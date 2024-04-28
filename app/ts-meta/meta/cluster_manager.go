@@ -48,7 +48,9 @@ const (
 
 type storeInterface interface {
 	updateNodeStatus(id uint64, status int32, lTime uint64, gossipPort string) error
+	UpdateSqlNodeStatus(id uint64, status int32, lTime uint64, gossipPort string) error
 	dataNodes() meta.DataNodeInfos
+	sqlNodes() meta.DataNodeInfos
 }
 
 type chooseTakeoverNodeFn func(cm *ClusterManager, oid uint64, nodePtNumMap *map[uint64]uint32, isRetry bool) (uint64, error)
@@ -107,11 +109,18 @@ func NewClusterManager(store storeInterface) *ClusterManager {
 
 func (cm *ClusterManager) PreviousNode() []*serf.PreviousNode {
 	dataNodes := cm.store.dataNodes()
-	previousNode := make([]*serf.PreviousNode, 0, len(dataNodes))
+	sqlNodes := cm.store.sqlNodes()
+	previousNode := make([]*serf.PreviousNode, 0, len(dataNodes)+len(sqlNodes))
 	for i := range dataNodes {
 		if dataNodes[i].Status == serf.StatusAlive {
 			previousNode = append(previousNode,
 				&serf.PreviousNode{Name: strconv.FormatUint(dataNodes[i].ID, 10), Addr: dataNodes[i].GossipAddr})
+		}
+	}
+	for i := range sqlNodes {
+		if sqlNodes[i].Status == serf.StatusAlive {
+			previousNode = append(previousNode,
+				&serf.PreviousNode{Name: strconv.FormatUint(sqlNodes[i].ID, 10), Addr: sqlNodes[i].GossipAddr})
 		}
 	}
 	return previousNode
@@ -161,6 +170,7 @@ func (cm *ClusterManager) isClosed() bool {
 // resend previous event when transfer to leader to avoid some event do not handled when leader change
 func (cm *ClusterManager) resendPreviousEvent(from eventFrom) {
 	dataNodes := globalService.store.dataNodes()
+	sqlNodes := globalService.store.sqlNodes()
 	cm.mu.RLock()
 	for i := range dataNodes {
 		if dataNodes[i].Status == serf.StatusAlive {
@@ -181,7 +191,27 @@ func (cm *ClusterManager) resendPreviousEvent(from eventFrom) {
 			}
 		}
 
-		logger.NewLogger(errno.ModuleHA).Error("resend event", zap.String("event", e.String()), zap.Any("members", e.Members), zap.Uint64("lTime", uint64(e.EventTime)))
+		logger.NewLogger(errno.ModuleHA).Error("resend data event", zap.String("event", e.String()), zap.Any("members", e.Members), zap.Uint64("lTime", uint64(e.EventTime)))
+		cm.eventWg.Add(1)
+		go cm.processEvent(*e, from)
+	}
+	for i := range sqlNodes {
+		e := cm.eventMap[strconv.FormatUint(sqlNodes[i].ID, 10)]
+		if e == nil || uint64(e.EventTime) < sqlNodes[i].LTime {
+			continue
+		}
+
+		// if event has processed, do not process event repeatedly
+		if uint64(e.EventTime) == sqlNodes[i].LTime {
+			if e.Type == serf.EventMemberJoin && sqlNodes[i].Status == serf.StatusAlive {
+				continue
+			}
+			if e.Type == serf.EventMemberFailed && sqlNodes[i].Status == serf.StatusFailed {
+				continue
+			}
+		}
+
+		logger.NewLogger(errno.ModuleHA).Error("resend sql event", zap.String("event", e.String()), zap.Any("members", e.Members), zap.Uint64("lTime", uint64(e.EventTime)))
 		cm.eventWg.Add(1)
 		go cm.processEvent(*e, from)
 	}
@@ -241,6 +271,7 @@ func (cm *ClusterManager) checkEvents() {
 
 func (cm *ClusterManager) checkFailedNode() {
 	dataNodes := cm.store.dataNodes()
+	sqlNodes := cm.store.sqlNodes()
 	cm.mu.RLock()
 	for i := range dataNodes {
 		if dataNodes[i].LTime == 0 {
@@ -259,8 +290,31 @@ func (cm *ClusterManager) checkFailedNode() {
 					Status: serf.StatusFailed,
 				}},
 			}
-			logger.GetLogger().Error("check failed node", zap.String("event", e.String()),
+			logger.GetLogger().Error("check failed datanode", zap.String("event", e.String()),
 				zap.Uint64("lTime", uint64(e.EventTime)), zap.Uint64("nodeId", dataNodes[i].ID))
+			cm.eventWg.Add(1)
+			go cm.processEvent(*e, fromSelfCheck)
+		}
+	}
+	for i := range sqlNodes {
+		if sqlNodes[i].LTime == 0 {
+			continue
+		}
+		e := cm.eventMap[strconv.FormatUint(sqlNodes[i].ID, 10)]
+		if e == nil {
+			host, _, _ := net.SplitHostPort(sqlNodes[i].GossipAddr)
+			e = &serf.MemberEvent{
+				Type:      serf.EventMemberFailed,
+				EventTime: serf.LamportTime(sqlNodes[i].LTime),
+				Members: []serf.Member{{
+					Name:   strconv.FormatUint(sqlNodes[i].ID, 10),
+					Addr:   net.ParseIP(host),
+					Tags:   map[string]string{"role": "sql"},
+					Status: serf.StatusFailed,
+				}},
+			}
+			logger.GetLogger().Error("check failed sqlnode", zap.String("event", e.String()),
+				zap.Uint64("lTime", uint64(e.EventTime)), zap.Uint64("nodeId", sqlNodes[i].ID))
 			cm.eventWg.Add(1)
 			go cm.processEvent(*e, fromSelfCheck)
 		}

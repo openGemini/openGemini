@@ -17,15 +17,15 @@ limitations under the License.
 package record
 
 import (
-	"github.com/apache/arrow/go/arrow"
-	"github.com/apache/arrow/go/arrow/array"
-	"github.com/apache/arrow/go/arrow/memory"
+	"github.com/apache/arrow/go/v13/arrow"
+	"github.com/apache/arrow/go/v13/arrow/array"
+	"github.com/apache/arrow/go/v13/arrow/memory"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
-func ArrowRecordToNativeRecord(rec array.Record, r *Record) error {
+func ArrowRecordToNativeRecord(rec arrow.Record, r *Record) error {
 	for i := 0; i < r.ColNums(); i++ {
 		r.ColVals[i].Len = rec.Column(i).Len()
 		r.ColVals[i].NilCount = rec.Column(i).NullN()
@@ -67,7 +67,7 @@ func ArrowColToNativeColWithoutNull(buffer []*memory.Buffer, colVal *ColVal, col
 	return nil
 }
 
-func ArrowColToNativeColWithNull(colArr array.Interface, colVal *ColVal, colType int) error {
+func ArrowColToNativeColWithNull(colArr arrow.Array, colVal *ColVal, colType int) error {
 	switch colType {
 	case influx.Field_Type_Float:
 		floatCol, _ := colArr.(*array.Float64)

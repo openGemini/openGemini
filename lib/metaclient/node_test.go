@@ -17,6 +17,8 @@ limitations under the License.
 package metaclient_test
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/influxdata/influxdb/pkg/testing/assert"
@@ -26,6 +28,11 @@ import (
 func TestLoadLogicalClock(t *testing.T) {
 	path := t.TempDir()
 	node := metaclient.NewNode(path)
+
+	clockPath := filepath.Join(path, metaclient.ClockFileName)
+	file, er := os.Create(clockPath)
+	assert.NoError(t, er)
+	file.Close()
 
 	err := node.LoadLogicalClock()
 	assert.NoError(t, err)

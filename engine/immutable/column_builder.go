@@ -350,7 +350,12 @@ func (b *ColumnBuilder) encBooleanColumn(timeCols []record.ColVal, segCols []rec
 }
 
 func (b *ColumnBuilder) EncodeColumn(ref record.Field, col *record.ColVal, timeCols []record.ColVal, segRowsLimit int, dataOffset int64) ([]byte, error) {
-	b.segCol = col.Split(b.segCol[:0], segRowsLimit, ref.Type)
+	if col.Len > segRowsLimit {
+		b.segCol = col.Split(b.segCol[:0], segRowsLimit, ref.Type)
+	} else {
+		b.segCol = append(b.segCol[:0], *col)
+	}
+
 	return b.encode(ref, timeCols, dataOffset)
 }
 

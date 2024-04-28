@@ -17,6 +17,7 @@ limitations under the License.
 package tsi
 
 import (
+	"fmt"
 	"math"
 	"sort"
 	"strconv"
@@ -24,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/influxdata/influxdb/pkg/testing/assert"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
@@ -35,6 +37,7 @@ import (
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/mergeset"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/uint64set"
 	"github.com/savsgio/dictpool"
@@ -179,6 +182,44 @@ func TestSearchSeries(t *testing.T) {
 			"mn-1_0000,tk1=value11,tk2=value22,tk3=value33",
 		})
 	})
+}
+
+func TestFlush(t *testing.T) {
+	path := t.TempDir()
+	_, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
+	defer idxBuilder.Close()
+	idxBuilder.Flush()
+
+	idxBuilder.Close()
+	idxBuilder.Flush()
+}
+
+func TestClearCache(t *testing.T) {
+	path := t.TempDir()
+	_, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
+	defer idxBuilder.Close()
+	idxBuilder.ClearCache()
+
+	idxBuilder.Close()
+	idxBuilder.ClearCache()
+}
+
+func TestMergeSetIndexRepeatedOpen(t *testing.T) {
+	path := t.TempDir()
+	_, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
+	defer idxBuilder.Close()
+	err := idxBuilder.Open()
+	assert.NoError(t, err)
+}
+
+func TestMergeSetIndexRepeatedClose(t *testing.T) {
+	path := t.TempDir()
+	_, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
+	err := idxBuilder.Close()
+	assert.NoError(t, err)
+
+	err = idxBuilder.Close()
+	assert.NoError(t, err)
 }
 
 func TestSeriesByExprIterator(t *testing.T) {
@@ -572,6 +613,65 @@ func TestSearchSeriesKeys(t *testing.T) {
 			"mn-1_0000,tk1=value11,tk2=value22,tk3=value33": {},
 		})
 	})
+
+	// test closed index
+	idx.Close()
+	t.Run("NoCond_closed_index", func(t *testing.T) {
+		f([]byte("mn-1"), nil, map[string]struct{}{
+			"mn-1_0000,tk1=value1,tk2=value2,tk3=value3":    {},
+			"mn-1_0000,tk1=value1,tk2=value22,tk3=value3":   {},
+			"mn-1_0000,tk1=value11,tk2=value2,tk3=value33":  {},
+			"mn-1_0000,tk1=value11,tk2=value22,tk3=value3":  {},
+			"mn-1_0000,tk1=value11,tk2=value22,tk3=value33": {},
+		})
+	})
+}
+
+func TestSearchSeriesWithLimitFail(t *testing.T) {
+	path := t.TempDir()
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
+	defer idxBuilder.Close()
+	CreateIndexByPtsWithoutTsid2Sk(idx, []string{
+		"mn-1,tk1=value1,tk2=k2",
+		"mn-1,tk1=value2,tk2=k2",
+		"mn-1,tk1=value3,tk2=k2",
+		"mn-1,tk1=value4,tk2=k2",
+		"mn-1,tk1=value5,tk2=k2",
+	}...)
+
+	run := func(name []byte, opt *query.ProcessorOptions, expectedSeriesKeys []string) {
+		name = append(name, []byte("_0000")...)
+		_, span := tracing.NewTrace("root")
+		groups, _, err := idx.SearchSeriesWithOpts(span, name, opt, func(num int64) error {
+			return nil
+		}, nil)
+		require.NoError(t, err)
+
+		keys := make([]string, 0)
+		for _, group := range groups {
+			for _, key := range group.SeriesKeys {
+				keys = append(keys, string(key))
+			}
+		}
+		sort.Strings(keys)
+		sort.Strings(expectedSeriesKeys)
+		require.Equal(t, len(expectedSeriesKeys), len(keys))
+		for i := 0; i < len(keys); i++ {
+			require.Equal(t, keys[i], expectedSeriesKeys[i])
+		}
+	}
+
+	syscontrol.SetQuerySeriesLimit(2)
+	defer syscontrol.SetQuerySeriesLimit(0)
+	opt := &query.ProcessorOptions{
+		StartTime: DefaultTR.Min,
+		EndTime:   DefaultTR.Max,
+		Condition: MustParseExpr(`tk2='k2'`),
+	}
+	run([]byte("mn-1"), opt, []string{
+		"mn-1_0000,tk1\x00value1\x00tk2\x00k2",
+		"mn-1_0000,tk1\x00value3\x00tk2\x00k2",
+	})
 }
 
 func TestDropMeasurement(t *testing.T) {
@@ -723,6 +823,25 @@ func TestSearchTagValues(t *testing.T) {
 	}
 
 	t.Run("SingleKeyWithoutCond", func(t *testing.T) {
+		f([]byte("mn-1"), [][]byte{[]byte("tk1")}, nil, [][]string{{
+			"value1",
+			"value11",
+		}})
+
+		f([]byte("mn-1"), [][]byte{[]byte("tk2")}, nil, [][]string{{
+			"value2",
+			"value22",
+		}})
+
+		f([]byte("mn-1"), [][]byte{[]byte("tk3")}, nil, [][]string{{
+			"value3",
+			"value33",
+		}})
+	})
+
+	// test closed index
+	idx.Close()
+	t.Run("SingleKeyWithoutCond_closed_index", func(t *testing.T) {
 		f([]byte("mn-1"), [][]byte{[]byte("tk1")}, nil, [][]string{{
 			"value1",
 			"value11",
@@ -933,6 +1052,12 @@ func TestSeriesCardinality(t *testing.T) {
 	t.Run("cardinality with condition", func(t *testing.T) {
 		f([]byte("mn-1"), MustParseExpr("tk1=value1"), 2)
 	})
+
+	// test closed index
+	idx.Close()
+	t.Run("cardinality with condition", func(t *testing.T) {
+		f([]byte("mn-1"), MustParseExpr("tk1=value1"), 2)
+	})
 }
 
 func TestSearchTagValuesCardinality(t *testing.T) {
@@ -996,6 +1121,179 @@ func CreateIndexByPts(idx Index, keys ...string) {
 	mmPoints := &dictpool.Dict{}
 	mmPoints.Set("mn-1_0000", &pts)
 	if err := idx.CreateIndexIfNotExists(mmPoints); err != nil {
+		panic(err)
+	}
+
+	for mmIndex := range mmPoints.D {
+		rows, ok := mmPoints.D[mmIndex].Value.(*[]influx.Row)
+		if !ok {
+			panic("create index failed due to map mmPoints")
+		}
+
+		for rowIdx := range *rows {
+			if (*rows)[rowIdx].SeriesId == 0 {
+				panic("create index failed")
+			}
+		}
+	}
+
+	idx.Close()
+	idx.Open()
+}
+
+func CreateIndexIfNotExistsForTest(idx *MergeSetIndex, mmRows *dictpool.Dict) error {
+	vkey := kbPool.Get()
+	defer kbPool.Put(vkey)
+	vname := kbPool.Get()
+	defer kbPool.Put(vname)
+
+	var err error
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+
+	for mmIdx := range mmRows.D {
+		rows, ok := mmRows.D[mmIdx].Value.(*[]influx.Row)
+		if !ok {
+			return fmt.Errorf("create index failed due to rows are not belong to type row")
+		}
+
+		vname.B = append(vname.B[:0], []byte(mmRows.D[mmIdx].Key)...)
+		for rowIdx := range *rows {
+			if (*rows)[rowIdx].SeriesId != 0 {
+				continue
+			}
+
+			vkey.B = append(vkey.B[:0], (*rows)[rowIdx].IndexKey...)
+			(*rows)[rowIdx].SeriesId, err = createIndexesIfNotExistsForTest(idx, vkey.B, vname.B, (*rows)[rowIdx].Tags, rowIdx)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func createIndexesIfNotExistsForTest(idx *MergeSetIndex, vkey, vname []byte, tags []influx.Tag, rowIndex int) (uint64, error) {
+	tsid, err := idx.getSeriesIdBySeriesKey(vkey)
+	if err != nil {
+		return 0, err
+	}
+
+	if tsid != 0 {
+		return tsid, nil
+	}
+
+	if err := idx.indexBuilder.SeriesLimited(); err != nil {
+		return 0, err
+	}
+
+	defer func(id *uint64) {
+		if *id != 0 {
+			idx.cache.PutTSIDToTSIDCache(id, vkey)
+		}
+	}(&tsid)
+
+	tsid, err = createIndexesForTest(idx, vkey, vname, tags, nil, false, rowIndex)
+	return tsid, err
+}
+
+func createIndexesForTest(idx *MergeSetIndex, seriesKey []byte, name []byte, tags []influx.Tag, tagArray [][]influx.Tag, enableTagArray bool, rowIndex int) (uint64, error) {
+	tsid := idx.indexBuilder.GenerateUUID()
+
+	ii := idxItemsPool.Get()
+	defer idxItemsPool.Put(ii)
+
+	// Create Series key -> TSID index
+	ii.B = append(ii.B, nsPrefixKeyToTSID)
+	ii.B = append(ii.B, seriesKey...)
+	ii.B = append(ii.B, kvSeparatorChar)
+	ii.B = encoding.MarshalUint64(ii.B, tsid)
+	ii.Next()
+
+	// Create TSID -> Series key index
+	if rowIndex%2 == 0 {
+		ii.B = append(ii.B, nsPrefixTSIDToKey)
+		ii.B = encoding.MarshalUint64(ii.B, tsid)
+		ii.B = append(ii.B, seriesKey...)
+		ii.Next()
+	}
+
+	// Create Tag -> TSID index
+	compositeKey := kbPool.Get()
+	if enableTagArray {
+		tagMap := make(map[string]map[string]struct{})
+		for _, tags := range tagArray {
+			for i := range tags {
+				if len(tags[i].Value) == 0 {
+					continue
+				}
+				if _, ok := tagMap[tags[i].Key]; !ok {
+					tagMap[tags[i].Key] = make(map[string]struct{})
+				}
+				if _, ok := tagMap[tags[i].Key][tags[i].Value]; ok {
+					continue
+				} else {
+					tagMap[tags[i].Key][tags[i].Value] = struct{}{}
+				}
+				ii.B = idx.marshalTagToTSIDs(compositeKey.B, ii.B, name, tags[i], tsid)
+				ii.Next()
+			}
+		}
+	} else {
+		for i := range tags {
+			ii.B = idx.marshalTagToTSIDs(compositeKey.B, ii.B, name, tags[i], tsid)
+			ii.Next()
+		}
+	}
+
+	compositeKey.B = marshalCompositeTagKey(compositeKey.B[:0], name, nil)
+	ii.B = append(ii.B, nsPrefixTagToTSIDs)
+	ii.B = marshalTagValue(ii.B, compositeKey.B)
+	ii.B = marshalTagValue(ii.B, nil)
+	ii.B = encoding.MarshalUint64(ii.B, tsid)
+	ii.Next()
+
+	kbPool.Put(compositeKey)
+
+	if err := idx.tb.AddItems(ii.Items); err != nil {
+		return 0, err
+	}
+
+	return tsid, nil
+}
+
+func CreateIndexByPtsWithoutTsid2Sk(idx Index, keys ...string) {
+	if keys == nil {
+		keys = []string{
+			"mn-1,tk1=value1,tk2=value2,tk3=value3",
+			"mn-1,tk1=value11,tk2=value22,tk3=value33",
+			"mn-1,tk1=value1,tk2=value22,tk3=value3",
+			"mn-1,tk1=value11,tk2=value2,tk3=value33",
+			"mn-1,tk1=value11,tk2=value22,tk3=value3",
+		}
+	}
+
+	pts := make([]influx.Row, 0, len(keys))
+	for _, key := range keys {
+		pt := influx.Row{}
+		strs := strings.Split(key, ",")
+		pt.Name = strs[0] + "_0000"
+		pt.Tags = make(influx.PointTags, len(strs)-1)
+		for i, str := range strs[1:] {
+			kv := strings.Split(str, "=")
+			pt.Tags[i].Key = kv[0]
+			pt.Tags[i].Value = kv[1]
+		}
+		sort.Sort(&pt.Tags)
+		pt.Timestamp = time.Now().UnixNano()
+		pt.UnmarshalIndexKeys(nil)
+		pt.ShardKey = pt.IndexKey
+		pts = append(pts, pt)
+	}
+
+	mmPoints := &dictpool.Dict{}
+	mmPoints.Set("mn-1_0000", &pts)
+	if err := CreateIndexIfNotExistsForTest(idx.(*MergeSetIndex), mmPoints); err != nil {
 		panic(err)
 	}
 
@@ -1509,4 +1807,63 @@ func TestIndexClearIndexCache(t *testing.T) {
 	CreateIndexByPtsOfAllAndExprFilterBreak(idx)
 
 	idxBuilder.ClearCache()
+}
+
+func TestFlushBloomFilter(t *testing.T) {
+	path := t.TempDir()
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
+	defer idxBuilder.Close()
+	// idx.bf not exist，flushBloomFilter should return directly
+	mergeSetIndex := idx.(*MergeSetIndex)
+	mergeSetIndex.flushBloomFilter()
+
+	// set BloomFilterEnable true
+	idx1, idxBuilder1 := getTestIndexAndBuilder(path, config.TSSTORE)
+	defer idxBuilder1.Close()
+	mergeSetIndex = idx1.(*MergeSetIndex)
+	lock := ""
+	var err error
+	mergeSetIndex.bf, err = mergeset.OpenBloomFilter(path, &lock, int(concurrencySize), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mergeSetIndex.flushBloomFilter()
+}
+
+func TestAddNewSeriesKey(t *testing.T) {
+	path := t.TempDir()
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
+	defer idxBuilder.Close()
+
+	mergeSetIndex := idx.(*MergeSetIndex)
+	// idx.bf not exist，AddNewSeriesKey should return directly
+	mergeSetIndex.AddNewSeriesKey(nil)
+
+	var err error
+	lock := ""
+	mergeSetIndex.bf, err = mergeset.OpenBloomFilter(path, &lock, int(concurrencySize), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := []byte("key")
+	mergeSetIndex.AddNewSeriesKey(key)
+	res := mergeSetIndex.CheckSeriesKeyExist(key)
+	assert.Equal(t, res, true)
+}
+
+func TestCheckSeriesKeyExist(t *testing.T) {
+	path := t.TempDir()
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
+	defer idxBuilder.Close()
+	// idx.bf not exist，flushBloomFilter should return directly
+	mergeSetIndex := idx.(*MergeSetIndex)
+	var err error
+	lock := ""
+	mergeSetIndex.bf, err = mergeset.OpenBloomFilter(path, &lock, int(concurrencySize), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := []byte("key")
+	res := mergeSetIndex.CheckSeriesKeyExist(key)
+	assert.Equal(t, res, false)
 }

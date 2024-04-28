@@ -116,11 +116,11 @@ func TestService_RunShardHierarchicalStorage(t *testing.T) {
 		return nil, shardsToCold
 	}
 
-	e.HierarchicalStorageFn = func(db string, ptId uint32, shardID uint64) error {
+	e.HierarchicalStorageFn = func(db string, ptId uint32, shardID uint64) bool {
 		if db == "testdb1" {
-			return errors.New("not the db")
+			return false
 		}
-		return nil
+		return true
 	}
 
 	t.Run("all success", func(t *testing.T) {
@@ -166,12 +166,12 @@ func TestService_Run(t *testing.T) {
 }
 
 type MockTEngine struct {
-	HierarchicalStorageFn        func(db string, ptId uint32, shardID uint64) error
+	HierarchicalStorageFn        func(db string, ptId uint32, shardID uint64) bool
 	FetchShardsNeedChangeStoreFn func() (shardsToWarm, shardsToCold []*meta.ShardIdentifier)
 	ChangeShardTierToWarmFn      func(db string, ptId uint32, shardID uint64) error
 }
 
-func (s *MockTEngine) HierarchicalStorage(db string, ptId uint32, shardID uint64) error {
+func (s *MockTEngine) HierarchicalStorage(db string, ptId uint32, shardID uint64) bool {
 	return s.HierarchicalStorageFn(db, ptId, shardID)
 }
 

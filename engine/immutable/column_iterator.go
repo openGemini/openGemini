@@ -31,7 +31,6 @@ type ColumnIteratorPerformer interface {
 	ColumnChanged(*record.Field) error
 	SeriesChanged(uint64, []int64) error
 	WriteOriginal(fi *FileIterator) error
-	Finish() error
 }
 
 type segWalkHandler func(col *record.ColVal, lastSeg bool) error
@@ -47,21 +46,26 @@ type ColumnIterator struct {
 	closed bool
 	signal chan struct{}
 	field  record.Field
+
+	minTime int64
+	sid     uint64
 }
 
 func NewColumnIterator(fi *FileIterator) *ColumnIterator {
-	return &ColumnIterator{
+	itr := &ColumnIterator{
 		fi:     fi,
 		sr:     NewSegmentReader(fi),
 		signal: make(chan struct{}),
 	}
+	itr.NextChunkMeta()
+	return itr
 }
 
 func (itr *ColumnIterator) initTimeColumn() error {
 	itr.times = itr.times[:0]
 
 	colIdx := len(itr.fi.curtChunkMeta.colMeta) - 1
-	return itr.walkSegment(&timeField, colIdx, func(col *record.ColVal, lastSeg bool) error {
+	return itr.walkSegment(timeRef, colIdx, func(col *record.ColVal, lastSeg bool) error {
 		itr.times = append(itr.times, col.IntegerValues()...)
 		return nil
 	})
@@ -69,7 +73,16 @@ func (itr *ColumnIterator) initTimeColumn() error {
 
 func (itr *ColumnIterator) NextChunkMeta() bool {
 	itr.fi.curtChunkMeta = nil
-	return itr.fi.NextChunkMeta()
+	ok := itr.fi.NextChunkMeta()
+	itr.IncrChunkUsed()
+
+	if ok {
+		cm := itr.fi.GetCurtChunkMeta()
+		itr.sid = cm.sid
+		itr.minTime = cm.minTime()
+	}
+
+	return ok
 }
 
 func (itr *ColumnIterator) IncrChunkUsed() {
@@ -95,45 +108,47 @@ func (itr *ColumnIterator) NextColumn(colIdx int) (*record.Field, bool) {
 func (itr *ColumnIterator) Run(p ColumnIteratorPerformer) error {
 	defer itr.Close()
 
-	var sid uint64
 	for {
 		if itr.isClosed() {
 			return errClosed
 		}
 
 		if !itr.NextChunkMeta() {
-			if itr.Error() != nil {
-				return itr.Error()
-			}
-
-			return p.Finish()
-		}
-		itr.IncrChunkUsed()
-
-		sid = itr.fi.curtChunkMeta.sid
-		if !p.HasSeries(sid) {
-			if err := p.SeriesChanged(sid, nil); err != nil {
-				return err
-			}
-
-			if err := p.WriteOriginal(itr.fi); err != nil {
-				return err
-			}
-			continue
+			return itr.Error()
 		}
 
-		if err := itr.initTimeColumn(); err != nil {
-			return err
-		}
-
-		if err := p.SeriesChanged(sid, itr.times); err != nil {
-			return err
-		}
-
-		if err := itr.walkColumn(p); err != nil {
+		if err := itr.IterCurrentChunk(p); err != nil {
 			return err
 		}
 	}
+}
+
+func (itr *ColumnIterator) IterCurrentChunk(p ColumnIteratorPerformer) error {
+	if itr.isClosed() {
+		return errClosed
+	}
+
+	sid := itr.fi.curtChunkMeta.sid
+
+	if !p.HasSeries(sid) {
+		if err := p.SeriesChanged(sid, nil); err != nil {
+			return err
+		}
+		if err := p.WriteOriginal(itr.fi); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	if err := itr.initTimeColumn(); err != nil {
+		return err
+	}
+
+	if err := p.SeriesChanged(sid, itr.times); err != nil {
+		return err
+	}
+
+	return itr.walkColumn(p)
 }
 
 func (itr *ColumnIterator) walkColumn(p ColumnIteratorPerformer) error {

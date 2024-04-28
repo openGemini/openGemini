@@ -28,10 +28,11 @@ import (
 
 	"github.com/openGemini/openGemini/lib/errno"
 	Logger2 "github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	streamLib "github.com/openGemini/openGemini/lib/stream"
 	"github.com/openGemini/openGemini/lib/util"
-	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/openGemini/openGemini/services/stream"
 	"github.com/panjf2000/ants/v2"
@@ -40,7 +41,8 @@ import (
 
 type Engine interface {
 	WriteRows(db, rp string, ptId uint32, shardID uint64, streamIdDstShardIdMap map[uint64]uint64, ww WritePointsWorkIF)
-	RegisterTask(info *meta2.StreamInfo, fieldCalls []*streamLib.FieldCall) error
+	WriteRec(db, rp, mst string, ptId uint32, shardID uint64, rec *record.Record, binaryRec []byte) error
+	RegisterTask(info *meta.StreamInfo, fieldCalls []*streamLib.FieldCall) error
 	Drain()
 	DeleteTask(id uint64)
 	Run()
@@ -49,6 +51,7 @@ type Engine interface {
 
 type Storage interface {
 	WriteRows(db, rp string, ptId uint32, shardID uint64, rows []influx.Row, binaryRows []byte) error
+	WriteRec(db, rp, mst string, ptId uint32, shardID uint64, rec *record.Record, binaryRec []byte) error
 }
 
 type WritePointsWorkIF interface {
@@ -57,16 +60,17 @@ type WritePointsWorkIF interface {
 }
 
 func NewStream(store Storage, Logger Logger, cli MetaClient, conf stream.Config) (Engine, error) {
-	cache := make(chan *CacheRow, conf.FilterCache)
+	cache := make(chan ChanData, conf.FilterCache)
 	rowPool := NewCacheRowPool()
 	bp := streamLib.NewBuilderPool()
-	windowCachePool := NewWindowCachePool()
+	windowCachePool := NewTaskCachePool()
 	goPool, err := ants.NewPool(conf.FilterConcurrency)
 	if err != nil {
 		return nil, err
 	}
 	s := &Stream{
 		cache:           cache,
+		abort:           make(chan struct{}),
 		rowPool:         rowPool,
 		bp:              bp,
 		store:           store,
@@ -99,15 +103,15 @@ type Logger interface {
 }
 
 type MetaClient interface {
-	GetStreamInfosStore() map[string]*meta2.StreamInfo
-	GetMeasurementInfoStore(dbName string, rpName string, mstName string) (*meta2.MeasurementInfo, error)
+	GetStreamInfos() map[string]*meta.StreamInfo
+	Measurement(dbName string, rpName string, mstName string) (*meta.MeasurementInfo, error)
 }
 
 type Stream struct {
-	cache           chan *CacheRow
+	cache           chan ChanData
 	rowPool         *CacheRowPool
 	bp              *streamLib.BuilderPool
-	windowCachePool *WindowCachePool
+	windowCachePool *TaskCachePool
 	goPool          *ants.Pool
 
 	//key stream task id
@@ -126,9 +130,12 @@ type Task interface {
 	Drain()
 	stop() error
 	getName() string
-	Put(r *WindowCache)
-	getSrcInfo() *meta2.StreamMeasurementInfo
-	getDesInfo() *meta2.StreamMeasurementInfo
+	Put(r ChanData)
+	getSrcInfo() *meta.StreamMeasurementInfo
+	getDesInfo() *meta.StreamMeasurementInfo
+}
+
+type ChanData interface {
 }
 
 type CacheRow struct {
@@ -141,9 +148,32 @@ type CacheRow struct {
 	ww                    WritePointsWorkIF
 }
 
+type CacheRecord struct {
+	rec         *record.Record
+	db, rp, mst string
+	ptId        uint32
+	shardID     uint64
+	wg          sync.WaitGroup
+}
+
+func (r *CacheRecord) Wait() {
+	r.wg.Wait()
+}
+
+func (r *CacheRecord) Retain() {
+	r.wg.Add(1)
+}
+
+func (r *CacheRecord) RetainNum(num int) {
+	r.wg.Add(num)
+}
+
+func (r *CacheRecord) Release() {
+	r.wg.Done()
+}
+
 func (s *Stream) Run() {
 	s.Logger.Info("start stream")
-	s.abort = make(chan struct{})
 	ticker := time.NewTicker(10 * time.Second)
 	for {
 		select {
@@ -151,9 +181,8 @@ func (s *Stream) Run() {
 			s.Logger.Info("close stream")
 			return
 		case <-ticker.C:
-			streams := s.cli.GetStreamInfosStore()
+			streams := s.cli.GetStreamInfos()
 			if streams == nil {
-				s.Logger.Info("get stream is nil")
 				continue
 			}
 			for _, info := range streams {
@@ -161,7 +190,7 @@ func (s *Stream) Run() {
 				if exist {
 					continue
 				}
-				srcMst, err := s.cli.GetMeasurementInfoStore(info.SrcMst.Database, info.SrcMst.RetentionPolicy, info.SrcMst.Name)
+				srcMst, err := s.cli.Measurement(info.SrcMst.Database, info.SrcMst.RetentionPolicy, info.SrcMst.Name)
 				if err != nil || srcMst == nil {
 					if err != nil {
 						s.Logger.Error(fmt.Sprintf("streamName: %s, get src measurement info failed and raise error (%s)", info.Name, err.Error()))
@@ -170,7 +199,7 @@ func (s *Stream) Run() {
 					}
 					continue
 				}
-				dstMst, err := s.cli.GetMeasurementInfoStore(info.DesMst.Database, info.DesMst.RetentionPolicy, info.DesMst.Name)
+				dstMst, err := s.cli.Measurement(info.DesMst.Database, info.DesMst.RetentionPolicy, info.DesMst.Name)
 				if err != nil || dstMst == nil {
 					if err != nil {
 						s.Logger.Error(fmt.Sprintf("streamName: %s, get dst measurement info failed and raise error (%s)", info.Name, err.Error()))
@@ -179,16 +208,18 @@ func (s *Stream) Run() {
 					}
 					continue
 				}
+				srcSchema := srcMst.CloneSchema()
+				dstSchema := dstMst.CloneSchema()
 				canRegisterTask := true
 				calls := make([]*streamLib.FieldCall, len(info.Calls))
 				for i, v := range info.Calls {
-					inFieldType, ok := srcMst.Schema[v.Field]
+					inFieldType, ok := srcSchema[v.Field]
 					if !ok {
 						s.Logger.Error(fmt.Sprintf("streamName: %s, srcMst: %s, inField: %s, get input field type failed", info.Name, srcMst.Name, v.Field))
 						canRegisterTask = false
 						break
 					}
-					outFieldType, ok := dstMst.Schema[v.Alias]
+					outFieldType, ok := dstSchema[v.Alias]
 					if !ok {
 						s.Logger.Error(fmt.Sprintf("streamName: %s, dstMst: %s, outField: %s, get output field type failed", info.Name, dstMst.Name, v.Alias))
 						canRegisterTask = false
@@ -203,7 +234,7 @@ func (s *Stream) Run() {
 				}
 				//TODO detect src schema change
 				for i := range info.Dims {
-					ty, ok := srcMst.Schema[info.Dims[i]]
+					ty, ok := srcSchema[info.Dims[i]]
 					if !ok || influx.Field_Type_Tag != ty {
 						s.Logger.Error(fmt.Sprintf("streamName: %s, dstMst: %s, dim: %s check fail", info.Name, dstMst.Name, info.Dims[i]))
 						canRegisterTask = false
@@ -256,7 +287,7 @@ func (s *Stream) DeleteTask(id uint64) {
 	}
 }
 
-func (s *Stream) RegisterTask(info *meta2.StreamInfo, fieldCalls []*streamLib.FieldCall) error {
+func (s *Stream) RegisterTask(info *meta.StreamInfo, fieldCalls []*streamLib.FieldCall) error {
 	s.Logger.Info("register stream task", zap.String("streamName", info.Name), zap.String("streamId", strconv.FormatUint(info.ID, 10)))
 	start := time.Now().Truncate(info.Interval).Add(info.Interval)
 	var logger Logger
@@ -274,7 +305,7 @@ func (s *Stream) RegisterTask(info *meta2.StreamInfo, fieldCalls []*streamLib.Fi
 	var task Task
 	if len(info.Dims) == 0 {
 		task = &TimeTask{
-			WindowDataPool:  NewWindowDataPool(),
+			TaskDataPool:    NewTaskDataPool(),
 			windowCachePool: s.windowCachePool,
 			BaseTask: &BaseTask{
 				windowNum:  int64(maxWindowNum),
@@ -296,7 +327,7 @@ func (s *Stream) RegisterTask(info *meta2.StreamInfo, fieldCalls []*streamLib.Fi
 	} else {
 		task = &TagTask{
 			values:          sync.Map{},
-			WindowDataPool:  NewWindowDataPool(),
+			TaskDataPool:    NewTaskDataPool(),
 			goPool:          s.goPool,
 			groupKeys:       info.Dims,
 			bp:              s.bp,
@@ -344,54 +375,69 @@ func (s *Stream) runFilter() {
 
 func (s *Stream) filter() {
 	for {
-		var r *CacheRow
 		select {
-		case r = <-s.cache:
+		case c := <-s.cache:
+			switch r := c.(type) {
+			case *CacheRow:
+				s.stats.AddStreamFilter(1)
+				release := func() {
+					if atomic.AddInt64(&r.refCount, -1) == 0 {
+						r.ww.PutWritePointsWork()
+						s.rowPool.Put(r)
+						return
+					}
+				}
+				ref, indexes := s.rowsRangeTask(r)
+				if !ref {
+					r.ww.PutWritePointsWork()
+					s.rowPool.Put(r)
+					continue
+				}
+				for _, vs := range indexes {
+					for j := 0; j < len(vs); j = j + 2 {
+						atomic.AddInt64(&r.refCount, 1)
+					}
+				}
+				for i, vs := range indexes {
+					for j := 0; j < len(vs); j = j + 2 {
+						cache := s.windowCachePool.Get()
+						cache.ptId = r.ptId
+						cache.shardId = r.streamIdDstShardIdMap[i]
+						cache.rows = r.rows[vs[j]:vs[j+1]]
+						cache.release = release
+						v, ok := s.tasks.Load(i)
+						if ok {
+							w, _ := v.(Task)
+							w.Put(cache)
+						}
+					}
+				}
+			case *CacheRecord:
+				s.stats.AddStreamFilter(1)
+				ref, indexes := s.recordRangeTask(r)
+				if !ref {
+					continue
+				}
+				r.RetainNum(len(indexes))
+				for i := range indexes {
+					v, ok := s.tasks.Load(i)
+					if ok {
+						w, _ := v.(Task)
+						w.Put(r)
+					}
+				}
+			default:
+				continue
+			}
 		case <-s.abort:
 			return
-		}
-		s.stats.AddStreamFilter(1)
-
-		release := func() bool {
-			cur := atomic.AddInt64(&r.refCount, -1)
-			if cur == 0 {
-				r.ww.PutWritePointsWork()
-				s.rowPool.Put(r)
-				return true
-			}
-			return false
-		}
-		ref, indexes := s.rangeWindow(r)
-		if !ref {
-			r.ww.PutWritePointsWork()
-			s.rowPool.Put(r)
-			continue
-		}
-		for _, vs := range indexes {
-			for j := 0; j < len(vs); j = j + 2 {
-				atomic.AddInt64(&r.refCount, 1)
-			}
-		}
-		for i, vs := range indexes {
-			for j := 0; j < len(vs); j = j + 2 {
-				cache := s.windowCachePool.Get()
-				cache.ptId = r.ptId
-				cache.shardId = r.streamIdDstShardIdMap[i]
-				cache.rows = r.rows[vs[j]:vs[j+1]]
-				cache.release = release
-				v, ok := s.tasks.Load(i)
-				if ok {
-					w, _ := v.(Task)
-					w.Put(cache)
-				}
-			}
 		}
 	}
 }
 
-func (s *Stream) rangeWindow(r *CacheRow) (bool, map[uint64][]int) {
+func (s *Stream) rowsRangeTask(r *CacheRow) (bool, map[uint64][]int) {
 	ref := false
-	indexs := make(map[uint64][]int)
+	indexes := make(map[uint64][]int)
 	s.tasks.Range(func(key, value interface{}) bool {
 		i, _ := key.(uint64)
 		v, _ := value.(Task)
@@ -399,10 +445,10 @@ func (s *Stream) rangeWindow(r *CacheRow) (bool, map[uint64][]int) {
 			return true
 		}
 		s.stats.AddStreamFilterNum(int64(len(r.rows)))
-		index, exist := indexs[i]
+		index, exist := indexes[i]
 		if !exist {
 			index = []int{}
-			indexs[i] = index
+			indexes[i] = index
 		}
 		con := false
 		startIndex := 0
@@ -427,10 +473,28 @@ func (s *Stream) rangeWindow(r *CacheRow) (bool, map[uint64][]int) {
 			ref = true
 			index = append(index, startIndex, len(r.rows))
 		}
-		indexs[i] = index
+		indexes[i] = index
 		return true
 	})
-	return ref, indexs
+	return ref, indexes
+}
+
+func (s *Stream) recordRangeTask(r *CacheRecord) (bool, map[uint64]struct{}) {
+	ref := false
+	indexes := make(map[uint64]struct{})
+	s.tasks.Range(func(key, value interface{}) bool {
+		i, _ := key.(uint64)
+		v, _ := value.(Task)
+		name := influx.GetOriginMstName(r.mst)
+		if r.db != v.getSrcInfo().Database || r.rp != v.getSrcInfo().RetentionPolicy || name != v.getSrcInfo().Name {
+			return true
+		}
+		s.stats.AddStreamFilterNum(int64(r.rec.RowNums()))
+		indexes[i] = struct{}{}
+		ref = true
+		return true
+	})
+	return ref, indexes
 }
 
 // Drain is for test case, to check whether there exist resource leakage
@@ -464,4 +528,24 @@ func (s *Stream) WriteRows(db, rp string, ptId uint32, shardID uint64, streamIdD
 	s.stats.AddStreamIn(1)
 	s.stats.AddStreamInNum(int64(len(r.rows)))
 	s.cache <- r
+}
+
+func (s *Stream) WriteRec(db, rp, mst string, ptId uint32, shardID uint64, rec *record.Record, binaryRec []byte) error {
+	err := s.store.WriteRec(db, rp, mst, ptId, shardID, rec, binaryRec)
+	if err == nil {
+		s.stats.AddStreamIn(1)
+		s.stats.AddStreamInNum(int64(rec.RowNums()))
+		r := &CacheRecord{
+			rec:     rec,
+			db:      db,
+			rp:      rp,
+			mst:     mst,
+			ptId:    ptId,
+			shardID: shardID,
+		}
+		s.cache <- r
+		r.Wait()
+		return nil
+	}
+	return err
 }

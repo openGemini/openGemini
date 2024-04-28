@@ -331,9 +331,11 @@ func TestHasRowCount(t *testing.T) {
 func TestMeanAsSubCall(t *testing.T) {
 	opt := query.ProcessorOptions{}
 	schema := executor.NewQuerySchema(influxql.Fields{&influxql.Field{
-		Expr: &influxql.Call{
-			Name: "floor",
-			Args: []influxql.Expr{&influxql.Call{Name: "mean", Args: []influxql.Expr{&influxql.VarRef{Val: "f1", Type: influxql.Integer}}}},
+		Expr: &influxql.ParenExpr{
+			Expr: &influxql.Call{
+				Name: "floor",
+				Args: []influxql.Expr{&influxql.Call{Name: "mean", Args: []influxql.Expr{&influxql.VarRef{Val: "f1", Type: influxql.Integer}}}},
+			},
 		},
 	}}, []string{"floor_val"}, &opt, nil)
 	hasSum := false
@@ -361,4 +363,10 @@ func TestGetTimeRangeByTC(t *testing.T) {
 	opt := query.ProcessorOptions{Sources: []influxql.Source{&influxql.Measurement{Name: "mst", IndexRelation: indexR}}, StartTime: influxql.MinTime, EndTime: 5001}
 	schema := executor.NewQuerySchema(nil, nil, &opt, nil)
 	assert.Equal(t, schema.GetTimeRangeByTC(), util.TimeRange{Min: influxql.MinTime, Max: 5000})
+}
+
+func TestCanSeqAggPushDown(t *testing.T) {
+	opt := query.ProcessorOptions{Sources: []influxql.Source{&influxql.Measurement{Name: "mst"}}, StartTime: influxql.MinTime, EndTime: 5001}
+	schema := executor.NewQuerySchema(nil, nil, &opt, nil)
+	assert.Equal(t, schema.CanSeqAggPushDown(), false)
 }

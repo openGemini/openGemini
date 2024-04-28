@@ -24,7 +24,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/util"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 var decs = NewCoderContext()
@@ -689,7 +692,7 @@ func TestStringEncodingVersion_CompatibilityV1(t *testing.T) {
 	}
 }
 
-func TestDecodingWithLz4(t *testing.T) {
+func TestDecodingWithLz4Error(t *testing.T) {
 	if decs.stringCoder == nil {
 		decs.stringCoder = GetStringCoder()
 
@@ -701,9 +704,7 @@ func TestDecodingWithLz4(t *testing.T) {
 	in = append(in, buf...)
 	var out []byte
 	out, err := decs.stringCoder.Decoding(in, out)
-	if err != nil {
-		t.Fatal(err)
-	}
+	assert.NotNil(t, err)
 }
 
 func TestEncoding_Timestamp_Second(t *testing.T) {
@@ -839,4 +840,20 @@ func TestEncodeTimestampBlock(t *testing.T) {
 	tmTest(time.Second, true, nil)
 	tmTest(time.Millisecond, true, nil)
 	tmTest(time.Nanosecond, true, util.Int64Slice2byte(arr))
+}
+
+func TestGetCompressAlgo(t *testing.T) {
+	conf := config.GetStoreConfig()
+	defer func() {
+		conf.StringCompressAlgo = config.CompressAlgoSnappy
+	}()
+
+	conf.StringCompressAlgo = config.CompressAlgoLZ4
+	require.Equal(t, StringCompressedLz4, GetCompressAlgo())
+
+	conf.StringCompressAlgo = config.CompressAlgoZSTD
+	require.Equal(t, StringCompressedZstd, GetCompressAlgo())
+
+	conf.StringCompressAlgo = "xxx"
+	require.Equal(t, stringCompressedSnappy, GetCompressAlgo())
 }

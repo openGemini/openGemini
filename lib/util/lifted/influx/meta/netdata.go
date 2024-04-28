@@ -204,6 +204,10 @@ func (d *DurationDescriptor) unmarshal(duration *proto2.DurationDescriptor) {
 	d.Duration = time.Duration(duration.GetDuration())
 }
 
+func (i *ShardIdentifier) IsRangeMode() bool {
+	return i.ShardType == RANGE
+}
+
 func (i *ShardIdentifier) marshal() *proto2.ShardIdentifier {
 	pb := &proto2.ShardIdentifier{}
 	pb.ShardID = proto.Uint64(i.ShardID)

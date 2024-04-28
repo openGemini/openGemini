@@ -32,6 +32,7 @@ import (
 	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	assert2 "github.com/stretchr/testify/assert"
 )
@@ -449,6 +450,9 @@ func TestColumnStoreReader(t *testing.T) {
 	}()
 
 	sh.SetMstInfo(NewMockColumnStoreMstInfo())
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta2.MeasurementInfo{NewMockColumnStoreMstInfo()},
+	})
 	if err = sh.WriteRows(pts, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -457,10 +461,10 @@ func TestColumnStoreReader(t *testing.T) {
 	time.Sleep(time.Second * 2)
 
 	// set the primary index reader
-	sh.pkIndexReader = sparseindex.NewPKIndexReader(colstore.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
+	sh.pkIndexReader = sparseindex.NewPKIndexReader(util.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
 
 	// set the skip index reader
-	sh.skIndexReader = sparseindex.NewSKIndexReader(colstore.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
+	sh.skIndexReader = sparseindex.NewSKIndexReader(util.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
 
 	// build the shard group
 	shardGroup := &mockShardGroup{

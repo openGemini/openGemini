@@ -31,13 +31,15 @@ import (
 const (
 	ChunkMetaCompressNone   = 0
 	ChunkMetaCompressSnappy = 1
+	ChunkMetaCompressLZ4    = 2
+	ChunkMetaCompressEnd    = 3
 )
 
 var chunkMetaCompressMode = ChunkMetaCompressNone
 var zeroPreAgg = make([]byte, 48)
 
 func SetChunkMetaCompressMode(mode int) {
-	if mode < ChunkMetaCompressNone || mode > ChunkMetaCompressSnappy {
+	if mode < ChunkMetaCompressNone || mode >= ChunkMetaCompressEnd {
 		return
 	}
 	chunkMetaCompressMode = mode
@@ -395,6 +397,10 @@ func (m *ChunkMeta) maxTime() int64 {
 	return m.timeRange[len(m.timeRange)-1].maxTime()
 }
 
+func (m *ChunkMeta) GetTimeRangeBy(index int) SegmentRange {
+	return m.timeRange[index]
+}
+
 func (m *ChunkMeta) MinMaxTime() (min int64, max int64) {
 	return m.minTime(), m.maxTime()
 }
@@ -549,7 +555,7 @@ func (m *ChunkMeta) validation() {
 		panic("length of m.colMeta is not equal to m.columnCount")
 	}
 
-	for i := 0; i < len(m.colMeta); i++ {
+	for i := range m.colMeta {
 		item := &m.colMeta[i]
 
 		if len(item.entries) != int(m.segCount) {
@@ -704,6 +710,18 @@ type MetaIndex struct {
 	offset  int64  // chunkmeta block offset
 	count   uint32 // number of ChunkMeta
 	size    uint32 // chunkmeta block size
+}
+
+func (m *MetaIndex) GetID() uint64 {
+	return m.id
+}
+
+func (m *MetaIndex) GetOffset() int64 {
+	return m.offset
+}
+
+func (m *MetaIndex) GetSize() uint32 {
+	return m.size
 }
 
 func (m *MetaIndex) marshal(dst []byte) []byte {

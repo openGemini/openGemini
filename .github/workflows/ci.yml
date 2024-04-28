@@ -43,7 +43,7 @@ jobs:
           fetch-depth: 1
       - uses: WillAbides/setup-go-faster@v1.7.0
         with:
-          go-version: "1.19"
+          go-version: "1.20"
       - name: Run static check
         run: make static-check
       - name: Run go version check
@@ -72,7 +72,7 @@ jobs:
       fail-fast: true
       matrix:
         os: ["ubuntu-latest"] # "macOS-latest"
-        go: ["1.19.x"]
+        go: ["1.20.x"]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
@@ -98,7 +98,7 @@ jobs:
       fail-fast: true
       matrix:
         os: ["ubuntu-latest"] # "macOS-latest"
-        go: ["1.19.x"]
+        go: ["1.20.x"]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:

@@ -315,6 +315,11 @@ func (r *AggPushdownToExchangeRule) OnMatch(call *OptRuleCall) {
 		return
 	}
 
+	// the calculation of prom function with range vector selector is only pushed down to series, not exchange.
+	if exchange.schema.Options().IsRangeVectorSelector() {
+		return
+	}
+
 	switch exchange.EType() {
 	case NODE_EXCHANGE, SERIES_EXCHANGE:
 		return
@@ -395,6 +400,11 @@ func (r *AggPushdownToReaderRule) OnMatch(call *OptRuleCall) {
 
 	canSlidingWindowPushDown := reader.Schema().HasSlidingWindowCall() && sysconfig.GetEnableSlidingWindowPushUp() != sysconfig.OnSlidingWindowPushUp
 	if !reader.Schema().CanCallsPushdown() || (!reader.Schema().HasPercentileOGSketch() && !canSlidingWindowPushDown) {
+		return
+	}
+
+	// the calculation of prom function with range vector selector is only pushed down to series, not reader.
+	if reader.schema.Options().IsRangeVectorSelector() {
 		return
 	}
 
@@ -554,7 +564,8 @@ func (r *AggPushdownToSeriesRule) OnMatch(call *OptRuleCall) {
 		return
 	}
 
-	if !series.Schema().CanCallsPushdown() {
+	// the calculation of prom function with range vector selector is only pushed down to series.
+	if !series.Schema().CanCallsPushdown() && !(series.Schema().Options().IsRangeVectorSelector()) {
 		return
 	}
 
@@ -893,6 +904,9 @@ func (r *AggPushDownToSubQueryRule) canPush(agg *LogicalAggregate, project *Logi
 	if !config.GetCommon().PreAggEnabled || project.schema.Options().GetHintType() == hybridqp.ExactStatisticQuery {
 		return false
 	}
+	if project.Schema().Options().IsRangeVectorSelector() {
+		return false
+	}
 	return true
 }
 
@@ -1107,6 +1121,10 @@ func (r *AggToProjectInSubQueryRule) OnMatch(call *OptRuleCall) {
 
 	nodeFromVertex := nodeVertex.GetParentVertex(nodeVertex)
 	if nodeFromVertex == nil {
+		return
+	}
+
+	if node.Schema().Options().IsRangeVectorSelector() {
 		return
 	}
 

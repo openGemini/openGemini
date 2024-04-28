@@ -48,6 +48,10 @@ message Data {
 	map<string, Replications> ReplicaGroups = 28;
 	optional uint64 MaxSubscriptionID = 29;
 	optional uint64 MaxCQChangeID = 30;
+	optional int32 NumOfShards = 31;
+	optional bool IsSQLiteEnabled = 32;
+	repeated DataNode SqlNodes = 33;
+	optional uint64 MaxMstID = 34;
 }
 
 message Replications {
@@ -130,6 +134,9 @@ message MeasurementInfo {
     optional uint32 EngineType = 6;
     optional ColStoreInfo ColStoreInfo = 7;
     optional ObsOptions ObsOptions = 8;
+    map<uint64, Idxes> ShardIdxes = 9;
+    optional int32 InitNumOfShards = 10;
+    optional uint64 ID = 11;
     optional Options Options = 21;
 }
 
@@ -184,6 +191,10 @@ message ShardKeyInfo {
     repeated string ShardKey = 1;
     optional string Type     = 2;
     optional uint64 SgID     = 3;
+}
+
+message Idxes {
+	repeated int32 Idx = 1;
 }
 
 message SubscriptionInfo{
@@ -359,6 +370,10 @@ message Command {
 		SetNodeSegregateStatusCommand              = 92;
 		RemoveNodeCommand                          = 93;
 		UpdateReplicationCommand                   = 94;
+		UpdateNodeTmpIndexCommand                  = 95;
+		CreateSqlNodeCommand                       = 96;
+		UpdateSqlNodeStatusCommand                 = 97;
+		InsertFilesCommand                         = 98;
 		UpdateMeasurementCommand                   = 101;
 	}
 
@@ -619,6 +634,7 @@ message CreateMeasurementCommand {
 	optional ColStoreInfo ColStoreInfo = 7;
     repeated FieldSchema SchemaInfo = 8;
 	optional Options Options = 9;
+	optional int32 InitNumOfShards = 10;
 }
 
 message AlterShardKeyCmd {
@@ -1166,4 +1182,60 @@ message UpdateMeasurementCommand {
  	required string Rp = 2;
  	required string Mst = 3;
  	required Options Options = 4;
+}
+
+message DataOps {
+	repeated string Op = 1;
+	optional int64 newIndex = 2;
+	optional int64 MaxCQChangeID = 3;
+	optional int32 GetOpState = 4;
+	optional Data Data = 5;
+}
+
+message CreateSqlNodeCommand {
+	extend Command {
+		optional CreateSqlNodeCommand command = 195;
+	}
+	required string HTTPAddr = 1;
+	optional string GossipAddr = 2;
+}
+
+message UpdateSqlNodeStatusCommand {
+    extend Command {
+        optional UpdateSqlNodeStatusCommand command = 196;
+    }
+    required uint64 ID     = 1;
+    required int32 Status  = 2;
+    required uint64 Ltime  = 3;
+    optional string GossipAddr = 4;
+}
+
+message UpdateNodeTmpIndexCommand {
+    extend Command {
+        optional UpdateNodeTmpIndexCommand command = 197;
+    }
+    required int32 Role     = 1;
+    required uint64 Index   = 2;
+    required uint64 NodeId  = 3;
+}
+
+message FileInfo {
+	optional uint64 sequence      = 1;
+	optional uint32 level         = 2;
+	optional uint32 merge         = 3;
+	optional uint32 extent        = 4;
+	optional uint64 mstID         = 5;
+	optional uint64 shardID       = 6;
+	optional int64  deletedAt     = 7;
+	optional int64  createdAt     = 8;
+	optional int64  minTime       = 9;
+	optional int64  maxTime       = 10;
+	optional int64  rowCount      = 11;
+	optional int64  fileSizeBytes = 12;
+}
+message InsertFilesCommand {
+	extend Command {
+		optional InsertFilesCommand command = 198;
+	}
+	repeated FileInfo FileInfos = 1;
 }

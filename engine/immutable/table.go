@@ -20,7 +20,6 @@ import (
 	"sync"
 	"unsafe"
 
-	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"go.uber.org/zap"
@@ -135,20 +134,21 @@ func EstimateBufferSize(recSize int, rows int) int {
 	return rows * recSize
 }
 
-func WriteIntoFile(msb *MsBuilder, tmp bool, withPKIndex bool, skipIndex *influxql.IndexRelation) error {
+func WriteIntoFile(msb *MsBuilder, tmp bool, withPKIndex bool, ir *influxql.IndexRelation) error {
 	f, err := msb.NewTSSPFile(tmp)
 	if err != nil {
 		panic(err)
 	}
 	if f != nil {
 		msb.Files = append(msb.Files, f)
+		fileInfo := genFileInfo(f, msb)
+		msb.FilesInfo = append(msb.FilesInfo, fileInfo)
 	}
 
 	if !withPKIndex {
 		err = RenameTmpFiles(msb.Files)
 	} else {
-		indexList := getSkipIndexList(skipIndex, msb.fullTextIdx)
-		err = RenameTmpFilesWithPKIndex(msb.Files, indexList)
+		err = RenameTmpFilesWithPKIndex(msb.Files, ir)
 	}
 
 	if err != nil {
@@ -156,17 +156,4 @@ func WriteIntoFile(msb *MsBuilder, tmp bool, withPKIndex bool, skipIndex *influx
 	}
 
 	return RenameTmpFullTextIdxFile(msb)
-}
-
-func getSkipIndexList(skipIndex *influxql.IndexRelation, isFullTextIdx bool) []string {
-	var indexList []string
-	if skipIndex != nil && len(skipIndex.IndexNames) != 0 {
-		for i := range skipIndex.IndexNames {
-			//If a full-text index is created, bf will not be created separately.
-			if (!isFullTextIdx && skipIndex.IndexNames[i] == index.BloomFilterIndex) || skipIndex.IndexNames[i] == index.MinMaxIndex {
-				indexList = append(indexList, skipIndex.IndexList[i].IList...)
-			}
-		}
-	}
-	return indexList
 }

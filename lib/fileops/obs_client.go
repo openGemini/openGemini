@@ -99,6 +99,8 @@ type ObsClient interface {
 	ModifyObject(input *obs.ModifyObjectInput) (output *obs.ModifyObjectOutput, err error)
 	PutObject(input *obs.PutObjectInput) (output *obs.PutObjectOutput, err error)
 	GetObjectMetadata(input *obs.GetObjectMetadataInput) (output *obs.GetObjectMetadataOutput, err error)
+	RenameFile(input *obs.RenameFileInput) (*obs.RenameFileOutput, error)
+	IsObsFile(input *obs.HeadObjectInput) (output *obs.BaseModel, err error)
 	Do(r *http.Request) (*http.Response, error)
 }
 
@@ -168,4 +170,12 @@ func (o *obsClient) GetObjectMetadata(input *obs.GetObjectMetadataInput) (*obs.G
 
 func (o *obsClient) Do(r *http.Request) (*http.Response, error) {
 	return o.httpClient.Do(r)
+}
+
+func (o *obsClient) RenameFile(input *obs.RenameFileInput) (output *obs.RenameFileOutput, err error) {
+	return o.obsClient.RenameFile(input)
+}
+
+func (o *obsClient) IsObsFile(input *obs.HeadObjectInput) (output *obs.BaseModel, err error) {
+	return o.obsClient.HeadObject(input)
 }

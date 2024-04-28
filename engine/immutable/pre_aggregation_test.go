@@ -109,3 +109,31 @@ func TestConvert(t *testing.T) {
 	require.NotNil(t, builder.FloatBuilder())
 	require.NotNil(t, builder.IntegerBuilder())
 }
+
+func TestFloatPreAgg_add(t *testing.T) {
+	agg := NewFloatPreAgg()
+	var assertMin = func(v float64, tm int64) {
+		require.Equal(t, v, agg.minV)
+		require.Equal(t, tm, agg.minTime)
+	}
+	var assertMax = func(v float64, tm int64) {
+		require.Equal(t, v, agg.maxV)
+		require.Equal(t, tm, agg.maxTime)
+	}
+
+	agg.addMin(1, 10)
+	agg.addMin(2, 11)
+	agg.addMin(1, 20)
+	assertMin(1.0, 10)
+
+	agg.addMin(0.1, 30)
+	assertMin(0.1, 30)
+
+	agg.addMax(1, 10)
+	agg.addMax(0.1, 20)
+	agg.addMax(1, 20)
+	assertMax(1.0, 10)
+
+	agg.addMax(2, 30)
+	assertMax(2.0, 30)
+}

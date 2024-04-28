@@ -18,6 +18,8 @@ package meta
 
 import (
 	"bytes"
+	"sort"
+	"sync"
 	"time"
 
 	"github.com/openGemini/openGemini/lib/config"
@@ -131,24 +133,29 @@ func (mo *Options) GetTagSplitChar() string {
 }
 
 type MeasurementInfo struct {
-	Name          string // measurement name with version
-	originName    string // cache original measurement name
-	ShardKeys     []ShardKeyInfo
-	Schema        map[string]int32
-	IndexRelation influxql.IndexRelation
-	ColStoreInfo  *ColStoreInfo
-	MarkDeleted   bool
-	EngineType    config.EngineType
-	Options       *Options
-	ObsOptions    *obs.ObsOptions // assign DatabaseInfo's ObsOptions to it when obatining MeasurementInfo
-	tagKeysTotal  int
+	Name            string // measurement name with version
+	originName      string // cache original measurement name
+	ShardKeys       []ShardKeyInfo
+	ShardIdexes     map[uint64][]int // index of ShardInfo in each shard group which contains this measurement.
+	InitNumOfShards int32            // init number of shards which contains this measurement in each shard group.
+	Schema          map[string]int32
+	IndexRelation   influxql.IndexRelation
+	ColStoreInfo    *ColStoreInfo
+	MarkDeleted     bool
+	EngineType      config.EngineType
+	Options         *Options
+	ObsOptions      *obs.ObsOptions // assign DatabaseInfo's ObsOptions to it when obatining MeasurementInfo
+	tagKeysTotal    int
+	ID              uint64
+	SchemaLock      sync.RWMutex //ts-meta not use
 }
 
-func NewMeasurementInfo(nameWithVer string) *MeasurementInfo {
+func NewMeasurementInfo(nameWithVer string, name string, engineType config.EngineType, id uint64) *MeasurementInfo {
 	return &MeasurementInfo{
 		Name:       nameWithVer,
-		originName: influx.GetOriginMstName(nameWithVer),
-		EngineType: config.TSSTORE,
+		originName: name,
+		EngineType: engineType,
+		ID:         id,
 	}
 }
 
@@ -166,12 +173,29 @@ func (msti *MeasurementInfo) IsTimeSorted() bool {
 	return msti.ColStoreInfo.SortKey[0] == record.TimeField
 }
 
+func (msti *MeasurementInfo) GetRecordSchema() record.Schemas {
+	var schema record.Schemas
+	schema = make([]record.Field, 0, len(msti.Schema))
+	msti.SchemaLock.RLock()
+	defer msti.SchemaLock.RUnlock()
+	for k, v := range msti.Schema {
+		schema = append(schema, record.Field{Type: int(v), Name: k})
+	}
+	sort.Sort(schema)
+	schema = append(schema, record.Field{Type: influx.Field_Type_Int, Name: "time"})
+	return schema
+}
+
 func (msti *MeasurementInfo) IsDetachedWrite() bool {
 	return msti.ObsOptions != nil
 }
 
 func (msti *MeasurementInfo) OriginName() string {
 	return msti.originName
+}
+
+func (msti *MeasurementInfo) GetInitNumOfShards() int32 {
+	return msti.InitNumOfShards
 }
 
 func (msti *MeasurementInfo) SetoriginName(originName string) {
@@ -198,6 +222,7 @@ func (msti *MeasurementInfo) marshal() *proto2.MeasurementInfo {
 		Name:        proto.String(msti.Name),
 		MarkDeleted: proto.Bool(msti.MarkDeleted),
 		EngineType:  proto.Uint32(uint32(msti.EngineType)),
+		ID:          proto.Uint64(msti.ID),
 	}
 
 	if msti.ShardKeys != nil {
@@ -206,13 +231,27 @@ func (msti *MeasurementInfo) marshal() *proto2.MeasurementInfo {
 			pb.ShardKeys[i] = msti.ShardKeys[i].Marshal()
 		}
 	}
-
+	msti.SchemaLock.RLock()
 	if msti.Schema != nil {
 		pb.Schema = make(map[string]int32, len(msti.Schema))
 		for n, t := range msti.Schema {
 			pb.Schema[n] = t
 		}
 	}
+	msti.SchemaLock.RUnlock()
+	if msti.ShardIdexes != nil {
+		pb.ShardIdxes = make(map[uint64]*proto2.Idxes, len(msti.ShardIdexes))
+		for sgi, shardID := range msti.ShardIdexes {
+			pb.ShardIdxes[sgi] = &proto2.Idxes{
+				Idx: make([]int32, len(shardID)),
+			}
+			for i, v := range shardID {
+				pb.ShardIdxes[sgi].Idx[i] = int32(v)
+			}
+		}
+	}
+
+	pb.InitNumOfShards = proto.Int32(msti.GetInitNumOfShards())
 
 	pb.IndexRelation = EncodeIndexRelation(&msti.IndexRelation)
 	if msti.ColStoreInfo != nil {
@@ -234,6 +273,7 @@ func (msti *MeasurementInfo) unmarshal(pb *proto2.MeasurementInfo) {
 	msti.originName = influx.GetOriginMstName(msti.Name)
 	msti.MarkDeleted = pb.GetMarkDeleted()
 	msti.EngineType = config.EngineType(pb.GetEngineType())
+	msti.ID = pb.GetID()
 	if pb.GetShardKeys() != nil {
 		msti.ShardKeys = make([]ShardKeyInfo, len(pb.GetShardKeys()))
 		for i := range pb.GetShardKeys() {
@@ -241,7 +281,7 @@ func (msti *MeasurementInfo) unmarshal(pb *proto2.MeasurementInfo) {
 		}
 	}
 
-	if len(pb.GetSchema()) > 0 {
+	if pb.GetSchema() != nil {
 		if config.IsLogKeeper() {
 			msti.Schema = make(map[string]int32, len(pb.GetSchema())+1)
 			msti.Schema[record.SeqIDField] = influx.Field_Type_Int
@@ -249,6 +289,18 @@ func (msti *MeasurementInfo) unmarshal(pb *proto2.MeasurementInfo) {
 			msti.Schema = make(map[string]int32, len(pb.GetSchema()))
 		}
 	}
+
+	if pb.GetShardIdxes() != nil {
+		msti.ShardIdexes = make(map[uint64][]int, len(pb.GetShardIdxes()))
+		for sgi, shardIdxes := range pb.GetShardIdxes() {
+			msti.ShardIdexes[sgi] = make([]int, len(shardIdxes.GetIdx()))
+			for i, v := range shardIdxes.GetIdx() {
+				msti.ShardIdexes[sgi][i] = int(v)
+			}
+		}
+	}
+
+	msti.InitNumOfShards = pb.GetInitNumOfShards()
 
 	for name, t := range pb.GetSchema() {
 		msti.Schema[name] = t
@@ -288,11 +340,20 @@ func (msti *MeasurementInfo) UnmarshalBinary(buf []byte) error {
 	return nil
 }
 
-func (msti MeasurementInfo) clone() *MeasurementInfo {
-	other := msti
-	other.Schema = msti.cloneSchema()
+func (msti *MeasurementInfo) clone() *MeasurementInfo {
+	other := &MeasurementInfo{}
+	other.Name = msti.Name
+	other.originName = msti.originName
+	other.InitNumOfShards = msti.InitNumOfShards
+	other.IndexRelation = msti.IndexRelation
+	other.MarkDeleted = msti.MarkDeleted
+	other.EngineType = msti.EngineType
+	other.tagKeysTotal = msti.tagKeysTotal
+
+	other.Schema = msti.CloneSchema()
+	other.ShardIdexes = msti.CloneShardIdexes()
 	if msti.ShardKeys == nil {
-		return &other
+		return other
 	}
 	other.ShardKeys = make([]ShardKeyInfo, len(msti.ShardKeys))
 	for i := range msti.ShardKeys {
@@ -310,22 +371,36 @@ func (msti MeasurementInfo) clone() *MeasurementInfo {
 		ObsOptions := *msti.ObsOptions
 		other.ObsOptions = &ObsOptions
 	}
-	return &other
+	return other
 }
 
-func (msti MeasurementInfo) cloneSchema() map[string]int32 {
+func (msti *MeasurementInfo) CloneSchema() map[string]int32 {
 	if msti.Schema == nil {
 		return nil
 	}
 
 	schema := make(map[string]int32, len(msti.Schema))
+	msti.SchemaLock.RLock()
+	defer msti.SchemaLock.RUnlock()
 	for name, info := range msti.Schema {
 		schema[name] = info
 	}
 	return schema
 }
 
-func (msti MeasurementInfo) FieldKeys(ret map[string]map[string]int32) {
+func (msti *MeasurementInfo) CloneShardIdexes() map[uint64][]int {
+	if msti.ShardIdexes == nil {
+		return nil
+	}
+
+	shardIdexes := make(map[uint64][]int, len(msti.ShardIdexes))
+	for name, info := range msti.ShardIdexes {
+		shardIdexes[name] = info
+	}
+	return shardIdexes
+}
+
+func (msti *MeasurementInfo) FieldKeys(ret map[string]map[string]int32) {
 	for key := range msti.Schema {
 		if msti.Schema[key] == influx.Field_Type_Tag {
 			continue
@@ -334,7 +409,7 @@ func (msti MeasurementInfo) FieldKeys(ret map[string]map[string]int32) {
 	}
 }
 
-func (msti MeasurementInfo) MatchTagKeys(cond influxql.Expr, ret map[string]map[string]struct{}) {
+func (msti *MeasurementInfo) MatchTagKeys(cond influxql.Expr, ret map[string]map[string]struct{}) {
 	for key, typ := range msti.Schema {
 		if typ != influx.Field_Type_Tag {
 			continue

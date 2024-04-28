@@ -284,7 +284,7 @@ func (StringValuer) SetValuer(_ influxql.Valuer, _ int) {
 }
 
 func (v StringValuer) Call(name string, args []interface{}) (interface{}, bool) {
-	if stringFunc := GetStringFunction(name); stringFunc != nil {
+	if stringFunc := GetMaterializeFunction(name, STRING); stringFunc != nil {
 		return stringFunc.CallFunc(name, args)
 	}
 	return nil, false

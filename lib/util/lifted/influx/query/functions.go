@@ -56,6 +56,15 @@ func (m FunctionTypeMapper) CallType(name string, args []influxql.DataType) (inf
 	if strFunc := GetStringFunction(name); strFunc != nil {
 		return strFunc.CallTypeFunc(name, args)
 	}
+
+	if labelFunc := GetLabelFunction(name); labelFunc != nil {
+		return labelFunc.CallTypeFunc(name, args)
+	}
+
+	if promTimeFunc := GetPromTimeFunction(name); promTimeFunc != nil {
+		return promTimeFunc.CallTypeFunc(name, args)
+	}
+
 	// Handle functions implemented by the query engine.
 	switch name {
 	case "median", "integral", "stddev",

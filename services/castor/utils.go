@@ -13,13 +13,14 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package castor
 
 import (
 	"net"
 	"sync"
 
-	"github.com/apache/arrow/go/arrow/array"
+	"github.com/apache/arrow/go/v13/arrow"
 	"github.com/openGemini/openGemini/lib/errno"
 )
 
@@ -30,7 +31,7 @@ func IsInternalKey(key string) bool {
 }
 
 // return value from record's metadata according to key
-func GetMetaValueFromRecord(data array.Record, key string) (string, *errno.Error) {
+func GetMetaValueFromRecord(data arrow.Record, key string) (string, *errno.Error) {
 	md := data.Schema().Metadata()
 	idx := md.FindKey(key)
 	if idx == -1 {
@@ -59,7 +60,7 @@ func NewRespChan(size int) (*respChan, *errno.Error) {
 		return nil, errno.NewError(errno.DataTooMuch, maxRespBufSize, size)
 	}
 	return &respChan{
-		C:     make(chan array.Record, size),
+		C:     make(chan arrow.Record, size),
 		ErrCh: make(chan *errno.Error, size),
 		alive: true,
 	}, nil
@@ -67,7 +68,7 @@ func NewRespChan(size int) (*respChan, *errno.Error) {
 
 type respChan struct {
 	mu    sync.Mutex
-	C     chan array.Record
+	C     chan arrow.Record
 	ErrCh chan *errno.Error
 	alive bool
 }
@@ -88,12 +89,12 @@ func (r *respChan) Close() {
 	close(r.ErrCh)
 }
 
-func newData(record array.Record) *data {
+func newData(record arrow.Record) *data {
 	return &data{record: record}
 }
 
 type data struct {
-	record   array.Record
+	record   arrow.Record
 	retryCnt int
 	err      *errno.Error
 }
@@ -108,5 +109,5 @@ func (d *data) size() int {
 
 type dataChanSet struct {
 	dataChan   chan *data
-	resultChan chan array.Record
+	resultChan chan arrow.Record
 }

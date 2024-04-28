@@ -21,10 +21,14 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"time"
 
+	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/request"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 )
@@ -64,7 +68,7 @@ type File interface {
 	Stat() (os.FileInfo, error)
 	SyncUpdateLength() error
 	Fd() uintptr
-	StreamReadBatch([]int64, []int64, int64, chan *request.StreamReader, int)
+	StreamReadBatch([]int64, []int64, int64, chan *request.StreamReader, int, bool)
 }
 
 type FSOption interface {
@@ -102,6 +106,9 @@ type VFS interface {
 	// Remove removes the named file or (empty) directory.
 	// the optional opt is: FileLockOption
 	Remove(name string, opt ...FSOption) error
+	// RemoveLocal removes the named file on local storage
+	// the optional opt is: FileLockOption
+	RemoveLocal(name string, opt ...FSOption) error
 	// RemoveAll removes path and any children it contains.
 	// the optional opt is: FileLockOption
 	RemoveAll(path string, opt ...FSOption) error
@@ -146,6 +153,15 @@ type VFS interface {
 
 	// CopyFileFromDFVToOBS copy a file from DFV TO OBS when use streamfs
 	CopyFileFromDFVToOBS(srcPath, dstPath string, opt ...FSOption) error
+
+	// GetAllFilesSizeInPath return totalSize, dfvSize, obsSize
+	GetAllFilesSizeInPath(path string) (int64, int64, int64, error)
+
+	// GetOBSTmpFileName return tmp file name on obs
+	GetOBSTmpFileName(path string, obsOption *obs.ObsOptions) string
+
+	// DecodeRemotePathToLocal return remote key path
+	DecodeRemotePathToLocal(path string) (string, error)
 }
 
 // Open opens the named file with specified options.
@@ -180,6 +196,20 @@ func CreateV1(name string, opt ...FSOption) (File, error) {
 func Remove(name string, opt ...FSOption) error {
 	t := GetFsType(name)
 	return GetFs(t).Remove(name, opt...)
+}
+
+func RemoveLocal(localName string, opt ...FSOption) error {
+	t := GetFsType(localName)
+	// use cold storage file name to get local file and remove it.
+	if t == Obs {
+		var err error
+		localName, err = DecodeObsPath(obs.GetPrefixDataPath(), localName)
+		if err != nil {
+			return err
+		}
+		t = Local
+	}
+	return GetFs(t).Remove(localName, opt...)
 }
 
 // RemoveAll removes path and any children it contains.
@@ -274,10 +304,40 @@ func CopyFileFromDFVToOBS(srcPath, dstPath string, opt ...FSOption) error {
 	return GetFs(t).CopyFileFromDFVToOBS(srcPath, dstPath, opt...)
 }
 
+func GetOBSTmpFileName(srcPath string, obsOption *obs.ObsOptions, opt ...FSOption) string {
+	t := GetFsType(srcPath)
+	return GetFs(t).GetOBSTmpFileName(srcPath, obsOption)
+}
+
 // CreateV2 create a new file in OBS when use streamfs
 func CreateV2(name string, opt ...FSOption) (File, error) {
 	t := GetFsType(name)
 	return GetFs(t).CreateV2(name, opt...)
+}
+
+func GetAllFilesSizeInPath(path string) (int64, int64, int64, error) {
+	t := GetFsType(path)
+	return GetFs(t).GetAllFilesSizeInPath(path)
+}
+
+func decodeRemotePathToLocal(path string) (string, error) {
+	t := GetFsType(path)
+	return GetFs(t).DecodeRemotePathToLocal(path)
+}
+
+func GetLocalFileName(fName string) (string, error) {
+	var err error
+	tmpName := fName
+	tmpName, err = decodeRemotePathToLocal(tmpName)
+	if err != nil {
+		return "", err
+	}
+
+	// local or streamFs
+	if len(tmpName) == 0 {
+		return fName, nil
+	}
+	return path.Join(obs.GetPrefixDataPath(), tmpName), nil
 }
 
 func opsStatEnd(startTime int64, opsType int, bytes int64) {
@@ -300,6 +360,29 @@ func opsStatEnd(startTime int64, opsType int, bytes int64) {
 
 func EncodeObsPath(endpoint, bucket, path, ak, sk string) string {
 	return fmt.Sprintf("%s%s/%s/%s/%s/%s", ObsPrefix, endpoint, ak, sk, bucket, path)
+}
+
+func DecodeObsPath(dir, path string) (string, error) {
+	_, _, _, _, basePath, err := decodeObsPath(path)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, basePath), nil
+}
+
+func DeleteObsPath(path string, obsOpts *obs.ObsOptions) error {
+	if path == "" {
+		return nil
+	}
+	var obsPath string
+	if obsOpts != nil {
+		path = filepath.Join(obsOpts.BasePath, path)
+		obsPath = EncodeObsPath(obsOpts.Endpoint, obsOpts.BucketName, path, obsOpts.Ak, obsOpts.Sk)
+	} else {
+		path := filepath.Join(config.GetDataDir(), path)
+		obsPath = path
+	}
+	return RemoveAll(obsPath)
 }
 
 func decodeObsPath(path string) (endpoint string, ak string, sk string, bucket string, basePath string, err error) {
@@ -329,6 +412,46 @@ func decodeObsPath(path string) (endpoint string, ak string, sk string, bucket s
 	bucket = path[:index]
 	basePath = path[index+1:]
 	return endpoint, ak, sk, bucket, basePath, nil
+}
+
+func OpenObsFile(path, fileName string, obsOpts *obs.ObsOptions, onlyRead bool) (File, error) {
+	var obsPath string
+	if obsOpts != nil {
+		path = filepath.Join(obsOpts.BasePath, path, fileName)
+		obsPath = EncodeObsPath(obsOpts.Endpoint, obsOpts.BucketName, path, obsOpts.Ak, obsOpts.Sk)
+	} else {
+		obsPath = filepath.Join(path, fileName)
+	}
+	var fd File
+	var err error
+	if onlyRead {
+		fd, err = OpenFile(obsPath, os.O_RDWR, 0640)
+	} else {
+		fd, err = OpenFile(obsPath, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0640)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return fd, nil
+}
+
+func GetRemoteDataPath(obsOpt *obs.ObsOptions, dataPath string) string {
+	var dir string
+	if obsOpt == nil {
+		return dir
+	}
+	dataPrefix := dataPath[len(obs.GetPrefixDataPath()):]
+	dir = fmt.Sprintf("%s%s/%s/%s/%s/%s%s", ObsPrefix, obsOpt.Endpoint, obsOpt.Ak, obsOpt.Sk, obsOpt.BucketName, obsOpt.BasePath, dataPrefix)
+	return dir
+}
+
+func GetRemotePrefixPath(obsOpt *obs.ObsOptions) string {
+	var dir string
+	if obsOpt == nil {
+		return dir
+	}
+	dir = fmt.Sprintf("%s%s/%s/%s/%s", ObsPrefix, obsOpt.Endpoint, obsOpt.Ak, obsOpt.Sk, obsOpt.BucketName)
+	return dir
 }
 
 type FsType uint32

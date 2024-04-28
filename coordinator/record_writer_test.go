@@ -21,13 +21,12 @@ import (
 	"io"
 	"path/filepath"
 	"sort"
-	"strings"
 	"testing"
 	"time"
 
-	"github.com/apache/arrow/go/arrow"
-	"github.com/apache/arrow/go/arrow/array"
-	"github.com/apache/arrow/go/arrow/memory"
+	"github.com/apache/arrow/go/v13/arrow"
+	"github.com/apache/arrow/go/v13/arrow/array"
+	"github.com/apache/arrow/go/v13/arrow/memory"
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
 	"github.com/openGemini/openGemini/engine/executor/spdy"
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
@@ -72,7 +71,7 @@ func (w *MockStorageEngine) WriteRec(db, rp, mst string, ptId uint32, shardID ui
 
 var StrValuePad = "aaaaabbbbbcccccdddddeeeeefffffggggghhhhhiiiijjjjj"
 
-func MockArrowRecords(numRec, numRowPerRec int) []array.Record {
+func MockArrowRecords(numRec, numRowPerRec int) []arrow.Record {
 	schema := arrow.NewSchema(
 		[]arrow.Field{
 			{Name: "int", Type: arrow.PrimitiveTypes.Int64},
@@ -87,7 +86,7 @@ func MockArrowRecords(numRec, numRowPerRec int) []array.Record {
 	b := array.NewRecordBuilder(memory.DefaultAllocator, schema)
 	b.Retain()
 
-	recs := make([]array.Record, 0, numRec)
+	recs := make([]arrow.Record, 0, numRec)
 	now := time.Now().UnixNano()
 	for i := 0; i < numRec; i++ {
 		for j := 0; j < numRowPerRec; j++ {
@@ -257,7 +256,7 @@ func (c *MockRWMetaClient) UpdateSchema(_ string, _ string, _ string, _ []*proto
 	return nil
 }
 
-func (c *MockRWMetaClient) CreateMeasurement(_ string, _ string, _ string, _ *meta.ShardKeyInfo, _ *influxql.IndexRelation, _ config.EngineType, _ *meta.ColStoreInfo,
+func (c *MockRWMetaClient) CreateMeasurement(_ string, _ string, _ string, _ *meta.ShardKeyInfo, _ int32, _ *influxql.IndexRelation, _ config.EngineType, _ *meta.ColStoreInfo,
 	_ []*proto.FieldSchema, _ *meta2.Options) (*meta.MeasurementInfo, error) {
 	return nil, c.CreateMeasurementErr
 }
@@ -426,18 +425,6 @@ func TestWriteLogRecord(t *testing.T) {
 	if err = rw.RetryWriteLogRecord(db, rp, mst, rec); err != nil {
 		t.Fatal(err)
 	}
-	if err = rw.writeLogRecord(db, rp, mst, rec, 0); err != nil {
-		t.Fatal(err)
-	}
-
-	schema1 := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	rec1 := record.NewRecord(schema1, true)
-	rec1.AppendTime([]int64{unixNano, unixNano, unixNano, unixNano, unixNano}...)
-	if err = rw.writeLogRecord(db, rp, mst, rec1, 0); err == nil || !strings.Contains(err.Error(), "checkSchema") {
-		t.Fatal("unexpect err", err)
-	}
 }
 
 func TestSplitAndWriteByShardErr(t *testing.T) {
@@ -460,22 +447,22 @@ func TestSplitAndWriteByShardErr(t *testing.T) {
 	assert.Equal(t, errno.Equal(err, errno.ArrowFlightGetShardGroupErr), true)
 }
 
-func MockArrowRecord1() array.Record {
+func MockArrowRecord1() arrow.Record {
 	schema := arrow.NewSchema([]arrow.Field{{Name: "time", Type: arrow.PrimitiveTypes.Int64}}, nil)
 	return array.NewRecordBuilder(memory.DefaultAllocator, schema).NewRecord()
 }
 
-func MockArrowRecord2() array.Record {
+func MockArrowRecord2() arrow.Record {
 	schema := arrow.NewSchema([]arrow.Field{{Name: "int1", Type: arrow.PrimitiveTypes.Int64}, {Name: "time", Type: arrow.PrimitiveTypes.Int64}}, nil)
 	return array.NewRecordBuilder(memory.DefaultAllocator, schema).NewRecord()
 }
 
-func MockArrowRecord3() array.Record {
+func MockArrowRecord3() arrow.Record {
 	schema := arrow.NewSchema([]arrow.Field{{Name: "time", Type: arrow.PrimitiveTypes.Float64}, {Name: "int", Type: arrow.PrimitiveTypes.Int64}}, nil)
 	return array.NewRecordBuilder(memory.DefaultAllocator, schema).NewRecord()
 }
 
-func MockArrowRecord4() array.Record {
+func MockArrowRecord4() arrow.Record {
 	schema := arrow.NewSchema([]arrow.Field{{Name: "int", Type: arrow.PrimitiveTypes.Float64}, {Name: "time", Type: arrow.PrimitiveTypes.Int64}}, nil)
 	return array.NewRecordBuilder(memory.DefaultAllocator, schema).NewRecord()
 }

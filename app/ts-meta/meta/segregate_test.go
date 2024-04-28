@@ -86,7 +86,10 @@ func TestHandleSpecialCtlData(t *testing.T) {
 	ptViews["db0"] = append(ptViews["db0"], meta2.PtInfo{Owner: meta2.PtOwner{NodeID: 3}, Status: meta2.Online, PtId: 1})
 	ptViews["db0"] = append(ptViews["db0"], meta2.PtInfo{Owner: meta2.PtOwner{NodeID: 2}, Status: meta2.Online, PtId: 2})
 	ptViews["db0"] = append(ptViews["db0"], meta2.PtInfo{Owner: meta2.PtOwner{NodeID: 3}, Status: meta2.Online, PtId: 3})
-	mms.GetStore().data = &meta2.Data{Databases: databases, DataNodes: dataNodes, PtView: ptViews}
+	ptViews["db1"] = append(ptViews["db1"], meta2.PtInfo{Owner: meta2.PtOwner{NodeID: 3}, Status: meta2.Online, PtId: 3})
+	mms.GetStore().data.Databases = databases
+	mms.GetStore().data.DataNodes = dataNodes
+	mms.GetStore().data.PtView = ptViews
 	mms.service.clusterManager.SetStop(0)
 	memberIds := make(map[uint64]struct{})
 	memberIds[2] = struct{}{}
@@ -185,7 +188,8 @@ func TestHandleSpecialCtlDataInvalidNodeIp(t *testing.T) {
 		ConnID:      3,
 		AliveConnID: 3,
 	})
-	mms.GetStore().data = &meta2.Data{Databases: databases, DataNodes: dataNodes}
+	mms.GetStore().data.Databases = databases
+	mms.GetStore().data.DataNodes = dataNodes
 	limitCmd := "limit|127.0.0.2,127.0.0.4"
 	err = mms.GetStore().SpecialCtlData(limitCmd)
 	if err.Error() != "some limit node ip is not correct: 127.0.0.4" {
@@ -227,7 +231,9 @@ func TestHandleSpecialCtlDataNoHa(t *testing.T) {
 	ptViews["db0"] = append(ptViews["db0"], meta2.PtInfo{Owner: meta2.PtOwner{NodeID: 3}, Status: meta2.Online, PtId: 1})
 	ptViews["db0"] = append(ptViews["db0"], meta2.PtInfo{Owner: meta2.PtOwner{NodeID: 2}, Status: meta2.Online, PtId: 2})
 	ptViews["db0"] = append(ptViews["db0"], meta2.PtInfo{Owner: meta2.PtOwner{NodeID: 3}, Status: meta2.Online, PtId: 3})
-	mms.GetStore().data = &meta2.Data{Databases: databases, DataNodes: dataNodes, PtView: ptViews}
+	mms.GetStore().data.Databases = databases
+	mms.GetStore().data.DataNodes = dataNodes
+	mms.GetStore().data.PtView = ptViews
 	mms.service.clusterManager.SetStop(0)
 	memberIds := make(map[uint64]struct{})
 	memberIds[2] = struct{}{}

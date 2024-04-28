@@ -59,6 +59,9 @@ const (
 
 	ShowTagKeysRequestMessage
 	ShowTagKeysResponseMessage
+
+	RaftMessagesRequestMessage
+	RaftMessagesResponseMessage
 )
 
 var MessageBinaryCodec = make(map[uint8]func() codec.BinaryCodec, 20)
@@ -89,6 +92,8 @@ func init() {
 	MessageBinaryCodec[KillQueryResponseMessage] = func() codec.BinaryCodec { return &KillQueryResponse{} }
 	MessageBinaryCodec[ShowTagKeysRequestMessage] = func() codec.BinaryCodec { return &ShowTagKeysRequest{} }
 	MessageBinaryCodec[ShowTagKeysResponseMessage] = func() codec.BinaryCodec { return &ShowTagKeysResponse{} }
+	MessageBinaryCodec[RaftMessagesRequestMessage] = func() codec.BinaryCodec { return &RaftMessagesRequest{} }
+	MessageBinaryCodec[RaftMessagesResponseMessage] = func() codec.BinaryCodec { return &RaftMessagesResponse{} }
 
 	MessageResponseTyp = map[uint8]uint8{
 		SeriesKeysRequestMessage:               SeriesKeysResponseMessage,
@@ -102,5 +107,6 @@ func init() {
 		ShowQueriesRequestMessage:              ShowQueriesResponseMessage,
 		KillQueryRequestMessage:                KillQueryResponseMessage,
 		ShowTagKeysRequestMessage:              ShowTagKeysResponseMessage,
+		RaftMessagesRequestMessage:             RaftMessagesResponseMessage,
 	}
 }

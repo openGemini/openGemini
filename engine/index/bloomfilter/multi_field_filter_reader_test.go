@@ -234,6 +234,8 @@ func TestReadMultiFilter(t *testing.T) {
 	for i := 128; i < 128+1; i++ {
 		isExist, _ := filterReader.IsExist(int64(i), &rpn.SKRPNElement{Value: "world"})
 		assert.True(t, isExist)
+		isExist, _ = filterReader.IsExist(int64(i), &rpn.SKRPNElement{Value: "world-"})
+		assert.True(t, isExist)
 	}
 
 	expr[0] = NewSKRPNElement("content", "hello1")
@@ -244,6 +246,9 @@ func TestReadMultiFilter(t *testing.T) {
 		isExist, _ := filterReader.IsExist(int64(i), &rpn.SKRPNElement{Value: "hello1"})
 		assert.False(t, isExist)
 	}
+
+	a, _ := filterReader.IsExist(int64(0), &rpn.SKRPNElement{Value: "-"})
+	assert.True(t, a)
 	filterReader.Close()
 
 	filterReader, _ = NewMultiFieldFilterReader(nil, nil, splitMap, false, true, 4, tmpDir, tmpDir, logstore.FilterLogName, logstore.OBSVLMFileName)

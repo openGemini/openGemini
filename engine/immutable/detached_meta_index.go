@@ -20,11 +20,15 @@ import (
 	"fmt"
 	"hash/crc32"
 	"sort"
+	"strings"
 
+	obs2 "github.com/huaweicloud/huaweicloud-sdk-go-obs/obs"
 	"github.com/openGemini/openGemini/lib/fileops"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/request"
 	"github.com/openGemini/openGemini/lib/util"
+	"go.uber.org/zap"
 )
 
 const (
@@ -38,7 +42,7 @@ type DetachedMetaIndexReader struct {
 }
 
 func NewDetachedMetaIndexReader(path string, obsOpts *obs.ObsOptions) (*DetachedMetaIndexReader, error) {
-	fd, err := obs.OpenObsFile(path, MetaIndexFile, obsOpts)
+	fd, err := fileops.OpenObsFile(path, MetaIndexFile, obsOpts, true)
 	if err != nil {
 		return nil, err
 	}
@@ -48,7 +52,7 @@ func NewDetachedMetaIndexReader(path string, obsOpts *obs.ObsOptions) (*Detached
 
 func (reader *DetachedMetaIndexReader) ReadMetaIndex(offset, length []int64) ([]*MetaIndex, error) {
 	c := make(chan *request.StreamReader, 1)
-	reader.r.StreamReadBatch(offset, length, c, MetaIndexLimitNum)
+	reader.r.StreamReadBatch(offset, length, c, MetaIndexLimitNum, true)
 	metaIndexs := make([]*MetaIndex, len(offset))
 	i := 0
 	for r := range c {
@@ -75,15 +79,27 @@ func (reader *DetachedMetaIndexReader) ReadMetaIndex(offset, length []int64) ([]
 	return metaIndexs, nil
 }
 
+func (reader *DetachedMetaIndexReader) Close() {
+	if reader.r != nil {
+		reader.r.Close()
+	}
+}
+
 func GetMetaIndexOffsetAndLengthByChunkId(chunkId int64) (offset, length int64) {
 	return chunkId*(crcSize+MetaIndexItemSize) + MetaIndexHeaderSize, crcSize + MetaIndexItemSize
 }
 
 func GetMetaIndexChunkCount(obsOptions *obs.ObsOptions, dataPath string) (int64, error) {
-	fd, err := OpenObsFile(dataPath, MetaIndexFile, obsOptions)
+	fd, err := fileops.OpenObsFile(dataPath, MetaIndexFile, obsOptions, true)
 	if err != nil {
+		obsErr, ok := err.(obs2.ObsError)
+		if (ok && obsErr.StatusCode == 404) || strings.Contains(err.Error(), "no such file or directory") {
+			logger.GetLogger().Error("obs dir not exist", zap.Error(err))
+			return 0, nil
+		}
 		return 0, err
 	}
+	defer fd.Close()
 	miFileInfo, err := fd.Stat()
 	if err != nil {
 		return 0, err

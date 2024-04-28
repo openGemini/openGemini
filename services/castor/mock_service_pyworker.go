@@ -21,15 +21,15 @@ import (
 	"net"
 
 	"github.com/BurntSushi/toml"
-	"github.com/apache/arrow/go/arrow"
-	"github.com/apache/arrow/go/arrow/array"
-	"github.com/apache/arrow/go/arrow/memory"
+	"github.com/apache/arrow/go/v13/arrow"
+	"github.com/apache/arrow/go/v13/arrow/array"
+	"github.com/apache/arrow/go/v13/arrow/memory"
 	"github.com/openGemini/openGemini/lib/config"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 )
 
-func mockPyworkerHandleData(recs []array.Record, conn net.Conn) error {
+func mockPyworkerHandleData(recs []arrow.Record, conn net.Conn) error {
 	for _, rec := range recs {
 		metaKeys := rec.Schema().Metadata().Keys()
 		metaVals := rec.Schema().Metadata().Values()
@@ -94,7 +94,7 @@ func MockPyWorker(addr string) error {
 }
 
 // mock castor response
-func BuildNumericRecord() array.Record {
+func BuildNumericRecord() arrow.Record {
 	metaKeys := []string{"t", string(AnomalyNum), string(MessageType), string(TaskID)}
 	metaVals := []string{"1", "1", string(DATA), ""}
 	metaData := arrow.NewMetadata(metaKeys, metaVals)

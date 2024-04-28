@@ -17,6 +17,7 @@ limitations under the License.
 package coordinator
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -57,6 +58,32 @@ func getExpRows() models.Rows {
 	}
 }
 
+func getExpRowsDesc() models.Rows {
+	return models.Rows{
+		&models.Row{
+			Name:    "mst",
+			Tags:    nil,
+			Columns: []string{"key", "value"},
+			Values: [][]interface{}{
+				{"author", "van"},
+				{"author", "tai"},
+				{"author", "san"},
+				{"author", "petter"},
+				{"author", "mao"},
+			},
+		},
+		&models.Row{
+			Name:    "mst_2",
+			Tags:    nil,
+			Columns: []string{"key", "value"},
+			Values: [][]interface{}{
+				{"author", "tai"},
+				{"author", "mao"},
+			},
+		},
+	}
+}
+
 func getCardinalityExpRows() models.Rows {
 	return models.Rows{
 		&models.Row{
@@ -75,43 +102,206 @@ func getCardinalityExpRows() models.Rows {
 }
 
 func TestShowTagValuesExecutor(t *testing.T) {
-	e := NewShowTagValuesExecutor(logger.NewLogger(errno.ModuleUnknown),
-		&mockMC{}, &mockME{}, &mockNS{})
-	smt := &influxql.ShowTagValuesStatement{
-		Database: "db0",
-		Sources:  append(influxql.Sources{}, &influxql.Measurement{}),
+	for _, testcase := range []struct {
+		Name     string
+		Disorder bool
+		Stmt     *influxql.ShowTagValuesStatement
+		ExpRows  models.Rows
+		ExpErr   error
+	}{
+		{
+			Name:     "no order by",
+			Disorder: true,
+			Stmt: &influxql.ShowTagValuesStatement{
+				Database: "db0",
+				Sources:  append(influxql.Sources{}, &influxql.Measurement{}),
+			},
+			ExpRows: getExpRows(),
+			ExpErr:  nil,
+		},
+		{
+			Name: "order by value asc",
+			Stmt: &influxql.ShowTagValuesStatement{
+				Database:   "db0",
+				Sources:    append(influxql.Sources{}, &influxql.Measurement{}),
+				SortFields: influxql.SortFields{&influxql.SortField{Name: "fieldName", Ascending: true}},
+			},
+			ExpRows: getExpRows(),
+			ExpErr:  nil,
+		},
+		{
+			Name: "order by desc",
+			Stmt: &influxql.ShowTagValuesStatement{
+				Database:   "db0",
+				Sources:    append(influxql.Sources{}, &influxql.Measurement{}),
+				SortFields: influxql.SortFields{&influxql.SortField{Name: "fieldName", Ascending: false}},
+			},
+			ExpRows: getExpRowsDesc(),
+			ExpErr:  nil,
+		},
+		{
+			Name: "no database",
+			Stmt: &influxql.ShowTagValuesStatement{
+				Database:   "",
+				Sources:    append(influxql.Sources{}, &influxql.Measurement{}),
+				SortFields: influxql.SortFields{&influxql.SortField{Name: "fieldName", Ascending: false}},
+			},
+			ExpRows: nil,
+			ExpErr:  ErrDatabaseNameRequired,
+		},
+		{
+			Name: "QueryTagKeys return nil",
+			Stmt: &influxql.ShowTagValuesStatement{
+				Database:   "db_nil",
+				Sources:    append(influxql.Sources{}, &influxql.Measurement{}),
+				SortFields: influxql.SortFields{&influxql.SortField{Name: "fieldName", Ascending: false}},
+			},
+			ExpRows: models.Rows{},
+			ExpErr:  nil,
+		},
+		{
+			Name: "QueryTagKeys return error",
+			Stmt: &influxql.ShowTagValuesStatement{
+				Database:   "db_error",
+				Sources:    append(influxql.Sources{}, &influxql.Measurement{}),
+				SortFields: influxql.SortFields{&influxql.SortField{Name: "fieldName", Ascending: false}},
+			},
+			ExpRows: nil,
+			ExpErr:  errors.New("mock error"),
+		},
+	} {
+		t.Run(testcase.Name, func(t *testing.T) {
+			e := NewShowTagValuesExecutor(logger.NewLogger(errno.ModuleUnknown),
+				&mockMC{}, &mockME{}, &mockNS{})
+			rows, err := e.Execute(testcase.Stmt)
+			// assert error
+			if testcase.ExpErr == nil {
+				assert.NoError(t, err)
+			} else {
+				assert.EqualError(t, err, testcase.ExpErr.Error())
+			}
+
+			// assert rows
+			if testcase.Disorder {
+				assert.Equal(t, len(rows), len(testcase.ExpRows))
+				for i, row := range rows {
+					assert.Equal(t, row.Name, testcase.ExpRows[i].Name)
+					assert.Equal(t, row.Tags, testcase.ExpRows[i].Tags)
+					assert.Equal(t, row.Columns, testcase.ExpRows[i].Columns)
+					assert.Equal(t, len(row.Values), len(testcase.ExpRows[i].Values))
+					for _, value := range row.Values {
+						var contains bool
+						for _, expValue := range testcase.ExpRows[i].Values {
+							if expValue[0] == value[0] && expValue[1] == expValue[1] {
+								contains = true
+								break
+							}
+						}
+						assert.True(t, contains)
+					}
+				}
+			} else {
+				assert.Equal(t, rows, testcase.ExpRows)
+			}
+		})
 	}
+}
 
-	rows, err := e.Execute(smt)
-	assert.NoError(t, err)
-	assert.Equal(t, rows, getExpRows())
-
-	// cardinality
-	e.Cardinality(influxql.Dimensions{})
-	rows, err = e.Execute(smt)
-	assert.NoError(t, err)
-	assert.Equal(t, rows, getCardinalityExpRows())
-
-	// no database
-	smt.Database = ""
-	_, err = e.Execute(smt)
-	assert.EqualError(t, err, ErrDatabaseNameRequired.Error())
-
-	// QueryTagKeys return nil
-	smt.Database = "db_nil"
-	rows, err = e.Execute(smt)
-	assert.NoError(t, err)
-	assert.Equal(t, rows, models.Rows{})
-
-	// QueryTagKeys return error
-	smt.Database = "db_error"
-	_, err = e.Execute(smt)
-	assert.EqualError(t, err, "mock error")
+func TestShowTagValuesExecutorCardinality(t *testing.T) {
+	for _, testcase := range []struct {
+		Name               string
+		Stmt               *influxql.ShowTagValuesStatement
+		ExpCardinalityRows models.Rows
+		ExpErr             error
+	}{
+		{
+			Name: "no order by cardinality",
+			Stmt: &influxql.ShowTagValuesStatement{
+				Database: "db0",
+				Sources:  append(influxql.Sources{}, &influxql.Measurement{}),
+			},
+			ExpCardinalityRows: getCardinalityExpRows(),
+			ExpErr:             nil,
+		},
+		{
+			Name: "order by value asc cardinality",
+			Stmt: &influxql.ShowTagValuesStatement{
+				Database:   "db0",
+				Sources:    append(influxql.Sources{}, &influxql.Measurement{}),
+				SortFields: influxql.SortFields{&influxql.SortField{Name: "fieldName", Ascending: true}},
+			},
+			ExpCardinalityRows: getCardinalityExpRows(),
+			ExpErr:             nil,
+		},
+		{
+			Name: "order by desc cardinality",
+			Stmt: &influxql.ShowTagValuesStatement{
+				Database:   "db0",
+				Sources:    append(influxql.Sources{}, &influxql.Measurement{}),
+				SortFields: influxql.SortFields{&influxql.SortField{Name: "fieldName", Ascending: false}},
+			},
+			ExpCardinalityRows: getCardinalityExpRows(),
+			ExpErr:             nil,
+		},
+	} {
+		t.Run(testcase.Name, func(t *testing.T) {
+			e := NewShowTagValuesExecutor(logger.NewLogger(errno.ModuleUnknown),
+				&mockMC{}, &mockME{}, &mockNS{})
+			// cardinality
+			e.Cardinality(influxql.Dimensions{})
+			rows, err := e.Execute(testcase.Stmt)
+			assert.NoError(t, err)
+			assert.Equal(t, rows, testcase.ExpCardinalityRows)
+		})
+	}
 }
 
 func TestApplyLimit(t *testing.T) {
 	e := &ShowTagValuesExecutor{}
-	data := netstorage.TagSets{
+
+	format := "limit failed. exp: len=%d, got: len=%d"
+
+	for _, testcase := range []struct {
+		Name    string
+		Data    netstorage.TagSets
+		Offset  int
+		Limit   int
+		OrderBy int
+		Exp     int
+	}{
+		{Name: "offset: 0, limit:10, orderBy:asc", Offset: 0, Limit: 10, OrderBy: orderByValueAsc, Exp: 5, Data: applyLimitData()},
+		{Name: "offset: 0, limit: 2, orderBy:asc", Offset: 0, Limit: 2, OrderBy: orderByValueAsc, Exp: 2, Data: applyLimitData()},
+		{Name: "offset: 2, limit: 1, orderBy:asc", Offset: 2, Limit: 1, OrderBy: orderByValueAsc, Exp: 1, Data: applyLimitData()},
+		{Name: "offset: 4, limit:10, orderBy:asc", Offset: 4, Limit: 10, OrderBy: orderByValueAsc, Exp: 1, Data: applyLimitData()},
+		{Name: "offset:-1, limit:-1, orderBy:asc", Offset: -1, Limit: -1, OrderBy: orderByValueAsc, Exp: 5, Data: applyLimitData()},
+		{Name: "offset: 2, limit:-1, orderBy:asc", Offset: 2, Limit: -1, OrderBy: orderByValueAsc, Exp: 3, Data: applyLimitData()},
+		{Name: "offset:-2, limit: 1, orderBy:asc", Offset: -2, Limit: 1, OrderBy: orderByValueAsc, Exp: 1, Data: applyLimitData()},
+
+		{Name: "offset: 0, limit:10, orderBy:desc", Offset: 0, Limit: 10, OrderBy: orderByValueDesc, Exp: 5, Data: applyLimitData()},
+		{Name: "offset: 0, limit: 2, orderBy:desc", Offset: 0, Limit: 2, OrderBy: orderByValueDesc, Exp: 2, Data: applyLimitData()},
+		{Name: "offset: 2, limit: 1, orderBy:desc", Offset: 2, Limit: 1, OrderBy: orderByValueDesc, Exp: 1, Data: applyLimitData()},
+		{Name: "offset: 4, limit:10, orderBy:desc", Offset: 4, Limit: 10, OrderBy: orderByValueDesc, Exp: 1, Data: applyLimitData()},
+		{Name: "offset:-1, limit:-1, orderBy:desc", Offset: -1, Limit: -1, OrderBy: orderByValueDesc, Exp: 5, Data: applyLimitData()},
+		{Name: "offset: 2, limit:-1, orderBy:desc", Offset: 2, Limit: -1, OrderBy: orderByValueDesc, Exp: 3, Data: applyLimitData()},
+		{Name: "offset:-2, limit: 1, orderBy:desc", Offset: -2, Limit: 1, OrderBy: orderByValueDesc, Exp: 1, Data: applyLimitData()},
+
+		{Name: "offset: 0, limit:10, orderBy:nil", Offset: 0, Limit: 10, OrderBy: orderByValueNil, Exp: 5, Data: applyLimitData()},
+		{Name: "offset: 0, limit: 2, orderBy:nil", Offset: 0, Limit: 2, OrderBy: orderByValueNil, Exp: 2, Data: applyLimitData()},
+		{Name: "offset: 2, limit: 1, orderBy:nil", Offset: 2, Limit: 1, OrderBy: orderByValueNil, Exp: 1, Data: applyLimitData()},
+		{Name: "offset: 4, limit:10, orderBy:nil", Offset: 4, Limit: 10, OrderBy: orderByValueNil, Exp: 1, Data: applyLimitData()},
+		{Name: "offset:-1, limit:-1, orderBy:nil", Offset: -1, Limit: -1, OrderBy: orderByValueNil, Exp: 5, Data: applyLimitData()},
+		{Name: "offset: 2, limit:-1, orderBy:nil", Offset: 2, Limit: -1, OrderBy: orderByValueNil, Exp: 3, Data: applyLimitData()},
+		{Name: "offset:-2, limit: 1, orderBy:nil", Offset: -2, Limit: 1, OrderBy: orderByValueNil, Exp: 1, Data: applyLimitData()},
+	} {
+		t.Run(fmt.Sprintf("offset:%d, limit:%d, orderBy:%d", testcase.Offset, testcase.Limit, testcase.OrderBy), func(t *testing.T) {
+			ret := e.applyLimit(testcase.Offset, testcase.Limit, testcase.OrderBy, testcase.Data)
+			assert.Equal(t, len(ret), testcase.Exp, format, testcase.Exp, len(ret))
+		})
+	}
+}
+
+func applyLimitData() netstorage.TagSets {
+	return netstorage.TagSets{
 		{Key: "a", Value: "aaa"},
 		{Key: "b", Value: "bbb"},
 		{Key: "a", Value: "aaa111"},
@@ -121,38 +311,6 @@ func TestApplyLimit(t *testing.T) {
 		{Key: "b", Value: "bbb"},
 		{Key: "c", Value: "ccc"},
 	}
-
-	format := "limit failed. exp: len=%d, got: len=%d"
-
-	ret := e.applyLimit(0, 10, data)
-	exp := 5
-	assert.Equal(t, len(ret), exp, format, exp, len(ret))
-
-	exp = 2
-	ret = e.applyLimit(0, 2, data)
-	assert.Equal(t, len(ret), exp, format, exp, len(ret))
-
-	exp = 1
-	ret = e.applyLimit(2, 1, data)
-	assert.Equal(t, len(ret), exp, format, exp, len(ret))
-	assert.Equal(t, ret[0].Value, "bbb", "limit failed. exp: bbb, got: %s", ret[0].Value)
-
-	exp = 1
-	ret = e.applyLimit(4, 10, data)
-	assert.Equal(t, len(ret), exp, format, exp, len(ret))
-	assert.Equal(t, ret[0].Value, "ccc", "limit failed. exp: ccc, got: %s", ret[0].Value)
-
-	exp = 5
-	ret = e.applyLimit(-1, -1, data)
-	assert.Equal(t, len(ret), exp, format, exp, len(ret))
-
-	exp = 3
-	ret = e.applyLimit(2, -1, data)
-	assert.Equal(t, len(ret), exp, format, exp, len(ret))
-
-	exp = 1
-	ret = e.applyLimit(-2, 1, data)
-	assert.Equal(t, len(ret), exp, format, exp, len(ret))
 }
 
 type mockMC struct {
@@ -220,7 +378,7 @@ func (m *mockNS) ShowTagKeys(nodeID uint64, db string, ptId []uint32, measuremen
 	return arr, nil
 }
 
-func (m *mockNS) TagValues(nodeID uint64, db string, ptIDs []uint32, tagKeys map[string]map[string]struct{}, cond influxql.Expr) (netstorage.TablesTagSets, error) {
+func (m *mockNS) TagValues(nodeID uint64, db string, ptIDs []uint32, tagKeys map[string]map[string]struct{}, cond influxql.Expr, limit int, disorder bool) (netstorage.TablesTagSets, error) {
 	if nodeID == 1 {
 		return append(netstorage.TablesTagSets{}, netstorage.TableTagSets{
 			Name: "mst",

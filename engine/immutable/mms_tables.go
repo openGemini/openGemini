@@ -32,10 +32,13 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/fragment"
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/record"
 	stats "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/savsgio/dictpool"
 	"go.uber.org/zap"
@@ -69,7 +72,7 @@ type TablesStore interface {
 	CompactionEnabled() bool
 	MergeEnabled() bool
 	IsOutOfOrderFilesExist() bool
-	MergeOutOfOrder(shId uint64, force bool) error
+	MergeOutOfOrder(shId uint64, full bool, force bool) error
 	LevelCompact(level uint16, shid uint64) error
 	FullCompact(shid uint64) error
 	SetAddFunc(addFunc func(int64))
@@ -77,6 +80,7 @@ type TablesStore interface {
 	GetRowCountsBySid(measurement string, sid uint64) (int64, error)
 	AddRowCountsBySid(measurement string, sid uint64, rowCounts int64)
 	GetOutOfOrderFileNum() int
+	GetTableFileNum(string, bool) int
 	GetMstFileStat() *stats.FileStat
 	DropMeasurement(ctx context.Context, name string) error
 	GetFileSeq() uint64
@@ -90,11 +94,14 @@ type TablesStore interface {
 	SeriesTotal() uint64
 	SetLockPath(lock *string)
 	FullyCompacted() bool
+	SetObsOption(option *obs.ObsOptions)
+	GetObsOption() *obs.ObsOptions
+	GetShardID() uint64
 }
 
 type ImmTable interface {
 	refMmsTable(m *MmsTables, name string, refOutOfOrder bool) (*sync.WaitGroup, *sync.WaitGroup)
-	unrefMmsTable(m *MmsTables, orderWg, outOfOrderWg *sync.WaitGroup)
+	unrefMmsTable(orderWg, outOfOrderWg *sync.WaitGroup)
 	addTSSPFile(m *MmsTables, isOrder bool, f TSSPFile, nameWithVer string)
 	getTSSPFiles(m *MmsTables, mstName string, isOrder bool) (*TSSPFiles, bool)
 	GetEngineType() config.EngineType
@@ -108,6 +115,7 @@ type ImmTable interface {
 	SetMstInfo(name string, mstInfo *meta.MeasurementInfo)
 	GetMstInfo(name string) (*meta.MeasurementInfo, bool)
 	UpdateAccumulateMetaIndexInfo(name string, index *AccumulateMetaIndex)
+	FullyCompacted(m *MmsTables) bool
 }
 
 type MmsTables struct {
@@ -138,6 +146,7 @@ type MmsTables struct {
 	compactRecovery bool
 	logger          *logger.Logger
 	ImmTable        ImmTable
+	obsOpt          *obs.ObsOptions
 
 	Conf *Config
 
@@ -190,6 +199,14 @@ func (m *MmsTables) SetImmTableType(engineType config.EngineType) {
 
 func (m *MmsTables) SetMstInfo(name string, mstInfo *meta.MeasurementInfo) {
 	m.ImmTable.SetMstInfo(name, mstInfo)
+}
+
+func (m *MmsTables) SetObsOption(option *obs.ObsOptions) {
+	m.obsOpt = option
+}
+
+func (m *MmsTables) GetObsOption() *obs.ObsOptions {
+	return m.obsOpt
 }
 
 func (m *MmsTables) SetAccumulateMetaIndex(name string, aMetaIndex *AccumulateMetaIndex) {
@@ -286,6 +303,10 @@ func (m *MmsTables) SetOpId(shardId uint64, opId uint64) {
 	m.opId = opId
 }
 
+func (m *MmsTables) GetShardID() uint64 {
+	return m.shardId
+}
+
 func (m *MmsTables) Open() (int64, error) {
 	lg := m.logger.With(zap.String("path", m.path))
 	lg.Info("table store open start", zap.Uint64("id", m.shardId), zap.Uint64("opId", m.opId))
@@ -320,6 +341,7 @@ func (m *MmsTables) Open() (int64, error) {
 	for i := range dirs {
 		mst := dirs[i].Name() // measurement name with version
 		loader.Load(filepath.Join(m.path, mst), mst, true)
+		loader.LoadRemote(filepath.Join(m.path, mst), mst, m.obsOpt)
 	}
 	loader.Wait()
 	stats.ShardStepDuration(m.shardId, m.opId, "FileLoaderDuration", time.Since(tm).Nanoseconds(), false)
@@ -627,6 +649,7 @@ func (m *MmsTables) DropMeasurement(_ context.Context, name string) error {
 	mmsDir := filepath.Join(m.path, name)
 	lockFile := fileops.FileLockOption(*m.lock)
 	_ = fileops.RemoveAll(mmsDir, lockFile)
+	_ = fileops.RemoveAll(fileops.GetRemoteDataPath(m.GetObsOption(), mmsDir), lockFile)
 	log.Info("drop measurement done", zap.String("name", name), zap.String("path", mstPath))
 
 	return nil
@@ -862,18 +885,19 @@ func RenameTmpFiles(newFiles []TSSPFile) error {
 	return nil
 }
 
-func RenameTmpFilesWithPKIndex(newFiles []TSSPFile, indexList []string) error {
+func RenameTmpFilesWithPKIndex(newFiles []TSSPFile, ir *influxql.IndexRelation) error {
 	lock := fileops.FileLockOption("")
+	var err error
 	for i := range newFiles {
 		f := newFiles[i]
 		tmpName := f.Path()
 		if IsTempleFile(filepath.Base(tmpName)) {
 			// rename tssp file
 			fname := tmpName[:len(tmpName)-len(tmpFileSuffix)]
-			if err := f.FreeFileHandle(); err != nil {
+			if err = f.FreeFileHandle(); err != nil {
 				return err
 			}
-			if err := f.Rename(fname); err != nil {
+			if err = f.Rename(fname); err != nil {
 				log.Error("rename file error", zap.String("name", tmpName), zap.Error(err))
 				if _, e := fileops.Stat(fname); e != nil {
 					return os.ErrNotExist
@@ -881,22 +905,45 @@ func RenameTmpFilesWithPKIndex(newFiles []TSSPFile, indexList []string) error {
 				return err
 			}
 
+			// get local file path if needed
+			fname, err = fileops.GetLocalFileName(fname)
+			if err != nil {
+				log.Error("get local file name fail", zap.Error(err))
+				return err
+			}
+
 			// rename pk index file
 			IndexFileName := fname[:len(fname)-tsspFileSuffixLen] + colstore.IndexFileSuffix
 			tmpIndexFileName := IndexFileName + tmpFileSuffix
-			if err := fileops.RenameFile(tmpIndexFileName, IndexFileName, lock); err != nil {
+			if err = fileops.RenameFile(tmpIndexFileName, IndexFileName, lock); err != nil {
 				err = errno.NewError(errno.RenameFileFailed, zap.String("old", tmpIndexFileName), zap.String("new", IndexFileName), err)
 				log.Error("rename file fail", zap.Error(err))
 				return err
 			}
-
-			if len(indexList) != 0 {
-				// rename skip index file
-				for j := range indexList {
-					skipIndexFileName := fname[:len(fname)-tsspFileSuffixLen] + "." + indexList[j] + colstore.BloomFilterIndexFileSuffix
-					tmpSkipIndexFileName := skipIndexFileName + tmpFileSuffix
-					if err := fileops.RenameFile(tmpSkipIndexFileName, skipIndexFileName, lock); err != nil {
-						err = errno.NewError(errno.RenameFileFailed, zap.String("old", tmpSkipIndexFileName), zap.String("new", skipIndexFileName), err)
+			if ir == nil {
+				continue
+			}
+			fileName := fname[:len(fname)-tsspFileSuffixLen]
+			for i, oid := range ir.Oids {
+				//If a full-text index is created, bf will not be created separately.
+				if oid == uint32(index.BloomFilterFullText) ||
+					oid == uint32(index.TimeCluster) {
+					continue
+				} else if oid == uint32(index.Text) {
+					for j := 0; j < colstore.TextIndexMax; j++ {
+						newName := colstore.AppendSecondaryIndexSuffix(fileName, ir.IndexList[i].IList[0], index.IndexType(oid), j)
+						oldName := newName + tmpFileSuffix
+						if err := fileops.RenameFile(oldName, newName, lock); err != nil {
+							err = errno.NewError(errno.RenameFileFailed, zap.String("old", oldName), zap.String("new", newName), err)
+							log.Error("rename file fail", zap.Error(err))
+							return err
+						}
+					}
+				} else {
+					newName := colstore.AppendSecondaryIndexSuffix(fileName, ir.IndexList[i].IList[0], index.IndexType(oid), 0)
+					oldName := newName + tmpFileSuffix
+					if err := fileops.RenameFile(oldName, newName, lock); err != nil {
+						err = errno.NewError(errno.RenameFileFailed, zap.String("old", oldName), zap.String("new", newName), err)
 						log.Error("rename file fail", zap.Error(err))
 						return err
 					}
@@ -1108,6 +1155,25 @@ func (m *MmsTables) NewStreamWriteFile(mst string) *StreamWriteFile {
 
 func (m *MmsTables) SetLockPath(lock *string) {
 	m.lock = lock
+}
+
+func (m *MmsTables) GetTableFileNum(name string, order bool) int {
+	mp := m.Order
+	if !order {
+		mp = m.OutOfOrder
+	}
+
+	m.mu.RLock()
+	files, ok := mp[name]
+	m.mu.RUnlock()
+
+	if !ok || files == nil {
+		return 0
+	}
+
+	files.RLock()
+	defer files.RUnlock()
+	return files.Len()
 }
 
 func levelSequenceEqual(level uint16, seq uint64, f TSSPFile) bool {

@@ -1,5 +1,3 @@
-//go:build lz4
-
 /*
 Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
 
@@ -24,6 +22,8 @@ import "C"
 import (
 	"errors"
 	"unsafe"
+
+	"github.com/pierrec/lz4/v4"
 )
 
 func bytesToCharPointer(b []byte) *C.char {
@@ -62,11 +62,12 @@ func CompressBlock(source, dest []byte) (int, error) {
 // If destination buffer is not large enough, decoding will stop and output an error code (<0).
 // If the source stream is detected malformed, the function will stop decoding and return a negative result.
 func DecompressSafe(source, dest []byte) (int, error) {
-	ret := int(C.LZ4_decompress_safe(bytesToCharPointer(source),
-		bytesToCharPointer(dest), C.int(len(source)), C.int(len(dest))))
-	if ret < 0 {
-		return ret, errors.New("lz4: invalid source or destination buffer too short")
+	size, err := lz4.UncompressBlock(source, dest)
+	if err != nil {
+		return 0, err
 	}
-
-	return ret, nil
+	if size <= 0 {
+		return size, errors.New("lz4: invalid source or destination buffer too short")
+	}
+	return 0, nil
 }

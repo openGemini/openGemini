@@ -19,13 +19,14 @@ package record_test
 import (
 	"fmt"
 	"math/rand"
+	"sort"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/apache/arrow/go/arrow"
-	"github.com/apache/arrow/go/arrow/array"
-	"github.com/apache/arrow/go/arrow/memory"
+	"github.com/apache/arrow/go/v13/arrow"
+	"github.com/apache/arrow/go/v13/arrow/array"
+	"github.com/apache/arrow/go/v13/arrow/memory"
 	"github.com/influxdata/influxdb/pkg/testing/assert"
 	"github.com/openGemini/openGemini/engine/mutable"
 	"github.com/openGemini/openGemini/lib/config"
@@ -35,7 +36,7 @@ import (
 	"github.com/savsgio/dictpool"
 )
 
-func MockArrowRecord(size int) array.Record {
+func MockArrowRecord(size int) arrow.Record {
 	s := arrow.NewSchema(
 		[]arrow.Field{
 			{Name: "age", Type: arrow.PrimitiveTypes.Int64},
@@ -81,7 +82,7 @@ func MockNativeRecord(size int) *record.Record {
 	return b
 }
 
-func MockArrowRecordWithNull() array.Record {
+func MockArrowRecordWithNull() arrow.Record {
 	s := arrow.NewSchema(
 		[]arrow.Field{
 			{Name: "age", Type: arrow.PrimitiveTypes.Int64},
@@ -133,6 +134,8 @@ func TestArrowRecordToNativeRecordWithNull(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	sort.Sort(r)
+	sort.Sort(rr)
 	record.CheckRecord(r)
 	assert.Equal(t, r, rr)
 }
@@ -160,7 +163,7 @@ func TestToPrimitiveType(t *testing.T) {
 
 var StrValuePad = "aaaaabbbbbcccccdddddeeeeefffffggggghhhhhiiiijjjjj"
 
-func MockFlowScopeArrowRecord(recIdx, numIntField, numStrField, numRowPerRec, now int, withNull bool) array.Record {
+func MockFlowScopeArrowRecord(recIdx, numIntField, numStrField, numRowPerRec, now int, withNull bool) arrow.Record {
 	schemaField := make([]arrow.Field, 0, numIntField+numStrField+1)
 	for i := 0; i < numIntField; i++ {
 		schemaField = append(schemaField, arrow.Field{Name: fmt.Sprintf("intKey%d", i), Type: arrow.PrimitiveTypes.Int64})
@@ -198,10 +201,10 @@ func MockFlowScopeArrowRecord(recIdx, numIntField, numStrField, numRowPerRec, no
 	return b.NewRecord()
 }
 
-func MockFlowScopeArrowRecords(numRec, numRowPerRec, numIntField, numStrField int, withNull bool) []array.Record {
+func MockFlowScopeArrowRecords(numRec, numRowPerRec, numIntField, numStrField int, withNull bool) []arrow.Record {
 	rand.Seed(time.Now().UnixNano())
 	now := time.Now().Nanosecond()
-	recs := make([]array.Record, 0, numRec)
+	recs := make([]arrow.Record, 0, numRec)
 	for i := 0; i < numRec; i++ {
 		recs = append(recs, MockFlowScopeArrowRecord(i, numIntField, numStrField, numRowPerRec, now, withNull))
 	}

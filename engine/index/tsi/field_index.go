@@ -49,6 +49,8 @@ type fieldIndex struct {
 	fieldKeys    map[string]string
 	fieldKeyLock sync.RWMutex
 	indexLock    sync.RWMutex
+
+	isOpen bool
 }
 
 func NewFieldIndex(opts *Options) (*fieldIndex, error) {
@@ -64,6 +66,11 @@ func NewFieldIndex(opts *Options) (*fieldIndex, error) {
 }
 
 func (idx *fieldIndex) Open() error {
+	idx.indexLock.Lock()
+	defer idx.indexLock.Unlock()
+	if idx.isOpen {
+		return nil
+	}
 	path := filepath.Join(idx.path, FieldIndexDirName)
 	tb, err := mergeset.OpenTable(path, nil, nil, idx.lock)
 	if err != nil {
@@ -73,6 +80,7 @@ func (idx *fieldIndex) Open() error {
 	if err = idx.loadFieldKey(); err != nil {
 		return err
 	}
+	idx.isOpen = true
 	return nil
 }
 
@@ -459,7 +467,11 @@ func (idx *fieldIndex) Delete(primaryIndex PrimaryIndex, name []byte, condition 
 }
 
 func (idx *fieldIndex) Close() error {
+	if !idx.isOpen {
+		return nil
+	}
 	idx.tb.MustClose()
+	idx.isOpen = false
 	return nil
 }
 

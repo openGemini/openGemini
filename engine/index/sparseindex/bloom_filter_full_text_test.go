@@ -28,6 +28,7 @@ import (
 	"github.com/openGemini/openGemini/lib/bloomfilter"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/fileops"
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/rpn"
@@ -65,6 +66,15 @@ func TestBloomFilterFullIndexReader(t *testing.T) {
 			Op:  influxql.MATCHPHRASE,
 			LHS: &influxql.VarRef{Val: "content"},
 			RHS: &influxql.StringLiteral{Val: "hello1"},
+		},
+		Sources: []influxql.Source{
+			&influxql.Measurement{
+				Name: "students",
+				IndexRelation: &influxql.IndexRelation{IndexNames: []string{index.BloomFilterFullTextIndex},
+					Oids:      []uint32{uint32(index.BloomFilterFullText)},
+					IndexList: []*influxql.IndexList{&influxql.IndexList{IList: []string{"content"}}},
+				},
+			},
 		},
 	}
 	rpnExpr := rpn.ConvertToRPNExpr(option.GetCondition())
@@ -126,6 +136,15 @@ func TestReadMultiVerticalFilter(t *testing.T) {
 			Op:  influxql.MATCHPHRASE,
 			LHS: &influxql.VarRef{Val: "content"},
 			RHS: &influxql.StringLiteral{Val: "hello1"},
+		},
+		Sources: []influxql.Source{
+			&influxql.Measurement{
+				Name: "students",
+				IndexRelation: &influxql.IndexRelation{IndexNames: []string{index.BloomFilterFullTextIndex},
+					Oids:      []uint32{uint32(index.BloomFilterFullText)},
+					IndexList: []*influxql.IndexList{&influxql.IndexList{IList: []string{"content"}}},
+				},
+			},
 		},
 	}
 	rpnExpr := rpn.ConvertToRPNExpr(option.GetCondition())

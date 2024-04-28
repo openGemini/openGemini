@@ -1072,6 +1072,24 @@ func getIndexAndBuilder(path string) (Index, *IndexBuilder) {
 	return primaryIndex, indexBuilder
 }
 
+func TestFieldIndexRepeatedOpen(t *testing.T) {
+	path := t.TempDir()
+	_, idxBuilder := getFieldIndexAndBuilder(path)
+	defer idxBuilder.Close()
+	err := idxBuilder.Open()
+	assert.NoError(t, err)
+}
+
+func TestFieldIndexRepeatedClose(t *testing.T) {
+	path := t.TempDir()
+	_, idxBuilder := getFieldIndexAndBuilder(path)
+	err := idxBuilder.Close()
+	assert.NoError(t, err)
+
+	err = idxBuilder.Close()
+	assert.NoError(t, err)
+}
+
 func TestCreateFieldIndex(t *testing.T) {
 	path := t.TempDir()
 	_, idxBuilder := getIndexAndBuilder(path)
@@ -1237,7 +1255,7 @@ func TestMergeSetCacheClear(t *testing.T) {
 		t.Fatal()
 	}
 	mem := 1 * 1024 * 1024
-	mIndex.cache = newIndexCache(mem/32, mem/32, mem/16, mem/128, path, false)
+	mIndex.cache = newIndexCache(mem/32, mem/32, mem/16, mem/128, path, false, false)
 
 	err = MergeSetCacheClear(mIndex)
 	if err != nil {

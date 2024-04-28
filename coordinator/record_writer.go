@@ -26,7 +26,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/apache/arrow/go/arrow/array"
+	"github.com/apache/arrow/go/v13/arrow"
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
@@ -49,7 +49,7 @@ type RWMetaClient interface {
 	DBPtView(database string) (meta.DBPtInfos, error)
 	Measurement(database string, rpName string, mstName string) (*meta.MeasurementInfo, error)
 	UpdateSchema(database string, retentionPolicy string, mst string, fieldToCreate []*proto.FieldSchema) error
-	CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta.ShardKeyInfo, indexR *influxql.IndexRelation, engineType config.EngineType,
+	CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta.ShardKeyInfo, numOfShards int32, indexR *influxql.IndexRelation, engineType config.EngineType,
 		colStoreInfo *meta.ColStoreInfo, schemaInfo []*proto.FieldSchema, options *meta.Options) (*meta.MeasurementInfo, error)
 	GetShardInfoByTime(database, retentionPolicy string, t time.Time, ptIdx int, nodeId uint64, engineType config.EngineType) (*meta.ShardInfo, error)
 }
@@ -96,7 +96,7 @@ func NewRecordWriter(timeout time.Duration, ptNum, recMsgChFactor int) *RecordWr
 	return rw
 }
 
-func (w *RecordWriter) RetryWriteRecord(database, retentionPolicy, measurement string, rec array.Record) error {
+func (w *RecordWriter) RetryWriteRecord(database, retentionPolicy, measurement string, rec arrow.Record) error {
 	w.recMsgCh <- &RecMsg{
 		Database:        database,
 		RetentionPolicy: retentionPolicy,
@@ -194,18 +194,19 @@ func (w *RecordWriter) processRecord(msg *RecMsg, ptIdx int) {
 			w.logger.Error("processRecord err", zap.String("db", msg.Database), zap.String("rp", msg.RetentionPolicy), zap.String("mst", msg.Measurement), zap.Error(writeErr))
 		}
 		switch m := msg.Rec.(type) {
-		case array.Record:
-			m.Release() // The memory is released. The value of reference counting is decreased by 1.
-		case *record.Record:
-			m.ResetForReuse()
+		case arrow.Record:
+			m.Release()
 		default:
 			break
 		}
 	}()
 
+	if w.recWriterHelpers[ptIdx].db != msg.Database || w.recWriterHelpers[ptIdx].rp != msg.RetentionPolicy {
+		w.recWriterHelpers[ptIdx].reset()
+	}
 	start := time.Now()
 	switch m := msg.Rec.(type) {
-	case array.Record:
+	case arrow.Record:
 		writeErr = w.writeRecord(msg.Database, msg.RetentionPolicy, msg.Measurement, m, ptIdx)
 		rowNums = m.NumRows()
 	case *record.Record:
@@ -222,7 +223,7 @@ func (w *RecordWriter) processRecord(msg *RecMsg, ptIdx int) {
 	atomic.AddInt64(&statistics.HandlerStat.WriteStoresDuration, time.Since(start).Nanoseconds())
 }
 
-func (w *RecordWriter) writeRecord(db, rp, mst string, rec array.Record, ptIdx int) error {
+func (w *RecordWriter) writeRecord(db, rp, mst string, rec arrow.Record, ptIdx int) error {
 	colNum, rowNum := rec.NumCols(), rec.NumRows()
 	if colNum == 0 || rowNum == 0 {
 		return nil

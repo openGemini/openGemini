@@ -30,6 +30,7 @@ import (
 	"io"
 	"math"
 	"sort"
+	"sync/atomic"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
@@ -918,6 +919,13 @@ func (is *indexSearch) searchAllTSIDsByName(name []byte, n *influxql.BinaryExpr,
 	return is.genSeriesIDIterator(*tsids, n), nil
 }
 
+func marshalTagFilterKey(dst []byte, tf *tagFilter) []byte {
+	prefix := atomic.LoadUint64(&tagFilterKeyGen)
+	dst = encoding.MarshalUint64(dst, prefix)
+	dst = tf.Marshal(dst)
+	return dst
+}
+
 func (is *indexSearch) seriesByBinaryExpr(name []byte, n *influxql.BinaryExpr, tsids **uint64set.Set, singleSeries bool) (index.SeriesIDIterator, error) {
 
 	if _, ok := n.LHS.(*influxql.BinaryExpr); ok {
@@ -975,10 +983,29 @@ func (is *indexSearch) seriesByBinaryExpr(name []byte, n *influxql.BinaryExpr, t
 		return nil, err
 	}
 
+	kb := kbPool.Get()
+	defer kbPool.Put(kb)
+
+	kb.B = marshalTagFilterKey(kb.B[:0], tf)
+	us := encoding.GetUint64s(1)
+	defer encoding.PutUint64s(us)
+	// Fast path: get series ids from cache
+	sids, err := is.idx.cache.getFromTagFilterCache(us.A, kb.B)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(sids) != 0 {
+		us.A = sids
+		return index.NewSeriesIDSetIterator(index.NewSeriesIDSet(us.A...)), nil
+	}
+
 	ids, _, err := is.searchTSIDsByTagFilterAndDateRange(tf)
 	if err != nil {
 		return nil, err
 	}
+
+	is.idx.cache.putToTagFilterCache(kb.B, ids.AppendTo(us.A[:0]))
 	return index.NewSeriesIDSetIterator(index.NewSeriesIDSetWithSet(ids)), nil
 }
 

@@ -16,77 +16,40 @@ limitations under the License.
 
 package record
 
-import (
-	"unsafe"
-
-	"github.com/openGemini/openGemini/lib/util"
-)
-
 func (cv *ColVal) AppendBooleans(values ...bool) {
-	for _, v := range values {
-		cv.AppendBoolean(v)
-	}
+	appendValues(cv, values...)
 }
 
 func (cv *ColVal) AppendBoolean(v bool) {
-	index := len(cv.Val)
-	cv.reserveVal(util.BooleanSizeBytes)
-	*(*bool)(unsafe.Pointer(&cv.Val[index])) = v
-	cv.setBitMap(cv.Len)
-	cv.Len++
+	appendValue(cv, v)
+}
+
+func (cv *ColVal) RemoveLastBoolean() {
+	removeLastValue[bool](cv)
 }
 
 func (cv *ColVal) AppendBooleanNullReserve() {
-	index := len(cv.Val)
-	cv.reserveVal(util.BooleanSizeBytes)
-	*(*bool)(unsafe.Pointer(&cv.Val[index])) = false
-	cv.resetBitMap(cv.Len)
-	cv.Len++
-	cv.NilCount++
+	appendNullReserve[bool](cv)
 }
 
 func (cv *ColVal) AppendBooleanNull() {
-	cv.resetBitMap(cv.Len)
-	cv.Len++
-	cv.NilCount++
+	appendNull(cv)
 }
 
 func (cv *ColVal) AppendBooleanNulls(count int) {
-	for i := 0; i < count; i++ {
-		cv.AppendBooleanNull()
-	}
+	appendNulls(cv, count)
 }
 
 func (cv *ColVal) BooleanValues() []bool {
-	return util.Bytes2BooleanSlice(cv.Val)
+	return values[bool](cv)
 }
 
 func (cv *ColVal) BooleanValue(i int) (bool, bool) {
-	isNil := cv.IsNil(i)
-	if isNil {
-		return false, isNil
-	}
-	return cv.BooleanValues()[cv.ValidCount(0, i)], isNil
+	return value(cv, cv.BooleanValues(), i)
 }
 
 func (cv *ColVal) UpdateBooleanValue(v bool, isNil bool, row int) {
-	if isNil {
-		cv.UpdateBooleanIntoNull(row)
-		return
-	}
-	if cv.IsNil(row) {
-		cv.NilCount--
-	}
-	cv.BooleanValues()[row] = v
-	cv.Bitmap[row>>3] |= BitMask[row&0x07]
-}
-
-func (cv *ColVal) UpdateBooleanIntoNull(row int) {
-	if !cv.IsNil(row) {
-		cv.BooleanValues()[row] = false
-		cv.NilCount++
-	}
-	cv.Bitmap[row>>3] &= FlippedBitMask[row&0x07]
+	updateValue(cv, v, isNil, row)
 }
 
 func (cv *ColVal) BooleanValueWithNullReserve(index int) (bool, bool) {
@@ -182,65 +145,11 @@ func (cv *ColVal) MinBooleanValue(values []bool, start, end int) (bool, int) {
 }
 
 func (cv *ColVal) FirstBooleanValue(values []bool, start, end int) (bool, int) {
-	if len(values) == 0 {
-		return false, -1
-	}
-
-	var (
-		first      bool
-		skip, vIdx int
-	)
-	row := -1
-	if cv.NilCount == 0 {
-		first = values[start]
-		row = start
-		return first, row
-	}
-
-	if cv.NilCount > 0 {
-		skip = cv.ValidCount(0, start)
-	}
-
-	vIdx = skip
-	for i := start; i < end && len(values[vIdx:]) > 0; i++ {
-		idx := cv.BitMapOffset + i
-		if cv.Bitmap[idx>>3]&BitMask[idx&0x07] == 0 {
-			continue
-		}
-		first = values[vIdx]
-		row = i
-		break
-	}
-	return first, row
+	return firstValue(values, start, end, cv)
 }
 
 func (cv *ColVal) LastBooleanValue(values []bool, start, end int) (bool, int) {
-	if len(values) == 0 {
-		return false, -1
-	}
-
-	var last bool
-	row := -1
-	if cv.NilCount == 0 {
-		last = values[end-1]
-		row = end - 1
-		return last, row
-	}
-
-	for i := end - 1; i >= start; i-- {
-		idx := cv.BitMapOffset + i
-		if cv.Bitmap[idx>>3]&BitMask[idx&0x07] == 0 {
-			continue
-		}
-		row = i
-		break
-	}
-	if row < start {
-		return last, -1
-	}
-	vIdx := cv.ValidCount(0, row)
-	last = values[vIdx]
-	return last, row
+	return lastValue(values, start, end, cv)
 }
 
 func (cv *ColVal) MaxBooleanValues(values []bool, start, end int) (bool, []int) {

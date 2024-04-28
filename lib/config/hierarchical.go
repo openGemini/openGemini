@@ -47,7 +47,7 @@ func NewHierarchicalConfig() HierarchicalConfig {
 		Enabled:              false,
 		RunInterval:          toml.Duration(DefaultHSRunInterval),
 		MaxProcessN:          DefaultMaxProcessHSNumber,
-		EnableWriteColdShard: true,
+		EnableWriteColdShard: false,
 	}
 }
 

@@ -9,5 +9,6 @@
     "CreateDataBase",
     "ShowQueries",
     "KillQuery",
-    "ShowTagKeys"
+    "ShowTagKeys",
+    "RaftMessages"
 ]

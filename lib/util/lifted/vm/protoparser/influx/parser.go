@@ -180,6 +180,14 @@ type Row struct {
 	IndexOptions            IndexOptions
 	ColumnToIndex           map[string]int // it indicates the sorted tagKey, fieldKey and index mapping relationship
 	ReadyBuildColumnToIndex bool
+
+	tagArrayInitialized bool
+	hasTagArray         bool
+	skipMarshalShardKey bool
+}
+
+func (r *Row) SkipMarshalShardKey() {
+	r.skipMarshalShardKey = true
 }
 
 func (r *Row) Reset() {
@@ -198,6 +206,9 @@ func (r *Row) Reset() {
 	r.StreamOnly = false
 	r.ColumnToIndex = nil
 	r.ReadyBuildColumnToIndex = false
+	r.tagArrayInitialized = false
+	r.hasTagArray = false
+	r.skipMarshalShardKey = false
 }
 
 // ReuseSet Reuse Field and Tag, compare with Reset
@@ -245,6 +256,7 @@ func (r *Row) Clone(rr *Row) {
 	r.StreamId = rr.StreamId
 	r.StreamOnly = rr.StreamOnly
 	r.ColumnToIndex = rr.ColumnToIndex
+	r.skipMarshalShardKey = rr.skipMarshalShardKey
 }
 
 func (r *Row) Copy(p *Row) {
@@ -414,8 +426,12 @@ func (r *Row) FastMarshalBinary(dst []byte) ([]byte, error) {
 	dst = append(dst, uint8(len(name)))
 	dst = append(dst, name...)
 
-	dst = encoding.MarshalUint32(dst, uint32(len(r.ShardKey)))
-	dst = append(dst, r.ShardKey...)
+	if r.skipMarshalShardKey {
+		dst = encoding.MarshalUint32(dst, 0)
+	} else {
+		dst = encoding.MarshalUint32(dst, uint32(len(r.ShardKey)))
+		dst = append(dst, r.ShardKey...)
+	}
 
 	dst, err = r.marshalTags(dst)
 	if err != nil {
@@ -433,6 +449,15 @@ func (r *Row) FastMarshalBinary(dst []byte) ([]byte, error) {
 
 	dst = encoding.MarshalInt64(dst, r.Timestamp)
 	return dst, nil
+}
+
+func (r *Row) HasTagArray() bool {
+	if !r.tagArrayInitialized {
+		r.tagArrayInitialized = true
+		r.hasTagArray = r.Tags.HasTagArray()
+	}
+
+	return r.hasTagArray
 }
 
 func FastMarshalMultiRows(src []byte, rows []Row) ([]byte, error) {
@@ -930,6 +955,56 @@ func Parse2SeriesKey(key []byte, dst []byte, splittWithNull bool) []byte {
 	return dst[:len(dst)-1]
 }
 
+type SeriesKey struct {
+	Measurement []byte
+	TagSet      []TagKV
+}
+
+type TagKV struct {
+	Key, Value []byte
+}
+
+func NewSeriesKey() *SeriesKey {
+	return &SeriesKey{
+		Measurement: make([]byte, 0),
+		TagSet:      make([]TagKV, 0),
+	}
+}
+
+// Parse2Series parse encoded index key to line protocol series key
+// encoded index key format: [total len][ms len][ms][tagk1 len][tagk1 val]...]
+func Parse2Series(key []byte) *SeriesKey {
+	seriesKey := NewSeriesKey()
+
+	// measurement
+	msName, src, err := MeasurementName(key)
+	if err != nil {
+		panic(err)
+	}
+	seriesKey.Measurement = append(seriesKey.Measurement, msName...)
+
+	// tags
+	tagsN := encoding.UnmarshalUint16(src)
+	src = src[2:]
+	var i uint16
+	for i = 0; i < tagsN; i++ {
+		tagK, tagV := make([]byte, 0), make([]byte, 0)
+		keyLen := encoding.UnmarshalUint16(src)
+		src = src[2:]
+		tagK = append(tagK, src[:keyLen]...)
+		src = src[keyLen:]
+
+		valLen := encoding.UnmarshalUint16(src)
+		src = src[2:]
+		tagV = append(tagV, src[:valLen]...)
+		src = src[valLen:]
+
+		seriesKey.TagSet = append(seriesKey.TagSet, TagKV{Key: tagK, Value: tagV})
+	}
+
+	return seriesKey
+}
+
 // Parse2SeriesGroupKey support reuse same memory space for src with dst, can reduce half memory space compared with Parse2SeriesKey
 func Parse2SeriesGroupKey(src []byte, dst []byte, dims []string) (PointTags, []byte, int, bool, error) {
 	//group by * or group by all sorted tag
@@ -1163,6 +1238,18 @@ func (pts *PointTags) Reset() {
 	for i := range *pts {
 		(*pts)[i].Reset()
 	}
+}
+
+func (pts *PointTags) HasTagArray() bool {
+	has := false
+	for i := 0; i < len(*pts); i++ {
+		val := (*pts)[i].Value
+		if strings.HasPrefix(val, "[") && strings.HasSuffix(val, "]") {
+			(*pts)[i].IsArray = true
+			has = true
+		}
+	}
+	return has
 }
 
 const (

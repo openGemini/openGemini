@@ -209,3 +209,9 @@ func TestFillNilCol(t *testing.T) {
 	require.Equal(t, 10, col.NilCount)
 	require.Equal(t, 0, len(col.Offset))
 }
+
+func TestBuildMergeContext(t *testing.T) {
+	files := &immutable.TSSPFiles{}
+	require.Empty(t, immutable.BuildMergeContext("mst", files))
+	require.Empty(t, immutable.BuildFullMergeContext("mst", files))
+}

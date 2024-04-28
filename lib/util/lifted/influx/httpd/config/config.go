@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"net"
 	"regexp"
 	"strconv"
 	"time"
@@ -86,6 +87,23 @@ type Config struct {
 	ReadBlockSize           toml.Size      `toml:"read-block-size"`
 	TimeFilterProtection    bool           `toml:"time-filter-protection"`
 	CPUThreshold            int            `toml:"cpu-threshold"`
+}
+
+func CombineDomain(domain, addr string) string {
+	if domain == "" {
+		return addr
+	}
+
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+
+	return fmt.Sprintf("%s:%s", domain, port)
+}
+
+func (c Config) BindAddr() string {
+	return CombineDomain(c.Domain, c.BindAddress)
 }
 
 // NewHttpConfig returns a new Config with default settings.

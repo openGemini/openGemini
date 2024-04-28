@@ -278,3 +278,43 @@ func testCodec(t *testing.T, obj transport.Codec) {
 	require.NoError(t, other.Unmarshal(buf))
 	require.Equal(t, obj, other)
 }
+
+func Test_SnapshotV2Request_Marshal_Unmarshal(t *testing.T) {
+	req := &message.SnapshotV2Request{
+		Role:  1,
+		Index: 2,
+	}
+	buf, err := req.Marshal(nil)
+	assert.NoError(t, err)
+	myReq := &message.SnapshotV2Request{}
+	err = myReq.Unmarshal(buf)
+	assert.NoError(t, err)
+	assert.Equal(t, req, myReq)
+	err = myReq.Unmarshal(nil)
+	assert.NoError(t, err)
+	assert.Equal(t, req, myReq)
+}
+
+func Test_SnapshotV2Response_Marshal_Unmarshal(t *testing.T) {
+	rep := &message.SnapshotV2Response{
+		Data: []byte{'a', 'b'},
+	}
+	buf, err := rep.Marshal(nil)
+	assert.NoError(t, err)
+	myRep := &message.SnapshotV2Response{}
+	err = myRep.Unmarshal(buf)
+	assert.NoError(t, err)
+	assert.Equal(t, rep, myRep)
+	err = myRep.Unmarshal(nil)
+	assert.NoError(t, err)
+	assert.Equal(t, rep, myRep)
+}
+
+func Test_CreateSqlNode_Unmarshal(t *testing.T) {
+	rep := &message.CreateSqlNodeRequest{}
+	err := rep.Unmarshal(nil)
+	assert.NoError(t, err)
+	myRep := &message.CreateSqlNodeResponse{}
+	err = myRep.Unmarshal(nil)
+	assert.NoError(t, err)
+}

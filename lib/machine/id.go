@@ -20,6 +20,7 @@ import (
 	"encoding/binary"
 	"net"
 	"strconv"
+	"strings"
 
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
@@ -39,6 +40,11 @@ func GetMachineID() uint64 {
 }
 
 func InitMachineID(addr string) {
+	addrs := strings.Split(addr, ",")
+	if len(addrs) > 0 {
+		addr = addrs[0]
+	}
+	addr = strings.TrimSpace(addr)
 	ip, port, err := parseAddr(addr)
 	if err != nil {
 		logger.NewLogger(errno.ModuleNetwork).Warn("failed to parse address", zap.Error(err))

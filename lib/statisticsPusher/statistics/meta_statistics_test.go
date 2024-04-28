@@ -33,6 +33,10 @@ func TestMeta(t *testing.T) {
 	stat.AddSnapshotUnmarshalDuration(2)
 	stat.AddLeaderSwitchTotal(2)
 	stat.AddStoreApplyTotal(2)
+	stat.AddGetFromOpsMapTotal(2)
+	stat.AddGetFromOpsMapLenTotal(2)
+	stat.AddGetFromDataMarshalTotal(2)
+	stat.AddGetFromDataMarshalLenTotal(2)
 
 	fields := map[string]interface{}{
 		"SnapshotTotal":             int64(2),
@@ -40,6 +44,10 @@ func TestMeta(t *testing.T) {
 		"SnapshotUnmarshalDuration": int64(2),
 		"LeaderSwitchTotal":         int64(2),
 		"StoreApplyTotal":           int64(2),
+		"GetFromOpsMapTotal":        int64(2),
+		"GetFromOpsMapLenTotal":     int64(2),
+		"GetFromDataMarshalTotal":   int64(2),
+		"GetFromDataMarshalLenTota": int64(2),
 	}
 	statistics.NewTimestamp().Init(time.Second)
 	buf, err := stat.Collect(nil)

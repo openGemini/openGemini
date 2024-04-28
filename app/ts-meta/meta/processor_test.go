@@ -91,6 +91,13 @@ func (s *MockRPCStore) createDataNode(httpAddr, tcpAddr, role string) ([]byte, e
 	return nodeStartInfo.MarshalBinary()
 }
 
+func (s *MockRPCStore) CreateSqlNode(httpAddr string, gossipAddr string) ([]byte, error) {
+	nodeStartInfo := meta.NodeStartInfo{}
+	nodeStartInfo.NodeId = 1
+	nodeStartInfo.ShardDurationInfos = nil
+	return nodeStartInfo.MarshalBinary()
+}
+
 func (s *MockRPCStore) afterIndex(index uint64) <-chan struct{} {
 	if !mockAfterIndexFail {
 		return nil
@@ -108,6 +115,10 @@ func (s *MockRPCStore) getSnapshot(role metaclient.Role) []byte {
 	return []byte{255, 128}
 }
 
+func (s *MockRPCStore) getSnapshotV2(role metaclient.Role, oldIndex uint64, id uint64) []byte {
+	return []byte{255, 128}
+}
+
 func (s *MockRPCStore) IsLeader() bool {
 	return s.stat == raft.Leader
 }
@@ -117,7 +128,7 @@ func (s *MockRPCStore) apply(b []byte) error {
 }
 
 func (s *MockRPCStore) index() uint64 {
-	panic("implement me")
+	return 2
 }
 
 func (s *MockRPCStore) UpdateLoad(b []byte) error {
@@ -230,6 +241,34 @@ func TestCreateNode(t *testing.T) {
 	ast.Equal(t, uint64(1), callback.NodeStartInfo.NodeId)
 }
 
+func TestCreateSqlNode(t *testing.T) {
+	server := startServer()
+	defer server.Stop()
+
+	callback := &metaclient.CreateSqlNodeCallback{
+		NodeStartInfo: &meta.NodeStartInfo{},
+	}
+	msg := message.NewMetaMessage(message.CreateSqlNodeRequestMessage, &message.CreateSqlNodeRequest{HttpHost: address, GossipHost: ""})
+	err := sendTestMsg(msg, callback)
+	if err != nil {
+		t.Errorf("send msg error: %s", err)
+	}
+	ast.Equal(t, uint64(1), callback.NodeStartInfo.NodeId)
+}
+
+func TestSqlNodeCallbackErr(t *testing.T) {
+	server := startServer()
+	defer server.Stop()
+
+	callback := &metaclient.CreateSqlNodeCallback{
+		NodeStartInfo: &meta.NodeStartInfo{},
+	}
+	err := callback.Handle(nil)
+	if err == nil {
+		t.Errorf("TestSqlNodeCallbackErr fail: %s", err)
+	}
+}
+
 func Test_Snapshot(t *testing.T) {
 	server := startServer()
 	defer server.Stop()
@@ -237,6 +276,20 @@ func Test_Snapshot(t *testing.T) {
 	// case 1. normal
 	callback := &metaclient.SnapshotCallback{}
 	msg := message.NewMetaMessage(message.SnapshotRequestMessage, &message.SnapshotRequest{Index: 1})
+	err := sendTestMsg(msg, callback)
+	if err != nil {
+		t.Errorf("send msg error: %s", err)
+	}
+	ast.Equal(t, []byte{255, 128}, callback.Data)
+}
+
+func Test_SnapshotV2(t *testing.T) {
+	server := startServer()
+	defer server.Stop()
+
+	// case 1. normal
+	callback := &metaclient.SnapshotV2Callback{}
+	msg := message.NewMetaMessage(message.SnapshotV2RequestMessage, &message.SnapshotV2Request{Index: 1})
 	err := sendTestMsg(msg, callback)
 	if err != nil {
 		t.Errorf("send msg error: %s", err)

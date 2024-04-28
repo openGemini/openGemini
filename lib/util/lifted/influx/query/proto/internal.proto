@@ -41,6 +41,11 @@ message ProcessorOptions {
     string      LogQueryCurrId   = 36;
     bool        IncQuery = 37;
     int32       IterID = 38;
+    bool        PromQuery = 39;
+    int64       Step = 40;
+    int64       Range = 41;
+    int64       LookBackDelta = 42;
+    int64       QueryOffset = 43;
 }
 
 message Measurement {
@@ -230,4 +235,5 @@ enum LogicPlanType
 	LogicalColumnStoreReader = 35;
 	LogicalHashAgg = 36;
     LogicalJoin = 37;
+    LogicalBinOp = 38;
 }

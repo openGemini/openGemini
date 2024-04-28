@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package castor
 
 import (
@@ -24,8 +25,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/apache/arrow/go/arrow/array"
-	"github.com/apache/arrow/go/arrow/ipc"
+	"github.com/apache/arrow/go/v13/arrow"
+	"github.com/apache/arrow/go/v13/arrow/ipc"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 )
@@ -36,7 +37,7 @@ type ByteReadReader interface {
 }
 
 // write record into connection
-func writeData(record array.Record, out io.WriteCloser) error {
+func writeData(record arrow.Record, out io.WriteCloser) error {
 	w := ipc.NewWriter(out, ipc.WithSchema(record.Schema()))
 	err := w.Write(record)
 	if err != nil {
@@ -50,7 +51,7 @@ func writeData(record array.Record, out io.WriteCloser) error {
 }
 
 // read record from connection
-func readData(in ByteReadReader) ([]array.Record, error) {
+func readData(in ByteReadReader) ([]arrow.Record, error) {
 	rdr, err := ipc.NewReader(in)
 	if err != nil {
 		if strings.HasSuffix(err.Error(), ": EOF") {
@@ -61,7 +62,7 @@ func readData(in ByteReadReader) ([]array.Record, error) {
 		}
 		return nil, err
 	}
-	var records []array.Record
+	var records []arrow.Record
 	for rdr.Next() {
 		out := rdr.Record()
 		out.Retain()
@@ -184,7 +185,7 @@ func (h *castorCli) close() {
 	h.logger.Info("close castorCli")
 }
 
-func checkRecordType(rec array.Record) *errno.Error {
+func checkRecordType(rec arrow.Record) *errno.Error {
 	msgType, err := GetMetaValueFromRecord(rec, string(MessageType))
 	if err != nil {
 		return errno.NewError(errno.UnknownDataMessage)

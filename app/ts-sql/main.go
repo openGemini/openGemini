@@ -36,5 +36,5 @@ func main() {
 		BuildTime: app.BuildTime,
 	}
 
-	app.Run(os.Args[1:], ingestserver.NewCommand(info))
+	app.Run(os.Args[1:], ingestserver.NewCommand(info, true))
 }

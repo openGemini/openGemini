@@ -80,7 +80,7 @@ func TestCommand_InitConfig(t *testing.T) {
 		return
 	}
 
-	conf := config.NewTSSql()
+	conf := config.NewTSSql(false)
 	cmd := app.NewCommand()
 	defer cmd.Close()
 

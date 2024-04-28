@@ -23,7 +23,7 @@ import (
 	"github.com/openGemini/openGemini/lib/rpn"
 )
 
-var _ = RegistrySKFileReaderCreator(index.SetIndex, &SetReaderCreator{})
+var _ = RegistrySKFileReaderCreator(uint32(index.Set), &SetReaderCreator{})
 
 type SetReaderCreator struct {
 }
@@ -82,10 +82,10 @@ func (s *SetWriter) Close() error {
 	return nil
 }
 
-func (s *SetWriter) CreateAttachSkipIndex(schemaIdx, rowsPerSegment []int, writeRec *record.Record) error {
+func (s *SetWriter) CreateAttachIndex(writeRec *record.Record, schemaIdx, rowsPerSegment []int) error {
 	return nil
 }
 
-func (s *SetWriter) CreateDetachSkipIndex(writeRec *record.Record, schemaIdx, rowsPerSegment []int, dataBuf [][]byte) ([][]byte, []string) {
+func (s *SetWriter) CreateDetachIndex(writeRec *record.Record, schemaIdx, rowsPerSegment []int, dataBuf [][]byte) ([][]byte, []string) {
 	return nil, nil
 }

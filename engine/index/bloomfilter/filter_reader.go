@@ -162,7 +162,7 @@ type VerticalFilterReader struct {
 }
 
 func NewVerticalFilterReader(path string, obsOpts *obs.ObsOptions, expr influxql.Expr, version uint32, splitMap map[string][]byte, fileName string) (*VerticalFilterReader, error) {
-	fd, err := obs.OpenObsFile(path, fileName, obsOpts)
+	fd, err := fileops.OpenObsFile(path, fileName, obsOpts, true)
 	if err != nil {
 		return nil, err
 	}
@@ -231,7 +231,7 @@ func (s *VerticalFilterReader) isExist(blockId int64) (bool, error) {
 			}
 			results := make(map[int64][]byte)
 			c := make(chan *request.StreamReader, 1)
-			s.r.StreamReadBatch(offsets, lens, c, limitNum)
+			s.r.StreamReadBatch(offsets, lens, c, limitNum, true)
 			for r := range c {
 				if r.Err != nil {
 					return false, r.Err
@@ -364,7 +364,7 @@ type LineFilterReader struct {
 }
 
 func NewLineFilterReader(path string, obsOpts *obs.ObsOptions, expr influxql.Expr, version uint32, splitMap map[string][]byte, fileName string) (*LineFilterReader, error) {
-	fd, err := obs.OpenObsFile(path, fileName, obsOpts)
+	fd, err := fileops.OpenObsFile(path, fileName, obsOpts, true)
 	if err != nil {
 		return nil, err
 	}

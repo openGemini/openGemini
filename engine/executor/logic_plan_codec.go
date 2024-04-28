@@ -286,6 +286,10 @@ func (p *LogicalHashAgg) LogicPlanType() internal.LogicPlanType {
 	return internal.LogicPlanType_LogicalHashAgg
 }
 
+func (p *LogicalBinOp) LogicPlanType() internal.LogicPlanType {
+	return internal.LogicPlanType_LogicalBinOp
+}
+
 func (p *LogicalHashAgg) String() string {
 	return "LogicalHashAgg"
 }
@@ -445,6 +449,10 @@ func (p *LogicalColumnStoreReader) String() string {
 	return "LogicalColumnStoreReader"
 }
 
+func (p *LogicalBinOp) String() string {
+	return "LogicalBinOp"
+}
+
 func MarshalBinary(q hybridqp.QueryNode) ([]byte, error) {
 	switch p := q.(type) {
 	case *HeuVertex:
@@ -510,7 +518,7 @@ func MarshalBinary(q hybridqp.QueryNode) ([]byte, error) {
 			pb.Exchange = uint32(p.eType)<<8 | uint32(p.eRole)
 		}, p.inputs...)
 	default:
-		panic(fmt.Sprintf("unsupoorted type %t", p))
+		return nil, fmt.Errorf("unsupoorted type %t", p)
 	}
 }
 
@@ -637,9 +645,9 @@ func UnmarshalBinaryNode(pb *internal.QueryNode, schema hybridqp.Catalog) (hybri
 			return node, nil
 		}
 	default:
-		panic(fmt.Sprintf("unsupoorted type %v", pb.Name))
+		return nil, fmt.Errorf("unsupoorted type %v", pb.Name)
 	}
-	panic("UnmarshalBinaryNode fail")
+	return nil, fmt.Errorf("UnmarshalBinaryNode fail")
 }
 
 func UnmarshalQueryNode(buf []byte, shardNum int, opt hybridqp.Options) (hybridqp.QueryNode, error) {

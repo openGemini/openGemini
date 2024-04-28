@@ -18,8 +18,12 @@ package record
 
 import (
 	"fmt"
+	"runtime/debug"
+	"sort"
 
+	Log "github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
+	"go.uber.org/zap"
 )
 
 func CheckRecord(rec *Record) {
@@ -37,7 +41,7 @@ func CheckRecord(rec *Record) {
 			panic(fmt.Sprintf("same schema; idx: %d, name: %v", i, rec.Schema[i].Name))
 		}
 	}
-
+	isOrderSchema := true
 	for i := 0; i < colN-1; i++ {
 		f := &rec.Schema[i]
 		col1, col2 := &rec.ColVals[i], &rec.ColVals[i+1]
@@ -45,6 +49,7 @@ func CheckRecord(rec *Record) {
 		if col1.Len != col2.Len {
 			panic(rec.String())
 		}
+		isOrderSchema = CheckSchema(i, rec, isOrderSchema)
 
 		// check string data length
 		if f.Type == influx.Field_Type_String || f.Type == influx.Field_Type_Tag {
@@ -60,6 +65,18 @@ func CheckRecord(rec *Record) {
 			panic(err)
 		}
 	}
+	if !isOrderSchema {
+		sort.Sort(rec)
+	}
+}
+
+func CheckSchema(i int, rec *Record, isOrderSchema bool) bool {
+	if isOrderSchema && i > 0 && rec.Schema[i-1].Name >= rec.Schema[i].Name {
+		err := fmt.Sprintf("rec schema is invalid; idx i-1:%d,name:%v, idx i:%d,name:%v", i-1, rec.Schema[i-1].Name, i, rec.Schema[i].Name)
+		Log.GetLogger().Error(err, zap.String("check schema panic stack:", string(debug.Stack())))
+		return false
+	}
+	return isOrderSchema
 }
 
 func CheckTimes(times []int64) {

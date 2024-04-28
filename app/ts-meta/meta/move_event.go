@@ -114,8 +114,8 @@ func (e *MoveEvent) isSrcEvent() bool {
 }
 
 func (e *MoveEvent) String() string {
-	return fmt.Sprintf("event type: %s, eventId: %s, opId: %d, currState: %s, preState: %s, retryNum: %d",
-		e.eventType.String(), e.eventId, e.operateId, e.curState.String(), e.preState.String(), e.retryNum)
+	return fmt.Sprintf("event type:%s, eventId:%s, opId:%d, currState:%s, preState:%s, src:%d, dst:%d, retryNum:%d",
+		e.eventType.String(), e.eventId, e.operateId, e.curState.String(), e.preState.String(), e.src, e.dst, e.retryNum)
 }
 
 func (e *MoveEvent) StringForTest() string {

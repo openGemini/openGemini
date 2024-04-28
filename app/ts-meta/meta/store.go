@@ -61,11 +61,15 @@ const (
 	updateCacheInterval = 100 * time.Millisecond
 
 	pushInterval = 10 * time.Second
+
+	// Default sqlite database
+	DefaultDatabase = "sqlite.db"
 )
 
 // Raft configuration.
 const (
 	raftListenerStartupTimeout = time.Second
+	UpdateTmpIndexGap          = 20
 )
 
 const (
@@ -398,7 +402,7 @@ type Store struct {
 	heartbeatInfoList *list.List              // the latest heartbeat information for each ts-sql
 	cqLease           map[string]*cqLeaseInfo // sql host to cq lease.
 	sqlHosts          []string                // sorted hostname ["127.0.0.1:8086", "127.0.0.2:8086", "127.0.0.3:8086"]
-
+	UseIncSyncData    bool
 }
 
 // NewStore will create a new metaStore with the passed in config
@@ -409,6 +413,7 @@ func NewStore(c *config.Meta, httpAddr, rpcAddr, raftAddr string) *Store {
 			PtNumPerNode:    c.PtNumPerNode,
 			TakeOverEnabled: true,
 			BalancerEnabled: true,
+			NumOfShards:     c.NumOfShards,
 		},
 		cacheData:        &meta.Data{},
 		closing:          make(chan struct{}),
@@ -426,7 +431,12 @@ func NewStore(c *config.Meta, httpAddr, rpcAddr, raftAddr string) *Store {
 		heartbeatInfoList: list.New(),
 		cqLease:           make(map[string]*cqLeaseInfo),
 	}
-
+	if c.UseIncSyncData {
+		s.data.OpsMap = make(map[uint64]*meta.Op)
+		s.data.OpsMapMinIndex = math.MaxUint64
+		s.data.OpsMapMaxIndex = 0
+		s.UseIncSyncData = true
+	}
 	return &s
 }
 
@@ -498,9 +508,21 @@ func (s *Store) Open(raftln net.Listener) error {
 		return err
 	}
 
-	err := s.newRaftWrapper(raftln, peers)
+	var err error
+
+	tmp := s.data.NumOfShards
+	err = s.newRaftWrapper(raftln, peers)
 	if err != nil {
 		return err
+	}
+	// set NumOfShards based on latest configuration
+	s.data.NumOfShards = tmp
+
+	if s.config.SQLiteEnabled {
+		s.data.SQLite, err = meta.NewSQLiteWrapper(s.config.Dir + "/" + DefaultDatabase + "?cache=shared")
+		if err != nil {
+			return err
+		}
 	}
 
 	if err = s.waitForLeader(); err != nil {
@@ -512,7 +534,13 @@ func (s *Store) Open(raftln net.Listener) error {
 	}
 
 	s.wg.Add(3)
-	go s.serveSnapshot()
+	if s.config.UseIncSyncData {
+		go s.serveSnapshotV2()
+		s.wg.Add(1)
+		go s.ClearOpsMap()
+	} else {
+		go s.serveSnapshot()
+	}
 	go s.checkLeaderChanged()
 	go s.detectSqlNodeOffline()
 
@@ -546,6 +574,9 @@ func (s *Store) joinMetaServer(c *mclient.Client) error {
 
 func (s *Store) makeClient() *mclient.Client {
 	c := mclient.NewClient(s.config.Dir, s.config.RetentionAutoCreate, s.config.MaxConcurrentWriteLimit)
+	if s.config.UseIncSyncData {
+		c.EnableUseSnapshotV2(s.config.RetentionAutoCreate, s.config.ExpandShardsEnable)
+	}
 	c.SetMetaServers(s.config.JoinPeers)
 	c.SetTLS(s.config.HTTPSEnabled)
 	return c
@@ -637,6 +668,25 @@ func (s *Store) updateCacheData() {
 	s.saveMetadataStatistics()
 }
 
+func (s *Store) UpdateCacheDataV2() {
+	s.mu.RLock()
+	tmp := s.data
+	s.mu.RUnlock()
+	s.cacheMu.Lock()
+	s.cacheData = tmp
+	var err error
+	if err = s.UpdateOpsMapCacheBytes(); err != nil {
+		logger.GetLogger().Error("fail to updateV2 cache data", zap.Error(err))
+	}
+	s.cacheMu.Unlock()
+	// save metadata statistics
+	s.saveMetadataStatistics()
+}
+
+func (s *Store) UpdateOpsMapCacheBytes() error {
+	return s.data.UpdateOpsMapCacheBytes()
+}
+
 func (s *Store) saveMetadataStatistics() {
 	if stat.MetadataInstance.HaveMetadata() {
 		// reduce the reporting frequency to almost 10s.
@@ -668,6 +718,44 @@ func (s *Store) serveSnapshot() {
 			if s.index() > s.cacheIndex() {
 				s.updateCacheData()
 			}
+			checkTime = time.After(updateCacheInterval)
+		}
+	}
+}
+
+func (s *Store) ClearOpsMap() {
+	defer s.wg.Done()
+	ticker := time.NewTicker(updateCacheInterval * 10)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.closing:
+			return
+		case <-ticker.C:
+			s.mu.RLock()
+			minAliveNodeTmpIndex := s.data.GetMinAliveNodeTmpIndex()
+			s.mu.RUnlock()
+			s.data.ClearOpsMapV2(minAliveNodeTmpIndex)
+		}
+	}
+}
+
+func (s *Store) serveSnapshotV2() {
+	defer s.wg.Done()
+	checkTime := time.After(updateCacheInterval)
+	for {
+		select {
+		case _, ok := <-s.dataChanged:
+			if ok {
+				logger.GetLogger().Error("serveSnapshotV2 dataChanged err")
+			}
+			if s.index() > s.cacheIndex() {
+				s.UpdateCacheDataV2()
+			}
+		case <-s.closing:
+			return
+		case <-checkTime:
+			s.UpdateCacheDataV2()
 			checkTime = time.After(updateCacheInterval)
 		}
 	}
@@ -954,10 +1042,17 @@ func (s *Store) close() error {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.raft == nil {
-		return nil
+	var errSQLite, errRaft error
+	if s.config.SQLiteEnabled && s.data.SQLite != nil {
+		errSQLite = s.data.SQLite.Close()
 	}
-	return s.raft.Close()
+	if s.raft != nil {
+		errRaft = s.raft.Close()
+	}
+	if errSQLite != nil || errRaft != nil {
+		return fmt.Errorf(errSQLite.Error() + errRaft.Error())
+	}
+	return nil
 }
 
 func (s *Store) getSnapshot(role mclient.Role) []byte {
@@ -968,6 +1063,88 @@ func (s *Store) getSnapshotBySql() []byte {
 	s.cacheMu.RLock()
 	defer s.cacheMu.RUnlock()
 	return s.cacheDataBytes
+}
+
+func (s *Store) UpdateNodeTmpIndex(role mclient.Role, index uint64, nodeId uint64) {
+	val := &mproto.UpdateNodeTmpIndexCommand{
+		Role:   proto.Int32(int32(role)),
+		Index:  proto.Uint64(index),
+		NodeId: proto.Uint64(nodeId),
+	}
+
+	t := mproto.Command_UpdateNodeTmpIndexCommand
+	cmd := &mproto.Command{Type: &t}
+	if err := proto.SetExtension(cmd, mproto.E_UpdateNodeTmpIndexCommand_Command, val); err != nil {
+		panic(err)
+	}
+
+	err := s.ApplyCmd(cmd)
+	if err != nil {
+		logger.GetLogger().Error("UpdateNodeTmpIndex fail", zap.Error(err))
+		return
+	}
+}
+
+func (s *Store) GetNodeTmpIndex(role mclient.Role, nodeId uint64) (uint64, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if role == mclient.SQL {
+		return s.data.GetSqlNodeIndex(nodeId)
+	} else if role == mclient.STORE {
+		return s.data.GetNodeIndexV2(nodeId)
+	}
+	return 0, fmt.Errorf("metanode has not tmpIndex")
+}
+
+func (s *Store) TryUpdateNodeTmpIndex(role mclient.Role, index uint64, nodeId uint64) {
+	tmpIndex, err := s.GetNodeTmpIndex(role, nodeId)
+	if err != nil {
+		logger.GetLogger().Error("getSnapshotV2 UpdateNodeTmpIndex err", zap.String("err", err.Error()), zap.Uint64("node", nodeId), zap.Int64("role", int64(role)), zap.Uint64("index", index))
+		return
+	}
+	if tmpIndex < index && (index-tmpIndex) >= UpdateTmpIndexGap {
+		go s.UpdateNodeTmpIndex(role, index, nodeId)
+	}
+}
+
+func (s *Store) getSnapshotV2(role mclient.Role, OldIndex uint64, nodeId uint64) []byte {
+	s.mu.RLock()
+	if OldIndex == s.data.Index {
+		s.mu.RUnlock()
+		return nil
+	} else if OldIndex > s.data.Index {
+		logger.GetLogger().Error("getSnapshotV2 oldIndex > data.index", zap.Uint64("node", nodeId), zap.Int64("role", int64(role)), zap.Uint64("oldIndex", OldIndex), zap.Uint64("data.index", s.data.Index))
+		s.mu.RUnlock()
+		return nil
+	}
+	defer s.TryUpdateNodeTmpIndex(role, OldIndex, nodeId)
+	ops, state := s.data.GetOps(OldIndex)
+	if len(ops) > 0 {
+		dataOps := meta.NewDataOps(ops, s.data.MaxCQChangeID, int(state), s.data.Index)
+		s.mu.RUnlock()
+		buf := dataOps.Marshal()
+		stat.NewMetaStatistics().AddGetFromOpsMapTotal(1)
+		stat.NewMetaStatistics().AddGetFromOpsMapLenTotal(int64(dataOps.Len()))
+		logger.GetLogger().Info("serveSnapshotV2Op ok", zap.Uint64("oldindex", OldIndex), zap.Uint64("newindex", s.index()), zap.Int("opNum", len(dataOps.GetOps())), zap.Int64("len", int64(len(buf))))
+		return buf
+	} else if state == meta.AllClear {
+		dataPb := s.data.MarshalV2()
+		s.mu.RUnlock()
+		dataOps := meta.NewDataOpsOfAllClear(int(state), dataPb, *dataPb.Index)
+		buf := dataOps.Marshal()
+		stat.NewMetaStatistics().AddGetFromDataMarshalTotal(1)
+		stat.NewMetaStatistics().AddGetFromDataMarshalLenTotal(int64(len(buf)))
+		logger.GetLogger().Info("serveSnapshotV2Data ok", zap.Uint64("oldindex", OldIndex), zap.Uint64("newindex", s.index()), zap.Int64("len", int64(len(buf))))
+		return buf
+	} else {
+		dataOps := meta.NewDataOps(nil, s.data.MaxCQChangeID, int(state), s.data.Index)
+		s.mu.RUnlock()
+		buf := dataOps.Marshal()
+		stat.NewMetaStatistics().AddGetFromOpsMapTotal(1)
+		stat.NewMetaStatistics().AddGetFromOpsMapLenTotal(int64(dataOps.Len()))
+		logger.GetLogger().Info("serveSnapshotV2CQ2 ok", zap.Uint64("oldindex", OldIndex), zap.Uint64("newindex", s.index()), zap.Int64("len", int64(len(buf))))
+		return buf
+	}
 }
 
 // afterIndex returns a channel that will be closed to signal
@@ -1339,6 +1516,51 @@ func (s *Store) createDataNode(writeHost, queryHost, role string) ([]byte, error
 	return nodeStartInfo.MarshalBinary()
 }
 
+func (s *Store) CreateSqlNode(httpHost string, gossipAddr string) ([]byte, error) {
+	val := &mproto.CreateSqlNodeCommand{
+		HTTPAddr:   proto.String(httpHost),
+		GossipAddr: proto.String(gossipAddr),
+	}
+
+	t := mproto.Command_CreateSqlNodeCommand
+	cmd := &mproto.Command{Type: &t}
+	if err := proto.SetExtension(cmd, mproto.E_CreateSqlNodeCommand_Command, val); err != nil {
+		panic(err)
+	}
+
+	err := s.ApplyCmd(cmd)
+	if err != nil {
+		logger.GetLogger().Error("create sql data node fail", zap.Error(err))
+		return nil, err
+	}
+
+	nodeStartInfo := meta.NodeStartInfo{}
+	s.mu.RLock()
+	dn := s.data.SqlNodeByHttpHost(httpHost)
+	logger.GetLogger().Info("create sql data node success", zap.Uint64("id", dn.ID), zap.Uint64("lTime", dn.LTime))
+	nodeStartInfo.NodeId = dn.ID
+	nodeStartInfo.LTime = dn.LTime
+	nodeStartInfo.ConnId = dn.ConnID
+	//status := dn.Status
+	s.mu.RUnlock()
+	// todo it is not approtiate to judge as single node, please modify it later
+	if len(s.config.JoinPeers) == 1 {
+		s.cm.eventCh <- serf.MemberEvent{
+			Type:      serf.EventMemberJoin,
+			EventTime: serf.LamportTime(nodeStartInfo.LTime + 1),
+			Members: []serf.Member{
+				serf.Member{Name: strconv.FormatUint(nodeStartInfo.NodeId, 10),
+					Tags:   map[string]string{"role": "sql"},
+					Status: serf.StatusAlive},
+			}}
+	}
+	// register the store node to SPDY, support send message from meta to store. sql not use
+	// transport.NewNodeManager().Add(dn.ID, dn.TCPHost)
+	// stat.NewMetaStatCollector().Push(&stat.MetaStatItem{Status: int64(status),
+	//LTime: int64(nodeStartInfo.LTime), NodeID: strconv.FormatUint(dn.ID, 10), Host: dn.Host})
+	return nodeStartInfo.MarshalBinary()
+}
+
 func (s *Store) getShardAuxInfo(body []byte) ([]byte, error) {
 	if !s.IsLeader() {
 		return nil, raft.ErrNotLeader
@@ -1352,7 +1574,11 @@ func (s *Store) getShardAuxInfo(body []byte) ([]byte, error) {
 	var err error
 	switch cmd.GetType() {
 	case mproto.Command_TimeRangeCommand:
-		b, err = s.getTimeRange(&cmd)
+		if s.UseIncSyncData {
+			b, err = s.getTimeRangeV2(&cmd)
+		} else {
+			b, err = s.getTimeRange(&cmd)
+		}
 	case mproto.Command_ShardDurationCommand:
 		b, err = s.getDurationInfo(&cmd)
 	default:
@@ -1417,6 +1643,30 @@ func (s *Store) getTimeRange(cmd *mproto.Command) ([]byte, error) {
 	s.cacheMu.RLock()
 	defer s.cacheMu.RUnlock()
 	dbInfo, err := s.cacheData.GetDatabase(v.GetDatabase())
+	if err != nil {
+		return nil, err
+	}
+	rpInfo, err := dbInfo.GetRetentionPolicy(v.GetPolicy())
+	if err != nil {
+		return nil, err
+	}
+	shardTimeRangeInfo := rpInfo.TimeRangeInfo(v.GetShardID())
+	if shardTimeRangeInfo == nil {
+		return nil, errno.NewError(errno.ShardMetaNotFound, v.GetShardID())
+	}
+
+	return shardTimeRangeInfo.MarshalBinary()
+}
+
+func (s *Store) getTimeRangeV2(cmd *mproto.Command) ([]byte, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	ext, _ := proto.GetExtension(cmd, mproto.E_TimeRangeCommand_Command)
+	v, ok := ext.(*mproto.TimeRangeCommand)
+	if !ok {
+		panic(fmt.Errorf("%s is not a TimeRangeCommand", ext))
+	}
+	dbInfo, err := s.data.GetDatabase(v.GetDatabase())
 	if err != nil {
 		return nil, err
 	}
@@ -1510,6 +1760,25 @@ func (s *Store) updateNodeStatus(id uint64, status int32, lTime uint64, gossipPo
 	return nil
 }
 
+func (s *Store) UpdateSqlNodeStatus(id uint64, status int32, lTime uint64, gossipPort string) error {
+	val := &mproto.UpdateSqlNodeStatusCommand{
+		ID:         proto.Uint64(id),
+		Status:     proto.Int32(status),
+		Ltime:      proto.Uint64(lTime),
+		GossipAddr: proto.String(gossipPort)}
+	t := mproto.Command_UpdateSqlNodeStatusCommand
+	cmd := &mproto.Command{Type: &t}
+	if err := proto.SetExtension(cmd, mproto.E_UpdateSqlNodeStatusCommand_Command, val); err != nil {
+		panic(err)
+	}
+
+	err := s.ApplyCmd(cmd)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func (s *Store) updateReplication(database string, rgId uint32, masterId uint32, peers []meta.Peer, rgStatus uint32) error {
 	mPeers := make([]*mproto.Peer, len(peers))
 	for i := range peers {
@@ -1539,6 +1808,12 @@ func (s *Store) dataNodes() meta.DataNodeInfos {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.data.CloneDataNodes()
+}
+
+func (s *Store) sqlNodes() meta.DataNodeInfos {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.data.CloneSqlNodes()
 }
 
 func (s *Store) removeEvent(eventId string) error {

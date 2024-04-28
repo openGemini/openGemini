@@ -30,7 +30,6 @@ import (
 	"github.com/openGemini/openGemini/engine"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/index/tsi"
-	"github.com/openGemini/openGemini/engine/mutable"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/netstorage"
@@ -112,7 +111,7 @@ func createShard(db, rp string, ptId uint32, pathName string, duration ...time.D
 	tr := &meta.TimeRangeInfo{StartTime: mustParseTime(time.RFC3339Nano, "1970-01-01T01:00:00Z"),
 		EndTime: mustParseTime(time.RFC3339Nano, "2099-01-01T01:00:00Z")}
 	shardIdent := &meta.ShardIdentifier{ShardID: defaultShardId, ShardGroupID: 1, OwnerDb: db, OwnerPt: ptId, Policy: rp}
-	sh := engine.NewShard(dataPath, walPath, &lockPath, shardIdent, shardDuration, tr, DefaultEngineOption, config.TSSTORE)
+	sh := engine.NewShard(dataPath, walPath, &lockPath, shardIdent, shardDuration, tr, DefaultEngineOption, config.TSSTORE, nil)
 	sh.SetIndexBuilder(indexBuilder)
 	if len(duration) > 0 {
 		sh.SetWriteColdDuration(duration[0])
@@ -394,7 +393,7 @@ func BenchmarkTestIndex(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	mutable.SetSizeLimit(10000000000)
+	config.SetShardMemTableSizeLimit(10000000000)
 
 	// step3: write data, mem table row limit less than row cnt, query will get record from both mem table and immutable
 	rows, startTime, endTime := GenDataRecord(500000, 1, time.Now(), true, true, false, map[string]interface{}{
@@ -478,7 +477,7 @@ func BenchmarkTestQuery(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	mutable.SetSizeLimit(10000000000)
+	config.SetShardMemTableSizeLimit(10000000000)
 
 	// step3: write data, mem table row limit less than row cnt, query will get record from both mem table and immutable
 	rows, startTime, endTime := GenDataRecord(50000, 1, time.Now(), true, true, false, map[string]interface{}{
@@ -535,7 +534,7 @@ func TestQuery(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	mutable.SetSizeLimit(10000000000)
+	config.SetShardMemTableSizeLimit(10000000000)
 
 	// step3: write data, mem table row limit less than row cnt, query will get record from both mem table and immutable
 	rows, startTime, endTime := GenDataRecord(50, 10, time.Now(), true, true, false, map[string]interface{}{

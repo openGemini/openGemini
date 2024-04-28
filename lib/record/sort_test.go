@@ -582,7 +582,7 @@ func TestSortRecordAndDeduplicate(t *testing.T) {
 
 	hlp := record.NewSortHelper()
 	defer hlp.Release()
-	rec = hlp.SortForColumnStore(wk.WriteRec.GetRecord(), mutable.GetPrimaryKeys(schema, sk), true, 0)
+	rec = hlp.SortForColumnStore(wk.WriteRec.GetRecord(), mutable.GetSortKeys(schema, sk), true, 0)
 
 	if !testRecsEqual(rec, expRec) {
 		t.Fatal("error result")
@@ -638,7 +638,7 @@ func TestSortRecordWithTimeCluster(t *testing.T) {
 
 	hlp := record.NewSortHelper()
 	defer hlp.Release()
-	rec = hlp.SortForColumnStore(wk.WriteRec.GetRecord(), mutable.GetPrimaryKeys(schema, sk), false, timeClusterDuration)
+	rec = hlp.SortForColumnStore(wk.WriteRec.GetRecord(), mutable.GetSortKeys(schema, sk), false, timeClusterDuration)
 
 	// need to remove the first column of rec(clustered time)
 	rec.ColVals = rec.ColVals[1:]

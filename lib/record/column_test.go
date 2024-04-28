@@ -391,3 +391,22 @@ func TestAppendByteSlice(t *testing.T) {
 	require.Equal(t, []byte{3}, col.Bitmap)
 	require.Equal(t, []uint32{0, 1}, col.Offset)
 }
+
+func TestSetBitmap(t *testing.T) {
+	col := &record.ColVal{}
+	col.AppendInteger(1)
+	require.Equal(t, []byte{1}, col.Bitmap)
+
+	col.Init()
+	col.AppendIntegerNull()
+	require.Equal(t, []byte{0}, col.Bitmap)
+}
+
+func TestRemoveLastInteger(t *testing.T) {
+	schema := record.Schemas{record.Field{Type: influx.Field_Type_Int, Name: "time"}}
+	rows := record.NewRecord(schema, false)
+	rows.ColVals[0].AppendInteger(123)
+	require.Equal(t, 1, rows.RowNums())
+	rows.ColVals[0].RemoveLastInteger()
+	require.Equal(t, 0, rows.RowNums())
+}

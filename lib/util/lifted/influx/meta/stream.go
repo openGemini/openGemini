@@ -51,23 +51,18 @@ type StreamMeasurementInfo struct {
 	RetentionPolicy string
 }
 
-func NewStreamInfo(stmt *influxql.CreateStreamStatement, selectStmt *influxql.SelectStatement) *StreamInfo {
+// func NewStreamInfo(stmt *influxql.CreateStreamStatement, selectStmt *influxql.SelectStatement) *StreamInfo {
+func NewStreamInfo(name string, delay time.Duration, srcMstInfo *influxql.Measurement, desMstInfo *StreamMeasurementInfo, selectStmt *influxql.SelectStatement) *StreamInfo {
 	info := &StreamInfo{
-		Name:  stmt.Name,
-		Delay: stmt.Delay,
+		Name:  name,
+		Delay: delay,
 	}
-	srcMst := selectStmt.Sources[0].(*influxql.Measurement)
 	info.SrcMst = &StreamMeasurementInfo{
-		Name:            srcMst.Name,
-		Database:        srcMst.Database,
-		RetentionPolicy: srcMst.RetentionPolicy,
+		Name:            srcMstInfo.Name,
+		Database:        srcMstInfo.Database,
+		RetentionPolicy: srcMstInfo.RetentionPolicy,
 	}
-	desMst := stmt.Target.Measurement
-	info.DesMst = &StreamMeasurementInfo{
-		Name:            desMst.Name,
-		Database:        desMst.Database,
-		RetentionPolicy: desMst.RetentionPolicy,
-	}
+	info.DesMst = desMstInfo
 	info.Calls = make([]*StreamCall, 0, len(selectStmt.Fields))
 	for i := range selectStmt.Fields {
 		f, ok := selectStmt.Fields[i].Expr.(*influxql.Call)
