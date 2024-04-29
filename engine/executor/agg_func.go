@@ -16,7 +16,11 @@ limitations under the License.
 
 package executor
 
-import "github.com/openGemini/openGemini/lib/util"
+import (
+	"sort"
+
+	"github.com/openGemini/openGemini/lib/util"
+)
 
 func TopCmpByTimeReduce[T util.NumberOnly](a, b *PointItem[T]) bool {
 	if a.time != b.time {
@@ -60,4 +64,53 @@ func AbsoluteDiffFunc[T util.NumberOnly](prev, curr T) T {
 		return res
 	}
 	return -res
+}
+
+func NewMedianReduce[T util.NumberOnly](si *SliceItem[T]) (int, int64, float64, bool) {
+	length := len(si.value)
+	if length == 0 {
+		return -1, 0, 0, true
+	}
+	if length == 1 {
+		return -1, si.time[0], float64(si.value[0]), false
+	}
+
+	sort.Stable(si)
+
+	if length%2 == 0 {
+		lowvalue, highvalue := si.value[length/2-1], si.value[length/2]
+		return -1, si.time[length/2-1], float64(lowvalue) + float64(highvalue-lowvalue)/2, false
+	}
+	return -1, si.time[length/2], float64(si.value[length/2]), false
+}
+
+func NewModeReduce[T util.ExceptBool](si *SliceItem[T]) (int, int64, float64, bool) {
+	length := len(si.value)
+	start := 0
+	end := length - 1
+	if length == 0 {
+		return 0, 0, 0, true
+	}
+
+	sort.Stable(si)
+	curri := start
+	currFreq := 0
+	currValue := si.value[start]
+	modei := start
+	modeFreq := 0
+	for i := start; i <= end; i++ {
+		if si.value[i] != currValue {
+			currFreq = 1
+			currValue = si.value[i]
+			curri = i
+			continue
+		}
+		currFreq++
+		if modeFreq > currFreq || (modeFreq == currFreq && si.time[curri] > si.time[modei]) {
+			continue
+		}
+		modeFreq = currFreq
+		modei = curri
+	}
+	return modei, 0, 0, false
 }
