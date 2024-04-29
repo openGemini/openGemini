@@ -30,7 +30,17 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
+// reducer represents the interface of the respective implementation method of aggregateCursor and InstantVectorCursor
+type reducer interface {
+	reduce(inRecord, newRecord *record.Record)
+	inNextWindow(currRecord *record.Record) error
+	inNextWindowWithInfo(currRecord *record.Record) error
+	SetSchema(inSchema, outSchema record.Schemas, exprOpt []hybridqp.ExprOptions)
+}
+
 type aggregateCursor struct {
+	r reducer
+
 	init          bool
 	multiCall     bool
 	inNextWin     bool
@@ -68,6 +78,7 @@ func NewAggregateCursor(input comm.KeyCursor, schema *executor.QuerySchema, glob
 	} else {
 		c.maxRecordSize = schema.Options().ChunkSizeNum()
 	}
+	c.r = c
 	return c
 }
 
@@ -124,11 +135,11 @@ func (c *aggregateCursor) NextAggData() (*record.Record, *comm.FileInfo, error) 
 			return newRecord, currInfo, err
 		}
 		c.fileInfo = info
-		err = c.inNextWindowWithInfo(inRecord)
+		err = c.r.inNextWindowWithInfo(inRecord)
 		if err != nil {
 			return nil, nil, err
 		}
-		c.reduce(inRecord, newRecord)
+		c.r.reduce(inRecord, newRecord)
 	}
 }
 
@@ -226,7 +237,7 @@ func (c *aggregateCursor) SinkPlan(plan hybridqp.QueryNode) {
 		opsCopy = append(opsCopy[:idx-i], opsCopy[idx+1-i:]...)
 	}
 
-	c.SetSchema(inSchema, outSchema, opsCopy)
+	c.r.SetSchema(inSchema, outSchema, opsCopy)
 }
 
 func (c *aggregateCursor) unreadRecord(record *record.Record) {
@@ -283,11 +294,11 @@ func (c *aggregateCursor) Next() (*record.Record, comm.SeriesInfoIntf, error) {
 			c.unreadRecord(inRecord)
 			return newRecord, info, nil
 		}
-		err = c.inNextWindow(inRecord)
+		err = c.r.inNextWindow(inRecord)
 		if err != nil {
 			return nil, nil, err
 		}
-		c.reduce(inRecord, newRecord)
+		c.r.reduce(inRecord, newRecord)
 	}
 }
 

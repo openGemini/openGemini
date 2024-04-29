@@ -87,14 +87,14 @@ func (d *DetachedMetaInfo) checkAndTruncateDetachedFiles(dir, msName string, bfC
 
 func (d *DetachedMetaInfo) getDetachedPrefixFilePath(dir, msName string) string {
 	filePath := filepath.Join(dir, msName)
-	prefixDataPathLength := len(immutable.GetPrefixDataPath())
+	prefixDataPathLength := len(obs.GetPrefixDataPath())
 	filePath = filePath[prefixDataPathLength:]
 	return filePath
 }
 
 func (d *DetachedMetaInfo) checkAndTruncateMetaIndexFile(filePath string) error {
 	//get detached metaIndex fd
-	fd, err := immutable.OpenObsFile(filePath, immutable.MetaIndexFile, d.obsOpt)
+	fd, err := fileops.OpenObsFile(filePath, immutable.MetaIndexFile, d.obsOpt, false)
 	if err != nil {
 		log.Error("open detached metaIndex file fail", zap.String("name", filePath), zap.Error(err))
 		return err
@@ -160,7 +160,7 @@ func (d *DetachedMetaInfo) clearMetaIndex(fd fileops.File) error {
 
 func (d *DetachedMetaInfo) checkAndTruncateChunkMeta(filePath string) error {
 	//get detached chunkMeta fd
-	fd, err := immutable.OpenObsFile(filePath, immutable.ChunkMetaFile, d.obsOpt)
+	fd, err := fileops.OpenObsFile(filePath, immutable.ChunkMetaFile, d.obsOpt, false)
 	if err != nil {
 		log.Error("open detached chunkMeta file fail", zap.String("name", filePath), zap.Error(err))
 		return err
@@ -204,7 +204,7 @@ func (d *DetachedMetaInfo) checkAndTruncateChunkMeta(filePath string) error {
 
 func (d *DetachedMetaInfo) checkAndTruncateDataFile(filePath string) error {
 	//get detached data fd
-	fd, err := immutable.OpenObsFile(filePath, immutable.DataFile, d.obsOpt)
+	fd, err := fileops.OpenObsFile(filePath, immutable.DataFile, d.obsOpt, false)
 	if err != nil {
 		log.Error("open detached data file fail", zap.String("name", filePath), zap.Error(err))
 		return err
@@ -231,7 +231,7 @@ func (d *DetachedMetaInfo) checkAndTruncateDataFile(filePath string) error {
 
 func (d *DetachedMetaInfo) checkAndTruncatePkMetaIdxFile(filePath string) error {
 	//get detached data fd
-	fd, err := immutable.OpenObsFile(filePath, immutable.PrimaryMetaFile, d.obsOpt)
+	fd, err := fileops.OpenObsFile(filePath, immutable.PrimaryMetaFile, d.obsOpt, false)
 	if err != nil {
 		log.Error("open detached primary index meta file fail", zap.String("name", filePath), zap.Error(err))
 		return err
@@ -318,7 +318,7 @@ func (d *DetachedMetaInfo) clearPkMetaFile(fd fileops.File, size int64) error {
 
 func (d *DetachedMetaInfo) checkAndTruncatePkIdxFile(filePath string) error {
 	//get detached data fd
-	fd, err := immutable.OpenObsFile(filePath, immutable.PrimaryKeyFile, d.obsOpt)
+	fd, err := fileops.OpenObsFile(filePath, immutable.PrimaryKeyFile, d.obsOpt, false)
 	if err != nil {
 		log.Error("open detached primary index file fail", zap.String("name", filePath), zap.Error(err))
 		return err
@@ -345,7 +345,7 @@ func (d *DetachedMetaInfo) checkAndTruncatePkIdxFile(filePath string) error {
 
 func (d *DetachedMetaInfo) checkAndTruncateBfFiles(dir, msName string, bfCols []string) error {
 	localPath := dir
-	prefixDataPathLength := len(immutable.GetPrefixDataPath())
+	prefixDataPathLength := len(obs.GetPrefixDataPath())
 	remotePath := localPath[prefixDataPathLength:]
 
 	//get bloom filter cols -> gen bloom filter files

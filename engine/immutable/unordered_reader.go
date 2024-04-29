@@ -17,109 +17,159 @@ limitations under the License.
 package immutable
 
 import (
+	"errors"
+	"io"
 	"math"
 	"sort"
 
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
-	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
-
-var timeField = record.Field{Name: record.TimeField, Type: influx.Field_Type_Int}
 
 type remainCallback func(sid uint64, ref record.Field, col *record.ColVal, times []int64) error
 
 type UnorderedColumnReader struct {
-	f  TSSPFile
-	sr *SegmentReader
-	cm *ChunkMeta
+	fi      *FileIterator
+	sr      *SegmentReader
+	columns *UnorderedColumns
+
+	seq uint64
+	sid uint64
 
 	// times of out-of-order data
 	times []int64
 
-	col *record.ColVal
-
-	lineOffset *Offset
-	segOffset  *Offset
-	remain     []*record.ColVal
-	colPool    *MergeColPool
+	colIdx  int
+	ref     *record.Field
+	colMeta *ColumnMeta
+	swap    *record.ColVal
+	remain  []*record.ColVal
+	colPool *MergeColPool
 }
 
-func newUnorderedColumnReader(f TSSPFile, cm *ChunkMeta, sr *SegmentReader, pool *MergeColPool) *UnorderedColumnReader {
+func newUnorderedColumnReader(f TSSPFile, lg *logger.Logger, pool *MergeColPool) *UnorderedColumnReader {
+	fi := NewFileIterator(f, lg)
+	_, seq := f.LevelAndSequence()
+
 	return &UnorderedColumnReader{
-		f:          f,
-		sr:         sr,
-		cm:         cm,
-		col:        &record.ColVal{},
-		remain:     make([]*record.ColVal, cm.columnCount),
-		lineOffset: newOffset(int(cm.columnCount)),
-		segOffset:  newOffset(int(cm.columnCount)),
-		colPool:    pool,
+		fi:      fi,
+		sr:      NewSegmentReader(fi),
+		swap:    &record.ColVal{},
+		colPool: pool,
+		seq:     seq,
+		columns: NewUnorderedColumns(),
 	}
 }
 
-func (r *UnorderedColumnReader) findColumnIndex(ref *record.Field) (int, bool) {
-	for i := range r.cm.colMeta {
-		if r.cm.colMeta[i].Equal(ref.Name, ref.Type) {
-			return i, true
-		}
+func (r *UnorderedColumnReader) HasColumn() bool {
+	return r.ref != nil
+}
+
+func (r *UnorderedColumnReader) MatchSeries(sid uint64) bool {
+	return r.sid == sid && !r.columns.ReadCompleted()
+}
+
+func (r *UnorderedColumnReader) ChangeSeries(sid uint64) error {
+	if r.columns.ReadCompleted() {
+		r.sid = 0
 	}
 
-	return 0, false
+	if r.sid == sid {
+		return nil
+	}
+
+	if r.sid > 0 {
+		return nil
+	}
+
+	if !r.fi.NextChunkMeta() {
+		return r.fi.err
+	}
+	cm := r.fi.GetCurtChunkMeta()
+	r.columns.Init(cm)
+
+	r.fi.chunkUsed++
+	r.fi.curtChunkMeta = nil
+
+	r.sid = cm.sid
+	n := int(cm.columnCount) - cap(r.remain)
+	if n > 0 {
+		r.remain = append(r.remain[:cap(r.remain)], make([]*record.ColVal, n)...)
+	}
+	r.remain = r.remain[:cm.columnCount]
+
+	err := r.initTime()
+	r.columns.SetRemainLine(int(cm.columnCount) * len(r.times))
+	return err
+}
+
+func (r *UnorderedColumnReader) ChangeColumn(sid uint64, ref *record.Field) {
+	r.colMeta = nil
+	r.ref = nil
+
+	if r.sid != sid {
+		return
+	}
+
+	col := r.columns.ChangeColumn(ref.Name)
+	if col != nil {
+		r.colMeta = col.meta
+		r.ref = ref
+		r.colIdx = col.colIdx
+	}
 }
 
 func (r *UnorderedColumnReader) initTime() error {
-	if len(r.times) == 0 {
-		meta := &r.cm.colMeta[r.cm.columnCount-1]
-		ref := &record.Field{Name: record.TimeField, Type: int(meta.ty)}
-
-		r.changOffset(len(r.cm.colMeta) - 1)
-		col, err := r.read(len(r.cm.colMeta)-1, math.MaxInt64, ref)
-		if err != nil {
-			return err
-		}
-
-		r.times = append(r.times, col.IntegerValues()...)
-		r.colPool.Put(col)
+	r.times = r.times[:0]
+	r.colIdx = 0
+	col, err := r.read(r.columns.TimeMeta(), math.MaxInt64, timeRef)
+	if err != nil {
+		return err
 	}
+
+	r.times = append(r.times, col.IntegerValues()...)
+	r.colPool.Put(col)
 	return nil
 }
 
-func (r *UnorderedColumnReader) readTime(colIdx int, maxTime int64) ([]int64, error) {
-	r.changOffset(colIdx)
+func (r *UnorderedColumnReader) ReadTime(sid uint64, maxTime int64) []int64 {
+	start := r.columns.GetLineOffset(record.TimeField)
+	times := r.readTime(sid, maxTime, start)
+	r.columns.IncrLineOffset(record.TimeField, len(times))
+	return times
+}
+
+func (r *UnorderedColumnReader) readTime(sid uint64, maxTime int64, start int) []int64 {
+	if r.sid != sid {
+		return nil
+	}
 
 	end := sort.Search(len(r.times), func(i int) bool {
 		return r.times[i] > maxTime
 	})
 
-	start := r.lineOffset.value()
 	if end < start {
-		return nil, nil
+		return nil
 	}
 
 	times := r.times[start:end]
-	r.lineOffset.incr(len(times))
-	return times, nil
+	return times
 }
 
-// reads all unordered data whose time is earlier than maxTime
-func (r *UnorderedColumnReader) Read(ref *record.Field, maxTime int64) (*record.ColVal, []int64, error) {
-	idx, ok := r.findColumnIndex(ref)
-	if !ok {
+func (r *UnorderedColumnReader) Read(sid uint64, maxTime int64) (*record.ColVal, []int64, error) {
+	if r.sid != sid || !r.HasColumn() {
 		return nil, nil, nil
 	}
 
-	if err := r.initTime(); err != nil {
-		return nil, nil, err
+	start := r.columns.GetLineOffset(r.ref.Name)
+	times := r.readTime(sid, maxTime, start)
+	if len(times) == 0 {
+		return nil, nil, nil
 	}
+	r.columns.IncrLineOffset(r.ref.Name, len(times))
 
-	times, err := r.readTime(idx, maxTime)
-	if err != nil || len(times) == 0 {
-		return nil, nil, err
-	}
-
-	col, err := r.read(idx, len(times), ref)
+	col, err := r.read(r.colMeta, len(times), r.ref)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -127,51 +177,22 @@ func (r *UnorderedColumnReader) Read(ref *record.Field, maxTime int64) (*record.
 	return col, times, nil
 }
 
-func (r *UnorderedColumnReader) ReadSchema(res map[string]record.Field, maxTime int64) {
-	if len(r.times) == 0 || r.times[0] > maxTime {
-		return
-	}
-
-	if r.lineOffset.valueAt(0) == len(r.times) {
-		return
-	}
-
-	for i := range r.cm.colMeta {
-		meta := &r.cm.colMeta[i]
-		if meta.IsTime() {
-			continue
-		}
-
-		tmp, ok := res[meta.Name()]
-		if !ok {
-			res[meta.Name()] = record.Field{Type: int(meta.ty), Name: meta.Name()}
-			continue
-		}
-
-		if tmp.Type != int(meta.ty) {
-			panic("BUG: field type conflict")
-		}
-	}
-}
-
-func (r *UnorderedColumnReader) read(idx, need int, ref *record.Field) (*record.ColVal, error) {
-	col := r.remain[idx]
+func (r *UnorderedColumnReader) read(colMeta *ColumnMeta, need int, ref *record.Field) (*record.ColVal, error) {
+	col := r.remain[r.colIdx]
 	if col == nil {
 		col = r.colPool.Get()
 	}
 
 	if col.Len == 0 || col.Len < need {
-		meta := &r.cm.colMeta[idx]
-
-		i := r.segOffset.value()
-		for ; i < len(meta.entries); i++ {
-			err := r.sr.Read(meta.entries[i], ref, r.col)
+		i := r.columns.GetSegOffset(ref.Name)
+		for ; i < len(colMeta.entries); i++ {
+			err := r.sr.Read(colMeta.entries[i], ref, r.swap)
 			if err != nil {
 				return nil, err
 			}
-			col.AppendColVal(r.col, ref.Type, 0, r.col.Len)
+			col.AppendColVal(r.swap, ref.Type, 0, r.swap.Len)
 
-			r.segOffset.incr(1)
+			r.columns.IncrSegOffset(ref.Name, 1)
 			if col.Len >= need {
 				break
 			}
@@ -179,7 +200,7 @@ func (r *UnorderedColumnReader) read(idx, need int, ref *record.Field) (*record.
 	}
 
 	res, remain := r.split(col, need, ref)
-	r.remain[idx] = remain
+	r.remain[r.colIdx] = remain
 	return res, nil
 }
 
@@ -196,124 +217,162 @@ func (r *UnorderedColumnReader) split(col *record.ColVal, rowCount int, ref *rec
 	return head, tail
 }
 
-func (r *UnorderedColumnReader) changOffset(idx int) {
-	r.lineOffset.change(idx)
-	r.segOffset.change(idx)
+func (r *UnorderedColumnReader) ReadSchemas(sid uint64, maxTime int64, dst map[string]record.Field) {
+	if r.sid != sid || r.times[0] > maxTime {
+		return
+	}
+
+	r.columns.Walk(func(meta *ColumnMeta) {
+		if _, ok := dst[meta.name]; !ok {
+			dst[meta.name] = record.Field{Name: meta.name, Type: int(meta.ty)}
+		}
+	})
+}
+
+func (r *UnorderedColumnReader) Close() {
+	r.fi.Close()
 }
 
 type UnorderedReader struct {
-	log *logger.Logger
+	log     *logger.Logger
+	ctx     *UnorderedReaderContext
+	readers []*UnorderedColumnReader
 
-	// map key is sid
-	meta    map[uint64][]*UnorderedColumnReader
-	sid     []uint64
-	times   []int64
-	swap    []int64
-	offsets map[string]int
+	sid     uint64
+	ref     *record.Field
+	schemas map[string]record.Field
+
+	ofs   int
+	times []int64
+	swap  []int64
+
 	timeCol record.ColVal
 	nilCol  record.ColVal
-
-	ctx *UnorderedReaderContext
 }
 
 func NewUnorderedReader(log *logger.Logger) *UnorderedReader {
 	return &UnorderedReader{
 		log:     log,
-		meta:    make(map[uint64][]*UnorderedColumnReader),
-		offsets: make(map[string]int),
-		ctx:     newUnorderedReadTool(),
+		ctx:     newUnorderedReaderContext(),
+		schemas: make(map[string]record.Field),
 	}
 }
 
 func (r *UnorderedReader) AddFiles(files []TSSPFile) {
 	for _, f := range files {
-		r.addFile(f)
-	}
-	sort.Slice(r.sid, func(i, j int) bool {
-		return r.sid[i] < r.sid[j]
-	})
-}
-
-func (r *UnorderedReader) addFile(f TSSPFile) {
-	itr := NewFileIterator(f, r.log)
-	sr := NewSegmentReader(itr)
-
-	for {
-		if !itr.NextChunkMeta() {
-			break
-		}
-
-		cm := itr.curtChunkMeta.Clone()
-
-		if _, ok := r.meta[cm.sid]; !ok {
-			r.sid = append(r.sid, cm.sid)
-		}
-
-		r.meta[cm.sid] = append(r.meta[itr.curtChunkMeta.sid], newUnorderedColumnReader(f, cm, sr, r.ctx.colPool))
-
-		itr.chunkUsed++
-		itr.curtChunkMeta = nil
+		r.readers = append(r.readers, newUnorderedColumnReader(f, r.log, r.ctx.colPool))
 	}
 }
 
-// ReadRemain reads all remaining data that is smaller than the current series ID in the unordered data
-func (r *UnorderedReader) ReadRemain(sid uint64, cb remainCallback) error {
-	i := 0
-	for ; i < len(r.sid); i++ {
-		if r.sid[i] >= sid {
-			break
-		}
-
-		if err := r.readRemain(r.sid[i], cb); err != nil {
-			return err
-		}
-
-		delete(r.meta, r.sid[i])
-	}
-
-	r.sid = r.sid[i:]
-
-	return nil
+func (r *UnorderedReader) ChangeSeries(sid uint64) error {
+	r.sid = sid
+	return r.changeSeries(sid)
 }
 
-func (r *UnorderedReader) readRemain(sid uint64, cb remainCallback) error {
-	if err := r.InitTimes(sid, math.MaxInt64); err != nil {
-		return err
-	}
-	if len(r.times) == 0 {
-		return nil
-	}
-
-	schemas := r.ReadSeriesSchemas(sid, math.MaxInt64)
-	if len(schemas) == 0 {
-		return nil
-	}
-
-	for i := 0; i < len(schemas); i++ {
-		col, times, err := r.Read(sid, &schemas[i], math.MaxInt64)
+func (r *UnorderedReader) changeSeries(sid uint64) error {
+	for _, reader := range r.readers {
+		err := reader.ChangeSeries(sid)
 		if err != nil {
 			return err
 		}
+	}
+	return nil
+}
 
-		if err := cb(sid, schemas[i], col, times); err != nil {
-			return err
+func (r *UnorderedReader) ChangeColumn(sid uint64, ref *record.Field) {
+	r.ofs = 0
+	r.ref = ref
+	for _, reader := range r.readers {
+		reader.ChangeColumn(sid, ref)
+	}
+}
+
+func (r *UnorderedReader) HasSeries(sid uint64) bool {
+	for _, reader := range r.readers {
+		if reader.MatchSeries(sid) {
+			return true
 		}
+	}
+	return false
+}
+
+func (r *UnorderedReader) ReadRemain(sid uint64, cb remainCallback) error {
+	var err error
+	for {
+		err = r.readRemain(sid, cb)
+		if err != nil {
+			break
+		}
+	}
+
+	if errors.Is(err, io.EOF) {
+		err = nil
+	}
+
+	return err
+}
+
+// ReadRemain reads all remaining data that is smaller than the current series ID in the unordered data
+func (r *UnorderedReader) readRemain(sid uint64, cb remainCallback) error {
+	if err := r.changeSeries(sid); err != nil {
+		return err
+	}
+
+	current := sid
+	for i := range r.readers {
+		if r.readers[i].sid > 0 && r.readers[i].sid < current {
+			current = r.readers[i].sid
+		}
+	}
+
+	if current == sid {
+		return io.EOF
+	}
+
+	r.sid = current
+	schema := r.ReadSeriesSchemas(current, math.MaxInt64)
+	r.InitTimes(current, math.MaxInt64)
+
+	times := r.times
+	rows := len(times)
+	if rows == 0 {
+		return io.EOF
+	}
+
+	wn := 0
+	for i := range schema {
+		r.ChangeColumn(current, &schema[i])
+
+		for wn < rows {
+			wn += GetTsStoreConfig().maxRowsPerSegment
+			if wn > rows {
+				wn = rows
+			}
+
+			col, colTimes, err := r.Read(current, times[wn-1])
+			if err != nil {
+				return err
+			}
+
+			err = cb(current, *r.ref, col, colTimes)
+			if err != nil {
+				return err
+			}
+		}
+		wn = 0
 	}
 
 	r.timeCol.Init()
 	r.timeCol.AppendTimes(r.times)
-	return cb(sid, timeField, &r.timeCol, r.times)
+	return cb(current, *timeRef, &r.timeCol, r.times)
 }
 
 func (r *UnorderedReader) ReadAllTimes() []int64 {
 	return r.times
 }
 
-func (r *UnorderedReader) ReadTimes(ref *record.Field, maxTime int64) []int64 {
-	ofs, ok := r.offsets[ref.Name]
-	if !ok {
-		ofs = 0
-	}
+func (r *UnorderedReader) ReadTimes(maxTime int64) []int64 {
+	ofs := r.ofs
 
 	if ofs >= len(r.times) || r.times[ofs] > maxTime {
 		return nil
@@ -323,7 +382,7 @@ func (r *UnorderedReader) ReadTimes(ref *record.Field, maxTime int64) []int64 {
 		return r.times[i] > maxTime
 	})
 
-	r.offsets[ref.Name] = end
+	r.ofs = end
 	return r.times[ofs:end]
 }
 
@@ -334,19 +393,15 @@ func (r *UnorderedReader) AllocNilCol(size int, ref *record.Field) *record.ColVa
 }
 
 // Read reads data based on the series ID, column, and time range
-func (r *UnorderedReader) Read(sid uint64, ref *record.Field, maxTime int64) (*record.ColVal, []int64, error) {
-	items, ok := r.meta[sid]
-	if !ok || len(items) == 0 {
-		return nil, nil, nil
-	}
-	nilTimes := r.ReadTimes(ref, maxTime)
+func (r *UnorderedReader) Read(sid uint64, maxTime int64) (*record.ColVal, []int64, error) {
+	nilTimes := r.ReadTimes(maxTime)
 	if len(nilTimes) == 0 {
 		return nil, nil, nil
 	}
-	nilCol := r.AllocNilCol(len(nilTimes), ref)
+	nilCol := r.AllocNilCol(len(nilTimes), r.ref)
 
-	for i := 0; i < len(items); i++ {
-		col, times, err := items[i].Read(ref, maxTime)
+	for _, reader := range r.readers {
+		col, times, err := reader.Read(sid, maxTime)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -354,17 +409,17 @@ func (r *UnorderedReader) Read(sid uint64, ref *record.Field, maxTime int64) (*r
 		r.ctx.add(times, col)
 	}
 
-	return r.ctx.merge(nilCol, nilTimes, ref.Type)
+	return r.ctx.merge(nilCol, nilTimes, r.ref.Type)
 }
 
 func (r *UnorderedReader) ReadSeriesSchemas(sid uint64, maxTime int64) record.Schemas {
-	meta, ok := r.meta[sid]
-	if !ok {
-		return nil
+	tmp := r.schemas
+	for k := range tmp {
+		delete(tmp, k)
 	}
-	tmp := make(map[string]record.Field)
-	for _, item := range meta {
-		item.ReadSchema(tmp, maxTime)
+
+	for _, reader := range r.readers {
+		reader.ReadSchemas(sid, maxTime, tmp)
 	}
 
 	if len(tmp) == 0 {
@@ -380,73 +435,30 @@ func (r *UnorderedReader) ReadSeriesSchemas(sid uint64, maxTime int64) record.Sc
 }
 
 // InitTimes initialize the time column of unordered data
-func (r *UnorderedReader) InitTimes(sid uint64, maxTime int64) error {
+func (r *UnorderedReader) InitTimes(sid uint64, maxTime int64) {
 	r.times = r.times[:0]
-	for k := range r.offsets {
-		delete(r.offsets, k)
+	if sid != r.sid {
+		return
 	}
 
-	meta, ok := r.meta[sid]
-	if !ok || len(meta) == 0 {
-		return nil
-	}
-
-	for _, item := range meta {
-		if err := item.initTime(); err != nil {
-			return err
-		}
-
-		times, err := item.readTime(len(item.cm.colMeta)-1, maxTime)
-		if err != nil {
-			return err
-		}
+	for _, reader := range r.readers {
+		times := reader.ReadTime(sid, maxTime)
 
 		r.swap = MergeTimes(r.times, times, r.swap[:0])
 		r.times, r.swap = r.swap, r.times
 	}
-
-	return nil
-}
-
-func (r *UnorderedReader) HasSeries(sid uint64) bool {
-	_, ok := r.meta[sid]
-	return ok
 }
 
 func (r *UnorderedReader) Close() {
-	for _, items := range r.meta {
-		for _, item := range items {
-			util.MustClose(item.f)
-		}
+	for _, reader := range r.readers {
+		reader.Close()
 	}
 }
 
-type Offset struct {
-	values  []int
-	current *int
-}
-
-func newOffset(size int) *Offset {
-	return &Offset{
-		values:  make([]int, size),
-		current: nil,
+func (r *UnorderedReader) CloseFile() {
+	for _, reader := range r.readers {
+		util.MustClose(reader.fi.r)
 	}
-}
-
-func (o *Offset) change(idx int) {
-	o.current = &o.values[idx]
-}
-
-func (o *Offset) incr(i int) {
-	*o.current += i
-}
-
-func (o *Offset) value() int {
-	return *o.current
-}
-
-func (o *Offset) valueAt(idx int) int {
-	return o.values[idx]
 }
 
 type SegmentReader struct {
@@ -486,7 +498,7 @@ type UnorderedReaderContext struct {
 	times [][]int64
 }
 
-func newUnorderedReadTool() *UnorderedReaderContext {
+func newUnorderedReaderContext() *UnorderedReaderContext {
 	return &UnorderedReaderContext{
 		colPool: &MergeColPool{},
 		mh:      record.NewMergeHelper(),
@@ -507,7 +519,6 @@ func (t *UnorderedReaderContext) release() {
 
 	t.cols = t.cols[:0]
 	t.times = t.times[:0]
-
 }
 
 func (t *UnorderedReaderContext) merge(nilCol *record.ColVal, nilTimes []int64, typ int) (*record.ColVal, []int64, error) {
@@ -522,4 +533,118 @@ func (t *UnorderedReaderContext) merge(nilCol *record.ColVal, nilTimes []int64, 
 	}
 
 	return t.mh.Merge(nilCol, nilTimes, typ)
+}
+
+type UnorderedColumns struct {
+	remainLine int
+	current    *UnorderedColumn
+	timeCol    *UnorderedColumn
+	columns    []UnorderedColumn
+	columnMap  map[string]*UnorderedColumn
+}
+
+func NewUnorderedColumns() *UnorderedColumns {
+	return &UnorderedColumns{
+		columns:   make([]UnorderedColumn, defaultCap),
+		columnMap: make(map[string]*UnorderedColumn),
+	}
+}
+
+func (c *UnorderedColumns) reset() {
+	c.current = nil
+	c.timeCol = nil
+	c.remainLine = 0
+	c.columns = c.columns[:0]
+
+	for k := range c.columnMap {
+		delete(c.columnMap, k)
+	}
+}
+
+func (c *UnorderedColumns) Walk(callback func(meta *ColumnMeta)) {
+	for i := 0; i < len(c.columns)-1; i++ {
+		callback(c.columns[i].meta)
+	}
+}
+
+func (c *UnorderedColumns) TimeMeta() *ColumnMeta {
+	return c.columns[len(c.columns)-1].meta
+}
+
+func (c *UnorderedColumns) alloc() *UnorderedColumn {
+	size := len(c.columns)
+	if size == cap(c.columns) {
+		c.columns = append(c.columns, UnorderedColumn{})
+	}
+	c.columns = c.columns[:size+1]
+	return &c.columns[size]
+}
+
+func (c *UnorderedColumns) Init(cm *ChunkMeta) {
+	c.reset()
+
+	for i := range cm.colMeta {
+		col := c.alloc()
+		col.Init(&cm.colMeta[i], i)
+		c.columnMap[cm.colMeta[i].name] = col
+	}
+	c.timeCol = &c.columns[len(c.columns)-1]
+}
+
+func (c *UnorderedColumns) ChangeColumn(name string) *UnorderedColumn {
+	c.current = c.columnMap[name]
+	return c.current
+}
+
+func (c *UnorderedColumns) GetLineOffset(name string) int {
+	if name == record.TimeField {
+		return c.timeCol.lineOffset
+	}
+	return c.current.lineOffset
+}
+
+func (c *UnorderedColumns) IncrLineOffset(name string, n int) {
+	if name == record.TimeField {
+		c.timeCol.lineOffset += n
+	} else {
+		c.current.lineOffset += n
+	}
+	c.remainLine -= n
+}
+
+func (c *UnorderedColumns) GetSegOffset(name string) int {
+	if name == record.TimeField {
+		return c.timeCol.segOffset
+	}
+	return c.current.segOffset
+}
+
+func (c *UnorderedColumns) IncrSegOffset(name string, n int) {
+	if name == record.TimeField {
+		c.timeCol.segOffset += n
+	} else {
+		c.current.segOffset += n
+	}
+}
+
+func (c *UnorderedColumns) SetRemainLine(n int) {
+	c.remainLine = n
+}
+
+func (c *UnorderedColumns) ReadCompleted() bool {
+	return c.remainLine <= 0
+}
+
+type UnorderedColumn struct {
+	lineOffset int
+	segOffset  int
+	colIdx     int
+	meta       *ColumnMeta
+}
+
+func (c *UnorderedColumn) Init(meta *ColumnMeta, idx int) {
+	c.lineOffset = 0
+	c.segOffset = 0
+	c.meta = meta
+	c.colIdx = idx
 }

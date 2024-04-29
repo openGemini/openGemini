@@ -25,8 +25,8 @@ import (
 	"go.uber.org/zap"
 )
 
-func (m *MmsTables) MergeOutOfOrder(shId uint64, force bool) error {
-	contexts := m.createMergeContext(maxCompactor)
+func (m *MmsTables) MergeOutOfOrder(shId uint64, full bool, force bool) error {
+	contexts := m.createMergeContext(maxCompactor, full)
 
 	for _, ctx := range contexts {
 		if ctx.mst == "" || len(ctx.unordered.seq) == 0 {
@@ -43,11 +43,13 @@ func (m *MmsTables) MergeOutOfOrder(shId uint64, force bool) error {
 			log.Warn("shard closed", zap.Uint64("id", shId))
 			return fmt.Errorf("store closed, shard id: %v", shId)
 		case <-m.stopCompMerge:
+			m.inMerge.Del(ctx.mst)
 			log.Info("stop merge", zap.Uint64("id", shId))
 			return nil
 		case compLimiter <- struct{}{}:
 			m.wg.Add(1)
 			if !m.MergeEnabled() {
+				m.inMerge.Del(ctx.mst)
 				m.wg.Done()
 				return nil
 			}
@@ -59,7 +61,7 @@ func (m *MmsTables) MergeOutOfOrder(shId uint64, force bool) error {
 	return nil
 }
 
-func (m *MmsTables) mergeOutOfOrder(ctx *mergeContext, force bool) {
+func (m *MmsTables) mergeOutOfOrder(ctx *MergeContext, force bool) {
 	stat := statistics.NewMergeStatistics()
 	stat.AddActive(1)
 	cLog, logEnd := logger.NewOperation(log, "MergeOutOfOrder", ctx.mst)
@@ -78,6 +80,7 @@ func (m *MmsTables) mergeOutOfOrder(ctx *mergeContext, force bool) {
 
 	tool := newMergeTool(m, cLog)
 	tool.merge(ctx, force)
+	tool.Release()
 }
 
 func (m *MmsTables) Listen(signal chan struct{}, onClose func()) {
@@ -111,7 +114,7 @@ func (m *MmsTables) replaceMergedFiles(name string, lg *zap.Logger, old []TSSPFi
 		old = append(old, f)
 		newFileName := new[len(old)-1].FileName()
 		oldFileName := f.FileName()
-		lg.Info("replace merged file",
+		lg.Debug("replace merged file",
 			zap.String("old file", oldFileName.String()),
 			zap.Int64("old size", f.FileSize()),
 			zap.String("new file", newFileName.String()),
@@ -140,33 +143,27 @@ func (m *MmsTables) getFilesByPath(mst string, path []string, order bool) (*TSSP
 	return files, nil
 }
 
-func (m *MmsTables) createMergeContext(limit int) []*mergeContext {
-	ret := make([]*mergeContext, 0, limit)
+func (m *MmsTables) createMergeContext(limit int, full bool) []*MergeContext {
+	ret := make([]*MergeContext, 0, limit)
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-
-	var create = func(mst string, files *TSSPFiles) bool {
-		files.lock.RLock()
-		defer files.lock.RUnlock()
-
-		ctx := NewMergeContext(mst)
-		ret = append(ret, ctx)
-		for _, f := range files.Files() {
-			if !ctx.AddUnordered(f) {
-				return true
-			}
-		}
-
-		return false
-	}
 
 	for k, v := range m.OutOfOrder {
 		if v.Len() == 0 || v.closing > 0 {
 			continue
 		}
-		if create(k, v) {
-			break
+
+		var ctx *MergeContext
+		if full {
+			ctx = BuildFullMergeContext(k, v)
+		} else {
+			ctx = BuildMergeContext(k, v)
 		}
+		if ctx == nil {
+			continue
+		}
+
+		ret = append(ret, ctx)
 		limit--
 		if limit <= 0 {
 			break
@@ -218,24 +215,7 @@ func (m *MmsTables) removeFile(f TSSPFile) {
 	}
 }
 
-func mergeFirst(outLen int, outSize, orderFileSize int64) bool {
-	if outLen == 1 {
-		return false
-	}
-	if float64(outSize) > float64(MaxSizeOfFileToMerge)*MergeFirstRatio {
-		return false
-	}
-	var avgMergeFileSize int64
-	if outLen != 0 {
-		avgMergeFileSize = outSize / int64(outLen)
-	} else {
-		avgMergeFileSize = outSize
-	}
-
-	return avgMergeFileSize < MergeFirstAvgSize && orderFileSize > MergeFirstDstSize
-}
-
-func (m *MmsTables) matchOrderFiles(ctx *mergeContext) {
+func (m *MmsTables) matchOrderFiles(ctx *MergeContext) {
 	files, ok := m.getTSSPFiles(ctx.mst, true)
 	if !ok {
 		log.Warn("No order file is matched.", zap.String("measurement", ctx.mst))

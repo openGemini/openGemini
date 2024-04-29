@@ -37,7 +37,7 @@ type metaClient interface {
 type engine interface {
 	FetchShardsNeedChangeStore() (shardsToWarm, shardsToCold []*meta.ShardIdentifier)
 	ChangeShardTierToWarm(db string, ptId uint32, shardID uint64) error
-	HierarchicalStorage(db string, ptId uint32, shardID uint64) error
+	HierarchicalStorage(db string, ptId uint32, shardID uint64) bool
 }
 
 type WaitGroup struct {
@@ -154,8 +154,7 @@ func (s *Service) runShardHierarchicalStorage(shardsToCold []*meta.ShardIdentifi
 				return
 			}
 
-			if err := s.Engine.HierarchicalStorage(shard.OwnerDb, shard.OwnerPt, shard.ShardID); err != nil {
-				s.Logger.Error("HierarchicalStorage run error", zap.Error(err))
+			if ok := s.Engine.HierarchicalStorage(shard.OwnerDb, shard.OwnerPt, shard.ShardID); !ok {
 				return
 			}
 

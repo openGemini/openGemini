@@ -75,6 +75,9 @@ func TestCheckDetachedFiles(t *testing.T) {
 	}
 
 	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta.MeasurementInfo{mstsInfo[defaultMeasurementName]},
+	})
 	err = sh.WriteRows(rows, nil)
 	msInfo, err := sh.activeTbl.GetMsInfo(defaultMeasurementName)
 	if err != nil {
@@ -135,6 +138,9 @@ func TestTestCheckDetachedFilesV2(t *testing.T) {
 	}
 
 	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta.MeasurementInfo{mstsInfo[defaultMeasurementName]},
+	})
 	err = sh.WriteRows(rows, nil)
 	msInfo, err := sh.activeTbl.GetMsInfo(defaultMeasurementName)
 	if err != nil {
@@ -180,7 +186,7 @@ func TestCheckMetaIndexFile(t *testing.T) {
 	data = append(data, buf...)
 	crc := crc32.ChecksumIEEE(data[immutable.MetaIndexHeaderSize+CRCLen : immutable.MetaIndexHeaderSize+immutable.MetaIndexItemSize+CRCLen])
 	numberenc.MarshalUint32Copy(data[immutable.MetaIndexHeaderSize:immutable.MetaIndexHeaderSize+CRCLen], crc)
-	fd, err := immutable.OpenObsFile(testDir, immutable.MetaIndexFile, nil)
+	fd, err := fileops.OpenObsFile(testDir, immutable.MetaIndexFile, nil, false)
 	if err != nil {
 		log.Error("open detached metaIndex file fail", zap.String("name", testDir), zap.Error(err))
 		t.Fatal(err)
@@ -217,7 +223,7 @@ func TestCheckChunkMetaFile(t *testing.T) {
 	detachedInfo.lastMetaIdxOff = 0
 	detachedInfo.lastMetaIdxSize = uint32(CRCLen + util.Uint64SizeBytes*2 + util.Uint32SizeBytes)
 	buf := make([]byte, detachedInfo.lastMetaIdxSize+10)
-	fd, err := immutable.OpenObsFile(testDir, immutable.ChunkMetaFile, nil)
+	fd, err := fileops.OpenObsFile(testDir, immutable.ChunkMetaFile, nil, false)
 	if err != nil {
 		log.Error("open detached metaIndex file fail", zap.String("name", testDir), zap.Error(err))
 		t.Fatal(err)
@@ -245,7 +251,7 @@ func TestCheckDataFile(t *testing.T) {
 	}
 
 	buf := make([]byte, 10)
-	fd, err := immutable.OpenObsFile(testDir, immutable.DataFile, nil)
+	fd, err := fileops.OpenObsFile(testDir, immutable.DataFile, nil, false)
 	if err != nil {
 		log.Error("open detached data file fail", zap.String("name", testDir), zap.Error(err))
 		t.Fatal(err)
@@ -279,7 +285,7 @@ func TestCheckPkMetaIndexFile(t *testing.T) {
 	}
 
 	buf := make([]byte, immutable.PKMetaPrefixSize-util.Uint32SizeBytes)
-	fd, err := immutable.OpenObsFile(testDir, immutable.PrimaryMetaFile, nil)
+	fd, err := fileops.OpenObsFile(testDir, immutable.PrimaryMetaFile, nil, false)
 	if err != nil {
 		log.Error("open detached data file fail", zap.String("name", testDir), zap.Error(err))
 		t.Fatal(err)
@@ -319,7 +325,7 @@ func TestCheckPkIndexFile(t *testing.T) {
 
 	//test fileInfo.Size() > dataFileSize
 	buf := make([]byte, 10)
-	fd, err := immutable.OpenObsFile(testDir, immutable.PrimaryKeyFile, nil)
+	fd, err := fileops.OpenObsFile(testDir, immutable.PrimaryKeyFile, nil, false)
 	if err != nil {
 		log.Error("open detached pk index file fail", zap.String("name", testDir), zap.Error(err))
 		t.Fatal(err)

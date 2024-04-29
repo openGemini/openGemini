@@ -18,6 +18,7 @@ package fileops
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/openGemini/openGemini/lib/request"
@@ -220,6 +221,35 @@ func TestObsFile_Write(t *testing.T) {
 	})
 }
 
+func TestObsFile_WriteV2(t *testing.T) {
+	client := newMockObsClient()
+	fd := &obsFile{
+		key:    "test_mock_obs_file_write",
+		client: client,
+		conf:   mockObsConf,
+		offset: 0,
+	}
+	// write empty byte slice
+	n, err := fd.Write([]byte{})
+	assert.Equal(t, 0, n)
+	assert.NotNil(t, err)
+	// write fail with mock error
+	client.mockErr = true
+	n, err = fd.Write([]byte("hello"))
+	assert.Equal(t, 0, n)
+	assert.NotNil(t, err)
+	// write success
+	client.mockErr = false
+	n, err = fd.Write([]byte("hello"))
+	assert.Equal(t, 5, n)
+	assert.Equal(t, int64(5), fd.offset)
+	assert.Nil(t, err)
+	n, err = fd.Write([]byte("world"))
+	assert.Equal(t, 5, n)
+	assert.Equal(t, int64(10), fd.offset)
+	assert.Nil(t, err)
+}
+
 func TestObsFile_Read(t *testing.T) {
 	initializeEnv(t)
 	name := EncodeObsPath(endpoint, bucketName, "test_obs_file_read.txt", ak, sk)
@@ -275,7 +305,7 @@ func TestObsFile_StreamReadBatch(t *testing.T) {
 	_ = testObsFs.WriteFile(name, []byte("hello,world"), os.ModePerm)
 	fd, _ := testObsFs.Open(name)
 	c := make(chan *request.StreamReader, 2)
-	go fd.StreamReadBatch([]int64{0, 2, 5, 8}, []int64{2, 2, 2, 2}, 2, c, -1)
+	go fd.StreamReadBatch([]int64{0, 2, 5, 8}, []int64{2, 2, 2, 2}, 2, c, -1, false)
 	result := make(map[int64][]byte)
 	result[0] = []byte("he")
 	result[2] = []byte("ll")
@@ -307,17 +337,56 @@ func TestObsFile_IsObsStoragePolicy(t *testing.T) {
 }
 
 func TestObsFile_CopyTSSPFromDFVToOBS(t *testing.T) {
-	srcFile := "/tmp/test/00000001-0000-00000000.tssp.obs"
-	dstFile := "/tmp/test/00000001-0000-00000000.tssp.obs"
-	lockFile := FileLockOption("/tmp/test_vfs/lock")
-	err := testObsFs.CopyFileFromDFVToOBS(srcFile, dstFile, lockFile)
-	assert.Nil(t, err)
+	srcFile := "00000001-0000-00000000.tssp"
+	dstFile := "00000001-0000-00000000.tssp.obs"
+	srcPath := EncodeObsPath(endpoint, bucketName, srcFile, ak, sk)
+	dstPath := EncodeObsPath(endpoint, bucketName, dstFile, ak, sk)
+	err := testObsFs.CopyFileFromDFVToOBS(srcPath, dstPath)
+	assert.NotNil(t, err)
 }
 
 func TestObsFile_CreateOBS(t *testing.T) {
-	srcFile := "/tmp/test/00000001-0000-00000000.tssp.obs"
+	dstFile := "00000001-0000-00000000.tssp.obs"
+	dstPath := EncodeObsPath(endpoint, bucketName, dstFile, ak, sk)
 	pri := FilePriorityOption(IO_PRIORITY_NORMAL)
 	lockFile := FileLockOption("/tmp/test_vfs/lock")
-	_, err := testObsFs.CreateV2(srcFile, lockFile, pri)
+	_, err := testObsFs.CreateV2(dstPath, lockFile, pri)
+	assert.NotNil(t, err)
+}
+
+func TestObsFile_GetAllFilesSizeInPath(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.RemoveAll(dir)
+	srcFile := filepath.Join(dir, "00000001-0000-00000000.tssp")
+	var totalSize int64
+	totalSize, _, _, _ = testObsFs.GetAllFilesSizeInPath(srcFile)
+	assert.Equal(t, int64(0), totalSize)
+
+	_ = Mkdir(dir, 0755)
+	fd, err := Create(srcFile)
 	assert.Nil(t, err)
+	assert.NotNil(t, fd)
+	_, _ = fd.Write([]byte("hello"))
+	_ = fd.Close()
+	totalSize, _, _, _ = testObsFs.GetAllFilesSizeInPath(srcFile)
+	assert.Equal(t, int64(0), totalSize)
+}
+
+func TestGetRepoAndStreamId(t *testing.T) {
+	o := &obsFile{}
+	o.key = `../data/repoId/0/streamId/1_1709510400000000000_1709596800000000000_1/columnstore/test_0000/xxx`
+	repo, stream := o.GetRepoAndStreamId()
+	assert.Equal(t, "repoId", repo)
+	assert.Equal(t, "streamId", stream)
+	o.key = ""
+	repo, stream = o.GetRepoAndStreamId()
+	assert.Equal(t, "", repo)
+	assert.Equal(t, "", stream)
+}
+
+func TestDecodeRemotePathToLocal(t *testing.T) {
+	name := EncodeObsPath(endpoint, bucketName, "test_obs_file_decode_remote_path.txt", ak, sk)
+	o := NewObsFs()
+	_, err := o.DecodeRemotePathToLocal(name)
+	assert.NotNil(t, err)
 }

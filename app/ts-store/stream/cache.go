@@ -84,12 +84,12 @@ func (p *RowsPool) Put(r *[]influx.Row) {
 	p.pool.Put(r)
 }
 
-type WindowDataPool struct {
-	cache  chan *WindowCache
+type TaskDataPool struct {
+	cache  chan ChanData
 	length int64
 }
 
-func NewWindowDataPool() *WindowDataPool {
+func NewTaskDataPool() *TaskDataPool {
 	n := cpu.GetCpuNum() * 8
 	if n < 4 {
 		n = 4
@@ -98,55 +98,55 @@ func NewWindowDataPool() *WindowDataPool {
 		n = 256
 	}
 
-	p := &WindowDataPool{
-		cache: make(chan *WindowCache, n),
+	p := &TaskDataPool{
+		cache: make(chan ChanData, n),
 	}
 	return p
 }
 
-func (p *WindowDataPool) Get() *WindowCache {
+func (p *TaskDataPool) Get() ChanData {
 	cache := <-p.cache
 	p.IncreaseChan()
 	return cache
 }
 
-func (p *WindowDataPool) IncreaseChan() {
+func (p *TaskDataPool) IncreaseChan() {
 	atomic.AddInt64(&p.length, -1)
 }
 
-func (p *WindowDataPool) Put(cache *WindowCache) {
+func (p *TaskDataPool) Put(cache ChanData) {
 	p.cache <- cache
 	atomic.AddInt64(&p.length, 1)
 }
 
-func (p *WindowDataPool) Len() int64 {
+func (p *TaskDataPool) Len() int64 {
 	return atomic.LoadInt64(&p.length)
 }
 
-type WindowCachePool struct {
+type TaskCachePool struct {
 	pool  sync.Pool
 	count int64
 }
 
-func NewWindowCachePool() *WindowCachePool {
-	p := &WindowCachePool{}
+func NewTaskCachePool() *TaskCachePool {
+	p := &TaskCachePool{}
 	return p
 }
 
-func (p *WindowCachePool) Get() *WindowCache {
+func (p *TaskCachePool) Get() *TaskCache {
 	atomic.AddInt64(&p.count, 1)
 	c := p.pool.Get()
 	if c == nil {
-		return &WindowCache{}
+		return &TaskCache{}
 	}
-	return c.(*WindowCache)
+	return c.(*TaskCache)
 }
 
-func (p *WindowCachePool) Put(r *WindowCache) {
+func (p *TaskCachePool) Put(r *TaskCache) {
 	atomic.AddInt64(&p.count, -1)
 	p.pool.Put(r)
 }
 
-func (p *WindowCachePool) Count() int64 {
+func (p *TaskCachePool) Count() int64 {
 	return atomic.LoadInt64(&p.count)
 }

@@ -40,6 +40,7 @@ import (
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/logparser"
@@ -63,10 +64,6 @@ func NewMockColumnStoreHybridMstInfo() *meta2.MeasurementInfo {
 			}
 		}
 	}
-	list := make([]*influxql.IndexList, 1)
-	bfColumn := []string{"primaryKey_string1", "primaryKey_string2"}
-	iList := influxql.IndexList{IList: bfColumn}
-	list[0] = &iList
 	mstinfo := &meta2.MeasurementInfo{
 		Name:       "mst",
 		EngineType: config.COLUMNSTORE,
@@ -76,9 +73,13 @@ func NewMockColumnStoreHybridMstInfo() *meta2.MeasurementInfo {
 			CompactionType: config.BLOCK,
 		},
 		Schema: schema,
-		IndexRelation: influxql.IndexRelation{IndexNames: []string{"bloomfilter"},
-			Oids:      []uint32{uint32(index.BloomFilter)},
-			IndexList: list},
+		IndexRelation: influxql.IndexRelation{
+			IndexNames: []string{"bloomfilter", "bloomfilter"},
+			Oids:       []uint32{uint32(index.BloomFilter), uint32(index.BloomFilter)},
+			IndexList: []*influxql.IndexList{
+				{IList: []string{"primaryKey_string1"}},
+				{IList: []string{"primaryKey_string2"}}},
+		},
 	}
 	return mstinfo
 }
@@ -196,8 +197,6 @@ func TestHybridStoreReaderFunctions(t *testing.T) {
 	assert2.Equal(t, errno.Equal(err, errno.ErrRPNOp), true)
 	readerPlan = executor.NewLogicalColumnStoreReader(nil, schema)
 	reader = NewHybridStoreReader(readerPlan, executor.NewCSIndexInfo("", executor.NewAttachedIndexInfo(nil, nil), logstore.CurrentLogTokenizerVersion))
-	err = reader.Work(context.Background())
-	assert2.Equal(t, strings.Contains(err.Error(), "students/segment.idx"), true)
 	reader.Close()
 	reader.sendChunk(nil)
 	assert2.Equal(t, reader.closedCount, int64(1))
@@ -333,6 +332,9 @@ func TestHybridStoreReader(t *testing.T) {
 	recRows := 1000
 	filesN := 8
 	sh.SetMstInfo(NewMockColumnStoreHybridMstInfo())
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta2.MeasurementInfo{NewMockColumnStoreHybridMstInfo()},
+	})
 	for i := 0; i < filesN; i++ {
 		rec := genTestDataForColumnStore(recRows, &startValue, &tm)
 		if err = sh.WriteCols(mst, rec, nil); err != nil {
@@ -351,10 +353,10 @@ func TestHybridStoreReader(t *testing.T) {
 	sh.immTables.(*immutable.MmsTables).Wait()
 
 	// set the primary index reader
-	sh.pkIndexReader = sparseindex.NewPKIndexReader(colstore.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
+	sh.pkIndexReader = sparseindex.NewPKIndexReader(util.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
 
 	// set the skip index reader
-	sh.skIndexReader = sparseindex.NewSKIndexReader(colstore.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
+	sh.skIndexReader = sparseindex.NewSKIndexReader(util.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
 
 	// build the shard group
 	shardGroup := &mockShardGroup{
@@ -455,17 +457,17 @@ func TestHybridStoreReader(t *testing.T) {
 			stmt.OmitTime = true
 			sopt := query.SelectOptions{ChunkSize: 1024, IncQuery: false}
 			opt, _ := query.NewProcessorOptionsStmt(stmt, sopt)
-			list := make([]*influxql.IndexList, 1)
-			bfColumn := []string{"primaryKey_string1", "primaryKey_string2"}
-			iList := influxql.IndexList{IList: bfColumn}
-			list[0] = &iList
 			source := influxql.Sources{&influxql.Measurement{
 				Database:        db,
 				RetentionPolicy: rp,
 				Name:            mst,
-				IndexRelation: &influxql.IndexRelation{IndexNames: []string{"bloomfilter"},
-					Oids:      []uint32{uint32(index.BloomFilter)},
-					IndexList: list},
+				IndexRelation: &influxql.IndexRelation{
+					IndexNames: []string{"bloomfilter", "bloomfilter"},
+					Oids:       []uint32{uint32(index.BloomFilter), uint32(index.BloomFilter)},
+					IndexList: []*influxql.IndexList{
+						{IList: []string{"primaryKey_string1"}},
+						{IList: []string{"primaryKey_string2"}}},
+				},
 				EngineType: config.COLUMNSTORE},
 			}
 			opt.Name = mst
@@ -581,6 +583,9 @@ func TestHybridStoreReaderForInc(t *testing.T) {
 	recRows := 1000
 	filesN := 8
 	sh.SetMstInfo(NewMockColumnStoreHybridMstInfo())
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta.MeasurementInfo{NewMockColumnStoreHybridMstInfo()},
+	})
 	for i := 0; i < filesN; i++ {
 		rec := genTestDataForColumnStore(recRows, &startValue, &tm)
 		if err = sh.WriteCols(mst, rec, nil); err != nil {
@@ -599,10 +604,10 @@ func TestHybridStoreReaderForInc(t *testing.T) {
 	sh.immTables.(*immutable.MmsTables).Wait()
 
 	// set the primary index reader
-	sh.pkIndexReader = sparseindex.NewPKIndexReader(colstore.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
+	sh.pkIndexReader = sparseindex.NewPKIndexReader(util.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
 
 	// set the skip index reader
-	sh.skIndexReader = sparseindex.NewSKIndexReader(colstore.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
+	sh.skIndexReader = sparseindex.NewSKIndexReader(util.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
 	var fields2 influxql.Fields
 	m := &influxql.Measurement{Name: mst}
 	fields2 = append(fields2, &influxql.Field{

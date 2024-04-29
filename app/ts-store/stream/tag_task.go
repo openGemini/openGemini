@@ -32,6 +32,7 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/record"
 	streamLib "github.com/openGemini/openGemini/lib/stream"
 	"github.com/openGemini/openGemini/lib/stringinterner"
 	"github.com/openGemini/openGemini/lib/util"
@@ -70,14 +71,14 @@ type TagTask struct {
 	groupKeys []string
 
 	// chan for process
-	innerCache     chan *WindowCache
+	innerCache     chan ChanData
 	innerRes       chan error
 	cleanPreWindow chan struct{}
 
 	// pool
 	bp              *streamLib.BuilderPool
-	windowCachePool *WindowCachePool
-	*WindowDataPool
+	windowCachePool *TaskCachePool
+	*TaskDataPool
 
 	// config
 	concurrency int
@@ -89,15 +90,15 @@ type TagTask struct {
 	*BaseTask
 }
 
-type WindowCache struct {
+type TaskCache struct {
 	rows    []influx.Row
 	shardId uint64
 	ptId    uint32
-	release func() bool
+	release func()
 }
 
-func (s *TagTask) Put(r *WindowCache) {
-	s.WindowDataPool.Put(r)
+func (s *TagTask) Put(r ChanData) {
+	s.TaskDataPool.Put(r)
 }
 
 func (s *TagTask) stop() error {
@@ -123,7 +124,7 @@ func (s *TagTask) run() error {
 		s.err = err
 		return err
 	}
-	s.info, err = s.cli.GetMeasurementInfoStore(s.des.Database, s.des.RetentionPolicy, s.des.Name)
+	s.info, err = s.cli.Measurement(s.des.Database, s.des.RetentionPolicy, s.des.Name)
 	if err != nil {
 		s.err = err
 		return err
@@ -149,7 +150,7 @@ func (s *TagTask) initVar() error {
 	s.corpus = sync.Map{}
 	s.corpusIndexes = []string{EmptyGroupKey}
 
-	s.innerCache = make(chan *WindowCache, s.concurrency)
+	s.innerCache = make(chan ChanData, s.concurrency)
 	s.innerRes = make(chan error, s.concurrency)
 
 	s.ptIds = make([]*uint32, maxWindowNum)
@@ -160,6 +161,9 @@ func (s *TagTask) initVar() error {
 		s.ptIds[i] = &pt
 		s.shardIds[i] = &shard
 	}
+	s.startTimeStamp = s.start.UnixNano()
+	s.endTimeStamp = s.end.UnixNano()
+	s.maxTimeStamp = s.startTimeStamp + s.maxDuration
 	return nil
 }
 
@@ -205,14 +209,29 @@ func (s *TagTask) parallelCalculate() {
 			for {
 				select {
 				case cache := <-s.innerCache:
-					err := s.calculate(cache)
-					if err != nil {
-						s.Logger.Error("calculate error", zap.String("window", s.name), zap.Error(err))
-					}
-					select {
-					case s.innerRes <- err:
+					switch v := cache.(type) {
+					case *TaskCache:
+						err := s.calculateRow(v)
+						if err != nil {
+							s.Logger.Error("calculate error", zap.String("window", s.name), zap.Error(err))
+						}
+						select {
+						case s.innerRes <- err:
+						default:
+							s.Logger.Error(fmt.Sprintf("stream innerRes is full, size %v", len(s.innerRes)))
+						}
+					case *CacheRecord:
+						err := s.calculateRec(v)
+						if err != nil {
+							s.Logger.Error("calculate error", zap.String("window", s.name), zap.Error(err))
+						}
+						select {
+						case s.innerRes <- err:
+						default:
+							s.Logger.Error(fmt.Sprintf("stream innerRes is full, size %v", len(s.innerRes)))
+						}
 					default:
-						s.Logger.Error(fmt.Sprintf("stream innerRes is full, size %v", len(s.innerRes)))
+						s.Logger.Error(fmt.Sprintf("not support type %T", cache))
 					}
 				case <-s.abort:
 					return
@@ -256,10 +275,13 @@ func (s *TagTask) consumeDataAndUpdateMeta() {
 			}
 			s.start = s.end
 			s.end = s.end.Add(s.window)
+			s.startTimeStamp = s.start.UnixNano()
+			s.endTimeStamp = s.end.UnixNano()
+			s.maxTimeStamp = s.startTimeStamp + s.maxDuration
 			atomic2.SetModInt64AndADD(&s.startWindowID, 1, int64(s.windowNum))
 			s.stats.Reset()
-			s.stats.StatWindowOutMinTime(s.start.UnixNano())
-			s.stats.StatWindowOutMaxTime(s.end.UnixNano())
+			s.stats.StatWindowOutMinTime(s.startTimeStamp)
+			s.stats.StatWindowOutMaxTime(s.maxTimeStamp)
 			select {
 			case s.cleanPreWindow <- struct{}{}:
 				continue
@@ -308,7 +330,104 @@ func (s *TagTask) walkUpdate(k, vv interface{}) bool {
 	return true
 }
 
-func (s *TagTask) calculate(cache *WindowCache) error {
+func (s *TagTask) calculateRec(cache *CacheRecord) error {
+	if cache == nil {
+		return ErrEmptyCache
+	}
+	defer func() {
+		cache.Release()
+	}()
+	rec := cache.rec
+	var skip int
+	windowIDS := make([]int8, rec.RowNums())
+	timeCol := rec.Column(rec.ColNums() - 1)
+	times := timeCol.IntegerValues()
+	columnIDs := s.generateRecGroupKeyIndex(s.groupKeys, rec.Schema)
+	s.stats.AddWindowIn(int64(rec.RowNums()))
+	s.stats.StatWindowStartTime(s.startTimeStamp)
+	s.stats.StatWindowEndTime(s.endTimeStamp)
+	var lastWindowID int = -1
+	callIds := make([]int, len(s.fieldCalls))
+	for c, call := range s.fieldCalls {
+		id := rec.Schema.FieldIndex(call.Name)
+		if id == -1 {
+			id = rec.Schema.FieldIndex(call.Alias)
+		}
+		callIds[c] = id
+	}
+
+	for i := 0; i < rec.RowNums(); i++ {
+		t := times[i]
+		if t < s.startTimeStamp || t >= s.maxTimeStamp {
+			if t >= s.endTimeStamp {
+				atomic2.CompareAndSwapMaxInt64(&s.stats.WindowOutMaxTime, t)
+			} else {
+				atomic2.CompareAndSwapMinInt64(&s.stats.WindowOutMinTime, t)
+			}
+			windowIDS[i] = -1
+			skip++
+			continue
+		}
+
+		key := s.generateRecGroupKeyUint(columnIDs, rec, i)
+		vv, exist := s.values.Load(key)
+		var vs []*float64
+		if !exist {
+			vs = make([]*float64, s.fieldCallsLen*int(s.windowNum))
+			s.values.Store(key, vs)
+			s.stats.AddWindowGroupKeyCount(1)
+		} else {
+			vs, _ = vv.([]*float64)
+		}
+		windowId := s.windowId(t)
+		for c := range s.fieldCalls {
+			var curVal float64
+			// count op, if streamOnly, add value, else add 1
+			if s.fieldCalls[c].Call == "count" {
+				curVal = 1
+			} else {
+				val := rec.Column(callIds[c])
+				if val == nil {
+					continue
+				}
+				if rec.Schema.Field(callIds[c]).Type == influx.Field_Type_UInt || rec.Schema.Field(callIds[c]).Type == influx.Field_Type_Int {
+					v, _ := val.IntegerValue(i)
+					curVal = float64(v)
+				} else if rec.Schema.Field(callIds[c]).Type == influx.Field_Type_Float {
+					curVal, _ = val.FloatValue(i)
+				} else {
+					continue
+				}
+			}
+			id := s.fieldCallsLen*windowId + c
+			if vs[id] == nil {
+				var v float64
+				if s.fieldCalls[c].Call == "min" {
+					v = math.MaxFloat64
+				} else if s.fieldCalls[c].Call == "max" {
+					v = -math.MaxFloat64
+				}
+				atomic2.SetAndSwapPointerFloat64(&vs[id], &v)
+			}
+			s.fieldCalls[c].ConcurrencyFunc(vs[id], curVal)
+		}
+		if windowId != lastWindowID {
+			atomic.SwapUint64(s.shardIds[windowId], cache.shardID)
+			atomic.StoreUint32(s.ptIds[windowId], cache.ptId)
+			lastWindowID = windowId
+		}
+
+		s.stats.AddWindowProcess(1)
+	}
+	s.stats.AddWindowSkip(int64(skip))
+	return nil
+}
+
+func (s *TagTask) windowId(t int64) int {
+	return int(((t-s.startTimeStamp)/s.window.Nanoseconds() + atomic.LoadInt64(&s.startWindowID)) % s.windowNum)
+}
+
+func (s *TagTask) calculateRow(cache *TaskCache) error {
 	// occur release func
 	if cache == nil {
 		return ErrEmptyCache
@@ -320,12 +439,12 @@ func (s *TagTask) calculate(cache *WindowCache) error {
 	}()
 	rows := cache.rows
 	s.stats.AddWindowIn(int64(len(rows)))
-	s.stats.StatWindowStartTime(s.start.UnixNano())
-	s.stats.StatWindowEndTime(s.start.UnixNano() + s.maxDuration)
+	s.stats.StatWindowStartTime(s.startTimeStamp)
+	s.stats.StatWindowEndTime(s.endTimeStamp)
 	for i := range rows {
 		row := rows[i]
-		if row.Timestamp < s.start.UnixNano() || row.Timestamp >= s.start.UnixNano()+s.maxDuration {
-			if row.Timestamp >= s.end.UnixNano() {
+		if row.Timestamp < s.startTimeStamp || row.Timestamp >= s.maxTimeStamp {
+			if row.Timestamp >= s.endTimeStamp {
 				atomic2.CompareAndSwapMaxInt64(&s.stats.WindowOutMaxTime, row.Timestamp)
 			} else {
 				atomic2.CompareAndSwapMinInt64(&s.stats.WindowOutMinTime, row.Timestamp)
@@ -453,7 +572,7 @@ func (s *TagTask) buildRow(k any, vv any) bool {
 		}
 		*tags = (*tags)[:validNum]
 	}
-	s.rows[s.validNum].Timestamp = s.start.UnixNano()
+	s.rows[s.validNum].Timestamp = s.startTimeStamp
 	s.indexKeyPool = s.rows[s.validNum].UnmarshalIndexKeys(s.indexKeyPool)
 	s.validNum++
 	return true
@@ -608,6 +727,63 @@ func (s *TagTask) Drain() {
 	}
 	for s.Len() != 0 {
 	}
+}
+
+// generateGroupKeyUint not support fieldIndex
+func (s *TagTask) generateRecGroupKeyIndex(keys []string, schema record.Schemas) []int {
+	if len(keys) == 0 {
+		return nil
+	}
+
+	columnIDs := make([]int, len(keys))
+	tagIndex := 0
+	for i := range keys {
+		idx := util.Search(tagIndex, len(schema), func(j int) bool { return schema[j].Name >= keys[i] })
+		if idx < len(schema) && schema[idx].Name == keys[i] {
+			tagIndex = idx + 1
+			if schema[idx].IsString() {
+				columnIDs[i] = idx
+			} else {
+				columnIDs[i] = -1
+			}
+			continue
+		}
+		tagIndex = idx + 1
+		columnIDs[i] = -1
+	}
+	return columnIDs
+}
+
+func (s *TagTask) generateRecGroupKeyUint(columnIDs []int, value *record.Record, row int) string {
+	builder := s.bp.Get()
+	defer func() {
+		builder.Reset()
+		s.bp.Put(builder)
+	}()
+
+	for i, id := range columnIDs {
+		if id == -1 {
+			if i < len(columnIDs)-1 {
+				builder.AppendByte(config.StreamGroupValueSeparator)
+			}
+			continue
+		}
+		val := value.Column(id)
+		if val == nil {
+			if i < len(columnIDs)-1 {
+				builder.AppendByte(config.StreamGroupValueSeparator)
+			}
+			continue
+		}
+		str, _ := val.StringValue(row)
+		v := s.compressDictKeyUint(string(str))
+		builder.AppendString(strconv.FormatUint(v, 10))
+		if i < len(columnIDs)-1 {
+			builder.AppendByte(config.StreamGroupValueSeparator)
+		}
+	}
+
+	return builder.NewString()
 }
 
 // generateGroupKeyUint not support fieldIndex

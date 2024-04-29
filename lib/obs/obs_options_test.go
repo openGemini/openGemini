@@ -15,7 +15,9 @@ limitations under the License.
 */
 package obs
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestObsOptionsClone(t *testing.T) {
 	srcOpts := &ObsOptions{

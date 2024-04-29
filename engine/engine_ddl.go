@@ -18,15 +18,19 @@ package engine
 
 import (
 	"context"
+	"io"
 	"path"
+	"path/filepath"
 	"sort"
 	"strconv"
 	sysStrings "strings"
 	"sync/atomic"
 	"time"
 
+	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics/opsStat"
@@ -474,6 +478,7 @@ func (e *Engine) StatisticsOps() []opsStat.OpsStatistic {
 		})
 	}
 
+	statistics = e.getFileSizeStats(statistics)
 	return statistics
 }
 
@@ -510,4 +515,114 @@ func (e *Engine) getAllMst(dbName string) [][]byte {
 		mstNames[i] = []byte(msts[i])
 	}
 	return mstNames
+}
+
+func (e *Engine) getFileSizeStats(statistics []opsStat.OpsStatistic) []opsStat.OpsStatistic {
+	dbPath := e.getAllDBPaths()
+	for dbName, paths := range dbPath {
+		var allFileSize int64
+		var dfvFileSize int64
+		var obsFileSize int64
+		for i := range paths {
+			totalSize, dfvSize, obsSize, _ := fileops.GetAllFilesSizeInPath(paths[i])
+			allFileSize += totalSize
+			dfvFileSize += dfvSize
+			obsFileSize += obsSize
+		}
+
+		valueMap := map[string]interface{}{
+			"diskBytes":    allFileSize,
+			"dfvDiskBytes": dfvFileSize,
+			"obsDiskBytes": obsFileSize,
+		}
+		statistics = append(statistics, opsStat.OpsStatistic{
+			Name:   stat.FileStatisticsName,
+			Tags:   stat.StatisticTags{"database": dbName}.Merge(stat.FileTagMap),
+			Values: valueMap,
+		})
+	}
+	return statistics
+}
+
+func (e *Engine) getAllDBPaths() map[string][]string {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if e.metaClient == nil {
+		return nil
+	}
+	dbs := e.metaClient.Databases()
+	dpPath := make(map[string][]string, len(dbs))
+	for _, db := range dbs {
+		if db.Name == "_internal" {
+			continue
+		}
+
+		path := make([]string, 2)
+		path[0] = filepath.Join(e.dataPath, config.DataDirectory, db.Name)
+		path[1] = filepath.Join(e.walPath, config.WalDirectory, db.Name)
+		dpPath[db.Name] = path
+	}
+	return dpPath
+}
+
+func (e *Engine) CreateShowTagValuesPlan(db string, ptIDs []uint32, tr *influxql.TimeRange) netstorage.ShowTagValuesPlan {
+	plan := &ShowTagValuesPlan{}
+
+	for i := range ptIDs {
+		dbPT := e.getDBPTInfo(db, ptIDs[i])
+		if dbPT == nil {
+			e.log.Info("CreateShowTagValuesPlan DBPT not found", zap.String("db", db), zap.Uint32("ptID", ptIDs[i]))
+			continue
+		}
+
+		dbPT.walkShards(tr, func(sh Shard) {
+			if p := sh.CreateShowTagValuesPlan(); p != nil {
+				plan.AddPlan(p)
+			}
+		})
+	}
+
+	return plan
+}
+
+type ShowTagValuesPlan struct {
+	plans []immutable.ShowTagValuesPlan
+}
+
+func (p *ShowTagValuesPlan) AddPlan(plan immutable.ShowTagValuesPlan) {
+	p.plans = append(p.plans, plan)
+}
+
+func (p *ShowTagValuesPlan) Execute(tagKeys map[string][][]byte, condition influxql.Expr, tr util.TimeRange, limit int) (netstorage.TablesTagSets, error) {
+	dst := make(map[string]*immutable.TagSets)
+
+	var err error
+	for _, plan := range p.plans {
+		err = plan.Execute(dst, tagKeys, condition, tr, limit)
+		if err != nil {
+			break
+		}
+	}
+
+	if err != nil && err != io.EOF {
+		return nil, err
+	}
+
+	tableTagSets := make(netstorage.TablesTagSets, 0)
+	for mst, tagSet := range dst {
+		tv := netstorage.TableTagSets{
+			Name:   influx.GetOriginMstName(mst),
+			Values: make(netstorage.TagSets, 0),
+		}
+		tagSet.ForEach(func(tagKey, tagValue string) {
+			tv.Values = append(tv.Values, netstorage.TagSet{Key: tagKey, Value: tagValue})
+		})
+		tableTagSets = append(tableTagSets, tv)
+	}
+
+	return tableTagSets, nil
+}
+
+func (p *ShowTagValuesPlan) Stop() {
+
 }

@@ -35,6 +35,7 @@ func Test_Reporter_CreateDatabase(t *testing.T) {
 		expect func(err error) error
 	}
 
+	count := 0
 	var testCases = []TestCase{
 		{
 			"create database ok",
@@ -42,6 +43,14 @@ func Test_Reporter_CreateDatabase(t *testing.T) {
 				resp := &http.Response{
 					StatusCode: http.StatusOK,
 					Body:       r.Body,
+				}
+				if count == 0 {
+					count++
+					resp2 := &http.Response{
+						StatusCode: http.StatusContinue,
+						Body:       r.Body,
+					}
+					return resp2, nil
 				}
 				return resp, nil
 			},

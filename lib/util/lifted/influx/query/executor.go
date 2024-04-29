@@ -207,6 +207,9 @@ type ExecutionOptions struct {
 	// IncQuery indicates whether the query is a incremental query.
 	IncQuery bool
 
+	// IsPromQuery indicates whether the query is a promql query.
+	IsPromQuery bool
+
 	// QueryID indicates the representation of the query.
 	QueryID string
 

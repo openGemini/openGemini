@@ -52,6 +52,15 @@ const (
 	DefaultHashAlgo             = "ver03"
 	DefaultHaPolicy             = "write-available-first"
 	DefaultBalanceAlgoVer       = "v1.1"
+
+	// Default number of shards for each measurement in a shard group.
+	DefaultNumOfShards = 3
+	MaxNumOfShards     = 1024
+
+	// Enable SQLite for meta
+	DefalutSQLiteEnabled = false
+
+	DefaultSqlBindPort = 8012
 )
 
 var DefaultMetaJoin = []string{"127.0.0.1:8092"}
@@ -169,6 +178,11 @@ type Meta struct {
 
 	PtNumPerNode uint32 `toml:"ptnum-pernode"`
 	BalanceAlgo  string `toml:"balance-algorithm-version"`
+
+	// Number of shards for each measurement in a shard group
+	NumOfShards    int32 `toml:"num-of-shards"`
+	UseIncSyncData bool  `toml:"inc-sync-data"`
+	SQLiteEnabled  bool  `toml:"sqlite-enabled"`
 }
 
 // NewMeta builds a new configuration with default values.
@@ -197,6 +211,9 @@ func NewMeta() *Meta {
 		ClusterTracing:          true,
 		PtNumPerNode:            DefaultPtNumPerNode,
 		BalanceAlgo:             DefaultBalanceAlgoVer,
+		NumOfShards:             DefaultNumOfShards,
+		SQLiteEnabled:           DefalutSQLiteEnabled,
+		UseIncSyncData:          true,
 	}
 }
 
@@ -218,6 +235,14 @@ func (c *Meta) Validate() error {
 
 	if c.SplitRowThreshold == 0 {
 		return fmt.Errorf("meta split-row-threshold must be greater than 0. got: %d", c.SplitRowThreshold)
+	}
+
+	ivItems := []intValidatorItem{
+		{"data shard-num", int64(c.NumOfShards), false},
+	}
+	iv := intValidator{0, MaxNumOfShards}
+	if err := iv.Validate(ivItems); err != nil {
+		return err
 	}
 
 	return nil
@@ -248,6 +273,7 @@ type Gossip struct {
 	BindAddr      string        `toml:"bind-address"`
 	MetaBindPort  int           `toml:"meta-bind-port"`
 	StoreBindPort int           `toml:"store-bind-port"`
+	SqlBindPort   int           `toml:"sql-bind-port"`
 	ProbInterval  toml.Duration `toml:"prob-interval"`
 	SuspicionMult int           `toml:"suspicion-mult"`
 	Members       []string      `toml:"members"`
@@ -261,6 +287,7 @@ func (c Gossip) Validate() error {
 	portItems := []intValidatorItem{
 		{"gossip bind-port", int64(c.MetaBindPort), false},
 		{"gossip bind-port", int64(c.StoreBindPort), false},
+		{"gossip bind-port", int64(c.SqlBindPort), false},
 	}
 
 	iv := intValidator{minPort, maxPort}
@@ -289,6 +316,9 @@ func (c *Gossip) BuildSerf(lg Logger, app App, name string, event chan<- serf.Ev
 	if app == AppStore {
 		member.BindPort = c.StoreBindPort
 	}
+	if app == AppSql {
+		member.BindPort = c.SqlBindPort
+	}
 
 	member.LogOutput = serfConf.LogOutput
 	member.BindAddr = c.BindAddr
@@ -305,5 +335,6 @@ func NewGossip(enableGossip bool) *Gossip {
 		LogEnabled:    true,
 		ProbInterval:  DefaultProbInterval,
 		SuspicionMult: DefaultSuspicionMult,
+		SqlBindPort:   DefaultSqlBindPort,
 	}
 }

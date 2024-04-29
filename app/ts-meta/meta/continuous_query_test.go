@@ -114,7 +114,15 @@ func Test_handlerSql2MetaHeartbeat(t *testing.T) {
 func Test_checkSQLNodesHeartbeat(t *testing.T) {
 	s := &Store{
 		raft: &MockRaftForCQ{isLeader: true},
-
+		cacheData: &meta.Data{
+			Databases: map[string]*meta.DatabaseInfo{
+				"db0": {
+					ContinuousQueries: map[string]*meta.ContinuousQueryInfo{
+						"cq1": nil,
+					},
+				},
+			},
+		},
 		heartbeatInfoList: list.New(),
 		cqLease:           make(map[string]*cqLeaseInfo),
 		closing:           make(chan struct{}),
@@ -150,6 +158,51 @@ func Test_checkSQLNodesHeartbeat(t *testing.T) {
 
 	require.Nil(t, s.cqLease[host1])
 	require.Nil(t, s.heartbeatInfoList.Front())
+}
+
+func Test_checkSQLNodesHeartbeat_WithoutCQ(t *testing.T) {
+	s := &Store{
+		raft: &MockRaftForCQ{isLeader: true},
+		cacheData: &meta.Data{
+			Databases: map[string]*meta.DatabaseInfo{
+				"db0": {}, // No continuous queries
+			},
+		},
+		heartbeatInfoList: list.New(),
+		cqLease:           make(map[string]*cqLeaseInfo),
+		closing:           make(chan struct{}),
+		Logger:            logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop()),
+	}
+	host1 := "127.0.0.1:8086"
+
+	err := s.handlerSql2MetaHeartbeat(host1)
+	require.NoError(t, err)
+	require.Equal(t, s.cqLease[host1].LastHeartbeat, s.heartbeatInfoList.Front())
+	require.Equal(t, s.heartbeatInfoList.Front().Value.(*HeartbeatInfo).Host, host1)
+
+	originInterval := detectSQLNodeOfflineInterval
+	detectSQLNodeOfflineInterval = 10 * time.Millisecond
+
+	originToleranceDuration := heartbeatToleranceDuration
+	heartbeatToleranceDuration = 100 * time.Millisecond
+
+	defer func() {
+		detectSQLNodeOfflineInterval = originInterval
+		heartbeatToleranceDuration = originToleranceDuration
+	}()
+
+	go func() {
+		time.Sleep(time.Second)
+		close(s.closing)
+	}()
+
+	s.wg.Add(1)
+	s.detectSqlNodeOffline()
+
+	s.wg.Wait()
+
+	require.NotNil(t, s.cqLease[host1])
+	require.NotNil(t, s.heartbeatInfoList.Front())
 }
 
 func Test_restoreCQNames(t *testing.T) {

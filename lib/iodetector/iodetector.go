@@ -19,6 +19,7 @@ package iodetector
 import (
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"time"
 
@@ -116,6 +117,7 @@ func (d *IODetector) detectIO() {
 		case beforeTime = <-d.detectCh:
 		case <-ticker.C:
 			if time.Since(beforeTime) > time.Duration(d.timeoutThreshold)*time.Second {
+				log.Println("Suicide for I/O detection failed")
 				// process suicide
 				sysinfo.Suicide()
 				return

@@ -73,6 +73,24 @@ func (sh Schemas) FieldIndex(name string) int {
 	return -1
 }
 
+func (sh Schemas) FieldIndexMap() map[string]int {
+	fieldMap := make(map[string]int)
+	for i := range sh {
+		fieldMap[sh[i].Name] = i
+	}
+	return fieldMap
+}
+
+func (sh Schemas) StringFieldIndex() []int {
+	fieldIndex := make([]int, 0)
+	for i := range sh {
+		if sh[i].IsString() {
+			fieldIndex = append(fieldIndex, i)
+		}
+	}
+	return fieldIndex
+}
+
 func (sh Schemas) Field(i int) *Field {
 	if i >= len(sh) || i < 0 {
 		return nil

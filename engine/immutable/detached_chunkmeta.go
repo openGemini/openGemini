@@ -31,7 +31,7 @@ type DetachedChunkMetaReader struct {
 }
 
 func NewDetachedChunkMetaReader(path string, obsOpts *obs.ObsOptions) (*DetachedChunkMetaReader, error) {
-	fd, err := obs.OpenObsFile(path, ChunkMetaFile, obsOpts)
+	fd, err := fileops.OpenObsFile(path, ChunkMetaFile, obsOpts, true)
 	if err != nil {
 		return nil, err
 	}
@@ -41,7 +41,7 @@ func NewDetachedChunkMetaReader(path string, obsOpts *obs.ObsOptions) (*Detached
 
 func (reader *DetachedChunkMetaReader) ReadChunkMeta(offset, length []int64) ([]*ChunkMeta, error) {
 	c := make(chan *request.StreamReader, 1)
-	reader.r.StreamReadBatch(offset, length, c, MetaIndexLimitNum)
+	reader.r.StreamReadBatch(offset, length, c, MetaIndexLimitNum, true)
 	chunkMetas := make([]*ChunkMeta, len(offset))
 	i := 0
 	var err error

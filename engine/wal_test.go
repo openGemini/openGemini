@@ -27,7 +27,6 @@ import (
 	"time"
 
 	"github.com/golang/snappy"
-	"github.com/openGemini/openGemini/engine/mutable"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
@@ -74,7 +73,7 @@ func TestWalReplayParallel(t *testing.T) {
 	}
 	// not flush data to snapshot
 	sh.SetWriteColdDuration(3 * time.Minute)
-	mutable.SetSizeLimit(3e10)
+	config.SetShardMemTableSizeLimit(3e10)
 
 	// step3: write data, mem table row limit less than row cnt, query will get record from both mem table and immutable
 	rows, minTime, maxTime := GenDataRecord(msNames, conf.seriesNum, conf.pointNumPerSeries, conf.interval, time.Now(), false, true, true)
@@ -94,7 +93,7 @@ func TestWalReplayParallel(t *testing.T) {
 	}
 	shardIdent := &meta.ShardIdentifier{ShardID: sh.ident.ShardID, Policy: sh.ident.Policy, OwnerDb: sh.ident.OwnerDb, OwnerPt: sh.ident.OwnerPt}
 	tr := &meta.TimeRangeInfo{StartTime: sh.startTime, EndTime: sh.endTime}
-	newSh := NewShard(sh.dataPath, sh.walPath, sh.lock, shardIdent, sh.durationInfo, tr, DefaultEngineOption, config.TSSTORE)
+	newSh := NewShard(sh.dataPath, sh.walPath, sh.lock, shardIdent, sh.durationInfo, tr, DefaultEngineOption, config.TSSTORE, nil)
 	newSh.indexBuilder = sh.indexBuilder
 
 	// reopen shard, replay wal files
@@ -162,7 +161,7 @@ func TestWalReplaySerial(t *testing.T) {
 	}
 	// not flush data to snapshot
 	sh.SetWriteColdDuration(3 * time.Minute)
-	mutable.SetSizeLimit(3e10)
+	config.SetShardMemTableSizeLimit(3e10)
 
 	// step3: write data, mem table row limit less than row cnt, query will get record from both mem table and immutable
 	rows, minTime, maxTime := GenDataRecord(msNames, conf.seriesNum, conf.pointNumPerSeries, conf.interval, time.Now(), false, true, true)
@@ -294,7 +293,7 @@ func TestWalReplay_SeriesLimited(t *testing.T) {
 
 	// not flush data to snapshot
 	sh.SetWriteColdDuration(3 * time.Minute)
-	mutable.SetSizeLimit(3e10)
+	config.SetShardMemTableSizeLimit(3e10)
 
 	// step3: write data, mem table row limit less than row cnt, query will get record from both mem table and immutable
 	for i := 0; i < 10; i++ {
@@ -331,7 +330,7 @@ func TestWalReplayWithUnKnowType(t *testing.T) {
 	}
 	// not flush data to snapshot
 	sh.SetWriteColdDuration(3 * time.Minute)
-	mutable.SetSizeLimit(3e10)
+	config.SetShardMemTableSizeLimit(3e10)
 
 	// step3: write data, mem table row limit less than row cnt, query will get record from both mem table and immutable
 	rows, minTime, maxTime := GenDataRecord(msNames, conf.seriesNum, conf.pointNumPerSeries, conf.interval, time.Now(), false, true, true)
@@ -352,7 +351,7 @@ func TestWalReplayWithUnKnowType(t *testing.T) {
 	}
 	shardIdent := &meta.ShardIdentifier{ShardID: sh.ident.ShardID, Policy: sh.ident.Policy, OwnerDb: sh.ident.OwnerDb, OwnerPt: sh.ident.OwnerPt}
 	tr := &meta.TimeRangeInfo{StartTime: sh.startTime, EndTime: sh.endTime}
-	newSh := NewShard(sh.dataPath, sh.walPath, sh.lock, shardIdent, sh.durationInfo, tr, DefaultEngineOption, config.TSSTORE)
+	newSh := NewShard(sh.dataPath, sh.walPath, sh.lock, shardIdent, sh.durationInfo, tr, DefaultEngineOption, config.TSSTORE, nil)
 	newSh.indexBuilder = sh.indexBuilder
 
 	// reopen shard, replay wal files

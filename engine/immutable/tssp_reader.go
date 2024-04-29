@@ -42,6 +42,7 @@ const (
 	tsspFileSuffixLen = len(tsspFileSuffix)
 	compactLogDir     = "compact_log"
 	DownSampleLogDir  = "downsample_log"
+	ShardMoveLogDir   = "shard_move_log"
 
 	TsspDirName        = "tssp"
 	ColumnStoreDirName = obs.ColumnStoreDirName
@@ -103,7 +104,9 @@ type TSSPFile interface {
 	AddToEvictList(level uint16)
 	RemoveFromEvictList(level uint16)
 	GetFileReaderRef() int64
-	RenameOnObs(obsName string) error
+	RenameOnObs(obsName string, tmp bool, opt *obs.ObsOptions) error
+
+	ChunkMetaCompressMode() uint8
 }
 
 type TSSPFiles struct {
@@ -767,14 +770,28 @@ func (f *tsspFile) GetFileReaderRef() int64 {
 	return 0
 }
 
-func (f *tsspFile) RenameOnObs(obsName string) error {
+func (f *tsspFile) RenameOnObs(oldName string, tmp bool, obsOpt *obs.ObsOptions) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.stopped() {
 		return errFileClosed
 	}
+	localFileName := f.reader.FileName()
+	err := f.reader.RenameOnObs(oldName, tmp, obsOpt)
+	if err != nil {
+		return err
+	}
+	// check file exist(streamFs)
+	if _, err = fileops.Stat(localFileName); os.IsNotExist(err) {
+		return nil
+	}
+	// remove local file
+	lock := fileops.FileLockOption(*f.lock)
+	return fileops.RemoveLocal(localFileName, lock)
+}
 
-	return f.reader.RenameOnObs(obsName)
+func (f *tsspFile) ChunkMetaCompressMode() uint8 {
+	return f.reader.ChunkMetaCompressMode()
 }
 
 var (

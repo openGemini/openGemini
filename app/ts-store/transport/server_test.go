@@ -30,12 +30,12 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/record"
 	streamLib "github.com/openGemini/openGemini/lib/stream"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestServer(t *testing.T) {
@@ -96,91 +96,6 @@ func mockRows() []influx.Row {
 	return pts
 }
 
-func mockMarshaledPoint(cut int) []byte {
-	if cut == 0 {
-		return nil
-	}
-	pBuf := make([]byte, 0)
-	pBuf = append(pBuf[:0], netstorage.PackageTypeFast)
-	if cut == 1 {
-		pBuf = append(pBuf[:0], 9)
-	}
-	// db
-	db := "db0"
-	pBuf = append(pBuf, uint8(len(db)))
-	if cut == 2 {
-		return pBuf
-	}
-	pBuf = append(pBuf, db...)
-	// rp
-	rp := "rp0"
-	pBuf = append(pBuf, uint8(len(rp)))
-	if cut == 3 {
-		return pBuf
-	}
-	pBuf = append(pBuf, rp...)
-	// ptid
-	pt := uint32(0)
-	pBuf = numenc.MarshalUint32(pBuf, pt)
-	shard := uint64(0)
-	pBuf = numenc.MarshalUint64(pBuf, shard)
-
-	rows := mockRows()
-	if cut == 4 {
-		return pBuf
-	}
-	pBuf, err := influx.FastMarshalMultiRows(pBuf, rows)
-	if err != nil {
-		panic(err)
-	}
-	return pBuf
-}
-
-func TestWritePointsWork_decodePoints(t *testing.T) {
-	type TestCase struct {
-		Name      string
-		reqBuf    []byte
-		expectMsg string
-	}
-	var testCases = []TestCase{
-		{
-			Name:      "loss of points data",
-			reqBuf:    mockMarshaledPoint(0),
-			expectMsg: "invalid points buffer",
-		},
-		{
-			Name:      "fast marshal header error",
-			reqBuf:    mockMarshaledPoint(1),
-			expectMsg: "not a fast marshal points package",
-		},
-		{
-			Name:      "buff no db error",
-			reqBuf:    mockMarshaledPoint(2),
-			expectMsg: "no data for db name",
-		},
-		{
-			Name:      "buff no rp error",
-			reqBuf:    mockMarshaledPoint(3),
-			expectMsg: "no data for rp name",
-		},
-		{
-			Name:      "buff no point error",
-			reqBuf:    mockMarshaledPoint(4),
-			expectMsg: "no data for points data",
-		},
-	}
-
-	for _, tt := range testCases {
-		t.Run(tt.Name, func(t *testing.T) {
-			var err error
-			ww := GetWritePointsWork()
-			ww.reqBuf = tt.reqBuf
-			_, _, _, _, _, _, err = ww.decodePoints()
-			require.Equal(t, err.Error(), tt.expectMsg)
-		})
-	}
-}
-
 var storageDataPath = "/tmp/data/"
 var metaPath = "/tmp/meta"
 
@@ -207,6 +122,11 @@ func mockStorage() *storage.Storage {
 }
 
 type MockStream struct{}
+
+func (m MockStream) WriteRec(db, rp, mst string, ptId uint32, shardID uint64, rec *record.Record, binaryRec []byte) error {
+	//TODO implement me
+	panic("implement me")
+}
 
 func (m MockStream) WriteRows(db, rp string, ptId uint32, shardID uint64, streamIdDstShardIdMap map[uint64]uint64, ww stream.WritePointsWorkIF) {
 	panic("implement me")
@@ -345,27 +265,4 @@ func mockMarshaledStreamPoint(haveStreamShardList bool, validStreamShardList boo
 		panic(err)
 	}
 	return pBuf
-}
-
-func TestDecodePoints(t *testing.T) {
-	ww := GetWritePointsWork()
-	ww.reqBuf = mockMarshaledStreamPoint(true, true)
-	ww.streamVars = []*netstorage.StreamVar{{Only: false, Id: []uint64{0}}, {Only: true, Id: []uint64{1}}}
-	_, _, _, _, _, _, err := ww.decodePoints()
-	if err != nil {
-		t.Fatal("DecodePoints failed")
-	}
-
-	ww.streamVars = []*netstorage.StreamVar{{Only: false, Id: []uint64{0}}}
-	_, _, _, _, _, _, err = ww.decodePoints()
-	if err == nil {
-		t.Fatal("DecodePoints failed")
-	}
-	if !strings.Contains(err.Error(), "unmarshal rows failed, the num of the rows is not equal to the stream vars") {
-		t.Fatal("DecodePoints failed")
-	}
-
-	rows := ww.GetRows()
-	ww.SetRows(rows)
-	ww.PutWritePointsWork()
 }

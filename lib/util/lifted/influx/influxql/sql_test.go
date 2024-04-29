@@ -354,6 +354,10 @@ func TestSingleParser(t *testing.T) {
 		"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = columnstore indextype bloomfilter indexlist tag1 compact row",
 		"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = columnstore indextype timecluster(1m) minmax indexlist field1",
 		"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = columnstore indextype timecluster(1m) bloomfilter indexlist field1 minmax INDEXLIST field1",
+		"create measurement mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = columnstore SHARDKEY tag1 SHARDS AUTO type hash",
+		"create measurement mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = columnstore SHARDKEY tag1 SHARDS 10 type hash",
+		"create measurement mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = tsstore SHARDKEY tag1 SHARDS 10 type hash",
+		"show shards from db.autogen.mst",
 	}
 	for _, c := range c {
 		YyParser.Scanner = influxql.NewScanner(strings.NewReader(c))
@@ -396,6 +400,14 @@ func TestSingleParserError(t *testing.T) {
 		"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = columnstore indextype timecluster(1y) field1",
 		"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = columnstore indextype timecluster(1m) minmax1 indexlist field1",
 		"create measurement db0.rp0.mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = columnstore indextype timecluster(1m) minmax indexlist field111",
+		"create measurement mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = columnstore SHARDKEY tag1 SHARDS -1 type hash",
+		"create measurement mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = columnstore SHARDKEY tag1 SHARDS AUTO1 type hash",
+		"create measurement mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = columnstore SHARDKEY tag1 SHARDS 0 type hash",
+		"show shards from",
+		"create measurement mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = columnstore SHARDKEY tag1 SHARDS 10 type range",
+		"create measurement mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = tsstore SHARDKEY tag1 SHARDS 10 type range",
+		"create measurement mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = columnstore SHARDKEY tag1 SHARDS auto type range",
+		"create measurement mst0 (tag1 tag, field1 int64 field) with ENGINETYPE = tsstore SHARDKEY tag1 SHARDS auto type range",
 	}
 
 	cr := []string{
@@ -424,6 +436,14 @@ func TestSingleParserError(t *testing.T) {
 		"syntax error: unexpected $end, expecting INDEXLIST",
 		"Invalid index type for COLUMNSTORE",
 		"Invalid indexlist",
+		"syntax error: unexpected SUB, expecting AUTO or INTEGER",
+		"syntax error: unexpected IDENT, expecting AUTO or INTEGER",
+		"syntax error: NUM OF SHARDS SHOULD LARGER THAN 0",
+		"syntax error: unexpected $end, expecting REGEX or DOT or IDENT or STRING",
+		"Not support to set num-of-shards for range sharding",
+		"Not support to set num-of-shards for range sharding",
+		"Not support to set num-of-shards for range sharding",
+		"Not support to set num-of-shards for range sharding",
 	}
 	for i, c := range c {
 		YyParser.Scanner = influxql.NewScanner(strings.NewReader(c))

@@ -24,8 +24,10 @@ import (
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/executor/spdy"
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/pointsdecoder"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 )
 
@@ -90,11 +92,10 @@ func (p *InsertProcessor) Handle(w spdy.Responser, data interface{}) error {
 func (p *InsertProcessor) processWritePointsRequest(w spdy.Responser, msg *netstorage.WritePointsRequest) error {
 	atomic.AddInt64(&statistics.PerfStat.WriteActiveRequests, 1)
 	defer atomic.AddInt64(&statistics.PerfStat.WriteActiveRequests, -1)
-	ww := GetWritePointsWork()
-	ww.storage = p.store
-	ww.reqBuf = msg.Points()
-	err := ww.WritePoints()
-	PutWritePointsWork(ww)
+	ww := pointsdecoder.GetDecoderWork()
+	ww.SetReqBuf(msg.Points())
+	err := writeHandler[config.GetHaPolicy()](ww, ww.GetLogger(), p.store)
+	pointsdecoder.PutDecoderWork(ww)
 
 	var rsp *netstorage.WritePointsResponse
 	switch stdErr := err.(type) {
@@ -111,14 +112,12 @@ func (p *InsertProcessor) processWritePointsRequest(w spdy.Responser, msg *netst
 func (p *InsertProcessor) processWriteStreamPointsRequest(w spdy.Responser, msg *netstorage.WriteStreamPointsRequest) error {
 	atomic.AddInt64(&statistics.PerfStat.WriteActiveRequests, 1)
 	defer atomic.AddInt64(&statistics.PerfStat.WriteActiveRequests, -1)
-	ww := GetWritePointsWork()
-	ww.storage = p.store
-	ww.stream = p.stream
-	ww.reqBuf = msg.Points()
-	ww.streamVars = msg.StreamVars()
-	err, inUse := ww.WriteStreamPoints()
+	ww := pointsdecoder.GetDecoderWork()
+	ww.SetReqBuf(msg.Points())
+	ww.SetStreamVars(msg.StreamVars())
+	err, inUse := WriteStreamPoints(ww, ww.GetLogger(), p.store, p.stream)
 	if !inUse {
-		PutWritePointsWork(ww)
+		pointsdecoder.PutDecoderWork(ww)
 	}
 
 	var rsp *netstorage.WriteStreamPointsResponse

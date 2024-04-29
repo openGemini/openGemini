@@ -229,7 +229,6 @@ func (s *Server) initStatisticsPusher() {
 	stat.NewMetaStatistics().Init(globalTags)
 	stat.NewMetaRaftStatistics().Init(globalTags)
 	stat.NewErrnoStat().Init(globalTags)
-	stat.NewLogKeeperStatistics().Init(globalTags)
 	stat.InitSpdyStatistics(globalTags)
 	transport.InitStatistics(transport.AppMeta)
 
@@ -239,7 +238,6 @@ func (s *Server) initStatisticsPusher() {
 		stat.NewMetaRaftStatistics().Collect,
 		stat.MetaTaskInstance.Collect,
 		stat.MetadataInstance.Collect,
-		stat.NewLogKeeperStatistics().Collect,
 		stat.CollectSpdyStatistics,
 	)
 

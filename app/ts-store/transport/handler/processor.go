@@ -130,7 +130,12 @@ func NewSelectProcessor(store *storage.Storage) *SelectProcessor {
 	}
 }
 
-func (p *SelectProcessor) Handle(w spdy.Responser, data interface{}) error {
+func (p *SelectProcessor) Handle(w spdy.Responser, data interface{}) (err error) {
+	defer func() {
+		if e := recover(); e != nil {
+			err = fmt.Errorf("%+v", e)
+		}
+	}()
 	msg, ok := data.(*rpc.Message)
 	if !ok {
 		return executor.NewInvalidTypeError("*executor.RPCMessage", data)
@@ -176,7 +181,7 @@ func (p *SelectProcessor) Handle(w spdy.Responser, data interface{}) error {
 		qm.Finish(req.Opt.QueryId)
 	}()
 
-	err := s.Process()
+	err = s.Process()
 	if err != nil {
 		logger.GetLogger().Error("failed to process the query request", zap.Error(err))
 		switch stderr := err.(type) {

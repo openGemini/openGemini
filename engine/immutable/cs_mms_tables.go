@@ -40,8 +40,6 @@ import (
 	"go.uber.org/zap"
 )
 
-var PrefixDataPath string
-
 type csImmTableImpl struct {
 	mu       sync.RWMutex
 	pkSchema map[string][]record.Field
@@ -179,6 +177,8 @@ func (c *csImmTableImpl) SetMstInfo(name string, mstInfo *meta.MeasurementInfo) 
 			Name: record.TimeClusterCol,
 		})
 	}
+	mstInfo.SchemaLock.RLock()
+	defer mstInfo.SchemaLock.RUnlock()
 	for _, key := range pk {
 		if key == record.TimeField {
 			c.pkSchema[name] = append(c.pkSchema[name], record.Field{
@@ -215,7 +215,7 @@ func (c *csImmTableImpl) refMmsTable(m *MmsTables, name string, refOutOfOrder bo
 	return nil, csWg
 }
 
-func (c *csImmTableImpl) unrefMmsTable(m *MmsTables, tsWg, csWg *sync.WaitGroup) {
+func (c *csImmTableImpl) unrefMmsTable(tsWg, csWg *sync.WaitGroup) {
 	if csWg != nil {
 		csWg.Done()
 	}
@@ -506,6 +506,18 @@ func (c *csImmTableImpl) ReplaceFiles(m *MmsTables, name string, oldFiles, newFi
 	return
 }
 
+func (c *csImmTableImpl) FullyCompacted(m *MmsTables) bool {
+	count := 0
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, v := range m.CSFiles {
+		if v.fullCompacted() {
+			count++
+		}
+	}
+	return count == len(m.CSFiles)
+}
+
 func RenameIndexFiles(fname string, indexList []string) error {
 	lock := fileops.FileLockOption("")
 	// rename pk index file
@@ -519,12 +531,4 @@ func RenameIndexFiles(fname string, indexList []string) error {
 		}
 	}
 	return nil
-}
-
-func SetPrefixDataPath(dataPath string) {
-	PrefixDataPath = dataPath
-}
-
-func GetPrefixDataPath() string {
-	return PrefixDataPath
 }

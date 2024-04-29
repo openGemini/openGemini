@@ -71,6 +71,27 @@ func NewProcessors(inRowDataType, outRowDataType hybridqp.RowDataType, exprOpt [
 				continue
 			}
 			name := exprOpt[i].Expr.(*influxql.Call).Name
+			// Operators implemented through registration
+			// TODO migrate all operators
+			if aggOp := GetAggOperator(name); aggOp != nil {
+				params := &AggCallFuncParams{
+					InRowDataType:  inRowDataType,
+					OutRowDataType: outRowDataType,
+					ExprOpt:        exprOpt[i],
+					IsSingleCall:   isSingleCall,
+					AuxProcessor:   auxProcessor,
+					Opt:            opt,
+					ProRes:         proRes,
+					IsSubQuery:     isSubQuery,
+					Name:           name,
+				}
+				routine, err = aggOp.CreateRoutine(params)
+				coProcessor.AppendRoutine(routine)
+				if err != nil {
+					return nil, err
+				}
+				continue
+			}
 			switch name {
 			case "count":
 				routine, err = NewCountRoutineImpl(inRowDataType, outRowDataType, exprOpt[i], isSingleCall)
@@ -84,19 +105,13 @@ func NewProcessors(inRowDataType, outRowDataType hybridqp.RowDataType, exprOpt [
 			case "last":
 				routine, err = NewLastRoutineImpl(inRowDataType, outRowDataType, exprOpt[i], isSingleCall, auxProcessor)
 				coProcessor.AppendRoutine(routine)
-			case "min":
-				routine, err = NewMinRoutineImpl(inRowDataType, outRowDataType, exprOpt[i], isSingleCall, auxProcessor)
-				coProcessor.AppendRoutine(routine)
-			case "max":
-				routine, err = NewMaxRoutineImpl(inRowDataType, outRowDataType, exprOpt[i], isSingleCall, auxProcessor)
-				coProcessor.AppendRoutine(routine)
 			case "percentile":
 				if isSubQuery {
 					isSingleCall = false
 				}
 				routine, err = NewPercentileRoutineImpl(inRowDataType, outRowDataType, exprOpt[i], isSingleCall, auxProcessor)
 				coProcessor.AppendRoutine(routine)
-			case "percentile_approx", "ogsketch_percentile", "ogsketch_merge", "ogsketch_insert":
+			case "ogsketch_percentile", "ogsketch_merge", "ogsketch_insert":
 				var percentile float64
 				var clusterNum int
 				var err error
@@ -522,56 +537,6 @@ func NewLastRoutineImpl(inRowDataType, outRowDataType hybridqp.RowDataType, opt 
 	}
 }
 
-func NewMinRoutineImpl(inRowDataType, outRowDataType hybridqp.RowDataType, opt hybridqp.ExprOptions, isSingleCall bool, auxProcessor []*AuxProcessor) (Routine, error) {
-	inOrdinal := inRowDataType.FieldIndex(opt.Expr.(*influxql.Call).Args[0].(*influxql.VarRef).Val)
-	outOrdinal := outRowDataType.FieldIndex(opt.Ref.Val)
-	if inOrdinal < 0 || outOrdinal < 0 {
-		panic("input and output schemas are not aligned for min iterator")
-	}
-	dataType := inRowDataType.Field(inOrdinal).Expr.(*influxql.VarRef).Type
-	switch dataType {
-	case influxql.Integer:
-		return NewRoutineImpl(NewIntegerColIntegerIterator(IntegerMinReduce, IntegerMinMerge,
-			isSingleCall, inOrdinal, outOrdinal, auxProcessor, outRowDataType),
-			inOrdinal, outOrdinal), nil
-	case influxql.Float:
-		return NewRoutineImpl(NewFloatColFloatIterator(FloatMinReduce, FloatMinMerge,
-			isSingleCall, inOrdinal, outOrdinal, auxProcessor, outRowDataType),
-			inOrdinal, outOrdinal), nil
-	case influxql.Boolean:
-		return NewRoutineImpl(NewBooleanColBooleanIterator(BooleanMinReduce, BooleanMinMerge,
-			isSingleCall, inOrdinal, outOrdinal, auxProcessor, outRowDataType),
-			inOrdinal, outOrdinal), nil
-	default:
-		return nil, errno.NewError(errno.UnsupportedDataType, "min/spread", dataType.String())
-	}
-}
-
-func NewMaxRoutineImpl(inRowDataType, outRowDataType hybridqp.RowDataType, opt hybridqp.ExprOptions, isSingleCall bool, auxProcessor []*AuxProcessor) (Routine, error) {
-	inOrdinal := inRowDataType.FieldIndex(opt.Expr.(*influxql.Call).Args[0].(*influxql.VarRef).Val)
-	outOrdinal := outRowDataType.FieldIndex(opt.Ref.Val)
-	if inOrdinal < 0 || outOrdinal < 0 {
-		panic("input and output schemas are not aligned for max iterator")
-	}
-	dataType := inRowDataType.Field(inOrdinal).Expr.(*influxql.VarRef).Type
-	switch dataType {
-	case influxql.Integer:
-		return NewRoutineImpl(NewIntegerColIntegerIterator(IntegerMaxReduce, IntegerMaxMerge,
-			isSingleCall, inOrdinal, outOrdinal, auxProcessor, outRowDataType),
-			inOrdinal, outOrdinal), nil
-	case influxql.Float:
-		return NewRoutineImpl(NewFloatColFloatIterator(FloatMaxReduce, FloatMaxMerge,
-			isSingleCall, inOrdinal, outOrdinal, auxProcessor, outRowDataType),
-			inOrdinal, outOrdinal), nil
-	case influxql.Boolean:
-		return NewRoutineImpl(NewBooleanColBooleanIterator(BooleanMaxReduce, BooleanMaxMerge,
-			isSingleCall, inOrdinal, outOrdinal, auxProcessor, outRowDataType),
-			inOrdinal, outOrdinal), nil
-	default:
-		return nil, errno.NewError(errno.UnsupportedDataType, "max/spread", dataType.String())
-	}
-}
-
 func NewPercentileRoutineImpl(inRowDataType, outRowDataType hybridqp.RowDataType, opt hybridqp.ExprOptions, isSingleCall bool, auxProcessor []*AuxProcessor) (Routine, error) {
 	var percentile float64
 	switch arg := opt.Expr.(*influxql.Call).Args[1].(type) {
@@ -691,11 +656,11 @@ func NewTopRoutineImpl(inRowDataType, outRowDataType hybridqp.RowDataType, opt h
 	dataType := inRowDataType.Field(inOrdinal).Expr.(*influxql.VarRef).Type
 	switch dataType {
 	case influxql.Float:
-		return NewRoutineImpl(NewFloatColFloatHeapIterator(inOrdinal, outOrdinal, auxProcessor, outRowDataType, NewFloatHeapItem(int(n.Val), FloatTopCmpByValueReduce, FloatTopCmpByTimeReduce)),
+		return NewRoutineImpl(NewFloatColFloatHeapIterator(inOrdinal, outOrdinal, auxProcessor, outRowDataType, NewHeapItem[float64](int(n.Val), TopCmpByValueReduce[float64], TopCmpByTimeReduce[float64])),
 			inOrdinal, outOrdinal), nil
 
 	case influxql.Integer:
-		return NewRoutineImpl(NewIntegerColIntegerHeapIterator(inOrdinal, outOrdinal, auxProcessor, outRowDataType, NewIntegerHeapItem(int(n.Val), IntegerTopCmpByValueReduce, IntegerTopCmpByTimeReduce)),
+		return NewRoutineImpl(NewIntegerColIntegerHeapIterator(inOrdinal, outOrdinal, auxProcessor, outRowDataType, NewHeapItem[int64](int(n.Val), TopCmpByValueReduce[int64], TopCmpByTimeReduce[int64])),
 			inOrdinal, outOrdinal), nil
 	default:
 		return nil, errno.NewError(errno.UnsupportedDataType, "top", dataType.String())
@@ -732,10 +697,10 @@ func NewBottomRoutineImpl(inRowDataType, outRowDataType hybridqp.RowDataType, op
 	dataType := inRowDataType.Field(inOrdinal).Expr.(*influxql.VarRef).Type
 	switch dataType {
 	case influxql.Float:
-		return NewRoutineImpl(NewFloatColFloatHeapIterator(inOrdinal, outOrdinal, auxProcessor, outRowDataType, NewFloatHeapItem(int(n.Val), FloatBottomCmpByValueReduce, FloatBottomCmpByTimeReduce)),
+		return NewRoutineImpl(NewFloatColFloatHeapIterator(inOrdinal, outOrdinal, auxProcessor, outRowDataType, NewHeapItem(int(n.Val), BottomCmpByValueReduce[float64], BottomCmpByTimeReduce[float64])),
 			inOrdinal, outOrdinal), nil
 	case influxql.Integer:
-		return NewRoutineImpl(NewIntegerColIntegerHeapIterator(inOrdinal, outOrdinal, auxProcessor, outRowDataType, NewIntegerHeapItem(int(n.Val), IntegerBottomCmpByValueReduce, IntegerBottomCmpByTimeReduce)),
+		return NewRoutineImpl(NewIntegerColIntegerHeapIterator(inOrdinal, outOrdinal, auxProcessor, outRowDataType, NewHeapItem(int(n.Val), BottomCmpByValueReduce[int64], BottomCmpByTimeReduce[int64])),
 			inOrdinal, outOrdinal), nil
 	default:
 		return nil, errno.NewError(errno.UnsupportedDataType, "bottom", dataType.String())

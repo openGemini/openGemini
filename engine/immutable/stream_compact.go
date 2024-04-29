@@ -41,7 +41,6 @@ import (
 )
 
 const (
-	readBufferSize                = 1 * 1024 * 1024
 	streamCompactMemThreshold     = 128 * 1024 * 1024
 	streamCompactSegmentThreshold = 500
 )
@@ -54,9 +53,9 @@ var (
 
 func NonStreamingCompaction(fi FilesInfo) bool {
 	flag := GetMergeFlag4TsStore()
-	if flag == NonStreamingCompact {
+	if flag == util.NonStreamingCompact {
 		return true
-	} else if flag == StreamingCompact {
+	} else if flag == util.StreamingCompact {
 		return false
 	} else {
 		n := fi.avgChunkRows * fi.maxColumns * 8 * len(fi.compIts)
@@ -194,6 +193,21 @@ type StreamIterators struct {
 	timeSegs   []record.ColVal
 	files      []TSSPFile
 	log        *Log.Logger
+
+	maxTime int64
+}
+
+func (c *StreamIterators) RemoveTmpFiles() {
+	if c.fd != nil {
+		name := c.fd.Name()
+		util.MustClose(c.fd)
+		util.MustRun(func() error {
+			return os.Remove(name)
+		})
+	}
+	for _, f := range c.files {
+		util.MustRun(f.Remove)
+	}
 }
 
 func (c *StreamIterators) WithLog(log *Log.Logger) {
@@ -265,45 +279,7 @@ func (c *StreamIterators) swapLastTimeSegment(col *record.ColVal) {
 
 func (c *StreamIterators) swapLastSegment(ref *record.Field, col *record.ColVal) {
 	c.tmpCol.Init()
-	switch ref.Type {
-	case influx.Field_Type_Int:
-		for i := 0; i < col.Len; i++ {
-			v, isNil := col.IntegerValue(i)
-			if isNil {
-				c.tmpCol.AppendIntegerNull()
-			} else {
-				c.tmpCol.AppendInteger(v)
-			}
-		}
-	case influx.Field_Type_String:
-		for i := 0; i < col.Len; i++ {
-			v, isNil := col.StringValueUnsafe(i)
-			if isNil {
-				c.tmpCol.AppendStringNull()
-			} else {
-				c.tmpCol.AppendString(v)
-			}
-		}
-	case influx.Field_Type_Boolean:
-		for i := 0; i < col.Len; i++ {
-			v, isNil := col.BooleanValue(i)
-			if isNil {
-				c.tmpCol.AppendBooleanNull()
-			} else {
-				c.tmpCol.AppendBoolean(v)
-			}
-		}
-	case influx.Field_Type_Float:
-		for i := 0; i < col.Len; i++ {
-			v, isNil := col.FloatValue(i)
-			if isNil {
-				c.tmpCol.AppendFloatNull()
-			} else {
-				c.tmpCol.AppendFloat(v)
-			}
-		}
-	}
-
+	c.tmpCol.AppendColVal(col, ref.Type, 0, col.Len)
 	c.col, c.tmpCol = c.tmpCol, c.col
 	c.tmpCol.Init()
 }
@@ -780,6 +756,8 @@ func (c *StreamIterators) isClosed() bool {
 }
 
 func (c *StreamIterators) compactColumn(dstIdx int, ref record.Field, needCalPreAgg bool, fieldIndex []int) (iteratorStart, segmentIndex int, splitFile bool, err error) {
+	c.maxTime = 0
+
 	// merge column ref
 	_ = c.colBuilder.initEncoder(ref)
 	splitFile = false
@@ -787,7 +765,7 @@ func (c *StreamIterators) compactColumn(dstIdx int, ref record.Field, needCalPre
 	segmentN := 0
 	lastSegRows := c.lastSeg.RowNums()
 	if lastSegRows > 0 {
-		idx := c.lastSeg.FieldIndexs(ref.Name)
+		idx := c.lastSeg.FieldIndexsFast(ref.Name)
 		col := c.lastSeg.Column(idx)
 		c.col.AppendColVal(col, ref.Type, 0, col.Len)
 		if needCalPreAgg {
@@ -1083,6 +1061,17 @@ func (c *StreamIterators) splitColumn(ref record.Field, needCalPreAgg bool) (spl
 		}
 	}
 	return
+}
+
+func (c *StreamIterators) validateTimes(times []int64) error {
+	if c.maxTime >= times[0] {
+		err := fmt.Errorf("minimum time is earlier than the maximum time of the previous segment: %d >= %d",
+			c.maxTime, times[0])
+		c.log.Error("Invalid series id", zap.Error(err))
+		return err
+	}
+	c.maxTime = times[len(times)-1]
+	return nil
 }
 
 func (c *StreamIterators) validate(id uint64, ref record.Field) error {
@@ -1431,6 +1420,10 @@ func (c *StreamIterators) decodeSegment(colData []byte, tmData []byte, ref recor
 
 	if ref.Name == record.TimeField {
 		err = appendTimeColumnData(colData, c.tmpCol, c.ctx, false)
+
+		if err == nil {
+			err = c.validateTimes(c.tmpCol.IntegerValues())
+		}
 	} else {
 		err = decodeColumnData(&ref, colData, c.tmpCol, c.ctx, false)
 	}
@@ -1478,7 +1471,7 @@ func (c *StreamIterators) nextSegmentPosition(itrIndex, segIndex int, tm *Column
 
 func (c *StreamIterators) saveSegment(ref record.Field) {
 	if c.col.Len > 0 {
-		idx := c.lastSeg.FieldIndexs(ref.Name)
+		idx := c.lastSeg.FieldIndexsFast(ref.Name)
 		col := c.lastSeg.Column(idx)
 		col.Init()
 		col.AppendColVal(c.col, ref.Type, 0, c.col.Len)

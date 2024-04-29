@@ -50,35 +50,39 @@ func TestUnorderedColumnReader(t *testing.T) {
 	ur := immutable.NewUnorderedReader(logger.NewLogger(errno.ModuleMerge))
 	ur.AddFiles(mh.store.OutOfOrder["mst"].Files())
 
-	require.NoError(t, ur.InitTimes(sid, math.MaxInt64))
+	require.NoError(t, ur.ChangeSeries(sid))
+	ur.InitTimes(sid, math.MaxInt64)
 
 	schema = ur.ReadSeriesSchemas(sid, math.MaxInt64)
 	require.Equal(t, 4, schema.Len())
 	require.Equal(t, "booleanBoolean", schema[0].String())
 
-	times := ur.ReadTimes(&schema[0], math.MaxInt64)
+	times := ur.ReadTimes(math.MaxInt64)
 	require.Equal(t, 6000, len(times))
 	require.Equal(t, begin, times[0])
 	require.Equal(t, int64(2999000000002), times[len(times)-1])
 
-	col, readTimes, err = ur.Read(sid, &schema[1], times[99])
+	ur.ChangeColumn(sid, &schema[1])
+	col, readTimes, err = ur.Read(sid, times[99])
 	require.NoError(t, err)
 	require.NotEmpty(t, col)
 	require.Equal(t, 100, col.Len)
 	require.Equal(t, times[99], readTimes[99])
 
-	col, readTimes, err = ur.Read(sid, &schema[1], times[99])
+	col, readTimes, err = ur.Read(sid, times[99])
 	require.NoError(t, err)
 	require.Empty(t, col)
 
-	col, readTimes, err = ur.Read(sid, &schema[0], 0)
+	ur.ChangeColumn(sid, &schema[0])
+	col, readTimes, err = ur.Read(sid, 0)
 	require.NoError(t, err)
 	require.Empty(t, col)
 
-	col, _, err = ur.Read(sid, &record.Field{
+	ur.ChangeColumn(sid, &record.Field{
 		Type: influx.Field_Type_Int,
 		Name: "not_exists",
-	}, times[99])
+	})
+	col, _, err = ur.Read(sid, times[99])
 	require.NoError(t, err)
 	require.Equal(t, 100, col.NilCount)
 	require.NoError(t, ur.ReadRemain(sid, nil))
@@ -136,15 +140,40 @@ func TestUnorderedColumnReader_error(t *testing.T) {
 	ur := immutable.NewUnorderedReader(logger.NewLogger(errno.ModuleMerge))
 	ur.AddFiles(mh.store.OutOfOrder["mst"].Files())
 
-	require.NoError(t, ur.InitTimes(sid+1, math.MaxInt64))
-	require.NoError(t, ur.InitTimes(sid, math.MaxInt64))
+	require.NoError(t, ur.ChangeSeries(sid))
+	ur.InitTimes(sid+1, math.MaxInt64)
+	ur.InitTimes(sid, math.MaxInt64)
 
-	schema := ur.ReadSeriesSchemas(100, math.MaxInt64)
+	schema := ur.ReadSeriesSchemas(sid, math.MaxInt64)
 	require.NotEmpty(t, schema)
+	ur.ChangeColumn(sid, &schema[0])
 
-	ur.Close()
-	col, readTimes, err := ur.Read(sid, &schema[0], begin+1)
+	ur.CloseFile()
+	col, readTimes, err := ur.Read(sid, begin+1)
 	require.NotEmpty(t, err)
 	require.Empty(t, col)
 	require.Empty(t, readTimes)
+}
+
+func TestUnorderedColumns(t *testing.T) {
+	defer beforeTest(t, 0)
+	var sid uint64 = 100
+
+	cols := immutable.NewUnorderedColumns()
+
+	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
+	rg := newRecordGenerator(1e15, defaultInterval, true)
+
+	mh.addRecord(sid, rg.generate(getDefaultSchemas(), 10))
+	require.NoError(t, mh.saveToOrder())
+
+	f := mh.store.Order["mst"].Files()[0]
+	fi := immutable.NewFileIterator(f, logger.NewLogger(errno.ModuleMerge))
+	require.True(t, fi.NextChunkMeta())
+	cm := fi.GetCurtChunkMeta()
+	cols.Init(cm)
+
+	cols.ChangeColumn("int")
+	require.Equal(t, 0, cols.GetLineOffset(record.TimeField))
+	require.Equal(t, 0, cols.GetSegOffset("foo"))
 }

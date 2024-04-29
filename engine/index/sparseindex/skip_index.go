@@ -28,7 +28,6 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/rpn"
-	"github.com/openGemini/openGemini/lib/tokenizer"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/logparser"
@@ -182,10 +181,9 @@ func (r *SKIndexReaderImpl) getSKInfoByExpr(rpnExpr *rpn.RPNExpr, skIndexRelatio
 func (r *SKIndexReaderImpl) createSKFileReaders(skInfoMap map[string]*SkInfo, rpnExpr *rpn.RPNExpr, option hybridqp.Options, isCache bool) ([]SKFileReader, error) {
 	var readers []SKFileReader
 	for _, v := range skInfoMap {
-		indexName, _ := index.GetIndexNameByType(index.IndexType(v.oid))
-		creator, ok := GetSKFileReaderFactoryInstance().Find(indexName)
+		creator, ok := GetSKFileReaderFactoryInstance().Find(v.oid)
 		if !ok {
-			return nil, fmt.Errorf("unsupported the skip index type: %s", indexName)
+			return nil, fmt.Errorf("unsupported the skip index type: %d", v.oid)
 		}
 		reader, err := creator.CreateSKFileReader(rpnExpr, v.fields, option, isCache)
 		if err != nil {
@@ -211,32 +209,32 @@ type SKFileReaderCreator interface {
 }
 
 // RegistrySKFileReaderCreator is used to registry the SKFileReaderCreator
-func RegistrySKFileReaderCreator(name string, creator SKFileReaderCreator) bool {
+func RegistrySKFileReaderCreator(oid uint32, creator SKFileReaderCreator) bool {
 	factory := GetSKFileReaderFactoryInstance()
 
-	_, ok := factory.Find(name)
+	_, ok := factory.Find(oid)
 	if ok {
 		return ok
 	}
 
-	factory.Add(name, creator)
+	factory.Add(oid, creator)
 	return true
 }
 
 type SKFileReaderCreatorFactory struct {
-	creators map[string]SKFileReaderCreator
+	creators map[uint32]SKFileReaderCreator
 }
 
 func NewSKFileReaderCreatorFactory() *SKFileReaderCreatorFactory {
-	return &SKFileReaderCreatorFactory{creators: make(map[string]SKFileReaderCreator)}
+	return &SKFileReaderCreatorFactory{creators: make(map[uint32]SKFileReaderCreator)}
 }
 
-func (s *SKFileReaderCreatorFactory) Add(name string, creator SKFileReaderCreator) {
-	s.creators[name] = creator
+func (s *SKFileReaderCreatorFactory) Add(oid uint32, creator SKFileReaderCreator) {
+	s.creators[oid] = creator
 }
 
-func (s *SKFileReaderCreatorFactory) Find(name string) (SKFileReaderCreator, bool) {
-	creator, ok := s.creators[name]
+func (s *SKFileReaderCreatorFactory) Find(oid uint32) (SKFileReaderCreator, bool) {
+	creator, ok := s.creators[oid]
 	return creator, ok
 }
 
@@ -250,124 +248,13 @@ func GetSKFileReaderFactoryInstance() *SKFileReaderCreatorFactory {
 	return SKFileReaderInstance
 }
 
-type SkipIndex struct {
-	bfIdx, fullTextIdx int     // if bloomFilter/fullTextIdx exist, the idx in schemaIdxes is bfIdx/fullTextIdx
-	idxInRelation      []int   // mark the position of each skipIndex in the indexRelation, indexRelation may include text、fieldIndex or mergeSet
-	schemaIdxes        [][]int // each skip index contains a schemaIdx to indicate the corresponding position of the index column, but under schemaLess, its content may be empty.
-	skipIndexWriters   []SkipIndexWriter
-}
-
-func NewSkipIndex() *SkipIndex {
-	return &SkipIndex{
-		bfIdx:       -1,
-		fullTextIdx: -1,
-	}
-}
-
-func (s *SkipIndex) NewSkipIndexWriters(dir, msName, dataFilePath, lockPath string, indexRelation influxql.IndexRelation) {
-	s.skipIndexWriters = make([]SkipIndexWriter, 0, len(indexRelation.Oids))
-	s.idxInRelation = make([]int, 0, len(indexRelation.Oids))
-	pos := 0
-	for i := range indexRelation.Oids {
-		if indexRelation.IsSkipIndex(i) {
-			if indexRelation.IndexNames[i] == index.BloomFilterIndex {
-				s.bfIdx = pos
-			}
-			if indexRelation.IndexNames[i] == index.BloomFilterFullTextIndex {
-				s.fullTextIdx = pos
-			}
-			tokens := tokenizer.GetFullTextOption(&indexRelation).Tokens
-			s.skipIndexWriters = append(s.skipIndexWriters, NewSkipIndexWriter(dir, msName, dataFilePath, lockPath, indexRelation.IndexNames[i], tokens))
-			s.idxInRelation = append(s.idxInRelation, i)
-			pos++
-		}
-	}
-}
-
-// GetBfIdx get idx in schemaIdxes if bloom filter index exist bfIdx >= 0
-func (s *SkipIndex) GetBfIdx() int {
-	return s.bfIdx
-}
-
-// GetFullTextIdx get idx in schemaIdxes if full text index exist fullTextIdx >= 0
-func (s *SkipIndex) GetFullTextIdx() int {
-	return s.fullTextIdx
-}
-
-func (s *SkipIndex) GetSchemaIdxes() [][]int {
-	return s.schemaIdxes
-}
-
-func (s *SkipIndex) GetSkipIndexWriters() []SkipIndexWriter {
-	return s.skipIndexWriters
-}
-
-func (s *SkipIndex) GenSchemaIdxes(schema record.Schemas, indexRelation influxql.IndexRelation) {
-	schemaMap := genSchemaMap(schema)
-	s.schemaIdxes = make([][]int, 0, len(s.skipIndexWriters))
-	var cols []string
-	for i := range s.idxInRelation {
-		cols = indexRelation.IndexList[s.idxInRelation[i]].IList
-		res := make([]int, 0, len(cols))
-		// if full text idx exist then get all string col into schema
-		if i == s.fullTextIdx {
-			for j := range schema {
-				if schema[j].IsString() {
-					res = append(res, j)
-				}
-			}
-			s.schemaIdxes = append(s.schemaIdxes, res)
-			continue
-		}
-
-		for idx := range cols {
-			_, ok := schemaMap[cols[idx]]
-			if !ok {
-				// skip missing col
-				continue
-			}
-			res = append(res, schemaMap[cols[idx]])
-		}
-		s.schemaIdxes = append(s.schemaIdxes, res)
-	}
-}
-
-func genSchemaMap(schema record.Schemas) map[string]int {
-	schemaMap := make(map[string]int)
-	for i := range schema {
-		schemaMap[schema[i].Name] = i
-	}
-	return schemaMap
-}
-
 func writeSkipIndexToDisk(data []byte, lockPath, skipIndexFilePath string) error {
-	indexBuilder := colstore.NewSkipIndexBuilder(&lockPath, skipIndexFilePath)
-	err := indexBuilder.WriteData(data)
-	defer indexBuilder.Reset()
-	return err
-}
-
-type SkipIndexWriter interface {
-	Open() error
-	Close() error
-	CreateAttachSkipIndex(schemaIdx, rowsPerSegment []int, writeRec *record.Record) error
-	CreateDetachSkipIndex(writeRec *record.Record, schemaIdx, rowsPerSegment []int, dataBuf [][]byte) ([][]byte, []string)
-}
-
-func NewSkipIndexWriter(dir, msName, dataFilePath, lockPath, indexType string, tokens string) SkipIndexWriter {
-	switch indexType {
-	case index.BloomFilterIndex:
-		return NewBloomFilterWriter(dir, msName, dataFilePath, lockPath, tokens)
-	case index.BloomFilterFullTextIndex:
-		return NewFullTextIdxWriter(dir, msName, dataFilePath, lockPath, tokens)
-	case index.SetIndex:
-		return NewSetWriter(dir, msName, dataFilePath, lockPath, tokens)
-	case index.MinMaxIndex:
-		return NewMinMaxWriter(dir, msName, dataFilePath, lockPath, tokens)
-	default:
-		logger.GetLogger().Error("unknown skip index type")
-		return nil
+	indexBuilder, err := colstore.NewIndexWriter(&lockPath, skipIndexFilePath)
+	if err != nil {
+		return err
 	}
+	defer indexBuilder.Reset()
+	return indexBuilder.WriteData(data)
 }
 
 type skipIndexWriter struct {

@@ -32,4 +32,3 @@ config/monitor-*
 dist/
 
 output/
-go.sum

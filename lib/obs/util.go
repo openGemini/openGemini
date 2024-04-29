@@ -16,36 +16,22 @@ limitations under the License.
 package obs
 
 import (
-	"os"
 	"path"
-	"path/filepath"
 	"strconv"
 	"time"
 
 	"github.com/influxdata/influxdb/services/meta"
-	"github.com/openGemini/openGemini/lib/fileops"
 )
 
-func OpenObsFile(path, fileName string, obsOpts *ObsOptions) (fileops.File, error) {
-	var obsPath string
-	if obsOpts != nil {
-		path = filepath.Join(obsOpts.BasePath, path, fileName)
-		obsPath = fileops.EncodeObsPath(obsOpts.Endpoint, obsOpts.BucketName, path, obsOpts.Ak, obsOpts.Sk)
-	} else {
-		obsPath = filepath.Join(path, fileName)
-	}
-	fd, err := fileops.OpenFile(obsPath, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0640)
-	if err != nil {
-		return nil, err
-	}
-	return fd, nil
-}
+var PrefixDataPath string
 
 const (
 	shardSeparator     = "_"
 	pathSeparator      = "/"
 	StoreDirName       = "data"
 	ColumnStoreDirName = "columnstore"
+	ObsFileSuffix      = ".obs"
+	ObsFileTmpSuffix   = ".init"
 )
 
 // "data/dbName/ptID/rpName/shardId_startTime_endTime_indexId/columnstore"
@@ -65,4 +51,12 @@ func GetBaseMstPath(shardPath, mstName string) string {
 // "localDataPath/data/dbName/ptID/rpName/shardId_startTime_endTime_indexId/columnstore/mstName"
 func GetLocalMstPath(localPath, mstPath string) string {
 	return path.Join(localPath, mstPath)
+}
+
+func SetPrefixDataPath(dataPath string) {
+	PrefixDataPath = dataPath
+}
+
+func GetPrefixDataPath() string {
+	return PrefixDataPath
 }

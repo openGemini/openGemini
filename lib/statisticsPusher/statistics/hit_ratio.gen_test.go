@@ -40,16 +40,22 @@ func TestHitRatio(t *testing.T) {
 	stat.AddQueryFileUnHitTotal(2)
 	stat.AddChunkMetaGetTotal(2)
 	stat.AddChunkMetaHitTotal(2)
+	stat.AddSeriesKeyToTSIDCacheGetTotal(2)
+	stat.AddSeriesKeyToTSIDCacheGetMissTotal(2)
+	stat.AddSeriesKeyToTSIDCacheGetNewSeriesTotal(2)
 
 	fields := map[string]interface{}{
-		"IndexWriterGetTotal": int64(2),
-		"IndexWriterHitTotal": int64(2),
-		"MergeColValGetTotal": int64(2),
-		"MergeColValHitTotal": int64(2),
-		"FileOpenTotal":       int64(2),
-		"QueryFileUnHitTotal": int64(2),
-		"ChunkMetaGetTotal":   int64(2),
-		"ChunkMetaHitTotal":   int64(2),
+		"IndexWriterGetTotal":                   int64(2),
+		"IndexWriterHitTotal":                   int64(2),
+		"MergeColValGetTotal":                   int64(2),
+		"MergeColValHitTotal":                   int64(2),
+		"FileOpenTotal":                         int64(2),
+		"QueryFileUnHitTotal":                   int64(2),
+		"ChunkMetaGetTotal":                     int64(2),
+		"ChunkMetaHitTotal":                     int64(2),
+		"SeriesKeyToTSIDCacheGetTotal":          int64(2),
+		"SeriesKeyToTSIDCacheGetMissTotal":      int64(2),
+		"SeriesKeyToTSIDCacheGetNewSeriesTotal": int64(2),
 	}
 	statistics.NewTimestamp().Init(time.Second)
 	buf, err := stat.Collect(nil)

@@ -40,7 +40,7 @@ type DetachedMetaDataReader struct {
 }
 
 func NewDetachedMetaDataReader(path string, obsOpts *obs.ObsOptions, isSort bool) (*DetachedMetaDataReader, error) {
-	fd, err := obs.OpenObsFile(path, DataFile, obsOpts)
+	fd, err := fileops.OpenObsFile(path, DataFile, obsOpts, true)
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +111,7 @@ func (reader *DetachedMetaDataReader) InitReadBatch(s []*SegmentMeta, schema rec
 	}
 
 	reader.ch = make(chan *request.StreamReader, 1)
-	reader.r.StreamReadBatch(offset, length, reader.ch, MetaIndexSegmentNum)
+	reader.r.StreamReadBatch(offset, length, reader.ch, MetaIndexSegmentNum, true)
 }
 func (reader *DetachedMetaDataReader) ReadBatch(dst *record.Record, decs *ReadContext) (*record.Record, error) {
 	schema := dst.Schema
@@ -183,4 +183,10 @@ func (reader *DetachedMetaDataReader) decodeTimeColumn(timeCol *record.ColVal, d
 		log.Error("decode time column fail", zap.Error(err))
 	}
 	return err
+}
+
+func (reader *DetachedMetaDataReader) Close() {
+	if reader.r != nil {
+		reader.r.Close()
+	}
 }

@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -41,6 +42,7 @@ import (
 	"github.com/openGemini/openGemini/lib/sysconfig"
 	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/lib/util"
+	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 	coordinator2 "github.com/openGemini/openGemini/lib/util/lifted/influx/coordinator"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/httpd"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
@@ -87,8 +89,9 @@ type Server struct {
 
 	cqService *continuousquery.Service
 
-	ctx       context.Context
-	ctxCancel context.CancelFunc
+	ctx          context.Context
+	ctxCancel    context.CancelFunc
+	serfInstance *serf.Serf
 }
 
 // updateTLSConfig stores with into the tls config pointed at by into but only if with is not nil
@@ -183,7 +186,7 @@ func newServer(info app.ServerInfo, logger *Logger.Logger, c *config.TSSql, meta
 		cqService.WithLogger(logger)
 	}
 
-	return &Server{
+	s := &Server{
 		info:          info,
 		Logger:        logger,
 		httpService:   httpd.NewService(c.HTTP),
@@ -194,6 +197,10 @@ func newServer(info app.ServerInfo, logger *Logger.Logger, c *config.TSSql, meta
 
 		cqService: cqService,
 	}
+	if c.Meta.UseIncSyncData {
+		s.MetaClient.EnableUseSnapshotV2(c.Meta.RetentionAutoCreate, c.Meta.ExpandShardsEnable)
+	}
+	return s
 }
 
 func (s *Server) initArrowFlightService(c *config.TSSql) error {
@@ -280,7 +287,16 @@ func (s *Server) Open() error {
 
 	s.PointsWriter.MetaClient = s.MetaClient
 	s.httpService.Handler.MetaClient = s.MetaClient
+	s.httpService.Handler.SQLConfig = s.config
 	s.httpService.Handler.RecordWriter = s.RecordWriter
+	if s.config.Gossip.Enabled && s.config.Meta.UseIncSyncData {
+		conf := s.config.Gossip.BuildSerf(s.config.Logging, config.AppSql, strconv.Itoa(int(s.MetaClient.NodeID())), nil)
+		var err error
+		s.serfInstance, err = app.CreateSerfInstance(conf, s.MetaClient.Clock, s.config.Gossip.Members, nil)
+		if err != nil {
+			panic(err)
+		}
+	}
 
 	if err := s.httpService.Open(); err != nil {
 		return err
@@ -414,10 +430,16 @@ func (s *Server) initializeMetaClient() error {
 		// start up a new single node cluster
 		return fmt.Errorf("server not set to join existing cluster must run also as a meta node")
 	} else {
-		_, _, _, err := s.MetaClient.InitMetaClient(s.metaJoinPeers, s.metaUseTLS, nil, "")
-		if err != nil {
-			return err
+		GossipAddr := fmt.Sprintf("%s:%s", s.config.Gossip.BindAddr, strconv.Itoa(s.config.Gossip.SqlBindPort))
+		sqlNodeInfo := meta.SqlNodeInfo{
+			HttpAddr:   s.config.HTTP.BindAddr(),
+			GossipAddr: GossipAddr,
 		}
+		nid, clock, _, err := s.MetaClient.InitMetaClient(s.metaJoinPeers, s.metaUseTLS, nil, &sqlNodeInfo, "", meta.SQL)
+		if err != nil {
+			panic(err)
+		}
+		s.MetaClient.SetNode(nid, clock)
 		err = s.MetaClient.Open()
 		if err != nil {
 			return err

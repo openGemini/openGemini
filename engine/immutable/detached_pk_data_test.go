@@ -46,11 +46,7 @@ func TestReadPKData(t *testing.T) {
 
 	pkRecNum := 2
 
-	pkInfoReader, err := NewDetachedPKMetaInfoReader(dataPath, opt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pkInfo, err := pkInfoReader.Read()
+	pkInfo, err := ReadPKMetaInfoAll(dataPath, opt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,6 +54,7 @@ func TestReadPKData(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer pkMetaReader.Close()
 	pmOffsets, pmLengths := make([]int64, 0, pkRecNum), make([]int64, 0, pkRecNum)
 	for i := 0; i < pkRecNum; i++ {
 		offset, length := GetPKMetaOffsetLengthByChunkId(pkInfo, i)
@@ -68,17 +65,12 @@ func TestReadPKData(t *testing.T) {
 		t.Fatalf(fmt.Sprintf("read pk meta err: %s", err.Error()))
 	}
 
-	reader, err := NewDetachedPKDataReader(dataPath, opt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	reader.SetPkMetaInfo(pkInfo)
 	pdOffset, pdLength := make([]int64, 0, len(pkMetas)), make([]int64, 0, len(pkMetas))
 	for i := range pkMetas {
 		pdOffset = append(pdOffset, int64(pkMetas[i].Offset))
 		pdLength = append(pdLength, int64(pkMetas[i].Length))
 	}
-	pkDatas, err := reader.Read(pdOffset, pdLength, pkMetas)
+	pkDatas, err := ReadPKDataAll(dataPath, opt, pdOffset, pdLength, pkMetas, pkInfo)
 	if err != nil {
 		t.Fatalf(fmt.Sprintf("read pk data err: %s", err.Error()))
 	}
@@ -98,5 +90,12 @@ func TestReadPKData(t *testing.T) {
 	_, err = NewDetachedPKMetaReader(dataPath, &obs.ObsOptions{})
 	assert.Equal(t, strings.Contains(err.Error(), "endpoint is not set"), true)
 	_, err = NewDetachedPKDataReader(dataPath, &obs.ObsOptions{})
+	assert.Equal(t, strings.Contains(err.Error(), "endpoint is not set"), true)
+
+	_, err = ReadPKDataAll(dataPath, &obs.ObsOptions{}, nil, nil, nil, nil)
+	assert.Equal(t, strings.Contains(err.Error(), "endpoint is not set"), true)
+	_, err = ReadPKMetaAll(dataPath, &obs.ObsOptions{}, nil, nil)
+	assert.Equal(t, strings.Contains(err.Error(), "endpoint is not set"), true)
+	_, err = ReadPKMetaInfoAll(dataPath, &obs.ObsOptions{})
 	assert.Equal(t, strings.Contains(err.Error(), "endpoint is not set"), true)
 }

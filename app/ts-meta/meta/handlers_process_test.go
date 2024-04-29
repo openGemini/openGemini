@@ -315,3 +315,49 @@ func TestSnapshot(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, resp.Err, errno.NewError(errno.MetaIsNotLeader).Error())
 }
+
+func TestSnapshotV2(t *testing.T) {
+	mockStore := NewMockRPCStore()
+	mockStore.stat = raft.Follower
+
+	msg := message.NewMetaMessage(message.SnapshotV2RequestMessage, &message.SnapshotV2Request{
+		Index: 2,
+	})
+	h := New(msg.Type())
+	h.InitHandler(mockStore, nil, nil)
+	require.NoError(t, h.SetRequestMsg(msg.Data()))
+
+	respMsg, err := h.Process()
+	require.NoError(t, err)
+
+	resp, ok := respMsg.(*message.SnapshotV2Response)
+	require.True(t, ok)
+	require.Equal(t, resp.Err, errno.NewError(errno.MetaIsNotLeader).Error())
+}
+
+func Test_CreateSqlNode(t *testing.T) {
+	mockStore := NewMockRPCStore()
+	mockStore.stat = raft.Follower
+
+	msg := message.NewMetaMessage(message.CreateSqlNodeRequestMessage, &message.CreateSqlNodeRequest{
+		HttpHost:   "",
+		GossipHost: "",
+	})
+	h := New(msg.Type())
+	h.InitHandler(mockStore, nil, nil)
+	require.NoError(t, h.SetRequestMsg(msg.Data()))
+
+	respMsg, err := h.Process()
+	require.NoError(t, err)
+
+	resp, ok := respMsg.(*message.CreateSqlNodeResponse)
+	require.True(t, ok)
+	require.Equal(t, resp.Err, "")
+	h.Instance()
+	msg1 := message.NewMetaMessage(message.SnapshotV2RequestMessage, &message.SnapshotV2Request{
+		Index: 2,
+	})
+	h1 := New(msg.Type())
+	h1.InitHandler(mockStore, nil, nil)
+	require.Error(t, h1.SetRequestMsg(msg1.Data()))
+}

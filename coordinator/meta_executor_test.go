@@ -42,6 +42,9 @@ func TestMetaExecutor(t *testing.T) {
 	err = me.EachDBNodes("db0", func(nodeID uint64, pts []uint32) error { return nil })
 	assert.NoError(t, err)
 
+	err = me.EachDBNodes("db1", func(nodeID uint64, pts []uint32) error { return nil })
+	assert.NoError(t, err)
+
 }
 
 type MockMetaClient struct {
@@ -51,6 +54,10 @@ type MockMetaClient struct {
 func (c *MockMetaClient) GetNodePtsMap(database string) (map[uint64][]uint32, error) {
 	if database == "dbpt_not_exists" {
 		return nil, errno.NewError(errno.DatabaseNotFound, database)
+	} else if database == "db1" {
+		nodePtMap := make(map[uint64][]uint32, 1)
+		nodePtMap[0] = append(nodePtMap[0], 0)
+		return nodePtMap, nil
 	}
 	return nil, nil
 }

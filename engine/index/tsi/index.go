@@ -42,13 +42,6 @@ import (
 	"github.com/savsgio/dictpool"
 )
 
-const (
-	defaultTSIDCacheSize     = 128 << 20
-	defaultSKeyCacheSize     = 128 << 20
-	defaultTagCacheSize      = 512 << 20
-	defaultTagFilterCostSize = 16 << 20 // 16MB
-)
-
 var (
 	sequenceID = uint64(time.Now().Unix())
 )
@@ -252,7 +245,7 @@ func (gs GroupSeries) SeriesCnt() int {
 
 type Index interface {
 	CreateIndexIfNotExists(mmRows *dictpool.Dict) error
-	GetSeriesIdBySeriesKey(key, name []byte) (uint64, error)
+	GetSeriesIdBySeriesKey(key []byte) (uint64, error)
 	SearchSeries(series [][]byte, name []byte, condition influxql.Expr, tr TimeRange) ([][]byte, error)
 	SearchSeriesWithOpts(span *tracing.Span, name []byte, opt *query.ProcessorOptions, callBack func(num int64) error, _ interface{}) (GroupSeries, int64, error)
 	SeriesCardinality(name []byte, condition influxql.Expr, tr TimeRange) (uint64, error)

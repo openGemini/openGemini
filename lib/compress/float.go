@@ -67,7 +67,7 @@ func (c *Float) AdaptiveEncoding(in []byte, out []byte) ([]byte, error) {
 
 	var err error
 	func() {
-		if ctx.Snappy() {
+		if ctx.Snappy() || ctx.extremeDataValues {
 			out = append(out, floatCompressedSnappy<<4)
 			out, err = SnappyEncoding(in, out)
 			return
@@ -119,8 +119,9 @@ type Context struct {
 	valueCount    int
 	distinctCount int
 
-	intOnly     bool // All values are integers
-	lessDecimal bool
+	intOnly           bool // All values are integers
+	lessDecimal       bool
+	extremeDataValues bool //extreme data values
 }
 
 var contextPool sync.Pool
@@ -142,6 +143,7 @@ func (ctx *Context) reset() {
 	ctx.distinctCount = 1
 	ctx.intOnly = true
 	ctx.lessDecimal = true
+	ctx.extremeDataValues = false
 }
 
 func (ctx *Context) NotCompress() bool {
@@ -172,6 +174,10 @@ func GenerateContext(values []float64) *Context {
 	for i := range values {
 		if i > 0 && values[i] != values[i-1] {
 			distinctCount++
+		}
+
+		if !ctx.extremeDataValues && math.IsNaN(values[i]) {
+			ctx.extremeDataValues = true
 		}
 	}
 	ctx.distinctCount = distinctCount

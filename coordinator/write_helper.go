@@ -24,7 +24,8 @@ import (
 	"time"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/fasttime"
-	"github.com/apache/arrow/go/arrow/array"
+	"github.com/apache/arrow/go/v13/arrow"
+	"github.com/apache/arrow/go/v13/arrow/array"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logstore"
@@ -57,6 +58,7 @@ type writeHelper struct {
 	pw         *PointsWriter
 	sameSchema bool
 	sameSg     bool
+	sameMst    bool
 	preSg      *meta2.ShardGroupInfo
 	preMst     *meta2.MeasurementInfo
 
@@ -76,13 +78,21 @@ func (wh *writeHelper) createMeasurement(database, retentionPolicy, name string)
 	return createMeasurement(database, retentionPolicy, name, wh.pw.MetaClient, &wh.preMst, &wh.sameSchema, config.TSSTORE)
 }
 
-func (wh *writeHelper) updateSchemaIfNeeded(database, rp string, r *influx.Row, mst *meta2.MeasurementInfo,
+func (wh *writeHelper) sameMeasurement(name string) {
+	if wh.preMst == nil {
+		wh.sameMst = false
+		return
+	}
+	wh.sameMst = wh.preMst.OriginName() == name
+}
+
+func (wh *writeHelper) updateSchemaCheck(database, rp string, r *influx.Row, mst *meta2.MeasurementInfo,
 	originName string, fieldToCreatePool []*proto2.FieldSchema) ([]*proto2.FieldSchema, bool, error) {
-	// update schema if needed
 	schemaMap := mst.Schema
 	var dropTagIndex []int
 	var err error
 	var pkCount int
+
 	// check tag need to add or not
 	for i, tag := range r.Tags {
 		if tag.Key == "time" {
@@ -156,7 +166,23 @@ func (wh *writeHelper) updateSchemaIfNeeded(database, rp string, r *influx.Row, 
 			return fieldToCreatePool, true, err
 		}
 	}
+	return fieldToCreatePool, false, err
+}
 
+func (wh *writeHelper) updateSchemaIfNeeded(database, rp string, r *influx.Row, mst *meta2.MeasurementInfo,
+	originName string, fieldToCreatePool []*proto2.FieldSchema) ([]*proto2.FieldSchema, bool, error) {
+	// update schema if needed
+	var err error
+	var isDropRow bool
+
+	mst.SchemaLock.RLock()
+	if fieldToCreatePool, isDropRow, err = wh.updateSchemaCheck(database, rp, r, mst, originName, fieldToCreatePool); err != nil {
+		if isDropRow {
+			mst.SchemaLock.RUnlock()
+			return fieldToCreatePool, isDropRow, err
+		}
+	}
+	mst.SchemaLock.RUnlock()
 	if len(fieldToCreatePool) > 0 {
 		start := time.Now()
 		if errInner := wh.pw.MetaClient.UpdateSchema(database, rp, originName, fieldToCreatePool); errInner != nil {
@@ -192,6 +218,7 @@ func (wh *writeHelper) reset() {
 	wh.preMst = nil
 	wh.sameSchema = false
 	wh.sameSg = false
+	wh.sameMst = false
 	wh.mstPrimaryKeyRowMap = nil
 	wh.pkLength = 0
 }
@@ -328,9 +355,11 @@ func (wh *recordWriterHelper) checkAndUpdateRecordSchema(db, rp, mst, originName
 		schema := make([]record.Field, 0, rec.ColNums())
 		wh.preSchema = &schema
 	}
+	wh.preMst.SchemaLock.RLock()
 	for i := 0; i < colNum; i++ {
 		// key field name protection
 		if rec.Schema.Field(i).Name == record.SeqIDField {
+			wh.preMst.SchemaLock.RUnlock()
 			err = errno.NewError(errno.KeyWordConflictErr, mst, rec.Schema.Field(i).Name)
 			return
 		}
@@ -343,7 +372,7 @@ func (wh *recordWriterHelper) checkAndUpdateRecordSchema(db, rp, mst, originName
 			*wh.preSchema = append(*wh.preSchema, *rec.Schema.Field(i))
 		}
 	}
-
+	wh.preMst.SchemaLock.RUnlock()
 	if len(timeCol.IntegerValues()) == 0 {
 		err = errno.NewError(errno.ArrowRecordTimeFieldErr)
 		return
@@ -360,7 +389,7 @@ func (wh *recordWriterHelper) checkAndUpdateRecordSchema(db, rp, mst, originName
 	return
 }
 
-func (wh *recordWriterHelper) checkAndUpdateSchema(db, rp, mst, originName string, rec array.Record) (startTime, endTime int64, r *record.Record, err error) {
+func (wh *recordWriterHelper) checkAndUpdateSchema(db, rp, mst, originName string, rec arrow.Record) (startTime, endTime int64, r *record.Record, err error) {
 	wh.fieldToCreatePool = wh.fieldToCreatePool[:0]
 	// check the number of columns
 	if rec.NumCols() <= 1 {
@@ -400,6 +429,7 @@ func (wh *recordWriterHelper) checkAndUpdateSchema(db, rp, mst, originName strin
 		schema := make([]record.Field, 0, rec.NumCols())
 		wh.preSchema = &schema
 	}
+	wh.preMst.SchemaLock.Lock()
 	for i := 0; i < colNum; i++ {
 		colType, ok := wh.preMst.Schema[rec.ColumnName(i)]
 		fieldType := record.ArrowTypeToNativeType(rec.Column(i).DataType())
@@ -415,6 +445,7 @@ func (wh *recordWriterHelper) checkAndUpdateSchema(db, rp, mst, originName strin
 			if (colType == influx.Field_Type_Tag && fieldType != influx.Field_Type_String) ||
 				(colType != influx.Field_Type_Tag && fieldType != int(colType)) {
 				err = errno.NewError(errno.ColumnStoreFieldTypeErr, mst, rec.ColumnName(i), fieldType, colType)
+				wh.preMst.SchemaLock.Unlock()
 				return
 			}
 		}
@@ -422,6 +453,7 @@ func (wh *recordWriterHelper) checkAndUpdateSchema(db, rp, mst, originName strin
 			*wh.preSchema = append(*wh.preSchema, record.Field{Name: rec.ColumnName(i), Type: fieldType})
 		}
 	}
+	wh.preMst.SchemaLock.Unlock()
 	startTime, endTime = times.Value(0), times.Value(int(rec.NumRows()-1))
 	if !samePreSchema {
 		*wh.preSchema = append(*wh.preSchema, record.Field{Name: record.TimeField, Type: influx.Field_Type_Int})
@@ -509,7 +541,7 @@ func (wc *writeRecCtx) Reset() {
 
 type ComMetaClient interface {
 	Measurement(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error)
-	CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *influxql.IndexRelation, engineType config.EngineType,
+	CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, numOfShards int32, indexR *influxql.IndexRelation, engineType config.EngineType,
 		colStoreInfo *meta2.ColStoreInfo, schemaInfo []*proto2.FieldSchema, options *meta2.Options) (*meta2.MeasurementInfo, error)
 	CreateShardGroup(database, policy string, timestamp time.Time, version uint32, engineType config.EngineType) (*meta2.ShardGroupInfo, error)
 }
@@ -530,7 +562,7 @@ func createMeasurement(database, retentionPolicy, name string, client ComMetaCli
 	mst, err := client.Measurement(database, retentionPolicy, name)
 	if err == meta2.ErrMeasurementNotFound {
 		ski := &meta2.ShardKeyInfo{ShardKey: nil, Type: influxql.HASH}
-		mst, err = client.CreateMeasurement(database, retentionPolicy, name, ski, nil, engineType, nil, nil, nil)
+		mst, err = client.CreateMeasurement(database, retentionPolicy, name, ski, 0, nil, engineType, nil, nil, nil)
 	}
 
 	if err == nil {

@@ -223,10 +223,18 @@ func (uw *unmarshalWork) Unmarshal() {
 	putUnmarshalWork(uw)
 }
 
+func (uw *unmarshalWork) Cancel(reason string) {
+	uw.Callback(uw.Db, nil, fmt.Errorf(reason))
+}
+
 // ScheduleUnmarshalWork schedules uw to run in the worker pool.
 //
 // It is expected that StartUnmarshalWorkers is already called.
 func ScheduleUnmarshalWork(uw UnmarshalWork) {
+	if stopped {
+		uw.Cancel("server is closing")
+		return
+	}
 	unmarshalWorkCh <- uw
 }
 
@@ -234,6 +242,7 @@ func ScheduleUnmarshalWork(uw UnmarshalWork) {
 type UnmarshalWork interface {
 	// Unmarshal must implement CPU-bound unmarshal work.
 	Unmarshal()
+	Cancel(reason string)
 }
 
 // StartUnmarshalWorkers starts unmarshal workers.
@@ -249,6 +258,10 @@ func StartUnmarshalWorkers() {
 		go func() {
 			defer unmarshalWorkersWG.Done()
 			for uw := range unmarshalWorkCh {
+				if stopped {
+					uw.Cancel("server is closing")
+					continue
+				}
 				uw.Unmarshal()
 			}
 		}()
@@ -259,6 +272,22 @@ func StartUnmarshalWorkers() {
 //
 // No more calles to ScheduleUnmarshalWork are allowed after callsing stopUnmarshalWorkers
 func StopUnmarshalWorkers() {
+	stopped = true
+
+	timer := time.NewTimer(2 * time.Second)
+	for {
+		select {
+		case uw := <-unmarshalWorkCh:
+			// consume uw stuck by the unmarshalWorkCh chan capacity
+			uw.Cancel("server is closing")
+			continue
+		case <-timer.C:
+			break
+		default:
+			break
+		}
+		break
+	}
 	close(unmarshalWorkCh)
 	unmarshalWorkersWG.Wait()
 	unmarshalWorkCh = nil
@@ -267,4 +296,5 @@ func StopUnmarshalWorkers() {
 var (
 	unmarshalWorkCh    chan UnmarshalWork
 	unmarshalWorkersWG sync.WaitGroup
+	stopped            bool
 )

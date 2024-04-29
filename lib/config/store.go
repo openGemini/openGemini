@@ -22,6 +22,7 @@ import (
 	"math"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/influxdata/influxdb/pkg/tlsconfig"
@@ -30,40 +31,29 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/iodetector"
 	"github.com/openGemini/openGemini/lib/memory"
+	"github.com/openGemini/openGemini/lib/util"
 	httpdConf "github.com/openGemini/openGemini/lib/util/lifted/influx/httpd/config"
 	"github.com/openGemini/openGemini/services/stream"
 )
 
 const (
-	EngineType1                         = "tssp1"
-	EngineType2                         = "tssp2"
-	DefaultEngine                       = "tssp1"
-	DefaultImmutableMaxMemoryPercent    = 10
-	DefaultCompactFullWriteColdDuration = 1 * time.Hour
+	EngineType1                      = "tssp1"
+	EngineType2                      = "tssp2"
+	DefaultEngine                    = "tssp1"
+	DefaultImmutableMaxMemoryPercent = 10
 
 	KB = 1024
 	MB = 1024 * 1024
 	GB = 1024 * 1024 * 1024
 
-	// DefaultMaxConcurrentCompactions is the maximum number of concurrent full and level compactions
-	// that can run at one time.  A value of 0 results in 50% of runtime.GOMAXPROCS(0) used at runtime.
-	DefaultMaxConcurrentCompactions = 0
-
-	DefaultWriteColdDuration = 5 * time.Second
-
-	DefaultSnapshotThroughput       = 48 * MB
-	DefaultSnapshotThroughputBurst  = 48 * MB
-	DefaultBackGroundReadThroughput = 64 * MB
-	DefaultMaxWriteHangTime         = 15 * time.Second
-	DefaultWALSyncInterval          = 100 * time.Millisecond
-	DefaultWalReplayBatchSize       = 1 * MB // 1MB
-	DefaultReadMetaCachePercent     = 3
-	DefaultReadDataCachePercent     = 10
-
 	DefaultIngesterAddress = "127.0.0.1:8400"
 	DefaultSelectAddress   = "127.0.0.1:8401"
 
 	DefaultInterruptSqlMemPct = 90
+
+	CompressAlgoLZ4    = "lz4"
+	CompressAlgoSnappy = "snappy"
+	CompressAlgoZSTD   = "zstd"
 
 	IndexFileDirectory = "index"
 	DataDirectory      = "data"
@@ -71,10 +61,12 @@ const (
 	MetaDirectory      = "meta"
 )
 
-var ReadMetaCachePct = DefaultReadMetaCachePercent
-var ReadDataCachePct = DefaultReadDataCachePercent
-
-var storeConfig = Store{}
+var storeConfig = Store{
+	Merge:     defaultMerge(),
+	MemTable:  NewMemTableConfig(),
+	Wal:       NewWalConfig(),
+	ReadCache: NewReadCacheConfig(),
+}
 
 func SetStoreConfig(conf Store) {
 	storeConfig = conf
@@ -109,6 +101,9 @@ type TSStore struct {
 	Meta       *Meta            `toml:"meta"`
 	ClvConfig  *ClvConfig       `toml:"clv_config"`
 	SelectSpec SelectSpecConfig `toml:"spec-limit"`
+
+	// index
+	Index *Index `toml:"index"`
 }
 
 // NewTSStore returns an instance of Config with reasonable defaults.
@@ -118,6 +113,7 @@ func NewTSStore(enableGossip bool) *TSStore {
 	c.Common = NewCommon()
 	c.Data = NewStore()
 	c.Coordinator = NewCoordinator()
+	c.Index = NewIndex()
 
 	c.Monitor = NewMonitor(AppStore)
 	c.HTTPD = httpdConf.NewConfig()
@@ -222,49 +218,29 @@ type Store struct {
 	// The max inmem percent of immutable
 	ImmTableMaxMemoryPercentage int `toml:"imm-table-max-memory-percentage"`
 
-	// Compaction options for tssp1 (descriptions above with defaults)
-	CompactFullWriteColdDuration toml.Duration `toml:"compact-full-write-cold-duration"`
-	MaxConcurrentCompactions     int           `toml:"max-concurrent-compactions"`
-	MaxFullCompactions           int           `toml:"max-full-compactions"`
-	CompactThroughput            toml.Size     `toml:"compact-throughput"`
-	CompactThroughputBurst       toml.Size     `toml:"compact-throughput-burst"`
-	SnapshotThroughput           toml.Size     `toml:"snapshot-throughput"`
-	SnapshotThroughputBurst      toml.Size     `toml:"snapshot-throughput-burst"`
-	BackGroundReadThroughput     toml.Size     `toml:"back-ground-read-throughput"`
-	CompactionMethod             int           `toml:"compaction-method"` // 0:auto, 1: streaming, 2: non-streaming
+	// configs for compact
+	Compact Compact `toml:"compact"`
 
-	// Configs for snapshot
-	WriteColdDuration      toml.Duration `toml:"write-cold-duration"`
-	ShardMutableSizeLimit  toml.Size     `toml:"shard-mutable-size-limit"`
-	NodeMutableSizeLimit   toml.Size     `toml:"node-mutable-size-limit"`
-	MaxWriteHangTime       toml.Duration `toml:"max-write-hang-time"`
-	MemDataReadEnabled     bool          `toml:"mem-data-read-enabled"`
-	CsCompactionEnabled    bool          `toml:"column-store-compact-enabled"`
-	CsDetachedFlushEnabled bool          `toml:"column-store-detached-flush-enabled"`
-	SnapshotTblNum         int           `toml:"snapshot-table-number"`
-	FragmentsNumPerFlush   int           `toml:"fragments-num-per-flush"`
+	// configs for memTable
+	MemTable MemTable `toml:"memtable"`
 
-	WalSyncInterval    toml.Duration `toml:"wal-sync-interval"`
-	WalEnabled         bool          `toml:"wal-enabled"`
-	WalReplayParallel  bool          `toml:"wal-replay-parallel"`
-	WalReplayAsync     bool          `toml:"wal-replay-async"`
-	WalReplayBatchSize toml.Size     `toml:"wal-replay-batch-size"`
-	CacheDataBlock     bool          `toml:"cache-table-data-block"`
-	CacheMetaBlock     bool          `toml:"cache-table-meta-block"`
-	EnableMmapRead     bool          `toml:"enable-mmap-read"`
-	Readonly           bool          `toml:"readonly"`
-	CompactRecovery    bool          `toml:"compact-recovery"`
+	// configs for wal
+	Wal Wal `toml:"wal"`
 
-	ReadPageSize         string    `toml:"read-page-size"`
-	ReadMetaCacheEn      toml.Size `toml:"enable-meta-cache"`
-	ReadMetaCacheEnPct   toml.Size `toml:"read-meta-cache-limit-pct"`
-	ReadDataCacheEn      toml.Size `toml:"enable-data-cache"`
-	ReadDataCacheEnPct   toml.Size `toml:"read-data-cache-limit-pct"`
-	WriteConcurrentLimit int       `toml:"write-concurrent-limit"`
-	OpenShardLimit       int       `toml:"open-shard-limit"`
-	MaxSeriesPerDatabase int       `toml:"max-series-per-database"`
+	// configs for readCache
+	ReadCache ReadCache `toml:"readcache"`
 
-	DownSampleWriteDrop bool `toml:"downsample-write-drop"`
+	CacheDataBlock bool `toml:"cache-table-data-block"`
+	CacheMetaBlock bool `toml:"cache-table-meta-block"`
+	EnableMmapRead bool `toml:"enable-mmap-read"`
+	Readonly       bool `toml:"readonly"`
+
+	WriteConcurrentLimit int `toml:"write-concurrent-limit"`
+	OpenShardLimit       int `toml:"open-shard-limit"`
+	MaxSeriesPerDatabase int `toml:"max-series-per-database"`
+
+	DownSampleWriteDrop          bool `toml:"downsample-write-drop"`
+	ShardMoveLayoutSwitchEnabled bool `toml:"shard-move-layout-switch"`
 
 	//parallelism allocator
 	MaxWaitResourceTime          toml.Duration `toml:"max-wait-resource-time"`
@@ -291,13 +267,21 @@ type Store struct {
 	TemporaryIndexCompressMode int  `toml:"temporary-index-compress-mode"`
 	ChunkMetaCompressMode      int  `toml:"chunk-meta-compress-mode"`
 	IndexReadCachePersistent   bool `toml:"index-read-cache-persistent"`
+
+	StringCompressAlgo string `toml:"string-compress-algo"`
+	// Ordered data and unordered data are not distinguished. All data is processed as unordered data.
+	UnorderedOnly bool `toml:"unordered-only"`
+
+	Merge Merge `toml:"merge"`
+
+	MaxRowsPerSegment int `toml:"max-rows-per-segment"`
+
+	// for hierarchical storage
+	SkipRegisterColdShard bool `toml:"skip-register-cold-shard"`
 }
 
 // NewStore returns the default configuration for tsdb.
 func NewStore() Store {
-	size, _ := memory.SysMem()
-	memorySize := toml.Size(size * KB)
-	ReadMetaCacheEn := getReadMetaCacheLimitSize(uint64(memorySize))
 	return Store{
 		IngesterAddress:              DefaultIngesterAddress,
 		SelectAddress:                DefaultSelectAddress,
@@ -306,26 +290,14 @@ func NewStore() Store {
 		MetaDir:                      filepath.Join(openGeminiDir(), MetaDirectory),
 		Engine:                       DefaultEngine,
 		ImmTableMaxMemoryPercentage:  DefaultImmutableMaxMemoryPercent,
-		CompactFullWriteColdDuration: toml.Duration(DefaultCompactFullWriteColdDuration),
-		MaxConcurrentCompactions:     DefaultMaxConcurrentCompactions,
-		MaxFullCompactions:           1,
-		SnapshotThroughput:           toml.Size(DefaultSnapshotThroughput),
-		SnapshotThroughputBurst:      toml.Size(DefaultSnapshotThroughputBurst),
-		WriteColdDuration:            toml.Duration(DefaultWriteColdDuration),
-		MaxWriteHangTime:             toml.Duration(DefaultMaxWriteHangTime),
-		MemDataReadEnabled:           true,
+		Compact:                      NewCompactConfig(),
+		MemTable:                     NewMemTableConfig(),
+		Wal:                          NewWalConfig(),
+		ReadCache:                    NewReadCacheConfig(),
 		CacheDataBlock:               false,
 		CacheMetaBlock:               false,
 		EnableMmapRead:               false,
-		ReadMetaCacheEn:              toml.Size(ReadMetaCacheEn),
 		WriteConcurrentLimit:         0,
-		WalSyncInterval:              toml.Duration(DefaultWALSyncInterval),
-		WalEnabled:                   true,
-		WalReplayParallel:            false,
-		WalReplayAsync:               false,
-		WalReplayBatchSize:           DefaultWalReplayBatchSize,
-		CompactRecovery:              true,
-		CompactionMethod:             0,
 		OpsMonitor:                   NewOpsMonitorConfig(),
 		OpenShardLimit:               0,
 		DownSampleWriteDrop:          true,
@@ -334,6 +306,11 @@ func NewStore() Store {
 		InterruptQuery:               true,
 		InterruptSqlMemPct:           DefaultInterruptSqlMemPct,
 		IndexReadCachePersistent:     false,
+		StringCompressAlgo:           CompressAlgoSnappy,
+		Merge:                        defaultMerge(),
+		MaxRowsPerSegment:            util.DefaultMaxRowsPerSegment4TsStore,
+		ShardMoveLayoutSwitchEnabled: false,
+		SkipRegisterColdShard:        true,
 	}
 }
 
@@ -348,20 +325,20 @@ func (c *Store) Corrector(cpuNum int, memorySize toml.Size) {
 	if c.OpenShardLimit <= 0 {
 		c.OpenShardLimit = cpuNum
 	}
-	SetReadMetaCachePct(int(c.ReadMetaCacheEnPct))
-	if c.ReadMetaCacheEn != 0 {
-		c.ReadMetaCacheEn = toml.Size(getReadMetaCacheLimitSize(uint64Limit(8*GB, 512*GB, uint64(memorySize))))
+	SetReadMetaCachePct(int(c.ReadCache.ReadMetaCacheEnPct))
+	if c.ReadCache.ReadMetaCacheEn != 0 {
+		c.ReadCache.ReadMetaCacheEn = toml.Size(getReadMetaCacheLimitSize(uint64Limit(8*GB, 512*GB, uint64(memorySize))))
 	}
-	SetReadDataCachePct(int(c.ReadDataCacheEnPct))
-	if c.ReadDataCacheEn != 0 {
-		c.ReadDataCacheEn = toml.Size(getReadDataCacheLimitSize(uint64Limit(8*GB, 512*GB, uint64(memorySize))))
+	SetReadDataCachePct(int(c.ReadCache.ReadDataCacheEnPct))
+	if c.ReadCache.ReadDataCacheEn != 0 {
+		c.ReadCache.ReadDataCacheEn = toml.Size(getReadDataCacheLimitSize(uint64Limit(8*GB, 512*GB, uint64(memorySize))))
 	}
 	defaultShardMutableSizeLimit := toml.Size(uint64Limit(8*MB, 1*GB, uint64(memorySize/256)))
 	defaultNodeMutableSizeLimit := toml.Size(uint64Limit(32*MB, 16*GB, uint64(memorySize/16)))
 
 	items := [][2]*toml.Size{
-		{&c.ShardMutableSizeLimit, &defaultShardMutableSizeLimit},
-		{&c.NodeMutableSizeLimit, &defaultNodeMutableSizeLimit},
+		{&c.MemTable.ShardMutableSizeLimit, &defaultShardMutableSizeLimit},
+		{&c.MemTable.NodeMutableSizeLimit, &defaultNodeMutableSizeLimit},
 	}
 
 	for i := range items {
@@ -370,6 +347,7 @@ func (c *Store) Corrector(cpuNum int, memorySize toml.Size) {
 		}
 	}
 
+	c.StringCompressAlgo = strings.ToLower(c.StringCompressAlgo)
 	c.CorrectorThroughput(cpuNum)
 }
 
@@ -405,11 +383,11 @@ func (c *Store) CorrectorThroughput(cpuNum int) {
 		defaultSnapshotThroughputBurst = DefaultSnapshotThroughput * 8
 		defaultBackGroundReadThroughput = DefaultBackGroundReadThroughput * 8
 	}
-	c.CompactThroughput = defaultCompactThroughput
-	c.CompactThroughputBurst = defaultCompactThroughputBurst
-	c.SnapshotThroughput = defaultSnapshotThroughput
-	c.SnapshotThroughputBurst = defaultSnapshotThroughputBurst
-	c.BackGroundReadThroughput = defaultBackGroundReadThroughput
+	c.Compact.CompactThroughput = defaultCompactThroughput
+	c.Compact.CompactThroughputBurst = defaultCompactThroughputBurst
+	c.Compact.SnapshotThroughput = defaultSnapshotThroughput
+	c.Compact.SnapshotThroughputBurst = defaultSnapshotThroughputBurst
+	c.Compact.BackGroundReadThroughput = defaultBackGroundReadThroughput
 }
 
 // Validate validates the configuration hold by c.
@@ -420,7 +398,7 @@ func (c Store) Validate() error {
 		{"data store-data-dir", c.DataDir},
 		{"data store-meta-dir", c.MetaDir},
 	}
-	if c.WalEnabled {
+	if c.Wal.WalEnabled {
 		svItems = append(svItems, stringValidatorItem{"data store-wal-dir", c.WALDir})
 	}
 	if err := (stringValidator{}).Validate(svItems); err != nil {
@@ -428,11 +406,11 @@ func (c Store) Validate() error {
 	}
 
 	ivItems := []intValidatorItem{
-		{"data max-concurrent-compactions", int64(c.MaxConcurrentCompactions), true},
-		{"data max-full-compactions", int64(c.MaxFullCompactions), true},
+		{"data max-concurrent-compactions", int64(c.Compact.MaxConcurrentCompactions), true},
+		{"data max-full-compactions", int64(c.Compact.MaxFullCompactions), true},
 		{"data imm-table-max-memory-percentage", int64(c.ImmTableMaxMemoryPercentage), false},
-		{"data write-cold-duration", int64(c.WriteColdDuration), false},
-		{"data max-write-hang-time", int64(c.MaxWriteHangTime), false},
+		{"data write-cold-duration", int64(c.MemTable.WriteColdDuration), false},
+		{"data max-write-hang-time", int64(c.MemTable.MaxWriteHangTime), false},
 	}
 	iv := intValidator{0, math.MaxInt64}
 	if err := iv.Validate(ivItems); err != nil {
@@ -483,26 +461,6 @@ func NewOpsMonitorConfig() *OpsMonitor {
 	}
 }
 
-func SetReadMetaCachePct(pct int) {
-	if pct > 0 && pct < 100 {
-		ReadMetaCachePct = pct
-	}
-}
-
-func SetReadDataCachePct(pct int) {
-	if pct > 0 && pct < 100 {
-		ReadDataCachePct = pct
-	}
-}
-
-func getReadMetaCacheLimitSize(size uint64) uint64 {
-	return size * uint64(ReadMetaCachePct) / 100
-}
-
-func getReadDataCacheLimitSize(size uint64) uint64 {
-	return size * uint64(ReadDataCachePct) / 100
-}
-
 type ClvConfig struct {
 	QMax      int    `toml:"q-max"`
 	Threshold int    `toml:"token-threshold"`
@@ -512,4 +470,41 @@ type ClvConfig struct {
 
 func NewClvConfig() *ClvConfig {
 	return &ClvConfig{}
+}
+
+const (
+	defaultMaxUnorderedFileSize   = 8 * GB
+	defaultMaxUnorderedFileNumber = 64
+	defaultMinUnorderedFileSize   = 1 * MB
+	defaultMinUnorderedFileNumber = 5
+	defaultMinInterval            = 300 * time.Second
+	defaultMaxMergeSelfFileSize   = 1 * GB
+)
+
+type Merge struct {
+	// The total size of unordered files to be merged each time cannot exceed MaxUnorderedFileSize
+	MaxUnorderedFileSize toml.Size `toml:"max-unordered-file-size"`
+	// The number of unordered files to be merged each time cannot exceed MaxUnorderedFileNumber
+	MaxUnorderedFileNumber int `toml:"max-unordered-file-number"`
+	// If the number of unordered files is less than MinUnorderedFileNumber
+	// and the total size of unordered files is less than MinUnorderedFileSize
+	// and the interval between the last merge and the current time is less than MinInterval
+	// skip the merge
+	MinUnorderedFileNumber int           `toml:"min-unordered-file-number"`
+	MinUnorderedFileSize   toml.Size     `toml:"min-unordered-file-size"`
+	MinInterval            toml.Duration `toml:"min-interval"`
+
+	// The unordered files are merged self when the total size is less than MaxMergeSelfFileSize
+	MaxMergeSelfFileSize toml.Size `toml:"max-merge-self-file-size"`
+}
+
+func defaultMerge() Merge {
+	return Merge{
+		MaxUnorderedFileSize:   defaultMaxUnorderedFileSize,
+		MaxUnorderedFileNumber: defaultMaxUnorderedFileNumber,
+		MinUnorderedFileNumber: defaultMinUnorderedFileNumber,
+		MinUnorderedFileSize:   defaultMinUnorderedFileSize,
+		MinInterval:            toml.Duration(defaultMinInterval),
+		MaxMergeSelfFileSize:   defaultMaxMergeSelfFileSize,
+	}
 }

@@ -210,6 +210,7 @@ type Catalog interface {
 	HasAuxTag() bool
 	HasPercentileOGSketch() bool
 	Options() Options
+	PromResetTime() bool
 	Symbols() map[string]influxql.VarRef
 	Mapping() map[influxql.Expr]influxql.VarRef
 	Refs() map[string]*influxql.VarRef
@@ -236,6 +237,7 @@ type Catalog interface {
 	CanSeqAggPushDown() bool
 	CanCallsPushdown() bool
 	CanAggPushDown() bool
+	CanAggTagSet() bool
 	ContainSeriesIgnoreCall() bool
 	IsRefInQueryFields(ref *influxql.VarRef) bool
 	IsRefInSymbolFields(ref *influxql.VarRef) bool

@@ -35,7 +35,7 @@ splittingLine "end: check licence header"
 splittingLine "start: static check and other go lint"
 
 [[ -s "$GVM_ROOT/scripts/gvm" ]] && source "$GVM_ROOT/scripts/gvm"
-gvm use go1.19 -y --default
+gvm use go1.20 -y --default
 
 rm -f go.sum
 go mod tidy

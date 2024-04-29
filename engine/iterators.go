@@ -384,11 +384,9 @@ func (s *shard) createGroupCursors(span *tracing.Span, schema *executor.QuerySch
 		}
 	}
 
-	enableFileCursor := executor.GetEnableFileCursor() && schema.HasOptimizeAgg()
-
+	enableFileCursor := executor.IsEnableFileCursor(schema)
 	var startGroupIdx int
 	errs := make([]error, parallelism)
-
 	work := func(start, subTagSetN int, parallel bool, wg *sync.WaitGroup, tagSet *tsi.TagSetInfo) {
 		defer func() {
 			if parallel {
@@ -574,6 +572,10 @@ func (i *idKeyCursorContext) RefMemTables() {
 	i.memTables.Ref()
 }
 
+func (i *idKeyCursorContext) GetFilterOption() *immutable.BaseFilterOptions {
+	return &i.filterOption
+}
+
 func (i *idKeyCursorContext) Ref() {
 	i.RefFiles()
 	i.RefMemTables()
@@ -606,6 +608,10 @@ func (i *idKeyCursorContext) unRefFiles(files immutable.TableReaders) {
 
 func (i *idKeyCursorContext) UnRefMemTables() {
 	i.memTables.UnRef()
+}
+
+func (i *idKeyCursorContext) SetSchema(r record.Schemas) {
+	i.schema = r
 }
 
 func (s *shard) newLazyTagSetCursor(ctx *idKeyCursorContext, span *tracing.Span, schema *executor.QuerySchema,
@@ -760,8 +766,17 @@ func (s *shard) newAggTagSetCursor(ctx *idKeyCursorContext, span *tracing.Span, 
 func (s *shard) iteratorInit(ctx *idKeyCursorContext, span *tracing.Span, schema *executor.QuerySchema,
 	tagSet *tsi.TagSetInfo, start, step int, havePreAgg bool, notAggOnSeriesFunc func(m map[string]*influxql.Call) bool) (comm.KeyCursor, error) {
 	itr := NewFileLoopCursor(ctx, span, schema, tagSet, start, step, s)
-	if !notAggOnSeriesFunc(schema.Calls()) && (len(schema.Calls()) > 0 && !havePreAgg) {
-		return NewAggregateCursor(itr, schema, ctx.aggPool, ctx.hasAuxTags()), nil
+	// determine whether the aggregation without pre-agg or sampling can be pushed down to the time series.
+	if !notAggOnSeriesFunc(schema.Calls()) && (len(schema.Calls()) > 0 && (!havePreAgg || schema.Options().IsPromQuery())) {
+		if !schema.Options().IsPromQuery() {
+			return NewAggregateCursor(itr, schema, ctx.aggPool, ctx.hasAuxTags()), nil
+		}
+		if schema.Options().IsInstantVectorSelector() {
+			return NewInstantVectorCursor(itr, schema, ctx.aggPool), nil
+		}
+		if schema.Options().IsRangeVectorSelector() && len(schema.Calls()) > 0 {
+			return NewRangeVectorCursor(itr, schema, ctx.aggPool), nil
+		}
 	}
 	return itr, nil
 }
@@ -788,10 +803,15 @@ func itrsInit(ctx *idKeyCursorContext, span *tracing.Span, schema *executor.Quer
 			continue
 		}
 
-		var itrAgg *aggregateCursor
+		var itrAgg comm.KeyCursor
 		canNotAggOnSeries := CanNotAggOnSeriesFunc(schema.Calls())
-		if !canNotAggOnSeries && (len(schema.Calls()) > 0 && !havePreAgg) {
+		// determine whether the aggregation without pre-agg or sampling can be pushed down to the time series.
+		if !canNotAggOnSeries && (len(schema.Calls()) > 0 && !havePreAgg) && !schema.Options().IsPromQuery() {
 			itrAgg = NewAggregateCursor(itr, schema, ctx.aggPool, ctx.hasAuxTags())
+		} else if schema.Options().IsInstantVectorSelector() {
+			itrAgg = NewInstantVectorCursor(itr, schema, ctx.aggPool)
+		} else if schema.Options().IsRangeVectorSelector() && len(schema.Calls()) > 0 {
+			itrAgg = NewRangeVectorCursor(itr, schema, ctx.aggPool)
 		}
 		var itrLimit *limitCursor
 
@@ -843,9 +863,15 @@ func itrsInitWithLimit(ctx *idKeyCursorContext, span *tracing.Span, schema *exec
 		nowNode := topNList.head
 		for {
 			itr := nowNode.item
-			var itrAgg *aggregateCursor
-			if !canNotAggOnSeries && (len(schema.Calls()) > 0 && !havePreAgg) {
-				itrAgg = NewAggregateCursor(itr, schema, ctx.aggPool, ctx.hasAuxTags())
+			var itrAgg comm.KeyCursor
+			if !canNotAggOnSeries && (len(schema.Calls()) > 0 && (!havePreAgg || schema.Options().IsPromQuery())) {
+				if !schema.Options().IsPromQuery() {
+					itrAgg = NewAggregateCursor(itr, schema, ctx.aggPool, ctx.hasAuxTags())
+				} else if schema.Options().IsInstantVectorSelector() {
+					itrAgg = NewInstantVectorCursor(itr, schema, ctx.aggPool)
+				} else if schema.Options().IsRangeVectorSelector() && len(schema.Calls()) > 0 {
+					itrAgg = NewRangeVectorCursor(itr, schema, ctx.aggPool)
+				}
 			}
 			var itrLimit *limitCursor
 

@@ -38,7 +38,7 @@ func TestConfig_Parse(t *testing.T) {
 	configFile := t.TempDir() + "/sql.conf"
 	_ = os.WriteFile(configFile, []byte(txt), 0600)
 
-	conf := config.NewTSSql()
+	conf := config.NewTSSql(false)
 
 	// Parse configuration.
 	err := config.Parse(conf, configFile)
@@ -118,8 +118,8 @@ func TestTSMeta(t *testing.T) {
 	conf.Spdy.ConnPoolSize = 10
 	conf.Common.CPUNum = 10
 	conf.Data.WALDir = "/opt/gemini/wal"
-	conf.Data.MaxConcurrentCompactions = -1
-	conf.Data.MaxConcurrentCompactions = 10
+	conf.Data.Compact.MaxConcurrentCompactions = -1
+	conf.Data.Compact.MaxConcurrentCompactions = 10
 
 	conf.Gossip.Enabled = false
 	assert.NoError(t, conf.Gossip.Validate())
@@ -128,6 +128,7 @@ func TestTSMeta(t *testing.T) {
 	conf.Meta.Dir = "/opt/openGemini/meta"
 	conf.Gossip.MetaBindPort = 8011
 	conf.Gossip.StoreBindPort = 8012
+	conf.Gossip.SqlBindPort = 8013
 	conf.Gossip.BindAddr = "127.0.0.1"
 	conf.Spdy.ConnPoolSize = 10
 	conf.Common.CPUNum = 10
@@ -142,7 +143,7 @@ func TestTSMeta(t *testing.T) {
 }
 
 func TestTSSql(t *testing.T) {
-	conf := config.NewTSSql()
+	conf := config.NewTSSql(false)
 	conf.Spdy.ConnPoolSize = 10
 	conf.Common.CPUNum = 10
 
@@ -166,20 +167,20 @@ func TestTSStore(t *testing.T) {
 	assert.NoError(t, conf.Validate())
 	conf.Data.WALDir = "/opt/gemini/wal"
 
-	conf.Data.MaxConcurrentCompactions = -1
+	conf.Data.Compact.MaxConcurrentCompactions = -1
 	assert.EqualError(t, conf.Validate(), "data max-concurrent-compactions must be greater than 0. got: -1")
-	conf.Data.MaxConcurrentCompactions = 10
+	conf.Data.Compact.MaxConcurrentCompactions = 10
 
 	assert.NoError(t, conf.Validate())
 	assert.Equal(t, 10, conf.GetSpdy().ConnPoolSize)
 	assert.Equal(t, 10, conf.GetCommon().CPUNum)
 
-	conf.Data.ShardMutableSizeLimit = 0
+	conf.Data.MemTable.ShardMutableSizeLimit = 0
 	conf.Data.Corrector(0, 0)
-	assert.NotEqual(t, uint64(0), uint64(conf.Data.ShardMutableSizeLimit))
-	assert.NotEqual(t, uint64(0), uint64(conf.Data.CompactThroughput))
-	assert.NotEqual(t, uint64(0), uint64(conf.Data.CompactThroughputBurst))
-	assert.NotEqual(t, uint64(0), uint64(conf.Data.NodeMutableSizeLimit))
+	assert.NotEqual(t, uint64(0), uint64(conf.Data.MemTable.ShardMutableSizeLimit))
+	assert.NotEqual(t, uint64(0), uint64(conf.Data.Compact.CompactThroughput))
+	assert.NotEqual(t, uint64(0), uint64(conf.Data.Compact.CompactThroughputBurst))
+	assert.NotEqual(t, uint64(0), uint64(conf.Data.MemTable.NodeMutableSizeLimit))
 
 	eng := []string{config.EngineType1, config.EngineType2}
 	conf.Data.Engine = "invalid"
@@ -196,7 +197,7 @@ func TestTSStore(t *testing.T) {
 
 	maxSize := 600 * config.GB
 	conf.Data.Corrector(0, 600*config.GB)
-	assert.NotEqual(t, maxSize*3/100, conf.Data.ReadMetaCacheEn)
+	assert.NotEqual(t, maxSize*3/100, conf.Data.ReadCache.ReadMetaCacheEn)
 
 }
 
@@ -246,35 +247,35 @@ func TestTSStoreThroughput(t *testing.T) {
 	conf.Data.WALDir = "/opt/gemini/wal"
 
 	conf.Data.Corrector(conf.Common.CPUNum, 0)
-	assert.Equal(t, uint64(config.DefaultSnapshotThroughput), uint64(conf.Data.CompactThroughput))
-	assert.Equal(t, uint64(config.DefaultSnapshotThroughput), uint64(conf.Data.CompactThroughputBurst))
-	assert.Equal(t, uint64(config.DefaultSnapshotThroughput), uint64(conf.Data.SnapshotThroughput))
-	assert.Equal(t, uint64(config.DefaultSnapshotThroughput), uint64(conf.Data.SnapshotThroughputBurst))
-	assert.Equal(t, uint64(config.DefaultBackGroundReadThroughput), uint64(conf.Data.BackGroundReadThroughput))
+	assert.Equal(t, uint64(config.DefaultSnapshotThroughput), uint64(conf.Data.Compact.CompactThroughput))
+	assert.Equal(t, uint64(config.DefaultSnapshotThroughput), uint64(conf.Data.Compact.CompactThroughputBurst))
+	assert.Equal(t, uint64(config.DefaultSnapshotThroughput), uint64(conf.Data.Compact.SnapshotThroughput))
+	assert.Equal(t, uint64(config.DefaultSnapshotThroughput), uint64(conf.Data.Compact.SnapshotThroughputBurst))
+	assert.Equal(t, uint64(config.DefaultBackGroundReadThroughput), uint64(conf.Data.Compact.BackGroundReadThroughput))
 
 	conf.Common.CPUNum = 8
 	conf.Data.Corrector(conf.Common.CPUNum, 0)
-	assert.Equal(t, uint64(config.DefaultSnapshotThroughput*2), uint64(conf.Data.CompactThroughput))
-	assert.Equal(t, uint64(config.DefaultSnapshotThroughput*2), uint64(conf.Data.CompactThroughputBurst))
-	assert.Equal(t, uint64(config.DefaultSnapshotThroughput*2), uint64(conf.Data.SnapshotThroughput))
-	assert.Equal(t, uint64(config.DefaultSnapshotThroughput*2), uint64(conf.Data.SnapshotThroughputBurst))
-	assert.Equal(t, uint64(config.DefaultBackGroundReadThroughput*2), uint64(conf.Data.BackGroundReadThroughput))
+	assert.Equal(t, uint64(config.DefaultSnapshotThroughput*2), uint64(conf.Data.Compact.CompactThroughput))
+	assert.Equal(t, uint64(config.DefaultSnapshotThroughput*2), uint64(conf.Data.Compact.CompactThroughputBurst))
+	assert.Equal(t, uint64(config.DefaultSnapshotThroughput*2), uint64(conf.Data.Compact.SnapshotThroughput))
+	assert.Equal(t, uint64(config.DefaultSnapshotThroughput*2), uint64(conf.Data.Compact.SnapshotThroughputBurst))
+	assert.Equal(t, uint64(config.DefaultBackGroundReadThroughput*2), uint64(conf.Data.Compact.BackGroundReadThroughput))
 
 	conf.Common.CPUNum = 16
 	conf.Data.Corrector(conf.Common.CPUNum, 0)
-	assert.Equal(t, uint64(config.DefaultSnapshotThroughput*4), uint64(conf.Data.CompactThroughput))
-	assert.Equal(t, uint64(config.DefaultSnapshotThroughput*4), uint64(conf.Data.CompactThroughputBurst))
-	assert.Equal(t, uint64(config.DefaultSnapshotThroughput*4), uint64(conf.Data.SnapshotThroughput))
-	assert.Equal(t, uint64(config.DefaultSnapshotThroughput*4), uint64(conf.Data.SnapshotThroughputBurst))
-	assert.Equal(t, uint64(config.DefaultBackGroundReadThroughput*4), uint64(conf.Data.BackGroundReadThroughput))
+	assert.Equal(t, uint64(config.DefaultSnapshotThroughput*4), uint64(conf.Data.Compact.CompactThroughput))
+	assert.Equal(t, uint64(config.DefaultSnapshotThroughput*4), uint64(conf.Data.Compact.CompactThroughputBurst))
+	assert.Equal(t, uint64(config.DefaultSnapshotThroughput*4), uint64(conf.Data.Compact.SnapshotThroughput))
+	assert.Equal(t, uint64(config.DefaultSnapshotThroughput*4), uint64(conf.Data.Compact.SnapshotThroughputBurst))
+	assert.Equal(t, uint64(config.DefaultBackGroundReadThroughput*4), uint64(conf.Data.Compact.BackGroundReadThroughput))
 
 	conf.Common.CPUNum = 32
 	conf.Data.Corrector(conf.Common.CPUNum, 0)
-	assert.Equal(t, uint64(config.DefaultSnapshotThroughput*8), uint64(conf.Data.CompactThroughput))
-	assert.Equal(t, uint64(config.DefaultSnapshotThroughput*8), uint64(conf.Data.CompactThroughputBurst))
-	assert.Equal(t, uint64(config.DefaultSnapshotThroughput*8), uint64(conf.Data.SnapshotThroughput))
-	assert.Equal(t, uint64(config.DefaultSnapshotThroughput*8), uint64(conf.Data.SnapshotThroughputBurst))
-	assert.Equal(t, uint64(config.DefaultBackGroundReadThroughput*8), uint64(conf.Data.BackGroundReadThroughput))
+	assert.Equal(t, uint64(config.DefaultSnapshotThroughput*8), uint64(conf.Data.Compact.CompactThroughput))
+	assert.Equal(t, uint64(config.DefaultSnapshotThroughput*8), uint64(conf.Data.Compact.CompactThroughputBurst))
+	assert.Equal(t, uint64(config.DefaultSnapshotThroughput*8), uint64(conf.Data.Compact.SnapshotThroughput))
+	assert.Equal(t, uint64(config.DefaultSnapshotThroughput*8), uint64(conf.Data.Compact.SnapshotThroughputBurst))
+	assert.Equal(t, uint64(config.DefaultBackGroundReadThroughput*8), uint64(conf.Data.Compact.BackGroundReadThroughput))
 }
 
 func TestHAPolicy(t *testing.T) {
@@ -286,17 +287,17 @@ func TestHAPolicy(t *testing.T) {
 
 func TestTSStoreCorrector(t *testing.T) {
 	conf := config.NewTSStore(true)
-	conf.Data.ReadMetaCacheEn = 1
-	conf.Data.ReadMetaCacheEnPct = 5
-	conf.Data.ReadDataCacheEn = 1
-	conf.Data.ReadDataCacheEnPct = 15
+	conf.Data.ReadCache.ReadMetaCacheEn = 1
+	conf.Data.ReadCache.ReadMetaCacheEnPct = 5
+	conf.Data.ReadCache.ReadDataCacheEn = 1
+	conf.Data.ReadCache.ReadDataCacheEnPct = 15
 
 	assert.NoError(t, conf.Validate())
 	conf.Data.WALDir = "/opt/gemini/wal"
 
 	conf.Data.Corrector(conf.Common.CPUNum, 0)
-	assert.Equal(t, config.ReadMetaCachePct, int(conf.Data.ReadMetaCacheEnPct))
-	assert.Equal(t, config.ReadDataCachePct, int(conf.Data.ReadDataCacheEnPct))
+	assert.Equal(t, config.ReadMetaCachePct, int(conf.Data.ReadCache.ReadMetaCacheEnPct))
+	assert.Equal(t, config.ReadDataCachePct, int(conf.Data.ReadCache.ReadDataCacheEnPct))
 }
 
 func TestCompactType(t *testing.T) {

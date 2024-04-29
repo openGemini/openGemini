@@ -680,12 +680,14 @@ func (builder *ExecutorBuilder) SetInfosAndTraits(mstsReqs []*MultiMstReqs, ctx 
 	multiMstInfos := make([]*IndexScanExtraInfo, 0)
 	for _, mstReqs := range mstsReqs {
 		for _, r := range mstReqs.reqs {
-			info := &IndexScanExtraInfo{
-				Store: localStorageForQuery,
-				Req:   r,
-				ctx:   ctx,
+			for i := 0; i < len(r.ShardIDs); i++ {
+				info := &IndexScanExtraInfo{
+					Store: localStorageForQuery,
+					Req:   r,
+					ctx:   ctx,
+				}
+				multiMstInfos = append(multiMstInfos, info)
 			}
-			multiMstInfos = append(multiMstInfos, info)
 		}
 	}
 	builder.SetMultiMstInfosForLocalStore(multiMstInfos)

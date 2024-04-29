@@ -26,10 +26,12 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 	"unsafe"
 
 	"github.com/influxdata/influxdb/pkg/bloom"
 	"github.com/openGemini/openGemini/engine/immutable/colstore"
+	"github.com/openGemini/openGemini/engine/index"
 	"github.com/openGemini/openGemini/engine/index/sparseindex"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
@@ -42,6 +44,7 @@ import (
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"go.uber.org/zap"
 )
@@ -62,6 +65,7 @@ type MsBuilder struct {
 	localBFCount    int64 //the block count of a local bloomFilter file
 	trailerOffset   int64
 	fileSize        int64
+	RowCount        int64
 
 	fd             fileops.File
 	diskFileWriter fileops.FileWriter // encode data fileWriter
@@ -82,33 +86,45 @@ type MsBuilder struct {
 	msName    string // measurement name with version.
 	lock      *string
 	tier      uint64
+	ShardID   uint64
 
 	tcLocation         int8 // time cluster
 	Files              []TSSPFile
+	FilesInfo          []FileInfoExtend
 	FileName           TSSPFileName
+	obsOpt             *obs.ObsOptions
 	log                *logger.Logger
 	pkIndexWriter      sparseindex.PKIndexWriter
 	pkRec              []*record.Record
 	pkMark             []fragment.IndexFragment
-	skipIndex          *sparseindex.SkipIndex
+	indexWriterBuilder *index.IndexWriterBuilder
 	EncodeChunkDataImp EncodeChunkData
 }
 
-func NewMsBuilder(dir, name string, lockPath *string, conf *Config, idCount int, fileName TSSPFileName,
-	tier uint64, sequencer *Sequencer, estimateSize int, engineType config.EngineType) *MsBuilder {
+type FileInfoExtend struct {
+	FileInfo meta.FileInfo
+	Name     string
+}
+
+func NewMsBuilder(dir, name string, lockPath *string, conf *Config, idCount int, fileName TSSPFileName, tier uint64,
+	sequencer *Sequencer, estimateSize int, engineType config.EngineType, obsOpt *obs.ObsOptions, shardID uint64) *MsBuilder {
 	msBuilder := genMsBuilder(dir, name, lockPath, conf, idCount, tier, sequencer, estimateSize, engineType)
+	msBuilder.obsOpt = obsOpt
 	msBuilder.FileName = fileName
+	msBuilder.ShardID = shardID
 
 	lock := fileops.FileLockOption(*lockPath)
 	pri := fileops.FilePriorityOption(fileops.IO_PRIORITY_NORMAL)
 	dir = filepath.Join(dir, name)
 	_ = fileops.MkdirAll(dir, 0750, lock)
-	filePath := fileName.Path(dir, true)
+	filePath, fileName := genFilePath(dir, fileName, obsOpt, FlushRemoteEnabled(tier))
+	msBuilder.FileName = fileName
 	_, err := fileops.Stat(filePath)
 	if err == nil {
 		panic(fmt.Sprintf("file(%v) exist", filePath))
 	}
-	if tier == util.Cold {
+
+	if FlushRemoteEnabled(tier) {
 		msBuilder.fd, err = fileops.CreateV2(filePath, lock, pri)
 	} else {
 		msBuilder.fd, err = fileops.OpenFile(filePath, os.O_CREATE|os.O_RDWR, 0640, lock, pri)
@@ -121,7 +137,7 @@ func NewMsBuilder(dir, name string, lockPath *string, conf *Config, idCount int,
 	limit := fileName.level > 0
 	if msBuilder.cacheMetaInMemory() {
 		msBuilder.diskFileWriter = newTsspFileWriter(msBuilder.fd, true, limit, lockPath)
-		n := idCount/DefaultMaxChunkMetaItemCount + 1
+		n := idCount/util.DefaultMaxChunkMetaItemCount + 1
 		msBuilder.inMemBlock.ReserveMetaBlock(n)
 	} else {
 		msBuilder.diskFileWriter = newTsspFileWriter(msBuilder.fd, false, limit, lockPath)
@@ -133,6 +149,20 @@ func NewMsBuilder(dir, name string, lockPath *string, conf *Config, idCount int,
 	return msBuilder
 }
 
+func FlushRemoteEnabled(tier uint64) bool {
+	return tier == util.Cold || tier == util.Moving
+}
+
+func genFilePath(filePath string, fileName TSSPFileName, obsOpt *obs.ObsOptions, flushRemote bool) (string, TSSPFileName) {
+	if flushRemote && obsOpt != nil {
+		filePath = filePath[len(obs.GetPrefixDataPath()):]
+		filePath = filepath.Join(obsOpt.BasePath, filePath, fileName.path("")) + obs.ObsFileSuffix + tmpFileSuffix
+		filePath = fileops.EncodeObsPath(obsOpt.Endpoint, obsOpt.BucketName, filePath, obsOpt.Ak, obsOpt.Sk)
+		return filePath, fileName
+	}
+	return fileName.Path(filePath, true), fileName
+}
+
 func NewDetachedMsBuilder(dir, name string, lockPath *string, conf *Config, idCount int, fileName TSSPFileName,
 	tier uint64, sequencer *Sequencer, estimateSize int, engineType config.EngineType, obsOpt *obs.ObsOptions, bfCols []string, fullTextIdx bool) (*MsBuilder, error) {
 	msBuilder := genMsBuilder(dir, name, lockPath, conf, idCount, tier, sequencer, estimateSize, engineType)
@@ -140,9 +170,9 @@ func NewDetachedMsBuilder(dir, name string, lockPath *string, conf *Config, idCo
 	msBuilder.FileName = fileName
 	filePath := filepath.Join(dir, name)
 	if obsOpt != nil {
-		filePath = filePath[len(GetPrefixDataPath()):]
+		filePath = filePath[len(obs.GetPrefixDataPath()):]
 	}
-	fd, err := OpenObsFile(filePath, DataFile, obsOpt)
+	fd, err := fileops.OpenObsFile(filePath, DataFile, obsOpt, false)
 	if err != nil {
 		log.Error("create file fail", zap.String("name", filePath), zap.Error(err))
 		return nil, err
@@ -190,6 +220,7 @@ func genMsBuilder(dir, name string, lockPath *string, conf *Config, idCount int,
 	msBuilder.sequencer = sequencer
 	msBuilder.msName = name
 	msBuilder.Files = msBuilder.Files[:0]
+	msBuilder.FilesInfo = msBuilder.FilesInfo[:0]
 	msBuilder.MaxIds = idCount
 	msBuilder.bf = nil
 	msBuilder.tcLocation = colstore.DefaultTCLocation
@@ -204,8 +235,8 @@ func (b *MsBuilder) GetFullTextIdx() bool {
 	return b.fullTextIdx
 }
 
-func (b *MsBuilder) GetSkipIndex() *sparseindex.SkipIndex {
-	return b.skipIndex
+func (b *MsBuilder) GetIndexBuilder() *index.IndexWriterBuilder {
+	return b.indexWriterBuilder
 }
 
 func (b *MsBuilder) StoreTimes() {
@@ -265,7 +296,9 @@ func (b *MsBuilder) Reset() {
 		b.fd = nil
 	}
 	b.fileSize = 0
+	b.RowCount = 0
 	b.Files = b.Files[:0]
+	b.FilesInfo = b.FilesInfo[:0]
 }
 
 func (b *MsBuilder) writeToDisk(rowCounts int64) error {
@@ -320,7 +353,7 @@ func (b *MsBuilder) writeToDisk(rowCounts int64) error {
 func needSwitchChunkMeta(conf *Config, size int, count int) bool {
 	maxCount := conf.maxChunkMetaItemCount
 	if GetChunkMetaCompressMode() != ChunkMetaCompressNone {
-		maxCount = CompressModMaxChunkMetaItemCount
+		maxCount = util.CompressModMaxChunkMetaItemCount
 	}
 
 	return size >= conf.maxChunkMetaItemSize || count >= maxCount
@@ -342,21 +375,41 @@ func switchTsspFile(msb *MsBuilder, rec, totalRec *record.Record, rowsLimit int,
 		zap.Int64("fileSize", fSize),
 		zap.Int64("sizeLimit", msb.Conf.fileSizeLimit))
 
+	fileInfo := genFileInfo(f, msb)
+
 	msb.Files = append(msb.Files, f)
+	msb.FilesInfo = append(msb.FilesInfo, fileInfo)
 	seq, lv, merge, ext := nextFile(msb.FileName)
 	msb.FileName.SetSeq(seq)
 	msb.FileName.SetMerge(merge)
 	msb.FileName.SetExtend(ext)
 	msb.FileName.SetLevel(lv)
 
-	builder := NewMsBuilder(msb.Path, msb.Name(), msb.lock, msb.Conf, msb.MaxIds, msb.FileName, msb.tier, msb.sequencer, rec.Len(), engineType)
+	builder := NewMsBuilder(msb.Path, msb.Name(), msb.lock, msb.Conf, msb.MaxIds, msb.FileName, msb.tier, msb.sequencer, rec.Len(), engineType, msb.obsOpt, msb.ShardID)
 	builder.Files = append(builder.Files, msb.Files...)
+	builder.FilesInfo = append(builder.FilesInfo, msb.FilesInfo...)
 	builder.pkRec = append(builder.pkRec, msb.pkRec...)
 	builder.pkMark = append(builder.pkMark, msb.pkMark...)
 	builder.tcLocation = msb.tcLocation
 	builder.timeSorted = msb.timeSorted
 	builder.WithLog(msb.log)
 	return builder, nil
+}
+
+func genFileInfo(f TSSPFile, msb *MsBuilder) FileInfoExtend {
+	var fileInfo FileInfoExtend
+	fileInfo.FileInfo.Sequence = f.FileName().seq
+	fileInfo.FileInfo.Level = f.FileName().level
+	fileInfo.FileInfo.Merge = f.FileName().merge
+	fileInfo.FileInfo.Extent = f.FileName().extent
+	fileInfo.FileInfo.ShardID = msb.ShardID
+	fileInfo.FileInfo.CreatedAt = time.Now().UnixNano()
+	fileInfo.FileInfo.MinTime = f.FileStat().minTime
+	fileInfo.FileInfo.MaxTime = f.FileStat().maxTime
+	fileInfo.FileInfo.RowCount = msb.RowCount
+	fileInfo.FileInfo.FileSizeBytes = f.FileSize()
+	fileInfo.Name = msb.msName
+	return fileInfo
 }
 
 func (b *MsBuilder) NewPKIndexWriter() {
@@ -422,18 +475,17 @@ func (b *MsBuilder) writeDetachedPrimaryIndex(firstFlush bool, pkRec *record.Rec
 	return err
 }
 
-func (b *MsBuilder) NewSkipIndex(schema record.Schemas, indexRelation influxql.IndexRelation) {
-	b.skipIndex = sparseindex.NewSkipIndex()
-	b.skipIndex.NewSkipIndexWriters(b.Path, b.msName, b.FileName.String(), *b.lock, indexRelation)
-	b.skipIndex.GenSchemaIdxes(schema, indexRelation)
+func (b *MsBuilder) NewIndexWriterBuilder(schema record.Schemas, indexRelation influxql.IndexRelation) {
+	b.indexWriterBuilder = index.NewIndexWriterBuilder()
+	b.indexWriterBuilder.NewIndexWriters(b.Path, b.msName, b.FileName.String(), *b.lock, schema, indexRelation)
 }
 
 func (b *MsBuilder) writeSkipIndex(writeRec *record.Record, rowsPerSegment []int) error {
 	var err error
-	skipWriters := b.skipIndex.GetSkipIndexWriters()
-	schemaIdxes := b.skipIndex.GetSchemaIdxes()
+	skipWriters := b.indexWriterBuilder.GetSkipIndexWriters()
+	schemaIdxes := b.indexWriterBuilder.GetSchemaIdxes()
 	for i := range skipWriters {
-		err = skipWriters[i].CreateAttachSkipIndex(schemaIdxes[i], rowsPerSegment, writeRec)
+		err = skipWriters[i].CreateAttachIndex(writeRec, schemaIdxes[i], rowsPerSegment)
 		if err != nil {
 			return err
 		}
@@ -442,18 +494,20 @@ func (b *MsBuilder) writeSkipIndex(writeRec *record.Record, rowsPerSegment []int
 }
 
 func writeSkipIndexToDisk(data []byte, lockPath, skipIndexFilePath string) error {
-	indexBuilder := colstore.NewSkipIndexBuilder(&lockPath, skipIndexFilePath)
-	err := indexBuilder.WriteData(data)
+	indexBuilder, err := colstore.NewIndexWriter(&lockPath, skipIndexFilePath)
+	if err != nil {
+		return err
+	}
 	defer indexBuilder.Reset()
-	return err
+	return indexBuilder.WriteData(data)
 }
 
 func (b *MsBuilder) genAccumulateRowsIndex(data *record.Record) []int {
 	var accumulateRowsIndex []int
 	if b.fullTextIdx {
-		accumulateRowsIndex = b.splitRecordForFullText(data, b.skipIndex.GetSchemaIdxes()[b.skipIndex.GetFullTextIdx()])
+		accumulateRowsIndex = b.splitRecordForFullText(data, b.indexWriterBuilder.GetSchemaIdxes()[b.indexWriterBuilder.GetFullTextIdx()])
 	} else {
-		accumulateRowsIndex = b.splitRecord(data, b.skipIndex.GetSchemaIdxes()[b.skipIndex.GetBfIdx()])
+		accumulateRowsIndex = b.splitRecord(data, b.indexWriterBuilder.GetSchemaIdxes()[b.indexWriterBuilder.GetBfIdx()])
 	}
 
 	if len(accumulateRowsIndex) == 0 {
@@ -558,6 +612,7 @@ func (b *MsBuilder) WriteRecordByCol(id uint64, data *record.Record, schema reco
 		}
 
 		fSize := b.Size()
+		b.RowCount += int64(data.RowNums())
 		if fSize < b.Conf.fileSizeLimit || nextFile == nil {
 			return b, nil
 		}
@@ -582,6 +637,7 @@ func (b *MsBuilder) WriteRecordByCol(id uint64, data *record.Record, schema reco
 
 		fSize := b.Size()
 		if (i < len(recs)-1 || fSize >= b.Conf.fileSizeLimit) && nextFile != nil {
+			b.RowCount += int64(recs[i].RowNums())
 			b, err = switchTsspFile(b, &recs[i], data, rowsLimit, fSize, nextFile, config.COLUMNSTORE)
 			if err != nil {
 				return b, err
@@ -591,7 +647,7 @@ func (b *MsBuilder) WriteRecordByCol(id uint64, data *record.Record, schema reco
 			}
 
 			if skipIndexRelation != nil && len(skipIndexRelation.Oids) != 0 {
-				b.NewSkipIndex(schema, *skipIndexRelation)
+				b.NewIndexWriterBuilder(schema, *skipIndexRelation)
 			}
 		}
 	}
@@ -679,7 +735,7 @@ func (b *MsBuilder) WriteDetachedMetaAndIndex(writeRec *record.Record, pkSchema 
 	if err != nil {
 		return err
 	}
-	err = b.WriteDetachedSkipIndex(writeRec, rowsPerSegment)
+	err = b.WriteDetachedIndex(writeRec, rowsPerSegment)
 	if err != nil {
 		return err
 	}
@@ -716,8 +772,8 @@ func (b *MsBuilder) closeFdWrite() error {
 		}
 	}
 
-	if b.skipIndex != nil {
-		skipIndexWriters := b.skipIndex.GetSkipIndexWriters()
+	if b.indexWriterBuilder != nil {
+		skipIndexWriters := b.indexWriterBuilder.GetSkipIndexWriters()
 		for i := range skipIndexWriters {
 			err = skipIndexWriters[i].Close()
 			skipIndexWriters[i] = nil
@@ -737,17 +793,33 @@ func (b *MsBuilder) closeFdWrite() error {
 	return nil
 }
 
-func (b *MsBuilder) WriteDetachedSkipIndex(writeRec *record.Record, rowsPerSegment []int) error {
+func (b *MsBuilder) CloseIndexWriters() error {
+	if b.indexWriterBuilder == nil {
+		return nil
+	}
+	var resError error
+	skipIndexWriters := b.indexWriterBuilder.GetSkipIndexWriters()
+	for i := range skipIndexWriters {
+		err := skipIndexWriters[i].Close()
+		if err != nil {
+			resError = fmt.Errorf("IndexWriter close failed:%+v[%v]", resError, err)
+		}
+		skipIndexWriters[i] = nil
+	}
+	return resError
+}
+
+func (b *MsBuilder) WriteDetachedIndex(writeRec *record.Record, rowsPerSegment []int) error {
 	// skip index not exist
-	if len(b.skipIndex.GetSkipIndexWriters()) == 0 {
+	if len(b.indexWriterBuilder.GetSkipIndexWriters()) == 0 {
 		return nil
 	}
 
 	var err error
 	var cols int
 	var skipIndexFilePaths []string
-	skipWriters := b.skipIndex.GetSkipIndexWriters()
-	schemaIdxes := b.skipIndex.GetSchemaIdxes()
+	skipWriters := b.indexWriterBuilder.GetSkipIndexWriters()
+	schemaIdxes := b.indexWriterBuilder.GetSchemaIdxes()
 	for i := range skipWriters {
 		if b.fullTextIdx {
 			cols = sparseindex.FullTextIdxColumnCnt
@@ -756,7 +828,7 @@ func (b *MsBuilder) WriteDetachedSkipIndex(writeRec *record.Record, rowsPerSegme
 		}
 		indexBuf := logstore.GetIndexBuf(cols)
 
-		*indexBuf, skipIndexFilePaths = skipWriters[i].CreateDetachSkipIndex(writeRec, schemaIdxes[i], rowsPerSegment, *indexBuf)
+		*indexBuf, skipIndexFilePaths = skipWriters[i].CreateDetachIndex(writeRec, schemaIdxes[i], rowsPerSegment, *indexBuf)
 		err = b.flushIndexToDisk(*indexBuf, skipIndexFilePaths, i, len(rowsPerSegment))
 		if err != nil {
 			logstore.PutIndexBuf(indexBuf)
@@ -772,7 +844,7 @@ func (b *MsBuilder) flushIndexToDisk(memBfData [][]byte, skipIndexFilePaths []st
 		return nil
 	}
 	var err error
-	if idx == b.skipIndex.GetBfIdx() || idx == b.skipIndex.GetFullTextIdx() {
+	if idx == b.indexWriterBuilder.GetBfIdx() || idx == b.indexWriterBuilder.GetFullTextIdx() {
 		filterDetachedWriteTimes := (segmentCount + int(b.localBFCount)) / int(logstore.GetConstant(logstore.CurrentLogTokenizerVersion).FilterCntPerVerticalGorup)
 		if b.BloomFilterNeedDetached(filterDetachedWriteTimes) {
 			// local bf files and memory blocks satisfied the dump quantity,then write to remote
@@ -864,7 +936,7 @@ func (b *MsBuilder) writeMemoryBloomFilterData(memBfData [][]byte, skipIndexFile
 	if len(memBfData[0]) == 0 {
 		b.localBFCount = 0
 	} else {
-		b.localBFCount = int64(len(memBfData[0])) / logstore.GetConstant(logstore.CurrentLogTokenizerVersion).FilterDataDiskSize
+		b.localBFCount += int64(len(memBfData[0])) / logstore.GetConstant(logstore.CurrentLogTokenizerVersion).FilterDataDiskSize
 	}
 	return nil
 }
@@ -1018,7 +1090,7 @@ func (b *MsBuilder) writeIndex(writeRecord *record.Record, schema record.Schemas
 	}
 
 	// write skipIndex, works for colStore
-	if b.skipIndex != nil && len(b.skipIndex.GetSkipIndexWriters()) > 0 {
+	if b.indexWriterBuilder != nil && len(b.indexWriterBuilder.GetSkipIndexWriters()) > 0 {
 		if err := b.writeSkipIndex(writeRecord, rowsPerSegment); err != nil {
 			logger.GetLogger().Error("write skip index file failed", zap.String("mstName", b.msName), zap.Error(err))
 			return err
@@ -1045,17 +1117,17 @@ func (b *MsBuilder) getAccumulateRowsIndex(data *record.Record, fixRowsPerSegmen
 }
 
 func (b *MsBuilder) bfIndexExist() bool {
-	if b.skipIndex == nil {
+	if b.indexWriterBuilder == nil {
 		return false
 	}
-	return b.skipIndex.GetBfIdx() >= 0 && len(b.skipIndex.GetSchemaIdxes()[b.skipIndex.GetBfIdx()]) > 0
+	return b.indexWriterBuilder.GetBfIdx() >= 0 && len(b.indexWriterBuilder.GetSchemaIdxes()[b.indexWriterBuilder.GetBfIdx()]) > 0
 }
 
 func (b *MsBuilder) fullTextIndexExist() bool {
-	if b.skipIndex == nil {
+	if b.indexWriterBuilder == nil {
 		return false
 	}
-	return b.skipIndex.GetFullTextIdx() >= 0 && len(b.skipIndex.GetSchemaIdxes()[b.skipIndex.GetFullTextIdx()]) > 0
+	return b.indexWriterBuilder.GetFullTextIdx() >= 0 && len(b.indexWriterBuilder.GetSchemaIdxes()[b.indexWriterBuilder.GetFullTextIdx()]) > 0
 }
 
 func GenFixRowsPerSegment(data *record.Record, rowNumPerSegment int) []int {
@@ -1082,6 +1154,7 @@ func (b *MsBuilder) WriteRecord(id uint64, data *record.Record, nextFile func(fn
 		}
 
 		fSize := b.Size()
+		b.RowCount += int64(data.RowNums())
 		if fSize < b.Conf.fileSizeLimit || nextFile == nil {
 			return b, nil
 		}
@@ -1100,6 +1173,7 @@ func (b *MsBuilder) WriteRecord(id uint64, data *record.Record, nextFile func(fn
 
 		fSize := b.Size()
 		if (i < len(recs)-1 || fSize >= b.Conf.fileSizeLimit) && nextFile != nil {
+			b.RowCount += int64(recs[i].RowNums())
 			b, err = switchTsspFile(b, &recs[i], data, rowsLimit, fSize, nextFile, config.TSSTORE)
 			if err != nil {
 				return b, err
@@ -1468,19 +1542,4 @@ func (b *MsBuilder) WriteChunkMeta(cm *ChunkMeta) (int, error) {
 		b.log.Error("write chunk meta fail", zap.String("file", b.fd.Name()), zap.Error(err))
 	}
 	return wn, err
-}
-
-func ReleaseMsBuilder(msb *MsBuilder) {
-	for _, nf := range msb.Files {
-		util.MustClose(nf)
-		if err := nf.Remove(); err != nil {
-			log.Error("failed to remove file", zap.String("file", nf.Path()))
-		}
-	}
-	nm := msb.fd.Name()
-	util.MustClose(msb.fd)
-	lock := fileops.FileLockOption(*msb.lock)
-	if err := fileops.Remove(nm, lock); err != nil {
-		log.Error("failed to remove file", zap.String("file", nm))
-	}
 }

@@ -112,6 +112,9 @@ func matchPreAgg(schema *executor.QuerySchema, ctx *idKeyCursorContext) bool {
 	if schema.Options().GetHintType() == hybridqp.ExactStatisticQuery {
 		return false
 	}
+	if schema.Options().IsPromQuery() {
+		return false
+	}
 	return true
 }
 

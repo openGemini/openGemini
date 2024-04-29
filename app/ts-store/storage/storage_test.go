@@ -121,7 +121,7 @@ func (mc *MockMetaClient) GetShardRangeInfo(db string, rp string, shardID uint64
 	return mc.GetShardRangeInfoFn(db, rp, shardID)
 }
 
-func (mc *MockMetaClient) GetMeasurementInfoStore(dbName string, rpName string, mstName string) (*meta.MeasurementInfo, error) {
+func (mc *MockMetaClient) RetryMeasurement(dbName string, rpName string, mstName string) (*meta.MeasurementInfo, error) {
 	return mc.GetMeasurementInfoStoreFn(dbName, rpName, mstName)
 }
 

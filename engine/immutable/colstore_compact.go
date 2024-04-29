@@ -313,7 +313,7 @@ func (bfi *BloomFilterIterator) updateBloomFilterPaths() {
 	bfi.bloomFilterPaths = make([]string, len(bfi.bloomFilterCols))
 	for i := range bfi.bloomFilterCols {
 		bfi.bloomFilterPaths[i] = path.Join(bfi.f.builder.Path, bfi.f.name,
-			colstore.AppendSKIndexSuffix(bfi.f.dataFilePath, bfi.bloomFilterCols[i], index.BloomFilterIndex)+tmpFileSuffix)
+			colstore.AppendSecondaryIndexSuffix(bfi.f.dataFilePath, bfi.bloomFilterCols[i], index.BloomFilter, 0)+tmpFileSuffix)
 	}
 }
 
@@ -343,7 +343,7 @@ func (bfi *BloomFilterIterator) newBloomFilterReaders(oldFiles []TSSPFile) error
 		bfi.bloomFilterBlockPos[i] = make([]int64, len(bfi.bloomFilterCols))
 		for j := 0; j < len(bfi.bloomFilterCols); j++ {
 			fileName = path.Join(bfi.f.builder.Path, bfi.f.name,
-				colstore.AppendSKIndexSuffix(fn.String(), bfi.bloomFilterCols[j], index.BloomFilterIndex))
+				colstore.AppendSecondaryIndexSuffix(fn.String(), bfi.bloomFilterCols[j], index.BloomFilter, 0))
 			dr, err = bfi.newBloomFilterReader(fileName)
 			if err != nil {
 				return err
@@ -403,13 +403,16 @@ func (bfi *BloomFilterIterator) Write(toLocal bool) error {
 		// write to Local
 		if len(*bf) > 0 {
 			lockpath := ""
-			indexBuilder := colstore.NewSkipIndexBuilder(&lockpath, bfi.bloomFilterPaths[idx])
+			indexBuilder, err := colstore.NewIndexWriter(&lockpath, bfi.bloomFilterPaths[idx])
+			if err != nil {
+				return err
+			}
+			defer indexBuilder.Reset()
 			err = indexBuilder.WriteData(*bf)
 			if err != nil {
 				bfi.f.builder.log.Error("write bloom filter to local fail", zap.String("name", fileName), zap.Error(err))
 				return err
 			}
-			indexBuilder.Reset()
 		}
 		*bf = (*bf)[:0]
 	}
@@ -643,7 +646,7 @@ func (ib *IteratorByBlock) WriteDetachedMeta(pkSchema record.Schemas) error {
 
 func (ib *IteratorByBlock) switchMsBuilder(tbStore *MmsTables) *MsBuilder {
 	msb := ib.f.builder
-	builder := NewMsBuilder(tbStore.path, ib.f.name, tbStore.lock, tbStore.Conf, 1, msb.FileName, *tbStore.tier, nil, 1, config.COLUMNSTORE)
+	builder := NewMsBuilder(tbStore.path, ib.f.name, tbStore.lock, tbStore.Conf, 1, msb.FileName, *tbStore.tier, nil, 1, config.COLUMNSTORE, tbStore.GetObsOption(), msb.ShardID)
 	builder.tcLocation = msb.tcLocation
 	builder.timeSorted = msb.timeSorted
 	builder.WithLog(msb.log)
@@ -785,7 +788,7 @@ func (f *FragmentIterators) updateIterators(m *MmsTables, group FilesInfo, sortK
 		fileName.extent = ext + 1
 		// totalSegmentCount less than bloomFilterFlushBlockCount, write data to sfs
 		if !IsFlushToFinalFile(group.totalSegmentCount, uint64(logstore.GetConstant(logstore.CurrentLogTokenizerVersion).FilterCntPerVerticalGorup)) {
-			f.builder = NewMsBuilder(m.path, f.name, m.lock, m.Conf, 1, fileName, *m.tier, nil, 1, config.COLUMNSTORE)
+			f.builder = NewMsBuilder(m.path, f.name, m.lock, m.Conf, 1, fileName, *m.tier, nil, 1, config.COLUMNSTORE, m.GetObsOption(), m.GetShardID())
 		} else {
 			f.builder, err = NewDetachedMsBuilder(m.path, f.name, m.lock, m.Conf, 1, fileName, *m.tier, nil, 1, config.COLUMNSTORE, mstInfo.ObsOptions, bfCols, false)
 			if err != nil {
@@ -793,7 +796,7 @@ func (f *FragmentIterators) updateIterators(m *MmsTables, group FilesInfo, sortK
 			}
 		}
 	} else {
-		f.builder = NewMsBuilder(m.path, f.name, m.lock, m.Conf, 1, fileName, *m.tier, nil, 1, config.COLUMNSTORE)
+		f.builder = NewMsBuilder(m.path, f.name, m.lock, m.Conf, 1, fileName, *m.tier, nil, 1, config.COLUMNSTORE, m.GetObsOption(), m.GetShardID())
 	}
 
 	f.builder.NewPKIndexWriter()
