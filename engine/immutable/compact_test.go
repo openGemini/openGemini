@@ -46,6 +46,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -328,7 +329,7 @@ func TestFullCompactForColumnStore(t *testing.T) {
 			dataFilePath := msb.FileName.String()
 			indexFilePath := path.Join(msb.Path, msb.msName, colstore.AppendPKIndexSuffix(dataFilePath))
 			fixRowsPerSegment := GenFixRowsPerSegment(rec, conf.maxRowsPerSegment)
-			if err = msb.writePrimaryIndex(rec, pkSchema, indexFilePath, *msb.lock, colstore.DefaultTCLocation, fixRowsPerSegment, DefaultMaxRowsPerSegment4ColStore); err != nil {
+			if err = msb.writePrimaryIndex(rec, pkSchema, indexFilePath, *msb.lock, colstore.DefaultTCLocation, fixRowsPerSegment, util.DefaultMaxRowsPerSegment4ColStore); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -423,7 +424,7 @@ func TestFullCompactForColumnStore(t *testing.T) {
 	for i := 0; i < filesN; i++ {
 		ids, data := genTestDataForColumnStore(idMinMax.min, 1, recRows, &startValue, &tm)
 		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
-		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE)
+		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE, nil, 0)
 		msb.NewPKIndexWriter()
 		oldRec = write(ids, data, msb, oldRec, sortKeyMap, primaryKey, sortKey, needMerge, pkSchema)
 		needMerge = true
@@ -459,11 +460,11 @@ func TestFullCompactForColumnStore(t *testing.T) {
 	}
 	// get origin pkRec
 	fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
-	msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE)
+	msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE, nil, 0)
 	msb.NewPKIndexWriter()
 
 	fixRowsPerSegment := GenFixRowsPerSegment(oldRec, conf.maxRowsPerSegment)
-	pkRec, pkMark, err := msb.pkIndexWriter.Build(oldRec, pkSchema, fixRowsPerSegment, colstore.DefaultTCLocation, DefaultMaxRowsPerSegment4ColStore)
+	pkRec, pkMark, err := msb.pkIndexWriter.Build(oldRec, pkSchema, fixRowsPerSegment, colstore.DefaultTCLocation, util.DefaultMaxRowsPerSegment4ColStore)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -552,7 +553,7 @@ func TestLevelCompactForColumnStore(t *testing.T) {
 			dataFilePath := msb.FileName.String()
 			indexFilePath := path.Join(msb.Path, msb.msName, colstore.AppendPKIndexSuffix(dataFilePath))
 			fixRowsPerSegment := GenFixRowsPerSegment(rec, conf.maxRowsPerSegment)
-			if err = msb.writePrimaryIndex(rec, pkSchema, indexFilePath, *msb.lock, colstore.DefaultTCLocation, fixRowsPerSegment, DefaultMaxRowsPerSegment4ColStore); err != nil {
+			if err = msb.writePrimaryIndex(rec, pkSchema, indexFilePath, *msb.lock, colstore.DefaultTCLocation, fixRowsPerSegment, util.DefaultMaxRowsPerSegment4ColStore); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -646,7 +647,7 @@ func TestLevelCompactForColumnStore(t *testing.T) {
 	for i := 0; i < filesN; i++ {
 		ids, data := genTestDataForColumnStore(idMinMax.min, 1, recRows, &startValue, &tm)
 		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
-		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE)
+		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE, nil, 0)
 		msb.NewPKIndexWriter()
 		oldRec = write(ids, data, msb, oldRec, sortKeyMap, primaryKey, sortKey, needMerge, pkSchema)
 		needMerge = true
@@ -682,10 +683,10 @@ func TestLevelCompactForColumnStore(t *testing.T) {
 	}
 	// get origin pkRec
 	fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
-	msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE)
+	msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE, nil, 0)
 	msb.NewPKIndexWriter()
 	fixRowsPerSegment := GenFixRowsPerSegment(oldRec, conf.maxRowsPerSegment)
-	pkRec, pkMark, err := msb.pkIndexWriter.Build(oldRec, pkSchema, fixRowsPerSegment, colstore.DefaultTCLocation, DefaultMaxRowsPerSegment4ColStore)
+	pkRec, pkMark, err := msb.pkIndexWriter.Build(oldRec, pkSchema, fixRowsPerSegment, colstore.DefaultTCLocation, util.DefaultMaxRowsPerSegment4ColStore)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -776,7 +777,7 @@ func TestLevelCompactForColumnStoreWithTimeCluster(t *testing.T) {
 			dataFilePath := msb.FileName.String()
 			indexFilePath := path.Join(msb.Path, msb.msName, colstore.AppendPKIndexSuffix(dataFilePath))
 			fixRowsPerSegment := GenFixRowsPerSegment(rec, conf.maxRowsPerSegment)
-			if err = msb.writePrimaryIndex(rec, pkSchema, indexFilePath, *msb.lock, colstore.DefaultTCLocation, fixRowsPerSegment, DefaultMaxRowsPerSegment4ColStore); err != nil {
+			if err = msb.writePrimaryIndex(rec, pkSchema, indexFilePath, *msb.lock, colstore.DefaultTCLocation, fixRowsPerSegment, util.DefaultMaxRowsPerSegment4ColStore); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -870,7 +871,7 @@ func TestLevelCompactForColumnStoreWithTimeCluster(t *testing.T) {
 	for i := 0; i < filesN; i++ {
 		ids, data := genTestDataForColumnStore(idMinMax.min, 1, recRows, &startValue, &tm)
 		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
-		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE)
+		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE, nil, 0)
 		msb.NewPKIndexWriter()
 		oldRec = write(ids, data, msb, oldRec, sortKeyMap, primaryKey, sortKey, needMerge, pkSchema)
 		needMerge = true
@@ -906,10 +907,10 @@ func TestLevelCompactForColumnStoreWithTimeCluster(t *testing.T) {
 	}
 	// get origin pkRec
 	fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
-	msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE)
+	msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE, nil, 0)
 	msb.NewPKIndexWriter()
 	fixRowsPerSegment := GenFixRowsPerSegment(oldRec, conf.maxRowsPerSegment)
-	pkRec, pkMark, err := msb.pkIndexWriter.Build(oldRec, pkSchema, fixRowsPerSegment, colstore.DefaultTCLocation, DefaultMaxRowsPerSegment4ColStore)
+	pkRec, pkMark, err := msb.pkIndexWriter.Build(oldRec, pkSchema, fixRowsPerSegment, colstore.DefaultTCLocation, util.DefaultMaxRowsPerSegment4ColStore)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -999,7 +1000,7 @@ func TestLevelCompactForColumnStoreWithSchemaLess(t *testing.T) {
 			dataFilePath := msb.FileName.String()
 			indexFilePath := path.Join(msb.Path, msb.msName, colstore.AppendPKIndexSuffix(dataFilePath))
 			fixRowsPerSegment := GenFixRowsPerSegment(rec, conf.maxRowsPerSegment)
-			if err = msb.writePrimaryIndex(rec, pkSchema, indexFilePath, *msb.lock, colstore.DefaultTCLocation, fixRowsPerSegment, DefaultMaxRowsPerSegment4ColStore); err != nil {
+			if err = msb.writePrimaryIndex(rec, pkSchema, indexFilePath, *msb.lock, colstore.DefaultTCLocation, fixRowsPerSegment, util.DefaultMaxRowsPerSegment4ColStore); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -1101,7 +1102,7 @@ func TestLevelCompactForColumnStoreWithSchemaLess(t *testing.T) {
 		}
 		//ids, data := genTestDataForColumnStore(idMinMax.min, 1, recRows, &startValue, &tm)
 		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
-		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE)
+		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE, nil, 0)
 		msb.NewPKIndexWriter()
 		oldRec = write(ids, data, msb, oldRec, sortKeyMap, primaryKey, sortKey, needMerge, pkSchema)
 		needMerge = true
@@ -1137,10 +1138,10 @@ func TestLevelCompactForColumnStoreWithSchemaLess(t *testing.T) {
 	}
 	// get origin pkRec
 	fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
-	msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE)
+	msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE, nil, 0)
 	msb.NewPKIndexWriter()
 	fixRowsPerSegment := GenFixRowsPerSegment(oldRec, conf.maxRowsPerSegment)
-	_, _, err := msb.pkIndexWriter.Build(oldRec, pkSchema, fixRowsPerSegment, colstore.DefaultTCLocation, DefaultMaxRowsPerSegment4ColStore)
+	_, _, err := msb.pkIndexWriter.Build(oldRec, pkSchema, fixRowsPerSegment, colstore.DefaultTCLocation, util.DefaultMaxRowsPerSegment4ColStore)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1178,7 +1179,7 @@ func TestCompactSwitchFilesForColumnStore(t *testing.T) {
 	conf.FragmentsNumPerFlush = 1
 	conf.fileSizeLimit = 1 * 1024
 	defer func() {
-		conf.fileSizeLimit = defaultFileSizeLimit
+		conf.fileSizeLimit = util.DefaultFileSizeLimit
 	}()
 	tier := uint64(util.Hot)
 	recRows := 8192
@@ -1221,7 +1222,7 @@ func TestCompactSwitchFilesForColumnStore(t *testing.T) {
 			dataFilePath := msb.FileName.String()
 			indexFilePath := path.Join(msb.Path, msb.msName, colstore.AppendPKIndexSuffix(dataFilePath))
 			fixRowsPerSegment := GenFixRowsPerSegment(rec, conf.maxRowsPerSegment)
-			if err = msb.writePrimaryIndex(rec, pkSchema, indexFilePath, *msb.lock, colstore.DefaultTCLocation, fixRowsPerSegment, DefaultMaxRowsPerSegment4ColStore); err != nil {
+			if err = msb.writePrimaryIndex(rec, pkSchema, indexFilePath, *msb.lock, colstore.DefaultTCLocation, fixRowsPerSegment, util.DefaultMaxRowsPerSegment4ColStore); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -1316,7 +1317,7 @@ func TestCompactSwitchFilesForColumnStore(t *testing.T) {
 	for i := 0; i < filesN; i++ {
 		ids, data := genTestDataForColumnStore(idMinMax.min, 1, recRows, &startValue, &tm)
 		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
-		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE)
+		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE, nil, 0)
 		msb.NewPKIndexWriter()
 		oldRec = write(ids, data, msb, oldRec, sortKeyMap, primaryKey, sortKey, needMerge, pkSchema)
 		needMerge = true
@@ -1352,10 +1353,10 @@ func TestCompactSwitchFilesForColumnStore(t *testing.T) {
 	}
 	// get origin pkRec
 	fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
-	msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE)
+	msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE, nil, 0)
 	msb.NewPKIndexWriter()
 	fixRowsPerSegment := GenFixRowsPerSegment(oldRec, conf.maxRowsPerSegment)
-	_, _, err := msb.pkIndexWriter.Build(oldRec, pkSchema, fixRowsPerSegment, colstore.DefaultTCLocation, DefaultMaxRowsPerSegment4ColStore)
+	_, _, err := msb.pkIndexWriter.Build(oldRec, pkSchema, fixRowsPerSegment, colstore.DefaultTCLocation, util.DefaultMaxRowsPerSegment4ColStore)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1467,7 +1468,7 @@ func TestWriteMetaIndexForColumnStore(t *testing.T) {
 	defer store.Close()
 	fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
 	f := &FragmentIterators{}
-	f.builder = NewMsBuilder(store.path, "cpu", store.lock, store.Conf, 1, fileName, *store.tier, nil, 1, config.TSSTORE)
+	f.builder = NewMsBuilder(store.path, "cpu", store.lock, store.Conf, 1, fileName, *store.tier, nil, 1, config.TSSTORE, nil, 0)
 	defer func() {
 		f.builder.diskFileWriter.Close()
 		f.builder.fd.Close()
@@ -1545,7 +1546,7 @@ func TestCompactionWriteMetaErr(t *testing.T) {
 	group := FilesInfo{name: "mst", compIts: filesItr}
 	compItrs := getFragmentIterators()
 	fileName := NewTSSPFileName(uint64(1), group.toLevel, 0, 0, true, store.lock)
-	compItrs.builder = NewMsBuilder(store.path, compItrs.name, store.lock, store.Conf, 1, fileName, *store.tier, nil, 1, config.TSSTORE)
+	compItrs.builder = NewMsBuilder(store.path, compItrs.name, store.lock, store.Conf, 1, fileName, *store.tier, nil, 1, config.TSSTORE, nil, 0)
 	indexName := compItrs.builder.fd.Name()[:len(compItrs.builder.fd.Name())-len(tmpFileSuffix)] + ".index.init"
 	fd, err := fileops.OpenFile(indexName, os.O_CREATE|os.O_RDWR, 0640)
 	if err != nil {
@@ -1583,7 +1584,7 @@ func TestBlockCompactionPrepareForColumnStore(t *testing.T) {
 	conf.maxRowsPerSegment = 8192
 	conf.FragmentsNumPerFlush = 1
 	defer func() {
-		conf.maxRowsPerSegment = DefaultMaxRowsPerSegment4ColStore
+		conf.maxRowsPerSegment = util.DefaultMaxRowsPerSegment4ColStore
 	}()
 	tier := uint64(util.Hot)
 	recRows := 10000
@@ -1635,13 +1636,13 @@ func TestBlockCompactionPrepareForColumnStore(t *testing.T) {
 			dataFilePath := msb.FileName.String()
 			indexFilePath := path.Join(msb.Path, msb.msName, colstore.AppendPKIndexSuffix(dataFilePath))
 			fixRowsPerSegment := GenFixRowsPerSegment(rec, conf.maxRowsPerSegment)
-			if err = msb.writePrimaryIndex(rec, pkSchema, indexFilePath, *msb.lock, colstore.DefaultTCLocation, fixRowsPerSegment, DefaultMaxRowsPerSegment4ColStore); err != nil {
+			if err = msb.writePrimaryIndex(rec, pkSchema, indexFilePath, *msb.lock, colstore.DefaultTCLocation, fixRowsPerSegment, util.DefaultMaxRowsPerSegment4ColStore); err != nil {
 				t.Fatal(err)
 			}
 		}
 
-		msb.NewSkipIndex(rec.Schema, *indexRelation)
-		if len(msb.skipIndex.GetSkipIndexWriters()) > 0 {
+		msb.NewIndexWriterBuilder(rec.Schema, *indexRelation)
+		if len(msb.indexWriterBuilder.GetSkipIndexWriters()) > 0 {
 			fixRowsPerSegment := GenFixRowsPerSegment(rec, conf.maxRowsPerSegment)
 			if err := msb.writeSkipIndex(rec, fixRowsPerSegment); err != nil {
 				t.Fatal(err)
@@ -1675,9 +1676,9 @@ func TestBlockCompactionPrepareForColumnStore(t *testing.T) {
 	for i := 0; i < filesN; i++ {
 		ids, data := genTestDataForColumnStore(idMinMax.min, 1, recRows, &startValue, &tm)
 		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
-		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE)
+		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE, nil, 0)
 		msb.NewPKIndexWriter()
-		msb.NewSkipIndex(data[ids].Schema, mstinfo.IndexRelation)
+		msb.NewIndexWriterBuilder(data[ids].Schema, mstinfo.IndexRelation)
 		oldRec = write(ids, data, msb, oldRec, sortKeyMap, primaryKey, sortKey, needMerge, pkSchema, &mstinfo.IndexRelation)
 		needMerge = true
 		if err := writeIntoFile(msb, false); err != nil {
@@ -1739,6 +1740,9 @@ func TestLevelBlockCompactForColumnStoreV1(t *testing.T) {
 	conf := NewColumnStoreConfig()
 	conf.maxRowsPerSegment = 20
 	conf.FragmentsNumPerFlush = 1
+	defer func() {
+		conf.maxRowsPerSegment = util.DefaultMaxRowsPerSegment4ColStore
+	}()
 	tier := uint64(util.Hot)
 	recRows := 1000
 	lockPath := ""
@@ -1789,12 +1793,12 @@ func TestLevelBlockCompactForColumnStoreV1(t *testing.T) {
 			dataFilePath := msb.FileName.String()
 			indexFilePath := path.Join(msb.Path, msb.msName, colstore.AppendPKIndexSuffix(dataFilePath))
 			fixRowsPerSegment := GenFixRowsPerSegment(rec, conf.maxRowsPerSegment)
-			if err = msb.writePrimaryIndex(rec, pkSchema, indexFilePath, *msb.lock, colstore.DefaultTCLocation, fixRowsPerSegment, DefaultMaxRowsPerSegment4ColStore); err != nil {
+			if err = msb.writePrimaryIndex(rec, pkSchema, indexFilePath, *msb.lock, colstore.DefaultTCLocation, fixRowsPerSegment, util.DefaultMaxRowsPerSegment4ColStore); err != nil {
 				t.Fatal(err)
 			}
 		}
-		msb.NewSkipIndex(rec.Schema, *indexRelation)
-		if len(msb.skipIndex.GetSkipIndexWriters()) > 0 {
+		msb.NewIndexWriterBuilder(rec.Schema, *indexRelation)
+		if len(msb.indexWriterBuilder.GetSkipIndexWriters()) > 0 {
 			fixRowsPerSegment := GenFixRowsPerSegment(rec, conf.maxRowsPerSegment)
 			if err := msb.writeSkipIndex(rec, fixRowsPerSegment); err != nil {
 				t.Fatal(err)
@@ -1890,9 +1894,9 @@ func TestLevelBlockCompactForColumnStoreV1(t *testing.T) {
 	for i := 0; i < filesN; i++ {
 		ids, data := genTestDataForColumnStore(idMinMax.min, 1, recRows, &startValue, &tm)
 		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
-		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE)
+		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE, nil, 0)
 		msb.NewPKIndexWriter()
-		msb.NewSkipIndex(data[ids].Schema, mstinfo.IndexRelation)
+		msb.NewIndexWriterBuilder(data[ids].Schema, mstinfo.IndexRelation)
 		oldRec = write(ids, data, msb, oldRec, sortKeyMap, primaryKey, sortKey, needMerge, pkSchema, &mstinfo.IndexRelation)
 		needMerge = true
 		if err := writeIntoFile(msb, false); err != nil {
@@ -1962,7 +1966,7 @@ func TestLevelBlockCompactForColumnStoreV2(t *testing.T) {
 	conf.maxRowsPerSegment = 20
 	conf.FragmentsNumPerFlush = 1
 	defer func() {
-		conf.maxRowsPerSegment = DefaultMaxRowsPerSegment4ColStore
+		conf.maxRowsPerSegment = util.DefaultMaxRowsPerSegment4ColStore
 	}()
 	tier := uint64(util.Hot)
 	recRows := 1000
@@ -2014,12 +2018,12 @@ func TestLevelBlockCompactForColumnStoreV2(t *testing.T) {
 			dataFilePath := msb.FileName.String()
 			indexFilePath := path.Join(msb.Path, msb.msName, colstore.AppendPKIndexSuffix(dataFilePath))
 			fixRowsPerSegment := GenFixRowsPerSegment(rec, conf.maxRowsPerSegment)
-			if err = msb.writePrimaryIndex(rec, pkSchema, indexFilePath, *msb.lock, colstore.DefaultTCLocation, fixRowsPerSegment, DefaultMaxRowsPerSegment4ColStore); err != nil {
+			if err = msb.writePrimaryIndex(rec, pkSchema, indexFilePath, *msb.lock, colstore.DefaultTCLocation, fixRowsPerSegment, util.DefaultMaxRowsPerSegment4ColStore); err != nil {
 				t.Fatal(err)
 			}
 		}
-		msb.NewSkipIndex(rec.Schema, *indexRelation)
-		if len(msb.skipIndex.GetSkipIndexWriters()) > 0 {
+		msb.NewIndexWriterBuilder(rec.Schema, *indexRelation)
+		if len(msb.indexWriterBuilder.GetSkipIndexWriters()) > 0 {
 			fixRowsPerSegment := GenFixRowsPerSegment(rec, conf.maxRowsPerSegment)
 			if err := msb.writeSkipIndex(rec, fixRowsPerSegment); err != nil {
 				t.Fatal(err)
@@ -2115,9 +2119,9 @@ func TestLevelBlockCompactForColumnStoreV2(t *testing.T) {
 	for i := 0; i < filesN; i++ {
 		ids, data := genTestDataForColumnStore(idMinMax.min, 1, recRows, &startValue, &tm)
 		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
-		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE)
+		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE, nil, 0)
 		msb.NewPKIndexWriter()
-		msb.NewSkipIndex(data[ids].Schema, mstinfo.IndexRelation)
+		msb.NewIndexWriterBuilder(data[ids].Schema, mstinfo.IndexRelation)
 		oldRec = write(ids, data, msb, oldRec, sortKeyMap, primaryKey, sortKey, needMerge, pkSchema, &mstinfo.IndexRelation)
 		needMerge = true
 		if err := writeIntoFile(msb, false); err != nil {
@@ -2186,8 +2190,8 @@ func TestBlockCompactFileNameConflict(t *testing.T) {
 	conf.FragmentsNumPerFlush = 1
 	conf.fileSizeLimit = 1 * 1024
 	defer func() {
-		conf.maxRowsPerSegment = DefaultMaxRowsPerSegment4ColStore
-		conf.fileSizeLimit = defaultFileSizeLimit
+		conf.maxRowsPerSegment = util.DefaultMaxRowsPerSegment4ColStore
+		conf.fileSizeLimit = util.DefaultFileSizeLimit
 	}()
 
 	tier := uint64(util.Hot)
@@ -2241,13 +2245,13 @@ func TestBlockCompactFileNameConflict(t *testing.T) {
 			dataFilePath := msb.FileName.String()
 			indexFilePath := path.Join(msb.Path, msb.msName, colstore.AppendPKIndexSuffix(dataFilePath))
 			fixRowsPerSegment := GenFixRowsPerSegment(rec, conf.maxRowsPerSegment)
-			if err = msb.writePrimaryIndex(rec, pkSchema, indexFilePath, *msb.lock, colstore.DefaultTCLocation, fixRowsPerSegment, DefaultMaxRowsPerSegment4ColStore); err != nil {
+			if err = msb.writePrimaryIndex(rec, pkSchema, indexFilePath, *msb.lock, colstore.DefaultTCLocation, fixRowsPerSegment, util.DefaultMaxRowsPerSegment4ColStore); err != nil {
 				t.Fatal(err)
 			}
 		}
 
-		msb.NewSkipIndex(rec.Schema, *indexRelation)
-		if len(msb.skipIndex.GetSkipIndexWriters()) > 0 {
+		msb.NewIndexWriterBuilder(rec.Schema, *indexRelation)
+		if len(msb.indexWriterBuilder.GetSkipIndexWriters()) > 0 {
 			fixRowsPerSegment := GenFixRowsPerSegment(rec, conf.maxRowsPerSegment)
 			if err := msb.writeSkipIndex(rec, fixRowsPerSegment); err != nil {
 				t.Fatal(err)
@@ -2343,9 +2347,9 @@ func TestBlockCompactFileNameConflict(t *testing.T) {
 	for i := 0; i < filesN; i++ {
 		ids, data := genTestDataForColumnStore(idMinMax.min, 1, recRows, &startValue, &tm)
 		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
-		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE)
+		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE, nil, 0)
 		msb.NewPKIndexWriter()
-		msb.NewSkipIndex(data[ids].Schema, mstinfo.IndexRelation)
+		msb.NewIndexWriterBuilder(data[ids].Schema, mstinfo.IndexRelation)
 		oldRec = write(ids, data, msb, oldRec, sortKeyMap, primaryKey, sortKey, needMerge, pkSchema, &mstinfo.IndexRelation)
 		needMerge = true
 		if err := writeIntoFile(msb, false); err != nil {
@@ -2415,7 +2419,7 @@ func TestNextSingleFragmentError(t *testing.T) {
 	cm := make([]ColumnMeta, 1)
 	curItrs.curtChunkMeta = &ChunkMeta{colMeta: cm}
 	f := &FragmentIterators{}
-	f.builder = NewMsBuilder(store.path, "cpu", store.lock, store.Conf, 1, fileName, *store.tier, nil, 1, config.COLUMNSTORE)
+	f.builder = NewMsBuilder(store.path, "cpu", store.lock, store.Conf, 1, fileName, *store.tier, nil, 1, config.COLUMNSTORE, nil, 0)
 	f.builder.Conf = conf
 	f.builder.Conf.maxRowsPerSegment = 1
 	f.Conf = f.builder.Conf
@@ -2463,7 +2467,7 @@ var schema = []record.Field{
 }
 
 func genTestData(id uint64, idCount int, rows int, startValue *float64, starTime *time.Time) ([]uint64, map[uint64]*record.Record) {
-	tm := *starTime
+	tm := (*starTime).Add(timeInterval)
 
 	value := *startValue
 
@@ -2616,7 +2620,7 @@ func TestMmsTables_LevelCompact_With_FileHandle_Optimize(t *testing.T) {
 	for i := 0; i < filesN; i++ {
 		ids, data := genTestData(idMinMax.min, 1, recRows, &startValue, &tm)
 		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
-		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE)
+		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE, nil, 0)
 		write(ids, data, msb, oldRec)
 		for _, v := range data {
 			recs = append(recs, v)
@@ -2784,7 +2788,7 @@ func TestMmsTables_LevelCompact_1ID5Segment(t *testing.T) {
 	for i := 0; i < filesN; i++ {
 		ids, data := genTestData(idMinMax.min, 1, recRows, &startValue, &tm)
 		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
-		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE)
+		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE, nil, 0)
 		write(ids, data, msb, oldRec)
 		for _, v := range data {
 			recs = append(recs, v)
@@ -2942,7 +2946,7 @@ func TestMmsTables_FullCompact(t *testing.T) {
 	for i := 0; i < filesN; i++ {
 		ids, data := genTestData(idMinMax.min, 1, recRows, &startValue, &tm)
 		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
-		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE)
+		msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE, nil, 0)
 		write(ids, data, msb, oldRec)
 		for _, v := range data {
 			recs = append(recs, v)
@@ -2989,9 +2993,11 @@ func TestMmsTables_FullCompact(t *testing.T) {
 }
 
 func TestMmsTables_LevelCompact_20ID10Segment(t *testing.T) {
-	mergeFlags := []int32{NonStreamingCompact, StreamingCompact, AutoCompact}
+	mergeFlags := []int32{util.NonStreamingCompact, util.StreamingCompact, util.AutoCompact}
 	testCompDir := t.TempDir()
 	lockPath := ""
+	tm := testTimeStart
+
 	for _, flag := range mergeFlags {
 		_ = fileops.RemoveAll(testCompDir)
 		cacheIns := readcache.GetReadMetaCacheIns()
@@ -3099,8 +3105,6 @@ func TestMmsTables_LevelCompact_20ID10Segment(t *testing.T) {
 			}
 		}
 
-		tm := testTimeStart
-
 		tmMinMax.min = uint64(tm.UnixNano())
 		idMinMax.min = 1
 
@@ -3112,7 +3116,7 @@ func TestMmsTables_LevelCompact_20ID10Segment(t *testing.T) {
 		for i := 0; i < filesN; i++ {
 			ids, data := genTestData(idMinMax.min, idCount, recRows, &startValue, &tm)
 			fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
-			msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 10, fileName, store.Tier(), nil, 2, config.TSSTORE)
+			msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 10, fileName, store.Tier(), nil, 2, config.TSSTORE, nil, 0)
 			write(ids, data, msb)
 
 			for j, id := range ids {
@@ -3499,11 +3503,11 @@ func TestMmsTables_LevelCompact_SegmentLimit(t *testing.T) {
 	}
 
 	confs := []TestConfig{
-		{24, 7, defaultFileSizeLimit, 24, NonStreamingCompact},
-		{24, 7, defaultFileSizeLimit, 24, StreamingCompact},
-		{1000, math.MaxUint16, minFileSizeLimit / 2, 1500 * 10, NonStreamingCompact},
-		{1000, math.MaxUint16, minFileSizeLimit / 2, 1500 * 10, StreamingCompact},
-		{1000, math.MaxUint16, minFileSizeLimit / 2, 1500 * 10, AutoCompact},
+		{24, 7, util.DefaultFileSizeLimit, 24, util.NonStreamingCompact},
+		{24, 7, util.DefaultFileSizeLimit, 24, util.StreamingCompact},
+		{1000, math.MaxUint16, minFileSizeLimit / 2, 1500 * 10, util.NonStreamingCompact},
+		{1000, math.MaxUint16, minFileSizeLimit / 2, 1500 * 10, util.StreamingCompact},
+		{1000, math.MaxUint16, minFileSizeLimit / 2, 1500 * 10, util.AutoCompact},
 	}
 	testCompDir := t.TempDir()
 	lockPath := ""
@@ -3570,7 +3574,7 @@ func TestMmsTables_LevelCompact_SegmentLimit(t *testing.T) {
 			}
 
 			fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
-			msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE)
+			msb := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE, nil, 0)
 			write(ids, data, msb, oldRec)
 			for _, v := range data {
 				recs = append(recs, v)
@@ -3751,4 +3755,72 @@ func TestDisableCompAndMerge(t *testing.T) {
 	mst.DisableCompAndMerge()
 	mst.DisableCompAndMerge()
 	require.False(t, mst.CompactionEnabled())
+}
+
+func TestGenFilePath(t *testing.T) {
+	testCompDir := t.TempDir()
+	_ = fileops.RemoveAll(testCompDir)
+
+	ObsOptions := &obs.ObsOptions{
+		Enabled: true,
+	}
+	fileName := TSSPFileName{
+		seq:   uint64(1),
+		order: true,
+	}
+	_, _ = genFilePath(testCompDir, fileName, ObsOptions, true)
+	_, _ = genFilePath(testCompDir, fileName, nil, false)
+}
+
+func TestFullyCompacted(t *testing.T) {
+	m := &MmsTables{
+		CSFiles: map[string]*TSSPFiles{"table1": &TSSPFiles{files: []TSSPFile{MocTsspFile{
+			path: "/tmp/openGemini",
+		}}}},
+		stopCompMerge: make(chan struct{}),
+	}
+	// test for column store
+	m.ImmTable = NewCsImmTableImpl()
+	fullCompacted := m.ImmTable.FullyCompacted(m)
+	assert.Equal(t, true, fullCompacted)
+}
+
+func TestGetRemoteSuffix(t *testing.T) {
+	fileName := "0000001-000-000000.tssp"
+	res := getRemoteSuffix(fileName)
+	assert.Equal(t, "", res)
+
+	fileName2 := "0000002-000-000000.tssp.obs"
+	res2 := getRemoteSuffix(fileName2)
+	assert.Equal(t, ".obs", res2)
+}
+
+func TestWriteMemoryBloomFilterData(t *testing.T) {
+	testCompDir := t.TempDir()
+	_ = fileops.RemoveAll(testCompDir)
+	sig := interruptsignal.NewInterruptSignal()
+	defer func() {
+		sig.Close()
+		_ = fileops.RemoveAll(testCompDir)
+	}()
+
+	conf := NewColumnStoreConfig()
+	tier := uint64(util.Hot)
+	lockPath := ""
+	store := NewTableStore(testCompDir, &lockPath, &tier, true, conf)
+	defer store.Close()
+
+	fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
+	msBuilder := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.COLUMNSTORE, nil, 0)
+	n := int64(2)
+	buf := make([]byte, logstore.GetConstant(logstore.CurrentLogTokenizerVersion).FilterDataDiskSize*n)
+	memBfData := [][]byte{buf}
+
+	err := msBuilder.writeMemoryBloomFilterData(memBfData, nil, lockPath)
+	assert.NoError(t, err)
+	assert.Equal(t, n, msBuilder.localBFCount)
+
+	err = msBuilder.writeMemoryBloomFilterData(memBfData, nil, lockPath)
+	assert.NoError(t, err)
+	assert.Equal(t, n*2, msBuilder.localBFCount)
 }

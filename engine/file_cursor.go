@@ -238,7 +238,8 @@ func (f *fileCursor) readPreAggData() (*DataBlockInfo, error) {
 		if _, ok := f.memRecIters[sid]; ok && f.isMemRecIterValid(sid, idx) {
 			immutable.AggregateData(f.memRecIters[sid][idx].iter.record, rec, f.ctx.decs.GetOps())
 			immutable.ResetAggregateData(f.memRecIters[sid][idx].iter.record, f.ctx.decs.GetOps())
-			orderRec = f.memRecIters[sid][idx].iter.record.Copy()
+			r := f.memRecIters[sid][idx].iter.record
+			orderRec = r.Copy(true, nil, r.Schema)
 			putRecordIterator(f.memRecIters[sid][idx].iter)
 			if idx+1 == len(f.memRecIters[sid]) {
 				delete(f.memRecIters, sid)
@@ -255,7 +256,8 @@ func (f *fileCursor) readInMemData(tagSetIdx, idx int, sInfo *seriesInfo) *DataB
 	sid := sInfo.GetSid()
 	if _, ok := f.memRecIters[sid]; ok {
 		if f.isMemRecIterValid(sid, idx) {
-			data = &DataBlockInfo{sInfo: sInfo, record: f.memRecIters[sid][idx].iter.record.Copy(),
+			rec := f.memRecIters[sid][idx].iter.record
+			data = &DataBlockInfo{sInfo: sInfo, record: rec.Copy(true, nil, rec.Schema),
 				sid: sid, index: idx, tagSetIndex: tagSetIdx}
 			putRecordIterator(f.memRecIters[sid][idx].iter)
 		}

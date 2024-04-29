@@ -70,6 +70,13 @@ func NewChunkTagsV2(subset []byte) *ChunkTags {
 	return c
 }
 
+func NewChunkTagsDeepCopy(subset []byte, offsets []uint16) *ChunkTags {
+	c := &ChunkTags{}
+	c.subset = append(c.subset, subset...)
+	c.offsets = append(c.offsets, offsets...)
+	return c
+}
+
 func (c *ChunkTags) GetOffsets() []uint16 {
 	return c.offsets
 }

@@ -24,6 +24,7 @@ import (
 	"github.com/openGemini/openGemini/lib/binaryfilterfunc"
 	"github.com/openGemini/openGemini/lib/bitmap"
 	"github.com/openGemini/openGemini/lib/encoding"
+	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
@@ -117,6 +118,7 @@ func Test_AppendString(t *testing.T) {
 }
 
 type MocTsspFile struct {
+	TSSPFile
 	path string
 }
 
@@ -300,7 +302,7 @@ func (m MocTsspFile) ReOpen() error {
 	return nil
 }
 
-func (m MocTsspFile) RenameOnObs(newName string) error {
+func (m MocTsspFile) RenameOnObs(newName string, tmp bool, opt *obs.ObsOptions) error {
 	return nil
 }
 

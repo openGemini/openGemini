@@ -19,57 +19,42 @@ package immutable
 import (
 	"math"
 
-	"github.com/openGemini/openGemini/engine/immutable/colstore"
+	"github.com/openGemini/openGemini/lib/util"
 	"go.uber.org/zap"
-)
-
-const (
-	DefaultMaxRowsPerSegment4TsStore  = 1000
-	DefaultMaxRowsPerSegment4ColStore = colstore.RowsNumPerFragment // should be the same as RowsNumPerFragment@colstore
-	DefaultMaxSegmentLimit4ColStore   = 256 * 1024
-	DefaultMaxChunkMetaItemSize       = 256 * 1024
-	DefaultMaxChunkMetaItemCount      = 512
-	CompressModMaxChunkMetaItemCount  = 16
-
-	NonStreamingCompact               = 2
-	StreamingCompact                  = 1
-	AutoCompact                       = 0
-	DefaultExpectedSegmentSize uint32 = 1024 * 1024
 )
 
 var tsStoreConf = Config{
 	maxSegmentLimit:       math.MaxUint16,
-	maxRowsPerSegment:     DefaultMaxRowsPerSegment4TsStore,
-	maxChunkMetaItemSize:  DefaultMaxChunkMetaItemSize,
-	maxChunkMetaItemCount: DefaultMaxChunkMetaItemCount,
-	fileSizeLimit:         defaultFileSizeLimit,
+	maxRowsPerSegment:     util.DefaultMaxRowsPerSegment4TsStore,
+	maxChunkMetaItemSize:  util.DefaultMaxChunkMetaItemSize,
+	maxChunkMetaItemCount: util.DefaultMaxChunkMetaItemCount,
+	fileSizeLimit:         util.DefaultFileSizeLimit,
 	cacheDataBlock:        false,
 	cacheMetaData:         false,
-	streamingCompact:      AutoCompact,
+	streamingCompact:      util.AutoCompact,
 }
 
 var colStoreConf = Config{
-	maxSegmentLimit:       DefaultMaxSegmentLimit4ColStore,
-	maxRowsPerSegment:     DefaultMaxRowsPerSegment4ColStore,
-	maxChunkMetaItemSize:  DefaultMaxChunkMetaItemSize,
-	maxChunkMetaItemCount: DefaultMaxChunkMetaItemCount,
-	fileSizeLimit:         defaultFileSizeLimit,
+	maxSegmentLimit:       util.DefaultMaxSegmentLimit4ColStore,
+	maxRowsPerSegment:     util.DefaultMaxRowsPerSegment4ColStore,
+	maxChunkMetaItemSize:  util.DefaultMaxChunkMetaItemSize,
+	maxChunkMetaItemCount: util.DefaultMaxChunkMetaItemCount,
+	fileSizeLimit:         util.DefaultFileSizeLimit,
 	detachedFlushEnabled:  false,
 	compactionEnabled:     false,
 	cacheDataBlock:        false,
 	cacheMetaData:         false,
-	streamingCompact:      AutoCompact,
-	expectedSegmentSize:   DefaultExpectedSegmentSize,
+	streamingCompact:      util.AutoCompact,
+	expectedSegmentSize:   util.DefaultExpectedSegmentSize,
 }
 
 func SetMaxRowsPerSegment4TsStore(maxRowsPerSegmentLimit int) {
-	n := maxRowsPerSegmentLimit / 8
-	if maxRowsPerSegmentLimit%8 > 0 {
-		n++
+	if maxRowsPerSegmentLimit <= 0 {
+		tsStoreConf.maxRowsPerSegment = util.DefaultMaxRowsPerSegment4TsStore
+	} else {
+		tsStoreConf.maxRowsPerSegment = maxRowsPerSegmentLimit
 	}
-	n = n * 8
-	tsStoreConf.maxRowsPerSegment = n
-	log.Info("Set maxRowsPerSegmentLimit", zap.Int("limit", n))
+	log.Info("Set maxRowsPerSegmentLimit", zap.Int("limit", tsStoreConf.maxRowsPerSegment))
 }
 
 func SetMaxSegmentLimit4TsStore(limit int) {
@@ -155,10 +140,6 @@ func (c *Config) SetExpectedSegmentSize(n uint32) {
 	c.expectedSegmentSize = n
 }
 
-func (c *Config) GetDetachedFlushEnabled() bool {
-	return c.detachedFlushEnabled
-}
-
 func SetSnapshotTblNum(snapshotTblNum int) {
 	if snapshotTblNum < 1 {
 		snapshotTblNum = 1
@@ -215,4 +196,8 @@ func SetMergeFlag4TsStore(v int32) {
 
 func GetMergeFlag4TsStore() int32 {
 	return tsStoreConf.streamingCompact
+}
+
+func GetDetachedFlushEnabled() bool {
+	return colStoreConf.detachedFlushEnabled
 }

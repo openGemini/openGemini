@@ -361,7 +361,7 @@ func BuildInConditionPlan(ctx context.Context, qc query.LogicalPlanCreator, stmt
 	return NewLogicalJoin(joinNodes, joinSchema), joinSchema, nil
 }
 
-func buildFullJoinQueryPlan(ctx context.Context, qc query.LogicalPlanCreator, stmt *influxql.SelectStatement, schema *QuerySchema) (hybridqp.QueryNode, error) {
+func BuildFullJoinQueryPlan(ctx context.Context, qc query.LogicalPlanCreator, stmt *influxql.SelectStatement, schema *QuerySchema) (hybridqp.QueryNode, error) {
 	joinCases := schema.GetJoinCases()
 	if len(joinCases) != 1 {
 		return nil, fmt.Errorf("only surrport two subquery join")
@@ -391,6 +391,46 @@ func buildFullJoinQueryPlan(ctx context.Context, qc query.LogicalPlanCreator, st
 	return NewLogicalFullJoin(joinNodes[0], joinNodes[1], joinConditon, schema), nil
 }
 
+func BuildBinOpQueryPlan(ctx context.Context, qc query.LogicalPlanCreator, stmt *influxql.SelectStatement, schema *QuerySchema) (hybridqp.QueryNode, error) {
+	binOps := stmt.BinOpSource
+	if len(binOps) != 1 {
+		return nil, fmt.Errorf("only surrport two subquery binOp")
+	}
+	binOpNodes := make([]hybridqp.QueryNode, 0, len(stmt.Sources))
+
+	for i := range stmt.Sources {
+		source := influxql.CloneSource(stmt.Sources[i])
+		optSource := influxql.Sources{source}
+		childOpt := schema.opt.(*query.ProcessorOptions).Clone()
+		childOpt.UpdateSources(optSource)
+		s := NewQuerySchemaWithSources(stmt.Fields, influxql.Sources{stmt.Sources[i]}, stmt.ColumnNames(), childOpt, nil)
+		if schema.opt.IsPromQuery() {
+			s.opt.SetDims(stmt.Sources[i])
+		}
+		child, err := buildSources(ctx, qc, influxql.Sources{stmt.Sources[i]}, s)
+		if err != nil {
+			return nil, err
+		}
+		if child != nil {
+			binOpNodes = append(binOpNodes, child)
+		}
+		schema.sources = append(schema.sources, source)
+	}
+
+	if len(binOpNodes) == 0 {
+		return nil, nil
+	}
+	binop := NewLogicalBinOp(binOpNodes[0], binOpNodes[1], binOps[0], schema)
+	if schema.HasCall() {
+		builder := NewLogicalPlanBuilderImpl(schema)
+		builder.Push(binop)
+		builder.GroupBy()
+		builder.OrderBy()
+		return builder.Build()
+	}
+	return binop, nil
+}
+
 func hasDistinctSelectorCall(s *QuerySchema) (bool, bool) {
 	var hasDistinct, hasSelector bool
 	for _, c := range s.calls {
@@ -410,7 +450,9 @@ func buildAggNode(builder *LogicalPlanBuilderImpl, schema hybridqp.Catalog, hasS
 		(schema.CanAggPushDown() && sysconfig.GetEnableSlidingWindowPushUp() == sysconfig.OnSlidingWindowPushUp) || schema.HasSubQuery()) {
 		builder.SlidingWindow()
 	} else {
-		builder.Aggregate()
+		if !schema.Options().IsRangeVectorSelector() {
+			builder.Aggregate()
+		}
 	}
 }
 
@@ -486,7 +528,9 @@ func buildQueryPlan(ctx context.Context, stmt *influxql.SelectStatement, qc quer
 	if _, ok = schema.Options().GetCondition().(*influxql.InCondition); ok {
 		sp, schema, err = BuildInConditionPlan(ctx, qc, stmt, s)
 	} else if schema.GetJoinCaseCount() > 0 && len(stmt.Sources) == 2 {
-		sp, err = buildFullJoinQueryPlan(ctx, qc, stmt, s)
+		sp, err = BuildFullJoinQueryPlan(ctx, qc, stmt, s)
+	} else if len(stmt.BinOpSource) > 0 && len(stmt.Sources) == 2 {
+		sp, err = BuildBinOpQueryPlan(ctx, qc, stmt, s)
 	} else if stmt.Sources = qc.GetSources(stmt.Sources); len(stmt.Sources) > 1 {
 		sp, err = buildSortAppendQueryPlan(ctx, qc, stmt, s)
 	} else {
@@ -550,19 +594,21 @@ func buildSources(ctx context.Context, qc query.LogicalPlanCreator, sources infl
 			stmt: source.Statement,
 		}
 		subQueryPlan, err := subQueryBuilder.Build(ctx, *schema.Options().(*query.ProcessorOptions))
-		if subQueryPlan == nil {
-			return nil, nil
-		}
 		if err != nil {
 			return nil, err
+		}
+		if subQueryPlan == nil {
+			return nil, nil
 		}
 		builder.Push(subQueryPlan)
 		if schema.Options().GetCondition() != nil {
 			builder.Filter()
 		}
 		builder.SubQuery()
-		builder.GroupBy()
-		builder.OrderBy()
+		if len(subQueryBuilder.stmt.BinOpSource) == 0 {
+			builder.GroupBy()
+			builder.OrderBy()
+		}
 		return builder.Build()
 
 	default:

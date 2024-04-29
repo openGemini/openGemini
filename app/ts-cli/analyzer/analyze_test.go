@@ -37,7 +37,7 @@ func TestAnalyze(t *testing.T) {
 func buildFile(t *testing.T, saveDir string) string {
 	lockPath := ""
 	fileName := immutable.NewTSSPFileName(1, 0, 0, 0, true, &lockPath)
-	builder := immutable.NewMsBuilder(saveDir, "mst", &lockPath, immutable.GetTsStoreConfig(), 0, fileName, 1, nil, 2, config.TSSTORE)
+	builder := immutable.NewMsBuilder(saveDir, "mst", &lockPath, immutable.GetTsStoreConfig(), 0, fileName, 1, nil, 2, config.TSSTORE, nil, 0)
 
 	schema := getDefaultSchemas()
 	rec := record.NewRecordBuilder(schema)
@@ -48,6 +48,7 @@ func buildFile(t *testing.T, saveDir string) string {
 	rec.AppendTime(1, 2, 3, 4, 5, 6, 7, 8, 9)
 	require.NoError(t, builder.WriteData(1, rec))
 
+	rec.Schema = getDefaultSchemas()
 	rec.ResetForReuse()
 	rec.Column(0).AppendIntegers(11, 299999999, 35, 422222222222, 5111111, 1888768, 1, 2)
 	rec.Column(1).AppendFloats(1.11, 2.22, 3.22, 4.33, 5.44, 6.66, 7.77, 8.88)
@@ -57,6 +58,7 @@ func buildFile(t *testing.T, saveDir string) string {
 	rec.AppendTime(1, 2, 33, 444, 5555, 66666, 777777, 88888888)
 	require.NoError(t, builder.WriteData(2, rec))
 
+	rec.Schema = getDefaultSchemas()
 	rec.ResetForReuse()
 	rec.Column(0).AppendIntegers(1)
 	rec.Column(1).AppendFloats(1)

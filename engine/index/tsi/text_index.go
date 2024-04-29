@@ -43,6 +43,8 @@ type TextIndex struct {
 	fieldTableLock sync.RWMutex
 	path           string
 	lock           *string
+
+	isOpen bool
 }
 
 func NewTextIndex(opts *Options) (*TextIndex, error) {
@@ -113,6 +115,11 @@ func (idx *TextIndex) NewTokenIndex(idxPath, measurement, field string) error {
 }
 
 func (idx *TextIndex) Open() error {
+	idx.fieldTableLock.Lock()
+	defer idx.fieldTableLock.Unlock()
+	if idx.isOpen {
+		return nil
+	}
 	path := path.Join(idx.path, TextDirectory)
 	mstDirs, err := fileops.ReadDir(path)
 	if err != nil {
@@ -138,18 +145,21 @@ func (idx *TextIndex) Open() error {
 				continue
 			}
 			field := fieldDirs[fieldIdx].Name()
-			idx.fieldTableLock.Lock()
-			err := idx.NewTokenIndex(idx.path, measurement, field)
-			idx.fieldTableLock.Unlock()
+			err = idx.NewTokenIndex(idx.path, measurement, field)
 			if err != nil {
 				return err
 			}
 		}
 	}
+	idx.isOpen = true
 	return nil
 }
 
 func (idx *TextIndex) Close() error {
+	if !idx.isOpen {
+		return nil
+	}
+
 	idx.fieldTableLock.RLock()
 	for _, tokenIndexMap := range idx.fieldTable {
 		for _, tokenIndex := range tokenIndexMap {
@@ -157,7 +167,7 @@ func (idx *TextIndex) Close() error {
 		}
 	}
 	idx.fieldTableLock.RUnlock()
-
+	idx.isOpen = false
 	return nil
 }
 

@@ -36,7 +36,7 @@ type DetachedPKMetaInfoReader struct {
 }
 
 func NewDetachedPKMetaInfoReader(path string, opts *obs.ObsOptions) (*DetachedPKMetaInfoReader, error) {
-	fd, err := obs.OpenObsFile(path, PrimaryMetaFile, opts)
+	fd, err := fileops.OpenObsFile(path, PrimaryMetaFile, opts, true)
 	if err != nil {
 		return nil, err
 	}
@@ -58,7 +58,7 @@ func (reader *DetachedPKMetaInfoReader) Read() (*colstore.DetachedPKMetaInfo, er
 
 func (reader *DetachedPKMetaInfoReader) readPKMetaInfoLength(offset, length []int64) ([]*colstore.DetachedPKMetaInfo, error) {
 	c := make(chan *request.StreamReader, 1)
-	reader.r.StreamReadBatch(offset, length, c, PKMetaLimitNum)
+	reader.r.StreamReadBatch(offset, length, c, PKMetaLimitNum, true)
 	pkItems := make([]*colstore.DetachedPKMetaInfo, len(offset))
 	i := 0
 	for r := range c {
@@ -77,7 +77,7 @@ func (reader *DetachedPKMetaInfoReader) readPKMetaInfoLength(offset, length []in
 
 func (reader *DetachedPKMetaInfoReader) readPKMetaInfoItem(offset, length []int64) ([]*colstore.DetachedPKMetaInfo, error) {
 	c := make(chan *request.StreamReader, 1)
-	reader.r.StreamReadBatch(offset, length, c, PKMetaLimitNum)
+	reader.r.StreamReadBatch(offset, length, c, PKMetaLimitNum, true)
 	pkItems := make([]*colstore.DetachedPKMetaInfo, len(offset))
 	i := 0
 	for r := range c {
@@ -95,4 +95,19 @@ func (reader *DetachedPKMetaInfoReader) readPKMetaInfoItem(offset, length []int6
 		return pkItems[i].Offset < pkItems[j].Offset
 	})
 	return pkItems, nil
+}
+
+func (reader *DetachedPKMetaInfoReader) Close() {
+	if reader.r != nil {
+		reader.r.Close()
+	}
+}
+
+func ReadPKMetaInfoAll(path string, opts *obs.ObsOptions) (*colstore.DetachedPKMetaInfo, error) {
+	reader, err := NewDetachedPKMetaInfoReader(path, opts)
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+	return reader.Read()
 }

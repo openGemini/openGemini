@@ -52,6 +52,7 @@ import (
 	"github.com/openGemini/openGemini/services/downsample"
 	"github.com/openGemini/openGemini/services/hierarchical"
 	"github.com/openGemini/openGemini/services/retention"
+	"go.etcd.io/etcd/raft/v3/raftpb"
 	"go.uber.org/zap"
 )
 
@@ -90,7 +91,7 @@ type SlaveStorage interface {
 
 type MetaClient interface {
 	GetShardRangeInfo(db string, rp string, shardID uint64) (*meta.ShardTimeRangeInfo, error)
-	GetMeasurementInfoStore(dbName string, rpName string, mstName string) (*meta.MeasurementInfo, error)
+	RetryMeasurement(dbName string, rpName string, mstName string) (*meta.MeasurementInfo, error)
 	GetReplicaInfo(db string, pt uint32) *message.ReplicaInfo
 }
 
@@ -180,32 +181,46 @@ func OpenStorage(path string, node *metaclient.Node, cli *metaclient.Client, con
 	loadCtx.LoadCh = make(chan *metaclient.DBPTCtx)
 	opt := netstorage.NewEngineOptions()
 	opt.ImmTableMaxMemoryPercentage = conf.Data.ImmTableMaxMemoryPercentage
-	opt.WriteColdDuration = time.Duration(conf.Data.WriteColdDuration)
-	opt.ShardMutableSizeLimit = int64(conf.Data.ShardMutableSizeLimit)
-	opt.NodeMutableSizeLimit = int64(conf.Data.NodeMutableSizeLimit)
-	opt.MaxWriteHangTime = time.Duration(conf.Data.MaxWriteHangTime)
-	opt.MemDataReadEnabled = conf.Data.MemDataReadEnabled
-	opt.CompactThroughput = int64(conf.Data.CompactThroughput)
-	opt.CompactThroughputBurst = int64(conf.Data.CompactThroughputBurst)
-	opt.CompactRecovery = conf.Data.CompactRecovery
-	opt.SnapshotThroughput = int64(conf.Data.SnapshotThroughput)
-	opt.SnapshotThroughputBurst = int64(conf.Data.SnapshotThroughputBurst)
-	opt.BackgroundReadThroughput = int(conf.Data.BackGroundReadThroughput)
-	opt.MaxConcurrentCompactions = conf.Data.MaxConcurrentCompactions
-	opt.MaxFullCompactions = conf.Data.MaxFullCompactions
-	opt.FullCompactColdDuration = time.Duration(conf.Data.CompactFullWriteColdDuration)
+
+	// for memTable
+	opt.WriteColdDuration = time.Duration(conf.Data.MemTable.WriteColdDuration)
+	opt.ForceSnapShotDuration = time.Duration(conf.Data.MemTable.ForceSnapShotDuration)
+	opt.ShardMutableSizeLimit = int64(conf.Data.MemTable.ShardMutableSizeLimit)
+	opt.NodeMutableSizeLimit = int64(conf.Data.MemTable.NodeMutableSizeLimit)
+	opt.MaxWriteHangTime = time.Duration(conf.Data.MemTable.MaxWriteHangTime)
+	opt.MemDataReadEnabled = conf.Data.MemTable.MemDataReadEnabled
+	opt.SnapshotTblNum = conf.Data.MemTable.SnapshotTblNum
+	opt.FragmentsNumPerFlush = conf.Data.MemTable.FragmentsNumPerFlush
+	opt.CsDetachedFlushEnabled = conf.Data.MemTable.CsDetachedFlushEnabled
+
+	// for wal
+	opt.WalSyncInterval = time.Duration(conf.Data.Wal.WalSyncInterval)
+	opt.WalEnabled = conf.Data.Wal.WalEnabled
+	opt.WalReplayParallel = conf.Data.Wal.WalReplayParallel
+	opt.WalReplayAsync = conf.Data.Wal.WalReplayAsync
+	opt.WalReplayBatchSize = int(conf.Data.Wal.WalReplayBatchSize)
+
+	// for compact
+	opt.CompactThroughput = int64(conf.Data.Compact.CompactThroughput)
+	opt.CompactThroughputBurst = int64(conf.Data.Compact.CompactThroughputBurst)
+	opt.CompactRecovery = conf.Data.Compact.CompactRecovery
+	opt.SnapshotThroughput = int64(conf.Data.Compact.SnapshotThroughput)
+	opt.SnapshotThroughputBurst = int64(conf.Data.Compact.SnapshotThroughputBurst)
+	opt.BackgroundReadThroughput = int(conf.Data.Compact.BackGroundReadThroughput)
+	opt.MaxConcurrentCompactions = conf.Data.Compact.MaxConcurrentCompactions
+	opt.MaxFullCompactions = conf.Data.Compact.MaxFullCompactions
+	opt.FullCompactColdDuration = time.Duration(conf.Data.Compact.CompactFullWriteColdDuration)
+	opt.CompactionMethod = conf.Data.Compact.CompactionMethod
+	opt.CsCompactionEnabled = conf.Data.Compact.CsCompactionEnabled
+
+	// for readCache
+	opt.ReadPageSize = conf.Data.ReadCache.ReadPageSize
+	opt.ReadMetaCacheLimit = uint64(conf.Data.ReadCache.ReadMetaCacheEn)
+	opt.ReadDataCacheLimit = uint64(conf.Data.ReadCache.ReadDataCacheEn)
+
 	opt.CacheDataBlock = conf.Data.CacheDataBlock
 	opt.CacheMetaBlock = conf.Data.CacheMetaBlock
 	opt.EnableMmapRead = conf.Data.EnableMmapRead
-	opt.ReadPageSize = conf.Data.ReadPageSize
-	opt.ReadMetaCacheLimit = uint64(conf.Data.ReadMetaCacheEn)
-	opt.ReadDataCacheLimit = uint64(conf.Data.ReadDataCacheEn)
-	opt.WalSyncInterval = time.Duration(conf.Data.WalSyncInterval)
-	opt.WalEnabled = conf.Data.WalEnabled
-	opt.WalReplayParallel = conf.Data.WalReplayParallel
-	opt.WalReplayAsync = conf.Data.WalReplayAsync
-	opt.WalReplayBatchSize = int(conf.Data.WalReplayBatchSize)
-	opt.CompactionMethod = conf.Data.CompactionMethod
 	opt.OpenShardLimit = conf.Data.OpenShardLimit
 	opt.LazyLoadShardEnable = conf.Data.LazyLoadShardEnable
 	opt.ThermalShardStartDuration = time.Duration(conf.Data.ThermalShardStartDuration)
@@ -213,10 +228,8 @@ func OpenStorage(path string, node *metaclient.Node, cli *metaclient.Client, con
 	opt.DownSampleWriteDrop = conf.Data.DownSampleWriteDrop
 	opt.MaxDownSampleTaskConcurrency = conf.Data.MaxDownSampleTaskConcurrency
 	opt.MaxSeriesPerDatabase = conf.Data.MaxSeriesPerDatabase
-	opt.SnapshotTblNum = conf.Data.SnapshotTblNum
-	opt.FragmentsNumPerFlush = conf.Data.FragmentsNumPerFlush
-	opt.CsCompactionEnabled = conf.Data.CsCompactionEnabled
-	opt.CsDetachedFlushEnabled = conf.Data.CsDetachedFlushEnabled
+	opt.MaxRowsPerSegment = conf.Data.MaxRowsPerSegment
+	opt.ShardMoveLayoutSwitchEnabled = conf.Data.ShardMoveLayoutSwitchEnabled
 
 	// init clv config
 	clv.InitConfig(conf.ClvConfig)
@@ -263,6 +276,7 @@ func OpenStorage(path string, node *metaclient.Node, cli *metaclient.Client, con
 	s.MetaClient = cli
 	s.log = logger.NewLogger(errno.ModuleStorageEngine)
 	// Append services.
+	config.SetSFSConfig(conf.Data.DataDir)
 	s.appendRetentionPolicyService(conf.Retention)
 	s.appendDownSamplePolicyService(conf.DownSample)
 	s.appendHierarchicalService(conf.HierarchicalStore)
@@ -287,12 +301,12 @@ var writeHandler []write
 
 func init() {
 	writeHandler = make([]write, config.PolicyEnd)
-	writeHandler[config.WriteAvailableFirst] = writeRows
-	writeHandler[config.SharedStorage] = writeRows
-	writeHandler[config.Replication] = writeRowsForRep
+	writeHandler[config.WriteAvailableFirst] = WriteRows
+	writeHandler[config.SharedStorage] = WriteRows
+	writeHandler[config.Replication] = WriteRowsForRep
 }
 
-func writeRows(s *Storage, db, rp string, ptId uint32, shardID uint64, rows []influx.Row, binaryRows []byte) error {
+func WriteRows(s *Storage, db, rp string, ptId uint32, shardID uint64, rows []influx.Row, binaryRows []byte) error {
 	db = stringinterner.InternSafe(db)
 	rp = stringinterner.InternSafe(rp)
 	return s.Write(db, rp, rows[0].Name, ptId, shardID, func() error {
@@ -308,7 +322,7 @@ func handleError(once *sync.Once, err error, errs error) {
 	}
 }
 
-func writeRowsForRep(s *Storage, db, rp string, ptId uint32, shardID uint64, rows []influx.Row, binaryRows []byte) error {
+func WriteRowsForRep(s *Storage, db, rp string, ptId uint32, shardID uint64, rows []influx.Row, binaryRows []byte) error {
 	db = stringinterner.InternSafe(db)
 	rp = stringinterner.InternSafe(rp)
 
@@ -381,11 +395,12 @@ func (s *Storage) Write(db, rp, mst string, ptId uint32, shardID uint64, writeDa
 	var timeRangeInfo *meta.ShardTimeRangeInfo
 	timeRangeInfo, err = s.MetaClient.GetShardRangeInfo(db, rp, shardID)
 	if err != nil {
+		s.log.Error("Storage Write GetShardRangeInfo err", zap.String("err", err.Error()))
 		return err
 	}
 	// all rows belongs to the same shard/engine type, we can get engine type from the first one.
 	var mstInfo *meta.MeasurementInfo
-	mstInfo, err = s.MetaClient.GetMeasurementInfoStore(db, rp, influx.GetOriginMstName(mst))
+	mstInfo, err = s.MetaClient.RetryMeasurement(db, rp, influx.GetOriginMstName(mst))
 	if err != nil {
 		return err
 	}
@@ -544,7 +559,7 @@ func (s *Storage) Offload(opId uint64, ptInfo *meta.DbPtInfo) error {
 }
 
 func (s *Storage) Assign(opId uint64, ptInfo *meta.DbPtInfo) error {
-	return s.engine.Assign(opId, ptInfo.Db, ptInfo.Pti.PtId, ptInfo.Pti.Ver, ptInfo.Shards, ptInfo.DBBriefInfo, s.metaClient)
+	return s.engine.Assign(opId, ptInfo.Pti.Owner.NodeID, ptInfo.Db, ptInfo.Pti.PtId, ptInfo.Pti.Ver, ptInfo.Shards, ptInfo.DBBriefInfo, s.metaClient)
 }
 
 func (s *Storage) GetConnId() uint64 {
@@ -577,4 +592,8 @@ func stringSlice2BytesSlice(s []string) [][]byte {
 		ret = append(ret, []byte(name))
 	}
 	return ret
+}
+
+func (s *Storage) SendRaftMessage(database string, opId uint64, msg raftpb.Message) error {
+	return s.engine.SendRaftMessage(database, opId, msg)
 }

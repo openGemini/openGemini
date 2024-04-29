@@ -20,9 +20,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"math"
 	"os"
+	"path"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -31,7 +33,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
 	set "github.com/deckarep/golang-set"
 	"github.com/influxdata/influxdb/models"
 	"github.com/influxdata/influxdb/pkg/tracing/fields"
@@ -71,6 +72,7 @@ import (
 )
 
 func init() {
+	_ = flag.Set("loggerLevel", "ERROR")
 	immutable.EnableMergeOutOfOrder = false
 	logger.InitLogger(config.NewLogger(config.AppStore))
 	immutable.Init()
@@ -221,7 +223,7 @@ func genRecord() *record.Record {
 		[]int{1}, []string{"hello"},
 		[]int{1}, []bool{false},
 		[]int64{1})
-
+	sort.Sort(rec)
 	return rec
 }
 
@@ -285,9 +287,9 @@ func createShard(db, rp string, ptId uint32, pathName string, engineType config.
 		immutable.SetSnapshotTblNum(8)
 		immutable.SetCompactionEnabled(false)
 	}
-	sh := NewShard(dataPath, walPath, &lockPath, shardIdent, shardDuration, tr, DefaultEngineOption, engineType)
+	sh := NewShard(dataPath, walPath, &lockPath, shardIdent, shardDuration, tr, DefaultEngineOption, engineType, nil)
 	sh.indexBuilder = indexBuilder
-	sh.storage.SetClient(&MockMetaClient{})
+	sh.SetClient(&MockMetaClient{})
 	if len(duration) > 0 {
 		sh.SetWriteColdDuration(duration[0])
 	}
@@ -385,7 +387,7 @@ func genQueryOpt(tc *TestCase, msName string, ascending bool) *query.ProcessorOp
 func appendFieldValueToRecord(rec *record.Record, fields []influx.Field, timeStamp int64) {
 	fieldExist := false
 	for _, v := range fields {
-		recIndex := rec.FieldIndexs(v.Key)
+		recIndex := rec.FieldIndexsFast(v.Key)
 		if recIndex == -1 {
 			continue
 		}
@@ -990,6 +992,9 @@ func TestShard_NewColStoreShard(t *testing.T) {
 			PrimaryKey: []string{}}}
 
 	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta.MeasurementInfo{mstsInfo[defaultMeasurementName]},
+	})
 	// step2: write data
 	st := time.Now().Truncate(time.Second)
 	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
@@ -1018,6 +1023,9 @@ func TestShard_NewColStoreShardWithPKIndex(t *testing.T) {
 			"field2_int":    influx.Field_Type_Int}}
 
 	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta.MeasurementInfo{mstsInfo[defaultMeasurementName]},
+	})
 	// step2: write data
 	st := time.Now().Truncate(time.Second)
 	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
@@ -1093,6 +1101,9 @@ func TestShard_NewColStoreShardWithPKIndexAndTC(t *testing.T) {
 			"field2_int":    influx.Field_Type_Int}}
 
 	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta.MeasurementInfo{mstsInfo[defaultMeasurementName]},
+	})
 	// step2: write data
 	st := time.Now().Truncate(time.Second)
 	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
@@ -1168,6 +1179,9 @@ func TestShard_NewColStoreShardWithPKIndexAndTCNilPrimaryKey(t *testing.T) {
 			"field2_int":    influx.Field_Type_Int}}
 
 	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta.MeasurementInfo{mstsInfo[defaultMeasurementName]},
+	})
 	// step2: write data
 	st := time.Now().Truncate(time.Second)
 	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
@@ -1243,6 +1257,9 @@ func TestShard_NewColStoreShardWithPKIndexMultiFiles(t *testing.T) {
 			"field2_int":    influx.Field_Type_Int}}
 
 	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta.MeasurementInfo{mstsInfo[defaultMeasurementName]},
+	})
 	// step2: write data
 	st := time.Now().Truncate(time.Second)
 	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
@@ -1298,8 +1315,8 @@ func TestShard_NewColStoreShardWithPKIndexMultiFiles(t *testing.T) {
 	}
 	require.NoError(t, closeShard(sh))
 	// recover config so that not to affect other tests
-	conf.SetMaxSegmentLimit(immutable.DefaultMaxSegmentLimit4ColStore)
-	conf.SetMaxRowsPerSegment(immutable.DefaultMaxRowsPerSegment4ColStore)
+	conf.SetMaxSegmentLimit(util.DefaultMaxSegmentLimit4ColStore)
+	conf.SetMaxRowsPerSegment(util.DefaultMaxRowsPerSegment4ColStore)
 }
 
 func TestShard_NewColStoreShardWithPKIndexAndTCMultiFiles(t *testing.T) {
@@ -1325,6 +1342,9 @@ func TestShard_NewColStoreShardWithPKIndexAndTCMultiFiles(t *testing.T) {
 			"field2_int":    influx.Field_Type_Int}}
 
 	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta.MeasurementInfo{mstsInfo[defaultMeasurementName]},
+	})
 	// step2: write data
 	st := time.Now().Truncate(time.Second)
 	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
@@ -1380,8 +1400,8 @@ func TestShard_NewColStoreShardWithPKIndexAndTCMultiFiles(t *testing.T) {
 	}
 	require.NoError(t, closeShard(sh))
 	// recover config so that not to affect other tests
-	conf.SetMaxSegmentLimit(immutable.DefaultMaxSegmentLimit4ColStore)
-	conf.SetMaxRowsPerSegment(immutable.DefaultMaxRowsPerSegment4ColStore)
+	conf.SetMaxSegmentLimit(util.DefaultMaxSegmentLimit4ColStore)
+	conf.SetMaxRowsPerSegment(util.DefaultMaxRowsPerSegment4ColStore)
 }
 
 func TestShard_NewColStoreShardWithPKIndexAndTCNilPrimaryKeyMultiFiles(t *testing.T) {
@@ -1407,6 +1427,9 @@ func TestShard_NewColStoreShardWithPKIndexAndTCNilPrimaryKeyMultiFiles(t *testin
 			"field2_int":    influx.Field_Type_Int}}
 
 	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta.MeasurementInfo{mstsInfo[defaultMeasurementName]},
+	})
 	// step2: write data
 	st := time.Now().Truncate(time.Second)
 	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
@@ -1462,8 +1485,8 @@ func TestShard_NewColStoreShardWithPKIndexAndTCNilPrimaryKeyMultiFiles(t *testin
 	}
 	require.NoError(t, closeShard(sh))
 	// recover config so that not to affect other tests
-	conf.SetMaxSegmentLimit(immutable.DefaultMaxSegmentLimit4ColStore)
-	conf.SetMaxRowsPerSegment(immutable.DefaultMaxRowsPerSegment4ColStore)
+	conf.SetMaxSegmentLimit(util.DefaultMaxSegmentLimit4ColStore)
+	conf.SetMaxRowsPerSegment(util.DefaultMaxRowsPerSegment4ColStore)
 }
 
 func TestColStoreWriteSkipIndex(t *testing.T) {
@@ -1490,6 +1513,9 @@ func TestColStoreWriteSkipIndex(t *testing.T) {
 	}
 
 	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta.MeasurementInfo{mstsInfo[defaultMeasurementName]},
+	})
 	// step2: write data
 	st := time.Now().Truncate(time.Second)
 	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
@@ -1502,6 +1528,9 @@ func TestColStoreWriteSkipIndex(t *testing.T) {
 	mstsInfo["cpu1"] = mstsInfo[defaultMeasurementName]
 	mstsInfo["cpu1"].Name = "cpu1"
 	sh.SetMstInfo(mstsInfo["cpu1"])
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta.MeasurementInfo{mstsInfo["cpu1"]},
+	})
 	err = sh.WriteCols("cpu1", rec, nil)
 	require.Equal(t, err, nil)
 	sh.ForceFlush()
@@ -1538,6 +1567,9 @@ func TestColStoreWriteSkipIndexSwitchFile(t *testing.T) {
 	}
 
 	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta.MeasurementInfo{mstsInfo[defaultMeasurementName]},
+	})
 	// step2: write data
 	st := time.Now().Truncate(time.Second)
 	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
@@ -1550,6 +1582,9 @@ func TestColStoreWriteSkipIndexSwitchFile(t *testing.T) {
 	mstsInfo["cpu1"] = mstsInfo[defaultMeasurementName]
 	mstsInfo["cpu1"].Name = "cpu1"
 	sh.SetMstInfo(mstsInfo["cpu1"])
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta.MeasurementInfo{mstsInfo["cpu1"]},
+	})
 	err = sh.WriteCols("cpu1", rec, nil)
 	require.Equal(t, err, nil)
 	sh.ForceFlush()
@@ -1582,7 +1617,7 @@ func TestShard_AsyncWalReplay_serial(t *testing.T) {
 	copyOptions.WalReplayAsync = true
 	shardIdent := &meta.ShardIdentifier{ShardID: sh.ident.ShardID, Policy: sh.ident.Policy, OwnerDb: sh.ident.OwnerDb, OwnerPt: sh.ident.OwnerPt}
 	tr := &meta.TimeRangeInfo{StartTime: sh.startTime, EndTime: sh.endTime}
-	newSh := NewShard(sh.dataPath, sh.walPath, sh.lock, shardIdent, sh.durationInfo, tr, copyOptions, config.TSSTORE)
+	newSh := NewShard(sh.dataPath, sh.walPath, sh.lock, shardIdent, sh.durationInfo, tr, copyOptions, config.TSSTORE, nil)
 	newSh.indexBuilder = sh.indexBuilder
 	if err = newSh.OpenAndEnable(nil); err != nil {
 		t.Fatal(err)
@@ -1625,7 +1660,7 @@ func TestShard_AsyncWalReplay_parallel_withCancel(t *testing.T) {
 	copyOptions.WalReplayParallel = true
 	shardIdent := &meta.ShardIdentifier{ShardID: sh.ident.ShardID, Policy: sh.ident.Policy, OwnerDb: sh.ident.OwnerDb, OwnerPt: sh.ident.OwnerPt}
 	tr := &meta.TimeRangeInfo{StartTime: sh.startTime, EndTime: sh.endTime}
-	newSh := NewShard(sh.dataPath, sh.walPath, sh.lock, shardIdent, sh.durationInfo, tr, copyOptions, config.TSSTORE)
+	newSh := NewShard(sh.dataPath, sh.walPath, sh.lock, shardIdent, sh.durationInfo, tr, copyOptions, config.TSSTORE, nil)
 	newSh.indexBuilder = sh.indexBuilder
 	require.Equal(t, 0, len(newSh.wal.logReplay[0].fileNames))
 	if err = newSh.OpenAndEnable(nil); err != nil {
@@ -1661,6 +1696,9 @@ func TestShard_AsyncWalReplay_serial_ArrowFlight(t *testing.T) {
 			PrimaryKey: []string{}}}
 
 	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta.MeasurementInfo{mstsInfo[defaultMeasurementName]},
+	})
 	// step2: write data
 	rec := genRecord()
 	err = writeRec(sh, rec, false)
@@ -1680,9 +1718,12 @@ func TestShard_AsyncWalReplay_serial_ArrowFlight(t *testing.T) {
 	copyOptions.WalReplayAsync = true
 	shardIdent := &meta.ShardIdentifier{ShardID: sh.ident.ShardID, Policy: sh.ident.Policy, OwnerDb: sh.ident.OwnerDb, OwnerPt: sh.ident.OwnerPt}
 	tr := &meta.TimeRangeInfo{StartTime: sh.startTime, EndTime: sh.endTime}
-	newSh := NewShard(sh.dataPath, sh.walPath, sh.lock, shardIdent, sh.durationInfo, tr, copyOptions, config.COLUMNSTORE)
+	newSh := NewShard(sh.dataPath, sh.walPath, sh.lock, shardIdent, sh.durationInfo, tr, copyOptions, config.COLUMNSTORE, nil)
 	newSh.indexBuilder = sh.indexBuilder
 	newSh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	newSh.SetClient(&MockMetaClient{
+		mstInfo: []*meta.MeasurementInfo{mstsInfo[defaultMeasurementName]},
+	})
 	if err = newSh.OpenAndEnable(nil); err != nil {
 		t.Fatal(err)
 	}
@@ -1728,6 +1769,9 @@ func TestShard_AsyncWalReplay_parallel_ArrowFlight(t *testing.T) {
 			PrimaryKey: []string{}}}
 
 	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta.MeasurementInfo{mstsInfo[defaultMeasurementName]},
+	})
 	// step2: write data
 	rec := genRecord()
 	err = writeRec(sh, rec, false)
@@ -1748,9 +1792,12 @@ func TestShard_AsyncWalReplay_parallel_ArrowFlight(t *testing.T) {
 	copyOptions.WalReplayParallel = true
 	shardIdent := &meta.ShardIdentifier{ShardID: sh.ident.ShardID, Policy: sh.ident.Policy, OwnerDb: sh.ident.OwnerDb, OwnerPt: sh.ident.OwnerPt}
 	tr := &meta.TimeRangeInfo{StartTime: sh.startTime, EndTime: sh.endTime}
-	newSh := NewShard(sh.dataPath, sh.walPath, sh.lock, shardIdent, sh.durationInfo, tr, copyOptions, config.COLUMNSTORE)
+	newSh := NewShard(sh.dataPath, sh.walPath, sh.lock, shardIdent, sh.durationInfo, tr, copyOptions, config.COLUMNSTORE, nil)
 	newSh.indexBuilder = sh.indexBuilder
 	newSh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	newSh.SetClient(&MockMetaClient{
+		mstInfo: []*meta.MeasurementInfo{mstsInfo[defaultMeasurementName]},
+	})
 	require.Equal(t, 0, len(newSh.wal.logReplay[0].fileNames))
 	if err = newSh.OpenAndEnable(nil); err != nil {
 		t.Fatal(err)
@@ -1761,7 +1808,7 @@ func TestShard_AsyncWalReplay_parallel_ArrowFlight(t *testing.T) {
 	record = msInfo.GetWriteChunk().WriteRec.GetRecord()
 	rec.AppendRec(rec, 0, rec.RowNums())
 	for newSh.replayingWal {
-		time.Sleep(13 * time.Millisecond)
+		time.Sleep(3 * time.Second)
 		fmt.Println("wait load wal done")
 	}
 	if !testRecsEqual(rec, record) {
@@ -1788,6 +1835,9 @@ func TestShard_AsyncWalReplay_parallel_ArrowFlight_WithCancel(t *testing.T) {
 			PrimaryKey: []string{}}}
 
 	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta.MeasurementInfo{mstsInfo[defaultMeasurementName]},
+	})
 	sh.SetWriteColdDuration(time.Minute)
 
 	// step2: write data
@@ -1810,9 +1860,12 @@ func TestShard_AsyncWalReplay_parallel_ArrowFlight_WithCancel(t *testing.T) {
 	copyOptions.WalReplayParallel = true
 	shardIdent := &meta.ShardIdentifier{ShardID: sh.ident.ShardID, Policy: sh.ident.Policy, OwnerDb: sh.ident.OwnerDb, OwnerPt: sh.ident.OwnerPt}
 	tr := &meta.TimeRangeInfo{StartTime: sh.startTime, EndTime: sh.endTime}
-	newSh := NewShard(sh.dataPath, sh.walPath, sh.lock, shardIdent, sh.durationInfo, tr, copyOptions, config.COLUMNSTORE)
+	newSh := NewShard(sh.dataPath, sh.walPath, sh.lock, shardIdent, sh.durationInfo, tr, copyOptions, config.COLUMNSTORE, nil)
 	newSh.indexBuilder = sh.indexBuilder
 	newSh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	newSh.SetClient(&MockMetaClient{
+		mstInfo: []*meta.MeasurementInfo{mstsInfo[defaultMeasurementName]},
+	})
 	require.Equal(t, 0, len(newSh.wal.logReplay[0].fileNames))
 	if err = newSh.OpenAndEnable(nil); err != nil {
 		t.Fatal(err)
@@ -1942,6 +1995,9 @@ func TestWriteRowsToColumnStoreError(t *testing.T) {
 		t.Fatal(err)
 	}
 	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta.MeasurementInfo{mstsInfo[defaultMeasurementName]},
+	})
 	st := time.Now().Truncate(time.Second)
 	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
 	ctx := getMstWriteCtx(time.Millisecond*10, config.TSSTORE)
@@ -1952,7 +2008,7 @@ func TestWriteRowsToColumnStoreError(t *testing.T) {
 		t.Fatal(err)
 	}
 	mmPoints := ctx.getMstMap()
-	ctx.initWriteRowsCtx(sh.getLastFlushTime, sh.addRowCountsBySid, storage.mstsInfo)
+	ctx.initWriteRowsCtx(sh.addRowCountsBySid, storage.mstsInfo)
 	ctx.writeRowsCtx.MstsInfo.Delete(defaultMeasurementName)
 	err = sh.activeTbl.MTable.WriteRows(sh.activeTbl, mmPoints, ctx.writeRowsCtx)
 	require.Equal(t, err, errors.New("measurement info is not found"))
@@ -2230,6 +2286,8 @@ func TestAggQueryOnlyInImmutable_NoEmpty(t *testing.T) {
 			{"PartFieldFilter_single_column_int", minTime, maxTime, createFieldAux([]string{"field2_int"}), "", nil, true, []string{"first", "min", "max", "last", "count", "sum"}},
 			{"PartFieldFilter_single_column_bool", minTime, maxTime, createFieldAux([]string{"field3_bool"}), "", nil, true, []string{"first", "last", "min", "max", "count"}},
 			{"PartFieldFilter_single_column_float", minTime, maxTime, createFieldAux([]string{"field4_float"}), "", nil, true, []string{"first", "min", "max", "last", "count", "sum"}},
+			{"PartFieldFilter_single_column_float_min_prom", minTime, maxTime, createFieldAux([]string{"field4_float"}), "", nil, true, []string{"min_prom"}},
+			{"PartFieldFilter_single_column_float_max_prom", minTime, maxTime, createFieldAux([]string{"field4_float"}), "", nil, true, []string{"max_prom"}},
 		}
 		chunkSize := []int{1, 2}
 		timeOrder := []bool{true, false}
@@ -2909,7 +2967,7 @@ func TestQueryOnlyInMutableTable(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		mutable.SetSizeLimit(10000000000)
+		config.SetShardMemTableSizeLimit(10000000000)
 
 		// step3: write data, mem table row limit less than row cnt, query will get record from both mem table and immutable
 		rows, minTime, maxTime := GenDataRecord(msNames, configs[index].seriesNum, configs[index].pointNumPerSeries, configs[index].interval, time.Now(), false, true, false)
@@ -3439,7 +3497,7 @@ func TestFreeSequencer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sh.ident.ShardType = influxql.RANGE
+	sh.seriesLimit = 10000
 	if err = sh.NewShardKeyIdx("range", sh.dataPath, &lockPath); err != nil {
 		t.Fatal(err)
 	}
@@ -3455,7 +3513,7 @@ func TestFreeSequencer(t *testing.T) {
 
 	primaryIndex := sh.indexBuilder.GetPrimaryIndex().(*tsi.MergeSetIndex)
 
-	id, err := primaryIndex.GetSeriesIdBySeriesKey(rows[0].IndexKey, bytesutil.ToUnsafeBytes(msNames[0]))
+	id, err := primaryIndex.GetSeriesIdBySeriesKey(rows[0].IndexKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3626,6 +3684,9 @@ func TestDropMeasurementForColStore(t *testing.T) {
 			"field2_int":    influx.Field_Type_Int}}
 
 	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta.MeasurementInfo{mstsInfo[defaultMeasurementName]},
+	})
 	// step2: write data
 	st := time.Now().Truncate(time.Second)
 	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
@@ -3667,14 +3728,88 @@ func TestDropMeasurementForColStore(t *testing.T) {
 	}
 	require.Equal(t, 0, len(files))
 	// recover config so that not to affect other tests
-	conf.SetMaxSegmentLimit(immutable.DefaultMaxSegmentLimit4ColStore)
-	conf.SetMaxRowsPerSegment(immutable.DefaultMaxRowsPerSegment4ColStore)
+	conf.SetMaxSegmentLimit(util.DefaultMaxSegmentLimit4ColStore)
+	conf.SetMaxRowsPerSegment(util.DefaultMaxRowsPerSegment4ColStore)
 
 	// step4: close shard
 	err = closeShard(sh)
 	if err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestTimeToSnapShot(t *testing.T) {
+	testDir := t.TempDir()
+	_ = os.RemoveAll(testDir)
+	// step1: create shard
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// step2: write data
+	st := time.Now().Truncate(time.Second)
+	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
+
+	err = sh.WriteRows(rows, nil)
+	if err == nil {
+		t.Fatal("should return error mstInfo")
+	}
+	// step3: close shard
+	err = closeShard(sh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := sh.storage.timeToSnapshot(sh)
+	assert2.Equal(t, res, true)
+}
+
+func TestTimeToSnapShotV2(t *testing.T) {
+	testDir := t.TempDir()
+	_ = os.RemoveAll(testDir)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.TSSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// step2: write data
+	st := time.Now().Truncate(time.Second)
+	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
+	err = writeData(sh, rows, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := sh.storage.timeToSnapshot(sh)
+	assert2.Equal(t, res, false)
+	// close shard
+	err = closeShard(sh)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWriteReadOnlyShard(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.RemoveAll(dir)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, dir, config.COLUMNSTORE)
+	require.NoError(t, err)
+	defer func() {
+		_ = closeShard(sh)
+	}()
+	record := genRecord()
+	mstsInfo := make(map[string]*meta.MeasurementInfo)
+	mstsInfo[defaultMeasurementName] = &meta.MeasurementInfo{Name: defaultMeasurementName,
+		EngineType: config.COLUMNSTORE,
+		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
+			PrimaryKey: []string{}}}
+
+	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta.MeasurementInfo{mstsInfo[defaultMeasurementName]},
+	})
+	sh.ident.ReadOnly = true
+	err = sh.WriteCols(defaultMeasurementName, record, nil)
+	assert2.Equal(t, err, errors.New("forbid by shard moving"))
+	sh.ident.ReadOnly = false
 }
 
 func TestEngine_DropMeasurement(t *testing.T) {
@@ -4383,8 +4518,8 @@ func TestColumnStoreFlushErr(t *testing.T) {
 	}
 
 	storage := sh.storage.(*columnstoreImpl)
-	for i := range storage.snapshotStatus {
-		storage.snapshotStatus[i] = 1
+	for i := range storage.snapshotInUsed {
+		storage.snapshotInUsed[i] = true
 	}
 	sh.ForceFlush()
 	err = closeShard(sh)
@@ -4432,6 +4567,9 @@ func TestWriteRecByColumnStore(t *testing.T) {
 			PrimaryKey: []string{}}}
 
 	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta.MeasurementInfo{mstsInfo[defaultMeasurementName]},
+	})
 
 	record := genRecord()
 
@@ -4464,6 +4602,9 @@ func TestWriteRecByColumnStoreWithSchemaLess(t *testing.T) {
 			PrimaryKey: []string{}}}
 
 	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta.MeasurementInfo{mstsInfo[defaultMeasurementName]},
+	})
 
 	oldRec := genRecord()
 	sort.Sort(oldRec)
@@ -4517,6 +4658,9 @@ func TestWriteDataByNewEngine(t *testing.T) {
 			PrimaryKey: []string{}}}
 
 	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta.MeasurementInfo{mstsInfo[defaultMeasurementName]},
+	})
 	err = sh.WriteRows(rows, nil)
 	require.NoError(t, err)
 	// wait mem table flush
@@ -4573,6 +4717,9 @@ func TestWriteDataByNewEngine3(t *testing.T) {
 			PrimaryKey: []string{}}}
 
 	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta.MeasurementInfo{mstsInfo[defaultMeasurementName]},
+	})
 	err = sh.WriteRows(rows, nil)
 	msInfo, err := sh.activeTbl.GetMsInfo(defaultMeasurementName)
 	if err != nil {
@@ -4608,20 +4755,17 @@ func TestAddSeqIDToCol(t *testing.T) {
 			PrimaryKey: []string{}}}
 
 	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta.MeasurementInfo{mstsInfo[defaultMeasurementName]},
+	})
 
 	config.SetProductType("logkeeper")
 	sort.Sort(record)
 	if err = sh.WriteCols(defaultMeasurementName, record, nil); err != nil {
 		t.Fatal(err)
 	}
-
+	sh.commitSnapshot(sh.activeTbl)
 	config.SetProductType("csstore")
-	record1 := genRecord()
-	sort.Sort(record1)
-	err = sh.WriteCols(defaultMeasurementName, record1, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
 }
 
 func TestAddSeqIDToColV1(t *testing.T) {
@@ -4640,6 +4784,9 @@ func TestAddSeqIDToColV1(t *testing.T) {
 			PrimaryKey: []string{}}}
 
 	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta.MeasurementInfo{mstsInfo[defaultMeasurementName]},
+	})
 	record1 := genRecord()
 	sort.Sort(record1)
 	err = sh.WriteCols(defaultMeasurementName, record1, nil)
@@ -4652,6 +4799,53 @@ func TestAddSeqIDToColV1(t *testing.T) {
 	if err = sh.WriteCols(defaultMeasurementName, record, nil); err != nil {
 		t.Fatal(err)
 	}
+	config.SetProductType("csstore")
+}
+
+func TestAddSeqIDToColV2(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.RemoveAll(dir)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, dir, config.COLUMNSTORE)
+	require.NoError(t, err)
+	defer func() {
+		_ = closeShard(sh)
+	}()
+	st := time.Now().Truncate(time.Second)
+	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
+	primaryKey := []string{"time"}
+	sortKey := []string{"time"}
+	mstsInfo := make(map[string]*meta.MeasurementInfo)
+	mstsInfo[defaultMeasurementName] = &meta.MeasurementInfo{
+		Name:       defaultMeasurementName,
+		EngineType: config.COLUMNSTORE,
+		ColStoreInfo: &meta.ColStoreInfo{
+			SortKey:    sortKey,
+			PrimaryKey: primaryKey,
+		},
+	}
+
+	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta.MeasurementInfo{mstsInfo[defaultMeasurementName]},
+	})
+	err = sh.WriteRows(rows, nil)
+	msInfo, err := sh.activeTbl.GetMsInfo(defaultMeasurementName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := msInfo.GetRowChunks().GetWriteChunks()[0].WriteRec.GetRecord()
+	mutable.SetWriteChunk(msInfo, rec)
+	config.SetProductType("logkeeper")
+	// wait mem table flush
+	sh.commitSnapshot(sh.activeTbl)
+	rec = msInfo.GetRowChunks().GetWriteChunks()[0].WriteRec.GetRecord()
+	var exist bool
+	for i := range rec.Schema {
+		if rec.Schema[i].Name == record.SeqIDField {
+			exist = true
+		}
+	}
+	assert2.Equal(t, exist, true)
 	config.SetProductType("csstore")
 }
 
@@ -4705,6 +4899,9 @@ func TestWriteDetachedData(t *testing.T) {
 	}
 
 	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta.MeasurementInfo{mstsInfo[defaultMeasurementName]},
+	})
 	err = sh.WriteRows(rows, nil)
 	msInfo, err := sh.activeTbl.GetMsInfo(defaultMeasurementName)
 	if err != nil {
@@ -4759,6 +4956,9 @@ func TestWriteDetachedDataV2(t *testing.T) {
 	}
 
 	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta.MeasurementInfo{mstsInfo[defaultMeasurementName]},
+	})
 	err = sh.WriteRows(rows, nil)
 	msInfo, err := sh.activeTbl.GetMsInfo(defaultMeasurementName)
 	if err != nil {
@@ -4824,6 +5024,9 @@ func TestWriteFullTextIndexV1(t *testing.T) {
 	}
 
 	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta.MeasurementInfo{mstsInfo[defaultMeasurementName]},
+	})
 	err = sh.WriteRows(rows, nil)
 	msInfo, err := sh.activeTbl.GetMsInfo(defaultMeasurementName)
 	if err != nil {
@@ -4878,6 +5081,9 @@ func TestWriteFullTextIndexV2(t *testing.T) {
 	}
 
 	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta.MeasurementInfo{mstsInfo[defaultMeasurementName]},
+	})
 	err = sh.WriteRows(rows, nil)
 	msInfo, err := sh.activeTbl.GetMsInfo(defaultMeasurementName)
 	if err != nil {
@@ -4934,6 +5140,9 @@ func TestWriteFullTextIndexV3(t *testing.T) {
 	}
 
 	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta.MeasurementInfo{mstsInfo[defaultMeasurementName]},
+	})
 	err = sh.WriteRows(rows, nil)
 	msInfo, err := sh.activeTbl.GetMsInfo(defaultMeasurementName)
 	if err != nil {
@@ -4988,6 +5197,9 @@ func TestWriteAttachedFullTextIndexV1(t *testing.T) {
 	}
 
 	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta.MeasurementInfo{mstsInfo[defaultMeasurementName]},
+	})
 	err = sh.WriteRows(rows, nil)
 	msInfo, err := sh.activeTbl.GetMsInfo(defaultMeasurementName)
 	if err != nil {
@@ -5042,6 +5254,9 @@ func TestWriteAttachedFullTextIndexV2(t *testing.T) {
 	}
 
 	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta.MeasurementInfo{mstsInfo[defaultMeasurementName]},
+	})
 	err = sh.WriteRows(rows, nil)
 	msInfo, err := sh.activeTbl.GetMsInfo(defaultMeasurementName)
 	if err != nil {
@@ -5082,6 +5297,9 @@ func TestWriteDataByNewEngineWithSchemaLess(t *testing.T) {
 			PrimaryKey: []string{}}}
 
 	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta.MeasurementInfo{mstsInfo[defaultMeasurementName]},
+	})
 	err = sh.WriteRows(rows, nil)
 	msInfo, err := sh.activeTbl.GetMsInfo(defaultMeasurementName)
 	if err != nil {
@@ -5121,6 +5339,9 @@ func TestWriteDataByNewEngineWithTag(t *testing.T) {
 			PrimaryKey: []string{}}}
 
 	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta.MeasurementInfo{mstsInfo[defaultMeasurementName]},
+	})
 	err = sh.WriteRows(rows, nil)
 	require.NoError(t, err)
 
@@ -5161,6 +5382,9 @@ func TestWriteDataByNewEngineWithTag2(t *testing.T) {
 			PrimaryKey: []string{}}}
 
 	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta.MeasurementInfo{mstsInfo[defaultMeasurementName]},
+	})
 	err = sh.WriteRows(rows, nil)
 	require.NoError(t, err)
 
@@ -5196,6 +5420,9 @@ func TestAppendTagsFieldsToRecord(t *testing.T) {
 			PrimaryKey: []string{}}}
 
 	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta.MeasurementInfo{mstsInfo[defaultMeasurementName]},
+	})
 
 	begin := time.Now().UnixNano()
 	rows := []influx.Row{{
@@ -5358,6 +5585,8 @@ func GenAggDataRecord(msNames []string, seriesNum, pointNumOfPerSeries int, inte
 	result["min"] = make([]interface{}, 4)
 	result["max"] = make([]interface{}, 4)
 	result["count"] = make([]interface{}, 4)
+	result["min_prom"] = make([]interface{}, 4)
+	result["max_prom"] = make([]interface{}, 4)
 	tm = tm.Truncate(time.Second)
 	pts := make([]influx.Row, 0, seriesNum)
 	names := msNames
@@ -5437,6 +5666,12 @@ func GenAggDataRecord(msNames []string, seriesNum, pointNumOfPerSeries int, inte
 				}
 				if result["max"][3] == nil || v.(float64) > result["max"][3].(float64) {
 					result["max"][3] = v
+				}
+				if result["min_prom"][3] == nil || v.(float64) < result["min_prom"][3].(float64) {
+					result["min_prom"][3] = v
+				}
+				if result["max_prom"][3] == nil || v.(float64) > result["max_prom"][3].(float64) {
+					result["max_prom"][3] = v
 				}
 				float64Sum += r.Fields[j].NumValue
 				floatCount += 1
@@ -5590,18 +5825,7 @@ func TestLastFlushTime(t *testing.T) {
 
 	swapMemTable(sh, dir)
 
-	var assertLastFlushTime = func(mst string, sid uint64, exp int64) {
-		got := sh.getLastFlushTime(mst, sid)
-		require.Equal(t, exp, got)
-	}
-
-	assertLastFlushTime(mst, sid, 100)
-	assertLastFlushTime("mst_not_exists", sid, int64(math.MinInt64))
-	assertLastFlushTime(mst, sid+1000, int64(math.MinInt64))
-
 	require.True(t, sh.immTables.FreeSequencer())
-	assertLastFlushTime(mst, sid, int64(math.MaxInt64))
-
 	rows, err := sh.immTables.GetRowCountsBySid(mst, sid)
 	require.NoError(t, err)
 	require.Equal(t, int64(0), rows)
@@ -5609,7 +5833,12 @@ func TestLastFlushTime(t *testing.T) {
 	sh.activeTbl = sh.snapshotTbl
 	sh.snapshotTbl = nil
 	sh.ForceFlush()
-	assertLastFlushTime("mst", sid, 100)
+
+	config.GetStoreConfig().UnorderedOnly = true
+	defer func() {
+		config.GetStoreConfig().UnorderedOnly = false
+	}()
+	sh.addRowCountsBySid(mst, sid, 100)
 }
 
 func TestFlushMstDeleted(t *testing.T) {
@@ -5747,6 +5976,9 @@ func TestWriteColsForColstore(t *testing.T) {
 			PrimaryKey: []string{}}}
 
 	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta.MeasurementInfo{mstsInfo[defaultMeasurementName]},
+	})
 
 	if err = sh.WriteCols(defaultMeasurementName, record, nil); err != nil {
 		t.Fatal(err)
@@ -5755,7 +5987,6 @@ func TestWriteColsForColstore(t *testing.T) {
 	if err == nil {
 		t.Fatal("write rec can not be nil")
 	}
-	sh.ident.ReadOnly = true
 	err = sh.WriteCols(defaultMeasurementName, record, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -5802,7 +6033,7 @@ func TestDownSampleRedo(t *testing.T) {
 	oldFiles := []immutable.TSSPFile{oFiles.Files()[1]}
 	_, err = sh.writeDownSampleInfo(msNames, [][]immutable.TSSPFile{oldFiles}, [][]immutable.TSSPFile{newFiles}, 0, 1)
 	require.NoError(t, err)
-	sh2 := NewShard(sh.dataPath, sh.walPath, sh.lock, sh.ident, sh.durationInfo, &meta.TimeRangeInfo{StartTime: sh.startTime, EndTime: sh.endTime}, DefaultEngineOption, config.TSSTORE)
+	sh2 := NewShard(sh.dataPath, sh.walPath, sh.lock, sh.ident, sh.durationInfo, &meta.TimeRangeInfo{StartTime: sh.startTime, EndTime: sh.endTime}, DefaultEngineOption, config.TSSTORE, nil)
 	m := mockMetaClient()
 	err = sh2.OpenAndEnable(m)
 	if err != nil {
@@ -6145,6 +6376,313 @@ func TestInterEngine_DoShardMove_OrderFiles(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestDoShardMoveOrderFilesByTs(t *testing.T) {
+	dir := t.TempDir()
+	obs.SetPrefixDataPath(dir)
+	_ = os.RemoveAll(dir)
+	syscontrol.SetHierarchicalStorageEnabled(true)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, dir, config.TSSTORE)
+	require.NoError(t, err)
+	syscontrol.SetHierarchicalStorageEnabled(false)
+
+	ObsOptions := &obs.ObsOptions{
+		Enabled: true,
+	}
+
+	msNames := []string{"mst"}
+	startTime := mustParseTime(time.RFC3339Nano, "2022-07-01T01:00:00Z")
+	pts, _, _ := GenDataRecord(msNames, 5, 2000, time.Second, startTime, true, false, true)
+
+	if err := sh.WriteRows(pts, nil); err != nil {
+		t.Fatal(err)
+	}
+	sh.endTime = mustParseTime(time.RFC3339Nano, "2022-07-08T01:00:00Z")
+	time.Sleep(time.Second * 1)
+	sh.ForceFlush()
+	time.Sleep(time.Second * 1)
+	// do shard move
+	sh.SetObsOption(ObsOptions)
+	err = sh.doShardMove()
+	assert2.NotNil(t, err)
+	err = closeShard(sh)
+	require.NoError(t, err)
+}
+
+func TestDoShardMoveAllFilesByTs(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.RemoveAll(dir)
+	syscontrol.SetHierarchicalStorageEnabled(true)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, dir, config.TSSTORE)
+	require.NoError(t, err)
+	syscontrol.SetHierarchicalStorageEnabled(false)
+
+	ObsOptions := &obs.ObsOptions{
+		Enabled: true,
+	}
+	msNames := []string{"mst"}
+	tm := time.Now().Truncate(time.Second)
+	// step3: write data, mem table row limit less than row cnt, query will get record from both mem table and immutable
+	rows, _, _ := GenDataRecord(msNames, 10, 20, time.Second, tm, false, true, false)
+	err = writeData(sh, rows, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tm = tm.Add(time.Second * 10)
+	rows, _, _ = GenDataRecord(msNames, 10, 20, time.Second, tm, false, true, false)
+	err = writeData(sh, rows, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// do shard move
+	sh.SetObsOption(ObsOptions)
+	err = sh.doShardMove()
+	assert2.NotNil(t, err)
+	err = closeShard(sh)
+	require.NoError(t, err)
+}
+
+func TestDoShardMove_ByCs(t *testing.T) {
+	testDir := t.TempDir()
+	_ = os.RemoveAll(testDir)
+	// step1: create shard
+	syscontrol.SetHierarchicalStorageEnabled(true)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	syscontrol.SetHierarchicalStorageEnabled(false)
+
+	// step2: write data
+	st := time.Now().Truncate(time.Second)
+	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
+
+	mstsInfo := make(map[string]*meta.MeasurementInfo)
+	mstsInfo[defaultMeasurementName] = &meta.MeasurementInfo{Name: defaultMeasurementName,
+		EngineType: config.COLUMNSTORE,
+		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
+			PrimaryKey: []string{}}}
+
+	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta.MeasurementInfo{mstsInfo[defaultMeasurementName]},
+	})
+	err = sh.WriteRows(rows, nil)
+	require.NoError(t, err)
+	// wait mem table flush
+	sh.ForceFlush()
+	time.Sleep(time.Second * 1)
+	ObsOptions := &obs.ObsOptions{
+		Enabled: true,
+	}
+
+	// do shard move
+	sh.SetObsOption(ObsOptions)
+	err = sh.ExecShardMove()
+	assert2.NotNil(t, err)
+	err = closeShard(sh)
+	require.NoError(t, err)
+}
+
+func TestDoShardMoveLayoutSwitch_ByCs(t *testing.T) {
+	testDir := t.TempDir()
+	_ = os.RemoveAll(testDir)
+	// step1: create shard
+	syscontrol.SetHierarchicalStorageEnabled(true)
+	config.GetStoreConfig().ShardMoveLayoutSwitchEnabled = true
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	syscontrol.SetHierarchicalStorageEnabled(false)
+	config.GetStoreConfig().ShardMoveLayoutSwitchEnabled = false
+
+	// step2: write data
+	st := time.Now().Truncate(time.Second)
+	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
+
+	mstsInfo := make(map[string]*meta.MeasurementInfo)
+	mstsInfo[defaultMeasurementName] = &meta.MeasurementInfo{Name: defaultMeasurementName,
+		EngineType: config.COLUMNSTORE,
+		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
+			PrimaryKey: []string{}}}
+
+	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta.MeasurementInfo{mstsInfo[defaultMeasurementName]},
+	})
+	err = sh.WriteRows(rows, nil)
+	require.NoError(t, err)
+	// wait mem table flush
+	sh.ForceFlush()
+	time.Sleep(time.Second * 1)
+	ObsOptions := &obs.ObsOptions{
+		Enabled: true,
+	}
+
+	// do shard move
+	sh.SetObsOption(ObsOptions)
+	err = sh.ExecShardMove()
+	assert2.Nil(t, err)
+	err = closeShard(sh)
+	require.NoError(t, err)
+}
+
+func TestInterEngine_WriteMovingShardTs(t *testing.T) {
+	dir := t.TempDir()
+	obs.SetPrefixDataPath(dir)
+	_ = os.RemoveAll(dir)
+	syscontrol.SetHierarchicalStorageEnabled(true)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, dir, config.TSSTORE)
+	require.NoError(t, err)
+	syscontrol.SetHierarchicalStorageEnabled(false)
+
+	msNames := []string{"mst"}
+	startTime := mustParseTime(time.RFC3339Nano, "2022-07-01T01:00:00Z")
+	pts, _, _ := GenDataRecord(msNames, 5, 2000, time.Second, startTime, true, false, true)
+	sh.tier = util.Moving
+	if err := sh.WriteRows(pts, nil); err != nil {
+		t.Fatal(err)
+	}
+	sh.endTime = mustParseTime(time.RFC3339Nano, "2022-07-08T01:00:00Z")
+	time.Sleep(time.Second * 1)
+	sh.ForceFlush()
+	time.Sleep(time.Second * 1)
+	err = closeShard(sh)
+	require.NoError(t, err)
+}
+
+func TestInterEngine_WriteMovingShardCs(t *testing.T) {
+	testDir := t.TempDir()
+	obs.SetPrefixDataPath(testDir)
+	_ = os.RemoveAll(testDir)
+	// step1: create shard
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// step2: write data
+	st := time.Now().Truncate(time.Second)
+	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
+
+	mstsInfo := make(map[string]*meta.MeasurementInfo)
+	mstsInfo[defaultMeasurementName] = &meta.MeasurementInfo{Name: defaultMeasurementName,
+		EngineType: config.COLUMNSTORE,
+		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
+			PrimaryKey: []string{}}}
+
+	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta.MeasurementInfo{mstsInfo[defaultMeasurementName]},
+	})
+	sh.tier = util.Moving
+	err = sh.WriteRows(rows, nil)
+	require.NoError(t, err)
+	// wait mem table flush
+	sh.ForceFlush()
+	time.Sleep(time.Second * 1)
+	err = closeShard(sh)
+	require.NoError(t, err)
+}
+
+func TestDoShardMoveRenameFailed(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.RemoveAll(dir)
+	syscontrol.SetHierarchicalStorageEnabled(true)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, dir, config.TSSTORE)
+	require.NoError(t, err)
+	syscontrol.SetHierarchicalStorageEnabled(false)
+
+	ObsOptions := &obs.ObsOptions{
+		Enabled: true,
+	}
+	msNames := []string{"mst"}
+	tm := time.Now().Truncate(time.Second)
+	// step3: write data, mem table row limit less than row cnt, query will get record from both mem table and immutable
+	rows, _, _ := GenDataRecord(msNames, 10, 20, time.Second, tm, false, true, false)
+	err = writeData(sh, rows, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, _ := sh.immTables.GetTSSPFiles("mst", true)
+	fileName := file.Files()[0].FileName()
+	newFileName := path.Join(sh.filesPath, "mst", fileName.String()+".tssp.init")
+	file.Files()[0].Rename(newFileName)
+
+	// do shard move
+	sh.SetObsOption(ObsOptions)
+	err = sh.doShardMove()
+	assert2.Nil(t, err)
+	err = closeShard(sh)
+	require.NoError(t, err)
+}
+
+func TestCloseShardWhileFlushing_Cs(t *testing.T) {
+	testDir := t.TempDir()
+	_ = os.RemoveAll(testDir)
+	// step1: create shard
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// step2: write data
+	st := time.Now().Truncate(time.Second)
+	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
+
+	mstsInfo := make(map[string]*meta.MeasurementInfo)
+	mstsInfo[defaultMeasurementName] = &meta.MeasurementInfo{Name: defaultMeasurementName,
+		EngineType: config.COLUMNSTORE,
+		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
+			PrimaryKey: []string{}}}
+
+	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta.MeasurementInfo{mstsInfo[defaultMeasurementName]},
+	})
+	err = sh.WriteRows(rows, nil)
+	require.NoError(t, err)
+	// wait mem table flush
+	sh.ForceFlush()
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	go func() {
+		err = closeShard(sh)
+		wg.Done()
+		require.NoError(t, err)
+	}()
+	wg.Wait()
+}
+
+func TestCloseShardWhileFlushing_Ts(t *testing.T) {
+	testDir := t.TempDir()
+	_ = os.RemoveAll(testDir)
+	// step1: create shard
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.TSSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// step2: write data
+	st := time.Now().Truncate(time.Second)
+	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
+
+	err = sh.WriteRows(rows, nil)
+	require.NoError(t, err)
+	// wait mem table flush
+	sh.ForceFlush()
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	go func() {
+		err = closeShard(sh)
+		wg.Done()
+		require.NoError(t, err)
+	}()
+	wg.Wait()
+}
+
 func TestInterEngine_DoShardMove_OutOfOrderFiles(t *testing.T) {
 	dir := t.TempDir()
 	_ = os.RemoveAll(dir)
@@ -6334,6 +6872,29 @@ func NewMockColumnStoreMstInfo() *meta2.MeasurementInfo {
 	}
 }
 
+func TestWriteSnapshotError(t *testing.T) {
+	testDir := t.TempDir()
+	_ = os.RemoveAll(testDir)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sh.activeTbl = nil
+	sh.storage.writeSnapshot(sh)
+	err = closeShard(sh)
+	require.NoError(t, err)
+
+	newSh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.TSSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newSh.activeTbl = nil
+	newSh.storage.writeSnapshot(newSh)
+	err = closeShard(newSh)
+	require.NoError(t, err)
+}
+
 func TestAggQueryOnlyInImmutable_NoEmpty_OneBoolMinMaxOp(t *testing.T) {
 	testDir := t.TempDir()
 	configs := []TestConfig{
@@ -6417,6 +6978,7 @@ func TestAggQueryOnlyInImmutable_NoEmpty_OneBoolMinMaxOp(t *testing.T) {
 
 type MockMetaClient struct {
 	metaclient.MetaClient
+	mstInfo []*meta2.MeasurementInfo
 }
 
 func (client *MockMetaClient) ThermalShards(db string, start, end time.Duration) map[uint64]struct{} {
@@ -6424,20 +6986,7 @@ func (client *MockMetaClient) ThermalShards(db string, start, end time.Duration)
 	panic("implement me")
 }
 
-func (client *MockMetaClient) GetStreamInfosStore() map[string]*meta2.StreamInfo {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (client *MockMetaClient) GetMeasurementInfoStore(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error) {
-	return nil, nil
-}
-
-func (client *MockMetaClient) GetMeasurementsInfoStore(dbName string, rpName string) (*meta2.MeasurementsInfo, error) {
-	return nil, nil
-}
-
-func (client *MockMetaClient) OpenAtStore() {
+func (client *MockMetaClient) OpenAtStore() error {
 	panic("implement me")
 }
 
@@ -6453,7 +7002,7 @@ func (client *MockMetaClient) GetNodePtsMap(database string) (map[uint64][]uint3
 	panic("implement me")
 }
 
-func (client *MockMetaClient) CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *influxql.IndexRelation,
+func (client *MockMetaClient) CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, numOfShards int32, indexR *influxql.IndexRelation,
 	engineType config.EngineType, colStoreInfo *meta2.ColStoreInfo, _ []*proto2.FieldSchema, options *meta2.Options) (*meta2.MeasurementInfo, error) {
 	return nil, nil
 }
@@ -6476,7 +7025,12 @@ func (client *MockMetaClient) CreateUser(name, password string, admin, rwuser bo
 	return nil, nil
 }
 func (client *MockMetaClient) Databases() map[string]*meta2.DatabaseInfo {
-	return nil
+	databases := make(map[string]*meta2.DatabaseInfo)
+	databases["db0"] = &meta2.DatabaseInfo{
+		Name:           "db0",
+		EnableTagArray: true,
+	}
+	return databases
 }
 func (client *MockMetaClient) Database(name string) (*meta2.DatabaseInfo, error) {
 	return nil, nil
@@ -6564,14 +7118,18 @@ func (client *MockMetaClient) ShardOwner(shardID uint64) (database, policy strin
 	return "", "", nil
 }
 func (client *MockMetaClient) Measurement(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error) {
+	if len(client.mstInfo) > 0 {
+		return client.mstInfo[0], nil
+	}
 	return nil, nil
+
 }
 func (client *MockMetaClient) Schema(database string, retentionPolicy string, mst string) (fields map[string]int32, dimensions map[string]struct{}, err error) {
 	return nil, nil, nil
 }
 
 func (client *MockMetaClient) GetMeasurements(m *influxql.Measurement) ([]*meta2.MeasurementInfo, error) {
-	return nil, nil
+	return client.mstInfo, nil
 }
 func (client *MockMetaClient) TagKeys(database string) map[string]set.Set {
 	return nil
@@ -6588,7 +7146,7 @@ func (client *MockMetaClient) MatchMeasurements(database string, ms influxql.Mea
 func (client *MockMetaClient) Measurements(database string, ms influxql.Measurements) ([]string, error) {
 	return nil, nil
 }
-func (client *MockMetaClient) ShowShards() models.Rows {
+func (client *MockMetaClient) ShowShards(db string, rp string, mst string) models.Rows {
 	return nil
 }
 func (client *MockMetaClient) ShowShardGroups() models.Rows {
@@ -6678,8 +7236,14 @@ func (client *MockMetaClient) RetryRegisterQueryIDOffset(host string) (uint64, e
 	return 0, nil
 }
 
-func TestDropMeasurementWhenReplayingWal(t *testing.T) {
-	sh := &shard{stopDownSample: util.NewSignal()}
-	sh.replayingWal = true
-	require.EqualError(t, sh.DropMeasurement(context.Background(), "mst"), "async replay wal not finish")
+func (client *MockMetaClient) IsSQLiteEnabled() bool {
+	return false
+}
+
+func (client *MockMetaClient) GetMeasurementID(database string, rpName string, mstName string) (uint64, error) {
+	return 0, nil
+}
+
+func (client *MockMetaClient) InsertFiles([]meta2.FileInfo) error {
+	return nil
 }

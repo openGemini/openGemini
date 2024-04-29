@@ -20,7 +20,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/apache/arrow/go/arrow/array"
+	"github.com/apache/arrow/go/v13/arrow"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/services"
@@ -43,7 +43,7 @@ type Service struct {
 	dataChanMu      sync.Mutex
 	dataChan        chan *data
 	dataFailureChan chan *data
-	resultChan      chan array.Record
+	resultChan      chan arrow.Record
 	responseChanMap sync.Map
 
 	alive bool
@@ -68,7 +68,7 @@ func NewService(c config.Castor) *Service {
 		clientPool:      make([]*pool, len(c.PyWorkerAddr)),
 		dataChan:        make(chan *data, chanBufferSize),
 		dataFailureChan: make(chan *data, chanBufferSize),
-		resultChan:      make(chan array.Record, chanBufferSize),
+		resultChan:      make(chan arrow.Record, chanBufferSize),
 		responseChanMap: sync.Map{},
 	}
 	s.Init("castor", 0, s.handle)
@@ -218,7 +218,7 @@ func (s *Service) handleResult() {
 	}
 }
 
-func (s *Service) getRespChan(rec array.Record) (*respChan, *errno.Error) {
+func (s *Service) getRespChan(rec arrow.Record) (*respChan, *errno.Error) {
 	id, err := GetMetaValueFromRecord(rec, string(TaskID))
 	if err != nil {
 		return nil, err
@@ -235,7 +235,7 @@ func (s *Service) getRespChan(rec array.Record) (*respChan, *errno.Error) {
 	return ch, nil
 }
 
-func (s *Service) dispatchResult(rec array.Record) *errno.Error {
+func (s *Service) dispatchResult(rec arrow.Record) *errno.Error {
 	ch, err := s.getRespChan(rec)
 	if err != nil {
 		return err
@@ -269,7 +269,7 @@ func (s *Service) dispatchErr(data *data) {
 }
 
 // HandleData will send data to computation node through internal client
-func (s *Service) HandleData(record array.Record) {
+func (s *Service) HandleData(record arrow.Record) {
 	s.dataChanMu.Lock()
 	defer s.dataChanMu.Unlock()
 	data := newData(record)
@@ -282,7 +282,7 @@ func (s *Service) HandleData(record array.Record) {
 }
 
 // ResultChan store result from computation node
-func (s *Service) ResultChan() chan<- array.Record {
+func (s *Service) ResultChan() chan<- arrow.Record {
 	return s.resultChan
 }
 

@@ -2340,9 +2340,7 @@ func (c *validateField) Visit(n Node) Visitor {
 	}
 
 	switch e.Op {
-	case EQ, NEQ, EQREGEX,
-		NEQREGEX, LT, LTE, GT, GTE,
-		AND, OR:
+	case EQREGEX, NEQREGEX, AND, OR:
 		c.foundInvalid = true
 		c.badToken = e.Op
 		return nil

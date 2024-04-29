@@ -36,6 +36,9 @@ type EngineOptions struct {
 	// WriteColdDuration is the length of time at which the engine will snapshot the mutable
 	WriteColdDuration time.Duration
 
+	// ForceSnapShotDuration is the length of time at which the engine must snapshot the mutable
+	ForceSnapShotDuration time.Duration
+
 	// ShardMutableSizeLimit is the maximum size a shard's cache can reach before it starts rejecting writes.
 	ShardMutableSizeLimit int64
 
@@ -48,19 +51,20 @@ type EngineOptions struct {
 	// Enable read from mem data, include mutable and snapshot table, default value is true
 	MemDataReadEnabled bool
 
-	FullCompactColdDuration  time.Duration
-	MaxConcurrentCompactions int
-	MaxFullCompactions       int
-	CompactThroughput        int64
-	CompactThroughputBurst   int64
-	CompactRecovery          bool
-	CsCompactionEnabled      bool
-	CsDetachedFlushEnabled   bool
-	SnapshotThroughput       int64
-	SnapshotThroughputBurst  int64
-	SnapshotTblNum           int
-	FragmentsNumPerFlush     int
-	BackgroundReadThroughput int
+	FullCompactColdDuration      time.Duration
+	MaxConcurrentCompactions     int
+	MaxFullCompactions           int
+	CompactThroughput            int64
+	CompactThroughputBurst       int64
+	CompactRecovery              bool
+	CsCompactionEnabled          bool
+	CsDetachedFlushEnabled       bool
+	ShardMoveLayoutSwitchEnabled bool
+	SnapshotThroughput           int64
+	SnapshotThroughputBurst      int64
+	SnapshotTblNum               int
+	FragmentsNumPerFlush         int
+	BackgroundReadThroughput     int
 
 	// WalSyncInterval is the interval of wal file sync
 	WalEnabled         bool
@@ -88,6 +92,10 @@ type EngineOptions struct {
 	MaxDownSampleTaskConcurrency int
 
 	MaxSeriesPerDatabase int
+	MaxRowsPerSegment    int
+
+	// for hierarchical storage
+	SkipRegisterColdShard bool
 }
 
 func NewEngineOptions() EngineOptions {

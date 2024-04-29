@@ -25,10 +25,10 @@ import (
 )
 
 func Benchmark_WindowDataPool(t *testing.B) {
-	pool := stream.NewWindowDataPool()
+	pool := stream.NewTaskDataPool()
 	for i := 0; i < t.N; i++ {
 		for i := 0; i < 10000000; i++ {
-			c := &stream.WindowCache{}
+			c := &stream.TaskCache{}
 			pool.Put(c)
 			pool.Get()
 		}
@@ -36,8 +36,8 @@ func Benchmark_WindowDataPool(t *testing.B) {
 }
 
 func Test_WindowDataPool_Len(t *testing.T) {
-	pool := stream.NewWindowDataPool()
-	c := &stream.WindowCache{}
+	pool := stream.NewTaskDataPool()
+	c := &stream.TaskCache{}
 	pool.Put(c)
 	if pool.Len() != 1 {
 		t.Error(fmt.Sprintf("expect %v ,got %v", 1, pool.Len()))
@@ -57,10 +57,10 @@ func Test_WindowDataPool_Len(t *testing.T) {
 }
 
 func Benchmark_WindowCachePool(t *testing.B) {
-	pool := stream.NewWindowCachePool()
+	pool := stream.NewTaskCachePool()
 	for i := 0; i < t.N; i++ {
 		for i := 0; i < 10000000; i++ {
-			c := &stream.WindowCache{}
+			c := &stream.TaskCache{}
 			pool.Put(c)
 			pool.Get()
 		}
@@ -68,7 +68,7 @@ func Benchmark_WindowCachePool(t *testing.B) {
 }
 
 func Test_WindowDataPool_Block(t *testing.T) {
-	pool := stream.NewWindowDataPool()
+	pool := stream.NewTaskDataPool()
 	timer := time.NewTicker(1 * time.Second)
 	r := make(chan struct{}, 1)
 	go func() {
@@ -83,7 +83,7 @@ func Test_WindowDataPool_Block(t *testing.T) {
 }
 
 func Test_WindowDataPool_NIL(t *testing.T) {
-	pool := stream.NewWindowDataPool()
+	pool := stream.NewTaskDataPool()
 	pool.Put(nil)
 	r := pool.Get()
 	if r != nil {
@@ -92,7 +92,7 @@ func Test_WindowDataPool_NIL(t *testing.T) {
 }
 
 func Test_WindowCachePool_Block(t *testing.T) {
-	pool := stream.NewWindowCachePool()
+	pool := stream.NewTaskCachePool()
 	timer := time.NewTicker(1 * time.Second)
 	r := make(chan struct{}, 1)
 	go func() {

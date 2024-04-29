@@ -42,6 +42,8 @@ const (
 	COMPRESSION_RATIO        = 2
 )
 
+var zeroCRC32 = [4]byte{}
+
 type StreamWriteFile struct {
 	closed       chan struct{}
 	version      uint64
@@ -249,8 +251,7 @@ func (c *StreamWriteFile) AppendColumn(ref *record.Field) error {
 	c.colBuilder.colMeta = c.dstMeta.AllocColMeta(ref)
 	c.colBuilder.cm = &c.dstMeta
 
-	var crc [4]byte
-	if err := c.writeCrc(crc[:]); err != nil {
+	if err := c.writeCrc(zeroCRC32[:]); err != nil {
 		return err
 	}
 
@@ -297,7 +298,7 @@ func (c *StreamWriteFile) SetValidate(en bool) {
 }
 
 func (c *StreamWriteFile) validation() {
-	if !c.enableValidate {
+	if !c.enableValidate || len(c.rowCount) == 0 {
 		return
 	}
 

@@ -17,15 +17,16 @@ limitations under the License.
 package netstorage
 
 import (
-	"errors"
 	"fmt"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
+	"github.com/cockroachdb/errors"
 	"github.com/openGemini/openGemini/lib/errno"
 	internal2 "github.com/openGemini/openGemini/lib/netstorage/data"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
+	"go.etcd.io/etcd/raft/v3/raftpb"
 )
 
 type DeleteType int
@@ -503,4 +504,43 @@ func (r *KillQueryResponse) Error() error {
 		return nil
 	}
 	return errno.NewError(errno.Errno(r.GetErrCode()), r.GetErrMsg())
+}
+
+type RaftMessagesRequest struct {
+	Database    string
+	PtId        uint32
+	RaftMessage raftpb.Message
+}
+
+func (r *RaftMessagesRequest) MarshalBinary() ([]byte, error) {
+	msg, _ := r.RaftMessage.Marshal()
+	dr := &internal2.RaftMessagesRequest{
+		Database:     proto.String(r.Database),
+		PtId:         proto.Uint32(r.PtId),
+		RaftMessages: msg,
+	}
+	return proto.Marshal(dr)
+}
+
+func (r *RaftMessagesRequest) UnmarshalBinary(data []byte) error {
+	var pb internal2.RaftMessagesRequest
+	if err := proto.Unmarshal(data, &pb); err != nil {
+		return err
+	}
+	r.Database = pb.GetDatabase()
+	r.PtId = pb.GetPtId()
+	err := r.RaftMessage.Unmarshal(pb.GetRaftMessages())
+	return errors.Wrapf(err, "unmarshal raft message error")
+}
+
+type RaftMessagesResponse struct {
+	internal2.RaftMessagesResponse
+}
+
+func (r *RaftMessagesResponse) MarshalBinary() ([]byte, error) {
+	return proto.Marshal(&r.RaftMessagesResponse)
+}
+
+func (r *RaftMessagesResponse) UnmarshalBinary(buf []byte) error {
+	return proto.Unmarshal(buf, &r.RaftMessagesResponse)
 }

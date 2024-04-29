@@ -19,8 +19,6 @@ package immutable
 import (
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"sync"
 
 	"github.com/openGemini/openGemini/engine/index/sparseindex"
@@ -435,22 +433,6 @@ const (
 	PrimaryMetaFile = "primary.meta"
 )
 
-func OpenObsFile(path, fileName string, obsOpts *obs.ObsOptions) (fileops.File, error) {
-	var obsPath string
-	if obsOpts != nil {
-		path = filepath.Join(obsOpts.BasePath, path, fileName)
-		obsPath = fileops.EncodeObsPath(obsOpts.Endpoint, obsOpts.BucketName, path, obsOpts.Ak, obsOpts.Sk)
-	} else {
-		obsPath = filepath.Join(path, fileName)
-	}
-	fd, err := fileops.OpenFile(obsPath, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0640)
-	if err != nil {
-		log.Error("create file fail", zap.String("name", obsPath), zap.Error(err))
-		return nil, err
-	}
-	return fd, nil
-}
-
 const (
 	FD_OUTSIDE uint32 = 0x00001
 )
@@ -464,7 +446,7 @@ type obsWriter struct {
 
 func NewObsWriter(path, fileName string, obsOpts *obs.ObsOptions) (*obsWriter, error) {
 	w := &obsWriter{}
-	fd, err := OpenObsFile(path, fileName, obsOpts)
+	fd, err := fileops.OpenObsFile(path, fileName, obsOpts, false)
 	if err != nil {
 		return nil, err
 	}

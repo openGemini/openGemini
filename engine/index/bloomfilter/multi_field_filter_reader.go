@@ -148,7 +148,7 @@ type MultilFieldVerticalFilterReader struct {
 }
 
 func NewMultiFieldVerticalFilterReader(path string, obsOpts *obs.ObsOptions, expr []*SKRPNElement, version uint32, splitMap map[string][]byte, fileName string) (*MultilFieldVerticalFilterReader, error) {
-	fd, err := obs.OpenObsFile(path, fileName, obsOpts)
+	fd, err := fileops.OpenObsFile(path, fileName, obsOpts, true)
 	if err != nil {
 		return nil, err
 	}
@@ -217,7 +217,7 @@ func (s *MultilFieldVerticalFilterReader) isExist(blockId int64, elem *rpn.SKRPN
 			}
 			results := make(map[int64][]byte)
 			c := make(chan *request.StreamReader, 1)
-			s.r.StreamReadBatch(offsets, lens, c, limitNum)
+			s.r.StreamReadBatch(offsets, lens, c, limitNum, true)
 			for r := range c {
 				if r.Err != nil {
 					return false, r.Err
@@ -253,6 +253,9 @@ func (s *MultilFieldVerticalFilterReader) isExist(blockId int64, elem *rpn.SKRPN
 
 func (s *MultilFieldVerticalFilterReader) hitExpr(val string) bool {
 	hashValues := s.hashes[val]
+	if len(hashValues) == 0 {
+		return true
+	}
 	isExist := false
 	for _, hash := range hashValues {
 		isExist = true
@@ -334,7 +337,7 @@ type MultiFiledLineFilterReader struct {
 }
 
 func NewMultiFiledLineFilterReader(path string, obsOpts *obs.ObsOptions, expr []*SKRPNElement, version uint32, splitMap map[string][]byte, fileName string) (*MultiFiledLineFilterReader, error) {
-	fd, err := obs.OpenObsFile(path, fileName, obsOpts)
+	fd, err := fileops.OpenObsFile(path, fileName, obsOpts, true)
 	if err != nil {
 		return nil, err
 	}
@@ -390,6 +393,9 @@ func (s *MultiFiledLineFilterReader) isExist(blockId int64, elem *rpn.SKRPNEleme
 
 func (s *MultiFiledLineFilterReader) hitExpr(val string) bool {
 	hashValues := s.hashes[val]
+	if len(hashValues) == 0 {
+		return true
+	}
 
 	blockOffset := s.currentBlockId * logstore.GetConstant(s.version).FilterDataDiskSize
 	bloomFilter := s.bloomCache[blockOffset]

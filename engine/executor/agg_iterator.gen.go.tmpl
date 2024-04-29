@@ -17,11 +17,9 @@ package executor
 
 import (
 	"bytes"
-	"container/heap"
 	"sort"
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
-	"github.com/openGemini/openGemini/lib/rand"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 )
@@ -606,7 +604,7 @@ func (r *{{$k.Name}}Col{{$v.Name}}Iterator) processMiddleWindow(
 		outChunk.AppendIntervalIndex(outChunk.Len() - 1)
 	}
 	outChunk.Column(r.outOrdinal).AppendNotNil()
-	outChunk.Column(r.outOrdinal).Append{{$v.Name}}Values(value)
+	outChunk.Column(r.outOrdinal).Append{{$v.Name}}Value(value)
 	if r.auxProcessor != nil {
 		r.appendInAuxCol(inChunk, outChunk, index)
 	}
@@ -927,11 +925,11 @@ func (r *{{.Name}}TimeCol{{.Name}}Iterator) processMiddleWindow(
 	inChunk, outChunk Chunk, index int, value {{.Type}},
 ) {
 	if r.initTimeCol {
-		outChunk.Column(r.outOrdinal).AppendColumnTimes(inChunk.Column(r.inOrdinal).ColumnTime(index))
+		outChunk.Column(r.outOrdinal).AppendColumnTime(inChunk.Column(r.inOrdinal).ColumnTime(index))
 	} else {
-		outChunk.Column(r.outOrdinal).AppendColumnTimes(inChunk.TimeByIndex(index))
+		outChunk.Column(r.outOrdinal).AppendColumnTime(inChunk.TimeByIndex(index))
 	}
-	outChunk.Column(r.outOrdinal).Append{{.Name}}Values(value)
+	outChunk.Column(r.outOrdinal).Append{{.Name}}Value(value)
 	outChunk.Column(r.outOrdinal).AppendNotNil()
 }
 
@@ -1314,194 +1312,6 @@ func (r *{{.Name}}Col{{.Name}}SliceIterator) Next(ie *IteratorEndpoint, p *Itera
 
 {{range .}}
 {{- if and (ne .Name "String") (ne .Name "Boolean")}}
-type {{.Name}}PointItem struct {
-	time  int64
-	value {{.Type}}
-	index int
-}
-
-func New{{.Name}}PointItem(time int64, value {{.Type}}) *{{.Name}}PointItem {
-	return &{{.Name}}PointItem{
-		time:  time,
-		value: value,
-	}
-}
-
-type {{.Name}}HeapItem struct {
-	sortByTime bool
-	maxIndex   int
-	cmpByValue func(a, b *{{.Name}}PointItem) bool
-	cmpByTime  func(a, b *{{.Name}}PointItem) bool
-	items      []{{.Name}}PointItem
-}
-
-func New{{.Name}}HeapItem(n int, cmpByValue, cmpByTime  func(a, b *{{.Name}}PointItem) bool) *{{.Name}}HeapItem {
-	return &{{.Name}}HeapItem{
-        items:      make([]{{.Name}}PointItem, 0, n),
-        cmpByValue : cmpByValue,
-        cmpByTime : cmpByTime,
-    }
-}
-
-func (f *{{.Name}}HeapItem) appendFast(input Chunk, start, end, ordinal int) {
-	// fast path
-	for i := start; i < end; i++ {
-		p := New{{.Name}}PointItem(
-			input.TimeByIndex(i),
-			input.Column(ordinal).{{.Name}}Values()[i])
-		if f.Len() == cap(f.items) {
-			if !f.cmpByValue(&f.items[0], p) {
-				continue
-			}
-			f.items[0] = *p
-			heap.Fix(f, 0)
-			continue
-		} else {
-			heap.Push(f, *p)
-		}
-	}
-}
-
-func (f *{{.Name}}HeapItem) appendSlow(input Chunk, start, end, ordinal int) {
-	// slow path
-	for i := start; i < end; i++ {
-		if input.Column(ordinal).IsNilV2(i) {
-			continue
-		}
-		p := New{{.Name}}PointItem(
-			input.TimeByIndex(i),
-			input.Column(ordinal).{{.Name}}Values()[input.Column(ordinal).GetValueIndexV2(i)])
-		if f.Len() == cap(f.items) {
-			if !f.cmpByValue(&f.items[0], p) {
-				continue
-			}
-			f.items[0] = *p
-			heap.Fix(f, 0)
-			continue
-		} else {
-			heap.Push(f, *p)
-		}
-	}
-}
-
-func (f *{{.Name}}HeapItem) append(input Chunk, start, end, ordinal int) {
-	if input.Column(ordinal).NilCount() == 0 {
-		f.appendFast(input, start, end, ordinal)
-	} else {
-		f.appendSlow(input, start, end, ordinal)
-	}
-}
-
-func (f *{{.Name}}HeapItem) appendForAuxFast(input Chunk, start, end, ordinal, maxIndex int) {
-	// fast path
-	for i := start; i < end; i++ {
-		p := New{{.Name}}PointItem(
-			input.TimeByIndex(i),
-			input.Column(ordinal).{{.Name}}Values()[i])
-		p.index = maxIndex + i
-		if f.Len() == cap(f.items) {
-			if !f.cmpByValue(&f.items[0], p) {
-				continue
-			}
-			if (*p).index > f.maxIndex {
-				f.maxIndex = (*p).index
-			}
-			f.items[0] = *p
-			heap.Fix(f, 0)
-			continue
-		} else {
-			if (*p).index > f.maxIndex {
-				f.maxIndex = (*p).index
-			}
-			heap.Push(f, *p)
-		}
-	}
-}
-
-func (f *{{.Name}}HeapItem) appendForAuxSlow(input Chunk, start, end, ordinal, maxIndex int) {
-	// slow path
-	for i := start; i < end; i++ {
-		if input.Column(ordinal).IsNilV2(i) {
-			continue
-		}
-		p := New{{.Name}}PointItem(
-			input.TimeByIndex(i),
-			input.Column(ordinal).{{.Name}}Values()[input.Column(ordinal).GetValueIndexV2(i)])
-		p.index = maxIndex + i
-		if f.Len() == cap(f.items) {
-			if !f.cmpByValue(&f.items[0], p) {
-				continue
-			}
-			if (*p).index > f.maxIndex {
-				f.maxIndex = (*p).index
-			}
-			f.items[0] = *p
-			heap.Fix(f, 0)
-			continue
-		} else {
-			if (*p).index > f.maxIndex {
-				f.maxIndex = (*p).index
-			}
-			heap.Push(f, *p)
-		}
-	}
-}
-
-func (f *{{.Name}}HeapItem) appendForAux(input Chunk, start, end, ordinal int) []int {
-	// make each index unique
-	maxIndex := f.maxIndex + 1 - start
-	if input.Column(ordinal).NilCount() == 0 {
-		f.appendForAuxFast(input, start, end, ordinal, maxIndex)
-	} else {
-		f.appendForAuxSlow(input, start, end, ordinal, maxIndex)
-	}
-	sort.Sort(f)
-	index := make([]int, 0)
-	for i := range f.items {
-		if idx := f.items[i].index - maxIndex; idx >= start {
-			index = append(index, idx)
-		}
-	}
-	return index
-}
-
-func (f *{{.Name}}HeapItem) Reset() {
-	f.items = f.items[:0]
-	f.sortByTime = false
-	f.maxIndex = 0
-}
-
-func (f *{{.Name}}HeapItem) Len() int {
-	return len(f.items)
-}
-
-func (f *{{.Name}}HeapItem) Less(i, j int) bool {
-	if !f.sortByTime {
-		return f.cmpByValue(&f.items[i], &f.items[j])
-	}
-	return f.cmpByTime(&f.items[i], &f.items[j])
-}
-
-func (f *{{.Name}}HeapItem) Swap(i, j int) {
-	f.items[i], f.items[j] = f.items[j], f.items[i]
-}
-
-func (f *{{.Name}}HeapItem) Push(x interface{}) {
-	f.items = append(f.items, x.({{.Name}}PointItem))
-}
-
-func (f *{{.Name}}HeapItem) Pop() interface{} {
-	p := f.items[len(f.items)-1]
-	f.items = f.items[:len(f.items)-1]
-	return p
-}
-{{- end}}
-{{end}}
-
-
-
-{{range .}}
-{{- if and (ne .Name "String") (ne .Name "Boolean")}}
 
 type {{.Name}}Col{{.Name}}HeapIterator struct {
 	n             int
@@ -1661,8 +1471,9 @@ func (r *{{.Name}}Col{{.Name}}HeapIterator) reset() {
 func (r *{{.Name}}Col{{.Name}}HeapIterator) updatePrevItem(
 	inChunk Chunk, start, end int,
 ) {
+	values := inChunk.Column(r.inOrdinal).{{.Name}}Values()
 	if len(r.auxProcessor) == 0 {
-        r.buf.append(inChunk, start, end, r.inOrdinal)
+        r.buf.append(inChunk, start, end, r.inOrdinal, values)
     } else {
         r.buf.sortByTime = true
         sort.Sort(r.buf)
@@ -1673,7 +1484,7 @@ func (r *{{.Name}}Col{{.Name}}HeapIterator) updatePrevItem(
         sort.Sort(r.buf)
         r.prevMaxIndex = r.buf.maxIndex + 1
 
-        r.windowIndex = r.buf.appendForAux(inChunk, start, end, r.inOrdinal)
+        r.windowIndex = r.buf.appendForAux(inChunk, start, end, r.inOrdinal, values)
 
         r.buf.sortByTime = true
         sort.Sort(r.buf)
@@ -1695,13 +1506,14 @@ func (r *{{.Name}}Col{{.Name}}HeapIterator) updatePrevItem(
 func (r *{{.Name}}Col{{.Name}}HeapIterator) updateCurrItem(
 	inChunk Chunk, start, end int,
 ) {
+	values := inChunk.Column(r.inOrdinal).{{.Name}}Values()
 	if len(r.auxProcessor) == 0 {
-        r.buf.append(inChunk, start, end, r.inOrdinal)
+        r.buf.append(inChunk, start, end, r.inOrdinal, values)
     } else {
         r.buf.sortByTime = true
         sort.Sort(r.buf)
         r.prevMaxIndex = r.buf.maxIndex + 1
-        r.windowIndex = r.buf.appendForAux(inChunk, start, end, r.inOrdinal)
+        r.windowIndex = r.buf.appendForAux(inChunk, start, end, r.inOrdinal, values)
         for j := range r.auxProcessor {
             r.auxProcessor[j].auxHelperFunc(
                 inChunk.Column(r.auxProcessor[j].inOrdinal),
@@ -1738,11 +1550,12 @@ func (r *{{.Name}}Col{{.Name}}HeapIterator) processLastWindow(
 func (r *{{.Name}}Col{{.Name}}HeapIterator) processMiddleWindow(
 	inChunk, outChunk Chunk, start, end int,
 ) {
+	values := inChunk.Column(r.inOrdinal).{{.Name}}Values()
 	if len(r.auxProcessor) == 0 {
-        r.buf.append(inChunk, start, end, r.inOrdinal)
+        r.buf.append(inChunk, start, end, r.inOrdinal, values)
     } else {
         r.prevMaxIndex = r.buf.maxIndex + 1
-        r.windowIndex = r.buf.appendForAux(inChunk, start, end, r.inOrdinal)
+        r.windowIndex = r.buf.appendForAux(inChunk, start, end, r.inOrdinal, values)
     }
     r.buf.sortByTime = true
     sort.Sort(r.buf)
@@ -3581,103 +3394,6 @@ func (r *{{.Name}}ColFloatRateIterator) Next(ie *IteratorEndpoint, p *IteratorPa
 
 {{range .}}
 
-type {{.Name}}SampleItem struct {
-	maxIndex int
-	items    []{{.Name}}PointItem
-}
-
-func (f *{{.Name}}SampleItem) Reset() {
-	f.maxIndex = 0
-	f.items = f.items[:0]
-}
-
-func (f *{{.Name}}SampleItem) Len() int {
-	return len(f.items)
-}
-
-func (f *{{.Name}}SampleItem) Less(i, j int) bool {
-	if f.items[i].time != f.items[j].time {
-        return f.items[i].time < f.items[j].time
-    }
-    return f.items[i].index < f.items[j].index
-}
-
-func (f *{{.Name}}SampleItem) Swap(i, j int) {
-	f.items[i], f.items[j] = f.items[j], f.items[i]
-}
-
-func (f *{{.Name}}SampleItem) appendForAux(input Chunk, start, end, ordinal int) []int {
-	maxIndex := f.maxIndex + 1
-	f.appendForFast(input, start, end, ordinal, maxIndex)
-	index := make([]int, 0)
-	for i := range f.items {
-		if idx := f.items[i].index + start - maxIndex; idx >= start {
-			index = append(index, idx)
-		}
-	}
-	return index
-}
-
-{{end}}
-
-
-{{range .}}
-{{- if and (ne .Name "String")}}
-func (f *{{.Name}}SampleItem) appendForFast(input Chunk, start, end, ordinal, maxIndex int) {
-	for i := start; i < end; i++ {
-		p := New{{.Name}}PointItem(
-			input.TimeByIndex(i),
-			input.Column(ordinal).{{.Name}}Values()[i])
-		p.index = maxIndex + i - start
-		if f.Len() == cap(f.items) {
-			rnd := rand.Intn(p.index)
-			if rnd >= cap(f.items) {
-				continue
-			}
-			if (*p).index > f.maxIndex {
-				f.maxIndex = (*p).index
-			}
-			f.items[rnd] = *p
-			continue
-		} else {
-			if (*p).index > f.maxIndex {
-				f.maxIndex = (*p).index
-			}
-			f.items = append(f.items, *p)
-		}
-	}
-}
-{{- end}}
-{{end}}
-
-func (f *StringSampleItem) appendForFast(input Chunk, start, end, ordinal, maxIndex int) {
-	for i := start; i < end; i++ {
-		p := NewStringPointItem(
-			input.TimeByIndex(i),
-			input.Column(ordinal).StringValue(i))
-		p.index = maxIndex + i - start
-		if f.Len() == cap(f.items) {
-			rnd := rand.Intn(p.index)
-			if rnd >= cap(f.items) {
-				continue
-			}
-			if (*p).index > f.maxIndex {
-				f.maxIndex = (*p).index
-			}
-			f.items[rnd] = *p
-			continue
-		} else {
-			if (*p).index > f.maxIndex {
-				f.maxIndex = (*p).index
-			}
-			f.items = append(f.items, *p)
-		}
-	}
-}
-
-
-{{range .}}
-
 type {{.Name}}Col{{.Name}}SampleIterator struct {
 	sampleNum     int
     isSingleCall  bool
@@ -3691,12 +3407,6 @@ type {{.Name}}Col{{.Name}}SampleIterator struct {
     prevBufIndex  []int
     currBufIndex  []int
     interBufIndex []int
-}
-
-func New{{.Name}}SampleItem(items []{{.Name}}PointItem) *{{.Name}}SampleItem {
-	return &{{.Name}}SampleItem{
-	    items: items,
-	}
 }
 
 func New{{.Name}}Col{{.Name}}SampleIterator(sampleNum int,

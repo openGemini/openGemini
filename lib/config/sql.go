@@ -77,6 +77,7 @@ type TSSql struct {
 	Coordinator Coordinator `toml:"coordinator"`
 	Monitor     Monitor     `toml:"monitor"`
 	Logging     Logger      `toml:"logging"`
+	Gossip      *Gossip     `toml:"gossip"`
 	Spdy        Spdy        `toml:"spdy"`
 
 	HTTP httpdConfig.Config `toml:"http"`
@@ -94,7 +95,7 @@ type TSSql struct {
 }
 
 // NewTSSql returns an instance of Config with reasonable defaults.
-func NewTSSql() *TSSql {
+func NewTSSql(enableGossip bool) *TSSql {
 	c := &TSSql{}
 	c.Common = NewCommon()
 	c.Coordinator = NewCoordinator()
@@ -107,6 +108,7 @@ func NewTSSql() *TSSql {
 	c.SelectSpec = NewSelectSpecConfig()
 	c.Subscriber = NewSubscriber()
 	c.ContinuousQuery = NewContinuousQueryConfig()
+	c.Gossip = NewGossip(enableGossip)
 	return c
 }
 

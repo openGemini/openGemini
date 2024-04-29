@@ -53,9 +53,12 @@ func (m *ReplicaInfoManager) update(data map[string]map[uint32]*message.ReplicaI
 	m.mu.Unlock()
 }
 
-func (m *ReplicaInfoManager) Update(data *meta.Data, nodeID uint64) {
+func (m *ReplicaInfoManager) Update(data *meta.Data, nodeID uint64, role Role) {
 	var replicaInfo = make(map[string]map[uint32]*message.ReplicaInfo)
-
+	if role == SQL {
+		m.update(replicaInfo)
+		return
+	}
 	for db, ptView := range data.PtView {
 		for i := range ptView {
 			pt := &ptView[i]

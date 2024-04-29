@@ -64,11 +64,6 @@ func (cmd *Command) Run(args ...string) error {
 		return err
 	}
 
-	// Write the PID file.
-	if err = WritePIDFile(options.PIDFile); err != nil {
-		return fmt.Errorf("write pid file: %s", err)
-	}
-	cmd.Pidfile = options.PIDFile
 	err = cmd.InitConfig(cmd.Config, options.ConfigPath)
 	if err != nil {
 		return fmt.Errorf("parse config: %s", err)
@@ -91,6 +86,12 @@ func (cmd *Command) Run(args ...string) error {
 	if cmd.AfterOpen != nil {
 		cmd.AfterOpen()
 	}
+
+	// Run successfully and write the PID file.
+	if err = WritePIDFile(options.PIDFile); err != nil {
+		return fmt.Errorf("write pid file: %s", err)
+	}
+	cmd.Pidfile = options.PIDFile
 
 	return nil
 }

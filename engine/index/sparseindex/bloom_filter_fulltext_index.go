@@ -34,7 +34,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/logparser"
 )
 
-var _ = RegistrySKFileReaderCreator(index.BloomFilterFullTextIndex, &BloomFilterFullTextReaderCreator{})
+var _ = RegistrySKFileReaderCreator(uint32(index.BloomFilterFullText), &BloomFilterFullTextReaderCreator{})
 
 type BloomFilterFullTextReaderCreator struct {
 }
@@ -121,14 +121,14 @@ func GetFullTextDetachFilePath(dir, msName string) string {
 }
 
 func GetFullTextAttachFilePath(dir, msName, dataFilePath string) string {
-	return path.Join(dir, msName, colstore.AppendSKIndexSuffix(dataFilePath, FullTextIndex, index.BloomFilterFullTextIndex))
+	return path.Join(dir, msName, colstore.AppendSecondaryIndexSuffix(dataFilePath, FullTextIndex, index.BloomFilterFullText, 0))
 }
 
 type FullTextIdxWriter struct {
 	*skipIndexWriter
 }
 
-func NewFullTextIdxWriter(dir, msName, dataFilePath, lockPath string, tokens string) *FullTextIdxWriter {
+func NewBloomFilterFullTextWriter(dir, msName, dataFilePath, lockPath string, tokens string) *FullTextIdxWriter {
 	return &FullTextIdxWriter{
 		newSkipIndexWriter(dir, msName, dataFilePath, lockPath, tokens),
 	}
@@ -149,7 +149,7 @@ func (f *FullTextIdxWriter) getFullTextIdxFilePath(detached bool) string {
 	return GetFullTextAttachFilePath(f.dir, f.msName, f.dataFilePath)
 }
 
-func (f *FullTextIdxWriter) CreateAttachSkipIndex(schemaIdx, rowsPerSegment []int, writeRec *record.Record) error {
+func (f *FullTextIdxWriter) CreateAttachIndex(writeRec *record.Record, schemaIdx, rowsPerSegment []int) error {
 	indexBuf := logstore.GetIndexBuf(FullTextIdxColumnCnt)
 	defer logstore.PutIndexBuf(indexBuf)
 
@@ -157,7 +157,7 @@ func (f *FullTextIdxWriter) CreateAttachSkipIndex(schemaIdx, rowsPerSegment []in
 	return writeSkipIndexToDisk(data[0], f.lockPath, skipIndexFilePaths[0])
 }
 
-func (f *FullTextIdxWriter) CreateDetachSkipIndex(writeRec *record.Record, schemaIdx, rowsPerSegment []int, dataBuf [][]byte) ([][]byte, []string) {
+func (f *FullTextIdxWriter) CreateDetachIndex(writeRec *record.Record, schemaIdx, rowsPerSegment []int, dataBuf [][]byte) ([][]byte, []string) {
 	return f.createSkipIndex(writeRec, schemaIdx, rowsPerSegment, dataBuf, true)
 }
 

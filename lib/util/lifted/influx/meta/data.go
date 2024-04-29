@@ -30,12 +30,14 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"math"
+	"math/rand"
 	"net"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
-	"unicode"
 
 	"github.com/influxdata/influxdb/models"
 	originql "github.com/influxdata/influxql"
@@ -79,6 +81,12 @@ const (
 	seperatorChar = "$"
 	DATANODE      = "data"
 	METANODE      = "meta"
+	OPMAPLIMITCAP = 30
+)
+
+const (
+	MarkDelete   int32 = 0 // this type for metricStore
+	CancelDelete int32 = 1
 )
 
 var dropStreamFirstError = errors.New("stream task exists, drop it first")
@@ -91,6 +99,82 @@ func assert(condition bool, msg string, v ...interface{}) {
 	}
 }
 
+// Metadata snapshot when incremental synchronization is used
+type DataOps struct {
+	ops           []string     // Snapshot dynamic part: incremental cmds after encoding
+	index         uint64       // Snapshot index
+	MaxCQChangeID uint64       // Snapshot static part: only MaxCQChangeID
+	state         int          // Snapshot Type
+	data          *proto2.Data // Full metadata used only for node startup
+}
+
+func NewDataOps(ops []string, MaxCQChangeID uint64, state int, index uint64) *DataOps {
+	return &DataOps{
+		ops:           ops,
+		MaxCQChangeID: MaxCQChangeID,
+		state:         state,
+		index:         index,
+	}
+}
+
+func NewDataOpsOfAllClear(state int, data *proto2.Data, index uint64) *DataOps {
+	return &DataOps{
+		state: state,
+		data:  data,
+		index: index,
+	}
+}
+
+func (dps *DataOps) Marshal() []byte {
+	var index int64 = int64(dps.index)
+	var MaxCQChangeID int64 = int64(dps.MaxCQChangeID)
+	var state int32 = int32(dps.state)
+	pb := proto2.DataOps{Op: dps.ops, NewIndex: &index, MaxCQChangeID: &MaxCQChangeID, GetOpState: &state, Data: dps.data}
+	opsBytes, err := proto.Marshal(&pb)
+	if err != nil {
+		DataLogger.Error("dataOps Marshal err", zap.String("pb string", pb.String()))
+		return nil
+	}
+	return opsBytes
+}
+
+func (dps *DataOps) UnmarshalBinary(buf []byte) error {
+	var pb proto2.DataOps
+	if err := proto.Unmarshal(buf, &pb); err != nil {
+		return err
+	}
+	dps.Unmarshal(&pb)
+	return nil
+}
+
+func (dps *DataOps) Unmarshal(pb *proto2.DataOps) {
+	dps.index = uint64(*pb.NewIndex)
+	dps.ops = pb.Op
+	dps.state = int(*pb.GetOpState)
+	dps.MaxCQChangeID = uint64(*pb.MaxCQChangeID)
+	dps.data = pb.Data
+}
+
+func (dps *DataOps) Len() int {
+	return len(dps.ops)
+}
+
+func (dps *DataOps) GetOps() []string {
+	return dps.ops
+}
+
+func (dps *DataOps) GetData() *proto2.Data {
+	return dps.data
+}
+
+func (dps *DataOps) GetState() int {
+	return dps.state
+}
+
+func (dps *DataOps) GetIndex() uint64 {
+	return dps.index
+}
+
 // Data represents the top level collection of all metadata.
 type Data struct {
 	Term         uint64 // associated raft term
@@ -98,9 +182,11 @@ type Data struct {
 	ClusterID    uint64
 	ClusterPtNum uint32 // default number is the total cpu number of 16 nodes.
 	PtNumPerNode uint32
+	NumOfShards  int32 // default number of shard for measurement created by `CREATE MEASUREMENT ... SHARDS AUTO`
 
 	MetaNodes     []NodeInfo
 	DataNodes     []DataNode                // data nodes
+	SqlNodes      []DataNode                // sql nodes
 	PtView        map[string]DBPtInfos      // PtView's key is dbname, value is PtInfo's slice.
 	ReplicaGroups map[string][]ReplicaGroup // key is dbname, value is the replication group of the database
 
@@ -122,6 +208,7 @@ type Data struct {
 	MaxNodeID         uint64
 	MaxShardGroupID   uint64
 	MaxShardID        uint64
+	MaxMstID          uint64
 	MaxIndexGroupID   uint64
 	MaxIndexID        uint64
 	MaxEventOpId      uint64
@@ -130,6 +217,13 @@ type Data struct {
 	MaxConnID         uint64
 	MaxSubscriptionID uint64 // +1 for any changes to subscriptions
 	MaxCQChangeID     uint64 // +1 for any changes to continuous queries
+	opsMapMu          sync.RWMutex
+	OpsMap            map[uint64]*Op
+	OpsMapMinIndex    uint64
+	OpsMapMaxIndex    uint64
+	OpsToMarshalIndex uint64
+
+	SQLite *SQLiteWrapper
 }
 
 var DataLogger *zap.Logger
@@ -140,6 +234,266 @@ type ReShardingInfo struct {
 	ShardGroupID uint64
 	SplitTime    int64
 	Bounds       []string
+}
+
+type Op struct {
+	com         *proto2.Command
+	nextOpIndex uint64
+	cacheBytes  []byte
+}
+
+func NewOp(com *proto2.Command, nextOpIndex uint64, cacheBytes []byte) *Op {
+	return &Op{
+		com:         com,
+		nextOpIndex: nextOpIndex,
+		cacheBytes:  cacheBytes,
+	}
+}
+
+func (data *Data) SetOps(o *Data) {
+	if o != nil {
+		data.OpsMap = o.OpsMap
+		data.OpsMapMinIndex = o.OpsMapMinIndex
+		data.OpsMapMaxIndex = o.OpsMapMaxIndex
+		data.OpsToMarshalIndex = o.OpsToMarshalIndex
+	}
+}
+
+func (data *Data) GetMinAliveNodeTmpIndex() uint64 {
+	var ret uint64 = math.MaxUint64
+	for _, sqlNode := range data.SqlNodes {
+		if sqlNode.Index < ret && sqlNode.Status == serf.StatusAlive {
+			ret = sqlNode.Index
+		}
+	}
+	for _, dataNode := range data.DataNodes {
+		if dataNode.Index < ret && dataNode.Status == serf.StatusAlive {
+			ret = dataNode.Index
+		}
+	}
+	return ret
+}
+
+func (data *Data) ClearOpsMapV2(minAliveNodeTmpIndex uint64) {
+	data.opsMapMu.Lock()
+	defer data.opsMapMu.Unlock()
+	if len(data.OpsMap) <= OPMAPLIMITCAP {
+		return
+	}
+	// keep [minAliveNodeTmpIndex:], remove [:minAliveNodeTmpIndex)
+	if minAliveNodeTmpIndex == math.MaxUint64 || data.OpsMapMinIndex >= minAliveNodeTmpIndex {
+		return
+	}
+	var tmpOp *Op
+	var next uint64
+	var start uint64
+	for start = data.OpsMapMinIndex; start < minAliveNodeTmpIndex && start != 0; {
+		tmpOp, _ = data.OpsMap[start]
+		next = tmpOp.nextOpIndex
+		delete(data.OpsMap, start)
+		start = next
+	}
+	if next == 0 {
+		data.OpsMapMinIndex = math.MaxUint64
+		data.OpsMapMaxIndex = 0
+		data.OpsToMarshalIndex = 0
+	} else {
+		data.OpsMapMinIndex = next
+		if data.OpsToMarshalIndex < data.OpsMapMinIndex {
+			data.OpsToMarshalIndex = data.OpsMapMinIndex
+		}
+	}
+}
+
+func (data *Data) UpdateOpsMapCacheBytes() error {
+	data.opsMapMu.Lock()
+	defer data.opsMapMu.Unlock()
+	if len(data.OpsMap) == 0 || data.OpsToMarshalIndex == 0 {
+		return nil
+	}
+	var err error
+	for i := data.OpsToMarshalIndex; i <= data.OpsMapMaxIndex; {
+		tmpOp, ok := data.OpsMap[i]
+		if !ok {
+			return errno.NewError(errno.OpsMapInValid, i)
+		}
+		tmpOp.cacheBytes, err = proto.Marshal(tmpOp.com)
+		if err != nil {
+			return errno.NewError(errno.OpMarshalErr, tmpOp.com.String())
+		}
+		i = data.OpsMap[i].nextOpIndex
+		data.OpsToMarshalIndex = i
+		if i == 0 {
+			break
+		}
+	}
+	return nil
+}
+
+var commandUseForClient map[proto2.Command_Type]struct{}
+
+func init() {
+	commandUseForClient = map[proto2.Command_Type]struct{}{
+		proto2.Command_CreateDatabaseCommand:            {},
+		proto2.Command_DropDatabaseCommand:              {},
+		proto2.Command_CreateRetentionPolicyCommand:     {},
+		proto2.Command_DropRetentionPolicyCommand:       {},
+		proto2.Command_SetDefaultRetentionPolicyCommand: {},
+		proto2.Command_UpdateRetentionPolicyCommand:     {},
+		proto2.Command_CreateShardGroupCommand:          {},
+		proto2.Command_DeleteShardGroupCommand:          {},
+		proto2.Command_CreateSubscriptionCommand:        {},
+		proto2.Command_DropSubscriptionCommand:          {},
+		proto2.Command_CreateUserCommand:                {},
+		proto2.Command_DropUserCommand:                  {},
+		proto2.Command_UpdateUserCommand:                {},
+		proto2.Command_SetPrivilegeCommand:              {},
+		proto2.Command_SetAdminPrivilegeCommand:         {},
+		proto2.Command_SetDataCommand:                   {},
+		proto2.Command_CreateMetaNodeCommand:            {},
+		proto2.Command_DeleteMetaNodeCommand:            {},
+		proto2.Command_SetMetaNodeCommand:               {},
+		proto2.Command_CreateDataNodeCommand:            {},
+		proto2.Command_CreateSqlNodeCommand:             {},
+		proto2.Command_DeleteDataNodeCommand:            {},
+		proto2.Command_MarkDatabaseDeleteCommand:        {},
+		proto2.Command_MarkRetentionPolicyDeleteCommand: {},
+		proto2.Command_CreateMeasurementCommand:         {},
+		proto2.Command_ReShardingCommand:                {},
+		proto2.Command_UpdateSchemaCommand:              {},
+		proto2.Command_AlterShardKeyCmd:                 {},
+		proto2.Command_PruneGroupsCommand:               {},
+		proto2.Command_MarkMeasurementDeleteCommand:     {},
+		proto2.Command_DropMeasurementCommand:           {},
+		proto2.Command_DeleteIndexGroupCommand:          {},
+		proto2.Command_UpdateShardInfoTierCommand:       {},
+		proto2.Command_UpdateNodeStatusCommand:          {},
+		proto2.Command_UpdateSqlNodeStatusCommand:       {},
+		proto2.Command_UpdatePtInfoCommand:              {},
+		proto2.Command_CreateDownSamplePolicyCommand:    {},
+		proto2.Command_DropDownSamplePolicyCommand:      {},
+		proto2.Command_CreateDbPtViewCommand:            {},
+		proto2.Command_UpdateShardDownSampleInfoCommand: {},
+		proto2.Command_CreateStreamCommand:              {},
+		proto2.Command_DropStreamCommand:                {},
+		proto2.Command_ExpandGroupsCommand:              {},
+		proto2.Command_UpdatePtVersionCommand:           {},
+		proto2.Command_RegisterQueryIDOffsetCommand:     {},
+		proto2.Command_CreateContinuousQueryCommand:     {},
+		proto2.Command_ContinuousQueryReportCommand:     {},
+		proto2.Command_DropContinuousQueryCommand:       {},
+		proto2.Command_SetNodeSegregateStatusCommand:    {},
+		proto2.Command_RemoveNodeCommand:                {},
+		proto2.Command_UpdateReplicationCommand:         {},
+		proto2.Command_UpdateMeasurementCommand:         {},
+	}
+}
+
+type GetOpsState int
+
+const (
+	AllClear GetOpsState = iota
+	NoClear
+)
+
+func (data *Data) GetNextOp(index uint64) ([]byte, uint64, error) {
+	if op, ok := data.OpsMap[index]; ok {
+		if len(op.cacheBytes) > 0 {
+			return op.cacheBytes, op.nextOpIndex, nil
+		} else {
+			str, err := proto.Marshal(op.com)
+			if err != nil {
+				DataLogger.Error("GetNextOp op marshal err", zap.Uint64("typ", uint64(*op.com.Type)))
+				return nil, 0, errno.NewError(errno.OpMarshalErr)
+			}
+			return str, op.nextOpIndex, nil
+		}
+	} else {
+		return nil, 0, errno.NewError(errno.OpsMapInValid)
+	}
+}
+
+func (data *Data) GetOpsFromStartOp(startOpIndex uint64, ops *[]string) ([]string, GetOpsState) {
+	for startOpIndex != 0 {
+		opStr, next, err := data.GetNextOp(startOpIndex)
+		if err != nil {
+			DataLogger.Error("GetOpsFromStartOp getnextop err", zap.Uint64("index", startOpIndex))
+			return nil, AllClear
+		} else {
+			*ops = append(*ops, string(opStr))
+		}
+		startOpIndex = next
+	}
+	return *ops, NoClear
+}
+
+func (data *Data) GetOps(oldIndex uint64) ([]string, GetOpsState) {
+	if data.OpsMap == nil {
+		return nil, AllClear
+	}
+	data.opsMapMu.RLock()
+	defer data.opsMapMu.RUnlock()
+	ops := make([]string, 0)
+	// the oldIndex has been cleared
+	if oldIndex < data.OpsMapMinIndex && data.OpsMapMinIndex != math.MaxUint64 {
+		return ops, AllClear
+	}
+	// snapshot has no ops
+	if oldIndex >= data.OpsMapMaxIndex {
+		return ops, NoClear
+	}
+
+	var tmpOps *Op
+	var ok bool
+	if tmpOps, ok = data.OpsMap[oldIndex]; ok {
+		return data.GetOpsFromStartOp(tmpOps.nextOpIndex, &ops)
+	} else {
+		// get start op
+		var nextIndex uint64
+		for i := oldIndex + 1; i <= data.OpsMapMaxIndex; i++ {
+			opStr, next, err := data.GetNextOp(i)
+			if err == nil {
+				ops = append(ops, string(opStr))
+				nextIndex = next
+				break
+			} else if errno.Equal(err, errno.OpMarshalErr) {
+				return nil, AllClear
+			} else {
+				continue
+			}
+		}
+		// get last ops
+		return data.GetOpsFromStartOp(nextIndex, &ops)
+	}
+}
+
+func (data *Data) AddCmdAsOpToOpMap(op proto2.Command, newIndex uint64) {
+	if data.OpsMap == nil {
+		return
+	}
+	if _, ok := commandUseForClient[*op.Type]; !ok {
+		return
+	}
+	data.opsMapMu.Lock()
+	defer data.opsMapMu.Unlock()
+	if oldOp, ok := data.OpsMap[newIndex]; ok {
+		DataLogger.Error("AddCmdAsOpToOpMap newIndex err", zap.String("oldOp.string", oldOp.com.String()), zap.Uint64("newIndex", newIndex))
+		return
+	}
+	if len(data.OpsMap) > 0 {
+		preOp := data.OpsMap[data.OpsMapMaxIndex]
+		preOp.nextOpIndex = newIndex
+	}
+	data.OpsMap[newIndex] = &Op{com: &op}
+	if newIndex < data.OpsMapMinIndex {
+		data.OpsMapMinIndex = newIndex
+	}
+	if newIndex > data.OpsMapMaxIndex {
+		data.OpsMapMaxIndex = newIndex
+	}
+	if data.OpsToMarshalIndex == 0 {
+		data.OpsToMarshalIndex = newIndex
+	}
 }
 
 func (data *Data) DBReplicaN(db string) int {
@@ -258,6 +612,24 @@ func (data *Data) NewestShardGroup(database, retentionPolicy string) (sg *ShardG
 	return &rp.ShardGroups[sgLen-1]
 }
 
+func (data *Data) GetMeasurementID(database, retentionPolicy, mst string) (uint64, error) {
+	db, err := data.GetDatabase(database)
+	if err != nil {
+		return 0, err
+	}
+	rp, err := db.GetRetentionPolicy(retentionPolicy)
+	if err != nil {
+		return 0, err
+	}
+
+	msti := rp.Measurement(mst)
+	if msti == nil {
+		return 0, ErrMeasurementNotFound
+	}
+
+	return msti.ID, nil
+}
+
 func (data *Data) Measurement(database, retentionPolicy, mst string) (*MeasurementInfo, error) {
 	db, err := data.GetDatabase(database)
 	if err != nil {
@@ -315,24 +687,21 @@ func (data *Data) UpdateSchema(database string, retentionPolicy string, mst stri
 	if err != nil {
 		return err
 	}
-
-	schema := make(map[string]int32)
-	for field := range msti.Schema {
-		schema[field] = msti.Schema[field]
+	msti.SchemaLock.Lock()
+	defer msti.SchemaLock.Unlock()
+	if msti.Schema == nil {
+		msti.Schema = make(map[string]int32)
 	}
-
 	for i := range fieldToCreate {
-		existType, ok := schema[fieldToCreate[i].GetFieldName()]
+		existType, ok := msti.Schema[fieldToCreate[i].GetFieldName()]
 		if !ok {
-			schema[fieldToCreate[i].GetFieldName()] = fieldToCreate[i].GetFieldType()
+			msti.Schema[fieldToCreate[i].GetFieldName()] = fieldToCreate[i].GetFieldType()
 			continue
 		}
 		if existType != fieldToCreate[i].GetFieldType() {
 			return ErrFieldTypeConflict
 		}
 	}
-
-	msti.Schema = schema
 	return nil
 }
 
@@ -428,7 +797,7 @@ func (data *Data) CreateShardGroupWithBounds(db string, rp *RetentionPolicyInfo,
 }
 
 // createVersionMeasurement create new measurement
-func (data *Data) createVersionMeasurement(db string, rp *RetentionPolicyInfo, shardKey *proto2.ShardKeyInfo,
+func (data *Data) createVersionMeasurement(db string, rp *RetentionPolicyInfo, shardKey *proto2.ShardKeyInfo, numOfShards int32,
 	indexR *proto2.IndexRelation, ski *ShardKeyInfo, mst string, version uint32, engineType config.EngineType,
 	colStoreInfo *ColStoreInfo, schemaInfo []*proto2.FieldSchema, options *proto2.Options) error {
 	sgLen := len(rp.ShardGroups)
@@ -439,13 +808,32 @@ func (data *Data) createVersionMeasurement(db string, rp *RetentionPolicyInfo, s
 	}
 	nameWithVer := influx.GetNameWithVersion(mst, version)
 
-	msti := &MeasurementInfo{Name: nameWithVer, originName: mst, EngineType: engineType}
+	msti := NewMeasurementInfo(nameWithVer, mst, engineType, data.MaxMstID)
+	data.MaxMstID++
 	if colStoreInfo != nil {
 		msti.ColStoreInfo = colStoreInfo
 	}
 
 	if shardKey != nil {
 		msti.ShardKeys = []ShardKeyInfo{*ski}
+	}
+
+	if numOfShards == -1 {
+		numOfShards = data.NumOfShards
+	}
+	msti.InitNumOfShards = 0 // default
+	maxShardNum := int32(data.GetEffectivePtNum(db))
+	if numOfShards != 0 && ski.Type == HASH && numOfShards < maxShardNum { // only works for hash sharding.
+		msti.InitNumOfShards = numOfShards
+		msti.ShardIdexes = make(map[uint64][]int)
+		shardGroups := rp.ShardGroups
+
+		if len(shardGroups) > 0 {
+			for _, shardGroup := range shardGroups {
+				shards := shardGroup.Shards
+				msti.ShardIdexes[shardGroup.ID] = mapShards(nameWithVer, shards, msti.InitNumOfShards)
+			}
+		}
 	}
 
 	if indexR != nil {
@@ -471,7 +859,7 @@ func (data *Data) createVersionMeasurement(db string, rp *RetentionPolicyInfo, s
 }
 
 func (data *Data) CreateMeasurement(database string, rpName string, mst string,
-	shardKey *proto2.ShardKeyInfo, indexR *proto2.IndexRelation, engineType config.EngineType,
+	shardKey *proto2.ShardKeyInfo, numOfShards int32, indexR *proto2.IndexRelation, engineType config.EngineType,
 	colStoreInfo *proto2.ColStoreInfo, schemaInfo []*proto2.FieldSchema, options *proto2.Options) error {
 	rp, err := data.RetentionPolicy(database, rpName)
 	if err != nil {
@@ -508,7 +896,7 @@ func (data *Data) CreateMeasurement(database string, rpName string, mst string,
 		if len(rp.MstVersions) == 0 {
 			rp.MstVersions = make(map[string]MeasurementVer)
 		}
-		return data.createVersionMeasurement(database, rp, shardKey, indexR, ski, mst, ver, engineType, hInfo, schemaInfo, options)
+		return data.createVersionMeasurement(database, rp, shardKey, numOfShards, indexR, ski, mst, ver, engineType, hInfo, schemaInfo, options)
 	}
 
 	n := len(msti.ShardKeys)
@@ -569,6 +957,60 @@ func (data *Data) GetNodeIndex(nodeId uint64) (uint64, error) {
 	return 0, errno.NewError(errno.DataNodeNotFound, nodeId)
 }
 
+func (data *Data) GetNodeIndexV2(nodeId uint64) (uint64, error) {
+	for _, value := range data.DataNodes {
+		if value.ID == nodeId {
+			return value.Index, nil
+		}
+	}
+
+	DataLogger.Error("[GetNodeIndexV2] not found task ", zap.Uint64("nodeid", nodeId))
+	return 0, errno.NewError(errno.DataNodeNotFound, nodeId)
+}
+
+func (data *Data) GetSqlNodeIndex(nodeId uint64) (uint64, error) {
+	for _, value := range data.SqlNodes {
+		if value.ID == nodeId {
+			return value.Index, nil
+		}
+	}
+
+	DataLogger.Error("[GetSqlNodeIndex] not found task ", zap.Uint64("nodeid", nodeId))
+	return 0, errno.NewError(errno.SqlNodeNotFound, nodeId)
+}
+
+func (data *Data) SetSqlNodeIndex(nodeId uint64, newIndex uint64) error {
+	for i, value := range data.SqlNodes {
+		if value.ID == nodeId {
+			if newIndex > data.SqlNodes[i].Index {
+				data.SqlNodes[i].Index = newIndex
+				return nil
+			} else if newIndex < data.SqlNodes[i].Index {
+				DataLogger.Error("[SetSqlNodeIndex] newIndex err", zap.Uint64("newIndex", newIndex), zap.Uint64("data.SqlNodes[i].Index", data.SqlNodes[i].Index), zap.Uint64("nodeId", nodeId))
+				return fmt.Errorf("SetSqlNodeIndex newIndex err")
+			}
+		}
+	}
+	DataLogger.Error("[SetSqlNodeIndex] not found task ", zap.Uint64("nodeid", nodeId))
+	return fmt.Errorf("SetSqlNodeIndex node not find err")
+}
+
+func (data *Data) SetDataNodeIndex(nodeId uint64, newIndex uint64) error {
+	for i, value := range data.DataNodes {
+		if value.ID == nodeId {
+			if newIndex > data.DataNodes[i].Index {
+				data.DataNodes[i].Index = newIndex
+				return nil
+			} else if newIndex < data.DataNodes[i].Index {
+				DataLogger.Error("[SetDataNodeIndex] newIndex err", zap.Uint64("newIndex", newIndex), zap.Uint64("data.DataNodes[i].Index", data.DataNodes[i].Index), zap.Uint64("nodeId", nodeId))
+				return fmt.Errorf("SetDataNodeIndex newIndex err")
+			}
+		}
+	}
+	DataLogger.Error("[SetDataNodeIndex] not found task ", zap.Uint64("nodeid", nodeId))
+	return fmt.Errorf("SetDataNodeIndex node not find err")
+}
+
 func (data *Data) CheckDataNodeAlive(nodeId uint64) error {
 	nodeIndex, err := data.GetNodeIndex(nodeId)
 	if err != nil {
@@ -596,10 +1038,29 @@ func (data *Data) DataNode(id uint64) *DataNode {
 	return nil
 }
 
+// SqlNode returns a sql node by id.
+func (data *Data) SqlNode(id uint64) *DataNode {
+	for i := range data.SqlNodes {
+		if data.SqlNodes[i].ID == id {
+			return &data.SqlNodes[i]
+		}
+	}
+	return nil
+}
+
 func (data *Data) DataNodeByHttpHost(httpAddr string) *DataNode {
 	for i := range data.DataNodes {
 		if data.DataNodes[i].Host == httpAddr {
 			return &data.DataNodes[i]
+		}
+	}
+	return nil
+}
+
+func (data *Data) SqlNodeByHttpHost(httpAddr string) *DataNode {
+	for i := range data.SqlNodes {
+		if data.SqlNodes[i].TCPHost == httpAddr {
+			return &data.SqlNodes[i]
 		}
 	}
 	return nil
@@ -685,6 +1146,46 @@ func (data *Data) CreateDataNode(host, tcpHost, role string) (uint64, error) {
 	if data.ExpandShardsEnable {
 		data.ExpandGroups()
 	}
+	return existingID, nil
+}
+
+func (data *Data) CreateSqlNode(httpHost string, gossipAddr string) (uint64, error) {
+	data.MaxConnID++
+	// Ensure a node with the same host doesn't already exist.
+	for i := range data.SqlNodes {
+		if data.SqlNodes[i].TCPHost == httpHost {
+			data.SqlNodes[i].ConnID = data.MaxConnID
+			return data.SqlNodes[i].ID, nil
+		}
+	}
+
+	// If an existing meta node exists with the same TCPHost address,
+	// then these nodes are actually the same so re-use the existing ID
+	var existingID uint64
+	for _, n := range data.MetaNodes {
+		if n.TCPHost == httpHost {
+			existingID = n.ID
+			break
+		}
+	}
+
+	// We didn't find an existing node, so assign it a new node ID
+	if existingID == 0 {
+		data.MaxNodeID++
+		existingID = data.MaxNodeID
+	}
+
+	dn := DataNode{
+		NodeInfo: NodeInfo{
+			ID:         existingID,
+			Role:       "",
+			TCPHost:    httpHost,
+			GossipAddr: gossipAddr,
+		},
+		ConnID: data.MaxConnID}
+	// Append new sql node.
+	data.SqlNodes = append(data.SqlNodes, dn)
+	DataLogger.Info("CreateSqlNode success ", zap.Uint64("nodeid", dn.ID), zap.String("httpHost", httpHost), zap.String("gossipHost", gossipAddr))
 	return existingID, nil
 }
 
@@ -876,6 +1377,18 @@ func (data *Data) CloneDataNodes() []DataNode {
 	}
 	nis := make([]DataNode, len(data.DataNodes))
 	copy(nis, data.DataNodes)
+	return nis
+}
+
+// CloneSqlNodes returns a copy of the NodeInfo.
+func (data *Data) CloneSqlNodes() []DataNode {
+	if data == nil || data.SqlNodes == nil {
+		return nil
+	}
+	nis := make([]DataNode, len(data.SqlNodes))
+	for i := range data.SqlNodes {
+		nis[i] = data.SqlNodes[i]
+	}
 	return nis
 }
 
@@ -1288,6 +1801,56 @@ func (data *Data) SetDefaultRetentionPolicy(database, name string) error {
 	return nil
 }
 
+func (data *Data) ShowShardsFromMst(db string, rp string, mst string) models.Rows {
+	var rows models.Rows
+	rpi, err := data.RetentionPolicy(db, rp)
+	if rpi == nil || err != nil {
+		return nil
+	}
+	mstInfo, err := rpi.GetMeasurement(mst)
+	if err != nil {
+		return nil
+	}
+	shardIdxes := mstInfo.ShardIdexes
+	row := &models.Row{Columns: []string{"id", "database", "retention_policy", "measurement", "shard_group"}, Name: db + "." + rp + "." + mst}
+	shardGroups := rpi.ShardGroups
+	if shardIdxes == nil {
+		for _, shardGroup := range shardGroups {
+			shard := shardGroup.Shards
+			for _, shardInfo := range shard {
+				row.Values = append(row.Values, []interface{}{
+					shardInfo.ID,
+					db,
+					rp,
+					mst,
+					shardGroup.ID,
+				})
+			}
+		}
+	} else {
+		sgIDToShards := make(map[uint64][]ShardInfo)
+		for _, shardGroup := range shardGroups {
+			if _, ok := shardIdxes[shardGroup.ID]; ok {
+				sgIDToShards[shardGroup.ID] = shardGroup.Shards
+			}
+		}
+		for shardGroup, shardIdx := range shardIdxes {
+			for _, shard := range shardIdx {
+				row.Values = append(row.Values, []interface{}{
+					sgIDToShards[shardGroup][shard].ID,
+					db,
+					rp,
+					mst,
+					shardGroup,
+				})
+			}
+		}
+	}
+
+	rows = append(rows, row)
+	return rows
+}
+
 func (data *Data) ShowShards() models.Rows {
 	var rows models.Rows
 	data.WalkDatabases(func(db *DatabaseInfo) {
@@ -1612,6 +2175,31 @@ func (data *Data) ShardGroupByTimestampAndEngineType(database, policy string, ti
 	return rpi.ShardGroupByTimestampAndEngineType(timestamp, engineType), nil
 }
 
+func (data *Data) mapShardsToMst(database string, rpi *RetentionPolicyInfo, sgi *ShardGroupInfo) {
+	var numOfShards int32
+	for mstName, mstInfo := range rpi.Measurements {
+		if mstInfo.InitNumOfShards == 0 { // Default
+			continue
+		} else {
+			numOfShards = mstInfo.InitNumOfShards
+		}
+		if mstInfo.ShardIdexes != nil {
+			mstInfo.ShardIdexes[sgi.ID] = mapShards(mstName, sgi.Shards, numOfShards)
+		} else {
+			DataLogger.Error("mapShardsToMst err", zap.String("mstName", mstName), zap.Int32("InitNumOfShards", mstInfo.InitNumOfShards))
+		}
+	}
+}
+
+// This method could be improved later.
+func mapShards(mstName string, shards []ShardInfo, numOfShards int32) []int {
+	rand.Seed(int64(HashID([]byte(mstName))))
+	randomSlice := rand.Perm(int(len(shards)))
+	shardsIdx := randomSlice[:numOfShards]
+	sort.Ints(shardsIdx)
+	return shardsIdx
+}
+
 func (data *Data) createShards(database string, sgi *ShardGroupInfo, igi *IndexGroupInfo,
 	rpi *RetentionPolicyInfo, msti *MeasurementInfo, tier uint64) {
 	// Determine shard count by node count divided by replication factor.
@@ -1701,6 +2289,11 @@ func (data *Data) CreateShardGroup(database, policy string, timestamp time.Time,
 
 	// Create shards on the group.
 	data.createShards(database, sgi, igi, rpi, msti, tier)
+
+	// Map shards to measurements, only works for hash sharding.
+	if msti.ShardKeys[0].Type == HASH {
+		data.mapShardsToMst(database, rpi, sgi)
+	}
 
 	// Retention policy has a new shard group, so update the policy. Shard
 	// Groups must be stored in sorted order, as other parts of the system
@@ -1831,7 +2424,7 @@ func (data *Data) DeleteIndexGroup(database, policy string, id uint64) error {
 }
 
 // DeleteShardGroup removes a shard group from a database and retention policy by id.
-func (data *Data) DeleteShardGroup(database, policy string, id uint64) error {
+func (data *Data) DeleteShardGroup(database, policy string, id uint64, deletedAt int64, deleteType int32) error {
 	// Find retention policy.
 	rpi, err := data.RetentionPolicy(database, policy)
 	if err != nil {
@@ -1840,7 +2433,18 @@ func (data *Data) DeleteShardGroup(database, policy string, id uint64) error {
 	// Find shard group by ID and set its deletion timestamp.
 	for i := range rpi.ShardGroups {
 		if rpi.ShardGroups[i].ID == id {
-			rpi.ShardGroups[i].DeletedAt = time.Now().UTC()
+			if deleteType == CancelDelete {
+				// mark shardGroup as no deleted
+				rpi.ShardGroups[i].DeletedAt = time.Time{}
+			} else {
+				// mark shardGroup as deleted
+				if deletedAt != 0 {
+					//When delay-deleted, the deletedAt time cannot be updated with the raft playback, so deletedAt is specified by the client.
+					rpi.ShardGroups[i].DeletedAt = time.Unix(0, deletedAt) // logkeeper
+				} else {
+					rpi.ShardGroups[i].DeletedAt = time.Now().UTC() // metricStore
+				}
+			}
 			break
 		}
 	}
@@ -1893,6 +2497,12 @@ func (data *Data) pruneShardGroups(id uint64) error {
 				}
 
 				if !rp.ShardGroups[idx].DeletedAt.IsZero() && rp.ShardGroups[idx].canDelete() {
+					for _, mstInfo := range rp.Measurements {
+						if mstInfo.InitNumOfShards == 0 {
+							continue
+						}
+						delete(mstInfo.ShardIdexes, rp.ShardGroups[idx].ID)
+					}
 					rp.ShardGroups = append(rp.ShardGroups[:idx], rp.ShardGroups[idx+1:]...)
 				} else {
 					idx++
@@ -2161,6 +2771,17 @@ func (data *Data) Clone() *Data {
 
 // Marshal serializes data to a protobuf representation.
 func (data *Data) Marshal() *proto2.Data {
+	pb := data.MarshalBase()
+	pb.MigrateEvents = make([]*proto2.MigrateEventInfo, len(data.MigrateEvents))
+	i := 0
+	for eventStr := range data.MigrateEvents {
+		pb.MigrateEvents[i] = data.MigrateEvents[eventStr].marshal()
+		i++
+	}
+	return pb
+}
+
+func (data *Data) MarshalBase() *proto2.Data {
 	pb := &proto2.Data{
 		Term:         proto.Uint64(data.Term),
 		Index:        proto.Uint64(data.Index),
@@ -2169,6 +2790,7 @@ func (data *Data) Marshal() *proto2.Data {
 
 		MaxShardGroupID: proto.Uint64(data.MaxShardGroupID),
 		MaxShardID:      proto.Uint64(data.MaxShardID),
+		MaxMstID:        proto.Uint64(data.MaxMstID),
 		MaxIndexGroupID: proto.Uint64(data.MaxIndexGroupID),
 		MaxIndexID:      proto.Uint64(data.MaxIndexID),
 
@@ -2176,6 +2798,7 @@ func (data *Data) Marshal() *proto2.Data {
 		MaxNodeID: proto.Uint64(data.MaxNodeID),
 
 		PtNumPerNode:    proto.Uint32(data.PtNumPerNode),
+		NumOfShards:     proto.Int32(data.NumOfShards),
 		MaxEventOpId:    proto.Uint64(data.MaxEventOpId),
 		TakeOverEnabled: proto.Bool(data.TakeOverEnabled),
 		BalancerEnabled: proto.Bool(data.BalancerEnabled),
@@ -2186,6 +2809,9 @@ func (data *Data) Marshal() *proto2.Data {
 		MaxSubscriptionID: proto.Uint64(data.MaxSubscriptionID),
 		MaxCQChangeID:     proto.Uint64(data.MaxCQChangeID),
 	}
+	if data.SQLite != nil {
+		pb.IsSQLiteEnabled = proto.Bool(true)
+	}
 
 	pb.DataNodes = make([]*proto2.DataNode, len(data.DataNodes))
 	for i := range data.DataNodes {
@@ -2195,6 +2821,11 @@ func (data *Data) Marshal() *proto2.Data {
 	pb.MetaNodes = make([]*proto2.NodeInfo, len(data.MetaNodes))
 	for i := range data.MetaNodes {
 		pb.MetaNodes[i] = data.MetaNodes[i].marshal()
+	}
+
+	pb.SqlNodes = make([]*proto2.DataNode, len(data.SqlNodes))
+	for i := range data.SqlNodes {
+		pb.SqlNodes[i] = data.SqlNodes[i].marshal()
 	}
 
 	pb.PtView = make(map[string]*proto2.DBPtInfo, len(data.PtView))
@@ -2227,13 +2858,6 @@ func (data *Data) Marshal() *proto2.Data {
 		pb.Users[i] = data.Users[i].marshal()
 	}
 
-	pb.MigrateEvents = make([]*proto2.MigrateEventInfo, len(data.MigrateEvents))
-	i = 0
-	for eventStr := range data.MigrateEvents {
-		pb.MigrateEvents[i] = data.MigrateEvents[eventStr].marshal()
-		i++
-	}
-
 	pb.QueryIDInit = make(map[string]uint64, len(data.QueryIDInit))
 	for host := range data.QueryIDInit {
 		pb.QueryIDInit[string(host)] = data.QueryIDInit[host]
@@ -2254,6 +2878,10 @@ func (data *Data) Marshal() *proto2.Data {
 	return pb
 }
 
+func (data *Data) MarshalV2() *proto2.Data {
+	return data.MarshalBase()
+}
+
 // unmarshal deserializes from a protobuf representation.
 func (data *Data) Unmarshal(pb *proto2.Data) {
 	data.Term = pb.GetTerm()
@@ -2264,7 +2892,9 @@ func (data *Data) Unmarshal(pb *proto2.Data) {
 	data.MaxNodeID = pb.GetMaxNodeID()
 	data.MaxShardGroupID = pb.GetMaxShardGroupID()
 	data.MaxShardID = pb.GetMaxShardID()
+	data.MaxMstID = pb.GetMaxMstID()
 	data.PtNumPerNode = pb.GetPtNumPerNode()
+	data.NumOfShards = pb.GetNumOfShards()
 	data.MaxIndexGroupID = pb.GetMaxIndexGroupID()
 	data.MaxIndexID = pb.GetMaxIndexID()
 	data.MaxEventOpId = pb.GetMaxEventOpId()
@@ -2276,6 +2906,10 @@ func (data *Data) Unmarshal(pb *proto2.Data) {
 	data.MaxSubscriptionID = pb.GetMaxSubscriptionID()
 	data.MaxCQChangeID = pb.GetMaxCQChangeID()
 
+	if pb.GetIsSQLiteEnabled() {
+		data.SQLite = &SQLiteWrapper{}
+	}
+
 	data.DataNodes = make([]DataNode, len(pb.GetDataNodes()))
 	for i, x := range pb.GetDataNodes() {
 		data.DataNodes[i].unmarshal(x)
@@ -2284,6 +2918,11 @@ func (data *Data) Unmarshal(pb *proto2.Data) {
 	data.MetaNodes = make([]NodeInfo, len(pb.GetMetaNodes()))
 	for i, x := range pb.GetMetaNodes() {
 		data.MetaNodes[i].unmarshal(x)
+	}
+
+	data.SqlNodes = make([]DataNode, len(pb.GetSqlNodes()))
+	for i, x := range pb.GetSqlNodes() {
+		data.SqlNodes[i].unmarshal(x)
 	}
 
 	data.PtView = make(map[string]DBPtInfos, len(pb.GetPtView()))
@@ -2518,6 +3157,30 @@ func (data *Data) UpdateNodeStatus(id uint64, status int32, lTime uint64, gossip
 	return nil
 }
 
+func (data *Data) UpdateSqlNodeStatus(id uint64, status int32, lTime uint64, gossipPort string) error {
+	dn := data.SqlNode(id)
+	if dn == nil {
+		return errno.NewError(errno.SqlNodeNotFound, id)
+	}
+
+	if lTime < dn.LTime {
+		DataLogger.Error("event is older", zap.Uint64("id", id), zap.Int32("status", status), zap.Uint64("ltime", lTime), zap.Uint64("dnLtime", dn.LTime))
+		return errno.NewError(errno.OlderEvent)
+	}
+
+	updateStatus := serf.MemberStatus(status)
+	dn.Status = updateStatus
+	dn.LTime = lTime
+	if updateStatus == serf.StatusAlive {
+		dn.AliveConnID = dn.ConnID
+	}
+	if dn.GossipAddr == "" {
+		DataLogger.Error("UpdateSqlNodeStatus GossipAddr err", zap.String("dn.TCPHost", dn.TCPHost), zap.Uint64("id", id))
+	}
+
+	return nil
+}
+
 // return pts for the nid
 func (data *Data) updatePtViewStatus(nid uint64, status PtStatus) {
 	for db := range data.PtView {
@@ -2616,6 +3279,44 @@ func (data *Data) GetShardDurationsByDbPt(db string, pt uint32) map[uint64]*Shar
 	return r
 }
 
+// GetShardDurationsByDbPtForRetention is used to transfer shards that are not marked for deletion and delete them from the retention.
+func (data *Data) GetShardDurationsByDbPtForRetention(db string, pt uint32) map[uint64]*ShardDurationInfo {
+	dbi := data.Database(db)
+	r := make(map[uint64]*ShardDurationInfo, 7)
+	dbi.WalkRetentionPolicy(func(rp *RetentionPolicyInfo) {
+		if rp.MarkDeleted {
+			return
+		}
+		rp.WalkShardGroups(func(sg *ShardGroupInfo) {
+			if len(sg.Shards) > int(pt) {
+				sh := sg.Shards[pt]
+				// need remove shard directory in store
+				if sh.MarkDelete {
+					return
+				}
+				durationInfo := &ShardDurationInfo{}
+				durationInfo.Ident = ShardIdentifier{}
+				durationInfo.Ident.ShardID = sh.ID
+				durationInfo.Ident.ShardGroupID = sg.ID
+				durationInfo.Ident.OwnerDb = db
+				durationInfo.Ident.OwnerPt = pt
+				durationInfo.Ident.Policy = rp.Name
+				durationInfo.Ident.ShardType = rp.shardingType()
+				durationInfo.Ident.DownSampleID = sh.DownSampleID
+				durationInfo.Ident.DownSampleLevel = int(sh.DownSampleLevel)
+				durationInfo.Ident.ReadOnly = sh.ReadOnly
+				durationInfo.Ident.EngineType = uint32(sg.EngineType)
+				durationInfo.DurationInfo = DurationDescriptor{}
+				durationInfo.DurationInfo.Duration = rp.Duration
+				durationInfo.DurationInfo.Tier = sh.Tier
+				durationInfo.DurationInfo.TierDuration = rp.TierDuration(sh.Tier)
+				r[sh.ID] = durationInfo
+			}
+		})
+	})
+	return r
+}
+
 func (data *Data) GetFailedPtInfos(id uint64, status PtStatus) []*DbPtInfo {
 	resPtInfos := make([]*DbPtInfo, 0, data.GetClusterPtNum())
 	for db := range data.PtView {
@@ -2627,7 +3328,7 @@ func (data *Data) GetFailedPtInfos(id uint64, status PtStatus) []*DbPtInfo {
 		dbInfo := data.GetDBBriefInfo(db)
 		for i := range data.PtView[db] {
 			if data.PtView[db][i].Owner.NodeID == id && data.PtView[db][i].Status == status {
-				shards := data.GetShardDurationsByDbPt(db, data.PtView[db][i].PtId)
+				shards := data.GetShardDurationsByDbPtForRetention(db, data.PtView[db][i].PtId)
 				pt := data.PtView[db][i]
 				resPtInfos = append(resPtInfos, &DbPtInfo{Db: db, Pti: &pt, Shards: shards, DBBriefInfo: dbInfo})
 			}
@@ -2786,6 +3487,7 @@ func (data *Data) MarshalUsers() *proto2.Data {
 		MaxNodeID: proto.Uint64(data.MaxNodeID),
 
 		PtNumPerNode:    proto.Uint32(data.PtNumPerNode),
+		NumOfShards:     proto.Int32(data.NumOfShards),
 		MaxEventOpId:    proto.Uint64(data.MaxEventOpId),
 		TakeOverEnabled: proto.Bool(data.TakeOverEnabled),
 	}
@@ -2963,59 +3665,6 @@ func (data *Data) expandRepGroups(db string, repNum uint32) {
 	data.ReplicaGroups[db] = append(data.ReplicaGroups[db], make([]ReplicaGroup, repNum)...)
 }
 
-func (data *Data) createReplicationInner(db string, replicaN, repStart, repEnd, ptStart uint32) {
-	var masterPtId, slavePtId uint32
-
-	data.expandRepGroups(db, repEnd-repStart)
-	ptNumPerNode := data.PtNumPerNode
-	repGroups := data.DBRepGroups(db)
-	ptView := data.DBPtView(db)
-	for repGroupId, ptIdx := repStart, ptStart; repGroupId < repEnd; {
-		for k := uint32(0); k < ptNumPerNode; k++ {
-			peers := make([]Peer, replicaN-1)
-			for i := uint32(0); i < replicaN-1; i++ {
-				slavePtId = ptIdx + ptNumPerNode*(i+1)
-				peers[i].ID = slavePtId
-				peers[i].PtRole = Slave
-
-				// update slave pt RG id
-				ptView[slavePtId].RGID = repGroupId
-			}
-
-			masterPtId = ptIdx
-			repGroups[repGroupId].init(repGroupId, masterPtId, peers, Health, 0)
-
-			// update master pt RG id
-			ptView[masterPtId].RGID = repGroupId
-			repGroupId++
-		}
-		ptIdx += ptNumPerNode * replicaN
-	}
-	DataLogger.Info("create replication", zap.String("db", db),
-		zap.Any("new replication group", repGroups[repStart:]), zap.Any("new pt info", ptView[ptStart:]),
-		zap.Uint32("replication start", repStart), zap.Uint32("replication end", repEnd),
-		zap.Uint32("pt start", ptStart))
-}
-
-func (data *Data) createReplicationImp(db string, replicaN uint32) error {
-	ptView := data.DBPtView(db)
-	ptNum := uint32(len(ptView))
-	nodeNum := ptNum / data.PtNumPerNode
-	if nodeNum%replicaN != 0 {
-		return errno.NewError(errno.ReplicaNodeNumIncorrect, nodeNum, replicaN)
-	}
-
-	data.createReplicationInner(db, replicaN, 0, ptNum/replicaN, 0)
-	return nil
-}
-
-func (data *Data) CreateReplication(db string, replicaN uint32) error {
-	if replicaN <= 1 {
-		return nil
-	}
-	return data.createReplicationImp(db, replicaN)
-}
-
 func (data *Data) GetDBBriefInfo(name string) *DatabaseBriefInfo {
 	dbBriefInfo := &DatabaseBriefInfo{
 		Name: name,
@@ -3064,6 +3713,9 @@ func (data *Data) GetSegregateStatusByNodeId(nodeId uint64) uint64 {
 func (data *Data) GetPtInfosByNodeId(id uint64) []*DbPtInfo {
 	resPtInfos := make([]*DbPtInfo, 0, data.GetClusterPtNum())
 	for db := range data.PtView {
+		if data.Database(db) == nil {
+			continue
+		}
 		dbInfo := data.GetDBBriefInfo(db)
 		for i := range data.PtView[db] {
 			if data.PtView[db][i].Owner.NodeID == id {
@@ -3208,6 +3860,17 @@ func (data *Data) UpdateMeasurement(db, rp, mst string, options *proto2.Options)
 	return nil
 }
 
+func (data *Data) UpdateNodeTmpIndex(role int32, index uint64, nodeID uint64) error {
+	if NodeType(role) == SQL {
+		return data.SetSqlNodeIndex(nodeID, index)
+	} else if NodeType(role) == STORE {
+		return data.SetDataNodeIndex(nodeID, index)
+	} else {
+		DataLogger.Error("UpdateNodeTmpIndex err meta")
+		return fmt.Errorf("UpdateNodeTmpIndex err meta")
+	}
+}
+
 // MarshalTime converts t to nanoseconds since epoch. A zero time returns 0.
 func MarshalTime(t time.Time) int64 {
 	if t.IsZero() {
@@ -3223,28 +3886,6 @@ func UnmarshalTime(v int64) time.Time {
 		return time.Time{}
 	}
 	return time.Unix(0, v).UTC()
-}
-
-// ValidName checks to see if the given name can would be valid for DB/RP name
-func ValidName(name string) bool {
-	return validName(name, `,:;./\`)
-}
-
-func ValidMeasurementName(name string) bool {
-	if name == "." || name == ".." {
-		return false
-	}
-	return validName(name, `,;/\`)
-}
-
-func validName(name string, charactersNotSupport string) bool {
-	for _, r := range name {
-		if !unicode.IsPrint(r) {
-			return false
-		}
-	}
-
-	return name != "" && !strings.ContainsAny(name, charactersNotSupport)
 }
 
 func ValidShardKey(shardKeys []string) error {

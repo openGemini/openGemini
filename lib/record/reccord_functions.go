@@ -16,6 +16,8 @@ limitations under the License.
 
 package record
 
+import "math"
+
 func booleanCompareLessEqual(a, b bool) bool {
 	if a == b {
 		return true
@@ -745,12 +747,38 @@ func UpdateCount(iRec, rec *Record, recColumn, iRecColumn, recRow, iRecRow int) 
 	updateCountImpl(v, iRec, iRecColumn, iRecRow)
 }
 
+func UpdateFloatCountProm(iRec, rec *Record, recColumn, iRecColumn, recRow, iRecRow int) {
+	v := rec.ColVals[recColumn].FloatValues()[recRow]
+	updateFloatCountPromImpl(v, iRec, iRecColumn, iRecRow)
+}
+
 func updateCountImpl(v int64, iRec *Record, iRecColumn, iRecRow int) {
 	srcVal, _ := iRec.ColVals[iRecColumn].IntegerValueWithNullReserve(iRecRow)
 	iRec.ColVals[iRecColumn].UpdateIntegerValue(v+srcVal, false, iRecRow)
 }
 
+func updateFloatCountPromImpl(v float64, iRec *Record, iRecColumn, iRecRow int) {
+	srcVal, _ := iRec.ColVals[iRecColumn].FloatValueWithNullReserve(iRecRow)
+	iRec.ColVals[iRecColumn].UpdateFloatValue(v+srcVal, false, iRecRow)
+}
+
 func UpdateCountFast(iRec, rec *Record, recColumn, iRecColumn, recRow, iRecRow int) {
 	v := rec.ColVals[recColumn].IntegerValues()[recRow]
 	updateCountImpl(v, iRec, iRecColumn, iRecRow)
+}
+
+func UpdateMinProm(iRec, rec *Record, recColumn, iRecColumn, recRow, iRecRow int) {
+	v := rec.ColVals[recColumn].FloatValues()[recRow]
+	srcVal, isSrcNil := iRec.ColVals[iRecColumn].FloatValueWithNullReserve(iRecRow)
+	if isSrcNil || srcVal > v || math.IsNaN(srcVal) {
+		iRec.UpdateIntervalRecRow(rec, recRow, iRecRow)
+	}
+}
+
+func UpdateMaxProm(iRec, rec *Record, recColumn, iRecColumn, recRow, iRecRow int) {
+	v := rec.ColVals[recColumn].FloatValues()[recRow]
+	srcVal, isSrcNil := iRec.ColVals[iRecColumn].FloatValueWithNullReserve(iRecRow)
+	if isSrcNil || srcVal < v || math.IsNaN(srcVal) {
+		iRec.UpdateIntervalRecRow(rec, recRow, iRecRow)
+	}
 }

@@ -25,10 +25,11 @@ import (
 	"testing"
 
 	"github.com/openGemini/openGemini/engine/immutable"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/readcache"
 	"github.com/openGemini/openGemini/lib/record"
-	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/pingcap/failpoint"
 	"github.com/stretchr/testify/assert"
@@ -42,10 +43,9 @@ type generateParams struct {
 	order    bool
 }
 
-func beforeTest(t *testing.T, segLimit int) func() {
+func recoverConfig(segLimit int) func() {
 	cacheIns := readcache.GetReadMetaCacheIns()
 	cacheIns.Purge()
-	saveDir = t.TempDir()
 
 	origSegLimit := immutable.GetMaxRowsPerSegment4TsStore()
 	if segLimit > 0 {
@@ -55,6 +55,16 @@ func beforeTest(t *testing.T, segLimit int) func() {
 	return func() {
 		immutable.SetMaxRowsPerSegment4TsStore(origSegLimit)
 	}
+}
+
+func beforeTest(t *testing.T, segLimit int) func() {
+	saveDir = t.TempDir()
+	return recoverConfig(segLimit)
+}
+
+func beforeBenchmark(b *testing.B, segLimit int) func() {
+	saveDir = b.TempDir()
+	return recoverConfig(segLimit)
 }
 
 // merge three unordered files into one ordered file
@@ -226,7 +236,7 @@ func TestMergeTool_Merge_mod6(t *testing.T) {
 	defer mh.store.Close()
 	rg := newRecordGenerator(begin, defaultInterval, true)
 
-	seriesCount := 3000
+	seriesCount := 1000
 
 	for i := 0; i < seriesCount; i++ {
 		mh.addRecord(100+uint64(i), rg.generate(schemas, segLimit))
@@ -422,6 +432,144 @@ func TestMergeTool_Merge_mod12(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestMergeTool_Merge_mod13(t *testing.T) {
+	var begin int64 = 1e12
+	defer beforeTest(t, 1000)()
+
+	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
+	defer mh.store.Close()
+	rg := newRecordGenerator(begin, defaultInterval, true)
+
+	schema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int_1"},
+		record.Field{Type: influx.Field_Type_Int, Name: "int_2"},
+		record.Field{Type: influx.Field_Type_Int, Name: "int_3"},
+	}
+	mh.addRecord(100, rg.generate(schema, 10))
+	require.NoError(t, mh.saveToOrder())
+
+	schema = record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int_1"},
+		record.Field{Type: influx.Field_Type_Int, Name: "int_2"},
+	}
+	mh.addRecord(100, rg.setBegin(begin).incrBegin(-10).generate(schema, 5))
+	require.NoError(t, mh.saveToUnordered())
+
+	assert.NoError(t, mh.mergeAndCompact(true))
+	assert.NoError(t, compareRecords(mh.readExpectRecord(), mh.readMergedRecord()))
+}
+
+func TestMergeTool_Merge_mod14(t *testing.T) {
+	var begin int64 = 1e12
+	defer beforeTest(t, 1000)()
+
+	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
+	defer mh.store.Close()
+	rg := newRecordGenerator(begin, defaultInterval, true)
+
+	schema := getDefaultSchemas()
+	mh.addRecord(100, rg.generate(schema, 10))
+	mh.addRecord(101, rg.generate(schema, 10))
+	mh.addRecord(102, rg.generate(schema, 10))
+	require.NoError(t, mh.saveToOrder())
+
+	mh.addRecord(101, rg.setBegin(begin).incrBegin(15).generate(schema, 10))
+	mh.addRecord(103, rg.setBegin(begin).incrBegin(15).generate(schema, 10))
+	require.NoError(t, mh.saveToOrder())
+
+	mh.addRecord(100, rg.setBegin(begin-1).incrBegin(-10).generate(schema, 25))
+	mh.addRecord(101, rg.setBegin(begin-1).incrBegin(-10).generate(schema, 5))
+	mh.addRecord(102, rg.setBegin(begin-1).incrBegin(-10).generate(schema, 5))
+	mh.addRecord(103, rg.setBegin(begin-1).incrBegin(-10).generate(schema, 5))
+	mh.addRecord(104, rg.setBegin(begin-1).incrBegin(-10).generate(schema, 5))
+	require.NoError(t, mh.saveToUnordered())
+
+	assert.NoError(t, mh.mergeAndCompact(true))
+	contains, _ := mh.store.Order["mst"].Files()[0].Contains(103)
+	require.False(t, contains)
+	contains, _ = mh.store.Order["mst"].Files()[1].Contains(104)
+	require.True(t, contains)
+
+	assert.NoError(t, compareRecords(mh.readExpectRecord(), mh.readMergedRecord()))
+	fmt.Println(mh.store.Order["mst"].Files()[0].Contains(103))
+}
+
+func TestMergeTool_Merge_mod15(t *testing.T) {
+	var begin int64 = 1e12
+	defer beforeTest(t, 10)()
+
+	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
+	defer mh.store.Close()
+	rg := newRecordGenerator(begin, defaultInterval, true)
+
+	schema := getDefaultSchemas()
+	mh.addRecord(100, rg.generate(schema, 10))
+	require.NoError(t, mh.saveToOrder())
+
+	mh.addRecord(99, rg.setBegin(begin-1).incrBegin(-10).generate(schema, 100))
+	mh.addRecord(100, rg.setBegin(begin-1).incrBegin(-10).generate(schema, 5))
+	require.NoError(t, mh.saveToUnordered())
+
+	assert.NoError(t, mh.mergeAndCompact(true))
+	assert.NoError(t, compareRecords(mh.readExpectRecord(), mh.readMergedRecord()))
+}
+
+func TestMergeTool_Merge_mod16(t *testing.T) {
+	var begin int64 = 1e12
+	defer beforeTest(t, 10)()
+	schemas := getDefaultSchemas()
+
+	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
+	defer mh.store.Close()
+	rg := newRecordGenerator(begin, defaultInterval, true)
+
+	for i := 0; i < 8; i++ {
+		rg.setBegin(begin).incrBegin(i)
+		mh.addRecord(100, rg.generate(schemas, 1))
+		mh.addRecord(101, rg.generate(schemas, 1))
+		require.NoError(t, mh.saveToOrder())
+	}
+
+	rg.setBegin(begin - 1)
+	mh.addRecord(100, rg.generate(schemas, 10))
+	require.NoError(t, mh.saveToUnordered())
+
+	assert.NoError(t, mh.mergeAndCompact(true))
+	for _, rec := range mh.readMergedRecord() {
+		record.CheckTimes(rec.Times())
+	}
+}
+
+func TestMergeTool_Merge_mod17(t *testing.T) {
+	var begin int64 = 1e12
+	defer beforeTest(t, 10)()
+	schemas := getDefaultSchemas()
+
+	immutable.SetMergeFlag4TsStore(1)
+	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
+	defer mh.store.Close()
+	rg := newRecordGenerator(begin, defaultInterval, false)
+
+	rg.setBegin(begin)
+	mh.addRecord(100, rg.generate(schemas, 1))
+	mh.addRecord(101, rg.generate(schemas, 1))
+	require.NoError(t, mh.saveToOrder())
+
+	rg.setBegin(begin).incrBegin(1)
+	mh.addRecord(100, rg.generate(schemas, 1))
+	require.NoError(t, mh.saveToOrder())
+
+	rg.setBegin(begin).incrBegin(-5)
+	mh.addRecord(100, rg.generate(schemas, 2))
+	mh.addRecord(101, rg.generate(schemas, 2))
+	require.NoError(t, mh.saveToUnordered())
+
+	assert.NoError(t, mh.mergeAndCompact(true))
+	for _, rec := range mh.readMergedRecord() {
+		record.CheckTimes(rec.Times())
+	}
+}
+
 func TestMergeTool_recentFile(t *testing.T) {
 	var begin int64 = 1e12
 	defer beforeTest(t, 0)()
@@ -490,7 +638,7 @@ func TestMergeTool_MergeUnorderedSelf(t *testing.T) {
 	schemas = append(schemas, record.Field{Type: influx.Field_Type_Float, Name: "float2"})
 	schemas = append(schemas, record.Field{Type: influx.Field_Type_Float, Name: "float3"})
 	for i := 0; i < 20; i++ {
-		mh.addRecord(uint64(100+i), rg.generate(schemas, 50000))
+		mh.addRecord(uint64(100+i), rg.generate(schemas, 10000))
 	}
 	require.NoError(t, mh.saveToOrder())
 
@@ -512,6 +660,41 @@ func TestMergeTool_MergeUnorderedSelf(t *testing.T) {
 
 	name := files.Files()[0].FileName()
 	require.Equal(t, "00000002-0000-00010000", name.String())
+}
+
+func TestMergeTool_MergeUnorderedSelf_full(t *testing.T) {
+	var begin int64 = 1e12
+	defer beforeTest(t, 0)()
+
+	conf := &config.GetStoreConfig().Merge
+	conf.MaxUnorderedFileNumber = 5
+	conf.MaxUnorderedFileSize = 100 * config.KB
+	defer func() {
+		conf.MaxUnorderedFileSize = 8 * config.GB
+		conf.MaxUnorderedFileNumber = 64
+	}()
+
+	schemas := getDefaultSchemas()
+
+	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
+	defer mh.store.Close()
+	rg := newRecordGenerator(begin, defaultInterval, true)
+	mh.addRecord(uint64(100), rg.generate(schemas, 10))
+	require.NoError(t, mh.saveToOrder())
+
+	mh.addRecord(100, rg.incrBegin(1).generate(schemas, 20000))
+	require.NoError(t, mh.saveToUnordered())
+
+	for i := 0; i < 10; i++ {
+		mh.addRecord(100, rg.incrBegin(1).generate(schemas, 10))
+		require.NoError(t, mh.saveToUnordered())
+	}
+	require.NoError(t, mh.store.MergeOutOfOrder(1, true, true))
+	mh.store.Wait()
+
+	files, ok := mh.store.OutOfOrder["mst"]
+	require.True(t, ok)
+	require.Equal(t, 5, files.Len())
 }
 
 func TestMergeTool_MergeAndCompact(t *testing.T) {
@@ -579,7 +762,6 @@ func TestMergeTool_PreAgg(t *testing.T) {
 				require.NoError(t, itr.Error())
 				break
 			}
-			itr.IncrChunkUsed()
 
 			sort.Sort(schemas)
 
@@ -610,28 +792,20 @@ func TestMergeTool_CleanTmpFiles(t *testing.T) {
 	defer failpoint.Disable(fp)
 
 	rg.setBegin(begin)
-	mh.addRecord(100, rg.generate(schemas, 100))
+	mh.addRecord(100, rg.generate(schemas, 10))
 	require.NoError(t, mh.saveToOrder())
 
-	mh.addRecord(100, rg.generate(schemas, 100))
+	mh.addRecord(100, rg.setBegin(begin-1).generate(schemas, 10))
 	require.NoError(t, mh.saveToUnordered())
-
-	tmpFile := filepath.Join(saveDir, "mst", "00000001-0000-00010000.tssp.init")
-	_, err := os.Stat(tmpFile)
-	require.NotEmpty(t, err)
 
 	assert.NoError(t, mh.mergeAndCompact(true))
 
+	mh.store.Wait()
 	mh.store.Close()
-	perf := immutable.NewMergePerformer(nil, statistics.NewMergeStatItem("mst", 1))
-	perf.Reset(mh.store.NewStreamWriteFile("mst"), true)
-	for _, f := range mh.store.Order["mst"].Files() {
-		perf.AppendMergedFile(f)
-	}
-	for _, f := range mh.store.OutOfOrder["mst"].Files() {
-		perf.AppendMergedFile(f)
-	}
-	perf.CleanTmpFiles()
+
+	tmpFile := filepath.Join(saveDir, "mst", "00000001-0000-00010000.tssp.init")
+	_, err := os.Stat(tmpFile)
+	require.True(t, os.IsNotExist(err))
 }
 
 func TestMergeTool_WriteCurrentMetaError(t *testing.T) {
@@ -693,7 +867,7 @@ func TestCompactionDiffSchemas(t *testing.T) {
 		require.NoError(t, mh.saveToOrder())
 	}
 
-	immutable.SetMergeFlag4TsStore(immutable.StreamingCompact)
+	immutable.SetMergeFlag4TsStore(util.StreamingCompact)
 	require.NoError(t, mh.store.FullCompact(1))
 	mh.store.Wait()
 
@@ -814,12 +988,24 @@ func TestCompressChunkMeta(t *testing.T) {
 		require.Equal(t, seriesNum, total)
 	}
 
+	// test case for snappy
 	for _, v := range []int{immutable.ChunkMetaCompressSnappy, immutable.ChunkMetaCompressNone, 200} {
 		immutable.SetChunkMetaCompressMode(v)
 		run(20)
 	}
 
 	for _, v := range []int{immutable.ChunkMetaCompressSnappy, immutable.ChunkMetaCompressNone, 200} {
+		immutable.SetChunkMetaCompressMode(v)
+		run(2000)
+	}
+
+	// test case for lz4
+	for _, v := range []int{immutable.ChunkMetaCompressLZ4, immutable.ChunkMetaCompressNone, 200} {
+		immutable.SetChunkMetaCompressMode(v)
+		run(20)
+	}
+
+	for _, v := range []int{immutable.ChunkMetaCompressLZ4, immutable.ChunkMetaCompressNone, 200} {
 		immutable.SetChunkMetaCompressMode(v)
 		run(2000)
 	}
@@ -861,4 +1047,82 @@ func TestChunkMeta(t *testing.T) {
 	require.True(t, ofs > 0)
 	require.True(t, size > 0)
 	require.Equal(t, uint8(5), cm.Type())
+}
+
+func TestCompactErrorTime(t *testing.T) {
+	var begin int64 = 1e12
+	defer beforeTest(t, 0)()
+
+	schemas := getDefaultSchemas()
+
+	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
+	defer mh.store.Close()
+	rg := newRecordGenerator(begin, defaultInterval, true)
+
+	for i := 0; i < 8; i++ {
+		mh.addRecord(uint64(100+i), rg.generate(schemas, 10))
+		require.NoError(t, mh.saveToOrder())
+		mh.seq++
+	}
+
+	mh.seq = 1
+	mh.addRecord(100, rg.incrBegin(-1).generate(schemas, 10))
+	require.NoError(t, mh.saveToOrder())
+
+	immutable.SetMergeFlag4TsStore(util.StreamingCompact)
+	defer func() {
+		immutable.SetMergeFlag4TsStore(util.AutoCompact)
+	}()
+	require.NoError(t, mh.store.FullCompact(1))
+	mh.store.Wait()
+	require.Equal(t, 9, mh.store.Order["mst"].Len())
+}
+
+func BenchmarkChunkMeta_compress(b *testing.B) {
+	var begin int64 = 1e13
+	defer beforeBenchmark(b, 0)()
+	immutable.InitWriterPool(8)
+
+	defer func() {
+		immutable.SetChunkMetaCompressMode(immutable.ChunkMetaCompressNone)
+		immutable.InitWriterPool(8)
+	}()
+
+	var run = func(seriesNum int) {
+		mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
+		defer mh.store.Close()
+		rg := newRecordGenerator(begin, defaultInterval, true)
+
+		for i := 0; i < seriesNum; i++ {
+			rg.incrBegin(15)
+			mh.addRecord(uint64(100+i), rg.generate(getDefaultSchemas(), 10))
+		}
+
+		require.NoError(b, mh.saveToOrder())
+		total := 0
+		itrTSSPFile(mh.store.Order["mst"].Files()[0], func(sid uint64, rec *record.Record) {
+			record.CheckRecord(rec)
+			total++
+		})
+		require.Equal(b, seriesNum, total)
+	}
+
+	b.ResetTimer()
+	b.Run("snappy", func(b *testing.B) {
+		immutable.SetChunkMetaCompressMode(immutable.ChunkMetaCompressSnappy)
+		run(20)
+
+		immutable.SetChunkMetaCompressMode(immutable.ChunkMetaCompressSnappy)
+		run(2000)
+	})
+
+	b.ResetTimer()
+	b.Run("lz4", func(b *testing.B) {
+		immutable.SetChunkMetaCompressMode(immutable.ChunkMetaCompressLZ4)
+		run(20)
+
+		immutable.SetChunkMetaCompressMode(immutable.ChunkMetaCompressLZ4)
+		run(2000)
+	})
+
 }

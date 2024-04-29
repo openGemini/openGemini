@@ -45,6 +45,7 @@ import (
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/syscontrol"
+	"github.com/openGemini/openGemini/lib/tokenizer"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
@@ -616,14 +617,20 @@ func (e *StatementExecutor) getIndexRelation(stmt *influxql.CreateMeasurementSta
 		indexR.Oids = append(indexR.Oids, uint32(oid))
 		indexR.IndexNames = append(indexR.IndexNames, indexTypeName)
 		indexR.IndexList = append(indexR.IndexList, &influxql.IndexList{IList: stmt.IndexList[i]})
-		if oid != (index.TimeCluster) {
-			indexR.IndexOptions = append(indexR.IndexOptions, &influxql.IndexOptions{})
-		} else {
+		if oid == index.TimeCluster {
 			indexR.IndexOptions = append(indexR.IndexOptions, &influxql.IndexOptions{
 				Options: []*influxql.IndexOption{
 					{TimeClusterDuration: stmt.TimeClusterDuration},
 				},
 			})
+		} else if oid == index.Text {
+			indexR.IndexOptions = append(indexR.IndexOptions, &influxql.IndexOptions{
+				Options: []*influxql.IndexOption{
+					{Tokens: tokenizer.CONTENT_SPLITTER},
+				},
+			})
+		} else {
+			indexR.IndexOptions = append(indexR.IndexOptions, &influxql.IndexOptions{})
 		}
 	}
 	return indexR, nil
@@ -649,7 +656,7 @@ func (e *StatementExecutor) executeCreateMeasurementStatement(stmt *influxql.Cre
 	if stmt.EngineType != "" && !ok {
 		return errors.New("ENGINETYPE \"" + stmt.EngineType + "\" IS NOT SUPPORTED!")
 	}
-	_, err = e.MetaClient.CreateMeasurement(stmt.Database, stmt.RetentionPolicy, stmt.Name, ski, indexR, engineType, colStoreInfo, schemaInfo, nil)
+	_, err = e.MetaClient.CreateMeasurement(stmt.Database, stmt.RetentionPolicy, stmt.Name, ski, int32(stmt.NumOfShards), indexR, engineType, colStoreInfo, schemaInfo, nil)
 	return err
 }
 
@@ -1140,6 +1147,7 @@ func (e *StatementExecutor) GetOptions(opt query2.ExecutionOptions, rowsChan cha
 		QueryLimitEn:            opt.QueryLimitEn,
 		RowsChan:                rowsChan,
 		ChunkSize:               opt.InnerChunkSize,
+		IsPromQuery:             opt.IsPromQuery,
 		AbortChan:               opt.AbortCh,
 		QueryID:                 opt.QueryID,
 		IncQuery:                opt.IncQuery,
@@ -1158,7 +1166,7 @@ func (e *StatementExecutor) createPipelineExecutor(ctx context.Context, stmt *in
 			}
 
 			stackInfo := fmt.Errorf("runtime panic: %v\n %s", e, string(debug.Stack())).Error()
-			logger.NewLogger(errno.ModuleQueryEngine).Error(stackInfo, zap.Uint64("query_id", ctx.Value(query2.QueryIDKey).(uint64)),
+			logger.NewLogger(errno.ModuleQueryEngine).Error(stackInfo, zap.Any("query_id", ctx.Value(query2.QueryIDKey).([]uint64)),
 				zap.String("query", "pipeline executor"))
 		}
 	}()
@@ -1417,7 +1425,10 @@ func (e *StatementExecutor) executeShowContinuousQueriesStatement(q *influxql.Sh
 }
 
 func (e *StatementExecutor) executeShowShardsStatement(stmt *influxql.ShowShardsStatement) (models.Rows, error) {
-	return e.MetaClient.ShowShards(), nil
+	if stmt.GetMstInfo() == nil {
+		return e.MetaClient.ShowShards("", "", ""), nil
+	}
+	return e.MetaClient.ShowShards(stmt.GetDBName(), stmt.GetRPName(), stmt.GetMstName()), nil
 }
 
 func (e *StatementExecutor) executeShowShardGroupsStatement(stmt *influxql.ShowShardGroupsStatement) (models.Rows, error) {
@@ -2197,7 +2208,6 @@ func (e *StatementExecutor) executeCreateStreamStatement(stmt *influxql.CreateSt
 	if !ok {
 		return errors.New("create stream query must be select statement")
 	}
-	mstInfo := stmt.Target.Measurement
 	proxy := newRowChanProxy()
 	opt := e.GetOptions(ctx.ExecutionOptions, proxy.rc)
 	s, er := query2.Prepare(selectStmt, e.ShardMapper, opt)
@@ -2208,29 +2218,23 @@ func (e *StatementExecutor) executeCreateStreamStatement(stmt *influxql.CreateSt
 	if err := stmt.Check(selectStmt, streamSupportMap); err != nil {
 		return err
 	}
-	_, err := e.MetaClient.Measurement(mstInfo.Database, mstInfo.RetentionPolicy, mstInfo.Name)
-	if err != nil {
-		if err == meta2.ErrMeasurementNotFound {
-			srcMst := selectStmt.Sources[0].(*influxql.Measurement)
-			srcInfo, _ := e.MetaClient.Measurement(srcMst.Database, srcMst.RetentionPolicy, srcMst.Name)
-			/*			if len(srcInfo.IndexRelations) > 0 {
-							_, err = e.MetaClient.CreateMeasurement(mstInfo.Database, mstInfo.RetentionPolicy, mstInfo.Name, &srcInfo.ShardKeys[0], &srcInfo.IndexRelations[0])
-						} else {
-							_, err = e.MetaClient.CreateMeasurement(mstInfo.Database, mstInfo.RetentionPolicy, mstInfo.Name, &srcInfo.ShardKeys[0], nil)
-						}*/
-			_, err = e.MetaClient.CreateMeasurement(mstInfo.Database, mstInfo.RetentionPolicy, mstInfo.Name, &srcInfo.ShardKeys[0], nil, srcInfo.EngineType, nil, nil, nil)
-
-			if err != nil {
-				return err
-			}
-			if err := e.MetaClient.UpdateStreamMstSchema(mstInfo.Database, mstInfo.RetentionPolicy, mstInfo.Name, selectStmt); err != nil {
-				return err
-			}
-		} else {
-			return err
-		}
+	srcMst, ok := selectStmt.Sources[0].(*influxql.Measurement)
+	if !ok {
+		return errors.New("streamTask don't have source measurement")
 	}
-	info := meta2.NewStreamInfo(stmt, selectStmt)
+	info := meta2.NewStreamInfo(stmt.Name, stmt.Delay, srcMst, &meta2.StreamMeasurementInfo{
+		Name:            stmt.Target.Measurement.Name,
+		Database:        stmt.Target.Measurement.Database,
+		RetentionPolicy: stmt.Target.Measurement.RetentionPolicy,
+	}, selectStmt)
+	mstInfo := stmt.Target.Measurement
+	if len(selectStmt.Sources) == 0 {
+		return errors.New("streamTask don't have source measurement")
+	}
+	err := e.MetaClient.CreateStreamMeasurement(info, srcMst, mstInfo, selectStmt)
+	if err != nil {
+		return err
+	}
 	return e.MetaClient.CreateStreamPolicy(info)
 }
 

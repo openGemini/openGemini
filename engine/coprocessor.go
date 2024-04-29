@@ -23,6 +23,13 @@ import (
 type ReducerParams struct {
 	multiCall     bool
 	sameWindow    bool
+	lastRec       bool
+	firstStep     int64
+	lastStep      int64
+	step          int64
+	offset        int64
+	rangeDuration int64
+	lookBackDelta int64
 	intervalIndex []uint16
 }
 

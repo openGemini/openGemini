@@ -47,6 +47,14 @@ func newProcessor(inSchema, outSchema record.Schemas, exprOpt []hybridqp.ExprOpt
 		switch exprOpt[i].Expr.(type) {
 		case *influxql.Call:
 			name := exprOpt[i].Expr.(*influxql.Call).Name
+			if aggOp := GetAggOperator(name); aggOp != nil {
+				routine, err := aggOp.CreateRoutine(NewAggParams(inSchema, outSchema, exprOpt[i], auxProcessors))
+				if err != nil {
+					panic(err)
+				}
+				coProcessor.AppendRoutine(routine)
+				continue
+			}
 			switch name {
 			case "count":
 				coProcessor.AppendRoutine(newCountRoutineImpl(inSchema, outSchema, exprOpt[i], auxProcessors))

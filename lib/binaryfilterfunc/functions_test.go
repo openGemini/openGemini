@@ -530,6 +530,30 @@ func GetStringLTConditionBitMapByStrings(col *record.ColVal, compare interface{}
 	return pos
 }
 
+func TestGetIntegerLTEConditionBitMapWithoutNull(t *testing.T) {
+	schema := []record.Field{
+		{Name: "cpu", Type: influx.Field_Type_Int},
+		{Name: "time", Type: influx.Field_Type_Int}}
+	rec := record.NewRecordBuilder(schema)
+	rec.ColVals[0].AppendIntegers(1, 2, 3, 4)
+	rec.AppendTime(1, 2, 3, 4)
+	dstRec := record.NewRecord(schema, false)
+	dstRec.SliceFromRecord(rec, 3, 4)
+	var bitMap []byte
+	col := &dstRec.ColVals[1]
+	bitMap = append(bitMap, dstRec.ColVals[1].Bitmap...)
+	p := &TypeFunParams{
+		col:     col,
+		compare: int64(3),
+		pos:     bitMap,
+		bitMap:  col.Bitmap,
+		offset:  col.BitMapOffset,
+		opt:     &query.ProcessorOptions{},
+	}
+	GetIntegerLTEConditionBitMapWithoutNull(p)
+	assert.Equal(t, bitMap, []uint8{0x7})
+}
+
 func BenchmarkStringCompareByBytes(b *testing.B) {
 	col, bitMap := prepareStringColValue(1, 8192)
 	b.ReportAllocs()

@@ -36,7 +36,7 @@ type DetachedPKMetaReader struct {
 }
 
 func NewDetachedPKMetaReader(path string, opts *obs.ObsOptions) (*DetachedPKMetaReader, error) {
-	fd, err := obs.OpenObsFile(path, PrimaryMetaFile, opts)
+	fd, err := fileops.OpenObsFile(path, PrimaryMetaFile, opts, true)
 	if err != nil {
 		return nil, err
 	}
@@ -46,7 +46,7 @@ func NewDetachedPKMetaReader(path string, opts *obs.ObsOptions) (*DetachedPKMeta
 
 func (reader *DetachedPKMetaReader) Read(offset, length []int64) ([]*colstore.DetachedPKMeta, error) {
 	c := make(chan *request.StreamReader, 1)
-	reader.r.StreamReadBatch(offset, length, c, PKMetaLimitNum)
+	reader.r.StreamReadBatch(offset, length, c, PKMetaLimitNum, true)
 	pkItems := make([]*colstore.DetachedPKMeta, len(offset))
 	i := 0
 	for r := range c {
@@ -67,9 +67,24 @@ func (reader *DetachedPKMetaReader) Read(offset, length []int64) ([]*colstore.De
 	return pkItems, nil
 }
 
+func (reader *DetachedPKMetaReader) Close() {
+	if reader.r != nil {
+		reader.r.Close()
+	}
+}
+
 func GetPKMetaOffsetLengthByChunkId(pkMetaInfo *colstore.DetachedPKMetaInfo, chunkId int) (offset, length int64) {
 	publicInfoSize := pkMetaInfo.Size()
 	colOffsetSize := pkMetaInfo.Schema.Len() * util.Uint32SizeBytes
 	pkMetaSize := PKMetaPrefixSize + colOffsetSize
 	return int64(publicInfoSize + (pkMetaSize+crcSize)*chunkId), int64(pkMetaSize + crcSize)
+}
+
+func ReadPKMetaAll(path string, opts *obs.ObsOptions, offset, length []int64) ([]*colstore.DetachedPKMeta, error) {
+	reader, err := NewDetachedPKMetaReader(path, opts)
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+	return reader.Read(offset, length)
 }

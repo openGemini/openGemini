@@ -65,14 +65,29 @@ func (e *ShowTagValuesExecutor) Execute(stmt *influxql.ShowTagValuesStatement) (
 	if e.cardinality {
 		return e.emitCardinality(tagValues)
 	}
-	return e.emit(tagValues, stmt.Offset, stmt.Limit)
+	return e.emit(tagValues, stmt.Offset, stmt.Limit, stmt.SortFields)
 }
 
-func (e *ShowTagValuesExecutor) emit(tagValues TagValuesSlice, offset, limit int) (models.Rows, error) {
+const (
+	orderByValueNil int = iota
+	orderByValueDesc
+	orderByValueAsc
+)
+
+func (e *ShowTagValuesExecutor) emit(tagValues TagValuesSlice, offset, limit int, sortFields influxql.SortFields) (models.Rows, error) {
 	rows := make(models.Rows, 0, len(tagValues))
 
+	var orderBy int = orderByValueNil
+	if len(sortFields) > 0 {
+		if sortFields[0].Ascending {
+			orderBy = orderByValueAsc
+		} else {
+			orderBy = orderByValueDesc
+		}
+	}
+
 	for _, m := range tagValues {
-		values := e.applyLimit(offset, limit, m.Values)
+		values := e.applyLimit(offset, limit, orderBy, m.Values)
 		if len(values) == 0 {
 			continue
 		}
@@ -96,7 +111,7 @@ func (e *ShowTagValuesExecutor) emitCardinality(tagValues TagValuesSlice) (model
 	rows := make(models.Rows, 0, len(tagValues))
 
 	for _, m := range tagValues {
-		values := e.applyLimit(0, 0, m.Values)
+		values := e.applyLimit(0, 0, orderByValueAsc, m.Values)
 		if len(values) == 0 {
 			continue
 		}
@@ -113,26 +128,22 @@ func (e *ShowTagValuesExecutor) emitCardinality(tagValues TagValuesSlice) (model
 	return rows, nil
 }
 
-func (e *ShowTagValuesExecutor) applyLimit(offset, limit int, values netstorage.TagSets) netstorage.TagSets {
+func (e *ShowTagValuesExecutor) applyLimit(offset, limit, orderBy int, values netstorage.TagSets) netstorage.TagSets {
 	size := len(values)
 	if offset >= size {
 		return nil
 	}
-	sort.Sort(values)
 
-	// The same tag key-value may be distributed on different nodes
-	cursor := 0
-	for i := 1; i < size; i++ {
-		if values[cursor] == values[i] {
-			continue
-		}
-		cursor++
-		if cursor != i {
-			values[cursor] = values[i]
-		}
+	switch orderBy {
+	case orderByValueNil:
+		values = e.deduplicateBySet(values)
+	case orderByValueAsc, orderByValueDesc:
+		values = e.deduplicateBySort(orderBy, values)
+	default:
+		return values
 	}
-	size = cursor + 1
 
+	size = len(values)
 	if offset >= size {
 		return nil
 	}
@@ -148,6 +159,54 @@ func (e *ShowTagValuesExecutor) applyLimit(offset, limit int, values netstorage.
 		limit = size
 	}
 	return values[offset:limit]
+}
+
+func (e *ShowTagValuesExecutor) deduplicateBySort(orderBy int, values netstorage.TagSets) netstorage.TagSets {
+	size := len(values)
+
+	switch orderBy {
+	case orderByValueAsc:
+		sort.Sort(values)
+	case orderByValueDesc:
+		sort.Slice(values, func(i, j int) bool {
+			ki, kj := values[i].Key, values[j].Key
+			if ki == kj {
+				return values[i].Value > values[j].Value
+			}
+			return ki < kj
+		})
+	default:
+		return values
+	}
+
+	cursor := 0
+	for i := 1; i < size; i++ {
+		if values[cursor] == values[i] {
+			continue
+		}
+		cursor++
+		if cursor != i {
+			values[cursor] = values[i]
+		}
+	}
+
+	return values[:cursor+1]
+}
+
+func (e *ShowTagValuesExecutor) deduplicateBySet(values netstorage.TagSets) netstorage.TagSets {
+	valuesSet := make(map[netstorage.TagSet]struct{}, len(values))
+	for _, tagSet := range values {
+		if _, ok := valuesSet[tagSet]; !ok {
+			valuesSet[tagSet] = struct{}{}
+		}
+	}
+
+	var i = 0
+	for tagSet := range valuesSet {
+		values[i] = tagSet
+		i++
+	}
+	return values[:len(valuesSet)]
 }
 
 // mergeTagValuesSlice
@@ -192,8 +251,9 @@ func (e *ShowTagValuesExecutor) queryTagValues(q *influxql.ShowTagValuesStatemen
 	var tagValuesSlice TagValuesSlice
 
 	lock := new(sync.Mutex)
+
 	err = e.me.EachDBNodes(q.Database, func(nodeID uint64, pts []uint32) error {
-		s, err := e.store.TagValues(nodeID, q.Database, pts, tagKeys, q.Condition)
+		s, err := e.store.TagValues(nodeID, q.Database, pts, tagKeys, q.Condition, q.Limit+q.Offset, len(q.SortFields) == 0 && !e.cardinality)
 		lock.Lock()
 		defer lock.Unlock()
 		if err != nil {

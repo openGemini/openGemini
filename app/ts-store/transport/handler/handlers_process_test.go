@@ -25,8 +25,11 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	internal "github.com/openGemini/openGemini/lib/netstorage/data"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 	"github.com/stretchr/testify/assert"
+	"go.etcd.io/etcd/raft/v3/raftpb"
 )
 
 func TestProcessDDL(t *testing.T) {
@@ -54,29 +57,58 @@ func TestProcessDDL(t *testing.T) {
 }
 
 func TestProcessShowTagValues(t *testing.T) {
+
 	db := path.Join(dataPath, "db0")
 	pts := []uint32{1}
 
-	h := newHandler(netstorage.ShowTagValuesRequestMessage)
-	if err := h.SetMessage(&netstorage.ShowTagValuesRequest{
-		ShowTagValuesRequest: internal.ShowTagValuesRequest{
-			Db:    &db,
-			PtIDs: pts,
+	for _, testcase := range []struct {
+		Name                 string
+		ShowTagValuesRequest internal.ShowTagValuesRequest
+	}{
+		{
+			Name: "show tag values with order by",
+			ShowTagValuesRequest: internal.ShowTagValuesRequest{
+				Db:       &db,
+				PtIDs:    pts,
+				Disorder: proto.Bool(true),
+			},
 		},
-	}); err != nil {
-		t.Fatal(err)
-	}
+		{
+			Name: "show tag values without order by 1",
+			ShowTagValuesRequest: internal.ShowTagValuesRequest{
+				Db:       &db,
+				PtIDs:    pts,
+				Disorder: proto.Bool(false),
+			},
+		},
+		{
+			Name: "show tag values without order by 2",
+			ShowTagValuesRequest: internal.ShowTagValuesRequest{
+				Db:    &db,
+				PtIDs: pts,
+			},
+		},
+	} {
+		t.Run(testcase.Name, func(t *testing.T) {
+			h := newHandler(netstorage.ShowTagValuesRequestMessage)
+			if err := h.SetMessage(&netstorage.ShowTagValuesRequest{
+				ShowTagValuesRequest: testcase.ShowTagValuesRequest,
+			}); err != nil {
+				t.Fatal(err)
+			}
 
-	s := &storage.Storage{}
-	s.SetEngine(&MockEngine{})
-	h.SetStore(s)
-	rsp, _ := h.Process()
-	response, ok := rsp.(*netstorage.ShowTagValuesResponse)
-	if !ok {
-		t.Fatal("response type is invalid")
+			s := &storage.Storage{}
+			s.SetEngine(&MockEngine{})
+			h.SetStore(s)
+			rsp, _ := h.Process()
+			response, ok := rsp.(*netstorage.ShowTagValuesResponse)
+			if !ok {
+				t.Fatal("response type is invalid")
+			}
+			assert.NotNil(t, response.GetErr())
+			response.Err = nil
+		})
 	}
-	assert.NotNil(t, response.GetErr())
-	response.Err = nil
 }
 
 type MockEngine struct {
@@ -93,6 +125,33 @@ func (e *MockEngine) SeriesKeys(_ string, _ []uint32, _ [][]byte, _ influxql.Exp
 
 func (e *MockEngine) GetShardSplitPoints(_ string, _ uint32, _ uint64, _ []int64) ([]string, error) {
 	return nil, nil
+}
+
+func (e *MockEngine) SendRaftMessage(database string, ptId uint64, msg raftpb.Message) error {
+	return nil
+}
+
+func (e *MockEngine) CreateShowTagValuesPlan(db string, ptIDs []uint32, tr *influxql.TimeRange) netstorage.ShowTagValuesPlan {
+	plan := &MockShowTagValuesPlan{
+		ExecuteFn: func(tagKeys map[string][][]byte, condition influxql.Expr, tr util.TimeRange, limit int) (netstorage.TablesTagSets, error) {
+			return netstorage.TablesTagSets{}, nil
+		},
+		StopFn: func() {},
+	}
+	return plan
+}
+
+type MockShowTagValuesPlan struct {
+	ExecuteFn func(tagKeys map[string][][]byte, condition influxql.Expr, tr util.TimeRange, limit int) (netstorage.TablesTagSets, error)
+	StopFn    func()
+}
+
+func (p *MockShowTagValuesPlan) Execute(tagKeys map[string][][]byte, condition influxql.Expr, tr util.TimeRange, limit int) (netstorage.TablesTagSets, error) {
+	return p.ExecuteFn(tagKeys, condition, tr, limit)
+}
+
+func (p *MockShowTagValuesPlan) Stop() {
+	p.StopFn()
 }
 
 func TestProcessGetShardSplitPoints(t *testing.T) {
@@ -149,4 +208,26 @@ func TestProcessSeriesKeys(t *testing.T) {
 	}
 	assert.NotNil(t, response.GetErr())
 	response.Err = nil
+}
+
+func TestProcessRaftMessages(t *testing.T) {
+	h := newHandler(netstorage.RaftMessagesRequestMessage)
+	if err := h.SetMessage(&netstorage.RaftMessagesRequest{
+		Database:    "test",
+		PtId:        1,
+		RaftMessage: raftpb.Message{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	s := &storage.Storage{}
+	s.SetEngine(&MockEngine{})
+	h.SetStore(s)
+
+	rsp, _ := h.Process()
+	response, ok := rsp.(*netstorage.RaftMessagesResponse)
+	if !ok {
+		t.Fatal("response type is invalid")
+	}
+	assert.Empty(t, response.GetErrMsg())
 }

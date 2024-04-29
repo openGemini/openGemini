@@ -17,11 +17,15 @@ limitations under the License.
 package engine
 
 import (
+	"os"
 	"path"
 	"testing"
 	"time"
 
+	"github.com/openGemini/openGemini/engine/index/tsi"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/stretchr/testify/require"
 )
@@ -64,7 +68,8 @@ func TestParseShardDir(t *testing.T) {
 }
 
 func TestOpenShard(t *testing.T) {
-	dbPTInfo := NewDBPTInfo(defaultDb, defaultPtId, "", "", nil)
+	dir := t.TempDir()
+	dbPTInfo := NewDBPTInfo(defaultDb, defaultPtId, "", "", nil, nil)
 	lockPath := path.Join("", "LOCK")
 	dbPTInfo.lockPath = &lockPath
 	durationInfos := make(map[uint64]*meta.ShardDurationInfo)
@@ -74,12 +79,50 @@ func TestOpenShard(t *testing.T) {
 	r := <-resC
 	require.NoError(t, r.err)
 	openShardsLimit <- struct{}{}
-	dbPTInfo.openShard(0, nil, "1_1635724800000000000_1636329600000000000_1", "1", durationInfos, resC, 0, nil)
+	dbPTInfo.openShard(0, nil, dir+"1_1635724800000000000_1636329600000000000_1", "1", durationInfos, resC, 0, nil)
 	r = <-resC
 	require.NoError(t, r.err)
 
 	durationInfos[10] = &meta.ShardDurationInfo{DurationInfo: meta.DurationDescriptor{Duration: time.Second}}
-	sh, err := dbPTInfo.loadProcess(0, nil, "10_1635724800000000000_1636329600000000000_100", "1", 100, 10, durationInfos, nil, nil)
+	sh, err := dbPTInfo.loadProcess(0, nil, dir+"10_1635724800000000000_1636329600000000000_100", "1", 100, 10, durationInfos, nil, nil)
 	require.Empty(t, sh)
+	require.NoError(t, err)
+
+	ltime := uint64(time.Now().Unix())
+	indexIdent := &meta.IndexIdentifier{OwnerDb: "db0", OwnerPt: 1, Policy: "rp0"}
+	indexIdent.Index = &meta.IndexDescriptor{IndexID: 2,
+		IndexGroupID: 3, TimeRange: meta.TimeRangeInfo{}}
+
+	opts := new(tsi.Options).
+		Path("").
+		Ident(indexIdent).
+		IndexType(index.Text).
+		StartTime(time.Now()).
+		EndTime(time.Now().Add(time.Hour)).
+		Duration(time.Hour).
+		LogicalClock(1).
+		SequenceId(&ltime).
+		Lock(&lockPath)
+	dbPTInfo.indexBuilder[100] = tsi.NewIndexBuilder(opts)
+	mst0 := &meta.MeasurementInfo{
+		Name: "mst0_0000",
+	}
+	mst1 := &meta.MeasurementInfo{
+		Name: "mst1_0000",
+	}
+	mstPath := dir + "10_1635724800000000000_1636329600000000000_100/columnstore/mst1_0000"
+	if err := os.MkdirAll(mstPath, os.ModePerm); err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(mstPath)
+	client := &MockMetaClient{
+		mstInfo: []*meta.MeasurementInfo{
+			mst0,
+			mst1,
+		},
+	}
+	durationInfos[10] = &meta.ShardDurationInfo{DurationInfo: meta.DurationDescriptor{Duration: time.Second}, Ident: meta.ShardIdentifier{EngineType: uint32(config.COLUMNSTORE)}}
+	sh, err = dbPTInfo.loadProcess(0, nil, dir+"10_1635724800000000000_1636329600000000000_100",
+		"1", 100, 10, durationInfos, &meta.TimeRangeInfo{StartTime: time.Now(), EndTime: time.Now().Add(1 * time.Hour)}, client)
 	require.NoError(t, err)
 }

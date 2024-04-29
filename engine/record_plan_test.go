@@ -35,7 +35,9 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
@@ -1063,6 +1065,8 @@ func Test_ShardDownSampleTask(t *testing.T) {
 
 func Test_ShardDownSampleQueryRewrite(t *testing.T) {
 	executor.EnableFileCursor(true)
+	syscontrol.SetWriteColdShardEnabled(true)
+	defer syscontrol.SetWriteColdShardEnabled(false)
 	fields := map[string]influxql.DataType{
 		"field2_int":    influxql.Integer,
 		"field3_bool":   influxql.Boolean,
@@ -1850,6 +1854,7 @@ func Test_DownSample_EmptyColumn(t *testing.T) {
 }
 
 type MocTsspFile struct {
+	immutable.TSSPFile
 	path string
 }
 
@@ -2029,7 +2034,7 @@ func (m MocTsspFile) GetFileReaderRef() int64 {
 	return 0
 }
 
-func (m MocTsspFile) RenameOnObs(newName string) error {
+func (m MocTsspFile) RenameOnObs(newName string, tmp bool, opt *obs.ObsOptions) error {
 	return errors.New("RenameOnObs error")
 }
 

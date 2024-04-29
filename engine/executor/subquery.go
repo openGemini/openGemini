@@ -38,6 +38,7 @@ func (b *SubQueryBuilder) newSubOptions(ctx context.Context, opt query.Processor
 		Chunked:     opt.Chunked,
 		ChunkSize:   opt.ChunkSize,
 		RowsChan:    opt.RowsChan,
+		IsPromQuery: opt.PromQuery,
 	})
 
 	if err != nil {
@@ -83,11 +84,15 @@ func (b *SubQueryBuilder) newSubOptions(ctx context.Context, opt query.Processor
 	if !b.stmt.IsRawQuery && subOpt.Fill == influxql.NullFill {
 		subOpt.Fill = influxql.NoFill
 	}
-
+	subOpt.PromQuery = opt.PromQuery
 	subOpt.Ordered = opt.Ordered
 	subOpt.HintType = opt.HintType
 	subOpt.StmtId = opt.StmtId
 	subOpt.MaxParallel = opt.MaxParallel
+	opt.Step = b.stmt.Step
+	opt.Range = b.stmt.Range
+	opt.LookBackDelta = b.stmt.LookBackDelta
+	opt.QueryOffset = b.stmt.QueryOffset
 	return subOpt, nil
 }
 

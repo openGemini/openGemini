@@ -29,12 +29,11 @@ const PKDataLimitNum = 16
 
 type DetachedPKDataReader struct {
 	r        fileops.BasicFileReader
-	metaInfo *colstore.DetachedPKMetaInfo
 	orderMap map[int64]int
 }
 
 func NewDetachedPKDataReader(path string, opts *obs.ObsOptions) (*DetachedPKDataReader, error) {
-	fd, err := obs.OpenObsFile(path, PrimaryKeyFile, opts)
+	fd, err := fileops.OpenObsFile(path, PrimaryKeyFile, opts, true)
 	if err != nil {
 		return nil, err
 	}
@@ -42,13 +41,9 @@ func NewDetachedPKDataReader(path string, opts *obs.ObsOptions) (*DetachedPKData
 	return &DetachedPKDataReader{r: dr, orderMap: make(map[int64]int)}, nil
 }
 
-func (reader *DetachedPKDataReader) SetPkMetaInfo(metaInfo *colstore.DetachedPKMetaInfo) {
-	reader.metaInfo = metaInfo
-}
-
-func (reader *DetachedPKDataReader) Read(offset, length []int64, metas []*colstore.DetachedPKMeta) ([]*colstore.DetachedPKData, error) {
+func (reader *DetachedPKDataReader) Read(offset, length []int64, metas []*colstore.DetachedPKMeta, info *colstore.DetachedPKMetaInfo) ([]*colstore.DetachedPKData, error) {
 	c := make(chan *request.StreamReader, 1)
-	reader.r.StreamReadBatch(offset, length, c, PKDataLimitNum)
+	reader.r.StreamReadBatch(offset, length, c, PKDataLimitNum, true)
 	pkItems := make([]*colstore.DetachedPKData, len(offset))
 	for i, of := range offset {
 		reader.orderMap[of] = i
@@ -59,7 +54,7 @@ func (reader *DetachedPKDataReader) Read(offset, length []int64, metas []*colsto
 			return nil, r.Err
 		}
 		pkItems[i] = &colstore.DetachedPKData{Offset: r.Offset}
-		_, err := pkItems[i].Unmarshal(r.Content, metas[reader.orderMap[r.Offset]], reader.metaInfo)
+		_, err := pkItems[i].Unmarshal(r.Content, metas[reader.orderMap[r.Offset]], info)
 		if err != nil {
 			return nil, err
 		}
@@ -69,4 +64,19 @@ func (reader *DetachedPKDataReader) Read(offset, length []int64, metas []*colsto
 		return pkItems[i].Offset < pkItems[j].Offset
 	})
 	return pkItems, nil
+}
+
+func (reader *DetachedPKDataReader) Close() {
+	if reader.r != nil {
+		reader.r.Close()
+	}
+}
+
+func ReadPKDataAll(path string, opts *obs.ObsOptions, offset, length []int64, meta []*colstore.DetachedPKMeta, info *colstore.DetachedPKMetaInfo) ([]*colstore.DetachedPKData, error) {
+	reader, err := NewDetachedPKDataReader(path, opts)
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+	return reader.Read(offset, length, meta, info)
 }

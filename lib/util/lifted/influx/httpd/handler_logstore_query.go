@@ -27,6 +27,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/gorilla/mux"
 	"github.com/influxdata/influxdb/uuid"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/cache"
@@ -35,9 +36,12 @@ import (
 	meta "github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/tokenizer"
+	"github.com/openGemini/openGemini/lib/util"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/httpd/consume"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	query2 "github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/valyala/fastjson"
 	"go.uber.org/zap"
 )
 
@@ -61,8 +65,8 @@ const (
 
 // URL query parameter
 const (
-	Repository     = ":repository"
-	LogStream      = ":logStream"
+	Repository     = "repository"
+	LogStream      = "logStream"
 	Complete       = "Complete"
 	InComplete     = "InComplete"
 	XContentLength = "X-Content-Length"
@@ -84,6 +88,7 @@ type QueryLogRequest struct {
 	Highlight  bool   `json:"highlight,omitempty"`
 	Sql        bool   `json:"sql,omitempty"`
 	IsTruncate bool   `json:"is_truncate,omitempty"`
+	Pretty     bool   `json:"pretty,omitempty"`
 }
 
 type QueryLogResponse struct {
@@ -106,11 +111,13 @@ type TimeRange struct {
 }
 
 type QueryParam struct {
+	isHistogram      bool
 	Ascending        bool
 	Explain          bool
 	Highlight        bool
 	IncQuery         bool
 	Truncate         bool
+	Pretty           bool
 	IterID           int32
 	Timeout          int
 	Limit            int
@@ -124,22 +131,46 @@ type QueryParam struct {
 	GroupBytInterval time.Duration
 }
 
-func NewQueryPara(query string, ascending bool, highlight bool, timeout, limit int, from, to int64, scroll, scroll_id string,
-	isIncQuery bool, explain bool, isTruncate bool) *QueryParam {
-	return &QueryParam{
-		Explain:   explain,
-		Query:     query,
-		Ascending: !ascending,
-		Highlight: highlight,
-		Timeout:   timeout,
-		TimeRange: TimeRange{start: from, end: to},
-		Scroll:    scroll,
-		Scroll_id: scroll_id,
-		Limit:     limit,
-		IncQuery:  isIncQuery,
-		Truncate:  isTruncate,
-		SeqID:     -1,
+func NewQueryPara(queryPara interface{}) *QueryParam {
+	queryParam := QueryParam{}
+	switch q := queryPara.(type) {
+	case *QueryLogRequest:
+		queryParam = QueryParam{
+			Explain:   q.Explain,
+			Query:     q.Query,
+			Ascending: !q.Reverse,
+			Highlight: q.Highlight,
+			Timeout:   q.Timeout,
+			TimeRange: TimeRange{start: q.From * 1e6, end: q.To * 1e6},
+			Scroll:    q.Scroll,
+			Scroll_id: q.Scroll_id,
+			Limit:     q.Limit,
+			Truncate:  q.IsTruncate,
+			Pretty:    q.Pretty,
+		}
+	case *QueryAggRequest:
+		queryParam = QueryParam{
+			Explain:   q.Explain,
+			Query:     q.Query,
+			Timeout:   q.Timeout,
+			TimeRange: TimeRange{start: q.From * 1e6, end: q.To * 1e6},
+			Scroll:    q.Scroll,
+			Scroll_id: q.Scroll_id,
+			IncQuery:  q.IncQuery,
+		}
+	case *consume.ConsumeLogsRequest:
+		queryParam = QueryParam{
+			Query:     q.Query,
+			Ascending: true,
+			TimeRange: TimeRange{start: 0, end: 0},
+		}
+	default:
+		logger.GetLogger().Error("query log para type err", zap.Any("type", q))
+		return nil
 	}
+	queryParam.SeqID = -1
+
+	return &queryParam
 }
 
 func (p *QueryParam) reInitForInc() {
@@ -216,6 +247,7 @@ func (para *QueryParam) parseScrollID() error {
 
 func (para *QueryParam) deepCopy() *QueryParam {
 	return &QueryParam{
+		isHistogram:      para.isHistogram,
 		Ascending:        para.Ascending,
 		Explain:          para.Explain,
 		Highlight:        para.Highlight,
@@ -236,8 +268,8 @@ func (para *QueryParam) deepCopy() *QueryParam {
 
 // serveQuery parses an incoming query and, if valid, executes the query
 func (h *Handler) serveQueryLog(w http.ResponseWriter, r *http.Request, user meta2.User) {
-	repository := r.URL.Query().Get(Repository)
-	logStream := r.URL.Query().Get(LogStream)
+	repository := mux.Vars(r)[Repository]
+	logStream := mux.Vars(r)[LogStream]
 	if err := h.ValidateAndCheckLogStreamExists(repository, logStream); err != nil {
 		h.Logger.Error("query log scan request error! ", zap.Error(err), zap.Any("r", r))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
@@ -251,9 +283,7 @@ func (h *Handler) serveQueryLog(w http.ResponseWriter, r *http.Request, user met
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
 		return
 	}
-	para := NewQueryPara(queryLogRequest.Query, queryLogRequest.Reverse, queryLogRequest.Highlight,
-		queryLogRequest.Timeout, queryLogRequest.Limit, queryLogRequest.From*1e6, queryLogRequest.To*1e6,
-		queryLogRequest.Scroll, queryLogRequest.Scroll_id, false, queryLogRequest.Explain, queryLogRequest.IsTruncate)
+	para := NewQueryPara(queryLogRequest)
 	if err := para.parseScrollID(); err != nil {
 		h.Logger.Error("query log scan request Scroll_id error! ", zap.Error(err), zap.Any("r", para.Scroll_id))
 		h.httpErrorRsp(w, ErrorResponse(errno.NewError(errno.ScrollIdIllegal).Error(), LogReqErr), http.StatusBadRequest)
@@ -284,7 +314,11 @@ func (h *Handler) serveQueryLog(w http.ResponseWriter, r *http.Request, user met
 		if sgs[i].EndTime.UnixNano() < currPara.TimeRange.end {
 			currPara.TimeRange.end = sgs[i].EndTime.UnixNano()
 		}
-		resp, logCond, _, err := h.serveLogQuery(w, r, currPara, user)
+		resp, logCond, _, _, err := h.serveLogQuery(w, r, currPara, user, &measurementInfo{
+			name:            logStream,
+			database:        repository,
+			retentionPolicy: logStream,
+		})
 		if err != nil {
 			if QuerySkippingError(err.Error()) {
 				continue
@@ -296,7 +330,7 @@ func (h *Handler) serveQueryLog(w http.ResponseWriter, r *http.Request, user met
 			h.getQueryLogExplainResult(resp, repository, logStream, w, t)
 			return
 		}
-		currCount, currLog, err := h.getQueryLogResult(resp, logCond, para, repository, logStream)
+		currCount, currLog, err := h.getQueryLogResult(resp, logCond, para)
 		if err != nil {
 			h.Logger.Error("query err ", zap.Error(err))
 			h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
@@ -393,6 +427,12 @@ type HighlightFragment struct {
 	Highlight bool   `json:"highlight"`
 }
 
+type JsonHighlightFragment struct {
+	Key       []HighlightFragment    `json:"key"`
+	Value     []HighlightFragment    `json:"value"`
+	InnerJson map[string]interface{} `json:"innerJson"`
+}
+
 func getHighlightWords(expr *influxql.Expr, tagsWords map[string]struct{}, contentWords map[string]struct{}) (map[string]struct{}, map[string]struct{}) {
 	if expr == nil {
 		return tagsWords, contentWords
@@ -406,7 +446,7 @@ func getHighlightWords(expr *influxql.Expr, tagsWords map[string]struct{}, conte
 		case influxql.OR:
 			tagsWords, contentWords = getHighlightWords(&n.LHS, tagsWords, contentWords)
 			tagsWords, contentWords = getHighlightWords(&n.RHS, tagsWords, contentWords)
-		case influxql.EQ:
+		case influxql.MATCHPHRASE:
 			val := n.RHS.(*influxql.StringLiteral).Val
 			if n.LHS.(*influxql.VarRef).Val == Tag {
 				tagsWords[val] = struct{}{}
@@ -432,8 +472,8 @@ func (h *Handler) getHighlightFragments(slog map[string]interface{}, logCond *in
 	tagsWords, contentWords = getHighlightWords(expr, tagsWords, contentWords)
 	highlight := map[string]interface{}{}
 
-	if val := slog[TAGS]; val != nil {
-		if tags, ok := slog[TAGS].([]string); ok {
+	if val := slog[Tags]; val != nil {
+		if tags, ok := slog[Tags].([]string); ok {
 			var tagsTokenFinder *tokenizer.SimpleTokenFinder
 			if version == tokenizer.VersionLatest {
 				tagsTokenFinder = tokenizer.NewSimpleTokenFinder(tokenizer.TAGS_SPLIT_TABLE)
@@ -446,9 +486,10 @@ func (h *Handler) getHighlightFragments(slog map[string]interface{}, logCond *in
 				sort.SliceStable(fragments, func(i, j int) bool {
 					return fragments[i].Offset < fragments[j].Offset
 				})
+				fragments = mergeFragments(fragments)
 				tagsHighlight = append(tagsHighlight, convertFragments(tag, fragments))
 			}
-			highlight[TAGS] = tagsHighlight
+			highlight[Tags] = tagsHighlight
 		} else {
 			h.Logger.Error("highlight failed, tags cannot convert to string array")
 		}
@@ -456,31 +497,29 @@ func (h *Handler) getHighlightFragments(slog map[string]interface{}, logCond *in
 		h.Logger.Error("highlight failed, tags field is nil")
 	}
 
-	if val := slog[CONTENT]; val != nil {
-		if content, ok := val.(string); ok {
-			contentTokenFinder := tokenizer.NewSimpleTokenFinder(tokenizer.CONTENT_SPLIT_TABLE)
-			fragments := extractFragments(content, contentWords, contentTokenFinder)
-			sort.SliceStable(fragments, func(i, j int) bool {
-				return fragments[i].Offset < fragments[j].Offset
-			})
-			highlight[CONTENT] = convertFragments(content, fragments)
-		} else {
+	if val := slog[Content]; val != nil {
+		content, ok := val.(string)
+		if !ok {
 			b, err := json.Marshal(val)
 			if err != nil {
 				h.Logger.Error("highlight failed, content field is nil")
 			}
-			highlight[CONTENT] = []HighlightFragment{HighlightFragment{
-				Fragment:  string(b),
-				Highlight: false,
-			}}
-			h.Logger.Warn("highlight failed, content cannot convert to string")
+			content = util.Bytes2str(b)
 		}
+
+		contentTokenFinder := tokenizer.NewSimpleTokenFinder(tokenizer.CONTENT_SPLIT_TABLE)
+		fragments := extractFragments(content, contentWords, contentTokenFinder)
+		sort.SliceStable(fragments, func(i, j int) bool {
+			return fragments[i].Offset < fragments[j].Offset
+		})
+		fragments = mergeFragments(fragments)
+		highlight[Content] = convertFragments(content, fragments)
 	} else {
 		h.Logger.Error("highlight failed, content field is nil")
 	}
 
 	for k, v := range slog {
-		if k == TAGS || k == CONTENT || k == Cursor {
+		if k == Tags || k == Content || k == Cursor {
 			continue
 		}
 		result := make([]HighlightFragment, 1)
@@ -494,6 +533,87 @@ func (h *Handler) getHighlightFragments(slog map[string]interface{}, logCond *in
 	}
 
 	return highlight
+}
+
+func getJsonHighlight(k string, v interface{}, logCond *influxql.Query) *JsonHighlightFragment {
+	var expr *influxql.Expr
+	p := parserPool.Get()
+	defer parserPool.Put(p)
+	if logCond != nil {
+		expr = &(logCond.Statements[0].(*influxql.LogPipeStatement).Cond)
+	}
+	finder := tokenizer.NewSimpleTokenFinder(tokenizer.CONTENT_SPLIT_TABLE)
+	value := convertToString(v)
+
+	words := map[string]struct{}{}
+	_, words = getHighlightWords(expr, nil, words)
+
+	segments := getJsonSegments(k, value, words, finder)
+
+	// When value is not in json format, inner json is empty
+	innerJson, err := p.Parse(value)
+	if err != nil {
+		return segments
+	}
+
+	ob := innerJson.GetObject()
+	if ob != nil {
+		segments.InnerJson = parseInnerJson(ob, words, finder)
+	}
+
+	return segments
+}
+
+func getJsonSegments(k, v string, words map[string]struct{}, finder *tokenizer.SimpleTokenFinder) *JsonHighlightFragment {
+	segments := JsonHighlightFragment{}
+	keyFragments := extractFragments(k, words, finder)
+	sort.SliceStable(keyFragments, func(i, j int) bool {
+		return keyFragments[i].Offset < keyFragments[j].Offset
+	})
+	keyFragments = mergeFragments(keyFragments)
+	segments.Key = convertFragments(k, keyFragments)
+
+	valueFragments := extractFragments(v, words, finder)
+	sort.SliceStable(valueFragments, func(i, j int) bool {
+		return valueFragments[i].Offset < valueFragments[j].Offset
+	})
+	valueFragments = mergeFragments(valueFragments)
+	segments.Value = convertFragments(v, valueFragments)
+
+	return &segments
+}
+
+func parseInnerJson(ob *fastjson.Object, words map[string]struct{}, finder *tokenizer.SimpleTokenFinder) map[string]interface{} {
+	var jsonHighlight []*JsonHighlightFragment
+
+	ob.Visit(func(key []byte, value *fastjson.Value) {
+		segments := getJsonSegments(string(key), value.String(), words, finder)
+
+		if value.Type() == fastjson.TypeObject {
+			segments.InnerJson = parseInnerJson(value.GetObject(), words, finder)
+		}
+
+		jsonHighlight = append(jsonHighlight, segments)
+	})
+
+	return map[string]interface{}{"segments": jsonHighlight}
+}
+
+func convertToString(v interface{}) string {
+	switch v.(type) {
+	case bool:
+		return fmt.Sprintf("%v", v.(bool))
+	case int:
+		return fmt.Sprintf("%v", v.(int))
+	case int64:
+		return fmt.Sprintf("%v", v.(int64))
+	case float64:
+		return fmt.Sprintf("%v", v.(float64))
+	case string:
+		return v.(string)
+	default:
+		return "null"
+	}
 }
 
 func extractFragments(source string, targets map[string]struct{}, finder *tokenizer.SimpleTokenFinder) []Fragment {
@@ -512,6 +632,32 @@ func extractFragments(source string, targets map[string]struct{}, finder *tokeni
 		}
 	}
 	return fragments
+}
+
+func mergeFragments(fragments []Fragment) []Fragment {
+	if len(fragments) < 2 {
+		return fragments
+	}
+
+	merge := []Fragment{fragments[0]}
+	highlightPosition := fragments[0].Offset + fragments[0].Length - 1
+	for i := 1; i < len(fragments); i++ {
+		newHighlight := fragments[i].Offset + fragments[i].Length - 1
+		if highlightPosition < fragments[i].Offset {
+			merge = append(merge, fragments[i])
+			highlightPosition = newHighlight
+			continue
+		}
+
+		if highlightPosition >= newHighlight {
+			continue
+		}
+
+		merge[len(merge)-1].Length += newHighlight - highlightPosition
+		highlightPosition = newHighlight
+	}
+
+	return merge
 }
 
 func convertFragments(source string, fragments []Fragment) []HighlightFragment {
@@ -617,8 +763,17 @@ func (h *Handler) getNilAnalyticsRequest(w http.ResponseWriter, repository, logS
 }
 
 func (h *Handler) serveAnalytics(w http.ResponseWriter, r *http.Request, user meta2.User) {
-	repository := r.URL.Query().Get(Repository)
-	logStream := r.URL.Query().Get(LogStream)
+	repository := mux.Vars(r)[Repository]
+	logStream := mux.Vars(r)[LogStream]
+	defer func() {
+		if err := recover(); err != nil {
+			h.Logger.Error("query log agg request error! ")
+			h.httpErrorRsp(w, ErrorResponse("query log agg request error! ", LogReqErr), http.StatusBadRequest)
+			atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+			return
+		}
+	}()
+
 	if err := h.ValidateAndCheckLogStreamExists(repository, logStream); err != nil {
 		h.Logger.Error("query log agg request error! ", zap.Error(err))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
@@ -637,8 +792,7 @@ func (h *Handler) serveAnalytics(w http.ResponseWriter, r *http.Request, user me
 		return
 	}
 	h.Logger.Info(fmt.Sprintf("queryAnalyticsRequest %v", queryAggRequest))
-	para := NewQueryPara(queryAggRequest.Query, true, false, queryAggRequest.Timeout, 0,
-		queryAggRequest.From*1e6, queryAggRequest.To*1e6, queryAggRequest.Scroll, queryAggRequest.Scroll_id, queryAggRequest.IncQuery, queryAggRequest.Explain, false)
+	para := NewQueryPara(queryAggRequest)
 	if err = para.initQueryIDAndIterID(); err != nil {
 		h.Logger.Error("query log analytics request error! ", zap.Error(err))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
@@ -655,10 +809,6 @@ func (h *Handler) serveAnalytics(w http.ResponseWriter, r *http.Request, user me
 		h.getNilAnalyticsRequest(w, repository, logStream, para)
 		return
 	}
-	if !strings.Contains(strings.ToLower(queryAggRequest.Query), Group) {
-		h.httpErrorRsp(w, ErrorResponse("query analytics request miss const group by", LogReqErr), http.StatusBadRequest)
-		return
-	}
 	para.Ascending = true
 	var count int64
 	var sql *influxql.Query
@@ -666,7 +816,12 @@ func (h *Handler) serveAnalytics(w http.ResponseWriter, r *http.Request, user me
 	incQueryTimeOut := time.Duration(para.Timeout) * time.Millisecond
 	incQueryStart := time.Now()
 	for i := 0; i < IncAggLogQueryRetryCount; i++ {
-		resp, sql, err = h.queryAggLog(w, r, user, incQueryStart, incQueryTimeOut, para)
+		rp, measurement := splitLogStream(logStream)
+		resp, _, sql, err = h.queryAggLog(w, r, user, incQueryStart, incQueryTimeOut, para, &measurementInfo{
+			name:            measurement,
+			database:        repository,
+			retentionPolicy: rp,
+		})
 		if err == nil {
 			break
 		}
@@ -709,65 +864,9 @@ func (h *Handler) serveAnalytics(w http.ResponseWriter, r *http.Request, user me
 		h.getNilAnalyticsRequest(w, repository, logStream, para)
 		return
 	}
+	results := make([][]string, 1)
 
-	if u, ok := sql.Statements[0].(*influxql.SelectStatement); !ok || u.UnnestSource == nil || len(u.UnnestSource) == 0 {
-		h.Logger.Error("query parser is wrong")
-		h.httpErrorRsp(w, ErrorResponse("query parser is wrong", LogReqErr), http.StatusBadRequest)
-		return
-	}
-	unnest := sql.Statements[0].(*influxql.SelectStatement).UnnestSource[0]
-
-	if err != nil {
-		var results [][]string
-		results = append(results, []string{unnest.Aliases[0], Count})
-		err = wrapIncAggLogQueryErr(err)
-		if QuerySkippingError(err.Error()) && para.GroupBytInterval > 0 {
-			res := QueryLogAnalyticsResponse{
-				Success:    true,
-				Code:       "200",
-				Message:    "",
-				Request_id: uuid.TimeUUID().String(),
-				Count:      count,
-				Progress:   fmt.Sprintf("%f", 1.0),
-				Dataset:    results,
-				Took_ms:    time.Since(time.Now()).Milliseconds(),
-				Scroll_id:  fmt.Sprintf("%v-%s-%d", meta.DefaultMetaClient.NodeID(), para.QueryID, para.IterID)}
-			b, err := json.Marshal(res)
-			if err != nil {
-				h.Logger.Error("query log marshal res fail! ", zap.Error(err))
-				h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
-				return
-			}
-
-			w.WriteHeader(http.StatusOK)
-			addLogQueryStatistics(repository, logStream)
-			_, err = w.Write(b)
-			if err != nil {
-				h.Logger.Error("query log marshal res fail! ", zap.Error(err))
-			}
-			return
-		}
-		if strings.Contains(err.Error(), ErrSyntax) || strings.Contains(err.Error(), ErrParsingQuery) {
-			h.Logger.Error("query agg fail! ", zap.Error(err))
-			h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
-			return
-		}
-		if result, ok := QueryAggResultCache.Get(para.QueryID); ok {
-			w.WriteHeader(http.StatusOK)
-			addLogQueryStatistics(repository, logStream)
-			_, err = w.Write(result.(*QueryLogAggResponseEntry).res)
-			if err != nil {
-				h.Logger.Error("query log marshal res fail! ", zap.Error(err))
-			}
-			return
-		}
-		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
-		return
-	}
-
-	if resp == nil {
-		var results [][]string
-		results = append(results, []string{unnest.Aliases[0], Count})
+	if resp == nil || len(resp.Results) == 0 || len(resp.Results[0].Series) == 0 || len(resp.Results[0].Series[0].Columns) == 0 {
 		res := QueryLogAnalyticsResponse{
 			Success:    true,
 			Code:       "200",
@@ -793,48 +892,14 @@ func (h *Handler) serveAnalytics(w http.ResponseWriter, r *http.Request, user me
 		}
 		return
 	}
-	var tagKey string
-	mergeResults := make(map[string]int64)
-	for i := range resp.Results {
-		for _, s := range resp.Results[i].Series {
-			var tagName string
-			// the analytics interface only support output one tags
-			for key, n := range s.Tags {
-				tagKey = key
-				tagName = n
-			}
-			var sum int64
-			for _, v := range s.Values {
-				var cnt int64
-				for k := 1; k < len(v); k++ {
-					val, ok := v[k].(int64)
-					if ok && val > cnt {
-						cnt = val
-					}
-				}
-				sum += cnt
-			}
-			count += sum
-			mergeResults[tagName] += sum
-		}
+	results = GetAnalysisResults(resp, sql)
+	if len(results) == 0 {
+		h.getNilAnalyticsRequest(w, repository, logStream, para)
+		return
 	}
-	i := 0
-	results := make([][2]interface{}, len(mergeResults))
-	for k, v := range mergeResults {
-		results[i][0] = k
-		results[i][1] = v
-		i++
-	}
-	sort.Slice(results, func(i, j int) bool {
-		return results[i][1].(int64) > results[j][1].(int64)
-	})
+
 	if len(results) > DefaultMaxLogStoreAnalyzeResponseNum {
 		results = results[0:DefaultMaxLogStoreAnalyzeResponseNum]
-	}
-	var resultsLast [][]string
-	resultsLast = append(resultsLast, []string{tagKey, Count})
-	for k := range results {
-		resultsLast = append(resultsLast, []string{results[k][0].(string), strconv.FormatInt(results[k][1].(int64), 10)})
 	}
 
 	res := QueryLogAnalyticsResponse{
@@ -844,7 +909,7 @@ func (h *Handler) serveAnalytics(w http.ResponseWriter, r *http.Request, user me
 		Request_id: uuid.TimeUUID().String(),
 		Count:      count,
 		Progress:   fmt.Sprintf("%f", para.Process),
-		Dataset:    resultsLast,
+		Dataset:    results,
 		Took_ms:    time.Since(time.Now()).Milliseconds(),
 		Scroll_id:  fmt.Sprintf("%v-%s-%d", meta.DefaultMetaClient.NodeID(), para.QueryID, para.IterID)}
 	b, err := json.Marshal(res)
@@ -865,6 +930,71 @@ func (h *Handler) serveAnalytics(w http.ResponseWriter, r *http.Request, user me
 	QueryAggResultCache.Put(para.QueryID, entry, cache.UpdateMetaData)
 }
 
+func GetAnalysisResults(resp *Response, sql *influxql.Query) [][]string {
+	tags, isGroupBy := GetAggFields(sql)
+	results := make([][]string, 1)
+	tagsIndex := make(map[string]int, 0)
+
+	results[0] = make([]string, 0)
+	for k, v := range tags {
+		results[0] = append(results[0], v)
+		tagsIndex[v] = k
+	}
+
+	fields := resp.Results[0].Series[0].Columns
+
+	for _, v := range fields {
+		if v == "time" {
+			continue
+		}
+		results[0] = append(results[0], v)
+	}
+	if isGroupBy {
+		results[0] = append(results[0], "time")
+	}
+
+	for i := range resp.Results {
+		for _, s := range resp.Results[i].Series {
+			for _, row := range s.Values {
+				currResult := make([]string, len(results[0]))
+				for tagK, tagV := range s.Tags {
+					currResult[tagsIndex[tagK]] = tagV
+				}
+				if isGroupBy {
+					currResult[len(currResult)-1] = strconv.Itoa(int(row[0].(time.Time).UnixMilli()))
+				}
+				for k := 1; k < len(row); k++ {
+					currResult[k-1+len(tags)] = fmt.Sprintf("%v", row[k])
+				}
+				results = append(results, currResult)
+			}
+		}
+	}
+	return results
+}
+
+func GetAggFields(sql *influxql.Query) ([]string, bool) {
+	tags := make([]string, 0)
+	if len(sql.Statements) == 0 {
+		return tags, false
+	}
+	statement, ok := sql.Statements[0].(*influxql.SelectStatement)
+	if !ok {
+		return tags, false
+	}
+	for _, v := range statement.Dimensions {
+		if val, ok := v.Expr.(*influxql.VarRef); ok {
+			tags = append(tags, val.Val)
+		}
+	}
+	interval, err := statement.GroupByInterval()
+	isGroupBy := false
+	if err == nil && interval != influxql.DefaultQueryTimeout {
+		isGroupBy = true
+	}
+	return tags, isGroupBy
+}
+
 func QuerySkippingError(err string) bool {
 	return strings.Contains(err, ErrShardGroupNotFound) || strings.Contains(err, ErrShardNotFound)
 }
@@ -872,8 +1002,8 @@ func QuerySkippingError(err string) bool {
 // serveAggLogQuery parses an incoming query and, if valid, executes the query
 func (h *Handler) serveAggLogQuery(w http.ResponseWriter, r *http.Request, user meta2.User) {
 	// Step 1: Verify the validity of repository and logStream and verify the validity of the request.
-	repository := r.URL.Query().Get(Repository)
-	logStream := r.URL.Query().Get(LogStream)
+	repository := mux.Vars(r)[Repository]
+	logStream := mux.Vars(r)[LogStream]
 	if err := h.ValidateAndCheckLogStreamExists(repository, logStream); err != nil {
 		h.Logger.Error("query log agg request error! ", zap.Error(err))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
@@ -899,9 +1029,9 @@ func (h *Handler) serveAggLogQuery(w http.ResponseWriter, r *http.Request, user 
 		queryAggRequest.Query = queryAggRequest.Query + " |select count(time)"
 	}
 
-	para := NewQueryPara(queryAggRequest.Query, true, false, queryAggRequest.Timeout, 0,
-		queryAggRequest.From*1e6, queryAggRequest.To*1e6, queryAggRequest.Scroll, queryAggRequest.Scroll_id, queryAggRequest.IncQuery, queryAggRequest.Explain, false)
+	para := NewQueryPara(queryAggRequest)
 	para.Ascending = true
+	para.isHistogram = true
 	if err = para.initQueryIDAndIterID(); err != nil {
 		h.Logger.Error("query log agg request error! ", zap.Error(err))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
@@ -919,7 +1049,11 @@ func (h *Handler) serveAggLogQuery(w http.ResponseWriter, r *http.Request, user 
 	incQueryTimeOut := time.Duration(para.Timeout) * time.Millisecond
 	incQueryStart := time.Now()
 	for i := 0; i < IncAggLogQueryRetryCount; i++ {
-		resp, _, err = h.queryAggLog(w, r, user, incQueryStart, incQueryTimeOut, para)
+		resp, _, _, err = h.queryAggLog(w, r, user, incQueryStart, incQueryTimeOut, para, &measurementInfo{
+			name:            logStream,
+			database:        repository,
+			retentionPolicy: logStream,
+		})
 		if err == nil {
 			break
 		}
@@ -1003,16 +1137,16 @@ func (h *Handler) serveAggLogQuery(w http.ResponseWriter, r *http.Request, user 
 }
 
 func (h *Handler) queryAggLog(w http.ResponseWriter, r *http.Request, user meta2.User,
-	incQueryStart time.Time, incQueryTimeOut time.Duration, para *QueryParam) (*Response, *influxql.Query, error) {
+	incQueryStart time.Time, incQueryTimeOut time.Duration, para *QueryParam, info *measurementInfo) (*Response, *influxql.Query, *influxql.Query, error) {
 	var err error
 	var resp *Response
-	var sql *influxql.Query
+	var sql, ppl *influxql.Query
 	for {
-		resp, sql, _, err = h.serveLogQuery(w, r, para, user)
+		resp, ppl, sql, _, err = h.serveLogQuery(w, r, para, user, info)
 		if err != nil {
 			if isIncAggLogQueryRetryErr(err) {
 				para.reInitForInc()
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 			break
 		}
@@ -1021,7 +1155,7 @@ func (h *Handler) queryAggLog(w http.ResponseWriter, r *http.Request, user meta2
 			err = errno.NewError(errno.FailedGetGlobalMaxIterNum, para.QueryID)
 			h.Logger.Error(err.Error())
 			para.reInitForInc()
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		var process float64
 		if iterMaxNum == 0 {
@@ -1036,7 +1170,7 @@ func (h *Handler) queryAggLog(w http.ResponseWriter, r *http.Request, user meta2
 			break
 		}
 	}
-	return resp, sql, err
+	return resp, ppl, sql, err
 }
 
 func (h *Handler) getHistogramsForAggLog(resp *Response, para *QueryParam) ([]Histograms, int64) {
@@ -1047,7 +1181,7 @@ func (h *Handler) getHistogramsForAggLog(resp *Response, para *QueryParam) ([]Hi
 			timeID := 0
 			for id, c := range s.Columns {
 				switch c {
-				case TIME:
+				case Time:
 					timeID = id
 				}
 			}

@@ -17,6 +17,7 @@ limitations under the License.
 package stream
 
 import (
+	"fmt"
 	"math"
 	"sync/atomic"
 	"time"
@@ -26,6 +27,8 @@ import (
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/record"
+	streamLib "github.com/openGemini/openGemini/lib/stream"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"go.uber.org/zap"
@@ -42,8 +45,8 @@ type TimeTask struct {
 	windowOffset []int
 
 	// pool
-	windowCachePool *WindowCachePool
-	*WindowDataPool
+	windowCachePool *TaskCachePool
+	*TaskDataPool
 
 	// tmp data, reuse
 	row *influx.Row
@@ -58,8 +61,8 @@ func (s *TimeTask) getDesInfo() *meta2.StreamMeasurementInfo {
 	return s.des
 }
 
-func (s *TimeTask) Put(r *WindowCache) {
-	s.WindowDataPool.Put(r)
+func (s *TimeTask) Put(r ChanData) {
+	s.TaskDataPool.Put(r)
 }
 
 func (s *TimeTask) stop() error {
@@ -77,7 +80,7 @@ func (s *TimeTask) run() error {
 		s.err = err
 		return err
 	}
-	s.info, err = s.cli.GetMeasurementInfoStore(s.des.Database, s.des.RetentionPolicy, s.des.Name)
+	s.info, err = s.cli.Measurement(s.des.Database, s.des.RetentionPolicy, s.des.Name)
 	if err != nil {
 		s.err = err
 		return err
@@ -142,8 +145,8 @@ func (s *TimeTask) consumeData() {
 			lastWindowId := s.startWindowID
 			atomic2.SetModInt64AndADD(&s.startWindowID, 1, int64(s.windowNum))
 			s.stats.Reset()
-			s.stats.StatWindowOutMinTime(s.start.UnixNano())
-			s.stats.StatWindowOutMaxTime(s.end.UnixNano())
+			s.stats.StatWindowOutMinTime(s.startTimeStamp)
+			s.stats.StatWindowOutMaxTime(s.maxTimeStamp)
 			t := time.Now()
 			s.walkUpdate(s.values, lastWindowId)
 			s.stats.StatWindowUpdateCost(int64(time.Since(t)))
@@ -203,26 +206,238 @@ func (s *TimeTask) walkUpdate(vv []float64, lastWindowId int64) bool {
 	return true
 }
 
-func (s *TimeTask) calculate(cache *WindowCache) error {
+func (s *TimeTask) calculate(data ChanData) error {
 	// occur release func
-	if cache == nil {
+	if data == nil {
 		return ErrEmptyCache
 	}
-	defer func() {
-		if cache.release != nil {
-			cache.release()
-		}
-		cache.rows = nil
-		s.windowCachePool.Put(cache)
-	}()
-	s.stats.AddWindowIn(int64(len(cache.rows)))
-	s.stats.StatWindowStartTime(s.startTimeStamp)
-	s.stats.StatWindowEndTime(s.maxTimeStamp)
-	s.calculateRow(cache)
+	switch cache := data.(type) {
+	case *TaskCache:
+		defer func() {
+			if cache.release != nil {
+				cache.release()
+			}
+			cache.rows = nil
+			s.windowCachePool.Put(cache)
+		}()
+		s.stats.AddWindowIn(int64(len(cache.rows)))
+		s.stats.StatWindowStartTime(s.startTimeStamp)
+		s.stats.StatWindowEndTime(s.maxTimeStamp)
+		s.calculateRow(cache)
+	case *CacheRecord:
+		defer func() {
+			cache.Release()
+		}()
+		s.stats.AddWindowIn(int64(cache.rec.RowNums()))
+		s.stats.StatWindowStartTime(s.startTimeStamp)
+		s.stats.StatWindowEndTime(s.maxTimeStamp)
+		s.calculateRec(cache)
+	default:
+		return fmt.Errorf("not support type %T", cache)
+	}
+
 	return nil
 }
 
-func (s *TimeTask) calculateRow(cache *WindowCache) {
+func (s *TimeTask) calculateRec(cache *CacheRecord) {
+	rec := cache.rec
+	var skip int
+	windowIDS := make([]int8, rec.RowNums())
+	timeCol := rec.Column(rec.ColNums() - 1)
+	times := timeCol.IntegerValues()
+	for i, t := range times {
+		if t < s.startTimeStamp || t >= s.maxTimeStamp {
+			if t >= s.endTimeStamp {
+				atomic2.CompareAndSwapMaxInt64(&s.stats.WindowOutMaxTime, t)
+			} else {
+				atomic2.CompareAndSwapMinInt64(&s.stats.WindowOutMinTime, t)
+			}
+			windowIDS[i] = -1
+			skip++
+			continue
+		}
+		windowIDS[i] = int8(s.windowId(t))
+	}
+	s.stats.AddWindowSkip(int64(skip))
+	for c, call := range s.fieldCalls {
+		id := rec.Schema.FieldIndex(call.Name)
+		if id == -1 {
+			id = rec.Schema.FieldIndex(call.Alias)
+		}
+		if id < 0 {
+			continue
+		}
+		colVal := rec.Column(id)
+		if colVal == nil {
+			continue
+		}
+		if colVal.Length()+colVal.NilCount == 0 {
+			continue
+		}
+		if rec.Schema.Field(id).Type == influx.Field_Type_Float {
+			if call.Call == "count" {
+				s.calculateCountValues(windowIDS, c, call, cache, colVal)
+			} else {
+				s.calculateFloatValues(windowIDS, c, call, cache, colVal)
+			}
+		} else if rec.Schema.Field(id).Type == influx.Field_Type_UInt || rec.Schema.Field(id).Type == influx.Field_Type_Int {
+			if call.Call == "count" {
+				s.calculateCountValues(windowIDS, c, call, cache, colVal)
+			} else {
+				s.calculateIntValues(windowIDS, c, call, cache, colVal)
+			}
+		}
+	}
+	s.stats.AddWindowProcess(int64(rec.RowNums() - skip))
+}
+
+func (s *TimeTask) calculateFloatValues(windowIDS []int8, c int, call *streamLib.FieldCall, cache *CacheRecord, colVal *record.ColVal) {
+	var lastWindowID int8 = -1
+	var lastIndex int = -1
+	values := colVal.FloatValues()
+	if colVal.NilCount == 0 {
+		for i := 0; i < colVal.Length(); i++ {
+			if lastWindowID == windowIDS[i] {
+				s.values[lastIndex] = call.SingleThreadFunc(s.values[lastIndex], values[i])
+				continue
+			}
+			lastWindowID = windowIDS[i]
+			base := s.windowOffset[windowIDS[i]]
+			index := base + c
+			lastIndex = index
+			s.values[index] = call.SingleThreadFunc(s.values[index], values[i])
+			s.validValues[index] = true
+			if s.shardIds[windowIDS[i]] < 0 {
+				s.shardIds[windowIDS[i]] = int64(cache.shardID)
+				s.ptIds[windowIDS[i]] = int32(cache.ptId)
+			}
+		}
+		return
+	}
+	colIndex := 0
+	for i := 0; i < colVal.Length(); i++ {
+		if windowIDS[i] < 0 {
+			continue
+		}
+		if colVal.IsNil(i) {
+			continue
+		}
+		if lastWindowID == windowIDS[i] {
+			s.values[lastIndex] = call.SingleThreadFunc(s.values[lastIndex], values[colIndex])
+			colIndex++
+			continue
+		}
+		colIndex++
+		lastWindowID = windowIDS[i]
+		base := s.windowOffset[windowIDS[i]]
+		index := base + c
+		lastIndex = index
+		s.values[index] = call.SingleThreadFunc(s.values[index], values[colIndex])
+		s.validValues[index] = true
+		if s.shardIds[windowIDS[i]] < 0 {
+			s.shardIds[windowIDS[i]] = int64(cache.shardID)
+			s.ptIds[windowIDS[i]] = int32(cache.ptId)
+		}
+	}
+}
+
+func (s *TimeTask) calculateIntValues(windowIDS []int8, c int, call *streamLib.FieldCall, cache *CacheRecord, colVal *record.ColVal) {
+	var lastWindowID int8 = -1
+	var lastIndex int = -1
+	values := colVal.IntegerValues()
+	if colVal.NilCount == 0 {
+		for i := 0; i < colVal.Length(); i++ {
+			if lastWindowID == windowIDS[i] {
+				s.values[lastIndex] = call.SingleThreadFunc(s.values[lastIndex], float64(values[i]))
+				continue
+			}
+			lastWindowID = windowIDS[i]
+			base := s.windowOffset[windowIDS[i]]
+			index := base + c
+			lastIndex = index
+			s.values[index] = call.SingleThreadFunc(s.values[index], float64(values[i]))
+			s.validValues[index] = true
+			if s.shardIds[windowIDS[i]] < 0 {
+				s.shardIds[windowIDS[i]] = int64(cache.shardID)
+				s.ptIds[windowIDS[i]] = int32(cache.ptId)
+			}
+		}
+		return
+	}
+	colIndex := 0
+	for i := 0; i < colVal.Length(); i++ {
+		if windowIDS[i] < 0 {
+			continue
+		}
+		if colVal.IsNil(i) {
+			continue
+		}
+		if lastWindowID == windowIDS[i] {
+			s.values[lastIndex] = call.SingleThreadFunc(s.values[lastIndex], float64(values[colIndex]))
+			colIndex++
+			continue
+		}
+		colIndex++
+		lastWindowID = windowIDS[i]
+		base := s.windowOffset[windowIDS[i]]
+		index := base + c
+		lastIndex = index
+		s.values[index] = call.SingleThreadFunc(s.values[index], float64(values[colIndex]))
+		s.validValues[index] = true
+		if s.shardIds[windowIDS[i]] < 0 {
+			s.shardIds[windowIDS[i]] = int64(cache.shardID)
+			s.ptIds[windowIDS[i]] = int32(cache.ptId)
+		}
+	}
+}
+
+func (s *TimeTask) calculateCountValues(windowIDS []int8, c int, call *streamLib.FieldCall, cache *CacheRecord, colVal *record.ColVal) {
+	var lastWindowID int8 = -1
+	var lastIndex int = -1
+	if colVal.NilCount == 0 {
+		for i := 0; i < colVal.Length(); i++ {
+			if lastWindowID == windowIDS[i] {
+				s.values[lastIndex] = call.SingleThreadFunc(s.values[lastIndex], 1)
+				continue
+			}
+			lastWindowID = windowIDS[i]
+			base := s.windowOffset[windowIDS[i]]
+			index := base + c
+			lastIndex = index
+			s.values[index] = call.SingleThreadFunc(s.values[index], 1)
+			s.validValues[index] = true
+			if s.shardIds[windowIDS[i]] < 0 {
+				s.shardIds[windowIDS[i]] = int64(cache.shardID)
+				s.ptIds[windowIDS[i]] = int32(cache.ptId)
+			}
+		}
+		return
+	}
+	for i := 0; i < colVal.Length(); i++ {
+		if windowIDS[i] < 0 {
+			continue
+		}
+		if colVal.IsNil(i) {
+			continue
+		}
+		if lastWindowID == windowIDS[i] {
+			s.values[lastIndex] = call.SingleThreadFunc(s.values[lastIndex], 1)
+			continue
+		}
+		lastWindowID = windowIDS[i]
+		base := s.windowOffset[windowIDS[i]]
+		index := base + c
+		lastIndex = index
+		s.values[index] = call.SingleThreadFunc(s.values[index], 1)
+		s.validValues[index] = true
+		if s.shardIds[windowIDS[i]] < 0 {
+			s.shardIds[windowIDS[i]] = int64(cache.shardID)
+			s.ptIds[windowIDS[i]] = int32(cache.ptId)
+		}
+	}
+}
+
+func (s *TimeTask) calculateRow(cache *TaskCache) {
 	var skip int
 	var curVal float64
 	for i := range cache.rows {
@@ -327,7 +542,7 @@ func (s *TimeTask) buildRow() bool {
 		return true
 	}
 	*fields = (*fields)[:validNum]
-	s.row.Timestamp = s.start.UnixNano()
+	s.row.Timestamp = s.startTimeStamp
 	s.indexKeyPool = s.row.UnmarshalIndexKeys(s.indexKeyPool)
 	s.validNum++
 	return true

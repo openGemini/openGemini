@@ -34,6 +34,14 @@ func (cv *ColVal) AppendString(v string) {
 	cv.Len++
 }
 
+func (cv *ColVal) RemoveLastString() {
+	cv.Len--
+	lastOffset := len(cv.Offset) - 1
+	cv.Val = cv.Val[:cv.Offset[lastOffset]]
+	cv.Offset = cv.Offset[:lastOffset]
+	cv.resetBitMap(cv.Len)
+}
+
 func (cv *ColVal) AppendStringNulls(count int) {
 	for i := 0; i < count; i++ {
 		cv.AppendStringNull()
@@ -157,65 +165,11 @@ func (cv *ColVal) appendStringCol(src *ColVal, start, limit int) {
 }
 
 func (cv *ColVal) FirstStringValue(values []string, start, end int) (string, int) {
-	if len(values) == 0 {
-		return "", -1
-	}
-
-	var (
-		first      string
-		skip, vIdx int
-	)
-	row := -1
-	if cv.NilCount == 0 {
-		first = values[start]
-		row = start
-		return first, row
-	}
-
-	if cv.NilCount > 0 {
-		skip = cv.ValidCount(0, start)
-	}
-
-	vIdx = skip
-	for i := start; i < end && len(values[vIdx:]) > 0; i++ {
-		idx := cv.BitMapOffset + i
-		if cv.Bitmap[idx>>3]&BitMask[idx&0x07] == 0 {
-			continue
-		}
-		first = values[vIdx]
-		row = i
-		break
-	}
-	return first, row
+	return firstValue(values, start, end, cv)
 }
 
 func (cv *ColVal) LastStringValue(values []string, start, end int) (string, int) {
-	if len(values) == 0 {
-		return "", -1
-	}
-
-	var last string
-	row := -1
-	if cv.NilCount == 0 {
-		last = values[end-1]
-		row = end - 1
-		return last, row
-	}
-
-	for i := end - 1; i >= start; i-- {
-		idx := cv.BitMapOffset + i
-		if cv.Bitmap[idx>>3]&BitMask[idx&0x07] == 0 {
-			continue
-		}
-		row = i
-		break
-	}
-	if row < start {
-		return last, -1
-	}
-	vIdx := cv.ValidCount(0, row)
-	last = values[vIdx]
-	return last, row
+	return lastValue(values, start, end, cv)
 }
 
 func (cv *ColVal) StringValueSafe(i int) (string, bool) {

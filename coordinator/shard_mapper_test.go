@@ -83,19 +83,6 @@ func (m mocShardMapperMetaClient) GetStreamInfos() map[string]*meta.StreamInfo {
 	return nil
 }
 
-func (m mocShardMapperMetaClient) GetStreamInfosStore() map[string]*meta.StreamInfo {
-	panic("implement me")
-}
-
-func (m mocShardMapperMetaClient) GetMeasurementInfoStore(database string, rpName string, mstName string) (*meta.MeasurementInfo, error) {
-	//TODO implement me
-	return meta.NewMeasurementInfo("test"), nil
-}
-
-func (m mocShardMapperMetaClient) GetMeasurementsInfoStore(dbName string, rpName string) (*meta.MeasurementsInfo, error) {
-	return nil, nil
-}
-
 func (m mocShardMapperMetaClient) UpdateStreamMstSchema(database string, retentionPolicy string, mst string, stmt *influxql.SelectStatement) error {
 	return nil
 }
@@ -112,7 +99,7 @@ func (m mocShardMapperMetaClient) DropStream(name string) error {
 	return nil
 }
 
-func (m mocShardMapperMetaClient) CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta.ShardKeyInfo, indexR *influxql.IndexRelation,
+func (m mocShardMapperMetaClient) CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta.ShardKeyInfo, numOfShards int32, indexR *influxql.IndexRelation,
 	engineType config.EngineType, colStoreInfo *meta.ColStoreInfo, schemaInfo []*proto.FieldSchema, options *meta2.Options) (*meta.MeasurementInfo, error) {
 	return nil, nil
 }
@@ -384,7 +371,7 @@ func (m mocShardMapperMetaClient) Measurements(database string, ms influxql.Meas
 	return nil, nil
 }
 
-func (m mocShardMapperMetaClient) ShowShards() models.Rows {
+func (m mocShardMapperMetaClient) ShowShards(db string, rp string, mst string) models.Rows {
 	return nil
 }
 
@@ -450,8 +437,8 @@ func (m mocShardMapperMetaClient) UpdateShardDownSampleInfo(Ident *meta.ShardIde
 	return nil
 }
 
-func (m mocShardMapperMetaClient) OpenAtStore() {
-	return
+func (m mocShardMapperMetaClient) OpenAtStore() error {
+	return nil
 }
 
 func (mmc *mocShardMapperMetaClient) GetAllMst(dbName string) []string {
@@ -639,7 +626,7 @@ func TestShardMappingGetSources(t *testing.T) {
 					"rp0": {
 						Name: "rp0",
 						Measurements: map[string]*meta.MeasurementInfo{
-							"mst1": meta.NewMeasurementInfo("mst1_000"),
+							"mst1": meta.NewMeasurementInfo("mst1_000", influx.GetOriginMstName("mst1_000"), config.TSSTORE, 0),
 						},
 					},
 				},
@@ -954,7 +941,7 @@ func Test_CreateLogicalPlan(t *testing.T) {
 	selectStmt.OmitTime = true
 	schema := executor.NewQuerySchema(selectStmt.Fields, selectStmt.ColumnNames(), opt1, nil)
 	schema.SetFill(influxql.NoFill)
-	var key uint64 = 1
+	var key = []uint64{1}
 	ctx := context.WithValue(context.Background(), (query.QueryIDKey), key)
 	ssqs := statistics.NewSqlSlowQueryStatistics("db0")
 	locs := make([][2]int, 0)
@@ -1345,7 +1332,7 @@ func Test_CreateLogicalPlanForRWSplit(t *testing.T) {
 	selectStmt.OmitTime = true
 	schema := executor.NewQuerySchema(selectStmt.Fields, selectStmt.ColumnNames(), opt1, nil)
 	schema.SetFill(influxql.NoFill)
-	var key uint64 = 1
+	var key = []uint64{1}
 	ctx := context.WithValue(context.Background(), (query.QueryIDKey), key)
 	m.cacheData = data
 
@@ -1356,5 +1343,112 @@ func Test_CreateLogicalPlanForRWSplit(t *testing.T) {
 	}
 	if !reflect.DeepEqual(plan.Schema().GetColumnNames(), []string{"v1", "u1"}) {
 		t.Fatal()
+	}
+}
+
+func Test_MapTypeBatchBinOp(t *testing.T) {
+	timeStart := time.Date(2022, 1, 0, 0, 0, 0, 0, time.UTC)
+	timeMid := time.Date(2022, 1, 15, 0, 0, 0, 0, time.UTC)
+	timeEnd := time.Date(2022, 2, 0, 0, 0, 0, 0, time.UTC)
+	shards1 := []meta.ShardInfo{{ID: 1, Owners: []uint32{0}, Min: "", Max: "", Tier: util.Hot, IndexID: 1, DownSampleID: 0, DownSampleLevel: 0, ReadOnly: false, MarkDelete: false}}
+	csm := &ClusterShardMapper{
+		Logger: logger.NewLogger(1),
+	}
+	defer csm.Close()
+	mc := &mocShardMapperMetaClient{
+		databases: map[string]*meta.DatabaseInfo{
+			"db0": {
+				Name:                   "db0",
+				DefaultRetentionPolicy: "rp0",
+				RetentionPolicies: map[string]*meta.RetentionPolicyInfo{
+					"rp0": {
+						Name: "rp0",
+						Measurements: map[string]*meta.MeasurementInfo{
+							"mst1": {
+								Name: "mst1",
+								ShardKeys: []meta.ShardKeyInfo{
+									{
+										ShardKey:   []string{"1", "2"},
+										Type:       "hash",
+										ShardGroup: 1,
+									},
+								},
+								Schema: map[string]int32{
+									"value": influx.Field_Type_Float,
+									"tag1":  influx.Field_Type_Tag,
+								},
+								EngineType: config.TSSTORE,
+							},
+						},
+						ShardGroups: []meta.ShardGroupInfo{
+							{
+								ID:         1,
+								StartTime:  timeStart,
+								EndTime:    timeMid,
+								Shards:     shards1,
+								EngineType: config.TSSTORE,
+							},
+						},
+					},
+				},
+				ShardKey: meta.ShardKeyInfo{
+					ShardKey:   []string{"1"},
+					Type:       "hash",
+					ShardGroup: 3,
+				},
+			},
+		},
+	}
+	csm.MetaClient = mc
+	csm.Measurement("db0", "rp0", "mst1")
+	m, _ := csm.MetaClient.(*mocShardMapperMetaClient)
+	db, _ := m.databases["db0"]
+	rp, _ := db.RetentionPolicies["rp0"]
+	mst, _ := rp.Measurements["mst1"]
+	mst.SetoriginName("mst1")
+	source := &influxql.Measurement{
+		Database: "db0", RetentionPolicy: "rp0", Name: "mst1", EngineType: config.TSSTORE,
+	}
+	binOp := &influxql.BinOp{
+		LSrc: source,
+		RSrc: source,
+	}
+	ttime := influxql.TimeRange{
+		Min: timeStart,
+		Max: timeEnd,
+	}
+	csming, _ := csm.MapShards([]influxql.Source{binOp}, ttime, query.SelectOptions{}, nil)
+	shardMapping := csming.(*ClusterShardMapping)
+	schema := &influxql.Schema{
+		MinTime: math.MaxInt64,
+		MaxTime: math.MinInt64,
+	}
+	myFields := map[string]*influxql.FieldNameSpace{
+		"value": {
+			RealName: "value",
+			DataType: influx.Field_Type_Float,
+		},
+		"tag1": {
+			RealName: "tag1",
+			DataType: influx.Field_Type_Tag,
+		},
+	}
+	err := shardMapping.MapTypeBatch(source, myFields, schema)
+	if err != nil {
+		t.Fatal()
+	}
+	mytype := shardMapping.MapType(source, "value")
+	if mytype != record.ToInfluxqlTypes(int(influx.Field_Type_Float)) {
+		t.Fatal()
+	}
+	mytype = shardMapping.MapType(source, "tag1")
+	if mytype != record.ToInfluxqlTypes(int(influx.Field_Type_Tag)) {
+		t.Fatal()
+	}
+	dbinfo := mc.databases["db0"]
+	delete(dbinfo.RetentionPolicies, "rp0")
+	_, err = csm.MapShards([]influxql.Source{binOp}, ttime, query.SelectOptions{}, nil)
+	if err == nil {
+		t.Fatal("Test_MapTypeBatchBinOp err")
 	}
 }

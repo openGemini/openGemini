@@ -24,6 +24,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
@@ -31,7 +32,7 @@ import (
 	"go.uber.org/zap"
 )
 
-type mergeContext struct {
+type MergeContext struct {
 	mst  string
 	shId uint64
 
@@ -40,7 +41,7 @@ type mergeContext struct {
 	unordered *mergeFileInfo
 }
 
-func (ctx *mergeContext) reset() {
+func (ctx *MergeContext) reset() {
 	ctx.mst = ""
 	ctx.shId = 0
 	ctx.tr.Min = math.MaxInt64
@@ -49,11 +50,11 @@ func (ctx *mergeContext) reset() {
 	ctx.unordered.reset()
 }
 
-func (ctx *mergeContext) AddUnordered(f TSSPFile) bool {
+func (ctx *MergeContext) AddUnordered(f TSSPFile) {
 	min, max, err := f.MinMaxTime()
 	if err != nil {
 		log.Error("failed to get min, max time")
-		return false
+		return
 	}
 
 	if ctx.tr.Min > min {
@@ -64,26 +65,29 @@ func (ctx *mergeContext) AddUnordered(f TSSPFile) bool {
 	}
 
 	ctx.unordered.add(f)
-
-	return !(len(ctx.unordered.seq) > MaxNumOfFileToMerge || ctx.unordered.size > MaxSizeOfFileToMerge)
 }
 
-func (ctx *mergeContext) Sort() {
+func (ctx *MergeContext) Limited() bool {
+	conf := &config.GetStoreConfig().Merge
+	return len(ctx.unordered.seq) > conf.MaxUnorderedFileNumber || ctx.unordered.size > int64(conf.MaxUnorderedFileSize)
+}
+
+func (ctx *MergeContext) Sort() {
 	sort.Sort(ctx.order)
 	sort.Sort(ctx.unordered)
 }
 
-func (ctx *mergeContext) Release() {
+func (ctx *MergeContext) Release() {
 	ctx.reset()
 	mergeContextPool.Put(ctx)
 }
 
 var mergeContextPool = sync.Pool{}
 
-func NewMergeContext(mst string) *mergeContext {
-	ctx, ok := mergeContextPool.Get().(*mergeContext)
+func NewMergeContext(mst string) *MergeContext {
+	ctx, ok := mergeContextPool.Get().(*MergeContext)
 	if !ok {
-		return &mergeContext{
+		return &MergeContext{
 			mst:       mst,
 			order:     &mergeFileInfo{},
 			unordered: &mergeFileInfo{},
@@ -91,6 +95,54 @@ func NewMergeContext(mst string) *mergeContext {
 		}
 	}
 	ctx.mst = mst
+	return ctx
+}
+
+func BuildMergeContext(mst string, files *TSSPFiles) *MergeContext {
+	files.lock.RLock()
+	defer files.lock.RUnlock()
+
+	if files.Len() == 0 {
+		return nil
+	}
+
+	maxLevel := files.Files()[0].FileNameMerge()
+	ctx := NewMergeContext(mst)
+
+	for i := uint16(0); i <= maxLevel; i++ {
+		for _, f := range files.Files() {
+			if f.FileNameMerge() != i {
+				continue
+			}
+			ctx.AddUnordered(f)
+			if ctx.Limited() {
+				return ctx
+			}
+		}
+	}
+	return ctx
+}
+
+func BuildFullMergeContext(mst string, files *TSSPFiles) *MergeContext {
+	files.lock.RLock()
+	defer files.lock.RUnlock()
+
+	if files.Len() == 0 {
+		return nil
+	}
+
+	conf := &config.GetStoreConfig().Merge
+	ctx := NewMergeContext(mst)
+
+	for _, f := range files.Files() {
+		if f.FileSize() >= int64(conf.MaxUnorderedFileSize) {
+			continue
+		}
+		ctx.AddUnordered(f)
+		if ctx.Limited() {
+			return ctx
+		}
+	}
 	return ctx
 }
 
@@ -189,7 +241,7 @@ func NewMeasurementInProcess() *MeasurementInProcess {
 	return &MeasurementInProcess{tables: make(map[string]struct{}, defaultCap)}
 }
 
-func MergeRecovery(path string, name string, ctx *mergeContext) {
+func MergeRecovery(path string, name string, ctx *MergeContext) {
 	if err := recover(); err != nil {
 		panicInfo := fmt.Sprintf("[Merge Panic:err:%s, name:%s, seqs:%v, path:%s] %s",
 			err, name, ctx.order.seq, path, debug.Stack())

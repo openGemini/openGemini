@@ -361,35 +361,38 @@ func (s *Stream) updateShardGroupAndShardKey(database, retentionPolicy string, r
 	dims []string) (err error, sh *meta2.ShardInfo, partialErr error) {
 	var wh *writeHelper
 	var di *meta2.DatabaseInfo
-	var shardKeyInfo **meta2.ShardKeyInfo
+	var si **meta2.ShardKeyInfo
 	var mi *meta2.MeasurementInfo
-	var aliveShardIdxes *[]int
+	var asis *[]int
 
-	wh = ctx.writeHelper
 	di = ctx.db
-	shardKeyInfo = &ctx.shardKeyInfo
 	mi = ctx.ms
-	aliveShardIdxes = &ctx.aliveShardIdxes
+	si = &ctx.shardKeyInfo
+	wh = ctx.writeHelper
+	asis = &ctx.aliveShardIdxes
+
+	var sameSg bool
+	var sg *meta2.ShardGroupInfo
 	engineType := mi.EngineType
-	sg, sameSg, err := wh.createShardGroup(database, retentionPolicy, time.Unix(0, r.Timestamp), engineType)
+	sg, sameSg, err = wh.createShardGroup(database, retentionPolicy, time.Unix(0, r.Timestamp), engineType)
 	if err != nil {
 		return
 	}
 
 	if !sameSg {
 		if len(di.ShardKey.ShardKey) > 0 {
-			*shardKeyInfo = &di.ShardKey
+			*si = &di.ShardKey
 		} else {
-			*shardKeyInfo = mi.GetShardKey(sg.ID)
+			*si = mi.GetShardKey(sg.ID)
 		}
 
-		if *shardKeyInfo == nil {
+		if *si == nil {
 			err = errno.NewError(errno.WriteNoShardKey)
 			return
 		}
 	}
 
-	if err = r.UnmarshalShardKeyByDimOrTag((*shardKeyInfo).ShardKey, dims); err != nil {
+	if err = r.UnmarshalShardKeyByDimOrTag((*si).ShardKey, dims); err != nil {
 		if err != influx.ErrPointShouldHaveAllShardKey {
 			return
 		}
@@ -405,16 +408,30 @@ func (s *Stream) updateShardGroupAndShardKey(database, retentionPolicy string, r
 	}
 
 	if !sameSg {
-		*aliveShardIdxes = s.MetaClient.GetAliveShards(database, sg)
+		*asis = s.MetaClient.GetAliveShards(database, sg)
 	}
 
-	if (*shardKeyInfo).Type == influxql.RANGE {
+	if (*si).Type == influxql.RANGE {
 		sh = sg.DestShard(bytesutil.ToUnsafeString(r.ShardKey))
 	} else {
-		if len((*shardKeyInfo).ShardKey) > 0 {
+		if len((*si).ShardKey) > 0 {
 			r.ShardKey = r.ShardKey[len(r.Name)+1:]
 		}
-		sh = sg.ShardFor(meta2.HashID(r.ShardKey), *aliveShardIdxes)
+		var shardIdxes []int
+		if mi.InitNumOfShards == 0 {
+			shardIdxes = *asis
+		} else {
+			shardIdxes = mi.ShardIdexes[sg.ID]
+			if len(shardIdxes) == 0 { // need to update mst info if shard group is newly created.
+				mi, err = s.MetaClient.Measurement(database, retentionPolicy, mi.OriginName())
+				if err != nil {
+					s.logger.Error("write failed", zap.Error(err))
+					return
+				}
+				shardIdxes = mi.ShardIdexes[sg.ID]
+			}
+		}
+		sh = sg.ShardFor(meta2.HashID(r.ShardKey), shardIdxes)
 	}
 	if sh == nil {
 		err = errno.NewError(errno.WritePointMap2Shard)

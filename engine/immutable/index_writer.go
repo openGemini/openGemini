@@ -24,7 +24,9 @@ import (
 	"github.com/golang/snappy"
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/fileops"
+	"github.com/openGemini/openGemini/lib/numberenc"
 	"github.com/openGemini/openGemini/lib/util"
+	"github.com/openGemini/openGemini/lib/util/lifted/encoding/lz4"
 )
 
 type IndexWriter interface {
@@ -178,10 +180,29 @@ func (w *IndexCompressWriter) openSwapper() error {
 	return nil
 }
 
+func tryExpand(dst []byte, estimateLen int) []byte {
+	if cap(dst) < estimateLen {
+		dst = make([]byte, 0, estimateLen)
+	}
+	return dst
+}
+
 func (w *IndexCompressWriter) compress(dst []byte, src []byte) []byte {
 	switch GetChunkMetaCompressMode() {
 	case ChunkMetaCompressSnappy:
 		dst = snappy.Encode(dst[:cap(dst)], src)
+	case ChunkMetaCompressLZ4:
+		// estimate the size of compressed data
+		maxLen := util.Uint32SizeBytes + lz4.CompressBlockBound(len(src))
+		dst = tryExpand(dst, maxLen)
+
+		// encoded data includes 4 bytes of data size before compression and compressed data size
+		dst = numberenc.MarshalUint32Append(dst, uint32(len(src)))
+		n, err := lz4.CompressBlock(src, dst[util.Uint32SizeBytes:maxLen])
+		if err != nil {
+			dst = append(dst[:util.Uint32SizeBytes], src...)
+		}
+		dst = dst[:n+util.Uint32SizeBytes]
 	default:
 		dst = append(dst[:0], src...)
 	}

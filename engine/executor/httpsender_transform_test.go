@@ -349,7 +349,7 @@ func BenchmarkHttpChunkSender_GetRows(b *testing.B) {
 	inRowDataType := hybridqp.NewRowDataTypeImpl(refs...)
 	chunk := genChunk(inRowDataType)
 
-	sender := executor.NewHttpChunkSender(&query.ProcessorOptions{})
+	sender := executor.NewHttpChunkSender(&query.ProcessorOptions{Location: time.UTC})
 	_ = sender
 	g := &executor.RowsGenerator{}
 	_ = g

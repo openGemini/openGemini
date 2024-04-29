@@ -146,3 +146,17 @@ func BenchmarkAdaptive(b *testing.B) {
 	runBenchmark(b, "Adaptive_rleData", enc.AdaptiveEncoding, enc.AdaptiveDecoding, rleData)
 	runBenchmark(b, "Snappy_rleData", compress.SnappyEncoding, compress.SnappyDecoding, rleData)
 }
+
+func BenchmarkGenerateContext(b *testing.B) {
+	var values []float64
+	for i := 0; i < 1000000; i++ {
+		values = append(values, float64(i/180))
+	}
+
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		for j := 0; j < 1000000; j++ {
+			compress.GenerateContext(values)
+		}
+	}
+}

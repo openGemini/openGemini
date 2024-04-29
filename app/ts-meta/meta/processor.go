@@ -37,8 +37,10 @@ type MetaStoreInterface interface {
 	leader() string
 	peers() []string
 	createDataNode(httpAddr, tcpAddr, role string) ([]byte, error)
+	CreateSqlNode(httpAddr string, gossopAddr string) ([]byte, error)
 	afterIndex(index uint64) <-chan struct{}
 	getSnapshot(role metaclient.Role) []byte
+	getSnapshotV2(role metaclient.Role, oldIndex uint64, id uint64) []byte
 	IsLeader() bool
 	Join(n *meta.NodeInfo) (*meta.NodeInfo, error)
 	apply(b []byte) error

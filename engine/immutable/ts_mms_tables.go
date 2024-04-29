@@ -33,10 +33,13 @@ import (
 )
 
 type tsImmTableImpl struct {
+	mstsInfo map[string]*meta.MeasurementInfo
 }
 
 func NewTsImmTable() *tsImmTableImpl {
-	return &tsImmTableImpl{}
+	return &tsImmTableImpl{
+		mstsInfo: make(map[string]*meta.MeasurementInfo),
+	}
 }
 
 func (c *tsImmTableImpl) GetEngineType() config.EngineType {
@@ -95,6 +98,9 @@ func (t *tsImmTableImpl) compactToLevel(m *MmsTables, group FilesInfo, full, isN
 		compItrs.WithLog(lcLog)
 		oldFilesSize = compItrs.estimateSize
 		newFiles, compactErr = compItrs.compact(group.oldFiles, group.toLevel, true)
+		if compactErr != nil {
+			compItrs.RemoveTmpFiles()
+		}
 		compItrs.Close()
 	}
 
@@ -253,7 +259,7 @@ func (t *tsImmTableImpl) refMmsTable(m *MmsTables, name string, refOutOfOrder bo
 	return orderWg, outOfOrderWg
 }
 
-func (t *tsImmTableImpl) unrefMmsTable(m *MmsTables, orderWg, outOfOrderWg *sync.WaitGroup) {
+func (t *tsImmTableImpl) unrefMmsTable(orderWg, outOfOrderWg *sync.WaitGroup) {
 	if orderWg != nil {
 		orderWg.Done()
 	}
@@ -309,4 +315,16 @@ func (t *tsImmTableImpl) SetMstInfo(name string, mstInfo *meta.MeasurementInfo) 
 
 func (t *tsImmTableImpl) GetMstInfo(name string) (*meta.MeasurementInfo, bool) {
 	return nil, false
+}
+
+func (t *tsImmTableImpl) FullyCompacted(m *MmsTables) bool {
+	count := 0
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, v := range m.Order {
+		if v.fullCompacted() {
+			count++
+		}
+	}
+	return count == len(m.Order)
 }

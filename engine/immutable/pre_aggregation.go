@@ -456,7 +456,7 @@ func (m *FloatPreAgg) release() {
 }
 
 func (m *FloatPreAgg) addMin(v float64, tm int64) {
-	if m.minV < v {
+	if m.minV > v {
 		m.minV = v
 		m.minTime = tm
 	} else if m.minV == v {
@@ -467,7 +467,7 @@ func (m *FloatPreAgg) addMin(v float64, tm int64) {
 }
 
 func (m *FloatPreAgg) addMax(v float64, tm int64) {
-	if m.maxV > v {
+	if m.maxV < v {
 		m.maxV = v
 		m.maxTime = tm
 	} else if m.minV == v {

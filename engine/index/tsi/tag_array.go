@@ -84,6 +84,7 @@ func (pool *TagSetsPool) Put(tags *tagSets) {
 }
 
 /*
+AnalyzeTagSets
 eg, inputTags:
 
 	{{Key: "tk1", Value: "[tv1,tv11]", IsArray: 0},
@@ -99,35 +100,46 @@ tagArray:
 	{Key: "tk2", Value: "tv22", IsArray: 0},
 	{Key: "tk3", Value: "tv33", IsArray: 0},]]
 */
-func analyzeTagSets(dstTagSets *tagSets, tags []influx.Tag) error {
-	var arrayLen int
-	for i := range tags {
-		if tags[i].IsArray {
-			tagCount := strings.Count(tags[i].Value, ",") + 1
-			if arrayLen == 0 {
-				arrayLen = tagCount
-			}
+func AnalyzeTagSets(dstTagSets *tagSets, tags []influx.Tag) error {
+	var arrayLen = 0
+	for cIndex := range tags {
+		tag := &tags[cIndex]
+		if !tag.IsArray {
+			continue
+		}
 
-			if arrayLen != tagCount {
+		if arrayLen == 0 {
+			arrayLen = strings.Count(tag.Value, ",") + 1
+			dstTagSets.resize(arrayLen, len(tags))
+		}
+
+		values := tag.Value[1 : len(tag.Value)-1] // remove the front and back brackets
+		offset := 0
+		rIndex := 0
+		for i := range values {
+			if rIndex >= arrayLen {
 				return errno.NewError(errno.ErrorTagArrayFormat)
 			}
-		}
-	}
 
-	dstTagSets.resize(arrayLen, len(tags))
+			if values[i] == ',' {
+				dstTagSets.tagsArray[rIndex][cIndex].Key = tag.Key
+				dstTagSets.tagsArray[rIndex][cIndex].Value = values[offset:i]
+				offset = i + 1
+				rIndex++
+			}
+		}
+		dstTagSets.tagsArray[rIndex][cIndex].Key = tag.Key
+		dstTagSets.tagsArray[rIndex][cIndex].Value = values[offset:]
+	}
 
 	for cIndex := range tags {
 		if tags[cIndex].IsArray {
-			values := strings.Split(tags[cIndex].Value[1:len(tags[cIndex].Value)-1], ",")
-			for rIndex := range values {
-				dstTagSets.tagsArray[rIndex][cIndex].Key = tags[cIndex].Key
-				dstTagSets.tagsArray[rIndex][cIndex].Value = values[rIndex]
-			}
-		} else {
-			for rIndex := 0; rIndex < arrayLen; rIndex++ {
-				dstTagSets.tagsArray[rIndex][cIndex].Key = tags[cIndex].Key
-				dstTagSets.tagsArray[rIndex][cIndex].Value = tags[cIndex].Value
-			}
+			continue
+		}
+
+		for rIndex := 0; rIndex < arrayLen; rIndex++ {
+			dstTagSets.tagsArray[rIndex][cIndex].Key = tags[cIndex].Key
+			dstTagSets.tagsArray[rIndex][cIndex].Value = tags[cIndex].Value
 		}
 	}
 	return nil
@@ -293,11 +305,11 @@ func resizeExprs(exprs []*influxql.BinaryExpr, keyCount int) []*influxql.BinaryE
 	return exprs
 }
 
-func analyzeSeriesWithCondition(series [][]byte, exprs []*influxql.BinaryExpr, condition influxql.Expr, isExpectSeries []bool) (int, []bool, []*influxql.BinaryExpr, error) {
+func analyzeSeriesWithCondition(series [][]byte, exprs []*influxql.BinaryExpr, condition influxql.Expr, isExpectSeries []bool, handleConditionForce bool) (int, []bool, []*influxql.BinaryExpr, error) {
 	isExpectSeries = resizeExpectSeries(isExpectSeries, len(series))
 	exprs = resizeExprs(exprs, len(series))
 	// no need to analyze one series
-	if len(series) == 1 {
+	if len(series) == 1 && !handleConditionForce {
 		isExpectSeries[0] = true
 		exprs[0] = nil
 		return 1, isExpectSeries, exprs, nil
@@ -511,7 +523,7 @@ func resizeExpectSeries(expectSeries []bool, keyCount int) []bool {
 }
 
 func (idx *MergeSetIndex) searchSeriesWithTagArray(tsid uint64, seriesKeys [][]byte, exprs []*influxql.BinaryExpr, combineKey []byte,
-	isExpectSeries []bool, condition influxql.Expr) ([][]byte, []*influxql.BinaryExpr, []bool, error) {
+	isExpectSeries []bool, condition influxql.Expr, handleConditionForce bool) ([][]byte, []*influxql.BinaryExpr, []bool, error) {
 	combineKey = combineKey[:0]
 	combineKey, err := idx.searchSeriesKey(combineKey, tsid)
 	if err != nil {
@@ -524,7 +536,7 @@ func (idx *MergeSetIndex) searchSeriesWithTagArray(tsid uint64, seriesKeys [][]b
 		return nil, nil, nil, err
 	}
 
-	_, isExpectSeries, exprs, err = analyzeSeriesWithCondition(seriesKeys, exprs, condition, isExpectSeries)
+	_, isExpectSeries, exprs, err = analyzeSeriesWithCondition(seriesKeys, exprs, condition, isExpectSeries, handleConditionForce)
 	if err != nil {
 		logger.GetLogger().Error("analyzeSeriesWithCondition fail", zap.Error(err))
 		return nil, nil, nil, err

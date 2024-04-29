@@ -29,11 +29,13 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/numberenc"
+	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/openGemini/openGemini/lib/readcache"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util"
+	"github.com/openGemini/openGemini/lib/util/lifted/encoding/lz4"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/pingcap/failpoint"
 	"go.uber.org/zap"
@@ -158,7 +160,6 @@ func NewTSSPFileReader(name string, lockPath *string) (*tsspFileReader, error) {
 		return nil, err
 	}
 	lock := fileops.FileLockOption(*lockPath)
-
 	if fi.Size() < minTableSize() {
 		err = fmt.Errorf("invalid file(%v) size:%v", name, fi.Size())
 		log.Error(err.Error())
@@ -512,6 +513,13 @@ func decompressChunkMeta(mode uint8, dst *pool.Buffer, src []byte) ([]byte, erro
 	switch mode {
 	case ChunkMetaCompressSnappy:
 		dst.Swap, err = snappy.Decode(dst.Swap[:cap(dst.Swap)], src)
+	case ChunkMetaCompressLZ4:
+		// 1. unmarshal the data size before compress
+		oriLen := numberenc.UnmarshalUint32(src)
+		// 2. alloc memory and decompress data
+		dst.Swap = tryExpand(dst.Swap, int(oriLen))
+		dst.Swap = dst.Swap[:oriLen]
+		_, err = lz4.DecompressSafe(src[util.Uint32SizeBytes:], dst.Swap)
 	default:
 		return nil, fmt.Errorf("unsupported compress mode: %d", mode)
 	}
@@ -817,8 +825,8 @@ func (r *tsspFileReader) Rename(newName string) error {
 	return r.r.Rename(newName)
 }
 
-func (r *tsspFileReader) RenameOnObs(obsName string) error {
-	return r.r.RenameOnObs(obsName)
+func (r *tsspFileReader) RenameOnObs(oldName string, tmp bool, obsOpt *obs.ObsOptions) error {
+	return r.r.RenameOnObs(oldName, tmp, obsOpt)
 }
 
 func (r *tsspFileReader) Version() uint64 {
@@ -1028,6 +1036,10 @@ func (r *tsspFileReader) AverageChunkRows() int {
 
 func (r *tsspFileReader) MaxChunkRows() int {
 	return r.maxChunkRows
+}
+
+func (r *tsspFileReader) ChunkMetaCompressMode() uint8 {
+	return r.chunkMetaCompressMode
 }
 
 var (

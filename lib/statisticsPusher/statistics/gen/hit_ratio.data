@@ -9,7 +9,10 @@
         "FileOpenTotal",
         "QueryFileUnHitTotal",
         "ChunkMetaGetTotal",
-        "ChunkMetaHitTotal"
+        "ChunkMetaHitTotal",
+        "SeriesKeyToTSIDCacheGetTotal",
+        "SeriesKeyToTSIDCacheGetMissTotal",
+        "SeriesKeyToTSIDCacheGetNewSeriesTotal"
     ],
     "SetItems":[],
     "EnablePush":"N",

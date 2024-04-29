@@ -1,6 +1,8 @@
-//go:build !lz4
+//go:build !linux || !amd64
 
 package lz4
+
+import "github.com/pierrec/lz4/v4"
 
 /*
 Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
@@ -19,13 +21,13 @@ limitations under the License.
 */
 
 func CompressBlockBound(size int) int {
-	return size
+	return lz4.CompressBlockBound(size)
 }
 
 func CompressBlock(source, dest []byte) (int, error) {
-	return len(source), nil
+	return lz4.CompressBlock(source, dest, nil)
 }
 
 func DecompressSafe(source, dest []byte) (int, error) {
-	return len(source), nil
+	return lz4.UncompressBlock(source, dest)
 }

@@ -38,7 +38,7 @@ type Handler struct {
 		User(username string) (meta2.User, error)
 		AdminUserExists() bool
 		DataNodes() ([]meta2.DataNode, error)
-		InitMetaClient(joinPeers []string, tlsEn bool, storageNodeInfo *meta.StorageNodeInfo, role string) (uint64, uint64, uint64, error)
+		InitMetaClient(joinPeers []string, tlsEn bool, storageNodeInfo *meta.StorageNodeInfo, sqlNodeInfo *meta.SqlNodeInfo, role string, t meta.Role) (uint64, uint64, uint64, error)
 		CreateDataNode(httpAddr, tcpAddr, role string) (uint64, uint64, uint64, error)
 	}
 

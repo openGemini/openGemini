@@ -16,6 +16,7 @@ import (
 	"github.com/cespare/xxhash/v2"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/sysconfig"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
@@ -55,25 +56,33 @@ func (sgi *ShardGroupInfo) walkShards(fn func(sh *ShardInfo)) {
 	}
 }
 
-func (sgi ShardGroupInfo) getShardsAndSeriesKeyForHintQuery(tagsGroup *influx.PointTags, aliveShardIdxes []int, mstName string, ski *ShardKeyInfo) ([]ShardInfo, []byte) {
+func (sgi ShardGroupInfo) getShardsAndSeriesKeyForHintQuery(tagsGroup *influx.PointTags, aliveShardIdxes []int, mst *MeasurementInfo, ski *ShardKeyInfo) ([]ShardInfo, []byte) {
 	shards := make([]ShardInfo, 0, len(sgi.Shards))
 	sort.Sort(tagsGroup)
-	r := influx.Row{Name: mstName, Tags: *tagsGroup}
+	r := influx.Row{Name: mst.Name, Tags: *tagsGroup}
 	r.UnmarshalIndexKeys(nil)
 	r.UnmarshalShardKeyByTag(nil)
 	if len(ski.ShardKey) > 0 {
-		r.ShardKey = r.ShardKey[len(mstName)+1:]
+		r.ShardKey = r.ShardKey[len(mst.Name)+1:]
 	}
-	shard := sgi.ShardFor(HashID(r.ShardKey), aliveShardIdxes)
-	shards = append(shards, *shard)
 	// Force the query to be broadcast
 	if sysconfig.GetEnableForceBroadcastQuery() == sysconfig.OnForceBroadcastQuery {
 		return sgi.genShardInfosByIndex(aliveShardIdxes), r.IndexKey
 	}
+	var shardIdxes []int
+	if mst.InitNumOfShards == 0 {
+		shardIdxes = aliveShardIdxes
+	} else {
+		shardIdxes = mst.ShardIdexes[sgi.ID]
+	}
+	shard := sgi.ShardFor(HashID(r.ShardKey), shardIdxes)
+	shards = append(shards, *shard)
 	return shards, r.IndexKey
 }
 
 func (sgi ShardGroupInfo) TargetShardsHintQuery(mst *MeasurementInfo, ski *ShardKeyInfo, condition influxql.Expr, opt *query.SelectOptions, aliveShardIdxes []int) ([]ShardInfo, []byte) {
+	mst.SchemaLock.RLock()
+	defer mst.SchemaLock.RUnlock()
 	tagsGroup := getConditionTags(condition, mst.Schema)
 	if len(tagsGroup) != 1 {
 		return sgi.genShardInfosByIndex(aliveShardIdxes), nil
@@ -101,7 +110,7 @@ func (sgi ShardGroupInfo) TargetShardsHintQuery(mst *MeasurementInfo, ski *Shard
 	}
 
 	// it's used for specific or full series of the hint query
-	return sgi.getShardsAndSeriesKeyForHintQuery(tagsGroup[0], aliveShardIdxes, mst.Name, ski)
+	return sgi.getShardsAndSeriesKeyForHintQuery(tagsGroup[0], aliveShardIdxes, mst, ski)
 
 }
 
@@ -117,7 +126,9 @@ func (sgi ShardGroupInfo) TargetShards(mst *MeasurementInfo, ski *ShardKeyInfo, 
 	if ski == nil || ski.ShardKey == nil || (ski.Type == HASH && condition == nil) {
 		return sgi.genShardInfosByIndex(aliveShardIdxes)
 	}
+	mst.SchemaLock.RLock()
 	tagsGroup := getConditionTags(condition, mst.Schema)
+	mst.SchemaLock.RUnlock()
 	if len(tagsGroup) == 0 {
 		return sgi.genShardInfosByIndex(aliveShardIdxes)
 	}
@@ -160,7 +171,13 @@ func (sgi ShardGroupInfo) TargetShards(mst *MeasurementInfo, ski *ShardKeyInfo, 
 			return sgi.genShardInfosByIndex(aliveShardIdxes)
 		}
 
-		shard := sgi.ShardFor(HashID(shardKeyAndValue[len(mst.Name)+1:]), aliveShardIdxes)
+		var shardIdxes []int
+		if mst.InitNumOfShards == 0 {
+			shardIdxes = aliveShardIdxes
+		} else {
+			shardIdxes = mst.ShardIdexes[sgi.ID]
+		}
+		shard := sgi.ShardFor(HashID(shardKeyAndValue[len(mst.Name)+1:]), shardIdxes)
 		if shard == nil {
 			continue
 		}
@@ -449,9 +466,7 @@ func (si ShardInfo) clone() ShardInfo {
 	other := si
 
 	other.Owners = make([]uint32, len(si.Owners))
-	for i := range si.Owners {
-		other.Owners[i] = si.Owners[i]
-	}
+	copy(other.Owners, si.Owners)
 
 	return other
 }
@@ -470,9 +485,7 @@ func (si ShardInfo) marshal() *proto2.ShardInfo {
 		MarkDelete:      proto.Bool(si.MarkDelete),
 	}
 	pb.OwnerIDs = make([]uint32, len(si.Owners))
-	for i := range si.Owners {
-		pb.OwnerIDs[i] = si.Owners[i]
-	}
+	copy(pb.OwnerIDs, si.Owners)
 
 	return pb
 }
@@ -558,4 +571,20 @@ func StringToTier(tier string) uint64 {
 	default:
 		return util.TierBegin
 	}
+}
+
+type ExpiredShardInfos struct {
+	Database     string
+	Policy       string
+	ShardGroupId uint64
+	ShardIds     []uint64
+	ShardPaths   []string
+	ObsOpts      *obs.ObsOptions
+}
+
+type ExpiredIndexInfos struct {
+	Database     string
+	Policy       string
+	IndexGroupID uint64
+	IndexIDs     []uint64
 }

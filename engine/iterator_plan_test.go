@@ -34,7 +34,6 @@ import (
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/index/tsi"
-	"github.com/openGemini/openGemini/engine/mutable"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/record"
@@ -3409,7 +3408,7 @@ func Test_FieldFilter_NoPreAgg_SingleCall(t *testing.T) {
 	// **** start write data to the shard.
 	sh, _ := createShard("db0", "rp0", 1, testDir, config.TSSTORE)
 	sh.SetWriteColdDuration(100000 * time.Second)
-	mutable.SetSizeLimit(10 * 1024 * 1024 * 1024)
+	config.SetShardMemTableSizeLimit(10 * 1024 * 1024 * 1024)
 	defer sh.Close()
 	defer sh.indexBuilder.Close()
 	if err := sh.WriteRows(pts, nil); err != nil {
@@ -3582,7 +3581,7 @@ func Run_MissingData_SingCall(t *testing.T, isFlush bool) {
 	// **** start write data to the shard.
 	sh, _ := createShard("db0", "rp0", 1, testDir, config.TSSTORE)
 	sh.SetWriteColdDuration(100000 * time.Second)
-	mutable.SetSizeLimit(10 * 1024 * 1024 * 1024)
+	config.SetShardMemTableSizeLimit(10 * 1024 * 1024 * 1024)
 	defer sh.Close()
 	defer sh.indexBuilder.Close()
 	if err := sh.WriteRows(pts, nil); err != nil {
@@ -5142,7 +5141,7 @@ func Test_PreAggregation_Memtable_After_Order_SingCall(t *testing.T) {
 	// **** start write data to the shard.
 	sh, _ := createShard("db0", "rp0", 1, testDir, config.TSSTORE)
 	sh.SetWriteColdDuration(100000 * time.Second)
-	mutable.SetSizeLimit(10 * 1024 * 1024 * 1024)
+	config.SetShardMemTableSizeLimit(10 * 1024 * 1024 * 1024)
 	defer sh.Close()
 	defer sh.indexBuilder.Close()
 	if err := sh.WriteRows(pts, nil); err != nil {

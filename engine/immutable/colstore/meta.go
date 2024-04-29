@@ -176,6 +176,18 @@ type DetachedPKInfo struct {
 	Data         *record.Record
 }
 
+func (d *DetachedPKInfo) IsBlockExist(start, end uint64) bool {
+	return !(end < d.StartBlockId || start > d.EndBlockId)
+}
+
+func (d *DetachedPKInfo) GetStartBlockId() uint64 {
+	return d.StartBlockId
+}
+
+func (d *DetachedPKInfo) GetEndBlockId() uint64 {
+	return d.EndBlockId
+}
+
 func GetPKInfoByPKMetaData(meta *DetachedPKMeta, data *DetachedPKData, tcLocation int8) *DetachedPKInfo {
 	return &DetachedPKInfo{StartBlockId: meta.StartBlockId, EndBlockId: meta.EndBlockId, TcLocation: tcLocation, Data: data.Data}
 }

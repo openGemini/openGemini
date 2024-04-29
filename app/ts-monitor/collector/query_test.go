@@ -62,6 +62,7 @@ func TestQueryMetric(t *testing.T) {
 	)
 	q.Reporter = rj
 
+	count := 0
 	showFn := func(r *http.Request) (*http.Response, error) {
 		var buff TempBuffer
 		if strings.Contains(strings.ToLower(r.URL.RawQuery), "show+databases") {
@@ -77,6 +78,14 @@ func TestQueryMetric(t *testing.T) {
 		resp := &http.Response{
 			StatusCode: http.StatusOK,
 			Body:       &buff,
+		}
+		if count == 0 {
+			count++
+			resp2 := &http.Response{
+				StatusCode: http.StatusContinue,
+				Body:       &buff,
+			}
+			return resp2, nil
 		}
 		return resp, nil
 	}

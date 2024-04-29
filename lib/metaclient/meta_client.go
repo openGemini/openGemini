@@ -82,10 +82,7 @@ const (
 
 	maxDbOrRpName = 256
 
-	// ShardGroupDeletedExpiration is the amount of time before a shard group info will be removed from cached
-	// data after it has been marked deleted (2 weeks).
-	ShardGroupDeletedExpiration = -2 * 7 * 24 * time.Hour
-	IndexGroupDeletedExpiration = -2 * 7 * 24 * time.Hour
+	RetentionDelayedTime = 24 * time.Hour // for logkeeper service
 
 	RPCReqTimeout       = 10 * time.Second
 	HttpSnapshotTimeout = 4 * time.Second
@@ -128,6 +125,8 @@ var DefaultTypeMapper = influxql.MultiTypeMapper(
 	query.MathTypeMapper{},
 	query.FunctionTypeMapper{},
 	query.StringFunctionTypeMapper{},
+	query.LabelFunctionTypeMapper{},
+	query.PromTimeFunctionTypeMapper{},
 )
 
 var DefaultMetaClient *Client
@@ -136,6 +135,11 @@ var cliOnce sync.Once
 type StorageNodeInfo struct {
 	InsertAddr string
 	SelectAddr string
+}
+
+type SqlNodeInfo struct {
+	HttpAddr   string
+	GossipAddr string
 }
 
 type FieldKey struct {
@@ -151,7 +155,7 @@ func (a FieldKeys) Less(i, j int) bool { return a[i].Field < a[j].Field }
 
 // MetaClient is an interface for accessing meta data.
 type MetaClient interface {
-	CreateMeasurement(database, retentionPolicy, mst string, shardKey *meta2.ShardKeyInfo, indexR *influxql.IndexRelation, engineType config.EngineType,
+	CreateMeasurement(database, retentionPolicy, mst string, shardKey *meta2.ShardKeyInfo, numOfShards int32, indexR *influxql.IndexRelation, engineType config.EngineType,
 		colStoreInfo *meta2.ColStoreInfo, schemaInfo []*proto2.FieldSchema, options *meta2.Options) (*meta2.MeasurementInfo, error)
 	AlterShardKey(database, retentionPolicy, mst string, shardKey *meta2.ShardKeyInfo) error
 	CreateDatabase(name string, enableTagArray bool, replicaN uint32, options *obs.ObsOptions) (*meta2.DatabaseInfo, error)
@@ -186,6 +190,7 @@ type MetaClient interface {
 	DBPtView(database string) (meta2.DBPtInfos, error)
 	ShardOwner(shardID uint64) (database, policy string, sgi *meta2.ShardGroupInfo)
 	Measurement(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error)
+	GetMeasurementID(database string, rpName string, mstName string) (uint64, error)
 	Schema(database string, retentionPolicy string, mst string) (fields map[string]int32, dimensions map[string]struct{}, err error)
 	GetMeasurements(m *influxql.Measurement) ([]*meta2.MeasurementInfo, error)
 	TagKeys(database string) map[string]set.Set
@@ -193,7 +198,7 @@ type MetaClient interface {
 	QueryTagKeys(database string, ms influxql.Measurements, cond influxql.Expr) (map[string]map[string]struct{}, error)
 	MatchMeasurements(database string, ms influxql.Measurements) (map[string]*meta2.MeasurementInfo, error)
 	Measurements(database string, ms influxql.Measurements) ([]string, error)
-	ShowShards() models.Rows
+	ShowShards(database string, rp string, mst string) models.Rows
 	ShowShardGroups() models.Rows
 	ShowSubscriptions() models.Rows
 	ShowRetentionPolicies(database string) (models.Rows, error)
@@ -207,15 +212,13 @@ type MetaClient interface {
 	AdminUserExists() bool
 	Authenticate(username, password string) (u meta2.User, e error)
 	UpdateShardDownSampleInfo(Ident *meta2.ShardIdentifier) error
-	OpenAtStore()
+	OpenAtStore() error
 	UpdateStreamMstSchema(database string, retentionPolicy string, mst string, stmt *influxql.SelectStatement) error
 	CreateStreamPolicy(info *meta2.StreamInfo) error
+	CreateStreamMeasurement(info *meta2.StreamInfo, src, dest *influxql.Measurement, stmt *influxql.SelectStatement) error
 	GetStreamInfos() map[string]*meta2.StreamInfo
-	GetStreamInfosStore() map[string]*meta2.StreamInfo
 	ShowStreams(database string, showAll bool) (models.Rows, error)
 	DropStream(name string) error
-	GetMeasurementInfoStore(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error)
-	GetMeasurementsInfoStore(dbName string, rpName string) (*meta2.MeasurementsInfo, error)
 	GetAllMst(dbName string) []string
 	RetryRegisterQueryIDOffset(host string) (uint64, error)
 	ThermalShards(db string, start, end time.Duration) map[uint64]struct{}
@@ -232,6 +235,10 @@ type MetaClient interface {
 
 	// sysctrl for admin
 	SendSysCtrlToMeta(mod string, param map[string]string) (map[string]string, error)
+
+	// file infos
+	IsSQLiteEnabled() bool
+	InsertFiles([]meta2.FileInfo) error
 }
 
 type LoadCtx struct {
@@ -322,6 +329,7 @@ type Client struct {
 	tls            bool
 	logger         *logger.Logger
 	nodeID         uint64
+	Clock          uint64
 	ShardDurations map[uint64]*meta2.ShardDurationInfo
 	DBBriefInfos   map[string]*meta2.DatabaseBriefInfo
 
@@ -350,8 +358,70 @@ type Client struct {
 
 	replicaInfoManager *ReplicaInfoManager
 
+	UseSnapshotV2       bool
+	RetentionAutoCreate bool
+
 	// send RPC message interface.
 	SendRPCMessage
+}
+
+func (c *Client) SetExpandShardsEnable(en bool) {
+	c.cacheData.ExpandShardsEnable = en
+}
+
+var applyFunc = map[proto2.Command_Type]func(c *Client, op *proto2.Command) error{
+	proto2.Command_CreateDatabaseCommand:            applyCreateDatabase,
+	proto2.Command_DropDatabaseCommand:              applyDropDatabase,
+	proto2.Command_CreateRetentionPolicyCommand:     applyCreateRetentionPolicy,
+	proto2.Command_DropRetentionPolicyCommand:       applyDropRetentionPolicy,
+	proto2.Command_SetDefaultRetentionPolicyCommand: applySetDefaultRetentionPolicy,
+	proto2.Command_UpdateRetentionPolicyCommand:     applyUpdateRetentionPolicy,
+	proto2.Command_CreateShardGroupCommand:          applyCreateShardGroup,
+	proto2.Command_DeleteShardGroupCommand:          applyDeleteShardGroup,
+	proto2.Command_CreateSubscriptionCommand:        applyCreateSubscription,
+	proto2.Command_DropSubscriptionCommand:          applyDropSubscription,
+	proto2.Command_CreateUserCommand:                applyCreateUser,
+	proto2.Command_DropUserCommand:                  applyDropUser,
+	proto2.Command_UpdateUserCommand:                applyUpdateUser,
+	proto2.Command_SetPrivilegeCommand:              applySetPrivilege,
+	proto2.Command_SetAdminPrivilegeCommand:         applySetAdminPrivilege,
+	proto2.Command_SetDataCommand:                   applySetData,
+	proto2.Command_CreateMetaNodeCommand:            applyCreateMetaNode,
+	proto2.Command_DeleteMetaNodeCommand:            applyDeleteMetaNode,
+	proto2.Command_SetMetaNodeCommand:               applySetMetaNode,
+	proto2.Command_CreateDataNodeCommand:            applyCreateDataNode,
+	proto2.Command_CreateSqlNodeCommand:             applyCreateSqlNode,
+	proto2.Command_DeleteDataNodeCommand:            applyDeleteDataNode,
+	proto2.Command_MarkDatabaseDeleteCommand:        applyMarkDatabaseDelete,
+	proto2.Command_MarkRetentionPolicyDeleteCommand: applyMarkRetentionPolicyDelete,
+	proto2.Command_CreateMeasurementCommand:         applyCreateMeasurement,
+	proto2.Command_ReShardingCommand:                applyReSharding,
+	proto2.Command_UpdateSchemaCommand:              applyUpdateSchema,
+	proto2.Command_AlterShardKeyCmd:                 applyAlterShardKey,
+	proto2.Command_PruneGroupsCommand:               applyPruneGroups,
+	proto2.Command_MarkMeasurementDeleteCommand:     applyMarkMeasurementDelete,
+	proto2.Command_DropMeasurementCommand:           applyDropMeasurement,
+	proto2.Command_DeleteIndexGroupCommand:          applyDeleteIndexGroup,
+	proto2.Command_UpdateShardInfoTierCommand:       applyUpdateShardInfoTier,
+	proto2.Command_UpdateNodeStatusCommand:          applyUpdateNodeStatus,
+	proto2.Command_UpdateSqlNodeStatusCommand:       applyUpdateSqlNodeStatus,
+	proto2.Command_UpdatePtInfoCommand:              applyUpdatePtInfo,
+	proto2.Command_CreateDownSamplePolicyCommand:    applyCreateDownSample,
+	proto2.Command_DropDownSamplePolicyCommand:      applyDropDownSample,
+	proto2.Command_CreateDbPtViewCommand:            applyCreateDbPtView,
+	proto2.Command_UpdateShardDownSampleInfoCommand: applyUpdateShardDownSampleInfo,
+	proto2.Command_CreateStreamCommand:              applyCreateStream,
+	proto2.Command_DropStreamCommand:                applyDropStream,
+	proto2.Command_ExpandGroupsCommand:              applyExpandGroups,
+	proto2.Command_UpdatePtVersionCommand:           applyUpdatePtVersion,
+	proto2.Command_RegisterQueryIDOffsetCommand:     applyRegisterQueryIDOffset,
+	proto2.Command_CreateContinuousQueryCommand:     applyCreateContinuousQuery,
+	proto2.Command_ContinuousQueryReportCommand:     applyContinuousQueryReport,
+	proto2.Command_DropContinuousQueryCommand:       applyDropContinuousQuery,
+	proto2.Command_SetNodeSegregateStatusCommand:    applySetNodeSegregateStatus,
+	proto2.Command_RemoveNodeCommand:                applyRemoveNode,
+	proto2.Command_UpdateReplicationCommand:         applyUpdateReplication,
+	proto2.Command_UpdateMeasurementCommand:         applyUpdateMeasurement,
 }
 
 type authRcd struct {
@@ -394,6 +464,12 @@ func NewClient(weakPwdPath string, retentionAutoCreate bool, maxConcurrentWriteL
 	return cli
 }
 
+func (c *Client) EnableUseSnapshotV2(RetentionAutoCreate bool, ExpandShardsEnable bool) {
+	c.UseSnapshotV2 = true
+	c.retentionAutoCreate = RetentionAutoCreate
+	c.SetExpandShardsEnable(ExpandShardsEnable)
+}
+
 func cvtDataForAlgoVer(ver string) int {
 	var rst int
 	switch ver {
@@ -415,17 +491,42 @@ func (c *Client) SetHashAlgo(optHashAlgo string) {
 
 // Open a connection to a meta service cluster.
 func (c *Client) Open() error {
-	c.cacheData = c.retryUntilSnapshot(SQL, 0)
-	go c.pollForUpdates(SQL)
+	if c.UseSnapshotV2 {
+		meta2.DataLogger = logger.GetLogger().With(zap.String("service", "data"))
+		err := c.retryUntilSnapshotV2(SQL, 0)
+		if err != nil {
+			// this will only be nil if the client has been closed,
+			// so we can exit out
+			c.logger.Error("client has been closed:", zap.String("err:", err.Error()))
+			return err
+		}
+		go c.pollForUpdatesV2(SQL)
+	} else {
+		c.cacheData = c.retryUntilSnapshot(SQL, 0)
+		go c.pollForUpdates(SQL)
+	}
 
 	go c.updateAuthCacheData()
 	return nil
 }
 
-func (c *Client) OpenAtStore() {
-	c.cacheData = c.retryUntilSnapshot(STORE, 0)
-	go c.pollForUpdates(STORE)
+func (c *Client) OpenAtStore() error {
+	if c.UseSnapshotV2 {
+		meta2.DataLogger = logger.GetLogger().With(zap.String("service", "data"))
+		err := c.retryUntilSnapshotV2(STORE, 0)
+		if err != nil {
+			// this will only be nil if the client has been closed,
+			// so we can exit out
+			c.logger.Error("client has been closed:", zap.String("err:", err.Error()))
+			return err
+		}
+		go c.pollForUpdatesV2(STORE)
+	} else {
+		c.cacheData = c.retryUntilSnapshot(STORE, 0)
+		go c.pollForUpdates(STORE)
+	}
 	go c.verifyDataNodeStatus()
+	return nil
 }
 
 // Close the meta service cluster connection.
@@ -449,6 +550,13 @@ func (c *Client) Close() error {
 
 // NodeID GetNodeID returns the client's node ID.
 func (c *Client) NodeID() uint64 { return c.nodeID }
+
+func (c *Client) SetNode(newNodeID uint64, newClock uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.nodeID = newNodeID
+	c.Clock = newClock
+}
 
 func (c *Client) SetTier(tier string) error {
 	c.ShardTier = meta2.StringToTier(strings.ToUpper(tier))
@@ -593,6 +701,36 @@ func (c *Client) CreateDataNode(writeHost, queryHost, role string) (uint64, uint
 	}
 }
 
+func (c *Client) CreateSqlNode(httpHost string, gossipHost string) (uint64, uint64, uint64, error) {
+	currentServer := connectedServer
+	for {
+		// exit if we're closed
+		select {
+		case <-c.closing:
+			return 0, 0, 0, meta2.ErrClientClosed
+		default:
+			// we're still open, continue on
+		}
+		c.mu.RLock()
+		if currentServer >= len(c.metaServers) {
+			currentServer = 0
+		}
+		c.mu.RUnlock()
+
+		node, err := c.getSqlNode(httpHost, gossipHost, currentServer)
+
+		if err == nil && node.NodeId > 0 {
+			c.nodeID = node.NodeId
+			return c.nodeID, node.LTime, node.ConnId, nil
+		}
+
+		c.logger.Warn("get sql node failed", zap.Error(err))
+		time.Sleep(errSleep)
+
+		currentServer++
+	}
+}
+
 // DataNodeByHTTPHost returns the data node with the give http bind address
 func (c *Client) DataNodeByHTTPHost(httpAddr string) (*meta2.DataNode, error) {
 	nodes, err := c.DataNodes()
@@ -719,6 +857,10 @@ func (c *Client) GetMeasurements(m *influxql.Measurement) ([]*meta2.MeasurementI
 		sort.Slice(measurements, func(i, j int) bool {
 			return influx.GetOriginMstName(measurements[i].Name) < influx.GetOriginMstName(measurements[j].Name)
 		})
+	} else if m.Name == "" {
+		for _, msti := range rpi.Measurements {
+			measurements = append(measurements, msti)
+		}
 	} else {
 		msti, err := rpi.GetMeasurement(m.Name)
 		if err != nil {
@@ -729,10 +871,24 @@ func (c *Client) GetMeasurements(m *influxql.Measurement) ([]*meta2.MeasurementI
 	return measurements, nil
 }
 
+func (c *Client) RetryMeasurement(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error) {
+	info, err := c.Measurement(database, rpName, mstName)
+	if err == nil {
+		return info, nil
+	}
+	return c.GetMeasurementInfoStore(database, rpName, mstName)
+}
+
 func (c *Client) Measurement(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.cacheData.Measurement(database, rpName, mstName)
+}
+
+func (c *Client) GetMeasurementID(database string, rpName string, mstName string) (uint64, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.cacheData.GetMeasurementID(database, rpName, mstName)
 }
 
 func (c *Client) RetryGetMeasurementInfoStore(database string, rpName string, mstName string) ([]byte, error) {
@@ -794,64 +950,6 @@ func (c *Client) GetMeasurementInfoStore(dbName string, rpName string, mstName s
 	return mst, nil
 }
 
-func (c *Client) GetMeasurementsInfoStore(dbName string, rpName string) (*meta2.MeasurementsInfo, error) {
-	b, err := c.RetryGetMeasurementsInfoStore(dbName, rpName)
-	if err != nil {
-		return nil, err
-	}
-	mst := &meta2.MeasurementsInfo{}
-	if err = mst.UnmarshalBinary(b); err != nil {
-		return nil, err
-	}
-	return mst, nil
-}
-
-func (c *Client) RetryGetMeasurementsInfoStore(database string, rpName string) ([]byte, error) {
-	startTime := time.Now()
-	currentServer := connectedServer
-	var err error
-	var info []byte
-	for {
-		c.mu.RLock()
-		select {
-		case <-c.closing:
-			c.mu.RUnlock()
-			return nil, errors.New("GetMeasurementsInfoStore fail")
-		default:
-
-		}
-
-		if currentServer >= len(c.metaServers) {
-			currentServer = 0
-		}
-		c.mu.RUnlock()
-		info, err = c.getMeasurementsInfo(currentServer, database, rpName)
-		if err == nil {
-			break
-		}
-
-		if time.Since(startTime).Seconds() > float64(len(c.metaServers))*HttpReqTimeout.Seconds() {
-			break
-		}
-		time.Sleep(errSleep)
-
-		currentServer++
-	}
-	return info, nil
-}
-
-func (c *Client) getMeasurementsInfo(currentServer int, database string, rpName string) ([]byte, error) {
-	callback := &GetMeasurementsInfoCallback{}
-	msg := message.NewMetaMessage(message.GetMeasurementsInfoRequestMessage, &message.GetMeasurementsInfoRequest{
-		DbName: database, RpName: rpName})
-	err := c.SendRPCMsg(currentServer, msg, callback)
-	if err != nil {
-		c.logger.Error("GetMeasurementInfoR SendRPCMsg fail", zap.Error(err))
-		return nil, err
-	}
-	return callback.Data, nil
-}
-
 // Database returns info for the requested database.
 func (c *Client) Database(name string) (*meta2.DatabaseInfo, error) {
 	c.mu.RLock()
@@ -867,10 +965,14 @@ func (c *Client) Databases() map[string]*meta2.DatabaseInfo {
 	return c.cacheData.Databases
 }
 
-func (c *Client) ShowShards() models.Rows {
+func (c *Client) ShowShards(db string, rp string, mst string) models.Rows {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.cacheData.ShowShards()
+	if db == "" && rp == "" && mst == "" {
+		return c.cacheData.ShowShards()
+	} else {
+		return c.cacheData.ShowShardsFromMst(db, rp, mst)
+	}
 }
 
 func (c *Client) ShowShardGroups() models.Rows {
@@ -911,7 +1013,8 @@ func (c *Client) Schema(database string, retentionPolicy string, mst string) (fi
 	if err != nil {
 		return nil, nil, err
 	}
-
+	msti.SchemaLock.RLock()
+	defer msti.SchemaLock.RUnlock()
 	for key := range msti.Schema {
 		if msti.Schema[key] == influx.Field_Type_Tag {
 			dimensions[key] = struct{}{}
@@ -937,7 +1040,24 @@ func (c *Client) UpdateSchema(database string, retentionPolicy string, mst strin
 	return nil
 }
 
-func (c *Client) CreateMeasurement(database, retentionPolicy, mst string, shardKey *meta2.ShardKeyInfo, indexR *influxql.IndexRelation,
+func (c *Client) IsSQLiteEnabled() bool {
+	return c.cacheData.SQLite != nil
+}
+
+func (c *Client) InsertFiles(fileInfos []meta2.FileInfo) error {
+	size := len(fileInfos)
+	if size == 0 {
+		return nil
+	}
+	fileInfosProto := make([]*proto2.FileInfo, size)
+	for i, file := range fileInfos {
+		fileInfosProto[i] = file.Marshal()
+	}
+	cmd := &proto2.InsertFilesCommand{FileInfos: fileInfosProto}
+	return c.retryUntilExec(proto2.Command_InsertFilesCommand, proto2.E_InsertFilesCommand_Command, cmd)
+}
+
+func (c *Client) CreateMeasurement(database, retentionPolicy, mst string, shardKey *meta2.ShardKeyInfo, NumOfShards int32, indexR *influxql.IndexRelation,
 	engineType config.EngineType, colStoreInfo *meta2.ColStoreInfo, schemaInfo []*proto2.FieldSchema, options *meta2.Options) (*meta2.MeasurementInfo, error) {
 	msti, err := c.Measurement(database, retentionPolicy, mst)
 	if msti != nil {
@@ -957,10 +1077,11 @@ func (c *Client) CreateMeasurement(database, retentionPolicy, mst string, shardK
 	}
 
 	cmd := &proto2.CreateMeasurementCommand{
-		DBName:     proto.String(database),
-		RpName:     proto.String(retentionPolicy),
-		Name:       proto.String(mst),
-		EngineType: proto.Uint32(uint32(engineType)),
+		DBName:          proto.String(database),
+		RpName:          proto.String(retentionPolicy),
+		Name:            proto.String(mst),
+		EngineType:      proto.Uint32(uint32(engineType)),
+		InitNumOfShards: proto.Int32(NumOfShards),
 	}
 
 	if shardKey != nil {
@@ -1034,7 +1155,7 @@ func (c *Client) CreateDatabase(name string, enableTagArray bool, replicaN uint3
 		ReplicaNum:     proto.Uint32(replicaN),
 	}
 
-	if options != nil {
+	if options != nil && options.Enabled {
 		cmd.Options = meta2.MarshalObsOptions(options)
 	}
 
@@ -1062,7 +1183,7 @@ func checkAndUpdateReplication(dbReplicaN uint32, rpReplicaN *int) (uint32, *int
 	if dbReplicaN != uint32(*rpReplicaN) {
 		return dbReplicaN, rpReplicaN, errno.NewError(errno.ReplicaNumberNotEqual)
 	}
-	if dbReplicaN > 2 {
+	if dbReplicaN%2 == 0 {
 		return dbReplicaN, rpReplicaN, errno.NewError(errno.ReplicaNumberNotSupport)
 	}
 	if dbReplicaN > 1 && config.GetHaPolicy() != config.Replication {
@@ -1180,6 +1301,124 @@ func (c *Client) MarkRetentionPolicyDelete(database, name string) error {
 	}
 
 	return c.retryUntilExec(proto2.Command_MarkRetentionPolicyDeleteCommand, proto2.E_MarkRetentionPolicyDeleteCommand_Command, cmd)
+}
+
+func (c *Client) RevertRetentionPolicyDelete(database, name string) error {
+	rp, err := c.RetentionPolicy(database, name)
+	if err != nil {
+		return err
+	}
+	if rp == nil || rp.MarkDeleted {
+		return meta2.ErrRetentionPolicyNotFound(name)
+	}
+
+	for i := range rp.ShardGroups {
+		if !rp.ShardGroups[i].Deleted() {
+			continue
+		}
+		err := c.DeleteShardGroup(database, name, rp.ShardGroups[i].ID, meta2.CancelDelete)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *Client) GetExpiredShards() ([]meta2.ExpiredShardInfos, []meta2.ExpiredShardInfos) {
+	t := time.Now().UTC()
+	markDelSgInfos := []meta2.ExpiredShardInfos{}
+	expiredShards := []meta2.ExpiredShardInfos{}
+
+	dataBases := c.Databases()
+	for dbName, db := range dataBases {
+		if db.Options == nil || db.MarkDeleted {
+			continue
+		}
+		obsOptions := db.Options
+		dbPtInfos, err := c.DBPtView(dbName)
+		if err != nil {
+			continue
+		}
+		for rpName, rp := range db.RetentionPolicies {
+			if rp.MarkDeleted {
+				continue
+			}
+			for i := range rp.ShardGroups {
+				// 1.mark the shardGroup deleted
+				if !rp.ShardGroups[i].Deleted() {
+					if rp.Duration != 0 && rp.ShardGroups[i].EndTime.Add(rp.Duration).Before(t) {
+						markDelSgInfos = append(markDelSgInfos, meta2.ExpiredShardInfos{Database: dbName, Policy: rpName, ShardGroupId: rp.ShardGroups[i].ID})
+					}
+					continue
+				}
+				// 2. Deleted: get shardGroupID and shardPath that need to delete
+				if rp.ShardGroups[i].DeletedAt.Add(RetentionDelayedTime).After(t) {
+					continue
+				}
+				shardPaths := []string{}
+				shardIds := []uint64{}
+				for j := range rp.ShardGroups[i].Shards {
+					if rp.ShardGroups[i].Shards[j].MarkDelete {
+						continue
+					}
+					// For online shards, aging operations are performed by their owner node.
+					ptId := rp.ShardGroups[i].Shards[j].Owners[0]
+					if dbPtInfos[ptId].Owner.NodeID != c.nodeID && dbPtInfos[ptId].Status == meta2.Online {
+						continue
+					}
+					logPath := obs.GetShardPath(
+						rp.ShardGroups[i].Shards[j].ID,
+						rp.ShardGroups[i].Shards[j].IndexID,
+						rp.ShardGroups[i].Shards[j].Owners[0],
+						rp.ShardGroups[i].StartTime,
+						rp.ShardGroups[i].EndTime, db.Name, rp.Name)
+					shardPaths = append(shardPaths, logPath)
+					shardIds = append(shardIds, rp.ShardGroups[i].Shards[j].ID)
+				}
+				expiredShards = append(expiredShards, meta2.ExpiredShardInfos{Database: dbName, Policy: rpName, ShardGroupId: rp.ShardGroups[i].ID,
+					ShardIds: shardIds, ShardPaths: shardPaths, ObsOpts: obsOptions})
+			}
+		}
+	}
+	return markDelSgInfos, expiredShards
+}
+
+func (c *Client) GetExpiredIndexes() []meta2.ExpiredIndexInfos {
+	t := time.Now().UTC()
+	expiredIndexes := []meta2.ExpiredIndexInfos{}
+
+	dataBases := c.Databases()
+	for dbName, db := range dataBases {
+		if db.Options == nil || db.MarkDeleted {
+			continue
+		}
+		dbPtInfos, err := c.DBPtView(dbName)
+		if err != nil {
+			continue
+		}
+		for rpName, rp := range db.RetentionPolicies {
+			if rp.MarkDeleted {
+				continue
+			}
+			for i := range rp.IndexGroups {
+				if rp.Duration == 0 || rp.IndexGroups[i].EndTime.Add(rp.Duration+RetentionDelayedTime).After(t) {
+					continue
+				}
+				indexIds := make([]uint64, 0, len(rp.IndexGroups[i].Indexes))
+				for j := range rp.IndexGroups[i].Indexes {
+					// For online shards, aging operations are performed by their owner node.
+					ptId := rp.IndexGroups[i].Indexes[j].Owners[0]
+					if dbPtInfos[ptId].Owner.NodeID != c.nodeID && dbPtInfos[ptId].Status == meta2.Online {
+						continue
+					}
+					indexIds = append(indexIds, rp.IndexGroups[i].Indexes[j].ID)
+				}
+				expiredIndexes = append(expiredIndexes, meta2.ExpiredIndexInfos{Database: dbName, Policy: rpName, IndexGroupID: rp.IndexGroups[i].ID,
+					IndexIDs: indexIds})
+			}
+		}
+	}
+	return expiredIndexes
 }
 
 // CreateRetentionPolicy creates a retention policy on the specified database.
@@ -2233,11 +2472,26 @@ func (c *Client) DeleteIndexGroup(database, policy string, id uint64) error {
 }
 
 // DeleteShardGroup removes a shard group from a database and retention policy by id.
-func (c *Client) DeleteShardGroup(database, policy string, id uint64) error {
+func (c *Client) DeleteShardGroup(database, policy string, id uint64, deleteType int32) error {
 	cmd := &proto2.DeleteShardGroupCommand{
 		Database:     proto.String(database),
 		Policy:       proto.String(policy),
 		ShardGroupID: proto.Uint64(id),
+		DeleteType:   proto.Int32(deleteType),
+	}
+
+	_, err := c.retryExec(proto2.Command_DeleteShardGroupCommand, proto2.E_DeleteShardGroupCommand_Command, cmd)
+	return err
+}
+
+// When delay-deleted, the deletedAt time cannot be updated with the raft playback, so deletedAt is specified by the client.
+func (c *Client) DelayDeleteShardGroup(database, policy string, id uint64, deletedAt time.Time, deleteType int32) error {
+	cmd := &proto2.DeleteShardGroupCommand{
+		Database:     proto.String(database),
+		Policy:       proto.String(policy),
+		ShardGroupID: proto.Uint64(id),
+		DeletedAt:    proto.Int64(deletedAt.UnixNano()),
+		DeleteType:   proto.Int32(deleteType),
 	}
 
 	_, err := c.retryExec(proto2.Command_DeleteShardGroupCommand, proto2.E_DeleteShardGroupCommand_Command, cmd)
@@ -2457,12 +2711,35 @@ func (c *Client) index() uint64 {
 	return c.cacheData.Index
 }
 
+func (c *Client) LocalExec(index uint64, typ proto2.Command_Type, desc *proto.ExtensionDesc, value interface{}) error {
+	c.mu.RLock()
+	if index <= c.cacheData.Index {
+		c.mu.RUnlock()
+		return nil
+	}
+	c.mu.RUnlock()
+	opcmd := &proto2.Command{Type: &typ}
+	if err := proto.SetExtension(opcmd, desc, value); err != nil {
+		panic(err)
+	}
+	if _, ok := applyFunc[typ]; ok {
+		c.waitForIndex(index)
+		return nil
+	} else {
+		c.logger.Info("cannot apply command: %x", zap.Int32("typ", int32(*opcmd.Type)))
+	}
+	return nil
+}
+
 // retryUntilExec will attempt the command on each of the metaservers until it either succeeds or
 // hits the max number of tries
 func (c *Client) retryUntilExec(typ proto2.Command_Type, desc *proto.ExtensionDesc, value interface{}) error {
 	index, err := c.retryExec(typ, desc, value)
 	if err != nil {
 		return err
+	}
+	if c.UseSnapshotV2 {
+		return c.LocalExec(index, typ, desc, value)
 	}
 	c.waitForIndex(index)
 	return nil
@@ -2583,7 +2860,31 @@ func (c *Client) pollForUpdates(role Role) {
 		if idx < data.Index {
 			c.cacheData = data
 			c.updateAuthCache()
-			c.replicaInfoManager.Update(data, c.nodeID)
+			c.replicaInfoManager.Update(data, c.nodeID, role)
+			for len(c.changed) > 0 {
+				notifyC := <-c.changed
+				close(notifyC)
+			}
+		}
+		c.mu.Unlock()
+	}
+}
+
+func (c *Client) pollForUpdatesV2(role Role) {
+	for {
+		preIndex := c.index()
+		err := c.retryUntilSnapshotV2(role, preIndex)
+		if err != nil {
+			// this will only be nil if the client has been closed,
+			// so we can exit out
+			c.logger.Error("client has been closed:", zap.String("err:", err.Error()))
+			return
+		}
+		// update the data and notify of the change
+		c.mu.Lock()
+		if preIndex < c.cacheData.Index {
+			c.updateAuthCache()
+			c.replicaInfoManager.Update(c.cacheData, c.nodeID, role)
 			for len(c.changed) > 0 {
 				notifyC := <-c.changed
 				close(notifyC)
@@ -2598,6 +2899,18 @@ func (c *Client) getNode(currentServer int, writeHost, queryHost, role string) (
 		NodeStartInfo: &meta2.NodeStartInfo{},
 	}
 	msg := message.NewMetaMessage(message.CreateNodeRequestMessage, &message.CreateNodeRequest{WriteHost: writeHost, QueryHost: queryHost, Role: role})
+	err := c.SendRPCMsg(currentServer, msg, callback)
+	if err != nil {
+		return nil, err
+	}
+	return callback.NodeStartInfo, nil
+}
+
+func (c *Client) getSqlNode(httpHost string, gossipHost string, currentServer int) (*meta2.NodeStartInfo, error) {
+	callback := &CreateSqlNodeCallback{
+		NodeStartInfo: &meta2.NodeStartInfo{},
+	}
+	msg := message.NewMetaMessage(message.CreateSqlNodeRequestMessage, &message.CreateSqlNodeRequest{HttpHost: httpHost, GossipHost: gossipHost})
 	err := c.SendRPCMsg(currentServer, msg, callback)
 	if err != nil {
 		return nil, err
@@ -2742,6 +3055,455 @@ func (c *Client) retryUntilSnapshot(role Role, idx uint64) *meta2.Data {
 
 		currentServer++
 	}
+}
+
+func (c *Client) retryUntilSnapshotV2(role Role, idx uint64) error {
+	currentServer := connectedServer
+	for {
+		// get the index to look from and the server to poll
+		c.mu.RLock()
+		// exit if we're closed
+		select {
+		case <-c.closing:
+			c.mu.RUnlock()
+			return nil
+		default:
+			// we're still open, continue on
+		}
+
+		if currentServer >= len(c.metaServers) {
+			currentServer = 0
+		}
+		server := c.metaServers[currentServer]
+		c.mu.RUnlock()
+
+		dataOps, err := c.getDataOps(role, currentServer, idx)
+
+		if err == nil && dataOps == nil {
+			continue
+		} else if err == nil && dataOps.Len() == 0 {
+			return nil
+		} else if err == nil && dataOps.Len() != 0 {
+			if err := c.applyDataOps(dataOps.GetOps(), dataOps.GetIndex(), dataOps.MaxCQChangeID); err != nil {
+				return err
+			}
+			return nil
+		}
+
+		c.logger.Debug("failure getting snapshot from", zap.String("server", server), zap.Error(err))
+		time.Sleep(errSleep)
+
+		currentServer++
+	}
+}
+
+func (c *Client) getDataOps(role Role, currentServer int, index uint64) (*meta2.DataOps, error) {
+	c.logger.Debug("getting snapshot from start")
+
+	callback := &SnapshotV2Callback{}
+	msg := message.NewMetaMessage(message.SnapshotV2RequestMessage, &message.SnapshotV2Request{Role: int(role), Index: index, Id: c.nodeID})
+	err := c.SendRPCMsg(currentServer, msg, callback)
+	if err != nil {
+		return nil, err
+	}
+	c.logger.Debug("getting snapshot from end")
+
+	if len(callback.Data) == 0 {
+		return nil, nil
+	}
+	stat := statistics.NewMetaStatistics()
+	stat.AddSnapshotTotal(1)
+	stat.AddSnapshotDataSize(int64(len(callback.Data)))
+
+	start := time.Now()
+	dataOps := &meta2.DataOps{}
+	if err = dataOps.UnmarshalBinary(callback.Data); err != nil {
+		return nil, err
+	} else {
+		if dataOps.Len() == 0 && dataOps.GetState() == int(meta2.NoClear) {
+			c.mu.Lock()
+			c.cacheData.Index = dataOps.GetIndex()
+			c.cacheData.MaxCQChangeID = dataOps.MaxCQChangeID
+			c.mu.Unlock()
+		} else if dataOps.Len() == 0 && dataOps.GetState() == int(meta2.AllClear) {
+			data := &meta2.Data{}
+			dataPb := dataOps.GetData()
+			data.Unmarshal(dataPb)
+			c.mu.Lock()
+			c.cacheData = data
+			c.mu.Unlock()
+		}
+	}
+	stat.AddSnapshotUnmarshalDuration(time.Since(start).Milliseconds())
+	return dataOps, nil
+}
+
+func (c *Client) applyDataOps(dataOps []string, index uint64, MaxCQChangeID uint64) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.cacheData.Index = index
+	c.cacheData.MaxCQChangeID = MaxCQChangeID
+	for _, op := range dataOps {
+		opcmd := proto2.Command{}
+		if err := proto.Unmarshal(util.Str2bytes(op), &opcmd); err != nil {
+			return err
+		}
+		if handler, ok := applyFunc[*opcmd.Type]; ok {
+			if err := handler(c, &opcmd); err != nil {
+				if errno.Equal(err, errno.ApplyFuncErr) {
+					c.logger.Error("sql apply dataops err", zap.String("msg", err.Error()))
+					continue
+				}
+				return err
+			}
+		} else {
+			panic(fmt.Errorf("cannot apply command: %x", *opcmd.Type))
+		}
+	}
+	return nil
+}
+
+const (
+	autoCreateRetentionPolicyName       = "autogen"
+	autoCreateRetentionPolicyPeriod     = 0
+	autoCreateRetentionPolicyWarmPeriod = 0
+)
+
+func applyCreateDatabase(c *Client, cmd *proto2.Command) error {
+	ext, _ := proto.GetExtension(cmd, proto2.E_CreateDatabaseCommand_Command)
+	v, ok := ext.(*proto2.CreateDatabaseCommand)
+	if !ok {
+		panic(fmt.Errorf("%s is not a CreateDatabaseCommand", ext))
+	}
+
+	var rp *meta2.RetentionPolicyInfo
+	rpi := v.GetRetentionPolicy()
+	repN := v.GetReplicaNum()
+	if repN == 0 {
+		repN = 1
+	}
+	if rpi != nil {
+		rp = &meta2.RetentionPolicyInfo{
+			Name:               rpi.GetName(),
+			ReplicaN:           int(rpi.GetReplicaN()),
+			Duration:           time.Duration(rpi.GetDuration()),
+			ShardGroupDuration: time.Duration(rpi.GetShardGroupDuration()),
+			HotDuration:        time.Duration(rpi.GetHotDuration()),
+			WarmDuration:       time.Duration(rpi.GetWarmDuration()),
+			IndexGroupDuration: time.Duration(rpi.GetIndexGroupDuration())}
+	} else if c.RetentionAutoCreate {
+		// Create a retention policy.
+		rp = meta2.NewRetentionPolicyInfo(autoCreateRetentionPolicyName)
+		rp.ReplicaN = int(repN)
+		rp.Duration = autoCreateRetentionPolicyPeriod
+		rp.WarmDuration = autoCreateRetentionPolicyWarmPeriod
+	}
+	// 1.create db pt view
+	val := &proto2.CreateDbPtViewCommand{
+		DbName:     v.Name,
+		ReplicaNum: v.ReplicaNum,
+	}
+	t := proto2.Command_CreateDbPtViewCommand
+	command := &proto2.Command{Type: &t}
+	if err := proto.SetExtension(command, proto2.E_CreateDbPtViewCommand_Command, val); err != nil {
+		panic(err)
+	}
+	err := c.cacheData.CreateDatabase(v.GetName(), rp, v.GetSki(), v.GetEnableTagArray(), repN, v.GetOptions())
+	if err != nil {
+		return errno.NewError(errno.ApplyFuncErr, "applyCreateDatabase2", err.Error())
+	}
+	return nil
+}
+
+func applyDropDatabase(c *Client, cmd *proto2.Command) error {
+	ext, _ := proto.GetExtension(cmd, proto2.E_DropDatabaseCommand_Command)
+	v, ok := ext.(*proto2.DropDatabaseCommand)
+	if !ok {
+		panic(fmt.Errorf("%s is not a DropDatabaseCommand", ext))
+	}
+	dbi := c.cacheData.Database(v.GetName())
+	if dbi == nil {
+		return nil
+	}
+	c.cacheData.DropDatabase(v.GetName())
+
+	return nil
+}
+
+func applyCreateRetentionPolicy(c *Client, cmd *proto2.Command) error {
+	if err := meta2.ApplyCreateRetentionPolicy(c.cacheData, cmd); err != nil {
+		return errno.NewError(errno.ApplyFuncErr, "applyCreateRetentionPolicy", err.Error())
+	}
+	return nil
+}
+
+func applyDropRetentionPolicy(c *Client, cmd *proto2.Command) error {
+	if err := meta2.ApplyDropRetentionPolicy(c.cacheData, cmd); err != nil {
+		return errno.NewError(errno.ApplyFuncErr, "applyDropRetentionPolicy", err.Error())
+	}
+	return nil
+}
+
+func applySetDefaultRetentionPolicy(c *Client, cmd *proto2.Command) error {
+	return meta2.ApplySetDefaultRetentionPolicy(c.cacheData, cmd)
+}
+
+func applyUpdateRetentionPolicy(c *Client, cmd *proto2.Command) error {
+	return meta2.ApplyUpdateRetentionPolicy(c.cacheData, cmd)
+}
+
+func applyCreateShardGroup(c *Client, cmd *proto2.Command) error {
+	if err := meta2.ApplyCreateShardGroup(c.cacheData, cmd); err != nil {
+		return errno.NewError(errno.ApplyFuncErr, "applyCreateShardGroup", err.Error())
+	}
+	return nil
+}
+
+func applyDeleteShardGroup(c *Client, cmd *proto2.Command) error {
+	return meta2.ApplyDeleteShardGroup(c.cacheData, cmd)
+}
+
+func applyCreateSubscription(c *Client, cmd *proto2.Command) error {
+	return meta2.ApplyCreateSubscription(c.cacheData, cmd)
+}
+
+func applyDropSubscription(c *Client, cmd *proto2.Command) error {
+	return meta2.ApplyDropSubscription(c.cacheData, cmd)
+}
+
+func applyCreateUser(c *Client, cmd *proto2.Command) error {
+	return meta2.ApplyCreateUser(c.cacheData, cmd)
+}
+
+func applyDropUser(c *Client, cmd *proto2.Command) error {
+	return meta2.ApplyDropUser(c.cacheData, cmd)
+}
+
+func applyUpdateUser(c *Client, cmd *proto2.Command) error {
+	return meta2.ApplyUpdateUser(c.cacheData, cmd)
+}
+
+func applySetPrivilege(c *Client, cmd *proto2.Command) error {
+	return meta2.ApplySetPrivilege(c.cacheData, cmd)
+}
+
+func applySetAdminPrivilege(c *Client, cmd *proto2.Command) error {
+	return meta2.ApplySetAdminPrivilege(c.cacheData, cmd)
+}
+
+func applySetData(c *Client, cmd *proto2.Command) error {
+	ext, _ := proto.GetExtension(cmd, proto2.E_SetDataCommand_Command)
+	v, ok := ext.(*proto2.SetDataCommand)
+	if !ok {
+		c.logger.Error("applySetData err")
+	}
+	// Overwrite data.
+	c.cacheData = &meta2.Data{}
+	c.cacheData.Unmarshal(v.GetData())
+
+	return nil
+}
+
+func applyCreateMetaNode(c *Client, cmd *proto2.Command) error {
+	return meta2.ApplyCreateMetaNode(c.cacheData, cmd)
+}
+
+func applySetMetaNode(c *Client, cmd *proto2.Command) error {
+	return meta2.ApplySetMetaNode(c.cacheData, cmd)
+}
+
+func applyDeleteMetaNode(c *Client, cmd *proto2.Command) error {
+	return meta2.ApplyDeleteMetaNode(c.cacheData, cmd)
+}
+
+func applyCreateDataNode(c *Client, cmd *proto2.Command) error {
+	return meta2.ApplyCreateDataNode(c.cacheData, cmd)
+}
+
+func applyDeleteDataNode(c *Client, cmd *proto2.Command) error {
+	return meta2.ApplyDeleteDataNode(c.cacheData, cmd)
+}
+
+func applyMarkDatabaseDelete(c *Client, cmd *proto2.Command) error {
+	if err := meta2.ApplyMarkDatabaseDelete(c.cacheData, cmd); err != nil {
+		return errno.NewError(errno.ApplyFuncErr, "applyMarkDatabaseDelete", err.Error())
+	}
+	return nil
+}
+
+func applyCreateSqlNode(c *Client, cmd *proto2.Command) error {
+	ext, _ := proto.GetExtension(cmd, proto2.E_CreateSqlNodeCommand_Command)
+	v, ok := ext.(*proto2.CreateSqlNodeCommand)
+	if !ok {
+		c.logger.Error("applyCreateSqlNode err")
+	}
+	sqlNode := c.cacheData.SqlNodeByHttpHost(v.GetHTTPAddr())
+	if sqlNode != nil {
+		c.cacheData.MaxConnID++
+		sqlNode.ConnID = c.cacheData.MaxConnID
+		return nil
+	}
+
+	_, err := c.cacheData.CreateSqlNode(v.GetHTTPAddr(), v.GetGossipAddr())
+	if err != nil {
+		c.logger.Error("applyCreateSqlNode err", zap.Error(err))
+	} else {
+		c.logger.Info("applyCreateSqlNode success")
+	}
+	return err
+}
+
+func applyMarkRetentionPolicyDelete(c *Client, cmd *proto2.Command) error {
+	return meta2.ApplyMarkRetentionPolicyDelete(c.cacheData, cmd)
+}
+
+func applyCreateMeasurement(c *Client, cmd *proto2.Command) error {
+	if err := meta2.ApplyCreateMeasurement(c.cacheData, cmd); err != nil {
+		return errno.NewError(errno.ApplyFuncErr, "applyCreateMeasurement", err.Error())
+	}
+	return nil
+}
+
+func applyReSharding(c *Client, cmd *proto2.Command) error {
+	return meta2.ApplyReSharding(c.cacheData, cmd)
+}
+
+func applyUpdateSchema(c *Client, cmd *proto2.Command) error {
+	if err := meta2.ApplyUpdateSchema(c.cacheData, cmd); err != nil {
+		return errno.NewError(errno.ApplyFuncErr, "applyUpdateSchema", err.Error())
+	}
+	return nil
+}
+
+func applyAlterShardKey(c *Client, cmd *proto2.Command) error {
+	return meta2.ApplyAlterShardKey(c.cacheData, cmd)
+}
+
+func applyPruneGroups(c *Client, cmd *proto2.Command) error {
+	return meta2.ApplyPruneGroups(c.cacheData, cmd)
+}
+
+func applyMarkMeasurementDelete(c *Client, cmd *proto2.Command) error {
+	return meta2.ApplyMarkMeasurementDelete(c.cacheData, cmd)
+}
+
+func applyDropMeasurement(c *Client, cmd *proto2.Command) error {
+	return meta2.ApplyDropMeasurement(c.cacheData, cmd)
+}
+
+func applyDeleteIndexGroup(c *Client, cmd *proto2.Command) error {
+	return meta2.ApplyDeleteIndexGroup(c.cacheData, cmd)
+}
+
+func applyUpdateShardInfoTier(c *Client, cmd *proto2.Command) error {
+	return meta2.ApplyUpdateShardInfoTier(c.cacheData, cmd)
+}
+
+func applyUpdateNodeStatus(c *Client, cmd *proto2.Command) error {
+	return meta2.ApplyUpdateNodeStatus(c.cacheData, cmd)
+}
+
+func applyUpdatePtInfo(c *Client, cmd *proto2.Command) error {
+	return meta2.ApplyUpdatePtInfo(c.cacheData, cmd)
+}
+
+func applyCreateDownSample(c *Client, cmd *proto2.Command) error {
+	return meta2.ApplyCreateDownSample(c.cacheData, cmd)
+}
+
+func applyDropDownSample(c *Client, cmd *proto2.Command) error {
+	if c.cacheData.Databases != nil {
+		return meta2.ApplyDropDownSample(c.cacheData, cmd)
+	}
+	return nil
+}
+
+func applyUpdateSqlNodeStatus(c *Client, cmd *proto2.Command) error {
+	ext, _ := proto.GetExtension(cmd, proto2.E_UpdateSqlNodeStatusCommand_Command)
+	v, ok := ext.(*proto2.UpdateSqlNodeStatusCommand)
+	if !ok {
+		panic(fmt.Errorf("%s is not a UpdateSqlNodeStatusCommand", ext))
+	}
+	return c.cacheData.UpdateSqlNodeStatus(v.GetID(), v.GetStatus(), v.GetLtime(), v.GetGossipAddr())
+}
+
+func applyCreateDbPtView(c *Client, cmd *proto2.Command) error {
+	if err := meta2.ApplyCreateDbPtViewCommand(c.cacheData, cmd); err != nil {
+		return errno.NewError(errno.ApplyFuncErr, "applyCreateDbPtView", err.Error())
+	}
+	return nil
+}
+
+func applyUpdateShardDownSampleInfo(c *Client, cmd *proto2.Command) error {
+	return meta2.ApplyUpdateShardDownSampleInfo(c.cacheData, cmd)
+}
+
+func applyCreateStream(c *Client, cmd *proto2.Command) error {
+	return meta2.ApplyCreateStream(c.cacheData, cmd)
+}
+
+func applyDropStream(c *Client, cmd *proto2.Command) error {
+	return meta2.ApplyDropStream(c.cacheData, cmd)
+}
+
+func applyExpandGroups(c *Client, cmd *proto2.Command) error {
+	c.cacheData.ExpandGroups()
+	return nil
+}
+
+func applyUpdatePtVersion(c *Client, cmd *proto2.Command) error {
+	return meta2.ApplyUpdatePtVersion(c.cacheData, cmd)
+}
+
+func applyRegisterQueryIDOffset(c *Client, cmd *proto2.Command) error {
+	return meta2.ApplyRegisterQueryIDOffset(c.cacheData, cmd)
+}
+
+func applyCreateContinuousQuery(c *Client, cmd *proto2.Command) error {
+	ext, _ := proto.GetExtension(cmd, proto2.E_CreateContinuousQueryCommand_Command)
+	v, ok := ext.(*proto2.CreateContinuousQueryCommand)
+	if !ok {
+		panic(fmt.Errorf("%s is not a CreateContinuousQueryCommand", ext))
+	}
+
+	if _, err := c.cacheData.CreateContinuousQueryBase(v.GetDatabase(), v.GetName(), v.GetQuery()); err != nil {
+		return err
+	}
+	return nil
+}
+
+func applyContinuousQueryReport(c *Client, cmd *proto2.Command) error {
+	return meta2.ApplyContinuousQueryReport(c.cacheData, cmd)
+}
+
+func applyDropContinuousQuery(c *Client, cmd *proto2.Command) error {
+	ext, _ := proto.GetExtension(cmd, proto2.E_DropContinuousQueryCommand_Command)
+	v, ok := ext.(*proto2.DropContinuousQueryCommand)
+	if !ok {
+		panic(fmt.Errorf("%s is not a DropContinuousQueryCommand", ext))
+	}
+	changed, err := c.cacheData.DropContinuousQueryBase(v.GetName(), v.GetDatabase())
+	if err != nil || !changed {
+		return err
+	}
+
+	return nil
+}
+
+func applySetNodeSegregateStatus(c *Client, cmd *proto2.Command) error {
+	return meta2.ApplySetNodeSegregateStatus(c.cacheData, cmd)
+}
+
+func applyRemoveNode(c *Client, cmd *proto2.Command) error {
+	return meta2.ApplyRemoveNode(c.cacheData, cmd)
+}
+
+func applyUpdateReplication(c *Client, cmd *proto2.Command) error {
+	return meta2.ApplyUpdateReplication(c.cacheData, cmd)
+}
+
+func applyUpdateMeasurement(c *Client, cmd *proto2.Command) error {
+	return meta2.ApplyUpdateMeasurement(c.cacheData, cmd)
 }
 
 func (c *Client) RetryDownSampleInfo() ([]byte, error) {
@@ -2891,7 +3653,7 @@ func (c *Client) MetaServers() []string {
 	return c.metaServers
 }
 
-func (c *Client) InitMetaClient(joinPeers []string, tlsEn bool, storageNodeInfo *StorageNodeInfo, role string) (uint64, uint64, uint64, error) {
+func (c *Client) InitMetaClient(joinPeers []string, tlsEn bool, storageNodeInfo *StorageNodeInfo, sqlNodeInfo *SqlNodeInfo, role string, t Role) (uint64, uint64, uint64, error) {
 	// It's the first time starting up and we need to either join
 	// the cluster or initialize this node as the first member
 	if len(joinPeers) == 0 {
@@ -2909,6 +3671,9 @@ func (c *Client) InitMetaClient(joinPeers []string, tlsEn bool, storageNodeInfo 
 	var connId uint64
 	if storageNodeInfo != nil {
 		nid, clock, connId, err = c.CreateDataNode(storageNodeInfo.InsertAddr, storageNodeInfo.SelectAddr, role)
+	}
+	if t == SQL && storageNodeInfo == nil && sqlNodeInfo != nil && c.UseSnapshotV2 {
+		nid, clock, connId, err = c.CreateSqlNode(sqlNodeInfo.HttpAddr, sqlNodeInfo.GossipAddr)
 	}
 
 	return nid, clock, connId, err
@@ -3211,63 +3976,44 @@ func (c *Client) CreateStreamPolicy(info *meta2.StreamInfo) error {
 	return nil
 }
 
-func (c *Client) GetStreamInfosStore() map[string]*meta2.StreamInfo {
-	return c.RetryGetStreamInfosStore()
-}
-
-func (c *Client) RetryGetStreamInfosStore() map[string]*meta2.StreamInfo {
-	startTime := time.Now()
-	currentServer := connectedServer
-	var infos map[string]*meta2.StreamInfo
-	for {
-		c.mu.RLock()
-		select {
-		case <-c.closing:
-			c.mu.RUnlock()
-			return nil
-		default:
-
-		}
-
-		if currentServer >= len(c.metaServers) {
-			currentServer = 0
-		}
-		c.mu.RUnlock()
-		infos = c.GetStreamInfosForStore(currentServer)
-		if infos != nil {
-			break
-		}
-
-		if time.Since(startTime).Seconds() > float64(len(c.metaServers))*HttpReqTimeout.Seconds() {
-			break
-		}
-		time.Sleep(errSleep)
-
-		currentServer++
+func (c *Client) CreateStreamMeasurement(info *meta2.StreamInfo, src, dest *influxql.Measurement, stmt *influxql.SelectStatement) error {
+	_, err := c.Measurement(dest.Database, dest.RetentionPolicy, dest.Name)
+	if err == nil || err != meta2.ErrMeasurementNotFound {
+		return err
 	}
-	return infos
-}
 
-func (c *Client) GetStreamInfosForStore(currentServer int) map[string]*meta2.StreamInfo {
-	callback := &GetStreamInfoCallback{}
-	msg := message.NewMetaMessage(message.GetStreamInfoRequestMessage, &message.GetStreamInfoRequest{Body: nil})
-	err := c.SendRPCMsg(currentServer, msg, callback)
+	srcInfo, err := c.Measurement(src.Database, src.RetentionPolicy, src.Name)
 	if err != nil {
-		c.logger.Error("GetStreamInfosForStore SendRPCMsg fail", zap.Error(err))
-		return nil
+		return err
 	}
-	pb := &proto2.StreamInfos{}
-	err = proto.Unmarshal(callback.Data, pb)
+	var schemaInfo []*proto2.FieldSchema
+	var colStoreInfo *meta2.ColStoreInfo
+	if srcInfo.EngineType == config.COLUMNSTORE {
+		var compactType string
+		if config.IsLogKeeper() {
+			compactType = "block"
+		}
+		keys := append(info.Dims, "time")
+		colStoreInfo = meta2.NewColStoreInfo(keys, keys, nil, 0, compactType)
+		tags := map[string]int32{}
+		for _, v := range info.Dims {
+			tags[v] = influx.Field_Type_Tag
+		}
+		fields := map[string]int32{}
+		for _, v := range info.Calls {
+			fields[v.Alias] = influx.Field_Type_Float
+		}
+		schemaInfo = meta2.NewSchemaInfo(tags, fields)
+	}
+	var shardKeyInfo *meta2.ShardKeyInfo
+	if len(srcInfo.ShardKeys) > 0 {
+		shardKeyInfo = &srcInfo.ShardKeys[0]
+	}
+	_, err = c.CreateMeasurement(dest.Database, dest.RetentionPolicy, dest.Name, shardKeyInfo, srcInfo.InitNumOfShards, nil, srcInfo.EngineType, colStoreInfo, schemaInfo, nil)
 	if err != nil {
-		return nil
+		return err
 	}
-	metaInfos := make(map[string]*meta2.StreamInfo)
-	for _, v := range pb.GetInfos() {
-		s := &meta2.StreamInfo{}
-		s.Unmarshal(v)
-		metaInfos[s.Name] = s
-	}
-	return metaInfos
+	return c.UpdateStreamMstSchema(dest.Database, dest.RetentionPolicy, dest.Name, stmt)
 }
 
 func (c *Client) ShowStreams(database string, showAll bool) (models.Rows, error) {

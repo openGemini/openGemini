@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/openGemini/openGemini/lib/fileops"
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -162,4 +163,36 @@ func TestPrimaryKeyWriterMetaDataBlocks(t *testing.T) {
 		require.Equal(t, err, "MetaDataBlocks not implement for indexWriter")
 	}()
 	fw.MetaDataBlocks(nil)
+}
+
+func TestIndexWriter(t *testing.T) {
+	testCompDir := t.TempDir()
+	filePath := filepath.Join(testCompDir, "chunkBuilder.test")
+	_ = fileops.MkdirAll(testCompDir, 0755)
+	defer func() {
+		_ = fileops.Remove(filePath)
+	}()
+
+	data := []byte("write bloomfilter test")
+	lockPath := ""
+	indexWriter, err := NewIndexWriter(&lockPath, filePath)
+	if err != nil {
+		t.Fatalf("NewIndexWriter error: %+v", err)
+	}
+	defer indexWriter.Reset()
+	err = indexWriter.WriteData(data)
+	if err != nil {
+		t.Fatalf("write data error: %+v", err)
+	}
+}
+
+func TestAppendSecondaryIndexSuffix(t *testing.T) {
+	dataPath := "0000-0000-0001"
+	fieldName := "text"
+	for i := 0; i < TextIndexMax; i++ {
+		indexFileName := AppendSecondaryIndexSuffix(dataPath, fieldName, index.Text, i)
+		if len(indexFileName) == 0 {
+			t.Fatalf("get secondary index suffix failed: %d", i)
+		}
+	}
 }

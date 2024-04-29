@@ -94,8 +94,8 @@ func NewAssignEvent(pt *meta.DbPtInfo, targetId uint64, aliveConnId uint64, isUs
 }
 
 func (e *AssignEvent) String() string {
-	return fmt.Sprintf("event type: %v, eventId: %s, opId: %d, currState: %v, preState: %v, retryNum: %d",
-		e.eventType, e.eventId, e.operateId, e.curState, e.preState, e.retryNum)
+	return fmt.Sprintf("event type:%s, eventId:%s, opId:%d, currState:%s, preState:%s, dst:%d, retryNum:%d",
+		e.eventType.String(), e.eventId, e.operateId, e.curState.String(), e.preState.String(), e.dst, e.retryNum)
 }
 
 func (e *AssignEvent) marshalEvent() *mproto.MigrateEventInfo {
