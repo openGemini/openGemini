@@ -2124,35 +2124,3 @@ func BooleanSlidingWindowMergeFunc(prevWindow, currWindow *BooleanSlidingWindow,
 		fpm(prevWindow.points[i], currWindow.points[i])
 	}
 }
-
-func FloatFrontDiffFunc(prev, curr float64) float64 {
-	return prev - curr
-}
-
-func FloatBehindDiffFunc(prev, curr float64) float64 {
-	return curr - prev
-}
-
-func FloatAbsoluteDiffFunc(prev, curr float64) float64 {
-	res := prev - curr
-	if res >= 0 {
-		return res
-	}
-	return -res
-}
-
-func IntegerFrontDiffFunc(prev, curr int64) int64 {
-	return prev - curr
-}
-
-func IntegerBehindDiffFunc(prev, curr int64) int64 {
-	return curr - prev
-}
-
-func IntegerAbsoluteDiffFunc(prev, curr int64) int64 {
-	res := prev - curr
-	if res >= 0 {
-		return res
-	}
-	return -res
-}

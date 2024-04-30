@@ -45,3 +45,19 @@ func BottomCmpByTimeReduce[T util.NumberOnly](a, b *PointItem[T]) bool {
 	}
 	return a.value < b.value
 }
+
+func FrontDiffFunc[T util.NumberOnly](prev, curr T) T {
+	return prev - curr
+}
+
+func BehindDiffFunc[T util.NumberOnly](prev, curr T) T {
+	return curr - prev
+}
+
+func AbsoluteDiffFunc[T util.NumberOnly](prev, curr T) T {
+	res := prev - curr
+	if res >= 0 {
+		return res
+	}
+	return -res
+}

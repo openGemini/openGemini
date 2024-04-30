@@ -746,25 +746,25 @@ func NewDifferenceRoutineImpl(inRowDataType, outRowDataType hybridqp.RowDataType
 	case influxql.Float:
 		if calDirection == "front" {
 			return NewRoutineImpl(NewFloatColFloatTransIterator(isSingleCall, inOrdinal, outOrdinal, outRowDataType,
-				NewFloatDifferenceItem(isNonNegative, FloatFrontDiffFunc)), inOrdinal, outOrdinal), nil
+				NewFloatDifferenceItem(isNonNegative, FrontDiffFunc[float64])), inOrdinal, outOrdinal), nil
 		}
 		if calDirection == "absolute" {
 			return NewRoutineImpl(NewFloatColFloatTransIterator(isSingleCall, inOrdinal, outOrdinal, outRowDataType,
-				NewFloatDifferenceItem(isNonNegative, FloatAbsoluteDiffFunc)), inOrdinal, outOrdinal), nil
+				NewFloatDifferenceItem(isNonNegative, AbsoluteDiffFunc[float64])), inOrdinal, outOrdinal), nil
 		}
 		return NewRoutineImpl(NewFloatColFloatTransIterator(isSingleCall, inOrdinal, outOrdinal, outRowDataType,
-			NewFloatDifferenceItem(isNonNegative, FloatBehindDiffFunc)), inOrdinal, outOrdinal), nil
+			NewFloatDifferenceItem(isNonNegative, BehindDiffFunc[float64])), inOrdinal, outOrdinal), nil
 	case influxql.Integer:
 		if calDirection == "front" {
 			return NewRoutineImpl(NewIntegerColIntegerTransIterator(isSingleCall, inOrdinal, outOrdinal, outRowDataType,
-				NewIntegerDifferenceItem(isNonNegative, IntegerFrontDiffFunc)), inOrdinal, outOrdinal), nil
+				NewIntegerDifferenceItem(isNonNegative, FrontDiffFunc[int64])), inOrdinal, outOrdinal), nil
 		}
 		if calDirection == "absolute" {
 			return NewRoutineImpl(NewIntegerColIntegerTransIterator(isSingleCall, inOrdinal, outOrdinal, outRowDataType,
-				NewIntegerDifferenceItem(isNonNegative, IntegerAbsoluteDiffFunc)), inOrdinal, outOrdinal), nil
+				NewIntegerDifferenceItem(isNonNegative, AbsoluteDiffFunc[int64])), inOrdinal, outOrdinal), nil
 		}
 		return NewRoutineImpl(NewIntegerColIntegerTransIterator(isSingleCall, inOrdinal, outOrdinal, outRowDataType,
-			NewIntegerDifferenceItem(isNonNegative, IntegerBehindDiffFunc)), inOrdinal, outOrdinal), nil
+			NewIntegerDifferenceItem(isNonNegative, BehindDiffFunc[int64])), inOrdinal, outOrdinal), nil
 	default:
 		return nil, errno.NewError(errno.UnsupportedDataType, "difference", dataType.String())
 	}
