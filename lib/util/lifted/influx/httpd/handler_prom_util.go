@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -351,6 +352,7 @@ func unmarshalPromTags(dst influx.PointTags, ts prompb2.TimeSeries) (influx.Poin
 		dst[i].Key = *(*string)(unsafe.Pointer(&label.Name))
 		dst[i].Value = *(*string)(unsafe.Pointer(&label.Value))
 	}
+	sort.Sort(&dst)
 	return dst, measurement
 }
 
