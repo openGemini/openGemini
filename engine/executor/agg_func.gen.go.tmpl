@@ -1188,24 +1188,5 @@ func {{.Name}}SlidingWindowMergeFunc(prevWindow, currWindow *{{.Name}}SlidingWin
 {{- end}}
 {{end}}
 
-{{range .}}
-{{- if and (ne .Name "String") (ne .Name "Boolean")}}
-func {{.Name}}FrontDiffFunc(prev, curr {{.Type}}) {{.Type}} {
-	return prev - curr
-}
-
-func {{.Name}}BehindDiffFunc(prev, curr {{.Type}}) {{.Type}} {
-	return curr - prev
-}
-
-func {{.Name}}AbsoluteDiffFunc(prev, curr {{.Type}}) {{.Type}} {
-	res := prev - curr
-	if res >= 0 {
-		return res
-	}
-	return -res
-}
-{{- end}}
-{{end}}
 
 
