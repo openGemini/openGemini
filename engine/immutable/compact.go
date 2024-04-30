@@ -20,7 +20,6 @@ import (
 	"container/heap"
 	"errors"
 	"fmt"
-	"math"
 	"runtime/debug"
 	"sync"
 	"sync/atomic"
@@ -388,23 +387,6 @@ func (m *MmsTables) SetAddFunc(addFunc func(int64)) {
 	m.addFunc = addFunc
 }
 
-func (m *MmsTables) GetLastFlushTimeBySid(measurement string, sid uint64) int64 {
-	seq := m.Sequencer()
-	defer seq.UnRef()
-
-	if seq.isLoading {
-		return math.MaxInt64
-	}
-
-	if seq.isFree {
-		m.ReloadSequencer(seq, true)
-		return math.MaxInt64
-	}
-
-	lastFlushTime, _ := seq.Get(measurement, sid)
-	return lastFlushTime
-}
-
 func (m *MmsTables) GetRowCountsBySid(measurement string, sid uint64) (int64, error) {
 	seq := m.Sequencer()
 	m.ReloadSequencer(seq, false)
@@ -417,6 +399,14 @@ func (m *MmsTables) AddRowCountsBySid(measurement string, sid uint64, rowCounts 
 	seq := m.Sequencer()
 	seq.AddRowCounts(measurement, sid, rowCounts)
 	seq.UnRef()
+}
+
+func (m *MmsTables) LoadSequencer() {
+	if !m.sequencer.isFree || m.sequencer.isLoading {
+		return
+	}
+
+	m.ReloadSequencer(m.sequencer, true)
 }
 
 func (m *MmsTables) ReloadSequencer(seq *Sequencer, async bool) {
