@@ -85,7 +85,11 @@ func (t *tsMemTableImpl) FlushChunks(table *MemTable, dataPath, msName, _, _ str
 	hasOrderFile := tbStore.GetTableFileNum(msName, true) > 0
 
 	if hasOrderFile {
-		mmsIdTime = tbStore.Sequencer().GetMmsIdTime(msName)
+		seq := tbStore.Sequencer()
+		defer func() {
+			seq.UnRef()
+		}()
+		mmsIdTime = seq.GetMmsIdTime(msName)
 	}
 
 	for i := range sids {
