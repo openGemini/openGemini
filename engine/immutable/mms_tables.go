@@ -76,7 +76,7 @@ type TablesStore interface {
 	LevelCompact(level uint16, shid uint64) error
 	FullCompact(shid uint64) error
 	SetAddFunc(addFunc func(int64))
-	GetLastFlushTimeBySid(measurement string, sid uint64) int64
+	LoadSequencer()
 	GetRowCountsBySid(measurement string, sid uint64) (int64, error)
 	AddRowCountsBySid(measurement string, sid uint64, rowCounts int64)
 	GetOutOfOrderFileNum() int

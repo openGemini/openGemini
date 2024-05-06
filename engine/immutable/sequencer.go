@@ -231,10 +231,15 @@ func (s *Sequencer) DelMmsIdTime(name string) {
 
 func (s *Sequencer) GetMmsIdTime(name string) *MmsIdTime {
 	s.mu.RLock()
-	mmsIdTime := s.mmsIdTime[name]
-	s.mu.RUnlock()
+	defer func() {
+		s.mu.RUnlock()
+	}()
 
-	return mmsIdTime
+	if s.isFree || s.isLoading {
+		return nil
+	}
+
+	return s.mmsIdTime[name]
 }
 
 // IdTimePairs If you change the order of the elements in the structure,

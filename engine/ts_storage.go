@@ -42,6 +42,7 @@ type tsstoreImpl struct {
 func (storage *tsstoreImpl) WriteRows(s *shard, mw *mstWriteCtx) error {
 	mmPoints := mw.getMstMap()
 	mw.initWriteRowsCtx(s.addRowCountsBySid, nil)
+	s.immTables.LoadSequencer()
 	return s.activeTbl.MTable.WriteRows(s.activeTbl, mmPoints, mw.writeRowsCtx)
 }
 
