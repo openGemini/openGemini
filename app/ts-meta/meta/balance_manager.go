@@ -84,7 +84,7 @@ func (b *BalanceManager) balanceIfNeededEx() {
 		for _, e := range events {
 			err := globalService.msm.executeEvent(e)
 			if err != nil {
-				logger.GetLogger().Error("[balancer] DefaultBalanceAlgoVer failed", zap.Any("event", e))
+				logger.GetLogger().Error("[balancer] DefaultBalanceAlgoVer failed", zap.Any("event", e), zap.Error(err))
 			}
 		}
 
