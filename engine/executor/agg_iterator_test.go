@@ -17,6 +17,7 @@ limitations under the License.
 package executor
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
@@ -248,4 +249,18 @@ func TestSampleItem_AppendForAux(t *testing.T) {
 			t.Fatal("not expect, index", i)
 		}
 	}
+}
+
+func TestStringPoint(t *testing.T) {
+	sp := newStringPoint()
+	sp.Set(0, 0, "string_test")
+
+	spNew := newStringPoint()
+	spNew.Assign(sp)
+
+	if bytes.Compare(sp.value, spNew.value) != 0 {
+		t.Fatal("not expect", "value1", sp.value, "value2", spNew.value)
+	}
+
+	spNew.Reset()
 }

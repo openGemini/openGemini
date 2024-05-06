@@ -34,7 +34,7 @@ func MinPromReduce(c Chunk, ordinal, start, end int) (int, float64, bool) {
 	return start, minValue, false
 }
 
-func MinPromMerge(prevPoint, currPoint *FloatPoint) {
+func MinPromMerge(prevPoint, currPoint *Point[float64]) {
 	if prevPoint.value > currPoint.value || math.IsNaN(prevPoint.value) {
 		prevPoint.Assign(currPoint)
 	}
@@ -51,7 +51,7 @@ func MaxPromReduce(c Chunk, ordinal, start, end int) (int, float64, bool) {
 	return start, maxValue, false
 }
 
-func MaxPromMerge(prevPoint, currPoint *FloatPoint) {
+func MaxPromMerge(prevPoint, currPoint *Point[float64]) {
 	if prevPoint.value < currPoint.value || math.IsNaN(prevPoint.value) {
 		prevPoint.Assign(currPoint)
 	}
@@ -62,7 +62,7 @@ func FloatCountPromReduce(c Chunk, ordinal, start, end int) (int, float64, bool)
 	return start, count, count == 0
 }
 
-func FloatCountPromMerge(prevPoint, currPoint *FloatPoint) {
+func FloatCountPromMerge(prevPoint, currPoint *Point[float64]) {
 	prevPoint.value += currPoint.value
 }
 
