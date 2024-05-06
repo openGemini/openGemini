@@ -24,7 +24,7 @@ import (
 
 func (data *Data) CheckCanMoveDb(db string) error {
 	if data.Database(db) == nil || data.Database(db).MarkDeleted {
-		return errno.NewError(errno.DatabaseNotFound)
+		return errno.NewError(errno.DatabaseNotFound, db)
 	}
 
 	for _, rp := range data.Database(db).RetentionPolicies {
