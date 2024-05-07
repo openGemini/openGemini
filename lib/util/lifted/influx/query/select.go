@@ -424,21 +424,6 @@ func (opt *ProcessorOptions) IsPromQuery() bool {
 	return opt.PromQuery
 }
 
-func (opt *ProcessorOptions) SetDims(source influxql.Source) {
-	switch s := source.(type) {
-	case *influxql.SubQuery:
-		for _, dim := range s.Statement.Dimensions {
-			if d, ok := dim.Expr.(*influxql.VarRef); ok {
-				if ContainDim(opt.Dimensions, d.Val) {
-					opt.Dimensions = append(opt.Dimensions, d.Val)
-				}
-			}
-		}
-	}
-
-	sort.Strings(opt.Dimensions)
-}
-
 func (opt *ProcessorOptions) GetPromStep() time.Duration {
 	return opt.Step
 }

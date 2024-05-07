@@ -69,5 +69,4 @@ type Options interface {
 	GetPromQueryOffset() time.Duration
 	IsRangeVectorSelector() bool
 	IsInstantVectorSelector() bool
-	SetDims(source influxql.Source)
 }
