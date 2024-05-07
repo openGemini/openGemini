@@ -2931,6 +2931,255 @@ func TestStreamAggregateTransformIrate(t *testing.T) {
 	)
 }
 
+func buildHistogramRowDataType() hybridqp.RowDataType {
+	schema := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "value", Type: influxql.Float},
+	)
+	return schema
+}
+
+func buildHistogramQuantileRowDataType() hybridqp.RowDataType {
+	schema := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "histogram_quantile(\"value\")", Type: influxql.Float},
+	)
+	return schema
+}
+
+func buildHistogramInChunk(floatValues []float64) []executor.Chunk {
+	inChunks := make([]executor.Chunk, 0, 2)
+	rowDataType := buildHistogramRowDataType()
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	// first chunk
+	inCk1 := b.NewChunk("mst")
+	inCk1.AppendTagsAndIndexes(
+		[]executor.ChunkTags{
+			*ParseChunkTags("job=prometheus,le=+Inf"), *ParseChunkTags("job=prometheus,le=0.1"),
+			*ParseChunkTags("job=prometheus,le=0.2"), *ParseChunkTags("job=prometheus,le=0.4"),
+			*ParseChunkTags("job=prometheus,le=1"), *ParseChunkTags("job=prometheus,le=120"),
+			*ParseChunkTags("job=prometheus,le=20"), *ParseChunkTags("job=prometheus,le=3"),
+			*ParseChunkTags("job=prometheus,le=60"), *ParseChunkTags("job=prometheus,le=8"),
+		},
+		[]int{0, 6, 12, 18, 24, 30, 36, 42, 48, 54})
+
+	intervalIndex := make([]int, 0, 60)
+	for i := 0; i < 60; i++ {
+		intervalIndex = append(intervalIndex, i)
+	}
+
+	inCk1.AppendIntervalIndexes(intervalIndex)
+
+	times := make([]int64, 0, 60)
+	for i := 0; i < 10; i++ {
+		var initTime int64 = 1713768282462000000
+		for j := 0; j < 6; j++ {
+			times = append(times, initTime+15*int64(time.Second)*int64(j))
+		}
+	}
+	inCk1.AppendTimes(times)
+
+	inCk1.Column(0).AppendFloatValues(floatValues)
+	inCk1.Column(0).AppendManyNotNil(60)
+
+	inChunks = append(inChunks, inCk1)
+	return inChunks
+}
+
+func buildHistogramDstChunk(res float64) []executor.Chunk {
+	dstChunks := make([]executor.Chunk, 0, 2)
+	rowDataType := buildHistogramRowDataType()
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	// first chunk
+	inCk1 := b.NewChunk("mst")
+	inCk1.AppendTagsAndIndexes(
+		[]executor.ChunkTags{
+			*ParseChunkTags("job=prometheus"),
+		},
+		[]int{0})
+
+	intervalIndex := make([]int, 0, 6)
+	for i := 0; i < 6; i++ {
+		intervalIndex = append(intervalIndex, i)
+	}
+
+	inCk1.AppendIntervalIndexes(intervalIndex)
+
+	times := make([]int64, 0, 6)
+	var initTime int64 = 1713768282462000000
+	for j := 0; j < 6; j++ {
+		times = append(times, initTime+15*int64(time.Second)*int64(j))
+	}
+	inCk1.AppendTimes(times)
+
+	floatValues := make([]float64, 0, 6)
+	for i := 0; i < 6; i++ {
+		floatValues = append(floatValues, res)
+	}
+	inCk1.Column(0).AppendFloatValues(floatValues)
+	inCk1.Column(0).AppendManyNotNil(6)
+
+	dstChunks = append(dstChunks, inCk1)
+	return dstChunks
+}
+
+func TestStreamAggregateTransformHistogram(t *testing.T) {
+	floatValues := make([]float64, 0, 60)
+	for i := 0; i < 10; i++ {
+		for j := 0; j < 6; j++ {
+			if i == 0 || i == 5 {
+				floatValues = append(floatValues, 5)
+			} else {
+				floatValues = append(floatValues, 3)
+			}
+
+		}
+	}
+	inChunks := buildHistogramInChunk(floatValues)
+
+	opt := query.ProcessorOptions{
+		Dimensions: []string{"country"},
+		Interval:   hybridqp.Interval{Duration: 20 * time.Nanosecond},
+		ChunkSize:  6,
+	}
+
+	t.Run("1", func(t *testing.T) {
+		exprOpt := []hybridqp.ExprOptions{
+			{
+				Expr: &influxql.Call{Name: "histogram_quantile", Args: []influxql.Expr{hybridqp.MustParseExpr("value"), hybridqp.MustParseExpr("0.9")}},
+				Ref:  influxql.VarRef{Val: `histogram_quantile("value")`, Type: influxql.Float},
+			},
+		}
+
+		dstChunks := buildHistogramDstChunk(105)
+
+		testStreamAggregateTransformBase(
+			t,
+			inChunks, dstChunks,
+			buildHistogramRowDataType(), buildHistogramQuantileRowDataType(),
+			exprOpt, &opt, false,
+		)
+	})
+
+	t.Run("2", func(t *testing.T) {
+		exprOpt := []hybridqp.ExprOptions{
+			{
+				Expr: &influxql.Call{Name: "histogram_quantile", Args: []influxql.Expr{hybridqp.MustParseExpr("value"), hybridqp.MustParseExpr("1.5")}},
+				Ref:  influxql.VarRef{Val: `histogram_quantile("value")`, Type: influxql.Float},
+			},
+		}
+
+		dstChunks := buildHistogramDstChunk(math.Inf(+1))
+
+		testStreamAggregateTransformBase(
+			t,
+			inChunks, dstChunks,
+			buildHistogramRowDataType(), buildHistogramQuantileRowDataType(),
+			exprOpt, &opt, false,
+		)
+	})
+
+	t.Run("3", func(t *testing.T) {
+		exprOpt := []hybridqp.ExprOptions{
+			{
+				Expr: &influxql.Call{Name: "histogram_quantile", Args: []influxql.Expr{hybridqp.MustParseExpr("value"), hybridqp.MustParseExpr("-1.5")}},
+				Ref:  influxql.VarRef{Val: `histogram_quantile("value")`, Type: influxql.Float},
+			},
+		}
+
+		dstChunks := buildHistogramDstChunk(math.Inf(-1))
+
+		testStreamAggregateTransformBase(
+			t,
+			inChunks, dstChunks,
+			buildHistogramRowDataType(), buildHistogramQuantileRowDataType(),
+			exprOpt, &opt, false,
+		)
+	})
+
+	t.Run("4", func(t *testing.T) {
+		exprOpt := []hybridqp.ExprOptions{
+			{
+				Expr: &influxql.Call{Name: "histogram_quantile", Args: []influxql.Expr{hybridqp.MustParseExpr("value"), hybridqp.MustParseExpr("1")}},
+				Ref:  influxql.VarRef{Val: `histogram_quantile("value")`, Type: influxql.Float},
+			},
+		}
+
+		dstChunks := buildHistogramDstChunk(120)
+
+		testStreamAggregateTransformBase(
+			t,
+			inChunks, dstChunks,
+			buildHistogramRowDataType(), buildHistogramQuantileRowDataType(),
+			exprOpt, &opt, false,
+		)
+	})
+
+	t.Run("5", func(t *testing.T) {
+		floatValues := make([]float64, 0, 60)
+		for i := 0; i < 10; i++ {
+			for j := 0; j < 6; j++ {
+				if i == 0 || i == 5 || i == 2 {
+					floatValues = append(floatValues, 5)
+				} else if i == 6 {
+					const smallDeltaTolerance = 1e-13
+					floatValues = append(floatValues, 3+smallDeltaTolerance)
+				} else {
+					floatValues = append(floatValues, 3)
+				}
+
+			}
+		}
+		inChunks := buildHistogramInChunk(floatValues)
+		dstChunks := buildHistogramDstChunk(0.17500000000000002)
+		exprOpt := []hybridqp.ExprOptions{
+			{
+				Expr: &influxql.Call{Name: "histogram_quantile", Args: []influxql.Expr{hybridqp.MustParseExpr("value"), hybridqp.MustParseExpr("0.9")}},
+				Ref:  influxql.VarRef{Val: `histogram_quantile("value")`, Type: influxql.Float},
+			},
+		}
+
+		testStreamAggregateTransformBase(
+			t,
+			inChunks, dstChunks,
+			buildHistogramRowDataType(), buildHistogramQuantileRowDataType(),
+			exprOpt, &opt, false,
+		)
+	})
+
+	t.Run("6", func(t *testing.T) {
+		floatValues := make([]float64, 0, 60)
+		for i := 0; i < 10; i++ {
+			for j := 0; j < 6; j++ {
+				if i == 0 {
+					floatValues = append(floatValues, 5)
+				} else {
+					floatValues = append(floatValues, 3)
+				}
+
+			}
+		}
+		inChunks := buildHistogramInChunk(floatValues)
+		dstChunks := buildHistogramDstChunk(120)
+		exprOpt := []hybridqp.ExprOptions{
+			{
+				Expr: &influxql.Call{Name: "histogram_quantile", Args: []influxql.Expr{hybridqp.MustParseExpr("value"), hybridqp.MustParseExpr("0.9")}},
+				Ref:  influxql.VarRef{Val: `histogram_quantile("value")`, Type: influxql.Float},
+			},
+		}
+
+		testStreamAggregateTransformBase(
+			t,
+			inChunks, dstChunks,
+			buildHistogramRowDataType(), buildHistogramQuantileRowDataType(),
+			exprOpt, &opt, false,
+		)
+	})
+
+}
+
 func TestStreamAggregateTransformRateInnerChunkSizeTo1(t *testing.T) {
 	inChunks := buildComInChunkInnerChunkSizeTo1()
 	dstChunks := buildDstChunkRateInnerChunkSizeTo1()
