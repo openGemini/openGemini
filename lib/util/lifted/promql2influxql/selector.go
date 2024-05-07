@@ -278,6 +278,8 @@ func (t *Transpiler) transpileInstantVectorSelector(v *parser.VectorSelector) (i
 	}
 	if t.timeRange > 0 {
 		selectStatement.Range = t.timeRange
+		// reset the range duration after using it.
+		t.timeRange = 0
 	}
 	selectStatement.LookBackDelta = t.LookBackDelta
 	selectStatement.QueryOffset = v.Offset
