@@ -1176,7 +1176,7 @@ func TestServer_PromQuery_Operators3(t *testing.T) {
 			name:    "instant query on nil",
 			params:  url.Values{"db": []string{"db0"}, "time": []string{"1970-01-01T00:05:00Z"}},
 			command: `random + on() metricA`,
-			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"__name__":""},"value":[9223372036.854,"5"]}]}}`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[9223372036.854,"5"]}]}}`,
 			path:    "/api/v1/query",
 		},
 		&Query{
