@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -1458,6 +1459,61 @@ func TestServer_PromQuery_Operators5(t *testing.T) {
 			command: `days_in_month(vector(1485907200))`,
 			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"28"]}]}}`,
 			path:    "/api/v1/query",
+		},
+	}...)
+
+	for i, query := range test.queries {
+		if i == 0 {
+			if err := test.init(s); err != nil {
+				t.Fatalf("test init failed: %s", err)
+			}
+		}
+		if query.skip {
+			t.Logf("SKIP:: %s", query.name)
+			continue
+		}
+		if err := query.ExecuteProm(s); err != nil {
+			t.Error(query.Error(err))
+		} else if !query.success() {
+			t.Error(query.failureMessage())
+		}
+	}
+}
+
+// histogram
+func TestServer_PromQuery_Histogram(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewConfig())
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("autogen", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+	initTime := 1713768282462000000
+	buckets := []string{"+Inf", "0.1", "0.2", "0.4", "1", "120", "20", "3", "60", "8"}
+	writes := make([]string, 0, 2*len(buckets))
+	for i := 0; i < len(buckets); i++ {
+		for j := 0; j < 5; j++ {
+			time := int64(initTime) + 15*int64(time.Second)*int64(j)
+			str := fmt.Sprintf(`up,__name__=up,instance=localhost:9090,job=prometheus,le=%s value=3 %d`, buckets[i], time)
+			writes = append(writes, str)
+			str = fmt.Sprintf(`up,__name__=up,instance=localhost:9090,job=prometheus2,le=%s value=1000 %d`, buckets[i], time)
+			writes = append(writes, str)
+		}
+
+	}
+
+	test := NewTest("db0", "autogen")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+	test.addQueries([]*Query{
+		&Query{
+			name:    "range query:  histogram_quantile",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1713768282.462"}, "end": []string{"1713768432.462"}, "step": []string{"30s"}},
+			command: `histogram_quantile(0.9,up)`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"instance":"localhost:9090","job":"prometheus"},"values":[[1713768282.462,"0.09000000000000001"],[1713768312.462,"0.09000000000000001"],[1713768342.462,"0.09000000000000001"],[1713768372.462,"0.09000000000000001"],[1713768402.462,"0.09000000000000001"],[1713768432.462,"0.09000000000000001"]]},{"metric":{"instance":"localhost:9090","job":"prometheus2"},"values":[[1713768282.462,"0.09000000000000001"],[1713768312.462,"0.09000000000000001"],[1713768342.462,"0.09000000000000001"],[1713768372.462,"0.09000000000000001"],[1713768402.462,"0.09000000000000001"],[1713768432.462,"0.09000000000000001"]]}]}}`,
+			path:    "/api/v1/query_range",
 		},
 	}...)
 
