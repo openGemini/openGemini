@@ -3182,3 +3182,23 @@ func TestClient_InsertFiles(t *testing.T) {
 		})
 	}
 }
+
+func TestClient_DatabaseOption(t *testing.T) {
+	c := &Client{
+		cacheData: &meta2.Data{
+			Databases: map[string]*meta2.DatabaseInfo{
+				"db0": {
+					Name: "db0",
+				},
+			},
+		},
+	}
+	_, err := c.DatabaseOption("db0")
+	if err != nil {
+		t.Fatalf("get database option failed, %+v", err)
+	}
+	_, err = c.DatabaseOption("db1")
+	if err == nil {
+		t.Fatalf("databases does not exist, but no error returned")
+	}
+}

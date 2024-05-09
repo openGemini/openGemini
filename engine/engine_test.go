@@ -57,6 +57,14 @@ import (
 	"go.uber.org/zap"
 )
 
+type mockMetaClient4Drop struct {
+	metaclient.MetaClient
+}
+
+func (m *mockMetaClient4Drop) DatabaseOption(database string) (*obs.ObsOptions, error) {
+	return nil, nil
+}
+
 type shardMock struct {
 	rp      string
 	id      uint64

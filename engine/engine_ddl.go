@@ -70,7 +70,7 @@ func (e *Engine) DeleteDatabase(db string, ptId uint32) (err error) {
 	dataPath := path.Join(e.dataPath, config.DataDirectory, db, strconv.Itoa(int(ptId)))
 	walPath := path.Join(e.walPath, config.WalDirectory, db, strconv.Itoa(int(ptId)))
 	lockPath := ""
-
+	obsOpt, _ := e.metaClient.DatabaseOption(db)
 	e.mu.RLock()
 	dbInfo, ok := e.DBPartitions[db]
 	if !ok {
@@ -140,6 +140,7 @@ func (e *Engine) DropRetentionPolicy(db string, rp string, ptId uint32) error {
 			zap.String("db", db), zap.String("rp", rp), zap.Duration("duration", d), zap.Uint32("pt", ptId))
 	}(start)
 
+	obsOpt, _ := e.metaClient.DatabaseOption(db)
 	deleteDirFunc := func() error {
 		dataPath := path.Join(e.dataPath, config.DataDirectory, db, strconv.Itoa(int(ptId)), rp)
 		walPath := path.Join(e.walPath, config.WalDirectory, db, strconv.Itoa(int(ptId)), rp)

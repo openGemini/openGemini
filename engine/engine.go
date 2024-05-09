@@ -187,7 +187,7 @@ func (e *Engine) Open(durationInfos map[uint64]*meta2.ShardDurationInfo, dbBrief
 		return err
 	}
 
-	e.setMetaClient(m)
+	e.SetMetaClient(m)
 	err := e.loadShards(durationInfos, dbBriefInfos, immutable.LOAD, m)
 	if err != nil {
 		atomic.AddInt64(&stat.EngineStat.OpenErrors, 1)
@@ -197,7 +197,7 @@ func (e *Engine) Open(durationInfos map[uint64]*meta2.ShardDurationInfo, dbBrief
 	return nil
 }
 
-func (e *Engine) setMetaClient(m meta.MetaClient) {
+func (e *Engine) SetMetaClient(m meta.MetaClient) {
 	e.mu.Lock()
 	e.metaClient = m
 	e.mu.Unlock()
