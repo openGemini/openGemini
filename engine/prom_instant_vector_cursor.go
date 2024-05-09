@@ -70,7 +70,7 @@ func NewInstantVectorCursor(input comm.KeyCursor, schema *executor.QuerySchema, 
 }
 
 func (c *InstantVectorCursor) SinkPlan(plan hybridqp.QueryNode) {
-	if plan.Schema().HasCall() {
+	if plan.Schema().HasCall() && (plan.Schema().HasOptimizeCall() || plan.Schema().CanCallsPushdown()) {
 		c.aggregateCursor.SinkPlan(plan)
 	} else {
 		c.aggregateCursor.input.SinkPlan(plan)

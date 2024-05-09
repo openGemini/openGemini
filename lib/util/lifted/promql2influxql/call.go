@@ -56,6 +56,11 @@ var aggregateOverTimeFns = map[string]aggregateFn{
 		name:         "increase",
 		functionType: TRANSFORM_FN,
 	},
+	"histogram_quantile": {
+		name:           "histogram_quantile",
+		functionType:   AGGREGATE_FN,
+		vectorPosition: 1,
+	},
 }
 
 var vectorMathFunctions = map[string]aggregateFn{

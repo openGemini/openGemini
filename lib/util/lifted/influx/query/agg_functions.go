@@ -320,6 +320,12 @@ var (
 			optimizeAgg:       true,
 		},
 	})
+	_ = RegistryAggregateFunction("histogram_quantile", &HistogramQuantileFunc{
+		BaseInfo: BaseInfo{FuncType: AGG_NORMAL},
+		BaseAgg: BaseAgg{
+			mergeCall: true,
+		},
+	})
 )
 
 func GetAggregateOperator(name string) AggregateFunc {
@@ -1249,4 +1255,28 @@ func (f *FloatCountPromFunc) CompileFunc(expr *influxql.Call, c *compiledField) 
 
 func (f *FloatCountPromFunc) CallTypeFunc(_ string, _ []influxql.DataType) (influxql.DataType, error) {
 	return influxql.Float, nil
+}
+
+type HistogramQuantileFunc struct {
+	BaseInfo
+	BaseAgg
+}
+
+func (f *HistogramQuantileFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
+	args := expr.Args
+	if exp, got := 2, len(args); got != exp {
+		return fmt.Errorf("invalid number of arguments for histogram_quantile, expected %d, got %d", exp, got)
+	}
+
+	switch args[1].(type) {
+	case *influxql.IntegerLiteral:
+	case *influxql.NumberLiteral:
+	default:
+		return fmt.Errorf("expected float argument in histogram_quantile()")
+	}
+	return c.compileSymbol(expr.Name, expr.Args[0])
+}
+
+func (f *HistogramQuantileFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
+	return args[0], nil
 }

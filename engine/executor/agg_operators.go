@@ -17,6 +17,8 @@ limitations under the License.
 package executor
 
 import (
+	"fmt"
+
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 )
@@ -28,6 +30,7 @@ func init() {
 	RegistryAggOp("min_prom", &MinPromOp{})
 	RegistryAggOp("max_prom", &MaxPromOp{})
 	RegistryAggOp("count_prom", &FloatCountPromOp{})
+	RegistryAggOp("histogram_quantile", &HistogramQuantileOp{})
 }
 
 type MinOp struct{}
@@ -157,4 +160,36 @@ type FloatCountPromOp struct {
 func (c *FloatCountPromOp) CreateRoutine(params *AggCallFuncParams) (Routine, error) {
 	c.BasePromOp = NewBasePromOp("count_prom", FloatCountPromReduce, FloatCountPromMerge)
 	return c.BasePromOp.CreateRoutine(params)
+}
+
+type FloatColReduceHistogramReduce func(floatItem []bucket) (value float64)
+
+type HistogramQuantileOp struct{}
+
+func (c *HistogramQuantileOp) CreateRoutine(params *AggCallFuncParams) (Routine, error) {
+	inRowDataType, outRowDataType, opt := params.InRowDataType, params.OutRowDataType, params.ExprOpt
+	params.ProRes.isSingleCall = true
+	params.ProRes.isUDAFCall = true
+	var percentile float64
+	switch arg := opt.Expr.(*influxql.Call).Args[1].(type) {
+	case *influxql.NumberLiteral:
+		percentile = arg.Val
+	case *influxql.IntegerLiteral:
+		percentile = float64(arg.Val)
+	default:
+		return nil, fmt.Errorf("the type of input args of histogram_quantile is unsupported")
+	}
+	inOrdinal := inRowDataType.FieldIndex(opt.Expr.(*influxql.Call).Args[0].(*influxql.VarRef).Val)
+	outOrdinal := outRowDataType.FieldIndex(opt.Ref.Val)
+	if inOrdinal < 0 || outOrdinal < 0 {
+		return nil, errno.NewError(errno.SchemaNotAligned, "histogram_quantile", "input and output schemas are not aligned")
+	}
+	dataType := inRowDataType.Field(inOrdinal).Expr.(*influxql.VarRef).Type
+	switch dataType {
+	case influxql.Float:
+		return NewRoutineImpl(NewFloatColFloatHistogramIterator(FloatHistogramQuantilePromReduce(percentile), inOrdinal, outOrdinal, outRowDataType),
+			inOrdinal, outOrdinal), nil
+	default:
+		return nil, errno.NewError(errno.UnsupportedDataType, "histogram_quantile", dataType.String())
+	}
 }
