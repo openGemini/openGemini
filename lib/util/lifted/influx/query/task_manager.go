@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/influxdata/influxdb/models"
-	"github.com/influxdata/influxdb/query"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
@@ -125,19 +124,19 @@ func (t *TaskManager) ExecuteStatement(stmt influxql.Statement, ctx *ExecutionCo
 			return err
 		}
 
-		ctx.Send(&query.Result{
+		ctx.Send(&Result{
 			Series: rows,
 		}, seq)
 	case *influxql.KillQueryStatement:
-		var messages []*query.Message
+		var messages []*Message
 		if ctx.ReadOnly {
-			messages = append(messages, query.ReadOnlyWarning(stmt.String()))
+			messages = append(messages, ReadOnlyWarning(stmt.String()))
 		}
 
 		if err := t.executeKillQueryStatement(stmt); err != nil {
 			return err
 		}
-		ctx.Send(&query.Result{
+		ctx.Send(&Result{
 			Messages: messages,
 		}, seq)
 	default:
