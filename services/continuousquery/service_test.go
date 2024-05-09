@@ -22,7 +22,6 @@ import (
 	"testing"
 	"time"
 
-	query2 "github.com/influxdata/influxdb/query"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
@@ -39,7 +38,7 @@ import (
 type MockMetaClient struct {
 	DatabasesFn                      func() map[string]*meta.DatabaseInfo
 	GetCqLeaseFn                     func() ([]string, error)
-	QueryExecutorFn                  func() <-chan *query2.Result
+	QueryExecutorFn                  func() <-chan *query.Result
 	GetMaxCQChangeIDFn               func() uint64
 	BatchUpdateContinuousQueryStatFn func() error
 
@@ -75,11 +74,11 @@ func (mc *MockMetaClient) BatchUpdateContinuousQueryStat(cqStats map[string]int6
 
 // mockQueryExecutor is a mock query executor
 type mockQueryExecutor struct {
-	ExecuteQueryFn func(results chan *query2.Result)
+	ExecuteQueryFn func(results chan *query.Result)
 }
 
-func (e *mockQueryExecutor) ExecuteQuery(query *influxql.Query, opt query.ExecutionOptions, closing chan struct{}, qDuration *statistics.SQLSlowQueryStatistics) <-chan *query2.Result {
-	res := make(chan *query2.Result)
+func (e *mockQueryExecutor) ExecuteQuery(q *influxql.Query, opt query.ExecutionOptions, closing chan struct{}, qDuration *statistics.SQLSlowQueryStatistics) <-chan *query.Result {
+	res := make(chan *query.Result)
 	go e.ExecuteQueryFn(res)
 	return res
 }
@@ -143,8 +142,8 @@ func TestService_handle(t *testing.T) {
 		changed: make(chan chan struct{}, 10),
 	}
 	s.QueryExecutor = &mockQueryExecutor{
-		ExecuteQueryFn: func(results chan *query2.Result) {
-			results <- &query2.Result{}
+		ExecuteQueryFn: func(results chan *query.Result) {
+			results <- &query.Result{}
 		},
 	}
 	s.handle()
@@ -244,8 +243,8 @@ func NewContinuousQueryService() (*Service, *ContinuousQuery) {
 func TestService_ExecuteContinuousQuery_Error(t *testing.T) {
 	s, cq := NewContinuousQueryService()
 	s.QueryExecutor = &mockQueryExecutor{
-		ExecuteQueryFn: func(results chan *query2.Result) {
-			results <- &query2.Result{Err: fmt.Errorf("mock error")}
+		ExecuteQueryFn: func(results chan *query.Result) {
+			results <- &query.Result{Err: fmt.Errorf("mock error")}
 		},
 	}
 	now := time.Now()
@@ -266,8 +265,8 @@ func (mockRegister) RetryRegisterQueryIDOffset(host string) (uint64, error) {
 func TestService_ExecuteContinuousQuery_Successfully(t *testing.T) {
 	s, cq := NewContinuousQueryService()
 	s.QueryExecutor = &mockQueryExecutor{
-		ExecuteQueryFn: func(results chan *query2.Result) {
-			results <- &query2.Result{}
+		ExecuteQueryFn: func(results chan *query.Result) {
+			results <- &query.Result{}
 		},
 	}
 
@@ -282,8 +281,8 @@ func TestService_ExecuteContinuousQuery_Cooling(t *testing.T) {
 	// test when the statement is executed successfully
 	s, cq := NewContinuousQueryService()
 	s.QueryExecutor = &mockQueryExecutor{
-		ExecuteQueryFn: func(results chan *query2.Result) {
-			results <- &query2.Result{}
+		ExecuteQueryFn: func(results chan *query.Result) {
+			results <- &query.Result{}
 		},
 	}
 
@@ -296,8 +295,8 @@ func TestService_ExecuteContinuousQuery_Cooling(t *testing.T) {
 func TestService_ExecuteContinuousQuery_WithTimeZone(t *testing.T) {
 	s, _ := NewContinuousQueryService()
 	s.QueryExecutor = &mockQueryExecutor{
-		ExecuteQueryFn: func(results chan *query2.Result) {
-			results <- &query2.Result{}
+		ExecuteQueryFn: func(results chan *query.Result) {
+			results <- &query.Result{}
 		},
 	}
 

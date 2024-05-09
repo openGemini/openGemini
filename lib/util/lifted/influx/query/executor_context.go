@@ -9,7 +9,6 @@ import (
 	"context"
 	"sync"
 
-	"github.com/influxdata/influxdb/query"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
@@ -28,7 +27,7 @@ type ExecutionContext struct {
 	task []*Task
 
 	// Output channel where results and errors should be sent.
-	Results chan *query.Result
+	Results chan *Result
 
 	// Options used to start this query.
 	ExecutionOptions
@@ -107,7 +106,7 @@ func (ctx *ExecutionContext) Value(key interface{}) interface{} {
 
 // send sends a Result to the Results channel and will exit if the query has
 // been aborted.
-func (ctx *ExecutionContext) send(result *query.Result, seq int) error {
+func (ctx *ExecutionContext) send(result *Result, seq int) error {
 	result.StatementID = seq
 	select {
 	case <-ctx.AbortCh:
@@ -119,7 +118,7 @@ func (ctx *ExecutionContext) send(result *query.Result, seq int) error {
 
 // Send sends a Result to the Results channel and will exit if the query has
 // been interrupted or aborted.
-func (ctx *ExecutionContext) Send(result *query.Result, seq int) error {
+func (ctx *ExecutionContext) Send(result *Result, seq int) error {
 	result.StatementID = seq
 	select {
 	case <-ctx.Done():

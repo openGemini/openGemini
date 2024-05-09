@@ -21,13 +21,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/influxdata/influxdb/query"
 	_ "github.com/influxdata/influxdb/toml"
 	jsoniter "github.com/json-iterator/go"
 	tssql "github.com/openGemini/openGemini/app/ts-sql/sql"
 	"github.com/openGemini/openGemini/lib/config"
 	_ "github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 )
 
 var verboseServerLogs bool

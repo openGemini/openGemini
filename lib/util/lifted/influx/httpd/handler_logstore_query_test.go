@@ -20,8 +20,8 @@ import (
 	"testing"
 
 	"github.com/influxdata/influxdb/models"
-	"github.com/influxdata/influxdb/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/stretchr/testify/assert"
 )
 

@@ -33,7 +33,6 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	"github.com/influxdata/influxdb/query"
 	"github.com/influxdata/influxdb/uuid"
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/config"
@@ -54,7 +53,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
-	query2 "github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/logparser"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/valyala/fastjson"
@@ -1866,7 +1865,7 @@ func (h *Handler) serveLogQuery(w http.ResponseWriter, r *http.Request, param *Q
 	}
 	// Parse whether this is an async command.
 	async := r.FormValue("async") == "true"
-	opts := *query2.NewExecutionOptions(info.database, r.FormValue("rp"), nodeID, chunkSize, innerChunkSize, false, r.Method == "GET", true,
+	opts := *query.NewExecutionOptions(info.database, r.FormValue("rp"), nodeID, chunkSize, innerChunkSize, false, r.Method == "GET", true,
 		atomic.LoadInt32(&syscontrol.ParallelQueryInBatch) == 1)
 	if param != nil {
 		opts.IncQuery, opts.QueryID, opts.IterID = param.IncQuery, param.QueryID, param.IterID
@@ -2552,7 +2551,7 @@ type Histograms struct {
 	Count int64 `json:"count"`
 }
 
-func GenZeroHistogram(opt query2.ProcessorOptions, start, end int64, ascending bool) []Histograms {
+func GenZeroHistogram(opt query.ProcessorOptions, start, end int64, ascending bool) []Histograms {
 	startTime, _ := opt.Window(start)
 	_, endTime := opt.Window(end)
 	if !ascending {

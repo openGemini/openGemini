@@ -20,7 +20,6 @@ import (
 
 	"github.com/influxdata/influxdb/models"
 	"github.com/influxdata/influxdb/pkg/limiter"
-	query2 "github.com/influxdata/influxdb/query"
 	originql "github.com/influxdata/influxql"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
@@ -298,8 +297,8 @@ func (e *Executor) WithLogger(log *logger.Logger) {
 }
 
 // ExecuteQuery executes each statement within a query.
-func (e *Executor) ExecuteQuery(query *influxql.Query, opt ExecutionOptions, closing chan struct{}, qDuration *statistics.SQLSlowQueryStatistics) <-chan *query2.Result {
-	results := make(chan *query2.Result)
+func (e *Executor) ExecuteQuery(query *influxql.Query, opt ExecutionOptions, closing chan struct{}, qDuration *statistics.SQLSlowQueryStatistics) <-chan *Result {
+	results := make(chan *Result)
 	if opt.ParallelQuery {
 		go e.executeParallelQuery(query, opt, closing, qDuration, results)
 	} else {
@@ -308,7 +307,7 @@ func (e *Executor) ExecuteQuery(query *influxql.Query, opt ExecutionOptions, clo
 	return results
 }
 
-func (e *Executor) executeQuery(query *influxql.Query, opt ExecutionOptions, closing <-chan struct{}, qStat *statistics.SQLSlowQueryStatistics, results chan *query2.Result) {
+func (e *Executor) executeQuery(query *influxql.Query, opt ExecutionOptions, closing <-chan struct{}, qStat *statistics.SQLSlowQueryStatistics, results chan *Result) {
 	defer close(results)
 	defer e.recover(query, results)
 	if qStat != nil && len(query.Statements) > 0 {
@@ -318,7 +317,7 @@ func (e *Executor) executeQuery(query *influxql.Query, opt ExecutionOptions, clo
 	ctx, detach, err := e.TaskManager.AttachQuery(query, opt, closing, qStat)
 	if err != nil {
 		select {
-		case results <- &query2.Result{Err: err}:
+		case results <- &Result{Err: err}:
 		case <-opt.AbortCh:
 		}
 		return
@@ -348,7 +347,7 @@ LOOP:
 		}
 
 		if ok, err := isSystemMeasurements(stmt); ok {
-			results <- &query2.Result{
+			results <- &Result{
 				Err: err,
 			}
 			break LOOP
@@ -358,7 +357,7 @@ LOOP:
 		// This can occur on meta read statements which convert to SELECT statements.
 		newStmt, err := RewriteStatement(stmt)
 		if err != nil {
-			results <- &query2.Result{Err: err}
+			results <- &Result{Err: err}
 			break
 		}
 		stmt = newStmt
@@ -366,7 +365,7 @@ LOOP:
 		// Normalize each statement if possible.
 		if normalizer, ok := e.StatementExecutor.(StatementNormalizer); ok {
 			if err := normalizer.NormalizeStatement(stmt, defaultDB, opt.RetentionPolicy); err != nil {
-				if err := ctx.send(&query2.Result{Err: err}, i); err == ErrQueryAborted {
+				if err := ctx.send(&Result{Err: err}, i); err == ErrQueryAborted {
 					return
 				}
 				break
@@ -390,7 +389,7 @@ LOOP:
 
 		// Send an error for this result if it failed for some reason.
 		if err != nil {
-			if err := ctx.send(&query2.Result{
+			if err := ctx.send(&Result{
 				StatementID: i,
 				Err:         err,
 			}, i); err == ErrQueryAborted {
@@ -416,7 +415,7 @@ LOOP:
 
 	// Send error results for any statements which were not executed.
 	for ; i < len(query.Statements)-1; i++ {
-		if err := ctx.send(&query2.Result{
+		if err := ctx.send(&Result{
 			StatementID: i,
 			Err:         ErrNotExecuted,
 		}, i); err == ErrQueryAborted {
@@ -425,7 +424,7 @@ LOOP:
 	}
 }
 
-func (e *Executor) executeParallelQuery(query *influxql.Query, opt ExecutionOptions, closing <-chan struct{}, qStat *statistics.SQLSlowQueryStatistics, results chan *query2.Result) {
+func (e *Executor) executeParallelQuery(query *influxql.Query, opt ExecutionOptions, closing <-chan struct{}, qStat *statistics.SQLSlowQueryStatistics, results chan *Result) {
 	defer close(results)
 	defer e.recover(query, results)
 	if qStat != nil && len(query.Statements) > 0 {
@@ -436,7 +435,7 @@ func (e *Executor) executeParallelQuery(query *influxql.Query, opt ExecutionOpti
 	ctx, detach, err := e.TaskManager.AttachQuery(query, opt, closing, qStat)
 	if err != nil {
 		select {
-		case results <- &query2.Result{Err: err}:
+		case results <- &Result{Err: err}:
 		case <-opt.AbortCh:
 		}
 		return
@@ -468,7 +467,7 @@ LOOP:
 		}
 
 		if ok, err := isSystemMeasurements(stmt); ok {
-			results <- &query2.Result{
+			results <- &Result{
 				Err: err,
 			}
 			break LOOP
@@ -488,7 +487,7 @@ LOOP:
 			// This can occur on meta read statements which convert to SELECT statements.
 			newStmt, err := RewriteStatement(stmt)
 			if err != nil {
-				results <- &query2.Result{Err: err}
+				results <- &Result{Err: err}
 				e.Logger.Error("Rewrite Statement", zap.String("query", stmt.String()), zap.Error(err))
 				return
 			}
@@ -497,7 +496,7 @@ LOOP:
 			// Normalize each statement if possible.
 			if normalizer, ok := e.StatementExecutor.(StatementNormalizer); ok {
 				if err := normalizer.NormalizeStatement(stmt, defaultDB, opt.RetentionPolicy); err != nil {
-					if err := ctx.send(&query2.Result{Err: err}, seq); err == ErrQueryAborted {
+					if err := ctx.send(&Result{Err: err}, seq); err == ErrQueryAborted {
 						e.Logger.Error("Normalize Statement ErrQueryAborted", zap.String("query", stmt.String()))
 						return
 					}
@@ -527,7 +526,7 @@ LOOP:
 
 			// Send an error for this result if it failed for some reason.
 			if err != nil {
-				if err := ctx.send(&query2.Result{
+				if err := ctx.send(&Result{
 					StatementID: i,
 					Err:         err,
 				}, seq); err == ErrQueryAborted {
@@ -597,18 +596,18 @@ func init() {
 	}
 }
 
-func (e *Executor) recover(query *influxql.Query, results chan *query2.Result) {
+func (e *Executor) recover(query *influxql.Query, results chan *Result) {
 	if err := recover(); err != nil {
 		e.Logger.Error(fmt.Sprintf("%s [error:%s] %s", query.String(), err, debug.Stack()))
 
 		internalErr, ok := err.(*errno.Error)
 		if ok && errno.Equal(internalErr, errno.DtypeNotSupport) {
-			results <- &query2.Result{
+			results <- &Result{
 				StatementID: -1,
 				Err:         fmt.Errorf("%s", err),
 			}
 		} else {
-			results <- &query2.Result{
+			results <- &Result{
 				StatementID: -1,
 				Err:         fmt.Errorf("%s [error:%s]", query.String(), err),
 			}

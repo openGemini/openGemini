@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/bytedance/sonic"
 	"github.com/influxdata/influxdb/models"
 	jsoniter "github.com/json-iterator/go"
 	"github.com/tinylib/msgp/msgp"
@@ -122,6 +123,41 @@ func (w *responseWriter) CloseNotify() <-chan bool {
 		return notifier.CloseNotify()
 	}
 	return nil
+}
+
+type sonicJsonFormatter struct {
+	Pretty bool
+}
+
+func (f *sonicJsonFormatter) WriteResponse(w io.Writer, resp Response) error {
+	var b []byte
+	var err error
+	if f.Pretty {
+		b, err = json.MarshalIndent(resp, "", "    ")
+	} else {
+		b, err = sonic.Marshal(resp)
+	}
+
+	if err != nil {
+		unnestedErr := unnestError(err)
+		// ignore any errors in this section, we already have a 'real' error to return
+		resp := Response{Err: unnestedErr}
+		if f.Pretty {
+			b, _ = json.MarshalIndent(resp, "", "    ")
+		} else {
+			b, _ = sonic.Marshal(resp)
+		}
+		w.Write(b)
+		w.Write([]byte("\n"))
+		return err
+	}
+
+	_, err = w.Write(b)
+	if err != nil {
+		return err
+	}
+	_, err = w.Write([]byte("\n"))
+	return err
 }
 
 type jsonFormatter struct {

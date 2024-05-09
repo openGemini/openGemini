@@ -33,7 +33,6 @@ import (
 	"github.com/influxdata/influxdb"
 	"github.com/influxdata/influxdb/models"
 	"github.com/influxdata/influxdb/prometheus"
-	"github.com/influxdata/influxdb/query"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/op"
 	"github.com/openGemini/openGemini/lib/pool"
@@ -41,7 +40,7 @@ import (
 	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
-	query2 "github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/promql2influxql"
 	"github.com/prometheus/prometheus/prompb"
 	"github.com/prometheus/prometheus/promql/parser"
@@ -226,7 +225,7 @@ func (h *Handler) servePromRead(w http.ResponseWriter, r *http.Request, user met
 	// Parse whether this is an async command.
 	async := r.FormValue("async") == "true"
 
-	opts := query2.ExecutionOptions{
+	opts := query.ExecutionOptions{
 		Database:        db,
 		RetentionPolicy: r.FormValue("rp"),
 		ChunkSize:       1,
@@ -237,14 +236,14 @@ func (h *Handler) servePromRead(w http.ResponseWriter, r *http.Request, user met
 
 	if h.Config.AuthEnabled {
 		if user != nil && user.AuthorizeUnrestricted() {
-			opts.Authorizer = query2.OpenAuthorizer
+			opts.Authorizer = query.OpenAuthorizer
 		} else {
 			// The current user determines the authorized actions.
 			opts.Authorizer = user
 		}
 	} else {
 		// Auth is disabled, so allow everything.
-		opts.Authorizer = query2.OpenAuthorizer
+		opts.Authorizer = query.OpenAuthorizer
 	}
 
 	// Make sure if the client disconnects we signal the query to abort
@@ -460,7 +459,7 @@ func (h *Handler) servePromBaseQuery(w http.ResponseWriter, r *http.Request, use
 	// Parse whether this is an async command.
 	async := r.FormValue("async") == "true"
 
-	opts := query2.ExecutionOptions{
+	opts := query.ExecutionOptions{
 		Database:        db,
 		RetentionPolicy: r.FormValue("rp"),
 		ChunkSize:       chunkSize,
@@ -540,8 +539,8 @@ func (h *Handler) promExprQuery(promCommand *promql2influxql.PromCommand, statem
 	valuer := influxql.ValuerEval{
 		Valuer: influxql.MultiValuer(
 			op.Valuer{},
-			query2.MathValuer{},
-			query2.StringValuer{},
+			query.MathValuer{},
+			query.StringValuer{},
 			executor.PromTimeValuer{},
 			promTimeValuer,
 		),
@@ -680,7 +679,7 @@ func (h *Handler) servePromBaseMetaQuery(w http.ResponseWriter, r *http.Request,
 	// Parse whether this is an async command.
 	async := r.FormValue("async") == "true"
 
-	opts := query2.ExecutionOptions{
+	opts := query.ExecutionOptions{
 		Database:        db,
 		RetentionPolicy: r.FormValue("rp"),
 		ReadOnly:        r.Method == "GET",
