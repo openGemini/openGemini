@@ -156,7 +156,8 @@ func (r *FloatColFloatIterator) processMiddleWindow(
 
 func (r *FloatColFloatIterator) Next(ie *IteratorEndpoint, p *IteratorParams) {
 	inChunk, outChunk := ie.InputPoint.Chunk, ie.OutputPoint.Chunk
-	if inChunk.Column(r.inOrdinal).IsEmpty() && r.prevPoint.isNil {
+	column := inChunk.Column(r.inOrdinal)
+	if column.IsEmpty() && r.prevPoint.isNil {
 		var addIntervalLen int
 		if p.sameInterval {
 			addIntervalLen = inChunk.IntervalLen() - 1
@@ -171,7 +172,7 @@ func (r *FloatColFloatIterator) Next(ie *IteratorEndpoint, p *IteratorParams) {
 
 	var end int
 	firstIndex, lastIndex := 0, len(inChunk.IntervalIndex())-1
-	values := inChunk.Column(r.inOrdinal).FloatValues()
+	values := column.FloatValues()
 	for i, start := range inChunk.IntervalIndex() {
 		if i < lastIndex {
 			end = inChunk.IntervalIndex()[i+1]
@@ -325,7 +326,8 @@ func (r *FloatColIntegerIterator) processMiddleWindow(
 
 func (r *FloatColIntegerIterator) Next(ie *IteratorEndpoint, p *IteratorParams) {
 	inChunk, outChunk := ie.InputPoint.Chunk, ie.OutputPoint.Chunk
-	if inChunk.Column(r.inOrdinal).IsEmpty() && r.prevPoint.isNil {
+	column := inChunk.Column(r.inOrdinal)
+	if column.IsEmpty() && r.prevPoint.isNil {
 		var addIntervalLen int
 		if p.sameInterval {
 			addIntervalLen = inChunk.IntervalLen() - 1
@@ -340,7 +342,7 @@ func (r *FloatColIntegerIterator) Next(ie *IteratorEndpoint, p *IteratorParams) 
 
 	var end int
 	firstIndex, lastIndex := 0, len(inChunk.IntervalIndex())-1
-	values := inChunk.Column(r.inOrdinal).IntegerValues()
+	values := column.IntegerValues()
 	for i, start := range inChunk.IntervalIndex() {
 		if i < lastIndex {
 			end = inChunk.IntervalIndex()[i+1]
@@ -494,7 +496,8 @@ func (r *IntegerColIntegerIterator) processMiddleWindow(
 
 func (r *IntegerColIntegerIterator) Next(ie *IteratorEndpoint, p *IteratorParams) {
 	inChunk, outChunk := ie.InputPoint.Chunk, ie.OutputPoint.Chunk
-	if inChunk.Column(r.inOrdinal).IsEmpty() && r.prevPoint.isNil {
+	column := inChunk.Column(r.inOrdinal)
+	if column.IsEmpty() && r.prevPoint.isNil {
 		var addIntervalLen int
 		if p.sameInterval {
 			addIntervalLen = inChunk.IntervalLen() - 1
@@ -509,7 +512,7 @@ func (r *IntegerColIntegerIterator) Next(ie *IteratorEndpoint, p *IteratorParams
 
 	var end int
 	firstIndex, lastIndex := 0, len(inChunk.IntervalIndex())-1
-	values := inChunk.Column(r.inOrdinal).IntegerValues()
+	values := column.IntegerValues()
 	for i, start := range inChunk.IntervalIndex() {
 		if i < lastIndex {
 			end = inChunk.IntervalIndex()[i+1]
@@ -663,7 +666,8 @@ func (r *StringColIntegerIterator) processMiddleWindow(
 
 func (r *StringColIntegerIterator) Next(ie *IteratorEndpoint, p *IteratorParams) {
 	inChunk, outChunk := ie.InputPoint.Chunk, ie.OutputPoint.Chunk
-	if inChunk.Column(r.inOrdinal).IsEmpty() && r.prevPoint.isNil {
+	column := inChunk.Column(r.inOrdinal)
+	if column.IsEmpty() && r.prevPoint.isNil {
 		var addIntervalLen int
 		if p.sameInterval {
 			addIntervalLen = inChunk.IntervalLen() - 1
@@ -678,7 +682,7 @@ func (r *StringColIntegerIterator) Next(ie *IteratorEndpoint, p *IteratorParams)
 
 	var end int
 	firstIndex, lastIndex := 0, len(inChunk.IntervalIndex())-1
-	values := inChunk.Column(r.inOrdinal).IntegerValues()
+	values := column.IntegerValues()
 	for i, start := range inChunk.IntervalIndex() {
 		if i < lastIndex {
 			end = inChunk.IntervalIndex()[i+1]
@@ -834,7 +838,8 @@ func (r *StringColStringIterator) processMiddleWindow(
 
 func (r *StringColStringIterator) Next(ie *IteratorEndpoint, p *IteratorParams) {
 	inChunk, outChunk := ie.InputPoint.Chunk, ie.OutputPoint.Chunk
-	if inChunk.Column(r.inOrdinal).IsEmpty() && r.prevPoint.isNil {
+	column := inChunk.Column(r.inOrdinal)
+	if column.IsEmpty() && r.prevPoint.isNil {
 		var addIntervalLen int
 		if p.sameInterval {
 			addIntervalLen = inChunk.IntervalLen() - 1
@@ -849,7 +854,7 @@ func (r *StringColStringIterator) Next(ie *IteratorEndpoint, p *IteratorParams) 
 
 	var end int
 	firstIndex, lastIndex := 0, len(inChunk.IntervalIndex())-1
-	values := inChunk.Column(r.inOrdinal).StringValuesV2(nil)
+	values := column.StringValuesV2(nil)
 	for i, start := range inChunk.IntervalIndex() {
 		if i < lastIndex {
 			end = inChunk.IntervalIndex()[i+1]
@@ -1003,7 +1008,8 @@ func (r *BooleanColIntegerIterator) processMiddleWindow(
 
 func (r *BooleanColIntegerIterator) Next(ie *IteratorEndpoint, p *IteratorParams) {
 	inChunk, outChunk := ie.InputPoint.Chunk, ie.OutputPoint.Chunk
-	if inChunk.Column(r.inOrdinal).IsEmpty() && r.prevPoint.isNil {
+	column := inChunk.Column(r.inOrdinal)
+	if column.IsEmpty() && r.prevPoint.isNil {
 		var addIntervalLen int
 		if p.sameInterval {
 			addIntervalLen = inChunk.IntervalLen() - 1
@@ -1018,7 +1024,7 @@ func (r *BooleanColIntegerIterator) Next(ie *IteratorEndpoint, p *IteratorParams
 
 	var end int
 	firstIndex, lastIndex := 0, len(inChunk.IntervalIndex())-1
-	values := inChunk.Column(r.inOrdinal).IntegerValues()
+	values := column.IntegerValues()
 	for i, start := range inChunk.IntervalIndex() {
 		if i < lastIndex {
 			end = inChunk.IntervalIndex()[i+1]
@@ -1176,7 +1182,8 @@ func (r *BooleanColBooleanIterator) processMiddleWindow(
 
 func (r *BooleanColBooleanIterator) Next(ie *IteratorEndpoint, p *IteratorParams) {
 	inChunk, outChunk := ie.InputPoint.Chunk, ie.OutputPoint.Chunk
-	if inChunk.Column(r.inOrdinal).IsEmpty() && r.prevPoint.isNil {
+	column := inChunk.Column(r.inOrdinal)
+	if column.IsEmpty() && r.prevPoint.isNil {
 		var addIntervalLen int
 		if p.sameInterval {
 			addIntervalLen = inChunk.IntervalLen() - 1
@@ -1191,7 +1198,7 @@ func (r *BooleanColBooleanIterator) Next(ie *IteratorEndpoint, p *IteratorParams
 
 	var end int
 	firstIndex, lastIndex := 0, len(inChunk.IntervalIndex())-1
-	values := inChunk.Column(r.inOrdinal).BooleanValues()
+	values := column.BooleanValues()
 	for i, start := range inChunk.IntervalIndex() {
 		if i < lastIndex {
 			end = inChunk.IntervalIndex()[i+1]
@@ -1300,7 +1307,8 @@ func (r *FloatTimeColFloatIterator) processMiddleWindow(
 
 func (r *FloatTimeColFloatIterator) Next(ie *IteratorEndpoint, p *IteratorParams) {
 	inChunk, outChunk := ie.InputPoint.Chunk, ie.OutputPoint.Chunk
-	if inChunk.Column(r.inOrdinal).IsEmpty() && r.prevPoint.isNil {
+	column := inChunk.Column(r.inOrdinal)
+	if column.IsEmpty() && r.prevPoint.isNil {
 		var addIntervalLen int
 		if p.sameInterval {
 			addIntervalLen = inChunk.IntervalLen() - 1
@@ -1314,9 +1322,9 @@ func (r *FloatTimeColFloatIterator) Next(ie *IteratorEndpoint, p *IteratorParams
 	}
 
 	var end int
-	r.initTimeCol = len(inChunk.Column(r.inOrdinal).ColumnTimes()) > 0
+	r.initTimeCol = len(column.ColumnTimes()) > 0
 	firstIndex, lastIndex := 0, len(inChunk.IntervalIndex())-1
-	values := inChunk.Column(r.inOrdinal).FloatValues()
+	values := column.FloatValues()
 	for i, start := range inChunk.IntervalIndex() {
 		if i < lastIndex {
 			end = inChunk.IntervalIndex()[i+1]
@@ -1425,7 +1433,8 @@ func (r *IntegerTimeColIntegerIterator) processMiddleWindow(
 
 func (r *IntegerTimeColIntegerIterator) Next(ie *IteratorEndpoint, p *IteratorParams) {
 	inChunk, outChunk := ie.InputPoint.Chunk, ie.OutputPoint.Chunk
-	if inChunk.Column(r.inOrdinal).IsEmpty() && r.prevPoint.isNil {
+	column := inChunk.Column(r.inOrdinal)
+	if column.IsEmpty() && r.prevPoint.isNil {
 		var addIntervalLen int
 		if p.sameInterval {
 			addIntervalLen = inChunk.IntervalLen() - 1
@@ -1439,9 +1448,9 @@ func (r *IntegerTimeColIntegerIterator) Next(ie *IteratorEndpoint, p *IteratorPa
 	}
 
 	var end int
-	r.initTimeCol = len(inChunk.Column(r.inOrdinal).ColumnTimes()) > 0
+	r.initTimeCol = len(column.ColumnTimes()) > 0
 	firstIndex, lastIndex := 0, len(inChunk.IntervalIndex())-1
-	values := inChunk.Column(r.inOrdinal).IntegerValues()
+	values := column.IntegerValues()
 	for i, start := range inChunk.IntervalIndex() {
 		if i < lastIndex {
 			end = inChunk.IntervalIndex()[i+1]
@@ -1552,7 +1561,8 @@ func (r *StringTimeColStringIterator) processMiddleWindow(
 
 func (r *StringTimeColStringIterator) Next(ie *IteratorEndpoint, p *IteratorParams) {
 	inChunk, outChunk := ie.InputPoint.Chunk, ie.OutputPoint.Chunk
-	if inChunk.Column(r.inOrdinal).IsEmpty() && r.prevPoint.isNil {
+	column := inChunk.Column(r.inOrdinal)
+	if column.IsEmpty() && r.prevPoint.isNil {
 		var addIntervalLen int
 		if p.sameInterval {
 			addIntervalLen = inChunk.IntervalLen() - 1
@@ -1566,9 +1576,9 @@ func (r *StringTimeColStringIterator) Next(ie *IteratorEndpoint, p *IteratorPara
 	}
 
 	var end int
-	r.initTimeCol = len(inChunk.Column(r.inOrdinal).ColumnTimes()) > 0
+	r.initTimeCol = len(column.ColumnTimes()) > 0
 	firstIndex, lastIndex := 0, len(inChunk.IntervalIndex())-1
-	values := inChunk.Column(r.inOrdinal).StringValuesV2(nil)
+	values := column.StringValuesV2(nil)
 	for i, start := range inChunk.IntervalIndex() {
 		if i < lastIndex {
 			end = inChunk.IntervalIndex()[i+1]
@@ -1681,7 +1691,8 @@ func (r *BooleanTimeColBooleanIterator) processMiddleWindow(
 
 func (r *BooleanTimeColBooleanIterator) Next(ie *IteratorEndpoint, p *IteratorParams) {
 	inChunk, outChunk := ie.InputPoint.Chunk, ie.OutputPoint.Chunk
-	if inChunk.Column(r.inOrdinal).IsEmpty() && r.prevPoint.isNil {
+	column := inChunk.Column(r.inOrdinal)
+	if column.IsEmpty() && r.prevPoint.isNil {
 		var addIntervalLen int
 		if p.sameInterval {
 			addIntervalLen = inChunk.IntervalLen() - 1
@@ -1695,7 +1706,7 @@ func (r *BooleanTimeColBooleanIterator) Next(ie *IteratorEndpoint, p *IteratorPa
 	}
 
 	var end int
-	r.initTimeCol = len(inChunk.Column(r.inOrdinal).ColumnTimes()) > 0
+	r.initTimeCol = len(column.ColumnTimes()) > 0
 	firstIndex, lastIndex := 0, len(inChunk.IntervalIndex())-1
 	for i, start := range inChunk.IntervalIndex() {
 		if i < lastIndex {
@@ -1720,44 +1731,6 @@ func (r *BooleanTimeColBooleanIterator) Next(ie *IteratorEndpoint, p *IteratorPa
 			r.processMiddleWindow(inChunk, outChunk, index, value)
 		}
 	}
-}
-
-type BooleanSliceItem struct {
-	index []int
-	time  []int64
-	value []bool
-}
-
-func (f *BooleanSliceItem) AppendItem(c Chunk, ordinal, start, end int) {
-	if start == end {
-		return
-	}
-	fLen := len(f.time)
-	if c.Column(ordinal).NilCount() == 0 {
-		// fast path
-		for i := start; i < end; i++ {
-			f.index = append(f.index, fLen+i-start)
-			f.time = append(f.time, c.TimeByIndex(i))
-		}
-	} else {
-		// slow path
-		getTimeIndex := c.Column(ordinal).GetTimeIndex
-		for i := start; i < end; i++ {
-			f.index = append(f.index, fLen+i-start)
-			f.time = append(f.time, c.TimeByIndex(getTimeIndex(i)))
-		}
-	}
-	f.value = append(f.value, c.Column(ordinal).BooleanValues()[start:end]...)
-}
-
-func (f *BooleanSliceItem) Reset() {
-	f.index = f.index[:0]
-	f.time = f.time[:0]
-	f.value = f.value[:0]
-}
-
-func (f *BooleanSliceItem) Len() int {
-	return len(f.time)
 }
 
 type FloatColFloatSliceIterator struct {
@@ -1919,7 +1892,8 @@ func (r *FloatColFloatSliceIterator) Next(ie *IteratorEndpoint, p *IteratorParam
 
 	var end int
 	firstIndex, lastIndex := 0, len(inChunk.IntervalIndex())-1
-	values := inChunk.Column(r.inOrdinal).FloatValues()
+	column := inChunk.Column(r.inOrdinal)
+	values := column.FloatValues()
 	for i, start := range inChunk.IntervalIndex() {
 		if i < lastIndex {
 			end = inChunk.IntervalIndex()[i+1]
@@ -1927,7 +1901,7 @@ func (r *FloatColFloatSliceIterator) Next(ie *IteratorEndpoint, p *IteratorParam
 			end = inChunk.NumberOfRows()
 		}
 		if !r.isSingleCall {
-			start, end = inChunk.Column(r.inOrdinal).GetRangeValueIndexV2(start, end)
+			start, end = column.GetRangeValueIndexV2(start, end)
 			if start == end && r.buf.Len() == 0 && (i < lastIndex || (i == lastIndex && !p.sameInterval)) {
 				outChunk.Column(r.outOrdinal).AppendNil()
 				continue
@@ -2103,7 +2077,8 @@ func (r *IntegerColIntegerSliceIterator) Next(ie *IteratorEndpoint, p *IteratorP
 
 	var end int
 	firstIndex, lastIndex := 0, len(inChunk.IntervalIndex())-1
-	values := inChunk.Column(r.inOrdinal).IntegerValues()
+	column := inChunk.Column(r.inOrdinal)
+	values := column.IntegerValues()
 	for i, start := range inChunk.IntervalIndex() {
 		if i < lastIndex {
 			end = inChunk.IntervalIndex()[i+1]
@@ -2111,7 +2086,7 @@ func (r *IntegerColIntegerSliceIterator) Next(ie *IteratorEndpoint, p *IteratorP
 			end = inChunk.NumberOfRows()
 		}
 		if !r.isSingleCall {
-			start, end = inChunk.Column(r.inOrdinal).GetRangeValueIndexV2(start, end)
+			start, end = column.GetRangeValueIndexV2(start, end)
 			if start == end && r.buf.Len() == 0 && (i < lastIndex || (i == lastIndex && !p.sameInterval)) {
 				outChunk.Column(r.outOrdinal).AppendNil()
 				continue
@@ -2298,7 +2273,7 @@ func (r *StringColStringSliceIterator) Next(ie *IteratorEndpoint, p *IteratorPar
 			end = inChunk.NumberOfRows()
 		}
 		if !r.isSingleCall {
-			start, end = inChunk.Column(r.inOrdinal).GetRangeValueIndexV2(start, end)
+			start, end = column.GetRangeValueIndexV2(start, end)
 			if start == end && r.buf.Len() == 0 && (i < lastIndex || (i == lastIndex && !p.sameInterval)) {
 				outChunk.Column(r.outOrdinal).AppendNil()
 				continue
@@ -2316,10 +2291,6 @@ func (r *StringColStringSliceIterator) Next(ie *IteratorEndpoint, p *IteratorPar
 }
 
 type BooleanColReduceSliceReduce func(booleanItem *BooleanSliceItem) (index int, time int64, value float64, isNil bool)
-
-func NewBooleanSliceItem() *BooleanSliceItem {
-	return &BooleanSliceItem{}
-}
 
 type BooleanColBooleanSliceIterator struct {
 	isSingleCall bool
@@ -2480,6 +2451,7 @@ func (r *BooleanColBooleanSliceIterator) Next(ie *IteratorEndpoint, p *IteratorP
 
 	var end int
 	firstIndex, lastIndex := 0, len(inChunk.IntervalIndex())-1
+	column := inChunk.Column(r.inOrdinal)
 	for i, start := range inChunk.IntervalIndex() {
 		if i < lastIndex {
 			end = inChunk.IntervalIndex()[i+1]
@@ -2487,7 +2459,7 @@ func (r *BooleanColBooleanSliceIterator) Next(ie *IteratorEndpoint, p *IteratorP
 			end = inChunk.NumberOfRows()
 		}
 		if !r.isSingleCall {
-			start, end = inChunk.Column(r.inOrdinal).GetRangeValueIndexV2(start, end)
+			start, end = column.GetRangeValueIndexV2(start, end)
 			if start == end && r.buf.Len() == 0 && (i < lastIndex || (i == lastIndex && !p.sameInterval)) {
 				outChunk.Column(r.outOrdinal).AppendNil()
 				continue
@@ -4713,7 +4685,8 @@ func (r *FloatColFloatIntegralIterator) appendLastItem(
 
 func (r *FloatColFloatIntegralIterator) Next(ie *IteratorEndpoint, p *IteratorParams) {
 	inChunk, outChunk := ie.InputPoint.Chunk, ie.OutputPoint.Chunk
-	if inChunk.Column(r.inOrdinal).IsEmpty() && r.buf.Len() > 0 {
+	column := inChunk.Column(r.inOrdinal)
+	if column.IsEmpty() && r.buf.Len() > 0 {
 		return
 	}
 
@@ -4742,7 +4715,7 @@ func (r *FloatColFloatIntegralIterator) Next(ie *IteratorEndpoint, p *IteratorPa
 				sametag = !(end == subIntervalIndexEnd)
 			}
 			if !r.isSingleCall {
-				start, end = inChunk.Column(r.inOrdinal).GetRangeValueIndexV2(start, end)
+				start, end = column.GetRangeValueIndexV2(start, end)
 				if start == end {
 					if r.buf.Nil() {
 						outChunk.Column(r.outOrdinal).AppendNil()
@@ -4894,7 +4867,8 @@ func (r *IntegerColFloatIntegralIterator) appendLastItem(
 
 func (r *IntegerColFloatIntegralIterator) Next(ie *IteratorEndpoint, p *IteratorParams) {
 	inChunk, outChunk := ie.InputPoint.Chunk, ie.OutputPoint.Chunk
-	if inChunk.Column(r.inOrdinal).IsEmpty() && r.buf.Len() > 0 {
+	column := inChunk.Column(r.inOrdinal)
+	if column.IsEmpty() && r.buf.Len() > 0 {
 		return
 	}
 
@@ -4923,7 +4897,7 @@ func (r *IntegerColFloatIntegralIterator) Next(ie *IteratorEndpoint, p *Iterator
 				sametag = !(end == subIntervalIndexEnd)
 			}
 			if !r.isSingleCall {
-				start, end = inChunk.Column(r.inOrdinal).GetRangeValueIndexV2(start, end)
+				start, end = column.GetRangeValueIndexV2(start, end)
 				if start == end {
 					if r.buf.Nil() {
 						outChunk.Column(r.outOrdinal).AppendNil()
@@ -6068,7 +6042,8 @@ func (r *FloatColFloatRateIterator) Next(ie *IteratorEndpoint, p *IteratorParams
 	inChunk, outChunk := ie.InputPoint.Chunk, ie.OutputPoint.Chunk
 	firstIndex, lastIndex := 0, len(inChunk.IntervalIndex())-1
 	onlyOneInterval := inChunk.IntervalLen() == 1
-	values := inChunk.Column(r.inOrdinal).FloatValues()
+	column := inChunk.Column(r.inOrdinal)
+	values := column.FloatValues()
 	for i, start := range inChunk.IntervalIndex() {
 		if i < lastIndex {
 			end = inChunk.IntervalIndex()[i+1]
@@ -6208,7 +6183,8 @@ func (r *IntegerColFloatRateIterator) Next(ie *IteratorEndpoint, p *IteratorPara
 	inChunk, outChunk := ie.InputPoint.Chunk, ie.OutputPoint.Chunk
 	firstIndex, lastIndex := 0, len(inChunk.IntervalIndex())-1
 	onlyOneInterval := inChunk.IntervalLen() == 1
-	values := inChunk.Column(r.inOrdinal).IntegerValues()
+	column := inChunk.Column(r.inOrdinal)
+	values := column.IntegerValues()
 	for i, start := range inChunk.IntervalIndex() {
 		if i < lastIndex {
 			end = inChunk.IntervalIndex()[i+1]
@@ -8078,6 +8054,7 @@ func (r *OGSketchIterator) Next(ie *IteratorEndpoint, p *IteratorParams) {
 	var end int
 	inChunk, outChunk := ie.InputPoint.Chunk, ie.OutputPoint.Chunk
 	firstIndex, lastIndex := 0, len(inChunk.IntervalIndex())-1
+	column := inChunk.Column(r.inOrdinal)
 	for i, start := range inChunk.IntervalIndex() {
 		if i < lastIndex {
 			end = inChunk.IntervalIndex()[i+1]
@@ -8090,7 +8067,7 @@ func (r *OGSketchIterator) Next(ie *IteratorEndpoint, p *IteratorParams) {
 		} else {
 			time, _ = r.opt.Window(inChunk.TimeByIndex(start))
 		}
-		start, end = inChunk.Column(r.inOrdinal).GetRangeValueIndexV2(start, end)
+		start, end = column.GetRangeValueIndexV2(start, end)
 		if !r.isSingleCall {
 			if start == end && r.sketch.IsNil() && (i < lastIndex || (i == lastIndex && !p.sameInterval)) {
 				outChunk.Column(r.outOrdinal).AppendManyNil(r.clusterNum)
