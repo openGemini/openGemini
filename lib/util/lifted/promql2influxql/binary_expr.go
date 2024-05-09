@@ -273,6 +273,8 @@ func (t *Transpiler) transpileBinOpOfBothVector(b *parser.BinaryExpr, op influxq
 		Sources: influxql.Sources{binOp},
 		Fields:  influxql.Fields{&influxql.Field{Expr: &influxql.VarRef{Val: DefaultFieldKey, Alias: DefaultFieldKey}}},
 	}
+	// set query time range
+	t.setTimeCondition(newStmt)
 	t.removeTableName = true
 	return newStmt, nil
 }
