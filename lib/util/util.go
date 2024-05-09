@@ -84,6 +84,10 @@ type ExceptString interface {
 	int64 | float64 | bool
 }
 
+type ExceptBool interface {
+	int64 | float64 | string
+}
+
 var logger *zap.Logger
 
 func SetLogger(lg *zap.Logger) {

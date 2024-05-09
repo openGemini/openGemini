@@ -29,135 +29,6 @@ import (
 	"github.com/openGemini/openGemini/engine/hybridqp"
 )
 
-func NewFloatMedianReduce(floatSliceItem *FloatSliceItem) (int, int64, float64, bool) {
-	length := len(floatSliceItem.value)
-	if length == 0 {
-		return -1, 0, 0, true
-	}
-	if length == 1 {
-		return -1, floatSliceItem.time[0], float64(floatSliceItem.value[0]), false
-	}
-
-	sort.Stable(floatSliceItem)
-
-	if length%2 == 0 {
-		lowvalue, highvalue := floatSliceItem.value[length/2-1], floatSliceItem.value[length/2]
-		return -1, floatSliceItem.time[length/2-1], float64(lowvalue) + float64(highvalue-lowvalue)/2, false
-	}
-	return -1, floatSliceItem.time[length/2], float64(floatSliceItem.value[length/2]), false
-}
-
-func NewIntegerMedianReduce(integerSliceItem *IntegerSliceItem) (int, int64, float64, bool) {
-	length := len(integerSliceItem.value)
-	if length == 0 {
-		return -1, 0, 0, true
-	}
-	if length == 1 {
-		return -1, integerSliceItem.time[0], float64(integerSliceItem.value[0]), false
-	}
-
-	sort.Stable(integerSliceItem)
-
-	if length%2 == 0 {
-		lowvalue, highvalue := integerSliceItem.value[length/2-1], integerSliceItem.value[length/2]
-		return -1, integerSliceItem.time[length/2-1], float64(lowvalue) + float64(highvalue-lowvalue)/2, false
-	}
-	return -1, integerSliceItem.time[length/2], float64(integerSliceItem.value[length/2]), false
-}
-
-func NewFloatModeReduce(FloatSliceItem *FloatSliceItem) (int, int64, float64, bool) {
-	length := len(FloatSliceItem.value)
-	start := 0
-	end := length - 1
-	if length == 0 {
-		return 0, 0, 0, true
-	}
-
-	sort.Stable(FloatSliceItem)
-	curri := start
-	currFreq := 0
-	currValue := FloatSliceItem.value[start]
-	modei := start
-	modeFreq := 0
-	for i := start; i <= end; i++ {
-		if FloatSliceItem.value[i] != currValue {
-			currFreq = 1
-			currValue = FloatSliceItem.value[i]
-			curri = i
-			continue
-		}
-		currFreq++
-		if modeFreq > currFreq || (modeFreq == currFreq && FloatSliceItem.time[curri] > FloatSliceItem.time[modei]) {
-			continue
-		}
-		modeFreq = currFreq
-		modei = curri
-	}
-	return modei, 0, 0, false
-}
-
-func NewIntegerModeReduce(IntegerSliceItem *IntegerSliceItem) (int, int64, float64, bool) {
-	length := len(IntegerSliceItem.value)
-	start := 0
-	end := length - 1
-	if length == 0 {
-		return 0, 0, 0, true
-	}
-
-	sort.Stable(IntegerSliceItem)
-	curri := start
-	currFreq := 0
-	currValue := IntegerSliceItem.value[start]
-	modei := start
-	modeFreq := 0
-	for i := start; i <= end; i++ {
-		if IntegerSliceItem.value[i] != currValue {
-			currFreq = 1
-			currValue = IntegerSliceItem.value[i]
-			curri = i
-			continue
-		}
-		currFreq++
-		if modeFreq > currFreq || (modeFreq == currFreq && IntegerSliceItem.time[curri] > IntegerSliceItem.time[modei]) {
-			continue
-		}
-		modeFreq = currFreq
-		modei = curri
-	}
-	return modei, 0, 0, false
-}
-
-func NewStringModeReduce(StringSliceItem *StringSliceItem) (int, int64, float64, bool) {
-	length := len(StringSliceItem.value)
-	start := 0
-	end := length - 1
-	if length == 0 {
-		return 0, 0, 0, true
-	}
-
-	sort.Stable(StringSliceItem)
-	curri := start
-	currFreq := 0
-	currValue := StringSliceItem.value[start]
-	modei := start
-	modeFreq := 0
-	for i := start; i <= end; i++ {
-		if StringSliceItem.value[i] != currValue {
-			currFreq = 1
-			currValue = StringSliceItem.value[i]
-			curri = i
-			continue
-		}
-		currFreq++
-		if modeFreq > currFreq || (modeFreq == currFreq && StringSliceItem.time[curri] > StringSliceItem.time[modei]) {
-			continue
-		}
-		modeFreq = currFreq
-		modei = curri
-	}
-	return modei, 0, 0, false
-}
-
 func NewBooleanModeReduce(BooleanSliceItem *BooleanSliceItem) (int, int64, float64, bool) {
 	length := len(BooleanSliceItem.value)
 	if length == 0 {
@@ -1490,7 +1361,7 @@ func BooleanLastTimeColMerge(prevPoint, currPoint *BooleanPoint) {
 }
 
 func NewFloatPercentileReduce(percentile float64) FloatColReduceSliceReduce {
-	return func(floatSliceItem *FloatSliceItem) (int, int64, float64, bool) {
+	return func(floatSliceItem *SliceItem[float64]) (int, int64, float64, bool) {
 		length := len(floatSliceItem.value)
 		if length == 0 {
 			return 0, int64(0), float64(0), true
@@ -1509,7 +1380,7 @@ func NewFloatPercentileReduce(percentile float64) FloatColReduceSliceReduce {
 }
 
 func NewIntegerPercentileReduce(percentile float64) IntegerColReduceSliceReduce {
-	return func(integerSliceItem *IntegerSliceItem) (int, int64, float64, bool) {
+	return func(integerSliceItem *SliceItem[int64]) (int, int64, float64, bool) {
 		length := len(integerSliceItem.value)
 		if length == 0 {
 			return 0, int64(0), float64(0), true
@@ -1528,7 +1399,7 @@ func NewIntegerPercentileReduce(percentile float64) IntegerColReduceSliceReduce 
 }
 
 func NewFloatStddevReduce() FloatColReduceSliceReduce {
-	return func(floatSliceItem *FloatSliceItem) (int, int64, float64, bool) {
+	return func(floatSliceItem *SliceItem[float64]) (int, int64, float64, bool) {
 		length := len(floatSliceItem.value)
 		if length == 1 {
 			return -1, int64(0), float64(0), false
@@ -1550,7 +1421,7 @@ func NewFloatStddevReduce() FloatColReduceSliceReduce {
 }
 
 func NewIntegerStddevReduce() IntegerColReduceSliceReduce {
-	return func(integerSliceItem *IntegerSliceItem) (int, int64, float64, bool) {
+	return func(integerSliceItem *SliceItem[int64]) (int, int64, float64, bool) {
 		length := len(integerSliceItem.value)
 		if length == 1 {
 			return -1, int64(0), float64(0), false

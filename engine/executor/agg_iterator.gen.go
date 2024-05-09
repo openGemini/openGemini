@@ -1872,154 +1872,6 @@ func (r *BooleanTimeColBooleanIterator) Next(ie *IteratorEndpoint, p *IteratorPa
 	}
 }
 
-type FloatSliceItem struct {
-	index []int
-	time  []int64
-	value []float64
-}
-
-func (f *FloatSliceItem) AppendItem(c Chunk, ordinal, start, end int) {
-	if start == end {
-		return
-	}
-	fLen := len(f.time)
-	if c.Column(ordinal).NilCount() == 0 {
-		// fast path
-		for i := start; i < end; i++ {
-			f.index = append(f.index, fLen+i-start)
-			f.time = append(f.time, c.TimeByIndex(i))
-		}
-	} else {
-		// slow path
-		getTimeIndex := c.Column(ordinal).GetTimeIndex
-		for i := start; i < end; i++ {
-			f.index = append(f.index, fLen+i-start)
-			f.time = append(f.time, c.TimeByIndex(getTimeIndex(i)))
-		}
-	}
-	f.value = append(f.value, c.Column(ordinal).FloatValues()[start:end]...)
-}
-
-func (f *FloatSliceItem) Reset() {
-	f.index = f.index[:0]
-	f.time = f.time[:0]
-	f.value = f.value[:0]
-}
-
-func (f *FloatSliceItem) Len() int {
-	return len(f.time)
-}
-
-func (f *FloatSliceItem) Less(i, j int) bool {
-	return f.value[i] < f.value[j]
-}
-
-func (f *FloatSliceItem) Swap(i, j int) {
-	f.index[i], f.index[j] = f.index[j], f.index[i]
-	f.time[i], f.time[j] = f.time[j], f.time[i]
-	f.value[i], f.value[j] = f.value[j], f.value[i]
-}
-
-type IntegerSliceItem struct {
-	index []int
-	time  []int64
-	value []int64
-}
-
-func (f *IntegerSliceItem) AppendItem(c Chunk, ordinal, start, end int) {
-	if start == end {
-		return
-	}
-	fLen := len(f.time)
-	if c.Column(ordinal).NilCount() == 0 {
-		// fast path
-		for i := start; i < end; i++ {
-			f.index = append(f.index, fLen+i-start)
-			f.time = append(f.time, c.TimeByIndex(i))
-		}
-	} else {
-		// slow path
-		getTimeIndex := c.Column(ordinal).GetTimeIndex
-		for i := start; i < end; i++ {
-			f.index = append(f.index, fLen+i-start)
-			f.time = append(f.time, c.TimeByIndex(getTimeIndex(i)))
-		}
-	}
-	f.value = append(f.value, c.Column(ordinal).IntegerValues()[start:end]...)
-}
-
-func (f *IntegerSliceItem) Reset() {
-	f.index = f.index[:0]
-	f.time = f.time[:0]
-	f.value = f.value[:0]
-}
-
-func (f *IntegerSliceItem) Len() int {
-	return len(f.time)
-}
-
-func (f *IntegerSliceItem) Less(i, j int) bool {
-	return f.value[i] < f.value[j]
-}
-
-func (f *IntegerSliceItem) Swap(i, j int) {
-	f.index[i], f.index[j] = f.index[j], f.index[i]
-	f.time[i], f.time[j] = f.time[j], f.time[i]
-	f.value[i], f.value[j] = f.value[j], f.value[i]
-}
-
-type StringSliceItem struct {
-	index     []int
-	time      []int64
-	value     []string
-	valueBits []byte
-}
-
-func (f *StringSliceItem) AppendItem(c Chunk, ordinal, start, end int) {
-	if start == end {
-		return
-	}
-	fLen := len(f.time)
-	if c.Column(ordinal).NilCount() == 0 {
-		// fast path
-		for i := start; i < end; i++ {
-			f.index = append(f.index, fLen+i-start)
-			f.time = append(f.time, c.TimeByIndex(i))
-		}
-	} else {
-		// slow path
-		getTimeIndex := c.Column(ordinal).GetTimeIndex
-		for i := start; i < end; i++ {
-			f.index = append(f.index, fLen+i-start)
-			f.time = append(f.time, c.TimeByIndex(getTimeIndex(i)))
-		}
-	}
-
-	col := c.Column(ordinal)
-	f.valueBits, f.value = col.GetStringValueBytes(f.valueBits, f.value, start, end)
-}
-
-func (f *StringSliceItem) Reset() {
-	f.index = f.index[:0]
-	f.time = f.time[:0]
-	f.value = f.value[:0]
-	f.valueBits = f.valueBits[:0]
-}
-
-func (f *StringSliceItem) Len() int {
-	return len(f.time)
-}
-
-func (f *StringSliceItem) Less(i, j int) bool {
-	return f.value[i] < f.value[j]
-}
-
-func (f *StringSliceItem) Swap(i, j int) {
-	f.index[i], f.index[j] = f.index[j], f.index[i]
-	f.time[i], f.time[j] = f.time[j], f.time[i]
-	f.value[i], f.value[j] = f.value[j], f.value[i]
-}
-
 type BooleanSliceItem struct {
 	index []int
 	time  []int64
@@ -2058,17 +1910,13 @@ func (f *BooleanSliceItem) Len() int {
 	return len(f.time)
 }
 
-type FloatColReduceSliceReduce func(floatItem *FloatSliceItem) (index int, time int64, value float64, isNil bool)
-
-func NewFloatSliceItem() *FloatSliceItem {
-	return &FloatSliceItem{}
-}
+type FloatColReduceSliceReduce func(floatItem *SliceItem[float64]) (index int, time int64, value float64, isNil bool)
 
 type FloatColFloatSliceIterator struct {
 	isSingleCall bool
 	inOrdinal    int
 	outOrdinal   int
-	buf          *FloatSliceItem
+	buf          *SliceItem[float64]
 	fn           FloatColReduceSliceReduce
 	auxChunk     Chunk
 	auxProcessor []*AuxProcessor
@@ -2079,7 +1927,7 @@ func NewFloatColFloatSliceIterator(fn FloatColReduceSliceReduce,
 	isSingleCall bool, inOrdinal, outOrdinal int, auxProcessor []*AuxProcessor, rowDataType hybridqp.RowDataType,
 ) *FloatColFloatSliceIterator {
 	r := &FloatColFloatSliceIterator{
-		buf:          NewFloatSliceItem(),
+		buf:          NewSliceItem[float64](),
 		fn:           fn,
 		isSingleCall: isSingleCall,
 		inOrdinal:    inOrdinal,
@@ -2183,9 +2031,9 @@ func (r *FloatColFloatSliceIterator) assembleCurrItem(
 }
 
 func (r *FloatColFloatSliceIterator) processFirstWindow(
-	inChunk, outChunk Chunk, sameInterval, haveMultiInterval bool, start, end int,
+	inChunk, outChunk Chunk, sameInterval, haveMultiInterval bool, start, end int, values []float64,
 ) {
-	r.buf.AppendItem(inChunk, r.inOrdinal, start, end)
+	r.buf.AppendItem(inChunk, r.inOrdinal, start, end, values)
 	if r.auxProcessor != nil {
 		r.updateAuxChunk(inChunk, r.auxChunk, start, end)
 	}
@@ -2199,18 +2047,18 @@ func (r *FloatColFloatSliceIterator) processFirstWindow(
 }
 
 func (r *FloatColFloatSliceIterator) processLastWindow(
-	inChunk Chunk, start, end int,
+	inChunk Chunk, start, end int, values []float64,
 ) {
-	r.buf.AppendItem(inChunk, r.inOrdinal, start, end)
+	r.buf.AppendItem(inChunk, r.inOrdinal, start, end, values)
 	if r.auxProcessor != nil {
 		r.updateAuxChunk(inChunk, r.auxChunk, start, end)
 	}
 }
 
 func (r *FloatColFloatSliceIterator) processMiddleWindow(
-	inChunk, outChunk Chunk, start, end int,
+	inChunk, outChunk Chunk, start, end int, values []float64,
 ) {
-	r.buf.AppendItem(inChunk, r.inOrdinal, start, end)
+	r.buf.AppendItem(inChunk, r.inOrdinal, start, end, values)
 	index, time, value, isNil := r.fn(r.buf)
 	if !isNil {
 		r.assembleCurrItem(inChunk, outChunk, start, index, time, value)
@@ -2223,6 +2071,7 @@ func (r *FloatColFloatSliceIterator) Next(ie *IteratorEndpoint, p *IteratorParam
 
 	var end int
 	firstIndex, lastIndex := 0, len(inChunk.IntervalIndex())-1
+	values := inChunk.Column(r.inOrdinal).FloatValues()
 	for i, start := range inChunk.IntervalIndex() {
 		if i < lastIndex {
 			end = inChunk.IntervalIndex()[i+1]
@@ -2238,26 +2087,22 @@ func (r *FloatColFloatSliceIterator) Next(ie *IteratorEndpoint, p *IteratorParam
 		}
 		if i == firstIndex && r.buf.Len() > 0 {
 			r.processFirstWindow(inChunk, outChunk, p.sameInterval,
-				firstIndex != lastIndex, start, end)
+				firstIndex != lastIndex, start, end, values)
 		} else if i == lastIndex && p.sameInterval {
-			r.processLastWindow(inChunk, start, end)
+			r.processLastWindow(inChunk, start, end, values)
 		} else {
-			r.processMiddleWindow(inChunk, outChunk, start, end)
+			r.processMiddleWindow(inChunk, outChunk, start, end, values)
 		}
 	}
 }
 
-type IntegerColReduceSliceReduce func(integerItem *IntegerSliceItem) (index int, time int64, value float64, isNil bool)
-
-func NewIntegerSliceItem() *IntegerSliceItem {
-	return &IntegerSliceItem{}
-}
+type IntegerColReduceSliceReduce func(integerItem *SliceItem[int64]) (index int, time int64, value float64, isNil bool)
 
 type IntegerColIntegerSliceIterator struct {
 	isSingleCall bool
 	inOrdinal    int
 	outOrdinal   int
-	buf          *IntegerSliceItem
+	buf          *SliceItem[int64]
 	fn           IntegerColReduceSliceReduce
 	auxChunk     Chunk
 	auxProcessor []*AuxProcessor
@@ -2268,7 +2113,7 @@ func NewIntegerColIntegerSliceIterator(fn IntegerColReduceSliceReduce,
 	isSingleCall bool, inOrdinal, outOrdinal int, auxProcessor []*AuxProcessor, rowDataType hybridqp.RowDataType,
 ) *IntegerColIntegerSliceIterator {
 	r := &IntegerColIntegerSliceIterator{
-		buf:          NewIntegerSliceItem(),
+		buf:          NewSliceItem[int64](),
 		fn:           fn,
 		isSingleCall: isSingleCall,
 		inOrdinal:    inOrdinal,
@@ -2372,9 +2217,9 @@ func (r *IntegerColIntegerSliceIterator) assembleCurrItem(
 }
 
 func (r *IntegerColIntegerSliceIterator) processFirstWindow(
-	inChunk, outChunk Chunk, sameInterval, haveMultiInterval bool, start, end int,
+	inChunk, outChunk Chunk, sameInterval, haveMultiInterval bool, start, end int, values []int64,
 ) {
-	r.buf.AppendItem(inChunk, r.inOrdinal, start, end)
+	r.buf.AppendItem(inChunk, r.inOrdinal, start, end, values)
 	if r.auxProcessor != nil {
 		r.updateAuxChunk(inChunk, r.auxChunk, start, end)
 	}
@@ -2388,18 +2233,18 @@ func (r *IntegerColIntegerSliceIterator) processFirstWindow(
 }
 
 func (r *IntegerColIntegerSliceIterator) processLastWindow(
-	inChunk Chunk, start, end int,
+	inChunk Chunk, start, end int, values []int64,
 ) {
-	r.buf.AppendItem(inChunk, r.inOrdinal, start, end)
+	r.buf.AppendItem(inChunk, r.inOrdinal, start, end, values)
 	if r.auxProcessor != nil {
 		r.updateAuxChunk(inChunk, r.auxChunk, start, end)
 	}
 }
 
 func (r *IntegerColIntegerSliceIterator) processMiddleWindow(
-	inChunk, outChunk Chunk, start, end int,
+	inChunk, outChunk Chunk, start, end int, values []int64,
 ) {
-	r.buf.AppendItem(inChunk, r.inOrdinal, start, end)
+	r.buf.AppendItem(inChunk, r.inOrdinal, start, end, values)
 	index, time, value, isNil := r.fn(r.buf)
 	if !isNil {
 		r.assembleCurrItem(inChunk, outChunk, start, index, time, value)
@@ -2412,6 +2257,7 @@ func (r *IntegerColIntegerSliceIterator) Next(ie *IteratorEndpoint, p *IteratorP
 
 	var end int
 	firstIndex, lastIndex := 0, len(inChunk.IntervalIndex())-1
+	values := inChunk.Column(r.inOrdinal).IntegerValues()
 	for i, start := range inChunk.IntervalIndex() {
 		if i < lastIndex {
 			end = inChunk.IntervalIndex()[i+1]
@@ -2427,26 +2273,22 @@ func (r *IntegerColIntegerSliceIterator) Next(ie *IteratorEndpoint, p *IteratorP
 		}
 		if i == firstIndex && r.buf.Len() > 0 {
 			r.processFirstWindow(inChunk, outChunk, p.sameInterval,
-				firstIndex != lastIndex, start, end)
+				firstIndex != lastIndex, start, end, values)
 		} else if i == lastIndex && p.sameInterval {
-			r.processLastWindow(inChunk, start, end)
+			r.processLastWindow(inChunk, start, end, values)
 		} else {
-			r.processMiddleWindow(inChunk, outChunk, start, end)
+			r.processMiddleWindow(inChunk, outChunk, start, end, values)
 		}
 	}
 }
 
-type StringColReduceSliceReduce func(stringItem *StringSliceItem) (index int, time int64, value float64, isNil bool)
-
-func NewStringSliceItem() *StringSliceItem {
-	return &StringSliceItem{}
-}
+type StringColReduceSliceReduce func(stringItem *SliceItem[string]) (index int, time int64, value float64, isNil bool)
 
 type StringColStringSliceIterator struct {
 	isSingleCall bool
 	inOrdinal    int
 	outOrdinal   int
-	buf          *StringSliceItem
+	buf          *SliceItem[string]
 	fn           StringColReduceSliceReduce
 	auxChunk     Chunk
 	auxProcessor []*AuxProcessor
@@ -2457,7 +2299,7 @@ func NewStringColStringSliceIterator(fn StringColReduceSliceReduce,
 	isSingleCall bool, inOrdinal, outOrdinal int, auxProcessor []*AuxProcessor, rowDataType hybridqp.RowDataType,
 ) *StringColStringSliceIterator {
 	r := &StringColStringSliceIterator{
-		buf:          NewStringSliceItem(),
+		buf:          NewSliceItem[string](),
 		fn:           fn,
 		isSingleCall: isSingleCall,
 		inOrdinal:    inOrdinal,
@@ -2561,9 +2403,9 @@ func (r *StringColStringSliceIterator) assembleCurrItem(
 }
 
 func (r *StringColStringSliceIterator) processFirstWindow(
-	inChunk, outChunk Chunk, sameInterval, haveMultiInterval bool, start, end int,
+	inChunk, outChunk Chunk, sameInterval, haveMultiInterval bool, start, end int, values []string,
 ) {
-	r.buf.AppendItem(inChunk, r.inOrdinal, start, end)
+	r.buf.AppendItem(inChunk, r.inOrdinal, start, end, values)
 	if r.auxProcessor != nil {
 		r.updateAuxChunk(inChunk, r.auxChunk, start, end)
 	}
@@ -2577,18 +2419,18 @@ func (r *StringColStringSliceIterator) processFirstWindow(
 }
 
 func (r *StringColStringSliceIterator) processLastWindow(
-	inChunk Chunk, start, end int,
+	inChunk Chunk, start, end int, values []string,
 ) {
-	r.buf.AppendItem(inChunk, r.inOrdinal, start, end)
+	r.buf.AppendItem(inChunk, r.inOrdinal, start, end, values)
 	if r.auxProcessor != nil {
 		r.updateAuxChunk(inChunk, r.auxChunk, start, end)
 	}
 }
 
 func (r *StringColStringSliceIterator) processMiddleWindow(
-	inChunk, outChunk Chunk, start, end int,
+	inChunk, outChunk Chunk, start, end int, values []string,
 ) {
-	r.buf.AppendItem(inChunk, r.inOrdinal, start, end)
+	r.buf.AppendItem(inChunk, r.inOrdinal, start, end, values)
 	index, time, value, isNil := r.fn(r.buf)
 	if !isNil {
 		r.assembleCurrItem(inChunk, outChunk, start, index, time, value)
@@ -2601,6 +2443,8 @@ func (r *StringColStringSliceIterator) Next(ie *IteratorEndpoint, p *IteratorPar
 
 	var end int
 	firstIndex, lastIndex := 0, len(inChunk.IntervalIndex())-1
+	column := inChunk.Column(r.inOrdinal)
+	_, values := column.GetStringValueBytes(nil, nil, 0, column.Length()-column.NilCount())
 	for i, start := range inChunk.IntervalIndex() {
 		if i < lastIndex {
 			end = inChunk.IntervalIndex()[i+1]
@@ -2616,11 +2460,11 @@ func (r *StringColStringSliceIterator) Next(ie *IteratorEndpoint, p *IteratorPar
 		}
 		if i == firstIndex && r.buf.Len() > 0 {
 			r.processFirstWindow(inChunk, outChunk, p.sameInterval,
-				firstIndex != lastIndex, start, end)
+				firstIndex != lastIndex, start, end, values)
 		} else if i == lastIndex && p.sameInterval {
-			r.processLastWindow(inChunk, start, end)
+			r.processLastWindow(inChunk, start, end, values)
 		} else {
-			r.processMiddleWindow(inChunk, outChunk, start, end)
+			r.processMiddleWindow(inChunk, outChunk, start, end, values)
 		}
 	}
 }
@@ -3356,156 +3200,6 @@ func (r *IntegerColIntegerHeapIterator) Next(ie *IteratorEndpoint, p *IteratorPa
 	}
 }
 
-type FloatDistinctItem struct {
-	m     map[float64]struct{}
-	time  []int64
-	value []float64
-}
-
-func NewFloatDistinctItem() *FloatDistinctItem {
-	return &FloatDistinctItem{
-		m: make(map[float64]struct{}),
-	}
-}
-
-func (f *FloatDistinctItem) appendItem(time []int64, value []float64) {
-	for i := 0; i < len(time); i++ {
-		if _, ok := f.m[value[i]]; !ok {
-			f.m[value[i]] = struct{}{}
-			f.time = append(f.time, time[i])
-			f.value = append(f.value, value[i])
-		}
-	}
-}
-
-func (f *FloatDistinctItem) Nil() bool {
-	return len(f.time) == 0
-}
-
-func (f *FloatDistinctItem) Reset() {
-	for k := range f.m {
-		delete(f.m, k)
-	}
-	f.time = f.time[:0]
-	f.value = f.value[:0]
-}
-
-func (f *FloatDistinctItem) Len() int {
-	return len(f.value)
-}
-
-func (f *FloatDistinctItem) Less(i, j int) bool {
-	if f.time[i] != f.time[j] {
-		return f.time[i] < f.time[j]
-	}
-	return f.value[i] < f.value[j]
-}
-
-func (f *FloatDistinctItem) Swap(i, j int) {
-	f.time[i], f.time[j] = f.time[j], f.time[i]
-	f.value[i], f.value[j] = f.value[j], f.value[i]
-}
-
-type IntegerDistinctItem struct {
-	m     map[int64]struct{}
-	time  []int64
-	value []int64
-}
-
-func NewIntegerDistinctItem() *IntegerDistinctItem {
-	return &IntegerDistinctItem{
-		m: make(map[int64]struct{}),
-	}
-}
-
-func (f *IntegerDistinctItem) appendItem(time []int64, value []int64) {
-	for i := 0; i < len(time); i++ {
-		if _, ok := f.m[value[i]]; !ok {
-			f.m[value[i]] = struct{}{}
-			f.time = append(f.time, time[i])
-			f.value = append(f.value, value[i])
-		}
-	}
-}
-
-func (f *IntegerDistinctItem) Nil() bool {
-	return len(f.time) == 0
-}
-
-func (f *IntegerDistinctItem) Reset() {
-	for k := range f.m {
-		delete(f.m, k)
-	}
-	f.time = f.time[:0]
-	f.value = f.value[:0]
-}
-
-func (f *IntegerDistinctItem) Len() int {
-	return len(f.value)
-}
-
-func (f *IntegerDistinctItem) Less(i, j int) bool {
-	if f.time[i] != f.time[j] {
-		return f.time[i] < f.time[j]
-	}
-	return f.value[i] < f.value[j]
-}
-
-func (f *IntegerDistinctItem) Swap(i, j int) {
-	f.time[i], f.time[j] = f.time[j], f.time[i]
-	f.value[i], f.value[j] = f.value[j], f.value[i]
-}
-
-type StringDistinctItem struct {
-	m     map[string]struct{}
-	time  []int64
-	value []string
-}
-
-func NewStringDistinctItem() *StringDistinctItem {
-	return &StringDistinctItem{
-		m: make(map[string]struct{}),
-	}
-}
-
-func (f *StringDistinctItem) appendItem(time []int64, value []string) {
-	for i := 0; i < len(time); i++ {
-		if _, ok := f.m[value[i]]; !ok {
-			f.m[value[i]] = struct{}{}
-			f.time = append(f.time, time[i])
-			f.value = append(f.value, value[i])
-		}
-	}
-}
-
-func (f *StringDistinctItem) Nil() bool {
-	return len(f.time) == 0
-}
-
-func (f *StringDistinctItem) Reset() {
-	for k := range f.m {
-		delete(f.m, k)
-	}
-	f.time = f.time[:0]
-	f.value = f.value[:0]
-}
-
-func (f *StringDistinctItem) Len() int {
-	return len(f.value)
-}
-
-func (f *StringDistinctItem) Less(i, j int) bool {
-	if f.time[i] != f.time[j] {
-		return f.time[i] < f.time[j]
-	}
-	return f.value[i] < f.value[j]
-}
-
-func (f *StringDistinctItem) Swap(i, j int) {
-	f.time[i], f.time[j] = f.time[j], f.time[i]
-	f.value[i], f.value[j] = f.value[j], f.value[i]
-}
-
 type BooleanDistinctItem struct {
 	m     map[bool]struct{}
 	time  []int64
@@ -3557,7 +3251,7 @@ func (f *BooleanDistinctItem) Swap(i, j int) {
 }
 
 type FloatColFloatDistinctIterator struct {
-	buf        *FloatDistinctItem
+	buf        *DistinctItem[float64]
 	inOrdinal  int
 	outOrdinal int
 }
@@ -3566,7 +3260,7 @@ func NewFloatColFloatDistinctIterator(
 	inOrdinal, outOrdinal int,
 ) *FloatColFloatDistinctIterator {
 	return &FloatColFloatDistinctIterator{
-		buf:        NewFloatDistinctItem(),
+		buf:        NewDistinctItem[float64](),
 		inOrdinal:  inOrdinal,
 		outOrdinal: outOrdinal,
 	}
@@ -3639,7 +3333,7 @@ func (r *FloatColFloatDistinctIterator) Next(ie *IteratorEndpoint, p *IteratorPa
 }
 
 type IntegerColIntegerDistinctIterator struct {
-	buf        *IntegerDistinctItem
+	buf        *DistinctItem[int64]
 	inOrdinal  int
 	outOrdinal int
 }
@@ -3648,7 +3342,7 @@ func NewIntegerColIntegerDistinctIterator(
 	inOrdinal, outOrdinal int,
 ) *IntegerColIntegerDistinctIterator {
 	return &IntegerColIntegerDistinctIterator{
-		buf:        NewIntegerDistinctItem(),
+		buf:        NewDistinctItem[int64](),
 		inOrdinal:  inOrdinal,
 		outOrdinal: outOrdinal,
 	}
@@ -3721,7 +3415,7 @@ func (r *IntegerColIntegerDistinctIterator) Next(ie *IteratorEndpoint, p *Iterat
 }
 
 type StringColStringDistinctIterator struct {
-	buf        *StringDistinctItem
+	buf        *DistinctItem[string]
 	inOrdinal  int
 	outOrdinal int
 	stringBuff []string
@@ -3731,7 +3425,7 @@ func NewStringColStringDistinctIterator(
 	inOrdinal, outOrdinal int,
 ) *StringColStringDistinctIterator {
 	return &StringColStringDistinctIterator{
-		buf:        NewStringDistinctItem(),
+		buf:        NewDistinctItem[string](),
 		inOrdinal:  inOrdinal,
 		outOrdinal: outOrdinal,
 	}

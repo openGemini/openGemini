@@ -343,11 +343,11 @@ func NewMedianRoutineImpl(inRowDataType, outRowDataType hybridqp.RowDataType, op
 	dataType := inRowDataType.Field(inOrdinal).Expr.(*influxql.VarRef).Type
 	switch dataType {
 	case influxql.Float:
-		return NewRoutineImpl(NewFloatColFloatSliceIterator(NewFloatMedianReduce,
+		return NewRoutineImpl(NewFloatColFloatSliceIterator(NewMedianReduce[float64],
 			isSingleCall, inOrdinal, outOrdinal, nil, outRowDataType),
 			inOrdinal, outOrdinal), nil
 	case influxql.Integer:
-		return NewRoutineImpl(NewIntegerColIntegerSliceIterator(NewIntegerMedianReduce,
+		return NewRoutineImpl(NewIntegerColIntegerSliceIterator(NewMedianReduce[int64],
 			isSingleCall, inOrdinal, outOrdinal, nil, outRowDataType),
 			inOrdinal, outOrdinal), nil
 	default:
@@ -364,15 +364,15 @@ func NewModeRoutineImpl(inRowDataType, outRowDataType hybridqp.RowDataType, opt 
 	dataType := inRowDataType.Field(inOrdinal).Expr.(*influxql.VarRef).Type
 	switch dataType {
 	case influxql.Float:
-		return NewRoutineImpl(NewFloatColFloatSliceIterator(NewFloatModeReduce,
+		return NewRoutineImpl(NewFloatColFloatSliceIterator(NewModeReduce[float64],
 			isSingleCall, inOrdinal, outOrdinal, nil, outRowDataType),
 			inOrdinal, outOrdinal), nil
 	case influxql.Integer:
-		return NewRoutineImpl(NewIntegerColIntegerSliceIterator(NewIntegerModeReduce,
+		return NewRoutineImpl(NewIntegerColIntegerSliceIterator(NewModeReduce[int64],
 			isSingleCall, inOrdinal, outOrdinal, nil, outRowDataType),
 			inOrdinal, outOrdinal), nil
 	case influxql.String:
-		return NewRoutineImpl(NewStringColStringSliceIterator(NewStringModeReduce,
+		return NewRoutineImpl(NewStringColStringSliceIterator(NewModeReduce[string],
 			isSingleCall, inOrdinal, outOrdinal, nil, outRowDataType),
 			inOrdinal, outOrdinal), nil
 	case influxql.Boolean:

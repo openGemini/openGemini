@@ -274,3 +274,105 @@ func (f *SampleItem[T]) appendForFast(input Chunk, start, end, maxIndex int, val
 		}
 	}
 }
+
+type DistinctItem[T util.ExceptBool] struct {
+	m     map[T]struct{}
+	time  []int64
+	value []T
+}
+
+func NewDistinctItem[T util.ExceptBool]() *DistinctItem[T] {
+	return &DistinctItem[T]{
+		m: make(map[T]struct{}),
+	}
+}
+
+func (f *DistinctItem[T]) appendItem(time []int64, value []T) {
+	for i := 0; i < len(time); i++ {
+		if _, ok := f.m[value[i]]; !ok {
+			f.m[value[i]] = struct{}{}
+			f.time = append(f.time, time[i])
+			f.value = append(f.value, value[i])
+		}
+	}
+}
+
+func (f *DistinctItem[T]) Nil() bool {
+	return len(f.time) == 0
+}
+
+func (f *DistinctItem[T]) Reset() {
+	for k := range f.m {
+		delete(f.m, k)
+	}
+	f.time = f.time[:0]
+	f.value = f.value[:0]
+}
+
+func (f *DistinctItem[T]) Len() int {
+	return len(f.value)
+}
+
+func (f *DistinctItem[T]) Less(i, j int) bool {
+	if f.time[i] != f.time[j] {
+		return f.time[i] < f.time[j]
+	}
+	return f.value[i] < f.value[j]
+}
+
+func (f *DistinctItem[T]) Swap(i, j int) {
+	f.time[i], f.time[j] = f.time[j], f.time[i]
+	f.value[i], f.value[j] = f.value[j], f.value[i]
+}
+
+type SliceItem[T util.ExceptBool] struct {
+	index []int
+	time  []int64
+	value []T
+}
+
+func NewSliceItem[T util.ExceptBool]() *SliceItem[T] {
+	return &SliceItem[T]{}
+}
+
+func (f *SliceItem[T]) AppendItem(c Chunk, ordinal, start, end int, values []T) {
+	if start == end {
+		return
+	}
+	fLen := len(f.time)
+	if c.Column(ordinal).NilCount() == 0 {
+		// fast path
+		for i := start; i < end; i++ {
+			f.index = append(f.index, fLen+i-start)
+			f.time = append(f.time, c.TimeByIndex(i))
+		}
+	} else {
+		// slow path
+		getTimeIndex := c.Column(ordinal).GetTimeIndex
+		for i := start; i < end; i++ {
+			f.index = append(f.index, fLen+i-start)
+			f.time = append(f.time, c.TimeByIndex(getTimeIndex(i)))
+		}
+	}
+	f.value = append(f.value, values[start:end]...)
+}
+
+func (f *SliceItem[T]) Reset() {
+	f.index = f.index[:0]
+	f.time = f.time[:0]
+	f.value = f.value[:0]
+}
+
+func (f *SliceItem[T]) Len() int {
+	return len(f.time)
+}
+
+func (f *SliceItem[T]) Less(i, j int) bool {
+	return f.value[i] < f.value[j]
+}
+
+func (f *SliceItem[T]) Swap(i, j int) {
+	f.index[i], f.index[j] = f.index[j], f.index[i]
+	f.time[i], f.time[j] = f.time[j], f.time[i]
+	f.value[i], f.value[j] = f.value[j], f.value[i]
+}

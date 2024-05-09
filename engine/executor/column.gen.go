@@ -433,8 +433,11 @@ func (c *ColumnImpl) CloneStringValues(val []byte, offset []uint32) {
 }
 
 func (c *ColumnImpl) GetStringValueBytes(valueBits []byte, value []string, start, end int) ([]byte, []string) {
-	var os, oe int
 	stringBytes, offset := c.GetStringBytes()
+	if len(stringBytes) == 0 {
+		return nil, nil
+	}
+	var os, oe int
 	os = int(offset[start])
 	if end < len(offset) {
 		oe = int(offset[end])
