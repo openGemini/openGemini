@@ -304,7 +304,7 @@ func buildSortAppendQueryPlan(ctx context.Context, qc query.LogicalPlanCreator, 
 		childOpt.UpdateSources(optSource)
 		s := NewQuerySchemaWithJoinCase(stmt.Fields, influxql.Sources{stmt.Sources[i]}, stmt.ColumnNames(), childOpt, stmt.JoinSource,
 			stmt.UnnestSource, stmt.SortFields)
-		child, err := buildSources(ctx, qc, influxql.Sources{stmt.Sources[i]}, s)
+		child, err := BuildSources(ctx, qc, influxql.Sources{stmt.Sources[i]}, s, false)
 		if err != nil {
 			return nil, err
 		}
@@ -339,7 +339,7 @@ func BuildInConditionPlan(ctx context.Context, qc query.LogicalPlanCreator, stmt
 	rightOpt, _ := query.NewProcessorOptionsStmt(c.Stmt, sopt)
 	sRight := NewQuerySchemaWithJoinCase(c.Stmt.Fields, c.Stmt.Sources, c.Stmt.ColumnNames(), &rightOpt, c.Stmt.JoinSource,
 		c.Stmt.UnnestSource, c.Stmt.SortFields)
-	right, err := buildSources(ctx, qc, c.Stmt.Sources, sRight)
+	right, err := BuildSources(ctx, qc, c.Stmt.Sources, sRight, false)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -349,7 +349,7 @@ func BuildInConditionPlan(ctx context.Context, qc query.LogicalPlanCreator, stmt
 	leftOpt := opt.Clone()
 	sLeft := NewQuerySchemaWithJoinCase(stmt.Fields, stmt.Sources, stmt.ColumnNames(), leftOpt, stmt.JoinSource,
 		stmt.UnnestSource, stmt.SortFields)
-	left, err := buildSources(ctx, qc, stmt.Sources, sLeft)
+	left, err := BuildSources(ctx, qc, stmt.Sources, sLeft, false)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -375,7 +375,7 @@ func BuildFullJoinQueryPlan(ctx context.Context, qc query.LogicalPlanCreator, st
 		childOpt := schema.opt.(*query.ProcessorOptions).Clone()
 		childOpt.UpdateSources(optSource)
 		s := NewQuerySchemaWithSources(stmt.Fields, influxql.Sources{stmt.Sources[i]}, stmt.ColumnNames(), childOpt, nil)
-		child, err := buildSources(ctx, qc, influxql.Sources{stmt.Sources[i]}, s)
+		child, err := BuildSources(ctx, qc, influxql.Sources{stmt.Sources[i]}, s, false)
 		if err != nil {
 			return nil, err
 		}
@@ -404,10 +404,7 @@ func BuildBinOpQueryPlan(ctx context.Context, qc query.LogicalPlanCreator, stmt 
 		childOpt := schema.opt.(*query.ProcessorOptions).Clone()
 		childOpt.UpdateSources(optSource)
 		s := NewQuerySchemaWithSources(stmt.Fields, influxql.Sources{stmt.Sources[i]}, stmt.ColumnNames(), childOpt, nil)
-		if schema.opt.IsPromQuery() {
-			s.opt.SetDims(stmt.Sources[i])
-		}
-		child, err := buildSources(ctx, qc, influxql.Sources{stmt.Sources[i]}, s)
+		child, err := BuildSources(ctx, qc, influxql.Sources{stmt.Sources[i]}, s, true)
 		if err != nil {
 			return nil, err
 		}
@@ -534,7 +531,7 @@ func buildQueryPlan(ctx context.Context, stmt *influxql.SelectStatement, qc quer
 	} else if stmt.Sources = qc.GetSources(stmt.Sources); len(stmt.Sources) > 1 {
 		sp, err = buildSortAppendQueryPlan(ctx, qc, stmt, s)
 	} else {
-		sp, err = buildSources(ctx, qc, stmt.Sources, s)
+		sp, err = BuildSources(ctx, qc, stmt.Sources, s, false)
 	}
 	if err != nil {
 		return nil, err
@@ -573,7 +570,7 @@ func buildExtendedPlan(ctx context.Context, stmt *influxql.SelectStatement, qc q
 	return builder.Build()
 }
 
-func buildSources(ctx context.Context, qc query.LogicalPlanCreator, sources influxql.Sources, schema *QuerySchema) (hybridqp.QueryNode, error) {
+func BuildSources(ctx context.Context, qc query.LogicalPlanCreator, sources influxql.Sources, schema *QuerySchema, outerBinOp bool) (hybridqp.QueryNode, error) {
 	if len(sources) == 0 {
 		return nil, nil
 	}
@@ -605,7 +602,7 @@ func buildSources(ctx context.Context, qc query.LogicalPlanCreator, sources infl
 			builder.Filter()
 		}
 		builder.SubQuery()
-		if len(subQueryBuilder.stmt.BinOpSource) == 0 {
+		if !schema.opt.IsPromQuery() || (!outerBinOp && schema.HasCall()) {
 			builder.GroupBy()
 			builder.OrderBy()
 		}
