@@ -762,6 +762,8 @@ func (s *Store) serveSnapshotV2() {
 }
 
 func (s *Store) getNodeShardsMap(db string, rp *meta.RetentionPolicyInfo, mst string) map[uint64][]uint64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	nodeShardsMap := make(map[uint64][]uint64)
 	for sgIdx := range rp.ShardGroups {
 		for shIdx := range rp.ShardGroups[sgIdx].Shards {
@@ -783,10 +785,9 @@ func (s *Store) getNodeShardsMap(db string, rp *meta.RetentionPolicyInfo, mst st
 }
 
 func (s *Store) deleteMeasurement(db string, rp *meta.RetentionPolicyInfo, mst string) error {
-	s.mu.RLock()
 	s.cacheMu.RLock()
 	nodeShardsMap := s.getNodeShardsMap(db, rp, mst)
-	s.mu.RUnlock()
+
 	errChan := make(chan error)
 	n := 0
 	for nodeId, shardIds := range nodeShardsMap {
