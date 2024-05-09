@@ -22,7 +22,6 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/influxdata/influxdb"
 	"github.com/influxdata/influxdb/models"
-	"github.com/influxdata/influxdb/query"
 	"github.com/influxdata/influxdb/services/httpd"
 	"github.com/influxdata/influxdb/uuid"
 	jsoniter "github.com/json-iterator/go"
@@ -46,7 +45,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
-	query2 "github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/pingcap/failpoint"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -165,7 +164,7 @@ type Handler struct {
 		SendSysCtrlOnNode(nodID uint64, req netstorage.SysCtrlRequest) (map[string]string, error)
 	}
 
-	QueryExecutor *query2.Executor
+	QueryExecutor *query.Executor
 
 	Monitor interface {
 	}
@@ -203,7 +202,7 @@ func NewHandler(c config.Config) *Handler {
 		CLFLogger:      logger.GetLogger(),
 		requestTracker: httpd.NewRequestTracker(),
 		slowQueries:    make(chan *hybridqp.SelectDuration, 256),
-		QueryExecutor:  query2.NewExecutor(cpu.GetCpuNum()),
+		QueryExecutor:  query.NewExecutor(cpu.GetCpuNum()),
 	}
 
 	// Limit the number of concurrent & enqueued write requests.
@@ -749,17 +748,17 @@ func (h *Handler) getSqlQuery(r *http.Request, qr io.Reader) (*influxql.Query, e
 	return q, nil, http.StatusOK
 }
 
-func (h *Handler) getAuthorizer(user meta2.User) query2.FineAuthorizer {
+func (h *Handler) getAuthorizer(user meta2.User) query.FineAuthorizer {
 	if h.Config.AuthEnabled {
 		if user != nil && user.AuthorizeUnrestricted() {
-			return query2.OpenAuthorizer
+			return query.OpenAuthorizer
 		} else {
 			// The current user determines the authorized actions.
 			return user
 		}
 	} else {
 		// Auth is disabled, so allow everything.
-		return query2.OpenAuthorizer
+		return query.OpenAuthorizer
 	}
 }
 
@@ -1035,7 +1034,7 @@ func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.
 	// Parse whether this is an async command.
 	async := r.FormValue("async") == "true"
 
-	opts := query2.ExecutionOptions{
+	opts := query.ExecutionOptions{
 		Database:        db,
 		RetentionPolicy: r.FormValue("rp"),
 		ChunkSize:       chunkSize,
@@ -1155,7 +1154,7 @@ func (h *Handler) async(q *influxql.Query, results <-chan *query.Result) {
 		if r.Err != nil {
 			// Do not log when a statement was not executed since there would
 			// have been an earlier error that was already logged.
-			if r.Err == query2.ErrNotExecuted {
+			if r.Err == query.ErrNotExecuted {
 				continue
 			}
 			h.Logger.Info("Error while running async query",
@@ -2068,7 +2067,7 @@ var willCrash bool
 
 func init() {
 	var err error
-	if willCrash, err = strconv.ParseBool(os.Getenv(query2.PanicCrashEnv)); err != nil {
+	if willCrash, err = strconv.ParseBool(os.Getenv(query.PanicCrashEnv)); err != nil {
 		willCrash = false
 	}
 }

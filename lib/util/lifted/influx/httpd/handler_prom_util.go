@@ -29,9 +29,9 @@ import (
 
 	prompb2 "github.com/VictoriaMetrics/VictoriaMetrics/lib/prompb"
 	"github.com/gorilla/mux"
-	"github.com/influxdata/influxdb/query"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/promql2influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/prometheus/common/model"
