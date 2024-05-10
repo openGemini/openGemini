@@ -18,6 +18,7 @@ package executor_test
 
 import (
 	"context"
+	"math"
 	"testing"
 	"time"
 
@@ -139,6 +140,43 @@ func buildSrcHashChunk1() []executor.Chunk {
 	return inChunks
 }
 
+func buildSrcHashChunk2() []executor.Chunk {
+	inChunks := make([]executor.Chunk, 0, 2)
+	rowDataType := buildSrcHashRowDataType()
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	chunk1 := b.NewChunk("mst")
+	chunk1.(*executor.ChunkImpl).Record = &record.Record{}
+	chunk1.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("country=CN"), *ParseChunkTags("country=US"), *ParseChunkTags("country=UK"),
+	}, []int{0, 2, 4})
+	chunk1.AppendIntervalIndexes([]int{0, 2, 4})
+	chunk1.AppendTimes([]int64{1, 2, 3, 4, 6})
+	chunk1.Column(0).AppendIntegerValues([]int64{20, 28, 30, 38, 40})
+	chunk1.Column(0).AppendManyNotNil(5)
+	chunk1.Column(0).AppendNilsV2(true, true, true, true, false, true)
+	chunk1.Column(1).AppendFloatValues([]float64{160.5, 180.5, 170.5, 175, 165})
+	chunk1.Column(1).AppendManyNotNil(5)
+	chunk1.Column(1).AppendNilsV2(true, true, true, true, false, true)
+
+	chunk2 := b.NewChunk("mst")
+	chunk2.(*executor.ChunkImpl).Record = &record.Record{}
+	chunk2.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("country=CN"), *ParseChunkTags("country=KR"), *ParseChunkTags("country=US"),
+	}, []int{0, 3, 4})
+	chunk2.AppendIntervalIndexes([]int{0, 3, 4})
+	chunk2.AppendTimes([]int64{1, 2, 3, 4, 5})
+	chunk2.Column(0).AppendIntegerValues([]int64{20, 28, 30, 38, 40})
+
+	chunk2.Column(0).AppendManyNotNil(5)
+	chunk2.Column(1).AppendFloatValues([]float64{160.5, 180.5, 170.5, 175, 165})
+	chunk2.Column(1).AppendManyNotNil(5)
+
+	inChunks = append(inChunks, chunk1, chunk2)
+	return inChunks
+}
+
 func buildDstHashRowDataTypeSum() hybridqp.RowDataType {
 	schema := hybridqp.NewRowDataTypeImpl(
 		influxql.VarRef{Val: "sum(\"age\")", Type: influxql.Integer},
@@ -237,6 +275,247 @@ func TestIncHashAggTransformSum(t *testing.T) {
 		t,
 		inChunks, dstChunks2,
 		buildSrcRowDataType(), buildDstRowDataTypeSum(),
+		exprOpt, opt,
+	)
+}
+
+func buildDstHashRowDataTypeMin() hybridqp.RowDataType {
+	schema := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "min(\"age\")", Type: influxql.Integer},
+		influxql.VarRef{Val: "min(\"height\")", Type: influxql.Float},
+	)
+	return schema
+}
+func buildDstHashRowDataTypeMin1() hybridqp.RowDataType {
+	schema := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "min(\"height\")", Type: influxql.Float},
+		influxql.VarRef{Val: "min(\"age\")", Type: influxql.Integer},
+	)
+	return schema
+}
+
+func buildDstHashChunkMin1() []executor.Chunk {
+	rowDataType := buildDstHashRowDataTypeSum()
+	dstChunks := make([]executor.Chunk, 0, 1)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	chunk := b.NewChunk("mst")
+	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("country=CN"), *ParseChunkTags("country=US"), *ParseChunkTags("country=UK"), *ParseChunkTags("country=KR"),
+	}, []int{0, 2, 4, 6})
+
+	chunk.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5, 6, 7})
+	chunk.AppendTimes([]int64{0, 5, 0, 5, 0, 5, 0, 5})
+
+	//[20, 28, 30, 38, 40],[160.5, 180.5, 170.5, 175, 165]
+
+	chunk.Column(0).AppendIntegerValues([]int64{20, math.MaxInt64, 30, 40, math.MaxInt64, 40, 38, math.MaxInt64})
+	chunk.Column(0).AppendNilsV2(true, true, true, true, true, true, true, true)
+
+	chunk.Column(1).AppendFloatValues([]float64{160.5, math.MaxFloat64, 170.5, 165, math.MaxFloat64, 165, 175, math.MaxFloat64})
+	chunk.Column(1).AppendNilsV2(true, true, true, true, true, true, true, true)
+
+	dstChunks = append(dstChunks, chunk)
+	return dstChunks
+}
+
+func buildDstHashChunkMin2() []executor.Chunk {
+	rowDataType := buildDstHashRowDataTypeSum()
+	dstChunks := make([]executor.Chunk, 0, 1)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	chunk := b.NewChunk("mst")
+	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("country=CN"), *ParseChunkTags("country=US"), *ParseChunkTags("country=UK"), *ParseChunkTags("country=KR"),
+	}, []int{0, 2, 4, 6})
+
+	chunk.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5, 6, 7})
+	chunk.AppendTimes([]int64{0, 5, 0, 5, 0, 5, 0, 5})
+
+	//[20, 28, 30, 38, 40],[160.5, 180.5, 170.5, 175, 165]
+
+	chunk.Column(0).AppendIntegerValues([]int64{20, math.MaxInt64, 30, 40, math.MaxInt64, 40, 38, math.MaxInt64})
+	chunk.Column(0).AppendNilsV2(true, true, true, true, true, true, true, true)
+
+	chunk.Column(1).AppendFloatValues([]float64{160.5, math.MaxFloat64, 170.5, 165, math.MaxFloat64, 165, 175, math.MaxFloat64})
+	chunk.Column(1).AppendNilsV2(true, true, true, true, true, true, true, true)
+
+	dstChunks = append(dstChunks, chunk)
+	return dstChunks
+}
+
+func TestIncHashAggTransformMin(t *testing.T) {
+	var queryId string = "QueryId1234"
+	cache.PutGlobalIterNum(queryId, int32(5))
+
+	inChunks := buildSrcHashChunk1()
+	dstChunks1 := buildDstHashChunkMin1()
+	exprOpt := []hybridqp.ExprOptions{
+		{
+			Expr: &influxql.Call{Name: "min", Args: []influxql.Expr{hybridqp.MustParseExpr("age")}},
+			Ref:  influxql.VarRef{Val: `min("age")`, Type: influxql.Integer},
+		},
+		{
+			Expr: &influxql.Call{Name: "min", Args: []influxql.Expr{hybridqp.MustParseExpr("height")}},
+			Ref:  influxql.VarRef{Val: `min("height")`, Type: influxql.Float},
+		},
+	}
+
+	opt := &query.ProcessorOptions{
+		Dimensions:     []string{"country"},
+		Interval:       hybridqp.Interval{Duration: 5 * time.Nanosecond},
+		StartTime:      0,
+		EndTime:        9,
+		ChunkSize:      10,
+		IncQuery:       true,
+		LogQueryCurrId: queryId,
+		IterID:         int32(0),
+		Ascending:      true,
+	}
+
+	testIncHashAggTransformBase(
+		t,
+		inChunks, dstChunks1,
+		buildSrcHashRowDataType(), buildDstHashRowDataTypeMin(),
+		exprOpt, opt,
+	)
+
+	testIncHashAggTransformBase(
+		t,
+		buildSrcHashChunk2(), dstChunks1,
+		buildSrcHashRowDataType(), buildDstHashRowDataTypeMin(),
+		exprOpt, opt,
+	)
+
+	opt.IterID = 1
+	dstChunks2 := buildDstHashChunkMin2()
+	testIncHashAggTransformBase(
+		t,
+		inChunks, dstChunks2,
+		buildSrcRowDataType(), buildDstHashRowDataTypeMin1(),
+		exprOpt, opt,
+	)
+}
+
+func buildDstHashRowDataTypeMax() hybridqp.RowDataType {
+	schema := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "max(\"age\")", Type: influxql.Integer},
+		influxql.VarRef{Val: "max(\"height\")", Type: influxql.Float},
+	)
+	return schema
+}
+
+func buildDstHashRowDataTypeMax1() hybridqp.RowDataType {
+	schema := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "max(\"height\")", Type: influxql.Float},
+		influxql.VarRef{Val: "max(\"age\")", Type: influxql.Integer},
+	)
+	return schema
+}
+
+func buildDstHashChunkMax1() []executor.Chunk {
+	rowDataType := buildDstHashRowDataTypeSum()
+	dstChunks := make([]executor.Chunk, 0, 1)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	chunk := b.NewChunk("mst")
+	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("country=CN"), *ParseChunkTags("country=US"), *ParseChunkTags("country=UK"), *ParseChunkTags("country=KR"),
+	}, []int{0, 2, 4, 6})
+
+	chunk.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5, 6, 7})
+	chunk.AppendTimes([]int64{0, 5, 0, 5, 0, 5, 0, 5})
+
+	//[20, 28, 30, 38, 40],[160.5, 180.5, 170.5, 175, 165]
+
+	chunk.Column(0).AppendIntegerValues([]int64{30, -math.MaxInt64, 38, 40, -math.MaxInt64, 40, 38, -math.MaxInt64})
+	chunk.Column(0).AppendNilsV2(true, true, true, true, true, true, true, true)
+
+	chunk.Column(1).AppendFloatValues([]float64{180.5, -math.MaxFloat64, 175, 165, -math.MaxFloat64, 165, 175, -math.MaxFloat64})
+	chunk.Column(1).AppendNilsV2(true, true, true, true, true, true, true, true)
+
+	dstChunks = append(dstChunks, chunk)
+	return dstChunks
+}
+
+func buildDstHashChunkMax2() []executor.Chunk {
+	rowDataType := buildDstHashRowDataTypeSum()
+	dstChunks := make([]executor.Chunk, 0, 1)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	chunk := b.NewChunk("mst")
+	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("country=CN"), *ParseChunkTags("country=US"), *ParseChunkTags("country=UK"), *ParseChunkTags("country=KR"),
+	}, []int{0, 2, 4, 6})
+
+	chunk.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5, 6, 7})
+	chunk.AppendTimes([]int64{0, 5, 0, 5, 0, 5, 0, 5})
+
+	//[20, 28, 30, 38, 40],[160.5, 180.5, 170.5, 175, 165]
+
+	chunk.Column(0).AppendIntegerValues([]int64{30, -math.MaxInt64, 38, 40, -math.MaxInt64, 40, 38, -math.MaxInt64})
+	chunk.Column(0).AppendNilsV2(true, true, true, true, true, true, true, true)
+
+	chunk.Column(1).AppendFloatValues([]float64{180.5, -math.MaxFloat64, 175, 165, -math.MaxFloat64, 165, 175, -math.MaxFloat64})
+	chunk.Column(1).AppendNilsV2(true, true, true, true, true, true, true, true)
+
+	dstChunks = append(dstChunks, chunk)
+	return dstChunks
+}
+
+func TestIncHashAggTransformMax(t *testing.T) {
+	var queryId string = "QueryId1234"
+	cache.PutGlobalIterNum(queryId, int32(5))
+
+	inChunks := buildSrcHashChunk1()
+	dstChunks1 := buildDstHashChunkMax1()
+	exprOpt := []hybridqp.ExprOptions{
+		{
+			Expr: &influxql.Call{Name: "max", Args: []influxql.Expr{hybridqp.MustParseExpr("age")}},
+			Ref:  influxql.VarRef{Val: `max("age")`, Type: influxql.Integer},
+		},
+		{
+			Expr: &influxql.Call{Name: "max", Args: []influxql.Expr{hybridqp.MustParseExpr("height")}},
+			Ref:  influxql.VarRef{Val: `max("height")`, Type: influxql.Float},
+		},
+	}
+
+	opt := &query.ProcessorOptions{
+		Dimensions:     []string{"country"},
+		Interval:       hybridqp.Interval{Duration: 5 * time.Nanosecond},
+		StartTime:      0,
+		EndTime:        9,
+		ChunkSize:      10,
+		IncQuery:       true,
+		LogQueryCurrId: queryId,
+		IterID:         int32(0),
+		Ascending:      true,
+	}
+
+	testIncHashAggTransformBase(
+		t,
+		inChunks, dstChunks1,
+		buildSrcHashRowDataType(), buildDstHashRowDataTypeMax(),
+		exprOpt, opt,
+	)
+
+	testIncHashAggTransformBase(
+		t,
+		buildSrcHashChunk2(), dstChunks1,
+		buildSrcHashRowDataType(), buildDstHashRowDataTypeMax(),
+		exprOpt, opt,
+	)
+
+	opt.IterID = 1
+	dstChunks2 := buildDstHashChunkMax2()
+	testIncHashAggTransformBase(
+		t,
+		inChunks, dstChunks2,
+		buildSrcRowDataType(), buildDstHashRowDataTypeMax1(),
 		exprOpt, opt,
 	)
 }
