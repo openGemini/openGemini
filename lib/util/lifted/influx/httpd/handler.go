@@ -313,6 +313,54 @@ func NewHandler(c config.Config) *Handler {
 			"prometheus-metadata-query", // Prometheus metadata query
 			"GET", "/api/v1/metadata", true, true, h.servePromQueryMetaData,
 		},
+		Route{
+			"prometheus-write-metric-store", // Prometheus remote write
+			"POST", "/prometheus/{metric_store}/api/v1/prom/write", false, true, h.servePromWriteWithMetricStore,
+		},
+		Route{
+			"prometheus-read-metric-store", // Prometheus remote read
+			"POST", "/prometheus/{metric_store}/api/v1/prom/read", true, true, h.servePromReadWithMetricStore,
+		},
+		Route{
+			"prometheus-instant-query-metric-store", // Prometheus instant query
+			"GET", "/prometheus/{metric_store}/api/v1/query", true, true, h.servePromQueryWithMetricStore,
+		},
+		Route{
+			"prometheus-instant-query-metric-store", // Prometheus instant query
+			"POST", "/prometheus/{metric_store}/api/v1/query", true, true, h.servePromQueryWithMetricStore,
+		},
+		Route{
+			"prometheus-range-query-metric-store", // Prometheus range query
+			"GET", "/prometheus/{metric_store}/api/v1/query_range", true, true, h.servePromQueryRangeWithMetricStore,
+		},
+		Route{
+			"prometheus-range-query-metric-store", // Prometheus range query
+			"POST", "/prometheus/{metric_store}/api/v1/query_range", true, true, h.servePromQueryRangeWithMetricStore,
+		},
+		Route{
+			"prometheus-labels-query-metric-store", // Prometheus labels query
+			"GET", "/prometheus/{metric_store}/api/v1/labels", true, true, h.servePromQueryLabelsWithMetricStore,
+		},
+		Route{
+			"prometheus-labels-query-metric-store", // Prometheus labels query
+			"POST", "/prometheus/{metric_store}/api/v1/labels", true, true, h.servePromQueryLabelsWithMetricStore,
+		},
+		Route{
+			"prometheus-label-values-query-metric-store", // Prometheus label-values query
+			"GET", "/prometheus/{metric_store}/api/v1/label/{name}/values", true, true, h.servePromQueryLabelValuesWithMetricStore,
+		},
+		Route{
+			"prometheus-series-query-metric-store", // Prometheus series query
+			"GET", "/prometheus/{metric_store}/api/v1/series", true, true, h.servePromQuerySeriesWithMetricStore,
+		},
+		Route{
+			"prometheus-series-query-metric-store", // Prometheus series query
+			"POST", "/prometheus/{metric_store}/api/v1/series", true, true, h.servePromQuerySeriesWithMetricStore,
+		},
+		Route{
+			"prometheus-metadata-query-metric-store", // Prometheus metadata query
+			"GET", "/prometheus/{metric_store}/api/v1/metadata", true, true, h.servePromQueryMetaDataWithMetricStore,
+		},
 		Route{ // sysCtrl
 			"sysCtrl",
 			"POST", "/debug/ctrl", false, true, h.serveSysCtrl,
@@ -2238,13 +2286,17 @@ func (t *Throttler) Handler(h http.Handler) http.Handler {
 	})
 }
 
-func buildCommand(q *prompb.Query) (string, error) {
+func buildCommand(q *prompb.Query, mst string) (string, error) {
 	matchers := make([]string, 0, len(q.Matchers))
 	// If we don't find a metric name matcher, query all metrics
 	// (InfluxDB measurements) by default.
 	from := "FROM /.+/"
+	haveMetricStore := len(mst) > 0
+	if haveMetricStore {
+		from = fmt.Sprintf("FROM %s", mst)
+	}
 	for _, m := range q.Matchers {
-		if m.Name == model.MetricNameLabel {
+		if !haveMetricStore && m.Name == model.MetricNameLabel {
 			switch m.Type {
 			case prompb.LabelMatcher_EQ:
 				from = fmt.Sprintf("FROM %q", m.Value)
@@ -2284,10 +2336,10 @@ func escapeSingleQuotes(str string) string {
 	return strings.Replace(str, `'`, `\'`, -1)
 }
 
-func ReadRequestToInfluxQuery(req *prompb.ReadRequest) (string, error) {
+func ReadRequestToInfluxQuery(req *prompb.ReadRequest, mst string) (string, error) {
 	var readRequest string
 	for _, q := range req.Queries {
-		if s, err := buildCommand(q); err != nil {
+		if s, err := buildCommand(q, mst); err != nil {
 			return "", err
 		} else {
 			readRequest += ";" + s
