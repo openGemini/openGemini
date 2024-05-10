@@ -61,7 +61,6 @@ type SegmentTask struct {
 func (reader *DetachedMetaDataReader) InitReadBatch(s []*SegmentMeta, schema record.Schemas) {
 	reader.task = make(map[int]*SegmentTask, len(s))
 	reader.positionMap = make(map[int64]*position, len(s))
-
 	offset := make([]int64, 0, len(s)*len(schema))
 	length := make([]int64, 0, len(s)*len(schema))
 	startSegmentIndex := -1
