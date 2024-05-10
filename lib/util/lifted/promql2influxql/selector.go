@@ -57,10 +57,10 @@ func GetTimeCondition(start, end *time.Time) influxql.Expr {
 	return timeCond
 }
 
-func GetTagCondition(v *parser.VectorSelector) (influxql.Expr, error) {
+func GetTagCondition(v *parser.VectorSelector, haveMetricStore bool) (influxql.Expr, error) {
 	var tagCond influxql.Expr
 	for _, item := range v.LabelMatchers {
-		if _, ok := reservedTags[item.Name]; ok {
+		if _, ok := reservedTags[item.Name]; ok && !haveMetricStore {
 			continue
 		}
 		if len(item.Value) == 0 {
@@ -194,7 +194,8 @@ func (t *Transpiler) transpileVectorSelector2ConditionExpr(v *parser.VectorSelec
 		start, end := timestamp.Time(t.minT), timestamp.Time(t.maxT)
 		timeCondition = GetTimeCondition(&start, &end)
 	}
-	tagCondition, err := GetTagCondition(v)
+	// if the API corresponding to MetricStore is used, the __name__ field is used as the condition, otherwise, drop it.
+	tagCondition, err := GetTagCondition(v, t.HaveMetricStore())
 	return timeCondition, tagCondition, err
 }
 
@@ -219,6 +220,10 @@ func (t *Transpiler) transpileInstantVectorSelector(v *parser.VectorSelector) (i
 		if len(v.LabelMatchers) > 0 {
 			showTagKeysStatement.Sources = make([]influxql.Source, 0, len(v.LabelMatchers))
 		}
+		if t.HaveMetricStore() {
+			showTagKeysStatement.Sources = append(showTagKeysStatement.Sources, &influxql.Measurement{Name: t.Measurement})
+			return &showTagKeysStatement, nil
+		}
 		for _, matcher := range v.LabelMatchers {
 			if _, ok := reservedTags[matcher.Name]; ok {
 				showTagKeysStatement.Sources = append(showTagKeysStatement.Sources, &influxql.Measurement{Name: matcher.Value})
@@ -232,6 +237,10 @@ func (t *Transpiler) transpileInstantVectorSelector(v *parser.VectorSelector) (i
 			TagKeyExpr: &influxql.StringLiteral{Val: t.LabelName},
 			// TODO support time condition
 			Condition: condition,
+		}
+		if t.HaveMetricStore() {
+			showTagValuesStatement.Sources = append(showTagValuesStatement.Sources, &influxql.Measurement{Name: t.Measurement})
+			return &showTagValuesStatement, nil
 		}
 		if len(v.LabelMatchers) > 0 {
 			showTagValuesStatement.Sources = make([]influxql.Source, 0, len(v.LabelMatchers))
@@ -248,6 +257,10 @@ func (t *Transpiler) transpileInstantVectorSelector(v *parser.VectorSelector) (i
 			// TODO support time condition
 			Condition: tagCondition,
 		}
+		if t.HaveMetricStore() {
+			showSeriesStatement.Sources = append(showSeriesStatement.Sources, &influxql.Measurement{Name: t.Measurement})
+			return &showSeriesStatement, nil
+		}
 		if len(v.LabelMatchers) > 0 {
 			showSeriesStatement.Sources = make([]influxql.Source, 0, len(v.LabelMatchers))
 		}
@@ -257,10 +270,15 @@ func (t *Transpiler) transpileInstantVectorSelector(v *parser.VectorSelector) (i
 		return &showSeriesStatement, nil
 	default:
 	}
+	// metricName is used as the measurement by default.
 	selectStatement := &influxql.SelectStatement{
 		Sources:    []influxql.Source{&influxql.Measurement{Name: v.Name}},
 		Condition:  condition,
 		Dimensions: []*influxql.Dimension{{Expr: &influxql.Wildcard{}}},
+	}
+	// if the API corresponding to MetricStore is used, MetricStore in the API is used as the measurement.
+	if t.HaveMetricStore() {
+		selectStatement.Sources = []influxql.Source{&influxql.Measurement{Name: t.Measurement}}
 	}
 	valueFieldKey := DefaultFieldKey
 	if len(t.ValueFieldKey) == 0 {
@@ -290,4 +308,8 @@ func (t *Transpiler) transpileRangeVectorSelector(v *parser.MatrixSelector) (inf
 		t.timeRange = v.Range
 	}
 	return t.transpileExpr(v.VectorSelector)
+}
+
+func (t *Transpiler) HaveMetricStore() bool {
+	return len(t.Measurement) > 0
 }

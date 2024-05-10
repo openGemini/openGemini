@@ -621,7 +621,7 @@ func TestTimeSeries2Rows(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := timeSeries2Rows(tt.args.dst, tt.args.tss)
+			got, err := timeSeries2Rows(EmptyPromMst, tt.args.dst, tt.args.tss)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("timeSeries2Rows() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -699,7 +699,7 @@ func Benchmark_TimeSeries2Rows(t *testing.B) {
 	for i := 0; i < t.N; i++ {
 		t.StartTimer()
 		for j := 0; j < 1000000; j++ {
-			*rs, err = timeSeries2Rows(*rs, tss)
+			*rs, err = timeSeries2Rows(EmptyPromMst, *rs, tss)
 			if err != nil {
 				if err != nil {
 					t.Fatal("timeSeries2Rows fail")

@@ -429,5 +429,6 @@ var messageMap = map[Errno]*Message{
 	InvalidExprType:        newNoticeMessage("invalid expression type %s for range query, must be Scalar or instant Vector", ModuleQueryEngine),
 	TranspileUnaryExprFail: newNoticeMessage("transpile unary expression fail: %s", ModuleQueryEngine),
 	InvalidUnaryExpr:       newNoticeMessage("invalid unary expression operator type (this should never happen)", ModuleQueryEngine),
+	InvalidPromMstName:     newFatalMessage("invalid metric store for prom: %s", ModuleQueryEngine),
 	ChunkReaderCursor:      newNoticeMessage("chunkReader read error", ModuleQueryEngine),
 }

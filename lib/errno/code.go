@@ -137,6 +137,7 @@ const (
 	InvalidExprType        = 1223
 	TranspileUnaryExprFail = 1224
 	InvalidUnaryExpr       = 1225
+	InvalidPromMstName     = 1226
 )
 
 // query interface error codes

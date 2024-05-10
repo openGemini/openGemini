@@ -12,12 +12,14 @@ const (
 )
 
 const (
-	DefaultFieldKey        string = "value"
-	DefaultMetricKeyLabel  string = "__name__"
-	DefaultMeasurementName        = "prom_metric_not_specified"
-	TimeField              string = "time"
-	LastCall               string = "last"
-	ArgNameOfTimeFunc      string = "prom_time"
+	ArgNameOfTimeFunc          string = "prom_time"
+	DefaultFieldKey            string = "value"
+	DefaultMetricKeyLabel      string = "__name__"
+	DefaultMeasurementName     string = "prom_metric_not_specified"
+	DefaultDatabaseName        string = "prom"
+	DefaultRetentionPolicyName string = "autogen"
+	TimeField                  string = "time"
+	LastCall                   string = "last"
 )
 
 const DefaultLookBackDelta = 5 * time.Minute
