@@ -1011,6 +1011,13 @@ func TestServer_PromQuery_Operators1(t *testing.T) {
 			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"group":"canary"},"value":[3000,"2"]},{"metric":{"group":"production"},"value":[3000,"2"]}]}}`,
 			path:    "/api/v1/query",
 		},
+		&Query{
+			name:    "instant query avg(rate(range vector)) / avg(instant vector)",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"1970-01-01T00:50:00Z"}},
+			command: `avg by (instance,job) (rate(http_requests[5m])) / avg by (instance,job) (http_requests)`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"instance":"0","job":"api-server"},"value":[9223372036.854,"0.0003333333333333333"]},{"metric":{"instance":"0","job":"app-server"},"value":[9223372036.854,"0.0003333333333333334"]},{"metric":{"instance":"1","job":"api-server"},"value":[9223372036.854,"0.0003333333333333334"]},{"metric":{"instance":"1","job":"app-server"},"value":[9223372036.854,"0.0003333333333333333"]}]}}`,
+			path:    "/api/v1/query",
+		},
 	}...)
 
 	for i, query := range test.queries {
