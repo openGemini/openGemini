@@ -234,7 +234,7 @@ func (m *MmsTables) matchOrderFiles(ctx *MergeContext) {
 			continue
 		}
 
-		if ctx.tr.Overlaps(min, max) || min > ctx.tr.Max {
+		if ctx.order.Len() > 0 || ctx.tr.Overlaps(min, max) || min > ctx.tr.Max {
 			ctx.order.add(f)
 		}
 	}

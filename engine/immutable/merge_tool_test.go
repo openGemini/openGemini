@@ -570,6 +570,37 @@ func TestMergeTool_Merge_mod17(t *testing.T) {
 	}
 }
 
+func TestMergeTool_Merge_mod18(t *testing.T) {
+	var begin int64 = 1e12
+	defer beforeTest(t, 10)()
+	schemas := getDefaultSchemas()
+
+	immutable.SetMergeFlag4TsStore(1)
+	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
+	defer mh.store.Close()
+	rg := newRecordGenerator(begin, defaultInterval, false)
+
+	rg.setBegin(begin)
+	mh.addRecord(100, rg.generate(schemas, 1))
+	mh.addRecord(101, rg.generate(schemas, 10))
+	require.NoError(t, mh.saveToOrder())
+
+	rg.setBegin(begin).incrBegin(2)
+	mh.addRecord(100, rg.generate(schemas, 1))
+	require.NoError(t, mh.saveToOrder())
+
+	rg.setBegin(begin).incrBegin(5)
+	mh.addRecord(100, rg.generate(schemas, 1))
+	require.NoError(t, mh.saveToUnordered())
+
+	assert.NoError(t, mh.mergeAndCompact(true))
+	assert.NoError(t, mh.store.FullCompact(1))
+	mh.store.Wait()
+	for _, rec := range mh.readMergedRecord() {
+		record.CheckTimes(rec.Times())
+	}
+}
+
 func TestMergeTool_recentFile(t *testing.T) {
 	var begin int64 = 1e12
 	defer beforeTest(t, 0)()
