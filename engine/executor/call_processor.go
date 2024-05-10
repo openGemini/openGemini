@@ -394,22 +394,22 @@ func NewCountRoutineImpl(inRowDataType, outRowDataType hybridqp.RowDataType, opt
 	switch dataType {
 	case influxql.Integer:
 		return NewRoutineImpl(
-			NewIntegerColIntegerIterator(CountReduce, CountMerge[int64], isSingleCall, inOrdinal, outOrdinal,
+			NewIntegerIterator(CountReduce, CountMerge[int64], isSingleCall, inOrdinal, outOrdinal,
 				nil, nil),
 			inOrdinal, outOrdinal), nil
 	case influxql.Float:
 		return NewRoutineImpl(
-			NewFloatColIntegerIterator(CountReduce, CountMerge[int64], isSingleCall, inOrdinal, outOrdinal,
+			NewIntegerIterator(CountReduce, CountMerge[int64], isSingleCall, inOrdinal, outOrdinal,
 				nil, nil),
 			inOrdinal, outOrdinal), nil
 	case influxql.String:
 		return NewRoutineImpl(
-			NewStringColIntegerIterator(CountReduce, CountMerge[int64], isSingleCall, inOrdinal, outOrdinal,
+			NewIntegerIterator(CountReduce, CountMerge[int64], isSingleCall, inOrdinal, outOrdinal,
 				nil, nil),
 			inOrdinal, outOrdinal), nil
 	case influxql.Boolean:
 		return NewRoutineImpl(
-			NewBooleanColIntegerIterator(CountReduce, CountMerge[int64], isSingleCall, inOrdinal, outOrdinal,
+			NewIntegerIterator(CountReduce, CountMerge[int64], isSingleCall, inOrdinal, outOrdinal,
 				nil, nil),
 			inOrdinal, outOrdinal), nil
 	default:
@@ -427,12 +427,12 @@ func NewSumRoutineImpl(inRowDataType, outRowDataType hybridqp.RowDataType, opt h
 	switch dataType {
 	case influxql.Integer:
 		return NewRoutineImpl(
-			NewIntegerColIntegerIterator(SumReduce[int64], SumMerge[int64], isSingleCall, inOrdinal, outOrdinal,
+			NewIntegerIterator(SumReduce[int64], SumMerge[int64], isSingleCall, inOrdinal, outOrdinal,
 				nil, nil),
 			inOrdinal, outOrdinal), nil
 	case influxql.Float:
 		return NewRoutineImpl(
-			NewFloatColFloatIterator(SumReduce[float64], SumMerge[float64], isSingleCall, inOrdinal, outOrdinal,
+			NewFloatIterator(SumReduce[float64], SumMerge[float64], isSingleCall, inOrdinal, outOrdinal,
 				nil, nil), inOrdinal, outOrdinal), nil
 	default:
 		return nil, errno.NewError(errno.UnsupportedDataType, "sum/mean", dataType.String())
@@ -449,7 +449,7 @@ func NewFirstRoutineImpl(inRowDataType, outRowDataType hybridqp.RowDataType, opt
 	switch dataType {
 	case influxql.Integer:
 		if isSingleCall {
-			return NewRoutineImpl(NewIntegerColIntegerIterator(FirstReduce[int64], FirstMerge[int64],
+			return NewRoutineImpl(NewIntegerIterator(FirstReduce[int64], FirstMerge[int64],
 				isSingleCall, inOrdinal, outOrdinal, auxProcessor, outRowDataType),
 				inOrdinal, outOrdinal), nil
 		}
@@ -458,7 +458,7 @@ func NewFirstRoutineImpl(inRowDataType, outRowDataType hybridqp.RowDataType, opt
 			inOrdinal, outOrdinal), nil
 	case influxql.Float:
 		if isSingleCall {
-			return NewRoutineImpl(NewFloatColFloatIterator(FirstReduce[float64], FirstMerge[float64],
+			return NewRoutineImpl(NewFloatIterator(FirstReduce[float64], FirstMerge[float64],
 				isSingleCall, inOrdinal, outOrdinal, auxProcessor, outRowDataType),
 				inOrdinal, outOrdinal), nil
 		}
@@ -467,7 +467,7 @@ func NewFirstRoutineImpl(inRowDataType, outRowDataType hybridqp.RowDataType, opt
 			inOrdinal, outOrdinal), nil
 	case influxql.String:
 		if isSingleCall {
-			return NewRoutineImpl(NewStringColStringIterator(FirstReduce[string], StringFirstMerge,
+			return NewRoutineImpl(NewStringIterator(FirstReduce[string], StringFirstMerge,
 				isSingleCall, inOrdinal, outOrdinal, auxProcessor, outRowDataType),
 				inOrdinal, outOrdinal), nil
 		}
@@ -476,7 +476,7 @@ func NewFirstRoutineImpl(inRowDataType, outRowDataType hybridqp.RowDataType, opt
 			inOrdinal, outOrdinal), nil
 	case influxql.Boolean:
 		if isSingleCall {
-			return NewRoutineImpl(NewBooleanColBooleanIterator(BooleanFirstReduce, BooleanFirstMerge,
+			return NewRoutineImpl(NewBooleanIterator(BooleanFirstReduce, BooleanFirstMerge,
 				isSingleCall, inOrdinal, outOrdinal, auxProcessor, outRowDataType),
 				inOrdinal, outOrdinal), nil
 		}
@@ -498,7 +498,7 @@ func NewLastRoutineImpl(inRowDataType, outRowDataType hybridqp.RowDataType, opt 
 	switch dataType {
 	case influxql.Integer:
 		if isSingleCall {
-			return NewRoutineImpl(NewIntegerColIntegerIterator(LastReduce[int64], LastMerge[int64],
+			return NewRoutineImpl(NewIntegerIterator(LastReduce[int64], LastMerge[int64],
 				isSingleCall, inOrdinal, outOrdinal, auxProcessor, outRowDataType),
 				inOrdinal, outOrdinal), nil
 		}
@@ -507,7 +507,7 @@ func NewLastRoutineImpl(inRowDataType, outRowDataType hybridqp.RowDataType, opt 
 			inOrdinal, outOrdinal), nil
 	case influxql.Float:
 		if isSingleCall {
-			return NewRoutineImpl(NewFloatColFloatIterator(LastReduce[float64], LastMerge[float64],
+			return NewRoutineImpl(NewFloatIterator(LastReduce[float64], LastMerge[float64],
 				isSingleCall, inOrdinal, outOrdinal, auxProcessor, outRowDataType),
 				inOrdinal, outOrdinal), nil
 		}
@@ -516,7 +516,7 @@ func NewLastRoutineImpl(inRowDataType, outRowDataType hybridqp.RowDataType, opt 
 			inOrdinal, outOrdinal), nil
 	case influxql.String:
 		if isSingleCall {
-			return NewRoutineImpl(NewStringColStringIterator(LastReduce[string], StringLastMerge,
+			return NewRoutineImpl(NewStringIterator(LastReduce[string], StringLastMerge,
 				isSingleCall, inOrdinal, outOrdinal, auxProcessor, outRowDataType),
 				inOrdinal, outOrdinal), nil
 		}
@@ -525,7 +525,7 @@ func NewLastRoutineImpl(inRowDataType, outRowDataType hybridqp.RowDataType, opt 
 			inOrdinal, outOrdinal), nil
 	case influxql.Boolean:
 		if isSingleCall {
-			return NewRoutineImpl(NewBooleanColBooleanIterator(BooleanLastReduce, BooleanLastMerge,
+			return NewRoutineImpl(NewBooleanIterator(BooleanLastReduce, BooleanLastMerge,
 				isSingleCall, inOrdinal, outOrdinal, auxProcessor, outRowDataType),
 				inOrdinal, outOrdinal), nil
 		}
@@ -929,22 +929,22 @@ func NewAbsentRoutineImpl(inRowDataType, outRowDataType hybridqp.RowDataType, op
 	switch dataType {
 	case influxql.Integer:
 		return NewRoutineImpl(
-			NewIntegerColIntegerIterator(AbsentReduce, AbsentMerge[int64], isSingleCall, inOrdinal, outOrdinal,
+			NewIntegerIterator(AbsentReduce, AbsentMerge[int64], isSingleCall, inOrdinal, outOrdinal,
 				nil, nil),
 			inOrdinal, outOrdinal), nil
 	case influxql.Float:
 		return NewRoutineImpl(
-			NewFloatColIntegerIterator(AbsentReduce, AbsentMerge[int64], isSingleCall, inOrdinal, outOrdinal,
+			NewIntegerIterator(AbsentReduce, AbsentMerge[int64], isSingleCall, inOrdinal, outOrdinal,
 				nil, nil),
 			inOrdinal, outOrdinal), nil
 	case influxql.String:
 		return NewRoutineImpl(
-			NewStringColIntegerIterator(AbsentReduce, AbsentMerge[int64], isSingleCall, inOrdinal, outOrdinal,
+			NewIntegerIterator(AbsentReduce, AbsentMerge[int64], isSingleCall, inOrdinal, outOrdinal,
 				nil, nil),
 			inOrdinal, outOrdinal), nil
 	case influxql.Boolean:
 		return NewRoutineImpl(
-			NewBooleanColIntegerIterator(AbsentReduce, AbsentMerge[int64], isSingleCall, inOrdinal, outOrdinal,
+			NewIntegerIterator(AbsentReduce, AbsentMerge[int64], isSingleCall, inOrdinal, outOrdinal,
 				nil, nil),
 			inOrdinal, outOrdinal), nil
 	default:

@@ -353,3 +353,191 @@ func TestBooleanLastMerge(t *testing.T) {
 		t.Fatal("prePoint and currentPoint is not equal")
 	}
 }
+
+func TestNumberLastMerge(t *testing.T) {
+	prePoint := newPoint[float64]()
+	prePoint.Set(0, 1, 1.1)
+
+	currentPoint := newPoint[float64]()
+	currentPoint.Set(1, 2, 2.2)
+
+	LastMerge(prePoint, currentPoint)
+	if !(prePoint.time == currentPoint.time &&
+		prePoint.index == currentPoint.index &&
+		prePoint.value == currentPoint.value) {
+		t.Fatal("prePoint and currentPoint is not equal")
+	}
+}
+
+func TestStringFirstMerge(t *testing.T) {
+	prePoint := newStringPoint()
+	prePoint.Set(0, 1, "string1")
+
+	currentPoint := newStringPoint()
+	currentPoint.Set(1, 0, "string2")
+
+	StringFirstMerge(prePoint, currentPoint)
+	if !(prePoint.time == currentPoint.time &&
+		prePoint.index == currentPoint.index &&
+		bytes.Compare(prePoint.value, currentPoint.value) == 0) {
+		t.Fatal("prePoint and currentPoint is not equal")
+	}
+}
+
+func TestBooleanFirstMerge(t *testing.T) {
+	prePoint := newPoint[bool]()
+	prePoint.Set(0, 1, true)
+
+	currentPoint := newPoint[bool]()
+	currentPoint.Set(1, 0, false)
+
+	BooleanFirstMerge(prePoint, currentPoint)
+	if !(prePoint.time == currentPoint.time &&
+		prePoint.index == currentPoint.index &&
+		prePoint.value == currentPoint.value) {
+		t.Fatal("prePoint and currentPoint is not equal")
+	}
+}
+
+func TestNumberFirstMerge(t *testing.T) {
+	prePoint := newPoint[float64]()
+	prePoint.Set(0, 1, 1.1)
+
+	currentPoint := newPoint[float64]()
+	currentPoint.Set(1, 0, 2.2)
+
+	FirstMerge(prePoint, currentPoint)
+	if !(prePoint.time == currentPoint.time &&
+		prePoint.index == currentPoint.index &&
+		prePoint.value == currentPoint.value) {
+		t.Fatal("prePoint and currentPoint is not equal")
+	}
+}
+
+func TestBooleanFirstTimeColReduce(t *testing.T) {
+	chunk := NewChunkImpl(hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "val_bool1", Type: influxql.Boolean},
+		influxql.VarRef{Val: "val_bool2", Type: influxql.Boolean},
+		influxql.VarRef{Val: "time", Type: influxql.Integer},
+	), "test")
+
+	c1 := NewColumnImpl(influxql.Boolean)
+	c1.AppendNilsV2(true, true, true, false, false)
+	c1.AppendBooleanValues([]bool{true, false, false})
+
+	c2 := NewColumnImpl(influxql.Boolean)
+	c2.AppendNilsV2(true, true, true, true, true)
+	c2.AppendBooleanValues([]bool{false, true, true, true, true})
+
+	chunk.SetTime([]int64{1, 2, 3, 4, 5})
+	chunk.ResetIntervalIndex(0)
+	chunk.AddColumn(c1)
+	chunk.AddColumn(c2)
+
+	idx, v, isNil := BooleanFirstTimeColReduce(chunk, chunk.Column(0).BooleanValues(), 0, 0, 5)
+	if !(idx == 0 && v == true && !isNil) {
+		t.Fatal("not expect, idx ", idx, "v ", v, "exist", isNil)
+	}
+
+	idx, v, isNil = BooleanFirstTimeColReduce(chunk, chunk.Column(1).BooleanValues(), 1, 0, 5)
+	if !(idx == 0 && v == false && !isNil) {
+		t.Fatal("not expect, idx ", idx, "v ", v, "exist", isNil)
+	}
+}
+
+func TestFloatFirstTimeColReduce(t *testing.T) {
+	chunk := NewChunkImpl(hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "val_float1", Type: influxql.Float},
+		influxql.VarRef{Val: "val_float2", Type: influxql.Float},
+		influxql.VarRef{Val: "time", Type: influxql.Integer},
+	), "test")
+
+	c1 := NewColumnImpl(influxql.Float)
+	c1.AppendNilsV2(true, true, true, false, false)
+	c1.AppendFloatValues([]float64{1.1, 8.2, 9.3})
+
+	c2 := NewColumnImpl(influxql.Float)
+	c2.AppendNilsV2(true, true, true, true, true)
+	c2.AppendFloatValues([]float64{11.1, 18.2, 19.3, 20.4, 21.5})
+
+	chunk.SetTime([]int64{1, 2, 3, 4, 5})
+	chunk.ResetIntervalIndex(0)
+	chunk.AddColumn(c1)
+	chunk.AddColumn(c2)
+
+	// first column
+	idx, v, isNil := FirstTimeColReduce[float64](chunk, chunk.Column(0).FloatValues(), 0, 0, 5)
+	if !(idx == 0 && v == 1.1 && !isNil) {
+		t.Fatal("not expect, idx ", idx, "v ", v, "exist", isNil)
+	}
+
+	// second column
+	idx, v, isNil = FirstTimeColReduce[float64](chunk, chunk.Column(1).FloatValues(), 1, 0, 5)
+	if !(idx == 0 && v == 11.1 && !isNil) {
+		t.Fatal("not expect, idx ", idx, "v ", v, "exist", isNil)
+	}
+}
+
+func TestIntegerLastTimeColReduce(t *testing.T) {
+	chunk := NewChunkImpl(hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "val_int1", Type: influxql.Integer},
+		influxql.VarRef{Val: "val_int2", Type: influxql.Integer},
+		influxql.VarRef{Val: "time", Type: influxql.Integer},
+	), "test")
+
+	c1 := NewColumnImpl(influxql.Integer)
+	c1.AppendNilsV2(true, true, true, false, false)
+	c1.AppendIntegerValues([]int64{1, 8, 9})
+
+	c2 := NewColumnImpl(influxql.Integer)
+	c2.AppendNilsV2(true, true, true, true, true)
+	c2.AppendIntegerValues([]int64{11, 18, 19, 20, 21})
+
+	chunk.SetTime([]int64{1, 2, 3, 4, 5})
+	chunk.ResetIntervalIndex(0)
+	chunk.AddColumn(c1)
+	chunk.AddColumn(c2)
+
+	// first column
+	idx, v, isNil := LastTimeColReduce[int64](chunk, chunk.Column(0).IntegerValues(), 0, 0, 5)
+	if !(idx == 2 && v == 9 && !isNil) {
+		t.Fatal("not expect, idx ", idx, "v ", v, "exist", isNil)
+	}
+
+	// second column
+	idx, v, isNil = LastTimeColReduce[int64](chunk, chunk.Column(1).IntegerValues(), 1, 0, 5)
+	if !(idx == 4 && v == 21 && !isNil) {
+		t.Fatal("not expect, idx ", idx, "v ", v, "exist", isNil)
+	}
+}
+
+func TestBooleanLastTimeColReduce(t *testing.T) {
+	chunk := NewChunkImpl(hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "val_bool1", Type: influxql.Boolean},
+		influxql.VarRef{Val: "val_bool2", Type: influxql.Boolean},
+		influxql.VarRef{Val: "time", Type: influxql.Integer},
+	), "test")
+
+	c1 := NewColumnImpl(influxql.Boolean)
+	c1.AppendNilsV2(true, true, true, false, false)
+	c1.AppendBooleanValues([]bool{true, false, false})
+
+	c2 := NewColumnImpl(influxql.Integer)
+	c2.AppendNilsV2(true, true, true, true, true)
+	c2.AppendBooleanValues([]bool{false, true, true, true, true})
+
+	chunk.SetTime([]int64{1, 2, 3, 4, 5})
+	chunk.ResetIntervalIndex(0)
+	chunk.AddColumn(c1)
+	chunk.AddColumn(c2)
+
+	idx, v, isNil := BooleanLastTimeColReduce(chunk, chunk.Column(0).BooleanValues(), 0, 0, 5)
+	if !(idx == 2 && v == false && !isNil) {
+		t.Fatal("not expect, idx ", idx, ", v ", v, ", exist", isNil)
+	}
+
+	idx, v, isNil = BooleanLastTimeColReduce(chunk, chunk.Column(1).BooleanValues(), 1, 0, 5)
+	if !(idx == 4 && v == true && !isNil) {
+		t.Fatal("not expect, idx ", idx, ", v ", v, ", exist", isNil)
+	}
+}
