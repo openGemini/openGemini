@@ -363,6 +363,7 @@ type MaterializeTransform struct {
 	resultChunk     Chunk
 	forward         bool
 	ResetTime       bool
+	isPromQuery     bool
 	transparents    []func(dst Column, src Chunk, index []int)
 
 	ColumnMap [][]int
@@ -420,7 +421,8 @@ func NewMaterializeTransform(inRowDataType hybridqp.RowDataType, outRowDataType 
 		transparents:    nil,
 		ColumnMap:       make([][]int, len(outRowDataType.Fields())),
 		ResetTime:       false,
-		rp:              NewResultEvalPool(1),
+		isPromQuery:     schema.Options().IsPromQuery(),
+		rp:              NewResultEvalPool(1, schema.Options().IsPromQuery()),
 	}
 
 	trans.valuer = influxql.ValuerEval{
@@ -528,20 +530,22 @@ type ResultEval struct {
 	floatLiteral float64
 	boolLiteral  bool
 	uintLiteral  uint64
+	isPromQuery  bool
 }
 
 type ResultEvalPool struct {
 	resultEvals []*ResultEval
 	index       int
+	isPromQuery bool
 }
 
-func NewResultEvalPool(len int) *ResultEvalPool {
-	return &ResultEvalPool{}
+func NewResultEvalPool(len int, isPromQuery bool) *ResultEvalPool {
+	return &ResultEvalPool{isPromQuery: isPromQuery}
 }
 
 func (rp *ResultEvalPool) getResultEval(dataType influxql.DataType) *ResultEval {
 	if rp.index >= len(rp.resultEvals) {
-		rp.resultEvals = append(rp.resultEvals, &ResultEval{})
+		rp.resultEvals = append(rp.resultEvals, &ResultEval{isPromQuery: rp.isPromQuery})
 	}
 	res := rp.resultEvals[rp.index]
 	rp.index += 1
@@ -694,7 +698,7 @@ func (res *ResultEval) copyToForFloat(l int, dst *ColumnImpl) {
 		num = 0
 		for index < l && !res.IsNil(index) {
 			value := res.getFloat64(index)
-			if math.IsNaN(value) {
+			if math.IsNaN(value) && !res.isPromQuery {
 				dst.AppendManyNotNil(num)
 				dst.AppendNil()
 				num = 0
@@ -1360,7 +1364,7 @@ func (trans *MaterializeTransform) materialize(chunk Chunk) Chunk {
 						dst.AppendNil()
 						continue
 					}
-					if val, ok := value.(float64); ok && math.IsNaN(val) {
+					if val, ok := value.(float64); ok && math.IsNaN(val) && !trans.isPromQuery {
 						dst.AppendNil()
 						continue
 					}
