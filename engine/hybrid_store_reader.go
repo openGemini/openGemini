@@ -247,6 +247,10 @@ func (r *HybridStoreReader) initDetachedFileReader(frags executor.IndexFrags) (c
 	if err != nil {
 		return nil, err
 	}
+	if r.schema.Options().CanTimeLimitPushDown() {
+		sortLimitCursor := immutable.NewSortLimitCursor(r.schema.Options(), r.readerCtx.GetSchemas(), fileReader)
+		return sortLimitCursor, nil
+	}
 	return fileReader, nil
 }
 
