@@ -349,6 +349,10 @@ type FileReaderContext struct {
 	filterBitmap *bitmap.FilterBitmap
 }
 
+func (f *FileReaderContext) GetSchemas() record.Schemas {
+	return f.schemas
+}
+
 func NewFileReaderContext(tr util.TimeRange, schemas record.Schemas, decs *ReadContext, filterOpts *FilterOptions, filterBitmap *bitmap.FilterBitmap, isOrder bool) *FileReaderContext {
 	return &FileReaderContext{
 		isOrder:      isOrder,

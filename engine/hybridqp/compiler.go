@@ -59,6 +59,7 @@ type Options interface {
 	GetLogQueryCurrId() string
 	GetIterId() int32
 	IsIncQuery() bool
+	CanTimeLimitPushDown() bool
 	SetPromQuery(bool)
 	IsPromQuery() bool
 	IsPromInstantQuery() bool
