@@ -20,8 +20,10 @@ const (
 
 // PromCommand wraps a raw query expression with several related attributes
 type PromCommand struct {
-	Cmd      string
-	Database string
+	Cmd             string
+	Database        string
+	RetentionPolicy string
+	Measurement     string
 	// Start and End attributes are mainly used for PromQL currently
 	// as it doesn't support time-bounding query expression itself
 	Start      *time.Time

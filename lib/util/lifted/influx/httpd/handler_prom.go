@@ -47,11 +47,26 @@ import (
 	"go.uber.org/zap"
 )
 
-var DefaultPromDB = "prom"
+const (
+	EmptyPromMst string = ""
+	MetricStore  string = "metric_store"
+)
 
-// servePromWrite receives data in the Prometheus remote write protocol and writes it
-// to the database
+// servePromWrite receives data in the Prometheus remote write protocol and writes into the database
 func (h *Handler) servePromWrite(w http.ResponseWriter, r *http.Request, user meta2.User) {
+	h.servePromWriteBase(w, r, user, EmptyPromMst, timeSeries2Rows)
+}
+
+// servePromWriteWithMetricStore receives data in the Prometheus remote write protocol and  writes into the database
+func (h *Handler) servePromWriteWithMetricStore(w http.ResponseWriter, r *http.Request, user meta2.User) {
+	mst, ok := getMstByProm(h, w, r)
+	if !ok {
+		return
+	}
+	h.servePromWriteBase(w, r, user, mst, timeSeries2RowsV2)
+}
+
+func (h *Handler) servePromWriteBase(w http.ResponseWriter, r *http.Request, user meta2.User, mst string, tansFunc timeSeries2RowsFunc) {
 	atomic.AddInt64(&statistics.HandlerStat.WriteRequests, 1)
 	atomic.AddInt64(&statistics.HandlerStat.ActiveWriteRequests, 1)
 	atomic.AddInt64(&statistics.HandlerStat.WriteRequestBytesIn, r.ContentLength)
@@ -68,25 +83,20 @@ func (h *Handler) servePromWrite(w http.ResponseWriter, r *http.Request, user me
 		return
 	}
 
-	urlValues := r.URL.Query()
-	database := urlValues.Get("db")
-	if database == "" {
-		database = DefaultPromDB
-	}
-
-	if _, err := h.MetaClient.Database(database); err != nil {
+	db, rp := getDbRpByProm(r)
+	if _, err := h.MetaClient.Database(db); err != nil {
 		h.httpError(w, fmt.Sprintf(err.Error()), http.StatusNotFound)
 		return
 	}
 
 	if h.Config.AuthEnabled {
 		if user == nil {
-			h.httpError(w, fmt.Sprintf("user is required to write to database %q", database), http.StatusForbidden)
+			h.httpError(w, fmt.Sprintf("user is required to write to database %q", db), http.StatusForbidden)
 			return
 		}
 
-		if err := h.WriteAuthorizer.AuthorizeWrite(user.ID(), database); err != nil {
-			h.httpError(w, fmt.Sprintf("%q user is not authorized to write to database %q", user.ID(), database), http.StatusForbidden)
+		if err := h.WriteAuthorizer.AuthorizeWrite(user.ID(), db); err != nil {
+			h.httpError(w, fmt.Sprintf("%q user is not authorized to write to database %q", user.ID(), db), http.StatusForbidden)
 			return
 		}
 	}
@@ -103,7 +113,6 @@ func (h *Handler) servePromWrite(w http.ResponseWriter, r *http.Request, user me
 		}
 	}
 
-	rp := urlValues.Get("rp")
 	err := Parser.ParseStream(body, func(tss []prompb2.TimeSeries) error {
 		var maxPoints int
 		var err error
@@ -113,13 +122,13 @@ func (h *Handler) servePromWrite(w http.ResponseWriter, r *http.Request, user me
 
 		rs := pool.GetRows(maxPoints)
 		defer pool.PutRows(rs)
-		*rs, err = timeSeries2Rows(*rs, tss)
+		*rs, err = tansFunc(mst, *rs, tss)
 		if err != nil {
 			h.httpError(w, err.Error(), http.StatusBadRequest)
 			return err
 		}
 
-		if err = h.PointsWriter.RetryWritePointRows(database, rp, *rs); influxdb.IsClientError(err) {
+		if err = h.PointsWriter.RetryWritePointRows(db, rp, *rs); influxdb.IsClientError(err) {
 			h.httpError(w, err.Error(), http.StatusBadRequest)
 		} else if influxdb.IsAuthorizationError(err) {
 			h.httpError(w, err.Error(), http.StatusForbidden)
@@ -136,9 +145,21 @@ func (h *Handler) servePromWrite(w http.ResponseWriter, r *http.Request, user me
 	h.writeHeader(w, http.StatusNoContent)
 }
 
-// servePromRead will convert a Prometheus remote read request into a storage
-// query and returns data in Prometheus remote read protobuf format.
 func (h *Handler) servePromRead(w http.ResponseWriter, r *http.Request, user meta2.User) {
+	h.servePromReadBase(w, r, user, EmptyPromMst)
+}
+
+func (h *Handler) servePromReadWithMetricStore(w http.ResponseWriter, r *http.Request, user meta2.User) {
+	mst, ok := getMstByProm(h, w, r)
+	if !ok {
+		return
+	}
+	h.servePromReadBase(w, r, user, mst)
+}
+
+// servePromReadBase will convert a Prometheus remote read request into a storage
+// query and returns data in Prometheus remote read protobuf format.
+func (h *Handler) servePromReadBase(w http.ResponseWriter, r *http.Request, user meta2.User, mst string) {
 	if syscontrol.DisableReads {
 		h.httpError(w, `disable read!`, http.StatusForbidden)
 		h.Logger.Error("read is forbidden!", zap.Bool("DisableReads", syscontrol.DisableReads))
@@ -164,10 +185,8 @@ func (h *Handler) servePromRead(w http.ResponseWriter, r *http.Request, user met
 		return
 	}
 
-	// Query the DB and create a ReadResponse for Prometheus
-	db := r.FormValue("db")
-
-	queries, err := ReadRequestToInfluxQuery(&req)
+	db, rp := getDbRpByProm(r)
+	queries, err := ReadRequestToInfluxQuery(&req, mst)
 	YyParser := &influxql.YyParser{
 		Query: influxql.Query{},
 	}
@@ -227,7 +246,7 @@ func (h *Handler) servePromRead(w http.ResponseWriter, r *http.Request, user met
 
 	opts := query.ExecutionOptions{
 		Database:        db,
-		RetentionPolicy: r.FormValue("rp"),
+		RetentionPolicy: rp,
 		ChunkSize:       1,
 		Chunked:         true,
 		ReadOnly:        r.Method == "GET",
@@ -336,16 +355,34 @@ func (h *Handler) servePromRead(w http.ResponseWriter, r *http.Request, user met
 
 // servePromQuery Executes an instant query of the PromQL and returns the query result.
 func (h *Handler) servePromQuery(w http.ResponseWriter, r *http.Request, user meta2.User) {
-	h.servePromBaseQuery(w, r, user, getInstantQueryCmd)
+	h.servePromBaseQuery(w, r, user, &promQueryParam{getQueryCmd: getInstantQueryCmd})
 }
 
 // servePromQueryRange Executes a range query of the PromQL and returns the query result.
 func (h *Handler) servePromQueryRange(w http.ResponseWriter, r *http.Request, user meta2.User) {
-	h.servePromBaseQuery(w, r, user, getRangeQueryCmd)
+	h.servePromBaseQuery(w, r, user, &promQueryParam{getQueryCmd: getRangeQueryCmd})
+}
+
+// servePromQueryWithMetricStore Executes an instant query of the PromQL and returns the query result.
+func (h *Handler) servePromQueryWithMetricStore(w http.ResponseWriter, r *http.Request, user meta2.User) {
+	mst, ok := getMstByProm(h, w, r)
+	if !ok {
+		return
+	}
+	h.servePromBaseQuery(w, r, user, &promQueryParam{mst: mst, getQueryCmd: getInstantQueryCmd})
+}
+
+// servePromQueryRangeWithMetricStore Executes a range query of the PromQL and returns the query result.
+func (h *Handler) servePromQueryRangeWithMetricStore(w http.ResponseWriter, r *http.Request, user meta2.User) {
+	mst, ok := getMstByProm(h, w, r)
+	if !ok {
+		return
+	}
+	h.servePromBaseQuery(w, r, user, &promQueryParam{mst: mst, getQueryCmd: getRangeQueryCmd})
 }
 
 // servePromBaseQuery Executes a query of the PromQL and returns the query result.
-func (h *Handler) servePromBaseQuery(w http.ResponseWriter, r *http.Request, user meta2.User, getQueryCmd getPromQueryCommand) {
+func (h *Handler) servePromBaseQuery(w http.ResponseWriter, r *http.Request, user meta2.User, p *promQueryParam) {
 	atomic.AddInt64(&statistics.HandlerStat.QueryRequests, 1)
 	atomic.AddInt64(&statistics.HandlerStat.ActiveQueryRequests, 1)
 	start := time.Now()
@@ -371,10 +408,7 @@ func (h *Handler) servePromBaseQuery(w http.ResponseWriter, r *http.Request, use
 	nodeID, _ := strconv.ParseUint(r.FormValue("node_id"), 10, 64)
 
 	// Get the query parameters db and epoch from the query request.
-	db := r.FormValue("db")
-	if db == "" {
-		db = DefaultPromDB
-	}
+	db, rp := getDbRpByProm(r)
 
 	ctx := r.Context()
 	if to := r.FormValue("timeout"); to != "" {
@@ -397,10 +431,13 @@ func (h *Handler) servePromBaseQuery(w http.ResponseWriter, r *http.Request, use
 	}
 
 	// Parse the query path parameters and generate the commands required for the prom query.
-	promCommand, ok := getQueryCmd(h, r, w)
+	promCommand, ok := p.getQueryCmd(r, w)
 	if !ok {
 		return
 	}
+
+	// Assign db, rp, and mst to prom command.
+	promCommand.Database, promCommand.RetentionPolicy, promCommand.Measurement = db, rp, p.mst
 
 	// Transpiler as the key converter for promql2influxql
 	transpiler := &promql2influxql.Transpiler{
@@ -461,7 +498,7 @@ func (h *Handler) servePromBaseQuery(w http.ResponseWriter, r *http.Request, use
 
 	opts := query.ExecutionOptions{
 		Database:        db,
-		RetentionPolicy: r.FormValue("rp"),
+		RetentionPolicy: rp,
 		ChunkSize:       chunkSize,
 		Chunked:         chunked,
 		ReadOnly:        r.Method == "GET",
@@ -567,13 +604,27 @@ func (h *Handler) promExprQuery(promCommand *promql2influxql.PromCommand, statem
 
 // servePromQueryLabels Executes a labels query of the PromQL and returns the query result.
 func (h *Handler) servePromQueryLabels(w http.ResponseWriter, r *http.Request, user meta2.User) {
+	h.servePromQueryLabelsBase(w, r, user, &promQueryParam{getMetaQuery: getLabelsQuery})
+}
+
+// servePromQueryLabels Executes a labels query of the PromQL and returns the query result.
+func (h *Handler) servePromQueryLabelsWithMetricStore(w http.ResponseWriter, r *http.Request, user meta2.User) {
+	mst, ok := getMstByProm(h, w, r)
+	if !ok {
+		return
+	}
+	h.servePromQueryLabelsBase(w, r, user, &promQueryParam{mst: mst, getMetaQuery: getLabelsQuery})
+}
+
+// servePromQueryLabels Executes a labels query of the PromQL and returns the query result.
+func (h *Handler) servePromQueryLabelsBase(w http.ResponseWriter, r *http.Request, user meta2.User, p *promQueryParam) {
 	// Retrieve the underlying ResponseWriter or initialize our own.
 	rw, ok := w.(ResponseWriter)
 	if !ok {
 		rw = NewResponseWriter(w, r)
 	}
 
-	stmtID2Result, ok := h.servePromBaseMetaQuery(w, r, user, resolveLabelsQuery)
+	stmtID2Result, ok := h.servePromBaseMetaQuery(w, r, user, p)
 	if !ok {
 		return
 	}
@@ -594,13 +645,28 @@ func (h *Handler) servePromQueryLabels(w http.ResponseWriter, r *http.Request, u
 
 // servePromQueryLabels Executes a label-values query of the PromQL and returns the query result.
 func (h *Handler) servePromQueryLabelValues(w http.ResponseWriter, r *http.Request, user meta2.User) {
+	h.servePromQueryLabelsBase(w, r, user, &promQueryParam{getMetaQuery: getLabelValuesQuery})
+
+}
+
+// servePromQueryLabelValuesWithMetricStore Executes a label-values query of the PromQL and returns the query result.
+func (h *Handler) servePromQueryLabelValuesWithMetricStore(w http.ResponseWriter, r *http.Request, user meta2.User) {
+	mst, ok := getMstByProm(h, w, r)
+	if !ok {
+		return
+	}
+	h.servePromQueryLabelsBase(w, r, user, &promQueryParam{mst: mst, getMetaQuery: getLabelValuesQuery})
+}
+
+// servePromQueryLabels Executes a label-values query of the PromQL and returns the query result.
+func (h *Handler) servePromQueryLabelValuesBase(w http.ResponseWriter, r *http.Request, user meta2.User, p *promQueryParam) {
 	// Retrieve the underlying ResponseWriter or initialize our own.
 	rw, ok := w.(ResponseWriter)
 	if !ok {
 		rw = NewResponseWriter(w, r)
 	}
 
-	stmtID2Result, ok := h.servePromBaseMetaQuery(w, r, user, resolveLabelValuesQuery)
+	stmtID2Result, ok := h.servePromBaseMetaQuery(w, r, user, p)
 	if !ok {
 		return
 	}
@@ -622,6 +688,20 @@ func (h *Handler) servePromQueryLabelValues(w http.ResponseWriter, r *http.Reque
 
 // servePromQueryLabels Executes a series query of the PromQL and returns the query result.
 func (h *Handler) servePromQuerySeries(w http.ResponseWriter, r *http.Request, user meta2.User) {
+	h.servePromQuerySeriesBase(w, r, user, &promQueryParam{getMetaQuery: getSeriesQuery})
+}
+
+// servePromQuerySeriesWithMetricStore Executes a series query of the PromQL and returns the query result.
+func (h *Handler) servePromQuerySeriesWithMetricStore(w http.ResponseWriter, r *http.Request, user meta2.User) {
+	mst, ok := getMstByProm(h, w, r)
+	if !ok {
+		return
+	}
+	h.servePromQuerySeriesBase(w, r, user, &promQueryParam{mst: mst, getMetaQuery: getSeriesQuery})
+}
+
+// servePromQuerySeriesBase Executes a series query of the PromQL and returns the query result.
+func (h *Handler) servePromQuerySeriesBase(w http.ResponseWriter, r *http.Request, user meta2.User, p *promQueryParam) {
 	if err := r.ParseForm(); err != nil {
 		respondError(w, &apiError{errorBadData, fmt.Errorf("error parsing form values: %w", err)}, nil)
 		return
@@ -631,7 +711,7 @@ func (h *Handler) servePromQuerySeries(w http.ResponseWriter, r *http.Request, u
 	if !ok {
 		rw = NewResponseWriter(w, r)
 	}
-	stmtID2Result, ok := h.servePromBaseMetaQuery(w, r, user, resolveSeriesQuery)
+	stmtID2Result, ok := h.servePromBaseMetaQuery(w, r, user, p)
 	if !ok {
 		return
 	}
@@ -654,18 +734,14 @@ func (h *Handler) servePromQuerySeries(w http.ResponseWriter, r *http.Request, u
 	atomic.AddInt64(&statistics.HandlerStat.QueryRequestBytesTransmitted, int64(n))
 }
 
-func (h *Handler) servePromBaseMetaQuery(w http.ResponseWriter, r *http.Request, user meta2.User, resolveMetaQuery resolveMetaQuery) (result map[int]*query.Result, ok bool) {
+func (h *Handler) servePromBaseMetaQuery(w http.ResponseWriter, r *http.Request, user meta2.User, p *promQueryParam) (result map[int]*query.Result, ok bool) {
 	// Get the query parameters db and epoch from the query request.
-	db := r.FormValue("db")
-	if db == "" {
-		invalidParamError(w, fmt.Errorf("database is required"), "db")
-		return nil, false
-	}
+	db, rp := getDbRpByProm(r)
 
 	// Retrieve the node id the query should be executed on.
 	nodeID, _ := strconv.ParseUint(r.FormValue("node_id"), 10, 64)
 
-	q, ok := resolveMetaQuery(r, w)
+	q, ok := p.getMetaQuery(r, w, p.mst)
 	if !ok {
 		return
 	}
@@ -681,7 +757,7 @@ func (h *Handler) servePromBaseMetaQuery(w http.ResponseWriter, r *http.Request,
 
 	opts := query.ExecutionOptions{
 		Database:        db,
-		RetentionPolicy: r.FormValue("rp"),
+		RetentionPolicy: rp,
 		ReadOnly:        r.Method == "GET",
 		NodeID:          nodeID,
 		ParallelQuery:   atomic.LoadInt32(&syscontrol.ParallelQueryInBatch) == 1,
@@ -722,16 +798,13 @@ func (h *Handler) servePromBaseMetaQuery(w http.ResponseWriter, r *http.Request,
 	return stmtID2Result, true
 }
 
-// servePromDropSeries Executes a metadata query of the PromQL and returns the query result.
+// servePromQueryMetaData Executes a metadata query of the PromQL and returns the query result.
 func (h *Handler) servePromQueryMetaData(w http.ResponseWriter, r *http.Request, user meta2.User) {
-	// Get the query parameters db and epoch from the query request.
-	db := r.FormValue("db")
-	if db == "" {
-		invalidParamError(w, fmt.Errorf("database is required"), "db")
-		return
-	}
-
 	// TODO query metadata
+}
+
+// servePromQueryMetaDataWithMetricStore Executes a metadata query of the PromQL and returns the query result.
+func (h *Handler) servePromQueryMetaDataWithMetricStore(w http.ResponseWriter, r *http.Request, user meta2.User) {
 }
 
 type PromTimeValuer struct {
@@ -753,5 +826,4 @@ func (t *PromTimeValuer) Value(key string) (interface{}, bool) {
 }
 
 func (t *PromTimeValuer) SetValuer(_ influxql.Valuer, _ int) {
-
 }
