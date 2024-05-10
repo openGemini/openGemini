@@ -55,7 +55,7 @@ func (r *Receiver) populatePromSeriesByTag(promSeries *[]*promql.Series, table *
 	var metric labels.Labels
 	if !r.DropMetric {
 		metric = labels.FromMap(table.Tags)
-		if !r.RemoveTableName {
+		if _, ok := table.Tags[DefaultMetricKeyLabel]; !ok && !r.RemoveTableName {
 			metric = append(metric, labels.FromStrings(DefaultMetricKeyLabel, table.Name)...)
 		}
 	} else {
@@ -93,7 +93,9 @@ func (r *Receiver) populatePromSeriesByHash(promSeries *[]*promql.Series, table 
 		var metric labels.Labels
 		if !r.DropMetric {
 			metric = labels.FromMap(kvs)
-			metric = append(metric, labels.FromStrings(DefaultMetricKeyLabel, table.Name)...)
+			if _, ok := kvs[DefaultMetricKeyLabel]; !ok && !r.RemoveTableName {
+				metric = append(metric, labels.FromStrings(DefaultMetricKeyLabel, table.Name)...)
+			}
 		} else {
 			metric = FromMapWithoutMetric(kvs)
 		}
