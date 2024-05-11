@@ -97,25 +97,25 @@ func NewSlidingWindowCountRoutineImpl(
 	case influxql.Integer:
 		return NewRoutineImpl(
 			NewIntegerSlidingWindowIntegerIterator(
-				IntegerCountReduce, IntegerCountMerge, IntegerSlidingWindowMergeFunc,
+				CountReduce, IntegerCountMerge, IntegerSlidingWindowMergeFunc,
 				inOrdinal, outOrdinal, slidingNum),
 			inOrdinal, outOrdinal)
 	case influxql.Float:
 		return NewRoutineImpl(
 			NewIntegerSlidingWindowIntegerIterator(
-				FloatCountReduce, IntegerCountMerge, IntegerSlidingWindowMergeFunc,
+				CountReduce, IntegerCountMerge, IntegerSlidingWindowMergeFunc,
 				inOrdinal, outOrdinal, slidingNum),
 			inOrdinal, outOrdinal)
 	case influxql.String:
 		return NewRoutineImpl(
 			NewIntegerSlidingWindowIntegerIterator(
-				StringCountReduce, IntegerCountMerge, IntegerSlidingWindowMergeFunc,
+				CountReduce, IntegerCountMerge, IntegerSlidingWindowMergeFunc,
 				inOrdinal, outOrdinal, slidingNum),
 			inOrdinal, outOrdinal)
 	case influxql.Boolean:
 		return NewRoutineImpl(
 			NewBooleanSlidingWindowIntegerIterator(
-				BooleanCountReduce, IntegerCountMerge, IntegerSlidingWindowMergeFunc,
+				CountReduce, IntegerCountMerge, IntegerSlidingWindowMergeFunc,
 				inOrdinal, outOrdinal, slidingNum),
 			inOrdinal, outOrdinal)
 	default:
