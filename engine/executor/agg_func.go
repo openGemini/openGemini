@@ -114,3 +114,37 @@ func NewModeReduce[T util.ExceptBool](si *SliceItem[T]) (int, int64, float64, bo
 	}
 	return modei, 0, 0, false
 }
+
+func CountReduce(c Chunk, ordinal, start, end int) (int, int64, bool) {
+	var count int64
+	if c.Column(ordinal).NilCount() == 0 {
+		// fast path
+		count = int64(end - start)
+		return start, count, count == 0
+	}
+
+	// slow path
+	vs, ve := c.Column(ordinal).GetRangeValueIndexV2(start, end)
+	count = int64(ve - vs)
+	return start, count, count == 0
+}
+
+func AbsentReduce(c Chunk, ordinal, start, end int) (int, int64, bool) {
+	var count int64
+	if c.Column(ordinal).NilCount() == 0 {
+		// fast path
+		count = int64(end - start)
+		if count > 0 {
+			return start, 1, false
+		}
+		return start, 0, true
+	}
+
+	// slow path
+	vs, ve := c.Column(ordinal).GetRangeValueIndexV2(start, end)
+	count = int64(ve - vs)
+	if count > 0 {
+		return start, 1, false
+	}
+	return start, 0, true
+}

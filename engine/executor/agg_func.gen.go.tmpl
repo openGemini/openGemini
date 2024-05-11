@@ -24,64 +24,6 @@ import (
 	"github.com/openGemini/openGemini/engine/hybridqp"
 )
 
-{{range .}}
-{{- if or (eq .Name "Float") (eq .Name "Integer")}}
-func New{{.Name}}MedianReduce({{.name}}SliceItem *{{.Name}}SliceItem) (int, int64, float64, bool) {
-		length := len({{.name}}SliceItem.value)
-		if length == 0 {
-			return -1, {{.Nil}}, {{.Nil}}, true
-		}
-		if length == 1 {
-		    return -1,  {{.name}}SliceItem.time[0], float64({{.name}}SliceItem.value[0]), false
-		}
-
-		sort.Stable({{.name}}SliceItem)
-
-        if length % 2 == 0 {
-            lowvalue, highvalue := {{.name}}SliceItem.value[length/2-1], {{.name}}SliceItem.value[length/2]
-            return -1, {{.name}}SliceItem.time[length/2-1], float64(lowvalue) + float64(highvalue - lowvalue)/2, false
-        }
-		return -1, {{.name}}SliceItem.time[length/2], float64({{.name}}SliceItem.value[length/2]), false
-}
-{{- end}}
-{{end}}
-
-{{range .}}
-{{- if or (eq .Name "Float") (eq .Name "Integer") (eq .Name "String")}}
-func New{{.Name}}ModeReduce({{.Name}}SliceItem *{{.Name}}SliceItem) (int, int64, float64, bool) {
-	length := len({{.Name}}SliceItem.value)
-	start := 0
-	end := length-1
-	if length == 0 {
-		return 0, 0, 0, true
-	}
-
-	sort.Stable({{.Name}}SliceItem)
-	curri := start
-	currFreq := 0
-	currValue := {{.Name}}SliceItem.value[start]
-	modei := start
-	modeFreq := 0
-	for i := start; i <= end; i++ {
-		if {{.Name}}SliceItem.value[i] != currValue{
-			currFreq = 1
-			currValue = {{.Name}}SliceItem.value[i]
-			curri = i
-			continue
-		}
-		currFreq++
-		if modeFreq > currFreq || (modeFreq == currFreq && {{.Name}}SliceItem.time[curri] > {{.Name}}SliceItem.time[modei]){
-			continue
-		}
-		modeFreq = currFreq
-		modei = curri
-	}
-	return modei, 0, 0, false
-}
-{{- end}}
-{{end}}
-
-
 func NewBooleanModeReduce(BooleanSliceItem *BooleanSliceItem) (int, int64, float64, bool) {
 	length := len(BooleanSliceItem.value)
 	if length == 0 {
@@ -113,23 +55,6 @@ func NewBooleanModeReduce(BooleanSliceItem *BooleanSliceItem) (int, int64, float
 	}
 	return falsei, 0, 0, false
 }
-
-
-{{range .}}
-func {{.Name}}CountReduce(c Chunk, ordinal, start, end int) (int, int64, bool) {
-	var count int64
-	if c.Column(ordinal).NilCount() == 0 {
-		// fast path
-		count = int64(end - start)
-		return start, count, count == 0
-	}
-
-	// slow path
-	vs, ve := c.Column(ordinal).GetRangeValueIndexV2(start, end)
-	count = int64(ve - vs)
-	return start, count, count == 0
-}
-{{end}}
 
 func IntegerCountMerge(prevPoint, currPoint *IntegerPoint) {
 	if currPoint.isNil {
@@ -1144,28 +1069,6 @@ func {{.Name}}IrateMerge(prevPoints [2]*{{.Name}}Point, interval *hybridqp.Inter
         prevPoints[0].value, prevPoints[1].value, interval)
 }
 {{- end}}
-{{end}}
-
-{{range .}}
-func {{.Name}}AbsentReduce(c Chunk, ordinal, start, end int) (int, int64, bool) {
-	var count int64
-	if c.Column(ordinal).NilCount() == 0 {
-		// fast path
-		count = int64(end - start)
-		if count > 0 {
-			return start, 1, false
-		}
-		return start, 0, true
-	}
-
-	// slow path
-	vs, ve := c.Column(ordinal).GetRangeValueIndexV2(start, end)
-	count = int64(ve - vs)
-	if count > 0 {
-		return start, 1, false
-	}
-	return start, 0, true
-}
 {{end}}
 
 func IntegerAbsentMerge(prevPoint, currPoint *IntegerPoint) {
