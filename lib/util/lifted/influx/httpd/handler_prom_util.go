@@ -161,7 +161,7 @@ func (h *Handler) getPromResult(w http.ResponseWriter, stmtID2Result map[int]*qu
 	return resp, true
 }
 
-func (h *Handler) getRangePromResultForEmptySeries(expr influxql.Expr, promCommand *promql2influxql.PromCommand, valuer *influxql.ValuerEval, timeValuer *PromTimeValuer) (*PromResponse, bool) {
+func (h *Handler) getRangePromResultForEmptySeries(expr influxql.Expr, promCommand *promql2influxql.PromCommand, valuer *influxql.ValuerEval, timeValuer *PromTimeValuer, typ parser.ValueType) (*PromResponse, bool) {
 	vector := make(promql.Vector, 0)
 	start, end, step := GetRangeTimeForEmptySeriesResult(promCommand)
 	for s := start; s <= end; s += step {
@@ -170,18 +170,18 @@ func (h *Handler) getRangePromResultForEmptySeries(expr influxql.Expr, promComma
 		Add2EmptySeriesResult(s, value.(float64), &vector)
 	}
 	resp := &PromResponse{Status: "success"}
-	resp.Data = &promql2influxql.PromResult{Result: vector, ResultType: string(parser.ValueTypeVector)}
+	resp.Data = &promql2influxql.PromResult{Result: vector, ResultType: string(typ)}
 	return resp, true
 }
 
-func (h *Handler) getInstantPromResultForEmptySeries(expr influxql.Expr, promCommand *promql2influxql.PromCommand, valuer *influxql.ValuerEval, timeValuer *PromTimeValuer) (*PromResponse, bool) {
+func (h *Handler) getInstantPromResultForEmptySeries(expr influxql.Expr, promCommand *promql2influxql.PromCommand, valuer *influxql.ValuerEval, timeValuer *PromTimeValuer, typ parser.ValueType) (*PromResponse, bool) {
 	vector := make(promql.Vector, 0)
 	time := GetTimeForEmptySeriesResult(promCommand)
 	timeValuer.tmpTime = time
 	value := valuer.Eval(expr)
 	Add2EmptySeriesResult(time, value.(float64), &vector)
 	resp := &PromResponse{Status: "success"}
-	resp.Data = &promql2influxql.PromResult{Result: vector, ResultType: string(parser.ValueTypeVector)}
+	resp.Data = &promql2influxql.PromResult{Result: vector, ResultType: string(typ)}
 	return resp, true
 }
 
