@@ -17,6 +17,8 @@ limitations under the License.
 package retention
 
 import (
+	"fmt"
+	"sync"
 	"time"
 
 	log "github.com/influxdata/influxdb/logger"
@@ -28,6 +30,54 @@ import (
 	"github.com/openGemini/openGemini/services"
 	"go.uber.org/zap"
 )
+
+const (
+	InitPending uint32 = 0
+	ExitPending uint32 = 1
+
+	ShardDelete int = 1
+	IndexDelete int = 2
+)
+
+type PendingInfo struct {
+	pendingId map[uint64]struct{}
+	lock      sync.RWMutex
+}
+
+func NewPendingInfo() PendingInfo {
+	return PendingInfo{
+		pendingId: make(map[uint64]struct{}, 0),
+	}
+}
+
+func (s *PendingInfo) EnteringPendingState(id uint64, pendingState *uint32) {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	if *pendingState == InitPending {
+		s.pendingId[id] = struct{}{}
+	}
+}
+
+func (s *PendingInfo) ExitingPendingState(id uint64, pendingState *uint32) {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	*pendingState = ExitPending
+	_, ok := s.pendingId[id]
+	if ok {
+		delete(s.pendingId, id)
+	}
+}
+
+func (s *PendingInfo) IsInPendingState(id uint64) error {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+
+	_, ok := s.pendingId[id]
+	if ok {
+		return fmt.Errorf("id{%d} deletion is still in pending state", id)
+	}
+	return nil
+}
 
 // include Shard retention polices and Index retention polices
 type Service struct {
@@ -53,11 +103,23 @@ type Service struct {
 		ClearIndexCache(db string, ptId uint32, indexID uint64) error
 	}
 
+	pendingShard PendingInfo
+	pendingIndex PendingInfo
+
 	index uint64
 }
 
+var shardDeletionTimeout time.Duration = 120 * time.Second
+
+func SetShardDeletionDelay(delay time.Duration) {
+	shardDeletionTimeout = delay
+}
+
 func NewService(interval time.Duration) *Service {
-	s := &Service{}
+	s := &Service{
+		pendingShard: NewPendingInfo(),
+		pendingIndex: NewPendingInfo(),
+	}
 	s.Init("retention", interval, s.handle)
 	return s
 }
@@ -131,6 +193,48 @@ func (s *Service) handleSharedStorage(logger *zap.Logger) bool {
 	return retryNeeded
 }
 
+func (s *Service) getPendingInfo(delType int) *PendingInfo {
+	if delType == ShardDelete {
+		return &s.pendingShard
+	} else {
+		return &s.pendingIndex
+	}
+}
+
+func (s *Service) DeleteByEngine(db string, ptId uint32, id uint64, delType int) error {
+	if delType == ShardDelete {
+		return s.Engine.DeleteShard(db, ptId, id)
+	} else {
+		return s.Engine.DeleteIndex(db, ptId, id)
+	}
+}
+
+func (s *Service) DeleteShardOrIndex(db string, ptId uint32, id uint64, delType int) error {
+	pdInfo := s.getPendingInfo(delType)
+	if err := pdInfo.IsInPendingState(id); err != nil {
+		return err
+	}
+
+	pendingState := InitPending
+	done := make(chan error, 1)
+	go func() {
+		err := s.DeleteByEngine(db, ptId, id, delType)
+		if err != nil {
+			s.Logger.Error("delete shard or index failed", zap.Int("delete type", delType), zap.Uint64("id", id), zap.Error(err))
+		}
+		done <- err
+		pdInfo.ExitingPendingState(id, &pendingState)
+	}()
+
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(shardDeletionTimeout):
+		pdInfo.EnteringPendingState(id, &pendingState)
+		return fmt.Errorf("id{%d} deletion entered pending status", id)
+	}
+}
+
 // ShardGroup Retention Policy check and IndexGroup Retention Policy check.
 func (s *Service) handleLocalStorage(logger *zap.Logger) bool {
 	var retryNeeded bool
@@ -146,7 +250,7 @@ func (s *Service) handleLocalStorage(logger *zap.Logger) bool {
 			continue
 		}
 
-		if err := s.Engine.DeleteShard(expiredShards[i].OwnerDb, expiredShards[i].OwnerPt, expiredShards[i].ShardID); err != nil {
+		if err := s.DeleteShardOrIndex(expiredShards[i].OwnerDb, expiredShards[i].OwnerPt, expiredShards[i].ShardID, ShardDelete); err != nil {
 			logger.Error("Failed to delete shard",
 				log.Database(expiredShards[i].OwnerDb),
 				log.Shard(expiredShards[i].ShardID),
@@ -173,7 +277,7 @@ func (s *Service) handleLocalStorage(logger *zap.Logger) bool {
 			continue
 		}
 
-		if err := s.Engine.DeleteIndex(expiredIndexes[i].OwnerDb, expiredIndexes[i].OwnerPt, expiredIndexes[i].Index.IndexID); err != nil {
+		if err := s.DeleteShardOrIndex(expiredIndexes[i].OwnerDb, expiredIndexes[i].OwnerPt, expiredIndexes[i].Index.IndexID, IndexDelete); err != nil {
 			logger.Error("Failed to delete index",
 				log.Database(expiredIndexes[i].OwnerDb),
 				zap.Uint64("indexID", expiredIndexes[i].Index.IndexID),

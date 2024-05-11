@@ -29,6 +29,7 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
+	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
@@ -825,4 +826,88 @@ func Test_executeCmdErr(t *testing.T) {
 	var errType proto2.Command_Type = math.MaxInt32
 	cmd.Type = &errType
 	fsm.executeCmd(*cmd)
+}
+
+func Test_DeleteRpForLogkeeper(t *testing.T) {
+	config.SetProductType("logkeeper")
+	dir := t.TempDir()
+	s := &Store{
+		config: &config.Meta{DataDir: dir + "/data", WalDir: dir + "/wal"},
+		cacheData: &meta2.Data{
+			DataNodes: []meta2.DataNode{
+				meta2.DataNode{NodeInfo: meta2.NodeInfo{ID: 0, TCPHost: "127.0.0.1", Status: serf.StatusAlive}, ConnID: 2, AliveConnID: 2},
+				meta2.DataNode{NodeInfo: meta2.NodeInfo{ID: 1, TCPHost: "127.0.0.2", Status: serf.StatusLeaving}, ConnID: 2, AliveConnID: 2},
+			},
+			PtView: map[string]meta2.DBPtInfos{
+				"db0": {
+					meta2.PtInfo{Owner: meta2.PtOwner{NodeID: 0}, Status: meta2.Online, PtId: 0},
+					meta2.PtInfo{Owner: meta2.PtOwner{NodeID: 1}, Status: meta2.Offline, PtId: 1},
+				},
+				"db1": {
+					meta2.PtInfo{Owner: meta2.PtOwner{NodeID: 0}, Status: meta2.Online, PtId: 0},
+					meta2.PtInfo{Owner: meta2.PtOwner{NodeID: 1}, Status: meta2.Offline, PtId: 1},
+				},
+			},
+			Databases: map[string]*meta2.DatabaseInfo{
+				"db0": &meta2.DatabaseInfo{Name: "db0", DefaultRetentionPolicy: "autogen"},
+				"db1": &meta2.DatabaseInfo{Name: "db0", DefaultRetentionPolicy: "autogen", Options: &obs.ObsOptions{}},
+			},
+		},
+		NetStore: NewMockNetStorage(),
+		raft:     &MockRaftForCQ{isLeader: true},
+	}
+	err := s.deleteRetentionPolicy("db0", "rp0")
+	if err != nil {
+		t.Errorf("deleteRetentionPolicy failed, err:%+v", err)
+	}
+	err = s.deleteRetentionPolicy("db1", "rp0")
+	if err == nil {
+		t.Error("expect deleteRetentionPolicy failed")
+	}
+	err = s.deleteRetentionPolicy("db2", "rp0")
+	if err != nil {
+		t.Errorf("deleteRetentionPolicy failed, err:%+v", err)
+	}
+}
+
+func Test_DeleteDbForLogkeeper(t *testing.T) {
+	config.SetProductType("logkeeper")
+	dir := t.TempDir()
+	s := &Store{
+		config: &config.Meta{DataDir: dir + "/data", WalDir: dir + "/wal"},
+		cacheData: &meta2.Data{
+			DataNodes: []meta2.DataNode{
+				meta2.DataNode{NodeInfo: meta2.NodeInfo{ID: 0, TCPHost: "127.0.0.1", Status: serf.StatusAlive}, ConnID: 2, AliveConnID: 2},
+				meta2.DataNode{NodeInfo: meta2.NodeInfo{ID: 1, TCPHost: "127.0.0.2", Status: serf.StatusLeaving}, ConnID: 2, AliveConnID: 2},
+			},
+			PtView: map[string]meta2.DBPtInfos{
+				"db0": {
+					meta2.PtInfo{Owner: meta2.PtOwner{NodeID: 0}, Status: meta2.Online, PtId: 0},
+					meta2.PtInfo{Owner: meta2.PtOwner{NodeID: 1}, Status: meta2.Offline, PtId: 1},
+				},
+				"db1": {
+					meta2.PtInfo{Owner: meta2.PtOwner{NodeID: 0}, Status: meta2.Online, PtId: 0},
+					meta2.PtInfo{Owner: meta2.PtOwner{NodeID: 1}, Status: meta2.Offline, PtId: 1},
+				},
+			},
+			Databases: map[string]*meta2.DatabaseInfo{
+				"db0": &meta2.DatabaseInfo{Name: "db0"},
+				"db1": &meta2.DatabaseInfo{Name: "db0", Options: &obs.ObsOptions{}},
+			},
+		},
+		NetStore: NewMockNetStorage(),
+		raft:     &MockRaftForCQ{isLeader: true},
+	}
+	err := s.deleteDatabase("db0")
+	if err != nil {
+		t.Errorf("deleteDatabase failed, err:%+v", err)
+	}
+	err = s.deleteDatabase("db1")
+	if err == nil {
+		t.Error("expect deleteDatabase failed")
+	}
+	err = s.deleteDatabase("db2")
+	if err != nil {
+		t.Errorf("deleteDatabase failed, err:%+v", err)
+	}
 }

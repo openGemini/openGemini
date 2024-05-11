@@ -141,7 +141,7 @@ func (e *Engine) Assign(opId uint64, nodeId uint64, db string, ptId uint32, ver 
 		return errno.NewError(errno.PtIsAlreadyMigrating)
 	}
 	defer e.clearDbPtMigrating(db, ptId)
-	e.setMetaClient(client)
+	e.SetMetaClient(client)
 	if e.metaClient.IsSQLiteEnabled() && e.fileInfos == nil {
 		e.fileInfos = make(chan []immutable.FileInfoExtend, MaxFileInfoSize)
 		go func() {

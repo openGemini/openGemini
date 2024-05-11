@@ -76,7 +76,7 @@ func TestPreOffLoadPts001(t *testing.T) {
 	go func() {
 		err := eng.DeleteDatabase(defaultDb, defaultPtId)
 		if err != nil {
-			t.Error("expect delete database success")
+			t.Error("expect delete database success", zap.Error(err))
 		}
 		wg.Done()
 	}()

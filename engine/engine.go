@@ -187,7 +187,7 @@ func (e *Engine) Open(durationInfos map[uint64]*meta2.ShardDurationInfo, dbBrief
 		return err
 	}
 
-	e.setMetaClient(m)
+	e.SetMetaClient(m)
 	err := e.loadShards(durationInfos, dbBriefInfos, immutable.LOAD, m)
 	if err != nil {
 		atomic.AddInt64(&stat.EngineStat.OpenErrors, 1)
@@ -197,7 +197,7 @@ func (e *Engine) Open(durationInfos map[uint64]*meta2.ShardDurationInfo, dbBrief
 	return nil
 }
 
-func (e *Engine) setMetaClient(m meta.MetaClient) {
+func (e *Engine) SetMetaClient(m meta.MetaClient) {
 	e.mu.Lock()
 	e.metaClient = m
 	e.mu.Unlock()
@@ -978,10 +978,17 @@ func (e *Engine) getPartition(db string, ptID uint32, isRef bool) (*DBPTInfo, er
 	return nil, errno.NewError(errno.DBPTClosed)
 }
 
-func deleteDataAndWalPath(dataPath, walPath string, lockPath *string) error {
+func deleteDataAndWalPath(dataPath, walPath string, obsOpt *obs.ObsOptions, lockPath *string) error {
 	logger.GetLogger().Info("deleteDataAndWalPath",
 		zap.String("data", dataPath), zap.String("wal", walPath))
 
+	// delete the remote dir
+	if obsOpt != nil {
+		if err := deleteDir(fileops.GetRemoteDataPath(obsOpt, dataPath), lockPath); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	// delete the local dir
 	if err := deleteDir(dataPath, lockPath); err != nil && !os.IsNotExist(err) {
 		return err
 	}
