@@ -417,7 +417,8 @@ func (fsm *storeFSM) executeCmd(cmd proto2.Command) interface{} {
 	if handler, ok := applyFunc[cmd.GetType()]; ok {
 		return handler(fsm, &cmd)
 	}
-	panic(fmt.Errorf("cannot apply command: %x", cmd.GetType()))
+	fsm.Logger.Error("cannot apply command: %x", zap.Int32("typ", int32(cmd.GetType())))
+	return nil
 }
 
 func (fsm *storeFSM) applyReShardingCommand(cmd *proto2.Command) interface{} {

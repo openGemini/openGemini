@@ -18,6 +18,7 @@ package meta
 
 import (
 	"fmt"
+	"math"
 	"sync"
 	"testing"
 	"time"
@@ -811,4 +812,17 @@ func Test_applyInsertFiles(t *testing.T) {
 	require.Nil(t, resErr)
 	resErr = applyInsertFilesCommand(fsm, cmd)
 	require.EqualError(t, resErr.(error), "UNIQUE constraint failed: files.mst_id, files.shard_id, files.sequence, files.level, files.extent, files.merge")
+}
+
+func Test_executeCmdErr(t *testing.T) {
+	s := &Store{Logger: logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())}
+	fsm := (*storeFSM)(s)
+	typ := proto2.Command_InsertFilesCommand
+	cmd := &proto2.Command{Type: &typ}
+	value := &proto2.InsertFilesCommand{}
+	err := proto.SetExtension(cmd, proto2.E_InsertFilesCommand_Command, value)
+	require.NoError(t, err)
+	var errType proto2.Command_Type = math.MaxInt32
+	cmd.Type = &errType
+	fsm.executeCmd(*cmd)
 }
