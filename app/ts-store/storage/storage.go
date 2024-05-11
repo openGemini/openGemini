@@ -273,6 +273,9 @@ func OpenStorage(path string, node *metaclient.Node, cli *metaclient.Client, con
 		slaveStorage: netstorage.NewNetStorage(cli),
 	}
 
+	if cli != nil {
+		eng.SetMetaClient(cli)
+	}
 	s.MetaClient = cli
 	s.log = logger.NewLogger(errno.ModuleStorageEngine)
 	// Append services.
