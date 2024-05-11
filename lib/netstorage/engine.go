@@ -136,6 +136,7 @@ type Engine interface {
 
 	RaftMessage
 	CreateShowTagValuesPlan(db string, ptIDs []uint32, tr *influxql.TimeRange) ShowTagValuesPlan
+	SetMetaClient(m metaclient.MetaClient)
 }
 
 type RaftMessage interface {

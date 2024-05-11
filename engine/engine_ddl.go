@@ -70,18 +70,18 @@ func (e *Engine) DeleteDatabase(db string, ptId uint32) (err error) {
 	dataPath := path.Join(e.dataPath, config.DataDirectory, db, strconv.Itoa(int(ptId)))
 	walPath := path.Join(e.walPath, config.WalDirectory, db, strconv.Itoa(int(ptId)))
 	lockPath := ""
-
+	obsOpt, _ := e.metaClient.DatabaseOption(db)
 	e.mu.RLock()
 	dbInfo, ok := e.DBPartitions[db]
 	if !ok {
 		e.mu.RUnlock()
-		return deleteDataAndWalPath(dataPath, walPath, &lockPath)
+		return deleteDataAndWalPath(dataPath, walPath, obsOpt, &lockPath)
 	}
 
 	dbPTInfo, exist := dbInfo[ptId]
 	if !exist {
 		e.mu.RUnlock()
-		return deleteDataAndWalPath(dataPath, walPath, &lockPath)
+		return deleteDataAndWalPath(dataPath, walPath, obsOpt, &lockPath)
 	}
 
 	done := make(chan bool, 1)
@@ -106,7 +106,7 @@ func (e *Engine) DeleteDatabase(db string, ptId uint32) (err error) {
 	dbPTInfo.wg.Wait()
 	err = e.deleteShardsAndIndexes(dbPTInfo)
 	if err == nil {
-		err = deleteDataAndWalPath(dataPath, walPath, dbInfo[ptId].lockPath)
+		err = deleteDataAndWalPath(dataPath, walPath, obsOpt, dbInfo[ptId].lockPath)
 	}
 	if err != nil {
 		dbPTInfo.unMarkOffload()
@@ -140,11 +140,12 @@ func (e *Engine) DropRetentionPolicy(db string, rp string, ptId uint32) error {
 			zap.String("db", db), zap.String("rp", rp), zap.Duration("duration", d), zap.Uint32("pt", ptId))
 	}(start)
 
+	obsOpt, _ := e.metaClient.DatabaseOption(db)
 	deleteDirFunc := func() error {
 		dataPath := path.Join(e.dataPath, config.DataDirectory, db, strconv.Itoa(int(ptId)), rp)
 		walPath := path.Join(e.walPath, config.WalDirectory, db, strconv.Itoa(int(ptId)), rp)
 		lockPath := ""
-		if err := deleteDataAndWalPath(dataPath, walPath, &lockPath); err != nil {
+		if err := deleteDataAndWalPath(dataPath, walPath, obsOpt, &lockPath); err != nil {
 			atomic.AddInt64(&stat.EngineStat.DropRPErrs, 1)
 			return err
 		}

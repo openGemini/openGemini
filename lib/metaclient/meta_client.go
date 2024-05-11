@@ -165,6 +165,7 @@ type MetaClient interface {
 	CreateUser(name, password string, admin, rwuser bool) (meta2.User, error)
 	Databases() map[string]*meta2.DatabaseInfo
 	Database(name string) (*meta2.DatabaseInfo, error)
+	DatabaseOption(name string) (*obs.ObsOptions, error)
 	DataNode(id uint64) (*meta2.DataNode, error)
 	DataNodes() ([]meta2.DataNode, error)
 	AliveReadNodes() ([]meta2.DataNode, error)
@@ -955,6 +956,17 @@ func (c *Client) Database(name string) (*meta2.DatabaseInfo, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.cacheData.GetDatabase(name)
+}
+
+// returns obs options info for the requested database.
+func (c *Client) DatabaseOption(name string) (*obs.ObsOptions, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	dbi := c.cacheData.Database(name)
+	if dbi == nil {
+		return nil, errno.NewError(errno.DatabaseNotFound, name)
+	}
+	return dbi.Options, nil
 }
 
 // Databases returns a list of all database infos.

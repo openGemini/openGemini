@@ -18,6 +18,7 @@ package retention
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -202,5 +203,83 @@ func TestTTLForShardStorage(t *testing.T) {
 	retryNeeded := s.handleSharedStorage(logger)
 	if !retryNeeded {
 		t.Fatal("retention operation injected a failed operation, but it was not retried")
+	}
+}
+
+type MockEngineForDelTimeout struct {
+	netstorage.Engine
+}
+
+func (e *MockEngineForDelTimeout) DeleteShard(db string, ptId uint32, shardID uint64) error {
+	time.Sleep(200 * time.Millisecond)
+	return fmt.Errorf("delete shard timeout")
+}
+
+func (e *MockEngineForDelTimeout) DeleteIndex(db string, ptId uint32, indexID uint64) error {
+	time.Sleep(200 * time.Millisecond)
+	return fmt.Errorf("delete index timeout")
+
+}
+
+func TestShardDeleteTimeout(t *testing.T) {
+	SetShardDeletionDelay(50 * time.Millisecond)
+	s := NewService(time.Second)
+	s.Engine = &MockEngineForDelTimeout{}
+
+	err := s.DeleteShardOrIndex("db", 0, 0, ShardDelete)
+	if err == nil {
+		t.Error("get error info failed")
+	}
+	time.Sleep(50 * time.Millisecond)
+	err = s.DeleteShardOrIndex("db", 0, 0, ShardDelete)
+	if !strings.Contains(err.Error(), "still in pending state") {
+		t.Errorf("shard need to be still in pending state, err:%+v", err)
+	}
+
+	time.Sleep(200 * time.Millisecond)
+	err = s.DeleteShardOrIndex("db", 0, 0, ShardDelete)
+	if strings.Contains(err.Error(), "still in pending state") {
+		t.Errorf("shard should not be in a pending state, err:%+v", err)
+	}
+}
+
+func TestIndexDeleteTimeout(t *testing.T) {
+	SetShardDeletionDelay(50 * time.Millisecond)
+	s := NewService(time.Second)
+	s.Engine = &MockEngineForDelTimeout{}
+
+	err := s.DeleteShardOrIndex("db", 0, 0, IndexDelete)
+	if err == nil {
+		t.Error("get error info failed")
+	}
+	time.Sleep(50 * time.Millisecond)
+	err = s.DeleteShardOrIndex("db", 0, 0, IndexDelete)
+	if !strings.Contains(err.Error(), "still in pending state") {
+		t.Errorf("index need to be still in pending state, err:%+v", err)
+	}
+
+	time.Sleep(200 * time.Millisecond)
+	err = s.DeleteShardOrIndex("db", 0, 0, IndexDelete)
+	if strings.Contains(err.Error(), "still in pending state") {
+		t.Errorf("index should not be in a pending state, err:%+v", err)
+	}
+}
+
+type MockEngineForDel struct {
+	netstorage.Engine
+}
+
+func (e *MockEngineForDel) DeleteShard(db string, ptId uint32, shardID uint64) error {
+	return fmt.Errorf("delete shard failed")
+}
+
+func TestShardDelete(t *testing.T) {
+	SetShardDeletionDelay(50 * time.Millisecond)
+	s := NewService(time.Second)
+	s.Engine = &MockEngineForDel{}
+
+	err := s.DeleteShardOrIndex("db", 0, 0, ShardDelete)
+	if err == nil || !strings.Contains(err.Error(), "delete shard failed") {
+		t.Errorf("get error info failed, err:%+v", err)
 	}
 }

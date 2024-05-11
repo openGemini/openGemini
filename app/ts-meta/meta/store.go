@@ -38,6 +38,7 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	mclient "github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/rand"
 	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
@@ -815,10 +816,35 @@ func (s *Store) deleteMeasurement(db string, rp *meta.RetentionPolicyInfo, mst s
 }
 
 // deletePtDir deletes data/db/pt dir and wal/db/pt dir
-func (s *Store) deletePtDir(db string, pt uint32) error {
+func (s *Store) deletePtDir(db string, pt uint32, obsOpt *obs.ObsOptions) error {
 	ptId := strconv.Itoa(int(pt))
 	dataPtPath := path.Join(s.config.DataDir, config.DataDirectory, db, ptId)
 	lock := fileops.FileLockOption("")
+	if obsOpt != nil {
+		if err := fileops.DeleteObsPath(path.Join(config.DataDirectory, db, ptId), obsOpt); err != nil {
+			return err
+		}
+	}
+	if err := fileops.RemoveAll(dataPtPath, lock); err != nil {
+		return err
+	}
+	walPtPath := path.Join(s.config.WalDir, config.WalDirectory, db, ptId)
+	if err := fileops.RemoveAll(walPtPath, lock); err != nil {
+		return err
+	}
+	return nil
+}
+
+// deleteRpDir deletes data/db/pt/rp dir and wal/db/pt/rp dir
+func (s *Store) deleteRpDir(db, rp string, pt uint32, obsOpt *obs.ObsOptions) error {
+	ptId := strconv.Itoa(int(pt))
+	dataPtPath := path.Join(s.config.DataDir, config.DataDirectory, db, ptId, rp)
+	lock := fileops.FileLockOption("")
+	if obsOpt != nil {
+		if err := fileops.DeleteObsPath(path.Join(config.DataDirectory, db, ptId, rp), obsOpt); err != nil {
+			return err
+		}
+	}
 	if err := fileops.RemoveAll(dataPtPath, lock); err != nil {
 		return err
 	}
@@ -832,6 +858,11 @@ func (s *Store) deletePtDir(db string, pt uint32) error {
 func (s *Store) deleteRetentionPolicy(db string, rp string) error {
 	s.cacheMu.RLock()
 	ptInfos := s.cacheData.PtView[db]
+	dbInfo, ok := s.cacheData.Databases[db]
+	if !ok {
+		s.cacheMu.RUnlock()
+		return nil
+	}
 
 	errChan := make(chan error)
 	n := 0
@@ -840,6 +871,15 @@ func (s *Store) deleteRetentionPolicy(db string, rp string) error {
 		if node == nil {
 			continue
 		}
+		// in shared-storage case and the node is not alive status, remove pt dir directly
+		if config.IsLogKeeper() && node.Status != serf.StatusAlive {
+			if err := s.deleteRpDir(db, rp, ptInfos[i].PtId, dbInfo.Options); err != nil {
+				s.cacheMu.RUnlock()
+				return err
+			}
+			continue
+		}
+
 		n++
 		go func(node *meta.DataNode, db string, rp string, pt uint32) {
 			errChan <- s.NetStore.DeleteRetentionPolicy(node, db, rp, pt)
@@ -935,6 +975,11 @@ func (s *Store) checkDelete(deleteType int) {
 func (s *Store) deleteDatabase(dbName string) error {
 	s.cacheMu.RLock()
 	ptInfos := s.cacheData.PtView[dbName]
+	dbInfo, ok := s.cacheData.Databases[dbName]
+	if !ok {
+		s.cacheMu.RUnlock()
+		return nil
+	}
 
 	errChan := make(chan error)
 	n := 0
@@ -946,8 +991,9 @@ func (s *Store) deleteDatabase(dbName string) error {
 
 		// in shared-storage case and the node is not alive status, remove pt dir directly
 		// case: 1.drop database 2.store1 failed 3.database only dropped until store1 startup
-		if config.GetHaPolicy() == config.SharedStorage && node.Status != serf.StatusAlive {
-			if err := s.deletePtDir(dbName, ptInfos[i].PtId); err != nil {
+		if (config.GetHaPolicy() == config.SharedStorage || config.IsLogKeeper()) && node.Status != serf.StatusAlive {
+			if err := s.deletePtDir(dbName, ptInfos[i].PtId, dbInfo.Options); err != nil {
+				s.cacheMu.RUnlock()
 				return err
 			}
 			continue
