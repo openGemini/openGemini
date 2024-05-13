@@ -1351,7 +1351,7 @@ func (h *Handler) serveWrite(w http.ResponseWriter, r *http.Request, user meta2.
 		tsMultiplier = 1e9 * 3600
 	}
 
-	ctx := influx.GetStreamContext(body)
+	ctx := influx.GetStreamContext(body, h.Config.MaxLineSize)
 	defer influx.PutStreamContext(ctx)
 
 	var numPtsParse, numPtsInsert int

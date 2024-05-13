@@ -91,7 +91,7 @@ func (ctx *streamContext) Read(blockSize int) bool {
 	if ctx.err != nil {
 		return false
 	}
-	ctx.ReqBuf, ctx.tailBuf, ctx.err = ReadLinesBlockExt(ctx.br, ctx.ReqBuf, ctx.tailBuf, maxLineSize, blockSize)
+	ctx.ReqBuf, ctx.tailBuf, ctx.err = ReadLinesBlockExt(ctx.br, ctx.ReqBuf, ctx.tailBuf, ctx.MaxLineSize, blockSize)
 	if ctx.err != nil {
 		if ctx.err != io.EOF {
 			ctx.err = fmt.Errorf("cannot read influx line protocol data: %w", ctx.err)
@@ -111,6 +111,7 @@ type streamContext struct {
 	ErrLock      sync.Mutex
 	UnmarshalErr error // unmarshal points failed, 400 error code
 	CallbackErr  error
+	MaxLineSize  int
 }
 
 func (ctx *streamContext) Error() error {
@@ -129,7 +130,7 @@ func (ctx *streamContext) reset() {
 	ctx.UnmarshalErr = nil
 }
 
-func GetStreamContext(r io.Reader) *streamContext {
+func GetStreamContext(r io.Reader, maxLineSize int) *streamContext {
 	select {
 	case ctx := <-streamContextPoolCh:
 		ctx.br.Reset(r)
@@ -138,11 +139,12 @@ func GetStreamContext(r io.Reader) *streamContext {
 		if v := streamContextPool.Get(); v != nil {
 			ctx := v.(*streamContext)
 			ctx.br.Reset(r)
+			ctx.MaxLineSize = maxLineSize
 			return ctx
 		}
 		return &streamContext{
-			br: bufio.NewReaderSize(r, 64*1024),
-		}
+			br:          bufio.NewReaderSize(r, 64*1024),
+			MaxLineSize: maxLineSize}
 	}
 }
 
