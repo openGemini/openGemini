@@ -457,7 +457,7 @@ func (h *Handler) servePromBaseQuery(w http.ResponseWriter, r *http.Request, use
 	case *influxql.SelectStatement:
 		q = &influxql.Query{Statements: []influxql.Statement{statement}}
 	case *influxql.Call, *influxql.BinaryExpr, *influxql.IntegerLiteral, *influxql.NumberLiteral:
-		h.promExprQuery(&promCommand, statement, rw)
+		h.promExprQuery(&promCommand, statement, rw, expr.Type())
 		return
 	default:
 		respondError(w, &apiError{errorBadData, fmt.Errorf("invalid the select statement for promql")}, nil)
@@ -571,7 +571,7 @@ func (h *Handler) servePromBaseQuery(w http.ResponseWriter, r *http.Request, use
 	atomic.AddInt64(&statistics.HandlerStat.QueryRequestBytesTransmitted, int64(n))
 }
 
-func (h *Handler) promExprQuery(promCommand *promql2influxql.PromCommand, statement influxql.Node, rw ResponseWriter) {
+func (h *Handler) promExprQuery(promCommand *promql2influxql.PromCommand, statement influxql.Node, rw ResponseWriter, typ parser.ValueType) {
 	promTimeValuer := NewPromTimeValuer()
 	valuer := influxql.ValuerEval{
 		Valuer: influxql.MultiValuer(
@@ -586,9 +586,9 @@ func (h *Handler) promExprQuery(promCommand *promql2influxql.PromCommand, statem
 	var resp *PromResponse
 	var ok bool
 	if promCommand.DataType == promql2influxql.GRAPH_DATA {
-		resp, ok = h.getRangePromResultForEmptySeries(statement.(influxql.Expr), promCommand, &valuer, promTimeValuer)
+		resp, ok = h.getRangePromResultForEmptySeries(statement.(influxql.Expr), promCommand, &valuer, promTimeValuer, typ)
 	} else {
-		resp, ok = h.getInstantPromResultForEmptySeries(statement.(influxql.Expr), promCommand, &valuer, promTimeValuer)
+		resp, ok = h.getInstantPromResultForEmptySeries(statement.(influxql.Expr), promCommand, &valuer, promTimeValuer, typ)
 	}
 	if !ok {
 		return
