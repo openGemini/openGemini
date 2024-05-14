@@ -60,6 +60,7 @@ type Options interface {
 	GetIterId() int32
 	IsIncQuery() bool
 	CanTimeLimitPushDown() bool
+	CanLimitPushDown() bool
 	SetPromQuery(bool)
 	IsPromQuery() bool
 	IsPromInstantQuery() bool
