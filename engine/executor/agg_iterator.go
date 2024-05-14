@@ -376,3 +376,114 @@ func (f *SliceItem[T]) Swap(i, j int) {
 	f.time[i], f.time[j] = f.time[j], f.time[i]
 	f.value[i], f.value[j] = f.value[j], f.value[i]
 }
+
+type Point[T util.ExceptString] struct {
+	time  int64
+	value T
+	index int
+	isNil bool
+}
+
+func newPoint[T util.ExceptString]() *Point[T] {
+	return &Point[T]{isNil: true}
+}
+
+func (p *Point[T]) Set(index int, time int64, value T) {
+	p.index = index
+	p.time = time
+	p.value = value
+	p.isNil = false
+}
+
+func (p *Point[T]) Reset() {
+	p.isNil = true
+}
+
+func (p *Point[T]) Assign(c *Point[T]) {
+	p.index = c.index
+	p.time = c.time
+	p.value = c.value
+}
+
+type StringPoint struct {
+	time  int64
+	value []byte
+	index int
+	isNil bool
+}
+
+func newStringPoint() *StringPoint {
+	return &StringPoint{isNil: true}
+}
+
+func (p *StringPoint) Set(index int, time int64, value string) {
+	p.index = index
+	p.time = time
+	p.isNil = false
+	valueByte := util.Str2bytes(value)
+	if cap(p.value) >= len(valueByte) {
+		p.value = p.value[:len(valueByte)]
+		copy(p.value, valueByte)
+	} else {
+		p.value = make([]byte, len(valueByte))
+		copy(p.value, valueByte)
+	}
+}
+
+func (p *StringPoint) Reset() {
+	p.isNil = true
+	p.value = p.value[:0]
+}
+
+func (p *StringPoint) Assign(c *StringPoint) {
+	p.index = c.index
+	p.time = c.time
+	p.value = p.value[:0]
+	if cap(p.value) >= len(c.value) {
+		p.value = p.value[:len(c.value)]
+		copy(p.value, c.value)
+	} else {
+		p.value = make([]byte, len(c.value))
+		copy(p.value, c.value)
+	}
+}
+
+type SlidingWindow[T util.ExceptString] struct {
+	isNil      bool
+	slidingNum int
+	points     []*Point[T]
+}
+
+func NewSlidingWindow[T util.ExceptString](slidingNum int) *SlidingWindow[T] {
+	sw := &SlidingWindow[T]{
+		isNil:      true,
+		slidingNum: slidingNum,
+	}
+	for i := 0; i < slidingNum; i++ {
+		sw.points = append(sw.points, newPoint[T]())
+	}
+	return sw
+}
+
+func (w *SlidingWindow[T]) Len() int {
+	return w.slidingNum
+}
+
+func (w *SlidingWindow[T]) IsNil() bool {
+	return w.isNil
+}
+
+func (w *SlidingWindow[T]) SetPoint(value T, isNil bool, index int) {
+	w.points[index].value = value
+	w.points[index].isNil = isNil
+	if index == w.slidingNum-1 {
+		w.isNil = false
+	}
+}
+
+func (w *SlidingWindow[T]) Reset() {
+	w.isNil = true
+}
+
+type PointMerge[T util.ExceptString] func(prevPoint, currPoint *Point[T])
+type WindowMerge[T util.ExceptString] func(prevWindow, currWindow *SlidingWindow[T], fpm PointMerge[T])
