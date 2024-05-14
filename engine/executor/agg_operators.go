@@ -45,11 +45,11 @@ func (c *MinOp) CreateRoutine(params *AggCallFuncParams) (Routine, error) {
 	dataType := inRowDataType.Field(inOrdinal).Expr.(*influxql.VarRef).Type
 	switch dataType {
 	case influxql.Integer:
-		return NewRoutineImpl(NewIntegerColIntegerIterator(IntegerMinReduce, IntegerMinMerge,
+		return NewRoutineImpl(NewIntegerColIntegerIterator(IntegerMinReduce, MinMerge[int64],
 			isSingleCall, inOrdinal, outOrdinal, auxProcessor, outRowDataType),
 			inOrdinal, outOrdinal), nil
 	case influxql.Float:
-		return NewRoutineImpl(NewFloatColFloatIterator(FloatMinReduce, FloatMinMerge,
+		return NewRoutineImpl(NewFloatColFloatIterator(FloatMinReduce, MinMerge[float64],
 			isSingleCall, inOrdinal, outOrdinal, auxProcessor, outRowDataType),
 			inOrdinal, outOrdinal), nil
 	case influxql.Boolean:
@@ -73,11 +73,11 @@ func (c *MaxOp) CreateRoutine(params *AggCallFuncParams) (Routine, error) {
 	dataType := inRowDataType.Field(inOrdinal).Expr.(*influxql.VarRef).Type
 	switch dataType {
 	case influxql.Integer:
-		return NewRoutineImpl(NewIntegerColIntegerIterator(IntegerMaxReduce, IntegerMaxMerge,
+		return NewRoutineImpl(NewIntegerColIntegerIterator(IntegerMaxReduce, MaxMerge[int64],
 			isSingleCall, inOrdinal, outOrdinal, auxProcessor, outRowDataType),
 			inOrdinal, outOrdinal), nil
 	case influxql.Float:
-		return NewRoutineImpl(NewFloatColFloatIterator(FloatMaxReduce, FloatMaxMerge,
+		return NewRoutineImpl(NewFloatColFloatIterator(FloatMaxReduce, MaxMerge[float64],
 			isSingleCall, inOrdinal, outOrdinal, auxProcessor, outRowDataType),
 			inOrdinal, outOrdinal), nil
 	case influxql.Boolean:

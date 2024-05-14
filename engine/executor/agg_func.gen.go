@@ -23,523 +23,7 @@ package executor
 
 import (
 	"bytes"
-	"math"
-	"sort"
-
-	"github.com/openGemini/openGemini/engine/hybridqp"
 )
-
-func NewBooleanModeReduce(BooleanSliceItem *BooleanSliceItem) (int, int64, float64, bool) {
-	length := len(BooleanSliceItem.value)
-	if length == 0 {
-		return 0, 0, 0, true
-	}
-	if length == 1 {
-		return 0, 0, 0, false
-	}
-
-	truei := -1
-	TrueFreq := 0
-	falsei := -1
-	FalseFreq := 0
-	for i := 0; i < length; i++ {
-		if BooleanSliceItem.value[i] {
-			if truei == -1 {
-				truei = i
-			}
-			TrueFreq++
-		} else {
-			if falsei == -1 {
-				falsei = i
-			}
-			FalseFreq++
-		}
-	}
-	if TrueFreq >= FalseFreq {
-		return truei, 0, 0, false
-	}
-	return falsei, 0, 0, false
-}
-
-func IntegerCountMerge(prevPoint, currPoint *IntegerPoint) {
-	if currPoint.isNil {
-		return
-	}
-	if prevPoint.isNil {
-		prevPoint.Assign(currPoint)
-		prevPoint.isNil = false
-		return
-	}
-	prevPoint.value += currPoint.value
-}
-
-func FloatSumReduce(c Chunk, ordinal, start, end int) (int, float64, bool) {
-	var sum float64
-	if c.Column(ordinal).NilCount() == 0 {
-		// fast path
-		for i := start; i < end; i++ {
-			sum += c.Column(ordinal).FloatValue(i)
-		}
-		return start, sum, false
-	}
-
-	// slow path
-	vs, ve := c.Column(ordinal).GetRangeValueIndexV2(start, end)
-	if vs == ve {
-		return start, 0, true
-	}
-	for i := vs; i < ve; i++ {
-		sum += c.Column(ordinal).FloatValue(i)
-	}
-	return start, sum, false
-}
-
-func FloatSumMerge(prevPoint, currPoint *FloatPoint) {
-	if currPoint.isNil {
-		return
-	}
-	if prevPoint.isNil {
-		prevPoint.Assign(currPoint)
-		prevPoint.isNil = false
-		return
-	}
-	prevPoint.value += currPoint.value
-}
-
-func IntegerSumReduce(c Chunk, ordinal, start, end int) (int, int64, bool) {
-	var sum int64
-	if c.Column(ordinal).NilCount() == 0 {
-		// fast path
-		for i := start; i < end; i++ {
-			sum += c.Column(ordinal).IntegerValue(i)
-		}
-		return start, sum, false
-	}
-
-	// slow path
-	vs, ve := c.Column(ordinal).GetRangeValueIndexV2(start, end)
-	if vs == ve {
-		return start, 0, true
-	}
-	for i := vs; i < ve; i++ {
-		sum += c.Column(ordinal).IntegerValue(i)
-	}
-	return start, sum, false
-}
-
-func IntegerSumMerge(prevPoint, currPoint *IntegerPoint) {
-	if currPoint.isNil {
-		return
-	}
-	if prevPoint.isNil {
-		prevPoint.Assign(currPoint)
-		prevPoint.isNil = false
-		return
-	}
-	prevPoint.value += currPoint.value
-}
-
-func FloatMinReduce(c Chunk, ordinal, start, end int) (int, float64, bool) {
-	if c.Column(ordinal).NilCount() == 0 {
-		// fast path
-		minValue, minIndex := c.Column(ordinal).FloatValue(start), start
-		for i := start; i < end; i++ {
-			v := c.Column(ordinal).FloatValue(i)
-			if v < minValue || (v == minValue && c.TimeByIndex(i) < c.TimeByIndex(minIndex)) {
-				minIndex = i
-				minValue = v
-			}
-		}
-		return minIndex, minValue, false
-	}
-
-	// slow path
-	vs, ve := c.Column(ordinal).GetRangeValueIndexV2(start, end)
-	if vs == ve {
-		return start, 0, true
-	}
-	minValue, minIndex := c.Column(ordinal).FloatValue(vs), c.Column(ordinal).GetTimeIndex(vs)
-	for i := vs; i < ve; i++ {
-		v, index := c.Column(ordinal).FloatValue(i), c.Column(ordinal).GetTimeIndex(i)
-		if v < minValue || (v == minValue && c.TimeByIndex(index) < c.TimeByIndex(minIndex)) {
-			minIndex = index
-			minValue = v
-		}
-	}
-	return minIndex, minValue, false
-}
-
-func FloatMinMerge(prevPoint, currPoint *FloatPoint) {
-	if currPoint.isNil {
-		return
-	}
-	if prevPoint.isNil || (currPoint.value < prevPoint.value) ||
-		(currPoint.value == prevPoint.value && currPoint.time < prevPoint.time) {
-		prevPoint.Assign(currPoint)
-		prevPoint.isNil = false
-	}
-}
-
-func IntegerMinReduce(c Chunk, ordinal, start, end int) (int, int64, bool) {
-	if c.Column(ordinal).NilCount() == 0 {
-		// fast path
-		minValue, minIndex := c.Column(ordinal).IntegerValue(start), start
-		for i := start; i < end; i++ {
-			v := c.Column(ordinal).IntegerValue(i)
-			if v < minValue || (v == minValue && c.TimeByIndex(i) < c.TimeByIndex(minIndex)) {
-				minIndex = i
-				minValue = v
-			}
-		}
-		return minIndex, minValue, false
-	}
-
-	// slow path
-	vs, ve := c.Column(ordinal).GetRangeValueIndexV2(start, end)
-	if vs == ve {
-		return start, 0, true
-	}
-	minValue, minIndex := c.Column(ordinal).IntegerValue(vs), c.Column(ordinal).GetTimeIndex(vs)
-	for i := vs; i < ve; i++ {
-		v, index := c.Column(ordinal).IntegerValue(i), c.Column(ordinal).GetTimeIndex(i)
-		if v < minValue || (v == minValue && c.TimeByIndex(index) < c.TimeByIndex(minIndex)) {
-			minIndex = index
-			minValue = v
-		}
-	}
-	return minIndex, minValue, false
-}
-
-func IntegerMinMerge(prevPoint, currPoint *IntegerPoint) {
-	if currPoint.isNil {
-		return
-	}
-	if prevPoint.isNil || (currPoint.value < prevPoint.value) ||
-		(currPoint.value == prevPoint.value && currPoint.time < prevPoint.time) {
-		prevPoint.Assign(currPoint)
-		prevPoint.isNil = false
-	}
-}
-
-func BooleanMinReduce(c Chunk, ordinal, start, end int) (int, bool, bool) {
-	if c.Column(ordinal).NilCount() == 0 {
-		// fast path
-		minValue, minIndex := c.Column(ordinal).BooleanValue(start), start
-		for i := start; i < end; i++ {
-			v := c.Column(ordinal).BooleanValue(i)
-			if (v != minValue && !v) || (v == minValue && c.TimeByIndex(i) < c.TimeByIndex(minIndex)) {
-				minIndex = i
-				minValue = v
-			}
-		}
-		return minIndex, minValue, false
-	}
-
-	// slow path
-	vs, ve := c.Column(ordinal).GetRangeValueIndexV2(start, end)
-	if vs == ve {
-		return start, false, true
-	}
-	minValue, minIndex := c.Column(ordinal).BooleanValue(vs), c.Column(ordinal).GetTimeIndex(vs)
-	for i := vs; i < ve; i++ {
-		v, index := c.Column(ordinal).BooleanValue(i), c.Column(ordinal).GetTimeIndex(i)
-		if (v != minValue && !v) || (v == minValue && c.TimeByIndex(index) < c.TimeByIndex(minIndex)) {
-			minIndex = index
-			minValue = v
-		}
-	}
-	return minIndex, minValue, false
-}
-
-func BooleanMinMerge(prevPoint, currPoint *BooleanPoint) {
-	if currPoint.isNil {
-		return
-	}
-	if prevPoint.isNil || (currPoint.value != prevPoint.value && !currPoint.value) ||
-		(currPoint.value == prevPoint.value && currPoint.time < prevPoint.time) {
-		prevPoint.Assign(currPoint)
-		prevPoint.isNil = false
-	}
-}
-
-func FloatMaxReduce(c Chunk, ordinal, start, end int) (int, float64, bool) {
-	if c.Column(ordinal).NilCount() == 0 {
-		// fast path
-		maxValue, maxIndex := c.Column(ordinal).FloatValue(start), start
-		for i := start; i < end; i++ {
-			v := c.Column(ordinal).FloatValue(i)
-			if v > maxValue || (v == maxValue && c.TimeByIndex(i) < c.TimeByIndex(maxIndex)) {
-				maxIndex = i
-				maxValue = v
-			}
-		}
-		return maxIndex, maxValue, false
-	}
-
-	// slow path
-	vs, ve := c.Column(ordinal).GetRangeValueIndexV2(start, end)
-	if vs == ve {
-		return start, 0, true
-	}
-	maxValue, maxIndex := c.Column(ordinal).FloatValue(vs), c.Column(ordinal).GetTimeIndex(vs)
-	for i := vs; i < ve; i++ {
-		v, index := c.Column(ordinal).FloatValue(i), c.Column(ordinal).GetTimeIndex(i)
-		if v > maxValue || (v == maxValue && c.TimeByIndex(index) < c.TimeByIndex(maxIndex)) {
-			maxIndex = index
-			maxValue = v
-		}
-	}
-	return maxIndex, maxValue, false
-}
-
-func FloatMaxMerge(prevPoint, currPoint *FloatPoint) {
-	if currPoint.isNil {
-		return
-	}
-	if prevPoint.isNil || (currPoint.value > prevPoint.value) ||
-		(currPoint.value == prevPoint.value && currPoint.time < prevPoint.time) {
-		prevPoint.Assign(currPoint)
-		prevPoint.isNil = false
-	}
-}
-
-func IntegerMaxReduce(c Chunk, ordinal, start, end int) (int, int64, bool) {
-	if c.Column(ordinal).NilCount() == 0 {
-		// fast path
-		maxValue, maxIndex := c.Column(ordinal).IntegerValue(start), start
-		for i := start; i < end; i++ {
-			v := c.Column(ordinal).IntegerValue(i)
-			if v > maxValue || (v == maxValue && c.TimeByIndex(i) < c.TimeByIndex(maxIndex)) {
-				maxIndex = i
-				maxValue = v
-			}
-		}
-		return maxIndex, maxValue, false
-	}
-
-	// slow path
-	vs, ve := c.Column(ordinal).GetRangeValueIndexV2(start, end)
-	if vs == ve {
-		return start, 0, true
-	}
-	maxValue, maxIndex := c.Column(ordinal).IntegerValue(vs), c.Column(ordinal).GetTimeIndex(vs)
-	for i := vs; i < ve; i++ {
-		v, index := c.Column(ordinal).IntegerValue(i), c.Column(ordinal).GetTimeIndex(i)
-		if v > maxValue || (v == maxValue && c.TimeByIndex(index) < c.TimeByIndex(maxIndex)) {
-			maxIndex = index
-			maxValue = v
-		}
-	}
-	return maxIndex, maxValue, false
-}
-
-func IntegerMaxMerge(prevPoint, currPoint *IntegerPoint) {
-	if currPoint.isNil {
-		return
-	}
-	if prevPoint.isNil || (currPoint.value > prevPoint.value) ||
-		(currPoint.value == prevPoint.value && currPoint.time < prevPoint.time) {
-		prevPoint.Assign(currPoint)
-		prevPoint.isNil = false
-	}
-}
-
-func BooleanMaxReduce(c Chunk, ordinal, start, end int) (int, bool, bool) {
-	if c.Column(ordinal).NilCount() == 0 {
-		// fast path
-		maxValue, maxIndex := c.Column(ordinal).BooleanValue(start), start
-		for i := start; i < end; i++ {
-			v := c.Column(ordinal).BooleanValue(i)
-			if (v != maxValue && v) || (v == maxValue && c.TimeByIndex(i) < c.TimeByIndex(maxIndex)) {
-				maxIndex = i
-				maxValue = v
-			}
-		}
-		return maxIndex, maxValue, false
-	}
-
-	// slow path
-	vs, ve := c.Column(ordinal).GetRangeValueIndexV2(start, end)
-	if vs == ve {
-		return start, false, true
-	}
-	maxValue, maxIndex := c.Column(ordinal).BooleanValue(vs), c.Column(ordinal).GetTimeIndex(vs)
-	for i := vs; i < ve; i++ {
-		v, index := c.Column(ordinal).BooleanValue(i), c.Column(ordinal).GetTimeIndex(i)
-		if (v != maxValue && v) || (v == maxValue && c.TimeByIndex(index) < c.TimeByIndex(maxIndex)) {
-			maxIndex = index
-			maxValue = v
-		}
-	}
-	return maxIndex, maxValue, false
-}
-
-func BooleanMaxMerge(prevPoint, currPoint *BooleanPoint) {
-	if currPoint.isNil {
-		return
-	}
-	if prevPoint.isNil || (currPoint.value != prevPoint.value && currPoint.value) ||
-		(currPoint.value == prevPoint.value && currPoint.time < prevPoint.time) {
-		prevPoint.Assign(currPoint)
-		prevPoint.isNil = false
-	}
-}
-
-func FloatFirstReduce(c Chunk, ordinal, start, end int) (int, float64, bool) {
-	if c.Column(ordinal).NilCount() == 0 {
-		// fast path
-		firstValue, firstIndex := c.Column(ordinal).FloatValue(start), start
-		for i := start; i < end; i++ {
-			v := c.Column(ordinal).FloatValue(i)
-			if c.TimeByIndex(i) < c.TimeByIndex(firstIndex) ||
-				(c.TimeByIndex(i) == c.TimeByIndex(firstIndex) && v > firstValue) {
-				firstIndex = i
-				firstValue = v
-			}
-		}
-		return firstIndex, firstValue, false
-	}
-
-	// slow path
-	vs, ve := c.Column(ordinal).GetRangeValueIndexV2(start, end)
-	if vs == ve {
-		return start, 0, true
-	}
-	firstValue, firstIndex := c.Column(ordinal).FloatValue(vs), int(c.Column(ordinal).GetTimeIndex(vs))
-	for i := vs; i < ve; i++ {
-		v, index := c.Column(ordinal).FloatValue(i), int(c.Column(ordinal).GetTimeIndex(i))
-		if c.TimeByIndex(index) < c.TimeByIndex(firstIndex) ||
-			(c.TimeByIndex(index) == c.TimeByIndex(firstIndex) && v > firstValue) {
-			firstIndex = index
-			firstValue = v
-		}
-	}
-	return firstIndex, firstValue, false
-}
-
-func FloatFirstMerge(prevPoint, currPoint *FloatPoint) {
-	if prevPoint.isNil || (currPoint.time < prevPoint.time) ||
-		(currPoint.time == prevPoint.time && currPoint.value > prevPoint.value) {
-		prevPoint.Assign(currPoint)
-	}
-}
-
-func IntegerFirstReduce(c Chunk, ordinal, start, end int) (int, int64, bool) {
-	if c.Column(ordinal).NilCount() == 0 {
-		// fast path
-		firstValue, firstIndex := c.Column(ordinal).IntegerValue(start), start
-		for i := start; i < end; i++ {
-			v := c.Column(ordinal).IntegerValue(i)
-			if c.TimeByIndex(i) < c.TimeByIndex(firstIndex) ||
-				(c.TimeByIndex(i) == c.TimeByIndex(firstIndex) && v > firstValue) {
-				firstIndex = i
-				firstValue = v
-			}
-		}
-		return firstIndex, firstValue, false
-	}
-
-	// slow path
-	vs, ve := c.Column(ordinal).GetRangeValueIndexV2(start, end)
-	if vs == ve {
-		return start, 0, true
-	}
-	firstValue, firstIndex := c.Column(ordinal).IntegerValue(vs), int(c.Column(ordinal).GetTimeIndex(vs))
-	for i := vs; i < ve; i++ {
-		v, index := c.Column(ordinal).IntegerValue(i), int(c.Column(ordinal).GetTimeIndex(i))
-		if c.TimeByIndex(index) < c.TimeByIndex(firstIndex) ||
-			(c.TimeByIndex(index) == c.TimeByIndex(firstIndex) && v > firstValue) {
-			firstIndex = index
-			firstValue = v
-		}
-	}
-	return firstIndex, firstValue, false
-}
-
-func IntegerFirstMerge(prevPoint, currPoint *IntegerPoint) {
-	if prevPoint.isNil || (currPoint.time < prevPoint.time) ||
-		(currPoint.time == prevPoint.time && currPoint.value > prevPoint.value) {
-		prevPoint.Assign(currPoint)
-	}
-}
-
-func StringFirstReduce(c Chunk, ordinal, start, end int) (int, string, bool) {
-	if c.Column(ordinal).NilCount() == 0 {
-		// fast path
-		firstValue, firstIndex := c.Column(ordinal).StringValue(start), start
-		for i := start; i < end; i++ {
-			v := c.Column(ordinal).StringValue(i)
-			if c.TimeByIndex(i) < c.TimeByIndex(firstIndex) ||
-				(c.TimeByIndex(i) == c.TimeByIndex(firstIndex) && v > firstValue) {
-				firstIndex = i
-				firstValue = v
-			}
-		}
-		return firstIndex, firstValue, false
-	}
-
-	// slow path
-	vs, ve := c.Column(ordinal).GetRangeValueIndexV2(start, end)
-	if vs == ve {
-		return start, "", true
-	}
-	firstValue, firstIndex := c.Column(ordinal).StringValue(vs), int(c.Column(ordinal).GetTimeIndex(vs))
-	for i := vs; i < ve; i++ {
-		v, index := c.Column(ordinal).StringValue(i), int(c.Column(ordinal).GetTimeIndex(i))
-		if c.TimeByIndex(index) < c.TimeByIndex(firstIndex) ||
-			(c.TimeByIndex(index) == c.TimeByIndex(firstIndex) && v > firstValue) {
-			firstIndex = index
-			firstValue = v
-		}
-	}
-	return firstIndex, firstValue, false
-}
-
-func StringFirstMerge(prevPoint, currPoint *StringPoint) {
-	if prevPoint.isNil || (currPoint.time < prevPoint.time) ||
-		(currPoint.time == prevPoint.time && bytes.Compare(currPoint.value, prevPoint.value) > 0) {
-		prevPoint.Assign(currPoint)
-	}
-}
-
-func BooleanFirstReduce(c Chunk, ordinal, start, end int) (int, bool, bool) {
-	if c.Column(ordinal).NilCount() == 0 {
-		// fast path
-		firstValue, firstIndex := c.Column(ordinal).BooleanValue(start), start
-		for i := start; i < end; i++ {
-			v := c.Column(ordinal).BooleanValue(i)
-			if c.TimeByIndex(i) < c.TimeByIndex(firstIndex) ||
-				(c.TimeByIndex(i) == c.TimeByIndex(firstIndex) && !v && firstValue) {
-				firstIndex = i
-				firstValue = v
-			}
-		}
-		return firstIndex, firstValue, false
-	}
-
-	// slow path
-	vs, ve := c.Column(ordinal).GetRangeValueIndexV2(start, end)
-	if vs == ve {
-		return start, false, true
-	}
-	firstValue, firstIndex := c.Column(ordinal).BooleanValue(vs), int(c.Column(ordinal).GetTimeIndex(vs))
-	for i := vs; i < ve; i++ {
-		v, index := c.Column(ordinal).BooleanValue(i), int(c.Column(ordinal).GetTimeIndex(i))
-		if c.TimeByIndex(index) < c.TimeByIndex(firstIndex) ||
-			(c.TimeByIndex(index) == c.TimeByIndex(firstIndex) && !v && firstValue) {
-			firstIndex = index
-			firstValue = v
-		}
-	}
-	return firstIndex, firstValue, false
-}
-
-func BooleanFirstMerge(prevPoint, currPoint *BooleanPoint) {
-	if prevPoint.isNil || (currPoint.time < prevPoint.time) ||
-		(currPoint.time == prevPoint.time && !currPoint.value && prevPoint.value) {
-		prevPoint.Assign(currPoint)
-	}
-}
 
 func FloatLastReduce(c Chunk, ordinal, start, end int) (int, float64, bool) {
 	if c.Column(ordinal).NilCount() == 0 {
@@ -573,13 +57,6 @@ func FloatLastReduce(c Chunk, ordinal, start, end int) (int, float64, bool) {
 	return lastIndex, lastValue, false
 }
 
-func FloatLastMerge(prevPoint, currPoint *FloatPoint) {
-	if prevPoint.isNil || (currPoint.time > prevPoint.time) ||
-		(currPoint.time == prevPoint.time && currPoint.value > prevPoint.value) {
-		prevPoint.Assign(currPoint)
-	}
-}
-
 func IntegerLastReduce(c Chunk, ordinal, start, end int) (int, int64, bool) {
 	if c.Column(ordinal).NilCount() == 0 {
 		// fast path
@@ -610,13 +87,6 @@ func IntegerLastReduce(c Chunk, ordinal, start, end int) (int, int64, bool) {
 		}
 	}
 	return lastIndex, lastValue, false
-}
-
-func IntegerLastMerge(prevPoint, currPoint *IntegerPoint) {
-	if prevPoint.isNil || (currPoint.time > prevPoint.time) ||
-		(currPoint.time == prevPoint.time && currPoint.value > prevPoint.value) {
-		prevPoint.Assign(currPoint)
-	}
 }
 
 func StringLastReduce(c Chunk, ordinal, start, end int) (int, string, bool) {
@@ -690,7 +160,7 @@ func BooleanLastReduce(c Chunk, ordinal, start, end int) (int, bool, bool) {
 	return lastIndex, lastValue, false
 }
 
-func BooleanLastMerge(prevPoint, currPoint *BooleanPoint) {
+func BooleanLastMerge(prevPoint, currPoint *Point[bool]) {
 	if prevPoint.isNil || (currPoint.time > prevPoint.time) ||
 		(currPoint.time == prevPoint.time && currPoint.value && !prevPoint.value) {
 		prevPoint.Assign(currPoint)
@@ -766,13 +236,6 @@ func FloatFirstTimeColReduce(c Chunk, ordinal, start, end int) (int, float64, bo
 	return FloatFirstTimeColSlowReduce(c, ordinal, start, end)
 }
 
-func FloatFirstTimeColMerge(prevPoint, currPoint *FloatPoint) {
-	if prevPoint.isNil || (currPoint.time < prevPoint.time) ||
-		(currPoint.time == prevPoint.time && currPoint.value > prevPoint.value) {
-		prevPoint.Assign(currPoint)
-	}
-}
-
 func IntegerFirstTimeColFastReduce(c Chunk, ordinal, start, end int) (int, int64, bool) {
 	// fast path
 	firstValue, firstIndex := c.Column(ordinal).IntegerValue(start), start
@@ -840,13 +303,6 @@ func IntegerFirstTimeColReduce(c Chunk, ordinal, start, end int) (int, int64, bo
 		return IntegerFirstTimeColFastReduce(c, ordinal, start, end)
 	}
 	return IntegerFirstTimeColSlowReduce(c, ordinal, start, end)
-}
-
-func IntegerFirstTimeColMerge(prevPoint, currPoint *IntegerPoint) {
-	if prevPoint.isNil || (currPoint.time < prevPoint.time) ||
-		(currPoint.time == prevPoint.time && currPoint.value > prevPoint.value) {
-		prevPoint.Assign(currPoint)
-	}
 }
 
 func StringFirstTimeColFastReduce(c Chunk, ordinal, start, end int) (int, string, bool) {
@@ -993,7 +449,7 @@ func BooleanFirstTimeColReduce(c Chunk, ordinal, start, end int) (int, bool, boo
 	return BooleanFirstTimeColSlowReduce(c, ordinal, start, end)
 }
 
-func BooleanFirstTimeColMerge(prevPoint, currPoint *BooleanPoint) {
+func BooleanFirstTimeColMerge(prevPoint, currPoint *Point[bool]) {
 	if prevPoint.isNil || (currPoint.time < prevPoint.time) ||
 		(currPoint.time == prevPoint.time && !currPoint.value && prevPoint.value) {
 		prevPoint.Assign(currPoint)
@@ -1069,13 +525,6 @@ func FloatLastTimeColReduce(c Chunk, ordinal, start, end int) (int, float64, boo
 	return FloatLastTimeColSlowReduce(c, ordinal, start, end)
 }
 
-func FloatLastTimeColMerge(prevPoint, currPoint *FloatPoint) {
-	if prevPoint.isNil || (currPoint.time > prevPoint.time) ||
-		(currPoint.time == prevPoint.time && currPoint.value > prevPoint.value) {
-		prevPoint.Assign(currPoint)
-	}
-}
-
 func IntegerLastTimeColFastReduce(c Chunk, ordinal, start, end int) (int, int64, bool) {
 	// fast path
 	lastValue, lastIndex := c.Column(ordinal).IntegerValue(start), start
@@ -1143,13 +592,6 @@ func IntegerLastTimeColReduce(c Chunk, ordinal, start, end int) (int, int64, boo
 		return IntegerLastTimeColFastReduce(c, ordinal, start, end)
 	}
 	return IntegerLastTimeColSlowReduce(c, ordinal, start, end)
-}
-
-func IntegerLastTimeColMerge(prevPoint, currPoint *IntegerPoint) {
-	if prevPoint.isNil || (currPoint.time > prevPoint.time) ||
-		(currPoint.time == prevPoint.time && currPoint.value > prevPoint.value) {
-		prevPoint.Assign(currPoint)
-	}
 }
 
 func StringLastTimeColFastReduce(c Chunk, ordinal, start, end int) (int, string, bool) {
@@ -1297,92 +739,10 @@ func BooleanLastTimeColReduce(c Chunk, ordinal, start, end int) (int, bool, bool
 	return BooleanLastTimeColSlowReduce(c, ordinal, start, end)
 }
 
-func BooleanLastTimeColMerge(prevPoint, currPoint *BooleanPoint) {
+func BooleanLastTimeColMerge(prevPoint, currPoint *Point[bool]) {
 	if prevPoint.isNil || (currPoint.time > prevPoint.time) ||
 		(currPoint.time == prevPoint.time && currPoint.value && !prevPoint.value) {
 		prevPoint.Assign(currPoint)
-	}
-}
-
-func NewFloatPercentileReduce(percentile float64) FloatColReduceSliceReduce {
-	return func(floatSliceItem *SliceItem[float64]) (int, int64, float64, bool) {
-		length := len(floatSliceItem.value)
-		if length == 0 {
-			return 0, int64(0), float64(0), true
-		}
-
-		sort.Sort(floatSliceItem)
-
-		i := int(math.Floor(float64(length)*percentile/100.0+0.5)) - 1
-		if i < 0 {
-			i = 0
-		} else if i >= length {
-			i = length - 1
-		}
-		return i, int64(0), float64(0), false
-	}
-}
-
-func NewIntegerPercentileReduce(percentile float64) IntegerColReduceSliceReduce {
-	return func(integerSliceItem *SliceItem[int64]) (int, int64, float64, bool) {
-		length := len(integerSliceItem.value)
-		if length == 0 {
-			return 0, int64(0), float64(0), true
-		}
-
-		sort.Sort(integerSliceItem)
-
-		i := int(math.Floor(float64(length)*percentile/100.0+0.5)) - 1
-		if i < 0 {
-			i = 0
-		} else if i >= length {
-			i = length - 1
-		}
-		return i, int64(0), float64(0), false
-	}
-}
-
-func NewFloatStddevReduce() FloatColReduceSliceReduce {
-	return func(floatSliceItem *SliceItem[float64]) (int, int64, float64, bool) {
-		length := len(floatSliceItem.value)
-		if length == 1 {
-			return -1, int64(0), float64(0), false
-		} else if length == 0 {
-			return -1, int64(0), float64(0), true
-		} else {
-			sum := float64(0)
-			sum2 := float64(0)
-			count := float64(length)
-			stddev := float64(0)
-			for _, v := range floatSliceItem.value {
-				sum += v
-				sum2 += v * v
-			}
-			stddev = math.Sqrt((sum2/count - math.Pow(sum/count, 2)) * count / (count - 1))
-			return -1, int64(0), stddev, false
-		}
-	}
-}
-
-func NewIntegerStddevReduce() IntegerColReduceSliceReduce {
-	return func(integerSliceItem *SliceItem[int64]) (int, int64, float64, bool) {
-		length := len(integerSliceItem.value)
-		if length == 1 {
-			return -1, int64(0), float64(0), false
-		} else if length == 0 {
-			return -1, int64(0), float64(0), true
-		} else {
-			sum := int64(0)
-			sum2 := int64(0)
-			count := float64(length)
-			stddev := float64(0)
-			for _, v := range integerSliceItem.value {
-				sum += v
-				sum2 += v * v
-			}
-			stddev = math.Sqrt((float64(sum2)/count - math.Pow(float64(sum)/count, 2)) * count / (count - 1))
-			return -1, int64(0), stddev, false
-		}
 	}
 }
 
@@ -1441,38 +801,6 @@ func FloatRateMiddleReduce(c Chunk, ordinal, start, end int) (int, int, float64,
 	return FloatRateLowReduce(c, ordinal, start, end)
 }
 
-func FloatRateFinalReduce(firstTime int64, lastTime int64, firstValue float64, lastValue float64,
-	interval *hybridqp.Interval) (float64, bool) {
-	if lastTime == firstTime || interval.Duration == 0 {
-		return 0, true
-	}
-	rate := float64(lastValue-firstValue) / (float64(lastTime-firstTime) / float64(interval.Duration))
-	return rate, false
-}
-
-func FloatRateUpdate(prevPoints, currPoints [2]*FloatPoint) {
-	for i := range currPoints {
-		if currPoints[i].isNil {
-			continue
-		}
-		if currPoints[i].time < prevPoints[0].time ||
-			(currPoints[i].time == prevPoints[0].time && currPoints[i].value > prevPoints[0].value) {
-			prevPoints[0].time = currPoints[i].time
-			prevPoints[0].value = currPoints[i].value
-		}
-		if currPoints[i].time > prevPoints[1].time ||
-			(currPoints[i].time == prevPoints[1].time && currPoints[i].value > prevPoints[1].value) {
-			prevPoints[1].time = currPoints[i].time
-			prevPoints[1].value = currPoints[i].value
-		}
-	}
-}
-
-func FloatRateMerge(prevPoints [2]*FloatPoint, interval *hybridqp.Interval) (float64, bool) {
-	return FloatRateFinalReduce(prevPoints[0].time, prevPoints[1].time,
-		prevPoints[0].value, prevPoints[1].value, interval)
-}
-
 func IntegerRateFastReduce(c Chunk, ordinal, start, end int) (int, int, int64, int64, bool) {
 	if end-start == 0 {
 		return 0, 0, 0, 0, true
@@ -1526,38 +854,6 @@ func IntegerRateMiddleReduce(c Chunk, ordinal, start, end int) (int, int, int64,
 
 	// slow path
 	return IntegerRateLowReduce(c, ordinal, start, end)
-}
-
-func IntegerRateFinalReduce(firstTime int64, lastTime int64, firstValue int64, lastValue int64,
-	interval *hybridqp.Interval) (float64, bool) {
-	if lastTime == firstTime || interval.Duration == 0 {
-		return 0, true
-	}
-	rate := float64(lastValue-firstValue) / (float64(lastTime-firstTime) / float64(interval.Duration))
-	return rate, false
-}
-
-func IntegerRateUpdate(prevPoints, currPoints [2]*IntegerPoint) {
-	for i := range currPoints {
-		if currPoints[i].isNil {
-			continue
-		}
-		if currPoints[i].time < prevPoints[0].time ||
-			(currPoints[i].time == prevPoints[0].time && currPoints[i].value > prevPoints[0].value) {
-			prevPoints[0].time = currPoints[i].time
-			prevPoints[0].value = currPoints[i].value
-		}
-		if currPoints[i].time > prevPoints[1].time ||
-			(currPoints[i].time == prevPoints[1].time && currPoints[i].value > prevPoints[1].value) {
-			prevPoints[1].time = currPoints[i].time
-			prevPoints[1].value = currPoints[i].value
-		}
-	}
-}
-
-func IntegerRateMerge(prevPoints [2]*IntegerPoint, interval *hybridqp.Interval) (float64, bool) {
-	return IntegerRateFinalReduce(prevPoints[0].time, prevPoints[1].time,
-		prevPoints[0].value, prevPoints[1].value, interval)
 }
 
 func FloatIrateFastReduce(c Chunk, ordinal, start, end int) (int, int, float64, float64, bool) {
@@ -1654,48 +950,6 @@ func FloatIrateMiddleReduce(c Chunk, ordinal, start, end int) (int, int, float64
 	return FloatIrateSlowReduce(c, ordinal, start, end)
 }
 
-func FloatIrateFinalReduce(ft int64, st int64, fv float64, sv float64,
-	interval *hybridqp.Interval) (float64, bool) {
-	if st == ft || interval.Duration == 0 {
-		return 0, true
-	}
-	rate := float64(sv-fv) / (float64(st-ft) / float64(interval.Duration))
-	return rate, false
-}
-
-func FloatIrateUpdate(prevPoints, currPoints [2]*FloatPoint) {
-	samePrevPoint := (!prevPoints[0].isNil && !prevPoints[1].isNil) &&
-		(prevPoints[0].time == prevPoints[1].time && prevPoints[0].value == prevPoints[1].value)
-	for i := range currPoints {
-		if currPoints[i].isNil || currPoints[i].time < prevPoints[0].time ||
-			(currPoints[i].time == prevPoints[0].time && currPoints[i].value < prevPoints[0].value) {
-			if samePrevPoint {
-				prevPoints[0].time, prevPoints[0].value = currPoints[i].time, currPoints[i].value
-			}
-			continue
-		}
-		if (i > 0 && !currPoints[i-1].isNil) &&
-			(currPoints[i].time == currPoints[i-1].time && currPoints[i].value == currPoints[i-1].value) {
-			continue
-		}
-		if currPoints[i].time > prevPoints[0].time ||
-			(currPoints[i].time == prevPoints[0].time && currPoints[i].value > prevPoints[0].value) {
-			if currPoints[i].time > prevPoints[1].time ||
-				(currPoints[i].time == prevPoints[1].time && currPoints[i].value > prevPoints[1].value) {
-				prevPoints[0].time, prevPoints[0].value = prevPoints[1].time, prevPoints[1].value
-				prevPoints[1].time, prevPoints[1].value = currPoints[i].time, currPoints[i].value
-			} else {
-				prevPoints[0].time, prevPoints[0].value = currPoints[i].time, currPoints[i].value
-			}
-		}
-	}
-}
-
-func FloatIrateMerge(prevPoints [2]*FloatPoint, interval *hybridqp.Interval) (float64, bool) {
-	return FloatRateFinalReduce(prevPoints[0].time, prevPoints[1].time,
-		prevPoints[0].value, prevPoints[1].value, interval)
-}
-
 func IntegerIrateFastReduce(c Chunk, ordinal, start, end int) (int, int, int64, int64, bool) {
 	if end-start == 0 {
 		return 0, 0, 0, 0, true
@@ -1788,74 +1042,4 @@ func IntegerIrateMiddleReduce(c Chunk, ordinal, start, end int) (int, int, int64
 
 	// slow path
 	return IntegerIrateSlowReduce(c, ordinal, start, end)
-}
-
-func IntegerIrateFinalReduce(ft int64, st int64, fv int64, sv int64,
-	interval *hybridqp.Interval) (float64, bool) {
-	if st == ft || interval.Duration == 0 {
-		return 0, true
-	}
-	rate := float64(sv-fv) / (float64(st-ft) / float64(interval.Duration))
-	return rate, false
-}
-
-func IntegerIrateUpdate(prevPoints, currPoints [2]*IntegerPoint) {
-	samePrevPoint := (!prevPoints[0].isNil && !prevPoints[1].isNil) &&
-		(prevPoints[0].time == prevPoints[1].time && prevPoints[0].value == prevPoints[1].value)
-	for i := range currPoints {
-		if currPoints[i].isNil || currPoints[i].time < prevPoints[0].time ||
-			(currPoints[i].time == prevPoints[0].time && currPoints[i].value < prevPoints[0].value) {
-			if samePrevPoint {
-				prevPoints[0].time, prevPoints[0].value = currPoints[i].time, currPoints[i].value
-			}
-			continue
-		}
-		if (i > 0 && !currPoints[i-1].isNil) &&
-			(currPoints[i].time == currPoints[i-1].time && currPoints[i].value == currPoints[i-1].value) {
-			continue
-		}
-		if currPoints[i].time > prevPoints[0].time ||
-			(currPoints[i].time == prevPoints[0].time && currPoints[i].value > prevPoints[0].value) {
-			if currPoints[i].time > prevPoints[1].time ||
-				(currPoints[i].time == prevPoints[1].time && currPoints[i].value > prevPoints[1].value) {
-				prevPoints[0].time, prevPoints[0].value = prevPoints[1].time, prevPoints[1].value
-				prevPoints[1].time, prevPoints[1].value = currPoints[i].time, currPoints[i].value
-			} else {
-				prevPoints[0].time, prevPoints[0].value = currPoints[i].time, currPoints[i].value
-			}
-		}
-	}
-}
-
-func IntegerIrateMerge(prevPoints [2]*IntegerPoint, interval *hybridqp.Interval) (float64, bool) {
-	return IntegerRateFinalReduce(prevPoints[0].time, prevPoints[1].time,
-		prevPoints[0].value, prevPoints[1].value, interval)
-}
-
-func IntegerAbsentMerge(prevPoint, currPoint *IntegerPoint) {
-	if prevPoint.isNil && currPoint.isNil {
-		prevPoint.isNil = true
-		prevPoint.value = 0
-		return
-	}
-	prevPoint.isNil = false
-	prevPoint.value = 1
-}
-
-func FloatSlidingWindowMergeFunc(prevWindow, currWindow *FloatSlidingWindow, fpm FloatPointMerge) {
-	for i := 0; i < prevWindow.Len(); i++ {
-		fpm(prevWindow.points[i], currWindow.points[i])
-	}
-}
-
-func IntegerSlidingWindowMergeFunc(prevWindow, currWindow *IntegerSlidingWindow, fpm IntegerPointMerge) {
-	for i := 0; i < prevWindow.Len(); i++ {
-		fpm(prevWindow.points[i], currWindow.points[i])
-	}
-}
-
-func BooleanSlidingWindowMergeFunc(prevWindow, currWindow *BooleanSlidingWindow, fpm BooleanPointMerge) {
-	for i := 0; i < prevWindow.Len(); i++ {
-		fpm(prevWindow.points[i], currWindow.points[i])
-	}
 }

@@ -25,147 +25,19 @@ import (
 	"sort"
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
-	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 )
 
-type FloatPoint struct {
-	time  int64
-	value float64
-	index int
-	isNil bool
-}
-
-func newFloatPoint() *FloatPoint {
-	return &FloatPoint{isNil: true}
-}
-
-func (p *FloatPoint) Set(index int, time int64, value float64) {
-	p.index = index
-	p.time = time
-	p.value = value
-	p.isNil = false
-}
-
-func (p *FloatPoint) Reset() {
-	p.isNil = true
-}
-
-func (p *FloatPoint) Assign(c *FloatPoint) {
-	p.index = c.index
-	p.time = c.time
-	p.value = c.value
-}
-
-type IntegerPoint struct {
-	time  int64
-	value int64
-	index int
-	isNil bool
-}
-
-func newIntegerPoint() *IntegerPoint {
-	return &IntegerPoint{isNil: true}
-}
-
-func (p *IntegerPoint) Set(index int, time int64, value int64) {
-	p.index = index
-	p.time = time
-	p.value = value
-	p.isNil = false
-}
-
-func (p *IntegerPoint) Reset() {
-	p.isNil = true
-}
-
-func (p *IntegerPoint) Assign(c *IntegerPoint) {
-	p.index = c.index
-	p.time = c.time
-	p.value = c.value
-}
-
-type BooleanPoint struct {
-	time  int64
-	value bool
-	index int
-	isNil bool
-}
-
-func newBooleanPoint() *BooleanPoint {
-	return &BooleanPoint{isNil: true}
-}
-
-func (p *BooleanPoint) Set(index int, time int64, value bool) {
-	p.index = index
-	p.time = time
-	p.value = value
-	p.isNil = false
-}
-
-func (p *BooleanPoint) Reset() {
-	p.isNil = true
-}
-
-func (p *BooleanPoint) Assign(c *BooleanPoint) {
-	p.index = c.index
-	p.time = c.time
-	p.value = c.value
-}
-
-type StringPoint struct {
-	time  int64
-	value []byte
-	index int
-	isNil bool
-}
-
-func newStringPoint() *StringPoint {
-	return &StringPoint{isNil: true}
-}
-
-func (p *StringPoint) Set(index int, time int64, value string) {
-	p.index = index
-	p.time = time
-	p.isNil = false
-	valueByte := util.Str2bytes(value)
-	if cap(p.value) >= len(valueByte) {
-		p.value = p.value[:len(valueByte)]
-		copy(p.value, valueByte)
-	} else {
-		p.value = make([]byte, len(valueByte))
-		copy(p.value, valueByte)
-	}
-}
-
-func (p *StringPoint) Reset() {
-	p.isNil = true
-	p.value = p.value[:0]
-}
-
-func (p *StringPoint) Assign(c *StringPoint) {
-	p.index = c.index
-	p.time = c.time
-	p.value = p.value[:0]
-	if cap(p.value) >= len(c.value) {
-		p.value = p.value[:len(c.value)]
-		copy(p.value, c.value)
-	} else {
-		p.value = make([]byte, len(c.value))
-		copy(p.value, c.value)
-	}
-}
-
 type FloatColFloatReduce func(c Chunk, ordinal, start, end int) (index int, value float64, isNil bool)
 
-type FloatColFloatMerge func(prevPoint, currPoint *FloatPoint)
+type FloatColFloatMerge func(prevPoint, currPoint *Point[float64])
 
 type FloatColFloatIterator struct {
 	isSingleCall bool
 	inOrdinal    int
 	outOrdinal   int
-	prevPoint    *FloatPoint
-	currPoint    *FloatPoint
+	prevPoint    *Point[float64]
+	currPoint    *Point[float64]
 	fn           FloatColFloatReduce
 	fv           FloatColFloatMerge
 	auxChunk     Chunk
@@ -181,8 +53,8 @@ func NewFloatColFloatIterator(fn FloatColFloatReduce, fv FloatColFloatMerge,
 		isSingleCall: isSingleCall,
 		inOrdinal:    inOrdinal,
 		outOrdinal:   outOrdinal,
-		prevPoint:    newFloatPoint(),
-		currPoint:    newFloatPoint(),
+		prevPoint:    newPoint[float64](),
+		currPoint:    newPoint[float64](),
 	}
 	if isSingleCall && len(auxProcessor) > 0 {
 		r.auxProcessor = auxProcessor
@@ -330,14 +202,14 @@ func (r *FloatColFloatIterator) Next(ie *IteratorEndpoint, p *IteratorParams) {
 
 type FloatColIntegerReduce func(c Chunk, ordinal, start, end int) (index int, value int64, isNil bool)
 
-type FloatColIntegerMerge func(prevPoint, currPoint *IntegerPoint)
+type FloatColIntegerMerge func(prevPoint, currPoint *Point[int64])
 
 type FloatColIntegerIterator struct {
 	isSingleCall bool
 	inOrdinal    int
 	outOrdinal   int
-	prevPoint    *IntegerPoint
-	currPoint    *IntegerPoint
+	prevPoint    *Point[int64]
+	currPoint    *Point[int64]
 	fn           FloatColIntegerReduce
 	fv           FloatColIntegerMerge
 	auxChunk     Chunk
@@ -353,8 +225,8 @@ func NewFloatColIntegerIterator(fn FloatColIntegerReduce, fv FloatColIntegerMerg
 		isSingleCall: isSingleCall,
 		inOrdinal:    inOrdinal,
 		outOrdinal:   outOrdinal,
-		prevPoint:    newIntegerPoint(),
-		currPoint:    newIntegerPoint(),
+		prevPoint:    newPoint[int64](),
+		currPoint:    newPoint[int64](),
 	}
 	if isSingleCall && len(auxProcessor) > 0 {
 		r.auxProcessor = auxProcessor
@@ -502,14 +374,14 @@ func (r *FloatColIntegerIterator) Next(ie *IteratorEndpoint, p *IteratorParams) 
 
 type IntegerColIntegerReduce func(c Chunk, ordinal, start, end int) (index int, value int64, isNil bool)
 
-type IntegerColIntegerMerge func(prevPoint, currPoint *IntegerPoint)
+type IntegerColIntegerMerge func(prevPoint, currPoint *Point[int64])
 
 type IntegerColIntegerIterator struct {
 	isSingleCall bool
 	inOrdinal    int
 	outOrdinal   int
-	prevPoint    *IntegerPoint
-	currPoint    *IntegerPoint
+	prevPoint    *Point[int64]
+	currPoint    *Point[int64]
 	fn           IntegerColIntegerReduce
 	fv           IntegerColIntegerMerge
 	auxChunk     Chunk
@@ -525,8 +397,8 @@ func NewIntegerColIntegerIterator(fn IntegerColIntegerReduce, fv IntegerColInteg
 		isSingleCall: isSingleCall,
 		inOrdinal:    inOrdinal,
 		outOrdinal:   outOrdinal,
-		prevPoint:    newIntegerPoint(),
-		currPoint:    newIntegerPoint(),
+		prevPoint:    newPoint[int64](),
+		currPoint:    newPoint[int64](),
 	}
 	if isSingleCall && len(auxProcessor) > 0 {
 		r.auxProcessor = auxProcessor
@@ -674,14 +546,14 @@ func (r *IntegerColIntegerIterator) Next(ie *IteratorEndpoint, p *IteratorParams
 
 type StringColIntegerReduce func(c Chunk, ordinal, start, end int) (index int, value int64, isNil bool)
 
-type StringColIntegerMerge func(prevPoint, currPoint *IntegerPoint)
+type StringColIntegerMerge func(prevPoint, currPoint *Point[int64])
 
 type StringColIntegerIterator struct {
 	isSingleCall bool
 	inOrdinal    int
 	outOrdinal   int
-	prevPoint    *IntegerPoint
-	currPoint    *IntegerPoint
+	prevPoint    *Point[int64]
+	currPoint    *Point[int64]
 	fn           StringColIntegerReduce
 	fv           StringColIntegerMerge
 	auxChunk     Chunk
@@ -697,8 +569,8 @@ func NewStringColIntegerIterator(fn StringColIntegerReduce, fv StringColIntegerM
 		isSingleCall: isSingleCall,
 		inOrdinal:    inOrdinal,
 		outOrdinal:   outOrdinal,
-		prevPoint:    newIntegerPoint(),
-		currPoint:    newIntegerPoint(),
+		prevPoint:    newPoint[int64](),
+		currPoint:    newPoint[int64](),
 	}
 	if isSingleCall && len(auxProcessor) > 0 {
 		r.auxProcessor = auxProcessor
@@ -1018,14 +890,14 @@ func (r *StringColStringIterator) Next(ie *IteratorEndpoint, p *IteratorParams) 
 
 type BooleanColIntegerReduce func(c Chunk, ordinal, start, end int) (index int, value int64, isNil bool)
 
-type BooleanColIntegerMerge func(prevPoint, currPoint *IntegerPoint)
+type BooleanColIntegerMerge func(prevPoint, currPoint *Point[int64])
 
 type BooleanColIntegerIterator struct {
 	isSingleCall bool
 	inOrdinal    int
 	outOrdinal   int
-	prevPoint    *IntegerPoint
-	currPoint    *IntegerPoint
+	prevPoint    *Point[int64]
+	currPoint    *Point[int64]
 	fn           BooleanColIntegerReduce
 	fv           BooleanColIntegerMerge
 	auxChunk     Chunk
@@ -1041,8 +913,8 @@ func NewBooleanColIntegerIterator(fn BooleanColIntegerReduce, fv BooleanColInteg
 		isSingleCall: isSingleCall,
 		inOrdinal:    inOrdinal,
 		outOrdinal:   outOrdinal,
-		prevPoint:    newIntegerPoint(),
-		currPoint:    newIntegerPoint(),
+		prevPoint:    newPoint[int64](),
+		currPoint:    newPoint[int64](),
 	}
 	if isSingleCall && len(auxProcessor) > 0 {
 		r.auxProcessor = auxProcessor
@@ -1190,14 +1062,14 @@ func (r *BooleanColIntegerIterator) Next(ie *IteratorEndpoint, p *IteratorParams
 
 type BooleanColBooleanReduce func(c Chunk, ordinal, start, end int) (index int, value bool, isNil bool)
 
-type BooleanColBooleanMerge func(prevPoint, currPoint *BooleanPoint)
+type BooleanColBooleanMerge func(prevPoint, currPoint *Point[bool])
 
 type BooleanColBooleanIterator struct {
 	isSingleCall bool
 	inOrdinal    int
 	outOrdinal   int
-	prevPoint    *BooleanPoint
-	currPoint    *BooleanPoint
+	prevPoint    *Point[bool]
+	currPoint    *Point[bool]
 	fn           BooleanColBooleanReduce
 	fv           BooleanColBooleanMerge
 	auxChunk     Chunk
@@ -1213,8 +1085,8 @@ func NewBooleanColBooleanIterator(fn BooleanColBooleanReduce, fv BooleanColBoole
 		isSingleCall: isSingleCall,
 		inOrdinal:    inOrdinal,
 		outOrdinal:   outOrdinal,
-		prevPoint:    newBooleanPoint(),
-		currPoint:    newBooleanPoint(),
+		prevPoint:    newPoint[bool](),
+		currPoint:    newPoint[bool](),
 	}
 	if isSingleCall && len(auxProcessor) > 0 {
 		r.auxProcessor = auxProcessor
@@ -1362,14 +1234,14 @@ func (r *BooleanColBooleanIterator) Next(ie *IteratorEndpoint, p *IteratorParams
 
 type FloatTimeColFloatReduce func(c Chunk, ordinal, start, end int) (index int, value float64, isNil bool)
 
-type FloatTimeColFloatMerge func(prevPoint, currPoint *FloatPoint)
+type FloatTimeColFloatMerge func(prevPoint, currPoint *Point[float64])
 
 type FloatTimeColFloatIterator struct {
 	initTimeCol bool
 	inOrdinal   int
 	outOrdinal  int
-	prevPoint   *FloatPoint
-	currPoint   *FloatPoint
+	prevPoint   *Point[float64]
+	currPoint   *Point[float64]
 	fn          FloatTimeColFloatReduce
 	fv          FloatTimeColFloatMerge
 }
@@ -1382,8 +1254,8 @@ func NewFloatTimeColFloatIterator(
 		fv:         fv,
 		inOrdinal:  inOrdinal,
 		outOrdinal: outOrdinal,
-		prevPoint:  newFloatPoint(),
-		currPoint:  newFloatPoint(),
+		prevPoint:  newPoint[float64](),
+		currPoint:  newPoint[float64](),
 	}
 	return r
 }
@@ -1490,14 +1362,14 @@ func (r *FloatTimeColFloatIterator) Next(ie *IteratorEndpoint, p *IteratorParams
 
 type IntegerTimeColIntegerReduce func(c Chunk, ordinal, start, end int) (index int, value int64, isNil bool)
 
-type IntegerTimeColIntegerMerge func(prevPoint, currPoint *IntegerPoint)
+type IntegerTimeColIntegerMerge func(prevPoint, currPoint *Point[int64])
 
 type IntegerTimeColIntegerIterator struct {
 	initTimeCol bool
 	inOrdinal   int
 	outOrdinal  int
-	prevPoint   *IntegerPoint
-	currPoint   *IntegerPoint
+	prevPoint   *Point[int64]
+	currPoint   *Point[int64]
 	fn          IntegerTimeColIntegerReduce
 	fv          IntegerTimeColIntegerMerge
 }
@@ -1510,8 +1382,8 @@ func NewIntegerTimeColIntegerIterator(
 		fv:         fv,
 		inOrdinal:  inOrdinal,
 		outOrdinal: outOrdinal,
-		prevPoint:  newIntegerPoint(),
-		currPoint:  newIntegerPoint(),
+		prevPoint:  newPoint[int64](),
+		currPoint:  newPoint[int64](),
 	}
 	return r
 }
@@ -1746,14 +1618,14 @@ func (r *StringTimeColStringIterator) Next(ie *IteratorEndpoint, p *IteratorPara
 
 type BooleanTimeColBooleanReduce func(c Chunk, ordinal, start, end int) (index int, value bool, isNil bool)
 
-type BooleanTimeColBooleanMerge func(prevPoint, currPoint *BooleanPoint)
+type BooleanTimeColBooleanMerge func(prevPoint, currPoint *Point[bool])
 
 type BooleanTimeColBooleanIterator struct {
 	initTimeCol bool
 	inOrdinal   int
 	outOrdinal  int
-	prevPoint   *BooleanPoint
-	currPoint   *BooleanPoint
+	prevPoint   *Point[bool]
+	currPoint   *Point[bool]
 	fn          BooleanTimeColBooleanReduce
 	fv          BooleanTimeColBooleanMerge
 }
@@ -1766,8 +1638,8 @@ func NewBooleanTimeColBooleanIterator(
 		fv:         fv,
 		inOrdinal:  inOrdinal,
 		outOrdinal: outOrdinal,
-		prevPoint:  newBooleanPoint(),
-		currPoint:  newBooleanPoint(),
+		prevPoint:  newPoint[bool](),
+		currPoint:  newPoint[bool](),
 	}
 	return r
 }
@@ -1910,20 +1782,18 @@ func (f *BooleanSliceItem) Len() int {
 	return len(f.time)
 }
 
-type FloatColReduceSliceReduce func(floatItem *SliceItem[float64]) (index int, time int64, value float64, isNil bool)
-
 type FloatColFloatSliceIterator struct {
 	isSingleCall bool
 	inOrdinal    int
 	outOrdinal   int
 	buf          *SliceItem[float64]
-	fn           FloatColReduceSliceReduce
+	fn           SliceReduce[float64]
 	auxChunk     Chunk
 	auxProcessor []*AuxProcessor
 	windowIndex  []int
 }
 
-func NewFloatColFloatSliceIterator(fn FloatColReduceSliceReduce,
+func NewFloatColFloatSliceIterator(fn SliceReduce[float64],
 	isSingleCall bool, inOrdinal, outOrdinal int, auxProcessor []*AuxProcessor, rowDataType hybridqp.RowDataType,
 ) *FloatColFloatSliceIterator {
 	r := &FloatColFloatSliceIterator{
@@ -2096,20 +1966,18 @@ func (r *FloatColFloatSliceIterator) Next(ie *IteratorEndpoint, p *IteratorParam
 	}
 }
 
-type IntegerColReduceSliceReduce func(integerItem *SliceItem[int64]) (index int, time int64, value float64, isNil bool)
-
 type IntegerColIntegerSliceIterator struct {
 	isSingleCall bool
 	inOrdinal    int
 	outOrdinal   int
 	buf          *SliceItem[int64]
-	fn           IntegerColReduceSliceReduce
+	fn           SliceReduce[int64]
 	auxChunk     Chunk
 	auxProcessor []*AuxProcessor
 	windowIndex  []int
 }
 
-func NewIntegerColIntegerSliceIterator(fn IntegerColReduceSliceReduce,
+func NewIntegerColIntegerSliceIterator(fn SliceReduce[int64],
 	isSingleCall bool, inOrdinal, outOrdinal int, auxProcessor []*AuxProcessor, rowDataType hybridqp.RowDataType,
 ) *IntegerColIntegerSliceIterator {
 	r := &IntegerColIntegerSliceIterator{
@@ -3603,14 +3471,14 @@ type floatDifference func(prev, curr float64) float64
 type FloatDifferenceItem struct {
 	isNonNegative bool
 	diff          func(prev, curr float64) float64
-	prev          *FloatPoint
+	prev          *Point[float64]
 	times         []int64
 	values        []float64
 	nils          []bool
 }
 
 func NewFloatDifferenceItem(isNonNegative bool, diff floatDifference) *FloatDifferenceItem {
-	return &FloatDifferenceItem{isNonNegative: isNonNegative, diff: diff, prev: newFloatPoint()}
+	return &FloatDifferenceItem{isNonNegative: isNonNegative, diff: diff, prev: newPoint[float64]()}
 }
 
 func (f *FloatDifferenceItem) diffComputeFast(prevValue, currValue float64, currTime int64) {
@@ -3788,14 +3656,14 @@ type integerDifference func(prev, curr int64) int64
 type IntegerDifferenceItem struct {
 	isNonNegative bool
 	diff          func(prev, curr int64) int64
-	prev          *IntegerPoint
+	prev          *Point[int64]
 	times         []int64
 	values        []int64
 	nils          []bool
 }
 
 func NewIntegerDifferenceItem(isNonNegative bool, diff integerDifference) *IntegerDifferenceItem {
-	return &IntegerDifferenceItem{isNonNegative: isNonNegative, diff: diff, prev: newIntegerPoint()}
+	return &IntegerDifferenceItem{isNonNegative: isNonNegative, diff: diff, prev: newPoint[int64]()}
 }
 
 func (f *IntegerDifferenceItem) diffComputeFast(prevValue, currValue int64, currTime int64) {
@@ -3971,7 +3839,7 @@ func (f *IntegerDifferenceItem) GetBaseTransData() BaseTransData {
 type FloatDerivativeItem struct {
 	isNonNegative bool
 	ascending     bool
-	prev          *FloatPoint
+	prev          *Point[float64]
 	times         []int64
 	values        []float64
 	nils          []bool
@@ -3980,7 +3848,7 @@ type FloatDerivativeItem struct {
 
 func NewFloatDerivativeItem(isNonNegative, ascending bool, interval hybridqp.Interval) *FloatDerivativeItem {
 	return &FloatDerivativeItem{
-		isNonNegative: isNonNegative, ascending: ascending, interval: interval, prev: newFloatPoint(),
+		isNonNegative: isNonNegative, ascending: ascending, interval: interval, prev: newPoint[float64](),
 	}
 }
 
@@ -4164,7 +4032,7 @@ func (f *FloatDerivativeItem) GetBaseTransData() BaseTransData {
 type IntegerDerivativeItem struct {
 	isNonNegative bool
 	ascending     bool
-	prev          *IntegerPoint
+	prev          *Point[int64]
 	times         []int64
 	values        []float64
 	nils          []bool
@@ -4173,7 +4041,7 @@ type IntegerDerivativeItem struct {
 
 func NewIntegerDerivativeItem(isNonNegative, ascending bool, interval hybridqp.Interval) *IntegerDerivativeItem {
 	return &IntegerDerivativeItem{
-		isNonNegative: isNonNegative, ascending: ascending, interval: interval, prev: newIntegerPoint(),
+		isNonNegative: isNonNegative, ascending: ascending, interval: interval, prev: newPoint[int64](),
 	}
 }
 
@@ -4370,7 +4238,7 @@ type FloatIntegralItem struct {
 		start int64
 		end   int64
 	}
-	prev     *FloatPoint
+	prev     *Point[float64]
 	time     []int64
 	value    []float64
 	interval hybridqp.Interval
@@ -4378,7 +4246,7 @@ type FloatIntegralItem struct {
 }
 
 func NewFloatIntegralItem(interval hybridqp.Interval, opt *query.ProcessorOptions) *FloatIntegralItem {
-	return &FloatIntegralItem{interval: interval, prev: newFloatPoint(), opt: opt, sameTag: false}
+	return &FloatIntegralItem{interval: interval, prev: newPoint[float64](), opt: opt, sameTag: false}
 }
 
 func (f *FloatIntegralItem) CalculateUnit(index int, time int64, value float64) {
@@ -4566,7 +4434,7 @@ type IntegerIntegralItem struct {
 		start int64
 		end   int64
 	}
-	prev     *FloatPoint
+	prev     *Point[float64]
 	time     []int64
 	value    []float64
 	interval hybridqp.Interval
@@ -4574,7 +4442,7 @@ type IntegerIntegralItem struct {
 }
 
 func NewIntegerIntegralItem(interval hybridqp.Interval, opt *query.ProcessorOptions) *IntegerIntegralItem {
-	return &IntegerIntegralItem{interval: interval, prev: newFloatPoint(), opt: opt, sameTag: false}
+	return &IntegerIntegralItem{interval: interval, prev: newPoint[float64](), opt: opt, sameTag: false}
 }
 
 func (f *IntegerIntegralItem) CalculateUnit(index int, time int64, value float64) {
@@ -5250,7 +5118,7 @@ func (f *ElapsedItem) GetBaseTransData() BaseTransData {
 }
 
 type FloatMovingAverageItem struct {
-	window []FloatPoint
+	window []Point[float64]
 	cur    int
 	pos    int
 	sum    float64
@@ -5261,7 +5129,7 @@ type FloatMovingAverageItem struct {
 }
 
 func NewFloatMovingAverageItem(n int) *FloatMovingAverageItem {
-	return &FloatMovingAverageItem{window: make([]FloatPoint, 0, n), pos: 0, cur: 0, sum: 0, n: n}
+	return &FloatMovingAverageItem{window: make([]Point[float64], 0, n), pos: 0, cur: 0, sum: 0, n: n}
 }
 
 func (f *FloatMovingAverageItem) AppendItemFastFunc(c Chunk, ordinal int, start, end int, sameInterval bool) {
@@ -5273,20 +5141,20 @@ func (f *FloatMovingAverageItem) AppendItemFastFunc(c Chunk, ordinal int, start,
 		f.cur += 1
 		if len(f.window) == f.n {
 			f.sum = f.sum - f.window[f.pos].value + value[i]
-			f.window[f.pos] = FloatPoint{time: time[i], value: value[i], isNil: false}
+			f.window[f.pos] = Point[float64]{time: time[i], value: value[i], isNil: false}
 			f.pos = (f.pos + 1) % f.n
 			f.value = append(f.value, f.sum/float64(f.n))
 			f.time = append(f.time, f.window[(f.pos+f.n-1)%f.n].time)
 			f.nils = append(f.nils, false)
 		} else if len(f.window) == f.n-1 {
 			f.sum += value[i]
-			f.window = append(f.window, FloatPoint{time: time[i], value: value[i], isNil: false})
+			f.window = append(f.window, Point[float64]{time: time[i], value: value[i], isNil: false})
 			f.value = append(f.value, f.sum/float64(f.n))
 			f.time = append(f.time, f.window[(f.pos+f.n-1)%f.n].time)
 			f.nils = append(f.nils, false)
 		} else {
 			f.sum += value[i]
-			f.window = append(f.window, FloatPoint{time: time[i], value: value[i], isNil: false})
+			f.window = append(f.window, Point[float64]{time: time[i], value: value[i], isNil: false})
 			if f.cur >= f.n {
 				f.nils = append(f.nils, true)
 				f.time = append(f.time, time[0])
@@ -5354,20 +5222,20 @@ func (f *FloatMovingAverageItem) AppendItemSlowFunc(c Chunk, ordinal int, start,
 
 		if len(f.window) == f.n {
 			f.sum = f.sum - f.window[f.pos].value + v
-			f.window[f.pos] = FloatPoint{time: t, value: v, isNil: false}
+			f.window[f.pos] = Point[float64]{time: t, value: v, isNil: false}
 			f.pos = (f.pos + 1) % f.n
 			f.value = append(f.value, f.sum/float64(f.n))
 			f.time = append(f.time, f.window[(f.pos+f.n-1)%f.n].time)
 			f.nils = append(f.nils, false)
 		} else if len(f.window) == f.n-1 {
 			f.sum += v
-			f.window = append(f.window, FloatPoint{time: t, value: v, isNil: false})
+			f.window = append(f.window, Point[float64]{time: t, value: v, isNil: false})
 			f.value = append(f.value, f.sum/float64(f.n))
 			f.time = append(f.time, f.window[(f.pos+f.n-1)%f.n].time)
 			f.nils = append(f.nils, false)
 		} else {
 			f.sum += v
-			f.window = append(f.window, FloatPoint{time: t, value: v, isNil: false})
+			f.window = append(f.window, Point[float64]{time: t, value: v, isNil: false})
 			if f.cur >= f.n {
 				f.nils = append(f.nils, true)
 				f.time = append(f.time, t)
@@ -5414,7 +5282,7 @@ func (f *FloatMovingAverageItem) GetBaseTransData() BaseTransData {
 }
 
 type IntegerMovingAverageItem struct {
-	window []IntegerPoint
+	window []Point[int64]
 	cur    int
 	pos    int
 	sum    int64
@@ -5425,7 +5293,7 @@ type IntegerMovingAverageItem struct {
 }
 
 func NewIntegerMovingAverageItem(n int) *IntegerMovingAverageItem {
-	return &IntegerMovingAverageItem{window: make([]IntegerPoint, 0, n), pos: 0, cur: 0, sum: 0, n: n}
+	return &IntegerMovingAverageItem{window: make([]Point[int64], 0, n), pos: 0, cur: 0, sum: 0, n: n}
 }
 
 func (f *IntegerMovingAverageItem) AppendItemFastFunc(c Chunk, ordinal int, start, end int, sameInterval bool) {
@@ -5437,20 +5305,20 @@ func (f *IntegerMovingAverageItem) AppendItemFastFunc(c Chunk, ordinal int, star
 		f.cur += 1
 		if len(f.window) == f.n {
 			f.sum = f.sum - f.window[f.pos].value + value[i]
-			f.window[f.pos] = IntegerPoint{time: time[i], value: value[i], isNil: false}
+			f.window[f.pos] = Point[int64]{time: time[i], value: value[i], isNil: false}
 			f.pos = (f.pos + 1) % f.n
 			f.value = append(f.value, float64(f.sum)/float64(f.n))
 			f.time = append(f.time, f.window[(f.pos+f.n-1)%f.n].time)
 			f.nils = append(f.nils, false)
 		} else if len(f.window) == f.n-1 {
 			f.sum += value[i]
-			f.window = append(f.window, IntegerPoint{time: time[i], value: value[i], isNil: false})
+			f.window = append(f.window, Point[int64]{time: time[i], value: value[i], isNil: false})
 			f.value = append(f.value, float64(f.sum)/float64(f.n))
 			f.time = append(f.time, f.window[(f.pos+f.n-1)%f.n].time)
 			f.nils = append(f.nils, false)
 		} else {
 			f.sum += value[i]
-			f.window = append(f.window, IntegerPoint{time: time[i], value: value[i], isNil: false})
+			f.window = append(f.window, Point[int64]{time: time[i], value: value[i], isNil: false})
 			if f.cur >= f.n {
 				f.nils = append(f.nils, true)
 				f.time = append(f.time, time[0])
@@ -5518,20 +5386,20 @@ func (f *IntegerMovingAverageItem) AppendItemSlowFunc(c Chunk, ordinal int, star
 
 		if len(f.window) == f.n {
 			f.sum = f.sum - f.window[f.pos].value + v
-			f.window[f.pos] = IntegerPoint{time: t, value: v, isNil: false}
+			f.window[f.pos] = Point[int64]{time: t, value: v, isNil: false}
 			f.pos = (f.pos + 1) % f.n
 			f.value = append(f.value, float64(f.sum)/float64(f.n))
 			f.time = append(f.time, f.window[(f.pos+f.n-1)%f.n].time)
 			f.nils = append(f.nils, false)
 		} else if len(f.window) == f.n-1 {
 			f.sum += v
-			f.window = append(f.window, IntegerPoint{time: t, value: v, isNil: false})
+			f.window = append(f.window, Point[int64]{time: t, value: v, isNil: false})
 			f.value = append(f.value, float64(f.sum)/float64(f.n))
 			f.time = append(f.time, f.window[(f.pos+f.n-1)%f.n].time)
 			f.nils = append(f.nils, false)
 		} else {
 			f.sum += v
-			f.window = append(f.window, IntegerPoint{time: t, value: v, isNil: false})
+			f.window = append(f.window, Point[int64]{time: t, value: v, isNil: false})
 			if f.cur >= f.n {
 				f.nils = append(f.nils, true)
 				f.time = append(f.time, t)
@@ -6113,9 +5981,9 @@ type FloatColFloatRateMiddleReduce func(c Chunk, ordinal, start, end int) (first
 
 type FloatColFloatRateFinalReduce func(firstTime, lastTime int64, firstValue, lastValue float64, interval *hybridqp.Interval) (v float64, isNil bool)
 
-type FloatColFloatRateUpdate func(prevPoints, currPoints [2]*FloatPoint)
+type FloatColFloatRateUpdate func(prevPoints, currPoints [2]*Point[float64])
 
-type FloatColFloatRateMerge func(prevPoints [2]*FloatPoint, interval *hybridqp.Interval) (v float64, isNil bool)
+type FloatColFloatRateMerge func(prevPoints [2]*Point[float64], interval *hybridqp.Interval) (v float64, isNil bool)
 
 type FloatColFloatRateIterator struct {
 	isSingleCall bool
@@ -6126,8 +5994,8 @@ type FloatColFloatRateIterator struct {
 	fv           FloatColFloatRateFinalReduce
 	fu           FloatColFloatRateUpdate
 	fm           FloatColFloatRateMerge
-	prevPoints   [2]*FloatPoint
-	currPoints   [2]*FloatPoint
+	prevPoints   [2]*Point[float64]
+	currPoints   [2]*Point[float64]
 }
 
 func NewFloatColFloatRateIterator(fn FloatColFloatRateMiddleReduce, fv FloatColFloatRateFinalReduce,
@@ -6144,8 +6012,8 @@ func NewFloatColFloatRateIterator(fn FloatColFloatRateMiddleReduce, fv FloatColF
 		inOrdinal:    inOrdinal,
 		outOrdinal:   outOrdinal,
 		interval:     interval,
-		prevPoints:   [2]*FloatPoint{newFloatPoint(), newFloatPoint()},
-		currPoints:   [2]*FloatPoint{newFloatPoint(), newFloatPoint()},
+		prevPoints:   [2]*Point[float64]{newPoint[float64](), newPoint[float64]()},
+		currPoints:   [2]*Point[float64]{newPoint[float64](), newPoint[float64]()},
 	}
 	return r
 }
@@ -6260,9 +6128,9 @@ type IntegerColFloatRateMiddleReduce func(c Chunk, ordinal, start, end int) (fir
 
 type IntegerColFloatRateFinalReduce func(firstTime, lastTime int64, firstValue, lastValue int64, interval *hybridqp.Interval) (v float64, isNil bool)
 
-type IntegerColFloatRateUpdate func(prevPoints, currPoints [2]*IntegerPoint)
+type IntegerColFloatRateUpdate func(prevPoints, currPoints [2]*Point[int64])
 
-type IntegerColFloatRateMerge func(prevPoints [2]*IntegerPoint, interval *hybridqp.Interval) (v float64, isNil bool)
+type IntegerColFloatRateMerge func(prevPoints [2]*Point[int64], interval *hybridqp.Interval) (v float64, isNil bool)
 
 type IntegerColFloatRateIterator struct {
 	isSingleCall bool
@@ -6273,8 +6141,8 @@ type IntegerColFloatRateIterator struct {
 	fv           IntegerColFloatRateFinalReduce
 	fu           IntegerColFloatRateUpdate
 	fm           IntegerColFloatRateMerge
-	prevPoints   [2]*IntegerPoint
-	currPoints   [2]*IntegerPoint
+	prevPoints   [2]*Point[int64]
+	currPoints   [2]*Point[int64]
 }
 
 func NewIntegerColFloatRateIterator(fn IntegerColFloatRateMiddleReduce, fv IntegerColFloatRateFinalReduce,
@@ -6291,8 +6159,8 @@ func NewIntegerColFloatRateIterator(fn IntegerColFloatRateMiddleReduce, fv Integ
 		inOrdinal:    inOrdinal,
 		outOrdinal:   outOrdinal,
 		interval:     interval,
-		prevPoints:   [2]*IntegerPoint{newIntegerPoint(), newIntegerPoint()},
-		currPoints:   [2]*IntegerPoint{newIntegerPoint(), newIntegerPoint()},
+		prevPoints:   [2]*Point[int64]{newPoint[int64](), newPoint[int64]()},
+		currPoints:   [2]*Point[int64]{newPoint[int64](), newPoint[int64]()},
 	}
 	return r
 }
@@ -7431,138 +7299,23 @@ func (r *BooleanColBooleanSampleIterator) Next(ie *IteratorEndpoint, p *Iterator
 	}
 }
 
-type FloatSlidingWindow struct {
-	isNil      bool
-	slidingNum int
-	points     []*FloatPoint
-}
-
-func NewFloatSlidingWindow(slidingNum int) *FloatSlidingWindow {
-	sw := &FloatSlidingWindow{
-		isNil:      true,
-		slidingNum: slidingNum,
-	}
-	for i := 0; i < slidingNum; i++ {
-		sw.points = append(sw.points, newFloatPoint())
-	}
-	return sw
-}
-
-func (w *FloatSlidingWindow) Len() int {
-	return w.slidingNum
-}
-
-func (w *FloatSlidingWindow) IsNil() bool {
-	return w.isNil
-}
-
-func (w *FloatSlidingWindow) SetPoint(value float64, isNil bool, index int) {
-	w.points[index].value = value
-	w.points[index].isNil = isNil
-	if index == w.slidingNum-1 {
-		w.isNil = false
-	}
-}
-
-func (w *FloatSlidingWindow) Reset() {
-	w.isNil = true
-}
-
-type IntegerSlidingWindow struct {
-	isNil      bool
-	slidingNum int
-	points     []*IntegerPoint
-}
-
-func NewIntegerSlidingWindow(slidingNum int) *IntegerSlidingWindow {
-	sw := &IntegerSlidingWindow{
-		isNil:      true,
-		slidingNum: slidingNum,
-	}
-	for i := 0; i < slidingNum; i++ {
-		sw.points = append(sw.points, newIntegerPoint())
-	}
-	return sw
-}
-
-func (w *IntegerSlidingWindow) Len() int {
-	return w.slidingNum
-}
-
-func (w *IntegerSlidingWindow) IsNil() bool {
-	return w.isNil
-}
-
-func (w *IntegerSlidingWindow) SetPoint(value int64, isNil bool, index int) {
-	w.points[index].value = value
-	w.points[index].isNil = isNil
-	if index == w.slidingNum-1 {
-		w.isNil = false
-	}
-}
-
-func (w *IntegerSlidingWindow) Reset() {
-	w.isNil = true
-}
-
-type BooleanSlidingWindow struct {
-	isNil      bool
-	slidingNum int
-	points     []*BooleanPoint
-}
-
-func NewBooleanSlidingWindow(slidingNum int) *BooleanSlidingWindow {
-	sw := &BooleanSlidingWindow{
-		isNil:      true,
-		slidingNum: slidingNum,
-	}
-	for i := 0; i < slidingNum; i++ {
-		sw.points = append(sw.points, newBooleanPoint())
-	}
-	return sw
-}
-
-func (w *BooleanSlidingWindow) Len() int {
-	return w.slidingNum
-}
-
-func (w *BooleanSlidingWindow) IsNil() bool {
-	return w.isNil
-}
-
-func (w *BooleanSlidingWindow) SetPoint(value bool, isNil bool, index int) {
-	w.points[index].value = value
-	w.points[index].isNil = isNil
-	if index == w.slidingNum-1 {
-		w.isNil = false
-	}
-}
-
-func (w *BooleanSlidingWindow) Reset() {
-	w.isNil = true
-}
-
 type FloatColFloatWindowReduce func(c Chunk, ordinal, start, end int) (index int, value float64, isNil bool)
-
-type FloatPointMerge func(prevPoint, currPoint *FloatPoint)
-
-type FloatWindowMerge func(prevWindow, currWindow *FloatSlidingWindow, fpm FloatPointMerge)
 
 type FloatSlidingWindowFloatIterator struct {
 	slidingNum int
 	inOrdinal  int
 	outOrdinal int
-	prevWindow *FloatSlidingWindow
-	currWindow *FloatSlidingWindow
+	prevWindow *SlidingWindow[float64]
+	currWindow *SlidingWindow[float64]
 	fwr        FloatColFloatWindowReduce
-	fpm        FloatPointMerge
-	fwm        FloatWindowMerge
+	fpm        PointMerge[float64]
+	fwm        WindowMerge[float64]
 }
 
 func NewFloatSlidingWindowFloatIterator(
 	fwr FloatColFloatWindowReduce,
-	fpm FloatPointMerge,
-	fwm FloatWindowMerge,
+	fpm PointMerge[float64],
+	fwm WindowMerge[float64],
 	inOrdinal, outOrdinal int, slidingNum int,
 ) *FloatSlidingWindowFloatIterator {
 	r := &FloatSlidingWindowFloatIterator{
@@ -7572,8 +7325,8 @@ func NewFloatSlidingWindowFloatIterator(
 		slidingNum: slidingNum,
 		inOrdinal:  inOrdinal,
 		outOrdinal: outOrdinal,
-		prevWindow: NewFloatSlidingWindow(slidingNum),
-		currWindow: NewFloatSlidingWindow(slidingNum),
+		prevWindow: NewSlidingWindow[float64](slidingNum),
+		currWindow: NewSlidingWindow[float64](slidingNum),
 	}
 	return r
 }
@@ -7652,25 +7405,21 @@ func (r *FloatSlidingWindowFloatIterator) Next(ie *IteratorEndpoint, p *Iterator
 
 type BooleanColBooleanWindowReduce func(c Chunk, ordinal, start, end int) (index int, value bool, isNil bool)
 
-type BooleanPointMerge func(prevPoint, currPoint *BooleanPoint)
-
-type BooleanWindowMerge func(prevWindow, currWindow *BooleanSlidingWindow, fpm BooleanPointMerge)
-
 type BooleanSlidingWindowBooleanIterator struct {
 	slidingNum int
 	inOrdinal  int
 	outOrdinal int
-	prevWindow *BooleanSlidingWindow
-	currWindow *BooleanSlidingWindow
+	prevWindow *SlidingWindow[bool]
+	currWindow *SlidingWindow[bool]
 	fwr        BooleanColBooleanWindowReduce
-	fpm        BooleanPointMerge
-	fwm        BooleanWindowMerge
+	fpm        PointMerge[bool]
+	fwm        WindowMerge[bool]
 }
 
 func NewBooleanSlidingWindowBooleanIterator(
 	fwr BooleanColBooleanWindowReduce,
-	fpm BooleanPointMerge,
-	fwm BooleanWindowMerge,
+	fpm PointMerge[bool],
+	fwm WindowMerge[bool],
 	inOrdinal, outOrdinal int, slidingNum int,
 ) *BooleanSlidingWindowBooleanIterator {
 	r := &BooleanSlidingWindowBooleanIterator{
@@ -7680,8 +7429,8 @@ func NewBooleanSlidingWindowBooleanIterator(
 		slidingNum: slidingNum,
 		inOrdinal:  inOrdinal,
 		outOrdinal: outOrdinal,
-		prevWindow: NewBooleanSlidingWindow(slidingNum),
-		currWindow: NewBooleanSlidingWindow(slidingNum),
+		prevWindow: NewSlidingWindow[bool](slidingNum),
+		currWindow: NewSlidingWindow[bool](slidingNum),
 	}
 	return r
 }
@@ -7758,27 +7507,23 @@ func (r *BooleanSlidingWindowBooleanIterator) Next(ie *IteratorEndpoint, p *Iter
 	}
 }
 
-type IntegerPointMerge func(prevPoint, currPoint *IntegerPoint)
-
-type IntegerWindowMerge func(prevWindow, currWindow *IntegerSlidingWindow, fpm IntegerPointMerge)
-
 type IntegerColIntegerWindowReduce func(c Chunk, ordinal, start, end int) (index int, value int64, isNil bool)
 
 type IntegerSlidingWindowIntegerIterator struct {
 	slidingNum int
 	inOrdinal  int
 	outOrdinal int
-	prevWindow *IntegerSlidingWindow
-	currWindow *IntegerSlidingWindow
+	prevWindow *SlidingWindow[int64]
+	currWindow *SlidingWindow[int64]
 	fwr        IntegerColIntegerWindowReduce
-	fpm        IntegerPointMerge
-	fwm        IntegerWindowMerge
+	fpm        PointMerge[int64]
+	fwm        WindowMerge[int64]
 }
 
 func NewIntegerSlidingWindowIntegerIterator(
 	fwr IntegerColIntegerWindowReduce,
-	fpm IntegerPointMerge,
-	fwm IntegerWindowMerge,
+	fpm PointMerge[int64],
+	fwm WindowMerge[int64],
 	inOrdinal, outOrdinal int, slidingNum int,
 ) *IntegerSlidingWindowIntegerIterator {
 	r := &IntegerSlidingWindowIntegerIterator{
@@ -7788,8 +7533,8 @@ func NewIntegerSlidingWindowIntegerIterator(
 		slidingNum: slidingNum,
 		inOrdinal:  inOrdinal,
 		outOrdinal: outOrdinal,
-		prevWindow: NewIntegerSlidingWindow(slidingNum),
-		currWindow: NewIntegerSlidingWindow(slidingNum),
+		prevWindow: NewSlidingWindow[int64](slidingNum),
+		currWindow: NewSlidingWindow[int64](slidingNum),
 	}
 	return r
 }
@@ -7872,19 +7617,20 @@ type BooleanSlidingWindowIntegerIterator struct {
 	slidingNum int
 	inOrdinal  int
 	outOrdinal int
-	prevWindow *IntegerSlidingWindow
-	currWindow *IntegerSlidingWindow
+	prevWindow *SlidingWindow[int64]
+	currWindow *SlidingWindow[int64]
 	fwr        BooleanColIntegerWindowReduce
-	fpm        IntegerPointMerge
-	fwm        IntegerWindowMerge
+	fpm        PointMerge[int64]
+	fwm        WindowMerge[int64]
 }
 
 func NewBooleanSlidingWindowIntegerIterator(
 	fwr BooleanColIntegerWindowReduce,
-	fpm IntegerPointMerge,
-	fwm IntegerWindowMerge,
+	fpm PointMerge[int64],
+	fwm WindowMerge[int64],
 	inOrdinal, outOrdinal int, slidingNum int,
 ) *BooleanSlidingWindowIntegerIterator {
+
 	r := &BooleanSlidingWindowIntegerIterator{
 		fwr:        fwr,
 		fpm:        fpm,
@@ -7892,8 +7638,8 @@ func NewBooleanSlidingWindowIntegerIterator(
 		slidingNum: slidingNum,
 		inOrdinal:  inOrdinal,
 		outOrdinal: outOrdinal,
-		prevWindow: NewIntegerSlidingWindow(slidingNum),
-		currWindow: NewIntegerSlidingWindow(slidingNum),
+		prevWindow: NewSlidingWindow[int64](slidingNum),
+		currWindow: NewSlidingWindow[int64](slidingNum),
 	}
 	return r
 }
