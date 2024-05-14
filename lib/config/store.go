@@ -475,36 +475,30 @@ func NewClvConfig() *ClvConfig {
 const (
 	defaultMaxUnorderedFileSize   = 8 * GB
 	defaultMaxUnorderedFileNumber = 64
-	defaultMinUnorderedFileSize   = 1 * MB
-	defaultMinUnorderedFileNumber = 5
+	defaultMaxMergeSelfLevel      = 0
 	defaultMinInterval            = 300 * time.Second
-	defaultMaxMergeSelfFileSize   = 1 * GB
 )
 
 type Merge struct {
+	// merge only unordered data
+	MergeSelfOnly bool `toml:"merge-self-only"`
+
 	// The total size of unordered files to be merged each time cannot exceed MaxUnorderedFileSize
 	MaxUnorderedFileSize toml.Size `toml:"max-unordered-file-size"`
 	// The number of unordered files to be merged each time cannot exceed MaxUnorderedFileNumber
 	MaxUnorderedFileNumber int `toml:"max-unordered-file-number"`
-	// If the number of unordered files is less than MinUnorderedFileNumber
-	// and the total size of unordered files is less than MinUnorderedFileSize
-	// and the interval between the last merge and the current time is less than MinInterval
-	// skip the merge
-	MinUnorderedFileNumber int           `toml:"min-unordered-file-number"`
-	MinUnorderedFileSize   toml.Size     `toml:"min-unordered-file-size"`
-	MinInterval            toml.Duration `toml:"min-interval"`
 
-	// The unordered files are merged self when the total size is less than MaxMergeSelfFileSize
-	MaxMergeSelfFileSize toml.Size `toml:"max-merge-self-file-size"`
+	MaxMergeSelfLevel uint16 `toml:"max-merge-self-level"`
+
+	MinInterval toml.Duration `toml:"min-interval"`
 }
 
 func defaultMerge() Merge {
 	return Merge{
+		MergeSelfOnly:          false,
 		MaxUnorderedFileSize:   defaultMaxUnorderedFileSize,
 		MaxUnorderedFileNumber: defaultMaxUnorderedFileNumber,
-		MinUnorderedFileNumber: defaultMinUnorderedFileNumber,
-		MinUnorderedFileSize:   defaultMinUnorderedFileSize,
 		MinInterval:            toml.Duration(defaultMinInterval),
-		MaxMergeSelfFileSize:   defaultMaxMergeSelfFileSize,
+		MaxMergeSelfLevel:      defaultMaxMergeSelfLevel,
 	}
 }

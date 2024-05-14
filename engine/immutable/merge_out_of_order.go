@@ -19,68 +19,95 @@ package immutable
 import (
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/influxdata/influxdb/logger"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"go.uber.org/zap"
 )
 
 func (m *MmsTables) MergeOutOfOrder(shId uint64, full bool, force bool) error {
-	contexts := m.createMergeContext(maxCompactor, full)
+	if !m.MergeEnabled() {
+		return nil
+	}
 
-	for _, ctx := range contexts {
-		if ctx.mst == "" || len(ctx.unordered.seq) == 0 {
-			continue
-		}
-		if !m.inMerge.Add(ctx.mst) {
-			log.Info("merging in progress", zap.String("name", ctx.mst))
-			continue
-		}
-		ctx.shId = shId
+	measurements := m.getMstToMerge(maxCompactor, full, force)
 
+	for i := range measurements {
 		select {
 		case <-m.closed:
 			log.Warn("shard closed", zap.Uint64("id", shId))
-			return fmt.Errorf("store closed, shard id: %v", shId)
+			return nil
 		case <-m.stopCompMerge:
-			m.inMerge.Del(ctx.mst)
-			log.Info("stop merge", zap.Uint64("id", shId))
+			log.Warn("stopped", zap.Uint64("id", shId))
 			return nil
 		case compLimiter <- struct{}{}:
 			m.wg.Add(1)
-			if !m.MergeEnabled() {
-				m.inMerge.Del(ctx.mst)
-				m.wg.Done()
-				return nil
-			}
-
-			go m.mergeOutOfOrder(ctx, force)
+			go func(mst string) {
+				defer func() {
+					compLimiter.Release()
+					m.wg.Done()
+				}()
+				m.mergeOutOfOrder(mst, shId, full, force)
+			}(measurements[i])
 		}
 	}
 
 	return nil
 }
 
-func (m *MmsTables) mergeOutOfOrder(ctx *MergeContext, force bool) {
+func (m *MmsTables) mergeOutOfOrder(mst string, shId uint64, full bool, force bool) {
+	if !m.inMerge.Add(mst) {
+		return
+	}
+	defer func() {
+		m.inMerge.Del(mst)
+	}()
+
+	contexts := m.buildMergeContext(mst, full, force)
+	defer func() {
+		for _, item := range contexts {
+			item.Release()
+		}
+	}()
+
+	for _, item := range contexts {
+		m.lmt.Update(mst)
+		item.shId = shId
+
+		select {
+		case <-m.closed:
+			return
+		case <-m.stopCompMerge:
+			return
+		default:
+			m.execMergeContext(item)
+		}
+	}
+}
+
+func (m *MmsTables) execMergeContext(ctx *MergeContext) {
 	stat := statistics.NewMergeStatistics()
 	stat.AddActive(1)
 	cLog, logEnd := logger.NewOperation(log, "MergeOutOfOrder", ctx.mst)
+	tool := newMergeTool(m, cLog)
+
 	defer func() {
+		tool.Release()
+		if m.compactRecovery {
+			MergeRecovery(m.path, ctx.mst, ctx)
+		}
 		stat.AddActive(-1)
-		m.wg.Done()
-		compLimiter.Release()
-		m.inMerge.Del(ctx.mst)
 		logEnd()
-		ctx.Release()
 	}()
 
-	if m.compactRecovery {
-		defer MergeRecovery(m.path, ctx.mst, ctx)
+	tool.initStat(ctx.mst, ctx.shId)
+	if ctx.MergeSelf() {
+		tool.mergeSelf(ctx)
+	} else {
+		tool.merge(ctx)
 	}
-
-	tool := newMergeTool(m, cLog)
-	tool.merge(ctx, force)
-	tool.Release()
 }
 
 func (m *MmsTables) Listen(signal chan struct{}, onClose func()) {
@@ -143,34 +170,52 @@ func (m *MmsTables) getFilesByPath(mst string, path []string, order bool) (*TSSP
 	return files, nil
 }
 
-func (m *MmsTables) createMergeContext(limit int, full bool) []*MergeContext {
-	ret := make([]*MergeContext, 0, limit)
+func (m *MmsTables) getMstToMerge(limit int, full bool, force bool) []string {
+	conf := &config.GetStoreConfig().Merge
+	ret := make([]string, 0, limit)
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	for k, v := range m.OutOfOrder {
-		if v.Len() == 0 || v.closing > 0 {
-			continue
-		}
-
-		var ctx *MergeContext
-		if full {
-			ctx = BuildFullMergeContext(k, v)
-		} else {
-			ctx = BuildMergeContext(k, v)
-		}
-		if ctx == nil {
-			continue
-		}
-
-		ret = append(ret, ctx)
-		limit--
-		if limit <= 0 {
+	for mst, files := range m.OutOfOrder {
+		if len(ret) >= limit {
 			break
+		}
+
+		files.RLock()
+		num := files.Len()
+		files.RUnlock()
+
+		if num == 0 || files.closing > 0 || m.inMerge.Has(mst) {
+			continue
+		}
+
+		if full || force {
+			ret = append(ret, mst)
+			continue
+		}
+
+		if num >= DefaultLevelMergeFileNum || !m.lmt.Nearly(mst, time.Duration(conf.MinInterval)) {
+			ret = append(ret, mst)
 		}
 	}
 
 	return ret
+}
+
+func (m *MmsTables) buildMergeContext(mst string, full bool, force bool) []*MergeContext {
+	m.mu.RLock()
+	files, ok := m.OutOfOrder[mst]
+	m.mu.RUnlock()
+
+	if !ok || files == nil {
+		return nil
+	}
+
+	if force {
+		return []*MergeContext{buildNormalMergeContext(mst, files)}
+	}
+
+	return BuildMergeContext(mst, files, full, m.lmt)
 }
 
 func (m *MmsTables) GetOutOfOrderFileNum() int {

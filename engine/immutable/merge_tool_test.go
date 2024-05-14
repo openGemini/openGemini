@@ -52,7 +52,13 @@ func recoverConfig(segLimit int) func() {
 		immutable.SetMaxRowsPerSegment4TsStore(segLimit)
 	}
 
+	conf := config.GetStoreConfig()
+	conf.Merge.MaxUnorderedFileNumber = 100
+
 	return func() {
+		conf.Merge.MergeSelfOnly = false
+		conf.UnorderedOnly = false
+		conf.Merge.MaxUnorderedFileNumber = 8
 		immutable.SetMaxRowsPerSegment4TsStore(origSegLimit)
 	}
 }
@@ -627,74 +633,40 @@ func TestMergeTool_MergeUnorderedSelf(t *testing.T) {
 	var begin int64 = 1e12
 	defer beforeTest(t, 0)()
 
-	schemas := getDefaultSchemas()
-
-	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
-	defer mh.store.Close()
-	rg := newRecordGenerator(begin, defaultInterval, true)
-
-	schemas = append(schemas, record.Field{Type: influx.Field_Type_String, Name: "string2"})
-	schemas = append(schemas, record.Field{Type: influx.Field_Type_String, Name: "string3"})
-	schemas = append(schemas, record.Field{Type: influx.Field_Type_Float, Name: "float2"})
-	schemas = append(schemas, record.Field{Type: influx.Field_Type_Float, Name: "float3"})
-	for i := 0; i < 20; i++ {
-		mh.addRecord(uint64(100+i), rg.generate(schemas, 10000))
-	}
-	require.NoError(t, mh.saveToOrder())
-
-	for i := 0; i < 10; i++ {
-		schemas = getDefaultSchemas()
-		mh.addRecord(100, rg.incrBegin(1).generate(schemas, 10))
-		schemas = append(schemas, record.Field{Type: influx.Field_Type_Float, Name: "float2"})
-		schemas = append(schemas, record.Field{Type: influx.Field_Type_String, Name: "string2"})
-		mh.addRecord(uint64(100+i+1), rg.incrBegin(1).generate(schemas, 10))
-
-		mh.addRecord(200, rg.incrBegin(1).generate(getDefaultSchemas(), 10))
-		require.NoError(t, mh.saveToUnordered())
-	}
-	require.NoError(t, mh.mergeAndCompact(false))
-
-	files, ok := mh.store.OutOfOrder["mst"]
-	require.True(t, ok)
-	require.Equal(t, 1, files.Len())
-
-	name := files.Files()[0].FileName()
-	require.Equal(t, "00000002-0000-00010000", name.String())
-}
-
-func TestMergeTool_MergeUnorderedSelf_full(t *testing.T) {
-	var begin int64 = 1e12
-	defer beforeTest(t, 0)()
-
-	conf := &config.GetStoreConfig().Merge
-	conf.MaxUnorderedFileNumber = 5
-	conf.MaxUnorderedFileSize = 100 * config.KB
-	defer func() {
-		conf.MaxUnorderedFileSize = 8 * config.GB
-		conf.MaxUnorderedFileNumber = 64
-	}()
+	conf := config.GetStoreConfig()
+	conf.Merge.MergeSelfOnly = true
 
 	schemas := getDefaultSchemas()
 
 	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
 	defer mh.store.Close()
 	rg := newRecordGenerator(begin, defaultInterval, true)
+
 	mh.addRecord(uint64(100), rg.generate(schemas, 10))
 	require.NoError(t, mh.saveToOrder())
 
-	mh.addRecord(100, rg.incrBegin(1).generate(schemas, 20000))
-	require.NoError(t, mh.saveToUnordered())
-
-	for i := 0; i < 10; i++ {
-		mh.addRecord(100, rg.incrBegin(1).generate(schemas, 10))
+	for i := 0; i < 66; i++ {
+		schemas = getDefaultSchemas()
+		mh.addRecord(uint64(100+i%2), rg.incrBegin(1).generate(schemas, 10))
 		require.NoError(t, mh.saveToUnordered())
 	}
-	require.NoError(t, mh.store.MergeOutOfOrder(1, true, true))
-	mh.store.Wait()
 
-	files, ok := mh.store.OutOfOrder["mst"]
-	require.True(t, ok)
-	require.Equal(t, 5, files.Len())
+	var assertFileNumber = func(exp int) {
+		files, ok := mh.store.OutOfOrder["mst"]
+		require.True(t, ok)
+		require.Equal(t, exp, files.Len())
+	}
+
+	require.NoError(t, mh.mergeAndCompact(false))
+	assertFileNumber(10)
+
+	conf.Merge.MergeSelfOnly = false
+	conf.UnorderedOnly = true
+	require.NoError(t, mh.mergeAndCompact(false))
+	assertFileNumber(3)
+
+	require.NoError(t, mh.mergeAndCompact(false))
+	assertFileNumber(3)
 }
 
 func TestMergeTool_MergeAndCompact(t *testing.T) {
@@ -889,6 +861,11 @@ func TestMergeStopFiles(t *testing.T) {
 
 	mh.addRecord(100, rg.generate(schemas, 100))
 	require.NoError(t, mh.saveToUnordered())
+
+	mh.store.DisableCompAndMerge()
+	require.NoError(t, mh.store.MergeOutOfOrder(1, false, true))
+	mh.store.Wait()
+	mh.store.EnableCompAndMerge()
 
 	orderFiles := immutable.NewTSSPFiles()
 	orderFiles.Append(mh.store.Order["mst"].Files()[0])

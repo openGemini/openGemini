@@ -240,6 +240,21 @@ func (f *TSSPFiles) RUnlock() {
 	f.lock.RUnlock()
 }
 
+func (f *TSSPFiles) MaxMerged() uint16 {
+	if f.Len() == 0 {
+		return 0
+	}
+
+	maxMerged := uint16(0)
+	for _, file := range f.files {
+		merge := file.FileNameMerge()
+		if merge > maxMerged {
+			maxMerged = merge
+		}
+	}
+	return maxMerged
+}
+
 type tsspFile struct {
 	mu sync.RWMutex
 	wg sync.WaitGroup

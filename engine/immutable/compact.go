@@ -130,11 +130,6 @@ func (m *MmsTables) LevelCompact(level uint16, shid uint64) error {
 			return nil
 		case compLimiter <- struct{}{}:
 			m.wg.Add(1)
-			if !m.CompactionEnabled() {
-				m.wg.Done()
-				m.blockCompactStop(plan.name)
-				return nil
-			}
 			go func(group *CompactGroup) {
 				orderWg, inorderWg := m.ImmTable.refMmsTable(m, group.name, false)
 				if m.compactRecovery {
@@ -149,6 +144,10 @@ func (m *MmsTables) LevelCompact(level uint16, shid uint64) error {
 					m.blockCompactStop(group.name)
 					group.release()
 				}()
+
+				if !m.CompactionEnabled() {
+					return
+				}
 
 				fi, err := m.ImmTable.NewFileIterators(m, group)
 				if err != nil {
@@ -462,10 +461,6 @@ func (m *MmsTables) executeFullCompact(shid uint64, plans []*CompactGroup) error
 			return nil
 		case compLimiter <- struct{}{}:
 			m.wg.Add(1)
-			if !m.CompactionEnabled() {
-				m.wg.Done()
-				return nil
-			}
 			atomic.AddInt64(&fullCompactingCount, 1)
 			go func(group *CompactGroup) {
 				orderWg, inorderWg := m.ImmTable.refMmsTable(m, group.name, false)
@@ -480,6 +475,10 @@ func (m *MmsTables) executeFullCompact(shid uint64, plans []*CompactGroup) error
 					atomic.AddInt64(&fullCompactingCount, -1)
 					m.CompactDone(group.group)
 				}()
+
+				if !m.CompactionEnabled() {
+					return
+				}
 
 				fi, err := m.ImmTable.NewFileIterators(m, group)
 				if err != nil {
