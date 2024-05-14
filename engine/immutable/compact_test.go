@@ -3739,7 +3739,7 @@ func TestMergeRecovery(t *testing.T) {
 
 	store.CompactionEnable()
 
-	ctx := NewMergeContext("mst")
+	ctx := NewMergeContext("mst", 0)
 	ctx.order.seq = append(ctx.order.seq, 1)
 	defer MergeRecovery(testCompDir, "test_name", ctx)
 
