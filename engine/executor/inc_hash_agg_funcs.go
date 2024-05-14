@@ -110,6 +110,35 @@ func UpdateHashFloatMinFast(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, sr
 	dstColumn.UpdateFloatValueFast(minV, dstRow)
 }
 
+func UpdateHashBooleanMinSlow(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, srcRow int) {
+	srcColumn, dstColumn := srcChunk.Column(srcCol), dstChunk.Column(dstCol)
+	isNil := srcColumn.IsNilV2(srcRow)
+	if isNil {
+		return
+	}
+	srcRow = srcColumn.GetValueIndexV2(srcRow)
+	sv := srcColumn.BooleanValue(srcRow)
+	dv := dstColumn.BooleanValue(dstRow)
+	if !dv {
+		return
+	}
+	if !sv {
+		dstColumn.UpdateBooleanValueFast(sv, dstRow)
+	}
+}
+
+func UpdateHashBooleanMinFast(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, srcRow int) {
+	dstColumn := dstChunk.Column(dstCol)
+	sv := srcChunk.Column(srcCol).BooleanValue(srcRow)
+	dv := dstColumn.BooleanValue(dstRow)
+	if !dv {
+		return
+	}
+	if !sv {
+		dstColumn.UpdateBooleanValueFast(sv, dstRow)
+	}
+}
+
 func rewriteInterMinColumnFunc(chunk Chunk, srcCol, lastNum int) {
 	column := chunk.Column(srcCol)
 	lastIndex := len(column.IntegerValues()) - 1
@@ -131,6 +160,18 @@ func rewriteFloatMinColumnFunc(chunk Chunk, srcCol, lastNum int) {
 	}
 	for i := lastIndex; i >= firstIndex; i-- {
 		column.UpdateFloatValueFast(math.MaxFloat64, i)
+	}
+}
+
+func rewriteBooleanMinColumnFunc(chunk Chunk, srcCol, lastNum int) {
+	column := chunk.Column(srcCol)
+	lastIndex := len(column.BooleanValues()) - 1
+	firstIndex := lastIndex - lastNum + 1
+	if firstIndex < 0 {
+		return
+	}
+	for i := lastIndex; i >= firstIndex; i-- {
+		column.UpdateBooleanValueFast(true, i)
 	}
 }
 
@@ -188,6 +229,35 @@ func UpdateHashFloatMaxFast(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, sr
 	dstColumn.UpdateFloatValueFast(maxV, dstRow)
 }
 
+func UpdateHashBooleanMaxSlow(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, srcRow int) {
+	srcColumn, dstColumn := srcChunk.Column(srcCol), dstChunk.Column(dstCol)
+	isNil := srcColumn.IsNilV2(srcRow)
+	if isNil {
+		return
+	}
+	srcRow = srcColumn.GetValueIndexV2(srcRow)
+	sv := srcColumn.BooleanValue(srcRow)
+	dv := dstColumn.BooleanValue(dstRow)
+	if dv {
+		return
+	}
+	if sv {
+		dstColumn.UpdateBooleanValueFast(sv, dstRow)
+	}
+}
+
+func UpdateHashBooleanMaxFast(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, srcRow int) {
+	dstColumn := dstChunk.Column(dstCol)
+	sv := srcChunk.Column(srcCol).BooleanValue(srcRow)
+	dv := dstColumn.BooleanValue(dstRow)
+	if dv {
+		return
+	}
+	if sv {
+		dstColumn.UpdateBooleanValueFast(sv, dstRow)
+	}
+}
+
 func rewriteInterMaxColumnFunc(chunk Chunk, srcCol, lastNum int) {
 	column := chunk.Column(srcCol)
 	lastIndex := len(column.IntegerValues()) - 1
@@ -209,5 +279,17 @@ func rewriteFloatMaxColumnFunc(chunk Chunk, srcCol, lastNum int) {
 	}
 	for i := lastIndex; i >= firstIndex; i-- {
 		column.UpdateFloatValueFast(-math.MaxFloat64, i)
+	}
+}
+
+func rewriteBooleanMaxColumnFunc(chunk Chunk, srcCol, lastNum int) {
+	column := chunk.Column(srcCol)
+	lastIndex := len(column.BooleanValues()) - 1
+	firstIndex := lastIndex - lastNum + 1
+	if firstIndex < 0 {
+		return
+	}
+	for i := lastIndex; i >= firstIndex; i-- {
+		column.UpdateBooleanValueFast(false, i)
 	}
 }

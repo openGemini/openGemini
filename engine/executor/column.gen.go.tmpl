@@ -69,7 +69,7 @@ type Column interface {
 		Append{{.Name}}Value({{.Type}})
 		Append{{.Name}}Values([]{{.Type}})
 		Set{{.Name}}Values([]{{.Type}})
-        {{- if or (eq .Name "Float") (eq .Name "Integer")}}
+        {{- if or (eq .Name "Float") (eq .Name "Integer") (eq .Name "Boolean")}}
         Update{{.Name}}ValueFast(v {{.Type}}, row int)
         {{- end}}
     {{- else }}
@@ -289,7 +289,8 @@ func (c *ColumnImpl) Set{{.Name}}Values(values []{{.Type}}) {
 	c.{{.name}}Values = values
 }
 
-{{- if or (eq .Name "Float") (eq .Name "Integer")}}
+{{- if or (eq .Name "Float") (eq .Name "Integer") (eq .Name "Boolean")}}
+
 func (c *ColumnImpl) Update{{.Name}}ValueFast(v {{.Type}}, row int) {
 	c.{{.name}}Values[row] = v
 }
