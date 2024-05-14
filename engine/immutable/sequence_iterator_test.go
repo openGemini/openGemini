@@ -88,6 +88,9 @@ func TestSequenceIterator_Run(t *testing.T) {
 		ReadChunkMetasFn: func(f TSSPFile, idx int) ([]byte, []uint32, error) { return make([]byte, 10), make([]uint32, 10), nil },
 	}
 
+	errSearchSeriesKey := errno.NewError(errno.ErrSearchSeriesKey)
+	mockErr := errors.New("mock error")
+
 	for _, testcase := range []struct {
 		Name    string
 		Handler SequenceIteratorHandler
@@ -115,14 +118,38 @@ func TestSequenceIterator_Run(t *testing.T) {
 			},
 			Err: io.EOF,
 		},
+		{
+			Name: "ErrSearchSeriesKey",
+			Handler: &MockSequenceIteratorHandler{
+				BeginFn:         func() {},
+				FinishFn:        func() {},
+				NextFileFn:      func(file TSSPFile) {},
+				NextChunkMetaFn: func(bytes []byte) error { return errSearchSeriesKey },
+				LimitedFn:       func() bool { return false },
+			},
+			Err: nil,
+		},
+		{
+			Name: "Unknown Error",
+			Handler: &MockSequenceIteratorHandler{
+				BeginFn:         func() {},
+				FinishFn:        func() {},
+				NextFileFn:      func(file TSSPFile) {},
+				NextChunkMetaFn: func(bytes []byte) error { return mockErr },
+				LimitedFn:       func() bool { return false },
+			},
+			Err: mockErr,
+		},
 	} {
-		iterator := NewSequenceIterator(testcase.Handler, logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop()))
-		iterator.SetChunkMetasReader(metaReader)
-		iterator.AddFiles(tsspFiles)
-		err := iterator.Run()
-		if !errors.Is(err, testcase.Err) {
-			t.Fatalf("SequenceIterator.Run failed, actual %v, expected: %v", err, testcase.Err)
-		}
+		t.Run(testcase.Name, func(t *testing.T) {
+			iterator := NewSequenceIterator(testcase.Handler, logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop()))
+			iterator.SetChunkMetasReader(metaReader)
+			iterator.AddFiles(tsspFiles)
+			err := iterator.Run()
+			if !errors.Is(err, testcase.Err) {
+				t.Fatalf("SequenceIterator.Run failed, actual %v, expected: %v", err, testcase.Err)
+			}
+		})
 	}
 
 }
