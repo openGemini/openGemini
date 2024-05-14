@@ -579,8 +579,12 @@ func (opt *ProcessorOptions) GetOptDimension() []string {
 	return opt.Dimensions
 }
 
-func (opt *ProcessorOptions) CanTimeLimitPushDown() bool {
+func (opt *ProcessorOptions) CanLimitPushDown() bool {
 	return opt.Limit > 0 && len(opt.SortFields) > 0
+}
+
+func (opt *ProcessorOptions) CanTimeLimitPushDown() bool {
+	return opt.CanLimitPushDown() && opt.SortFields[0].Name == "time"
 }
 
 // Zone returns the zone information for the given time. The offset is in nanoseconds.

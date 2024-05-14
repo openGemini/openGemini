@@ -419,3 +419,52 @@ func TestSeqFilterReader(t *testing.T) {
 
 	config.SetProductType("basic")
 }
+
+func TestSeqFilterReaderWhenUpdataBy(t *testing.T) {
+	testCompDir := t.TempDir()
+	config.SetProductType("logkeeper")
+	_ = fileops.RemoveAll(testCompDir)
+	sig := interruptsignal.NewInterruptSignal()
+	defer func() {
+		sig.Close()
+		_ = fileops.RemoveAll(testCompDir)
+	}()
+	mstName := "mst"
+	err := writeData(testCompDir, mstName)
+	if err != nil {
+		t.Errorf(err.Error())
+	}
+
+	p := path.Join(testCompDir, mstName)
+	reader, _ := NewDetachedMetaIndexReader(p, nil)
+
+	metaIndex, _ := reader.ReadMetaIndex([]int64{16, 56}, []int64{40, 40})
+	option := query2.ProcessorOptions{
+		QueryId: 1,
+		Query:   "select * from mst",
+	}
+	option.LogQueryCurrId = "1635724829000000000|9^^"
+	option.Limit = 10
+	schema3 := []record.Field{
+		{Name: record.SeqIDField, Type: influx.Field_Type_Int},
+		{Name: "field2_int", Type: influx.Field_Type_Int},
+		{Name: "time", Type: influx.Field_Type_Int},
+	}
+	decs := NewFileReaderContext(util.TimeRange{Min: 1635724829000000000, Max: 1645724819000000000}, schema3, NewReadContext(true), NewFilterOpts(nil, nil, nil, nil), nil, false)
+	treader, _ := NewTSSPFileDetachedReader(metaIndex[:1], [][]int{[]int{0, 2}}, decs, sparseindex.NewOBSFilterPath("", p, nil), nil, true, &option)
+	totalRow := 0
+	treader.UpdateTime(1635724839000000000)
+	for {
+		data, _, _ := treader.Next()
+		if data == nil {
+			break
+		}
+		assert.Equal(t, data.RowNums(), data.ColVals[0].Len)
+		totalRow += data.RowNums()
+	}
+	if totalRow != 0 {
+		t.Errorf("tssp_file_detached update time wrong")
+	}
+
+	config.SetProductType("basic")
+}

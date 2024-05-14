@@ -253,3 +253,6 @@ func (t *MockCursor) SetOps(ops []*comm.CallOption) {
 func (t *MockCursor) NextAggData() (*record.Record, *comm.FileInfo, error) {
 	return nil, nil, nil
 }
+
+func (t *MockCursor) UpdateTime(time int64) {
+}

@@ -29,11 +29,11 @@ type SortLimitCursor struct {
 	isRead   bool
 	options  hybridqp.Options
 	schemas  record.Schemas
-	input    comm.KeyCursor
+	input    comm.TimeCutKeyCursor
 	sortHeap *SortLimitRows
 }
 
-func NewSortLimitCursor(options hybridqp.Options, schemas record.Schemas, input comm.KeyCursor) *SortLimitCursor {
+func NewSortLimitCursor(options hybridqp.Options, schemas record.Schemas, input comm.TimeCutKeyCursor) *SortLimitCursor {
 	sortIndex := make([]int, len(options.GetSortFields()))
 	for fk, field := range options.GetSortFields() {
 		for sk, v := range schemas {
@@ -115,6 +115,10 @@ func (t *SortLimitCursor) Next() (*record.Record, comm.SeriesInfoIntf, error) {
 				heap.Pop(t.sortHeap)
 				heap.Push(t.sortHeap, data)
 			}
+		}
+
+		if t.options.CanTimeLimitPushDown() && t.sortHeap.Len() >= t.options.GetLimit() {
+			t.input.UpdateTime(t.sortHeap.rows[0][len(t.schemas)-1].(int64))
 		}
 	}
 	t.isRead = true
