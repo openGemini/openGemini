@@ -1345,7 +1345,7 @@ func TestServer_PromQuery_Operators5(t *testing.T) {
 			name:    "instant query time() 50m",
 			params:  url.Values{"db": []string{"db0"}, "time": []string{"1970-01-01T00:50:00Z"}},
 			command: `time()`,
-			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[3000,"3000"]}]}}`,
+			exp:     `{"status":"success","data":{"resultType":"scalar","result":[{"metric":{},"value":[3000,"3000"]}]}}`,
 			path:    "/api/v1/query",
 		},
 		&Query{
