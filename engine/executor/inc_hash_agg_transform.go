@@ -522,6 +522,10 @@ func (trans *IncHashAggTransform) buildIncMinAggFuncs(i int) {
 		trans.rewriteColumnFunc[srcCol] = rewriteFloatMinColumnFunc
 		trans.incAggFuncs[srcCol][SlowFuncIdx] = UpdateHashFloatMinSlow
 		trans.incAggFuncs[srcCol][FastFuncIdx] = UpdateHashFloatMinFast
+	case influxql.Boolean:
+		trans.rewriteColumnFunc[srcCol] = rewriteBooleanMinColumnFunc
+		trans.incAggFuncs[srcCol][SlowFuncIdx] = UpdateHashBooleanMinSlow
+		trans.incAggFuncs[srcCol][FastFuncIdx] = UpdateHashBooleanMinFast
 	default:
 		panic(fmt.Sprintf("unsupport data type %s for min", srcType))
 	}
@@ -544,6 +548,10 @@ func (trans *IncHashAggTransform) buildIncMaxAggFuncs(i int) {
 		trans.rewriteColumnFunc[srcCol] = rewriteFloatMaxColumnFunc
 		trans.incAggFuncs[srcCol][SlowFuncIdx] = UpdateHashFloatMaxSlow
 		trans.incAggFuncs[srcCol][FastFuncIdx] = UpdateHashFloatMaxFast
+	case influxql.Boolean:
+		trans.rewriteColumnFunc[srcCol] = rewriteBooleanMaxColumnFunc
+		trans.incAggFuncs[srcCol][SlowFuncIdx] = UpdateHashBooleanMaxSlow
+		trans.incAggFuncs[srcCol][FastFuncIdx] = UpdateHashBooleanMaxFast
 	default:
 		panic(fmt.Sprintf("unsupport data type %s for max", srcType))
 	}
