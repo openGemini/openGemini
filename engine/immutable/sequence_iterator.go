@@ -148,14 +148,12 @@ func (itr *sequenceIterator) iterateFile(f TSSPFile) error {
 		offsets = append(offsets, uint32(len(buf)))
 		for k := 0; k < len(offsets)-1; k++ {
 			err = itr.handler.NextChunkMeta(buf[offsets[k]:offsets[k+1]])
-			if err != nil {
-				return err
-			}
-
-			// sid not found in index, skip
-			if errno.Equal(err, errno.ErrSearchSeriesKey) {
+			if err != nil && errno.Equal(err, errno.ErrSearchSeriesKey) {
+				// sid not found in index, skip
 				itr.logger.Warn("sequenceIterator.iterateFile NextChunkMeta search sid failed", zap.Error(err))
 				continue
+			} else if err != nil {
+				return err
 			}
 
 			// reach the limit
