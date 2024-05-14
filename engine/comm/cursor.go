@@ -42,6 +42,11 @@ type KeyCursor interface {
 	NextAggData() (*record.Record, *FileInfo, error)
 }
 
+type TimeCutKeyCursor interface {
+	KeyCursor
+	UpdateTime(time int64)
+}
+
 type FileInfo struct {
 	MinTime    int64
 	MaxTime    int64
