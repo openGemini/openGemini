@@ -1487,6 +1487,10 @@ func Mmap(fd int, offset int64, length int) (data []byte, err error) {
 	return
 }
 
+func MmapRW(fd int, offset int64, length int) (data []byte, err error) {
+	return
+}
+
 func MUnmap(data []byte) error {
 	return nil
 }
