@@ -18,9 +18,7 @@ package immutable
 
 import (
 	"container/heap"
-	"time"
 
-	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
@@ -46,51 +44,23 @@ func newMergeTool(mts *MmsTables, lg *zap.Logger) *mergeTool {
 	}
 }
 
-func (mt *mergeTool) skip(ctx *MergeContext) bool {
-	conf := &config.GetStoreConfig().Merge
-	ok := len(ctx.unordered.seq) < conf.MinUnorderedFileNumber &&
-		ctx.unordered.size < int64(conf.MinUnorderedFileSize) &&
-		mt.lmt.Nearly(ctx.mst, time.Duration(conf.MinInterval))
-
-	if ok {
-		statistics.NewMergeStatistics().AddSkipTotal(1)
-		mt.zlg.Debug("new and small unordered files, merge later")
-	} else {
-		mt.lmt.Update(ctx.mst)
-	}
-
-	return ok
+func (mt *mergeTool) initStat(mst string, shID uint64) {
+	mt.stat = statistics.NewMergeStatItem(mst, shID)
 }
 
-func (mt *mergeTool) mergePrepare(ctx *MergeContext, force bool) bool {
-	mt.zlg.Info("merge info",
-		zap.String("path", mt.mts.path+"/"+ctx.mst),
-		zap.Uint64("shard id", ctx.shId),
-		zap.Int("unordered file count", len(ctx.unordered.seq)),
-		zap.Uint64s("unordered sequences", ctx.unordered.seq),
-		zap.Int64("unordered size", ctx.unordered.size))
-
-	mt.stat = statistics.NewMergeStatItem(ctx.mst, ctx.shId)
-	if !force && mt.skip(ctx) {
-		return false
-	}
-
-	conf := &config.GetStoreConfig().Merge
-	if !force && ctx.unordered.Len() > 1 &&
-		ctx.unordered.Len() >= conf.MinUnorderedFileNumber &&
-		ctx.unordered.size < int64(conf.MaxMergeSelfFileSize) {
-
-		mt.mergeSelf(ctx)
-		return false
-	}
-
+func (mt *mergeTool) mergePrepare(ctx *MergeContext) bool {
 	mt.mts.matchOrderFiles(ctx)
 	if ctx.order.Len() == 0 {
 		mt.zlg.Warn("no order file is matched")
 		return false
 	}
 
-	mt.zlg.Info("order file info",
+	mt.zlg.Info("merge info",
+		zap.String("path", mt.mts.path+"/"+ctx.mst),
+		zap.Uint64("shard id", ctx.shId),
+		zap.Int("unordered file count", len(ctx.unordered.seq)),
+		zap.Uint64s("unordered sequences", ctx.unordered.seq),
+		zap.Int64("unordered size", ctx.unordered.size),
 		zap.Int("order file count", len(ctx.order.seq)),
 		zap.Uint64s("order sequences", ctx.order.seq),
 		zap.Int64("order file size", ctx.order.size))
@@ -103,8 +73,8 @@ func (mt *mergeTool) mergePrepare(ctx *MergeContext, force bool) bool {
 	return true
 }
 
-func (mt *mergeTool) merge(ctx *MergeContext, force bool) {
-	if !mt.mergePrepare(ctx, force) {
+func (mt *mergeTool) merge(ctx *MergeContext) {
+	if !mt.mergePrepare(ctx) {
 		return
 	}
 
@@ -227,7 +197,7 @@ func (mt *mergeTool) Release() {
 	mt.zlg = nil
 }
 
-func (mt *mergeTool) mergeSelf(ctx *MergeContext) bool {
+func (mt *mergeTool) mergeSelf(ctx *MergeContext) {
 	orderWg, inorderWg := mt.mts.refMmsTable(ctx.mst, true)
 	success := false
 
@@ -241,7 +211,7 @@ func (mt *mergeTool) mergeSelf(ctx *MergeContext) bool {
 	files, err := mt.mts.getFilesByPath(ctx.mst, ctx.unordered.path, false)
 	if err != nil {
 		mt.zlg.Error("failed to get files", zap.Error(err))
-		return true
+		return
 	}
 
 	statistics.NewMergeStatistics().AddMergeSelfTotal(1)
@@ -270,8 +240,6 @@ func (mt *mergeTool) mergeSelf(ctx *MergeContext) bool {
 		mt.stat.Push()
 		success = true
 	}()
-
-	return true
 }
 
 func CleanTempFile(f fileops.File) {
