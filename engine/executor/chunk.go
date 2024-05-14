@@ -381,6 +381,8 @@ func (c *ChunkImpl) AppendIntervalFullRows(start, step int64, num int, tag Chunk
 			c.Column(i).AppendIntegerValues(make([]int64, num))
 		case influxql.Float:
 			c.Column(i).AppendFloatValues(make([]float64, num))
+		case influxql.Boolean:
+			c.Column(i).AppendBooleanValues(make([]bool, num))
 		default:
 			panic("unsupported the data type for AppendIntervalFullRows")
 		}
