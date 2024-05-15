@@ -30,6 +30,7 @@ import (
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/tracing"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
@@ -3139,5 +3140,45 @@ func TestGetCtx(t *testing.T) {
 	ctx, err = engine.GetCtx(schema)
 	if err == nil {
 		t.Fatal("get wrong ctx")
+	}
+}
+
+func TestGetIntersectTimeRange(t *testing.T) {
+	type args struct {
+		queryStartTime int64
+		queryEndTime   int64
+		shardStartTime int64
+		shardEndTime   int64
+	}
+	tests := []struct {
+		name string
+		args args
+		want util.TimeRange
+	}{
+		{
+			name: "full contain",
+			args: args{queryStartTime: 1, queryEndTime: 5, shardStartTime: 2, shardEndTime: 3},
+			want: util.TimeRange{Min: 2, Max: 3},
+		},
+		{
+			name: "left contain",
+			args: args{queryStartTime: 1, queryEndTime: 5, shardStartTime: 2, shardEndTime: 6},
+			want: util.TimeRange{Min: 2, Max: 5},
+		},
+		{
+			name: "right contain",
+			args: args{queryStartTime: 2, queryEndTime: 5, shardStartTime: 1, shardEndTime: 3},
+			want: util.TimeRange{Min: 2, Max: 3},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(
+				t,
+				tt.want,
+				engine.GetIntersectTimeRange(tt.args.queryStartTime, tt.args.queryEndTime, tt.args.shardStartTime, tt.args.shardEndTime),
+				"GetIntersectTimeRange(%v, %v, %v, %v)", tt.args.queryStartTime, tt.args.queryEndTime, tt.args.shardStartTime, tt.args.shardEndTime,
+			)
+		})
 	}
 }
