@@ -1,12 +1,14 @@
 package promql2influxql
 
 import (
+	"strings"
+
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/prometheus/prometheus/promql/parser"
 )
 
-var aggregateOverTimeFns = map[string]aggregateFn{
+var rangeVectorFunctions = map[string]aggregateFn{
 	"sum_over_time": {
 		name:         "sum_over_time",
 		functionType: AGGREGATE_FN,
@@ -56,6 +58,9 @@ var aggregateOverTimeFns = map[string]aggregateFn{
 		name:         "increase",
 		functionType: TRANSFORM_FN,
 	},
+}
+
+var instantVectorFunctions = map[string]aggregateFn{
 	"histogram_quantile": {
 		name:           "histogram_quantile",
 		functionType:   AGGREGATE_FN,
@@ -187,6 +192,13 @@ var vectorTimeFunctions = map[string]aggregateFn{
 	},
 }
 
+func getOriCallName(call string) string {
+	if strings.HasSuffix(call, PromSuffix) {
+		return call[:len(call)-len(PromSuffix)]
+	}
+	return call
+}
+
 type SetFieldsFunc func(selectStatement *influxql.SelectStatement, field *influxql.Field, parameter []influxql.Expr, aggFn aggregateFn)
 
 func (t *Transpiler) transpileVectorTimeFunc(aggFn aggregateFn, inArgs []influxql.Node) (influxql.Node, error) {
@@ -296,7 +308,12 @@ func (t *Transpiler) transpileCall(a *parser.Call) (influxql.Node, error) {
 	}
 
 	// {count,avg,sum,min,max,...}_over_time()
-	if fn, ok := aggregateOverTimeFns[a.Func.Name]; ok {
+	if fn, ok := rangeVectorFunctions[a.Func.Name]; ok {
+		t.dropMetric = true
+		return t.transpilePromFunc(fn, args, t.setAggregateFields)
+	}
+
+	if fn, ok := instantVectorFunctions[a.Func.Name]; ok {
 		t.dropMetric = true
 		return t.transpilePromFunc(fn, args, t.setAggregateFields)
 	}

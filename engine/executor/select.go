@@ -447,7 +447,7 @@ func buildAggNode(builder *LogicalPlanBuilderImpl, schema hybridqp.Catalog, hasS
 		(schema.CanAggPushDown() && sysconfig.GetEnableSlidingWindowPushUp() == sysconfig.OnSlidingWindowPushUp) || schema.HasSubQuery()) {
 		builder.SlidingWindow()
 	} else {
-		if !schema.Options().IsRangeVectorSelector() {
+		if !schema.Options().IsRangeVectorSelector() || schema.HasPromNestedCall() {
 			builder.Aggregate()
 		}
 	}

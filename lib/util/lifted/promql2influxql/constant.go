@@ -1,6 +1,8 @@
 package promql2influxql
 
-import "time"
+import (
+	"time"
+)
 
 type FunctionType int
 
@@ -20,6 +22,7 @@ const (
 	DefaultRetentionPolicyName string = "autogen"
 	TimeField                  string = "time"
 	LastCall                   string = "last"
+	PromSuffix                 string = "_prom"
 )
 
 const DefaultLookBackDelta = 5 * time.Minute

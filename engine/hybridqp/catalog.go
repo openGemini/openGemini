@@ -208,7 +208,9 @@ type Catalog interface {
 	HasInterval() bool
 	HasFieldCondition() bool
 	HasAuxTag() bool
+	IsPromNestedCall(call *influxql.Call) bool
 	HasPercentileOGSketch() bool
+	HasPromNestedCall() bool
 	Options() Options
 	PromResetTime() bool
 	Symbols() map[string]influxql.VarRef
@@ -223,6 +225,7 @@ type Catalog interface {
 	SlidingWindow() map[string]*influxql.Call
 	HoltWinters() []*influxql.Field
 	CompositeCall() map[string]*OGSketchCompositeOperator
+	PromNestedCall() map[string]*PromNestedCall
 	Binarys() map[string]*influxql.BinaryExpr
 	Fields() influxql.Fields
 	FieldsRef() influxql.VarRefs
@@ -336,4 +339,21 @@ func (o *OGSketchCompositeOperator) GetMergeOp() *influxql.Call {
 
 func (o *OGSketchCompositeOperator) GetQueryPerOp() *influxql.Call {
 	return o.queryPerOp
+}
+
+type PromNestedCall struct {
+	aggCall  *influxql.Call
+	funcCall *influxql.Call
+}
+
+func NewPromNestedCall(fc, ac *influxql.Call) *PromNestedCall {
+	return &PromNestedCall{funcCall: fc, aggCall: ac}
+}
+
+func (c *PromNestedCall) GetAggCall() *influxql.Call {
+	return c.aggCall
+}
+
+func (c *PromNestedCall) GetFuncCall() *influxql.Call {
+	return c.funcCall
 }

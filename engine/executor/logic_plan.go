@@ -553,6 +553,7 @@ func (p *LogicalIncHashAgg) Digest() string {
 type LogicalAggregate struct {
 	isCountDistinct      bool
 	isPercentileOGSketch bool
+	isPromNestedCall     bool
 	aggType              int
 	calls                map[string]*influxql.Call
 	callsOrder           []string
@@ -571,6 +572,7 @@ func NewLogicalAggregate(input hybridqp.QueryNode, schema hybridqp.Catalog) *Log
 		callsOrder:           make([]string, 0, len(schema.Calls())),
 		isCountDistinct:      false,
 		isPercentileOGSketch: schema.HasPercentileOGSketch(),
+		isPromNestedCall:     schema.HasPromNestedCall(),
 		LogicalPlanSingle:    *NewLogicalPlanSingle(input, schema),
 	}
 
@@ -640,6 +642,26 @@ func (p *LogicalAggregate) inferAggLevel() AggLevel {
 	return SourceLevel
 }
 
+func (p *LogicalAggregate) inferPromCallLevel() AggLevel {
+	_, ok := p.Children()[0].(*HeuVertex)
+	if !ok {
+		_, ok = p.Children()[0].(*LogicalSeries)
+		if ok {
+			return SourceLevel
+		}
+		return SinkLevel
+	}
+	_, ok = p.Children()[0].(*HeuVertex).node.(*LogicalExchange)
+	if ok {
+		return SinkLevel
+	}
+	_, ok = p.Children()[0].(*HeuVertex).node.(*LogicalSeries)
+	if ok {
+		return SourceLevel
+	}
+	return SinkLevel
+}
+
 func (p *LogicalAggregate) getOGSketchOp(k string, level AggLevel, cc map[string]*hybridqp.OGSketchCompositeOperator) *influxql.Call {
 	switch level {
 	case SourceLevel:
@@ -651,6 +673,13 @@ func (p *LogicalAggregate) getOGSketchOp(k string, level AggLevel, cc map[string
 	default:
 		return cc[k].GetQueryPerOp()
 	}
+}
+
+func (p *LogicalAggregate) getPromNestedCall(level AggLevel, call *hybridqp.PromNestedCall) *influxql.Call {
+	if level == SourceLevel {
+		return call.GetFuncCall()
+	}
+	return call.GetAggCall()
 }
 
 func (p *LogicalAggregate) DeriveOperations() {
@@ -692,6 +721,11 @@ func (p *LogicalAggregate) init() {
 		level = p.inferAggLevel()
 		cc = p.schema.CompositeCall()
 	}
+	var pc map[string]*hybridqp.PromNestedCall
+	if p.isPromNestedCall {
+		level = p.inferPromCallLevel()
+		pc = p.schema.PromNestedCall()
+	}
 	refs := p.inputs[0].RowDataType().MakeRefs()
 
 	m := make(map[string]influxql.VarRef)
@@ -705,6 +739,13 @@ func (p *LogicalAggregate) init() {
 		var ref influxql.VarRef
 		if p.isPercentileOGSketch && c.Name == PercentileOGSketch {
 			c = p.getOGSketchOp(k, level, cc)
+			ref = p.schema.Mapping()[c]
+		} else if p.isPromNestedCall && p.schema.IsPromNestedCall(c) {
+			kc, ok := pc[k]
+			if !ok {
+				continue
+			}
+			c = p.getPromNestedCall(level, kc)
 			ref = p.schema.Mapping()[c]
 		} else {
 			ref = p.schema.Mapping()[p.schema.Calls()[k]]
@@ -747,7 +788,7 @@ func (p *LogicalAggregate) init() {
 }
 
 func (p *LogicalAggregate) ForwardCallArgs() {
-	if p.isPercentileOGSketch {
+	if p.isPercentileOGSketch || p.isPromNestedCall {
 		return
 	}
 	for k, call := range p.calls {

@@ -1438,25 +1438,7 @@ func TestIncHashAggRule(t *testing.T) {
 	}
 }
 
-func TestAggPushDownWithRangeVector(t *testing.T) {
-	fields := influxql.Fields{
-		&influxql.Field{
-			Expr: &influxql.Call{
-				Name: "count",
-				Args: []influxql.Expr{
-					&influxql.VarRef{
-						Val:  "value",
-						Type: influxql.Float,
-					},
-				},
-			},
-		},
-	}
-	columnsName := []string{"count"}
-	opt := query.ProcessorOptions{PromQuery: true, Range: time.Minute, Step: time.Second}
-	opt.Interval.Duration = 1000
-
-	schema := executor.NewQuerySchema(fields, columnsName, &opt, nil)
+func testAggPushDownBase(t *testing.T, schema *executor.QuerySchema) *AggPushDownVerifier {
 	planBuilder := executor.NewLogicalPlanBuilderImpl(schema)
 
 	var plan hybridqp.QueryNode
@@ -1506,10 +1488,62 @@ func TestAggPushDownWithRangeVector(t *testing.T) {
 
 	verifier := NewAggPushDownVerifier()
 	hybridqp.WalkQueryNodeInPreOrder(verifier, best)
+	return verifier
+}
+
+func TestAggPushDownWithRangeVector(t *testing.T) {
+	fields := influxql.Fields{
+		&influxql.Field{
+			Expr: &influxql.Call{
+				Name: "count",
+				Args: []influxql.Expr{
+					&influxql.VarRef{
+						Val:  "value",
+						Type: influxql.Float,
+					},
+				},
+			},
+		},
+	}
+	columnsName := []string{"count"}
+	opt := query.ProcessorOptions{PromQuery: true, Range: time.Minute, Step: time.Second}
+	opt.Interval.Duration = 1000
+
+	schema := executor.NewQuerySchema(fields, columnsName, &opt, nil)
+	verifier := testAggPushDownBase(t, schema)
 	if verifier.AggCount() != 4 && !executor.GetEnableFileCursor() {
 		t.Errorf("4 agg in plan tree, but %d", verifier.AggCount())
 	}
 	if verifier.AggCount() != 2 && executor.GetEnableFileCursor() {
 		t.Errorf("2 agg in plan tree, but %d", verifier.AggCount())
+	}
+}
+
+func TestAggPushDownWithPromNestedCall(t *testing.T) {
+	fields := influxql.Fields{
+		&influxql.Field{
+			Expr: &influxql.Call{
+				Name: "count",
+				Args: []influxql.Expr{
+					&influxql.Call{
+						Name: "rate_prom",
+						Args: []influxql.Expr{
+							&influxql.VarRef{Val: "value", Type: influxql.Float},
+						},
+					},
+				},
+			},
+		},
+	}
+	columnsName := []string{"count"}
+	opt := query.ProcessorOptions{PromQuery: true, Range: time.Minute, Step: time.Second}
+	opt.Interval.Duration = 1000
+	schema := executor.NewQuerySchema(fields, columnsName, &opt, nil)
+	verifier := testAggPushDownBase(t, schema)
+	if verifier.AggCount() != 4 && !executor.GetEnableFileCursor() {
+		t.Errorf("4 agg in plan tree, but %d", verifier.AggCount())
+	}
+	if verifier.AggCount() != 5 && executor.GetEnableFileCursor() {
+		t.Errorf("5 agg in plan tree, but %d", verifier.AggCount())
 	}
 }
