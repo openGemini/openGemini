@@ -402,7 +402,7 @@ func TestTranspiler_transpile_sql(t1 *testing.T) {
 			args: args{
 				expr: ParseExpr(`topk(3, sum by (app, proc) (rate(instance_cpu_time_ns[5m])))`),
 			},
-			want:    parseInfluxqlByYacc(`SELECT top(value, 3) AS value FROM (SELECT sum(value) AS value FROM (SELECT rate_prom(value) AS value FROM instance_cpu_time_ns WHERE time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY *) WHERE time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY app, proc) WHERE time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY app, proc`),
+			want:    parseInfluxqlByYacc(`SELECT top(value, 3) AS value FROM (SELECT sum(rate_prom(value)) AS value FROM instance_cpu_time_ns WHERE time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY app, proc) WHERE time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY app, proc`),
 			wantErr: false,
 		},
 		{
@@ -416,7 +416,7 @@ func TestTranspiler_transpile_sql(t1 *testing.T) {
 			args: args{
 				expr: ParseExpr(`topk(3, sum by (app, proc) (rate(instance_cpu_time_ns[5m])))`),
 			},
-			want:    parseInfluxqlByYacc(`SELECT top(value, 3) AS value FROM (SELECT sum(value) AS value FROM (SELECT rate_prom(value) AS value FROM instance_cpu_time_ns WHERE time >= '2023-01-06T03:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY *, time(1m) fill(none)) WHERE time >= '2023-01-06T03:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY app, proc, time(1m) fill(none)) WHERE time >= '2023-01-06T03:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY app, proc, time(1m)`),
+			want:    parseInfluxqlByYacc(`SELECT top(value, 3) AS value FROM (SELECT sum(rate_prom(value)) AS value FROM instance_cpu_time_ns WHERE time >= '2023-01-06T03:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY app, proc, time(1m) fill(none)) WHERE time >= '2023-01-06T03:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY app, proc, time(1m)`),
 			wantErr: false,
 		},
 	}
