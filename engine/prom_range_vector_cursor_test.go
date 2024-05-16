@@ -25,6 +25,7 @@ import (
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
@@ -126,7 +127,8 @@ func TestRangeVectorCursorSinkPlan(t *testing.T) {
 	srcCursor := newReaderKeyCursor(nil)
 	srcCursor.schema = []record.Field{{Name: "cpu", Type: influx.Field_Type_Float}, {Name: "time", Type: influx.Field_Type_Int}}
 	schema.Visit(&influxql.Call{Name: "rate_prom", Args: []influxql.Expr{&influxql.VarRef{Val: "cpu", Type: influxql.Float}}})
-	promCursor := engine.NewRangeVectorCursor(srcCursor, schema, AggPool)
+	tr := util.TimeRange{Min: opt.StartTime, Max: opt.EndTime}
+	promCursor := engine.NewRangeVectorCursor(srcCursor, schema, AggPool, tr)
 	assert.Equal(t, promCursor.Name(), "range_vector_cursor")
 	agg := executor.NewLogicalAggregate(series, schema)
 	promCursor.SinkPlan(agg)
@@ -144,7 +146,8 @@ func testRangeVectorCursor(
 ) {
 	outRecords := make([]*record.Record, 0, len(dstRecords))
 	srcCursor := newReaderKeyCursor(srcRecords)
-	promCursor := engine.NewRangeVectorCursor(srcCursor, querySchema, AggPool)
+	tr := util.TimeRange{Min: querySchema.Options().GetStartTime(), Max: querySchema.Options().GetEndTime()}
+	promCursor := engine.NewRangeVectorCursor(srcCursor, querySchema, AggPool, tr)
 	promCursor.SetSchema(inSchema, outSchema, exprOpt)
 
 	for {

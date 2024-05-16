@@ -23,6 +23,7 @@ import (
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
@@ -48,7 +49,7 @@ type InstantVectorCursor struct {
 	firstStep   int64 // first step of each record for prom sampling
 }
 
-func NewInstantVectorCursor(input comm.KeyCursor, schema *executor.QuerySchema, globalPool *record.RecordPool) *InstantVectorCursor {
+func NewInstantVectorCursor(input comm.KeyCursor, schema *executor.QuerySchema, globalPool *record.RecordPool, tr util.TimeRange) *InstantVectorCursor {
 	c := &InstantVectorCursor{}
 	c.aggregateCursor = *NewAggregateCursor(input, schema, globalPool, false)
 	c.aggregateCursor.r = c
@@ -61,11 +62,13 @@ func NewInstantVectorCursor(input comm.KeyCursor, schema *executor.QuerySchema, 
 	c.startSample = c.start + c.lookUpDelta
 	if c.step == 0 {
 		c.endSample = c.startSample
+		c.firstStep = c.startSample
+		c.reducerParams.lastStep = c.endSample
 	} else {
 		c.endSample = c.start + c.lookUpDelta + (c.end-(c.start+c.lookUpDelta))/c.step*c.step
+		c.firstStep = getCurrStep(c.startSample, c.endSample, c.step, tr.Min)
+		c.reducerParams.lastStep = getPrevStep(c.startSample, c.endSample, c.step, tr.Max)
 	}
-	c.firstStep = c.startSample
-	c.reducerParams.lastStep = c.endSample
 	return c
 }
 
@@ -200,6 +203,17 @@ func isSameWindow(
 	prevStep := getCurrStep(startSample, endSample, step, currRecord.Times()[currRecord.RowNums()-1])
 	nextStep := getCurrStep(startSample, endSample, step, nextRecord.Times()[0])
 	return prevStep == nextStep
+}
+
+func getPrevStep(startSample, endSample, step, t int64) int64 {
+	if t <= startSample {
+		return startSample
+	}
+	if t == endSample {
+		return t
+	}
+	n := (t - startSample) / step
+	return hybridqp.MinInt64(startSample+n*step, endSample)
 }
 
 func getCurrStep(startSample, endSample, step, t int64) int64 {

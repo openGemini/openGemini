@@ -21,6 +21,7 @@ import (
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util"
 )
 
 // RangeVectorCursor is used to process the calculation of the function with range duration for
@@ -46,7 +47,7 @@ type RangeVectorCursor struct {
 	firstStep     int64 // first step of each record for prom sampling
 }
 
-func NewRangeVectorCursor(input comm.KeyCursor, schema *executor.QuerySchema, globalPool *record.RecordPool) *RangeVectorCursor {
+func NewRangeVectorCursor(input comm.KeyCursor, schema *executor.QuerySchema, globalPool *record.RecordPool, tr util.TimeRange) *RangeVectorCursor {
 	c := &RangeVectorCursor{}
 	c.aggregateCursor = *NewAggregateCursor(input, schema, globalPool, false)
 	c.aggregateCursor.r = c
@@ -60,11 +61,13 @@ func NewRangeVectorCursor(input comm.KeyCursor, schema *executor.QuerySchema, gl
 	c.startSample = c.start + c.rangeDuration
 	if c.step == 0 {
 		c.endSample = c.startSample
+		c.firstStep = c.startSample
+		c.reducerParams.lastStep = c.endSample
 	} else {
 		c.endSample = c.start + c.rangeDuration + (c.end-(c.start+c.rangeDuration))/c.step*c.step
+		c.firstStep = getCurrStep(c.startSample, c.endSample, c.step, tr.Min)
+		c.reducerParams.lastStep = getPrevStep(c.startSample, c.endSample, c.step, tr.Max)
 	}
-	c.firstStep = c.startSample
-	c.reducerParams.lastStep = c.endSample
 	return c
 }
 

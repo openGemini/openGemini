@@ -1625,7 +1625,7 @@ func TestRangeVectorCursorFunc(t *testing.T) {
 	opt := &query.ProcessorOptions{Step: 0}
 	schema := executor.NewQuerySchema(nil, nil, opt, nil)
 	pool := record.NewRecordPool(record.AggPool)
-	c := NewRangeVectorCursor(ic, schema, pool)
+	c := NewRangeVectorCursor(ic, schema, pool, util.TimeRange{})
 	rec := record.NewRecord([]record.Field{{Name: "time", Type: influx.Field_Type_Int}}, false)
 	c.getIntervalIndex(rec)
 	assert2.Equal(t, c.Name(), "range_vector_cursor")

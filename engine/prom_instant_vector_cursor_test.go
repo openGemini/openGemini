@@ -25,6 +25,7 @@ import (
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
@@ -45,7 +46,7 @@ func TestInstantVectorCursorSinkPlan(t *testing.T) {
 	series := executor.NewLogicalSeries(schema)
 	srcCursor := newReaderKeyCursor(nil)
 	srcCursor.schema = []record.Field{{Name: "cpu", Type: influx.Field_Type_Float}, {Name: "time", Type: influx.Field_Type_Int}}
-	promCursor := engine.NewInstantVectorCursor(srcCursor, schema, AggPool)
+	promCursor := engine.NewInstantVectorCursor(srcCursor, schema, AggPool, util.TimeRange{})
 	promCursor.SinkPlan(series)
 	assert.True(t, len(promCursor.GetSchema()) == 2)
 	schema.Visit(&influxql.Call{Name: "count", Args: []influxql.Expr{&influxql.VarRef{Val: "cpu", Type: influxql.Integer}}})
@@ -65,7 +66,8 @@ func testInstantVectorCursor(
 ) {
 	outRecords := make([]*record.Record, 0, len(dstRecords))
 	srcCursor := newReaderKeyCursor(srcRecords)
-	promCursor := engine.NewInstantVectorCursor(srcCursor, querySchema, AggPool)
+	tr := util.TimeRange{Min: querySchema.Options().GetStartTime(), Max: querySchema.Options().GetEndTime()}
+	promCursor := engine.NewInstantVectorCursor(srcCursor, querySchema, AggPool, tr)
 	promCursor.SetSchema(inSchema, outSchema, exprOpt)
 
 	for {
@@ -282,13 +284,13 @@ func TestInstantVectorCursor(t *testing.T) {
 
 func benchmarkInstantVectorCursor(b *testing.B, recordCount, recordSize, tagPerRecord, intervalPerRecord int,
 	exprOpt []hybridqp.ExprOptions, schema *executor.QuerySchema, inSchema, outSchema record.Schemas) {
-
+	tr := util.TimeRange{Min: schema.Options().GetStartTime(), Max: schema.Options().GetEndTime()}
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		srcRecords := buildBenchSrcRecords(inSchema, recordCount, recordSize, tagPerRecord, intervalPerRecord)
 		srcCursor := newReaderKeyCursor(srcRecords)
-		sampleCursor := engine.NewInstantVectorCursor(srcCursor, schema, AggPool)
+		sampleCursor := engine.NewInstantVectorCursor(srcCursor, schema, AggPool, tr)
 		sampleCursor.SetSchema(inSchema, outSchema, exprOpt)
 		b.StartTimer()
 		for {
