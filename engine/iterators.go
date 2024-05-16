@@ -182,14 +182,17 @@ func (s *shard) CreateCursor(ctx context.Context, schema *executor.QuerySchema) 
 	if (startTime >= shardStartTime && startTime <= shardEndTime) || (endTime >= shardStartTime && endTime <= shardEndTime) {
 		hasTimeFilter = true
 	}
-
+	iTr := util.TimeRange{}
+	if schema.Options().IsPromQuery() {
+		iTr = GetIntersectTimeRange(startTime, endTime, shardStartTime, shardEndTime)
+	}
 	immutableReader, mutableReader := s.cloneReaders(schema.Options().OptionsName(), hasTimeFilter, tr)
 	if cloneMsSpan != nil {
 		cloneMsSpan.SetNameValue(fmt.Sprintf("order=%d,unorder=%d", len(immutableReader.Orders), len(immutableReader.OutOfOrders)))
 		cloneMsSpan.Finish()
 	}
 
-	groupCursors, err := s.createGroupCursors(span, schema, lazyInit, result, immutableReader, mutableReader)
+	groupCursors, err := s.createGroupCursors(span, schema, lazyInit, result, immutableReader, mutableReader, iTr)
 
 	// unref file(no need lock here), series iterator will ref/unref file itself
 	unRefReaders(immutableReader, mutableReader)
@@ -225,7 +228,7 @@ func (s *shard) GetTSSPFiles(mm string, isOrder bool) (*immutable.TSSPFiles, boo
 }
 
 func (s *shard) initGroupCursors(querySchema *executor.QuerySchema, parallelism int,
-	readers *immutable.MmsReaders, memTables *mutable.MemTables) (comm.KeyCursors, error) {
+	readers *immutable.MmsReaders, memTables *mutable.MemTables, iTr util.TimeRange) (comm.KeyCursors, error) {
 	var schema record.Schemas
 	var filterFieldsIdx []int
 	var filterTags []string
@@ -255,6 +258,7 @@ func (s *shard) initGroupCursors(querySchema *executor.QuerySchema, parallelism 
 				seriesPool:   SeriesPool,
 				tmsMergePool: TsmMergePool,
 				querySchema:  querySchema,
+				interTr:      util.TimeRange{Min: iTr.Min, Max: iTr.Max},
 			},
 			querySchema: querySchema,
 		}
@@ -350,7 +354,7 @@ func getQueryTimeRange(readers *immutable.MmsReaders, querySchema *executor.Quer
 }
 
 func (s *shard) createGroupCursors(span *tracing.Span, schema *executor.QuerySchema, lazyInit bool, tagSets []*tsi.TagSetInfo,
-	readers *immutable.MmsReaders, memTables *mutable.MemTables) ([]comm.KeyCursor, error) {
+	readers *immutable.MmsReaders, memTables *mutable.MemTables, iTr util.TimeRange) ([]comm.KeyCursor, error) {
 
 	parallelism, totalSid := getParallelismNumAndSidNum(schema, tagSets)
 
@@ -363,7 +367,7 @@ func (s *shard) createGroupCursors(span *tracing.Span, schema *executor.QuerySch
 		defer groupSpan.Finish()
 	}
 
-	cursors, err := s.initGroupCursors(schema, parallelism, readers, memTables)
+	cursors, err := s.initGroupCursors(schema, parallelism, readers, memTables, iTr)
 	if err != nil {
 		return nil, err
 	}
@@ -383,7 +387,6 @@ func (s *shard) createGroupCursors(span *tracing.Span, schema *executor.QuerySch
 			cursors[i].(*groupCursor).span = subGroupSpan
 		}
 	}
-
 	enableFileCursor := executor.IsEnableFileCursor(schema)
 	var startGroupIdx int
 	errs := make([]error, parallelism)
@@ -537,6 +540,7 @@ type idKeyCursorContext struct {
 	engineType   config.EngineType
 	tr           util.TimeRange
 	queryTr      util.TimeRange
+	interTr      util.TimeRange // intersection of the query time and shard time
 	auxTags      []string
 	schema       record.Schemas
 	readers      *immutable.MmsReaders
@@ -772,10 +776,10 @@ func (s *shard) iteratorInit(ctx *idKeyCursorContext, span *tracing.Span, schema
 			return NewAggregateCursor(itr, schema, ctx.aggPool, ctx.hasAuxTags()), nil
 		}
 		if schema.Options().IsInstantVectorSelector() {
-			return NewInstantVectorCursor(itr, schema, ctx.aggPool), nil
+			return NewInstantVectorCursor(itr, schema, ctx.aggPool, ctx.interTr), nil
 		}
 		if schema.Options().IsRangeVectorSelector() && len(schema.Calls()) > 0 {
-			return NewRangeVectorCursor(itr, schema, ctx.aggPool), nil
+			return NewRangeVectorCursor(itr, schema, ctx.aggPool, ctx.interTr), nil
 		}
 	}
 	return itr, nil
@@ -809,9 +813,9 @@ func itrsInit(ctx *idKeyCursorContext, span *tracing.Span, schema *executor.Quer
 		if !canNotAggOnSeries && (len(schema.Calls()) > 0 && !havePreAgg) && !schema.Options().IsPromQuery() {
 			itrAgg = NewAggregateCursor(itr, schema, ctx.aggPool, ctx.hasAuxTags())
 		} else if schema.Options().IsInstantVectorSelector() {
-			itrAgg = NewInstantVectorCursor(itr, schema, ctx.aggPool)
+			itrAgg = NewInstantVectorCursor(itr, schema, ctx.aggPool, ctx.interTr)
 		} else if schema.Options().IsRangeVectorSelector() && len(schema.Calls()) > 0 {
-			itrAgg = NewRangeVectorCursor(itr, schema, ctx.aggPool)
+			itrAgg = NewRangeVectorCursor(itr, schema, ctx.aggPool, ctx.interTr)
 		}
 		var itrLimit *limitCursor
 
@@ -868,9 +872,9 @@ func itrsInitWithLimit(ctx *idKeyCursorContext, span *tracing.Span, schema *exec
 				if !schema.Options().IsPromQuery() {
 					itrAgg = NewAggregateCursor(itr, schema, ctx.aggPool, ctx.hasAuxTags())
 				} else if schema.Options().IsInstantVectorSelector() {
-					itrAgg = NewInstantVectorCursor(itr, schema, ctx.aggPool)
+					itrAgg = NewInstantVectorCursor(itr, schema, ctx.aggPool, ctx.interTr)
 				} else if schema.Options().IsRangeVectorSelector() && len(schema.Calls()) > 0 {
-					itrAgg = NewRangeVectorCursor(itr, schema, ctx.aggPool)
+					itrAgg = NewRangeVectorCursor(itr, schema, ctx.aggPool, ctx.interTr)
 				}
 			}
 			var itrLimit *limitCursor
@@ -1025,4 +1029,20 @@ func getParallelismNumAndSidNum(schema *executor.QuerySchema, tagSets []*tsi.Tag
 	parallelism = int(num)
 
 	return parallelism, totalSid
+}
+
+// GetIntersectTimeRange used to get intersection of the query time and shard time
+func GetIntersectTimeRange(queryStartTime, queryEndTime, shardStartTime, shardEndTime int64) util.TimeRange {
+	tr := util.TimeRange{}
+	if queryStartTime <= shardStartTime {
+		tr.Min = shardStartTime
+	} else {
+		tr.Min = queryStartTime
+	}
+	if queryEndTime <= shardEndTime {
+		tr.Max = queryEndTime
+	} else {
+		tr.Max = shardEndTime
+	}
+	return tr
 }
