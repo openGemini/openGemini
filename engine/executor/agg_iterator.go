@@ -20,6 +20,7 @@ import (
 	"container/heap"
 	"sort"
 
+	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/rand"
 	"github.com/openGemini/openGemini/lib/util"
 )
@@ -487,3 +488,11 @@ func (w *SlidingWindow[T]) Reset() {
 
 type PointMerge[T util.ExceptString] func(prevPoint, currPoint *Point[T])
 type WindowMerge[T util.ExceptString] func(prevWindow, currWindow *SlidingWindow[T], fpm PointMerge[T])
+type ColMergeFunc[T util.ExceptString] func(prevPoint, currPoint *Point[T])
+
+type RateMiddleReduceFunc[T util.NumberOnly] func(c Chunk, values []T, ordinal, start, end int) (firstIndex, lastIndex int, firstValue, lastValue T, isNil bool)
+type ColReduceFunc[T util.ExceptBool] func(c Chunk, values []T, ordinal, start, end int) (index int, value T, isNil bool)
+type TimeColReduceFunc[T util.ExceptBool] func(c Chunk, values []T, ordinal, start, end int) (index int, value T, isNil bool)
+type RateUpdateFunc[T util.NumberOnly] func(prevPoints, currPoints [2]*Point[T])
+type RateMergeFunc[T util.NumberOnly] func(prevPoints [2]*Point[T], interval *hybridqp.Interval) (float64, bool)
+type RateFinalReduceFunc[T util.NumberOnly] func(firstTime int64, lastTime int64, firstValue T, lastValue T, interval *hybridqp.Interval) (float64, bool)

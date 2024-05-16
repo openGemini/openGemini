@@ -150,7 +150,7 @@ func NewBooleanModeReduce(BooleanSliceItem *BooleanSliceItem) (int, int64, float
 	return falsei, 0, 0, false
 }
 
-func CountReduce(c Chunk, ordinal, start, end int) (int, int64, bool) {
+func CountReduce(c Chunk, values []int64, ordinal, start, end int) (int, int64, bool) {
 	var count int64
 	if c.Column(ordinal).NilCount() == 0 {
 		// fast path
@@ -164,7 +164,7 @@ func CountReduce(c Chunk, ordinal, start, end int) (int, int64, bool) {
 	return start, count, count == 0
 }
 
-func AbsentReduce(c Chunk, ordinal, start, end int) (int, int64, bool) {
+func AbsentReduce(c Chunk, values []int64, ordinal, start, end int) (int, int64, bool) {
 	var count int64
 	if c.Column(ordinal).NilCount() == 0 {
 		// fast path
@@ -184,12 +184,12 @@ func AbsentReduce(c Chunk, ordinal, start, end int) (int, int64, bool) {
 	return start, 0, true
 }
 
-func FloatSumReduce(c Chunk, ordinal, start, end int) (int, float64, bool) {
-	var sum float64
+func SumReduce[T util.NumberOnly](c Chunk, values []T, ordinal, start, end int) (int, T, bool) {
+	var sum T
 	if c.Column(ordinal).NilCount() == 0 {
 		// fast path
 		for i := start; i < end; i++ {
-			sum += c.Column(ordinal).FloatValue(i)
+			sum += values[i]
 		}
 		return start, sum, false
 	}
@@ -200,38 +200,17 @@ func FloatSumReduce(c Chunk, ordinal, start, end int) (int, float64, bool) {
 		return start, 0, true
 	}
 	for i := vs; i < ve; i++ {
-		sum += c.Column(ordinal).FloatValue(i)
+		sum += values[i]
 	}
 	return start, sum, false
 }
 
-func IntegerSumReduce(c Chunk, ordinal, start, end int) (int, int64, bool) {
-	var sum int64
+func MinReduce[T util.NumberOnly](c Chunk, values []T, ordinal, start, end int) (int, T, bool) {
 	if c.Column(ordinal).NilCount() == 0 {
 		// fast path
+		minValue, minIndex := values[start], start
 		for i := start; i < end; i++ {
-			sum += c.Column(ordinal).IntegerValue(i)
-		}
-		return start, sum, false
-	}
-
-	// slow path
-	vs, ve := c.Column(ordinal).GetRangeValueIndexV2(start, end)
-	if vs == ve {
-		return start, 0, true
-	}
-	for i := vs; i < ve; i++ {
-		sum += c.Column(ordinal).IntegerValue(i)
-	}
-	return start, sum, false
-}
-
-func FloatMinReduce(c Chunk, ordinal, start, end int) (int, float64, bool) {
-	if c.Column(ordinal).NilCount() == 0 {
-		// fast path
-		minValue, minIndex := c.Column(ordinal).FloatValue(start), start
-		for i := start; i < end; i++ {
-			v := c.Column(ordinal).FloatValue(i)
+			v := values[i]
 			if v < minValue || (v == minValue && c.TimeByIndex(i) < c.TimeByIndex(minIndex)) {
 				minIndex = i
 				minValue = v
@@ -245,9 +224,9 @@ func FloatMinReduce(c Chunk, ordinal, start, end int) (int, float64, bool) {
 	if vs == ve {
 		return start, 0, true
 	}
-	minValue, minIndex := c.Column(ordinal).FloatValue(vs), c.Column(ordinal).GetTimeIndex(vs)
+	minValue, minIndex := values[vs], c.Column(ordinal).GetTimeIndex(vs)
 	for i := vs; i < ve; i++ {
-		v, index := c.Column(ordinal).FloatValue(i), c.Column(ordinal).GetTimeIndex(i)
+		v, index := values[i], c.Column(ordinal).GetTimeIndex(i)
 		if v < minValue || (v == minValue && c.TimeByIndex(index) < c.TimeByIndex(minIndex)) {
 			minIndex = index
 			minValue = v
@@ -256,42 +235,12 @@ func FloatMinReduce(c Chunk, ordinal, start, end int) (int, float64, bool) {
 	return minIndex, minValue, false
 }
 
-func IntegerMinReduce(c Chunk, ordinal, start, end int) (int, int64, bool) {
+func BooleanMinReduce(c Chunk, values []bool, ordinal, start, end int) (int, bool, bool) {
 	if c.Column(ordinal).NilCount() == 0 {
 		// fast path
-		minValue, minIndex := c.Column(ordinal).IntegerValue(start), start
+		minValue, minIndex := values[start], start
 		for i := start; i < end; i++ {
-			v := c.Column(ordinal).IntegerValue(i)
-			if v < minValue || (v == minValue && c.TimeByIndex(i) < c.TimeByIndex(minIndex)) {
-				minIndex = i
-				minValue = v
-			}
-		}
-		return minIndex, minValue, false
-	}
-
-	// slow path
-	vs, ve := c.Column(ordinal).GetRangeValueIndexV2(start, end)
-	if vs == ve {
-		return start, 0, true
-	}
-	minValue, minIndex := c.Column(ordinal).IntegerValue(vs), c.Column(ordinal).GetTimeIndex(vs)
-	for i := vs; i < ve; i++ {
-		v, index := c.Column(ordinal).IntegerValue(i), c.Column(ordinal).GetTimeIndex(i)
-		if v < minValue || (v == minValue && c.TimeByIndex(index) < c.TimeByIndex(minIndex)) {
-			minIndex = index
-			minValue = v
-		}
-	}
-	return minIndex, minValue, false
-}
-
-func BooleanMinReduce(c Chunk, ordinal, start, end int) (int, bool, bool) {
-	if c.Column(ordinal).NilCount() == 0 {
-		// fast path
-		minValue, minIndex := c.Column(ordinal).BooleanValue(start), start
-		for i := start; i < end; i++ {
-			v := c.Column(ordinal).BooleanValue(i)
+			v := values[i]
 			if (v != minValue && !v) || (v == minValue && c.TimeByIndex(i) < c.TimeByIndex(minIndex)) {
 				minIndex = i
 				minValue = v
@@ -305,9 +254,9 @@ func BooleanMinReduce(c Chunk, ordinal, start, end int) (int, bool, bool) {
 	if vs == ve {
 		return start, false, true
 	}
-	minValue, minIndex := c.Column(ordinal).BooleanValue(vs), c.Column(ordinal).GetTimeIndex(vs)
+	minValue, minIndex := values[vs], c.Column(ordinal).GetTimeIndex(vs)
 	for i := vs; i < ve; i++ {
-		v, index := c.Column(ordinal).BooleanValue(i), c.Column(ordinal).GetTimeIndex(i)
+		v, index := values[i], c.Column(ordinal).GetTimeIndex(i)
 		if (v != minValue && !v) || (v == minValue && c.TimeByIndex(index) < c.TimeByIndex(minIndex)) {
 			minIndex = index
 			minValue = v
@@ -408,6 +357,20 @@ func BooleanFirstMerge(prevPoint, currPoint *Point[bool]) {
 func LastMerge[T util.NumberOnly](prevPoint, currPoint *Point[T]) {
 	if prevPoint.isNil || (currPoint.time > prevPoint.time) ||
 		(currPoint.time == prevPoint.time && currPoint.value > prevPoint.value) {
+		prevPoint.Assign(currPoint)
+	}
+}
+
+func StringLastMerge(prevPoint, currPoint *StringPoint) {
+	if prevPoint.isNil || (currPoint.time > prevPoint.time) ||
+		(currPoint.time == prevPoint.time && bytes.Compare(currPoint.value, prevPoint.value) > 0) {
+		prevPoint.Assign(currPoint)
+	}
+}
+
+func BooleanLastMerge(prevPoint, currPoint *Point[bool]) {
+	if prevPoint.isNil || (currPoint.time > prevPoint.time) ||
+		(currPoint.time == prevPoint.time && currPoint.value && !prevPoint.value) {
 		prevPoint.Assign(currPoint)
 	}
 }
@@ -516,12 +479,13 @@ func SlidingWindowMergeFunc[T util.ExceptString](prevWindow, currWindow *Sliding
 	}
 }
 
-func FloatMaxReduce(c Chunk, ordinal, start, end int) (int, float64, bool) {
-	if c.Column(ordinal).NilCount() == 0 {
+func MaxReduce[T util.NumberOnly](c Chunk, values []T, ordinal, start, end int) (int, T, bool) {
+	column := c.Column(ordinal)
+	if column.NilCount() == 0 {
 		// fast path
-		maxValue, maxIndex := c.Column(ordinal).FloatValue(start), start
+		maxValue, maxIndex := values[start], start
 		for i := start; i < end; i++ {
-			v := c.Column(ordinal).FloatValue(i)
+			v := values[i]
 			if v > maxValue || (v == maxValue && c.TimeByIndex(i) < c.TimeByIndex(maxIndex)) {
 				maxIndex = i
 				maxValue = v
@@ -531,13 +495,13 @@ func FloatMaxReduce(c Chunk, ordinal, start, end int) (int, float64, bool) {
 	}
 
 	// slow path
-	vs, ve := c.Column(ordinal).GetRangeValueIndexV2(start, end)
+	vs, ve := column.GetRangeValueIndexV2(start, end)
 	if vs == ve {
 		return start, 0, true
 	}
-	maxValue, maxIndex := c.Column(ordinal).FloatValue(vs), c.Column(ordinal).GetTimeIndex(vs)
+	maxValue, maxIndex := values[vs], column.GetTimeIndex(vs)
 	for i := vs; i < ve; i++ {
-		v, index := c.Column(ordinal).FloatValue(i), c.Column(ordinal).GetTimeIndex(i)
+		v, index := values[i], column.GetTimeIndex(i)
 		if v > maxValue || (v == maxValue && c.TimeByIndex(index) < c.TimeByIndex(maxIndex)) {
 			maxIndex = index
 			maxValue = v
@@ -546,42 +510,13 @@ func FloatMaxReduce(c Chunk, ordinal, start, end int) (int, float64, bool) {
 	return maxIndex, maxValue, false
 }
 
-func IntegerMaxReduce(c Chunk, ordinal, start, end int) (int, int64, bool) {
-	if c.Column(ordinal).NilCount() == 0 {
+func BooleanMaxReduce(c Chunk, values []bool, ordinal, start, end int) (int, bool, bool) {
+	column := c.Column(ordinal)
+	if column.NilCount() == 0 {
 		// fast path
-		maxValue, maxIndex := c.Column(ordinal).IntegerValue(start), start
+		maxValue, maxIndex := values[start], start
 		for i := start; i < end; i++ {
-			v := c.Column(ordinal).IntegerValue(i)
-			if v > maxValue || (v == maxValue && c.TimeByIndex(i) < c.TimeByIndex(maxIndex)) {
-				maxIndex = i
-				maxValue = v
-			}
-		}
-		return maxIndex, maxValue, false
-	}
-
-	// slow path
-	vs, ve := c.Column(ordinal).GetRangeValueIndexV2(start, end)
-	if vs == ve {
-		return start, 0, true
-	}
-	maxValue, maxIndex := c.Column(ordinal).IntegerValue(vs), c.Column(ordinal).GetTimeIndex(vs)
-	for i := vs; i < ve; i++ {
-		v, index := c.Column(ordinal).IntegerValue(i), c.Column(ordinal).GetTimeIndex(i)
-		if v > maxValue || (v == maxValue && c.TimeByIndex(index) < c.TimeByIndex(maxIndex)) {
-			maxIndex = index
-			maxValue = v
-		}
-	}
-	return maxIndex, maxValue, false
-}
-
-func BooleanMaxReduce(c Chunk, ordinal, start, end int) (int, bool, bool) {
-	if c.Column(ordinal).NilCount() == 0 {
-		// fast path
-		maxValue, maxIndex := c.Column(ordinal).BooleanValue(start), start
-		for i := start; i < end; i++ {
-			v := c.Column(ordinal).BooleanValue(i)
+			v := values[i]
 			if (v != maxValue && v) || (v == maxValue && c.TimeByIndex(i) < c.TimeByIndex(maxIndex)) {
 				maxIndex = i
 				maxValue = v
@@ -591,13 +526,13 @@ func BooleanMaxReduce(c Chunk, ordinal, start, end int) (int, bool, bool) {
 	}
 
 	// slow path
-	vs, ve := c.Column(ordinal).GetRangeValueIndexV2(start, end)
+	vs, ve := column.GetRangeValueIndexV2(start, end)
 	if vs == ve {
 		return start, false, true
 	}
-	maxValue, maxIndex := c.Column(ordinal).BooleanValue(vs), c.Column(ordinal).GetTimeIndex(vs)
+	maxValue, maxIndex := values[vs], column.GetTimeIndex(vs)
 	for i := vs; i < ve; i++ {
-		v, index := c.Column(ordinal).BooleanValue(i), c.Column(ordinal).GetTimeIndex(i)
+		v, index := values[i], column.GetTimeIndex(i)
 		if (v != maxValue && v) || (v == maxValue && c.TimeByIndex(index) < c.TimeByIndex(maxIndex)) {
 			maxIndex = index
 			maxValue = v
@@ -649,108 +584,13 @@ func NewStdDevReduce[T util.NumberOnly]() SliceReduce[T] {
 	}
 }
 
-func FloatFirstReduce(c Chunk, ordinal, start, end int) (int, float64, bool) {
-	if c.Column(ordinal).NilCount() == 0 {
+func BooleanFirstReduce(c Chunk, values []bool, ordinal, start, end int) (int, bool, bool) {
+	column := c.Column(ordinal)
+	if column.NilCount() == 0 {
 		// fast path
-		firstValue, firstIndex := c.Column(ordinal).FloatValue(start), start
+		firstValue, firstIndex := values[start], start
 		for i := start; i < end; i++ {
-			v := c.Column(ordinal).FloatValue(i)
-			if c.TimeByIndex(i) < c.TimeByIndex(firstIndex) ||
-				(c.TimeByIndex(i) == c.TimeByIndex(firstIndex) && v > firstValue) {
-				firstIndex = i
-				firstValue = v
-			}
-		}
-		return firstIndex, firstValue, false
-	}
-
-	// slow path
-	vs, ve := c.Column(ordinal).GetRangeValueIndexV2(start, end)
-	if vs == ve {
-		return start, 0, true
-	}
-	firstValue, firstIndex := c.Column(ordinal).FloatValue(vs), int(c.Column(ordinal).GetTimeIndex(vs))
-	for i := vs; i < ve; i++ {
-		v, index := c.Column(ordinal).FloatValue(i), int(c.Column(ordinal).GetTimeIndex(i))
-		if c.TimeByIndex(index) < c.TimeByIndex(firstIndex) ||
-			(c.TimeByIndex(index) == c.TimeByIndex(firstIndex) && v > firstValue) {
-			firstIndex = index
-			firstValue = v
-		}
-	}
-	return firstIndex, firstValue, false
-}
-
-func IntegerFirstReduce(c Chunk, ordinal, start, end int) (int, int64, bool) {
-	if c.Column(ordinal).NilCount() == 0 {
-		// fast path
-		firstValue, firstIndex := c.Column(ordinal).IntegerValue(start), start
-		for i := start; i < end; i++ {
-			v := c.Column(ordinal).IntegerValue(i)
-			if c.TimeByIndex(i) < c.TimeByIndex(firstIndex) ||
-				(c.TimeByIndex(i) == c.TimeByIndex(firstIndex) && v > firstValue) {
-				firstIndex = i
-				firstValue = v
-			}
-		}
-		return firstIndex, firstValue, false
-	}
-
-	// slow path
-	vs, ve := c.Column(ordinal).GetRangeValueIndexV2(start, end)
-	if vs == ve {
-		return start, 0, true
-	}
-	firstValue, firstIndex := c.Column(ordinal).IntegerValue(vs), int(c.Column(ordinal).GetTimeIndex(vs))
-	for i := vs; i < ve; i++ {
-		v, index := c.Column(ordinal).IntegerValue(i), int(c.Column(ordinal).GetTimeIndex(i))
-		if c.TimeByIndex(index) < c.TimeByIndex(firstIndex) ||
-			(c.TimeByIndex(index) == c.TimeByIndex(firstIndex) && v > firstValue) {
-			firstIndex = index
-			firstValue = v
-		}
-	}
-	return firstIndex, firstValue, false
-}
-
-func StringFirstReduce(c Chunk, ordinal, start, end int) (int, string, bool) {
-	if c.Column(ordinal).NilCount() == 0 {
-		// fast path
-		firstValue, firstIndex := c.Column(ordinal).StringValue(start), start
-		for i := start; i < end; i++ {
-			v := c.Column(ordinal).StringValue(i)
-			if c.TimeByIndex(i) < c.TimeByIndex(firstIndex) ||
-				(c.TimeByIndex(i) == c.TimeByIndex(firstIndex) && v > firstValue) {
-				firstIndex = i
-				firstValue = v
-			}
-		}
-		return firstIndex, firstValue, false
-	}
-
-	// slow path
-	vs, ve := c.Column(ordinal).GetRangeValueIndexV2(start, end)
-	if vs == ve {
-		return start, "", true
-	}
-	firstValue, firstIndex := c.Column(ordinal).StringValue(vs), int(c.Column(ordinal).GetTimeIndex(vs))
-	for i := vs; i < ve; i++ {
-		v, index := c.Column(ordinal).StringValue(i), int(c.Column(ordinal).GetTimeIndex(i))
-		if c.TimeByIndex(index) < c.TimeByIndex(firstIndex) ||
-			(c.TimeByIndex(index) == c.TimeByIndex(firstIndex) && v > firstValue) {
-			firstIndex = index
-			firstValue = v
-		}
-	}
-	return firstIndex, firstValue, false
-}
-
-func BooleanFirstReduce(c Chunk, ordinal, start, end int) (int, bool, bool) {
-	if c.Column(ordinal).NilCount() == 0 {
-		// fast path
-		firstValue, firstIndex := c.Column(ordinal).BooleanValue(start), start
-		for i := start; i < end; i++ {
-			v := c.Column(ordinal).BooleanValue(i)
+			v := values[i]
 			if c.TimeByIndex(i) < c.TimeByIndex(firstIndex) ||
 				(c.TimeByIndex(i) == c.TimeByIndex(firstIndex) && !v && firstValue) {
 				firstIndex = i
@@ -761,13 +601,13 @@ func BooleanFirstReduce(c Chunk, ordinal, start, end int) (int, bool, bool) {
 	}
 
 	// slow path
-	vs, ve := c.Column(ordinal).GetRangeValueIndexV2(start, end)
+	vs, ve := column.GetRangeValueIndexV2(start, end)
 	if vs == ve {
 		return start, false, true
 	}
-	firstValue, firstIndex := c.Column(ordinal).BooleanValue(vs), int(c.Column(ordinal).GetTimeIndex(vs))
+	firstValue, firstIndex := values[vs], column.GetTimeIndex(vs)
 	for i := vs; i < ve; i++ {
-		v, index := c.Column(ordinal).BooleanValue(i), int(c.Column(ordinal).GetTimeIndex(i))
+		v, index := values[i], column.GetTimeIndex(i)
 		if c.TimeByIndex(index) < c.TimeByIndex(firstIndex) ||
 			(c.TimeByIndex(index) == c.TimeByIndex(firstIndex) && !v && firstValue) {
 			firstIndex = index
@@ -775,4 +615,527 @@ func BooleanFirstReduce(c Chunk, ordinal, start, end int) (int, bool, bool) {
 		}
 	}
 	return firstIndex, firstValue, false
+}
+
+func FirstReduce[T util.ExceptBool](c Chunk, values []T, ordinal, start, end int) (int, T, bool) {
+	column := c.Column(ordinal)
+	if column.NilCount() == 0 {
+		// fast path
+		firstValue, firstIndex := values[start], start
+		for i := start; i < end; i++ {
+			v := values[i]
+			if c.TimeByIndex(i) < c.TimeByIndex(firstIndex) ||
+				(c.TimeByIndex(i) == c.TimeByIndex(firstIndex) && v > firstValue) {
+				firstIndex = i
+				firstValue = v
+			}
+		}
+		return firstIndex, firstValue, false
+	}
+
+	// slow path
+	var defaultValue T
+	vs, ve := column.GetRangeValueIndexV2(start, end)
+	if vs == ve {
+		return start, defaultValue, true
+	}
+	firstValue, firstIndex := values[vs], column.GetTimeIndex(vs)
+	for i := vs; i < ve; i++ {
+		v, index := values[i], column.GetTimeIndex(i)
+		if c.TimeByIndex(index) < c.TimeByIndex(firstIndex) ||
+			(c.TimeByIndex(index) == c.TimeByIndex(firstIndex) && v > firstValue) {
+			firstIndex = index
+			firstValue = v
+		}
+	}
+	return firstIndex, firstValue, false
+}
+
+func IrateFastReduce[T util.NumberOnly](c Chunk, values []T, ordinal, start, end int) (int, int, T, T, bool) {
+	if end-start == 0 {
+		return 0, 0, 0, 0, true
+	}
+	if end-start == 1 {
+		v := values[start]
+		return start, start, v, v, false
+	}
+	var (
+		fi, si int
+		fv, sv T
+	)
+	if c.TimeByIndex(start) < c.TimeByIndex(start+1) || (c.TimeByIndex(start) == c.TimeByIndex(start+1) && fv > sv) {
+		fi, si, fv, sv = start, start+1, values[start], values[start+1]
+	} else {
+		fi, si, fv, sv = start+1, start, values[start+1], values[start]
+	}
+	if end-start == 2 {
+		return fi, si, fv, sv, false
+	}
+	for i := start + 2; i < end; i++ {
+		v := values[i]
+		if c.TimeByIndex(i) < c.TimeByIndex(fi) ||
+			(c.TimeByIndex(i) == c.TimeByIndex(fi) && v < fv) {
+			continue
+		}
+		if c.TimeByIndex(i) > c.TimeByIndex(fi) ||
+			(c.TimeByIndex(i) == c.TimeByIndex(fi) && v > fv) {
+			if c.TimeByIndex(i) > c.TimeByIndex(si) ||
+				(c.TimeByIndex(i) == c.TimeByIndex(si) && v > sv) {
+				fi, fv = si, sv
+				si, sv = i, v
+			} else {
+				fi, fv = i, v
+			}
+		}
+	}
+	return fi, si, fv, sv, false
+}
+
+func IrateSlowReduce[T util.NumberOnly](c Chunk, values []T, ordinal, start, end int) (int, int, T, T, bool) {
+	vs, ve := c.Column(ordinal).GetRangeValueIndexV2(start, end)
+	if vs == ve {
+		return 0, 0, 0, 0, true
+	}
+	if ve-vs == 1 {
+		v := values[vs]
+		return start, start, v, v, false
+	}
+	var (
+		fi, si int
+		fv, sv T
+	)
+	col := c.Column(ordinal)
+	fv, sv = values[vs], values[vs+1]
+	fi, si = col.GetTimeIndex(vs), col.GetTimeIndex(vs+1)
+	if !(c.TimeByIndex(fi) < c.TimeByIndex(si) || (c.TimeByIndex(fi) == c.TimeByIndex(si) && fv > sv)) {
+		fi, si, fv, sv = si, fi, sv, fv
+	}
+	if ve-vs == 2 {
+		return fi, si, fv, sv, false
+	}
+	for i := vs + 2; i < ve; i++ {
+		v, index := values[i], c.Column(ordinal).GetTimeIndex(i)
+		if c.TimeByIndex(index) < c.TimeByIndex(fi) ||
+			(c.TimeByIndex(index) == c.TimeByIndex(fi) && v > fv) {
+			continue
+		}
+		if c.TimeByIndex(index) > c.TimeByIndex(fi) ||
+			(c.TimeByIndex(index) == c.TimeByIndex(fi) && v > fv) {
+			if c.TimeByIndex(index) > c.TimeByIndex(si) ||
+				(c.TimeByIndex(index) == c.TimeByIndex(si) && v > sv) {
+				fi, fv = si, sv
+				si, sv = index, v
+			} else {
+				fi, fv = index, v
+			}
+		}
+	}
+	return fi, si, fv, sv, false
+}
+
+func IrateMiddleReduce[T util.NumberOnly](c Chunk, values []T, ordinal, start, end int) (int, int, T, T, bool) {
+	if c.Column(ordinal).NilCount() == 0 {
+		// fast path
+		return IrateFastReduce(c, values, ordinal, start, end)
+	}
+
+	// slow path
+	return IrateSlowReduce(c, values, ordinal, start, end)
+}
+
+func RateFastReduce[T util.NumberOnly](c Chunk, values []T, ordinal, start, end int) (int, int, T, T, bool) {
+	if end-start == 0 {
+		return 0, 0, 0, 0, true
+	}
+	firstValue, firstIndex := values[start], start
+	lastValue, lastIndex := firstValue, firstIndex
+	for i := start; i < end; i++ {
+		v := values[i]
+		if c.TimeByIndex(i) < c.TimeByIndex(firstIndex) ||
+			(c.TimeByIndex(i) == c.TimeByIndex(firstIndex) && v > firstValue) {
+			firstIndex = i
+			firstValue = v
+		}
+		if c.TimeByIndex(i) > c.TimeByIndex(lastIndex) ||
+			(c.TimeByIndex(i) == c.TimeByIndex(lastIndex) && v > lastValue) {
+			lastIndex = i
+			lastValue = v
+		}
+	}
+	return firstIndex, lastIndex, firstValue, lastValue, false
+}
+
+func RateLowReduce[T util.NumberOnly](c Chunk, values []T, ordinal, start, end int) (int, int, T, T, bool) {
+	vs, ve := c.Column(ordinal).GetRangeValueIndexV2(start, end)
+	if vs == ve {
+		return 0, 0, 0, 0, true
+	}
+	firstValue, firstIndex := values[vs], c.Column(ordinal).GetTimeIndex(vs)
+	lastValue, lastIndex := firstValue, firstIndex
+	for i := vs; i < ve; i++ {
+		v, index := values[i], c.Column(ordinal).GetTimeIndex(i)
+		if c.TimeByIndex(index) < c.TimeByIndex(firstIndex) ||
+			(c.TimeByIndex(index) == c.TimeByIndex(firstIndex) && v > firstValue) {
+			firstIndex = index
+			firstValue = v
+		}
+		if c.TimeByIndex(index) > c.TimeByIndex(lastIndex) ||
+			(c.TimeByIndex(index) == c.TimeByIndex(lastIndex) && v > lastValue) {
+			lastIndex = index
+			lastValue = v
+		}
+	}
+	return firstIndex, lastIndex, firstValue, lastValue, false
+}
+
+func RateMiddleReduce[T util.NumberOnly](c Chunk, values []T, ordinal, start, end int) (int, int, T, T, bool) {
+	if c.Column(ordinal).NilCount() == 0 {
+		// fast path
+		return RateFastReduce(c, values, ordinal, start, end)
+	}
+
+	// slow path
+	return RateLowReduce(c, values, ordinal, start, end)
+}
+
+func LastReduce[T util.ExceptBool](c Chunk, values []T, ordinal, start, end int) (int, T, bool) {
+	if c.Column(ordinal).NilCount() == 0 {
+		// fast path
+		lastValue, lastIndex := values[start], start
+		for i := start; i < end; i++ {
+			v := values[i]
+			if c.TimeByIndex(i) > c.TimeByIndex(lastIndex) ||
+				(c.TimeByIndex(i) == c.TimeByIndex(lastIndex) && v > lastValue) {
+				lastIndex = i
+				lastValue = v
+			}
+		}
+		return lastIndex, lastValue, false
+	}
+
+	// slow path
+	var defaultValue T
+	vs, ve := c.Column(ordinal).GetRangeValueIndexV2(start, end)
+	if vs == ve {
+		return start, defaultValue, true
+	}
+	lastValue, lastIndex := values[vs], c.Column(ordinal).GetTimeIndex(vs)
+	for i := vs; i < ve; i++ {
+		v, index := values[i], c.Column(ordinal).GetTimeIndex(i)
+		if c.TimeByIndex(index) > c.TimeByIndex(lastIndex) ||
+			(c.TimeByIndex(index) == c.TimeByIndex(lastIndex) && v > lastValue) {
+			lastIndex = index
+			lastValue = v
+		}
+	}
+	return lastIndex, lastValue, false
+}
+
+func BooleanLastReduce(c Chunk, values []bool, ordinal, start, end int) (int, bool, bool) {
+	if c.Column(ordinal).NilCount() == 0 {
+		// fast path
+		lastValue, lastIndex := values[start], start
+		for i := start; i < end; i++ {
+			v := c.Column(ordinal).BooleanValue(i)
+			if c.TimeByIndex(i) > c.TimeByIndex(lastIndex) ||
+				(c.TimeByIndex(i) == c.TimeByIndex(lastIndex) && v && !lastValue) {
+				lastIndex = i
+				lastValue = v
+			}
+		}
+		return lastIndex, lastValue, false
+	}
+
+	// slow path
+	vs, ve := c.Column(ordinal).GetRangeValueIndexV2(start, end)
+	if vs == ve {
+		return start, false, true
+	}
+	lastValue, lastIndex := values[vs], c.Column(ordinal).GetTimeIndex(vs)
+	for i := vs; i < ve; i++ {
+		v, index := values[i], c.Column(ordinal).GetTimeIndex(i)
+		if c.TimeByIndex(index) > c.TimeByIndex(lastIndex) ||
+			(c.TimeByIndex(index) == c.TimeByIndex(lastIndex) && v && !lastValue) {
+			lastIndex = index
+			lastValue = v
+		}
+	}
+	return lastIndex, lastValue, false
+}
+
+func BooleanLastTimeColFastReduce(c Chunk, ordinal, start, end int) (int, bool, bool) {
+	// fast path
+	lastValue, lastIndex := c.Column(ordinal).BooleanValue(start), start
+	// column time is not initialized in the subquery
+	if len(c.Column(ordinal).ColumnTimes()) == 0 {
+		for i := start; i < end; i++ {
+			v := c.Column(ordinal).BooleanValue(i)
+			if c.TimeByIndex(i) > c.TimeByIndex(lastIndex) ||
+				(c.TimeByIndex(i) == c.TimeByIndex(lastIndex) && v && !lastValue) {
+				lastIndex = i
+				lastValue = v
+			}
+		}
+		return lastIndex, lastValue, false
+	}
+	// column time is initialized
+	for i := start; i < end; i++ {
+		v := c.Column(ordinal).BooleanValue(i)
+		if c.Column(ordinal).ColumnTime(i) > c.Column(ordinal).ColumnTime(lastIndex) ||
+			(c.Column(ordinal).ColumnTime(i) == c.Column(ordinal).ColumnTime(lastIndex) && v && !lastValue) {
+			lastIndex = i
+			lastValue = v
+		}
+	}
+	return lastIndex, lastValue, false
+}
+
+func BooleanLastTimeColSlowReduce(c Chunk, ordinal, start, end int) (int, bool, bool) {
+	// slow path
+	vs, ve := c.Column(ordinal).GetRangeValueIndexV2(start, end)
+	if vs == ve {
+		return start, false, true
+	}
+	// column time is not initialized in the subquery
+	if len(c.Column(ordinal).ColumnTimes()) == 0 {
+		lastValue, lastIndex := c.Column(ordinal).BooleanValue(vs), c.Column(ordinal).GetTimeIndex(vs)
+		for i := start; i < end; i++ {
+			if c.Column(ordinal).IsNilV2(i) {
+				continue
+			}
+			v := c.Column(ordinal).BooleanValue(c.Column(ordinal).GetValueIndexV2(i))
+			if c.TimeByIndex(i) > c.TimeByIndex(lastIndex) ||
+				(c.TimeByIndex(i) == c.TimeByIndex(lastIndex) && v && !lastValue) {
+				lastIndex = i
+				lastValue = v
+			}
+		}
+		return lastIndex, lastValue, false
+	}
+	// column time is initialized
+	lastValue, lastIndex := c.Column(ordinal).BooleanValue(vs), vs
+	for i := vs; i < ve; i++ {
+		v := c.Column(ordinal).BooleanValue(i)
+		if c.Column(ordinal).ColumnTime(i) > c.Column(ordinal).ColumnTime(lastIndex) ||
+			(c.Column(ordinal).ColumnTime(i) == c.Column(ordinal).ColumnTime(lastIndex) && v && !lastValue) {
+			lastIndex = i
+			lastValue = v
+		}
+	}
+	return lastIndex, lastValue, false
+}
+
+func BooleanLastTimeColReduce(c Chunk, ordinal, start, end int) (int, bool, bool) {
+	if c.Column(ordinal).NilCount() == 0 {
+		return BooleanLastTimeColFastReduce(c, ordinal, start, end)
+	}
+	return BooleanLastTimeColSlowReduce(c, ordinal, start, end)
+}
+
+func LastTimeColFastReduce[T util.ExceptBool](c Chunk, values []T, ordinal, start, end int) (int, T, bool) {
+	// fast path
+	lastValue, lastIndex := values[start], start
+	// column time is not initialized in the subquery
+	if len(c.Column(ordinal).ColumnTimes()) == 0 {
+		for i := start; i < end; i++ {
+			v := values[i]
+			if c.TimeByIndex(i) > c.TimeByIndex(lastIndex) ||
+				(c.TimeByIndex(i) == c.TimeByIndex(lastIndex) && v > lastValue) {
+				lastIndex = i
+				lastValue = v
+			}
+		}
+		return lastIndex, lastValue, false
+	}
+	// column time is initialized
+	for i := start; i < end; i++ {
+		v := values[i]
+		if c.Column(ordinal).ColumnTime(i) > c.Column(ordinal).ColumnTime(lastIndex) ||
+			(c.Column(ordinal).ColumnTime(i) == c.Column(ordinal).ColumnTime(lastIndex) && v > lastValue) {
+			lastIndex = i
+			lastValue = v
+		}
+	}
+	return lastIndex, lastValue, false
+}
+
+func LastTimeColSlowReduce[T util.ExceptBool](c Chunk, values []T, ordinal, start, end int) (int, T, bool) {
+	// slow path
+	var defaultValue T
+	vs, ve := c.Column(ordinal).GetRangeValueIndexV2(start, end)
+	if vs == ve {
+		return start, defaultValue, true
+	}
+	// column time is not initialized in the subquery
+	if len(c.Column(ordinal).ColumnTimes()) == 0 {
+		lastValue, lastIndex := values[vs], c.Column(ordinal).GetTimeIndex(vs)
+		for i := start; i < end; i++ {
+			if c.Column(ordinal).IsNilV2(i) {
+				continue
+			}
+			v := values[c.Column(ordinal).GetValueIndexV2(i)]
+			if c.TimeByIndex(i) > c.TimeByIndex(lastIndex) ||
+				(c.TimeByIndex(i) == c.TimeByIndex(lastIndex) && v > lastValue) {
+				lastIndex = i
+				lastValue = v
+			}
+		}
+		return lastIndex, lastValue, false
+	}
+	// column time is initialized
+	lastValue, lastIndex := values[vs], vs
+	for i := vs; i < ve; i++ {
+		v := values[i]
+		if c.Column(ordinal).ColumnTime(i) > c.Column(ordinal).ColumnTime(lastIndex) ||
+			(c.Column(ordinal).ColumnTime(i) == c.Column(ordinal).ColumnTime(lastIndex) && v > lastValue) {
+			lastIndex = i
+			lastValue = v
+		}
+	}
+	return lastIndex, lastValue, false
+}
+
+func LastTimeColReduce[T util.ExceptBool](c Chunk, values []T, ordinal, start, end int) (int, T, bool) {
+	if c.Column(ordinal).NilCount() == 0 {
+		return LastTimeColFastReduce(c, values, ordinal, start, end)
+	}
+	return LastTimeColSlowReduce(c, values, ordinal, start, end)
+}
+
+func FirstTimeColFastReduce[T util.ExceptBool](c Chunk, values []T, ordinal, start, end int) (int, T, bool) {
+	// fast path
+	firstValue, firstIndex := values[start], start
+	// column time is not initialized in the subquery
+	if len(c.Column(ordinal).ColumnTimes()) == 0 {
+		for i := start; i < end; i++ {
+			v := values[i]
+			if c.TimeByIndex(i) < c.TimeByIndex(firstIndex) ||
+				(c.TimeByIndex(i) == c.TimeByIndex(firstIndex) && v > firstValue) {
+				firstIndex = i
+				firstValue = v
+			}
+		}
+		return firstIndex, firstValue, false
+	}
+	// column time is initialized
+	for i := start; i < end; i++ {
+		v := values[i]
+		if c.Column(ordinal).ColumnTime(i) < c.Column(ordinal).ColumnTime(firstIndex) ||
+			(c.Column(ordinal).ColumnTime(i) == c.Column(ordinal).ColumnTime(firstIndex) && v > firstValue) {
+			firstIndex = i
+			firstValue = v
+		}
+	}
+	return firstIndex, firstValue, false
+}
+
+func FirstTimeColSlowReduce[T util.ExceptBool](c Chunk, values []T, ordinal, start, end int) (int, T, bool) {
+	// slow path
+	var defaultValue T
+	vs, ve := c.Column(ordinal).GetRangeValueIndexV2(start, end)
+	if vs == ve {
+		return start, defaultValue, true
+	}
+	// column time is not initialized in the subquery
+	if len(c.Column(ordinal).ColumnTimes()) == 0 {
+		firstValue, firstIndex := values[vs], c.Column(ordinal).GetTimeIndex(vs)
+		for i := start; i < end; i++ {
+			if c.Column(ordinal).IsNilV2(i) {
+				continue
+			}
+			v := values[c.Column(ordinal).GetValueIndexV2(i)]
+			if c.TimeByIndex(i) < c.TimeByIndex(firstIndex) ||
+				(c.TimeByIndex(i) == c.TimeByIndex(firstIndex) && v > firstValue) {
+				firstIndex = i
+				firstValue = v
+			}
+		}
+		return firstIndex, firstValue, false
+	}
+	// column time is initialized
+	firstValue, firstIndex := values[vs], vs
+	for i := vs; i < ve; i++ {
+		v := values[i]
+		if c.Column(ordinal).ColumnTime(i) < c.Column(ordinal).ColumnTime(firstIndex) ||
+			(c.Column(ordinal).ColumnTime(i) == c.Column(ordinal).ColumnTime(firstIndex) && v > firstValue) {
+			firstIndex = i
+			firstValue = v
+		}
+	}
+	return firstIndex, firstValue, false
+}
+
+func FirstTimeColReduce[T util.ExceptBool](c Chunk, values []T, ordinal, start, end int) (int, T, bool) {
+	if c.Column(ordinal).NilCount() == 0 {
+		return FirstTimeColFastReduce(c, values, ordinal, start, end)
+	}
+	return FirstTimeColSlowReduce(c, values, ordinal, start, end)
+}
+
+func BooleanFirstTimeColFastReduce(c Chunk, ordinal, start, end int) (int, bool, bool) {
+	// fast path
+	firstValue, firstIndex := c.Column(ordinal).BooleanValue(start), start
+	// column time is not initialized in the subquery
+	if len(c.Column(ordinal).ColumnTimes()) == 0 {
+		for i := start; i < end; i++ {
+			v := c.Column(ordinal).BooleanValue(i)
+			if c.TimeByIndex(i) < c.TimeByIndex(firstIndex) ||
+				(c.TimeByIndex(i) == c.TimeByIndex(firstIndex) && !v && firstValue) {
+				firstIndex = i
+				firstValue = v
+			}
+		}
+		return firstIndex, firstValue, false
+	}
+	for i := start; i < end; i++ {
+		v := c.Column(ordinal).BooleanValue(i)
+		if c.Column(ordinal).ColumnTime(i) < c.Column(ordinal).ColumnTime(firstIndex) ||
+			(c.Column(ordinal).ColumnTime(i) == c.Column(ordinal).ColumnTime(firstIndex) && !v && firstValue) {
+			firstIndex = i
+			firstValue = v
+		}
+	}
+	return firstIndex, firstValue, false
+}
+
+func BooleanFirstTimeColSlowReduce(c Chunk, ordinal, start, end int) (int, bool, bool) {
+	// slow path
+	vs, ve := c.Column(ordinal).GetRangeValueIndexV2(start, end)
+	if vs == ve {
+		return start, false, true
+	}
+	// column time is not initialized in the subquery
+	if len(c.Column(ordinal).ColumnTimes()) == 0 {
+		firstValue, firstIndex := c.Column(ordinal).BooleanValue(vs), c.Column(ordinal).GetTimeIndex(vs)
+		for i := start; i < end; i++ {
+			if c.Column(ordinal).IsNilV2(i) {
+				continue
+			}
+			v := c.Column(ordinal).BooleanValue(c.Column(ordinal).GetValueIndexV2(i))
+			if c.TimeByIndex(i) < c.TimeByIndex(firstIndex) ||
+				(c.TimeByIndex(i) == c.TimeByIndex(firstIndex) && !v && firstValue) {
+				firstIndex = i
+				firstValue = v
+			}
+		}
+		return firstIndex, firstValue, false
+	}
+	// column time is initialized
+	firstValue, firstIndex := c.Column(ordinal).BooleanValue(vs), vs
+	for i := vs; i < ve; i++ {
+		v := c.Column(ordinal).BooleanValue(i)
+		if c.Column(ordinal).ColumnTime(i) < c.Column(ordinal).ColumnTime(firstIndex) ||
+			(c.Column(ordinal).ColumnTime(i) == c.Column(ordinal).ColumnTime(firstIndex) && !v && firstValue) {
+			firstIndex = i
+			firstValue = v
+		}
+	}
+	return firstIndex, firstValue, false
+}
+
+func BooleanFirstTimeColReduce(c Chunk, ordinal, start, end int) (int, bool, bool) {
+	if c.Column(ordinal).NilCount() == 0 {
+		return BooleanFirstTimeColFastReduce(c, ordinal, start, end)
+	}
+	return BooleanFirstTimeColSlowReduce(c, ordinal, start, end)
 }
