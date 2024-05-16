@@ -569,7 +569,7 @@ func Test_SubQueryAndBinOp(t *testing.T) {
 	args := args{
 		expr: BinaryExpr("avg(node_load5{instance=\"\",job=\"\"}) /  count(count(node_cpu_seconds_total{instance=\"\",job=\"\"}) by (cpu)) * 100"),
 	}
-	want := "SELECT value * 100 AS value FROM (SELECT mean(value) AS value FROM node_load5 WHERE time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z') binary op (SELECT count_prom(value) AS value FROM (SELECT count_prom(value) AS value FROM node_cpu_seconds_total WHERE time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY cpu) WHERE time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z') false false() 0()"
+	want := "SELECT value * 100 AS value FROM (SELECT mean(value) AS value FROM node_load5 WHERE time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z') binary op (SELECT count_prom(value) AS value FROM (SELECT count_prom(value) AS value FROM node_cpu_seconds_total WHERE time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY cpu) WHERE time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z') false false() 0() WHERE time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z'"
 	trans := &Transpiler{
 		PromCommand: PromCommand{
 			Start:         fields.Start,
