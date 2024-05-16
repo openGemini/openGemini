@@ -2279,10 +2279,11 @@ func TestRecordSort(t *testing.T) {
 		{Name: "time", Type: influx.Field_Type_Int},
 	}
 	fs2 := []record.Field{
+		{Name: "field0", Type: influx.Field_Type_Int},
 		{Name: "field1", Type: influx.Field_Type_Int},
 		{Name: "field3", Type: influx.Field_Type_Int},
 		{Name: "field4", Type: influx.Field_Type_Int},
-		{Name: "field0", Type: influx.Field_Type_Int},
+		{Name: "field5", Type: influx.Field_Type_Int},
 		{Name: "time", Type: influx.Field_Type_Int},
 	}
 	fs := record.Schemas{
@@ -2291,6 +2292,7 @@ func TestRecordSort(t *testing.T) {
 		{Name: "field2", Type: influx.Field_Type_Int},
 		{Name: "field3", Type: influx.Field_Type_Int},
 		{Name: "field4", Type: influx.Field_Type_Int},
+		{Name: "field5", Type: influx.Field_Type_Int},
 		{Name: "time", Type: influx.Field_Type_Int},
 	}
 

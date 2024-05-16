@@ -33,8 +33,12 @@ import (
 )
 
 var (
-	LevelMergeFileNum        = []int{8, 8}
-	DefaultLevelMergeFileNum = 4
+	LevelMergeFileNum = []int{8, 8}
+)
+
+const (
+	DefaultLevelMergeFileNum  = 4
+	MergeSelfFastModeMaxLevel = 2
 )
 
 type MergeContext struct {
