@@ -28,23 +28,19 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 )
 
-type FloatColFloatReduce func(c Chunk, ordinal, start, end int) (index int, value float64, isNil bool)
-
-type FloatColFloatMerge func(prevPoint, currPoint *Point[float64])
-
 type FloatColFloatIterator struct {
 	isSingleCall bool
 	inOrdinal    int
 	outOrdinal   int
 	prevPoint    *Point[float64]
 	currPoint    *Point[float64]
-	fn           FloatColFloatReduce
-	fv           FloatColFloatMerge
+	fn           ColReduceFunc[float64]
+	fv           ColMergeFunc[float64]
 	auxChunk     Chunk
 	auxProcessor []*AuxProcessor
 }
 
-func NewFloatColFloatIterator(fn FloatColFloatReduce, fv FloatColFloatMerge,
+func NewFloatColFloatIterator(fn ColReduceFunc[float64], fv ColMergeFunc[float64],
 	isSingleCall bool, inOrdinal, outOrdinal int, auxProcessor []*AuxProcessor, rowDataType hybridqp.RowDataType,
 ) *FloatColFloatIterator {
 	r := &FloatColFloatIterator{
@@ -175,13 +171,14 @@ func (r *FloatColFloatIterator) Next(ie *IteratorEndpoint, p *IteratorParams) {
 
 	var end int
 	firstIndex, lastIndex := 0, len(inChunk.IntervalIndex())-1
+	values := inChunk.Column(r.inOrdinal).FloatValues()
 	for i, start := range inChunk.IntervalIndex() {
 		if i < lastIndex {
 			end = inChunk.IntervalIndex()[i+1]
 		} else {
 			end = inChunk.NumberOfRows()
 		}
-		index, value, isNil := r.fn(inChunk, r.inOrdinal, start, end)
+		index, value, isNil := r.fn(inChunk, values, r.inOrdinal, start, end)
 		if isNil && ((i > firstIndex && i < lastIndex) ||
 			(firstIndex == lastIndex && r.prevPoint.isNil && !p.sameInterval) ||
 			(firstIndex != lastIndex && i == firstIndex && r.prevPoint.isNil) ||
@@ -200,23 +197,19 @@ func (r *FloatColFloatIterator) Next(ie *IteratorEndpoint, p *IteratorParams) {
 	}
 }
 
-type FloatColIntegerReduce func(c Chunk, ordinal, start, end int) (index int, value int64, isNil bool)
-
-type FloatColIntegerMerge func(prevPoint, currPoint *Point[int64])
-
 type FloatColIntegerIterator struct {
 	isSingleCall bool
 	inOrdinal    int
 	outOrdinal   int
 	prevPoint    *Point[int64]
 	currPoint    *Point[int64]
-	fn           FloatColIntegerReduce
-	fv           FloatColIntegerMerge
+	fn           ColReduceFunc[int64]
+	fv           ColMergeFunc[int64]
 	auxChunk     Chunk
 	auxProcessor []*AuxProcessor
 }
 
-func NewFloatColIntegerIterator(fn FloatColIntegerReduce, fv FloatColIntegerMerge,
+func NewFloatColIntegerIterator(fn ColReduceFunc[int64], fv ColMergeFunc[int64],
 	isSingleCall bool, inOrdinal, outOrdinal int, auxProcessor []*AuxProcessor, rowDataType hybridqp.RowDataType,
 ) *FloatColIntegerIterator {
 	r := &FloatColIntegerIterator{
@@ -347,13 +340,14 @@ func (r *FloatColIntegerIterator) Next(ie *IteratorEndpoint, p *IteratorParams) 
 
 	var end int
 	firstIndex, lastIndex := 0, len(inChunk.IntervalIndex())-1
+	values := inChunk.Column(r.inOrdinal).IntegerValues()
 	for i, start := range inChunk.IntervalIndex() {
 		if i < lastIndex {
 			end = inChunk.IntervalIndex()[i+1]
 		} else {
 			end = inChunk.NumberOfRows()
 		}
-		index, value, isNil := r.fn(inChunk, r.inOrdinal, start, end)
+		index, value, isNil := r.fn(inChunk, values, r.inOrdinal, start, end)
 		if isNil && ((i > firstIndex && i < lastIndex) ||
 			(firstIndex == lastIndex && r.prevPoint.isNil && !p.sameInterval) ||
 			(firstIndex != lastIndex && i == firstIndex && r.prevPoint.isNil) ||
@@ -372,23 +366,19 @@ func (r *FloatColIntegerIterator) Next(ie *IteratorEndpoint, p *IteratorParams) 
 	}
 }
 
-type IntegerColIntegerReduce func(c Chunk, ordinal, start, end int) (index int, value int64, isNil bool)
-
-type IntegerColIntegerMerge func(prevPoint, currPoint *Point[int64])
-
 type IntegerColIntegerIterator struct {
 	isSingleCall bool
 	inOrdinal    int
 	outOrdinal   int
 	prevPoint    *Point[int64]
 	currPoint    *Point[int64]
-	fn           IntegerColIntegerReduce
-	fv           IntegerColIntegerMerge
+	fn           ColReduceFunc[int64]
+	fv           ColMergeFunc[int64]
 	auxChunk     Chunk
 	auxProcessor []*AuxProcessor
 }
 
-func NewIntegerColIntegerIterator(fn IntegerColIntegerReduce, fv IntegerColIntegerMerge,
+func NewIntegerColIntegerIterator(fn ColReduceFunc[int64], fv ColMergeFunc[int64],
 	isSingleCall bool, inOrdinal, outOrdinal int, auxProcessor []*AuxProcessor, rowDataType hybridqp.RowDataType,
 ) *IntegerColIntegerIterator {
 	r := &IntegerColIntegerIterator{
@@ -519,13 +509,14 @@ func (r *IntegerColIntegerIterator) Next(ie *IteratorEndpoint, p *IteratorParams
 
 	var end int
 	firstIndex, lastIndex := 0, len(inChunk.IntervalIndex())-1
+	values := inChunk.Column(r.inOrdinal).IntegerValues()
 	for i, start := range inChunk.IntervalIndex() {
 		if i < lastIndex {
 			end = inChunk.IntervalIndex()[i+1]
 		} else {
 			end = inChunk.NumberOfRows()
 		}
-		index, value, isNil := r.fn(inChunk, r.inOrdinal, start, end)
+		index, value, isNil := r.fn(inChunk, values, r.inOrdinal, start, end)
 		if isNil && ((i > firstIndex && i < lastIndex) ||
 			(firstIndex == lastIndex && r.prevPoint.isNil && !p.sameInterval) ||
 			(firstIndex != lastIndex && i == firstIndex && r.prevPoint.isNil) ||
@@ -544,23 +535,19 @@ func (r *IntegerColIntegerIterator) Next(ie *IteratorEndpoint, p *IteratorParams
 	}
 }
 
-type StringColIntegerReduce func(c Chunk, ordinal, start, end int) (index int, value int64, isNil bool)
-
-type StringColIntegerMerge func(prevPoint, currPoint *Point[int64])
-
 type StringColIntegerIterator struct {
 	isSingleCall bool
 	inOrdinal    int
 	outOrdinal   int
 	prevPoint    *Point[int64]
 	currPoint    *Point[int64]
-	fn           StringColIntegerReduce
-	fv           StringColIntegerMerge
+	fn           ColReduceFunc[int64]
+	fv           ColMergeFunc[int64]
 	auxChunk     Chunk
 	auxProcessor []*AuxProcessor
 }
 
-func NewStringColIntegerIterator(fn StringColIntegerReduce, fv StringColIntegerMerge,
+func NewStringColIntegerIterator(fn ColReduceFunc[int64], fv ColMergeFunc[int64],
 	isSingleCall bool, inOrdinal, outOrdinal int, auxProcessor []*AuxProcessor, rowDataType hybridqp.RowDataType,
 ) *StringColIntegerIterator {
 	r := &StringColIntegerIterator{
@@ -691,13 +678,14 @@ func (r *StringColIntegerIterator) Next(ie *IteratorEndpoint, p *IteratorParams)
 
 	var end int
 	firstIndex, lastIndex := 0, len(inChunk.IntervalIndex())-1
+	values := inChunk.Column(r.inOrdinal).IntegerValues()
 	for i, start := range inChunk.IntervalIndex() {
 		if i < lastIndex {
 			end = inChunk.IntervalIndex()[i+1]
 		} else {
 			end = inChunk.NumberOfRows()
 		}
-		index, value, isNil := r.fn(inChunk, r.inOrdinal, start, end)
+		index, value, isNil := r.fn(inChunk, values, r.inOrdinal, start, end)
 		if isNil && ((i > firstIndex && i < lastIndex) ||
 			(firstIndex == lastIndex && r.prevPoint.isNil && !p.sameInterval) ||
 			(firstIndex != lastIndex && i == firstIndex && r.prevPoint.isNil) ||
@@ -716,8 +704,6 @@ func (r *StringColIntegerIterator) Next(ie *IteratorEndpoint, p *IteratorParams)
 	}
 }
 
-type StringColStringReduce func(c Chunk, ordinal, start, end int) (index int, value string, isNil bool)
-
 type StringColStringMerge func(prevPoint, currPoint *StringPoint)
 
 type StringColStringIterator struct {
@@ -726,13 +712,13 @@ type StringColStringIterator struct {
 	outOrdinal   int
 	prevPoint    *StringPoint
 	currPoint    *StringPoint
-	fn           StringColStringReduce
+	fn           ColReduceFunc[string]
 	fv           StringColStringMerge
 	auxChunk     Chunk
 	auxProcessor []*AuxProcessor
 }
 
-func NewStringColStringIterator(fn StringColStringReduce, fv StringColStringMerge,
+func NewStringColStringIterator(fn ColReduceFunc[string], fv StringColStringMerge,
 	isSingleCall bool, inOrdinal, outOrdinal int, auxProcessor []*AuxProcessor, rowDataType hybridqp.RowDataType,
 ) *StringColStringIterator {
 	r := &StringColStringIterator{
@@ -863,13 +849,14 @@ func (r *StringColStringIterator) Next(ie *IteratorEndpoint, p *IteratorParams) 
 
 	var end int
 	firstIndex, lastIndex := 0, len(inChunk.IntervalIndex())-1
+	values := inChunk.Column(r.inOrdinal).StringValuesV2(nil)
 	for i, start := range inChunk.IntervalIndex() {
 		if i < lastIndex {
 			end = inChunk.IntervalIndex()[i+1]
 		} else {
 			end = inChunk.NumberOfRows()
 		}
-		index, value, isNil := r.fn(inChunk, r.inOrdinal, start, end)
+		index, value, isNil := r.fn(inChunk, values, r.inOrdinal, start, end)
 		if isNil && ((i > firstIndex && i < lastIndex) ||
 			(firstIndex == lastIndex && r.prevPoint.isNil && !p.sameInterval) ||
 			(firstIndex != lastIndex && i == firstIndex && r.prevPoint.isNil) ||
@@ -888,23 +875,19 @@ func (r *StringColStringIterator) Next(ie *IteratorEndpoint, p *IteratorParams) 
 	}
 }
 
-type BooleanColIntegerReduce func(c Chunk, ordinal, start, end int) (index int, value int64, isNil bool)
-
-type BooleanColIntegerMerge func(prevPoint, currPoint *Point[int64])
-
 type BooleanColIntegerIterator struct {
 	isSingleCall bool
 	inOrdinal    int
 	outOrdinal   int
 	prevPoint    *Point[int64]
 	currPoint    *Point[int64]
-	fn           BooleanColIntegerReduce
-	fv           BooleanColIntegerMerge
+	fn           ColReduceFunc[int64]
+	fv           ColMergeFunc[int64]
 	auxChunk     Chunk
 	auxProcessor []*AuxProcessor
 }
 
-func NewBooleanColIntegerIterator(fn BooleanColIntegerReduce, fv BooleanColIntegerMerge,
+func NewBooleanColIntegerIterator(fn ColReduceFunc[int64], fv ColMergeFunc[int64],
 	isSingleCall bool, inOrdinal, outOrdinal int, auxProcessor []*AuxProcessor, rowDataType hybridqp.RowDataType,
 ) *BooleanColIntegerIterator {
 	r := &BooleanColIntegerIterator{
@@ -1035,13 +1018,14 @@ func (r *BooleanColIntegerIterator) Next(ie *IteratorEndpoint, p *IteratorParams
 
 	var end int
 	firstIndex, lastIndex := 0, len(inChunk.IntervalIndex())-1
+	values := inChunk.Column(r.inOrdinal).IntegerValues()
 	for i, start := range inChunk.IntervalIndex() {
 		if i < lastIndex {
 			end = inChunk.IntervalIndex()[i+1]
 		} else {
 			end = inChunk.NumberOfRows()
 		}
-		index, value, isNil := r.fn(inChunk, r.inOrdinal, start, end)
+		index, value, isNil := r.fn(inChunk, values, r.inOrdinal, start, end)
 		if isNil && ((i > firstIndex && i < lastIndex) ||
 			(firstIndex == lastIndex && r.prevPoint.isNil && !p.sameInterval) ||
 			(firstIndex != lastIndex && i == firstIndex && r.prevPoint.isNil) ||
@@ -1060,7 +1044,7 @@ func (r *BooleanColIntegerIterator) Next(ie *IteratorEndpoint, p *IteratorParams
 	}
 }
 
-type BooleanColBooleanReduce func(c Chunk, ordinal, start, end int) (index int, value bool, isNil bool)
+type BooleanColBooleanReduce func(c Chunk, values []bool, ordinal, start, end int) (index int, value bool, isNil bool)
 
 type BooleanColBooleanMerge func(prevPoint, currPoint *Point[bool])
 
@@ -1207,13 +1191,14 @@ func (r *BooleanColBooleanIterator) Next(ie *IteratorEndpoint, p *IteratorParams
 
 	var end int
 	firstIndex, lastIndex := 0, len(inChunk.IntervalIndex())-1
+	values := inChunk.Column(r.inOrdinal).BooleanValues()
 	for i, start := range inChunk.IntervalIndex() {
 		if i < lastIndex {
 			end = inChunk.IntervalIndex()[i+1]
 		} else {
 			end = inChunk.NumberOfRows()
 		}
-		index, value, isNil := r.fn(inChunk, r.inOrdinal, start, end)
+		index, value, isNil := r.fn(inChunk, values, r.inOrdinal, start, end)
 		if isNil && ((i > firstIndex && i < lastIndex) ||
 			(firstIndex == lastIndex && r.prevPoint.isNil && !p.sameInterval) ||
 			(firstIndex != lastIndex && i == firstIndex && r.prevPoint.isNil) ||
@@ -1232,22 +1217,18 @@ func (r *BooleanColBooleanIterator) Next(ie *IteratorEndpoint, p *IteratorParams
 	}
 }
 
-type FloatTimeColFloatReduce func(c Chunk, ordinal, start, end int) (index int, value float64, isNil bool)
-
-type FloatTimeColFloatMerge func(prevPoint, currPoint *Point[float64])
-
 type FloatTimeColFloatIterator struct {
 	initTimeCol bool
 	inOrdinal   int
 	outOrdinal  int
 	prevPoint   *Point[float64]
 	currPoint   *Point[float64]
-	fn          FloatTimeColFloatReduce
-	fv          FloatTimeColFloatMerge
+	fn          TimeColReduceFunc[float64]
+	fv          ColMergeFunc[float64]
 }
 
 func NewFloatTimeColFloatIterator(
-	fn FloatTimeColFloatReduce, fv FloatTimeColFloatMerge, inOrdinal, outOrdinal int,
+	fn TimeColReduceFunc[float64], fv ColMergeFunc[float64], inOrdinal, outOrdinal int,
 ) *FloatTimeColFloatIterator {
 	r := &FloatTimeColFloatIterator{
 		fn:         fn,
@@ -1335,13 +1316,14 @@ func (r *FloatTimeColFloatIterator) Next(ie *IteratorEndpoint, p *IteratorParams
 	var end int
 	r.initTimeCol = len(inChunk.Column(r.inOrdinal).ColumnTimes()) > 0
 	firstIndex, lastIndex := 0, len(inChunk.IntervalIndex())-1
+	values := inChunk.Column(r.inOrdinal).FloatValues()
 	for i, start := range inChunk.IntervalIndex() {
 		if i < lastIndex {
 			end = inChunk.IntervalIndex()[i+1]
 		} else {
 			end = inChunk.NumberOfRows()
 		}
-		index, value, isNil := r.fn(inChunk, r.inOrdinal, start, end)
+		index, value, isNil := r.fn(inChunk, values, r.inOrdinal, start, end)
 		if isNil && ((i > firstIndex && i < lastIndex) ||
 			(firstIndex == lastIndex && r.prevPoint.isNil && !p.sameInterval) ||
 			(firstIndex != lastIndex && i == firstIndex && r.prevPoint.isNil) ||
@@ -1360,22 +1342,18 @@ func (r *FloatTimeColFloatIterator) Next(ie *IteratorEndpoint, p *IteratorParams
 	}
 }
 
-type IntegerTimeColIntegerReduce func(c Chunk, ordinal, start, end int) (index int, value int64, isNil bool)
-
-type IntegerTimeColIntegerMerge func(prevPoint, currPoint *Point[int64])
-
 type IntegerTimeColIntegerIterator struct {
 	initTimeCol bool
 	inOrdinal   int
 	outOrdinal  int
 	prevPoint   *Point[int64]
 	currPoint   *Point[int64]
-	fn          IntegerTimeColIntegerReduce
-	fv          IntegerTimeColIntegerMerge
+	fn          TimeColReduceFunc[int64]
+	fv          ColMergeFunc[int64]
 }
 
 func NewIntegerTimeColIntegerIterator(
-	fn IntegerTimeColIntegerReduce, fv IntegerTimeColIntegerMerge, inOrdinal, outOrdinal int,
+	fn TimeColReduceFunc[int64], fv ColMergeFunc[int64], inOrdinal, outOrdinal int,
 ) *IntegerTimeColIntegerIterator {
 	r := &IntegerTimeColIntegerIterator{
 		fn:         fn,
@@ -1463,13 +1441,14 @@ func (r *IntegerTimeColIntegerIterator) Next(ie *IteratorEndpoint, p *IteratorPa
 	var end int
 	r.initTimeCol = len(inChunk.Column(r.inOrdinal).ColumnTimes()) > 0
 	firstIndex, lastIndex := 0, len(inChunk.IntervalIndex())-1
+	values := inChunk.Column(r.inOrdinal).IntegerValues()
 	for i, start := range inChunk.IntervalIndex() {
 		if i < lastIndex {
 			end = inChunk.IntervalIndex()[i+1]
 		} else {
 			end = inChunk.NumberOfRows()
 		}
-		index, value, isNil := r.fn(inChunk, r.inOrdinal, start, end)
+		index, value, isNil := r.fn(inChunk, values, r.inOrdinal, start, end)
 		if isNil && ((i > firstIndex && i < lastIndex) ||
 			(firstIndex == lastIndex && r.prevPoint.isNil && !p.sameInterval) ||
 			(firstIndex != lastIndex && i == firstIndex && r.prevPoint.isNil) ||
@@ -1488,8 +1467,6 @@ func (r *IntegerTimeColIntegerIterator) Next(ie *IteratorEndpoint, p *IteratorPa
 	}
 }
 
-type StringTimeColStringReduce func(c Chunk, ordinal, start, end int) (index int, value string, isNil bool)
-
 type StringTimeColStringMerge func(prevPoint, currPoint *StringPoint)
 
 type StringTimeColStringIterator struct {
@@ -1498,12 +1475,12 @@ type StringTimeColStringIterator struct {
 	outOrdinal  int
 	prevPoint   *StringPoint
 	currPoint   *StringPoint
-	fn          StringTimeColStringReduce
+	fn          TimeColReduceFunc[string]
 	fv          StringTimeColStringMerge
 }
 
 func NewStringTimeColStringIterator(
-	fn StringTimeColStringReduce, fv StringTimeColStringMerge, inOrdinal, outOrdinal int,
+	fn TimeColReduceFunc[string], fv StringTimeColStringMerge, inOrdinal, outOrdinal int,
 ) *StringTimeColStringIterator {
 	r := &StringTimeColStringIterator{
 		fn:         fn,
@@ -1591,13 +1568,14 @@ func (r *StringTimeColStringIterator) Next(ie *IteratorEndpoint, p *IteratorPara
 	var end int
 	r.initTimeCol = len(inChunk.Column(r.inOrdinal).ColumnTimes()) > 0
 	firstIndex, lastIndex := 0, len(inChunk.IntervalIndex())-1
+	values := inChunk.Column(r.inOrdinal).StringValuesV2(nil)
 	for i, start := range inChunk.IntervalIndex() {
 		if i < lastIndex {
 			end = inChunk.IntervalIndex()[i+1]
 		} else {
 			end = inChunk.NumberOfRows()
 		}
-		index, value, isNil := r.fn(inChunk, r.inOrdinal, start, end)
+		index, value, isNil := r.fn(inChunk, values, r.inOrdinal, start, end)
 		if isNil && ((i > firstIndex && i < lastIndex) ||
 			(firstIndex == lastIndex && r.prevPoint.isNil && !p.sameInterval) ||
 			(firstIndex != lastIndex && i == firstIndex && r.prevPoint.isNil) ||
@@ -5977,29 +5955,21 @@ func (r *IntegerColIntegerTransIterator) Next(ie *IteratorEndpoint, p *IteratorP
 	}
 }
 
-type FloatColFloatRateMiddleReduce func(c Chunk, ordinal, start, end int) (firstIndex, lastIndex int, firstValue, lastValue float64, isNil bool)
-
-type FloatColFloatRateFinalReduce func(firstTime, lastTime int64, firstValue, lastValue float64, interval *hybridqp.Interval) (v float64, isNil bool)
-
-type FloatColFloatRateUpdate func(prevPoints, currPoints [2]*Point[float64])
-
-type FloatColFloatRateMerge func(prevPoints [2]*Point[float64], interval *hybridqp.Interval) (v float64, isNil bool)
-
 type FloatColFloatRateIterator struct {
 	isSingleCall bool
 	inOrdinal    int
 	outOrdinal   int
 	interval     *hybridqp.Interval
-	fn           FloatColFloatRateMiddleReduce
-	fv           FloatColFloatRateFinalReduce
-	fu           FloatColFloatRateUpdate
-	fm           FloatColFloatRateMerge
+	fn           RateMiddleReduceFunc[float64]
+	fv           RateFinalReduceFunc[float64]
+	fu           RateUpdateFunc[float64]
+	fm           RateMergeFunc[float64]
 	prevPoints   [2]*Point[float64]
 	currPoints   [2]*Point[float64]
 }
 
-func NewFloatColFloatRateIterator(fn FloatColFloatRateMiddleReduce, fv FloatColFloatRateFinalReduce,
-	fu FloatColFloatRateUpdate, fm FloatColFloatRateMerge,
+func NewFloatColFloatRateIterator(fn RateMiddleReduceFunc[float64], fv RateFinalReduceFunc[float64],
+	fu RateUpdateFunc[float64], fm RateMergeFunc[float64],
 	isSingleCall bool, inOrdinal, outOrdinal int, rowDataType hybridqp.RowDataType,
 	interval *hybridqp.Interval,
 ) *FloatColFloatRateIterator {
@@ -6098,6 +6068,7 @@ func (r *FloatColFloatRateIterator) Next(ie *IteratorEndpoint, p *IteratorParams
 	inChunk, outChunk := ie.InputPoint.Chunk, ie.OutputPoint.Chunk
 	firstIndex, lastIndex := 0, len(inChunk.IntervalIndex())-1
 	onlyOneInterval := inChunk.IntervalLen() == 1
+	values := inChunk.Column(r.inOrdinal).FloatValues()
 	for i, start := range inChunk.IntervalIndex() {
 		if i < lastIndex {
 			end = inChunk.IntervalIndex()[i+1]
@@ -6105,7 +6076,7 @@ func (r *FloatColFloatRateIterator) Next(ie *IteratorEndpoint, p *IteratorParams
 			end = inChunk.NumberOfRows()
 		}
 
-		fi, si, fv, sv, isNil := r.fn(inChunk, r.inOrdinal, start, end)
+		fi, si, fv, sv, isNil := r.fn(inChunk, values, r.inOrdinal, start, end)
 		if isNil {
 			r.processNullWindow(outChunk, p.sameInterval, onlyOneInterval, i, firstIndex, lastIndex)
 			continue
@@ -6124,29 +6095,21 @@ func (r *FloatColFloatRateIterator) Next(ie *IteratorEndpoint, p *IteratorParams
 	}
 }
 
-type IntegerColFloatRateMiddleReduce func(c Chunk, ordinal, start, end int) (firstIndex, lastIndex int, firstValue, lastValue int64, isNil bool)
-
-type IntegerColFloatRateFinalReduce func(firstTime, lastTime int64, firstValue, lastValue int64, interval *hybridqp.Interval) (v float64, isNil bool)
-
-type IntegerColFloatRateUpdate func(prevPoints, currPoints [2]*Point[int64])
-
-type IntegerColFloatRateMerge func(prevPoints [2]*Point[int64], interval *hybridqp.Interval) (v float64, isNil bool)
-
 type IntegerColFloatRateIterator struct {
 	isSingleCall bool
 	inOrdinal    int
 	outOrdinal   int
 	interval     *hybridqp.Interval
-	fn           IntegerColFloatRateMiddleReduce
-	fv           IntegerColFloatRateFinalReduce
-	fu           IntegerColFloatRateUpdate
-	fm           IntegerColFloatRateMerge
+	fn           RateMiddleReduceFunc[int64]
+	fv           RateFinalReduceFunc[int64]
+	fu           RateUpdateFunc[int64]
+	fm           RateMergeFunc[int64]
 	prevPoints   [2]*Point[int64]
 	currPoints   [2]*Point[int64]
 }
 
-func NewIntegerColFloatRateIterator(fn IntegerColFloatRateMiddleReduce, fv IntegerColFloatRateFinalReduce,
-	fu IntegerColFloatRateUpdate, fm IntegerColFloatRateMerge,
+func NewIntegerColFloatRateIterator(fn RateMiddleReduceFunc[int64], fv RateFinalReduceFunc[int64],
+	fu RateUpdateFunc[int64], fm RateMergeFunc[int64],
 	isSingleCall bool, inOrdinal, outOrdinal int, rowDataType hybridqp.RowDataType,
 	interval *hybridqp.Interval,
 ) *IntegerColFloatRateIterator {
@@ -6245,6 +6208,7 @@ func (r *IntegerColFloatRateIterator) Next(ie *IteratorEndpoint, p *IteratorPara
 	inChunk, outChunk := ie.InputPoint.Chunk, ie.OutputPoint.Chunk
 	firstIndex, lastIndex := 0, len(inChunk.IntervalIndex())-1
 	onlyOneInterval := inChunk.IntervalLen() == 1
+	values := inChunk.Column(r.inOrdinal).IntegerValues()
 	for i, start := range inChunk.IntervalIndex() {
 		if i < lastIndex {
 			end = inChunk.IntervalIndex()[i+1]
@@ -6252,7 +6216,7 @@ func (r *IntegerColFloatRateIterator) Next(ie *IteratorEndpoint, p *IteratorPara
 			end = inChunk.NumberOfRows()
 		}
 
-		fi, si, fv, sv, isNil := r.fn(inChunk, r.inOrdinal, start, end)
+		fi, si, fv, sv, isNil := r.fn(inChunk, values, r.inOrdinal, start, end)
 		if isNil {
 			r.processNullWindow(outChunk, p.sameInterval, onlyOneInterval, i, firstIndex, lastIndex)
 			continue
@@ -7299,21 +7263,19 @@ func (r *BooleanColBooleanSampleIterator) Next(ie *IteratorEndpoint, p *Iterator
 	}
 }
 
-type FloatColFloatWindowReduce func(c Chunk, ordinal, start, end int) (index int, value float64, isNil bool)
-
 type FloatSlidingWindowFloatIterator struct {
 	slidingNum int
 	inOrdinal  int
 	outOrdinal int
 	prevWindow *SlidingWindow[float64]
 	currWindow *SlidingWindow[float64]
-	fwr        FloatColFloatWindowReduce
+	fwr        ColReduceFunc[float64]
 	fpm        PointMerge[float64]
 	fwm        WindowMerge[float64]
 }
 
 func NewFloatSlidingWindowFloatIterator(
-	fwr FloatColFloatWindowReduce,
+	fwr ColReduceFunc[float64],
 	fpm PointMerge[float64],
 	fwm WindowMerge[float64],
 	inOrdinal, outOrdinal int, slidingNum int,
@@ -7384,13 +7346,14 @@ func (r *FloatSlidingWindowFloatIterator) Next(ie *IteratorEndpoint, p *Iterator
 	)
 	firstIndex, lastIndex := 0, len(p.winIdx)/r.slidingNum-1
 	inChunk, outChunk := ie.InputPoint.Chunk, ie.OutputPoint.Chunk
+	values := inChunk.Column(r.inOrdinal).FloatValues()
 	for i := range p.winIdx {
 		m, n := i/r.slidingNum, i%r.slidingNum
 		start, end = p.winIdx[i][0], p.winIdx[i][1]
 		if start == -1 || end == -1 || start >= end {
 			value, isNil = 0, true
 		} else {
-			_, value, isNil = r.fwr(inChunk, r.inOrdinal, start, end)
+			_, value, isNil = r.fwr(inChunk, values, r.inOrdinal, start, end)
 		}
 		if m == firstIndex && !r.prevWindow.IsNil() {
 			r.processFirstWindow(outChunk, value, isNil,
@@ -7403,7 +7366,7 @@ func (r *FloatSlidingWindowFloatIterator) Next(ie *IteratorEndpoint, p *Iterator
 	}
 }
 
-type BooleanColBooleanWindowReduce func(c Chunk, ordinal, start, end int) (index int, value bool, isNil bool)
+type BooleanColBooleanWindowReduce func(c Chunk, values []bool, ordinal, start, end int) (index int, value bool, isNil bool)
 
 type BooleanSlidingWindowBooleanIterator struct {
 	slidingNum int
@@ -7488,13 +7451,14 @@ func (r *BooleanSlidingWindowBooleanIterator) Next(ie *IteratorEndpoint, p *Iter
 	)
 	firstIndex, lastIndex := 0, len(p.winIdx)/r.slidingNum-1
 	inChunk, outChunk := ie.InputPoint.Chunk, ie.OutputPoint.Chunk
+	values := inChunk.Column(r.inOrdinal).BooleanValues()
 	for i := range p.winIdx {
 		m, n := i/r.slidingNum, i%r.slidingNum
 		start, end = p.winIdx[i][0], p.winIdx[i][1]
 		if start == -1 || end == -1 || start >= end {
 			value, isNil = false, true
 		} else {
-			_, value, isNil = r.fwr(inChunk, r.inOrdinal, start, end)
+			_, value, isNil = r.fwr(inChunk, values, r.inOrdinal, start, end)
 		}
 		if m == firstIndex && !r.prevWindow.IsNil() {
 			r.processFirstWindow(outChunk, value, isNil,
@@ -7515,13 +7479,13 @@ type IntegerSlidingWindowIntegerIterator struct {
 	outOrdinal int
 	prevWindow *SlidingWindow[int64]
 	currWindow *SlidingWindow[int64]
-	fwr        IntegerColIntegerWindowReduce
+	fwr        ColReduceFunc[int64]
 	fpm        PointMerge[int64]
 	fwm        WindowMerge[int64]
 }
 
 func NewIntegerSlidingWindowIntegerIterator(
-	fwr IntegerColIntegerWindowReduce,
+	fwr ColReduceFunc[int64],
 	fpm PointMerge[int64],
 	fwm WindowMerge[int64],
 	inOrdinal, outOrdinal int, slidingNum int,
@@ -7592,13 +7556,14 @@ func (r *IntegerSlidingWindowIntegerIterator) Next(ie *IteratorEndpoint, p *Iter
 	)
 	firstIndex, lastIndex := 0, len(p.winIdx)/r.slidingNum-1
 	inChunk, outChunk := ie.InputPoint.Chunk, ie.OutputPoint.Chunk
+	values := inChunk.Column(r.inOrdinal).IntegerValues()
 	for i := range p.winIdx {
 		m, n := i/r.slidingNum, i%r.slidingNum
 		start, end = p.winIdx[i][0], p.winIdx[i][1]
 		if start == -1 || end == -1 || start >= end {
 			value, isNil = 0, true
 		} else {
-			_, value, isNil = r.fwr(inChunk, r.inOrdinal, start, end)
+			_, value, isNil = r.fwr(inChunk, values, r.inOrdinal, start, end)
 		}
 		if m == firstIndex && !r.prevWindow.IsNil() {
 			r.processFirstWindow(outChunk, value, isNil,
@@ -7619,13 +7584,13 @@ type BooleanSlidingWindowIntegerIterator struct {
 	outOrdinal int
 	prevWindow *SlidingWindow[int64]
 	currWindow *SlidingWindow[int64]
-	fwr        BooleanColIntegerWindowReduce
+	fwr        ColReduceFunc[int64]
 	fpm        PointMerge[int64]
 	fwm        WindowMerge[int64]
 }
 
 func NewBooleanSlidingWindowIntegerIterator(
-	fwr BooleanColIntegerWindowReduce,
+	fwr ColReduceFunc[int64],
 	fpm PointMerge[int64],
 	fwm WindowMerge[int64],
 	inOrdinal, outOrdinal int, slidingNum int,
@@ -7697,13 +7662,14 @@ func (r *BooleanSlidingWindowIntegerIterator) Next(ie *IteratorEndpoint, p *Iter
 	)
 	firstIndex, lastIndex := 0, len(p.winIdx)/r.slidingNum-1
 	inChunk, outChunk := ie.InputPoint.Chunk, ie.OutputPoint.Chunk
+	values := inChunk.Column(r.inOrdinal).IntegerValues()
 	for i := range p.winIdx {
 		m, n := i/r.slidingNum, i%r.slidingNum
 		start, end = p.winIdx[i][0], p.winIdx[i][1]
 		if start == -1 || end == -1 || start >= end {
 			value, isNil = 0, true
 		} else {
-			_, value, isNil = r.fwr(inChunk, r.inOrdinal, start, end)
+			_, value, isNil = r.fwr(inChunk, values, r.inOrdinal, start, end)
 		}
 		if m == firstIndex && !r.prevWindow.IsNil() {
 			r.processFirstWindow(outChunk, value, isNil,
