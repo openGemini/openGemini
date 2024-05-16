@@ -173,12 +173,6 @@ func TestHybridStoreReaderFunctions(t *testing.T) {
 	reader.schema = schema
 	err = reader.initQueryCtx()
 	assert2.Equal(t, err, nil)
-	_, err = reader.initAttachedFileReader(executor.NewDetachedFrags("", 0))
-	assert2.Equal(t, strings.Contains(err.Error(), "invalid index info for attached file reader"), true)
-	_, err = reader.initDetachedFileReader(executor.NewAttachedFrags("", 0))
-	assert2.Equal(t, strings.Contains(err.Error(), "invalid index info for detached file reader"), true)
-	_, err = reader.initFileReader(&executor.DetachedFrags{BaseFrags: *executor.NewBaseFrags("", 3)})
-	assert2.Equal(t, strings.Contains(err.Error(), "invalid file reader"), true)
 	frag := executor.NewBaseFrags("", 3)
 	assert2.Equal(t, 72, frag.Size())
 	err = reader.initSchema()
@@ -244,12 +238,6 @@ func TestHybridStoreReaderFunctionsForFullText(t *testing.T) {
 	reader.schema = schema
 	err = reader.initQueryCtx()
 	assert2.Equal(t, err, nil)
-	_, err = reader.initAttachedFileReader(executor.NewDetachedFrags("", 0))
-	assert2.Equal(t, strings.Contains(err.Error(), "invalid index info for attached file reader"), true)
-	_, err = reader.initDetachedFileReader(executor.NewAttachedFrags("", 0))
-	assert2.Equal(t, strings.Contains(err.Error(), "invalid index info for detached file reader"), true)
-	_, err = reader.initFileReader(&executor.DetachedFrags{BaseFrags: *executor.NewBaseFrags("", 3)})
-	assert2.Equal(t, strings.Contains(err.Error(), "invalid file reader"), true)
 	frag := executor.NewBaseFrags("", 3)
 	assert2.Equal(t, 72, frag.Size())
 	err = reader.initSchema()
@@ -257,14 +245,38 @@ func TestHybridStoreReaderFunctionsForFullText(t *testing.T) {
 }
 
 func TestHybridIndexReaderFunctions(t *testing.T) {
-	indexReader := NewDetachedIndexReader(NewIndexContext(true, 8, createSortQuerySchema(), ""), &obs.ObsOptions{})
-	err := indexReader.Init()
+	unnest := &influxql.Unnest{
+		Expr: &influxql.Call{
+			Name: "match_all",
+			Args: []influxql.Expr{
+				&influxql.VarRef{Val: "([a-z]+),([0-9]+)", Type: influxql.String},
+				&influxql.VarRef{Val: "field1", Type: influxql.String},
+			},
+		},
+		Aliases: []string{"key1", "value1"},
+		DstType: []influxql.DataType{influxql.String, influxql.String},
+	}
+	schema := createSortQuerySchema()
+	schema.SetUnnests([]*influxql.Unnest{unnest})
+	readCtx := immutable.NewFileReaderContext(util.TimeRange{}, nil, immutable.NewReadContext(true), nil, nil, true)
+	indexReader := NewDetachedIndexReader(NewIndexContext(true, 8, schema, ""), &obs.ObsOptions{}, readCtx)
+	_, _, err := indexReader.CreateCursors()
+	assert2.Equal(t, strings.Contains(err.Error(), "endpoint is not set"), true)
+	_, err = indexReader.initFileReader(executor.NewDetachedFrags("", 0))
+	assert2.Equal(t, strings.Contains(err.Error(), "endpoint is not set"), true)
+
+	indexReader = NewDetachedIndexReader(NewIndexContext(true, 8, createSortQuerySchema(), ""), &obs.ObsOptions{}, nil)
+	err = indexReader.Init()
 	assert2.Equal(t, strings.Contains(err.Error(), "endpoint is not set"), true)
 	_, err = indexReader.Next()
 	assert2.Equal(t, strings.Contains(err.Error(), "endpoint is not set"), true)
-	indexReader1 := NewAttachedIndexReader(NewIndexContext(true, 8, createSortQuerySchema(), ""), &executor.AttachedIndexInfo{})
+	indexReader1 := NewAttachedIndexReader(NewIndexContext(true, 8, createSortQuerySchema(), ""), &executor.AttachedIndexInfo{}, nil)
 	_, err = indexReader1.Next()
 	assert2.Equal(t, err, nil)
+
+	indexReader1 = NewAttachedIndexReader(NewIndexContext(true, 8, createSortQuerySchema(), ""), &executor.AttachedIndexInfo{}, nil)
+	_, err = indexReader1.initFileReader(executor.NewDetachedFrags("", 0))
+	assert2.Equal(t, strings.Contains(err.Error(), "invalid index info for attached file reader"), true)
 	db, rp, mst, ptId := "db0", "rp0", "mst", uint32(0)
 	testDir := t.TempDir()
 	defer func() {
@@ -287,7 +299,7 @@ func TestHybridIndexReaderFunctions(t *testing.T) {
 	_, err = sh.GetIndexInfo(querySchema)
 	assert2.Equal(t, err, nil)
 	immutable.SetDetachedFlushEnabled(true)
-	indexReader = NewDetachedIndexReader(NewIndexContext(false, 0, querySchema, ""), &obs.ObsOptions{})
+	indexReader = NewDetachedIndexReader(NewIndexContext(false, 0, querySchema, ""), &obs.ObsOptions{}, nil)
 	err = indexReader.Init()
 	assert2.Equal(t, strings.Contains(err.Error(), "endpoint is not set"), true)
 	immutable.SetDetachedFlushEnabled(false)
@@ -625,7 +637,7 @@ func TestHybridStoreReaderForInc(t *testing.T) {
 	schema := executor.NewQuerySchema(fields2, names, &opt, nil)
 	schema.AddTable(m, schema.MakeRefs())
 	for {
-		indexReader := NewDetachedIndexReader(NewIndexContext(true, 8, schema, sh.filesPath), nil)
+		indexReader := NewDetachedIndexReader(NewIndexContext(true, 8, schema, sh.filesPath), nil, nil)
 		schema.Options().(*query.ProcessorOptions).IterID += 1
 		indexReader.Init()
 		frag, err := indexReader.Next()
@@ -639,7 +651,7 @@ func TestHybridStoreReaderForInc(t *testing.T) {
 	}
 	opt.EndTime = 0
 	schema = executor.NewQuerySchema(fields2, names, &opt, nil)
-	indexReader := NewDetachedIndexReader(NewIndexContext(true, 8, schema, sh.filesPath), nil)
+	indexReader := NewDetachedIndexReader(NewIndexContext(true, 8, schema, sh.filesPath), nil, nil)
 	schema.Options().(*query.ProcessorOptions).IterID += 1
 	indexReader.Init()
 	_, ok := immutable.GetDetachedSegmentTask(sh.filesPath + queryID)

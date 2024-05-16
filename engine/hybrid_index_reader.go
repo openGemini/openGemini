@@ -21,6 +21,7 @@ import (
 	"math"
 	"strconv"
 
+	"github.com/openGemini/openGemini/engine/comm"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable"
@@ -42,7 +43,7 @@ const (
 )
 
 type IndexReader interface {
-	Next() (executor.IndexFrags, error)
+	CreateCursors() ([]comm.KeyCursor, int, error)
 }
 
 type indexContext struct {
@@ -77,12 +78,14 @@ type attachedIndexReader struct {
 	ctx          *indexContext
 	info         *executor.AttachedIndexInfo
 	skFileReader []sparseindex.SKFileReader
+	readerCtx    *immutable.FileReaderContext
 }
 
-func NewAttachedIndexReader(ctx *indexContext, info *executor.AttachedIndexInfo) *attachedIndexReader {
+func NewAttachedIndexReader(ctx *indexContext, info *executor.AttachedIndexInfo, readerCtx *immutable.FileReaderContext) *attachedIndexReader {
 	return &attachedIndexReader{
-		info: info,
-		ctx:  ctx,
+		info:      info,
+		ctx:       ctx,
+		readerCtx: readerCtx,
 	}
 }
 
@@ -94,6 +97,46 @@ func (r *attachedIndexReader) Init() (err error) {
 	}
 	err = initKeyCondition(r.info.Infos()[0].GetRec().Schema, r.ctx, r.info.Infos()[0].GetTCLocation())
 	return
+}
+
+func (r *attachedIndexReader) CreateCursors() ([]comm.KeyCursor, int, error) {
+	var fragCount int
+	cursors := make([]comm.KeyCursor, 0)
+	for {
+		frags, err := r.Next()
+		if err != nil {
+			return nil, 0, err
+		}
+		if frags == nil {
+			break
+		}
+		fragCount += int(frags.FragCount())
+		reader, err := r.initFileReader(frags)
+		if err != nil {
+			return nil, 0, err
+		}
+		cursors = append(cursors, reader)
+	}
+	return cursors, fragCount, nil
+}
+
+func (r *attachedIndexReader) initFileReader(frags executor.IndexFrags) (comm.KeyCursor, error) {
+	files, ok := frags.Indexes().([]immutable.TSSPFile)
+	if !ok {
+		return nil, fmt.Errorf("invalid index info for attached file reader")
+	}
+
+	var unnest *influxql.Unnest
+	if r.ctx.schema.HasUnnests() {
+		unnest = r.ctx.schema.GetUnnests()[0]
+	}
+
+	fragRanges := frags.FragRanges()
+	fileReader, err := immutable.NewTSSPFileAttachedReader(files, fragRanges, r.readerCtx, r.ctx.schema.Options(), unnest)
+	if err != nil {
+		return nil, err
+	}
+	return fileReader, nil
 }
 
 func (r *attachedIndexReader) Next() (executor.IndexFrags, error) {
@@ -164,13 +207,68 @@ type detachedIndexReader struct {
 	ctx          *indexContext
 	skFileReader []sparseindex.SKFileReader
 	obsOptions   *obs.ObsOptions
+	readerCtx    *immutable.FileReaderContext
 }
 
-func NewDetachedIndexReader(ctx *indexContext, obsOption *obs.ObsOptions) *detachedIndexReader {
+func NewDetachedIndexReader(ctx *indexContext, obsOption *obs.ObsOptions, readerCtx *immutable.FileReaderContext) *detachedIndexReader {
 	return &detachedIndexReader{
 		obsOptions: obsOption,
 		ctx:        ctx,
+		readerCtx:  readerCtx,
 	}
+}
+
+func (r *detachedIndexReader) CreateCursors() ([]comm.KeyCursor, int, error) {
+	var fragCount int
+	cursors := make([]comm.KeyCursor, 0)
+	for {
+		frags, err := r.Next()
+		if err != nil {
+			return nil, 0, err
+		}
+		if frags == nil {
+			break
+		}
+		fragCount += int(frags.FragCount())
+		reader, err := r.initFileReader(frags)
+		if err != nil {
+			return nil, 0, err
+		}
+		cursors = append(cursors, reader)
+	}
+	return cursors, fragCount, nil
+}
+
+func (r *detachedIndexReader) initFileReader(frags executor.IndexFrags) (comm.KeyCursor, error) {
+	metaIndexes, ok := frags.Indexes().([]*immutable.MetaIndex)
+	if !ok {
+		return nil, fmt.Errorf("invalid index info for detached file reader")
+	}
+	fragRanges := frags.FragRanges()
+	blocks := make([][]int, len(fragRanges))
+	for i, frs := range fragRanges {
+		for j := range frs {
+			for k := frs[j].Start; k < frs[j].End; k++ {
+				blocks[i] = append(blocks[i], int(k))
+			}
+		}
+	}
+
+	var unnest *influxql.Unnest
+	if r.ctx.schema.HasUnnests() {
+		unnest = r.ctx.schema.GetUnnests()[0]
+	}
+
+	fileReader, err := immutable.NewTSSPFileDetachedReader(metaIndexes, blocks, r.readerCtx,
+		sparseindex.NewOBSFilterPath("", frags.BasePath(), r.obsOptions), unnest, true, r.ctx.schema.Options())
+	if err != nil {
+		return nil, err
+	}
+	if r.ctx.schema.Options().CanLimitPushDown() {
+		sortLimitCursor := immutable.NewSortLimitCursor(r.ctx.schema.Options(), r.readerCtx.GetSchemas(), fileReader)
+		return sortLimitCursor, nil
+	}
+	return fileReader, nil
 }
 
 func (r *detachedIndexReader) Init() (err error) {
