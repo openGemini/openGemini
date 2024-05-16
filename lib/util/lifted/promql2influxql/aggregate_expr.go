@@ -168,6 +168,7 @@ func (t *Transpiler) transpileAggregateExpr(a *parser.AggregateExpr) (influxql.N
 					&influxql.SubQuery{
 						Statement: statement,
 					}},
+				IsPromQuery: true,
 			}
 			wrappedField := &influxql.Field{
 				Expr: &influxql.VarRef{

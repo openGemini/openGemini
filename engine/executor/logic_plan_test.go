@@ -1004,3 +1004,17 @@ func Test_BuildFullJoinQueryPlant(t *testing.T) {
 		t.Fatal("TestBuildFullJoinQueryPlan error")
 	}
 }
+
+func Test_ExplainNode(t *testing.T) {
+	planWriter := executor.NewLogicalPlanWriterImpl(&strings.Builder{})
+	opt := query.ProcessorOptions{}
+	fields := []*influxql.Field{
+		{Expr: &influxql.VarRef{Val: "m1.f1", Type: influxql.Float, Alias: ""}, Alias: ""},
+	}
+	clonames := []string{"f1"}
+	schema := executor.NewQuerySchema(fields, clonames, &opt, nil)
+	logicSeries := executor.NewLogicalSeries(schema)
+	groupBy := executor.NewLogicalGroupBy(logicSeries, schema)
+	orderBy := executor.NewLogicalOrderBy(groupBy, schema)
+	orderBy.Explain(planWriter)
+}

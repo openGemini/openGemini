@@ -1054,6 +1054,48 @@ func Parse2SeriesGroupKey(src []byte, dst []byte, dims []string) (PointTags, []b
 	return tags, dst[:length-1], len(msName), groupByAllSortedTag, nil
 }
 
+// Parse2SeriesGroupKeyOfPromQuery support reuse same memory space for src with dst, can reduce half memory space compared with Parse2SeriesKey
+// Parse2SeriesGroupKeyOfPromQuery not use dims
+func Parse2SeriesGroupKeyOfPromQuery(src []byte, dst []byte) (PointTags, []byte, int, error) {
+	msName, data, err := MeasurementName(src)
+	if err != nil {
+		return nil, dst, 0, err
+	}
+
+	length := 0
+	length = length + copy(dst[length:], msName)
+	length = length + copy(dst[length:], ",")
+	tagsN := int(encoding.UnmarshalUint16(data))
+	data = data[2:]
+
+	tags := make(PointTags, tagsN, tagsN)
+	for i := 0; i < tagsN; i++ {
+		l := int(encoding.UnmarshalUint16(data))
+		data = data[2:]
+		if l+2 > len(data) {
+			return tags, dst, len(msName), fmt.Errorf("too small data for tag key")
+		}
+		tags[i].Key = bytesutil.ToUnsafeString(dst[length : length+l])
+		length = length + copy(dst[length:], data[:l])
+		length = length + copy(dst[length:], StringSplit)
+		data = data[l:]
+
+		l = int(encoding.UnmarshalUint16(data))
+		data = data[2:]
+		if l > len(data) {
+			return tags, dst, len(msName), fmt.Errorf("too small data for tag value")
+		}
+
+		tags[i].Value = bytesutil.ToUnsafeString(dst[length : length+l])
+		length = length + copy(dst[length:], data[:l])
+		length = length + copy(dst[length:], StringSplit)
+
+		data = data[l:]
+	}
+
+	return tags, dst[:length-1], len(msName), nil
+}
+
 // MeasurementName extract measurement from series key,
 // return measurement_name_with_version, tail, error
 func MeasurementName(src []byte) ([]byte, []byte, error) {

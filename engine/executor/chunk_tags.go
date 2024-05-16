@@ -57,6 +57,12 @@ func NewChunkTags(pts influx.PointTags, dimensions []string) *ChunkTags {
 	return c
 }
 
+func NewChunkTagsWithoutDims(pts influx.PointTags, withoutDims []string) *ChunkTags {
+	c := &ChunkTags{}
+	c.encodeTagsWithoutDims(pts, withoutDims)
+	return c
+}
+
 func NewChunkTagsByTagKVs(k []string, v []string) *ChunkTags {
 	c := &ChunkTags{}
 	c.encodeTagsByTagKVs(k, v)
@@ -134,6 +140,19 @@ func (ct *ChunkTags) KeepKeys(keys []string) *ChunkTags {
 	var m influx.PointTags
 	var ss []string
 	for _, kv := range ct.decodeTags() {
+		if ContainDim(keys, kv[0]) {
+			ss = append(ss, kv[0])
+			m = append(m, influx.Tag{Key: kv[0], Value: kv[1], IsArray: false})
+		}
+	}
+	sort.Sort(&m)
+	return NewChunkTags(m, ss)
+}
+
+func (ct *ChunkTags) RemoveKeys(keys []string) *ChunkTags {
+	var m influx.PointTags
+	var ss []string
+	for _, kv := range ct.decodeTags() {
 		if !ContainDim(keys, kv[0]) {
 			ss = append(ss, kv[0])
 			m = append(m, influx.Tag{Key: kv[0], Value: kv[1], IsArray: false})
@@ -172,10 +191,10 @@ func (ct *ChunkTags) PointTags() influx.PointTags {
 func ContainDim(des []string, src string) bool {
 	for i := range des {
 		if src == des[i] {
-			return false
+			return true
 		}
 	}
-	return true
+	return false
 }
 
 func (ct *ChunkTags) encodeTagsByTagKVs(keys []string, vals []string) {
@@ -234,6 +253,38 @@ func (ct *ChunkTags) encodeTags(pts influx.PointTags, keys []string) {
 		ct.subset = append(ct.subset, Str2bytes(t1.Value+influx.StringSplit)...)
 		ct.offsets = append(ct.offsets, uint16(len(ct.subset)))
 	}
+	ct.offsets = append([]uint16{uint16(len(ct.offsets))}, ct.offsets...)
+	head := util.Uint16Slice2byte(ct.offsets)
+	ct.subset = append(head, ct.subset...)
+}
+
+func (ct *ChunkTags) encodeTagsWithoutDims(pts influx.PointTags, withoutKeys []string) {
+	ct.offsets = make([]uint16, 0, (len(pts)-len(withoutKeys))*2)
+	if len(pts) == 0 {
+		return
+	}
+	i, j := 0, 0
+	for i < len(withoutKeys) && j < len(pts) {
+		if withoutKeys[i] < pts[j].Key {
+			i++
+		} else if withoutKeys[i] > pts[j].Key {
+			ct.subset = append(ct.subset, Str2bytes(pts[j].Key+influx.StringSplit)...)
+			ct.offsets = append(ct.offsets, uint16(len(ct.subset)))
+			ct.subset = append(ct.subset, Str2bytes(pts[j].Value+influx.StringSplit)...)
+			ct.offsets = append(ct.offsets, uint16(len(ct.subset)))
+			j++
+		} else {
+			i++
+			j++
+		}
+	}
+	for ; j < len(pts); j++ {
+		ct.subset = append(ct.subset, Str2bytes(pts[j].Key+influx.StringSplit)...)
+		ct.offsets = append(ct.offsets, uint16(len(ct.subset)))
+		ct.subset = append(ct.subset, Str2bytes(pts[j].Value+influx.StringSplit)...)
+		ct.offsets = append(ct.offsets, uint16(len(ct.subset)))
+	}
+
 	ct.offsets = append([]uint16{uint16(len(ct.offsets))}, ct.offsets...)
 	head := util.Uint16Slice2byte(ct.offsets)
 	ct.subset = append(head, ct.subset...)
