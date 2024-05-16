@@ -23,10 +23,10 @@ import (
 
 const smallDeltaTolerance = 1e-12
 
-func MinPromReduce(c Chunk, ordinal, start, end int) (int, float64, bool) {
-	minValue := c.Column(ordinal).FloatValue(start)
+func MinPromReduce(c Chunk, values []float64, ordinal, start, end int) (int, float64, bool) {
+	minValue := values[start]
 	for i := start + 1; i < end; i++ {
-		v := c.Column(ordinal).FloatValue(i)
+		v := values[i]
 		if minValue > v || math.IsNaN(minValue) {
 			minValue = v
 		}
@@ -40,10 +40,10 @@ func MinPromMerge(prevPoint, currPoint *Point[float64]) {
 	}
 }
 
-func MaxPromReduce(c Chunk, ordinal, start, end int) (int, float64, bool) {
-	maxValue := c.Column(ordinal).FloatValue(start)
+func MaxPromReduce(c Chunk, values []float64, ordinal, start, end int) (int, float64, bool) {
+	maxValue := values[start]
 	for i := start + 1; i < end; i++ {
-		v := c.Column(ordinal).FloatValue(i)
+		v := values[i]
 		if maxValue < v || math.IsNaN(maxValue) {
 			maxValue = v
 		}
@@ -57,7 +57,7 @@ func MaxPromMerge(prevPoint, currPoint *Point[float64]) {
 	}
 }
 
-func FloatCountPromReduce(c Chunk, ordinal, start, end int) (int, float64, bool) {
+func FloatCountPromReduce(c Chunk, values []float64, ordinal, start, end int) (int, float64, bool) {
 	count := float64(end - start)
 	return start, count, count == 0
 }

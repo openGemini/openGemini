@@ -136,13 +136,13 @@ func NewSlidingWindowSumRoutineImpl(
 	case influxql.Integer:
 		return NewRoutineImpl(
 			NewIntegerSlidingWindowIntegerIterator(
-				IntegerSumReduce, SumMerge[int64], SlidingWindowMergeFunc[int64],
+				SumReduce[int64], SumMerge[int64], SlidingWindowMergeFunc[int64],
 				inOrdinal, outOrdinal, slidingNum),
 			inOrdinal, outOrdinal)
 	case influxql.Float:
 		return NewRoutineImpl(
 			NewFloatSlidingWindowFloatIterator(
-				FloatSumReduce, SumMerge[float64], SlidingWindowMergeFunc[float64],
+				SumReduce[float64], SumMerge[float64], SlidingWindowMergeFunc[float64],
 				inOrdinal, outOrdinal, slidingNum),
 			inOrdinal, outOrdinal)
 	default:
@@ -163,13 +163,13 @@ func NewSlidingWindowMinRoutineImpl(
 	case influxql.Integer:
 		return NewRoutineImpl(
 			NewIntegerSlidingWindowIntegerIterator(
-				IntegerMinReduce, MinMerge[int64], SlidingWindowMergeFunc[int64],
+				MinReduce[int64], MinMerge[int64], SlidingWindowMergeFunc[int64],
 				inOrdinal, outOrdinal, slidingNum),
 			inOrdinal, outOrdinal)
 	case influxql.Float:
 		return NewRoutineImpl(
 			NewFloatSlidingWindowFloatIterator(
-				FloatMinReduce, MinMerge[float64], SlidingWindowMergeFunc[float64],
+				MinReduce[float64], MinMerge[float64], SlidingWindowMergeFunc[float64],
 				inOrdinal, outOrdinal, slidingNum),
 			inOrdinal, outOrdinal)
 	case influxql.Boolean:
@@ -196,13 +196,13 @@ func NewSlidingWindowMaxRoutineImpl(
 	case influxql.Integer:
 		return NewRoutineImpl(
 			NewIntegerSlidingWindowIntegerIterator(
-				IntegerMaxReduce, MaxMerge[int64], SlidingWindowMergeFunc[int64],
+				MaxReduce[int64], MaxMerge[int64], SlidingWindowMergeFunc[int64],
 				inOrdinal, outOrdinal, slidingNum),
 			inOrdinal, outOrdinal)
 	case influxql.Float:
 		return NewRoutineImpl(
 			NewFloatSlidingWindowFloatIterator(
-				FloatMaxReduce, MaxMerge[float64], SlidingWindowMergeFunc[float64],
+				MaxReduce[float64], MaxMerge[float64], SlidingWindowMergeFunc[float64],
 				inOrdinal, outOrdinal, slidingNum),
 			inOrdinal, outOrdinal)
 	case influxql.Boolean:

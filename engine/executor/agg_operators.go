@@ -45,11 +45,11 @@ func (c *MinOp) CreateRoutine(params *AggCallFuncParams) (Routine, error) {
 	dataType := inRowDataType.Field(inOrdinal).Expr.(*influxql.VarRef).Type
 	switch dataType {
 	case influxql.Integer:
-		return NewRoutineImpl(NewIntegerColIntegerIterator(IntegerMinReduce, MinMerge[int64],
+		return NewRoutineImpl(NewIntegerColIntegerIterator(MinReduce[int64], MinMerge[int64],
 			isSingleCall, inOrdinal, outOrdinal, auxProcessor, outRowDataType),
 			inOrdinal, outOrdinal), nil
 	case influxql.Float:
-		return NewRoutineImpl(NewFloatColFloatIterator(FloatMinReduce, MinMerge[float64],
+		return NewRoutineImpl(NewFloatColFloatIterator(MinReduce[float64], MinMerge[float64],
 			isSingleCall, inOrdinal, outOrdinal, auxProcessor, outRowDataType),
 			inOrdinal, outOrdinal), nil
 	case influxql.Boolean:
@@ -73,11 +73,11 @@ func (c *MaxOp) CreateRoutine(params *AggCallFuncParams) (Routine, error) {
 	dataType := inRowDataType.Field(inOrdinal).Expr.(*influxql.VarRef).Type
 	switch dataType {
 	case influxql.Integer:
-		return NewRoutineImpl(NewIntegerColIntegerIterator(IntegerMaxReduce, MaxMerge[int64],
+		return NewRoutineImpl(NewIntegerColIntegerIterator(MaxReduce[int64], MaxMerge[int64],
 			isSingleCall, inOrdinal, outOrdinal, auxProcessor, outRowDataType),
 			inOrdinal, outOrdinal), nil
 	case influxql.Float:
-		return NewRoutineImpl(NewFloatColFloatIterator(FloatMaxReduce, MaxMerge[float64],
+		return NewRoutineImpl(NewFloatColFloatIterator(MaxReduce[float64], MaxMerge[float64],
 			isSingleCall, inOrdinal, outOrdinal, auxProcessor, outRowDataType),
 			inOrdinal, outOrdinal), nil
 	case influxql.Boolean:
@@ -113,11 +113,11 @@ func (c *PercentileApproxOp) CreateRoutine(params *AggCallFuncParams) (Routine, 
 
 type BasePromOp struct {
 	op string
-	fn FloatColFloatReduce
-	fv FloatColFloatMerge
+	fn ColReduceFunc[float64]
+	fv ColMergeFunc[float64]
 }
 
-func NewBasePromOp(op string, fn FloatColFloatReduce, fv FloatColFloatMerge) BasePromOp {
+func NewBasePromOp(op string, fn ColReduceFunc[float64], fv ColMergeFunc[float64]) BasePromOp {
 	return BasePromOp{
 		op: op,
 		fn: fn,
