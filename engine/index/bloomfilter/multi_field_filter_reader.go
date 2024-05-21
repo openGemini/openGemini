@@ -190,20 +190,23 @@ func (s *MultilFieldVerticalFilterReader) isExist(blockId int64, elem *rpn.SKRPN
 		if _, ok2 := s.groupNewPreCache[groupIndex]; !ok2 {
 			s.groupNewPreCache = s.groupNewCache
 			s.groupNewCache = make(map[int64]map[int64][]uint64)
-			pieceNum := PIECE_NUM
-			if groupIndex+pieceNum > s.verticalPieceCount {
-				pieceNum = s.verticalPieceCount - groupIndex
+			pieceIndex := groupIndex / PIECE_NUM
+			startPieceIndex := pieceIndex * PIECE_NUM
+			endPieceIndex := startPieceIndex + PIECE_NUM
+			if startPieceIndex+PIECE_NUM > s.verticalPieceCount {
+				endPieceIndex = s.verticalPieceCount
 			}
-			for i := int64(0); i < pieceNum; i++ {
+			for startPieceIndex < endPieceIndex {
 				for _, hashes := range s.hashes {
 					for _, hash := range hashes {
-						pieceOffset, offsetInLong := s.getPieceOffset(hash, groupIndex+i)
+						pieceOffset, offsetInLong := s.getPieceOffset(hash, startPieceIndex)
 						offsetsSet[pieceOffset] = true
 						if offsetInLong != 0 {
 							offsetsSet[pieceOffset+verticalPieceDiskSize] = true
 						}
 					}
 				}
+				startPieceIndex++
 			}
 			offsetsLen := len(offsetsSet)
 			offsets := make([]int64, 0)
