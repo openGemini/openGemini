@@ -114,7 +114,7 @@ func deal_Fill (fill interface{})  (FillOption , interface{},bool) {
                 QUERY PARTITION
                 TOKEN TOKENIZERS MATCH LIKE MATCHPHRASE CONFIG CONFIGS CLUSTER
                 REPLICAS DETAIL DESTINATIONS
-                SCHEMA INDEXES AUTO
+                SCHEMA INDEXES AUTO EXCEPT
 %token <bool>   DESC ASC
 %token <str>    COMMA SEMICOLON LPAREN RPAREN REGEX
 %token <int>    EQ NEQ LT LTE GT GTE DOT DOUBLECOLON NEQREGEX EQREGEX
@@ -159,7 +159,7 @@ func deal_Fill (fill interface{})  (FillOption , interface{},bool) {
 %type <dataType>                    COLUMN_VAREF_TYPE
 %type <sortfs>                      SORTFIELDS ORDER_CLAUSES
 %type <sortf>                       SORTFIELD
-%type <dimens>                      GROUP_BY_CLAUSE DIMENSION_NAMES
+%type <dimens>                      GROUP_BY_CLAUSE EXCEPT_CLAUSE DIMENSION_NAMES
 %type <dimen>                       DIMENSION_NAME
 %type <intSlice>                    OPTION_CLAUSES LIMIT_OFFSET_OPTION SLIMIT_SOFFSET_OPTION
 %type <inter>                       FILL_CLAUSE FILLCONTENT
@@ -428,54 +428,14 @@ STATEMENT:
     }
 
 SELECT_STATEMENT:
-    SELECT COLUMN_CLAUSES INTO_CLAUSE FROM_CLAUSE WHERE_CLAUSE GROUP_BY_CLAUSE FILL_CLAUSE ORDER_CLAUSES OPTION_CLAUSES TIME_ZONE
+    SELECT COLUMN_CLAUSES INTO_CLAUSE FROM_CLAUSE WHERE_CLAUSE GROUP_BY_CLAUSE EXCEPT_CLAUSE FILL_CLAUSE ORDER_CLAUSES OPTION_CLAUSES TIME_ZONE
     {
         stmt := &SelectStatement{}
         stmt.Fields = $2
         stmt.Sources = $4
         stmt.Dimensions = $6
+        stmt.ExceptDimensions = $7
         stmt.Condition = $5
-        stmt.SortFields = $8
-        stmt.Limit = $9[0]
-        stmt.Offset = $9[1]
-        stmt.SLimit = $9[2]
-        stmt.SOffset = $9[3]
-
-        tempfill,tempfillvalue,fillflag := deal_Fill($7)
-        if fillflag==false{
-            yylex.Error("Invalid characters in fill")
-        }else{
-            stmt.Fill,stmt.FillValue = tempfill,tempfillvalue
-        }
-        stmt.IsRawQuery = true
-	WalkFunc(stmt.Fields, func(n Node) {
-		if _, ok := n.(*Call); ok {
-			stmt.IsRawQuery = false
-		}
-	})
-        stmt.Location = $10
-        if len($3) > 1{
-            yylex.Error("into clause only support one measurement")
-        }else if len($3) == 1{
-            mst,ok := $3[0].(*Measurement)
-            if !ok{
-                 yylex.Error("into clause only support measurement clause")
-            }
-            mst.IsTarget = true
-            stmt.Target = &Target{
-            	Measurement: mst,
-            }
-        }
-        $$ = stmt
-    }
-    |SELECT HINT COLUMN_CLAUSES INTO_CLAUSE FROM_CLAUSE WHERE_CLAUSE GROUP_BY_CLAUSE FILL_CLAUSE ORDER_CLAUSES OPTION_CLAUSES TIME_ZONE
-    {
-        stmt := &SelectStatement{}
-        stmt.Hints = $2
-        stmt.Fields = $3
-        stmt.Sources = $5
-        stmt.Dimensions = $7
-        stmt.Condition = $6
         stmt.SortFields = $9
         stmt.Limit = $10[0]
         stmt.Offset = $10[1]
@@ -495,6 +455,48 @@ SELECT_STATEMENT:
 		}
 	})
         stmt.Location = $11
+        if len($3) > 1{
+            yylex.Error("into clause only support one measurement")
+        }else if len($3) == 1{
+            mst,ok := $3[0].(*Measurement)
+            if !ok{
+                 yylex.Error("into clause only support measurement clause")
+            }
+            mst.IsTarget = true
+            stmt.Target = &Target{
+            	Measurement: mst,
+            }
+        }
+        $$ = stmt
+    }
+    |SELECT HINT COLUMN_CLAUSES INTO_CLAUSE FROM_CLAUSE WHERE_CLAUSE GROUP_BY_CLAUSE EXCEPT_CLAUSE FILL_CLAUSE ORDER_CLAUSES OPTION_CLAUSES TIME_ZONE
+    {
+        stmt := &SelectStatement{}
+        stmt.Hints = $2
+        stmt.Fields = $3
+        stmt.Sources = $5
+        stmt.Dimensions = $7
+        stmt.ExceptDimensions = $8
+        stmt.Condition = $6
+        stmt.SortFields = $10
+        stmt.Limit = $11[0]
+        stmt.Offset = $11[1]
+        stmt.SLimit = $11[2]
+        stmt.SOffset = $11[3]
+
+        tempfill,tempfillvalue,fillflag := deal_Fill($9)
+        if fillflag==false{
+            yylex.Error("Invalid characters in fill")
+        }else{
+            stmt.Fill,stmt.FillValue = tempfill,tempfillvalue
+        }
+        stmt.IsRawQuery = true
+	WalkFunc(stmt.Fields, func(n Node) {
+		if _, ok := n.(*Call); ok {
+			stmt.IsRawQuery = false
+		}
+	})
+        stmt.Location = $12
         if len($4) > 1{
             yylex.Error("into clause only support one measurement")
         }else if len($4) == 1{
@@ -509,19 +511,20 @@ SELECT_STATEMENT:
         }
         $$ = stmt
     }
-    |SELECT COLUMN_CLAUSES WHERE_CLAUSE GROUP_BY_CLAUSE FILL_CLAUSE ORDER_CLAUSES OPTION_CLAUSES TIME_ZONE
+    |SELECT COLUMN_CLAUSES WHERE_CLAUSE GROUP_BY_CLAUSE EXCEPT_CLAUSE FILL_CLAUSE ORDER_CLAUSES OPTION_CLAUSES TIME_ZONE
     {
         stmt := &SelectStatement{}
         stmt.Fields = $2
         stmt.Dimensions = $4
+        stmt.ExceptDimensions = $5
         stmt.Condition = $3
-        stmt.SortFields = $6
-        stmt.Limit = $7[0]
-        stmt.Offset = $7[1]
-        stmt.SLimit = $7[2]
-        stmt.SOffset = $7[3]
+        stmt.SortFields = $7
+        stmt.Limit = $8[0]
+        stmt.Offset = $8[1]
+        stmt.SLimit = $8[2]
+        stmt.SOffset = $8[3]
 
-        tempfill,tempfillvalue,fillflag := deal_Fill($5)
+        tempfill,tempfillvalue,fillflag := deal_Fill($6)
         if fillflag==false{
             yylex.Error("Invalid characters in fill")
         }else{
@@ -533,7 +536,7 @@ SELECT_STATEMENT:
 			stmt.IsRawQuery = false
 		}
 	})
-        stmt.Location = $8
+        stmt.Location = $9
         $$ = stmt
     }
 
@@ -870,6 +873,16 @@ GROUP_BY_CLAUSE:
     GROUP BY DIMENSION_NAMES
     {
         $$ = $3
+    }
+    |
+    {
+        $$ = nil
+    }
+
+EXCEPT_CLAUSE:
+    EXCEPT DIMENSION_NAMES
+    {
+        $$ = $2
     }
     |
     {
