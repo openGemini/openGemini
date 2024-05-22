@@ -1363,11 +1363,14 @@ func (builder *ExecutorBuilder) addColStoreReader(node *LogicalColumnStoreReader
 	}
 }
 
-func (builder *ExecutorBuilder) isMultiMstPlanNode(node hybridqp.QueryNode) bool {
+func (builder *ExecutorBuilder) IsMultiMstPlanNode(node hybridqp.QueryNode) bool {
 	if _, ok := node.(*LogicalFullJoin); ok {
 		return true
 	}
 	if _, ok := node.(*LogicalSortAppend); ok {
+		return true
+	}
+	if _, ok := node.(*LogicalBinOp); ok {
 		return true
 	}
 	return false
@@ -1387,7 +1390,7 @@ func (builder *ExecutorBuilder) addDefaultNode(node hybridqp.QueryNode) (*Transf
 			continue
 		}
 		children = append(children, child)
-		if builder.isMultiMstPlanNode(node) {
+		if builder.IsMultiMstPlanNode(node) {
 			builder.NextMst()
 		}
 	}
