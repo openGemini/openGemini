@@ -487,7 +487,7 @@ func DecodeColumnHeader(col *record.ColVal, data []byte, colType uint8) ([]byte,
 }
 
 func CanEncodeOneRowMode(col *record.ColVal) bool {
-	return col.Len == 1 && len(col.Val) < 16
+	return col.Len == 1 && len(col.Val) < 16 && len(col.Val) > 0
 }
 
 func rewriteType(col *record.ColVal, typ uint8) uint8 {
