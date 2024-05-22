@@ -91,7 +91,7 @@ func TestCheckDetachedFiles(t *testing.T) {
 
 	require.Equal(t, 4*100, int(sh.rowCount))
 	detachedInfo := NewDetachedMetaInfo()
-	err = detachedInfo.checkAndTruncateDetachedFiles(sh.filesPath, defaultMeasurementName, bfColumn)
+	err = detachedInfo.checkAndTruncateDetachedFiles(sh.filesPath, defaultMeasurementName, bfColumn, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +153,7 @@ func TestTestCheckDetachedFilesV2(t *testing.T) {
 		mutable.SetWriteChunk(msInfo, rec)
 		sh.commitSnapshot(sh.activeTbl)
 		detachedInfo := NewDetachedMetaInfo()
-		err = detachedInfo.checkAndTruncateDetachedFiles(sh.filesPath, defaultMeasurementName, bfColumn)
+		err = detachedInfo.checkAndTruncateDetachedFiles(sh.filesPath, defaultMeasurementName, bfColumn, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -168,7 +168,7 @@ func TestTestCheckDetachedFilesV2(t *testing.T) {
 func TestCheckMetaIndexFile(t *testing.T) {
 	testDir := t.TempDir()
 	detachedInfo := NewDetachedMetaInfo()
-	err := detachedInfo.checkAndTruncateDetachedFiles("unknownPath", "cpu", nil)
+	err := detachedInfo.checkAndTruncateDetachedFiles("unknownPath", "cpu", nil, false)
 	if err == nil {
 		t.Fatal("should return open metaIndex file path error")
 	}
@@ -349,7 +349,7 @@ func TestCheckBloomFilterFiles(t *testing.T) {
 	testDir := t.TempDir()
 	detachedInfo := NewDetachedMetaInfo()
 	bfCols := []string{"tags"}
-	err := detachedInfo.checkAndTruncateBfFiles("unknownPath", "", bfCols)
+	err := detachedInfo.checkAndTruncateBfFiles("unknownPath", "", bfCols, false)
 	if err == nil {
 		t.Fatal("should return open bloom filter file path error")
 	}
@@ -372,7 +372,7 @@ func TestCheckBloomFilterFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = detachedInfo.checkAndTruncateBfFiles(testDir, "", bfCols)
+	err = detachedInfo.checkAndTruncateBfFiles(testDir, "", bfCols, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -382,7 +382,51 @@ func TestCheckBloomFilterFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = detachedInfo.checkAndTruncateBfFiles(testDir, "", bfCols)
+	err = detachedInfo.checkAndTruncateBfFiles(testDir, "", bfCols, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = os.RemoveAll(testDir)
+}
+
+func TestCheckFullTextBfFiles(t *testing.T) {
+	testDir := t.TempDir()
+	detachedInfo := NewDetachedMetaInfo()
+	err := detachedInfo.checkAndTruncateBfFiles("unknownPath", "", nil, true)
+	if err == nil {
+		t.Fatal("should return open bloom filter file path error")
+	}
+	constant := logstore.GetConstant(logstore.CurrentLogTokenizerVersion)
+	buf := make([]byte, constant.FilterDataDiskSize*2)
+	lock := fileops.FileLockOption("")
+	pri := fileops.FilePriorityOption(fileops.IO_PRIORITY_NORMAL)
+	bfCols := []string{sparseindex.FullTextIndex}
+	filePath := sparseindex.GetBloomFilterFilePath(testDir, "", bfCols[0])
+
+	fd, err := fileops.OpenFile(filePath, os.O_CREATE|os.O_RDWR, 0640, lock, pri)
+	if err != nil {
+		log.Error("open detached bloom filter file fail", zap.String("name", testDir), zap.Error(err))
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = fd.Close()
+	}()
+
+	_, err = fd.Write(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = detachedInfo.checkAndTruncateBfFiles(testDir, "", bfCols, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	detachedInfo.lastPkMetaEndBlockId = 3
+	_, err = fd.Write(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = detachedInfo.checkAndTruncateBfFiles(testDir, "", bfCols, true)
 	if err != nil {
 		t.Fatal(err)
 	}

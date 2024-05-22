@@ -3824,3 +3824,30 @@ func TestWriteMemoryBloomFilterData(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, n*2, msBuilder.localBFCount)
 }
+
+func TestGetLocalBloomFilterData(t *testing.T) {
+	testCompDir := t.TempDir()
+	_ = fileops.RemoveAll(testCompDir)
+	sig := interruptsignal.NewInterruptSignal()
+	defer func() {
+		sig.Close()
+		_ = fileops.RemoveAll(testCompDir)
+	}()
+
+	conf := NewColumnStoreConfig()
+	tier := uint64(util.Hot)
+	lockPath := ""
+	store := NewTableStore(testCompDir, &lockPath, &tier, true, conf)
+	defer store.Close()
+
+	fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
+	msBuilder := NewMsBuilder(store.path, "mst", &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.COLUMNSTORE, nil, 0)
+	p := filepath.Join(msBuilder.Path, "full_text_bf.idx")
+	skipIndexFilePaths := make([]string, 0, 1)
+	skipIndexFilePaths = append(skipIndexFilePaths, p)
+	msBuilder.localBFCount = 1
+	_, err := msBuilder.getLocalBloomFilterData(skipIndexFilePaths)
+	if err == nil {
+		t.Fatal("should return no such file or dir")
+	}
+}
