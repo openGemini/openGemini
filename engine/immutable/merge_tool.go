@@ -18,6 +18,7 @@ package immutable
 
 import (
 	"container/heap"
+	"time"
 
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
@@ -29,7 +30,6 @@ import (
 
 type mergeTool struct {
 	mts  *MmsTables
-	lmt  *lastMergeTime
 	stat *statistics.MergeStatItem
 	lg   *logger.Logger
 	zlg  *zap.Logger
@@ -38,7 +38,6 @@ type mergeTool struct {
 func newMergeTool(mts *MmsTables, lg *zap.Logger) *mergeTool {
 	return &mergeTool{
 		mts: mts,
-		lmt: mts.lmt,
 		lg:  logger.NewLogger(errno.ModuleMerge),
 		zlg: lg,
 	}
@@ -198,6 +197,50 @@ func (mt *mergeTool) Release() {
 }
 
 func (mt *mergeTool) mergeSelf(ctx *MergeContext) {
+	mt.mts.lmt.Update(ctx.mst)
+
+	if ctx.level <= MergeSelfFastModeMaxLevel {
+		mt.mergeSelfFastMode(ctx)
+		return
+	}
+
+	mt.mergeSelfStreamMode(ctx)
+}
+
+func (mt *mergeTool) mergeSelfFastMode(ctx *MergeContext) {
+	files, err := mt.mts.getFilesByPath(ctx.mst, ctx.unordered.path, false)
+	if err != nil {
+		mt.zlg.Error("failed to get files", zap.Error(err))
+		return
+	}
+
+	ms := NewMergeSelf(mt.mts, mt.lg)
+	defer ms.Stop()
+
+	mt.mts.Listen(ms.signal, func() {
+		ms.Stop()
+	})
+
+	level := ctx.level
+	mergedSize := int64(0)
+	begin := time.Now()
+
+	merged, err := ms.Merge(ctx.mst, files.Files())
+	if err == nil {
+		mergedSize = merged.FileSize()
+		err = mt.mts.ReplaceFiles(ctx.mst, files.Files(), []TSSPFile{merged}, false)
+	}
+
+	mt.lg.Info("finish merge self",
+		zap.Int64("total size(MB)", ctx.unordered.size/1024/1024),
+		zap.Int64("merged size(MB)", mergedSize/1024/1024),
+		zap.Float64("time use(s)", time.Since(begin).Seconds()),
+		zap.Uint16("level", level),
+		zap.Any("err", err),
+		zap.String("mst", ctx.mst))
+}
+
+func (mt *mergeTool) mergeSelfStreamMode(ctx *MergeContext) {
 	orderWg, inorderWg := mt.mts.refMmsTable(ctx.mst, true)
 	success := false
 

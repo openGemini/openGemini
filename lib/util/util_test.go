@@ -128,3 +128,12 @@ func TestAllocSlice(t *testing.T) {
 	require.Equal(t, size*cpu.GetCpuNum(), cap(buf))
 	require.Equal(t, size, len(sub))
 }
+
+func TestDivisionCeil(t *testing.T) {
+	require.Equal(t, 0, util.DivisionCeil(10, 0))
+	require.Equal(t, 1, util.DivisionCeil(10, 11))
+	require.Equal(t, 4, util.DivisionCeil(10, 3))
+	require.Equal(t, 2, util.DivisionCeil(10, 8))
+	require.Equal(t, 2, util.DivisionCeil(10, 9))
+	require.Equal(t, 1, util.DivisionCeil(10, 10))
+}
