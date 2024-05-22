@@ -767,7 +767,7 @@ func (t *MemTable) getSortedRecSafe(msName string, id uint64, tr util.TimeRange,
 	}
 
 	chunk.SortRecordNoLock(hlp)
-	var rec = writeRec.Copy(ascending, &tr, schema)
+	var rec = chunk.WriteRec.rec.Copy(ascending, &tr, schema)
 	chunk.Mu.Unlock()
 	return rec
 }
