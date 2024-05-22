@@ -1077,21 +1077,15 @@ func (rec *Record) ResetWithSchema(schema Schemas) {
 	rec.ReserveColVal(len(rec.Schema))
 }
 
-func (rec *Record) addColumn(f *Field) {
+func (rec *Record) addColumn(f *Field, rowNum int) {
 	newField := Field{Name: f.Name, Type: f.Type}
-	newCol := &ColVal{}
-	rowNum := rec.RowNums()
-	for i := 0; i < rowNum; i++ {
-		switch f.Type {
-		case influx.Field_Type_Int:
-			newCol.AppendIntegerNull()
-		case influx.Field_Type_Float:
-			newCol.AppendFloatNull()
-		case influx.Field_Type_Boolean:
-			newCol.AppendBooleanNull()
-		case influx.Field_Type_String:
-			newCol.AppendStringNull()
-		}
+	newCol := &ColVal{
+		NilCount: rowNum,
+		Len:      rowNum,
+		Bitmap:   make([]byte, util.DivisionCeil(rowNum, 8)),
+	}
+	if f.Type == influx.Field_Type_String {
+		newCol.Offset = make([]uint32, rowNum)
 	}
 
 	rec.Schema = append(rec.Schema, newField)
@@ -1099,17 +1093,33 @@ func (rec *Record) addColumn(f *Field) {
 }
 
 func (rec *Record) PadRecord(other *Record) {
-	needSort := false
-	for i := range other.Schema[:len(other.Schema)-1] {
-		f := &(other.Schema[i])
-		idx := rec.FieldIndexs(f.Name)
-		if idx < 0 {
-			needSort = true
-			rec.addColumn(f)
+	i, j := 0, 0
+	size := rec.Schema.Len()
+	rowNum := rec.RowNums()
+
+	for i < size-1 && j < other.Schema.Len()-1 {
+		a, b := &rec.Schema[i], &other.Schema[j]
+
+		if a.Name < b.Name {
+			i++
+			continue
 		}
+
+		if a.Name > b.Name {
+			rec.addColumn(b, rowNum)
+			j++
+			continue
+		}
+
+		i++
+		j++
 	}
 
-	if needSort {
+	for ; j < other.Schema.Len()-1; j++ {
+		rec.addColumn(&other.Schema[j], rowNum)
+	}
+
+	if size != rec.Schema.Len() {
 		sort.Sort(rec)
 	}
 }
