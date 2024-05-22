@@ -264,3 +264,61 @@ func TestStringPoint(t *testing.T) {
 
 	spNew.Reset()
 }
+
+func TestBooleanSliceItem(t *testing.T) {
+	chunk := NewChunkImpl(hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "val1", Type: influxql.Boolean},
+		influxql.VarRef{Val: "time", Type: influxql.Integer},
+	), "test")
+
+	c1 := NewColumnImpl(influxql.Boolean)
+	c1.AppendManyNotNil(5)
+	c1.AppendBooleanValues([]bool{true, true, true, true, true})
+
+	chunk.SetTime([]int64{1, 2, 3, 4, 5})
+	chunk.ResetIntervalIndex(0)
+	chunk.AddColumn(c1)
+
+	items := NewBooleanSliceItem()
+	// abnormal branch
+	items.AppendItem(chunk, 0, 0, 0)
+
+	// normal branch
+	items.AppendItem(chunk, 0, 0, 5)
+
+	for i := range items.time {
+		if items.time[i] == chunk.TimeByIndex(i) {
+			continue
+		}
+		t.Fatal("not expect result")
+	}
+}
+
+func TestIntegerSliceItem(t *testing.T) {
+	chunk := NewChunkImpl(hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "val1", Type: influxql.Integer},
+		influxql.VarRef{Val: "time", Type: influxql.Integer},
+	), "test")
+
+	c1 := NewColumnImpl(influxql.Integer)
+	c1.AppendManyNotNil(5)
+	c1.AppendIntegerValues([]int64{1, 2, 4, 8, 16})
+
+	chunk.SetTime([]int64{1, 2, 3, 4, 5})
+	chunk.ResetIntervalIndex(0)
+	chunk.AddColumn(c1)
+
+	items := NewSliceItem[int64]()
+	// abnormal branch
+	items.AppendItem(chunk, 0, 0, 0, chunk.Column(0).IntegerValues())
+
+	// normal branch
+	items.AppendItem(chunk, 0, 0, 5, chunk.Column(0).IntegerValues())
+
+	for i := range items.time {
+		if items.time[i] == chunk.TimeByIndex(i) {
+			continue
+		}
+		t.Fatal("not expect result")
+	}
+}

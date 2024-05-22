@@ -341,7 +341,8 @@ func (f *SliceItem[T]) AppendItem(c Chunk, ordinal, start, end int, values []T) 
 		return
 	}
 	fLen := len(f.time)
-	if c.Column(ordinal).NilCount() == 0 {
+	column := c.Column(ordinal)
+	if column.NilCount() == 0 {
 		// fast path
 		for i := start; i < end; i++ {
 			f.index = append(f.index, fLen+i-start)
@@ -349,7 +350,7 @@ func (f *SliceItem[T]) AppendItem(c Chunk, ordinal, start, end int, values []T) 
 		}
 	} else {
 		// slow path
-		getTimeIndex := c.Column(ordinal).GetTimeIndex
+		getTimeIndex := column.GetTimeIndex
 		for i := start; i < end; i++ {
 			f.index = append(f.index, fLen+i-start)
 			f.time = append(f.time, c.TimeByIndex(getTimeIndex(i)))
@@ -376,6 +377,49 @@ func (f *SliceItem[T]) Swap(i, j int) {
 	f.index[i], f.index[j] = f.index[j], f.index[i]
 	f.time[i], f.time[j] = f.time[j], f.time[i]
 	f.value[i], f.value[j] = f.value[j], f.value[i]
+}
+
+type BooleanSliceItem struct {
+	index []int
+	time  []int64
+	value []bool
+}
+
+func NewBooleanSliceItem() *BooleanSliceItem {
+	return &BooleanSliceItem{}
+}
+
+func (f *BooleanSliceItem) AppendItem(c Chunk, ordinal, start, end int) {
+	if start == end {
+		return
+	}
+	fLen := len(f.time)
+	column := c.Column(ordinal)
+	if column.NilCount() == 0 {
+		// fast path
+		for i := start; i < end; i++ {
+			f.index = append(f.index, fLen+i-start)
+			f.time = append(f.time, c.TimeByIndex(i))
+		}
+	} else {
+		// slow path
+		getTimeIndex := column.GetTimeIndex
+		for i := start; i < end; i++ {
+			f.index = append(f.index, fLen+i-start)
+			f.time = append(f.time, c.TimeByIndex(getTimeIndex(i)))
+		}
+	}
+	f.value = append(f.value, column.BooleanValues()[start:end]...)
+}
+
+func (f *BooleanSliceItem) Reset() {
+	f.index = f.index[:0]
+	f.time = f.time[:0]
+	f.value = f.value[:0]
+}
+
+func (f *BooleanSliceItem) Len() int {
+	return len(f.time)
 }
 
 type Point[T util.ExceptString] struct {
