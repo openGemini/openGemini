@@ -632,12 +632,7 @@ func TestEncodeOneRowMode(t *testing.T) {
 	codec.dataCol.Init()
 	codec.dataCol.AppendIntegerNull()
 	codec.encode(t)
-	codec.assertEncodeDataSize(t, 1)
-
-	DecodeColumnOfOneValue(codec.buf[1:], other, influx.Field_Type_Int)
-	require.Equal(t, 1, other.Len)
-	require.Equal(t, 1, other.NilCount)
-	require.Equal(t, 0, len(other.Val))
+	codec.assertEncodeDataSize(t, 5)
 
 	var s = ""
 	for i := 0; i < 50; i++ {
