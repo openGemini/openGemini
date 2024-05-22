@@ -272,9 +272,10 @@ func (t *Transpiler) transpileInstantVectorSelector(v *parser.VectorSelector) (i
 	}
 	// metricName is used as the measurement by default.
 	selectStatement := &influxql.SelectStatement{
-		Sources:    []influxql.Source{&influxql.Measurement{Name: v.Name}},
-		Condition:  condition,
-		Dimensions: []*influxql.Dimension{{Expr: &influxql.Wildcard{}}},
+		Sources:     []influxql.Source{&influxql.Measurement{Name: v.Name}},
+		Condition:   condition,
+		Dimensions:  []*influxql.Dimension{{Expr: &influxql.Wildcard{}}},
+		IsPromQuery: true,
 	}
 	// if the API corresponding to MetricStore is used, MetricStore in the API is used as the measurement.
 	if t.HaveMetricStore() {

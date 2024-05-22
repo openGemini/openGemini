@@ -928,39 +928,15 @@ func (idx *MergeSetIndex) SearchSeriesIterator(span *tracing.Span, name []byte, 
 	return itr, nil
 }
 
-func (idx *MergeSetIndex) SearchSeriesWithOpts(span *tracing.Span, name []byte, opt *query.ProcessorOptions, callBack func(num int64) error, _ interface{}) (GroupSeries, int64, error) {
-	var indexSpan, tsidIter, sortTs *tracing.Span
-	if span != nil {
-		indexSpan = span.StartSpan("index_stat").StartPP()
-		defer indexSpan.Finish()
-	}
-
-	seriesNum := int64(0)
-	itr, err := idx.SearchSeriesIterator(indexSpan, name, opt)
-	if err != nil {
-		return nil, seriesNum, err
-	}
-	if itr == nil {
-		return nil, seriesNum, nil
-	}
-
-	seriesLen := int64(itr.Ids().Len())
-	if e := callBack(seriesLen); e != nil {
-		return nil, seriesNum, e
-	}
-	seriesNum = seriesLen
-
-	var querySeriesUpperBound = syscontrol.GetQuerySeriesLimit()
-	if querySeriesUpperBound > 0 && int(seriesNum) > querySeriesUpperBound && !syscontrol.GetQueryEnabledWhenExceedSeries() {
-		return nil, 0, errno.NewError(errno.ErrQuerySeriesUpperBound, int(seriesNum), querySeriesUpperBound)
-	}
-
-	dims := make([]string, len(opt.Dimensions))
-	copy(dims, opt.Dimensions)
-	if len(dims) > 1 {
-		sort.Strings(dims)
-	}
-	dimPos := genDimensionPosition(opt.Dimensions)
+func (idx *MergeSetIndex) SeriesGroup2MapOfProm(seriesNum int64, querySeriesUpperBound int, itr index.SeriesIDIterator, opt *query.ProcessorOptions, name []byte) (map[string]*TagSetInfo, []*TagSetInfo, int64, int, error) {
+	var seriesKeys [][]byte
+	var exprs []*influxql.BinaryExpr
+	var isExpectSeries []bool
+	var combineSeriesKey []byte
+	var totalSeriesKeyLen int64
+	var tagsBuf influx.PointTags
+	var groupTagKey []byte
+	var tagSet *TagSetInfo
 
 	var tagSetsMap map[string]*TagSetInfo
 	var tagSetSlice []*TagSetInfo
@@ -969,29 +945,15 @@ func (idx *MergeSetIndex) SearchSeriesWithOpts(span *tracing.Span, name []byte, 
 	} else {
 		tagSetsMap = make(map[string]*TagSetInfo)
 	}
-
-	if indexSpan != nil {
-		tsidIter = indexSpan.StartSpan("tsid_iter")
-		tsidIter.StartPP()
-	}
-
-	var seriesN int
 	var ok bool
-	var groupTagKey []byte // reused
-	var totalSeriesKeyLen int64
-	var tagSet *TagSetInfo
-	var tagsBuf influx.PointTags
-	var seriesKeys [][]byte
-	var combineSeriesKey []byte
-	var isExpectSeries []bool
-	var exprs []*influxql.BinaryExpr
+	var seriesN int
 
 LOOP:
 	for {
 		se, err := itr.Next()
 		if err != nil {
 			idx.logger.Error("itr.Next() fail", zap.Error(err), zap.String("index", "mergeset"))
-			return nil, seriesNum, err
+			return nil, nil, totalSeriesKeyLen, seriesN, err
 		} else if se.SeriesID == 0 {
 			break
 		}
@@ -1002,7 +964,109 @@ LOOP:
 				continue
 			}
 			idx.logger.Error("searchSeriesKey fail", zap.Error(err), zap.String("index", "mergeset"))
-			return nil, seriesNum, err
+			return nil, nil, totalSeriesKeyLen, seriesN, err
+		}
+
+		for i := range seriesKeys {
+			if !isExpectSeries[i] {
+				continue
+			}
+
+			var seriesKey []byte
+			seriesKey = append(seriesKey, seriesKeys[i]...)
+			totalSeriesKeyLen += int64(len(seriesKey))
+			var mLen int
+			// when group by * or group by all sorted tag, groupByAllSortedTag is true
+			// there is no need to sort tags since it is already sorted when writing point
+
+			tagsBuf, seriesKey, mLen, err = influx.Parse2SeriesGroupKeyOfPromQuery(seriesKey, seriesKey)
+			if err != nil {
+				return nil, nil, totalSeriesKeyLen, seriesN, err
+			}
+			if opt.GroupByAllDims {
+				// when group by all sorted tag, do not need to calculate groupKey again
+				groupTagKey = append(groupTagKey, seriesKey[mLen+1:]...)
+			} else if opt.Without {
+				groupTagKey = MakeGroupTagsKeyByWithoutDims(opt.Dimensions, tagsBuf, groupTagKey)
+			} else {
+				groupTagKey = MakeGroupTagsKeyByDims(opt.Dimensions, tagsBuf, groupTagKey)
+			}
+
+			if opt.GroupByAllDims {
+				tagSet = NewSingleTagSetInfo()
+				tagSet.key = append(tagSet.key, groupTagKey...)
+				tagSetSlice = append(tagSetSlice, tagSet)
+			} else {
+				tagSet, ok = tagSetsMap[bytesutil.ToUnsafeString(groupTagKey)]
+				if !ok {
+					tagSet = NewTagSetInfo()
+					tagSet.key = append(tagSet.key, groupTagKey...)
+				}
+				tagSetsMap[string(groupTagKey)] = tagSet
+			}
+
+			if exprs[i] != nil {
+				tagSet.Append(se.SeriesID, seriesKey, exprs[i], tagsBuf, nil)
+			} else {
+				tagSet.Append(se.SeriesID, seriesKey, se.Expr, tagsBuf, nil)
+			}
+			groupTagKey = groupTagKey[:0]
+			seriesN++
+
+			if querySeriesUpperBound > 0 && seriesN >= querySeriesUpperBound {
+				idx.logger.Error("", zap.Error(errno.NewError(errno.ErrQuerySeriesUpperBound)),
+					zap.Int("querySeriesLimit", querySeriesUpperBound),
+					zap.String("index_path", idx.Path()),
+					zap.ByteString("measurement", name),
+				)
+				break LOOP
+			}
+		}
+	}
+	return tagSetsMap, tagSetSlice, totalSeriesKeyLen, seriesN, nil
+}
+
+func (idx *MergeSetIndex) SeriesGroup2Map(seriesNum int64, querySeriesUpperBound int, itr index.SeriesIDIterator, opt *query.ProcessorOptions, name []byte) (map[string]*TagSetInfo, []*TagSetInfo, int64, int, error) {
+	var seriesN int
+	var ok bool
+	var groupTagKey []byte // reused
+	var tagSet *TagSetInfo
+	var tagsBuf influx.PointTags
+	var seriesKeys [][]byte
+	var combineSeriesKey []byte
+	var isExpectSeries []bool
+	var exprs []*influxql.BinaryExpr
+	var tagSetsMap map[string]*TagSetInfo
+	var tagSetSlice []*TagSetInfo
+	if opt.GroupByAllDims {
+		tagSetSlice = make([]*TagSetInfo, 0, seriesNum)
+	} else {
+		tagSetsMap = make(map[string]*TagSetInfo)
+	}
+	var totalSeriesKeyLen int64
+	dims := make([]string, len(opt.Dimensions))
+	copy(dims, opt.Dimensions)
+	if len(dims) > 1 {
+		sort.Strings(dims)
+	}
+	dimPos := genDimensionPosition(opt.Dimensions)
+LOOP:
+	for {
+		se, err := itr.Next()
+		if err != nil {
+			idx.logger.Error("itr.Next() fail", zap.Error(err), zap.String("index", "mergeset"))
+			return nil, nil, totalSeriesKeyLen, seriesN, err
+		} else if se.SeriesID == 0 {
+			break
+		}
+
+		seriesKeys, exprs, isExpectSeries, err = idx.searchSeriesWithTagArray(se.SeriesID, seriesKeys, exprs, combineSeriesKey, isExpectSeries, opt.Condition, false)
+		if err != nil {
+			if errno.Equal(err, errno.ErrSearchSeriesKey) {
+				continue
+			}
+			idx.logger.Error("searchSeriesKey fail", zap.Error(err), zap.String("index", "mergeset"))
+			return nil, nil, totalSeriesKeyLen, seriesN, err
 		}
 
 		for i := range seriesKeys {
@@ -1019,7 +1083,7 @@ LOOP:
 			// there is no need to sort tags since it is already sorted when writing point
 			tagsBuf, seriesKey, mLen, groupByAllSortedTag, err = influx.Parse2SeriesGroupKey(seriesKey, seriesKey, opt.Dimensions)
 			if err != nil {
-				return nil, seriesNum, err
+				return nil, nil, totalSeriesKeyLen, seriesN, err
 			}
 
 			if len(dims) > 0 {
@@ -1060,6 +1124,55 @@ LOOP:
 				)
 				break LOOP
 			}
+		}
+	}
+	return tagSetsMap, tagSetSlice, totalSeriesKeyLen, seriesN, nil
+}
+
+func (idx *MergeSetIndex) SearchSeriesWithOpts(span *tracing.Span, name []byte, opt *query.ProcessorOptions, callBack func(num int64) error, _ interface{}) (GroupSeries, int64, error) {
+	var indexSpan, tsidIter, sortTs *tracing.Span
+	if span != nil {
+		indexSpan = span.StartSpan("index_stat").StartPP()
+		defer indexSpan.Finish()
+	}
+
+	seriesNum := int64(0)
+	itr, err := idx.SearchSeriesIterator(indexSpan, name, opt)
+	if err != nil {
+		return nil, seriesNum, err
+	}
+	if itr == nil {
+		return nil, seriesNum, nil
+	}
+
+	seriesLen := int64(itr.Ids().Len())
+	if e := callBack(seriesLen); e != nil {
+		return nil, seriesNum, e
+	}
+	seriesNum = seriesLen
+
+	var querySeriesUpperBound = syscontrol.GetQuerySeriesLimit()
+	if querySeriesUpperBound > 0 && int(seriesNum) > querySeriesUpperBound && !syscontrol.GetQueryEnabledWhenExceedSeries() {
+		return nil, 0, errno.NewError(errno.ErrQuerySeriesUpperBound, int(seriesNum), querySeriesUpperBound)
+	}
+
+	if indexSpan != nil {
+		tsidIter = indexSpan.StartSpan("tsid_iter")
+		tsidIter.StartPP()
+	}
+	var tagSetsMap map[string]*TagSetInfo
+	var tagSetSlice []*TagSetInfo
+	var totalSeriesKeyLen int64
+	var seriesN int
+	if opt.IsPromQuery() {
+		tagSetsMap, tagSetSlice, totalSeriesKeyLen, seriesN, err = idx.SeriesGroup2MapOfProm(seriesNum, querySeriesUpperBound, itr, opt, name)
+		if err != nil {
+			return nil, seriesNum, err
+		}
+	} else {
+		tagSetsMap, tagSetSlice, totalSeriesKeyLen, seriesN, err = idx.SeriesGroup2Map(seriesNum, querySeriesUpperBound, itr, opt, name)
+		if err != nil {
+			return nil, seriesNum, err
 		}
 	}
 
@@ -1550,6 +1663,67 @@ func MakeGroupTagsKey(dims []string, tags influx.PointTags, dst []byte, dimPos m
 		} else {
 			result[dimPos[dims[i]]] = dims[i] + influx.StringSplit + tags[j].Value + influx.StringSplit
 
+			i++
+			j++
+		}
+	}
+	for k := range result {
+		dst = append(dst, bytesutil.ToUnsafeBytes(result[k])...)
+	}
+
+	// skip last '\x00'
+	if len(dst) > 1 {
+		return dst[:len(dst)-1]
+	}
+	return dst
+}
+
+func MakeGroupTagsKeyByWithoutDims(withoutDims []string, tags influx.PointTags, dst []byte) []byte {
+	if len(tags) == 0 {
+		return nil
+	}
+
+	result := make([]string, 0)
+	i, j := 0, 0
+	for i < len(withoutDims) && j < len(tags) {
+		if withoutDims[i] < tags[j].Key {
+			i++
+		} else if withoutDims[i] > tags[j].Key {
+			result = append(result, tags[j].Key+influx.StringSplit+tags[j].Value+influx.StringSplit)
+			j++
+		} else {
+			i++
+			j++
+		}
+	}
+	for ; j < len(tags); j++ {
+		result = append(result, tags[j].Key+influx.StringSplit+tags[j].Value+influx.StringSplit)
+	}
+	for k := range result {
+		dst = append(dst, bytesutil.ToUnsafeBytes(result[k])...)
+	}
+
+	// skip last '\x00'
+	if len(dst) > 1 {
+		return dst[:len(dst)-1]
+	}
+	return dst
+}
+
+func MakeGroupTagsKeyByDims(byDims []string, tags influx.PointTags, dst []byte) []byte {
+	if len(byDims) == 0 || len(tags) == 0 {
+		return nil
+	}
+
+	result := make([]string, len(byDims))
+	i, j := 0, 0
+	for i < len(byDims) && j < len(tags) {
+		if byDims[i] < tags[j].Key {
+			i++
+		} else if byDims[i] > tags[j].Key {
+			j++
+		} else {
+			result = append(result, tags[j].Key+influx.StringSplit+tags[j].Value+influx.StringSplit)
 			i++
 			j++
 		}

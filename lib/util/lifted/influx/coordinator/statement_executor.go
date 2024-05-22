@@ -1146,7 +1146,6 @@ func (e *StatementExecutor) GetOptions(opt query.ExecutionOptions, rowsChan chan
 		QueryLimitEn:            opt.QueryLimitEn,
 		RowsChan:                rowsChan,
 		ChunkSize:               opt.InnerChunkSize,
-		IsPromQuery:             opt.IsPromQuery,
 		AbortChan:               opt.AbortCh,
 		QueryID:                 opt.QueryID,
 		IncQuery:                opt.IncQuery,

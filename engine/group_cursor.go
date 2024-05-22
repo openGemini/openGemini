@@ -118,7 +118,12 @@ func (c *groupCursor) nextWithReuse() (*record.Record, comm.SeriesInfoIntf, erro
 			if e != nil {
 				return nil, nil, e
 			}
-			tag := executor.NewChunkTags(*currTags, c.querySchema.Options().GetOptDimension()).GetTag()
+			var tag []byte
+			if c.querySchema.Options().IsPromGroupAllOrWithout() {
+				tag = executor.NewChunkTagsWithoutDims(*currTags, c.querySchema.Options().GetOptDimension()).GetTag()
+			} else {
+				tag = executor.NewChunkTags(*currTags, c.querySchema.Options().GetOptDimension()).GetTag()
+			}
 			re.AddTagIndexAndKey(&tag, re.RowNums())
 			sameTag = true
 		}

@@ -160,7 +160,7 @@ func (t *Transpiler) transpileCompBinOps(b *parser.BinaryExpr, op influxql.Token
 				return statement, nil
 			}
 			// for the comparison operation of the non-source-table query, use the sub-query to implement the operation.
-			var selectStatement = &influxql.SelectStatement{}
+			var selectStatement = &influxql.SelectStatement{IsPromQuery: true}
 			selectStatement.Sources = []influxql.Source{&influxql.SubQuery{Statement: statement}}
 			fieldExpr := &influxql.VarRef{Val: statement.Fields[len(statement.Fields)-1].Name()}
 			selectStatement.Fields = append(selectStatement.Fields, &influxql.Field{Expr: fieldExpr, Alias: DefaultFieldKey})
@@ -270,8 +270,9 @@ func (t *Transpiler) transpileBinOpOfBothVector(b *parser.BinaryExpr, op influxq
 		ReturnBool:  b.ReturnBool,
 	}
 	newStmt := &influxql.SelectStatement{
-		Sources: influxql.Sources{binOp},
-		Fields:  influxql.Fields{&influxql.Field{Expr: &influxql.VarRef{Val: DefaultFieldKey, Alias: DefaultFieldKey}}},
+		Sources:     influxql.Sources{binOp},
+		Fields:      influxql.Fields{&influxql.Field{Expr: &influxql.VarRef{Val: DefaultFieldKey, Alias: DefaultFieldKey}}},
+		IsPromQuery: true,
 	}
 	// set query time range
 	t.setTimeCondition(newStmt)

@@ -186,9 +186,20 @@ func (trans *OrderByTransform) closeChunkChannel() {
 	close(trans.currChunk)
 }
 
+func (trans *OrderByTransform) GetCurrTags(i int) string {
+	return string(trans.currTags[i].subset)
+}
+
 func (trans *OrderByTransform) GetTagAndIndexes(chunk Chunk) {
+	var t *ChunkTags
 	for i := range chunk.Tags() {
-		t := chunk.Tags()[i].KeepKeys(trans.dimensions)
+		if trans.opt.IsPromGroupAll() {
+			t = &chunk.Tags()[i]
+		} else if trans.opt.IsWithout() {
+			t = chunk.Tags()[i].RemoveKeys(trans.opt.Dimensions)
+		} else {
+			t = chunk.Tags()[i].KeepKeys(trans.dimensions)
+		}
 		index := chunk.TagIndex()
 		if i == 0 || !bytes.Equal(t.Subset(trans.dimensions), trans.currTags[len(trans.currTags)-1].Subset(trans.dimensions)) {
 			trans.currTags = append(trans.currTags, *t)
@@ -199,8 +210,15 @@ func (trans *OrderByTransform) GetTagAndIndexes(chunk Chunk) {
 
 func (trans *OrderByTransform) GetTagsResetTagIndexes(chunk Chunk) {
 	trans.currTagIndex = trans.currTagIndex[:0]
+	var t *ChunkTags
 	for i := range chunk.Tags() {
-		t := chunk.Tags()[i].KeepKeys(trans.dimensions)
+		if trans.opt.IsPromGroupAll() {
+			t = &chunk.Tags()[i]
+		} else if trans.opt.IsWithout() {
+			t = chunk.Tags()[i].RemoveKeys(trans.opt.Dimensions)
+		} else {
+			t = chunk.Tags()[i].KeepKeys(trans.dimensions)
+		}
 		index := chunk.TagIndex()
 		if len(trans.currTags) == 0 || !bytes.Equal(t.Subset(trans.dimensions), trans.currTags[len(trans.currTags)-1].Subset(trans.dimensions)) {
 			trans.currTags = append(trans.currTags, *t)

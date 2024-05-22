@@ -1528,6 +1528,8 @@ type SelectStatement struct {
 	QueryOffset time.Duration
 
 	BinOpSource []*BinOp
+
+	IsPromQuery bool
 }
 
 func (s *SelectStatement) SetStmtId(id int) {
@@ -2154,7 +2156,17 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin boo
 	if len(other.Dimensions) == 1 {
 		if _, ok := other.Dimensions[0].Expr.(*Wildcard); ok {
 			other.GroupByAllDims = true
+			// 1.group by * + promquery
+			if other.IsPromQuery {
+				other.Dimensions = nil
+				return other, nil
+			}
 		}
+	}
+
+	if other.Without {
+		// 2.without dims + promquery
+		return other, nil
 	}
 
 	fieldSet, dimensionSet, err := FieldDimensions(other.Sources, m, &other.Schema)
@@ -2340,11 +2352,7 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin boo
 		}
 		other.Dimensions = rwDimensions
 	}
-	if other.Without {
-		if err = RewriteDimensionWithout(other, dimensions); err != nil {
-			return nil, err
-		}
-	}
+
 	return other, nil
 }
 

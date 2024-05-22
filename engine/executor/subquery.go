@@ -38,7 +38,6 @@ func (b *SubQueryBuilder) newSubOptions(ctx context.Context, opt query.Processor
 		Chunked:     opt.Chunked,
 		ChunkSize:   opt.ChunkSize,
 		RowsChan:    opt.RowsChan,
-		IsPromQuery: opt.PromQuery,
 	})
 
 	if err != nil {
@@ -57,10 +56,15 @@ func (b *SubQueryBuilder) newSubOptions(ctx context.Context, opt query.Processor
 		}
 	}
 
-	pushDownDimension := GetInnerDimensions(opt.Dimensions, subOpt.Dimensions)
-	subOpt.Dimensions = pushDownDimension
-	for d := range opt.GroupBy {
-		subOpt.GroupBy[d] = struct{}{}
+	if !opt.Without {
+		pushDownDimension := GetInnerDimensions(opt.Dimensions, subOpt.Dimensions)
+		subOpt.Dimensions = pushDownDimension
+		for d := range opt.GroupBy {
+			subOpt.GroupBy[d] = struct{}{}
+		}
+		if opt.PromQuery && len(pushDownDimension) > 0 {
+			subOpt.GroupByAllDims = opt.GroupByAllDims
+		}
 	}
 
 	valuer := &influxql.NowValuer{Location: b.stmt.Location}
@@ -85,6 +89,7 @@ func (b *SubQueryBuilder) newSubOptions(ctx context.Context, opt query.Processor
 		subOpt.Fill = influxql.NoFill
 	}
 	subOpt.PromQuery = opt.PromQuery
+	subOpt.Without = b.stmt.Without
 	subOpt.Ordered = opt.Ordered
 	subOpt.HintType = opt.HintType
 	subOpt.StmtId = opt.StmtId

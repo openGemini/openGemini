@@ -60,9 +60,6 @@ type SelectOptions struct {
 
 	QueryLimitEn bool
 
-	// IsPromQuery indicates whether the query is a promql query.
-	IsPromQuery bool
-
 	QueryTimeCompareEnabled bool
 
 	AbortChan <-chan struct{}
@@ -261,6 +258,9 @@ type ProcessorOptions struct {
 	// which is calculated using the original offset, at modifier time,
 	// eval time, and subquery offsets in the AST tree.
 	QueryOffset time.Duration
+
+	// promQuery use
+	Without bool
 }
 
 // NewProcessorOptionsStmt creates the iterator options from stmt.
@@ -304,7 +304,7 @@ func NewProcessorOptionsStmt(stmt *influxql.SelectStatement, sopt SelectOptions)
 			}
 		}
 	}
-	if sopt.IsPromQuery {
+	if stmt.IsPromQuery {
 		sort.Strings(opt.Dimensions)
 	}
 	opt.Ascending = stmt.TimeAscending()
@@ -332,6 +332,8 @@ func NewProcessorOptionsStmt(stmt *influxql.SelectStatement, sopt SelectOptions)
 	opt.Range = stmt.Range
 	opt.LookBackDelta = stmt.LookBackDelta
 	opt.QueryOffset = stmt.QueryOffset
+	opt.PromQuery = stmt.IsPromQuery
+	opt.Without = stmt.Without
 	return opt, nil
 }
 
@@ -736,6 +738,18 @@ func (opt *ProcessorOptions) GetIterId() int32 {
 
 func (opt *ProcessorOptions) IsIncQuery() bool {
 	return opt.IncQuery
+}
+
+func (opt *ProcessorOptions) IsPromGroupAllOrWithout() bool {
+	return opt.PromQuery && (opt.GroupByAllDims || opt.Without)
+}
+
+func (opt *ProcessorOptions) IsPromGroupAll() bool {
+	return opt.PromQuery && opt.GroupByAllDims
+}
+
+func (opt *ProcessorOptions) IsWithout() bool {
+	return opt.Without
 }
 
 func validateTypes(stmt *influxql.SelectStatement) error {

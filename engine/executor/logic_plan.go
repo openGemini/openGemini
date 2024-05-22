@@ -1769,6 +1769,22 @@ func explainIterms(writer LogicalPlanWriter, id uint64, mstName string, dimensio
 	writer.Item("ID", id)
 }
 
+func explainItermsReader(writer LogicalPlanWriter, id uint64, mstName string, dimensions []string, isProm bool, without bool, groupByAll bool) {
+	var builder strings.Builder
+	for i, d := range dimensions {
+		if i != 0 {
+			builder.WriteString(", ")
+		}
+		builder.WriteString(d)
+	}
+	writer.Item("dimensions", builder.String())
+	writer.Item("mstName", mstName)
+	writer.Item("ID", id)
+	writer.Item("isProm", isProm)
+	writer.Item("without", without)
+	writer.Item("groupByAll", groupByAll)
+}
+
 type LogicalReader struct {
 	cursor         []interface{}
 	hasPreAgg      bool
@@ -1849,7 +1865,7 @@ func (p *LogicalReader) SetCursor(cursor []interface{}) {
 }
 
 func (p *LogicalReader) ExplainIterms(writer LogicalPlanWriter) {
-	explainIterms(writer, p.id, p.mstName, p.dimensions)
+	explainItermsReader(writer, p.id, p.mstName, p.dimensions, p.schema.Options().IsPromQuery(), p.schema.Options().IsWithout(), p.schema.Options().IsGroupByAllDims())
 }
 
 func (p *LogicalReader) Explain(writer LogicalPlanWriter) {
@@ -2188,6 +2204,9 @@ func (p *LogicalGroupBy) ExplainIterms(writer LogicalPlanWriter) {
 		builder.WriteString(d)
 	}
 	writer.Item("dimensions", builder.String())
+	writer.Item("isProm", p.schema.Options().IsPromQuery())
+	writer.Item("without", p.schema.Options().IsWithout())
+	writer.Item("groupByAll", p.schema.Options().IsGroupByAllDims())
 }
 
 func (p *LogicalGroupBy) Explain(writer LogicalPlanWriter) {
@@ -2255,6 +2274,9 @@ func (p *LogicalOrderBy) ExplainIterms(writer LogicalPlanWriter) {
 		builder.WriteString(d)
 	}
 	writer.Item("dimensions", builder.String())
+	writer.Item("isProm", p.schema.Options().IsPromQuery())
+	writer.Item("without", p.schema.Options().IsWithout())
+	writer.Item("groupByAll", p.schema.Options().IsGroupByAllDims())
 }
 
 func (p *LogicalOrderBy) Explain(writer LogicalPlanWriter) {
@@ -2844,7 +2866,7 @@ func (b *LogicalPlanBuilderImpl) CreateSegmentPlan(schema hybridqp.Catalog) (hyb
 	if schema.HasCall() && schema.CanAggPushDown() {
 		b.Exchange(READER_EXCHANGE, nil)
 	}
-	if len(schema.Options().GetDimensions()) > 0 && (!schema.HasCall() || schema.HasCall() && !schema.CanAggPushDown()) {
+	if (len(schema.Options().GetDimensions()) > 0 || schema.Options().IsPromGroupAllOrWithout()) && (!schema.HasCall() || schema.HasCall() && !schema.CanAggPushDown()) {
 		b.Exchange(READER_EXCHANGE, nil)
 	}
 	b.Exchange(SEGMENT_EXCHANGE, nil)

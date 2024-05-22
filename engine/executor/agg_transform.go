@@ -591,7 +591,7 @@ func (trans *StreamAggregateTransform) isSameGroup(c Chunk) bool {
 	}
 
 	// Case1: tag and time are grouped by.
-	if trans.opt.Dimensions != nil && !trans.opt.Interval.IsZero() {
+	if (trans.opt.Dimensions != nil || trans.opt.IsPromGroupAllOrWithout()) && !trans.opt.Interval.IsZero() {
 		if bytes.Equal(nextChunk.Tags()[0].Subset(trans.opt.Dimensions),
 			c.Tags()[len(c.Tags())-1].Subset(trans.opt.Dimensions)) {
 			startTime, endTime := trans.opt.Window(c.TimeByIndex(c.NumberOfRows() - 1))
@@ -601,7 +601,7 @@ func (trans *StreamAggregateTransform) isSameGroup(c Chunk) bool {
 	}
 
 	// Case2: only tag is grouped by.
-	if trans.opt.Dimensions != nil && trans.opt.Interval.IsZero() {
+	if (trans.opt.Dimensions != nil || trans.opt.IsPromGroupAllOrWithout()) && trans.opt.Interval.IsZero() {
 		return bytes.Equal(nextChunk.Tags()[0].Subset(trans.opt.Dimensions),
 			c.Tags()[len(c.Tags())-1].Subset(trans.opt.Dimensions))
 	}
@@ -623,7 +623,7 @@ func (trans *StreamAggregateTransform) isSameTag(c Chunk) bool {
 	}
 
 	// Case1: tag is grouped by.
-	if trans.opt.Dimensions != nil {
+	if trans.opt.Dimensions != nil || trans.opt.IsPromGroupAllOrWithout() {
 		return bytes.Equal(nextChunk.Tags()[0].Subset(trans.opt.Dimensions),
 			c.Tags()[len(c.Tags())-1].Subset(trans.opt.Dimensions))
 	}

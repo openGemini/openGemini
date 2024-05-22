@@ -46,6 +46,7 @@ message ProcessorOptions {
     int64       Range = 41;
     int64       LookBackDelta = 42;
     int64       QueryOffset = 43;
+    bool        Without = 44;
 }
 
 message Measurement {

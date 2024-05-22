@@ -71,4 +71,7 @@ type Options interface {
 	GetPromQueryOffset() time.Duration
 	IsRangeVectorSelector() bool
 	IsInstantVectorSelector() bool
+	IsPromGroupAllOrWithout() bool
+	IsPromGroupAll() bool
+	IsWithout() bool
 }
