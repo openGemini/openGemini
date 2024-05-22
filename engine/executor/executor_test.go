@@ -642,3 +642,17 @@ func TestOneReaderExchangeExecutorBuilder(t *testing.T) {
 		t.Error("OneShardExchangeExecutorBuilder test error")
 	}
 }
+
+func TestNewChunkTagsWithoutDims(t *testing.T) {
+	pts := make(influx.PointTags, 0)
+	pts = append(pts, influx.Tag{Key: "tk1", Value: "tv1"})
+	pts = append(pts, influx.Tag{Key: "tk2", Value: "tv2"})
+	pts = append(pts, influx.Tag{Key: "tk3", Value: "tv3"})
+	withoutDims := []string{"tk0", "tk2"}
+	ct := executor.NewChunkTagsWithoutDims(pts, withoutDims)
+	k, v := ct.GetChunkTagAndValues()
+	assert.Equal(t, k[0], "tk1")
+	assert.Equal(t, v[0], "tv1")
+	assert.Equal(t, k[1], "tk3")
+	assert.Equal(t, v[1], "tv3")
+}

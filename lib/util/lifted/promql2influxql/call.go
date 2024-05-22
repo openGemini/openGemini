@@ -238,6 +238,7 @@ func (t *Transpiler) transpilePromFunc(aggFn aggregateFn, inArgs []influxql.Node
 					&influxql.SubQuery{
 						Statement: statement,
 					}},
+				IsPromQuery: true,
 			}
 			wrappedField := &influxql.Field{
 				Expr: &influxql.VarRef{

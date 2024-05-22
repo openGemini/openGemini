@@ -235,6 +235,15 @@ func generateKeyWithTagArray5() []string {
 	return keys
 }
 
+func generateKeyWithForProm() []string {
+	keys := []string{
+		"mn-1,tk1=value1_1,tk2=value2,tk3=value3",
+		"mn-1,tk1=value1_2,tk2=value2,tk3=value3",
+	}
+
+	return keys
+}
+
 func CreateIndexByPts_TagArray(iBuilder *IndexBuilder, idx Index, genKeys func() []string) {
 	keys := genKeys()
 	pts := make([]influx.Row, 0, len(keys))
@@ -1549,4 +1558,79 @@ func analyzeTagSetsOld(dstTagSets *tagSets, tags []influx.Tag) error {
 		}
 	}
 	return nil
+}
+
+func TestSearchSeriesWithPromOpt(t *testing.T) {
+	path := t.TempDir()
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
+	idxBuilder.EnableTagArray = true
+	defer idxBuilder.Close()
+	CreateIndexByPts_TagArray(idxBuilder, idx, generateKeyWithForProm)
+
+	f := func(name []byte, opt *query.ProcessorOptions, tr TimeRange, expectedSeriesKeys []string, filtersIndex []int) {
+		_, span := tracing.NewTrace("root")
+		groups, _, err := idx.SearchSeriesWithOpts(span, name, opt, func(num int64) error {
+			return nil
+		}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		keys := make([]string, 0)
+		filterCount := 0
+		for _, group := range groups {
+			keys = append(keys, string(group.key))
+
+			for _, filter := range group.Filters {
+				if filter != nil {
+					filterCount++
+				}
+			}
+		}
+		assert.Equal(t, filterCount, len(filtersIndex))
+
+		sort.Strings(keys)
+		sort.Strings(expectedSeriesKeys)
+		assert.Equal(t, len(keys), len(expectedSeriesKeys))
+
+		for i := 0; i < len(keys); i++ {
+			assert.Equal(t, string(keys[i]), expectedSeriesKeys[i])
+		}
+	}
+
+	opt1 := &query.ProcessorOptions{
+		StartTime:      DefaultTR.Min,
+		EndTime:        DefaultTR.Max,
+		PromQuery:      true,
+		GroupByAllDims: true,
+	}
+	opt2 := &query.ProcessorOptions{
+		StartTime:  DefaultTR.Min,
+		EndTime:    DefaultTR.Max,
+		PromQuery:  true,
+		Without:    true,
+		Dimensions: []string{"tk1"},
+	}
+	opt3 := &query.ProcessorOptions{
+		StartTime:  DefaultTR.Min,
+		EndTime:    DefaultTR.Max,
+		PromQuery:  true,
+		Dimensions: []string{"tk1"},
+	}
+	t.Run("searchSeriesWithPromOpt", func(t *testing.T) {
+		var filterIndex []int = nil
+		f([]byte("mn-1"), opt1, defaultTR, []string{
+			"tk1\x00value1_1\x00tk2\x00value2\x00tk3\x00value3",
+			"tk1\x00value1_2\x00tk2\x00value2\x00tk3\x00value3",
+		}, filterIndex)
+
+		f([]byte("mn-1"), opt2, defaultTR, []string{
+			"tk2\x00value2\x00tk3\x00value3",
+		}, filterIndex)
+
+		f([]byte("mn-1"), opt3, defaultTR, []string{
+			"tk1\x00value1_1",
+			"tk1\x00value1_2",
+		}, filterIndex)
+	})
 }
