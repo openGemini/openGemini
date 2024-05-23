@@ -3177,7 +3177,99 @@ func TestStreamAggregateTransformHistogram(t *testing.T) {
 			exprOpt, &opt, false,
 		)
 	})
+}
 
+func buildDstRowDataTypeCountValues() hybridqp.RowDataType {
+	schema := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "count_values_prom(\"age\")", Type: influxql.Float},
+	)
+	return schema
+}
+
+func buildCountValuesInChunk() []executor.Chunk {
+	inChunks := make([]executor.Chunk, 0, 2)
+	rowDataType := buildComRowDataType()
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	// first chunk
+	inCk1 := b.NewChunk("mst")
+	inCk1.AppendTagsAndIndexes(
+		[]executor.ChunkTags{
+			*ParseChunkTags("country=american"),
+			*ParseChunkTags("country=china")},
+		[]int{0, 3})
+	inCk1.AppendIntervalIndexes([]int{0, 1, 3, 5})
+	inCk1.AppendTimes([]int64{1, 1, 3, 3, 3, 5})
+
+	inCk1.Column(0).AppendFloatValues([]float64{102, 102, 52.7, 50, 50, 50})
+	inCk1.Column(0).AppendManyNotNil(6)
+
+	// second chunk
+	inCk2 := b.NewChunk("mst")
+	inCk2.AppendTagsAndIndexes(
+		[]executor.ChunkTags{
+			*ParseChunkTags("country=china"),
+			*ParseChunkTags("country=japan")},
+		[]int{0, 4})
+	inCk2.AppendIntervalIndexes([]int{0, 2, 4})
+	inCk2.AppendTimes([]int64{5, 6, 7, 7, 1})
+
+	inCk2.Column(0).AppendFloatValues([]float64{48.8, 48.8, 48.8, 48.8, 30})
+	inCk2.Column(0).AppendManyNotNil(5)
+
+	inChunks = append(inChunks, inCk1, inCk2)
+
+	return inChunks
+}
+
+func buildDstChunkCountValues() []executor.Chunk {
+	rowDataType := buildDstRowDataTypeIrate()
+	dstChunks := make([]executor.Chunk, 0, 1)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	chunk := b.NewChunk("mst")
+
+	chunk.AppendTagsAndIndexes(
+		[]executor.ChunkTags{
+			*ParseChunkTags("country=american,value=52.7"), *ParseChunkTags("country=american,value=102"),
+			*ParseChunkTags("country=china,value=48.8"), *ParseChunkTags("country=china,value=50"),
+			*ParseChunkTags("country=japan,value=30")},
+		[]int{0, 1, 2, 4, 6})
+	chunk.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5, 6})
+	chunk.AppendTimes([]int64{1, 1, 5, 7, 3, 5, 1})
+
+	chunk.Column(0).AppendFloatValues([]float64{1, 2, 2, 2, 2, 1, 1})
+	chunk.Column(0).AppendManyNotNil(7)
+
+	dstChunks = append(dstChunks, chunk)
+	return dstChunks
+}
+
+func TestStreamAggregateTransformCountValues(t *testing.T) {
+	inChunks := buildCountValuesInChunk()
+	dstChunks := buildDstChunkCountValues()
+	var _ = hybridqp.MustParseExpr("value")
+	exprOpt := []hybridqp.ExprOptions{
+		{
+			Expr: &influxql.Call{Name: "count_values_prom", Args: []influxql.Expr{hybridqp.MustParseExpr("age"), &influxql.StringLiteral{Val: "value"}}},
+			Ref:  influxql.VarRef{Val: `count_values_prom("age")`, Type: influxql.Float},
+		},
+	}
+
+	opt := query.ProcessorOptions{
+		Dimensions: []string{"country"},
+		Interval:   hybridqp.Interval{Duration: 20 * time.Nanosecond},
+		ChunkSize:  6,
+	}
+
+	testStreamAggregateTransformBase(
+		t,
+		inChunks, dstChunks,
+		buildComRowDataType(), buildDstRowDataTypeCountValues(),
+		exprOpt, &opt, false,
+	)
 }
 
 func TestStreamAggregateTransformRateInnerChunkSizeTo1(t *testing.T) {

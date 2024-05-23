@@ -168,3 +168,95 @@ func coalesceBuckets(buckets buckets) buckets {
 	buckets[i] = last
 	return buckets[:i+1]
 }
+
+type CountValuesIterator struct {
+	inOrdinal     int
+	outOrdinal    int
+	tagName       string
+	valueCountMap map[float64]*ValueCount
+	mapSortKey    []float64
+}
+
+func NewCountValuesIterator(inOrdinal, outOrdinal int, rowDataType hybridqp.RowDataType, tagName string) *CountValuesIterator {
+	return &CountValuesIterator{
+		inOrdinal:     inOrdinal,
+		outOrdinal:    outOrdinal,
+		tagName:       tagName,
+		valueCountMap: make(map[float64]*ValueCount),
+	}
+}
+
+type ValueCount struct {
+	times  []int64
+	counts []float64
+}
+
+func (r *CountValuesIterator) Next(ie *IteratorEndpoint, p *IteratorParams) {
+	inChunk, outChunk := ie.InputPoint.Chunk, ie.OutputPoint.Chunk
+	firstIndex, lastIndex := 0, len(inChunk.IntervalIndex())-1
+	var end, tagInd int
+	for i, start := range inChunk.IntervalIndex() {
+		if start == inChunk.TagIndex()[tagInd] {
+			if start != firstIndex {
+				r.processCounts(inChunk, outChunk, tagInd-1)
+			}
+			if tagInd < len(inChunk.TagIndex())-1 {
+				tagInd++
+			}
+		}
+		if i < lastIndex {
+			end = inChunk.IntervalIndex()[i+1]
+		} else {
+			end = inChunk.NumberOfRows()
+		}
+		r.appendValueCount(start, end, inChunk)
+	}
+	if !p.sameTag {
+		r.processCounts(inChunk, outChunk, tagInd)
+	}
+}
+
+func (r *CountValuesIterator) appendValueCount(start, end int, inChunk Chunk) {
+	time := inChunk.TimeByIndex(start)
+	for j := start; j < end; j++ {
+		value := inChunk.Column(r.inOrdinal).FloatValue(j)
+		if valueCount, ok := r.valueCountMap[value]; ok {
+			if valueCount.times[len(valueCount.times)-1] != time {
+				valueCount.times = append(valueCount.times, time)
+				valueCount.counts = append(valueCount.counts, 1)
+			} else {
+				valueCount.counts[len(valueCount.counts)-1]++
+			}
+
+		} else {
+			r.mapSortKey = append(r.mapSortKey, value)
+			r.valueCountMap[value] = &ValueCount{
+				times:  []int64{time},
+				counts: []float64{1},
+			}
+		}
+	}
+}
+
+func (r *CountValuesIterator) processCounts(inChunk, outChunk Chunk, tagInd int) {
+	tag := inChunk.Tags()[tagInd]
+	sort.Float64s(r.mapSortKey)
+	column := outChunk.Column(r.outOrdinal)
+	for _, value := range r.mapSortKey {
+		valueCount := r.valueCountMap[value]
+		tagK, tagV := tag.GetChunkTagAndValues()
+		tagK = append(tagK, r.tagName)
+		tagV = append(tagV, strconv.FormatFloat(value, 'f', -1, 64))
+
+		chunkTag := NewChunkTagsByTagKVs(tagK, tagV)
+		outChunk.AppendTagsAndIndex(*chunkTag, outChunk.Len())
+		for i := 0; i < len(valueCount.times); i++ {
+			outChunk.AppendTime(valueCount.times[i])
+			outChunk.AppendIntervalIndex(outChunk.Len() - 1)
+			column.AppendNotNil()
+			column.AppendFloatValue(valueCount.counts[i])
+		}
+	}
+	r.valueCountMap = make(map[float64]*ValueCount)
+	r.mapSortKey = make([]float64, 0)
+}

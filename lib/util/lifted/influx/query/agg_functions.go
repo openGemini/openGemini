@@ -321,8 +321,15 @@ var (
 		},
 	})
 	_ = RegistryAggregateFunction("histogram_quantile", &HistogramQuantileFunc{
-		BaseInfo: BaseInfo{FuncType: AGG_NORMAL},
+		BaseInfo: BaseInfo{FuncType: AGG_SPECIAL},
 		BaseAgg: BaseAgg{
+			mergeCall: true,
+		},
+	})
+	_ = RegistryAggregateFunction("count_values_prom", &CountValuesFunc{
+		BaseInfo: BaseInfo{FuncType: AGG_SPECIAL},
+		BaseAgg: BaseAgg{
+			// TODO support push down
 			mergeCall: true,
 		},
 	})
@@ -1279,4 +1286,26 @@ func (f *HistogramQuantileFunc) CompileFunc(expr *influxql.Call, c *compiledFiel
 
 func (f *HistogramQuantileFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
 	return args[0], nil
+}
+
+type CountValuesFunc struct {
+	BaseInfo
+	BaseAgg
+}
+
+func (f *CountValuesFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
+	args := expr.Args
+	if exp, got := 2, len(args); got != exp {
+		return fmt.Errorf("invalid number of arguments for count_values, expected %d, got %d", exp, got)
+	}
+
+	if _, ok := args[1].(*influxql.StringLiteral); !ok {
+		return fmt.Errorf("expected string argument in count_values()")
+	}
+
+	return c.compileSymbol(expr.Name, expr.Args[0])
+}
+
+func (f *CountValuesFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
+	return influxql.Integer, nil
 }
