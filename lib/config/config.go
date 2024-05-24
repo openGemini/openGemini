@@ -45,6 +45,7 @@ type Config interface {
 	GetSpdy() *Spdy
 	GetCommon() *Common
 	ShowConfigs() map[string]interface{}
+	GetLogStoreConfig() *LogStoreConfig
 }
 
 type App string

@@ -18,6 +18,7 @@ package obs
 import (
 	"path"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/influxdata/influxdb/services/meta"
@@ -59,4 +60,13 @@ func SetPrefixDataPath(dataPath string) {
 
 func GetPrefixDataPath() string {
 	return PrefixDataPath
+}
+
+func Join(elem ...string) string {
+	for i, e := range elem {
+		if e != "" {
+			return path.Clean(strings.Join(elem[i:], pathSeparator))
+		}
+	}
+	return ""
 }
