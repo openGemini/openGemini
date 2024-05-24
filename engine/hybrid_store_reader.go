@@ -208,7 +208,11 @@ func (r *HybridStoreReader) initIndexReader() {
 		r.indexReaders = append(r.indexReaders, NewAttachedIndexReader(ctx, &r.indexInfo.AttachedIndexInfo, r.readerCtx))
 	}
 	if _, err := os.Stat(obs.GetLocalMstPath(obs.GetPrefixDataPath(), ctx.shardPath)); !os.IsNotExist(err) {
-		r.indexReaders = append(r.indexReaders, NewDetachedIndexReader(ctx, r.obsOptions, r.readerCtx))
+		if ctx.schema.Options().CanTimeLimitPushDown() && r.opt.Sources[0].(*influxql.Measurement).IsTimeSorted {
+			r.indexReaders = append(r.indexReaders, NewDetachedLazyLoadIndexReader(ctx, r.obsOptions, r.readerCtx))
+		} else {
+			r.indexReaders = append(r.indexReaders, NewDetachedIndexReader(ctx, r.obsOptions, r.readerCtx))
+		}
 	}
 }
 
@@ -441,7 +445,6 @@ func (r *HybridStoreReader) run(ctx context.Context, reader comm.KeyCursor) (err
 			if rec.RowNums() == 0 {
 				continue
 			}
-
 			r.iterCount++
 			r.rowCountAfterFilter += rec.RowNums()
 

@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	obs2 "github.com/huaweicloud/huaweicloud-sdk-go-obs/obs"
+	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/obs"
@@ -83,6 +84,65 @@ func (reader *DetachedMetaIndexReader) Close() {
 	if reader.r != nil {
 		reader.r.Close()
 	}
+}
+
+func GetMetaIndexAndBlockId(path string, obsOpts *obs.ObsOptions, chunkCount int64, tr util.TimeRange) ([]int64, []*MetaIndex, error) {
+	var miChunkIds []int64
+	var miFiltered []*MetaIndex
+	metaIndexReader, err := NewDetachedMetaIndexReader(path, obsOpts)
+	if err != nil {
+		return nil, nil, err
+	}
+	startChunkId, endChunkId := int64(0), chunkCount
+	defer metaIndexReader.Close()
+
+	// step1: init the meta index
+	offsets, lengths := make([]int64, 0, chunkCount), make([]int64, 0, chunkCount)
+	for i := startChunkId; i < endChunkId; i++ {
+		offset, length := GetMetaIndexOffsetAndLengthByChunkId(i)
+		offsets, lengths = append(offsets, offset), append(lengths, length)
+	}
+	metaIndexes, err := metaIndexReader.ReadMetaIndex(offsets, lengths)
+	if err != nil {
+		return nil, nil, err
+	}
+	for i := range metaIndexes {
+		if metaIndexes[i].IsExist(tr) {
+			miFiltered = append(miFiltered, metaIndexes[i])
+			miChunkIds = append(miChunkIds, startChunkId+int64(i))
+		}
+	}
+	return miChunkIds, miFiltered, nil
+}
+
+func GetPKItems(path string, obsOpts *obs.ObsOptions, miChunkIds []int64) (*colstore.DetachedPKMetaInfo, []*colstore.DetachedPKInfo, error) {
+	pkMetaInfo, err := ReadPKMetaInfoAll(path, obsOpts)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	offsets, lengths := make([]int64, 0, len(miChunkIds)), make([]int64, 0, len(miChunkIds))
+	for _, chunkId := range miChunkIds {
+		offset, length := GetPKMetaOffsetLengthByChunkId(pkMetaInfo, int(chunkId))
+		offsets, lengths = append(offsets, offset), append(lengths, length)
+	}
+	pkMetas, err := ReadPKMetaAll(path, obsOpts, offsets, lengths)
+	if err != nil {
+		return nil, nil, err
+	}
+	offsets, lengths = offsets[:0], lengths[:0]
+	for i := range pkMetas {
+		offsets, lengths = append(offsets, int64(pkMetas[i].Offset)), append(lengths, int64(pkMetas[i].Length))
+	}
+	pkDatas, err := ReadPKDataAll(path, obsOpts, offsets, lengths, pkMetas, pkMetaInfo)
+	if err != nil {
+		return nil, nil, err
+	}
+	var pkItems []*colstore.DetachedPKInfo
+	for i := range pkDatas {
+		pkItems = append(pkItems, colstore.GetPKInfoByPKMetaData(pkMetas[i], pkDatas[i], pkMetaInfo.TCLocation))
+	}
+	return pkMetaInfo, pkItems, nil
 }
 
 func GetMetaIndexOffsetAndLengthByChunkId(chunkId int64) (offset, length int64) {
