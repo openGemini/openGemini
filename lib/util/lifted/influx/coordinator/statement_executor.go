@@ -201,23 +201,35 @@ func (e *StatementExecutor) Close() error {
 // ExecuteStatement executes the given statement with the given execution context.
 func (e *StatementExecutor) ExecuteStatement(stmt influxql.Statement, ctx *query.ExecutionContext, seq int) error {
 	e.MaxQueryParallel = int(atomic.LoadInt32(&syscontrol.QueryParallel))
+	stmtString := stmt.String()
+
 	// Select statements are handled separately so that they can be streamed.
 	if stmt, ok := stmt.(*influxql.SelectStatement); ok {
+		begin := time.Now()
 		err := e.retryExecuteSelectStatement(stmt, ctx, seq)
+		dur := time.Since(begin)
 		if err == nil {
+			if dur.Nanoseconds() > time.Second.Nanoseconds() {
+				e.StmtExecLogger.GetZapLogger().Warn("slow query",
+					zap.String("stmt", stmtString),
+					zap.Float64("duration", dur.Seconds()))
+			}
 			return nil
-		} else if errno.Equal(err, errno.DatabaseNotFound) ||
-			errno.Equal(err, errno.ErrMeasurementNotFound) {
-			e.StmtExecLogger.Error("execute select statement 400 error", zap.Any("stmt", stmt), zap.Error(err))
+		}
+
+		if errno.Equal(err, errno.DatabaseNotFound, errno.ErrMeasurementNotFound) {
+			e.StmtExecLogger.Error("execute select statement 400 error", zap.Any("stmt", stmtString),
+				zap.Error(err), zap.Float64("duration", dur.Seconds()))
 			atomic.AddInt64(&statistics.HandlerStat.Query400ErrorStmtCount, 1)
 		} else {
-			e.StmtExecLogger.Error("execute select statement 500 error", zap.Any("stmt", stmt), zap.Error(err))
+			e.StmtExecLogger.Error("execute select statement 500 error", zap.Any("stmt", stmtString),
+				zap.Error(err), zap.Float64("duration", dur.Seconds()))
 			atomic.AddInt64(&statistics.HandlerStat.QueryErrorStmtCount, 1)
 		}
 		return err
 	}
 
-	e.StmtExecLogger.Info("start execute statement", zap.Any("stmt", stmt))
+	e.StmtExecLogger.Info("start execute statement", zap.Any("stmt", stmtString))
 	var rows models.Rows
 	var messages []*query.Message
 	var err error
