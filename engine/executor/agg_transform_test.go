@@ -2191,6 +2191,495 @@ func TestStreamAggregateTransform_Multi_Count_Integer_Min_Float(t *testing.T) {
 	}
 }
 
+func buildSourceRowDataTypeStringBool() hybridqp.RowDataType {
+	rowDataType := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "value1", Type: influxql.String},
+		influxql.VarRef{Val: "value2", Type: influxql.Boolean},
+		influxql.VarRef{Val: "value3", Type: influxql.Integer},
+		influxql.VarRef{Val: "value4", Type: influxql.Float},
+		influxql.VarRef{Val: "value5", Type: influxql.String},
+		influxql.VarRef{Val: "value6", Type: influxql.Boolean},
+	)
+
+	return rowDataType
+}
+
+func buildSourceChunkStringBool1() executor.Chunk {
+	rowDataType := buildSourceRowDataTypeStringBool()
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	chunk := b.NewChunk("mst")
+
+	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"), *ParseChunkTags("name=ccc"),
+	}, []int{0, 2, 4})
+	chunk.AppendIntervalIndexes([]int{0, 2, 3, 4})
+	chunk.AppendTimes([]int64{1, 2, 3, 4, 5})
+
+	chunk.Column(0).AppendStringValues([]string{"1.1", "2.2", "3.3", "4.4", "5.5"})
+	chunk.Column(0).AppendManyNotNil(5)
+
+	chunk.Column(1).AppendBooleanValues([]bool{true, false, true, false, true})
+	chunk.Column(1).AppendManyNotNil(5)
+
+	chunk.Column(2).AppendManyNil(5)
+	chunk.Column(3).AppendManyNil(5)
+	chunk.Column(4).AppendManyNil(5)
+	chunk.Column(5).AppendManyNil(5)
+
+	return chunk
+}
+
+func buildSourceChunkStringBool2() executor.Chunk {
+	rowDataType := buildSourceRowDataTypeStringBool()
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	chunk := b.NewChunk("mst")
+
+	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=ccc"), *ParseChunkTags("name=ddd"), *ParseChunkTags("name=eee"),
+	}, []int{0, 1, 3})
+	chunk.AppendIntervalIndexes([]int{0, 1, 2, 3})
+	chunk.AppendTimes([]int64{6, 7, 8, 9, 10})
+
+	chunk.Column(0).AppendStringValues([]string{"6.6", "7.7", "8.8", "9.9", "10.1"})
+	chunk.Column(0).AppendManyNotNil(5)
+
+	chunk.Column(1).AppendBooleanValues([]bool{false, true, true, false, true})
+	chunk.Column(1).AppendManyNotNil(5)
+
+	chunk.Column(2).AppendManyNil(5)
+	chunk.Column(3).AppendManyNil(5)
+	chunk.Column(4).AppendManyNil(5)
+	chunk.Column(5).AppendManyNil(5)
+
+	return chunk
+}
+
+func buildTargetRowDataTypeCountStringBool() hybridqp.RowDataType {
+	rowDataType := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "count(\"value1\")", Type: influxql.Integer},
+		influxql.VarRef{Val: "min(\"value2\")", Type: influxql.Boolean},
+		influxql.VarRef{Val: "count(\"value3\")", Type: influxql.Integer},
+		influxql.VarRef{Val: "count(\"value4\")", Type: influxql.Integer},
+		influxql.VarRef{Val: "count(\"value5\")", Type: influxql.Integer},
+		influxql.VarRef{Val: "count(\"value6\")", Type: influxql.Integer},
+	)
+
+	return rowDataType
+}
+
+func buildTargetChunkStringBool() executor.Chunk {
+	rowDataType := buildTargetRowDataTypeCountStringBool()
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	chunk := b.NewChunk("mst")
+
+	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
+		*ParseChunkTags("name=ccc"), *ParseChunkTags("name=ddd"),
+		*ParseChunkTags("name=eee")}, []int{0, 1, 3, 4, 6})
+	chunk.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5, 6})
+	chunk.AppendTimes([]int64{1, 3, 4, 6, 7, 8, 9})
+
+	chunk.Column(0).AppendIntegerValues([]int64{2, 1, 1, 2, 1, 1, 2})
+	chunk.Column(0).AppendManyNotNil(7)
+
+	chunk.Column(1).AppendBooleanValues([]bool{false, true, false, false, true, true, false})
+	chunk.Column(1).AppendManyNotNil(7)
+
+	chunk.Column(2).AppendManyNil(7)
+	chunk.Column(3).AppendManyNil(7)
+	chunk.Column(4).AppendManyNil(7)
+	chunk.Column(5).AppendManyNil(7)
+
+	return chunk
+}
+
+func TestStreamAggregateTransform_Multi_Count_String_Min_Bool(t *testing.T) {
+	sourceChunk1, sourceChunk2 := buildSourceChunkStringBool1(), buildSourceChunkStringBool2()
+	targetChunk := buildTargetChunkStringBool()
+
+	expectChunks := make([]executor.Chunk, 0, 1)
+	expectChunks = append(expectChunks, targetChunk)
+
+	exprOpt := []hybridqp.ExprOptions{
+		{
+			Expr: &influxql.Call{Name: "count", Args: []influxql.Expr{hybridqp.MustParseExpr("value1")}},
+			Ref:  influxql.VarRef{Val: `count("value1")`, Type: influxql.Integer},
+		},
+		{
+			Expr: &influxql.Call{Name: "min", Args: []influxql.Expr{hybridqp.MustParseExpr("value2")}},
+			Ref:  influxql.VarRef{Val: `min("value2")`, Type: influxql.Boolean},
+		},
+		{
+			Expr: &influxql.Call{Name: "count", Args: []influxql.Expr{hybridqp.MustParseExpr("value3")}},
+			Ref:  influxql.VarRef{Val: `count("value3")`, Type: influxql.Integer},
+		},
+		{
+			Expr: &influxql.Call{Name: "count", Args: []influxql.Expr{hybridqp.MustParseExpr("value3")}},
+			Ref:  influxql.VarRef{Val: `count("value4")`, Type: influxql.Integer},
+		},
+		{
+			Expr: &influxql.Call{Name: "count", Args: []influxql.Expr{hybridqp.MustParseExpr("value3")}},
+			Ref:  influxql.VarRef{Val: `count("value5")`, Type: influxql.Integer},
+		},
+		{
+			Expr: &influxql.Call{Name: "count", Args: []influxql.Expr{hybridqp.MustParseExpr("value3")}},
+			Ref:  influxql.VarRef{Val: `count("value6")`, Type: influxql.Integer},
+		},
+	}
+
+	opt := query.ProcessorOptions{
+		Exprs: []influxql.Expr{
+			hybridqp.MustParseExpr(`count("value1")`),
+			hybridqp.MustParseExpr(`min("value2")`),
+			hybridqp.MustParseExpr(`count("value3")`),
+			hybridqp.MustParseExpr(`count("value4")`),
+			hybridqp.MustParseExpr(`count("value5")`),
+			hybridqp.MustParseExpr(`count("value6")`),
+		},
+		Dimensions: []string{"name"},
+		Interval:   hybridqp.Interval{Duration: 4 * time.Nanosecond},
+		Ordered:    true,
+		Ascending:  true,
+		ChunkSize:  10,
+	}
+
+	source := NewSourceFromMultiChunk(buildSourceRowDataTypeStringBool(), []executor.Chunk{sourceChunk1, sourceChunk2})
+	trans1, _ := executor.NewStreamAggregateTransform(
+		[]hybridqp.RowDataType{buildSourceRowDataTypeStringBool()}, []hybridqp.RowDataType{buildTargetRowDataTypeCountStringBool()},
+		exprOpt, &opt, false)
+	sink := NewNilSink(buildTargetRowDataTypeCountStringBool())
+
+	err := executor.Connect(source.Output, trans1.Inputs[0])
+	if err != nil {
+		t.Fatalf("connect error")
+	}
+	err = executor.Connect(trans1.Outputs[0], sink.Input)
+	if err != nil {
+		t.Fatalf("connect error")
+	}
+
+	var processors executor.Processors
+
+	processors = append(processors, source)
+	processors = append(processors, trans1)
+	processors = append(processors, sink)
+
+	executors := executor.NewPipelineExecutor(processors)
+	err = executors.Execute(context.Background())
+	if err != nil {
+		t.Fatalf("connect error")
+	}
+	executors.Release()
+
+	outputChunks := sink.Chunks
+	if len(expectChunks) != len(outputChunks) {
+		t.Fatalf("the chunk number is not the same as the expected: %d != %d\n", len(expectChunks), len(outputChunks))
+	}
+	for i := range outputChunks {
+		assert.Equal(t, outputChunks[i].Name(), expectChunks[i].Name())
+		assert.Equal(t, outputChunks[i].Tags(), expectChunks[i].Tags())
+		assert.Equal(t, outputChunks[i].Time(), expectChunks[i].Time())
+		assert.Equal(t, outputChunks[i].TagIndex(), expectChunks[i].TagIndex())
+		assert.Equal(t, outputChunks[i].IntervalIndex(), expectChunks[i].IntervalIndex())
+		for j := range outputChunks[i].Columns() {
+			assert.Equal(t, outputChunks[i].Column(j), expectChunks[i].Column(j))
+		}
+	}
+}
+
+func buildSourceChunkString1() executor.Chunk {
+	rowDataType := buildSourceRowDataTypeFirst(influxql.String)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	chunk := b.NewChunk("mst")
+
+	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"), *ParseChunkTags("name=ccc"),
+	}, []int{0, 2, 4})
+	chunk.AppendIntervalIndexes([]int{0, 2, 3, 4})
+	chunk.AppendTimes([]int64{1, 2, 3, 4, 5})
+
+	chunk.Column(0).AppendStringValues([]string{"1.1", "2.2", "3.3", "4.4", "5.5"})
+	chunk.Column(0).AppendManyNotNil(5)
+
+	return chunk
+}
+
+func buildSourceChunkString2() executor.Chunk {
+	rowDataType := buildSourceRowDataTypeFirst(influxql.String)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	chunk := b.NewChunk("mst")
+
+	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=ccc"), *ParseChunkTags("name=ddd"), *ParseChunkTags("name=eee"),
+	}, []int{0, 1, 3})
+	chunk.AppendIntervalIndexes([]int{0, 1, 2, 3})
+	chunk.AppendTimes([]int64{6, 7, 8, 9, 10})
+
+	chunk.Column(0).AppendStringValues([]string{"6.6", "7.7", "8.8", "9.9", "10.1"})
+	chunk.Column(0).AppendManyNotNil(5)
+
+	return chunk
+}
+
+func buildTargetChunkString() executor.Chunk {
+	rowDataType := buildTargetRowDataTypeFirst(influxql.String)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	chunk := b.NewChunk("mst")
+
+	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
+		*ParseChunkTags("name=ccc"), *ParseChunkTags("name=ddd"),
+		*ParseChunkTags("name=eee")}, []int{0, 1, 3, 4, 6})
+	chunk.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5, 6})
+	chunk.AppendTimes([]int64{1, 3, 4, 5, 7, 8, 9})
+
+	chunk.Column(0).AppendStringValues([]string{"1.1", "3.3", "4.4", "5.5", "7.7", "8.8", "9.9"})
+	chunk.Column(0).AppendManyNotNil(7)
+
+	chunk.Column(1).AppendStringValues([]string{"1.1", "3.3", "4.4", "5.5", "7.7", "8.8", "9.9"})
+	chunk.Column(1).AppendManyNotNil(7)
+
+	return chunk
+}
+
+func TestStreamAggregateTransform_Multi_First_String(t *testing.T) {
+	sourceChunk1, sourceChunk2 := buildSourceChunkString1(), buildSourceChunkString2()
+	targetChunk := buildTargetChunkString()
+
+	expectChunks := make([]executor.Chunk, 0, 1)
+	expectChunks = append(expectChunks, targetChunk)
+
+	exprOpt := []hybridqp.ExprOptions{
+		{
+			Expr: &influxql.Call{Name: "first", Args: []influxql.Expr{hybridqp.MustParseExpr("value1")}},
+			Ref:  influxql.VarRef{Val: `first("value1")`, Type: influxql.String},
+		},
+		{
+			Expr: &influxql.VarRef{Val: "value1", Type: influxql.String},
+			Ref:  influxql.VarRef{Val: "value1", Type: influxql.String},
+		},
+	}
+
+	opt := query.ProcessorOptions{
+		Exprs: []influxql.Expr{
+			hybridqp.MustParseExpr(`first("value1")`),
+			hybridqp.MustParseExpr("value1"),
+		},
+		Dimensions: []string{"name"},
+		Interval:   hybridqp.Interval{Duration: 4 * time.Nanosecond},
+		Ordered:    true,
+		Ascending:  true,
+		ChunkSize:  10,
+	}
+
+	source := NewSourceFromMultiChunk(buildSourceRowDataTypeFirst(influxql.String), []executor.Chunk{sourceChunk1, sourceChunk2})
+	trans1, _ := executor.NewStreamAggregateTransform(
+		[]hybridqp.RowDataType{buildSourceRowDataTypeFirst(influxql.String)}, []hybridqp.RowDataType{buildTargetRowDataTypeFirst(influxql.String)},
+		exprOpt, &opt, false)
+	sink := NewNilSink(buildTargetRowDataTypeFirst(influxql.String))
+
+	err := executor.Connect(source.Output, trans1.Inputs[0])
+	if err != nil {
+		t.Fatalf("connect error")
+	}
+	err = executor.Connect(trans1.Outputs[0], sink.Input)
+	if err != nil {
+		t.Fatalf("connect error")
+	}
+
+	var processors executor.Processors
+
+	processors = append(processors, source)
+	processors = append(processors, trans1)
+	processors = append(processors, sink)
+
+	executors := executor.NewPipelineExecutor(processors)
+	err = executors.Execute(context.Background())
+	if err != nil {
+		t.Fatalf("connect error")
+	}
+	executors.Release()
+
+	outputChunks := sink.Chunks
+	if len(expectChunks) != len(outputChunks) {
+		t.Fatalf("the chunk number is not the same as the expected: %d != %d\n", len(expectChunks), len(outputChunks))
+	}
+	for i := range outputChunks {
+		assert.Equal(t, outputChunks[i].Name(), expectChunks[i].Name())
+		assert.Equal(t, outputChunks[i].Tags(), expectChunks[i].Tags())
+		assert.Equal(t, outputChunks[i].Time(), expectChunks[i].Time())
+		assert.Equal(t, outputChunks[i].TagIndex(), expectChunks[i].TagIndex())
+		assert.Equal(t, outputChunks[i].IntervalIndex(), expectChunks[i].IntervalIndex())
+		for j := range outputChunks[i].Columns() {
+			assert.Equal(t, outputChunks[i].Column(j), expectChunks[i].Column(j))
+		}
+	}
+}
+
+func buildSourceRowDataTypeFirst(dataType influxql.DataType) hybridqp.RowDataType {
+	rowDataType := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "value1", Type: dataType},
+	)
+
+	return rowDataType
+}
+
+func buildSourceChunkBool1() executor.Chunk {
+	rowDataType := buildSourceRowDataTypeFirst(influxql.Boolean)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	chunk := b.NewChunk("mst")
+
+	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"), *ParseChunkTags("name=ccc"),
+	}, []int{0, 2, 4})
+	chunk.AppendIntervalIndexes([]int{0, 2, 3, 4})
+	chunk.AppendTimes([]int64{1, 2, 3, 4, 5})
+
+	chunk.Column(0).AppendBooleanValues([]bool{true, false, true, false, true})
+	chunk.Column(0).AppendManyNotNil(5)
+
+	return chunk
+}
+
+func buildSourceChunkBool2() executor.Chunk {
+	rowDataType := buildSourceRowDataTypeFirst(influxql.Boolean)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	chunk := b.NewChunk("mst")
+
+	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=ccc"), *ParseChunkTags("name=ddd"), *ParseChunkTags("name=eee"),
+	}, []int{0, 1, 3})
+	chunk.AppendIntervalIndexes([]int{0, 1, 2, 3})
+	chunk.AppendTimes([]int64{6, 7, 8, 9, 10})
+
+	chunk.Column(0).AppendBooleanValues([]bool{true, false, true, false, true})
+	chunk.Column(0).AppendManyNotNil(5)
+
+	return chunk
+}
+
+func buildTargetRowDataTypeFirst(dataType influxql.DataType) hybridqp.RowDataType {
+	rowDataType := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "first(\"value1\")", Type: dataType},
+		influxql.VarRef{Val: "value1", Type: dataType},
+	)
+
+	return rowDataType
+}
+
+func buildTargetChunkBool() executor.Chunk {
+	rowDataType := buildTargetRowDataTypeFirst(influxql.Boolean)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	chunk := b.NewChunk("mst")
+
+	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
+		*ParseChunkTags("name=ccc"), *ParseChunkTags("name=ddd"),
+		*ParseChunkTags("name=eee")}, []int{0, 1, 3, 4, 6})
+	chunk.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5, 6})
+	chunk.AppendTimes([]int64{1, 3, 4, 5, 7, 8, 9})
+
+	chunk.Column(0).AppendBooleanValues([]bool{true, true, false, true, false, true, false})
+	chunk.Column(0).AppendManyNotNil(7)
+
+	chunk.Column(1).AppendBooleanValues([]bool{true, true, false, true, false, true, false})
+	chunk.Column(1).AppendManyNotNil(7)
+
+	return chunk
+}
+
+func TestStreamAggregateTransform_Multi_First_Boolean(t *testing.T) {
+	sourceChunk1, sourceChunk2 := buildSourceChunkBool1(), buildSourceChunkBool2()
+	targetChunk := buildTargetChunkBool()
+
+	expectChunks := make([]executor.Chunk, 0, 1)
+	expectChunks = append(expectChunks, targetChunk)
+
+	exprOpt := []hybridqp.ExprOptions{
+		{
+			Expr: &influxql.Call{Name: "first", Args: []influxql.Expr{hybridqp.MustParseExpr("value1")}},
+			Ref:  influxql.VarRef{Val: `first("value1")`, Type: influxql.Boolean},
+		},
+		{
+			Expr: &influxql.VarRef{Val: "value1", Type: influxql.Boolean},
+			Ref:  influxql.VarRef{Val: "value1", Type: influxql.Boolean},
+		},
+	}
+
+	opt := query.ProcessorOptions{
+		Exprs: []influxql.Expr{
+			hybridqp.MustParseExpr(`first("value1")`),
+			hybridqp.MustParseExpr("value1"),
+		},
+		Dimensions: []string{"name"},
+		Interval:   hybridqp.Interval{Duration: 4 * time.Nanosecond},
+		Ordered:    true,
+		Ascending:  true,
+		ChunkSize:  10,
+	}
+
+	source := NewSourceFromMultiChunk(buildSourceRowDataTypeFirst(influxql.Boolean), []executor.Chunk{sourceChunk1, sourceChunk2})
+	trans1, _ := executor.NewStreamAggregateTransform(
+		[]hybridqp.RowDataType{buildSourceRowDataTypeFirst(influxql.Boolean)}, []hybridqp.RowDataType{buildTargetRowDataTypeFirst(influxql.Boolean)},
+		exprOpt, &opt, false)
+	sink := NewNilSink(buildTargetRowDataTypeFirst(influxql.Boolean))
+
+	err := executor.Connect(source.Output, trans1.Inputs[0])
+	if err != nil {
+		t.Fatalf("connect error")
+	}
+	err = executor.Connect(trans1.Outputs[0], sink.Input)
+	if err != nil {
+		t.Fatalf("connect error")
+	}
+
+	var processors executor.Processors
+
+	processors = append(processors, source)
+	processors = append(processors, trans1)
+	processors = append(processors, sink)
+
+	executors := executor.NewPipelineExecutor(processors)
+	err = executors.Execute(context.Background())
+	if err != nil {
+		t.Fatalf("connect error")
+	}
+	executors.Release()
+
+	outputChunks := sink.Chunks
+	if len(expectChunks) != len(outputChunks) {
+		t.Fatalf("the chunk number is not the same as the expected: %d != %d\n", len(expectChunks), len(outputChunks))
+	}
+	for i := range outputChunks {
+		assert.Equal(t, outputChunks[i].Name(), expectChunks[i].Name())
+		assert.Equal(t, outputChunks[i].Tags(), expectChunks[i].Tags())
+		assert.Equal(t, outputChunks[i].Time(), expectChunks[i].Time())
+		assert.Equal(t, outputChunks[i].TagIndex(), expectChunks[i].TagIndex())
+		assert.Equal(t, outputChunks[i].IntervalIndex(), expectChunks[i].IntervalIndex())
+		for j := range outputChunks[i].Columns() {
+			assert.Equal(t, outputChunks[i].Column(j), expectChunks[i].Column(j))
+		}
+	}
+}
+
 func TestStreamAggregateTransformPercentile(t *testing.T) {
 	sourceChunk1, sourceChunk2 := buildSourceChunkPercentile1(), buildSourceChunkPercentile2()
 	targetChunk := buildTargetChunkPercentile()
