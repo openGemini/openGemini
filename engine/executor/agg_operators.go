@@ -45,15 +45,15 @@ func (c *MinOp) CreateRoutine(params *AggCallFuncParams) (Routine, error) {
 	dataType := inRowDataType.Field(inOrdinal).Expr.(*influxql.VarRef).Type
 	switch dataType {
 	case influxql.Integer:
-		return NewRoutineImpl(NewIntegerColIntegerIterator(MinReduce[int64], MinMerge[int64],
+		return NewRoutineImpl(NewIntegerIterator(MinReduce[int64], MinMerge[int64],
 			isSingleCall, inOrdinal, outOrdinal, auxProcessor, outRowDataType),
 			inOrdinal, outOrdinal), nil
 	case influxql.Float:
-		return NewRoutineImpl(NewFloatColFloatIterator(MinReduce[float64], MinMerge[float64],
+		return NewRoutineImpl(NewFloatIterator(MinReduce[float64], MinMerge[float64],
 			isSingleCall, inOrdinal, outOrdinal, auxProcessor, outRowDataType),
 			inOrdinal, outOrdinal), nil
 	case influxql.Boolean:
-		return NewRoutineImpl(NewBooleanColBooleanIterator(BooleanMinReduce, BooleanMinMerge,
+		return NewRoutineImpl(NewBooleanIterator(BooleanMinReduce, BooleanMinMerge,
 			isSingleCall, inOrdinal, outOrdinal, auxProcessor, outRowDataType),
 			inOrdinal, outOrdinal), nil
 	default:
@@ -73,15 +73,15 @@ func (c *MaxOp) CreateRoutine(params *AggCallFuncParams) (Routine, error) {
 	dataType := inRowDataType.Field(inOrdinal).Expr.(*influxql.VarRef).Type
 	switch dataType {
 	case influxql.Integer:
-		return NewRoutineImpl(NewIntegerColIntegerIterator(MaxReduce[int64], MaxMerge[int64],
+		return NewRoutineImpl(NewIntegerIterator(MaxReduce[int64], MaxMerge[int64],
 			isSingleCall, inOrdinal, outOrdinal, auxProcessor, outRowDataType),
 			inOrdinal, outOrdinal), nil
 	case influxql.Float:
-		return NewRoutineImpl(NewFloatColFloatIterator(MaxReduce[float64], MaxMerge[float64],
+		return NewRoutineImpl(NewFloatIterator(MaxReduce[float64], MaxMerge[float64],
 			isSingleCall, inOrdinal, outOrdinal, auxProcessor, outRowDataType),
 			inOrdinal, outOrdinal), nil
 	case influxql.Boolean:
-		return NewRoutineImpl(NewBooleanColBooleanIterator(BooleanMaxReduce, BooleanMaxMerge,
+		return NewRoutineImpl(NewBooleanIterator(BooleanMaxReduce, BooleanMaxMerge,
 			isSingleCall, inOrdinal, outOrdinal, auxProcessor, outRowDataType),
 			inOrdinal, outOrdinal), nil
 	default:
@@ -132,7 +132,7 @@ func (c *BasePromOp) CreateRoutine(params *AggCallFuncParams) (Routine, error) {
 	if inOrdinal < 0 || outOrdinal < 0 {
 		return nil, errno.NewError(errno.SchemaNotAligned, c.op, "input and output schemas are not aligned")
 	}
-	return NewRoutineImpl(NewFloatColFloatIterator(c.fn, c.fv, isSingleCall, inOrdinal, outOrdinal, auxProcessor, outRowDataType), inOrdinal, outOrdinal), nil
+	return NewRoutineImpl(NewFloatIterator(c.fn, c.fv, isSingleCall, inOrdinal, outOrdinal, auxProcessor, outRowDataType), inOrdinal, outOrdinal), nil
 }
 
 type MinPromOp struct {

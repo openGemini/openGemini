@@ -131,6 +131,7 @@ func (r *FloatColFloatHistogramIterator) processBuckets(inChunk, outChunk Chunk)
 	}
 	chunkTag := NewChunkTagsByBytes([]byte(r.metricWithBuckets.name))
 	outChunk.AppendTagsAndIndex(*chunkTag, outChunk.Len())
+	outColumn := outChunk.Column(r.outOrdinal)
 	for i, buckets := range r.metricWithBuckets.buckets {
 		if len(buckets) > 0 {
 			sort.Sort(buckets)
@@ -139,8 +140,8 @@ func (r *FloatColFloatHistogramIterator) processBuckets(inChunk, outChunk Chunk)
 
 			outChunk.AppendTime(r.metricWithBuckets.times[i])
 			outChunk.AppendIntervalIndex(outChunk.Len() - 1)
-			outChunk.Column(r.outOrdinal).AppendNotNil()
-			outChunk.Column(r.outOrdinal).AppendFloatValue(val)
+			outColumn.AppendNotNil()
+			outColumn.AppendFloatValue(val)
 		}
 	}
 	r.metricWithBuckets.clear()

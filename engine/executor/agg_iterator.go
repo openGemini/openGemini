@@ -540,3 +540,699 @@ type TimeColReduceFunc[T util.ExceptBool] func(c Chunk, values []T, ordinal, sta
 type RateUpdateFunc[T util.NumberOnly] func(prevPoints, currPoints [2]*Point[T])
 type RateMergeFunc[T util.NumberOnly] func(prevPoints [2]*Point[T], interval *hybridqp.Interval) (float64, bool)
 type RateFinalReduceFunc[T util.NumberOnly] func(firstTime int64, lastTime int64, firstValue T, lastValue T, interval *hybridqp.Interval) (float64, bool)
+
+type FloatIterator struct {
+	isSingleCall bool
+	inOrdinal    int
+	outOrdinal   int
+	prevPoint    *Point[float64]
+	currPoint    *Point[float64]
+	fn           ColReduceFunc[float64]
+	fv           ColMergeFunc[float64]
+	auxChunk     Chunk
+	auxProcessor []*AuxProcessor
+}
+
+func NewFloatIterator(fn ColReduceFunc[float64], fv ColMergeFunc[float64],
+	isSingleCall bool, inOrdinal, outOrdinal int, auxProcessor []*AuxProcessor, rowDataType hybridqp.RowDataType,
+) *FloatIterator {
+	r := &FloatIterator{
+		fn:           fn,
+		fv:           fv,
+		isSingleCall: isSingleCall,
+		inOrdinal:    inOrdinal,
+		outOrdinal:   outOrdinal,
+		prevPoint:    newPoint[float64](),
+		currPoint:    newPoint[float64](),
+	}
+	if isSingleCall && len(auxProcessor) > 0 {
+		r.auxProcessor = auxProcessor
+		r.auxChunk = NewChunkBuilder(rowDataType).NewChunk("")
+	}
+	return r
+}
+
+func (r *FloatIterator) appendInAuxCol(
+	inChunk, outChunk Chunk, index int,
+) {
+	for j := range r.auxProcessor {
+		r.auxProcessor[j].auxHelperFunc(
+			inChunk.Column(r.auxProcessor[j].inOrdinal),
+			outChunk.Column(r.auxProcessor[j].outOrdinal),
+			index,
+		)
+	}
+}
+
+func (r *FloatIterator) appendOutAuxCol(
+	inChunk, outChunk Chunk, index int,
+) {
+	for j := range r.auxProcessor {
+		r.auxProcessor[j].auxHelperFunc(
+			inChunk.Column(r.auxProcessor[j].outOrdinal),
+			outChunk.Column(r.auxProcessor[j].outOrdinal),
+			index,
+		)
+	}
+}
+
+func (r *FloatIterator) mergePrevItem(
+	inChunk, outChunk Chunk,
+) {
+	if r.isSingleCall {
+		outChunk.AppendTime(r.prevPoint.time)
+		outChunk.AppendIntervalIndex(outChunk.Len() - 1)
+	}
+	outColumn := outChunk.Column(r.outOrdinal)
+	outColumn.AppendNotNil()
+	outColumn.AppendFloatValue(r.prevPoint.value)
+	if r.auxProcessor != nil {
+		if r.prevPoint.index == 0 {
+			r.appendOutAuxCol(r.auxChunk, outChunk, r.prevPoint.index)
+		} else {
+			r.appendInAuxCol(inChunk, outChunk, r.prevPoint.index-1)
+		}
+		r.auxChunk.Reset()
+	}
+}
+
+func (r *FloatIterator) processFirstWindow(
+	inChunk, outChunk Chunk, isNil, sameInterval, onlyOneInterval bool, index int, value float64,
+) {
+	// To distinguish values between inChunk and auxChunk, r.currPoint.index incremented by 1.
+	if !isNil {
+		r.currPoint.Set(index+1, inChunk.TimeByIndex(index), value)
+		r.fv(r.prevPoint, r.currPoint)
+	}
+	if onlyOneInterval && sameInterval {
+		if r.auxProcessor != nil && r.prevPoint.index > 0 {
+			r.auxChunk.Reset()
+			r.auxChunk.AppendTime(inChunk.TimeByIndex(r.prevPoint.index - 1))
+			r.appendInAuxCol(inChunk, r.auxChunk, r.prevPoint.index-1)
+		}
+		r.prevPoint.index = 0
+	} else {
+		if !r.prevPoint.isNil {
+			r.mergePrevItem(inChunk, outChunk)
+		}
+		r.prevPoint.Reset()
+	}
+	r.currPoint.Reset()
+}
+
+func (r *FloatIterator) processLastWindow(
+	inChunk Chunk, index int, isNil bool, value float64,
+) {
+	if isNil {
+		r.prevPoint.Reset()
+	} else {
+		r.prevPoint.Set(0, inChunk.TimeByIndex(index), value)
+	}
+	if r.auxProcessor != nil {
+		r.auxChunk.AppendTime(inChunk.TimeByIndex(index))
+		r.appendInAuxCol(inChunk, r.auxChunk, index)
+	}
+}
+
+func (r *FloatIterator) processMiddleWindow(
+	inChunk, outChunk Chunk, index int, value float64,
+) {
+	if r.isSingleCall {
+		outChunk.AppendTime(inChunk.TimeByIndex(index))
+		outChunk.AppendIntervalIndex(outChunk.Len() - 1)
+	}
+	outColumn := outChunk.Column(r.outOrdinal)
+	outColumn.AppendNotNil()
+	outColumn.AppendFloatValue(value)
+	if r.auxProcessor != nil {
+		r.appendInAuxCol(inChunk, outChunk, index)
+	}
+}
+
+func (r *FloatIterator) Next(ie *IteratorEndpoint, p *IteratorParams) {
+	inChunk, outChunk := ie.InputPoint.Chunk, ie.OutputPoint.Chunk
+	inColumn := inChunk.Column(r.inOrdinal)
+	outColumn := outChunk.Column(r.outOrdinal)
+	if inColumn.IsEmpty() && r.prevPoint.isNil {
+		var addIntervalLen int
+		if p.sameInterval {
+			addIntervalLen = inChunk.IntervalLen() - 1
+		} else {
+			addIntervalLen = inChunk.IntervalLen()
+		}
+		if addIntervalLen > 0 {
+			outColumn.AppendManyNil(addIntervalLen)
+		}
+		return
+	}
+
+	var end int
+	firstIndex, lastIndex := 0, len(inChunk.IntervalIndex())-1
+	values := inColumn.FloatValues()
+	for i, start := range inChunk.IntervalIndex() {
+		if i < lastIndex {
+			end = inChunk.IntervalIndex()[i+1]
+		} else {
+			end = inChunk.NumberOfRows()
+		}
+		index, value, isNil := r.fn(inChunk, values, r.inOrdinal, start, end)
+		if isNil && ((i > firstIndex && i < lastIndex) ||
+			(firstIndex == lastIndex && r.prevPoint.isNil && !p.sameInterval) ||
+			(firstIndex != lastIndex && i == firstIndex && r.prevPoint.isNil) ||
+			(firstIndex != lastIndex && i == lastIndex && !p.sameInterval)) {
+			outColumn.AppendNil()
+			continue
+		}
+		if i == firstIndex && !r.prevPoint.isNil {
+			r.processFirstWindow(inChunk, outChunk, isNil, p.sameInterval,
+				firstIndex == lastIndex, index, value)
+		} else if i == lastIndex && p.sameInterval {
+			r.processLastWindow(inChunk, index, isNil, value)
+		} else if !isNil {
+			r.processMiddleWindow(inChunk, outChunk, index, value)
+		}
+	}
+}
+
+type IntegerIterator struct {
+	isSingleCall bool
+	inOrdinal    int
+	outOrdinal   int
+	prevPoint    *Point[int64]
+	currPoint    *Point[int64]
+	fn           ColReduceFunc[int64]
+	fv           ColMergeFunc[int64]
+	auxChunk     Chunk
+	auxProcessor []*AuxProcessor
+}
+
+func NewIntegerIterator(fn ColReduceFunc[int64], fv ColMergeFunc[int64],
+	isSingleCall bool, inOrdinal, outOrdinal int, auxProcessor []*AuxProcessor, rowDataType hybridqp.RowDataType,
+) *IntegerIterator {
+	r := &IntegerIterator{
+		fn:           fn,
+		fv:           fv,
+		isSingleCall: isSingleCall,
+		inOrdinal:    inOrdinal,
+		outOrdinal:   outOrdinal,
+		prevPoint:    newPoint[int64](),
+		currPoint:    newPoint[int64](),
+	}
+	if isSingleCall && len(auxProcessor) > 0 {
+		r.auxProcessor = auxProcessor
+		r.auxChunk = NewChunkBuilder(rowDataType).NewChunk("")
+	}
+	return r
+}
+
+func (r *IntegerIterator) appendInAuxCol(
+	inChunk, outChunk Chunk, index int,
+) {
+	for j := range r.auxProcessor {
+		r.auxProcessor[j].auxHelperFunc(
+			inChunk.Column(r.auxProcessor[j].inOrdinal),
+			outChunk.Column(r.auxProcessor[j].outOrdinal),
+			index,
+		)
+	}
+}
+
+func (r *IntegerIterator) appendOutAuxCol(
+	inChunk, outChunk Chunk, index int,
+) {
+	for j := range r.auxProcessor {
+		r.auxProcessor[j].auxHelperFunc(
+			inChunk.Column(r.auxProcessor[j].outOrdinal),
+			outChunk.Column(r.auxProcessor[j].outOrdinal),
+			index,
+		)
+	}
+}
+
+func (r *IntegerIterator) mergePrevItem(
+	inChunk, outChunk Chunk,
+) {
+	if r.isSingleCall {
+		outChunk.AppendTime(r.prevPoint.time)
+		outChunk.AppendIntervalIndex(outChunk.Len() - 1)
+	}
+	outColumn := outChunk.Column(r.outOrdinal)
+	outColumn.AppendNotNil()
+	outColumn.AppendIntegerValue(r.prevPoint.value)
+	if r.auxProcessor != nil {
+		if r.prevPoint.index == 0 {
+			r.appendOutAuxCol(r.auxChunk, outChunk, r.prevPoint.index)
+		} else {
+			r.appendInAuxCol(inChunk, outChunk, r.prevPoint.index-1)
+		}
+		r.auxChunk.Reset()
+	}
+}
+
+func (r *IntegerIterator) processFirstWindow(
+	inChunk, outChunk Chunk, isNil, sameInterval, onlyOneInterval bool, index int, value int64,
+) {
+	// To distinguish values between inChunk and auxChunk, r.currPoint.index incremented by 1.
+	if !isNil {
+		r.currPoint.Set(index+1, inChunk.TimeByIndex(index), value)
+		r.fv(r.prevPoint, r.currPoint)
+	}
+	if onlyOneInterval && sameInterval {
+		if r.auxProcessor != nil && r.prevPoint.index > 0 {
+			r.auxChunk.Reset()
+			r.auxChunk.AppendTime(inChunk.TimeByIndex(r.prevPoint.index - 1))
+			r.appendInAuxCol(inChunk, r.auxChunk, r.prevPoint.index-1)
+		}
+		r.prevPoint.index = 0
+	} else {
+		if !r.prevPoint.isNil {
+			r.mergePrevItem(inChunk, outChunk)
+		}
+		r.prevPoint.Reset()
+	}
+	r.currPoint.Reset()
+}
+
+func (r *IntegerIterator) processLastWindow(
+	inChunk Chunk, index int, isNil bool, value int64,
+) {
+	if isNil {
+		r.prevPoint.Reset()
+	} else {
+		r.prevPoint.Set(0, inChunk.TimeByIndex(index), value)
+	}
+	if r.auxProcessor != nil {
+		r.auxChunk.AppendTime(inChunk.TimeByIndex(index))
+		r.appendInAuxCol(inChunk, r.auxChunk, index)
+	}
+}
+
+func (r *IntegerIterator) processMiddleWindow(
+	inChunk, outChunk Chunk, index int, value int64,
+) {
+	if r.isSingleCall {
+		outChunk.AppendTime(inChunk.TimeByIndex(index))
+		outChunk.AppendIntervalIndex(outChunk.Len() - 1)
+	}
+	outColumn := outChunk.Column(r.outOrdinal)
+	outColumn.AppendNotNil()
+	outColumn.AppendIntegerValue(value)
+	if r.auxProcessor != nil {
+		r.appendInAuxCol(inChunk, outChunk, index)
+	}
+}
+
+func (r *IntegerIterator) Next(ie *IteratorEndpoint, p *IteratorParams) {
+	inChunk, outChunk := ie.InputPoint.Chunk, ie.OutputPoint.Chunk
+	inColumn := inChunk.Column(r.inOrdinal)
+	outColumn := outChunk.Column(r.outOrdinal)
+	if inColumn.IsEmpty() && r.prevPoint.isNil {
+		var addIntervalLen int
+		if p.sameInterval {
+			addIntervalLen = inChunk.IntervalLen() - 1
+		} else {
+			addIntervalLen = inChunk.IntervalLen()
+		}
+		if addIntervalLen > 0 {
+			outColumn.AppendManyNil(addIntervalLen)
+		}
+		return
+	}
+
+	var end int
+	firstIndex, lastIndex := 0, len(inChunk.IntervalIndex())-1
+	values := inColumn.IntegerValues()
+	for i, start := range inChunk.IntervalIndex() {
+		if i < lastIndex {
+			end = inChunk.IntervalIndex()[i+1]
+		} else {
+			end = inChunk.NumberOfRows()
+		}
+		index, value, isNil := r.fn(inChunk, values, r.inOrdinal, start, end)
+		if isNil && ((i > firstIndex && i < lastIndex) ||
+			(firstIndex == lastIndex && r.prevPoint.isNil && !p.sameInterval) ||
+			(firstIndex != lastIndex && i == firstIndex && r.prevPoint.isNil) ||
+			(firstIndex != lastIndex && i == lastIndex && !p.sameInterval)) {
+			outColumn.AppendNil()
+			continue
+		}
+		if i == firstIndex && !r.prevPoint.isNil {
+			r.processFirstWindow(inChunk, outChunk, isNil, p.sameInterval,
+				firstIndex == lastIndex, index, value)
+		} else if i == lastIndex && p.sameInterval {
+			r.processLastWindow(inChunk, index, isNil, value)
+		} else if !isNil {
+			r.processMiddleWindow(inChunk, outChunk, index, value)
+		}
+	}
+}
+
+type StringMerge func(prevPoint, currPoint *StringPoint)
+
+type StringIterator struct {
+	isSingleCall bool
+	inOrdinal    int
+	outOrdinal   int
+	prevPoint    *StringPoint
+	currPoint    *StringPoint
+	fn           ColReduceFunc[string]
+	fv           StringMerge
+	auxChunk     Chunk
+	auxProcessor []*AuxProcessor
+}
+
+func NewStringIterator(fn ColReduceFunc[string], fv StringMerge,
+	isSingleCall bool, inOrdinal, outOrdinal int, auxProcessor []*AuxProcessor, rowDataType hybridqp.RowDataType,
+) *StringIterator {
+	r := &StringIterator{
+		fn:           fn,
+		fv:           fv,
+		isSingleCall: isSingleCall,
+		inOrdinal:    inOrdinal,
+		outOrdinal:   outOrdinal,
+		prevPoint:    newStringPoint(),
+		currPoint:    newStringPoint(),
+	}
+	if isSingleCall && len(auxProcessor) > 0 {
+		r.auxProcessor = auxProcessor
+		r.auxChunk = NewChunkBuilder(rowDataType).NewChunk("")
+	}
+	return r
+}
+
+func (r *StringIterator) appendInAuxCol(
+	inChunk, outChunk Chunk, index int,
+) {
+	for j := range r.auxProcessor {
+		r.auxProcessor[j].auxHelperFunc(
+			inChunk.Column(r.auxProcessor[j].inOrdinal),
+			outChunk.Column(r.auxProcessor[j].outOrdinal),
+			index,
+		)
+	}
+}
+
+func (r *StringIterator) appendOutAuxCol(
+	inChunk, outChunk Chunk, index int,
+) {
+	for j := range r.auxProcessor {
+		r.auxProcessor[j].auxHelperFunc(
+			inChunk.Column(r.auxProcessor[j].outOrdinal),
+			outChunk.Column(r.auxProcessor[j].outOrdinal),
+			index,
+		)
+	}
+}
+
+func (r *StringIterator) mergePrevItem(
+	inChunk, outChunk Chunk,
+) {
+	if r.isSingleCall {
+		outChunk.AppendTime(r.prevPoint.time)
+		outChunk.AppendIntervalIndex(outChunk.Len() - 1)
+	}
+	outColumn := outChunk.Column(r.outOrdinal)
+	outColumn.AppendNotNil()
+	outColumn.AppendStringValue(string(r.prevPoint.value))
+	if r.auxProcessor != nil {
+		if r.prevPoint.index == 0 {
+			r.appendOutAuxCol(r.auxChunk, outChunk, r.prevPoint.index)
+		} else {
+			r.appendInAuxCol(inChunk, outChunk, r.prevPoint.index-1)
+		}
+		r.auxChunk.Reset()
+	}
+}
+
+func (r *StringIterator) processFirstWindow(
+	inChunk, outChunk Chunk, isNil, sameInterval, onlyOneInterval bool, index int, value string,
+) {
+	// To distinguish values between inChunk and auxChunk, r.currPoint.index incremented by 1.
+	if !isNil {
+		r.currPoint.Set(index+1, inChunk.TimeByIndex(index), value)
+		r.fv(r.prevPoint, r.currPoint)
+	}
+	if onlyOneInterval && sameInterval {
+		if r.auxProcessor != nil && r.prevPoint.index > 0 {
+			r.auxChunk.Reset()
+			r.auxChunk.AppendTime(inChunk.TimeByIndex(r.prevPoint.index - 1))
+			r.appendInAuxCol(inChunk, r.auxChunk, r.prevPoint.index-1)
+		}
+		r.prevPoint.index = 0
+	} else {
+		if !r.prevPoint.isNil {
+			r.mergePrevItem(inChunk, outChunk)
+		}
+		r.prevPoint.Reset()
+	}
+	r.currPoint.Reset()
+}
+
+func (r *StringIterator) processLastWindow(
+	inChunk Chunk, index int, isNil bool, value string,
+) {
+	if isNil {
+		r.prevPoint.Reset()
+	} else {
+		r.prevPoint.Set(0, inChunk.TimeByIndex(index), value)
+	}
+	if r.auxProcessor != nil {
+		r.auxChunk.AppendTime(inChunk.TimeByIndex(index))
+		r.appendInAuxCol(inChunk, r.auxChunk, index)
+	}
+}
+
+func (r *StringIterator) processMiddleWindow(
+	inChunk, outChunk Chunk, index int, value string,
+) {
+	if r.isSingleCall {
+		outChunk.AppendTime(inChunk.TimeByIndex(index))
+		outChunk.AppendIntervalIndex(outChunk.Len() - 1)
+	}
+	outColumn := outChunk.Column(r.outOrdinal)
+	outColumn.AppendNotNil()
+	outColumn.AppendStringValue(value)
+	if r.auxProcessor != nil {
+		r.appendInAuxCol(inChunk, outChunk, index)
+	}
+}
+
+func (r *StringIterator) Next(ie *IteratorEndpoint, p *IteratorParams) {
+	inChunk, outChunk := ie.InputPoint.Chunk, ie.OutputPoint.Chunk
+	inColumn := inChunk.Column(r.inOrdinal)
+	outColumn := outChunk.Column(r.outOrdinal)
+	if inColumn.IsEmpty() && r.prevPoint.isNil {
+		var addIntervalLen int
+		if p.sameInterval {
+			addIntervalLen = inChunk.IntervalLen() - 1
+		} else {
+			addIntervalLen = inChunk.IntervalLen()
+		}
+		if addIntervalLen > 0 {
+			outColumn.AppendManyNil(addIntervalLen)
+		}
+		return
+	}
+
+	var end int
+	firstIndex, lastIndex := 0, len(inChunk.IntervalIndex())-1
+	values := inColumn.StringValuesV2(nil)
+	for i, start := range inChunk.IntervalIndex() {
+		if i < lastIndex {
+			end = inChunk.IntervalIndex()[i+1]
+		} else {
+			end = inChunk.NumberOfRows()
+		}
+		index, value, isNil := r.fn(inChunk, values, r.inOrdinal, start, end)
+		if isNil && ((i > firstIndex && i < lastIndex) ||
+			(firstIndex == lastIndex && r.prevPoint.isNil && !p.sameInterval) ||
+			(firstIndex != lastIndex && i == firstIndex && r.prevPoint.isNil) ||
+			(firstIndex != lastIndex && i == lastIndex && !p.sameInterval)) {
+			outColumn.AppendNil()
+			continue
+		}
+		if i == firstIndex && !r.prevPoint.isNil {
+			r.processFirstWindow(inChunk, outChunk, isNil, p.sameInterval,
+				firstIndex == lastIndex, index, value)
+		} else if i == lastIndex && p.sameInterval {
+			r.processLastWindow(inChunk, index, isNil, value)
+		} else if !isNil {
+			r.processMiddleWindow(inChunk, outChunk, index, value)
+		}
+	}
+}
+
+type BooleanReduce func(c Chunk, values []bool, ordinal, start, end int) (index int, value bool, isNil bool)
+
+type BooleanIterator struct {
+	isSingleCall bool
+	inOrdinal    int
+	outOrdinal   int
+	prevPoint    *Point[bool]
+	currPoint    *Point[bool]
+	fn           BooleanReduce
+	fv           PointMerge[bool]
+	auxChunk     Chunk
+	auxProcessor []*AuxProcessor
+}
+
+func NewBooleanIterator(fn BooleanReduce, fv PointMerge[bool],
+	isSingleCall bool, inOrdinal, outOrdinal int, auxProcessor []*AuxProcessor, rowDataType hybridqp.RowDataType,
+) *BooleanIterator {
+	r := &BooleanIterator{
+		fn:           fn,
+		fv:           fv,
+		isSingleCall: isSingleCall,
+		inOrdinal:    inOrdinal,
+		outOrdinal:   outOrdinal,
+		prevPoint:    newPoint[bool](),
+		currPoint:    newPoint[bool](),
+	}
+	if isSingleCall && len(auxProcessor) > 0 {
+		r.auxProcessor = auxProcessor
+		r.auxChunk = NewChunkBuilder(rowDataType).NewChunk("")
+	}
+	return r
+}
+
+func (r *BooleanIterator) appendInAuxCol(
+	inChunk, outChunk Chunk, index int,
+) {
+	for j := range r.auxProcessor {
+		r.auxProcessor[j].auxHelperFunc(
+			inChunk.Column(r.auxProcessor[j].inOrdinal),
+			outChunk.Column(r.auxProcessor[j].outOrdinal),
+			index,
+		)
+	}
+}
+
+func (r *BooleanIterator) appendOutAuxCol(
+	inChunk, outChunk Chunk, index int,
+) {
+	for j := range r.auxProcessor {
+		r.auxProcessor[j].auxHelperFunc(
+			inChunk.Column(r.auxProcessor[j].outOrdinal),
+			outChunk.Column(r.auxProcessor[j].outOrdinal),
+			index,
+		)
+	}
+}
+
+func (r *BooleanIterator) mergePrevItem(
+	inChunk, outChunk Chunk,
+) {
+	if r.isSingleCall {
+		outChunk.AppendTime(r.prevPoint.time)
+		outChunk.AppendIntervalIndex(outChunk.Len() - 1)
+	}
+	outColumn := outChunk.Column(r.outOrdinal)
+	outColumn.AppendNotNil()
+	outColumn.AppendBooleanValue(r.prevPoint.value)
+	if r.auxProcessor != nil {
+		if r.prevPoint.index == 0 {
+			r.appendOutAuxCol(r.auxChunk, outChunk, r.prevPoint.index)
+		} else {
+			r.appendInAuxCol(inChunk, outChunk, r.prevPoint.index-1)
+		}
+		r.auxChunk.Reset()
+	}
+}
+
+func (r *BooleanIterator) processFirstWindow(
+	inChunk, outChunk Chunk, isNil, sameInterval, onlyOneInterval bool, index int, value bool,
+) {
+	// To distinguish values between inChunk and auxChunk, r.currPoint.index incremented by 1.
+	if !isNil {
+		r.currPoint.Set(index+1, inChunk.TimeByIndex(index), value)
+		r.fv(r.prevPoint, r.currPoint)
+	}
+	if onlyOneInterval && sameInterval {
+		if r.auxProcessor != nil && r.prevPoint.index > 0 {
+			r.auxChunk.Reset()
+			r.auxChunk.AppendTime(inChunk.TimeByIndex(r.prevPoint.index - 1))
+			r.appendInAuxCol(inChunk, r.auxChunk, r.prevPoint.index-1)
+		}
+		r.prevPoint.index = 0
+	} else {
+		if !r.prevPoint.isNil {
+			r.mergePrevItem(inChunk, outChunk)
+		}
+		r.prevPoint.Reset()
+	}
+	r.currPoint.Reset()
+}
+
+func (r *BooleanIterator) processLastWindow(
+	inChunk Chunk, index int, isNil bool, value bool,
+) {
+	if isNil {
+		r.prevPoint.Reset()
+	} else {
+		r.prevPoint.Set(0, inChunk.TimeByIndex(index), value)
+	}
+	if r.auxProcessor != nil {
+		r.auxChunk.AppendTime(inChunk.TimeByIndex(index))
+		r.appendInAuxCol(inChunk, r.auxChunk, index)
+	}
+}
+
+func (r *BooleanIterator) processMiddleWindow(
+	inChunk, outChunk Chunk, index int, value bool,
+) {
+	if r.isSingleCall {
+		outChunk.AppendTime(inChunk.TimeByIndex(index))
+		outChunk.AppendIntervalIndex(outChunk.Len() - 1)
+	}
+	outColumn := outChunk.Column(r.outOrdinal)
+	outColumn.AppendNotNil()
+	outColumn.AppendBooleanValue(value)
+	if r.auxProcessor != nil {
+		r.appendInAuxCol(inChunk, outChunk, index)
+	}
+}
+
+func (r *BooleanIterator) Next(ie *IteratorEndpoint, p *IteratorParams) {
+	inChunk, outChunk := ie.InputPoint.Chunk, ie.OutputPoint.Chunk
+	inColumn := inChunk.Column(r.inOrdinal)
+	outColumn := outChunk.Column(r.outOrdinal)
+	if inColumn.IsEmpty() && r.prevPoint.isNil {
+		var addIntervalLen int
+		if p.sameInterval {
+			addIntervalLen = inChunk.IntervalLen() - 1
+		} else {
+			addIntervalLen = inChunk.IntervalLen()
+		}
+		if addIntervalLen > 0 {
+			outColumn.AppendManyNil(addIntervalLen)
+		}
+		return
+	}
+
+	var end int
+	firstIndex, lastIndex := 0, len(inChunk.IntervalIndex())-1
+	values := inColumn.BooleanValues()
+	for i, start := range inChunk.IntervalIndex() {
+		if i < lastIndex {
+			end = inChunk.IntervalIndex()[i+1]
+		} else {
+			end = inChunk.NumberOfRows()
+		}
+		index, value, isNil := r.fn(inChunk, values, r.inOrdinal, start, end)
+		if isNil && ((i > firstIndex && i < lastIndex) ||
+			(firstIndex == lastIndex && r.prevPoint.isNil && !p.sameInterval) ||
+			(firstIndex != lastIndex && i == firstIndex && r.prevPoint.isNil) ||
+			(firstIndex != lastIndex && i == lastIndex && !p.sameInterval)) {
+			outColumn.AppendNil()
+			continue
+		}
+		if i == firstIndex && !r.prevPoint.isNil {
+			r.processFirstWindow(inChunk, outChunk, isNil, p.sameInterval,
+				firstIndex == lastIndex, index, value)
+		} else if i == lastIndex && p.sameInterval {
+			r.processLastWindow(inChunk, index, isNil, value)
+		} else if !isNil {
+			r.processMiddleWindow(inChunk, outChunk, index, value)
+		}
+	}
+}
