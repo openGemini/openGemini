@@ -191,6 +191,7 @@ func (p *mergePerformer) Finish() (TSSPFile, error) {
 	}
 
 	p.Close()
+	p.Release()
 	return file, nil
 }
 
@@ -388,6 +389,9 @@ func (p *mergePerformer) WriteOriginal(fi *FileIterator) error {
 
 func (p *mergePerformer) Close() {
 	p.itr.Close()
+}
+
+func (p *mergePerformer) Release() {
 	p.itr = nil
 	p.ur = nil
 	p.sw = nil
@@ -548,14 +552,20 @@ func (c *MergePerformers) Pop() interface{} {
 	return v
 }
 
+func (c *MergePerformers) Done() {
+	c.wg.Done()
+}
+
 func (c *MergePerformers) Close() {
 	c.once.Do(func() {
 		close(c.signal)
 		c.closed = true
-		c.wg.Wait()
-
 		for _, item := range c.items {
 			item.Close()
+		}
+		c.wg.Wait()
+		for _, item := range c.items {
+			item.Release()
 		}
 		c.items = nil
 		c.ur = nil

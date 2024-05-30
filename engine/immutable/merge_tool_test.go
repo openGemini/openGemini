@@ -1137,5 +1137,43 @@ func BenchmarkChunkMeta_compress(b *testing.B) {
 		immutable.SetChunkMetaCompressMode(immutable.ChunkMetaCompressLZ4)
 		run(2000)
 	})
+}
 
+func TestMergePerformers_close(t *testing.T) {
+	var begin int64 = 1e12
+	defer beforeTest(t, 0)()
+
+	schemas := getDefaultSchemas()
+	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
+	defer mh.store.Close()
+	rg := newRecordGenerator(begin, defaultInterval, true)
+
+	for i := 0; i < 8; i++ {
+		mh.addRecord(uint64(100+i), rg.generate(schemas, 10))
+		require.NoError(t, mh.saveToOrder())
+	}
+
+	performers := immutable.NewMergePerformers(nil)
+	var tempFiles []*immutable.StreamWriteFile
+
+	defer func() {
+		for _, f := range tempFiles {
+			f.Close(true)
+		}
+	}()
+	for _, f := range mh.store.Order["mst"].Files() {
+		sw := mh.store.NewStreamWriteFile("mst")
+		require.NoError(t, sw.InitMergedFile(f))
+		sw.SetValidate(true)
+		tempFiles = append(tempFiles, sw)
+
+		p := immutable.NewMergePerformer(nil, nil)
+
+		itr := immutable.NewColumnIterator(immutable.NewFileIterator(f, nil))
+		p.Reset(sw, itr)
+		performers.Push(p)
+	}
+
+	performers.Done()
+	performers.Close()
 }
