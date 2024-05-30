@@ -317,6 +317,19 @@ func (trans *MockGenDataTransform) GetInputNumber(_ executor.Port) int {
 	return 0
 }
 
+func TestGenRows(t *testing.T) {
+	sender := executor.NewHttpChunkSender(&query.ProcessorOptions{
+		Except: true,
+	})
+
+	fields := mockFieldsAndTags()
+	refs := varRefsFromFields(fields)
+	inRowDataType := hybridqp.NewRowDataTypeImpl(refs...)
+	chunk := genChunk(inRowDataType)
+
+	sender.GenRows(chunk)
+}
+
 func TestGetRows(t *testing.T) {
 	fields := mockFieldsAndTags()
 	refs := varRefsFromFields(fields)
@@ -328,17 +341,18 @@ func TestGetRows(t *testing.T) {
 
 	g := &executor.RowsGenerator{}
 	other := g.Generate(chunk, time.UTC)
-	require.Equal(t, rows.Len(), len(other))
+	require.GreaterOrEqual(t, rows.Len(), len(other))
 
+	valueIndex := 0
 	for i := 0; i < rows.Len(); i++ {
 		exp := rows[i]
-		got := other[i]
+		got := other[0]
 		require.Equal(t, exp.Tags, got.Tags)
 		require.Equal(t, exp.Columns, got.Columns)
-		require.Equal(t, len(exp.Values), len(got.Values))
 
 		for j := 0; j < len(exp.Values); j++ {
-			require.Equal(t, exp.Values[j], got.Values[j])
+			require.Equal(t, exp.Values[j], got.Values[valueIndex])
+			valueIndex++
 		}
 	}
 }

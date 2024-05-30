@@ -154,7 +154,8 @@ type ProcessorOptions struct {
 
 	// Group by interval and tags.
 	Interval   hybridqp.Interval
-	Dimensions []string            // The final dimensions of the query (stays the same even in subqueries).
+	Dimensions []string // The final dimensions of the query (stays the same even in subqueries).
+	Except     bool
 	GroupBy    map[string]struct{} // Dimensions to group points by in intermediate iterators.
 	Location   *time.Location
 
@@ -294,10 +295,24 @@ func NewProcessorOptionsStmt(stmt *influxql.SelectStatement, sopt SelectOptions)
 	// The emitter will always emit points as ordered.
 	opt.Ordered = true
 
+	exceptDimensions := make(map[string]struct{})
+	for _, dim := range stmt.ExceptDimensions {
+		if d, ok := dim.Expr.(*influxql.VarRef); ok {
+			exceptDimensions[d.Val] = struct{}{}
+		}
+	}
+
+	if len(exceptDimensions) > 0 {
+		opt.Except = true
+	}
+
 	// Determine dimensions.
 	opt.GroupBy = make(map[string]struct{}, len(opt.Dimensions))
 	for _, d := range stmt.Dimensions {
 		if d, ok := d.Expr.(*influxql.VarRef); ok {
+			if _, ok = exceptDimensions[d.Val]; ok {
+				continue
+			}
 			if ContainDim(opt.Dimensions, d.Val) {
 				opt.Dimensions = append(opt.Dimensions, d.Val)
 				opt.GroupBy[d.Val] = struct{}{}

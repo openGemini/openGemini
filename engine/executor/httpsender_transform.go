@@ -59,7 +59,7 @@ func NewHttpChunkSender(opt *query.ProcessorOptions) *HttpChunkSender {
 }
 
 func (w *HttpChunkSender) Write(chunk Chunk, lastChunk bool) bool {
-	w.genRows(chunk)
+	w.GenRows(chunk)
 
 	var chunkedRow models.Rows
 	var partial bool
@@ -115,13 +115,18 @@ func (w *HttpChunkSender) Write(chunk Chunk, lastChunk bool) bool {
 	return partial
 }
 
-func (w *HttpChunkSender) genRows(chunk Chunk) {
+func (w *HttpChunkSender) GenRows(chunk Chunk) {
 	if chunk == nil {
 		return
 	}
 
 	statistics.ExecutorStat.SinkRows.Push(int64(chunk.NumberOfRows()))
 	rows := w.rowsGenerator.Generate(chunk, w.opt.Location)
+	if w.opt.Except {
+		for i := 0; i < len(rows); i++ {
+			rows[i].Values = removeDuplicationValues(rows[i].Values)
+		}
+	}
 
 	// May next Chunk has the same tag as this buffRow
 	if rows.Len() > 0 && w.buffRows.Len() > 0 {
@@ -129,10 +134,32 @@ func (w *HttpChunkSender) genRows(chunk Chunk) {
 		lastRow := w.buffRows[len(w.buffRows)-1]
 		if lastRow.Name == firstRow.Name && hybridqp.EqualMap(lastRow.Tags, firstRow.Tags) {
 			lastRow.Values = append(lastRow.Values, firstRow.Values...)
+			if w.opt.Except {
+				lastRow.Values = removeDuplicationValues(lastRow.Values)
+			}
 			rows = rows[1:]
 		}
 	}
 	w.buffRows = append(w.buffRows, rows...)
+}
+
+func removeDuplicationValues(values [][]interface{}) [][]interface{} {
+	length := len(values)
+	if length == 0 {
+		return values
+	}
+
+	j := 0
+	for i := 1; i < length; i++ {
+		if values[i][0] != values[j][0] {
+			j++
+			if j < i {
+				values[i], values[j] = values[j], values[i]
+			}
+		}
+	}
+
+	return values[:j+1]
 }
 
 // GetRows transfer Chunk to models.Rows
@@ -370,6 +397,7 @@ func (g *RowsGenerator) Generate(chunk Chunk, loc *time.Location) models.Rows {
 	tmpRows := g.allocRows(len(tagIndex))
 	var start, end int
 
+	var lastRow *models.Row
 	for index := 0; index < len(tagIndex); index++ {
 		start = tagIndex[index]
 		if start == tagIndex[len(tagIndex)-1] {
@@ -383,7 +411,12 @@ func (g *RowsGenerator) Generate(chunk Chunk, loc *time.Location) models.Rows {
 		row.Tags = chunkTags[index].KeyValues()
 		row.Columns = columnNames
 		row.Values = g.buildValues(end, start, times, loc, columns)
-		rows = append(rows, row)
+		if lastRow != nil && hybridqp.EqualMap(lastRow.Tags, row.Tags) {
+			lastRow.Values = append(lastRow.Values, row.Values...)
+		} else {
+			rows = append(rows, row)
+			lastRow = row
+		}
 	}
 	return rows
 }
