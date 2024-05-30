@@ -1434,6 +1434,8 @@ type SelectStatement struct {
 	// Expressions used for grouping the selection.
 	Dimensions Dimensions
 
+	ExceptDimensions Dimensions
+
 	// Whether to drop the given labels rather than keep them.
 	Without bool
 
