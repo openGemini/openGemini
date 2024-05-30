@@ -60,7 +60,7 @@ const (
 	NonStreamingCompact               = 2
 	StreamingCompact                  = 1
 	AutoCompact                       = 0
-	DefaultExpectedSegmentSize uint32 = 1024 * 1024
+	DefaultExpectedSegmentSize uint32 = 8 * 1024 * 1024
 	DefaultFileSizeLimit              = 8 * 1024 * 1024 * 1024
 )
 
