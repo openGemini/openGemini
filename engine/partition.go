@@ -125,6 +125,13 @@ func NewDBPTInfo(db string, id uint32, dataPath, walPath string, ctx *metaclient
 	}
 }
 
+func (dbPT *DBPTInfo) Execute(handler func(pt *DBPTInfo) error) error {
+	dbPT.ref()
+	defer dbPT.unref()
+
+	return handler(dbPT)
+}
+
 func (dbPT *DBPTInfo) enableReportShardLoad() {
 	dbPT.mu.Lock()
 	defer dbPT.mu.Unlock()

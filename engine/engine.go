@@ -978,6 +978,15 @@ func (e *Engine) getPartition(db string, ptID uint32, isRef bool) (*DBPTInfo, er
 	return nil, errno.NewError(errno.DBPTClosed)
 }
 
+func (e *Engine) PartitionExecute(db string, ptID uint32, handler func(pt *DBPTInfo) error) error {
+	pt, err := e.getPartition(db, ptID, false)
+	if err != nil {
+		return err
+	}
+
+	return pt.Execute(handler)
+}
+
 func deleteDataAndWalPath(dataPath, walPath string, obsOpt *obs.ObsOptions, lockPath *string) error {
 	logger.GetLogger().Info("deleteDataAndWalPath",
 		zap.String("data", dataPath), zap.String("wal", walPath))
