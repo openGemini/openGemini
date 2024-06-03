@@ -128,7 +128,7 @@ func NewServer(conf config.Config, info app.ServerInfo, logger *Logger.Logger) (
 	s.initMetaClientFn = s.initializeMetaClient
 	s.MetaClient.SetHashAlgo(c.Common.OptHashAlgo)
 
-	go openServer(c, logger)
+	go openPprofServer(c, logger)
 
 	err = s.MetaClient.SetTier(c.Coordinator.ShardTier)
 	if err != nil {
@@ -254,18 +254,23 @@ func (s *Server) initQueryExecutor(c *config.TSSql) {
 	}
 }
 
-func openServer(c *config.TSSql, logger *Logger.Logger) {
+func openPprofServer(c *config.TSSql, logger *Logger.Logger) {
 	if !c.HTTP.PprofEnabled {
 		return
 	}
-	port, _, err := net.SplitHostPort(c.HTTP.BindAddress)
+	hosts := strings.Split(c.HTTP.BindAddress, ",")
+	if len(hosts) == 0 || hosts[0] == "" {
+		return
+	}
+
+	host, _, err := net.SplitHostPort(hosts[0])
 	if err != nil {
 		logger.Error("failed to split host and port", zap.Error(err),
 			zap.String("addr", c.HTTP.BindAddress))
 		return
 	}
 
-	addr := net.JoinHostPort(port, "6061")
+	addr := net.JoinHostPort(host, "6061")
 	err = http.ListenAndServe(addr, nil)
 	if err != nil {
 		logger.Error("failed to start http server", zap.String("addr", addr))

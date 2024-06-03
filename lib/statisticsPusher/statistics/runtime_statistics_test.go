@@ -24,6 +24,7 @@ import (
 
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestGetCpuUsage(t *testing.T) {
@@ -53,10 +54,12 @@ func TestGetCpuUsage(t *testing.T) {
 
 func TestCollectRuntimeStatistics(t *testing.T) {
 	buf, err := statistics.CollectRuntimeStatistics(nil)
-	if !assert.NoError(t, err) {
-		return
-	}
+	require.NoError(t, err)
 	assert.Equal(t, true, strings.Contains(string(buf), "runtime"))
+
+	buf, err = statistics.CollectRuntimeStatistics(nil)
+	require.NoError(t, err)
+	require.Equal(t, 0, len(buf))
 }
 
 func TestOpsGetCpuUsage(t *testing.T) {

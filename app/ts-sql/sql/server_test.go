@@ -348,3 +348,14 @@ func Test_NewServer_IncSyncData_Enabled(t *testing.T) {
 	err = server.Close()
 	require.NoError(t, err)
 }
+
+func TestOpenPprofServer(t *testing.T) {
+	lg := logger.NewLogger(errno.ModuleUnknown)
+	conf := config.NewTSSql(false)
+	conf.HTTP.BindAddress = ""
+
+	openPprofServer(conf, lg)
+
+	conf.HTTP.PprofEnabled = true
+	openPprofServer(conf, lg)
+}

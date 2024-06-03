@@ -29,6 +29,7 @@ import (
 	"github.com/openGemini/openGemini/lib/crypto"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
+	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/spf13/cobra"
@@ -147,6 +148,7 @@ func Run(args []string, commands ...*Command) {
 		return
 	}
 
+	stat.SetVersion(commands[0].Info.StatVersion())
 	name, args := cmd.ParseCommandName(args)
 
 	// Extract name from args.
