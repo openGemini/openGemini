@@ -69,6 +69,10 @@ func (t *SortLimitCursor) GetSchema() record.Schemas {
 	return t.schemas
 }
 
+func (t *SortLimitCursor) GetInput() comm.TimeCutKeyCursor {
+	return t.input
+}
+
 func (t *SortLimitCursor) Next() (*record.Record, comm.SeriesInfoIntf, error) {
 	if t.input == nil {
 		return nil, nil, nil

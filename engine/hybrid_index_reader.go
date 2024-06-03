@@ -284,33 +284,11 @@ func (r *detachedIndexReader) Init() (err error) {
 	if chunkCount == 0 {
 		return
 	}
-	startChunkId, endChunkId := int64(0), chunkCount
 
-	// init the obs meta index reader
-	metaIndexReader, err := immutable.NewDetachedMetaIndexReader(r.dataPath, r.obsOptions)
+	miChunkIds, miFiltered, err := immutable.GetMetaIndexAndBlockId(r.dataPath, r.obsOptions, chunkCount, r.ctx.tr)
+
 	if err != nil {
 		return
-	}
-	defer metaIndexReader.Close()
-
-	var miChunkIds []int64
-	var miFiltered []*immutable.MetaIndex
-
-	// step1: init the meta index
-	offsets, lengths := make([]int64, 0, chunkCount), make([]int64, 0, chunkCount)
-	for i := startChunkId; i < endChunkId; i++ {
-		offset, length := immutable.GetMetaIndexOffsetAndLengthByChunkId(i)
-		offsets, lengths = append(offsets, offset), append(lengths, length)
-	}
-	metaIndexes, err := metaIndexReader.ReadMetaIndex(offsets, lengths)
-	if err != nil {
-		return err
-	}
-	for i := range metaIndexes {
-		if metaIndexes[i].IsExist(r.ctx.tr) {
-			miFiltered = append(miFiltered, metaIndexes[i])
-			miChunkIds = append(miChunkIds, startChunkId+int64(i))
-		}
 	}
 
 	if len(miFiltered) == 0 {
@@ -318,31 +296,9 @@ func (r *detachedIndexReader) Init() (err error) {
 	}
 
 	// step2: init the pk items
-	pkMetaInfo, err := immutable.ReadPKMetaInfoAll(r.dataPath, r.obsOptions)
-	if err != nil {
-		return
-	}
-
-	offsets, lengths = offsets[:0], lengths[:0]
-	for _, chunkId := range miChunkIds {
-		offset, length := immutable.GetPKMetaOffsetLengthByChunkId(pkMetaInfo, int(chunkId))
-		offsets, lengths = append(offsets, offset), append(lengths, length)
-	}
-	pkMetas, err := immutable.ReadPKMetaAll(r.dataPath, r.obsOptions, offsets, lengths)
+	pkMetaInfo, pkItems, err := immutable.GetPKItems(r.dataPath, r.obsOptions, miChunkIds)
 	if err != nil {
 		return err
-	}
-	offsets, lengths = offsets[:0], lengths[:0]
-	for i := range pkMetas {
-		offsets, lengths = append(offsets, int64(pkMetas[i].Offset)), append(lengths, int64(pkMetas[i].Length))
-	}
-	pkDatas, err := immutable.ReadPKDataAll(r.dataPath, r.obsOptions, offsets, lengths, pkMetas, pkMetaInfo)
-	if err != nil {
-		return err
-	}
-	var pkItems []*colstore.DetachedPKInfo
-	for i := range pkDatas {
-		pkItems = append(pkItems, colstore.GetPKInfoByPKMetaData(pkMetas[i], pkDatas[i], pkMetaInfo.TCLocation))
 	}
 	r.info = executor.NewDetachedIndexInfo(miFiltered, pkItems)
 
