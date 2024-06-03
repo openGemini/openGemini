@@ -34,7 +34,7 @@ import (
 )
 
 const (
-	chunkMetaReadNum     = 16
+	ChunkMetaReadNum     = 16
 	BatchReaderRecordNum = 8
 	chunkReadNum         = 16
 )
@@ -75,7 +75,7 @@ func NewTSSPFileDetachedReader(metaIndex []*MetaIndex, blocks [][]int, ctx *File
 		blocks:        blocks,
 		obsOpts:       path.Option(),
 		ctx:           ctx,
-		metaDataQueue: NewMetaControl(ctx.readCtx.Ascending, chunkMetaReadNum),
+		metaDataQueue: NewMetaControl(ctx.readCtx.Ascending, ChunkMetaReadNum),
 		unnest:        unnest,
 		seqIndex:      -1,
 		tr:            util.TimeRange{Min: ctx.tr.Min, Max: ctx.tr.Max},
@@ -286,10 +286,10 @@ func (t *TSSPFileDetachedReader) initChunkMeta() (bool, error) {
 		t.currChunkMetaID = 0
 		t.currBlockID = 0
 		var endMetaIndexID int
-		if t.metaIndexID+chunkMetaReadNum > len(t.metaIndex) {
+		if t.metaIndexID+ChunkMetaReadNum > len(t.metaIndex) {
 			endMetaIndexID = len(t.metaIndex)
 		} else {
-			endMetaIndexID = t.metaIndexID + chunkMetaReadNum
+			endMetaIndexID = t.metaIndexID + ChunkMetaReadNum
 		}
 		offset := make([]int64, 0, endMetaIndexID-t.metaIndexID)
 		sizes := make([]int64, 0, endMetaIndexID-t.metaIndexID)
