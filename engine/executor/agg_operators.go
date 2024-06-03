@@ -31,6 +31,7 @@ func init() {
 	RegistryAggOp("max_prom", &MaxPromOp{})
 	RegistryAggOp("count_prom", &FloatCountPromOp{})
 	RegistryAggOp("histogram_quantile", &HistogramQuantileOp{})
+	RegistryAggOp("count_values_prom", &CountValuesOp{})
 }
 
 type MinOp struct{}
@@ -192,4 +193,29 @@ func (c *HistogramQuantileOp) CreateRoutine(params *AggCallFuncParams) (Routine,
 	default:
 		return nil, errno.NewError(errno.UnsupportedDataType, "histogram_quantile", dataType.String())
 	}
+}
+
+type CountValuesReduce func()
+
+type CountValuesOp struct{}
+
+func (c *CountValuesOp) CreateRoutine(params *AggCallFuncParams) (Routine, error) {
+	inRowDataType, outRowDataType, opt := params.InRowDataType, params.OutRowDataType, params.ExprOpt
+	inOrdinal := inRowDataType.FieldIndex(opt.Expr.(*influxql.Call).Args[0].(*influxql.VarRef).Val)
+	outOrdinal := outRowDataType.FieldIndex(opt.Ref.Val)
+	params.ProRes.isSingleCall = true
+	params.ProRes.isUDAFCall = true
+	arg, ok := opt.Expr.(*influxql.Call).Args[1].(*influxql.StringLiteral)
+	if !ok {
+		return nil, fmt.Errorf("the type of input args of count_values is unsupported")
+	}
+	if inOrdinal < 0 || outOrdinal < 0 {
+		return nil, errno.NewError(errno.SchemaNotAligned, "count_values", "input and output schemas are not aligned")
+	}
+	dataType := inRowDataType.Field(inOrdinal).Expr.(*influxql.VarRef).Type
+	if dataType == influxql.Float {
+		return NewRoutineImpl(NewCountValuesIterator(inOrdinal, outOrdinal, outRowDataType, arg.Val),
+			inOrdinal, outOrdinal), nil
+	}
+	return nil, errno.NewError(errno.UnsupportedDataType, "count_values", dataType.String())
 }
