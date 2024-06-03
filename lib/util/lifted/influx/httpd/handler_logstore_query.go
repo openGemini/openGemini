@@ -899,7 +899,7 @@ func (h *Handler) serveAnalytics(w http.ResponseWriter, r *http.Request, user me
 	}
 
 	if len(results) > DefaultMaxLogStoreAnalyzeResponseNum {
-		results = results[0:DefaultMaxLogStoreAnalyzeResponseNum]
+		results = results[0 : DefaultMaxLogStoreAnalyzeResponseNum+1]
 	}
 
 	res := QueryLogAnalyticsResponse{
