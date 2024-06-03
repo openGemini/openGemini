@@ -19,15 +19,16 @@ type aggregateFn struct {
 }
 
 var aggregateFns = map[parser.ItemType]aggregateFn{
-	parser.SUM:      {name: "sum", functionType: AGGREGATE_FN},
-	parser.AVG:      {name: "mean", functionType: AGGREGATE_FN},
-	parser.MAX:      {name: "max_prom", functionType: SELECTOR_FN},
-	parser.MIN:      {name: "min_prom", functionType: SELECTOR_FN},
-	parser.COUNT:    {name: "count_prom", functionType: AGGREGATE_FN},
-	parser.STDDEV:   {name: "stddev", functionType: AGGREGATE_FN},
-	parser.TOPK:     {name: "top", functionType: SELECTOR_FN, expectIntegerParameter: true, keepMetric: true},
-	parser.BOTTOMK:  {name: "bottom", functionType: SELECTOR_FN, expectIntegerParameter: true, keepMetric: true},
-	parser.QUANTILE: {name: "percentile", functionType: SELECTOR_FN}, // TODO add unit tests
+	parser.SUM:          {name: "sum", functionType: AGGREGATE_FN},
+	parser.AVG:          {name: "mean", functionType: AGGREGATE_FN},
+	parser.MAX:          {name: "max_prom", functionType: SELECTOR_FN},
+	parser.MIN:          {name: "min_prom", functionType: SELECTOR_FN},
+	parser.COUNT:        {name: "count_prom", functionType: AGGREGATE_FN},
+	parser.STDDEV:       {name: "stddev", functionType: AGGREGATE_FN},
+	parser.TOPK:         {name: "top", functionType: SELECTOR_FN, expectIntegerParameter: true, keepMetric: true},
+	parser.BOTTOMK:      {name: "bottom", functionType: SELECTOR_FN, expectIntegerParameter: true, keepMetric: true},
+	parser.QUANTILE:     {name: "percentile", functionType: SELECTOR_FN}, // TODO add unit tests
+	parser.COUNT_VALUES: {name: "count_values_prom", functionType: AGGREGATE_FN},
 }
 
 // generateDimension is used to generate the dimensions of group by to Dimensions.
@@ -134,7 +135,7 @@ func (t *Transpiler) transpileAggregateExpr(a *parser.AggregateExpr) (influxql.N
 	if a.Param != nil {
 		unwrapParenExpr(&a.Param)
 		a.Param = unwrapStepInvariantExpr(a.Param)
-		if !yieldsFloat(a.Param) {
+		if !yieldsFloat(a.Param) && !yieldsString(a.Param) {
 			return nil, errno.NewError(errno.ErrFloatParamAggExpr)
 		}
 		param, err := t.transpileExpr(a.Param)
