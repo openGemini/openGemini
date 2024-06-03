@@ -49,7 +49,7 @@ func NewDetachedMetaInfo() *DetachedMetaInfo {
 	return &DetachedMetaInfo{}
 }
 
-func (d *DetachedMetaInfo) checkAndTruncateDetachedFiles(dir, msName string, bfCols []string) error {
+func (d *DetachedMetaInfo) checkAndTruncateDetachedFiles(dir, msName string, bfCols []string, isFullTextIdx bool) error {
 	filePath := d.getDetachedPrefixFilePath(dir, msName)
 	//check detached metaIndex file
 	err := d.checkAndTruncateMetaIndexFile(filePath)
@@ -82,7 +82,7 @@ func (d *DetachedMetaInfo) checkAndTruncateDetachedFiles(dir, msName string, bfC
 	}
 
 	//check bloom filter files
-	return d.checkAndTruncateBfFiles(dir, msName, bfCols)
+	return d.checkAndTruncateBfFiles(dir, msName, bfCols, isFullTextIdx)
 }
 
 func (d *DetachedMetaInfo) getDetachedPrefixFilePath(dir, msName string) string {
@@ -343,15 +343,19 @@ func (d *DetachedMetaInfo) checkAndTruncatePkIdxFile(filePath string) error {
 	return nil
 }
 
-func (d *DetachedMetaInfo) checkAndTruncateBfFiles(dir, msName string, bfCols []string) error {
+func (d *DetachedMetaInfo) checkAndTruncateBfFiles(dir, msName string, bfCols []string, isFullTextIdx bool) error {
 	localPath := dir
 	prefixDataPathLength := len(obs.GetPrefixDataPath())
 	remotePath := localPath[prefixDataPathLength:]
-
+	cols := bfCols
+	if isFullTextIdx {
+		cols = append(cols, sparseindex.FullTextIndex)
+	}
 	//get bloom filter cols -> gen bloom filter files
 	constant := logstore.GetConstant(logstore.CurrentLogTokenizerVersion)
-	for i := range bfCols {
-		fdr, fdl, err := d.getBloomFilterFile(remotePath, localPath, msName, bfCols[i])
+
+	for i := range cols {
+		fdr, fdl, err := d.getBloomFilterFile(remotePath, localPath, msName, cols[i])
 		if err != nil {
 			return err
 		}

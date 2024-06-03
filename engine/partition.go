@@ -37,6 +37,7 @@ import (
 	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/interruptsignal"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
@@ -664,7 +665,7 @@ func (dbPT *DBPTInfo) loadProcess(opId uint64, thermalShards map[uint64]struct{}
 
 func checkAndTruncateDetachedFiles(d *DetachedMetaInfo, mstInfo *meta.MeasurementInfo, sh *shard) error {
 	d.obsOpt = mstInfo.ObsOptions
-	err := d.checkAndTruncateDetachedFiles(sh.filesPath, mstInfo.Name, mstInfo.IndexRelation.GetBloomFilterColumns())
+	err := d.checkAndTruncateDetachedFiles(sh.filesPath, mstInfo.Name, mstInfo.IndexRelation.GetBloomFilterColumns(), logstore.IsFullTextIdx(&mstInfo.IndexRelation))
 	if err != nil {
 		return err
 	}
