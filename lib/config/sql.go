@@ -223,6 +223,10 @@ func (c *TSSql) ShowConfigs() map[string]interface{} {
 	return sqlConfig
 }
 
+func (c *TSSql) GetLogStoreConfig() *LogStoreConfig {
+	return nil
+}
+
 // Coordinator represents the configuration for the coordinator service.
 type Coordinator struct {
 	WriteTimeout         toml.Duration `toml:"write-timeout"`

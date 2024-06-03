@@ -140,6 +140,10 @@ func (c *TSMeta) ShowConfigs() map[string]interface{} {
 	return nil
 }
 
+func (c *TSMeta) GetLogStoreConfig() *LogStoreConfig {
+	return nil
+}
+
 // Meta represents the meta configuration.
 type Meta struct {
 	HTTPSEnabled        bool `toml:"https-enabled"`

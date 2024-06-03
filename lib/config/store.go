@@ -104,6 +104,9 @@ type TSStore struct {
 
 	// index
 	Index *Index `toml:"index"`
+
+	// logkeeper config
+	LogStore *LogStoreConfig `toml:"logstore"`
 }
 
 // NewTSStore returns an instance of Config with reasonable defaults.
@@ -131,6 +134,7 @@ func NewTSStore(enableGossip bool) *TSStore {
 
 	c.Meta = NewMeta()
 	c.ClvConfig = NewClvConfig()
+	c.LogStore = NewLogStoreConfig()
 	return c
 }
 
@@ -183,6 +187,10 @@ func (c *TSStore) GetCommon() *Common {
 
 func (c *TSStore) ShowConfigs() map[string]interface{} {
 	return nil
+}
+
+func (c *TSStore) GetLogStoreConfig() *LogStoreConfig {
+	return c.LogStore
 }
 
 /*

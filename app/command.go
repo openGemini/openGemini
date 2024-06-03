@@ -138,6 +138,10 @@ func (cmd *Command) InitConfig(conf config.Config, path string) error {
 		return err
 	}
 
+	if logstore := conf.GetLogStoreConfig(); logstore != nil {
+		config.SetLogStoreConfig(logstore)
+	}
+
 	cmd.Config = conf
 	return nil
 }

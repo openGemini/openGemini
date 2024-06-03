@@ -75,6 +75,7 @@ func EnableReadDataCache(en uint64) {
 
 type BasicFileReader interface {
 	Name() string
+	Size() (int64, error)
 	ReadAt(off int64, size uint32, dst *[]byte, ioPriority int) ([]byte, error)
 	StreamReadBatch(off, length []int64, c chan *request.StreamReader, limit int, isStat bool)
 	Rename(newName string) error

@@ -27,7 +27,6 @@ import (
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/obs"
-	"github.com/openGemini/openGemini/lib/request"
 	"github.com/openGemini/openGemini/lib/rpn"
 	"github.com/openGemini/openGemini/lib/tokenizer"
 	"github.com/openGemini/openGemini/lib/tracing"
@@ -138,7 +137,7 @@ func (s *MultiFieldFilterReader) Close() {
 
 type MultilFieldVerticalFilterReader struct {
 	MultiFieldFilterReader
-	r                  fileops.BasicFileReader
+	r                  logstore.BloomFilterReader
 	bloomFilter        bloomfilter.Bloomfilter
 	currentBlockId     int64
 	groupIndex         int64
@@ -148,11 +147,10 @@ type MultilFieldVerticalFilterReader struct {
 }
 
 func NewMultiFieldVerticalFilterReader(path string, obsOpts *obs.ObsOptions, expr []*SKRPNElement, version uint32, splitMap map[string][]byte, fileName string) (*MultilFieldVerticalFilterReader, error) {
-	fd, err := fileops.OpenObsFile(path, fileName, obsOpts, true)
+	dr, err := logstore.NewBloomfilterReader(obsOpts, path, fileName, version)
 	if err != nil {
 		return nil, err
 	}
-	dr := fileops.NewFileReader(fd, nil)
 	v := &MultilFieldVerticalFilterReader{
 		r:           dr,
 		groupIndex:  -1,
@@ -219,13 +217,9 @@ func (s *MultilFieldVerticalFilterReader) isExist(blockId int64, elem *rpn.SKRPN
 				lens[i] = verticalPieceDiskSize
 			}
 			results := make(map[int64][]byte)
-			c := make(chan *request.StreamReader, 1)
-			s.r.StreamReadBatch(offsets, lens, c, limitNum, true)
-			for r := range c {
-				if r.Err != nil {
-					return false, r.Err
-				}
-				results[r.Offset] = r.Content
+			err := s.r.ReadBatch(offsets, lens, limitNum, true, results)
+			if err != nil {
+				return false, err
 			}
 			if s.span != nil {
 				for k := range results {
@@ -233,7 +227,6 @@ func (s *MultilFieldVerticalFilterReader) isExist(blockId int64, elem *rpn.SKRPN
 				}
 				s.span.Count(VerticalFilterReaderNumSpan, int64(len(offsets)))
 			}
-			var err error
 			for i, result := range results {
 				subGroupIndex := i / logstore.GetConstant(s.version).VerticalGroupDiskSize
 				if _, subOk := s.groupNewCache[subGroupIndex]; !subOk {
@@ -328,7 +321,6 @@ func (s *MultilFieldVerticalFilterReader) StartSpan(span *tracing.Span) {
 }
 
 func (s *MultilFieldVerticalFilterReader) close() {
-
 }
 
 type MultiFiledLineFilterReader struct {
