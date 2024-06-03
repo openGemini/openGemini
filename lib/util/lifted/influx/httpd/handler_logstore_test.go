@@ -3,13 +3,16 @@ package httpd
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/bytedance/sonic"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/logparser"
 	"github.com/stretchr/testify/assert"
@@ -264,4 +267,59 @@ func TestRewriteLogStream(t *testing.T) {
 	if newLogStream != expect {
 		t.Fatal("unexpect", newLogStream)
 	}
+}
+
+func TestParseJsonArray(t *testing.T) {
+	jsonArray := `[{"field1":"aa","field2":"bb"},{"field1":"cc","field2":"dd"}]`
+	var jsonMapSlice []map[string]interface{}
+
+	err := sonic.UnmarshalString(jsonArray, &jsonMapSlice)
+	if err != nil {
+		t.Fatal("unmarshal string err")
+	}
+	assert.Equal(t, 2, len(jsonMapSlice))
+
+	// Test stream read
+	jsonCompact := `{"int_v":15,"float_v":15.1,"bool_v":true,"string_v":"this is string","nest_json":{"v":"ii"}}`
+	var jsonMap map[string]interface{}
+	var r = strings.NewReader(jsonCompact)
+	var dec = sonic.ConfigDefault.NewDecoder(r)
+
+	for {
+		err = dec.Decode(&jsonMap)
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+		}
+	}
+	assert.Equal(t, 5, len(jsonMap))
+
+	// Test null value
+	res, ok := jsonMap["wrong"].(string)
+	assert.Equal(t, false, ok)
+	assert.Equal(t, "", res)
+}
+
+func TestInterface2str(t *testing.T) {
+	b := []byte("hello, byte")
+	s := Interface2str(b)
+	assert.Equal(t, string(b), s)
+
+	m := map[string]interface{}{}
+	b, err := sonic.Marshal(m)
+	assert.Equal(t, nil, err)
+	assert.Equal(t, string(b), `{}`)
+
+	m["first"] = true
+	m["second"] = "hello"
+	s = Interface2str(m)
+	assert.Equal(t, true, strings.Contains(s, `"first":true`))
+
+	failStr := "hello, string"
+	s = Interface2str(failStr)
+	assert.Equal(t, failStr, s)
+
+	res := util.Str2bytes(failStr)
+	assert.Equal(t, []byte(failStr), res)
 }

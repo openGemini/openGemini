@@ -32,6 +32,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bytedance/sonic"
 	"github.com/gorilla/mux"
 	"github.com/influxdata/influxdb/uuid"
 	"github.com/openGemini/openGemini/lib/bufferpool"
@@ -49,6 +50,7 @@ import (
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/lib/tokenizer"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
@@ -535,7 +537,8 @@ type LogDataType uint8
 type FailLogType uint8
 
 const (
-	JSON LogDataType = 0
+	JSON      LogDataType = 0
+	JSONArray LogDataType = 1
 
 	Tags          = "tags"
 	Tag           = "tag"
@@ -559,9 +562,10 @@ const (
 )
 
 var (
-	LogMax         = 1000
-	byteBufferPool = bufferpool.NewByteBufferPool(1024*100, cpu.GetCpuNum(), bufferpool.MaxLocalCacheLen)
-	parserPool     = &fastjson.ParserPool{}
+	LogMax           = 1000
+	byteBufferPool   = bufferpool.NewByteBufferPool(100*1024, cpu.GetCpuNum(), bufferpool.MaxLocalCacheLen)
+	recordBufferPool = bufferpool.NewByteBufferPool(10*1024*1024, cpu.GetCpuNum(), bufferpool.MaxLocalCacheLen)
+	parserPool       = &fastjson.ParserPool{}
 )
 
 var logSchema = record.Schemas{
@@ -618,12 +622,31 @@ type JsonMapping struct {
 	discardFields map[string]bool
 }
 
+func ReadAll(b []byte, r io.Reader) ([]byte, error) {
+	for {
+		if len(b) == cap(b) {
+			// Add more capacity (let append pick how much).
+			b = append(b, 0)[:len(b)]
+		}
+		n, err := r.Read(b[len(b):cap(b)])
+		b = b[:len(b)+n]
+		if err != nil {
+			if err == io.EOF {
+				err = nil
+			}
+			return b, err
+		}
+	}
+}
+
 func getRecordType(ty string) (LogDataType, error) {
 	logDataType := JSON
 	ty = strings.ToLower(ty)
 	switch ty {
 	case "json", "":
 		logDataType = JSON
+	case "jsonarray":
+		logDataType = JSONArray
 	default:
 		return logDataType, errno.NewError(errno.InvalidLogDataType)
 	}
@@ -852,7 +875,16 @@ func appendRow(rows *record.Record, tags, content []byte, time int64) {
 	rows.ColVals[rows.ColNums()-1].AppendInteger(time)
 }
 
-func appendFailRow(failRows *record.Record, req *LogWriteRequest, content []byte) {
+func (h *Handler) appendFailRow(failRows *record.Record, req *LogWriteRequest, val interface{}) {
+	var err error
+	content, ok := val.([]byte)
+	if !ok {
+		content, err = sonic.Marshal(val)
+		if err != nil {
+			content = util.Str2bytes(Interface2str(val))
+		}
+	}
+
 	failRows.ColVals[0].AppendStrings(req.failTag)
 	failRows.ColVals[1].AppendByteSlice(content)
 	failRows.ColVals[2].AppendBoolean(req.retry)
@@ -862,14 +894,14 @@ func appendFailRow(failRows *record.Record, req *LogWriteRequest, content []byte
 	appendFailRowsLogTags(failRows, req)
 }
 
-func appendBigLog(failRows *record.Record, req *LogWriteRequest, content []byte) {
+func (h *Handler) appendBigLog(failRows *record.Record, req *LogWriteRequest, content []byte) {
 	segmentNum := 1
 	for i := 0; i < len(content); i += MaxContentLen {
 		req.failTag = fmt.Sprintf("%s_%d", BigLogTag, segmentNum)
 		if i+MaxContentLen > len(content) {
-			appendFailRow(failRows, req, content[i:])
+			h.appendFailRow(failRows, req, content[i:])
 		} else {
-			appendFailRow(failRows, req, content[i:i+MaxContentLen])
+			h.appendFailRow(failRows, req, content[i:i+MaxContentLen])
 		}
 		segmentNum++
 	}
@@ -904,7 +936,7 @@ func (h *Handler) getLogWriteRequest(r *http.Request) (*LogWriteRequest, error) 
 			return nil, errno.NewError(errno.InvalidRetryPara)
 		}
 	}
-	_, err = getRecordType(r.FormValue("type"))
+	req.dataType, err = getRecordType(r.FormValue("type"))
 	if err != nil {
 		return nil, err
 	}
@@ -969,33 +1001,33 @@ func (h *Handler) parseJson(scanner *bufio.Scanner, req *LogWriteRequest, rows, 
 		b := scanner.Bytes()
 		totalLen += int64(len(b)) + NewlineLen
 		if len(b) > MaxContentLen {
-			appendBigLog(failRows, req, scanner.Bytes())
+			h.appendBigLog(failRows, req, scanner.Bytes())
 			continue
 		}
 		v, err := p.ParseBytes(b)
 		if err != nil {
 			h.printFailLog(ParseError, req, scanner.Bytes(), err)
-			appendFailRow(failRows, req, scanner.Bytes())
+			h.appendFailRow(failRows, req, scanner.Bytes())
 			continue
 		}
 
 		unixTimestamp := v.GetInt64(req.mapping.timestamp)
 		if unixTimestamp < req.minUnixTimestamp || unixTimestamp > req.maxUnixTimestamp {
 			h.printFailLog(TimestampError, req, scanner.Bytes(), nil)
-			appendFailRow(failRows, req, scanner.Bytes())
+			h.appendFailRow(failRows, req, scanner.Bytes())
 			continue
 		}
 		unixTimestamp = unixTimestamp * req.timeMultiplier
 		if unixTimestamp < req.expiredTime {
 			req.failTag = ExpiredLogTag
-			appendFailRow(failRows, req, scanner.Bytes())
+			h.appendFailRow(failRows, req, scanner.Bytes())
 			continue
 		}
 
 		pf.object, err = v.Object()
 		if err != nil {
 			h.printFailLog(ObjectError, req, scanner.Bytes(), err)
-			appendFailRow(failRows, req, scanner.Bytes())
+			h.appendFailRow(failRows, req, scanner.Bytes())
 			continue
 		}
 		pf.contentCnt = 0
@@ -1003,13 +1035,13 @@ func (h *Handler) parseJson(scanner *bufio.Scanner, req *LogWriteRequest, rows, 
 		if err != nil {
 			h.printFailLog(ContentFieldError, req, scanner.Bytes(), err)
 			clearFailRow(rows, pf.rowCnt+1)
-			appendFailRow(failRows, req, scanner.Bytes())
+			h.appendFailRow(failRows, req, scanner.Bytes())
 			continue
 		}
 
 		if pf.contentCnt == 0 {
 			h.printFailLog(NoContentError, req, scanner.Bytes(), err)
-			appendFailRow(failRows, req, scanner.Bytes())
+			h.appendFailRow(failRows, req, scanner.Bytes())
 			continue
 		}
 
@@ -1023,36 +1055,123 @@ func (h *Handler) parseJson(scanner *bufio.Scanner, req *LogWriteRequest, rows, 
 	return totalLen
 }
 
-func (h *Handler) printFailLog(failLogType FailLogType, req *LogWriteRequest, line []byte, err error) {
+func (h *Handler) parseJsonArray(body io.ReadCloser, req *LogWriteRequest, rows, failRows *record.Record) int64 {
+	pf := getParseField(len(req.logTags) + logSchema.Len())
+
+	b := recordBufferPool.Get()
+	defer recordBufferPool.Put(b)
+
+	var jsonArray []map[string]interface{}
+	b, err := ReadAll(b, body)
+	totalLen := int64(len(b))
+	if err != nil {
+		h.Logger.Error("read all json fail", zap.Error(err), zap.String(Repository, req.repository),
+			zap.String(LogStream, req.logStream), zap.Any("read length", len(b)))
+		h.appendFailRow(failRows, req, b)
+		return totalLen
+	}
+
+	err = sonic.Unmarshal(b, &jsonArray)
+	if err != nil {
+		h.Logger.Error("sonic unmarshal json fail", zap.Error(err), zap.String(Repository, req.repository),
+			zap.String(LogStream, req.logStream), zap.Any("json length", len(b)))
+		h.appendFailRow(failRows, req, b)
+		return totalLen
+	}
+
+	for _, jsonMap := range jsonArray {
+		timeFloat, ok := jsonMap[req.mapping.timestamp].(float64)
+		if !ok {
+			h.printFailLog(TimestampError, req, jsonMap, nil)
+			h.appendFailRow(failRows, req, jsonMap)
+			continue
+		}
+		unixTimestamp := int64(timeFloat)
+
+		if unixTimestamp < req.minUnixTimestamp || unixTimestamp > req.maxUnixTimestamp {
+			h.printFailLog(TimestampError, req, jsonMap, nil)
+			h.appendFailRow(failRows, req, jsonMap)
+			continue
+		}
+		unixTimestamp = unixTimestamp * req.timeMultiplier
+		if unixTimestamp < req.expiredTime {
+			req.failTag = ExpiredLogTag
+			h.appendFailRow(failRows, req, jsonMap)
+			continue
+		}
+
+		pf.contentCnt = 0
+		err = visitJsonMap(jsonMap, req, rows, pf)
+		if err != nil {
+			h.printFailLog(ContentFieldError, req, jsonMap, err)
+			clearFailRow(rows, pf.rowCnt+1)
+			h.appendFailRow(failRows, req, jsonMap)
+			continue
+		}
+
+		if pf.contentCnt == 0 {
+			h.printFailLog(NoContentError, req, jsonMap, err)
+			h.appendFailRow(failRows, req, jsonMap)
+			continue
+		}
+
+		rows.ColVals[0].AppendBoolean(req.retry)
+		appendLogTags(rows, req)
+		appendRowAll(rows, pf, unixTimestamp)
+		pf.rowCnt++
+	}
+	swapTimeColumnToEnd(rows, failRows)
+
+	return totalLen
+}
+
+func Interface2str(i interface{}) string {
+	switch v := i.(type) {
+	case map[string]interface{}:
+		str, err := sonic.MarshalString(i)
+		if err != nil {
+			break
+		}
+		return str
+	case []byte:
+		return util.Bytes2str(v)
+	}
+
+	return fmt.Sprintf("%s", i)
+}
+
+func (h *Handler) printFailLog(failLogType FailLogType, req *LogWriteRequest, line interface{}, err error) {
+	str := Interface2str(line)
+
 	switch failLogType {
 	case ParseError:
 		if !req.printFailLog.alreadyPrintParseError {
 			h.Logger.Error("Unmarshal json fail", zap.Error(err), zap.String("repository", req.repository),
-				zap.String("logstream", req.logStream), zap.String("line", string(line)))
+				zap.String("logstream", req.logStream), zap.String("line", str))
 			req.printFailLog.alreadyPrintParseError = true
 		}
 	case TimestampError:
 		if !req.printFailLog.alreadyPrintTimestampError {
 			h.Logger.Error("the timestamp format is incorrect or missing", zap.String("repository", req.repository),
-				zap.String("logstream", req.logStream), zap.String("line", string(line)))
+				zap.String("logstream", req.logStream), zap.String("line", str))
 			req.printFailLog.alreadyPrintTimestampError = true
 		}
 	case ObjectError:
 		if !req.printFailLog.alreadyPrintObjectError {
 			h.Logger.Error("fastjson object get err", zap.Error(err), zap.String("repository", req.repository),
-				zap.String("logstream", req.logStream), zap.String("line", string(line)))
+				zap.String("logstream", req.logStream), zap.String("line", str))
 			req.printFailLog.alreadyPrintObjectError = true
 		}
 	case ContentFieldError:
 		if !req.printFailLog.alreadyPrintFieldError {
 			h.Logger.Error("content field err", zap.Error(err), zap.String("repository", req.repository),
-				zap.String("logstream", req.logStream), zap.String("line", string(line)))
+				zap.String("logstream", req.logStream), zap.String("line", str))
 			req.printFailLog.alreadyPrintFieldError = true
 		}
 	case NoContentError:
 		if !req.printFailLog.alreadyPrintNoContentError {
 			h.Logger.Error("content json empty", zap.Error(err), zap.String("repository", req.repository),
-				zap.String("logstream", req.logStream), zap.String("line", string(line)))
+				zap.String("logstream", req.logStream), zap.String("line", str))
 			req.printFailLog.alreadyPrintNoContentError = true
 		}
 	default:
@@ -1085,20 +1204,51 @@ func visitJsonField(req *LogWriteRequest, rows *record.Record, p *ParseField) er
 				p.schemasNil = append(p.schemasNil, true)
 				rows.Schema = append(rows.Schema, record.Field{Type: fastJsonTypeToRecordType(v.Type()), Name: key})
 				rows.ColVals = append(rows.ColVals, record.ColVal{})
-				appendValueToRecordColumn(rows, p.fieldIndex, v)
+				appendFastJsonValue(rows, p.fieldIndex, v)
 				p.fieldIndex++
 			} else {
 				if err = existFieldCheck(rows, col, p.rowCnt, fastJsonTypeToRecordType(v.Type()), key); err != nil {
 					stopVisit = true
 					return
 				}
-				appendValueToRecordColumn(rows, col, v)
+				appendFastJsonValue(rows, col, v)
 				p.schemasNil[col] = true
 			}
 			p.contentCnt++
 		}
 	})
 	return err
+}
+
+func visitJsonMap(jsonMap map[string]interface{}, req *LogWriteRequest, rows *record.Record, p *ParseField) error {
+	for key, v := range jsonMap {
+		if req.mapping.discardFields[key] || key == req.mapping.timestamp {
+		} else if reservedFields[key] {
+			return errno.NewError(errno.ErrReservedFieldDuplication, key)
+		} else {
+			col, ok := p.schemasMap[key]
+			if !ok {
+				if err := newFieldCheck(req, getInfluxType(v), key); err != nil {
+					return err
+				}
+				p.schemasMap[key] = p.fieldIndex
+				p.schemasNil = append(p.schemasNil, true)
+				rows.Schema = append(rows.Schema, record.Field{Type: getInfluxType(v), Name: key})
+				rows.ColVals = append(rows.ColVals, record.ColVal{})
+				appendInterfaceValue(rows, p.fieldIndex, v)
+				p.fieldIndex++
+			} else {
+				if err := existFieldCheck(rows, col, p.rowCnt, getInfluxType(v), key); err != nil {
+					return err
+				}
+				appendInterfaceValue(rows, col, v)
+				p.schemasNil[col] = true
+			}
+			p.contentCnt++
+		}
+	}
+
+	return nil
 }
 
 func clearFailRow(rows *record.Record, failRowNum int) {
@@ -1155,7 +1305,7 @@ func swapTimeColumnToEnd(rows, failRows *record.Record) {
 	rows.Schema[1], rows.Schema[rows.ColNums()-1] = rows.Schema[rows.ColNums()-1], rows.Schema[1]
 }
 
-func appendValueToRecordColumn(rows *record.Record, col int, v *fastjson.Value) {
+func appendFastJsonValue(rows *record.Record, col int, v *fastjson.Value) {
 	switch v.Type() {
 	case fastjson.TypeString:
 		sb, _ := v.StringBytes()
@@ -1171,6 +1321,19 @@ func appendValueToRecordColumn(rows *record.Record, col int, v *fastjson.Value) 
 	}
 }
 
+func appendInterfaceValue(rows *record.Record, col int, i interface{}) {
+	switch v := i.(type) {
+	case string:
+		rows.ColVals[col].AppendString(v)
+	case float64:
+		rows.ColVals[col].AppendFloat(v)
+	case bool:
+		rows.ColVals[col].AppendBoolean(v)
+	default:
+		rows.ColVals[col].AppendString(Interface2str(i))
+	}
+}
+
 func fastJsonTypeToRecordType(ty fastjson.Type) int {
 	switch ty {
 	case fastjson.TypeString:
@@ -1180,6 +1343,19 @@ func fastJsonTypeToRecordType(ty fastjson.Type) int {
 	case fastjson.TypeTrue:
 		return influx.Field_Type_Boolean
 	case fastjson.TypeFalse:
+		return influx.Field_Type_Boolean
+	default:
+		return influx.Field_Type_String
+	}
+}
+
+func getInfluxType(i interface{}) int {
+	switch i.(type) {
+	case string, map[string]interface{}:
+		return influx.Field_Type_String
+	case float64:
+		return influx.Field_Type_Float
+	case bool:
 		return influx.Field_Type_Boolean
 	default:
 		return influx.Field_Type_String
@@ -1294,7 +1470,12 @@ func (h *Handler) serveRecord(w http.ResponseWriter, r *http.Request, user meta2
 		req.expiredTime = req.requestTime - logInfo.Duration.Nanoseconds()
 	}
 	req.printFailLog = getPrintFailLog()
-	totalLen = h.parseJson(scanner, req, rows, failRows)
+	if req.dataType == JSON {
+		totalLen = h.parseJson(scanner, req, rows, failRows)
+	} else {
+		totalLen = h.parseJsonArray(r.Body, req, rows, failRows)
+	}
+
 	if scanner.Err() != nil {
 		h.Logger.Error("scanner internal error", zap.Error(scanner.Err()), zap.String("repo", req.repository),
 			zap.String("logstream", req.logStream))
