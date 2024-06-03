@@ -1236,3 +1236,429 @@ func (r *BooleanIterator) Next(ie *IteratorEndpoint, p *IteratorParams) {
 		}
 	}
 }
+
+type FloatTransIterator struct {
+	isSingleCall bool
+	inOrdinal    int
+	outOrdinal   int
+	buf          TransItem
+}
+
+func NewFloatTransIterator(
+	isSingleCall bool, inOrdinal, outOrdinal int, transItem TransItem,
+) *FloatTransIterator {
+	r := &FloatTransIterator{
+		buf:          transItem,
+		isSingleCall: isSingleCall,
+		inOrdinal:    inOrdinal,
+		outOrdinal:   outOrdinal,
+	}
+	return r
+}
+
+func (r *FloatTransIterator) processFirstWindow(
+	inChunk, outChunk Chunk, haveMultiInterval, sameInterval bool, start, end, i int,
+) {
+	if haveMultiInterval {
+		r.buf.AppendItem(inChunk, r.inOrdinal, start, end, false)
+	} else {
+		r.buf.AppendItem(inChunk, r.inOrdinal, start, end, sameInterval)
+	}
+	if r.buf.Len() > 0 {
+		r.appendCurrItem(inChunk, outChunk, i)
+	}
+	r.buf.Reset()
+}
+
+func (r *FloatTransIterator) processLastWindow(
+	inChunk, outChunk Chunk, start, end, i int,
+) {
+	r.buf.AppendItem(inChunk, r.inOrdinal, start, end, true)
+	if r.buf.Len() > 0 {
+		r.appendCurrItem(inChunk, outChunk, i)
+	}
+	r.buf.Reset()
+}
+
+func (r *FloatTransIterator) processMiddleWindow(
+	inChunk, outChunk Chunk, start, end, i int,
+) {
+	r.buf.AppendItem(inChunk, r.inOrdinal, start, end, false)
+	if r.buf.Len() > 0 {
+		r.appendCurrItem(inChunk, outChunk, i)
+	}
+	r.buf.Reset()
+}
+
+func (r *FloatTransIterator) appendCurrItem(inChunk, outChunk Chunk, i int) {
+	transData := r.buf.GetBaseTransData()
+	time := transData.time
+	value := transData.floatValue
+	nils := transData.nils
+	outColumn := outChunk.Column(r.outOrdinal)
+	if r.isSingleCall {
+		var nilCount int
+		for j := range time {
+			if nils[j] {
+				nilCount++
+				continue
+			}
+			outChunk.AppendTime(time[j])
+			outColumn.AppendFloatValue(value[j])
+			outColumn.AppendNotNil()
+		}
+		if nilCount == r.buf.Len() {
+			return
+		}
+		idx := outChunk.Len() - r.buf.Len() + nilCount
+		outChunk.AppendIntervalIndex(idx)
+		outChunk.AppendTagsAndIndex(inChunk.Tags()[i], idx)
+		return
+	}
+	for j := range time {
+		if nils[j] {
+			outColumn.AppendNil()
+			continue
+		}
+		outColumn.AppendFloatValue(value[j])
+		outColumn.AppendNotNil()
+	}
+}
+
+func (r *FloatTransIterator) Next(ie *IteratorEndpoint, p *IteratorParams) {
+	var end int
+	inChunk, outChunk := ie.InputPoint.Chunk, ie.OutputPoint.Chunk
+	firstIndex, lastIndex := 0, len(inChunk.TagIndex())-1
+	for i, start := range inChunk.TagIndex() {
+		if i < lastIndex {
+			end = inChunk.TagIndex()[i+1]
+		} else {
+			end = inChunk.NumberOfRows()
+		}
+
+		if i == firstIndex && !r.buf.PrevNil() {
+			r.processFirstWindow(inChunk, outChunk, firstIndex != lastIndex, p.sameInterval, start, end, i)
+		} else if i == lastIndex && p.sameInterval {
+			r.processLastWindow(inChunk, outChunk, start, end, i)
+		} else {
+			r.processMiddleWindow(inChunk, outChunk, start, end, i)
+		}
+	}
+}
+
+type IntegerTransIterator struct {
+	isSingleCall bool
+	inOrdinal    int
+	outOrdinal   int
+	buf          TransItem
+}
+
+func NewIntegerTransIterator(
+	isSingleCall bool, inOrdinal, outOrdinal int, transItem TransItem,
+) *IntegerTransIterator {
+	r := &IntegerTransIterator{
+		buf:          transItem,
+		isSingleCall: isSingleCall,
+		inOrdinal:    inOrdinal,
+		outOrdinal:   outOrdinal,
+	}
+	return r
+}
+
+func (r *IntegerTransIterator) processFirstWindow(
+	inChunk, outChunk Chunk, haveMultiInterval, sameInterval bool, start, end, i int,
+) {
+	if haveMultiInterval {
+		r.buf.AppendItem(inChunk, r.inOrdinal, start, end, false)
+	} else {
+		r.buf.AppendItem(inChunk, r.inOrdinal, start, end, sameInterval)
+	}
+	if r.buf.Len() > 0 {
+		r.appendCurrItem(inChunk, outChunk, i)
+	}
+	r.buf.Reset()
+}
+
+func (r *IntegerTransIterator) processLastWindow(
+	inChunk, outChunk Chunk, start, end, i int,
+) {
+	r.buf.AppendItem(inChunk, r.inOrdinal, start, end, true)
+	if r.buf.Len() > 0 {
+		r.appendCurrItem(inChunk, outChunk, i)
+	}
+	r.buf.Reset()
+}
+
+func (r *IntegerTransIterator) processMiddleWindow(
+	inChunk, outChunk Chunk, start, end, i int,
+) {
+	r.buf.AppendItem(inChunk, r.inOrdinal, start, end, false)
+	if r.buf.Len() > 0 {
+		r.appendCurrItem(inChunk, outChunk, i)
+	}
+	r.buf.Reset()
+}
+
+func (r *IntegerTransIterator) appendCurrItem(inChunk, outChunk Chunk, i int) {
+	transData := r.buf.GetBaseTransData()
+	time := transData.time
+	value := transData.integerValue
+	nils := transData.nils
+	outColumn := outChunk.Column(r.outOrdinal)
+	if r.isSingleCall {
+		var nilCount int
+		for j := range time {
+			if nils[j] {
+				nilCount++
+				continue
+			}
+			outChunk.AppendTime(time[j])
+			outColumn.AppendIntegerValue(value[j])
+			outColumn.AppendNotNil()
+		}
+		if nilCount == r.buf.Len() {
+			return
+		}
+		idx := outChunk.Len() - r.buf.Len() + nilCount
+		outChunk.AppendIntervalIndex(idx)
+		outChunk.AppendTagsAndIndex(inChunk.Tags()[i], idx)
+		return
+	}
+	for j := range time {
+		if nils[j] {
+			outColumn.AppendNil()
+			continue
+		}
+		outColumn.AppendIntegerValue(value[j])
+		outColumn.AppendNotNil()
+	}
+}
+
+func (r *IntegerTransIterator) Next(ie *IteratorEndpoint, p *IteratorParams) {
+	var end int
+	inChunk, outChunk := ie.InputPoint.Chunk, ie.OutputPoint.Chunk
+	firstIndex, lastIndex := 0, len(inChunk.TagIndex())-1
+	for i, start := range inChunk.TagIndex() {
+		if i < lastIndex {
+			end = inChunk.TagIndex()[i+1]
+		} else {
+			end = inChunk.NumberOfRows()
+		}
+
+		if i == firstIndex && !r.buf.PrevNil() {
+			r.processFirstWindow(inChunk, outChunk, firstIndex != lastIndex, p.sameInterval, start, end, i)
+		} else if i == lastIndex && p.sameInterval {
+			r.processLastWindow(inChunk, outChunk, start, end, i)
+		} else {
+			r.processMiddleWindow(inChunk, outChunk, start, end, i)
+		}
+	}
+}
+
+type FloatCumulativeSumItem struct {
+	sum   float64
+	time  []int64
+	value []float64
+	nils  []bool
+}
+
+func NewFloatCumulativeSumItem() *FloatCumulativeSumItem {
+	return &FloatCumulativeSumItem{sum: 0}
+}
+
+func (f *FloatCumulativeSumItem) AppendItemFastFunc(c Chunk, ordinal int, start, end int, sameInterval bool) {
+	// fast path
+	col := c.Column(ordinal)
+	time := c.Time()[start:end]
+	value := col.FloatValues()[start:end]
+
+	for i := 0; i < len(time); i++ {
+		f.sum += value[i]
+		f.time = append(f.time, time[i])
+		f.value = append(f.value, f.sum)
+		f.nils = append(f.nils, false)
+	}
+
+	if !sameInterval {
+		f.sum = 0
+	}
+}
+
+func (f *FloatCumulativeSumItem) doNullWindow(time []int64, sameInterval bool) {
+	f.time = append(f.time, time[:]...)
+	f.value = append(f.value, make([]float64, len(time))...)
+	f.nils = append(f.nils, make([]bool, len(time))...)
+	for i := len(f.nils) - 1; i >= len(f.nils)-len(time); i-- {
+		f.nils[i] = true
+	}
+	if !sameInterval {
+		f.sum = 0
+	}
+}
+
+func (f *FloatCumulativeSumItem) AppendItemSlowFunc(c Chunk, ordinal int, start, end int, sameInterval bool) {
+	// slow path
+	col := c.Column(ordinal)
+	time := c.Time()[start:end]
+	vs, ve := col.GetRangeValueIndexV2(start, end)
+	if vs == ve {
+		f.doNullWindow(time, sameInterval)
+		return
+	}
+
+	var vos int
+	for i := start; i < end; i++ {
+		t := c.TimeByIndex(i)
+		if col.IsNilV2(i) {
+			f.time = append(f.time, t)
+			f.value = append(f.value, 0)
+			f.nils = append(f.nils, true)
+			continue
+		}
+
+		v := col.FloatValue(vs + vos)
+		vos++
+		f.sum += v
+		f.time = append(f.time, t)
+		f.value = append(f.value, f.sum)
+		f.nils = append(f.nils, false)
+	}
+
+	if !sameInterval {
+		f.sum = 0
+	}
+}
+
+func (f *FloatCumulativeSumItem) AppendItem(c Chunk, ordinal int, start, end int, sameInterval bool) {
+	if c.Column(ordinal).NilCount() == 0 {
+		f.AppendItemFastFunc(c, ordinal, start, end, sameInterval)
+		return
+	}
+	f.AppendItemSlowFunc(c, ordinal, start, end, sameInterval)
+}
+
+func (f *FloatCumulativeSumItem) Reset() {
+	f.time = f.time[:0]
+	f.value = f.value[:0]
+	f.nils = f.nils[:0]
+}
+
+func (f *FloatCumulativeSumItem) Len() int {
+	return len(f.time)
+}
+
+func (f *FloatCumulativeSumItem) PrevNil() bool {
+	return f.sum == 0
+}
+
+func (f *FloatCumulativeSumItem) ResetPrev() {
+	f.sum = 0
+}
+
+func (f *FloatCumulativeSumItem) GetBaseTransData() BaseTransData {
+	return BaseTransData{time: f.time, floatValue: f.value, nils: f.nils}
+}
+
+type IntegerCumulativeSumItem struct {
+	sum   int64
+	time  []int64
+	value []int64
+	nils  []bool
+}
+
+func NewIntegerCumulativeSumItem() *IntegerCumulativeSumItem {
+	return &IntegerCumulativeSumItem{sum: 0}
+}
+
+func (f *IntegerCumulativeSumItem) AppendItemFastFunc(c Chunk, ordinal int, start, end int, sameInterval bool) {
+	// fast path
+	col := c.Column(ordinal)
+	time := c.Time()[start:end]
+	value := col.IntegerValues()[start:end]
+
+	for i := 0; i < len(time); i++ {
+		f.sum += value[i]
+		f.time = append(f.time, time[i])
+		f.value = append(f.value, f.sum)
+		f.nils = append(f.nils, false)
+	}
+
+	if !sameInterval {
+		f.sum = 0
+	}
+}
+
+func (f *IntegerCumulativeSumItem) doNullWindow(time []int64, sameInterval bool) {
+	f.time = append(f.time, time[:]...)
+	f.value = append(f.value, make([]int64, len(time))...)
+	f.nils = append(f.nils, make([]bool, len(time))...)
+	for i := len(f.nils) - 1; i >= len(f.nils)-len(time); i-- {
+		f.nils[i] = true
+	}
+	if !sameInterval {
+		f.sum = 0
+	}
+}
+
+func (f *IntegerCumulativeSumItem) AppendItemSlowFunc(c Chunk, ordinal int, start, end int, sameInterval bool) {
+	// slow path
+	col := c.Column(ordinal)
+	time := c.Time()[start:end]
+	vs, ve := col.GetRangeValueIndexV2(start, end)
+	if vs == ve {
+		f.doNullWindow(time, sameInterval)
+		return
+	}
+
+	var vos int
+	for i := start; i < end; i++ {
+		t := c.TimeByIndex(i)
+		if col.IsNilV2(i) {
+			f.time = append(f.time, t)
+			f.value = append(f.value, 0)
+			f.nils = append(f.nils, true)
+			continue
+		}
+
+		v := col.IntegerValue(vs + vos)
+		vos++
+		f.sum += v
+		f.time = append(f.time, t)
+		f.value = append(f.value, f.sum)
+		f.nils = append(f.nils, false)
+	}
+
+	if !sameInterval {
+		f.sum = 0
+	}
+}
+
+func (f *IntegerCumulativeSumItem) AppendItem(c Chunk, ordinal int, start, end int, sameInterval bool) {
+	if c.Column(ordinal).NilCount() == 0 {
+		f.AppendItemFastFunc(c, ordinal, start, end, sameInterval)
+		return
+	}
+	f.AppendItemSlowFunc(c, ordinal, start, end, sameInterval)
+}
+
+func (f *IntegerCumulativeSumItem) Reset() {
+	f.time = f.time[:0]
+	f.value = f.value[:0]
+	f.nils = f.nils[:0]
+}
+
+func (f *IntegerCumulativeSumItem) Len() int {
+	return len(f.time)
+}
+
+func (f *IntegerCumulativeSumItem) PrevNil() bool {
+	return f.sum == 0
+}
+
+func (f *IntegerCumulativeSumItem) ResetPrev() {
+	f.sum = 0
+}
+
+func (f *IntegerCumulativeSumItem) GetBaseTransData() BaseTransData {
+	return BaseTransData{time: f.time, integerValue: f.value, nils: f.nils}
+}
