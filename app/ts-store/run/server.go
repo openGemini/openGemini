@@ -37,6 +37,7 @@ import (
 	"github.com/openGemini/openGemini/lib/httpserver"
 	"github.com/openGemini/openGemini/lib/iodetector"
 	Logger "github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/statisticsPusher"
@@ -137,6 +138,7 @@ func NewServer(c config.Config, info app.ServerInfo, logger *Logger.Logger) (app
 
 	s.sherlockService = sherlock.NewService(conf.Sherlock)
 	s.sherlockService.WithLogger(s.Logger)
+	logstore.InitializeVlmCache()
 
 	return s, nil
 }

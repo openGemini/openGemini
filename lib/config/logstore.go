@@ -21,7 +21,7 @@ import (
 	"github.com/influxdata/influxdb/toml"
 )
 
-type LogStoreEngineConfig struct {
+type LogStoreConfig struct {
 	MemorySize   uint64
 	CacheEnabled bool          `toml:"cache-segment-metadata"`
 	CacheRate    float32       `toml:"cache-segment-metadata-memory-rate"`
@@ -37,89 +37,92 @@ type LogStoreEngineConfig struct {
 	ContainerBasePath     string        `toml:"container-base-path"`
 }
 
-var LogKeeperConfig = &LogStoreEngineConfig{}
+var LogKeeperConfig = &LogStoreConfig{}
 
-func NewLogStoreEngineConfig() *LogStoreEngineConfig {
-	return &LogStoreEngineConfig{
-		CacheEnabled:        false,
-		MemorySize:          1024 * 1024,
-		CacheRate:           0.3,
-		CacheTTL:            toml.Duration(24 * time.Hour),
-		VlmCachePieceSize:   1024 * 1024,
-		VlmCacheGroupSize:   1024,
-		VlmCachePrefetchNum: 64,
-		VlmCacheTtl:         toml.Duration(2 * time.Hour),
-		ContainerBasePath:   "/data"}
+func NewLogStoreConfig() *LogStoreConfig {
+	return &LogStoreConfig{
+		CacheEnabled:          false,
+		MemorySize:            1024 * 1024,
+		CacheRate:             0.3,
+		CacheTTL:              toml.Duration(24 * time.Hour),
+		VlmCacheHotData:       false,
+		VlmCachePiecePrefetch: false,
+		VlmCachePieceSize:     1024 * 1024,
+		VlmCacheGroupPrefetch: false,
+		VlmCacheGroupSize:     1024,
+		VlmCachePrefetchNum:   64,
+		VlmCacheTtl:           toml.Duration(2 * time.Hour),
+		ContainerBasePath:     "/data"}
 }
 
-func (l *LogStoreEngineConfig) IsCacheEnabled() bool {
+func (l *LogStoreConfig) IsCacheEnabled() bool {
 	return l.CacheEnabled
 }
 
-func (l *LogStoreEngineConfig) GetCacheRate() float32 {
+func (l *LogStoreConfig) GetCacheRate() float32 {
 	return l.CacheRate
 }
 
-func (l *LogStoreEngineConfig) EnableCache(e bool) {
+func (l *LogStoreConfig) EnableCache(e bool) {
 	l.CacheEnabled = e
 }
 
-func (l *LogStoreEngineConfig) SetMemorySize(m toml.Size) {
+func (l *LogStoreConfig) SetMemorySize(m toml.Size) {
 	l.MemorySize = uint64(m)
 }
 
-func (l *LogStoreEngineConfig) GetCacheMemory() int64 {
+func (l *LogStoreConfig) GetCacheMemory() int64 {
 	return int64(float64(l.MemorySize) * float64(l.CacheRate) / 2)
 }
 
-func (l *LogStoreEngineConfig) GetCacheTTL() time.Duration {
+func (l *LogStoreConfig) GetCacheTTL() time.Duration {
 	return time.Duration(l.CacheTTL)
 }
 
-func (l *LogStoreEngineConfig) IsVlmCacheHotData() bool {
+func (l *LogStoreConfig) IsVlmCacheHotData() bool {
 	return l.VlmCacheHotData
 }
 
-func (l *LogStoreEngineConfig) IsVlmCachePiecePrefetch() bool {
+func (l *LogStoreConfig) IsVlmCachePiecePrefetch() bool {
 	return l.VlmCachePiecePrefetch
 }
 
-func (l *LogStoreEngineConfig) GetVlmCachePieceSize() uint32 {
+func (l *LogStoreConfig) GetVlmCachePieceSize() uint32 {
 	return l.VlmCachePieceSize
 }
 
-func (l *LogStoreEngineConfig) IsVlmCacheGroupPrefetch() bool {
+func (l *LogStoreConfig) IsVlmCacheGroupPrefetch() bool {
 	return l.VlmCacheGroupPrefetch
 }
 
-func (l *LogStoreEngineConfig) GetVlmCacheGroupSize() uint32 {
+func (l *LogStoreConfig) GetVlmCacheGroupSize() uint32 {
 	return l.VlmCacheGroupSize
 }
 
-func (l *LogStoreEngineConfig) GetVlmCachePrefetchNums() uint32 {
+func (l *LogStoreConfig) GetVlmCachePrefetchNums() uint32 {
 	return l.VlmCachePrefetchNum
 }
 
-func (l *LogStoreEngineConfig) GetVlmCacheTtl() time.Duration {
+func (l *LogStoreConfig) GetVlmCacheTtl() time.Duration {
 	return time.Duration(l.VlmCacheTtl)
 }
 
-func (l *LogStoreEngineConfig) IsVlmCacheEnable() bool {
+func (l *LogStoreConfig) IsVlmCacheEnable() bool {
 	return l.VlmCacheHotData || l.VlmCachePiecePrefetch || l.VlmCacheGroupPrefetch
 }
 
-func (l *LogStoreEngineConfig) IsVlmPrefetchEnable() bool {
+func (l *LogStoreConfig) IsVlmPrefetchEnable() bool {
 	return l.VlmCachePiecePrefetch || l.VlmCacheGroupPrefetch
 }
 
-func (l *LogStoreEngineConfig) GetContainerBasePath() string {
+func (l *LogStoreConfig) GetContainerBasePath() string {
 	return l.ContainerBasePath
 }
 
-func GetLogStoreConfig() *LogStoreEngineConfig {
+func GetLogStoreConfig() *LogStoreConfig {
 	return LogKeeperConfig
 }
 
-func SetLogStoreConfig(c *LogStoreEngineConfig) {
+func SetLogStoreConfig(c *LogStoreConfig) {
 	LogKeeperConfig = c
 }
