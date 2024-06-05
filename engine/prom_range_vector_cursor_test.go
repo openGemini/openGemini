@@ -366,6 +366,172 @@ func TestIrateFunctions(t *testing.T) {
 		testRangeVectorCursor(t, inSchema, outSchema, srcRecs2, dstRecs3, exprOpt, querySchema)
 	})
 
+	// 4. irate(value[5]) start=2,end=18,step=2
+	var dstRecs4 []*record.Record
+	dstRecs4 = append(dstRecs4,
+		genRec(inSchema,
+			[]int{1, 1, 1},
+			[]float64{2, 1.5, 1},
+			[]int64{4000000000, 6000000000, 10000000000}),
+	)
+	querySchema = executor.NewQuerySchema(nil, nil, opt3, nil)
+	t.Run("4", func(t *testing.T) {
+		testRangeVectorCursor(t, inSchema, outSchema, srcRecs4, dstRecs4, exprOpt, querySchema)
+	})
+}
+
+func TestDeltaFunctions(t *testing.T) {
+	exprOpt := []hybridqp.ExprOptions{
+		{
+			Expr: &influxql.Call{Name: "delta_prom", Args: []influxql.Expr{hybridqp.MustParseExpr("float")}},
+			Ref:  influxql.VarRef{Val: "float", Type: influx.Field_Type_Float},
+		},
+	}
+	// 1. delta(value[5]) start=1,end=19,step=2
+	querySchema := executor.NewQuerySchema(nil, nil, opt5, nil)
+
+	var dstRecs1 []*record.Record
+	dstRecs1 = append(dstRecs1,
+		genRec(inSchema,
+			[]int{1, 1, 1, 1, 1},
+			[]float64{1.5, 3.75, 3.75, 5, 2.5},
+			[]int64{3000000000, 5000000000, 7000000000, 9000000000, 11000000000}),
+		genRec(inSchema,
+			[]int{1, 1},
+			[]float64{3.5, 5},
+			[]int64{13000000000, 15000000000}),
+	)
+	t.Run("delta_1", func(t *testing.T) {
+		testRangeVectorCursor(t, inSchema, outSchema, srcRecs1, dstRecs1, exprOpt, querySchema)
+	})
+
+	// 2. delta(value[3]) start=1,end=19,step=2
+	var dstRecs2 []*record.Record
+	dstRecs2 = append(dstRecs2,
+		genRec(inSchema,
+			[]int{1, 1, 1},
+			[]float64{1.5, 3, 3},
+			[]int64{3000000000, 5000000000, 11000000000}),
+		genRec(inSchema,
+			[]int{1},
+			[]float64{1.5},
+			[]int64{13000000000}),
+	)
+	querySchema = executor.NewQuerySchema(nil, nil, opt6, nil)
+	t.Run("delta_2", func(t *testing.T) {
+		testRangeVectorCursor(t, inSchema, outSchema, srcRecs1, dstRecs2, exprOpt, querySchema)
+	})
+
+	// 3. delta(value[5]) start=2,end=18,step=2
+	var dstRecs3 []*record.Record
+	dstRecs3 = append(dstRecs3,
+		genRec(inSchema,
+			[]int{1, 1, 1, 1, 1},
+			[]float64{2.5, 5, 3, 5, 3.5},
+			[]int64{4000000000, 6000000000, 8000000000, 10000000000, 12000000000}),
+		genRec(inSchema,
+			[]int{1, 1},
+			[]float64{2.5, 5},
+			[]int64{14000000000, 16000000000}),
+	)
+	querySchema = executor.NewQuerySchema(nil, nil, opt1, nil)
+	t.Run("delta_3", func(t *testing.T) {
+		testRangeVectorCursor(t, inSchema, outSchema, srcRecs1, dstRecs3, exprOpt, querySchema)
+	})
+
+	// 4. delta(value[3]) start=2,end=18,step=2
+	var dstRecs4 []*record.Record
+	dstRecs4 = append(dstRecs4,
+		genRec(inSchema,
+			[]int{1, 1, 1, 1},
+			[]float64{3, 3, 1.5, 3},
+			[]int64{4000000000, 6000000000, 10000000000, 12000000000}),
+	)
+	querySchema = executor.NewQuerySchema(nil, nil, opt2, nil)
+	t.Run("delta_4", func(t *testing.T) {
+		testRangeVectorCursor(t, inSchema, outSchema, srcRecs1, dstRecs4, exprOpt, querySchema)
+	})
+
+	// 5. delta(value[5]) start=1,end=19,step=2
+	var dstRecs5 []*record.Record
+	dstRecs5 = append(dstRecs5,
+		genRec(inSchema,
+			[]int{1, 1, 1, 1, 1},
+			[]float64{-1.5, 2.5, 2.5, 5, 2.5},
+			[]int64{3000000000, 5000000000, 7000000000, 9000000000, 11000000000}),
+		genRec(inSchema,
+			[]int{1, 1},
+			[]float64{3.5, 5},
+			[]int64{13000000000, 15000000000}),
+	)
+	querySchema = executor.NewQuerySchema(nil, nil, opt5, nil)
+	t.Run("delta_5", func(t *testing.T) {
+		testRangeVectorCursor(t, inSchema, outSchema, srcRecs4, dstRecs5, exprOpt, querySchema)
+	})
+}
+
+func TestIdeltaFunctions(t *testing.T) {
+	// 1. idelta(value[3]) start=2,end=18,step=2
+	exprOpt := []hybridqp.ExprOptions{
+		{
+			Expr: &influxql.Call{Name: "idelta_prom", Args: []influxql.Expr{hybridqp.MustParseExpr("float")}},
+			Ref:  influxql.VarRef{Val: "float", Type: influx.Field_Type_Float},
+		},
+	}
+	var dstRecs1 []*record.Record
+	dstRecs1 = append(dstRecs1,
+		genRec(inSchema,
+			[]int{1, 1, 1, 1, 1},
+			[]float64{1, 2, 2, 1, 1},
+			[]int64{4000000000, 6000000000, 8000000000, 10000000000, 12000000000}),
+		genRec(inSchema,
+			[]int{1, 1},
+			[]float64{2, 4},
+			[]int64{14000000000, 16000000000}),
+	)
+	querySchema := executor.NewQuerySchema(nil, nil, opt1, nil)
+	t.Run("1", func(t *testing.T) {
+		testRangeVectorCursor(t, inSchema, outSchema, srcRecs1, dstRecs1, exprOpt, querySchema)
+	})
+
+	// 2. idelta(value[3]) start=2,end=18,step=2
+	var dstRecs2 []*record.Record
+	dstRecs2 = append(dstRecs2,
+		genRec(inSchema,
+			[]int{1, 1, 1, 1},
+			[]float64{1, 2, 1, 1},
+			[]int64{4000000000, 6000000000, 10000000000, 12000000000}),
+	)
+	querySchema = executor.NewQuerySchema(nil, nil, opt2, nil)
+	t.Run("2", func(t *testing.T) {
+		testRangeVectorCursor(t, inSchema, outSchema, srcRecs1, dstRecs2, exprOpt, querySchema)
+	})
+
+	// 3. idelta(value[5]) start=2,end=18,step=2
+	var dstRecs3 []*record.Record
+	dstRecs3 = append(dstRecs3,
+		genRec(inSchema,
+			[]int{1, 1, 1, 1},
+			[]float64{1, 1, 3, 1},
+			[]int64{4000000000, 6000000000, 8000000000, 10000000000}),
+	)
+	querySchema = executor.NewQuerySchema(nil, nil, opt3, nil)
+	t.Run("3", func(t *testing.T) {
+		testRangeVectorCursor(t, inSchema, outSchema, srcRecs2, dstRecs3, exprOpt, querySchema)
+	})
+
+	// 4. idelta(value[5]) start=2,end=18,step=2
+	var dstRecs4 []*record.Record
+	dstRecs4 = append(dstRecs4,
+		genRec(inSchema,
+			[]int{1, 1, 1},
+			[]float64{2, 3, 4},
+			[]int64{4000000000, 6000000000, 10000000000}),
+	)
+	querySchema = executor.NewQuerySchema(nil, nil, opt3, nil)
+	t.Run("4", func(t *testing.T) {
+		testRangeVectorCursor(t, inSchema, outSchema, srcRecs4, dstRecs4, exprOpt, querySchema)
+	})
 }
 
 func TestMeanFunctions(t *testing.T) {

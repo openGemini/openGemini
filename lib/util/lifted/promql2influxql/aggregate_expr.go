@@ -11,7 +11,7 @@ import (
 type aggregateFn struct {
 	name string
 	// keep the metric calculated by the upper layer as the label.
-	noFill                 bool
+	KeepFill               bool
 	keepMetric             bool
 	expectIntegerParameter bool
 	functionType           FunctionType
@@ -24,11 +24,12 @@ var aggregateFns = map[parser.ItemType]aggregateFn{
 	parser.MAX:          {name: "max_prom", functionType: SELECTOR_FN},
 	parser.MIN:          {name: "min_prom", functionType: SELECTOR_FN},
 	parser.COUNT:        {name: "count_prom", functionType: AGGREGATE_FN},
-	parser.STDDEV:       {name: "stddev", functionType: AGGREGATE_FN},
+	parser.STDDEV:       {name: "stddev_prom", functionType: AGGREGATE_FN},
 	parser.TOPK:         {name: "top", functionType: SELECTOR_FN, expectIntegerParameter: true, keepMetric: true},
 	parser.BOTTOMK:      {name: "bottom", functionType: SELECTOR_FN, expectIntegerParameter: true, keepMetric: true},
 	parser.QUANTILE:     {name: "percentile", functionType: SELECTOR_FN}, // TODO add unit tests
 	parser.COUNT_VALUES: {name: "count_values_prom", functionType: AGGREGATE_FN},
+	parser.STDVAR:       {name: "stdvar_prom", functionType: AGGREGATE_FN},
 }
 
 // generateDimension is used to generate the dimensions of group by to Dimensions.
