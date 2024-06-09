@@ -20,12 +20,10 @@ import (
 
 func mockLogWriteRequest(mapping string) *LogWriteRequest {
 	req := &LogWriteRequest{
-		repository:       "test",
-		logStream:        "test",
-		printFailLog:     getPrintFailLog(),
-		maxUnixTimestamp: MaxUnixTimestampNs / 1e6,
-		minUnixTimestamp: MinUnixTimestampNs / 1e6,
-		timeMultiplier:   1e6,
+		repository:     "test",
+		logStream:      "test",
+		printFailLog:   getPrintFailLog(),
+		timeMultiplier: 1e6,
 	}
 	if len(mapping) > 0 {
 		req.mapping, _ = parseMapping(mapping)
@@ -221,6 +219,9 @@ func TestConvertToString(t *testing.T) {
 
 	res = convertToString(false)
 	assert.Equal(t, "false", res)
+
+	res = convertToString(true)
+	assert.Equal(t, "true", res)
 }
 
 func TestParsePPlQuery(t *testing.T) {
@@ -322,4 +323,81 @@ func TestInterface2str(t *testing.T) {
 
 	res := util.Str2bytes(failStr)
 	assert.Equal(t, []byte(failStr), res)
+}
+
+func TestParseTime(t *testing.T) {
+	// Test the wrong format
+	s := "2017-12-08 20:05:30"
+	_, err := time.Parse("yyyy-MM-dd HH:mm:ss", s)
+	assert.NotEqual(t, nil, err)
+
+	// Test parse null value
+	_, err = time.Parse("2006/01/02 15:04:05", "")
+	assert.NotEqual(t, nil, err)
+
+	// Test the normal format
+	s = "2017/12/08 20:05:30"
+	_, err = time.Parse("2006/01/02 15:04:05", s)
+	assert.Equal(t, nil, err)
+
+	// Test the redundant format
+	s = "2017/5/8T20:05:30Z+UTC0800"
+	_, err = time.Parse("2006/1/2T15:04:05Z+UTC0800", s)
+	assert.Equal(t, nil, err)
+}
+
+func TestGetTimeFormat(t *testing.T) {
+	// Test the normal time format
+	mapping := `{"time_format":"yyyy-MM-ddTHH:mm:ssZ","time_zone":"UTC+8"}`
+	jm := JsonMapping{}
+	p := parserPool.Get()
+	defer parserPool.Put(p)
+	v, err := p.Parse(mapping)
+	assert.Equal(t, nil, err)
+	err = getTimeFormat(v, &jm)
+	assert.Equal(t, nil, err)
+	assert.Equal(t, convertTimeFormat("yyyy-MM-ddTHH:mm:ssZ"), jm.timeFormat)
+	assert.Equal(t, int64(8), jm.timeZone)
+
+	mapping = `{"time_format":"yyyy-MM-ddTHH:mm:ssZ","time_zone":"UTC-6"}`
+	v, err = p.Parse(mapping)
+	assert.Equal(t, nil, err)
+	err = getTimeFormat(v, &jm)
+	assert.Equal(t, nil, err)
+	assert.Equal(t, convertTimeFormat("yyyy-MM-ddTHH:mm:ssZ"), jm.timeFormat)
+	assert.Equal(t, int64(-6), jm.timeZone)
+
+	// Test time format is null
+	mapping = `{}`
+	jm = JsonMapping{}
+	v, err = p.Parse(mapping)
+	assert.Equal(t, nil, err)
+	err = getTimeFormat(v, &jm)
+	assert.Equal(t, nil, err)
+	assert.Equal(t, 0, len(jm.timeFormat))
+
+	// Test the wrong time format
+	mapping = `{"time_format":123,"time_zone":"UTC+8"}`
+	v, err = p.Parse(mapping)
+	assert.Equal(t, nil, err)
+	err = getTimeFormat(v, &jm)
+	assert.Equal(t, errno.NewError(errno.InvalidMappingTimeFormatVal), err)
+
+	mapping = `{"time_format":"yyyy-MM-ddTHH:mm:ssZ"}`
+	v, err = p.Parse(mapping)
+	assert.Equal(t, nil, err)
+	err = getTimeFormat(v, &jm)
+	assert.Equal(t, errno.NewError(errno.InvalidMappingTimeZone), err)
+
+	mapping = `{"time_format":"yyyy-MM-ddTHH:mm:ssZ","time_zone":123}`
+	v, err = p.Parse(mapping)
+	assert.Equal(t, nil, err)
+	err = getTimeFormat(v, &jm)
+	assert.Equal(t, errno.NewError(errno.InvalidMappingTimeZoneVal), err)
+
+	mapping = `{"time_format":"yyyy-MM-ddTHH:mm:ssZ","time_zone":"UTC"}`
+	v, err = p.Parse(mapping)
+	assert.Equal(t, nil, err)
+	err = getTimeFormat(v, &jm)
+	assert.Equal(t, errno.NewError(errno.InvalidMappingTimeZoneVal), err)
 }

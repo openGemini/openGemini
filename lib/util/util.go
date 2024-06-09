@@ -35,6 +35,8 @@ const (
 	Cold      = 3
 	Moving    = 4
 	TierEnd   = 5
+	True      = "true"
+	False     = "false"
 )
 
 const (
@@ -472,6 +474,14 @@ func Str2bytes(s string) []byte {
 
 func Bytes2str(b []byte) string {
 	return *(*string)(unsafe.Pointer(&b))
+}
+
+func Bool2str(b bool) string {
+	if b {
+		return True
+	} else {
+		return False
+	}
 }
 
 func MemorySet(buf []byte) {

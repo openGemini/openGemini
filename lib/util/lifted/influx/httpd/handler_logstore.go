@@ -95,6 +95,7 @@ const (
 	DefaultMaxLogStoreAnalyzeResponseNum     = 100
 
 	MaxSplitCharLen int = 128
+	UTCPrefix       int = len("UTC")
 )
 
 type measurementInfo struct {
@@ -600,24 +601,25 @@ var (
 )
 
 type LogWriteRequest struct {
-	repository       string
-	logStream        string
-	failTag          string
-	retry            bool
-	timeMultiplier   int64
-	maxUnixTimestamp int64
-	minUnixTimestamp int64
-	expiredTime      int64
-	requestTime      int64
-	logTagString     *string
-	dataType         LogDataType
-	mapping          *JsonMapping
-	printFailLog     *PrintFailLog
-	logTags          map[string][]byte
-	mstSchema        map[string]int32
+	repository     string
+	logStream      string
+	failTag        string
+	retry          bool
+	timeMultiplier int64
+	expiredTime    int64
+	requestTime    int64
+	logTagString   *string
+	dataType       LogDataType
+	mapping        *JsonMapping
+	printFailLog   *PrintFailLog
+	logTags        map[string][]byte
+	mstSchema      map[string]int32
 }
 
 type JsonMapping struct {
+	isConvertTime bool
+	timeZone      int64
+	timeFormat    string
 	timestamp     string
 	discardFields map[string]bool
 }
@@ -674,6 +676,11 @@ func parseMapping(mapping string) (*JsonMapping, error) {
 	}
 	jsonMapping.timestamp = string(timeKeyByte)
 
+	err = getTimeFormat(v, jsonMapping)
+	if err != nil {
+		return nil, err
+	}
+
 	jsonMapping.discardFields = make(map[string]bool)
 	value := v.Get("discard_fields")
 	if value == nil {
@@ -695,6 +702,114 @@ func parseMapping(mapping string) (*JsonMapping, error) {
 	}
 
 	return jsonMapping, nil
+}
+
+func getTimeFormat(v *fastjson.Value, jsonMapping *JsonMapping) error {
+	timeFormat := v.Get("time_format")
+	if timeFormat == nil {
+		return nil
+	}
+	format, err := timeFormat.StringBytes()
+	if err != nil || len(format) == 0 {
+		return errno.NewError(errno.InvalidMappingTimeFormatVal)
+	}
+	jsonMapping.timeFormat = convertTimeFormat(string(format))
+	jsonMapping.isConvertTime = true
+
+	timeZone := v.Get("time_zone")
+	if timeZone == nil {
+		return errno.NewError(errno.InvalidMappingTimeZone)
+	}
+	zoneBy, err := timeZone.StringBytes()
+	if len(zoneBy) < UTCPrefix+1 || err != nil {
+		return errno.NewError(errno.InvalidMappingTimeZoneVal)
+	}
+	zoneStr := strings.TrimSpace(string(zoneBy[UTCPrefix:]))
+	utc, err := strconv.Atoi(zoneStr)
+	if err != nil {
+		return errno.NewError(errno.InvalidMappingTimeZoneVal)
+	}
+	jsonMapping.timeZone = int64(utc)
+
+	return nil
+}
+
+func convertTimeFormat(timeFormat string) string {
+	switch timeFormat {
+	case "yyyy-MM-dd HH:mm:ss":
+		return "2006-01-02 15:04:05"
+	case "yyyy-MM-dd HH:mm":
+		return "2006-01-02 15:04"
+	case "yyyy-MM-dd HH":
+		return "2006-01-02 15"
+	case "yy-MM-dd HH:mm:ss":
+		return "06-01-02 15:04:05"
+	case "yyyy-MM-ddTHH:mm:ssZ":
+		return "2006-01-02T15:04:05Z"
+	case "dd/MMM/yyyy:HH:mm:ss":
+		return "02/Jan/2006:15:04:05"
+	case "EEE MMM dd HH:mm:ss zzz yyyy":
+		return "Mon Jan 02 15:04:05 2006"
+	default:
+		return timeFormat
+	}
+}
+
+func getTimestamp(i interface{}, req *LogWriteRequest) (int64, error) {
+	var unixTimestamp int64
+	switch v := i.(type) {
+	case *fastjson.Value:
+		unixTimestamp = v.GetInt64(req.mapping.timestamp)
+		if req.mapping.isConvertTime {
+			timeByte := v.GetStringBytes(req.mapping.timestamp)
+			timeUtc, err := time.Parse(req.mapping.timeFormat, util.Bytes2str(timeByte))
+			if err != nil {
+				return 0, err
+			}
+			unixTimestamp = timeUtc.UnixNano() - req.mapping.timeZone*time.Hour.Nanoseconds()
+		} else {
+			unixTimestamp = unixTimestamp * req.timeMultiplier
+		}
+	case map[string]interface{}:
+		if req.mapping.isConvertTime {
+			timeStr, _ := v[req.mapping.timestamp].(string)
+			timeUtc, err := time.Parse(req.mapping.timeFormat, timeStr)
+			if err != nil {
+				return 0, errno.NewError(errno.ErrParseTimestamp)
+			}
+			unixTimestamp = timeUtc.UnixNano() - req.mapping.timeZone*time.Hour.Nanoseconds()
+		} else {
+			timeFloat, _ := v[req.mapping.timestamp].(float64)
+			unixTimestamp = int64(timeFloat) * req.timeMultiplier
+		}
+	default:
+		return 0, errno.NewError(errno.ErrParseTimestamp)
+	}
+
+	if unixTimestamp < MinUnixTimestampNs || unixTimestamp > MaxUnixTimestampNs {
+		return 0, errno.NewError(errno.ErrParseTimestamp)
+	}
+	if unixTimestamp < req.expiredTime {
+		req.failTag = ExpiredLogTag
+		return 0, errno.NewError(errno.ErrParseTimestamp)
+	}
+
+	return unixTimestamp, nil
+}
+
+func Interface2str(i interface{}) string {
+	switch v := i.(type) {
+	case map[string]interface{}:
+		str, err := sonic.MarshalString(i)
+		if err != nil {
+			break
+		}
+		return str
+	case []byte:
+		return util.Bytes2str(v)
+	}
+
+	return fmt.Sprintf("%s", i)
 }
 
 func parseLogTags(req *LogWriteRequest) (map[string][]byte, error) {
@@ -875,7 +990,7 @@ func appendRow(rows *record.Record, tags, content []byte, time int64) {
 	rows.ColVals[rows.ColNums()-1].AppendInteger(time)
 }
 
-func (h *Handler) appendFailRow(failRows *record.Record, req *LogWriteRequest, val interface{}) {
+func appendFailRow(failRows *record.Record, req *LogWriteRequest, val interface{}) {
 	var err error
 	content, ok := val.([]byte)
 	if !ok {
@@ -894,14 +1009,14 @@ func (h *Handler) appendFailRow(failRows *record.Record, req *LogWriteRequest, v
 	appendFailRowsLogTags(failRows, req)
 }
 
-func (h *Handler) appendBigLog(failRows *record.Record, req *LogWriteRequest, content []byte) {
+func appendBigLog(failRows *record.Record, req *LogWriteRequest, content []byte) {
 	segmentNum := 1
 	for i := 0; i < len(content); i += MaxContentLen {
 		req.failTag = fmt.Sprintf("%s_%d", BigLogTag, segmentNum)
 		if i+MaxContentLen > len(content) {
-			h.appendFailRow(failRows, req, content[i:])
+			appendFailRow(failRows, req, content[i:])
 		} else {
-			h.appendFailRow(failRows, req, content[i:i+MaxContentLen])
+			appendFailRow(failRows, req, content[i:i+MaxContentLen])
 		}
 		segmentNum++
 	}
@@ -956,8 +1071,6 @@ func (h *Handler) getLogWriteRequest(r *http.Request) (*LogWriteRequest, error) 
 	default:
 		return nil, errno.NewError(errno.InvalidPrecisionPara)
 	}
-	req.maxUnixTimestamp = MaxUnixTimestampNs / req.timeMultiplier
-	req.minUnixTimestamp = MinUnixTimestampNs / req.timeMultiplier
 
 	req.mapping = &JsonMapping{
 		timestamp:     "time",
@@ -1001,33 +1114,29 @@ func (h *Handler) parseJson(scanner *bufio.Scanner, req *LogWriteRequest, rows, 
 		b := scanner.Bytes()
 		totalLen += int64(len(b)) + NewlineLen
 		if len(b) > MaxContentLen {
-			h.appendBigLog(failRows, req, scanner.Bytes())
+			appendBigLog(failRows, req, scanner.Bytes())
 			continue
 		}
 		v, err := p.ParseBytes(b)
 		if err != nil {
 			h.printFailLog(ParseError, req, scanner.Bytes(), err)
-			h.appendFailRow(failRows, req, scanner.Bytes())
+			appendFailRow(failRows, req, scanner.Bytes())
 			continue
 		}
 
-		unixTimestamp := v.GetInt64(req.mapping.timestamp)
-		if unixTimestamp < req.minUnixTimestamp || unixTimestamp > req.maxUnixTimestamp {
-			h.printFailLog(TimestampError, req, scanner.Bytes(), nil)
-			h.appendFailRow(failRows, req, scanner.Bytes())
-			continue
-		}
-		unixTimestamp = unixTimestamp * req.timeMultiplier
-		if unixTimestamp < req.expiredTime {
-			req.failTag = ExpiredLogTag
-			h.appendFailRow(failRows, req, scanner.Bytes())
+		unixTimestamp, err := getTimestamp(v, req)
+		if err != nil {
+			if req.failTag != ExpiredLogTag {
+				h.printFailLog(TimestampError, req, scanner.Bytes(), nil)
+			}
+			appendFailRow(failRows, req, scanner.Bytes())
 			continue
 		}
 
 		pf.object, err = v.Object()
 		if err != nil {
 			h.printFailLog(ObjectError, req, scanner.Bytes(), err)
-			h.appendFailRow(failRows, req, scanner.Bytes())
+			appendFailRow(failRows, req, scanner.Bytes())
 			continue
 		}
 		pf.contentCnt = 0
@@ -1035,13 +1144,13 @@ func (h *Handler) parseJson(scanner *bufio.Scanner, req *LogWriteRequest, rows, 
 		if err != nil {
 			h.printFailLog(ContentFieldError, req, scanner.Bytes(), err)
 			clearFailRow(rows, pf.rowCnt+1)
-			h.appendFailRow(failRows, req, scanner.Bytes())
+			appendFailRow(failRows, req, scanner.Bytes())
 			continue
 		}
 
 		if pf.contentCnt == 0 {
 			h.printFailLog(NoContentError, req, scanner.Bytes(), err)
-			h.appendFailRow(failRows, req, scanner.Bytes())
+			appendFailRow(failRows, req, scanner.Bytes())
 			continue
 		}
 
@@ -1067,7 +1176,7 @@ func (h *Handler) parseJsonArray(body io.ReadCloser, req *LogWriteRequest, rows,
 	if err != nil {
 		h.Logger.Error("read all json fail", zap.Error(err), zap.String(Repository, req.repository),
 			zap.String(LogStream, req.logStream), zap.Any("read length", len(b)))
-		h.appendFailRow(failRows, req, b)
+		appendFailRow(failRows, req, b)
 		return totalLen
 	}
 
@@ -1075,28 +1184,17 @@ func (h *Handler) parseJsonArray(body io.ReadCloser, req *LogWriteRequest, rows,
 	if err != nil {
 		h.Logger.Error("sonic unmarshal json fail", zap.Error(err), zap.String(Repository, req.repository),
 			zap.String(LogStream, req.logStream), zap.Any("json length", len(b)))
-		h.appendFailRow(failRows, req, b)
+		appendFailRow(failRows, req, b)
 		return totalLen
 	}
 
 	for _, jsonMap := range jsonArray {
-		timeFloat, ok := jsonMap[req.mapping.timestamp].(float64)
-		if !ok {
-			h.printFailLog(TimestampError, req, jsonMap, nil)
-			h.appendFailRow(failRows, req, jsonMap)
-			continue
-		}
-		unixTimestamp := int64(timeFloat)
-
-		if unixTimestamp < req.minUnixTimestamp || unixTimestamp > req.maxUnixTimestamp {
-			h.printFailLog(TimestampError, req, jsonMap, nil)
-			h.appendFailRow(failRows, req, jsonMap)
-			continue
-		}
-		unixTimestamp = unixTimestamp * req.timeMultiplier
-		if unixTimestamp < req.expiredTime {
-			req.failTag = ExpiredLogTag
-			h.appendFailRow(failRows, req, jsonMap)
+		unixTimestamp, err := getTimestamp(jsonMap, req)
+		if err != nil {
+			if req.failTag != ExpiredLogTag {
+				h.printFailLog(TimestampError, req, jsonMap, nil)
+			}
+			appendFailRow(failRows, req, jsonMap)
 			continue
 		}
 
@@ -1105,13 +1203,13 @@ func (h *Handler) parseJsonArray(body io.ReadCloser, req *LogWriteRequest, rows,
 		if err != nil {
 			h.printFailLog(ContentFieldError, req, jsonMap, err)
 			clearFailRow(rows, pf.rowCnt+1)
-			h.appendFailRow(failRows, req, jsonMap)
+			appendFailRow(failRows, req, jsonMap)
 			continue
 		}
 
 		if pf.contentCnt == 0 {
 			h.printFailLog(NoContentError, req, jsonMap, err)
-			h.appendFailRow(failRows, req, jsonMap)
+			appendFailRow(failRows, req, jsonMap)
 			continue
 		}
 
@@ -1123,21 +1221,6 @@ func (h *Handler) parseJsonArray(body io.ReadCloser, req *LogWriteRequest, rows,
 	swapTimeColumnToEnd(rows, failRows)
 
 	return totalLen
-}
-
-func Interface2str(i interface{}) string {
-	switch v := i.(type) {
-	case map[string]interface{}:
-		str, err := sonic.MarshalString(i)
-		if err != nil {
-			break
-		}
-		return str
-	case []byte:
-		return util.Bytes2str(v)
-	}
-
-	return fmt.Sprintf("%s", i)
 }
 
 func (h *Handler) printFailLog(failLogType FailLogType, req *LogWriteRequest, line interface{}, err error) {

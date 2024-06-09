@@ -71,8 +71,8 @@ const (
 	InComplete     = "InComplete"
 	XContentLength = "X-Content-Length"
 	LogProxy       = "Log-Proxy"
-	Group          = "group"
-	Count          = "count"
+
+	Null = "null"
 )
 
 type QueryLogRequest struct {
@@ -599,20 +599,20 @@ func parseInnerJson(ob *fastjson.Object, words map[string]struct{}, finder *toke
 	return map[string]interface{}{"segments": jsonHighlight}
 }
 
-func convertToString(v interface{}) string {
-	switch v.(type) {
+func convertToString(i interface{}) string {
+	switch v := i.(type) {
 	case bool:
-		return fmt.Sprintf("%v", v.(bool))
+		return util.Bool2str(v)
 	case int:
-		return fmt.Sprintf("%v", v.(int))
+		return strconv.Itoa(v)
 	case int64:
-		return fmt.Sprintf("%v", v.(int64))
+		return strconv.Itoa(int(v))
 	case float64:
-		return fmt.Sprintf("%v", v.(float64))
+		return strconv.FormatFloat(v, 'f', -1, 64)
 	case string:
-		return v.(string)
+		return v
 	default:
-		return "null"
+		return Null
 	}
 }
 
