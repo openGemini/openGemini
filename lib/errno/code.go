@@ -350,20 +350,24 @@ const (
 	InvalidMappingTimeKey           = 5502
 	InvalidMappingTimeKeyType       = 5503
 	InvalidMappingTimeKeyVal        = 5504
-	InvalidMappingDiscardKeyType    = 5505
-	InvalidMappingDiscardKeySubType = 5506
-	InvalidMappingDiscardKeyVal     = 5507
-	InvalidRequestBodyLength        = 5508
-	InvalidLogTagsParmLength        = 5509
-	InvalidRetryPara                = 5510
-	InvalidPrecisionPara            = 5511
-	InvalidXLogCompressType         = 5512
-	ErrLogTagsJsonFormat            = 5513
-	ErrFieldDataType                = 5514
-	ErrTagFieldDataType             = 5515
-	ErrFieldDuplication             = 5516
-	ErrTagFieldDuplication          = 5517
-	ErrReservedFieldDuplication     = 5518
+	InvalidMappingTimeFormatVal     = 5505
+	InvalidMappingTimeZone          = 5506
+	InvalidMappingTimeZoneVal       = 5507
+	InvalidMappingDiscardKeyType    = 5508
+	InvalidMappingDiscardKeySubType = 5509
+	InvalidMappingDiscardKeyVal     = 5510
+	InvalidRequestBodyLength        = 5511
+	InvalidLogTagsParmLength        = 5512
+	InvalidRetryPara                = 5513
+	InvalidPrecisionPara            = 5514
+	InvalidXLogCompressType         = 5515
+	ErrLogTagsJsonFormat            = 5516
+	ErrFieldDataType                = 5517
+	ErrTagFieldDataType             = 5518
+	ErrFieldDuplication             = 5519
+	ErrTagFieldDuplication          = 5520
+	ErrReservedFieldDuplication     = 5521
+	ErrParseTimestamp               = 5522
 )
 
 // index

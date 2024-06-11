@@ -102,6 +102,9 @@ var messageMap = map[Errno]*Message{
 	InvalidMappingTimeKey:           newWarnMessage("mapping missing timestamp key", ModuleWriteInterface),
 	InvalidMappingTimeKeyType:       newWarnMessage("mapping timestamp key type should be string", ModuleWriteInterface),
 	InvalidMappingTimeKeyVal:        newWarnMessage("mapping timestamp key is empty", ModuleWriteInterface),
+	InvalidMappingTimeFormatVal:     newWarnMessage("mapping time format value is wrong", ModuleWriteInterface),
+	InvalidMappingTimeZone:          newWarnMessage("mapping missing time zone", ModuleWriteInterface),
+	InvalidMappingTimeZoneVal:       newWarnMessage("mapping time zone value is wrong", ModuleWriteInterface),
 	InvalidMappingDiscardKeyType:    newWarnMessage("mapping discard fields type should be string array", ModuleWriteInterface),
 	InvalidMappingDiscardKeySubType: newWarnMessage("mapping discard fields sub key type should be string", ModuleWriteInterface),
 	InvalidMappingDiscardKeyVal:     newWarnMessage("mapping discard fields should not discard timestamp field", ModuleWriteInterface),
@@ -116,6 +119,7 @@ var messageMap = map[Errno]*Message{
 	ErrFieldDuplication:             newWarnMessage("[%s] field duplication", ModuleWriteInterface),
 	ErrTagFieldDuplication:          newWarnMessage("[%s] tag field duplication", ModuleWriteInterface),
 	ErrReservedFieldDuplication:     newWarnMessage("[%s] and reserved field duplication", ModuleWriteInterface),
+	ErrParseTimestamp:               newWarnMessage("the timestamp format is incorrect", ModuleWriteInterface),
 
 	// network module error codes
 	NoConnectionAvailable: newFatalMessage("no connections available, node: %v, %v", ModuleNetwork),
