@@ -76,7 +76,7 @@ type VlmCacheReader struct {
 	span           *tracing.Span
 }
 
-func NewVlmCacheReader(reader *fileReader, path, fileName string, version uint32) *VlmCacheReader {
+func NewVlmCacheReader(reader BloomFilterReader, path, fileName string, version uint32) *VlmCacheReader {
 	pathName := obs.Join(path, fileName)
 	pathId := xxhash.Sum64String(pathName)
 	vlmReader := &VlmCacheReader{
@@ -174,12 +174,20 @@ type BloomFilterReader interface {
 	Close() error
 }
 
-func NewBloomfilterReader(obsOpts *obs.ObsOptions, path, fileName string, version uint32) (BloomFilterReader, error) {
+func NewBasicBloomfilterReader(obsOpts *obs.ObsOptions, path, fileName string) (BloomFilterReader, error) {
 	fd, err := fileops.OpenObsFile(path, fileName, obsOpts, true)
 	if err != nil {
 		return nil, err
 	}
 	dr := NewFileReader(fileops.NewFileReader(fd, nil))
+	return dr, nil
+}
+
+func NewBloomfilterReader(obsOpts *obs.ObsOptions, path, fileName string, version uint32) (BloomFilterReader, error) {
+	dr, err := NewBasicBloomfilterReader(obsOpts, path, fileName)
+	if err != nil {
+		return nil, err
+	}
 	if GetVlmCacheInitialized() {
 		return NewVlmCacheReader(dr, path, fileName, version), nil
 	}
