@@ -18,11 +18,15 @@ package raftlog
 
 import (
 	"bufio"
+	"encoding/binary"
 	"io"
 
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/cockroachdb/errors"
 	"github.com/openGemini/openGemini/lib/fileops"
 )
+
+const unit32Size = 4 // the byte size of unit32
 
 var NewFile = errors.New("Create a new file")
 
@@ -31,6 +35,9 @@ type FileWrapper interface {
 	Size() int
 	Write(dat []byte) (int, error)
 	WriteAt(offset int64, dat []byte) (int, error)
+	WriteSlice(offset int64, dat []byte) error
+	ReadSlice(offset int64) []byte
+	SliceSize(offset int) int
 	TrySync() error
 	Close() error
 }
@@ -107,15 +114,57 @@ func (fw *FileWrap) Write(dat []byte) (int, error) {
 func (fw *FileWrap) WriteAt(offset int64, dat []byte) (int, error) {
 	_, err := fw.fd.Seek(offset, 0)
 	if err != nil {
-		return 0, errors.Wrapf(err, "seek unreachable file:%s", fw.fd.Name())
+		return 0, errors.Wrapf(err, "seek unreachable file:%s", fw.Name())
 	}
 	n, err := fw.fd.Write(dat)
 	if err != nil {
-		return 0, errors.Wrapf(err, "write failed for file:%s", fw.fd.Name())
+		return 0, errors.Wrapf(err, "write failed for file:%s", fw.Name())
 	}
 	copy(fw.data[offset:], dat)
 	_, err = fw.fd.Seek(0, io.SeekEnd)
-	return n, errors.Wrapf(err, "seek unreachable file:%s", fw.fd.Name())
+	return n, errors.Wrapf(err, "seek unreachable file:%s", fw.Name())
+}
+
+func (fw *FileWrap) WriteSlice(offset int64, dat []byte) error {
+	_, err := fw.fd.Seek(offset, 0)
+	if err != nil {
+		return errors.Wrapf(err, "seek unreachable file:%s", fw.Name())
+	}
+	var buff = make([]byte, 0, unit32Size)
+	buff = encoding.MarshalUint32(buff, uint32(len(dat))) // size
+	_, err = fw.fd.Write(buff)
+	if err != nil {
+		return errors.Wrapf(err, "write failed for file:%s", fw.Name())
+	}
+	_, err = fw.fd.Write(dat) // data
+	if err != nil {
+		return errors.Wrapf(err, "write failed for file:%s", fw.Name())
+	}
+	_, err = fw.fd.Seek(0, io.SeekEnd)
+
+	if int(offset)+unit32Size+len(dat) >= len(fw.data) {
+		fw.data = append(fw.data, make([]byte, int(offset)-len(fw.data)+unit32Size+len(dat))...)
+	}
+	dst := fw.data[offset:]
+	binary.BigEndian.PutUint32(dst[:unit32Size], uint32(len(dat))) // size
+	copy(dst[unit32Size:], dat)                                    // data
+
+	return errors.Wrapf(err, "seek unreachable file:%s", fw.Name())
+}
+
+func (fw *FileWrap) ReadSlice(offset int64) []byte {
+	sz := encoding.UnmarshalUint32(fw.data[offset:])
+	start := offset + unit32Size
+	next := int(start) + int(sz)
+	if next > len(fw.data) {
+		return []byte{}
+	}
+	return fw.data[start:next]
+}
+
+func (fw *FileWrap) SliceSize(offset int) int {
+	sz := encoding.UnmarshalUint32(fw.data[offset:])
+	return unit32Size + int(sz)
 }
 
 func (fw *FileWrap) Close() error {
