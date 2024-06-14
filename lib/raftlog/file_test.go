@@ -148,3 +148,46 @@ func TestFileWrap_TrySync(t *testing.T) {
 		require.NoError(t, fw.TrySync())
 	})
 }
+
+func TestFileWrap_WriteSlice_ReadSlice(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Run("WriteSlice_SeekError", func(t *testing.T) {
+		ef := &FileWrap{fd: &badSeeker{}}
+		ef.data = make([]byte, 10)
+
+		err := ef.WriteSlice(0, []byte("hello"))
+		require.EqualError(t, err, "seek unreachable file:test file: mock seek error")
+	})
+
+	t.Run("WriteSlice_WriteError", func(t *testing.T) {
+		ef := &FileWrap{fd: &badWriter{}}
+		ef.data = make([]byte, 10)
+
+		err := ef.WriteSlice(0, []byte("hello"))
+		require.EqualError(t, err, "write failed for file:test file: mock write error")
+	})
+
+	t.Run("WriteSlice_ReadSlice_Success", func(t *testing.T) {
+		file, err := fileops.OpenFile(filepath.Join(tmpDir, "test"), os.O_CREATE|os.O_RDWR, 0640)
+		require.NoError(t, err)
+
+		fw := &FileWrap{fd: file, data: make([]byte, 0)}
+		defer fw.Close()
+		err = fw.WriteSlice(0, []byte("hello"))
+		require.NoError(t, err)
+		var buff = make([]byte, 9)
+		n, err := file.ReadAt(buff, 0)
+		require.NoError(t, err)
+		require.Equal(t, 9, n)
+		require.Contains(t, string(buff), "hello")
+		require.Equal(t, []byte{0, 0, 0, 5, 104, 101, 108, 108, 111}, fw.data[:9]) // size+"hello"
+
+		data := fw.ReadSlice(0)
+		require.Contains(t, string(buff), "hello")
+		require.Equal(t, []byte{104, 101, 108, 108, 111}, data) // "hello"
+		require.Equal(t, data, fw.data[4:9])                    // "hello"
+
+		size := fw.SliceSize(0)
+		require.Equal(t, 9, size) // 4 + len("hello")
+	})
+}
