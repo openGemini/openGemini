@@ -81,6 +81,14 @@ func TestFileWrap_OpenFile(t *testing.T) {
 	})
 }
 
+func TestGetEntryData(t *testing.T) {
+	fw := FileWrap{data: []byte("Hello, World!")}
+
+	if result := fw.GetEntryData(0, 5); string(result) != "Hello" {
+		t.Errorf("Expected 'Hello', got %s", result)
+	}
+}
+
 func TestFileWrap_Write_WriteAt(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Run("WriteAt_Success", func(t *testing.T) {
@@ -189,5 +197,67 @@ func TestFileWrap_WriteSlice_ReadSlice(t *testing.T) {
 
 		size := fw.SliceSize(0)
 		require.Equal(t, 9, size) // 4 + len("hello")
+	})
+}
+
+func TestTruncate(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Run("truncate a file", func(t *testing.T) {
+		file, err := fileops.OpenFile(filepath.Join(tmpDir, "test"), os.O_CREATE|os.O_RDWR, 0640)
+		require.NoError(t, err)
+
+		fw := &FileWrap{fd: file, data: make([]byte, 0)}
+		defer fw.Close()
+		err = fw.WriteSlice(0, []byte("Hello, world! GoodBye!!!"))
+		require.NoError(t, err)
+
+		err = fw.Truncate(5)
+		require.NoError(t, err)
+
+		fi, err := file.Stat()
+		require.NoError(t, err)
+
+		require.Equal(t, 5, int(fi.Size()))
+	})
+}
+
+type badCloser struct {
+	fileops.File
+}
+
+func (badCloser) Name() string {
+	return "mock file"
+}
+
+func (badCloser) Truncate(size int64) error {
+	return nil
+}
+
+func (badCloser) Close() error {
+	return fmt.Errorf("test close error")
+}
+
+func TestFileWrap_Delete(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Run("Delete a file successfully", func(t *testing.T) {
+		file, err := fileops.OpenFile(filepath.Join(tmpDir, "test"), os.O_CREATE|os.O_RDWR, 0640)
+		require.NoError(t, err)
+
+		fw := &FileWrap{fd: file}
+		defer fw.Close()
+		err = fw.Delete()
+		require.NoError(t, err)
+	})
+
+	t.Run("Delete an empty fd", func(t *testing.T) {
+		fw := &FileWrap{fd: nil}
+		err := fw.Delete()
+		require.NoError(t, err)
+	})
+
+	t.Run("Delete a file close failed", func(t *testing.T) {
+		fw := &FileWrap{fd: &badCloser{}}
+		err := fw.Delete()
+		require.EqualError(t, err, "while close file:mock file: test close error")
 	})
 }
