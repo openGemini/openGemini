@@ -87,6 +87,15 @@ var (
 	_ = RegistryMaterializeFunction("cast_string", &castStringFunc{
 		BaseInfo: BaseInfo{FuncType: MATH},
 	})
+	_ = RegistryMaterializeFunction("clamp_prom", &promClampFunc{
+		BaseInfo: BaseInfo{FuncType: MATH},
+	})
+	_ = RegistryMaterializeFunction("clamp_max_prom", &promClampMaxMinFunc{
+		BaseInfo: BaseInfo{FuncType: MATH},
+	})
+	_ = RegistryMaterializeFunction("clamp_min_prom", &promClampMaxMinFunc{
+		BaseInfo: BaseInfo{FuncType: MATH},
+	})
 )
 
 func GetMathFunction(name string) MaterializeFunc {
@@ -639,6 +648,95 @@ func (f *castStringFunc) CallFunc(name string, args []interface{}) (interface{},
 	default:
 		return nil, false
 	}
+}
+
+type promClampFunc struct {
+	BaseInfo
+}
+
+func (f *promClampFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
+	args, name := expr.Args, expr.Name
+	if exp, got := 3, len(expr.Args); exp != got {
+		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", name, exp, got)
+	}
+
+	err := checkNumberArg(args[1], expr.Name)
+	if err != nil {
+		return err
+	}
+
+	err = checkNumberArg(args[2], expr.Name)
+	if err != nil {
+		return err
+	}
+
+	return c.compileSymbol(expr.Name, expr.Args[0])
+}
+
+func (f *promClampFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
+	return influxql.Float, nil
+}
+
+func (f *promClampFunc) CallFunc(name string, args []interface{}) (interface{}, bool) {
+	if min, max, ok := asFloats(args[1], args[2]); ok {
+		if math.IsNaN(min) || math.IsNaN(max) {
+			return math.NaN(), true
+		}
+		if min > max {
+			return nil, true
+		}
+		if val, ok := asFloat(args[0]); ok {
+			return math.Max(min, math.Min(max, val)), true
+		}
+		return nil, true
+	}
+	return nil, true
+}
+
+type promClampMaxMinFunc struct {
+	BaseInfo
+}
+
+func (f *promClampMaxMinFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
+	args, name := expr.Args, expr.Name
+	if exp, got := 2, len(expr.Args); exp != got {
+		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", name, exp, got)
+	}
+
+	err := checkNumberArg(args[1], expr.Name)
+	if err != nil {
+		return err
+	}
+
+	return c.compileSymbol(expr.Name, expr.Args[0])
+}
+
+func (f *promClampMaxMinFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
+	return influxql.Float, nil
+}
+
+func (f *promClampMaxMinFunc) CallFunc(name string, args []interface{}) (interface{}, bool) {
+	if val, arg1, ok := asFloats(args[0], args[1]); ok {
+		if math.IsNaN(arg1) {
+			return math.NaN(), true
+		}
+		if name == "clamp_max_prom" {
+			return math.Min(val, arg1), true
+		} else if name == "clamp_min_prom" {
+			return math.Max(val, arg1), true
+		}
+	}
+	return nil, true
+}
+
+func checkNumberArg(arg influxql.Expr, callName string) error {
+	switch arg.(type) {
+	case *influxql.IntegerLiteral:
+	case *influxql.NumberLiteral:
+	default:
+		return fmt.Errorf("expected float argument in %s()", callName)
+	}
+	return nil
 }
 
 func commonCallType1(name string, args []influxql.DataType) (influxql.DataType, error) {

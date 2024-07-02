@@ -593,6 +593,33 @@ func NewStdDevReduce[T util.NumberOnly]() SliceReduce[T] {
 	}
 }
 
+func NewStdReduce(isStddev bool) SliceReduce[float64] {
+	return func(floatSliceItem *SliceItem[float64]) (int, int64, float64, bool) {
+		length := len(floatSliceItem.value)
+		if length == 1 {
+			return -1, int64(0), float64(0), false
+		}
+		if length == 0 {
+			return -1, int64(0), float64(0), true
+		}
+		var count, floatValue float64
+		floatMean := floatSliceItem.value[0]
+
+		for _, v := range floatSliceItem.value {
+			count++
+			delta := v - floatMean
+			floatMean += delta / count
+			floatValue += delta * (v - floatMean)
+		}
+
+		std := floatValue / count
+		if isStddev {
+			std = math.Sqrt(std)
+		}
+		return -1, floatSliceItem.time[0], std, false
+	}
+}
+
 func BooleanFirstReduce(c Chunk, values []bool, ordinal, start, end int) (int, bool, bool) {
 	column := c.Column(ordinal)
 	times := c.Time()

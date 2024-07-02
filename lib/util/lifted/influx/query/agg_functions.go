@@ -333,6 +333,30 @@ var (
 			mergeCall: true,
 		},
 	})
+	_ = RegistryAggregateFunction("delta_prom", &PromDeltaFunc{
+		BaseInfo: BaseInfo{FuncType: AGG_SPECIAL},
+		BaseAgg: BaseAgg{
+			mergeCall: true,
+		},
+	})
+	_ = RegistryAggregateFunction("idelta_prom", &PromIDeltaFunc{
+		BaseInfo: BaseInfo{FuncType: AGG_SPECIAL},
+		BaseAgg: BaseAgg{
+			mergeCall: true,
+		},
+	})
+	_ = RegistryAggregateFunction("stdvar_prom", &StddevFunc{
+		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
+		BaseAgg: BaseAgg{
+			mergeCall: true,
+		},
+	})
+	_ = RegistryAggregateFunction("stddev_prom", &StddevFunc{
+		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
+		BaseAgg: BaseAgg{
+			mergeCall: true,
+		},
+	})
 )
 
 func GetAggregateOperator(name string) AggregateFunc {
@@ -1021,6 +1045,25 @@ func (f *StddevFunc) CallTypeFunc(name string, args []influxql.DataType) (influx
 	return influxql.Float, nil
 }
 
+type StdvarFunc struct {
+	BaseInfo
+	BaseAgg
+}
+
+func (f *StdvarFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
+	args, name := expr.Args, expr.Name
+	if exp, got := 1, len(expr.Args); exp != got {
+		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", name, exp, got)
+	}
+	c.global.OnlySelectors = false
+	// Must be a variable reference, wildcard, or regexp.
+	return c.compileSymbol(name, args[0])
+}
+
+func (f *StdvarFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
+	return influxql.Float, nil
+}
+
 type SpreadFunc struct {
 	BaseInfo
 	BaseAgg
@@ -1308,4 +1351,42 @@ func (f *CountValuesFunc) CompileFunc(expr *influxql.Call, c *compiledField) err
 
 func (f *CountValuesFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
 	return influxql.Integer, nil
+}
+
+type PromDeltaFunc struct {
+	BaseInfo
+	BaseAgg
+}
+
+func (f *PromDeltaFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
+	args, name := expr.Args, expr.Name
+	if exp, got := 1, len(expr.Args); exp != got {
+		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", name, exp, got)
+	}
+	c.global.OnlySelectors = false
+	// Must be a variable reference, wildcard, or regexp.
+	return c.compileSymbol(name, args[0])
+}
+
+func (f *PromDeltaFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
+	return influxql.Float, nil
+}
+
+type PromIDeltaFunc struct {
+	BaseInfo
+	BaseAgg
+}
+
+func (f *PromIDeltaFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
+	args, name := expr.Args, expr.Name
+	if exp, got := 1, len(expr.Args); exp != got {
+		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", name, exp, got)
+	}
+	c.global.OnlySelectors = false
+	// Must be a variable reference, wildcard, or regexp.
+	return c.compileSymbol(name, args[0])
+}
+
+func (f *PromIDeltaFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
+	return influxql.Float, nil
 }

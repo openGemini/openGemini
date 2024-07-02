@@ -3670,14 +3670,21 @@ func TestStreamAggregateTransformHistogram(t *testing.T) {
 
 func buildDstRowDataTypeCountValues() hybridqp.RowDataType {
 	schema := hybridqp.NewRowDataTypeImpl(
-		influxql.VarRef{Val: "count_values_prom(\"age\")", Type: influxql.Float},
+		influxql.VarRef{Val: "count_values_prom(\"height\")", Type: influxql.Float},
 	)
 	return schema
 }
 
-func buildCountValuesInChunk() []executor.Chunk {
+func buildFloatRowDataType() hybridqp.RowDataType {
+	schema := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "height", Type: influxql.Float},
+	)
+	return schema
+}
+
+func buildFloatInChunk() []executor.Chunk {
 	inChunks := make([]executor.Chunk, 0, 2)
-	rowDataType := buildComRowDataType()
+	rowDataType := buildFloatRowDataType()
 
 	b := executor.NewChunkBuilder(rowDataType)
 
@@ -3737,13 +3744,13 @@ func buildDstChunkCountValues() []executor.Chunk {
 }
 
 func TestStreamAggregateTransformCountValues(t *testing.T) {
-	inChunks := buildCountValuesInChunk()
+	inChunks := buildFloatInChunk()
 	dstChunks := buildDstChunkCountValues()
 	var _ = hybridqp.MustParseExpr("value")
 	exprOpt := []hybridqp.ExprOptions{
 		{
-			Expr: &influxql.Call{Name: "count_values_prom", Args: []influxql.Expr{hybridqp.MustParseExpr("age"), &influxql.StringLiteral{Val: "value"}}},
-			Ref:  influxql.VarRef{Val: `count_values_prom("age")`, Type: influxql.Float},
+			Expr: &influxql.Call{Name: "count_values_prom", Args: []influxql.Expr{hybridqp.MustParseExpr("height"), &influxql.StringLiteral{Val: "value"}}},
+			Ref:  influxql.VarRef{Val: `count_values_prom("height")`, Type: influxql.Float},
 		},
 	}
 
@@ -3756,7 +3763,119 @@ func TestStreamAggregateTransformCountValues(t *testing.T) {
 	testStreamAggregateTransformBase(
 		t,
 		inChunks, dstChunks,
-		buildComRowDataType(), buildDstRowDataTypeCountValues(),
+		buildFloatRowDataType(), buildDstRowDataTypeCountValues(),
+		exprOpt, &opt, false,
+	)
+}
+
+func buildDstRowDataTypePromStddev() hybridqp.RowDataType {
+	schema := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "stddev_prom(\"height\")", Type: influxql.Float},
+	)
+	return schema
+}
+
+func buildDstChunkPromStddev() []executor.Chunk {
+	rowDataType := buildDstRowDataTypePromStddev()
+	dstChunks := make([]executor.Chunk, 0, 1)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	chunk := b.NewChunk("mst")
+
+	chunk.AppendTagsAndIndexes(
+		[]executor.ChunkTags{
+			*ParseChunkTags("country=american"),
+			*ParseChunkTags("country=china"),
+			*ParseChunkTags("country=japan")},
+		[]int{0, 2, 5})
+	chunk.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5})
+	chunk.AppendTimes([]int64{0, 1, 3, 5, 7, 0})
+
+	chunk.Column(0).AppendFloatValues([]float64{0, 24.649999999999995, 0, 0.5656854249492389, 0, 0})
+	chunk.Column(0).AppendManyNotNil(6)
+
+	dstChunks = append(dstChunks, chunk)
+	return dstChunks
+}
+
+func TestStreamAggregateTransformPromStddev(t *testing.T) {
+	inChunks := buildFloatInChunk()
+	dstChunks := buildDstChunkPromStddev()
+	var _ = hybridqp.MustParseExpr("value")
+	exprOpt := []hybridqp.ExprOptions{
+		{
+			Expr: &influxql.Call{Name: "stddev_prom", Args: []influxql.Expr{hybridqp.MustParseExpr("height")}},
+			Ref:  influxql.VarRef{Val: `stddev_prom("height")`, Type: influxql.Float},
+		},
+	}
+
+	opt := query.ProcessorOptions{
+		Dimensions: []string{"country"},
+		Interval:   hybridqp.Interval{Duration: 20 * time.Nanosecond},
+		ChunkSize:  6,
+	}
+
+	testStreamAggregateTransformBase(
+		t,
+		inChunks, dstChunks,
+		buildFloatRowDataType(), buildDstRowDataTypePromStddev(),
+		exprOpt, &opt, false,
+	)
+}
+
+func buildDstRowDataTypePromStdvar() hybridqp.RowDataType {
+	schema := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "stdvar_prom(\"height\")", Type: influxql.Float},
+	)
+	return schema
+}
+
+func buildDstChunkPromStdvar() []executor.Chunk {
+	rowDataType := buildDstRowDataTypePromStdvar()
+	dstChunks := make([]executor.Chunk, 0, 1)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	chunk := b.NewChunk("mst")
+
+	chunk.AppendTagsAndIndexes(
+		[]executor.ChunkTags{
+			*ParseChunkTags("country=american"),
+			*ParseChunkTags("country=china"),
+			*ParseChunkTags("country=japan")},
+		[]int{0, 2, 5})
+	chunk.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5})
+	chunk.AppendTimes([]int64{0, 1, 3, 5, 7, 0})
+
+	chunk.Column(0).AppendFloatValues([]float64{0, 607.6224999999997, 0, 0.320000000000001, 0, 0})
+	chunk.Column(0).AppendManyNotNil(6)
+
+	dstChunks = append(dstChunks, chunk)
+	return dstChunks
+}
+
+func TestStreamAggregateTransformPromStdvar(t *testing.T) {
+	inChunks := buildFloatInChunk()
+	dstChunks := buildDstChunkPromStdvar()
+	var _ = hybridqp.MustParseExpr("value")
+	exprOpt := []hybridqp.ExprOptions{
+		{
+			Expr: &influxql.Call{Name: "stdvar_prom", Args: []influxql.Expr{hybridqp.MustParseExpr("height")}},
+			Ref:  influxql.VarRef{Val: `stdvar_prom("height")`, Type: influxql.Float},
+		},
+	}
+
+	opt := query.ProcessorOptions{
+		Dimensions: []string{"country"},
+		Interval:   hybridqp.Interval{Duration: 20 * time.Nanosecond},
+		ChunkSize:  6,
+	}
+
+	testStreamAggregateTransformBase(
+		t,
+		inChunks, dstChunks,
+		buildFloatRowDataType(), buildDstRowDataTypePromStdvar(),
 		exprOpt, &opt, false,
 	)
 }

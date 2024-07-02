@@ -58,6 +58,14 @@ var rangeVectorFunctions = map[string]aggregateFn{
 		name:         "increase",
 		functionType: TRANSFORM_FN,
 	},
+	"delta": {
+		name:         "delta_prom",
+		functionType: TRANSFORM_FN,
+	},
+	"idelta": {
+		name:         "idelta_prom",
+		functionType: TRANSFORM_FN,
+	},
 }
 
 var instantVectorFunctions = map[string]aggregateFn{
@@ -72,62 +80,92 @@ var vectorMathFunctions = map[string]aggregateFn{
 	"abs": {
 		name:         "abs",
 		functionType: TRANSFORM_FN,
+		KeepFill:     true,
 	},
 	"ceil": {
 		name:         "ceil",
 		functionType: TRANSFORM_FN,
+		KeepFill:     true,
 	},
 	"floor": {
 		name:         "floor",
 		functionType: TRANSFORM_FN,
+		KeepFill:     true,
 	},
 	"exp": {
 		name:         "exp",
 		functionType: TRANSFORM_FN,
+		KeepFill:     true,
 	},
 	"sqrt": {
 		name:         "sqrt",
 		functionType: TRANSFORM_FN,
+		KeepFill:     true,
 	},
 	"ln": {
 		name:         "log",
 		functionType: TRANSFORM_FN,
+		KeepFill:     true,
 	},
 	"log2": {
 		name:         "log2",
 		functionType: TRANSFORM_FN,
+		KeepFill:     true,
 	},
 	"log10": {
 		name:         "log10",
 		functionType: TRANSFORM_FN,
+		KeepFill:     true,
 	},
 	"round": {
 		name:         "round",
 		functionType: TRANSFORM_FN,
+		KeepFill:     true,
 	},
 	"acos": {
 		name:         "acos",
 		functionType: TRANSFORM_FN,
+		KeepFill:     true,
 	},
 	"asin": {
 		name:         "asin",
 		functionType: TRANSFORM_FN,
+		KeepFill:     true,
 	},
 	"atan": {
 		name:         "atan",
 		functionType: TRANSFORM_FN,
+		KeepFill:     true,
 	},
 	"cos": {
 		name:         "cos",
 		functionType: TRANSFORM_FN,
+		KeepFill:     true,
 	},
 	"sin": {
 		name:         "sin",
 		functionType: TRANSFORM_FN,
+		KeepFill:     true,
 	},
 	"tan": {
 		name:         "tan",
 		functionType: TRANSFORM_FN,
+		KeepFill:     true,
+	},
+	"clamp": {
+		name:         "clamp_prom",
+		functionType: TRANSFORM_FN,
+		KeepFill:     true,
+	},
+	"clamp_max": {
+		name:         "clamp_max_prom",
+		functionType: TRANSFORM_FN,
+		KeepFill:     true,
+	},
+	"clamp_min": {
+		name:         "clamp_min_prom",
+		functionType: TRANSFORM_FN,
+		KeepFill:     true,
 	},
 }
 
@@ -135,12 +173,12 @@ var vectorLabelFunctions = map[string]aggregateFn{
 	"label_replace": {
 		name:         "label_replace",
 		functionType: TRANSFORM_FN,
-		noFill:       true,
+		KeepFill:     true,
 	},
 	"label_join": {
 		name:         "label_join",
 		functionType: TRANSFORM_FN,
-		noFill:       true,
+		KeepFill:     true,
 	},
 }
 
@@ -148,47 +186,47 @@ var vectorTimeFunctions = map[string]aggregateFn{
 	"year": {
 		name:         "year_prom",
 		functionType: TRANSFORM_FN,
-		noFill:       true,
+		KeepFill:     true,
 	},
 	"time": {
 		name:         "time_prom",
 		functionType: TRANSFORM_FN,
-		noFill:       true,
+		KeepFill:     true,
 	},
 	"month": {
 		name:         "month_prom",
 		functionType: TRANSFORM_FN,
-		noFill:       true,
+		KeepFill:     true,
 	},
 	"minute": {
 		name:         "minute_prom",
 		functionType: TRANSFORM_FN,
-		noFill:       true,
+		KeepFill:     true,
 	},
 	"hour": {
 		name:         "hour_prom",
 		functionType: TRANSFORM_FN,
-		noFill:       true,
+		KeepFill:     true,
 	},
 	"day_of_week": {
 		name:         "day_of_week_prom",
 		functionType: TRANSFORM_FN,
-		noFill:       true,
+		KeepFill:     true,
 	},
 	"day_of_month": {
 		name:         "day_of_month_prom",
 		functionType: TRANSFORM_FN,
-		noFill:       true,
+		KeepFill:     true,
 	},
 	"days_in_month": {
 		name:         "days_in_month_prom",
 		functionType: TRANSFORM_FN,
-		noFill:       true,
+		KeepFill:     true,
 	},
 	"vector": {
 		name:         "vector_prom",
 		functionType: TRANSFORM_FN,
-		noFill:       true,
+		KeepFill:     true,
 	},
 }
 
@@ -247,14 +285,14 @@ func (t *Transpiler) transpilePromFunc(aggFn aggregateFn, inArgs []influxql.Node
 				Alias: DefaultFieldKey,
 			}
 			setFieldsFunc(selectStatement, wrappedField, parameter, aggFn)
-			if t.Step > 0 && !aggFn.noFill {
+			if t.Step > 0 && !aggFn.KeepFill {
 				t.setTimeInterval(selectStatement)
 				selectStatement.Fill = influxql.NoFill
 			}
 			return selectStatement, nil
 		default:
 			setFieldsFunc(statement, field, parameter, aggFn)
-			if t.Step > 0 && !aggFn.noFill {
+			if t.Step > 0 && !aggFn.KeepFill {
 				t.setTimeInterval(statement)
 				statement.Fill = influxql.NoFill
 			}

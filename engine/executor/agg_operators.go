@@ -32,6 +32,8 @@ func init() {
 	RegistryAggOp("count_prom", &FloatCountPromOp{})
 	RegistryAggOp("histogram_quantile", &HistogramQuantileOp{})
 	RegistryAggOp("count_values_prom", &CountValuesOp{})
+	RegistryAggOp("stdvar_prom", &PromStdOp{})
+	RegistryAggOp("stddev_prom", &PromStdOp{isStddev: true})
 }
 
 type MinOp struct{}
@@ -195,8 +197,6 @@ func (c *HistogramQuantileOp) CreateRoutine(params *AggCallFuncParams) (Routine,
 	}
 }
 
-type CountValuesReduce func()
-
 type CountValuesOp struct{}
 
 func (c *CountValuesOp) CreateRoutine(params *AggCallFuncParams) (Routine, error) {
@@ -218,4 +218,33 @@ func (c *CountValuesOp) CreateRoutine(params *AggCallFuncParams) (Routine, error
 			inOrdinal, outOrdinal), nil
 	}
 	return nil, errno.NewError(errno.UnsupportedDataType, "count_values", dataType.String())
+}
+
+type PromStdOp struct {
+	isStddev bool
+}
+
+func (c *PromStdOp) CreateRoutine(params *AggCallFuncParams) (Routine, error) {
+	inRowDataType, outRowDataType, opt, isSingleCall := params.InRowDataType, params.OutRowDataType, params.ExprOpt, params.IsSingleCall
+	inOrdinal := inRowDataType.FieldIndex(opt.Expr.(*influxql.Call).Args[0].(*influxql.VarRef).Val)
+	outOrdinal := outRowDataType.FieldIndex(opt.Ref.Val)
+	var funcName string
+	if c.isStddev {
+		funcName = "stddev_prom"
+	} else {
+		funcName = "stdvar_prom"
+	}
+
+	if inOrdinal < 0 || outOrdinal < 0 {
+		panic(fmt.Sprintf("input and output schemas are not aligned for %s iterator", funcName))
+	}
+	dataType := inRowDataType.Field(inOrdinal).Expr.(*influxql.VarRef).Type
+	switch dataType {
+	case influxql.Float:
+		return NewRoutineImpl(NewFloatColFloatSliceIterator(NewStdReduce(c.isStddev),
+			isSingleCall, inOrdinal, outOrdinal, nil, outRowDataType),
+			inOrdinal, outOrdinal), nil
+	default:
+		return nil, errno.NewError(errno.UnsupportedDataType, funcName, dataType.String())
+	}
 }
