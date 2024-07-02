@@ -33,12 +33,15 @@ var NewFile = errors.New("Create a new file")
 type FileWrapper interface {
 	Name() string
 	Size() int
+	GetEntryData(start, end int) []byte
 	Write(dat []byte) (int, error)
 	WriteAt(offset int64, dat []byte) (int, error)
 	WriteSlice(offset int64, dat []byte) error
 	ReadSlice(offset int64) []byte
 	SliceSize(offset int) int
+	Truncate(size int64) error
 	TrySync() error
+	Delete() error
 	Close() error
 }
 
@@ -100,6 +103,11 @@ func (fw *FileWrap) Name() string {
 
 func (fw *FileWrap) Size() int {
 	return len(fw.data)
+}
+
+// GetEntryData returns entry data
+func (fw *FileWrap) GetEntryData(start, end int) []byte {
+	return fw.data[start:end]
 }
 
 func (fw *FileWrap) Write(dat []byte) (int, error) {
@@ -165,6 +173,24 @@ func (fw *FileWrap) ReadSlice(offset int64) []byte {
 func (fw *FileWrap) SliceSize(offset int) int {
 	sz := encoding.UnmarshalUint32(fw.data[offset:])
 	return unit32Size + int(sz)
+}
+
+func (fw *FileWrap) Truncate(size int64) error {
+	return fw.fd.Truncate(size)
+}
+
+func (fw *FileWrap) Delete() error {
+	// Badger can set the m.Data directly, without setting any Fd. In that case, this should be a
+	// NOOP.
+	if fw.fd == nil {
+		return nil
+	}
+
+	fw.data = nil
+	if err := fw.fd.Close(); err != nil {
+		return errors.Wrapf(err, "while close file:%s", fw.Name())
+	}
+	return fileops.Remove(fw.fd.Name())
 }
 
 func (fw *FileWrap) Close() error {
