@@ -137,7 +137,7 @@ func buildLogLine(l *responseLogger, r *http.Request, start time.Time) string {
 
 	userAgent := r.UserAgent()
 
-	return fmt.Sprintf(`%s - %s [%s] "%s %s %s" %s %s "%s" "%s" %s %d`,
+	return fmt.Sprintf(`%s - %s [%s] "%s %s %s" %s %s "%s" "%s" %s %d %d`,
 		host,
 		detect(username, "-"),
 		start.Format("02/Jan/2006:15:04:05 -0700"),
@@ -151,7 +151,8 @@ func buildLogLine(l *responseLogger, r *http.Request, start time.Time) string {
 		r.Header.Get("Request-Id"),
 		// response time, report in microseconds because this is consistent
 		// with apache's %D parameter in mod_log_config
-		int64(time.Since(start)/time.Microsecond))
+		int64(time.Since(start)/time.Microsecond),
+		r.ContentLength)
 }
 
 // detect detects the first presence of a non blank string and returns it

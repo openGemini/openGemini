@@ -69,5 +69,5 @@ func DecompressSafe(source, dest []byte) (int, error) {
 	if size <= 0 {
 		return size, errors.New("lz4: invalid source or destination buffer too short")
 	}
-	return 0, nil
+	return size, nil
 }
