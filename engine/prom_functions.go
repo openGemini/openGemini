@@ -38,6 +38,8 @@ func init() {
 	RegistryPromFunction("increase", &increaseOp{})
 	RegistryPromFunction("deriv", &derivOp{})
 	RegistryPromFunction("predict_linear", &PredictLinearOp{})
+	RegistryPromFunction("delta_prom", &deltaOp{})
+	RegistryPromFunction("idelta_prom", &ideltaOp{})
 }
 
 type PromFunction interface {
@@ -74,7 +76,7 @@ func (o *rateOp) CreateRoutine(p *PromFuncParam) (Routine, error) {
 type irateOp struct{}
 
 func (o *irateOp) CreateRoutine(p *PromFuncParam) (Routine, error) {
-	return NewRoutineImpl(newFloatRateReducer(floatIRateReduce, floatIRateMerge, floatIRateUpdate), p.inOrdinal, p.outOrdinal), nil
+	return NewRoutineImpl(newFloatRateReducer(floatIRateReduce, floatIRateMerge(true), floatIRateUpdate), p.inOrdinal, p.outOrdinal), nil
 }
 
 type avgOp struct{}
@@ -138,6 +140,18 @@ func (o *PredictLinearOp) CreateRoutine(p *PromFuncParam) (Routine, error) {
 		return nil, errno.NewError(errno.UnsupportedDataType, "argument of predict_linear", arg.String())
 	}
 	return NewRoutineImpl(newFloatSliceReducer(floatPromDerivReduce, linearMergeFunc(false, scalar)), p.inOrdinal, p.outOrdinal), nil
+}
+
+type deltaOp struct{}
+
+func (o *deltaOp) CreateRoutine(p *PromFuncParam) (Routine, error) {
+	return NewRoutineImpl(newFloatSliceReducer(floatPromRateReduce, floatPromRateMerge(false, false)), p.inOrdinal, p.outOrdinal), nil
+}
+
+type ideltaOp struct{}
+
+func (o *ideltaOp) CreateRoutine(p *PromFuncParam) (Routine, error) {
+	return NewRoutineImpl(newFloatRateReducer(floatIRateReduce, floatIRateMerge(false), floatIRateUpdate), p.inOrdinal, p.outOrdinal), nil
 }
 
 func newPromFuncProcessor(inSchema, outSchema record.Schemas, exprOpt []hybridqp.ExprOptions) (CoProcessor, error) {
@@ -399,28 +413,34 @@ func floatIRateReduce(times []int64, values []float64, start, end int) (int64, i
 	return times[end-2], times[end-1], values[end-2], values[end-1], false
 }
 
-func floatIRateMerge(prevTime int64, lastTime int64, prevValue float64, lastValue float64,
-	ts int64, pointCount int, param *ReducerParams) (float64, bool) {
-	if lastTime == prevTime || param.rangeDuration == 0 || pointCount < 2 {
-		return 0, true
+func floatIRateMerge(isRate bool) FloatRateMergeFunc {
+	return func(prevTime int64, lastTime int64, prevValue float64, lastValue float64,
+		ts int64, pointCount int, param *ReducerParams) (float64, bool) {
+		if lastTime == prevTime || param.rangeDuration == 0 || pointCount < 2 {
+			return 0, true
+		}
+
+		var resultValue float64
+		if lastValue < prevValue {
+			resultValue = lastValue
+		} else {
+			resultValue = lastValue - prevValue
+		}
+
+		sampledInterval := lastTime - prevTime
+		if sampledInterval == 0 {
+			// Avoid dividing by 0.
+			return 0, true
+		}
+
+		if isRate {
+			// Convert to per-second.
+			resultValue /= float64(sampledInterval) / 1e9
+		}
+
+		return resultValue, false
 	}
 
-	var resultValue float64
-	if lastValue < prevValue {
-		resultValue = lastValue
-	} else {
-		resultValue = lastValue - prevValue
-	}
-
-	sampledInterval := lastTime - prevTime
-	if sampledInterval == 0 {
-		// Avoid dividing by 0.
-		return 0, true
-	}
-
-	// Convert to per-second.
-	resultValue /= float64(sampledInterval) / 1e9
-	return resultValue, false
 }
 
 func floatIRateUpdate(ft1, ft2, lt1, lt2 int64, fv1, fv2, lv1, lv2 float64) (int64, int64, float64, float64) {

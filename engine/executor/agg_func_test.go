@@ -541,3 +541,21 @@ func TestBooleanLastTimeColReduce(t *testing.T) {
 		t.Fatal("not expect, idx ", idx, ", v ", v, ", exist", isNil)
 	}
 }
+
+func TestFloatStdReduce(t *testing.T) {
+	sliceItem := &SliceItem[float64]{
+		value: []float64{1, 2, 3, 4, 5},
+		time:  []int64{1, 2, 3, 4, 5},
+	}
+	fn := NewStdReduce(true)
+	_, time, val, _ := fn(sliceItem)
+	if time != 1 || val != 1.4142135623730951 {
+		t.Fatal("not expect, value ", val, "time", time)
+	}
+
+	fn = NewStdReduce(false)
+	_, time, val, _ = fn(sliceItem)
+	if time != 1 || val != 2 {
+		t.Fatal("not expect, value ", val, "time", time)
+	}
+}
