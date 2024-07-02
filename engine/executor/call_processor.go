@@ -804,12 +804,12 @@ func NewIntegralRoutineImpl(inRowDataType, outRowDataType hybridqp.RowDataType, 
 	dataType := inRowDataType.Field(inOrdinal).Expr.(*influxql.VarRef).Type
 	switch dataType {
 	case influxql.Float:
-		return NewRoutineImpl(NewFloatColFloatIntegralIterator(
-			isSingleCall, inOrdinal, outOrdinal, outRowDataType, interval, opts),
+		return NewRoutineImpl(NewFloatIntegralIterator(
+			isSingleCall, inOrdinal, outOrdinal, interval, opts),
 			inOrdinal, outOrdinal), nil
 	case influxql.Integer:
-		return NewRoutineImpl(NewIntegerColFloatIntegralIterator(
-			isSingleCall, inOrdinal, outOrdinal, outRowDataType, interval, opts),
+		return NewRoutineImpl(NewIntegerIntegralIterator(
+			isSingleCall, inOrdinal, outOrdinal, interval, opts),
 			inOrdinal, outOrdinal), nil
 	default:
 		return nil, errno.NewError(errno.UnsupportedDataType, "integral", dataType.String())
