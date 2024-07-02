@@ -17,8 +17,6 @@ package bloomfilter
 
 import (
 	"encoding/binary"
-
-	"github.com/openGemini/openGemini/lib/logstore"
 )
 
 var tableLow = make([]uint64, 256)
@@ -205,7 +203,7 @@ func NewOneHitBloomFilter(bytes []byte, version uint32) Bloomfilter {
 	}
 }
 
-func DefaultOneHitBloomFilter(version uint32) Bloomfilter {
-	bytes := make([]byte, logstore.GetConstant(version).FilterDataMemSize)
+func DefaultOneHitBloomFilter(version uint32, bloomfiterSize int64) Bloomfilter {
+	bytes := make([]byte, bloomfiterSize)
 	return NewOneHitBloomFilter(bytes, version)
 }

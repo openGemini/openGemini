@@ -36,6 +36,7 @@ import (
 	"github.com/openGemini/openGemini/lib/obs"
 	internal "github.com/openGemini/openGemini/lib/util/lifted/influx/influxql/internal"
 	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
 // DataType represents the primitive data types available in InfluxQL.
@@ -92,6 +93,8 @@ const (
 
 	HASH  = "hash"
 	RANGE = "range"
+
+	SeqIDField = "__seq_id___"
 )
 
 var (
@@ -1914,6 +1917,15 @@ func checkField(expr Expr, fks map[string]DataType, tks map[string]struct{}) err
 	return nil
 }
 
+func (s *SelectStatement) RewriteSeqIdForLogStore(fields map[string]DataType) {
+	if config.IsLogKeeper() {
+		_, ok := fields[SeqIDField]
+		if !ok {
+			fields[SeqIDField] = influx.Field_Type_Int
+		}
+	}
+}
+
 // RewriteFields returns the re-written form of the select statement. Any wildcard query
 // fields are replaced with the supplied fields, and any wildcard GROUP BY fields are replaced
 // with the supplied dimensions. Any fields with no type specifier are rewritten with the
@@ -2176,6 +2188,7 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin boo
 		return nil, err
 	}
 	s.GetUnnestSchema(fieldSet)
+	s.RewriteSeqIdForLogStore(fieldSet)
 
 	// If there are no dimension wildcards then merge dimensions to fields.
 	if !hasDimensionWildcard {

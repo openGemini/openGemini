@@ -170,7 +170,7 @@ func NewVerticalFilterReader(path string, obsOpts *obs.ObsOptions, expr influxql
 	v := &VerticalFilterReader{
 		r:           dr,
 		groupIndex:  -1,
-		bloomFilter: bloomfilter.DefaultOneHitBloomFilter(version),
+		bloomFilter: bloomfilter.DefaultOneHitBloomFilter(version, logstore.GetConstant(version).FilterDataMemSize),
 	}
 	v.version = version
 	verticalFilterLen, err := dr.Size()

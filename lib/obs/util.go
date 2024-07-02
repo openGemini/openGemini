@@ -16,12 +16,14 @@ limitations under the License.
 package obs
 
 import (
+	"fmt"
 	"path"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/influxdata/influxdb/services/meta"
+	"github.com/openGemini/openGemini/lib/errno"
 )
 
 var PrefixDataPath string
@@ -69,4 +71,51 @@ func Join(elem ...string) string {
 		}
 	}
 	return ""
+}
+
+type LogPathInfo struct {
+	RepoName  string
+	LogStream string
+	PtId      uint32
+	ShardId   uint64
+	StartTime int64
+	EndTime   int64
+}
+
+func (info *LogPathInfo) Contains(t int64) bool {
+	return (t >= info.StartTime) && (t < info.EndTime)
+}
+
+// logPath format: "data/dbName/ptID/rpName/shardId_startTime_endTime_indexId/columnstore"
+func ParseLogPath(logPath string) (*LogPathInfo, error) {
+	logPathSplit := strings.Split(logPath, pathSeparator)
+	// according to the format of logpath, it needs to be divided into at least 6 parts
+	if len(logPathSplit) < 6 {
+		return nil, fmt.Errorf("not a standard logstream path: %s", logPath)
+	}
+
+	logInfo := &LogPathInfo{}
+	logInfo.RepoName = logPathSplit[1]
+	ptId, err := strconv.ParseUint(logPathSplit[2], 10, 64)
+	if err != nil {
+		return nil, errno.NewError(errno.InvalidDataDir)
+	}
+	logInfo.PtId = uint32(ptId)
+	logInfo.LogStream = logPathSplit[3]
+
+	shardPathSplit := strings.Split(logPathSplit[4], shardSeparator)
+	logInfo.ShardId, err = strconv.ParseUint(shardPathSplit[0], 10, 64)
+	if err != nil {
+		return nil, errno.NewError(errno.InvalidDataDir)
+	}
+	logInfo.StartTime, err = strconv.ParseInt(shardPathSplit[1], 10, 64)
+	if err != nil {
+		return nil, errno.NewError(errno.InvalidDataDir)
+	}
+	logInfo.EndTime, err = strconv.ParseInt(shardPathSplit[2], 10, 64)
+	if err != nil {
+		return nil, errno.NewError(errno.InvalidDataDir)
+	}
+
+	return logInfo, nil
 }
