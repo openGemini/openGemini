@@ -17,6 +17,7 @@ package obs
 
 import (
 	"testing"
+	"time"
 )
 
 func TestObsOptionsClone(t *testing.T) {
@@ -40,5 +41,45 @@ func TestObsOptionsClone(t *testing.T) {
 	cloneOpts = srcOpts.Clone()
 	if cloneOpts != nil {
 		t.Fatal("ObsOptions clone failed")
+	}
+}
+
+func TestParseLogPath(t *testing.T) {
+	startTime := time.Now().Truncate(24 * time.Hour)
+	endTime := startTime.Add(24 * time.Hour)
+	segPath := GetShardPath(0, 0, 1, startTime, endTime, "repo", "logstream")
+	logInfo, err := ParseLogPath(segPath)
+	if err != nil {
+		t.Fatalf("ParseLogPath error: %+v", err)
+	}
+	if logInfo.RepoName != "repo" {
+		t.Fatalf("ParseLogPath repo failed, expect: repo, real: %s", logInfo.RepoName)
+	}
+	if logInfo.StartTime != startTime.UnixNano() {
+		t.Fatalf("ParseLogPath repo failed, expect: %d, real: %d", startTime.UnixNano(), logInfo.StartTime)
+	}
+	if logInfo.EndTime != endTime.UnixNano() {
+		t.Fatalf("ParseLogPath repo failed, expect: %d, real: %d", endTime.UnixNano(), logInfo.EndTime)
+	}
+
+	_, err = ParseLogPath("data/test/test1/7_1695859200000000000_1695945600000000000_7")
+	if err == nil {
+		t.Fatal("Expect ParseLogPath failed")
+	}
+	_, err = ParseLogPath("data/test/abc/test1/7_1695859200000000000_1695945600000000000_7/columnstore")
+	if err == nil {
+		t.Fatal("Expect ParseLogPath failed")
+	}
+	_, err = ParseLogPath("data/test/0/test1/x_1695859200000000000_1695945600000000000_7/columnstore")
+	if err == nil {
+		t.Fatal("Expect ParseLogPath failed")
+	}
+	_, err = ParseLogPath("data/test/0/test1/7_x695859200000000000_1695945600000000000_7/columnstore")
+	if err == nil {
+		t.Fatal("Expect ParseLogPath failed")
+	}
+	_, err = ParseLogPath("data/test/0/test1/a_1695859200000000000_x695945600000000000_7/columnstore")
+	if err == nil {
+		t.Fatal("Expect ParseLogPath failed")
 	}
 }

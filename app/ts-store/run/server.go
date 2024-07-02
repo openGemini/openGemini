@@ -139,6 +139,7 @@ func NewServer(c config.Config, info app.ServerInfo, logger *Logger.Logger) (app
 	s.sherlockService = sherlock.NewService(conf.Sherlock)
 	s.sherlockService.WithLogger(s.Logger)
 	logstore.InitializeVlmCache()
+	logstore.StartHotDataDetector()
 
 	return s, nil
 }

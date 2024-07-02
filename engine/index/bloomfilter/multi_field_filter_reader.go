@@ -154,7 +154,7 @@ func NewMultiFieldVerticalFilterReader(path string, obsOpts *obs.ObsOptions, exp
 	v := &MultilFieldVerticalFilterReader{
 		r:           dr,
 		groupIndex:  -1,
-		bloomFilter: bloomfilter.DefaultOneHitBloomFilter(version),
+		bloomFilter: bloomfilter.DefaultOneHitBloomFilter(version, logstore.GetConstant(version).FilterDataMemSize),
 	}
 	v.version = version
 	verticalFilterLen, err := dr.Size()
@@ -167,6 +167,8 @@ func NewMultiFieldVerticalFilterReader(path string, obsOpts *obs.ObsOptions, exp
 	v.splitMap = splitMap
 	v.expr = expr
 	v.getAllHashes(expr)
+
+	logstore.SendLogRequestWithHash(&logstore.LogPath{Path: path, FileName: fileName, Version: version, ObsOpt: obsOpts}, v.hashes)
 	return v, nil
 }
 
@@ -315,6 +317,9 @@ func (s *MultilFieldVerticalFilterReader) StartSpan(span *tracing.Span) {
 		return
 	}
 	s.span = span
+	if s.r != nil {
+		s.r.StartSpan(span)
+	}
 	s.span.CreateCounter(VerticalFilterReaderSizeSpan, "")
 	s.span.CreateCounter(VerticalFilterReaderNumSpan, "")
 	s.span.CreateCounter(VerticalFilterReaderDuration, "ns")
