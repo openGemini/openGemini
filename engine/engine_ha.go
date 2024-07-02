@@ -36,22 +36,18 @@ func (e *Engine) PreOffload(opId uint64, db string, ptId uint32) error {
 	}
 	defer e.clearDbPtMigrating(db, ptId)
 	e.log.Info("prepare offload pt start", zap.Uint64("opId", opId), zap.String("db", db), zap.Uint32("pt", ptId))
-	dbPt, err := e.getPartition(db, ptId, true)
-	if err != nil {
-		if errno.Equal(err, errno.PtNotFound) || errno.Equal(err, errno.DatabaseNotFound) {
-			return nil
+
+	return e.PartitionExecute(db, ptId, func(pt *DBPTInfo) error {
+		if err := pt.disableDBPtBgr(); err != nil {
+			return err
 		}
-		return err
-	}
-	if err = dbPt.disableDBPtBgr(); err != nil {
-		dbPt.unref()
-		return err
-	}
-	start := time.Now()
-	dbPt.setEnableShardsBgr(false)
-	dbPt.unref()
-	e.log.Info("prepare offload pt success", zap.Uint64("opId", opId), zap.String("db", db), zap.Uint32("pt", ptId), zap.Duration("time used", time.Since(start)))
-	return nil
+		start := time.Now()
+		pt.setEnableShardsBgr(false)
+
+		e.log.Info("prepare offload pt success", zap.Uint64("opId", opId),
+			zap.String("db", db), zap.Uint32("pt", ptId), zap.Duration("time used", time.Since(start)))
+		return nil
+	})
 }
 
 func (e *Engine) RollbackPreOffload(opId uint64, db string, ptId uint32) error {
