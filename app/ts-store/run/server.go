@@ -128,8 +128,13 @@ func NewServer(c config.Config, info app.ServerInfo, logger *Logger.Logger) (app
 
 	runtime.SetBlockProfileRate(int(1 * time.Second))
 	runtime.SetMutexProfileFraction(1)
-	listenIp := strings.Split(conf.Data.SelectAddress, ":")[0]
-	go func() { _ = http.ListenAndServe(fmt.Sprintf("%s:6060", listenIp), nil) }()
+
+	if conf.HTTPD.PprofEnabled {
+		addr := strings.Split(conf.Data.SelectAddress, ":")[0] + ":6060"
+		go func() {
+			_ = http.ListenAndServe(addr, nil)
+		}()
+	}
 
 	node := metaclient.NewNode(s.metaPath)
 	s.node = node
