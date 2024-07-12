@@ -1,5 +1,5 @@
 # Adopters
-
+	
 This document lists the organizations that use openGemini on production or testing environment and projects that adopts openGemini as their upstream.
 
 Please make a pull request on this document if any organization or project would like to be added or removed.
