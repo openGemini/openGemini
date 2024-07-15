@@ -26,13 +26,14 @@ import (
 
 type SeriesInfoIntf interface {
 	GetSeriesKey() []byte
-	
+
 	GetSeriesTags() *influx.PointTags
 	GetSid() uint64
 }
 
 type KeyCursor interface {
 	SetOps(ops []*CallOption)
+	
 	SinkPlan(plan hybridqp.QueryNode)
 	Next() (*record.Record, SeriesInfoIntf, error)
 	Name() string
