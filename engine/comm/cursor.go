@@ -26,6 +26,7 @@ import (
 
 type SeriesInfoIntf interface {
 	GetSeriesKey() []byte
+	
 	GetSeriesTags() *influx.PointTags
 	GetSid() uint64
 }
