@@ -5,6 +5,7 @@ go 1.20
 require (
 	github.com/BurntSushi/toml v0.4.1
 	github.com/RoaringBitmap/roaring v0.9.1
+	github.com/StepY1aoZz/go-prompt v0.0.0-20240714073756-61a575943cba
 	github.com/VictoriaMetrics/VictoriaMetrics v1.67.0
 	github.com/VictoriaMetrics/fastcache v1.7.0
 	github.com/agiledragon/gomonkey/v2 v2.10.1
@@ -12,7 +13,6 @@ require (
 	github.com/armon/go-metrics v0.4.1
 	github.com/bits-and-blooms/bloom/v3 v3.5.0
 	github.com/bytedance/sonic v1.9.1
-	github.com/c-bata/go-prompt v0.2.6
 	github.com/cespare/xxhash/v2 v2.2.0
 	github.com/cockroachdb/errors v1.9.1
 	github.com/deckarep/golang-set v1.8.0
@@ -88,6 +88,7 @@ require (
 	github.com/bgentry/speakeasy v0.1.0 // indirect
 	github.com/bits-and-blooms/bitset v1.8.0 // indirect
 	github.com/bmizerany/pat v0.0.0-20170815010413-6226ea591a40 // indirect
+	github.com/c-bata/go-prompt v0.2.6 // indirect
 	github.com/cespare/xxhash v1.1.0 // indirect
 	github.com/chenzhuoyu/base64x v0.0.0-20221115062448-fe3a3abad311 // indirect
 	github.com/cockroachdb/logtags v0.0.0-20211118104740-dabe8e521a4f // indirect

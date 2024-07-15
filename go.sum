@@ -186,6 +186,8 @@ github.com/Shopify/goreferrer v0.0.0-20181106222321-ec9c9a553398/go.mod h1:a1uqR
 github.com/Shopify/logrus-bugsnag v0.0.0-20171204204709-577dee27f20d/go.mod h1:HI8ITrYtUY+O+ZhtlqUnD8+KwNPOyugEhfP9fdUIaEQ=
 github.com/Shopify/sarama v1.19.0/go.mod h1:FVkBWblsNy7DGZRfXLU0O9RCGt5g3g3yEuWXgklEdEo=
 github.com/Shopify/toxiproxy v2.1.4+incompatible/go.mod h1:OXgGpZ6Cli1/URJOF1DMxUHB2q5Ap20/P/eIdh4G0pI=
+github.com/StepY1aoZz/go-prompt v0.0.0-20240714073756-61a575943cba h1:zn8iUFVBcJohty5a9bBgrfxgvNLwIsIffMNOX77EXYs=
+github.com/StepY1aoZz/go-prompt v0.0.0-20240714073756-61a575943cba/go.mod h1:zWMLnPy1Vppwy3vwOssF01Sr4bWtzu7BBoia+QtVkDQ=
 github.com/VictoriaMetrics/VictoriaMetrics v1.67.0 h1:CS+AZT9rykvIPNiTzwdE5d894bUnkeXV4qStEA6ki/E=
 github.com/VictoriaMetrics/VictoriaMetrics v1.67.0/go.mod h1:cgL5RdFv2yZW8eCsRjpmsHghpHw30ZG/knU0t4cRH0E=
 github.com/VictoriaMetrics/fastcache v1.7.0 h1:E6GibaGI685TafrI7E/QqZPkMsOzRw+3gpICQx08ISg=
