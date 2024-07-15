@@ -61,6 +61,7 @@ var (
 	_ LogicalPlan = &LogicalSparseIndexScan{}
 	_ LogicalPlan = &LogicalColumnStoreReader{}
 	_ LogicalPlan = &LogicalJoin{}
+	_ LogicalPlan = &LogicalBinOp{}
 )
 
 type AggLevel uint8
@@ -82,6 +83,10 @@ func EnableFileCursor(en bool) {
 
 func GetEnableFileCursor() bool {
 	return enableFileCursor
+}
+
+func IsEnableFileCursor(schema hybridqp.Catalog) bool {
+	return GetEnableFileCursor() && schema.HasOptimizeAgg() && !schema.Options().IsPromQuery()
 }
 
 func PrintPlan(planName string, plan hybridqp.QueryNode) {
@@ -548,6 +553,7 @@ func (p *LogicalIncHashAgg) Digest() string {
 type LogicalAggregate struct {
 	isCountDistinct      bool
 	isPercentileOGSketch bool
+	isPromNestedCall     bool
 	aggType              int
 	calls                map[string]*influxql.Call
 	callsOrder           []string
@@ -566,6 +572,7 @@ func NewLogicalAggregate(input hybridqp.QueryNode, schema hybridqp.Catalog) *Log
 		callsOrder:           make([]string, 0, len(schema.Calls())),
 		isCountDistinct:      false,
 		isPercentileOGSketch: schema.HasPercentileOGSketch(),
+		isPromNestedCall:     schema.HasPromNestedCall(),
 		LogicalPlanSingle:    *NewLogicalPlanSingle(input, schema),
 	}
 
@@ -635,6 +642,26 @@ func (p *LogicalAggregate) inferAggLevel() AggLevel {
 	return SourceLevel
 }
 
+func (p *LogicalAggregate) inferPromCallLevel() AggLevel {
+	_, ok := p.Children()[0].(*HeuVertex)
+	if !ok {
+		_, ok = p.Children()[0].(*LogicalSeries)
+		if ok {
+			return SourceLevel
+		}
+		return SinkLevel
+	}
+	_, ok = p.Children()[0].(*HeuVertex).node.(*LogicalExchange)
+	if ok {
+		return SinkLevel
+	}
+	_, ok = p.Children()[0].(*HeuVertex).node.(*LogicalSeries)
+	if ok {
+		return SourceLevel
+	}
+	return SinkLevel
+}
+
 func (p *LogicalAggregate) getOGSketchOp(k string, level AggLevel, cc map[string]*hybridqp.OGSketchCompositeOperator) *influxql.Call {
 	switch level {
 	case SourceLevel:
@@ -646,6 +673,13 @@ func (p *LogicalAggregate) getOGSketchOp(k string, level AggLevel, cc map[string
 	default:
 		return cc[k].GetQueryPerOp()
 	}
+}
+
+func (p *LogicalAggregate) getPromNestedCall(level AggLevel, call *hybridqp.PromNestedCall) *influxql.Call {
+	if level == SourceLevel {
+		return call.GetFuncCall()
+	}
+	return call.GetAggCall()
 }
 
 func (p *LogicalAggregate) DeriveOperations() {
@@ -687,6 +721,11 @@ func (p *LogicalAggregate) init() {
 		level = p.inferAggLevel()
 		cc = p.schema.CompositeCall()
 	}
+	var pc map[string]*hybridqp.PromNestedCall
+	if p.isPromNestedCall {
+		level = p.inferPromCallLevel()
+		pc = p.schema.PromNestedCall()
+	}
 	refs := p.inputs[0].RowDataType().MakeRefs()
 
 	m := make(map[string]influxql.VarRef)
@@ -700,6 +739,13 @@ func (p *LogicalAggregate) init() {
 		var ref influxql.VarRef
 		if p.isPercentileOGSketch && c.Name == PercentileOGSketch {
 			c = p.getOGSketchOp(k, level, cc)
+			ref = p.schema.Mapping()[c]
+		} else if p.isPromNestedCall && p.schema.IsPromNestedCall(c) {
+			kc, ok := pc[k]
+			if !ok {
+				continue
+			}
+			c = p.getPromNestedCall(level, kc)
 			ref = p.schema.Mapping()[c]
 		} else {
 			ref = p.schema.Mapping()[p.schema.Calls()[k]]
@@ -742,7 +788,7 @@ func (p *LogicalAggregate) init() {
 }
 
 func (p *LogicalAggregate) ForwardCallArgs() {
-	if p.isPercentileOGSketch {
+	if p.isPercentileOGSketch || p.isPromNestedCall {
 		return
 	}
 	for k, call := range p.calls {
@@ -756,7 +802,7 @@ func (p *LogicalAggregate) ForwardCallArgs() {
 
 func (p *LogicalAggregate) CountToSum() {
 	for _, call := range p.calls {
-		if call.Name == "count" {
+		if call.Name == "count" || call.Name == "count_prom" {
 			call.Name = "sum"
 			p.digest = false
 		}
@@ -1723,6 +1769,22 @@ func explainIterms(writer LogicalPlanWriter, id uint64, mstName string, dimensio
 	writer.Item("ID", id)
 }
 
+func explainItermsReader(writer LogicalPlanWriter, id uint64, mstName string, dimensions []string, isProm bool, without bool, groupByAll bool) {
+	var builder strings.Builder
+	for i, d := range dimensions {
+		if i != 0 {
+			builder.WriteString(", ")
+		}
+		builder.WriteString(d)
+	}
+	writer.Item("dimensions", builder.String())
+	writer.Item("mstName", mstName)
+	writer.Item("ID", id)
+	writer.Item("isProm", isProm)
+	writer.Item("without", without)
+	writer.Item("groupByAll", groupByAll)
+}
+
 type LogicalReader struct {
 	cursor         []interface{}
 	hasPreAgg      bool
@@ -1803,7 +1865,7 @@ func (p *LogicalReader) SetCursor(cursor []interface{}) {
 }
 
 func (p *LogicalReader) ExplainIterms(writer LogicalPlanWriter) {
-	explainIterms(writer, p.id, p.mstName, p.dimensions)
+	explainItermsReader(writer, p.id, p.mstName, p.dimensions, p.schema.Options().IsPromQuery(), p.schema.Options().IsWithout(), p.schema.Options().IsGroupByAllDims())
 }
 
 func (p *LogicalReader) Explain(writer LogicalPlanWriter) {
@@ -2142,6 +2204,9 @@ func (p *LogicalGroupBy) ExplainIterms(writer LogicalPlanWriter) {
 		builder.WriteString(d)
 	}
 	writer.Item("dimensions", builder.String())
+	writer.Item("isProm", p.schema.Options().IsPromQuery())
+	writer.Item("without", p.schema.Options().IsWithout())
+	writer.Item("groupByAll", p.schema.Options().IsGroupByAllDims())
 }
 
 func (p *LogicalGroupBy) Explain(writer LogicalPlanWriter) {
@@ -2209,6 +2274,9 @@ func (p *LogicalOrderBy) ExplainIterms(writer LogicalPlanWriter) {
 		builder.WriteString(d)
 	}
 	writer.Item("dimensions", builder.String())
+	writer.Item("isProm", p.schema.Options().IsPromQuery())
+	writer.Item("without", p.schema.Options().IsWithout())
+	writer.Item("groupByAll", p.schema.Options().IsGroupByAllDims())
 }
 
 func (p *LogicalOrderBy) Explain(writer LogicalPlanWriter) {
@@ -2798,7 +2866,7 @@ func (b *LogicalPlanBuilderImpl) CreateSegmentPlan(schema hybridqp.Catalog) (hyb
 	if schema.HasCall() && schema.CanAggPushDown() {
 		b.Exchange(READER_EXCHANGE, nil)
 	}
-	if len(schema.Options().GetDimensions()) > 0 && (!schema.HasCall() || schema.HasCall() && !schema.CanAggPushDown()) {
+	if (len(schema.Options().GetDimensions()) > 0 || schema.Options().IsPromGroupAllOrWithout()) && (!schema.HasCall() || schema.HasCall() && !schema.CanAggPushDown()) {
 		b.Exchange(READER_EXCHANGE, nil)
 	}
 	b.Exchange(SEGMENT_EXCHANGE, nil)
@@ -2812,8 +2880,8 @@ func (b *LogicalPlanBuilderImpl) CreateSeriesPlan() (hybridqp.QueryNode, error) 
 	}
 	b.Series()
 
-	if GetEnableFileCursor() && b.schema.HasOptimizeAgg() {
-		if b.schema.HasCall() && b.schema.CanCallsPushdown() && !b.schema.ContainSeriesIgnoreCall() {
+	if IsEnableFileCursor(b.schema) {
+		if b.schema.CanAggTagSet() {
 			b.TagSetAggregate()
 		}
 	}
@@ -4158,5 +4226,93 @@ func (p *LogicalColumnStoreReader) Digest() string {
 	p.digestName = p.digestName[:0]
 	p.digestName = encoding.MarshalUint32(p.digestName, uint32(p.LogicPlanType()))
 	p.digestName = encoding.MarshalUint64(p.digestName, p.ID())
+	return string(p.digestName)
+}
+
+type LogicalBinOp struct {
+	left  hybridqp.QueryNode
+	right hybridqp.QueryNode
+	Para  *influxql.BinOp
+	LogicalPlanBase
+}
+
+func NewLogicalBinOp(left hybridqp.QueryNode, right hybridqp.QueryNode, para *influxql.BinOp, schema hybridqp.Catalog) *LogicalBinOp {
+	project := &LogicalBinOp{
+		left:  left,
+		right: right,
+		Para:  para,
+		LogicalPlanBase: LogicalPlanBase{
+			id:     hybridqp.GenerateNodeId(),
+			schema: schema,
+			rt:     nil,
+			ops:    nil,
+		},
+	}
+	project.init()
+	return project
+}
+
+// impl me
+func (p *LogicalBinOp) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	return nil
+}
+
+func (p *LogicalBinOp) DeriveOperations() {
+	p.init()
+}
+
+func (p *LogicalBinOp) init() {
+	p.InitRef(p.right)
+	p.InitRef(p.left)
+}
+
+func (p *LogicalBinOp) Clone() hybridqp.QueryNode {
+	clone := &LogicalBinOp{}
+	*clone = *p
+	clone.id = hybridqp.GenerateNodeId()
+	return clone
+}
+
+func (p *LogicalBinOp) Children() []hybridqp.QueryNode {
+	return []hybridqp.QueryNode{p.left, p.right}
+}
+
+func (p *LogicalBinOp) ReplaceChildren(children []hybridqp.QueryNode) {
+	if len(children) != 2 {
+		panic("children count in LogicalBinOp is not 2")
+	}
+	p.left = children[0]
+	p.right = children[1]
+}
+
+func (p *LogicalBinOp) ReplaceChild(ordinal int, child hybridqp.QueryNode) {
+	if ordinal > 1 {
+		panic(fmt.Sprintf("index %d out of range %d", ordinal, 1))
+	}
+	if ordinal == 0 {
+		p.left = child
+	} else {
+		p.right = child
+	}
+}
+
+func (p *LogicalBinOp) Explain(writer LogicalPlanWriter) {
+	p.ExplainIterms(writer)
+	writer.Explain(p)
+}
+
+func (p *LogicalBinOp) Type() string {
+	return GetType(p)
+}
+
+func (p *LogicalBinOp) Digest() string {
+	if p.digest {
+		return string(p.digestName)
+	}
+	p.digest = true
+	p.digestName = p.digestName[:0]
+	p.digestName = encoding.MarshalUint32(p.digestName, uint32(p.LogicPlanType()))
+	p.digestName = encoding.MarshalUint64(p.digestName, p.left.ID())
+	p.digestName = encoding.MarshalUint64(p.digestName, p.right.ID())
 	return string(p.digestName)
 }

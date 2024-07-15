@@ -680,12 +680,14 @@ func (builder *ExecutorBuilder) SetInfosAndTraits(mstsReqs []*MultiMstReqs, ctx 
 	multiMstInfos := make([]*IndexScanExtraInfo, 0)
 	for _, mstReqs := range mstsReqs {
 		for _, r := range mstReqs.reqs {
-			info := &IndexScanExtraInfo{
-				Store: localStorageForQuery,
-				Req:   r,
-				ctx:   ctx,
+			for i := 0; i < len(r.ShardIDs); i++ {
+				info := &IndexScanExtraInfo{
+					Store: localStorageForQuery,
+					Req:   r,
+					ctx:   ctx,
+				}
+				multiMstInfos = append(multiMstInfos, info)
 			}
-			multiMstInfos = append(multiMstInfos, info)
 		}
 	}
 	builder.SetMultiMstInfosForLocalStore(multiMstInfos)
@@ -1361,11 +1363,14 @@ func (builder *ExecutorBuilder) addColStoreReader(node *LogicalColumnStoreReader
 	}
 }
 
-func (builder *ExecutorBuilder) isMultiMstPlanNode(node hybridqp.QueryNode) bool {
+func (builder *ExecutorBuilder) IsMultiMstPlanNode(node hybridqp.QueryNode) bool {
 	if _, ok := node.(*LogicalFullJoin); ok {
 		return true
 	}
 	if _, ok := node.(*LogicalSortAppend); ok {
+		return true
+	}
+	if _, ok := node.(*LogicalBinOp); ok {
 		return true
 	}
 	return false
@@ -1385,7 +1390,7 @@ func (builder *ExecutorBuilder) addDefaultNode(node hybridqp.QueryNode) (*Transf
 			continue
 		}
 		children = append(children, child)
-		if builder.isMultiMstPlanNode(node) {
+		if builder.IsMultiMstPlanNode(node) {
 			builder.NextMst()
 		}
 	}

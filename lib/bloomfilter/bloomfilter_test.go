@@ -19,14 +19,13 @@ import (
 	"math/bits"
 	"testing"
 
-	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestBloomFilter(t *testing.T) {
-	version := []uint32{0, 2, 3}
+	version := [][2]uint32{{0, 32*1024 + 64}, {2, 256*1024 + 64}, {3, 256*1024 + 64}}
 	for _, v := range version {
-		bf := DefaultOneHitBloomFilter(v)
+		bf := DefaultOneHitBloomFilter(v[0], int64(v[1]))
 		bf.Add(Hash([]byte("a")))
 		bf.Add(Hash([]byte("b")))
 		bf.Add(Hash([]byte("writeChan")))
@@ -41,9 +40,9 @@ func TestBloomFilter(t *testing.T) {
 }
 
 func TestBloomFilterWithConflict(t *testing.T) {
-	version := []uint32{0, 2, 3}
+	version := [][2]uint32{{0, 32*1024 + 64}, {2, 256*1024 + 64}, {3, 256*1024 + 64}}
 	for _, v := range version {
-		bf := DefaultOneHitBloomFilter(v)
+		bf := DefaultOneHitBloomFilter(v[0], int64(v[1]))
 		bf.Add(Hash([]byte("a")))
 		bf.Add(Hash([]byte("b")))
 		bf.Add(Hash([]byte("writeChan")))
@@ -58,10 +57,14 @@ func TestBloomFilterWithConflict(t *testing.T) {
 	}
 }
 
+const (
+	Prime_64 uint64 = 0x9E3779B185EBCA87
+)
+
 func Hash(bytes []byte) uint64 {
 	var hash uint64 = 0
 	for _, b := range bytes {
-		hash ^= bits.RotateLeft64(hash, 11) ^ (uint64(b) * logstore.Prime_64)
+		hash ^= bits.RotateLeft64(hash, 11) ^ (uint64(b) * Prime_64)
 	}
 	return hash
 }

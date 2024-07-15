@@ -23,7 +23,7 @@ import (
 )
 
 // The maximum size of a single line returned by ReadLinesBlock.
-const maxLineSize = 256 * 1024
+const maxLineSize = 1024 * 1024
 
 // Default size in bytes of a single block returned by ReadLinesBlock.
 const defaultBlockSize = 64 * 1024
@@ -91,7 +91,7 @@ func (ctx *streamContext) Read(blockSize int) bool {
 	if ctx.err != nil {
 		return false
 	}
-	ctx.ReqBuf, ctx.tailBuf, ctx.err = ReadLinesBlockExt(ctx.br, ctx.ReqBuf, ctx.tailBuf, maxLineSize, blockSize)
+	ctx.ReqBuf, ctx.tailBuf, ctx.err = ReadLinesBlockExt(ctx.br, ctx.ReqBuf, ctx.tailBuf, ctx.MaxLineSize, blockSize)
 	if ctx.err != nil {
 		if ctx.err != io.EOF {
 			ctx.err = fmt.Errorf("cannot read influx line protocol data: %w", ctx.err)
@@ -111,6 +111,7 @@ type streamContext struct {
 	ErrLock      sync.Mutex
 	UnmarshalErr error // unmarshal points failed, 400 error code
 	CallbackErr  error
+	MaxLineSize  int
 }
 
 func (ctx *streamContext) Error() error {
@@ -129,7 +130,7 @@ func (ctx *streamContext) reset() {
 	ctx.UnmarshalErr = nil
 }
 
-func GetStreamContext(r io.Reader) *streamContext {
+func GetStreamContext(r io.Reader, maxLineSize int) *streamContext {
 	select {
 	case ctx := <-streamContextPoolCh:
 		ctx.br.Reset(r)
@@ -138,11 +139,12 @@ func GetStreamContext(r io.Reader) *streamContext {
 		if v := streamContextPool.Get(); v != nil {
 			ctx := v.(*streamContext)
 			ctx.br.Reset(r)
+			ctx.MaxLineSize = maxLineSize
 			return ctx
 		}
 		return &streamContext{
-			br: bufio.NewReaderSize(r, 64*1024),
-		}
+			br:          bufio.NewReaderSize(r, 64*1024),
+			MaxLineSize: maxLineSize}
 	}
 }
 
@@ -223,10 +225,18 @@ func (uw *unmarshalWork) Unmarshal() {
 	putUnmarshalWork(uw)
 }
 
+func (uw *unmarshalWork) Cancel(reason string) {
+	uw.Callback(uw.Db, nil, fmt.Errorf(reason))
+}
+
 // ScheduleUnmarshalWork schedules uw to run in the worker pool.
 //
 // It is expected that StartUnmarshalWorkers is already called.
 func ScheduleUnmarshalWork(uw UnmarshalWork) {
+	if stopped {
+		uw.Cancel("server is closing")
+		return
+	}
 	unmarshalWorkCh <- uw
 }
 
@@ -234,6 +244,7 @@ func ScheduleUnmarshalWork(uw UnmarshalWork) {
 type UnmarshalWork interface {
 	// Unmarshal must implement CPU-bound unmarshal work.
 	Unmarshal()
+	Cancel(reason string)
 }
 
 // StartUnmarshalWorkers starts unmarshal workers.
@@ -249,6 +260,10 @@ func StartUnmarshalWorkers() {
 		go func() {
 			defer unmarshalWorkersWG.Done()
 			for uw := range unmarshalWorkCh {
+				if stopped {
+					uw.Cancel("server is closing")
+					continue
+				}
 				uw.Unmarshal()
 			}
 		}()
@@ -259,6 +274,22 @@ func StartUnmarshalWorkers() {
 //
 // No more calles to ScheduleUnmarshalWork are allowed after callsing stopUnmarshalWorkers
 func StopUnmarshalWorkers() {
+	stopped = true
+
+	timer := time.NewTimer(2 * time.Second)
+	for {
+		select {
+		case uw := <-unmarshalWorkCh:
+			// consume uw stuck by the unmarshalWorkCh chan capacity
+			uw.Cancel("server is closing")
+			continue
+		case <-timer.C:
+			break
+		default:
+			break
+		}
+		break
+	}
 	close(unmarshalWorkCh)
 	unmarshalWorkersWG.Wait()
 	unmarshalWorkCh = nil
@@ -267,4 +298,5 @@ func StopUnmarshalWorkers() {
 var (
 	unmarshalWorkCh    chan UnmarshalWork
 	unmarshalWorkersWG sync.WaitGroup
+	stopped            bool
 )

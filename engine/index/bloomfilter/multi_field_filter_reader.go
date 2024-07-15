@@ -27,7 +27,6 @@ import (
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/obs"
-	"github.com/openGemini/openGemini/lib/request"
 	"github.com/openGemini/openGemini/lib/rpn"
 	"github.com/openGemini/openGemini/lib/tokenizer"
 	"github.com/openGemini/openGemini/lib/tracing"
@@ -138,7 +137,7 @@ func (s *MultiFieldFilterReader) Close() {
 
 type MultilFieldVerticalFilterReader struct {
 	MultiFieldFilterReader
-	r                  fileops.BasicFileReader
+	r                  logstore.BloomFilterReader
 	bloomFilter        bloomfilter.Bloomfilter
 	currentBlockId     int64
 	groupIndex         int64
@@ -148,15 +147,14 @@ type MultilFieldVerticalFilterReader struct {
 }
 
 func NewMultiFieldVerticalFilterReader(path string, obsOpts *obs.ObsOptions, expr []*SKRPNElement, version uint32, splitMap map[string][]byte, fileName string) (*MultilFieldVerticalFilterReader, error) {
-	fd, err := obs.OpenObsFile(path, fileName, obsOpts)
+	dr, err := logstore.NewBloomfilterReader(obsOpts, path, fileName, version)
 	if err != nil {
 		return nil, err
 	}
-	dr := fileops.NewFileReader(fd, nil)
 	v := &MultilFieldVerticalFilterReader{
 		r:           dr,
 		groupIndex:  -1,
-		bloomFilter: bloomfilter.DefaultOneHitBloomFilter(version),
+		bloomFilter: bloomfilter.DefaultOneHitBloomFilter(version, logstore.GetConstant(version).FilterDataMemSize),
 	}
 	v.version = version
 	verticalFilterLen, err := dr.Size()
@@ -169,6 +167,8 @@ func NewMultiFieldVerticalFilterReader(path string, obsOpts *obs.ObsOptions, exp
 	v.splitMap = splitMap
 	v.expr = expr
 	v.getAllHashes(expr)
+
+	logstore.SendLogRequestWithHash(&logstore.LogPath{Path: path, FileName: fileName, Version: version, ObsOpt: obsOpts}, v.hashes)
 	return v, nil
 }
 
@@ -190,20 +190,23 @@ func (s *MultilFieldVerticalFilterReader) isExist(blockId int64, elem *rpn.SKRPN
 		if _, ok2 := s.groupNewPreCache[groupIndex]; !ok2 {
 			s.groupNewPreCache = s.groupNewCache
 			s.groupNewCache = make(map[int64]map[int64][]uint64)
-			pieceNum := PIECE_NUM
-			if groupIndex+pieceNum > s.verticalPieceCount {
-				pieceNum = s.verticalPieceCount - groupIndex
+			pieceIndex := groupIndex / PIECE_NUM
+			startPieceIndex := pieceIndex * PIECE_NUM
+			endPieceIndex := startPieceIndex + PIECE_NUM
+			if startPieceIndex+PIECE_NUM > s.verticalPieceCount {
+				endPieceIndex = s.verticalPieceCount
 			}
-			for i := int64(0); i < pieceNum; i++ {
+			for startPieceIndex < endPieceIndex {
 				for _, hashes := range s.hashes {
 					for _, hash := range hashes {
-						pieceOffset, offsetInLong := s.getPieceOffset(hash, groupIndex+i)
+						pieceOffset, offsetInLong := s.getPieceOffset(hash, startPieceIndex)
 						offsetsSet[pieceOffset] = true
 						if offsetInLong != 0 {
 							offsetsSet[pieceOffset+verticalPieceDiskSize] = true
 						}
 					}
 				}
+				startPieceIndex++
 			}
 			offsetsLen := len(offsetsSet)
 			offsets := make([]int64, 0)
@@ -216,13 +219,9 @@ func (s *MultilFieldVerticalFilterReader) isExist(blockId int64, elem *rpn.SKRPN
 				lens[i] = verticalPieceDiskSize
 			}
 			results := make(map[int64][]byte)
-			c := make(chan *request.StreamReader, 1)
-			s.r.StreamReadBatch(offsets, lens, c, limitNum)
-			for r := range c {
-				if r.Err != nil {
-					return false, r.Err
-				}
-				results[r.Offset] = r.Content
+			err := s.r.ReadBatch(offsets, lens, limitNum, true, results)
+			if err != nil {
+				return false, err
 			}
 			if s.span != nil {
 				for k := range results {
@@ -230,7 +229,6 @@ func (s *MultilFieldVerticalFilterReader) isExist(blockId int64, elem *rpn.SKRPN
 				}
 				s.span.Count(VerticalFilterReaderNumSpan, int64(len(offsets)))
 			}
-			var err error
 			for i, result := range results {
 				subGroupIndex := i / logstore.GetConstant(s.version).VerticalGroupDiskSize
 				if _, subOk := s.groupNewCache[subGroupIndex]; !subOk {
@@ -253,6 +251,9 @@ func (s *MultilFieldVerticalFilterReader) isExist(blockId int64, elem *rpn.SKRPN
 
 func (s *MultilFieldVerticalFilterReader) hitExpr(val string) bool {
 	hashValues := s.hashes[val]
+	if len(hashValues) == 0 {
+		return true
+	}
 	isExist := false
 	for _, hash := range hashValues {
 		isExist = true
@@ -316,13 +317,15 @@ func (s *MultilFieldVerticalFilterReader) StartSpan(span *tracing.Span) {
 		return
 	}
 	s.span = span
+	if s.r != nil {
+		s.r.StartSpan(span)
+	}
 	s.span.CreateCounter(VerticalFilterReaderSizeSpan, "")
 	s.span.CreateCounter(VerticalFilterReaderNumSpan, "")
 	s.span.CreateCounter(VerticalFilterReaderDuration, "ns")
 }
 
 func (s *MultilFieldVerticalFilterReader) close() {
-
 }
 
 type MultiFiledLineFilterReader struct {
@@ -334,7 +337,7 @@ type MultiFiledLineFilterReader struct {
 }
 
 func NewMultiFiledLineFilterReader(path string, obsOpts *obs.ObsOptions, expr []*SKRPNElement, version uint32, splitMap map[string][]byte, fileName string) (*MultiFiledLineFilterReader, error) {
-	fd, err := obs.OpenObsFile(path, fileName, obsOpts)
+	fd, err := fileops.OpenObsFile(path, fileName, obsOpts, true)
 	if err != nil {
 		return nil, err
 	}
@@ -390,6 +393,9 @@ func (s *MultiFiledLineFilterReader) isExist(blockId int64, elem *rpn.SKRPNEleme
 
 func (s *MultiFiledLineFilterReader) hitExpr(val string) bool {
 	hashValues := s.hashes[val]
+	if len(hashValues) == 0 {
+		return true
+	}
 
 	blockOffset := s.currentBlockId * logstore.GetConstant(s.version).FilterDataDiskSize
 	bloomFilter := s.bloomCache[blockOffset]

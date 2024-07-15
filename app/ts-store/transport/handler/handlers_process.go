@@ -27,6 +27,7 @@ import (
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 	"go.uber.org/zap"
@@ -105,6 +106,13 @@ func (h *CreateDataBase) Process() (codec.BinaryCodec, error) {
 }
 
 func (h *ShowTagValues) Process() (codec.BinaryCodec, error) {
+	if h.req.Disorder == nil || !h.req.GetDisorder() {
+		return h.process()
+	}
+	return h.processDisorder()
+}
+
+func (h *ShowTagValues) process() (codec.BinaryCodec, error) {
 	h.rsp.Err = processDDL(h.req.Condition, func(expr influxql.Expr, tr influxql.TimeRange) error {
 		tagKeys := h.req.GetTagKeysBytes()
 		if len(tagKeys) == 0 {
@@ -112,6 +120,25 @@ func (h *ShowTagValues) Process() (codec.BinaryCodec, error) {
 		}
 
 		tagValues, err := h.store.TagValues(*h.req.Db, h.req.PtIDs, tagKeys, expr, tr)
+		h.rsp.SetTagValuesSlice(tagValues)
+
+		return err
+	})
+
+	return h.rsp, nil
+}
+
+func (h *ShowTagValues) processDisorder() (codec.BinaryCodec, error) {
+	var plan netstorage.ShowTagValuesPlan
+
+	h.rsp.Err = processDDL(h.req.Condition, func(expr influxql.Expr, tr influxql.TimeRange) error {
+		plan = h.store.GetEngine().CreateShowTagValuesPlan(*h.req.Db, h.req.PtIDs, &tr)
+
+		tagValues, err := plan.Execute(h.req.GetTagKeysBytes(), expr, util.TimeRange{
+			Min: tr.Min.UnixNano(),
+			Max: tr.Max.UnixNano(),
+		}, int(h.req.GetLimit()))
+
 		h.rsp.SetTagValuesSlice(tagValues)
 
 		return err
@@ -213,4 +240,12 @@ func createDir(dataPath, db string, pt uint32, rp string) error {
 	}
 
 	return nil
+}
+
+func (h *RaftMessages) Process() (codec.BinaryCodec, error) {
+	err := h.store.SendRaftMessage(h.req.Database, uint64(h.req.PtId), h.req.RaftMessage)
+	if err != nil {
+		h.rsp.ErrMsg = proto.String(err.Error())
+	}
+	return h.rsp, nil
 }

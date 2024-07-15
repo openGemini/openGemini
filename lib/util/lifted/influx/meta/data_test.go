@@ -17,7 +17,9 @@ limitations under the License.
 package meta
 
 import (
+	"database/sql"
 	"fmt"
+	"log"
 	"os"
 	"reflect"
 	"runtime"
@@ -26,8 +28,10 @@ import (
 	"time"
 
 	"github.com/influxdata/influxdb/logger"
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
+	logger1 "github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
@@ -85,21 +89,21 @@ func Test_Data_CreateMeasurement(t *testing.T) {
 
 	mstName := "cpu"
 	err = data.CreateMeasurement(dbName, rpName, mstName,
-		&proto2.ShardKeyInfo{ShardKey: []string{"hostName", "location"}, Type: proto.String(influxql.RANGE)}, nil, 0, nil, nil, nil)
+		&proto2.ShardKeyInfo{ShardKey: []string{"hostName", "location"}, Type: proto.String(influxql.RANGE)}, 0, nil, 0, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// try to recreate measurement with same shardKey, should success
 	err = data.CreateMeasurement(dbName, rpName, mstName,
-		&proto2.ShardKeyInfo{ShardKey: []string{"hostName", "location"}, Type: proto.String(influxql.RANGE)}, nil, 0, nil, nil, nil)
+		&proto2.ShardKeyInfo{ShardKey: []string{"hostName", "location"}, Type: proto.String(influxql.RANGE)}, 0, nil, 0, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// try to recreate measurement with same shardKey, should fail
 	err = data.CreateMeasurement(dbName, rpName, mstName,
-		&proto2.ShardKeyInfo{ShardKey: []string{"hostName", "region"}, Type: proto.String(influxql.RANGE)}, nil, 0, nil, nil, nil)
+		&proto2.ShardKeyInfo{ShardKey: []string{"hostName", "region"}, Type: proto.String(influxql.RANGE)}, 0, nil, 0, nil, nil, nil)
 	if err == nil || err != ErrMeasurementExists {
 		t.Fatalf("unexpected error.  got: %v, exp: %s", err, ErrMeasurementExists)
 	}
@@ -130,7 +134,7 @@ func Test_Data_AlterShardKey(t *testing.T) {
 
 	mstName := "cpu"
 	err = data.CreateMeasurement(dbName, rpName, mstName,
-		&proto2.ShardKeyInfo{ShardKey: []string{"hostName", "location"}, Type: proto.String(influxql.RANGE)}, nil, 0, nil, nil, nil)
+		&proto2.ShardKeyInfo{ShardKey: []string{"hostName", "location"}, Type: proto.String(influxql.RANGE)}, 0, nil, 0, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +199,7 @@ func Test_Data_ReSharding(t *testing.T) {
 	rp.ShardGroupDuration = 24 * time.Hour
 	must(data.CreateRetentionPolicy("foo", rp, false))
 	must(data.CreateMeasurement("foo", "bar", "cpu",
-		&proto2.ShardKeyInfo{ShardKey: []string{"hostname"}, Type: proto.String(influxql.RANGE)}, nil, 0, nil, nil, nil))
+		&proto2.ShardKeyInfo{ShardKey: []string{"hostname"}, Type: proto.String(influxql.RANGE)}, 0, nil, 0, nil, nil, nil))
 	must(data.CreateShardGroup("foo", "bar", time.Unix(0, 0), util.Hot, config.TSSTORE, 0))
 
 	sg0, err := data.ShardGroupByTimestampAndEngineType("foo", "bar", time.Unix(0, 0), config.TSSTORE)
@@ -244,15 +248,40 @@ func NewMockData(database, policy string) Data {
 	data := Data{}
 
 	sgInfo1 := ShardGroupInfo{ID: 1, StartTime: time.Now(), EndTime: time.Now().Add(time.Duration(3600)), DeletedAt: time.Time{},
-		Shards: []ShardInfo{{ID: 1}, {ID: 2}, {ID: 3}, {ID: 4}}}
+		Shards: []ShardInfo{{ID: 1, MarkDelete: true}, {ID: 2}, {ID: 3}, {ID: 4}}}
 	sgInfo2 := ShardGroupInfo{ID: 2, StartTime: time.Now(), EndTime: time.Now().Add(time.Duration(3600)), DeletedAt: time.Time{},
-		Shards: []ShardInfo{{ID: 5}, {ID: 6}, {ID: 7}, {ID: 8}}}
+		Shards: []ShardInfo{{ID: 5, MarkDelete: false}, {ID: 6}, {ID: 7}, {ID: 8}}}
 	sgInfo3 := ShardGroupInfo{ID: 3, StartTime: time.Now(), EndTime: time.Now().Add(time.Duration(3600)), DeletedAt: time.Time{},
-		Shards: []ShardInfo{{ID: 9}, {ID: 10}, {ID: 11}, {ID: 12}}}
+		Shards: []ShardInfo{{ID: 9, MarkDelete: true}, {ID: 10}, {ID: 11}, {ID: 12}}}
 
 	sgInfos := []ShardGroupInfo{sgInfo1, sgInfo2, sgInfo3}
 
-	rpInfo := RetentionPolicyInfo{Name: policy, ShardGroups: sgInfos}
+	rpInfo := RetentionPolicyInfo{
+		Name:        policy,
+		ShardGroups: sgInfos,
+		Measurements: map[string]*MeasurementInfo{
+			"mst1": {
+				InitNumOfShards: 0,
+				ShardIdexes:     nil,
+			},
+			"mst2": {
+				InitNumOfShards: 2,
+				ShardIdexes: map[uint64][]int{
+					1: {0, 1},
+					2: {0, 1},
+					3: {0, 1},
+				},
+			},
+			"mst3": {
+				InitNumOfShards: 1,
+				ShardIdexes: map[uint64][]int{
+					1: {2},
+					2: {2},
+					3: {2},
+				},
+			},
+		},
+	}
 	rps := make(map[string]*RetentionPolicyInfo)
 	rps[policy] = &rpInfo
 	dbInfo := DatabaseInfo{Name: database, RetentionPolicies: rps}
@@ -267,7 +296,7 @@ func TestData_DeleteShardGroup(t *testing.T) {
 	rp := "bar"
 
 	data := NewMockData(db, rp)
-	if err := data.DeleteShardGroup(db, rp, 1); err != nil {
+	if err := data.DeleteShardGroup(db, rp, 1, 0, MarkDelete); err != nil {
 		t.Fatal(err)
 	}
 
@@ -290,7 +319,7 @@ func TestData_PruneGroups(t *testing.T) {
 	rp := "bar"
 
 	data := NewMockData(db, rp)
-	if err := data.DeleteShardGroup(db, rp, 1); err != nil {
+	if err := data.DeleteShardGroup(db, rp, 1, 0, MarkDelete); err != nil {
 		t.Fatal(err)
 	}
 
@@ -308,6 +337,22 @@ func TestData_PruneGroups(t *testing.T) {
 
 	assert(len(rpInfo.ShardGroups) == 2, "expect len(ShardGroups) == 2, but got %d", len(rpInfo.ShardGroups))
 	assert(rpInfo.ShardGroups[0].ID == 2, "expect left ShardGroup ID == 2, but got %d", rpInfo.ShardGroups[0].ID)
+	mst2ShardLists := rpInfo.Measurements["mst2"].ShardIdexes
+	mst3ShardLists := rpInfo.Measurements["mst3"].ShardIdexes
+	ShardListsWant2 := map[uint64][]int{
+		2: {0, 1},
+		3: {0, 1},
+	}
+	ShardListsWant3 := map[uint64][]int{
+		2: {2},
+		3: {2},
+	}
+	if !reflect.DeepEqual(mst2ShardLists, ShardListsWant2) {
+		t.Errorf("shardList got %v, want %v", mst2ShardLists, ShardListsWant2)
+	}
+	if !reflect.DeepEqual(mst3ShardLists, ShardListsWant3) {
+		t.Errorf("shardList got %v, want %v", mst3ShardLists, ShardListsWant3)
+	}
 }
 
 func initData() *Data {
@@ -330,7 +375,7 @@ func generateMeasurement(data *Data, dbName, rpName, mstName string) error {
 		return err
 	}
 	return data.CreateMeasurement(dbName, rpName, mstName,
-		&proto2.ShardKeyInfo{ShardKey: []string{"hostname"}, Type: proto.String(influxql.RANGE)}, nil, 0, nil, nil, nil)
+		&proto2.ShardKeyInfo{ShardKey: []string{"hostname"}, Type: proto.String(influxql.RANGE)}, 0, nil, 0, nil, nil, nil)
 }
 
 func Test_Data_DeleteCmd(t *testing.T) {
@@ -549,7 +594,10 @@ func TestData_CreateRetentionPolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = data.CreateMeasurement(dbName, rpName, mstName, nil, nil, 0, nil, nil, nil)
+	err = data.CreateMeasurement(dbName, rpName, mstName, &proto2.ShardKeyInfo{
+		ShardKey: []string{"hostname"},
+		Type:     proto.String(influxql.HASH),
+	}, 0, nil, 0, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -573,7 +621,7 @@ func TestShardGroupOutOfOrder(t *testing.T) {
 	data := Data{}
 	data.PtNumPerNode = 1
 	DataLogger = logger.New(os.Stderr)
-	err, _ := data.CreateDataNode("127.0.0.1:8400", "127.0.0.1:8401", "")
+	_, err := data.CreateDataNode("127.0.0.1:8400", "127.0.0.1:8401", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -594,7 +642,10 @@ func TestShardGroupOutOfOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = data.CreateMeasurement(dbName, rpName, mstName, nil, nil, 0, nil, nil, nil)
+	err = data.CreateMeasurement(dbName, rpName, mstName, &proto2.ShardKeyInfo{
+		ShardKey: []string{"hostname"},
+		Type:     proto.String(influxql.HASH),
+	}, 0, nil, 0, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -653,7 +704,10 @@ func TestData_CreateShardGroup(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = data.CreateMeasurement(dbName, rpName, mstName, nil, nil, 0, nil, nil, nil)
+	err = data.CreateMeasurement(dbName, rpName, mstName, &proto2.ShardKeyInfo{
+		ShardKey: []string{"hostname"},
+		Type:     proto.String(influxql.HASH),
+	}, 0, nil, 0, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -673,7 +727,7 @@ func TestData_CreateShardGroup(t *testing.T) {
 	assert(igs[0].StartTime.Equal(mustParseTime(time.RFC3339Nano, "2022-06-08T08:00:00Z")), "index group startTime error")
 	assert(igs[0].EndTime.Equal(mustParseTime(time.RFC3339Nano, "2022-06-08T10:00:00Z")), "index group endTime error")
 	data.ExpandShardsEnable = true
-	err, _ = data.CreateDataNode("127.0.0.3:8400", "127.0.0.3:8401", "")
+	_, err = data.CreateDataNode("127.0.0.3:8400", "127.0.0.3:8401", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -794,7 +848,7 @@ func initDataWithDataNode() *Data {
 
 	for i := 1; i <= 40; i++ {
 		nodeIp := prefix + fmt.Sprint(i)
-		err, _ := data.CreateDataNode(nodeIp+fmt.Sprint(selectPort), nodeIp+fmt.Sprint(writePort), "")
+		_, err := data.CreateDataNode(nodeIp+fmt.Sprint(selectPort), nodeIp+fmt.Sprint(writePort), "")
 		if err != nil {
 			panic(err)
 		}
@@ -869,7 +923,7 @@ func BenchmarkData_CreateMeasurement(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_ = data.CreateMeasurement(databases[i%n], rpName, mstName, nil, nil, 0, nil, nil, nil)
+		_ = data.CreateMeasurement(databases[i%n], rpName, mstName, nil, 0, nil, 0, nil, nil, nil)
 	}
 	b.StopTimer()
 }
@@ -894,7 +948,10 @@ func BenchmarkData_CreateShardGroup(b *testing.B) {
 		if err := data.CreateRetentionPolicy(dbName, rpi, true); err != nil {
 			b.Fatal(err)
 		}
-		if err = data.CreateMeasurement(dbName, rpName, mstName, nil, nil, 0, nil, nil, nil); err != nil {
+		if err = data.CreateMeasurement(dbName, rpName, mstName, &proto2.ShardKeyInfo{
+			ShardKey: []string{"hostname"},
+			Type:     proto.String(influxql.HASH),
+		}, 0, nil, 0, nil, nil, nil); err != nil {
 			b.Fatal(err)
 		}
 
@@ -930,7 +987,10 @@ func BenchmarkData_DeleteShardGroup(b *testing.B) {
 		if err := data.CreateRetentionPolicy(dbName, rpi, true); err != nil {
 			b.Fatal(err)
 		}
-		if err = data.CreateMeasurement(dbName, rpName, mstName, nil, nil, 0, nil, nil, nil); err != nil {
+		if err = data.CreateMeasurement(dbName, rpName, mstName, &proto2.ShardKeyInfo{
+			ShardKey: []string{"hostname"},
+			Type:     proto.String(influxql.HASH),
+		}, 0, nil, 0, nil, nil, nil); err != nil {
 			b.Fatal(err)
 		}
 
@@ -948,7 +1008,7 @@ func BenchmarkData_DeleteShardGroup(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		data.DeleteShardGroup(databases[i%n], rpName, sgIds[i%n])
+		data.DeleteShardGroup(databases[i%n], rpName, sgIds[i%n], 0, MarkDelete)
 		//data.pruneShardGroups()
 	}
 	b.StopTimer()
@@ -1013,7 +1073,7 @@ func BenchmarkData_UpdateSchema(b *testing.B) {
 		if err := data.CreateRetentionPolicy(dbName, rpi, true); err != nil {
 			b.Fatal(err)
 		}
-		if err = data.CreateMeasurement(dbName, rpName, mstName, nil, nil, 0, nil, nil, nil); err != nil {
+		if err = data.CreateMeasurement(dbName, rpName, mstName, nil, 0, nil, 0, nil, nil, nil); err != nil {
 			b.Fatal(err)
 		}
 		tags := make([]*proto2.FieldSchema, fieldNum)
@@ -1054,7 +1114,10 @@ func BenchmarkData_ShardGroupsByTimeRange(b *testing.B) {
 			b.Fatal(err)
 		}
 
-		err = data.CreateMeasurement(dbName, rpName, mstName, nil, nil, 0, nil, nil, nil)
+		err = data.CreateMeasurement(dbName, rpName, mstName, &proto2.ShardKeyInfo{
+			ShardKey: []string{"hostname"},
+			Type:     proto.String(influxql.HASH),
+		}, 0, nil, 0, nil, nil, nil)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -1105,7 +1168,10 @@ func TestBigMetaDataWith_400thousandMeasurements(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		err = data.CreateMeasurement(dbName, rpName, mstName, nil, nil, 0, nil, nil, nil)
+		err = data.CreateMeasurement(dbName, rpName, mstName, &proto2.ShardKeyInfo{
+			ShardKey: []string{"hostname"},
+			Type:     proto.String(influxql.HASH),
+		}, 0, nil, 0, nil, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1462,7 +1528,7 @@ func TestUpdateMeasurement(t *testing.T) {
 	if err := data.CreateRetentionPolicy(dbName, rp, false); err != nil {
 		t.Fatal(err)
 	}
-	if err := data.CreateMeasurement(dbName, logStream, logStream, nil, nil, 0, nil, nil, options); err != nil {
+	if err := data.CreateMeasurement(dbName, logStream, logStream, nil, 0, nil, 0, nil, nil, options); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1512,11 +1578,1067 @@ func TestUpdateMeasurement(t *testing.T) {
 func TestInitDataNodePtView(t *testing.T) {
 	data := &Data{}
 	data.PtNumPerNode = 1
-	data.DataNodes = append(data.DataNodes, DataNode{NodeInfo{ID: 5, Role: NodeWriter}, 0, 0})
-	data.DataNodes = append(data.DataNodes, DataNode{NodeInfo{ID: 6, Role: NodeDefault}, 0, 0})
-	data.DataNodes = append(data.DataNodes, DataNode{NodeInfo{ID: 7, Role: NodeReader}, 0, 0})
+	data.DataNodes = append(data.DataNodes, DataNode{NodeInfo{ID: 5, Role: NodeWriter}, 0, 0, 0})
+	data.DataNodes = append(data.DataNodes, DataNode{NodeInfo{ID: 6, Role: NodeDefault}, 0, 0, 0})
+	data.DataNodes = append(data.DataNodes, DataNode{NodeInfo{ID: 7, Role: NodeReader}, 0, 0, 0})
 	data.initDataNodePtView(data.GetClusterPtNum())
 	if data.ClusterPtNum != 2 {
 		t.Fatalf("calculate ClusterPtNum failed")
+	}
+}
+
+func TestData_mapShardsToMstWithNilShardIdx(t *testing.T) {
+	DataLogger = logger1.GetLogger()
+	data1 := &Data{Databases: make(map[string]*DatabaseInfo)}
+	data1.Databases["db0"] = &DatabaseInfo{RetentionPolicies: make(map[string]*RetentionPolicyInfo)}
+	data1.Databases["db0"].RetentionPolicies["rp0"] = &RetentionPolicyInfo{Measurements: make(map[string]*MeasurementInfo)}
+	data1.Databases["db0"].RetentionPolicies["rp0"].Measurements["mst0"] = &MeasurementInfo{InitNumOfShards: 1}
+	sg := &ShardGroupInfo{}
+	data1.mapShardsToMst("db0", data1.Databases["db0"].RetentionPolicies["rp0"], sg)
+	assert2.NotEqual(t, data1.Databases["db0"].RetentionPolicies["rp0"].Measurements["mst0"].ShardIdexes, nil)
+}
+
+func TestData_MstCopy(t *testing.T) {
+	mst := &MeasurementInfo{}
+	mst1 := mst.clone()
+	assert2.Equal(t, 0, len(mst1.ShardIdexes))
+	mst = &MeasurementInfo{ShardIdexes: make(map[uint64][]int)}
+	mst.ShardIdexes[1] = []int{1}
+	mst1 = mst.clone()
+	assert2.NotEqual(t, 0, len(mst1.ShardIdexes))
+}
+
+func TestData_mapShardsToMst(t *testing.T) {
+	type args struct {
+		database string
+		rpi      *RetentionPolicyInfo
+		sgi      *ShardGroupInfo
+	}
+	data := &Data{PtNumPerNode: 1}
+	DataLogger = logger.New(os.Stderr)
+	data.CreateDataNode("127.0.0.1:8086", "127.0.0.1:8188", "")
+	data.CreateDataNode("127.0.0.2:8086", "127.0.0.2:8188", "")
+	data.CreateDataNode("127.0.0.3:8086", "127.0.0.3:8188", "")
+	data.CreateDataNode("127.0.0.4:8086", "127.0.0.4:8188", "")
+	data.CreateDataNode("127.0.0.5:8086", "127.0.0.5:8188", "")
+	data.CreateDataNode("127.0.0.6:8086", "127.0.0.6:8188", "")
+	must := func(err error) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	data.CreateDBPtView("foo")
+	must(data.CreateDatabase("foo", nil, nil, false, 1, nil))
+	rp := NewRetentionPolicyInfo("bar")
+	rp.ShardGroupDuration = 24 * time.Hour
+	must(data.CreateRetentionPolicy("foo", rp, false))
+	must(data.CreateMeasurement("foo", "bar", "cpu",
+		&proto2.ShardKeyInfo{ShardKey: []string{"hostname"}, Type: proto.String(influxql.HASH)}, 3, nil, 0, nil, nil, nil))
+	tests := []struct {
+		name   string
+		fields Data
+		args   args
+		want   map[uint64][]int
+	}{
+		{
+			name:   "test1",
+			fields: *data,
+			args: args{
+				database: "foo",
+				rpi:      rp,
+				sgi: &ShardGroupInfo{
+					ID: 1,
+					Shards: []ShardInfo{
+						{
+							ID: 1,
+						},
+						{
+							ID: 2,
+						},
+						{
+							ID: 3,
+						},
+						{
+							ID: 4,
+						},
+						{
+							ID: 5,
+						},
+						{
+							ID: 6,
+						},
+					},
+				},
+			},
+			want: map[uint64][]int{
+				1: {0, 1, 5},
+			},
+		},
+		{
+			name:   "test1",
+			fields: *data,
+			args: args{
+				database: "foo",
+				rpi:      rp,
+				sgi: &ShardGroupInfo{
+					ID: 1,
+					Shards: []ShardInfo{
+						{
+							ID: 11,
+						},
+						{
+							ID: 12,
+						},
+						{
+							ID: 13,
+						},
+						{
+							ID: 14,
+						},
+						{
+							ID: 15,
+						},
+						{
+							ID: 16,
+						},
+					},
+				},
+			},
+			want: map[uint64][]int{
+				1: {0, 1, 5},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data := &Data{
+				Term:               tt.fields.Term,
+				Index:              tt.fields.Index,
+				ClusterID:          tt.fields.ClusterID,
+				ClusterPtNum:       tt.fields.ClusterPtNum,
+				PtNumPerNode:       tt.fields.PtNumPerNode,
+				NumOfShards:        tt.fields.NumOfShards,
+				MetaNodes:          tt.fields.MetaNodes,
+				DataNodes:          tt.fields.DataNodes,
+				PtView:             tt.fields.PtView,
+				ReplicaGroups:      tt.fields.ReplicaGroups,
+				Databases:          tt.fields.Databases,
+				Streams:            tt.fields.Streams,
+				Users:              tt.fields.Users,
+				MigrateEvents:      tt.fields.MigrateEvents,
+				QueryIDInit:        tt.fields.QueryIDInit,
+				AdminUserExists:    tt.fields.AdminUserExists,
+				TakeOverEnabled:    tt.fields.TakeOverEnabled,
+				BalancerEnabled:    tt.fields.BalancerEnabled,
+				ExpandShardsEnable: tt.fields.ExpandShardsEnable,
+				MaxNodeID:          tt.fields.MaxNodeID,
+				MaxShardGroupID:    tt.fields.MaxShardGroupID,
+				MaxShardID:         tt.fields.MaxShardID,
+				MaxIndexGroupID:    tt.fields.MaxIndexGroupID,
+				MaxIndexID:         tt.fields.MaxIndexID,
+				MaxEventOpId:       tt.fields.MaxEventOpId,
+				MaxDownSampleID:    tt.fields.MaxDownSampleID,
+				MaxStreamID:        tt.fields.MaxStreamID,
+				MaxConnID:          tt.fields.MaxConnID,
+				MaxSubscriptionID:  tt.fields.MaxSubscriptionID,
+				MaxCQChangeID:      tt.fields.MaxCQChangeID,
+			}
+			data.mapShardsToMst(tt.args.database, tt.args.rpi, tt.args.sgi)
+			got := data.Databases["foo"].RetentionPolicies["bar"].Measurements["cpu_0000"].ShardIdexes
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("mapShards got: %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func Test_mapShards(t *testing.T) {
+	type args struct {
+		mstName     string
+		shards      []ShardInfo
+		numOfShards int32
+		shardList   []int
+	}
+	tests := []struct {
+		name string
+		args args
+		want []int
+	}{
+		{
+			name: "test1",
+			args: args{
+				mstName: "mst1",
+				shards: []ShardInfo{
+					{
+						ID: 11,
+					},
+					{
+						ID: 12,
+					},
+					{
+						ID: 13,
+					},
+					{
+						ID: 14,
+					},
+					{
+						ID: 15,
+					},
+					{
+						ID: 16,
+					},
+				},
+				numOfShards: 2,
+			},
+			want: []int{4, 5},
+		},
+		{
+			name: "test1",
+			args: args{
+				mstName: "mst2",
+				shards: []ShardInfo{
+					{
+						ID: 11,
+					},
+					{
+						ID: 12,
+					},
+					{
+						ID: 13,
+					},
+					{
+						ID: 14,
+					},
+					{
+						ID: 15,
+					},
+					{
+						ID: 16,
+					},
+				},
+				numOfShards: 4,
+			},
+			want: []int{0, 2, 3, 5},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.args.shardList = mapShards(tt.args.mstName, tt.args.shards, tt.args.numOfShards)
+		})
+		got := tt.args.shardList
+		if !reflect.DeepEqual(got, tt.want) {
+			t.Errorf("mapShards got: %v, want %v", got, tt.want)
+		}
+	}
+}
+
+func TestData_GetShardDurationsByDbPtForRetention(t *testing.T) {
+	db := "foo"
+	rp := "bar"
+
+	data := NewMockData(db, rp)
+	shards := data.GetShardDurationsByDbPtForRetention(db, 0)
+	assert2.Equal(t, len(shards), 1)
+	for k, v := range shards {
+		assert2.Equal(t, k, uint64(5))
+		assert2.Equal(t, v.Ident.ShardGroupID, uint64(2))
+	}
+}
+
+func Test_SQLITE_SIMPLE(t *testing.T) {
+	os.Remove("./simple.db")
+	defer os.Remove("./simple.db")
+
+	db, err := sql.Open("sqlite3", "./simple.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	sqlStmt := `
+	create table foo (id integer not null primary key, name text);
+	delete from foo;
+	`
+	_, err = db.Exec(sqlStmt)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stmt, err := tx.Prepare("insert into foo(id, name) values(?, ?)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stmt.Close()
+	for i := 0; i < 100; i++ {
+		_, err = stmt.Exec(i, fmt.Sprintf("hello world%03d", i))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	err = tx.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := db.Query("select id, name from foo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int
+		var name string
+		err = rows.Scan(&id, &name)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	err = rows.Err()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stmt, err = db.Prepare("select name from foo where id = ?")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stmt.Close()
+	var name string
+	err = stmt.QueryRow("3").Scan(&name)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = db.Exec("delete from foo")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = db.Exec("insert into foo(id, name) values(1, 'foo'), (2, 'bar'), (3, 'baz')")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err = db.Query("select id, name from foo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int
+		var name string
+		err = rows.Scan(&id, &name)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	err = rows.Err()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func Test_SQLite_TESTSQL(t *testing.T) {
+	os.Remove("./testsql.db")
+	defer os.Remove("./testsql.db")
+
+	db, err := sql.Open("sqlite3", "./testsql.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	query, err := os.ReadFile("./test.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = db.Exec(string(query))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// create database databases
+	insertDB, err := db.Prepare("INSERT INTO dbs(name) values(?)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 5; i++ {
+		_, err = insertDB.Exec(fmt.Sprintf("db%02d", i))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// get database id
+	getDBID, err := db.Prepare("SELECT id, name FROM dbs WHERE name = ?")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dbid int
+	var rpid int32
+	var mstid int32
+	var name string
+	err = getDBID.QueryRow("db01").Scan(&dbid, &name)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// create retention policies
+	insertRP, err := db.Prepare("INSERT INTO rps(db_id, name) values(?, ?)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 5; i++ {
+		_, err = insertRP.Exec(dbid, fmt.Sprintf("rp%02d", i))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err = insertRP.Exec(3, fmt.Sprintf("rp%02d", 3))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = insertRP.Exec(3, fmt.Sprintf("rp%02d", 3))
+	if err.Error() != "UNIQUE constraint failed: rps.db_id, rps.name" {
+		t.Fatal(err)
+	}
+	_, err = insertRP.Exec(30, fmt.Sprintf("rp%02d", 3))
+	if err.Error() != "FOREIGN KEY constraint failed" {
+		t.Fatal(err)
+	}
+
+	// get retention policy id
+	getRPID, err := db.Prepare("SELECT id, name FROM rps WHERE name = ? AND db_id = ?")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = getRPID.QueryRow("rp02", dbid).Scan(&rpid, &name)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// create measurements
+	insertMST, err := db.Prepare("INSERT INTO msts(rp_id, name) values(?, ?)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 5; i++ {
+		_, err = insertMST.Exec(rpid, fmt.Sprintf("mst%02d", i))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err = insertMST.Exec(6, fmt.Sprintf("mst%02d", 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = insertMST.Exec(6, fmt.Sprintf("mst%02d", 0))
+	if err.Error() != "UNIQUE constraint failed: msts.rp_id, msts.name" {
+		t.Fatal(err)
+	}
+	_, err = insertMST.Exec(60, fmt.Sprintf("mst%02d", 0))
+	if err.Error() != "FOREIGN KEY constraint failed" {
+		t.Fatal(err)
+	}
+
+	// get measurement id
+	getMSTID, err := db.Prepare("SELECT id, name FROM msts WHERE name = ? AND rp_id = ?")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = getMSTID.QueryRow("mst03", rpid).Scan(&mstid, &name)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// create files
+	insertFILE, err := db.Prepare("INSERT INTO files(mst_id, sequence, level, extent, merge) values(?, ?, ?, ?, ?)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 10; i++ {
+		_, err = insertFILE.Exec(6, i, 0, 0, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// delete db
+	deleteDB, err := db.Prepare("DELETE FROM dbs WHERE id = ?")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = deleteDB.Exec(dbid)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// check delete
+	var numDBs, numRPs, numMSTs int
+	err = db.QueryRow("SELECT COUNT(*) FROM dbs").Scan(&numDBs)
+	if err != nil || numDBs != 4 {
+		t.Fatal(err)
+	}
+	err = db.QueryRow("SELECT COUNT(*) FROM rps").Scan(&numRPs)
+	if err != nil || numRPs != 1 {
+		t.Fatal(err)
+	}
+	err = db.QueryRow("SELECT COUNT(*) FROM msts").Scan(&numMSTs)
+	if err != nil || numMSTs != 1 {
+		t.Fatal(err)
+	}
+
+	var numFiles int
+	err = db.QueryRow("SELECT COUNT(*) FROM files").Scan(&numFiles)
+	if err != nil || numFiles != 10 {
+		t.Fatal(err)
+	}
+
+	// select files from db.rp.msts
+	selectFiles, err := db.Query("SELECT files.sequence, msts.name, rps.name, dbs.name FROM files, msts, rps, dbs WHERE dbs.id=rps.db_id AND rps.id=msts.rp_id AND msts.id=files.mst_id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer selectFiles.Close()
+	var id int
+	var mstname, rpname, dbname string
+	for selectFiles.Next() {
+		err = selectFiles.Scan(&id, &mstname, &rpname, &dbname)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	err = selectFiles.Err()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestData_Files(t *testing.T) {
+	type args struct {
+		insertFiles  []FileInfo // insert
+		updateFiles  []uint64   // mark delete
+		deleteFiles  []uint64   // file id
+		deleteFiles2 []uint64   // shard id
+		deleteFiles3 []uint64   // for compaction
+		insertFiles3 []FileInfo // for compaction
+		mstID        uint64
+		shardID      uint64
+	}
+	tests := []struct {
+		name    string
+		args    args
+		want    []FileInfo
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name: "test1",
+			args: args{
+				insertFiles: []FileInfo{
+					{
+						MstID:         1,
+						ShardID:       1,
+						Sequence:      1,
+						Level:         0,
+						Merge:         0,
+						Extent:        0,
+						CreatedAt:     1,
+						DeletedAt:     0,
+						MinTime:       1,
+						MaxTime:       100,
+						RowCount:      11,
+						FileSizeBytes: 1011,
+					},
+					{
+						MstID:         21,
+						ShardID:       31,
+						Sequence:      2,
+						Level:         3,
+						Merge:         4,
+						Extent:        5,
+						CreatedAt:     1,
+						DeletedAt:     0,
+						MinTime:       100,
+						MaxTime:       200,
+						RowCount:      21,
+						FileSizeBytes: 2022,
+					},
+				},
+				mstID:   21,
+				shardID: 31,
+			},
+			want: []FileInfo{
+				{
+					MstID:         21,
+					ShardID:       31,
+					Sequence:      2,
+					Level:         3,
+					Merge:         4,
+					Extent:        5,
+					CreatedAt:     1,
+					DeletedAt:     0,
+					MinTime:       100,
+					MaxTime:       200,
+					RowCount:      21,
+					FileSizeBytes: 2022,
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "test2",
+			args: args{
+				insertFiles: []FileInfo{
+					{
+						MstID:         1,
+						ShardID:       1,
+						Sequence:      1,
+						Level:         0,
+						Merge:         0,
+						Extent:        0,
+						CreatedAt:     1,
+						DeletedAt:     0,
+						MinTime:       1,
+						MaxTime:       100,
+						RowCount:      11,
+						FileSizeBytes: 1011,
+					},
+					{
+						MstID:         211,
+						ShardID:       311,
+						Sequence:      22,
+						Level:         23,
+						Merge:         24,
+						Extent:        25,
+						CreatedAt:     21,
+						DeletedAt:     0,
+						MinTime:       100,
+						MaxTime:       200,
+						RowCount:      221,
+						FileSizeBytes: 2022,
+					},
+					{
+						MstID:         211,
+						ShardID:       311,
+						Sequence:      122,
+						Level:         123,
+						Merge:         124,
+						Extent:        125,
+						CreatedAt:     121,
+						DeletedAt:     0,
+						MinTime:       100,
+						MaxTime:       200,
+						RowCount:      221,
+						FileSizeBytes: 2022,
+					},
+				},
+				updateFiles: []uint64{3},
+				mstID:       211,
+				shardID:     311,
+			},
+			want: []FileInfo{
+				{
+					MstID:         211,
+					ShardID:       311,
+					Sequence:      22,
+					Level:         23,
+					Merge:         24,
+					Extent:        25,
+					CreatedAt:     21,
+					DeletedAt:     0,
+					MinTime:       100,
+					MaxTime:       200,
+					RowCount:      221,
+					FileSizeBytes: 2022,
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "testDeleteFilesByShard",
+			args: args{
+				insertFiles: []FileInfo{
+					{
+						MstID:         1,
+						ShardID:       1,
+						Sequence:      1,
+						Level:         0,
+						Merge:         0,
+						Extent:        0,
+						CreatedAt:     1,
+						DeletedAt:     0,
+						MinTime:       1,
+						MaxTime:       100,
+						RowCount:      11,
+						FileSizeBytes: 1011,
+					},
+					{
+						MstID:         211,
+						ShardID:       311,
+						Sequence:      22,
+						Level:         23,
+						Merge:         24,
+						Extent:        25,
+						CreatedAt:     21,
+						DeletedAt:     0,
+						MinTime:       100,
+						MaxTime:       200,
+						RowCount:      221,
+						FileSizeBytes: 2022,
+					},
+					{
+						MstID:         211,
+						ShardID:       311,
+						Sequence:      122,
+						Level:         123,
+						Merge:         124,
+						Extent:        125,
+						CreatedAt:     121,
+						DeletedAt:     0,
+						MinTime:       100,
+						MaxTime:       200,
+						RowCount:      221,
+						FileSizeBytes: 2022,
+					},
+				},
+				deleteFiles: []uint64{2},
+				mstID:       211,
+				shardID:     311,
+			},
+			want: []FileInfo{
+				{
+					MstID:         211,
+					ShardID:       311,
+					Sequence:      122,
+					Level:         123,
+					Merge:         124,
+					Extent:        125,
+					CreatedAt:     121,
+					DeletedAt:     0,
+					MinTime:       100,
+					MaxTime:       200,
+					RowCount:      221,
+					FileSizeBytes: 2022,
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "testDeleteFiles",
+			args: args{
+				insertFiles: []FileInfo{
+					{
+						MstID:         1,
+						ShardID:       1,
+						Sequence:      1,
+						Level:         0,
+						Merge:         0,
+						Extent:        0,
+						CreatedAt:     1,
+						DeletedAt:     0,
+						MinTime:       1,
+						MaxTime:       100,
+						RowCount:      11,
+						FileSizeBytes: 1011,
+					},
+					{
+						MstID:         211,
+						ShardID:       311,
+						Sequence:      22,
+						Level:         23,
+						Merge:         24,
+						Extent:        25,
+						CreatedAt:     21,
+						DeletedAt:     0,
+						MinTime:       100,
+						MaxTime:       200,
+						RowCount:      221,
+						FileSizeBytes: 2022,
+					},
+					{
+						MstID:         211,
+						ShardID:       311,
+						Sequence:      122,
+						Level:         123,
+						Merge:         124,
+						Extent:        125,
+						CreatedAt:     121,
+						DeletedAt:     0,
+						MinTime:       100,
+						MaxTime:       200,
+						RowCount:      221,
+						FileSizeBytes: 2022,
+					},
+				},
+				deleteFiles2: []uint64{311},
+				mstID:        211,
+				shardID:      311,
+			},
+			want:    []FileInfo{},
+			wantErr: false,
+		},
+		{
+			name: "testCompactFiles",
+			args: args{
+				insertFiles: []FileInfo{
+					{
+						MstID:         1,
+						ShardID:       1,
+						Sequence:      1,
+						Level:         0,
+						Merge:         0,
+						Extent:        0,
+						CreatedAt:     1,
+						DeletedAt:     0,
+						MinTime:       1,
+						MaxTime:       100,
+						RowCount:      11,
+						FileSizeBytes: 1011,
+					},
+					{
+						MstID:         211,
+						ShardID:       311,
+						Sequence:      22,
+						Level:         23,
+						Merge:         24,
+						Extent:        25,
+						CreatedAt:     21,
+						DeletedAt:     0,
+						MinTime:       100,
+						MaxTime:       200,
+						RowCount:      221,
+						FileSizeBytes: 2022,
+					},
+					{
+						MstID:         211,
+						ShardID:       311,
+						Sequence:      122,
+						Level:         123,
+						Merge:         124,
+						Extent:        125,
+						CreatedAt:     121,
+						DeletedAt:     0,
+						MinTime:       100,
+						MaxTime:       200,
+						RowCount:      221,
+						FileSizeBytes: 2022,
+					},
+				},
+				deleteFiles3: []uint64{2, 3},
+				insertFiles3: []FileInfo{
+					{
+						MstID:         211,
+						ShardID:       311,
+						Sequence:      1122,
+						Level:         123,
+						Merge:         124,
+						Extent:        125,
+						CreatedAt:     121,
+						DeletedAt:     0,
+						MinTime:       100,
+						MaxTime:       200,
+						RowCount:      221,
+						FileSizeBytes: 4044,
+					},
+				},
+				mstID:   211,
+				shardID: 311,
+			},
+			want: []FileInfo{
+				{
+					MstID:         211,
+					ShardID:       311,
+					Sequence:      1122,
+					Level:         123,
+					Merge:         124,
+					Extent:        125,
+					CreatedAt:     121,
+					DeletedAt:     0,
+					MinTime:       100,
+					MaxTime:       200,
+					RowCount:      221,
+					FileSizeBytes: 4044,
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "testInsertErr",
+			args: args{
+				insertFiles: []FileInfo{
+					{
+						MstID:         1,
+						ShardID:       1,
+						Sequence:      1,
+						Level:         0,
+						Merge:         0,
+						Extent:        0,
+						CreatedAt:     1,
+						DeletedAt:     0,
+						MinTime:       1,
+						MaxTime:       100,
+						RowCount:      11,
+						FileSizeBytes: 1011,
+					},
+					{
+						MstID:         1,
+						ShardID:       1,
+						Sequence:      1,
+						Level:         0,
+						Merge:         0,
+						Extent:        0,
+						CreatedAt:     1,
+						DeletedAt:     0,
+						MinTime:       1,
+						MaxTime:       100,
+						RowCount:      11,
+						FileSizeBytes: 1011,
+					},
+				},
+				updateFiles: []uint64{},
+				mstID:       21,
+				shardID:     31,
+			},
+			wantErr: true,
+			errMsg:  "UNIQUE constraint failed: files.mst_id, files.shard_id, files.sequence, files.level, files.extent, files.merge",
+		},
+	}
+	for _, tt := range tests {
+		if tt.name != "testCompactFiles" {
+			continue
+		}
+		t.Run(tt.name, func(t *testing.T) {
+			os.Remove("./files.db")
+			defer os.Remove("./files.db")
+
+			db, err := sql.Open("sqlite3", "./files.db?cache=shared")
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = db.Exec(INITSQL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sqlite := &SQLiteWrapper{
+				database: db,
+			}
+			err = sqlite.InsertFiles(tt.args.insertFiles, nil)
+			if err != nil {
+				if !(tt.wantErr && err.Error() == tt.errMsg) {
+					t.Errorf(err.Error())
+				}
+			}
+			err = sqlite.UpdateFiles(tt.args.updateFiles, nil)
+			if err != nil {
+				t.Fatal(err.Error())
+			}
+			err = sqlite.DeleteFiles(tt.args.deleteFiles)
+			if err != nil {
+				t.Fatal(err.Error())
+			}
+			err = sqlite.DeleteFilesByShard(tt.args.deleteFiles2)
+			if err != nil {
+				t.Fatal(err.Error())
+			}
+			err = sqlite.CompactFiles(tt.args.deleteFiles3, tt.args.insertFiles3)
+			if err != nil {
+				t.Fatal(err.Error())
+			}
+			got, err := sqlite.QueryFiles(tt.args.mstID, tt.args.shardID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, tt.want) && (len(got) != 0 && len(tt.want) != 0) {
+				t.Errorf("got: %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func Test_SQLite_Transaction(t *testing.T) {
+	os.Remove("./transaction.db")
+	defer os.Remove("./transaction.db")
+	db, err := sql.Open("sqlite3", "file:transaction.db//?cache=shared")
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS users (
+			id INTEGER PRIMARY KEY,
+			name TEXT
+		);
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// first transaction
+	tx1, err := db.Begin()
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer tx1.Rollback()
+
+	// insert data for first transaction
+	_, err = tx1.Exec("INSERT INTO users (name) VALUES (?)", "Alice")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// second transaction
+	tx2, err := db.Begin()
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer tx2.Rollback()
+
+	// query for second transaction
+	rows, err := tx2.Query("SELECT name FROM users")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer rows.Close()
+
+	fmt.Println("Users in second transaction:")
+	for rows.Next() {
+		var name string
+		err := rows.Scan(&name)
+		if err != nil {
+			log.Fatal(err)
+		}
+		fmt.Println(name)
+	}
+
+	// commit the first transaction
+	err = tx1.Commit()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// query for second transaction
+	rows, err = tx2.Query("SELECT name FROM users")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer rows.Close()
+
+	fmt.Println("Users after first transaction commit:")
+	for rows.Next() {
+		var name string
+		err := rows.Scan(&name)
+		if err != nil {
+			log.Fatal(err)
+		}
+		fmt.Println(name)
 	}
 }

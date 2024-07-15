@@ -41,9 +41,9 @@ func TestLastMergeTime(t *testing.T) {
 }
 
 func TestMergeContext(t *testing.T) {
-	ctx := immutable.NewMergeContext("mst")
+	ctx := immutable.NewMergeContext("mst", 0)
 	ctx.Release()
-	ctx = immutable.NewMergeContext("mst")
+	ctx = immutable.NewMergeContext("mst", 0)
 
 	beforeTest(t, 0)
 	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
@@ -208,4 +208,10 @@ func TestFillNilCol(t *testing.T) {
 	require.Equal(t, 10, col.Len)
 	require.Equal(t, 10, col.NilCount)
 	require.Equal(t, 0, len(col.Offset))
+}
+
+func TestBuildMergeContext(t *testing.T) {
+	files := &immutable.TSSPFiles{}
+	arr := immutable.BuildMergeContext("mst", files, false, immutable.NewLastMergeTime())
+	require.Equal(t, 0, len(arr))
 }

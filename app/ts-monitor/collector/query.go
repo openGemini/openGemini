@@ -130,8 +130,8 @@ func (q *QueryMetric) queryExecute(db, cmd string) ([]byte, error) {
 		req, _ := http.NewRequest(http.MethodGet, fmt.Sprintf("%s?%s", q.url, params.Encode()), nil)
 		headers := http.Header{}
 		headers.Add("Content-Type", "application/json")
-		req.SetBasicAuth(q.conf.Username, crypto.Decrypt(q.conf.Password))
 		req.Header = headers
+		req.SetBasicAuth(q.conf.Username, crypto.Decrypt(q.conf.Password))
 		resp, err := q.Client.Do(req)
 		if err == nil {
 			if resp.StatusCode == http.StatusOK {

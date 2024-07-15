@@ -34,7 +34,7 @@ import (
 )
 
 const (
-	chunkMetaReadNum     = 16
+	ChunkMetaReadNum     = 16
 	BatchReaderRecordNum = 8
 	chunkReadNum         = 16
 )
@@ -50,6 +50,7 @@ type TSSPFileDetachedReader struct {
 	filterSeqTime   int64
 	filterSeqId     int64
 	filterSeqFunc   func(int64, int64) bool
+	tr              util.TimeRange
 
 	metaDataQueue   MetaControl
 	metaIndex       []*MetaIndex
@@ -74,9 +75,10 @@ func NewTSSPFileDetachedReader(metaIndex []*MetaIndex, blocks [][]int, ctx *File
 		blocks:        blocks,
 		obsOpts:       path.Option(),
 		ctx:           ctx,
-		metaDataQueue: NewMetaControl(true, chunkMetaReadNum),
+		metaDataQueue: NewMetaControl(ctx.readCtx.Ascending, ChunkMetaReadNum),
 		unnest:        unnest,
 		seqIndex:      -1,
+		tr:            util.TimeRange{Min: ctx.tr.Min, Max: ctx.tr.Max},
 	}
 	if config.IsLogKeeper() && options.GetLogQueryCurrId() != "" && options.GetLimit() > 0 {
 		err := r.parseSeqId(options)
@@ -203,6 +205,14 @@ func (t *TSSPFileDetachedReader) GetSchema() record.Schemas {
 	return t.ctx.schemas
 }
 
+func (t *TSSPFileDetachedReader) UpdateTime(time int64) {
+	if t.ctx.readCtx.Ascending {
+		t.tr.Max = time
+	} else {
+		t.tr.Min = time
+	}
+}
+
 func (t *TSSPFileDetachedReader) Next() (*record.Record, comm.SeriesInfoIntf, error) {
 	for {
 		if !t.isInit {
@@ -241,6 +251,7 @@ func (t *TSSPFileDetachedReader) readBatch() (*record.Record, error) {
 		result = t.filterData(result)
 		if result.RowNums() == 0 {
 			t.recordPool.PutRecordInCircularPool()
+			t.filterPool.PutRecordInCircularPool()
 			continue
 		}
 		return result, nil
@@ -250,9 +261,9 @@ func (t *TSSPFileDetachedReader) readBatch() (*record.Record, error) {
 func (t *TSSPFileDetachedReader) filterData(rec *record.Record) *record.Record {
 	if rec != nil && (t.ctx.isOrder || t.isSort) {
 		if t.ctx.readCtx.Ascending {
-			rec = FilterByTime(rec, t.ctx.tr)
+			rec = FilterByTime(rec, t.tr)
 		} else {
-			rec = FilterByTimeDescend(rec, t.ctx.tr)
+			rec = FilterByTimeDescend(rec, t.tr)
 		}
 	}
 
@@ -275,10 +286,10 @@ func (t *TSSPFileDetachedReader) initChunkMeta() (bool, error) {
 		t.currChunkMetaID = 0
 		t.currBlockID = 0
 		var endMetaIndexID int
-		if t.metaIndexID+chunkMetaReadNum > len(t.metaIndex) {
+		if t.metaIndexID+ChunkMetaReadNum > len(t.metaIndex) {
 			endMetaIndexID = len(t.metaIndex)
 		} else {
-			endMetaIndexID = t.metaIndexID + chunkMetaReadNum
+			endMetaIndexID = t.metaIndexID + ChunkMetaReadNum
 		}
 		offset := make([]int64, 0, endMetaIndexID-t.metaIndexID)
 		sizes := make([]int64, 0, endMetaIndexID-t.metaIndexID)
@@ -303,7 +314,10 @@ func (t *TSSPFileDetachedReader) initChunkMeta() (bool, error) {
 	chunkMetas := make([]*SegmentMeta, 0)
 	for len(chunkMetas) < chunkReadNum && !t.metaDataQueue.IsEmpty() {
 		s, _ := t.metaDataQueue.Pop()
-		chunkMetas = append(chunkMetas, s.(*SegmentMeta))
+		currTr := s.(*SegmentMeta).chunkMeta.GetTimeRangeBy(s.(*SegmentMeta).id)
+		if currTr[0] <= t.tr.Max && currTr[1] >= t.tr.Min {
+			chunkMetas = append(chunkMetas, s.(*SegmentMeta))
+		}
 	}
 	t.dataReader.InitReadBatch(chunkMetas, t.ctx.schemas)
 	return true, nil
@@ -325,6 +339,9 @@ func (t *TSSPFileDetachedReader) Close() error {
 	if t.filterPool != nil {
 		t.filterPool.Put()
 	}
+	if t.dataReader != nil {
+		t.dataReader.Close()
+	}
 	return nil
 }
 
@@ -343,6 +360,10 @@ type FileReaderContext struct {
 	readCtx      *ReadContext
 	filterOpts   *FilterOptions
 	filterBitmap *bitmap.FilterBitmap
+}
+
+func (f *FileReaderContext) GetSchemas() record.Schemas {
+	return f.schemas
 }
 
 func NewFileReaderContext(tr util.TimeRange, schemas record.Schemas, decs *ReadContext, filterOpts *FilterOptions, filterBitmap *bitmap.FilterBitmap, isOrder bool) *FileReaderContext {

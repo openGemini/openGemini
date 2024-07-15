@@ -44,6 +44,23 @@ func Mmap(fd int, offset int64, length int) (data []byte, err error) {
 	return
 }
 
+func MmapRW(fd int, offset int64, length int) (data []byte, err error) {
+	if length <= 0 {
+		length = defaultMmapSize
+	}
+
+	data, err = syscall.Mmap(fd, offset, length, syscall.PROT_READ|syscall.PROT_WRITE, syscall.MAP_SHARED)
+	if err != nil {
+		return
+	}
+
+	if err = Fadvise(fd, offset, int64(length), syscall.MADV_RANDOM); err != nil {
+		return nil, fmt.Errorf("madvise: %+v", err)
+	}
+
+	return
+}
+
 func MUnmap(data []byte) error {
 	if len(data) == 0 {
 		return nil

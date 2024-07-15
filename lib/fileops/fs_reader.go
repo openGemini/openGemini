@@ -25,6 +25,7 @@ import (
 
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/readcache"
 	"github.com/openGemini/openGemini/lib/request"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
@@ -74,10 +75,11 @@ func EnableReadDataCache(en uint64) {
 
 type BasicFileReader interface {
 	Name() string
+	Size() (int64, error)
 	ReadAt(off int64, size uint32, dst *[]byte, ioPriority int) ([]byte, error)
-	StreamReadBatch(off, length []int64, c chan *request.StreamReader, limit int)
+	StreamReadBatch(off, length []int64, c chan *request.StreamReader, limit int, isStat bool)
 	Rename(newName string) error
-	RenameOnObs(newName string) error
+	RenameOnObs(newName string, tmp bool, obsOpt *obs.ObsOptions) error
 	ReOpen() error
 	IsMmapRead() bool
 	IsOpen() bool
@@ -132,8 +134,8 @@ func (r *fileReader) IsOpen() bool {
 	return r.fd != nil
 }
 
-func (r *fileReader) StreamReadBatch(off, length []int64, c chan *request.StreamReader, limitNum int) {
-	go r.fd.StreamReadBatch(off, length, -1, c, limitNum)
+func (r *fileReader) StreamReadBatch(off, length []int64, c chan *request.StreamReader, limitNum int, isStat bool) {
+	go r.fd.StreamReadBatch(off, length, -1, c, limitNum, isStat)
 }
 
 func (r *fileReader) ReadAt(off int64, size uint32, dstPtr *[]byte, ioPriority int) ([]byte, error) {
@@ -226,15 +228,29 @@ func (r *fileReader) Rename(newName string) error {
 	return r.rename(r.name, newName)
 }
 
-// rename tssp.obs -> tssp
-func (r *fileReader) RenameOnObs(obsName string) error {
-	err := r.rename(obsName, r.name)
+// RenameOnObs rename tssp.obs -> tssp
+func (r *fileReader) RenameOnObs(oldName string, renameTmp bool, obsOpt *obs.ObsOptions) error {
+	if r.mmapData != nil {
+		_ = MUnmap(r.mmapData)
+		r.mmapData = nil
+	}
+
+	newName := r.name
+	if !renameTmp {
+		newName, oldName = oldName, newName
+	} else {
+		if obsOpt != nil {
+			newName = oldName[:len(oldName)-len(obs.ObsFileTmpSuffix)]
+		}
+	}
+
+	err := r.rename(oldName, newName)
 	if err != nil {
 		isOpen := r.IsOpen()
 		if !isOpen {
 			// first try to reopen tssp file, then try to reopen tssp.obs file
 			if err := r.ReOpen(); err != nil {
-				r.name = obsName
+				r.name = oldName
 				return r.ReOpen()
 			}
 		}

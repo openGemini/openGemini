@@ -9,7 +9,6 @@ import (
 	"context"
 	"sync"
 
-	"github.com/influxdata/influxdb/query"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
@@ -21,14 +20,14 @@ type ExecutionContext struct {
 	// The statement ID of the executing query.
 	statementID int
 
-	// The query ID of the executing query.
-	QueryID uint64
+	// The query IDs of the executing query. Each statement assigns one ID.
+	QueryID []uint64
 
-	// The query task information available to the StatementExecutor.
-	task *Task
+	// The query task information available to the StatementExecutor. Each statement is one sub task.
+	task []*Task
 
 	// Output channel where results and errors should be sent.
-	Results chan *query.Result
+	Results chan *Result
 
 	// Options used to start this query.
 	ExecutionOptions
@@ -53,22 +52,25 @@ func (ctx *ExecutionContext) watch() {
 	go func() {
 		defer close(ctx.done)
 
-		var taskCtx <-chan struct{}
-		if ctx.task != nil {
-			taskCtx = ctx.task.closing
+		for _, task := range ctx.task {
+			var taskCtx <-chan struct{}
+			if task != nil {
+				taskCtx = task.closing
+			}
+
+			select {
+			case <-taskCtx:
+				ctx.err = task.Error()
+				if ctx.err == nil {
+					ctx.err = errno.NewError(errno.ErrQueryKilled)
+				}
+			case <-ctx.AbortCh:
+				ctx.err = ErrQueryAborted
+			case <-ctx.Context.Done():
+				ctx.err = ctx.Context.Err()
+			}
 		}
 
-		select {
-		case <-taskCtx:
-			ctx.err = ctx.task.Error()
-			if ctx.err == nil {
-				ctx.err = errno.NewError(errno.ErrQueryKilled)
-			}
-		case <-ctx.AbortCh:
-			ctx.err = ErrQueryAborted
-		case <-ctx.Context.Done():
-			ctx.err = ctx.Context.Err()
-		}
 	}()
 }
 
@@ -104,7 +106,7 @@ func (ctx *ExecutionContext) Value(key interface{}) interface{} {
 
 // send sends a Result to the Results channel and will exit if the query has
 // been aborted.
-func (ctx *ExecutionContext) send(result *query.Result, seq int) error {
+func (ctx *ExecutionContext) send(result *Result, seq int) error {
 	result.StatementID = seq
 	select {
 	case <-ctx.AbortCh:
@@ -116,7 +118,7 @@ func (ctx *ExecutionContext) send(result *query.Result, seq int) error {
 
 // Send sends a Result to the Results channel and will exit if the query has
 // been interrupted or aborted.
-func (ctx *ExecutionContext) Send(result *query.Result, seq int) error {
+func (ctx *ExecutionContext) Send(result *Result, seq int) error {
 	result.StatementID = seq
 	select {
 	case <-ctx.Done():

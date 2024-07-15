@@ -73,9 +73,9 @@ const (
 	BadListen             = 1023
 	FailedConvertToCodec  = 1024
 	OpenSessionTimeout    = 1025
-	RemoteError           = 1206
+	RemoteError           = 1026
 	DataACKTimeout        = 1027
-	InvalidTLSConfig      = 1208
+	InvalidTLSConfig      = 1028
 )
 
 // query engine error codes
@@ -106,6 +106,38 @@ const (
 	OBSClientRead                = 1124
 	ShardBucketLacks             = 1125
 	SeriesBucketLacks            = 1126
+	ChunkReaderCursor            = 1127
+	ApplyFuncErr                 = 1128
+)
+
+// promql2influxql
+const (
+	UnsupportedPromExpr    = 1201
+	TranspileAggFail       = 1202
+	WithoutNotSupported    = 1203
+	ErrFloatParamAggExpr   = 1204
+	UnsupportedAggType     = 1205
+	UnableLeftBinOp        = 1206
+	UnableRightBinOp       = 1207
+	MissBoolModifier       = 1208
+	InvalidSSBinOp         = 1209
+	InvalidSVBinOp         = 1210
+	UnsupportedBothVS      = 1211
+	TranspileFunctionFail  = 1212
+	ParseTimeFail          = 1213
+	ErrPopulatePromSeries  = 1214
+	ErrGroupResultBySeries = 1215
+	UnsupportedValueType   = 1216
+	InvalidOutputPoint     = 1217
+	ErrRegularExpSyntax    = 1218
+	UnsupportedMatchType   = 1219
+	TranspileIVSFail       = 1220
+	TranspileExprFail      = 1221
+	UnsupportedNodeType    = 1222
+	InvalidExprType        = 1223
+	TranspileUnaryExprFail = 1224
+	InvalidUnaryExpr       = 1225
+	InvalidPromMstName     = 1226
 )
 
 // query interface error codes
@@ -256,6 +288,9 @@ const (
 	EventDstNodeSegregating            = 4051
 	InValidNodeID                      = 4052
 	InValidNodeType                    = 4053
+	OpsMapInValid                      = 4054
+	OpMarshalErr                       = 4055
+	SqlNodeNotFound                    = 4056
 )
 
 // meta-client process
@@ -311,20 +346,28 @@ const (
 
 // write interface
 const (
-	InvalidLogDataType                 = 5501
-	InvalidMappingTimeKey              = 5502
-	InvalidMappingContentKeyMissing    = 5503
-	InvalidMappingTimeKeyType          = 5504
-	InvalidMappingTimeKeyVal           = 5505
-	InvalidMappingContentKeyType       = 5506
-	InvalidMappingContentKeySubType    = 5507
-	InvalidMappingContentKeyValMissing = 5508
-	InvalidMappingTagsKeyType          = 5509
-	InvalidMappingTagsKeySubType       = 5510
-	InvalidRequestBodyLength           = 5511
-	InvalidMappingDefaultType          = 5512
-	InvalidRetryPara                   = 5513
-	InvalidXLogCompressType            = 5514
+	InvalidLogDataType              = 5501
+	InvalidMappingTimeKey           = 5502
+	InvalidMappingTimeKeyType       = 5503
+	InvalidMappingTimeKeyVal        = 5504
+	InvalidMappingTimeFormatVal     = 5505
+	InvalidMappingTimeZone          = 5506
+	InvalidMappingTimeZoneVal       = 5507
+	InvalidMappingDiscardKeyType    = 5508
+	InvalidMappingDiscardKeySubType = 5509
+	InvalidMappingDiscardKeyVal     = 5510
+	InvalidRequestBodyLength        = 5511
+	InvalidLogTagsParmLength        = 5512
+	InvalidRetryPara                = 5513
+	InvalidPrecisionPara            = 5514
+	InvalidXLogCompressType         = 5515
+	ErrLogTagsJsonFormat            = 5516
+	ErrFieldDataType                = 5517
+	ErrTagFieldDataType             = 5518
+	ErrFieldDuplication             = 5519
+	ErrTagFieldDuplication          = 5520
+	ErrReservedFieldDuplication     = 5521
+	ErrParseTimestamp               = 5522
 )
 
 // index
@@ -350,6 +393,7 @@ const (
 	ErrCoarseIndexFragment     = 6019
 	ErrQuerySchemaUpperBound   = 6020
 	ErrValueTypeFullTextIndex  = 6021
+	ErrSearchSeriesKey         = 6022
 )
 
 const (

@@ -26,21 +26,21 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/influxdata/influxdb/pkg/limiter"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/index/ski"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/stringinterner"
 	"github.com/openGemini/openGemini/lib/util"
-	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/savsgio/dictpool"
 )
 
 type WriteRowsCtx struct {
-	GetLastFlushTime  func(msName string, sid uint64) int64
 	AddRowCountsBySid func(msName string, sid uint64, rowCounts int64)
 	MstsInfo          *sync.Map
 	MsRowCount        *sync.Map
@@ -62,21 +62,17 @@ type WriteRec struct {
 }
 
 type WriteChunk struct {
-	Mu              sync.Mutex
-	Sid             uint64
-	LastFlushTime   int64
-	OrderWriteRec   WriteRec
-	UnOrderWriteRec WriteRec
+	Mu       sync.Mutex
+	Sid      uint64
+	WriteRec WriteRec
 }
 
 func (chunk *WriteChunk) Init(sid uint64) {
 	chunk.Sid = sid
-	chunk.LastFlushTime = math.MinInt64
 }
 
 func (chunk *WriteChunk) SortRecordNoLock(hlp *record.ColumnSortHelper) {
-	chunk.OrderWriteRec.SortRecord(hlp)
-	chunk.UnOrderWriteRec.SortRecord(hlp)
+	chunk.WriteRec.SortRecord(hlp)
 }
 
 func (chunk *WriteChunk) SortRecord(hlp *record.ColumnSortHelper) {
@@ -109,7 +105,7 @@ func (chunk *WriteChunkForColumnStore) TimeSorted() bool {
 
 var writeRecPool pool.FixedPool
 
-func InitWriteRecPool(size int) {
+func initWriteRecPool(size int) {
 	writeRecPool.Reset(size, func() interface{} {
 		return &record.Record{}
 	}, nil)
@@ -209,7 +205,7 @@ func (msi *MsInfo) CreateWriteChunkForColumnStore(sortKeys []string) {
 	}
 	msi.writeChunk = &WriteChunkForColumnStore{}
 	msi.writeChunk.WriteRec.initForReuse(msi.Schema)
-	msi.writeChunk.sortKeys = GetPrimaryKeys(msi.Schema, sortKeys)
+	msi.writeChunk.sortKeys = GetSortKeys(msi.Schema, sortKeys)
 	msi.mu.Unlock()
 }
 
@@ -236,7 +232,7 @@ func (msi *MsInfo) GetAllSid() []uint64 {
 	return sids
 }
 
-func GetPrimaryKeys(schema []record.Field, primaryKeys []string) []record.PrimaryKey {
+func GetSortKeys(schema []record.Field, primaryKeys []string) []record.PrimaryKey {
 	pk := make([]record.PrimaryKey, 0, len(primaryKeys))
 	var filed record.PrimaryKey
 	for i := range primaryKeys {
@@ -253,9 +249,10 @@ func GetPrimaryKeys(schema []record.Field, primaryKeys []string) []record.Primar
 
 type MTable interface {
 	initMsInfo(msInfo *MsInfo, row *influx.Row, rec *record.Record, name string) *MsInfo
-	FlushChunks(table *MemTable, dataPath, msName string, lock *string, tbStore immutable.TablesStore)
+	FlushChunks(table *MemTable, dataPath, msName, db, rp string, lock *string, tbStore immutable.TablesStore, msRowCount int64, fileInfos chan []immutable.FileInfoExtend)
+	SetClient(client metaclient.MetaClient)
 	WriteRows(table *MemTable, rowsD *dictpool.Dict, wc WriteRowsCtx) error
-	WriteCols(table *MemTable, rec *record.Record, mstsInfo *sync.Map, mst string, startSeqId int64) error
+	WriteCols(table *MemTable, rec *record.Record, mstsInfo *sync.Map, mst string) error
 	SetFlushManagerInfo(manager map[string]FlushManager, accumulateMetaIndex *sync.Map)
 	Reset(table *MemTable)
 }
@@ -286,7 +283,7 @@ func createMsBuilder(tbStore immutable.TablesStore, order bool, lockPath *string
 	defer seq.UnRef()
 
 	FileName := immutable.NewTSSPFileName(tbStore.NextSequence(), 0, 0, 0, order, lockPath)
-	msb := immutable.NewMsBuilder(dataPath, msName, lockPath, conf, totalChunks, FileName, tbStore.Tier(), seq, size, engineType)
+	msb := immutable.NewMsBuilder(dataPath, msName, lockPath, conf, totalChunks, FileName, tbStore.Tier(), seq, size, engineType, tbStore.GetObsOption(), tbStore.GetShardID())
 	return msb
 }
 
@@ -364,8 +361,6 @@ func (t *MemTable) initMTable(engineType config.EngineType) {
 	case config.COLUMNSTORE:
 		t.MTable = &csMemTableImpl{
 			primaryKey:          make(map[string]record.Schemas),
-			timeClusterDuration: make(map[string]time.Duration),
-			indexRelation:       make(map[string]influxql.IndexRelation),
 			flushManager:        make(map[string]FlushManager),
 			accumulateMetaIndex: &sync.Map{},
 		}
@@ -476,7 +471,7 @@ func NewMemTable(engineType config.EngineType) *MemTable {
 }
 
 func (t *MemTable) NeedFlush() bool {
-	return atomic.LoadInt64(&t.memSize) > GetSizeLimit()
+	return atomic.LoadInt64(&t.memSize) > config.GetShardMemTableSizeLimit()
 }
 
 func (t *MemTable) SetMsInfo(name string, msInfo *MsInfo) {
@@ -764,27 +759,17 @@ func (t *MemTable) getSortedRecSafe(msName string, id uint64, tr util.TimeRange,
 	hlp := record.NewColumnSortHelper()
 	defer hlp.Release()
 
-	var rec *record.Record
 	chunk.Mu.Lock()
+	writeRec := chunk.WriteRec.rec
+	if writeRec == nil || writeRec.RowNums() == 0 {
+		chunk.Mu.Unlock()
+		return nil
+	}
+
 	chunk.SortRecordNoLock(hlp)
-
-	if chunk.OrderWriteRec.rec.RowNums() == 0 {
-		rec = chunk.UnOrderWriteRec.rec.CopyWithCondition(ascending, tr, schema)
-		chunk.Mu.Unlock()
-		return rec
-	}
-
-	if chunk.UnOrderWriteRec.rec.RowNums() == 0 {
-		rec = chunk.OrderWriteRec.rec.CopyWithCondition(ascending, tr, schema)
-		chunk.Mu.Unlock()
-		return rec
-	}
-
-	rec = &record.Record{}
-	rec.MergeRecord(chunk.OrderWriteRec.rec, chunk.UnOrderWriteRec.rec)
+	var rec = chunk.WriteRec.rec.Copy(ascending, &tr, schema)
 	chunk.Mu.Unlock()
-
-	return rec.CopyWithCondition(ascending, tr, schema)
+	return rec
 }
 
 func (t *MemTable) values(msName string, id uint64, tr util.TimeRange, schema record.Schemas, ascending bool) *record.Record {
@@ -796,30 +781,23 @@ func (t *MemTable) values(msName string, id uint64, tr util.TimeRange, schema re
 	return rec
 }
 
-func (t *MemTable) GetMaxTimeBySidNoLock(msName string, sid uint64) int64 {
-	msInfo, ok := t.msInfoMap[msName]
-	if !ok {
-		return math.MinInt64
-	}
-	chunk, ok := msInfo.sidMap[sid]
-	if !ok {
-		return math.MinInt64
-	}
-
-	if chunk.UnOrderWriteRec.lastAppendTime > chunk.OrderWriteRec.lastAppendTime {
-		return chunk.UnOrderWriteRec.lastAppendTime
-	}
-	return chunk.OrderWriteRec.lastAppendTime
-}
-
-func UpdateMstRowCount(msRowCount *sync.Map, mstName string, rowCount int64) int64 {
-	var startSeqId *int64
+func UpdateMstRowCount(msRowCount *sync.Map, mstName string, rowCount int64) {
 	if count, ok := msRowCount.Load(mstName); ok {
-		startSeqId, _ = count.(*int64)
-		atomic.AddInt64(startSeqId, rowCount)
-		return *startSeqId
+		atomic.AddInt64(count.(*int64), rowCount)
 	} else {
 		msRowCount.Store(mstName, &rowCount)
-		return 0
 	}
+}
+
+var concurLimiter = limiter.NewFixed(8)
+
+func initConcurLimiter(limit int) {
+	concurLimiter = limiter.NewFixed(limit)
+}
+
+func Init(cpuNum int) {
+	initConcurLimiter(cpuNum)
+	initWriteRecPool(cpuNum)
+	InitMutablePool(cpuNum)
+	NewMemTablePoolManager().Init()
 }

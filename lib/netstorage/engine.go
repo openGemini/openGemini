@@ -25,10 +25,12 @@ import (
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics/opsStat"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
+	"go.etcd.io/etcd/raft/v3/raftpb"
 	"go.uber.org/zap"
 )
 
@@ -114,7 +116,7 @@ type Engine interface {
 	RollbackPreOffload(opId uint64, db string, ptId uint32) error
 	PreAssign(opId uint64, db string, ptId uint32, durationInfos map[uint64]*meta.ShardDurationInfo, dbBriefInfo *meta.DatabaseBriefInfo, client metaclient.MetaClient) error
 	Offload(opId uint64, db string, ptId uint32) error
-	Assign(opId uint64, db string, ptId uint32, ver uint64, durationInfos map[uint64]*meta.ShardDurationInfo, dbBriefInfo *meta.DatabaseBriefInfo, client metaclient.MetaClient) error
+	Assign(opId uint64, nodeId uint64, db string, ptId uint32, ver uint64, durationInfos map[uint64]*meta.ShardDurationInfo, dbBriefInfo *meta.DatabaseBriefInfo, client metaclient.MetaClient) error
 
 	SysCtrl(req *SysCtrlRequest) (map[string]string, error)
 	Statistics(buffer []byte) ([]byte, error)
@@ -130,5 +132,18 @@ type Engine interface {
 	UpdateDownSampleInfo(policies *meta.DownSamplePoliciesInfoWithDbRp)
 	UpdateShardDownSampleInfo(infos *meta.ShardDownSampleUpdateInfos)
 	CheckPtsRemovedDone() bool
-	HierarchicalStorage(db string, ptId uint32, shardID uint64) error
+	HierarchicalStorage(db string, ptId uint32, shardID uint64) bool
+
+	RaftMessage
+	CreateShowTagValuesPlan(db string, ptIDs []uint32, tr *influxql.TimeRange) ShowTagValuesPlan
+	SetMetaClient(m metaclient.MetaClient)
+}
+
+type RaftMessage interface {
+	SendRaftMessage(database string, ptId uint64, msg raftpb.Message) error
+}
+
+type ShowTagValuesPlan interface {
+	Execute(tagKeys map[string][][]byte, condition influxql.Expr, tr util.TimeRange, limit int) (TablesTagSets, error)
+	Stop()
 }

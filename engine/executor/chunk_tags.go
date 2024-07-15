@@ -57,9 +57,21 @@ func NewChunkTags(pts influx.PointTags, dimensions []string) *ChunkTags {
 	return c
 }
 
+func NewChunkTagsWithoutDims(pts influx.PointTags, withoutDims []string) *ChunkTags {
+	c := &ChunkTags{}
+	c.encodeTagsWithoutDims(pts, withoutDims)
+	return c
+}
+
 func NewChunkTagsByTagKVs(k []string, v []string) *ChunkTags {
 	c := &ChunkTags{}
 	c.encodeTagsByTagKVs(k, v)
+	return c
+}
+
+func NewChunkTagsByBytes(bytes []byte) *ChunkTags {
+	c := &ChunkTags{}
+	c.encodeTagsByBytes(bytes)
 	return c
 }
 
@@ -67,6 +79,13 @@ func NewChunkTagsV2(subset []byte) *ChunkTags {
 	c := &ChunkTags{
 		subset: subset,
 	}
+	return c
+}
+
+func NewChunkTagsDeepCopy(subset []byte, offsets []uint16) *ChunkTags {
+	c := &ChunkTags{}
+	c.subset = append(c.subset, subset...)
+	c.offsets = append(c.offsets, offsets...)
 	return c
 }
 
@@ -121,6 +140,19 @@ func (ct *ChunkTags) KeepKeys(keys []string) *ChunkTags {
 	var m influx.PointTags
 	var ss []string
 	for _, kv := range ct.decodeTags() {
+		if ContainDim(keys, kv[0]) {
+			ss = append(ss, kv[0])
+			m = append(m, influx.Tag{Key: kv[0], Value: kv[1], IsArray: false})
+		}
+	}
+	sort.Sort(&m)
+	return NewChunkTags(m, ss)
+}
+
+func (ct *ChunkTags) RemoveKeys(keys []string) *ChunkTags {
+	var m influx.PointTags
+	var ss []string
+	for _, kv := range ct.decodeTags() {
 		if !ContainDim(keys, kv[0]) {
 			ss = append(ss, kv[0])
 			m = append(m, influx.Tag{Key: kv[0], Value: kv[1], IsArray: false})
@@ -159,10 +191,10 @@ func (ct *ChunkTags) PointTags() influx.PointTags {
 func ContainDim(des []string, src string) bool {
 	for i := range des {
 		if src == des[i] {
-			return false
+			return true
 		}
 	}
-	return true
+	return false
 }
 
 func (ct *ChunkTags) encodeTagsByTagKVs(keys []string, vals []string) {
@@ -178,6 +210,16 @@ func (ct *ChunkTags) encodeTagsByTagKVs(keys []string, vals []string) {
 		ct.subset = append(ct.subset, vals[i]...)
 		ct.subset = append(ct.subset, influx.ByteSplit)
 		ct.offsets = append(ct.offsets, uint16(len(ct.subset)))
+	}
+	ct.encodeHead()
+}
+
+func (ct *ChunkTags) encodeTagsByBytes(bytes []byte) {
+	ct.subset = bytes
+	for i, b := range bytes {
+		if b == influx.ByteSplit {
+			ct.offsets = append(ct.offsets, uint16(i+1))
+		}
 	}
 	ct.encodeHead()
 }
@@ -216,6 +258,38 @@ func (ct *ChunkTags) encodeTags(pts influx.PointTags, keys []string) {
 	ct.subset = append(head, ct.subset...)
 }
 
+func (ct *ChunkTags) encodeTagsWithoutDims(pts influx.PointTags, withoutKeys []string) {
+	ct.offsets = make([]uint16, 0, (len(pts)-len(withoutKeys))*2)
+	if len(pts) == 0 {
+		return
+	}
+	i, j := 0, 0
+	for i < len(withoutKeys) && j < len(pts) {
+		if withoutKeys[i] < pts[j].Key {
+			i++
+		} else if withoutKeys[i] > pts[j].Key {
+			ct.subset = append(ct.subset, Str2bytes(pts[j].Key+influx.StringSplit)...)
+			ct.offsets = append(ct.offsets, uint16(len(ct.subset)))
+			ct.subset = append(ct.subset, Str2bytes(pts[j].Value+influx.StringSplit)...)
+			ct.offsets = append(ct.offsets, uint16(len(ct.subset)))
+			j++
+		} else {
+			i++
+			j++
+		}
+	}
+	for ; j < len(pts); j++ {
+		ct.subset = append(ct.subset, Str2bytes(pts[j].Key+influx.StringSplit)...)
+		ct.offsets = append(ct.offsets, uint16(len(ct.subset)))
+		ct.subset = append(ct.subset, Str2bytes(pts[j].Value+influx.StringSplit)...)
+		ct.offsets = append(ct.offsets, uint16(len(ct.subset)))
+	}
+
+	ct.offsets = append([]uint16{uint16(len(ct.offsets))}, ct.offsets...)
+	head := util.Uint16Slice2byte(ct.offsets)
+	ct.subset = append(head, ct.subset...)
+}
+
 func (ct *ChunkTags) decodeTags() [][]string {
 	if len(ct.subset) == 0 {
 		return nil
@@ -236,4 +310,38 @@ func (ct *ChunkTags) decodeTags() [][]string {
 		index = ct.offsets[i+1]
 	}
 	return TagValues
+}
+
+func (ct *ChunkTags) decodeTagsWithoutTag(tagName string) ([]byte, string) {
+	if len(ct.subset) == 0 {
+		return nil, ""
+	}
+	offsetLen := util.Bytes2Uint16Slice(ct.subset[:2])[0]
+	ct.offsets = util.Bytes2Uint16Slice(ct.subset[2 : 2+int(offsetLen)*2])
+	tags := ct.subset[2+int(offsetLen)*2:]
+	newTags := make([]byte, 0, len(tags))
+	var targetTagValue string
+	var index uint16
+	var flag bool
+	for i := uint16(0); i < offsetLen; i += 2 {
+		if !flag {
+			k := util.Bytes2str(tags[index : ct.offsets[i]-1])
+			if len(k) == 1 {
+				index = ct.offsets[i+1]
+				continue
+			}
+			if k == tagName {
+				targetTagValue = string(tags[ct.offsets[i] : ct.offsets[i+1]-1])
+				flag = true
+				continue
+			}
+		}
+		newTags = append(newTags, tags[index:ct.offsets[i]]...)
+		newTags = append(newTags, tags[ct.offsets[i]:ct.offsets[i+1]]...)
+		index = ct.offsets[i+1]
+	}
+	if targetTagValue == "" {
+		return nil, targetTagValue
+	}
+	return newTags, targetTagValue
 }

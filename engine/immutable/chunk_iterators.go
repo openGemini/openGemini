@@ -20,10 +20,8 @@ import (
 	"container/heap"
 	"sync/atomic"
 
-	"github.com/openGemini/openGemini/lib/fileops"
 	Log "github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/record"
-	"go.uber.org/zap"
 )
 
 type ChunkIterator struct {
@@ -31,7 +29,6 @@ type ChunkIterator struct {
 	ctx    *ReadContext
 	id     uint64
 	fields record.Schemas
-	rec    *record.Record
 	merge  *record.Record
 	log    *Log.Logger
 }
@@ -165,7 +162,6 @@ func NewChunkIterator(r *FileIterator) *ChunkIterator {
 		FileIterator: r,
 		ctx:          NewReadContext(true),
 		merge:        allocRecord(),
-		rec:          allocRecord(),
 	}
 
 	return itr
@@ -177,7 +173,6 @@ func (c *ChunkIterator) WithLog(log *Log.Logger) {
 
 func (c *ChunkIterator) Close() {
 	c.FileIterator.Close()
-	freeRecord(c.rec)
 	freeRecord(c.merge)
 	c.ctx.Release()
 	c.ctx = nil
@@ -208,14 +203,14 @@ func (c *ChunkIterator) Next() bool {
 		c.fields[i].Type = int(cm.ty)
 	}
 
-	if c.err = c.read(); c.err != nil {
+	if c.err = c.readRecord(); c.err != nil {
 		return false
 	}
 
 	return true
 }
 
-func (c *ChunkIterator) read() error {
+func (c *ChunkIterator) readRecord() error {
 	var err error
 	c.id = c.curtChunkMeta.sid
 	cMeta := c.curtChunkMeta
@@ -223,31 +218,24 @@ func (c *ChunkIterator) read() error {
 	c.merge.Reset()
 	c.merge.SetSchema(c.fields)
 	c.merge.ReserveColVal(len(c.fields))
-	timeMeta := cMeta.timeMeta()
-	for i := range timeMeta.entries {
-		c.rec.Reset()
-		c.rec.SetSchema(c.fields)
-		c.rec.ReserveColVal(len(c.fields))
-		c.rec.ReserveColumnRows(8)
-		record.CheckRecord(c.rec)
 
-		c.rec, err = c.r.ReadAt(cMeta, i, c.rec, c.ctx, fileops.IO_PRIORITY_LOW_READ)
-		if err != nil {
-			c.log.Error("read segment error", zap.String("file", c.r.Path()), zap.Error(err))
-			return err
-		}
-
-		c.segPos++
-
-		record.CheckRecord(c.rec)
-		c.merge.Merge(c.rec)
-		record.CheckRecord(c.merge)
+	buf, err := c.readData(cMeta.offset, cMeta.size)
+	if err != nil {
+		return err
 	}
 
-	if c.segPos >= len(timeMeta.entries) {
-		c.curtChunkMeta = nil
-		c.chunkUsed++
+	c.merge.Reset()
+	c.merge.SetSchema(c.fields)
+	c.merge.ReserveColVal(len(c.fields))
+
+	err = decodeRecord(c.ctx, buf, cMeta, c.merge)
+	if err != nil {
+		return err
 	}
+
+	record.CheckRecord(c.merge)
+	c.curtChunkMeta = nil
+	c.chunkUsed++
 
 	return nil
 }
@@ -258,4 +246,35 @@ func (c *ChunkIterator) GetSeriesID() uint64 {
 
 func (c *ChunkIterator) GetRecord() *record.Record {
 	return c.merge
+}
+
+func decodeRecord(ctx *ReadContext, chunkData []byte, cm *ChunkMeta, dst *record.Record) error {
+	var err error
+
+	schema := dst.Schema
+	swap := &ctx.col
+
+	for i := 0; i < schema.Len(); i++ {
+		ref := &schema[i]
+		colMeta := &cm.colMeta[i]
+		col := dst.Column(i)
+
+		for n := range colMeta.entries {
+			buf := columnData(chunkData, cm.offset, colMeta.entries[n].offset, colMeta.entries[n].size)
+
+			if ref.Name == record.TimeField {
+				err = appendTimeColumnData(buf, swap, ctx, false)
+			} else {
+				err = decodeColumnData(ref, buf, swap, ctx, false)
+			}
+
+			if err != nil {
+				return err
+			}
+
+			col.AppendColVal(swap, ref.Type, 0, swap.Len)
+		}
+	}
+
+	return nil
 }

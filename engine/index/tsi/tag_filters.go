@@ -143,6 +143,7 @@ func (tf *tagFilter) String() string {
 // Marshal appends marshaled tf to dst
 // and returns the result.
 func (tf *tagFilter) Marshal(dst []byte) []byte {
+	dst = marshalTagValue(dst, tf.name)
 	dst = marshalTagValue(dst, tf.key)
 	dst = marshalTagValue(dst, tf.value)
 

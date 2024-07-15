@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"net"
 	"regexp"
 	"strconv"
 	"time"
@@ -35,7 +36,8 @@ const (
 	// DefaultMaxRowNum is the maximum row number of a query result.
 	DefaultMaxRowNum = 1000000
 
-	DefaultBlockSize = 64 * 1024
+	DefaultBlockSize   = 64 * 1024
+	DefaultMaxLineSize = 1024 * 1024
 )
 
 // Config represents a configuration for a HTTP service.
@@ -86,6 +88,24 @@ type Config struct {
 	ReadBlockSize           toml.Size      `toml:"read-block-size"`
 	TimeFilterProtection    bool           `toml:"time-filter-protection"`
 	CPUThreshold            int            `toml:"cpu-threshold"`
+	MaxLineSize             int            `toml:"max-line-size"`
+}
+
+func CombineDomain(domain, addr string) string {
+	if domain == "" {
+		return addr
+	}
+
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+
+	return fmt.Sprintf("%s:%s", domain, port)
+}
+
+func (c Config) BindAddr() string {
+	return CombineDomain(c.Domain, c.BindAddress)
 }
 
 // NewHttpConfig returns a new Config with default settings.
@@ -117,6 +137,7 @@ func NewConfig() Config {
 		ChunkReaderParallel:     cpu.GetCpuNum(),
 		ReadBlockSize:           toml.Size(DefaultBlockSize),
 		TimeFilterProtection:    false,
+		MaxLineSize:             DefaultMaxLineSize,
 	}
 }
 

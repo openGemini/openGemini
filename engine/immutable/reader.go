@@ -27,6 +27,7 @@ import (
 	"github.com/openGemini/openGemini/lib/binaryfilterfunc"
 	"github.com/openGemini/openGemini/lib/bitmap"
 	"github.com/openGemini/openGemini/lib/encoding"
+	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/openGemini/openGemini/lib/readcache"
 	"github.com/openGemini/openGemini/lib/record"
@@ -67,7 +68,7 @@ type FileReader interface {
 	Name() string
 	FileName() string
 	Rename(newName string) error
-	RenameOnObs(obsName string) error
+	RenameOnObs(obsName string, tmp bool, obsOpt *obs.ObsOptions) error
 	FileSize() int64
 	InMemSize() int64
 	Version() uint64
@@ -78,6 +79,7 @@ type FileReader interface {
 	AverageChunkRows() int
 	MaxChunkRows() int
 	GetFileReaderRef() int64
+	ChunkMetaCompressMode() uint8
 }
 
 type MmsReaders struct {
@@ -484,7 +486,7 @@ func appendIntegerColumn(nilBitmap []byte, bitmapOffset uint32, encData []byte, 
 		col.AppendBitmap(nilBitmap, int(bitmapOffset), rows, 0, rows)
 
 		if !ctx.Ascending {
-			_ = reverseIntegerValues(values)
+			_ = reverseValues(values)
 			col.Bitmap = record.ReverseBitMap(col.Bitmap, uint32(col.BitMapOffset), rows)
 		}
 
@@ -510,7 +512,7 @@ func appendFloatColumn(nilBitmap []byte, bitmapOffset uint32, encData []byte, ni
 		col.ReserveBitmap(len(col.Val))
 		col.AppendBitmap(nilBitmap, int(bitmapOffset), rows, 0, rows)
 		if !ctx.Ascending {
-			_ = reverseFloatValues(values)
+			_ = reverseValues(values)
 			col.Bitmap = record.ReverseBitMap(col.Bitmap, uint32(col.BitMapOffset), rows)
 		}
 
@@ -535,7 +537,7 @@ func appendBooleanColumn(nilBitmap []byte, bitmapOffset uint32, encData []byte, 
 		col.ReserveBitmap(len(col.Val))
 		col.AppendBitmap(nilBitmap, int(bitmapOffset), rows, 0, rows)
 		if !ctx.Ascending {
-			_ = reverseBooleanValues(values)
+			_ = reverseValues(values)
 			col.Bitmap = record.ReverseBitMap(col.Bitmap, uint32(col.BitMapOffset), rows)
 		}
 
@@ -628,7 +630,7 @@ func appendTimeColumnData(tmData []byte, timeCol *record.ColVal, ctx *ReadContex
 	}
 
 	if !ctx.Ascending {
-		values = reverseIntegerValues(values)
+		values = reverseValues(values)
 		timeCol.Val = util.Int64Slice2byte(values)
 	}
 
@@ -1002,25 +1004,8 @@ func initIgnoreTypeFun() {
 		filterMap.SetFilterMapValue(name, Boolvalue[validCount])
 	}
 }
-func reverseIntegerValues(values []int64) []int64 {
-	for i, j := 0, len(values)-1; i < j; {
-		values[i], values[j] = values[j], values[i]
-		i++
-		j--
-	}
-	return values
-}
 
-func reverseFloatValues(values []float64) []float64 {
-	for i, j := 0, len(values)-1; i < j; {
-		values[i], values[j] = values[j], values[i]
-		i++
-		j--
-	}
-	return values
-}
-
-func reverseBooleanValues(values []bool) []bool {
+func reverseValues[T int64 | float64 | bool](values []T) []T {
 	for i, j := 0, len(values)-1; i < j; {
 		values[i], values[j] = values[j], values[i]
 		i++

@@ -18,6 +18,7 @@ package meta
 
 import (
 	"fmt"
+	"math"
 	"sync"
 	"testing"
 	"time"
@@ -28,6 +29,9 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
+	"github.com/openGemini/openGemini/lib/obs"
+	"github.com/openGemini/openGemini/lib/util"
+	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
 	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
@@ -567,4 +571,343 @@ func Test_applyUpdateMeasuremt(t *testing.T) {
 
 	resErr := applyUpdateMeasurement(fsm, cmd)
 	require.Nil(t, resErr)
+}
+
+func Test_getSnapshotV2(t *testing.T) {
+	s := &Store{
+		data: &meta2.Data{
+			Term:         1,
+			Index:        2,
+			ClusterID:    3,
+			ClusterPtNum: 4,
+			PtNumPerNode: 5,
+
+			Databases: map[string]*meta2.DatabaseInfo{
+				"db0": {
+					Name: "db0",
+					RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+						"rp0": {
+							Measurements: map[string]*meta2.MeasurementInfo{
+								"cpu-1": {
+									Name: "cpu-1",
+								},
+							},
+						},
+					},
+				},
+			},
+			Users: []meta2.UserInfo{
+				{
+					Name: "test",
+				},
+			},
+		},
+		cacheDataBytes:   []byte{1, 2, 3},
+		cacheDataChanged: make(chan struct{}),
+		config:           &config.Meta{RetentionAutoCreate: true},
+		Logger:           logger.NewLogger(errno.ModuleMeta).With(zap.String("service", "meta")),
+		UseIncSyncData:   true,
+	}
+	var err error
+
+	dataPb := s.data.Marshal()
+	dataOps := meta2.NewDataOpsOfAllClear(int(meta2.AllClear), dataPb, *dataPb.Index)
+	expStr1 := dataOps.Marshal()
+	meta2.DataLogger = logger.GetLogger().With(zap.String("service", "data"))
+	// case sql
+	sqlBytes := s.getSnapshotV2(metaclient.SQL, 1, 3)
+	require.Equal(t, expStr1, sqlBytes)
+
+	// case meta
+	metaBytes := s.getSnapshotV2(metaclient.META, 1, 1)
+	require.Equal(t, expStr1, metaBytes)
+
+	// case store1
+	storeBytes1 := s.getSnapshotV2(metaclient.META, 1, 2)
+	require.Equal(t, expStr1, storeBytes1)
+
+	// case store2
+	cmd1, ext := &proto2.CreateDatabaseCommand{
+		Name:           proto.String("db1"),
+		EnableTagArray: proto.Bool(false),
+		ReplicaNum:     proto.Uint32(1),
+	}, proto2.E_CreateDatabaseCommand_Command
+	typ := proto2.Command_CreateDatabaseCommand
+	cmd2 := &proto2.Command{Type: &typ}
+	if err := proto.SetExtension(cmd2, ext, cmd1); err != nil {
+		panic(err)
+	}
+	ret := applyCreateDatabase((*storeFSM)(s), cmd2)
+	if ret != nil {
+		t.Fatal("Test_getSnapshotV2 err2-1", ret.(error).Error())
+	}
+
+	expStr2, err := proto.Marshal(cmd2)
+	if err != nil {
+		t.Fatal("Test_getSnapshotV2 err2-2", ret.(error).Error())
+	}
+
+	s.data.OpsMap = make(map[uint64]*meta2.Op)
+	s.data.AddCmdAsOpToOpMap(*cmd2, 3)
+	s.data.Index = 3
+	storeBytes2 := s.getSnapshotV2(metaclient.STORE, 2, 2)
+	dataOps = &meta2.DataOps{}
+	if err = dataOps.UnmarshalBinary(storeBytes2); err != nil {
+		t.Fatal("Test_getSnapshotV2 err3", ret.(error).Error())
+	}
+	for _, op := range dataOps.GetOps() {
+		opcmd := proto2.Command{}
+		if err := proto.Unmarshal(util.Str2bytes(op), &opcmd); err != nil {
+			t.Fatal("Test_getSnapshotV2 err4", ret.(error).Error())
+		} else if *opcmd.Type != proto2.Command_CreateDatabaseCommand {
+			t.Fatal("Test_getSnapshotV2 err5", ret.(error).Error())
+		} else {
+			actual, err := proto.Marshal(&opcmd)
+			if err != nil {
+				t.Fatal("Test_getSnapshotV2 err6", ret.(error).Error())
+			}
+			require.Equal(t, expStr2, actual)
+		}
+	}
+	s.UpdateCacheDataV2()
+	storeBytes3 := s.getSnapshotV2(metaclient.STORE, 2, 2)
+	require.Equal(t, storeBytes3, storeBytes2)
+	storeBytes4 := s.getSnapshotV2(metaclient.STORE, 3, 2)
+	require.Equal(t, len(storeBytes4), 0)
+	storeBytes5 := s.getSnapshotV2(metaclient.STORE, 4, 2)
+	require.Equal(t, len(storeBytes5), 0)
+	s.data.Index = 4
+	dataOps6 := meta2.NewDataOps(nil, s.data.MaxCQChangeID, int(meta2.NoClear), s.data.Index)
+	expStr3 := dataOps6.Marshal()
+	storeBytes6 := s.getSnapshotV2(metaclient.STORE, 3, 2)
+	require.Equal(t, storeBytes6, expStr3)
+}
+
+func Test_ClearOpsMap(t *testing.T) {
+	s := &Store{
+		data: &meta2.Data{
+			Term:         1,
+			Index:        31,
+			ClusterID:    3,
+			ClusterPtNum: 4,
+			PtNumPerNode: 5,
+
+			Databases: map[string]*meta2.DatabaseInfo{
+				"db0": {
+					Name: "db0",
+					RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+						"rp0": {
+							Measurements: map[string]*meta2.MeasurementInfo{
+								"cpu-1": {
+									Name: "cpu-1",
+								},
+							},
+						},
+					},
+				},
+			},
+			Users: []meta2.UserInfo{
+				{
+					Name: "test",
+				},
+			},
+			DataNodes:         []meta2.DataNode{meta2.DataNode{Index: 3, NodeInfo: meta2.NodeInfo{Status: serf.StatusAlive}}},
+			OpsMap:            make(map[uint64]*meta2.Op),
+			OpsMapMinIndex:    1,
+			OpsMapMaxIndex:    31,
+			OpsToMarshalIndex: 1,
+		},
+		cacheDataBytes:   []byte{1, 2, 3},
+		cacheDataChanged: make(chan struct{}),
+		config:           &config.Meta{RetentionAutoCreate: true},
+		Logger:           logger.NewLogger(errno.ModuleMeta).With(zap.String("service", "meta")),
+		UseIncSyncData:   true,
+		closing:          make(chan struct{}),
+	}
+	var i uint64
+	for i = 1; i <= 30; i++ {
+		s.data.OpsMap[i] = meta2.NewOp(nil, i+1, nil)
+	}
+	s.data.OpsMap[31] = meta2.NewOp(nil, 0, nil)
+	s.wg.Add(1)
+	go s.ClearOpsMap()
+	time.Sleep(time.Second * 5)
+	s.close()
+	s.wg.Wait()
+	if len(s.data.OpsMap) != 29 {
+		t.Fatal("Test_ClearOpsMap err")
+	}
+}
+
+func Test_applyInsertFilesErr(t *testing.T) {
+	s := &Store{
+		raft:     &MockRaftForCQ{isLeader: true},
+		sqlHosts: []string{"127.0.0.1:8086"},
+		cqLease: map[string]*cqLeaseInfo{
+			"127.0.0.1:8086": {},
+		},
+		data:   &meta2.Data{},
+		Logger: logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop()),
+	}
+	fsm := (*storeFSM)(s)
+	var fileInfosProto []*proto2.FileInfo
+	value := &proto2.InsertFilesCommand{
+		FileInfos: fileInfosProto,
+	}
+	typ := proto2.Command_InsertFilesCommand
+	cmd := &proto2.Command{Type: &typ}
+	err := proto.SetExtension(cmd, proto2.E_InsertFilesCommand_Command, value)
+	require.NoError(t, err)
+
+	applyInsertFilesCommand(fsm, cmd)
+}
+
+func Test_applyInsertFiles(t *testing.T) {
+	sqlite, err := meta2.NewSQLiteWrapper(t.TempDir() + "/" + DefaultDatabase + "?cache=shared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Store{
+		raft:     &MockRaftForCQ{isLeader: true},
+		sqlHosts: []string{"127.0.0.1:8086"},
+		cqLease: map[string]*cqLeaseInfo{
+			"127.0.0.1:8086": {},
+		},
+		data: &meta2.Data{
+			Databases: map[string]*meta2.DatabaseInfo{
+				"db0": {
+					Name: "db0",
+				},
+			},
+			SQLite: sqlite,
+		},
+		Logger: logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop()),
+	}
+	fsm := (*storeFSM)(s)
+	fileInfo := meta2.FileInfo{
+		MstID:         211,
+		ShardID:       311,
+		Sequence:      1122,
+		Level:         123,
+		Merge:         124,
+		Extent:        125,
+		CreatedAt:     121,
+		DeletedAt:     0,
+		MinTime:       100,
+		MaxTime:       200,
+		RowCount:      221,
+		FileSizeBytes: 4044,
+	}
+	fip := fileInfo.Marshal()
+	var fileInfosProto []*proto2.FileInfo
+	fileInfosProto = append(fileInfosProto, fip)
+	value := &proto2.InsertFilesCommand{
+		FileInfos: fileInfosProto,
+	}
+	typ := proto2.Command_InsertFilesCommand
+	cmd := &proto2.Command{Type: &typ}
+	err = proto.SetExtension(cmd, proto2.E_InsertFilesCommand_Command, value)
+	require.NoError(t, err)
+
+	resErr := applyInsertFilesCommand(fsm, cmd)
+	require.Nil(t, resErr)
+	resErr = applyInsertFilesCommand(fsm, cmd)
+	require.EqualError(t, resErr.(error), "UNIQUE constraint failed: files.mst_id, files.shard_id, files.sequence, files.level, files.extent, files.merge")
+}
+
+func Test_executeCmdErr(t *testing.T) {
+	s := &Store{Logger: logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())}
+	fsm := (*storeFSM)(s)
+	typ := proto2.Command_InsertFilesCommand
+	cmd := &proto2.Command{Type: &typ}
+	value := &proto2.InsertFilesCommand{}
+	err := proto.SetExtension(cmd, proto2.E_InsertFilesCommand_Command, value)
+	require.NoError(t, err)
+	var errType proto2.Command_Type = math.MaxInt32
+	cmd.Type = &errType
+	fsm.executeCmd(*cmd)
+}
+
+func Test_DeleteRpForLogkeeper(t *testing.T) {
+	config.SetProductType("logkeeper")
+	dir := t.TempDir()
+	s := &Store{
+		config: &config.Meta{DataDir: dir + "/data", WalDir: dir + "/wal"},
+		cacheData: &meta2.Data{
+			DataNodes: []meta2.DataNode{
+				meta2.DataNode{NodeInfo: meta2.NodeInfo{ID: 0, TCPHost: "127.0.0.1", Status: serf.StatusAlive}, ConnID: 2, AliveConnID: 2},
+				meta2.DataNode{NodeInfo: meta2.NodeInfo{ID: 1, TCPHost: "127.0.0.2", Status: serf.StatusLeaving}, ConnID: 2, AliveConnID: 2},
+			},
+			PtView: map[string]meta2.DBPtInfos{
+				"db0": {
+					meta2.PtInfo{Owner: meta2.PtOwner{NodeID: 0}, Status: meta2.Online, PtId: 0},
+					meta2.PtInfo{Owner: meta2.PtOwner{NodeID: 1}, Status: meta2.Offline, PtId: 1},
+				},
+				"db1": {
+					meta2.PtInfo{Owner: meta2.PtOwner{NodeID: 0}, Status: meta2.Online, PtId: 0},
+					meta2.PtInfo{Owner: meta2.PtOwner{NodeID: 1}, Status: meta2.Offline, PtId: 1},
+				},
+			},
+			Databases: map[string]*meta2.DatabaseInfo{
+				"db0": &meta2.DatabaseInfo{Name: "db0", DefaultRetentionPolicy: "autogen"},
+				"db1": &meta2.DatabaseInfo{Name: "db0", DefaultRetentionPolicy: "autogen", Options: &obs.ObsOptions{}},
+			},
+		},
+		NetStore: NewMockNetStorage(),
+		raft:     &MockRaftForCQ{isLeader: true},
+	}
+	err := s.deleteRetentionPolicy("db0", "rp0")
+	if err != nil {
+		t.Errorf("deleteRetentionPolicy failed, err:%+v", err)
+	}
+	err = s.deleteRetentionPolicy("db1", "rp0")
+	if err == nil {
+		t.Error("expect deleteRetentionPolicy failed")
+	}
+	err = s.deleteRetentionPolicy("db2", "rp0")
+	if err != nil {
+		t.Errorf("deleteRetentionPolicy failed, err:%+v", err)
+	}
+}
+
+func Test_DeleteDbForLogkeeper(t *testing.T) {
+	config.SetProductType("logkeeper")
+	dir := t.TempDir()
+	s := &Store{
+		config: &config.Meta{DataDir: dir + "/data", WalDir: dir + "/wal"},
+		cacheData: &meta2.Data{
+			DataNodes: []meta2.DataNode{
+				meta2.DataNode{NodeInfo: meta2.NodeInfo{ID: 0, TCPHost: "127.0.0.1", Status: serf.StatusAlive}, ConnID: 2, AliveConnID: 2},
+				meta2.DataNode{NodeInfo: meta2.NodeInfo{ID: 1, TCPHost: "127.0.0.2", Status: serf.StatusLeaving}, ConnID: 2, AliveConnID: 2},
+			},
+			PtView: map[string]meta2.DBPtInfos{
+				"db0": {
+					meta2.PtInfo{Owner: meta2.PtOwner{NodeID: 0}, Status: meta2.Online, PtId: 0},
+					meta2.PtInfo{Owner: meta2.PtOwner{NodeID: 1}, Status: meta2.Offline, PtId: 1},
+				},
+				"db1": {
+					meta2.PtInfo{Owner: meta2.PtOwner{NodeID: 0}, Status: meta2.Online, PtId: 0},
+					meta2.PtInfo{Owner: meta2.PtOwner{NodeID: 1}, Status: meta2.Offline, PtId: 1},
+				},
+			},
+			Databases: map[string]*meta2.DatabaseInfo{
+				"db0": &meta2.DatabaseInfo{Name: "db0"},
+				"db1": &meta2.DatabaseInfo{Name: "db0", Options: &obs.ObsOptions{}},
+			},
+		},
+		NetStore: NewMockNetStorage(),
+		raft:     &MockRaftForCQ{isLeader: true},
+	}
+	err := s.deleteDatabase("db0")
+	if err != nil {
+		t.Errorf("deleteDatabase failed, err:%+v", err)
+	}
+	err = s.deleteDatabase("db1")
+	if err == nil {
+		t.Error("expect deleteDatabase failed")
+	}
+	err = s.deleteDatabase("db2")
+	if err != nil {
+		t.Errorf("deleteDatabase failed, err:%+v", err)
+	}
 }

@@ -201,6 +201,11 @@ func NormalGetPlanType(schema hybridqp.Catalog, stmt *influxql.SelectStatement) 
 		return UNKNOWN
 	}
 
+	// Avoid promql range vector selector
+	if schema.Options().IsRangeVectorSelector() {
+		return UNKNOWN
+	}
+
 	for i := range PlanTypes {
 		if MatchPlanFunc[i](schema) {
 			return PlanTypes[i]

@@ -33,7 +33,6 @@ import (
 
 	set "github.com/deckarep/golang-set"
 	"github.com/influxdata/influxdb/models"
-	"github.com/influxdata/influxdb/query"
 	originql "github.com/influxdata/influxql"
 	"github.com/openGemini/openGemini/coordinator"
 	"github.com/openGemini/openGemini/engine/executor"
@@ -45,10 +44,11 @@ import (
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/syscontrol"
+	"github.com/openGemini/openGemini/lib/tokenizer"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
-	query2 "github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"go.uber.org/zap"
 )
@@ -71,12 +71,12 @@ type StatementExecutor struct {
 	MetaClient meta.MetaClient
 
 	// TaskManager holds the StatementExecutor that handles task-related commands.
-	TaskManager query2.StatementExecutor
+	TaskManager query.StatementExecutor
 
 	NetStorage netstorage.Storage
 
 	// ShardMapper for mapping shards when executing a SELECT statement.
-	ShardMapper query2.ShardMapper
+	ShardMapper query.ShardMapper
 
 	// Holds monitoring data for SHOW STATS and SHOW DIAGNOSTICS.
 	MetaExecutor *coordinator.MetaExecutor
@@ -199,25 +199,37 @@ func (e *StatementExecutor) Close() error {
 }
 
 // ExecuteStatement executes the given statement with the given execution context.
-func (e *StatementExecutor) ExecuteStatement(stmt influxql.Statement, ctx *query2.ExecutionContext, seq int) error {
+func (e *StatementExecutor) ExecuteStatement(stmt influxql.Statement, ctx *query.ExecutionContext, seq int) error {
 	e.MaxQueryParallel = int(atomic.LoadInt32(&syscontrol.QueryParallel))
+	stmtString := stmt.String()
+
 	// Select statements are handled separately so that they can be streamed.
 	if stmt, ok := stmt.(*influxql.SelectStatement); ok {
+		begin := time.Now()
 		err := e.retryExecuteSelectStatement(stmt, ctx, seq)
+		dur := time.Since(begin)
 		if err == nil {
+			if dur.Nanoseconds() > time.Second.Nanoseconds() {
+				e.StmtExecLogger.GetZapLogger().Warn("slow query",
+					zap.String("stmt", stmtString),
+					zap.Float64("duration", dur.Seconds()))
+			}
 			return nil
-		} else if errno.Equal(err, errno.DatabaseNotFound) ||
-			errno.Equal(err, errno.ErrMeasurementNotFound) {
-			e.StmtExecLogger.Error("execute select statement 400 error", zap.Any("stmt", stmt), zap.Error(err))
+		}
+
+		if errno.Equal(err, errno.DatabaseNotFound, errno.ErrMeasurementNotFound) {
+			e.StmtExecLogger.Error("execute select statement 400 error", zap.Any("stmt", stmtString),
+				zap.Error(err), zap.Float64("duration", dur.Seconds()))
 			atomic.AddInt64(&statistics.HandlerStat.Query400ErrorStmtCount, 1)
 		} else {
-			e.StmtExecLogger.Error("execute select statement 500 error", zap.Any("stmt", stmt), zap.Error(err))
+			e.StmtExecLogger.Error("execute select statement 500 error", zap.Any("stmt", stmtString),
+				zap.Error(err), zap.Float64("duration", dur.Seconds()))
 			atomic.AddInt64(&statistics.HandlerStat.QueryErrorStmtCount, 1)
 		}
 		return err
 	}
 
-	e.StmtExecLogger.Info("start execute statement", zap.Any("stmt", stmt))
+	e.StmtExecLogger.Info("start execute statement", zap.Any("stmt", stmtString))
 	var rows models.Rows
 	var messages []*query.Message
 	var err error
@@ -428,7 +440,7 @@ func (e *StatementExecutor) ExecuteStatement(stmt influxql.Statement, ctx *query
 	case *influxql.ShowClusterStatement:
 		rows, err = e.executeShowCluster(stmt)
 	default:
-		return query2.ErrInvalidQuery
+		return query.ErrInvalidQuery
 	}
 
 	if err != nil {
@@ -441,7 +453,7 @@ func (e *StatementExecutor) ExecuteStatement(stmt influxql.Statement, ctx *query
 	}, seq)
 }
 
-func (e *StatementExecutor) retryExecuteStatement(stmt influxql.Statement, ctx *query2.ExecutionContext, seq int) (models.Rows, error) {
+func (e *StatementExecutor) retryExecuteStatement(stmt influxql.Statement, ctx *query.ExecutionContext, seq int) (models.Rows, error) {
 	startTime := time.Now()
 	var retryNum uint32 = 0
 	var err error
@@ -616,14 +628,20 @@ func (e *StatementExecutor) getIndexRelation(stmt *influxql.CreateMeasurementSta
 		indexR.Oids = append(indexR.Oids, uint32(oid))
 		indexR.IndexNames = append(indexR.IndexNames, indexTypeName)
 		indexR.IndexList = append(indexR.IndexList, &influxql.IndexList{IList: stmt.IndexList[i]})
-		if oid != (index.TimeCluster) {
-			indexR.IndexOptions = append(indexR.IndexOptions, &influxql.IndexOptions{})
-		} else {
+		if oid == index.TimeCluster {
 			indexR.IndexOptions = append(indexR.IndexOptions, &influxql.IndexOptions{
 				Options: []*influxql.IndexOption{
 					{TimeClusterDuration: stmt.TimeClusterDuration},
 				},
 			})
+		} else if oid == index.Text {
+			indexR.IndexOptions = append(indexR.IndexOptions, &influxql.IndexOptions{
+				Options: []*influxql.IndexOption{
+					{Tokens: tokenizer.CONTENT_SPLITTER},
+				},
+			})
+		} else {
+			indexR.IndexOptions = append(indexR.IndexOptions, &influxql.IndexOptions{})
 		}
 	}
 	return indexR, nil
@@ -649,7 +667,7 @@ func (e *StatementExecutor) executeCreateMeasurementStatement(stmt *influxql.Cre
 	if stmt.EngineType != "" && !ok {
 		return errors.New("ENGINETYPE \"" + stmt.EngineType + "\" IS NOT SUPPORTED!")
 	}
-	_, err = e.MetaClient.CreateMeasurement(stmt.Database, stmt.RetentionPolicy, stmt.Name, ski, indexR, engineType, colStoreInfo, schemaInfo, nil)
+	_, err = e.MetaClient.CreateMeasurement(stmt.Database, stmt.RetentionPolicy, stmt.Name, ski, int32(stmt.NumOfShards), indexR, engineType, colStoreInfo, schemaInfo, nil)
 	return err
 }
 
@@ -882,11 +900,11 @@ func (e *StatementExecutor) executeDropUserStatement(q *influxql.DropUserStateme
 	return e.MetaClient.DropUser(q.Name)
 }
 
-func (e *StatementExecutor) executeExplainStatement(q *influxql.ExplainStatement, ctx *query2.ExecutionContext) (models.Rows, error) {
+func (e *StatementExecutor) executeExplainStatement(q *influxql.ExplainStatement, ctx *query.ExecutionContext) (models.Rows, error) {
 	panic("impl me")
 }
 
-func (e *StatementExecutor) executeExplainAnalyzeStatement(q *influxql.ExplainStatement, ectx *query2.ExecutionContext) (models.Rows, error) {
+func (e *StatementExecutor) executeExplainAnalyzeStatement(q *influxql.ExplainStatement, ectx *query.ExecutionContext) (models.Rows, error) {
 	stmt := q.Statement
 	trace, span := tracing.NewTrace("SELECT")
 	stmt.OmitTime = true
@@ -989,7 +1007,7 @@ func (e *StatementExecutor) executeSetPasswordUserStatement(q *influxql.SetPassw
 	return e.MetaClient.UpdateUser(q.Name, q.Password)
 }
 
-func (e *StatementExecutor) retryExecuteSelectStatement(stmt *influxql.SelectStatement, ctx *query2.ExecutionContext, seq int) error {
+func (e *StatementExecutor) retryExecuteSelectStatement(stmt *influxql.SelectStatement, ctx *query.ExecutionContext, seq int) error {
 	var err error
 
 	for i := 0; i < maxRetrySelectCount; i++ {
@@ -1002,7 +1020,7 @@ func (e *StatementExecutor) retryExecuteSelectStatement(stmt *influxql.SelectSta
 	return err
 }
 
-func (e *StatementExecutor) retryCreatePipelineExecutor(ctx context.Context, stmt *influxql.SelectStatement, opt query2.ExecutionOptions, rowsChan chan query2.RowsChan) (*executor.PipelineExecutor, error) {
+func (e *StatementExecutor) retryCreatePipelineExecutor(ctx context.Context, stmt *influxql.SelectStatement, opt query.ExecutionOptions, rowsChan chan query.RowsChan) (*executor.PipelineExecutor, error) {
 	startTime := time.Now()
 	var retryNum uint32 = 0
 	for {
@@ -1033,7 +1051,7 @@ func (e *StatementExecutor) retryCreatePipelineExecutor(ctx context.Context, stm
 	}
 }
 
-func (e *StatementExecutor) executeSelectStatement(stmt *influxql.SelectStatement, ctx *query2.ExecutionContext, seq int) error {
+func (e *StatementExecutor) executeSelectStatement(stmt *influxql.SelectStatement, ctx *query.ExecutionContext, seq int) error {
 	start := time.Now()
 	proxy := newRowChanProxy()
 	// omit Time field for stmt
@@ -1071,14 +1089,14 @@ func (e *StatementExecutor) executeSelectStatement(stmt *influxql.SelectStatemen
 	}()
 
 	defer func() {
-		qStat, _ := ctx.Value(query2.QueryDurationKey).(*statistics.SQLSlowQueryStatistics)
+		qStat, _ := ctx.Value(query.QueryDurationKey).(*statistics.SQLSlowQueryStatistics)
 		if qStat != nil {
 			qStat.AddDuration("SqlIteratorDuration", end.Sub(start).Nanoseconds())
 			qStat.AddDuration("EmitDuration", time.Now().Sub(end).Nanoseconds())
 		}
 	}()
 
-	var rowsChan query2.RowsChan
+	var rowsChan query.RowsChan
 	var ok bool
 	for {
 		select {
@@ -1124,8 +1142,8 @@ func (e *StatementExecutor) executeSelectStatement(stmt *influxql.SelectStatemen
 	return nil
 }
 
-func (e *StatementExecutor) GetOptions(opt query2.ExecutionOptions, rowsChan chan query2.RowsChan) query2.SelectOptions {
-	return query2.SelectOptions{
+func (e *StatementExecutor) GetOptions(opt query.ExecutionOptions, rowsChan chan query.RowsChan) query.SelectOptions {
+	return query.SelectOptions{
 		NodeID:                  opt.NodeID,
 		MaxSeriesN:              e.MaxSelectSeriesN,
 		MaxFieldsN:              e.MaxSelectFieldsN,
@@ -1147,7 +1165,7 @@ func (e *StatementExecutor) GetOptions(opt query2.ExecutionOptions, rowsChan cha
 	}
 }
 
-func (e *StatementExecutor) createPipelineExecutor(ctx context.Context, stmt *influxql.SelectStatement, opt query2.ExecutionOptions, rowsChan chan query2.RowsChan) (pipelineExecutor *executor.PipelineExecutor, err error) {
+func (e *StatementExecutor) createPipelineExecutor(ctx context.Context, stmt *influxql.SelectStatement, opt query.ExecutionOptions, rowsChan chan query.RowsChan) (pipelineExecutor *executor.PipelineExecutor, err error) {
 	sopt := e.GetOptions(opt, rowsChan)
 
 	defer func() {
@@ -1158,7 +1176,7 @@ func (e *StatementExecutor) createPipelineExecutor(ctx context.Context, stmt *in
 			}
 
 			stackInfo := fmt.Errorf("runtime panic: %v\n %s", e, string(debug.Stack())).Error()
-			logger.NewLogger(errno.ModuleQueryEngine).Error(stackInfo, zap.Uint64("query_id", ctx.Value(query2.QueryIDKey).(uint64)),
+			logger.NewLogger(errno.ModuleQueryEngine).Error(stackInfo, zap.Any("query_id", ctx.Value(query.QueryIDKey).([]uint64)),
 				zap.String("query", "pipeline executor"))
 		}
 	}()
@@ -1173,7 +1191,7 @@ func (e *StatementExecutor) createPipelineExecutor(ctx context.Context, stmt *in
 	return pipelineExecutor, err
 }
 
-func (e *StatementExecutor) executeShowDatabasesStatement(q *influxql.ShowDatabasesStatement, ctx *query2.ExecutionContext) (models.Rows, error) {
+func (e *StatementExecutor) executeShowDatabasesStatement(q *influxql.ShowDatabasesStatement, ctx *query.ExecutionContext) (models.Rows, error) {
 	dis := e.MetaClient.Databases()
 	a := ctx.ExecutionOptions.Authorizer
 
@@ -1353,7 +1371,7 @@ func (e *StatementExecutor) executeShowGrantsForUserStatement(q *influxql.ShowGr
 	return []*models.Row{row}, nil
 }
 
-func (e *StatementExecutor) executeShowMeasurementsStatement(q *influxql.ShowMeasurementsStatement, ctx *query2.ExecutionContext, seq int) error {
+func (e *StatementExecutor) executeShowMeasurementsStatement(q *influxql.ShowMeasurementsStatement, ctx *query.ExecutionContext, seq int) error {
 	if q.Database == "" {
 		return coordinator.ErrDatabaseNameRequired
 	}
@@ -1417,7 +1435,10 @@ func (e *StatementExecutor) executeShowContinuousQueriesStatement(q *influxql.Sh
 }
 
 func (e *StatementExecutor) executeShowShardsStatement(stmt *influxql.ShowShardsStatement) (models.Rows, error) {
-	return e.MetaClient.ShowShards(), nil
+	if stmt.GetMstInfo() == nil {
+		return e.MetaClient.ShowShards("", "", ""), nil
+	}
+	return e.MetaClient.ShowShards(stmt.GetDBName(), stmt.GetRPName(), stmt.GetMstName()), nil
 }
 
 func (e *StatementExecutor) executeShowShardGroupsStatement(stmt *influxql.ShowShardGroupsStatement) (models.Rows, error) {
@@ -1451,7 +1472,7 @@ func (e *StatementExecutor) FieldKeys(database string, measurements influxql.Mea
 	return fieldKeys, nil
 }
 
-func (e *StatementExecutor) executeShowFieldKeys(q *influxql.ShowFieldKeysStatement, ctx *query2.ExecutionContext, seq int) error {
+func (e *StatementExecutor) executeShowFieldKeys(q *influxql.ShowFieldKeysStatement, ctx *query.ExecutionContext, seq int) error {
 	if q.Database == "" {
 		return coordinator.ErrDatabaseNameRequired
 	}
@@ -1489,7 +1510,7 @@ func (e *StatementExecutor) executeShowFieldKeys(q *influxql.ShowFieldKeysStatem
 	return nil
 }
 
-func (e *StatementExecutor) executeShowFieldKeyCardinality(q *influxql.ShowFieldKeyCardinalityStatement, ctx *query2.ExecutionContext, seq int) error {
+func (e *StatementExecutor) executeShowFieldKeyCardinality(q *influxql.ShowFieldKeyCardinalityStatement, ctx *query.ExecutionContext, seq int) error {
 	if q.Condition != nil {
 		return meta2.ErrUnsupportCommand
 	}
@@ -1543,7 +1564,7 @@ func (e *StatementExecutor) TagKeys(database string, measurements influxql.Measu
 	return tagKeys, nil
 }
 
-func (e *StatementExecutor) executeShowTagKeys(q *influxql.ShowTagKeysStatement, ctx *query2.ExecutionContext, seq int) error {
+func (e *StatementExecutor) executeShowTagKeys(q *influxql.ShowTagKeysStatement, ctx *query.ExecutionContext, seq int) error {
 	var tagKeys netstorage.TableTagKeys
 	var err error
 	if q.Condition != nil {
@@ -1600,7 +1621,7 @@ func (e *StatementExecutor) executeShowTagKeys(q *influxql.ShowTagKeysStatement,
 
 }
 
-func (e *StatementExecutor) executeShowTagKeyCardinality(q *influxql.ShowTagKeyCardinalityStatement, ctx *query2.ExecutionContext, seq int) error {
+func (e *StatementExecutor) executeShowTagKeyCardinality(q *influxql.ShowTagKeyCardinalityStatement, ctx *query.ExecutionContext, seq int) error {
 	if q.Condition != nil {
 		return meta2.ErrUnsupportCommand
 	}
@@ -1660,7 +1681,7 @@ func (e *StatementExecutor) executeShowTagValuesCardinality(stmt *influxql.ShowT
 	return exec.Execute(newStmt)
 }
 
-func (e *StatementExecutor) executeShowSeries(q *influxql.ShowSeriesStatement, ctx *query2.ExecutionContext, seq int) error {
+func (e *StatementExecutor) executeShowSeries(q *influxql.ShowSeriesStatement, ctx *query.ExecutionContext, seq int) error {
 	mis, err := e.MetaClient.MatchMeasurements(q.Database, q.Sources.Measurements())
 	if err != nil {
 		return err
@@ -2180,27 +2201,26 @@ func (e *StatementExecutor) normalizeMeasurement(m *influxql.Measurement, defaul
 	return nil
 }
 
-func (e *StatementExecutor) executePrepareSnapshotStatement(q *influxql.PrepareSnapshotStatement, ctx *query2.ExecutionContext) error {
+func (e *StatementExecutor) executePrepareSnapshotStatement(q *influxql.PrepareSnapshotStatement, ctx *query.ExecutionContext) error {
 	panic("impl me")
 }
 
-func (e *StatementExecutor) executeEndPrepareSnapshotStatement(q *influxql.EndPrepareSnapshotStatement, ctx *query2.ExecutionContext) error {
+func (e *StatementExecutor) executeEndPrepareSnapshotStatement(q *influxql.EndPrepareSnapshotStatement, ctx *query.ExecutionContext) error {
 	panic("impl me")
 }
 
-func (e *StatementExecutor) executeGetRuntimeInfoStatement(q *influxql.GetRuntimeInfoStatement, ctx *query2.ExecutionContext) (models.Rows, error) {
+func (e *StatementExecutor) executeGetRuntimeInfoStatement(q *influxql.GetRuntimeInfoStatement, ctx *query.ExecutionContext) (models.Rows, error) {
 	panic("impl me")
 }
 
-func (e *StatementExecutor) executeCreateStreamStatement(stmt *influxql.CreateStreamStatement, ctx *query2.ExecutionContext) error {
+func (e *StatementExecutor) executeCreateStreamStatement(stmt *influxql.CreateStreamStatement, ctx *query.ExecutionContext) error {
 	selectStmt, ok := stmt.Query.(*influxql.SelectStatement)
 	if !ok {
 		return errors.New("create stream query must be select statement")
 	}
-	mstInfo := stmt.Target.Measurement
 	proxy := newRowChanProxy()
 	opt := e.GetOptions(ctx.ExecutionOptions, proxy.rc)
-	s, er := query2.Prepare(selectStmt, e.ShardMapper, opt)
+	s, er := query.Prepare(selectStmt, e.ShardMapper, opt)
 	if er != nil {
 		return er
 	}
@@ -2208,29 +2228,23 @@ func (e *StatementExecutor) executeCreateStreamStatement(stmt *influxql.CreateSt
 	if err := stmt.Check(selectStmt, streamSupportMap); err != nil {
 		return err
 	}
-	_, err := e.MetaClient.Measurement(mstInfo.Database, mstInfo.RetentionPolicy, mstInfo.Name)
-	if err != nil {
-		if err == meta2.ErrMeasurementNotFound {
-			srcMst := selectStmt.Sources[0].(*influxql.Measurement)
-			srcInfo, _ := e.MetaClient.Measurement(srcMst.Database, srcMst.RetentionPolicy, srcMst.Name)
-			/*			if len(srcInfo.IndexRelations) > 0 {
-							_, err = e.MetaClient.CreateMeasurement(mstInfo.Database, mstInfo.RetentionPolicy, mstInfo.Name, &srcInfo.ShardKeys[0], &srcInfo.IndexRelations[0])
-						} else {
-							_, err = e.MetaClient.CreateMeasurement(mstInfo.Database, mstInfo.RetentionPolicy, mstInfo.Name, &srcInfo.ShardKeys[0], nil)
-						}*/
-			_, err = e.MetaClient.CreateMeasurement(mstInfo.Database, mstInfo.RetentionPolicy, mstInfo.Name, &srcInfo.ShardKeys[0], nil, srcInfo.EngineType, nil, nil, nil)
-
-			if err != nil {
-				return err
-			}
-			if err := e.MetaClient.UpdateStreamMstSchema(mstInfo.Database, mstInfo.RetentionPolicy, mstInfo.Name, selectStmt); err != nil {
-				return err
-			}
-		} else {
-			return err
-		}
+	srcMst, ok := selectStmt.Sources[0].(*influxql.Measurement)
+	if !ok {
+		return errors.New("streamTask don't have source measurement")
 	}
-	info := meta2.NewStreamInfo(stmt, selectStmt)
+	info := meta2.NewStreamInfo(stmt.Name, stmt.Delay, srcMst, &meta2.StreamMeasurementInfo{
+		Name:            stmt.Target.Measurement.Name,
+		Database:        stmt.Target.Measurement.Database,
+		RetentionPolicy: stmt.Target.Measurement.RetentionPolicy,
+	}, selectStmt)
+	mstInfo := stmt.Target.Measurement
+	if len(selectStmt.Sources) == 0 {
+		return errors.New("streamTask don't have source measurement")
+	}
+	err := e.MetaClient.CreateStreamMeasurement(info, srcMst, mstInfo, selectStmt)
+	if err != nil {
+		return err
+	}
 	return e.MetaClient.CreateStreamPolicy(info)
 }
 
@@ -2565,13 +2579,13 @@ func limitStringSlice(s []string, offset, limit int) []string {
 }
 
 type rowChanProxy struct {
-	rc       chan query2.RowsChan
+	rc       chan query.RowsChan
 	finished chan struct{}
 }
 
 func newRowChanProxy() *rowChanProxy {
 	p := &rowChanProxy{
-		rc:       make(chan query2.RowsChan),
+		rc:       make(chan query.RowsChan),
 		finished: make(chan struct{}),
 	}
 	return p

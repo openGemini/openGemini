@@ -33,20 +33,12 @@ const (
 	RecMaxRowNumForRuse = 2024
 )
 
-var intervalRecAppendFunctions map[int]func(rec, iRec *Record, index, row int)
 var intervalRecUpdateFunctions map[int]func(rec, iRec *Record, index, row, recRow int)
 var recTransAppendFunctions map[int]func(rec, iRec *Record, index, row int)
 
 func init() {
-	intervalRecAppendFunctions = make(map[int]func(rec, iRec *Record, index, row int))
 	recTransAppendFunctions = make(map[int]func(rec, iRec *Record, index, row int))
 	intervalRecUpdateFunctions = make(map[int]func(rec, iRec *Record, index, row, recRow int))
-
-	intervalRecAppendFunctions[influx.Field_Type_String] = stringAppendFunction
-	intervalRecAppendFunctions[influx.Field_Type_Tag] = stringAppendFunction
-	intervalRecAppendFunctions[influx.Field_Type_Int] = integerAppendFunction
-	intervalRecAppendFunctions[influx.Field_Type_Float] = floatAppendFunction
-	intervalRecAppendFunctions[influx.Field_Type_Boolean] = booleanAppendFunction
 
 	intervalRecUpdateFunctions[influx.Field_Type_String] = stringUpdateFunction
 	intervalRecUpdateFunctions[influx.Field_Type_Tag] = stringUpdateFunction
@@ -153,6 +145,21 @@ func (rec *Record) FieldIndexs(colName string) int {
 	return -1
 }
 
+// schema except the last time column, which is sorted in ascending order.
+func (rec *Record) FieldIndexsFast(colName string) int {
+	schemaLen := len(rec.Schema) - 1
+	if colName != TimeField {
+		idx := sort.Search(schemaLen, func(i int) bool {
+			return rec.Schema[i].Name >= colName
+		})
+		if idx < schemaLen && rec.Schema[idx].Name == colName {
+			return idx
+		}
+		return -1
+	}
+	return schemaLen
+}
+
 func (rec *Record) InitColVal(start, end int) {
 	for i := start; i < end; i++ {
 		cv := &rec.ColVals[i]
@@ -167,93 +174,69 @@ func (rec *Record) ReserveSchemaAndColVal(size int) {
 	}
 }
 
-func (rec *Record) CopyWithCondition(ascending bool, tr util.TimeRange, schema Schemas) *Record {
+func (rec *Record) Copy(ascending bool, tr *util.TimeRange, schema Schemas) *Record {
 	times := rec.Times()
-	startIndex := GetTimeRangeStartIndex(times, 0, tr.Min)
-	endIndex := GetTimeRangeEndIndex(times, 0, tr.Max)
+	startIdx, endIdx := 0, len(times)-1
+	if tr != nil {
+		startIdx = GetTimeRangeStartIndex(times, 0, tr.Min)
+		endIdx = GetTimeRangeEndIndex(times, 0, tr.Max)
+	}
 
-	if startIndex <= endIndex {
-		copyRec := Record{}
-		copyRec.SetSchema(schema)
-		copyRec.ReserveColVal(len(schema))
-		isExist := false
-		if ascending {
-			for i := 0; i < len(schema)-1; i++ {
-				colIndex := rec.FieldIndexs(schema[i].Name)
-				if colIndex >= 0 {
-					isExist = true
-					copyRec.ColVals[i].AppendColVal(&rec.ColVals[colIndex], rec.Schema[colIndex].Type, startIndex, endIndex+1)
-				} else {
-					copyRec.ColVals[i].PadColVal(copyRec.Schema[i].Type, endIndex-startIndex+1)
-				}
-			}
-			if isExist {
-				// append time column
-				timeIndex := rec.ColNums() - 1
-				copyRec.ColVals[len(schema)-1].AppendColVal(&rec.ColVals[timeIndex], rec.Schema[timeIndex].Type, startIndex, endIndex+1)
-				return &copyRec
-			}
-			return nil
-		}
-
-		for i := 0; i < len(schema)-1; i++ {
-			colIndex := rec.FieldIndexs(schema[i].Name)
-			if colIndex < 0 {
-				copyRec.ColVals[i].PadColVal(copyRec.Schema[i].Type, endIndex-startIndex+1)
-				continue
-			}
-			isExist = true
-			for pos := endIndex; pos >= startIndex; pos-- {
-				copyRec.ColVals[i].AppendColVal(&rec.ColVals[colIndex], rec.Schema[colIndex].Type, pos, pos+1)
-			}
-		}
-		if isExist {
-			// append time column
-			timeIndex := rec.ColNums() - 1
-			for pos := endIndex; pos >= startIndex; pos-- {
-				copyRec.ColVals[len(schema)-1].AppendColVal(&rec.ColVals[timeIndex], rec.Schema[timeIndex].Type, pos, pos+1)
-			}
-			return &copyRec
-		}
+	copyRec := &Record{}
+	copyRec.CopyImpl(rec, true, true, ascending, startIdx, endIdx, schema)
+	if copyRec.RowNums() == 0 {
 		return nil
 	}
-	return nil
-}
-
-func (rec *Record) Copy() *Record {
-	copyRec := &Record{}
-	copyRec.CopyImpl(rec, true, true)
 	return copyRec
 }
 
-func (rec *Record) CopyImpl(srcRec *Record, setSchema, reserveColVal bool) {
-	times := srcRec.Times()
-	startIndex := 0
-	endIndex := len(times) - 1
+func (rec *Record) CopyImpl(srcRec *Record, setSchema, reserveColVal, ascending bool, startIndex, endIndex int, schema Schemas) {
 	if startIndex <= endIndex {
 		if srcRec.RecMeta != nil {
 			rec.RecMeta = srcRec.RecMeta.Copy()
 		}
 		if setSchema {
-			rec.SetSchema(srcRec.Schema)
+			rec.SetSchema(schema)
 		}
 		if reserveColVal {
-			rec.ReserveColVal(len(srcRec.Schema))
+			rec.ReserveColVal(len(schema))
 		}
 		isExist := false
-		for i := 0; i < len(srcRec.Schema)-1; i++ {
-			colIndex := srcRec.FieldIndexs(srcRec.Schema[i].Name)
-			if colIndex >= 0 {
-				isExist = true
-				rec.ColVals[i].AppendColVal(&srcRec.ColVals[colIndex], srcRec.Schema[colIndex].Type, startIndex, endIndex+1)
-			} else {
+		if ascending {
+			for i := 0; i < len(schema)-1; i++ {
+				colIndex := srcRec.FieldIndexsFast(schema[i].Name)
+				if colIndex >= 0 {
+					isExist = true
+					rec.ColVals[i].AppendColVal(&srcRec.ColVals[colIndex], srcRec.Schema[colIndex].Type, startIndex, endIndex+1)
+				} else {
+					rec.ColVals[i].PadColVal(rec.Schema[i].Type, endIndex-startIndex+1)
+				}
+			}
+			if isExist {
+				// append time column
+				timeIndex := srcRec.ColNums() - 1
+				rec.ColVals[len(schema)-1].AppendColVal(&srcRec.ColVals[timeIndex], srcRec.Schema[timeIndex].Type, startIndex, endIndex+1)
+				return
+			}
+			return
+		}
+		for i := 0; i < len(schema)-1; i++ {
+			colIndex := srcRec.FieldIndexsFast(schema[i].Name)
+			if colIndex < 0 {
 				rec.ColVals[i].PadColVal(rec.Schema[i].Type, endIndex-startIndex+1)
+				continue
+			}
+			isExist = true
+			for pos := endIndex; pos >= startIndex; pos-- {
+				rec.ColVals[i].AppendColVal(&srcRec.ColVals[colIndex], srcRec.Schema[colIndex].Type, pos, pos+1)
 			}
 		}
 		if isExist {
 			// append time column
 			timeIndex := srcRec.ColNums() - 1
-			rec.ColVals[len(srcRec.Schema)-1].AppendColVal(&srcRec.ColVals[timeIndex], srcRec.Schema[timeIndex].Type, startIndex, endIndex+1)
+			for pos := endIndex; pos >= startIndex; pos-- {
+				rec.ColVals[len(schema)-1].AppendColVal(&srcRec.ColVals[timeIndex], srcRec.Schema[timeIndex].Type, pos, pos+1)
+			}
 			return
 		}
 		return
@@ -281,7 +264,7 @@ func (rec *Record) CopyColVals() []ColVal {
 		}
 		isExist := false
 		for i := 0; i < len(rec.Schema)-1; i++ {
-			colIndex := rec.FieldIndexs(rec.Schema[i].Name)
+			colIndex := rec.FieldIndexsFast(rec.Schema[i].Name)
 			isExist = true
 			colVals[i].AppendColVal(&rec.ColVals[colIndex], rec.Schema[colIndex].Type, startIndex, endIndex+1)
 		}
@@ -1094,21 +1077,15 @@ func (rec *Record) ResetWithSchema(schema Schemas) {
 	rec.ReserveColVal(len(rec.Schema))
 }
 
-func (rec *Record) addColumn(f *Field) {
+func (rec *Record) addColumn(f *Field, rowNum int) {
 	newField := Field{Name: f.Name, Type: f.Type}
-	newCol := &ColVal{}
-	rowNum := rec.RowNums()
-	for i := 0; i < rowNum; i++ {
-		switch f.Type {
-		case influx.Field_Type_Int:
-			newCol.AppendIntegerNull()
-		case influx.Field_Type_Float:
-			newCol.AppendFloatNull()
-		case influx.Field_Type_Boolean:
-			newCol.AppendBooleanNull()
-		case influx.Field_Type_String:
-			newCol.AppendStringNull()
-		}
+	newCol := &ColVal{
+		NilCount: rowNum,
+		Len:      rowNum,
+		Bitmap:   make([]byte, util.DivisionCeil(rowNum, 8)),
+	}
+	if f.Type == influx.Field_Type_String {
+		newCol.Offset = make([]uint32, rowNum)
 	}
 
 	rec.Schema = append(rec.Schema, newField)
@@ -1116,17 +1093,33 @@ func (rec *Record) addColumn(f *Field) {
 }
 
 func (rec *Record) PadRecord(other *Record) {
-	needSort := false
-	for i := range other.Schema[:len(other.Schema)-1] {
-		f := &(other.Schema[i])
-		idx := rec.FieldIndexs(f.Name)
-		if idx < 0 {
-			needSort = true
-			rec.addColumn(f)
+	i, j := 0, 0
+	size := rec.Schema.Len()
+	rowNum := rec.RowNums()
+
+	for i < size-1 && j < other.Schema.Len()-1 {
+		a, b := &rec.Schema[i], &other.Schema[j]
+
+		if a.Name < b.Name {
+			i++
+			continue
 		}
+
+		if a.Name > b.Name {
+			rec.addColumn(b, rowNum)
+			j++
+			continue
+		}
+
+		i++
+		j++
 	}
 
-	if needSort {
+	for ; j < other.Schema.Len()-1; j++ {
+		rec.addColumn(&other.Schema[j], rowNum)
+	}
+
+	if size != rec.Schema.Len() {
 		sort.Sort(rec)
 	}
 }
@@ -1412,44 +1405,6 @@ func (rec *Record) Split(dst []Record, maxRows int) []Record {
 	return dst
 }
 
-func stringAppendFunction(rec, iRec *Record, index, row int) {
-	v, isNil := rec.ColVals[index].StringValueUnsafe(row)
-	if isNil {
-		iRec.ColVals[index].AppendStringNull()
-	} else {
-		iRec.ColVals[index].AppendString(v)
-	}
-	appendRecMeta2iRec(rec, iRec, index, row)
-}
-
-func integerAppendFunction(rec, iRec *Record, index, row int) {
-	v, isNil := rec.ColVals[index].IntegerValue(row)
-	if isNil {
-		iRec.ColVals[index].AppendIntegerNullReserve()
-	} else {
-		iRec.ColVals[index].AppendInteger(v)
-	}
-	appendRecMeta2iRec(rec, iRec, index, row)
-}
-func floatAppendFunction(rec, iRec *Record, index, row int) {
-	v, isNil := rec.ColVals[index].FloatValue(row)
-	if isNil {
-		iRec.ColVals[index].AppendFloatNullReserve()
-	} else {
-		iRec.ColVals[index].AppendFloat(v)
-	}
-	appendRecMeta2iRec(rec, iRec, index, row)
-}
-func booleanAppendFunction(rec, iRec *Record, index, row int) {
-	v, isNil := rec.ColVals[index].BooleanValue(row)
-	if isNil {
-		iRec.ColVals[index].AppendBooleanNullReserve()
-	} else {
-		iRec.ColVals[index].AppendBoolean(v)
-	}
-	appendRecMeta2iRec(rec, iRec, index, row)
-}
-
 func stringUpdateFunction(rec, iRec *Record, index, row, recRow int) {
 	v, isNil := rec.ColVals[index].StringValueUnsafe(recRow)
 	iRec.ColVals[index].UpdateStringValue(v, isNil, row)
@@ -1512,12 +1467,6 @@ func recBooleanAppendFunction(rec, iRec *Record, index, row int) {
 		rec.ColVals[index].AppendBoolean(v)
 	}
 	appendRecMeta2Rec(rec, iRec, index, row)
-}
-
-func appendRecMeta2iRec(rec, iRec *Record, index, row int) {
-	if rec.RecMeta != nil && len(rec.RecMeta.Times) != 0 && len(rec.RecMeta.Times[index]) != 0 {
-		iRec.RecMeta.Times[index] = append(iRec.RecMeta.Times[index], rec.RecMeta.Times[index][row])
-	}
 }
 
 func updateRecMeta(rec, iRec *Record, index, row, recRow int) {

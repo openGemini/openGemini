@@ -18,6 +18,7 @@ package executor
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
@@ -28,6 +29,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/promql2influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
@@ -61,6 +63,8 @@ var DefaultTypeMapper = influxql.MultiTypeMapper(
 	query.MathTypeMapper{},
 	query.FunctionTypeMapper{},
 	query.StringFunctionTypeMapper{},
+	query.LabelFunctionTypeMapper{},
+	query.PromTimeFunctionTypeMapper{},
 )
 
 type QueryTable struct {
@@ -176,12 +180,16 @@ type QuerySchema struct {
 	binarys       map[string]*influxql.BinaryExpr
 	maths         map[string]*influxql.Call
 	strings       map[string]*influxql.Call
+	labelCalls    map[string]*influxql.Call
+	promTimeCalls map[string]*influxql.Call
 	slidingWindow map[string]*influxql.Call
 	holtWinters   []*influxql.Field
 	compositeCall map[string]*hybridqp.OGSketchCompositeOperator
-	i             int
-	notIncI       bool
-	sources       influxql.Sources
+	// promNestedCall is used to optimize the nested push down of function and aggregate operator
+	promNestedCall map[string]*hybridqp.PromNestedCall
+	i              int
+	notIncI        bool
+	sources        influxql.Sources
 	// Options is interface now, it must be cloned in internal
 	opt hybridqp.Options
 
@@ -193,28 +201,31 @@ type QuerySchema struct {
 
 func NewQuerySchema(fields influxql.Fields, columnNames []string, opt hybridqp.Options, sortFields influxql.SortFields) *QuerySchema {
 	schema := &QuerySchema{
-		tables:        make(map[string]*QueryTable),
-		queryFields:   fields,
-		columnNames:   columnNames,
-		fields:        make(influxql.Fields, 0, len(fields)),
-		fieldsRef:     make(influxql.VarRefs, 0, len(fields)),
-		mapDeriveType: make(map[influxql.Expr]influxql.DataType),
-		mapping:       make(map[influxql.Expr]influxql.VarRef),
-		symbols:       make(map[string]influxql.VarRef),
-		calls:         make(map[string]*influxql.Call),
-		origCalls:     make(map[string]*influxql.Call),
-		refs:          make(map[string]*influxql.VarRef),
-		binarys:       make(map[string]*influxql.BinaryExpr),
-		maths:         make(map[string]*influxql.Call),
-		strings:       make(map[string]*influxql.Call),
-		slidingWindow: make(map[string]*influxql.Call),
-		holtWinters:   make([]*influxql.Field, 0),
-		compositeCall: make(map[string]*hybridqp.OGSketchCompositeOperator),
-		i:             0,
-		notIncI:       false,
-		opt:           opt,
-		sources:       nil,
-		planType:      UNKNOWN,
+		tables:         make(map[string]*QueryTable),
+		queryFields:    fields,
+		columnNames:    columnNames,
+		fields:         make(influxql.Fields, 0, len(fields)),
+		fieldsRef:      make(influxql.VarRefs, 0, len(fields)),
+		mapDeriveType:  make(map[influxql.Expr]influxql.DataType),
+		mapping:        make(map[influxql.Expr]influxql.VarRef),
+		symbols:        make(map[string]influxql.VarRef),
+		calls:          make(map[string]*influxql.Call),
+		origCalls:      make(map[string]*influxql.Call),
+		refs:           make(map[string]*influxql.VarRef),
+		binarys:        make(map[string]*influxql.BinaryExpr),
+		maths:          make(map[string]*influxql.Call),
+		strings:        make(map[string]*influxql.Call),
+		labelCalls:     make(map[string]*influxql.Call),
+		promTimeCalls:  make(map[string]*influxql.Call),
+		slidingWindow:  make(map[string]*influxql.Call),
+		holtWinters:    make([]*influxql.Field, 0),
+		compositeCall:  make(map[string]*hybridqp.OGSketchCompositeOperator),
+		promNestedCall: make(map[string]*hybridqp.PromNestedCall),
+		i:              0,
+		notIncI:        false,
+		opt:            opt,
+		sources:        nil,
+		planType:       UNKNOWN,
 	}
 	if len(sortFields) > 0 && len(opt.GetSortFields()) == 0 {
 		schema.opt.SetSortFields(sortFields)
@@ -224,6 +235,10 @@ func NewQuerySchema(fields influxql.Fields, columnNames []string, opt hybridqp.O
 
 	if schema.HasPercentileOGSketch() {
 		schema.rewritePercentileOGSketchCompositeCall()
+	}
+
+	if schema.HasPromNestedCall() {
+		schema.rewritePromNestedCall()
 	}
 
 	return schema
@@ -264,7 +279,10 @@ func (qs *QuerySchema) reset(fields influxql.Fields, column []string) {
 	qs.binarys = make(map[string]*influxql.BinaryExpr)
 	qs.maths = make(map[string]*influxql.Call)
 	qs.strings = make(map[string]*influxql.Call)
+	qs.labelCalls = make(map[string]*influxql.Call)
+	qs.promTimeCalls = make(map[string]*influxql.Call)
 	qs.slidingWindow = make(map[string]*influxql.Call)
+	qs.promNestedCall = make(map[string]*hybridqp.PromNestedCall)
 	qs.holtWinters = qs.holtWinters[0:0]
 	qs.unnestCases = qs.unnestCases[:0]
 	qs.i = 0
@@ -325,7 +343,9 @@ func (qs *QuerySchema) rewriteBaseCallTransformExprCall(expr influxql.Expr) infl
 	}
 	switch expr := expr.(type) {
 	case *influxql.BinaryExpr:
-		return &influxql.BinaryExpr{Op: expr.Op, LHS: qs.rewriteBaseCallTransformExprCall(expr.LHS), RHS: qs.rewriteBaseCallTransformExprCall(expr.RHS)}
+		return &influxql.BinaryExpr{Op: expr.Op, LHS: qs.rewriteBaseCallTransformExprCall(expr.LHS), RHS: qs.rewriteBaseCallTransformExprCall(expr.RHS), ReturnBool: expr.ReturnBool}
+	case *influxql.ParenExpr:
+		return &influxql.ParenExpr{Expr: qs.rewriteBaseCallTransformExprCall(expr.Expr)}
 	case *influxql.Call:
 		if expr.Name == "mean" {
 			replacement := qs.meanToSumDivCount(expr)
@@ -357,7 +377,12 @@ func (qs *QuerySchema) rewriteBaseCallTransformExprCall(expr influxql.Expr) infl
 func (qs *QuerySchema) meanToSumDivCount(call *influxql.Call) influxql.Expr {
 	lhs := &influxql.Call{Name: "sum", Args: nil}
 	lhs.Args = append(lhs.Args, influxql.CloneExpr(call.Args[0]))
-	rhs := &influxql.Call{Name: "count", Args: nil}
+	rhs := &influxql.Call{Args: nil}
+	if qs.opt.IsPromQuery() {
+		rhs.Name = "count_prom"
+	} else {
+		rhs.Name = "count"
+	}
 	rhs.Args = append(rhs.Args, influxql.CloneExpr(call.Args[0]))
 	be := &influxql.BinaryExpr{Op: influxql.DIV, LHS: lhs, RHS: rhs}
 	return be
@@ -417,8 +442,10 @@ func (qs *QuerySchema) HasOptimizeAgg() bool {
 	return qs.HasOptimizeCall()
 }
 
+// CanSeqAggPushDown determines whether the csstore engine performs seqAgg optimization.
 func (qs *QuerySchema) CanSeqAggPushDown() bool {
-	return qs.HasCall() && qs.HasOptimizeCall() && len(qs.opt.GetDimensions()) == 0 && qs.opt.IsTimeSorted()
+	// TODO: Open it after seqAgg is added to HybridStoreReader
+	return false && qs.HasOptimizeCall() && len(qs.opt.GetDimensions()) == 0 && qs.opt.IsTimeSorted()
 }
 
 func (qs *QuerySchema) HasOptimizeCall() bool {
@@ -462,6 +489,14 @@ func (qs *QuerySchema) HasMath() bool {
 
 func (qs *QuerySchema) HasString() bool {
 	return len(qs.strings) > 0
+}
+
+func (qs *QuerySchema) HasLabelCalls() bool {
+	return len(qs.labelCalls) > 0
+}
+
+func (qs *QuerySchema) HasPromTimeCalls() bool {
+	return len(qs.promTimeCalls) > 0
 }
 
 func (qs *QuerySchema) HasGroupBy() bool {
@@ -535,8 +570,16 @@ func (qs *QuerySchema) HasPercentileOGSketch() bool {
 	return false
 }
 
+func (qs *QuerySchema) HasPromNestedCall() bool {
+	return len(qs.promNestedCall) > 0
+}
+
 func (qs *QuerySchema) CompositeCall() map[string]*hybridqp.OGSketchCompositeOperator {
 	return qs.compositeCall
+}
+
+func (qs *QuerySchema) PromNestedCall() map[string]*hybridqp.PromNestedCall {
+	return qs.promNestedCall
 }
 
 func (qs *QuerySchema) isPercentileOGSketch(call *influxql.Call) bool {
@@ -545,6 +588,15 @@ func (qs *QuerySchema) isPercentileOGSketch(call *influxql.Call) bool {
 	}
 
 	return call.Name == PercentileOGSketch
+}
+
+func (qs *QuerySchema) IsPromNestedCall(call *influxql.Call) bool {
+	if !qs.opt.IsRangeVectorSelector() {
+		return false
+	}
+
+	_, ok := call.Args[0].(*influxql.Call)
+	return ok
 }
 
 func (qs *QuerySchema) rewritePercentileOGSketchCompositeCall() {
@@ -613,6 +665,66 @@ func (qs *QuerySchema) genOGSketchOperator(call *influxql.Call) {
 	qs.addCompositeCall(call.String(), operator)
 }
 
+func (qs *QuerySchema) rewritePromNestedCall() {
+	for key, call := range qs.calls {
+		if _, ok := call.Args[0].(*influxql.Call); ok {
+			nc := qs.promNestedCall[key]
+
+			// derive the schema of the lower-layer prom function.
+			dc := nc.GetFuncCall()
+			dcInRef, ok := dc.Args[0].(*influxql.VarRef)
+			if !ok {
+				panic(fmt.Sprintf("the type of the %s should be *influxql.VarRef", dc.Args[0].String()))
+			}
+			oriKey := fmt.Sprintf("%s::%s", dcInRef.Val, dcInRef.Type)
+			inSymbolRef := qs.symbols[oriKey]
+			outSymbolRef := qs.symbols[key]
+			dcInRef.Val = inSymbolRef.Val
+			dcInRef.Type = inSymbolRef.Type
+			qs.mapping[dc] = outSymbolRef
+
+			// derive the schema of the upper-layer prom aggregate operator.
+			uc := nc.GetAggCall()
+			ucInRef, ok := uc.Args[0].(*influxql.VarRef)
+			if !ok {
+				panic(fmt.Sprintf("the type of the %s should be *influxql.VarRef", dc.Args[0].String()))
+			}
+			ucInRef.Val = outSymbolRef.Val
+			ucInRef.Type = outSymbolRef.Type
+			ucOutRef := qs.mapping[uc]
+			ucOutRef.Val = outSymbolRef.Val
+			ucOutRef.Type = outSymbolRef.Type
+			qs.mapping[uc] = ucOutRef
+		}
+	}
+}
+
+func (qs *QuerySchema) genPromNestedCall(call *influxql.Call) {
+	// add the prom nested call
+	qs.addCall(call.String(), call)
+	qs.mapSymbol(call.String(), call)
+
+	// prom nested func call
+	funcCall, ok := influxql.CloneExpr(call.Args[0]).(*influxql.Call)
+	if !ok {
+		panic(fmt.Sprintf("the type of the %s should be a *influxql.Call", call.Args[0].String()))
+	}
+	qs.notIncI = true
+	qs.mapSymbol(funcCall.String(), funcCall)
+
+	// prom nested agg call
+	aggCall, ok := influxql.CloneExpr(call).(*influxql.Call)
+	if !ok {
+		panic(fmt.Sprintf("the type of the %s should be a *influxql.Call", aggCall.String()))
+	}
+	downRef := qs.mapping[aggCall]
+	aggCall.Args[0] = &influxql.VarRef{Val: downRef.Val, Type: downRef.Type}
+	qs.mapSymbol(aggCall.String(), aggCall)
+	qs.notIncI = false
+
+	qs.addPromNestedCall(call.String(), hybridqp.NewPromNestedCall(funcCall, aggCall))
+}
+
 func (qs *QuerySchema) HasInterval() bool {
 	return qs.opt.HasInterval()
 }
@@ -657,6 +769,12 @@ func (qs *QuerySchema) AddTable(m *influxql.Measurement, refs []influxql.VarRef)
 
 func (qs *QuerySchema) Options() hybridqp.Options {
 	return qs.opt
+}
+
+// PromResetTime is used to determine whether to set the time of result to the end time of the query,
+// according to the semantics of the prom instant query,
+func (qs *QuerySchema) PromResetTime() bool {
+	return qs.opt.IsPromInstantQuery() && (qs.opt.GetPromRange() == 0 || (qs.opt.GetPromRange() > 0 && len(qs.Calls()) > 0))
 }
 
 func (qs *QuerySchema) Table(name string) *QueryTable {
@@ -770,16 +888,28 @@ func (qs *QuerySchema) HasCastorCall() bool {
 }
 
 func (qs *QuerySchema) isMathFunction(call *influxql.Call) bool {
-	switch call.Name {
-	case "abs", "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "exp", "log", "ln", "log2", "log10", "sqrt", "pow", "floor", "ceil", "round", "row_max", "cast_int64", "cast_bool", "cast_float64", "cast_string":
+	if mathFunc := query.GetMaterializeFunction(call.Name, query.MATH); mathFunc != nil {
 		return true
 	}
 	return false
 }
 
 func (qs *QuerySchema) isStringFunction(call *influxql.Call) bool {
-	switch call.Name {
-	case "str", "strlen", "substr":
+	if stringFunc := query.GetMaterializeFunction(call.Name, query.STRING); stringFunc != nil {
+		return true
+	}
+	return false
+}
+
+func (qs *QuerySchema) isLabelFunction(call *influxql.Call) bool {
+	if labelFunc := query.GetLabelFunction(call.Name); labelFunc != nil {
+		return true
+	}
+	return false
+}
+
+func (qs *QuerySchema) isPromTimeFunction(call *influxql.Call) bool {
+	if promTimeFunc := query.GetPromTimeFunction(call.Name); promTimeFunc != nil {
 		return true
 	}
 	return false
@@ -843,6 +973,15 @@ func (qs *QuerySchema) Visit(n influxql.Node) influxql.Visitor {
 			qs.AddString(key, n)
 			return qs
 		}
+		if qs.isLabelFunction(n) {
+			qs.AddLabelCalls(key, n)
+			return qs
+		}
+
+		if qs.isPromTimeFunction(n) {
+			qs.AddPromTimeCalls(key, n)
+			return qs
+		}
 
 		if qs.isCountDistinct(n) {
 			qs.countDistinct = n
@@ -855,10 +994,26 @@ func (qs *QuerySchema) Visit(n influxql.Node) influxql.Visitor {
 			return qs
 		}
 
+		if qs.IsPromNestedCall(n) {
+			qs.genPromNestedCall(n)
+			return qs
+		}
+
+		if qs.opt.IsRangeVectorSelector() {
+			for name := range qs.calls {
+				if strings.Contains(name, key) {
+					return qs
+				}
+			}
+		}
+
 		qs.addCall(key, n)
 		qs.mapSymbol(key, expr)
 		return qs
 	case *influxql.VarRef:
+		if n.Val == promql2influxql.ArgNameOfTimeFunc {
+			return nil
+		}
 		qs.addRef(key, n)
 		qs.mapSymbol(key, expr)
 		return nil
@@ -895,11 +1050,35 @@ func (qs *QuerySchema) addCompositeCall(key string, operator *hybridqp.OGSketchC
 	}
 }
 
+func (qs *QuerySchema) addPromNestedCall(key string, operator *hybridqp.PromNestedCall) {
+	_, ok := qs.promNestedCall[key]
+
+	if !ok {
+		qs.promNestedCall[key] = operator
+	}
+}
+
 func (qs *QuerySchema) AddMath(key string, math *influxql.Call) {
 	_, ok := qs.maths[key]
 
 	if !ok {
 		qs.maths[key] = math
+	}
+}
+
+func (qs *QuerySchema) AddLabelCalls(key string, labelCalls *influxql.Call) {
+	_, ok := qs.labelCalls[key]
+
+	if !ok {
+		qs.labelCalls[key] = labelCalls
+	}
+}
+
+func (qs *QuerySchema) AddPromTimeCalls(key string, promTimeCalls *influxql.Call) {
+	_, ok := qs.promTimeCalls[key]
+
+	if !ok {
+		qs.promTimeCalls[key] = promTimeCalls
 	}
 }
 
@@ -923,7 +1102,9 @@ func (qs *QuerySchema) mapSymbol(key string, expr influxql.Expr) {
 			}
 			panic(fmt.Errorf("QuerySchema mapSymbol get derive type failed, %v", err.Error()))
 		}
-
+		if qs.opt.IsPromQuery() {
+			typ = influxql.Float
+		}
 		symbol = influxql.VarRef{
 			Val:  symbolName,
 			Type: typ,
@@ -1032,6 +1213,9 @@ func (qs *QuerySchema) MatchPreAgg() bool {
 		return false
 	}
 
+	if qs.Options().IsPromQuery() {
+		return false
+	}
 	return true
 }
 
@@ -1045,7 +1229,12 @@ func (qs *QuerySchema) CanCallsPushdown() bool {
 }
 
 func (qs *QuerySchema) CanAggPushDown() bool {
-	return !(qs.HasMath() || qs.HasString() || !qs.CanCallsPushdown())
+	return !(qs.HasMath() || qs.HasString() || qs.HasLabelCalls() || qs.HasPromTimeCalls() || !qs.CanCallsPushdown())
+}
+
+// CanAggTagSet indicates that aggregation is performed among multiple TagSets. File traversal and SeqAgg optimization are used.
+func (qs *QuerySchema) CanAggTagSet() bool {
+	return qs.HasCall() && qs.CanCallsPushdown() && !qs.ContainSeriesIgnoreCall() && !qs.Options().IsRangeVectorSelector()
 }
 
 func (qs *QuerySchema) ContainSeriesIgnoreCall() bool {

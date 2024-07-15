@@ -17,18 +17,18 @@ limitations under the License.
 package immutable
 
 import (
+	"container/heap"
 	"errors"
 	"fmt"
 	"math"
+	"sync"
 
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
-	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/pingcap/failpoint"
-	"go.uber.org/zap"
 )
 
 type mergePerformer struct {
@@ -36,15 +36,15 @@ type mergePerformer struct {
 	ur   *UnorderedReader
 	sw   *StreamWriteFile
 	cw   *columnWriter
+	itr  *ColumnIterator
 	stat *statistics.MergeStatItem
-
-	// New file after merge
-	mergedFiles TSSPFiles
 
 	// Is the last ordered file?
 	// The remaining unordered data that does not intersect the series
 	// needs to be written into this file
 	lastFile bool
+
+	lastSeries bool
 
 	// The series of the current ordered data does not exist in the unordered data
 	noUnorderedSeries bool
@@ -72,17 +72,16 @@ func NewMergePerformer(ur *UnorderedReader, stat *statistics.MergeStatItem) *mer
 	return &mergePerformer{
 		mh:            record.NewMergeHelper(),
 		ur:            ur,
-		mergedFiles:   TSSPFiles{},
 		mergedTimeCol: &record.ColVal{},
 		stat:          stat,
 	}
 }
 
-func (p *mergePerformer) Reset(sw *StreamWriteFile, last bool) {
-	p.sid = 0
+func (p *mergePerformer) Reset(sw *StreamWriteFile, itr *ColumnIterator) {
+	p.sid = itr.sid
+	p.itr = itr
 	p.sw = sw
 	p.cw = newColumnWriter(sw, GetMaxRowsPerSegment4TsStore())
-	p.lastFile = last
 }
 
 func (p *mergePerformer) Handle(col *record.ColVal, times []int64, lastSeg bool) error {
@@ -92,7 +91,7 @@ func (p *mergePerformer) Handle(col *record.ColVal, times []int64, lastSeg bool)
 	}
 
 	maxOrderTime := times[len(times)-1]
-	if p.lastFile && lastSeg {
+	if p.lastSeries && lastSeg {
 		maxOrderTime = math.MaxInt64
 	}
 
@@ -110,23 +109,17 @@ func (p *mergePerformer) Handle(col *record.ColVal, times []int64, lastSeg bool)
 func (p *mergePerformer) SeriesChanged(sid uint64, orderTimes []int64) error {
 	p.stat.OrderSeriesCount++
 
-	if err := p.finishSeries(sid); err != nil {
-		return err
-	}
 	if len(orderTimes) == 0 {
 		p.sid = 0
 		return nil
 	}
 
 	maxOrderTime := orderTimes[len(orderTimes)-1]
-	if p.lastFile {
+	if p.lastSeries {
 		maxOrderTime = math.MaxInt64
 	}
 
-	if err := p.ur.InitTimes(sid, maxOrderTime); err != nil {
-		return err
-	}
-
+	p.ur.InitTimes(sid, maxOrderTime)
 	unorderedTimes := p.ur.ReadAllTimes()
 	p.noUnorderedSeries = len(unorderedTimes) == 0
 
@@ -155,6 +148,7 @@ func (p *mergePerformer) ColumnChanged(ref *record.Field) error {
 
 	sl := len(p.unorderedSchemas)
 	if p.noUnorderedSeries || sl == 0 {
+		p.ur.ChangeColumn(p.sid, ref)
 		return p.sw.AppendColumn(ref)
 	}
 
@@ -178,26 +172,30 @@ func (p *mergePerformer) ColumnChanged(ref *record.Field) error {
 		break
 	}
 
+	p.ur.ChangeColumn(p.sid, ref)
 	p.unorderedSchemas = p.unorderedSchemas[pos:]
 	return p.sw.AppendColumn(ref)
 }
 
-func (p *mergePerformer) Finish() error {
-	if err := p.finishSeries(math.MaxInt64); err != nil {
-		return err
+func (p *mergePerformer) Finish() (TSSPFile, error) {
+	if p.lastFile {
+		err := p.writeRemain(math.MaxUint64)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	file, err := p.sw.NewTSSPFile(true)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	p.AppendMergedFile(file)
-
-	return nil
+	p.Close()
+	p.Release()
+	return file, nil
 }
 
-func (p *mergePerformer) finishSeries(sid uint64) error {
+func (p *mergePerformer) finishSeries() error {
 	if err := p.writeRemainCol(); err != nil {
 		return err
 	}
@@ -210,27 +208,7 @@ func (p *mergePerformer) finishSeries(sid uint64) error {
 		return err
 	}
 
-	return p.writeRemain(sid)
-}
-
-func (p *mergePerformer) AppendMergedFile(file TSSPFile) {
-	p.mergedFiles.Append(file)
-}
-
-func (p *mergePerformer) MergedFiles() *TSSPFiles {
-	return &p.mergedFiles
-}
-
-func (p *mergePerformer) CleanTmpFiles() {
-	for _, f := range p.mergedFiles.Files() {
-		if err := f.Remove(); err != nil {
-			logger.GetLogger().Error("failed to remove tmp file", zap.String("file", f.Path()))
-		}
-	}
-
-	if p.sw != nil {
-		p.sw.Close(true)
-	}
+	return nil
 }
 
 func (p *mergePerformer) writeRemainCol() error {
@@ -250,11 +228,9 @@ func (p *mergePerformer) writeRemainCol() error {
 
 // Write the data whose sid is smaller than maxSid in the unordered data
 func (p *mergePerformer) writeRemain(maxSid uint64) error {
-	if !p.lastFile {
-		return nil
-	}
-
 	var lastSid uint64 = 0
+	var lastRef *record.Field
+
 	err := p.ur.ReadRemain(maxSid, func(sid uint64, ref record.Field, col *record.ColVal, times []int64) error {
 		if lastSid != sid {
 			if err := p.sw.WriteCurrentMeta(); err != nil {
@@ -265,8 +241,11 @@ func (p *mergePerformer) writeRemain(maxSid uint64) error {
 			lastSid = sid
 		}
 
-		if err := p.sw.AppendColumn(&ref); err != nil {
-			return err
+		if lastRef == nil || lastRef.Name != ref.Name {
+			if err := p.sw.AppendColumn(&ref); err != nil {
+				return err
+			}
+			lastRef = &ref
 		}
 
 		return p.write(&ref, col, times, true)
@@ -287,12 +266,12 @@ func (p *mergePerformer) merge(orderCol, unorderedCol *record.ColVal,
 	}
 
 	p.mh.AddUnorderedCol(unorderedCol, unorderedTimes)
-	mergedCol, mergedTimeCol, err := p.mh.Merge(orderCol, orderTimes, ref.Type)
+	mergedCol, mergedTimes, err := p.mh.Merge(orderCol, orderTimes, ref.Type)
 	if err != nil {
 		return err
 	}
 
-	return p.write(ref, mergedCol, mergedTimeCol, lastSeg)
+	return p.write(ref, mergedCol, mergedTimes, lastSeg)
 }
 
 func (p *mergePerformer) readUnordered(max int64) (*record.ColVal, []int64, error) {
@@ -301,28 +280,30 @@ func (p *mergePerformer) readUnordered(max int64) (*record.ColVal, []int64, erro
 	var err error
 
 	if p.noUnorderedColumn {
-		times = p.ur.ReadTimes(p.ref, max)
+		times = p.ur.ReadTimes(max)
 		col = p.ur.AllocNilCol(len(times), p.ref)
 	} else {
-		col, times, err = p.ur.Read(p.sid, p.ref, max)
+		col, times, err = p.ur.Read(p.sid, max)
 	}
 
 	return col, times, err
 }
 
 func (p *mergePerformer) writeUnorderedCol(ref *record.Field) error {
+	p.ur.ChangeColumn(p.sid, ref)
+
 	if err := p.sw.AppendColumn(ref); err != nil {
 		return err
 	}
 
 	maxTime := p.mergedTimes[len(p.mergedTimes)-1]
-	if p.lastFile {
+	if p.lastSeries {
 		maxTime = math.MaxInt64
 	}
 
 	orderCol := &p.nilCol
 	FillNilCol(orderCol, len(p.mergedTimes), ref)
-	unorderedCol, unorderedTimes, err := p.ur.Read(p.sid, ref, maxTime)
+	unorderedCol, unorderedTimes, err := p.ur.Read(p.sid, maxTime)
 	if err != nil {
 		return err
 	}
@@ -334,7 +315,7 @@ func (p *mergePerformer) writeMergedTime() error {
 		return nil
 	}
 
-	if err := p.sw.AppendColumn(&timeField); err != nil {
+	if err := p.sw.AppendColumn(timeRef); err != nil {
 		return err
 	}
 
@@ -404,6 +385,18 @@ func (p *mergePerformer) WriteOriginal(fi *FileIterator) error {
 	}
 
 	return p.sw.WriteMeta(meta)
+}
+
+func (p *mergePerformer) Close() {
+	p.itr.Close()
+}
+
+func (p *mergePerformer) Release() {
+	p.itr = nil
+	p.ur = nil
+	p.sw = nil
+	p.cw = nil
+	p.ref = nil
 }
 
 type columnWriter struct {
@@ -503,4 +496,144 @@ func (cw *columnWriter) flush(sid uint64, ref *record.Field) error {
 	}()
 
 	return cw.sw.WriteData(sid, *ref, *cw.remain, cw.remainTime)
+}
+
+type MergePerformers struct {
+	closed bool
+	signal chan struct{}
+	wg     sync.WaitGroup
+	once   sync.Once
+
+	items []*mergePerformer
+	ur    *UnorderedReader
+
+	mergedFiles *TSSPFiles
+}
+
+func NewMergePerformers(ur *UnorderedReader) *MergePerformers {
+	performers := &MergePerformers{
+		mergedFiles: NewTSSPFiles(),
+		signal:      make(chan struct{}),
+		ur:          ur,
+	}
+	performers.wg.Add(1)
+	return performers
+}
+
+func (c *MergePerformers) Len() int      { return len(c.items) }
+func (c *MergePerformers) Swap(i, j int) { c.items[i], c.items[j] = c.items[j], c.items[i] }
+func (c *MergePerformers) Less(i, j int) bool {
+	a := c.items[i]
+	b := c.items[j]
+	if a.sid != b.sid {
+		return a.sid < b.sid
+	}
+
+	return a.itr.minTime < b.itr.minTime
+}
+
+func (c *MergePerformers) Push(v interface{}) {
+	c.items = append(c.items, v.(*mergePerformer))
+}
+
+func (c *MergePerformers) Pop() interface{} {
+	l := len(c.items)
+	v := c.items[l-1]
+	c.items = c.items[:l-1]
+
+	v.lastSeries = true
+	for _, item := range c.items {
+		if item.sid == v.sid {
+			v.lastSeries = false
+			break
+		}
+	}
+	v.lastFile = len(c.items) == 0
+	return v
+}
+
+func (c *MergePerformers) Done() {
+	c.wg.Done()
+}
+
+func (c *MergePerformers) Close() {
+	c.once.Do(func() {
+		close(c.signal)
+		c.closed = true
+		for _, item := range c.items {
+			item.Close()
+		}
+		c.wg.Wait()
+		for _, item := range c.items {
+			item.Release()
+		}
+		c.items = nil
+		c.ur = nil
+	})
+}
+
+func (c *MergePerformers) Closed() bool {
+	return c.closed
+}
+
+func (c *MergePerformers) Next() error {
+	var sid uint64 = 0
+
+	for {
+		if c.Len() == 0 {
+			break
+		}
+
+		item, ok := heap.Pop(c).(*mergePerformer)
+		if !ok {
+			continue
+		}
+
+		if sid > 0 && item.sid != sid {
+			heap.Push(c, item)
+			break
+		}
+
+		if sid == 0 {
+			sid = item.sid
+			err := item.writeRemain(sid)
+			if err != nil {
+				return err
+			}
+
+			err = item.ur.ChangeSeries(sid)
+			if err != nil {
+				return err
+			}
+		}
+
+		itr := item.itr
+		err := itr.IterCurrentChunk(item)
+		if err != nil {
+			return err
+		}
+
+		err = item.finishSeries()
+		if err != nil {
+			return err
+		}
+
+		if itr.NextChunkMeta() {
+			item.sid = itr.sid
+			heap.Push(c, item)
+			continue
+		}
+
+		if itr.Error() != nil {
+			return itr.Error()
+		}
+
+		mergedFile, err := item.Finish()
+		if err != nil {
+			return err
+		}
+		c.mergedFiles.Append(mergedFile)
+	}
+
+	return nil
 }

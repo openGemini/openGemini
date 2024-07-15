@@ -6,7 +6,11 @@
         "SnapshotDataSize",
         "SnapshotUnmarshalDuration",
         "LeaderSwitchTotal",
-        "StoreApplyTotal"
+        "StoreApplyTotal",
+        "GetFromOpsMapTotal",
+        "GetFromOpsMapLenTotal",
+        "GetFromDataMarshalTotal",
+        "GetFromDataMarshalLenTotal"
     ],
     "SetItems":[],
     "EnablePush":"Y",

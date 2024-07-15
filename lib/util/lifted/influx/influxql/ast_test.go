@@ -1,6 +1,7 @@
 package influxql
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/openGemini/openGemini/lib/config"
@@ -91,5 +92,20 @@ func Test_RewriteCondForLogKeeper(t *testing.T) {
 	err := RewriteCondVarRef(condition, schema)
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func Test_NumberLiteralString(t *testing.T) {
+	tMap := []float64{123456789, 12345678.9, 12345.6789, 1.23456789, 0.123456789, 1, 1.123456, 1.123456789123456}
+	var number NumberLiteral
+	for _, v := range tMap {
+		number.Val = v
+		newNum, err := strconv.ParseFloat(number.String(), 64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if newNum != v {
+			t.Fatalf("NumberLiteral format failed, expected: %f, get:%f", newNum, v)
+		}
 	}
 }

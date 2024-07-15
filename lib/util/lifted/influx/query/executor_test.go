@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"testing"
 
-	query2 "github.com/influxdata/influxdb/query"
 	"github.com/openGemini/openGemini/lib/errno"
 	Logger "github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/coordinator"
@@ -45,7 +44,7 @@ func TestQueryExecutor_Parallel(t *testing.T) {
 	discardOutput(results)
 }
 
-func discardOutput(results <-chan *query2.Result) {
+func discardOutput(results <-chan *query.Result) {
 	for range results {
 		// Read all results and discard.
 	}

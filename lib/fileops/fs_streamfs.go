@@ -48,6 +48,7 @@ import (
 
 	"github.com/influxdata/influxdb/pkg/limiter"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/request"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"go.uber.org/zap"
@@ -1047,7 +1048,8 @@ func (f *StreamFile) SyncTrue() error {
 	return err
 }
 
-func (f *StreamFile) StreamReadBatch(offs []int64, sizes []int64, minBlockSize int64, c chan *request.StreamReader, obsRangeSize int) {
+func (f *StreamFile) StreamReadBatch(offs []int64, sizes []int64, minBlockSize int64, c chan *request.StreamReader,
+	obsRangeSize int, isStat bool) {
 }
 
 func (f *StreamFile) SyncUpdateLength() error {
@@ -1337,6 +1339,10 @@ func (fs *streamVfs) Remove(name string, opts ...FSOption) error {
 	return fs.sc.RemoveV2(name, lock)
 }
 
+func (fs *streamVfs) RemoveLocal(path string, _ ...FSOption) error {
+	return nil
+}
+
 func (fs *streamVfs) RemoveAll(path string, opts ...FSOption) error {
 	var lock string
 	if err := lockOpt(&lock, opts...); err != nil {
@@ -1465,7 +1471,23 @@ func (fs *streamVfs) CreateV2(name string, opts ...FSOption) (File, error) {
 	return fs.sc.CreateOBSFile(name, lock, priority)
 }
 
+func (fs *streamVfs) GetAllFilesSizeInPath(path string) (int64, int64, int64, error) {
+	return fs.sc.AllFilesSizeInPath(path)
+}
+
+func (fs *streamVfs) GetOBSTmpFileName(path string, obsOption *obs.ObsOptions) string {
+	return path + obs.ObsFileTmpSuffix
+}
+
+func (fs *streamVfs) DecodeRemotePathToLocal(path string) (string, error) {
+	return "", nil
+}
+
 func Mmap(fd int, offset int64, length int) (data []byte, err error) {
+	return
+}
+
+func MmapRW(fd int, offset int64, length int) (data []byte, err error) {
 	return
 }
 

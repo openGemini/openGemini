@@ -73,7 +73,7 @@ func (o *OBSFilterPath) Option() *obs.ObsOptions {
 	return o.option
 }
 
-var _ = RegistrySKFileReaderCreator(index.BloomFilterIndex, &BloomFilterReaderCreator{})
+var _ = RegistrySKFileReaderCreator(uint32(index.BloomFilter), &BloomFilterReaderCreator{})
 
 type BloomFilterReaderCreator struct {
 }
@@ -147,17 +147,17 @@ func (r *BloomFilterIndexReader) Close() error {
 }
 
 // GetLocalBloomFilterBlockCnts get one local bloomFilter col's  block count,if not exist return 0
-func GetLocalBloomFilterBlockCnts(dir, msName, lockPath string, recSchema record.Schemas, skipIndex *SkipIndex,
+func GetLocalBloomFilterBlockCnts(dir, msName, lockPath string, recSchema record.Schemas, bfSchemaIdx int,
 	fullTextIdx bool) int64 {
 	var localPath string
 	if fullTextIdx {
 		localPath = GetFullTextDetachFilePath(dir, msName)
 	} else {
-		if skipIndex.bfIdx < 0 || len(skipIndex.schemaIdxes[skipIndex.bfIdx]) == 0 {
+		if bfSchemaIdx < 0 {
 			logger.GetLogger().Info("bloom filter cols is not exist in the schema", zap.String("measurement name", msName))
 			return 0
 		}
-		fieldName := recSchema[skipIndex.schemaIdxes[skipIndex.bfIdx][0]].Name // get the first bloom filter col
+		fieldName := recSchema[bfSchemaIdx].Name // get the first bloom filter col
 		localPath = GetBloomFilterFilePath(dir, msName, fieldName)
 	}
 
@@ -203,10 +203,10 @@ func (b *BloomFilterWriter) getSkipIndexFilePath(fieldName string, detached bool
 	if detached {
 		return GetBloomFilterFilePath(b.dir, b.msName, fieldName)
 	}
-	return path.Join(b.dir, b.msName, colstore.AppendSKIndexSuffix(b.dataFilePath, fieldName, index.BloomFilterIndex)+tmpFileSuffix)
+	return path.Join(b.dir, b.msName, colstore.AppendSecondaryIndexSuffix(b.dataFilePath, fieldName, index.BloomFilter, 0)+tmpFileSuffix)
 }
 
-func (b *BloomFilterWriter) CreateAttachSkipIndex(schemaIdx, rowsPerSegment []int, writeRec *record.Record) error {
+func (b *BloomFilterWriter) CreateAttachIndex(writeRec *record.Record, schemaIdx, rowsPerSegment []int) error {
 	var err error
 	var data []byte
 	var skipIndexFilePath string
@@ -222,7 +222,7 @@ func (b *BloomFilterWriter) CreateAttachSkipIndex(schemaIdx, rowsPerSegment []in
 	return nil
 }
 
-func (b *BloomFilterWriter) CreateDetachSkipIndex(writeRec *record.Record, schemaIdx, rowsPerSegment []int,
+func (b *BloomFilterWriter) CreateDetachIndex(writeRec *record.Record, schemaIdx, rowsPerSegment []int,
 	dataBuf [][]byte) ([][]byte, []string) {
 	skipIndexFilePaths := make([]string, len(schemaIdx))
 	for k, v := range schemaIdx {

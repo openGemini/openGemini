@@ -2109,3 +2109,9 @@ func TestExecutorBuilder_addPartitionExchange1(t *testing.T) {
 	pipelineExecutor := p.(*executor.PipelineExecutor)
 	require.Equal(t, pipelineExecutor.GetProcessors().Empty(), true)
 }
+
+func TestIsMultiMstPlanNode(t *testing.T) {
+	node := &executor.LogicalBinOp{}
+	builder := &executor.ExecutorBuilder{}
+	assert.Equal(t, builder.IsMultiMstPlanNode(node), true)
+}

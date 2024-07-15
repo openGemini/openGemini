@@ -12,6 +12,7 @@ Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
 import (
 	"context"
 	"io"
+	"sort"
 	"sync"
 	"time"
 
@@ -153,7 +154,8 @@ type ProcessorOptions struct {
 
 	// Group by interval and tags.
 	Interval   hybridqp.Interval
-	Dimensions []string            // The final dimensions of the query (stays the same even in subqueries).
+	Dimensions []string // The final dimensions of the query (stays the same even in subqueries).
+	Except     bool
 	GroupBy    map[string]struct{} // Dimensions to group points by in intermediate iterators.
 	Location   *time.Location
 
@@ -238,6 +240,28 @@ type ProcessorOptions struct {
 
 	// IterID indicates the number of iteration in incremental query, starting from 0.
 	IterID int32
+
+	// PromQuery indicates whether the query is a promql query.
+	PromQuery bool
+
+	// Step is query resolution step width in duration format or float number of seconds for Prom.
+	Step time.Duration
+
+	// Range is used to specify how far back in time values should be fetched for each resulting
+	// range vector element. The range is a closed interval for Prom.
+	Range time.Duration
+
+	// LookBackDelta determines the time since the last sample after which a time series is considered
+	// stale for Prom.
+	LookBackDelta time.Duration
+
+	// QueryOffset is the offset used during the query execution fo promql
+	// which is calculated using the original offset, at modifier time,
+	// eval time, and subquery offsets in the AST tree.
+	QueryOffset time.Duration
+
+	// promQuery use
+	Without bool
 }
 
 // NewProcessorOptionsStmt creates the iterator options from stmt.
@@ -271,17 +295,33 @@ func NewProcessorOptionsStmt(stmt *influxql.SelectStatement, sopt SelectOptions)
 	// The emitter will always emit points as ordered.
 	opt.Ordered = true
 
+	exceptDimensions := make(map[string]struct{})
+	for _, dim := range stmt.ExceptDimensions {
+		if d, ok := dim.Expr.(*influxql.VarRef); ok {
+			exceptDimensions[d.Val] = struct{}{}
+		}
+	}
+
+	if len(exceptDimensions) > 0 {
+		opt.Except = true
+	}
+
 	// Determine dimensions.
 	opt.GroupBy = make(map[string]struct{}, len(opt.Dimensions))
 	for _, d := range stmt.Dimensions {
 		if d, ok := d.Expr.(*influxql.VarRef); ok {
+			if _, ok = exceptDimensions[d.Val]; ok {
+				continue
+			}
 			if ContainDim(opt.Dimensions, d.Val) {
 				opt.Dimensions = append(opt.Dimensions, d.Val)
 				opt.GroupBy[d.Val] = struct{}{}
 			}
 		}
 	}
-
+	if stmt.IsPromQuery {
+		sort.Strings(opt.Dimensions)
+	}
 	opt.Ascending = stmt.TimeAscending()
 	opt.Dedupe = stmt.Dedupe
 	opt.StripName = stmt.StripName
@@ -303,6 +343,12 @@ func NewProcessorOptionsStmt(stmt *influxql.SelectStatement, sopt SelectOptions)
 	opt.GroupByAllDims = stmt.GroupByAllDims
 	opt.HasFieldWildcard = stmt.HasWildcardField
 	opt.StmtId = stmt.StmtId
+	opt.Step = stmt.Step
+	opt.Range = stmt.Range
+	opt.LookBackDelta = stmt.LookBackDelta
+	opt.QueryOffset = stmt.QueryOffset
+	opt.PromQuery = stmt.IsPromQuery
+	opt.Without = stmt.Without
 	return opt, nil
 }
 
@@ -377,6 +423,46 @@ func (opt *ProcessorOptions) IsAscending() bool {
 
 func (opt *ProcessorOptions) SetAscending(a bool) {
 	opt.Ascending = a
+}
+
+func (opt *ProcessorOptions) SetPromQuery(isPromQuery bool) {
+	opt.PromQuery = isPromQuery
+}
+
+func (opt *ProcessorOptions) IsPromInstantQuery() bool {
+	return opt.PromQuery && opt.Step == 0
+}
+
+func (opt *ProcessorOptions) IsPromRangeQuery() bool {
+	return opt.PromQuery && opt.Step > 0
+}
+
+func (opt *ProcessorOptions) IsPromQuery() bool {
+	return opt.PromQuery
+}
+
+func (opt *ProcessorOptions) GetPromStep() time.Duration {
+	return opt.Step
+}
+
+func (opt *ProcessorOptions) GetPromRange() time.Duration {
+	return opt.Range
+}
+
+func (opt *ProcessorOptions) GetPromLookBackDelta() time.Duration {
+	return opt.LookBackDelta
+}
+
+func (opt *ProcessorOptions) GetPromQueryOffset() time.Duration {
+	return opt.QueryOffset
+}
+
+func (opt *ProcessorOptions) IsRangeVectorSelector() bool {
+	return opt.PromQuery && opt.Range > 0
+}
+
+func (opt *ProcessorOptions) IsInstantVectorSelector() bool {
+	return opt.PromQuery && opt.Range == 0
 }
 
 // Window returns the time window [start,end) that t falls within.
@@ -508,6 +594,14 @@ func (opt *ProcessorOptions) GetDimensions() []string {
 
 func (opt *ProcessorOptions) GetOptDimension() []string {
 	return opt.Dimensions
+}
+
+func (opt *ProcessorOptions) CanLimitPushDown() bool {
+	return opt.Limit > 0 && len(opt.SortFields) > 0
+}
+
+func (opt *ProcessorOptions) CanTimeLimitPushDown() bool {
+	return opt.CanLimitPushDown() && opt.SortFields[0].Name == "time"
 }
 
 // Zone returns the zone information for the given time. The offset is in nanoseconds.
@@ -661,12 +755,26 @@ func (opt *ProcessorOptions) IsIncQuery() bool {
 	return opt.IncQuery
 }
 
+func (opt *ProcessorOptions) IsPromGroupAllOrWithout() bool {
+	return opt.PromQuery && (opt.GroupByAllDims || opt.Without)
+}
+
+func (opt *ProcessorOptions) IsPromGroupAll() bool {
+	return opt.PromQuery && opt.GroupByAllDims
+}
+
+func (opt *ProcessorOptions) IsWithout() bool {
+	return opt.Without
+}
+
 func validateTypes(stmt *influxql.SelectStatement) error {
 	valuer := influxql.TypeValuerEval{
 		TypeMapper: influxql.MultiTypeMapper(
 			FunctionTypeMapper{},
 			MathTypeMapper{},
 			StringFunctionTypeMapper{},
+			LabelFunctionTypeMapper{},
+			PromTimeFunctionTypeMapper{},
 		),
 	}
 	for _, f := range stmt.Fields {

@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/bytedance/sonic"
 	"github.com/influxdata/influxdb/models"
 	jsoniter "github.com/json-iterator/go"
 	"github.com/tinylib/msgp/msgp"
@@ -17,12 +18,14 @@ import (
 type ResponseWriter interface {
 	// WriteResponse writes a response.
 	WriteResponse(resp Response) (int, error)
+	WritePromResponse(resp PromResponse) (int, error)
 
 	http.ResponseWriter
 }
 
 type formatter interface {
 	WriteResponse(w io.Writer, resp Response) error
+	WritePromResponse(w io.Writer, resp PromResponse) error
 }
 
 type supportedContentType struct {
@@ -76,6 +79,7 @@ func match(ah accept, sct supportedContentType) bool {
 type responseWriter struct {
 	formatter interface {
 		WriteResponse(w io.Writer, resp Response) error
+		WritePromResponse(w io.Writer, resp PromResponse) error
 	}
 	http.ResponseWriter
 }
@@ -98,6 +102,13 @@ func (w *responseWriter) WriteResponse(resp Response) (int, error) {
 	return writer.n, err
 }
 
+// WriteResponse writes the response using the formatter.
+func (w *responseWriter) WritePromResponse(resp PromResponse) (int, error) {
+	writer := bytesCountWriter{w: w.ResponseWriter}
+	err := w.formatter.WritePromResponse(&writer, resp)
+	return writer.n, err
+}
+
 // Flush flushes the ResponseWriter if it has a Flush() method.
 func (w *responseWriter) Flush() {
 	if w, ok := w.ResponseWriter.(http.Flusher); ok {
@@ -114,11 +125,78 @@ func (w *responseWriter) CloseNotify() <-chan bool {
 	return nil
 }
 
+type sonicJsonFormatter struct {
+	Pretty bool
+}
+
+func (f *sonicJsonFormatter) WriteResponse(w io.Writer, resp Response) error {
+	var b []byte
+	var err error
+	if f.Pretty {
+		b, err = json.MarshalIndent(resp, "", "    ")
+	} else {
+		b, err = sonic.Marshal(resp)
+	}
+
+	if err != nil {
+		unnestedErr := unnestError(err)
+		// ignore any errors in this section, we already have a 'real' error to return
+		resp := Response{Err: unnestedErr}
+		if f.Pretty {
+			b, _ = json.MarshalIndent(resp, "", "    ")
+		} else {
+			b, _ = sonic.Marshal(resp)
+		}
+		w.Write(b)
+		w.Write([]byte("\n"))
+		return err
+	}
+
+	_, err = w.Write(b)
+	if err != nil {
+		return err
+	}
+	_, err = w.Write([]byte("\n"))
+	return err
+}
+
 type jsonFormatter struct {
 	Pretty bool
 }
 
 func (f *jsonFormatter) WriteResponse(w io.Writer, resp Response) error {
+	var b []byte
+	var err error
+	var json = jsoniter.ConfigCompatibleWithStandardLibrary
+	if f.Pretty {
+		b, err = json.MarshalIndent(resp, "", "    ")
+	} else {
+		b, err = json.Marshal(resp)
+	}
+
+	if err != nil {
+		unnestedErr := unnestError(err)
+		// ignore any errors in this section, we already have a 'real' error to return
+		resp := Response{Err: unnestedErr}
+		if f.Pretty {
+			b, _ = json.MarshalIndent(resp, "", "    ")
+		} else {
+			b, _ = json.Marshal(resp)
+		}
+		w.Write(b)
+		w.Write([]byte("\n"))
+		return err
+	}
+
+	_, err = w.Write(b)
+	if err != nil {
+		return err
+	}
+	_, err = w.Write([]byte("\n"))
+	return err
+}
+
+func (f *jsonFormatter) WritePromResponse(w io.Writer, resp PromResponse) error {
 	var b []byte
 	var err error
 	var json = jsoniter.ConfigCompatibleWithStandardLibrary
@@ -267,6 +345,10 @@ func (f *csvFormatter) WriteResponse(w io.Writer, resp Response) (err error) {
 	return csv.Error()
 }
 
+func (f *csvFormatter) WritePromResponse(w io.Writer, resp PromResponse) (err error) {
+	return nil
+}
+
 type msgpackFormatter struct{}
 
 func (f *msgpackFormatter) ContentType() string {
@@ -364,6 +446,10 @@ func (f *msgpackFormatter) WriteResponse(w io.Writer, resp Response) (err error)
 			}
 		}
 	}
+	return nil
+}
+
+func (f *msgpackFormatter) WritePromResponse(w io.Writer, resp PromResponse) (err error) {
 	return nil
 }
 

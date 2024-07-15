@@ -270,10 +270,8 @@ func parsePrecision(precision string) (string, error) {
 	switch epoch {
 	case "":
 		return "ns", nil
-	case "h", "m", "s", "ms", "u", "ns":
+	case "h", "m", "s", "ms", "u", "ns", "rfc3339":
 		return epoch, nil
-	case "rfc3339":
-		return "", nil
 	default:
 		return "", fmt.Errorf("unknown precision %q. precision must be rfc3339, h, m, s, ms, u or ns", precision)
 	}

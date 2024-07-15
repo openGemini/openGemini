@@ -97,6 +97,7 @@ type Column interface {
 	AppendBooleanValue(bool)
 	AppendBooleanValues([]bool)
 	SetBooleanValues([]bool)
+	UpdateBooleanValueFast(v bool, row int)
 
 	//TODO:CheckColumn used to check the chunk's structure
 	// Remember to remove it!
@@ -295,6 +296,7 @@ func (c *ColumnImpl) AppendFloatValues(values []float64) {
 func (c *ColumnImpl) SetFloatValues(values []float64) {
 	c.floatValues = values
 }
+
 func (c *ColumnImpl) UpdateFloatValueFast(v float64, row int) {
 	c.floatValues[row] = v
 }
@@ -318,6 +320,7 @@ func (c *ColumnImpl) AppendIntegerValues(values []int64) {
 func (c *ColumnImpl) SetIntegerValues(values []int64) {
 	c.integerValues = values
 }
+
 func (c *ColumnImpl) UpdateIntegerValueFast(v int64, row int) {
 	c.integerValues[row] = v
 }
@@ -433,8 +436,11 @@ func (c *ColumnImpl) CloneStringValues(val []byte, offset []uint32) {
 }
 
 func (c *ColumnImpl) GetStringValueBytes(valueBits []byte, value []string, start, end int) ([]byte, []string) {
-	var os, oe int
 	stringBytes, offset := c.GetStringBytes()
+	if len(stringBytes) == 0 {
+		return nil, nil
+	}
+	var os, oe int
 	os = int(offset[start])
 	if end < len(offset) {
 		oe = int(offset[end])
@@ -476,6 +482,10 @@ func (c *ColumnImpl) AppendBooleanValues(values []bool) {
 
 func (c *ColumnImpl) SetBooleanValues(values []bool) {
 	c.booleanValues = values
+}
+
+func (c *ColumnImpl) UpdateBooleanValueFast(v bool, row int) {
+	c.booleanValues[row] = v
 }
 
 func (c *ColumnImpl) CheckColumn(length int) {

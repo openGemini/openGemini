@@ -188,7 +188,7 @@ func (l *LocationCursor) ReadOutOfOrderMeta(filterOpts *FilterOptions, dst *reco
 		}
 		l.pos++
 		if rec == nil {
-			rec = midRec.Copy()
+			rec = midRec.Copy(true, nil, midRec.Schema)
 			continue
 		}
 		AggregateData(rec, midRec, loc.ctx.ops)

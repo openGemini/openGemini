@@ -96,26 +96,26 @@ func NewSlidingWindowCountRoutineImpl(
 	switch dataType {
 	case influxql.Integer:
 		return NewRoutineImpl(
-			NewIntegerSlidingWindowIntegerIterator(
-				IntegerCountReduce, IntegerCountMerge, IntegerSlidingWindowMergeFunc,
+			NewSlidingWindowIntegerIterator(
+				CountReduce, CountMerge[int64], SlidingWindowMergeFunc[int64],
 				inOrdinal, outOrdinal, slidingNum),
 			inOrdinal, outOrdinal)
 	case influxql.Float:
 		return NewRoutineImpl(
-			NewIntegerSlidingWindowIntegerIterator(
-				FloatCountReduce, IntegerCountMerge, IntegerSlidingWindowMergeFunc,
+			NewSlidingWindowIntegerIterator(
+				CountReduce, CountMerge[int64], SlidingWindowMergeFunc[int64],
 				inOrdinal, outOrdinal, slidingNum),
 			inOrdinal, outOrdinal)
 	case influxql.String:
 		return NewRoutineImpl(
-			NewIntegerSlidingWindowIntegerIterator(
-				StringCountReduce, IntegerCountMerge, IntegerSlidingWindowMergeFunc,
+			NewSlidingWindowIntegerIterator(
+				CountReduce, CountMerge[int64], SlidingWindowMergeFunc[int64],
 				inOrdinal, outOrdinal, slidingNum),
 			inOrdinal, outOrdinal)
 	case influxql.Boolean:
 		return NewRoutineImpl(
-			NewBooleanSlidingWindowIntegerIterator(
-				BooleanCountReduce, IntegerCountMerge, IntegerSlidingWindowMergeFunc,
+			NewSlidingWindowIntegerIterator(
+				CountReduce, CountMerge[int64], SlidingWindowMergeFunc[int64],
 				inOrdinal, outOrdinal, slidingNum),
 			inOrdinal, outOrdinal)
 	default:
@@ -135,14 +135,14 @@ func NewSlidingWindowSumRoutineImpl(
 	switch dataType {
 	case influxql.Integer:
 		return NewRoutineImpl(
-			NewIntegerSlidingWindowIntegerIterator(
-				IntegerSumReduce, IntegerSumMerge, IntegerSlidingWindowMergeFunc,
+			NewSlidingWindowIntegerIterator(
+				SumReduce[int64], SumMerge[int64], SlidingWindowMergeFunc[int64],
 				inOrdinal, outOrdinal, slidingNum),
 			inOrdinal, outOrdinal)
 	case influxql.Float:
 		return NewRoutineImpl(
-			NewFloatSlidingWindowFloatIterator(
-				FloatSumReduce, FloatSumMerge, FloatSlidingWindowMergeFunc,
+			NewSlidingWindowFloatIterator(
+				SumReduce[float64], SumMerge[float64], SlidingWindowMergeFunc[float64],
 				inOrdinal, outOrdinal, slidingNum),
 			inOrdinal, outOrdinal)
 	default:
@@ -162,20 +162,20 @@ func NewSlidingWindowMinRoutineImpl(
 	switch dataType {
 	case influxql.Integer:
 		return NewRoutineImpl(
-			NewIntegerSlidingWindowIntegerIterator(
-				IntegerMinReduce, IntegerMinMerge, IntegerSlidingWindowMergeFunc,
+			NewSlidingWindowIntegerIterator(
+				MinReduce[int64], MinMerge[int64], SlidingWindowMergeFunc[int64],
 				inOrdinal, outOrdinal, slidingNum),
 			inOrdinal, outOrdinal)
 	case influxql.Float:
 		return NewRoutineImpl(
-			NewFloatSlidingWindowFloatIterator(
-				FloatMinReduce, FloatMinMerge, FloatSlidingWindowMergeFunc,
+			NewSlidingWindowFloatIterator(
+				MinReduce[float64], MinMerge[float64], SlidingWindowMergeFunc[float64],
 				inOrdinal, outOrdinal, slidingNum),
 			inOrdinal, outOrdinal)
 	case influxql.Boolean:
 		return NewRoutineImpl(
-			NewBooleanSlidingWindowBooleanIterator(
-				BooleanMinReduce, BooleanMinMerge, BooleanSlidingWindowMergeFunc,
+			NewSlidingWindowBooleanIterator(
+				BooleanMinReduce, BooleanMinMerge, SlidingWindowMergeFunc[bool],
 				inOrdinal, outOrdinal, slidingNum),
 			inOrdinal, outOrdinal)
 	default:
@@ -195,20 +195,20 @@ func NewSlidingWindowMaxRoutineImpl(
 	switch dataType {
 	case influxql.Integer:
 		return NewRoutineImpl(
-			NewIntegerSlidingWindowIntegerIterator(
-				IntegerMaxReduce, IntegerMaxMerge, IntegerSlidingWindowMergeFunc,
+			NewSlidingWindowIntegerIterator(
+				MaxReduce[int64], MaxMerge[int64], SlidingWindowMergeFunc[int64],
 				inOrdinal, outOrdinal, slidingNum),
 			inOrdinal, outOrdinal)
 	case influxql.Float:
 		return NewRoutineImpl(
-			NewFloatSlidingWindowFloatIterator(
-				FloatMaxReduce, FloatMaxMerge, FloatSlidingWindowMergeFunc,
+			NewSlidingWindowFloatIterator(
+				MaxReduce[float64], MaxMerge[float64], SlidingWindowMergeFunc[float64],
 				inOrdinal, outOrdinal, slidingNum),
 			inOrdinal, outOrdinal)
 	case influxql.Boolean:
 		return NewRoutineImpl(
-			NewBooleanSlidingWindowBooleanIterator(
-				BooleanMaxReduce, BooleanMaxMerge, BooleanSlidingWindowMergeFunc,
+			NewSlidingWindowBooleanIterator(
+				BooleanMaxReduce, BooleanMaxMerge, SlidingWindowMergeFunc[bool],
 				inOrdinal, outOrdinal, slidingNum),
 			inOrdinal, outOrdinal)
 	default:

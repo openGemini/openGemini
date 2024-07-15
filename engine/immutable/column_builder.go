@@ -350,7 +350,12 @@ func (b *ColumnBuilder) encBooleanColumn(timeCols []record.ColVal, segCols []rec
 }
 
 func (b *ColumnBuilder) EncodeColumn(ref record.Field, col *record.ColVal, timeCols []record.ColVal, segRowsLimit int, dataOffset int64) ([]byte, error) {
-	b.segCol = col.Split(b.segCol[:0], segRowsLimit, ref.Type)
+	if col.Len > segRowsLimit {
+		b.segCol = col.Split(b.segCol[:0], segRowsLimit, ref.Type)
+	} else {
+		b.segCol = append(b.segCol[:0], *col)
+	}
+
 	return b.encode(ref, timeCols, dataOffset)
 }
 
@@ -482,7 +487,7 @@ func DecodeColumnHeader(col *record.ColVal, data []byte, colType uint8) ([]byte,
 }
 
 func CanEncodeOneRowMode(col *record.ColVal) bool {
-	return col.Len == 1 && len(col.Val) < 16
+	return col.Len == 1 && len(col.Val) < 16 && len(col.Val) > 0
 }
 
 func rewriteType(col *record.ColVal, typ uint8) uint8 {

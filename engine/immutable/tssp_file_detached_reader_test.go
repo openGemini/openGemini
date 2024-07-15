@@ -92,12 +92,12 @@ func writeData(testCompDir, mstName string) error {
 			dataFilePath := msb.FileName.String()
 			indexFilePath := path.Join(msb.Path, msb.msName, colstore.AppendPKIndexSuffix(dataFilePath))
 			fixRowsPerSegment := GenFixRowsPerSegment(rec, conf.maxRowsPerSegment)
-			if err = msb.writePrimaryIndex(rec, pkSchema, indexFilePath, *msb.lock, colstore.DefaultTCLocation, fixRowsPerSegment, DefaultMaxRowsPerSegment4ColStore); err != nil {
+			if err = msb.writePrimaryIndex(rec, pkSchema, indexFilePath, *msb.lock, colstore.DefaultTCLocation, fixRowsPerSegment, util.DefaultMaxRowsPerSegment4ColStore); err != nil {
 				return nil, err
 			}
 		}
-		msb.NewSkipIndex(rec.Schema, *indexRelation)
-		if len(msb.skipIndex.GetSkipIndexWriters()) > 0 {
+		msb.NewIndexWriterBuilder(rec.Schema, *indexRelation)
+		if len(msb.indexWriterBuilder.GetSkipIndexWriters()) > 0 {
 			fixRowsPerSegment := GenFixRowsPerSegment(rec, conf.maxRowsPerSegment)
 			if err = msb.writeSkipIndex(rec, fixRowsPerSegment); err != nil {
 				return nil, err
@@ -195,9 +195,9 @@ func writeData(testCompDir, mstName string) error {
 	for i := 0; i < filesN; i++ {
 		ids, data := genTestDataForColumnStore(idMinMax.min, 1, recRows, &startValue, &tm)
 		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
-		msb := NewMsBuilder(store.path, mstName, &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE)
+		msb := NewMsBuilder(store.path, mstName, &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE, nil, 0)
 		msb.NewPKIndexWriter()
-		msb.NewSkipIndex(data[ids].Schema, mstinfo.IndexRelation)
+		msb.NewIndexWriterBuilder(data[ids].Schema, mstinfo.IndexRelation)
 		oldRec, err = write(ids, data, msb, oldRec, sortKeyMap, primaryKey, sortKey, needMerge, pkSchema, &mstinfo.IndexRelation)
 		if err != nil {
 			return err
@@ -415,6 +415,55 @@ func TestSeqFilterReader(t *testing.T) {
 	err = treader.parseSeqId(&option)
 	if !IsInterfaceNil(err) {
 		t.Errorf("get wrong result")
+	}
+
+	config.SetProductType("basic")
+}
+
+func TestSeqFilterReaderWhenUpdataBy(t *testing.T) {
+	testCompDir := t.TempDir()
+	config.SetProductType("logkeeper")
+	_ = fileops.RemoveAll(testCompDir)
+	sig := interruptsignal.NewInterruptSignal()
+	defer func() {
+		sig.Close()
+		_ = fileops.RemoveAll(testCompDir)
+	}()
+	mstName := "mst"
+	err := writeData(testCompDir, mstName)
+	if err != nil {
+		t.Errorf(err.Error())
+	}
+
+	p := path.Join(testCompDir, mstName)
+	reader, _ := NewDetachedMetaIndexReader(p, nil)
+
+	metaIndex, _ := reader.ReadMetaIndex([]int64{16, 56}, []int64{40, 40})
+	option := query2.ProcessorOptions{
+		QueryId: 1,
+		Query:   "select * from mst",
+	}
+	option.LogQueryCurrId = "1635724829000000000|9^^"
+	option.Limit = 10
+	schema3 := []record.Field{
+		{Name: record.SeqIDField, Type: influx.Field_Type_Int},
+		{Name: "field2_int", Type: influx.Field_Type_Int},
+		{Name: "time", Type: influx.Field_Type_Int},
+	}
+	decs := NewFileReaderContext(util.TimeRange{Min: 1635724829000000000, Max: 1645724819000000000}, schema3, NewReadContext(true), NewFilterOpts(nil, nil, nil, nil), nil, false)
+	treader, _ := NewTSSPFileDetachedReader(metaIndex[:1], [][]int{[]int{0, 2}}, decs, sparseindex.NewOBSFilterPath("", p, nil), nil, true, &option)
+	totalRow := 0
+	treader.UpdateTime(1635724839000000000)
+	for {
+		data, _, _ := treader.Next()
+		if data == nil {
+			break
+		}
+		assert.Equal(t, data.RowNums(), data.ColVals[0].Len)
+		totalRow += data.RowNums()
+	}
+	if totalRow != 0 {
+		t.Errorf("tssp_file_detached update time wrong")
 	}
 
 	config.SetProductType("basic")

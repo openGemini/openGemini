@@ -21,13 +21,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/influxdata/influxdb/query"
 	_ "github.com/influxdata/influxdb/toml"
 	jsoniter "github.com/json-iterator/go"
 	tssql "github.com/openGemini/openGemini/app/ts-sql/sql"
 	"github.com/openGemini/openGemini/lib/config"
 	_ "github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 )
 
 var verboseServerLogs bool
@@ -57,6 +57,7 @@ type Server interface {
 
 	Query(query string) (results string, err error)
 	QueryWithParams(query string, values url.Values) (results string, err error)
+	QueryPromWithParams(query string, values url.Values, path string) (results string, err error)
 
 	Write(db, rp, body string, params url.Values) (results string, err error)
 	MustWrite(db, rp, body string, params url.Values) string
@@ -474,6 +475,18 @@ func (s *client) Query(query string) (results string, err error) {
 	return s.QueryWithParams(query, nil)
 }
 
+func (s *client) QueryPromWithParams(query string, values url.Values, path string) (string, error) {
+	var v url.Values
+	if values == nil {
+		v = url.Values{}
+	} else {
+		v, _ = url.ParseQuery(values.Encode())
+	}
+	v.Set("query", query)
+	return s.HTTPPost(s.URL()+path+"?"+v.Encode(), nil)
+
+}
+
 // MustQuery executes a query against the server and returns the results.
 func (s *client) MustQuery(query string) string {
 	results, err := s.Query(query)
@@ -490,6 +503,9 @@ func (s *client) QueryWithParams(query string, values url.Values) (results strin
 		v = url.Values{}
 	} else {
 		v, _ = url.ParseQuery(values.Encode())
+	}
+	if !v.Has("epoch") {
+		v.Add("epoch", "rfc3339")
 	}
 	if v.Get("chunked") == "true" {
 		v.Set("chunked", "true")
@@ -625,7 +641,7 @@ func NewParseConfig(path string) *Config {
 
 // NewConfig returns the default config with temporary paths.
 func NewConfig() *Config {
-	ingestConfig := config.NewTSSql()
+	ingestConfig := config.NewTSSql(false)
 	_ = config.Parse(ingestConfig, "config/sql-1.conf")
 
 	c := &Config{ingesterConfig: ingestConfig}
@@ -700,6 +716,9 @@ type Query struct {
 	repeat   int
 	once     bool
 	exps     []string
+	path     string
+	ordered  bool
+	fail     bool
 }
 
 // Execute runs the command and returns an err if it fails
@@ -712,6 +731,14 @@ func (q *Query) Execute(s Server) (err error) {
 		return
 	}
 	q.act, err = s.QueryWithParams(q.command, q.params)
+	if err != nil {
+		FailCount++
+	}
+	return
+}
+
+func (q *Query) ExecuteProm(s Server) (err error) {
+	q.act, err = s.QueryPromWithParams(q.command, q.params, q.path)
 	if err != nil {
 		FailCount++
 	}

@@ -72,6 +72,20 @@ func (h *CreateNode) Process() (transport.Codec, error) {
 	return rsp, nil
 }
 
+func (h *CreateSqlNode) Process() (transport.Codec, error) {
+	rsp := &message.CreateSqlNodeResponse{}
+	httpAddr := h.req.HttpHost
+	gossipAddr := h.req.GossipHost
+	b, err := h.store.CreateSqlNode(httpAddr, gossipAddr)
+	if err != nil {
+		h.logger.Error("createSqlNode fail", zap.Error(err))
+		rsp.Err = err.Error()
+		return rsp, nil
+	}
+	rsp.Data = b
+	return rsp, nil
+}
+
 func (h *Snapshot) Process() (transport.Codec, error) {
 	rsp := &message.SnapshotResponse{}
 	if h.isClosed() {
@@ -90,8 +104,43 @@ func (h *Snapshot) Process() (transport.Codec, error) {
 		select {
 		case <-h.store.afterIndex(index):
 			rsp.Data = h.store.getSnapshot(metaclient.Role(h.req.Role))
-			h.logger.Info("serveSnapshot ok", zap.Uint64("index", index))
+			h.logger.Info("serveSnapshot ok", zap.Uint64("index", index), zap.Int64("len", int64(len(rsp.Data))))
 			return rsp, nil
+		case <-h.closing:
+			rsp.Err = "server closed"
+			return rsp, nil
+		case <-checkRaft:
+			return rsp, nil
+		}
+	}
+}
+
+func (h *SnapshotV2) Process() (transport.Codec, error) {
+	rsp := &message.SnapshotV2Response{}
+	if h.isClosed() {
+		rsp.Err = "server closed"
+		return rsp, nil
+	}
+
+	if !h.store.IsLeader() {
+		rsp.Err = errno.NewError(errno.MetaIsNotLeader).Error()
+		return rsp, nil
+	}
+
+	index := h.req.Index
+	id := h.req.Id
+	checkRaft := time.After(3 * time.Second)
+	checkUpdateCache := time.After(updateCacheInterval)
+	for {
+		if h.store.index() > index {
+			rsp.Data = h.store.getSnapshotV2(metaclient.Role(h.req.Role), index, id)
+			h.logger.Info("serveSnapshotV2 ok", zap.Uint64("index", index), zap.Int64("len", int64(len(rsp.Data))))
+			return rsp, nil
+		}
+		select {
+		case <-checkUpdateCache:
+			checkUpdateCache = time.After(updateCacheInterval)
+			continue
 		case <-h.closing:
 			rsp.Err = "server closed"
 			return rsp, nil

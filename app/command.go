@@ -29,6 +29,7 @@ import (
 	"github.com/openGemini/openGemini/lib/crypto"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
+	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/spf13/cobra"
@@ -64,11 +65,6 @@ func (cmd *Command) Run(args ...string) error {
 		return err
 	}
 
-	// Write the PID file.
-	if err = WritePIDFile(options.PIDFile); err != nil {
-		return fmt.Errorf("write pid file: %s", err)
-	}
-	cmd.Pidfile = options.PIDFile
 	err = cmd.InitConfig(cmd.Config, options.ConfigPath)
 	if err != nil {
 		return fmt.Errorf("parse config: %s", err)
@@ -91,6 +87,12 @@ func (cmd *Command) Run(args ...string) error {
 	if cmd.AfterOpen != nil {
 		cmd.AfterOpen()
 	}
+
+	// Run successfully and write the PID file.
+	if err = WritePIDFile(options.PIDFile); err != nil {
+		return fmt.Errorf("write pid file: %s", err)
+	}
+	cmd.Pidfile = options.PIDFile
 
 	return nil
 }
@@ -137,6 +139,10 @@ func (cmd *Command) InitConfig(conf config.Config, path string) error {
 		return err
 	}
 
+	if logstore := conf.GetLogStoreConfig(); logstore != nil {
+		config.SetLogStoreConfig(logstore)
+	}
+
 	cmd.Config = conf
 	return nil
 }
@@ -146,6 +152,7 @@ func Run(args []string, commands ...*Command) {
 		return
 	}
 
+	stat.SetVersion(commands[0].Info.StatVersion())
 	name, args := cmd.ParseCommandName(args)
 
 	// Extract name from args.

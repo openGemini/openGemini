@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/engine/immutable"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/encoding"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -244,6 +245,18 @@ func TestBatchUpdateCheckTime(t *testing.T) {
 		lastTime, rowCount := seq.Get("mst_1", p1.Ids[i])
 		assert.Equal(t, lastTime, maxInt64(p1.Tms[i], p2.Tms[i]))
 		assert.Equal(t, rowCount, p1.Rows[i]+p2.Rows[i])
+	}
+
+	seq = immutable.NewSequencer()
+	config.GetStoreConfig().UnorderedOnly = true
+	defer func() {
+		config.GetStoreConfig().UnorderedOnly = false
+	}()
+	seq.BatchUpdateCheckTime(p1, true)
+	for i := range p1.Ids {
+		lastTime, rowCount := seq.Get("mst_1", p1.Ids[i])
+		assert.Equal(t, int64(math.MinInt64), lastTime)
+		assert.Equal(t, int64(0), rowCount)
 	}
 }
 

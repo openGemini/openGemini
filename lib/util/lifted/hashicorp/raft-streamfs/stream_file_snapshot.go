@@ -123,6 +123,7 @@ func NewStreamFileSnapshotStore(base string, retain int, logger *log.Logger) (*S
 
 func (f *StreamFileSnapshotStore) testPermissions() error {
 	path := filepath.Join(f.path, testPath)
+	fileops.Remove(path)
 	fh, err := fileops.Create(path, fileops.FilePriorityOption(fileops.IO_PRIORITY_NORMAL))
 	if err != nil {
 		return err

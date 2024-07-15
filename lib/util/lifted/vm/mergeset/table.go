@@ -1,11 +1,14 @@
 package mergeset
 
 import (
+	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -18,6 +21,9 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/memory"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/storagepacelimiter"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/syncwg"
+	"github.com/bits-and-blooms/bloom/v3"
+	"github.com/openGemini/openGemini/lib/bufferpool"
+	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/fs"
 )
@@ -56,6 +62,18 @@ const finalPartsToMerge = 2
 // The required time shouldn't exceed a day.
 const maxPartSize = 400e9
 
+const (
+	rawItemsFlushInterval      = time.Second
+	BloomFilterDirName         = "bloomfilter"
+	BloomFilterFileName        = "mergeset.bf"
+	bloomFilterItems      uint = 1e8
+	falsePositiveRate          = 0.01
+)
+
+var (
+	BfBufPool = bufferpool.NewByteBufferPool(128*1024*1024, cpu.GetCpuNum(), bufferpool.MaxLocalCacheLen)
+)
+
 // maxItemsPerCachedPart is the maximum items per created part by the merge,
 // which must be cached in the OS page cache.
 //
@@ -77,7 +95,6 @@ func maxItemsPerCachedPart() uint64 {
 
 // The interval for flushing (converting) recent raw items into parts,
 // so they become visible to search.
-const rawItemsFlushInterval = time.Second
 
 // Table represents mergeset table.
 type Table struct {
@@ -95,6 +112,7 @@ type Table struct {
 	path string
 
 	flushCallback         func()
+	flushBfCallback       func()
 	flushCallbackWorkerWG sync.WaitGroup
 	needFlushCallbackCall uint32
 
@@ -323,6 +341,82 @@ func OpenTable(path string, flushCallback func(), prepareBlock PrepareBlockCallb
 	}
 
 	return tb, nil
+}
+
+var IndexBufferPool sync.Pool
+
+func GetIndexBuffer() *bytes.Buffer {
+	buf := IndexBufferPool.Get()
+	if buf == nil {
+		return &bytes.Buffer{}
+	}
+	return buf.(*bytes.Buffer)
+}
+
+func PutIndexBuffer(buf *bytes.Buffer) {
+	buf.Reset()
+	IndexBufferPool.Put(buf)
+}
+
+func OpenBloomFilter(path string, lock *string, size int, enabled bool) ([]*bloom.BloomFilter, error) {
+	if !enabled {
+		return nil, nil
+	}
+	bfSlice := make([]*bloom.BloomFilter, 0, size)
+	filesPath := make([]string, 0, size)
+	// init mergeSet bloom filter path
+	bfDir := filepath.Join(path, BloomFilterDirName)
+	err := fs.MkdirAllIfNotExist(bfDir, lock)
+	if err != nil {
+		return nil, err
+	}
+
+	// bloomFilter exist,load from disk
+	itemCount := bloomFilterItems / uint(size)
+	var fileName, filePath string
+	for i := 0; i < size; i++ {
+		fileName = strconv.Itoa(i+1) + "_" + BloomFilterFileName
+		filePath = filepath.Join(bfDir, fileName)
+		filesPath = append(filesPath, filePath)
+		fileInfo, err := fileops.Stat(filePath)
+		if err != nil && !os.IsNotExist(err) {
+			return nil, err
+		}
+		if os.IsNotExist(err) || (fileInfo != nil && fileInfo.Size() == 0) {
+			bfSlice = append(bfSlice, bloom.NewWithEstimates(itemCount, falsePositiveRate))
+		}
+	}
+
+	if len(bfSlice) == size {
+		return bfSlice, nil
+	}
+
+	// read bf from disk
+	buffer := GetIndexBuffer()
+	defer PutIndexBuffer(buffer)
+	for i := range filesPath {
+		f, err := fileops.Open(filesPath[i], fileops.FileLockOption(""), fileops.FilePriorityOption(fileops.IO_PRIORITY_NORMAL))
+		if err != nil {
+			return nil, err
+		}
+
+		bf := &bloom.BloomFilter{}
+		_, err = buffer.ReadFrom(bufio.NewReader(f))
+		if err != nil {
+			return nil, err
+		}
+		_, err = bf.ReadFrom(buffer)
+		if err != nil {
+			return nil, err
+		}
+		bfSlice = append(bfSlice, bf)
+		buffer.Reset()
+	}
+	return bfSlice, nil
+}
+
+func (tb *Table) SetFlushBfCallback(flushBfCallback func()) {
+	tb.flushBfCallback = flushBfCallback
 }
 
 // MustClose closes the table.
@@ -599,17 +693,28 @@ func (tb *Table) DebugFlush() {
 }
 
 func (tb *Table) flushRawItems(isFinal bool) {
-	tb.rawItems.flush(tb, isFinal)
+	blocksToFlush := tb.rawItems.getFlushBlocks(tb, isFinal)
+	if len(blocksToFlush) == 0 {
+		return
+	}
+	if tb.flushBfCallback != nil {
+		tb.flushBfCallback()
+	}
+	tb.rawItems.flush(tb, isFinal, blocksToFlush)
 }
 
-func (riss *rawItemsShards) flush(tb *Table, isFinal bool) {
-	tb.rawItemsPendingFlushesWG.Add(1)
-	defer tb.rawItemsPendingFlushesWG.Done()
-
+func (riss *rawItemsShards) getFlushBlocks(tb *Table, isFinal bool) []*inmemoryBlock {
 	var blocksToFlush []*inmemoryBlock
 	for i := range riss.shards {
 		blocksToFlush = riss.shards[i].appendBlocksToFlush(blocksToFlush, tb, isFinal)
 	}
+	return blocksToFlush
+}
+
+func (riss *rawItemsShards) flush(tb *Table, isFinal bool, blocksToFlush []*inmemoryBlock) {
+	tb.rawItemsPendingFlushesWG.Add(1)
+	defer tb.rawItemsPendingFlushesWG.Done()
+
 	tb.mergeRawItemsBlocks(blocksToFlush, isFinal)
 }
 
@@ -1468,5 +1573,5 @@ func removeParts(pws []*partWrapper, partsToRemove map[*partWrapper]bool) ([]*pa
 func isSpecialDir(name string) bool {
 	// Snapshots and cache dirs aren't used anymore.
 	// Keep them here for backwards compatibility.
-	return name == "tmp" || name == "txn" || name == "snapshots" || name == "cache"
+	return name == "tmp" || name == "txn" || name == "snapshots" || name == "cache" || name == BloomFilterDirName
 }

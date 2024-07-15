@@ -18,6 +18,7 @@ package executor_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/openGemini/openGemini/coordinator"
 	"github.com/openGemini/openGemini/engine/executor"
@@ -1434,5 +1435,115 @@ func TestIncHashAggRule(t *testing.T) {
 	rule3 := executor.NewIncAggRule("IncAggRule")
 	if rule1.Equals(rule3) == true {
 		t.Errorf("IncHashAggRule match failed")
+	}
+}
+
+func testAggPushDownBase(t *testing.T, schema *executor.QuerySchema) *AggPushDownVerifier {
+	planBuilder := executor.NewLogicalPlanBuilderImpl(schema)
+
+	var plan hybridqp.QueryNode
+	var err error
+	if plan, err = planBuilder.CreateSeriesPlan(); err != nil {
+		t.Error(err.Error())
+	}
+	if plan, err = planBuilder.CreateMeasurementPlan(plan); err != nil {
+		t.Error(err.Error())
+	}
+	if plan, err = planBuilder.CreateScanPlan(plan); err != nil {
+		t.Error(err.Error())
+	}
+	if plan, err = planBuilder.CreateShardPlan(plan); err != nil {
+		t.Error(err.Error())
+	}
+	if plan, err = planBuilder.CreateNodePlan(plan, nil); err != nil {
+		t.Error(err.Error())
+	}
+	planBuilder.Push(plan)
+	planBuilder.Aggregate()
+	if plan, err = planBuilder.Build(); err != nil {
+		t.Error(err.Error())
+	}
+
+	toExchange := executor.NewAggPushdownToExchangeRule("")
+	toMeasurement := executor.NewAggPushdownToReaderRule("")
+	toSeries := executor.NewAggPushdownToSeriesRule("")
+	spreadToExchange := executor.NewAggSpreadToExchangeRule("")
+	spreadToReader := executor.NewAggSpreadToReaderRule("")
+	pb := NewHeuProgramBuilder()
+	pb.AddRuleCatagory(executor.RULE_PUSHDOWN_AGG)
+	pb.AddRuleCatagory(executor.RULE_SPREAD_AGG)
+	planner := executor.NewHeuPlannerImpl(pb.Build())
+	planner.AddRule(toExchange)
+	planner.AddRule(toMeasurement)
+	planner.AddRule(toSeries)
+	planner.AddRule(spreadToExchange)
+	planner.AddRule(spreadToReader)
+	planner.SetRoot(plan)
+
+	best := planner.FindBestExp()
+
+	if best == nil {
+		t.Error("no best plan found")
+	}
+
+	verifier := NewAggPushDownVerifier()
+	hybridqp.WalkQueryNodeInPreOrder(verifier, best)
+	return verifier
+}
+
+func TestAggPushDownWithRangeVector(t *testing.T) {
+	fields := influxql.Fields{
+		&influxql.Field{
+			Expr: &influxql.Call{
+				Name: "count",
+				Args: []influxql.Expr{
+					&influxql.VarRef{
+						Val:  "value",
+						Type: influxql.Float,
+					},
+				},
+			},
+		},
+	}
+	columnsName := []string{"count"}
+	opt := query.ProcessorOptions{PromQuery: true, Range: time.Minute, Step: time.Second}
+	opt.Interval.Duration = 1000
+
+	schema := executor.NewQuerySchema(fields, columnsName, &opt, nil)
+	verifier := testAggPushDownBase(t, schema)
+	if verifier.AggCount() != 4 && !executor.GetEnableFileCursor() {
+		t.Errorf("4 agg in plan tree, but %d", verifier.AggCount())
+	}
+	if verifier.AggCount() != 2 && executor.GetEnableFileCursor() {
+		t.Errorf("2 agg in plan tree, but %d", verifier.AggCount())
+	}
+}
+
+func TestAggPushDownWithPromNestedCall(t *testing.T) {
+	fields := influxql.Fields{
+		&influxql.Field{
+			Expr: &influxql.Call{
+				Name: "count",
+				Args: []influxql.Expr{
+					&influxql.Call{
+						Name: "rate_prom",
+						Args: []influxql.Expr{
+							&influxql.VarRef{Val: "value", Type: influxql.Float},
+						},
+					},
+				},
+			},
+		},
+	}
+	columnsName := []string{"count"}
+	opt := query.ProcessorOptions{PromQuery: true, Range: time.Minute, Step: time.Second}
+	opt.Interval.Duration = 1000
+	schema := executor.NewQuerySchema(fields, columnsName, &opt, nil)
+	verifier := testAggPushDownBase(t, schema)
+	if verifier.AggCount() != 4 && !executor.GetEnableFileCursor() {
+		t.Errorf("4 agg in plan tree, but %d", verifier.AggCount())
+	}
+	if verifier.AggCount() != 5 && executor.GetEnableFileCursor() {
+		t.Errorf("5 agg in plan tree, but %d", verifier.AggCount())
 	}
 }

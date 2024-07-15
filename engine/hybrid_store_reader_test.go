@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"path"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -40,6 +41,7 @@ import (
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/logparser"
@@ -63,10 +65,6 @@ func NewMockColumnStoreHybridMstInfo() *meta2.MeasurementInfo {
 			}
 		}
 	}
-	list := make([]*influxql.IndexList, 1)
-	bfColumn := []string{"primaryKey_string1", "primaryKey_string2"}
-	iList := influxql.IndexList{IList: bfColumn}
-	list[0] = &iList
 	mstinfo := &meta2.MeasurementInfo{
 		Name:       "mst",
 		EngineType: config.COLUMNSTORE,
@@ -76,9 +74,13 @@ func NewMockColumnStoreHybridMstInfo() *meta2.MeasurementInfo {
 			CompactionType: config.BLOCK,
 		},
 		Schema: schema,
-		IndexRelation: influxql.IndexRelation{IndexNames: []string{"bloomfilter"},
-			Oids:      []uint32{uint32(index.BloomFilter)},
-			IndexList: list},
+		IndexRelation: influxql.IndexRelation{
+			IndexNames: []string{"bloomfilter", "bloomfilter"},
+			Oids:       []uint32{uint32(index.BloomFilter), uint32(index.BloomFilter)},
+			IndexList: []*influxql.IndexList{
+				{IList: []string{"primaryKey_string1"}},
+				{IList: []string{"primaryKey_string2"}}},
+		},
 	}
 	return mstinfo
 }
@@ -172,12 +174,6 @@ func TestHybridStoreReaderFunctions(t *testing.T) {
 	reader.schema = schema
 	err = reader.initQueryCtx()
 	assert2.Equal(t, err, nil)
-	_, err = reader.initAttachedFileReader(executor.NewDetachedFrags("", 0))
-	assert2.Equal(t, strings.Contains(err.Error(), "invalid index info for attached file reader"), true)
-	_, err = reader.initDetachedFileReader(executor.NewAttachedFrags("", 0))
-	assert2.Equal(t, strings.Contains(err.Error(), "invalid index info for detached file reader"), true)
-	_, err = reader.initFileReader(&executor.DetachedFrags{BaseFrags: *executor.NewBaseFrags("", 3)})
-	assert2.Equal(t, strings.Contains(err.Error(), "invalid file reader"), true)
 	frag := executor.NewBaseFrags("", 3)
 	assert2.Equal(t, 72, frag.Size())
 	err = reader.initSchema()
@@ -196,8 +192,6 @@ func TestHybridStoreReaderFunctions(t *testing.T) {
 	assert2.Equal(t, errno.Equal(err, errno.ErrRPNOp), true)
 	readerPlan = executor.NewLogicalColumnStoreReader(nil, schema)
 	reader = NewHybridStoreReader(readerPlan, executor.NewCSIndexInfo("", executor.NewAttachedIndexInfo(nil, nil), logstore.CurrentLogTokenizerVersion))
-	err = reader.Work(context.Background())
-	assert2.Equal(t, strings.Contains(err.Error(), "students/segment.idx"), true)
 	reader.Close()
 	reader.sendChunk(nil)
 	assert2.Equal(t, reader.closedCount, int64(1))
@@ -245,12 +239,6 @@ func TestHybridStoreReaderFunctionsForFullText(t *testing.T) {
 	reader.schema = schema
 	err = reader.initQueryCtx()
 	assert2.Equal(t, err, nil)
-	_, err = reader.initAttachedFileReader(executor.NewDetachedFrags("", 0))
-	assert2.Equal(t, strings.Contains(err.Error(), "invalid index info for attached file reader"), true)
-	_, err = reader.initDetachedFileReader(executor.NewAttachedFrags("", 0))
-	assert2.Equal(t, strings.Contains(err.Error(), "invalid index info for detached file reader"), true)
-	_, err = reader.initFileReader(&executor.DetachedFrags{BaseFrags: *executor.NewBaseFrags("", 3)})
-	assert2.Equal(t, strings.Contains(err.Error(), "invalid file reader"), true)
 	frag := executor.NewBaseFrags("", 3)
 	assert2.Equal(t, 72, frag.Size())
 	err = reader.initSchema()
@@ -258,14 +246,38 @@ func TestHybridStoreReaderFunctionsForFullText(t *testing.T) {
 }
 
 func TestHybridIndexReaderFunctions(t *testing.T) {
-	indexReader := NewDetachedIndexReader(NewIndexContext(true, 8, createSortQuerySchema(), ""), &obs.ObsOptions{})
-	err := indexReader.Init()
+	unnest := &influxql.Unnest{
+		Expr: &influxql.Call{
+			Name: "match_all",
+			Args: []influxql.Expr{
+				&influxql.VarRef{Val: "([a-z]+),([0-9]+)", Type: influxql.String},
+				&influxql.VarRef{Val: "field1", Type: influxql.String},
+			},
+		},
+		Aliases: []string{"key1", "value1"},
+		DstType: []influxql.DataType{influxql.String, influxql.String},
+	}
+	schema := createSortQuerySchema()
+	schema.SetUnnests([]*influxql.Unnest{unnest})
+	readCtx := immutable.NewFileReaderContext(util.TimeRange{}, nil, immutable.NewReadContext(true), nil, nil, true)
+	indexReader := NewDetachedIndexReader(NewIndexContext(true, 8, schema, ""), &obs.ObsOptions{}, readCtx)
+	_, _, err := indexReader.CreateCursors()
+	assert2.Equal(t, strings.Contains(err.Error(), "endpoint is not set"), true)
+	_, err = indexReader.initFileReader(executor.NewDetachedFrags("", 0))
+	assert2.Equal(t, strings.Contains(err.Error(), "endpoint is not set"), true)
+
+	indexReader = NewDetachedIndexReader(NewIndexContext(true, 8, createSortQuerySchema(), ""), &obs.ObsOptions{}, nil)
+	err = indexReader.Init()
 	assert2.Equal(t, strings.Contains(err.Error(), "endpoint is not set"), true)
 	_, err = indexReader.Next()
 	assert2.Equal(t, strings.Contains(err.Error(), "endpoint is not set"), true)
-	indexReader1 := NewAttachedIndexReader(NewIndexContext(true, 8, createSortQuerySchema(), ""), &executor.AttachedIndexInfo{})
+	indexReader1 := NewAttachedIndexReader(NewIndexContext(true, 8, createSortQuerySchema(), ""), &executor.AttachedIndexInfo{}, nil)
 	_, err = indexReader1.Next()
 	assert2.Equal(t, err, nil)
+
+	indexReader1 = NewAttachedIndexReader(NewIndexContext(true, 8, createSortQuerySchema(), ""), &executor.AttachedIndexInfo{}, nil)
+	_, err = indexReader1.initFileReader(executor.NewDetachedFrags("", 0))
+	assert2.Equal(t, strings.Contains(err.Error(), "invalid index info for attached file reader"), true)
 	db, rp, mst, ptId := "db0", "rp0", "mst", uint32(0)
 	testDir := t.TempDir()
 	defer func() {
@@ -288,7 +300,7 @@ func TestHybridIndexReaderFunctions(t *testing.T) {
 	_, err = sh.GetIndexInfo(querySchema)
 	assert2.Equal(t, err, nil)
 	immutable.SetDetachedFlushEnabled(true)
-	indexReader = NewDetachedIndexReader(NewIndexContext(false, 0, querySchema, ""), &obs.ObsOptions{})
+	indexReader = NewDetachedIndexReader(NewIndexContext(false, 0, querySchema, ""), &obs.ObsOptions{}, nil)
 	err = indexReader.Init()
 	assert2.Equal(t, strings.Contains(err.Error(), "endpoint is not set"), true)
 	immutable.SetDetachedFlushEnabled(false)
@@ -333,6 +345,9 @@ func TestHybridStoreReader(t *testing.T) {
 	recRows := 1000
 	filesN := 8
 	sh.SetMstInfo(NewMockColumnStoreHybridMstInfo())
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta2.MeasurementInfo{NewMockColumnStoreHybridMstInfo()},
+	})
 	for i := 0; i < filesN; i++ {
 		rec := genTestDataForColumnStore(recRows, &startValue, &tm)
 		if err = sh.WriteCols(mst, rec, nil); err != nil {
@@ -351,10 +366,10 @@ func TestHybridStoreReader(t *testing.T) {
 	sh.immTables.(*immutable.MmsTables).Wait()
 
 	// set the primary index reader
-	sh.pkIndexReader = sparseindex.NewPKIndexReader(colstore.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
+	sh.pkIndexReader = sparseindex.NewPKIndexReader(util.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
 
 	// set the skip index reader
-	sh.skIndexReader = sparseindex.NewSKIndexReader(colstore.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
+	sh.skIndexReader = sparseindex.NewSKIndexReader(util.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
 
 	// build the shard group
 	shardGroup := &mockShardGroup{
@@ -382,6 +397,16 @@ func TestHybridStoreReader(t *testing.T) {
 		fields    map[string]influxql.DataType
 		expect    func(out, expect int) bool
 	}{
+		{
+			name:      "select * from db0.rp0.mst order by time limit 1",
+			q:         `select field1_float,field2_int,field3_bool,field4_string from db0.rp0.mst where MATCHPHRASE(primaryKey_string1, 'test') order by time limit 1`,
+			tr:        util.TimeRange{Min: 1635724800000000000, Max: 1635732800000000000},
+			out:       buildComRowDataType(),
+			readerOps: buildComReaderOps(),
+			fields:    fields,
+			expected:  1,
+			expect:    testEqualChunkNum,
+		},
 		{
 			name:      "select * from db0.rp0.mst limit 1",
 			q:         `select field1_float,field2_int,field3_bool,field4_string from db0.rp0.mst where MATCHPHRASE(primaryKey_string1, 'test') limit 1`,
@@ -455,18 +480,19 @@ func TestHybridStoreReader(t *testing.T) {
 			stmt.OmitTime = true
 			sopt := query.SelectOptions{ChunkSize: 1024, IncQuery: false}
 			opt, _ := query.NewProcessorOptionsStmt(stmt, sopt)
-			list := make([]*influxql.IndexList, 1)
-			bfColumn := []string{"primaryKey_string1", "primaryKey_string2"}
-			iList := influxql.IndexList{IList: bfColumn}
-			list[0] = &iList
 			source := influxql.Sources{&influxql.Measurement{
 				Database:        db,
 				RetentionPolicy: rp,
 				Name:            mst,
-				IndexRelation: &influxql.IndexRelation{IndexNames: []string{"bloomfilter"},
-					Oids:      []uint32{uint32(index.BloomFilter)},
-					IndexList: list},
-				EngineType: config.COLUMNSTORE},
+				IndexRelation: &influxql.IndexRelation{
+					IndexNames: []string{"bloomfilter", "bloomfilter"},
+					Oids:       []uint32{uint32(index.BloomFilter), uint32(index.BloomFilter)},
+					IndexList: []*influxql.IndexList{
+						{IList: []string{"primaryKey_string1"}},
+						{IList: []string{"primaryKey_string2"}}},
+				},
+				IsTimeSorted: true,
+				EngineType:   config.COLUMNSTORE},
 			}
 			opt.Name = mst
 			opt.Sources = source
@@ -581,6 +607,9 @@ func TestHybridStoreReaderForInc(t *testing.T) {
 	recRows := 1000
 	filesN := 8
 	sh.SetMstInfo(NewMockColumnStoreHybridMstInfo())
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta.MeasurementInfo{NewMockColumnStoreHybridMstInfo()},
+	})
 	for i := 0; i < filesN; i++ {
 		rec := genTestDataForColumnStore(recRows, &startValue, &tm)
 		if err = sh.WriteCols(mst, rec, nil); err != nil {
@@ -599,10 +628,10 @@ func TestHybridStoreReaderForInc(t *testing.T) {
 	sh.immTables.(*immutable.MmsTables).Wait()
 
 	// set the primary index reader
-	sh.pkIndexReader = sparseindex.NewPKIndexReader(colstore.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
+	sh.pkIndexReader = sparseindex.NewPKIndexReader(util.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
 
 	// set the skip index reader
-	sh.skIndexReader = sparseindex.NewSKIndexReader(colstore.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
+	sh.skIndexReader = sparseindex.NewSKIndexReader(util.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
 	var fields2 influxql.Fields
 	m := &influxql.Measurement{Name: mst}
 	fields2 = append(fields2, &influxql.Field{
@@ -620,7 +649,7 @@ func TestHybridStoreReaderForInc(t *testing.T) {
 	schema := executor.NewQuerySchema(fields2, names, &opt, nil)
 	schema.AddTable(m, schema.MakeRefs())
 	for {
-		indexReader := NewDetachedIndexReader(NewIndexContext(true, 8, schema, sh.filesPath), nil)
+		indexReader := NewDetachedIndexReader(NewIndexContext(true, 8, schema, sh.filesPath), nil, nil)
 		schema.Options().(*query.ProcessorOptions).IterID += 1
 		indexReader.Init()
 		frag, err := indexReader.Next()
@@ -634,7 +663,7 @@ func TestHybridStoreReaderForInc(t *testing.T) {
 	}
 	opt.EndTime = 0
 	schema = executor.NewQuerySchema(fields2, names, &opt, nil)
-	indexReader := NewDetachedIndexReader(NewIndexContext(true, 8, schema, sh.filesPath), nil)
+	indexReader := NewDetachedIndexReader(NewIndexContext(true, 8, schema, sh.filesPath), nil, nil)
 	schema.Options().(*query.ProcessorOptions).IterID += 1
 	indexReader.Init()
 	_, ok := immutable.GetDetachedSegmentTask(sh.filesPath + queryID)
@@ -739,4 +768,329 @@ func TestHybridStoreReaderTranRecToChunk(t *testing.T) {
 		t.Fatal("trans rec to dim failed. The column[3] not equal to dim[0]")
 	}
 	fmt.Println(chk.Column(3).BitMap())
+}
+
+func TestNewDetachedLazyLoadIndexReader(t *testing.T) {
+	config.SetProductType(config.LogKeeperService)
+	defer config.SetProductType("")
+	testDir := t.TempDir()
+	defer func() {
+		_ = fileops.RemoveAll(testDir)
+	}()
+	db, rp, mst := "db0", "rp0", "mst"
+	ptId := uint32(1)
+	executor.RegistryTransformCreator(&executor.LogicalColumnStoreReader{}, &ColumnStoreReaderCreator{})
+	fields := make(map[string]influxql.DataType)
+	for _, field := range schemaForColumnStore {
+		fields[field.Name] = record.ToInfluxqlTypes(field.Type)
+	}
+
+	// create the shard.
+	var err error
+	conf := immutable.GetColStoreConfig()
+	conf.SetMaxRowsPerSegment(20)
+	conf.SetExpectedSegmentSize(1024)
+	sh, err := createShard(db, rp, ptId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compWorker.UnregisterShard(sh.GetID())
+	immutable.SetMaxCompactor(8)
+	defer func() {
+		if err = sh.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err = sh.indexBuilder.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}()
+
+	// write data to the shard.
+	startValue := 999999.0
+	tm := testTimeStart
+	recRows := 1000
+	filesN := 8
+	sh.SetMstInfo(NewMockColumnStoreHybridMstInfo())
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta2.MeasurementInfo{NewMockColumnStoreHybridMstInfo()},
+	})
+	for i := 0; i < filesN; i++ {
+		rec := genTestDataForColumnStore(recRows, &startValue, &tm)
+		if err = sh.WriteCols(mst, rec, nil); err != nil {
+			t.Fatal(err)
+		}
+		sh.ForceFlush()
+		sh.waitSnapshot()
+	}
+
+	// start to compact
+	time.Sleep(time.Second * 3)
+	err = sh.immTables.LevelCompact(0, sh.GetID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sh.immTables.(*immutable.MmsTables).Wait()
+
+	// set the primary index reader
+	sh.pkIndexReader = sparseindex.NewPKIndexReader(util.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
+
+	// set the skip index reader
+	sh.skIndexReader = sparseindex.NewSKIndexReader(util.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
+
+	// build the shard group
+	shardGroup := &mockShardGroup{
+		sh:     sh,
+		Fields: fields,
+	}
+
+	// build the storage engine
+	storeEngine := NewMockStoreEngine()
+	storeEngine.SetShard(sh)
+	tr := util.TimeRange{Min: 1635724800000000000, Max: 1635732800000000000}
+	q := "select field1_float,field2_int,field3_bool,field4_string from db0.rp0.mst order by time limit 1"
+	stmt := MustParseSelectStatementByYacc(q)
+	stmt, err = stmt.RewriteFields(shardGroup, true, false)
+	stmt.OmitTime = true
+	sopt := query.SelectOptions{ChunkSize: 1024, IncQuery: false}
+	opt, _ := query.NewProcessorOptionsStmt(stmt, sopt)
+	source := influxql.Sources{&influxql.Measurement{
+		Database:        db,
+		RetentionPolicy: rp,
+		Name:            mst,
+		IndexRelation: &influxql.IndexRelation{
+			IndexNames: []string{"bloomfilter", "bloomfilter"},
+			Oids:       []uint32{uint32(index.BloomFilter), uint32(index.BloomFilter)},
+			IndexList: []*influxql.IndexList{
+				{IList: []string{"primaryKey_string1"}},
+				{IList: []string{"primaryKey_string2"}}},
+		},
+		IsTimeSorted: true,
+		EngineType:   config.COLUMNSTORE},
+	}
+	opt.Name = mst
+	opt.Sources = source
+	opt.StartTime = tr.Min
+	opt.EndTime = tr.Max
+	opt.Condition = stmt.Condition
+	opt.MaxParallel = 1
+	querySchema := executor.NewQuerySchema(stmt.Fields, stmt.ColumnNames(), &opt, nil)
+	readCtx := immutable.NewFileReaderContext(tr, schemaForColumnStore, immutable.NewReadContext(true), immutable.NewFilterOpts(nil, nil, nil, nil), nil, true)
+	indexReader := NewDetachedLazyLoadIndexReader(NewIndexContext(true, 8, querySchema, sh.filesPath), nil, readCtx)
+	c, _, _ := indexReader.CreateCursors()
+	re, _, _ := c[0].Next()
+	if re.RowNums() != 1 {
+		t.Errorf("readdata failed")
+	}
+	testCur := c[0].(*immutable.SortLimitCursor).GetInput()
+	if testCur.Name() != "StreamDetachedReader" {
+		t.Errorf("get wrong name")
+	}
+	if testCur.GetSchema() == nil {
+		t.Errorf("get wrong schema")
+	}
+	testCur.UpdateTime(0)
+	if testCur.Close() != nil {
+		t.Errorf("close err")
+	}
+	re, _, _ = testCur.NextAggData()
+	if re != nil {
+		t.Errorf("get wrong data")
+	}
+
+	immutable.SetDetachedFlushEnabled(true)
+	defer immutable.SetDetachedFlushEnabled(false)
+
+	q = "select field1_float,field2_int,field3_bool,field4_string from db0.rp0.mst where MATCHPHRASE(primaryKey_string1, 'test') order by time limit 1"
+	stmt = MustParseSelectStatementByYacc(q)
+	stmt, err = stmt.RewriteFields(shardGroup, true, false)
+	stmt.OmitTime = true
+	opt.Condition = stmt.Condition
+	unnest := &influxql.Unnest{
+		Expr: &influxql.Call{
+			Name: "match_all",
+			Args: []influxql.Expr{
+				&influxql.VarRef{Val: "([a-z]+),([0-9]+)", Type: influxql.String},
+				&influxql.VarRef{Val: "field4_string", Type: influxql.String},
+			},
+		},
+		Aliases: []string{"key1", "value1"},
+		DstType: []influxql.DataType{influxql.String, influxql.String},
+	}
+	querySchema2 := executor.NewQuerySchema(stmt.Fields, stmt.ColumnNames(), &opt, nil)
+	querySchema2.SetUnnests([]*influxql.Unnest{unnest})
+	currSchemaForColumnStore := []record.Field{
+		{Name: "field1_float", Type: influx.Field_Type_Float},
+		{Name: "field2_int", Type: influx.Field_Type_Int},
+		{Name: "field3_bool", Type: influx.Field_Type_Boolean},
+		{Name: "field4_string", Type: influx.Field_Type_String},
+		{Name: "key1", Type: influx.Field_Type_String},
+		{Name: "primaryKey_float1", Type: influx.Field_Type_Float},
+		{Name: "primaryKey_string1", Type: influx.Field_Type_String},
+		{Name: "primaryKey_string2", Type: influx.Field_Type_String},
+		{Name: "sortKey_int1", Type: influx.Field_Type_Int},
+		{Name: "value1", Type: influx.Field_Type_String},
+		{Name: "time", Type: influx.Field_Type_Int},
+	}
+	readCtx = immutable.NewFileReaderContext(tr, currSchemaForColumnStore, immutable.NewReadContext(true), immutable.NewFilterOpts(nil, nil, nil, nil), nil, true)
+	indexReader = NewDetachedLazyLoadIndexReader(NewIndexContext(true, 8, querySchema2, sh.filesPath), nil, readCtx)
+	c, _, _ = indexReader.CreateCursors()
+	_, _, err = c[0].Next()
+	if err != nil {
+		t.Errorf("readdata failed, %s", err.Error())
+	}
+
+	opt.Ascending = false
+	tr.Min = 0
+	tr.Max = 1635724700000000000
+	readCtx = immutable.NewFileReaderContext(tr, schemaForColumnStore, immutable.NewReadContext(true), immutable.NewFilterOpts(nil, nil, nil, nil), nil, true)
+	indexReader = NewDetachedLazyLoadIndexReader(NewIndexContext(true, 8, querySchema, sh.filesPath), nil, readCtx)
+	c, _, _ = indexReader.CreateCursors()
+	re, _, _ = c[0].Next()
+	if re != nil {
+		t.Errorf("readdata failed")
+	}
+	c[0].(*immutable.SortLimitCursor).GetInput().SetOps(nil)
+	c[0].(*immutable.SortLimitCursor).GetInput().UpdateTime(0)
+
+	c[0].(*immutable.SortLimitCursor).GetInput().StartSpan(nil)
+	c[0].(*immutable.SortLimitCursor).GetInput().EndSpan()
+	c[0].(*immutable.SortLimitCursor).GetInput().SinkPlan(nil)
+
+	readCtx = immutable.NewFileReaderContext(util.TimeRange{}, schemaForColumnStore, immutable.NewReadContext(true), immutable.NewFilterOpts(nil, nil, nil, nil), nil, true)
+	indexReader = NewDetachedLazyLoadIndexReader(NewIndexContext(true, 8, querySchema, ""), nil, readCtx)
+	c, _, err = indexReader.CreateCursors()
+	if err != nil {
+		t.Errorf("create cursor failed")
+	}
+
+	_, _, err = c[0].Next()
+	if err != nil {
+		t.Errorf("readdata failed")
+	}
+}
+
+func TestNewDetachedLazyLoadIndexReaderWhenErr(t *testing.T) {
+	config.SetProductType(config.LogKeeperService)
+	defer config.SetProductType("")
+	testDir := t.TempDir()
+	defer func() {
+		_ = fileops.RemoveAll(testDir)
+	}()
+	db, rp, mst := "db0", "rp0", "mst"
+	ptId := uint32(1)
+	executor.RegistryTransformCreator(&executor.LogicalColumnStoreReader{}, &ColumnStoreReaderCreator{})
+	fields := make(map[string]influxql.DataType)
+	for _, field := range schemaForColumnStore {
+		fields[field.Name] = record.ToInfluxqlTypes(field.Type)
+	}
+
+	// create the shard.
+	var err error
+	conf := immutable.GetColStoreConfig()
+	conf.SetMaxRowsPerSegment(20)
+	conf.SetExpectedSegmentSize(1024)
+	sh, err := createShard(db, rp, ptId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compWorker.UnregisterShard(sh.GetID())
+	immutable.SetMaxCompactor(8)
+	defer func() {
+		if err = sh.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err = sh.indexBuilder.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}()
+
+	// write data to the shard.
+	startValue := 999999.0
+	tm := testTimeStart
+	recRows := 1000
+	filesN := 8
+	sh.SetMstInfo(NewMockColumnStoreHybridMstInfo())
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta2.MeasurementInfo{NewMockColumnStoreHybridMstInfo()},
+	})
+	for i := 0; i < filesN; i++ {
+		rec := genTestDataForColumnStore(recRows, &startValue, &tm)
+		if err = sh.WriteCols(mst, rec, nil); err != nil {
+			t.Fatal(err)
+		}
+		sh.ForceFlush()
+		sh.waitSnapshot()
+	}
+
+	// start to compact
+	time.Sleep(time.Second * 3)
+	err = sh.immTables.LevelCompact(0, sh.GetID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sh.immTables.(*immutable.MmsTables).Wait()
+
+	// set the primary index reader
+	sh.pkIndexReader = sparseindex.NewPKIndexReader(util.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
+
+	// set the skip index reader
+	sh.skIndexReader = sparseindex.NewSKIndexReader(util.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
+
+	// build the shard group
+	shardGroup := &mockShardGroup{
+		sh:     sh,
+		Fields: fields,
+	}
+
+	// build the storage engine
+	storeEngine := NewMockStoreEngine()
+	storeEngine.SetShard(sh)
+	tr := util.TimeRange{Min: 1635724800000000000, Max: 1635732800000000000}
+	q := "select field1_float,field2_int,field3_bool,field4_string from db0.rp0.mst order by time limit 1"
+	stmt := MustParseSelectStatementByYacc(q)
+	stmt, err = stmt.RewriteFields(shardGroup, true, false)
+	stmt.OmitTime = true
+	sopt := query.SelectOptions{ChunkSize: 1024, IncQuery: false}
+	opt, _ := query.NewProcessorOptionsStmt(stmt, sopt)
+	source := influxql.Sources{&influxql.Measurement{
+		Database:        db,
+		RetentionPolicy: rp,
+		Name:            mst,
+		IndexRelation: &influxql.IndexRelation{
+			IndexNames: []string{"bloomfilter", "bloomfilter"},
+			Oids:       []uint32{uint32(index.BloomFilter), uint32(index.BloomFilter)},
+			IndexList: []*influxql.IndexList{
+				{IList: []string{"primaryKey_string1"}},
+				{IList: []string{"primaryKey_string2"}}},
+		},
+		IsTimeSorted: true,
+		EngineType:   config.COLUMNSTORE},
+	}
+	opt.Name = mst
+	opt.Sources = source
+	opt.StartTime = tr.Min
+	opt.EndTime = tr.Max
+	opt.Condition = stmt.Condition
+	opt.MaxParallel = 1
+	querySchema := executor.NewQuerySchema(stmt.Fields, stmt.ColumnNames(), &opt, nil)
+	readCtx := immutable.NewFileReaderContext(tr, schemaForColumnStore, immutable.NewReadContext(true), immutable.NewFilterOpts(nil, nil, nil, nil), nil, true)
+	indexReader := NewDetachedLazyLoadIndexReader(NewIndexContext(true, 8, querySchema, sh.filesPath), nil, readCtx)
+	err = fileops.Remove(path.Join(sh.filesPath, opt.GetMeasurements()[0].Name, immutable.DataFile))
+	if err != nil {
+		t.Fatal("remove file failed")
+	}
+	c, _, err := indexReader.CreateCursors()
+	_, _, err = c[0].Next()
+	if err == nil {
+		t.Errorf("readdata failed")
+	}
+
+	err = fileops.Remove(path.Join(sh.filesPath, opt.GetMeasurements()[0].Name, immutable.PrimaryMetaFile))
+	if err != nil {
+		t.Fatal("remove file failed")
+	}
+	_, _, err = indexReader.CreateCursors()
+	if err == nil {
+		t.Errorf("create cursor failed")
+	}
 }

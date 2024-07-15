@@ -136,22 +136,23 @@ func testRecsEqual(mergeRec, expRec *record.Record) bool {
 	return isRecEqual(mergeRec, expRec)
 }
 
+var testSchema = record.Schemas{
+	record.Field{Type: influx.Field_Type_Int, Name: "int"},
+	record.Field{Type: influx.Field_Type_Float, Name: "float"},
+	record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
+	record.Field{Type: influx.Field_Type_String, Name: "string"},
+	record.Field{Type: influx.Field_Type_Int, Name: "time"},
+}
+
 // merge with oldRec.time[0] == newRec.time[0]
 func TestMergeRecordWithSameSchemaAndOneRowCase1(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	oldRec := genRowRec(schema,
+	oldRec := genRowRec(testSchema,
 		[]int{1}, []int64{200},
 		[]int{1}, []float64{2.3},
 		[]int{1}, []string{"hello"},
 		[]int{1}, []bool{false},
 		[]int64{1})
-	newRec := genRowRec(schema,
+	newRec := genRowRec(testSchema,
 		[]int{1}, []int64{100},
 		[]int{1}, []float64{1.3},
 		[]int{1}, []string{"world"},
@@ -169,20 +170,13 @@ func TestMergeRecordWithSameSchemaAndOneRowCase1(t *testing.T) {
 
 // merge with oldRec.time[0] == newRec.time[0]
 func TestMergeRecordWithSameSchemaAndOneRowCase1Descend(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	oldRec := genRowRec(schema,
+	oldRec := genRowRec(testSchema,
 		[]int{1}, []int64{200},
 		[]int{1}, []float64{2.3},
 		[]int{1}, []string{"hello"},
 		[]int{1}, []bool{false},
 		[]int64{1})
-	newRec := genRowRec(schema,
+	newRec := genRowRec(testSchema,
 		[]int{1}, []int64{100},
 		[]int{1}, []float64{1.3},
 		[]int{1}, []string{"world"},
@@ -201,26 +195,19 @@ func TestMergeRecordWithSameSchemaAndOneRowCase1Descend(t *testing.T) {
 
 // merge with oldRec.time[0] < newRec.time[0]
 func TestMergeRecordWithSameSchemaAndOneRowCase2(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	oldRec := genRowRec(schema,
+	oldRec := genRowRec(testSchema,
 		[]int{1}, []int64{200},
 		[]int{1}, []float64{2.3},
 		[]int{1}, []string{"hello"},
 		[]int{1}, []bool{false},
 		[]int64{1})
-	newRec := genRowRec(schema,
+	newRec := genRowRec(testSchema,
 		[]int{1}, []int64{100},
 		[]int{1}, []float64{1.3},
 		[]int{1}, []string{"world"},
 		[]int{1}, []bool{true},
 		[]int64{2})
-	expectRec := genRowRec(schema,
+	expectRec := genRowRec(testSchema,
 		[]int{1, 1}, []int64{200, 100},
 		[]int{1, 1}, []float64{2.3, 1.3},
 		[]int{1, 1}, []string{"hello", "world"},
@@ -239,26 +226,19 @@ func TestMergeRecordWithSameSchemaAndOneRowCase2(t *testing.T) {
 
 // merge with oldRec.time[0] < newRec.time[0]
 func TestMergeRecordWithSameSchemaAndOneRowCase2Descend(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	oldRec := genRowRec(schema,
+	oldRec := genRowRec(testSchema,
 		[]int{1}, []int64{200},
 		[]int{1}, []float64{2.3},
 		[]int{1}, []string{"hello"},
 		[]int{1}, []bool{false},
 		[]int64{1})
-	newRec := genRowRec(schema,
+	newRec := genRowRec(testSchema,
 		[]int{1}, []int64{100},
 		[]int{1}, []float64{1.3},
 		[]int{1}, []string{"world"},
 		[]int{1}, []bool{true},
 		[]int64{2})
-	expectRec := genRowRec(schema,
+	expectRec := genRowRec(testSchema,
 		[]int{1, 1}, []int64{100, 200},
 		[]int{1, 1}, []float64{1.3, 2.3},
 		[]int{1, 1}, []string{"world", "hello"},
@@ -277,26 +257,19 @@ func TestMergeRecordWithSameSchemaAndOneRowCase2Descend(t *testing.T) {
 
 // merge with oldRec.time[0] > newRec.time[0]
 func TestMergeRecordWithSameSchemaAndOneRowCase3(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	oldRec := genRowRec(schema,
+	oldRec := genRowRec(testSchema,
 		[]int{1}, []int64{200},
 		[]int{1}, []float64{2.3},
 		[]int{1}, []string{"hello"},
 		[]int{1}, []bool{false},
 		[]int64{3})
-	newRec := genRowRec(schema,
+	newRec := genRowRec(testSchema,
 		[]int{1}, []int64{100},
 		[]int{1}, []float64{1.3},
 		[]int{1}, []string{"world"},
 		[]int{1}, []bool{true},
 		[]int64{2})
-	expectRec := genRowRec(schema,
+	expectRec := genRowRec(testSchema,
 		[]int{1, 1}, []int64{100, 200},
 		[]int{1, 1}, []float64{1.3, 2.3},
 		[]int{1, 1}, []string{"world", "hello"},
@@ -315,26 +288,19 @@ func TestMergeRecordWithSameSchemaAndOneRowCase3(t *testing.T) {
 
 // merge with oldRec.time[0] > newRec.time[0]
 func TestMergeRecordWithSameSchemaAndOneRowCase3Descend(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	oldRec := genRowRec(schema,
+	oldRec := genRowRec(testSchema,
 		[]int{1}, []int64{200},
 		[]int{1}, []float64{2.3},
 		[]int{1}, []string{"hello"},
 		[]int{1}, []bool{false},
 		[]int64{3})
-	newRec := genRowRec(schema,
+	newRec := genRowRec(testSchema,
 		[]int{1}, []int64{100},
 		[]int{1}, []float64{1.3},
 		[]int{1}, []string{"world"},
 		[]int{1}, []bool{true},
 		[]int64{2})
-	expectRec := genRowRec(schema,
+	expectRec := genRowRec(testSchema,
 		[]int{1, 1}, []int64{200, 100},
 		[]int{1, 1}, []float64{2.3, 1.3},
 		[]int{1, 1}, []string{"hello", "world"},
@@ -364,14 +330,6 @@ func TestMergeRecordWithDifferentSchemaAndOneRowCase1(t *testing.T) {
 		record.Field{Type: influx.Field_Type_String, Name: "string"},
 		record.Field{Type: influx.Field_Type_Int, Name: "time"},
 	}
-	expSchema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-
 	oldRec := genRowRec(oldSchema,
 		[]int{1}, []int64{200},
 		[]int{0}, []float64{},
@@ -384,7 +342,7 @@ func TestMergeRecordWithDifferentSchemaAndOneRowCase1(t *testing.T) {
 		[]int{1}, []string{"test"},
 		[]int{0}, []bool{},
 		[]int64{1})
-	expectRec := genRowRec(expSchema,
+	expectRec := genRowRec(testSchema,
 		[]int{1}, []int64{100},
 		[]int{1}, []float64{1.3},
 		[]int{1}, []string{"test"},
@@ -415,13 +373,6 @@ func TestMergeRecordWithDifferentSchemaAndOneRowCase1Descend(t *testing.T) {
 		record.Field{Type: influx.Field_Type_String, Name: "string"},
 		record.Field{Type: influx.Field_Type_Int, Name: "time"},
 	}
-	expSchema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
 
 	oldRec := genRowRec(oldSchema,
 		[]int{1}, []int64{200},
@@ -435,7 +386,7 @@ func TestMergeRecordWithDifferentSchemaAndOneRowCase1Descend(t *testing.T) {
 		[]int{1}, []string{"test"},
 		[]int{0}, []bool{},
 		[]int64{1})
-	expectRec := genRowRec(expSchema,
+	expectRec := genRowRec(testSchema,
 		[]int{1}, []int64{100},
 		[]int{1}, []float64{1.3},
 		[]int{1}, []string{"test"},
@@ -651,26 +602,19 @@ func TestMergeRecordWithDifferentSchemaAndOneRowCase3Descend(t *testing.T) {
 
 // merge with oldRec.time[max] < newRec.time[0]
 func TestMergeRecordWithSameSchemaAndMultiRowsCase1(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	oldRec := genRowRec(schema,
+	oldRec := genRowRec(testSchema,
 		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
 		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
 		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
 		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
 		[]int64{1, 2, 3, 4, 5, 6, 7})
-	newRec := genRowRec(schema,
+	newRec := genRowRec(testSchema,
 		[]int{1, 0, 1, 1, 1}, []int64{1000, 0, 1100, 1200, 1300},
 		[]int{1, 1, 0, 1, 0}, []float64{1001.3, 1002.4, 0, 1003.5, 0},
 		[]int{0, 1, 1, 1, 0}, []string{"", "helloNew", "worldNew", "testNew1", ""},
 		[]int{1, 1, 1, 1, 0}, []bool{true, true, false, true, false},
 		[]int64{18, 19, 20, 21, 22})
-	expectRec := genRowRec(schema,
+	expectRec := genRowRec(testSchema,
 		[]int{1, 1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700, 1000, 0, 1100, 1200, 1300},
 		[]int{1, 0, 1, 0, 1, 1, 0, 1, 1, 0, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0, 1001.3, 1002.4, 0, 1003.5, 0},
 		[]int{0, 1, 0, 0, 1, 0, 1, 0, 1, 1, 1, 0}, []string{"", "hello", "", "", "world", "", "test", "", "helloNew", "worldNew", "testNew1", ""},
@@ -689,26 +633,19 @@ func TestMergeRecordWithSameSchemaAndMultiRowsCase1(t *testing.T) {
 
 // merge with oldRec.time[max] < newRec.time[0]
 func TestMergeRecordWithSameSchemaAndMultiRowsCase1Descend(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	oldRec := genRowRec(schema,
+	oldRec := genRowRec(testSchema,
 		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
 		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
 		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
 		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
 		[]int64{7, 6, 5, 4, 3, 2, 1})
-	newRec := genRowRec(schema,
+	newRec := genRowRec(testSchema,
 		[]int{1, 0, 1, 1, 1}, []int64{1000, 0, 1100, 1200, 1300},
 		[]int{1, 1, 0, 1, 0}, []float64{1001.3, 1002.4, 0, 1003.5, 0},
 		[]int{1, 1, 0, 1, 0}, []string{"", "helloNew", "worldNew", "testNew1", ""},
 		[]int{1, 1, 1, 1, 0}, []bool{true, true, false, true, false},
 		[]int64{22, 21, 20, 19, 18})
-	expectRec := genRowRec(schema,
+	expectRec := genRowRec(testSchema,
 		[]int{1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1}, []int64{1000, 0, 1100, 1200, 1300, 200, 300, 0, 400, 500, 600, 700},
 		[]int{1, 1, 0, 1, 0, 1, 0, 1, 0, 1, 1, 0}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 2.3, 0, 3.3, 0, 4.3, 5.3, 0},
 		[]int{1, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 1}, []string{"", "helloNew", "worldNew", "testNew1", "", "", "hello", "", "", "world", "", "test"},
@@ -727,26 +664,19 @@ func TestMergeRecordWithSameSchemaAndMultiRowsCase1Descend(t *testing.T) {
 
 // merge with oldRec.time[0] > newRec.time[max]
 func TestMergeRecordWithSameSchemaAndMultiRowsCase2(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	oldRec := genRowRec(schema,
+	oldRec := genRowRec(testSchema,
 		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
 		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
 		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
 		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
 		[]int64{31, 32, 33, 34, 45, 46, 47})
-	newRec := genRowRec(schema,
+	newRec := genRowRec(testSchema,
 		[]int{1, 0, 1, 1, 1}, []int64{1000, 0, 1100, 1200, 1300},
 		[]int{1, 1, 0, 1, 0}, []float64{1001.3, 1002.4, 0, 1003.5, 0},
 		[]int{0, 1, 1, 1, 0}, []string{"", "helloNew", "worldNew", "testNew1", ""},
 		[]int{1, 1, 1, 1, 0}, []bool{true, true, false, true, false},
 		[]int64{18, 19, 20, 21, 22})
-	expectRec := genRowRec(schema,
+	expectRec := genRowRec(testSchema,
 		[]int{1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1}, []int64{1000, 0, 1100, 1200, 1300, 200, 300, 0, 400, 500, 600, 700},
 		[]int{1, 1, 0, 1, 0, 1, 0, 1, 0, 1, 1, 0}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 2.3, 0, 3.3, 0, 4.3, 5.3, 0},
 		[]int{0, 1, 1, 1, 0, 0, 1, 0, 0, 1, 0, 1}, []string{"", "helloNew", "worldNew", "testNew1", "", "", "hello", "", "", "world", "", "test"},
@@ -765,26 +695,19 @@ func TestMergeRecordWithSameSchemaAndMultiRowsCase2(t *testing.T) {
 
 // merge with oldRec.time[0] > newRec.time[max]
 func TestMergeRecordWithSameSchemaAndMultiRowsCase2Descend(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	oldRec := genRowRec(schema,
+	oldRec := genRowRec(testSchema,
 		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
 		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
 		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
 		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
 		[]int64{47, 46, 45, 34, 33, 32, 31})
-	newRec := genRowRec(schema,
+	newRec := genRowRec(testSchema,
 		[]int{1, 0, 1, 1, 1}, []int64{1000, 0, 1100, 1200, 1300},
 		[]int{1, 1, 0, 1, 0}, []float64{1001.3, 1002.4, 0, 1003.5, 0},
 		[]int{0, 1, 1, 1, 0}, []string{"", "helloNew", "worldNew", "testNew1", ""},
 		[]int{1, 1, 1, 1, 0}, []bool{true, true, false, true, false},
 		[]int64{22, 21, 20, 19, 18})
-	expectRec := genRowRec(schema,
+	expectRec := genRowRec(testSchema,
 		[]int{1, 1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700, 1000, 0, 1100, 1200, 1300},
 		[]int{1, 0, 1, 0, 1, 1, 0, 1, 1, 0, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0, 1001.3, 1002.4, 0, 1003.5, 0},
 		[]int{0, 1, 0, 0, 1, 0, 1, 0, 1, 1, 1, 0}, []string{"", "hello", "", "", "world", "", "test", "", "helloNew", "worldNew", "testNew1", ""},
@@ -806,26 +729,19 @@ func TestMergeRecordWithSameSchemaAndMultiRowsCase2Descend(t *testing.T) {
 //	old.time [31, 32, 33, 34, 45, 46, 47]
 //	new.time [31, 32, 33, 34, 45, 46, 47]
 func TestMergeRecordWithSameSchemaAndMultiRowsCase3(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	oldRec := genRowRec(schema,
+	oldRec := genRowRec(testSchema,
 		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
 		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
 		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
 		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
 		[]int64{31, 32, 33, 34, 45, 46, 47})
-	newRec := genRowRec(schema,
+	newRec := genRowRec(testSchema,
 		[]int{1, 0, 1, 1, 1, 1, 0}, []int64{1000, 0, 1100, 1200, 1300, 1400, 0},
 		[]int{1, 1, 0, 1, 0, 0, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6},
 		[]int{0, 1, 1, 1, 0, 1, 1}, []string{"", "helloNew", "worldNew", "testNew1", "", "testNew2", "testNew3"},
 		[]int{1, 1, 1, 1, 0, 1, 1}, []bool{true, true, false, true, false, false, true},
 		[]int64{31, 32, 33, 34, 45, 46, 47})
-	expRec := genRowRec(schema,
+	expRec := genRowRec(testSchema,
 		[]int{1, 1, 1, 1, 1, 1, 1}, []int64{1000, 300, 1100, 1200, 1300, 1400, 700},
 		[]int{1, 1, 1, 1, 1, 1, 1}, []float64{1001.3, 1002.4, 3.3, 1003.5, 4.3, 5.3, 2000.6},
 		[]int{0, 1, 1, 1, 1, 1, 1}, []string{"", "helloNew", "worldNew", "testNew1", "world", "testNew2", "testNew3"},
@@ -848,26 +764,19 @@ func TestMergeRecordWithSameSchemaAndMultiRowsCase3(t *testing.T) {
 //	old.time [31, 32, 33, 34, 45, 46, 47]
 //	new.time [31, 32, 33, 34, 45, 46, 47]
 func TestMergeRecordWithSameSchemaAndMultiRowsCase3Descend(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	oldRec := genRowRec(schema,
+	oldRec := genRowRec(testSchema,
 		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
 		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
 		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
 		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
 		[]int64{47, 46, 45, 34, 33, 32, 31})
-	newRec := genRowRec(schema,
+	newRec := genRowRec(testSchema,
 		[]int{1, 0, 1, 1, 1, 1, 0}, []int64{1000, 0, 1100, 1200, 1300, 1400, 0},
 		[]int{1, 1, 0, 1, 0, 0, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6},
 		[]int{0, 1, 1, 1, 0, 1, 1}, []string{"", "helloNew", "worldNew", "testNew1", "", "testNew2", "testNew3"},
 		[]int{1, 1, 1, 1, 0, 1, 1}, []bool{true, true, false, true, false, false, true},
 		[]int64{47, 46, 45, 34, 33, 32, 31})
-	expRec := genRowRec(schema,
+	expRec := genRowRec(testSchema,
 		[]int{1, 1, 1, 1, 1, 1, 1}, []int64{1000, 300, 1100, 1200, 1300, 1400, 700},
 		[]int{1, 1, 1, 1, 1, 1, 1}, []float64{1001.3, 1002.4, 3.3, 1003.5, 4.3, 5.3, 2000.6},
 		[]int{0, 1, 1, 1, 1, 1, 1}, []string{"", "helloNew", "worldNew", "testNew1", "world", "testNew2", "testNew3"},
@@ -890,26 +799,19 @@ func TestMergeRecordWithSameSchemaAndMultiRowsCase3Descend(t *testing.T) {
 //	old.time [31, 32, 33, 34, 45, 46, 47]
 //	new.time     [32, 33, 34, 45, 46, 47, 48]
 func TestMergeRecordWithSameSchemaAndMultiRowsCase4(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	oldRec := genRowRec(schema,
+	oldRec := genRowRec(testSchema,
 		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
 		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
 		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
 		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
 		[]int64{31, 32, 33, 34, 45, 46, 47})
-	newRec := genRowRec(schema,
+	newRec := genRowRec(testSchema,
 		[]int{1, 0, 1, 1, 1, 1, 0}, []int64{1000, 0, 1100, 1200, 1300, 1400, 0},
 		[]int{1, 1, 0, 1, 0, 0, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6},
 		[]int{0, 1, 1, 1, 0, 1, 1}, []string{"", "helloNew", "worldNew", "testNew1", "", "testNew2", "testNew3"},
 		[]int{1, 1, 1, 1, 0, 1, 1}, []bool{true, true, false, true, false, false, true},
 		[]int64{32, 33, 34, 45, 46, 47, 48})
-	expectRec := genRowRec(schema,
+	expectRec := genRowRec(testSchema,
 		[]int{1, 1, 0, 1, 1, 1, 1, 0}, []int64{200, 1000, 0, 1100, 1200, 1300, 1400, 0},
 		[]int{1, 1, 1, 0, 1, 1, 0, 1}, []float64{2.3, 1001.3, 1002.4, 0, 1003.5, 5.3, 0, 2000.6},
 		[]int{0, 1, 1, 1, 1, 0, 1, 1}, []string{"", "hello", "helloNew", "worldNew", "testNew1", "", "testNew2", "testNew3"},
@@ -931,26 +833,19 @@ func TestMergeRecordWithSameSchemaAndMultiRowsCase4(t *testing.T) {
 //	old.time     [47, 46, 45, 34, 33, 32, 31]
 //	new.time [48, 47, 46, 45, 34, 33, 32]
 func TestMergeRecordWithSameSchemaAndMultiRowsCase4Descend(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	oldRec := genRowRec(schema,
+	oldRec := genRowRec(testSchema,
 		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
 		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
 		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
 		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
 		[]int64{47, 46, 45, 34, 33, 32, 31})
-	newRec := genRowRec(schema,
+	newRec := genRowRec(testSchema,
 		[]int{1, 0, 1, 1, 1, 1, 0}, []int64{1000, 0, 1100, 1200, 1300, 1400, 0},
 		[]int{1, 1, 0, 1, 0, 0, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6},
 		[]int{0, 1, 1, 1, 0, 1, 1}, []string{"", "helloNew", "worldNew", "testNew1", "", "testNew2", "testNew3"},
 		[]int{1, 1, 1, 1, 0, 1, 1}, []bool{true, true, false, true, false, false, true},
 		[]int64{48, 47, 46, 45, 34, 33, 32})
-	expectRec := genRowRec(schema,
+	expectRec := genRowRec(testSchema,
 		[]int{1, 1, 1, 1, 1, 1, 1, 1}, []int64{1000, 200, 1100, 1200, 1300, 1400, 600, 700},
 		[]int{1, 1, 0, 1, 0, 1, 1, 0}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 4.3, 2000.6, 0},
 		[]int{0, 1, 1, 1, 0, 1, 1, 1}, []string{"", "helloNew", "worldNew", "testNew1", "", "testNew2", "testNew3", "test"},
@@ -972,26 +867,19 @@ func TestMergeRecordWithSameSchemaAndMultiRowsCase4Descend(t *testing.T) {
 //	old.time [31, 32, 33, 34, 45, 46, 47]
 //	new.time     [32, 33, 34, 45, 46, 47, 48, 49]
 func TestMergeRecordWithSameSchemaAndMultiRowsCase5(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	oldRec := genRowRec(schema,
+	oldRec := genRowRec(testSchema,
 		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
 		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
 		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
 		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
 		[]int64{31, 32, 33, 34, 45, 46, 47})
-	newRec := genRowRec(schema,
+	newRec := genRowRec(testSchema,
 		[]int{1, 0, 1, 1, 1, 1, 0, 1}, []int64{1000, 0, 1100, 1200, 1300, 1400, 0, 2100},
 		[]int{1, 1, 0, 1, 0, 0, 1, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6, 3000.1},
 		[]int{0, 1, 1, 1, 0, 1, 1, 1}, []string{"", "helloNew", "worldNew", "testNew1", "", "testNew2", "testNew3", "testNew4"},
 		[]int{1, 1, 1, 1, 0, 1, 1, 0}, []bool{true, true, false, true, false, false, true, false},
 		[]int64{32, 33, 34, 45, 46, 47, 48, 49})
-	expectRec := genRowRec(schema,
+	expectRec := genRowRec(testSchema,
 		[]int{1, 1, 0, 1, 1, 1, 1, 0, 1}, []int64{200, 1000, 0, 1100, 1200, 1300, 1400, 0, 2100},
 		[]int{1, 1, 1, 0, 1, 1, 0, 1, 1}, []float64{2.3, 1001.3, 1002.4, 0, 1003.5, 5.3, 0, 2000.6, 3000.1},
 		[]int{0, 1, 1, 1, 1, 0, 1, 1, 1}, []string{"", "hello", "helloNew", "worldNew", "testNew1", "", "testNew2", "testNew3", "testNew4"},
@@ -1013,13 +901,6 @@ func TestMergeRecordWithSameSchemaAndMultiRowsCase5(t *testing.T) {
 //	old.time         [47, 46, 45, 34, 33, 32, 31]
 //	new.time [49, 48, 47, 46, 45, 34, 33, 32]
 func TestMergeRecordWithSameSchemaAndMultiRowsCase5Descend(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
 	oldRec := genRowRec(schema,
 		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
 		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
@@ -1054,13 +935,6 @@ func TestMergeRecordWithSameSchemaAndMultiRowsCase5Descend(t *testing.T) {
 //	old.time [31, 32, 33, 34, 45, 46, 47]
 //	new.time     [32, 33, 34, 45, 46,    48, 49, 50]
 func TestMergeRecordWithSameSchemaAndMultiRowsCase6(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
 	oldRec := genRowRec(schema,
 		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
 		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
@@ -1095,13 +969,6 @@ func TestMergeRecordWithSameSchemaAndMultiRowsCase6(t *testing.T) {
 //	old.time              [47, 46, 45, 34, 33, 32, 31]
 //	new.time [50, 49, 48,      46, 45, 34, 33, 32]
 func TestMergeRecordWithSameSchemaAndMultiRowsCase6Descend(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
 	oldRec := genRowRec(schema,
 		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
 		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
@@ -1136,26 +1003,19 @@ func TestMergeRecordWithSameSchemaAndMultiRowsCase6Descend(t *testing.T) {
 //	old.time [30,    32, 33, 34, 45, 46, 47]
 //	new.time     [31,    33, 34, 45, 46,    48, 49, 50]
 func TestMergeRecordWithSameSchemaAndMultiRowsCase7(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	oldRec := genRowRec(schema,
+	oldRec := genRowRec(testSchema,
 		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
 		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
 		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
 		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
 		[]int64{30, 32, 33, 34, 45, 46, 47})
-	newRec := genRowRec(schema,
+	newRec := genRowRec(testSchema,
 		[]int{1, 0, 1, 1, 1, 1, 0, 1}, []int64{1000, 0, 1100, 1200, 1300, 1400, 0, 2100},
 		[]int{1, 1, 0, 1, 0, 0, 1, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6, 3000.1},
 		[]int{0, 1, 1, 1, 0, 1, 1, 1}, []string{"", "helloNew", "worldNew", "testNew1", "", "testNew2", "testNew3", "testNew4"},
 		[]int{1, 1, 1, 1, 0, 1, 1, 0}, []bool{true, true, false, true, false, false, true, false},
 		[]int64{31, 33, 34, 45, 46, 48, 49, 50})
-	expectRec := genRowRec(schema,
+	expectRec := genRowRec(testSchema,
 		[]int{1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1}, []int64{200, 1000, 300, 0, 1100, 1200, 1300, 700, 1400, 0, 2100},
 		[]int{1, 1, 0, 1, 0, 1, 1, 0, 0, 1, 1}, []float64{2.3, 1001.3, 0, 1002.4, 0, 1003.5, 5.3, 0, 0, 2000.6, 3000.1},
 		[]int{0, 0, 1, 1, 1, 1, 0, 1, 1, 1, 1}, []string{"", "", "hello", "helloNew", "worldNew", "testNew1", "", "test", "testNew2", "testNew3", "testNew4"},
@@ -1177,26 +1037,19 @@ func TestMergeRecordWithSameSchemaAndMultiRowsCase7(t *testing.T) {
 //	old.time             [47, 46, 45, 34, 33, 32,   30]
 //	new.time [50, 49, 48,     46, 45, 34, 33,    31]
 func TestMergeRecordWithSameSchemaAndMultiRowsCase7Descend(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	oldRec := genRowRec(schema,
+	oldRec := genRowRec(testSchema,
 		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
 		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
 		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
 		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
 		[]int64{47, 46, 45, 34, 33, 32, 30})
-	newRec := genRowRec(schema,
+	newRec := genRowRec(testSchema,
 		[]int{1, 0, 1, 1, 1, 1, 0, 1}, []int64{1000, 0, 1100, 1200, 1300, 1400, 0, 2100},
 		[]int{1, 1, 0, 1, 0, 0, 1, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6, 3000.1},
 		[]int{0, 1, 1, 1, 0, 1, 1, 1}, []string{"", "helloNew", "worldNew", "testNew1", "", "testNew2", "testNew3", "testNew4"},
 		[]int{1, 1, 1, 1, 0, 1, 1, 0}, []bool{true, true, false, true, false, false, true, false},
 		[]int64{50, 49, 48, 46, 45, 34, 33, 31})
-	expectRec := genRowRec(schema,
+	expectRec := genRowRec(testSchema,
 		[]int{1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1}, []int64{1000, 0, 1100, 200, 1200, 1300, 1400, 500, 600, 2100, 700},
 		[]int{1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 0}, []float64{1001.3, 1002.4, 0, 2.3, 1003.5, 3.3, 0, 2000.6, 5.3, 3000.1, 0},
 		[]int{0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 1}, []string{"", "helloNew", "worldNew", "", "testNew1", "", "testNew2", "testNew3", "", "testNew4", "test"},
@@ -1218,26 +1071,19 @@ func TestMergeRecordWithSameSchemaAndMultiRowsCase7Descend(t *testing.T) {
 //	old.time [30,    32, 33, 34, 45, 46, 47]
 //	new.time     [31,    33, 34, 45, 46]
 func TestMergeRecordWithSameSchemaAndMultiRowsCase8(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	oldRec := genRowRec(schema,
+	oldRec := genRowRec(testSchema,
 		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
 		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
 		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
 		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
 		[]int64{30, 32, 33, 34, 45, 46, 47})
-	newRec := genRowRec(schema,
+	newRec := genRowRec(testSchema,
 		[]int{1, 0, 1, 1, 1}, []int64{1000, 0, 1100, 1200, 1300},
 		[]int{1, 1, 0, 1, 0}, []float64{1001.3, 1002.4, 0, 1003.5, 0},
 		[]int{0, 1, 1, 1, 0}, []string{"", "helloNew", "worldNew", "testNew1", ""},
 		[]int{1, 1, 1, 1, 0}, []bool{true, true, false, true, false},
 		[]int64{31, 33, 34, 45, 46})
-	expectRec := genRowRec(schema,
+	expectRec := genRowRec(testSchema,
 		[]int{1, 1, 1, 0, 1, 1, 1, 1}, []int64{200, 1000, 300, 0, 1100, 1200, 1300, 700},
 		[]int{1, 1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 1001.3, 0, 1002.4, 0, 1003.5, 5.3, 0},
 		[]int{0, 0, 1, 1, 1, 1, 0, 1}, []string{"", "", "hello", "helloNew", "worldNew", "testNew1", "", "test"},
@@ -1259,26 +1105,19 @@ func TestMergeRecordWithSameSchemaAndMultiRowsCase8(t *testing.T) {
 //	old.time [47, 46, 45, 34, 33, 32,   30]
 //	new.time     [46, 45, 34, 33,    31]
 func TestMergeRecordWithSameSchemaAndMultiRowsCase8Descend(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	oldRec := genRowRec(schema,
+	oldRec := genRowRec(testSchema,
 		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
 		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
 		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
 		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
 		[]int64{47, 46, 45, 34, 33, 32, 30})
-	newRec := genRowRec(schema,
+	newRec := genRowRec(testSchema,
 		[]int{1, 0, 1, 1, 1}, []int64{1000, 0, 1100, 1200, 1300},
 		[]int{1, 1, 0, 1, 0}, []float64{1001.3, 1002.4, 0, 1003.5, 0},
 		[]int{0, 1, 1, 1, 0}, []string{"", "helloNew", "worldNew", "testNew1", ""},
 		[]int{1, 1, 1, 1, 0}, []bool{true, true, false, true, false},
 		[]int64{46, 45, 34, 33, 31})
-	expectRec := genRowRec(schema,
+	expectRec := genRowRec(testSchema,
 		[]int{1, 1, 0, 1, 1, 1, 1, 1}, []int64{200, 1000, 0, 1100, 1200, 600, 1300, 700},
 		[]int{1, 1, 1, 0, 1, 1, 0, 0}, []float64{2.3, 1001.3, 1002.4, 0, 1003.5, 5.3, 0, 0},
 		[]int{0, 1, 1, 1, 1, 0, 0, 1}, []string{"", "hello", "helloNew", "worldNew", "testNew1", "", "", "test"},
@@ -1300,26 +1139,19 @@ func TestMergeRecordWithSameSchemaAndMultiRowsCase8Descend(t *testing.T) {
 //	old.time [30,    32, 33, 34, 45, 46,   48]
 //	new.time     [31,    33, 34, 45,    47]
 func TestMergeRecordWithSameSchemaAndMultiRowsCase9(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	oldRec := genRowRec(schema,
+	oldRec := genRowRec(testSchema,
 		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
 		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
 		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
 		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
 		[]int64{30, 32, 33, 34, 45, 46, 48})
-	newRec := genRowRec(schema,
+	newRec := genRowRec(testSchema,
 		[]int{1, 0, 1, 1, 1}, []int64{1000, 0, 1100, 1200, 1300},
 		[]int{1, 1, 0, 1, 0}, []float64{1001.3, 1002.4, 0, 1003.5, 0},
 		[]int{0, 1, 1, 1, 0}, []string{"", "helloNew", "worldNew", "testNew1", ""},
 		[]int{1, 1, 1, 1, 0}, []bool{true, true, false, true, false},
 		[]int64{31, 33, 34, 45, 47})
-	expectRec := genRowRec(schema,
+	expectRec := genRowRec(testSchema,
 		[]int{1, 1, 1, 0, 1, 1, 1, 1, 1}, []int64{200, 1000, 300, 0, 1100, 1200, 600, 1300, 700},
 		[]int{1, 1, 0, 1, 0, 1, 1, 0, 0}, []float64{2.3, 1001.3, 0, 1002.4, 0, 1003.5, 5.3, 0, 0},
 		[]int{0, 0, 1, 1, 1, 1, 0, 0, 1}, []string{"", "", "hello", "helloNew", "worldNew", "testNew1", "", "", "test"},
@@ -1341,26 +1173,19 @@ func TestMergeRecordWithSameSchemaAndMultiRowsCase9(t *testing.T) {
 //	old.time     [31,    33, 34, 45,    47]
 //	new.time [30,    32, 33, 34, 45, 46,   48]
 func TestMergeRecordWithSameSchemaAndMultiRowsCase10(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	oldRec := genRowRec(schema,
+	oldRec := genRowRec(testSchema,
 		[]int{1, 0, 1, 1, 1}, []int64{1000, 0, 1100, 1200, 1300},
 		[]int{1, 1, 0, 1, 0}, []float64{1001.3, 1002.4, 0, 1003.5, 0},
 		[]int{0, 1, 1, 1, 0}, []string{"", "helloNew", "worldNew", "testNew1", ""},
 		[]int{1, 1, 1, 1, 0}, []bool{true, true, false, true, false},
 		[]int64{31, 33, 34, 45, 47})
-	newRec := genRowRec(schema,
+	newRec := genRowRec(testSchema,
 		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
 		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
 		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
 		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
 		[]int64{30, 32, 33, 34, 45, 46, 48})
-	expectRec := genRowRec(schema,
+	expectRec := genRowRec(testSchema,
 		[]int{1, 1, 1, 0, 1, 1, 1, 1, 1}, []int64{200, 1000, 300, 0, 400, 500, 600, 1300, 700},
 		[]int{1, 1, 0, 1, 0, 1, 1, 0, 0}, []float64{2.3, 1001.3, 0, 3.3, 0, 4.3, 5.3, 0, 0},
 		[]int{0, 0, 1, 1, 1, 1, 0, 0, 1}, []string{"", "", "hello", "helloNew", "worldNew", "world", "", "", "test"},
@@ -1382,26 +1207,19 @@ func TestMergeRecordWithSameSchemaAndMultiRowsCase10(t *testing.T) {
 //	old.time 	  [31,    33, 34, 45, 46,    48, 49, 50]
 //	new.time [30,    32, 33, 34, 45, 46, 47]
 func TestMergeRecordWithSameSchemaAndMultiRowsCase11(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	oldRec := genRowRec(schema,
+	oldRec := genRowRec(testSchema,
 		[]int{1, 0, 1, 1, 1, 1, 0, 1}, []int64{1000, 0, 1100, 1200, 1300, 1400, 0, 2100},
 		[]int{1, 1, 0, 1, 0, 0, 1, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6, 3000.1},
 		[]int{0, 1, 1, 1, 0, 1, 1, 1}, []string{"", "helloNew", "worldNew", "testNew1", "", "testNew2", "testNew3", "testNew4"},
 		[]int{1, 1, 1, 1, 0, 1, 1, 0}, []bool{true, true, false, true, false, false, true, false},
 		[]int64{31, 33, 34, 45, 46, 48, 49, 50})
-	newRec := genRowRec(schema,
+	newRec := genRowRec(testSchema,
 		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
 		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
 		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
 		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
 		[]int64{30, 32, 33, 34, 45, 46, 47})
-	expectRec := genRowRec(schema,
+	expectRec := genRowRec(testSchema,
 		[]int{1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1}, []int64{200, 1000, 300, 0, 400, 500, 600, 700, 1400, 0, 2100},
 		[]int{1, 1, 0, 1, 0, 1, 1, 0, 0, 1, 1}, []float64{2.3, 1001.3, 0, 3.3, 0, 4.3, 5.3, 0, 0, 2000.6, 3000.1},
 		[]int{0, 0, 1, 1, 1, 1, 0, 1, 1, 1, 1}, []string{"", "", "hello", "helloNew", "worldNew", "world", "", "test", "testNew2", "testNew3", "testNew4"},
@@ -1423,26 +1241,19 @@ func TestMergeRecordWithSameSchemaAndMultiRowsCase11(t *testing.T) {
 //	old.time 	 [31,    33, 34, 45, 46,    48, 49, 50]
 //	new.time [30,    32, 33, 34, 45, 46, 47]
 func TestMergeRecordWithSameSchemaAndMultiRowsCase12(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	oldRec := genRowRec(schema,
+	oldRec := genRowRec(testSchema,
 		[]int{1, 0, 1, 1, 1, 1, 0, 1}, []int64{1000, 0, 1100, 1200, 1300, 1400, 0, 2100},
 		[]int{1, 1, 0, 1, 0, 0, 1, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6, 3000.1},
 		[]int{0, 1, 1, 1, 0, 1, 1, 1}, []string{"", "helloNew", "worldNew", "testNew1", "", "testNew2", "testNew3", "testNew4"},
 		[]int{1, 1, 1, 1, 0, 1, 1, 0}, []bool{true, true, false, true, false, false, true, false},
 		[]int64{31, 33, 34, 45, 46, 48, 49, 50})
-	newRec := genRowRec(schema,
+	newRec := genRowRec(testSchema,
 		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
 		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
 		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
 		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
 		[]int64{30, 32, 33, 34, 45, 46, 47})
-	expectRec := genRowRec(schema,
+	expectRec := genRowRec(testSchema,
 		[]int{1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1}, []int64{200, 1000, 300, 0, 400, 500, 600, 700, 1400, 0, 2100},
 		[]int{1, 1, 0, 1, 0, 1, 1, 0, 0, 1, 1}, []float64{2.3, 1001.3, 0, 3.3, 0, 4.3, 5.3, 0, 0, 2000.6, 3000.1},
 		[]int{0, 0, 1, 1, 1, 1, 0, 1, 1, 1, 1}, []string{"", "", "hello", "helloNew", "worldNew", "world", "", "test", "testNew2", "testNew3", "testNew4"},
@@ -1464,26 +1275,19 @@ func TestMergeRecordWithSameSchemaAndMultiRowsCase12(t *testing.T) {
 //	old.time     [32, 33, 34, 45, 46,    48, 49, 50]
 //	new.time [31, 32, 33, 34, 45, 46, 47]
 func TestMergeRecordWithSameSchemaAndMultiRowsCase13(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	oldRec := genRowRec(schema,
+	oldRec := genRowRec(testSchema,
 		[]int{1, 0, 1, 1, 1, 1, 0, 1}, []int64{1000, 0, 1100, 1200, 1300, 1400, 0, 2100},
 		[]int{1, 1, 0, 1, 0, 0, 1, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6, 3000.1},
 		[]int{0, 1, 1, 1, 0, 1, 1, 1}, []string{"", "helloNew", "worldNew", "testNew1", "", "testNew2", "testNew3", "testNew4"},
 		[]int{1, 1, 1, 1, 0, 1, 1, 0}, []bool{true, true, false, true, false, false, true, false},
 		[]int64{32, 33, 34, 45, 46, 48, 49, 50})
-	newRec := genRowRec(schema,
+	newRec := genRowRec(testSchema,
 		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
 		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
 		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
 		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
 		[]int64{31, 32, 33, 34, 45, 46, 47})
-	expectRec := genRowRec(schema,
+	expectRec := genRowRec(testSchema,
 		[]int{1, 1, 0, 1, 1, 1, 1, 1, 0, 1}, []int64{200, 300, 0, 400, 500, 600, 700, 1400, 0, 2100},
 		[]int{1, 1, 1, 0, 1, 1, 0, 0, 1, 1}, []float64{2.3, 1001.3, 3.3, 0, 4.3, 5.3, 0, 0, 2000.6, 3000.1},
 		[]int{0, 1, 1, 1, 1, 0, 1, 1, 1, 1}, []string{"", "hello", "helloNew", "worldNew", "world", "", "test", "testNew2", "testNew3", "testNew4"},
@@ -1505,26 +1309,19 @@ func TestMergeRecordWithSameSchemaAndMultiRowsCase13(t *testing.T) {
 //	old.time     [32, 33, 34, 45, 46, 47, 48, 49]
 //	new.time [31, 32, 33, 34, 45, 46, 47]
 func TestMergeRecordWithSameSchemaAndMultiRowsCase14(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	oldRec := genRowRec(schema,
+	oldRec := genRowRec(testSchema,
 		[]int{1, 0, 1, 1, 1, 1, 0, 1}, []int64{1000, 0, 1100, 1200, 1300, 1400, 0, 2100},
 		[]int{1, 1, 0, 1, 0, 0, 1, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6, 3000.1},
 		[]int{0, 1, 1, 1, 0, 1, 1, 1}, []string{"", "helloNew", "worldNew", "testNew1", "", "testNew2", "testNew3", "testNew4"},
 		[]int{1, 1, 1, 1, 0, 1, 1, 0}, []bool{true, true, false, true, false, false, true, false},
 		[]int64{32, 33, 34, 45, 46, 47, 48, 49})
-	newRec := genRowRec(schema,
+	newRec := genRowRec(testSchema,
 		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
 		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
 		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
 		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
 		[]int64{31, 32, 33, 34, 45, 46, 47})
-	expectRec := genRowRec(schema,
+	expectRec := genRowRec(testSchema,
 		[]int{1, 1, 0, 1, 1, 1, 1, 0, 1}, []int64{200, 300, 0, 400, 500, 600, 700, 0, 2100},
 		[]int{1, 1, 1, 0, 1, 1, 0, 1, 1}, []float64{2.3, 1001.3, 3.3, 0, 4.3, 5.3, 0, 2000.6, 3000.1},
 		[]int{0, 1, 1, 1, 1, 0, 1, 1, 1}, []string{"", "hello", "helloNew", "worldNew", "world", "", "test", "testNew3", "testNew4"},
@@ -1546,26 +1343,19 @@ func TestMergeRecordWithSameSchemaAndMultiRowsCase14(t *testing.T) {
 //	old.time     [32, 33, 34, 45, 46, 47, 48]
 //	new.time [31, 32, 33, 34, 45, 46, 47]
 func TestMergeRecordWithSameSchemaAndMultiRowsCase15(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	oldRec := genRowRec(schema,
+	oldRec := genRowRec(testSchema,
 		[]int{1, 0, 1, 1, 1, 1, 0}, []int64{1000, 0, 1100, 1200, 1300, 1400, 0},
 		[]int{1, 1, 0, 1, 0, 0, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6},
 		[]int{0, 1, 1, 1, 0, 1, 1}, []string{"", "helloNew", "worldNew", "testNew1", "", "testNew2", "testNew3"},
 		[]int{1, 1, 1, 1, 0, 1, 1}, []bool{true, true, false, true, false, false, true},
 		[]int64{32, 33, 34, 45, 46, 47, 48})
-	newRec := genRowRec(schema,
+	newRec := genRowRec(testSchema,
 		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
 		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
 		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
 		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
 		[]int64{31, 32, 33, 34, 45, 46, 47})
-	expectRec := genRowRec(schema,
+	expectRec := genRowRec(testSchema,
 		[]int{1, 1, 0, 1, 1, 1, 1, 0}, []int64{200, 300, 0, 400, 500, 600, 700, 0},
 		[]int{1, 1, 1, 0, 1, 1, 0, 1}, []float64{2.3, 1001.3, 3.3, 0, 4.3, 5.3, 0, 2000.6},
 		[]int{0, 1, 1, 1, 1, 0, 1, 1}, []string{"", "hello", "helloNew", "worldNew", "world", "", "test", "testNew3"},
@@ -1583,26 +1373,19 @@ func TestMergeRecordWithSameSchemaAndMultiRowsCase15(t *testing.T) {
 }
 
 func TestMergeRecordWithSameSchemaAndMultiRowsCase16(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	oldRec := genRowRec(schema,
+	oldRec := genRowRec(testSchema,
 		[]int{1, 1, 1, 1, 1, 1, 1}, []int64{1000, 0, 1100, 1200, 1300, 1400, 0},
 		[]int{1, 1, 1, 1, 1, 1, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6},
 		[]int{1, 1, 1, 1, 1, 1, 1}, []string{"a", "helloNew", "worldNew", "testNew1", "b", "testNew2", "testNew3"},
 		[]int{1, 1, 1, 1, 1, 1, 1}, []bool{true, true, false, true, false, false, true},
 		[]int64{1, 2, 3, 4, 5, 6, 7})
-	newRec := genRowRec(schema,
+	newRec := genRowRec(testSchema,
 		[]int{1, 1, 1, 1, 1, 1, 1, 1, 1}, []int64{1000, 0, 1100, 1200, 1300, 1400, 0, 1500, 1600},
 		[]int{1, 1, 1, 1, 1, 1, 1, 1, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6, 2000.7, 2000.8},
 		[]int{1, 1, 1, 1, 1, 1, 1, 1, 1}, []string{"a", "helloNew", "worldNew", "testNew1", "b", "testNew2", "testNew3", "testNew4", "testNew5"},
 		[]int{1, 1, 1, 1, 1, 1, 1, 1, 1}, []bool{true, true, false, true, false, false, true, true, true},
 		[]int64{8, 9, 10, 11, 12, 13, 14, 15, 16})
-	expectRec := genRowRec(schema,
+	expectRec := genRowRec(testSchema,
 		[]int{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}, []int64{1000, 0, 1100, 1200, 1300, 1400, 0, 1000, 0, 1100, 1200, 1300, 1400, 0, 1500, 1600},
 		[]int{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6, 1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6, 2000.7, 2000.8},
 		[]int{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}, []string{"a", "helloNew", "worldNew", "testNew1", "b", "testNew2", "testNew3", "a", "helloNew", "worldNew", "testNew1", "b", "testNew2", "testNew3", "testNew4", "testNew5"},
@@ -1621,20 +1404,13 @@ func TestMergeRecordWithSameSchemaAndMultiRowsCase16(t *testing.T) {
 
 // merge with oldRec.time[max] < newRec.time[0]
 func TestMergeRecordWithDifferentSchemaAndMultiRowsCase1(t *testing.T) {
-	oldSchema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
 	newSchema := record.Schemas{
 		record.Field{Type: influx.Field_Type_Float, Name: "float"},
 		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
 		record.Field{Type: influx.Field_Type_String, Name: "string"},
 		record.Field{Type: influx.Field_Type_Int, Name: "time"},
 	}
-	oldRec := genRowRec(oldSchema,
+	oldRec := genRowRec(testSchema,
 		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
 		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
 		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
@@ -1646,7 +1422,7 @@ func TestMergeRecordWithDifferentSchemaAndMultiRowsCase1(t *testing.T) {
 		[]int{0, 1, 1, 1, 0}, []string{"", "helloNew", "worldNew", "testNew1", ""},
 		[]int{1, 1, 1, 1, 0}, []bool{true, true, false, true, false},
 		[]int64{18, 19, 20, 21, 22})
-	expectRec := genRowRec(oldSchema,
+	expectRec := genRowRec(testSchema,
 		[]int{1, 1, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0}, []int64{200, 300, 0, 400, 500, 600, 700, 0, 0, 0, 0, 0},
 		[]int{1, 0, 1, 0, 1, 1, 0, 1, 1, 0, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0, 1001.3, 1002.4, 0, 1003.5, 0},
 		[]int{0, 1, 0, 0, 1, 0, 1, 0, 1, 1, 1, 0}, []string{"", "hello", "", "", "world", "", "test", "", "helloNew", "worldNew", "testNew1", ""},
@@ -1665,20 +1441,13 @@ func TestMergeRecordWithDifferentSchemaAndMultiRowsCase1(t *testing.T) {
 
 // merge with oldRec.time[0] > newRec.time[max]
 func TestMergeRecordWithDifferentSchemaAndMultiRowsCase2(t *testing.T) {
-	oldSchema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
 	newSchema := record.Schemas{
 		record.Field{Type: influx.Field_Type_Int, Name: "int"},
 		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
 		record.Field{Type: influx.Field_Type_String, Name: "string"},
 		record.Field{Type: influx.Field_Type_Int, Name: "time"},
 	}
-	oldRec := genRowRec(oldSchema,
+	oldRec := genRowRec(testSchema,
 		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
 		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
 		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
@@ -1690,7 +1459,7 @@ func TestMergeRecordWithDifferentSchemaAndMultiRowsCase2(t *testing.T) {
 		[]int{0, 1, 1, 1, 0}, []string{"", "helloNew", "worldNew", "testNew1", ""},
 		[]int{1, 1, 1, 1, 0}, []bool{true, true, false, true, false},
 		[]int64{18, 19, 20, 21, 22})
-	expectRec := genRowRec(oldSchema,
+	expectRec := genRowRec(testSchema,
 		[]int{1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1}, []int64{1000, 0, 1100, 1200, 1300, 200, 300, 0, 400, 500, 600, 700},
 		[]int{0, 0, 0, 0, 0, 1, 0, 1, 0, 1, 1, 0}, []float64{0, 0, 0, 0, 0, 2.3, 0, 3.3, 0, 4.3, 5.3, 0},
 		[]int{0, 1, 1, 1, 0, 0, 1, 0, 0, 1, 0, 1}, []string{"", "helloNew", "worldNew", "testNew1", "", "", "hello", "", "", "world", "", "test"},
@@ -1709,20 +1478,13 @@ func TestMergeRecordWithDifferentSchemaAndMultiRowsCase2(t *testing.T) {
 
 // merge with oldRec.time[0] > newRec.time[max]
 func TestMergeRecordWithDifferentSchemaAndMultiRowsCase2Descend(t *testing.T) {
-	oldSchema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
 	newSchema := record.Schemas{
 		record.Field{Type: influx.Field_Type_Int, Name: "int"},
 		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
 		record.Field{Type: influx.Field_Type_String, Name: "string"},
 		record.Field{Type: influx.Field_Type_Int, Name: "time"},
 	}
-	oldRec := genRowRec(oldSchema,
+	oldRec := genRowRec(testSchema,
 		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
 		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
 		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
@@ -1734,7 +1496,7 @@ func TestMergeRecordWithDifferentSchemaAndMultiRowsCase2Descend(t *testing.T) {
 		[]int{0, 1, 1, 1, 0}, []string{"", "helloNew", "worldNew", "testNew1", ""},
 		[]int{1, 1, 1, 1, 0}, []bool{true, true, false, true, false},
 		[]int64{22, 21, 20, 19, 18})
-	expectRec := genRowRec(oldSchema,
+	expectRec := genRowRec(testSchema,
 		[]int{1, 1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700, 1000, 0, 1100, 1200, 1300},
 		[]int{1, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0, 0, 0, 0, 0, 0},
 		[]int{0, 1, 0, 0, 1, 0, 1, 0, 1, 1, 1, 0}, []string{"", "hello", "", "", "world", "", "test", "", "helloNew", "worldNew", "testNew1", ""},
@@ -1768,13 +1530,6 @@ func TestMergeRecordWithDifferentSchemaAndMultiRowsCase3(t *testing.T) {
 		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
 		record.Field{Type: influx.Field_Type_Int, Name: "time"},
 	}
-	expectSchema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
 	oldRec := genRowRec(oldSchema,
 		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
 		[]int{}, []float64{},
@@ -1787,7 +1542,7 @@ func TestMergeRecordWithDifferentSchemaAndMultiRowsCase3(t *testing.T) {
 		[]int{}, []string{},
 		[]int{1, 1, 1, 1, 0, 1, 1}, []bool{true, true, false, true, false, false, true},
 		[]int64{31, 32, 33, 34, 45, 46, 47})
-	expectRec := genRowRec(expectSchema,
+	expectRec := genRowRec(testSchema,
 		[]int{1, 1, 1, 1, 1, 1, 1}, []int64{1000, 300, 1100, 1200, 1300, 1400, 700},
 		[]int{1, 1, 0, 1, 0, 0, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6},
 		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
@@ -1822,13 +1577,6 @@ func TestMergeRecordWithDifferentSchemaAndMultiRowsCase3Descend(t *testing.T) {
 		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
 		record.Field{Type: influx.Field_Type_Int, Name: "time"},
 	}
-	expectSchema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
 	oldRec := genRowRec(oldSchema,
 		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
 		[]int{}, []float64{},
@@ -1841,7 +1589,7 @@ func TestMergeRecordWithDifferentSchemaAndMultiRowsCase3Descend(t *testing.T) {
 		[]int{}, []string{},
 		[]int{1, 1, 1, 1, 0, 1, 1}, []bool{true, true, false, true, false, false, true},
 		[]int64{47, 46, 45, 34, 33, 32, 31})
-	expectRec := genRowRec(expectSchema,
+	expectRec := genRowRec(testSchema,
 		[]int{1, 1, 1, 1, 1, 1, 1}, []int64{1000, 300, 1100, 1200, 1300, 1400, 700},
 		[]int{1, 1, 0, 1, 0, 0, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6},
 		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
@@ -1876,13 +1624,6 @@ func TestMergeRecordWithDifferentSchemaAndMultiRowsCase4(t *testing.T) {
 		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
 		record.Field{Type: influx.Field_Type_Int, Name: "time"},
 	}
-	expectSchema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
 	oldRec := genRowRec(oldSchema,
 		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
 		[]int{}, []float64{},
@@ -1895,7 +1636,7 @@ func TestMergeRecordWithDifferentSchemaAndMultiRowsCase4(t *testing.T) {
 		[]int{}, []string{},
 		[]int{1, 1, 1, 1, 0, 1, 1}, []bool{true, true, false, true, false, false, true},
 		[]int64{32, 33, 34, 45, 46, 47, 48})
-	expectRec := genRowRec(expectSchema,
+	expectRec := genRowRec(testSchema,
 		[]int{1, 1, 0, 1, 1, 1, 1, 0}, []int64{200, 1000, 0, 1100, 1200, 1300, 1400, 0},
 		[]int{0, 1, 1, 0, 1, 0, 0, 1}, []float64{0, 1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6},
 		[]int{0, 1, 0, 0, 1, 0, 1, 0}, []string{"", "hello", "", "", "world", "", "test", ""},
@@ -2015,20 +1756,13 @@ func TestMergeRecordWithDifferentSchemaAndMultiRowsCase5Descend(t *testing.T) {
 // limitRows = 1, newRows = 1, oldRows = 1, mergedRows = 2
 // merge with oldRec.time[0] < newRec.time[0]
 func TestMergeRecordLimitRowsCase1(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	oldRec := genRowRec(schema,
+	oldRec := genRowRec(testSchema,
 		[]int{1}, []int64{200},
 		[]int{1}, []float64{2.3},
 		[]int{1}, []string{"hello"},
 		[]int{1}, []bool{false},
 		[]int64{1})
-	newRec := genRowRec(schema,
+	newRec := genRowRec(testSchema,
 		[]int{1}, []int64{100},
 		[]int{1}, []float64{1.3},
 		[]int{1}, []string{"world"},
@@ -2047,20 +1781,13 @@ func TestMergeRecordLimitRowsCase1(t *testing.T) {
 // limitRows = 1, newRows = 1, oldRows = 1, mergedRows = 2
 // merge with oldRec.time[0] < newRec.time[0]
 func TestMergeRecordLimitRowsCase1Descend(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	oldRec := genRowRec(schema,
+	oldRec := genRowRec(testSchema,
 		[]int{1}, []int64{200},
 		[]int{1}, []float64{2.3},
 		[]int{1}, []string{"hello"},
 		[]int{1}, []bool{false},
 		[]int64{1})
-	newRec := genRowRec(schema,
+	newRec := genRowRec(testSchema,
 		[]int{1}, []int64{100},
 		[]int{1}, []float64{1.3},
 		[]int{1}, []string{"world"},
@@ -2079,20 +1806,13 @@ func TestMergeRecordLimitRowsCase1Descend(t *testing.T) {
 // limitRows = 1, newRows = 1, oldRows = 1, mergedRows = 2
 // merge with oldRec.time[0] > newRec.time[0]
 func TestMergeRecordLimitRowsCase2(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	oldRec := genRowRec(schema,
+	oldRec := genRowRec(testSchema,
 		[]int{1}, []int64{200},
 		[]int{1}, []float64{2.3},
 		[]int{1}, []string{"hello"},
 		[]int{1}, []bool{false},
 		[]int64{3})
-	newRec := genRowRec(schema,
+	newRec := genRowRec(testSchema,
 		[]int{1}, []int64{100},
 		[]int{1}, []float64{1.3},
 		[]int{1}, []string{"world"},
@@ -2111,20 +1831,13 @@ func TestMergeRecordLimitRowsCase2(t *testing.T) {
 // limitRows = 1, newRows = 1, oldRows = 1, mergedRows = 2
 // merge with oldRec.time[0] > newRec.time[0]
 func TestMergeRecordLimitRowsCase2Descend(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	oldRec := genRowRec(schema,
+	oldRec := genRowRec(testSchema,
 		[]int{1}, []int64{200},
 		[]int{1}, []float64{2.3},
 		[]int{1}, []string{"hello"},
 		[]int{1}, []bool{false},
 		[]int64{3})
-	newRec := genRowRec(schema,
+	newRec := genRowRec(testSchema,
 		[]int{1}, []int64{100},
 		[]int{1}, []float64{1.3},
 		[]int{1}, []string{"world"},
@@ -2143,20 +1856,13 @@ func TestMergeRecordLimitRowsCase2Descend(t *testing.T) {
 // limitRows = 1, newRows = 1, oldRows = 1, mergedRows = 1
 // merge with oldRec.time[0] = newRec.time[0]
 func TestMergeRecordLimitRowsCase3(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	oldRec := genRowRec(schema,
+	oldRec := genRowRec(testSchema,
 		[]int{1}, []int64{200},
 		[]int{1}, []float64{2.3},
 		[]int{1}, []string{"hello"},
 		[]int{1}, []bool{false},
 		[]int64{2})
-	newRec := genRowRec(schema,
+	newRec := genRowRec(testSchema,
 		[]int{1}, []int64{100},
 		[]int{1}, []float64{1.3},
 		[]int{1}, []string{"world"},
@@ -2175,20 +1881,13 @@ func TestMergeRecordLimitRowsCase3(t *testing.T) {
 // limitRows = 1, newRows = 1, oldRows = 1, mergedRows = 1
 // merge with oldRec.time[0] = newRec.time[0]
 func TestMergeRecordLimitRowsCase3Descend(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	oldRec := genRowRec(schema,
+	oldRec := genRowRec(testSchema,
 		[]int{1}, []int64{200},
 		[]int{1}, []float64{2.3},
 		[]int{1}, []string{"hello"},
 		[]int{1}, []bool{false},
 		[]int64{2})
-	newRec := genRowRec(schema,
+	newRec := genRowRec(testSchema,
 		[]int{1}, []int64{100},
 		[]int{1}, []float64{1.3},
 		[]int{1}, []string{"world"},
@@ -2207,44 +1906,37 @@ func TestMergeRecordLimitRowsCase3Descend(t *testing.T) {
 // limitRows = 2, newRows = 5, oldRows = 7, mergedRows = 12
 // merge with oldRec.time[max] < newRec.time[0]
 func TestMergeRecordLimitRowsCase4(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	oldRec := genRowRec(schema,
+	oldRec := genRowRec(testSchema,
 		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
 		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
 		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
 		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
 		[]int64{1, 2, 3, 4, 5, 6, 7})
-	newRec := genRowRec(schema,
+	newRec := genRowRec(testSchema,
 		[]int{1, 0, 1, 1, 1}, []int64{1000, 0, 1100, 1200, 1300},
 		[]int{1, 1, 0, 1, 0}, []float64{1001.3, 1002.4, 0, 1003.5, 0},
 		[]int{0, 1, 1, 1, 0}, []string{"", "helloNew", "worldNew", "testNew1", ""},
 		[]int{1, 1, 1, 1, 0}, []bool{true, true, false, true, false},
 		[]int64{18, 19, 20, 21, 22})
-	expectRec1 := genRowRec(schema,
+	expectRec1 := genRowRec(testSchema,
 		[]int{1, 1}, []int64{200, 300},
 		[]int{1, 0}, []float64{2.3, 0},
 		[]int{0, 1}, []string{"", "hello"},
 		[]int{0, 0}, []bool{false, false},
 		[]int64{1, 2})
-	expectRec2 := genRowRec(schema,
+	expectRec2 := genRowRec(testSchema,
 		[]int{0, 1}, []int64{0, 400},
 		[]int{1, 0}, []float64{3.3, 0},
 		[]int{0, 0}, []string{"", ""},
 		[]int{1, 0}, []bool{true, false},
 		[]int64{3, 4})
-	expectRec3 := genRowRec(schema,
+	expectRec3 := genRowRec(testSchema,
 		[]int{1, 1}, []int64{500, 600},
 		[]int{1, 1}, []float64{4.3, 5.3},
 		[]int{1, 0}, []string{"world", ""},
 		[]int{1, 1}, []bool{true, false},
 		[]int64{5, 6})
-	expectRec4 := genRowRec(schema,
+	expectRec4 := genRowRec(testSchema,
 		[]int{1, 1}, []int64{700, 1000},
 		[]int{0, 1}, []float64{0, 1001.3},
 		[]int{1, 0}, []string{"test", ""},
@@ -2285,38 +1977,31 @@ func TestMergeRecordLimitRowsCase4(t *testing.T) {
 // limitRows = 2, newRows = 7, oldRows = 5, mergedRows = 12
 // merge with oldRec.time[0] > newRec.time[max]
 func TestMergeRecordLimitRowsCase5(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	oldRec := genRowRec(schema,
+	oldRec := genRowRec(testSchema,
 		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
 		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
 		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
 		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
 		[]int64{31, 32, 33, 34, 45, 46, 47})
-	newRec := genRowRec(schema,
+	newRec := genRowRec(testSchema,
 		[]int{1, 0, 1, 1, 1}, []int64{1000, 0, 1100, 1200, 1300},
 		[]int{1, 1, 0, 1, 0}, []float64{1001.3, 1002.4, 0, 1003.5, 0},
 		[]int{0, 1, 1, 1, 0}, []string{"", "helloNew", "worldNew", "testNew1", ""},
 		[]int{1, 1, 1, 1, 0}, []bool{true, true, false, true, false},
 		[]int64{18, 19, 20, 21, 22})
-	expectRec1 := genRowRec(schema,
+	expectRec1 := genRowRec(testSchema,
 		[]int{1, 0}, []int64{1000, 0},
 		[]int{1, 1}, []float64{1001.3, 1002.4},
 		[]int{0, 1}, []string{"", "helloNew"},
 		[]int{1, 1}, []bool{true, true},
 		[]int64{18, 19})
-	expectRec2 := genRowRec(schema,
+	expectRec2 := genRowRec(testSchema,
 		[]int{1, 1}, []int64{1100, 1200},
 		[]int{0, 1}, []float64{0, 1003.5},
 		[]int{1, 1}, []string{"worldNew", "testNew1"},
 		[]int{1, 1}, []bool{false, true},
 		[]int64{20, 21})
-	expectRec3 := genRowRec(schema,
+	expectRec3 := genRowRec(testSchema,
 		[]int{1, 1}, []int64{1300, 200},
 		[]int{0, 1}, []float64{0, 2.3},
 		[]int{0, 0}, []string{"", ""},
@@ -2354,38 +2039,31 @@ func TestMergeRecordLimitRowsCase5(t *testing.T) {
 //	old.time [31, 32, 33, 34, 45, 46, 47]
 //	new.time [31, 32, 33, 34, 45, 46, 47]
 func TestMergeRecordLimitRowsCase6(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	oldRec := genRowRec(schema,
+	oldRec := genRowRec(testSchema,
 		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
 		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
 		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
 		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
 		[]int64{31, 32, 33, 34, 45, 46, 47})
-	newRec := genRowRec(schema,
+	newRec := genRowRec(testSchema,
 		[]int{1, 0, 1, 1, 1, 1, 0}, []int64{1000, 0, 1100, 1200, 1300, 1400, 0},
 		[]int{1, 1, 0, 1, 0, 0, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6},
 		[]int{0, 1, 1, 1, 0, 1, 1}, []string{"", "helloNew", "worldNew", "testNew1", "", "testNew2", "testNew3"},
 		[]int{1, 1, 1, 1, 0, 1, 1}, []bool{true, true, false, true, false, false, true},
 		[]int64{31, 32, 33, 34, 45, 46, 47})
-	expectRec1 := genRowRec(schema,
+	expectRec1 := genRowRec(testSchema,
 		[]int{1, 1, 1}, []int64{1000, 300, 1100},
 		[]int{1, 1, 1}, []float64{1001.3, 1002.4, 3.3},
 		[]int{0, 1, 1}, []string{"", "helloNew", "worldNew"},
 		[]int{1, 1, 1}, []bool{true, true, false},
 		[]int64{31, 32, 33})
-	expectRec2 := genRowRec(schema,
+	expectRec2 := genRowRec(testSchema,
 		[]int{1, 1, 1}, []int64{1200, 1300, 1400},
 		[]int{1, 1, 1}, []float64{1003.5, 4.3, 5.3},
 		[]int{1, 1, 1}, []string{"testNew1", "world", "testNew2"},
 		[]int{1, 1, 1}, []bool{true, true, false},
 		[]int64{34, 45, 46})
-	expectRec3 := genRowRec(schema,
+	expectRec3 := genRowRec(testSchema,
 		[]int{1}, []int64{700},
 		[]int{1}, []float64{2000.6},
 		[]int{1}, []string{"testNew3"},
@@ -2423,38 +2101,31 @@ func TestMergeRecordLimitRowsCase6(t *testing.T) {
 //	old.time [31, 32, 33, 34, 45, 46, 47]
 //	new.time [31, 32, 33, 34, 45, 46, 47]
 func TestMergeRecordLimitRowsCase7(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	oldRec := genRowRec(schema,
+	oldRec := genRowRec(testSchema,
 		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
 		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
 		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
 		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
 		[]int64{31, 32, 33, 34, 45, 46, 47})
-	newRec := genRowRec(schema,
+	newRec := genRowRec(testSchema,
 		[]int{1, 0, 1, 1, 1, 1, 0}, []int64{1000, 0, 1100, 1200, 1300, 1400, 0},
 		[]int{1, 1, 0, 1, 0, 0, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6},
 		[]int{0, 1, 1, 1, 0, 1, 1}, []string{"", "helloNew", "worldNew", "testNew1", "", "testNew2", "testNew3"},
 		[]int{1, 1, 1, 1, 0, 1, 1}, []bool{true, true, false, true, false, false, true},
 		[]int64{31, 32, 33, 34, 45, 46, 47})
-	expectRec := genRowRec(schema,
+	expectRec := genRowRec(testSchema,
 		[]int{1, 1, 1, 1, 1, 1, 1}, []int64{1000, 300, 1100, 1200, 1300, 1400, 700},
 		[]int{1, 1, 1, 1, 1, 1, 1}, []float64{1001.3, 1002.4, 3.3, 1003.5, 4.3, 5.3, 2000.6},
 		[]int{0, 1, 1, 1, 1, 1, 1}, []string{"", "helloNew", "worldNew", "testNew1", "world", "testNew2", "testNew3"},
 		[]int{1, 1, 1, 1, 1, 1, 1}, []bool{true, true, false, true, true, false, true},
 		[]int64{31, 32, 33, 34, 45, 46, 47})
-	expectRec1 := genRowRec(schema,
+	expectRec1 := genRowRec(testSchema,
 		[]int{1, 1, 1, 1, 1, 1, 1}, []int64{200, 300, 1100, 1200, 1300, 1400, 700},
 		[]int{1, 1, 1, 1, 1, 1, 1}, []float64{2.3, 1002.4, 3.3, 1003.5, 4.3, 5.3, 2000.6},
 		[]int{0, 1, 1, 1, 1, 1, 1}, []string{"", "helloNew", "worldNew", "testNew1", "world", "testNew2", "testNew3"},
 		[]int{0, 1, 1, 1, 1, 1, 1}, []bool{false, true, false, true, true, false, true},
 		[]int64{31, 32, 33, 34, 45, 46, 47})
-	expectRec2 := genRowRec(schema,
+	expectRec2 := genRowRec(testSchema,
 		[]int{1, 1, 1, 1, 1}, []int64{1100, 1200, 1300, 1400, 700},
 		[]int{0, 1, 1, 1, 1}, []float64{0, 1003.5, 4.3, 5.3, 2000.6},
 		[]int{1, 1, 1, 1, 1}, []string{"worldNew", "testNew1", "world", "testNew2", "testNew3"},
@@ -2491,26 +2162,19 @@ func TestMergeRecordLimitRowsCase7(t *testing.T) {
 //	old.time [31, 32, 33, 34, 45, 46, 47] pos: 1->7
 //	new.time [48, 49, 50, 51, 52, 53, 54] pos: 0->0
 func TestMergeRecordByMaxTimeOfOldRecCase1(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	oldRec := genRowRec(schema,
+	oldRec := genRowRec(testSchema,
 		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
 		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
 		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
 		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
 		[]int64{31, 32, 33, 34, 45, 46, 47})
-	newRec := genRowRec(schema,
+	newRec := genRowRec(testSchema,
 		[]int{1, 0, 1, 1, 1, 1, 0}, []int64{1000, 0, 1100, 1200, 1300, 1400, 0},
 		[]int{1, 1, 0, 1, 0, 0, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6},
 		[]int{0, 1, 1, 1, 0, 1, 1}, []string{"", "helloNew", "worldNew", "testNew1", "", "testNew2", "testNew3"},
 		[]int{1, 1, 1, 1, 0, 1, 1}, []bool{true, true, false, true, false, false, true},
 		[]int64{48, 49, 50, 51, 52, 53, 54})
-	expectRec := genRowRec(schema,
+	expectRec := genRowRec(testSchema,
 		[]int{1, 0, 1, 1, 1, 1}, []int64{300, 0, 400, 500, 600, 700},
 		[]int{0, 1, 0, 1, 1, 0}, []float64{0, 3.3, 0, 4.3, 5.3, 0},
 		[]int{1, 0, 0, 1, 0, 1}, []string{"hello", "", "", "world", "", "test"},
@@ -2526,26 +2190,19 @@ func TestMergeRecordByMaxTimeOfOldRecCase1(t *testing.T) {
 // old.time [47, 46, 45, 34, 33, 32, 31] pos: 1->7
 // new.time [30, 29, 28, 27, 26, 25, 24] pos: 0->0
 func TestMergeRecordByMaxTimeOfOldRecCase2(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	oldRec := genRowRec(schema,
+	oldRec := genRowRec(testSchema,
 		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
 		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
 		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
 		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
 		[]int64{47, 46, 45, 34, 33, 32, 31})
-	newRec := genRowRec(schema,
+	newRec := genRowRec(testSchema,
 		[]int{1, 0, 1, 1, 1, 1, 0}, []int64{1000, 0, 1100, 1200, 1300, 1400, 0},
 		[]int{1, 1, 0, 1, 0, 0, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6},
 		[]int{0, 1, 1, 1, 0, 1, 1}, []string{"", "helloNew", "worldNew", "testNew1", "", "testNew2", "testNew3"},
 		[]int{1, 1, 1, 1, 0, 1, 1}, []bool{true, true, false, true, false, false, true},
 		[]int64{30, 29, 28, 27, 26, 25, 24})
-	expectRec := genRowRec(schema,
+	expectRec := genRowRec(testSchema,
 		[]int{1, 0, 1, 1, 1, 1}, []int64{300, 0, 400, 500, 600, 700},
 		[]int{0, 1, 0, 1, 1, 0}, []float64{0, 3.3, 0, 4.3, 5.3, 0},
 		[]int{1, 0, 0, 1, 0, 1}, []string{"hello", "", "", "world", "", "test"},
@@ -2560,14 +2217,7 @@ func TestMergeRecordByMaxTimeOfOldRecCase2(t *testing.T) {
 
 // rows = 7, slice [0, 7)
 func TestRecord_SliceFromRecordCase1(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	rec := genRowRec(schema,
+	rec := genRowRec(testSchema,
 		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
 		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
 		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
@@ -2585,26 +2235,19 @@ func TestRecord_SliceFromRecordCase1(t *testing.T) {
 
 // rows = 7, slice [0, 3) and slice [3, 7)
 func TestRecord_SliceFromRecordCase2(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	rec := genRowRec(schema,
+	rec := genRowRec(testSchema,
 		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
 		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
 		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
 		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
 		[]int64{31, 32, 33, 34, 45, 46, 47})
-	expectRec1 := genRowRec(schema,
+	expectRec1 := genRowRec(testSchema,
 		[]int{1, 1, 0}, []int64{200, 300, 0},
 		[]int{1, 0, 1}, []float64{2.3, 0, 3.3},
 		[]int{0, 1, 0}, []string{"", "hello", ""},
 		[]int{0, 0, 1}, []bool{false, false, true},
 		[]int64{31, 32, 33})
-	expectRec2 := genRowRec(schema,
+	expectRec2 := genRowRec(testSchema,
 		[]int{1, 1, 1, 1}, []int64{400, 500, 600, 700},
 		[]int{0, 1, 1, 0}, []float64{0, 4.3, 5.3, 0},
 		[]int{0, 1, 0, 1}, []string{"", "world", "", "test"},
@@ -2636,10 +2279,11 @@ func TestRecordSort(t *testing.T) {
 		{Name: "time", Type: influx.Field_Type_Int},
 	}
 	fs2 := []record.Field{
+		{Name: "field0", Type: influx.Field_Type_Int},
 		{Name: "field1", Type: influx.Field_Type_Int},
 		{Name: "field3", Type: influx.Field_Type_Int},
 		{Name: "field4", Type: influx.Field_Type_Int},
-		{Name: "field0", Type: influx.Field_Type_Int},
+		{Name: "field5", Type: influx.Field_Type_Int},
 		{Name: "time", Type: influx.Field_Type_Int},
 	}
 	fs := record.Schemas{
@@ -2648,6 +2292,7 @@ func TestRecordSort(t *testing.T) {
 		{Name: "field2", Type: influx.Field_Type_Int},
 		{Name: "field3", Type: influx.Field_Type_Int},
 		{Name: "field4", Type: influx.Field_Type_Int},
+		{Name: "field5", Type: influx.Field_Type_Int},
 		{Name: "time", Type: influx.Field_Type_Int},
 	}
 
@@ -2708,20 +2353,13 @@ func TestColVal_RowBitmap(t *testing.T) {
 }
 
 func TestKickNilRecord1(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	rec := genRowRec(schema,
+	rec := genRowRec(testSchema,
 		[]int{1, 0, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
 		[]int{1, 0, 0, 0, 0, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
 		[]int{0, 0, 0, 0, 0, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
 		[]int{0, 0, 1, 0, 0, 1, 0}, []bool{false, false, true, false, true, false, false},
 		[]int64{31, 32, 33, 34, 45, 46, 47})
-	expRec := genRowRec(schema,
+	expRec := genRowRec(testSchema,
 		[]int{1, 0, 1, 1, 1, 1}, []int64{200, 0, 400, 500, 600, 700},
 		[]int{1, 0, 0, 0, 1, 0}, []float64{2.3, 3.3, 0, 4.3, 5.3, 0},
 		[]int{0, 0, 0, 0, 0, 1}, []string{"", "", "", "world", "", "test"},
@@ -2737,20 +2375,13 @@ func TestKickNilRecord1(t *testing.T) {
 }
 
 func TestKickNilRecord2(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	rec := genRowRec(schema,
+	rec := genRowRec(testSchema,
 		[]int{1, 1, 1, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
 		[]int{1, 1, 1, 1, 1, 1, 1}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
 		[]int{1, 1, 1, 1, 1, 1, 1}, []string{"a", "hello", "b", "c", "world", "d", "test"},
 		[]int{1, 1, 1, 1, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
 		[]int64{31, 32, 33, 34, 45, 46, 47})
-	expRec := genRowRec(schema,
+	expRec := genRowRec(testSchema,
 		[]int{1, 1, 1, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
 		[]int{1, 1, 1, 1, 1, 1, 1}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
 		[]int{1, 1, 1, 1, 1, 1, 1}, []string{"a", "hello", "b", "c", "world", "d", "test"},
@@ -2766,20 +2397,13 @@ func TestKickNilRecord2(t *testing.T) {
 }
 
 func TestKickNilRecord3(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	rec := genRowRec(schema,
+	rec := genRowRec(testSchema,
 		[]int{1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 0, 0}, []int64{200, 300, 0, 400, 500, 600, 700, 200, 300, 0, 400, 500, 600, 700},
 		[]int{1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0, 2.3, 0, 3.3, 0, 4.3, 5.3, 0},
 		[]int{1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 0, 0}, []string{"a", "hello", "b", "c", "world", "d", "test", "a", "hello", "b", "c", "world", "d", "test"},
 		[]int{0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0, 0}, []bool{false, false, true, false, true, false, false, true, true, true, false, true, false, true},
 		[]int64{31, 32, 33, 34, 45, 46, 47, 61, 62, 63, 64, 65, 66, 67})
-	expRec := genRowRec(schema,
+	expRec := genRowRec(testSchema,
 		[]int{1, 0, 0, 1, 1, 1}, []int64{200, 400, 500, 300, 400, 500},
 		[]int{1, 1, 0, 1, 1, 0}, []float64{2.3, 0, 4.3, 0, 0, 4.3},
 		[]int{1, 0, 0, 1, 1, 1}, []string{"a", "c", "world", "hello", "c", "world"},
@@ -2795,14 +2419,7 @@ func TestKickNilRecord3(t *testing.T) {
 }
 
 func TestKickNilRecord4(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	rec := genRowRec(schema,
+	rec := genRowRec(testSchema,
 		[]int{0, 0, 0, 0, 0, 0, 0}, []int64{200, 300, 0, 400, 500, 600, 700},
 		[]int{0, 0, 0, 0, 0, 0, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
 		[]int{0, 0, 0, 0, 0, 0, 0}, []string{"a", "hello", "b", "c", "world", "d", "test"},
@@ -2817,20 +2434,13 @@ func TestKickNilRecord4(t *testing.T) {
 }
 
 func TestSortRecord1(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	rec := genRowRec(schema,
+	rec := genRowRec(testSchema,
 		[]int{1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1}, []int64{1000, 0, 1100, 1200, 1300, 200, 300, 0, 400, 500, 600, 700},
 		[]int{1, 1, 0, 1, 0, 1, 0, 1, 0, 1, 1, 0}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 2.3, 0, 3.3, 0, 4.3, 5.3, 0},
 		[]int{1, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 1}, []string{"", "helloNew", "worldNew", "testNew1", "", "", "hello", "", "", "world", "", "test"},
 		[]int{1, 1, 1, 1, 0, 0, 0, 1, 0, 1, 1, 0}, []bool{true, true, false, true, false, false, false, true, false, true, false, false},
 		[]int64{22, 21, 20, 19, 18, 7, 6, 5, 4, 3, 2, 1})
-	expRec := genRowRec(schema,
+	expRec := genRowRec(testSchema,
 		[]int{1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1}, []int64{700, 600, 500, 400, 0, 300, 200, 1300, 1200, 1100, 0, 1000},
 		[]int{0, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1, 1}, []float64{0, 5.3, 4.3, 0, 3.3, 0, 2.3, 0, 1003.5, 0, 1002.4, 1001.3},
 		[]int{1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 1, 1}, []string{"test", "", "world", "", "", "hello", "", "", "testNew1", "worldNew", "helloNew", ""},
@@ -2846,20 +2456,13 @@ func TestSortRecord1(t *testing.T) {
 }
 
 func TestSortRecord2(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	rec := genRowRec(schema,
+	rec := genRowRec(testSchema,
 		[]int{1, 1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1}, []int64{1000, 12, 0, 1100, 1200, 1300, 200, 300, 0, 400, 500, 600, 700},
 		[]int{1, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1, 1, 0}, []float64{1001.3, 1.2, 1002.4, 0, 1003.5, 0, 2.3, 0, 3.3, 0, 4.3, 5.3, 0},
 		[]int{1, 1, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 1}, []string{"", "hi", "helloNew", "worldNew", "testNew1", "", "", "hello", "", "", "world", "", "test"},
 		[]int{1, 1, 1, 1, 1, 0, 0, 0, 1, 0, 1, 1, 0}, []bool{true, true, true, false, true, false, false, false, true, false, true, false, false},
 		[]int64{22, 4, 21, 20, 19, 18, 7, 6, 5, 4, 3, 2, 1})
-	expRec := genRowRec(schema,
+	expRec := genRowRec(testSchema,
 		[]int{1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1}, []int64{700, 600, 500, 400, 0, 300, 200, 1300, 1200, 1100, 0, 1000},
 		[]int{0, 1, 1, 1, 1, 0, 1, 0, 1, 0, 1, 1}, []float64{0, 5.3, 4.3, 1.2, 3.3, 0, 2.3, 0, 1003.5, 0, 1002.4, 1001.3},
 		[]int{1, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1}, []string{"test", "", "world", "hi", "", "hello", "", "", "testNew1", "worldNew", "helloNew", ""},
@@ -2875,14 +2478,7 @@ func TestSortRecord2(t *testing.T) {
 }
 
 func TestSortRecord3(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	rec := genRowRec(schema,
+	rec := genRowRec(testSchema,
 		[]int{1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1}, []int64{700, 600, 500, 400, 0, 300, 200, 1300, 1200, 1100, 0, 1000},
 		[]int{0, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1, 1}, []float64{0, 5.3, 4.3, 0, 3.3, 0, 2.3, 0, 1003.5, 0, 1002.4, 1001.3},
 		[]int{1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 1, 1}, []string{"test", "", "world", "", "", "hello", "", "", "testNew1", "worldNew", "helloNew", ""},
@@ -2897,20 +2493,13 @@ func TestSortRecord3(t *testing.T) {
 }
 
 func TestSortRecord4(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	rec := genRowRec(schema,
+	rec := genRowRec(testSchema,
 		[]int{1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1, 1}, []int64{700, 2, 600, 500, 400, 0, 300, 200, 1300, 1200, 1100, 0, 1000, 2},
 		[]int{0, 1, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1, 1, 1}, []float64{0, 2.2, 5.3, 4.3, 0, 3.3, 0, 2.3, 0, 1003.5, 0, 1002.4, 1001.3, 2.2},
 		[]int{1, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 1, 1, 1}, []string{"test", "hi", "", "world", "", "", "hello", "", "", "testNew1", "worldNew", "helloNew", "", "hi"},
 		[]int{0, 1, 1, 1, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1}, []bool{false, true, false, true, false, true, false, false, false, true, false, true, true, false},
 		[]int64{1, 1, 2, 3, 4, 5, 6, 7, 18, 19, 20, 21, 22, 22})
-	expRec := genRowRec(schema,
+	expRec := genRowRec(testSchema,
 		[]int{1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1}, []int64{2, 600, 500, 400, 0, 300, 200, 1300, 1200, 1100, 0, 2},
 		[]int{1, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1, 1}, []float64{2.2, 5.3, 4.3, 0, 3.3, 0, 2.3, 0, 1003.5, 0, 1002.4, 2.2},
 		[]int{1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 1, 1}, []string{"hi", "", "world", "", "", "hello", "", "", "testNew1", "worldNew", "helloNew", "hi"},
@@ -2926,20 +2515,13 @@ func TestSortRecord4(t *testing.T) {
 }
 
 func TestSortRecord5(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	rec := genRowRec(schema,
+	rec := genRowRec(testSchema,
 		[]int{1, 1, 1}, []int64{700, 2, 600},
 		[]int{1, 1, 1}, []float64{0, 2.2, 5.3},
 		[]int{1, 1, 1}, []string{"test", "hi", "world"},
 		[]int{1, 1, 1}, []bool{false, true, false},
 		[]int64{6, 6, 1})
-	expRec := genRowRec(schema,
+	expRec := genRowRec(testSchema,
 		[]int{1, 1}, []int64{600, 2},
 		[]int{1, 1}, []float64{5.3, 2.2},
 		[]int{1, 1}, []string{"world", "hi"},
@@ -2955,20 +2537,13 @@ func TestSortRecord5(t *testing.T) {
 }
 
 func TestSortRecord6(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	rec := genRowRec(schema,
+	rec := genRowRec(testSchema,
 		[]int{1, 1, 1}, []int64{700, 2, 600},
 		[]int{1, 1, 1}, []float64{0, 2.2, 5.3},
 		[]int{1, 1, 1}, []string{"test", "hi", "world"},
 		[]int{1, 1, 1}, []bool{true, true, true},
 		[]int64{6, 1, 1})
-	expRec := genRowRec(schema,
+	expRec := genRowRec(testSchema,
 		[]int{1, 1}, []int64{600, 700},
 		[]int{1, 1}, []float64{5.3, 0},
 		[]int{1, 1}, []string{"world", "test"},
@@ -2985,14 +2560,7 @@ func TestSortRecord6(t *testing.T) {
 
 // BUG2022042701004 Fix the bug of method Record.SliceFromRecord
 func TestSliceFromRecord(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	rec := genRowRec(schema,
+	rec := genRowRec(testSchema,
 		[]int{0, 0, 0}, []int64{0, 0, 0},
 		[]int{1, 1, 1}, []float64{0, 2.2, 5.3},
 		[]int{1, 1, 1}, []string{"test", "hi", "world"},
@@ -3007,20 +2575,13 @@ func TestSliceFromRecord(t *testing.T) {
 }
 
 func TestReCordCopyColVals(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	rec := genRowRec(schema,
+	rec := genRowRec(testSchema,
 		[]int{0, 0, 0}, []int64{0, 0, 0},
 		[]int{1, 1, 1}, []float64{0, 2.2, 5.3},
 		[]int{1, 1, 1}, []string{"test", "hi", "world"},
 		[]int{1, 1, 1}, []bool{true, true, true},
 		[]int64{6, 1, 1})
-
+	sort.Sort(rec)
 	colvals := rec.CopyColVals()
 	for index, colVal := range colvals {
 		assert.Equal(t, colVal.Len, rec.ColVals[index].Len, "invalid ColVal.Len")
@@ -3028,14 +2589,7 @@ func TestReCordCopyColVals(t *testing.T) {
 }
 
 func TestRecord_GetMinMaxTimeByAscending(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	rec := genRowRec(schema,
+	rec := genRowRec(testSchema,
 		[]int{0, 0, 0}, []int64{0, 0, 0},
 		[]int{1, 1, 1}, []float64{0, 2.2, 5.3},
 		[]int{1, 1, 1}, []string{"test", "hi", "world"},
@@ -3052,35 +2606,19 @@ func TestRecord_GetMinMaxTimeByAscending(t *testing.T) {
 }
 
 func TestRecordPoolGetBySchema(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-
 	changeSchema := record.Schemas{
 		record.Field{Type: influx.Field_Type_Int, Name: "int"},
 		record.Field{Type: influx.Field_Type_Float, Name: "float"},
 		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
 		record.Field{Type: influx.Field_Type_Int, Name: "time"},
 	}
-	pool := record.NewCircularRecordPool(record.NewRecordPool(record.UnknownPool), 3, schema, false)
+	pool := record.NewCircularRecordPool(record.NewRecordPool(record.UnknownPool), 3, testSchema, false)
 	re := pool.GetBySchema(changeSchema)
 	assert.Equal(t, re.Schema, changeSchema, "invalid schema")
 }
 
 func TestRecordPoolPutIn(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-
-	pool := record.NewCircularRecordPool(record.NewRecordPool(record.UnknownPool), 4, schema, false)
+	pool := record.NewCircularRecordPool(record.NewRecordPool(record.UnknownPool), 4, testSchema, false)
 	pool.Get()
 	pool.Get()
 	pool.PutRecordInCircularPool()
@@ -3098,15 +2636,7 @@ func TestRecMetaCopyTimes(t *testing.T) {
 }
 
 func TestSliceFromRecordWithRecMetaTimes(t *testing.T) {
-	schema := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	rec := genRowRec(schema,
-
+	rec := genRowRec(testSchema,
 		[]int{0, 0, 0}, []int64{0, 0, 0},
 		[]int{1, 1, 1}, []float64{0, 2.2, 5.3},
 		[]int{1, 1, 1}, []string{"test", "hi", "world"},
@@ -3143,16 +2673,9 @@ func TestRecordResizeBySchema(t *testing.T) {
 }
 
 func TestRecUpdateFunc(t *testing.T) {
-	schema1 := record.Schemas{
-		record.Field{Type: influx.Field_Type_Int, Name: "int"},
-		record.Field{Type: influx.Field_Type_Float, Name: "float"},
-		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
-		record.Field{Type: influx.Field_Type_String, Name: "string"},
-		record.Field{Type: influx.Field_Type_Int, Name: "time"},
-	}
-	iRec := record.NewRecord(schema1, true)
+	iRec := record.NewRecord(testSchema, true)
 	iRec.AppendIntervalEmptyRow(1, true, nil)
-	rec := record.NewRecord(schema1, true)
+	rec := record.NewRecord(testSchema, true)
 	rec.AppendIntervalEmptyRow(1, true, nil)
 	record.UpdateIntegerFirst(iRec, rec, 0, 0, 0, 0)
 	record.UpdateIntegerLast(iRec, rec, 0, 0, 0, 0)
@@ -3172,5 +2695,27 @@ func BenchmarkRecord_Get(b *testing.B) {
 		for j := 0; j < 100; j++ {
 			p.Get()
 		}
+	}
+}
+
+func TestFieldIndexs(t *testing.T) {
+	rec := genRowRec(testSchema,
+		[]int{0, 0, 0}, []int64{0, 0, 0},
+		[]int{1, 1, 1}, []float64{0, 2.2, 5.3},
+		[]int{1, 1, 1}, []string{"test", "hi", "world"},
+		[]int{1, 1, 1}, []bool{true, true, true},
+		[]int64{6, 1, 1})
+
+	sort.Sort(rec)
+	for i := range testSchema {
+		idx := rec.FieldIndexsFast(testSchema[i].Name)
+		if rec.Schema[idx] != testSchema[i] {
+			t.Fatal("error index, actual schema", rec.Schema[idx], "expect schema", testSchema[i])
+		}
+	}
+
+	idx := rec.FieldIndexsFast("not exist")
+	if idx != -1 {
+		t.Fatal("error index, actual index", idx)
 	}
 }

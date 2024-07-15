@@ -31,6 +31,28 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func ComparePlanNode(a, b hybridqp.QueryNode) bool {
+	if a.String() != b.String() {
+		return false
+	}
+
+	ac := a.Children()
+	bc := b.Children()
+
+	if len(ac) != len(bc) {
+		return false
+	}
+
+	for i, p := range ac {
+		same := ComparePlanNode(p, bc[i])
+		if !same {
+			return false
+		}
+	}
+
+	return true
+}
+
 func createQuerySchema() *executor.QuerySchema {
 	opt := query.ProcessorOptions{}
 	schema := executor.NewQuerySchema(createFields(), createColumnNames(), &opt, nil)
@@ -763,4 +785,236 @@ func TestLogicalIncHashAgg(t *testing.T) {
 	if newAgg.Type() != agg.Type() {
 		t.Error("wrong result")
 	}
+}
+
+func TestNewLogicalBinOp(t *testing.T) {
+	schema := createQuerySchema()
+	node := executor.NewLogicalSeries(schema)
+	leftSubquery := executor.NewLogicalSubQuery(node, schema)
+	rightSubquery := executor.NewLogicalSubQuery(node, schema)
+	binOp := executor.NewLogicalBinOp(leftSubquery, rightSubquery, nil, schema)
+	binOpClone := binOp.Clone()
+	if binOpClone.Type() != binOp.Type() {
+		t.Fatal("wrong type result")
+	}
+	if len(binOp.Children()) != 2 {
+		t.Fatal("wrong children len result")
+	}
+	planWriter := executor.NewLogicalPlanWriterImpl(&strings.Builder{})
+	binOp.Explain(planWriter)
+	if binOp.Digest() == "" {
+		t.Fatal("wrong Digest result")
+	}
+	binOp.ReplaceChild(0, nil)
+	binOp.ReplaceChild(1, nil)
+	binOp.ReplaceChildren([]hybridqp.QueryNode{nil, nil})
+	if binOp.Children()[0] != nil {
+		t.Fatal("wrong replace child result")
+	}
+	binOpClone.DeriveOperations()
+	if binOp.New(nil, nil, nil) != nil {
+		t.Fatal("wrong new result")
+	}
+}
+
+func TestBuildBinOpPlan(t *testing.T) {
+	fields := []*influxql.Field{&influxql.Field{Expr: &influxql.VarRef{Val: "value", Type: influxql.Float, Alias: "value"}, Alias: "value"}}
+	stmt := &influxql.SelectStatement{
+		Fields: fields,
+		Sources: []influxql.Source{&influxql.SubQuery{Statement: &influxql.SelectStatement{Fields: fields, Sources: []influxql.Source{&influxql.Measurement{Name: "mst"}}}},
+			&influxql.SubQuery{Statement: &influxql.SelectStatement{Fields: fields, Sources: []influxql.Source{&influxql.Measurement{Name: "mst"}}}}},
+		BinOpSource: []*influxql.BinOp{&influxql.BinOp{}},
+	}
+	schema := createQuerySchema()
+
+	creator := NewMockShardGroup()
+	table := NewTable("mst")
+	table.AddDataTypes(map[string]influxql.DataType{"value": influxql.Float})
+	creator.AddShard(table)
+	_, err := executor.BuildBinOpQueryPlan(context.Background(), creator, stmt, schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stmt.Sources[0].(*influxql.SubQuery).Statement.Dimensions = append(stmt.Sources[0].(*influxql.SubQuery).Statement.Dimensions, &influxql.Dimension{Expr: &influxql.Call{Name: "time"}})
+	if _, err := executor.BuildBinOpQueryPlan(context.Background(), creator, stmt, schema); err == nil {
+		t.Fatal("TestBuildBinOpPlan error1")
+	}
+	stmt.Sources = nil
+	if _, err := executor.BuildBinOpQueryPlan(context.Background(), creator, stmt, schema); err != nil {
+		t.Fatal("TestBuildBinOpPlan error3")
+	}
+	stmt.BinOpSource = nil
+	if _, err := executor.BuildBinOpQueryPlan(context.Background(), creator, stmt, schema); err == nil {
+		t.Fatal("TestBuildBinOpPlan error2")
+	}
+}
+
+// binop(subquery1, subquery2) -> without groupby+orderby
+func TestBuildPromPlanNoGroupByOfBinOp(t *testing.T) {
+	fields := []*influxql.Field{&influxql.Field{Expr: &influxql.VarRef{Val: "value", Type: influxql.Float, Alias: "value"}, Alias: "value"}}
+	stmt := &influxql.SelectStatement{
+		Fields: fields,
+		Sources: []influxql.Source{&influxql.SubQuery{Statement: &influxql.SelectStatement{Fields: fields, Sources: []influxql.Source{&influxql.Measurement{Name: "mst"}}}},
+			&influxql.SubQuery{Statement: &influxql.SelectStatement{Fields: fields, Sources: []influxql.Source{&influxql.Measurement{Name: "mst"}}}}},
+		BinOpSource: []*influxql.BinOp{&influxql.BinOp{}},
+	}
+	schema := createQuerySchema()
+	schema.Options().SetPromQuery(true)
+	creator := NewMockShardGroup()
+	table := NewTable("mst")
+	table.AddDataTypes(map[string]influxql.DataType{"value": influxql.Float})
+	creator.AddShard(table)
+	plan, err := executor.BuildBinOpQueryPlan(context.Background(), creator, stmt, schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	logicSeries1 := executor.NewLogicalSeries(schema)
+	logicSeries2 := executor.NewLogicalSeries(schema)
+
+	ex1 := executor.NewLogicalExchange(logicSeries1, executor.SERIES_EXCHANGE, nil, schema)
+	ex2 := executor.NewLogicalExchange(logicSeries2, executor.SERIES_EXCHANGE, nil, schema)
+
+	reader1 := executor.NewLogicalReader(ex1, schema)
+	reader2 := executor.NewLogicalReader(ex2, schema)
+
+	ex3 := executor.NewLogicalExchange(reader1, executor.READER_EXCHANGE, nil, schema)
+	ex4 := executor.NewLogicalExchange(reader2, executor.READER_EXCHANGE, nil, schema)
+	ex5 := executor.NewLogicalExchange(ex3, executor.SINGLE_SHARD_EXCHANGE, nil, schema)
+	ex6 := executor.NewLogicalExchange(ex4, executor.SINGLE_SHARD_EXCHANGE, nil, schema)
+
+	project1 := executor.NewLogicalProject(ex5, schema)
+	project2 := executor.NewLogicalProject(ex6, schema)
+
+	subquery1 := executor.NewLogicalSubQuery(project1, schema)
+	subquery2 := executor.NewLogicalSubQuery(project2, schema)
+
+	binop := executor.NewLogicalBinOp(subquery1, subquery2, nil, schema)
+	if !ComparePlanNode(plan, binop) {
+		t.Fatal("TestBuildPromPlanNoGroupByOfBinOp err")
+	}
+}
+
+// agg(subquery) -> with groupby+orderby
+func TestBuildPromPlanGroupByOfAgg(t *testing.T) {
+	fields := []*influxql.Field{&influxql.Field{Expr: &influxql.VarRef{Val: "value", Type: influxql.Float, Alias: "value"}, Alias: "value"}}
+	Sources := []influxql.Source{&influxql.SubQuery{Statement: &influxql.SelectStatement{Fields: fields, Sources: []influxql.Source{&influxql.Measurement{Name: "mst"}}}}}
+
+	schema := createQuerySchema()
+	schema.Options().SetPromQuery(true)
+	schema.Calls()["sum"] = nil
+	creator := NewMockShardGroup()
+	table := NewTable("mst")
+	table.AddDataTypes(map[string]influxql.DataType{"value": influxql.Float})
+	creator.AddShard(table)
+	plan, err := executor.BuildSources(context.Background(), creator, Sources, schema, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	logicSeries := executor.NewLogicalSeries(schema)
+	ex := executor.NewLogicalExchange(logicSeries, executor.SERIES_EXCHANGE, nil, schema)
+	reader := executor.NewLogicalReader(ex, schema)
+	ex1 := executor.NewLogicalExchange(reader, executor.READER_EXCHANGE, nil, schema)
+	ex2 := executor.NewLogicalExchange(ex1, executor.SINGLE_SHARD_EXCHANGE, nil, schema)
+	project := executor.NewLogicalProject(ex2, schema)
+	subquery := executor.NewLogicalSubQuery(project, schema)
+	groupby := executor.NewLogicalGroupBy(subquery, schema)
+	orderby := executor.NewLogicalOrderBy(groupby, schema)
+
+	if !ComparePlanNode(plan, orderby) {
+		t.Fatal("TestBuildPromPlanGroupByOfAgg err")
+	}
+}
+
+// noagg(subquery) -> without groupby+orderby
+func TestBuildPromPlanGroupByOfNoAgg(t *testing.T) {
+	fields := []*influxql.Field{&influxql.Field{Expr: &influxql.VarRef{Val: "value", Type: influxql.Float, Alias: "value"}, Alias: "value"}}
+	Sources := []influxql.Source{&influxql.SubQuery{Statement: &influxql.SelectStatement{Fields: fields, Sources: []influxql.Source{&influxql.Measurement{Name: "mst"}}}}}
+
+	schema := createQuerySchema()
+	schema.Options().SetPromQuery(true)
+	creator := NewMockShardGroup()
+	table := NewTable("mst")
+	table.AddDataTypes(map[string]influxql.DataType{"value": influxql.Float})
+	creator.AddShard(table)
+	plan, err := executor.BuildSources(context.Background(), creator, Sources, schema, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	logicSeries := executor.NewLogicalSeries(schema)
+	ex := executor.NewLogicalExchange(logicSeries, executor.SERIES_EXCHANGE, nil, schema)
+	reader := executor.NewLogicalReader(ex, schema)
+	ex1 := executor.NewLogicalExchange(reader, executor.READER_EXCHANGE, nil, schema)
+	ex2 := executor.NewLogicalExchange(ex1, executor.SINGLE_SHARD_EXCHANGE, nil, schema)
+	project := executor.NewLogicalProject(ex2, schema)
+	subquery := executor.NewLogicalSubQuery(project, schema)
+
+	if !ComparePlanNode(plan, subquery) {
+		t.Fatal("TestBuildPromPlanGroupByOfNoAgg err")
+	}
+}
+
+func Test_BuildFullJoinQueryPlant(t *testing.T) {
+	fields := []*influxql.Field{
+		{Expr: &influxql.VarRef{Val: "m1.f1", Type: influxql.Float, Alias: ""}, Alias: ""},
+		{Expr: &influxql.VarRef{Val: "m2.f1", Type: influxql.Float, Alias: ""}, Alias: ""},
+	}
+	sub_query_fields_1 := []*influxql.Field{
+		{Expr: &influxql.VarRef{Val: "f1", Type: influxql.Float, Alias: ""}, Alias: "m1.f1"},
+	}
+
+	sub_query_fields_2 := []*influxql.Field{
+		{Expr: &influxql.VarRef{Val: "f1", Type: influxql.Float, Alias: ""}, Alias: "m2.f1"},
+	}
+
+	sub_query_fields_3 := []*influxql.Field{
+		{Expr: &influxql.VarRef{Val: "f1", Type: influxql.Unknown, Alias: ""}, Alias: ""},
+	}
+
+	sources := []influxql.Source{
+		&influxql.SubQuery{Statement: &influxql.SelectStatement{Fields: sub_query_fields_1, Sources: []influxql.Source{&influxql.Measurement{Database: "db0", Name: "mst"}}}, Alias: "m1"},
+		&influxql.SubQuery{Statement: &influxql.SelectStatement{Fields: sub_query_fields_2, Sources: []influxql.Source{&influxql.Measurement{Database: "db0", Name: "mst"}}}, Alias: "m2"},
+	}
+	joincases := []*influxql.Join{
+		{
+			LSrc:      &influxql.SubQuery{Statement: &influxql.SelectStatement{Fields: sub_query_fields_3, Sources: []influxql.Source{&influxql.Measurement{Database: "db0", Name: "mst"}}}, Alias: "m1"},
+			RSrc:      &influxql.SubQuery{Statement: &influxql.SelectStatement{Fields: sub_query_fields_3, Sources: []influxql.Source{&influxql.Measurement{Database: "db0", Name: "mst"}}}, Alias: "m2"},
+			Condition: &influxql.BinaryExpr{},
+		},
+	}
+	unsets := []*influxql.Unnest{}
+	clonames := []string{"tk1", "f1"}
+
+	stmt := &influxql.SelectStatement{
+		Fields:     fields,
+		Sources:    sources,
+		JoinSource: joincases,
+	}
+	opt := query.ProcessorOptions{}
+
+	schema := executor.NewQuerySchemaWithJoinCase(fields, sources, clonames, &opt, joincases, unsets, nil)
+	creator := NewMockShardGroup()
+	table := NewTable("mst")
+	table.AddDataTypes(map[string]influxql.DataType{"f1": influxql.Float})
+	creator.AddShard(table)
+	_, err := executor.BuildFullJoinQueryPlan(context.Background(), creator, stmt, schema)
+	if err != nil {
+		t.Fatal("TestBuildFullJoinQueryPlan error")
+	}
+}
+
+func Test_ExplainNode(t *testing.T) {
+	planWriter := executor.NewLogicalPlanWriterImpl(&strings.Builder{})
+	opt := query.ProcessorOptions{}
+	fields := []*influxql.Field{
+		{Expr: &influxql.VarRef{Val: "m1.f1", Type: influxql.Float, Alias: ""}, Alias: ""},
+	}
+	clonames := []string{"f1"}
+	schema := executor.NewQuerySchema(fields, clonames, &opt, nil)
+	logicSeries := executor.NewLogicalSeries(schema)
+	groupBy := executor.NewLogicalGroupBy(logicSeries, schema)
+	orderBy := executor.NewLogicalOrderBy(groupBy, schema)
+	orderBy.Explain(planWriter)
 }

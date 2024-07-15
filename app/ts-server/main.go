@@ -42,7 +42,7 @@ func main() {
 
 	cmdMeta := meta.NewCommand(info, false)
 	cmdStore := store.NewCommand(info, false)
-	cmdSql := ingestserver.NewCommand(info)
+	cmdSql := ingestserver.NewCommand(info, false)
 	cmdMeta.Logo = app.TSSERVER
 	cmdSql.Logo = ""
 	cmdStore.Logo = ""

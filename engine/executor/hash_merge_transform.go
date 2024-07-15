@@ -406,6 +406,14 @@ func (trans *HashMergeTransform) computeGroupKeysByDims() {
 	trans.bufGroupKeys = trans.bufGroupKeysMPool.AllocGroupKeys(trans.bufChunk.Len())
 	trans.bufGroupTags = trans.bufGroupKeysMPool.AllocGroupTags(trans.bufChunk.Len())
 	trans.bufBatchSize = trans.bufChunk.Len()
+	for colId := range trans.opt.Dimensions {
+		if trans.bufChunk.Dims()[colId].NilCount() == 0 {
+			continue
+		}
+		values, offsets := trans.bufChunk.Dims()[colId].GetStringBytes()
+		values, offsets = ExpandColumnOffsets(trans.bufChunk.Dims()[colId], values, offsets)
+		trans.bufChunk.Dims()[colId].SetStringValues(values, offsets)
+	}
 	for rowId := 0; rowId < trans.bufChunk.Len(); rowId++ {
 		for colId, dimKey := range trans.opt.Dimensions {
 			trans.bufGroupKeys[rowId] = append(trans.bufGroupKeys[rowId], dimKey...)

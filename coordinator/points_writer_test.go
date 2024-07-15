@@ -61,7 +61,7 @@ type MockMetaClient struct {
 	DBPtViewFn           func(database string) (meta2.DBPtInfos, error)
 	MeasurementFn        func(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error)
 	UpdateSchemaFn       func(database string, retentionPolicy string, mst string, fieldToCreate []*proto2.FieldSchema) error
-	CreateMeasurementFn  func(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *influxql.IndexRelation, engineType config.EngineType, colStoreInfo *meta2.ColStoreInfo) (*meta2.MeasurementInfo, error)
+	CreateMeasurementFn  func(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, numOfShard int32, indexR *influxql.IndexRelation, engineType config.EngineType, colStoreInfo *meta2.ColStoreInfo) (*meta2.MeasurementInfo, error)
 	GetAliveShardsFn     func(database string, sgi *meta2.ShardGroupInfo) []int
 	GetShardInfoByTimeFn func(database, retentionPolicy string, t time.Time, ptIdx int, nodeId uint64, engineType config.EngineType) (*meta2.ShardInfo, error)
 	DBRepGroupsFn        func(database string) []meta2.ReplicaGroup
@@ -100,9 +100,9 @@ func (mmc *MockMetaClient) UpdateSchema(database string, retentionPolicy string,
 	return mmc.UpdateSchemaFn(database, retentionPolicy, mst, fieldToCreate)
 }
 
-func (mmc *MockMetaClient) CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *influxql.IndexRelation,
+func (mmc *MockMetaClient) CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, numOfShards int32, indexR *influxql.IndexRelation,
 	engineType config.EngineType, colStoreInfo *meta2.ColStoreInfo, schemaInfo []*proto2.FieldSchema, options *meta2.Options) (*meta2.MeasurementInfo, error) {
-	return mmc.CreateMeasurementFn(database, retentionPolicy, mst, shardKey, indexR, engineType, nil)
+	return mmc.CreateMeasurementFn(database, retentionPolicy, mst, shardKey, numOfShards, indexR, engineType, nil)
 }
 
 func (mmc *MockMetaClient) GetAliveShards(database string, sgi *meta2.ShardGroupInfo) []int {
@@ -269,7 +269,7 @@ func NewMockMetaClient() *MockMetaClient {
 		panic("could not find sg")
 	}
 
-	mc.CreateMeasurementFn = func(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, indexR *influxql.IndexRelation, engineType config.EngineType, colStoreInfo *meta2.ColStoreInfo) (*meta2.MeasurementInfo, error) {
+	mc.CreateMeasurementFn = func(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, numOfShards int32, indexR *influxql.IndexRelation, engineType config.EngineType, colStoreInfo *meta2.ColStoreInfo) (*meta2.MeasurementInfo, error) {
 		return NewMeasurement(mst, engineType), nil
 	}
 	mc.MeasurementFn = func(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error) {
@@ -296,6 +296,19 @@ func NewMockMetaClient() *MockMetaClient {
 			}
 		}
 		return idxes
+	}
+	return mc
+}
+
+func NewMockMetaClientWithShardLists() *MockMetaClient {
+	mc := NewMockMetaClient()
+	mc.CreateMeasurementFn = func(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, numOfShards int32, indexR *influxql.IndexRelation, engineType config.EngineType, colStoreInfo *meta2.ColStoreInfo) (*meta2.MeasurementInfo, error) {
+		rp, _ := mc.RetentionPolicy(database, retentionPolicy)
+		return NewMeasurementWithShardLists(rp.ShardGroups, mst, engineType), nil
+	}
+	mc.MeasurementFn = func(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error) {
+		rp, _ := mc.RetentionPolicy(database, rpName)
+		return NewMeasurementWithShardLists(rp.ShardGroups, mstName, engineType), nil
 	}
 	return mc
 }
@@ -330,9 +343,7 @@ func NewRetentionPolicy(name string, duration time.Duration, engineType config.E
 }
 
 func NewMeasurement(mst string, engineType config.EngineType) *meta2.MeasurementInfo {
-	var msti = meta2.NewMeasurementInfo(mst)
-	msti.EngineType = engineType
-
+	var msti = meta2.NewMeasurementInfo(mst, influx.GetOriginMstName(mst), engineType, 0)
 	switch streamDistribution {
 	case sameMst:
 		msti.ShardKeys = []meta2.ShardKeyInfo{{ShardKey: []string{"tk1"}, Type: "hash"}}
@@ -367,6 +378,17 @@ func NewMeasurement(mst string, engineType config.EngineType) *meta2.Measurement
 	return msti
 }
 
+func NewMeasurementWithShardLists(sgs []meta2.ShardGroupInfo, mst string, engineType config.EngineType) *meta2.MeasurementInfo {
+	msti := NewMeasurement(mst, engineType)
+	msti.InitNumOfShards = 1
+	msti.ShardIdexes = make(map[uint64][]int)
+	for _, sg := range sgs {
+		msti.ShardIdexes[sg.ID] = []int{0}
+	}
+
+	return msti
+}
+
 type MockNetStore struct {
 	WriteRowsFn func(ctx *netstorage.WriteContext, nodeID uint64, pt uint32, database, rp string, timeout time.Duration) error
 }
@@ -394,8 +416,20 @@ func TestPointsWriter_WritePointRows(t *testing.T) {
 	}
 }
 
+func TestPointsWriter_WritePointRowsWithShardLists1(t *testing.T) {
+	pw := NewPointsWriter(time.Second)
+	pw.MetaClient = NewMockMetaClientWithShardLists()
+	pw.TSDBStore = NewMockNetStore()
+	rows := make([]influx.Row, 10)
+	err := pw.RetryWritePointRows("db0", "rp0", generateRows(10, rows))
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestPointsWriter_updateSchemaIfNeeded(t *testing.T) {
-	mi := meta2.NewMeasurementInfo("mst_0000")
+	mstName := "mst_0000"
+	mi := meta2.NewMeasurementInfo(mstName, influx.GetOriginMstName(mstName), config.TSSTORE, 0)
 	mi.Schema = map[string]int32{
 		"value1": influx.Field_Type_Float,
 		"value2": influx.Field_Type_String,
@@ -458,8 +492,8 @@ func TestPointsWriter_updateSchemaIfNeeded(t *testing.T) {
 }
 
 func TestPointsWriter_updateSchemaIfNeededError(t *testing.T) {
-	mi := meta2.NewMeasurementInfo("mst_0000")
-	mi.EngineType = config.COLUMNSTORE
+	mstName := "mst_0000"
+	mi := meta2.NewMeasurementInfo(mstName, influx.GetOriginMstName(mstName), config.COLUMNSTORE, 0)
 	mi.Schema = map[string]int32{
 		"value1": influx.Field_Type_Float,
 		"value2": influx.Field_Type_Int,
@@ -518,8 +552,8 @@ func TestPointsWriter_updateSchemaIfNeededError(t *testing.T) {
 }
 
 func TestPointsWriter_updateSchemaIfNeededErrorV2(t *testing.T) {
-	mi := meta2.NewMeasurementInfo("mst_0000")
-	mi.EngineType = config.COLUMNSTORE
+	mstName := "mst_0000"
+	mi := meta2.NewMeasurementInfo(mstName, influx.GetOriginMstName(mstName), config.COLUMNSTORE, 0)
 	mi.Schema = map[string]int32{
 		"tk1":    influx.Field_Type_Tag,
 		"value1": influx.Field_Type_Float,

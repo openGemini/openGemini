@@ -17,16 +17,21 @@ limitations under the License.
 package immutable
 
 import (
+	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/openGemini/openGemini/engine/immutable/colstore"
+	"github.com/openGemini/openGemini/engine/index/sparseindex"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/fragment"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/util"
 	"go.uber.org/zap"
 )
@@ -94,11 +99,52 @@ func (fl *fileLoader) Load(dir, mst string, isOrder bool) {
 	}
 }
 
+func (fl *fileLoader) LoadRemote(dir, mst string, obsOpt *obs.ObsOptions) {
+	if obsOpt == nil {
+		return
+	}
+	remotePath := fileops.GetRemoteDataPath(obsOpt, dir)
+	remotePrefixPath := fileops.GetRemotePrefixPath(obsOpt)
+	nameDirs, err := fileops.ReadDir(remotePath)
+	if err != nil {
+		fl.lg.Error("read measurement dir fail", zap.String("path", dir), zap.Error(err))
+		fl.ctx.setError(err)
+		return
+	}
+	fl.loadDirs(nameDirs, mst, remotePrefixPath)
+}
+
+func (fl *fileLoader) loadDirs(nameDirs []os.FileInfo, mst, remotePrefixPath string) {
+	for i := range nameDirs {
+		item := nameDirs[i]
+		switch filepath.Ext(item.Name()) {
+		case obs.ObsFileSuffix:
+			fl.loadTsspFile(fmt.Sprintf("%s/%s", remotePrefixPath, item.Name()), mst, remoteDirIsOrder(item.Name()))
+		default:
+			fl.removeTmpFile(fmt.Sprintf("%s/%s", remotePrefixPath, item.Name())) // skip invalid file, remove if it is a temp file
+		}
+		fl.total++
+	}
+}
+
+func remoteDirIsOrder(path string) bool {
+	lastIndex := strings.LastIndex(path, "/")
+	if lastIndex == -1 {
+		return false
+	}
+	tmpPath := path[:lastIndex]
+	return !strings.HasSuffix(tmpPath, unorderedDir)
+}
+
 func isDetachedIdxFile(fileName string) bool {
-	if fileName == MetaIndexFile || fileName == PrimaryKeyFile {
+	if fileName == MetaIndexFile || fileName == PrimaryKeyFile || isBloomFilterFile(fileName) {
 		return true
 	}
 	return false
+}
+
+func isBloomFilterFile(file string) bool {
+	return strings.HasPrefix(file, sparseindex.BloomFilterFilePrefix)
 }
 
 func (fl *fileLoader) removeTmpFile(file string) {

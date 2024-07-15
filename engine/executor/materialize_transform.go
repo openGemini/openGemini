@@ -27,6 +27,7 @@ import (
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/promql2influxql"
 )
 
 type StdoutChunkWriter struct{}
@@ -91,6 +92,15 @@ func AdjustNils(dst Column, src Column, low int, high int) {
 			dst.AppendManyNotNil(num)
 		}
 	}
+}
+
+func ResetTime(srcCk, dstCk Chunk, ts int64) {
+	resetTimes := make([]int64, len(srcCk.Time()))
+	zeroTime := maxTime(ZeroTimeStamp, ts)
+	for j := 0; j < len(srcCk.Time()); j++ {
+		resetTimes[j] = zeroTime
+	}
+	dstCk.AppendTimes(resetTimes)
 }
 
 func TransparentForwardIntegerColumn(dst Column, src Column) {
@@ -288,12 +298,18 @@ func AppendRowValue(column Column, value interface{}) {
 type ChunkValuer struct {
 	ref   Chunk
 	index int
+	value func(key string) (interface{}, bool)
 }
 
-func NewChunkValuer() *ChunkValuer {
+func NewChunkValuer(isPromQuery bool) *ChunkValuer {
 	c := &ChunkValuer{
 		ref:   nil,
 		index: 0,
+	}
+	if !isPromQuery {
+		c.value = c.ValueNormal
+	} else {
+		c.value = c.ValueProm
 	}
 	return c
 }
@@ -305,6 +321,10 @@ func (c *ChunkValuer) AtChunkRow(chunk Chunk, index int) {
 
 // Value returns the value for a key in the MapValuer.
 func (c *ChunkValuer) Value(key string) (interface{}, bool) {
+	return c.value(key)
+}
+
+func (c *ChunkValuer) ValueNormal(key string) (interface{}, bool) {
 	fieldIndex := c.ref.RowDataType().FieldIndex(key)
 	column := c.ref.Columns()[fieldIndex]
 	if column.IsNilV2(c.index) {
@@ -312,6 +332,15 @@ func (c *ChunkValuer) Value(key string) (interface{}, bool) {
 	}
 	// TODO: opt this code
 	return getRowValue(column, column.GetValueIndexV2(c.index)), true
+}
+
+func (c *ChunkValuer) ValueProm(key string) (interface{}, bool) {
+	if key == promql2influxql.ArgNameOfTimeFunc {
+		t := float64(c.ref.Time()[c.index] / 1000000000)
+		return t, true
+	} else {
+		return c.ValueNormal(key)
+	}
 }
 
 func (c *ChunkValuer) SetValuer(_ influxql.Valuer, _ int) {
@@ -325,6 +354,7 @@ type MaterializeTransform struct {
 	output          *ChunkPort
 	ops             []hybridqp.ExprOptions
 	opt             *query.ProcessorOptions
+	schema          *QuerySchema
 	valuer          influxql.ValuerEval
 	m               map[string]interface{}
 	chunkValuer     *ChunkValuer
@@ -333,15 +363,18 @@ type MaterializeTransform struct {
 	resultChunk     Chunk
 	forward         bool
 	ResetTime       bool
+	isPromQuery     bool
 	transparents    []func(dst Column, src Chunk, index []int)
 
 	ColumnMap [][]int
 
+	promQueryTime     int64
 	ppMaterializeCost *tracing.Span
 	rp                *ResultEvalPool
+	labelCall         *influxql.Call
 }
 
-func createTransparents(ops []hybridqp.ExprOptions) []func(dst Column, src Chunk, index []int) {
+func (trans *MaterializeTransform) createTransparents(ops []hybridqp.ExprOptions) []func(dst Column, src Chunk, index []int) {
 	transparents := make([]func(dst Column, src Chunk, index []int), len(ops))
 
 	for i, opt := range ops {
@@ -358,6 +391,10 @@ func createTransparents(ops []hybridqp.ExprOptions) []func(dst Column, src Chunk
 			}
 		}
 		if vr, ok := opt.Expr.(*influxql.Call); ok {
+			if labelFunc := query.GetLabelFunction(vr.Name); labelFunc != nil {
+				trans.labelCall = vr
+			}
+
 			f, err := TransMath(vr)
 			if err != nil {
 				panic(err)
@@ -375,15 +412,17 @@ func NewMaterializeTransform(inRowDataType hybridqp.RowDataType, outRowDataType 
 		output:          NewChunkPort(outRowDataType),
 		ops:             ops,
 		opt:             opt,
+		schema:          schema,
 		m:               make(map[string]interface{}),
-		chunkValuer:     NewChunkValuer(),
+		chunkValuer:     NewChunkValuer(opt.IsPromQuery()),
 		resultChunkPool: NewCircularChunkPool(CircularChunkNum, NewChunkBuilder(outRowDataType)),
 		chunkWriter:     writer,
 		forward:         false,
 		transparents:    nil,
 		ColumnMap:       make([][]int, len(outRowDataType.Fields())),
 		ResetTime:       false,
-		rp:              NewResultEvalPool(1),
+		isPromQuery:     schema.Options().IsPromQuery(),
+		rp:              NewResultEvalPool(1, schema.Options().IsPromQuery()),
 	}
 
 	trans.valuer = influxql.ValuerEval{
@@ -391,17 +430,21 @@ func NewMaterializeTransform(inRowDataType hybridqp.RowDataType, outRowDataType 
 			op.Valuer{},
 			query.MathValuer{},
 			query.StringValuer{},
+			LabelValuer{},
+			PromTimeValuer{},
 			trans.chunkValuer,
 		),
 		IntegerFloatDivision: true,
 	}
 
-	trans.transparents = createTransparents(trans.ops)
+	trans.transparents = trans.createTransparents(trans.ops)
 
 	if SetTimeZero(schema) {
 		trans.ResetTime = true
 	}
-
+	if trans.schema.PromResetTime() {
+		trans.promQueryTime = trans.opt.EndTime + trans.opt.QueryOffset.Nanoseconds()
+	}
 	trans.ColumnMapInit()
 	return trans
 }
@@ -487,20 +530,22 @@ type ResultEval struct {
 	floatLiteral float64
 	boolLiteral  bool
 	uintLiteral  uint64
+	isPromQuery  bool
 }
 
 type ResultEvalPool struct {
 	resultEvals []*ResultEval
 	index       int
+	isPromQuery bool
 }
 
-func NewResultEvalPool(len int) *ResultEvalPool {
-	return &ResultEvalPool{}
+func NewResultEvalPool(len int, isPromQuery bool) *ResultEvalPool {
+	return &ResultEvalPool{isPromQuery: isPromQuery}
 }
 
 func (rp *ResultEvalPool) getResultEval(dataType influxql.DataType) *ResultEval {
 	if rp.index >= len(rp.resultEvals) {
-		rp.resultEvals = append(rp.resultEvals, &ResultEval{})
+		rp.resultEvals = append(rp.resultEvals, &ResultEval{isPromQuery: rp.isPromQuery})
 	}
 	res := rp.resultEvals[rp.index]
 	rp.index += 1
@@ -653,7 +698,7 @@ func (res *ResultEval) copyToForFloat(l int, dst *ColumnImpl) {
 		num = 0
 		for index < l && !res.IsNil(index) {
 			value := res.getFloat64(index)
-			if math.IsNaN(value) {
+			if math.IsNaN(value) && !res.isPromQuery {
 				dst.AppendManyNotNil(num)
 				dst.AppendNil()
 				num = 0
@@ -1214,6 +1259,18 @@ func evalBinaryExpr(expr *influxql.BinaryExpr, v *influxql.ValuerEval, columnMap
 	lhs := eval(expr.LHS, v, columnMap, l, rp)
 	rhs := eval(expr.RHS, v, columnMap, l, rp)
 	f(lhs, rhs, l, expr.Op, v)
+	// promql bool modifier rewriting results, true:1, false:0.
+	if expr.ReturnBool {
+		lhs.dataType = influxql.Float
+		lhs.floatValue = lhs.floatValue[:0]
+		for i := range lhs.booleanValue {
+			if lhs.booleanValue[i] {
+				lhs.floatValue = append(lhs.floatValue, float64(1))
+			} else {
+				lhs.floatValue = append(lhs.floatValue, float64(0))
+			}
+		}
+	}
 	lhs.isLiteral = false
 	return lhs
 
@@ -1245,20 +1302,44 @@ func initByType(expr influxql.Expr, chunkValuer *ChunkValuer, columnMap map[stri
 		return false
 	}
 }
+
 func (trans *MaterializeTransform) materialize(chunk Chunk) Chunk {
 	oChunk := trans.resultChunkPool.GetChunk()
 	oChunk.SetName(chunk.Name())
 	if !trans.ResetTime {
 		oChunk.AppendTimes(chunk.Time())
 	} else {
-		resetTimes := make([]int64, len(chunk.Time()))
-		zeroTime := maxTime(ZeroTimeStamp, trans.opt.StartTime)
-		for j := 0; j < len(chunk.Time()); j++ {
-			resetTimes[j] = zeroTime
+		if trans.schema.PromResetTime() {
+			// change the time in instant query to the query end time.
+			ResetTime(chunk, oChunk, trans.promQueryTime)
+		} else {
+			ResetTime(chunk, oChunk, trans.opt.StartTime)
 		}
-		oChunk.AppendTimes(resetTimes)
 	}
-	oChunk.AppendTagsAndIndexes(chunk.Tags(), chunk.TagIndex())
+	if trans.labelCall != nil {
+		if valuer, ok := trans.valuer.Valuer.(influxql.CallValuer); ok {
+			var args []interface{}
+			if len(trans.labelCall.Args) > 0 {
+				args = make([]interface{}, len(trans.labelCall.Args))
+				args[0] = chunk.Tags()
+				for i := 1; i < len(trans.labelCall.Args); i++ {
+					if arg, ok := trans.labelCall.Args[i].(*influxql.StringLiteral); ok {
+						args[i] = arg.Val
+					} else {
+						args[i] = nil
+					}
+				}
+			}
+			values, _ := valuer.Call(trans.labelCall.Name, args)
+			if tags, ok := values.([]ChunkTags); ok {
+				tagIndexes := chunk.TagIndex()
+				oChunk.ResetTagsAndIndexes(tags, tagIndexes)
+			}
+		}
+	} else {
+		oChunk.AppendTagsAndIndexes(chunk.Tags(), chunk.TagIndex())
+	}
+
 	oChunk.AppendIntervalIndexes(chunk.IntervalIndex())
 	columnMap := make(map[string]*ColumnImpl)
 	for i, f := range trans.transparents {
@@ -1273,6 +1354,8 @@ func (trans *MaterializeTransform) materialize(chunk Chunk) Chunk {
 				res := eval(trans.ops[i].Expr, &trans.valuer, columnMap, chunk.NumberOfRows(), trans.rp)
 				res.copyTo(chunk.NumberOfRows(), dst.(*ColumnImpl))
 			} else {
+				//var isLabel bool
+
 				for index := 0; index < chunk.NumberOfRows(); index++ {
 					trans.chunkValuer.index = index
 
@@ -1281,7 +1364,7 @@ func (trans *MaterializeTransform) materialize(chunk Chunk) Chunk {
 						dst.AppendNil()
 						continue
 					}
-					if val, ok := value.(float64); ok && math.IsNaN(val) {
+					if val, ok := value.(float64); ok && math.IsNaN(val) && !trans.isPromQuery {
 						dst.AppendNil()
 						continue
 					}

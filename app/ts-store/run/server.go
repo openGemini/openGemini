@@ -37,6 +37,7 @@ import (
 	"github.com/openGemini/openGemini/lib/httpserver"
 	"github.com/openGemini/openGemini/lib/iodetector"
 	Logger "github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/statisticsPusher"
@@ -94,15 +95,12 @@ func NewServer(c config.Config, info app.ServerInfo, logger *Logger.Logger) (app
 		conf.Common.NodeRole = ""
 	}
 
-	mutable.NewMemTablePoolManager().Init()
-	mutable.SetSizeLimit(int64(conf.Data.ShardMutableSizeLimit))
-	mutable.InitConcurLimiter(cpu.GetCpuNum())
-	mutable.InitMutablePool(cpu.GetCpuNum())
-	mutable.InitWriteRecPool(cpu.GetCpuNum())
+	mutable.Init(cpu.GetCpuNum())
 	immutable.InitWriterPool(3 * cpu.GetCpuNum())
 	immutable.SetIndexCompressMode(conf.Data.TemporaryIndexCompressMode)
 	immutable.SetChunkMetaCompressMode(conf.Data.ChunkMetaCompressMode)
 	config.SetStoreConfig(conf.Data)
+	config.SetIndexConfig(conf.Index)
 
 	s.config = conf
 	Logger.SetLogger(Logger.GetLogger().With(zap.String("hostname", conf.Data.IngesterAddress)))
@@ -112,6 +110,7 @@ func NewServer(c config.Config, info app.ServerInfo, logger *Logger.Logger) (app
 	syscontrol.SetQueryEnabledWhenExceedSeries(conf.SelectSpec.EnableWhenExceed)
 	syscontrol.SetIndexReadCachePersistent(conf.Data.IndexReadCachePersistent)
 	syscontrol.SetHierarchicalStorageEnabled(conf.HierarchicalStore.Enabled)
+	syscontrol.SetWriteColdShardEnabled(conf.HierarchicalStore.EnableWriteColdShard)
 
 	s.storageDataPath = conf.Data.DataDir
 	s.metaPath = conf.Data.MetaDir
@@ -139,6 +138,8 @@ func NewServer(c config.Config, info app.ServerInfo, logger *Logger.Logger) (app
 
 	s.sherlockService = sherlock.NewService(conf.Sherlock)
 	s.sherlockService.WithLogger(s.Logger)
+	logstore.InitializeVlmCache()
+	logstore.StartHotDataDetector()
 
 	return s, nil
 }
@@ -170,7 +171,7 @@ func (s *Server) Open() error {
 	}
 	_ = metaclient.NewClient(s.metaPath, false, 20)
 	commHttpHandler := httpserver.NewHandler(s.config.HTTPD.AuthEnabled, "")
-	nid, clock, connId, err := commHttpHandler.MetaClient.InitMetaClient(s.metaNodes, false, &storageNodeInfo, s.config.Common.NodeRole)
+	nid, clock, connId, err := commHttpHandler.MetaClient.InitMetaClient(s.metaNodes, false, &storageNodeInfo, nil, s.config.Common.NodeRole, metaclient.STORE)
 	if err != nil {
 		panic(err)
 	}
@@ -190,7 +191,14 @@ func (s *Server) Open() error {
 	}
 
 	s.metaClient = metaclient.DefaultMetaClient
-	s.metaClient.OpenAtStore() // wait for ts-meta to be ready
+	if s.config.Meta.UseIncSyncData {
+		if c, ok := s.metaClient.(*metaclient.Client); ok {
+			c.EnableUseSnapshotV2(s.config.Meta.RetentionAutoCreate, s.config.Meta.ExpandShardsEnable)
+		}
+	}
+	if err := s.metaClient.OpenAtStore(); err != nil {
+		panic(err)
+	} // wait for ts-meta to be ready
 
 	log := Logger.GetLogger()
 	s.storage, err = storage.OpenStorage(s.storageDataPath, s.node, s.metaClient.(*metaclient.Client), s.config)
@@ -231,7 +239,7 @@ func (s *Server) Open() error {
 	}
 	s.iodetector = iodetector.OpenIODetection(s.config.IODetector)
 	if role := s.info.App; s.config.HTTPD.FlightEnabled && (role == config.AppSingle || role == config.AppData) {
-		services.SetStorageEngine(s.storage)
+		services.SetStorageEngine(s.stream)
 	}
 	return err
 }

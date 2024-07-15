@@ -101,6 +101,27 @@ func (c *CreateNodeCallback) Handle(data interface{}) error {
 	return nil
 }
 
+type CreateSqlNodeCallback struct {
+	BaseCallback
+
+	NodeStartInfo *meta.NodeStartInfo
+}
+
+func (c *CreateSqlNodeCallback) Handle(data interface{}) error {
+	metaMsg, err := c.Trans2MetaMsg(data)
+	if err != nil {
+		return err
+	}
+	msg, ok := metaMsg.Data().(*message.CreateSqlNodeResponse)
+	if !ok {
+		return errors.New("data is not a CreateSqlNodeResponse")
+	}
+	if err = c.NodeStartInfo.UnMarshalBinary(msg.Data); err != nil {
+		return err
+	}
+	return nil
+}
+
 type SnapshotCallback struct {
 	BaseCallback
 
@@ -115,6 +136,28 @@ func (c *SnapshotCallback) Handle(data interface{}) error {
 	msg, ok := metaMsg.Data().(*message.SnapshotResponse)
 	if !ok {
 		return errors.New("data is not a SnapshotResponse")
+	}
+	if msg.Err != "" {
+		return errors.New(msg.Err)
+	}
+	c.Data = msg.Data
+	return nil
+}
+
+type SnapshotV2Callback struct {
+	BaseCallback
+
+	Data []byte
+}
+
+func (c *SnapshotV2Callback) Handle(data interface{}) error {
+	metaMsg, err := c.Trans2MetaMsg(data)
+	if err != nil {
+		return err
+	}
+	msg, ok := metaMsg.Data().(*message.SnapshotV2Response)
+	if !ok {
+		return errors.New("data is not a SnapshotV2Response")
 	}
 	if msg.Err != "" {
 		return errors.New(msg.Err)

@@ -21,7 +21,6 @@ import (
 	"sync"
 	"time"
 
-	query2 "github.com/influxdata/influxdb/query"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/syscontrol"
@@ -49,7 +48,7 @@ type MetaClient interface {
 }
 
 type QueryExecutor interface {
-	ExecuteQuery(query *influxql.Query, opt query.ExecutionOptions, closing chan struct{}, qDuration *statistics.SQLSlowQueryStatistics) <-chan *query2.Result
+	ExecuteQuery(query *influxql.Query, opt query.ExecutionOptions, closing chan struct{}, qDuration *statistics.SQLSlowQueryStatistics) <-chan *query.Result
 }
 
 // Service represents a service for managing continuous queries.
@@ -264,7 +263,7 @@ func (s *Service) ExecuteContinuousQuery(cq *ContinuousQuery, now time.Time) (bo
 }
 
 // runContinuousQueryAndWriteResult will run the query and write the results.
-func (s *Service) runContinuousQueryAndWriteResult(cq *ContinuousQuery) *query2.Result {
+func (s *Service) runContinuousQueryAndWriteResult(cq *ContinuousQuery) *query.Result {
 	// Wrap the CQ's inner SELECT statement in a Query for the Executor.
 	q := &influxql.Query{
 		Statements: influxql.Statements([]influxql.Statement{cq.source}),

@@ -23,8 +23,6 @@ import (
 	"time"
 
 	"github.com/hashicorp/raft"
-	originql "github.com/influxdata/influxql"
-	"github.com/openGemini/openGemini/lib/config"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
 	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
@@ -39,6 +37,10 @@ func (fsm *storeFSM) ApplyBatch(logs []*raft.Log) []interface{} {
 	var dataChanged bool
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if fsm.UseIncSyncData {
+		s.cacheMu.Lock()
+		defer s.cacheMu.Unlock()
+	}
 	ret := make([]interface{}, len(logs))
 	for i := range logs {
 		switch logs[i].Type {
@@ -56,6 +58,7 @@ func (fsm *storeFSM) ApplyBatch(logs []*raft.Log) []interface{} {
 		ret[i] = fsm.executeCmd(cmd)
 		if ret[i] == nil {
 			dataChanged = true
+			fsm.data.AddCmdAsOpToOpMap(cmd, logs[i].Index)
 		}
 	}
 
@@ -80,6 +83,10 @@ func (fsm *storeFSM) Apply(l *raft.Log) interface{} {
 	s := (*Store)(fsm)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if fsm.UseIncSyncData {
+		s.cacheMu.Lock()
+		defer s.cacheMu.Unlock()
+	}
 	fsm.Logger.Info(fmt.Sprintf("Apply log term %d index %d type %d", l.Term, l.Index, int32(cmd.GetType())))
 	err := fsm.executeCmd(cmd)
 
@@ -90,6 +97,7 @@ func (fsm *storeFSM) Apply(l *raft.Log) interface{} {
 	if err != nil {
 		return err
 	}
+	fsm.data.AddCmdAsOpToOpMap(cmd, l.Index)
 	// signal that the data changed
 	close(s.dataChanged)
 	s.dataChanged = make(chan struct{})
@@ -118,6 +126,7 @@ var applyFunc = map[proto2.Command_Type]func(fsm *storeFSM, cmd *proto2.Command)
 	proto2.Command_DeleteMetaNodeCommand:            applyDeleteMetaNode,
 	proto2.Command_SetMetaNodeCommand:               applySetMetaNode,
 	proto2.Command_CreateDataNodeCommand:            applyCreateDataNode,
+	proto2.Command_CreateSqlNodeCommand:             applyCreateSqlNode,
 	proto2.Command_DeleteDataNodeCommand:            applyDeleteDataNode,
 	proto2.Command_MarkDatabaseDeleteCommand:        applyMarkDatabaseDelete,
 	proto2.Command_MarkRetentionPolicyDeleteCommand: applyMarkRetentionPolicyDelete,
@@ -131,6 +140,7 @@ var applyFunc = map[proto2.Command_Type]func(fsm *storeFSM, cmd *proto2.Command)
 	proto2.Command_DeleteIndexGroupCommand:          applyDeleteIndexGroup,
 	proto2.Command_UpdateShardInfoTierCommand:       applyUpdateShardInfoTier,
 	proto2.Command_UpdateNodeStatusCommand:          applyUpdateNodeStatus,
+	proto2.Command_UpdateSqlNodeStatusCommand:       applyUpdateSqlNodeStatus,
 	proto2.Command_CreateEventCommand:               applyCreateEvent,
 	proto2.Command_UpdateEventCommand:               applyUpdateEvent,
 	proto2.Command_UpdatePtInfoCommand:              applyUpdatePtInfo,
@@ -155,6 +165,8 @@ var applyFunc = map[proto2.Command_Type]func(fsm *storeFSM, cmd *proto2.Command)
 	proto2.Command_RemoveNodeCommand:                applyRemoveNodeCommand,
 	proto2.Command_UpdateReplicationCommand:         applyUpdateReplicationCommand,
 	proto2.Command_UpdateMeasurementCommand:         applyUpdateMeasurement,
+	proto2.Command_UpdateNodeTmpIndexCommand:        applyUpdateNodeTmpIndexCommand,
+	proto2.Command_InsertFilesCommand:               applyInsertFilesCommand,
 }
 
 func applyCreateDatabase(fsm *storeFSM, cmd *proto2.Command) interface{} {
@@ -237,6 +249,10 @@ func applyCreateDataNode(fsm *storeFSM, cmd *proto2.Command) interface{} {
 	return fsm.applyCreateDataNodeCommand(cmd)
 }
 
+func applyCreateSqlNode(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyCreateSqlNodeCommand(cmd)
+}
+
 func applyDeleteDataNode(fsm *storeFSM, cmd *proto2.Command) interface{} {
 	return fsm.applyDeleteDataNodeCommand(cmd)
 }
@@ -287,6 +303,10 @@ func applyUpdateShardInfoTier(fsm *storeFSM, cmd *proto2.Command) interface{} {
 
 func applyUpdateNodeStatus(fsm *storeFSM, cmd *proto2.Command) interface{} {
 	return fsm.applyUpdateNodeStatusCommand(cmd)
+}
+
+func applyUpdateSqlNodeStatus(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyUpdateSqlNodeStatusCommand(cmd)
 }
 
 func applyCreateEvent(fsm *storeFSM, cmd *proto2.Command) interface{} {
@@ -385,74 +405,44 @@ func applyUpdateMeasurement(fsm *storeFSM, cmd *proto2.Command) interface{} {
 	return fsm.applyUpdateMeasurementCommand(cmd)
 }
 
+func applyUpdateNodeTmpIndexCommand(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyUpdateNodeTmpIndexCommand(cmd)
+}
+
+func applyInsertFilesCommand(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyInsertFilesCommand(cmd)
+}
+
 func (fsm *storeFSM) executeCmd(cmd proto2.Command) interface{} {
 	if handler, ok := applyFunc[cmd.GetType()]; ok {
 		return handler(fsm, &cmd)
 	}
-	panic(fmt.Errorf("cannot apply command: %x", cmd.GetType()))
+	fsm.Logger.Error("cannot apply command: %x", zap.Int32("typ", int32(cmd.GetType())))
+	return nil
 }
 
 func (fsm *storeFSM) applyReShardingCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_ReShardingCommand_Command)
-	v := ext.(*proto2.ReShardingCommand)
-	info := &meta2.ReShardingInfo{
-		Database:     v.GetDatabase(),
-		Rp:           v.GetRpName(),
-		ShardGroupID: v.GetShardGroupID(),
-		SplitTime:    v.GetSplitTime(),
-		Bounds:       v.GetShardBounds(),
-	}
-	return fsm.data.ReSharding(info)
+	return meta2.ApplyReSharding(fsm.data, cmd)
 }
 
 func (fsm *storeFSM) applyUpdateSchemaCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_UpdateSchemaCommand_Command)
-	v, ok := ext.(*proto2.UpdateSchemaCommand)
-	if !ok {
-		panic(fmt.Errorf("%s is not a UpdateSchemaCommand", ext))
-	}
-	return fsm.data.UpdateSchema(v.GetDatabase(), v.GetRpName(), v.GetMeasurement(), v.GetFieldToCreate())
+	return meta2.ApplyUpdateSchema(fsm.data, cmd)
 }
 
 func (fsm *storeFSM) applyAlterShardKeyCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_AlterShardKeyCmd_Command)
-	v, ok := ext.(*proto2.AlterShardKeyCmd)
-	if !ok {
-		panic(fmt.Errorf("%s is not a AlterShardKeyCmd", ext))
-	}
-	return fsm.data.AlterShardKey(v.GetDBName(), v.GetRpName(), v.GetName(), v.GetSki())
+	return meta2.ApplyAlterShardKey(fsm.data, cmd)
 }
 
 func (fsm *storeFSM) applyMarkMeasurementDeleteCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_MarkMeasurementDeleteCommand_Command)
-	v, ok := ext.(*proto2.MarkMeasurementDeleteCommand)
-	if !ok {
-		panic(fmt.Errorf("%s is not a MarkMeasurementDeleteCommand", ext))
-	}
-	return fsm.data.MarkMeasurementDelete(v.GetDatabase(), v.GetPolicy(), v.GetMeasurement())
+	return meta2.ApplyMarkMeasurementDelete(fsm.data, cmd)
 }
 
 func (fsm *storeFSM) applyDropMeasurementCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_DropMeasurementCommand_Command)
-	v, ok := ext.(*proto2.DropMeasurementCommand)
-	if !ok {
-		panic(fmt.Errorf("%s is not a DropMeasurementCommand", ext))
-	}
-	return fsm.data.DropMeasurement(v.GetDatabase(), v.GetPolicy(), v.GetMeasurement())
+	return meta2.ApplyDropMeasurement(fsm.data, cmd)
 }
 
 func (fsm *storeFSM) applyCreateDbPtViewCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_CreateDbPtViewCommand_Command)
-	v, ok := ext.(*proto2.CreateDbPtViewCommand)
-	if !ok {
-		panic(fmt.Errorf("%s is not a CreateDbPtViewCommand", ext))
-	}
-
-	if err := fsm.data.CreateDBPtView(v.GetDbName()); err != nil {
-		return err
-	}
-
-	return fsm.data.CreateReplication(v.GetDbName(), v.GetReplicaNum())
+	return meta2.ApplyCreateDbPtViewCommand(fsm.data, cmd)
 }
 
 func (fsm *storeFSM) applyCreateDatabaseCommand(cmd *proto2.Command) interface{} {
@@ -484,6 +474,18 @@ func (fsm *storeFSM) applyCreateDatabaseCommand(cmd *proto2.Command) interface{}
 		rp.ReplicaN = int(repN)
 		rp.Duration = autoCreateRetentionPolicyPeriod
 		rp.WarmDuration = autoCreateRetentionPolicyWarmPeriod
+		if fsm.UseIncSyncData {
+			pbRN := uint32(rp.ReplicaN)
+			v.RetentionPolicy = &proto2.RetentionPolicyInfo{
+				Name:               &rp.Name,
+				ReplicaN:           &pbRN,
+				Duration:           (*int64)(&rp.Duration),
+				ShardGroupDuration: (*int64)(&rp.ShardGroupDuration),
+				HotDuration:        (*int64)(&rp.HotDuration),
+				WarmDuration:       (*int64)(&rp.WarmDuration),
+				IndexGroupDuration: (*int64)(&rp.IndexGroupDuration),
+			}
+		}
 	}
 
 	err := fsm.data.CreateDatabase(v.GetName(), rp, v.GetSki(), v.GetEnableTagArray(), repN, v.GetOptions())
@@ -492,12 +494,7 @@ func (fsm *storeFSM) applyCreateDatabaseCommand(cmd *proto2.Command) interface{}
 }
 
 func (fsm *storeFSM) applyMarkDatabaseDeleteCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_MarkDatabaseDeleteCommand_Command)
-	v, ok := ext.(*proto2.MarkDatabaseDeleteCommand)
-	if !ok {
-		panic(fmt.Errorf("%s is not a MarkDatabaseDeleteCommand", ext))
-	}
-	return fsm.data.MarkDatabaseDelete(v.GetName())
+	return meta2.ApplyMarkDatabaseDelete(fsm.data, cmd)
 }
 
 func (fsm *storeFSM) applyDropDatabaseCommand(cmd *proto2.Command) interface{} {
@@ -531,34 +528,11 @@ func (fsm *storeFSM) applyDropDatabaseCommand(cmd *proto2.Command) interface{} {
 }
 
 func (fsm *storeFSM) applyCreateMeasurementCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_CreateMeasurementCommand_Command)
-	v, ok := ext.(*proto2.CreateMeasurementCommand)
-	if !ok {
-		panic(fmt.Errorf("%s is not a CreateMeasurementCommand", ext))
-	}
-	return fsm.data.CreateMeasurement(v.GetDBName(), v.GetRpName(), v.GetName(), v.GetSki(), v.GetIR(), config.EngineType(v.GetEngineType()),
-		v.GetColStoreInfo(), v.GetSchemaInfo(), v.GetOptions())
+	return meta2.ApplyCreateMeasurement(fsm.data, cmd)
 }
 
 func (fsm *storeFSM) applyCreateRetentionPolicyCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_CreateRetentionPolicyCommand_Command)
-	v, ok := ext.(*proto2.CreateRetentionPolicyCommand)
-	if !ok {
-		panic(fmt.Errorf("%s is not a CreateRetentionPolicyCommand", ext))
-	}
-	pb := v.GetRetentionPolicy()
-
-	rpi := &meta2.RetentionPolicyInfo{
-		Name:               pb.GetName(),
-		ReplicaN:           int(pb.GetReplicaN()),
-		Duration:           time.Duration(pb.GetDuration()),
-		ShardGroupDuration: time.Duration(pb.GetShardGroupDuration()),
-		HotDuration:        time.Duration(pb.GetHotDuration()),
-		WarmDuration:       time.Duration(pb.GetWarmDuration()),
-		IndexGroupDuration: time.Duration(pb.GetIndexGroupDuration()),
-	}
-
-	return fsm.data.CreateRetentionPolicy(v.GetDatabase(), rpi, v.GetDefaultRP())
+	return meta2.ApplyCreateRetentionPolicy(fsm.data, cmd)
 }
 
 func (fsm *storeFSM) applyCreateContinuousQueryCommand(cmd *proto2.Command) interface{} {
@@ -577,13 +551,7 @@ func (fsm *storeFSM) applyCreateContinuousQueryCommand(cmd *proto2.Command) inte
 }
 
 func (fsm *storeFSM) applyContinuousQueryReportCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_ContinuousQueryReportCommand_Command)
-	v, ok := ext.(*proto2.ContinuousQueryReportCommand)
-	if !ok {
-		panic(fmt.Errorf("%s is not a ContinuousQueryReportCommand", ext))
-	}
-
-	return fsm.data.BatchUpdateContinuousQueryStat(v.GetCQStates())
+	return meta2.ApplyContinuousQueryReport(fsm.data, cmd)
 }
 
 func (fsm *storeFSM) applyDropContinuousQueryCommand(cmd *proto2.Command) interface{} {
@@ -614,118 +582,63 @@ func (fsm *storeFSM) applyNotifyCQLeaseChangedCommand(cmd *proto2.Command) inter
 }
 
 func (fsm *storeFSM) applyDropRetentionPolicyCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_DropRetentionPolicyCommand_Command)
-	v := ext.(*proto2.DropRetentionPolicyCommand)
-	return fsm.data.DropRetentionPolicy(v.GetDatabase(), v.GetName())
+	return meta2.ApplyDropRetentionPolicy(fsm.data, cmd)
 }
 
 func (fsm *storeFSM) applyMarkRetentionPolicyDeleteCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_MarkRetentionPolicyDeleteCommand_Command)
-	v := ext.(*proto2.MarkRetentionPolicyDeleteCommand)
-	return fsm.data.MarkRetentionPolicyDelete(v.GetDatabase(), v.GetName())
+	return meta2.ApplyMarkRetentionPolicyDelete(fsm.data, cmd)
 }
 
 func (fsm *storeFSM) applySetDefaultRetentionPolicyCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_SetDefaultRetentionPolicyCommand_Command)
-	v := ext.(*proto2.SetDefaultRetentionPolicyCommand)
-	return fsm.data.SetDefaultRetentionPolicy(v.GetDatabase(), v.GetName())
+	return meta2.ApplySetDefaultRetentionPolicy(fsm.data, cmd)
 }
 
 func (fsm *storeFSM) applyUpdateRetentionPolicyCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_UpdateRetentionPolicyCommand_Command)
-	v := ext.(*proto2.UpdateRetentionPolicyCommand)
-
-	// Create update object.
-	rpu := meta2.RetentionPolicyUpdate{Name: v.NewName}
-	rpu.Duration = meta2.GetDuration(v.Duration)
-	rpu.HotDuration = meta2.GetDuration(v.HotDuration)
-	if v.WarmDuration != nil {
-		value := time.Duration(v.GetWarmDuration())
-		rpu.WarmDuration = &value
-	}
-	rpu.IndexGroupDuration = meta2.GetDuration(v.IndexGroupDuration)
-	rpu.ShardGroupDuration = meta2.GetDuration(v.ShardGroupDuration)
-	if v.ReplicaN != nil {
-		value := int(v.GetReplicaN())
-		rpu.ReplicaN = &value
-	}
-	return fsm.data.UpdateRetentionPolicy(v.GetDatabase(), v.GetName(), &rpu, v.GetMakeDefault())
+	return meta2.ApplyUpdateRetentionPolicy(fsm.data, cmd)
 }
 
 func (fsm *storeFSM) applyCreateShardGroupCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_CreateShardGroupCommand_Command)
-	v := ext.(*proto2.CreateShardGroupCommand)
-	return fsm.data.CreateShardGroup(v.GetDatabase(), v.GetPolicy(), time.Unix(0, v.GetTimestamp()), v.GetShardTier(),
-		config.EngineType(v.GetEngineType()), v.GetVersion())
+	return meta2.ApplyCreateShardGroup(fsm.data, cmd)
 }
 
 func (fsm *storeFSM) applyDeleteShardGroupCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_DeleteShardGroupCommand_Command)
-	v := ext.(*proto2.DeleteShardGroupCommand)
-	return fsm.data.DeleteShardGroup(v.GetDatabase(), v.GetPolicy(), v.GetShardGroupID())
+	return meta2.ApplyDeleteShardGroup(fsm.data, cmd)
 }
 
 func (fsm *storeFSM) applyDeleteIndexGroupCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_DeleteIndexGroupCommand_Command)
-	v := ext.(*proto2.DeleteIndexGroupCommand)
-	return fsm.data.DeleteIndexGroup(v.GetDatabase(), v.GetPolicy(), v.GetIndexGroupID())
+	return meta2.ApplyDeleteIndexGroup(fsm.data, cmd)
 }
 
 func (fsm *storeFSM) applyPruneGroupsCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_PruneGroupsCommand_Command)
-	v := ext.(*proto2.PruneGroupsCommand)
-	return fsm.data.PruneGroups(v.GetShardGroup(), v.GetID())
+	return meta2.ApplyPruneGroups(fsm.data, cmd)
 }
 
 func (fsm *storeFSM) applyCreateSubscriptionCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_CreateSubscriptionCommand_Command)
-	v := ext.(*proto2.CreateSubscriptionCommand)
-	return fsm.data.CreateSubscription(v.GetDatabase(), v.GetRetentionPolicy(), v.GetName(), v.GetMode(), v.GetDestinations())
+	return meta2.ApplyCreateSubscription(fsm.data, cmd)
 }
 
 func (fsm *storeFSM) applyDropSubscriptionCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_DropSubscriptionCommand_Command)
-	v := ext.(*proto2.DropSubscriptionCommand)
-	return fsm.data.DropSubscription(v.GetDatabase(), v.GetRetentionPolicy(), v.GetName())
+	return meta2.ApplyDropSubscription(fsm.data, cmd)
 }
 
 func (fsm *storeFSM) applyCreateUserCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_CreateUserCommand_Command)
-	v := ext.(*proto2.CreateUserCommand)
-	err := fsm.data.CreateUser(v.GetName(), v.GetHash(), v.GetAdmin(), v.GetRwUser())
-	fsm.Logger.Info("apply create user command", zap.String("userID", v.GetName()), zap.Error(err))
-	return err
+	return meta2.ApplyCreateUser(fsm.data, cmd)
 }
 
 func (fsm *storeFSM) applyDropUserCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_DropUserCommand_Command)
-	v := ext.(*proto2.DropUserCommand)
-	err := fsm.data.DropUser(v.GetName())
-	fsm.Logger.Info("apply drop user command", zap.String("userID", v.GetName()), zap.Error(err))
-	return err
+	return meta2.ApplyDropUser(fsm.data, cmd)
 }
 
 func (fsm *storeFSM) applyUpdateUserCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_UpdateUserCommand_Command)
-	v := ext.(*proto2.UpdateUserCommand)
-	return fsm.data.UpdateUser(v.GetName(), v.GetHash())
+	return meta2.ApplyUpdateUser(fsm.data, cmd)
 }
 
 func (fsm *storeFSM) applySetPrivilegeCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_SetPrivilegeCommand_Command)
-	v := ext.(*proto2.SetPrivilegeCommand)
-	err := fsm.data.SetPrivilege(v.GetUsername(), v.GetDatabase(), originql.Privilege(v.GetPrivilege()))
-	fsm.Logger.Info("apply set privilege command", zap.String("userID", v.GetUsername()),
-		zap.String("db", v.GetDatabase()), zap.Int32("privilege", v.GetPrivilege()), zap.Error(err))
-	return err
+	return meta2.ApplySetPrivilege(fsm.data, cmd)
 }
 
 func (fsm *storeFSM) applySetAdminPrivilegeCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_SetAdminPrivilegeCommand_Command)
-	v := ext.(*proto2.SetAdminPrivilegeCommand)
-	err := fsm.data.SetAdminPrivilege(v.GetUsername(), v.GetAdmin())
-	fsm.Logger.Info("apply set admin privilege command", zap.String("userID", v.GetUsername()), zap.Error(err))
-	return err
+	return meta2.ApplySetAdminPrivilege(fsm.data, cmd)
 }
 
 func (fsm *storeFSM) applySetDataCommand(cmd *proto2.Command) interface{} {
@@ -740,59 +653,42 @@ func (fsm *storeFSM) applySetDataCommand(cmd *proto2.Command) interface{} {
 }
 
 func (fsm *storeFSM) applyCreateMetaNodeCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_CreateMetaNodeCommand_Command)
-	v := ext.(*proto2.CreateMetaNodeCommand)
-
-	err := fsm.data.CreateMetaNode(v.GetHTTPAddr(), v.GetRPCAddr(), v.GetTCPAddr())
-	if err != nil {
-		return err
-	}
-	fsm.data.ClusterID = v.GetRand()
-	return nil
+	return meta2.ApplyCreateMetaNode(fsm.data, cmd)
 }
 
 func (fsm *storeFSM) applySetMetaNodeCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_SetMetaNodeCommand_Command)
-	v := ext.(*proto2.SetMetaNodeCommand)
-	err := fsm.data.SetMetaNode(v.GetHTTPAddr(), v.GetRPCAddr(), v.GetTCPAddr())
-	if err != nil {
-		return err
-	}
-
-	// If the cluster ID hasn't been set then use the command's random number.
-	if fsm.data.ClusterID == 0 {
-		fsm.data.ClusterID = v.GetRand()
-	}
-
-	return nil
+	return meta2.ApplySetMetaNode(fsm.data, cmd)
 }
 
 func (fsm *storeFSM) applyDeleteMetaNodeCommand(cmd *proto2.Command, s *Store) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_DeleteMetaNodeCommand_Command)
-	v := ext.(*proto2.DeleteMetaNodeCommand)
-	return fsm.data.DeleteMetaNode(v.GetID())
+	return meta2.ApplyDeleteMetaNode(fsm.data, cmd)
 }
 
 func (fsm *storeFSM) applyCreateDataNodeCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_CreateDataNodeCommand_Command)
-	v := ext.(*proto2.CreateDataNodeCommand)
+	fsm.data.ExpandShardsEnable = fsm.config.ExpandShardsEnable
+	return meta2.ApplyCreateDataNode(fsm.data, cmd)
+}
 
-	dataNode := fsm.data.DataNodeByHttpHost(v.GetHTTPAddr())
-	if dataNode != nil {
+func (fsm *storeFSM) applyCreateSqlNodeCommand(cmd *proto2.Command) interface{} {
+	ext, _ := proto.GetExtension(cmd, proto2.E_CreateSqlNodeCommand_Command)
+	v, ok := ext.(*proto2.CreateSqlNodeCommand)
+	if !ok {
+		panic(fmt.Errorf("%s is not a CreateSqlNodeCommand", ext))
+	}
+	sqlNode := fsm.data.SqlNodeByHttpHost(v.GetHTTPAddr())
+	if sqlNode != nil {
 		fsm.data.MaxConnID++
-		dataNode.ConnID = fsm.data.MaxConnID
+		sqlNode.ConnID = fsm.data.MaxConnID
 		return nil
 	}
 
 	fsm.data.ExpandShardsEnable = fsm.config.ExpandShardsEnable
-	err, _ := fsm.data.CreateDataNode(v.GetHTTPAddr(), v.GetTCPAddr(), v.GetRole())
+	_, err := fsm.data.CreateSqlNode(v.GetHTTPAddr(), v.GetGossipAddr())
 	return err
 }
 
 func (fsm *storeFSM) applyDeleteDataNodeCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_DeleteDataNodeCommand_Command)
-	v := ext.(*proto2.DeleteDataNodeCommand)
-	return fsm.data.DeleteDataNode(v.GetID())
+	return meta2.ApplyDeleteDataNode(fsm.data, cmd)
 }
 
 func (fsm *storeFSM) Snapshot() (raft.FSMSnapshot, error) {
@@ -804,15 +700,20 @@ func (fsm *storeFSM) Snapshot() (raft.FSMSnapshot, error) {
 }
 
 func (fsm *storeFSM) applyUpdateShardInfoTierCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_UpdateShardInfoTierCommand_Command)
-	v := ext.(*proto2.UpdateShardInfoTierCommand)
-	return fsm.data.UpdateShardInfoTier(v.GetShardID(), v.GetTier(), v.GetDbName(), v.GetRpName())
+	return meta2.ApplyUpdateShardInfoTier(fsm.data, cmd)
 }
 
 func (fsm *storeFSM) applyUpdateNodeStatusCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_UpdateNodeStatusCommand_Command)
-	v := ext.(*proto2.UpdateNodeStatusCommand)
-	return fsm.data.UpdateNodeStatus(v.GetID(), v.GetStatus(), v.GetLtime(), v.GetGossipAddr())
+	return meta2.ApplyUpdateNodeStatus(fsm.data, cmd)
+}
+
+func (fsm *storeFSM) applyUpdateSqlNodeStatusCommand(cmd *proto2.Command) interface{} {
+	ext, _ := proto.GetExtension(cmd, proto2.E_UpdateSqlNodeStatusCommand_Command)
+	v, ok := ext.(*proto2.UpdateSqlNodeStatusCommand)
+	if !ok {
+		panic(fmt.Errorf("%s is not a UpdateSqlNodeStatusCommand", ext))
+	}
+	return fsm.data.UpdateSqlNodeStatus(v.GetID(), v.GetStatus(), v.GetLtime(), v.GetGossipAddr())
 }
 
 func (fsm *storeFSM) applyCreateEventCommand(cmd *proto2.Command) interface{} {
@@ -828,9 +729,7 @@ func (fsm *storeFSM) applyUpdateEventCommand(cmd *proto2.Command) interface{} {
 }
 
 func (fsm *storeFSM) applyUpdatePtInfoCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_UpdatePtInfoCommand_Command)
-	v := ext.(*proto2.UpdatePtInfoCommand)
-	return fsm.data.UpdatePtInfo(v.GetDb(), v.GetPt(), v.GetOwnerNode(), v.GetStatus())
+	return meta2.ApplyUpdatePtInfo(fsm.data, cmd)
 }
 
 func (fsm *storeFSM) applyRemoveEvent(cmd *proto2.Command) interface{} {
@@ -840,22 +739,11 @@ func (fsm *storeFSM) applyRemoveEvent(cmd *proto2.Command) interface{} {
 }
 
 func (fsm *storeFSM) applyCreateStream(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_CreateStreamCommand_Command)
-	v := ext.(*proto2.CreateStreamCommand)
-	pb := v.GetStreamInfo()
-
-	rpi := &meta2.StreamInfo{}
-	rpi.Unmarshal(pb)
-
-	return fsm.data.CreateStream(rpi)
+	return meta2.ApplyCreateStream(fsm.data, cmd)
 }
 
 func (fsm *storeFSM) applyDropStream(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_DropStreamCommand_Command)
-	v := ext.(*proto2.DropStreamCommand)
-	name := v.GetName()
-
-	return fsm.data.DropStream(name)
+	return meta2.ApplyDropStream(fsm.data, cmd)
 }
 
 func (fsm *storeFSM) applyExpandGroupsCommand(cmd *proto2.Command) interface{} {
@@ -864,13 +752,7 @@ func (fsm *storeFSM) applyExpandGroupsCommand(cmd *proto2.Command) interface{} {
 }
 
 func (fsm *storeFSM) applyUpdatePtVersionCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_UpdatePtVersionCommand_Command)
-	v, ok := ext.(*proto2.UpdatePtVersionCommand)
-	if !ok {
-		panic(fmt.Errorf("%s is not a UpdatePtVersionCommand", ext))
-	}
-	_ = fsm.data.UpdatePtVersion(v.GetDb(), v.GetPt())
-	return nil
+	return meta2.ApplyUpdatePtVersion(fsm.data, cmd)
 }
 
 func (fsm *storeFSM) Restore(r io.ReadCloser) error {
@@ -883,7 +765,9 @@ func (fsm *storeFSM) Restore(r io.ReadCloser) error {
 	if err = data.UnmarshalBinary(b); err != nil {
 		return err
 	}
-
+	if fsm.UseIncSyncData {
+		data.SetOps(fsm.data)
+	}
 	fsm.data = data
 	fsm.restoreCQNames()
 
@@ -902,34 +786,15 @@ func (fsm *storeFSM) restoreCQNames() {
 }
 
 func (fsm *storeFSM) applyCreateDownSampleCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_CreateDownSamplePolicyCommand_Command)
-	v := ext.(*proto2.CreateDownSamplePolicyCommand)
-	pb := v.GetDownSamplePolicyInfo()
-
-	rpi := &meta2.DownSamplePolicyInfo{}
-	rpi.Unmarshal(pb)
-	if rpi.IsNil() {
-		rpi = nil
-	}
-
-	return fsm.data.CreateDownSamplePolicy(v.GetDatabase(), v.GetName(), rpi)
+	return meta2.ApplyCreateDownSample(fsm.data, cmd)
 }
 
 func (fsm *storeFSM) applyDropDownSampleCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_DropDownSamplePolicyCommand_Command)
-	v := ext.(*proto2.DropDownSamplePolicyCommand)
-
-	fsm.data.DropDownSamplePolicy(v.GetDatabase(), v.GetRpName(), v.GetDropAll())
-	return nil
+	return meta2.ApplyDropDownSample(fsm.data, cmd)
 }
 
 func (fsm *storeFSM) applyUpdateShardDownSampleInfoCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_UpdateShardDownSampleInfoCommand_Command)
-	v := ext.(*proto2.UpdateShardDownSampleInfoCommand)
-
-	ident := &meta2.ShardIdentifier{}
-	ident.Unmarshal(v.GetIdent())
-	return fsm.data.UpdateShardDownSampleInfo(ident)
+	return meta2.ApplyUpdateShardDownSampleInfo(fsm.data, cmd)
 }
 
 func (fsm *storeFSM) applyMarkTakeoverCommand(cmd *proto2.Command) interface{} {
@@ -949,57 +814,51 @@ func (fsm *storeFSM) applyMarkBalancerCommand(cmd *proto2.Command) interface{} {
 }
 
 func (fsm *storeFSM) applyRegisterQueryIDOffsetCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_RegisterQueryIDOffsetCommand_Command)
-	v, ok := ext.(*proto2.RegisterQueryIDOffsetCommand)
-	if !ok {
-		panic(fmt.Errorf("%s is not a RegisterQueryIDOffsetCommand", ext))
-	}
-	err := fsm.data.RegisterQueryIDOffset(meta2.SQLHost(v.GetHost()))
-	return err
+	return meta2.ApplyRegisterQueryIDOffset(fsm.data, cmd)
 }
 
 func (fsm *storeFSM) applySetNodeSegregateStatusCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_SetNodeSegregateStatusCommand_Command)
-	v, ok := ext.(*proto2.SetNodeSegregateStatusCommand)
-	if !ok {
-		panic(fmt.Errorf("%s is not a SetNodeSegregateStatusCommand", ext))
-	}
-	nodeIds := v.GetNodeIds()
-	status := v.GetStatus()
-	fsm.data.SetSegregateNodeStatus(status, nodeIds)
-	return nil
+	return meta2.ApplySetNodeSegregateStatus(fsm.data, cmd)
 }
 
 func (fsm *storeFSM) applyRemoveNodeCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_RemoveNodeCommand_Command)
-	v, ok := ext.(*proto2.RemoveNodeCommand)
-	if !ok {
-		panic(fmt.Errorf("%s is not a RemoveNodeCommand", ext))
-	}
-	nodeIds := v.GetNodeIds()
-	fsm.data.RemoveNode(nodeIds)
-	return nil
+	return meta2.ApplyRemoveNode(fsm.data, cmd)
 }
 
 func (fsm *storeFSM) applyUpdateReplicationCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_UpdateReplicationCommand_Command)
-	v, ok := ext.(*proto2.UpdateReplicationCommand)
-	if !ok {
-		panic(fmt.Errorf("%s is not a UpdateReplicationCommand", ext))
-	}
-	db := v.GetDatabase()
-	rgId := v.GetRepGroupId()
-	peers := v.GetPeers()
-	masterId := v.GetMasterId()
-	rgStatus := v.GetRgStatus()
-	return fsm.data.UpdateReplication(db, rgId, masterId, peers, rgStatus)
+	return meta2.ApplyUpdateReplication(fsm.data, cmd)
 }
 
 func (fsm *storeFSM) applyUpdateMeasurementCommand(cmd *proto2.Command) interface{} {
-	ext, _ := proto.GetExtension(cmd, proto2.E_UpdateMeasurementCommand_Command)
-	v, ok := ext.(*proto2.UpdateMeasurementCommand)
+	return meta2.ApplyUpdateMeasurement(fsm.data, cmd)
+}
+
+func (fsm *storeFSM) applyUpdateNodeTmpIndexCommand(cmd *proto2.Command) interface{} {
+	ext, _ := proto.GetExtension(cmd, proto2.E_UpdateNodeTmpIndexCommand_Command)
+	v, ok := ext.(*proto2.UpdateNodeTmpIndexCommand)
 	if !ok {
-		panic(fmt.Errorf("%s is not a UpdateMeasurementCommand", ext))
+		panic(fmt.Errorf("%s is not a UpdateNodeTmpIndexCommand", ext))
 	}
-	return fsm.data.UpdateMeasurement(v.GetDb(), v.GetRp(), v.GetMst(), v.GetOptions())
+	return fsm.data.UpdateNodeTmpIndex(v.GetRole(), v.GetIndex(), v.GetNodeId())
+}
+
+func (fsm *storeFSM) applyInsertFilesCommand(cmd *proto2.Command) interface{} {
+	ext, _ := proto.GetExtension(cmd, proto2.E_InsertFilesCommand_Command)
+	v, ok := ext.(*proto2.InsertFilesCommand)
+	if !ok {
+		panic(fmt.Errorf("%s is not a InsertFilesCommand", ext))
+	}
+	if fsm.data.SQLite == nil {
+		return fmt.Errorf("not support to InsertFiles while SQLite is not initialized")
+	}
+	fileNum := len(v.GetFileInfos())
+	if fileNum == 0 {
+		return nil
+	}
+	fileInfos := make([]meta2.FileInfo, fileNum)
+	for i, file := range v.GetFileInfos() {
+		fileInfos[i].Unmarshal(file)
+	}
+
+	return fsm.data.SQLite.InsertFiles(fileInfos, nil)
 }

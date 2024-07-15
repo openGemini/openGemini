@@ -16,36 +16,25 @@ limitations under the License.
 package obs
 
 import (
-	"os"
+	"fmt"
 	"path"
-	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/influxdata/influxdb/services/meta"
-	"github.com/openGemini/openGemini/lib/fileops"
+	"github.com/openGemini/openGemini/lib/errno"
 )
 
-func OpenObsFile(path, fileName string, obsOpts *ObsOptions) (fileops.File, error) {
-	var obsPath string
-	if obsOpts != nil {
-		path = filepath.Join(obsOpts.BasePath, path, fileName)
-		obsPath = fileops.EncodeObsPath(obsOpts.Endpoint, obsOpts.BucketName, path, obsOpts.Ak, obsOpts.Sk)
-	} else {
-		obsPath = filepath.Join(path, fileName)
-	}
-	fd, err := fileops.OpenFile(obsPath, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0640)
-	if err != nil {
-		return nil, err
-	}
-	return fd, nil
-}
+var PrefixDataPath string
 
 const (
 	shardSeparator     = "_"
 	pathSeparator      = "/"
 	StoreDirName       = "data"
 	ColumnStoreDirName = "columnstore"
+	ObsFileSuffix      = ".obs"
+	ObsFileTmpSuffix   = ".init"
 )
 
 // "data/dbName/ptID/rpName/shardId_startTime_endTime_indexId/columnstore"
@@ -65,4 +54,68 @@ func GetBaseMstPath(shardPath, mstName string) string {
 // "localDataPath/data/dbName/ptID/rpName/shardId_startTime_endTime_indexId/columnstore/mstName"
 func GetLocalMstPath(localPath, mstPath string) string {
 	return path.Join(localPath, mstPath)
+}
+
+func SetPrefixDataPath(dataPath string) {
+	PrefixDataPath = dataPath
+}
+
+func GetPrefixDataPath() string {
+	return PrefixDataPath
+}
+
+func Join(elem ...string) string {
+	for i, e := range elem {
+		if e != "" {
+			return path.Clean(strings.Join(elem[i:], pathSeparator))
+		}
+	}
+	return ""
+}
+
+type LogPathInfo struct {
+	RepoName  string
+	LogStream string
+	PtId      uint32
+	ShardId   uint64
+	StartTime int64
+	EndTime   int64
+}
+
+func (info *LogPathInfo) Contains(t int64) bool {
+	return (t >= info.StartTime) && (t < info.EndTime)
+}
+
+// logPath format: "data/dbName/ptID/rpName/shardId_startTime_endTime_indexId/columnstore"
+func ParseLogPath(logPath string) (*LogPathInfo, error) {
+	logPathSplit := strings.Split(logPath, pathSeparator)
+	// according to the format of logpath, it needs to be divided into at least 6 parts
+	if len(logPathSplit) < 6 {
+		return nil, fmt.Errorf("not a standard logstream path: %s", logPath)
+	}
+
+	logInfo := &LogPathInfo{}
+	logInfo.RepoName = logPathSplit[1]
+	ptId, err := strconv.ParseUint(logPathSplit[2], 10, 64)
+	if err != nil {
+		return nil, errno.NewError(errno.InvalidDataDir)
+	}
+	logInfo.PtId = uint32(ptId)
+	logInfo.LogStream = logPathSplit[3]
+
+	shardPathSplit := strings.Split(logPathSplit[4], shardSeparator)
+	logInfo.ShardId, err = strconv.ParseUint(shardPathSplit[0], 10, 64)
+	if err != nil {
+		return nil, errno.NewError(errno.InvalidDataDir)
+	}
+	logInfo.StartTime, err = strconv.ParseInt(shardPathSplit[1], 10, 64)
+	if err != nil {
+		return nil, errno.NewError(errno.InvalidDataDir)
+	}
+	logInfo.EndTime, err = strconv.ParseInt(shardPathSplit[2], 10, 64)
+	if err != nil {
+		return nil, errno.NewError(errno.InvalidDataDir)
+	}
+
+	return logInfo, nil
 }

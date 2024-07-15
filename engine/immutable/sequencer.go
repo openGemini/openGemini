@@ -22,6 +22,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/encoding"
 	"github.com/openGemini/openGemini/lib/numberenc"
 	"github.com/openGemini/openGemini/lib/util"
@@ -36,6 +37,10 @@ type MmsIdTime struct {
 	mu     sync.RWMutex
 	idTime map[uint64]*idInfo
 	sc     *SeriesCounter
+}
+
+func (m *MmsIdTime) Get(id uint64) (int64, int64) {
+	return m.get(id)
 }
 
 func (m *MmsIdTime) get(id uint64) (int64, int64) {
@@ -178,6 +183,10 @@ func (s *Sequencer) getMmsIdTime(name string) *MmsIdTime {
 }
 
 func (s *Sequencer) BatchUpdateCheckTime(p *IdTimePairs, incrRows bool) {
+	if config.GetStoreConfig().UnorderedOnly {
+		return
+	}
+
 	mmsIdTime := s.getMmsIdTime(p.Name)
 	mmsIdTime.batchUpdateCheckTime(p, incrRows)
 }
@@ -218,6 +227,19 @@ func (s *Sequencer) DelMmsIdTime(name string) {
 	}
 
 	s.sc.DecrN(uint64(len(mmsIdTime.idTime)))
+}
+
+func (s *Sequencer) GetMmsIdTime(name string) *MmsIdTime {
+	s.mu.RLock()
+	defer func() {
+		s.mu.RUnlock()
+	}()
+
+	if s.isFree || s.isLoading {
+		return nil
+	}
+
+	return s.mmsIdTime[name]
 }
 
 // IdTimePairs If you change the order of the elements in the structure,
@@ -275,7 +297,7 @@ func (p *IdTimePairs) Reset(name string) {
 
 func (p *IdTimePairs) Marshal(encTimes bool, dst []byte, ctx *encoding.CoderContext) []byte {
 	var err error
-	maxBlock := uint32(DefaultMaxRowsPerSegment4TsStore) * 2
+	maxBlock := uint32(util.DefaultMaxRowsPerSegment4TsStore) * 2
 	rows := uint32(len(p.Tms))
 	blocks := rows / maxBlock
 	if rows%maxBlock > 0 {

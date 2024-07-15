@@ -291,6 +291,10 @@ type ServerInfo struct {
 	BuildTime string
 }
 
+func (si *ServerInfo) StatVersion() string {
+	return fmt.Sprintf("%s-%s:%s-%s", si.Version, si.Branch, si.Commit, si.BuildTime)
+}
+
 func (si *ServerInfo) FullVersion() string {
 	return FullVersion(string(si.App))
 }

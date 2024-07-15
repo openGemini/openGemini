@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/influxdata/influxdb/models"
-	"github.com/influxdata/influxdb/query"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
@@ -125,19 +124,19 @@ func (t *TaskManager) ExecuteStatement(stmt influxql.Statement, ctx *ExecutionCo
 			return err
 		}
 
-		ctx.Send(&query.Result{
+		ctx.Send(&Result{
 			Series: rows,
 		}, seq)
 	case *influxql.KillQueryStatement:
-		var messages []*query.Message
+		var messages []*Message
 		if ctx.ReadOnly {
-			messages = append(messages, query.ReadOnlyWarning(stmt.String()))
+			messages = append(messages, ReadOnlyWarning(stmt.String()))
 		}
 
 		if err := t.executeKillQueryStatement(stmt); err != nil {
 			return err
 		}
-		ctx.Send(&query.Result{
+		ctx.Send(&Result{
 			Messages: messages,
 		}, seq)
 	default:
@@ -212,53 +211,54 @@ func (t *TaskManager) AttachQuery(q *influxql.Query, opt ExecutionOptions, inter
 		return nil, nil, err
 	}
 
-	qid := t.AssignQueryID()
+	queries := make([]*Task, 0, len(q.Statements))
+	qids := make([]uint64, 0, len(q.Statements))
+	for i := 0; i < len(q.Statements); i++ {
+		qid := t.AssignQueryID()
+		qids = append(qids, qid)
+		query := &Task{
+			database:  opt.Database,
+			status:    RunningTask,
+			startTime: time.Now(),
+			closing:   make(chan struct{}),
+			monitorCh: make(chan error),
+		}
+		queries = append(queries, query)
+		query.query = q.Statements[i].String()
 
-	query := &Task{
-		database:  opt.Database,
-		status:    RunningTask,
-		startTime: time.Now(),
-		closing:   make(chan struct{}),
-		monitorCh: make(chan error),
-	}
-	if qStat != nil {
-		query.query = qStat.Query
-	} else {
-		query.query = q.String()
-	}
+		t.mu.Lock()
+		t.queries[qid] = query
+		t.mu.Unlock()
 
-	t.mu.Lock()
-	t.queries[qid] = query
-	t.mu.Unlock()
+		go t.waitForQuery(qid, query.closing, interrupt, query.monitorCh)
+		if t.LogQueriesAfter != 0 {
+			go query.monitor(func(closing <-chan struct{}) error {
+				timer := time.NewTimer(t.LogQueriesAfter)
+				defer timer.Stop()
 
-	go t.waitForQuery(qid, query.closing, interrupt, query.monitorCh)
-	if t.LogQueriesAfter != 0 {
-		go query.monitor(func(closing <-chan struct{}) error {
-			timer := time.NewTimer(t.LogQueriesAfter)
-			defer timer.Stop()
-
-			select {
-			case <-timer.C:
-				t.Logger.Warn("Detected slow query", zap.String("query", query.query),
-					zap.Uint64("qid", qid), zap.String("db", query.database),
-					zap.Duration("threshold", t.LogQueriesAfter))
-			case <-closing:
-			}
-			return nil
-		})
+				select {
+				case <-timer.C:
+					t.Logger.Warn("Detected slow query", zap.String("query", query.query),
+						zap.Uint64("qid", qid), zap.String("db", query.database),
+						zap.Duration("threshold", t.LogQueriesAfter))
+				case <-closing:
+				}
+				return nil
+			})
+		}
 	}
 
 	qCtx := context.Background()
-	qCtx = context.WithValue(qCtx, QueryIDKey, qid)
+	qCtx = context.WithValue(qCtx, QueryIDKey, qids)
 	qCtx = context.WithValue(qCtx, QueryDurationKey, qStat)
 	ctx := &ExecutionContext{
 		Context:          qCtx,
-		QueryID:          qid,
-		task:             query,
+		QueryID:          qids,
+		task:             queries,
 		ExecutionOptions: opt,
 	}
 	ctx.watch()
-	return ctx, func() { t.DetachQuery(qid) }, nil
+	return ctx, func() { t.DetachQuery(qids) }, nil
 }
 
 // KillQuery enters a query into the killed state and closes the channel
@@ -277,18 +277,20 @@ func (t *TaskManager) KillQuery(qid uint64) error {
 
 // DetachQuery removes a query from the query table. If the query is not in the
 // killed state, this will also close the related channel.
-func (t *TaskManager) DetachQuery(qid uint64) error {
+func (t *TaskManager) DetachQuery(qids []uint64) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	query := t.queries[qid]
-	if query == nil {
-		return fmt.Errorf("no such query id: %d", qid)
-	}
+	for _, qid := range qids {
+		query := t.queries[qid]
+		if query == nil {
+			logger.GetLogger().Error("no such query id.", zap.Uint64("query id:", qid))
+			continue
+		}
 
-	query.close()
-	delete(t.queries, qid)
-	return nil
+		query.close()
+		delete(t.queries, qid)
+	}
 }
 
 func (t *TaskManager) tryRegisterQueryIDOffset() error {

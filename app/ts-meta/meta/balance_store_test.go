@@ -35,9 +35,9 @@ func TestSelectDbPtsToMove(t *testing.T) {
 			TakeOverEnabled: true,
 		},
 	}
-	_, n1 := store.data.CreateDataNode("127.0.0.1:8401", "127.0.0.1:8402", "")
-	_, n2 := store.data.CreateDataNode("127.0.0.2:8401", "127.0.0.2:8402", "")
-	_, n3 := store.data.CreateDataNode("127.0.0.3:8401", "127.0.0.3:8402", "")
+	n1, _ := store.data.CreateDataNode("127.0.0.1:8401", "127.0.0.1:8402", "")
+	n2, _ := store.data.CreateDataNode("127.0.0.2:8401", "127.0.0.2:8402", "")
+	n3, _ := store.data.CreateDataNode("127.0.0.3:8401", "127.0.0.3:8402", "")
 	_ = store.data.UpdateNodeStatus(n1, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
 	_ = store.data.UpdateNodeStatus(n2, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
 	_ = store.data.UpdateNodeStatus(n3, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
@@ -118,9 +118,9 @@ func TestBalanceDBPts1(t *testing.T) {
 			TakeOverEnabled: true,
 		},
 	}
-	_, n1 := store.data.CreateDataNode("127.0.0.1:8401", "127.0.0.1:8402", "")
-	_, n2 := store.data.CreateDataNode("127.0.0.2:8401", "127.0.0.2:8402", "")
-	_, n3 := store.data.CreateDataNode("127.0.0.3:8401", "127.0.0.3:8402", "")
+	n1, _ := store.data.CreateDataNode("127.0.0.1:8401", "127.0.0.1:8402", "")
+	n2, _ := store.data.CreateDataNode("127.0.0.2:8401", "127.0.0.2:8402", "")
+	n3, _ := store.data.CreateDataNode("127.0.0.3:8401", "127.0.0.3:8402", "")
 	_ = store.data.UpdateNodeStatus(n1, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
 	_ = store.data.UpdateNodeStatus(n2, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
 	_ = store.data.UpdateNodeStatus(n3, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
@@ -155,9 +155,9 @@ func TestBalanceDBPts2(t *testing.T) {
 			TakeOverEnabled: true,
 		},
 	}
-	_, n1 := store.data.CreateDataNode("127.0.0.1:8401", "127.0.0.1:8402", "")
-	_, n2 := store.data.CreateDataNode("127.0.0.2:8401", "127.0.0.2:8402", "")
-	_, n3 := store.data.CreateDataNode("127.0.0.3:8401", "127.0.0.3:8402", "")
+	n1, _ := store.data.CreateDataNode("127.0.0.1:8401", "127.0.0.1:8402", "")
+	n2, _ := store.data.CreateDataNode("127.0.0.2:8401", "127.0.0.2:8402", "")
+	n3, _ := store.data.CreateDataNode("127.0.0.3:8401", "127.0.0.3:8402", "")
 	_ = store.data.UpdateNodeStatus(n1, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
 	_ = store.data.UpdateNodeStatus(n2, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
 	_ = store.data.UpdateNodeStatus(n3, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
@@ -193,9 +193,9 @@ func TestBalanceDBPts3(t *testing.T) {
 			TakeOverEnabled: true,
 		},
 	}
-	_, n1 := store.data.CreateDataNode("127.0.0.1:8401", "127.0.0.1:8402", "")
-	_, n2 := store.data.CreateDataNode("127.0.0.2:8401", "127.0.0.2:8402", "")
-	_, n3 := store.data.CreateDataNode("127.0.0.3:8401", "127.0.0.3:8402", "")
+	n1, _ := store.data.CreateDataNode("127.0.0.1:8401", "127.0.0.1:8402", "")
+	n2, _ := store.data.CreateDataNode("127.0.0.2:8401", "127.0.0.2:8402", "")
+	n3, _ := store.data.CreateDataNode("127.0.0.3:8401", "127.0.0.3:8402", "")
 	_ = store.data.UpdateNodeStatus(n1, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
 	_ = store.data.UpdateNodeStatus(n2, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
 	_ = store.data.UpdateNodeStatus(n3, int32(serf.StatusAlive), 1, "127.0.0.1:8011")

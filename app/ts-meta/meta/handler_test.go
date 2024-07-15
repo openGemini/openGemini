@@ -92,11 +92,11 @@ func TestHttpHandler_ServeHTTP(t *testing.T) {
 	}
 	defer mms.Close()
 
-	err, node1 := mms.GetStore().data.CreateDataNode("127.0.0.1:8400", "127.0.0.1:8401", "")
+	node1, err := mms.GetStore().data.CreateDataNode("127.0.0.1:8400", "127.0.0.1:8401", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	err, node2 := mms.GetStore().data.CreateDataNode("127.0.0.2:8400", "127.0.0.2:8401", "")
+	node2, err := mms.GetStore().data.CreateDataNode("127.0.0.2:8400", "127.0.0.2:8401", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +223,7 @@ func TestGetDBBriefInfo_FromStore(t *testing.T) {
 		Name:           "db0",
 		EnableTagArray: true,
 	}
-	mms.GetStore().data = &meta2.Data{Databases: databases}
+	mms.GetStore().data.Databases = databases
 	_, err = mms.GetStore().getDBBriefInfo("db0")
 	if err != nil {
 		t.Fatal(err)

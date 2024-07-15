@@ -5,7 +5,7 @@ Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
- http://www.apache.org/licenses/LICENSE-2.0
+http://www.apache.org/licenses/LICENSE-2.0
 
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,34 +14,16 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package mutable
+package opentelemetry
 
 import (
-	"github.com/influxdata/influxdb/pkg/limiter"
+	"github.com/openGemini/openGemini/lib/logger"
 )
 
-const (
-	// minimum value of sizeLimit
-	minSizeLimit int64 = 1024 * 1024
-)
-
-var (
-	// limit on the size of data in the memory (Byte)
-	sizeLimit     int64 = 30 * 1024 * 1024
-	concurLimiter       = limiter.NewFixed(8)
-)
-
-func SetSizeLimit(limit int64) {
-	if limit < minSizeLimit {
-		limit = minSizeLimit
-	}
-	sizeLimit = limit
+type otelLogger struct {
+	logger *logger.Logger
 }
 
-func GetSizeLimit() int64 {
-	return sizeLimit
-}
-
-func InitConcurLimiter(limit int) {
-	concurLimiter = limiter.NewFixed(limit)
+func (l *otelLogger) Debug(msg string, kv ...interface{}) {
+	l.logger.Debug(msg)
 }

@@ -19,6 +19,8 @@ package engine
 import (
 	"context"
 	"fmt"
+	"os"
+	"reflect"
 	"sort"
 	"sync/atomic"
 
@@ -26,8 +28,6 @@ import (
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable"
-	"github.com/openGemini/openGemini/engine/immutable/colstore"
-	"github.com/openGemini/openGemini/engine/index/sparseindex"
 	"github.com/openGemini/openGemini/lib/binaryfilterfunc"
 	"github.com/openGemini/openGemini/lib/bitmap"
 	"github.com/openGemini/openGemini/lib/config"
@@ -202,70 +202,18 @@ func (r *HybridStoreReader) initQueryCtx() (err error) {
 	return
 }
 
-func (r *HybridStoreReader) initAttachedFileReader(frags executor.IndexFrags) (comm.KeyCursor, error) {
-	files, ok := frags.Indexes().([]immutable.TSSPFile)
-	if !ok {
-		return nil, fmt.Errorf("invalid index info for attached file reader")
-	}
-
-	var unnest *influxql.Unnest
-	if r.schema.HasUnnests() {
-		unnest = r.schema.GetUnnests()[0]
-	}
-
-	fragRanges := frags.FragRanges()
-	fileReader, err := immutable.NewTSSPFileAttachedReader(files, fragRanges, r.readerCtx, r.schema.Options(), unnest)
-	if err != nil {
-		return nil, err
-	}
-	return fileReader, nil
-}
-
-func (r *HybridStoreReader) initDetachedFileReader(frags executor.IndexFrags) (comm.KeyCursor, error) {
-	metaIndexes, ok := frags.Indexes().([]*immutable.MetaIndex)
-	if !ok {
-		return nil, fmt.Errorf("invalid index info for detached file reader")
-	}
-	fragRanges := frags.FragRanges()
-	blocks := make([][]int, len(fragRanges))
-	for i, frs := range fragRanges {
-		for j := range frs {
-			for k := frs[j].Start; k < frs[j].End; k++ {
-				blocks[i] = append(blocks[i], int(k))
-			}
-		}
-	}
-
-	var unnest *influxql.Unnest
-	if r.schema.HasUnnests() {
-		unnest = r.schema.GetUnnests()[0]
-	}
-
-	fileReader, err := immutable.NewTSSPFileDetachedReader(metaIndexes, blocks, r.readerCtx,
-		sparseindex.NewOBSFilterPath("", frags.BasePath(), r.obsOptions), unnest, true, r.schema.Options())
-	if err != nil {
-		return nil, err
-	}
-	return fileReader, nil
-}
-
-func (r *HybridStoreReader) initFileReader(frags executor.IndexFrags) (comm.KeyCursor, error) {
-	switch frags.FileMode() {
-	case executor.Attached:
-		return r.initAttachedFileReader(frags)
-	case executor.Detached:
-		return r.initDetachedFileReader(frags)
-	default:
-		return nil, fmt.Errorf("invalid file reader")
-	}
-}
-
 func (r *HybridStoreReader) initIndexReader() {
 	ctx := NewIndexContext(!r.opt.IsIncQuery(), SegmentBatchCount, r.schema, r.indexInfo.ShardPath())
 	if !r.opt.IsIncQuery() || r.opt.IterID == 0 {
-		r.indexReaders = append(r.indexReaders, NewAttachedIndexReader(ctx, &r.indexInfo.AttachedIndexInfo))
+		r.indexReaders = append(r.indexReaders, NewAttachedIndexReader(ctx, &r.indexInfo.AttachedIndexInfo, r.readerCtx))
 	}
-	r.indexReaders = append(r.indexReaders, NewDetachedIndexReader(ctx, r.obsOptions))
+	if _, err := os.Stat(obs.GetLocalMstPath(obs.GetPrefixDataPath(), ctx.shardPath)); !os.IsNotExist(err) {
+		if ctx.schema.Options().CanTimeLimitPushDown() && r.opt.Sources[0].(*influxql.Measurement).IsTimeSorted {
+			r.indexReaders = append(r.indexReaders, NewDetachedLazyLoadIndexReader(ctx, r.obsOptions, r.readerCtx))
+		} else {
+			r.indexReaders = append(r.indexReaders, NewDetachedIndexReader(ctx, r.obsOptions, r.readerCtx))
+		}
+	}
 }
 
 func (r *HybridStoreReader) initSchemaByFullTest() error {
@@ -412,30 +360,23 @@ func (r *HybridStoreReader) CreateCursors() ([]comm.KeyCursor, error) {
 	cursors := make([]comm.KeyCursor, 0)
 	r.initIndexReader()
 	for i := range r.indexReaders {
-		for {
-			frags, err := r.indexReaders[i].Next()
-			if err != nil {
-				return nil, err
-			}
-			if frags == nil {
-				break
-			}
-			r.fragCount += int(frags.FragCount())
-			reader, err := r.initFileReader(frags)
-			if err != nil {
-				return nil, err
-			}
-			cursors = append(cursors, reader)
+		keyCursors, fagCount, err := r.indexReaders[i].CreateCursors()
+		if err != nil {
+			return nil, err
 		}
+		r.fragCount += fagCount
+		cursors = append(cursors, keyCursors...)
 	}
 	return cursors, nil
 }
 
-func (r *HybridStoreReader) Work(ctx context.Context) error {
+func (r *HybridStoreReader) Work(ctx context.Context) (err error) {
 	statistics.ExecutorStat.SourceWidth.Push(int64(r.output.RowDataType.NumColumn()))
-
-	var err error
-
+	defer func() {
+		if err != nil && reflect.TypeOf(err).Kind() == reflect.Pointer && reflect.TypeOf(err) != reflect.TypeOf(&errno.Error{}) {
+			err = errno.NewError(errno.ChunkReaderCursor, err.Error())
+		}
+	}()
 	r.initSpan()
 
 	tracing.StartPP(r.initReaderSpan)
@@ -448,7 +389,7 @@ func (r *HybridStoreReader) Work(ctx context.Context) error {
 		return err
 	}
 
-	rowCountBeforeFilter := r.fragCount * colstore.RowsNumPerFragment
+	rowCountBeforeFilter := r.fragCount * util.RowsNumPerFragment
 	tracing.StartPP(r.span)
 	cursors, err := r.CreateCursors()
 	if err != nil {
@@ -504,7 +445,6 @@ func (r *HybridStoreReader) run(ctx context.Context, reader comm.KeyCursor) (err
 			if rec.RowNums() == 0 {
 				continue
 			}
-
 			r.iterCount++
 			r.rowCountAfterFilter += rec.RowNums()
 

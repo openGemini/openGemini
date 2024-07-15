@@ -96,7 +96,19 @@ type CreateNodeRequest struct {
 	Role      string
 }
 
+type CreateSqlNodeRequest struct {
+	HttpHost   string
+	GossipHost string
+}
+
 type CreateNodeResponse struct {
+	//Header     map[string][]string
+	Data []byte
+
+	Err string
+}
+
+type CreateSqlNodeResponse struct {
 	//Header     map[string][]string
 	Data []byte
 
@@ -116,7 +128,18 @@ type SnapshotRequest struct {
 	Index uint64
 }
 
+type SnapshotV2Request struct {
+	Role  int
+	Index uint64
+	Id    uint64
+}
+
 type SnapshotResponse struct {
+	Data []byte
+	Err  string
+}
+
+type SnapshotV2Response struct {
 	Data []byte
 	Err  string
 }

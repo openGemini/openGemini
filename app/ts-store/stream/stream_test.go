@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openGemini/openGemini/lib/record"
 	streamLib "github.com/openGemini/openGemini/lib/stream"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
@@ -47,8 +48,17 @@ type MockStorage struct {
 func (m *MockStorage) WriteRows(db, rp string, ptId uint32, shardID uint64, rows []influx.Row, binaryRows []byte) error {
 	fmt.Println("flush WriteRows", time.Now())
 	m.count = len(rows) + m.count
-	m.value = rows[0].Fields[0].NumValue
+	for i := 0; i < rows[0].Fields.Len(); i++ {
+		if m.value < rows[0].Fields[i].NumValue {
+			m.value = rows[0].Fields[i].NumValue
+		}
+	}
 	m.timestamp = time.Unix(0, rows[0].Timestamp)
+	return nil
+}
+
+func (m *MockStorage) WriteRec(db, rp, mst string, ptId uint32, shardID uint64, rec *record.Record, binaryRec []byte) error {
+	fmt.Println("flush WriteRec", time.Now())
 	return nil
 }
 
@@ -84,7 +94,7 @@ func buildRow(tagValue, eipValue string, fieldIndex bool) influx.Row {
 	})
 	var fields []influx.Field
 	fields = append(fields, influx.Field{
-		Key:      "bps",
+		Key:      "float",
 		NumValue: 1,
 		StrValue: "",
 		Type:     influx.Field_Type_Float,
@@ -128,6 +138,58 @@ func buildRows(length int) []influx.Row {
 	return *fieldRows
 }
 
+func buildTestRecordNil(size int) *record.Record {
+	s := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Float, Name: "float"},
+		record.Field{Type: influx.Field_Type_String, Name: "string"},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	var rec record.Record
+	rec.Schema = append(rec.Schema, s...)
+	for range rec.Schema {
+		var colVal record.ColVal
+		rec.ColVals = append(rec.ColVals, colVal)
+	}
+	for i := 0; i < size/4; i++ {
+		rec.Column(0).AppendIntegers([]int64{12, 20, 3}...)
+		rec.Column(1).AppendFloats([]float64{70.0, 80.0, 90.0}...)
+		rec.Column(2).AppendStrings([]string{"shenzhen", "shanghai", "beijin"}...)
+		rec.Column(3).AppendBooleans([]bool{true, true, true}...)
+		rec.Column(4).AppendIntegers([]int64{time.Now().UnixNano(), time.Now().UnixNano(), time.Now().UnixNano(), time.Now().UnixNano()}...)
+		rec.Column(0).AppendIntegerNull()
+		rec.Column(1).AppendFloatNull()
+		rec.Column(2).AppendStringNull()
+		rec.Column(3).AppendBooleanNull()
+	}
+	return &rec
+}
+
+func buildTestRecord(size int) *record.Record {
+	s := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Float, Name: "float"},
+		record.Field{Type: influx.Field_Type_String, Name: "string"},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	var rec record.Record
+	rec.Schema = append(rec.Schema, s...)
+	for range rec.Schema {
+		var colVal record.ColVal
+		rec.ColVals = append(rec.ColVals, colVal)
+	}
+	for i := 0; i < size/4; i++ {
+		rec.Column(0).AppendIntegers([]int64{12, 20, 3, 30}...)
+		rec.Column(1).AppendFloats([]float64{70.0, 80.0, 90.0, 121.0}...)
+		rec.Column(2).AppendStrings([]string{"shenzhen", "shanghai", "beijin", "guangzhou"}...)
+		rec.Column(3).AppendBooleans([]bool{true, true, true, false}...)
+		rec.Column(4).AppendIntegers([]int64{time.Now().UnixNano(), time.Now().UnixNano(), time.Now().UnixNano(), time.Now().UnixNano()}...)
+	}
+	return &rec
+}
+
 type TestLogger interface {
 	Log(args ...any)
 }
@@ -152,12 +214,12 @@ type MockMetaclient struct {
 	getInfoFail bool
 }
 
-func (m MockMetaclient) GetMeasurementInfoStore(dbName string, rpName string, mstName string) (*meta.MeasurementInfo, error) {
+func (m MockMetaclient) Measurement(dbName string, rpName string, mstName string) (*meta.MeasurementInfo, error) {
 	if m.getInfoFail {
 		return nil, errors.New("get info fail")
 	}
 	schema := map[string]int32{}
-	schema["bps"] = influx.Field_Type_Float
+	schema["float"] = influx.Field_Type_Float
 	for i := 0; i < 8; i++ {
 		schema[fmt.Sprintf("tagkey%v", i)] = influx.Field_Type_Tag
 	}
@@ -174,7 +236,7 @@ func (m MockMetaclient) Database(name string) (di *meta.DatabaseInfo, err error)
 	panic("implement me")
 }
 
-func (m MockMetaclient) GetStreamInfosStore() map[string]*meta.StreamInfo {
+func (m MockMetaclient) GetStreamInfos() map[string]*meta.StreamInfo {
 	calls := []string{"sum", "min", "max", "count"}
 	streamInfos := buildStreamInfo(time.Second*1, 0, calls)
 	return streamInfos
@@ -281,6 +343,59 @@ func Test_Call(t *testing.T) {
 	time.Sleep(time.Second * 3)
 }
 
+func Test_RecCall(t *testing.T) {
+	m := &MockStorage{}
+	l := &MockLogger{t}
+	metaClient := &MockMetaclient{}
+	conf := stream2.NewConfig()
+	stream, err := NewStream(m, l, metaClient, conf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	FlushParallelMinRowNum = 10
+	window := time.Second * 1
+	now := time.Now()
+	t.Log("now", now)
+	go stream.Run()
+	//wait stream fresh task
+	time.Sleep(10 * time.Second)
+	next := now.Truncate(window).Add(window)
+	after := time.NewTicker(next.Sub(now))
+	select {
+	case <-after.C:
+	}
+	after.Reset(window)
+	select {
+	case <-after.C:
+	}
+	start := time.Now()
+	fieldRec := buildTestRecord(30)
+	stream.WriteRec("test", "auto", "flow", 0, 0, fieldRec, nil)
+	//for test reuse object
+	stream.Drain()
+	fieldRec2 := buildTestRecord(1)
+	stream.WriteRec("test", "test", "test", 0, 0, fieldRec2, nil)
+	t.Log("write rec ", start, time.Now())
+	stream.Drain()
+	select {
+	case <-after.C:
+	}
+	//wait flush
+	time.Sleep(window)
+	t.Log("m count", m.Count(), "m value", m.Value(), time.Now())
+	if m.Value() != 2527 {
+		t.Error(fmt.Sprintf("expect %v ,got %v", 1, m.Value()))
+	}
+	ex := start.Truncate(time.Second)
+	if ex != m.TimeStamp().Truncate(time.Second) {
+		t.Error(fmt.Sprintf("expect %v ,got %v", ex, m.TimeStamp().Truncate(time.Second)))
+	}
+	stream.Close()
+	stream.DeleteTask(1)
+	// wait stream filter close
+	time.Sleep(time.Second * 3)
+}
+
 func Test_RegisterFail(t *testing.T) {
 	m := &MockStorage{}
 	l := &MockLogger{t}
@@ -296,7 +411,7 @@ func Test_RegisterFail(t *testing.T) {
 		groupKeys = append(groupKeys, fmt.Sprintf("tagkey%v", i))
 	}
 	fieldCalls := []*streamLib.FieldCall{}
-	call, err := streamLib.NewFieldCall(influx.Field_Type_Float, influx.Field_Type_Float, "bps", "bps", "sum", true)
+	call, err := streamLib.NewFieldCall(influx.Field_Type_Float, influx.Field_Type_Float, "float", "float", "sum", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -333,7 +448,7 @@ func Test_RegisterTimeTask(t *testing.T) {
 		groupKeys = append(groupKeys, fmt.Sprintf("tagkey%v", i))
 	}
 	fieldCalls := []*streamLib.FieldCall{}
-	call, err := streamLib.NewFieldCall(influx.Field_Type_Float, influx.Field_Type_Float, "bps", "bps", "sum", false)
+	call, err := streamLib.NewFieldCall(influx.Field_Type_Float, influx.Field_Type_Float, "float", "float", "sum", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -368,8 +483,8 @@ func Test_MaxDelay(t *testing.T) {
 	for i := 0; i < 8; i++ {
 		groupKeys = append(groupKeys, fmt.Sprintf("tagkey%v", i))
 	}
-	var fieldCalls []*streamLib.FieldCall
-	call, err := streamLib.NewFieldCall(influx.Field_Type_Float, influx.Field_Type_Float, "bps", "bps", "sum", true)
+	fieldCalls := []*streamLib.FieldCall{}
+	call, err := streamLib.NewFieldCall(influx.Field_Type_Float, influx.Field_Type_Float, "float", "float", "sum", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -427,7 +542,7 @@ func Test_MaxDelay(t *testing.T) {
 	if ex != m.TimeStamp().Truncate(time.Second) {
 		t.Error(fmt.Sprintf("expect %v ,got %v", ex, m.TimeStamp().Truncate(time.Second)))
 	}
-
+	stream.Close()
 }
 
 func buildStreamInfo(window, maxDelay time.Duration, calls []string) map[string]*meta.StreamInfo {
@@ -452,8 +567,8 @@ func buildStreamInfoGroup(window, maxDelay time.Duration, calls []string, groupN
 	var mFieldCalls []*meta.StreamCall
 	for _, c := range calls {
 		mFieldCalls = append(mFieldCalls, &meta.StreamCall{
-			Field: "bps",
-			Alias: "bps",
+			Field: "float",
+			Alias: "float",
 			Call:  c,
 		})
 	}
@@ -489,7 +604,7 @@ func Bench_Stream_POINT(t *testing.B, pointNum int) {
 	maxDelay := time.Second * 1
 
 	fieldCalls := []*streamLib.FieldCall{}
-	call, err := streamLib.NewFieldCall(influx.Field_Type_Float, influx.Field_Type_Float, "bps", "bps", "sum", true)
+	call, err := streamLib.NewFieldCall(influx.Field_Type_Float, influx.Field_Type_Float, "float", "float", "sum", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -561,15 +676,32 @@ type MockRowCache struct {
 	res      int64
 }
 
-func (r *MockRowCache) GetPool() *WindowCache {
-	windowCachePool := NewWindowCachePool()
-	release := func() bool {
+func (r *MockRowCache) GetPool() *TaskCache {
+	windowCachePool := NewTaskCachePool()
+	release := func() {
 		cur := atomic.AddInt64(&r.refCount, -1)
 		r.res = cur
-		return true
 	}
 	r.refCount++
 	cache := windowCachePool.Get()
 	cache.release = release
 	return cache
+}
+
+func TestCacheRecord(t *testing.T) {
+	r := &CacheRecord{
+		db:      "db",
+		rp:      "rp",
+		mst:     "mst",
+		ptId:    0,
+		shardID: 0,
+	}
+	r.Wait()
+	r.Retain()
+	r.Release()
+	r.Wait()
+	r.RetainNum(2)
+	r.Release()
+	r.Release()
+	r.Wait()
 }

@@ -20,7 +20,6 @@ import (
 	"container/heap"
 	"errors"
 	"fmt"
-	"math"
 	"runtime/debug"
 	"sync"
 	"sync/atomic"
@@ -37,9 +36,8 @@ import (
 )
 
 const (
-	CompactLevels        = 7
-	defaultFileSizeLimit = 8 * 1024 * 1024 * 1024
-	minFileSizeLimit     = 1 * 1024 * 1024
+	CompactLevels    = 7
+	minFileSizeLimit = 1 * 1024 * 1024
 )
 
 var (
@@ -55,10 +53,8 @@ var (
 	LeveLMinGroupFiles    = [CompactLevels]int{8, 4, 4, 4, 4, 4, 2}
 	compLogSeq            = uint64(time.Now().UnixNano())
 
-	EnableMergeOutOfOrder       = true
-	MaxNumOfFileToMerge         = 256
-	MaxSizeOfFileToMerge  int64 = 512 * 1024 * 1024 // 512MB
-	log                         = Log.GetLogger()
+	EnableMergeOutOfOrder = true
+	log                   = Log.GetLogger()
 
 	compactStat = statistics.NewCompactStatistics()
 )
@@ -117,7 +113,7 @@ func (m *MmsTables) refMmsTable(name string, refOutOfOrder bool) (orderWg, outOf
 }
 
 func (m *MmsTables) unrefMmsTable(orderWg, outOfOrderWg *sync.WaitGroup) {
-	m.ImmTable.unrefMmsTable(m, orderWg, outOfOrderWg)
+	m.ImmTable.unrefMmsTable(orderWg, outOfOrderWg)
 }
 
 func (m *MmsTables) LevelCompact(level uint16, shid uint64) error {
@@ -134,11 +130,6 @@ func (m *MmsTables) LevelCompact(level uint16, shid uint64) error {
 			return nil
 		case compLimiter <- struct{}{}:
 			m.wg.Add(1)
-			if !m.CompactionEnabled() {
-				m.wg.Done()
-				m.blockCompactStop(plan.name)
-				return nil
-			}
 			go func(group *CompactGroup) {
 				orderWg, inorderWg := m.ImmTable.refMmsTable(m, group.name, false)
 				if m.compactRecovery {
@@ -147,12 +138,16 @@ func (m *MmsTables) LevelCompact(level uint16, shid uint64) error {
 
 				defer func() {
 					m.wg.Done()
-					m.ImmTable.unrefMmsTable(m, orderWg, inorderWg)
+					m.ImmTable.unrefMmsTable(orderWg, inorderWg)
 					compLimiter.Release()
 					m.CompactDone(group.group)
 					m.blockCompactStop(group.name)
 					group.release()
 				}()
+
+				if !m.CompactionEnabled() {
+					return
+				}
 
 				fi, err := m.ImmTable.NewFileIterators(m, group)
 				if err != nil {
@@ -212,7 +207,7 @@ func (m *MmsTables) NewChunkIterators(group FilesInfo) *ChunkIterators {
 func (m *MmsTables) compact(itrs *ChunkIterators, files []TSSPFile, level uint16, isOrder bool, cLog *Log.Logger) ([]TSSPFile, error) {
 	_, seq := files[0].LevelAndSequence()
 	fileName := NewTSSPFileName(seq, level, 0, 0, isOrder, m.lock)
-	tableBuilder := NewMsBuilder(m.path, itrs.name, m.lock, m.Conf, itrs.maxN, fileName, *m.tier, nil, itrs.estimateSize, config.TSSTORE)
+	tableBuilder := NewMsBuilder(m.path, itrs.name, m.lock, m.Conf, itrs.maxN, fileName, *m.tier, nil, itrs.estimateSize, config.TSSTORE, m.obsOpt, m.GetShardID())
 	tableBuilder.WithLog(cLog)
 	for {
 		select {
@@ -234,6 +229,7 @@ func (m *MmsTables) compact(itrs *ChunkIterators, files []TSSPFile, level uint16
 		}
 
 		record.CheckRecord(rec)
+		record.CheckTimes(rec.Times())
 		tableBuilder, err = tableBuilder.WriteRecord(id, rec, func(fn TSSPFileName) (uint64, uint16, uint16, uint16) {
 			ext := fn.extent
 			ext++
@@ -290,22 +286,11 @@ func (m *MmsTables) GetMstFileStat() *statistics.FileStat {
 }
 
 func (m *MmsTables) FullyCompacted() bool {
-	count := 0
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	for _, v := range m.Order {
-		if m.isClosed() || m.isCompMergeStopped() {
-			return false
-		}
-		if v.fullCompacted() {
-			count++
-		}
-	}
-	return count == len(m.Order)
+	return m.ImmTable.FullyCompacted(m)
 }
 
 func (m *MmsTables) FreeSequencer() bool {
-	if !m.FullyCompacted() {
+	if !m.ImmTable.FullyCompacted(m) {
 		return false
 	}
 	return m.sequencer.free()
@@ -401,23 +386,6 @@ func (m *MmsTables) SetAddFunc(addFunc func(int64)) {
 	m.addFunc = addFunc
 }
 
-func (m *MmsTables) GetLastFlushTimeBySid(measurement string, sid uint64) int64 {
-	seq := m.Sequencer()
-	defer seq.UnRef()
-
-	if seq.isLoading {
-		return math.MaxInt64
-	}
-
-	if seq.isFree {
-		m.ReloadSequencer(seq, true)
-		return math.MaxInt64
-	}
-
-	lastFlushTime, _ := seq.Get(measurement, sid)
-	return lastFlushTime
-}
-
 func (m *MmsTables) GetRowCountsBySid(measurement string, sid uint64) (int64, error) {
 	seq := m.Sequencer()
 	m.ReloadSequencer(seq, false)
@@ -430,6 +398,14 @@ func (m *MmsTables) AddRowCountsBySid(measurement string, sid uint64, rowCounts 
 	seq := m.Sequencer()
 	seq.AddRowCounts(measurement, sid, rowCounts)
 	seq.UnRef()
+}
+
+func (m *MmsTables) LoadSequencer() {
+	if !m.sequencer.isFree || m.sequencer.isLoading {
+		return
+	}
+
+	m.ReloadSequencer(m.sequencer, true)
 }
 
 func (m *MmsTables) ReloadSequencer(seq *Sequencer, async bool) {
@@ -471,6 +447,10 @@ func (m *MmsTables) FullCompact(shid uint64) error {
 		return nil
 	}
 
+	return m.executeFullCompact(shid, plans)
+}
+
+func (m *MmsTables) executeFullCompact(shid uint64, plans []*CompactGroup) error {
 	for _, plan := range plans {
 		plan.shardId = shid
 		select {
@@ -481,10 +461,6 @@ func (m *MmsTables) FullCompact(shid uint64) error {
 			return nil
 		case compLimiter <- struct{}{}:
 			m.wg.Add(1)
-			if !m.CompactionEnabled() {
-				m.wg.Done()
-				return nil
-			}
 			atomic.AddInt64(&fullCompactingCount, 1)
 			go func(group *CompactGroup) {
 				orderWg, inorderWg := m.ImmTable.refMmsTable(m, group.name, false)
@@ -495,10 +471,14 @@ func (m *MmsTables) FullCompact(shid uint64) error {
 				defer func() {
 					m.wg.Done()
 					compLimiter.Release()
-					m.ImmTable.unrefMmsTable(m, orderWg, inorderWg)
+					m.ImmTable.unrefMmsTable(orderWg, inorderWg)
 					atomic.AddInt64(&fullCompactingCount, -1)
 					m.CompactDone(group.group)
 				}()
+
+				if !m.CompactionEnabled() {
+					return
+				}
 
 				fi, err := m.ImmTable.NewFileIterators(m, group)
 				if err != nil {
@@ -515,7 +495,6 @@ func (m *MmsTables) FullCompact(shid uint64) error {
 			}(plan)
 		}
 	}
-
 	return nil
 }
 

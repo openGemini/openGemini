@@ -21,6 +21,7 @@ import (
 	"time"
 
 	numenc "github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
+	"github.com/cockroachdb/errors"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/executor/spdy"
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
@@ -32,6 +33,7 @@ import (
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
+	"go.etcd.io/etcd/raft/v3/raftpb"
 	"go.uber.org/zap"
 )
 
@@ -48,7 +50,7 @@ type Storage interface {
 	WriteRows(ctx *WriteContext, nodeID uint64, pt uint32, database, rpName string, timeout time.Duration) error
 	DropShard(nodeID uint64, database, rpName string, dbPts []uint32, shardID uint64) error
 
-	TagValues(nodeID uint64, db string, ptIDs []uint32, tagKeys map[string]map[string]struct{}, cond influxql.Expr) (TablesTagSets, error)
+	TagValues(nodeID uint64, db string, ptIDs []uint32, tagKeys map[string]map[string]struct{}, cond influxql.Expr, limit int, disorder bool) (TablesTagSets, error)
 	TagValuesCardinality(nodeID uint64, db string, ptIDs []uint32, tagKeys map[string]map[string]struct{}, cond influxql.Expr) (map[string]uint64, error)
 
 	ShowTagKeys(nodeID uint64, db string, ptId []uint32, measurements []string, condition influxql.Expr) ([]string, error)
@@ -70,6 +72,12 @@ type Storage interface {
 	GetQueriesOnNode(nodeID uint64) ([]*QueryExeInfo, error)
 	KillQueryOnNode(nodeID, queryID uint64) error
 	SendSegregateNodeCmds(nodeIDs []uint64, address []string) (int, error)
+
+	SendRaftMessageToStorage
+}
+
+type SendRaftMessageToStorage interface {
+	SendRaftMessages(nodeID uint64, database string, pt uint32, msgs raftpb.Message) error
 }
 
 type NetStorage struct {
@@ -183,6 +191,7 @@ func (s *NetStorage) WriteRows(ctx *WriteContext, nodeID uint64, pt uint32, data
 	r := NewRequester(0, nil, s.metaClient)
 	r.setToInsert()
 	r.setTimeout(timeout)
+
 	err = r.initWithNodeID(nodeID)
 	if err != nil {
 		return err
@@ -227,7 +236,7 @@ func (s *NetStorage) ddlRequestWithNode(node *meta2.DataNode, typ uint8, data co
 	return r.ddl()
 }
 
-func (s *NetStorage) TagValues(nodeID uint64, db string, ptIDs []uint32, tagKeys map[string]map[string]struct{}, cond influxql.Expr) (TablesTagSets, error) {
+func (s *NetStorage) TagValues(nodeID uint64, db string, ptIDs []uint32, tagKeys map[string]map[string]struct{}, cond influxql.Expr, limit int, disorder bool) (TablesTagSets, error) {
 	req := &ShowTagValuesRequest{}
 	req.Db = proto.String(db)
 	req.PtIDs = ptIDs
@@ -235,6 +244,8 @@ func (s *NetStorage) TagValues(nodeID uint64, db string, ptIDs []uint32, tagKeys
 		req.Condition = proto.String(cond.String())
 	}
 	req.SetTagKeys(tagKeys)
+	req.Limit = proto.Int(limit)
+	req.Disorder = proto.Bool(disorder)
 
 	v, err := s.ddlRequestWithNodeId(nodeID, ShowTagValuesRequestMessage, req)
 	if err != nil {
@@ -502,4 +513,23 @@ func (s *NetStorage) KillQueryOnNode(nodeID, queryID uint64) error {
 		return executor.NewInvalidTypeError("*netstorage.KillQueryResponse", v)
 	}
 	return errno.NewError(errno.Errno(resp.GetErrCode()))
+}
+
+func (s *NetStorage) SendRaftMessages(nodeID uint64, database string, pt uint32, msgs raftpb.Message) error {
+	req := &RaftMessagesRequest{}
+	req.Database = database
+	req.PtId = pt
+	req.RaftMessage = msgs
+	v, err := s.ddlRequestWithNodeId(nodeID, RaftMessagesRequestMessage, req)
+	if err != nil {
+		return err
+	}
+	resp, ok := v.(*RaftMessagesResponse)
+	if !ok {
+		return executor.NewInvalidTypeError("*netstorage.RaftMsgResponse", v)
+	}
+	if resp.GetErrMsg() != "" {
+		return errors.New(resp.GetErrMsg())
+	}
+	return nil
 }

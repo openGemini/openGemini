@@ -36,6 +36,7 @@ import (
 	"github.com/openGemini/openGemini/lib/obs"
 	internal "github.com/openGemini/openGemini/lib/util/lifted/influx/influxql/internal"
 	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
 // DataType represents the primitive data types available in InfluxQL.
@@ -63,7 +64,8 @@ const (
 	// Unsigned means the data type is an unsigned integer.
 	Unsigned DataType = 9
 	// FloatTuple means the data type is a float tuple.
-	FloatTuple DataType = 10
+	FloatTuple      DataType = 10
+	DefaultFieldKey string   = "value"
 )
 
 const (
@@ -91,6 +93,8 @@ const (
 
 	HASH  = "hash"
 	RANGE = "range"
+
+	SeqIDField = "__seq_id___"
 )
 
 var (
@@ -351,6 +355,7 @@ func (Hints) node()                        {}
 func (*MatchExpr) node()                   {}
 func (*InCondition) node()                 {}
 func (*Unnest) node()                      {}
+func (*BinOp) node()                       {}
 
 // Query represents a collection of ordered statements.
 type Query struct {
@@ -547,6 +552,7 @@ func (*Measurement) source() {}
 func (*SubQuery) source()    {}
 func (*Join) source()        {}
 func (*Unnest) source()      {}
+func (*BinOp) source()       {}
 
 // Sources represents a list of sources.
 type Sources []Source
@@ -817,6 +823,7 @@ type CreateMeasurementStatement struct {
 	RetentionPolicy     string
 	Name                string
 	ShardKey            []string
+	NumOfShards         int64
 	EngineType          string
 	PrimaryKey          []string
 	SortKey             []string
@@ -835,6 +842,7 @@ type CreateMeasurementStatementOption struct {
 	IndexType           []string
 	IndexList           [][]string
 	ShardKey            []string
+	NumOfShards         int64
 	Type                string
 	EngineType          string
 	PrimaryKey          []string
@@ -1429,6 +1437,11 @@ type SelectStatement struct {
 	// Expressions used for grouping the selection.
 	Dimensions Dimensions
 
+	ExceptDimensions Dimensions
+
+	// Whether to drop the given labels rather than keep them.
+	Without bool
+
 	//Expressions used for optimize querys
 	Hints Hints
 
@@ -1502,10 +1515,47 @@ type SelectStatement struct {
 
 	// whether to return error
 	ReturnErr bool
+
+	// Step is query resolution step width in duration format or float number of seconds for Prom.
+	Step time.Duration
+
+	// Range is used to specify how far back in time values should be fetched for each resulting
+	// range vector element. The range is a closed interval for Prom.
+	Range time.Duration
+
+	// LookBackDelta determines the time since the last sample after which a time series is considered
+	// stale for Prom.
+	LookBackDelta time.Duration
+
+	// QueryOffset is the offset used during the query execution fo promql
+	// which is calculated using the original offset, at modifier time,
+	// eval time, and subquery offsets in the AST tree.
+	QueryOffset time.Duration
+
+	BinOpSource []*BinOp
+
+	IsPromQuery bool
 }
 
 func (s *SelectStatement) SetStmtId(id int) {
 	s.StmtId = id
+}
+
+func (s *SelectStatement) StreamCheck(supportTable map[string]bool) error {
+	for i := range s.Fields {
+		if c, ok := s.Fields[i].Expr.(*Call); ok && !supportTable[c.Name] {
+			return errors.New("unsupported call function in stream")
+		}
+	}
+
+	if s.groupByInterval == 0 {
+		return errors.New("should have group by interval time")
+	}
+
+	if s.groupByInterval < 5*time.Second {
+		return errors.New("streaming aggregation within 5 seconds is not supported")
+	}
+	return nil
 }
 
 func (s *SelectStatement) RewriteUnnestSource() {
@@ -1550,6 +1600,7 @@ func (s *SelectStatement) Clone() *SelectStatement {
 	clone.Sources = cloneSources(s.Sources)
 	clone.SortFields = make(SortFields, 0, len(s.SortFields))
 	clone.Condition = CloneExpr(s.Condition)
+	clone.Location = s.Location
 
 	if s.Target != nil {
 		clone.Target = &Target{
@@ -1603,6 +1654,17 @@ func cloneSource(s Source) Source {
 		return c
 	case *Unnest:
 		return s.Clone()
+	case *BinOp:
+		c := &BinOp{}
+		c.LSrc = cloneSource(s.LSrc)
+		c.RSrc = cloneSource(s.RSrc)
+		c.OpType = s.OpType
+		c.On = s.On
+		c.MatchKeys = s.MatchKeys
+		c.MatchCard = s.MatchCard
+		c.IncludeKeys = s.IncludeKeys
+		c.ReturnBool = s.ReturnBool
+		return c
 	default:
 		panic("unreachable")
 	}
@@ -1653,15 +1715,15 @@ func RewriteSubQueryNameSpace(source Source, hasJoin bool) error {
 	return nil
 }
 
-func (s *SelectStatement) RewriteJoinCase(src Source, m FieldMapper, batchEn bool, fields Fields) (Source, error) {
+func (s *SelectStatement) RewriteJoinCase(src Source, m FieldMapper, batchEn bool, fields Fields, hasJoin bool) (Source, error) {
 	switch src := src.(type) {
 	case *SubQuery:
-		if e := RewriteSubQueryNameSpace(src, true); e != nil {
+		if e := RewriteSubQueryNameSpace(src, hasJoin); e != nil {
 			return nil, e
 		}
-		stmt, err := src.Statement.RewriteFields(m, batchEn, true)
+		stmt, err := src.Statement.RewriteFields(m, batchEn, hasJoin)
 		src.Statement = stmt
-		if e := RewriteSubQueryNameSpace(src, true); e != nil {
+		if e := RewriteSubQueryNameSpace(src, hasJoin); e != nil {
 			return nil, e
 		}
 		if err == nil {
@@ -1673,7 +1735,7 @@ func (s *SelectStatement) RewriteJoinCase(src Source, m FieldMapper, batchEn boo
 		}
 		return nil, nil
 	case *Measurement:
-		if e := RewriteMstNameSpace(fields, src, true, src.GetName()); e != nil {
+		if e := RewriteMstNameSpace(fields, src, hasJoin, src.GetName()); e != nil {
 			return nil, e
 		}
 		return nil, nil
@@ -1855,6 +1917,15 @@ func checkField(expr Expr, fks map[string]DataType, tks map[string]struct{}) err
 	return nil
 }
 
+func (s *SelectStatement) RewriteSeqIdForLogStore(fields map[string]DataType) {
+	if config.IsLogKeeper() {
+		_, ok := fields[SeqIDField]
+		if !ok {
+			fields[SeqIDField] = influx.Field_Type_Int
+		}
+	}
+}
+
 // RewriteFields returns the re-written form of the select statement. Any wildcard query
 // fields are replaced with the supplied fields, and any wildcard GROUP BY fields are replaced
 // with the supplied dimensions. Any fields with no type specifier are rewritten with the
@@ -1879,12 +1950,23 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin boo
 				return nil, err
 			}
 		case *Join:
-			lSources, lErr := s.RewriteJoinCase(src.LSrc, m, batchEn, other.Fields)
+			lSources, lErr := s.RewriteJoinCase(src.LSrc, m, batchEn, other.Fields, true)
 			if lErr != nil {
 				return nil, lErr
 			}
 			sources = append(sources, lSources)
-			rSources, rErr := s.RewriteJoinCase(src.RSrc, m, batchEn, other.Fields)
+			rSources, rErr := s.RewriteJoinCase(src.RSrc, m, batchEn, other.Fields, true)
+			if rErr != nil {
+				return nil, rErr
+			}
+			sources = append(sources, rSources)
+		case *BinOp:
+			lSources, lErr := s.RewriteJoinCase(src.LSrc, m, batchEn, other.Fields, false)
+			if lErr != nil {
+				return nil, lErr
+			}
+			sources = append(sources, lSources)
+			rSources, rErr := s.RewriteJoinCase(src.RSrc, m, batchEn, other.Fields, false)
 			if rErr != nil {
 				return nil, rErr
 			}
@@ -2072,13 +2154,33 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin boo
 	WalkFunc(other.Fields, rewriteDefaultTypeOfVarRef)
 
 	if !hasFieldWildcard && !hasDimensionWildcard {
+		if other.Without {
+			_, dimensionSet, err := FieldDimensions(other.Sources, m, &other.Schema)
+			if err != nil {
+				return nil, err
+			}
+			dimensions := stringSetSlice(dimensionSet)
+			if err = RewriteDimensionWithout(other, dimensions); err != nil {
+				return nil, err
+			}
+		}
 		return other, nil
 	}
 
 	if len(other.Dimensions) == 1 {
 		if _, ok := other.Dimensions[0].Expr.(*Wildcard); ok {
 			other.GroupByAllDims = true
+			// 1.group by * + promquery
+			if other.IsPromQuery {
+				other.Dimensions = nil
+				return other, nil
+			}
 		}
+	}
+
+	if other.Without {
+		// 2.without dims + promquery
+		return other, nil
 	}
 
 	fieldSet, dimensionSet, err := FieldDimensions(other.Sources, m, &other.Schema)
@@ -2086,6 +2188,7 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin boo
 		return nil, err
 	}
 	s.GetUnnestSchema(fieldSet)
+	s.RewriteSeqIdForLogStore(fieldSet)
 
 	// If there are no dimension wildcards then merge dimensions to fields.
 	if !hasDimensionWildcard {
@@ -2266,6 +2369,38 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin boo
 	}
 
 	return other, nil
+}
+
+// RewriteDimensionWithout used to extract the group field without from the full set to regenerate the dimension.
+func RewriteDimensionWithout(statement *SelectStatement, dimensions []string) error {
+	if len(statement.Sources) != 1 {
+		return fmt.Errorf("the number of source should be 1 for promql query")
+	}
+	statement.Without = false
+	_, dimRefs := statement.Dimensions.Normalize()
+	if len(dimRefs) == 0 {
+		for i := 0; i < len(dimensions); i++ {
+			statement.Dimensions = append(statement.Dimensions, &Dimension{Expr: &VarRef{Val: dimensions[i], Type: Tag}})
+		}
+		return nil
+	}
+	dimRefMap := make(map[string]bool, len(dimRefs))
+	for i := range dimRefs {
+		dimRefMap[dimRefs[i]] = true
+	}
+	var newDims Dimensions
+	for i := range dimensions {
+		if !dimRefMap[dimensions[i]] {
+			newDims = append(newDims, &Dimension{Expr: &VarRef{Val: dimensions[i], Type: Tag}})
+		}
+	}
+	for i := 0; i < len(statement.Dimensions); i++ {
+		if _, ok := statement.Dimensions[i].Expr.(*Call); ok {
+			newDims = append(newDims, statement.Dimensions[i])
+		}
+	}
+	statement.Dimensions = newDims
+	return nil
 }
 
 // RewriteRegexConditions rewrites regex conditions to make better use of the
@@ -3715,7 +3850,9 @@ func (s *ShowShardGroupsStatement) RequiredPrivileges() (ExecutionPrivileges, er
 }
 
 // ShowShardsStatement represents a command for displaying shards in the cluster.
-type ShowShardsStatement struct{}
+type ShowShardsStatement struct {
+	mstInfo *Measurement
+}
 
 // String returns a string representation.
 func (s *ShowShardsStatement) String() string { return "SHOW SHARDS" }
@@ -3723,6 +3860,31 @@ func (s *ShowShardsStatement) String() string { return "SHOW SHARDS" }
 // RequiredPrivileges returns the privileges required to execute the statement.
 func (s *ShowShardsStatement) RequiredPrivileges() (ExecutionPrivileges, error) {
 	return ExecutionPrivileges{{Admin: true, Name: "", Rwuser: true, Privilege: AllPrivileges}}, nil
+}
+
+func (s *ShowShardsStatement) GetMstInfo() *Measurement {
+	return s.mstInfo
+}
+
+func (s *ShowShardsStatement) GetMstName() string {
+	if s.mstInfo == nil {
+		return ""
+	}
+	return s.mstInfo.Name
+}
+
+func (s *ShowShardsStatement) GetDBName() string {
+	if s.mstInfo == nil {
+		return ""
+	}
+	return s.mstInfo.Database
+}
+
+func (s *ShowShardsStatement) GetRPName() string {
+	if s.mstInfo == nil {
+		return ""
+	}
+	return s.mstInfo.RetentionPolicy
 }
 
 // ShowDiagnosticsStatement represents a command for show node diagnostics.
@@ -4578,6 +4740,7 @@ func (m *Measurement) Clone() *Measurement {
 		IndexRelation:     indexRelation,
 		ObsOptions:        obsOpts,
 		EngineType:        m.EngineType,
+		IsTimeSorted:      m.IsTimeSorted,
 	}
 }
 
@@ -4656,6 +4819,41 @@ func (j *Join) String() string {
 }
 
 func (j *Join) GetName() string {
+	return ""
+}
+
+type MatchCardinality int
+
+const (
+	OneToOne MatchCardinality = iota
+	ManyToOne
+	OneToMany
+)
+
+type BinOp struct {
+	LSrc        Source
+	RSrc        Source
+	OpType      int
+	On          bool     // true: on; false: ignore
+	MatchKeys   []string // on(MatchKeys)
+	MatchCard   MatchCardinality
+	IncludeKeys []string // group_left/group_right(IncludeKeys)
+	ReturnBool  bool
+}
+
+func (b *BinOp) String() string {
+	var matchKeys []byte
+	for _, matchKey := range b.MatchKeys {
+		matchKeys = append(matchKeys, []byte(matchKey)...)
+	}
+	var includeKeys []byte
+	for _, includeKey := range b.IncludeKeys {
+		includeKeys = append(includeKeys, []byte(includeKey)...)
+	}
+	return fmt.Sprintf("%s binary op %s %t %t(%s) %d(%s)", b.LSrc.String(), b.RSrc.String(), b.ReturnBool, b.On, string(matchKeys), b.MatchCard, includeKeys)
+}
+
+func (b *BinOp) GetName() string {
 	return ""
 }
 
@@ -4835,7 +5033,7 @@ type NumberLiteral struct {
 func (l *NumberLiteral) RewriteNameSpace(alias, mst string) {}
 
 // String returns a string representation of the literal.
-func (l *NumberLiteral) String() string { return strconv.FormatFloat(l.Val, 'f', 9, 64) }
+func (l *NumberLiteral) String() string { return strconv.FormatFloat(l.Val, 'f', -1, 64) }
 
 // IntegerLiteral represents an integer literal.
 type IntegerLiteral struct {
@@ -5001,6 +5199,8 @@ type BinaryExpr struct {
 	Op  Token
 	LHS Expr
 	RHS Expr
+	// If a comparison operator, return 0/1 rather than filtering.
+	ReturnBool bool
 }
 
 // String returns a string representation of the binary expression.
@@ -5122,7 +5322,7 @@ func CloneExpr(expr Expr) Expr {
 	}
 	switch expr := expr.(type) {
 	case *BinaryExpr:
-		return &BinaryExpr{Op: expr.Op, LHS: CloneExpr(expr.LHS), RHS: CloneExpr(expr.RHS)}
+		return &BinaryExpr{Op: expr.Op, LHS: CloneExpr(expr.LHS), RHS: CloneExpr(expr.RHS), ReturnBool: expr.ReturnBool}
 	case *BooleanLiteral:
 		return &BooleanLiteral{Val: expr.Val}
 	case *Call:
@@ -5317,6 +5517,9 @@ func Walk(v Visitor, node Node) {
 		if n != nil {
 			Walk(v, n.Measurement)
 		}
+	case *BinOp:
+		Walk(v, n.LSrc)
+		Walk(v, n.RSrc)
 	}
 }
 
@@ -5471,7 +5674,7 @@ func (v *ValuerEval) Eval(expr Expr) interface{} {
 
 	switch expr := expr.(type) {
 	case *BinaryExpr:
-		return v.evalBinaryExpr(expr)
+		return v.wrapEvalBinaryExpr(expr)
 	case *BooleanLiteral:
 		return expr.Val
 	case *IntegerLiteral:
@@ -5511,6 +5714,17 @@ func (v *ValuerEval) Eval(expr Expr) interface{} {
 // Otherwise returns false.
 func (v *ValuerEval) EvalBool(expr Expr) bool {
 	val, _ := v.Eval(expr).(bool)
+	return val
+}
+
+func (v *ValuerEval) wrapEvalBinaryExpr(expr *BinaryExpr) interface{} {
+	val := v.evalBinaryExpr(expr)
+	if expr.ReturnBool {
+		if val.(bool) {
+			return float64(1)
+		}
+		return float64(0)
+	}
 	return val
 }
 
@@ -6244,7 +6458,9 @@ func (v *TypeValuerEval) evalBinaryExprType(expr *BinaryExpr, batchCall bool) (D
 	if expr.Op == DIV {
 		return Float, nil
 	}
-
+	if expr.ReturnBool {
+		return Float, nil
+	}
 	return typ, nil
 }
 
@@ -6383,7 +6599,7 @@ func reduceBinaryExpr(expr *BinaryExpr, valuer Valuer) Expr {
 
 	// Do not evaluate if one side is nil.
 	if lhs == nil || rhs == nil {
-		return &BinaryExpr{LHS: lhs, RHS: rhs, Op: expr.Op}
+		return &BinaryExpr{LHS: lhs, RHS: rhs, Op: expr.Op, ReturnBool: expr.ReturnBool}
 	}
 
 	// If we have a logical operator (AND, OR) and one side is a boolean literal
@@ -6419,13 +6635,13 @@ func reduceBinaryExpr(expr *BinaryExpr, valuer Valuer) Expr {
 	case *NilLiteral:
 		return reduceBinaryExprNilLHS(op, lhs, rhs)
 	case *NumberLiteral:
-		return reduceBinaryExprNumberLHS(op, lhs, rhs)
+		return wrapReduceBinaryExprNumberLHS(expr, op, lhs, rhs)
 	case *StringLiteral:
 		return reduceBinaryExprStringLHS(op, lhs, rhs, loc)
 	case *TimeLiteral:
 		return reduceBinaryExprTimeLHS(op, lhs, rhs, loc)
 	default:
-		return &BinaryExpr{Op: op, LHS: lhs, RHS: rhs}
+		return &BinaryExpr{Op: op, LHS: lhs, RHS: rhs, ReturnBool: expr.ReturnBool}
 	}
 }
 
@@ -6660,6 +6876,25 @@ func reduceBinaryExprNilLHS(op Token, lhs *NilLiteral, rhs Expr) Expr {
 		return &BooleanLiteral{Val: false}
 	}
 	return &BinaryExpr{Op: op, LHS: lhs, RHS: rhs}
+}
+
+func wrapReduceBinaryExprNumberLHS(expr *BinaryExpr, op Token, lhs *NumberLiteral, rhs Expr) Expr {
+	if !expr.ReturnBool {
+		return reduceBinaryExprNumberLHS(op, lhs, rhs)
+	}
+	res := reduceBinaryExprNumberLHS(op, lhs, rhs)
+	switch val := res.(type) {
+	case *BooleanLiteral:
+		if val.Val {
+			return &NumberLiteral{Val: 1}
+		}
+		return &NumberLiteral{Val: 0}
+	case *BinaryExpr:
+		val.ReturnBool = expr.ReturnBool
+		return val
+	default:
+		return res
+	}
 }
 
 func reduceBinaryExprNumberLHS(op Token, lhs *NumberLiteral, rhs Expr) Expr {
@@ -7577,13 +7812,8 @@ func (c *CreateStreamStatement) String() string {
 }
 
 func (c *CreateStreamStatement) Check(stmt *SelectStatement, supportTable map[string]bool) error {
-	for i := range stmt.Fields {
-		if c, ok := stmt.Fields[i].Expr.(*Call); ok && !supportTable[c.Name] {
-			return errors.New("unsupported call function in stream")
-		}
-	}
-	if stmt.groupByInterval == 0 {
-		return errors.New("should have group by interval time")
+	if err := stmt.StreamCheck(supportTable); err != nil {
+		return err
 	}
 	if stmt.groupByInterval*10 < c.Delay {
 		return errors.New("delay time must be smaller than 10 times of group by interval time")

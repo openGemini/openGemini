@@ -18,6 +18,7 @@ package executor_test
 
 import (
 	"context"
+	"math"
 	"reflect"
 	"testing"
 	"time"
@@ -26,6 +27,7 @@ import (
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/stretchr/testify/assert"
 )
 
 func createMaterializeExprOptions() []hybridqp.ExprOptions {
@@ -627,6 +629,183 @@ func TestMaterializeTransform1(t *testing.T) {
 	executor.Execute(context.Background())
 	executor.Release()
 }
+
+func TestMaterializeTransform2(t *testing.T) {
+	chunk := buildMaterializeChunk()
+	ops := []hybridqp.ExprOptions{
+		{
+			Expr: &influxql.Call{
+				Name: "label_replace",
+				Args: []influxql.Expr{
+					&influxql.VarRef{
+						Val:  "mark1",
+						Type: influxql.Integer,
+					},
+					&influxql.StringLiteral{
+						Val: "h",
+					},
+					&influxql.StringLiteral{
+						Val: "$1",
+					},
+					&influxql.StringLiteral{
+						Val: "host",
+					},
+					&influxql.StringLiteral{
+						Val: "(.*)",
+					},
+				},
+			},
+		},
+	}
+	opt := query.ProcessorOptions{
+		Interval: hybridqp.Interval{
+			Duration: 10 * time.Nanosecond,
+		},
+		Dimensions: []string{"host"},
+		Ascending:  true,
+		ChunkSize:  100,
+	}
+	expectChunkTags := []executor.ChunkTags{*executor.NewChunkTagsByTagKVs([]string{"host", "h"}, []string{"A", "A"})}
+	schema := executor.NewQuerySchema(nil, nil, &opt, nil)
+	trans := executor.NewMaterializeTransform(buildMaterializeInRowDataType(), buildMaterializeOutRowDataType(), ops, &opt, nil, schema)
+	source := NewSourceFromSingleChunk(buildMaterializeInRowDataType(), []executor.Chunk{chunk})
+	sink := NewSinkFromFunction(buildMaterializeOutRowDataType(), func(chunk executor.Chunk) error {
+		if !reflect.DeepEqual(chunk.Tags(), expectChunkTags) {
+			t.Fatal()
+		}
+		return nil
+	})
+
+	executor.Connect(source.Output, trans.GetInputs()[0])
+	executor.Connect(trans.GetOutputs()[0], sink.Input)
+
+	var processors executor.Processors
+	processors = append(processors, source)
+	processors = append(processors, trans)
+	processors = append(processors, sink)
+
+	dag := executor.NewDAG(processors)
+
+	if dag.CyclicGraph() == true {
+		t.Error("dag has circle")
+	}
+
+	executor := executor.NewPipelineExecutor(processors)
+	executor.Execute(context.Background())
+	executor.Release()
+}
+
+func buildSrcRowDataType1() hybridqp.RowDataType {
+	return hybridqp.NewRowDataTypeImpl(influxql.VarRef{Val: "value", Type: influxql.Float})
+}
+
+func buildSrcChunk() executor.Chunk {
+	rp := buildSrcRowDataType1()
+	b := executor.NewChunkBuilder(rp)
+	chunk := b.NewChunk("up")
+	chunk.AppendTimes([]int64{1, 2, 3})
+	chunk.AddTagAndIndex(*ParseChunkTags("host=A"), 0)
+	chunk.AddIntervalIndex(0)
+	chunk.Column(0).AppendFloatValues([]float64{1, 2, 3})
+	chunk.Column(0).AppendManyNotNil(3)
+	return chunk
+}
+
+func TestMaterializeTransform_Bool_Modifier(t *testing.T) {
+	chunk := buildSrcChunk()
+	ops := []hybridqp.ExprOptions{
+		{
+			Expr: &influxql.BinaryExpr{
+				Op:         influxql.GT,
+				LHS:        &influxql.VarRef{Val: "value", Type: influxql.Float},
+				RHS:        &influxql.NumberLiteral{Val: 2},
+				ReturnBool: true,
+			},
+		},
+	}
+	opt := query.ProcessorOptions{Dimensions: []string{"host"}}
+	expect := []float64{0, 0, 1}
+	schema := executor.NewQuerySchema(nil, nil, &opt, nil)
+	trans := executor.NewMaterializeTransform(buildSrcRowDataType1(), buildSrcRowDataType1(), ops, &opt, nil, schema)
+	source := NewSourceFromSingleChunk(buildSrcRowDataType1(), []executor.Chunk{chunk})
+	sink := NewSinkFromFunction(buildSrcRowDataType1(), func(chunk executor.Chunk) error {
+		if !reflect.DeepEqual(chunk.Column(0).FloatValues(), expect) {
+			t.Fatal()
+		}
+		return nil
+	})
+	executor.Connect(source.Output, trans.GetInputs()[0])
+	executor.Connect(trans.GetOutputs()[0], sink.Input)
+	var processors executor.Processors
+	processors = append(processors, source)
+	processors = append(processors, trans)
+	processors = append(processors, sink)
+	dag := executor.NewDAG(processors)
+	if dag.CyclicGraph() == true {
+		t.Error("dag has circle")
+	}
+	executor := executor.NewPipelineExecutor(processors)
+	executor.Execute(context.Background())
+	executor.Release()
+}
+
+func buildSrcChunk_Special_value() executor.Chunk {
+	rp := buildSrcRowDataType1()
+	b := executor.NewChunkBuilder(rp)
+	chunk := b.NewChunk("up")
+	chunk.AppendTimes([]int64{1, 2, 3})
+	chunk.AddTagAndIndex(*ParseChunkTags("host=A"), 0)
+	chunk.AddIntervalIndex(0)
+	chunk.Column(0).AppendFloatValues([]float64{math.NaN(), math.Inf(0), math.Inf(-1)})
+	chunk.Column(0).AppendManyNotNil(3)
+	return chunk
+}
+
+func TestMaterializeTransform_Special_value(t *testing.T) {
+	chunk := buildSrcChunk_Special_value()
+	ops := []hybridqp.ExprOptions{
+		{
+			Expr: &influxql.BinaryExpr{
+				Op: influxql.MUL,
+				LHS: &influxql.BinaryExpr{
+					Op:  influxql.ADD,
+					LHS: &influxql.VarRef{Val: "value", Type: influxql.Float},
+					RHS: &influxql.NumberLiteral{Val: 2},
+				},
+				RHS: &influxql.NumberLiteral{Val: 10},
+			},
+		},
+	}
+	opt := query.ProcessorOptions{Dimensions: []string{"host"}, PromQuery: true}
+	expect := []float64{math.NaN(), math.Inf(0), math.Inf(-1)}
+	schema := executor.NewQuerySchema(nil, nil, &opt, nil)
+	trans := executor.NewMaterializeTransform(buildSrcRowDataType1(), buildSrcRowDataType1(), ops, &opt, nil, schema)
+	source := NewSourceFromSingleChunk(buildSrcRowDataType1(), []executor.Chunk{chunk})
+	sink := NewSinkFromFunction(buildSrcRowDataType1(), func(chunk executor.Chunk) error {
+		output := chunk.Column(0).FloatValues()
+		for i := range output {
+			if math.IsNaN(output[i]) && math.IsNaN(expect[i]) {
+				continue
+			}
+			assert.Equal(t, output[i], expect[i])
+		}
+		return nil
+	})
+	executor.Connect(source.Output, trans.GetInputs()[0])
+	executor.Connect(trans.GetOutputs()[0], sink.Input)
+	var processors executor.Processors
+	processors = append(processors, source)
+	processors = append(processors, trans)
+	processors = append(processors, sink)
+	dag := executor.NewDAG(processors)
+	if dag.CyclicGraph() == true {
+		t.Error("dag has circle")
+	}
+	executor := executor.NewPipelineExecutor(processors)
+	executor.Execute(context.Background())
+	executor.Release()
+}
+
 func buildBenchmarkCreateMaterializeOps() []hybridqp.ExprOptions {
 	return []hybridqp.ExprOptions{
 		{

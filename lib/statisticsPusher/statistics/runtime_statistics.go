@@ -25,11 +25,13 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/fasttime"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics/opsStat"
 	"github.com/openGemini/openGemini/lib/util"
 )
 
+var version string
 var RuntimeTagMap map[string]string
 var RuntimeStatisticsName = "runtime"
 var CpuStatFile = "/sys/fs/cgroup/cpu,cpuacct/cpuacct.stat"
@@ -38,6 +40,15 @@ var formerUserUsage = 0
 var formerSysUsage = 0
 var newUserUsage = 0
 var newSysUsage = 0
+var lastCollectTime uint64 = 0
+
+const (
+	RuntimeCollectInterval = 60 // second
+)
+
+func SetVersion(v string) {
+	version = v
+}
 
 func InitRuntimeStatistics(tags map[string]string, interval int) {
 	RuntimeTagMap = tags
@@ -47,6 +58,12 @@ func InitRuntimeStatistics(tags map[string]string, interval int) {
 }
 
 func CollectRuntimeStatistics(buffer []byte) ([]byte, error) {
+	ts := fasttime.UnixTimestamp()
+	if ts < (lastCollectTime + RuntimeCollectInterval) {
+		return buffer, nil
+	}
+
+	lastCollectTime = ts
 	valueMap := genRuntimeValueMap()
 
 	buffer = AddPointToBuffer(RuntimeStatisticsName, RuntimeTagMap, valueMap, buffer)
@@ -62,10 +79,10 @@ func genRuntimeValueMap() map[string]interface{} {
 		"Alloc":        int64(rt.Alloc),
 		"HeapAlloc":    int64(rt.HeapAlloc),
 		"HeapSys":      int64(rt.HeapSys),
-		"HeapIdle":     int64(rt.HeapIdle),
 		"HeapInUse":    int64(rt.HeapInuse),
-		"HeapReleased": int64(rt.HeapReleased),
+		"HeapIdle":     int64(rt.HeapIdle),
 		"HeapObjects":  int64(rt.HeapObjects),
+		"HeapReleased": int64(rt.HeapReleased),
 		"TotalAlloc":   int64(rt.TotalAlloc),
 		"Lookups":      int64(rt.Lookups),
 		"Mallocs":      int64(rt.Mallocs),
@@ -74,6 +91,7 @@ func genRuntimeValueMap() map[string]interface{} {
 		"NumGC":        int64(rt.NumGC),
 		"NumGoroutine": int64(runtime.NumGoroutine()),
 		"CpuUsage":     user_usage,
+		"Version":      version,
 	}
 
 	return valueMap
@@ -87,10 +105,6 @@ func CollectOpsRuntimeStatistics() []opsStat.OpsStatistic {
 		Values: valueMap,
 	},
 	}
-}
-
-func CreateRuntimeWithShardKey(buffer []byte) ([]byte, error) {
-	return nil, nil
 }
 
 func GetCpuUsage() (int64, int64) {

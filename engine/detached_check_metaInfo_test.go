@@ -75,6 +75,9 @@ func TestCheckDetachedFiles(t *testing.T) {
 	}
 
 	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta.MeasurementInfo{mstsInfo[defaultMeasurementName]},
+	})
 	err = sh.WriteRows(rows, nil)
 	msInfo, err := sh.activeTbl.GetMsInfo(defaultMeasurementName)
 	if err != nil {
@@ -88,7 +91,7 @@ func TestCheckDetachedFiles(t *testing.T) {
 
 	require.Equal(t, 4*100, int(sh.rowCount))
 	detachedInfo := NewDetachedMetaInfo()
-	err = detachedInfo.checkAndTruncateDetachedFiles(sh.filesPath, defaultMeasurementName, bfColumn)
+	err = detachedInfo.checkAndTruncateDetachedFiles(sh.filesPath, defaultMeasurementName, bfColumn, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,6 +138,9 @@ func TestTestCheckDetachedFilesV2(t *testing.T) {
 	}
 
 	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
+	sh.SetClient(&MockMetaClient{
+		mstInfo: []*meta.MeasurementInfo{mstsInfo[defaultMeasurementName]},
+	})
 	err = sh.WriteRows(rows, nil)
 	msInfo, err := sh.activeTbl.GetMsInfo(defaultMeasurementName)
 	if err != nil {
@@ -147,7 +153,7 @@ func TestTestCheckDetachedFilesV2(t *testing.T) {
 		mutable.SetWriteChunk(msInfo, rec)
 		sh.commitSnapshot(sh.activeTbl)
 		detachedInfo := NewDetachedMetaInfo()
-		err = detachedInfo.checkAndTruncateDetachedFiles(sh.filesPath, defaultMeasurementName, bfColumn)
+		err = detachedInfo.checkAndTruncateDetachedFiles(sh.filesPath, defaultMeasurementName, bfColumn, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -162,7 +168,7 @@ func TestTestCheckDetachedFilesV2(t *testing.T) {
 func TestCheckMetaIndexFile(t *testing.T) {
 	testDir := t.TempDir()
 	detachedInfo := NewDetachedMetaInfo()
-	err := detachedInfo.checkAndTruncateDetachedFiles("unknownPath", "cpu", nil)
+	err := detachedInfo.checkAndTruncateDetachedFiles("unknownPath", "cpu", nil, false)
 	if err == nil {
 		t.Fatal("should return open metaIndex file path error")
 	}
@@ -180,7 +186,7 @@ func TestCheckMetaIndexFile(t *testing.T) {
 	data = append(data, buf...)
 	crc := crc32.ChecksumIEEE(data[immutable.MetaIndexHeaderSize+CRCLen : immutable.MetaIndexHeaderSize+immutable.MetaIndexItemSize+CRCLen])
 	numberenc.MarshalUint32Copy(data[immutable.MetaIndexHeaderSize:immutable.MetaIndexHeaderSize+CRCLen], crc)
-	fd, err := immutable.OpenObsFile(testDir, immutable.MetaIndexFile, nil)
+	fd, err := fileops.OpenObsFile(testDir, immutable.MetaIndexFile, nil, false)
 	if err != nil {
 		log.Error("open detached metaIndex file fail", zap.String("name", testDir), zap.Error(err))
 		t.Fatal(err)
@@ -217,7 +223,7 @@ func TestCheckChunkMetaFile(t *testing.T) {
 	detachedInfo.lastMetaIdxOff = 0
 	detachedInfo.lastMetaIdxSize = uint32(CRCLen + util.Uint64SizeBytes*2 + util.Uint32SizeBytes)
 	buf := make([]byte, detachedInfo.lastMetaIdxSize+10)
-	fd, err := immutable.OpenObsFile(testDir, immutable.ChunkMetaFile, nil)
+	fd, err := fileops.OpenObsFile(testDir, immutable.ChunkMetaFile, nil, false)
 	if err != nil {
 		log.Error("open detached metaIndex file fail", zap.String("name", testDir), zap.Error(err))
 		t.Fatal(err)
@@ -245,7 +251,7 @@ func TestCheckDataFile(t *testing.T) {
 	}
 
 	buf := make([]byte, 10)
-	fd, err := immutable.OpenObsFile(testDir, immutable.DataFile, nil)
+	fd, err := fileops.OpenObsFile(testDir, immutable.DataFile, nil, false)
 	if err != nil {
 		log.Error("open detached data file fail", zap.String("name", testDir), zap.Error(err))
 		t.Fatal(err)
@@ -279,7 +285,7 @@ func TestCheckPkMetaIndexFile(t *testing.T) {
 	}
 
 	buf := make([]byte, immutable.PKMetaPrefixSize-util.Uint32SizeBytes)
-	fd, err := immutable.OpenObsFile(testDir, immutable.PrimaryMetaFile, nil)
+	fd, err := fileops.OpenObsFile(testDir, immutable.PrimaryMetaFile, nil, false)
 	if err != nil {
 		log.Error("open detached data file fail", zap.String("name", testDir), zap.Error(err))
 		t.Fatal(err)
@@ -319,7 +325,7 @@ func TestCheckPkIndexFile(t *testing.T) {
 
 	//test fileInfo.Size() > dataFileSize
 	buf := make([]byte, 10)
-	fd, err := immutable.OpenObsFile(testDir, immutable.PrimaryKeyFile, nil)
+	fd, err := fileops.OpenObsFile(testDir, immutable.PrimaryKeyFile, nil, false)
 	if err != nil {
 		log.Error("open detached pk index file fail", zap.String("name", testDir), zap.Error(err))
 		t.Fatal(err)
@@ -343,7 +349,7 @@ func TestCheckBloomFilterFiles(t *testing.T) {
 	testDir := t.TempDir()
 	detachedInfo := NewDetachedMetaInfo()
 	bfCols := []string{"tags"}
-	err := detachedInfo.checkAndTruncateBfFiles("unknownPath", "", bfCols)
+	err := detachedInfo.checkAndTruncateBfFiles("unknownPath", "", bfCols, false)
 	if err == nil {
 		t.Fatal("should return open bloom filter file path error")
 	}
@@ -366,7 +372,7 @@ func TestCheckBloomFilterFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = detachedInfo.checkAndTruncateBfFiles(testDir, "", bfCols)
+	err = detachedInfo.checkAndTruncateBfFiles(testDir, "", bfCols, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -376,7 +382,51 @@ func TestCheckBloomFilterFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = detachedInfo.checkAndTruncateBfFiles(testDir, "", bfCols)
+	err = detachedInfo.checkAndTruncateBfFiles(testDir, "", bfCols, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = os.RemoveAll(testDir)
+}
+
+func TestCheckFullTextBfFiles(t *testing.T) {
+	testDir := t.TempDir()
+	detachedInfo := NewDetachedMetaInfo()
+	err := detachedInfo.checkAndTruncateBfFiles("unknownPath", "", nil, true)
+	if err == nil {
+		t.Fatal("should return open bloom filter file path error")
+	}
+	constant := logstore.GetConstant(logstore.CurrentLogTokenizerVersion)
+	buf := make([]byte, constant.FilterDataDiskSize*2)
+	lock := fileops.FileLockOption("")
+	pri := fileops.FilePriorityOption(fileops.IO_PRIORITY_NORMAL)
+	bfCols := []string{sparseindex.FullTextIndex}
+	filePath := sparseindex.GetBloomFilterFilePath(testDir, "", bfCols[0])
+
+	fd, err := fileops.OpenFile(filePath, os.O_CREATE|os.O_RDWR, 0640, lock, pri)
+	if err != nil {
+		log.Error("open detached bloom filter file fail", zap.String("name", testDir), zap.Error(err))
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = fd.Close()
+	}()
+
+	_, err = fd.Write(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = detachedInfo.checkAndTruncateBfFiles(testDir, "", bfCols, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	detachedInfo.lastPkMetaEndBlockId = 3
+	_, err = fd.Write(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = detachedInfo.checkAndTruncateBfFiles(testDir, "", bfCols, true)
 	if err != nil {
 		t.Fatal(err)
 	}

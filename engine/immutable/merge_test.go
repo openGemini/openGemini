@@ -25,7 +25,6 @@ import (
 
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/lib/config"
-	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/rand"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
@@ -44,10 +43,6 @@ func getDefaultSchemas() record.Schemas {
 var defaultInterval = time.Second.Nanoseconds()
 var saveDir = ""
 var defaultTier uint64 = util.Warm
-
-func init() {
-	immutable.MaxNumOfFileToMerge = 20
-}
 
 type MergeTestHelper struct {
 	mst     string
@@ -84,7 +79,7 @@ func (h *MergeTestHelper) resetRecords() {
 }
 
 func (h *MergeTestHelper) addRecord(sid uint64, rec *record.Record) {
-	h.mergeRec(sid, rec.Copy(), h.records)
+	h.mergeRec(sid, rec.Copy(true, nil, rec.Schema), h.records)
 
 	if h.compare {
 		h.appendRec(sid, rec, h.expect)
@@ -134,7 +129,7 @@ func (h *MergeTestHelper) save(order bool) error {
 }
 
 func (h *MergeTestHelper) mergeAndCompact(force bool) error {
-	if err := h.store.MergeOutOfOrder(1, force); err != nil {
+	if err := h.store.MergeOutOfOrder(1, false, force); err != nil {
 		return err
 	}
 	h.store.Wait()
@@ -364,7 +359,7 @@ func (rg *recordGenerator) generateString(col *record.ColVal, withEmpty bool) {
 		return
 	}
 
-	col.AppendString(fmt.Sprintf("s_%d", int64(rand.Float64()*1000)))
+	col.AppendString(fmt.Sprintf("s_%03d", int64(rand.Float64()*1000)))
 }
 
 func (rg *recordGenerator) generateBool(col *record.ColVal, withEmpty bool) {
@@ -395,7 +390,7 @@ func saveRecordToFile(seq uint64, records map[uint64]*record.Record, order bool,
 	}
 	lockPath := ""
 	fileName := immutable.NewTSSPFileName(seq, 0, 0, 0, order, &lockPath)
-	builder := immutable.NewMsBuilder(saveDir, "mst", &lockPath, conf, 0, fileName, 1, nil, 2, config.TSSTORE)
+	builder := immutable.NewMsBuilder(saveDir, "mst", &lockPath, conf, 0, fileName, 1, nil, 2, config.TSSTORE, nil, 0)
 	sort.Slice(sidList, func(i, j int) bool {
 		return sidList[i] < sidList[j]
 	})
@@ -412,29 +407,6 @@ func saveRecordToFile(seq uint64, records map[uint64]*record.Record, order bool,
 		return nil, err
 	}
 	return f, nil
-}
-
-func openFilesFromDir(dir string, store *immutable.MmsTables, order bool) error {
-	glob, err := fileops.Glob(dir + "*")
-	if err != nil {
-		return err
-	}
-	//fmt.Println(glob)
-	lockPath := ""
-	for _, s := range glob {
-		if s[len(s)-4:] != "tssp" {
-			continue
-		}
-
-		f, err := immutable.OpenTSSPFile(s, &lockPath, order, false)
-		if err != nil {
-			return err
-		}
-
-		_ = f.LoadComponents()
-		store.AddTSSPFiles(f.Name(), order, f)
-	}
-	return nil
 }
 
 func itrTSSPFile(f immutable.TSSPFile, hook func(sid uint64, rec *record.Record)) {

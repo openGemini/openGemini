@@ -35,6 +35,8 @@ const (
 	Cold      = 3
 	Moving    = 4
 	TierEnd   = 5
+	True      = "true"
+	False     = "false"
 )
 
 const (
@@ -48,9 +50,21 @@ const (
 	Float32SizeBytes = int(unsafe.Sizeof(float32(0)))
 	Float64SizeBytes = int(unsafe.Sizeof(float64(0)))
 	Int8SizeBytes    = int(unsafe.Sizeof(int8(0)))
-)
 
-const RowsNumPerFragment int = 8192
+	RowsNumPerFragment                int = 8192
+	DefaultMaxRowsPerSegment4TsStore      = 1000
+	DefaultMaxRowsPerSegment4ColStore     = RowsNumPerFragment // should be the same as RowsNumPerFragment@colstore
+	DefaultMaxSegmentLimit4ColStore       = 256 * 1024
+	DefaultMaxChunkMetaItemSize           = 256 * 1024
+	DefaultMaxChunkMetaItemCount          = 512
+	CompressModMaxChunkMetaItemCount      = 16
+
+	NonStreamingCompact               = 2
+	StreamingCompact                  = 1
+	AutoCompact                       = 0
+	DefaultExpectedSegmentSize uint32 = 8 * 1024 * 1024
+	DefaultFileSizeLimit              = 8 * 1024 * 1024 * 1024
+)
 
 const MaxMeasurementLengthWithVersion = 255
 
@@ -59,6 +73,22 @@ const MeasurementVersionLength = 5
 
 // the measurement name length should consider MeasurementVersionLength
 const MaxMeasurementLength = MaxMeasurementLengthWithVersion - MeasurementVersionLength
+
+type BasicType interface {
+	int64 | float64 | bool | string
+}
+
+type NumberOnly interface {
+	int64 | float64
+}
+
+type ExceptString interface {
+	int64 | float64 | bool
+}
+
+type ExceptBool interface {
+	int64 | float64 | string
+}
 
 var logger *zap.Logger
 
@@ -75,6 +105,18 @@ func MustClose(obj io.Closer) {
 	if err != nil && logger != nil {
 		logger.WithOptions(zap.AddCallerSkip(1)).
 			Error("failed to close", zap.Error(err))
+	}
+}
+
+func MustRun(fn func() error) {
+	if fn == nil {
+		return
+	}
+
+	err := fn()
+	if err != nil && logger != nil {
+		logger.WithOptions(zap.AddCallerSkip(1)).
+			Error("failed", zap.Error(err))
 	}
 }
 
@@ -434,6 +476,14 @@ func Bytes2str(b []byte) string {
 	return *(*string)(unsafe.Pointer(&b))
 }
 
+func Bool2str(b bool) string {
+	if b {
+		return True
+	} else {
+		return False
+	}
+}
+
 func MemorySet(buf []byte) {
 	for i := range buf {
 		buf[i] = 0
@@ -484,4 +534,11 @@ func AllocSlice[T allocItem](data []T, size int) ([]T, []T) {
 	}
 
 	return data[:end], data[start:end]
+}
+
+func DivisionCeil(dividend, divisor int) int {
+	if divisor == 0 {
+		return 0
+	}
+	return (dividend + divisor - 1) / divisor
 }

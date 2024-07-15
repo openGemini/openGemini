@@ -195,7 +195,7 @@ func (s *fileLoopCursor) FilterRecInMemTable(re *record.Record, cond influxql.Ex
 	if s.isCutSchema {
 		rec.AppendRecForSeries(r, 0, r.RowNums(), s.ridIdx)
 	} else {
-		rec.CopyImpl(r, false, false)
+		rec.CopyImpl(r, false, false, true, 0, r.RowNums()-1, r.Schema)
 	}
 	info := s.FilesInfoPool.Get()
 	info.MinTime = s.minTime
@@ -321,7 +321,7 @@ func (s *fileLoopCursor) ReadAggDataNormal() (*record.Record, *comm.FileInfo, er
 		if s.isCutSchema {
 			rec.AppendRecForSeries(re.record, 0, re.record.RowNums(), s.ridIdx)
 		} else {
-			rec.CopyImpl(re.record, false, false)
+			rec.CopyImpl(re.record, false, false, true, 0, re.record.RowNums()-1, re.record.Schema)
 		}
 
 		info := s.UpdateRecordInfo(re)
@@ -412,7 +412,7 @@ func (s *fileLoopCursor) initMergeIters() error {
 	if s.span != nil {
 		tm = time.Now()
 	}
-	for i := range s.ctx.readers.OutOfOrders {
+	for i := len(s.ctx.readers.OutOfOrders) - 1; i >= 0; i-- {
 		if !isInit {
 			curCursor, err = newFileCursor(s.ctx, s.span, s.schema, s.tagSetInfo, s.start, s.step, s.ctx.readers.OutOfOrders[i], nil)
 			if err != nil {
@@ -455,12 +455,7 @@ func (s *fileLoopCursor) updateQueryTime() {
 }
 
 func (s *fileLoopCursor) initOutOfOrderItersByFile(curCursor *fileCursor, i int) error {
-	outOfOrderFilsLen := len(s.ctx.readers.OutOfOrders) - 1
-	ascending := s.schema.Options().IsAscending()
-	if !ascending {
-		i = outOfOrderFilsLen - i
-	}
-	if (i == outOfOrderFilsLen && ascending) || (i == 0 && !ascending) {
+	if i == 0 {
 		curCursor.SetLastFile()
 	}
 	for {
@@ -500,7 +495,7 @@ func (s *fileLoopCursor) initOutOfOrderItersByFile(curCursor *fileCursor, i int)
 
 func (s *fileLoopCursor) initOutOfOrderItersByRecordWhenPreAgg(data *DataBlockInfo, midSid uint64, i int) {
 	if s.mergeRecIters[midSid][i].iter.record == nil {
-		s.mergeRecIters[midSid][i].iter.init(data.record.Copy())
+		s.mergeRecIters[midSid][i].iter.init(data.record.Copy(true, nil, data.record.Schema))
 		return
 	}
 	immutable.AggregateData(s.mergeRecIters[midSid][i].iter.record, data.record, s.ctx.decs.GetOps())
@@ -514,14 +509,14 @@ func (s *fileLoopCursor) initOutOfOrderItersByRecord(data *DataBlockInfo, limitR
 		if data.record.RowNums() > limitRows {
 			mergeRecord.SliceFromRecord(data.record, 0, limitRows)
 		} else {
-			mergeRecord = data.record.Copy()
+			mergeRecord = data.record.Copy(true, nil, data.record.Schema)
 		}
 	} else if s.ctx.decs.Ascending {
 		mergeRecord.Schema = nil
-		mergeRecord.MergeRecordLimitRows(data.record, s.mergeRecIters[midSid][i].iter.record, 0, 0, limitRows)
+		mergeRecord.MergeRecordLimitRows(s.mergeRecIters[midSid][i].iter.record, data.record, 0, 0, limitRows)
 	} else {
 		mergeRecord.Schema = nil
-		mergeRecord.MergeRecordLimitRowsDescend(data.record, s.mergeRecIters[midSid][i].iter.record, 0, 0, limitRows)
+		mergeRecord.MergeRecordLimitRowsDescend(s.mergeRecIters[midSid][i].iter.record, data.record, 0, 0, limitRows)
 	}
 	if mergeRecord.RowNums() != 0 {
 		s.minTime = GetMinTime(s.minTime, mergeRecord, s.schema.Options().IsAscending())
@@ -629,6 +624,8 @@ func (s *AggTagSetCursor) buildAggFuncs() {
 			s.buildSumFuncs(i)
 		case "count":
 			s.buildCountFuncs(i)
+		case "count_prom":
+			s.buildFloatCountPromFuncs(i)
 		default:
 			panic("unsupported agg function")
 		}
@@ -649,9 +646,14 @@ func (s *AggTagSetCursor) buildAggFunc() {
 		s.buildSumFunc()
 	case "count":
 		s.buildCountFunc()
+	case "count_prom":
+		s.buildFloatCountPromFuncs(0)
+	case "min_prom":
+		s.buildMinPromFunc()
+	case "max_prom":
+		s.buildMaxPromFunc()
 	default:
 		panic("unsupported agg function")
-
 	}
 }
 
@@ -668,6 +670,18 @@ func (s *AggTagSetCursor) buildMinFunc() {
 		s.functions[column][0] = record.UpdateBooleanMin
 		s.functions[column][1] = record.UpdateBooleanMinFast
 	}
+}
+
+func (s *AggTagSetCursor) buildMinPromFunc() {
+	column := s.GetSchema().FieldIndex(s.aggOps[0].Ref.Val)
+	s.functions[column][0] = record.UpdateMinProm
+	s.functions[column][1] = record.UpdateMinProm
+}
+
+func (s *AggTagSetCursor) buildFloatCountPromFuncs(i int) {
+	column := s.GetSchema().FieldIndex(s.aggOps[i].Ref.Val)
+	s.functions[column][0] = record.UpdateFloatCountProm
+	s.functions[column][1] = record.UpdateFloatCountProm
 }
 
 func (s *AggTagSetCursor) buildMinFuncs(i int) {
@@ -698,6 +712,12 @@ func (s *AggTagSetCursor) buildMaxFunc() {
 		s.functions[column][0] = record.UpdateBooleanMax
 		s.functions[column][1] = record.UpdateBooleanMaxFast
 	}
+}
+
+func (s *AggTagSetCursor) buildMaxPromFunc() {
+	column := s.GetSchema().FieldIndex(s.aggOps[0].Ref.Val)
+	s.functions[column][0] = record.UpdateMaxProm
+	s.functions[column][1] = record.UpdateMaxProm
 }
 
 func (s *AggTagSetCursor) buildMaxFuncs(i int) {
@@ -1173,7 +1193,8 @@ func (s *PreAggTagSetCursor) Next() (*record.Record, comm.SeriesInfoIntf, error)
 	if err != nil {
 		return nil, nil, err
 	}
-	s.baseCursorInfo.RecordResult = s.baseAggCursorInfo.recordBuf.Copy()
+	rec := s.baseAggCursorInfo.recordBuf
+	s.baseCursorInfo.RecordResult = rec.Copy(true, nil, rec.Schema)
 	if e := s.RecordInitPreAgg(); e != nil {
 		return nil, nil, e
 	}

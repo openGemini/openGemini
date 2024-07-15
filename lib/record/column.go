@@ -74,6 +74,10 @@ func (cv *ColVal) AppendBitmap(bitmap []byte, bitOffset int, rows int, start, en
 	cv.appendBitmap(bitmap, bitOffset, rows, start, end)
 }
 
+func (cv *ColVal) GetValLen() int {
+	return len(cv.Val)
+}
+
 func (cv *ColVal) appendBitmap(bm []byte, bitOffset int, rows int, start, end int) {
 	// fast path
 	bitmap, bitMapOffset := subBitmapBytes(bm, bitOffset, rows)

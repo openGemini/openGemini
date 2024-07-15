@@ -53,6 +53,13 @@ func TestMustClose(t *testing.T) {
 	util.MustClose(s)
 }
 
+func TestMustRun(t *testing.T) {
+	o := &closeObject{err: fmt.Errorf("some error")}
+	util.MustRun(o.Close)
+
+	util.MustRun(nil)
+}
+
 func BenchmarkIsObjectNil(b *testing.B) {
 	o := &closeObject{err: fmt.Errorf("some error")}
 	var s String
@@ -120,4 +127,13 @@ func TestAllocSlice(t *testing.T) {
 	buf, sub = util.AllocSlice(buf, size)
 	require.Equal(t, size*cpu.GetCpuNum(), cap(buf))
 	require.Equal(t, size, len(sub))
+}
+
+func TestDivisionCeil(t *testing.T) {
+	require.Equal(t, 0, util.DivisionCeil(10, 0))
+	require.Equal(t, 1, util.DivisionCeil(10, 11))
+	require.Equal(t, 4, util.DivisionCeil(10, 3))
+	require.Equal(t, 2, util.DivisionCeil(10, 8))
+	require.Equal(t, 2, util.DivisionCeil(10, 9))
+	require.Equal(t, 1, util.DivisionCeil(10, 10))
 }

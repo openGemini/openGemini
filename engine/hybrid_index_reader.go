@@ -21,6 +21,7 @@ import (
 	"math"
 	"strconv"
 
+	"github.com/openGemini/openGemini/engine/comm"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable"
@@ -42,7 +43,7 @@ const (
 )
 
 type IndexReader interface {
-	Next() (executor.IndexFrags, error)
+	CreateCursors() ([]comm.KeyCursor, int, error)
 }
 
 type indexContext struct {
@@ -62,8 +63,8 @@ func NewIndexContext(readBatch bool, batchCount int, schema hybridqp.Catalog, sh
 		readSegmentBatch:  readBatch,
 		segmentBatchCount: batchCount,
 		shardPath:         shardPath,
-		pkIndexReader:     sparseindex.NewPKIndexReader(colstore.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek),
-		skIndexReader:     sparseindex.NewSKIndexReader(colstore.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek),
+		pkIndexReader:     sparseindex.NewPKIndexReader(util.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek),
+		skIndexReader:     sparseindex.NewSKIndexReader(util.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek),
 		schema:            schema,
 		tr:                util.TimeRange{Min: schema.Options().GetStartTime(), Max: schema.Options().GetEndTime()},
 		log:               logger.NewLogger(errno.ModuleIndex),
@@ -77,12 +78,14 @@ type attachedIndexReader struct {
 	ctx          *indexContext
 	info         *executor.AttachedIndexInfo
 	skFileReader []sparseindex.SKFileReader
+	readerCtx    *immutable.FileReaderContext
 }
 
-func NewAttachedIndexReader(ctx *indexContext, info *executor.AttachedIndexInfo) *attachedIndexReader {
+func NewAttachedIndexReader(ctx *indexContext, info *executor.AttachedIndexInfo, readerCtx *immutable.FileReaderContext) *attachedIndexReader {
 	return &attachedIndexReader{
-		info: info,
-		ctx:  ctx,
+		info:      info,
+		ctx:       ctx,
+		readerCtx: readerCtx,
 	}
 }
 
@@ -94,6 +97,46 @@ func (r *attachedIndexReader) Init() (err error) {
 	}
 	err = initKeyCondition(r.info.Infos()[0].GetRec().Schema, r.ctx, r.info.Infos()[0].GetTCLocation())
 	return
+}
+
+func (r *attachedIndexReader) CreateCursors() ([]comm.KeyCursor, int, error) {
+	var fragCount int
+	cursors := make([]comm.KeyCursor, 0)
+	for {
+		frags, err := r.Next()
+		if err != nil {
+			return nil, 0, err
+		}
+		if frags == nil {
+			break
+		}
+		fragCount += int(frags.FragCount())
+		reader, err := r.initFileReader(frags)
+		if err != nil {
+			return nil, 0, err
+		}
+		cursors = append(cursors, reader)
+	}
+	return cursors, fragCount, nil
+}
+
+func (r *attachedIndexReader) initFileReader(frags executor.IndexFrags) (comm.KeyCursor, error) {
+	files, ok := frags.Indexes().([]immutable.TSSPFile)
+	if !ok {
+		return nil, fmt.Errorf("invalid index info for attached file reader")
+	}
+
+	var unnest *influxql.Unnest
+	if r.ctx.schema.HasUnnests() {
+		unnest = r.ctx.schema.GetUnnests()[0]
+	}
+
+	fragRanges := frags.FragRanges()
+	fileReader, err := immutable.NewTSSPFileAttachedReader(files, fragRanges, r.readerCtx, r.ctx.schema.Options(), unnest)
+	if err != nil {
+		return nil, err
+	}
+	return fileReader, nil
 }
 
 func (r *attachedIndexReader) Next() (executor.IndexFrags, error) {
@@ -164,20 +207,75 @@ type detachedIndexReader struct {
 	ctx          *indexContext
 	skFileReader []sparseindex.SKFileReader
 	obsOptions   *obs.ObsOptions
+	readerCtx    *immutable.FileReaderContext
 }
 
-func NewDetachedIndexReader(ctx *indexContext, obsOption *obs.ObsOptions) *detachedIndexReader {
+func NewDetachedIndexReader(ctx *indexContext, obsOption *obs.ObsOptions, readerCtx *immutable.FileReaderContext) *detachedIndexReader {
 	return &detachedIndexReader{
 		obsOptions: obsOption,
 		ctx:        ctx,
+		readerCtx:  readerCtx,
 	}
+}
+
+func (r *detachedIndexReader) CreateCursors() ([]comm.KeyCursor, int, error) {
+	var fragCount int
+	cursors := make([]comm.KeyCursor, 0)
+	for {
+		frags, err := r.Next()
+		if err != nil {
+			return nil, 0, err
+		}
+		if frags == nil {
+			break
+		}
+		fragCount += int(frags.FragCount())
+		reader, err := r.initFileReader(frags)
+		if err != nil {
+			return nil, 0, err
+		}
+		cursors = append(cursors, reader)
+	}
+	return cursors, fragCount, nil
+}
+
+func (r *detachedIndexReader) initFileReader(frags executor.IndexFrags) (comm.KeyCursor, error) {
+	metaIndexes, ok := frags.Indexes().([]*immutable.MetaIndex)
+	if !ok {
+		return nil, fmt.Errorf("invalid index info for detached file reader")
+	}
+	fragRanges := frags.FragRanges()
+	blocks := make([][]int, len(fragRanges))
+	for i, frs := range fragRanges {
+		for j := range frs {
+			for k := frs[j].Start; k < frs[j].End; k++ {
+				blocks[i] = append(blocks[i], int(k))
+			}
+		}
+	}
+
+	var unnest *influxql.Unnest
+	if r.ctx.schema.HasUnnests() {
+		unnest = r.ctx.schema.GetUnnests()[0]
+	}
+
+	fileReader, err := immutable.NewTSSPFileDetachedReader(metaIndexes, blocks, r.readerCtx,
+		sparseindex.NewOBSFilterPath("", frags.BasePath(), r.obsOptions), unnest, true, r.ctx.schema.Options())
+	if err != nil {
+		return nil, err
+	}
+	if r.ctx.schema.Options().CanLimitPushDown() {
+		sortLimitCursor := immutable.NewSortLimitCursor(r.ctx.schema.Options(), r.readerCtx.GetSchemas(), fileReader)
+		return sortLimitCursor, nil
+	}
+	return fileReader, nil
 }
 
 func (r *detachedIndexReader) Init() (err error) {
 	mst := r.ctx.schema.Options().GetMeasurements()[0]
 	r.dataPath = obs.GetBaseMstPath(r.ctx.shardPath, mst.Name)
-	if immutable.GetColStoreConfig().GetDetachedFlushEnabled() {
-		r.localPath = obs.GetLocalMstPath(immutable.GetPrefixDataPath(), r.dataPath)
+	if immutable.GetDetachedFlushEnabled() {
+		r.localPath = obs.GetLocalMstPath(obs.GetPrefixDataPath(), r.dataPath)
 	}
 	chunkCount, err := immutable.GetMetaIndexChunkCount(r.obsOptions, r.dataPath)
 	if err != nil {
@@ -186,60 +284,11 @@ func (r *detachedIndexReader) Init() (err error) {
 	if chunkCount == 0 {
 		return
 	}
-	startChunkId, endChunkId := int64(0), chunkCount
 
-	// init the obs meta index reader
-	metaIndexReader, err := immutable.NewDetachedMetaIndexReader(r.dataPath, r.obsOptions)
+	miChunkIds, miFiltered, err := immutable.GetMetaIndexAndBlockId(r.dataPath, r.obsOptions, chunkCount, r.ctx.tr)
+
 	if err != nil {
 		return
-	}
-
-	// init the obs pk meta info reader
-	pkMetaInfoReader, err := immutable.NewDetachedPKMetaInfoReader(r.dataPath, r.obsOptions)
-	if err != nil {
-		return
-	}
-	pkMetaInfo, err := pkMetaInfoReader.Read()
-	if err != nil {
-		return
-	}
-
-	// init the obs pk meta reader
-	pkMetaReader, err := immutable.NewDetachedPKMetaReader(r.dataPath, r.obsOptions)
-	if err != nil {
-		return
-	}
-
-	// init the obs pk data reader
-	pkDataReader, err := immutable.NewDetachedPKDataReader(r.dataPath, r.obsOptions)
-	if err != nil {
-		return
-	}
-	pkDataReader.SetPkMetaInfo(pkMetaInfo)
-
-	var miChunkIds []int64
-	var miFiltered []*immutable.MetaIndex
-
-	// init the pk meta variables
-	var pkMetas []*colstore.DetachedPKMeta
-	var pkDatas []*colstore.DetachedPKData
-	var pkItems []*colstore.DetachedPKInfo
-
-	// step1: init the meta index
-	offsets, lengths := make([]int64, 0, chunkCount), make([]int64, 0, chunkCount)
-	for i := startChunkId; i < endChunkId; i++ {
-		offset, length := immutable.GetMetaIndexOffsetAndLengthByChunkId(i)
-		offsets, lengths = append(offsets, offset), append(lengths, length)
-	}
-	metaIndexes, err := metaIndexReader.ReadMetaIndex(offsets, lengths)
-	if err != nil {
-		return err
-	}
-	for i := range metaIndexes {
-		if metaIndexes[i].IsExist(r.ctx.tr) {
-			miFiltered = append(miFiltered, metaIndexes[i])
-			miChunkIds = append(miChunkIds, startChunkId+int64(i))
-		}
 	}
 
 	if len(miFiltered) == 0 {
@@ -247,25 +296,9 @@ func (r *detachedIndexReader) Init() (err error) {
 	}
 
 	// step2: init the pk items
-	offsets, lengths = offsets[:0], lengths[:0]
-	for _, chunkId := range miChunkIds {
-		offset, length := immutable.GetPKMetaOffsetLengthByChunkId(pkMetaInfo, int(chunkId))
-		offsets, lengths = append(offsets, offset), append(lengths, length)
-	}
-	pkMetas, err = pkMetaReader.Read(offsets, lengths)
+	pkMetaInfo, pkItems, err := immutable.GetPKItems(r.dataPath, r.obsOptions, miChunkIds)
 	if err != nil {
 		return err
-	}
-	offsets, lengths = offsets[:0], lengths[:0]
-	for i := range pkMetas {
-		offsets, lengths = append(offsets, int64(pkMetas[i].Offset)), append(lengths, int64(pkMetas[i].Length))
-	}
-	pkDatas, err = pkDataReader.Read(offsets, lengths, pkMetas)
-	if err != nil {
-		return err
-	}
-	for i := range pkDatas {
-		pkItems = append(pkItems, colstore.GetPKInfoByPKMetaData(pkMetas[i], pkDatas[i], pkMetaInfo.TCLocation))
 	}
 	r.info = executor.NewDetachedIndexInfo(miFiltered, pkItems)
 

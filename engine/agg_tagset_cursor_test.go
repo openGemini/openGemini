@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/openGemini/openGemini/engine/executor"
+	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
@@ -183,4 +184,102 @@ func TestFilterRecInMemTable(t *testing.T) {
 		[]int{0, 1, 1, 0, 1, 0, 0}, []bool{false, false, true, false, true, false, false},
 		[]int64{157, 156, 155, 137, 113, 112, 99})
 	s.FilterRecInMemTable(rec3, s.tagSetInfo.Filters[0], sInfo, nil)
+}
+
+func TestInitOutOfOrderItersByRecordASC(t *testing.T) {
+	sInfo := &seriesInfo{
+		sid:  1,
+		key:  []byte{'a', 'b'},
+		tags: influx.PointTags{{Key: "a", Value: "b", IsArray: false}},
+	}
+	schema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Float, Name: "float"},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
+		record.Field{Type: influx.Field_Type_String, Name: "string"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	rec := genRowRec(schema,
+		[]int{1, 1, 1, 1, 0, 1, 1}, []int64{17, 16, 15, 14, 0, 13, 12},
+		[]int{0, 1, 1, 0, 1, 0, 1}, []float64{0, 5.3, 4.3, 0, 3.3, 0, 2.3},
+		[]int{1, 0, 1, 0, 0, 1, 0}, []string{"test1", "", "world1", "", "", "hello1", ""},
+		[]int{0, 1, 1, 0, 1, 0, 0}, []bool{false, false, true, false, true, false, false},
+		[]int64{57, 56, 55, 37, 3, 2, 1})
+	s := &fileLoopCursor{}
+	s.ctx = &idKeyCursorContext{
+		tr:   util.TimeRange{Max: 100},
+		decs: &immutable.ReadContext{},
+	}
+	s.ctx.filterOption.FiltersMap = map[string]*influxql.FilterMapValue{}
+	s.schema = executor.NewQuerySchema(nil, nil, &query.ProcessorOptions{Ascending: true}, nil)
+	s.mergeRecIters = make(map[uint64][]*SeriesIter, 1)
+	s.mergeRecIters[sInfo.sid] = make([]*SeriesIter, 0)
+	s.mergeRecIters[sInfo.sid] = append(s.mergeRecIters[sInfo.sid], &SeriesIter{iter: &recordIter{record: rec, rowCnt: 1}})
+	s.tagSetInfo = &tsi.TagSetInfo{Filters: []influxql.Expr{&influxql.VarRef{Val: "a"}}}
+	s.ridIdx = map[int]struct{}{}
+	s.recPool = record.NewCircularRecordPool(record.NewRecordPool(record.UnknownPool), 4, schema, false)
+	s.FilesInfoPool = NewSeriesInfoPool(fileInfoNum)
+	re, _ := s.FilterRecInMemTable(rec, s.tagSetInfo.Filters[0], sInfo, nil)
+	for i := range re.Times() {
+		if re.Times()[i] != rec.Times()[i] {
+			t.Fatal()
+		}
+	}
+	s.schema = executor.NewQuerySchema(nil, nil, &query.ProcessorOptions{Ascending: false}, nil)
+	data := &DataBlockInfo{sInfo: sInfo, record: rec, sid: 1, index: 1, tagSetIndex: 1}
+	s.initOutOfOrderItersByRecord(data, 10, 1, 0)
+	for i := range rec.Times() {
+		if rec.Times()[i] != s.mergeRecIters[sInfo.sid][0].iter.record.Time(i) {
+			t.Fatal()
+		}
+	}
+}
+
+func TestInitOutOfOrderItersByRecordDSC(t *testing.T) {
+	sInfo := &seriesInfo{
+		sid:  1,
+		key:  []byte{'a', 'b'},
+		tags: influx.PointTags{{Key: "a", Value: "b", IsArray: false}},
+	}
+	schema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Float, Name: "float"},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
+		record.Field{Type: influx.Field_Type_String, Name: "string"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	rec := genRowRec(schema,
+		[]int{1, 1, 1, 1, 0, 1, 1}, []int64{17, 16, 15, 14, 0, 13, 12},
+		[]int{0, 1, 1, 0, 1, 0, 1}, []float64{0, 5.3, 4.3, 0, 3.3, 0, 2.3},
+		[]int{1, 0, 1, 0, 0, 1, 0}, []string{"test1", "", "world1", "", "", "hello1", ""},
+		[]int{0, 1, 1, 0, 1, 0, 0}, []bool{false, false, true, false, true, false, false},
+		[]int64{57, 56, 55, 37, 3, 2, 1})
+	s := &fileLoopCursor{}
+	s.ctx = &idKeyCursorContext{
+		tr:   util.TimeRange{Max: 100},
+		decs: &immutable.ReadContext{Ascending: true},
+	}
+	s.ctx.filterOption.FiltersMap = map[string]*influxql.FilterMapValue{}
+	s.schema = executor.NewQuerySchema(nil, nil, &query.ProcessorOptions{Ascending: true}, nil)
+	s.mergeRecIters = make(map[uint64][]*SeriesIter, 1)
+	s.mergeRecIters[sInfo.sid] = make([]*SeriesIter, 0)
+	s.mergeRecIters[sInfo.sid] = append(s.mergeRecIters[sInfo.sid], &SeriesIter{iter: &recordIter{record: rec, rowCnt: 1}})
+	s.tagSetInfo = &tsi.TagSetInfo{Filters: []influxql.Expr{&influxql.VarRef{Val: "a"}}}
+	s.ridIdx = map[int]struct{}{}
+	s.recPool = record.NewCircularRecordPool(record.NewRecordPool(record.UnknownPool), 4, schema, false)
+	s.FilesInfoPool = NewSeriesInfoPool(fileInfoNum)
+	re, _ := s.FilterRecInMemTable(rec, s.tagSetInfo.Filters[0], sInfo, nil)
+	for i := range re.Times() {
+		if re.Times()[i] != rec.Times()[i] {
+			t.Fatal()
+		}
+	}
+	s.schema = executor.NewQuerySchema(nil, nil, &query.ProcessorOptions{Ascending: false}, nil)
+	data := &DataBlockInfo{sInfo: sInfo, record: rec, sid: 1, index: 1, tagSetIndex: 1}
+	s.initOutOfOrderItersByRecord(data, 10, 1, 0)
+	for i := range rec.Times() {
+		if rec.Times()[i] != s.mergeRecIters[sInfo.sid][0].iter.record.Time(i) {
+			t.Fatal()
+		}
+	}
 }

@@ -245,6 +245,19 @@ func (c *compiledStatement) compile(stmt *influxql.SelectStatement) error {
 					stmt.SubQueryHasDifferentAscending = rsrc.Statement.SubQueryHasDifferentAscending
 				}
 			}
+		case *influxql.BinOp:
+			if lsrc, ok := source.LSrc.(*influxql.SubQuery); ok {
+				lsrc.Statement.OmitTime = true
+				if err := c.subquery(lsrc.Statement); err != nil {
+					return err
+				}
+			}
+			if rsrc, ok := source.RSrc.(*influxql.SubQuery); ok {
+				rsrc.Statement.OmitTime = true
+				if err := c.subquery(rsrc.Statement); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	return nil
@@ -326,6 +339,14 @@ func (c *compiledField) compileExpr(expr influxql.Expr) error {
 
 		if stringFunc := GetStringFunction(expr.Name); stringFunc != nil {
 			return stringFunc.CompileFunc(expr, c)
+		}
+
+		if labelFunc := GetLabelFunction(expr.Name); labelFunc != nil {
+			return labelFunc.CompileFunc(expr, c)
+		}
+
+		if promTimeFunc := GetPromTimeFunction(expr.Name); promTimeFunc != nil {
+			return promTimeFunc.CompileFunc(expr, c)
 		}
 
 		// Register the function call in the list of function calls.
@@ -420,6 +441,11 @@ func (c *compiledField) compileSymbol(name string, field influxql.Expr) error {
 		}
 		c.global.OnlySelectors = false
 		return nil
+	case *influxql.Call:
+		if c.global.stmt.Range > 0 {
+			return nil
+		}
+		return fmt.Errorf("expected field argument in %s()", name)
 	default:
 		return fmt.Errorf("expected field argument in %s()", name)
 	}
@@ -692,6 +718,14 @@ func (c *compiledField) compileCall(expr *influxql.Call) error {
 
 	if stringFunc := GetStringFunction(expr.Name); stringFunc != nil {
 		return stringFunc.CompileFunc(expr, c)
+	}
+
+	if labelFunc := GetLabelFunction(expr.Name); labelFunc != nil {
+		return labelFunc.CompileFunc(expr, c)
+	}
+
+	if promTimeFunc := GetPromTimeFunction(expr.Name); promTimeFunc != nil {
+		return promTimeFunc.CompileFunc(expr, c)
 	}
 
 	if op.IsAggregateOp(expr) {
@@ -981,6 +1015,29 @@ func (c *compiledStatement) RewriteJoinSourceDFS(joinSources *[]*influxql.Join, 
 	}
 }
 
+func (c *compiledStatement) RewriteBinOpSource() {
+	sources := make([]*influxql.BinOp, 0, 8)
+	for _, source := range c.stmt.Sources {
+		c.RewriteBinOpSourceDFS(&sources, source)
+	}
+
+	c.stmt.BinOpSource = sources
+}
+
+func (c *compiledStatement) RewriteBinOpSourceDFS(binOpSources *[]*influxql.BinOp, source influxql.Source) {
+	switch s := source.(type) {
+	case *influxql.SubQuery:
+		for _, subSource := range s.Statement.Sources {
+			c.RewriteBinOpSourceDFS(&s.Statement.BinOpSource, subSource)
+		}
+	case *influxql.BinOp:
+		*binOpSources = append(*binOpSources, influxql.CloneSource(s).(*influxql.BinOp))
+		c.RewriteBinOpSourceDFS(nil, s.LSrc)
+		c.RewriteBinOpSourceDFS(nil, s.RSrc)
+	}
+
+}
+
 func (c *compiledStatement) Prepare(shardMapper ShardMapper, sopt SelectOptions) (PreparedStatement, error) {
 	// If this is a query with a grouping, there is a bucket limit, and the minimum time has not been specified,
 	// we need to limit the possible time range that can be used when mapping shards but not when actually executing
@@ -1059,6 +1116,7 @@ func (c *compiledStatement) Prepare(shardMapper ShardMapper, sopt SelectOptions)
 	batchEn := true
 	mapper := FieldMapper{FieldMapper: shards}
 	c.RewriteJoinSource()
+	c.RewriteBinOpSource()
 	stmt, err := c.stmt.RewriteFields(mapper, batchEn, false)
 	if err != nil {
 		shards.Close()

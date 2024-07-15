@@ -93,7 +93,7 @@ func (e *Engine) PreAssign(opId uint64, db string, ptId uint32, durationInfos ma
 	ptPath := path.Join(e.dataPath, config.DataDirectory, db, strconv.Itoa(int(ptId)))
 	walPath := path.Join(e.walPath, config.WalDirectory, db, strconv.Itoa(int(ptId)))
 	lockPath := ""
-	dbPt := NewDBPTInfo(db, ptId, ptPath, walPath, e.loadCtx)
+	dbPt := NewDBPTInfo(db, ptId, ptPath, walPath, e.loadCtx, e.fileInfos)
 	dbPt.SetOption(e.engOpt)
 	dbPt.SetParams(true, &lockPath, dbBriefInfo.EnableTagArray)
 	start := time.Now()
@@ -136,12 +136,18 @@ func (e *Engine) Offload(opId uint64, db string, ptId uint32) error {
 	return nil
 }
 
-func (e *Engine) Assign(opId uint64, db string, ptId uint32, ver uint64, durationInfos map[uint64]*meta2.ShardDurationInfo, dbBriefInfo *meta2.DatabaseBriefInfo, client metaclient.MetaClient) error {
+func (e *Engine) Assign(opId uint64, nodeId uint64, db string, ptId uint32, ver uint64, durationInfos map[uint64]*meta2.ShardDurationInfo, dbBriefInfo *meta2.DatabaseBriefInfo, client metaclient.MetaClient) error {
 	if !e.trySetDbPtMigrating(db, ptId) {
 		return errno.NewError(errno.PtIsAlreadyMigrating)
 	}
 	defer e.clearDbPtMigrating(db, ptId)
-	e.setMetaClient(client)
+	e.SetMetaClient(client)
+	if e.metaClient.IsSQLiteEnabled() && e.fileInfos == nil {
+		e.fileInfos = make(chan []immutable.FileInfoExtend, MaxFileInfoSize)
+		go func() {
+			e.uploadFileInfos()
+		}()
+	}
 	e.log.Info("engine start to load all shards", zap.Uint64("opId", opId), zap.String("db", db), zap.Uint32("pt", ptId))
 	start := time.Now()
 	ptPath := path.Join(e.dataPath, config.DataDirectory, db, strconv.Itoa(int(ptId)))
@@ -152,7 +158,7 @@ func (e *Engine) Assign(opId uint64, db string, ptId uint32, ver uint64, duratio
 		if errno.Equal(err, errno.DBPTClosed) {
 			return err
 		}
-		dbPt = NewDBPTInfo(db, ptId, ptPath, walPath, e.loadCtx)
+		dbPt = NewDBPTInfo(db, ptId, ptPath, walPath, e.loadCtx, e.fileInfos)
 	} else if !dbPt.preload {
 		e.log.Info("engine already load all shards", zap.Uint64("opId", opId), zap.String("db", db), zap.Uint32("pt", ptId))
 		return nil

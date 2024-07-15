@@ -24,6 +24,11 @@ type MeasurementVer struct {
 	Version         uint32
 }
 
+func (mstv MeasurementVer) clone() *MeasurementVer {
+	other := mstv
+	return &other
+}
+
 // RetentionPolicyInfo represents metadata about a retention policy.
 type RetentionPolicyInfo struct {
 	Name               string
@@ -236,7 +241,7 @@ func (rpi *RetentionPolicyInfo) TierDuration(tier uint64) time.Duration {
 	switch tier {
 	case util.Hot:
 		return rpi.HotDuration
-	case util.Warm:
+	case util.Warm, util.Moving:
 		return rpi.WarmDuration
 	}
 	return 0
@@ -444,7 +449,12 @@ func (rpi RetentionPolicyInfo) Clone() *RetentionPolicyInfo {
 			other.Measurements[msti.Name] = msti.clone()
 		}
 	}
-
+	if rpi.MstVersions != nil {
+		other.MstVersions = make(map[string]MeasurementVer, len(rpi.MstVersions))
+		for k, mstv := range rpi.MstVersions {
+			other.MstVersions[k] = *mstv.clone()
+		}
+	}
 	return &other
 }
 

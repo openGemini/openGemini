@@ -19,9 +19,10 @@ package sparseindex_test
 import (
 	"testing"
 
+	"github.com/openGemini/openGemini/engine/index"
 	"github.com/openGemini/openGemini/engine/index/sparseindex"
 	"github.com/openGemini/openGemini/lib/fileops"
-	"github.com/openGemini/openGemini/lib/index"
+	indextype "github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/rpn"
 	"github.com/openGemini/openGemini/lib/tokenizer"
@@ -56,18 +57,18 @@ func TestSetIndexWriter(t *testing.T) {
 	_ = fileops.RemoveAll(testCompDir)
 
 	msName := "cpu"
-	setWriter := sparseindex.NewSkipIndexWriter(testCompDir, msName, "", "", index.SetIndex, tokenizer.CONTENT_SPLITTER)
+	setWriter := index.NewIndexWriter(testCompDir, msName, "", "", indextype.Set, tokenizer.CONTENT_SPLITTER)
 	err := setWriter.Open()
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	err = setWriter.CreateAttachSkipIndex(nil, nil, nil)
+	err = setWriter.CreateAttachIndex(nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	_, _ = setWriter.CreateDetachSkipIndex(nil, nil, nil, nil)
+	_, _ = setWriter.CreateDetachIndex(nil, nil, nil, nil)
 
 	err = setWriter.Close()
 	if err != nil {

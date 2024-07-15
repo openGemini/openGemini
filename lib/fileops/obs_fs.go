@@ -26,6 +26,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -35,23 +36,25 @@ import (
 	"unsafe"
 
 	"github.com/huaweicloud/huaweicloud-sdk-go-obs/obs"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
+	OBS "github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/request"
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+	"go.uber.org/zap"
 )
 
 const (
-	KeyAK             = "AK"
-	KeySK             = "SK"
-	KeyBucket         = "BUCKET"
-	ObsReadRetryTimes = 3
+	ObsReadRetryTimes  = 3
+	ObsWriteRetryTimes = 3
 )
 
 type obsFile struct {
-	key    string
-	client ObsClient
-	conf   *obsConf
-	offset int64
+	key, fullPath string
+	client        ObsClient
+	conf          *obsConf
+	offset        int64
 }
 
 func (o *obsFile) Close() error {
@@ -85,6 +88,7 @@ func (o *obsFile) Write(src []byte) (int, error) {
 	if size <= 0 {
 		return 0, fmt.Errorf("write bytes length must be positive")
 	}
+	var err error
 	modifyObjectInput := &obs.ModifyObjectInput{
 		Bucket:        o.conf.bucket,
 		Key:           o.key,
@@ -92,7 +96,15 @@ func (o *obsFile) Write(src []byte) (int, error) {
 		Body:          bytes.NewReader(src),
 		ContentLength: int64(len(src)),
 	}
-	if _, err := o.client.ModifyObject(modifyObjectInput); err != nil {
+	for i := 0; i < ObsWriteRetryTimes; i++ {
+		_, err = o.client.ModifyObject(modifyObjectInput)
+		if err == nil {
+			break
+		}
+		logger.GetLogger().Error("retry append to object", zap.Error(err), zap.Int64("pos", modifyObjectInput.Position),
+			zap.Int("data size", size), zap.String("write stack", string(debug.Stack())))
+	}
+	if err != nil {
 		return 0, fmt.Errorf("obsClient.ModifyObject failed, error: %v", err)
 	}
 	o.offset += int64(size)
@@ -121,14 +133,40 @@ func (o *obsFile) ReadAt(dst []byte, off int64) (int, error) {
 	return size, nil
 }
 
-func (o *obsFile) StreamReadBatch(offsets []int64, sizes []int64, minBlockSize int64, c chan *request.StreamReader, rangSize int) {
+func (o *obsFile) StreamReadBatch(offsets []int64, sizes []int64, minBlockSize int64, c chan *request.StreamReader, rangSize int, isStat bool) {
 	defer close(c)
 	rangeRequests, err := NewObsReadRequest(offsets, sizes, minBlockSize, rangSize)
 	if err != nil {
 		c <- &request.StreamReader{Err: err}
 		return
 	}
-	o.StreamReadRangeRequests(0, c, rangeRequests, rangSize)
+	readLen := o.StreamReadRangeRequests(0, c, rangeRequests, rangSize)
+	// collect obs read data size
+	if isStat && config.GetProductType() == config.LogKeeper {
+		statistics.NewLogKeeperStatistics().AddTotalObsReadDataSize(readLen)
+		item := statistics.NewLogKeeperStatItem(o.GetRepoAndStreamId())
+		atomic.AddInt64(&item.ObsReadDataSize, readLen)
+		statistics.NewLogKeeperStatistics().Push(item)
+	}
+}
+
+func (o *obsFile) GetRepoAndStreamId() (repoId, streamId string) {
+	index := make([]int, 5)
+	order := 0
+	// o.key: ../data/repoId/0/streamId/1_1709510400000000000_1709596800000000000_1/columnstore/test_0000/xxx
+	for i, v := range o.key {
+		if v == '/' {
+			index[order] = i
+			order++
+		}
+		if order == 5 {
+			break
+		}
+	}
+	if order != 5 {
+		return
+	}
+	return o.key[index[1]+1 : index[2]], o.key[index[3]+1 : index[4]]
 }
 
 type retryCtx struct {
@@ -222,12 +260,14 @@ func (o *obsFile) getStreamReaders(rangeHeader string, rangeRequest *RangeReques
 }
 
 func (o *obsFile) StreamReadRangeRequests(retryTimes int32, c chan *request.StreamReader,
-	rangeRequests []*RangeRequest, obsRangeSize int) {
+	rangeRequests []*RangeRequest, obsRangeSize int) int64 {
+	var toReadLen int64 = 0
 	wg := &sync.WaitGroup{}
 	retryRange := newRetryCtx(retryTimes)
 	objUrl := o.buildObsEndpoint()
 	for _, rangeRequest := range rangeRequests {
 		wg.Add(1)
+		toReadLen += rangeRequest.length
 		go func(rangeRequest *RangeRequest, retryInfo *retryCtx, waitGroup *sync.WaitGroup) {
 			defer waitGroup.Done()
 			req, err := o.newRequest(objUrl, rangeRequest)
@@ -286,14 +326,15 @@ func (o *obsFile) StreamReadRangeRequests(retryTimes int32, c chan *request.Stre
 	}
 	wg.Wait()
 	if retryRange.empty() {
-		return
+		return retryRange.totalReadLen
 	}
 	if retryTimes < ObsReadRetryTimes {
 		rangeRequests = NewObsRetryReadRequest(retryRange.retries, obsRangeSize)
-		o.StreamReadRangeRequests(retryTimes+1, c, rangeRequests, obsRangeSize)
-		return
+		toReadLen += o.StreamReadRangeRequests(retryTimes+1, c, rangeRequests, obsRangeSize)
+		return toReadLen
 	}
 	logger.GetLogger().Error("obsClient.StreamReadMultiRange read retry times reach limit")
+	return toReadLen
 }
 
 func (o *obsFile) buildObsEndpoint() string {
@@ -301,7 +342,7 @@ func (o *obsFile) buildObsEndpoint() string {
 }
 
 func (o *obsFile) Name() string {
-	return o.key
+	return o.fullPath
 }
 
 func (o *obsFile) Truncate(size int64) error {
@@ -392,7 +433,7 @@ func (o *obsFileInfo) ModTime() time.Time {
 }
 
 func (o *obsFileInfo) IsDir() bool {
-	return false
+	return strings.HasSuffix(o.name, "/")
 }
 
 func (o *obsFileInfo) Sys() any {
@@ -470,10 +511,11 @@ func (o *obsFs) OpenFile(path string, flag int, perm os.FileMode, opt ...FSOptio
 		offset = 0
 	}
 	fd := &obsFile{
-		key:    key,
-		client: client,
-		conf:   conf,
-		offset: offset,
+		fullPath: path,
+		key:      key,
+		client:   client,
+		conf:     conf,
+		offset:   offset,
 	}
 	return fd, nil
 }
@@ -493,10 +535,11 @@ func (o *obsFs) Create(path string, opt ...FSOption) (File, error) {
 		return nil, err
 	}
 	fd := &obsFile{
-		key:    key,
-		client: client,
-		conf:   conf,
-		offset: 0,
+		fullPath: path,
+		key:      key,
+		client:   client,
+		conf:     conf,
+		offset:   0,
 	}
 	return fd, nil
 }
@@ -519,6 +562,10 @@ func (o *obsFs) Remove(path string, opt ...FSOption) error {
 		return err
 	}
 	return nil
+}
+
+func (o *obsFs) RemoveLocal(path string, _ ...FSOption) error {
+	return o.Remove(path)
 }
 
 func (o *obsFs) RemoveAll(path string, opt ...FSOption) error {
@@ -624,7 +671,38 @@ func (o *obsFs) Glob(pattern string) ([]string, error) {
 }
 
 func (o *obsFs) RenameFile(oldPath, newPath string, opt ...FSOption) error {
-	return fmt.Errorf("'rename' is supported for obs fs")
+	conf, key, client, err := o.prepare(oldPath)
+	if err != nil {
+		return err
+	}
+
+	input := &obs.RenameFileInput{
+		Bucket:       conf.bucket,
+		Key:          key,
+		NewObjectKey: key[:len(key)-len(OBS.ObsFileTmpSuffix)],
+	}
+
+	_, err = client.RenameFile(input)
+	return err
+}
+
+func (o *obsFs) IsObsFile(path string) (bool, error) {
+	conf, key, client, err := o.prepare(path)
+	if err != nil {
+		return false, err
+	}
+
+	input := &obs.HeadObjectInput{
+		Bucket: conf.bucket,
+		Key:    key,
+	}
+
+	output, _ := client.IsObsFile(input)
+	return output == nil, nil
+}
+
+func (o *obsFs) GetOBSTmpFileName(path string, obsOption *OBS.ObsOptions) string {
+	return path + OBS.ObsFileSuffix + OBS.ObsFileTmpSuffix
 }
 
 func (o *obsFs) Stat(path string) (os.FileInfo, error) {
@@ -718,14 +796,29 @@ func (o *obsFs) Truncate(name string, size int64, opt ...FSOption) error {
 	return fd.Close()
 }
 
-func (o *obsFs) IsObsFile(path string) (bool, error) {
-	return false, nil
-}
-
 func (o *obsFs) CopyFileFromDFVToOBS(srcPath, dstPath string, opt ...FSOption) error {
-	return nil
+	_, err := o.CopyFile(srcPath, dstPath, opt...)
+	return err
 }
 
 func (o *obsFs) CreateV2(name string, opt ...FSOption) (File, error) {
-	return nil, nil
+	return o.OpenFile(name, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0640)
+}
+
+func (o *obsFs) GetAllFilesSizeInPath(path string) (int64, int64, int64, error) {
+	fi, err := o.Stat(path)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	size := fi.Size()
+	return size, 0, 0, nil
+}
+
+func (o *obsFs) DecodeRemotePathToLocal(path string) (string, error) {
+	_, key, _, err := o.prepare(path)
+	if err != nil {
+		return "", err
+	}
+	key = key[strings.Index(key, "/"):]
+	return key[:len(key)-len(OBS.ObsFileSuffix)], nil
 }
