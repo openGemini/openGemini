@@ -53,7 +53,12 @@ func GetStringLTConditionBitMap(params *TypeFunParams) []byte {
 func GetFloatLTConditionBitMapWithoutNull(params *TypeFunParams) []byte {
 	var idx int
 	compare, col, offset, pos := params.compare, params.col, params.offset, params.pos
-	values := col.FloatValues()
+	var values []float64
+	if !params.int2float {
+		values = col.FloatValues()
+	} else {
+		values = Int64ToFloat64Slice(col.IntegerValues())
+	}
 	cmpData, _ := compare.(float64)
 	for i := 0; i < col.Len; i++ {
 		idx = offset + i
@@ -109,7 +114,12 @@ func GetStringLTConditionBitMapWithoutNull(params *TypeFunParams) []byte {
 
 func GetFloatLTConditionBitMapWithNull(params *TypeFunParams) []byte {
 	compare, col, offset, pos, bitMap := params.compare, params.col, params.offset, params.pos, params.bitMap
-	values := col.FloatValues()
+	var values []float64
+	if !params.int2float {
+		values = col.FloatValues()
+	} else {
+		values = Int64ToFloat64Slice(col.IntegerValues())
+	}
 	var idx int
 	var index int
 	cmpData, _ := compare.(float64)
@@ -213,7 +223,12 @@ func GetStringLTEConditionBitMap(params *TypeFunParams) []byte {
 func GetFloatLTEConditionBitMapWithoutNull(params *TypeFunParams) []byte {
 	var idx int
 	compare, col, offset, pos := params.compare, params.col, params.offset, params.pos
-	values := col.FloatValues()
+	var values []float64
+	if !params.int2float {
+		values = col.FloatValues()
+	} else {
+		values = Int64ToFloat64Slice(col.IntegerValues())
+	}
 	cmpData, _ := compare.(float64)
 	for i := 0; i < col.Len; i++ {
 		idx = offset + i
@@ -269,7 +284,12 @@ func GetStringLTEConditionBitMapWithoutNull(params *TypeFunParams) []byte {
 
 func GetFloatLTEConditionBitMapWithNull(params *TypeFunParams) []byte {
 	compare, col, offset, pos, bitMap := params.compare, params.col, params.offset, params.pos, params.bitMap
-	values := col.FloatValues()
+	var values []float64
+	if !params.int2float {
+		values = col.FloatValues()
+	} else {
+		values = Int64ToFloat64Slice(col.IntegerValues())
+	}
 	var idx int
 	var index int
 	cmpData, _ := compare.(float64)
@@ -373,7 +393,12 @@ func GetStringGTConditionBitMap(params *TypeFunParams) []byte {
 func GetFloatGTConditionBitMapWithoutNull(params *TypeFunParams) []byte {
 	var idx int
 	compare, col, offset, pos := params.compare, params.col, params.offset, params.pos
-	values := col.FloatValues()
+	var values []float64
+	if !params.int2float {
+		values = col.FloatValues()
+	} else {
+		values = Int64ToFloat64Slice(col.IntegerValues())
+	}
 	cmpData, _ := compare.(float64)
 	for i := 0; i < col.Len; i++ {
 		idx = offset + i
@@ -429,7 +454,12 @@ func GetStringGTConditionBitMapWithoutNull(params *TypeFunParams) []byte {
 
 func GetFloatGTConditionBitMapWithNull(params *TypeFunParams) []byte {
 	compare, col, offset, pos, bitMap := params.compare, params.col, params.offset, params.pos, params.bitMap
-	values := col.FloatValues()
+	var values []float64
+	if !params.int2float {
+		values = col.FloatValues()
+	} else {
+		values = Int64ToFloat64Slice(col.IntegerValues())
+	}
 	var idx int
 	var index int
 	cmpData, _ := compare.(float64)
@@ -533,7 +563,12 @@ func GetStringGTEConditionBitMap(params *TypeFunParams) []byte {
 func GetFloatGTEConditionBitMapWithoutNull(params *TypeFunParams) []byte {
 	var idx int
 	compare, col, offset, pos := params.compare, params.col, params.offset, params.pos
-	values := col.FloatValues()
+	var values []float64
+	if !params.int2float {
+		values = col.FloatValues()
+	} else {
+		values = Int64ToFloat64Slice(col.IntegerValues())
+	}
 	cmpData, _ := compare.(float64)
 	for i := 0; i < col.Len; i++ {
 		idx = offset + i
@@ -589,7 +624,12 @@ func GetStringGTEConditionBitMapWithoutNull(params *TypeFunParams) []byte {
 
 func GetFloatGTEConditionBitMapWithNull(params *TypeFunParams) []byte {
 	compare, col, offset, pos, bitMap := params.compare, params.col, params.offset, params.pos, params.bitMap
-	values := col.FloatValues()
+	var values []float64
+	if !params.int2float {
+		values = col.FloatValues()
+	} else {
+		values = Int64ToFloat64Slice(col.IntegerValues())
+	}
 	var idx int
 	var index int
 	cmpData, _ := compare.(float64)
@@ -700,7 +740,12 @@ func GetBooleanEQConditionBitMap(params *TypeFunParams) []byte {
 func GetFloatEQConditionBitMapWithoutNull(params *TypeFunParams) []byte {
 	var idx int
 	compare, col, offset, pos := params.compare, params.col, params.offset, params.pos
-	values := col.FloatValues()
+	var values []float64
+	if !params.int2float {
+		values = col.FloatValues()
+	} else {
+		values = Int64ToFloat64Slice(col.IntegerValues())
+	}
 	cmpData, _ := compare.(float64)
 	for i := 0; i < col.Len; i++ {
 		idx = offset + i
@@ -773,7 +818,12 @@ func GetBooleanEQConditionBitMapWithoutNull(params *TypeFunParams) []byte {
 
 func GetFloatEQConditionBitMapWithNull(params *TypeFunParams) []byte {
 	compare, col, offset, pos, bitMap := params.compare, params.col, params.offset, params.pos, params.bitMap
-	values := col.FloatValues()
+	var values []float64
+	if !params.int2float {
+		values = col.FloatValues()
+	} else {
+		values = Int64ToFloat64Slice(col.IntegerValues())
+	}
 	var idx int
 	var index int
 	cmpData, _ := compare.(float64)
@@ -911,7 +961,12 @@ func GetBooleanNEQConditionBitMap(params *TypeFunParams) []byte {
 func GetFloatNEQConditionBitMapWithoutNull(params *TypeFunParams) []byte {
 	var idx int
 	compare, col, offset, pos := params.compare, params.col, params.offset, params.pos
-	values := col.FloatValues()
+	var values []float64
+	if !params.int2float {
+		values = col.FloatValues()
+	} else {
+		values = Int64ToFloat64Slice(col.IntegerValues())
+	}
 	cmpData, _ := compare.(float64)
 	for i := 0; i < col.Len; i++ {
 		idx = offset + i
@@ -984,7 +1039,12 @@ func GetBooleanNEQConditionBitMapWithoutNull(params *TypeFunParams) []byte {
 
 func GetFloatNEQConditionBitMapWithNull(params *TypeFunParams) []byte {
 	compare, col, offset, pos, bitMap := params.compare, params.col, params.offset, params.pos, params.bitMap
-	values := col.FloatValues()
+	var values []float64
+	if !params.int2float {
+		values = col.FloatValues()
+	} else {
+		values = Int64ToFloat64Slice(col.IntegerValues())
+	}
 	var idx int
 	var index int
 	cmpData, _ := compare.(float64)

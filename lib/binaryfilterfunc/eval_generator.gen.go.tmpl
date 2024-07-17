@@ -41,8 +41,16 @@ func Get{{.Name}}LTConditionBitMap(params *TypeFunParams) []byte {
 func Get{{.Name}}LTConditionBitMapWithoutNull(params *TypeFunParams) []byte {
     var idx int
     compare, col, offset, pos := params.compare, params.col, params.offset, params.pos
-    {{- if or (eq .Name "Float") (eq .Name "Integer")}}
+    {{- if or (eq .Name "Integer")}}
     values := col.{{.Name}}Values()
+    {{- end}}
+    {{- if or (eq .Name "Float")}}
+    var values []float64
+	if !params.int2float {
+		values = col.FloatValues()
+	} else {
+		values = Int64ToFloat64Slice(col.IntegerValues())
+	}
     {{- end}}
     {{- if or (eq .Name "Float") (eq .Name "Integer")}}
     cmpData, _ := compare.({{.Type}})
@@ -89,8 +97,16 @@ func Get{{.Name}}LTConditionBitMapWithoutNull(params *TypeFunParams) []byte {
 {{- if or (eq .Name "Float") (eq .Name "String") (eq .Name "Integer")}}
 func Get{{.Name}}LTConditionBitMapWithNull(params *TypeFunParams) []byte {
     compare, col, offset, pos, bitMap := params.compare, params.col, params.offset, params.pos, params.bitMap
-    {{- if or (eq .Name "Float") (eq .Name "Integer")}}
+    {{- if or (eq .Name "Integer")}}
     values := col.{{.Name}}Values()
+    {{- end}}
+    {{- if or (eq .Name "Float")}}
+    var values []float64
+	if !params.int2float {
+		values = col.FloatValues()
+	} else {
+		values = Int64ToFloat64Slice(col.IntegerValues())
+	}
     {{- end}}
     var idx int
     {{- if or (eq .Name "Float") (eq .Name "Integer")}}
@@ -164,8 +180,16 @@ func Get{{.Name}}LTEConditionBitMap(params *TypeFunParams) []byte {
 func Get{{.Name}}LTEConditionBitMapWithoutNull(params *TypeFunParams) []byte {
     var idx int
     compare, col, offset, pos := params.compare, params.col, params.offset, params.pos
-    {{- if or (eq .Name "Float") (eq .Name "Integer")}}
+    {{- if or (eq .Name "Integer")}}
     values := col.{{.Name}}Values()
+    {{- end}}
+    {{- if or (eq .Name "Float")}}
+    var values []float64
+	if !params.int2float {
+		values = col.FloatValues()
+	} else {
+		values = Int64ToFloat64Slice(col.IntegerValues())
+	}
     {{- end}}
     {{- if or (eq .Name "Float") (eq .Name "Integer")}}
     cmpData, _ := compare.({{.Type}})
@@ -212,8 +236,16 @@ func Get{{.Name}}LTEConditionBitMapWithoutNull(params *TypeFunParams) []byte {
 {{- if or (eq .Name "Float") (eq .Name "String") (eq .Name "Integer")}}
 func Get{{.Name}}LTEConditionBitMapWithNull(params *TypeFunParams) []byte {
     compare, col, offset, pos, bitMap := params.compare, params.col, params.offset, params.pos, params.bitMap
-    {{- if or (eq .Name "Float") (eq .Name "Integer")}}
+    {{- if or (eq .Name "Integer")}}
     values := col.{{.Name}}Values()
+    {{- end}}
+    {{- if or (eq .Name "Float")}}
+    var values []float64
+	if !params.int2float {
+		values = col.FloatValues()
+	} else {
+		values = Int64ToFloat64Slice(col.IntegerValues())
+	}
     {{- end}}
     var idx int
     {{- if or (eq .Name "Float") (eq .Name "Integer")}}
@@ -287,8 +319,16 @@ func Get{{.Name}}GTConditionBitMap(params *TypeFunParams) []byte {
 func Get{{.Name}}GTConditionBitMapWithoutNull(params *TypeFunParams) []byte {
     var idx int
     compare, col, offset, pos := params.compare, params.col, params.offset, params.pos
-    {{- if or (eq .Name "Float") (eq .Name "Integer")}}
+    {{- if or (eq .Name "Integer")}}
     values := col.{{.Name}}Values()
+    {{- end}}
+    {{- if or (eq .Name "Float")}}
+    var values []float64
+	if !params.int2float {
+		values = col.FloatValues()
+	} else {
+		values = Int64ToFloat64Slice(col.IntegerValues())
+	}
     {{- end}}
     {{- if or (eq .Name "Float") (eq .Name "Integer")}}
     cmpData, _ := compare.({{.Type}})
@@ -335,8 +375,16 @@ func Get{{.Name}}GTConditionBitMapWithoutNull(params *TypeFunParams) []byte {
 {{- if or (eq .Name "Float") (eq .Name "String") (eq .Name "Integer")}}
 func Get{{.Name}}GTConditionBitMapWithNull(params *TypeFunParams) []byte {
     compare, col, offset, pos, bitMap := params.compare, params.col, params.offset, params.pos, params.bitMap
-    {{- if or (eq .Name "Float") (eq .Name "Integer")}}
+    {{- if or (eq .Name "Integer")}}
     values := col.{{.Name}}Values()
+    {{- end}}
+    {{- if or (eq .Name "Float")}}
+    var values []float64
+	if !params.int2float {
+		values = col.FloatValues()
+	} else {
+		values = Int64ToFloat64Slice(col.IntegerValues())
+	}
     {{- end}}
     var idx int
     {{- if or (eq .Name "Float") (eq .Name "Integer")}}
@@ -410,8 +458,16 @@ func Get{{.Name}}GTEConditionBitMap(params *TypeFunParams) []byte {
 func Get{{.Name}}GTEConditionBitMapWithoutNull(params *TypeFunParams) []byte {
     var idx int
     compare, col, offset, pos := params.compare, params.col, params.offset, params.pos
-    {{- if or (eq .Name "Float") (eq .Name "Integer")}}
+    {{- if or (eq .Name "Integer")}}
     values := col.{{.Name}}Values()
+    {{- end}}
+    {{- if or (eq .Name "Float")}}
+    var values []float64
+	if !params.int2float {
+		values = col.FloatValues()
+	} else {
+		values = Int64ToFloat64Slice(col.IntegerValues())
+	}
     {{- end}}
     {{- if or (eq .Name "Float") (eq .Name "Integer")}}
     cmpData, _ := compare.({{.Type}})
@@ -459,8 +515,16 @@ func Get{{.Name}}GTEConditionBitMapWithoutNull(params *TypeFunParams) []byte {
 {{- if or (eq .Name "Float") (eq .Name "String") (eq .Name "Integer")}}
 func Get{{.Name}}GTEConditionBitMapWithNull(params *TypeFunParams) []byte {
     compare, col, offset, pos, bitMap := params.compare, params.col, params.offset, params.pos, params.bitMap
-    {{- if or (eq .Name "Float") (eq .Name "Integer")}}
+    {{- if or (eq .Name "Integer")}}
     values := col.{{.Name}}Values()
+    {{- end}}
+    {{- if or (eq .Name "Float")}}
+    var values []float64
+	if !params.int2float {
+		values = col.FloatValues()
+	} else {
+		values = Int64ToFloat64Slice(col.IntegerValues())
+	}
     {{- end}}
     var idx int
     {{- if or (eq .Name "Float") (eq .Name "Integer")}}
@@ -531,8 +595,16 @@ func Get{{.Name}}EQConditionBitMap(params *TypeFunParams) []byte {
 func Get{{.Name}}EQConditionBitMapWithoutNull(params *TypeFunParams) []byte {
     var idx int
     compare, col, offset, pos := params.compare, params.col, params.offset, params.pos
-    {{- if or (eq .Name "Float") (eq .Name "Boolean") (eq .Name "Integer")}}
+    {{- if or (eq .Name "Boolean") (eq .Name "Integer")}}
     values := col.{{.Name}}Values()
+    {{- end}}
+    {{- if or (eq .Name "Float")}}
+    var values []float64
+	if !params.int2float {
+		values = col.FloatValues()
+	} else {
+		values = Int64ToFloat64Slice(col.IntegerValues())
+	}
     {{- end}}
     {{- if or (eq .Name "Float") (eq .Name "Boolean") (eq .Name "Integer")}}
     cmpData, _ := compare.({{.Type}})
@@ -577,8 +649,16 @@ func Get{{.Name}}EQConditionBitMapWithoutNull(params *TypeFunParams) []byte {
 {{range .}}
 func Get{{.Name}}EQConditionBitMapWithNull(params *TypeFunParams) []byte {
     compare, col, offset, pos, bitMap := params.compare, params.col, params.offset, params.pos, params.bitMap
-    {{- if or (eq .Name "Float") (eq .Name "Boolean") (eq .Name "Integer")}}
+    {{- if or (eq .Name "Boolean") (eq .Name "Integer")}}
     values := col.{{.Name}}Values()
+    {{- end}}
+    {{- if or (eq .Name "Float")}}
+    var values []float64
+	if !params.int2float {
+		values = col.FloatValues()
+	} else {
+		values = Int64ToFloat64Slice(col.IntegerValues())
+	}
     {{- end}}
     var idx int
     {{- if or (eq .Name "Float") (eq .Name "Boolean") (eq .Name "Integer")}}
@@ -648,8 +728,16 @@ func Get{{.Name}}NEQConditionBitMap(params *TypeFunParams) []byte {
 func Get{{.Name}}NEQConditionBitMapWithoutNull(params *TypeFunParams) []byte {
     var idx int
     compare, col, offset, pos := params.compare, params.col, params.offset, params.pos
-    {{- if or (eq .Name "Float") (eq .Name "Boolean") (eq .Name "Integer")}}
+    {{- if or (eq .Name "Boolean") (eq .Name "Integer")}}
     values := col.{{.Name}}Values()
+    {{- end}}
+    {{- if or (eq .Name "Float")}}
+    var values []float64
+	if !params.int2float {
+		values = col.FloatValues()
+	} else {
+		values = Int64ToFloat64Slice(col.IntegerValues())
+	}
     {{- end}}
     {{- if or (eq .Name "Float") (eq .Name "Boolean") (eq .Name "Integer")}}
     cmpData, _ := compare.({{.Type}})
@@ -694,8 +782,16 @@ func Get{{.Name}}NEQConditionBitMapWithoutNull(params *TypeFunParams) []byte {
 {{range .}}
 func Get{{.Name}}NEQConditionBitMapWithNull(params *TypeFunParams) []byte {
     compare, col, offset, pos, bitMap := params.compare, params.col, params.offset, params.pos, params.bitMap
-    {{- if or (eq .Name "Float") (eq .Name "Boolean") (eq .Name "Integer")}}
+    {{- if or (eq .Name "Boolean") (eq .Name "Integer")}}
     values := col.{{.Name}}Values()
+    {{- end}}
+    {{- if or (eq .Name "Float")}}
+    var values []float64
+	if !params.int2float {
+		values = col.FloatValues()
+	} else {
+		values = Int64ToFloat64Slice(col.IntegerValues())
+	}
     {{- end}}
     var idx int
     {{- if or (eq .Name "Float") (eq .Name "Boolean") (eq .Name "Integer")}}
