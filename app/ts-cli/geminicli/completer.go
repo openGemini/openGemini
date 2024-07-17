@@ -17,7 +17,7 @@ limitations under the License.
 package geminicli
 
 import (
-	"github.com/c-bata/go-prompt"
+	"github.com/StepY1aoZz/go-prompt"
 )
 
 type Completer struct {
