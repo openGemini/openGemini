@@ -31,7 +31,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/c-bata/go-prompt"
+	"github.com/StepY1aoZz/go-prompt"
 	"github.com/influxdata/influxdb/client"
 	"github.com/influxdata/influxdb/models"
 	"github.com/olekukonko/tablewriter"
