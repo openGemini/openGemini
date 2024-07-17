@@ -27,6 +27,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/logparser"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
 func init() {
@@ -129,11 +130,12 @@ func SplitWithOrOperation(expr influxql.Expr) []influxql.Expr {
 }
 
 type IdxFunction struct {
-	Idx      int
-	Function func(params *TypeFunParams) []byte
-	Compare  interface{}
-	Op       influxql.Token
-	Opt      hybridqp.Options
+	Int2Float bool
+	Idx       int
+	Function  func(params *TypeFunParams) []byte
+	Compare   interface{}
+	Op        influxql.Token
+	Opt       hybridqp.Options
 }
 
 type IdxFunctions []IdxFunction
@@ -238,12 +240,13 @@ var switchOpMap = map[int]int{
 }
 
 type TypeFunParams struct {
-	col     *record.ColVal
-	opt     hybridqp.Options
-	compare interface{}
-	bitMap  []byte
-	pos     []byte
-	offset  int
+	col       *record.ColVal
+	opt       hybridqp.Options
+	compare   interface{}
+	bitMap    []byte
+	pos       []byte
+	offset    int
+	int2float bool
 }
 
 var idxTypeFun [BOTTOM][ColBottom]func(params *TypeFunParams) []byte
@@ -431,6 +434,14 @@ func GetTimeCondition(tr util.TimeRange, schema record.Schemas, tcIdx int) influ
 	return nil
 }
 
+func Int64ToFloat64Slice(intSlice []int64) []float64 {
+	floatSlice := make([]float64, len(intSlice))
+	for i, v := range intSlice {
+		floatSlice[i] = float64(v)
+	}
+	return floatSlice
+}
+
 func CombineConditionWithAnd(lhs, rhs influxql.Expr) influxql.Expr {
 	if lhs == nil {
 		return rhs
@@ -541,15 +552,30 @@ func (c *ConditionImpl) genRPNElementByVal(value interface{}, op influxql.Token,
 	case *influxql.StringLiteral:
 		elem.rg.Compare = val.Val
 		elem.rg.Function = idxTypeFun[operationMap[op]][StringFunc]
-	case *influxql.IntegerLiteral:
-		elem.rg.Compare = val.Val
-		elem.rg.Function = idxTypeFun[operationMap[op]][IntFunc]
-	case *influxql.NumberLiteral:
-		elem.rg.Compare = val.Val
-		elem.rg.Function = idxTypeFun[operationMap[op]][FloatFunc]
 	case *influxql.BooleanLiteral:
 		elem.rg.Compare = val.Val
 		elem.rg.Function = idxTypeFun[operationMap[op]][BoolFunc]
+	case *influxql.IntegerLiteral:
+		switch c.schema[idx].Type {
+		case influx.Field_Type_Int:
+			elem.rg.Compare = val.Val
+			elem.rg.Function = idxTypeFun[operationMap[op]][IntFunc]
+		case influx.Field_Type_Float:
+			elem.rg.Compare = float64(val.Val)
+			elem.rg.Function = idxTypeFun[operationMap[op]][FloatFunc]
+		default:
+			return errno.NewError(errno.ErrRPNElement, value)
+		}
+	case *influxql.NumberLiteral:
+		switch c.schema[idx].Type {
+		case influx.Field_Type_Int:
+			elem.rg.Int2Float = true
+		case influx.Field_Type_Float:
+		default:
+			return errno.NewError(errno.ErrRPNElement, value)
+		}
+		elem.rg.Compare = val.Val
+		elem.rg.Function = idxTypeFun[operationMap[op]][FloatFunc]
 	default:
 		return errno.NewError(errno.ErrRPNElement, value)
 	}
@@ -630,12 +656,13 @@ func (c *ConditionImpl) filterSimplexExpr(rec *record.Record, filterBitmap *bitm
 				filterBitmap.Bitmap[0].Val = append(filterBitmap.Bitmap[0].Val, col.Bitmap...)
 			}
 			params := &TypeFunParams{
-				col:     &col,
-				compare: elem.rg.Compare,
-				bitMap:  col.Bitmap,
-				pos:     filterBitmap.Bitmap[0].Val,
-				offset:  col.BitMapOffset,
-				opt:     elem.rg.Opt,
+				col:       &col,
+				compare:   elem.rg.Compare,
+				bitMap:    col.Bitmap,
+				pos:       filterBitmap.Bitmap[0].Val,
+				offset:    col.BitMapOffset,
+				opt:       elem.rg.Opt,
+				int2float: elem.rg.Int2Float,
 			}
 			filterBitmap.Bitmap[0].Val = elem.rg.Function(params)
 		case rpn.AND, rpn.OR:
