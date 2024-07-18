@@ -130,6 +130,9 @@ func (cmd *Command) InitConfig(conf config.Config, path string) error {
 		if err := config.SetHaPolicy(common.HaPolicy); err != nil {
 			return err
 		}
+		if common.CryptoType == "pem" {
+			crypto.InitPassKeyDecipher()
+		}
 		crypto.Initialize(common.CryptoConfig)
 		config.SetProductType(common.ProductType)
 		config.SetCommon(*common)
