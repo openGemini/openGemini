@@ -13,6 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package consume
 
 import (
@@ -20,7 +21,7 @@ import (
 	"compress/gzip"
 	"encoding/base64"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -351,7 +352,7 @@ func decompress(input []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	output, err := ioutil.ReadAll(comp)
+	output, err := io.ReadAll(comp)
 	comp.Close()
 	if err != nil {
 		return nil, err

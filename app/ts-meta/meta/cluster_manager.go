@@ -455,8 +455,8 @@ func (cm *ClusterManager) chooseNodeByPtNum(nodePtNumMap *map[uint64]uint32) uin
 }
 
 func (cm *ClusterManager) chooseNodeRandom(nodeIds []int) uint64 {
-	rand.Seed(time.Now().UnixNano())
-	i := rand.Intn(len(nodeIds))
+	source := rand.New(rand.NewSource(time.Now().UnixNano()))
+	i := source.Intn(len(nodeIds))
 	return uint64(nodeIds[i])
 }
 

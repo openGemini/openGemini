@@ -3,6 +3,7 @@ package serf
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"log"
 	"math/rand"
 	"net"
@@ -540,7 +541,7 @@ func (s *Snapshotter) compact() error {
 // state
 func (s *Snapshotter) replay() error {
 	// Seek to the beginning
-	if _, err := s.fh.Seek(0, os.SEEK_SET); err != nil {
+	if _, err := s.fh.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
 
@@ -620,7 +621,7 @@ func (s *Snapshotter) replay() error {
 	}
 
 	// Seek to the end
-	if _, err := s.fh.Seek(0, os.SEEK_END); err != nil {
+	if _, err := s.fh.Seek(0, io.SeekEnd); err != nil {
 		return err
 	}
 	return nil
