@@ -2083,7 +2083,9 @@ func (h *Handler) logging(inner http.Handler, name string) http.Handler {
 		l := &responseLogger{w: w}
 		inner.ServeHTTP(l, r)
 
-		if h.accessLogFilters.Match(l.Status()) {
+		if config2.IsLogKeeper() {
+			logger.GetLogger().Info(buildLogLine(l, r, start))
+		} else if h.accessLogFilters.Match(l.Status()) {
 			if handlerLogLimit >= 10 {
 				h.Logger.Info(buildLogLine(l, r, start))
 				handlerLogLimit = 0
