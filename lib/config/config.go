@@ -117,6 +117,7 @@ type Common struct {
 	IgnoreEmptyTag bool     `toml:"ignore-empty-tag"`
 	ReportEnable   bool     `toml:"report-enable"`
 	CryptoConfig   string   `toml:"crypto-config"`
+	CryptoType     string   `toml:"crypto-type"`
 	ClusterID      string   `toml:"cluster-id"`
 	CPUNum         int      `toml:"cpu-num"`
 	ReaderStop     bool     `toml:"read-stop"`
