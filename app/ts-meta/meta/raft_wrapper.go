@@ -120,7 +120,8 @@ func (r *raftWrapper) Leader() string {
 	if r == nil || r.raft == nil {
 		return ""
 	}
-	return string(r.raft.Leader())
+	id, _ := r.raft.LeaderWithID()
+	return string(id)
 }
 
 func (r *raftWrapper) UserSnapshot() error {
