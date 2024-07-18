@@ -395,7 +395,7 @@ func TestMmsTables_LevelCompact_20ID10Segment_SegLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store.wg.Wait()
+	store.Wait()
 
 	files = store.Order
 	if len(files) != 1 {
