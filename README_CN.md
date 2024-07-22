@@ -227,7 +227,7 @@ Elapsed: 7.723332ms
 
 4. [邮件列表(mailing list)](https://groups.google.com/g/openGemini)
 
-5. [Slack](https://join.slack.com/t/huawei-ipz9493/shared_invite/zt-1bvxs3s0i-h0BzP7ibpWfqmpJO2a4iKw)
+5. [Slack](https://join.slack.com/t/opengemini/shared_invite/zt-2naig1675-x3bcwgXR_Rw5OwDU5X~dUQ)
 
 6. [Twitter](https://twitter.com/openGemini)
 
