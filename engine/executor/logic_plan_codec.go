@@ -290,6 +290,10 @@ func (p *LogicalBinOp) LogicPlanType() internal.LogicPlanType {
 	return internal.LogicPlanType_LogicalBinOp
 }
 
+func (p *LogicalPromSubquery) LogicPlanType() internal.LogicPlanType {
+	return internal.LogicPlanType_LogicalPromSubquery
+}
+
 func (p *LogicalHashAgg) String() string {
 	return "LogicalHashAgg"
 }
@@ -451,6 +455,10 @@ func (p *LogicalColumnStoreReader) String() string {
 
 func (p *LogicalBinOp) String() string {
 	return "LogicalBinOp"
+}
+
+func (p *LogicalPromSubquery) String() string {
+	return "LogicalPromSubquery"
 }
 
 func MarshalBinary(q hybridqp.QueryNode) ([]byte, error) {

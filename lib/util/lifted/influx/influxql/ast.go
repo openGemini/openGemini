@@ -1535,6 +1535,8 @@ type SelectStatement struct {
 	BinOpSource []*BinOp
 
 	IsPromQuery bool
+
+	PromSubCalls []*PromSubCall
 }
 
 func (s *SelectStatement) SetStmtId(id int) {
@@ -4855,6 +4857,16 @@ func (b *BinOp) String() string {
 
 func (b *BinOp) GetName() string {
 	return ""
+}
+
+type PromSubCall struct {
+	Name      string
+	Interval  int64         // ns
+	StartTime int64         // ns
+	EndTime   int64         // ns
+	Range     time.Duration // ns
+	Offset    time.Duration // ns
+	InArgs    []Expr
 }
 
 type InCondition struct {

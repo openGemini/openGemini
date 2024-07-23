@@ -23,6 +23,14 @@ type Transpiler struct {
 	timeCondition   influxql.Expr
 }
 
+func (t *Transpiler) rewriteMinMaxTime() {
+	if t.Start != nil && t.End != nil {
+		t.minT, t.maxT = timestamp.FromTime(*t.Start), timestamp.FromTime(*t.End)
+	} else if t.Evaluation != nil {
+		t.minT, t.maxT = timestamp.FromTime(*t.Evaluation), timestamp.FromTime(*t.Evaluation)
+	}
+}
+
 // Transpile converts a PromQL expression with the time ranges set in the transpiler
 // into an InfluxQL expression. The resulting InfluxQL expression can be executed and the result needs to
 // be transformed using InfluxResultToPromQLValue() (implemented in the promql package of this repo)
@@ -33,7 +41,7 @@ type Transpiler struct {
 func (t *Transpiler) Transpile(expr parser.Expr) (influxql.Node, error) {
 	if !IsMetaQuery(t.DataType) {
 		s := t.newEvalStmt(expr)
-		t.minT, t.maxT = t.findMinMaxTime(s)
+		t.rewriteMinMaxTime()
 		// Modify the offset of vector and matrix selectors for the @ modifier
 		// w.r.t. the start time since only 1 evaluation will be done on them.
 		setOffsetForAtModifier(timeMilliseconds(s.Start), s.Expr)
@@ -78,7 +86,7 @@ func (t *Transpiler) transpileExpr(expr parser.Expr) (influxql.Node, error) {
 	case *parser.StepInvariantExpr:
 		return t.transpileStepInvariantExpr(e)
 	case *parser.SubqueryExpr:
-		return nil, errno.NewError(errno.UnsupportedNodeType, expr.String())
+		return t.transpileSubqueryExpr(e)
 	default:
 		return nil, errno.NewError(errno.UnsupportedNodeType, expr.String())
 	}
@@ -236,6 +244,38 @@ func (t *Transpiler) transpileStepInvariantExpr(e *parser.StepInvariantExpr) (in
 	}
 	t.End = t.Start // Always a single evaluation.
 	return t.transpileExpr(e.Expr)
+}
+
+func (t *Transpiler) transpileSubqueryExpr(e *parser.SubqueryExpr) (influxql.Node, error) {
+	preMinT := t.minT
+	preMaxT := t.maxT
+	preInterval := t.Step
+
+	offsetMills := durationMilliseconds(e.Offset)
+	rangeMillis := durationMilliseconds(e.Range)
+	newEndTime := t.maxT - offsetMills
+	var newInterval int64
+	if e.Step != 0 {
+		newInterval = durationMilliseconds(e.Step)
+	} else {
+		newInterval = rangeMillis
+	}
+	newStartTime := newInterval * ((t.minT - offsetMills - rangeMillis) / newInterval)
+	if newStartTime < (t.minT - offsetMills - rangeMillis) {
+		newStartTime += newInterval
+	}
+	if newStartTime != t.minT {
+		// Adjust the offset of selectors based on the new
+		// start time of the evaluator since the calculation
+		// of the offset with @ happens w.r.t. the start time.
+		setOffsetForAtModifier(newStartTime, e.Expr)
+	}
+
+	t.minT, t.maxT, t.Step = newStartTime, newEndTime, time.Duration(newInterval*int64(time.Millisecond/time.Nanosecond))
+
+	node, err := t.transpileExpr(e.Expr)
+	t.minT, t.maxT, t.Step = preMinT, preMaxT, preInterval
+	return node, err
 }
 
 // setOffsetForAtModifier modifies the offset of vector and matrix selector
