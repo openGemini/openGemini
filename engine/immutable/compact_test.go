@@ -42,6 +42,7 @@ import (
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/readcache"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/scheduler"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
@@ -2657,7 +2658,7 @@ func TestMmsTables_LevelCompact_With_FileHandle_Optimize(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store.wg.Wait()
+	store.Wait()
 
 	files = store.Order
 	if len(files) != 1 {
@@ -2815,7 +2816,7 @@ func TestMmsTables_LevelCompact_1ID5Segment(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store.wg.Wait()
+	store.Wait()
 
 	files = store.Order
 	if len(files) != 1 {
@@ -2973,7 +2974,7 @@ func TestMmsTables_FullCompact(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store.wg.Wait()
+	store.Wait()
 
 	files = store.Order
 	if len(files) != 1 {
@@ -3150,7 +3151,7 @@ func TestMmsTables_LevelCompact_20ID10Segment(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		store.wg.Wait()
+		store.Wait()
 
 		files = store.Order
 		if len(files) != 1 {
@@ -3597,7 +3598,7 @@ func TestMmsTables_LevelCompact_SegmentLimit(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		store.wg.Wait()
+		store.Wait()
 
 		files = store.Order
 		fids, ok = files["mst"]
@@ -3747,7 +3748,10 @@ func TestMergeRecovery(t *testing.T) {
 }
 
 func TestDisableCompAndMerge(t *testing.T) {
-	mst := &MmsTables{inCompLock: sync.RWMutex{}}
+	mst := &MmsTables{
+		inCompLock: sync.RWMutex{},
+		scheduler:  scheduler.NewTaskScheduler(func(signal chan struct{}, onClose func()) {}, compLimiter),
+	}
 	mst.EnableCompAndMerge()
 	mst.EnableCompAndMerge()
 	require.True(t, mst.CompactionEnabled())
