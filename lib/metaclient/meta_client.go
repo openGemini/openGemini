@@ -187,7 +187,7 @@ type MetaClient interface {
 	Users() []meta2.UserInfo
 	MarkDatabaseDelete(name string) error
 	MarkRetentionPolicyDelete(database, name string) error
-	MarkMeasurementDelete(database, mst string) error
+	MarkMeasurementDelete(database, policy, measurement string) error
 	DBPtView(database string) (meta2.DBPtInfos, error)
 	ShardOwner(shardID uint64) (database, policy string, sgi *meta2.ShardGroupInfo)
 	Measurement(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error)
@@ -1268,7 +1268,7 @@ func (c *Client) CreateDatabaseWithRetentionPolicy(name string, spec *meta2.Rete
 	return c.Database(name)
 }
 
-func (c *Client) MarkMeasurementDelete(database, measurement string) error {
+func (c *Client) MarkMeasurementDelete(database, policy, measurement string) error {
 	dbi, err := c.Database(database)
 	if err != nil {
 		return err
@@ -1277,17 +1277,15 @@ func (c *Client) MarkMeasurementDelete(database, measurement string) error {
 		return nil
 	}
 
-	var policy string
-	for _, rp := range dbi.RetentionPolicies {
+	if policy == "" {
+		//  rp is not provided, use default retention policy
+		policy = dbi.DefaultRetentionPolicy
+	}
+	if rp, ok := dbi.RetentionPolicies[policy]; ok {
 		msti := rp.Measurement(measurement)
-		if msti == nil {
-			continue
-		}
-		if msti.MarkDeleted {
+		if msti != nil && msti.MarkDeleted {
 			return nil
 		}
-		policy = rp.Name
-		break
 	}
 	cmd := &proto2.MarkMeasurementDeleteCommand{
 		Database:    proto.String(database),

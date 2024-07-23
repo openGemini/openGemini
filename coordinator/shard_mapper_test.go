@@ -260,7 +260,7 @@ func (m mocShardMapperMetaClient) MarkRetentionPolicyDelete(database, name strin
 	return nil
 }
 
-func (m mocShardMapperMetaClient) MarkMeasurementDelete(database, mst string) error {
+func (m mocShardMapperMetaClient) MarkMeasurementDelete(database, policy, measurement string) error {
 	return nil
 }
 

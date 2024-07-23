@@ -865,7 +865,7 @@ func (e *StatementExecutor) executeDropMeasurementStatement(stmt *influxql.DropM
 		return err
 	}
 
-	return e.MetaClient.MarkMeasurementDelete(database, stmt.Name)
+	return e.MetaClient.MarkMeasurementDelete(database, stmt.RpName, stmt.Name)
 }
 
 func (e *StatementExecutor) executeDropRetentionPolicyStatement(stmt *influxql.DropRetentionPolicyStatement) error {
