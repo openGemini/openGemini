@@ -2475,6 +2475,9 @@ func (h *Handler) getQueryLogResult(resp *Response, logCond *influxql.Query, par
 						rec[Tags] = strings.Split(tags, tokenizer.TAGS_SPLITTER)
 					case Content:
 						h.setRecord(rec, Content, s.Values[j][id], para.Truncate)
+						if para.Highlight && para.Pretty {
+							jsonHighlight = append(jsonHighlight, getJsonHighlight(c, rec[c], logCond))
+						}
 					default:
 						if unnest != nil && unnest.IsUnnestField(c) {
 							h.setRecord(rec, c, s.Values[j][id], para.Truncate)
