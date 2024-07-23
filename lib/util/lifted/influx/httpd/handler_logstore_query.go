@@ -34,6 +34,7 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
+	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/tokenizer"
 	"github.com/openGemini/openGemini/lib/util"
@@ -942,9 +943,13 @@ func GetAnalysisResults(resp *Response, sql *influxql.Query) [][]string {
 	}
 
 	fields := resp.Results[0].Series[0].Columns
-
-	for _, v := range fields {
+	seqId := make(map[int]struct{}, 0)
+	for k, v := range fields {
 		if v == "time" {
+			continue
+		}
+		if strings.Contains(v, record.SeqIDField) {
+			seqId[k] = struct{}{}
 			continue
 		}
 		results[0] = append(results[0], v)
@@ -963,8 +968,17 @@ func GetAnalysisResults(resp *Response, sql *influxql.Query) [][]string {
 				if isGroupBy {
 					currResult[len(currResult)-1] = strconv.Itoa(int(row[0].(time.Time).UnixMilli()))
 				}
+				skipIndex := 0
 				for k := 1; k < len(row); k++ {
-					currResult[k-1+len(tags)] = fmt.Sprintf("%v", row[k])
+					if _, ok := seqId[k]; ok {
+						skipIndex += 1
+						continue
+					}
+					if floatRow, ok := row[k].(float64); ok {
+						currResult[k-1+len(tags)-skipIndex] = strconv.FormatFloat(floatRow, 'f', -1, 64)
+					} else {
+						currResult[k-1+len(tags)-skipIndex] = fmt.Sprintf("%v", row[k])
+					}
 				}
 				results = append(results, currResult)
 			}
