@@ -286,6 +286,9 @@ type Store struct {
 
 	// for hierarchical storage
 	SkipRegisterColdShard bool `toml:"skip-register-cold-shard"`
+
+	// the level of the TSSP file to be converted to a Parquet. 0: not convert
+	TSSPToParquetLevel uint16 `toml:"tssp-to-parquet-level"`
 }
 
 // NewStore returns the default configuration for tsdb.

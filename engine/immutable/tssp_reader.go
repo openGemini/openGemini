@@ -94,6 +94,7 @@ type TSSPFile interface {
 	LoadComponents() error
 	LoadIdTimes(p *IdTimePairs) error
 	Rename(newName string) error
+	UpdateLevel(level uint16)
 	Remove() error
 	FreeMemory(evictLock bool) int64
 	FreeFileHandle() error
@@ -579,6 +580,12 @@ func (f *tsspFile) Rename(newName string) error {
 	return f.reader.Rename(newName)
 }
 
+func (f *tsspFile) UpdateLevel(level uint16) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.name.level = level
+}
+
 func (f *tsspFile) Remove() error {
 	atomic.AddUint32(&f.flag, 1)
 	if atomic.AddInt32(&f.ref, -1) == 0 {
@@ -843,6 +850,20 @@ func (g *CompactGroup) reset() {
 func (g *CompactGroup) release() {
 	g.reset()
 	compactGroupPool.Put(g)
+}
+
+func (g *CompactGroup) Len() int {
+	return len(g.group)
+}
+
+func (g *CompactGroup) Add(item string) {
+	g.group = append(g.group, item)
+}
+
+func (g *CompactGroup) UpdateLevel(lv uint16) {
+	if g.toLevel < lv {
+		g.toLevel = lv
+	}
 }
 
 type FilesInfo struct {

@@ -36,6 +36,7 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/scheduler"
 	stats "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
@@ -152,6 +153,8 @@ type MmsTables struct {
 
 	isAdded bool // set true if addFunc called
 	addFunc func(int64)
+
+	scheduler *scheduler.TaskScheduler
 }
 
 func NewTableStore(dir string, lock *string, tier *uint64, compactRecovery bool, config *Config) *MmsTables {
@@ -176,6 +179,7 @@ func NewTableStore(dir string, lock *string, tier *uint64, compactRecovery bool,
 		Conf:            config,
 		logger:          logger.NewLogger(errno.ModuleShard),
 	}
+	store.scheduler = scheduler.NewTaskScheduler(store.Listen, compLimiter)
 	return store
 }
 
@@ -248,7 +252,7 @@ func (m *MmsTables) disableCompAndMerge() {
 
 func (m *MmsTables) DisableCompAndMerge() {
 	m.disableCompAndMerge()
-	m.wg.Wait()
+	m.Wait()
 }
 
 func (m *MmsTables) EnableCompAndMerge() {
@@ -398,7 +402,7 @@ func (m *MmsTables) Close() error {
 	if !m.isClosed() {
 		close(m.closed)
 	}
-	m.wg.Wait()
+	m.Wait()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 

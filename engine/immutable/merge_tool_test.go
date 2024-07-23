@@ -602,6 +602,7 @@ func TestMergeTool_Merge_mod18(t *testing.T) {
 	assert.NoError(t, mh.mergeAndCompact(true))
 	assert.NoError(t, mh.store.FullCompact(1))
 	mh.store.Wait()
+	require.Equal(t, 1, len(mh.store.Order["mst"].Files()))
 	for _, rec := range mh.readMergedRecord() {
 		record.CheckTimes(rec.Times())
 	}
@@ -724,6 +725,7 @@ func TestMergeTool_MergeAndCompact(t *testing.T) {
 
 	assert.NoError(t, mh.mergeAndCompact(true))
 	assert.NoError(t, compareRecords(mh.readExpectRecord(), mh.readMergedRecord()))
+	require.Equal(t, 3, len(mh.store.Order["mst"].Files()))
 }
 
 func TestMergeTool_PreAgg(t *testing.T) {
