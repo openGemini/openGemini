@@ -188,6 +188,7 @@ func (h *MockSequenceIteratorHandler) Finish() {
 }
 
 type MockTSSPFileSeqIterator struct {
+	TSSPFile
 	PathFn                  func() string
 	NameFn                  func() string
 	FileNameFn              func() TSSPFileName
