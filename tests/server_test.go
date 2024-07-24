@@ -8875,65 +8875,65 @@ func TestServer_Query_By_Chunked_SingleMst(t *testing.T) {
 			params:  url.Values{"db": []string{"db0"}, "chunked": []string{"true"}, "chunk_size": []string{"1"}},
 			command: `SELECT * FROM survey`,
 			exp: `{"results":[{"statement_id":0,"series":[{"name":"survey","columns":["time","age","city","country","height","name","sex"],"values":[["2021-07-06T07:57:20.121Z",15,"chengdu","China",170,"ada",false]],"partial":true}],"partial":true}]}
-		{"results":[{"statement_id":0,"series":[{"name":"survey","columns":["time","age","city","country","height","name","sex"],"values":[["2021-07-06T07:57:20.122Z",27,"shenzhen","China",165,"billy",false]],"partial":true}],"partial":true}]}
-		{"results":[{"statement_id":0,"series":[{"name":"survey","columns":["time","age","city","country","height","name","sex"],"values":[["2021-07-06T07:57:20.123Z",57,"shanghai","China",150,"demon",false]],"partial":true}],"partial":true}]}
-		{"results":[{"statement_id":0,"series":[{"name":"survey","columns":["time","age","city","country","height","name","sex"],"values":[["2021-07-06T07:57:20.124Z",22,"beijing","China",167,"king",false]],"partial":true}],"partial":true}]}
-		{"results":[{"statement_id":0,"series":[{"name":"survey","columns":["time","age","city","country","height","name","sex"],"values":[["2021-07-06T07:57:22.121Z",31,"elilansa","Egypt",159,"chris",false]],"partial":true}],"partial":true}]}
-		{"results":[{"statement_id":0,"series":[{"name":"survey","columns":["time","age","city","country","height","name","sex"],"values":[["2021-07-06T07:57:22.122Z",40,"gunilanduo","Egypt",178,"daisy",true]],"partial":true}],"partial":true}]}
-		{"results":[{"statement_id":0,"series":[{"name":"survey","columns":["time","age","city","country","height","name","sex"],"values":[["2021-07-06T07:57:22.123Z",45,"paris","France",164,"paul",true]],"partial":true}],"partial":true}]}
-		{"results":[{"statement_id":0,"series":[{"name":"survey","columns":["time","age","city","country","height","name","sex"],"values":[["2021-07-06T07:57:22.124Z",35,"bakeli","Germany",169,"frank",true]],"partial":true}],"partial":true}]}
-		{"results":[{"statement_id":0,"series":[{"name":"survey","columns":["time","age","city","country","height","name","sex"],"values":[["2021-07-06T07:57:22.125Z",21,"dongjin","Japan",190,"jack",true]]}]}]}`,
+{"results":[{"statement_id":0,"series":[{"name":"survey","columns":["time","age","city","country","height","name","sex"],"values":[["2021-07-06T07:57:20.122Z",27,"shenzhen","China",165,"billy",false]],"partial":true}],"partial":true}]}
+{"results":[{"statement_id":0,"series":[{"name":"survey","columns":["time","age","city","country","height","name","sex"],"values":[["2021-07-06T07:57:20.123Z",57,"shanghai","China",150,"demon",false]],"partial":true}],"partial":true}]}
+{"results":[{"statement_id":0,"series":[{"name":"survey","columns":["time","age","city","country","height","name","sex"],"values":[["2021-07-06T07:57:20.124Z",22,"beijing","China",167,"king",false]],"partial":true}],"partial":true}]}
+{"results":[{"statement_id":0,"series":[{"name":"survey","columns":["time","age","city","country","height","name","sex"],"values":[["2021-07-06T07:57:22.121Z",31,"elilansa","Egypt",159,"chris",false]],"partial":true}],"partial":true}]}
+{"results":[{"statement_id":0,"series":[{"name":"survey","columns":["time","age","city","country","height","name","sex"],"values":[["2021-07-06T07:57:22.122Z",40,"gunilanduo","Egypt",178,"daisy",true]],"partial":true}],"partial":true}]}
+{"results":[{"statement_id":0,"series":[{"name":"survey","columns":["time","age","city","country","height","name","sex"],"values":[["2021-07-06T07:57:22.123Z",45,"paris","France",164,"paul",true]],"partial":true}],"partial":true}]}
+{"results":[{"statement_id":0,"series":[{"name":"survey","columns":["time","age","city","country","height","name","sex"],"values":[["2021-07-06T07:57:22.124Z",35,"bakeli","Germany",169,"frank",true]],"partial":true}],"partial":true}]}
+{"results":[{"statement_id":0,"series":[{"name":"survey","columns":["time","age","city","country","height","name","sex"],"values":[["2021-07-06T07:57:22.125Z",21,"dongjin","Japan",190,"jack",true]]}]}]}`,
 		},
 		{
 			name:    "query with a single measurement by chunk size 4",
 			params:  url.Values{"db": []string{"db0"}, "chunked": []string{"true"}, "chunk_size": []string{"4"}},
 			command: `SELECT * FROM survey`,
 			exp: `{"results":[{"statement_id":0,"series":[{"name":"survey","columns":["time","age","city","country","height","name","sex"],"values":[["2021-07-06T07:57:20.121Z",15,"chengdu","China",170,"ada",false],["2021-07-06T07:57:20.122Z",27,"shenzhen","China",165,"billy",false],["2021-07-06T07:57:20.123Z",57,"shanghai","China",150,"demon",false],["2021-07-06T07:57:20.124Z",22,"beijing","China",167,"king",false]],"partial":true}],"partial":true}]}
-		{"results":[{"statement_id":0,"series":[{"name":"survey","columns":["time","age","city","country","height","name","sex"],"values":[["2021-07-06T07:57:22.121Z",31,"elilansa","Egypt",159,"chris",false],["2021-07-06T07:57:22.122Z",40,"gunilanduo","Egypt",178,"daisy",true],["2021-07-06T07:57:22.123Z",45,"paris","France",164,"paul",true],["2021-07-06T07:57:22.124Z",35,"bakeli","Germany",169,"frank",true]],"partial":true}],"partial":true}]}
-		{"results":[{"statement_id":0,"series":[{"name":"survey","columns":["time","age","city","country","height","name","sex"],"values":[["2021-07-06T07:57:22.125Z",21,"dongjin","Japan",190,"jack",true]]}]}]}`,
+{"results":[{"statement_id":0,"series":[{"name":"survey","columns":["time","age","city","country","height","name","sex"],"values":[["2021-07-06T07:57:22.121Z",31,"elilansa","Egypt",159,"chris",false],["2021-07-06T07:57:22.122Z",40,"gunilanduo","Egypt",178,"daisy",true],["2021-07-06T07:57:22.123Z",45,"paris","France",164,"paul",true],["2021-07-06T07:57:22.124Z",35,"bakeli","Germany",169,"frank",true]],"partial":true}],"partial":true}]}
+{"results":[{"statement_id":0,"series":[{"name":"survey","columns":["time","age","city","country","height","name","sex"],"values":[["2021-07-06T07:57:22.125Z",21,"dongjin","Japan",190,"jack",true]]}]}]}`,
 		},
 		{
 			name:    "query with a single measurement by chunk size 3 and inner chunk size 4",
 			params:  url.Values{"db": []string{"db0"}, "chunked": []string{"true"}, "chunk_size": []string{"3"}, "inner_chunk_size": []string{"4"}},
 			command: `SELECT * FROM survey`,
 			exp: `{"results":[{"statement_id":0,"series":[{"name":"survey","columns":["time","age","city","country","height","name","sex"],"values":[["2021-07-06T07:57:20.121Z",15,"chengdu","China",170,"ada",false],["2021-07-06T07:57:20.122Z",27,"shenzhen","China",165,"billy",false],["2021-07-06T07:57:20.123Z",57,"shanghai","China",150,"demon",false]],"partial":true}],"partial":true}]}
-		{"results":[{"statement_id":0,"series":[{"name":"survey","columns":["time","age","city","country","height","name","sex"],"values":[["2021-07-06T07:57:20.124Z",22,"beijing","China",167,"king",false],["2021-07-06T07:57:22.121Z",31,"elilansa","Egypt",159,"chris",false],["2021-07-06T07:57:22.122Z",40,"gunilanduo","Egypt",178,"daisy",true]],"partial":true}],"partial":true}]}
-		{"results":[{"statement_id":0,"series":[{"name":"survey","columns":["time","age","city","country","height","name","sex"],"values":[["2021-07-06T07:57:22.123Z",45,"paris","France",164,"paul",true],["2021-07-06T07:57:22.124Z",35,"bakeli","Germany",169,"frank",true],["2021-07-06T07:57:22.125Z",21,"dongjin","Japan",190,"jack",true]]}]}]}`,
+{"results":[{"statement_id":0,"series":[{"name":"survey","columns":["time","age","city","country","height","name","sex"],"values":[["2021-07-06T07:57:20.124Z",22,"beijing","China",167,"king",false],["2021-07-06T07:57:22.121Z",31,"elilansa","Egypt",159,"chris",false],["2021-07-06T07:57:22.122Z",40,"gunilanduo","Egypt",178,"daisy",true]],"partial":true}],"partial":true}]}
+{"results":[{"statement_id":0,"series":[{"name":"survey","columns":["time","age","city","country","height","name","sex"],"values":[["2021-07-06T07:57:22.123Z",45,"paris","France",164,"paul",true],["2021-07-06T07:57:22.124Z",35,"bakeli","Germany",169,"frank",true],["2021-07-06T07:57:22.125Z",21,"dongjin","Japan",190,"jack",true]]}]}]}`,
 		},
 		{
 			name:    "query with a single measurement by chunk size 1 and inner chunk size 3",
 			params:  url.Values{"db": []string{"db0"}, "chunked": []string{"true"}, "chunk_size": []string{"1"}, "inner_chunk_size": []string{"3"}},
 			command: `SELECT * FROM survey group by country`,
 			exp: `{"results":[{"statement_id":0,"series":[{"name":"survey","tags":{"country":"China"},"columns":["time","age","city","height","name","sex"],"values":[["2021-07-06T07:57:20.121Z",15,"chengdu",170,"ada",false]],"partial":true}],"partial":true}]}
-		{"results":[{"statement_id":0,"series":[{"name":"survey","tags":{"country":"China"},"columns":["time","age","city","height","name","sex"],"values":[["2021-07-06T07:57:20.122Z",27,"shenzhen",165,"billy",false]],"partial":true}],"partial":true}]}
-		{"results":[{"statement_id":0,"series":[{"name":"survey","tags":{"country":"China"},"columns":["time","age","city","height","name","sex"],"values":[["2021-07-06T07:57:20.123Z",57,"shanghai",150,"demon",false]],"partial":true}],"partial":true}]}
-		{"results":[{"statement_id":0,"series":[{"name":"survey","tags":{"country":"China"},"columns":["time","age","city","height","name","sex"],"values":[["2021-07-06T07:57:20.124Z",22,"beijing",167,"king",false]]}],"partial":true}]}
-		{"results":[{"statement_id":0,"series":[{"name":"survey","tags":{"country":"Egypt"},"columns":["time","age","city","height","name","sex"],"values":[["2021-07-06T07:57:22.121Z",31,"elilansa",159,"chris",false]],"partial":true}],"partial":true}]}
-		{"results":[{"statement_id":0,"series":[{"name":"survey","tags":{"country":"Egypt"},"columns":["time","age","city","height","name","sex"],"values":[["2021-07-06T07:57:22.122Z",40,"gunilanduo",178,"daisy",true]]}],"partial":true}]}
-		{"results":[{"statement_id":0,"series":[{"name":"survey","tags":{"country":"France"},"columns":["time","age","city","height","name","sex"],"values":[["2021-07-06T07:57:22.123Z",45,"paris",164,"paul",true]]}],"partial":true}]}
-		{"results":[{"statement_id":0,"series":[{"name":"survey","tags":{"country":"Germany"},"columns":["time","age","city","height","name","sex"],"values":[["2021-07-06T07:57:22.124Z",35,"bakeli",169,"frank",true]]}],"partial":true}]}
-		{"results":[{"statement_id":0,"series":[{"name":"survey","tags":{"country":"Japan"},"columns":["time","age","city","height","name","sex"],"values":[["2021-07-06T07:57:22.125Z",21,"dongjin",190,"jack",true]]}]}]}`,
+{"results":[{"statement_id":0,"series":[{"name":"survey","tags":{"country":"China"},"columns":["time","age","city","height","name","sex"],"values":[["2021-07-06T07:57:20.122Z",27,"shenzhen",165,"billy",false]],"partial":true}],"partial":true}]}
+{"results":[{"statement_id":0,"series":[{"name":"survey","tags":{"country":"China"},"columns":["time","age","city","height","name","sex"],"values":[["2021-07-06T07:57:20.123Z",57,"shanghai",150,"demon",false]],"partial":true}],"partial":true}]}
+{"results":[{"statement_id":0,"series":[{"name":"survey","tags":{"country":"China"},"columns":["time","age","city","height","name","sex"],"values":[["2021-07-06T07:57:20.124Z",22,"beijing",167,"king",false]]}],"partial":true}]}
+{"results":[{"statement_id":0,"series":[{"name":"survey","tags":{"country":"Egypt"},"columns":["time","age","city","height","name","sex"],"values":[["2021-07-06T07:57:22.121Z",31,"elilansa",159,"chris",false]],"partial":true}],"partial":true}]}
+{"results":[{"statement_id":0,"series":[{"name":"survey","tags":{"country":"Egypt"},"columns":["time","age","city","height","name","sex"],"values":[["2021-07-06T07:57:22.122Z",40,"gunilanduo",178,"daisy",true]]}],"partial":true}]}
+{"results":[{"statement_id":0,"series":[{"name":"survey","tags":{"country":"France"},"columns":["time","age","city","height","name","sex"],"values":[["2021-07-06T07:57:22.123Z",45,"paris",164,"paul",true]]}],"partial":true}]}
+{"results":[{"statement_id":0,"series":[{"name":"survey","tags":{"country":"Germany"},"columns":["time","age","city","height","name","sex"],"values":[["2021-07-06T07:57:22.124Z",35,"bakeli",169,"frank",true]]}],"partial":true}]}
+{"results":[{"statement_id":0,"series":[{"name":"survey","tags":{"country":"Japan"},"columns":["time","age","city","height","name","sex"],"values":[["2021-07-06T07:57:22.125Z",21,"dongjin",190,"jack",true]]}]}]}`,
 		},
 		{
 			name:    "query with a single measurement by chunk size 3 and inner chunk size 3",
 			params:  url.Values{"db": []string{"db0"}, "chunked": []string{"true"}, "chunk_size": []string{"3"}, "inner_chunk_size": []string{"3"}},
 			command: `SELECT * FROM survey group by country`,
 			exp: `{"results":[{"statement_id":0,"series":[{"name":"survey","tags":{"country":"China"},"columns":["time","age","city","height","name","sex"],"values":[["2021-07-06T07:57:20.121Z",15,"chengdu",170,"ada",false],["2021-07-06T07:57:20.122Z",27,"shenzhen",165,"billy",false],["2021-07-06T07:57:20.123Z",57,"shanghai",150,"demon",false]],"partial":true}],"partial":true}]}
-		{"results":[{"statement_id":0,"series":[{"name":"survey","tags":{"country":"China"},"columns":["time","age","city","height","name","sex"],"values":[["2021-07-06T07:57:20.124Z",22,"beijing",167,"king",false]]}],"partial":true}]}
-		{"results":[{"statement_id":0,"series":[{"name":"survey","tags":{"country":"Egypt"},"columns":["time","age","city","height","name","sex"],"values":[["2021-07-06T07:57:22.121Z",31,"elilansa",159,"chris",false],["2021-07-06T07:57:22.122Z",40,"gunilanduo",178,"daisy",true]]}],"partial":true}]}
-		{"results":[{"statement_id":0,"series":[{"name":"survey","tags":{"country":"France"},"columns":["time","age","city","height","name","sex"],"values":[["2021-07-06T07:57:22.123Z",45,"paris",164,"paul",true]]}],"partial":true}]}
-		{"results":[{"statement_id":0,"series":[{"name":"survey","tags":{"country":"Germany"},"columns":["time","age","city","height","name","sex"],"values":[["2021-07-06T07:57:22.124Z",35,"bakeli",169,"frank",true]]}],"partial":true}]}
-		{"results":[{"statement_id":0,"series":[{"name":"survey","tags":{"country":"Japan"},"columns":["time","age","city","height","name","sex"],"values":[["2021-07-06T07:57:22.125Z",21,"dongjin",190,"jack",true]]}]}]}`,
+{"results":[{"statement_id":0,"series":[{"name":"survey","tags":{"country":"China"},"columns":["time","age","city","height","name","sex"],"values":[["2021-07-06T07:57:20.124Z",22,"beijing",167,"king",false]]}],"partial":true}]}
+{"results":[{"statement_id":0,"series":[{"name":"survey","tags":{"country":"Egypt"},"columns":["time","age","city","height","name","sex"],"values":[["2021-07-06T07:57:22.121Z",31,"elilansa",159,"chris",false],["2021-07-06T07:57:22.122Z",40,"gunilanduo",178,"daisy",true]]}],"partial":true}]}
+{"results":[{"statement_id":0,"series":[{"name":"survey","tags":{"country":"France"},"columns":["time","age","city","height","name","sex"],"values":[["2021-07-06T07:57:22.123Z",45,"paris",164,"paul",true]]}],"partial":true}]}
+{"results":[{"statement_id":0,"series":[{"name":"survey","tags":{"country":"Germany"},"columns":["time","age","city","height","name","sex"],"values":[["2021-07-06T07:57:22.124Z",35,"bakeli",169,"frank",true]]}],"partial":true}]}
+{"results":[{"statement_id":0,"series":[{"name":"survey","tags":{"country":"Japan"},"columns":["time","age","city","height","name","sex"],"values":[["2021-07-06T07:57:22.125Z",21,"dongjin",190,"jack",true]]}]}]}`,
 		},
 		{
 			name:    "query with a single measurement by chunk size 5 and inner chunk size 3",
 			params:  url.Values{"db": []string{"db0"}, "chunked": []string{"true"}, "chunk_size": []string{"5"}, "inner_chunk_size": []string{"3"}},
 			command: `SELECT * FROM survey group by country`,
 			exp: `{"results":[{"statement_id":0,"series":[{"name":"survey","tags":{"country":"China"},"columns":["time","age","city","height","name","sex"],"values":[["2021-07-06T07:57:20.121Z",15,"chengdu",170,"ada",false],["2021-07-06T07:57:20.122Z",27,"shenzhen",165,"billy",false],["2021-07-06T07:57:20.123Z",57,"shanghai",150,"demon",false],["2021-07-06T07:57:20.124Z",22,"beijing",167,"king",false]]}],"partial":true}]}
-		{"results":[{"statement_id":0,"series":[{"name":"survey","tags":{"country":"Egypt"},"columns":["time","age","city","height","name","sex"],"values":[["2021-07-06T07:57:22.121Z",31,"elilansa",159,"chris",false],["2021-07-06T07:57:22.122Z",40,"gunilanduo",178,"daisy",true]]}],"partial":true}]}
-		{"results":[{"statement_id":0,"series":[{"name":"survey","tags":{"country":"France"},"columns":["time","age","city","height","name","sex"],"values":[["2021-07-06T07:57:22.123Z",45,"paris",164,"paul",true]]}],"partial":true}]}
-		{"results":[{"statement_id":0,"series":[{"name":"survey","tags":{"country":"Germany"},"columns":["time","age","city","height","name","sex"],"values":[["2021-07-06T07:57:22.124Z",35,"bakeli",169,"frank",true]]}],"partial":true}]}
-		{"results":[{"statement_id":0,"series":[{"name":"survey","tags":{"country":"Japan"},"columns":["time","age","city","height","name","sex"],"values":[["2021-07-06T07:57:22.125Z",21,"dongjin",190,"jack",true]]}]}]}`,
+{"results":[{"statement_id":0,"series":[{"name":"survey","tags":{"country":"Egypt"},"columns":["time","age","city","height","name","sex"],"values":[["2021-07-06T07:57:22.121Z",31,"elilansa",159,"chris",false],["2021-07-06T07:57:22.122Z",40,"gunilanduo",178,"daisy",true]]}],"partial":true}]}
+{"results":[{"statement_id":0,"series":[{"name":"survey","tags":{"country":"France"},"columns":["time","age","city","height","name","sex"],"values":[["2021-07-06T07:57:22.123Z",45,"paris",164,"paul",true]]}],"partial":true}]}
+{"results":[{"statement_id":0,"series":[{"name":"survey","tags":{"country":"Germany"},"columns":["time","age","city","height","name","sex"],"values":[["2021-07-06T07:57:22.124Z",35,"bakeli",169,"frank",true]]}],"partial":true}]}
+{"results":[{"statement_id":0,"series":[{"name":"survey","tags":{"country":"Japan"},"columns":["time","age","city","height","name","sex"],"values":[["2021-07-06T07:57:22.125Z",21,"dongjin",190,"jack",true]]}]}]}`,
 		},
 	}...)
 
