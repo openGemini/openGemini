@@ -3098,6 +3098,14 @@ DROP_MEASUREMENT_STATEMENT:
     {
         stmt := &DropMeasurementStatement{}
         stmt.Name = $3
+        stmt.RpName = ""
+        $$ = stmt
+    }
+    | DROP MEASUREMENT IDENT DOT IDENT
+    {
+        stmt := &DropMeasurementStatement{}
+        stmt.Name = $5
+        stmt.RpName = $3
         $$ = stmt
     }
 
