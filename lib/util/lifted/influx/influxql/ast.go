@@ -3762,12 +3762,18 @@ func (s *ShowMeasurementsStatement) DefaultDatabase() string {
 type DropMeasurementStatement struct {
 	// Name of the measurement to be dropped.
 	Name string
+	// retention policy of the measurement to be dropped
+	RpName string
 }
 
 // String returns a string representation of the drop measurement statement.
 func (s *DropMeasurementStatement) String() string {
 	var buf bytes.Buffer
 	_, _ = buf.WriteString("DROP MEASUREMENT ")
+	if s.RpName != "" {
+		_, _ = buf.WriteString(QuoteIdent(s.RpName))
+		_, _ = buf.WriteString(".")
+	}
 	_, _ = buf.WriteString(QuoteIdent(s.Name))
 	return buf.String()
 }
