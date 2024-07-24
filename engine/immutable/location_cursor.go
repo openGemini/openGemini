@@ -46,6 +46,13 @@ func (l *LocationCursor) RowCount() int {
 	return l.rowNum
 }
 
+func (l *LocationCursor) Reset() {
+	l.Unref()
+	l.rowNum = 0
+	l.pos = 0
+	l.lcs = l.lcs[:0]
+}
+
 func (l *LocationCursor) AddLocation(loc *Location) {
 	l.lcs = append(l.lcs, loc)
 }

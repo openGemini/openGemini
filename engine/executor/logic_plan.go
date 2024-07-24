@@ -86,7 +86,7 @@ func GetEnableFileCursor() bool {
 }
 
 func IsEnableFileCursor(schema hybridqp.Catalog) bool {
-	return GetEnableFileCursor() && schema.HasOptimizeAgg() && !schema.Options().IsPromQuery()
+	return GetEnableFileCursor() && schema.HasOptimizeAgg()
 }
 
 func PrintPlan(planName string, plan hybridqp.QueryNode) {

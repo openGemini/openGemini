@@ -210,6 +210,30 @@ func AddLocationsWithFirstTime(l *immutable.LocationCursor, files immutable.Tabl
 	return firstTime, nil
 }
 
+func (c *tsmMergeCursor) ReInit(
+	sid uint64,
+	filter influxql.Expr,
+	rowFilters *[]clv.RowFilter,
+	tags *influx.PointTags,
+) (bool, error) {
+	c.init = true
+	c.filter = filter
+	c.rowFilters = rowFilters
+	c.tags = tags
+	c.sid = sid
+	c.orderRecIter.reset()
+	c.outOrderRecIter.reset()
+	c.locations.Reset()
+	c.outOfOrderLocations.Reset()
+	if err := c.AddLoc(); err != nil {
+		return false, err
+	}
+	if c.locations.Len() == 0 && c.outOfOrderLocations.Len() == 0 {
+		return false, nil
+	}
+	return true, nil
+}
+
 func (c *tsmMergeCursor) AddLoc() error {
 	var err error
 	var limitFirstTime int64
