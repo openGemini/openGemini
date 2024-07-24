@@ -12238,3 +12238,70 @@ func TestServer_TSSubQueryHasDifferentAscending(t *testing.T) {
 		}
 	}
 }
+
+// Ensure the Drop Measurement work correctly when dropping measurements in specific RP.
+func TestServer_DropMeasurementPerRP(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewConfig())
+	defer s.Close()
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp1", 1, 0), false); err != nil {
+		t.Fatal(err)
+	}
+	writes := []string{
+		"cpu0,host=server01 usage=10",
+		"cpu0,host=server02 usage=20",
+	}
+
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{db: "db0", rp: "rp0", data: writes[0]},
+		&Write{db: "db0", rp: "rp1", data: writes[1]},
+	}
+	test.addQueries([]*Query{
+		{
+			name:    "drop measurement cpu0 in default RP: rp0",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `DROP MEASUREMENT cpu0`,
+			exps:    []string{`{"results":[{"statement_id":0}]}`},
+		},
+		{
+			name:    "ensure rp0.cpu no longer exists",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `SELECT * FROM rp0.cpu0`,
+			exps: []string{`{"results":[{"statement_id":0,"error":"measurement is being delete"}]}`,
+				`{"results":[{"statement_id":0,"error":"measurement not found"}]}`},
+		},
+		{
+			name:    "drop measurement cpu in rp1",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `DROP MEASUREMENT rp1.cpu0`,
+			exps:    []string{`{"results":[{"statement_id":0}]}`},
+		},
+		{
+			name:    "ensure rp1.cpu no longer exists",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `SELECT * FROM rp1.cpu0`,
+			exps: []string{`{"results":[{"statement_id":0,"error":"measurement is being delete"}]}`,
+				`{"results":[{"statement_id":0,"error":"measurement not found"}]}`},
+		},
+	}...)
+	for i, query := range test.queries {
+		if i == 0 {
+			if err := test.init(s); err != nil {
+				t.Fatalf("test init failed: %s", err)
+			}
+		}
+		if query.skip {
+			t.Logf("SKIP:: %s", query.name)
+			continue
+		}
+		if err := query.Execute(s); err != nil {
+			t.Error(query.Error(err))
+		} else if !query.isSuccess() {
+			t.Error(query.failureMessage())
+		}
+	}
+}
