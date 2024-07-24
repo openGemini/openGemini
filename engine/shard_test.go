@@ -7157,7 +7157,7 @@ func (client *MockMetaClient) MarkDatabaseDelete(name string) error {
 func (client *MockMetaClient) MarkRetentionPolicyDelete(database, name string) error {
 	return nil
 }
-func (client *MockMetaClient) MarkMeasurementDelete(database, mst string) error {
+func (client *MockMetaClient) MarkMeasurementDelete(database, policy, measurement string) error {
 	return nil
 }
 func (client *MockMetaClient) DBPtView(database string) (meta2.DBPtInfos, error) {
