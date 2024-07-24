@@ -400,7 +400,7 @@ func (r *AggPushdownToReaderRule) OnMatch(call *OptRuleCall) {
 	}
 
 	canSlidingWindowPushDown := reader.Schema().HasSlidingWindowCall() && sysconfig.GetEnableSlidingWindowPushUp() != sysconfig.OnSlidingWindowPushUp
-	if !reader.Schema().CanCallsPushdown() || (!reader.Schema().HasPercentileOGSketch() && !canSlidingWindowPushDown && !reader.Schema().Options().IsPromQuery()) {
+	if !reader.Schema().CanCallsPushdown() || (!reader.Schema().HasPercentileOGSketch() && !canSlidingWindowPushDown) {
 		return
 	}
 

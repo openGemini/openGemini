@@ -1514,8 +1514,8 @@ func TestAggPushDownWithRangeVector(t *testing.T) {
 	if verifier.AggCount() != 4 && !executor.GetEnableFileCursor() {
 		t.Errorf("4 agg in plan tree, but %d", verifier.AggCount())
 	}
-	if verifier.AggCount() != 2 && executor.GetEnableFileCursor() {
-		t.Errorf("2 agg in plan tree, but %d", verifier.AggCount())
+	if verifier.AggCount() != 3 && executor.GetEnableFileCursor() {
+		t.Errorf("3 agg in plan tree, but %d", verifier.AggCount())
 	}
 }
 

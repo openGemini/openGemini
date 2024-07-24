@@ -1235,7 +1235,7 @@ func (qs *QuerySchema) CanAggPushDown() bool {
 
 // CanAggTagSet indicates that aggregation is performed among multiple TagSets. File traversal and SeqAgg optimization are used.
 func (qs *QuerySchema) CanAggTagSet() bool {
-	return qs.HasCall() && qs.CanCallsPushdown() && !qs.ContainSeriesIgnoreCall() && !qs.Options().IsRangeVectorSelector()
+	return qs.HasCall() && qs.CanCallsPushdown() && !qs.ContainSeriesIgnoreCall()
 }
 
 func (qs *QuerySchema) ContainSeriesIgnoreCall() bool {
