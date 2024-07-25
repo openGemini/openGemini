@@ -96,14 +96,11 @@ func newTsmMergeCursor(ctx *idKeyCursorContext, sid uint64, filter influxql.Expr
 	return c, nil
 }
 
-func AddLocationsWithInit(l *immutable.LocationCursor, files immutable.TableReaders, ctx *idKeyCursorContext, sid uint64) error {
-	chunkMetaContext := immutable.NewChunkMetaContext(ctx.schema)
-	defer chunkMetaContext.Release()
-
+func AddLocations(l *immutable.LocationCursor, files immutable.TableReaders, ctx *idKeyCursorContext, sid uint64, metaCtx *immutable.ChunkMetaContext) error {
 	for _, r := range files {
 		r.RefFileReader()
 		loc := immutable.NewLocation(r, ctx.decs)
-		contains, err := loc.Contains(sid, ctx.tr, chunkMetaContext)
+		contains, err := loc.Contains(sid, ctx.tr, metaCtx)
 		if err != nil {
 			r.UnrefFileReader()
 			return err
@@ -113,6 +110,20 @@ func AddLocationsWithInit(l *immutable.LocationCursor, files immutable.TableRead
 		} else {
 			r.UnrefFileReader()
 		}
+	}
+	return nil
+}
+
+func AddLocationsWithInit(l *immutable.LocationCursor, files immutable.TableReaders, ctx *idKeyCursorContext, sid uint64) error {
+	var chunkMetaContext *immutable.ChunkMetaContext
+	if ctx.querySchema.Options().IsPromQuery() && ctx.metaContext != nil {
+		chunkMetaContext = ctx.metaContext
+	} else {
+		chunkMetaContext = immutable.NewChunkMetaContext(ctx.schema)
+		defer chunkMetaContext.Release()
+	}
+	if err := AddLocations(l, files, ctx, sid, chunkMetaContext); err != nil {
+		return err
 	}
 	return nil
 }
