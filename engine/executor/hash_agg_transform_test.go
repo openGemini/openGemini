@@ -200,6 +200,164 @@ func BuildHashAggInChunkForDimsIn4() executor.Chunk {
 	return chunk
 }
 
+func BuildHashAggInChunkNilDims() executor.Chunk {
+	rowDataType := buildHashAggInputRowDataType1()
+	b := executor.NewChunkBuilder(rowDataType)
+	chunk := b.NewChunk("m1")
+	chunk.AppendTimes([]int64{1, 2, 3, 4})
+	chunk.NewDims(1)
+	for _, col := range chunk.Columns() {
+		switch col.DataType() {
+		case influxql.Integer:
+			col.AppendIntegerValues([]int64{1, 2, 3})
+		case influxql.Float:
+			col.AppendFloatValues([]float64{1.1, 2.2, 3.3})
+		case influxql.Boolean:
+			col.AppendBooleanValues([]bool{true, false, true})
+		case influxql.String:
+			col.AppendStringValues([]string{"a", "b", "c"})
+		default:
+			panic("datatype error")
+		}
+		col.AppendManyNotNil(3)
+		col.AppendManyNil(1)
+	}
+	return chunk
+}
+
+func BuildHashAggInChunkNilDims1() executor.Chunk {
+	rowDataType := buildHashAggInputRowDataType1()
+	b := executor.NewChunkBuilder(rowDataType)
+	chunk := b.NewChunk("m1")
+	chunk.AppendTimes([]int64{1, 1, 3, 4})
+	chunk.NewDims(1)
+	for _, col := range chunk.Columns() {
+		switch col.DataType() {
+		case influxql.Integer:
+			col.AppendIntegerValues([]int64{1, 2, 3})
+		case influxql.Float:
+			col.AppendFloatValues([]float64{1.1, 2.2, 3.3})
+		case influxql.Boolean:
+			col.AppendBooleanValues([]bool{true, false, true})
+		case influxql.String:
+			col.AppendStringValues([]string{"a", "b", "c"})
+		default:
+			panic("datatype error")
+		}
+		col.AppendManyNotNil(3)
+		col.AppendManyNil(1)
+	}
+	return chunk
+}
+
+func BuildHashAggInChunkNilDims2() executor.Chunk {
+	rowDataType := buildHashAggInputRowDataType1()
+	b := executor.NewChunkBuilder(rowDataType)
+	chunk := b.NewChunk("m1")
+	chunk.AppendTimes([]int64{1, 2, 3, 3})
+	chunk.NewDims(1)
+	for _, col := range chunk.Columns() {
+		switch col.DataType() {
+		case influxql.Integer:
+			col.AppendIntegerValues([]int64{1, 2, 3})
+		case influxql.Float:
+			col.AppendFloatValues([]float64{1.1, 2.2, 3.3})
+		case influxql.Boolean:
+			col.AppendBooleanValues([]bool{true, false, true})
+		case influxql.String:
+			col.AppendStringValues([]string{"a", "b", "c"})
+		default:
+			panic("datatype error")
+		}
+		col.AppendManyNotNil(3)
+		col.AppendManyNil(1)
+	}
+	return chunk
+}
+
+func BuildHashAggResultNilDimsWithoutInterval() []executor.Chunk {
+	rowDataType := buildHashAggResultRowDataType()
+	b := executor.NewChunkBuilder(rowDataType)
+	chunk1 := b.NewChunk("m1")
+	chunk1.AppendTimes([]int64{1})
+
+	AppendIntegerValues(chunk1, 0, []int64{12}, []bool{true})
+
+	AppendFloatValues(chunk1, 1, []float64{13.2}, []bool{true})
+
+	for _, idx := range []int{2, 3, 4, 5} {
+		AppendIntegerValues(chunk1, idx, []int64{6}, []bool{true})
+	}
+
+	for _, idx := range []int{6, 14, 16} {
+		AppendIntegerValues(chunk1, idx, []int64{1}, []bool{true})
+	}
+
+	AppendIntegerValues(chunk1, 18, []int64{2}, []bool{true})
+
+	AppendIntegerValues(chunk1, 10, []int64{1}, []bool{false})
+
+	AppendFloatValues(chunk1, 11, []float64{1}, []bool{false})
+
+	AppendBooleanValues(chunk1, 12, []bool{true}, []bool{false})
+
+	AppendStringValues(chunk1, 13, []string{"a"}, []bool{false})
+
+	for _, idx := range []int{7, 15} {
+		AppendFloatValues(chunk1, idx, []float64{1.1}, []bool{true})
+	}
+
+	AppendFloatValues(chunk1, 19, []float64{2.2}, []bool{true})
+
+	AppendFloatValues(chunk1, 17, []float64{3.3}, []bool{true})
+
+	for _, idx := range []int{8} {
+		AppendBooleanValues(chunk1, idx, []bool{true}, []bool{true})
+	}
+
+	for _, idx := range []int{9} {
+		AppendStringValues(chunk1, idx, []string{"a"}, []bool{true})
+	}
+
+	AppendBooleanValues(chunk1, 20, []bool{false}, []bool{true})
+	AppendBooleanValues(chunk1, 21, []bool{true}, []bool{true})
+
+	return []executor.Chunk{chunk1}
+}
+
+func BuildHashAggResultNilDimsWithInterval() []executor.Chunk {
+	rowDataType := buildHashAggResultRowDataType()
+	b := executor.NewChunkBuilder(rowDataType)
+	chunk1 := b.NewChunk("m1")
+	chunk1.AppendTimes([]int64{1, 3, 4, 2})
+
+	AppendIntegerValues(chunk1, 0, []int64{4, 6, 0, 2}, []bool{true, true, true, true})
+
+	AppendFloatValues(chunk1, 1, []float64{4.4, 6.6, 0, 2.2}, []bool{true, true, true, true})
+
+	for _, idx := range []int{2, 3, 4, 5} {
+		AppendIntegerValues(chunk1, idx, []int64{3, 2, 0, 1}, []bool{true, true, true, true})
+	}
+
+	for _, idx := range []int{6, 10, 14, 18} {
+		AppendIntegerValues(chunk1, idx, []int64{1, 3, 0, 2}, []bool{true, true, false, true})
+	}
+
+	for _, idx := range []int{7, 11, 15, 19} {
+		AppendFloatValues(chunk1, idx, []float64{1.1, 3.3, 0, 2.2}, []bool{true, true, false, true})
+	}
+	for _, idx := range []int{8, 12, 21} {
+		AppendBooleanValues(chunk1, idx, []bool{true, true, false, false}, []bool{true, true, false, true})
+	}
+	for _, idx := range []int{9, 13} {
+		AppendStringValues(chunk1, idx, []string{"a", "c", "", "b"}, []bool{true, true, false, true})
+	}
+	AppendIntegerValues(chunk1, 16, []int64{2, 3, 0, 2}, []bool{true, true, false, true})
+	AppendFloatValues(chunk1, 17, []float64{2.2, 3.3, 0, 2.2}, []bool{true, true, false, true})
+	AppendBooleanValues(chunk1, 20, []bool{false, true, false, false}, []bool{true, true, false, true})
+	return []executor.Chunk{chunk1}
+}
+
 func BuildHashAggResult34() []executor.Chunk {
 	rowDataType := buildHashAggResultRowDataType()
 	b := executor.NewChunkBuilder(rowDataType)
@@ -1766,6 +1924,107 @@ func TestHashAggTransformIntervalFixIntervalNumFill_Top_String(t *testing.T) {
 	executor.Connect(trans.GetOutputs()[0], sink.Input)
 	var processors executor.Processors
 	processors = append(processors, source1)
+	processors = append(processors, trans)
+	processors = append(processors, sink)
+	executors := executor.NewPipelineExecutor(processors)
+	executors.Execute(context.Background())
+	executors.Release()
+}
+
+func TestHashAggTransformNilDimsWithoutInterval(t *testing.T) {
+	chunk1 := BuildHashAggInChunkNilDims()
+	chunk2 := BuildHashAggInChunkNilDims()
+	expResult := BuildHashAggResultNilDimsWithoutInterval()
+	source1 := NewSourceFromMultiChunk(chunk1.RowDataType(), []executor.Chunk{chunk1})
+	source2 := NewSourceFromMultiChunk(chunk1.RowDataType(), []executor.Chunk{chunk2})
+	var inRowDataTypes []hybridqp.RowDataType
+	inRowDataTypes = append(inRowDataTypes, source1.Output.RowDataType)
+	inRowDataTypes = append(inRowDataTypes, source2.Output.RowDataType)
+	var outRowDataTypes []hybridqp.RowDataType
+	outRowDataType := buildHashAggOutputRowDataType1()
+	outRowDataTypes = append(outRowDataTypes, outRowDataType)
+	schema := buildHashAggTransformSchemaGroupByFixIntervalNullFill()
+	aggFuncsName := buildAggFuncsName()
+	exprOpt := make([]hybridqp.ExprOptions, len(outRowDataType.Fields()))
+	for i := range outRowDataType.Fields() {
+		if aggFuncsName[i] == "percentile" {
+			exprOpt[i] = hybridqp.ExprOptions{
+				Expr: &influxql.Call{Name: "percentile", Args: []influxql.Expr{hybridqp.MustParseExpr(inRowDataTypes[0].Field(i).Expr.(*influxql.VarRef).Val), hybridqp.MustParseExpr("50")}},
+				Ref:  influxql.VarRef{Val: outRowDataType.Field(i).Expr.(*influxql.VarRef).Val, Type: outRowDataType.Field(i).Expr.(*influxql.VarRef).Type},
+			}
+		} else {
+			exprOpt[i] = hybridqp.ExprOptions{
+				Expr: &influxql.Call{Name: aggFuncsName[i], Args: []influxql.Expr{hybridqp.MustParseExpr(inRowDataTypes[0].Field(i).Expr.(*influxql.VarRef).Val)}},
+				Ref:  influxql.VarRef{Val: outRowDataType.Field(i).Expr.(*influxql.VarRef).Val, Type: outRowDataType.Field(i).Expr.(*influxql.VarRef).Type},
+			}
+		}
+	}
+	trans, err := executor.NewHashAggTransform(inRowDataTypes, outRowDataTypes, exprOpt, schema, executor.Fill)
+	if err != nil {
+		panic("")
+	}
+	checkResult := func(chunk executor.Chunk) error {
+		compareResult34(chunk, expResult, t)
+		return nil
+	}
+	sink := NewSinkFromFunction(outRowDataType, checkResult)
+	executor.Connect(source1.Output, trans.GetInputs()[0])
+	executor.Connect(source2.Output, trans.GetInputs()[1])
+	executor.Connect(trans.GetOutputs()[0], sink.Input)
+	var processors executor.Processors
+	processors = append(processors, source1)
+	processors = append(processors, source2)
+	processors = append(processors, trans)
+	processors = append(processors, sink)
+	executors := executor.NewPipelineExecutor(processors)
+	executors.Execute(context.Background())
+	executors.Release()
+}
+
+func TestHashAggTransformNilDimsWithInterval(t *testing.T) {
+	chunk1 := BuildHashAggInChunkNilDims1()
+	chunk2 := BuildHashAggInChunkNilDims2()
+	expResult := BuildHashAggResultNilDimsWithInterval()
+	source1 := NewSourceFromMultiChunk(chunk1.RowDataType(), []executor.Chunk{chunk1})
+	source2 := NewSourceFromMultiChunk(chunk1.RowDataType(), []executor.Chunk{chunk2})
+	var inRowDataTypes []hybridqp.RowDataType
+	inRowDataTypes = append(inRowDataTypes, source1.Output.RowDataType)
+	inRowDataTypes = append(inRowDataTypes, source2.Output.RowDataType)
+	var outRowDataTypes []hybridqp.RowDataType
+	outRowDataType := buildHashAggOutputRowDataType1()
+	outRowDataTypes = append(outRowDataTypes, outRowDataType)
+	schema := buildHashAggTransformSchemaGroupByNoFixIntervalNullFill()
+	aggFuncsName := buildAggFuncsName()
+	exprOpt := make([]hybridqp.ExprOptions, len(outRowDataType.Fields()))
+	for i := range outRowDataType.Fields() {
+		if aggFuncsName[i] == "percentile" {
+			exprOpt[i] = hybridqp.ExprOptions{
+				Expr: &influxql.Call{Name: "percentile", Args: []influxql.Expr{hybridqp.MustParseExpr(inRowDataTypes[0].Field(i).Expr.(*influxql.VarRef).Val), hybridqp.MustParseExpr("50")}},
+				Ref:  influxql.VarRef{Val: outRowDataType.Field(i).Expr.(*influxql.VarRef).Val, Type: outRowDataType.Field(i).Expr.(*influxql.VarRef).Type},
+			}
+		} else {
+			exprOpt[i] = hybridqp.ExprOptions{
+				Expr: &influxql.Call{Name: aggFuncsName[i], Args: []influxql.Expr{hybridqp.MustParseExpr(inRowDataTypes[0].Field(i).Expr.(*influxql.VarRef).Val)}},
+				Ref:  influxql.VarRef{Val: outRowDataType.Field(i).Expr.(*influxql.VarRef).Val, Type: outRowDataType.Field(i).Expr.(*influxql.VarRef).Type},
+			}
+		}
+	}
+	trans, err := executor.NewHashAggTransform(inRowDataTypes, outRowDataTypes, exprOpt, schema, executor.Normal)
+	if err != nil {
+		panic("")
+	}
+
+	checkResult := func(chunk executor.Chunk) error {
+		compareResult34(chunk, expResult, t)
+		return nil
+	}
+	sink := NewSinkFromFunction(outRowDataType, checkResult)
+	executor.Connect(source1.Output, trans.GetInputs()[0])
+	executor.Connect(source2.Output, trans.GetInputs()[1])
+	executor.Connect(trans.GetOutputs()[0], sink.Input)
+	var processors executor.Processors
+	processors = append(processors, source1)
+	processors = append(processors, source2)
 	processors = append(processors, trans)
 	processors = append(processors, sink)
 	executors := executor.NewPipelineExecutor(processors)
