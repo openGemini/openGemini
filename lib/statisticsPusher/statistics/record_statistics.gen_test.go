@@ -4,7 +4,7 @@
 // Source: statistics_test.tmpl
 
 /*
-Copyright 2023 Huawei Cloud Computing Technologies Co., Ltd.
+Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -73,6 +73,10 @@ func TestRecord(t *testing.T) {
 	stat.AddSeriesPoolGet(2)
 	stat.AddSeriesPoolAbort(2)
 	stat.AddSeriesPoolGetReUse(2)
+	stat.AddSeriesLoopPoolInUse(2)
+	stat.AddSeriesLoopPoolGet(2)
+	stat.AddSeriesLoopPoolAbort(2)
+	stat.AddSeriesLoopPoolGetReUse(2)
 
 	fields := map[string]interface{}{
 		"IntervalRecordPoolInUse":            int64(2),
@@ -116,6 +120,10 @@ func TestRecord(t *testing.T) {
 		"SeriesPoolGet":                      int64(2),
 		"SeriesPoolAbort":                    int64(2),
 		"SeriesPoolGetReUse":                 int64(2),
+		"SeriesLoopPoolInUse":                int64(2),
+		"SeriesLoopPoolGet":                  int64(2),
+		"SeriesLoopPoolAbort":                int64(2),
+		"SeriesLoopPoolGetReUse":             int64(2),
 	}
 	statistics.NewTimestamp().Init(time.Second)
 	buf, err := stat.Collect(nil)

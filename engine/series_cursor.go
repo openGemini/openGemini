@@ -72,6 +72,31 @@ type seriesCursor struct {
 	colAux         *record.ColAux
 }
 
+func (s *seriesCursor) ReInit(idx int) (bool, error) {
+	sid := s.tagSetRef.IDs[idx]
+	filter := s.tagSetRef.Filters[idx]
+	ptTags := &(s.tagSetRef.TagsVec[idx])
+	rowFilters := s.tagSetRef.GetRowFilter(idx)
+
+	memTableRecord := getMemTableRecord(s.ctx, s.span, s.ctx.querySchema, sid, filter, rowFilters, ptTags)
+	contain, err := s.tsmCursor.(*tsmMergeCursor).ReInit(sid, filter, rowFilters, ptTags)
+	if err != nil {
+		return false, err
+	}
+	if !contain && memTableRecord == nil {
+		return false, nil
+	}
+	s.init = true
+	s.memRecIter.reset()
+	s.tsmRecIter.reset()
+	s.sInfo.tags = *ptTags
+	s.sInfo.sid = sid
+	s.filter = filter
+	s.sInfo.key = s.tagSetRef.SeriesKeys[idx]
+	s.memRecIter.init(memTableRecord)
+	return true, nil
+}
+
 func (s *seriesCursor) SetFirstLimitTime(memTableRecord *record.Record, tsmCursor *tsmMergeCursor, schema *executor.QuerySchema) {
 	if !schema.CanLimitCut() {
 		return

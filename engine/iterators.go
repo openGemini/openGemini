@@ -60,18 +60,20 @@ const (
 )
 
 const (
-	tsmMergeCursorRecordNum = 3
-	seriesCursorRecordNum   = 3
-	aggCursorRecordNum      = 2
-	tagSetCursorRecordNum   = 2
-	groupCursorRecordNum    = 4 // groupCursorRecordNum must be the same as the  CircularChunkNum of ChunkReader
-	memtableInitMapSize     = 32
+	tsmMergeCursorRecordNum   = 3
+	seriesCursorRecordNum     = 3
+	seriesLoopCursorRecordNum = 4
+	aggCursorRecordNum        = 2
+	tagSetCursorRecordNum     = 2
+	groupCursorRecordNum      = 4 // groupCursorRecordNum must be the same as the  CircularChunkNum of ChunkReader
+	memtableInitMapSize       = 32
 )
 
 var (
-	AggPool      = record.NewRecordPool(record.AggPool)
-	SeriesPool   = record.NewRecordPool(record.SeriesPool)
-	TsmMergePool = record.NewRecordPool(record.TsmMergePool)
+	AggPool        = record.NewRecordPool(record.AggPool)
+	SeriesPool     = record.NewRecordPool(record.SeriesPool)
+	SeriesLoopPool = record.NewRecordPool(record.SeriesLoopPool)
+	TsmMergePool   = record.NewRecordPool(record.TsmMergePool)
 )
 
 var AppendManyNils map[int]func(colVal *record.ColVal, count int)
@@ -769,7 +771,12 @@ func (s *shard) newAggTagSetCursor(ctx *idKeyCursorContext, span *tracing.Span, 
 
 func (s *shard) iteratorInit(ctx *idKeyCursorContext, span *tracing.Span, schema *executor.QuerySchema,
 	tagSet *tsi.TagSetInfo, start, step int, havePreAgg bool, notAggOnSeriesFunc func(m map[string]*influxql.Call) bool) (comm.KeyCursor, error) {
-	itr := NewFileLoopCursor(ctx, span, schema, tagSet, start, step, s)
+	var itr comm.KeyCursor
+	if !schema.Options().IsPromQuery() {
+		itr = NewFileLoopCursor(ctx, span, schema, tagSet, start, step, s)
+	} else {
+		itr = newSeriesLoopCursor(ctx, span, schema, tagSet, start, step)
+	}
 	// determine whether the aggregation without pre-agg or sampling can be pushed down to the time series.
 	if !notAggOnSeriesFunc(schema.Calls()) && (len(schema.Calls()) > 0 && (!havePreAgg || schema.Options().IsPromQuery())) {
 		if !schema.Options().IsPromQuery() {
