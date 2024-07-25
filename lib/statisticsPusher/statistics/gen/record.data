@@ -42,7 +42,11 @@
         "SeriesPoolInUse",
         "SeriesPoolGet",
         "SeriesPoolAbort",
-        "SeriesPoolGetReUse"
+        "SeriesPoolGetReUse",
+        "SeriesLoopPoolInUse",
+        "SeriesLoopPoolGet",
+        "SeriesLoopPoolAbort",
+        "SeriesLoopPoolGetReUse"
     ],
     "EnablePush":"Y",
     "PushDuration":"Y"

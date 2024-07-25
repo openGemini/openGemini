@@ -733,7 +733,7 @@ func TestServer_PromQuery_Offset(t *testing.T) {
 			name:    "range query: sum vector offset",
 			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258357.955"}, "step": []string{"15s"}},
 			command: `sum(up offset 15s)`,
-			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{},"values":[[1709258327.955,"1"],[1709258342.955,"2"],[1709258357.955,"12"]]}]}}`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{},"values":[[1709258327.955,"1"],[1709258342.955,"2"],[1709258357.955,"3"]]}]}}`,
 			path:    "/api/v1/query_range",
 		},
 		&Query{

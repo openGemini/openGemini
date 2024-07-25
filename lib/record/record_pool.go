@@ -49,6 +49,7 @@ const (
 	SeriesPool
 	ColumnReaderPool
 	LogStoreReaderPool
+	SeriesLoopPool
 	UnknownPool
 )
 
@@ -116,6 +117,11 @@ func NewRecordPool(recordType RecordType) *RecordPool {
 		get = statistics.NewRecordStatistics().AddSeriesPoolGet
 		reuse = statistics.NewRecordStatistics().AddSeriesPoolGetReUse
 		abort = statistics.NewRecordStatistics().AddSeriesPoolAbort
+	case SeriesLoopPool:
+		inUse = statistics.NewRecordStatistics().AddSeriesLoopPoolInUse
+		get = statistics.NewRecordStatistics().AddSeriesLoopPoolGet
+		reuse = statistics.NewRecordStatistics().AddSeriesLoopPoolGetReUse
+		abort = statistics.NewRecordStatistics().AddSeriesLoopPoolAbort
 	}
 
 	return &RecordPool{
