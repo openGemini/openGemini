@@ -209,7 +209,12 @@ func (c *groupCursor) StartSpan(span *tracing.Span) {
 		c.span.CreateCounter(unorderDuration, "ns")
 		enableFileCursor := executor.GetEnableFileCursor() && c.querySchema.HasOptimizeAgg()
 		if enableFileCursor {
-			c.span.CreateCounter(fileCursorDurationSpan, "ns")
+			if c.querySchema.Options().IsPromQuery() {
+				c.span.CreateCounter(seriesCursorReadDuration, "ns")
+				c.span.CreateCounter(seriesCursorInitDuration, "ns")
+			} else {
+				c.span.CreateCounter(fileCursorDurationSpan, "ns")
+			}
 		} else {
 			c.span.CreateCounter(tsmIterCount, "")
 			c.span.CreateCounter(tsmIterDuration, "ns")
