@@ -19,6 +19,8 @@ package executor
 import (
 	"math"
 	"sort"
+
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 )
 
 const smallDeltaTolerance = 1e-12
@@ -180,4 +182,96 @@ func almostEqual(a, b, epsilon float64) bool {
 		return diff < epsilon*minNormal
 	}
 	return diff/math.Min(absSum, math.MaxFloat64) < epsilon
+}
+
+type CallFn func([]int64, []int64, []float64, []float64, int64, *influxql.PromSubCall) (float64, bool)
+
+var promSubqueryFunc map[string]CallFn = make(map[string]CallFn)
+
+func init() {
+	promSubqueryFunc["rate_prom"] = rate
+}
+
+func CalcReduceResult(prevT, currT []int64, prevV, currV []float64, isCounter bool) (int64, int64, float64, float64, float64) {
+	var firstTime, lastTime int64
+	var firstValue, lastValue float64
+	if len(prevT) > 0 {
+		firstTime = prevT[0]
+		firstValue = prevV[0]
+		if len(currT) > 0 {
+			lastTime = currT[len(currT)-1]
+			lastValue = currV[len(currV)-1]
+		} else {
+			lastTime = prevT[len(prevT)-1]
+			lastValue = prevV[len(prevV)-1]
+		}
+	} else {
+		firstTime, lastTime = currT[0], currT[len(currT)-1]
+		firstValue, lastValue = currV[0], currV[len(currV)-1]
+	}
+	reduceResult := lastValue - firstValue
+	if isCounter {
+		prev := firstValue
+		for _, cur := range prevV {
+			if cur < prev {
+				reduceResult += prev
+			}
+			prev = cur
+		}
+		for _, cur := range currV {
+			if cur < prev {
+				reduceResult += prev
+			}
+			prev = cur
+		}
+	}
+	return firstTime, lastTime, firstValue, lastValue, reduceResult
+}
+
+func rate(preTimes []int64, currTimes []int64, preValues []float64, currValues []float64, ts int64, call *influxql.PromSubCall) (float64, bool) {
+	pointCount := len(preTimes) + len(currTimes)
+	if pointCount <= 1 {
+		return 0, false
+	}
+	firstTime, lastTime, firstValue, _, reduceResult := CalcReduceResult(preTimes, currTimes, preValues, currValues, true)
+	if lastTime == firstTime || call.Range.Nanoseconds() == 0 {
+		return 0, false
+	}
+	rangeStart, rangeEnd := ts-call.Range.Nanoseconds(), ts
+
+	// Duration between first/last samples and boundary of range.
+	durationToStart := float64(firstTime-rangeStart) / 1e9
+	durationToEnd := float64(rangeEnd-lastTime) / 1e9
+
+	sampledInterval := float64(lastTime-firstTime) / 1e9
+	averageDurationBetweenSamples := sampledInterval / float64(pointCount-1)
+
+	if reduceResult > 0 && pointCount > 0 && firstValue >= 0 {
+		durationToZero := sampledInterval * (firstValue / reduceResult)
+		if durationToZero < durationToStart {
+			durationToStart = durationToZero
+		}
+	}
+
+	// If the first/last samples are close to the boundaries of the range,
+	// extrapolate the result. This is as we expect that another sample
+	// will exist given the spacing between samples we've seen thus far,
+	// with an allowance for noise.
+	extrapolationThreshold := averageDurationBetweenSamples * 1.1
+	extrapolateToInterval := sampledInterval
+
+	if durationToStart < extrapolationThreshold {
+		extrapolateToInterval += durationToStart
+	} else {
+		extrapolateToInterval += averageDurationBetweenSamples / 2
+	}
+	if durationToEnd < extrapolationThreshold {
+		extrapolateToInterval += durationToEnd
+	} else {
+		extrapolateToInterval += averageDurationBetweenSamples / 2
+	}
+	factor := extrapolateToInterval / sampledInterval
+	factor /= call.Range.Seconds()
+	reduceResult *= factor
+	return reduceResult, true
 }

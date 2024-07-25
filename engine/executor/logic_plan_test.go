@@ -1018,3 +1018,33 @@ func Test_ExplainNode(t *testing.T) {
 	orderBy := executor.NewLogicalOrderBy(groupBy, schema)
 	orderBy.Explain(planWriter)
 }
+
+func TestNewLogicalPromSubquery(t *testing.T) {
+	schema := createQuerySchema()
+	call := &influxql.PromSubCall{
+		Name: "rate_prom",
+	}
+	node := executor.NewLogicalSeries(schema)
+	op := executor.NewLogicalPromSubquery(node, schema, call)
+	opClone := op.Clone()
+	if opClone.Type() != op.Type() {
+		t.Fatal("wrong type result")
+	}
+	if len(op.Children()) != 1 {
+		t.Fatal("wrong children len result")
+	}
+	planWriter := executor.NewLogicalPlanWriterImpl(&strings.Builder{})
+	op.Explain(planWriter)
+	if op.Digest() == "" {
+		t.Fatal("wrong Digest result")
+	}
+	op.ReplaceChild(0, nil)
+	op.ReplaceChildren([]hybridqp.QueryNode{nil})
+	if op.Children()[0] != nil {
+		t.Fatal("wrong replace child result")
+	}
+	opClone.DeriveOperations()
+	if op.New(nil, nil, nil) != nil {
+		t.Fatal("wrong new result")
+	}
+}

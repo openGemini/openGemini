@@ -93,7 +93,7 @@ func TestTranspiler_transpileCall(t1 *testing.T) {
 				parenExprCount: tt.fields.parenExprCount,
 				timeCondition:  tt.fields.timeCondition,
 			}
-			t.minT, t.maxT = t.findMinMaxTime(t.newEvalStmt(tt.args.a))
+			t.rewriteMinMaxTime()
 			got, err := t.transpileCall(tt.args.a)
 			if (err != nil) != tt.wantErr {
 				t1.Errorf("transpileCall() error = %v, wantErr %v", err, tt.wantErr)
