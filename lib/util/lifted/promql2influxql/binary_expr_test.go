@@ -134,7 +134,7 @@ func TestTranspiler_transpileBinaryExpr(t1 *testing.T) {
 			args: args{
 				b: BinaryExpr(`go_gc_duration_seconds_count^(3^4)`),
 			},
-			want:    parseInfluxqlByYacc(`SELECT pow(value, pow(3, 4)) AS value FROM go_gc_duration_seconds_count WHERE time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY *`),
+			want:    parseInfluxqlByYacc(`SELECT pow(value, (pow(3, 4))) AS value FROM go_gc_duration_seconds_count WHERE time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY *`),
 			wantErr: false,
 		},
 		{
@@ -204,7 +204,7 @@ func TestTranspiler_transpileBinaryExpr(t1 *testing.T) {
 					Evaluation:    tt.fields.Evaluation,
 				},
 			}
-			t.minT, t.maxT = t.findMinMaxTime(t.newEvalStmt(tt.args.b))
+			t.rewriteMinMaxTime()
 			got, err := t.transpileBinaryExpr(tt.args.b)
 			if (err != nil) != tt.wantErr {
 				t1.Errorf("transpileBinaryExpr() error = %v, wantErr %v", err, tt.wantErr)
