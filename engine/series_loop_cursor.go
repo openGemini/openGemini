@@ -17,14 +17,23 @@ limitations under the License.
 package engine
 
 import (
+	"time"
+
 	"github.com/openGemini/openGemini/engine/comm"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
+)
+
+const seriesInfoLoopNum = 3
+const (
+	seriesCursorReadDuration = "seriesCursor_read"
+	seriesCursorInitDuration = "seriesCursor_init"
 )
 
 type seriesLoopCursor struct {
@@ -44,25 +53,28 @@ type seriesLoopCursor struct {
 	recordSchema record.Schemas
 	tagSetInfo   *tsi.TagSetInfo
 
-	input    *seriesCursor
-	plan     hybridqp.QueryNode
-	fileInfo *comm.FileInfo
-	recPool  *record.CircularRecordPool
+	plan           hybridqp.QueryNode
+	input          *seriesCursor
+	seriesInfo     *comm.FileInfo
+	seriesInfoPool *filesInfoPool
+	recPool        *record.CircularRecordPool
 }
 
 func newSeriesLoopCursor(ctx *idKeyCursorContext, span *tracing.Span, schema *executor.QuerySchema,
 	tagSet *tsi.TagSetInfo, start, step int) *seriesLoopCursor {
 	tagSet.Ref()
 	s := &seriesLoopCursor{
-		ctx:        ctx,
-		span:       span,
-		schema:     schema,
-		tagSetInfo: tagSet,
-		start:      start,
-		step:       step,
-		initFirst:  false,
-		fileInfo:   &comm.FileInfo{MinTime: ctx.interTr.Min, MaxTime: ctx.interTr.Max},
+		ctx:            ctx,
+		span:           span,
+		schema:         schema,
+		tagSetInfo:     tagSet,
+		start:          start,
+		step:           step,
+		initFirst:      false,
+		seriesInfoPool: NewSeriesInfoPool(seriesInfoLoopNum),
 	}
+	s.ctx.metaContext = immutable.NewChunkMetaContext(ctx.schema)
+	s.updateSeriesInfo()
 	return s
 }
 
@@ -109,6 +121,15 @@ func (s *seriesLoopCursor) Next() (*record.Record, comm.SeriesInfoIntf, error) {
 }
 
 func (s *seriesLoopCursor) initCursor() error {
+	if s.span != nil {
+		start := time.Now()
+		defer func() {
+			s.span.Count(seriesCursorInitDuration, int64(time.Since(start)))
+		}()
+	}
+	if s.finished {
+		return nil
+	}
 	var err error
 	for s.start < len(s.tagSetInfo.IDs) {
 		if !s.initFirst {
@@ -141,13 +162,19 @@ func (s *seriesLoopCursor) initCursor() error {
 }
 
 func (s *seriesLoopCursor) NextAggData() (*record.Record, *comm.FileInfo, error) {
+	if s.span != nil {
+		start := time.Now()
+		defer func() {
+			s.span.Count(seriesCursorReadDuration, int64(time.Since(start)))
+		}()
+	}
 	for {
 		if !s.init {
-			if s.finished {
-				return nil, nil, nil
-			}
 			if err := s.initCursor(); err != nil {
 				return nil, nil, err
+			}
+			if s.finished {
+				return nil, nil, nil
 			}
 			s.init = true
 		}
@@ -157,16 +184,22 @@ func (s *seriesLoopCursor) NextAggData() (*record.Record, *comm.FileInfo, error)
 				return nil, nil, err
 			}
 			if re == nil {
-				// reinitialize time series
+				s.updateSeriesInfo()
 				s.init = false
-				return nil, nil, nil
+				break
 			}
 			rec := s.recPool.Get()
 			rec.CopyImpl(re, false, false, true, 0, re.RowNums()-1, re.Schema)
-			s.fileInfo.SeriesInfo = info
-			return rec, s.fileInfo, err
+			s.seriesInfo.SeriesInfo = info
+			return rec, s.seriesInfo, err
 		}
 	}
+}
+
+func (s *seriesLoopCursor) updateSeriesInfo() {
+	s.seriesInfo = s.seriesInfoPool.Get()
+	s.seriesInfo.MinTime = s.ctx.interTr.Min
+	s.seriesInfo.MaxTime = s.ctx.interTr.Max
 }
 
 func (s *seriesLoopCursor) Close() error {
@@ -180,6 +213,10 @@ func (s *seriesLoopCursor) Close() error {
 			return err
 		}
 		s.input = nil
+	}
+	if s.ctx.metaContext != nil {
+		s.ctx.metaContext.Release()
+		s.ctx.metaContext = nil
 	}
 	return nil
 }

@@ -553,6 +553,7 @@ type idKeyCursorContext struct {
 	querySchema  *executor.QuerySchema
 	decs         *immutable.ReadContext
 	colAux       *immutable.ColAux
+	metaContext  *immutable.ChunkMetaContext
 }
 
 func (i *idKeyCursorContext) hasAuxTags() bool {

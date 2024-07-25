@@ -28,6 +28,7 @@ import (
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
@@ -202,6 +203,39 @@ func Test_PromqlQuery_SeriesLoopCursor(t *testing.T) {
 					return success
 				},
 			},
+			// select count_prom[float]
+			{
+				name:          "select count_prom[float]",
+				q:             fmt.Sprintf(`SELECT count_prom(field4_float) from cpu`),
+				tr:            util.TimeRange{Min: minT, Max: maxT},
+				step:          time.Duration(0),
+				rangeDuration: time.Duration(0),
+				fields:        fields,
+				outputRowDataType: hybridqp.NewRowDataTypeImpl(
+					influxql.VarRef{Val: "val1", Type: influxql.Float},
+				),
+				readerOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.VarRef{Val: "val0", Type: influxql.Float},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				aggOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.Call{Name: "count_prom", Args: []influxql.Expr{&influxql.VarRef{Val: "val1", Type: influxql.Float}}},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				expect: func(chunks []executor.Chunk) bool {
+					if len(chunks) != 1 {
+						t.Errorf("The result should be 1 chunk")
+					}
+					ck := chunks[0]
+					success := true
+					success = ast.Equal(t, len(ck.Columns()), 1) && success
+					return success
+				},
+			},
 		} {
 			t.Run(tt.name, func(t *testing.T) {
 				if tt.skip {
@@ -235,6 +269,9 @@ func Test_PromqlQuery_SeriesLoopCursor(t *testing.T) {
 				aggTagSet := executor.NewLogicalTagSetAggregate(aggr, querySchema)
 				reader := executor.NewLogicalReader(aggTagSet, querySchema)
 				chunkReader := NewChunkReader(tt.outputRowDataType, tt.readerOps, reader, querySchema, keyCursors, false)
+				_, span := tracing.NewTrace("root")
+				span.StartPP()
+				chunkReader.Analyze(span)
 				defer chunkReader.Release()
 
 				// this is the output for this stmt
