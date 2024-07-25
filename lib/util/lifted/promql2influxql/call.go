@@ -1,7 +1,9 @@
 package promql2influxql
 
 import (
+	"fmt"
 	"strings"
+	"time"
 
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
@@ -259,6 +261,38 @@ func (t *Transpiler) transpilePromFuncWithExprArgs(aggFn aggregateFn, arg influx
 	return callExpr, nil
 }
 
+func (t *Transpiler) transpilePromSubqueryFunc(subExpr *parser.SubqueryExpr, aggFn aggregateFn, inArgs []influxql.Node) (influxql.Node, error) {
+	table, parameter := t.transpileParameter(aggFn.vectorPosition, inArgs)
+
+	node, ok := table.(influxql.Statement)
+	if !ok {
+		return nil, fmt.Errorf("transpilePromSubqueryFunc expr InArgs error")
+	}
+	switch statement := node.(type) {
+	case *influxql.SelectStatement:
+		subCall := influxql.PromSubCall{
+			Name:      aggFn.name,
+			StartTime: t.minT * int64(time.Millisecond),
+			EndTime:   t.maxT * int64(time.Millisecond),
+			Range:     subExpr.Range,
+			InArgs:    parameter,
+			Offset:    subExpr.Offset,
+		}
+		interval := t.Step.Nanoseconds()
+		if interval == 0 {
+			interval = t.timeRange.Nanoseconds()
+			if interval == 0 {
+				interval = 1
+			}
+		}
+		subCall.Interval = interval
+		statement.PromSubCalls = append(statement.PromSubCalls, &subCall)
+		return statement, nil
+	default:
+		return nil, errno.NewError(errno.UnsupportedPromExpr)
+	}
+}
+
 func (t *Transpiler) transpilePromFunc(aggFn aggregateFn, inArgs []influxql.Node, setFieldsFunc SetFieldsFunc) (influxql.Node, error) {
 	table, parameter := t.transpileParameter(aggFn.vectorPosition, inArgs)
 
@@ -349,6 +383,9 @@ func (t *Transpiler) transpileCall(a *parser.Call) (influxql.Node, error) {
 	// {count,avg,sum,min,max,...}_over_time()
 	if fn, ok := rangeVectorFunctions[a.Func.Name]; ok {
 		t.dropMetric = true
+		if subExpr, subOk := a.Args[fn.vectorPosition].(*parser.SubqueryExpr); subOk {
+			return t.transpilePromSubqueryFunc(subExpr, fn, args)
+		}
 		return t.transpilePromFunc(fn, args, t.setAggregateFields)
 	}
 

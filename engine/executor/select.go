@@ -180,6 +180,7 @@ func (p *preparedStatement) BuildLogicalPlan(ctx context.Context) (hybridqp.Quer
 
 	schema := NewQuerySchemaWithJoinCase(p.stmt.Fields, p.stmt.Sources, p.stmt.ColumnNames(), opt, p.stmt.JoinSource,
 		p.stmt.UnnestSource, p.stmt.SortFields)
+	schema.SetPromCalls(p.stmt.PromSubCalls)
 
 	HaveOnlyCSStore := schema.Sources().HaveOnlyCSStore()
 	planType := GetPlanType(schema, p.stmt)
@@ -482,6 +483,10 @@ func buildNodes(builder *LogicalPlanBuilderImpl, schema hybridqp.Catalog, s *Que
 	}
 
 	builder.Project()
+
+	for _, call := range s.PromSubCalls {
+		builder.PromSubquery(call)
+	}
 
 	if schema.HasBlankRowCall() {
 		builder.FilterBlank()
