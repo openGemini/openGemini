@@ -637,7 +637,7 @@ func (trans *HashAggTransform) computeBatchLocsByDimsWithInterval(strings [][]by
 		} else {
 			for dimColId := range trans.opt.Dimensions {
 				stringBytes, offset := strings[dimColId], offsets[dimColId]
-				if !bytes.Equal(
+				if stringBytes != nil && !bytes.Equal(
 					stringBytes[offset[rowId]:offset[rowId+1]],
 					stringBytes[offset[preLoc]:offset[preLoc+1]],
 				) {
@@ -656,10 +656,10 @@ func (trans *HashAggTransform) computeBatchLocsByDimsWithInterval(strings [][]by
 			stringBytes, offset := strings[dimColId], offsets[dimColId]
 			if preLoc == len(offset)-1 {
 				preString = stringBytes[offset[preLoc]:]
-			} else {
+			} else if stringBytes != nil {
 				preString = stringBytes[offset[preLoc]:offset[preLoc+1]]
 			}
-			if !bytes.Equal(stringBytes[offset[rowNum-1]:], preString) {
+			if stringBytes != nil && !bytes.Equal(stringBytes[offset[rowNum-1]:], preString) {
 				trans.batchEndLocs = append(trans.batchEndLocs, rowNum-1)
 				break
 			}
@@ -674,7 +674,7 @@ func (trans *HashAggTransform) computeBatchLocsByDimsWithoutInterval(strings [][
 	for rowId := 1; rowId < rowNum-1; rowId++ {
 		for dimColId := range trans.opt.Dimensions {
 			stringBytes, offset := strings[dimColId], offsets[dimColId]
-			if !bytes.Equal(
+			if stringBytes != nil && !bytes.Equal(
 				stringBytes[offset[rowId]:offset[rowId+1]],
 				stringBytes[offset[preLoc]:offset[preLoc+1]],
 			) {
@@ -689,10 +689,10 @@ func (trans *HashAggTransform) computeBatchLocsByDimsWithoutInterval(strings [][
 		stringBytes, offset := strings[dimColId], offsets[dimColId]
 		if preLoc == len(offset)-1 {
 			preString = stringBytes[offset[preLoc]:]
-		} else {
+		} else if stringBytes != nil {
 			preString = stringBytes[offset[preLoc]:offset[preLoc+1]]
 		}
-		if !bytes.Equal(stringBytes[offset[rowNum-1]:], preString) {
+		if stringBytes != nil && !bytes.Equal(stringBytes[offset[rowNum-1]:], preString) {
 			trans.batchEndLocs = append(trans.batchEndLocs, rowNum-1)
 			break
 		}
@@ -919,7 +919,11 @@ func (trans *HashAggTransform) computeGroupKeysByDims() {
 		for colId, dimKey := range trans.opt.Dimensions {
 			stringBytes, offset := strings[colId], offsets[colId]
 			trans.bufGroupKeys[i] = append(trans.bufGroupKeys[i], dimKey...)
-			trans.bufGroupKeys[i] = append(trans.bufGroupKeys[i], stringBytes[offset[rowId]:offset[rowId+1]]...)
+			if stringBytes != nil {
+				trans.bufGroupKeys[i] = append(trans.bufGroupKeys[i], stringBytes[offset[rowId]:offset[rowId+1]]...)
+			} else {
+				trans.bufGroupKeys[i] = append(trans.bufGroupKeys[i], ""...)
+			}
 		}
 		trans.bufGroupTags[i] = nil
 		rowId = endLoc
@@ -934,6 +938,9 @@ func (trans *HashAggTransform) computeGroupKeysByDims() {
 		} else if rowId == len(offset)-1 {
 			trans.bufGroupKeys[endOfBatchEndLocs] =
 				append(trans.bufGroupKeys[endOfBatchEndLocs], stringBytes[offset[rowId]:]...)
+		} else if offset == nil {
+			trans.bufGroupKeys[endOfBatchEndLocs] =
+				append(trans.bufGroupKeys[endOfBatchEndLocs], ""...)
 		} else {
 			panic("HashAggTransform runing err")
 		}
@@ -1144,7 +1151,11 @@ func (trans *HashAggTransform) GetFuncs() []aggFunc {
 
 func ColumnStringValue(c Column, rowLoc int) string {
 	// fast path
+	if rowLoc >= c.Length() {
+		return ""
+	}
 	if c.NilCount() == 0 {
+
 		return c.StringValue(rowLoc)
 	}
 
