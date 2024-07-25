@@ -320,17 +320,6 @@ func TestTranspiler_transpile_sql(t1 *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "not support PromQL subquery expression",
-			fields: fields{
-				Evaluation: &endTime2,
-			},
-			args: args{
-				expr: SubqueryExpr(`sum_over_time(go_gc_duration_seconds_count[5m])[1h:10m]`),
-			},
-			want:    nil,
-			wantErr: true,
-		},
-		{
 			name: "20",
 			fields: fields{
 				Evaluation: &endTime2,
@@ -562,35 +551,63 @@ func Test_makeInt64Pointer(t *testing.T) {
 }
 
 // name: "not support both sides has VectorSelector in binary expression"
-func Test_SubQueryAndBinOp(t *testing.T) {
-	fields := fields{
-		Evaluation: &endTime2,
-	}
-	args := args{
-		expr: BinaryExpr("avg(node_load5{instance=\"\",job=\"\"}) /  count(count(node_cpu_seconds_total{instance=\"\",job=\"\"}) by (cpu)) * 100"),
-	}
-	want := "SELECT value * 100 AS value FROM (SELECT mean(value) AS value FROM node_load5 WHERE time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z') binary op (SELECT count_prom(value) AS value FROM (SELECT count_prom(value) AS value FROM node_cpu_seconds_total WHERE time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY cpu) WHERE time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z') false false() 0() WHERE time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z'"
-	trans := &Transpiler{
-		PromCommand: PromCommand{
-			Start:         fields.Start,
-			End:           fields.End,
-			Timezone:      fields.Timezone,
-			Evaluation:    fields.Evaluation,
-			Step:          fields.Step,
-			DataType:      fields.DataType,
-			Database:      fields.Database,
-			LabelName:     fields.LabelName,
-			LookBackDelta: DefaultLookBackDelta,
+func Test_SubQueryAndBinOp(t1 *testing.T) {
+	tests := []struct {
+		name   string
+		fields fields
+		args   args
+		want   string
+		skip   bool
+	}{
+		{
+			name: "binop",
+			fields: fields{
+				Evaluation: &endTime2,
+			},
+			args: args{
+				expr: BinaryExpr("avg(node_load5{instance=\"\",job=\"\"}) /  count(count(node_cpu_seconds_total{instance=\"\",job=\"\"}) by (cpu)) * 100"),
+			},
+			want: "SELECT value * 100 AS value FROM (SELECT mean(value) AS value FROM node_load5 WHERE time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z') binary op (SELECT count_prom(value) AS value FROM (SELECT count_prom(value) AS value FROM node_cpu_seconds_total WHERE time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY cpu) WHERE time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z') false false() 0() WHERE time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z'",
 		},
-		timeRange:      fields.timeRange,
-		parenExprCount: fields.parenExprCount,
-		timeCondition:  fields.condition,
+		{
+			name: "subquery",
+			fields: fields{
+				Evaluation: &endTime2,
+			},
+			args: args{
+				expr: SubqueryExpr(`sum_over_time(go_gc_duration_seconds_count[5m])[1h:10m]`),
+			},
+			want: "SELECT sum_over_time(value) AS value FROM go_gc_duration_seconds_count WHERE time >= '2023-01-06T05:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY *, time(10m) fill(none)",
+		},
 	}
-	got, err := trans.Transpile(args.expr)
-	if err != nil {
-		t.Fatal("Test_SubQueryAndBinOp err")
-	}
-	if !reflect.DeepEqual(got.String(), want) {
-		t.Errorf("transpile() got = %v, want %v", got, want)
+	for _, tt := range tests {
+		if tt.skip {
+			continue
+		}
+		t1.Run(tt.name, func(t1 *testing.T) {
+			t := &Transpiler{
+				PromCommand: PromCommand{
+					Start:         tt.fields.Start,
+					End:           tt.fields.End,
+					Timezone:      tt.fields.Timezone,
+					Evaluation:    tt.fields.Evaluation,
+					Step:          tt.fields.Step,
+					DataType:      tt.fields.DataType,
+					Database:      tt.fields.Database,
+					LabelName:     tt.fields.LabelName,
+					LookBackDelta: DefaultLookBackDelta,
+				},
+				timeRange:      tt.fields.timeRange,
+				parenExprCount: tt.fields.parenExprCount,
+				timeCondition:  tt.fields.condition,
+			}
+			got, err := t.Transpile(tt.args.expr)
+			if err != nil {
+				t1.Fatal("Test_SubQueryAndBinOp err")
+			}
+			if !reflect.DeepEqual(got.String(), tt.want) {
+				t1.Errorf("transpile() got = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

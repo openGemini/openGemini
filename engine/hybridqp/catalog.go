@@ -264,6 +264,7 @@ type Catalog interface {
 	GetUnnests() influxql.Unnests
 	HasUnnests() bool
 	GetTimeRangeByTC() util.TimeRange
+	GetPromCalls() []*influxql.PromSubCall
 }
 
 type CatalogCreator interface {

@@ -2843,6 +2843,14 @@ func (b *LogicalPlanBuilderImpl) Exchange(eType ExchangeType, eTraits []hybridqp
 	return b
 }
 
+func (b *LogicalPlanBuilderImpl) PromSubquery(call *influxql.PromSubCall) LogicalPlanBuilder {
+	last := b.stack.Pop()
+
+	plan := NewLogicalPromSubquery(last, b.schema, call)
+	b.stack.Push(plan)
+	return b
+}
+
 func (b *LogicalPlanBuilderImpl) CreateSparseIndexScanPlan(plan hybridqp.QueryNode) (hybridqp.QueryNode, error) {
 	if plan == nil {
 		return nil, nil
@@ -4314,5 +4322,78 @@ func (p *LogicalBinOp) Digest() string {
 	p.digestName = encoding.MarshalUint32(p.digestName, uint32(p.LogicPlanType()))
 	p.digestName = encoding.MarshalUint64(p.digestName, p.left.ID())
 	p.digestName = encoding.MarshalUint64(p.digestName, p.right.ID())
+	return string(p.digestName)
+}
+
+type LogicalPromSubquery struct {
+	input hybridqp.QueryNode
+	Call  *influxql.PromSubCall
+	LogicalPlanBase
+}
+
+func NewLogicalPromSubquery(input hybridqp.QueryNode, schema hybridqp.Catalog, Call *influxql.PromSubCall) *LogicalPromSubquery {
+	project := &LogicalPromSubquery{
+		input: input,
+		Call:  Call,
+		LogicalPlanBase: LogicalPlanBase{
+			id:     hybridqp.GenerateNodeId(),
+			schema: schema,
+			rt:     nil,
+			ops:    nil,
+		},
+	}
+	project.init()
+	return project
+}
+
+// impl me
+func (p *LogicalPromSubquery) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	return nil
+}
+
+func (p *LogicalPromSubquery) DeriveOperations() {
+	p.init()
+}
+
+func (p *LogicalPromSubquery) init() {
+	p.InitRef(p.input)
+}
+
+func (p *LogicalPromSubquery) Clone() hybridqp.QueryNode {
+	clone := &LogicalPromSubquery{}
+	*clone = *p
+	clone.id = hybridqp.GenerateNodeId()
+	return clone
+}
+
+func (p *LogicalPromSubquery) Children() []hybridqp.QueryNode {
+	return []hybridqp.QueryNode{p.input}
+}
+
+func (p *LogicalPromSubquery) ReplaceChildren(children []hybridqp.QueryNode) {
+	p.input = children[0]
+}
+
+func (p *LogicalPromSubquery) ReplaceChild(ordinal int, child hybridqp.QueryNode) {
+	p.input = child
+}
+
+func (p *LogicalPromSubquery) Explain(writer LogicalPlanWriter) {
+	p.ExplainIterms(writer)
+	writer.Explain(p)
+}
+
+func (p *LogicalPromSubquery) Type() string {
+	return GetType(p)
+}
+
+func (p *LogicalPromSubquery) Digest() string {
+	if p.digest {
+		return string(p.digestName)
+	}
+	p.digest = true
+	p.digestName = p.digestName[:0]
+	p.digestName = encoding.MarshalUint32(p.digestName, uint32(p.LogicPlanType()))
+	p.digestName = encoding.MarshalUint64(p.digestName, p.input.ID())
 	return string(p.digestName)
 }

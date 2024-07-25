@@ -237,4 +237,5 @@ enum LogicPlanType
 	LogicalHashAgg = 36;
     LogicalJoin = 37;
     LogicalBinOp = 38;
+    LogicalPromSubquery = 39;
 }

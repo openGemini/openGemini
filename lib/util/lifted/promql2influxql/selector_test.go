@@ -256,7 +256,7 @@ func TestTranspiler_transpileRangeVectorSelector(t1 *testing.T) {
 					Evaluation: tt.fields.Evaluation,
 				},
 			}
-			t.minT, t.maxT = t.findMinMaxTime(t.newEvalStmt(tt.args.v))
+			t.rewriteMinMaxTime()
 			got, err := t.transpileRangeVectorSelector(tt.args.v)
 			if (err != nil) != tt.wantErr {
 				t1.Errorf("transpileRangeVectorSelector() error = %v, wantErr %v", err, tt.wantErr)

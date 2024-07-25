@@ -108,7 +108,7 @@ func (b *SubQueryBuilder) Build(ctx context.Context, opt query.ProcessorOptions)
 	}
 	schema := NewQuerySchemaWithJoinCase(b.stmt.Fields, b.stmt.Sources, b.stmt.ColumnNames(), &subOpt, b.stmt.JoinSource,
 		b.stmt.UnnestSource, b.stmt.SortFields)
-
+	schema.SetPromCalls(b.stmt.PromSubCalls)
 	return buildQueryPlan(ctx, b.stmt, b.qc, schema)
 }
 

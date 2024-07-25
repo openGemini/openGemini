@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/record"
@@ -322,7 +323,7 @@ func floatPromRateMerge(isRate, isCounter bool) FloatSliceMergeFunc {
 		if pointCount <= 1 {
 			return 0, true
 		}
-		firstTime, lastTime, firstValue, _, reduceResult := calcReduceResult(prevT, currT, prevV, currV, isCounter)
+		firstTime, lastTime, firstValue, _, reduceResult := executor.CalcReduceResult(prevT, currT, prevV, currV, isCounter)
 		if lastTime == firstTime || param.rangeDuration == 0 {
 			return 0, true
 		}
@@ -365,42 +366,6 @@ func floatPromRateMerge(isRate, isCounter bool) FloatSliceMergeFunc {
 		}
 		return resultValue, false
 	}
-}
-
-func calcReduceResult(prevT, currT []int64, prevV, currV []float64, isCounter bool) (int64, int64, float64, float64, float64) {
-	var firstTime, lastTime int64
-	var firstValue, lastValue float64
-	if len(prevT) > 0 {
-		firstTime = prevT[0]
-		firstValue = prevV[0]
-		if len(currT) > 0 {
-			lastTime = currT[len(currT)-1]
-			lastValue = currV[len(currV)-1]
-		} else {
-			lastTime = prevT[len(prevT)-1]
-			lastValue = prevV[len(prevV)-1]
-		}
-	} else {
-		firstTime, lastTime = currT[0], currT[len(currT)-1]
-		firstValue, lastValue = currV[0], currV[len(currV)-1]
-	}
-	reduceResult := lastValue - firstValue
-	if isCounter {
-		prev := firstValue
-		for _, cur := range prevV {
-			if cur < prev {
-				reduceResult += prev
-			}
-			prev = cur
-		}
-		for _, cur := range currV {
-			if cur < prev {
-				reduceResult += prev
-			}
-			prev = cur
-		}
-	}
-	return firstTime, lastTime, firstValue, lastValue, reduceResult
 }
 
 func floatIRateReduce(times []int64, values []float64, start, end int) (int64, int64, float64, float64, bool) {

@@ -1660,3 +1660,211 @@ func TestServer_PromQuery_Histogram(t *testing.T) {
 		}
 	}
 }
+
+func TestServer_PromQuery_Subquery1(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewConfig())
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("autogen", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	startTime := 0
+	writes := make([]string, 0)
+
+	writes = append(writes, fmt.Sprintf(`metric,__name__=metric value=%d %d`, 1, startTime))
+	writes = append(writes, fmt.Sprintf(`metric,__name__=metric value=%d %d`, 2, 10*1000*1000*1000))
+
+	test := NewTest("db0", "autogen")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		&Query{
+			name:    "instant query:  rate(subquery)1",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"1970-01-01T00:00:10Z"}},
+			command: `rate(metric[20s:10s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[10,"0.1"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "instant query:  rate(subquery)2",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"1970-01-01T00:00:20Z"}},
+			command: `rate(metric[20s:5s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[20,"0.05"]}]}}`,
+			path:    "/api/v1/query",
+		},
+	}...)
+
+	for i, query := range test.queries {
+		if i == 0 {
+			if err := test.init(s); err != nil {
+				t.Fatalf("test init failed: %s", err)
+			}
+		}
+		if query.skip {
+			t.Logf("SKIP:: %s", query.name)
+			continue
+		}
+		if err := query.ExecuteProm(s); err != nil {
+			t.Error(query.Error(err))
+		} else if !query.success() {
+			t.Error(query.failureMessage())
+		}
+	}
+}
+
+func TestServer_PromQuery_Subquery2(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewConfig())
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("autogen", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	valueGap := 20
+	startValue := 0
+	valueNum := 1000
+	timeGap := 10 * 1000 * 1000 * 1000
+	startTime := 0
+	writes := make([]string, 0)
+	for i := 0; i <= valueNum; i++ {
+		writes = append(writes, fmt.Sprintf(`http_requests,__name__=http_requests,job=api-server,instance=1,group=production value=%d %d`, startValue+i*valueGap, startTime+i*timeGap))
+	}
+	startTime += (valueNum + 1) * timeGap
+	startValue = 200
+	valueGap = 30
+	valueNum = 1000
+	for i := 0; i <= valueNum; i++ {
+		writes = append(writes, fmt.Sprintf(`http_requests,__name__=http_requests,job=api-server,instance=1,group=production value=%d %d`, startValue+i*valueGap, startTime+i*timeGap))
+	}
+
+	startTime = 0
+	startValue = 0
+	valueGap = 10
+	valueNum = 1000
+	for i := 0; i <= valueNum; i++ {
+		writes = append(writes, fmt.Sprintf(`http_requests,__name__=http_requests,job=api-server,instance=0,group=production value=%d %d`, startValue+i*valueGap, startTime+i*timeGap))
+	}
+	startTime += (valueNum + 1) * timeGap
+	startValue = 100
+	valueGap = 30
+	valueNum = 1000
+	for i := 0; i <= valueNum; i++ {
+		writes = append(writes, fmt.Sprintf(`http_requests,__name__=http_requests,job=api-server,instance=0,group=production value=%d %d`, startValue+i*valueGap, startTime+i*timeGap))
+	}
+
+	startTime = 0
+	startValue = 0
+	valueGap = 30
+	valueNum = 1000
+	for i := 0; i <= valueNum; i++ {
+		writes = append(writes, fmt.Sprintf(`http_requests,__name__=http_requests,job=api-server,instance=0,group=canary value=%d %d`, startValue+i*valueGap, startTime+i*timeGap))
+	}
+	startTime += (valueNum + 1) * timeGap
+	startValue = 300
+	valueGap = 80
+	valueNum = 1000
+	for i := 0; i <= valueNum; i++ {
+		writes = append(writes, fmt.Sprintf(`http_requests,__name__=http_requests,job=api-server,instance=0,group=canary value=%d %d`, startValue+i*valueGap, startTime+i*timeGap))
+	}
+
+	startTime = 0
+	startValue = 0
+	valueGap = 40
+	valueNum = 2000
+	for i := 0; i <= valueNum; i++ {
+		writes = append(writes, fmt.Sprintf(`http_requests,__name__=http_requests,job=api-server,instance=1,group=canary value=%d %d`, startValue+i*valueGap, startTime+i*timeGap))
+	}
+
+	test := NewTest("db0", "autogen")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		&Query{
+			name:    "instant query:  rate(subquery)1",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"8000"}},
+			command: `rate(http_requests{group=~"pro.*"}[1m:10s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"group":"production","instance":"0","job":"api-server"},"value":[8000,"1"]},{"metric":{"group":"production","instance":"1","job":"api-server"},"value":[8000,"2"]}]}}`,
+			path:    "/api/v1/query",
+		},
+	}...)
+
+	for i, query := range test.queries {
+		if i == 0 {
+			if err := test.init(s); err != nil {
+				t.Fatalf("test init failed: %s", err)
+			}
+		}
+		if query.skip {
+			t.Logf("SKIP:: %s", query.name)
+			continue
+		}
+		if err := query.ExecuteProm(s); err != nil {
+			t.Error(query.Error(err))
+		} else if !query.success() {
+			t.Error(query.failureMessage())
+		}
+	}
+}
+
+func TestServer_PromQuery_Subquery3(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewConfig())
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("autogen", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+	values := []float64{1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377, 610, 987, 1597, 2584, 4181, 6765, 10946, 17711, 28657, 46368, 75025, 121393, 196418, 317811, 514229, 832040, 1346269, 2178309, 3524578, 5702887, 9227465, 14930352, 24157817, 39088169, 63245986, 102334155, 165580141, 267914296, 433494437, 701408733, 1134903170, 1836311903, 2971215073, 4807526976, 7778742049, 12586269025, 20365011074, 32951280099, 53316291173, 86267571272, 139583862445, 225851433717, 365435296162, 591286729879, 956722026041, 1548008755920, 2504730781961, 4052739537881, 6557470319842, 10610209857723, 17167680177565, 27777890035288, 44945570212853, 72723460248141, 117669030460994, 190392490709135, 308061521170129, 498454011879264, 806515533049393, 1304969544928657, 2111485077978050, 3416454622906707, 5527939700884757, 8944394323791464, 14472334024676221, 23416728348467685, 37889062373143906, 61305790721611591, 99194853094755497, 160500643816367088, 259695496911122585, 420196140727489673, 679891637638612258, 1100087778366101931, 1779979416004714189, 2880067194370816120, 4660046610375530309, 7540113804746346429, 12200160415121876738, 19740274219868223167, 31940434634990099905, 51680708854858323072, 83621143489848422977, 135301852344706746049, 218922995834555169026, 354224848179261915075, 573147844013817084101, 927372692193078999176, 1500520536206896083277, 2427893228399975082453, 3928413764606871165730, 6356306993006846248183, 10284720757613717413913, 16641027750620563662096, 26925748508234281076009, 43566776258854844738105, 70492524767089125814114, 114059301025943970552219, 184551825793033096366333, 298611126818977066918552, 483162952612010163284885, 781774079430987230203437, 1264937032042997393488322, 2046711111473984623691759, 3311648143516982017180081, 5358359254990966640871840, 8670007398507948658051921, 14028366653498915298923761, 22698374052006863956975682, 36726740705505779255899443, 59425114757512643212875125, 96151855463018422468774568, 155576970220531065681649693, 251728825683549488150424261, 407305795904080553832073954, 659034621587630041982498215, 1066340417491710595814572169, 1725375039079340637797070384, 2791715456571051233611642553, 4517090495650391871408712937, 7308805952221443105020355490, 11825896447871834976429068427, 19134702400093278081449423917, 30960598847965113057878492344, 50095301248058391139327916261, 81055900096023504197206408605, 131151201344081895336534324866, 212207101440105399533740733471, 343358302784187294870275058337, 555565404224292694404015791808, 898923707008479989274290850145, 1454489111232772683678306641953, 2353412818241252672952597492098, 3807901929474025356630904134051, 6161314747715278029583501626149, 9969216677189303386214405760200, 16130531424904581415797907386349, 26099748102093884802012313146549, 42230279526998466217810220532898, 68330027629092351019822533679447, 110560307156090817237632754212345, 178890334785183168257455287891792, 289450641941273985495088042104137, 468340976726457153752543329995929, 757791618667731139247631372100066, 1226132595394188293000174702095995, 1983924214061919432247806074196061, 3210056809456107725247980776292056, 5193981023518027157495786850488117, 8404037832974134882743767626780173, 13598018856492162040239554477268290, 22002056689466296922983322104048463, 35600075545958458963222876581316753, 57602132235424755886206198685365216, 93202207781383214849429075266681969, 150804340016807970735635273952047185, 244006547798191185585064349218729154, 394810887814999156320699623170776339, 638817435613190341905763972389505493, 1033628323428189498226463595560281832, 1672445759041379840132227567949787325, 2706074082469569338358691163510069157, 4378519841510949178490918731459856482, 7084593923980518516849609894969925639, 11463113765491467695340528626429782121, 18547707689471986212190138521399707760}
+	timeGap := 7 * 1000 * 1000 * 1000
+	startTime := 0
+	writes := make([]string, 0)
+	for i := 0; i < len(values); i++ {
+		writes = append(writes, fmt.Sprintf(`metric,__name__=metric value=%f %d`, values[i], startTime+i*timeGap))
+	}
+
+	test := NewTest("db0", "autogen")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		&Query{
+			name:    "instant query:  rate(range)",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"80"}},
+			command: `rate(metric[1m])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[80,"2.517857142857143"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "instant query:  rate(subquery)",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"80"}},
+			command: `rate(metric[1m:10s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[80,"2.3666666666666667"]}]}}`,
+			path:    "/api/v1/query",
+		},
+	}...)
+
+	for i, query := range test.queries {
+		if i == 0 {
+			if err := test.init(s); err != nil {
+				t.Fatalf("test init failed: %s", err)
+			}
+		}
+		if query.skip {
+			t.Logf("SKIP:: %s", query.name)
+			continue
+		}
+		if err := query.ExecuteProm(s); err != nil {
+			t.Error(query.Error(err))
+		} else if !query.success() {
+			t.Error(query.failureMessage())
+		}
+	}
+}

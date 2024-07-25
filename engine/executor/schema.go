@@ -197,6 +197,7 @@ type QuerySchema struct {
 	unnestCases       []*influxql.Unnest
 	hasFieldCondition bool
 	planType          PlanType
+	PromSubCalls      []*influxql.PromSubCall
 }
 
 func NewQuerySchema(fields influxql.Fields, columnNames []string, opt hybridqp.Options, sortFields influxql.SortFields) *QuerySchema {
@@ -1426,6 +1427,14 @@ func (qs *QuerySchema) GetTimeRangeByTC() util.TimeRange {
 		interval = indexR.GetTimeClusterDuration()
 	}
 	return util.TimeRange{Min: window(startTime, interval), Max: window(endTime, interval)}
+}
+
+func (qs *QuerySchema) SetPromCalls(calls []*influxql.PromSubCall) {
+	qs.PromSubCalls = calls
+}
+
+func (qs *QuerySchema) GetPromCalls() []*influxql.PromSubCall {
+	return qs.PromSubCalls
 }
 
 // window used to calculate the time point that belongs to a specific time window.
