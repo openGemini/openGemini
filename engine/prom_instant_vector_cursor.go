@@ -109,7 +109,7 @@ func (c *InstantVectorCursor) inNextWindowWithInfo(currRecord *record.Record) er
 		return err
 	}
 	// padding is required before and after the last rec. Padding is required only before the previous rec.
-	c.reducerParams.lastRec = nextRecord == nil
+	c.reducerParams.lastRec = (nextRecord == nil) || (c.fileInfo != nil && info != c.fileInfo)
 	c.inNextWin = isSameWindow(currRecord, nextRecord, c.fileInfo, info, c.schema, c.startSample, c.endSample, c.step)
 	return nil
 }
