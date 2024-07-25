@@ -10713,7 +10713,7 @@ func TestServer_Write_OutOfOrder(t *testing.T) {
 				name:    "create database with shard group duration and index duration should succeed",
 				command: `CREATE DATABASE db3 WITH SHARD DURATION 12h index duration 24h name rp3`,
 				exp:     `{"results":[{"statement_id":0}]}`,
-				sikp:	true,
+				skip:    true,
 			},
 		},
 	}
@@ -10757,19 +10757,19 @@ func TestServer_Write_OutOfOrder(t *testing.T) {
 			name:    "select val from in date 2021-11-26 should success",
 			command: `select val from db3.rp3.cpu where time>='2021-11-26T00:00:00Z' and time<='2021-11-26T23:00:00Z' and "host"='serverB'`,
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","val"],"values":[["2021-11-26T10:00:00Z",200],["2021-11-26T14:00:00Z",23.2]]}]}]}`,
-			skip:	true,
+			skip:    true,
 		},
 		{
 			name:    "select val from in date 2021-11-27 should success",
 			command: `select val from db3.rp3.cpu where time>='2021-11-27T00:00:00Z' and time<='2021-11-27T23:00:00Z' and "host"='serverB'`,
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","val"],"values":[["2021-11-27T10:00:00Z",106]]}]}]}`,
-			skip:	true,
+			skip:    true,
 		},
 		{
 			name:    "select val from 25 to 26 should success",
 			command: `select val from db3.rp3.cpu where time>='2021-11-25T00:00:00Z' and time<='2021-11-26T23:00:00Z' and "host"='serverB'`,
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","val"],"values":[["2021-11-25T13:00:00Z",23.3],["2021-11-26T10:00:00Z",200],["2021-11-26T14:00:00Z",23.2]]}]}]}`,
-			skip:	true,
+			skip:    true,
 		},
 	}
 
