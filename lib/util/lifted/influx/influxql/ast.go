@@ -2155,20 +2155,6 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin boo
 
 	WalkFunc(other.Fields, rewriteDefaultTypeOfVarRef)
 
-	if !hasFieldWildcard && !hasDimensionWildcard {
-		if other.Without {
-			_, dimensionSet, err := FieldDimensions(other.Sources, m, &other.Schema)
-			if err != nil {
-				return nil, err
-			}
-			dimensions := stringSetSlice(dimensionSet)
-			if err = RewriteDimensionWithout(other, dimensions); err != nil {
-				return nil, err
-			}
-		}
-		return other, nil
-	}
-
 	if len(other.Dimensions) == 1 {
 		if _, ok := other.Dimensions[0].Expr.(*Wildcard); ok {
 			other.GroupByAllDims = true
@@ -2182,6 +2168,10 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin boo
 
 	if other.Without {
 		// 2.without dims + promquery
+		return other, nil
+	}
+
+	if !hasFieldWildcard && !hasDimensionWildcard {
 		return other, nil
 	}
 
@@ -2371,38 +2361,6 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin boo
 	}
 
 	return other, nil
-}
-
-// RewriteDimensionWithout used to extract the group field without from the full set to regenerate the dimension.
-func RewriteDimensionWithout(statement *SelectStatement, dimensions []string) error {
-	if len(statement.Sources) != 1 {
-		return fmt.Errorf("the number of source should be 1 for promql query")
-	}
-	statement.Without = false
-	_, dimRefs := statement.Dimensions.Normalize()
-	if len(dimRefs) == 0 {
-		for i := 0; i < len(dimensions); i++ {
-			statement.Dimensions = append(statement.Dimensions, &Dimension{Expr: &VarRef{Val: dimensions[i], Type: Tag}})
-		}
-		return nil
-	}
-	dimRefMap := make(map[string]bool, len(dimRefs))
-	for i := range dimRefs {
-		dimRefMap[dimRefs[i]] = true
-	}
-	var newDims Dimensions
-	for i := range dimensions {
-		if !dimRefMap[dimensions[i]] {
-			newDims = append(newDims, &Dimension{Expr: &VarRef{Val: dimensions[i], Type: Tag}})
-		}
-	}
-	for i := 0; i < len(statement.Dimensions); i++ {
-		if _, ok := statement.Dimensions[i].Expr.(*Call); ok {
-			newDims = append(newDims, statement.Dimensions[i])
-		}
-	}
-	statement.Dimensions = newDims
-	return nil
 }
 
 // RewriteRegexConditions rewrites regex conditions to make better use of the
