@@ -289,6 +289,7 @@ func TestRetryWriteRecordErr(t *testing.T) {
 	_, err = createMeasurement(db, rp, mst, &MockRWMetaClient{MeasurementErr: meta.ErrMeasurementNotFound, CreateMeasurementErr: io.EOF}, &mstInfo, &sameSchema, config.COLUMNSTORE)
 	assert.Equal(t, err, io.EOF)
 
+	rpInfo := NewRetentionPolicy("rp0", time.Hour, config.COLUMNSTORE)
 	preSg := &rpInfo.ShardGroups[0]
 	sg, _, _ := createShardGroup(db, rp, &MockRWMetaClient{}, &preSg, time.Now(), 0, config.COLUMNSTORE)
 	assert.Equal(t, sg, &rpInfo.ShardGroups[0])

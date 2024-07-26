@@ -575,7 +575,7 @@ func createMeasurement(database, retentionPolicy, name string, client ComMetaCli
 func createShardGroup(database, retentionPolicy string, client ComMetaClient, preSg **meta2.ShardGroupInfo, ts time.Time,
 	version uint32, engineType config.EngineType) (*meta2.ShardGroupInfo, bool, error) {
 	// fast path, time is contained
-	if *preSg != nil && (*preSg).Contains(ts) {
+	if *preSg != nil && (*preSg).Contains(ts) && (*preSg).EngineType == engineType {
 		return *preSg, true, nil
 	}
 
