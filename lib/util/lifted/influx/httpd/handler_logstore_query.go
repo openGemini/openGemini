@@ -828,6 +828,11 @@ func (h *Handler) serveAnalytics(w http.ResponseWriter, r *http.Request, user me
 		}
 	}
 	if err != nil {
+		err = wrapIncAggLogQueryErr(err)
+		if IncQuerySkippingError(err) {
+			h.getNilAnalyticsRequest(w, repository, logStream, para)
+			return
+		}
 		if QuerySkippingError(err.Error()) && para.GroupBytInterval > 0 {
 			var results [][]string
 			err = wrapIncAggLogQueryErr(err)
