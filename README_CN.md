@@ -211,6 +211,10 @@ Elapsed: 7.723332ms
 
 [贡献指南](CONTRIBUTION_CN.md)
 
+## 行为守则
+
+openGemini遵循[CNCF 行为守则](https://github.com/cncf/foundation/blob/master/code-of-conduct.md)
+
 ## 联系我们
 
 1. 加入微信交流群
