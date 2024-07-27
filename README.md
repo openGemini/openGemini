@@ -209,6 +209,10 @@ Elapsed: 7.723332ms
 
 [Tips for Contribution](CONTRIBUTION.md)
 
+## Code of Conduct
+
+openGemini follows the [CNCF Code of Conduct](https://github.com/cncf/foundation/blob/master/code-of-conduct.md).
+
 ## Contact Us
 
 1. [Slack](https://join.slack.com/t/opengemini/shared_invite/zt-2naig1675-x3bcwgXR_Rw5OwDU5X~dUQ)
