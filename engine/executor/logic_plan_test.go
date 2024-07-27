@@ -792,7 +792,7 @@ func TestNewLogicalBinOp(t *testing.T) {
 	node := executor.NewLogicalSeries(schema)
 	leftSubquery := executor.NewLogicalSubQuery(node, schema)
 	rightSubquery := executor.NewLogicalSubQuery(node, schema)
-	binOp := executor.NewLogicalBinOp(leftSubquery, rightSubquery, nil, schema)
+	binOp := executor.NewLogicalBinOp(leftSubquery, rightSubquery, &influxql.BinOp{}, schema)
 	binOpClone := binOp.Clone()
 	if binOpClone.Type() != binOp.Type() {
 		t.Fatal("wrong type result")
@@ -805,15 +805,45 @@ func TestNewLogicalBinOp(t *testing.T) {
 	if binOp.Digest() == "" {
 		t.Fatal("wrong Digest result")
 	}
+	binOp.ReplaceChildren([]hybridqp.QueryNode{nil, nil})
 	binOp.ReplaceChild(0, nil)
 	binOp.ReplaceChild(1, nil)
-	binOp.ReplaceChildren([]hybridqp.QueryNode{nil, nil})
 	if binOp.Children()[0] != nil {
 		t.Fatal("wrong replace child result")
 	}
 	binOpClone.DeriveOperations()
 	if binOp.New(nil, nil, nil) != nil {
 		t.Fatal("wrong new result")
+	}
+}
+
+func TestNewLogicalBinOpOfNilMst(t *testing.T) {
+	para := &influxql.BinOp{
+		NilMst: influxql.LNilMst,
+	}
+	schema := createQuerySchema()
+	node := executor.NewLogicalSeries(schema)
+	rightSubquery := executor.NewLogicalSubQuery(node, schema)
+	binOp := executor.NewLogicalBinOp(nil, rightSubquery, para, schema)
+	if len(binOp.Children()) != 1 {
+		t.Fatal("wrong children len result")
+	}
+
+	binOp.ReplaceChild(0, binOp.Children()[0])
+	binOp.ReplaceChildren([]hybridqp.QueryNode{nil})
+	if binOp.Children()[0] != nil {
+		t.Fatal("wrong replace child result")
+	}
+	para.NilMst = influxql.RNilMst
+	binOp = executor.NewLogicalBinOp(rightSubquery, nil, para, schema)
+	if len(binOp.Children()) != 1 {
+		t.Fatal("wrong children len result")
+	}
+
+	binOp.ReplaceChild(0, binOp.Children()[0])
+	binOp.ReplaceChildren([]hybridqp.QueryNode{nil})
+	if binOp.Children()[0] != nil {
+		t.Fatal("wrong replace child result")
 	}
 }
 
@@ -846,6 +876,29 @@ func TestBuildBinOpPlan(t *testing.T) {
 	stmt.BinOpSource = nil
 	if _, err := executor.BuildBinOpQueryPlan(context.Background(), creator, stmt, schema); err == nil {
 		t.Fatal("TestBuildBinOpPlan error2")
+	}
+}
+
+func TestBuildBinOpPlanOfNilMst(t *testing.T) {
+	fields := []*influxql.Field{&influxql.Field{Expr: &influxql.VarRef{Val: "value", Type: influxql.Float, Alias: "value"}, Alias: "value"}}
+	stmt := &influxql.SelectStatement{
+		Fields:      fields,
+		Sources:     []influxql.Source{&influxql.SubQuery{Statement: &influxql.SelectStatement{Fields: fields, Sources: []influxql.Source{&influxql.Measurement{Name: "mst"}}}}},
+		BinOpSource: []*influxql.BinOp{&influxql.BinOp{NilMst: influxql.LNilMst}},
+	}
+	schema := createQuerySchema()
+
+	creator := NewMockShardGroup()
+	table := NewTable("mst")
+	table.AddDataTypes(map[string]influxql.DataType{"value": influxql.Float})
+	creator.AddShard(table)
+	_, err := executor.BuildBinOpQueryPlan(context.Background(), creator, stmt, schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stmt.BinOpSource[0].NilMst = influxql.RNilMst
+	if _, err := executor.BuildBinOpQueryPlan(context.Background(), creator, stmt, schema); err != nil {
+		t.Fatal("TestBuildBinOpPlanOfNilMst error1")
 	}
 }
 

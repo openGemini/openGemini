@@ -418,7 +418,15 @@ func BuildBinOpQueryPlan(ctx context.Context, qc query.LogicalPlanCreator, stmt 
 	if len(binOpNodes) == 0 {
 		return nil, nil
 	}
-	binop := NewLogicalBinOp(binOpNodes[0], binOpNodes[1], binOps[0], schema)
+	var binop hybridqp.QueryNode
+	if binOps[0].NilMst == influxql.NoNilMst {
+		binop = NewLogicalBinOp(binOpNodes[0], binOpNodes[1], binOps[0], schema)
+	} else if binOps[0].NilMst == influxql.LNilMst {
+		binop = NewLogicalBinOp(nil, binOpNodes[0], binOps[0], schema)
+	} else {
+		binop = NewLogicalBinOp(binOpNodes[0], nil, binOps[0], schema)
+	}
+
 	if schema.HasCall() {
 		builder := NewLogicalPlanBuilderImpl(schema)
 		builder.Push(binop)
@@ -531,7 +539,7 @@ func buildQueryPlan(ctx context.Context, stmt *influxql.SelectStatement, qc quer
 		sp, schema, err = BuildInConditionPlan(ctx, qc, stmt, s)
 	} else if schema.GetJoinCaseCount() > 0 && len(stmt.Sources) == 2 {
 		sp, err = BuildFullJoinQueryPlan(ctx, qc, stmt, s)
-	} else if len(stmt.BinOpSource) > 0 && len(stmt.Sources) == 2 {
+	} else if len(stmt.BinOpSource) > 0 {
 		sp, err = BuildBinOpQueryPlan(ctx, qc, stmt, s)
 	} else if stmt.Sources = qc.GetSources(stmt.Sources); len(stmt.Sources) > 1 {
 		sp, err = buildSortAppendQueryPlan(ctx, qc, stmt, s)

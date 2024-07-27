@@ -768,3 +768,71 @@ func TestPromBinOpTransform27(t *testing.T) {
 	}
 	PromBinOpTransformTestBase(t, []executor.Chunk{chunk1}, []executor.Chunk{chunk2}, para, BuildBinOpResult13()[0])
 }
+
+func PromBinOpTransformSingleInputTestBase(t *testing.T, chunks1 []executor.Chunk, para *influxql.BinOp, rChunk executor.Chunk) {
+	source1 := NewSourceFromMultiChunk(chunks1[0].RowDataType(), chunks1)
+	var inRowDataTypes []hybridqp.RowDataType
+	inRowDataTypes = append(inRowDataTypes, source1.Output.RowDataType)
+	outRowDataType := buildPromBinOpOutputRowDataType()
+	schema := buildPromBinOpSchema()
+	trans, err := executor.NewBinOpTransform(inRowDataTypes, outRowDataType, schema, para)
+	if err != nil {
+		panic("")
+	}
+	checkResult := func(chunk executor.Chunk) error {
+		PromResultCompare(chunk, rChunk, t)
+		return nil
+	}
+	sink := NewSinkFromFunction(outRowDataType, checkResult)
+	executor.Connect(source1.Output, trans.GetInputs()[0])
+	executor.Connect(trans.GetOutputs()[0], sink.Input)
+	var processors executor.Processors
+	processors = append(processors, source1)
+	processors = append(processors, trans)
+	processors = append(processors, sink)
+	executors := executor.NewPipelineExecutor(processors)
+	executors.Execute(context.Background())
+	executors.Release()
+}
+
+// LNilMst LOR
+func TestPromBinOpTransform28(t *testing.T) {
+	chunk1 := BuildBinOpInChunk1()
+	para := &influxql.BinOp{
+		OpType:     parser.LOR,
+		On:         true,
+		MatchKeys:  []string{"tk3"},
+		MatchCard:  influxql.OneToOne,
+		ReturnBool: true,
+		NilMst:     influxql.LNilMst,
+	}
+	PromBinOpTransformSingleInputTestBase(t, []executor.Chunk{chunk1}, para, BuildBinOpInChunk1())
+}
+
+// LNilMst LUNLESS
+func TestPromBinOpTransform29(t *testing.T) {
+	chunk1 := BuildBinOpInChunk1()
+	para := &influxql.BinOp{
+		OpType:     parser.LUNLESS,
+		On:         true,
+		MatchKeys:  []string{"tk3"},
+		MatchCard:  influxql.OneToOne,
+		ReturnBool: true,
+		NilMst:     influxql.LNilMst,
+	}
+	PromBinOpTransformSingleInputTestBase(t, []executor.Chunk{chunk1}, para, nil)
+}
+
+// RNilMst LUNLESS
+func TestPromBinOpTransform30(t *testing.T) {
+	chunk1 := BuildBinOpInChunk1()
+	para := &influxql.BinOp{
+		OpType:     parser.LUNLESS,
+		On:         true,
+		MatchKeys:  []string{"tk3"},
+		MatchCard:  influxql.OneToOne,
+		ReturnBool: true,
+		NilMst:     influxql.RNilMst,
+	}
+	PromBinOpTransformSingleInputTestBase(t, []executor.Chunk{chunk1}, para, BuildBinOpInChunk1())
+}

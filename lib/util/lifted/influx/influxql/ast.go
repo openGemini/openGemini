@@ -37,6 +37,7 @@ import (
 	internal "github.com/openGemini/openGemini/lib/util/lifted/influx/influxql/internal"
 	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
+	"github.com/prometheus/prometheus/promql/parser"
 )
 
 // DataType represents the primitive data types available in InfluxQL.
@@ -1666,6 +1667,7 @@ func cloneSource(s Source) Source {
 		c.MatchCard = s.MatchCard
 		c.IncludeKeys = s.IncludeKeys
 		c.ReturnBool = s.ReturnBool
+		c.NilMst = s.NilMst
 		return c
 	default:
 		panic("unreachable")
@@ -1963,16 +1965,20 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin boo
 			}
 			sources = append(sources, rSources)
 		case *BinOp:
-			lSources, lErr := s.RewriteJoinCase(src.LSrc, m, batchEn, other.Fields, false)
-			if lErr != nil {
-				return nil, lErr
+			if src.NilMst != LNilMst {
+				lSources, lErr := s.RewriteJoinCase(src.LSrc, m, batchEn, other.Fields, false)
+				if lErr != nil {
+					return nil, lErr
+				}
+				sources = append(sources, lSources)
 			}
-			sources = append(sources, lSources)
-			rSources, rErr := s.RewriteJoinCase(src.RSrc, m, batchEn, other.Fields, false)
-			if rErr != nil {
-				return nil, rErr
+			if src.NilMst != RNilMst {
+				rSources, rErr := s.RewriteJoinCase(src.RSrc, m, batchEn, other.Fields, false)
+				if rErr != nil {
+					return nil, rErr
+				}
+				sources = append(sources, rSources)
 			}
-			sources = append(sources, rSources)
 		default:
 			if e := RewriteMstNameSpace(other.Fields, src, hasJoin, src.GetName()); e != nil {
 				return nil, e
@@ -4796,6 +4802,14 @@ const (
 	OneToMany
 )
 
+type NilMstState int
+
+const (
+	NoNilMst NilMstState = iota
+	LNilMst
+	RNilMst
+)
+
 type BinOp struct {
 	LSrc        Source
 	RSrc        Source
@@ -4805,6 +4819,7 @@ type BinOp struct {
 	MatchCard   MatchCardinality
 	IncludeKeys []string // group_left/group_right(IncludeKeys)
 	ReturnBool  bool
+	NilMst      NilMstState
 }
 
 func (b *BinOp) String() string {
@@ -4821,6 +4836,10 @@ func (b *BinOp) String() string {
 
 func (b *BinOp) GetName() string {
 	return ""
+}
+
+func AllowNilMst(BinOpType int) bool {
+	return BinOpType == parser.LOR || BinOpType == parser.LUNLESS
 }
 
 type PromSubCall struct {
