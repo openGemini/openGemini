@@ -25,11 +25,18 @@ import (
 	"github.com/openGemini/openGemini/lib/record"
 )
 
+type MergeSelfHook interface {
+	OnWriteRecord(record *record.Record)
+	OnNewFile(f TSSPFile)
+}
+
 type MergeSelf struct {
 	once   sync.Once
 	signal chan struct{}
 	mts    *MmsTables
 	lg     *logger.Logger
+
+	hook MergeSelfHook
 }
 
 func NewMergeSelf(mts *MmsTables, lg *logger.Logger) *MergeSelf {
@@ -38,6 +45,10 @@ func NewMergeSelf(mts *MmsTables, lg *logger.Logger) *MergeSelf {
 		mts:    mts,
 		lg:     lg,
 	}
+}
+
+func (m *MergeSelf) SetHook(hook MergeSelfHook) {
+	m.hook = hook
 }
 
 func (m *MergeSelf) Merge(mst string, files []TSSPFile) (TSSPFile, error) {
@@ -58,6 +69,10 @@ func (m *MergeSelf) Merge(mst string, files []TSSPFile) (TSSPFile, error) {
 			break
 		}
 
+		if m.hook != nil {
+			m.hook.OnWriteRecord(rec)
+		}
+
 		record.CheckRecord(rec)
 		rec = sh.Sort(rec)
 		itrs.merged = rec
@@ -71,6 +86,9 @@ func (m *MergeSelf) Merge(mst string, files []TSSPFile) (TSSPFile, error) {
 	itrs.Close()
 
 	merged, err := builder.NewTSSPFile(true)
+	if m.hook != nil {
+		m.hook.OnNewFile(merged)
+	}
 	return merged, err
 }
 
