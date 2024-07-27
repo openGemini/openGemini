@@ -2719,3 +2719,72 @@ func TestFieldIndexs(t *testing.T) {
 		t.Fatal("error index, actual index", idx)
 	}
 }
+
+func TestRecord_TryPadColumn2AlignBitmap(t *testing.T) {
+	type fields struct {
+		RecMeta *record.RecMeta
+		ColVals []record.ColVal
+		Schema  record.Schemas
+	}
+	tests := []struct {
+		name   string
+		fields fields
+	}{
+		{
+			name: "1",
+			fields: fields{
+				RecMeta: nil,
+				ColVals: []record.ColVal{
+					{},
+					{
+						Len:          8,
+						NilCount:     8,
+						BitMapOffset: 0,
+						Offset:       make([]uint32, 8),
+						Bitmap:       make([]byte, 1),
+					},
+					{
+						Len:          8,
+						NilCount:     0,
+						BitMapOffset: 1,
+						Offset:       nil,
+						Val:          make([]byte, 32),
+						Bitmap:       make([]byte, 2),
+					},
+				},
+				Schema: []record.Field{
+					{
+						Name: "a",
+						Type: influx.Field_Type_String,
+					},
+					{
+						Name: "b",
+						Type: influx.Field_Type_String,
+					},
+					{
+						Name: "time",
+						Type: influx.Field_Type_Int,
+					},
+				},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := &record.Record{
+				RecMeta: tt.fields.RecMeta,
+				ColVals: tt.fields.ColVals,
+				Schema:  tt.fields.Schema,
+			}
+			rec.TryPadColumn2AlignBitmap()
+			assert.Equal(t, rec.ColVals[0].Len, 8)
+			assert.Equal(t, rec.ColVals[0].NilCount, 8)
+			assert.Equal(t, rec.ColVals[0].BitMapOffset, 1)
+			assert.Equal(t, len(rec.ColVals[0].Bitmap), 2)
+			assert.Equal(t, rec.ColVals[1].Len, 8)
+			assert.Equal(t, rec.ColVals[1].NilCount, 8)
+			assert.Equal(t, rec.ColVals[1].BitMapOffset, 1)
+			assert.Equal(t, len(rec.ColVals[1].Bitmap), 2)
+		})
+	}
+}

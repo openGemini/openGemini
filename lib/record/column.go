@@ -204,6 +204,44 @@ func (cv *ColVal) PadColVal(colType, padLen int) {
 	cv.NilCount += padLen
 }
 
+// PadEmptyCol2AlignBitmap used to fill the empty column, including setting bitMapOffset.
+func (cv *ColVal) PadEmptyCol2AlignBitmap(colType, padLen, bitMapOffset, bitMapLen int) {
+	if padLen == 0 {
+		return
+	}
+	if colType == influx.Field_Type_String {
+		cv.Offset = make([]uint32, padLen)
+	}
+
+	// pad bitmap
+	cv.Len = padLen
+	cv.NilCount = padLen
+	cv.BitMapOffset = bitMapOffset
+	cv.Val = cv.Val[:0]
+	cv.Bitmap = cv.Bitmap[:0]
+	cv.Bitmap = reserveBytes(cv.Bitmap, bitMapLen)
+	cv.Bitmap = cv.Bitmap[:bitMapLen]
+	for i := 0; i < bitMapLen; i++ {
+		cv.Bitmap[i] = 0
+	}
+}
+
+// PadEmptyCol2FixBitmap used to fix the empty column, including setting the bitMapOffset and appending the bitMap.
+func (cv *ColVal) PadEmptyCol2FixBitmap(bitMapOffset, bitMapLen int) {
+	if bitMapOffset == 0 {
+		return
+	}
+	cv.BitMapOffset = bitMapOffset
+	oriBitMapLen := len(cv.Bitmap)
+	if oriBitMapLen >= bitMapLen {
+		return
+	}
+	cv.Bitmap = reserveBytes(cv.Bitmap, bitMapLen-oriBitMapLen)
+	for i := oriBitMapLen; i < bitMapLen; i++ {
+		cv.Bitmap[i] = 0
+	}
+}
+
 func (cv *ColVal) RowBitmap(dst []bool) []bool {
 	var idx int
 	for i := 0; i < cv.Len; i++ {
