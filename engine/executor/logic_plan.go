@@ -4270,8 +4270,12 @@ func (p *LogicalBinOp) DeriveOperations() {
 }
 
 func (p *LogicalBinOp) init() {
-	p.InitRef(p.right)
-	p.InitRef(p.left)
+	if p.right != nil {
+		p.InitRef(p.right)
+	}
+	if p.left != nil {
+		p.InitRef(p.left)
+	}
 }
 
 func (p *LogicalBinOp) Clone() hybridqp.QueryNode {
@@ -4282,15 +4286,23 @@ func (p *LogicalBinOp) Clone() hybridqp.QueryNode {
 }
 
 func (p *LogicalBinOp) Children() []hybridqp.QueryNode {
+	if p.left == nil {
+		return []hybridqp.QueryNode{p.right}
+	} else if p.right == nil {
+		return []hybridqp.QueryNode{p.left}
+	}
 	return []hybridqp.QueryNode{p.left, p.right}
 }
 
 func (p *LogicalBinOp) ReplaceChildren(children []hybridqp.QueryNode) {
-	if len(children) != 2 {
-		panic("children count in LogicalBinOp is not 2")
+	if p.left == nil {
+		p.right = children[0]
+	} else if p.right == nil {
+		p.left = children[0]
+	} else {
+		p.left = children[0]
+		p.right = children[1]
 	}
-	p.left = children[0]
-	p.right = children[1]
 }
 
 func (p *LogicalBinOp) ReplaceChild(ordinal int, child hybridqp.QueryNode) {
@@ -4298,7 +4310,11 @@ func (p *LogicalBinOp) ReplaceChild(ordinal int, child hybridqp.QueryNode) {
 		panic(fmt.Sprintf("index %d out of range %d", ordinal, 1))
 	}
 	if ordinal == 0 {
-		p.left = child
+		if p.Para.NilMst == influxql.LNilMst {
+			p.right = child
+		} else {
+			p.left = child
+		}
 	} else {
 		p.right = child
 	}
@@ -4320,8 +4336,12 @@ func (p *LogicalBinOp) Digest() string {
 	p.digest = true
 	p.digestName = p.digestName[:0]
 	p.digestName = encoding.MarshalUint32(p.digestName, uint32(p.LogicPlanType()))
-	p.digestName = encoding.MarshalUint64(p.digestName, p.left.ID())
-	p.digestName = encoding.MarshalUint64(p.digestName, p.right.ID())
+	if p.left != nil {
+		p.digestName = encoding.MarshalUint64(p.digestName, p.left.ID())
+	}
+	if p.right != nil {
+		p.digestName = encoding.MarshalUint64(p.digestName, p.right.ID())
+	}
 	return string(p.digestName)
 }
 
