@@ -98,6 +98,7 @@ type BinOpTransform struct {
 	matchType                influxql.MatchCardinality
 	IncludeKeys              []string // group_left/group_right(IncludeKeys)
 	ReturnBool               bool
+	NilMst                   influxql.NilMstState
 
 	primaryLoc        int
 	secondaryLoc      int
@@ -154,6 +155,7 @@ func NewBinOpTransform(inRowDataTypes []hybridqp.RowDataType, outRowDataType hyb
 		resultTagValues:   make([]string, 0),
 		reserveLoc:        make([]int, 0),
 		delLoc:            make([]int, 0),
+		NilMst:            para.NilMst,
 	}
 	for i := range inRowDataTypes {
 		trans.inputs = append(trans.inputs, NewChunkPort(inRowDataTypes[i]))
@@ -282,7 +284,7 @@ func (trans *BinOpTransform) runnable(ctx context.Context, errs *errno.Errs, i i
 				return
 			}
 		case <-ctx.Done():
-			trans.closeNextChunks(i)
+			trans.closeNextChunk(i)
 			return
 		}
 	}
@@ -297,10 +299,15 @@ func (trans *BinOpTransform) Work(ctx context.Context) error {
 	}()
 
 	errs := &trans.errs
-	errs.Init(3, trans.Close)
 
-	go trans.runnable(ctx, errs, 0)
-	go trans.runnable(ctx, errs, 1)
+	if trans.NilMst == influxql.NoNilMst {
+		errs.Init(3, trans.Close)
+		go trans.runnable(ctx, errs, 0)
+		go trans.runnable(ctx, errs, 1)
+	} else {
+		errs.Init(2, trans.Close)
+		go trans.runnable(ctx, errs, 0)
+	}
 	go trans.BinOpHelper(ctx, errs)
 
 	return errs.Err()
@@ -313,7 +320,16 @@ func (trans *BinOpTransform) SendChunk() {
 	}
 }
 
-func (trans *BinOpTransform) closeNextChunks(i int) {
+func (trans *BinOpTransform) closeNextChunks() {
+	if trans.NilMst == influxql.NoNilMst {
+		trans.closeNextChunk(0)
+		trans.closeNextChunk(1)
+	} else {
+		trans.closeNextChunk(0)
+	}
+}
+
+func (trans *BinOpTransform) closeNextChunk(i int) {
 	trans.nextChunksCloseOnce[i].Do(func() {
 		close(trans.nextChunks[i])
 	})
@@ -743,8 +759,7 @@ func (trans *BinOpTransform) encodeTags() string {
 
 func (trans *BinOpTransform) BinOpHelperOperator(ctx context.Context, errs *errno.Errs) {
 	defer func() {
-		trans.closeNextChunks(0)
-		trans.closeNextChunks(1)
+		trans.closeNextChunks()
 		if e := recover(); e != nil {
 			err := errno.NewError(errno.RecoverPanic, e)
 			trans.streamBinOpLogger.Error(err.Error(), zap.String("query", "BinOpTransform"),
@@ -789,8 +804,7 @@ func (trans *BinOpTransform) BinOpHelperOperator(ctx context.Context, errs *errn
 
 func (trans *BinOpTransform) BinOpHelperConditionSingle(ctx context.Context, errs *errno.Errs) {
 	defer func() {
-		trans.closeNextChunks(0)
-		trans.closeNextChunks(1)
+		trans.closeNextChunks()
 		if e := recover(); e != nil {
 			err := errno.NewError(errno.RecoverPanic, e)
 			trans.streamBinOpLogger.Error(err.Error(), zap.String("query", "BinOpTransform"),
@@ -800,6 +814,23 @@ func (trans *BinOpTransform) BinOpHelperConditionSingle(ctx context.Context, err
 			errs.Dispatch(nil)
 		}
 	}()
+	// 0. one side input is nilMst
+	if trans.NilMst == influxql.LNilMst {
+		<-trans.inputSignals[0]
+		return
+	} else if trans.NilMst == influxql.RNilMst {
+		for {
+			<-trans.inputSignals[0]
+			if trans.bufChunks[0] == nil {
+				return
+			}
+			trans.bufChunks[0].CopyTo(trans.outputChunk)
+			trans.output.State <- trans.outputChunk
+			trans.outputChunk = trans.chunkPool.GetChunk()
+			trans.nextChunks[0] <- signal
+		}
+	}
+
 	// 1. build PrimaryMapSimple by right
 	for {
 		<-trans.inputSignals[1]
@@ -826,8 +857,7 @@ func (trans *BinOpTransform) BinOpHelperConditionSingle(ctx context.Context, err
 
 func (trans *BinOpTransform) BinOpHelperConditionBoth(ctx context.Context, errs *errno.Errs) {
 	defer func() {
-		trans.closeNextChunks(0)
-		trans.closeNextChunks(1)
+		trans.closeNextChunks()
 		if e := recover(); e != nil {
 			err := errno.NewError(errno.RecoverPanic, e)
 			trans.streamBinOpLogger.Error(err.Error(), zap.String("query", "BinOpTransform"),
@@ -837,6 +867,20 @@ func (trans *BinOpTransform) BinOpHelperConditionBoth(ctx context.Context, errs 
 			errs.Dispatch(nil)
 		}
 	}()
+	// 0. one side input is nilMst
+	if trans.NilMst != influxql.NoNilMst {
+		for {
+			<-trans.inputSignals[0]
+			if trans.bufChunks[0] == nil {
+				return
+			}
+			trans.bufChunks[0].CopyTo(trans.outputChunk)
+			trans.output.State <- trans.outputChunk
+			trans.outputChunk = trans.chunkPool.GetChunk()
+			trans.nextChunks[0] <- signal
+		}
+	}
+
 	// 1. build PrimaryMapSimple and add result by left
 	for {
 		<-trans.inputSignals[0]

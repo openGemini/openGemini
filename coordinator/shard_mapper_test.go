@@ -47,6 +47,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
+	"github.com/prometheus/prometheus/promql/parser"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -345,9 +346,13 @@ func (m mocShardMapperMetaClient) GetMeasurements(mst *influxql.Measurement) ([]
 		if rp == nil {
 			return nil, nil
 		}
-		measurements = append(measurements, rp.Measurements[mst.Name])
+		if name, ok := rp.Measurements[mst.Name]; ok {
+			measurements = append(measurements, name)
+		}
 	}
-
+	if len(measurements) == 0 {
+		return nil, errno.NewError(errno.ErrMeasurementNotFound)
+	}
 	return measurements, nil
 }
 
@@ -1450,5 +1455,116 @@ func Test_MapTypeBatchBinOp(t *testing.T) {
 	_, err = csm.MapShards([]influxql.Source{binOp}, ttime, query.SelectOptions{}, nil)
 	if err == nil {
 		t.Fatal("Test_MapTypeBatchBinOp err")
+	}
+}
+
+func Test_MapTypeBatchBinOpNilMst(t *testing.T) {
+	timeStart := time.Date(2022, 1, 0, 0, 0, 0, 0, time.UTC)
+	timeMid := time.Date(2022, 1, 15, 0, 0, 0, 0, time.UTC)
+	timeEnd := time.Date(2022, 2, 0, 0, 0, 0, 0, time.UTC)
+	shards1 := []meta.ShardInfo{{ID: 1, Owners: []uint32{0}, Min: "", Max: "", Tier: util.Hot, IndexID: 1, DownSampleID: 0, DownSampleLevel: 0, ReadOnly: false, MarkDelete: false}}
+	csm := &ClusterShardMapper{
+		Logger: logger.NewLogger(1),
+	}
+	defer csm.Close()
+	mc := &mocShardMapperMetaClient{
+		databases: map[string]*meta.DatabaseInfo{
+			"db0": {
+				Name:                   "db0",
+				DefaultRetentionPolicy: "rp0",
+				RetentionPolicies: map[string]*meta.RetentionPolicyInfo{
+					"rp0": {
+						Name: "rp0",
+						Measurements: map[string]*meta.MeasurementInfo{
+							"mst1": {
+								Name: "mst1",
+								ShardKeys: []meta.ShardKeyInfo{
+									{
+										ShardKey:   []string{"1", "2"},
+										Type:       "hash",
+										ShardGroup: 1,
+									},
+								},
+								Schema: map[string]int32{
+									"value": influx.Field_Type_Float,
+									"tag1":  influx.Field_Type_Tag,
+								},
+								EngineType: config.TSSTORE,
+							},
+						},
+						ShardGroups: []meta.ShardGroupInfo{
+							{
+								ID:         1,
+								StartTime:  timeStart,
+								EndTime:    timeMid,
+								Shards:     shards1,
+								EngineType: config.TSSTORE,
+							},
+						},
+					},
+				},
+				ShardKey: meta.ShardKeyInfo{
+					ShardKey:   []string{"1"},
+					Type:       "hash",
+					ShardGroup: 3,
+				},
+			},
+		},
+	}
+	csm.MetaClient = mc
+	csm.Measurement("db0", "rp0", "mst1")
+	m, _ := csm.MetaClient.(*mocShardMapperMetaClient)
+	db, _ := m.databases["db0"]
+	rp, _ := db.RetentionPolicies["rp0"]
+	mst, _ := rp.Measurements["mst1"]
+	mst.SetoriginName("mst1")
+	csm.Measurement("db0", "rp0", "mst1")
+	source1 := &influxql.Measurement{
+		Database: "db0", RetentionPolicy: "rp0", Name: "mst1", EngineType: config.TSSTORE,
+	}
+	source2 := &influxql.Measurement{
+		Database: "db0", RetentionPolicy: "rp0", Name: "mst2", EngineType: config.TSSTORE,
+	}
+	binOp := &influxql.BinOp{
+		LSrc:   source1,
+		RSrc:   source2,
+		OpType: parser.LOR,
+		NilMst: influxql.RNilMst,
+	}
+	ttime := influxql.TimeRange{
+		Min: timeStart,
+		Max: timeEnd,
+	}
+	csming, _ := csm.MapShards([]influxql.Source{binOp}, ttime, query.SelectOptions{}, nil)
+	shardMapping := csming.(*ClusterShardMapping)
+	schema := &influxql.Schema{
+		MinTime: math.MaxInt64,
+		MaxTime: math.MinInt64,
+	}
+	myFields := map[string]*influxql.FieldNameSpace{
+		"value": {
+			RealName: "value",
+			DataType: influx.Field_Type_Float,
+		},
+		"tag1": {
+			RealName: "tag1",
+			DataType: influx.Field_Type_Tag,
+		},
+	}
+	err := shardMapping.MapTypeBatch(source1, myFields, schema)
+	if err != nil {
+		t.Fatal()
+	}
+	binOp.NilMst = influxql.LNilMst
+	csming, _ = csm.MapShards([]influxql.Source{binOp}, ttime, query.SelectOptions{}, nil)
+	if csming != nil {
+		t.Fatal()
+	}
+	binOp.LSrc, binOp.RSrc = source2, source1
+	csming, _ = csm.MapShards([]influxql.Source{binOp}, ttime, query.SelectOptions{}, nil)
+	shardMapping = csming.(*ClusterShardMapping)
+	err = shardMapping.MapTypeBatch(source1, myFields, schema)
+	if err != nil {
+		t.Fatal()
 	}
 }

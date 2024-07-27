@@ -185,10 +185,20 @@ func (csm *ClusterShardMapper) mapShards(csming *ClusterShardMapping, sources in
 				return err
 			}
 		case *influxql.BinOp:
-			if err := csm.mapShards(csming, influxql.Sources{s.LSrc}, tmin, tmax, condition, opt); err != nil {
+			err := csm.mapShards(csming, influxql.Sources{s.LSrc}, tmin, tmax, condition, opt)
+			if errno.Equal(err, errno.ErrMeasurementNotFound) && influxql.AllowNilMst(s.OpType) {
+				s.NilMst = influxql.LNilMst
+			} else if err != nil {
 				return err
 			}
-			if err := csm.mapShards(csming, influxql.Sources{s.RSrc}, tmin, tmax, condition, opt); err != nil {
+			err = csm.mapShards(csming, influxql.Sources{s.RSrc}, tmin, tmax, condition, opt)
+			if errno.Equal(err, errno.ErrMeasurementNotFound) && influxql.AllowNilMst(s.OpType) {
+				if s.NilMst == influxql.LNilMst {
+					return err
+				} else {
+					s.NilMst = influxql.RNilMst
+				}
+			} else if err != nil {
 				return err
 			}
 		}
