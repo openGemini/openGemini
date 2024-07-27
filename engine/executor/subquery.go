@@ -55,8 +55,8 @@ func (b *SubQueryBuilder) newSubOptions(ctx context.Context, opt query.Processor
 			subOpt.EndTime = now.(time.Time).UnixNano()
 		}
 	}
-
-	if !opt.Without {
+	// use dimPushDown: 1.noPromQuery 2.PromQuery agg by(xx) call(mst[range])
+	if !opt.PromQuery || subOpt.GroupByAllDims && subOpt.Range > 0 {
 		pushDownDimension := GetInnerDimensions(opt.Dimensions, subOpt.Dimensions)
 		subOpt.Dimensions = pushDownDimension
 		for d := range opt.GroupBy {
