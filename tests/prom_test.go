@@ -872,11 +872,11 @@ func runTestFile(t *testing.T, fn string) {
 	s := OpenServer(NewConfig())
 	defer s.Close()
 
-	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("autogen", 1, 0), true); err != nil {
 		t.Fatal(err)
 	}
 
-	err := NewPromTestFromFile(t, fn, "db0", "rp0", s)
+	err := NewPromTestFromFile(t, fn, "db0", "autogen", s)
 	t.Error(err)
 }
 
