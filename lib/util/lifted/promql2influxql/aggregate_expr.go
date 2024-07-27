@@ -43,6 +43,42 @@ func (t *Transpiler) generateDimension(statement *influxql.SelectStatement, grou
 	}
 }
 
+func (t *Transpiler) setAggregateDimensionOfSubquery(dims influxql.Dimensions, statement *influxql.SelectStatement, grouping ...string) {
+	if len(dims) == 0 {
+		return
+	}
+	_, dimRefs := dims.Normalize()
+	if len(dimRefs) == 0 {
+		var isGroupByStar bool
+		for i := range dims {
+			expr, ok := dims[i].Expr.(*influxql.Wildcard)
+			if ok && (expr.Type == influxql.ILLEGAL || expr.Type == influxql.TAG) {
+				isGroupByStar = true
+				break
+			}
+		}
+		if isGroupByStar {
+			// exclude grouping from full set to generate dimension
+			statement.Without = true
+			t.generateDimension(statement, grouping...)
+		}
+		return
+	}
+	sort.Strings(dimRefs)
+	groupMap := make(map[string]bool, len(grouping))
+	for i := range grouping {
+		groupMap[grouping[i]] = true
+	}
+	var newGrouping []string
+	for i := range dimRefs {
+		if !groupMap[dimRefs[i]] {
+			newGrouping = append(newGrouping, dimRefs[i])
+		}
+	}
+	// exclude grouping from sub-query dimension to generate dimension
+	t.generateDimension(statement, newGrouping...)
+}
+
 // setAggregateDimension sets the group by expression of selectStatement
 func (t *Transpiler) setAggregateDimension(statement *influxql.SelectStatement, without bool, grouping ...string) {
 	// if without is false, dimension is generated based on grouping.
@@ -60,40 +96,14 @@ func (t *Transpiler) setAggregateDimension(statement *influxql.SelectStatement, 
 		statement.Without = true
 		t.generateDimension(statement, grouping...)
 	case *influxql.SubQuery:
-		dims := source.Statement.Dimensions
-		if len(dims) == 0 {
-			return
-		}
-		_, dimRefs := dims.Normalize()
-		if len(dimRefs) == 0 {
-			var isGroupByStar bool
-			for i := range dims {
-				expr, ok := dims[i].Expr.(*influxql.Wildcard)
-				if ok && (expr.Type == influxql.ILLEGAL || expr.Type == influxql.TAG) {
-					isGroupByStar = true
-					break
-				}
-			}
-			if isGroupByStar {
-				// exclude grouping from full set to generate dimension
-				statement.Without = true
-				t.generateDimension(statement, grouping...)
-			}
-			return
-		}
-		sort.Strings(dimRefs)
-		groupMap := make(map[string]bool, len(grouping))
-		for i := range grouping {
-			groupMap[grouping[i]] = true
-		}
-		var newGrouping []string
-		for i := range dimRefs {
-			if !groupMap[dimRefs[i]] {
-				newGrouping = append(newGrouping, dimRefs[i])
-			}
-		}
-		// exclude grouping from sub-query dimension to generate dimension
-		t.generateDimension(statement, newGrouping...)
+		t.setAggregateDimensionOfSubquery(source.Statement.Dimensions, statement, grouping...)
+	case *influxql.BinOp:
+		unionDims := make(influxql.Dimensions, 0)
+		lsource := source.LSrc.(*influxql.SubQuery)
+		rsource := source.RSrc.(*influxql.SubQuery)
+		unionDims = append(unionDims, lsource.Statement.Dimensions...)
+		unionDims = append(unionDims, rsource.Statement.Dimensions...)
+		t.setAggregateDimensionOfSubquery(unionDims, statement, grouping...)
 	}
 }
 
