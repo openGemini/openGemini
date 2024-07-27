@@ -27,6 +27,9 @@ func (h *Handler) handleProfiles(w http.ResponseWriter, r *http.Request) {
 		httppprof.Symbol(w, r)
 	case "/debug/pprof/all":
 		h.archiveProfilesAndQueries(w, r)
+	case "/debug/pprof":
+		// redirect /debug/pprof to /debug/pprof/ to maintain routing compatibility with the stdlib pprof.Index
+		http.Redirect(w, r, "/debug/pprof/", http.StatusFound)
 	default:
 		httppprof.Index(w, r)
 	}
