@@ -1,3 +1,19 @@
+/*
+Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+ http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 package httpd
 
 import (
@@ -26,11 +42,11 @@ var (
 )
 
 func init() {
-	// 创建一个自定义的注册表
+	// Create a custom registry
 	registry := prometheus.NewRegistry()
-	// 实例化自定义收集器
+	// Instantiate a custom collector
 	openGeminiCollector = NewOpenGeminiCollector()
-	// 注册收集器到注册表
+	// Register the collector to the registry
 	err := registry.Register(openGeminiCollector)
 	if err != nil {
 		log.Fatal("Failed to register collector:", err)
@@ -49,7 +65,7 @@ func NewOpenGeminiCollector() *OpenGeminiCollector {
 		BaseCollector: metrics.NewBaseCollector(metrics.ComIndexRegistry),
 		indexMap:      make(map[string]*metrics.ModuleIndex),
 	}
-	// 初始化指标
+	// Initialize metrics
 	for moduleName, index := range c.IndexRegistry {
 		desc := make(map[string]*prometheus.Desc)
 		for indexName, help := range index.HelpMap {
@@ -67,7 +83,7 @@ func (c *OpenGeminiCollector) Collect(ch chan<- prometheus.Metric) {
 	for moduleName, index := range c.IndexRegistry {
 		value, ok := indexMap[moduleName]
 		if ok {
-			// 获取该module的label
+			// Get the label of the module
 			labelValues := make([]string, 0)
 			for _, labelName := range index.Labels {
 				labelValue, ok := value.LabelValues[labelName]
@@ -81,7 +97,7 @@ func (c *OpenGeminiCollector) Collect(ch chan<- prometheus.Metric) {
 			for indexName := range index.HelpMap {
 				indexName = fmt.Sprintf("last_%s", indexName)
 				indexValue, ok = value.MetricsMap[indexName]
-				// 指标存在
+				// If the indicator exists, write the indicator
 				if ok {
 					ch <- prometheus.MustNewConstMetric(c.AllModulesDesc[moduleName][indexName], prometheus.GaugeValue,
 						indexValue.(float64), labelValues...)
@@ -235,12 +251,13 @@ func getMetrics(h *Handler, r *http.Request, user meta2.User, tableName string, 
 	}
 	labelValues := make(map[string]string)
 
+	// Get label
 	for key, value := range resp.Results[0].Series[0].Tags {
 		labelValues[key] = value
 	}
 
 	return &metrics.ModuleIndex{
 		LabelValues: labelValues,
-		MetricsMap:    metricsMap,
+		MetricsMap:  metricsMap,
 	}, nil
 }
