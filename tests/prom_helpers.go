@@ -25,6 +25,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/httpd"
+	"github.com/openGemini/openGemini/lib/util/lifted/promql2influxql"
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/pkg/labels"
 	"github.com/prometheus/prometheus/pkg/timestamp"
@@ -33,17 +35,23 @@ import (
 )
 
 var (
+	minNormal      = math.Float64frombits(0x0010000000000000)
 	patSpace       = regexp.MustCompile("[\t ]+")
 	patLoad        = regexp.MustCompile(`^load\s+(.+?)$`)
 	patEvalInstant = regexp.MustCompile(`^eval(?:_(fail|ordered|skip))?\s+instant\s+(?:at\s+(.+?))?\s+(.+)$`)
+
+	testStartTime = time.Unix(0, 0).UTC()
 )
 
-var testStartTime = time.Unix(0, 0).UTC()
+const (
+	epsilon = 0.000001 // Relative error allowed for sample values.
+)
 
 // PromTest is a sequence of read and write commands that are run
 // against a test storage.
 type PromTest struct {
 	Test
+	s Server
 }
 
 func NewPromTestFromFile(t *testing.T, filename string, db string, rp string, s Server) error {
@@ -54,6 +62,7 @@ func NewPromTestFromFile(t *testing.T, filename string, db string, rp string, s 
 	test := &PromTest{}
 	test.db = db
 	test.rp = rp
+	test.s = s
 	test.writes = make(Writes, 0)
 
 	err = test.parse(string(content), t, s)
@@ -92,7 +101,7 @@ func parseLoad(lines []string, i int) (int, []string, error) {
 		for _, v := range vals {
 			if !v.Omitted {
 				samples = append(samples, promql.Point{
-					T: ts.UnixNano() / int64(time.Millisecond/time.Nanosecond),
+					T: ts.UnixNano(),
 					V: v.Value,
 				})
 			}
@@ -115,12 +124,17 @@ func AppendData(data *[]string, metric labels.Labels, samples []promql.Point) {
 	}
 	writes := metric[0].Value
 	for _, label := range metric {
-		writes += "," + label.Name + "=" + label.Value
+		writes += fmt.Sprintf(",%s=\"%s\"", label.Name, label.Value)
 	}
 
 	for _, val := range samples {
 		*data = append(*data, fmt.Sprintf(`%s value=%f %d`, writes, val.V, val.T))
 	}
+}
+
+type PromExp struct {
+	Value  parser.SequenceValue
+	Metric labels.Labels
 }
 
 func (t *PromTest) parseEval(lines []string, i int) (int, []*Query, error) {
@@ -152,6 +166,9 @@ func (t *PromTest) parseEval(lines []string, i int) (int, []*Query, error) {
 	ts := testStartTime.Add(time.Duration(offset))
 
 	queries := make([]*Query, 0)
+	line := i + 1
+	promExps := make([]*PromExp, 0)
+
 	for i+1 < len(lines) {
 		i++
 		defLine := lines[i]
@@ -160,10 +177,12 @@ func (t *PromTest) parseEval(lines []string, i int) (int, []*Query, error) {
 			break
 		}
 		if f, err := parseNumber(defLine); err == nil {
-			AppendQueries(&queries, i+1, expr, ts, f, mod)
+			promExps = append(promExps, &PromExp{
+				Value: parser.SequenceValue{Value: f},
+			})
 			break
 		}
-		_, vals, err := parser.ParseSeriesDesc(defLine)
+		metrics, vals, err := parser.ParseSeriesDesc(defLine)
 		if err != nil {
 			if perr, ok := err.(*parser.ParseErr); ok {
 				perr.LineOffset = i
@@ -175,12 +194,16 @@ func (t *PromTest) parseEval(lines []string, i int) (int, []*Query, error) {
 		if len(vals) > 1 {
 			return i, nil, raise(i, "expecting multiple values in instant evaluation not allowed")
 		}
-		AppendQueries(&queries, i+1, expr, ts, vals[0].Value, mod)
+		promExps = append(promExps, &PromExp{
+			Value:  vals[0],
+			Metric: metrics,
+		})
 	}
+	AppendQueries(&queries, line, expr, ts, promExps, mod)
 	return i, queries, nil
 }
 
-func AppendQueries(queries *[]*Query, line int, expr string, startTime time.Time, exp float64, mod string) error {
+func AppendQueries(queries *[]*Query, line int, expr string, startTime time.Time, promExps []*PromExp, mod string) error {
 	var fail, ordered, skip bool
 	switch mod {
 	case "ordered":
@@ -190,18 +213,20 @@ func AppendQueries(queries *[]*Query, line int, expr string, startTime time.Time
 	case "skip":
 		skip = true
 	}
+
 	qs, err := atModifierTestCases(expr, startTime)
 	if err != nil {
 		return err
 	}
 	for _, q := range qs {
+		evalTime := q.evalTime.Unix()
+		insExp, rangeExp := buildExp(promExps, q.evalTime)
 		*queries = append(*queries, &Query{
 			name:    strconv.Itoa(line),
 			command: q.expr,
-			params:  url.Values{"db": []string{"db0"}, "time": []string{strconv.FormatInt(q.evalTime.Unix(), 10)}},
-			exp:     strconv.FormatFloat(exp, 'f', 1, 64),
+			params:  url.Values{"db": []string{"db0"}, "time": []string{strconv.FormatInt(evalTime, 10)}},
+			exp:     insExp,
 			path:    "/api/v1/query",
-			pattern: true,
 			ordered: ordered,
 			fail:    fail,
 			skip:    skip,
@@ -210,15 +235,54 @@ func AppendQueries(queries *[]*Query, line int, expr string, startTime time.Time
 			name:    strconv.Itoa(line),
 			command: q.expr,
 			params:  url.Values{"db": []string{"db0"}, "start": []string{strconv.FormatInt(q.evalTime.Add(-time.Minute).Unix(), 10)}, "end": []string{strconv.FormatInt(q.evalTime.Add(time.Minute).Unix(), 10)}, "step": []string{"60"}},
-			exp:     strconv.FormatFloat(exp, 'f', 1, 64),
+			exp:     rangeExp,
 			path:    "/api/v1/query_range",
-			pattern: true,
 			ordered: ordered,
 			fail:    fail,
 			skip:    skip,
 		})
 	}
 	return nil
+}
+
+func buildExp(promExps []*PromExp, evalTime time.Time) (string, string) {
+	matrix := make(promql.Matrix, 0, len(promExps))
+	vector := make(promql.Vector, 0, len(promExps))
+	for _, exp := range promExps {
+		instantPoint := promql.Point{
+			T: evalTime.Unix() * 1000,
+			V: exp.Value.Value,
+		}
+		rangePoint := promql.Point{
+			T: evalTime.Add(-time.Minute).Unix() * 1000,
+			V: exp.Value.Value,
+		}
+		vector = append(vector, promql.Sample{
+			Metric: exp.Metric,
+			Point:  instantPoint,
+		})
+		matrix = append(matrix, promql.Series{
+			Metric: exp.Metric,
+			Points: []promql.Point{rangePoint},
+		})
+	}
+	instantRes := &httpd.PromResponse{
+		Status: httpd.StatusSuccess,
+		Data: &promql2influxql.PromResult{
+			ResultType: string(parser.ValueTypeVector),
+			Result:     vector,
+		},
+	}
+	rangeRes := &httpd.PromResponse{
+		Status: httpd.StatusSuccess,
+		Data: &promql2influxql.PromResult{
+			ResultType: string(parser.ValueTypeMatrix),
+			Result:     matrix,
+		},
+	}
+	instantExp, _ := json.Marshal(instantRes)
+	rangeExp, _ := json.Marshal(rangeRes)
+	return string(instantExp), string(rangeExp)
 }
 
 // getLines returns trimmed lines after removing the comments.
@@ -238,6 +302,7 @@ func getLines(input string) []string {
 func (test *PromTest) parse(input string, t *testing.T, s Server) error {
 	lines := getLines(input)
 	var err error
+	var isLoad bool
 	// Scan for steps line by line.
 	for i := 0; i < len(lines); i++ {
 		l := lines[i]
@@ -250,15 +315,23 @@ func (test *PromTest) parse(input string, t *testing.T, s Server) error {
 			test.clear()
 		case c == "load":
 			var writes []string
+			isLoad = true
 			i, writes, err = parseLoad(lines, i)
 			if err != nil {
 				return err
 			}
-			test.writes = append(test.writes, &Write{data: strings.Join(writes, "\n")})
-			if err := test.init(s); err != nil {
-				t.Fatalf("test init failed: %s", err)
-			}
+			test.writes = append(test.writes, &Write{
+				db:   test.db,
+				rp:   test.rp,
+				data: strings.Join(writes, "\n"),
+			})
 		case strings.HasPrefix(c, "eval"):
+			if isLoad {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
+				isLoad = false
+			}
 			var queries []*Query
 			i, queries, err = test.parseEval(lines, i)
 			RunQueries(queries, t, s)
@@ -270,6 +343,32 @@ func (test *PromTest) parse(input string, t *testing.T, s Server) error {
 		}
 	}
 	return nil
+}
+
+/*
+Copyright 2015 The Prometheus Authors
+This code is originally from: https://github.com/prometheus/prometheus/blob/main/promql/test.go
+*/
+// samplesAlmostEqual returns true if the two sample lines only differ by a
+// small relative error in their sample value.
+func almostEqual(a, b float64) bool {
+	// NaN has no equality but for testing we still want to know whether both values
+	// are NaN.
+	if math.IsNaN(a) && math.IsNaN(b) {
+		return true
+	}
+
+	// Cf. http://floating-point-gui.de/errors/comparison/
+	if a == b {
+		return true
+	}
+
+	diff := math.Abs(a - b)
+
+	if a == 0 || b == 0 || diff < minNormal {
+		return diff < epsilon*minNormal
+	}
+	return diff/(math.Abs(a)+math.Abs(b)) < epsilon
 }
 
 type atModifierTestCase struct {
@@ -344,6 +443,10 @@ func atModifierTestCases(exprStr string, evalTime time.Time) ([]atModifierTestCa
 func (t *PromTest) clear() {
 	t.queries = nil
 	t.writes = nil
+	t.initialized = false
+	if err := t.s.Reset(); err != nil {
+		panic(err.Error())
+	}
 }
 
 func RunQueries(queries []*Query, t *testing.T, s Server) {
