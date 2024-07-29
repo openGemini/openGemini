@@ -62,12 +62,12 @@ const (
 type status string
 
 const (
-	statusSuccess status = "success"
-	statusError   status = "error"
+	StatusSuccess status = "success"
+	StatusError   status = "error"
 
 	// Non-standard status code (originally introduced by nginx) for the case when a client closes
 	// the connection while the server is still processing the request.
-	statusClientClosedConnection = 499
+	StatusClientClosedConnection = 499
 )
 
 var (
@@ -225,7 +225,7 @@ func getEmptyResponse(cmd promql2influxql.PromCommand) *promql2influxql.PromResu
 
 func respondError(w http.ResponseWriter, apiErr *apiError, data interface{}) {
 	b, err := json.Marshal(&PromResponse{
-		Status:    statusError,
+		Status:    StatusError,
 		ErrorType: apiErr.typ,
 		Error:     apiErr.err.Error(),
 		Data:      data,
@@ -243,7 +243,7 @@ func respondError(w http.ResponseWriter, apiErr *apiError, data interface{}) {
 	case errorExec:
 		code = http.StatusUnprocessableEntity
 	case errorCanceled:
-		code = statusClientClosedConnection
+		code = StatusClientClosedConnection
 	case errorTimeout:
 		code = http.StatusServiceUnavailable
 	case errorInternal:
