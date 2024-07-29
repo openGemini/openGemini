@@ -1,0 +1,246 @@
+package httpd
+
+import (
+	"fmt"
+	"log"
+	"net/http"
+	"strconv"
+	"strings"
+	"sync/atomic"
+	"time"
+
+	"github.com/openGemini/openGemini/lib/metrics"
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+	"github.com/openGemini/openGemini/lib/syscontrol"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.uber.org/zap"
+)
+
+var (
+	metricsHandler      http.Handler
+	openGeminiCollector *OpenGeminiCollector
+)
+
+func init() {
+	// 创建一个自定义的注册表
+	registry := prometheus.NewRegistry()
+	// 实例化自定义收集器
+	openGeminiCollector = NewOpenGeminiCollector()
+	// 注册收集器到注册表
+	err := registry.Register(openGeminiCollector)
+	if err != nil {
+		log.Fatal("Failed to register collector:", err)
+	}
+
+	metricsHandler = promhttp.HandlerFor(registry, promhttp.HandlerOpts{Registry: registry})
+}
+
+type OpenGeminiCollector struct {
+	*metrics.BaseCollector
+	indexMap map[string]*metrics.ModuleIndex
+}
+
+func NewOpenGeminiCollector() *OpenGeminiCollector {
+	c := &OpenGeminiCollector{
+		BaseCollector: metrics.NewBaseCollector(metrics.ComIndexRegistry),
+		indexMap:      make(map[string]*metrics.ModuleIndex),
+	}
+	// 初始化指标
+	for moduleName, index := range c.IndexRegistry {
+		desc := make(map[string]*prometheus.Desc)
+		for indexName, help := range index.HelpMap {
+			desc[fmt.Sprintf("last_%s", indexName)] = metrics.NewDesc("", indexName, help, index.Labels)
+		}
+		c.AllModulesDesc[moduleName] = desc
+	}
+
+	return c
+}
+
+func (c *OpenGeminiCollector) Collect(ch chan<- prometheus.Metric) {
+	var indexValue interface{}
+	indexMap := c.indexMap
+	for moduleName, index := range c.IndexRegistry {
+		value, ok := indexMap[moduleName]
+		if ok {
+			// 获取该module的label
+			labelValues := make([]string, 0)
+			for _, labelName := range index.Labels {
+				labelValue, ok := value.LabelValues[labelName]
+				if !ok {
+					labelValues = append(labelValues, "nil")
+				}
+
+				labelValues = append(labelValues, labelValue)
+			}
+
+			for indexName := range index.HelpMap {
+				indexName = fmt.Sprintf("last_%s", indexName)
+				indexValue, ok = value.MetricsMap[indexName]
+				// 指标存在
+				if ok {
+					ch <- prometheus.MustNewConstMetric(c.AllModulesDesc[moduleName][indexName], prometheus.GaugeValue,
+						indexValue.(float64), labelValues...)
+				}
+			}
+		}
+	}
+
+}
+
+func (h *Handler) serveMetrics(w http.ResponseWriter, r *http.Request, user meta2.User) {
+	for moduleName, index := range openGeminiCollector.IndexRegistry {
+		moduleIndex, err := getMetrics(h, r, user, moduleName, index.Labels)
+		if err != nil {
+			continue
+		}
+		openGeminiCollector.indexMap[moduleName] = moduleIndex
+	}
+
+	metricsHandler.ServeHTTP(w, r)
+}
+
+// serverProm
+func getMetrics(h *Handler, r *http.Request, user meta2.User, tableName string, labelNames []string) (*metrics.ModuleIndex, error) {
+	// Retrieve the underlying ResponseWriter or initialize our own.
+	start := time.Now()
+
+	nodeID, _ := strconv.ParseUint(r.FormValue("node_id"), 10, 64)
+	var q *influxql.Query
+	var err error
+	sql := fmt.Sprintf("select last(*) from %s", tableName)
+	for i, labelName := range labelNames {
+		if i == 0 {
+			sql = fmt.Sprintf("%s group by %s", sql, labelName)
+		} else {
+			sql = fmt.Sprintf("%s,%s", sql, labelName)
+		}
+	}
+
+	qr := strings.NewReader(sql)
+	q, err, _ = h.getSqlQuery(r, qr)
+	if err != nil {
+		return nil, err
+	}
+
+	db := h.SQLConfig.Monitor.StoreDatabase
+	var qDuration *statistics.SQLSlowQueryStatistics
+	if !isInternalDatabase(db) {
+		qDuration = statistics.NewSqlSlowQueryStatistics(db)
+		defer func() {
+			d := time.Now().Sub(start)
+			if d.Nanoseconds() > time.Second.Nanoseconds()*10 {
+				qDuration.AddDuration("TotalDuration", d.Nanoseconds())
+				statistics.AppendSqlQueryDuration(qDuration)
+				h.Logger.Info("slow query", zap.Duration("duration", d), zap.String("db", qDuration.DB),
+					zap.String("query", qDuration.Query))
+			}
+		}()
+	}
+
+	// Check authorization.
+	err = h.checkAuthorization(user, q, db)
+	if err != nil {
+		return nil, fmt.Errorf("error authorizing query: " + err.Error())
+	}
+	// Parse chunk size. Use default if not provided or unparsable.
+	chunked, chunkSize, innerChunkSize, err := h.parseChunkSize(r)
+	if err != nil {
+		return nil, err
+	}
+	// Parse whether this is an async command.
+	async := r.FormValue("async") == "true"
+
+	opts := query.ExecutionOptions{
+		Database:        db,
+		RetentionPolicy: r.FormValue("rp"),
+		ChunkSize:       chunkSize,
+		Chunked:         chunked,
+		ReadOnly:        r.Method == "GET",
+		NodeID:          nodeID,
+		InnerChunkSize:  innerChunkSize,
+		ParallelQuery:   atomic.LoadInt32(&syscontrol.ParallelQueryInBatch) == 1,
+		Quiet:           true,
+		Authorizer:      h.getAuthorizer(user),
+	}
+
+	// Make sure if the client disconnects we signal the query to abort
+	var closing chan struct{}
+	if !async {
+		closing = make(chan struct{})
+		done := make(chan struct{})
+
+		opts.AbortCh = closing
+		defer func() {
+			close(done)
+		}()
+		go func() {
+			select {
+			case <-done:
+			case <-r.Context().Done():
+			}
+			close(closing)
+		}()
+	}
+
+	// Execute query
+	results := h.QueryExecutor.ExecuteQuery(q, opts, closing, qDuration)
+
+	//// if we're not chunking, this will be the in memory buffer for all results before sending to client
+	stmtID2Result := make(map[int]*query.Result)
+	//
+	//// Status header is OK once this point is reached.
+	//// Attempt to flush the header immediately so the client gets the header information
+	//// and knows the query was accepted.
+	//// pull all results from the channel
+	rows := 0
+	for r := range results {
+		// Ignore nil results.
+		if r == nil {
+			continue
+		}
+
+		rows = h.getResultRowsCnt(r, rows)
+		if !h.updateStmtId2Result(r, stmtID2Result) {
+			continue
+		}
+		//
+		//	// Drop out of this loop and do not process further results when we hit the row limit.
+		if h.Config.MaxRowLimit > 0 && rows >= h.Config.MaxRowLimit {
+			// If the result is marked as partial, remove that partial marking
+			// here. While the series is partial and we would normally have
+			// tried to return the rest in the next chunk, we are not using
+			// chunking and are truncating the series so we don't want to
+			// signal to the client that we plan on sending another JSON blob
+			// with another result.  The series, on the other hand, still
+			// returns partial true if it was truncated or had more data to
+			// send in a future chunk.
+			r.Partial = false
+			break
+		}
+	}
+
+	resp := h.getStmtResult(stmtID2Result)
+	if resp.Results[0].Err != nil {
+		return nil, resp.Results[0].Err
+	}
+	metricsMap := make(map[string]interface{})
+
+	for i, key := range resp.Results[0].Series[0].Columns {
+		metricsMap[key] = resp.Results[0].Series[0].Values[0][i]
+	}
+	labelValues := make(map[string]string)
+
+	for key, value := range resp.Results[0].Series[0].Tags {
+		labelValues[key] = value
+	}
+
+	return &metrics.ModuleIndex{
+		LabelValues: labelValues,
+		MetricsMap:    metricsMap,
+	}, nil
+}
