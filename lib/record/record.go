@@ -1228,6 +1228,24 @@ func (rec *Record) TryPadColumn() {
 	}
 }
 
+// TryPadColumn2AlignBitmap used to fill the empty columns and ensure bitmap alignment.
+func (rec *Record) TryPadColumn2AlignBitmap() {
+	rows := rec.RowNums()
+	timeCol := rec.TimeColumn()
+	bitMapOffSet := timeCol.BitMapOffset
+	if bitMapOffSet == 0 || rows == 0 {
+		return
+	}
+	bitMapLen := len(timeCol.Bitmap)
+	for i := range rec.ColVals {
+		if rec.ColVals[i].Len == 0 {
+			rec.ColVals[i].PadEmptyCol2AlignBitmap(rec.Schema[i].Type, rows, bitMapOffSet, bitMapLen)
+		} else if rec.ColVals[i].Len > 0 && rec.ColVals[i].Len == rec.ColVals[i].NilCount {
+			rec.ColVals[i].PadEmptyCol2FixBitmap(bitMapOffSet, bitMapLen)
+		}
+	}
+}
+
 func (rec *Record) Size() int {
 	size := 0
 	for i := range rec.Schema {

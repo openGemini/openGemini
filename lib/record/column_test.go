@@ -410,3 +410,58 @@ func TestRemoveLastInteger(t *testing.T) {
 	rows.ColVals[0].RemoveLastInteger()
 	require.Equal(t, 0, rows.RowNums())
 }
+
+func TestColVal_PadEmptyColVal(t *testing.T) {
+	type fields struct {
+		Val          []byte
+		Offset       []uint32
+		Bitmap       []byte
+		BitMapOffset int
+		Len          int
+		NilCount     int
+	}
+	type args struct {
+		colType      int
+		padLen       int
+		bitMapOffset int
+		bitMapLen    int
+	}
+	tests := []struct {
+		name   string
+		fields fields
+		args   args
+	}{
+		{
+			name: "1",
+			fields: fields{
+				Len:      0,
+				NilCount: 0,
+			},
+			args: args{
+				colType:      influx.Field_Type_String,
+				padLen:       24,
+				bitMapOffset: 1,
+				bitMapLen:    4,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cv := &record.ColVal{
+				Val:          tt.fields.Val,
+				Offset:       tt.fields.Offset,
+				Bitmap:       tt.fields.Bitmap,
+				BitMapOffset: tt.fields.BitMapOffset,
+				Len:          tt.fields.Len,
+				NilCount:     tt.fields.NilCount,
+			}
+			cv.PadEmptyCol2AlignBitmap(tt.args.colType, tt.args.padLen, tt.args.bitMapOffset, tt.args.bitMapLen)
+			assert.Equal(t, cv.Len, 24)
+			assert.Equal(t, cv.NilCount, 24)
+			assert.Equal(t, cv.BitMapOffset, 1)
+			assert.Equal(t, len(cv.Val), 0)
+			assert.Equal(t, len(cv.Offset), 24)
+			assert.Equal(t, len(cv.Bitmap), 4)
+		})
+	}
+}

@@ -628,6 +628,7 @@ func (c *ConditionImpl) getNumFilter() (int, error) {
 }
 
 func (c *ConditionImpl) Filter(rec *record.Record, filterBitmap *bitmap.FilterBitmap) error {
+	rec.TryPadColumn2AlignBitmap()
 	if c.isSimpleExpr {
 		if err := c.filterSimplexExpr(rec, filterBitmap); err != nil {
 			return err
