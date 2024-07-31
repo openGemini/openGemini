@@ -719,7 +719,7 @@ func (c *ConditionImpl) filterForOr(rec *record.Record, filterBitmap *bitmap.Fil
 		// Apply for a new bitmap.
 		idx++
 		b := filterBitmap.Bitmap[idx]
-		b.Val = append(b.Val, col.Bitmap...)
+		b.Val = append(b.Val[:0], col.Bitmap...)
 		// Save the compare result in the new bitmap.
 		params := &TypeFunParams{
 			col:     &col,
@@ -743,7 +743,7 @@ func (c *ConditionImpl) filterForOr(rec *record.Record, filterBitmap *bitmap.Fil
 			idx++
 		}
 		b1 := filterBitmap.Bitmap[idx]
-		b1.Val = append(b1.Val, col.Bitmap...)
+		b1.Val = append(b1.Val[:0], col.Bitmap...)
 		// Save the compare result in the new bitmap.
 		b1.Val = e1.rg.Function(&TypeFunParams{
 			col:     &col,
@@ -754,11 +754,11 @@ func (c *ConditionImpl) filterForOr(rec *record.Record, filterBitmap *bitmap.Fil
 			opt:     e1.rg.Opt,
 		})
 		// Apply for a new bitmap.
+		col = rec.ColVals[e2.rg.Idx]
 		idx++
 		b2 := filterBitmap.Bitmap[idx]
-		b2.Val = append(b2.Val, col.Bitmap...)
+		b2.Val = append(b2.Val[:0], col.Bitmap...)
 		// Save the compare result in the new bitmap.
-		col = rec.ColVals[e2.rg.Idx]
 		b2.Val = e2.rg.Function(&TypeFunParams{
 			col:     &col,
 			compare: e2.rg.Compare,
@@ -809,7 +809,7 @@ func (c *ConditionImpl) filterForAnd(rec *record.Record, filterBitmap *bitmap.Fi
 			idx++
 		}
 		b := filterBitmap.Bitmap[idx]
-		b.Val = append(b.Val, col.Bitmap...)
+		b.Val = append(b.Val[:0], col.Bitmap...)
 		// Save the AND result in the new bitmap.
 		b.Val = e1.rg.Function(&TypeFunParams{
 			col:     &col,
