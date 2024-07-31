@@ -44,7 +44,6 @@ type ColumnIterator struct {
 
 	mu     sync.RWMutex
 	closed bool
-	signal chan struct{}
 	field  record.Field
 
 	minTime int64
@@ -53,9 +52,8 @@ type ColumnIterator struct {
 
 func NewColumnIterator(fi *FileIterator) *ColumnIterator {
 	itr := &ColumnIterator{
-		fi:     fi,
-		sr:     NewSegmentReader(fi),
-		signal: make(chan struct{}),
+		fi: fi,
+		sr: NewSegmentReader(fi),
 	}
 	itr.NextChunkMeta()
 	return itr
@@ -126,6 +124,10 @@ func (itr *ColumnIterator) Run(p ColumnIteratorPerformer) error {
 func (itr *ColumnIterator) IterCurrentChunk(p ColumnIteratorPerformer) error {
 	if itr.isClosed() {
 		return errClosed
+	}
+
+	if itr.Error() != nil {
+		return itr.Error()
 	}
 
 	sid := itr.fi.curtChunkMeta.sid
@@ -226,7 +228,6 @@ func (itr *ColumnIterator) Close() {
 		return
 	}
 	itr.closed = true
-	close(itr.signal)
 }
 
 func (itr *ColumnIterator) resetCol() {

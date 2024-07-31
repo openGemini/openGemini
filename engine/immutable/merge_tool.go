@@ -141,9 +141,9 @@ func (mt *mergeTool) execute(mst string, order, unordered *TSSPFiles) (*TSSPFile
 	var tempFiles []fileops.File
 
 	defer func() {
-		performers.Done()
 		performers.Close()
 		ur.Close()
+		performers.Release()
 
 		if err != nil && len(tempFiles) > 0 {
 			for _, f := range tempFiles {
