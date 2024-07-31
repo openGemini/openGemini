@@ -157,14 +157,11 @@ func (b *IndexBuilder) WriteDetachedMeta(startId, endId uint64, offset, size uin
 	var num int
 	var err error
 	if num, err = b.writer.WriteData(b.meta); err != nil {
-		return err
-	}
-
-	if err != nil {
 		err = errno.NewError(errno.WriteFileFailed, err)
 		b.log.Error("write pkIndex meta fail", zap.Error(err))
 		return err
 	}
+
 	if num != len(b.meta) {
 		b.log.Error("write pkIndex meta fail", zap.String("file", b.fd.Name()),
 			zap.Ints("size", []int{len(b.encodeChunk), num}))
