@@ -17,9 +17,10 @@ limitations under the License.
 package immutable_test
 
 import (
-	"fmt"
 	"testing"
+	"time"
 
+	"github.com/influxdata/influxdb/toml"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/stretchr/testify/require"
@@ -50,10 +51,47 @@ func TestFullCompactOneFile(t *testing.T) {
 
 		require.NoError(t, mh.store.FullCompact(1))
 		mh.store.Wait()
-		fmt.Println(len(mh.store.Order["mst"].Files()))
 	}
 
 	require.NoError(t, mh.store.FullCompact(1))
 	mh.store.Wait()
 	require.Equal(t, 1, len(mh.store.Order["mst"].Files()))
+}
+
+func TestMergeWithParquetTask(t *testing.T) {
+	var begin int64 = 1e12
+	defer beforeTest(t, 10)()
+	schemas := getDefaultSchemas()
+
+	immutable.SetMergeFlag4TsStore(1)
+	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
+	defer mh.store.Close()
+	rg := newRecordGenerator(begin, defaultInterval, false)
+
+	conf := config.GetStoreConfig()
+	conf.TSSPToParquetLevel = 2
+	conf.Merge.MergeSelfOnly = true
+	conf.Merge.MinInterval = 0
+	conf.Merge.MaxMergeSelfLevel = 4
+	defer func() {
+		conf.Merge.MinInterval = toml.Duration(300 * time.Second)
+		conf.TSSPToParquetLevel = 0
+		conf.Merge.MaxMergeSelfLevel = 0
+		conf.Merge.MergeSelfOnly = false
+	}()
+
+	rg.setBegin(begin)
+	mh.addRecord(100, rg.generate(schemas, 1))
+	require.NoError(t, mh.saveToOrder())
+
+	for i := 0; i < 100; i++ {
+		rg.setBegin(begin).incrBegin(i + 5)
+		mh.addRecord(100, rg.generate(schemas, 1))
+		require.NoError(t, mh.saveToUnordered())
+	}
+
+	require.NoError(t, mh.mergeAndCompact(false))
+	mh.store.Wait()
+	require.NoError(t, mh.mergeAndCompact(false))
+	mh.store.Wait()
 }

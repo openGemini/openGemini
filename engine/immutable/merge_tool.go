@@ -199,15 +199,16 @@ func (mt *mergeTool) Release() {
 func (mt *mergeTool) mergeSelf(ctx *MergeContext) {
 	mt.mts.lmt.Update(ctx.mst)
 
-	if ctx.level <= MergeSelfFastModeMaxLevel {
-		mt.mergeSelfFastMode(ctx)
+	parquetPlan := NewTSSP2ParquetPlan(ctx.level + 1)
+	if ctx.level <= MergeSelfFastModeMaxLevel || parquetPlan.Enable() {
+		mt.mergeSelfFastMode(ctx, parquetPlan)
 		return
 	}
 
 	mt.mergeSelfStreamMode(ctx)
 }
 
-func (mt *mergeTool) mergeSelfFastMode(ctx *MergeContext) {
+func (mt *mergeTool) mergeSelfFastMode(ctx *MergeContext, parquetPlan *TSSP2ParquetPlan) {
 	files, err := mt.mts.getFilesByPath(ctx.mst, ctx.unordered.path, false)
 	if err != nil {
 		mt.zlg.Error("failed to get files", zap.Error(err))
@@ -216,6 +217,10 @@ func (mt *mergeTool) mergeSelfFastMode(ctx *MergeContext) {
 
 	ms := NewMergeSelf(mt.mts, mt.lg)
 	defer ms.Stop()
+
+	if parquetPlan.Enable() {
+		ms.SetHook(parquetPlan)
+	}
 
 	mt.mts.Listen(ms.signal, func() {
 		ms.Stop()

@@ -137,6 +137,12 @@ func putStreamIterators(itr *StreamIterators) {
 	}
 }
 
+type StreamCompactHook interface {
+	OnWriteChunkMeta(*ChunkMeta)
+	OnNewFile(f TSSPFile)
+	EnableSplitFile() bool
+}
+
 type StreamIterators struct {
 	closed        chan struct{}
 	stopCompMerge chan struct{}
@@ -195,6 +201,12 @@ type StreamIterators struct {
 	log        *Log.Logger
 
 	maxTime int64
+
+	hook StreamCompactHook
+}
+
+func (c *StreamIterators) SetHook(hook StreamCompactHook) {
+	c.hook = hook
 }
 
 func (c *StreamIterators) RemoveTmpFiles() {
@@ -505,6 +517,11 @@ func (c *StreamIterators) updateChunkStat(id uint64, maxT int64) {
 
 func (c *StreamIterators) writeMetaToDisk() error {
 	cm := &c.dstMeta
+
+	if c.hook != nil {
+		c.hook.OnWriteChunkMeta(cm)
+	}
+
 	cm.size = uint32(c.writer.DataSize() - cm.offset)
 	cm.columnCount = uint32(len(cm.colMeta))
 	cm.segCount = uint32(len(cm.timeRange))
@@ -967,7 +984,7 @@ func (c *StreamIterators) compact(files []TSSPFile, level uint16, isOrder bool) 
 			}
 			// check whether the file size exceeds the limit.
 			fSize := c.Size()
-			if fSize >= c.Conf.fileSizeLimit || splitFile {
+			if c.enableSplitFile() && (fSize >= c.Conf.fileSizeLimit || splitFile) {
 				f, err := c.NewTSSPFile(true)
 				if err != nil {
 					c.log.Error("new tssp file fail", zap.Error(err))
@@ -999,6 +1016,9 @@ func (c *StreamIterators) compact(files []TSSPFile, level uint16, isOrder bool) 
 		}
 		if f != nil {
 			c.files = append(c.files, f)
+			if c.hook != nil {
+				c.hook.OnNewFile(f)
+			}
 		}
 	} else {
 		c.removeEmptyFile()
@@ -1016,6 +1036,10 @@ func (c *StreamIterators) columnIdxForIters(fieldIndex, itrFieldIndex []int, ref
 			itrFieldIndex[i] = fieldIndex[i] + 1
 		}
 	}
+}
+
+func (c *StreamIterators) enableSplitFile() bool {
+	return c.hook == nil || c.hook.EnableSplitFile()
 }
 
 func resetItrFieldIndex(itrFieldIndex []int) {
