@@ -501,7 +501,6 @@ func (cw *columnWriter) flush(sid uint64, ref *record.Field) error {
 type MergePerformers struct {
 	closed bool
 	signal chan struct{}
-	wg     sync.WaitGroup
 	once   sync.Once
 
 	items []*mergePerformer
@@ -516,7 +515,6 @@ func NewMergePerformers(ur *UnorderedReader) *MergePerformers {
 		signal:      make(chan struct{}),
 		ur:          ur,
 	}
-	performers.wg.Add(1)
 	return performers
 }
 
@@ -552,10 +550,6 @@ func (c *MergePerformers) Pop() interface{} {
 	return v
 }
 
-func (c *MergePerformers) Done() {
-	c.wg.Done()
-}
-
 func (c *MergePerformers) Close() {
 	c.once.Do(func() {
 		close(c.signal)
@@ -563,13 +557,15 @@ func (c *MergePerformers) Close() {
 		for _, item := range c.items {
 			item.Close()
 		}
-		c.wg.Wait()
-		for _, item := range c.items {
-			item.Release()
-		}
-		c.items = nil
-		c.ur = nil
 	})
+}
+
+func (c *MergePerformers) Release() {
+	for _, item := range c.items {
+		item.Release()
+	}
+	c.items = nil
+	c.ur = nil
 }
 
 func (c *MergePerformers) Closed() bool {

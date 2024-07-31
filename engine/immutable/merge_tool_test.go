@@ -1176,6 +1176,6 @@ func TestMergePerformers_close(t *testing.T) {
 		performers.Push(p)
 	}
 
-	performers.Done()
 	performers.Close()
+	performers.Release()
 }

@@ -21,7 +21,9 @@ import (
 	"testing"
 
 	"github.com/openGemini/openGemini/engine/immutable"
+	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/stretchr/testify/require"
 )
 
@@ -73,4 +75,27 @@ func TestBufferReader(t *testing.T) {
 		require.NoError(t, err2)
 		require.Equal(t, buf2, buf1)
 	}
+}
+
+func TestColumnIterator_Error(t *testing.T) {
+	defer beforeTest(t, 0)
+
+	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
+
+	rg := newRecordGenerator(1e15, defaultInterval, true)
+	mh.addRecord(100, rg.generate(getDefaultSchemas(), 10))
+	require.NoError(t, mh.saveToOrder())
+
+	files, ok := mh.store.GetTSSPFiles("mst", true)
+	require.True(t, ok)
+
+	file := files.Files()[0]
+
+	fi := immutable.NewFileIterator(file, logger.NewLogger(errno.ModuleMerge))
+	require.NoError(t, file.Close())
+	ci := immutable.NewColumnIterator(fi)
+
+	p := &MockPerformer{}
+	require.NotEmpty(t, ci.IterCurrentChunk(p))
+	ci.Close()
 }
