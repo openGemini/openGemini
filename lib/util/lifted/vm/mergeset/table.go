@@ -258,16 +258,17 @@ func (pw *partWrapper) decRef() {
 		return
 	}
 
+	// Release the file handle before deleting the file to prevent the service from panicking when running on Windows.
+	pw.p.MustClose()
 	if pw.removeWG != nil {
 		fs.MustRemoveAllWithDoneCallback(pw.p.path, pw.lock, pw.removeWG.Done)
 	}
+	pw.p = nil
 
 	if pw.mp != nil {
 		putInmemoryPart(pw.mp)
 		pw.mp = nil
 	}
-	pw.p.MustClose()
-	pw.p = nil
 }
 
 // OpenTable opens a table on the given path.
