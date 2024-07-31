@@ -76,6 +76,8 @@ func (t *tsImmTableImpl) compactToLevel(m *MmsTables, group FilesInfo, full, isN
 	lcLog.Debug("start compact file", zap.Uint64("shid", group.shId), zap.Any("seqs", group.oldFids), zap.Time("start", start))
 	lcLog.Debug(fmt.Sprintf("compactionGroup: name=%v, groups=%v", group.name, group.oldFids))
 
+	parquetPlan := NewTSSP2ParquetPlan(group.toLevel)
+
 	var oldFilesSize int
 	var newFiles []TSSPFile
 	var compactErr error
@@ -95,6 +97,11 @@ func (t *tsImmTableImpl) compactToLevel(m *MmsTables, group FilesInfo, full, isN
 			group.compIts.Close()
 			return nil
 		}
+
+		if parquetPlan.Enable() {
+			compItrs.SetHook(parquetPlan)
+		}
+
 		compItrs.WithLog(lcLog)
 		oldFilesSize = compItrs.estimateSize
 		newFiles, compactErr = compItrs.compact(group.oldFiles, group.toLevel, true)
