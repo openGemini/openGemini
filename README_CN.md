@@ -2,9 +2,9 @@
 
 ![color](./images/github_log_591x183.svg)
 
-![License](https://img.shields.io/badge/license-Apache2.0-green) ![Language](https://img.shields.io/badge/Language-Go-blue.svg)  ![codeCov](https://img.shields.io/codecov/c/gh/openGemini/openGemini)  ![release](https://img.shields.io/github/v/release/openGemini/openGemini)   
+![license](https://img.shields.io/badge/开源许可证-Apache2.0-green) ![language](https://img.shields.io/badge/语言-Go-blue.svg) ![codeCov](https://img.shields.io/codecov/c/gh/openGemini/openGemini) [![release](https://img.shields.io/github/v/tag/opengemini/opengemini?label=发布版本&color=blue)](https://github.com/opengemini/opengemini/releases)
 
-简体中文 | [English](README.md)
+[English](README.md) | 简体中文
 
 [官网](http://www.openGemini.org) | [文档](https://docs.opengemini.org/zh/guide) | [贡献指南](CONTRIBUTION_CN.md) | [RoadMap](ROADMAP.md) | [性能](https://docs.opengemini.org/zh/guide/introduction/performance.html)
 
@@ -223,9 +223,9 @@ openGemini遵循[CNCF 行为守则](https://github.com/cncf/foundation/blob/mast
 
 2. 扫描下方二维码关注openGemini公众号
 
-  ![img](images/qrt.png)
+![img](images/qrt.png)
 
-3. 社区邮箱   
+3. 社区邮箱
 
    community.ts@opengemini.org
 
