@@ -1,5 +1,5 @@
 /*
-Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
+Copyright right 2024 openGemini author.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -29,11 +29,10 @@ import (
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
-	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"go.uber.org/zap"
 )
 
 var (
@@ -62,14 +61,14 @@ type OpenGeminiCollector struct {
 
 func NewOpenGeminiCollector() *OpenGeminiCollector {
 	c := &OpenGeminiCollector{
-		BaseCollector: metrics.NewBaseCollector(metrics.ComIndexRegistry),
+		BaseCollector: metrics.NewBaseCollector(),
 		indexMap:      make(map[string]*metrics.ModuleIndex),
 	}
 	// Initialize metrics
 	for moduleName, index := range c.IndexRegistry {
 		desc := make(map[string]*prometheus.Desc)
 		for indexName, help := range index.HelpMap {
-			desc[fmt.Sprintf("last_%s", indexName)] = metrics.NewDesc("", indexName, help, index.Labels)
+			desc[indexName] = metrics.NewDesc("", indexName, help, index.Labels)
 		}
 		c.AllModulesDesc[moduleName] = desc
 	}
@@ -82,25 +81,30 @@ func (c *OpenGeminiCollector) Collect(ch chan<- prometheus.Metric) {
 	indexMap := c.indexMap
 	for moduleName, index := range c.IndexRegistry {
 		value, ok := indexMap[moduleName]
+		labelErr := false
 		if ok {
 			// Get the label of the module
 			labelValues := make([]string, 0)
 			for _, labelName := range index.Labels {
 				labelValue, ok := value.LabelValues[labelName]
 				if !ok {
-					labelValues = append(labelValues, "nil")
+					labelErr = true
+					break
 				}
-
 				labelValues = append(labelValues, labelValue)
+			}
+			if labelErr {
+				continue
 			}
 
 			for indexName := range index.HelpMap {
-				indexName = fmt.Sprintf("last_%s", indexName)
 				indexValue, ok = value.MetricsMap[indexName]
 				// If the indicator exists, write the indicator
 				if ok {
-					ch <- prometheus.MustNewConstMetric(c.AllModulesDesc[moduleName][indexName], prometheus.GaugeValue,
+					m := prometheus.MustNewConstMetric(c.AllModulesDesc[moduleName][indexName], prometheus.GaugeValue,
 						indexValue.(float64), labelValues...)
+
+					ch <- prometheus.NewMetricWithTimestamp(value.Timestamp, m)
 				}
 			}
 		}
@@ -108,7 +112,7 @@ func (c *OpenGeminiCollector) Collect(ch chan<- prometheus.Metric) {
 
 }
 
-func (h *Handler) serveMetrics(w http.ResponseWriter, r *http.Request, user meta2.User) {
+func (h *Handler) serveMetrics(w http.ResponseWriter, r *http.Request, user meta.User) {
 	for moduleName, index := range openGeminiCollector.IndexRegistry {
 		moduleIndex, err := getMetrics(h, r, user, moduleName, index.Labels)
 		if err != nil {
@@ -120,15 +124,12 @@ func (h *Handler) serveMetrics(w http.ResponseWriter, r *http.Request, user meta
 	metricsHandler.ServeHTTP(w, r)
 }
 
-// serverProm
-func getMetrics(h *Handler, r *http.Request, user meta2.User, tableName string, labelNames []string) (*metrics.ModuleIndex, error) {
-	// Retrieve the underlying ResponseWriter or initialize our own.
-	start := time.Now()
-
+// // getMetrics serverProm
+func getMetrics(h *Handler, r *http.Request, user meta.User, tableName string, labelNames []string) (*metrics.ModuleIndex, error) {
 	nodeID, _ := strconv.ParseUint(r.FormValue("node_id"), 10, 64)
 	var q *influxql.Query
 	var err error
-	sql := fmt.Sprintf("select last(*) from %s", tableName)
+	sql := fmt.Sprintf("select * from %s", tableName)
 	for i, labelName := range labelNames {
 		if i == 0 {
 			sql = fmt.Sprintf("%s group by %s", sql, labelName)
@@ -136,6 +137,7 @@ func getMetrics(h *Handler, r *http.Request, user meta2.User, tableName string, 
 			sql = fmt.Sprintf("%s,%s", sql, labelName)
 		}
 	}
+	sql = fmt.Sprintf("%s order by time DESC limit 1", sql)
 
 	qr := strings.NewReader(sql)
 	q, err, _ = h.getSqlQuery(r, qr)
@@ -145,18 +147,6 @@ func getMetrics(h *Handler, r *http.Request, user meta2.User, tableName string, 
 
 	db := h.SQLConfig.Monitor.StoreDatabase
 	var qDuration *statistics.SQLSlowQueryStatistics
-	if !isInternalDatabase(db) {
-		qDuration = statistics.NewSqlSlowQueryStatistics(db)
-		defer func() {
-			d := time.Now().Sub(start)
-			if d.Nanoseconds() > time.Second.Nanoseconds()*10 {
-				qDuration.AddDuration("TotalDuration", d.Nanoseconds())
-				statistics.AppendSqlQueryDuration(qDuration)
-				h.Logger.Info("slow query", zap.Duration("duration", d), zap.String("db", qDuration.DB),
-					zap.String("query", qDuration.Query))
-			}
-		}()
-	}
 
 	// Check authorization.
 	err = h.checkAuthorization(user, q, db)
@@ -246,18 +236,24 @@ func getMetrics(h *Handler, r *http.Request, user meta2.User, tableName string, 
 	}
 	metricsMap := make(map[string]interface{})
 
-	for i, key := range resp.Results[0].Series[0].Columns {
-		metricsMap[key] = resp.Results[0].Series[0].Values[0][i]
-	}
 	labelValues := make(map[string]string)
+	for m, res := range resp.Results {
+		for n, series := range res.Series {
+			// Get label
+			for key, value := range series.Tags {
+				labelValues[key] = value
+			}
 
-	// Get label
-	for key, value := range resp.Results[0].Series[0].Tags {
-		labelValues[key] = value
+			// Get metrics
+			for i, metricName := range series.Columns {
+				metricsMap[metricName] = resp.Results[m].Series[n].Values[n][i]
+			}
+		}
 	}
 
 	return &metrics.ModuleIndex{
 		LabelValues: labelValues,
 		MetricsMap:  metricsMap,
+		Timestamp:   metricsMap["time"].(time.Time),
 	}, nil
 }
