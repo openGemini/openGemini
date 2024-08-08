@@ -48,7 +48,6 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/pingcap/failpoint"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/prompb"
 	"go.uber.org/zap"
@@ -259,7 +258,7 @@ func NewHandler(c config.Config) *Handler {
 		},
 		Route{
 			"prometheus-metrics",
-			"GET", "/metrics", false, true, promhttp.Handler().ServeHTTP,
+			"GET", "/metrics", false, true, h.serveMetrics,
 		},
 		Route{
 			"failpoint",
