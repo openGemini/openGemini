@@ -17,14 +17,9 @@ limitations under the License.
 package metrics
 
 import (
-	"os"
-	"path"
 	"time"
 
-	"github.com/BurntSushi/toml"
 	"github.com/prometheus/client_golang/prometheus"
-	"golang.org/x/text/encoding/unicode"
-	"golang.org/x/text/transform"
 )
 
 // ModuleIndex stores the indicators of each module
@@ -46,47 +41,4 @@ func NewDesc(subsystem, name, help string, labels []string) *prometheus.Desc {
 		labels,
 		nil,
 	)
-}
-
-type BaseCollector struct {
-	AllModulesDesc map[string]map[string]*prometheus.Desc
-	IndexRegistry  map[string]*Metric
-}
-
-func NewBaseCollector() *BaseCollector {
-	// Read indicator config
-	tomlData, err := os.ReadFile(path.Clean("../lib/metrics/index.conf"))
-	if err != nil {
-		panic(err)
-	}
-	var result map[string]*Metric = make(map[string]*Metric)
-
-	dec := unicode.BOMOverride(transform.Nop)
-	content, _, err := transform.Bytes(dec, tomlData)
-	if err != nil {
-		panic(err)
-	}
-
-	_, err = toml.Decode(string(content), &result)
-	if err != nil {
-		panic(err)
-	}
-
-	c := &BaseCollector{
-		AllModulesDesc: make(map[string]map[string]*prometheus.Desc),
-		IndexRegistry:  result,
-	}
-
-	return c
-}
-
-func (c *BaseCollector) Collect(ch chan<- prometheus.Metric) {
-}
-
-func (c *BaseCollector) Describe(ch chan<- *prometheus.Desc) {
-	for _, v := range c.AllModulesDesc {
-		for _, desc := range v {
-			ch <- desc
-		}
-	}
 }
