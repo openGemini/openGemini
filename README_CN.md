@@ -83,7 +83,7 @@ openGemini是一款云原生分布式时序数据库，主要面向物联网和�
 
 ### 编译环境信息
 
-[GO](https://golang.org/dl/) version v1.19+
+[GO](https://golang.org/dl/) version v1.20+
 
 [Python](https://www.python.org/downloads/) version v3.7+
 

@@ -135,7 +135,7 @@ We support the following platforms:
 
 #### Compilation environment information
 
-[GO](https://golang.org/dl/) version v1.19+
+[GO](https://golang.org/dl/) version v1.20+
 
 [Python](https://www.python.org/downloads/) version v3.7+
 
