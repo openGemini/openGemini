@@ -108,7 +108,7 @@ func getMetrics(h *Handler, r *http.Request, user meta.User, tableName string) (
 	nodeID, _ := strconv.ParseUint(r.FormValue("node_id"), 10, 64)
 	var q *influxql.Query
 	var err error
-	sql := fmt.Sprintf("select last(*) from %s where time >= now()-1m group by *", tableName)
+	sql := fmt.Sprintf("select last(*) from '%s' where time >= now()-1m group by *", tableName)
 
 	qr := strings.NewReader(sql)
 	q, err, _ = h.getSqlQuery(r, qr)
