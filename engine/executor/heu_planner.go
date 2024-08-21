@@ -382,7 +382,7 @@ func (dag *HeuDag) AddEdge(from *HeuVertex, to *HeuVertex) bool {
 	edge := NewHeuEdge(from, to)
 
 	if _, ok := dag.edgeSet[edge]; ok {
-		return !ok
+		return false
 	}
 	dag.edgeSet[edge] = struct{}{}
 
