@@ -111,6 +111,7 @@ func buildMaterializeInRowDataType() hybridqp.RowDataType {
 		influxql.VarRef{Val: "age_cast", Type: influxql.Integer},
 		influxql.VarRef{Val: "alive_cast", Type: influxql.Boolean},
 		influxql.VarRef{Val: "name_cast", Type: influxql.String},
+		influxql.VarRef{Val: "val0", Type: influxql.Float},
 	)
 
 	return rowDataType
@@ -147,6 +148,7 @@ func buildMaterializeOutRowDataType() hybridqp.RowDataType {
 		influxql.VarRef{Val: "float_string", Type: influxql.String},
 		influxql.VarRef{Val: "int_string", Type: influxql.String},
 		influxql.VarRef{Val: "bool_string", Type: influxql.String},
+		influxql.VarRef{Val: "value", Type: influxql.Float},
 	)
 
 	return rowDataType
@@ -477,6 +479,17 @@ func createMaterializeOps() []hybridqp.ExprOptions {
 				Name: "cast_string",
 				Args: []influxql.Expr{
 					&influxql.VarRef{Val: "alive_cast", Type: influxql.Boolean},
+				},
+			},
+		},
+		{
+			Expr: &influxql.Call{
+				Name: "timestamp_prom",
+				Args: []influxql.Expr{
+					&influxql.VarRef{
+						Val:  "val0",
+						Type: influxql.Float,
+					},
 				},
 			},
 		},

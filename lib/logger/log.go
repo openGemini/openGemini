@@ -18,10 +18,12 @@ package logger
 
 import (
 	"fmt"
+	"log"
 
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/crypto"
 	"github.com/openGemini/openGemini/lib/util"
+	"go.etcd.io/etcd/raft/v3"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"gopkg.in/natefinch/lumberjack.v2"
@@ -145,4 +147,15 @@ func newEncoder() zapcore.Encoder {
 	}
 
 	return zapcore.NewJSONEncoder(encoderConfig)
+}
+
+var srLogger raft.Logger
+
+func InitSrLogger(conf config.Logger) {
+	ioW := conf.NewLumberjackLogger(config.DefaultStoreRaftLoggerName)
+	srLogger = &raft.DefaultLogger{Logger: log.New(ioW, "raft", log.LstdFlags)}
+}
+
+func GetSrLogger() raft.Logger {
+	return srLogger
 }

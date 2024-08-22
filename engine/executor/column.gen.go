@@ -832,6 +832,24 @@ func (b *Bitmap) containsInt(x int) bool {
 	return !theByte.isZero(bitPos)
 }
 
+func (b *Bitmap) setByIndex(x int) {
+	byteIdx := x >> 3
+	if byteIdx >= len(b.bits) {
+		return
+	} else if byteIdx < 0 {
+		return
+	}
+	bitPos := x % bitSize
+	theByte := Byte(b.bits[byteIdx])
+	isZero := theByte.isZero(bitPos)
+	if !isZero {
+		return
+	}
+	theByte = theByte | 1<<(bitSize-bitPos-1)
+	b.bits[byteIdx] = uint8(theByte)
+	b.nilCount--
+}
+
 // rank returns the number of integers that are smaller or equal to x (Rank(infinity) would be GetCardinality()).
 // If you pass the smallest value, you get the value 1. If you pass a value that is smaller than the smallest
 // value, you get 0.

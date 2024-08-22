@@ -345,7 +345,7 @@ func TestColumnStoreReaderFunctions(t *testing.T) {
 	assert2.Equal(t, reader.GetOutputNumber(nil), 0)
 	assert2.Equal(t, reader.GetInputNumber(nil), 0)
 	reader.sendChunk(nil)
-	assert2.Equal(t, *(reader.closedSignal), int32(1))
+	assert2.Equal(t, *(reader.closedSignal), true)
 }
 
 type MockStoreEngine struct {
@@ -359,8 +359,8 @@ func NewMockStoreEngine() *MockStoreEngine {
 func (s *MockStoreEngine) ReportLoad() {
 }
 
-func (s *MockStoreEngine) CreateLogicPlan(_ context.Context, _ string, _ uint32, _ uint64, _ influxql.Sources, _ hybridqp.Catalog) (hybridqp.QueryNode, error) {
-	return nil, nil
+func (s *MockStoreEngine) CreateLogicPlan(ctx context.Context, db string, ptId uint32, shardID uint64, sources influxql.Sources, schema hybridqp.Catalog) (hybridqp.QueryNode, error) {
+	return s.shard.CreateLogicalPlan(ctx, sources, schema.(*executor.QuerySchema))
 }
 
 func (s *MockStoreEngine) GetIndexInfo(db string, ptId uint32, shardID uint64, schema hybridqp.Catalog) (interface{}, error) {
@@ -456,9 +456,8 @@ func TestColumnStoreReader(t *testing.T) {
 	if err = sh.WriteRows(pts, nil); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(time.Second * 1)
 	sh.ForceFlush()
-	time.Sleep(time.Second * 2)
+	sh.waitSnapshot()
 
 	// set the primary index reader
 	sh.pkIndexReader = sparseindex.NewPKIndexReader(util.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)

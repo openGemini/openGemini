@@ -16,7 +16,7 @@ limitations under the License.
 
 /*
 Copyright 2020 Dgraph Labs, Inc. and Contributors
-This code is originally from: https://github.com/solsson/dgraph/blob/85a3dea0013ca8f33977f06b8e2aea626cf15a37/raftwal/log.go
+This code is originally from: https://github.com/dgraph-io/dgraph/blob/v23.1.1/raftwal/log.go
 */
 
 package raftlog
@@ -41,11 +41,11 @@ import (
 
 maxSize: 32MB
 
-|----------------------slots------------------|--------------logFileOffset--------------...
-|--------slot----------|---------slot---------|--------------logFileOffset--------------...
-|Term Index Type Offset|Term Index Type Offset|size offset filename|size offset filename...
+|----------------------slots------------------|--------logFileOffset--------...
+|--------slot----------|---------slot---------|--------logFileOffset--------...
+|Term Index Type Offset|Term Index Type Offset|size data|size data|size data...
                                               ↑
-                                     logFileOffset(10MB)
+                                     logFileOffset
 slot size: 4*8=32 byte
 
 */

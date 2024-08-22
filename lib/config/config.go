@@ -17,6 +17,7 @@ limitations under the License.
 package config
 
 import (
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -33,6 +34,13 @@ import (
 // Use byte 0 to replace spaces as the separator of stream group values.
 const StreamGroupValueSeparator byte = 0
 const StreamGroupValueStrSeparator string = "\x00"
+
+var DefaultCipherSuites = []uint16{
+	tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+	tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+	tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+	tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+}
 
 type Validator interface {
 	Validate() error

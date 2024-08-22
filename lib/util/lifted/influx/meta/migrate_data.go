@@ -34,7 +34,7 @@ func (data *Data) CheckCanMoveDb(db string) error {
 	}
 
 	var ptId uint32
-	ptNum := data.GetEffectivePtNum(db)
+	ptNum := data.GetClusterPtNum()
 	for ptId < ptNum {
 		dbPtId := db + seperatorChar + fmt.Sprintf("%d", ptId)
 		if data.MigrateEvents[dbPtId] != nil {

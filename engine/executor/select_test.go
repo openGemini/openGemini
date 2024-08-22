@@ -22,6 +22,7 @@ import (
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 )
 
 func TestSchemaOverLimit(t *testing.T) {
@@ -59,4 +60,99 @@ func Test_defaultQueryExecutorBuilderCreator(t *testing.T) {
 			}
 		})
 	}
+}
+
+func retNodeHashAggCheck(t *testing.T, node hybridqp.QueryNode) {
+	if _, ok := node.(*LogicalHashAgg); !ok {
+		t.Fatal("retNodeHashAggCheck err")
+	}
+}
+
+func retNodeStreamAggCheck(t *testing.T, node hybridqp.QueryNode) {
+	if _, ok := node.(*LogicalAggregate); !ok {
+		t.Fatal("retNodeStreamAggCheck err")
+	}
+}
+
+func Test_BuildAggNode(t *testing.T) {
+	lowerOpt := &query.ProcessorOptions{
+		PromQuery: true,
+	}
+	upperOpt := &query.ProcessorOptions{
+		LowerOpt:       lowerOpt,
+		PromQuery:      true,
+		GroupByAllDims: true,
+	}
+	schema := &QuerySchema{
+		opt: upperOpt,
+	}
+	builder := NewLogicalPlanBuilderImpl(schema)
+	builder.Series()
+	buildAggNode(builder, schema, false)
+	retNodeStreamAggCheck(t, builder.stack.Pop())
+
+	upperOpt.GroupByAllDims = false
+	upperOpt.Without = true
+	lowerOpt.GroupByAllDims = true
+	builder.Series()
+	buildAggNode(builder, schema, false)
+	retNodeStreamAggCheck(t, builder.stack.Pop())
+
+	lowerOpt.GroupByAllDims = false
+	lowerOpt.Without = true
+	lowerOpt.Dimensions = []string{"a", "b"}
+	upperOpt.Dimensions = []string{"a"}
+	builder.Series()
+	buildAggNode(builder, schema, false)
+	retNodeStreamAggCheck(t, builder.stack.Pop())
+
+	upperOpt.Dimensions = []string{"c"}
+	builder.Series()
+	buildAggNode(builder, schema, false)
+	retNodeHashAggCheck(t, builder.stack.Pop())
+
+	lowerOpt.Without = false
+	upperOpt.Dimensions = []string{"b"}
+	builder.Series()
+	buildAggNode(builder, schema, false)
+	retNodeStreamAggCheck(t, builder.stack.Pop())
+
+	upperOpt.Dimensions = []string{"a"}
+	builder.Series()
+	buildAggNode(builder, schema, false)
+	retNodeHashAggCheck(t, builder.stack.Pop())
+
+	upperOpt.Without = false
+	lowerOpt.GroupByAllDims = true
+	lowerOpt.Dimensions = nil
+	builder.Series()
+	buildAggNode(builder, schema, false)
+	retNodeHashAggCheck(t, builder.stack.Pop())
+
+	lowerOpt.GroupByAllDims = false
+	lowerOpt.Without = true
+	lowerOpt.Dimensions = []string{"a"}
+	builder.Series()
+	buildAggNode(builder, schema, false)
+	retNodeStreamAggCheck(t, builder.stack.Pop())
+
+	lowerOpt.Dimensions = []string{"b"}
+	builder.Series()
+	buildAggNode(builder, schema, false)
+	retNodeHashAggCheck(t, builder.stack.Pop())
+
+	lowerOpt.Without = false
+	builder.Series()
+	buildAggNode(builder, schema, false)
+	retNodeHashAggCheck(t, builder.stack.Pop())
+
+	upperOpt.Dimensions = []string{"b"}
+	builder.Series()
+	buildAggNode(builder, schema, false)
+	retNodeStreamAggCheck(t, builder.stack.Pop())
+
+	upperOpt.BinOp = true
+	builder.Series()
+	buildAggNode(builder, schema, false)
+	retNodeHashAggCheck(t, builder.stack.Pop())
 }

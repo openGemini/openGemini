@@ -18,10 +18,12 @@ package executor
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
 func TestHeapItem_AppendFast(t *testing.T) {
@@ -319,6 +321,255 @@ func TestIntegerSliceItem(t *testing.T) {
 		if items.time[i] == chunk.TimeByIndex(i) {
 			continue
 		}
+		t.Fatal("not expect result")
+	}
+}
+
+func buildInRowDataTypeIntegral() hybridqp.RowDataType {
+	rowDataType := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "value", Type: influxql.Integer},
+		influxql.VarRef{Val: "f2", Type: influxql.Integer},
+	)
+	return rowDataType
+}
+
+func TestIntegerTimeColIntegerIteratorMergePrevItem(t *testing.T) {
+	rowDataType := buildInRowDataTypeIntegral()
+	inOrdinal := rowDataType.FieldIndex("value")
+	outOrdinal := rowDataType.FieldIndex("value")
+
+	outchunk := NewChunkImpl(hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "value", Type: influxql.Integer},
+	), "test")
+	outchunk.columns = make([]Column, 1)
+
+	c1 := NewColumnImpl(influxql.Integer)
+	c1.AppendIntegerValue(100)
+	c1.AppendColumnTime(1)
+	outchunk.columns[0] = c1
+
+	iter := NewIntegerTimeColIntegerIterator(FirstTimeColReduce[int64], FirstTimeColMerge[int64], inOrdinal, outOrdinal)
+	iter.prevPoint.Set(0, 2, 80)
+	iter.mergePrevItem(outchunk)
+	for _, column := range outchunk.columns {
+		for _, value := range column.IntegerValues() {
+			if value != 80 && value != 100 {
+				t.Fatal("not expect result")
+			}
+		}
+	}
+}
+
+func TestIntegerTimeColIntegerIteratorProcessFirstWindow(t *testing.T) {
+	rowDataType := buildInRowDataTypeIntegral()
+	inOrdinal := rowDataType.FieldIndex("value")
+	outOrdinal := rowDataType.FieldIndex("value")
+
+	outchunk := NewChunkImpl(hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "value", Type: influxql.Integer},
+	), "test")
+	outchunk.columns = make([]Column, 1)
+
+	c1 := NewColumnImpl(influxql.Integer)
+	c1.AppendIntegerValue(90)
+	c1.AppendColumnTime(10)
+	outchunk.columns[0] = c1
+
+	inchunk := NewChunkImpl(hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "value", Type: influxql.Integer},
+	), "test")
+	inchunk.columns = make([]Column, 2)
+
+	c2 := NewColumnImpl(influxql.Integer)
+	c2.AppendIntegerValue(100)
+	c2.AppendColumnTime(11)
+	inchunk.columns[0] = c2
+	inchunk.AppendTime(11)
+
+	c3 := NewColumnImpl(influxql.Integer)
+	c3.AppendIntegerValue(200)
+	c3.AppendColumnTime(12)
+	inchunk.columns[1] = c3
+	inchunk.AppendTime(12)
+
+	iter := NewIntegerTimeColIntegerIterator(FirstTimeColReduce[int64], FirstTimeColMerge[int64], inOrdinal, outOrdinal)
+
+	iter.processFirstWindow(inchunk, outchunk, false, true, true, 0, inchunk.columns[0].IntegerValues()[0])
+	if iter.prevPoint.index != 0 {
+		t.Fatal("not expect result")
+	}
+	if iter.currPoint.isNil != true {
+		t.Fatal("not expect result")
+	}
+	if iter.prevPoint.value != 100 {
+		t.Fatal("not expect result")
+	}
+	iter.prevPoint.Set(0, 9, 80)
+	iter.processFirstWindow(inchunk, outchunk, false, true, false, 0, inchunk.columns[0].IntegerValues()[0])
+	for _, column := range outchunk.columns {
+		for _, value := range column.IntegerValues() {
+			if value != 80 && value != 90 {
+				t.Fatal("not expect result")
+			}
+		}
+	}
+}
+
+func TestIntegerTimeColIntegerIteratorProcessLastWindow(t *testing.T) {
+	rowDataType := buildInRowDataTypeIntegral()
+	inOrdinal := rowDataType.FieldIndex("value")
+	outOrdinal := rowDataType.FieldIndex("value")
+
+	inchunk := NewChunkImpl(hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "value", Type: influxql.Integer},
+	), "test")
+	inchunk.columns = make([]Column, 2)
+
+	c2 := NewColumnImpl(influxql.Integer)
+	c2.AppendIntegerValue(100)
+	c2.AppendColumnTime(11)
+	inchunk.columns[0] = c2
+	inchunk.AppendTime(11)
+
+	c3 := NewColumnImpl(influxql.Integer)
+	c3.AppendIntegerValue(200)
+	c3.AppendColumnTime(12)
+	inchunk.columns[1] = c3
+	inchunk.AppendTime(12)
+
+	iter := NewIntegerTimeColIntegerIterator(FirstTimeColReduce[int64], FirstTimeColMerge[int64], inOrdinal, outOrdinal)
+
+	iter.processLastWindow(inchunk, 0, false, inchunk.columns[0].IntegerValues()[0])
+	if iter.prevPoint.value != 100 {
+		t.Fatal("not expect result")
+	}
+
+	iter.processLastWindow(inchunk, 0, true, inchunk.columns[0].IntegerValues()[0])
+	if iter.prevPoint.isNil == false {
+		t.Fatal("not expect result")
+	}
+}
+
+func TestIntegerTimeColIntegerIteratorMiddleLastWindow(t *testing.T) {
+	rowDataType := buildInRowDataTypeIntegral()
+	inOrdinal := rowDataType.FieldIndex("value")
+	outOrdinal := rowDataType.FieldIndex("value")
+
+	outchunk := NewChunkImpl(hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "value", Type: influxql.Integer},
+	), "test")
+	outchunk.columns = make([]Column, 1)
+
+	c1 := NewColumnImpl(influxql.Integer)
+	c1.AppendIntegerValue(90)
+	c1.AppendColumnTime(10)
+	outchunk.columns[0] = c1
+
+	inchunk := NewChunkImpl(hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "value", Type: influxql.Integer},
+	), "test")
+	inchunk.columns = make([]Column, 2)
+
+	c2 := NewColumnImpl(influxql.Integer)
+	c2.AppendIntegerValue(100)
+	c2.AppendColumnTime(11)
+	inchunk.columns[0] = c2
+	inchunk.AppendTime(11)
+
+	c3 := NewColumnImpl(influxql.Integer)
+	c3.AppendIntegerValue(200)
+	c3.AppendColumnTime(12)
+	inchunk.columns[1] = c3
+	inchunk.AppendTime(12)
+
+	iter := NewIntegerTimeColIntegerIterator(FirstTimeColReduce[int64], FirstTimeColMerge[int64], inOrdinal, outOrdinal)
+
+	iter.processMiddleWindow(inchunk, outchunk, 0, inchunk.columns[0].IntegerValues()[0])
+	if outchunk.columns[0].IntegerValues()[1] != 100 {
+		t.Fatal("not expect result")
+	}
+	if outchunk.columns[0].ColumnTimes()[1] != 11 {
+		t.Fatal("not expect result")
+	}
+
+}
+
+func ParseChunkTags(s string) *ChunkTags {
+	var m influx.PointTags
+	var ss []string
+	for _, kv := range strings.Split(s, ",") {
+		a := strings.Split(kv, "=")
+		m = append(m, influx.Tag{Key: a[0], Value: a[1], IsArray: false})
+		ss = append(ss, a[0])
+	}
+	return NewChunkTags(m, ss)
+}
+
+func buildIntegralInChunk() Chunk {
+
+	rowDataType := buildInRowDataTypeIntegral()
+
+	b := NewChunkBuilder(rowDataType)
+
+	inCk := b.NewChunk("mst")
+
+	inCk.AppendTagsAndIndexes([]ChunkTags{
+		*ParseChunkTags("name=a"),
+	}, []int{0})
+	inCk.AppendIntervalIndexes([]int{0, 1, 2, 3, 4})
+	inCk.AppendTimes([]int64{1 * 60 * 1000000000, 2 * 60 * 1000000000, 3 * 60 * 1000000000, 30 * 60 * 1000000000, 31 * 60 * 1000000000})
+
+	inCk.Column(0).AppendIntegerValues([]int64{10, 11, 12, 13, 14})
+	inCk.Column(0).AppendManyNotNil(5)
+	inCk.Column(0).AppendColumnTimes([]int64{1 * 60 * 1000000000, 2 * 60 * 1000000000, 3 * 60 * 1000000000, 30 * 60 * 1000000000, 31 * 60 * 1000000000})
+
+	inCk.Column(1).AppendIntegerValues([]int64{1, 1, 1, 1})
+	inCk.Column(1).AppendNilsV2(true, true, true, false, true)
+	inCk.Column(1).AppendColumnTimes([]int64{1 * 60 * 1000000000, 2 * 60 * 1000000000, 3 * 60 * 1000000000, 30 * 60 * 1000000000, 31 * 60 * 1000000000})
+	return inCk
+}
+
+func TestIntegerTimeColIntegerIteratorNext(t *testing.T) {
+	rowDataType := buildInRowDataTypeIntegral()
+	inOrdinal := rowDataType.FieldIndex("value")
+	outOrdinal := rowDataType.FieldIndex("value")
+
+	inchunk := NewChunkImpl(hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "value", Type: influxql.Integer},
+	), "test")
+	inchunk.columns = make([]Column, 2)
+
+	c2 := NewColumnImpl(influxql.Integer)
+	c2.AppendIntegerValue(100)
+	c2.AppendColumnTime(11)
+	inchunk.columns[0] = c2
+	inchunk.AppendTime(11)
+
+	c3 := NewColumnImpl(influxql.Integer)
+	c3.AppendIntegerValue(200)
+	c3.AppendColumnTime(12)
+	inchunk.columns[1] = c3
+	inchunk.AppendTime(12)
+
+	iter := NewIntegerTimeColIntegerIterator(FirstTimeColReduce[int64], FirstTimeColMerge[int64], inOrdinal, outOrdinal)
+
+	ie := &IteratorEndpoint{
+		InputPoint:  EndPointPair{Chunk: inchunk},
+		OutputPoint: EndPointPair{Chunk: inchunk},
+	}
+	p := &IteratorParams{}
+
+	iter.Next(ie, p)
+
+	ck := buildIntegralInChunk()
+
+	ie2 := &IteratorEndpoint{
+		InputPoint:  EndPointPair{Chunk: ck},
+		OutputPoint: EndPointPair{Chunk: ck},
+	}
+	p2 := &IteratorParams{}
+	iter.Next(ie2, p2)
+	if len(ie2.OutputPoint.Chunk.Columns()) != 2 {
 		t.Fatal("not expect result")
 	}
 }

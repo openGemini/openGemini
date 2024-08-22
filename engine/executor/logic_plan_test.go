@@ -1101,3 +1101,20 @@ func TestNewLogicalPromSubquery(t *testing.T) {
 		t.Fatal("wrong new result")
 	}
 }
+
+// except return err if it's a sub-query
+func TestBuildSubQuery_Except(t *testing.T) {
+	fields := []*influxql.Field{{Expr: &influxql.VarRef{Val: "value", Type: influxql.Float, Alias: "value"}, Alias: "value"}}
+	Sources := []influxql.Source{&influxql.SubQuery{Statement: &influxql.SelectStatement{
+		ExceptDimensions: make(influxql.Dimensions, 1),
+		Fields:           fields,
+		Sources:          []influxql.Source{&influxql.Measurement{Name: "mst"}}},
+	}}
+	schema := createQuerySchema()
+	creator := NewMockShardGroup()
+	table := NewTable("mst")
+	table.AddDataTypes(map[string]influxql.DataType{"value": influxql.Float})
+	creator.AddShard(table)
+	_, err := executor.BuildSources(context.Background(), creator, Sources, schema, false)
+	assert.True(t, strings.Contains(err.Error(), "except: sub-query or join-query is unsupported"))
+}

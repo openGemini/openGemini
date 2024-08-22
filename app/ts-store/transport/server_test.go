@@ -28,8 +28,11 @@ import (
 	"github.com/openGemini/openGemini/app/ts-store/stream"
 	"github.com/openGemini/openGemini/engine/executor/spdy"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/pointsdecoder"
 	"github.com/openGemini/openGemini/lib/record"
 	streamLib "github.com/openGemini/openGemini/lib/stream"
 	"github.com/openGemini/openGemini/lib/tracing"
@@ -265,4 +268,25 @@ func mockMarshaledStreamPoint(haveStreamShardList bool, validStreamShardList boo
 		panic(err)
 	}
 	return pBuf
+}
+
+func TestWritePointsForRep(t *testing.T) {
+	rows := []influx.Row{{Timestamp: 1, Name: "mst", Tags: influx.PointTags{{Key: "tk1", Value: "tv1"}}, Fields: influx.Fields{{Key: "f1", NumValue: 1, Type: influx.Field_Type_Float}}}}
+	ctx := &netstorage.WriteContext{Rows: rows, Buf: make([]byte, 0), Shard: &meta.ShardInfo{}}
+	tail, err := netstorage.MarshalRows(ctx, "db0", "rp0", 1)
+	tail = tail[:len(tail)-2]
+	assert.Equal(t, err, nil)
+	log := logger.NewLogger(errno.ModuleWrite)
+	ww := pointsdecoder.GetDecoderWork()
+	ww.SetReqBuf(tail)
+	data := &meta.Data{
+		Databases: map[string]*meta.DatabaseInfo{"db0": &meta.DatabaseInfo{ReplicaN: 1}},
+	}
+	client := metaclient.NewClient("", false, 0)
+	client.SetCacheData(data)
+	store := &storage.Storage{}
+	store.SetMetaClient(client)
+	store.MetaClient = client
+	err = WritePointsForRep(ww, log, store)
+	assert.Equal(t, err.Error(), "unmarshal points error, err: too small bytes for row timestamp")
 }

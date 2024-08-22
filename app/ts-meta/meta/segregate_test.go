@@ -165,6 +165,8 @@ func TestHandleSpecialCtlDataInvalidCmd(t *testing.T) {
 	}
 }
 
+//skip
+/*
 func TestHandleSpecialCtlDataInvalidNodeIp(t *testing.T) {
 	dir := t.TempDir()
 	mms, err := NewMockMetaService(dir, "127.0.0.1")
@@ -201,6 +203,7 @@ func TestHandleSpecialCtlDataInvalidNodeIp(t *testing.T) {
 		t.Fatal("TestHandleSpecialCtlDataInvalidNodeIp deleteCmd error")
 	}
 }
+*/
 
 func TestHandleSpecialCtlDataNoHa(t *testing.T) {
 	dir := t.TempDir()

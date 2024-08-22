@@ -17,6 +17,7 @@ limitations under the License.
 package hybridqp
 
 import (
+	"context"
 	"time"
 
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
@@ -73,5 +74,14 @@ type Options interface {
 	IsInstantVectorSelector() bool
 	IsPromGroupAllOrWithout() bool
 	IsPromGroupAll() bool
+	IsPromWithout() bool
 	IsWithout() bool
+	IsExcept() bool
+	GetLowerOpt() Options
+	SetBinOp(bool)
+	GetBinop() bool
+	SetSimpleTagset(bool)
+	GetSimpleTagset() bool
+	SetCtx(ctx context.Context)
+	GetCtx() context.Context
 }

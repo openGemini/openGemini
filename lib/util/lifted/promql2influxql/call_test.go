@@ -74,7 +74,18 @@ func TestTranspiler_transpileCall(t1 *testing.T) {
 			args: args{
 				a: CallExpr(`rate(go_gc_duration_seconds_count[5m])`),
 			},
-			want:    parseInfluxqlByYacc(`SELECT rate_prom(value) AS value FROM go_gc_duration_seconds_count WHERE time >= '2023-01-06T03:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY *, time(1m) fill(none)`),
+			want:    parseInfluxqlByYacc(`SELECT rate_prom(value) AS value FROM go_gc_duration_seconds_count WHERE time >= '2023-01-06T03:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY *, time(1m,0s) fill(none)`),
+			wantErr: false,
+		},
+		{
+			name: "4",
+			fields: fields{
+				Start: &startTime2, End: &endTime2, Step: step,
+			},
+			args: args{
+				a: CallExpr(`sqrt(abs(go_gc_duration_seconds_count))`),
+			},
+			want:    parseInfluxqlByYacc(`SELECT sqrt(value) AS value FROM (SELECT abs(value) AS value FROM go_gc_duration_seconds_count WHERE time >= '2023-01-06T04:00:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY *) WHERE time >= '2023-01-06T04:00:00Z' AND time <= '2023-01-06T07:00:00Z'`),
 			wantErr: false,
 		},
 	}

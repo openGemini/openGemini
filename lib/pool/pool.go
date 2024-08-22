@@ -20,6 +20,7 @@ import (
 	"sync"
 
 	"github.com/openGemini/openGemini/lib/bufferpool"
+	"github.com/openGemini/openGemini/lib/cpu"
 )
 
 type HitRatioHook struct {
@@ -151,4 +152,57 @@ func (p *ObjectPool) Put(v Object) {
 	default:
 		p.pool.Put(v)
 	}
+}
+
+type FixedCachePool struct {
+	cache chan interface{}
+	pool  sync.Pool
+}
+
+func NewFixedCachePool() *FixedCachePool {
+	n := cpu.GetCpuNum() * 2
+	if n < 4 {
+		n = 4
+	}
+	if n > 256 {
+		n = 256
+	}
+	return &FixedCachePool{
+		cache: make(chan interface{}, n),
+	}
+}
+
+func (p *FixedCachePool) Reset(size int) {
+	p.cache = make(chan interface{}, size)
+}
+
+func (p *FixedCachePool) Get() interface{} {
+	select {
+	case iw := <-p.cache:
+		return iw
+	default:
+		return p.pool.Get()
+	}
+}
+
+func (p *FixedCachePool) Put(v interface{}) {
+	select {
+	case p.cache <- v:
+	default:
+		p.pool.Put(v)
+	}
+}
+
+var intSlicePool sync.Pool
+
+func GetIntSlice(size int) []int {
+	v, ok := intSlicePool.Get().(*[]int)
+	if !ok || v == nil || cap(*v) < size {
+		return make([]int, size)
+	}
+	return (*v)[:size]
+}
+
+func PutIntSlice(v []int) {
+	intSlicePool.Put(&v)
 }

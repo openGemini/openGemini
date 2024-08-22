@@ -98,6 +98,9 @@ func newTsmMergeCursor(ctx *idKeyCursorContext, sid uint64, filter influxql.Expr
 
 func AddLocations(l *immutable.LocationCursor, files immutable.TableReaders, ctx *idKeyCursorContext, sid uint64, metaCtx *immutable.ChunkMetaContext) error {
 	for _, r := range files {
+		if ctx.IsAborted() {
+			return nil
+		}
 		r.RefFileReader()
 		loc := immutable.NewLocation(r, ctx.decs)
 		contains, err := loc.Contains(sid, ctx.tr, metaCtx)
@@ -278,6 +281,7 @@ func (c *tsmMergeCursor) AddLoc() error {
 
 func (c *tsmMergeCursor) readData(orderLoc bool, dst *record.Record) (*record.Record, error) {
 	c.ctx.decs.Set(c.ctx.decs.Ascending, c.ctx.tr, c.onlyFirstOrLast, c.ops)
+	c.ctx.decs.SetClosedSignal(c.ctx.closedSignal)
 	filterOpts := immutable.NewFilterOpts(c.filter, &c.ctx.filterOption, c.tags, c.rowFilters)
 	if orderLoc {
 		return c.locations.ReadData(filterOpts, dst, nil, nil)
@@ -313,6 +317,10 @@ func (c *tsmMergeCursor) SetOps(ops []*comm.CallOption) {
 }
 
 func (c *tsmMergeCursor) Next() (*record.Record, error) {
+	if c.ctx.IsAborted() {
+		return nil, nil
+	}
+
 	if !c.init && c.lazyInit {
 		c.locations = immutable.NewLocationCursor(len(c.ctx.readers.Orders))
 		c.outOfOrderLocations = immutable.NewLocationCursor(len(c.ctx.readers.OutOfOrders))

@@ -49,11 +49,13 @@ import (
 	"github.com/openGemini/openGemini/lib/bitmap"
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/obs"
+	"github.com/openGemini/openGemini/lib/raftlog"
 	"github.com/openGemini/openGemini/lib/rand"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
@@ -1018,9 +1020,9 @@ func TestShard_NewColStoreShardWithPKIndex(t *testing.T) {
 		EngineType: config.COLUMNSTORE,
 		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
 			PrimaryKey: []string{"field1_string", "field2_int"}},
-		Schema: map[string]int32{
-			"field1_string": influx.Field_Type_String,
-			"field2_int":    influx.Field_Type_Int}}
+		Schema: &meta.CleanSchema{
+			"field1_string": meta.SchemaVal{Typ: influx.Field_Type_String},
+			"field2_int":    meta.SchemaVal{Typ: influx.Field_Type_Int}}}
 
 	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
 	sh.SetClient(&MockMetaClient{
@@ -1030,7 +1032,7 @@ func TestShard_NewColStoreShardWithPKIndex(t *testing.T) {
 	st := time.Now().Truncate(time.Second)
 	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
 	err = writeData(sh, rows, true)
-	time.Sleep(3 * time.Second)
+	sh.waitSnapshot()
 	require.Equal(t, err, nil)
 	engineType := sh.GetEngineType()
 	require.Equal(t, config.COLUMNSTORE, engineType)
@@ -1096,9 +1098,9 @@ func TestShard_NewColStoreShardWithPKIndexAndTC(t *testing.T) {
 			PrimaryKey:          []string{"field1_string", "field2_int"},
 			TimeClusterDuration: 60000000,
 		},
-		Schema: map[string]int32{
-			"field1_string": influx.Field_Type_String,
-			"field2_int":    influx.Field_Type_Int}}
+		Schema: &meta.CleanSchema{
+			"field1_string": meta.SchemaVal{Typ: influx.Field_Type_String},
+			"field2_int":    meta.SchemaVal{Typ: influx.Field_Type_Int}}}
 
 	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
 	sh.SetClient(&MockMetaClient{
@@ -1108,7 +1110,7 @@ func TestShard_NewColStoreShardWithPKIndexAndTC(t *testing.T) {
 	st := time.Now().Truncate(time.Second)
 	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
 	err = writeData(sh, rows, true)
-	time.Sleep(3 * time.Second)
+	sh.waitSnapshot()
 	require.Equal(t, err, nil)
 	engineType := sh.GetEngineType()
 	require.Equal(t, config.COLUMNSTORE, engineType)
@@ -1174,9 +1176,9 @@ func TestShard_NewColStoreShardWithPKIndexAndTCNilPrimaryKey(t *testing.T) {
 			PrimaryKey:          nil,
 			TimeClusterDuration: 60000000,
 		},
-		Schema: map[string]int32{
-			"field1_string": influx.Field_Type_String,
-			"field2_int":    influx.Field_Type_Int}}
+		Schema: &meta.CleanSchema{
+			"field1_string": meta.SchemaVal{Typ: influx.Field_Type_String},
+			"field2_int":    meta.SchemaVal{Typ: influx.Field_Type_Int}}}
 
 	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
 	sh.SetClient(&MockMetaClient{
@@ -1186,7 +1188,7 @@ func TestShard_NewColStoreShardWithPKIndexAndTCNilPrimaryKey(t *testing.T) {
 	st := time.Now().Truncate(time.Second)
 	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
 	err = writeData(sh, rows, true)
-	time.Sleep(3 * time.Second)
+	sh.waitSnapshot()
 	require.Equal(t, err, nil)
 	engineType := sh.GetEngineType()
 	require.Equal(t, config.COLUMNSTORE, engineType)
@@ -1252,9 +1254,9 @@ func TestShard_NewColStoreShardWithPKIndexMultiFiles(t *testing.T) {
 		EngineType: config.COLUMNSTORE,
 		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
 			PrimaryKey: []string{"field1_string", "field2_int"}},
-		Schema: map[string]int32{
-			"field1_string": influx.Field_Type_String,
-			"field2_int":    influx.Field_Type_Int}}
+		Schema: &meta.CleanSchema{
+			"field1_string": meta.SchemaVal{Typ: influx.Field_Type_String},
+			"field2_int":    meta.SchemaVal{Typ: influx.Field_Type_Int}}}
 
 	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
 	sh.SetClient(&MockMetaClient{
@@ -1264,7 +1266,7 @@ func TestShard_NewColStoreShardWithPKIndexMultiFiles(t *testing.T) {
 	st := time.Now().Truncate(time.Second)
 	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
 	err = writeData(sh, rows, true)
-	time.Sleep(3 * time.Second)
+	sh.waitSnapshot()
 	require.Equal(t, err, nil)
 	engineType := sh.GetEngineType()
 	require.Equal(t, config.COLUMNSTORE, engineType)
@@ -1337,9 +1339,9 @@ func TestShard_NewColStoreShardWithPKIndexAndTCMultiFiles(t *testing.T) {
 			PrimaryKey:          []string{"field1_string", "field2_int"},
 			TimeClusterDuration: 60000000,
 		},
-		Schema: map[string]int32{
-			"field1_string": influx.Field_Type_String,
-			"field2_int":    influx.Field_Type_Int}}
+		Schema: &meta.CleanSchema{
+			"field1_string": meta.SchemaVal{Typ: influx.Field_Type_String},
+			"field2_int":    meta.SchemaVal{Typ: influx.Field_Type_Int}}}
 
 	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
 	sh.SetClient(&MockMetaClient{
@@ -1349,7 +1351,7 @@ func TestShard_NewColStoreShardWithPKIndexAndTCMultiFiles(t *testing.T) {
 	st := time.Now().Truncate(time.Second)
 	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
 	err = writeData(sh, rows, true)
-	time.Sleep(3 * time.Second)
+	sh.waitSnapshot()
 	require.Equal(t, err, nil)
 	engineType := sh.GetEngineType()
 	require.Equal(t, config.COLUMNSTORE, engineType)
@@ -1422,9 +1424,9 @@ func TestShard_NewColStoreShardWithPKIndexAndTCNilPrimaryKeyMultiFiles(t *testin
 			PrimaryKey:          nil,
 			TimeClusterDuration: 60000000,
 		},
-		Schema: map[string]int32{
-			"field1_string": influx.Field_Type_String,
-			"field2_int":    influx.Field_Type_Int}}
+		Schema: &meta.CleanSchema{
+			"field1_string": meta.SchemaVal{Typ: influx.Field_Type_String},
+			"field2_int":    meta.SchemaVal{Typ: influx.Field_Type_Int}}}
 
 	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
 	sh.SetClient(&MockMetaClient{
@@ -1434,7 +1436,7 @@ func TestShard_NewColStoreShardWithPKIndexAndTCNilPrimaryKeyMultiFiles(t *testin
 	st := time.Now().Truncate(time.Second)
 	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
 	err = writeData(sh, rows, true)
-	time.Sleep(3 * time.Second)
+	sh.waitSnapshot()
 	require.Equal(t, err, nil)
 	engineType := sh.GetEngineType()
 	require.Equal(t, config.COLUMNSTORE, engineType)
@@ -1504,9 +1506,9 @@ func TestColStoreWriteSkipIndex(t *testing.T) {
 		EngineType: config.COLUMNSTORE,
 		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
 			PrimaryKey: []string{"field1_string", "field2_int"}},
-		Schema: map[string]int32{
-			"field1_string": influx.Field_Type_String,
-			"field2_int":    influx.Field_Type_Int},
+		Schema: &meta.CleanSchema{
+			"field1_string": meta.SchemaVal{Typ: influx.Field_Type_String},
+			"field2_int":    meta.SchemaVal{Typ: influx.Field_Type_Int}},
 		IndexRelation: influxql.IndexRelation{IndexNames: []string{"bloomfilter"},
 			Oids:      []uint32{uint32(index.BloomFilter)},
 			IndexList: list},
@@ -1534,7 +1536,7 @@ func TestColStoreWriteSkipIndex(t *testing.T) {
 	err = sh.WriteCols("cpu1", rec, nil)
 	require.Equal(t, err, nil)
 	sh.ForceFlush()
-	time.Sleep(3 * time.Second)
+	sh.waitSnapshot()
 	if err = closeShard(sh); err != nil {
 		t.Fatal(err)
 	}
@@ -1558,9 +1560,9 @@ func TestColStoreWriteSkipIndexSwitchFile(t *testing.T) {
 		EngineType: config.COLUMNSTORE,
 		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
 			PrimaryKey: []string{"field1_string", "field2_int"}},
-		Schema: map[string]int32{
-			"field1_string": influx.Field_Type_String,
-			"field2_int":    influx.Field_Type_Int},
+		Schema: &meta.CleanSchema{
+			"field1_string": meta.SchemaVal{Typ: influx.Field_Type_String},
+			"field2_int":    meta.SchemaVal{Typ: influx.Field_Type_Int}},
 		IndexRelation: influxql.IndexRelation{IndexNames: []string{"bloomfilter"},
 			Oids:      []uint32{uint32(index.BloomFilter)},
 			IndexList: list},
@@ -1588,7 +1590,7 @@ func TestColStoreWriteSkipIndexSwitchFile(t *testing.T) {
 	err = sh.WriteCols("cpu1", rec, nil)
 	require.Equal(t, err, nil)
 	sh.ForceFlush()
-	time.Sleep(3 * time.Second)
+	sh.waitSnapshot()
 	if err = closeShard(sh); err != nil {
 		t.Fatal(err)
 	}
@@ -1691,6 +1693,7 @@ func TestShard_AsyncWalReplay_serial_ArrowFlight(t *testing.T) {
 	}
 	mstsInfo := make(map[string]*meta.MeasurementInfo)
 	mstsInfo[defaultMeasurementName] = &meta.MeasurementInfo{Name: defaultMeasurementName,
+		Schema:     &meta2.CleanSchema{},
 		EngineType: config.COLUMNSTORE,
 		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
 			PrimaryKey: []string{}}}
@@ -1764,6 +1767,7 @@ func TestShard_AsyncWalReplay_parallel_ArrowFlight(t *testing.T) {
 	}
 	mstsInfo := make(map[string]*meta.MeasurementInfo)
 	mstsInfo[defaultMeasurementName] = &meta.MeasurementInfo{Name: defaultMeasurementName,
+		Schema:     &meta2.CleanSchema{},
 		EngineType: config.COLUMNSTORE,
 		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
 			PrimaryKey: []string{}}}
@@ -1805,12 +1809,13 @@ func TestShard_AsyncWalReplay_parallel_ArrowFlight(t *testing.T) {
 
 	err = writeRec(newSh, rec, false)
 	msInfo, err = newSh.activeTbl.GetMsInfo(defaultMeasurementName)
-	record = msInfo.GetWriteChunk().WriteRec.GetRecord()
 	rec.AppendRec(rec, 0, rec.RowNums())
 	for newSh.replayingWal {
 		time.Sleep(3 * time.Second)
 		fmt.Println("wait load wal done")
 	}
+
+	record = msInfo.GetWriteChunk().WriteRec.GetRecord()
 	if !testRecsEqual(rec, record) {
 		t.Fatal("error result")
 	}
@@ -1830,6 +1835,7 @@ func TestShard_AsyncWalReplay_parallel_ArrowFlight_WithCancel(t *testing.T) {
 	}
 	mstsInfo := make(map[string]*meta.MeasurementInfo)
 	mstsInfo[defaultMeasurementName] = &meta.MeasurementInfo{Name: defaultMeasurementName,
+		Schema:     &meta2.CleanSchema{},
 		EngineType: config.COLUMNSTORE,
 		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
 			PrimaryKey: []string{}}}
@@ -1987,9 +1993,9 @@ func TestWriteRowsToColumnStoreError(t *testing.T) {
 		EngineType: config.COLUMNSTORE,
 		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
 			PrimaryKey: []string{"field1_string", "field2_int"}},
-		Schema: map[string]int32{
-			"field1_string": influx.Field_Type_String,
-			"field2_int":    influx.Field_Type_Int}}
+		Schema: &meta.CleanSchema{
+			"field1_string": meta.SchemaVal{Typ: influx.Field_Type_String},
+			"field2_int":    meta.SchemaVal{Typ: influx.Field_Type_Int}}}
 	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
 	if err != nil {
 		t.Fatal(err)
@@ -3679,9 +3685,9 @@ func TestDropMeasurementForColStore(t *testing.T) {
 		EngineType: config.COLUMNSTORE,
 		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
 			PrimaryKey: []string{"field1_string", "field2_int"}},
-		Schema: map[string]int32{
-			"field1_string": influx.Field_Type_String,
-			"field2_int":    influx.Field_Type_Int}}
+		Schema: &meta.CleanSchema{
+			"field1_string": meta.SchemaVal{Typ: influx.Field_Type_String},
+			"field2_int":    meta.SchemaVal{Typ: influx.Field_Type_Int}}}
 
 	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
 	sh.SetClient(&MockMetaClient{
@@ -3829,14 +3835,14 @@ func TestEngine_DropMeasurement(t *testing.T) {
 	rows, _, _ := GenDataRecord(msNames, seriesNum, 200, time.Second, tm, false, true, false)
 	for len(rows) > 0 {
 		if len(rows) > 200 {
-			if err := eng.WriteRows("db0", "rp0", 0, 1, rows[:200], nil); err != nil {
+			if err := eng.WriteRows("db0", "rp0", 0, 1, rows[:200], nil, nil); err != nil {
 				t.Fatal(err)
 			}
 			rows = rows[100:]
 			continue
 		}
 
-		if err := eng.WriteRows("db0", "rp0", 0, 1, rows, nil); err != nil {
+		if err := eng.WriteRows("db0", "rp0", 0, 1, rows, nil, nil); err != nil {
 			t.Fatal(err)
 		}
 		rows = rows[len(rows):]
@@ -4617,6 +4623,7 @@ func TestWriteRecByColumnStore(t *testing.T) {
 	sh := eng.DBPartitions["db0"][0].Shard(1).(*shard)
 	mstsInfo := make(map[string]*meta.MeasurementInfo)
 	mstsInfo[defaultMeasurementName] = &meta.MeasurementInfo{Name: defaultMeasurementName,
+		Schema:     &meta2.CleanSchema{},
 		EngineType: config.COLUMNSTORE,
 		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
 			PrimaryKey: []string{}}}
@@ -4652,6 +4659,7 @@ func TestWriteRecByColumnStoreWithSchemaLess(t *testing.T) {
 	sh := eng.DBPartitions["db0"][0].Shard(1).(*shard)
 	mstsInfo := make(map[string]*meta.MeasurementInfo)
 	mstsInfo[defaultMeasurementName] = &meta.MeasurementInfo{Name: defaultMeasurementName,
+		Schema:     &meta2.CleanSchema{},
 		EngineType: config.COLUMNSTORE,
 		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
 			PrimaryKey: []string{}}}
@@ -4720,7 +4728,7 @@ func TestWriteDataByNewEngine(t *testing.T) {
 	require.NoError(t, err)
 	// wait mem table flush
 	sh.ForceFlush()
-	time.Sleep(time.Second * 1)
+	sh.waitSnapshot()
 
 	require.Equal(t, 4*100, int(sh.rowCount))
 	err = closeShard(sh)
@@ -4834,6 +4842,7 @@ func TestAddSeqIDToColV1(t *testing.T) {
 	record := genRecord()
 	mstsInfo := make(map[string]*meta.MeasurementInfo)
 	mstsInfo[defaultMeasurementName] = &meta.MeasurementInfo{Name: defaultMeasurementName,
+		Schema:     &meta2.CleanSchema{},
 		EngineType: config.COLUMNSTORE,
 		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
 			PrimaryKey: []string{}}}
@@ -4865,8 +4874,6 @@ func TestAddSeqIDToColV2(t *testing.T) {
 	defer func() {
 		_ = closeShard(sh)
 	}()
-	st := time.Now().Truncate(time.Second)
-	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
 	primaryKey := []string{"time"}
 	sortKey := []string{"time"}
 	mstsInfo := make(map[string]*meta.MeasurementInfo)
@@ -4877,23 +4884,28 @@ func TestAddSeqIDToColV2(t *testing.T) {
 			SortKey:    sortKey,
 			PrimaryKey: primaryKey,
 		},
+		Schema: &meta2.CleanSchema{},
 	}
 
 	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
 	sh.SetClient(&MockMetaClient{
 		mstInfo: []*meta.MeasurementInfo{mstsInfo[defaultMeasurementName]},
 	})
-	err = sh.WriteRows(rows, nil)
+
+	rec := genRecord()
+	record.AppendSeqIdSchema(rec)
+	err = sh.WriteCols(defaultMeasurementName, rec, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	msInfo, err := sh.activeTbl.GetMsInfo(defaultMeasurementName)
 	if err != nil {
 		t.Fatal(err)
 	}
-	rec := msInfo.GetRowChunks().GetWriteChunks()[0].WriteRec.GetRecord()
-	mutable.SetWriteChunk(msInfo, rec)
 	config.SetProductType("logkeeper")
 	// wait mem table flush
 	sh.commitSnapshot(sh.activeTbl)
-	rec = msInfo.GetRowChunks().GetWriteChunks()[0].WriteRec.GetRecord()
+	rec = msInfo.GetWriteChunk().WriteRec.GetRecord()
 	var exist bool
 	for i := range rec.Schema {
 		if rec.Schema[i].Name == record.SeqIDField {
@@ -6026,6 +6038,7 @@ func TestWriteColsForColstore(t *testing.T) {
 	record := genRecord()
 	mstsInfo := make(map[string]*meta.MeasurementInfo)
 	mstsInfo[defaultMeasurementName] = &meta.MeasurementInfo{Name: defaultMeasurementName,
+		Schema:     &meta2.CleanSchema{},
 		EngineType: config.COLUMNSTORE,
 		ColStoreInfo: &meta.ColStoreInfo{SortKey: []string{},
 			PrimaryKey: []string{}}}
@@ -6070,18 +6083,16 @@ func TestDownSampleRedo(t *testing.T) {
 		t.Fatal(err)
 	}
 	sh.endTime = mustParseTime(time.RFC3339Nano, "2022-07-08T01:00:00Z")
-	time.Sleep(time.Second * 1)
 	sh.ForceFlush()
-	time.Sleep(time.Second * 1)
+	sh.waitSnapshot()
 
 	startTime2 := mustParseTime(time.RFC3339Nano, "2022-07-01T12:00:00Z")
 	pts2, _, _ := GenDataRecord(msNames, 5, 2000, time.Millisecond*10, startTime2, true, false, true)
 	if err := sh.WriteRows(pts2, nil); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(time.Second * 1)
 	sh.ForceFlush()
-	time.Sleep(time.Second * 1)
+	sh.waitSnapshot()
 
 	oFiles, _ := sh.immTables.GetTSSPFiles("mst", true)
 	newFiles := []immutable.TSSPFile{oFiles.Files()[0]}
@@ -6116,17 +6127,17 @@ func TestFindTagIndex(t *testing.T) {
 		record.Field{Type: influx.Field_Type_Int, Name: "time"},
 	}
 
-	metaSchema := make(map[string]int32)
+	metaSchema := make(meta.CleanSchema)
 	for i := range schema {
 		if schema[i].Name == "string" {
-			metaSchema[schema[i].Name] = int32(influx.Field_Type_Tag)
+			metaSchema[schema[i].Name] = meta2.SchemaVal{Typ: int8(influx.Field_Type_Tag)}
 			continue
 		}
-		metaSchema[schema[i].Name] = int32(schema[i].Type)
+		metaSchema[schema[i].Name] = meta2.SchemaVal{Typ: int8(schema[i].Type)}
 	}
 
 	expRes := []int{3}
-	res := findTagIndex(schema, metaSchema)
+	res := findTagIndex(schema, &metaSchema)
 
 	if len(res) != len(expRes) {
 		t.Fatal("find tag index error")
@@ -6402,9 +6413,8 @@ func TestInterEngine_DoShardMove_OrderFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	sh.endTime = mustParseTime(time.RFC3339Nano, "2022-07-08T01:00:00Z")
-	time.Sleep(time.Second * 1)
 	sh.ForceFlush()
-	time.Sleep(time.Second * 1)
+	sh.waitSnapshot()
 
 	err = closeShard(sh)
 	require.NoError(t, err)
@@ -6754,9 +6764,8 @@ func TestInterEngine_DoShardMove_OutOfOrderFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	sh.endTime = mustParseTime(time.RFC3339Nano, "2022-07-08T01:00:00Z")
-	time.Sleep(time.Second * 1)
 	sh.ForceFlush()
-	time.Sleep(time.Second * 1)
+	sh.waitSnapshot()
 
 	err = closeShard(sh)
 	require.NoError(t, err)
@@ -6798,9 +6807,8 @@ func TestInterEngine_DoShardMove_BothFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	sh.endTime = mustParseTime(time.RFC3339Nano, "2022-07-08T01:00:00Z")
-	time.Sleep(time.Second * 1)
 	sh.ForceFlush()
-	time.Sleep(time.Second * 1)
+	sh.waitSnapshot()
 
 	err = closeShard(sh)
 	require.NoError(t, err)
@@ -6837,9 +6845,8 @@ func TestInterEngine_DoShardMove_Stop(t *testing.T) {
 		t.Fatal(err)
 	}
 	sh.endTime = mustParseTime(time.RFC3339Nano, "2022-07-08T01:00:00Z")
-	time.Sleep(time.Second * 1)
 	sh.ForceFlush()
-	time.Sleep(time.Second * 1)
+	sh.waitSnapshot()
 
 	err = closeShard(sh)
 	require.NoError(t, err)
@@ -6896,9 +6903,8 @@ func TestInterEngine_CopyFileRollBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	sh.endTime = mustParseTime(time.RFC3339Nano, "2022-07-08T01:00:00Z")
-	time.Sleep(time.Second * 1)
 	sh.ForceFlush()
-	time.Sleep(time.Second * 1)
+	sh.waitSnapshot()
 
 	err = closeShard(sh)
 	require.NoError(t, err)
@@ -6912,12 +6918,12 @@ func TestInterEngine_CopyFileRollBack(t *testing.T) {
 func NewMockColumnStoreMstInfo() *meta2.MeasurementInfo {
 	return &meta2.MeasurementInfo{
 		Name: "cpu",
-		Schema: map[string]int32{
-			"field2_int":    influx.Field_Type_Int,
-			"field3_bool":   influx.Field_Type_Boolean,
-			"field4_float":  influx.Field_Type_Float,
-			"field1_string": influx.Field_Type_String,
-			"time":          influx.Field_Type_Int,
+		Schema: &meta.CleanSchema{
+			"field2_int":    meta.SchemaVal{Typ: influx.Field_Type_Int},
+			"field3_bool":   meta.SchemaVal{Typ: influx.Field_Type_Boolean},
+			"field4_float":  meta.SchemaVal{Typ: influx.Field_Type_Float},
+			"field1_string": meta.SchemaVal{Typ: influx.Field_Type_String},
+			"time":          meta.SchemaVal{Typ: influx.Field_Type_Int},
 		},
 		ColStoreInfo: &meta2.ColStoreInfo{
 			PrimaryKey: []string{"time", "field1_string"},
@@ -6945,6 +6951,33 @@ func TestWriteSnapshotError(t *testing.T) {
 		t.Fatal(err)
 	}
 	newSh.activeTbl = nil
+	newSh.storage.writeSnapshot(newSh)
+	err = closeShard(newSh)
+	require.NoError(t, err)
+}
+
+func TestWriteSnapshotRaftSnapshot(t *testing.T) {
+	flushC := make(chan bool, 2)
+	shotter := &raftlog.SnapShotter{
+		RaftFlag:   1,
+		RaftFlushC: flushC,
+	}
+	testDir := t.TempDir()
+	_ = os.RemoveAll(testDir)
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sh.SetSnapShotter(shotter)
+	sh.storage.writeSnapshot(sh)
+	err = closeShard(sh)
+	require.NoError(t, err)
+
+	newSh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.TSSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newSh.SetSnapShotter(shotter)
 	newSh.storage.writeSnapshot(newSh)
 	err = closeShard(newSh)
 	require.NoError(t, err)
@@ -7034,6 +7067,10 @@ func TestAggQueryOnlyInImmutable_NoEmpty_OneBoolMinMaxOp(t *testing.T) {
 type MockMetaClient struct {
 	metaclient.MetaClient
 	mstInfo []*meta2.MeasurementInfo
+}
+
+func (client *MockMetaClient) IsMasterPt(uint32, string) bool {
+	return false
 }
 
 func (client *MockMetaClient) ThermalShards(db string, start, end time.Duration) map[uint64]struct{} {
@@ -7164,13 +7201,46 @@ func (client *MockMetaClient) DBPtView(database string) (meta2.DBPtInfos, error)
 	return nil, nil
 }
 func (client *MockMetaClient) DBRepGroups(database string) []meta2.ReplicaGroup {
-	return nil
+	var peers []meta2.Peer
+	if database == "testUnFull" {
+		peers = append(peers, meta2.Peer{
+			ID:     1,
+			PtRole: meta.Slave,
+		})
+		replicaGroup := meta2.ReplicaGroup{
+			ID:         0,
+			MasterPtID: 0,
+			Peers:      peers,
+			Status:     meta.UnFull,
+			Term:       1,
+		}
+		return []meta2.ReplicaGroup{replicaGroup}
+	}
+
+	peers = append(peers, meta2.Peer{
+		ID:     1,
+		PtRole: meta.Slave,
+	})
+	peers = append(peers, meta2.Peer{
+		ID:     2,
+		PtRole: meta.Slave,
+	})
+	replicaGroup := meta2.ReplicaGroup{
+		ID:         0,
+		MasterPtID: 0,
+		Peers:      peers,
+		Status:     meta.Health,
+		Term:       1,
+	}
+	return []meta2.ReplicaGroup{replicaGroup}
 }
 func (client *MockMetaClient) GetReplicaN(database string) (int, error) {
 	return 1, nil
 }
 func (client *MockMetaClient) ShardOwner(shardID uint64) (database, policy string, sgi *meta2.ShardGroupInfo) {
-	return "", "", nil
+	var shards []meta2.ShardInfo
+	shards = append(shards, meta2.ShardInfo{})
+	return "", "", &meta2.ShardGroupInfo{Shards: shards}
 }
 func (client *MockMetaClient) Measurement(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error) {
 	if len(client.mstInfo) > 0 {
@@ -7280,6 +7350,10 @@ func (client *MockMetaClient) GetDstStreamInfos(db, rp string, dstSis *[]*meta2.
 	return false
 }
 
+func (client *MockMetaClient) GetSgEndTime(database string, rp string, timestamp time.Time, engineType config.EngineType) (int64, error) {
+	return 0, nil
+}
+
 func (mmc *MockMetaClient) GetAllMst(dbName string) []string {
 	var msts []string
 	msts = append(msts, "cpu")
@@ -7301,4 +7375,91 @@ func (client *MockMetaClient) GetMeasurementID(database string, rpName string, m
 
 func (client *MockMetaClient) InsertFiles([]meta2.FileInfo) error {
 	return nil
+}
+
+func TestSetSnapShotter(t *testing.T) {
+	shard := &shard{}
+	mockSnap := &raftlog.SnapShotter{}
+	shard.SetSnapShotter(mockSnap)
+}
+
+func TestCreateCursorWithAbort(t *testing.T) {
+	if e := resourceallocator.InitResAllocator(16, 2, 1, -1, resourceallocator.ChunkReaderRes, 0, 0); e == nil {
+		t.Fatal()
+	}
+	if e := resourceallocator.InitResAllocator(16, 2, 1, resourceallocator.GradientDesc, resourceallocator.ChunkReaderRes, 0, 0); e != nil {
+		t.Fatal(e)
+	}
+	testDir := t.TempDir()
+	_ = os.RemoveAll(testDir)
+
+	// step2: create shard
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, testDir, config.TSSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seriesNum := 8
+
+	// step3: write data, mem table row limit less than row cnt, query will get record from both mem table and immutable
+	rows, startTime, endTime := GenDataRecord([]string{"mst"}, seriesNum, 1, 1, time.Now(), false, true, false)
+	err = writeData(sh, rows, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := TestCase{"AllField", startTime, endTime, createFieldAux(nil), "field2_int < 5 AND field4_float < 10.0", nil, true, nil}
+	opt := genQueryOpt(&c, "mst", true)
+	opt.Limit = 1
+	opt.Offset = 1
+	opt.GroupByAllDims = true
+
+	//querySchema := genQuerySchema(c.fieldAux, opt)
+	querySchema := executor.NewQuerySchema(influxql.Fields{&influxql.Field{Expr: &influxql.Call{Name: "sum", Args: []influxql.Expr{&influxql.VarRef{Val: "field4_float", Type: influxql.Float}}}}},
+		[]string{"sum"},
+		opt, nil)
+	config.GetCommon().PreAggEnabled = false
+
+	// step4: index scan and create group cursor
+	_, span := tracing.NewTrace("root")
+	ctx := tracing.NewContextWithSpan(context.Background(), span)
+	result, _, _ := sh.Scan(span, querySchema, resourceallocator.DefaultSeriesAllocateFunc)
+	hasTimeFilter := false
+	startTime = querySchema.Options().GetStartTime()
+	endTime = querySchema.Options().GetEndTime()
+	tr := util.TimeRange{Min: startTime, Max: endTime}
+	shardStartTime := sh.startTime.UnixNano()
+	shardEndTime := sh.endTime.UnixNano()
+	if (startTime >= shardStartTime && startTime <= shardEndTime) || (endTime >= shardStartTime && endTime <= shardEndTime) {
+		hasTimeFilter = true
+	}
+	immutableReader, mutableReader := sh.cloneReaders(querySchema.Options().OptionsName(), hasTimeFilter, tr)
+	// unref file(no need lock here), series iterator will ref/unref file itself
+	unRefReaders(immutableReader, mutableReader)
+
+	closedSignal := false
+	closedSignalPtr := &closedSignal
+	ctx = context.WithValue(ctx, hybridqp.QueryAborted, closedSignalPtr)
+	executor.EnableFileCursor(false)
+	currsors, err := sh.createGroupCursors(ctx, span, querySchema, false, result, immutableReader, mutableReader, util.TimeRange{})
+	_ = resourceallocator.FreeRes(resourceallocator.ChunkReaderRes, int64(seriesNum), int64(seriesNum))
+	_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.ChunkReaderRes, 0, 0)
+
+	*closedSignalPtr = true
+	_, err = itrsInitWithLimit(currsors[0].(*groupCursor).ctx, nil, querySchema, result[0], 0, 1, false, false)
+	assert2.True(t, errno.Equal(err, errno.QueryAborted))
+
+	executor.EnableFileCursor(true)
+	_, err = sh.createGroupCursors(ctx, span, querySchema, false, result, immutableReader, mutableReader, util.TimeRange{})
+	assert2.True(t, errno.Equal(err, errno.QueryAborted))
+	_ = resourceallocator.FreeRes(resourceallocator.ChunkReaderRes, int64(seriesNum), int64(seriesNum))
+	_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.ChunkReaderRes, 0, 0)
+
+	executor.EnableFileCursor(false)
+	for i := range currsors {
+		currsors[i].Close()
+	}
+
+	err = closeShard(sh)
+	if err != nil {
+		t.Fatal(err)
+	}
 }

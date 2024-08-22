@@ -129,6 +129,10 @@ func (tg *TaskGroup) Add(task Task) {
 	tg.tasks = append(tg.tasks, task)
 }
 
+func (tg *TaskGroup) Len() int {
+	return len(tg.tasks)
+}
+
 func (tg *TaskGroup) Key() string {
 	return tg.key
 }

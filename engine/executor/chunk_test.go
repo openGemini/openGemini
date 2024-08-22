@@ -563,3 +563,52 @@ func TestChunkCopyByRowDataType(t *testing.T) {
 		}
 	}
 }
+
+func TestDecodeTagsWithoutTag(t *testing.T) {
+	t.Run("1", func(t *testing.T) {
+		keys := []string{"a", "le", "z"}
+		values := []string{"1", "+Inf", "2"}
+		chunkTags := executor.NewChunkTagsByTagKVs(keys, values)
+		expTags := executor.NewChunkTagsByTagKVs([]string{"a", "z"}, []string{"1", "2"}).GetTag()
+		expLe := "+Inf"
+
+		metricNameBytes, le := chunkTags.DecodeTagsWithoutTag("le")
+		curTags := executor.NewChunkTagsByBytes(metricNameBytes).GetTag()
+		if util.Bytes2str(expTags) != util.Bytes2str(curTags) {
+			t.Fatal("not expect, exp metricNameBytes ", string(expTags), "current metricNameBytes", string(curTags))
+		}
+		if expLe != le {
+			t.Fatal("not expect,exp le ", expLe, "current le", le)
+		}
+	})
+	t.Run("2", func(t *testing.T) {
+		keys := []string{"le", "z"}
+		values := []string{"+Inf", "2"}
+		chunkTags := executor.NewChunkTagsByTagKVs(keys, values)
+		expTags := executor.NewChunkTagsByTagKVs([]string{"z"}, []string{"2"}).GetTag()
+		expLe := "+Inf"
+
+		metricNameBytes, le := chunkTags.DecodeTagsWithoutTag("le")
+		curTags := executor.NewChunkTagsByBytes(metricNameBytes).GetTag()
+		if util.Bytes2str(expTags) != util.Bytes2str(curTags) {
+			t.Fatal("not expect, exp metricNameBytes ", string(expTags), "current metricNameBytes", string(metricNameBytes))
+		}
+		if expLe != le {
+			t.Fatal("not expect,exp le ", expLe, "current le", le)
+		}
+	})
+	t.Run("3", func(t *testing.T) {
+		keys := []string{"le"}
+		values := []string{"+Inf"}
+		chunkTags := executor.NewChunkTagsByTagKVs(keys, values)
+		expLe := "+Inf"
+
+		metricNameBytes, le := chunkTags.DecodeTagsWithoutTag("le")
+		if len(metricNameBytes) != 0 {
+			t.Fatal("not expect, exp metricNameBytes ", nil)
+		}
+		if expLe != le {
+			t.Fatal("not expect,exp le ", expLe, "current le", le)
+		}
+	})
+}

@@ -27,9 +27,10 @@ var aggregateFns = map[parser.ItemType]aggregateFn{
 	parser.STDDEV:       {name: "stddev_prom", functionType: AGGREGATE_FN},
 	parser.TOPK:         {name: "top", functionType: SELECTOR_FN, expectIntegerParameter: true, keepMetric: true},
 	parser.BOTTOMK:      {name: "bottom", functionType: SELECTOR_FN, expectIntegerParameter: true, keepMetric: true},
-	parser.QUANTILE:     {name: "percentile", functionType: SELECTOR_FN}, // TODO add unit tests
+	parser.QUANTILE:     {name: "quantile_prom", functionType: SELECTOR_FN},
 	parser.COUNT_VALUES: {name: "count_values_prom", functionType: AGGREGATE_FN},
 	parser.STDVAR:       {name: "stdvar_prom", functionType: AGGREGATE_FN},
+	parser.GROUP:        {name: "group_prom", functionType: AGGREGATE_FN},
 }
 
 // generateDimension is used to generate the dimensions of group by to Dimensions.
@@ -43,8 +44,11 @@ func (t *Transpiler) generateDimension(statement *influxql.SelectStatement, grou
 	}
 }
 
+// without == true
 func (t *Transpiler) setAggregateDimensionOfSubquery(dims influxql.Dimensions, statement *influxql.SelectStatement, grouping ...string) {
 	if len(dims) == 0 {
+		statement.Without = true
+		t.generateDimension(statement, grouping...)
 		return
 	}
 	_, dimRefs := dims.Normalize()
@@ -96,11 +100,22 @@ func (t *Transpiler) setAggregateDimension(statement *influxql.SelectStatement, 
 		statement.Without = true
 		t.generateDimension(statement, grouping...)
 	case *influxql.SubQuery:
+		// subquery is without, skip setAggDims perf
+		if source.Statement.Without {
+			statement.Without = true
+			t.generateDimension(statement, grouping...)
+			return
+		}
 		t.setAggregateDimensionOfSubquery(source.Statement.Dimensions, statement, grouping...)
 	case *influxql.BinOp:
 		unionDims := make(influxql.Dimensions, 0)
 		lsource := source.LSrc.(*influxql.SubQuery)
 		rsource := source.RSrc.(*influxql.SubQuery)
+		if lsource.Statement.Without || rsource.Statement.Without {
+			statement.Without = true
+			t.generateDimension(statement, grouping...)
+			return
+		}
 		unionDims = append(unionDims, lsource.Statement.Dimensions...)
 		unionDims = append(unionDims, rsource.Statement.Dimensions...)
 		t.setAggregateDimensionOfSubquery(unionDims, statement, grouping...)
@@ -170,7 +185,7 @@ func (t *Transpiler) transpileAggregateExpr(a *parser.AggregateExpr) (influxql.N
 		// Get the last field of sub expression. The last field is the matrix value.
 		field := statement.Fields[len(statement.Fields)-1]
 		switch field.Expr.(type) {
-		case *influxql.Call, *influxql.BinaryExpr:
+		case *influxql.Call, *influxql.BinaryExpr, *influxql.ParenExpr:
 			if t.canPushDownAggWithFunction(a, statement, field, parameter, aggFn) {
 				return statement, nil
 			}
@@ -211,7 +226,12 @@ func (t *Transpiler) transpileAggregateExpr(a *parser.AggregateExpr) (influxql.N
 				t.setTimeInterval(statement)
 				statement.Fill = influxql.NoFill
 			}
+
+			if aggFn.name == "count_values_prom" {
+				return t.transpileCountValues(statement, a, aggFn, field, parameter), nil
+			}
 			return statement, nil
+
 		default:
 			return nil, errno.NewError(errno.UnsupportedPromExpr)
 		}
@@ -246,4 +266,67 @@ func (t *Transpiler) canPushDownAggWithFunction(agg *parser.AggregateExpr, state
 		}
 	}
 	return true
+}
+
+func (t *Transpiler) transpileCountValues(statement *influxql.SelectStatement, a *parser.AggregateExpr, aggFn aggregateFn, field *influxql.Field, parameter []influxql.Expr) *influxql.SelectStatement {
+	selectStatement := &influxql.SelectStatement{
+		Sources: []influxql.Source{
+			&influxql.SubQuery{
+				Statement: statement,
+			}},
+		IsPromQuery: true,
+	}
+	wrappedField := &influxql.Field{
+		Expr: &influxql.VarRef{
+			Val:   field.Name(),
+			Alias: DefaultFieldKey,
+		},
+		Alias: DefaultFieldKey,
+	}
+	sumFn := aggregateFns[parser.SUM]
+	t.setAggregateFields(selectStatement, wrappedField, nil, sumFn)
+	t.setTimeCondition(selectStatement)
+	selectStatement.LookBackDelta = t.LookBackDelta
+	selectStatement.QueryOffset = statement.QueryOffset
+	selectStatement.Step = statement.Step
+	if sumFn.keepMetric {
+		selectStatement.Dimensions = statement.Dimensions
+		return selectStatement
+	}
+	grouping := getCountValuesGrouping(a)
+	t.setAggregateDimension(selectStatement, a.Without, grouping...)
+	if t.Step > 0 {
+		t.setTimeInterval(selectStatement)
+		selectStatement.Fill = influxql.NoFill
+	}
+	return selectStatement
+}
+
+func getCountValuesGrouping(a *parser.AggregateExpr) []string {
+	grouping := make([]string, 0, len(a.Grouping))
+	param, ok := a.Param.(*parser.StringLiteral)
+	if !ok {
+		return a.Grouping[:len(a.Grouping)]
+	}
+	paramName := param.Val
+	if !a.Without {
+		if len(a.Grouping) > 0 {
+			grouping = a.Grouping[:len(a.Grouping)]
+		}
+		for _, name := range a.Grouping {
+			if name == paramName {
+				return grouping
+			}
+		}
+		grouping = append(grouping, paramName)
+	} else {
+		for _, name := range a.Grouping {
+			if name == paramName {
+				continue
+			}
+			grouping = append(grouping, name)
+		}
+	}
+
+	return grouping
 }

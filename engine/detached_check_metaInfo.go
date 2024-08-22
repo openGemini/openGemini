@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 
 	"github.com/openGemini/openGemini/engine/immutable"
+	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/engine/index/sparseindex"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logstore"
@@ -275,28 +276,30 @@ func (d *DetachedMetaInfo) checkAndTruncatePkMetaIdxFile(filePath string) error 
 	}
 
 	//check pkMetaIndex Item
-	var startBlockId uint64
-	j := n - 1
-	for ; j >= 0; j-- {
+	j := n
+	for j > 0 {
 		dst = make([]byte, singleMetaItemSize)
-		_, err = fd.ReadAt(dst, j*int64(singleMetaItemSize)+int64(pInfoLen))
+		_, err = fd.ReadAt(dst, (j-1)*int64(singleMetaItemSize)+int64(pInfoLen))
 		if err != nil {
 			return err
 		}
-		dst = dst[CRCLen:]
-		startBlockId, dst = numberenc.UnmarshalUint64(dst), dst[util.Uint64SizeBytes:]
-		if startBlockId == d.lastMetaIdxBlockId {
-			d.lastPkMetaEndBlockId, dst = numberenc.UnmarshalUint64(dst), dst[util.Uint64SizeBytes:]
-			d.lastPkMetaOff, dst = numberenc.UnmarshalUint32(dst), dst[util.Uint32SizeBytes:]
-			d.lastPkMetaSize = numberenc.UnmarshalUint32(dst)
+		pk, err := colstore.UnmarshalPkMetaBlock(dst)
+		if err != nil {
+			return err
+		}
+		if pk.StartBlockId == d.lastMetaIdxBlockId {
+			d.lastPkMetaEndBlockId = pk.EndBlockId
+			d.lastPkMetaOff = pk.Offset
+			d.lastPkMetaSize = pk.Size
 			break
 		}
+		j--
 	}
 
 	//There is some dirty data in pk meta file, so truncate file
-	if j != n-1 {
-		err = fd.Truncate(fileInfo.Size() - j*int64(singleMetaItemSize) + int64(pInfoLen))
-		log.Warn("truncate detached pkMetaIndex file", zap.Int64("truncate start size is", fileInfo.Size()-j*int64(singleMetaItemSize)+int64(pInfoLen)))
+	if j != n {
+		err = fd.Truncate(int64(pInfoLen) + j*int64(singleMetaItemSize))
+		log.Warn("truncate detached pkMetaIndex file", zap.Int64("truncate start size is", int64(pInfoLen)+j*int64(singleMetaItemSize)))
 		if err != nil {
 			return err
 		}

@@ -72,7 +72,8 @@ type seriesCursor struct {
 	colAux         *record.ColAux
 }
 
-func (s *seriesCursor) ReInit(idx int) (bool, error) {
+func (s *seriesCursor) ReInit(tagSetInfo *tsi.TagSetInfo, idx int) (bool, error) {
+	s.tagSetRef = tagSetInfo
 	sid := s.tagSetRef.IDs[idx]
 	filter := s.tagSetRef.Filters[idx]
 	ptTags := &(s.tagSetRef.TagsVec[idx])
@@ -200,6 +201,10 @@ func (s *seriesCursor) nextInner() (*record.Record, *seriesInfo, error) {
 }
 
 func (s *seriesCursor) Next() (*record.Record, comm.SeriesInfoIntf, error) {
+	if s.ctx.IsAborted() {
+		return nil, nil, nil
+	}
+
 	if !s.init && s.lazyInit {
 		if s.span != nil {
 			s.span.CreateCounter(memTableDuration, "ns")

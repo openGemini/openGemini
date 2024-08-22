@@ -32,6 +32,7 @@ import (
 	spdyTransport "github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/mutable"
+	"github.com/openGemini/openGemini/lib/compress"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/httpserver"
@@ -44,6 +45,7 @@ import (
 	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/fs"
 	"github.com/openGemini/openGemini/services"
 	"github.com/openGemini/openGemini/services/sherlock"
@@ -101,9 +103,11 @@ func NewServer(c config.Config, info app.ServerInfo, logger *Logger.Logger) (app
 	immutable.SetChunkMetaCompressMode(conf.Data.ChunkMetaCompressMode)
 	config.SetStoreConfig(conf.Data)
 	config.SetIndexConfig(conf.Index)
+	compress.Init()
 
 	s.config = conf
 	Logger.SetLogger(Logger.GetLogger().With(zap.String("hostname", conf.Data.IngesterAddress)))
+	Logger.InitSrLogger(conf.Logging)
 
 	// set query series limit
 	syscontrol.SetQuerySeriesLimit(conf.SelectSpec.QuerySeriesLimit)
@@ -168,6 +172,7 @@ func (s *Server) Open() error {
 	storageNodeInfo := metaclient.StorageNodeInfo{
 		InsertAddr: s.config.Data.InsertAddr(),
 		SelectAddr: s.config.Data.SelectAddr(),
+		Az:         s.config.Data.AvailabilityZone,
 	}
 	_ = metaclient.NewClient(s.metaPath, false, 20)
 	commHttpHandler := httpserver.NewHandler(s.config.HTTPD.AuthEnabled, "")
@@ -196,6 +201,7 @@ func (s *Server) Open() error {
 			c.EnableUseSnapshotV2(s.config.Meta.RetentionAutoCreate, s.config.Meta.ExpandShardsEnable)
 		}
 	}
+	meta.InitSchemaCleanEn(s.config.Meta.SchemaCleanEn)
 	if err := s.metaClient.OpenAtStore(); err != nil {
 		panic(err)
 	} // wait for ts-meta to be ready

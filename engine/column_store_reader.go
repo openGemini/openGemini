@@ -19,7 +19,6 @@ package engine
 import (
 	"context"
 	"fmt"
-	"sync/atomic"
 	"time"
 
 	"github.com/openGemini/openGemini/engine/executor"
@@ -73,7 +72,7 @@ type ColumnStoreReader struct {
 	outInIdxMap  map[int]int
 	inOutIdxMap  map[int]int
 	closedCh     chan struct{}
-	closedSignal *int32
+	closedSignal *bool
 }
 
 func NewColumnStoreReader(plan hybridqp.QueryNode, frags executor.ShardsFragments) *ColumnStoreReader {
@@ -94,7 +93,7 @@ func NewColumnStoreReader(plan hybridqp.QueryNode, frags executor.ShardsFragment
 	if len(r.schema.GetSortFields()) == 0 && !r.schema.HasCall() {
 		r.limit = plan.Schema().Options().GetLimit() + plan.Schema().Options().GetOffset()
 	}
-	closedSignal := int32(0)
+	closedSignal := false
 	r.closedSignal = &closedSignal
 	return r
 }
@@ -155,7 +154,7 @@ func (r *ColumnStoreReader) initSpan() {
 
 func (r *ColumnStoreReader) Close() {
 	r.Once(func() {
-		atomic.AddInt32(r.closedSignal, 1)
+		*r.closedSignal = true
 		r.output.Close()
 	})
 }
@@ -552,7 +551,7 @@ func (r *ColumnStoreReader) sendChunk(chunk executor.Chunk) {
 			r.closedCh <- struct{}{}
 		}
 	}()
-	if atomic.LoadInt32(r.closedSignal) == 0 {
+	if !*r.closedSignal {
 		statistics.ExecutorStat.SourceRows.Push(int64(chunk.NumberOfRows()))
 		r.output.State <- chunk
 	} else {

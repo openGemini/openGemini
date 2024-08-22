@@ -59,6 +59,7 @@ func TestCheckLeaderChanged(t *testing.T) {
 }
 
 func Test_getSnapshot(t *testing.T) {
+	schema := meta2.NewCleanSchema(0)
 	s := &Store{
 		cacheData: &meta2.Data{
 			Term:         1,
@@ -74,7 +75,8 @@ func Test_getSnapshot(t *testing.T) {
 						"rp0": {
 							Measurements: map[string]*meta2.MeasurementInfo{
 								"cpu-1": {
-									Name: "cpu-1",
+									Name:   "cpu-1",
+									Schema: &schema,
 								},
 							},
 						},
@@ -185,6 +187,7 @@ func Test_GetStreamInfo(t *testing.T) {
 
 func Test_MeasurementInfo(t *testing.T) {
 	raft := &MockRaft{}
+	schema := meta2.NewCleanSchema(0)
 	s := &Store{
 		cacheData: &meta2.Data{
 			Term:         1,
@@ -199,7 +202,8 @@ func Test_MeasurementInfo(t *testing.T) {
 						"rp0": {
 							Measurements: map[string]*meta2.MeasurementInfo{
 								"cpu-1_0000": {
-									Name: "cpu-1",
+									Name:   "cpu-1",
+									Schema: &schema,
 								},
 							},
 
@@ -234,6 +238,7 @@ func Test_MeasurementInfo(t *testing.T) {
 
 func Test_MeasurementsInfo(t *testing.T) {
 	raft := &MockRaft{}
+	schema := meta2.NewCleanSchema(0)
 	s := &Store{
 		cacheData: &meta2.Data{
 			Term:         1,
@@ -250,6 +255,7 @@ func Test_MeasurementsInfo(t *testing.T) {
 								"cpu-1_0000": {
 									Name:       "cpu-1",
 									EngineType: config.COLUMNSTORE,
+									Schema:     &schema,
 								},
 							},
 						},
@@ -533,6 +539,7 @@ func Test_applyNotifyCQLeaseChanged(t *testing.T) {
 
 func Test_applyUpdateMeasuremt(t *testing.T) {
 	orgOptions := &meta2.Options{Ttl: 1}
+	schema := meta2.NewCleanSchema(0)
 	s := &Store{
 		raft: &MockRaftForCQ{isLeader: true},
 		data: &meta2.Data{
@@ -543,7 +550,7 @@ func Test_applyUpdateMeasuremt(t *testing.T) {
 						"rp0": {
 							Duration: 1,
 							Measurements: map[string]*meta2.MeasurementInfo{
-								"cpu_0001": {Options: orgOptions},
+								"cpu_0001": {Options: orgOptions, Schema: &schema},
 							},
 							MstVersions: map[string]meta2.MeasurementVer{
 								"cpu": {NameWithVersion: "cpu_0001", Version: 1},
@@ -574,6 +581,7 @@ func Test_applyUpdateMeasuremt(t *testing.T) {
 }
 
 func Test_getSnapshotV2(t *testing.T) {
+	schema := meta2.NewCleanSchema(0)
 	s := &Store{
 		data: &meta2.Data{
 			Term:         1,
@@ -589,7 +597,8 @@ func Test_getSnapshotV2(t *testing.T) {
 						"rp0": {
 							Measurements: map[string]*meta2.MeasurementInfo{
 								"cpu-1": {
-									Name: "cpu-1",
+									Name:   "cpu-1",
+									Schema: &schema,
 								},
 							},
 						},
@@ -610,7 +619,7 @@ func Test_getSnapshotV2(t *testing.T) {
 	}
 	var err error
 
-	dataPb := s.data.Marshal()
+	dataPb := s.data.Marshal(false)
 	dataOps := meta2.NewDataOpsOfAllClear(int(meta2.AllClear), dataPb, *dataPb.Index)
 	expStr1 := dataOps.Marshal()
 	meta2.DataLogger = logger.GetLogger().With(zap.String("service", "data"))
@@ -684,6 +693,7 @@ func Test_getSnapshotV2(t *testing.T) {
 }
 
 func Test_ClearOpsMap(t *testing.T) {
+	schema := meta2.NewCleanSchema(0)
 	s := &Store{
 		data: &meta2.Data{
 			Term:         1,
@@ -699,7 +709,8 @@ func Test_ClearOpsMap(t *testing.T) {
 						"rp0": {
 							Measurements: map[string]*meta2.MeasurementInfo{
 								"cpu-1": {
-									Name: "cpu-1",
+									Name:   "cpu-1",
+									Schema: &schema,
 								},
 							},
 						},

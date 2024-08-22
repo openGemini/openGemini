@@ -181,7 +181,8 @@ type ChunkReader struct {
 	multiCallsWithFirst bool
 	transColumnFun      *map[influxql.DataType]func(recColumn *record.ColVal, column executor.Column)
 
-	closed chan struct{}
+	closed       chan struct{}
+	closedSignal bool
 
 	span       *tracing.Span
 	outputSpan *tracing.Span
@@ -219,13 +220,14 @@ func NewChunkReader(outputRowDataType hybridqp.RowDataType, ops []hybridqp.ExprO
 	}
 
 	r := &ChunkReader{
-		schema:   schema,
-		Output:   executor.NewChunkPort(outputRowDataType),
-		tags:     new(influx.PointTags),
-		ops:      ops,
-		cursor:   keyCursors,
-		isPreAgg: isPreAgg,
-		closed:   make(chan struct{}, 2),
+		schema:       schema,
+		Output:       executor.NewChunkPort(outputRowDataType),
+		tags:         new(influx.PointTags),
+		ops:          ops,
+		cursor:       keyCursors,
+		isPreAgg:     isPreAgg,
+		closed:       make(chan struct{}, 2),
+		closedSignal: false,
 	}
 	if isPreAgg {
 		r.initPreAggCallForAux()
@@ -847,8 +849,12 @@ func (r *ChunkReader) sendChunk(chunk executor.Chunk) {
 			r.closed <- struct{}{}
 		}
 	}()
-	statistics.ExecutorStat.SourceRows.Push(int64(chunk.NumberOfRows()))
-	r.Output.State <- chunk
+	if !r.closedSignal {
+		statistics.ExecutorStat.SourceRows.Push(int64(chunk.NumberOfRows()))
+		r.Output.State <- chunk
+	} else {
+		r.closed <- struct{}{}
+	}
 }
 
 func (r *ChunkReader) IsSink() bool {
@@ -857,6 +863,7 @@ func (r *ChunkReader) IsSink() bool {
 
 func (r *ChunkReader) Close() {
 	r.Once(func() {
+		r.closedSignal = true
 		r.Output.Close()
 	})
 }

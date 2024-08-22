@@ -218,15 +218,15 @@ func (m MockMetaclient) Measurement(dbName string, rpName string, mstName string
 	if m.getInfoFail {
 		return nil, errors.New("get info fail")
 	}
-	schema := map[string]int32{}
-	schema["float"] = influx.Field_Type_Float
+	schema := meta.CleanSchema{}
+	schema["float"] = meta.SchemaVal{Typ: influx.Field_Type_Float}
 	for i := 0; i < 8; i++ {
-		schema[fmt.Sprintf("tagkey%v", i)] = influx.Field_Type_Tag
+		schema[fmt.Sprintf("tagkey%v", i)] = meta.SchemaVal{Typ: influx.Field_Type_Tag}
 	}
 	return &meta.MeasurementInfo{
 		Name:          "flow",
 		ShardKeys:     nil,
-		Schema:        schema,
+		Schema:        &schema,
 		IndexRelation: influxql.IndexRelation{},
 		MarkDeleted:   false,
 	}, nil

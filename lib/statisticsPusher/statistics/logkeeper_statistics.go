@@ -21,7 +21,7 @@ import (
 
 func NewLogKeeperStatItem(RepoId string, LogStreamId string) *LogKeeperStatItem {
 	return &LogKeeperStatItem{
-		begin:       time.Now(),
+		Begin:       time.Now(),
 		LogStreamId: LogStreamId,
 		RepoId:      RepoId,
 	}

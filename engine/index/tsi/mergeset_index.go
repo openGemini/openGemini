@@ -24,7 +24,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"text/tabwriter"
@@ -77,6 +76,10 @@ const (
 	compositeTagKeyPrefix = '\xfe'
 	//maxTSIDsPerRow        = 64
 	MergeSetDirName = "mergeset"
+)
+
+const (
+	SeriesNumPerTagSetForExcept = 1
 )
 
 var tagFilterKeyGen uint64
@@ -266,6 +269,7 @@ type MergeSetIndex struct {
 	labelStoreQueues []chan *TagCol
 
 	bf    []*bloom.BloomFilter
+	wg    sync.WaitGroup
 	cache *IndexCache
 
 	// Deleted tsids
@@ -314,8 +318,11 @@ func (idx *MergeSetIndex) Open() error {
 
 	tablePath := filepath.Join(idx.path, MergeSetDirName)
 	// open bloom filter
-	var err error
-	idx.bf, err = mergeset.OpenBloomFilter(tablePath, idx.lock, int(concurrencySize), idx.config.BloomFilterEnable)
+	bfEnabled, err := idx.bloomFilterEnable(tablePath)
+	if err != nil {
+		return fmt.Errorf("check bloom filter enable error at %q: %w", tablePath, err)
+	}
+	idx.bf, err = mergeset.OpenBloomFilter(tablePath, idx.lock, int(concurrencySize), bfEnabled)
 	if err != nil {
 		return fmt.Errorf("cannot open bloom filter at %q: %w", tablePath, err)
 	}
@@ -341,12 +348,35 @@ func (idx *MergeSetIndex) Open() error {
 	return nil
 }
 
+func (idx *MergeSetIndex) bloomFilterEnable(tablePath string) (bool, error) {
+	_, err := fileops.Stat(tablePath)
+	if err != nil && !os.IsNotExist(err) {
+		return false, err
+	}
+
+	// mergeSet dir is not exist, it's new index
+	if os.IsNotExist(err) {
+		return idx.config.BloomFilterEnabled, nil
+	}
+
+	bfDir := filepath.Join(tablePath, mergeset.BloomFilterDirName)
+	_, err = fileops.Stat(bfDir)
+	if err != nil && !os.IsNotExist(err) {
+		return false, err
+	}
+
+	// bf dir is not exist
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return idx.config.BloomFilterEnabled, nil
+}
+
 func (idx *MergeSetIndex) flushBloomFilter() {
 	if !idx.bfExist() {
 		return
 	}
 	lock := fileops.FileLockOption(*idx.lock)
-	pri := fileops.FilePriorityOption(fileops.IO_PRIORITY_NORMAL)
 	dirPath := filepath.Join(idx.path, MergeSetDirName, mergeset.BloomFilterDirName)
 	err := fileops.MkdirAll(dirPath, 0750, lock)
 	if err != nil {
@@ -354,31 +384,25 @@ func (idx *MergeSetIndex) flushBloomFilter() {
 		return
 	}
 
-	var fileName, filePath string
-	buffer := mergeset.GetIndexBuffer()
-	defer mergeset.PutIndexBuffer(buffer)
 	for i := range idx.queues {
-		b, err := idx.bf[i].WriteTo(buffer)
-		if err != nil {
-			idx.logger.Error("write mergeSet bloom filter file error", zap.Error(err))
-			return
-		}
+		idx.wg.Add(1)
+		go func(i int) {
+			buffer := mergeset.GetIndexBuffer()
+			defer mergeset.PutIndexBuffer(buffer)
+			defer idx.wg.Done()
+			b, err := idx.bf[i].WriteTo(buffer)
+			if err != nil {
+				idx.logger.Error("write mergeSet bloom filter file error", zap.Error(err))
+				return
+			}
 
-		fileName = strconv.Itoa(i+1) + "_" + mergeset.BloomFilterFileName
-		filePath = filepath.Join(dirPath, fileName)
-		fd, err := fileops.OpenFile(filePath, os.O_CREATE|os.O_RDWR, 0640, lock, pri)
-		if err != nil {
-			idx.logger.Error("open mergeSet bloom filter file error", zap.Error(err))
-			return
-		}
-
-		n, err := fd.Write(buffer.Bytes())
-		if err != nil || b != int64(n) {
-			idx.logger.Error("write mergeSet bloom filter file error", zap.Error(err))
-			return
-		}
-		buffer.Reset()
+			err = mergeset.FlushBloomFilter(i, b, dirPath, buffer, lock)
+			if err != nil {
+				idx.logger.Error("flush mergeSet bloom filter file error", zap.Error(err), zap.String("path", dirPath))
+			}
+		}(i)
 	}
+	idx.wg.Wait()
 }
 
 func (idx *MergeSetIndex) bfExist() bool {
@@ -948,6 +972,15 @@ func (idx *MergeSetIndex) SeriesGroup2MapOfProm(seriesNum int64, querySeriesUppe
 	var ok bool
 	var seriesN int
 
+	var closedSignal *bool
+	ctx := opt.GetCtx()
+	if ctx != nil {
+		closedSignal, ok = ctx.Value(hybridqp.QueryAborted).(*bool)
+		if !ok || closedSignal == nil {
+			idx.logger.Warn("there is no aborted signal to search series")
+		}
+	}
+
 LOOP:
 	for {
 		se, err := itr.Next()
@@ -956,6 +989,11 @@ LOOP:
 			return nil, nil, totalSeriesKeyLen, seriesN, err
 		} else if se.SeriesID == 0 {
 			break
+		}
+
+		// if a query interrupt is received, the index stops iterating.
+		if closedSignal != nil && *closedSignal {
+			return nil, nil, totalSeriesKeyLen, seriesN, errno.NewError(errno.QueryAborted)
 		}
 
 		seriesKeys, exprs, isExpectSeries, err = idx.searchSeriesWithTagArray(se.SeriesID, seriesKeys, exprs, combineSeriesKey, isExpectSeries, opt.Condition, false)
@@ -1038,6 +1076,16 @@ func (idx *MergeSetIndex) SeriesGroup2Map(seriesNum int64, querySeriesUpperBound
 	var exprs []*influxql.BinaryExpr
 	var tagSetsMap map[string]*TagSetInfo
 	var tagSetSlice []*TagSetInfo
+
+	var closedSignal *bool
+	ctx := opt.GetCtx()
+	if ctx != nil {
+		closedSignal, ok = ctx.Value(hybridqp.QueryAborted).(*bool)
+		if !ok || closedSignal == nil {
+			idx.logger.Warn("there is no aborted signal to search series")
+		}
+	}
+
 	if opt.GroupByAllDims {
 		tagSetSlice = make([]*TagSetInfo, 0, seriesNum)
 	} else {
@@ -1058,6 +1106,11 @@ LOOP:
 			return nil, nil, totalSeriesKeyLen, seriesN, err
 		} else if se.SeriesID == 0 {
 			break
+		}
+
+		// if a query interrupt is received, the index stops iterating.
+		if closedSignal != nil && *closedSignal {
+			return nil, nil, totalSeriesKeyLen, seriesN, errno.NewError(errno.QueryAborted)
 		}
 
 		seriesKeys, exprs, isExpectSeries, err = idx.searchSeriesWithTagArray(se.SeriesID, seriesKeys, exprs, combineSeriesKey, isExpectSeries, opt.Condition, false)
@@ -1109,9 +1162,9 @@ LOOP:
 			}
 
 			if exprs[i] != nil {
-				tagSet.Append(se.SeriesID, seriesKey, exprs[i], tagsBuf, nil)
+				tagSet.AppendWithOpt(se.SeriesID, seriesKey, exprs[i], tagsBuf, nil, opt)
 			} else {
-				tagSet.Append(se.SeriesID, seriesKey, se.Expr, tagsBuf, nil)
+				tagSet.AppendWithOpt(se.SeriesID, seriesKey, se.Expr, tagsBuf, nil, opt)
 			}
 			groupTagKey = groupTagKey[:0]
 			seriesN++
@@ -1194,9 +1247,16 @@ func (idx *MergeSetIndex) SearchSeriesWithOpts(span *tracing.Span, name []byte, 
 
 	// The TagSets have been created, as a map of TagSets. Just send
 	// the values back as a slice, sorting for consistency.
+	isExcept := opt.IsExcept()
+	if isExcept {
+		seriesNum = int64(len(tagSetsMap))
+	}
 	if !opt.GroupByAllDims {
 		tagSetSlice = make([]*TagSetInfo, 0, len(tagSetsMap))
 		for _, v := range tagSetsMap {
+			if isExcept {
+				v.Cut(SeriesNumPerTagSetForExcept)
+			}
 			tagSetSlice = append(tagSetSlice, v)
 		}
 	}
@@ -1399,10 +1459,6 @@ func (idx *MergeSetIndex) Close() error {
 	}
 
 	idx.tb.MustClose()
-
-	for i := 0; i < len(idx.bf); i++ {
-		idx.bf[i].ClearAll()
-	}
 
 	for i := 0; i < len(idx.queues); i++ {
 		close(idx.queues[i])

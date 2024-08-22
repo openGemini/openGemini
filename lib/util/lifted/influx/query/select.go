@@ -11,6 +11,7 @@ Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"sort"
 	"sync"
@@ -134,6 +135,16 @@ func Prepare(stmt *influxql.SelectStatement, shardMapper ShardMapper, opt Select
 	return c.Prepare(shardMapper, opt)
 }
 
+func IsCountValues(stmt *influxql.SelectStatement) bool {
+	if len(stmt.Fields) == 0 {
+		return false
+	}
+	if call, ok := stmt.Fields[0].Expr.(*influxql.Call); ok && call.Name == "count_values_prom" {
+		return true
+	}
+	return false
+}
+
 // ProcessorOptions is an object passed to CreateIterator to specify creation options.
 type ProcessorOptions struct {
 	Name string
@@ -154,8 +165,7 @@ type ProcessorOptions struct {
 
 	// Group by interval and tags.
 	Interval   hybridqp.Interval
-	Dimensions []string // The final dimensions of the query (stays the same even in subqueries).
-	Except     bool
+	Dimensions []string            // The final dimensions of the query (stays the same even in subqueries).
 	GroupBy    map[string]struct{} // Dimensions to group points by in intermediate iterators.
 	Location   *time.Location
 
@@ -262,6 +272,17 @@ type ProcessorOptions struct {
 
 	// promQuery use
 	Without bool
+
+	LowerOpt *ProcessorOptions
+
+	BinOp bool
+
+	IsCountValues bool
+
+	SimpleTagset bool
+
+	// query context
+	ctx context.Context
 }
 
 // NewProcessorOptionsStmt creates the iterator options from stmt.
@@ -295,15 +316,12 @@ func NewProcessorOptionsStmt(stmt *influxql.SelectStatement, sopt SelectOptions)
 	// The emitter will always emit points as ordered.
 	opt.Ordered = true
 
-	exceptDimensions := make(map[string]struct{})
+	exceptDimensions := make(map[string]struct{}, len(stmt.ExceptDimensions))
+	validExceptDimens := make(map[string]struct{}, len(stmt.ExceptDimensions))
 	for _, dim := range stmt.ExceptDimensions {
 		if d, ok := dim.Expr.(*influxql.VarRef); ok {
 			exceptDimensions[d.Val] = struct{}{}
 		}
-	}
-
-	if len(exceptDimensions) > 0 {
-		opt.Except = true
 	}
 
 	// Determine dimensions.
@@ -311,6 +329,7 @@ func NewProcessorOptionsStmt(stmt *influxql.SelectStatement, sopt SelectOptions)
 	for _, d := range stmt.Dimensions {
 		if d, ok := d.Expr.(*influxql.VarRef); ok {
 			if _, ok = exceptDimensions[d.Val]; ok {
+				validExceptDimens[d.Val] = struct{}{}
 				continue
 			}
 			if ContainDim(opt.Dimensions, d.Val) {
@@ -349,7 +368,38 @@ func NewProcessorOptionsStmt(stmt *influxql.SelectStatement, sopt SelectOptions)
 	opt.QueryOffset = stmt.QueryOffset
 	opt.PromQuery = stmt.IsPromQuery
 	opt.Without = stmt.Without
+	if IsCountValues(stmt) {
+		opt.IsCountValues = true
+	}
+	if len(exceptDimensions) > 0 {
+		if len(validExceptDimens) != len(exceptDimensions) && (stmt.GroupByAllDims && len(stmt.Dimensions) > 0) {
+			return ProcessorOptions{}, fmt.Errorf("except: invalid fields")
+		}
+		if err = opt.validateExcept(stmt); err != nil {
+			return ProcessorOptions{}, err
+		}
+		opt.Without = true
+		opt.GroupByAllDims = false
+	}
 	return opt, nil
+}
+
+func (opt *ProcessorOptions) validateExcept(stmt *influxql.SelectStatement) error {
+	if !stmt.GroupByAllDims {
+		return fmt.Errorf("except: only group by * is supported")
+	}
+	if len(stmt.Sources) != 1 {
+		return fmt.Errorf("except: multi-measurement is unsupported")
+	}
+	if _, ok := stmt.Sources[0].(*influxql.Measurement); !ok {
+		return fmt.Errorf("except: sub-query or join-query is unsupported")
+	}
+	for i := range stmt.Fields {
+		if call, ok := stmt.Fields[i].Expr.(*influxql.Call); ok {
+			return fmt.Errorf("except:  %s is unsupported", call.Name)
+		}
+	}
+	return nil
 }
 
 func (opt *ProcessorOptions) GetStmtId() int {
@@ -763,8 +813,44 @@ func (opt *ProcessorOptions) IsPromGroupAll() bool {
 	return opt.PromQuery && opt.GroupByAllDims
 }
 
+func (opt *ProcessorOptions) IsPromWithout() bool {
+	return opt.Without && opt.PromQuery
+}
+
 func (opt *ProcessorOptions) IsWithout() bool {
 	return opt.Without
+}
+
+func (opt *ProcessorOptions) IsExcept() bool {
+	return opt.Without && !opt.PromQuery
+}
+
+func (opt *ProcessorOptions) GetLowerOpt() hybridqp.Options {
+	return opt.LowerOpt
+}
+
+func (opt *ProcessorOptions) SetBinOp(en bool) {
+	opt.BinOp = en
+}
+
+func (opt *ProcessorOptions) GetBinop() bool {
+	return opt.BinOp
+}
+
+func (opt *ProcessorOptions) SetSimpleTagset(flag bool) {
+	opt.SimpleTagset = flag
+}
+
+func (opt *ProcessorOptions) GetSimpleTagset() bool {
+	return opt.SimpleTagset
+}
+
+func (opt *ProcessorOptions) SetCtx(ctx context.Context) {
+	opt.ctx = ctx
+}
+
+func (opt *ProcessorOptions) GetCtx() context.Context {
+	return opt.ctx
 }
 
 func validateTypes(stmt *influxql.SelectStatement) error {

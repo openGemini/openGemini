@@ -32,6 +32,7 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	streamLib "github.com/openGemini/openGemini/lib/stream"
+	strings2 "github.com/openGemini/openGemini/lib/strings"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
@@ -47,7 +48,7 @@ type streamTask struct {
 	fieldIndexKeys []string
 }
 
-func newStreamTask(info *meta2.StreamInfo, srcSchema, dstSchema map[string]int32) (*streamTask, error) {
+func newStreamTask(info *meta2.StreamInfo, srcSchema, dstSchema *meta2.CleanSchema) (*streamTask, error) {
 	w := &streamTask{
 		info: info,
 	}
@@ -105,7 +106,7 @@ func PutStreamCtx(s *streamCtx) {
 
 type streamCtx struct {
 	minTime         int64
-	bp              *streamLib.BuilderPool
+	bp              *strings2.BuilderPool
 	db              *meta2.DatabaseInfo
 	rp              *meta2.RetentionPolicyInfo
 	ms              *meta2.MeasurementInfo
@@ -128,7 +129,7 @@ func (s *streamCtx) reset() {
 	s.dataCache = make(map[string]map[int64][]*float64)
 }
 
-func (s *streamCtx) SetBP(bp *streamLib.BuilderPool) {
+func (s *streamCtx) SetBP(bp *strings2.BuilderPool) {
 	s.bp = bp
 }
 
@@ -162,7 +163,7 @@ func (s *streamCtx) initVar(w *PointsWriter, si *meta2.StreamInfo) (err error) {
 	}
 
 	if s.bp == nil {
-		s.bp = streamLib.NewBuilderPool()
+		s.bp = strings2.NewBuilderPool()
 	}
 
 	if s.opt == nil {
@@ -468,11 +469,13 @@ func (s *Stream) GenerateGroupKey(ctx *streamCtx, keys []string, value *influx.R
 	return builder.NewString()
 }
 
-func BuildFieldCall(info *meta2.StreamInfo, srcSchema map[string]int32, destSchema map[string]int32) ([]*streamLib.FieldCall, error) {
+func BuildFieldCall(info *meta2.StreamInfo, srcSchema *meta2.CleanSchema, destSchema *meta2.CleanSchema) ([]*streamLib.FieldCall, error) {
 	calls := make([]*streamLib.FieldCall, len(info.Calls))
 	var err error
 	for i, v := range info.Calls {
-		calls[i], err = streamLib.NewFieldCall(srcSchema[v.Field], destSchema[v.Alias], v.Field, v.Alias, v.Call, false)
+		srcTyp, _ := srcSchema.GetTyp(v.Field)
+		dstTyp, _ := destSchema.GetTyp(v.Alias)
+		calls[i], err = streamLib.NewFieldCall(srcTyp, dstTyp, v.Field, v.Alias, v.Call, false)
 		if err != nil {
 			return nil, err
 		}

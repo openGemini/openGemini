@@ -17,6 +17,7 @@ package immutable
 
 import (
 	"container/heap"
+	"time"
 
 	"github.com/openGemini/openGemini/engine/comm"
 	"github.com/openGemini/openGemini/engine/hybridqp"
@@ -25,15 +26,21 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
+const (
+	SortLimitCursorDuration = "sort_limit_cursor_duration"
+)
+
 type SortLimitCursor struct {
 	isRead   bool
+	isClose  bool
+	span     *tracing.Span
 	options  hybridqp.Options
 	schemas  record.Schemas
 	input    comm.TimeCutKeyCursor
 	sortHeap *SortLimitRows
 }
 
-func NewSortLimitCursor(options hybridqp.Options, schemas record.Schemas, input comm.TimeCutKeyCursor) *SortLimitCursor {
+func NewSortLimitCursor(options hybridqp.Options, schemas record.Schemas, input comm.TimeCutKeyCursor, shardId int64) *SortLimitCursor {
 	sortIndex := make([]int, len(options.GetSortFields()))
 	for fk, field := range options.GetSortFields() {
 		for sk, v := range schemas {
@@ -42,7 +49,7 @@ func NewSortLimitCursor(options hybridqp.Options, schemas record.Schemas, input 
 			}
 		}
 	}
-	h := NewSortLimitRows(sortIndex, schemas)
+	h := NewSortLimitRows(sortIndex, schemas, shardId)
 	heap.Init(h)
 	return &SortLimitCursor{
 		options:  options,
@@ -57,6 +64,12 @@ func (t *SortLimitCursor) Name() string {
 }
 
 func (t *SortLimitCursor) StartSpan(span *tracing.Span) {
+	if span == nil {
+		return
+	}
+	t.span = span
+	t.input.StartSpan(span)
+	t.span.CreateCounter(SortLimitCursorDuration, "ns")
 }
 
 func (t *SortLimitCursor) EndSpan() {
@@ -81,9 +94,16 @@ func (t *SortLimitCursor) Next() (*record.Record, comm.SeriesInfoIntf, error) {
 		return nil, nil, nil
 	}
 	for {
+		if t.isClose {
+			return nil, nil, nil
+		}
 		re, se, err := t.input.Next()
 		if err != nil {
 			return re, se, err
+		}
+		var tm time.Time
+		if t.span != nil {
+			tm = time.Now()
 		}
 		if re == nil || re.RowNums() == 0 {
 			break
@@ -124,12 +144,16 @@ func (t *SortLimitCursor) Next() (*record.Record, comm.SeriesInfoIntf, error) {
 		if t.options.CanTimeLimitPushDown() && t.sortHeap.Len() >= t.options.GetLimit() {
 			t.input.UpdateTime(t.sortHeap.rows[0][len(t.schemas)-1].(int64))
 		}
+		if t.span != nil {
+			t.span.Count(SortLimitCursorDuration, int64(time.Since(tm)))
+		}
 	}
 	t.isRead = true
 	return t.sortHeap.PopToRec(), nil, nil
 }
 
 func (t *SortLimitCursor) Close() error {
+	t.isClose = true
 	if t.input != nil {
 		return t.input.Close()
 	}

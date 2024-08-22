@@ -179,7 +179,7 @@ func (reader *SegmentSequenceReader) getLogsBy(result *record.Record) ([]map[str
 	}
 	var size int64
 	for index, v := range result.Schema {
-		if v.Name == record.SeqIDField {
+		if v.Name == record.SeqIDField || v.Name == influxql.ShardIDField {
 			continue
 		}
 		size += int64(result.Column(index).GetValLen())

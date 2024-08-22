@@ -16,10 +16,8 @@ limitations under the License.
 
 /*
 Copyright 2020 Dgraph Labs, Inc. and Contributors
-This code is originally from: https://github.com/solsson/dgraph/blob/schemagen-cli/v21.x-c2c67d1aa/raftwal/wal.go
+This code is originally from: https://github.com/dgraph-io/dgraph/blob/v23.1.1/raftwal/wal.go
 */
-
-//lint:file-ignore U1000 ignore until next pr
 
 package raftlog
 
@@ -199,9 +197,6 @@ func (l *entryLog) AddEntries(entries []raftpb.Entry) error {
 		l.nextEntryIdx++
 	}
 
-	if err := l.current.entry.TrySync(); err != nil {
-		return errors.Wrapf(err, "while trying sync entry file")
-	}
 	return nil
 }
 

@@ -53,8 +53,8 @@ public:
     }
 
 private:
-    void InsertPostingList(MemPool *pool, Invert *root, VToken *vtoken, uint32_t batchLen);
-    void PutToSortInvert(MemPool *pool, Invert *root);
+    uint32_t InsertPostingList(MemPool *pool, Invert *root, ListNode *hashSections, VToken *vtoken, uint32_t batchLen);
+    void PutToSortInvert(MemPool *pool, Invert *root, ListNode *hashSections, uint32_t nodeCount);
     uint32_t GetHashTableBkts(uint32_t rowsCnt);
     void UpdateHashSizeCurve(uint32_t rowsCnt, uint32_t tokensCnt);
 
@@ -64,7 +64,6 @@ public:
 
 private:
     SimpleGramTokenizer tokenizer;
-    uint32_t nodeCount;
 };
 
 #endif

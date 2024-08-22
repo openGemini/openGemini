@@ -504,6 +504,15 @@ func (is *indexSearch) seriesByTagFilters(name []byte) (index.SeriesIDIterator, 
 	// if cost eq keep tf order in where clause
 	sort.Slice(tfcosts, func(i, j int) bool {
 		a, b := &tfcosts[i], &tfcosts[j]
+		// for the query tag='', the index query will obtain the full measurement TSID,
+		// so the query computation is the largest and placed last.
+		// for example, "tag0='' and tag1='xxx'", adjust the order to "tag1='xxx' and tag0=''".
+		if b.tf.IsFilterEmptyValue() {
+			return !a.tf.IsFilterEmptyValue()
+		}
+		if a.tf.IsFilterEmptyValue() {
+			return true
+		}
 		return a.cost < b.cost
 	})
 	var err error
@@ -549,15 +558,25 @@ func (is *indexSearch) seriesByTagFilters(name []byte) (index.SeriesIDIterator, 
 	if startTfLoc > 0 {
 		sort.Slice(tfcosts, func(i, j int) bool {
 			a, b := &tfcosts[i], &tfcosts[j]
+			// for the query tag='', the index query will obtain the full measurement TSID,
+			// so the query computation is the largest and placed last.
+			// for example, "tag0='' and tag1='xxx'", adjust the order to "tag1='xxx' and tag0=''".
+			if b.tf.IsFilterEmptyValue() {
+				return !a.tf.IsFilterEmptyValue()
+			}
+			if a.tf.IsFilterEmptyValue() {
+				return true
+			}
 			return a.cost < b.cost
 		})
 	}
 	for i, tfcost := range tfcosts {
-		// if the cost of next filter is much larger
-		// than the current result set,
+		// if the cost of next filter is much larger than the current result set,
+		// or the current result set is less than TagScanPruneThreshold and the current tagfilter condition is tag=""
 		// it's very inefficient to tarverse the tsids of next filter,
 		// we can do prune there.
-		if tfcost.cost/int64(set.Len()) > int64(pruneThreshold) {
+		if (tfcost.cost/int64(set.Len()) > int64(pruneThreshold)) ||
+			(tfcost.tf.IsFilterEmptyValue() && set.Len() < is.idx.config.TagScanPruneThreshold) {
 			tfs := make([]*tagFilter, len(tfcosts)-i)
 			for j := 0; j < len(tfs); j++ {
 				tfs[j] = tfcosts[i+j].tf

@@ -19,9 +19,10 @@ package engine
 import (
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/index/tsi"
+	"github.com/openGemini/openGemini/lib/metaclient"
 )
 
-func (s *shard) CreateShowTagValuesPlan() immutable.ShowTagValuesPlan {
+func (s *shard) CreateShowTagValuesPlan(client metaclient.MetaClient) immutable.ShowTagValuesPlan {
 	if s.indexBuilder == nil {
 		return nil
 	}
@@ -29,5 +30,5 @@ func (s *shard) CreateShowTagValuesPlan() immutable.ShowTagValuesPlan {
 	if !ok {
 		return nil
 	}
-	return immutable.NewShowTagValuesPlan(s.immTables, idx, s.log)
+	return immutable.NewShowTagValuesPlan(s.immTables, idx, s.log, s, client)
 }

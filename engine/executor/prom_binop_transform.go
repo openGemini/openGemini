@@ -455,11 +455,11 @@ func (trans *BinOpTransform) AddResult(secondaryChunk Chunk) error {
 		if err = trans.addResulMap(matchTags, tagsKeys, tagValues, tags[i], primaryGroups); err != nil {
 			return err
 		}
-		if err := trans.computeMatchResult(primaryGroups, secondaryChunk, i); err != nil {
-			return err
-		}
 		if trans.notSameGroup(tags[i]) {
 			primaryGroups.reset()
+		}
+		if err := trans.computeMatchResult(primaryGroups, secondaryChunk, i); err != nil {
+			return err
 		}
 		trans.preTags = string(tags[i].subset)
 	}
@@ -483,6 +483,7 @@ func (trans *BinOpTransform) computeMatchResult(primaryGroups *GroupLocs, second
 	var start, end int
 	var rVal float64
 	var keep bool
+	var pTime, sTime int64
 	preOutSize := trans.outputChunk.Len()
 	start = secondaryChunk.TagIndex()[secondaryGroupLoc]
 	if secondaryGroupLoc == secondaryChunk.TagLen()-1 {
@@ -490,15 +491,20 @@ func (trans *BinOpTransform) computeMatchResult(primaryGroups *GroupLocs, second
 	} else {
 		end = secondaryChunk.TagIndex()[secondaryGroupLoc+1]
 	}
-	for ; start < end; start++ {
+	for start < end {
 		if primaryGroups.Loc >= len(primaryGroups.Locs) {
-			return fmt.Errorf("primary point over")
+			break
 		}
 		pLoc := primaryGroups.Locs[primaryGroups.Loc]
 		pChunk := trans.primaryChunks[pLoc.ChunkLoc]
-		pTime := pChunk.Time()[pLoc.RowLoc]
-		if pTime != secondaryChunk.Time()[start] {
-			return fmt.Errorf("primary time: %d != secondary time: %d", pTime, secondaryChunk.Time()[start])
+		pTime = pChunk.Time()[pLoc.RowLoc]
+		sTime = secondaryChunk.Time()[start]
+		if pTime < sTime {
+			primaryGroups.add(pChunk.Len())
+			continue
+		} else if sTime < pTime {
+			start++
+			continue
 		}
 		pVal := pChunk.Columns()[0].FloatValues()[pLoc.RowLoc]
 		sVal := secondaryChunk.Columns()[0].FloatValues()[start]
@@ -514,10 +520,13 @@ func (trans *BinOpTransform) computeMatchResult(primaryGroups *GroupLocs, second
 				rVal = 0
 			}
 		} else if !keep {
+			primaryGroups.add(pChunk.Len())
+			start++
 			continue
 		}
 		trans.addOutputVal(pTime, rVal)
 		primaryGroups.add(pChunk.Len())
+		start++
 	}
 	if trans.outputChunk.Len() > preOutSize {
 		trans.addOutPutTags(preOutSize)

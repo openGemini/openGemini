@@ -7,6 +7,7 @@ import (
 
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/prometheus/prometheus/promql/parser"
+	"github.com/stretchr/testify/assert"
 )
 
 func AggregateExpr(input string) *parser.AggregateExpr {
@@ -92,7 +93,7 @@ func TestTranspiler_transpileAggregateExpr(t1 *testing.T) {
 			args: args{
 				a: AggregateExpr(`topk(3, go_gc_duration_seconds_count)`),
 			},
-			want:    parseInfluxqlByYacc(`SELECT top(value, 3) AS value FROM go_gc_duration_seconds_count WHERE time >= '2023-01-06T03:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY *, time(1m) fill(none)`),
+			want:    parseInfluxqlByYacc(`SELECT top(value, 3) AS value FROM go_gc_duration_seconds_count WHERE time >= '2023-01-06T03:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY *, time(1m,0s) fill(none)`),
 			wantErr: false,
 		},
 		{
@@ -103,7 +104,7 @@ func TestTranspiler_transpileAggregateExpr(t1 *testing.T) {
 			args: args{
 				a: AggregateExpr(`sum(go_gc_duration_seconds_count) by (container)`),
 			},
-			want:    parseInfluxqlByYacc(`SELECT sum(value) AS value FROM go_gc_duration_seconds_count WHERE time >= '2023-01-06T03:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY container, time(1m) fill(none)`),
+			want:    parseInfluxqlByYacc(`SELECT sum(value) AS value FROM go_gc_duration_seconds_count WHERE time >= '2023-01-06T03:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY container, time(1m,0s) fill(none)`),
 			wantErr: false,
 		},
 		{
@@ -114,7 +115,7 @@ func TestTranspiler_transpileAggregateExpr(t1 *testing.T) {
 			args: args{
 				a: AggregateExpr(`sum by (endpoint) (topk(1, go_gc_duration_seconds_count) by (container))`),
 			},
-			want:    parseInfluxqlByYacc(`SELECT sum(value) AS value FROM (SELECT top(value, 1) AS value FROM go_gc_duration_seconds_count WHERE time >= '2023-01-06T03:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY *, time(1m) fill(none)) WHERE time >= '2023-01-06T03:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY endpoint, time(1m) fill(none)`),
+			want:    parseInfluxqlByYacc(`SELECT sum(value) AS value FROM (SELECT top(value, 1) AS value FROM go_gc_duration_seconds_count WHERE time >= '2023-01-06T03:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY *, time(1m,0s) fill(none)) WHERE time >= '2023-01-06T03:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY endpoint, time(1m,0s) fill(none)`),
 			wantErr: false,
 		},
 		{
@@ -125,7 +126,7 @@ func TestTranspiler_transpileAggregateExpr(t1 *testing.T) {
 			args: args{
 				a: AggregateExpr(`sum by (endpoint) (sum(go_gc_duration_seconds_count) by (container))`),
 			},
-			want:    parseInfluxqlByYacc(`SELECT sum(value) AS value FROM (SELECT sum(value) AS value FROM go_gc_duration_seconds_count WHERE time >= '2023-01-06T03:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY container, time(1m) fill(none)) WHERE time >= '2023-01-06T03:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY endpoint, time(1m) fill(none)`),
+			want:    parseInfluxqlByYacc(`SELECT sum(value) AS value FROM (SELECT sum(value) AS value FROM go_gc_duration_seconds_count WHERE time >= '2023-01-06T03:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY container, time(1m,0s) fill(none)) WHERE time >= '2023-01-06T03:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY endpoint, time(1m,0s) fill(none)`),
 			wantErr: false,
 		},
 		{
@@ -172,6 +173,28 @@ func TestTranspiler_transpileAggregateExpr(t1 *testing.T) {
 			want:    parseInfluxqlByYacc(`SELECT sum(value) AS value FROM go_gc_duration_seconds_count WHERE time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY nonexistent`),
 			wantErr: false,
 		},
+		{
+			name: "13",
+			fields: fields{
+				Start: &startTime2, End: &endTime2, Step: step,
+			},
+			args: args{
+				a: AggregateExpr(`count_values("job", go_gc_duration_seconds_count)`),
+			},
+			want:    parseInfluxqlByYacc(`SELECT sum(value) AS value FROM (SELECT count_values_prom(value, 'job') AS value FROM go_gc_duration_seconds_count WHERE time >= '2023-01-06T03:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY time(1m, 0s) fill(none)) WHERE time >= '2023-01-06T03:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY job, time(1m, 0s) fill(none)`),
+			wantErr: false,
+		},
+		{
+			name: "13",
+			fields: fields{
+				Start: &startTime2, End: &endTime2, Step: step,
+			},
+			args: args{
+				a: AggregateExpr(`count_values by (job) ("job", go_gc_duration_seconds_count)`),
+			},
+			want:    parseInfluxqlByYacc(`SELECT sum(value) AS value FROM (SELECT count_values_prom(value, 'job') AS value FROM go_gc_duration_seconds_count WHERE time >= '2023-01-06T03:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY job, time(1m, 0s) fill(none)) WHERE time >= '2023-01-06T03:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY job, time(1m, 0s) fill(none)`),
+			wantErr: false,
+		},
 	}
 	for _, tt := range tests {
 		t1.Run(tt.name, func(t1 *testing.T) {
@@ -199,4 +222,58 @@ func TestTranspiler_transpileAggregateExpr(t1 *testing.T) {
 			}
 		})
 	}
+}
+
+func TestGetCountValuesGrouping(t *testing.T) {
+	t.Run("group by", func(t *testing.T) {
+		a := &parser.AggregateExpr{
+			Without:  false,
+			Grouping: []string{"a", "b", "c"},
+			Param: &parser.StringLiteral{
+				Val: "d",
+			},
+		}
+		groupings := getCountValuesGrouping(a)
+		exp := []string{"a", "b", "c", "d"}
+		assert.Equal(t, groupings, exp)
+	})
+
+	t.Run("group by", func(t *testing.T) {
+		a := &parser.AggregateExpr{
+			Without:  false,
+			Grouping: []string{"a", "b", "c"},
+			Param: &parser.StringLiteral{
+				Val: "a",
+			},
+		}
+		groupings := getCountValuesGrouping(a)
+		exp := []string{"a", "b", "c"}
+		assert.Equal(t, groupings, exp)
+	})
+
+	t.Run("without", func(t *testing.T) {
+		a := &parser.AggregateExpr{
+			Without:  true,
+			Grouping: []string{"a", "b", "c"},
+			Param: &parser.StringLiteral{
+				Val: "a",
+			},
+		}
+		groupings := getCountValuesGrouping(a)
+		exp := []string{"b", "c"}
+		assert.Equal(t, exp, groupings)
+	})
+
+	t.Run("without", func(t *testing.T) {
+		a := &parser.AggregateExpr{
+			Without:  true,
+			Grouping: []string{"a", "b", "c"},
+			Param: &parser.StringLiteral{
+				Val: "d",
+			},
+		}
+		groupings := getCountValuesGrouping(a)
+		exp := []string{"a", "b", "c"}
+		assert.Equal(t, groupings, exp)
+	})
 }

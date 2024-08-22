@@ -487,12 +487,7 @@ func TestOpenObsFile(t *testing.T) {
 }
 
 func TestGetRemoteDataPath(t *testing.T) {
-	rootDir := "/tmp/GetRemoteDataPath"
-	defer RemoveAll(rootDir)
-
-	targetPath := GetRemoteDataPath(nil, rootDir)
-	assert.Equal(t, "", targetPath)
-
+	rootDir := "/tmp/openGemini/data/GetRemoteDataPath"
 	obsOpt := &obs.ObsOptions{
 		Endpoint:   "mock_endpoint",
 		Ak:         "mock_ak",
@@ -502,8 +497,16 @@ func TestGetRemoteDataPath(t *testing.T) {
 		Enabled:    true,
 	}
 
+	targetPath := GetRemoteDataPath(nil, rootDir)
+	assert.Equal(t, "", targetPath)
+
+	obs.SetPrefixDataPath("/tmp/openGemini/data")
 	targetPath = GetRemoteDataPath(obsOpt, rootDir)
-	assert.Equal(t, "obs://mock_endpoint/mock_ak/mock_sk/mock_BucketName/mock_basePath/tmp/GetRemoteDataPath", targetPath)
+	assert.Equal(t, "obs://mock_endpoint/mock_ak/mock_sk/mock_BucketName/mock_basePath/GetRemoteDataPath", targetPath)
+
+	obs.SetPrefixDataPath("/tmp/openGemini/data/")
+	targetPath = GetRemoteDataPath(obsOpt, rootDir)
+	assert.Equal(t, "obs://mock_endpoint/mock_ak/mock_sk/mock_BucketName/mock_basePath/GetRemoteDataPath", targetPath)
 }
 
 func TestRemoveLocal(t *testing.T) {

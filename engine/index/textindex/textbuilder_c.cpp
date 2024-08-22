@@ -50,6 +50,10 @@ void FreeTextIndexBuilder(TextIndexBuilder builder)
 MemElement AddDocument(TextIndexBuilder builder, char *val, uint32_t valLen, uint32_t *offset, uint32_t offLen, uint32_t startRow, uint32_t endRow)
 {
     FullTextIndex *textIndex = reinterpret_cast<FullTextIndex *>(builder);
+    if (textIndex == nullptr) {
+        LOG_ERROR("input text index is invalid");
+        return nullptr;
+    }
     return (MemElement)textIndex->AddDocument(val, valLen, offset, offLen, startRow, endRow);
 }
 
@@ -65,11 +69,44 @@ MemElement AddDocument(TextIndexBuilder builder, char *val, uint32_t valLen, uin
 bool NextData(MemElement memElement, char *keys, uint32_t keysLen, char *data, uint32_t dataLen, uint32_t *res)
 {
     MemPool *memPool = reinterpret_cast<MemPool *>(memElement);
+    if (memPool == nullptr) {
+        LOG_ERROR("input memory element is invalid");
+        return false;
+    }
     return memPool->Next(keys, keysLen, data, dataLen, res);
 }
 
 void PutMemElement(MemElement memElement)
 {
     MemPool *memPool = reinterpret_cast<MemPool *>(memElement);
+    if (memPool == nullptr) {
+        LOG_ERROR("input memory element is invalid");
+        return;
+    }
     PutMemPool(memPool);
+}
+
+// get memory element for test
+MemElement GetMemElement(uint32_t groupSize)
+{
+    MemPool *pool = GetMemPool();
+    InvertGroup *invertGroup = pool->GetInvertGroup();
+    int32_t ret = invertGroup->Prepare(groupSize);
+    if (ret != SUCCESS) {
+        PutMemElement(pool);
+        return nullptr;
+    }
+    pool->invertIter = 0;
+    return (MemElement)pool;
+}
+
+// add posting data for test
+bool AddPostingToMem(MemElement memElement, char *key, uint32_t keyLen, uint32_t rowId)
+{
+    MemPool *memPool = reinterpret_cast<MemPool *>(memElement);
+    if (memPool == nullptr) {
+        LOG_ERROR("input memory element is invalid");
+        return false;
+    }
+    return memPool->AddPostingData(key, keyLen, rowId);
 }

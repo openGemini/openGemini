@@ -225,7 +225,7 @@ func PromRangeVectorTransformTestBase(t *testing.T, chunks []executor.Chunk, cal
 		panic("err")
 	}
 	checkResult := func(chunk executor.Chunk) error {
-		PromResultCompare(chunk, rChunk, t)
+		PromResultCompareMultiCol(chunk, rChunk, t)
 		return nil
 	}
 	sink := NewSinkFromFunction(outRowDataType, checkResult)

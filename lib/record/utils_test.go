@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -170,4 +171,46 @@ func valueIndexRangeWithSingle(bitMap []byte, bmStart int, pos int, posValidCoun
 	num = (((num >> leftIndex) << (leftIndex + rightIndex)) >> rightIndex)
 	posValidCount = posValidCount + bitNum[int(num)]
 	return posValidCount
+}
+
+func TestReserveInt64Slice(t *testing.T) {
+	type args struct {
+		b    []int64
+		size int
+	}
+	tests := []struct {
+		name string
+		args args
+		want []int64
+	}{
+		{
+			name: "1",
+			args: args{
+				b:    []int64{},
+				size: 1,
+			},
+			want: []int64{0},
+		},
+		{
+			name: "2",
+			args: args{
+				b:    make([]int64, 0, 2),
+				size: 1,
+			},
+			want: []int64{0},
+		},
+		{
+			name: "3",
+			args: args{
+				b:    make([]int64, 0, 2),
+				size: 3,
+			},
+			want: []int64{0, 0, 0},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equalf(t, tt.want, record.ReserveInt64Slice(tt.args.b, tt.args.size), "ReserveInt64Slice(%v, %v)", tt.args.b, tt.args.size)
+		})
+	}
 }

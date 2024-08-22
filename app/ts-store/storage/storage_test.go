@@ -167,7 +167,7 @@ func TestStorage_Write(t *testing.T) {
 	var shardID uint64 = 1
 	st.engine.CreateDBPT(db, ptId, false)
 	err = st.Write(db, rp, mst, ptId, shardID, func() error {
-		return st.engine.WriteRows(db, rp, ptId, shardID, nil, nil)
+		return st.engine.WriteRows(db, rp, ptId, shardID, nil, nil, nil)
 	})
 	assert.Equal(t, nil, err)
 
@@ -188,7 +188,7 @@ func TestStorage_Write(t *testing.T) {
 	}
 
 	err = st.Write(db, rp, mst, ptId, 2, func() error {
-		return st.engine.WriteRows(db, rp, ptId, 2, nil, nil)
+		return st.engine.WriteRows(db, rp, ptId, 2, nil, nil, nil)
 	})
 	assert.Equal(t, true, errno.Equal(err, errno.NoNodeAvailable))
 }
@@ -253,7 +253,16 @@ func TestStorage_WriteToSlave(t *testing.T) {
 			return &meta.MeasurementInfo{Name: "mst"}, nil
 		},
 	}
+	mockData := meta.Data{
+		Databases: map[string]*meta.DatabaseInfo{
+			"db0": {
+				ReplicaN: 2,
+			},
+		},
+	}
 	st.MetaClient = mockClient
+	st.metaClient = &metaclient.Client{}
+	st.metaClient.SetCacheData(&mockData)
 	newEngineFn := netstorage.GetNewEngineFunction(config.DefaultEngine)
 
 	loadCtx := metaclient.LoadCtx{}
@@ -274,7 +283,9 @@ func TestStorage_WriteToSlave(t *testing.T) {
 	rows := mockRows(1)
 	binaryRows, _ := influx.FastMarshalMultiRows(nil, rows)
 	err = st.WriteRows(db, rp, ptId, shardID, rows, binaryRows)
-	assert.Equal(t, nil, err)
+	if !errno.Equal(err, errno.RepConfigWriteNoRepDB) {
+		t.Fatal("TestStorage_WriteToSlave err")
+	}
 
 	// replication write
 	mockClient.replicaInfo = &message.ReplicaInfo{

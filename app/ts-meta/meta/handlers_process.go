@@ -62,7 +62,8 @@ func (h *CreateNode) Process() (transport.Codec, error) {
 	httpAddr := h.req.WriteHost
 	tcpAddr := h.req.QueryHost
 	role := h.req.Role
-	b, err := h.store.createDataNode(httpAddr, tcpAddr, role)
+	az := h.req.Az
+	b, err := h.store.createDataNode(httpAddr, tcpAddr, role, az)
 	if err != nil {
 		h.logger.Error("createNode fail", zap.Error(err))
 		rsp.Err = err.Error()
@@ -242,7 +243,7 @@ func createDatabase(cmd *proto2.Command) error {
 		return fmt.Errorf("%s is not a CreateDatabaseCommand", ext)
 	}
 
-	// 1.create db pt view
+	// 1.create db pt view, and create rgs if rep on
 	val := &proto2.CreateDbPtViewCommand{
 		DbName:     v.Name,
 		ReplicaNum: v.ReplicaNum,
@@ -256,8 +257,8 @@ func createDatabase(cmd *proto2.Command) error {
 		return err
 	}
 
-	// 2.assign db pt
-	dbPts, err := globalService.store.getDbPtsByDbname(v.GetName(), v.GetEnableTagArray())
+	// 2.assign db pt, if rep on make sure rg of pt if not UNFULL
+	dbPts, err := globalService.store.getDbPtsByDbname(v.GetName(), v.GetEnableTagArray(), v.GetReplicaNum())
 	if err != nil {
 		return err
 	}

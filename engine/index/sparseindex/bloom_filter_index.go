@@ -35,6 +35,7 @@ import (
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/rpn"
 	"github.com/openGemini/openGemini/lib/tokenizer"
+	"github.com/openGemini/openGemini/lib/tracing"
 	"go.uber.org/zap"
 )
 
@@ -89,6 +90,7 @@ type BloomFilterIndexReader struct {
 	option  hybridqp.Options
 	bf      rpn.SKBaseReader
 	sk      SKCondition
+	span    *tracing.Span
 }
 
 func NewBloomFilterIndexReader(rpnExpr *rpn.RPNExpr, schema record.Schemas, option hybridqp.Options, isCache bool) (*BloomFilterIndexReader, error) {
@@ -101,6 +103,10 @@ func NewBloomFilterIndexReader(rpnExpr *rpn.RPNExpr, schema record.Schemas, opti
 
 func (r *BloomFilterIndexReader) MayBeInFragment(fragId uint32) (bool, error) {
 	return r.sk.IsExist(int64(fragId), r.bf)
+}
+
+func (r *BloomFilterIndexReader) StartSpan(span *tracing.Span) {
+	r.span = span
 }
 
 func (r *BloomFilterIndexReader) ReInit(file interface{}) (err error) {

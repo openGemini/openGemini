@@ -132,6 +132,7 @@ func (exec *PipelineExecutor) Crash() {
 	}
 	exec.crashed = true
 	exec.cancel()
+	exec.processors.Interrupt()
 	exec.processors.Close()
 }
 
@@ -183,7 +184,7 @@ func (exec *PipelineExecutor) ExecuteExecutor(ctx context.Context) error {
 	return exec.Execute(ctx)
 }
 
-func (exec *PipelineExecutor) initContext(ctx context.Context) error {
+func (exec *PipelineExecutor) InitContext(ctx context.Context) error {
 	exec.contextMutex.Lock()
 	if exec.context != nil || exec.cancelFunc != nil {
 		exec.contextMutex.Unlock()
@@ -227,7 +228,12 @@ func (exec *PipelineExecutor) Execute(ctx context.Context) error {
 	exec.RunTimeStats.Begin()
 	defer exec.RunTimeStats.End()
 
-	if err := exec.initContext(ctx); err != nil {
+	err := exec.InitContext(ctx)
+	defer func() {
+		exec.Release()
+		exec.destroyContext()
+	}()
+	if err != nil {
 		return err
 	}
 
@@ -252,8 +258,6 @@ func (exec *PipelineExecutor) Execute(ctx context.Context) error {
 		}(p)
 	}
 	wg.Wait()
-	exec.Release()
-	exec.destroyContext()
 
 	if processorErr != nil {
 		// TODO: return an internel error like errors.New("internal error occurs in executor")
@@ -1317,6 +1321,17 @@ func (builder *ExecutorBuilder) addDefaultToDag(node hybridqp.QueryNode) (*Trans
 			p.(*LimitTransform).SetVertex(vertex)
 		}
 
+		if node.Schema().Options().IsExcept() && node.Schema().Options().GetLimit() > 0 {
+			if _, ok := node.(*LogicalHttpSender); ok {
+				p.(*HttpSenderTransform).SetDag(builder.dag)
+				p.(*HttpSenderTransform).SetVertex(vertex)
+			}
+
+			if _, ok := node.(*LogicalHttpSenderHint); ok {
+				p.(*HttpSenderHintTransform).SetDag(builder.dag)
+				p.(*HttpSenderHintTransform).SetVertex(vertex)
+			}
+		}
 		return vertex, nil
 	} else {
 		return nil, errno.NewError(errno.LogicalPlanBuildFail, "unsupport logical plan, can't build processor from itr")

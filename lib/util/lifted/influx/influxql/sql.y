@@ -1000,6 +1000,17 @@ FILLCONTENT:
     {
         $$ = $1
     }
+    |SUB FILLCONTENT
+    {
+        switch s := $2.(type) {
+        case int64:
+            $$ = -1 * s
+        case float64:
+            $$ = -1 * s
+        default:
+            $$ = $2
+        }
+    }
 
 WHERE_CLAUSE:
     WHERE CONDITION
@@ -1527,9 +1538,6 @@ CREAT_DATABASE_POLICY:
     }
     |REPLICATION INTEGER
     {
-        if $2 < 1 || $2 % 2 == 0 {
-            yylex.Error("REPLICATION must be an odd number")
-        }
         replicaN := int($2)
         $$ = &Durations{ShardGroupDuration: -1,HotDuration: -1,WarmDuration: -1,IndexGroupDuration: -1,Replication: &replicaN}
     }
@@ -1668,9 +1676,6 @@ RP_DURATION_OPTIONS:
     {
     	stmt := &CreateRetentionPolicyStatement{}
     	stmt.Duration = $2
-        if $4 < 1 || $4 % 2 == 0 {
-            yylex.Error("REPLICATION must be an odd number")
-        }
     	stmt.Replication = int($4)
 
     	if $5.ShardGroupDuration==-1||$5.ShardGroupDuration==0{
@@ -1703,9 +1708,6 @@ RP_DURATION_OPTIONS:
     {
     	stmt := &CreateRetentionPolicyStatement{}
     	stmt.Duration = $2
-        if $4 < 1 || $4 % 2 == 0 {
-            yylex.Error("REPLICATION must be an odd number")
-        }
     	stmt.Replication = int($4)
     	$$ = stmt
     }
@@ -3098,7 +3100,7 @@ DROP_MEASUREMENT_STATEMENT:
     {
         stmt := &DropMeasurementStatement{}
         stmt.Name = $3
-        stmt.RpName = ""
+	    stmt.RpName = ""
         $$ = stmt
     }
     | DROP MEASUREMENT IDENT DOT IDENT

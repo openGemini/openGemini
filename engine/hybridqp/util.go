@@ -24,9 +24,12 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 )
 
+type ContextKey string
+
 const (
 	// SecToNs is the number of nanoseconds in a second.
-	SecToNs = int64(time.Second)
+	SecToNs                 = int64(time.Second)
+	QueryAborted ContextKey = "query_aborted"
 )
 
 // MustParseExpr parses an expression. Panic on error.

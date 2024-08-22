@@ -121,6 +121,7 @@ func (h *Handler) servePromWriteBase(w http.ResponseWriter, r *http.Request, use
 		}
 
 		rs := pool.GetRows(maxPoints)
+		*rs = (*rs)[:maxPoints]
 		defer pool.PutRows(rs)
 		*rs, err = tansFunc(mst, *rs, tss)
 		if err != nil {
@@ -449,13 +450,28 @@ func (h *Handler) servePromBaseQuery(w http.ResponseWriter, r *http.Request, use
 		return
 	}
 
+	// explain is used to output query delay analysis
+	isExplain := false
+	explain := r.FormValue("explain")
+	if len(explain) > 0 {
+		isExplain, err = strconv.ParseBool(explain)
+		if err != nil {
+			respondError(w, &apiError{errorBadData, err}, nil)
+			return
+		}
+	}
+
 	// PromQL2InfluxQL: there are two conversion methods.
 	// Method 1: is to convert the AST of the Promql to the Influxql query string and then perform the Influxql parsing.
 	// Method 2: is to directly convert the AST of the Promql to the AST of the Influxql.
 	var q *influxql.Query
 	switch statement := nodes.(type) {
 	case *influxql.SelectStatement:
-		q = &influxql.Query{Statements: []influxql.Statement{statement}}
+		if !isExplain {
+			q = &influxql.Query{Statements: []influxql.Statement{statement}}
+		} else {
+			q = &influxql.Query{Statements: []influxql.Statement{&influxql.ExplainStatement{Statement: statement, Analyze: true}}}
+		}
 	case *influxql.Call, *influxql.BinaryExpr, *influxql.IntegerLiteral, *influxql.NumberLiteral:
 		h.promExprQuery(&promCommand, statement, rw, expr.Type())
 		return
@@ -562,8 +578,15 @@ func (h *Handler) servePromBaseQuery(w http.ResponseWriter, r *http.Request, use
 		}
 	}
 
+	if isExplain {
+		resp := h.getStmtResult(stmtID2Result)
+		n, _ := rw.WriteResponse(resp)
+		atomic.AddInt64(&statistics.HandlerStat.QueryRequestBytesTransmitted, int64(n))
+		return
+	}
+
 	// Return the prometheus query result.
-	resp, ok := h.getPromResult(w, stmtID2Result, expr, promCommand, transpiler.DropMetric(), transpiler.RemoveTableName())
+	resp, ok := h.getPromResult(w, stmtID2Result, expr, promCommand, transpiler.DropMetric(), transpiler.RemoveTableName(), transpiler.DuplicateResult())
 	if !ok {
 		return
 	}
@@ -578,15 +601,15 @@ func (h *Handler) promExprQuery(promCommand *promql2influxql.PromCommand, statem
 			op.Valuer{},
 			query.MathValuer{},
 			query.StringValuer{},
-			executor.PromTimeValuer{},
 			promTimeValuer,
+			executor.PromTimeValuer{},
 		),
 		IntegerFloatDivision: true,
 	}
 	var resp *PromResponse
 	var ok bool
 	if promCommand.DataType == promql2influxql.GRAPH_DATA {
-		resp, ok = h.getRangePromResultForEmptySeries(statement.(influxql.Expr), promCommand, &valuer, promTimeValuer, typ)
+		resp, ok = h.getRangePromResultForEmptySeries(statement.(influxql.Expr), promCommand, &valuer, promTimeValuer)
 	} else {
 		resp, ok = h.getInstantPromResultForEmptySeries(statement.(influxql.Expr), promCommand, &valuer, promTimeValuer, typ)
 	}
@@ -821,6 +844,13 @@ func (t *PromTimeValuer) Value(key string) (interface{}, bool) {
 	if key == promql2influxql.ArgNameOfTimeFunc {
 		rTime := (t.tmpTime)
 		return float64(rTime / 1000), true
+	}
+	return nil, false
+}
+
+func (t *PromTimeValuer) Call(name string, args []interface{}) (interface{}, bool) {
+	if timeFunc := executor.GetPromTimeFuncInstance()[name]; timeFunc != nil && name == "timestamp_prom" {
+		return timeFunc.CallFunc(name, []interface{}{float64(t.tmpTime / 1000)})
 	}
 	return nil, false
 }

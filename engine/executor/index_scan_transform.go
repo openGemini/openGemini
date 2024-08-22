@@ -49,6 +49,7 @@ type IndexScanTransform struct {
 	info             *IndexScanExtraInfo
 	wg               sync.WaitGroup
 	aborted          bool
+	closedSignal     *bool
 	mutex            sync.RWMutex
 
 	inputPort             *ChunkPort
@@ -85,6 +86,8 @@ func NewIndexScanTransform(outRowDataType hybridqp.RowDataType, ops []hybridqp.E
 		limit:          limit,
 		oneShardState:  oneShardState,
 	}
+	closedSignal := false
+	trans.closedSignal = &closedSignal
 	return trans
 }
 
@@ -282,6 +285,10 @@ func (trans *IndexScanTransform) tsIndexScan() error {
 		return err
 	}
 	trans.GetResFromAllocator()
+	if info.ctx == nil {
+		info.ctx = context.Background()
+	}
+	info.ctx = context.WithValue(info.ctx, hybridqp.QueryAborted, trans.closedSignal)
 	plan, err := trans.info.Store.CreateLogicPlan(info.ctx, info.Req.Database, info.Req.PtID, shardInfo.ID,
 		info.Req.Opt.Sources, subPlanSchema)
 	trans.FreeResFromAllocator()
@@ -360,6 +367,10 @@ func (trans *IndexScanTransform) Explain() []ValuePair {
 	return pairs
 }
 
+func (trans *IndexScanTransform) Interrupt() {
+	*trans.closedSignal = true
+}
+
 func (trans *IndexScanTransform) Abort() {
 	trans.mutex.Lock()
 	defer trans.mutex.Unlock()
@@ -376,7 +387,6 @@ func (trans *IndexScanTransform) Abort() {
 
 func (trans *IndexScanTransform) Close() {
 	trans.output.Close()
-
 	trans.mutex.Lock()
 	defer trans.mutex.Unlock()
 	trans.aborted = true

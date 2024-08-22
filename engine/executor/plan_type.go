@@ -94,7 +94,7 @@ func MatchAggGroup(schema hybridqp.Catalog) bool {
 }
 
 func MatchNoAggNoGroupLimit(schema hybridqp.Catalog) bool {
-	if !schema.HasCall() && schema.HasLimit() && !schema.HasInterval() && len(schema.Options().GetDimensions()) == 0 {
+	if !schema.HasCall() && schema.HasLimit() && !schema.HasInterval() && len(schema.Options().GetDimensions()) == 0 && !schema.Options().IsExcept() {
 		return true
 	}
 	return false

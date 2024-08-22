@@ -22,15 +22,17 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
 const (
-	TimeField           = "time"
-	SeqIDField          = "__seq_id___"
-	RecMaxLenForRuse    = 512
-	RecMaxRowNumForRuse = 2024
+	TimeField              = "time"
+	SeqIDField             = "__seq_id___"
+	RecMaxLenForRuse       = 512
+	RecMaxRowNumForRuse    = 2024
+	BigRecMaxRowNumForRuse = 32 * 1024
 )
 
 var intervalRecUpdateFunctions map[int]func(rec, iRec *Record, index, row, recRow int)
@@ -70,6 +72,14 @@ func NewRecord(schema Schemas, initColMeta bool) *Record {
 		record.ColMeta = make([]ColMeta, schemaLen)
 	}
 	return record
+}
+
+type BulkRecords struct {
+	TotalLen  int64
+	Repo      string
+	Logstream string
+	Rec       *Record
+	MsgType   RecordType
 }
 
 type ColAux struct {
@@ -1048,6 +1058,10 @@ func (rec *Record) ResetDeep() {
 	}
 }
 
+func (rec *Record) ReuseForWrite() {
+	rec.ResetForReuse()
+}
+
 func (rec *Record) ResetForReuse() {
 	for i := range rec.ColVals {
 		rec.ColVals[i].Init()
@@ -1498,4 +1512,36 @@ func appendRecMeta2Rec(rec, iRec *Record, index, row int) {
 	if rec.RecMeta != nil && len(iRec.RecMeta.Times) != 0 && len(iRec.RecMeta.Times[index]) != 0 {
 		rec.RecMeta.Times[index] = append(rec.RecMeta.Times[index], iRec.RecMeta.Times[index][row])
 	}
+}
+
+func AppendSeqIdSchema(rec *Record) error {
+	idx := rec.Schema.FieldIndex(SeqIDField)
+	if idx != -1 {
+		return errno.NewError(errno.KeyWordConflictErr, "", SeqIDField)
+	}
+	// update schema
+	seqIDSchema := Field{Type: influx.Field_Type_Int, Name: SeqIDField}
+	rec.Schema = append(rec.Schema, seqIDSchema)
+	// add seqIdCol
+	var seqIdCol ColVal
+	seqIdCol.AppendIntegerNulls(rec.RowNums())
+	rec.ColVals = append(rec.ColVals, seqIdCol)
+	sort.Sort(rec)
+	return nil
+}
+
+func UpdateSeqIdCol(startSeqId int64, rec *Record) {
+	idx := rec.Schema.FieldIndex(SeqIDField)
+	if idx == -1 {
+		return
+	}
+	//update seqIdCol
+	rowCount := rec.RowNums()
+	seqCol := make([]int64, rowCount)
+	for i := 0; i < rowCount; i++ {
+		seqCol[i] = startSeqId
+		startSeqId++
+	}
+	rec.ColVals[idx].Init()
+	rec.ColVals[idx].AppendIntegers(seqCol...)
 }

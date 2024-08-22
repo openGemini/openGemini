@@ -2788,3 +2788,45 @@ func TestRecord_TryPadColumn2AlignBitmap(t *testing.T) {
 		})
 	}
 }
+
+func TestGetRecordFromPool(t *testing.T) {
+	rec := record.GetRecordFromPool(record.LogStoreRecordPool, testSchema)
+	assert.NotEqual(t, rec, nil)
+	record.LogStoreRecordPool.Put(rec)
+	rec0 := record.GetRecordFromPool(record.LogStoreRecordPool, testSchema)
+	assert.NotEqual(t, rec0, nil)
+	record.LogStoreRecordPool.Put(rec0)
+}
+
+func TestPutBigRecord(t *testing.T) {
+	rec := record.GetRecordFromPool(record.LogStoreRecordPool, nil)
+	assert.Equal(t, 0, rec.Len())
+	record.LogStoreRecordPool.PutBigRecord(rec)
+	rec0 := record.GetRecordFromPool(record.LogStoreRecordPool, testSchema)
+	assert.NotEqual(t, rec0, nil)
+	record.LogStoreRecordPool.PutBigRecord(rec0)
+}
+
+func TestUpdateSeqIdCol(t *testing.T) {
+	rec := genRowRec(testSchema,
+		[]int{0, 0, 0}, []int64{0, 0, 0},
+		[]int{1, 1, 1}, []float64{0, 2.2, 5.3},
+		[]int{1, 1, 1}, []string{"test", "hi", "world"},
+		[]int{1, 1, 1}, []bool{true, true, true},
+		[]int64{6, 1, 1})
+	sort.Sort(rec)
+	// do nothing
+	record.UpdateSeqIdCol(0, rec)
+	// append seq id
+	err := record.AppendSeqIdSchema(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// update seqId
+	record.UpdateSeqIdCol(0, rec)
+	// expecting AppendSeqIdSchema fail
+	err = record.AppendSeqIdSchema(rec)
+	if err == nil {
+		t.Fatalf("expecting AppendSeqIdSchema fail, but not")
+	}
+}

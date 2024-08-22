@@ -25,6 +25,7 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/metaclient"
+	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"go.uber.org/zap"
@@ -43,6 +44,15 @@ func (e *Engine) PreOffload(opId uint64, db string, ptId uint32) error {
 		}
 		return err
 	}
+	dbPt.mu.Lock()
+	if dbPt.doingShardMoveN > 0 {
+		dbPt.mu.Unlock()
+		dbPt.unref()
+		return errno.NewError(errno.PtIsDoingSomeShardMove)
+	} else {
+		dbPt.doingOff = true
+	}
+	dbPt.mu.Unlock()
 	if err = dbPt.disableDBPtBgr(); err != nil {
 		dbPt.unref()
 		return err
@@ -72,6 +82,12 @@ func (e *Engine) RollbackPreOffload(opId uint64, db string, ptId uint32) error {
 	dbPt.enableDBPtBgr()
 	dbPt.setEnableShardsBgr(true)
 	dbPt.unref()
+	dbPt.mu.Lock()
+	if dbPt.doingShardMoveN > 0 {
+		e.log.Error("doingShardMoveN > 0 when RollbackPreOffload", zap.Uint64("opId", opId), zap.String("db", db), zap.Uint32("pt", ptId))
+	}
+	dbPt.doingOff = false
+	dbPt.mu.Unlock()
 	e.log.Info("rollback prepare offload pt success", zap.Uint64("opId", opId), zap.String("db", db), zap.Uint32("pt", ptId), zap.Duration("time used", time.Since(start)))
 	return nil
 }
@@ -136,7 +152,7 @@ func (e *Engine) Offload(opId uint64, db string, ptId uint32) error {
 	return nil
 }
 
-func (e *Engine) Assign(opId uint64, nodeId uint64, db string, ptId uint32, ver uint64, durationInfos map[uint64]*meta2.ShardDurationInfo, dbBriefInfo *meta2.DatabaseBriefInfo, client metaclient.MetaClient) error {
+func (e *Engine) Assign(opId uint64, nodeId uint64, db string, ptId uint32, ver uint64, durationInfos map[uint64]*meta2.ShardDurationInfo, dbBriefInfo *meta2.DatabaseBriefInfo, client metaclient.MetaClient, storage netstorage.StorageService) error {
 	if !e.trySetDbPtMigrating(db, ptId) {
 		return errno.NewError(errno.PtIsAlreadyMigrating)
 	}
@@ -198,6 +214,14 @@ func (e *Engine) Assign(opId uint64, nodeId uint64, db string, ptId uint32, ver 
 		}
 		statistics.DBPTStepDuration(opId, "DBPTLoadError", time.Since(start).Nanoseconds(), statistics.DBPTLoadErr, err.Error())
 		return err
+	}
+
+	if config.IsReplication() {
+		err = e.startRaftNode(opId, nodeId, dbPt, client, storage)
+		if err != nil {
+			e.log.Error("engine start raft node failed", zap.Uint64("opId", opId), zap.String("db", db), zap.Uint32("pt", ptId), zap.Error(err))
+			return err
+		}
 	}
 
 	start = time.Now()
