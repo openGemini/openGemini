@@ -173,6 +173,9 @@ func (m *MmsTables) compact(itrs *ChunkIterators, files []TSSPFile, level uint16
 	fileName := NewTSSPFileName(seq, level, 0, 0, isOrder, m.lock)
 	tableBuilder := NewMsBuilder(m.path, itrs.name, m.lock, m.Conf, itrs.maxN, fileName, *m.tier, nil, itrs.estimateSize, config.TSSTORE, m.obsOpt, m.GetShardID())
 	tableBuilder.WithLog(cLog)
+
+	correctTimeDisorder := config.GetStoreConfig().Compact.CorrectTimeDisorder
+
 	for {
 		select {
 		case <-m.closed:
@@ -193,7 +196,13 @@ func (m *MmsTables) compact(itrs *ChunkIterators, files []TSSPFile, level uint16
 		}
 
 		record.CheckRecord(rec)
-		record.CheckTimes(rec.Times())
+		if correctTimeDisorder {
+			rec = record.SortRecordIfNeeded(rec)
+			itrs.merged = rec
+		} else {
+			record.CheckTimes(rec.Times())
+		}
+
 		tableBuilder, err = tableBuilder.WriteRecord(id, rec, func(fn TSSPFileName) (uint64, uint16, uint16, uint16) {
 			ext := fn.extent
 			ext++

@@ -228,6 +228,8 @@ func (e *Engine) Assign(opId uint64, nodeId uint64, db string, ptId uint32, ver 
 	e.mu.Lock()
 	e.addDBPTInfo(dbPt)
 	e.mu.Unlock()
+	// replay is complete before 'assign' operation is complete.
+	readReplayForReplication(dbPt.ReplayC, client, storage)
 	dbPt.enableReportShardLoad()
 	dbPt.preload = false
 	e.log.Info("engine load all shards success", zap.Uint64("opId", opId), zap.String("db", db), zap.Uint32("pt", ptId))

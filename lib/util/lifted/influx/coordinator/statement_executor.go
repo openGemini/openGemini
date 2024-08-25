@@ -89,6 +89,7 @@ type StatementExecutor struct {
 	MaxSelectFieldsN        int
 	MaxSelectBucketsN       int
 	MaxQueryMem             int64
+	MaxRowSizeLimit         int64
 	QueryTimeCompareEnabled bool
 	RetentionPolicyLimit    int
 	MaxQueryParallel        int
@@ -1098,6 +1099,10 @@ func (e *StatementExecutor) executeSelectStatement(stmt *influxql.SelectStatemen
 
 	var rowsChan query.RowsChan
 	var ok bool
+	var init bool
+	var byteSizePerRow int
+	var byteSizePerSeries int
+	var totalRowSize int
 	for {
 		select {
 		case rowsChan, ok = <-proxy.rc:
@@ -1109,16 +1114,54 @@ func (e *StatementExecutor) executeSelectStatement(stmt *influxql.SelectStatemen
 				Series:  rowsChan.Rows,
 				Partial: rowsChan.Partial,
 			}
+
 			// Send results or exit if closing.
 			if err := ctx.Send(result, seq); err != nil {
-				pipelineExecutor.Abort()
-				e.StmtExecLogger.Error("send result rows failed", zap.Error(err))
+				var abort, crash bool
+				if strings.Contains(err.Error(), query.ErrQueryTimeoutLimitExceeded.Error()) {
+					pipelineExecutor.Crash()
+					crash = true
+				} else {
+					pipelineExecutor.Abort()
+					abort = true
+				}
+				e.StmtExecLogger.Error("send result rows failed", zap.Error(err), zap.Bool("crash", crash), zap.Bool("abort", abort))
 				return err
 			}
 			emitted = true
+			if e.MaxRowSizeLimit > 0 {
+				if !init {
+					if len(result.Series) > 0 && len(result.Series[0].Values) > 0 {
+						byteSizePerSeries, byteSizePerRow = getPerSeriesAndRowSize(result.Series[0])
+						init = true
+					}
+				}
+				for i := range result.Series {
+					totalRowSize += byteSizePerSeries
+					totalRowSize += len(result.Series[i].Values) * byteSizePerRow
+				}
+				if totalRowSize > int(e.MaxRowSizeLimit) {
+					e.StmtExecLogger.Warn("the queried data volume exceeds the maximum memory threshold.",
+						zap.Float64("QueryMemory(Gb):", float64(totalRowSize)/config.GB),
+						zap.Float64("MemoryThreshold(GB):", float64(e.MaxRowSizeLimit)/config.GB),
+						zap.String("stmt", stmt.String()))
+					pipelineExecutor.Abort()
+					// Always emit at least one result.
+					return ctx.Send(&query.Result{
+						Series: make([]*models.Row, 0),
+					}, seq)
+				}
+			}
 		case <-ctx.Done():
-			e.StmtExecLogger.Info("aborted by user", zap.String("stmt", stmt.String()))
-			pipelineExecutor.Abort()
+			var abort, crash bool
+			if err := ctx.Err(); err != nil && strings.Contains(err.Error(), query.ErrQueryTimeoutLimitExceeded.Error()) {
+				pipelineExecutor.Crash()
+				crash = true
+			} else {
+				pipelineExecutor.Abort()
+				abort = true
+			}
+			e.StmtExecLogger.Info("aborted by user", zap.String("stmt", stmt.String()), zap.Bool("crash", crash), zap.Bool("abort", abort))
 			go proxy.wait()
 			return ctx.Err()
 		}
@@ -2304,7 +2347,7 @@ func (e *StatementExecutor) executeShowCluster(stmt *influxql.ShowClusterStateme
 	if stmt.NodeID != 0 || stmt.NodeType != "" {
 		return e.executeShowClusterWithCondition(stmt)
 	}
-	return e.MetaClient.ShowCluster(), nil
+	return e.MetaClient.ShowCluster("", 0)
 }
 
 func (e *StatementExecutor) executeShowClusterWithCondition(stmt *influxql.ShowClusterStatement) (models.Rows, error) {
@@ -2608,4 +2651,29 @@ func (p *rowChanProxy) wait() {
 		case <-p.rc:
 		}
 	}
+}
+
+func getPerSeriesAndRowSize(s *models.Row) (int, int) {
+	var byteSizePerSeries, byteSizePerRow int
+	byteSizePerSeries += len(s.Name)
+	for k, v := range s.Tags {
+		byteSizePerSeries += len(k) + len(v)
+	}
+	for i := range s.Columns {
+		byteSizePerSeries += len(s.Columns[i])
+	}
+	for i := range s.Values[0] {
+		switch v := s.Values[0][i].(type) {
+		case float64, int64, uint64:
+			byteSizePerRow += 8
+		case bool:
+			byteSizePerRow += 1
+		case string:
+			byteSizePerRow += len(v)
+		case time.Time:
+			byteSizePerRow += 16
+		default:
+		}
+	}
+	return byteSizePerSeries, byteSizePerRow
 }

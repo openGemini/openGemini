@@ -2,6 +2,7 @@ package httpd
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"io"
 	"strconv"
@@ -234,6 +235,10 @@ func TestConvertToString(t *testing.T) {
 
 	res = convertToString(true)
 	assert.Equal(t, "true", res)
+
+	num := json.Number("2156465555555555555555000")
+	res = convertToString(num)
+	assert.Equal(t, num.String(), res)
 }
 
 func TestParsePPlQuery(t *testing.T) {
@@ -568,4 +573,17 @@ func TestParseFirstRowSchema(t *testing.T) {
 		assert.Equal(t, schema[i].Name, rows.Schema[i].Name)
 	}
 	assert.Equal(t, "field3", rows.Schema[schema.Len()+2].Name)
+}
+
+func TestSetRecordFloat64(t *testing.T) {
+	h := &Handler{
+		Logger: logger.NewLogger(errno.ModuleLogStore),
+	}
+
+	var data = 2.1e21
+	rec := map[string]interface{}{}
+	h.setRecord(rec, "field", data, false)
+	val, ok := rec["field"].(json.Number)
+	assert.Equal(t, true, ok)
+	assert.Equal(t, 22, len(val))
 }

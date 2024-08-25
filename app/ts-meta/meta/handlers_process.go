@@ -498,3 +498,34 @@ func (h *SendSysCtrlToMeta) Process() (transport.Codec, error) {
 	}
 	return rsp, nil
 }
+
+func (h *ShowCluster) Process() (transport.Codec, error) {
+	rsp := &message.ShowClusterResponse{}
+
+	body := h.req.Body
+	// Make sure it's a valid command.
+	if _, err := validateCommand(body); err != nil {
+		rsp.Err = err.Error()
+		return rsp, nil
+	}
+
+	b, err := h.store.ShowCluster(body)
+
+	if err == raft.ErrNotLeader {
+		rsp.Err = "node is not the leader"
+		return rsp, nil
+	}
+
+	if err != nil {
+		h.logger.Error("show cluster fail", zap.Error(err))
+		switch stdErr := err.(type) {
+		case *errno.Error:
+			rsp.ErrCode = stdErr.Errno()
+		default:
+		}
+		rsp.Err = err.Error()
+		return rsp, nil
+	}
+	rsp.Data = b
+	return rsp, nil
+}

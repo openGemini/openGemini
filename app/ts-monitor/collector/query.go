@@ -17,7 +17,6 @@ limitations under the License.
 package collector
 
 import (
-	"crypto/tls"
 	"fmt"
 	"io"
 	"net/http"
@@ -72,7 +71,7 @@ func NewQueryMetric(logger *logger.Logger, conf *config.MonitorQuery) *QueryMetr
 	if conf.HTTPSEnabled {
 		protocol = "https"
 		tr := &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			TLSClientConfig: config.NewTLSConfig(true),
 		}
 		defaultClient = &http.Client{
 			Transport: tr,

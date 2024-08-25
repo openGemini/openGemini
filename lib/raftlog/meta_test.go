@@ -56,3 +56,17 @@ func TestMetaFile_StoreSnapshot_snapshot(t *testing.T) {
 	idx := meta.Uint(SnapshotIndex)
 	require.Equal(t, 10, int(idx))
 }
+
+func TestIsValidSnapshot(t *testing.T) {
+	var snap = raftpb.Snapshot{Data: []byte("hello"), Metadata: raftpb.SnapshotMetadata{Index: 10, Term: 100}}
+	isValid := IsValidSnapshot(snap)
+	require.True(t, isValid)
+	state := raftpb.ConfState{
+		Voters: make([]uint64, 0),
+	}
+	snapShot2 := raftpb.Snapshot{Data: []byte("hello"),
+		Metadata: raftpb.SnapshotMetadata{ConfState: state},
+	}
+	isValid = IsValidSnapshot(snapShot2)
+	require.True(t, isValid)
+}

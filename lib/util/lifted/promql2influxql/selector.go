@@ -2,6 +2,7 @@ package promql2influxql
 
 import (
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/openGemini/openGemini/lib/errno"
@@ -10,6 +11,14 @@ import (
 	"github.com/prometheus/prometheus/pkg/timestamp"
 	"github.com/prometheus/prometheus/promql/parser"
 )
+
+func escapeSlashes(str string) string {
+	return strings.Replace(str, `/`, `\/`, -1)
+}
+
+func escapeSingleQuotes(str string) string {
+	return strings.Replace(str, `'`, `\'`, -1)
+}
 
 var reservedTags = map[string]struct{}{
 	DefaultMetricKeyLabel: {},
@@ -68,29 +77,21 @@ func GetTagCondition(v *parser.VectorSelector, haveMetricStore bool) (influxql.E
 		}
 		var cond *influxql.BinaryExpr
 		switch item.Type {
-		case labels.MatchEqual:
+		case labels.MatchEqual, labels.MatchNotEqual:
 			cond = &influxql.BinaryExpr{
 				Op: influxql.EQ,
 				LHS: &influxql.VarRef{
 					Val: item.Name,
 				},
 				RHS: &influxql.StringLiteral{
-					Val: item.Value,
+					Val: escapeSingleQuotes(item.Value),
 				},
 			}
-		case labels.MatchNotEqual:
-			cond = &influxql.BinaryExpr{
-				Op: influxql.NEQ,
-				LHS: &influxql.VarRef{
-					Val: item.Name,
-				},
-				RHS: &influxql.StringLiteral{
-					Val: item.Value,
-				},
+			if item.Type == labels.MatchNotEqual {
+				cond.Op = influxql.NEQ
 			}
 		case labels.MatchRegexp, labels.MatchNotRegexp:
-			// TODO: to support the FastRegexMatcher
-			promRegexStr := "^(?:" + item.Value + ")$"
+			promRegexStr := escapeSlashes(item.Value)
 			re, err := regexp.Compile(promRegexStr)
 			if err != nil {
 				return nil, errno.NewError(errno.ErrRegularExpSyntax, err.Error())

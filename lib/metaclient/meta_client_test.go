@@ -69,6 +69,8 @@ func (c *RPCServer) Handle(w spdy.Responser, data interface{}) error {
 		return c.HandleSnapshotV2(w, msg)
 	case *message.CreateSqlNodeRequest:
 		return c.HandleCreateSqlNode(w, msg)
+	case *message.ShowClusterRequest:
+		return c.HandleShowCluster(w, msg)
 	}
 	return nil
 }
@@ -86,6 +88,17 @@ func (c *RPCServer) HandleSnapshot(w spdy.Responser, msg *message.SnapshotReques
 		rsp.Err = server.err.Error()
 	}
 	return w.Response(message.NewMetaMessage(message.SnapshotResponseMessage, rsp), true)
+}
+
+func (c *RPCServer) HandleShowCluster(w spdy.Responser, msg *message.ShowClusterRequest) error {
+	fmt.Printf("server HandleShowCluster: %+v \n", msg)
+	showClusterInfo := meta2.ShowClusterInfo{Nodes: []meta2.NodeRow{{NodeID: 123}}, Events: []meta2.EventRow{{SrcNodeId: 123}}}
+	buf, _ := showClusterInfo.MarshalBinary()
+	rsp := &message.ShowClusterResponse{
+		Data: buf,
+		Err:  "",
+	}
+	return w.Response(message.NewMetaMessage(message.ShowClusterResponseMessage, rsp), true)
 }
 
 func (c *RPCServer) HandleSnapshotV2(w spdy.Responser, msg *message.SnapshotV2Request) error {
@@ -1880,102 +1893,44 @@ func TestGetAliveReadNode(t *testing.T) {
 	}
 }
 
-func TestClient_ShowCluster(t *testing.T) {
-	m1 := meta2.NodeInfo{
-		ID:     1,
-		Host:   "127.0.0.2:8091",
-		Status: serf.MemberStatus(meta2.StatusAlive),
-	}
-	m2 := meta2.NodeInfo{
-		ID:     2,
-		Host:   "127.0.0.2:8091",
-		Status: serf.MemberStatus(meta2.StatusAlive),
-	}
-	m3 := meta2.NodeInfo{
-		ID:     3,
-		Host:   "127.0.0.2:8091",
-		Status: serf.MemberStatus(meta2.StatusAlive),
-	}
-	d1 := meta2.DataNode{
-		NodeInfo: meta2.NodeInfo{
-			ID:     4,
-			Host:   "127.0.0.2:8400",
-			Status: serf.MemberStatus(meta2.StatusAlive),
-		},
-	}
-	d2 := meta2.DataNode{
-		NodeInfo: meta2.NodeInfo{
-			ID:     5,
-			Host:   "127.0.0.2:8400",
-			Status: serf.MemberStatus(meta2.StatusAlive),
-		},
-	}
-	d3 := meta2.DataNode{
-		NodeInfo: meta2.NodeInfo{
-			ID:     6,
-			Host:   "127.0.0.2:8400",
-			Status: serf.MemberStatus(meta2.StatusAlive),
-		},
-	}
-	c := &Client{
-		cacheData: &meta2.Data{
-			MetaNodes: []meta2.NodeInfo{m1, m2, m3},
-			DataNodes: []meta2.DataNode{d1, d2, d3},
-		},
-	}
+func TestClient_ShowClusterWithCondition(t *testing.T) {
+	address := "127.0.0.1:8491"
+	nodeId := 1
+	transport.NewMetaNodeManager().Add(uint64(nodeId), address)
 
-	names := []string{"time", "status", "hostname", "nodeID", "nodeType"}
-	value1 := []interface{}{m1.Status.String(), m1.Host, m1.ID, "meta"}
-	value2 := []interface{}{m2.Status.String(), m2.Host, m2.ID, "meta"}
-	value3 := []interface{}{m3.Status.String(), m3.Host, m3.ID, "meta"}
-	value4 := []interface{}{d1.Status.String(), d1.Host, d1.ID, "data"}
-	value5 := []interface{}{d2.Status.String(), d2.Host, d2.ID, "data"}
-	value6 := []interface{}{d3.Status.String(), d3.Host, d3.ID, "data"}
-
-	row1 := c.ShowCluster()
-	values1 := [][]interface{}{value1, value2, value3, value4, value5, value6}
-	for i := range row1[0].Columns {
-		if row1[0].Columns[i] != names[i] {
-			t.Fatalf("wrong column names")
-		}
-		for j := range row1[0].Values {
-			if i != 0 && row1[0].Values[j][i] != values1[j][i-1] {
-				t.Fatalf("wrong column values %s %s", row1[0].Values[j][i], values1[j][i-1])
-			}
-		}
-	}
-
-	row2, err := c.ShowClusterWithCondition("meta", 0)
+	// Server
+	var err error
+	rrcServer, err := startServer(address)
 	if err != nil {
-		t.Fatalf("get cluster info failed")
+		t.Fatalf("%v", err)
 	}
-	values2 := [][]interface{}{value1, value2, value3}
-	for i := range row2[0].Columns {
-		if row2[0].Columns[i] != names[i] {
-			t.Fatalf("wrong column names")
-		}
-		for j := range row2[0].Values {
-			if i != 0 && row2[0].Values[j][i] != values2[j][i-1] {
-				t.Fatalf("wrong column values %s %s", row2[0].Values[j][i], values2[j][i-1])
-			}
-		}
-	}
+	defer rrcServer.Stop()
+	time.Sleep(time.Second)
 
-	row3, err := c.ShowClusterWithCondition("data", 5)
-	if err != nil {
-		t.Fatalf("get cluster info failed")
+	mc := Client{
+		logger:         logger.NewLogger(errno.ModuleUnknown),
+		SendRPCMessage: &RPCMessageSender{},
+		metaServers:    []string{"127.0.0.1:8491", "127.0.0.1:8492"},
+		cacheData:      &meta2.Data{},
 	}
-	values3 := [][]interface{}{value5}
-	for i := range row3[0].Columns {
-		if row3[0].Columns[i] != names[i] {
-			t.Fatalf("wrong column names")
-		}
-		for j := range row3[0].Values {
-			if i != 0 && row3[0].Values[j][i] != values3[j][i-1] {
-				t.Fatalf("wrong column values %s %s", row3[0].Values[j][i], values3[j][i-1])
-			}
-		}
+	connectedServer = nodeId
+	clusterRows, err := mc.ShowClusterWithCondition("", 0)
+	assert.Equal(t, err, nil)
+	ret1 := (clusterRows[0].Values[0][5]).(string)
+	ret2 := (clusterRows[1].Values[0][4]).(uint64)
+	assert.Equal(t, ret1, "unavailable")
+	assert.Equal(t, ret2, uint64(123))
+}
+
+func TestClient_ShowCluster_Err(t *testing.T) {
+	client := &Client{
+		cacheData:      &meta2.Data{},
+		metaServers:    []string{"127.0.0.1"},
+		logger:         logger.NewLogger(errno.ModuleMetaClient).With(zap.String("service", "metaclient")),
+		SendRPCMessage: &RPCMessageSender{},
 	}
+	_, err := client.ShowCluster("", 0)
+	assert.NotEqual(t, err, nil)
 }
 
 func TestCheckAndUpdateReplication(t *testing.T) {

@@ -147,7 +147,6 @@ func (c *TSMeta) GetLogStoreConfig() *LogStoreConfig {
 // Meta represents the meta configuration.
 type Meta struct {
 	HTTPSEnabled        bool `toml:"https-enabled"`
-	PprofEnabled        bool `toml:"pprof-enabled"`
 	RetentionAutoCreate bool `toml:"retention-autocreate"`
 	ClusterTracing      bool `toml:"cluster-tracing"`
 	LoggingEnabled      bool `toml:"logging-enabled"`

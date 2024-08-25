@@ -69,6 +69,8 @@ func New(typ uint8) RPCHandler {
 		return &VerifyDataNodeStatus{}
 	case message.SendSysCtrlToMetaRequestMessage:
 		return &SendSysCtrlToMeta{}
+	case message.ShowClusterRequestMessage:
+		return &ShowCluster{}
 	default:
 		return nil
 	}
@@ -452,4 +454,23 @@ func (h *SendSysCtrlToMeta) SetRequestMsg(data transport.Codec) error {
 
 func (h *SendSysCtrlToMeta) Instance() RPCHandler {
 	return &SendSysCtrlToMeta{}
+}
+
+type ShowCluster struct {
+	BaseHandler
+
+	req *message.ShowClusterRequest
+}
+
+func (h *ShowCluster) SetRequestMsg(data transport.Codec) error {
+	msg, ok := data.(*message.ShowClusterRequest)
+	if !ok {
+		return executor.NewInvalidTypeError("*message.ShowClusterRequest", data)
+	}
+	h.req = msg
+	return nil
+}
+
+func (h *ShowCluster) Instance() RPCHandler {
+	return &ShowCluster{}
 }

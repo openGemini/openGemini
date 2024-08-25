@@ -1937,12 +1937,11 @@ func (s *shard) GetIndexInfo(schema *executor.QuerySchema) (*executor.AttachedIn
 	mst := schema.Options().GetSourcesNames()[0]
 
 	// get the data files by the measurement
-	dataFileRes, ok := s.immTables.GetCSFiles(mst)
-	if !ok {
+	dataFiles := s.immTables.CopyCSFiles(mst)
+	if len(dataFiles) == 0 {
 		s.log.Warn(fmt.Sprintf("ScanWithSparseIndex have not data file. mst: %s, shardID: %d", mst, s.GetID()))
 		return executor.NewAttachedIndexInfo(nil, nil), nil
 	}
-	dataFiles := dataFileRes.Files()
 
 	// get the pk infos by the measurement
 	pkInfos := make([]*colstore.PKInfo, 0, len(dataFiles))
@@ -1970,12 +1969,11 @@ func (s *shard) ScanWithSparseIndex(ctx context.Context, schema *executor.QueryS
 	mst := schema.Options().GetSourcesNames()[0]
 
 	// get the data files by the measurement
-	dataFileRes, ok := s.immTables.GetCSFiles(mst)
-	if !ok {
+	dataFiles := s.immTables.CopyCSFiles(mst)
+	if len(dataFiles) == 0 {
 		s.log.Warn(fmt.Sprintf("ScanWithSparseIndex have not data file. mst: %s, shardID: %d", mst, s.GetID()))
 		return nil, nil
 	}
-	dataFiles := dataFileRes.Files()
 
 	// get the shard fragments by the primary index and skip index
 	fileFrags, skipFileIdx, err := s.scanWithSparseIndex(dataFiles, schema, mst)
@@ -2015,6 +2013,8 @@ func (s *shard) scanWithSparseIndex(dataFiles []immutable.TSSPFile, schema *exec
 			// If the system is powered off abnormally, the index file may not be flushed to disks.
 			// When the system is powered on, the file can be played back based on the WAL and data can be read normally.
 			s.log.Warn(fmt.Sprintf("ScanWithSparseIndex have no primary index file. mst: %s, shardID: %d, file: %s", mst, s.GetID(), pkFileName))
+			skipFileIdx = append(skipFileIdx, i)
+			continue
 		}
 		if tcIdx := pkInfo.GetTCLocation(); !initCondition || (tcIdx > colstore.DefaultTCLocation && tcIdx != preTcIdx) {
 			pkSchema := pkInfo.GetRec().Schema

@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
@@ -45,6 +46,28 @@ type raftNodeRequest interface {
 func putTailBuf(ptId uint32, client metaclient.MetaClient, tail []byte, database string) {
 	if client.IsMasterPt(ptId, database) {
 		metaclient.PutTailBuf(&tail)
+	}
+}
+
+func readReplayForReplication(ReplayC <-chan *raftconn.Commit, client metaclient.MetaClient, storage netstorage.StorageService) {
+	if len(ReplayC) == 0 {
+		return
+	}
+	for commit := range ReplayC {
+		if commit == nil {
+			continue
+		}
+		database := commit.Database
+		ptId := commit.PtId
+		for _, data := range commit.Data {
+			dataWrapper, _ := raftlog.Unmarshal(data)
+			if dataWrapper.DataType == raftlog.Normal {
+				err := dealNormalData(dataWrapper, database, ptId, client, storage, nil)
+				if err != nil {
+					logger.GetLogger().Error("deal normal data failed", zap.Error(err))
+				}
+			}
+		}
 	}
 }
 
@@ -84,6 +107,10 @@ func dealCommitData(node *raftconn.RaftNode, client metaclient.MetaClient, stora
 		if err != nil {
 			logger.GetLogger().Error("deal normal data failed", zap.Error(err))
 		}
+	} else if dataWrapper.DataType == raftlog.ClearEntryLog {
+		bytes := dataWrapper.Data
+		index := encoding.UnmarshalUint64(bytes)
+		node.Store.DeleteBefore(index)
 	} else {
 		logger.GetLogger().Error("not support this data type")
 	}
@@ -114,8 +141,14 @@ func dealNormalData(dataWrapper *raftlog.DataWrapper, database string, ptId uint
 		return errors.New("sgi shards less than ptid")
 	}
 	shardID := sgi.Shards[ptId].ID
+	var snapShotter *raftlog.SnapShotter
+	if node == nil {
+		snapShotter = nil
+	} else {
+		snapShotter = node.SnapShotter
+	}
 	err = storage.Write(database, rp, ww.GetRows()[0].Name, ptId, shardID, func() error {
-		return storage.WriteDataFunc(database, rp, ptId, shardID, ww.GetRows(), nil, node.SnapShotter)
+		return storage.WriteDataFunc(database, rp, ptId, shardID, ww.GetRows(), nil, snapShotter)
 	})
 	if err != nil {
 		pointsdecoder.PutDecoderWork(ww)

@@ -491,6 +491,13 @@ type floatBuffer struct {
 	s, e   int
 }
 
+func (b *floatBuffer) reset() {
+	b.times = b.times[:0]
+	b.values = b.values[:0]
+	b.s = 0
+	b.e = 0
+}
+
 func newFloatBuffer() *floatBuffer {
 	return &floatBuffer{}
 }
@@ -806,6 +813,7 @@ func (r *floatSliceReducer) Aggregate(p *ReducerEndpoint, param *ReducerParams) 
 	}
 	r.prevStep = rangeEnd
 	if param.lastRec {
+		defer r.ringBuf.reset()
 		if param.step == 0 {
 			return
 		}
@@ -854,7 +862,7 @@ func (r *floatSliceReducer) populateByLast(outRecord *record.Record, outOrdinal 
 		if bufNil || r.ringBuf.s >= int(rangeStart) {
 			for start < len(times) {
 				if times[start] >= rangeStart {
-					r.doMiddleWindow(outRecord, outOrdinal, param, rangeEnd, times[start:rowNum], []int64{}, values[start:rowNum], []float64{}, rowNum-start)
+					r.doMiddleWindow(outRecord, outOrdinal, param, rangeEnd, []int64{}, times[start:rowNum], []float64{}, values[start:rowNum], rowNum-start)
 					break
 				}
 				start++
@@ -868,7 +876,7 @@ func (r *floatSliceReducer) populateByLast(outRecord *record.Record, outOrdinal 
 			r.ringBuf.s++
 		}
 		if r.ringBuf.s < bufCount {
-			r.doMiddleWindow(outRecord, outOrdinal, param, rangeEnd, r.ringBuf.times[r.ringBuf.s:rowNum], []int64{}, r.ringBuf.values[r.ringBuf.s:rowNum], []float64{}, rowNum+bufCount-r.ringBuf.s)
+			r.doMiddleWindow(outRecord, outOrdinal, param, rangeEnd, r.ringBuf.times[r.ringBuf.s:bufCount], times[:rowNum], r.ringBuf.values[r.ringBuf.s:bufCount], values[:rowNum], rowNum+bufCount-r.ringBuf.s)
 		}
 	}
 }
@@ -954,6 +962,7 @@ func (r *floatIncAggReducer) Aggregate(p *ReducerEndpoint, param *ReducerParams)
 	}
 	r.prevStep = rangeEnd
 	if param.lastRec {
+		defer r.ringBuf.reset()
 		if param.step == 0 {
 			return
 		}

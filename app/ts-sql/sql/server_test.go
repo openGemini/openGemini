@@ -332,6 +332,7 @@ func Test_NewServer_IncSyncData_Enabled(t *testing.T) {
 
 	conf := config.NewTSSql(false)
 	conf.Common.ReportEnable = false
+	conf.Common.PprofEnabled = true
 	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
 	conf.Meta.UseIncSyncData = true
 	conf.Gossip.Enabled = true
@@ -347,15 +348,4 @@ func Test_NewServer_IncSyncData_Enabled(t *testing.T) {
 
 	err = server.Close()
 	require.NoError(t, err)
-}
-
-func TestOpenPprofServer(t *testing.T) {
-	lg := logger.NewLogger(errno.ModuleUnknown)
-	conf := config.NewTSSql(false)
-	conf.HTTP.BindAddress = ""
-
-	openPprofServer(conf, lg)
-
-	conf.HTTP.PprofEnabled = true
-	openPprofServer(conf, lg)
 }

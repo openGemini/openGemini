@@ -56,6 +56,7 @@ const (
 	PtRequest
 	WriteStreamPointsRequest
 	SegregateNodeRequest
+	CrashRequest
 	Unknown
 )
 

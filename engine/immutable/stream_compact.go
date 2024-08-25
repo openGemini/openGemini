@@ -28,6 +28,7 @@ import (
 	"unsafe"
 
 	"github.com/influxdata/influxdb/pkg/bloom"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/encoding"
 	"github.com/openGemini/openGemini/lib/errno"
@@ -52,6 +53,10 @@ var (
 )
 
 func NonStreamingCompaction(fi FilesInfo) bool {
+	if config.GetStoreConfig().Compact.CorrectTimeDisorder {
+		return true
+	}
+
 	flag := GetMergeFlag4TsStore()
 	if flag == util.NonStreamingCompact {
 		return true

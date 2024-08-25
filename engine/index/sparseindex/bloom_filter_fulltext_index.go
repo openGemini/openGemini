@@ -203,6 +203,9 @@ func (f *FullTextIdxWriter) genFullTextIndexData(writeRec *record.Record, schema
 	start := 0
 	end := 0
 	colsData := f.getFullTextColsData(writeRec, schemaIdx, rowsPerSegment)
+	if len(colsData) == 0 {
+		return res
+	}
 	row, col := len(colsData), len(colsData[0])
 	for i := 0; i < col; i++ {
 		end = start + segBfSize

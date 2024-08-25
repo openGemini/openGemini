@@ -67,7 +67,8 @@ var mockAfterIndexFail bool = true
 type MockRPCStore struct {
 	MetaStoreInterface
 
-	stat raft.RaftState
+	stat          raft.RaftState
+	ShowClusterFn func(body []byte) ([]byte, error)
 }
 
 func NewMockRPCStore() *MockRPCStore {
@@ -89,6 +90,13 @@ func (s *MockRPCStore) createDataNode(httpAddr, tcpAddr, role, az string) ([]byt
 	nodeStartInfo.NodeId = 1
 	nodeStartInfo.ShardDurationInfos = nil
 	return nodeStartInfo.MarshalBinary()
+}
+
+func (s *MockRPCStore) ShowCluster(body []byte) ([]byte, error) {
+	if s.ShowClusterFn == nil {
+		return nil, nil
+	}
+	return s.ShowClusterFn(body)
 }
 
 func (s *MockRPCStore) CreateSqlNode(httpAddr string, gossipAddr string) ([]byte, error) {

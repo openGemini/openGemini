@@ -382,6 +382,8 @@ message Command {
 		UpdateSqlNodeStatusCommand                 = 97;
 		InsertFilesCommand                         = 98;
 		UpdateMeasurementCommand                   = 101;
+		UpdateMetaNodeStatusCommand                = 102;
+		ShowClusterCommand                         = 103;
 	}
 
 	required Type type = 1;
@@ -1246,4 +1248,36 @@ message InsertFilesCommand {
 		optional InsertFilesCommand command = 198;
 	}
 	repeated FileInfo FileInfos = 1;
+}
+
+message ShowClusterCommand {
+    extend Command {
+        optional ShowClusterCommand command = 200;
+    }
+    required string nodeType = 1;
+    required uint64 ID = 2;
+}
+ 
+message NodeRow {
+    required int64 timestamp = 1;
+	required string status = 2;
+	required string hostName = 3;
+	required uint64 nodeID = 4;
+	required string nodeType = 5;
+}
+ 
+message EventRow {
+	required uint64 opId = 1;
+	required string eventType = 2;
+	required string db = 3;
+	required uint32 ptId = 4;
+	required uint64 srcNodeId = 5;
+	required uint64 dstNodeId = 6;
+	required string currState = 7;
+	required string preState = 8;
+}
+ 
+message ShowClusterInfo {
+    repeated NodeRow nodes = 1;
+	repeated EventRow events = 2;
 }

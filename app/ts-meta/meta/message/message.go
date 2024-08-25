@@ -276,3 +276,13 @@ type SendSysCtrlToMetaRequest struct {
 type SendSysCtrlToMetaResponse struct {
 	Err string
 }
+
+type ShowClusterRequest struct {
+	Body []byte
+}
+
+type ShowClusterResponse struct {
+	Data    []byte
+	ErrCode errno.Errno
+	Err     string
+}

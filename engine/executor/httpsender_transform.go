@@ -53,6 +53,7 @@ type HttpChunkSender struct {
 	offsetPos int
 	limit     int
 	offset    int
+	prevRow   *models.Row
 	trans     AbortProcessor
 }
 
@@ -158,6 +159,19 @@ func (w *HttpChunkSender) GenRows(chunk Chunk) {
 		w.buffRows = append(w.buffRows, rows...)
 		return
 	}
+	if w.prevRow != nil && rows.Len() > 0 {
+		firstRow, lastRow := w.prevRow, rows[0]
+		if lastRow.Name == firstRow.Name && hybridqp.EqualMap(lastRow.Tags, firstRow.Tags) {
+			lastRow.Values = RemoveCommonValues(firstRow.Values, lastRow.Values)
+			if len(lastRow.Values) == 0 {
+				rows = rows[1:]
+			}
+		}
+	}
+	if rows.Len() == 0 {
+		return
+	}
+	w.prevRow = rows[rows.Len()-1]
 	w.exceptLimit(rows)
 }
 
@@ -212,6 +226,43 @@ func removeDuplicationValues(values [][]interface{}) [][]interface{} {
 		}
 	}
 	return values[:j+1]
+}
+
+func RemoveCommonValues(prev, curr [][]interface{}) [][]interface{} {
+	if len(prev) == 0 || len(curr) == 0 {
+		return curr
+	}
+	if prev[len(prev)-1][0].(time.Time).Before(curr[0][0].(time.Time)) {
+		return curr
+	}
+
+	i, j, k := 0, 0, 0
+	for i < len(prev) && j < len(curr) {
+		if prev[i][0] == curr[j][0] {
+			// Skip the element in curr since it is common to both
+			i++
+			j++
+		} else if prev[i][0].(time.Time).Before(curr[j][0].(time.Time)) {
+			// Move pointer in prev
+			i++
+		} else {
+			// Element only exists in curr, place it at position k and move pointers
+			curr[k] = curr[j]
+			k++
+			j++
+		}
+	}
+
+	// Append remaining elements from curr
+	for j < len(curr) {
+		curr[k] = curr[j]
+		k++
+		j++
+	}
+
+	// Truncate curr to the new length
+	curr = curr[:k]
+	return curr
 }
 
 // GetRows transfer Chunk to models.Rows

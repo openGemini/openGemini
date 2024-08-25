@@ -508,6 +508,11 @@ func mergeData(newRecIter, baseRecIter *recordIter, maxRow int, ascending bool) 
 		// pos not zero, need generate a new record from pos to end
 		return baseRecIter.cutRecord(maxRow)
 	} else if newRecIter.hasRemainData() {
+		if newRecIter.pos == 0 && newRecIter.rowCnt <= maxRow {
+			rec := newRecIter.record
+			newRecIter.reset()
+			return rec
+		}
 		return newRecIter.cutRecord(maxRow)
 	}
 

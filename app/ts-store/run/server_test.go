@@ -65,6 +65,7 @@ func mockStorage() *storage.Storage {
 		Common:  config.NewCommon(),
 		Meta:    config.NewMeta(),
 	}
+	config.Common.PprofEnabled = true
 
 	storage, err := storage.OpenStorage(storageDataPath, node, nil, config)
 	if err != nil {
@@ -238,6 +239,8 @@ func TestNewServer(t *testing.T) {
 	conf.Common.MetaJoin = []string{"127.0.0.1", "127.0.0.2", "127.0.0.3"}
 
 	conf.Index.MemoryAllowedPercent = 20
+	conf.Common.PprofEnabled = true
+
 	NewServer(conf, app.ServerInfo{}, logger.NewLogger(errno.ModuleUnknown))
 	require.Equal(t, 20, config.GetIndexConfig().MemoryAllowedPercent)
 }
@@ -442,7 +445,9 @@ func (client *MockMetaClient) ShowRetentionPolicies(database string) (models.Row
 func (client *MockMetaClient) ShowContinuousQueries() (models.Rows, error) {
 	return nil, nil
 }
-func (client *MockMetaClient) ShowCluster() models.Rows { return nil }
+func (client *MockMetaClient) ShowCluster(nodeType string, ID uint64) (models.Rows, error) {
+	return nil, nil
+}
 func (client *MockMetaClient) ShowClusterWithCondition(nodeType string, ID uint64) (models.Rows, error) {
 	return nil, nil
 }

@@ -132,7 +132,22 @@ func (h *ShowTagValues) processDisorder() (codec.BinaryCodec, error) {
 	var plan netstorage.ShowTagValuesPlan
 
 	h.rsp.Err = processDDL(h.req.Condition, func(expr influxql.Expr, tr influxql.TimeRange) error {
-		plan = h.store.GetEngine().CreateShowTagValuesPlan(*h.req.Db, h.req.PtIDs, &tr)
+		engine := h.store.GetEngine()
+
+		ptIdRefSuc := make([]uint32, 0, len(h.req.PtIDs))
+		defer func() {
+			for _, ptId := range ptIdRefSuc {
+				engine.DbPTUnref(*h.req.Db, ptId)
+			}
+		}()
+		for _, ptId := range h.req.PtIDs {
+			if err := engine.DbPTRef(*h.req.Db, ptId); err != nil {
+				return err
+			}
+			ptIdRefSuc = append(ptIdRefSuc, ptId)
+		}
+
+		plan = engine.CreateShowTagValuesPlan(*h.req.Db, ptIdRefSuc, &tr)
 
 		tagValues, err := plan.Execute(h.req.GetTagKeysBytes(), expr, util.TimeRange{
 			Min: tr.Min.UnixNano(),
