@@ -33,8 +33,8 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/record"
-	streamLib "github.com/openGemini/openGemini/lib/stream"
 	"github.com/openGemini/openGemini/lib/stringinterner"
+	strings2 "github.com/openGemini/openGemini/lib/strings"
 	"github.com/openGemini/openGemini/lib/util"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
@@ -76,7 +76,7 @@ type TagTask struct {
 	cleanPreWindow chan struct{}
 
 	// pool
-	bp              *streamLib.BuilderPool
+	bp              *strings2.BuilderPool
 	windowCachePool *TaskCachePool
 	*TaskDataPool
 

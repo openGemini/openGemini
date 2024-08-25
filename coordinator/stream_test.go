@@ -29,7 +29,6 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/logger"
-	"github.com/openGemini/openGemini/lib/stream"
 	"github.com/openGemini/openGemini/lib/stringinterner"
 	strings2 "github.com/openGemini/openGemini/lib/strings"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
@@ -52,7 +51,7 @@ func TestStreamGenerateGroupKey(t *testing.T) {
 	ctx := coordinator.GetStreamCtx()
 	defer coordinator.PutStreamCtx(ctx)
 
-	ctx.SetBP(stream.NewBuilderPool())
+	ctx.SetBP(strings2.NewBuilderPool())
 	keys := []string{"tk1", "fk1"}
 	value := s.GenerateGroupKey(ctx, keys, &rows[0])
 	assert2.Equal(t, value, "value1\x00")
@@ -116,19 +115,19 @@ func TestStreamBuildFieldCall(t *testing.T) {
 		},
 	}
 	infos[info.Name] = info
-	srcSchema := map[string]int32{
-		"fk1": 3,
-		"fk2": 3,
-		"fk3": 3,
-		"fk4": 3,
+	srcSchema := meta2.CleanSchema{
+		"fk1": meta2.SchemaVal{Typ: 3},
+		"fk2": meta2.SchemaVal{Typ: 3},
+		"fk3": meta2.SchemaVal{Typ: 3},
+		"fk4": meta2.SchemaVal{Typ: 3},
 	}
-	dstSchema := map[string]int32{
-		"sum_fk1":   3,
-		"max_fk2":   3,
-		"min_fk3":   3,
-		"count_fk2": 1,
+	dstSchema := meta2.CleanSchema{
+		"sum_fk1":   meta2.SchemaVal{Typ: 3},
+		"max_fk2":   meta2.SchemaVal{Typ: 3},
+		"min_fk3":   meta2.SchemaVal{Typ: 3},
+		"count_fk2": meta2.SchemaVal{Typ: 1},
 	}
-	_, err := coordinator.BuildFieldCall(info, srcSchema, dstSchema)
+	_, err := coordinator.BuildFieldCall(info, &srcSchema, &dstSchema)
 	if err != nil {
 		t.Fatal("StreamBuildFieldCall failed")
 	}

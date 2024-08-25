@@ -72,6 +72,10 @@ type RecordStatistics struct {
 	itemSeriesLoopPoolGet                  int64
 	itemSeriesLoopPoolAbort                int64
 	itemSeriesLoopPoolGetReUse             int64
+	itemLogstoreInUse                      int64
+	itemLogstoreGet                        int64
+	itemLogstoreAbort                      int64
+	itemLogstoreReUse                      int64
 
 	mu  sync.RWMutex
 	buf []byte
@@ -139,6 +143,10 @@ func (s *RecordStatistics) Collect(buffer []byte) ([]byte, error) {
 		"SeriesLoopPoolGet":                  s.itemSeriesLoopPoolGet,
 		"SeriesLoopPoolAbort":                s.itemSeriesLoopPoolAbort,
 		"SeriesLoopPoolGetReUse":             s.itemSeriesLoopPoolGetReUse,
+		"LogstoreInUse":                      s.itemLogstoreInUse,
+		"LogstoreGet":                        s.itemLogstoreGet,
+		"LogstoreAbort":                      s.itemLogstoreAbort,
+		"LogstoreReUse":                      s.itemLogstoreReUse,
 	}
 
 	buffer = AddPointToBuffer("record", s.tags, data, buffer)
@@ -330,4 +338,20 @@ func (s *RecordStatistics) AddSeriesLoopPoolAbort(i int64) {
 
 func (s *RecordStatistics) AddSeriesLoopPoolGetReUse(i int64) {
 	atomic.AddInt64(&s.itemSeriesLoopPoolGetReUse, i)
+}
+
+func (s *RecordStatistics) AddLogstoreInUse(i int64) {
+	atomic.AddInt64(&s.itemLogstoreInUse, i)
+}
+
+func (s *RecordStatistics) AddLogstoreGet(i int64) {
+	atomic.AddInt64(&s.itemLogstoreGet, i)
+}
+
+func (s *RecordStatistics) AddLogstoreAbort(i int64) {
+	atomic.AddInt64(&s.itemLogstoreAbort, i)
+}
+
+func (s *RecordStatistics) AddLogstoreReUse(i int64) {
+	atomic.AddInt64(&s.itemLogstoreReUse, i)
 }

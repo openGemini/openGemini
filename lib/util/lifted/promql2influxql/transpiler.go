@@ -19,6 +19,7 @@ type Transpiler struct {
 	parenExprCount  int
 	dropMetric      bool
 	removeTableName bool
+	duplicateResult bool
 	minT, maxT      int64
 	timeCondition   influxql.Expr
 }
@@ -109,9 +110,6 @@ func (t *Transpiler) setTimeInterval(statement *influxql.SelectStatement) {
 		return
 	}
 	remain := t.Start.UnixNano() % t.Step.Nanoseconds()
-	if remain == 0 {
-		return
-	}
 	offset := time.Duration(remain) * time.Nanosecond
 	interval.Expr.(*influxql.Call).Args = append(
 		interval.Expr.(*influxql.Call).Args,
@@ -139,6 +137,10 @@ func (t *Transpiler) DropMetric() bool {
 
 func (t *Transpiler) RemoveTableName() bool {
 	return t.removeTableName
+}
+
+func (t *Transpiler) DuplicateResult() bool {
+	return t.duplicateResult
 }
 
 func (t *Transpiler) newEvalStmt(expr parser.Expr) *parser.EvalStmt {
@@ -242,8 +244,19 @@ func (t *Transpiler) transpileStepInvariantExpr(e *parser.StepInvariantExpr) (in
 	case *parser.StringLiteral, *parser.NumberLiteral:
 		return t.transpileExpr(ce)
 	}
-	t.End = t.Start // Always a single evaluation.
-	return t.transpileExpr(e.Expr)
+	t.maxT = t.minT // Always a single evaluation.
+	node, err := t.transpile(e.Expr)
+	switch e.Expr.(type) {
+	case *parser.MatrixSelector, *parser.SubqueryExpr:
+		// We do not duplicate results for range selectors since result is a matrix
+		// with their unique timestamps which does not depend on the step.
+		return node, err
+	}
+	// For every evaluation while the value remains same, the timestamp for that
+	// value would change for different eval times. Hence we duplicate the result
+	// with changed timestamps.
+	t.duplicateResult = true
+	return node, err
 }
 
 func (t *Transpiler) transpileSubqueryExpr(e *parser.SubqueryExpr) (influxql.Node, error) {

@@ -330,12 +330,12 @@ func BenchmarkWriteRowsToColumnStore(t *testing.B) {
 	recs, s := MockFlowScopeNativeRecords(1, 10000, 8, 22, false)
 	rows := NativeRecordToInfluxRows(recs, mstName)
 	rowsD.Set(mstName, &rows)
-	mstSchema := make(map[string]int32)
+	mstSchema := make(meta.CleanSchema)
 	for i := 0; i < len(s); i++ {
-		mstSchema[s[i].Name] = int32(s[i].Type)
+		mstSchema[s[i].Name] = meta.SchemaVal{Typ: int8(s[i].Type)}
 	}
 	mstsInfo := &sync.Map{}
-	mInfo := &meta.MeasurementInfo{Name: mstName, Schema: mstSchema}
+	mInfo := &meta.MeasurementInfo{Name: mstName, Schema: &mstSchema}
 	mstsInfo.Store(mstName, mInfo)
 	var writeCtx = mutable.WriteRowsCtx{MstsInfo: mstsInfo}
 	t.SetParallelism(1)
@@ -357,12 +357,12 @@ func BenchmarkWriteRecsToColumnStore(t *testing.B) {
 	mstName := "mst"
 	recs, s := MockFlowScopeNativeRecords(1, 10000, 8, 22, false)
 	recsD.Set(mstName, &recs)
-	mstSchema := make(map[string]int32)
+	mstSchema := make(meta.CleanSchema)
 	for i := 0; i < len(s); i++ {
-		mstSchema[s[i].Name] = int32(s[i].Type)
+		mstSchema[s[i].Name] = meta.SchemaVal{Typ: int8(s[i].Type)}
 	}
 	mstsInfo := &sync.Map{}
-	mInfo := &meta.MeasurementInfo{Name: mstName, Schema: mstSchema}
+	mInfo := &meta.MeasurementInfo{Name: mstName, Schema: &mstSchema}
 	mstsInfo.Store(mstName, mInfo)
 	var writeCtx = mutable.WriteRowsCtx{MstsInfo: mstsInfo}
 	t.SetParallelism(1)

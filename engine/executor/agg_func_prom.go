@@ -275,3 +275,49 @@ func rate(preTimes, currTimes []int64, preValues, currValues []float64, ts int64
 	reduceResult *= factor
 	return reduceResult, true
 }
+
+func GroupReduce(c Chunk, values []float64, ordinal, start, end int) (int, float64, bool) {
+	column := c.Column(ordinal)
+	if column.NilCount() == 0 {
+		// fast path
+		return start, float64(1), false
+	}
+
+	// slow path
+	vs, ve := column.GetRangeValueIndexV2(start, end)
+	if vs == ve {
+		return start, 0, true
+	}
+	return start, float64(1), false
+}
+
+func GroupMerge(prevPoint, currPoint *Point[float64]) {
+	prevPoint.value = float64(1)
+}
+
+func QuantileReduce(percentile float64) SliceReduce[float64] {
+	return func(floatSliceItem *SliceItem[float64]) (int, int64, float64, bool) {
+		length := len(floatSliceItem.value)
+		if length == 0 {
+			return -1, int64(0), math.NaN(), false
+		}
+
+		if percentile < 0 {
+			return -1, floatSliceItem.time[0], math.Inf(-1), false
+		} else if percentile > 1 {
+			return -1, floatSliceItem.time[0], math.Inf(+1), false
+		}
+
+		sort.Sort(floatSliceItem)
+
+		n := float64(length)
+		rank := percentile * (n - 1)
+
+		lowerIndex := math.Max(0, math.Floor(rank))
+		upperIndex := math.Min(n-1, lowerIndex+1)
+
+		weight := rank - math.Floor(rank)
+
+		return -1, floatSliceItem.time[int(math.Floor(rank))], floatSliceItem.value[int(lowerIndex)]*(1-weight) + floatSliceItem.value[int(upperIndex)]*weight, false
+	}
+}

@@ -53,14 +53,14 @@ func TestSortLimitCursor(t *testing.T) {
 		{Name: "time", Type: influx.Field_Type_Int},
 	}
 
-	sortLimit := NewSortLimitCursor(option, s, NewMockCursor([]*record.Record{nil}, []error{nil}))
+	sortLimit := NewSortLimitCursor(option, s, NewMockCursor([]*record.Record{nil}, []error{nil}), 0)
 	defer sortLimit.Close()
 	data, _, _ := sortLimit.Next()
 	if data != nil {
 		t.Errorf("get wrong data")
 	}
 
-	sortLimit = NewSortLimitCursor(option, s, NewMockCursor([]*record.Record{nil}, []error{fmt.Errorf("wrong")}))
+	sortLimit = NewSortLimitCursor(option, s, NewMockCursor([]*record.Record{nil}, []error{fmt.Errorf("wrong")}), 0)
 	_, _, err := sortLimit.Next()
 	if err == nil {
 		t.Errorf("get wrong data")
@@ -78,7 +78,7 @@ func TestSortLimitCursor(t *testing.T) {
 
 	r.ColVals[0].AppendInteger(1)
 
-	sortLimit = NewSortLimitCursor(option, s, NewMockCursor([]*record.Record{r}, []error{nil}))
+	sortLimit = NewSortLimitCursor(option, s, NewMockCursor([]*record.Record{r}, []error{nil}), 0)
 	data, _, _ = sortLimit.Next()
 	if data.RowNums() != 3 || data.Time(0) != 7 {
 		t.Errorf("get wrong data")
@@ -99,7 +99,7 @@ func TestSortLimitCursor(t *testing.T) {
 		Ascending: true,
 	}
 
-	sortLimit = NewSortLimitCursor(option, s, NewMockCursor([]*record.Record{r}, []error{nil}))
+	sortLimit = NewSortLimitCursor(option, s, NewMockCursor([]*record.Record{r}, []error{nil}), 0)
 	data, _, _ = sortLimit.Next()
 	if data.RowNums() != 3 || data.Time(0) != 0 {
 		t.Errorf("get wrong data")
@@ -117,7 +117,7 @@ func TestSortLimitCursor(t *testing.T) {
 		Ascending: true,
 	}
 
-	sortLimit = NewSortLimitCursor(option, s, NewMockCursor([]*record.Record{r}, []error{nil}))
+	sortLimit = NewSortLimitCursor(option, s, NewMockCursor([]*record.Record{r}, []error{nil}), 0)
 	data, _, _ = sortLimit.Next()
 	if data.RowNums() != 3 || data.Time(0) != 0 {
 		t.Errorf("get wrong data")
@@ -135,7 +135,7 @@ func TestSortLimitCursor(t *testing.T) {
 		Ascending: true,
 	}
 
-	sortLimit = NewSortLimitCursor(option, s, NewMockCursor([]*record.Record{r}, []error{nil}))
+	sortLimit = NewSortLimitCursor(option, s, NewMockCursor([]*record.Record{r}, []error{nil}), 0)
 	data, _, _ = sortLimit.Next()
 	if data.RowNums() != 3 || data.Time(0) != 0 {
 		t.Errorf("get wrong data")
@@ -166,14 +166,14 @@ func TestSortLimitCursorFiledNil(t *testing.T) {
 		{Name: "time", Type: influx.Field_Type_Int},
 	}
 
-	sortLimit := NewSortLimitCursor(option, s, NewMockCursor([]*record.Record{nil}, []error{nil}))
+	sortLimit := NewSortLimitCursor(option, s, NewMockCursor([]*record.Record{nil}, []error{nil}), 0)
 	defer sortLimit.Close()
 	data, _, _ := sortLimit.Next()
 	if data != nil {
 		t.Errorf("get wrong data")
 	}
 
-	sortLimit = NewSortLimitCursor(option, s, NewMockCursor([]*record.Record{nil}, []error{fmt.Errorf("wrong")}))
+	sortLimit = NewSortLimitCursor(option, s, NewMockCursor([]*record.Record{nil}, []error{fmt.Errorf("wrong")}), 0)
 	_, _, err := sortLimit.Next()
 	if err == nil {
 		t.Errorf("get wrong data")
@@ -194,9 +194,41 @@ func TestSortLimitCursorFiledNil(t *testing.T) {
 	r.ColVals[4].AppendBoolean(true)
 	r.AppendTime(0)
 
-	sortLimit = NewSortLimitCursor(option, s, NewMockCursor([]*record.Record{r}, []error{nil}))
+	sortLimit = NewSortLimitCursor(option, s, NewMockCursor([]*record.Record{r}, []error{nil}), 0)
 	data, _, _ = sortLimit.Next()
 	if data.RowNums() != 2 || data.Time(0) != 0 {
+		t.Errorf("get wrong data")
+	}
+}
+
+func TestSortLimitCursorFiledAbort(t *testing.T) {
+	option := &query2.ProcessorOptions{
+		QueryId: 1,
+		Query:   "select * from mst",
+		Limit:   3,
+		SortFields: influxql.SortFields{
+			&influxql.SortField{
+				Name: "time", Ascending: true,
+			},
+			&influxql.SortField{
+				Name: record.SeqIDField, Ascending: true,
+			},
+		},
+	}
+
+	s := []record.Field{
+		{Name: record.SeqIDField, Type: influx.Field_Type_Int},
+		{Name: "field2_int", Type: influx.Field_Type_Int},
+		{Name: "field3_float", Type: influx.Field_Type_Float},
+		{Name: "field4_string", Type: influx.Field_Type_String},
+		{Name: "field5_bool", Type: influx.Field_Type_Boolean},
+		{Name: "time", Type: influx.Field_Type_Int},
+	}
+
+	sortLimit := NewSortLimitCursor(option, s, NewMockCursor([]*record.Record{nil}, []error{nil}), 0)
+	sortLimit.Close()
+	data, _, _ := sortLimit.Next()
+	if data != nil {
 		t.Errorf("get wrong data")
 	}
 }

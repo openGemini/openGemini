@@ -47,6 +47,7 @@ const (
 	TsspDirName        = "tssp"
 	ColumnStoreDirName = obs.ColumnStoreDirName
 	CountBinFile       = "count.txt"
+	CapacityBinFile    = "capacity.txt"
 
 	defaultCap = 64
 )
@@ -803,13 +804,13 @@ func (f *tsspFile) RenameOnObs(oldName string, tmp bool, obsOpt *obs.ObsOptions)
 	if err != nil {
 		return err
 	}
-	// check file exist(streamFs)
-	if _, err = fileops.Stat(localFileName); os.IsNotExist(err) {
-		return nil
+
+	if fileops.RemoveLocalEnabled(localFileName, obsOpt) {
+		// remove local file
+		lock := fileops.FileLockOption(*f.lock)
+		return fileops.RemoveLocal(localFileName, lock)
 	}
-	// remove local file
-	lock := fileops.FileLockOption(*f.lock)
-	return fileops.RemoveLocal(localFileName, lock)
+	return nil
 }
 
 func (f *tsspFile) ChunkMetaCompressMode() uint8 {

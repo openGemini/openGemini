@@ -52,6 +52,7 @@ func (f *mockFile) Stat() (os.FileInfo, error)                                  
 func (f *mockFile) Sync() error                                                                    { return f.SyncFn() }
 func (f *mockFile) SyncUpdateLength() error                                                        { return f.SyncUpdateLengthFn() }
 func (f *mockFile) Fd() uintptr                                                                    { return f.FdFn() }
+func (f *mockFile) Size() (int64, error)                                                           { return 0, nil }
 func (f *mockFile) StreamReadBatch([]int64, []int64, int64, chan *request.StreamReader, int, bool) {}
 func TestDiskWriter(t *testing.T) {
 	dir := t.TempDir()

@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
+	"github.com/influxdata/influxdb/pkg/testing/assert"
+	"github.com/openGemini/openGemini/lib/fileops"
 )
 
 func TestTableOpenClose(t *testing.T) {
@@ -283,4 +286,80 @@ func testReopenTable(t *testing.T, path string, itemsCount int) {
 		}
 		tb.MustClose()
 	}
+}
+
+func TestCheckBloomFilterFiles(t *testing.T) {
+	dir := t.TempDir()
+	_ = fileops.RemoveAll(dir)
+
+	if err := checkBloomFilterFiles("/nonexistent/directory"); err == nil {
+		t.Error("Expected error, got nil")
+	}
+	err := os.Mkdir(dir, 0750)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "file.unsupported"), []byte("content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkBloomFilterFiles(dir); err == nil {
+		t.Error("Expected error, got nil")
+	}
+
+	err = os.RemoveAll(filepath.Join(dir, "file.unsupported"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "file"+TmpBloomFilterFileSuffix), []byte("content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkBloomFilterFiles(dir); err != nil {
+		t.Errorf("Expected no error, got %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "file"+LastBloomFilterFileSuffix), []byte("content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkBloomFilterFiles(dir); err != nil {
+		t.Errorf("Expected no error, got %v", err)
+	}
+	err = os.RemoveAll(filepath.Join(dir, "file"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "file"+BloomFilterFileSuffix), []byte("content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkBloomFilterFiles(dir); err != nil {
+		t.Errorf("Expected no error, got %v", err)
+	}
+}
+
+func TestRenameOldFile(t *testing.T) {
+	dir := t.TempDir()
+	_ = fileops.RemoveAll(dir)
+
+	exist, err := renameOldFile("/nonexistent/directory")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assert.Equal(t, false, exist)
+	err = os.Mkdir(dir, 0750)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "file.bf"), []byte("content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	exist, err = renameOldFile(filepath.Join(dir, "file.bf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assert.Equal(t, true, exist)
 }

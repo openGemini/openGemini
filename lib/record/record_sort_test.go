@@ -17,11 +17,14 @@ limitations under the License.
 package record_test
 
 import (
+	"fmt"
+	"sort"
 	"testing"
 
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type Values struct {
@@ -254,4 +257,88 @@ func buildRecord(values Values) *record.Record {
 	}
 
 	return rec
+}
+
+func TestFastSortRecord(t *testing.T) {
+	var run = func(n int) {
+		rec := buildFastSortRecord(n)
+		sortFast := &record.Record{}
+		cloneRecord(rec, sortFast)
+		record.FastSortRecord(sortFast, n)
+
+		sortNormal := &record.Record{}
+		cloneRecord(rec, sortNormal)
+		sort.Sort(sortNormal)
+
+		record.CheckRecord(sortFast)
+		record.CheckRecord(sortNormal)
+
+		require.Equal(t, sortNormal.String(), sortFast.String())
+	}
+
+	for _, i := range []int{1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 77, 88, 7} {
+		run(i)
+	}
+}
+
+func cloneRecord(src, dst *record.Record) {
+	dst.Schema = append(dst.Schema[:0], src.Schema...)
+	dst.ColVals = append(dst.ColVals[:0], src.ColVals...)
+}
+
+func buildFastSortRecord(n int) *record.Record {
+	rec := &record.Record{
+		RecMeta: nil,
+		ColVals: make([]record.ColVal, n),
+		Schema:  make(record.Schemas, n),
+	}
+
+	for i := 10; i < n+9; i++ {
+		rec.Schema[i-10].Type = influx.Field_Type_Int
+		rec.Schema[i-10].Name = fmt.Sprintf("foo_%08d", i*4)
+		rec.ColVals[i-10].AppendInteger(int64(i * 4))
+	}
+	rec.Schema[n-1].Name = record.TimeField
+	rec.ColVals[n-1].AppendInteger(1000000)
+
+	names := []int{7, 1, 2, 99, 97, 123, 143, 145, 142, 141, 3, 999999, 999997, 999998}
+	sort.Ints(names)
+	added := &record.Record{
+		RecMeta: nil,
+		ColVals: make([]record.ColVal, len(names)),
+		Schema:  make(record.Schemas, len(names)),
+	}
+
+	for i, name := range names {
+		added.Schema[i].Type = influx.Field_Type_Int
+		added.Schema[i].Name = fmt.Sprintf("foo_%08d", name)
+		added.ColVals[i].AppendInteger(int64(name))
+	}
+
+	rec.Schema = append(rec.Schema, added.Schema...)
+	rec.ColVals = append(rec.ColVals, added.ColVals...)
+	return rec
+}
+
+func BenchmarkFastSortRecord(b *testing.B) {
+	n := 256
+	rec1 := buildFastSortRecord(n)
+	rec2 := buildFastSortRecord(n)
+	b.ResetTimer()
+
+	b.Run("sort-normal", func(b *testing.B) {
+		var tmp = &record.Record{}
+		for i := 0; i < b.N; i++ {
+			cloneRecord(rec1, tmp)
+			sort.Sort(tmp)
+		}
+	})
+
+	b.Run("sort-fast", func(b *testing.B) {
+		var tmp = &record.Record{}
+		for i := 0; i < b.N; i++ {
+			cloneRecord(rec2, tmp)
+			record.FastSortRecord(tmp, n)
+		}
+	})
 }

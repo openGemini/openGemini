@@ -1289,7 +1289,9 @@ func getIndex(mst *meta2.MeasurementInfo) *models.Row {
 		for _, col := range mst.IndexRelation.IndexList[i].IList {
 			indexList += col + ","
 		}
-		indexList = indexList[:len(indexList)-1]
+		if len(indexList) > 0 {
+			indexList = indexList[:len(indexList)-1]
+		}
 		if id == uint32(index.TimeCluster) {
 			indexList = mst.ColStoreInfo.TimeClusterDuration.String()
 		}

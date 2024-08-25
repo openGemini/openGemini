@@ -24,6 +24,11 @@ import (
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 )
 
+var (
+	LogStoreRecordPool     = NewRecordPool(LogStoreRecord)
+	LogStoreFailRecordPool = NewRecordPool(LogStoreFailRecord)
+)
+
 type RecordPool struct {
 	name  RecordType
 	cache chan *Record
@@ -50,6 +55,8 @@ const (
 	ColumnReaderPool
 	LogStoreReaderPool
 	SeriesLoopPool
+	LogStoreRecord
+	LogStoreFailRecord
 	UnknownPool
 )
 
@@ -122,6 +129,16 @@ func NewRecordPool(recordType RecordType) *RecordPool {
 		get = statistics.NewRecordStatistics().AddSeriesLoopPoolGet
 		reuse = statistics.NewRecordStatistics().AddSeriesLoopPoolGetReUse
 		abort = statistics.NewRecordStatistics().AddSeriesLoopPoolAbort
+	case LogStoreRecord:
+		inUse = statistics.NewRecordStatistics().AddLogstoreInUse
+		get = statistics.NewRecordStatistics().AddLogstoreGet
+		reuse = statistics.NewRecordStatistics().AddLogstoreReUse
+		abort = statistics.NewRecordStatistics().AddLogstoreAbort
+	case LogStoreFailRecord:
+		inUse = statistics.NewRecordStatistics().AddLogstoreInUse
+		get = statistics.NewRecordStatistics().AddLogstoreGet
+		reuse = statistics.NewRecordStatistics().AddLogstoreReUse
+		abort = statistics.NewRecordStatistics().AddLogstoreAbort
 	}
 
 	return &RecordPool{
@@ -159,6 +176,20 @@ func (p *RecordPool) Get() *Record {
 func (p *RecordPool) Put(rec *Record) {
 	p.inUse(-1)
 	if recLen := rec.Len(); (recLen > 0 && rec.RowNums() > RecMaxRowNumForRuse) || cap(rec.Schema) > RecMaxLenForRuse {
+		p.abort(1)
+		return
+	}
+	rec.ResetDeep()
+	select {
+	case p.cache <- rec:
+	default:
+		p.pool.Put(rec)
+	}
+}
+
+func (p *RecordPool) PutBigRecord(rec *Record) {
+	p.inUse(-1)
+	if rec.Len() == 0 || rec.RowNums() > BigRecMaxRowNumForRuse || cap(rec.Schema) > RecMaxLenForRuse {
 		p.abort(1)
 		return
 	}
@@ -262,4 +293,11 @@ func (p *CircularRecordPool) Put() {
 func (p *CircularRecordPool) PutRecordInCircularPool() {
 	recordNum := cap(p.records)
 	p.index = (p.index - 1 + recordNum) % recordNum
+}
+
+func GetRecordFromPool(p *RecordPool, schema Schemas) *Record {
+	record := p.Get()
+	record.ReserveSchemaAndColVal(schema.Len())
+	copy(record.Schema, schema)
+	return record
 }

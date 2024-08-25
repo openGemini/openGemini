@@ -186,8 +186,9 @@ func (c *csImmTableImpl) SetMstInfo(name string, mstInfo *meta.MeasurementInfo) 
 				Name: key,
 			})
 		} else {
+			v, _ := mstInfo.Schema.GetTyp(key)
 			c.pkSchema[name] = append(c.pkSchema[name], record.Field{
-				Type: record.ToPrimitiveType(mstInfo.Schema[key]),
+				Type: record.ToPrimitiveType(v),
 				Name: key,
 			})
 		}

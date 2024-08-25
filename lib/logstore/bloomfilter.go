@@ -19,9 +19,9 @@ package logstore
 import (
 	"encoding/binary"
 	"hash/crc32"
-	"sync"
 
 	"github.com/openGemini/openGemini/lib/index"
+	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
@@ -93,12 +93,18 @@ func IsFullTextIdx(indexRelation *influxql.IndexRelation) bool {
 	return false
 }
 
-var IndexBufferPool sync.Pool
-
 type multiCosBuf [][]byte
 
-func GetIndexBuf(cols int) *multiCosBuf {
-	buf := IndexBufferPool.Get()
+var SkipIndexPool pool.FixedPool
+
+func InitSkipIndexPool(size int) {
+	SkipIndexPool.Reset(size, func() interface{} {
+		return nil
+	}, nil)
+}
+
+func GetSkipIndexBuf(cols int) *multiCosBuf {
+	buf := SkipIndexPool.Get()
 	if buf == nil {
 		multiBuf := make(multiCosBuf, cols)
 		return &multiBuf
@@ -106,9 +112,9 @@ func GetIndexBuf(cols int) *multiCosBuf {
 	return buf.(*multiCosBuf)
 }
 
-func PutIndexBuf(buf *multiCosBuf) {
+func PutSkipIndexBuf(buf *multiCosBuf) {
 	for i := range *buf {
 		(*buf)[i] = (*buf)[i][:0]
 	}
-	IndexBufferPool.Put(buf)
+	SkipIndexPool.Put(buf)
 }

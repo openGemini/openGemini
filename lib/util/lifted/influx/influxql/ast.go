@@ -95,7 +95,8 @@ const (
 	HASH  = "hash"
 	RANGE = "range"
 
-	SeqIDField = "__seq_id___"
+	SeqIDField   = "__seq_id___"
+	ShardIDField = "__shard_id___"
 )
 
 var (
@@ -1927,7 +1928,22 @@ func (s *SelectStatement) RewriteSeqIdForLogStore(fields map[string]DataType) {
 		if !ok {
 			fields[SeqIDField] = influx.Field_Type_Int
 		}
+		if !s.hasCall() {
+			_, ok = fields[ShardIDField]
+			if !ok {
+				fields[ShardIDField] = Integer
+			}
+		}
 	}
+}
+
+func (s *SelectStatement) hasCall() bool {
+	for _, v := range s.Fields {
+		if _, ok := v.Expr.(*Call); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // RewriteFields returns the re-written form of the select statement. Any wildcard query

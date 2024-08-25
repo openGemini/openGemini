@@ -231,7 +231,9 @@ func (l *LocationCursor) ReadData(filterOpts *FilterOptions, dst *record.Record,
 			l.pos++
 			continue
 		}
-
+		if loc.ctx.IsAborted() {
+			return nil, nil
+		}
 		rec, rowNum, err = loc.readData(filterOpts, dst, filterRec, filterBitmap, unnestOperator)
 		if err != nil {
 			return nil, err

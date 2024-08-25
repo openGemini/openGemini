@@ -57,7 +57,7 @@ func (b *FullTextIndexBuilder) AddDocument(val []byte, offset []uint32, startRow
 // res[6]: data size
 // res[7]: data total size = data size + data offs size
 // res[8]: items count
-func (b *FullTextIndexBuilder) Next(memElement *InvertMemElement, data *BlockData, bh *BlockHeader) bool {
+func RetrievePostingList(memElement *InvertMemElement, data *BlockData, bh *BlockHeader) bool {
 	keysHeader := (*reflect.SliceHeader)(unsafe.Pointer(&data.Keys))
 	keysBuf := (*C.char)(unsafe.Pointer(keysHeader.Data))
 
@@ -100,4 +100,20 @@ func FreeFullTextIndexBuilder(builder *FullTextIndexBuilder) {
 
 func PutInvertMemElement(ele *InvertMemElement) {
 	C.PutMemElement(ele.memElement)
+}
+
+func GetMemElement(groupSize uint32) *InvertMemElement {
+	memElement := C.GetMemElement(C.uint32_t(groupSize))
+	if memElement == nil {
+		return nil
+	}
+	return &InvertMemElement{memElement: memElement}
+}
+
+func AddPostingToMem(memElement *InvertMemElement, key []byte, rowId uint32) bool {
+	keyHeader := (*reflect.SliceHeader)(unsafe.Pointer(&key))
+	keyBuf := (*C.char)(unsafe.Pointer(keyHeader.Data))
+
+	isSuccess := C.AddPostingToMem(memElement.memElement, keyBuf, C.uint32_t(len(key)), C.uint32_t(rowId))
+	return bool(isSuccess)
 }

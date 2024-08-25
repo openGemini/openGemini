@@ -170,6 +170,19 @@ func reserveBytes(b []byte, size int) []byte {
 	return b[:valLen+size]
 }
 
+func ReserveInt64Slice(b []int64, size int) []int64 {
+	bCap := cap(b)
+	if bCap == 0 {
+		return make([]int64, size)
+	}
+	bLen := len(b)
+	remain := bCap - bLen
+	if delta := size - remain; delta > 0 {
+		b = append(b[:bCap], make([]int64, delta)...)
+	}
+	return b[:bLen+size]
+}
+
 func valueIndexRange(bitMap []byte, bitOffset int, bmStart, bmEnd int, pos int, posValidCount int) (int, int) {
 	var start, end int
 	firstIndex := 0

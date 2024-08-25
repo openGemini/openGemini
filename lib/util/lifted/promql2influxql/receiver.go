@@ -10,17 +10,20 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
-	"github.com/prometheus/prometheus/pkg/labels"
+	"github.com/openGemini/openGemini/lib/util/lifted/promtheus/pkg/labels"
+	"github.com/openGemini/openGemini/lib/util/lifted/promtheus/promql"
 	"github.com/prometheus/prometheus/pkg/timestamp"
-	"github.com/prometheus/prometheus/promql"
 	"github.com/prometheus/prometheus/promql/parser"
 )
 
 // Receiver is a query engine to run models.PromCommand.
 // It contains a reference to QueryCommandRunnerFactory instance for putting itself back to the factory from which it was born after work.
 type Receiver struct {
+	PromCommand
+
 	DropMetric      bool
 	RemoveTableName bool
+	DuplicateResult bool
 }
 
 // InfluxLiteralToPromQLValue converts influxql.Literal expression to parser.Value of Prometheus
@@ -73,6 +76,20 @@ func (r *Receiver) populatePromSeriesByTag(promSeries *[]*promql.Series, table *
 		Metric: metric,
 		Points: points,
 	})
+	if !r.DuplicateResult || r.PromCommand.Step == 0 {
+		return nil
+	}
+	// For every evaluation while the value remains same, the timestamp for that
+	// value would change for different eval times. Hence we duplicate the result
+	// with changed timestamps.
+	start, end, interval := r.Start.UnixMilli(), r.End.UnixMilli(), r.Step.Milliseconds()
+	series := (*promSeries)[len(*promSeries)-1]
+	idx := len(series.Points)
+	ReservePoints(series, int((end-start-interval)/interval)+1)
+	for ts := start + interval; ts <= end; ts += interval {
+		series.Points[idx] = promql.Point{T: ts, V: points[0].V}
+		idx++
+	}
 	return nil
 }
 
@@ -80,7 +97,7 @@ func (r *Receiver) populatePromSeriesByTag(promSeries *[]*promql.Series, table *
 // when raw result has not grouped by series(measurement + tag key/value pairs).
 // Iterate the whole result table to collect all series into seriesMap. The map key is hash of label set, the map value is
 // a pointer to promql.Series. Each series may contain one or more points.
-func (r *Receiver) populatePromSeriesByHash(promSeries *[]*promql.Series, table *models.Row) error {
+func (r *Receiver) PopulatePromSeriesByHash(promSeries *[]*promql.Series, table *models.Row) error {
 	seriesMap := make(map[uint64]*promql.Series)
 	for _, row := range table.Values {
 		kvs := make(map[string]string)
@@ -117,6 +134,21 @@ func (r *Receiver) populatePromSeriesByHash(promSeries *[]*promql.Series, table 
 	for _, series := range seriesMap {
 		*promSeries = append(*promSeries, series)
 	}
+	if !r.DuplicateResult || r.PromCommand.Step == 0 {
+		return nil
+	}
+	// For every evaluation while the value remains same, the timestamp for that
+	// value would change for different eval times. Hence we duplicate the result
+	// with changed timestamps.
+	start, end, interval := r.Start.UnixMilli(), r.End.UnixMilli(), r.Step.Milliseconds()
+	for _, series := range *promSeries {
+		idx := len(series.Points)
+		ReservePoints(series, int((end-start-interval)/interval)+1)
+		for ts := start + interval; ts <= end; ts += interval {
+			series.Points[idx] = promql.Point{T: ts, V: series.Points[0].V}
+			idx++
+		}
+	}
 	return nil
 }
 
@@ -135,21 +167,30 @@ func (r *Receiver) InfluxResultToPromQLValue(result *query.Result, expr parser.E
 				return NewPromResult(nil, ""), errno.NewError(errno.ErrPopulatePromSeries, err.Error())
 			}
 		} else {
-			if err := r.populatePromSeriesByHash(&promSeries, item); err != nil {
+			if err := r.PopulatePromSeriesByHash(&promSeries, item); err != nil {
 				return NewPromResult(nil, ""), errno.NewError(errno.ErrGroupResultBySeries, err.Error())
 			}
 		}
 	}
+
 	switch expr.Type() {
 	case parser.ValueTypeMatrix:
-		return NewPromResult(r.handleValueTypeMatrix(promSeries), string(parser.ValueTypeMatrix)), nil
+		return NewPromResult(HandleValueTypeMatrix(promSeries), string(parser.ValueTypeMatrix)), nil
 	case parser.ValueTypeVector:
 		switch cmd.DataType {
 		case GRAPH_DATA:
-			return NewPromResult(r.handleValueTypeMatrix(promSeries), string(parser.ValueTypeMatrix)), nil
+			return NewPromResult(HandleValueTypeMatrix(promSeries), string(parser.ValueTypeMatrix)), nil
 		default:
 			value, err := r.handleValueTypeVector(promSeries)
 			return NewPromResult(value, string(parser.ValueTypeVector)), err
+		}
+	case parser.ValueTypeScalar:
+		switch cmd.DataType {
+		case GRAPH_DATA:
+			return NewPromResult(HandleValueTypeMatrix(promSeries), string(parser.ValueTypeMatrix)), nil
+		default:
+			value, err := r.handleValueTypeScalar(promSeries)
+			return NewPromResult(value, string(parser.ValueTypeScalar)), err
 		}
 	default:
 		return NewPromResult(nil, ""), errno.NewError(errno.UnsupportedValueType, expr.Type())
@@ -214,7 +255,7 @@ func (r *Receiver) InfluxTagsToPromLabels(result *query.Result) ([]string, error
 	return promLabels, nil
 }
 
-func (r *Receiver) handleValueTypeMatrix(promSeries []*promql.Series) promql.Matrix {
+func HandleValueTypeMatrix(promSeries []*promql.Series) promql.Matrix {
 	matrix := make(promql.Matrix, 0, len(promSeries))
 	for _, ser := range promSeries {
 		matrix = append(matrix, *ser)
@@ -235,6 +276,16 @@ func (r *Receiver) handleValueTypeVector(promSeries []*promql.Series) (promql.Ve
 		})
 	}
 	return vector, nil
+}
+
+func (r *Receiver) handleValueTypeScalar(promSeries []*promql.Series) (promql.Scalar, error) {
+	scalar := promql.Scalar{}
+	if len(promSeries) > 0 && len(promSeries[0].Points) > 0 {
+		point := promSeries[0].Points[0]
+		scalar.T = point.T
+		scalar.V = point.V
+	}
+	return scalar, nil
 }
 
 func Row2Point(row []interface{}) (promql.Point, error) {
@@ -273,4 +324,19 @@ func FromMapWithoutMetric(m map[string]string) labels.Labels {
 		l = append(l, labels.Label{Name: k, Value: v})
 	}
 	return labels.New(l...)
+}
+
+func ReservePoints(series *promql.Series, size int) {
+	sCap := cap(series.Points)
+	if sCap == 0 {
+		series.Points = make([]promql.Point, size)
+		return
+	}
+	sLen := len(series.Points)
+	remain := sCap - sLen
+	if delta := size - remain; delta > 0 {
+		series.Points = append(series.Points[:sCap], make([]promql.Point, delta)...)
+	}
+	series.Points = series.Points[:sLen+size]
+	return
 }

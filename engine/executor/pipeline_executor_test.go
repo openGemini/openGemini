@@ -2115,3 +2115,46 @@ func TestIsMultiMstPlanNode(t *testing.T) {
 	builder := &executor.ExecutorBuilder{}
 	assert.Equal(t, builder.IsMultiMstPlanNode(node), true)
 }
+
+func TestExecutorInitCtxErr(t *testing.T) {
+	var processors executor.Processors
+	executors := executor.NewPipelineExecutor(processors)
+	ctx := context.Background()
+	executors.InitContext(ctx)
+	err := executors.Execute(ctx)
+	assert.NotEqual(t, err, nil)
+}
+
+func TestPipelineExecutorInterrupt(t *testing.T) {
+	outputRowDataType := buildIRowDataType()
+	schema := buildISchema()
+	trans := executor.NewIndexScanTransform(outputRowDataType, nil, schema, nil, nil, make(chan struct{}, 1), 0, false)
+	pe := executor.NewPipelineExecutor(executor.Processors{trans})
+	pe.Crash()
+	assert.Equal(t, pe.Crashed(), true)
+}
+
+func TestExecutorBuilder_Except_Limit(t *testing.T) {
+	var schema *executor.QuerySchema
+	var builder hybridqp.PipelineExecutorBuilder
+	var traits *executor.StoreExchangeTraits
+	builder, schema, traits = MockNewExecutorBuilder()
+	schema.Options().(*query.ProcessorOptions).Without = true
+	schema.Options().(*query.ProcessorOptions).Limit = 1
+	input := executor.NewLogicalReader(nil, schema)
+	exchange := executor.NewLogicalExchange(input, executor.SERIES_EXCHANGE, []hybridqp.Trait{traits}, schema)
+	sender := executor.NewLogicalHttpSender(exchange, schema)
+	p, _ := builder.Build(sender)
+	pipelineExecutor := p.(*executor.PipelineExecutor)
+	require.Equal(t, pipelineExecutor.GetProcessors().Empty(), false)
+
+	builder, schema, traits = MockNewExecutorBuilder()
+	schema.Options().(*query.ProcessorOptions).Without = true
+	schema.Options().(*query.ProcessorOptions).Limit = 1
+	input = executor.NewLogicalReader(nil, schema)
+	exchange = executor.NewLogicalExchange(input, executor.SERIES_EXCHANGE, []hybridqp.Trait{traits}, schema)
+	sender1 := executor.NewLogicalHttpSenderHint(exchange, schema)
+	p, _ = builder.Build(sender1)
+	pipelineExecutor = p.(*executor.PipelineExecutor)
+	require.Equal(t, pipelineExecutor.GetProcessors().Empty(), false)
+}

@@ -142,8 +142,8 @@ func invalidParamError(w http.ResponseWriter, err error, parameter string) {
 	}, nil)
 }
 
-func (h *Handler) getPromResult(w http.ResponseWriter, stmtID2Result map[int]*query.Result, expr parser.Expr, cmd promql2influxql.PromCommand, dropMetric bool, removeTableName bool) (PromResponse, bool) {
-	r := &promql2influxql.Receiver{DropMetric: dropMetric, RemoveTableName: removeTableName}
+func (h *Handler) getPromResult(w http.ResponseWriter, stmtID2Result map[int]*query.Result, expr parser.Expr, cmd promql2influxql.PromCommand, dropMetric, removeTableName, duplicateResult bool) (PromResponse, bool) {
+	r := &promql2influxql.Receiver{PromCommand: cmd, DropMetric: dropMetric, RemoveTableName: removeTableName, DuplicateResult: duplicateResult}
 	resp := PromResponse{Data: &promql2influxql.PromResult{}, Status: "success"}
 	if len(stmtID2Result) > 0 {
 		if stmtID2Result[0].Err != nil {
@@ -161,16 +161,17 @@ func (h *Handler) getPromResult(w http.ResponseWriter, stmtID2Result map[int]*qu
 	return resp, true
 }
 
-func (h *Handler) getRangePromResultForEmptySeries(expr influxql.Expr, promCommand *promql2influxql.PromCommand, valuer *influxql.ValuerEval, timeValuer *PromTimeValuer, typ parser.ValueType) (*PromResponse, bool) {
-	vector := make(promql.Vector, 0)
+func (h *Handler) getRangePromResultForEmptySeries(expr influxql.Expr, promCommand *promql2influxql.PromCommand, valuer *influxql.ValuerEval, timeValuer *PromTimeValuer) (*PromResponse, bool) {
+	points := make([]promql.Point, 0)
 	start, end, step := GetRangeTimeForEmptySeriesResult(promCommand)
 	for s := start; s <= end; s += step {
 		timeValuer.tmpTime = s
 		value := valuer.Eval(expr)
-		Add2EmptySeriesResult(s, value.(float64), &vector)
+		points = append(points, promql.Point{T: s, V: value.(float64)})
 	}
+	matrix := promql.Matrix{promql.Series{Metric: labels.Labels{}, Points: points}}
 	resp := &PromResponse{Status: "success"}
-	resp.Data = &promql2influxql.PromResult{Result: vector, ResultType: string(typ)}
+	resp.Data = &promql2influxql.PromResult{Result: matrix, ResultType: string(parser.ValueTypeMatrix)}
 	return resp, true
 }
 
@@ -193,9 +194,9 @@ func Add2EmptySeriesResult(t int64, val float64, vector *promql.Vector) {
 func GetRangeTimeForEmptySeriesResult(promComand *promql2influxql.PromCommand) (int64, int64, int64) {
 	if promComand.Start != nil {
 		if promComand.End != nil {
-			return promComand.Start.UnixMilli(), promComand.End.UnixMilli(), promComand.Step.Microseconds()
+			return promComand.Start.UnixMilli(), promComand.End.UnixMilli(), promComand.Step.Milliseconds()
 		} else {
-			return promComand.Start.UnixMilli(), time.Now().UnixMilli(), promComand.Step.Microseconds()
+			return promComand.Start.UnixMilli(), time.Now().UnixMilli(), promComand.Step.Milliseconds()
 		}
 	} else {
 		if promComand.End != nil {
@@ -319,27 +320,35 @@ func (r *PromResponse) UnmarshalJSON(b []byte) error {
 type timeSeries2RowsFunc func(mst string, dst []influx.Row, tss []prompb2.TimeSeries) ([]influx.Row, error)
 
 func timeSeries2Rows(mst string, dst []influx.Row, tss []prompb2.TimeSeries) ([]influx.Row, error) {
-	var r influx.Row
-	var t time.Time
+	var i int
 	for _, ts := range tss {
-		tags := make(influx.PointTags, len(ts.Labels))
+		dst[i].ResizeTags(len(ts.Labels))
+		tags := dst[i].Tags
 		tags, mst = unmarshalPromTags(tags, ts)
-		for _, s := range ts.Samples {
+		for j, s := range ts.Samples {
 			// convert and append
-			t = time.Unix(0, s.Timestamp*int64(time.Millisecond))
-			r = influx.Row{
-				Tags:      tags,
-				Name:      mst,
-				Timestamp: t.UnixNano(),
-				Fields: []influx.Field{
+			dst[i].Timestamp = s.Timestamp * int64(time.Millisecond)
+			dst[i].Name = mst
+			if j == 0 {
+				dst[i].Tags = tags
+			} else {
+				dst[i].CloneTags(tags)
+			}
+			if cap(dst[i].Fields) > 0 {
+				dst[i].Fields = dst[i].Fields[:1]
+				dst[i].Fields[0].Type = influx.Field_Type_Float
+				dst[i].Fields[0].Key = promql2influxql.DefaultFieldKey
+				dst[i].Fields[0].NumValue = s.Value
+			} else {
+				dst[i].Fields = []influx.Field{
 					influx.Field{
 						Type:     influx.Field_Type_Float,
 						Key:      promql2influxql.DefaultFieldKey,
 						NumValue: s.Value,
 					},
-				},
+				}
 			}
-			dst = append(dst, r)
+			i++
 		}
 	}
 	return dst, nil
@@ -359,27 +368,35 @@ func unmarshalPromTags(dst influx.PointTags, ts prompb2.TimeSeries) (influx.Poin
 }
 
 func timeSeries2RowsV2(mst string, dst []influx.Row, tss []prompb2.TimeSeries) ([]influx.Row, error) {
-	var r influx.Row
-	var t time.Time
+	var i int
 	for _, ts := range tss {
-		tags := make(influx.PointTags, len(ts.Labels))
+		dst[i].ResizeTags(len(ts.Labels))
+		tags := dst[i].Tags
 		tags = unmarshalPromTagsV2(tags, ts)
-		for _, s := range ts.Samples {
+		for j, s := range ts.Samples {
 			// convert and append
-			t = time.Unix(0, s.Timestamp*int64(time.Millisecond))
-			r = influx.Row{
-				Tags:      tags,
-				Name:      mst,
-				Timestamp: t.UnixNano(),
-				Fields: []influx.Field{
+			dst[i].Timestamp = s.Timestamp * int64(time.Millisecond)
+			dst[i].Name = mst
+			if j == 0 {
+				dst[i].Tags = tags
+			} else {
+				dst[i].CloneTags(tags)
+			}
+			if cap(dst[i].Fields) > 0 {
+				dst[i].Fields = dst[i].Fields[:1]
+				dst[i].Fields[0].Type = influx.Field_Type_Float
+				dst[i].Fields[0].Key = promql2influxql.DefaultFieldKey
+				dst[i].Fields[0].NumValue = s.Value
+			} else {
+				dst[i].Fields = []influx.Field{
 					influx.Field{
 						Type:     influx.Field_Type_Float,
 						Key:      promql2influxql.DefaultFieldKey,
 						NumValue: s.Value,
 					},
-				},
+				}
 			}
-			dst = append(dst, r)
+			i++
 		}
 	}
 	return dst, nil

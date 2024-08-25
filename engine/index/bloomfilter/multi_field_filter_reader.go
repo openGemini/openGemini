@@ -25,11 +25,14 @@ import (
 
 	"github.com/openGemini/openGemini/lib/bloomfilter"
 	"github.com/openGemini/openGemini/lib/fileops"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/rpn"
 	"github.com/openGemini/openGemini/lib/tokenizer"
 	"github.com/openGemini/openGemini/lib/tracing"
+	"github.com/openGemini/openGemini/lib/util"
+	"go.uber.org/zap"
 )
 
 type SKRPNElement struct {
@@ -381,7 +384,9 @@ func (s *MultiFiledLineFilterReader) isExist(blockId int64, elem *rpn.SKRPNEleme
 			loadCheckValue := binary.LittleEndian.Uint32(checkSumPart)
 			checkValue := crc32.Checksum(filterPart, crc32.MakeTable(crc32.Castagnoli))
 			if checkValue != loadCheckValue {
-				return false, fmt.Errorf("load filter log checksum(%d) mismatch computed valued(%d)", loadCheckValue, checkValue)
+				logger.GetLogger().Warn("load filter log checksum mismatch computed valued", zap.Uint32("loadCheckValue", loadCheckValue),
+					zap.Uint32("computedCheckValue", checkValue))
+				util.MemorySet(filterPart, 0xff)
 			}
 			bloomFilter := bloomfilter.NewOneHitBloomFilter(filterPart, s.version)
 			s.bloomCache[int64(i)*filterDataDiskSize+s.verticalFilterCount*filterDataDiskSize] = bloomFilter

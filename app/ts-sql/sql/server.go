@@ -45,6 +45,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 	coordinator2 "github.com/openGemini/openGemini/lib/util/lifted/influx/coordinator"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/httpd"
+	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/services"
 	"github.com/openGemini/openGemini/services/arrowflight"
@@ -200,6 +201,7 @@ func newServer(info app.ServerInfo, logger *Logger.Logger, c *config.TSSql, meta
 	if c.Meta.UseIncSyncData {
 		s.MetaClient.EnableUseSnapshotV2(c.Meta.RetentionAutoCreate, c.Meta.ExpandShardsEnable)
 	}
+	meta2.InitSchemaCleanEn(c.Meta.SchemaCleanEn)
 	return s
 }
 

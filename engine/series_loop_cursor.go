@@ -17,15 +17,16 @@ limitations under the License.
 package engine
 
 import (
+	"math"
 	"time"
 
 	"github.com/openGemini/openGemini/engine/comm"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
-	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/tracing"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
@@ -37,13 +38,32 @@ const (
 )
 
 type seriesLoopCursor struct {
-	start int
-	step  int
+	// start and end positions and step of series traversal
+	seriesStart int
+	seriesEnd   int
+	seriesStep  int
+	seriesPos   int
+
+	// start and end positions and step of tagset traversal
+	tagSetStart int
+	tagSetEnd   int
+	tagSetStep  int
+	tagSetPos   int
+
+	oriSeriesStart int
+	oriSeriesEnd   int
+	oriTagSetStart int
+	oriTagSetEnd   int
 
 	init        bool
 	initFirst   bool
 	isCutSchema bool
 	finished    bool
+
+	minTime int64
+	maxTime int64
+
+	sid uint64
 
 	ridIdx map[int]struct{}
 
@@ -51,7 +71,7 @@ type seriesLoopCursor struct {
 	span         *tracing.Span
 	schema       *executor.QuerySchema
 	recordSchema record.Schemas
-	tagSetInfo   *tsi.TagSetInfo
+	tagSetInfos  []*tsi.TagSetInfo
 
 	plan           hybridqp.QueryNode
 	input          *seriesCursor
@@ -67,13 +87,55 @@ func newSeriesLoopCursor(ctx *idKeyCursorContext, span *tracing.Span, schema *ex
 		ctx:            ctx,
 		span:           span,
 		schema:         schema,
-		tagSetInfo:     tagSet,
-		start:          start,
-		step:           step,
+		seriesStart:    start,
+		seriesEnd:      len(tagSet.IDs),
+		seriesStep:     step,
+		tagSetStart:    0,
+		tagSetEnd:      1,
+		tagSetStep:     1,
+		initFirst:      false,
+		sid:            math.MaxUint64,
+		tagSetInfos:    []*tsi.TagSetInfo{tagSet},
+		seriesInfoPool: NewSeriesInfoPool(seriesInfoLoopNum),
+	}
+	s.oriSeriesStart, s.oriSeriesEnd = s.seriesStart, s.seriesEnd
+	s.oriTagSetStart, s.oriTagSetEnd = s.tagSetStart, s.tagSetEnd
+	s.ctx.metaContext = ctx.metaContext
+	offset := schema.Options().GetPromQueryOffset().Nanoseconds()
+	s.minTime = ctx.interTr.Min + offset
+	s.maxTime = ctx.interTr.Max + offset
+	s.updateSeriesInfo()
+	return s
+}
+
+func newSeriesLoopCursorInSerial(ctx *idKeyCursorContext, span *tracing.Span, schema *executor.QuerySchema,
+	tagSets []*tsi.TagSetInfo, group int, groupIdx int) *seriesLoopCursor {
+	s := &seriesLoopCursor{
+		ctx:            ctx,
+		span:           span,
+		schema:         schema,
+		seriesStart:    0,
+		seriesEnd:      1,
+		seriesStep:     1,
+		tagSetStep:     1,
+		sid:            math.MaxUint64,
+		tagSetInfos:    tagSets,
 		initFirst:      false,
 		seriesInfoPool: NewSeriesInfoPool(seriesInfoLoopNum),
 	}
-	s.ctx.metaContext = immutable.NewChunkMetaContext(ctx.schema)
+	tagSetNumPerGroup, remainTagSet := len(tagSets)/group, len(tagSets)%group
+	s.tagSetStart = tagSetNumPerGroup * groupIdx
+	if remainTagSet > 0 && remainTagSet >= groupIdx {
+		tagSetNumPerGroup += 1
+		s.tagSetStart += groupIdx
+	}
+	s.tagSetEnd = util.Min(s.tagSetStart+tagSetNumPerGroup, len(tagSets))
+	s.oriSeriesStart, s.oriSeriesEnd = s.seriesStart, s.seriesEnd
+	s.oriTagSetStart, s.oriTagSetEnd = s.tagSetStart, s.tagSetEnd
+	s.ctx.metaContext = ctx.metaContext
+	offset := schema.Options().GetPromQueryOffset().Nanoseconds()
+	s.minTime = ctx.interTr.Min + offset
+	s.maxTime = ctx.interTr.Max + offset
 	s.updateSeriesInfo()
 	return s
 }
@@ -131,31 +193,37 @@ func (s *seriesLoopCursor) initCursor() error {
 		return nil
 	}
 	var err error
-	for s.start < len(s.tagSetInfo.IDs) {
-		if !s.initFirst {
-			s.input, err = newSeriesCursor(s.ctx, s.span, s.schema, s.tagSetInfo, s.start, false)
-			if err != nil {
-				return err
+	for s.tagSetStart < s.tagSetEnd {
+		tagSetInfo := s.tagSetInfos[s.tagSetStart]
+		for s.seriesStart < s.seriesEnd {
+			if !s.initFirst {
+				s.input, err = newSeriesCursor(s.ctx, s.span, s.schema, tagSetInfo, s.seriesStart, false)
+				if err != nil {
+					return err
+				}
+				if s.input == nil {
+					s.seriesStart += s.seriesStep
+					continue
+				}
+				s.input.SinkPlan(s.plan)
+				s.input.SetOps(s.ctx.decs.GetOps())
+				s.initFirst = true
+			} else {
+				ok, err := s.input.ReInit(tagSetInfo, s.seriesStart)
+				if err != nil {
+					return err
+				}
+				if !ok {
+					s.seriesStart += s.seriesStep
+					continue
+				}
 			}
-			if s.input == nil {
-				s.start += s.step
-				continue
-			}
-			s.input.SinkPlan(s.plan)
-			s.input.SetOps(s.ctx.decs.GetOps())
-			s.initFirst = true
-		} else {
-			ok, err := s.input.ReInit(s.start)
-			if err != nil {
-				return err
-			}
-			if !ok {
-				s.start += s.step
-				continue
-			}
+			s.tagSetPos, s.seriesPos = s.tagSetStart, s.seriesStart
+			s.seriesStart += s.seriesStep
+			return nil
 		}
-		s.start += s.step
-		return nil
+		s.seriesStart, s.seriesEnd = s.oriSeriesStart, s.oriSeriesEnd
+		s.tagSetStart += s.tagSetStep
 	}
 	s.finished = true
 	return nil
@@ -184,13 +252,15 @@ func (s *seriesLoopCursor) NextAggData() (*record.Record, *comm.FileInfo, error)
 				return nil, nil, err
 			}
 			if re == nil {
-				s.updateSeriesInfo()
 				s.init = false
 				break
 			}
 			rec := s.recPool.Get()
 			rec.CopyImpl(re, false, false, true, 0, re.RowNums()-1, re.Schema)
-			s.seriesInfo.SeriesInfo = info
+			if s.sid != info.GetSid() {
+				sInfo := s.getSeriesInfo()
+				return rec, sInfo, err
+			}
 			return rec, s.seriesInfo, err
 		}
 	}
@@ -198,8 +268,19 @@ func (s *seriesLoopCursor) NextAggData() (*record.Record, *comm.FileInfo, error)
 
 func (s *seriesLoopCursor) updateSeriesInfo() {
 	s.seriesInfo = s.seriesInfoPool.Get()
-	s.seriesInfo.MinTime = s.ctx.interTr.Min
-	s.seriesInfo.MaxTime = s.ctx.interTr.Max
+	s.seriesInfo.MinTime = s.minTime
+	s.seriesInfo.MaxTime = s.maxTime
+}
+
+func (s *seriesLoopCursor) getSeriesInfo() *comm.FileInfo {
+	tagSetInfo := s.tagSetInfos[s.tagSetPos]
+	sInfo := s.seriesInfoPool.Get()
+	sInfo.MinTime = s.minTime
+	sInfo.MaxTime = s.maxTime
+	sInfo.SeriesInfo.Set(tagSetInfo.IDs[s.seriesPos], tagSetInfo.SeriesKeys[s.seriesPos], &tagSetInfo.TagsVec[s.seriesPos])
+	s.sid = tagSetInfo.IDs[s.seriesPos]
+	s.seriesInfo = sInfo
+	return sInfo
 }
 
 func (s *seriesLoopCursor) Close() error {
@@ -207,16 +288,19 @@ func (s *seriesLoopCursor) Close() error {
 		s.recPool.Put()
 		s.recPool = nil
 	}
-	s.tagSetInfo.Unref()
+
 	if s.input != nil {
 		if err := s.input.Close(); err != nil {
 			return err
 		}
 		s.input = nil
 	}
-	if s.ctx.metaContext != nil {
-		s.ctx.metaContext.Release()
-		s.ctx.metaContext = nil
+
+	for s.oriTagSetStart < s.oriTagSetEnd {
+		if s.tagSetInfos[s.oriTagSetStart] != nil {
+			s.tagSetInfos[s.oriTagSetStart].Unref()
+		}
+		s.oriTagSetStart += s.tagSetStep
 	}
 	return nil
 }

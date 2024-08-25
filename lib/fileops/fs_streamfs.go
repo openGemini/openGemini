@@ -1343,6 +1343,10 @@ func (fs *streamVfs) RemoveLocal(path string, _ ...FSOption) error {
 	return nil
 }
 
+func (fs *streamVfs) RemoveLocalEnabled(obsOptValid bool) bool {
+	return false
+}
+
 func (fs *streamVfs) RemoveAll(path string, opts ...FSOption) error {
 	var lock string
 	if err := lockOpt(&lock, opts...); err != nil {

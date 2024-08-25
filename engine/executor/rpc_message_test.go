@@ -175,7 +175,7 @@ func (c *RPCServer) Handle(w spdy.Responser, data interface{}) error {
 	}
 
 	qm.Add(qid, c)
-	defer qm.Finish(qid)
+	defer qm.FinishAll(qid)
 
 	if err := w.Response(executor.NewErrorMessage(0, "some error"), true); err != nil {
 		return err

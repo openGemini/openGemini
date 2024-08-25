@@ -17,6 +17,7 @@ limitations under the License.
 package executor
 
 import (
+	"math"
 	"sort"
 	"strconv"
 
@@ -88,27 +89,35 @@ func (r *FloatColFloatHistogramIterator) Next(ie *IteratorEndpoint, p *IteratorP
 			insertIndex = 0
 			var le string
 			// get bytes without le
-			metricNameBytes, le = inChunk.Tags()[tagInd].decodeTagsWithoutTag(leTagName)
-			if len(metricNameBytes) == 0 {
-				continue
-			}
+			metricNameBytes, le = inChunk.Tags()[tagInd].DecodeTagsWithoutTag(leTagName)
+
 			upperBound, err = strconv.ParseFloat(le, 64)
 			if err != nil {
 				continue
 			}
 
-			if r.metricWithBuckets.name != util.Bytes2str(metricNameBytes) {
-				initBuckets = true
-				// process buckets
-				r.processBuckets(inChunk, outChunk)
+			if len(metricNameBytes) == 0 {
+				if tagInd == 0 {
+					initBuckets = true
+				} else {
+					initBuckets = false
+				}
 				r.metricWithBuckets.name = string(metricNameBytes)
+
 			} else {
-				initBuckets = false
+				if r.metricWithBuckets.name != util.Bytes2str(metricNameBytes) {
+					initBuckets = true
+					// process buckets
+					r.processBuckets(inChunk, outChunk)
+					r.metricWithBuckets.name = string(metricNameBytes)
+				} else {
+					initBuckets = false
+				}
+
 			}
 			if tagInd < len(inChunk.TagIndex())-1 {
 				tagInd++
 			}
-
 		}
 		time := inChunk.TimeByIndex(i)
 		b := bucket{upperBound, inChunk.Column(r.inOrdinal).FloatValues()[curIndex]}
@@ -178,7 +187,7 @@ type CountValuesIterator struct {
 	mapSortKey    []float64
 }
 
-func NewCountValuesIterator(inOrdinal, outOrdinal int, rowDataType hybridqp.RowDataType, tagName string) *CountValuesIterator {
+func NewCountValuesIterator(inOrdinal, outOrdinal int, tagName string) *CountValuesIterator {
 	return &CountValuesIterator{
 		inOrdinal:     inOrdinal,
 		outOrdinal:    outOrdinal,
@@ -240,7 +249,7 @@ func (r *CountValuesIterator) appendValueCount(start, end int, inChunk Chunk) {
 }
 
 func (r *CountValuesIterator) processCounts(inChunk, outChunk Chunk, tagInd int) {
-	tag := inChunk.Tags()[tagInd]
+	tag := inChunk.Tags()[tagInd].RemoveKeys([]string{r.tagName})
 	sort.Float64s(r.mapSortKey)
 	column := outChunk.Column(r.outOrdinal)
 	for _, value := range r.mapSortKey {
@@ -260,4 +269,74 @@ func (r *CountValuesIterator) processCounts(inChunk, outChunk Chunk, tagInd int)
 	}
 	r.valueCountMap = make(map[float64]*ValueCount)
 	r.mapSortKey = make([]float64, 0)
+}
+
+type ScalarBuf struct {
+	times  []int64
+	values []float64
+}
+
+type ScalarIterator struct {
+	inOrdinal     int
+	outOrdinal    int
+	lastTag       string
+	isMultiSeries bool
+	buf           ScalarBuf
+}
+
+func NewScalarIterator(inOrdinal, outOrdinal int) *ScalarIterator {
+	return &ScalarIterator{
+		inOrdinal:  inOrdinal,
+		outOrdinal: outOrdinal,
+	}
+}
+
+func (r *ScalarIterator) Next(ie *IteratorEndpoint, p *IteratorParams) {
+	inChunk, outChunk := ie.InputPoint.Chunk, ie.OutputPoint.Chunk
+	inColumn := inChunk.Column(r.inOrdinal)
+
+	if r.isMultiSeries {
+		return
+	}
+	if inChunk.TagLen() > 1 || (r.lastTag != "" && r.lastTag != string(inChunk.Tags()[0].subset)) {
+		r.isMultiSeries = true
+		if inChunk.TagLen() > 1 {
+			length := inChunk.TagIndex()[1]
+			times := inChunk.Time()[:length]
+			values := inColumn.FloatValues()[:length]
+			r.buf.times = append(r.buf.times, times...)
+			r.buf.values = append(r.buf.values, values...)
+		}
+		r.processBuffer(outChunk)
+	} else {
+		r.lastTag = string(inChunk.Tags()[0].subset)
+	}
+
+	if r.isMultiSeries {
+		return
+	}
+
+	r.buf.times = append(r.buf.times, inChunk.Time()...)
+	r.buf.values = append(r.buf.values, inColumn.FloatValues()...)
+
+	if p.lastChunk {
+		r.processBuffer(outChunk)
+	}
+}
+
+func (r *ScalarIterator) processBuffer(outChunk Chunk) {
+	column := outChunk.Column(r.outOrdinal)
+	chunkTag := &ChunkTags{}
+	outChunk.AppendTagsAndIndex(*chunkTag, 0)
+
+	for i := 0; i < len(r.buf.times); i++ {
+		val := r.buf.values[i]
+		if r.isMultiSeries {
+			val = math.NaN()
+		}
+		outChunk.AppendTime(r.buf.times[i])
+		outChunk.AppendIntervalIndex(outChunk.Len() - 1)
+		column.AppendNotNil()
+		column.AppendFloatValue(val)
+	}
 }

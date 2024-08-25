@@ -258,3 +258,50 @@ func TestReadMultiFilter(t *testing.T) {
 		t.Error("get wrong reader")
 	}
 }
+
+func TestReadMultiFiledLineFilter(t *testing.T) {
+	version := uint32(4)
+	tmpDir := t.TempDir()
+	config.SetSFSConfig(tmpDir)
+	defer os.RemoveAll(tmpDir)
+
+	fileName := "00000001-0001-00000000.bloomfilter_fullText.bf"
+	filterLogName := tmpDir + "/" + fileName
+	filterLogFd, err := fileops.OpenFile(filterLogName, os.O_CREATE|os.O_RDWR, 0640)
+	if err != nil {
+		t.Errorf("open file failed: %s", err)
+	}
+
+	bytes := make([]byte, logstore.GetConstant(version).FilterDataDiskSize)
+	bloomFilter := bloomfilter.NewOneHitBloomFilter(bytes, version)
+	bloomFilter.Add(Hash([]byte("hello")))
+	bloomFilter.Add(Hash([]byte("world")))
+
+	filterDataMemSize := logstore.GetConstant(version).FilterDataMemSize
+	crc := crc32.Checksum(bytes[0:filterDataMemSize], crc32.MakeTable(crc32.Castagnoli))
+	binary.LittleEndian.PutUint32(bytes[filterDataMemSize:filterDataMemSize+4], crc)
+	for i := 10; i >= 0; i-- {
+		if i == 0 {
+			binary.LittleEndian.PutUint32(bytes[filterDataMemSize:filterDataMemSize+4], 0) // inject a crc error
+		}
+		filterLogFd.Write(bytes)
+	}
+	filterLogFd.Sync()
+
+	expr := make([]*SKRPNElement, 2)
+	expr[0] = NewSKRPNElement("content", "hello")
+	expr[1] = NewSKRPNElement("content", "world")
+	splitMap := make(map[string][]byte)
+	splitMap["content"] = tokenizer.CONTENT_SPLIT_TABLE
+
+	filterReader, err := NewMultiFiledLineFilterReader(tmpDir, nil, expr, 4, splitMap, fileName)
+	if err != nil {
+		t.Errorf("NewMultiFiledLineFilterReader failed: %s", err)
+	}
+	filterReader.StartSpan(nil)
+	for i := 0; i < 10; i++ {
+		isExist, _ := filterReader.IsExist(int64(i), &rpn.SKRPNElement{Value: "hello"})
+		assert.True(t, isExist)
+	}
+	filterReader.Close()
+}

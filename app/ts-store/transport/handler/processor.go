@@ -178,7 +178,7 @@ func (p *SelectProcessor) Handle(w spdy.Responser, data interface{}) (err error)
 	w.Session().EnableDataACK()
 	defer func() {
 		w.Session().DisableDataACK()
-		qm.Finish(req.Opt.QueryId)
+		qm.Finish(req.Opt.QueryId, s)
 	}()
 
 	err = s.Process()

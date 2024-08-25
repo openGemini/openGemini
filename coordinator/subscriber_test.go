@@ -22,6 +22,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -31,6 +34,7 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	assert2 "github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type MockSubscriberClient struct {
@@ -373,4 +377,36 @@ func TestSendWriteRequest(t *testing.T) {
 	default:
 	}
 	s.StopAllWriters()
+}
+
+func TestNewHTTPSClient(t *testing.T) {
+	dir := t.TempDir()
+	err := execCommand([]string{
+		`openssl req -x509 -nodes -newkey rsa:2048 -keyout {{dir}}/gemini.key -out {{dir}}/gemini.crt -days 365 -subj "{{subj}}"`,
+		`echo "" > {{dir}}/gemini.pem; cat {{dir}}/gemini.key {{dir}}/gemini.crt >> {{dir}}/gemini.pem`,
+	}, dir)
+
+	require.NoError(t, err)
+
+	u, err := url.Parse("https://127.0.0.3:8086")
+	require.NoError(t, err)
+
+	_, err = NewHTTPSClient(u, time.Second, false, dir+"/gemini.pem")
+	require.NoError(t, err)
+}
+
+const subject = "/C=US/ST=CA/L=San Francisco/O=openGemini/OU=openGemini/CN=localhost"
+
+func execCommand(cmdList []string, dir string) error {
+	for _, c := range cmdList {
+		c = strings.ReplaceAll(c, "{{dir}}", dir)
+		c = strings.ReplaceAll(c, "{{subj}}", subject)
+		fmt.Println(c)
+		err := exec.Command("/bin/bash", "-c", c).Run()
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

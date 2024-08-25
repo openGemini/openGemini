@@ -25,18 +25,13 @@ import (
 	"github.com/openGemini/openGemini/lib/record"
 )
 
-type MergeSelfHook interface {
-	OnWriteRecord(record *record.Record)
-	OnNewFile(f TSSPFile)
-}
-
 type MergeSelf struct {
 	once   sync.Once
 	signal chan struct{}
 	mts    *MmsTables
 	lg     *logger.Logger
 
-	hook MergeSelfHook
+	events *Events
 }
 
 func NewMergeSelf(mts *MmsTables, lg *logger.Logger) *MergeSelf {
@@ -47,12 +42,13 @@ func NewMergeSelf(mts *MmsTables, lg *logger.Logger) *MergeSelf {
 	}
 }
 
-func (m *MergeSelf) SetHook(hook MergeSelfHook) {
-	m.hook = hook
+func (m *MergeSelf) InitEvents(ctx *MergeContext) *Events {
+	m.events = DefaultEventBus().NewEvents(EventTypeMergeSelf, ctx.mst, ctx.ToLevel())
+	return m.events
 }
 
-func (m *MergeSelf) Merge(mst string, files []TSSPFile) (TSSPFile, error) {
-	builder := m.createMsBuilder(mst, files[0].FileName())
+func (m *MergeSelf) Merge(mst string, toLevel uint16, files []TSSPFile) (TSSPFile, error) {
+	builder := m.createMsBuilder(mst, toLevel, files[0].FileName())
 	sh := record.NewColumnSortHelper()
 	defer sh.Release()
 
@@ -69,9 +65,7 @@ func (m *MergeSelf) Merge(mst string, files []TSSPFile) (TSSPFile, error) {
 			break
 		}
 
-		if m.hook != nil {
-			m.hook.OnWriteRecord(rec)
-		}
+		m.events.TriggerWriteRecord(rec)
 
 		record.CheckRecord(rec)
 		rec = sh.Sort(rec)
@@ -86,8 +80,8 @@ func (m *MergeSelf) Merge(mst string, files []TSSPFile) (TSSPFile, error) {
 	itrs.Close()
 
 	merged, err := builder.NewTSSPFile(true)
-	if m.hook != nil {
-		m.hook.OnNewFile(merged)
+	if err == nil {
+		m.events.TriggerNewFile(merged)
 	}
 	return merged, err
 }
@@ -119,8 +113,8 @@ func (m *MergeSelf) createIterators(files []TSSPFile) *ChunkIterators {
 	return itrs
 }
 
-func (m *MergeSelf) createMsBuilder(mst string, fileName TSSPFileName) *MsBuilder {
-	fileName.merge++
+func (m *MergeSelf) createMsBuilder(mst string, toLevel uint16, fileName TSSPFileName) *MsBuilder {
+	fileName.merge = toLevel
 	fileName.lock = m.mts.lock
 	builder := NewMsBuilder(m.mts.path, mst, m.mts.lock, m.mts.Conf,
 		0, fileName, 0, nil, 0, config.TSSTORE, nil, m.mts.shardId)

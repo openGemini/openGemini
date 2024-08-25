@@ -84,7 +84,7 @@ func (s *MockRPCStore) peers() []string {
 	return []string{address}
 }
 
-func (s *MockRPCStore) createDataNode(httpAddr, tcpAddr, role string) ([]byte, error) {
+func (s *MockRPCStore) createDataNode(httpAddr, tcpAddr, role, az string) ([]byte, error) {
 	nodeStartInfo := meta.NodeStartInfo{}
 	nodeStartInfo.NodeId = 1
 	nodeStartInfo.ShardDurationInfos = nil

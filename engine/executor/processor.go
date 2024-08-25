@@ -164,6 +164,7 @@ type Processor interface {
 	Analyze(span *tracing.Span)
 	StartSpan(name string, withPP bool) *tracing.Span
 	FinishSpan()
+	Interrupt()
 }
 
 type BaseProcessor struct {
@@ -216,6 +217,9 @@ func (bp *BaseProcessor) Release() error {
 	return nil
 }
 
+func (bp *BaseProcessor) Interrupt() {
+}
+
 type Processors []Processor
 
 func (ps *Processors) Push(p Processor) {
@@ -243,6 +247,12 @@ func (ps Processors) Empty() bool {
 func (ps Processors) Close() {
 	for _, p := range ps {
 		p.Close()
+	}
+}
+
+func (ps Processors) Interrupt() {
+	for _, p := range ps {
+		p.Interrupt()
 	}
 }
 

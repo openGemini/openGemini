@@ -24,15 +24,20 @@ import (
 	"math"
 	"net"
 	"path"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/hashicorp/raft"
+	"github.com/openGemini/openGemini/coordinator"
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
+	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
@@ -40,6 +45,7 @@ import (
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/rand"
+	sp "github.com/openGemini/openGemini/lib/statisticsPusher"
 	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
@@ -63,6 +69,8 @@ const (
 
 	pushInterval = 10 * time.Second
 
+	clearCapacityStatMapInterval = 24 * time.Hour
+
 	// Default sqlite database
 	DefaultDatabase = "sqlite.db"
 )
@@ -82,6 +90,18 @@ const (
 const categoryDatanode = "datanode"
 const categoryMetadata = "metanode"
 const categoryParam = "param"
+
+var (
+	CapacityStatMap = &sync.Map{}
+	statRetryTimes  = 3
+	statConcurrency = cpu.GetCpuNum() * 2
+	statErrInfo     = "no such file"
+)
+
+type CapacityStat struct {
+	Capacity   int64
+	UpdateTime time.Time
+}
 
 type ShardStat struct {
 	id          uint64
@@ -438,6 +458,7 @@ func NewStore(c *config.Meta, httpAddr, rpcAddr, raftAddr string) *Store {
 		s.data.OpsMapMaxIndex = 0
 		s.UseIncSyncData = true
 	}
+	meta.InitSchemaCleanEn(c.SchemaCleanEn)
 	return &s
 }
 
@@ -534,7 +555,7 @@ func (s *Store) Open(raftln net.Listener) error {
 		return err
 	}
 
-	s.wg.Add(3)
+	s.wg.Add(5)
 	if s.config.UseIncSyncData {
 		go s.serveSnapshotV2()
 		s.wg.Add(1)
@@ -544,8 +565,192 @@ func (s *Store) Open(raftln net.Listener) error {
 	}
 	go s.checkLeaderChanged()
 	go s.detectSqlNodeOffline()
+	go s.pushCapacityStats()
+	go s.clearCapacityStatMap()
 
 	return nil
+}
+
+func (s *Store) CloneDatabases() map[string]*meta.DatabaseInfo {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.cacheData.CloneDatabases()
+}
+
+func (s *Store) updateMetaNode() {
+	sp.IsMeta = true
+	sp.IsLeader = s.IsLeader()
+}
+
+func (s *Store) pushCapacityStats() {
+	interval := time.NewTicker(5 * time.Minute)
+	defer func() {
+		if err := recover(); err != nil {
+			s.Logger.Error("pushCapacityStats panic", zap.String("store raise stack:", string(debug.Stack())),
+				zap.Error(errno.NewError(errno.RecoverPanic, err)))
+		}
+		s.wg.Done()
+		interval.Stop()
+	}()
+
+	s.updateMetaNode()
+	for {
+		select {
+		case <-s.closing:
+			return
+		case <-interval.C:
+			s.updateMetaNode()
+			if sp.IsLeader {
+				s.UpLoadCapacityStat()
+			}
+		}
+	}
+}
+
+func (s *Store) clearCapacityStatMap() {
+	defer func() {
+		if err := recover(); err != nil {
+			s.Logger.Error("clearCapacityStatMap panic", zap.String("store raise stack:", string(debug.Stack())),
+				zap.Error(errno.NewError(errno.RecoverPanic, err)))
+		}
+		s.wg.Done()
+	}()
+
+	for {
+		select {
+		case <-s.closing:
+			return
+		case <-time.After(clearCapacityStatMapInterval):
+			if s.IsLeader() {
+				s.ClearCapStatMap()
+			}
+		}
+	}
+}
+
+func (s *Store) ClearCapStatMap() {
+	timeNow := time.Now()
+	CapacityStatMap.Range(func(key, value any) bool {
+		if timeNow.Sub(value.(*CapacityStat).UpdateTime) > clearCapacityStatMapInterval {
+			CapacityStatMap.Delete(key)
+		}
+		return true
+	})
+}
+
+func (s *Store) UpLoadCapacityStat() {
+	defer func() {
+		if err := recover(); err != nil {
+			s.Logger.Error("UpLoadCapacityStat panic", zap.String("store raise stack:", string(debug.Stack())),
+				zap.Error(errno.NewError(errno.RecoverPanic, err)))
+		}
+	}()
+
+	c := make(chan struct{}, statConcurrency)
+	defer close(c)
+	dbMap := s.CloneDatabases()
+
+	for dbName, db := range dbMap {
+		if db.Options == nil || db.MarkDeleted {
+			continue
+		}
+		for rpName, rp := range db.RetentionPolicies {
+			if rpName == autoCreateRetentionPolicyName || rp.MarkDeleted {
+				continue
+			}
+			item := stat.NewLogKeeperStatItem(dbName, rpName)
+			wg := &sync.WaitGroup{}
+			for _, sg := range rp.ShardGroups {
+				if sg.Deleted() {
+					continue
+				}
+				for _, shard := range sg.Shards {
+					if shard.MarkDelete {
+						continue
+					}
+					wg.Add(1)
+					c <- struct{}{}
+
+					shardPath := obs.GetShardPath(shard.ID, shard.IndexID, shard.Owners[0], sg.StartTime, sg.EndTime, dbName, rpName)
+					logPath := path.Join(s.config.DataDir, shardPath, getMst(rp), immutable.CapacityBinFile)
+
+					go func(logPath string, shardID uint64) {
+						defer func() {
+							wg.Done()
+							<-c
+						}()
+
+						CollectCapacityStat(shardID, logPath, item)
+					}(logPath, shard.ID)
+				}
+			}
+
+			wg.Wait()
+			if item.ObsStoreDataSize == 0 {
+				continue
+			}
+			stat.NewLogKeeperStatistics().Push(item)
+		}
+	}
+}
+
+func getMst(rp *meta.RetentionPolicyInfo) string {
+	for key := range rp.Measurements {
+		return key
+	}
+	return ""
+}
+
+func CollectCapacityStat(shardID uint64, logPath string, item *stat.LogKeeperStatItem) {
+	for t := 0; t < statRetryTimes; t++ {
+		shardCap, err := coordinator.LoadCapacity(logPath, t)
+		if err != nil {
+			if isBreak := ParseLoadErr(t, shardID, err, logPath, item); isBreak {
+				break
+			}
+		} else {
+			if isRetry := UpdateCapacityStatMap(t, shardCap, shardID, item); isRetry {
+				continue
+			}
+			atomic.AddInt64(&item.ObsStoreDataSize, shardCap)
+			break
+		}
+	}
+}
+
+func ParseLoadErr(retryTimes int, shardID uint64, err error, logPath string, item *stat.LogKeeperStatItem) (isBreak bool) {
+	if strings.Contains(err.Error(), statErrInfo) {
+		return true
+	} else if retryTimes == statRetryTimes-1 {
+		v, ok := CapacityStatMap.Load(shardID)
+		if ok {
+			atomic.AddInt64(&item.ObsStoreDataSize, v.(*CapacityStat).Capacity)
+		}
+		logger.GetLogger().Error("read mst cap fail", zap.String("logPath", logPath), zap.Error(err))
+	}
+	return false
+}
+
+func UpdateCapacityStatMap(retryTimes int, shardCap int64, shardID uint64, item *stat.LogKeeperStatItem) (isRetry bool) {
+	capStat := &CapacityStat{shardCap, item.Begin}
+	lastCapStat, loaded := CapacityStatMap.LoadOrStore(shardID, capStat)
+	if loaded {
+		lastStat, ok := lastCapStat.(*CapacityStat)
+		if !ok {
+			CapacityStatMap.Delete(shardID)
+			CapacityStatMap.Store(shardID, capStat)
+			return false
+		}
+		if lastStat.Capacity <= shardCap {
+			CapacityStatMap.Store(shardID, capStat)
+		} else {
+			if retryTimes == statRetryTimes-1 {
+				atomic.AddInt64(&item.ObsStoreDataSize, lastStat.Capacity)
+			}
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Store) joinMetaServer(c *mclient.Client) error {
@@ -626,6 +831,13 @@ func (s *Store) GetData() *meta.Data {
 	return data
 }
 
+// setData is used for ut test
+func (s *Store) SetData(data *meta.Data) {
+	s.mu.RLock()
+	s.data = data
+	s.mu.RUnlock()
+}
+
 // peers returns the raft peers known to this Store
 func (s *Store) peers() []string {
 	s.mu.RLock()
@@ -654,7 +866,7 @@ func (s *Store) newRaftWrapper(ln net.Listener, peers []string) error {
 func (s *Store) updateCacheData() {
 	var err error
 	s.mu.RLock()
-	dataPb := s.data.Marshal()
+	dataPb := s.data.Marshal(false)
 	s.mu.RUnlock()
 	s.cacheMu.Lock()
 	s.cacheData.Unmarshal(dataPb)
@@ -1522,11 +1734,12 @@ func (s *Store) UpdateLoad(b []byte) error {
 	return nil
 }
 
-func (s *Store) createDataNode(writeHost, queryHost, role string) ([]byte, error) {
+func (s *Store) createDataNode(writeHost, queryHost, role, az string) ([]byte, error) {
 	val := &mproto.CreateDataNodeCommand{
 		HTTPAddr: proto.String(writeHost),
 		TCPAddr:  proto.String(queryHost),
 		Role:     proto.String(role),
+		Az:       proto.String(az),
 	}
 
 	t := mproto.Command_CreateDataNodeCommand
@@ -1831,7 +2044,7 @@ func (s *Store) UpdateSqlNodeStatus(id uint64, status int32, lTime uint64, gossi
 	return nil
 }
 
-func (s *Store) updateReplication(database string, rgId uint32, masterId uint32, peers []meta.Peer, rgStatus uint32) error {
+func (s *Store) updateReplication(database string, rgId uint32, masterId uint32, peers []meta.Peer) error {
 	mPeers := make([]*mproto.Peer, len(peers))
 	for i := range peers {
 		role := uint32(peers[i].PtRole)
@@ -1845,8 +2058,7 @@ func (s *Store) updateReplication(database string, rgId uint32, masterId uint32,
 		Database:   proto.String(database),
 		RepGroupId: proto.Uint32(rgId),
 		MasterId:   proto.Uint32(masterId),
-		Peers:      mPeers,
-		RgStatus:   proto.Uint32(rgStatus)}
+		Peers:      mPeers}
 	t := mproto.Command_UpdateReplicationCommand
 	cmd := &mproto.Command{Type: &t}
 	if err := proto.SetExtension(cmd, mproto.E_UpdateReplicationCommand_Command, val); err != nil {
@@ -1958,6 +2170,43 @@ func (s *Store) getFailedDbPts(ownerNode uint64, status meta.PtStatus) []*meta.D
 	return ptInfos
 }
 
+// 1.rg full 2.pt failed 3.ownerNode alive
+func (s *Store) getFullRGAllFailedPtsOwnedAliveNodeBasedPtId(basePt *meta.DbPtInfo, database string) []*meta.DbPtInfo {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.data.Databases[database] == nil || s.data.Database(database).MarkDeleted {
+		return nil
+	}
+	rg := s.data.GetRGOfPtFast(basePt.Pti.RGID, database)
+	ptViews, ok := s.data.PtView[database]
+	if !ok || rg == nil || rg.Status == meta.UnFull {
+		return nil
+	}
+	resPtInfos := make([]*meta.DbPtInfo, 0, s.data.GetClusterPtNum())
+	var ptId uint32
+	for i := range rg.Peers {
+		ptId = rg.Peers[i].ID
+		for j := range ptViews {
+			if ptId == ptViews[j].PtId && ptViews[j].Status == meta.Offline && s.data.DataNodeAlive(ptViews[j].Owner.NodeID) {
+				shards := s.data.GetShardDurationsByDbPtForRetention(database, ptId)
+				pt := ptViews[j].Copy()
+				dbInfo := s.data.GetDBBriefInfo(database)
+				resPtInfos = append(resPtInfos, &meta.DbPtInfo{Db: database, Pti: pt, Shards: shards, DBBriefInfo: dbInfo})
+			}
+		}
+	}
+	ptId = rg.MasterPtID
+	for j := range ptViews {
+		if ptId == ptViews[j].PtId && ptViews[j].Status == meta.Offline && s.data.DataNodeAlive(ptViews[j].Owner.NodeID) {
+			shards := s.data.GetShardDurationsByDbPtForRetention(database, ptId)
+			pt := ptViews[j].Copy()
+			dbInfo := s.data.GetDBBriefInfo(database)
+			resPtInfos = append(resPtInfos, &meta.DbPtInfo{Db: database, Pti: pt, Shards: shards, DBBriefInfo: dbInfo})
+		}
+	}
+	return resPtInfos
+}
+
 func (s *Store) getDbPtNumPerAliveNode() *map[uint64]uint32 {
 	nodePtNumMap := make(map[uint64]uint32)
 	s.mu.RLock()
@@ -1981,9 +2230,9 @@ func (s *Store) shouldTakeOver() bool {
 	return s.data.TakeOverEnabled
 }
 
-func (s *Store) getDbPtsByDbname(db string, enableTagArray bool) ([]*meta.DbPtInfo, error) {
+func (s *Store) getDbPtsByDbname(db string, enableTagArray bool, replicasN uint32) ([]*meta.DbPtInfo, error) {
 	s.mu.RLock()
-	ptInfos, err := s.data.GetPtInfosByDbname(db, enableTagArray)
+	ptInfos, err := s.data.GetPtInfosByDbname(db, enableTagArray, replicasN)
 	s.mu.RUnlock()
 	return ptInfos, err
 }
@@ -2089,6 +2338,7 @@ func (s *Store) getDBBriefInfo(dbName string) ([]byte, error) {
 	}
 
 	d.EnableTagArray = s.data.Databases[dbName].EnableTagArray
+	d.Replicas = s.data.Databases[dbName].ReplicaN
 	return d.Marshal()
 }
 
@@ -2447,4 +2697,18 @@ func (s *Store) verifyDataNodeStatus(nodeID uint64) error {
 		return errno.NewError(errno.DataNoAlive, nodeID)
 	}
 	return nil
+}
+
+func (s *Store) ModifyRepDBMasterPt(db string, rgId uint32, newMasterPtId uint32) error {
+	if config.GetHaPolicy() != config.Replication {
+		return fmt.Errorf("ha-policy is not replication")
+	}
+	s.mu.RLock()
+	newMasterId, newPeers, err := s.data.GetNewRg(db, rgId, newMasterPtId)
+	s.mu.RUnlock()
+	if err != nil {
+		s.Logger.Error("ModifyRepDBMasterPt err", zap.String("db", db), zap.Uint32("rgId", rgId), zap.Uint32("newMasterPtId", newMasterPtId), zap.Error(err))
+		return err
+	}
+	return globalService.store.updateReplication(db, rgId, newMasterId, newPeers)
 }

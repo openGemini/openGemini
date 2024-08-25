@@ -142,3 +142,23 @@ func TestSplitRecordByTime(t *testing.T) {
 	require.Equal(t, 2, order.Len())
 	require.Equal(t, 2, unOrder.Len())
 }
+
+func TestSplitRecordByTime_EmptyStringColumn(t *testing.T) {
+	var order, unOrder *record.Record
+	schema := record.Schemas{
+		record.Field{Type: influx.Field_Type_String, Name: "a1"},
+		record.Field{Type: influx.Field_Type_Int, Name: record.TimeField},
+	}
+	rec := &record.Record{}
+	rec.ResetWithSchema(schema)
+	rec.Column(0).AppendStrings("", "", "", "", "")
+	rec.Column(1).AppendIntegers(1, 2, 3, 4, 5)
+
+	order, unOrder = mutable.SplitRecordByTime(rec, nil, 3)
+	record.CheckRecord(order)
+	record.CheckRecord(unOrder)
+	require.Equal(t, 2, order.RowNums())
+	require.Equal(t, 3, unOrder.RowNums())
+	require.Equal(t, 2, order.Len())
+	require.Equal(t, 2, unOrder.Len())
+}

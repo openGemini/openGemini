@@ -21,6 +21,7 @@ import (
 	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/rpn"
+	"github.com/openGemini/openGemini/lib/tracing"
 )
 
 var _ = RegistrySKFileReaderCreator(uint32(index.MinMax), &MinMaxReaderCreator{})
@@ -55,6 +56,7 @@ type MinMaxIndexReader struct {
 	// read the data of the index according to the file and index fields.
 	ReadFunc func(file interface{}, rec *record.Record, isCache bool) (*record.Record, error)
 	sk       SKCondition
+	span     *tracing.Span
 }
 
 func NewMinMaxIndexReader(rpnExpr *rpn.RPNExpr, schema record.Schemas, option hybridqp.Options, isCache bool) (*MinMaxIndexReader, error) {
@@ -127,6 +129,10 @@ func (r *MinMaxIndexReader) ReInit(file interface{}) (err error) {
 		r.indexCols = append(r.indexCols, NewColumnRef(r.rec.Schemas()[i].Name, r.rec.Schemas()[i].Type, r.rec.Column(i)))
 	}
 	return
+}
+
+func (r *MinMaxIndexReader) StartSpan(span *tracing.Span) {
+	r.span = span
 }
 
 func (r *MinMaxIndexReader) Close() error {

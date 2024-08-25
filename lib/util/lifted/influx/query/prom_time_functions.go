@@ -27,6 +27,9 @@ func init() {
 	RegistryPromTimeFunction("time_prom", &timePromFunc{
 		BaseInfo: BaseInfo{FuncType: PROMTIME},
 	})
+	RegistryPromTimeFunction("timestamp_prom", &timestampPromFunc{
+		BaseInfo: BaseInfo{FuncType: PROMTIME},
+	})
 	RegistryPromTimeFunction("vector_prom", &vectorPromFunc{
 		BaseInfo: BaseInfo{FuncType: PROMTIME},
 	})
@@ -46,6 +49,9 @@ func init() {
 		BaseInfo: BaseInfo{FuncType: PROMTIME},
 	})
 	RegistryPromTimeFunction("days_in_month_prom", &daysInMonthPromFunc{
+		BaseInfo: BaseInfo{FuncType: PROMTIME},
+	})
+	RegistryPromTimeFunction("pi_prom", &piPromFunc{
 		BaseInfo: BaseInfo{FuncType: PROMTIME},
 	})
 }
@@ -79,6 +85,18 @@ func (s *timePromFunc) CompileFunc(expr *influxql.Call, c *compiledField) error 
 }
 
 func (s *timePromFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
+	return influxql.Float, nil
+}
+
+type timestampPromFunc struct {
+	BaseInfo
+}
+
+func (s *timestampPromFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
+	return nil
+}
+
+func (s *timestampPromFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
 	return influxql.Float, nil
 }
 
@@ -163,6 +181,18 @@ func (s *daysInMonthPromFunc) CompileFunc(expr *influxql.Call, c *compiledField)
 }
 
 func (s *daysInMonthPromFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
+	return influxql.Float, nil
+}
+
+type piPromFunc struct {
+	BaseInfo
+}
+
+func (s *piPromFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
+	return nil
+}
+
+func (s *piPromFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
 	return influxql.Float, nil
 }
 

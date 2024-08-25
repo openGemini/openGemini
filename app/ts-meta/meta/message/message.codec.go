@@ -23,6 +23,7 @@ func (o *CreateNodeRequest) Marshal(buf []byte) ([]byte, error) {
 	buf = codec.AppendString(buf, o.WriteHost)
 	buf = codec.AppendString(buf, o.QueryHost)
 	buf = codec.AppendString(buf, o.Role)
+	buf = codec.AppendString(buf, o.Az)
 
 	return buf, nil
 }
@@ -36,6 +37,7 @@ func (o *CreateNodeRequest) Unmarshal(buf []byte) error {
 	o.WriteHost = dec.String()
 	o.QueryHost = dec.String()
 	o.Role = dec.String()
+	o.Az = dec.String()
 
 	return nil
 }
@@ -45,6 +47,7 @@ func (o *CreateNodeRequest) Size() int {
 	size += codec.SizeOfString(o.WriteHost)
 	size += codec.SizeOfString(o.QueryHost)
 	size += codec.SizeOfString(o.Role)
+	size += codec.SizeOfString(o.Az)
 
 	return size
 }

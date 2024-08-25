@@ -549,7 +549,7 @@ func TestTimeSeries2Rows(t *testing.T) {
 		{
 			name: "Test with valid time series",
 			args: args{
-				dst: []influx.Row{},
+				dst: make([]influx.Row, 1),
 				tss: []prompb2.TimeSeries{
 					{
 						Labels: []prompb2.Label{
@@ -585,7 +585,7 @@ func TestTimeSeries2Rows(t *testing.T) {
 		{
 			name: "Test with invalid time series",
 			args: args{
-				dst: []influx.Row{},
+				dst: make([]influx.Row, 1),
 				tss: []prompb2.TimeSeries{
 					{
 						Labels: []prompb2.Label{
@@ -656,6 +656,7 @@ func TestParseJson(t *testing.T) {
 	req.expiredTime = time.Now().UnixNano() - ld.Nanoseconds()
 	rows := record.NewRecord(logSchema, false)
 	failRows := record.NewRecord(failLogSchema, false)
+	req.logSchema = logSchema
 	_ = h.parseJson(scanner, req, rows, failRows)
 	expect := fmt.Sprintf("field(__retry_tag__):[]bool{false}\nfield(cnt):[]float64{4}\nfield(http):[]string{\"127.0.0.1\"}\nfield(time):[]int64{%v}\n", now*1e6)
 	res := rows.String()
@@ -738,4 +739,14 @@ func TestMergeFragments(t *testing.T) {
 	}
 	fragments = mergeFragments(fragments)
 	assert.Equal(t, 2, len(fragments))
+
+	// A test of same highlights
+	fragments = []Fragment{
+		{1, 10},
+		{1, 10},
+	}
+	fragments = mergeFragments(fragments)
+	assert.Equal(t, 1, len(fragments))
+	assert.Equal(t, 1, fragments[0].Offset)
+	assert.Equal(t, 10, fragments[0].Length)
 }

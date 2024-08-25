@@ -616,11 +616,11 @@ func TestFileSizeExceedLimit(t *testing.T) {
 		_ = fileops.RemoveAll(testCompDir)
 	}()
 
-	size := 2 * 1024 * 1024
+	size := 200 * 1024
 	conf := NewTsStoreConfig()
 	conf.SetFilesLimit(int64(size))
 	conf.maxRowsPerSegment = 1000
-	conf.maxSegmentLimit = 65535
+	conf.maxSegmentLimit = 6000
 	tier := uint64(util.Hot)
 	lockPath := ""
 	store := NewTableStore(testCompDir, &lockPath, &tier, true, conf)

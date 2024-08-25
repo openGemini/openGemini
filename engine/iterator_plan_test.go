@@ -42,6 +42,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
+	assert2 "github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -83,7 +84,7 @@ func Test_PreAggregation_FullData_SingleCall(t *testing.T) {
 		t.Fatal(err)
 	}
 	sh.ForceFlush()
-	time.Sleep(time.Second * 1)
+	sh.waitSnapshot()
 
 	shardGroup := &mockShardGroup{
 		sh:     sh,
@@ -1905,7 +1906,7 @@ func Test_PreAggregation_MissingData_SingleCall(t *testing.T) {
 		t.Fatal(err)
 	}
 	sh.ForceFlush()
-	time.Sleep(time.Second * 2)
+	sh.waitSnapshot()
 
 	shardGroup := &mockShardGroup{
 		sh:     sh,
@@ -3415,14 +3416,14 @@ func Test_FieldFilter_NoPreAgg_SingleCall(t *testing.T) {
 		t.Fatal(err)
 	}
 	sh.ForceFlush()
-	time.Sleep(time.Second * 1)
+	sh.waitSnapshot()
 	startTimeMemTable := mustParseTime(time.RFC3339Nano, "2020-01-01T00:00:00Z")
 	ptsOut, minTOut, maxTOut := GenDataRecord(msNames, 5, 1000, time.Millisecond*100, startTimeMemTable, false, false, true)
 	if err := sh.WriteRows(ptsOut, nil); err != nil {
 		t.Fatal(err)
 	}
 	sh.ForceFlush()
-	time.Sleep(time.Second * 1)
+	sh.waitSnapshot()
 	var minFalseVOut int
 	first := true
 	for _, value := range ptsOut {
@@ -3588,7 +3589,7 @@ func Run_MissingData_SingCall(t *testing.T, isFlush bool) {
 		t.Fatal(err)
 	}
 	sh.ForceFlush()
-	time.Sleep(time.Second * 1)
+	sh.waitSnapshot()
 	startTimeMemTable := mustParseTime(time.RFC3339Nano, "2020-01-01T00:00:00Z")
 	ptsOut, minTOut, maxTOut := GenDataRecord(msNames, 5, 1000, time.Millisecond*100, startTimeMemTable, false, false, true)
 	if err := sh.WriteRows(ptsOut, nil); err != nil {
@@ -3596,7 +3597,7 @@ func Run_MissingData_SingCall(t *testing.T, isFlush bool) {
 	}
 	if isFlush {
 		sh.ForceFlush()
-		time.Sleep(time.Second * 1)
+		sh.waitSnapshot()
 	} else {
 		idx, ok := sh.indexBuilder.GetPrimaryIndex().(*tsi.MergeSetIndex)
 		if !ok {
@@ -5148,7 +5149,7 @@ func Test_PreAggregation_Memtable_After_Order_SingCall(t *testing.T) {
 		t.Fatal(err)
 	}
 	sh.ForceFlush()
-	time.Sleep(time.Second * 1)
+	sh.waitSnapshot()
 
 	startTimeMemTable := mustParseTime(time.RFC3339Nano, "2021-02-01T00:00:00Z")
 	ptsOut, minTOut, maxTOut := GenDataRecord(msNames, 5, 1000, time.Millisecond*100, startTimeMemTable, false, false, true)
@@ -6617,7 +6618,7 @@ func Test_PreAggregation_MemTableData_SingleCall(t *testing.T) {
 		t.Fatal(err)
 	}
 	sh.ForceFlush()
-	time.Sleep(time.Second * 1)
+	sh.waitSnapshot()
 
 	startTimeMemTable := mustParseTime(time.RFC3339Nano, "2021-01-01T00:00:00Z")
 	ptsOut, minTOut, maxTout := GenDataRecord(msNames, 5, 1000, time.Millisecond*100, startTimeMemTable, true, false, true)
@@ -8218,7 +8219,7 @@ func Test_PreAggregation_FullData_MultiCalls(t *testing.T) {
 		t.Fatal(err)
 	}
 	sh.ForceFlush()
-	time.Sleep(time.Second * 2)
+	sh.waitSnapshot()
 
 	shardGroup := &mockShardGroup{
 		sh:     sh,
@@ -8430,7 +8431,7 @@ func Test_PreAggregation_MissingData_MultiCalls(t *testing.T) {
 		t.Fatal(err)
 	}
 	sh.ForceFlush()
-	time.Sleep(time.Second * 2)
+	sh.waitSnapshot()
 
 	shardGroup := &mockShardGroup{
 		sh:     sh,
@@ -8778,7 +8779,7 @@ func TestReadLastFromPreAgg(t *testing.T) {
 		t.Fatal(err)
 	}
 	sh.ForceFlush()
-	time.Sleep(time.Second * 1)
+	sh.waitSnapshot()
 
 	shardGroup := &mockShardGroup{
 		sh:     sh,
@@ -8928,14 +8929,14 @@ func Test_CreateLogicalPlan(t *testing.T) {
 		t.Fatal(err)
 	}
 	sh.ForceFlush()
-	time.Sleep(time.Second * 1)
+	sh.waitSnapshot()
 	startTime2 := mustParseTime(time.RFC3339Nano, "2021-01-01T12:00:00Z")
 	pts2, _, _ := GenDataRecord(msNames, 5, 2000, time.Millisecond*10, startTime2, true, false, true)
 	if err := sh.WriteRows(pts2, nil); err != nil {
 		t.Fatal(err)
 	}
 	sh.ForceFlush()
-	time.Sleep(time.Second * 1)
+	sh.waitSnapshot()
 
 	shardGroup := &mockShardGroup{
 		sh:     sh,
@@ -9188,4 +9189,15 @@ func TestRecTransToChunk3(t *testing.T) {
 			t.Fatal("TestRecTransToChunk2 error2")
 		}
 	}
+}
+
+func TestChunkReaderSend(t *testing.T) {
+	r := &ChunkReader{
+		closed:       make(chan struct{}, 2),
+		closedSignal: true,
+	}
+	r.sendChunk(nil)
+	_, ok := <-r.closed
+	assert2.True(t, ok)
+	close(r.closed)
 }

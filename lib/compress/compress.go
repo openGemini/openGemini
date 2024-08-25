@@ -28,8 +28,6 @@ const (
 	RLEBlockLimit = 1 << 14
 )
 
-var zeroBuf = make([]byte, 8000)
-
 type RLE struct {
 	step      int
 	blockSize int
@@ -58,7 +56,7 @@ func (rle *RLE) SameValueDecoding(in, out []byte) ([]byte, error) {
 
 	// all values are 0
 	if len(in) == 2 {
-		return paddingZeroBuffer(out, decSize), nil
+		return util.PaddingZeroBuffer(out, decSize), nil
 	}
 
 	if len(in) < rle.blockSize {
@@ -108,7 +106,7 @@ func (rle *RLE) Decoding(in, out []byte) ([]byte, error) {
 		// zero value
 		if n>>15 == 1 {
 			n -= 1 << 15
-			out = paddingZeroBuffer(out, int(n)*rle.step)
+			out = util.PaddingZeroBuffer(out, int(n)*rle.step)
 			in = in[2:]
 			continue
 		}
@@ -186,15 +184,6 @@ func paddingBuffer(pad, out []byte, size int) []byte {
 		}
 		size -= len(out[ofs:])
 		out = append(out, out[ofs:]...)
-	}
-	return out
-}
-
-func paddingZeroBuffer(out []byte, size int) []byte {
-	if size > len(zeroBuf) {
-		out = append(out, make([]byte, size)...)
-	} else {
-		out = append(out, zeroBuf[:size]...)
 	}
 	return out
 }

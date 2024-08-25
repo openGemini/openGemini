@@ -17,10 +17,19 @@ limitations under the License.
 package colstore
 
 import (
+	"fmt"
+	"hash/crc32"
 	"sync"
 
 	"github.com/openGemini/openGemini/lib/fragment"
+	"github.com/openGemini/openGemini/lib/numberenc"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util"
+)
+
+const (
+	PKMetaPrefixSize = util.Uint64SizeBytes*2 + util.Uint32SizeBytes*2
+	CRCLen           = 4
 )
 
 type PKInfo struct {
@@ -82,4 +91,39 @@ func (f *PKFiles) GetPKInfos() PKInfos {
 	ret := f.pkInfos
 	f.mutex.RUnlock()
 	return ret
+}
+
+type PkMetaBlock struct {
+	StartBlockId uint64
+	EndBlockId   uint64
+	Offset       uint32
+	Size         uint32
+}
+
+func MarshalPkMetaBlock(startId, endId uint64, offset, size uint32, meta, colsOffset []byte) []byte {
+	pos := uint32(len(meta))
+	meta = numberenc.MarshalUint32Append(meta, 0) // reserve crc32
+	meta = numberenc.MarshalUint64Append(meta, startId)
+	meta = numberenc.MarshalUint64Append(meta, endId)
+	meta = numberenc.MarshalUint32Append(meta, offset)
+	meta = numberenc.MarshalUint32Append(meta, size)
+	meta = append(meta, colsOffset...)
+	crc := crc32.ChecksumIEEE(meta[pos+crcSize:])
+	numberenc.MarshalUint32Copy(meta[pos:pos+crcSize], crc)
+	return meta
+}
+
+func UnmarshalPkMetaBlock(src []byte) (*PkMetaBlock, error) {
+	if len(src) < PKMetaPrefixSize {
+		return nil, fmt.Errorf("not enough data for unmarshal PkMetaBlock; want %d bytes; remained %d bytes", PKMetaPrefixSize, len(src))
+	}
+
+	pk := &PkMetaBlock{}
+	src = src[CRCLen:]
+	pk.StartBlockId, src = numberenc.UnmarshalUint64(src), src[util.Uint64SizeBytes:]
+	pk.EndBlockId, src = numberenc.UnmarshalUint64(src), src[util.Uint64SizeBytes:]
+	pk.Offset, src = numberenc.UnmarshalUint32(src), src[util.Uint32SizeBytes:]
+	pk.Size = numberenc.UnmarshalUint32(src)
+	// colsOffset is parsed on demand outside
+	return pk, nil
 }

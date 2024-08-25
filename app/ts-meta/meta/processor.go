@@ -36,7 +36,7 @@ import (
 type MetaStoreInterface interface {
 	leader() string
 	peers() []string
-	createDataNode(httpAddr, tcpAddr, role string) ([]byte, error)
+	createDataNode(httpAddr, tcpAddr, role, az string) ([]byte, error)
 	CreateSqlNode(httpAddr string, gossopAddr string) ([]byte, error)
 	afterIndex(index uint64) <-chan struct{}
 	getSnapshot(role metaclient.Role) []byte

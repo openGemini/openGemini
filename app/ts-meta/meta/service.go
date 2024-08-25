@@ -171,7 +171,7 @@ func (s *Service) Open() error {
 	if err != nil {
 		return err
 	}
-
+	meta.SetRepDisPolicy(s.config.RepDisPolicy)
 	s.initStore(ar)
 	s.startMetaHTTPServer()
 	err = s.startMetaServer()

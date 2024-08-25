@@ -172,6 +172,9 @@ func (storage *tsstoreImpl) ForceFlush(s *shard) {
 }
 
 func (storage *tsstoreImpl) writeSnapshot(s *shard) {
+	if s.SnapShotter != nil {
+		atomic.StoreUint32(&s.SnapShotter.RaftFlag, 0)
+	}
 	s.snapshotLock.Lock()
 	if s.activeTbl == nil {
 		s.snapshotLock.Unlock()
@@ -188,6 +191,10 @@ func (storage *tsstoreImpl) writeSnapshot(s *shard) {
 
 	s.activeTbl = s.memTablePool.Get(s.engineType)
 	s.activeTbl.SetIdx(s.skIdx)
+	if s.SnapShotter != nil {
+		s.SnapShotter.RaftFlushC <- true
+		atomic.StoreUint32(&s.SnapShotter.RaftFlag, 1)
+	}
 	s.snapshotLock.Unlock()
 
 	start := time.Now()

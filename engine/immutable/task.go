@@ -39,9 +39,6 @@ func NewCompactTask(table *MmsTables, plan *CompactGroup, full bool) *CompactTas
 		table: table,
 	}
 	task.Init(plan.name)
-	task.OnFinish(func() {
-		table.CompactDone(task.plan.group)
-	})
 	return task
 }
 
@@ -51,6 +48,7 @@ func (t *CompactTask) BeforeExecute() bool {
 	}
 	t.OnFinish(func() {
 		t.table.CompactDone(t.plan.group)
+		t.table.blockCompactStop(t.plan.name)
 	})
 	return true
 }
@@ -73,16 +71,14 @@ func (t *CompactTask) Execute() {
 		return
 	}
 
-	atomic.AddInt64(&fullCompactingCount, 1)
-
+	t.IncrFull(1)
 	orderWg, inorderWg := m.ImmTable.refMmsTable(m, group.name, false)
-
 	defer func() {
 		if config.GetStoreConfig().Compact.CompactRecovery {
 			CompactRecovery(m.path, group)
 		}
 		m.ImmTable.unrefMmsTable(orderWg, inorderWg)
-		atomic.AddInt64(&fullCompactingCount, -1)
+		t.IncrFull(-1)
 	}()
 
 	if !m.CompactionEnabled() {
@@ -100,6 +96,12 @@ func (t *CompactTask) Execute() {
 	if err != nil {
 		compactStat.AddErrors(1)
 		log.Error("compact error", zap.Error(err))
+	}
+}
+
+func (t *CompactTask) IncrFull(n int64) {
+	if t.full {
+		atomic.AddInt64(&fullCompactingCount, n)
 	}
 }
 

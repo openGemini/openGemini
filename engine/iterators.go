@@ -28,6 +28,7 @@ import (
 
 	"github.com/openGemini/openGemini/engine/comm"
 	"github.com/openGemini/openGemini/engine/executor"
+	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/index/clv"
 	"github.com/openGemini/openGemini/engine/index/tsi"
@@ -99,6 +100,7 @@ func init() {
 }
 
 func (s *shard) Scan(span *tracing.Span, schema *executor.QuerySchema, callBack func(num int64) error) (tsi.GroupSeries, int64, error) {
+	schema.SetSimpleTagset()
 	result, num, err := s.indexBuilder.Scan(span, util.Str2bytes(schema.Options().OptionsName()), schema.Options().(*query.ProcessorOptions), callBack)
 	if err != nil {
 		return nil, num, err
@@ -149,6 +151,8 @@ func (s *shard) CreateCursor(ctx context.Context, schema *executor.QuerySchema) 
 	if !schema.HasCall() && schema.HasLimit() && (len(schema.Options().GetDimensions()) > 0 || schema.GetOptions().IsGroupByAllDims()) {
 		lazyInit = true
 	}
+	// the query context can be used for index
+	schema.Options().SetCtx(ctx)
 	result, seriesNum, err := s.Scan(span, schema, resourceallocator.DefaultSeriesAllocateFunc)
 	defer func() {
 		_ = resourceallocator.FreeRes(resourceallocator.SeriesParallelismRes, seriesNum, seriesNum)
@@ -193,12 +197,9 @@ func (s *shard) CreateCursor(ctx context.Context, schema *executor.QuerySchema) 
 		cloneMsSpan.SetNameValue(fmt.Sprintf("order=%d,unorder=%d", len(immutableReader.Orders), len(immutableReader.OutOfOrders)))
 		cloneMsSpan.Finish()
 	}
-
-	groupCursors, err := s.createGroupCursors(span, schema, lazyInit, result, immutableReader, mutableReader, iTr)
-
 	// unref file(no need lock here), series iterator will ref/unref file itself
-	unRefReaders(immutableReader, mutableReader)
-
+	defer unRefReaders(immutableReader, mutableReader)
+	groupCursors, err := s.createGroupCursors(ctx, span, schema, lazyInit, result, immutableReader, mutableReader, iTr)
 	return groupCursors, err
 }
 
@@ -229,7 +230,7 @@ func (s *shard) GetTSSPFiles(mm string, isOrder bool) (*immutable.TSSPFiles, boo
 	return s.immTables.GetTSSPFiles(mm, isOrder)
 }
 
-func (s *shard) initGroupCursors(querySchema *executor.QuerySchema, parallelism int,
+func (s *shard) initGroupCursors(ctx context.Context, querySchema *executor.QuerySchema, parallelism int,
 	readers *immutable.MmsReaders, memTables *mutable.MemTables, iTr util.TimeRange) (comm.KeyCursors, error) {
 	var schema record.Schemas
 	var filterFieldsIdx []int
@@ -246,8 +247,16 @@ func (s *shard) initGroupCursors(querySchema *executor.QuerySchema, parallelism 
 		}
 	}
 
+	// the query interrupt signal is placed in IndexScanTransform.
+	closedSignal, ok := ctx.Value(hybridqp.QueryAborted).(*bool)
+	if !ok || closedSignal == nil {
+		s.log.Warn("there is no aborted signal to init group cursor")
+	}
 	cursors := make(comm.KeyCursors, 0, parallelism)
 	for groupIdx := 0; groupIdx < parallelism; groupIdx++ {
+		if closedSignal != nil && *closedSignal {
+			return nil, errno.NewError(errno.QueryAborted)
+		}
 		c := &groupCursor{
 			id:   groupIdx,
 			name: querySchema.Options().OptionsName(),
@@ -261,6 +270,7 @@ func (s *shard) initGroupCursors(querySchema *executor.QuerySchema, parallelism 
 				tmsMergePool: TsmMergePool,
 				querySchema:  querySchema,
 				interTr:      util.TimeRange{Min: iTr.Min, Max: iTr.Max},
+				closedSignal: closedSignal,
 			},
 			querySchema: querySchema,
 		}
@@ -275,7 +285,6 @@ func (s *shard) initGroupCursors(querySchema *executor.QuerySchema, parallelism 
 			auxTags = c.ctx.auxTags
 			schema = c.ctx.schema
 			condFunctions = c.ctx.filterOption.CondFunctions
-
 			if c.ctx.schema.Len() <= 1 {
 				return nil, errno.NewError(errno.NoFieldSelected, "initGroupCursors")
 			}
@@ -285,6 +294,12 @@ func (s *shard) initGroupCursors(querySchema *executor.QuerySchema, parallelism 
 			c.ctx.filterOption.FilterTags = filterTags
 			c.ctx.auxTags = auxTags
 			c.ctx.filterOption.CondFunctions = condFunctions
+
+		}
+
+		// init chunk meta context
+		if querySchema.Options().IsPromQuery() {
+			c.ctx.metaContext = immutable.NewChunkMetaContext(c.ctx.schema)
 		}
 
 		// init map
@@ -292,11 +307,6 @@ func (s *shard) initGroupCursors(querySchema *executor.QuerySchema, parallelism 
 		for _, id := range c.ctx.filterOption.FieldsIdx {
 			if val, err := influx.FieldType2Val(schema[id].Type); err != nil {
 				c.ctx.filterOption.FiltersMap.SetFilterMapValue(schema[id].Name, val)
-				if executor.GetEnableFileCursor() && c.querySchema.HasOptimizeAgg() {
-					for _, v := range cursors {
-						v.(*groupCursor).ctx.UnRef()
-					}
-				}
 				return nil, err
 			} else {
 				c.ctx.filterOption.FiltersMap.SetFilterMapValue(schema[id].Name, val)
@@ -355,41 +365,37 @@ func getQueryTimeRange(readers *immutable.MmsReaders, querySchema *executor.Quer
 	return min, max, nil
 }
 
-func (s *shard) createGroupCursors(span *tracing.Span, schema *executor.QuerySchema, lazyInit bool, tagSets []*tsi.TagSetInfo,
-	readers *immutable.MmsReaders, memTables *mutable.MemTables, iTr util.TimeRange) ([]comm.KeyCursor, error) {
-
-	parallelism, totalSid := getParallelismNumAndSidNum(schema, tagSets)
-
-	var groupSpan *tracing.Span
-	if span != nil {
-		groupSpan = span.StartSpan("create_group_cursor").StartPP()
-		groupSpan.SetNameValue(fmt.Sprintf("parallelism:%d, original_tagsets:%d, total_sid:%d",
-			parallelism, len(tagSets), totalSid))
-
-		defer groupSpan.Finish()
-	}
-
-	cursors, err := s.initGroupCursors(schema, parallelism, readers, memTables, iTr)
-	if err != nil {
-		return nil, err
-	}
-	if len(cursors) == 0 {
-		return nil, nil
-	}
-
+func (s *shard) createGroupSubCursorInSerial(cursors comm.KeyCursors, tagSets []*tsi.TagSetInfo, schema *executor.QuerySchema, parallelism int) ([]comm.KeyCursor, error) {
 	releaseCursors := func() {
 		_ = cursors.Close()
 	}
+	for i := 0; i < len(tagSets); i++ {
+		tagSet := tagSets[i]
+		tagSet.Sort(schema)
+		tagSet.Ref()
+	}
 
-	if span != nil && !lazyInit {
-		for i := 0; i < len(cursors); i++ {
-			subGroupSpan := groupSpan.StartSpan(fmt.Sprintf("group%d", i)).StartPP()
-			subGroupSpan.CreateCounter(memTableDuration, "ns")
-			subGroupSpan.CreateCounter(memTableRowCount, "")
-			cursors[i].(*groupCursor).span = subGroupSpan
+	for groupIdx := 0; groupIdx < parallelism; groupIdx++ {
+		groupCur, ok := cursors[groupIdx].(*groupCursor)
+		if !ok {
+			return nil, fmt.Errorf("invalid the group cursor")
+		}
+		tsCursor, err := s.newAggTagSetCursorInSerial(groupCur.ctx, groupCur.span, schema, tagSets, parallelism, groupIdx)
+		if err != nil {
+			releaseCursors()
+			return nil, err
+		}
+		if !immutable.IsInterfaceNil(tsCursor) {
+			groupCur.tagSetCursors = append(groupCur.tagSetCursors, tsCursor)
 		}
 	}
-	enableFileCursor := executor.IsEnableFileCursor(schema)
+	return cursors, nil
+}
+
+func (s *shard) createGroupSubCursor(cursors comm.KeyCursors, tagSets []*tsi.TagSetInfo, schema *executor.QuerySchema, enableFileCursor, lazyInit bool, parallelism int) ([]comm.KeyCursor, error) {
+	releaseCursors := func() {
+		_ = cursors.Close()
+	}
 	var startGroupIdx int
 	errs := make([]error, parallelism)
 	work := func(start, subTagSetN int, parallel bool, wg *sync.WaitGroup, tagSet *tsi.TagSetInfo) {
@@ -404,9 +410,16 @@ func (s *shard) createGroupCursors(span *tracing.Span, schema *executor.QuerySch
 			}
 		}()
 		groupIdx := (startGroupIdx + start) % parallelism
-		groupCur := cursors[groupIdx].(*groupCursor)
+		groupCur, ok := cursors[groupIdx].(*groupCursor)
+		if !ok {
+			errs[start] = fmt.Errorf("invalid the group cursor")
+		}
 		var tsCursor comm.KeyCursor
 		var err error
+		if groupCur.ctx.IsAborted() {
+			errs[start] = errno.NewError(errno.QueryAborted)
+			return
+		}
 		if enableFileCursor {
 			tsCursor, err = s.newAggTagSetCursor(groupCur.ctx, groupCur.span, schema, tagSet, start, subTagSetN)
 		} else {
@@ -449,6 +462,59 @@ func (s *shard) createGroupCursors(span *tracing.Span, schema *executor.QuerySch
 			}
 		}
 	}
+	return cursors, nil
+}
+
+func (s *shard) createGroupCursors(ctx context.Context, span *tracing.Span, schema *executor.QuerySchema, lazyInit bool, tagSets []*tsi.TagSetInfo,
+	readers *immutable.MmsReaders, memTables *mutable.MemTables, iTr util.TimeRange) ([]comm.KeyCursor, error) {
+
+	parallelism, totalSid := getParallelismNumAndSidNum(schema, tagSets)
+
+	var groupSpan *tracing.Span
+	if span != nil {
+		groupSpan = span.StartSpan("create_group_cursor").StartPP()
+		groupSpan.SetNameValue(fmt.Sprintf("parallelism:%d, original_tagsets:%d, total_sid:%d",
+			parallelism, len(tagSets), totalSid))
+
+		defer groupSpan.Finish()
+	}
+
+	cursors, err := s.initGroupCursors(ctx, schema, parallelism, readers, memTables, iTr)
+	if err != nil {
+		if executor.GetEnableFileCursor() && schema.HasOptimizeAgg() {
+			for _, v := range cursors {
+				v.(*groupCursor).ctx.UnRef()
+			}
+		}
+		return nil, err
+	}
+	if len(cursors) == 0 {
+		return nil, nil
+	}
+
+	if span != nil && !lazyInit {
+		for i := 0; i < len(cursors); i++ {
+			subGroupSpan := groupSpan.StartSpan(fmt.Sprintf("group%d", i)).StartPP()
+			subGroupSpan.CreateCounter(memTableDuration, "ns")
+			subGroupSpan.CreateCounter(memTableRowCount, "")
+			cursors[i].(*groupCursor).span = subGroupSpan
+		}
+	}
+
+	// Creates the child cursors of groupCursor.
+	enableFileCursor := executor.IsEnableFileCursor(schema)
+	if schema.Options().IsPromQuery() && schema.Options().IsPromGroupAll() && !schema.HasCall() {
+		cursors, err = s.createGroupSubCursorInSerial(cursors, tagSets, schema, parallelism)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		cursors, err = s.createGroupSubCursor(cursors, tagSets, schema, enableFileCursor, lazyInit, parallelism)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	result := make([]comm.KeyCursor, 0, len(cursors))
 	for i := range cursors {
 		gCursor := cursors[i].(*groupCursor)
@@ -469,7 +535,6 @@ func (s *shard) createGroupCursors(span *tracing.Span, schema *executor.QuerySch
 	if len(result) > 0 {
 		return result, nil
 	}
-
 	return nil, nil
 }
 
@@ -524,6 +589,12 @@ type seriesInfo struct {
 	tags influx.PointTags
 }
 
+func (s *seriesInfo) Set(sid uint64, key []byte, tags *influx.PointTags) {
+	s.sid = sid
+	s.key = key
+	s.tags = *tags
+}
+
 func (s *seriesInfo) GetSeriesKey() []byte {
 	return s.key
 }
@@ -554,6 +625,11 @@ type idKeyCursorContext struct {
 	decs         *immutable.ReadContext
 	colAux       *immutable.ColAux
 	metaContext  *immutable.ChunkMetaContext
+	closedSignal *bool
+}
+
+func (i *idKeyCursorContext) IsAborted() bool {
+	return i.closedSignal != nil && *i.closedSignal
 }
 
 func (i *idKeyCursorContext) hasAuxTags() bool {
@@ -712,7 +788,7 @@ func (s *shard) getAllSeriesMemtableRecord(ctx *idKeyCursorContext, schema *exec
 	colAux := record.ColAux{}
 	for i := start; i < tagSetNum; i += step {
 		sid := tagSet.IDs[i]
-		ptTags := &(tagSet.TagsVec[i])
+		ptTags := tagSet.GetTagsWithQuerySchema(i, schema)
 		filter := tagSet.Filters[i]
 		rowFilter := tagSet.GetRowFilter(i)
 		nameWithVer := schema.Options().OptionsName()
@@ -741,6 +817,13 @@ func (s *shard) getAllSeriesMemtableRecord(ctx *idKeyCursorContext, schema *exec
 		maxTime = GetMaxTime(maxTime, midItr.record, schema.Options().IsAscending())
 	}
 	return memItrs, minTime, maxTime
+}
+
+func (s *shard) newAggTagSetCursorInSerial(ctx *idKeyCursorContext, span *tracing.Span, schema *executor.QuerySchema,
+	tagSets []*tsi.TagSetInfo, group, groupIdx int) (comm.KeyCursor, error) {
+	scanCursor := newSeriesLoopCursorInSerial(ctx, span, schema, tagSets, group, groupIdx)
+	sampleCursor := NewInstantVectorCursor(scanCursor, schema, ctx.aggPool, ctx.interTr)
+	return NewAggTagSetCursor(schema, ctx, sampleCursor, true), nil
 }
 
 func (s *shard) newAggTagSetCursor(ctx *idKeyCursorContext, span *tracing.Span, schema *executor.QuerySchema,
@@ -798,6 +881,10 @@ func itrsInit(ctx *idKeyCursorContext, span *tracing.Span, schema *executor.Quer
 	avg := len(tagSet.IDs)/step + 1
 	itrs := make(comm.KeyCursors, 0, avg)
 	for i := start; i < len(tagSet.IDs); i += step {
+		if ctx.IsAborted() {
+			_ = itrs.Close()
+			return nil, errno.NewError(errno.QueryAborted)
+		}
 		var itr *seriesCursor
 		var err error
 		if !lazyInit {
@@ -854,6 +941,10 @@ func itrsInitWithLimit(ctx *idKeyCursorContext, span *tracing.Span, schema *exec
 	itrs := make(comm.KeyCursors, 0, avg)
 	topNList := NewTopNLinkedList(schema.Options().GetLimit()+schema.Options().GetOffset(), schema.Options().IsAscending())
 	for i := start; i < len(tagSet.IDs); i += step {
+		if ctx.IsAborted() {
+			_ = itrs.Close()
+			return nil, errno.NewError(errno.QueryAborted)
+		}
 		var itr *seriesCursor
 		var err error
 		if !lazyInit {
@@ -862,7 +953,7 @@ func itrsInitWithLimit(ctx *idKeyCursorContext, span *tracing.Span, schema *exec
 			itr, err = newSeriesCursorLazyInit(ctx, span, schema, tagSet, i, true)
 		}
 		if err != nil {
-			_ = itrs.Close()
+			topNList.Close()
 			return nil, err
 		}
 		if itr != nil {

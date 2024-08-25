@@ -18,9 +18,13 @@ package httpd
 
 import (
 	"testing"
+	"time"
 
 	"github.com/influxdata/influxdb/models"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/promql2influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/promtheus/promql"
+	"github.com/prometheus/prometheus/promql/parser"
 )
 
 type mockWriter struct {
@@ -89,5 +93,46 @@ func BenchmarkSonicJsonFormatter(b *testing.B) {
 	b.StartTimer()
 	for i := 0; i < b.N; i++ {
 		f.WriteResponse(writer, resp)
+	}
+}
+
+func BenchmarkPromJsonFormatter(b *testing.B) {
+	f := &jsonFormatter{}
+	resp := PromResponse{Data: &promql2influxql.PromResult{}, Status: "success"}
+	r := &promql2influxql.Receiver{DropMetric: false, RemoveTableName: false}
+	res := &query.Result{}
+	t := time.Now()
+	for i := 0; i < 100; i++ {
+		res.Series = append(res.Series, []*models.Row{{
+			Name:    "db2",
+			Columns: []string{"time", "name"},
+			Values: [][]interface{}{
+				{t, int64(123)},
+				{t, int64(123)},
+			},
+		},
+			{
+				Name:    "db4",
+				Columns: []string{"time", "query"},
+				Values: [][]interface{}{
+					{t, int64(123)},
+					{t, int64(123)},
+					{t, int64(123)},
+				},
+			}}...)
+	}
+	var promSeries []*promql.Series
+	for _, item := range res.Series {
+		if err := r.PopulatePromSeriesByHash(&promSeries, item); err != nil {
+			b.Fatal(err)
+		}
+	}
+	data := promql2influxql.NewPromResult(promql2influxql.HandleValueTypeMatrix(promSeries), string(parser.ValueTypeMatrix))
+	resp.Data = data
+	writer := &mockWriter{}
+	b.ReportAllocs()
+	b.StartTimer()
+	for i := 0; i < b.N; i++ {
+		f.WritePromResponse(writer, resp)
 	}
 }

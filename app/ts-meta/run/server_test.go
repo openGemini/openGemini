@@ -142,6 +142,9 @@ func Test_NewServer_Statistics(t *testing.T) {
 	server.initStatisticsPusher()
 	puser := &statisticsPusher.StatisticsPusher{}
 	server.MetaService.SetStatisticsPusher(puser)
+
+	config.SetProductType("logkeeper")
+	server.initStatisticsPusher()
 }
 
 func Test_NewServer_Statistics_Single(t *testing.T) {

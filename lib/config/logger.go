@@ -44,6 +44,8 @@ const (
 
 	// DefaultCompressEnabled is whether the log files are compressed
 	DefaultCompressEnabled = true
+
+	DefaultStoreRaftLoggerName = "store_raft"
 )
 
 // global readonly logger

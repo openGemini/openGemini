@@ -27,7 +27,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func PromResultCompare(c1 executor.Chunk, c2 executor.Chunk, t *testing.T) {
+func PromResultCompareMultiCol(c1 executor.Chunk, c2 executor.Chunk, t *testing.T) {
 	if c1 == nil && c2 == nil {
 		return
 	}
@@ -37,9 +37,10 @@ func PromResultCompare(c1 executor.Chunk, c2 executor.Chunk, t *testing.T) {
 		assert.Equal(t, tag1s.GetTag(), tag2s.GetTag())
 	}
 	assert.Equal(t, c1.Time(), c2.Time())
-	assert.Equal(t, len(c1.Columns()), 1)
-	assert.Equal(t, len(c2.Columns()), 1)
-	assert.Equal(t, c1.Columns()[0].FloatValues(), c2.Columns()[0].FloatValues())
+	assert.Equal(t, len(c1.Columns()), len(c2.Columns()))
+	for i := range c1.Columns() {
+		assert.Equal(t, c1.Columns()[i].FloatValues(), c2.Columns()[i].FloatValues())
+	}
 }
 
 func PromBinOpTransformTestBase(t *testing.T, chunks1, chunks2 []executor.Chunk, para *influxql.BinOp, rChunk executor.Chunk) {
@@ -55,7 +56,7 @@ func PromBinOpTransformTestBase(t *testing.T, chunks1, chunks2 []executor.Chunk,
 		panic("")
 	}
 	checkResult := func(chunk executor.Chunk) error {
-		PromResultCompare(chunk, rChunk, t)
+		PromResultCompareMultiCol(chunk, rChunk, t)
 		return nil
 	}
 	sink := NewSinkFromFunction(outRowDataType, checkResult)
@@ -229,6 +230,64 @@ func BuildBinOpInChunk9() executor.Chunk {
 	return chunk
 }
 
+func BuildBinOpInChunk10() executor.Chunk {
+	rowDataType := buildPromBinOpOutputRowDataType()
+	b := executor.NewChunkBuilder(rowDataType)
+	chunk := b.NewChunk("m2")
+	chunk.AppendTimes([]int64{1, 2})
+	chunk.AddTagAndIndex(*ParseChunkTags("tk1=2"), 0)
+	chunk.AddIntervalIndex(0)
+	chunk.Column(0).AppendFloatValues([]float64{1.1, 2, 2})
+	chunk.Column(0).AppendColumnTimes([]int64{1, 2})
+	chunk.Column(0).AppendManyNotNil(2)
+	return chunk
+}
+
+func BuildBinOpInChunk11() executor.Chunk {
+	rowDataType := buildPromBinOpOutputRowDataType()
+	b := executor.NewChunkBuilder(rowDataType)
+	chunk := b.NewChunk("m2")
+	chunk.AppendTimes([]int64{1, 2, 1, 2})
+	chunk.AddTagAndIndex(*ParseChunkTags("tk1=2,tk2=1"), 0)
+	chunk.AddTagAndIndex(*ParseChunkTags("tk1=2,tk2=1"), 1)
+	chunk.AddTagAndIndex(*ParseChunkTags("tk1=2,tk2=2"), 2)
+	chunk.AddTagAndIndex(*ParseChunkTags("tk1=2,tk2=2"), 3)
+	chunk.AddIntervalIndex(0)
+	chunk.AddIntervalIndex(1)
+	chunk.AddIntervalIndex(2)
+	chunk.AddIntervalIndex(3)
+	chunk.Column(0).AppendFloatValues([]float64{1.1, 2, 2, 3.3, 4.4})
+	chunk.Column(0).AppendColumnTimes([]int64{1, 2, 1, 2})
+	chunk.Column(0).AppendManyNotNil(4)
+	return chunk
+}
+
+func BuildBinOpInChunk12() executor.Chunk {
+	rowDataType := buildPromBinOpOutputRowDataType()
+	b := executor.NewChunkBuilder(rowDataType)
+	chunk := b.NewChunk("m2")
+	chunk.AppendTimes([]int64{1, 2, 3, 4})
+	chunk.AddTagAndIndex(*ParseChunkTags("tk1=2"), 0)
+	chunk.AddIntervalIndex(0)
+	chunk.Column(0).AppendFloatValues([]float64{1.1, 2.2, 3.3, 4.4})
+	chunk.Column(0).AppendColumnTimes([]int64{1, 2, 3, 4})
+	chunk.Column(0).AppendManyNotNil(4)
+	return chunk
+}
+
+func BuildBinOpInChunk13() executor.Chunk {
+	rowDataType := buildPromBinOpOutputRowDataType()
+	b := executor.NewChunkBuilder(rowDataType)
+	chunk := b.NewChunk("m2")
+	chunk.AppendTimes([]int64{1, 3})
+	chunk.AddTagAndIndex(*ParseChunkTags("tk1=2"), 0)
+	chunk.AddIntervalIndex(0)
+	chunk.Column(0).AppendFloatValues([]float64{1.1, 3.3})
+	chunk.Column(0).AppendColumnTimes([]int64{1, 3})
+	chunk.Column(0).AppendManyNotNil(2)
+	return chunk
+}
+
 func BuildBinOpResult() []executor.Chunk {
 	rowDataType := buildPromBinOpOutputRowDataType()
 	b := executor.NewChunkBuilder(rowDataType)
@@ -383,6 +442,27 @@ func BuildBinOpResult13() []executor.Chunk {
 	chunk1.AppendTimes([]int64{1})
 	chunk1.AddTagAndIndex(*ParseChunkTags("tk3=3"), 0)
 	AppendFloatValues(chunk1, 0, []float64{0}, []bool{true})
+	return []executor.Chunk{chunk1}
+}
+
+func BuildBinOpResult14() []executor.Chunk {
+	rowDataType := buildPromBinOpOutputRowDataType()
+	b := executor.NewChunkBuilder(rowDataType)
+	chunk1 := b.NewChunk("")
+	chunk1.AppendTimes([]int64{1, 2, 1, 2})
+	chunk1.AddTagAndIndex(*ParseChunkTags("tk1=2,tk2=1"), 0)
+	chunk1.AddTagAndIndex(*ParseChunkTags("tk1=2,tk2=2"), 2)
+	AppendFloatValues(chunk1, 0, []float64{1, 1, 1, 1}, []bool{true, true, true, true})
+	return []executor.Chunk{chunk1}
+}
+
+func BuildBinOpResult15() []executor.Chunk {
+	rowDataType := buildPromBinOpOutputRowDataType()
+	b := executor.NewChunkBuilder(rowDataType)
+	chunk1 := b.NewChunk("")
+	chunk1.AppendTimes([]int64{1, 3})
+	chunk1.AddTagAndIndex(*ParseChunkTags("tk1=2"), 0)
+	AppendFloatValues(chunk1, 0, []float64{2.2, 6.6}, []bool{true, true})
 	return []executor.Chunk{chunk1}
 }
 
@@ -780,7 +860,7 @@ func PromBinOpTransformSingleInputTestBase(t *testing.T, chunks1 []executor.Chun
 		panic("")
 	}
 	checkResult := func(chunk executor.Chunk) error {
-		PromResultCompare(chunk, rChunk, t)
+		PromResultCompareMultiCol(chunk, rChunk, t)
 		return nil
 	}
 	sink := NewSinkFromFunction(outRowDataType, checkResult)
@@ -835,4 +915,33 @@ func TestPromBinOpTransform30(t *testing.T) {
 		NilMst:     influxql.RNilMst,
 	}
 	PromBinOpTransformSingleInputTestBase(t, []executor.Chunk{chunk1}, para, BuildBinOpInChunk1())
+}
+
+// test same PrimaryGroup reuse
+func TestPromBinOpTransform31(t *testing.T) {
+	chunk1 := BuildBinOpInChunk10()
+	chunk2 := BuildBinOpInChunk11()
+	para := &influxql.BinOp{
+		OpType:     parser.ADD,
+		On:         true,
+		MatchKeys:  []string{"tk1"},
+		MatchCard:  influxql.OneToMany,
+		ReturnBool: true,
+	}
+	PromBinOpTransformTestBase(t, []executor.Chunk{chunk1}, []executor.Chunk{chunk2}, para, BuildBinOpResult14()[0])
+}
+
+// test skip timestamp only one-side has, like "Short-circuit: nothing is going to match" in prom
+func TestPromBinOpTransform32(t *testing.T) {
+	chunk1 := BuildBinOpInChunk12()
+	chunk2 := BuildBinOpInChunk13()
+	para := &influxql.BinOp{
+		OpType:    parser.ADD,
+		MatchCard: influxql.OneToOne,
+	}
+	PromBinOpTransformTestBase(t, []executor.Chunk{chunk1}, []executor.Chunk{chunk2}, para, BuildBinOpResult15()[0])
+
+	chunk1 = BuildBinOpInChunk13()
+	chunk2 = BuildBinOpInChunk12()
+	PromBinOpTransformTestBase(t, []executor.Chunk{chunk1}, []executor.Chunk{chunk2}, para, BuildBinOpResult15()[0])
 }

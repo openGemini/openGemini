@@ -21,6 +21,7 @@ import (
 	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/rpn"
+	"github.com/openGemini/openGemini/lib/tracing"
 )
 
 var _ = RegistrySKFileReaderCreator(uint32(index.Set), &SetReaderCreator{})
@@ -38,6 +39,7 @@ type SetIndexReader struct {
 	schema  record.Schemas
 	option  hybridqp.Options
 	sk      SKCondition
+	span    *tracing.Span
 }
 
 func NewSetIndexReader(rpnExpr *rpn.RPNExpr, schema record.Schemas, option hybridqp.Options, isCache bool) (*SetIndexReader, error) {
@@ -62,6 +64,10 @@ func (r *SetIndexReader) ReInit(file interface{}) (err error) {
 
 func (r *SetIndexReader) Close() error {
 	return nil
+}
+
+func (r *SetIndexReader) StartSpan(span *tracing.Span) {
+	r.span = span
 }
 
 type SetWriter struct {

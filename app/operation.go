@@ -35,7 +35,7 @@ import (
 
 const (
 	killCntOnce        = int(5)
-	periodOfInspection = 3 * time.Second
+	periodOfInspection = 100 * time.Millisecond
 )
 
 type ProactiveManager struct {
@@ -112,7 +112,7 @@ func (pm *ProactiveManager) KillQuery(id uint64) {
 	var abortSuccess bool
 	killQueryByIDFn := func(manager *query.Manager) {
 		// qid is not in current manager, or it has been aborted successfully
-		if manager.Get(id) == nil || abortSuccess {
+		if len(manager.Get(id)) == 0 || abortSuccess {
 			return
 		}
 		isExist = true

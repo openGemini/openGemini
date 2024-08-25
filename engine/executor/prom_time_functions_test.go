@@ -17,6 +17,7 @@ limitations under the License.
 package executor_test
 
 import (
+	"math"
 	"testing"
 
 	"github.com/openGemini/openGemini/engine/executor"
@@ -25,10 +26,10 @@ import (
 
 func TestPromTimeFuncstions(t *testing.T) {
 	valuer := executor.PromTimeValuer{}
-	calls := []string{"year_prom", "time_prom", "vector_prom", "month_prom", "day_of_month_prom", "day_of_week_prom", "hour_prom", "minute_prom", "days_in_month_prom"}
+	calls := []string{"year_prom", "time_prom", "vector_prom", "month_prom", "day_of_month_prom", "day_of_week_prom", "hour_prom", "minute_prom", "days_in_month_prom", "pi_prom", "timestamp_prom"}
 	// 1.normal return
 	callArgs := []interface{}{1.0}
-	expects := []float64{1970, 1, 1, 1, 1, 4, 0, 0, 31}
+	expects := []float64{1970, 1, 1, 1, 1, 4, 0, 0, 31, math.Pi, 1}
 	for i, call := range calls {
 		act, _ := valuer.Call(call, callArgs)
 		assert.Equal(t, expects[i], act.(float64))

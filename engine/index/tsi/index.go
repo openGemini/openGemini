@@ -80,6 +80,16 @@ func (t *TagSetInfo) Swap(i, j int) {
 	}
 }
 
+func (t *TagSetInfo) Cut(idx int) {
+	if idx >= len(t.IDs) {
+		return
+	}
+	t.SeriesKeys = t.SeriesKeys[:idx]
+	t.IDs = t.IDs[:idx]
+	t.TagsVec = t.TagsVec[:idx]
+	t.Filters = t.Filters[:idx]
+}
+
 func NewTagSetInfo() *TagSetInfo {
 	return setPool.getInit(32)
 }
@@ -100,6 +110,24 @@ func (t *TagSetInfo) reset() {
 	}
 }
 
+func (t *TagSetInfo) AppendWithOpt(id uint64, seriesKey []byte, filter influxql.Expr, tags influx.PointTags,
+	rowFilter []clv.RowFilter, opt *query.ProcessorOptions) {
+	t.IDs = append(t.IDs, id)
+	t.Filters = append(t.Filters, filter)
+	if opt.SimpleTagset {
+		t.SeriesKeys = append(t.SeriesKeys, nil)
+		if len(t.TagsVec) == 0 {
+			t.TagsVec = append(t.TagsVec, tags)
+		}
+	} else {
+		t.TagsVec = append(t.TagsVec, tags)
+		t.SeriesKeys = append(t.SeriesKeys, seriesKey)
+	}
+	if t.RowFilters != nil {
+		t.RowFilters.Append(rowFilter)
+	}
+}
+
 func (t *TagSetInfo) Append(id uint64, seriesKey []byte, filter influxql.Expr, tags influx.PointTags, rowFilter []clv.RowFilter) {
 	t.IDs = append(t.IDs, id)
 	t.Filters = append(t.Filters, filter)
@@ -108,6 +136,13 @@ func (t *TagSetInfo) Append(id uint64, seriesKey []byte, filter influxql.Expr, t
 	if t.RowFilters != nil {
 		t.RowFilters.Append(rowFilter)
 	}
+}
+
+func (t *TagSetInfo) GetTagsWithQuerySchema(i int, s *executor.QuerySchema) *influx.PointTags {
+	if s.Options().GetSimpleTagset() {
+		return &t.TagsVec[0]
+	}
+	return &t.TagsVec[i]
 }
 
 func (t *TagSetInfo) Ref() {

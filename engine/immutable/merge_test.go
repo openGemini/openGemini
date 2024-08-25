@@ -210,6 +210,9 @@ func compareRecords(expect, got map[uint64]*record.Record) error {
 		if err := compareRecordCols(exp, item); err != nil {
 			return err
 		}
+
+		delete(expect, sid)
+		delete(got, sid)
 	}
 
 	return nil

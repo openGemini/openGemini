@@ -27,6 +27,7 @@ import (
 )
 
 const unit32Size = 4 // the byte size of unit32
+const unit64Size = 8 // the byte size of unit64
 
 var NewFile = errors.New("Create a new file")
 

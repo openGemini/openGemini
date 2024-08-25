@@ -458,3 +458,61 @@ func (t *SimpleGramTokenizerV1) Next() bool {
 func (t *SimpleGramTokenizerV1) CurrentHash() uint64 {
 	return t.allHashes[t.currIndex]
 }
+
+type StandardTokenizer struct {
+	splitTable []byte
+}
+
+func NewStandardTokenizer(split string) *StandardTokenizer {
+	tokenizer := &StandardTokenizer{
+		splitTable: make([]byte, 256),
+	}
+	for _, c := range split {
+		tokenizer.splitTable[c] = 1
+	}
+	return tokenizer
+}
+
+func (t *StandardTokenizer) isSplit(b byte) bool {
+	return (b&0x80 == 0) && (t.splitTable[b] == 1)
+}
+
+func (t *StandardTokenizer) isChar(b byte) bool {
+	return (b&0x80 == 0) && (t.splitTable[b] == 0)
+}
+
+func (t *StandardTokenizer) Split(str string) []string {
+	data := []byte(str)
+	if len(data) == 0 {
+		return nil
+	}
+	res := make([]string, 0)
+	start, end := 0, 0
+	max := len(data)
+	for end < max {
+		c := data[end]
+		if t.isSplit(c) {
+			start++
+			end++
+			continue
+		}
+		if c < 0x80 {
+			for end < max && t.isChar(data[end]) {
+				end++
+			}
+		} else if c < 0xe0 {
+			end += 2 // 2-byte utf-8
+		} else if c < 0xf0 {
+			end += 3 // 3-byte utf-8
+		} else if c < 0xf8 {
+			end += 4 // 4-byte utf-8
+		} else if c < 0xfc {
+			end += 5 // 5-byte utf-8
+		} else {
+			end += 6 // 6-byte utf-8
+		}
+		res = append(res, string(data[start:end]))
+		start = end
+	}
+	return res
+}
