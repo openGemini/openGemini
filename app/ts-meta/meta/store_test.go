@@ -17,20 +17,27 @@ limitations under the License.
 package meta_test
 
 import (
+	"errors"
 	"fmt"
 	"runtime"
+	"runtime/debug"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/openGemini/openGemini/app/ts-meta/meta"
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
+	"github.com/openGemini/openGemini/coordinator"
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
+	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	logger2 "github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/obs"
+	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
@@ -815,7 +822,7 @@ func TestDownSampleCommands(t *testing.T) {
 	rpInfos := &meta2.RetentionPolicyInfo{
 		Measurements: map[string]*meta2.MeasurementInfo{"mst_0000": {
 			Name:   "mst_0000",
-			Schema: map[string]int32{"age": influx.Field_Type_Int},
+			Schema: &meta2.CleanSchema{"age": meta2.SchemaVal{Typ: influx.Field_Type_Int}},
 		}},
 		MstVersions: map[string]meta2.MeasurementVer{
 			"mst": {NameWithVersion: "mst_0000", Version: 0},
@@ -981,7 +988,6 @@ func createUpdateReplicationCmd(db string, rgId, masterId uint32, peers []meta2.
 		RepGroupId: proto.Uint32(rgId),
 		MasterId:   proto.Uint32(masterId),
 		Peers:      mPeers,
-		RgStatus:   proto.Uint32(rgStatus),
 	}
 
 	t1 := proto2.Command_UpdateReplicationCommand
@@ -1199,4 +1205,202 @@ func TestUpdateInvalidUser(t *testing.T) {
 	if err = mms.GetStore().ApplyCmd(cmd); err == nil {
 		t.Fatal("TestUpdateInvalidUser err")
 	}
+}
+
+func TestUpLoadCapacityStatPanic(t *testing.T) {
+	dir := t.TempDir()
+	mms, err := meta.InitStore(dir, "127.0.0.1")
+	conf := config.NewMeta()
+	_ = meta.NewService(conf, nil)
+	defer func() {
+		mms.Close()
+	}()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := recover(); err != nil {
+			if !strings.Contains(string(debug.Stack()), "UpLoadCapacityStat.func1()") {
+				t.Fatal("unexpect panic", string(debug.Stack()))
+			}
+		}
+	}()
+	store := mms.GetStore()
+	store = nil
+	store.UpLoadCapacityStat()
+}
+
+func TestUpLoadCapacityStat(t *testing.T) {
+	dir := t.TempDir()
+	mms, err := meta.InitStore(dir, "127.0.0.1")
+	conf := config.NewMeta()
+	_ = meta.NewService(conf, nil)
+	defer func() {
+		mms.Close()
+	}()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := meta.GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")
+	if err = mms.GetStore().ApplyCmd(cmd); err != nil {
+		t.Fatal(err)
+	}
+	cmd = meta.GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")
+	if err = mms.GetStore().ApplyCmd(cmd); err != nil {
+		t.Fatal(err)
+	}
+	data := mms.GetStore().GetData()
+	data.MetaNodes = append(data.MetaNodes, *new(meta2.NodeInfo))
+	cmd = meta.GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")
+	if err = mms.GetStore().ApplyCmd(cmd); err != nil {
+		t.Fatal(err)
+	}
+	shard := meta2.ShardInfo{Owners: []uint32{12}}
+	sg := meta2.ShardGroupInfo{Shards: []meta2.ShardInfo{shard}}
+	rpInfo := meta2.RetentionPolicyInfo{Name: "test", ShardGroups: []meta2.ShardGroupInfo{sg}}
+	dbInfo := meta2.DatabaseInfo{
+		Name:              "test",
+		RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{"test": &rpInfo},
+		Options:           &obs.ObsOptions{},
+	}
+	data.Databases = map[string]*meta2.DatabaseInfo{"test": &dbInfo}
+
+	time.Sleep(time.Second)
+	store := mms.GetStore()
+	store.UpLoadCapacityStat()
+	data.Databases["test"].RetentionPolicies["test"].ShardGroups[0].Shards[0].MarkDelete = true
+	time.Sleep(3 * time.Second)
+	store.UpLoadCapacityStat()
+	data.Databases["test"].RetentionPolicies["test"].MarkDeleted = true
+	time.Sleep(3 * time.Second)
+	store.UpLoadCapacityStat()
+}
+
+func TestLoadOrStroe(t *testing.T) {
+	var testMap = &sync.Map{}
+	act, loaded := testMap.LoadOrStore(1, 2)
+	assert.Equal(t, act.(int), 2)
+	assert.Equal(t, loaded, false)
+	act, loaded = testMap.LoadOrStore(1, 3)
+	assert.Equal(t, act.(int), 2)
+	testMap.Store(1, 5)
+	act, loaded = testMap.LoadOrStore(1, 3)
+	assert.Equal(t, act.(int), 5)
+}
+
+func TestUpdateCapacityStatMap(t *testing.T) {
+	meta.CapacityStatMap = &sync.Map{}
+	meta.CapacityStatMap.Store(uint64(2), 12)
+
+	item := stat.NewLogKeeperStatItem("test", "test")
+	isRetry := meta.UpdateCapacityStatMap(1, 12, 0, item)
+	assert.Equal(t, false, isRetry)
+
+	// Test capacity growth
+	isRetry = meta.UpdateCapacityStatMap(1, 15, 0, item)
+	assert.Equal(t, false, isRetry)
+
+	// Test capacity read exception
+	isRetry = meta.UpdateCapacityStatMap(2, 12, 0, item)
+	assert.Equal(t, true, isRetry)
+
+	// Test capacity wrong type
+	isRetry = meta.UpdateCapacityStatMap(1, 12, uint64(2), item)
+	assert.Equal(t, false, isRetry)
+}
+
+func TestClearCapStatMap(t *testing.T) {
+	meta.CapacityStatMap = &sync.Map{}
+	timeNow := time.Now()
+	item0 := &stat.LogKeeperStatItem{Begin: timeNow.Add(-36 * time.Hour)}
+	item1 := &stat.LogKeeperStatItem{Begin: timeNow}
+	assert.Equal(t, 36*time.Hour, item1.Begin.Sub(item0.Begin))
+
+	meta.UpdateCapacityStatMap(0, 12, 0, item0)
+	meta.UpdateCapacityStatMap(0, 12, 1, item1)
+	_, ok := meta.CapacityStatMap.Load(uint64(0))
+	assert.Equal(t, true, ok)
+	_, ok = meta.CapacityStatMap.Load(uint64(1))
+	assert.Equal(t, true, ok)
+
+	store := meta.Store{}
+	store.ClearCapStatMap()
+	_, ok = meta.CapacityStatMap.Load(uint64(0))
+	assert.Equal(t, false, ok)
+	_, ok = meta.CapacityStatMap.Load(uint64(1))
+	assert.Equal(t, true, ok)
+}
+
+func TestCollectCapacityStat(t *testing.T) {
+	dir := t.TempDir()
+	dir += "/" + immutable.CapacityBinFile
+
+	err := coordinator.StoreCapacity(dir, 12)
+	assert.Equal(t, nil, err)
+
+	item := stat.NewLogKeeperStatItem("test", "test")
+	meta.CollectCapacityStat(0, dir, item)
+
+	err = errors.New("test err")
+	isBreak := meta.ParseLoadErr(0, 0, err, dir, item)
+	assert.Equal(t, false, isBreak)
+
+	isBreak = meta.ParseLoadErr(2, 0, err, dir, item)
+	assert.Equal(t, false, isBreak)
+}
+
+func TestModifyRepDBMasterPt_Success(t *testing.T) {
+	dir := t.TempDir()
+	mms, err := meta.NewMockMetaService(dir, "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mms.Close()
+	data := &meta2.Data{
+		ReplicaGroups: map[string][]meta2.ReplicaGroup{
+			"db0": []meta2.ReplicaGroup{
+				{ID: 0, MasterPtID: 0, Status: meta2.Health, Peers: []meta2.Peer{{ID: 1, PtRole: meta2.Slave}, {ID: 2, PtRole: meta2.Slave}}},
+			},
+		},
+	}
+	mms.GetStore().SetData(data)
+
+	config.SetHaPolicy(config.RepPolicy)
+	err = mms.GetStore().ModifyRepDBMasterPt("db0", 0, 1)
+	if err != nil {
+		t.Fatal("TestModifyRepDBMasterPt error", err)
+	}
+	assert.Equal(t, data.ReplicaGroups["db0"][0].MasterPtID, uint32(1))
+	assert.Equal(t, data.ReplicaGroups["db0"][0].Peers[0].ID, uint32(0))
+	assert.Equal(t, data.ReplicaGroups["db0"][0].Peers[1].ID, uint32(2))
+}
+
+func TestModifyRepDBMasterPt_Err(t *testing.T) {
+	dir := t.TempDir()
+	mms, err := meta.NewMockMetaService(dir, "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mms.Close()
+	data := &meta2.Data{
+		ReplicaGroups: map[string][]meta2.ReplicaGroup{},
+	}
+	mms.GetStore().SetData(data)
+
+	err = mms.GetStore().ModifyRepDBMasterPt("db0", 0, 1)
+	assert.Equal(t, err.Error(), "ha-policy is not replication")
+
+	config.SetHaPolicy(config.RepPolicy)
+	err = mms.GetStore().ModifyRepDBMasterPt("db0", 0, 1)
+	assert.Equal(t, err.Error(), "no rg of db")
+
+	data.ReplicaGroups["db0"] = []meta2.ReplicaGroup{
+		{ID: 0, MasterPtID: 0, Status: meta2.Health, Peers: []meta2.Peer{{ID: 1, PtRole: meta2.Slave}, {ID: 2, PtRole: meta2.Slave}}},
+	}
+	err = mms.GetStore().ModifyRepDBMasterPt("db0", 1, 1)
+	assert.Equal(t, err.Error(), "rgId > len(dbRgs), len:1")
+
+	err = mms.GetStore().ModifyRepDBMasterPt("db0", 0, 3)
+	assert.Equal(t, err.Error(), "newMasterPtId find err")
 }

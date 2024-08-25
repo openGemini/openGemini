@@ -21,13 +21,28 @@ import (
 	"testing"
 
 	"github.com/openGemini/openGemini/lib/compress"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/rand"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/stretchr/testify/require"
 )
 
-func codecFloatBlock(t *testing.T, values []float64) {
+func codecFloatBlockWithMLF(t *testing.T, values []float64) {
+	config.GetStoreConfig().FloatCompressAlgorithm = compress.FloatCompressAlgorithmMLF
+	compress.Init()
+
+	defer func() {
+		config.GetStoreConfig().FloatCompressAlgorithm = ""
+		compress.Init()
+	}()
+
+	codecFloatBlock(t, values)
+}
+
+func codecFloatBlock(t *testing.T, data []float64) {
+	values := append([]float64{}, data...)
+
 	size := len(values)
 	float := compress.NewFloat()
 	in := util.Float64Slice2byte(values)
@@ -54,6 +69,7 @@ func codecFloatBlock(t *testing.T, values []float64) {
 func TestCodecFloatBlock_one(t *testing.T) {
 	var values = []float64{0}
 	codecFloatBlock(t, values)
+	codecFloatBlockWithMLF(t, values)
 }
 
 func TestCodecFloatBlock_rand(t *testing.T) {
@@ -62,6 +78,7 @@ func TestCodecFloatBlock_rand(t *testing.T) {
 		values = append(values, rand.Float64()*1000)
 	}
 	codecFloatBlock(t, values)
+	codecFloatBlockWithMLF(t, values)
 }
 
 func TestCodecFloatBlock_small(t *testing.T) {
@@ -70,6 +87,7 @@ func TestCodecFloatBlock_small(t *testing.T) {
 		values = append(values, float64(rand.Int63()%10000)/100)
 	}
 	codecFloatBlock(t, values)
+	codecFloatBlockWithMLF(t, values)
 }
 
 func TestCodecFloatBlock_same(t *testing.T) {
@@ -80,11 +98,13 @@ func TestCodecFloatBlock_same(t *testing.T) {
 		values = append(values, v)
 	}
 	codecFloatBlock(t, values)
+	codecFloatBlockWithMLF(t, values)
 
 	for i := 0; i < 1000; i++ {
 		values[i] = 0
 	}
 	codecFloatBlock(t, values)
+	codecFloatBlockWithMLF(t, values)
 }
 
 func TestCodecFloatBlock_int(t *testing.T) {
@@ -93,6 +113,7 @@ func TestCodecFloatBlock_int(t *testing.T) {
 		values = append(values, float64(rand.Int31n(100)))
 	}
 	codecFloatBlock(t, values)
+	codecFloatBlockWithMLF(t, values)
 }
 
 func TestCodecFloatBlock_smallDelta(t *testing.T) {
@@ -101,6 +122,7 @@ func TestCodecFloatBlock_smallDelta(t *testing.T) {
 		values = append(values, 2+0.1+rand.Float64()/10)
 	}
 	codecFloatBlock(t, values)
+	codecFloatBlockWithMLF(t, values)
 }
 
 func TestCodecFloatBlock_RLE(t *testing.T) {
@@ -109,6 +131,7 @@ func TestCodecFloatBlock_RLE(t *testing.T) {
 		values = append(values, float64(i/180))
 	}
 	codecFloatBlock(t, values)
+	codecFloatBlockWithMLF(t, values)
 }
 
 func TestCodecFloatBlock_Snappy(t *testing.T) {
@@ -126,6 +149,7 @@ func TestCodecFloatBlock_NaN(t *testing.T) {
 	}
 	values[1] = math.NaN()
 	codecFloatBlock(t, values)
+	codecFloatBlockWithMLF(t, values)
 }
 
 func TestCodecFloatBlock_abnormal(t *testing.T) {

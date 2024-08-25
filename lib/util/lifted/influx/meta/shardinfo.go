@@ -91,11 +91,12 @@ func (sgi ShardGroupInfo) TargetShardsHintQuery(mst *MeasurementInfo, ski *Shard
 	// it's used for specific series of the hint query
 	if opt.HintType == hybridqp.SpecificSeriesQuery {
 		var tagCount int
-		for key := range mst.Schema {
-			if mst.Schema[key] == influx.Field_Type_Tag {
+		callback := func(k string, v int32) {
+			if v == influx.Field_Type_Tag {
 				tagCount++
 			}
 		}
+		mst.Schema.RangeTypCall(callback)
 		// check whether the query contains the all tags of the measurement
 		if tagCount != len(*tagsGroup[0]) {
 			return sgi.genShardInfosByIndex(aliveShardIdxes), nil
@@ -103,7 +104,7 @@ func (sgi ShardGroupInfo) TargetShardsHintQuery(mst *MeasurementInfo, ski *Shard
 
 		// check whether the query's tagKey matches the schema's tagKey
 		for i := 0; i < tagCount; i++ {
-			if _, ok := mst.Schema[(*tagsGroup[0])[i].Key]; !ok {
+			if _, ok := mst.Schema.GetTyp((*tagsGroup[0])[i].Key); !ok {
 				return sgi.genShardInfosByIndex(aliveShardIdxes), nil
 			}
 		}
@@ -186,7 +187,7 @@ func (sgi ShardGroupInfo) TargetShards(mst *MeasurementInfo, ski *ShardKeyInfo, 
 	return shards
 }
 
-func getConditionTags(condition influxql.Expr, schema map[string]int32) []*influx.PointTags {
+func getConditionTags(condition influxql.Expr, schema *CleanSchema) []*influx.PointTags {
 	if condition == nil {
 		return nil
 	}
@@ -204,7 +205,7 @@ func getConditionTags(condition influxql.Expr, schema map[string]int32) []*influ
 			for i := range ltags {
 				for j := range rtags {
 					for ti := range *rtags[j] {
-						if v, ok := schema[(*rtags[j])[ti].Key]; ok && v == influx.Field_Type_Tag {
+						if v, ok := schema.GetTyp((*rtags[j])[ti].Key); ok && v == influx.Field_Type_Tag {
 							*ltags[i] = append(*ltags[i], (*rtags[j])[ti])
 						}
 					}
@@ -233,7 +234,7 @@ func getConditionTags(condition influxql.Expr, schema map[string]int32) []*influ
 	return nil
 }
 
-func conditionTagsByBinary(n *influxql.BinaryExpr, schema map[string]int32) *influx.Tag {
+func conditionTagsByBinary(n *influxql.BinaryExpr, schema *CleanSchema) *influx.Tag {
 	if isTimeCondition(n) {
 		return nil
 	}
@@ -246,7 +247,7 @@ func conditionTagsByBinary(n *influxql.BinaryExpr, schema map[string]int32) *inf
 
 	switch value := value.(type) {
 	case *influxql.StringLiteral:
-		if v, ok := schema[key.Val]; ok && v == influx.Field_Type_Tag {
+		if v, ok := schema.GetTyp(key.Val); ok && v == influx.Field_Type_Tag {
 			return &influx.Tag{Key: key.Val, Value: value.Val}
 		}
 		return nil

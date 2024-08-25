@@ -410,6 +410,19 @@ func (mock *MockSender) Explain() []executor.ValuePair {
 	return nil
 }
 
+func (trans *MockSender) SetDag(_ *executor.TransformDag) {
+}
+
+func (trans *MockSender) SetVertex(_ *executor.TransformVertex) {
+}
+
+func (trans *MockSender) Visit(_ *executor.TransformVertex) executor.TransformVertexVisitor {
+	return nil
+}
+
+func (trans *MockSender) abortSinkTransform() {
+}
+
 func RegistryMockTransformCreator() {
 	executor.RegistryTransformCreator(&executor.LogicalReader{}, &MockScannerCreator{})
 	executor.RegistryTransformCreator(&executor.LogicalHttpSender{}, &MockSenderCreator{})

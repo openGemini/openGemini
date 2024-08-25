@@ -1437,6 +1437,10 @@ func (qs *QuerySchema) GetPromCalls() []*influxql.PromSubCall {
 	return qs.PromSubCalls
 }
 
+func (qs *QuerySchema) SetSimpleTagset() {
+	qs.Options().SetSimpleTagset(len(qs.Options().GetDimensions()) > 0 && IsEnableFileCursor(qs) && !qs.HasAuxTag() && !qs.HasExcatLimit())
+}
+
 // window used to calculate the time point that belongs to a specific time window.
 func window(t, window int64) int64 {
 	if t == influxql.MinTime || t == influxql.MaxTime || window == 0 {

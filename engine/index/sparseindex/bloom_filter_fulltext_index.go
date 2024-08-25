@@ -31,6 +31,7 @@ import (
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/rpn"
 	"github.com/openGemini/openGemini/lib/tokenizer"
+	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util/lifted/logparser"
 )
 
@@ -44,12 +45,15 @@ func (index *BloomFilterFullTextReaderCreator) CreateSKFileReader(rpnExpr *rpn.R
 }
 
 type BloomFilterFullTextIndexReader struct {
-	isCache bool
-	version uint32
-	schema  record.Schemas
-	option  hybridqp.Options
-	bf      rpn.SKBaseReader
-	sk      SKCondition
+	isCache    bool
+	isInitSpan bool
+	version    uint32
+	currFile   interface{}
+	schema     record.Schemas
+	option     hybridqp.Options
+	bf         rpn.SKBaseReader
+	sk         SKCondition
+	span       *tracing.Span
 }
 
 func NewBloomFilterFullTextIndexReader(rpnExpr *rpn.RPNExpr, schema record.Schemas, option hybridqp.Options, isCache bool) (*BloomFilterFullTextIndexReader, error) {
@@ -64,7 +68,26 @@ func (r *BloomFilterFullTextIndexReader) MayBeInFragment(fragId uint32) (bool, e
 	return r.sk.IsExist(int64(fragId), r.bf)
 }
 
+func (r *BloomFilterFullTextIndexReader) StartSpan(span *tracing.Span) {
+	if span == nil {
+		return
+	}
+	if r.isInitSpan {
+		return
+	}
+	r.isInitSpan = true
+	r.span = span
+	if r.bf != nil {
+		r.bf.StartSpan(span)
+	}
+}
+
 func (r *BloomFilterFullTextIndexReader) ReInit(file interface{}) (err error) {
+	obsFile, isOBS := file.(*OBSFilterPath)
+	currOBSFile, currFileIsOBS := r.currFile.(*OBSFilterPath)
+	if r.currFile != nil && file != nil && isOBS && currFileIsOBS && obsFile.localPath == currOBSFile.localPath {
+		return nil
+	}
 	splitMap := make(map[string][]byte)
 	expr := make([]*bloomfilter.SKRPNElement, 0, len(r.schema))
 	var tokensTable []byte
@@ -94,6 +117,7 @@ func (r *BloomFilterFullTextIndexReader) ReInit(file interface{}) (err error) {
 		if err != nil {
 			return err
 		}
+		r.currFile = file
 		return nil
 	} else if f1, ok := file.(TsspFile); ok {
 		index := strings.LastIndex(f1.Path(), "/")
@@ -106,6 +130,7 @@ func (r *BloomFilterFullTextIndexReader) ReInit(file interface{}) (err error) {
 		if err != nil {
 			return err
 		}
+		r.currFile = file
 		return nil
 	} else {
 		return fmt.Errorf("not support file type")
@@ -150,8 +175,8 @@ func (f *FullTextIdxWriter) getFullTextIdxFilePath(detached bool) string {
 }
 
 func (f *FullTextIdxWriter) CreateAttachIndex(writeRec *record.Record, schemaIdx, rowsPerSegment []int) error {
-	indexBuf := logstore.GetIndexBuf(FullTextIdxColumnCnt)
-	defer logstore.PutIndexBuf(indexBuf)
+	indexBuf := logstore.GetSkipIndexBuf(FullTextIdxColumnCnt)
+	defer logstore.PutSkipIndexBuf(indexBuf)
 
 	data, skipIndexFilePaths := f.createSkipIndex(writeRec, schemaIdx, rowsPerSegment, *indexBuf, false)
 	return writeSkipIndexToDisk(data[0], f.lockPath, skipIndexFilePaths[0])

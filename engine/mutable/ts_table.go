@@ -186,14 +186,14 @@ func SplitRecordByTime(rec *record.Record, pool []record.Record, time int64) (*r
 
 		unOrderCol.Init()
 		unOrderCol.AppendColVal(col, field.Type, 0, n)
-		if len(unOrderCol.Val) > 0 {
+		if unOrderCol.NilCount != unOrderCol.Len {
 			unOrderRec.Schema = append(unOrderRec.Schema, field)
 			unOrderIdx++
 		}
 
 		orderCol.Init()
 		orderCol.AppendColVal(col, field.Type, n, col.Len)
-		if len(orderCol.Val) > 0 {
+		if orderCol.NilCount != orderCol.Len {
 			orderRec.Schema = append(orderRec.Schema, field)
 			orderIdx++
 		}
@@ -242,7 +242,6 @@ func (t *tsMemTableImpl) WriteRows(table *MemTable, rowsD *dictpool.Dict, wc Wri
 				}
 				atomic.AddInt64(&Statistics.PerfStat.WriteShardKeyIdxNs, time.Since(startTime).Nanoseconds())
 			}
-
 			_, err = t.appendFields(table, msInfo, chunk, rs[index].Timestamp, rs[index].Fields)
 			if err != nil {
 				return err

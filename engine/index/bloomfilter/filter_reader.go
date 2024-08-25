@@ -25,13 +25,16 @@ import (
 
 	"github.com/openGemini/openGemini/lib/bloomfilter"
 	"github.com/openGemini/openGemini/lib/fileops"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/request"
 	"github.com/openGemini/openGemini/lib/rpn"
 	"github.com/openGemini/openGemini/lib/tokenizer"
 	"github.com/openGemini/openGemini/lib/tracing"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"go.uber.org/zap"
 )
 
 const (
@@ -403,12 +406,16 @@ func (s *LineFilterReader) isExist(blockId int64) (bool, error) {
 			return false, err
 		}
 		for i := 0; i < int(s.filterLogCount); i++ {
-			filterPart := bloomBuf[i*int(filterDataDiskSize) : (i+1)*int(filterDataDiskSize)-4]
-			checkSumPart := bloomBuf[(i+1)*int(filterDataDiskSize)-4 : (i+1)*int(filterDataDiskSize)]
+			start := i * int(filterDataDiskSize)
+			end := (i + 1) * int(filterDataDiskSize)
+			filterPart := bloomBuf[start : end-4]
+			checkSumPart := bloomBuf[end-4 : end]
 			loadCheckValue := binary.LittleEndian.Uint32(checkSumPart)
 			checkValue := crc32.Checksum(filterPart, crc32.MakeTable(crc32.Castagnoli))
 			if checkValue != loadCheckValue {
-				return false, fmt.Errorf("load filter log checksum(%d) mismatch computed valued(%d)", loadCheckValue, checkValue)
+				logger.GetLogger().Warn("load filter log checksum mismatch computed valued", zap.Uint32("loadCheckValue", loadCheckValue),
+					zap.Uint32("computedCheckValue", checkValue))
+				util.MemorySet(filterPart, 0xff)
 			}
 			bloomFilter := bloomfilter.NewOneHitBloomFilter(filterPart, s.version)
 			s.bloomCache[int64(i)*filterDataDiskSize+s.verticalFilterCount*filterDataDiskSize] = bloomFilter

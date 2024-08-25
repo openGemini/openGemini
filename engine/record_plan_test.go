@@ -551,17 +551,16 @@ func Test_BuildRecordDag(t *testing.T) {
 	if err := sh.WriteRows(pts, nil); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(time.Second * 1)
 	sh.ForceFlush()
-	time.Sleep(time.Second * 1)
+	sh.waitSnapshot()
+
 	startTime2 := mustParseTime(time.RFC3339Nano, "2021-01-01T12:00:00Z")
 	pts2, _, _ := GenDataRecord(msNames, 5, 2000, time.Millisecond*10, startTime2, true, false, true)
 	if err := sh.WriteRows(pts2, nil); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(time.Second * 1)
 	sh.ForceFlush()
-	time.Sleep(time.Second * 1)
+	sh.waitSnapshot()
 
 	shardGroup := &mockShardGroup{
 		sh:     sh,
@@ -838,9 +837,8 @@ func Test_ShardDownSampleTaskNotExist(t *testing.T) {
 		t.Fatal(err)
 	}
 	sh.endTime = mustParseTime(time.RFC3339Nano, "2022-07-08T01:00:00Z")
-	time.Sleep(time.Second * 1)
 	sh.ForceFlush()
-	time.Sleep(time.Second * 1)
+	sh.waitSnapshot()
 
 	info := &meta.DownSamplePolicyInfo{
 		Calls: []*meta.DownSampleOperators{
@@ -903,17 +901,15 @@ func Test_ShardDownSampleTask(t *testing.T) {
 		t.Fatal(err)
 	}
 	sh.endTime = mustParseTime(time.RFC3339Nano, "2022-07-08T01:00:00Z")
-	time.Sleep(time.Second * 1)
 	sh.ForceFlush()
-	time.Sleep(time.Second * 1)
+	sh.waitSnapshot()
 	startTime2 := mustParseTime(time.RFC3339Nano, "2022-07-01T12:00:00Z")
 	pts2, _, _ := GenDataRecord(msNames, 5, 2000, time.Millisecond*10, startTime2, true, false, true)
 	if err := sh.WriteRows(pts2, nil); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(time.Second * 1)
 	sh.ForceFlush()
-	time.Sleep(time.Second * 1)
+	sh.waitSnapshot()
 	info := &meta.DownSamplePolicyInfo{
 		Calls: []*meta.DownSampleOperators{
 			{
@@ -1153,9 +1149,8 @@ func Test_ShardDownSampleQueryRewrite(t *testing.T) {
 				}
 
 				sh.endTime = mustParseTime(time.RFC3339Nano, "2022-07-08T01:00:00Z")
-				time.Sleep(time.Second * 1)
 				sh.ForceFlush()
-				time.Sleep(time.Second * 1)
+				sh.waitSnapshot()
 				info := &meta.DownSamplePolicyInfo{
 					Calls: []*meta.DownSampleOperators{
 						{
@@ -1325,9 +1320,8 @@ func Test_BuildRecordDag_Error(t *testing.T) {
 	if err := sh.WriteRows(pts, nil); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(time.Second * 1)
 	sh.ForceFlush()
-	time.Sleep(time.Second * 1)
+	sh.waitSnapshot()
 	shardGroup := &mockShardGroup{
 		sh:     sh,
 		Fields: fields,
@@ -1460,9 +1454,8 @@ func Test_CanDownSampleRewrite(t *testing.T) {
 	if err := sh.WriteRows(pts, nil); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(time.Second * 1)
 	sh.ForceFlush()
-	time.Sleep(time.Second * 1)
+	sh.waitSnapshot()
 	shardGroup := &mockShardGroup{
 		sh:     sh,
 		Fields: fields,
@@ -1582,17 +1575,15 @@ func Test_DownSampleCancel1(t *testing.T) {
 	if err := sh.WriteRows(pts, nil); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(time.Second * 1)
 	sh.ForceFlush()
-	time.Sleep(time.Second * 1)
+	sh.waitSnapshot()
 	startTime2 := mustParseTime(time.RFC3339Nano, "2021-01-01T12:00:00Z")
 	pts2, _, _ := GenDataRecord(msNames, 5, 2000, time.Millisecond*10, startTime2, true, false, true)
 	if err := sh.WriteRows(pts2, nil); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(time.Second * 1)
 	sh.ForceFlush()
-	time.Sleep(time.Second * 1)
+	sh.waitSnapshot()
 
 	shardGroup := &mockShardGroup{
 		sh:     sh,
@@ -1714,17 +1705,15 @@ func Test_DownSample_EmptyColumn(t *testing.T) {
 	if err := sh.WriteRows(pts, nil); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(time.Second * 1)
 	sh.ForceFlush()
-	time.Sleep(time.Second * 1)
+	sh.waitSnapshot()
 	startTime2 := mustParseTime(time.RFC3339Nano, "2021-01-01T12:00:00Z")
 	pts2, _, _ := GenDataRecord(msNames, 5, 2000, time.Millisecond*10, startTime2, true, false, true)
 	if err := sh.WriteRows(pts2, nil); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(time.Second * 1)
 	sh.ForceFlush()
-	time.Sleep(time.Second * 1)
+	sh.waitSnapshot()
 
 	shardGroup := &mockShardGroup{
 		sh:     sh,
@@ -2153,17 +2142,17 @@ func Test_ShardDownSampleTaskErrorDeleteFiles(t *testing.T) {
 	if err := sh.WriteRows(pts, nil); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(time.Second * 1)
+
 	sh.ForceFlush()
-	time.Sleep(time.Second * 1)
+	sh.waitSnapshot()
+
 	startTime2 := mustParseTime(time.RFC3339Nano, "2021-01-01T12:00:00Z")
 	pts2, _, _ := GenDataRecord(msNames, 5, 2000, time.Millisecond*10, startTime2, true, false, true)
 	if err := sh.WriteRows(pts2, nil); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(time.Second * 1)
 	sh.ForceFlush()
-	time.Sleep(time.Second * 1)
+	sh.waitSnapshot()
 
 	shardGroup := &mockShardGroup{
 		sh:     sh,
@@ -2377,17 +2366,17 @@ func Test_Create(t *testing.T) {
 	if err := sh.WriteRows(pts, nil); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(time.Second * 1)
+
 	sh.ForceFlush()
-	time.Sleep(time.Second * 1)
+	sh.waitSnapshot()
+
 	startTime2 := mustParseTime(time.RFC3339Nano, "2021-01-01T12:00:00Z")
 	pts2, _, _ := GenDataRecord(msNames, 5, 2000, time.Millisecond*10, startTime2, true, false, true)
 	if err := sh.WriteRows(pts2, nil); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(time.Second * 1)
 	sh.ForceFlush()
-	time.Sleep(time.Second * 1)
+	sh.waitSnapshot()
 
 	shardGroup := &mockShardGroup{
 		sh:     sh,

@@ -35,7 +35,8 @@ const (
 	// if the length of the float slice is smaller than this value, not compress it
 	floatCompressThreshold    = 4
 	floatRLECompressThreshold = 8
-	lessDecimalThreshold      = 1000
+
+	lessDecimalThreshold = 1000
 )
 
 type Float struct {
@@ -47,6 +48,10 @@ func NewFloat() *Float {
 }
 
 func (c *Float) AdaptiveEncoding(in []byte, out []byte) ([]byte, error) {
+	return c.adaptiveEncoding(in, out)
+}
+
+func (c *Float) adaptiveEncoding(in []byte, out []byte) ([]byte, error) {
 	values := util.Bytes2Float64Slice(in)
 	ctx := GenerateContext(values)
 	defer ctx.Release()

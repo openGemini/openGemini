@@ -78,6 +78,7 @@ type Storage interface {
 
 type SendRaftMessageToStorage interface {
 	SendRaftMessages(nodeID uint64, database string, pt uint32, msgs raftpb.Message) error
+	Client() meta.MetaClient
 }
 
 type NetStorage struct {
@@ -97,6 +98,10 @@ func NewNetStorage(mcli meta.MetaClient) Storage {
 		metaClient: mcli,
 		log:        logger.NewLogger(errno.ModuleNetwork).With(zap.String("service", "netstorage")),
 	}
+}
+
+func (s *NetStorage) Client() meta.MetaClient {
+	return s.metaClient
 }
 
 func (s *NetStorage) GetShardSplitPoints(node *meta2.DataNode, database string, pt uint32,

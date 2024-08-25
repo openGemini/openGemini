@@ -17,7 +17,6 @@ limitations under the License.
 package immutable
 
 import (
-	"sync/atomic"
 	"testing"
 
 	"github.com/openGemini/openGemini/lib/fragment"
@@ -170,12 +169,12 @@ func TestNextSegmentLast(t *testing.T) {
 
 func TestReadCtx(t *testing.T) {
 	readCtx := NewReadContext(true)
-	assert.False(t, readCtx.isAborted())
-	s := int32(0)
+	assert.False(t, readCtx.IsAborted())
+	s := false
 	closedSignal := &s
 	readCtx.SetClosedSignal(closedSignal)
-	atomic.AddInt32(closedSignal, 1)
-	assert.True(t, readCtx.isAborted())
+	*closedSignal = true
+	assert.True(t, readCtx.IsAborted())
 
 	loc := NewLocation(nil, readCtx)
 	loc.ctx.tr.Min, loc.ctx.tr.Max = 0, 1

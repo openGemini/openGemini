@@ -154,6 +154,10 @@ func (l *Location) GetChunkMeta() *ChunkMeta {
 	return l.meta
 }
 
+func (d *Location) SetClosedSignal(s *bool) {
+	d.ctx.SetClosedSignal(s)
+}
+
 func (l *Location) hasNext() bool {
 	if l.meta == nil {
 		return false
@@ -270,7 +274,7 @@ func (l *Location) readData(filterOpts *FilterOptions, dst, filterRec *record.Re
 	}
 
 	for rec == nil && l.hasNext() {
-		if l.ctx.isAborted() {
+		if l.ctx.IsAborted() {
 			return nil, oriRowCount, nil
 		}
 		if (!l.ctx.tr.Overlaps(l.getCurSegMinMax())) ||

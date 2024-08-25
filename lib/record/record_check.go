@@ -28,7 +28,7 @@ import (
 
 func CheckRecord(rec *Record) {
 	colN := len(rec.Schema)
-	if rec.Schema[colN-1].Name != TimeField {
+	if colN <= 1 || rec.Schema[colN-1].Name != TimeField {
 		panic(fmt.Sprintf("schema:%v", rec.Schema))
 	}
 

@@ -383,7 +383,7 @@ func (m *MigrateStateMachine) deleteEvent(e MigrateEvent) {
 		nodePtNumMap := globalService.store.getDbPtNumPerAliveNode()
 		m.logger.Error("process failed db pt failed", zap.String("event", e.String()), zap.Error(res.err))
 		go func() {
-			err := globalService.clusterManager.processFailedDbPt(e.getPtInfo(), nodePtNumMap, true)
+			err := globalService.clusterManager.processFailedDbPt(e.getPtInfo(), nodePtNumMap, true, e.getPtInfo().DBBriefInfo.Replicas > 1)
 			m.logger.Error("retry to process failed db pt error", zap.String("event", e.String()), zap.Error(err))
 		}()
 	}

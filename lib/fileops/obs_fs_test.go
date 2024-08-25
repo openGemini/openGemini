@@ -390,3 +390,30 @@ func TestDecodeRemotePathToLocal(t *testing.T) {
 	_, err := o.DecodeRemotePathToLocal(name)
 	assert.NotNil(t, err)
 }
+
+func TestObsFs_Size(t *testing.T) {
+	initializeEnv(t)
+	name := EncodeObsPath(endpoint, bucketName, "test_obs_fs_open.txt", ak, sk)
+	fd, err := testObsFs.OpenFile(name, os.O_CREATE|os.O_RDWR, os.ModePerm)
+	assert.Nil(t, err)
+	assert.NotNil(t, fd)
+	_, _ = fd.Write([]byte("hello"))
+	fileSize, err := fd.Size()
+	_ = fd.Close()
+	assert.Nil(t, err)
+	assert.Equal(t, int64(5), fileSize)
+	t.Cleanup(func() {
+		_ = testObsFs.Remove(name)
+	})
+}
+
+func TestObsFs_Size0(t *testing.T) {
+	fileSize := int64(100)
+	o := &obsFile{
+		offset: fileSize,
+		flag:   os.O_CREATE | os.O_APPEND,
+	}
+	tmpSize, err := o.Size()
+	assert.Nil(t, err)
+	assert.Equal(t, tmpSize, fileSize)
+}

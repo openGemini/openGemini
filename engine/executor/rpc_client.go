@@ -144,7 +144,6 @@ func (c *RPCClient) sendRequest() error {
 
 	begin := time.Now()
 	defer tracing.AddPP(c.requestSpan, begin)
-
 	msg := rpc.NewMessage(QueryMessage, c.query)
 	msg.SetHandler(NewRPCMessage)
 	msg.SetClientID(machine.GetMachineID())

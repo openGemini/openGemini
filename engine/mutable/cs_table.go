@@ -159,7 +159,8 @@ type csMemTableImpl struct {
 func (c *csMemTableImpl) initMsInfo(msInfo *MsInfo, row *influx.Row, rec *record.Record, name string) *MsInfo {
 	if rec != nil {
 		msInfo.Name = name
-		msInfo.Schema = rec.Schema
+		msInfo.Schema = make(record.Schemas, len(rec.Schema))
+		copy(msInfo.Schema, rec.Schema)
 		return msInfo
 	}
 	msInfo.Name = row.Name
@@ -244,7 +245,7 @@ func (c *csMemTableImpl) FlushChunks(table *MemTable, dataPath, msName, db, rp s
 	MergeSchema(table, msName)
 	JoinWriteRec(table, msName)
 	// add seq id col if needed
-	c.addSeqIdColIfNeeded(msRowCount-int64(msInfo.writeChunk.WriteRec.rec.RowNums()), msInfo.writeChunk.WriteRec.rec)
+	c.updateSeqIdCol(msRowCount-int64(msInfo.writeChunk.WriteRec.rec.RowNums()), msInfo.writeChunk.WriteRec.rec)
 
 	var indexRelation influxql.IndexRelation
 	var timeClusterDuration time.Duration
@@ -416,30 +417,11 @@ func (c *csMemTableImpl) WriteRows(table *MemTable, rowsD *dictpool.Dict, wc Wri
 	return err
 }
 
-func (c *csMemTableImpl) addSeqIdColIfNeeded(startSeqId int64, rec *record.Record) {
+func (c *csMemTableImpl) updateSeqIdCol(startSeqId int64, rec *record.Record) {
 	if !config.IsLogKeeper() {
 		return
 	}
-
-	//update schema
-	seqIDSchema := record.Field{Type: influx.Field_Type_Int,
-		Name: record.SeqIDField}
-	rec.Schema = append(rec.Schema, seqIDSchema)
-	//add seqIdCol
-	var seqIdCol record.ColVal
-	col := genSeqIDCol(startSeqId, rec.RowNums())
-	seqIdCol.AppendIntegers(col...)
-	rec.ColVals = append(rec.ColVals, seqIdCol)
-	sort.Sort(rec)
-}
-
-func genSeqIDCol(startSeqId int64, rowCount int) []int64 {
-	seqCol := make([]int64, rowCount)
-	for i := 0; i < rowCount; i++ {
-		seqCol[i] = startSeqId
-		startSeqId++
-	}
-	return seqCol
+	record.UpdateSeqIdCol(startSeqId, rec)
 }
 
 func (c *csMemTableImpl) appendFields(table *MemTable, chunk *WriteChunkForColumnStore, time int64, fields []influx.Field, tags []influx.Tag) (int64, error) {
@@ -622,7 +604,8 @@ func (c *csMemTableImpl) UpdateMstInfo(msName string, mstInfo *meta.MeasurementI
 			if pk == record.TimeField {
 				primaryKey[i] = record.Field{Name: pk, Type: influx.Field_Type_Int}
 			} else {
-				primaryKey[i] = record.Field{Name: pk, Type: record.ToPrimitiveType(mstInfo.Schema[pk])}
+				v, _ := mstInfo.Schema.GetTyp(pk)
+				primaryKey[i] = record.Field{Name: pk, Type: record.ToPrimitiveType(v)}
 			}
 		}
 	}
@@ -635,13 +618,13 @@ func (c *csMemTableImpl) UpdateMstInfo(msName string, mstInfo *meta.MeasurementI
 func (c *csMemTableImpl) Reset(t *MemTable) {
 	for _, msInfo := range t.msInfoMap {
 		if msInfo.writeChunk != nil {
-			msInfo.writeChunk.WriteRec.rec.ResetForReuse()
+			msInfo.writeChunk.WriteRec.rec.ReuseForWrite()
 			writeRecPool.Put(msInfo.writeChunk.WriteRec.rec)
 		}
 		if msInfo.concurrencyChunks != nil {
 			for i := range msInfo.concurrencyChunks.writeChunks {
 				if msInfo.concurrencyChunks.writeChunks[i] != nil {
-					msInfo.concurrencyChunks.writeChunks[i].WriteRec.rec.ResetForReuse()
+					msInfo.concurrencyChunks.writeChunks[i].WriteRec.rec.ReuseForWrite()
 					writeRecPool.Put(msInfo.concurrencyChunks.writeChunks[i].WriteRec.rec)
 				}
 			}

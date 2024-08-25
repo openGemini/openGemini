@@ -308,6 +308,7 @@ func (s *Select) finishDuration(qd *statistics.StoreSlowQueryStatistics, start t
 func (s *Select) GetQueryExeInfo() *netstorage.QueryExeInfo {
 	info := &netstorage.QueryExeInfo{
 		QueryID:  s.req.Opt.QueryId,
+		PtID:     s.req.PtID,
 		Stmt:     s.req.Opt.Query,
 		Database: s.req.Database,
 	}

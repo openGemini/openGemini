@@ -179,7 +179,7 @@ func (fl *fileLoader) loadTsspFile(file, mst string, isOrder bool) {
 		return
 	}
 
-	if fl.fileName.seq <= fl.mst.fileSeq {
+	if !fl.verifySeq(fl.fileName.seq, mst, isOrder) {
 		return
 	}
 
@@ -197,6 +197,32 @@ func (fl *fileLoader) loadTsspFile(file, mst string, isOrder bool) {
 	case <-fl.mst.closed:
 		return
 	}
+}
+
+func (fl *fileLoader) verifySeq(seq uint64, mst string, isOrder bool) bool {
+	if seq > fl.mst.fileSeq {
+		return true
+	}
+
+	files, ok := fl.mst.Order[mst]
+	if !isOrder {
+		files, ok = fl.mst.OutOfOrder[mst]
+	}
+	if !ok {
+		return true
+	}
+
+	files.RLock()
+	defer files.RUnlock()
+
+	var maxSeq uint64 = 0
+	for i := range files.Files() {
+		_, val := files.Files()[i].LevelAndSequence()
+		if maxSeq < val {
+			maxSeq = val
+		}
+	}
+	return seq > maxSeq
 }
 
 func (fl *fileLoader) removeFile(file string) {

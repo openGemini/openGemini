@@ -55,16 +55,17 @@ func TestProactiveManager_ServiceKillQuery(t *testing.T) {
 		Opt:      opt,
 		Database: "db0",
 	}
-	qm.Add(1, handler2.NewSelect(nil, nil, &req))
+	s := handler2.NewSelect(nil, nil, &req)
+	qm.Add(1, s)
 	obj := app.NewProactiveManager()
 	qryLst := obj.GetQueryList(1)
 	for _, id := range qryLst {
 		obj.KillQuery(id)
 	}
 	time.Sleep(3 * time.Second)
-	qm.Finish(1)
+	qm.Finish(1, s)
 	val := qm.Get(1)
-	if val != nil {
+	if len(val) != 0 {
 		t.Error("TestProactiveManager_ServiceKillQuery fail")
 	}
 }

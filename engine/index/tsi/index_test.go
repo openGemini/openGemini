@@ -17,8 +17,11 @@ limitations under the License.
 package tsi
 
 import (
+	"context"
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -30,6 +33,7 @@ import (
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/rand"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
@@ -497,6 +501,96 @@ func TestSearchSeriesWithOpts(t *testing.T) {
 
 		opt.Condition = MustParseExpr(`tk1!~/.*/`)
 		f([]byte("mn-1"), opt, nil)
+	})
+}
+
+func TestSearchSeriesWithExcept(t *testing.T) {
+	path := t.TempDir()
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
+	defer idxBuilder.Close()
+	CreateIndexByPts(idx, []string{
+		"mn-1,tk1=value1,tk2=k2",
+		"mn-1,tk1=value2,tk2=k2",
+		"mn-1,tk1=value3,tk2=k2",
+		"mn-1,tk1=value4,tk2=k2",
+		"mn-1,tk1=value5,tk2=k2",
+	}...)
+
+	run := func(name []byte, opt *query.ProcessorOptions, expectedSeriesKeys []string) {
+		name = append(name, []byte("_0000")...)
+		_, span := tracing.NewTrace("root")
+		groups, _, err := idx.SearchSeriesWithOpts(span, name, opt, func(num int64) error {
+			return nil
+		}, nil)
+		require.NoError(t, err)
+
+		keys := make([]string, 0)
+		for _, group := range groups {
+			for _, key := range group.SeriesKeys {
+				keys = append(keys, string(key))
+			}
+		}
+		sort.Strings(keys)
+		sort.Strings(expectedSeriesKeys)
+		require.Equal(t, len(expectedSeriesKeys), len(keys))
+		for i := 0; i < len(keys); i++ {
+			require.Equal(t, keys[i], expectedSeriesKeys[i])
+		}
+	}
+
+	opt := &query.ProcessorOptions{
+		StartTime: DefaultTR.Min,
+		EndTime:   DefaultTR.Max,
+		Condition: MustParseExpr(`tk2='k2'`),
+		Without:   true,
+	}
+	run([]byte("mn-1"), opt, []string{
+		"mn-1_0000,tk1\x00value1\x00tk2\x00k2",
+	})
+}
+
+func TestSearchSeriesWithAbort(t *testing.T) {
+	path := t.TempDir()
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
+	defer idxBuilder.Close()
+	CreateIndexByPts(idx, []string{
+		"mn-1,tk1=value1,tk2=k2",
+		"mn-1,tk1=value2,tk2=k2",
+		"mn-1,tk1=value3,tk2=k2",
+		"mn-1,tk1=value4,tk2=k2",
+		"mn-1,tk1=value5,tk2=k2",
+	}...)
+
+	run := func(name []byte, opt *query.ProcessorOptions, expectedSeriesKeys []string) {
+		name = append(name, []byte("_0000")...)
+		_, span := tracing.NewTrace("root")
+		_, _, err := idx.SearchSeriesWithOpts(span, name, opt, func(num int64) error {
+			return nil
+		}, nil)
+		errno.Equal(err, errno.QueryAborted)
+	}
+
+	ctx, closedSignal := context.Background(), true
+	ctx = context.WithValue(ctx, hybridqp.QueryAborted, &closedSignal)
+	opt := &query.ProcessorOptions{
+		StartTime: DefaultTR.Min,
+		EndTime:   DefaultTR.Max,
+		Condition: MustParseExpr(`tk2='k2'`),
+	}
+	opt.SetCtx(ctx)
+	run([]byte("mn-1"), opt, []string{
+		"mn-1_0000,tk1\x00value1\x00tk2\x00k2",
+	})
+
+	opt = &query.ProcessorOptions{
+		StartTime: DefaultTR.Min,
+		EndTime:   DefaultTR.Max,
+		Condition: MustParseExpr(`tk2='k2'`),
+		PromQuery: true,
+	}
+	opt.SetCtx(ctx)
+	run([]byte("mn-1"), opt, []string{
+		"mn-1_0000,tk1\x00value1\x00tk2\x00k2",
 	})
 }
 
@@ -1866,4 +1960,32 @@ func TestCheckSeriesKeyExist(t *testing.T) {
 	key := []byte("key")
 	res := mergeSetIndex.CheckSeriesKeyExist(key)
 	assert.Equal(t, res, false)
+}
+
+func TestBloomFilterEnable(t *testing.T) {
+	path := t.TempDir()
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
+	defer idxBuilder.Close()
+
+	mergeSetIndex := idx.(*MergeSetIndex)
+	enable, err := mergeSetIndex.bloomFilterEnable("/tmp/index/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assert.Equal(t, false, enable)
+
+	mergeSetPath := filepath.Join(path, MergeSetDirName)
+	enable, err = mergeSetIndex.bloomFilterEnable(mergeSetPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assert.Equal(t, false, enable)
+
+	bfPath := filepath.Join(mergeSetPath, mergeset.BloomFilterDirName)
+	err = os.Mkdir(bfPath, 0750)
+	enable, err = mergeSetIndex.bloomFilterEnable(mergeSetPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assert.Equal(t, false, enable)
 }

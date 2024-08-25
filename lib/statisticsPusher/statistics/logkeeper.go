@@ -188,13 +188,13 @@ type LogKeeperStatItem struct {
 	LogStreamId string
 	RepoId      string
 
-	begin    time.Time
+	Begin    time.Time
 	duration int64
 }
 
 func (s *LogKeeperStatItem) Duration() int64 {
 	if s.duration == 0 {
-		s.duration = time.Since(s.begin).Milliseconds()
+		s.duration = time.Since(s.Begin).Milliseconds()
 	}
 	return s.duration
 }

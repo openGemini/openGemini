@@ -99,6 +99,7 @@ func NewTagSetCursorForTest(schema *executor.QuerySchema, seriesN int) *tagSetCu
 		},
 		breakPoint: &breakPoint{},
 	}
+	itr.ctx = &idKeyCursorContext{}
 	return itr
 }
 
@@ -229,6 +230,9 @@ func (t *tagSetCursor) SetHelper(helper func(start, end int, src, des *record.Re
 }
 
 func (t *tagSetCursor) Next() (*record.Record, comm.SeriesInfoIntf, error) {
+	if t.ctx.IsAborted() {
+		return nil, nil, nil
+	}
 	if !t.initLazyTagSet && t.lazyTagSetCursorPara != nil {
 		var e error
 		tracing.SpanElapsed(t.span, func() {
@@ -288,6 +292,9 @@ func (t *tagSetCursor) GetSeriesSchema() record.Schemas {
 func (t *tagSetCursor) NextWithoutPreAgg() (*record.Record, comm.SeriesInfoIntf, error) {
 	if !t.init {
 		for i := range t.keyCursors {
+			if t.ctx.IsAborted() {
+				return nil, nil, nil
+			}
 			recordBuf, info, err := t.keyCursors[i].Next()
 			if err != nil {
 				return nil, nil, err
@@ -380,6 +387,9 @@ func (t *tagSetCursor) TagAuxHandler(start, end int) {
 func (t *tagSetCursor) NextWithPreAgg() (*record.Record, comm.SeriesInfoIntf, error) {
 	if !t.init {
 		for i := range t.keyCursors {
+			if t.ctx.IsAborted() {
+				return nil, nil, nil
+			}
 			recordBuf, info, err := t.keyCursors[i].Next()
 			if err != nil {
 				return nil, nil, err

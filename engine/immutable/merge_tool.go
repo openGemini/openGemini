@@ -18,6 +18,7 @@ package immutable
 
 import (
 	"container/heap"
+	"path/filepath"
 	"time"
 
 	"github.com/openGemini/openGemini/lib/errno"
@@ -29,17 +30,20 @@ import (
 )
 
 type mergeTool struct {
-	mts  *MmsTables
-	stat *statistics.MergeStatItem
-	lg   *logger.Logger
-	zlg  *zap.Logger
+	mts     *MmsTables
+	stat    *statistics.MergeStatItem
+	lg      *logger.Logger
+	zlg     *zap.Logger
+	context EventContext
 }
 
-func newMergeTool(mts *MmsTables, lg *zap.Logger) *mergeTool {
+func newMergeTool(mts *MmsTables, ctx EventContext, lg *zap.Logger) *mergeTool {
+
 	return &mergeTool{
-		mts: mts,
-		lg:  logger.NewLogger(errno.ModuleMerge),
-		zlg: lg,
+		mts:     mts,
+		context: ctx,
+		lg:      logger.NewLogger(errno.ModuleMerge),
+		zlg:     lg,
 	}
 }
 
@@ -199,16 +203,19 @@ func (mt *mergeTool) Release() {
 func (mt *mergeTool) mergeSelf(ctx *MergeContext) {
 	mt.mts.lmt.Update(ctx.mst)
 
-	parquetPlan := NewTSSP2ParquetPlan(ctx.level + 1)
-	if ctx.level <= MergeSelfFastModeMaxLevel || parquetPlan.Enable() {
-		mt.mergeSelfFastMode(ctx, parquetPlan)
+	if ctx.UnorderedLen() <= 1 {
+		return
+	}
+
+	if ctx.MergeSelfFast() {
+		mt.mergeSelfFastMode(ctx)
 		return
 	}
 
 	mt.mergeSelfStreamMode(ctx)
 }
 
-func (mt *mergeTool) mergeSelfFastMode(ctx *MergeContext, parquetPlan *TSSP2ParquetPlan) {
+func (mt *mergeTool) mergeSelfFastMode(ctx *MergeContext) {
 	files, err := mt.mts.getFilesByPath(ctx.mst, ctx.unordered.path, false)
 	if err != nil {
 		mt.zlg.Error("failed to get files", zap.Error(err))
@@ -218,29 +225,31 @@ func (mt *mergeTool) mergeSelfFastMode(ctx *MergeContext, parquetPlan *TSSP2Parq
 	ms := NewMergeSelf(mt.mts, mt.lg)
 	defer ms.Stop()
 
-	if parquetPlan.Enable() {
-		ms.SetHook(parquetPlan)
-	}
-
+	events := ms.InitEvents(ctx)
 	mt.mts.Listen(ms.signal, func() {
 		ms.Stop()
 	})
 
-	level := ctx.level
 	mergedSize := int64(0)
 	begin := time.Now()
 
-	merged, err := ms.Merge(ctx.mst, files.Files())
+	merged, err := ms.Merge(ctx.mst, ctx.ToLevel(), files.Files())
+
+	if err == nil {
+		err = events.TriggerReplaceFile(filepath.Dir(mt.mts.path), *mt.mts.lock)
+	}
+
 	if err == nil {
 		mergedSize = merged.FileSize()
 		err = mt.mts.ReplaceFiles(ctx.mst, files.Files(), []TSSPFile{merged}, false)
 	}
 
+	events.Finish(err == nil, mt.context)
 	mt.lg.Info("finish merge self",
 		zap.Int64("total size(MB)", ctx.unordered.size/1024/1024),
 		zap.Int64("merged size(MB)", mergedSize/1024/1024),
 		zap.Float64("time use(s)", time.Since(begin).Seconds()),
-		zap.Uint16("level", level),
+		zap.Uint16("level", ctx.ToLevel()),
 		zap.Any("err", err),
 		zap.String("mst", ctx.mst))
 }

@@ -53,6 +53,8 @@ type StatisticsPusher struct {
 var bufferPool = bufferpool.NewByteBufferPool(0, cpu.GetCpuNum(), bufferpool.MaxLocalCacheLen)
 var sp *StatisticsPusher
 var once sync.Once
+var IsMeta bool
+var IsLeader bool
 
 func NewStatisticsPusher(conf *config.Monitor, logger *logger.Logger) *StatisticsPusher {
 	once.Do(func() {
@@ -191,6 +193,9 @@ func (sp *StatisticsPusher) start() {
 			case <-timestamp.C:
 				statistics.NewTimestamp().Reset()
 			case <-interval.C:
+				if IsMeta && !IsLeader && config.IsLogKeeper() {
+					continue
+				}
 				statistics.NewTimestamp().Incr()
 				sp.push()
 			}

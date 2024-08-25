@@ -44,6 +44,9 @@ const (
 	maxFunc
 	percentileFunc
 	heapFunc
+	countPromFunc
+	minPromFunc
+	maxPromFunc
 )
 
 const DefaultTime = 0

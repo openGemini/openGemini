@@ -30,6 +30,7 @@ import (
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/index/ski"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/openGemini/openGemini/lib/record"
@@ -692,7 +693,7 @@ func (t *MemTable) appendFieldsToRecordSlow(rec *record.Record, fields []influx.
 	// check if added new field
 	newColNum := rec.ColNums()
 	if oldColNum != newColNum {
-		sort.Sort(rec)
+		record.FastSortRecord(rec, oldColNum)
 	}
 	rec.ColVals[newColNum-1].AppendInteger(time)
 	size += int64(util.Int64SizeBytes)
@@ -799,5 +800,6 @@ func Init(cpuNum int) {
 	initConcurLimiter(cpuNum)
 	initWriteRecPool(cpuNum)
 	InitMutablePool(cpuNum)
+	logstore.InitSkipIndexPool(cpuNum)
 	NewMemTablePoolManager().Init()
 }

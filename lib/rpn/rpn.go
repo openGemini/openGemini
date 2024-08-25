@@ -16,7 +16,10 @@ limitations under the License.
 
 package rpn
 
-import "github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+import (
+	"github.com/openGemini/openGemini/lib/tracing"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+)
 
 type Op uint8
 
@@ -84,4 +87,5 @@ type SKRPNElement struct {
 
 type SKBaseReader interface {
 	IsExist(blockId int64, elem *SKRPNElement) (bool, error)
+	StartSpan(span *tracing.Span)
 }

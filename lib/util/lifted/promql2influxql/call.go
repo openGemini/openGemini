@@ -76,6 +76,10 @@ var instantVectorFunctions = map[string]aggregateFn{
 		functionType:   AGGREGATE_FN,
 		vectorPosition: 1,
 	},
+	"scalar": {
+		name:         "scalar_prom",
+		functionType: AGGREGATE_FN,
+	},
 }
 
 var vectorMathFunctions = map[string]aggregateFn{
@@ -120,7 +124,7 @@ var vectorMathFunctions = map[string]aggregateFn{
 		KeepFill:     true,
 	},
 	"round": {
-		name:         "round",
+		name:         "round_prom",
 		functionType: TRANSFORM_FN,
 		KeepFill:     true,
 	},
@@ -169,6 +173,41 @@ var vectorMathFunctions = map[string]aggregateFn{
 		functionType: TRANSFORM_FN,
 		KeepFill:     true,
 	},
+	"rad": {
+		name:         "rad",
+		functionType: TRANSFORM_FN,
+		KeepFill:     true,
+	},
+	"deg": {
+		name:         "deg",
+		functionType: TRANSFORM_FN,
+		KeepFill:     true,
+	},
+	"sinh": {
+		name:         "sinh",
+		functionType: TRANSFORM_FN,
+		KeepFill:     true,
+	},
+	"cosh": {
+		name:         "cosh",
+		functionType: TRANSFORM_FN,
+		KeepFill:     true,
+	},
+	"tanh": {
+		name:         "tanh",
+		functionType: TRANSFORM_FN,
+		KeepFill:     true,
+	},
+	"asinh": {
+		name:         "asinh",
+		functionType: TRANSFORM_FN,
+		KeepFill:     true,
+	},
+	"atanh": {
+		name:         "atanh",
+		functionType: TRANSFORM_FN,
+		KeepFill:     true,
+	},
 }
 
 var vectorLabelFunctions = map[string]aggregateFn{
@@ -195,6 +234,13 @@ var vectorTimeFunctions = map[string]aggregateFn{
 		functionType: TRANSFORM_FN,
 		KeepFill:     true,
 	},
+
+	"timestamp": {
+		name:         "timestamp_prom",
+		functionType: TRANSFORM_FN,
+		KeepFill:     true,
+	},
+
 	"month": {
 		name:         "month_prom",
 		functionType: TRANSFORM_FN,
@@ -227,6 +273,11 @@ var vectorTimeFunctions = map[string]aggregateFn{
 	},
 	"vector": {
 		name:         "vector_prom",
+		functionType: TRANSFORM_FN,
+		KeepFill:     true,
+	},
+	"pi": {
+		name:         "pi_prom",
 		functionType: TRANSFORM_FN,
 		KeepFill:     true,
 	},
@@ -319,9 +370,13 @@ func (t *Transpiler) transpilePromFunc(aggFn aggregateFn, inArgs []influxql.Node
 				Alias: DefaultFieldKey,
 			}
 			setFieldsFunc(selectStatement, wrappedField, parameter, aggFn)
+			t.setTimeCondition(selectStatement)
 			if t.Step > 0 && !aggFn.KeepFill {
 				t.setTimeInterval(selectStatement)
 				selectStatement.Fill = influxql.NoFill
+			}
+			if aggFn.name == "histogram_quantile" {
+				selectStatement.Dimensions = statement.Dimensions
 			}
 			return selectStatement, nil
 		default:
@@ -395,6 +450,7 @@ func (t *Transpiler) transpileCall(a *parser.Call) (influxql.Node, error) {
 	}
 
 	if fn, ok := vectorMathFunctions[a.Func.Name]; ok {
+		t.dropMetric = true
 		return t.transpileVectorMathFunc(fn, args)
 	}
 

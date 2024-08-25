@@ -27,6 +27,11 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 )
 
+// OrderbyChunkNum consists of 3 orderbyTransform chunks and 3 hash_agg_transform chunks
+// orderby_transform: 1 currChunk,1 bufChunk and 1 outCh
+// hash_agg_transform: 1 inCh, 1 inputChunk and 1 bufChunk
+const OrderbyChunkNum = 6
+
 type heapOrderByItems struct {
 	items []*heapOrderByItem
 	opt   *query.ProcessorOptions
@@ -107,7 +112,7 @@ func NewOrderByTransform(inRowDataType hybridqp.RowDataType, outRowDataType hybr
 		trans.transferHelper = trans.transferFast
 	} else {
 		trans.transferHelper = trans.transferGroupByTime
-		trans.ResultChunkPool = NewCircularChunkPool(CircularChunkNum, NewChunkBuilder(outRowDataType))
+		trans.ResultChunkPool = NewCircularChunkPool(OrderbyChunkNum, NewChunkBuilder(outRowDataType))
 		trans.resultChunk = trans.ResultChunkPool.GetChunk()
 	}
 
@@ -195,7 +200,7 @@ func (trans *OrderByTransform) GetTagAndIndexes(chunk Chunk) {
 	for i := range chunk.Tags() {
 		if trans.opt.IsPromGroupAll() {
 			t = &chunk.Tags()[i]
-		} else if trans.opt.IsWithout() {
+		} else if trans.opt.IsPromWithout() {
 			t = chunk.Tags()[i].RemoveKeys(trans.opt.Dimensions)
 		} else {
 			t = chunk.Tags()[i].KeepKeys(trans.dimensions)
@@ -214,7 +219,7 @@ func (trans *OrderByTransform) GetTagsResetTagIndexes(chunk Chunk) {
 	for i := range chunk.Tags() {
 		if trans.opt.IsPromGroupAll() {
 			t = &chunk.Tags()[i]
-		} else if trans.opt.IsWithout() {
+		} else if trans.opt.IsPromWithout() {
 			t = chunk.Tags()[i].RemoveKeys(trans.opt.Dimensions)
 		} else {
 			t = chunk.Tags()[i].KeepKeys(trans.dimensions)

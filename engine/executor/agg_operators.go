@@ -34,6 +34,9 @@ func init() {
 	RegistryAggOp("count_values_prom", &CountValuesOp{})
 	RegistryAggOp("stdvar_prom", &PromStdOp{})
 	RegistryAggOp("stddev_prom", &PromStdOp{isStddev: true})
+	RegistryAggOp("group_prom", &PromGroupOp{})
+	RegistryAggOp("scalar_prom", &PromScalarOp{})
+	RegistryAggOp("quantile_prom", &PromQuantileOp{})
 }
 
 type MinOp struct{}
@@ -171,7 +174,6 @@ type HistogramQuantileOp struct{}
 
 func (c *HistogramQuantileOp) CreateRoutine(params *AggCallFuncParams) (Routine, error) {
 	inRowDataType, outRowDataType, opt := params.InRowDataType, params.OutRowDataType, params.ExprOpt
-	params.ProRes.isSingleCall = true
 	params.ProRes.isUDAFCall = true
 	var percentile float64
 	switch arg := opt.Expr.(*influxql.Call).Args[1].(type) {
@@ -214,7 +216,7 @@ func (c *CountValuesOp) CreateRoutine(params *AggCallFuncParams) (Routine, error
 	}
 	dataType := inRowDataType.Field(inOrdinal).Expr.(*influxql.VarRef).Type
 	if dataType == influxql.Float {
-		return NewRoutineImpl(NewCountValuesIterator(inOrdinal, outOrdinal, outRowDataType, arg.Val),
+		return NewRoutineImpl(NewCountValuesIterator(inOrdinal, outOrdinal, arg.Val),
 			inOrdinal, outOrdinal), nil
 	}
 	return nil, errno.NewError(errno.UnsupportedDataType, "count_values", dataType.String())
@@ -247,4 +249,67 @@ func (c *PromStdOp) CreateRoutine(params *AggCallFuncParams) (Routine, error) {
 	default:
 		return nil, errno.NewError(errno.UnsupportedDataType, funcName, dataType.String())
 	}
+}
+
+type PromGroupOp struct{}
+
+func (c *PromGroupOp) CreateRoutine(params *AggCallFuncParams) (Routine, error) {
+	inRowDataType, outRowDataType, opt, isSingleCall := params.InRowDataType, params.OutRowDataType, params.ExprOpt, params.IsSingleCall
+	inOrdinal := inRowDataType.FieldIndex(opt.Expr.(*influxql.Call).Args[0].(*influxql.VarRef).Val)
+	outOrdinal := outRowDataType.FieldIndex(opt.Ref.Val)
+	if inOrdinal < 0 || outOrdinal < 0 {
+		return nil, errno.NewError(errno.SchemaNotAligned, "group", "input and output schemas are not aligned")
+	}
+	dataType := inRowDataType.Field(inOrdinal).Expr.(*influxql.VarRef).Type
+	if dataType == influxql.Float {
+		return NewRoutineImpl(NewFloatIterator(GroupReduce, GroupMerge, isSingleCall, inOrdinal, outOrdinal,
+			nil, nil), inOrdinal, outOrdinal), nil
+	}
+	return nil, errno.NewError(errno.UnsupportedDataType, "group", dataType.String())
+}
+
+type PromScalarOp struct{}
+
+func (c *PromScalarOp) CreateRoutine(params *AggCallFuncParams) (Routine, error) {
+	inRowDataType, outRowDataType, opt := params.InRowDataType, params.OutRowDataType, params.ExprOpt
+	inOrdinal := inRowDataType.FieldIndex(opt.Expr.(*influxql.Call).Args[0].(*influxql.VarRef).Val)
+	outOrdinal := outRowDataType.FieldIndex(opt.Ref.Val)
+	params.ProRes.isUDAFCall = true
+	if inOrdinal < 0 || outOrdinal < 0 {
+		return nil, errno.NewError(errno.SchemaNotAligned, "scalar", "input and output schemas are not aligned")
+	}
+	dataType := inRowDataType.Field(inOrdinal).Expr.(*influxql.VarRef).Type
+	if dataType == influxql.Float {
+		return NewRoutineImpl(NewScalarIterator(inOrdinal, outOrdinal), inOrdinal, outOrdinal), nil
+	}
+	return nil, errno.NewError(errno.UnsupportedDataType, "scalar", dataType.String())
+}
+
+type PromQuantileOp struct{}
+
+func (c *PromQuantileOp) CreateRoutine(params *AggCallFuncParams) (Routine, error) {
+	inRowDataType, outRowDataType, opt, isSingleCall, auxProcessor := params.InRowDataType, params.OutRowDataType, params.ExprOpt, params.IsSingleCall, params.AuxProcessor
+	var percentile float64
+	switch arg := opt.Expr.(*influxql.Call).Args[1].(type) {
+	case *influxql.NumberLiteral:
+		percentile = arg.Val
+	case *influxql.IntegerLiteral:
+		percentile = float64(arg.Val)
+	default:
+		panic("the type of input args of quantile_prom iterator is unsupported")
+	}
+
+	inOrdinal := inRowDataType.FieldIndex(opt.Expr.(*influxql.Call).Args[0].(*influxql.VarRef).Val)
+	outOrdinal := outRowDataType.FieldIndex(opt.Ref.Val)
+	if inOrdinal < 0 || outOrdinal < 0 {
+		panic("input and output schemas are not aligned for quantile_prom iterator")
+	}
+	dataType := inRowDataType.Field(inOrdinal).Expr.(*influxql.VarRef).Type
+	switch dataType {
+	case influxql.Float:
+		return NewRoutineImpl(NewFloatColFloatSliceIterator(QuantileReduce(percentile),
+			isSingleCall, inOrdinal, outOrdinal, auxProcessor, outRowDataType),
+			inOrdinal, outOrdinal), nil
+	}
+	return nil, errno.NewError(errno.UnsupportedDataType, "quantile_prom", dataType.String())
 }

@@ -20,19 +20,25 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path"
 	"runtime/debug"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/apache/arrow/go/v13/arrow"
+	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/metaclient"
+	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util"
@@ -40,6 +46,13 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
 	"go.uber.org/zap"
+)
+
+var (
+	flushRetryTimes    = 3
+	errInfo            = "no such file"
+	flushTime          = 30 * time.Second
+	CurrentCapacityMap = &sync.Map{}
 )
 
 type RWMetaClient interface {
@@ -56,26 +69,30 @@ type RWMetaClient interface {
 
 // RecMsg data structure of the message of the record.
 type RecMsg struct {
+	TotalLen        int64
 	Database        string
 	RetentionPolicy string
 	Measurement     string
 	Rec             interface{}
+	MsgType         record.RecordType
 }
 
 // RecordWriter handles writes the local data node.
 type RecordWriter struct {
-	ptNum            int // ptNum is the number of partition on the current node
-	recMsgChFactor   int // recMsgChFactor based on the rule of thumb, increase the capacity of ch and reduce block.
-	nodeId           uint64
-	MetaClient       RWMetaClient
-	errs             *errno.Errs
-	logger           *logger.Logger
-	wg               sync.WaitGroup
-	ctx              context.Context
-	cancel           context.CancelFunc
-	timeout          time.Duration
-	recMsgCh         chan *RecMsg
-	recWriterHelpers []*recordWriterHelper
+	ptNum               int // ptNum is the number of partition on the current node
+	recMsgChFactor      int // recMsgChFactor based on the rule of thumb, increase the capacity of ch and reduce block.
+	nodeId              uint64
+	MetaClient          RWMetaClient
+	errs                *errno.Errs
+	logger              *logger.Logger
+	wg                  sync.WaitGroup
+	ctx                 context.Context
+	cancel              context.CancelFunc
+	timeout             time.Duration
+	recMsgCh            chan *RecMsg
+	recWriterHelpers    []*recordWriterHelper
+	previousCapacityMap *sync.Map
+	mu                  sync.RWMutex
 
 	StorageEngine interface {
 		WriteRec(db, rp, mst string, ptId uint32, shardID uint64, rec *record.Record, binaryRec []byte) error
@@ -106,12 +123,14 @@ func (w *RecordWriter) RetryWriteRecord(database, retentionPolicy, measurement s
 	return nil
 }
 
-func (w *RecordWriter) RetryWriteLogRecord(database, retentionPolicy, measurement string, rec *record.Record) error {
+func (w *RecordWriter) RetryWriteLogRecord(bulk *record.BulkRecords) error {
 	w.recMsgCh <- &RecMsg{
-		Database:        database,
-		RetentionPolicy: retentionPolicy,
-		Measurement:     measurement,
-		Rec:             rec,
+		TotalLen:        bulk.TotalLen,
+		Database:        bulk.Repo,
+		RetentionPolicy: bulk.Logstream,
+		Measurement:     bulk.Logstream,
+		Rec:             bulk.Rec,
+		MsgType:         bulk.MsgType,
 	}
 	return nil
 }
@@ -131,8 +150,95 @@ func (w *RecordWriter) Open() error {
 			w.consume(idx)
 		}(ptIdx)
 	}
+
 	go w.monitoring()
+	go w.flush()
 	return nil
+}
+
+func (w *RecordWriter) flush() {
+	ticker := time.NewTicker(flushTime)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			w.FlushCapacity()
+		case <-w.ctx.Done():
+			return
+		}
+	}
+}
+
+func (w *RecordWriter) FlushCapacity() {
+	defer func() {
+		if err := recover(); err != nil {
+			w.logger.Error("FlushCapacity panic", zap.String("store raise stack:", string(debug.Stack())),
+				zap.Error(errno.NewError(errno.RecoverPanic, err)))
+		}
+	}()
+
+	w.mu.Lock()
+	w.previousCapacityMap = CurrentCapacityMap
+	CurrentCapacityMap = &sync.Map{}
+	w.mu.Unlock()
+
+	w.previousCapacityMap.Range(func(key, value any) bool {
+		for i := 1; i <= flushRetryTimes; i++ {
+			err := StoreCapacity(key.(string), value.(int64))
+			if err == nil {
+				break
+			} else if i == flushRetryTimes {
+				w.logger.Error("write capacity failed", zap.Error(err), zap.String("fastPath", key.(string)))
+
+				if strings.Contains(err.Error(), errInfo) {
+					break
+				}
+				CurrentCapacityMap.Store(key, value)
+			}
+		}
+
+		return true
+	})
+}
+
+// StoreCapacity is used to persist the shard-level capacity value.
+func StoreCapacity(capacityFile string, capacity int64) error {
+	data, err := os.ReadFile(capacityFile)
+	if err != nil {
+		if strings.Contains(err.Error(), errInfo) {
+			data = []byte{'0'}
+		} else {
+			return err
+		}
+	}
+
+	sumCapacity, err := strconv.Atoi(string(data))
+	if err != nil {
+		return err
+	}
+
+	sumCapacity += int(capacity)
+	str := strconv.Itoa(sumCapacity)
+
+	return os.WriteFile(capacityFile, []byte(str), 0640)
+}
+
+// LoadCapacity is used to load the shard-level capacity value.
+func LoadCapacity(capacityFile string, retryTimes int) (int64, error) {
+	if retryTimes > 0 {
+		time.Sleep(time.Duration(retryTimes) * 100 * time.Millisecond)
+	}
+
+	data, err := os.ReadFile(capacityFile)
+	if err != nil {
+		return 0, err
+	}
+
+	capacity, err := strconv.Atoi(string(data))
+	if err != nil {
+		return 0, err
+	}
+	return int64(capacity), nil
 }
 
 func (w *RecordWriter) monitoring() {
@@ -180,15 +286,22 @@ func (w *RecordWriter) consume(ptIdx int) {
 	}
 }
 
+func (w *RecordWriter) CacheCapacity(capacityPath string, totalLen int64) {
+	i, loaded := CurrentCapacityMap.LoadOrStore(capacityPath, totalLen)
+	if loaded {
+		capacity, _ := i.(int64)
+		CurrentCapacityMap.Store(capacityPath, capacity+totalLen)
+	}
+}
+
 func (w *RecordWriter) processRecord(msg *RecMsg, ptIdx int) {
 	var writeErr error
 	var rowNums int64
 	defer func() {
 		if err := recover(); err != nil {
-			w.logger.Error("processRecord panic", zap.String("db", msg.Database), zap.String("rp", msg.RetentionPolicy), zap.String("mst", msg.Measurement),
+			fmt.Println("processRecord panic", zap.String("db", msg.Database), zap.String("rp", msg.RetentionPolicy), zap.String("mst", msg.Measurement),
 				zap.String("record writer raise stack:", string(debug.Stack())),
 				zap.Error(errno.NewError(errno.RecoverPanic, err)))
-			w.errs.Dispatch(errno.NewError(errno.RecoverPanic, err))
 		}
 		if writeErr != nil && !IsKeepWritingErr(writeErr) {
 			w.logger.Error("processRecord err", zap.String("db", msg.Database), zap.String("rp", msg.RetentionPolicy), zap.String("mst", msg.Measurement), zap.Error(writeErr))
@@ -196,6 +309,12 @@ func (w *RecordWriter) processRecord(msg *RecMsg, ptIdx int) {
 		switch m := msg.Rec.(type) {
 		case arrow.Record:
 			m.Release()
+		case *record.Record:
+			if msg.MsgType == record.LogStoreRecord {
+				record.LogStoreRecordPool.PutBigRecord(m)
+			} else if msg.MsgType == record.LogStoreFailRecord {
+				record.LogStoreFailRecordPool.PutBigRecord(m)
+			}
 		default:
 			break
 		}
@@ -210,7 +329,7 @@ func (w *RecordWriter) processRecord(msg *RecMsg, ptIdx int) {
 		writeErr = w.writeRecord(msg.Database, msg.RetentionPolicy, msg.Measurement, m, ptIdx)
 		rowNums = m.NumRows()
 	case *record.Record:
-		writeErr = w.writeLogRecord(msg.Database, msg.RetentionPolicy, msg.Measurement, m, ptIdx)
+		writeErr = w.writeLogRecord(msg.Database, msg.RetentionPolicy, msg.Measurement, msg.TotalLen, m, ptIdx)
 		rowNums = int64(m.RowNums())
 	default:
 		break
@@ -271,15 +390,19 @@ func (w *RecordWriter) writeRecord(db, rp, mst string, rec arrow.Record, ptIdx i
 		return err
 	}
 	atomic.AddInt64(&statistics.HandlerStat.FieldsWritten, rec.NumRows()*rec.NumCols())
-	return w.splitAndWriteByShard(sgis, db, rp, mst, r, ptIdx, ctx.ms.EngineType)
+	return w.splitAndWriteByShard(sgis, db, rp, mst, 0, r, ptIdx, ctx.ms.EngineType)
 }
 
-func (w *RecordWriter) writeLogRecord(db, rp, mst string, rec *record.Record, ptIdx int) error {
+func (w *RecordWriter) writeLogRecord(db, rp, mst string, totalLen int64, rec *record.Record, ptIdx int) error {
 	colNum, rowNum := rec.ColNums(), rec.RowNums()
 	if colNum == 0 || rowNum == 0 {
 		return nil
 	}
+
 	sort.Sort(rec)
+	if err := record.AppendSeqIdSchema(rec); err != nil {
+		return err
+	}
 
 	ctx := getWriteRecCtx()
 	defer putWriteRecCtx(ctx)
@@ -316,10 +439,10 @@ func (w *RecordWriter) writeLogRecord(db, rp, mst string, rec *record.Record, pt
 		return err
 	}
 	atomic.AddInt64(&statistics.HandlerStat.FieldsWritten, int64(rec.RowNums()*rec.ColNums()))
-	return w.splitAndWriteByShard(sgis, db, rp, mst, rec, ptIdx, ctx.ms.EngineType)
+	return w.splitAndWriteByShard(sgis, db, rp, mst, totalLen, rec, ptIdx, ctx.ms.EngineType)
 }
 
-func (w *RecordWriter) splitAndWriteByShard(sgis []*meta.ShardGroupInfo, db, rp, mst string, rec *record.Record, ptIdx int, engineType config.EngineType) error {
+func (w *RecordWriter) splitAndWriteByShard(sgis []*meta.ShardGroupInfo, db, rp, mst string, totalLen int64, rec *record.Record, ptIdx int, engineType config.EngineType) error {
 	start := 0
 	var subRec *record.Record
 	var err error
@@ -348,6 +471,11 @@ func (w *RecordWriter) splitAndWriteByShard(sgis []*meta.ShardGroupInfo, db, rp,
 			return err
 		}
 		start = end
+		if totalLen > 0 {
+			sp := obs.GetShardPath(shard.ID, shard.IndexID, shard.Owners[0], sgis[i].StartTime, sgis[i].EndTime, db, rp)
+			w.CacheCapacity(path.Join(obs.GetPrefixDataPath(), sp, mst, immutable.CapacityBinFile),
+				int64((float64(subRec.RowNums())/float64(rec.RowNums()))*float64(totalLen)))
+		}
 	}
 	return err
 }

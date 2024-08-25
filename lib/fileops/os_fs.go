@@ -127,6 +127,14 @@ func (f *file) Stat() (os.FileInfo, error) {
 	return f.of.Stat()
 }
 
+func (f *file) Size() (int64, error) {
+	info, err := f.of.Stat()
+	if err != nil {
+		return 0, err
+	}
+	return info.Size(), nil
+}
+
 func (f *file) Readdir(n int) ([]os.FileInfo, error) {
 	return f.of.Readdir(n)
 }
@@ -174,6 +182,10 @@ func (vfs) Remove(name string, _ ...FSOption) error {
 
 func (vfs) RemoveLocal(name string, _ ...FSOption) error {
 	return os.Remove(name)
+}
+
+func (vfs) RemoveLocalEnabled(obsOptValid bool) bool {
+	return obsOptValid
 }
 
 func (vfs) RemoveAll(path string, _ ...FSOption) error {

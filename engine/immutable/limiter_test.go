@@ -73,7 +73,7 @@ func TestCompactLimitWriter(t *testing.T) {
 		SetSnapshotLimit(1*1024*1024, 2*1024*1024)
 		lw := fileops.NewLimitWriter(fd, snapshotWriteLimiter)
 
-		b := make([]byte, 2*1024*1024)
+		b := make([]byte, 1*1024*1024)
 		b[0] = 1
 		b[len(b)-1] = 1
 

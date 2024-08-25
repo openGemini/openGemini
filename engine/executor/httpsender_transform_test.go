@@ -23,10 +23,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/influxdata/influxdb/models"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -317,16 +319,36 @@ func (trans *MockGenDataTransform) GetInputNumber(_ executor.Port) int {
 	return 0
 }
 
+type MockAbortProcessor struct{}
+
+func (m *MockAbortProcessor) AbortSinkTransform() {}
+
 func TestGenRows(t *testing.T) {
 	sender := executor.NewHttpChunkSender(&query.ProcessorOptions{
-		Except: true,
+		Without: true,
+		Limit:   1000,
 	})
+	sender.SetAbortProcessor(&MockAbortProcessor{})
 
 	fields := mockFieldsAndTags()
 	refs := varRefsFromFields(fields)
 	inRowDataType := hybridqp.NewRowDataTypeImpl(refs...)
 	chunk := genChunk(inRowDataType)
+	sender.GenRows(chunk)
 
+	sender = executor.NewHttpChunkSender(&query.ProcessorOptions{
+		Without: true,
+		Limit:   11,
+	})
+	sender.SetAbortProcessor(&MockAbortProcessor{})
+	sender.GenRows(chunk)
+
+	sender = executor.NewHttpChunkSender(&query.ProcessorOptions{
+		Without: true,
+		Limit:   11,
+		Offset:  190,
+	})
+	sender.SetAbortProcessor(&MockAbortProcessor{})
 	sender.GenRows(chunk)
 }
 
@@ -341,18 +363,16 @@ func TestGetRows(t *testing.T) {
 
 	g := &executor.RowsGenerator{}
 	other := g.Generate(chunk, time.UTC)
-	require.GreaterOrEqual(t, rows.Len(), len(other))
-
-	valueIndex := 0
+	require.Equal(t, rows.Len(), len(other))
 	for i := 0; i < rows.Len(); i++ {
 		exp := rows[i]
-		got := other[0]
+		got := other[i]
 		require.Equal(t, exp.Tags, got.Tags)
 		require.Equal(t, exp.Columns, got.Columns)
-
+		require.Equal(t, len(exp.Values), len(got.Values))
 		for j := 0; j < len(exp.Values); j++ {
-			require.Equal(t, exp.Values[j], got.Values[valueIndex])
-			valueIndex++
+			require.Equal(t, exp.Values[j], got.Values[j])
+
 		}
 	}
 }
@@ -417,4 +437,158 @@ func genChunk(outRowDataType hybridqp.RowDataType) executor.Chunk {
 	}
 
 	return ck
+}
+
+func buildRows() models.Rows {
+	return models.Rows{&models.Row{
+		Name:    "cpu",
+		Columns: []string{"time", "f1_float", "f2_int", "f3_bool", "f4_string", "t1_tag", "t2_tag"},
+		Values:  [][]interface{}{{time.Unix(0, 0), float64(0), int64(0), true, "0", "tv1", "tv2"}},
+	}}
+}
+
+func Test_HttpSenderTransform_Except(t *testing.T) {
+	// 4 fields, 2 tags
+	fields := mockFieldsAndTags()
+	refs := varRefsFromFields(fields)
+	inRowDataType := hybridqp.NewRowDataTypeImpl(refs...)
+	ctx := context.Background()
+
+	outPutRowsChan := make(chan query.RowsChan)
+	opt := query.ProcessorOptions{
+		ChunkSize:   1024,
+		ChunkedSize: 10000,
+		RowsChan:    outPutRowsChan,
+		Without:     true,
+		Limit:       1,
+	}
+	schema := executor.NewQuerySchema(fields, mockColumnNames(), &opt, nil)
+	schema.SetOpt(&opt)
+	mockInput := NewMockGenDataTransform(inRowDataType)
+	httpSender := executor.NewHttpSenderTransform(inRowDataType, schema)
+	httpSender.SetDag(nil)
+	httpSender.SetVertex(nil)
+	httpSender.GetInputs()[0].Connect(mockInput.GetOutputs()[0])
+
+	var processors executor.Processors
+	processors = append(processors, mockInput)
+	processors = append(processors, httpSender)
+	executors := executor.NewPipelineExecutor(processors)
+
+	ec := make(chan error, 1)
+	go func() {
+		ec <- executors.Execute(context.Background())
+		close(ec)
+		close(opt.RowsChan)
+	}()
+	var closed bool
+	var dstRows models.Rows
+	for {
+		select {
+		case data, ok := <-opt.RowsChan:
+			if !ok {
+				closed = true
+				break
+			}
+			dstRows = append(dstRows, data.Rows...)
+		case <-ctx.Done():
+			closed = true
+			break
+		}
+		if closed {
+			break
+		}
+	}
+	executors.Release()
+	assert.Equal(t, len(dstRows), len(buildRows()))
+}
+
+func Test_HttpSenderHintTransform_Except(t *testing.T) {
+	// 4 fields, 2 tags
+	fields := mockFieldsAndTags()
+	refs := varRefsFromFields(fields)
+	inRowDataType := hybridqp.NewRowDataTypeImpl(refs...)
+	ctx := context.Background()
+
+	outPutRowsChan := make(chan query.RowsChan)
+	opt := query.ProcessorOptions{
+		ChunkSize:   1024,
+		ChunkedSize: 10000,
+		RowsChan:    outPutRowsChan,
+		Without:     true,
+		Limit:       1,
+	}
+	schema := executor.NewQuerySchema(fields, mockColumnNames(), &opt, nil)
+	schema.SetOpt(&opt)
+	mockInput := NewMockGenDataTransform(inRowDataType)
+	httpSender := executor.NewHttpSenderHintTransform(inRowDataType, schema)
+	httpSender.SetDag(nil)
+	httpSender.SetVertex(nil)
+	httpSender.GetInputs()[0].Connect(mockInput.GetOutputs()[0])
+
+	var processors executor.Processors
+	processors = append(processors, mockInput)
+	processors = append(processors, httpSender)
+	executors := executor.NewPipelineExecutor(processors)
+
+	ec := make(chan error, 1)
+	go func() {
+		ec <- executors.Execute(context.Background())
+		close(ec)
+		close(opt.RowsChan)
+	}()
+	var closed bool
+	var dstRows models.Rows
+	for {
+		select {
+		case data, ok := <-opt.RowsChan:
+			if !ok {
+				closed = true
+				break
+			}
+			dstRows = append(dstRows, data.Rows...)
+		case <-ctx.Done():
+			closed = true
+			break
+		}
+		if closed {
+			break
+		}
+	}
+	executors.Release()
+	assert.Equal(t, len(dstRows), len(buildRows()))
+}
+
+func Test_HttpSenderTransform_Except_Abort(t *testing.T) {
+	fields := mockFieldsAndTags()
+	refs := varRefsFromFields(fields)
+	inRowDataType := hybridqp.NewRowDataTypeImpl(refs...)
+	opt := query.ProcessorOptions{Without: true, Limit: 1}
+	schema := executor.NewQuerySchema(fields, mockColumnNames(), &opt, nil)
+	schema.SetOpt(&opt)
+	httpSender := executor.NewHttpSenderTransform(inRowDataType, schema)
+	vertex := executor.NewTransformVertex(executor.NewLogicalHttpSender(nil, schema), httpSender)
+	dag := executor.NewTransformDag()
+	dag.AddVertex(vertex)
+	httpSender.SetDag(dag)
+	httpSender.SetVertex(vertex)
+	httpSender.AbortSinkTransform()
+	httpSender.Visit(vertex)
+}
+
+func Test_HttpSenderHintTransform_Except_Abort(t *testing.T) {
+	fields := mockFieldsAndTags()
+	refs := varRefsFromFields(fields)
+	inRowDataType := hybridqp.NewRowDataTypeImpl(refs...)
+	opt := query.ProcessorOptions{Without: true, Limit: 1}
+	schema := executor.NewQuerySchema(fields, mockColumnNames(), &opt, nil)
+	schema.SetOpt(&opt)
+	httpSender := executor.NewHttpSenderHintTransform(inRowDataType, schema)
+	vertex := executor.NewTransformVertex(executor.NewLogicalHttpSender(nil, schema), httpSender)
+	dag := executor.NewTransformDag()
+	dag.AddVertex(vertex)
+	httpSender.SetDag(dag)
+	httpSender.SetVertex(vertex)
+	httpSender.AbortSinkTransform()
+	httpSender.Visit(vertex)
 }

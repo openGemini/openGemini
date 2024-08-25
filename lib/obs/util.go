@@ -46,6 +46,23 @@ func GetShardPath(shardId, IndexId uint64, ptId uint32, startTime, endTime time.
 	return logPath
 }
 
+// example: data/test/8/mst/9_1756944000000000000_1757030400000000000_9/columnstore/mst_0000, 9 is the shardID
+func GetShardID(dataPath string) int64 {
+	path := strings.Split(dataPath, "/")
+	if len(path) != 7 {
+		return 0
+	}
+	shardPath := strings.Split(path[4], "_")
+	if len(shardPath) < 4 {
+		return 0
+	}
+	num, err := strconv.ParseInt(shardPath[0], 10, 64)
+	if err != nil {
+		return 0
+	}
+	return num
+}
+
 // "data/dbName/ptID/rpName/shardId_startTime_endTime_indexId/columnstore/mstName"
 func GetBaseMstPath(shardPath, mstName string) string {
 	return path.Join(shardPath, mstName)

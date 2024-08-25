@@ -70,3 +70,13 @@ func TestEqualInterface(t *testing.T) {
 
 	assert.False(t, strings.EqualInterface(111, "111"))
 }
+
+func TestStringBuilder(t *testing.T) {
+	sb := strings.NewStringBuilder(10)
+	sb.AppendString("123")
+	str := sb.String()
+	assert.True(t, strings.EqualInterface(str, "123"))
+	sb.Truncate(sb.Size() - 1)
+	str = sb.String()
+	assert.True(t, strings.EqualInterface(str, "12"))
+}

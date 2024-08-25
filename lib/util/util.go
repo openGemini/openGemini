@@ -484,9 +484,9 @@ func Bool2str(b bool) string {
 	}
 }
 
-func MemorySet(buf []byte) {
+func MemorySet(buf []byte, val byte) {
 	for i := range buf {
-		buf[i] = 0
+		buf[i] = val
 	}
 }
 
@@ -541,4 +541,15 @@ func DivisionCeil(dividend, divisor int) int {
 		return 0
 	}
 	return (dividend + divisor - 1) / divisor
+}
+
+var zeroBuf = make([]byte, 8000)
+
+func PaddingZeroBuffer(out []byte, size int) []byte {
+	if size > len(zeroBuf) {
+		out = append(out, make([]byte, size)...)
+	} else {
+		out = append(out, zeroBuf[:size]...)
+	}
+	return out
 }

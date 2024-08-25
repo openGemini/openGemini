@@ -187,6 +187,8 @@ type Meta struct {
 	NumOfShards    int32 `toml:"num-of-shards"`
 	UseIncSyncData bool  `toml:"inc-sync-data"`
 	SQLiteEnabled  bool  `toml:"sqlite-enabled"`
+	RepDisPolicy   uint8 `toml:"rep-dis-policy"`
+	SchemaCleanEn  bool  `toml:"schema-clean-enable"`
 }
 
 // NewMeta builds a new configuration with default values.

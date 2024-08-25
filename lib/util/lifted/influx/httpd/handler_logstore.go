@@ -94,8 +94,9 @@ const (
 	IncAggLogQueryRetryCount             int = 3
 	DefaultMaxLogStoreAnalyzeResponseNum     = 100
 
-	MaxSplitCharLen int = 128
-	UTCPrefix       int = len("UTC")
+	MaxSplitCharLen         int = 128
+	UTCPrefix               int = len("UTC")
+	MarshalFieldPunctuation int = len(`,"":`)
 )
 
 type measurementInfo struct {
@@ -333,34 +334,17 @@ func (h *Handler) serveUpdateRepository(w http.ResponseWriter, r *http.Request, 
 
 func (h *Handler) getDefaultSchemaForLog(opt *meta2.Options) (*meta2.ColStoreInfo, []*proto2.FieldSchema, *influxql.IndexRelation, *meta2.ShardKeyInfo, int32) {
 	colStoreInfo := meta2.NewColStoreInfo([]string{"time"}, []string{"time"}, nil, 0, "block")
-
-	tags := map[string]int32{"tags": influx.Field_Type_String}
-	fields := map[string]int32{"content": influx.Field_Type_String}
-	schemaInfo := meta2.NewSchemaInfo(tags, fields)
-	indexName, _ := index.GetIndexNameByType(index.BloomFilterFullText)
-	fullTextOid := uint32(index.BloomFilterFullText)
 	indexR := &influxql.IndexRelation{
 		Rid:        0,
-		Oids:       []uint32{fullTextOid},
-		IndexNames: []string{indexName},
-		IndexList: []*influxql.IndexList{
-			&influxql.IndexList{
-				IList: []string{"tags", "content"},
-			},
-		},
-		IndexOptions: []*influxql.IndexOptions{
-			{
-				Options: []*influxql.IndexOption{
-					{Tokens: opt.TagsSplit, Tokenizers: "standard"},
-					{Tokens: opt.SplitChar, Tokenizers: "standard"},
-				},
-			},
-		},
+		Oids:       []uint32{uint32(index.BloomFilterFullText)},
+		IndexNames: []string{index.BloomFilterFullTextIndex},
+		IndexList:  []*influxql.IndexList{{IList: []string{}}},
+		IndexOptions: []*influxql.IndexOptions{{Options: []*influxql.IndexOption{
+			{Tokens: opt.SplitChar, Tokenizers: "standard"},
+		}}},
 	}
-
 	ski := &meta2.ShardKeyInfo{Type: "hash"}
-	var numOfShards int32 = 0
-	return colStoreInfo, schemaInfo, indexR, ski, numOfShards
+	return colStoreInfo, nil, indexR, ski, 0
 }
 
 func (h *Handler) serveCreateLogstream(w http.ResponseWriter, r *http.Request, user meta2.User) {
@@ -565,6 +549,7 @@ const (
 var (
 	LogMax           = 1000
 	byteBufferPool   = bufferpool.NewByteBufferPool(100*1024, cpu.GetCpuNum(), bufferpool.MaxLocalCacheLen)
+	fieldBufferPool  = bufferpool.NewByteBufferPool(10*1024, cpu.GetCpuNum()*10, bufferpool.MaxLocalCacheLen)
 	recordBufferPool = bufferpool.NewByteBufferPool(10*1024*1024, cpu.GetCpuNum(), bufferpool.MaxLocalCacheLen)
 	parserPool       = &fastjson.ParserPool{}
 )
@@ -575,8 +560,8 @@ var logSchema = record.Schemas{
 }
 
 var failLogSchema = record.Schemas{
-	record.Field{Type: influx.Field_Type_String, Name: FailTag},
 	record.Field{Type: influx.Field_Type_String, Name: FailLog},
+	record.Field{Type: influx.Field_Type_String, Name: FailTag},
 	record.Field{Type: influx.Field_Type_Boolean, Name: RetryTag},
 	record.Field{Type: influx.Field_Type_Int, Name: Time},
 }
@@ -608,12 +593,16 @@ type LogWriteRequest struct {
 	timeMultiplier int64
 	expiredTime    int64
 	requestTime    int64
+	minTime        int64
+	maxTime        int64
 	logTagString   *string
 	dataType       LogDataType
 	mapping        *JsonMapping
 	printFailLog   *PrintFailLog
-	logTags        map[string][]byte
-	mstSchema      map[string]int32
+	logTags        [][]byte
+	logTagsKey     map[string]bool
+	logSchema      record.Schemas
+	mstSchema      *meta2.CleanSchema
 }
 
 type JsonMapping struct {
@@ -852,7 +841,9 @@ func parseLogTags(req *LogWriteRequest) (map[string][]byte, error) {
 			} else {
 				b = append(b, v.String()...)
 			}
-			tagsMap[key] = b
+			if len(b) > 0 {
+				tagsMap[key] = b
+			}
 		}
 	})
 
@@ -867,7 +858,7 @@ func checkTagFieldsType(key string, req *LogWriteRequest, tagsMap map[string][]b
 	if _, ok := tagsMap[key]; ok {
 		return errno.NewError(errno.ErrTagFieldDuplication, key)
 	}
-	if existType, ok := req.mstSchema[key]; ok {
+	if existType, ok := req.mstSchema.GetTyp(key); ok {
 		if existType != influx.Field_Type_String {
 			return errno.NewError(errno.ErrTagFieldDataType, key, getInfluxDataType(existType))
 		}
@@ -896,13 +887,22 @@ func getBufferSize(requestSize int) int {
 	}
 }
 
-func addLogTagsField(rows, failRows *record.Record, logTags map[string][]byte) {
-	for key := range logTags {
-		rows.Schema = append(rows.Schema, record.Field{Type: influx.Field_Type_String, Name: key})
-		rows.ColVals = append(rows.ColVals, record.ColVal{})
+// Reserve the location for the log-tags field
+func addLogTagsField(failRows *record.Record, logTagsMap map[string][]byte, req *LogWriteRequest) ([][]byte, map[string]bool) {
+	logTagsSlice := make([][]byte, len(logTagsMap))
+	logTagsKey := make(map[string]bool, len(logTagsMap))
+	i := 0
+	for key, value := range logTagsMap {
 		failRows.Schema = append(failRows.Schema, record.Field{Type: influx.Field_Type_String, Name: key})
 		failRows.ColVals = append(failRows.ColVals, record.ColVal{})
+
+		logTagsSlice[i] = value
+		logTagsKey[key] = true
+		req.logSchema = append(req.logSchema, record.Field{Type: influx.Field_Type_String, Name: key})
+		i++
 	}
+
+	return logTagsSlice, logTagsKey
 }
 
 func appendLogTags(rows *record.Record, req *LogWriteRequest) {
@@ -910,18 +910,14 @@ func appendLogTags(rows *record.Record, req *LogWriteRequest) {
 		return
 	}
 	lastTagLocation := logSchema.Len() + len(req.logTags)
-	var key string
 	for i := logSchema.Len(); i < lastTagLocation; i++ {
-		key = rows.Schema[i].Name
-		rows.ColVals[i].AppendByteSlice(req.logTags[key])
+		rows.ColVals[i].AppendByteSlice(req.logTags[i-logSchema.Len()])
 	}
 }
 
 func appendFailRowsLogTags(failRows *record.Record, req *LogWriteRequest) {
-	var key string
 	for i := failLogSchema.Len(); i < failRows.ColNums(); i++ {
-		key = failRows.Schema[i].Name
-		failRows.ColVals[i].AppendByteSlice(req.logTags[key])
+		failRows.ColVals[i].AppendByteSlice(req.logTags[i-failLogSchema.Len()])
 	}
 }
 
@@ -956,6 +952,22 @@ func getParseField(tagNum int) *ParseField {
 	}
 }
 
+func getMinMaxTime(req *LogWriteRequest, t int64) {
+	if req.minTime == 0 && req.maxTime == 0 {
+		req.minTime = t
+		req.maxTime = t
+		return
+	}
+
+	if t < req.minTime {
+		req.minTime = t
+	} else {
+		if t > req.maxTime {
+			req.maxTime = t
+		}
+	}
+}
+
 func appendRowAll(rows *record.Record, pf *ParseField, time int64) {
 	rows.ColVals[1].AppendInteger(time)
 	for i := pf.tagCnt; i < pf.fieldIndex; i++ {
@@ -981,12 +993,8 @@ func appendNilToRecordColumn(rows *record.Record, colIndex, colType int) {
 }
 
 func appendRow(rows *record.Record, tags, content []byte, time int64) {
-	rows.ColVals[0].AppendByteSlice(content)
-	if len(tags) == 0 {
-		rows.ColVals[1].AppendStringNull()
-	} else {
-		rows.ColVals[1].AppendByteSlice(tags)
-	}
+	appendValueOrNull(&rows.ColVals[0], content)
+	appendValueOrNull(&rows.ColVals[1], tags)
 	rows.ColVals[rows.ColNums()-1].AppendInteger(time)
 }
 
@@ -1000,8 +1008,8 @@ func appendFailRow(failRows *record.Record, req *LogWriteRequest, val interface{
 		}
 	}
 
-	failRows.ColVals[0].AppendStrings(req.failTag)
-	failRows.ColVals[1].AppendByteSlice(content)
+	appendValueOrNull(&failRows.ColVals[0], content)
+	failRows.ColVals[1].AppendStrings(req.failTag)
 	failRows.ColVals[2].AppendBoolean(req.retry)
 	failRows.ColVals[3].AppendInteger(req.requestTime)
 	req.requestTime++
@@ -1033,7 +1041,7 @@ func parameterValidate(r *http.Request) error {
 }
 
 func (h *Handler) getLogWriteRequest(r *http.Request) (*LogWriteRequest, error) {
-	req := &LogWriteRequest{}
+	req := &LogWriteRequest{mstSchema: &meta2.CleanSchema{}}
 	var err error
 	repository := mux.Vars(r)[Repository]
 	logStream := mux.Vars(r)[LogStream]
@@ -1086,6 +1094,7 @@ func (h *Handler) getLogWriteRequest(r *http.Request) (*LogWriteRequest, error) 
 
 	logTags := r.Header.Get("log-tags")
 	req.logTagString = &logTags
+	req.logSchema = append(req.logSchema, logSchema...)
 
 	return req, nil
 }
@@ -1110,13 +1119,19 @@ func (h *Handler) parseJson(scanner *bufio.Scanner, req *LogWriteRequest, rows, 
 	defer parserPool.Put(p)
 	pf := getParseField(len(req.logTags) + logSchema.Len())
 
+	firstRow := true
 	for scanner.Scan() {
 		b := scanner.Bytes()
+		if len(b) == 0 {
+			continue
+		}
+
 		totalLen += int64(len(b)) + NewlineLen
 		if len(b) > MaxContentLen {
 			appendBigLog(failRows, req, scanner.Bytes())
 			continue
 		}
+
 		v, err := p.ParseBytes(b)
 		if err != nil {
 			h.printFailLog(ParseError, req, scanner.Bytes(), err)
@@ -1139,11 +1154,25 @@ func (h *Handler) parseJson(scanner *bufio.Scanner, req *LogWriteRequest, rows, 
 			appendFailRow(failRows, req, scanner.Bytes())
 			continue
 		}
+
 		pf.contentCnt = 0
+		if firstRow {
+			err = parseFirstRowSchema(req, pf)
+			if err != nil {
+				pf = getParseField(len(req.logTags) + logSchema.Len())
+				req.logSchema = req.logSchema[:len(req.logTags)+logSchema.Len()]
+				appendFailRow(failRows, req, scanner.Bytes())
+				continue
+			}
+			reuseRecordSchema(rows, req)
+			firstRow = false
+		}
+
 		err = visitJsonField(req, rows, pf)
 		if err != nil {
 			h.printFailLog(ContentFieldError, req, scanner.Bytes(), err)
 			clearFailRow(rows, pf.rowCnt+1)
+			resetSchemaNil(pf.schemasNil)
 			appendFailRow(failRows, req, scanner.Bytes())
 			continue
 		}
@@ -1157,6 +1186,7 @@ func (h *Handler) parseJson(scanner *bufio.Scanner, req *LogWriteRequest, rows, 
 		rows.ColVals[0].AppendBoolean(req.retry)
 		appendLogTags(rows, req)
 		appendRowAll(rows, pf, unixTimestamp)
+		getMinMaxTime(req, unixTimestamp)
 		pf.rowCnt++
 	}
 	swapTimeColumnToEnd(rows, failRows)
@@ -1166,12 +1196,13 @@ func (h *Handler) parseJson(scanner *bufio.Scanner, req *LogWriteRequest, rows, 
 
 func (h *Handler) parseJsonArray(body io.ReadCloser, req *LogWriteRequest, rows, failRows *record.Record) int64 {
 	pf := getParseField(len(req.logTags) + logSchema.Len())
-
-	b := recordBufferPool.Get()
-	defer recordBufferPool.Put(b)
+	rows.ReserveSchemaAndColVal(req.logSchema.Len())
+	copy(rows.Schema, req.logSchema)
 
 	var jsonArray []map[string]interface{}
+	b := recordBufferPool.Get()
 	b, err := ReadAll(b, body)
+	defer recordBufferPool.Put(b)
 	totalLen := int64(len(b))
 	if err != nil {
 		h.Logger.Error("read all json fail", zap.Error(err), zap.String(Repository, req.repository),
@@ -1203,6 +1234,7 @@ func (h *Handler) parseJsonArray(body io.ReadCloser, req *LogWriteRequest, rows,
 		if err != nil {
 			h.printFailLog(ContentFieldError, req, jsonMap, err)
 			clearFailRow(rows, pf.rowCnt+1)
+			resetSchemaNil(pf.schemasNil)
 			appendFailRow(failRows, req, jsonMap)
 			continue
 		}
@@ -1216,6 +1248,7 @@ func (h *Handler) parseJsonArray(body io.ReadCloser, req *LogWriteRequest, rows,
 		rows.ColVals[0].AppendBoolean(req.retry)
 		appendLogTags(rows, req)
 		appendRowAll(rows, pf, unixTimestamp)
+		getMinMaxTime(req, unixTimestamp)
 		pf.rowCnt++
 	}
 	swapTimeColumnToEnd(rows, failRows)
@@ -1286,7 +1319,14 @@ func visitJsonField(req *LogWriteRequest, rows *record.Record, p *ParseField) er
 				p.schemasMap[key] = p.fieldIndex
 				p.schemasNil = append(p.schemasNil, true)
 				rows.Schema = append(rows.Schema, record.Field{Type: fastJsonTypeToRecordType(v.Type()), Name: key})
-				rows.ColVals = append(rows.ColVals, record.ColVal{})
+				colsLen := len(rows.ColVals)
+				if colsLen < cap(rows.ColVals) {
+					rows.ColVals = rows.ColVals[:colsLen+1]
+					rows.ColVals[colsLen].Init()
+				} else {
+					rows.ColVals = append(rows.ColVals, record.ColVal{})
+				}
+				fillNewField(rows, p)
 				appendFastJsonValue(rows, p.fieldIndex, v)
 				p.fieldIndex++
 			} else {
@@ -1303,6 +1343,109 @@ func visitJsonField(req *LogWriteRequest, rows *record.Record, p *ParseField) er
 	return err
 }
 
+func parseFirstRowSchema(req *LogWriteRequest, p *ParseField) error {
+	var key string
+	var err error
+	var stopVisit bool
+	// Traverse the first log field added to the logSchema
+	p.object.Visit(func(k []byte, v *fastjson.Value) {
+		if stopVisit {
+			return
+		}
+		key = string(k)
+		if req.mapping.discardFields[key] || key == req.mapping.timestamp {
+		} else if reservedFields[key] {
+			err = errno.NewError(errno.ErrReservedFieldDuplication, key)
+			stopVisit = true
+			return
+		} else {
+			_, ok := p.schemasMap[key]
+			if !ok {
+				if err = newFieldCheck(req, fastJsonTypeToRecordType(v.Type()), key); err != nil {
+					stopVisit = true
+					return
+				}
+				p.schemasMap[key] = p.fieldIndex
+				p.schemasNil = append(p.schemasNil, true)
+				req.logSchema = append(req.logSchema, record.Field{Type: fastJsonTypeToRecordType(v.Type()), Name: key})
+				p.fieldIndex++
+			} else {
+				err = errno.NewError(errno.ErrFieldDuplication, key)
+				stopVisit = true
+				return
+			}
+		}
+	})
+
+	return err
+}
+
+func reuseRecordSchema(rows *record.Record, req *LogWriteRequest) {
+	rows.Schema = rows.Schema[:cap(rows.Schema)]
+	rows.ColVals = rows.ColVals[:cap(rows.ColVals)]
+	recoverySchema := make(map[string]int, len(rows.Schema))
+	if len(rows.Schema) == 0 {
+		// If there is an empty record, add the schema and return it directly
+		rows.ColVals = rows.ColVals[:0]
+		rows.ReserveSchemaAndColVal(req.logSchema.Len())
+		copy(rows.Schema, req.logSchema)
+		return
+	}
+
+	// Verify the record's own Schema and ColVal
+	if delta := len(rows.Schema) - len(rows.ColVals); delta > 0 {
+		rows.ColVals = append(rows.ColVals, make([]record.ColVal, delta)...)
+	}
+
+	// Gets the fields in the record
+	for i, field := range rows.Schema {
+		if field.Name == "" {
+			break
+		}
+		recoverySchema[field.Name] = i
+	}
+
+	// Keep the record field no less than the number of logSchema fields
+	if delta := len(req.logSchema) - len(rows.Schema); delta > 0 {
+		rows.Schema = append(rows.Schema, make([]record.Field, delta)...)
+		rows.ColVals = append(rows.ColVals, make([]record.ColVal, delta)...)
+	}
+
+	var newFieldIndex []int
+	// Adjust the order of the record field to keep it with logSchema
+	for i, field := range req.logSchema {
+		if idx, ok := recoverySchema[field.Name]; ok {
+			exchangeField(idx, i, rows, recoverySchema)
+		} else {
+			newFieldIndex = append(newFieldIndex, i)
+		}
+	}
+	// Record fields that do not exist are replaced with logSchema fields
+	for _, idx := range newFieldIndex {
+		rows.Schema[idx] = req.logSchema[idx]
+	}
+
+	// Leave valid fields in record
+	rows.Schema = rows.Schema[:len(req.logSchema)]
+	rows.ColVals = rows.ColVals[:len(req.logSchema)]
+}
+
+func exchangeField(src, dst int, rows *record.Record, rowsSchemaMap map[string]int) {
+	if src != dst {
+		rows.Schema[dst], rows.Schema[src] = rows.Schema[src], rows.Schema[dst]
+		rows.ColVals[dst], rows.ColVals[src] = rows.ColVals[src], rows.ColVals[dst]
+		// Update the location of an unfixed field
+		rowsSchemaMap[rows.Schema[src].Name] = src
+	}
+}
+
+func fillNewField(rows *record.Record, p *ParseField) {
+	fieldType := rows.Schema.Field(p.fieldIndex).Type
+	for i := 0; i < p.rowCnt; i++ {
+		appendNilToRecordColumn(rows, p.fieldIndex, fieldType)
+	}
+}
+
 func visitJsonMap(jsonMap map[string]interface{}, req *LogWriteRequest, rows *record.Record, p *ParseField) error {
 	for key, v := range jsonMap {
 		if req.mapping.discardFields[key] || key == req.mapping.timestamp {
@@ -1317,7 +1460,14 @@ func visitJsonMap(jsonMap map[string]interface{}, req *LogWriteRequest, rows *re
 				p.schemasMap[key] = p.fieldIndex
 				p.schemasNil = append(p.schemasNil, true)
 				rows.Schema = append(rows.Schema, record.Field{Type: getInfluxType(v), Name: key})
-				rows.ColVals = append(rows.ColVals, record.ColVal{})
+				colsLen := len(rows.ColVals)
+				if colsLen < cap(rows.ColVals) {
+					rows.ColVals = rows.ColVals[:colsLen+1]
+					rows.ColVals[colsLen].Init()
+				} else {
+					rows.ColVals = append(rows.ColVals, record.ColVal{})
+				}
+				fillNewField(rows, p)
 				appendInterfaceValue(rows, p.fieldIndex, v)
 				p.fieldIndex++
 			} else {
@@ -1332,6 +1482,14 @@ func visitJsonMap(jsonMap map[string]interface{}, req *LogWriteRequest, rows *re
 	}
 
 	return nil
+}
+
+func resetSchemaNil(schemasNil []bool) {
+	for i, ok := range schemasNil {
+		if ok {
+			schemasNil[i] = !ok
+		}
+	}
 }
 
 func clearFailRow(rows *record.Record, failRowNum int) {
@@ -1355,12 +1513,12 @@ func clearFailRow(rows *record.Record, failRowNum int) {
 }
 
 func newFieldCheck(req *LogWriteRequest, dstType int, key string) error {
-	if existType, ok := req.mstSchema[key]; ok {
+	if existType, ok := req.mstSchema.GetTyp(key); ok {
 		if int(existType) != dstType {
 			return errno.NewError(errno.ErrFieldDataType, key, getInfluxDataType(existType))
 		}
 	}
-	if _, ok := req.logTags[key]; ok {
+	if req.logTagsKey[key] {
 		err := errno.NewError(errno.ErrTagFieldDuplication, key)
 		return err
 	}
@@ -1384,37 +1542,60 @@ func swapTimeColumnToEnd(rows, failRows *record.Record) {
 		failRows.ColVals[3], failRows.ColVals[failRows.ColNums()-1] = failRows.ColVals[failRows.ColNums()-1], failRows.ColVals[3]
 		failRows.Schema[3], failRows.Schema[failRows.ColNums()-1] = failRows.Schema[failRows.ColNums()-1], failRows.Schema[3]
 	}
-	rows.ColVals[1], rows.ColVals[rows.ColNums()-1] = rows.ColVals[rows.ColNums()-1], rows.ColVals[1]
-	rows.Schema[1], rows.Schema[rows.ColNums()-1] = rows.Schema[rows.ColNums()-1], rows.Schema[1]
+	if rows.ColNums() > logSchema.Len() {
+		rows.ColVals[1], rows.ColVals[rows.ColNums()-1] = rows.ColVals[rows.ColNums()-1], rows.ColVals[1]
+		rows.Schema[1], rows.Schema[rows.ColNums()-1] = rows.Schema[rows.ColNums()-1], rows.Schema[1]
+	}
 }
 
 func appendFastJsonValue(rows *record.Record, col int, v *fastjson.Value) {
 	switch v.Type() {
 	case fastjson.TypeString:
 		sb, _ := v.StringBytes()
-		rows.ColVals[col].AppendByteSlice(sb)
+		appendValueOrNull(&rows.ColVals[col], sb)
 	case fastjson.TypeNumber:
 		f, _ := v.Float64()
 		rows.ColVals[col].AppendFloat(f)
 	case fastjson.TypeTrue, fastjson.TypeFalse:
 		b, _ := v.Bool()
 		rows.ColVals[col].AppendBoolean(b)
+	case fastjson.TypeObject:
+		fieldBuf := fieldBufferPool.Get()
+		fieldBuf = v.MarshalTo(fieldBuf)
+		appendValueOrNull(&rows.ColVals[col], fieldBuf)
+		fieldBufferPool.Put(fieldBuf)
 	default:
-		rows.ColVals[col].AppendString(v.String())
+		appendValueOrNull(&rows.ColVals[col], v.String())
 	}
 }
 
 func appendInterfaceValue(rows *record.Record, col int, i interface{}) {
 	switch v := i.(type) {
 	case string:
-		rows.ColVals[col].AppendString(v)
+		appendValueOrNull(&rows.ColVals[col], v)
 	case float64:
 		rows.ColVals[col].AppendFloat(v)
 	case bool:
 		rows.ColVals[col].AppendBoolean(v)
 	default:
-		rows.ColVals[col].AppendString(Interface2str(i))
+		appendValueOrNull(&rows.ColVals[col], Interface2str(i))
 	}
+}
+
+func appendValueOrNull(cv *record.ColVal, i interface{}) {
+	switch v := i.(type) {
+	case string:
+		if len(v) > 0 {
+			cv.AppendString(v)
+			return
+		}
+	case []byte:
+		if len(v) > 0 {
+			cv.AppendByteSlice(v)
+			return
+		}
+	}
+	cv.AppendStringNull()
 }
 
 func fastJsonTypeToRecordType(ty fastjson.Type) int {
@@ -1504,7 +1685,7 @@ func (h *Handler) serveRecord(w http.ResponseWriter, r *http.Request, user meta2
 	}
 	req.mstSchema = logInfo.Measurements[req.logStream+MstSuffix].Schema
 	logInfo.Measurements[req.logStream+MstSuffix].SchemaLock.RLock()
-	req.logTags, err = parseLogTags(req)
+	logTagsMap, err := parseLogTags(req)
 	logInfo.Measurements[req.logStream+MstSuffix].SchemaLock.RUnlock()
 	if err != nil {
 		h.Logger.Error("serveRecord parseLogTags fail", zap.Error(err))
@@ -1544,9 +1725,9 @@ func (h *Handler) serveRecord(w http.ResponseWriter, r *http.Request, user meta2
 	scanner.Buffer(scanBuf, getBufferSize(int(r.ContentLength)))
 	scanner.Split(bufio.ScanLines)
 
-	rows := record.NewRecord(logSchema, false)
-	failRows := record.NewRecord(failLogSchema, false)
-	addLogTagsField(rows, failRows, req.logTags)
+	rows := record.LogStoreRecordPool.Get()
+	failRows := record.GetRecordFromPool(record.LogStoreFailRecordPool, failLogSchema)
+	req.logTags, req.logTagsKey = addLogTagsField(failRows, logTagsMap, req)
 
 	req.requestTime = time.Now().UnixNano()
 	if logInfo.Duration != 0 {
@@ -1574,25 +1755,51 @@ func (h *Handler) serveRecord(w http.ResponseWriter, r *http.Request, user meta2
 		return
 	}
 
+	bulk, failBulk := getBulkRecords(rows, failRows, req, totalLen, logInfo.ShardGroupDuration)
 	if rows.RowNums() > 0 {
-		err = h.RecordWriter.RetryWriteLogRecord(req.repository, req.logStream, req.logStream, rows)
+		err = h.RecordWriter.RetryWriteLogRecord(bulk)
 		if err != nil {
 			h.Logger.Error("serve records", zap.Error(err))
 			h.httpErrorRsp(w, ErrorResponse("write log error", LogReqErr), http.StatusBadRequest)
 			atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
 			return
 		}
+	} else {
+		record.LogStoreRecordPool.PutBigRecord(rows)
 	}
+
 	if failRows.RowNums() > 0 {
-		err = h.RecordWriter.RetryWriteLogRecord(req.repository, req.logStream, req.logStream, failRows)
+		err = h.RecordWriter.RetryWriteLogRecord(failBulk)
 		if err != nil {
 			h.Logger.Error("serve records", zap.Error(err))
 			h.httpErrorRsp(w, ErrorResponse("write fail log error", LogReqErr), http.StatusBadRequest)
 			atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
 			return
 		}
+	} else {
+		record.LogStoreFailRecordPool.PutBigRecord(failRows)
 	}
+
 	addLogInsertStatistics(req.repository, req.logStream, totalLen)
+}
+
+func getBulkRecords(rows, failRows *record.Record, req *LogWriteRequest, totalLen int64, shardGroupDuration time.Duration) (*record.BulkRecords,
+	*record.BulkRecords) {
+	bulk := &record.BulkRecords{Repo: req.repository, Logstream: req.logStream, Rec: rows, MsgType: record.LogStoreRecord}
+	failBulk := &record.BulkRecords{Repo: req.repository, Logstream: req.logStream, Rec: failRows, MsgType: record.LogStoreFailRecord}
+
+	if rows.RowNums() > 0 {
+		bulk.TotalLen = totalLen
+		if req.minTime/shardGroupDuration.Nanoseconds() != req.maxTime/shardGroupDuration.Nanoseconds() {
+			SortHelper := record.NewSortHelper()
+			bulk.Rec = SortHelper.SortForColumnStore(rows, []record.PrimaryKey{{Key: "time", Type: influx.Field_Type_Int}}, false, 0)
+			SortHelper.Release()
+		}
+	} else if failRows.RowNums() > 0 {
+		failBulk.TotalLen = totalLen
+	}
+
+	return bulk, failBulk
 }
 
 func addLogInsertStatistics(repoName, logStreamName string, totalLen int64) {
@@ -1604,15 +1811,27 @@ func addLogInsertStatistics(repoName, logStreamName string, totalLen int64) {
 	statistics.NewLogKeeperStatistics().Push(item)
 }
 
+func getLogTimestamp(t int64) int64 {
+	if t%1000 != 0 {
+		return t + 1
+	}
+	tmp := time.Now().UnixNano()
+	if tmp > t+1 {
+		return tmp
+	}
+	return t + 1
+}
+
 func (h *Handler) serveUpload(w http.ResponseWriter, r *http.Request, user meta2.User) {
 	atomic.AddInt64(&statistics.HandlerStat.WriteRequests, 1)
 	atomic.AddInt64(&statistics.HandlerStat.ActiveWriteRequests, 1)
 	atomic.AddInt64(&statistics.HandlerStat.WriteRequestBytesIn, r.ContentLength)
+	start := time.Now()
 	defer func(start time.Time) {
 		d := time.Since(start).Nanoseconds()
 		atomic.AddInt64(&statistics.HandlerStat.ActiveWriteRequests, -1)
 		atomic.AddInt64(&statistics.HandlerStat.WriteRequestDuration, d)
-	}(time.Now())
+	}(start)
 	h.requestTracker.Add(r, user)
 
 	if !h.IsWriteNode() {
@@ -1646,55 +1865,56 @@ func (h *Handler) serveUpload(w http.ResponseWriter, r *http.Request, user meta2
 		return
 	}
 
-	dur := logInfo.ShardGroupDuration
-	date := time.Now().Unix()
+	dur := logInfo.ShardGroupDuration.Nanoseconds()
+	date := start.Unix()
 	tagsStr := "date:" + strconv.FormatInt(date, 10) + tokenizer.TAGS_SPLITTER + "type:upload"
 	tagsByte := []byte(tagsStr)
 
-	var groupId int
-	var groupIdTmp int
 	timeStr := r.FormValue("timestamp")
 	timeStart, _ := strconv.ParseInt(timeStr, 10, 64)
-	rows := record.NewRecord(uploadSchema, false)
+	rows := record.GetRecordFromPool(record.LogStoreRecordPool, uploadSchema)
 	rowCount := 0
-	timeNow := time.Now().UnixNano()
-	var t int64
+	baseTime := int64(0)
+	curTime := start.UnixNano()
+	if timeStart > 0 {
+		baseTime = timeStart - curTime
+	}
+	t := curTime + baseTime
+	groupId := int(t / dur)
 	for scanner.Scan() {
-		if timeStart > 0 {
-			t = timeStart + time.Now().UnixNano() - timeNow
-		} else {
-			t = time.Now().UnixNano()
-		}
-		groupIdTmp = int(t / (dur.Nanoseconds()))
-		if groupId == 0 {
+		curTime = getLogTimestamp(curTime)
+		t = curTime + baseTime
+		groupIdTmp := int(t / dur)
+		if groupIdTmp != groupId {
 			groupId = groupIdTmp
-		} else if groupIdTmp != groupId {
-			groupId = groupIdTmp
-			err = h.RecordWriter.RetryWriteLogRecord(repository, logStream, logStream, rows)
+			bulk := &record.BulkRecords{Repo: repository, Logstream: logStream, Rec: rows, MsgType: record.LogStoreRecord}
+			err = h.RecordWriter.RetryWriteLogRecord(bulk)
 			if err != nil {
 				h.Logger.Error("serve upload", zap.Error(err))
 				h.httpErrorRsp(w, ErrorResponse("upload log error", LogReqErr), http.StatusBadRequest)
 				atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
 				return
 			}
-			rows = record.NewRecord(uploadSchema, false)
+			rows = record.GetRecordFromPool(record.LogStoreRecordPool, uploadSchema)
 			rowCount = 0
 		} else if rowCount > LogMax {
-			err = h.RecordWriter.RetryWriteLogRecord(repository, logStream, logStream, rows)
+			bulk := &record.BulkRecords{Repo: repository, Logstream: logStream, Rec: rows, MsgType: record.LogStoreRecord}
+			err = h.RecordWriter.RetryWriteLogRecord(bulk)
 			if err != nil {
 				h.Logger.Error("serve upload", zap.Error(err))
 				h.httpErrorRsp(w, ErrorResponse("upload log error", LogReqErr), http.StatusBadRequest)
 				atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
 				return
 			}
-			rows = record.NewRecord(uploadSchema, false)
+			rows = record.GetRecordFromPool(record.LogStoreRecordPool, uploadSchema)
 			rowCount = 0
 		}
 		appendRow(rows, tagsByte, scanner.Bytes(), t)
 		rowCount++
 	}
 	if rows.RowNums() > 0 {
-		err = h.RecordWriter.RetryWriteLogRecord(repository, logStream, logStream, rows)
+		bulk := &record.BulkRecords{Repo: repository, Logstream: logStream, Rec: rows, MsgType: record.LogStoreRecord}
+		err = h.RecordWriter.RetryWriteLogRecord(bulk)
 		if err != nil {
 			h.Logger.Error("serve upload", zap.Error(err))
 			h.httpErrorRsp(w, ErrorResponse("upload log error", LogReqErr), http.StatusBadRequest)
@@ -1932,7 +2152,7 @@ func (h *Handler) rewriteStatementForLogStore(selectStmt *influxql.SelectStateme
 		selectStmt.Limit = param.Limit
 		if len(selectStmt.SortFields) == 0 {
 			if param.Limit > 0 {
-				selectStmt.SortFields = []*influxql.SortField{{Name: "time", Ascending: param.Ascending}, {Name: record.SeqIDField, Ascending: param.Ascending}}
+				selectStmt.SortFields = []*influxql.SortField{{Name: "time", Ascending: param.Ascending}, {Name: influxql.ShardIDField, Ascending: param.Ascending}, {Name: record.SeqIDField, Ascending: param.Ascending}}
 			} else {
 				selectStmt.SortFields = []*influxql.SortField{{Name: "time", Ascending: param.Ascending}}
 			}
@@ -2422,15 +2642,20 @@ func (h *Handler) getQueryLogExplainResult(resp *Response, repository, logStream
 	w.Write(b)
 }
 
-func (h *Handler) setRecord(rec map[string]interface{}, field string, value interface{}, truncate bool) {
+func (h *Handler) setRecord(rec map[string]interface{}, field string, value interface{}, truncate bool) (isAdd bool) {
+	isNeed := h.isNeedReply(field, value)
+	if !isNeed {
+		return false
+	}
+
 	if !truncate {
 		rec[field] = value
-		return
+		return true
 	}
 	strVal, ok := value.(string)
 	if !ok {
 		rec[field] = value
-		return
+		return true
 	}
 	if len(strVal) > MaxRowLen {
 		rec[IsOverflow] = true
@@ -2438,25 +2663,46 @@ func (h *Handler) setRecord(rec map[string]interface{}, field string, value inte
 	} else {
 		rec[field] = value
 	}
+
+	return true
 }
 
-func (h *Handler) getQueryLogResult(resp *Response, logCond *influxql.Query, para *QueryParam) (int64, []map[string]interface{}, error) {
+func (h *Handler) isNeedReply(key string, i interface{}) (isNeed bool) {
+	if i == nil {
+		return false
+	}
+
+	if key == RetryTag {
+		isRetry, _ := i.(bool)
+		if !isRetry {
+			return false
+		}
+	}
+	return true
+}
+
+func (h *Handler) getQueryLogResult(resp *Response, logCond *influxql.Query, para *QueryParam, keysMap map[string]bool) (int64, []map[string]interface{}, error) {
 	var count int64
 	var logs []map[string]interface{}
 	var unnest *influxql.Unnest
+
+	highlightWords := map[string]map[string]bool{}
 	if logCond != nil {
 		unnest = logCond.Statements[0].(*influxql.LogPipeStatement).Unnest
+		expr := &(logCond.Statements[0].(*influxql.LogPipeStatement).Cond)
+		highlightWords = getHighlightWords(expr, highlightWords)
 	}
 	for i := range resp.Results {
 		for _, s := range resp.Results[i].Series {
 			for j := range s.Values {
 				rec := map[string]interface{}{}
-				recMore := map[string]interface{}{}
-				hasMore := false
+				content := map[string]interface{}{}
 				rec[IsOverflow] = false
 
+				var fieldScopes []marshalFieldScope
 				var jsonHighlight []*JsonHighlightFragment
 				var currSeqID int64
+				var currShardID int64
 				var currT int64
 				for id, c := range s.Columns {
 					if c == record.SeqIDField {
@@ -2465,41 +2711,44 @@ func (h *Handler) getQueryLogResult(resp *Response, logCond *influxql.Query, par
 						}
 						continue
 					}
+					if c == influxql.ShardIDField {
+						if s.Values[j][id] != nil {
+							currShardID = s.Values[j][id].(int64)
+						}
+						continue
+					}
 					switch c {
 					case Time:
 						v, _ := s.Values[j][id].(time.Time)
 						rec[Timestamp] = v.UnixMilli()
 						currT = v.UnixNano()
-					case Tags:
-						tags, _ := s.Values[j][id].(string)
-						rec[Tags] = strings.Split(tags, tokenizer.TAGS_SPLITTER)
-					case Content:
-						h.setRecord(rec, Content, s.Values[j][id], para.Truncate)
-						if para.Highlight && para.Pretty {
-							jsonHighlight = append(jsonHighlight, getJsonHighlight(c, rec[c], logCond))
-						}
 					default:
 						if unnest != nil && unnest.IsUnnestField(c) {
 							h.setRecord(rec, c, s.Values[j][id], para.Truncate)
+							keysMap[c] = true
 						} else {
-							hasMore = true
-							h.setRecord(recMore, c, s.Values[j][id], para.Truncate)
+							isAdd := h.setRecord(content, c, s.Values[j][id], para.Truncate)
+							if !isAdd {
+								continue
+							}
+
+							if para.Highlight && logCond != nil {
+								fieldScopes = h.appendFieldScopes(fieldScopes, c, content[c])
+							}
+
+							keysMap[c] = true
 							if para.Highlight && para.Pretty {
-								jsonHighlight = append(jsonHighlight, getJsonHighlight(c, recMore[c], logCond))
+								jsonHighlight = append(jsonHighlight, getJsonHighlight(c, content[c], highlightWords))
 							}
 						}
 					}
 				}
-				rec[Cursor] = base64.StdEncoding.EncodeToString([]byte(strconv.FormatInt(currT, 10) + "|" + strconv.FormatInt(currSeqID, 10) + "^^"))
-				if hasMore {
-					if content, ok := rec[Content]; ok {
-						recMore[Content] = content
-					}
-					rec[Content] = recMore
-				}
+
+				rec[Cursor] = base64.StdEncoding.EncodeToString([]byte(strconv.FormatInt(currT, 10) + "|" + strconv.FormatInt(currShardID, 10) + "|" + strconv.FormatInt(currSeqID, 10) + "^^"))
+				rec[Content] = content
 				count += 1
 				if para.Highlight {
-					rec[Highlight] = h.getHighlightFragments(rec, logCond, tokenizer.VersionLatest)
+					rec[Highlight] = h.getHighlightFragments(rec, highlightWords, fieldScopes)
 					if para.Pretty {
 						rec[JsonHighlight] = map[string]interface{}{"segments": jsonHighlight}
 					}
@@ -2510,6 +2759,31 @@ func (h *Handler) getQueryLogResult(resp *Response, logCond *influxql.Query, par
 		}
 	}
 	return count, logs, nil
+}
+
+type marshalFieldScope struct {
+	key   string
+	start int
+	end   int
+}
+
+func (h *Handler) appendFieldScopes(fieldScopes []marshalFieldScope, k string, i interface{}) []marshalFieldScope {
+	keyLen := len(k) + MarshalFieldPunctuation
+	if len(fieldScopes) == 0 {
+		fieldScopes = append(fieldScopes, marshalFieldScope{k, keyLen, keyLen + h.getMarshalFieldLen(i)})
+	} else {
+		lastFs := fieldScopes[len(fieldScopes)-1]
+		fieldScopes = append(fieldScopes, marshalFieldScope{k, keyLen + lastFs.end, keyLen + lastFs.end + h.getMarshalFieldLen(i)})
+	}
+	return fieldScopes
+}
+
+func (h *Handler) getMarshalFieldLen(i interface{}) int {
+	b, err := json.Marshal(i)
+	if err != nil {
+		h.Logger.Error("highlight marshal field len error", zap.Any("value", i))
+	}
+	return len(b)
 }
 
 func (h *Handler) serveContextQueryLog(w http.ResponseWriter, r *http.Request, user meta2.User) {
@@ -2543,6 +2817,7 @@ func (h *Handler) serveContextQueryLog(w http.ResponseWriter, r *http.Request, u
 	}
 	var count int64
 	var logs []map[string]interface{}
+	keysMap := map[string]bool{}
 	sgs, err := h.MetaClient.GetShardGroupByTimeRange(repository, logStream, time.Unix(0, para.TimeRange.start), time.Unix(0, para.TimeRange.end))
 	tm := time.Now()
 	isFinish := true
@@ -2576,7 +2851,7 @@ func (h *Handler) serveContextQueryLog(w http.ResponseWriter, r *http.Request, u
 			h.getQueryLogExplainResult(resp, repository, logStream, w, t)
 			return
 		}
-		currCount, currLog, err := h.getQueryLogResult(resp, logCond, para)
+		currCount, currLog, err := h.getQueryLogResult(resp, logCond, para, keysMap)
 		if err != nil {
 			h.Logger.Error("query err ", zap.Error(err))
 			h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
@@ -2662,7 +2937,7 @@ func (h *Handler) serveContextQueryLog(w http.ResponseWriter, r *http.Request, u
 	}
 
 	res := QueryLogResponse{Success: true, Code: "200", Message: "", Request_id: uuid.TimeUUID().String(),
-		Count: count, Progress: progress, Logs: logs, Took_ms: time.Since(t).Milliseconds(), Scroll_id: scrollIDString, Complete_progress: completeProgress, Cursor_time: cursorTime}
+		Count: count, Progress: progress, Logs: logs, Keys: getKeys(keysMap), Took_ms: time.Since(t).Milliseconds(), Scroll_id: scrollIDString, Complete_progress: completeProgress, Cursor_time: cursorTime}
 
 	b, err := json.Marshal(res)
 	if err != nil {

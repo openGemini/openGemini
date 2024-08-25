@@ -454,13 +454,12 @@ func NewObsWriter(path, fileName string, obsOpts *obs.ObsOptions) (*obsWriter, e
 	w.fd = fd
 	w.fileWriter = fileops.NewFileWriter(w.fd, fileops.DefaultWriterBufferSize, &lockPath)
 
-	fileInfo, err := w.fd.Stat()
+	fileFize, err := w.fd.Size()
 	if err != nil {
 		log.Error("execute stat() failed", zap.String("path", path), zap.Error(err))
 		return nil, err
 	}
-	w.fileSize = fileInfo.Size()
-
+	w.fileSize = fileFize
 	return w, nil
 }
 
@@ -470,12 +469,12 @@ func NewObsWriterByFd(fd fileops.File, obsOpts *obs.ObsOptions) (*obsWriter, err
 	w.fd = fd
 	w.fileWriter = fileops.NewFileWriter(w.fd, fileops.DefaultWriterBufferSize, &lockPath)
 
-	fileInfo, err := w.fd.Stat()
+	fileFize, err := w.fd.Size()
 	if err != nil {
 		log.Error("execute stat() failed", zap.Error(err))
 		return nil, err
 	}
-	w.fileSize = fileInfo.Size()
+	w.fileSize = fileFize
 	w.flag = w.flag | FD_OUTSIDE
 
 	return w, nil

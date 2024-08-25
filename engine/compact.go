@@ -146,8 +146,9 @@ func (c *Compactor) merger() {
 			log.Info("closed", zap.Uint64("shardId", id))
 			return
 		default:
+			conf := config.GetStoreConfig()
 			full := false
-			if config.GetStoreConfig().UnorderedOnly {
+			if conf.UnorderedOnly || conf.Merge.MergeSelfOnly {
 				d := fasttime.UnixTimestamp() - sh.LastWriteTime()
 				full = d >= atomic.LoadUint64(&fullCompColdDuration)
 			}

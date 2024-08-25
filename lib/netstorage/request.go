@@ -432,6 +432,7 @@ func (r *ShowQueriesRequest) UnmarshalBinary(buf []byte) error {
 
 type QueryExeInfo struct {
 	QueryID   uint64
+	PtID      uint32
 	Stmt      string
 	Database  string
 	BeginTime int64
@@ -448,6 +449,7 @@ func (r *ShowQueriesResponse) MarshalBinary() ([]byte, error) {
 	for _, info := range r.QueryExeInfos {
 		pb.QueryExeInfos = append(pb.QueryExeInfos, &internal2.QueryExeInfo{
 			QueryID:   proto.Uint64(info.QueryID),
+			PtID:      proto.Uint32(info.PtID),
 			Stmt:      proto.String(info.Stmt),
 			Database:  proto.String(info.Database),
 			BeginTime: proto.Int64(info.BeginTime),
@@ -466,6 +468,7 @@ func (r *ShowQueriesResponse) UnmarshalBinary(buf []byte) error {
 	for _, pbInfo := range pb.QueryExeInfos {
 		r.QueryExeInfos = append(r.QueryExeInfos, &QueryExeInfo{
 			QueryID:   pbInfo.GetQueryID(),
+			PtID:      pbInfo.GetPtID(),
 			Stmt:      pbInfo.GetStmt(),
 			Database:  pbInfo.GetDatabase(),
 			BeginTime: pbInfo.GetBeginTime(),

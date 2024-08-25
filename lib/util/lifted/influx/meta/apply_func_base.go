@@ -230,12 +230,15 @@ func ApplyCreateDataNode(data *Data, cmd *proto2.Command) error {
 	}
 	dataNode := data.DataNodeByHttpHost(v.GetHTTPAddr())
 	if dataNode != nil {
+		if AzHard == repDisPolicy && v.GetAz() != dataNode.Az {
+			return ErrAzChange
+		}
 		data.MaxConnID++
 		dataNode.ConnID = data.MaxConnID
 		return nil
 	}
 
-	_, err := data.CreateDataNode(v.GetHTTPAddr(), v.GetTCPAddr(), v.GetRole())
+	_, err := data.CreateDataNode(v.GetHTTPAddr(), v.GetTCPAddr(), v.GetRole(), v.GetAz())
 	return err
 }
 
@@ -406,12 +409,14 @@ func ApplyCreateDbPtViewCommand(data *Data, cmd *proto2.Command) error {
 	if !ok {
 		panic(fmt.Errorf("%s is not a CreateDbPtViewCommand", ext))
 	}
-
-	if err := data.CreateDBPtView(v.GetDbName()); err != nil {
+	var err error
+	if ok, err = data.CreateDBPtView(v.GetDbName()); err != nil {
 		return err
 	}
-
-	return data.CreateReplication(v.GetDbName(), v.GetReplicaNum())
+	if ok {
+		return data.CreateDBReplication(v.GetDbName(), v.GetReplicaNum())
+	}
+	return nil
 }
 
 func ApplyUpdateShardDownSampleInfo(data *Data, cmd *proto2.Command) error {
@@ -511,8 +516,7 @@ func ApplyUpdateReplication(data *Data, cmd *proto2.Command) error {
 	rgId := v.GetRepGroupId()
 	peers := v.GetPeers()
 	masterId := v.GetMasterId()
-	rgStatus := v.GetRgStatus()
-	return data.UpdateReplication(db, rgId, masterId, peers, rgStatus)
+	return data.UpdateReplication(db, rgId, masterId, peers)
 }
 
 func ApplyUpdateMeasurement(data *Data, cmd *proto2.Command) error {

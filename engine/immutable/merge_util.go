@@ -60,6 +60,12 @@ func (ctx *MergeContext) reset() {
 	ctx.unordered.reset()
 }
 
+func (ctx *MergeContext) UpdateLevel(l uint16) {
+	if ctx.level < l {
+		ctx.level = l
+	}
+}
+
 func (ctx *MergeContext) AddUnordered(f TSSPFile) {
 	min, max, err := f.MinMaxTime()
 	if err != nil {
@@ -104,14 +110,20 @@ func (ctx *MergeContext) MergeSelf() bool {
 		(conf.Merge.MaxMergeSelfLevel > ctx.level && int64(conf.Merge.MaxUnorderedFileSize) > ctx.unordered.size)
 }
 
+func (ctx *MergeContext) ToLevel() uint16 {
+	return ctx.level + 1
+}
+
+func (ctx *MergeContext) MergeSelfFast() bool {
+	return ctx.ToLevel() == config.GetStoreConfig().TSSPToParquetLevel || ctx.ToLevel() <= MergeSelfFastModeMaxLevel
+}
+
 var mergeContextPool = sync.Pool{}
 
 func NewMergeContext(mst string, level uint16) *MergeContext {
 	ctx, ok := mergeContextPool.Get().(*MergeContext)
-	if !ok {
-		return &MergeContext{
-			mst:       mst,
-			level:     level,
+	if !ok || ctx == nil {
+		ctx = &MergeContext{
 			order:     &mergeFileInfo{},
 			unordered: &mergeFileInfo{},
 			tr:        util.TimeRange{Min: math.MaxInt64, Max: math.MinInt64},
@@ -200,27 +212,53 @@ func buildLevelMergeContext(mst string, files *TSSPFiles, level uint16, callback
 }
 
 func buildFullMergeContext(mst string, files *TSSPFiles, callback func(ctx *MergeContext)) {
+	ok := buildLowLevelFullMergeContext(mst, files, config.GetStoreConfig().TSSPToParquetLevel, callback)
+	if ok {
+		return
+	}
+
 	conf := &config.GetStoreConfig().Merge
-	ctx := NewMergeContext(mst, math.MaxUint16)
+	ctx := NewMergeContext(mst, 0)
 
 	for _, f := range files.Files() {
 		if ctx.UnorderedLen() == 0 && f.FileSize() >= int64(conf.MaxUnorderedFileSize) {
 			continue
 		}
+
+		ctx.UpdateLevel(f.FileNameMerge())
 		ctx.AddUnordered(f)
 		if ctx.Limited() {
 			callback(ctx)
-			ctx = NewMergeContext(mst, math.MaxUint16)
+			ctx = NewMergeContext(mst, 0)
 		}
 	}
+	callback(ctx)
+}
+
+func buildLowLevelFullMergeContext(mst string, files *TSSPFiles, maxLevel uint16, callback func(ctx *MergeContext)) bool {
+	if maxLevel == 0 {
+		return false
+	}
+
+	ctx := NewMergeContext(mst, maxLevel)
+
+	for _, f := range files.Files() {
+		if f.FileNameMerge() >= maxLevel {
+			continue
+		}
+		ctx.AddUnordered(f)
+	}
+	callback(ctx)
+	return ctx.UnorderedLen() > 0
 }
 
 func buildNormalMergeContext(mst string, files *TSSPFiles) *MergeContext {
 	files.RLock()
 	defer files.RUnlock()
-	ctx := NewMergeContext(mst, math.MaxUint16)
+	ctx := NewMergeContext(mst, 0)
 
 	for _, f := range files.Files() {
+		ctx.UpdateLevel(f.FileNameMerge())
 		ctx.AddUnordered(f)
 		if ctx.Limited() {
 			break

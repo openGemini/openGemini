@@ -49,7 +49,7 @@ const (
 	DefaultIngesterAddress = "127.0.0.1:8400"
 	DefaultSelectAddress   = "127.0.0.1:8401"
 
-	DefaultInterruptSqlMemPct = 90
+	DefaultInterruptSqlMemPct = 85
 
 	CompressAlgoLZ4    = "lz4"
 	CompressAlgoSnappy = "snappy"
@@ -272,9 +272,10 @@ type Store struct {
 	InterruptSqlMemPct   int           `toml:"interrupt-sql-mem-pct"`
 	ProactiveMgrInterval toml.Duration `toml:"proactive-manager-interval"`
 
-	TemporaryIndexCompressMode int  `toml:"temporary-index-compress-mode"`
-	ChunkMetaCompressMode      int  `toml:"chunk-meta-compress-mode"`
-	IndexReadCachePersistent   bool `toml:"index-read-cache-persistent"`
+	TemporaryIndexCompressMode int    `toml:"temporary-index-compress-mode"`
+	ChunkMetaCompressMode      int    `toml:"chunk-meta-compress-mode"`
+	IndexReadCachePersistent   bool   `toml:"index-read-cache-persistent"`
+	FloatCompressAlgorithm     string `toml:"float-compress-algorithm"`
 
 	StringCompressAlgo string `toml:"string-compress-algo"`
 	// Ordered data and unordered data are not distinguished. All data is processed as unordered data.
@@ -289,6 +290,8 @@ type Store struct {
 
 	// the level of the TSSP file to be converted to a Parquet. 0: not convert
 	TSSPToParquetLevel uint16 `toml:"tssp-to-parquet-level"`
+
+	AvailabilityZone string `toml:"availability-zone"`
 }
 
 // NewStore returns the default configuration for tsdb.
@@ -346,6 +349,9 @@ func (c *Store) Corrector(cpuNum int, memorySize toml.Size) {
 	}
 	defaultShardMutableSizeLimit := toml.Size(uint64Limit(8*MB, 1*GB, uint64(memorySize/256)))
 	defaultNodeMutableSizeLimit := toml.Size(uint64Limit(32*MB, 16*GB, uint64(memorySize/16)))
+	if IsLogKeeper() {
+		defaultNodeMutableSizeLimit = toml.Size(uint64Limit(32*MB, 16*GB, uint64(memorySize/8)))
+	}
 
 	items := [][2]*toml.Size{
 		{&c.MemTable.ShardMutableSizeLimit, &defaultShardMutableSizeLimit},
@@ -512,4 +518,8 @@ func defaultMerge() Merge {
 		MinInterval:            toml.Duration(defaultMinInterval),
 		MaxMergeSelfLevel:      defaultMaxMergeSelfLevel,
 	}
+}
+
+func PreFullCompactLevel() uint16 {
+	return GetStoreConfig().TSSPToParquetLevel
 }

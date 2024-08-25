@@ -298,6 +298,11 @@ func TestTSStoreCorrector(t *testing.T) {
 	conf.Data.Corrector(conf.Common.CPUNum, 0)
 	assert.Equal(t, config.ReadMetaCachePct, int(conf.Data.ReadCache.ReadMetaCacheEnPct))
 	assert.Equal(t, config.ReadDataCachePct, int(conf.Data.ReadCache.ReadDataCacheEnPct))
+
+	config.SetProductType(config.LogKeeperService)
+	defer config.SetProductType("")
+	conf.Data.Corrector(conf.Common.CPUNum, 4*config.GB)
+	assert.NotEqual(t, 4*config.GB/8, conf.Data.MemTable.NodeMutableSizeLimit)
 }
 
 func TestCompactType(t *testing.T) {

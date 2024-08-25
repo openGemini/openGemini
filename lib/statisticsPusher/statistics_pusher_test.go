@@ -18,6 +18,7 @@ package statisticsPusher
 
 import (
 	"testing"
+	"time"
 
 	"github.com/influxdata/influxdb/toml"
 	"github.com/openGemini/openGemini/lib/config"
@@ -42,8 +43,11 @@ func TestPusher(t *testing.T) {
 	sp := NewStatisticsPusher(conf, logger.NewLogger(errno.ModuleUnknown))
 	defer sp.Stop()
 
+	IsMeta = true
+	sp.pushInterval = 100 * time.Millisecond
 	sp.Register(mockCollect)
 	sp.Start()
+	time.Sleep(200 * time.Millisecond)
 
 	if len(sp.pushers) != 2 {
 		t.Fatalf("exp %d pushers, got: %d", 2, len(sp.pushers))

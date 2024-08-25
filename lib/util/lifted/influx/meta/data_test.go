@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/influxdata/influxdb/logger"
+	"github.com/influxdata/influxdb/models"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
@@ -358,8 +359,8 @@ func TestData_PruneGroups(t *testing.T) {
 func initData() *Data {
 	data := &Data{PtNumPerNode: 1}
 	DataLogger = logger.New(os.Stderr)
-	data.CreateDataNode("127.0.0.1:8086", "127.0.0.1:8188", "")
-	data.CreateDataNode("127.0.0.2:8086", "127.0.0.2:8188", "")
+	data.CreateDataNode("127.0.0.1:8086", "127.0.0.1:8188", "", "")
+	data.CreateDataNode("127.0.0.2:8086", "127.0.0.2:8188", "", "")
 	return data
 }
 
@@ -621,7 +622,7 @@ func TestShardGroupOutOfOrder(t *testing.T) {
 	data := Data{}
 	data.PtNumPerNode = 1
 	DataLogger = logger.New(os.Stderr)
-	_, err := data.CreateDataNode("127.0.0.1:8400", "127.0.0.1:8401", "")
+	_, err := data.CreateDataNode("127.0.0.1:8400", "127.0.0.1:8401", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -690,7 +691,7 @@ func TestData_CreateShardGroup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = data.CreateDBPtView(dbName)
+	_, err = data.CreateDBPtView(dbName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -727,7 +728,7 @@ func TestData_CreateShardGroup(t *testing.T) {
 	assert(igs[0].StartTime.Equal(mustParseTime(time.RFC3339Nano, "2022-06-08T08:00:00Z")), "index group startTime error")
 	assert(igs[0].EndTime.Equal(mustParseTime(time.RFC3339Nano, "2022-06-08T10:00:00Z")), "index group endTime error")
 	data.ExpandShardsEnable = true
-	_, err = data.CreateDataNode("127.0.0.3:8400", "127.0.0.3:8401", "")
+	_, err = data.CreateDataNode("127.0.0.3:8400", "127.0.0.3:8401", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -848,7 +849,7 @@ func initDataWithDataNode() *Data {
 
 	for i := 1; i <= 40; i++ {
 		nodeIp := prefix + fmt.Sprint(i)
-		_, err := data.CreateDataNode(nodeIp+fmt.Sprint(selectPort), nodeIp+fmt.Sprint(writePort), "")
+		_, err := data.CreateDataNode(nodeIp+fmt.Sprint(selectPort), nodeIp+fmt.Sprint(writePort), "", "")
 		if err != nil {
 			panic(err)
 		}
@@ -1225,7 +1226,7 @@ func TestData_Marshal_Unmarshal(t *testing.T) {
 	dbPt1 := generateDbPtInfo("db0", 0, 1, dbBriefInfo)
 	mei := NewMigrateEventInfo(dbPt1.String(), 1, dbPt1, 1, 1)
 	data.MigrateEvents[mei.eventId] = mei
-	pb := data.Marshal()
+	pb := data.Marshal(false)
 	dataUnMarshal := &Data{}
 	dataUnMarshal.Unmarshal(pb)
 
@@ -1578,9 +1579,9 @@ func TestUpdateMeasurement(t *testing.T) {
 func TestInitDataNodePtView(t *testing.T) {
 	data := &Data{}
 	data.PtNumPerNode = 1
-	data.DataNodes = append(data.DataNodes, DataNode{NodeInfo{ID: 5, Role: NodeWriter}, 0, 0, 0})
-	data.DataNodes = append(data.DataNodes, DataNode{NodeInfo{ID: 6, Role: NodeDefault}, 0, 0, 0})
-	data.DataNodes = append(data.DataNodes, DataNode{NodeInfo{ID: 7, Role: NodeReader}, 0, 0, 0})
+	data.DataNodes = append(data.DataNodes, DataNode{NodeInfo{ID: 5, Role: NodeWriter}, 0, 0, 0, ""})
+	data.DataNodes = append(data.DataNodes, DataNode{NodeInfo{ID: 6, Role: NodeDefault}, 0, 0, 0, ""})
+	data.DataNodes = append(data.DataNodes, DataNode{NodeInfo{ID: 7, Role: NodeReader}, 0, 0, 0, ""})
 	data.initDataNodePtView(data.GetClusterPtNum())
 	if data.ClusterPtNum != 2 {
 		t.Fatalf("calculate ClusterPtNum failed")
@@ -1616,12 +1617,12 @@ func TestData_mapShardsToMst(t *testing.T) {
 	}
 	data := &Data{PtNumPerNode: 1}
 	DataLogger = logger.New(os.Stderr)
-	data.CreateDataNode("127.0.0.1:8086", "127.0.0.1:8188", "")
-	data.CreateDataNode("127.0.0.2:8086", "127.0.0.2:8188", "")
-	data.CreateDataNode("127.0.0.3:8086", "127.0.0.3:8188", "")
-	data.CreateDataNode("127.0.0.4:8086", "127.0.0.4:8188", "")
-	data.CreateDataNode("127.0.0.5:8086", "127.0.0.5:8188", "")
-	data.CreateDataNode("127.0.0.6:8086", "127.0.0.6:8188", "")
+	data.CreateDataNode("127.0.0.1:8086", "127.0.0.1:8188", "", "")
+	data.CreateDataNode("127.0.0.2:8086", "127.0.0.2:8188", "", "")
+	data.CreateDataNode("127.0.0.3:8086", "127.0.0.3:8188", "", "")
+	data.CreateDataNode("127.0.0.4:8086", "127.0.0.4:8188", "", "")
+	data.CreateDataNode("127.0.0.5:8086", "127.0.0.5:8188", "", "")
+	data.CreateDataNode("127.0.0.6:8086", "127.0.0.6:8188", "", "")
 	must := func(err error) {
 		if err != nil {
 			t.Fatal(err)
@@ -2641,4 +2642,454 @@ func Test_SQLite_Transaction(t *testing.T) {
 		}
 		fmt.Println(name)
 	}
+}
+
+func TestData_ShowShardsFromMst(t *testing.T) {
+	data := &Data{PtNumPerNode: 1}
+	DataLogger = logger.New(os.Stderr)
+	data.CreateDataNode("127.0.0.1:8086", "127.0.0.1:8188", "", "")
+	data.CreateDataNode("127.0.0.2:8086", "127.0.0.2:8188", "", "")
+	data.CreateDataNode("127.0.0.3:8086", "127.0.0.3:8188", "", "")
+	data.CreateDataNode("127.0.0.4:8086", "127.0.0.4:8188", "", "")
+	data.CreateDataNode("127.0.0.5:8086", "127.0.0.5:8188", "", "")
+	data.CreateDataNode("127.0.0.6:8086", "127.0.0.6:8188", "", "")
+	must := func(err error) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	data.CreateDBPtView("foo")
+	must(data.CreateDatabase("foo", nil, nil, false, 1, nil))
+	rp := NewRetentionPolicyInfo("bar")
+	rp.ShardGroupDuration = 24 * time.Hour
+	must(data.CreateRetentionPolicy("foo", rp, false))
+	shardGroups := make([]ShardGroupInfo, 0, 10)
+	sg := []ShardGroupInfo{
+		{
+			ID:        1,
+			DeletedAt: time.Now(),
+			Shards: []ShardInfo{
+				{
+					ID: 1,
+				},
+				{
+					ID: 2,
+				},
+				{
+					ID: 3,
+				},
+				{
+					ID: 4,
+				},
+				{
+					ID: 5,
+				},
+				{
+					ID: 6,
+				},
+			},
+		},
+		{
+			ID: 2,
+			Shards: []ShardInfo{
+				{
+					ID: 11,
+				},
+				{
+					ID: 12,
+				},
+				{
+					ID: 13,
+				},
+				{
+					ID: 14,
+				},
+				{
+					ID: 15,
+				},
+				{
+					ID: 16,
+				},
+			},
+		},
+	}
+	shardGroups = append(shardGroups, sg...)
+	must(data.CreateMeasurement("foo", "bar", "cpu",
+		&proto2.ShardKeyInfo{ShardKey: []string{"hostname"}, Type: proto.String(influxql.HASH)}, 3, nil, 0, nil, nil, nil))
+	must(data.CreateMeasurement("foo", "bar", "mem",
+		&proto2.ShardKeyInfo{ShardKey: []string{"hostname"}, Type: proto.String(influxql.HASH)}, 0, nil, 0, nil, nil, nil))
+	data.Databases["foo"].RetentionPolicies["bar"].ShardGroups = shardGroups
+	data.mapShardsToMst("db0", data.Databases["foo"].RetentionPolicies["bar"], &shardGroups[0])
+	data.mapShardsToMst("db0", data.Databases["foo"].RetentionPolicies["bar"], &shardGroups[1])
+
+	type args struct {
+		db  string
+		rp  string
+		mst string
+	}
+	tests := []struct {
+		name   string
+		fields Data
+		args   args
+		want   models.Rows
+	}{
+		{
+			name:   "test1",
+			fields: *data,
+			args: args{
+				db:  "foo",
+				rp:  "bar",
+				mst: "cpu",
+			},
+			want: []*models.Row{
+				{
+					Name:    "foo.bar.cpu",
+					Columns: []string{"id", "database", "retention_policy", "measurement", "shard_group"},
+					Values: [][]interface{}{
+						{
+							uint64(11),
+							"foo",
+							"bar",
+							"cpu",
+							uint64(2),
+						},
+						{
+							uint64(12),
+							"foo",
+							"bar",
+							"cpu",
+							uint64(2),
+						},
+						{
+							uint64(16),
+							"foo",
+							"bar",
+							"cpu",
+							uint64(2),
+						},
+					},
+				},
+			},
+		},
+		{
+			name:   "test1",
+			fields: *data,
+			args: args{
+				db:  "foo",
+				rp:  "bar",
+				mst: "mem",
+			},
+			want: []*models.Row{
+				{
+					Name:    "foo.bar.mem",
+					Columns: []string{"id", "database", "retention_policy", "measurement", "shard_group"},
+					Values: [][]interface{}{
+						{
+							uint64(11),
+							"foo",
+							"bar",
+							"mem",
+							uint64(2),
+						},
+						{
+							uint64(12),
+							"foo",
+							"bar",
+							"mem",
+							uint64(2),
+						},
+						{
+							uint64(13),
+							"foo",
+							"bar",
+							"mem",
+							uint64(2),
+						},
+						{
+							uint64(14),
+							"foo",
+							"bar",
+							"mem",
+							uint64(2),
+						},
+						{
+							uint64(15),
+							"foo",
+							"bar",
+							"mem",
+							uint64(2),
+						},
+						{
+							uint64(16),
+							"foo",
+							"bar",
+							"mem",
+							uint64(2),
+						},
+					},
+				},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data := &Data{
+				Term:               tt.fields.Term,
+				Index:              tt.fields.Index,
+				ClusterID:          tt.fields.ClusterID,
+				ClusterPtNum:       tt.fields.ClusterPtNum,
+				PtNumPerNode:       tt.fields.PtNumPerNode,
+				NumOfShards:        tt.fields.NumOfShards,
+				MetaNodes:          tt.fields.MetaNodes,
+				DataNodes:          tt.fields.DataNodes,
+				SqlNodes:           tt.fields.SqlNodes,
+				PtView:             tt.fields.PtView,
+				ReplicaGroups:      tt.fields.ReplicaGroups,
+				Databases:          tt.fields.Databases,
+				Streams:            tt.fields.Streams,
+				Users:              tt.fields.Users,
+				MigrateEvents:      tt.fields.MigrateEvents,
+				QueryIDInit:        tt.fields.QueryIDInit,
+				AdminUserExists:    tt.fields.AdminUserExists,
+				TakeOverEnabled:    tt.fields.TakeOverEnabled,
+				BalancerEnabled:    tt.fields.BalancerEnabled,
+				ExpandShardsEnable: tt.fields.ExpandShardsEnable,
+				MaxNodeID:          tt.fields.MaxNodeID,
+				MaxShardGroupID:    tt.fields.MaxShardGroupID,
+				MaxShardID:         tt.fields.MaxShardID,
+				MaxMstID:           tt.fields.MaxMstID,
+				MaxIndexGroupID:    tt.fields.MaxIndexGroupID,
+				MaxIndexID:         tt.fields.MaxIndexID,
+				MaxEventOpId:       tt.fields.MaxEventOpId,
+				MaxDownSampleID:    tt.fields.MaxDownSampleID,
+				MaxStreamID:        tt.fields.MaxStreamID,
+				MaxConnID:          tt.fields.MaxConnID,
+				MaxSubscriptionID:  tt.fields.MaxSubscriptionID,
+				MaxCQChangeID:      tt.fields.MaxCQChangeID,
+				opsMapMu:           tt.fields.opsMapMu,
+				OpsMap:             tt.fields.OpsMap,
+				OpsMapMinIndex:     tt.fields.OpsMapMinIndex,
+				OpsMapMaxIndex:     tt.fields.OpsMapMaxIndex,
+				OpsToMarshalIndex:  tt.fields.OpsToMarshalIndex,
+				SQLite:             tt.fields.SQLite,
+			}
+			got := data.ShowShardsFromMst(tt.args.db, tt.args.rp, tt.args.mst)
+			if len(got) != len(tt.want) {
+				t.Fatal("got wrong num of shards")
+			}
+			for i := range got {
+				if !reflect.DeepEqual(got[i], tt.want[i]) {
+					t.Errorf("Data.ShowShardsFromMst() = %v, want %v", got[i], tt.want[i])
+				}
+			}
+
+		})
+	}
+}
+
+func TestGetPtInfosByDbnameForRep(t *testing.T) {
+	data := &Data{
+		TakeOverEnabled: true,
+		PtNumPerNode:    2,
+		Databases: map[string]*DatabaseInfo{
+			"db0": &DatabaseInfo{
+				Name:     "db0",
+				ReplicaN: 3,
+			},
+		},
+		ReplicaGroups: map[string][]ReplicaGroup{
+			"db0": []ReplicaGroup{
+				{
+					ID:         0,
+					MasterPtID: 1,
+					Peers:      []Peer{{ID: 3}},
+					Status:     SubHealth,
+				},
+				{
+					ID:         1,
+					MasterPtID: 2,
+					Peers:      []Peer{{ID: 4}},
+					Status:     UnFull,
+				},
+			},
+		},
+		PtView: map[string]DBPtInfos{
+			"db0": {
+				{
+					PtId:   1,
+					Owner:  PtOwner{NodeID: 1},
+					Status: Offline,
+					RGID:   0,
+				},
+				{
+					PtId:   2,
+					Owner:  PtOwner{NodeID: 1},
+					Status: Offline,
+					RGID:   1,
+				},
+				{
+					PtId:   3,
+					Owner:  PtOwner{NodeID: 2},
+					Status: Offline,
+					RGID:   0,
+				},
+				{
+					PtId:   4,
+					Owner:  PtOwner{NodeID: 2},
+					Status: Offline,
+					RGID:   1,
+				},
+			},
+		},
+	}
+	config.SetHaPolicy(config.RepPolicy)
+	res, err := data.GetPtInfosByDbname("db0", true, 3)
+	assert2.Equal(t, nil, err)
+	assert2.Equal(t, 2, len(res))
+	assert2.Equal(t, uint32(1), res[0].Pti.PtId)
+	assert2.Equal(t, uint32(3), res[1].Pti.PtId)
+}
+
+func TestUpdatePtStatusForRep1(t *testing.T) {
+	data := &Data{
+		TakeOverEnabled: true,
+		ClusterPtNum:    1,
+		Databases: map[string]*DatabaseInfo{
+			"db0": &DatabaseInfo{
+				Name:     "db0",
+				ReplicaN: 1,
+			},
+		},
+		ReplicaGroups: map[string][]ReplicaGroup{
+			"db0": []ReplicaGroup{
+				{
+					ID:         0,
+					MasterPtID: 0,
+					Status:     SubHealth,
+				},
+			},
+		},
+		PtView: map[string]DBPtInfos{
+			"db0": {
+				{
+					PtId:   0,
+					Owner:  PtOwner{NodeID: 1},
+					Status: Offline,
+					RGID:   0,
+				},
+			},
+		},
+	}
+	DataLogger = logger1.GetLogger()
+	config.SetHaPolicy(config.RepPolicy)
+	data.updatePtStatus("db0", 0, 1, Online)
+	assert2.Equal(t, Health, data.ReplicaGroups["db0"][0].Status)
+}
+
+func TestUpdatePtStatusForRep2(t *testing.T) {
+	data := &Data{
+		TakeOverEnabled: true,
+		ClusterPtNum:    3,
+		Databases: map[string]*DatabaseInfo{
+			"db0": &DatabaseInfo{
+				Name:     "db0",
+				ReplicaN: 3,
+			},
+		},
+		ReplicaGroups: map[string][]ReplicaGroup{
+			"db0": []ReplicaGroup{
+				{
+					ID:         0,
+					MasterPtID: 0,
+					Peers:      []Peer{Peer{ID: 1}, Peer{ID: 2}},
+					Status:     SubHealth,
+				},
+			},
+		},
+		PtView: map[string]DBPtInfos{
+			"db0": {
+				{
+					PtId:   0,
+					Owner:  PtOwner{NodeID: 1},
+					Status: Offline,
+					RGID:   0,
+				},
+				{
+					PtId:   1,
+					Owner:  PtOwner{NodeID: 2},
+					Status: Offline,
+					RGID:   0,
+				},
+				{
+					PtId:   2,
+					Owner:  PtOwner{NodeID: 3},
+					Status: Offline,
+					RGID:   0,
+				},
+			},
+		},
+	}
+	DataLogger = logger1.GetLogger()
+	config.SetHaPolicy(config.RepPolicy)
+	data.updatePtStatus("db0", 0, 1, Online)
+	assert2.Equal(t, SubHealth, data.ReplicaGroups["db0"][0].Status)
+	data.updatePtStatus("db0", 1, 1, Online)
+	assert2.Equal(t, Health, data.ReplicaGroups["db0"][0].Status)
+	data.updatePtStatus("db0", 2, 1, Online)
+	assert2.Equal(t, Health, data.ReplicaGroups["db0"][0].Status)
+	data.ReplicaGroups["db0"][0].Status = UnFull
+	data.updatePtStatus("db0", 2, 1, Online)
+}
+
+func TestUpdatePtViewStatusForRep1(t *testing.T) {
+	data := &Data{
+		TakeOverEnabled: true,
+		ClusterPtNum:    3,
+		Databases: map[string]*DatabaseInfo{
+			"db0": &DatabaseInfo{
+				Name:     "db0",
+				ReplicaN: 3,
+			},
+		},
+		ReplicaGroups: map[string][]ReplicaGroup{
+			"db0": []ReplicaGroup{
+				{
+					ID:         0,
+					MasterPtID: 0,
+					Peers:      []Peer{Peer{ID: 1}, Peer{ID: 2}},
+					Status:     Health,
+				},
+			},
+		},
+		PtView: map[string]DBPtInfos{
+			"db0": {
+				{
+					PtId:   0,
+					Owner:  PtOwner{NodeID: 1},
+					Status: Online,
+					RGID:   0,
+				},
+				{
+					PtId:   1,
+					Owner:  PtOwner{NodeID: 2},
+					Status: Online,
+					RGID:   0,
+				},
+				{
+					PtId:   2,
+					Owner:  PtOwner{NodeID: 3},
+					Status: Online,
+					RGID:   0,
+				},
+			},
+		},
+	}
+	DataLogger = logger1.GetLogger()
+	config.SetHaPolicy(config.RepPolicy)
+	data.updatePtViewStatus(2, Offline)
+	assert2.Equal(t, Health, data.ReplicaGroups["db0"][0].Status)
+	data.updatePtViewStatus(1, Offline)
+	assert2.Equal(t, SubHealth, data.ReplicaGroups["db0"][0].Status)
+	data.updatePtViewStatus(3, Offline)
 }

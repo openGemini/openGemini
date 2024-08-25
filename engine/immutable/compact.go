@@ -46,7 +46,7 @@ var (
 	fullCompactingCount   int64
 	maxFullCompactor      = cpu.GetCpuNum() / 2
 	maxCompactor          = cpu.GetCpuNum()
-	compLimiter           limiter.Fixed
+	compLimiter           = limiter.NewFixed(maxCompactor)
 	ErrCompStopped        = errors.New("compact stopped")
 	ErrDownSampleStopped  = errors.New("downSample stopped")
 	ErrDroppingMst        = errors.New("measurement is dropped")
@@ -60,10 +60,6 @@ var (
 
 	compactStat = statistics.NewCompactStatistics()
 )
-
-func GetFullCompactingCount() int64 {
-	return fullCompactingCount
-}
 
 func Init() {
 	log = Log.GetLogger()
@@ -124,53 +120,15 @@ func (m *MmsTables) unrefMmsTable(orderWg, outOfOrderWg *sync.WaitGroup) {
 
 func (m *MmsTables) LevelCompact(level uint16, shid uint64) error {
 	plans := m.ImmTable.LevelPlan(m, level)
-	for len(plans) > 0 {
-		plan := plans[0]
-		plan.shardId = shid
-		select {
-		case <-m.closed:
-			return ErrCompStopped
-		case <-m.stopCompMerge:
-			log.Info("stop LevelCompact", zap.Uint64("id", shid))
-			m.blockCompactStop(plan.name)
-			return nil
-		case compLimiter <- struct{}{}:
-			m.wg.Add(1)
-			go func(group *CompactGroup) {
-				orderWg, inorderWg := m.ImmTable.refMmsTable(m, group.name, false)
-				if m.compactRecovery {
-					defer CompactRecovery(m.path, group)
-				}
 
-				defer func() {
-					m.wg.Done()
-					m.ImmTable.unrefMmsTable(orderWg, inorderWg)
-					compLimiter.Release()
-					m.CompactDone(group.group)
-					m.blockCompactStop(group.name)
-					group.release()
-				}()
-
-				if !m.CompactionEnabled() {
-					return
-				}
-
-				fi, err := m.ImmTable.NewFileIterators(m, group)
-				if err != nil {
-					log.Error(err.Error())
-					compactStat.AddErrors(1)
-					return
-				}
-				err = m.ImmTable.compactToLevel(m, fi, false, NonStreamingCompaction(fi))
-				if err != nil {
-					compactStat.AddErrors(1)
-					log.Error("compact error", zap.Error(err))
-				}
-			}(plan)
-		}
-		plans = plans[1:]
+	if len(plans) == 0 {
+		return nil
 	}
 
+	taskGroups := m.buildCompactTaskGroup(plans, false, shid)
+	for _, group := range taskGroups {
+		m.scheduler.ExecuteTaskGroup(group, m.stopCompMerge)
+	}
 	return nil
 }
 
@@ -441,8 +399,8 @@ func (m *MmsTables) FullCompact(shid uint64) error {
 		return nil
 	}
 
-	if config.GetStoreConfig().TSSPToParquetLevel > 0 {
-		plans := m.buildFullCompactPlan(n, config.GetStoreConfig().TSSPToParquetLevel)
+	if preLevel := config.PreFullCompactLevel(); preLevel > 0 {
+		plans := m.buildFullCompactPlan(n, preLevel)
 		if len(plans) > 0 {
 			m.scheduler.ExecuteBatch(m.buildCompactTasks(plans, true, shid), m.stopCompMerge)
 			return nil
@@ -481,6 +439,30 @@ func (m *MmsTables) buildCompactTasks(plans []*CompactGroup, full bool, shardId 
 		tasks = append(tasks, task)
 	}
 	return tasks
+}
+
+func (m *MmsTables) buildCompactTaskGroup(plans []*CompactGroup, full bool, shardId uint64) []*scheduler.TaskGroup {
+	var taskGroups []*scheduler.TaskGroup
+	var taskGroup *scheduler.TaskGroup
+
+	var appendGroup = func() {
+		if taskGroup != nil && taskGroup.Len() > 0 {
+			taskGroups = append(taskGroups, taskGroup)
+		}
+	}
+
+	for _, plan := range plans {
+		if taskGroup == nil || taskGroup.Key() != plan.name {
+			appendGroup()
+			taskGroup = scheduler.NewTaskGroup(plan.name)
+		}
+
+		plan.shardId = shardId
+		taskGroup.Add(NewCompactTask(m, plan, full))
+	}
+
+	appendGroup()
+	return taskGroups
 }
 
 func (m *MmsTables) Wait() {

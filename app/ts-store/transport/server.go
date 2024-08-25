@@ -108,14 +108,21 @@ func WritePointsForRep(ww *pointsdecoder.DecoderWork, log *logger.Logger, store 
 	db, rp, ptId, tail, err := ww.DecodeDBPT() // the tail contains data: [shard_id, streamShardIdList, rows...]
 	if err != nil {
 		err = errno.NewError(errno.ErrUnmarshalPoints, err)
-		log.Error("unmarshal rows failed", zap.String("db", db),
-			zap.String("rp", rp), zap.Uint32("ptId", ptId), zap.Error(err)) // 测试一下error格式
+		log.Error("unmarshal rows failed", zap.String("db", db), zap.String("rp", rp), zap.Uint32("ptId", ptId), zap.Error(err))
 		return err
 	}
 
 	if err = storage.WriteRowsForRep(store, db, rp, ptId, 0, ww.GetRows(), tail); err != nil {
-		log.Error("write rows failed", zap.String("db", db),
-			zap.String("rp", rp), zap.Uint32("ptId", ptId), zap.Error(err))
+		if errno.Equal(err, errno.RepConfigWriteNoRepDB) {
+			shard, _, newTail, err1 := ww.DecodeShardAndRows(db, rp, ptId, tail)
+			if err1 != nil {
+				err = errno.NewError(errno.ErrUnmarshalPoints, err1)
+				log.Error("unmarshal rows failed", zap.String("db", db), zap.String("rp", rp), zap.Uint32("ptId", ptId), zap.Error(err))
+				return err
+			}
+			return storage.WriteRows(store, db, rp, ptId, shard, ww.GetRows(), newTail)
+		}
+		log.Error("WritePointsForRep write rows failed", zap.String("db", db), zap.String("rp", rp), zap.Uint32("ptId", ptId), zap.Error(err))
 	}
 	return err
 }

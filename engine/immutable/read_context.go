@@ -17,8 +17,6 @@ limitations under the License.
 package immutable
 
 import (
-	"sync/atomic"
-
 	"github.com/openGemini/openGemini/engine/comm"
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/encoding"
@@ -45,7 +43,7 @@ type ReadContext struct {
 
 	readSpan     *tracing.Span
 	filterSpan   *tracing.Span
-	closedSignal *int32
+	closedSignal *bool
 }
 
 func NewReadContext(ascending bool) *ReadContext {
@@ -64,15 +62,12 @@ func NewReadContext(ascending bool) *ReadContext {
 	}
 }
 
-func (d *ReadContext) SetClosedSignal(s *int32) {
+func (d *ReadContext) SetClosedSignal(s *bool) {
 	d.closedSignal = s
 }
 
-func (d *ReadContext) isAborted() bool {
-	if d.closedSignal == nil {
-		return false
-	}
-	return atomic.LoadInt32(d.closedSignal) > 0
+func (d *ReadContext) IsAborted() bool {
+	return d.closedSignal != nil && *d.closedSignal
 }
 
 func (d *ReadContext) SetSpan(readSpan, filterSpan *tracing.Span) {

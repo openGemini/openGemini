@@ -104,6 +104,7 @@ type DataNode struct {
 	ConnID      uint64 // after joined raft cluster. ConnID will +1 when restart
 	AliveConnID uint64 // after joined gossip cluster, AliveConnID will set by ConnID
 	Index       uint64
+	Az          string
 }
 
 func (n *DataNode) MarshalBinary() ([]byte, error) {
@@ -124,12 +125,14 @@ func (n *DataNode) marshal() *proto2.DataNode {
 	pb.Ni = n.NodeInfo.marshal()
 	pb.ConnID = proto.Uint64(n.ConnID)
 	pb.AliveConnID = proto.Uint64(n.AliveConnID)
+	pb.Az = proto.String(n.Az)
 	return pb
 }
 func (n *DataNode) unmarshal(pb *proto2.DataNode) {
 	n.NodeInfo.unmarshal(pb.GetNi())
 	n.ConnID = pb.GetConnID()
 	n.AliveConnID = pb.GetAliveConnID()
+	n.Az = pb.GetAz()
 }
 
 // NodeInfos is a slice of NodeInfo used for sorting

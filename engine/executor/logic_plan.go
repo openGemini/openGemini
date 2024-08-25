@@ -2604,6 +2604,14 @@ func (b *LogicalPlanBuilderImpl) IncHashAgg() LogicalPlanBuilder {
 	return b
 }
 
+// only use for prom for build hashAggNode
+func (b *LogicalPlanBuilderImpl) HashAgg() LogicalPlanBuilder {
+	last := b.stack.Pop()
+	plan := NewLogicalHashAgg(last, b.schema, UNKNOWN_EXCHANGE, nil)
+	b.stack.Push(plan)
+	return b
+}
+
 func (b *LogicalPlanBuilderImpl) TagSetAggregate() LogicalPlanBuilder {
 	last := b.stack.Pop()
 	plan := NewLogicalTagSetAggregate(last, b.schema)

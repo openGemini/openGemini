@@ -65,6 +65,7 @@ var (
 	ErrDataViewBootStrap = errors.New("cluster is bootstrapping for initial data view")
 	ErrDuplicateShardKey = errors.New("duplicate shard key")
 	ErrInvalidShardKey   = errors.New("invalid shard key")
+	ErrAzChange          = errors.New("AZ change is not supported.")
 )
 
 var (
@@ -110,10 +111,6 @@ var (
 	// retention policy that has a duration lower than the current shard
 	// duration.
 	ErrIncompatibleDurations = errors.New("retention policy duration must be greater than the shard duration")
-
-	// ErrReplicationFactorTooLow is returned when the replication factor is not in an
-	// acceptable range.
-	ErrReplicationFactorTooLow = errors.New("replication factor must be greater than 0")
 
 	ErrIncompatibleHotDurations = errors.New("retention policy hot duration must be greater than the shard duration and lower than the duration")
 	// ErrIncompatibleWarmDurations is returned when creating or updating a

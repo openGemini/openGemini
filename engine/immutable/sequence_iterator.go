@@ -39,11 +39,13 @@ func NewTagSets() *TagSets {
 }
 
 func (s *TagSets) Add(key, val string) {
-	if _, ok := s.sets[key]; !ok {
-		s.sets[key] = make(map[string]struct{})
+	if valueSet, keyExist := s.sets[key]; !keyExist {
+		s.sets[key] = map[string]struct{}{val: {}}
+		s.totalCount++
+	} else if _, valueExist := valueSet[val]; !valueExist {
+		valueSet[val] = struct{}{}
+		s.totalCount++
 	}
-	s.sets[key][val] = struct{}{}
-	s.totalCount++
 }
 
 func (s *TagSets) ForEach(process func(tagKey, tagValue string)) {

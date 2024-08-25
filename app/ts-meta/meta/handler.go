@@ -57,6 +57,7 @@ type IStore interface {
 	leaderHTTP() string
 	leadershipTransfer() error
 	SpecialCtlData(cmd string) error
+	ModifyRepDBMasterPt(db string, rgId uint32, newMasterPtId uint32) error
 }
 
 var httpScheme = map[bool]string{
@@ -142,6 +143,8 @@ func (h *httpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.WrapHandler(h.leadershipTransfer).ServeHTTP(w, r)
 		case "/specialCtlData":
 			h.WrapHandler(h.specialCtlData).ServeHTTP(w, r)
+		case "/modifyRepDBMasterPt":
+			h.WrapHandler(h.modifyRepDBMasterPt).ServeHTTP(w, r)
 		}
 		h.logger.Info("serve post")
 	default:
@@ -170,13 +173,14 @@ func (h *httpHandler) serveDebug(w http.ResponseWriter, r *http.Request) {
 			errorMap["Error"] = fmt.Sprintf("%s", err)
 		}
 
-		status[h.config.HTTPBindAddress] = errorMap
+		status[h.config.CombineDomain(h.config.HTTPBindAddress)] = errorMap
 	} else {
 		var m map[string]string
 		if err = json.Unmarshal(info, &m); err != nil {
 			h.logger.Error("fail to unmarshal debug info", zap.Error(err))
 		}
-		status[h.config.HTTPBindAddress] = m
+
+		status[h.config.CombineDomain(h.config.HTTPBindAddress)] = m
 		h.logger.Info(fmt.Sprintf("local raft stat: %s", status))
 	}
 
@@ -520,4 +524,32 @@ func (h *httpHandler) specialCtlData(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.logger.Error("write result failed", zap.Error(err))
 	}
+}
+
+// curl -i -XPOST 'http://127.0.0.1:8091/modifyRepDBMasterPt?db=db0&rgId=0&newMasterPtId=0'
+func (h *httpHandler) modifyRepDBMasterPt(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	db := q.Get("db")
+	h.logger.Info("modifyRepDBMasterPt query", zap.String("q", fmt.Sprintln(q)))
+	if db == "" {
+		h.logger.Error("missing parameter db")
+		http.Error(w, "you should input db in modifyRepDBMasterPt command", http.StatusBadRequest)
+		return
+	}
+	rgId, err := strconv.ParseUint(q.Get("rgId"), 10, 32)
+	if err != nil {
+		h.logger.Error("error parsing rgId", zap.Error(err))
+		http.Error(w, "error parsing rgId", http.StatusBadRequest)
+		return
+	}
+	newMasterPtId, err := strconv.ParseUint(q.Get("newMasterPtId"), 10, 32)
+	if err != nil {
+		h.logger.Error("error parsing newMasterPtId")
+		http.Error(w, "error parsing newMasterPtId", http.StatusBadRequest)
+		return
+	}
+
+	err = h.store.ModifyRepDBMasterPt(db, uint32(rgId), uint32(newMasterPtId))
+	h.handleResponse(w, err)
+	h.logger.Info("modifyRepDBMasterPt", zap.String("db", db), zap.Uint64("rgId", rgId), zap.Uint64("newMasterPtId", newMasterPtId), zap.Error(err))
 }

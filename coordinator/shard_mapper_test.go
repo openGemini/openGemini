@@ -311,14 +311,14 @@ func (m mocShardMapperMetaClient) Schema(database string, retentionPolicy string
 	if err != nil {
 		return nil, nil, err
 	}
-
-	for key := range msti.Schema {
-		if msti.Schema[key] == influx.Field_Type_Tag {
-			dimensions[key] = struct{}{}
+	callback := func(k string, v int32) {
+		if v == influx.Field_Type_Tag {
+			dimensions[k] = struct{}{}
 		} else {
-			fields[key] = msti.Schema[key]
+			fields[k] = v
 		}
 	}
+	msti.Schema.RangeTypCall(callback)
 	return fields, dimensions, nil
 }
 
@@ -680,9 +680,9 @@ func Test_FieldDimensions(t *testing.T) {
 										ShardGroup: 1,
 									},
 								},
-								Schema: map[string]int32{
-									"f1":   influx.Field_Type_String,
-									"tag1": influx.Field_Type_Tag,
+								Schema: &meta.CleanSchema{
+									"f1":   meta2.SchemaVal{Typ: influx.Field_Type_String},
+									"tag1": meta2.SchemaVal{Typ: influx.Field_Type_Tag},
 								},
 								EngineType: config.COLUMNSTORE,
 							},
@@ -820,9 +820,9 @@ func Test_CreateLogicalPlan(t *testing.T) {
 										ShardGroup: 1,
 									},
 								},
-								Schema: map[string]int32{
-									"f1":   influx.Field_Type_String,
-									"tag1": influx.Field_Type_Tag,
+								Schema: &meta.CleanSchema{
+									"f1":   meta2.SchemaVal{Typ: influx.Field_Type_String},
+									"tag1": meta2.SchemaVal{Typ: influx.Field_Type_Tag},
 								},
 								EngineType: config.COLUMNSTORE,
 							},
@@ -1018,9 +1018,9 @@ func Test_MapTypeBatch(t *testing.T) {
 										ShardGroup: 1,
 									},
 								},
-								Schema: map[string]int32{
-									"f1":   influx.Field_Type_String,
-									"tag1": influx.Field_Type_Tag,
+								Schema: &meta.CleanSchema{
+									"f1":   meta2.SchemaVal{Typ: influx.Field_Type_String},
+									"tag1": meta2.SchemaVal{Typ: influx.Field_Type_Tag},
 								},
 								EngineType: config.COLUMNSTORE,
 							},
@@ -1157,9 +1157,9 @@ func Test_CreateRemoteQuery(t *testing.T) {
 										ShardGroup: 1,
 									},
 								},
-								Schema: map[string]int32{
-									"f1":   influx.Field_Type_String,
-									"tag1": influx.Field_Type_Tag,
+								Schema: &meta.CleanSchema{
+									"f1":   meta2.SchemaVal{Typ: influx.Field_Type_String},
+									"tag1": meta2.SchemaVal{Typ: influx.Field_Type_Tag},
 								},
 								EngineType: config.COLUMNSTORE,
 							},
@@ -1226,9 +1226,9 @@ func Test_CreateLogicalPlanForRWSplit(t *testing.T) {
 										ShardGroup: 1,
 									},
 								},
-								Schema: map[string]int32{
-									"f1":   influx.Field_Type_String,
-									"tag1": influx.Field_Type_Tag,
+								Schema: &meta.CleanSchema{
+									"f1":   meta2.SchemaVal{Typ: influx.Field_Type_String},
+									"tag1": meta2.SchemaVal{Typ: influx.Field_Type_Tag},
 								},
 								ObsOptions: obsOpts,
 								EngineType: config.COLUMNSTORE,
@@ -1378,9 +1378,9 @@ func Test_MapTypeBatchBinOp(t *testing.T) {
 										ShardGroup: 1,
 									},
 								},
-								Schema: map[string]int32{
-									"value": influx.Field_Type_Float,
-									"tag1":  influx.Field_Type_Tag,
+								Schema: &meta.CleanSchema{
+									"value": meta2.SchemaVal{Typ: influx.Field_Type_Float},
+									"tag1":  meta2.SchemaVal{Typ: influx.Field_Type_Tag},
 								},
 								EngineType: config.TSSTORE,
 							},
@@ -1485,9 +1485,9 @@ func Test_MapTypeBatchBinOpNilMst(t *testing.T) {
 										ShardGroup: 1,
 									},
 								},
-								Schema: map[string]int32{
-									"value": influx.Field_Type_Float,
-									"tag1":  influx.Field_Type_Tag,
+								Schema: &meta.CleanSchema{
+									"value": meta2.SchemaVal{Typ: influx.Field_Type_Float},
+									"tag1":  meta2.SchemaVal{Typ: influx.Field_Type_Tag},
 								},
 								EngineType: config.TSSTORE,
 							},

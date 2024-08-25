@@ -28,7 +28,7 @@ func (b *FullTextIndexBuilder) AddDocument(val []byte, offset []uint32, startRow
 	return nil, nil
 }
 
-func (b *FullTextIndexBuilder) Next(memElement *InvertMemElement, data *BlockData, bh *BlockHeader) bool {
+func RetrievePostingList(memElement *InvertMemElement, data *BlockData, bh *BlockHeader) bool {
 	return false
 }
 
@@ -40,4 +40,12 @@ func FreeFullTextIndexBuilder(builder *FullTextIndexBuilder) {
 }
 
 func PutInvertMemElement(ele *InvertMemElement) {
+}
+
+func GetMemElement(groupSize uint32) *InvertMemElement {
+	return &InvertMemElement{}
+}
+
+func AddPostingToMem(memElement *InvertMemElement, key []byte, rowId uint32) bool {
+	return true
 }

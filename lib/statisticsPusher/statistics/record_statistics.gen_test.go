@@ -77,6 +77,10 @@ func TestRecord(t *testing.T) {
 	stat.AddSeriesLoopPoolGet(2)
 	stat.AddSeriesLoopPoolAbort(2)
 	stat.AddSeriesLoopPoolGetReUse(2)
+	stat.AddLogstoreInUse(2)
+	stat.AddLogstoreGet(2)
+	stat.AddLogstoreAbort(2)
+	stat.AddLogstoreReUse(2)
 
 	fields := map[string]interface{}{
 		"IntervalRecordPoolInUse":            int64(2),
@@ -124,6 +128,10 @@ func TestRecord(t *testing.T) {
 		"SeriesLoopPoolGet":                  int64(2),
 		"SeriesLoopPoolAbort":                int64(2),
 		"SeriesLoopPoolGetReUse":             int64(2),
+		"LogstoreInUse":                      int64(2),
+		"LogstoreGet":                        int64(2),
+		"LogstoreAbort":                      int64(2),
+		"LogstoreReUse":                      int64(2),
 	}
 	statistics.NewTimestamp().Init(time.Second)
 	buf, err := stat.Collect(nil)

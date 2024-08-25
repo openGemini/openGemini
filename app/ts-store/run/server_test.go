@@ -234,10 +234,12 @@ func TestNilService(t *testing.T) {
 }
 
 func TestNewServer(t *testing.T) {
-	config := config.NewTSStore(true)
-	config.Common.MetaJoin = []string{"127.0.0.1", "127.0.0.2", "127.0.0.3"}
+	conf := config.NewTSStore(true)
+	conf.Common.MetaJoin = []string{"127.0.0.1", "127.0.0.2", "127.0.0.3"}
 
-	NewServer(config, app.ServerInfo{}, logger.NewLogger(errno.ModuleUnknown))
+	conf.Index.MemoryAllowedPercent = 20
+	NewServer(conf, app.ServerInfo{}, logger.NewLogger(errno.ModuleUnknown))
+	require.Equal(t, 20, config.GetIndexConfig().MemoryAllowedPercent)
 }
 
 func TestNewServerErrRole(t *testing.T) {
@@ -487,6 +489,10 @@ func (mmc *MockMetaClient) GetStreamInfos() map[string]*meta2.StreamInfo {
 
 func (mmc *MockMetaClient) GetDstStreamInfos(db, rp string, dstSis *[]*meta2.StreamInfo) bool {
 	return false
+}
+
+func (mmc *MockMetaClient) GetSgEndTime(database string, rp string, timestamp time.Time, engineType config.EngineType) (int64, error) {
+	return 0, nil
 }
 
 func (mmc *MockMetaClient) GetAllMst(dbName string) []string {

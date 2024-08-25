@@ -624,3 +624,21 @@ func MultiHash(multiBytes ...[]byte) uint64 {
 	}
 	return hash
 }
+
+func TestStandardTokenizer(t *testing.T) {
+	content := "  成都is a beautiful city. \t\n ¢ĀȀʧξ𒀁."
+	res := []string{"成", "都", "is", "a", "beautiful", "city", "¢", "Ā", "Ȁ", "ʧ", "ξ", "𒀁"}
+	tokenizer := NewStandardTokenizer(CONTENT_SPLITTER)
+	if len(tokenizer.Split("")) != 0 {
+		t.Errorf("expecting to return a null value")
+	}
+	splitStr := tokenizer.Split(content)
+	if len(splitStr) != len(res) {
+		t.Errorf("StandardTokenizer split wrong, expected:%+v, got: %+v", res, splitStr)
+	}
+	for i := 0; i < len(res); i++ {
+		if splitStr[i] != res[i] {
+			t.Errorf("StandardTokenizer split wrong, expected:%+v, got: %+v", res, splitStr)
+		}
+	}
+}

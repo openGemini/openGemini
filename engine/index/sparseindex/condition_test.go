@@ -22,6 +22,7 @@ import (
 	"github.com/openGemini/openGemini/engine/index/sparseindex"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/rpn"
+	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/stretchr/testify/assert"
 )
@@ -110,6 +111,9 @@ type MockSKBaseReader struct {
 
 func (m *MockSKBaseReader) IsExist(_ int64, _ *rpn.SKRPNElement) (bool, error) {
 	return true, m.err
+}
+
+func (m *MockSKBaseReader) StartSpan(span *tracing.Span) {
 }
 
 func TestSKCondition(t *testing.T) {

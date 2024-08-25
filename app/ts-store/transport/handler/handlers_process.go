@@ -178,7 +178,7 @@ func (h *KillQuery) Process() (codec.BinaryCodec, error) {
 	var abortSuccess bool
 	killQueryByIDFn := func(manager *query.Manager) {
 		// qid is not in current manager, or it has been aborted successfully
-		if manager.Get(qid) == nil || abortSuccess {
+		if len(manager.Get(qid)) == 0 || abortSuccess {
 			return
 		}
 		isExist = true

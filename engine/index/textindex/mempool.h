@@ -70,7 +70,7 @@ struct PoolStatistic {
 
     void PrintUsedMem() {
         uint64_t totalBytes = uint64_t(eleCnt) * sizeof(InvertElement) + uint64_t(containerCnt) * sizeof(RunContainer) +
-            uint64_t(pairGroupCnt) * sizeof(RunPairGroup) + MAX_HASHTABLE_BKTS*sizeof(ListNode);
+            uint64_t(pairGroupCnt) * sizeof(RunPairGroup) + HASHTABLE_BKTS_SIZE*sizeof(ListNode);
         LOG_INFO("memory consumption statistics, this=[%p], ObjSize=[%ld, %ld, %ld], TotalMem=[%lu]",
             this, sizeof(InvertElement), sizeof(RunContainer), sizeof(RunPairGroup), totalBytes);
     }
@@ -112,17 +112,19 @@ public:
     void PutRunPairGroup(RunPairGroup *p);
 
     /* Invert root pool */
-    Invert *GetInvert(uint32_t rowCnt);
+    Invert *GetInvert();
     /* vtoken pool */
     VToken *GetVToken();
     /* sort element pool */
     InvertGroup *GetInvertGroup();
+    /* hash section */
+    ListNode *GetHashSections();
 
 public:
-    uint32_t GetHashTableBktCnt(uint32_t rowCnt);
-    void UpdateHashFactor(uint32_t rowCnt, uint32_t tokenCnt);
+    bool AddPostingData(char *key, uint32_t keyLen, uint32_t rowId);
     bool Next(char *keys, uint32_t keysLen, char *data, uint32_t dataLen, uint32_t res[RES_LENS_LEN]);
-    void SerializedContainer(char *data, RunContainer *c);
+    uint32_t SerializedContainer(char *data, RunContainer *c);
+    void SerializedCookieHeader(char *data, uint16_t containerCnt, uint32_t cardinalityCnt);
 
 private:
     HashFactor hashFactors[MAX_HASHCURVE_SIZE];
@@ -134,6 +136,7 @@ public:
     ListNode elementPool; // InvertElement pool
     ListNode containerPool; // RunContainer pool
     ListNode pairGroupPool; // RunPairGroup pool
+    ListNode hashSection[HASHTABLE_SECTION_SIZE]; // HashSections
 
     Invert *invert; // the root of invert node
     VToken vtoken[TOKENIZE_STEP];  // vtoken memory pool

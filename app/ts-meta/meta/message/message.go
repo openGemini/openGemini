@@ -94,6 +94,7 @@ type CreateNodeRequest struct {
 	WriteHost string
 	QueryHost string
 	Role      string
+	Az        string
 }
 
 type CreateSqlNodeRequest struct {

@@ -214,6 +214,7 @@ func (t *Transpiler) transpileBinaryExpr(b *parser.BinaryExpr) (influxql.Node, e
 	if b.ReturnBool {
 		t.dropMetric = true
 	}
+	t.removeTableName = true
 	switch {
 	case yieldsFloat(b.LHS) && yieldsFloat(b.RHS):
 		// Handle both sides return scalar value.
@@ -273,10 +274,10 @@ func (t *Transpiler) transpileBinOpOfBothVector(b *parser.BinaryExpr, op influxq
 		Sources:     influxql.Sources{binOp},
 		Fields:      influxql.Fields{&influxql.Field{Expr: &influxql.VarRef{Val: DefaultFieldKey, Alias: DefaultFieldKey}}},
 		IsPromQuery: true,
+		QueryOffset: lStmt.QueryOffset,
 	}
 	// set query time range
 	t.setTimeCondition(newStmt)
-	t.removeTableName = true
 	return newStmt, nil
 }
 

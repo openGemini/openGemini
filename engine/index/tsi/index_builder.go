@@ -24,6 +24,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/logger"
@@ -143,6 +144,9 @@ func (iBuilder *IndexBuilder) GenerateUUID() uint64 {
 }
 
 func (iBuilder *IndexBuilder) Flush() {
+	if config.IsLogKeeper() {
+		return
+	}
 	for i := range iBuilder.Relations {
 		if iBuilder.isRelationInited(uint32(i)) {
 			iBuilder.Relations[i].IndexFlush()

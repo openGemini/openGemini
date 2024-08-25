@@ -312,7 +312,7 @@ func (ct *ChunkTags) decodeTags() [][]string {
 	return TagValues
 }
 
-func (ct *ChunkTags) decodeTagsWithoutTag(tagName string) ([]byte, string) {
+func (ct *ChunkTags) DecodeTagsWithoutTag(tagName string) ([]byte, string) {
 	if len(ct.subset) == 0 {
 		return nil, ""
 	}
@@ -326,13 +326,10 @@ func (ct *ChunkTags) decodeTagsWithoutTag(tagName string) ([]byte, string) {
 	for i := uint16(0); i < offsetLen; i += 2 {
 		if !flag {
 			k := util.Bytes2str(tags[index : ct.offsets[i]-1])
-			if len(k) == 1 {
-				index = ct.offsets[i+1]
-				continue
-			}
 			if k == tagName {
 				targetTagValue = string(tags[ct.offsets[i] : ct.offsets[i+1]-1])
 				flag = true
+				index = ct.offsets[i+1]
 				continue
 			}
 		}

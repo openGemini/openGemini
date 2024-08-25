@@ -357,6 +357,24 @@ var (
 			mergeCall: true,
 		},
 	})
+	_ = RegistryAggregateFunction("group_prom", &PromGroupFunc{
+		BaseInfo: BaseInfo{FuncType: AGG_NORMAL},
+		BaseAgg: BaseAgg{
+			mergeCall: true,
+		},
+	})
+	_ = RegistryAggregateFunction("scalar_prom", &PromScalarFunc{
+		BaseInfo: BaseInfo{FuncType: AGG_NORMAL},
+		BaseAgg: BaseAgg{
+			mergeCall: true,
+		},
+	})
+	_ = RegistryAggregateFunction("quantile_prom", &PercentileFunc{
+		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
+		BaseAgg: BaseAgg{
+			mergeCall: true,
+		},
+	})
 )
 
 func GetAggregateOperator(name string) AggregateFunc {
@@ -1350,7 +1368,7 @@ func (f *CountValuesFunc) CompileFunc(expr *influxql.Call, c *compiledField) err
 }
 
 func (f *CountValuesFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
-	return influxql.Integer, nil
+	return influxql.Float, nil
 }
 
 type PromDeltaFunc struct {
@@ -1388,5 +1406,43 @@ func (f *PromIDeltaFunc) CompileFunc(expr *influxql.Call, c *compiledField) erro
 }
 
 func (f *PromIDeltaFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
+	return influxql.Float, nil
+}
+
+type PromGroupFunc struct {
+	BaseInfo
+	BaseAgg
+}
+
+func (f *PromGroupFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
+	args, name := expr.Args, expr.Name
+	if exp, got := 1, len(expr.Args); exp != got {
+		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", name, exp, got)
+	}
+	c.global.OnlySelectors = false
+	// Must be a variable reference, wildcard, or regexp.
+	return c.compileSymbol(name, args[0])
+}
+
+func (f *PromGroupFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
+	return influxql.Float, nil
+}
+
+type PromScalarFunc struct {
+	BaseInfo
+	BaseAgg
+}
+
+func (f *PromScalarFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
+	args, name := expr.Args, expr.Name
+	if exp, got := 1, len(expr.Args); exp != got {
+		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", name, exp, got)
+	}
+	c.global.OnlySelectors = false
+	// Must be a variable reference, wildcard, or regexp.
+	return c.compileSymbol(name, args[0])
+}
+
+func (f *PromScalarFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
 	return influxql.Float, nil
 }

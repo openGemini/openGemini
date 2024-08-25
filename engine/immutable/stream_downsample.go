@@ -568,7 +568,7 @@ func (c *StreamWriteFile) genBloomFilter() {
 		c.bloomFilter = make([]byte, bmBytes)
 	} else {
 		c.bloomFilter = c.bloomFilter[:bmBytes]
-		util.MemorySet(c.bloomFilter)
+		util.MemorySet(c.bloomFilter, 0)
 	}
 	c.trailer.bloomM = bm
 	c.trailer.bloomK = bk

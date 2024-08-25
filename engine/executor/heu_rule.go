@@ -1112,6 +1112,12 @@ func (r *AggToProjectInSubQueryRule) OnMatch(call *OptRuleCall) {
 		return
 	}
 
+	if _, ok := node.(*LogicalHashAgg); ok {
+		if node.Schema().Options().IsPromQuery() {
+			return
+		}
+	}
+
 	if !node.Schema().HasCall() {
 		return
 	}

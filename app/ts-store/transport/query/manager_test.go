@@ -54,15 +54,19 @@ func TestManager_Abort(t *testing.T) {
 
 func TestManager_Query(t *testing.T) {
 	var seq uint64 = 10
-	query := &mockQuery{id: 10}
+
+	query := []IQuery{&mockQuery{id: 10}}
 
 	qm := NewManager(clientIDs[0])
-	qm.Add(seq, query)
+	qm.FinishAll(seq)
+
+	qm.Add(seq, query[0])
 	assert.Equal(t, query, qm.Get(seq))
 
-	qm.Finish(seq)
+	qm.FinishAll(seq)
 
-	var nilQuery IQuery
+	var nilQuery []IQuery
+
 	assert.Equal(t, nilQuery, qm.Get(seq))
 }
 

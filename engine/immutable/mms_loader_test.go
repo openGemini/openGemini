@@ -19,11 +19,16 @@ package immutable
 import (
 	"os"
 	"path"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/openGemini/openGemini/engine/index/sparseindex"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/obs"
+	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/stretchr/testify/require"
 )
 
@@ -153,4 +158,73 @@ func TestLoadDirs(t *testing.T) {
 	}
 	nameDirs, _ = fileops.ReadDir(path.Join(dir, "cpu"))
 	loader.loadDirs(nameDirs, "cpu", "")
+}
+
+func TestMmsLoader_verifySeq(t *testing.T) {
+	ctx := &fileLoadContext{}
+	dir := t.TempDir()
+
+	buildTSSPFile(dir, 1, "mst0")
+	buildTSSPFile(dir, 10, "mst1")
+	buildTSSPFile(dir, 3, "mst2")
+
+	loader := newFileLoader(buildMmsTables(dir), ctx)
+	defer loader.mst.Close()
+
+	var load = func() {
+		for _, mst := range []string{"mst0", "mst1", "mst2"} {
+			loader.Load(filepath.Join(dir, mst), mst, true)
+			loader.Wait()
+			loader.mst.fileSeq = ctx.getMaxSeq()
+		}
+	}
+
+	load()
+	_, err := ctx.getError()
+	require.NoError(t, err)
+
+	buildTSSPFile(dir, 4, "mst2")
+	load()
+	_, err = ctx.getError()
+	require.NoError(t, err)
+
+	files, ok := loader.mst.getTSSPFiles("mst2", true)
+	require.True(t, ok)
+	require.Equal(t, 2, files.Len())
+}
+
+func buildMmsTables(dir string) *MmsTables {
+	conf := NewTsStoreConfig()
+	tier := uint64(util.Hot)
+	lockPath := ""
+	store := NewTableStore(dir, &lockPath, &tier, true, conf)
+	store.SetImmTableType(config.TSSTORE)
+	return store
+}
+
+func buildTSSPFile(dir string, seq uint64, mst string) {
+	lockPath := ""
+	conf := NewTsStoreConfig()
+	tm := time.Now()
+	var idMinMax MinMax
+	var startValue = 1.1
+	idCount := 20
+
+	write := func(ids []uint64, data map[uint64]*record.Record, msb *MsBuilder) {
+		for _, id := range ids {
+			rec := data[id]
+			err := msb.WriteData(id, rec)
+			if err != nil {
+				panic(err)
+			}
+		}
+	}
+
+	store := buildMmsTables(dir)
+	ids, data := genTestData(idMinMax.min, idCount, 1, &startValue, &tm)
+	fileName := NewTSSPFileName(seq, 0, 0, 0, true, &lockPath)
+	msb := NewMsBuilder(store.path, mst, &lockPath, conf, 10, fileName, store.Tier(), nil, 2, config.TSSTORE, nil, 0)
+	write(ids, data, msb)
+	store.AddTable(msb, true, false)
+	store.Close()
 }

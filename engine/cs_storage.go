@@ -65,6 +65,9 @@ func newColumnstoreImpl(snapshotTblNum int) *columnstoreImpl {
 }
 
 func (storage *columnstoreImpl) writeSnapshot(s *shard) {
+	if s.SnapShotter != nil {
+		atomic.StoreUint32(&s.SnapShotter.RaftFlag, 0)
+	}
 	s.snapshotLock.Lock()
 	if s.activeTbl == nil {
 		s.snapshotLock.Unlock()
@@ -93,6 +96,10 @@ func (storage *columnstoreImpl) writeSnapshot(s *shard) {
 	s.snapshotLock.Unlock()
 	// update last snapshot time
 	atomic.StoreUint64(&storage.lastSnapShotTime, fasttime.UnixTimestamp())
+	if s.SnapShotter != nil {
+		s.SnapShotter.RaftFlushC <- true
+		atomic.StoreUint32(&s.SnapShotter.RaftFlag, 1)
+	}
 
 	start := time.Now()
 	s.indexBuilder.Flush()
@@ -359,6 +366,9 @@ func (storage *columnstoreImpl) WriteIndex(s *shard, rows *influx.Rows, mw *mstW
 func (storage *columnstoreImpl) WriteIndexForCols(s *shard, cols *record.Record, mst string) error {
 	if s.closed.Closed() {
 		return errno.NewError(errno.ErrShardClosed, s.ident.ShardID)
+	}
+	if config.IsLogKeeper() {
+		return nil
 	}
 	mst = stringinterner.InternSafe(mst)
 	msInfo, ok := mutable.GetMsInfo(mst, storage.mstsInfo)

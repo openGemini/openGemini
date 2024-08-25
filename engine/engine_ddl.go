@@ -42,6 +42,8 @@ import (
 	"go.uber.org/zap"
 )
 
+var DeleteDatabaseTimeout = time.Second * 15
+
 func (e *Engine) DeleteDatabase(db string, ptId uint32) (err error) {
 	traceId := tsi.GenerateUUID()
 	begin := time.Now()
@@ -88,7 +90,7 @@ func (e *Engine) DeleteDatabase(db string, ptId uint32) (err error) {
 	if ok = dbPTInfo.markOffload(done); !ok {
 		select {
 		case <-done:
-		case <-time.After(15 * time.Second):
+		case <-time.After(DeleteDatabaseTimeout):
 			log.Warn("offload dbPt timeout", zap.String("db", db), zap.Uint32("pt id", ptId))
 			dbPTInfo.unMarkOffload()
 			e.mu.RUnlock()
@@ -115,6 +117,9 @@ func (e *Engine) DeleteDatabase(db string, ptId uint32) (err error) {
 		return err
 	}
 
+	if dbPTInfo.node != nil {
+		dbPTInfo.node.Stop()
+	}
 	e.mu.RUnlock()
 	e.mu.Lock()
 	e.dropDBPTInfo(db, ptId)
@@ -577,7 +582,7 @@ func (e *Engine) CreateShowTagValuesPlan(db string, ptIDs []uint32, tr *influxql
 		}
 
 		dbPT.walkShards(tr, func(sh Shard) {
-			if p := sh.CreateShowTagValuesPlan(); p != nil {
+			if p := sh.CreateShowTagValuesPlan(e.metaClient); p != nil {
 				plan.AddPlan(p)
 			}
 		})

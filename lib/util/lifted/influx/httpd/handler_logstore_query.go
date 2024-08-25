@@ -42,6 +42,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	query2 "github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/logparser"
 	"github.com/valyala/fastjson"
 	"go.uber.org/zap"
 )
@@ -100,6 +101,7 @@ type QueryLogResponse struct {
 	Count             int64                    `json:"count,omitempty"`
 	Progress          string                   `json:"progress,omitempty"`
 	Logs              []map[string]interface{} `json:"logs,omitempty"`
+	Keys              []string                 `json:"keys,omitempty"`
 	Took_ms           int64                    `json:"took_ms,omitempty"`
 	Cursor_time       int64                    `json:"cursor_time,omitempty"`
 	Complete_progress float64                  `json:"complete_progress,omitempty"`
@@ -227,15 +229,15 @@ func (para *QueryParam) parseScrollID() error {
 	if err != nil {
 		return err
 	}
-	seqId, err := strconv.ParseInt(arr[1], 10, 64)
+	seqId, err := strconv.ParseInt(arr[2], 10, 64)
 	if err != nil {
 		return err
 	}
-	if len(arr) != 2 {
+	if len(arr) != 3 {
 		return fmt.Errorf("scroll_id is not right")
 	}
 	if para.Ascending {
-		para.TimeRange.start = n - 1
+		para.TimeRange.start = n
 	} else {
 		if para.TimeRange.end < MaxToValue {
 			para.TimeRange.end = n + 1
@@ -298,6 +300,7 @@ func (h *Handler) serveQueryLog(w http.ResponseWriter, r *http.Request, user met
 	}
 	var count int64
 	var logs []map[string]interface{}
+	keysMap := map[string]bool{}
 	sgs, err := h.MetaClient.GetShardGroupByTimeRange(repository, logStream, time.Unix(0, para.TimeRange.start), time.Unix(0, para.TimeRange.end))
 	tm := time.Now()
 	isFinish := true
@@ -331,7 +334,7 @@ func (h *Handler) serveQueryLog(w http.ResponseWriter, r *http.Request, user met
 			h.getQueryLogExplainResult(resp, repository, logStream, w, t)
 			return
 		}
-		currCount, currLog, err := h.getQueryLogResult(resp, logCond, para)
+		currCount, currLog, err := h.getQueryLogResult(resp, logCond, para, keysMap)
 		if err != nil {
 			h.Logger.Error("query err ", zap.Error(err))
 			h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
@@ -398,7 +401,8 @@ func (h *Handler) serveQueryLog(w http.ResponseWriter, r *http.Request, user met
 	}
 
 	res := QueryLogResponse{Success: true, Code: "200", Message: "", Request_id: uuid.TimeUUID().String(),
-		Count: count, Progress: progress, Logs: logs, Took_ms: time.Since(t).Milliseconds(), Scroll_id: scrollIDString, Complete_progress: completeProgress, Cursor_time: cursorTime}
+		Count: count, Progress: progress, Logs: logs, Keys: getKeys(keysMap), Took_ms: time.Since(t).Milliseconds(),
+		Scroll_id: scrollIDString, Complete_progress: completeProgress, Cursor_time: cursorTime}
 	b, err := json.Marshal(res)
 	if err != nil {
 		h.Logger.Error("query log marshal res fail! ", zap.Error(err))
@@ -409,6 +413,16 @@ func (h *Handler) serveQueryLog(w http.ResponseWriter, r *http.Request, user met
 	h.writeHeader(w, http.StatusOK)
 	addLogQueryStatistics(repository, logStream)
 	w.Write(b)
+}
+
+func getKeys(keysMap map[string]bool) []string {
+	keys := make([]string, 0, len(keysMap))
+	for key := range keysMap {
+		keys = append(keys, key)
+	}
+
+	sort.Strings(keys)
+	return keys
 }
 
 func addLogQueryStatistics(repoName, logStreamName string) {
@@ -434,69 +448,40 @@ type JsonHighlightFragment struct {
 	InnerJson map[string]interface{} `json:"innerJson"`
 }
 
-func getHighlightWords(expr *influxql.Expr, tagsWords map[string]struct{}, contentWords map[string]struct{}) (map[string]struct{}, map[string]struct{}) {
+func getHighlightWords(expr *influxql.Expr, words map[string]map[string]bool) map[string]map[string]bool {
 	if expr == nil {
-		return tagsWords, contentWords
+		return words
 	}
 	switch n := (*expr).(type) {
 	case *influxql.BinaryExpr:
 		switch n.Op {
 		case influxql.AND:
-			tagsWords, contentWords = getHighlightWords(&n.LHS, tagsWords, contentWords)
-			tagsWords, contentWords = getHighlightWords(&n.RHS, tagsWords, contentWords)
+			words = getHighlightWords(&n.LHS, words)
+			words = getHighlightWords(&n.RHS, words)
 		case influxql.OR:
-			tagsWords, contentWords = getHighlightWords(&n.LHS, tagsWords, contentWords)
-			tagsWords, contentWords = getHighlightWords(&n.RHS, tagsWords, contentWords)
+			words = getHighlightWords(&n.LHS, words)
+			words = getHighlightWords(&n.RHS, words)
 		case influxql.MATCHPHRASE:
 			val := n.RHS.(*influxql.StringLiteral).Val
-			if n.LHS.(*influxql.VarRef).Val == Tag {
-				tagsWords[val] = struct{}{}
+			if val == EmptyValue {
+				break
+			}
+
+			if len(words[val]) == 0 {
+				words[val] = map[string]bool{n.LHS.(*influxql.VarRef).Val: true}
 			} else {
-				contentWords[val] = struct{}{}
+				words[val][n.LHS.(*influxql.VarRef).Val] = true
 			}
 		}
 	case *influxql.ParenExpr:
-		tagsWords, contentWords = getHighlightWords(&n.Expr, tagsWords, contentWords)
+		words = getHighlightWords(&n.Expr, words)
 	}
 
-	return tagsWords, contentWords
+	return words
 }
 
-func (h *Handler) getHighlightFragments(slog map[string]interface{}, logCond *influxql.Query, version uint32) map[string]interface{} {
-	var expr *influxql.Expr
-	if logCond != nil {
-		expr = &(logCond.Statements[0].(*influxql.LogPipeStatement).Cond)
-	}
-
-	tagsWords := map[string]struct{}{}
-	contentWords := map[string]struct{}{}
-	tagsWords, contentWords = getHighlightWords(expr, tagsWords, contentWords)
+func (h *Handler) getHighlightFragments(slog map[string]interface{}, highlightWords map[string]map[string]bool, fieldScopes []marshalFieldScope) map[string]interface{} {
 	highlight := map[string]interface{}{}
-
-	if val := slog[Tags]; val != nil {
-		if tags, ok := slog[Tags].([]string); ok {
-			var tagsTokenFinder *tokenizer.SimpleTokenFinder
-			if version == tokenizer.VersionLatest {
-				tagsTokenFinder = tokenizer.NewSimpleTokenFinder(tokenizer.TAGS_SPLIT_TABLE)
-			} else {
-				tagsTokenFinder = tokenizer.NewSimpleTokenFinder(tokenizer.TAGS_SPLIT_TABLE_BEFORE)
-			}
-			var tagsHighlight [][]HighlightFragment
-			for _, tag := range tags {
-				fragments := extractFragments(tag, tagsWords, tagsTokenFinder)
-				sort.SliceStable(fragments, func(i, j int) bool {
-					return fragments[i].Offset < fragments[j].Offset
-				})
-				fragments = mergeFragments(fragments)
-				tagsHighlight = append(tagsHighlight, convertFragments(tag, fragments))
-			}
-			highlight[Tags] = tagsHighlight
-		} else {
-			h.Logger.Error("highlight failed, tags cannot convert to string array")
-		}
-	} else {
-		h.Logger.Error("highlight failed, tags field is nil")
-	}
 
 	if val := slog[Content]; val != nil {
 		content, ok := val.(string)
@@ -509,7 +494,7 @@ func (h *Handler) getHighlightFragments(slog map[string]interface{}, logCond *in
 		}
 
 		contentTokenFinder := tokenizer.NewSimpleTokenFinder(tokenizer.CONTENT_SPLIT_TABLE)
-		fragments := extractFragments(content, contentWords, contentTokenFinder)
+		fragments := extractFieldFragments(content, highlightWords, contentTokenFinder, fieldScopes)
 		sort.SliceStable(fragments, func(i, j int) bool {
 			return fragments[i].Offset < fragments[j].Offset
 		})
@@ -536,20 +521,14 @@ func (h *Handler) getHighlightFragments(slog map[string]interface{}, logCond *in
 	return highlight
 }
 
-func getJsonHighlight(k string, v interface{}, logCond *influxql.Query) *JsonHighlightFragment {
-	var expr *influxql.Expr
+// Get the highlights of individual fields when presented in json format
+func getJsonHighlight(k string, v interface{}, highlightWords map[string]map[string]bool) *JsonHighlightFragment {
 	p := parserPool.Get()
 	defer parserPool.Put(p)
-	if logCond != nil {
-		expr = &(logCond.Statements[0].(*influxql.LogPipeStatement).Cond)
-	}
 	finder := tokenizer.NewSimpleTokenFinder(tokenizer.CONTENT_SPLIT_TABLE)
 	value := convertToString(v)
 
-	words := map[string]struct{}{}
-	_, words = getHighlightWords(expr, nil, words)
-
-	segments := getJsonSegments(k, value, words, finder)
+	segments := getJsonSegments(k, value, highlightWords, finder)
 
 	// When value is not in json format, inner json is empty
 	innerJson, err := p.Parse(value)
@@ -559,22 +538,45 @@ func getJsonHighlight(k string, v interface{}, logCond *influxql.Query) *JsonHig
 
 	ob := innerJson.GetObject()
 	if ob != nil {
-		segments.InnerJson = parseInnerJson(ob, words, finder)
+		innerJsonHighlightWords := getInnerJsonHighlightWords(k, highlightWords)
+		segments.InnerJson = parseInnerJson(ob, innerJsonHighlightWords, finder)
 	}
 
 	return segments
 }
 
-func getJsonSegments(k, v string, words map[string]struct{}, finder *tokenizer.SimpleTokenFinder) *JsonHighlightFragment {
+// The inner json field name also needs to be highlighted, highlighting the full text
+func getInnerJsonHighlightWords(k string, highlightWords map[string]map[string]bool) map[string]map[string]bool {
+	innerJsonHighlightWords := map[string]map[string]bool{}
+	for word, finiteFields := range highlightWords {
+		if finiteFields[logparser.DefaultFieldForFullText] {
+			innerJsonHighlightWords[word] = map[string]bool{logparser.DefaultFieldForFullText: true}
+			continue
+		}
+
+		for finiteField := range finiteFields {
+			if k == finiteField {
+				innerJsonHighlightWords[word] = map[string]bool{logparser.DefaultFieldForFullText: true}
+				break
+			}
+		}
+	}
+
+	return innerJsonHighlightWords
+}
+
+func getJsonSegments(k, v string, highlightWords map[string]map[string]bool, finder *tokenizer.SimpleTokenFinder) *JsonHighlightFragment {
+	keyWords, valueWords := getFieldHighlightWords(k, highlightWords)
+
 	segments := JsonHighlightFragment{}
-	keyFragments := extractFragments(k, words, finder)
+	keyFragments := extractFragments(k, keyWords, finder)
 	sort.SliceStable(keyFragments, func(i, j int) bool {
 		return keyFragments[i].Offset < keyFragments[j].Offset
 	})
 	keyFragments = mergeFragments(keyFragments)
 	segments.Key = convertFragments(k, keyFragments)
 
-	valueFragments := extractFragments(v, words, finder)
+	valueFragments := extractFragments(v, valueWords, finder)
 	sort.SliceStable(valueFragments, func(i, j int) bool {
 		return valueFragments[i].Offset < valueFragments[j].Offset
 	})
@@ -584,14 +586,34 @@ func getJsonSegments(k, v string, words map[string]struct{}, finder *tokenizer.S
 	return &segments
 }
 
-func parseInnerJson(ob *fastjson.Object, words map[string]struct{}, finder *tokenizer.SimpleTokenFinder) map[string]interface{} {
+func getFieldHighlightWords(key string, highlightWords map[string]map[string]bool) ([]string, []string) {
+	var keyWords []string
+	var valueWords []string
+	for highlightWord, finiteFields := range highlightWords {
+		if finiteFields[logparser.DefaultFieldForFullText] {
+			keyWords = append(keyWords, highlightWord)
+			valueWords = append(valueWords, highlightWord)
+			continue
+		}
+
+		for finiteField := range finiteFields {
+			if finiteField == key {
+				valueWords = append(valueWords, highlightWord)
+			}
+		}
+	}
+
+	return keyWords, valueWords
+}
+
+func parseInnerJson(ob *fastjson.Object, highlightWords map[string]map[string]bool, finder *tokenizer.SimpleTokenFinder) map[string]interface{} {
 	var jsonHighlight []*JsonHighlightFragment
 
 	ob.Visit(func(key []byte, value *fastjson.Value) {
-		segments := getJsonSegments(string(key), value.String(), words, finder)
+		segments := getJsonSegments(string(key), value.String(), highlightWords, finder)
 
 		if value.Type() == fastjson.TypeObject {
-			segments.InnerJson = parseInnerJson(value.GetObject(), words, finder)
+			segments.InnerJson = parseInnerJson(value.GetObject(), highlightWords, finder)
 		}
 
 		jsonHighlight = append(jsonHighlight, segments)
@@ -617,22 +639,56 @@ func convertToString(i interface{}) string {
 	}
 }
 
-func extractFragments(source string, targets map[string]struct{}, finder *tokenizer.SimpleTokenFinder) []Fragment {
+func extractFragments(source string, highlightWords []string, finder *tokenizer.SimpleTokenFinder) []Fragment {
 	var fragments []Fragment
-	if finder == nil || len(targets) == 0 {
+	if finder == nil || len(highlightWords) == 0 {
 		return fragments
 	}
-	for target := range targets {
-		if target == EmptyValue {
-			continue
-		}
-		length := len(target)
-		finder.InitInput([]byte(source), []byte(target))
+
+	for _, highlightWord := range highlightWords {
+		length := len(highlightWord)
+		finder.InitInput([]byte(source), []byte(highlightWord))
 		for finder.Next() {
 			fragments = append(fragments, Fragment{Offset: finder.CurrentOffset(), Length: length})
 		}
 	}
 	return fragments
+}
+
+func extractFieldFragments(source string, highlightWords map[string]map[string]bool, finder *tokenizer.SimpleTokenFinder, fieldScopes []marshalFieldScope) []Fragment {
+	var fragments []Fragment
+	if finder == nil || len(highlightWords) == 0 {
+		return fragments
+	}
+	fieldScopesMap := fieldScopesSlice2Map(fieldScopes)
+	for highlightWord, finiteFields := range highlightWords {
+		length := len(highlightWord)
+		if finiteFields[logparser.DefaultFieldForFullText] {
+			finder.InitInput([]byte(source), []byte(highlightWord))
+			for finder.Next() {
+				fragments = append(fragments, Fragment{Offset: finder.CurrentOffset(), Length: length})
+			}
+			continue
+		}
+
+		for key := range finiteFields {
+			fieldScope := fieldScopesMap[key]
+			finder.InitInput([]byte(source[fieldScope.start:fieldScope.end]), []byte(highlightWord))
+			for finder.Next() {
+				fragments = append(fragments, Fragment{Offset: finder.CurrentOffset() + fieldScope.start, Length: length})
+			}
+		}
+	}
+
+	return fragments
+}
+
+func fieldScopesSlice2Map(fieldScopes []marshalFieldScope) map[string]marshalFieldScope {
+	fieldScopesMap := make(map[string]marshalFieldScope, len(fieldScopes))
+	for _, fieldScope := range fieldScopes {
+		fieldScopesMap[fieldScope.key] = fieldScope
+	}
+	return fieldScopesMap
 }
 
 func mergeFragments(fragments []Fragment) []Fragment {
@@ -880,7 +936,7 @@ func (h *Handler) serveAnalytics(w http.ResponseWriter, r *http.Request, user me
 			Request_id: uuid.TimeUUID().String(),
 			Count:      count,
 			Progress:   fmt.Sprintf("%f", 1.0),
-			Dataset:    results,
+			Dataset:    nil,
 			Took_ms:    time.Since(time.Now()).Milliseconds(),
 			Scroll_id:  fmt.Sprintf("%v-%s-%d", meta.DefaultMetaClient.NodeID(), para.QueryID, para.IterID)}
 		b, err := json.Marshal(res)
@@ -979,7 +1035,9 @@ func GetAnalysisResults(resp *Response, sql *influxql.Query) [][]string {
 						skipIndex += 1
 						continue
 					}
-					if floatRow, ok := row[k].(float64); ok {
+					if row[k] == nil {
+						currResult[k-1+len(tags)-skipIndex] = ""
+					} else if floatRow, ok := row[k].(float64); ok {
 						currResult[k-1+len(tags)-skipIndex] = strconv.FormatFloat(floatRow, 'f', -1, 64)
 					} else {
 						currResult[k-1+len(tags)-skipIndex] = fmt.Sprintf("%v", row[k])

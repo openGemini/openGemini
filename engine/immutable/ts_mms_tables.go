@@ -18,6 +18,7 @@ package immutable
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -76,11 +77,11 @@ func (t *tsImmTableImpl) compactToLevel(m *MmsTables, group FilesInfo, full, isN
 	lcLog.Debug("start compact file", zap.Uint64("shid", group.shId), zap.Any("seqs", group.oldFids), zap.Time("start", start))
 	lcLog.Debug(fmt.Sprintf("compactionGroup: name=%v, groups=%v", group.name, group.oldFids))
 
-	parquetPlan := NewTSSP2ParquetPlan(group.toLevel)
-
 	var oldFilesSize int
 	var newFiles []TSSPFile
 	var compactErr error
+	var events *Events
+
 	if isNonStream {
 		compItrs := m.NewChunkIterators(group)
 		if compItrs == nil {
@@ -98,14 +99,14 @@ func (t *tsImmTableImpl) compactToLevel(m *MmsTables, group FilesInfo, full, isN
 			return nil
 		}
 
-		if parquetPlan.Enable() {
-			compItrs.SetHook(parquetPlan)
-		}
+		events = compItrs.InitEvents(group.toLevel)
 
 		compItrs.WithLog(lcLog)
 		oldFilesSize = compItrs.estimateSize
 		newFiles, compactErr = compItrs.compact(group.oldFiles, group.toLevel, true)
 		if compactErr != nil {
+			events.Finish(false, m.getEventContext())
+			events = nil
 			compItrs.RemoveTmpFiles()
 		}
 		compItrs.Close()
@@ -116,11 +117,24 @@ func (t *tsImmTableImpl) compactToLevel(m *MmsTables, group FilesInfo, full, isN
 		return compactErr
 	}
 
+	if events != nil {
+		err := events.TriggerReplaceFile(filepath.Dir(m.path), *m.lock)
+		if err != nil {
+			lcLog.Error("failed to trigger event ReplaceFile", zap.Error(err))
+			events.Finish(false, m.getEventContext())
+			return err
+		}
+	}
+
 	if err := m.ReplaceFiles(group.name, group.oldFiles, newFiles, true); err != nil {
 		lcLog.Error("replace compacted file error", zap.Error(err))
+		events.Finish(false, m.getEventContext())
 		return err
 	}
 
+	if events != nil {
+		events.Finish(true, m.getEventContext())
+	}
 	end := time.Now()
 	lcLog.Debug("compact file done", zap.Any("files", group.oldFids), zap.Time("end", end), zap.Duration("time used", end.Sub(start)))
 

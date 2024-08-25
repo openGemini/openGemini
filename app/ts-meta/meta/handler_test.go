@@ -92,11 +92,11 @@ func TestHttpHandler_ServeHTTP(t *testing.T) {
 	}
 	defer mms.Close()
 
-	node1, err := mms.GetStore().data.CreateDataNode("127.0.0.1:8400", "127.0.0.1:8401", "")
+	node1, err := mms.GetStore().data.CreateDataNode("127.0.0.1:8400", "127.0.0.1:8401", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	node2, err := mms.GetStore().data.CreateDataNode("127.0.0.2:8400", "127.0.0.2:8401", "")
+	node2, err := mms.GetStore().data.CreateDataNode("127.0.0.2:8400", "127.0.0.2:8401", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,6 +202,10 @@ func (s *MockIStore) movePt(db string, pt uint32, to uint64) error {
 }
 
 func (s *MockIStore) SpecialCtlData(cmd string) error {
+	return nil
+}
+
+func (s *MockIStore) ModifyRepDBMasterPt(db string, rgId uint32, newMasterPtId uint32) error {
 	return nil
 }
 

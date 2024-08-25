@@ -124,7 +124,7 @@ func AppendData(data *[]string, metric labels.Labels, samples []promql.Point) {
 	}
 	writes := metric[0].Value
 	for _, label := range metric {
-		writes += fmt.Sprintf(",%s=\"%s\"", label.Name, label.Value)
+		writes += fmt.Sprintf(",%s=%s", label.Name, label.Value)
 	}
 
 	for _, val := range samples {
@@ -203,7 +203,7 @@ func (t *PromTest) parseEval(lines []string, i int) (int, []*Query, error) {
 	return i, queries, nil
 }
 
-func AppendQueries(queries *[]*Query, line int, expr string, startTime time.Time, promExps []*PromExp, mod string) error {
+func AppendQueries(queries *[]*Query, line int, expr string, startTime time.Time, exps []*PromExp, mod string) error {
 	var fail, ordered, skip bool
 	switch mod {
 	case "ordered":
@@ -214,32 +214,45 @@ func AppendQueries(queries *[]*Query, line int, expr string, startTime time.Time
 		skip = true
 	}
 
+	promExps := map[uint64]*PromExp{}
+	for _, e := range exps {
+		var h uint64 = 0
+		if e.Metric != nil {
+			h = e.Metric.Hash()
+		}
+		promExps[h] = e
+	}
+
 	qs, err := atModifierTestCases(expr, startTime)
 	if err != nil {
 		return err
 	}
+	qs = append(qs, atModifierTestCase{expr: expr, evalTime: startTime})
 	for _, q := range qs {
 		evalTime := q.evalTime.Unix()
-		insExp, rangeExp := buildExp(promExps, q.evalTime)
+		insExp, rangeExp := buildExp(exps, q.evalTime)
 		*queries = append(*queries, &Query{
 			name:    strconv.Itoa(line),
 			command: q.expr,
 			params:  url.Values{"db": []string{"db0"}, "time": []string{strconv.FormatInt(evalTime, 10)}},
 			exp:     insExp,
+			promExp: promExps,
 			path:    "/api/v1/query",
 			ordered: ordered,
 			fail:    fail,
 			skip:    skip,
 		})
 		*queries = append(*queries, &Query{
-			name:    strconv.Itoa(line),
-			command: q.expr,
-			params:  url.Values{"db": []string{"db0"}, "start": []string{strconv.FormatInt(q.evalTime.Add(-time.Minute).Unix(), 10)}, "end": []string{strconv.FormatInt(q.evalTime.Add(time.Minute).Unix(), 10)}, "step": []string{"60"}},
-			exp:     rangeExp,
-			path:    "/api/v1/query_range",
-			ordered: ordered,
-			fail:    fail,
-			skip:    skip,
+			name:     strconv.Itoa(line),
+			command:  q.expr,
+			params:   url.Values{"db": []string{"db0"}, "start": []string{strconv.FormatInt(q.evalTime.Add(-time.Minute).Unix(), 10)}, "end": []string{strconv.FormatInt(q.evalTime.Add(time.Minute).Unix(), 10)}, "step": []string{"60"}},
+			exp:      rangeExp,
+			evalTime: q.evalTime.Unix() * 1000,
+			promExp:  promExps,
+			path:     "/api/v1/query_range",
+			ordered:  ordered,
+			fail:     fail,
+			skip:     skip,
 		})
 	}
 	return nil
@@ -468,7 +481,7 @@ func RunQueries(queries []*Query, t *testing.T, s Server) {
 					// Ordering isn't defined for range queries.
 					t.Skipf("SKIP:: %s", query.name)
 				}
-				if !query.success() {
+				if !query.promSuccess() {
 					t.Error(query.failureMessage())
 				}
 			}

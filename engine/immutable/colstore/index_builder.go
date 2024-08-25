@@ -17,7 +17,6 @@ limitations under the License.
 package colstore
 
 import (
-	"hash/crc32"
 	"io"
 	"os"
 
@@ -137,16 +136,8 @@ func (b *IndexBuilder) WriteDetachedData(rec *record.Record, tcLocation int8) er
 
 func (b *IndexBuilder) WriteDetachedMeta(startId, endId uint64, offset, size uint32, fd fileops.File) error {
 	b.reserveMeta()
-	pos := uint32(len(b.meta))
-	b.meta = numberenc.MarshalUint32Append(b.meta, 0) // reserve crc32
-	b.meta = numberenc.MarshalUint64Append(b.meta, startId)
-	b.meta = numberenc.MarshalUint64Append(b.meta, endId)
-	b.meta = numberenc.MarshalUint32Append(b.meta, offset)
-	b.meta = numberenc.MarshalUint32Append(b.meta, size)
-	b.meta = append(b.meta, b.colsOffset...)
-	crc := crc32.ChecksumIEEE(b.meta[pos+crcSize:])
-	numberenc.MarshalUint32Copy(b.meta[pos:pos+crcSize], crc)
-
+	// marshal primary key metablock
+	b.meta = MarshalPkMetaBlock(startId, endId, offset, size, b.meta, b.colsOffset)
 	//init encodeChunk writer
 	if b.writer != nil {
 		_ = b.writer.Close()

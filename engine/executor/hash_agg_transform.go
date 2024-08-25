@@ -337,8 +337,14 @@ func NewHashAggTransform(
 }
 
 func (trans *HashAggTransform) initIntervalWindow() error {
-	trans.intervalStartTime, _ = trans.opt.Window(trans.opt.StartTime)
-	trans.intervalEndTime, _ = trans.opt.Window(trans.opt.EndTime)
+	if trans.opt.IsPromQuery() {
+		offset := trans.opt.GetPromQueryOffset().Nanoseconds()
+		trans.intervalStartTime, _ = trans.opt.Window(trans.opt.StartTime + offset)
+		trans.intervalEndTime, _ = trans.opt.Window(trans.opt.EndTime + offset)
+	} else {
+		trans.intervalStartTime, _ = trans.opt.Window(trans.opt.StartTime)
+		trans.intervalEndTime, _ = trans.opt.Window(trans.opt.EndTime)
+	}
 	// 1.not surrport: previousFill linearFill 2.use fixInterval: startTime != minTime && endTime != maxTime 3.use unfixInterva: other
 	if trans.opt.Fill == influxql.PreviousFill || trans.opt.Fill == influxql.LinearFill {
 		return fmt.Errorf("NewHashAggTransform error: not support Fill")
@@ -389,7 +395,11 @@ func (trans *HashAggTransform) InitFuncs(inRowDataType, outRowDataType hybridqp.
 				trans.haveTopBottomOp = true
 				fn, err = NewHeapFunc(inRowDataType, outRowDataType, exprOpt, i, false)
 			default:
-				return errors.New("unsupported aggregation operator of call processor")
+				if newFn, ok := newPromFunc[name]; ok {
+					fn, err = newFn(inRowDataType, outRowDataType, exprOpt[i])
+				} else {
+					return errors.New("unsupported aggregation operator of call processor")
+				}
 			}
 			if err != nil {
 				return err
@@ -714,6 +724,12 @@ func (trans *HashAggTransform) computeBatchLocsByChunkTags() {
 		trans.batchEndLocs = append(trans.batchEndLocs, trans.bufChunk.Len())
 		return
 	}
+	if trans.opt.IsPromQuery() {
+		intervalIndex := trans.bufChunk.IntervalIndex()
+		trans.batchEndLocs = append(trans.batchEndLocs, intervalIndex[1:]...)
+		trans.batchEndLocs = append(trans.batchEndLocs, trans.bufChunk.Len())
+		return
+	}
 	for i := 1; i <= trans.bufChunk.Len(); i++ {
 		trans.batchEndLocs = append(trans.batchEndLocs, i)
 	}
@@ -899,7 +915,7 @@ func (trans *HashAggTransform) mapGroupKeys() []uint64 {
 		return trans.spillMapGroupKeys()
 	}
 	values := trans.bufGroupKeysMPool.AllocValues(len(trans.batchEndLocs))
-	if trans.opt.Dimensions == nil || len(trans.opt.Dimensions) == 0 {
+	if len(trans.opt.Dimensions) == 0 && !trans.opt.Without {
 		return values
 	}
 	for i := 0; i < len(trans.batchEndLocs); i++ {
@@ -949,16 +965,24 @@ func (trans *HashAggTransform) computeGroupKeysByDims() {
 	trans.bufGroupTags[endOfBatchEndLocs] = nil
 }
 
+func (trans *HashAggTransform) nilGroupKeys() bool {
+	return (trans.opt.Dimensions == nil || trans.bufChunk.TagLen() == 0 || (trans.bufChunk.TagLen() == 1 && trans.bufChunk.Tags()[0].subset == nil)) && !trans.opt.Without
+}
+
 func (trans *HashAggTransform) computeGroupKeys() {
 	if trans.bufChunk.Dims() != nil && len(trans.bufChunk.Dims()) > 0 {
 		trans.computeGroupKeysByDims()
+		return
+	}
+	if trans.opt.IsPromQuery() {
+		trans.computeGroupKeysByTags()
 		return
 	}
 	// batch can not use
 	tags := trans.bufChunk.Tags()
 	trans.bufGroupKeys = trans.bufGroupKeysMPool.AllocGroupKeys(len(trans.batchEndLocs))
 	trans.bufGroupTags = trans.bufGroupKeysMPool.AllocGroupTags(len(trans.batchEndLocs))
-	if trans.opt.Dimensions == nil || trans.bufChunk.TagLen() == 0 || (trans.bufChunk.TagLen() == 1 && trans.bufChunk.Tags()[0].subset == nil) {
+	if trans.nilGroupKeys() {
 		return
 	}
 	for i := range tags {
@@ -979,9 +1003,28 @@ func (trans *HashAggTransform) computeGroupKeys() {
 	}
 }
 
+func (trans *HashAggTransform) computeGroupKeysByTags() {
+	tags := trans.bufChunk.Tags()
+	tagIndex := trans.bufChunk.TagIndex()
+	trans.bufGroupKeys = trans.bufGroupKeysMPool.AllocGroupKeys(len(trans.batchEndLocs))
+	trans.bufGroupTags = trans.bufGroupKeysMPool.AllocGroupTags(len(trans.batchEndLocs))
+	if trans.nilGroupKeys() {
+		return
+	}
+	tagInd := 0
+	for i, index := range trans.bufChunk.IntervalIndex() {
+		if tagInd+1 < len(tags) && index == tagIndex[tagInd+1] {
+			tagInd++
+		}
+		key := tags[tagInd].subset
+		trans.bufGroupKeys[i] = key
+		trans.bufGroupTags[i] = &tags[tagInd]
+	}
+}
+
 func (trans *HashAggTransform) getTags(keys []string, i int) *ChunkTags {
 	groupValues := trans.groupKeys[i]
-	if len(keys) > 0 {
+	if len(keys) > 0 || trans.opt.Without {
 		return &groupValues
 	} else {
 		return &ChunkTags{}

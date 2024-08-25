@@ -188,4 +188,8 @@ func (reader *DetachedMetaDataReader) Close() {
 	if reader.r != nil {
 		reader.r.Close()
 	}
+	if reader.ch != nil {
+		for range reader.ch {
+		}
+	}
 }

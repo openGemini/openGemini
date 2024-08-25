@@ -82,6 +82,7 @@ type PWMetaClient interface {
 	GetDstStreamInfos(db, rp string, dstSis *[]*meta2.StreamInfo) bool
 	DBRepGroups(database string) []meta2.ReplicaGroup
 	GetReplicaN(database string) (int, error)
+	GetSgEndTime(database string, rp string, timestamp time.Time, engineType config.EngineType) (int64, error)
 }
 
 // PointsWriter handles writes across multiple local and remote data nodes.
@@ -420,16 +421,17 @@ func (w *PointsWriter) routeAndMapOriginRows(
 		if ctx.ms.EngineType == config.COLUMNSTORE {
 			wh.updatePrimaryKeyMapIfNeeded(ctx.ms.ColStoreInfo.PrimaryKey, r.Name)
 		}
-
-		if ctx.fieldToCreatePool, isDropRow, err = wh.updateSchemaIfNeeded(database, retentionPolicy, r, ctx.ms, originName, ctx.fieldToCreatePool[:0]); err != nil {
-			if w.isPartialErr(err) {
-				partialErr = err
-				if isDropRow {
-					dropped++
-					continue
+		if !meta2.SchemaCleanEn {
+			if ctx.fieldToCreatePool, isDropRow, err = wh.updateSchemaIfNeeded(database, retentionPolicy, r, ctx.ms, originName, ctx.fieldToCreatePool[:0]); err != nil {
+				if w.isPartialErr(err) {
+					partialErr = err
+					if isDropRow {
+						dropped++
+						continue
+					}
+				} else {
+					return nil, dropped, err
 				}
-			} else {
-				return nil, dropped, err
 			}
 		}
 
@@ -446,6 +448,19 @@ func (w *PointsWriter) routeAndMapOriginRows(
 			partialErr = pErr
 			dropped++
 			continue
+		}
+		if meta2.SchemaCleanEn {
+			if ctx.fieldToCreatePool, isDropRow, err = wh.updateSchemaIfNeeded(database, retentionPolicy, r, ctx.ms, originName, ctx.fieldToCreatePool[:0]); err != nil {
+				if w.isPartialErr(err) {
+					partialErr = err
+					if isDropRow {
+						dropped++
+						continue
+					}
+				} else {
+					return nil, dropped, err
+				}
+			}
 		}
 
 		if len(*ctx.getDstSis()) > 0 {
@@ -590,11 +605,11 @@ func (w *PointsWriter) routeAndCalculateStreamRows(ctx *injestionCtx) (err error
 	return
 }
 
-func buildTagsFields(info *meta2.StreamInfo, srcSchema map[string]int32) ([]string, []string) {
+func buildTagsFields(info *meta2.StreamInfo, srcSchema *meta2.CleanSchema) ([]string, []string) {
 	var tags []string
 	var fields []string
 	for _, v := range info.Dims {
-		t, exist := srcSchema[v]
+		t, exist := srcSchema.GetTyp(v)
 		if exist {
 			if t == influx.Field_Type_Tag {
 				tags = append(tags, v)

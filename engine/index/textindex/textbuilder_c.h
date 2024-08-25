@@ -28,3 +28,7 @@ void FreeTextIndexBuilder(TextIndexBuilder builder);
 MemElement AddDocument(TextIndexBuilder builder, char *val, uint32_t valLen, uint32_t *offset, uint32_t offLen, uint32_t startRow, uint32_t endRow);
 bool NextData(MemElement memElement, char *keys, uint32_t keysLen, char *data, uint32_t dataLen, uint32_t *res);
 void PutMemElement(MemElement memElement);
+
+// for test
+MemElement GetMemElement(uint32_t groupSize);
+bool AddPostingToMem(MemElement memElement, char *key, uint32_t keyLen, uint32_t rowId);

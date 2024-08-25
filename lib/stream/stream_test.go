@@ -19,10 +19,12 @@ package stream
 import (
 	"fmt"
 	"testing"
+
+	"github.com/openGemini/openGemini/lib/strings"
 )
 
 func Test_builderPool(t *testing.T) {
-	bp := NewBuilderPool()
+	bp := strings.NewBuilderPool()
 	sb := bp.Get()
 	for i := 0; i < 100; i++ {
 		sb.AppendString("xx")
@@ -44,7 +46,7 @@ func Test_builderPool(t *testing.T) {
 }
 
 func Test_BuilderPool_Len(t *testing.T) {
-	pool := NewBuilderPool()
+	pool := strings.NewBuilderPool()
 	c1 := pool.Get()
 	if pool.Len() != 0 {
 		t.Error(fmt.Sprintf("expect %v ,got %v", 0, pool.Len()))
@@ -76,7 +78,7 @@ func Test_BuilderPool_Len(t *testing.T) {
 }
 
 func Test_StringBuilder(t *testing.T) {
-	sb := StringBuilder{}
+	sb := strings.StringBuilder{}
 	sb.AppendString("xx")
 	str := sb.String()
 	strNew := sb.NewString()

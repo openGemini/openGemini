@@ -221,7 +221,7 @@ func (s *Server) initStatisticsPusher() {
 	}
 
 	s.config.Monitor.SetApp(s.info.App)
-	hostname := config.CombineDomain(s.config.Meta.Domain, s.BindAddress)
+	hostname := s.BindAddress
 	globalTags := map[string]string{
 		"hostname": strings.ReplaceAll(hostname, ",", "_"),
 		"app":      "ts-" + string(s.info.App),
@@ -231,6 +231,7 @@ func (s *Server) initStatisticsPusher() {
 	stat.NewErrnoStat().Init(globalTags)
 	stat.InitSpdyStatistics(globalTags)
 	transport.InitStatistics(transport.AppMeta)
+	stat.NewLogKeeperStatistics().Init(globalTags)
 
 	s.statisticsPusher.Register(
 		stat.NewMetaStatistics().Collect,
@@ -239,6 +240,7 @@ func (s *Server) initStatisticsPusher() {
 		stat.MetaTaskInstance.Collect,
 		stat.MetadataInstance.Collect,
 		stat.CollectSpdyStatistics,
+		stat.NewLogKeeperStatistics().Collect,
 	)
 
 	s.statisticsPusher.RegisterOps(

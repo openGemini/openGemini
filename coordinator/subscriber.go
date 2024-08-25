@@ -83,13 +83,13 @@ func NewHTTPClient(url *url.URL, timeout time.Duration) *HTTPClient {
 }
 
 func NewHTTPSClient(url *url.URL, timeout time.Duration, skipVerify bool, certs string) (*HTTPClient, error) {
-	var tlsConfig *tls.Config
+	tlsConfig := &tls.Config{
+		InsecureSkipVerify: skipVerify,
+		MinVersion:         tls.VersionTLS12,
+		CipherSuites:       config.DefaultCipherSuites,
+	}
 
-	if certs == "" {
-		tlsConfig = &tls.Config{
-			InsecureSkipVerify: true,
-		}
-	} else {
+	if certs != "" {
 		cert, err := tls.X509KeyPair(
 			[]byte(crypto.DecryptFromFile(certs)),
 			[]byte(crypto.DecryptFromFile(certs)),
@@ -97,11 +97,7 @@ func NewHTTPSClient(url *url.URL, timeout time.Duration, skipVerify bool, certs 
 		if err != nil {
 			return nil, err
 		}
-
-		tlsConfig = &tls.Config{
-			InsecureSkipVerify: skipVerify,
-			Certificates:       []tls.Certificate{cert},
-		}
+		tlsConfig.Certificates = []tls.Certificate{cert}
 	}
 
 	transport := &http.Transport{

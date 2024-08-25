@@ -826,15 +826,15 @@ func (b *MsBuilder) WriteDetachedIndex(writeRec *record.Record, rowsPerSegment [
 		} else {
 			cols = len(schemaIdxes[i])
 		}
-		indexBuf := logstore.GetIndexBuf(cols)
+		indexBuf := logstore.GetSkipIndexBuf(cols)
 
 		*indexBuf, skipIndexFilePaths = skipWriters[i].CreateDetachIndex(writeRec, schemaIdxes[i], rowsPerSegment, *indexBuf)
 		err = b.flushIndexToDisk(*indexBuf, skipIndexFilePaths, i, len(rowsPerSegment))
 		if err != nil {
-			logstore.PutIndexBuf(indexBuf)
+			logstore.PutSkipIndexBuf(indexBuf)
 			return err
 		}
-		logstore.PutIndexBuf(indexBuf)
+		logstore.PutSkipIndexBuf(indexBuf)
 	}
 	return nil
 }
@@ -1345,7 +1345,7 @@ func (b *MsBuilder) genBloomFilter() {
 		b.bloomFilter = make([]byte, bmBytes)
 	} else {
 		b.bloomFilter = b.bloomFilter[:bmBytes]
-		util.MemorySet(b.bloomFilter)
+		util.MemorySet(b.bloomFilter, 0)
 	}
 	b.trailer.bloomM = bm
 	b.trailer.bloomK = bk

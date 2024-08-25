@@ -64,11 +64,12 @@ type IncAggTransform struct {
 	startTime      int64
 	endTime        int64
 	bucketCount    int64
+	bitmaps        []*Bitmap
 
 	aggLogger        *logger.Logger
 	span             *tracing.Span
 	ppIncAggCost     *tracing.Span
-	incAggFuncs      [][FuncPathCount]func(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, srcRow int)
+	incAggFuncs      [][FuncPathCount]func(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, srcRow int, bitmap *Bitmap)
 	incAggApproxFunc []func(srcCol Column, iterCurrNum, iterMaxNum int32)
 	incFuncIndex     []int
 	funcInOutIdxMap  map[int][FuncPathCount]int
@@ -102,8 +103,11 @@ func NewIncAggTransform(inRowDataTypes []hybridqp.RowDataType, outRowDataTypes [
 		trans.Outputs = append(trans.Outputs, output)
 	}
 
-	trans.initIncAggFuncs()
-	err := trans.initIntervalChunk()
+	err := trans.initIncAggFuncs()
+	if err != nil {
+		return nil, err
+	}
+	err = trans.initIntervalChunk()
 	if err != nil {
 		return nil, err
 	}
@@ -147,6 +151,30 @@ func (trans *IncAggTransform) initSpan() {
 	}
 }
 
+func (trans *IncAggTransform) filterEmptyValue(c Chunk) Chunk {
+	newChunk := NewChunkBuilder(c.RowDataType()).NewChunk(c.Name())
+	newChunk.AppendTagsAndIndexes(c.Tags(), c.TagIndex())
+	newChunk.AppendIntervalIndexes(c.IntervalIndex())
+	newChunk.SetTime(c.Time())
+	for i, column := range newChunk.Columns() {
+		dataType := column.DataType()
+		inColumn := c.Column(i)
+		switch dataType {
+		case influxql.Integer:
+			integerValues := filterValueByBitmap[int64](trans.bitmaps[i], inColumn.IntegerValues())
+			column.AppendIntegerValues(integerValues)
+		case influxql.Float:
+			floatValues := filterValueByBitmap[float64](trans.bitmaps[i], inColumn.FloatValues())
+			column.AppendFloatValues(floatValues)
+		case influxql.Boolean:
+			boolValues := filterValueByBitmap[bool](trans.bitmaps[i], inColumn.BooleanValues())
+			column.AppendBooleanValues(boolValues)
+		}
+		trans.bitmaps[i].CopyTo(column.NilsV2())
+	}
+	return newChunk
+}
+
 func (trans *IncAggTransform) Work(ctx context.Context) error {
 	trans.initSpan()
 	defer func() {
@@ -164,7 +192,8 @@ func (trans *IncAggTransform) Work(ctx context.Context) error {
 						return
 					}
 					trans.updateCache()
-					trans.sendChunk(trans.approxChunk)
+					chunk := trans.filterEmptyValue(trans.approxChunk)
+					trans.sendChunk(chunk)
 					return
 				}
 
@@ -212,6 +241,9 @@ func (trans *IncAggTransform) computeApprox() error {
 		return nil
 	}
 	for i := range trans.incAggApproxFunc {
+		if trans.incAggApproxFunc[i] == nil {
+			continue
+		}
 		idx := trans.funcInOutIdxMap[i]
 		trans.incAggApproxFunc[i](trans.approxChunk.Column(idx[1]), iterCurrNum, iterMaxNum)
 	}
@@ -230,7 +262,7 @@ func (trans *IncAggTransform) updateChunk(srcRow, dstRow int) {
 		}
 		idx := trans.funcInOutIdxMap[i]
 		srcCol, dstCol := idx[0], idx[1]
-		trans.incAggFuncs[i][trans.incFuncIndex[i]](trans.intervalChunk, chunk, dstCol, srcCol, dstRow, srcRow)
+		trans.incAggFuncs[i][trans.incFuncIndex[i]](trans.intervalChunk, chunk, dstCol, srcCol, dstRow, srcRow, trans.bitmaps[dstCol])
 	}
 }
 
@@ -289,7 +321,17 @@ func (trans *IncAggTransform) initTimeWindows() error {
 		trans.opt.IsAscending(),
 		ChunkTags{},
 	)
+	trans.initBitmaps()
 	return nil
+}
+
+func (trans *IncAggTransform) initBitmaps() {
+	trans.bitmaps = make([]*Bitmap, 0)
+	for i := 0; i < trans.intervalChunk.NumberOfCols(); i++ {
+		bitmap := NewBitmap()
+		bitmap.appendManyV2Nil(int(trans.bucketCount))
+		trans.bitmaps = append(trans.bitmaps, bitmap)
+	}
 }
 
 func (trans *IncAggTransform) GetIndex(t int64) int64 {
@@ -323,14 +365,15 @@ func (trans *IncAggTransform) initIntervalChunk() error {
 		return errno.NewError(errno.FailedGetIncAggItem, queryID, iterID)
 	}
 	trans.intervalChunk = aggItem.Clone()
+	trans.initBitmaps()
 	return nil
 }
 
-func (trans *IncAggTransform) initIncAggFuncs() {
-	trans.incAggFuncs = make([][FuncPathCount]func(stChunk, srcChunk Chunk, dstCol, srcCol, dstRow, srcRow int), len(trans.ops))
+func (trans *IncAggTransform) initIncAggFuncs() error {
+	trans.incAggFuncs = make([][FuncPathCount]func(stChunk, srcChunk Chunk, dstCol, srcCol, dstRow, srcRow int, bitmap *Bitmap), len(trans.ops))
 	trans.incAggApproxFunc = make([]func(srcCol Column, iterCurrNum, iterMaxNum int32), len(trans.ops))
 	trans.incFuncIndex = make([]int, len(trans.ops))
-	trans.buildIncAggFuncs()
+	return trans.buildIncAggFuncs()
 }
 
 func (trans *IncAggTransform) updateIncFuncIndex() {
@@ -350,55 +393,30 @@ func (trans *IncAggTransform) resetIncFuncIndex() {
 	}
 }
 
-func (trans *IncAggTransform) buildIncAggFuncs() {
+func (trans *IncAggTransform) buildIncAggFuncs() error {
 	for i := range trans.ops {
+		var err error
 		switch trans.ops[i].Expr.(type) {
 		case *influxql.Call:
 			name := trans.ops[i].Expr.(*influxql.Call).Name
 			switch name {
 			case "sum":
-				trans.buildIncSumAggFuncs(i)
+				err = trans.buildIncSumAggFuncs(i)
+			case "min":
+				err = trans.buildIncMinAggFuncs(i)
+			case "max":
+				err = trans.buildIncMaxAggFuncs(i)
 			default:
-				panic(fmt.Sprintf("unsupported agg function: %s", name))
+				return fmt.Errorf("unsupported agg function: %s", name)
 			}
 		default:
-			panic("unsupported agg expr type")
+			return errno.NewError(errno.UnsupportedExprType)
+		}
+		if err != nil {
+			return nil
 		}
 	}
-}
-
-func UpdateInterSumSlow(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, srcRow int) {
-	isNil := srcChunk.Column(srcCol).IsNilV2(srcRow)
-	if isNil {
-		return
-	}
-	srcRow = srcChunk.Column(srcCol).GetValueIndexV2(srcRow)
-	sv := srcChunk.Column(srcCol).IntegerValue(srcRow)
-	dv := dstChunk.Column(dstCol).IntegerValue(dstRow)
-	dstChunk.Column(dstCol).UpdateIntegerValueFast(sv+dv, dstRow)
-}
-
-func UpdateInterSumFast(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, srcRow int) {
-	sv := srcChunk.Column(srcCol).IntegerValue(srcRow)
-	dv := dstChunk.Column(dstCol).IntegerValue(dstRow)
-	dstChunk.Column(dstCol).UpdateIntegerValueFast(sv+dv, dstRow)
-}
-
-func UpdateFloatSumSlow(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, srcRow int) {
-	isNil := srcChunk.Column(srcCol).IsNilV2(srcRow)
-	if isNil {
-		return
-	}
-	srcRow = srcChunk.Column(srcCol).GetValueIndexV2(srcRow)
-	sv := srcChunk.Column(srcCol).FloatValue(srcRow)
-	dv := dstChunk.Column(dstCol).FloatValue(dstRow)
-	dstChunk.Column(dstCol).UpdateFloatValueFast(sv+dv, dstRow)
-}
-
-func UpdateFloatSumFast(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, srcRow int) {
-	sv := srcChunk.Column(srcCol).FloatValue(srcRow)
-	dv := dstChunk.Column(dstCol).FloatValue(dstRow)
-	dstChunk.Column(dstCol).UpdateFloatValueFast(sv+dv, dstRow)
+	return nil
 }
 
 func computeApproxInteger(srcCol Column, iterNum, iterMaxNum int32) {
@@ -415,26 +433,76 @@ func computeApproxFloat(srcCol Column, iterNum, iterMaxNum int32) {
 	}
 }
 
-func (trans *IncAggTransform) buildIncSumAggFuncs(i int) {
+func (trans *IncAggTransform) buildIncSumAggFuncs(i int) error {
 	srcCol := trans.inRowDataType.FieldIndex(trans.ops[i].Expr.(*influxql.Call).Args[0].(*influxql.VarRef).Val)
 	dstCol := trans.outRowDataType.FieldIndex(trans.ops[i].Ref.Val)
 	if srcCol < 0 || dstCol < 0 {
-		panic("input and output schemas are not aligned for sum")
+		return errno.NewError(errno.SchemaNotAligned, "sum", "input and output schemas are not aligned")
 	}
 	trans.funcInOutIdxMap[i] = [2]int{srcCol, dstCol}
 	srcType := trans.inRowDataType.Field(srcCol).Expr.(*influxql.VarRef).Type
 	switch srcType {
 	case influxql.Integer:
 		trans.incAggApproxFunc[srcCol] = computeApproxInteger
-		trans.incAggFuncs[srcCol][SlowFuncIdx] = UpdateInterSumSlow
-		trans.incAggFuncs[srcCol][FastFuncIdx] = UpdateInterSumFast
+		trans.incAggFuncs[srcCol][SlowFuncIdx] = UpdateHashInterSumSlow
+		trans.incAggFuncs[srcCol][FastFuncIdx] = UpdateHashInterSumFast
 	case influxql.Float:
 		trans.incAggApproxFunc[srcCol] = computeApproxFloat
-		trans.incAggFuncs[srcCol][SlowFuncIdx] = UpdateFloatSumSlow
-		trans.incAggFuncs[srcCol][FastFuncIdx] = UpdateFloatSumFast
+		trans.incAggFuncs[srcCol][SlowFuncIdx] = UpdateHashFloatSumSlow
+		trans.incAggFuncs[srcCol][FastFuncIdx] = UpdateHashFloatSumFast
 	default:
-		panic(fmt.Sprintf("unsupport data type %s for sum", srcType))
+		return fmt.Errorf("unsupport data type %s for sum", srcType)
 	}
+	return nil
+}
+
+func (trans *IncAggTransform) buildIncMinAggFuncs(i int) error {
+	srcCol := trans.inRowDataType.FieldIndex(trans.ops[i].Expr.(*influxql.Call).Args[0].(*influxql.VarRef).Val)
+	dstCol := trans.outRowDataType.FieldIndex(trans.ops[i].Ref.Val)
+	if srcCol < 0 || dstCol < 0 {
+		return errno.NewError(errno.SchemaNotAligned, "min", "input and output schemas are not aligned")
+	}
+	trans.funcInOutIdxMap[i] = [2]int{srcCol, dstCol}
+	srcType := trans.inRowDataType.Field(srcCol).Expr.(*influxql.VarRef).Type
+
+	switch srcType {
+	case influxql.Integer:
+		trans.incAggFuncs[srcCol][SlowFuncIdx] = UpdateHashInterMinSlow
+		trans.incAggFuncs[srcCol][FastFuncIdx] = UpdateHashInterMinFast
+	case influxql.Float:
+		trans.incAggFuncs[srcCol][SlowFuncIdx] = UpdateHashFloatMinSlow
+		trans.incAggFuncs[srcCol][FastFuncIdx] = UpdateHashFloatMinFast
+	case influxql.Boolean:
+		trans.incAggFuncs[srcCol][SlowFuncIdx] = UpdateHashBooleanMinSlow
+		trans.incAggFuncs[srcCol][FastFuncIdx] = UpdateHashBooleanMinFast
+	default:
+		return fmt.Errorf("unsupport data type %s for min", srcType)
+	}
+	return nil
+}
+
+func (trans *IncAggTransform) buildIncMaxAggFuncs(i int) error {
+	srcCol := trans.inRowDataType.FieldIndex(trans.ops[i].Expr.(*influxql.Call).Args[0].(*influxql.VarRef).Val)
+	dstCol := trans.outRowDataType.FieldIndex(trans.ops[i].Ref.Val)
+	if srcCol < 0 || dstCol < 0 {
+		return errno.NewError(errno.SchemaNotAligned, "min", "input and output schemas are not aligned")
+	}
+	trans.funcInOutIdxMap[i] = [2]int{srcCol, dstCol}
+	srcType := trans.inRowDataType.Field(srcCol).Expr.(*influxql.VarRef).Type
+	switch srcType {
+	case influxql.Integer:
+		trans.incAggFuncs[srcCol][SlowFuncIdx] = UpdateHashInterMaxSlow
+		trans.incAggFuncs[srcCol][FastFuncIdx] = UpdateHashInterMaxFast
+	case influxql.Float:
+		trans.incAggFuncs[srcCol][SlowFuncIdx] = UpdateHashFloatMaxSlow
+		trans.incAggFuncs[srcCol][FastFuncIdx] = UpdateHashFloatMaxFast
+	case influxql.Boolean:
+		trans.incAggFuncs[srcCol][SlowFuncIdx] = UpdateHashBooleanMaxSlow
+		trans.incAggFuncs[srcCol][FastFuncIdx] = UpdateHashBooleanMaxFast
+	default:
+		return fmt.Errorf("unsupport data type %s for max", srcType)
+	}
+	return nil
 }
 
 type IncAggItem struct {

@@ -132,9 +132,25 @@ var DefaultTypeMapper = influxql.MultiTypeMapper(
 var DefaultMetaClient *Client
 var cliOnce sync.Once
 
+var tailBufPool sync.Pool
+
+func GetTailBuf(size int) []byte {
+	v := tailBufPool.Get()
+	if v == nil {
+		return make([]byte, 0, size)
+	}
+	return *(v.(*[]byte))
+}
+
+func PutTailBuf(v *[]byte) {
+	(*v) = (*v)[:0]
+	tailBufPool.Put(v)
+}
+
 type StorageNodeInfo struct {
 	InsertAddr string
 	SelectAddr string
+	Az         string
 }
 
 type SqlNodeInfo struct {
@@ -240,6 +256,7 @@ type MetaClient interface {
 	// file infos
 	IsSQLiteEnabled() bool
 	InsertFiles([]meta2.FileInfo) error
+	IsMasterPt(uint32, string) bool
 }
 
 type LoadCtx struct {
@@ -345,8 +362,6 @@ type Client struct {
 
 	weakPwdPath string
 
-	retentionAutoCreate bool
-
 	ShardTier uint64
 
 	// auth fail lock user
@@ -445,18 +460,17 @@ type authUser struct {
 // NewClient returns a new *Client.
 func NewClient(weakPwdPath string, retentionAutoCreate bool, maxConcurrentWriteLimit int) *Client {
 	cli := &Client{
-		cacheData:           &meta2.Data{},
-		closing:             make(chan struct{}),
-		changed:             make(chan chan struct{}, maxConcurrentWriteLimit),
-		authCache:           make(map[string]authUser),
-		weakPwdPath:         weakPwdPath,
-		retentionAutoCreate: retentionAutoCreate,
-		logger:              logger.NewLogger(errno.ModuleMetaClient).With(zap.String("service", "metaclient")),
-		arChan:              make(chan *authRcd, authFailCacheLimit),
-		authFailRcds:        make(map[string]authFailCache),
-		authSuccRcds:        make(map[string]time.Time),
-		replicaInfoManager:  NewReplicaInfoManager(),
-		SendRPCMessage:      &RPCMessageSender{},
+		cacheData:          &meta2.Data{},
+		closing:            make(chan struct{}),
+		changed:            make(chan chan struct{}, maxConcurrentWriteLimit),
+		authCache:          make(map[string]authUser),
+		weakPwdPath:        weakPwdPath,
+		logger:             logger.NewLogger(errno.ModuleMetaClient).With(zap.String("service", "metaclient")),
+		arChan:             make(chan *authRcd, authFailCacheLimit),
+		authFailRcds:       make(map[string]authFailCache),
+		authSuccRcds:       make(map[string]time.Time),
+		replicaInfoManager: NewReplicaInfoManager(),
+		SendRPCMessage:     &RPCMessageSender{},
 	}
 	cliOnce.Do(func() {
 		DefaultMetaClient = cli
@@ -467,7 +481,7 @@ func NewClient(weakPwdPath string, retentionAutoCreate bool, maxConcurrentWriteL
 
 func (c *Client) EnableUseSnapshotV2(RetentionAutoCreate bool, ExpandShardsEnable bool) {
 	c.UseSnapshotV2 = true
-	c.retentionAutoCreate = RetentionAutoCreate
+	c.RetentionAutoCreate = RetentionAutoCreate
 	c.SetExpandShardsEnable(ExpandShardsEnable)
 }
 
@@ -625,6 +639,7 @@ func (c *Client) AliveReadNodes() ([]meta2.DataNode, error) {
 	defer c.mu.RUnlock()
 	var aliveReaders []meta2.DataNode
 	var aliveDefault []meta2.DataNode
+	var aliveWriters []meta2.DataNode
 	for _, n := range c.cacheData.DataNodes {
 		if n.Status != serf.StatusAlive {
 			continue
@@ -633,19 +648,24 @@ func (c *Client) AliveReadNodes() ([]meta2.DataNode, error) {
 			aliveReaders = append(aliveReaders, n)
 		} else if n.Role == meta2.NodeDefault {
 			aliveDefault = append(aliveDefault, n)
+		} else if n.Role == meta2.NodeWriter {
+			aliveWriters = append(aliveWriters, n)
 		}
 	}
 
-	if len(aliveReaders) == 0 {
-		if len(aliveDefault) == 0 {
-			return nil, fmt.Errorf("there is no data nodes for querying")
-		}
+	if len(aliveReaders) != 0 {
+		sort.Sort(meta2.DataNodeInfos(aliveReaders))
+		return aliveReaders, nil
+	}
+	if len(aliveDefault) != 0 {
 		sort.Sort(meta2.DataNodeInfos(aliveDefault))
 		return aliveDefault, nil
 	}
-
-	sort.Sort(meta2.DataNodeInfos(aliveReaders))
-	return aliveReaders, nil
+	if len(aliveWriters) != 0 {
+		sort.Sort(meta2.DataNodeInfos(aliveWriters))
+		return aliveWriters, nil
+	}
+	return nil, fmt.Errorf("there is no data nodes for querying")
 }
 
 // DataNodes returns the data nodes' info.
@@ -672,7 +692,7 @@ func (c *Client) GetAllMst(dbName string) []string {
 }
 
 // CreateDataNode will create a new data node in the metastore
-func (c *Client) CreateDataNode(writeHost, queryHost, role string) (uint64, uint64, uint64, error) {
+func (c *Client) CreateDataNode(writeHost, queryHost, role, az string) (uint64, uint64, uint64, error) {
 	currentServer := connectedServer
 	for {
 		// exit if we're closed
@@ -688,7 +708,7 @@ func (c *Client) CreateDataNode(writeHost, queryHost, role string) (uint64, uint
 		}
 		c.mu.RUnlock()
 
-		node, err := c.getNode(currentServer, writeHost, queryHost, role)
+		node, err := c.getNode(currentServer, writeHost, queryHost, role, az)
 
 		if err == nil && node.NodeId > 0 {
 			c.nodeID = node.NodeId
@@ -818,11 +838,12 @@ func (c *Client) TagKeys(database string) map[string]set.Set {
 	dbi.WalkRetentionPolicy(func(rp *meta2.RetentionPolicyInfo) {
 		rp.EachMeasurements(func(mst *meta2.MeasurementInfo) {
 			s := set.NewSet()
-			for key := range mst.Schema {
-				if mst.Schema[key] == influx.Field_Type_Tag {
-					s.Add(key)
+			callback := func(k string, v int32) {
+				if v == influx.Field_Type_Tag {
+					s.Add(k)
 				}
 			}
+			mst.Schema.RangeTypCall(callback)
 			_, ok := uniqueMap[mst.Name]
 			if ok {
 				uniqueMap[mst.Name] = uniqueMap[mst.Name].Union(s)
@@ -977,6 +998,21 @@ func (c *Client) Databases() map[string]*meta2.DatabaseInfo {
 	return c.cacheData.Databases
 }
 
+func (c *Client) RaftEnabledForDB(name string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	dbInfo, err := c.cacheData.GetDatabase(name)
+	if err != nil {
+		return false
+	}
+	// ReplicaN: 3, 5, 7...
+	if dbInfo.ReplicaN > 1 && dbInfo.ReplicaN%2 != 0 {
+		return true
+	}
+	return false
+}
+
 func (c *Client) ShowShards(db string, rp string, mst string) models.Rows {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -1027,13 +1063,14 @@ func (c *Client) Schema(database string, retentionPolicy string, mst string) (fi
 	}
 	msti.SchemaLock.RLock()
 	defer msti.SchemaLock.RUnlock()
-	for key := range msti.Schema {
-		if msti.Schema[key] == influx.Field_Type_Tag {
-			dimensions[key] = struct{}{}
+	callback := func(k string, v int32) {
+		if v == influx.Field_Type_Tag {
+			dimensions[k] = struct{}{}
 		} else {
-			fields[key] = msti.Schema[key]
+			fields[k] = v
 		}
 	}
+	msti.Schema.RangeTypCall(callback)
 	return fields, dimensions, nil
 }
 
@@ -1187,6 +1224,10 @@ func checkAndUpdateReplication(dbReplicaN uint32, rpReplicaN *int) (uint32, *int
 		rpReplicaN = &oneReplication
 	} else if dbReplicaN == 0 && rpReplicaN != nil {
 		dbReplicaN = uint32(*rpReplicaN)
+		if dbReplicaN == 0 {
+			dbReplicaN = 1
+			rpReplicaN = &oneReplication
+		}
 	} else if dbReplicaN != 0 && rpReplicaN == nil {
 		rpReplicaN = &oneReplication
 		*rpReplicaN = int(dbReplicaN)
@@ -1251,7 +1292,7 @@ func (c *Client) CreateDatabaseWithRetentionPolicy(name string, spec *meta2.Rete
 
 	cmd := &proto2.CreateDatabaseCommand{
 		Name:            proto.String(name),
-		RetentionPolicy: rpi.Marshal(),
+		RetentionPolicy: rpi.Marshal(false),
 		EnableTagArray:  proto.Bool(enableTagArray),
 		ReplicaNum:      proto.Uint32(replicaN),
 	}
@@ -1444,7 +1485,7 @@ func (c *Client) CreateRetentionPolicy(database string, spec *meta2.RetentionPol
 	}
 	cmd := &proto2.CreateRetentionPolicyCommand{
 		Database:        proto.String(database),
-		RetentionPolicy: rpi.Marshal(),
+		RetentionPolicy: rpi.Marshal(false),
 		DefaultRP:       proto.Bool(makeDefault),
 	}
 
@@ -2343,6 +2384,25 @@ func (c *Client) DropShard(id uint64) error {
 	return nil
 }
 
+func (c *Client) GetSgEndTime(database string, rp string, timestamp time.Time, engineType config.EngineType) (int64, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	db := c.cacheData.Database(database)
+	if db == nil || db.MarkDeleted {
+		return 0, errno.NewError(errno.DatabaseNotFound, database)
+	}
+
+	rpi := db.RetentionPolicy(rp)
+	if rpi == nil {
+		return 0, errno.NewError(errno.RpNotFound, rp)
+	}
+	sg := rpi.ShardGroupByTimestampAndEngineType(timestamp, engineType)
+	if sg == nil {
+		return 0, errno.NewError(errno.WriteNoShardGroup)
+	}
+	return sg.EndTime.UnixNano(), nil
+}
+
 // CreateShardGroup creates a shard group on a database and policy for a given timestamp.
 func (c *Client) CreateShardGroup(database, policy string, timestamp time.Time, version uint32, engineType config.EngineType) (*meta2.ShardGroupInfo, error) {
 	c.mu.RLock()
@@ -2352,8 +2412,9 @@ func (c *Client) CreateShardGroup(database, policy string, timestamp time.Time, 
 		return nil, err
 	}
 	if sg != nil {
+		sgi := *sg // need to make a copy
 		c.mu.RUnlock()
-		return sg, nil
+		return &sgi, nil
 	}
 	c.mu.RUnlock()
 
@@ -2376,8 +2437,11 @@ func (c *Client) CreateShardGroup(database, policy string, timestamp time.Time, 
 	} else if rpi == nil || rpi.MarkDeleted {
 		return nil, errors.New("retention policy deleted after shard group created")
 	}
+	c.mu.RLock() // ShardGroups of rpi may be changed when some shardgroups are deleted/pruned.
+	defer c.mu.RUnlock()
+	sgi := *(rpi.ShardGroupByTimestampAndEngineType(timestamp, engineType)) // need to make a copy
 
-	return rpi.ShardGroupByTimestampAndEngineType(timestamp, engineType), nil
+	return &sgi, nil
 }
 
 func (c *Client) GetShardInfoByTime(database, retentionPolicy string, t time.Time, ptIdx int, nodeId uint64, engineType config.EngineType) (*meta2.ShardInfo, error) {
@@ -2450,7 +2514,7 @@ func (c *Client) getAliveShardsForSSAndRep(database string, sgi *meta2.ShardGrou
 				aliveShardIdxes = append(aliveShardIdxes, i)
 				break
 			}
-			if repGroups[ptView[ptId].RGID].IsMasterPt(ptId) {
+			if repGroups[ptView[ptId].RGID].Status == meta2.Health && repGroups[ptView[ptId].RGID].IsMasterPt(ptId) {
 				aliveShardIdxes = append(aliveShardIdxes, i)
 				break
 			}
@@ -2701,7 +2765,7 @@ func (c *Client) GetMaxSubscriptionID() uint64 {
 func (c *Client) SetData(data *meta2.Data) error {
 	return c.retryUntilExec(proto2.Command_SetDataCommand, proto2.E_SetDataCommand_Command,
 		&proto2.SetDataCommand{
-			Data: data.Marshal(),
+			Data: data.Marshal(false),
 		},
 	)
 }
@@ -2904,11 +2968,11 @@ func (c *Client) pollForUpdatesV2(role Role) {
 	}
 }
 
-func (c *Client) getNode(currentServer int, writeHost, queryHost, role string) (*meta2.NodeStartInfo, error) {
+func (c *Client) getNode(currentServer int, writeHost, queryHost, role, az string) (*meta2.NodeStartInfo, error) {
 	callback := &CreateNodeCallback{
 		NodeStartInfo: &meta2.NodeStartInfo{},
 	}
-	msg := message.NewMetaMessage(message.CreateNodeRequestMessage, &message.CreateNodeRequest{WriteHost: writeHost, QueryHost: queryHost, Role: role})
+	msg := message.NewMetaMessage(message.CreateNodeRequestMessage, &message.CreateNodeRequest{WriteHost: writeHost, QueryHost: queryHost, Role: role, Az: az})
 	err := c.SendRPCMsg(currentServer, msg, callback)
 	if err != nil {
 		return nil, err
@@ -3136,7 +3200,7 @@ func (c *Client) getDataOps(role Role, currentServer int, index uint64) (*meta2.
 			c.cacheData.MaxCQChangeID = dataOps.MaxCQChangeID
 			c.mu.Unlock()
 		} else if dataOps.Len() == 0 && dataOps.GetState() == int(meta2.AllClear) {
-			data := &meta2.Data{}
+			data := &meta2.Data{ExpandShardsEnable: c.cacheData.ExpandShardsEnable}
 			dataPb := dataOps.GetData()
 			data.Unmarshal(dataPb)
 			c.mu.Lock()
@@ -3680,7 +3744,7 @@ func (c *Client) InitMetaClient(joinPeers []string, tlsEn bool, storageNodeInfo 
 	var clock uint64
 	var connId uint64
 	if storageNodeInfo != nil {
-		nid, clock, connId, err = c.CreateDataNode(storageNodeInfo.InsertAddr, storageNodeInfo.SelectAddr, role)
+		nid, clock, connId, err = c.CreateDataNode(storageNodeInfo.InsertAddr, storageNodeInfo.SelectAddr, role, storageNodeInfo.Az)
 	}
 	if t == SQL && storageNodeInfo == nil && sqlNodeInfo != nil && c.UseSnapshotV2 {
 		nid, clock, connId, err = c.CreateSqlNode(sqlNodeInfo.HttpAddr, sqlNodeInfo.GossipAddr)
@@ -4281,6 +4345,21 @@ func (c *Client) GetShardGroupByTimeRange(repoName, streamName string, min, max 
 	sg := rp.ShardGroupsByTimeRange(min, max)
 
 	return sg, nil
+}
+
+func (c *Client) IsMasterPt(ptId uint32, database string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	dbRgs, ok := c.cacheData.ReplicaGroups[database]
+	if !ok {
+		return false
+	}
+	for _, rg := range dbRgs {
+		if rg.MasterPtID == ptId {
+			return true
+		}
+	}
+	return false
 }
 
 func refreshConnectedServer(currentServer int) {

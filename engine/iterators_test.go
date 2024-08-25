@@ -389,6 +389,9 @@ func (s *sInfo) GetSid() uint64 {
 	return 0
 }
 
+func (s *sInfo) Set(_ uint64, _ []byte, _ *influx.PointTags) {
+}
+
 type cursor struct {
 	records []*record.Record
 	tags    []byte
@@ -3059,6 +3062,9 @@ func (m *MocSeriesInfo) GetSeriesTags() *influx.PointTags {
 
 func (m *MocSeriesInfo) GetSid() uint64 {
 	return 0
+}
+
+func (m *MocSeriesInfo) Set(_ uint64, _ []byte, _ *influx.PointTags) {
 }
 
 func TestAggTagSetCursorNext_SingleSeries(t *testing.T) {

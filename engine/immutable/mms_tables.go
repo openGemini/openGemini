@@ -98,6 +98,7 @@ type TablesStore interface {
 	SetObsOption(option *obs.ObsOptions)
 	GetObsOption() *obs.ObsOptions
 	GetShardID() uint64
+	SetIndexMergeSet(idx IndexMergeSet)
 }
 
 type ImmTable interface {
@@ -154,7 +155,8 @@ type MmsTables struct {
 	isAdded bool // set true if addFunc called
 	addFunc func(int64)
 
-	scheduler *scheduler.TaskScheduler
+	indexMergeSet IndexMergeSet
+	scheduler     *scheduler.TaskScheduler
 }
 
 func NewTableStore(dir string, lock *string, tier *uint64, compactRecovery bool, config *Config) *MmsTables {
@@ -311,6 +313,10 @@ func (m *MmsTables) GetShardID() uint64 {
 	return m.shardId
 }
 
+func (m *MmsTables) SetIndexMergeSet(idx IndexMergeSet) {
+	m.indexMergeSet = idx
+}
+
 func (m *MmsTables) Open() (int64, error) {
 	lg := m.logger.With(zap.String("path", m.path))
 	lg.Info("table store open start", zap.Uint64("id", m.shardId), zap.Uint64("opId", m.opId))
@@ -320,7 +326,7 @@ func (m *MmsTables) Open() (int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if err := recoverFile(shardDir, m.lock, m.ImmTable.GetEngineType()); err != nil {
+	if err := recoverFile(shardDir, m.lock, m.ImmTable.GetEngineType(), m.getEventContext()); err != nil {
 		errInfo := errno.NewError(errno.RecoverFileFailed, shardDir)
 		lg.Error("", zap.Error(errInfo))
 		return 0, errInfo
@@ -1011,6 +1017,19 @@ func (m *MmsTables) acquire(files []string) bool {
 	return true
 }
 
+func (m *MmsTables) busy(files []string) bool {
+	m.inCompLock.RLock()
+	defer m.inCompLock.RUnlock()
+
+	for i := range files {
+		if _, ok := m.inCompact[files[i]]; ok {
+			return true
+		}
+	}
+
+	return false
+}
+
 func (m *MmsTables) CompactDone(files []string) {
 	m.inCompLock.Lock()
 	defer m.inCompLock.Unlock()
@@ -1036,7 +1055,7 @@ func (m *MmsTables) genCompactGroup(seqMap *dictpool.Dict, name string, level ui
 		group.group[i] = fn
 	}
 
-	if !m.acquire(group.group) {
+	if m.busy(group.group) || InParquetProcess(group.group...) {
 		group.release()
 		return nil
 	}
@@ -1185,7 +1204,7 @@ func levelSequenceEqual(level uint16, seq uint64, f TSSPFile) bool {
 	return lv == level && seq == n
 }
 
-func recoverFile(shardDir string, lockPath *string, engineType config.EngineType) error {
+func recoverFile(shardDir string, lockPath *string, engineType config.EngineType, ctx EventContext) error {
 	dirs, err := fileops.ReadDir(shardDir)
 	if err != nil {
 		log.Error("read table store dir fail", zap.String("path", shardDir), zap.Error(err))
@@ -1193,15 +1212,18 @@ func recoverFile(shardDir string, lockPath *string, engineType config.EngineType
 	}
 
 	for i := range dirs {
-		mn := dirs[i].Name()
-		if mn != compactLogDir {
-			continue
-		}
-
-		logDir := filepath.Join(shardDir, compactLogDir)
-		err := procCompactLog(shardDir, logDir, lockPath, engineType)
-		if err != nil {
-			if err != ErrDirtyLog {
+		switch dirs[i].Name() {
+		case compactLogDir:
+			logDir := filepath.Join(shardDir, compactLogDir)
+			err := procCompactLog(shardDir, logDir, lockPath, engineType)
+			if err != nil {
+				if !errors.Is(err, ErrDirtyLog) {
+					return err
+				}
+			}
+		case parquetLogDir:
+			logDir := filepath.Join(shardDir, compactLogDir)
+			if err := ProcParquetLog(logDir, lockPath, ctx); err != nil {
 				return err
 			}
 		}

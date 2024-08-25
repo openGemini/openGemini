@@ -73,7 +73,10 @@ func TestMergeSelf_Stop(t *testing.T) {
 	conf.Merge.MergeSelfOnly = true
 
 	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
-	defer mh.store.Close()
+	defer func() {
+		recover()
+		mh.store.Close()
+	}()
 	rg := newRecordGenerator(begin, defaultInterval, true)
 
 	mh.addRecord(100, rg.generate(getDefaultSchemas(), 10))
@@ -92,13 +95,17 @@ func TestMergeSelf_Stop(t *testing.T) {
 	}
 
 	ms := immutable.NewMergeSelf(mh.store, logger.NewLogger(0))
+	ms.InitEvents(&immutable.MergeContext{})
+
 	ms.Stop()
-	_, err := ms.Merge("mst", files)
+	_, err := ms.Merge("mst", 1, files)
 	require.EqualError(t, err, "compact stopped")
 
 	ms = immutable.NewMergeSelf(mh.store, logger.NewLogger(0))
+	ms.InitEvents(&immutable.MergeContext{})
+
 	files[1], files[0] = files[0], files[1]
 	_ = files[1].Close()
-	_, err = ms.Merge("mst", files)
+	_, err = ms.Merge("mst", 1, files)
 	require.NoError(t, err)
 }

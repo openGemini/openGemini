@@ -28,6 +28,7 @@ type SeriesInfoIntf interface {
 	GetSeriesKey() []byte
 	GetSeriesTags() *influx.PointTags
 	GetSid() uint64
+	Set(sid uint64, key []byte, tags *influx.PointTags)
 }
 
 type KeyCursor interface {

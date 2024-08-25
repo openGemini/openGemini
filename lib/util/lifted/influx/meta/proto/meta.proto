@@ -103,6 +103,7 @@ message DataNode {
 	required NodeInfo Ni = 1;
 	optional uint64 ConnID = 2;
 	optional uint64 AliveConnID = 3;
+	optional string Az = 4;
 }
 
 message DatabaseInfo {
@@ -138,6 +139,12 @@ message MeasurementInfo {
     optional int32 InitNumOfShards = 10;
     optional uint64 ID = 11;
     optional Options Options = 21;
+	map<string, SchemaVal> SchemaUseForClean = 22;
+}
+
+message SchemaVal {
+	required int32 Typ = 1;
+	optional int32 EndTime =2;
 }
 
 message RetentionPolicyInfo {
@@ -550,6 +557,7 @@ message CreateDataNodeCommand {
 	required string HTTPAddr = 1;
 	required string TCPAddr = 2;
 	optional string Role = 10;
+	optional string Az = 11;
 }
 
 message DataNodeEvent {
@@ -682,6 +690,7 @@ message UpdateSchemaCommand {
 message FieldSchema {
     required string FieldName = 1;
     required int32 FieldType  = 2;
+	optional int32 EndTime = 3;
 }
 
 message IndexInfo {
@@ -1151,7 +1160,6 @@ message UpdateReplicationCommand{
 	required uint32 repGroupId = 2;
 	optional uint32 masterId = 3;
 	repeated Peer Peers = 4;
-	optional uint32 rgStatus = 5;
 }
 
 message ObsOptions {

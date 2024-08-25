@@ -18,6 +18,7 @@ package executor
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
@@ -31,6 +32,9 @@ type SubQueryBuilder struct {
 }
 
 func (b *SubQueryBuilder) newSubOptions(ctx context.Context, opt query.ProcessorOptions) (query.ProcessorOptions, error) {
+	if len(b.stmt.ExceptDimensions) > 0 {
+		return query.ProcessorOptions{}, fmt.Errorf("except: sub-query or join-query is unsupported")
+	}
 	subOpt, err := query.NewProcessorOptionsStmt(b.stmt, query.SelectOptions{
 		Authorizer:  opt.Authorizer,
 		MaxSeriesN:  opt.MaxSeriesN,
@@ -65,6 +69,9 @@ func (b *SubQueryBuilder) newSubOptions(ctx context.Context, opt query.Processor
 		if opt.PromQuery && len(pushDownDimension) > 0 {
 			subOpt.GroupByAllDims = opt.GroupByAllDims
 		}
+		if opt.Without {
+			subOpt.Without = opt.Without
+		}
 	}
 
 	valuer := &influxql.NowValuer{Location: b.stmt.Location}
@@ -89,7 +96,6 @@ func (b *SubQueryBuilder) newSubOptions(ctx context.Context, opt query.Processor
 		subOpt.Fill = influxql.NoFill
 	}
 	subOpt.PromQuery = opt.PromQuery
-	subOpt.Without = b.stmt.Without
 	subOpt.Ordered = opt.Ordered
 	subOpt.HintType = opt.HintType
 	subOpt.StmtId = opt.StmtId
@@ -101,14 +107,15 @@ func (b *SubQueryBuilder) newSubOptions(ctx context.Context, opt query.Processor
 	return subOpt, nil
 }
 
-func (b *SubQueryBuilder) Build(ctx context.Context, opt query.ProcessorOptions) (hybridqp.QueryNode, error) {
-	subOpt, err := b.newSubOptions(ctx, opt)
+func (b *SubQueryBuilder) Build(ctx context.Context, opt *query.ProcessorOptions) (hybridqp.QueryNode, error) {
+	subOpt, err := b.newSubOptions(ctx, *opt)
 	if err != nil {
 		return nil, err
 	}
 	schema := NewQuerySchemaWithJoinCase(b.stmt.Fields, b.stmt.Sources, b.stmt.ColumnNames(), &subOpt, b.stmt.JoinSource,
 		b.stmt.UnnestSource, b.stmt.SortFields)
 	schema.SetPromCalls(b.stmt.PromSubCalls)
+	opt.LowerOpt = &subOpt
 	return buildQueryPlan(ctx, b.stmt, b.qc, schema)
 }
 

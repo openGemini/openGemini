@@ -97,7 +97,7 @@ func NewSeriesInfoPool(num int64) *filesInfoPool {
 		num:   num,
 	}
 	for i := int64(0); i < num; i++ {
-		s.files = append(s.files, &comm.FileInfo{})
+		s.files = append(s.files, &comm.FileInfo{SeriesInfo: &seriesInfo{}})
 	}
 	return s
 }
@@ -222,6 +222,9 @@ func (s *fileLoopCursor) ReadAggDataOnlyInMemTable() (*record.Record, *comm.File
 		}
 	}
 	for len(s.mergeRecIters) > 0 {
+		if s.ctx.IsAborted() {
+			return nil, nil, nil
+		}
 		sid := s.currSid
 		i := s.currIndex
 		if i >= len(s.mergeRecIters[sid]) || s.mergeRecIters[sid][i] == nil || s.mergeRecIters[sid][i].iter.record == nil {
@@ -229,7 +232,7 @@ func (s *fileLoopCursor) ReadAggDataOnlyInMemTable() (*record.Record, *comm.File
 			continue
 		}
 		idx := s.mergeRecIters[sid][i].index
-		ptTags := &(s.tagSetInfo.TagsVec[idx])
+		ptTags := s.tagSetInfo.GetTagsWithQuerySchema(idx, s.schema)
 		seriesKey := &seriesInfo{sid: sid, tags: *ptTags, key: s.tagSetInfo.SeriesKeys[idx]}
 		if s.preAgg {
 			r := s.mergeRecIters[sid][i].iter.record
@@ -262,6 +265,9 @@ func (s *fileLoopCursor) initData() error {
 }
 
 func (s *fileLoopCursor) NextAggData() (*record.Record, *comm.FileInfo, error) {
+	if s.ctx.IsAborted() {
+		return nil, nil, nil
+	}
 	if !s.initFirst {
 		var schema record.Schemas
 		if s.recordSchema != nil {
@@ -296,6 +302,9 @@ func (s *fileLoopCursor) ReadAggDataNormal() (*record.Record, *comm.FileInfo, er
 
 	var e error
 	for s.index < len(s.ctx.readers.Orders) {
+		if s.ctx.IsAborted() {
+			return nil, nil, nil
+		}
 		var file immutable.TSSPFile
 		if s.newCursor {
 			file = s.getFile()
@@ -848,6 +857,12 @@ func (s *AggTagSetCursor) buildCountFuncs(i int) {
 }
 
 func (s *AggTagSetCursor) SinkPlan(plan hybridqp.QueryNode) {
+	// transparent data for the single time series to optimize the group by all dims
+	if _, ok := plan.Children()[0].(*executor.LogicalSeries); ok {
+		s.baseCursorInfo.keyCursor.SinkPlan(plan.Children()[0])
+		s.SetSchema(s.GetSchema())
+		return
+	}
 	defer func() {
 		s.aggFunctionsInit()
 	}()

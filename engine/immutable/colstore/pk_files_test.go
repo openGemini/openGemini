@@ -57,3 +57,16 @@ func TestPKInfosV1(t *testing.T) {
 	pkFiles.DelPKInfo("test")
 	require.EqualValues(t, PKInfos(PKInfos{}), pkFiles.pkInfos)
 }
+
+func TestPkMetaBlockMarshal(t *testing.T) {
+	meta := make([]byte, 0)
+	meta = MarshalPkMetaBlock(0, 1, 0, 100, meta, nil)
+	_, err := UnmarshalPkMetaBlock(meta[:0])
+	if err == nil {
+		t.Error("expected unmarshal failure ")
+	}
+	_, err = UnmarshalPkMetaBlock(meta)
+	if err != nil {
+		t.Errorf("expected unmarshal success: %+v", err)
+	}
+}

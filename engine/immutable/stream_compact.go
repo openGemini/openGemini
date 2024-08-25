@@ -137,12 +137,6 @@ func putStreamIterators(itr *StreamIterators) {
 	}
 }
 
-type StreamCompactHook interface {
-	OnWriteChunkMeta(*ChunkMeta)
-	OnNewFile(f TSSPFile)
-	EnableSplitFile() bool
-}
-
 type StreamIterators struct {
 	closed        chan struct{}
 	stopCompMerge chan struct{}
@@ -202,11 +196,12 @@ type StreamIterators struct {
 
 	maxTime int64
 
-	hook StreamCompactHook
+	events *Events
 }
 
-func (c *StreamIterators) SetHook(hook StreamCompactHook) {
-	c.hook = hook
+func (c *StreamIterators) InitEvents(level uint16) *Events {
+	c.events = DefaultEventBus().NewEvents(EventTypeStreamCompact, c.name, level)
+	return c.events
 }
 
 func (c *StreamIterators) RemoveTmpFiles() {
@@ -518,9 +513,7 @@ func (c *StreamIterators) updateChunkStat(id uint64, maxT int64) {
 func (c *StreamIterators) writeMetaToDisk() error {
 	cm := &c.dstMeta
 
-	if c.hook != nil {
-		c.hook.OnWriteChunkMeta(cm)
-	}
+	c.events.TriggerWriteChunkMeta(cm)
 
 	cm.size = uint32(c.writer.DataSize() - cm.offset)
 	cm.columnCount = uint32(len(cm.colMeta))
@@ -675,7 +668,7 @@ func (c *StreamIterators) genBloomFilter() {
 		c.bloomFilter = make([]byte, bmBytes)
 	} else {
 		c.bloomFilter = c.bloomFilter[:bmBytes]
-		util.MemorySet(c.bloomFilter)
+		util.MemorySet(c.bloomFilter, 0)
 	}
 	c.trailer.bloomM = bm
 	c.trailer.bloomK = bk
@@ -984,12 +977,14 @@ func (c *StreamIterators) compact(files []TSSPFile, level uint16, isOrder bool) 
 			}
 			// check whether the file size exceeds the limit.
 			fSize := c.Size()
-			if c.enableSplitFile() && (fSize >= c.Conf.fileSizeLimit || splitFile) {
+			if fSize >= c.Conf.fileSizeLimit || splitFile {
 				f, err := c.NewTSSPFile(true)
 				if err != nil {
 					c.log.Error("new tssp file fail", zap.Error(err))
 					return nil, err
 				}
+
+				c.events.TriggerNewFile(f)
 
 				c.log.Info("switch tssp file",
 					zap.String("file", f.Path()),
@@ -1016,9 +1011,7 @@ func (c *StreamIterators) compact(files []TSSPFile, level uint16, isOrder bool) 
 		}
 		if f != nil {
 			c.files = append(c.files, f)
-			if c.hook != nil {
-				c.hook.OnNewFile(f)
-			}
+			c.events.TriggerNewFile(f)
 		}
 	} else {
 		c.removeEmptyFile()
@@ -1036,10 +1029,6 @@ func (c *StreamIterators) columnIdxForIters(fieldIndex, itrFieldIndex []int, ref
 			itrFieldIndex[i] = fieldIndex[i] + 1
 		}
 	}
-}
-
-func (c *StreamIterators) enableSplitFile() bool {
-	return c.hook == nil || c.hook.EnableSplitFile()
 }
 
 func resetItrFieldIndex(itrFieldIndex []int) {

@@ -55,6 +55,7 @@ type obsFile struct {
 	client        ObsClient
 	conf          *obsConf
 	offset        int64
+	flag          int
 }
 
 func (o *obsFile) Close() error {
@@ -89,14 +90,15 @@ func (o *obsFile) Write(src []byte) (int, error) {
 		return 0, fmt.Errorf("write bytes length must be positive")
 	}
 	var err error
-	modifyObjectInput := &obs.ModifyObjectInput{
-		Bucket:        o.conf.bucket,
-		Key:           o.key,
-		Position:      o.offset,
-		Body:          bytes.NewReader(src),
-		ContentLength: int64(len(src)),
-	}
 	for i := 0; i < ObsWriteRetryTimes; i++ {
+		// the Body of ModifyObjectInput will be cleared after each send, so it need to place inside the loop body
+		modifyObjectInput := &obs.ModifyObjectInput{
+			Bucket:        o.conf.bucket,
+			Key:           o.key,
+			Position:      o.offset,
+			Body:          bytes.NewReader(src),
+			ContentLength: int64(len(src)),
+		}
 		_, err = o.client.ModifyObject(modifyObjectInput)
 		if err == nil {
 			break
@@ -389,6 +391,22 @@ func (o *obsFile) Stat() (os.FileInfo, error) {
 	}
 }
 
+func (o *obsFile) Size() (int64, error) {
+	if o.flag&os.O_APPEND != 0 {
+		return o.offset, nil
+	}
+
+	getObjectMetadataInput := &obs.GetObjectMetadataInput{
+		Bucket: o.conf.bucket,
+		Key:    o.key,
+	}
+	if meta, err := o.client.GetObjectMetadata(getObjectMetadataInput); err != nil {
+		return 0, fmt.Errorf("obsClient.GetObjectMetadata failed, error: %v", err)
+	} else {
+		return meta.ContentLength, nil
+	}
+}
+
 func headerSignature(ak string, sk string, bucketName string, httpMethod string, date string, objectKey string) string {
 	var sb strings.Builder
 	sb.WriteString(httpMethod)
@@ -488,6 +506,7 @@ func (o *obsFs) OpenFile(path string, flag int, perm os.FileMode, opt ...FSOptio
 		Bucket: conf.bucket,
 		Key:    key,
 	}
+
 	meta, err := client.GetObjectMetadata(input)
 	if err != nil {
 		if err.(obs.ObsError).StatusCode == 404 && flag&os.O_CREATE > 0 { // object not found
@@ -507,15 +526,15 @@ func (o *obsFs) OpenFile(path string, flag int, perm os.FileMode, opt ...FSOptio
 	var offset int64
 	if flag&os.O_APPEND > 0 && meta != nil {
 		offset = meta.ContentLength
-	} else {
-		offset = 0
 	}
+
 	fd := &obsFile{
 		fullPath: path,
 		key:      key,
 		client:   client,
 		conf:     conf,
 		offset:   offset,
+		flag:     flag,
 	}
 	return fd, nil
 }
@@ -566,6 +585,10 @@ func (o *obsFs) Remove(path string, opt ...FSOption) error {
 
 func (o *obsFs) RemoveLocal(path string, _ ...FSOption) error {
 	return o.Remove(path)
+}
+
+func (o *obsFs) RemoveLocalEnabled(obsOptValid bool) bool {
+	return true
 }
 
 func (o *obsFs) RemoveAll(path string, opt ...FSOption) error {

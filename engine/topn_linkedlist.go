@@ -16,7 +16,11 @@ limitations under the License.
 
 package engine
 
-import "github.com/openGemini/openGemini/lib/util"
+import (
+	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/util"
+	"go.uber.org/zap"
+)
 
 type topNLinkedList struct {
 	maxLength int
@@ -98,6 +102,25 @@ func (m *topNLinkedList) Insert(cursor *seriesCursor) {
 				nowNode.next = newNode
 				newNode.pre = nowNode
 				m.replaceFirstNode()
+				break
+			} else {
+				nowNode = nowNode.next
+			}
+		}
+	}
+}
+
+func (m *topNLinkedList) Close() {
+	if m.head != nil {
+		nowNode := m.head
+		for {
+			itr := nowNode.item
+			if itr != nil {
+				if err := itr.Close(); err != nil {
+					logger.GetLogger().Error("topNLinkedList Close cursor", zap.Error(err))
+				}
+			}
+			if nowNode.next == nil {
 				break
 			} else {
 				nowNode = nowNode.next

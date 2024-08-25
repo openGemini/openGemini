@@ -37,6 +37,13 @@ type SortData struct {
 	SortRec       *Record
 }
 
+func (d *SortData) Reset() {
+	d.Times = d.Times[:0]
+	d.RowIds = d.RowIds[:0]
+	d.DuplicateRows = d.DuplicateRows[:0]
+	d.Data = d.Data[:0]
+}
+
 func (d *SortData) Less(i, j int) bool {
 	for idx, item := range d.Data {
 		v := item.Compare(i, j)
@@ -65,7 +72,9 @@ func (d *SortData) Len() int {
 	return len(d.RowIds)
 }
 
-func (d *SortData) InitRecord(schemas Schemas) {
+func (d *SortData) InitRecord(recSchemas Schemas) {
+	schemas := make(Schemas, len(recSchemas))
+	copy(schemas, recSchemas)
 	if d.SortRec == nil {
 		d.SortRec = NewRecordBuilder(schemas)
 	} else {

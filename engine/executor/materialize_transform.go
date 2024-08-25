@@ -24,6 +24,7 @@ import (
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/op"
+	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
@@ -101,6 +102,16 @@ func ResetTime(srcCk, dstCk Chunk, ts int64) {
 		resetTimes[j] = zeroTime
 	}
 	dstCk.AppendTimes(resetTimes)
+}
+
+func ResetTimeForProm(srcCk, dstCk Chunk, ts int64) {
+	dstTimeCol := dstCk.Time()
+	timeColLen := len(dstTimeCol)
+	dstTimeCol = record.ReserveInt64Slice(dstTimeCol, len(srcCk.Time()))
+	for j := timeColLen; j < len(dstTimeCol); j++ {
+		dstTimeCol[j] = ts
+	}
+	dstCk.SetTime(dstTimeCol)
 }
 
 func TransparentForwardIntegerColumn(dst Column, src Column) {
@@ -364,6 +375,7 @@ type MaterializeTransform struct {
 	forward         bool
 	ResetTime       bool
 	isPromQuery     bool
+	HasBinaryExpr   bool
 	transparents    []func(dst Column, src Chunk, index []int)
 
 	ColumnMap [][]int
@@ -378,39 +390,61 @@ func (trans *MaterializeTransform) createTransparents(ops []hybridqp.ExprOptions
 	transparents := make([]func(dst Column, src Chunk, index []int), len(ops))
 
 	for i, opt := range ops {
-		if vr, ok := opt.Expr.(*influxql.VarRef); ok {
-			switch vr.Type {
-			case influxql.Integer:
-				transparents[i] = TransparentForwardInteger
-			case influxql.Float:
-				transparents[i] = TransparentForwardFloat
-			case influxql.Boolean:
-				transparents[i] = TransparentForwardBoolean
-			case influxql.String, influxql.Tag:
-				transparents[i] = TransparentForwardString
-			}
-		}
-		if vr, ok := opt.Expr.(*influxql.Call); ok {
-			if labelFunc := query.GetLabelFunction(vr.Name); labelFunc != nil {
-				trans.labelCall = vr
-			}
-
-			f, err := TransMath(vr)
-			if err != nil {
-				panic(err)
-			}
-			transparents[i] = f
+		switch vr := opt.Expr.(type) {
+		case *influxql.VarRef:
+			trans.processVarRef(vr, transparents, i)
+		case *influxql.Call:
+			trans.processCall(vr, transparents, i)
+		case *influxql.BinaryExpr:
+			trans.HasBinaryExpr = true
+		default:
+			return transparents
 		}
 	}
 
 	return transparents
 }
 
+func ChangeCallExprForTimestamp(call *influxql.Call) {
+	if call.Name != "timestamp_prom" {
+		return
+	}
+
+	call.Args = []influxql.Expr{
+		&influxql.VarRef{
+			Val:  "prom_time",
+			Type: influxql.Float,
+		},
+	}
+}
+
+func TranverseBinTreeForTimestamp(expr influxql.Expr) {
+	switch ex := expr.(type) {
+	case *influxql.Call:
+		ChangeCallExprForTimestamp(ex)
+	case *influxql.BinaryExpr:
+		TranverseBinTreeForTimestamp(ex.LHS)
+		TranverseBinTreeForTimestamp(ex.RHS)
+	case *influxql.ParenExpr:
+		TranverseBinTreeForTimestamp(ex.Expr)
+	default:
+		return
+	}
+}
+
+func ChangeOpsForTimestamp(ops []hybridqp.ExprOptions) []hybridqp.ExprOptions {
+	for _, expr := range ops {
+		TranverseBinTreeForTimestamp(expr.Expr)
+	}
+	return ops
+}
+
 func NewMaterializeTransform(inRowDataType hybridqp.RowDataType, outRowDataType hybridqp.RowDataType, ops []hybridqp.ExprOptions, opt *query.ProcessorOptions, writer ChunkWriter, schema *QuerySchema) *MaterializeTransform {
+	newOps := ChangeOpsForTimestamp(ops)
 	trans := &MaterializeTransform{
 		input:           NewChunkPort(inRowDataType),
 		output:          NewChunkPort(outRowDataType),
-		ops:             ops,
+		ops:             newOps,
 		opt:             opt,
 		schema:          schema,
 		m:               make(map[string]interface{}),
@@ -503,6 +537,31 @@ func (trans *MaterializeTransform) Work(ctx context.Context) error {
 			return nil
 		}
 	}
+}
+
+func (trans *MaterializeTransform) processVarRef(vr *influxql.VarRef, transparents []func(dst Column, src Chunk, index []int), i int) {
+	switch vr.Type {
+	case influxql.Integer:
+		transparents[i] = TransparentForwardInteger
+	case influxql.Float:
+		transparents[i] = TransparentForwardFloat
+	case influxql.Boolean:
+		transparents[i] = TransparentForwardBoolean
+	case influxql.String, influxql.Tag:
+		transparents[i] = TransparentForwardString
+	}
+}
+
+func (trans *MaterializeTransform) processCall(vr *influxql.Call, transparents []func(dst Column, src Chunk, index []int), i int) {
+	if labelFunc := query.GetLabelFunction(vr.Name); labelFunc != nil {
+		trans.labelCall = vr
+	}
+
+	f, err := TransMath(vr)
+	if err != nil {
+		panic(err)
+	}
+	transparents[i] = f
 }
 
 func maxTime(x, y int64) int64 {
@@ -1311,36 +1370,20 @@ func (trans *MaterializeTransform) materialize(chunk Chunk) Chunk {
 	} else {
 		if trans.schema.PromResetTime() {
 			// change the time in instant query to the query end time.
-			ResetTime(chunk, oChunk, trans.promQueryTime)
+			ResetTimeForProm(chunk, oChunk, trans.promQueryTime)
 		} else {
 			ResetTime(chunk, oChunk, trans.opt.StartTime)
 		}
 	}
 	if trans.labelCall != nil {
-		if valuer, ok := trans.valuer.Valuer.(influxql.CallValuer); ok {
-			var args []interface{}
-			if len(trans.labelCall.Args) > 0 {
-				args = make([]interface{}, len(trans.labelCall.Args))
-				args[0] = chunk.Tags()
-				for i := 1; i < len(trans.labelCall.Args); i++ {
-					if arg, ok := trans.labelCall.Args[i].(*influxql.StringLiteral); ok {
-						args[i] = arg.Val
-					} else {
-						args[i] = nil
-					}
-				}
-			}
-			values, _ := valuer.Call(trans.labelCall.Name, args)
-			if tags, ok := values.([]ChunkTags); ok {
-				tagIndexes := chunk.TagIndex()
-				oChunk.ResetTagsAndIndexes(tags, tagIndexes)
-			}
-		}
+		trans.processLabelCall(chunk, oChunk)
 	} else {
 		oChunk.AppendTagsAndIndexes(chunk.Tags(), chunk.TagIndex())
+		oChunk.AppendIntervalIndexes(chunk.IntervalIndex())
 	}
-
-	oChunk.AppendIntervalIndexes(chunk.IntervalIndex())
+	if trans.HasBinaryExpr {
+		removeTableName(chunk, oChunk)
+	}
 	columnMap := make(map[string]*ColumnImpl)
 	for i, f := range trans.transparents {
 		dst := oChunk.Column(i)
@@ -1354,11 +1397,8 @@ func (trans *MaterializeTransform) materialize(chunk Chunk) Chunk {
 				res := eval(trans.ops[i].Expr, &trans.valuer, columnMap, chunk.NumberOfRows(), trans.rp)
 				res.copyTo(chunk.NumberOfRows(), dst.(*ColumnImpl))
 			} else {
-				//var isLabel bool
-
 				for index := 0; index < chunk.NumberOfRows(); index++ {
 					trans.chunkValuer.index = index
-
 					value := trans.valuer.Eval(trans.ops[i].Expr)
 					if value == nil {
 						dst.AppendNil()
@@ -1377,6 +1417,29 @@ func (trans *MaterializeTransform) materialize(chunk Chunk) Chunk {
 	}
 
 	return oChunk
+}
+
+func (trans *MaterializeTransform) processLabelCall(chunk, oChunk Chunk) {
+	if valuer, ok := trans.valuer.Valuer.(influxql.CallValuer); ok {
+		var args []interface{}
+		if len(trans.labelCall.Args) > 0 {
+			args = make([]interface{}, len(trans.labelCall.Args))
+			args[0] = chunk.Tags()
+			for i := 1; i < len(trans.labelCall.Args); i++ {
+				if arg, ok := trans.labelCall.Args[i].(*influxql.StringLiteral); ok {
+					args[i] = arg.Val
+				} else {
+					args[i] = nil
+				}
+			}
+		}
+		values, _ := valuer.Call(trans.labelCall.Name, args)
+		if tags, ok := values.([]ChunkTags); ok {
+			tagIndexes := chunk.TagIndex()
+			oChunk.ResetTagsAndIndexes(tags, tagIndexes)
+		}
+		oChunk.AppendIntervalIndexes(chunk.IntervalIndex())
+	}
 }
 
 func (trans *MaterializeTransform) GetOutputs() Ports {
@@ -1411,4 +1474,26 @@ func (trans *MaterializeTransform) ColumnMapInit() {
 			trans.ColumnMap[i] = index
 		}
 	}
+}
+
+func removeTableName(chunk, oChunk Chunk) {
+	chunkTags := oChunk.Tags()
+	dstTags := make([]ChunkTags, 0, len(chunkTags))
+	for _, tag := range chunkTags {
+		index := -1
+		keys, values := tag.GetChunkTagAndValues()
+		for i := range keys {
+			if keys[i] == promql2influxql.DefaultMetricKeyLabel {
+				index = i
+				break
+			}
+		}
+		if index != -1 {
+			keys = append(keys[:index], keys[index+1:]...)
+			values = append(values[:index], values[index+1:]...)
+		}
+		dstTag := NewChunkTagsByTagKVs(keys, values)
+		dstTags = append(dstTags, *dstTag)
+	}
+	oChunk.ResetTagsAndIndexes(dstTags, chunk.TagIndex())
 }

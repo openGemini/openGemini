@@ -28,6 +28,7 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/rpn"
+	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/logparser"
@@ -56,6 +57,7 @@ type SKFileReader interface {
 	MayBeInFragment(fragId uint32) (bool, error)
 	// ReInit is used to that a SKFileReader is reused among multiple files.
 	ReInit(file interface{}) error
+	StartSpan(span *tracing.Span)
 	// Close is used to close the SKFileReader
 	Close() error
 }

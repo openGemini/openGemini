@@ -16,14 +16,27 @@ limitations under the License.
 
 package config
 
+import (
+	"flag"
+	"log"
+	"strconv"
+)
+
+const (
+	defaultTagScanPruneThreshold = 20000
+)
+
 type Index struct {
 	TSIDCacheSize          int `toml:"tsid-cache-size"`
 	SKeyCacheSize          int `toml:"skey-cache-size"`
 	TagCacheSize           int `toml:"tag-cache-size"`
 	TagFilterCostCacheSize int `toml:"tag-filter-cost-cache-size"`
 
+	TagScanPruneThreshold int `toml:"tag-scan-prune-threshold"`
+	MemoryAllowedPercent  int `toml:"memory-allowed-percent"`
+
 	CacheCompressEnable bool `toml:"cache-compress-enable"`
-	BloomFilterEnable   bool `toml:"bloom-filter-enable"`
+	BloomFilterEnabled  bool `toml:"bloom-filter-enable"`
 }
 
 func NewIndex() *Index {
@@ -34,12 +47,22 @@ var indexConfig *Index
 
 func SetIndexConfig(conf *Index) {
 	indexConfig = conf
+	if indexConfig.TagScanPruneThreshold == 0 {
+		indexConfig.TagScanPruneThreshold = defaultTagScanPruneThreshold
+	}
+
+	if conf.MemoryAllowedPercent > 0 {
+		// See: github.com/VictoriaMetrics/VictoriaMetrics/lib/memory/memory.go memory.allowedPercent
+		err := flag.Set("memory.allowedPercent", strconv.Itoa(conf.MemoryAllowedPercent))
+		log.Printf("set memory.allowedPercent=%d; err=%v \n", conf.MemoryAllowedPercent, err)
+	}
 }
 
 func GetIndexConfig() *Index {
 	if indexConfig == nil {
 		return &Index{
-			CacheCompressEnable: true,
+			CacheCompressEnable:   true,
+			TagScanPruneThreshold: defaultTagScanPruneThreshold,
 		}
 	}
 	return indexConfig

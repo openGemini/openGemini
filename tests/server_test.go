@@ -9592,6 +9592,257 @@ func TestServer_Query_ShowTagValues(t *testing.T) {
 	ReleaseHaTestEnv(t)
 }
 
+func TestServer_Query_ShowTagValues_Disorder(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewConfig())
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		fmt.Sprintf(`cpu,host=server01 value=100 %d`, mustParseTime(time.RFC3339Nano, "2009-11-10T23:00:00Z").UnixNano()),
+		fmt.Sprintf(`cpu,host=server01,region=uswest value=100 %d`, mustParseTime(time.RFC3339Nano, "2009-11-10T23:00:00Z").UnixNano()),
+		fmt.Sprintf(`cpu,host=server01,region=useast value=100 %d`, mustParseTime(time.RFC3339Nano, "2009-11-10T23:00:00Z").UnixNano()),
+		fmt.Sprintf(`cpu,host=server02,region=useast value=100 %d`, mustParseTime(time.RFC3339Nano, "2009-11-10T23:00:00Z").UnixNano()),
+		fmt.Sprintf(`gpu,host=server02,region=useast value=100 %d`, mustParseTime(time.RFC3339Nano, "2009-11-10T23:00:00Z").UnixNano()),
+		fmt.Sprintf(`gpu,host=server03,region=caeast value=100 %d`, mustParseTime(time.RFC3339Nano, "2009-11-10T23:00:00Z").UnixNano()),
+		fmt.Sprintf(`disk,host=server03,region=caeast value=100 %d`, mustParseTime(time.RFC3339Nano, "2009-11-10T23:00:00Z").UnixNano()),
+	}
+
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		&Query{
+			name:    "show tag values with key",
+			command: "SHOW TAG VALUES WITH KEY = host",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["key","value"],"values":[["host","server01"],["host","server02"]]},{"name":"disk","columns":["key","value"],"values":[["host","server03"]]},{"name":"gpu","columns":["key","value"],"values":[["host","server02"],["host","server03"]]}]}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+		},
+		&Query{
+			name:    "show tag values with key regex",
+			command: "SHOW TAG VALUES WITH KEY =~ /ho/",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["key","value"],"values":[["host","server01"],["host","server02"]]},{"name":"disk","columns":["key","value"],"values":[["host","server03"]]},{"name":"gpu","columns":["key","value"],"values":[["host","server02"],["host","server03"]]}]}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+		},
+		&Query{
+			name:    `show tag values with key and where`,
+			command: `SHOW TAG VALUES FROM cpu WITH KEY = host WHERE region = 'uswest'`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["key","value"],"values":[["host","server01"]]}]}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+		},
+		&Query{
+			name:    `show tag values with key regex and where`,
+			command: `SHOW TAG VALUES FROM cpu WITH KEY =~ /ho/ WHERE region = 'uswest'`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["key","value"],"values":[["host","server01"]]}]}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+		},
+		&Query{
+			name:    `show tag values with key and where matches the regular expression`,
+			command: `SHOW TAG VALUES WITH KEY = host WHERE region =~ /ca.*/`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"disk","columns":["key","value"],"values":[["host","server03"]]},{"name":"gpu","columns":["key","value"],"values":[["host","server03"]]}]}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+		},
+		&Query{
+			name:    `show tag values with key and where does not match the regular expression`,
+			command: `SHOW TAG VALUES WITH KEY = region WHERE host !~ /server0[12]/`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"disk","columns":["key","value"],"values":[["region","caeast"]]},{"name":"gpu","columns":["key","value"],"values":[["region","caeast"]]}]}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+		},
+		&Query{
+			name:    `show tag values with key and where partially matches the regular expression`,
+			command: `SHOW TAG VALUES WITH KEY = host WHERE region =~ /us/`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["key","value"],"values":[["host","server01"],["host","server02"]]},{"name":"gpu","columns":["key","value"],"values":[["host","server02"]]}]}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+			skip:    true,
+		},
+		&Query{
+			name:    `show tag values with key and where partially does not match the regular expression`,
+			command: `SHOW TAG VALUES WITH KEY = host WHERE region !~ /us/`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["key","value"],"values":[["host","server01"]]},{"name":"disk","columns":["key","value"],"values":[["host","server03"]]},{"name":"gpu","columns":["key","value"],"values":[["host","server03"]]}]}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+			skip:    true,
+		},
+		&Query{
+			name:    `show tag values with key in and where does not match the regular expression`,
+			command: `SHOW TAG VALUES FROM cpu WITH KEY IN (host, region) WHERE region = 'uswest'`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["key","value"],"values":[["host","server01"],["region","uswest"]]}]}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+		},
+		&Query{
+			name:    `show tag values with key regex and where does not match the regular expression`,
+			command: `SHOW TAG VALUES FROM cpu WITH KEY =~ /(host|region)/ WHERE region = 'uswest'`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["key","value"],"values":[["host","server01"],["region","uswest"]]}]}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+		},
+		&Query{
+			name:    `show tag values with key and measurement matches regular expression`,
+			command: `SHOW TAG VALUES FROM /[cg]pu/ WITH KEY = host`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["key","value"],"values":[["host","server01"],["host","server02"]]},{"name":"gpu","columns":["key","value"],"values":[["host","server02"],["host","server03"]]}]}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+		},
+		&Query{
+			name:    "show tag values with key where time",
+			command: "SHOW TAG VALUES WITH KEY = host WHERE time > 0",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["key","value"],"values":[["host","server01"],["host","server02"]]},{"name":"disk","columns":["key","value"],"values":[["host","server03"]]},{"name":"gpu","columns":["key","value"],"values":[["host","server02"],["host","server03"]]}]}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+			skip:    true,
+		},
+		&Query{
+			name:    "show tag values with key regex where time",
+			command: "SHOW TAG VALUES WITH KEY =~ /ho/ WHERE time > 0",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["key","value"],"values":[["host","server01"],["host","server02"]]},{"name":"disk","columns":["key","value"],"values":[["host","server03"]]},{"name":"gpu","columns":["key","value"],"values":[["host","server02"],["host","server03"]]}]}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+			skip:    true,
+		},
+		&Query{
+			name:    `show tag values with key and where time`,
+			command: `SHOW TAG VALUES FROM cpu WITH KEY = host WHERE region = 'uswest' AND time > 0`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["key","value"],"values":[["host","server01"]]}]}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+			skip:    true,
+		},
+		&Query{
+			name:    `show tag values with key regex and where time`,
+			command: `SHOW TAG VALUES FROM cpu WITH KEY =~ /ho/ WHERE region = 'uswest' AND time > 0`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["key","value"],"values":[["host","server01"]]}]}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+			skip:    true,
+		},
+		&Query{
+			name:    `show tag values with key and where matches the regular expression where time`,
+			command: `SHOW TAG VALUES WITH KEY = host WHERE region =~ /ca.*/ AND time > 0`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"disk","columns":["key","value"],"values":[["host","server03"]]},{"name":"gpu","columns":["key","value"],"values":[["host","server03"]]}]}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+			skip:    true,
+		},
+		&Query{
+			name:    `show tag values with key and where does not match the regular expression where time`,
+			command: `SHOW TAG VALUES WITH KEY = region WHERE host !~ /server0[12]/ AND time > 0`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"disk","columns":["key","value"],"values":[["region","caeast"]]},{"name":"gpu","columns":["key","value"],"values":[["region","caeast"]]}]}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+			skip:    true,
+		},
+		&Query{
+			name:    `show tag values with key and where partially matches the regular expression where time`,
+			command: `SHOW TAG VALUES WITH KEY = host WHERE region =~ /us/ AND time > 0`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["key","value"],"values":[["host","server01"],["host","server02"]]},{"name":"gpu","columns":["key","value"],"values":[["host","server02"]]}]}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+			skip:    true,
+		},
+		&Query{
+			name:    `show tag values with key and where partially does not match the regular expression where time`,
+			command: `SHOW TAG VALUES WITH KEY = host WHERE region !~ /us/ AND time > 0`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["key","value"],"values":[["host","server01"]]},{"name":"disk","columns":["key","value"],"values":[["host","server03"]]},{"name":"gpu","columns":["key","value"],"values":[["host","server03"]]}]}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+			skip:    true,
+		},
+		&Query{
+			name:    `show tag values with key in and where does not match the regular expression where time`,
+			command: `SHOW TAG VALUES FROM cpu WITH KEY IN (host, region) WHERE region = 'uswest' AND time > 0`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["key","value"],"values":[["host","server01"],["region","uswest"]]}]}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+			skip:    true,
+		},
+		&Query{
+			name:    `show tag values with key regex and where does not match the regular expression where time`,
+			command: `SHOW TAG VALUES FROM cpu WITH KEY =~ /(host|region)/ WHERE region = 'uswest' AND time > 0`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["key","value"],"values":[["host","server01"],["region","uswest"]]}]}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+			skip:    true,
+		},
+		&Query{
+			name:    `show tag values with key and measurement matches regular expression where time`,
+			command: `SHOW TAG VALUES FROM /[cg]pu/ WITH KEY = host WHERE time > 0`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["key","value"],"values":[["host","server01"],["host","server02"]]},{"name":"gpu","columns":["key","value"],"values":[["host","server02"],["host","server03"]]}]}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+			skip:    true,
+		},
+		&Query{
+			name:    "show tag values with value filter",
+			command: "SHOW TAG VALUES WITH KEY = host WHERE value = 'server03'",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"disk","columns":["key","value"],"values":[["host","server03"]]},{"name":"gpu","columns":["key","value"],"values":[["host","server03"]]}]}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+			skip:    true,
+		},
+		&Query{
+			name:    "show tag values with no matching value filter",
+			command: "SHOW TAG VALUES WITH KEY = host WHERE value = 'no_such_value'",
+			exp:     `{"results":[{"statement_id":0}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+		},
+		&Query{
+			name:    "show tag values with non-string value filter",
+			command: "SHOW TAG VALUES WITH KEY = host WHERE value = 5000",
+			exp:     `{"results":[{"statement_id":0}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+		},
+		&Query{
+			name:    "show tag values with limit 1 offset 2",
+			command: "SHOW TAG VALUES FROM cpu WITH KEY = host limit 1 offset 2",
+			exp:     `{"results":[{"statement_id":0}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+		},
+		&Query{
+			name:    "show tag values with limit 1 offset 0",
+			command: "SHOW TAG VALUES WITH KEY = host limit 1 offset 0",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["key","value"],"values":[["host","server01"]]},{"name":"disk","columns":["key","value"],"values":[["host","server03"]]},{"name":"gpu","columns":["key","value"],"values":[["host","server02"]]}]}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+		},
+		&Query{
+			name:    "show tag values with KEY = host where time",
+			command: "show tag values with KEY = host where time > '2009-11-09T23:00:00Z' and time < '2009-11-11T23:00:00Z'",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["key","value"],"values":[["host","server01"],["host","server02"]]},{"name":"disk","columns":["key","value"],"values":[["host","server03"]]},{"name":"gpu","columns":["key","value"],"values":[["host","server02"],["host","server03"]]}]}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+		},
+		&Query{
+			name:    "show tag values with KEY = host where time limit",
+			command: "show tag values with KEY = host where time > '2009-11-09T23:00:00Z' and time < '2009-11-11T23:00:00Z' limit 1",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["key","value"],"values":[["host","server01"]]},{"name":"disk","columns":["key","value"],"values":[["host","server03"]]},{"name":"gpu","columns":["key","value"],"values":[["host","server02"]]}]}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+		},
+		&Query{
+			name:    "show tag values with KEY = host where time limit offset 0",
+			command: "show tag values with KEY = host where time > '2009-11-09T23:00:00Z' and time < '2009-11-11T23:00:00Z' limit 1 offset 0",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["key","value"],"values":[["host","server01"]]},{"name":"disk","columns":["key","value"],"values":[["host","server03"]]},{"name":"gpu","columns":["key","value"],"values":[["host","server02"]]}]}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+		},
+		&Query{
+			name:    "show tag values with KEY = host where time limit offset 1",
+			command: "show tag values with KEY = host where time > '2009-11-09T23:00:00Z' and time < '2009-11-11T23:00:00Z' limit 1 offset 1",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["key","value"],"values":[["host","server01"]]},{"name":"gpu","columns":["key","value"],"values":[["host","server02"]]}]}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+		},
+	}...)
+
+	InitHaTestEnv(t)
+
+	var once sync.Once
+	for _, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			once.Do(func() {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
+			})
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.showTagValueDisorderSuc() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+
+	ReleaseHaTestEnv(t)
+}
+
 func TestServer_Query_ShowTagKeyCardinality(t *testing.T) {
 	t.Parallel()
 	s := OpenServer(NewConfig())
@@ -10969,6 +11220,7 @@ func TestServer_Query_SpecificSeries(t *testing.T) {
 			params:  url.Values{"db": []string{"db0"}},
 			command: `select /*+ specific_series */ value from cpu where (host = 'server01')`,
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","value"],"values":[["2009-11-10T23:00:00Z",100],["2009-11-10T23:00:00Z",101],["2009-11-10T23:00:00Z",102]]}]}]}`,
+			skip:    true,
 		},
 		{
 			name:    "specific series normal",

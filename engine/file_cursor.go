@@ -108,6 +108,7 @@ func newFileCursor(ctx *idKeyCursorContext, span *tracing.Span, schema *executor
 		return nil, nil
 	}
 	loc := immutable.NewLocation(file, ctx.decs)
+	loc.SetClosedSignal(ctx.closedSignal)
 	var err error
 	minT, maxT, err := file.MinMaxTime()
 	if err != nil {
@@ -201,7 +202,7 @@ func (f *fileCursor) readPreAggData() (*DataBlockInfo, error) {
 		}
 		f.nextIndex(i)
 		sid := f.tagSet.IDs[i]
-		ptTags := &(f.tagSet.TagsVec[i])
+		ptTags := f.tagSet.GetTagsWithQuerySchema(i, f.querySchema)
 		sInfo := &seriesInfo{sid: sid, tags: *ptTags, key: f.tagSet.SeriesKeys[i]}
 		f.loc.ResetMeta()
 
@@ -283,7 +284,7 @@ func (f *fileCursor) readData() (*DataBlockInfo, error) {
 			return nil, nil
 		}
 		sid := f.tagSet.IDs[i]
-		ptTags := &(f.tagSet.TagsVec[i])
+		ptTags := f.tagSet.GetTagsWithQuerySchema(i, f.querySchema)
 		sInfo := &seriesInfo{sid: sid, tags: *ptTags, key: f.tagSet.SeriesKeys[i]}
 		if f.seriesIter.iter.hasRemainData() {
 			orderRec := mergeData(f.memIter, f.seriesIter.iter, f.querySchema.Options().ChunkSizeNum(), f.ascending)
@@ -421,6 +422,7 @@ func (f *fileCursor) reInit(ctx *idKeyCursorContext, span *tracing.Span, schema 
 		}
 	}
 	f.loc = immutable.NewLocation(file, f.ctx.decs)
+	f.loc.SetClosedSignal(ctx.closedSignal)
 	var err error
 	f.minT, f.maxT, err = file.MinMaxTime()
 	if err != nil {

@@ -72,6 +72,9 @@ var (
 	_ = RegistryMaterializeFunction("round", &roundFunc{
 		BaseInfo: BaseInfo{FuncType: MATH},
 	})
+	_ = RegistryMaterializeFunction("round_prom", &roundPromFunc{
+		BaseInfo: BaseInfo{FuncType: MATH},
+	})
 	_ = RegistryMaterializeFunction("row_max", &rowMaxFunc{
 		BaseInfo: BaseInfo{FuncType: MATH},
 	})
@@ -94,6 +97,27 @@ var (
 		BaseInfo: BaseInfo{FuncType: MATH},
 	})
 	_ = RegistryMaterializeFunction("clamp_min_prom", &promClampMaxMinFunc{
+		BaseInfo: BaseInfo{FuncType: MATH},
+	})
+	_ = RegistryMaterializeFunction("rad", &radFunc{
+		BaseInfo: BaseInfo{FuncType: MATH},
+	})
+	_ = RegistryMaterializeFunction("deg", &degFunc{
+		BaseInfo: BaseInfo{FuncType: MATH},
+	})
+	_ = RegistryMaterializeFunction("sinh", &sinhFunc{
+		BaseInfo: BaseInfo{FuncType: MATH},
+	})
+	_ = RegistryMaterializeFunction("cosh", &coshFunc{
+		BaseInfo: BaseInfo{FuncType: MATH},
+	})
+	_ = RegistryMaterializeFunction("tanh", &tanhFunc{
+		BaseInfo: BaseInfo{FuncType: MATH},
+	})
+	_ = RegistryMaterializeFunction("asinh", &asinhFunc{
+		BaseInfo: BaseInfo{FuncType: MATH},
+	})
+	_ = RegistryMaterializeFunction("atanh", &atanhFunc{
 		BaseInfo: BaseInfo{FuncType: MATH},
 	})
 )
@@ -483,6 +507,46 @@ func (f *roundFunc) CallFunc(name string, args []interface{}) (interface{}, bool
 	}
 }
 
+type roundPromFunc struct {
+	BaseInfo
+}
+
+func (f *roundPromFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
+	if got := len(expr.Args); got != 1 && got != 2 {
+		return fmt.Errorf("invalid number of arguments for %s, expected 1 or 2, got %d", expr.Name, got)
+	}
+	// Compile all the argument expressions that are not just literals.
+	for _, arg := range expr.Args {
+		if _, ok := arg.(influxql.Literal); ok {
+			continue
+		}
+		if err := c.compileExpr(arg); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (f *roundPromFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
+	return commonCallType4(name, args)
+}
+
+func (f *roundPromFunc) CallFunc(name string, args []interface{}) (interface{}, bool) {
+	arg0, ok := asFloat(args[0])
+	if !ok {
+		return nil, true
+	}
+	toNearest := float64(1)
+	if len(args) == 2 {
+		toNearest, _ = asFloat(args[1])
+	}
+
+	toNearestInverse := 1.0 / toNearest
+	v := math.Floor(arg0*toNearestInverse+0.5) / toNearestInverse
+
+	return v, true
+}
+
 type rowMaxFunc struct {
 	BaseInfo
 }
@@ -725,6 +789,139 @@ func (f *promClampMaxMinFunc) CallFunc(name string, args []interface{}) (interfa
 		} else if name == "clamp_min_prom" {
 			return math.Max(val, arg1), true
 		}
+	}
+	return nil, true
+}
+
+type radFunc struct {
+	BaseInfo
+}
+
+func (f *radFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
+	return compileMathFunction(expr, c, 1)
+}
+
+func (f *radFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
+	return commonCallType1(name, args)
+}
+
+func (f *radFunc) CallFunc(name string, args []interface{}) (interface{}, bool) {
+	if arg0, ok := asFloat(args[0]); ok {
+		return arg0 * math.Pi / 180, true
+	}
+	return nil, true
+}
+
+type degFunc struct {
+	BaseInfo
+}
+
+func (f *degFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
+	return compileMathFunction(expr, c, 1)
+}
+
+func (f *degFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
+	return commonCallType1(name, args)
+}
+
+func (f *degFunc) CallFunc(name string, args []interface{}) (interface{}, bool) {
+	if arg0, ok := asFloat(args[0]); ok {
+		return arg0 * 180 / math.Pi, true
+	}
+	return nil, true
+}
+
+type sinhFunc struct {
+	BaseInfo
+}
+
+func (f *sinhFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
+	return compileMathFunction(expr, c, 1)
+}
+
+func (f *sinhFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
+	return commonCallType1(name, args)
+}
+
+func (f *sinhFunc) CallFunc(name string, args []interface{}) (interface{}, bool) {
+	if arg0, ok := asFloat(args[0]); ok {
+		return math.Sinh(arg0), true
+	}
+	return nil, true
+}
+
+type coshFunc struct {
+	BaseInfo
+}
+
+func (f *coshFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
+	return compileMathFunction(expr, c, 1)
+}
+
+func (f *coshFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
+	return commonCallType1(name, args)
+}
+
+func (f *coshFunc) CallFunc(name string, args []interface{}) (interface{}, bool) {
+	if arg0, ok := asFloat(args[0]); ok {
+		return math.Cosh(arg0), true
+	}
+	return nil, true
+}
+
+type tanhFunc struct {
+	BaseInfo
+}
+
+func (f *tanhFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
+	return compileMathFunction(expr, c, 1)
+}
+
+func (f *tanhFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
+	return commonCallType1(name, args)
+}
+
+func (f *tanhFunc) CallFunc(name string, args []interface{}) (interface{}, bool) {
+	if arg0, ok := asFloat(args[0]); ok {
+		return math.Tanh(arg0), true
+	}
+	return nil, true
+}
+
+type asinhFunc struct {
+	BaseInfo
+}
+
+func (f *asinhFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
+	return compileMathFunction(expr, c, 1)
+}
+
+func (f *asinhFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
+	return commonCallType1(name, args)
+}
+
+func (f *asinhFunc) CallFunc(name string, args []interface{}) (interface{}, bool) {
+	if arg0, ok := asFloat(args[0]); ok {
+		return math.Asinh(arg0), true
+	}
+	return nil, true
+}
+
+type atanhFunc struct {
+	BaseInfo
+}
+
+func (f *atanhFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
+	return compileMathFunction(expr, c, 1)
+}
+
+func (f *atanhFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
+	return commonCallType1(name, args)
+}
+
+func (f *atanhFunc) CallFunc(name string, args []interface{}) (interface{}, bool) {
+	if arg0, ok := asFloat(args[0]); ok {
+		return math.Atanh(arg0), true
 	}
 	return nil, true
 }
