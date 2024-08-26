@@ -79,10 +79,6 @@ func (ts *TaskScheduler) addTask(task Task) bool {
 		return false
 	}
 
-	if !task.BeforeExecute() {
-		return false
-	}
-
 	ts.tasks[task.UUID()] = task
 	return true
 }
@@ -173,7 +169,9 @@ func (ts *TaskScheduler) execute(task Task, signal chan struct{}) {
 				ts.wg.Done()
 			}()
 
-			task.Execute()
+			if task.BeforeExecute() {
+				task.Execute()
+			}
 		}()
 	}
 }

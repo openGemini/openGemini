@@ -28,6 +28,7 @@ type DataType uint32
 const (
 	Normal DataType = iota
 	Snapshot
+	ClearEntryLog
 )
 
 type DataWrapper struct {

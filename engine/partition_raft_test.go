@@ -115,6 +115,40 @@ func TestDealCommitData(t *testing.T) {
 		DataType: raftlog.Snapshot,
 	}
 	dealCommitData(node, client, storage, dataWrapper2.Marshal(), "db", 1)
+
+	var dst2 []byte
+	dst2 = encoding.MarshalUint64(dst2, 1)
+	dataWrapper3 := &raftlog.DataWrapper{
+		Data:     dst2,
+		DataType: raftlog.ClearEntryLog,
+	}
+	dealCommitData(node, client, storage, dataWrapper3.Marshal(), "db", 1)
+}
+
+func TestReadReplayForReplication(t *testing.T) {
+	client := &MockMetaClient{}
+	storage := &MockStorageService{}
+	replayC := make(chan *raftconn.Commit, 1)
+	bytes := mockMarshaledPoint()
+	dataWrapper := &raftlog.DataWrapper{
+		Data:     bytes,
+		DataType: raftlog.Normal,
+	}
+	var data [][]byte
+	data = append(data, dataWrapper.Marshal())
+	commit := &raftconn.Commit{
+		Database:   "db0",
+		PtId:       1,
+		MasterShId: 1,
+		Data:       data,
+	}
+	replayC <- commit
+	close(replayC)
+	readReplayForReplication(replayC, client, storage)
+	replayC = make(chan *raftconn.Commit, 1)
+	close(replayC)
+	readReplayForReplication(replayC, client, storage)
+
 }
 
 func mockMarshaledPoint() []byte {

@@ -20,6 +20,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -204,7 +205,7 @@ func (h *Handler) serveCreateRepository(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	options := &obs.ObsOptions{}
-	dec := json.NewDecoder(r.Body)
+	dec := json2.NewDecoder(r.Body)
 	if err := dec.Decode(options); err != nil {
 		logger.GetLogger().Error("serveCreateRepository, decode CreateRepositoryOptions", zap.Error(err))
 		if err != nil && err.Error() != "EOF" { // with body
@@ -272,7 +273,7 @@ func (h *Handler) serveListRepository(w http.ResponseWriter, r *http.Request, us
 		}
 	}
 	sort.Strings(repoList)
-	buffer, err := json.Marshal(repoList)
+	buffer, err := json2.Marshal(repoList)
 	if err != nil {
 		h.Logger.Error("serveListRepository, encode repositories info", zap.Error(err))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusInternalServerError)
@@ -304,7 +305,7 @@ func (h *Handler) serveShowRepository(w http.ResponseWriter, r *http.Request, us
 		return
 	}
 	sort.Strings(logStreams)
-	buffer, err := json.Marshal(logStreams)
+	buffer, err := json2.Marshal(logStreams)
 	if err != nil {
 		h.Logger.Error("serveRepository, encode log repository info", zap.Error(err))
 		h.httpError(w, err.Error(), http.StatusInternalServerError)
@@ -358,7 +359,7 @@ func (h *Handler) serveCreateLogstream(w http.ResponseWriter, r *http.Request, u
 	}
 	options := &meta2.Options{}
 	options.InitDefault()
-	dec := json.NewDecoder(r.Body)
+	dec := json2.NewDecoder(r.Body)
 	if err := dec.Decode(options); err != nil {
 		logger.GetLogger().Error("serveCreateLogstream, decode CreateLogStreamOptions", zap.Error(err))
 		if err != nil && err.Error() != "EOF" {
@@ -432,7 +433,7 @@ func (h *Handler) serveListLogstream(w http.ResponseWriter, r *http.Request, use
 		}
 	}
 	sort.Strings(logStreams)
-	buffer, err := json.Marshal(logStreams)
+	buffer, err := json2.Marshal(logStreams)
 	if err != nil {
 		h.Logger.Error("serveRepository, encode log repository info", zap.Error(err))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusInternalServerError)
@@ -469,7 +470,7 @@ func (h *Handler) serveShowLogstream(w http.ResponseWriter, r *http.Request, use
 		return
 	}
 	bf := bytes.NewBuffer([]byte{})
-	jsonEncoder := json.NewEncoder(bf)
+	jsonEncoder := json2.NewEncoder(bf)
 	jsonEncoder.SetEscapeHTML(false)
 	err = jsonEncoder.Encode(rpi)
 	if err != nil {
@@ -496,7 +497,7 @@ func (h *Handler) serveUpdateLogstream(w http.ResponseWriter, r *http.Request, u
 		return
 	}
 	option := &meta2.Options{}
-	dec := json.NewDecoder(r.Body)
+	dec := json2.NewDecoder(r.Body)
 	if err := dec.Decode(option); err != nil {
 		logger.GetLogger().Error("serveUpdateLogstream, decode UpdateLogStreamOptions", zap.Error(err))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusInternalServerError)
@@ -2595,7 +2596,7 @@ func (h *Handler) serveQueryLogWhenErr(w http.ResponseWriter, err error, t time.
 	if QuerySkippingError(err.Error()) {
 		res := QueryLogResponse{Success: true, Code: "200", Message: "", Request_id: uuid.TimeUUID().String(),
 			Count: count, Progress: "Complete", Logs: logs, Took_ms: time.Since(t).Milliseconds()}
-		b, err := json.Marshal(res)
+		b, err := json2.Marshal(res)
 		if err != nil {
 			h.Logger.Error("query log marshal res fail! ", zap.Error(err))
 			h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
@@ -2631,7 +2632,7 @@ func (h *Handler) getQueryLogExplainResult(resp *Response, repository, logStream
 	}
 	res := QueryLogResponse{Success: true, Code: "200", Message: "", Request_id: uuid.TimeUUID().String(),
 		Count: count, Progress: "Complete", Logs: logs, Took_ms: time.Since(t).Milliseconds(), Explain: explain}
-	b, err := json.Marshal(res)
+	b, err := json2.Marshal(res)
 	if err != nil {
 		h.Logger.Error("query log marshal res fail! ", zap.Error(err))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
@@ -2648,6 +2649,9 @@ func (h *Handler) setRecord(rec map[string]interface{}, field string, value inte
 		return false
 	}
 
+	if v, ok := value.(float64); ok {
+		value = json.Number(strconv.FormatFloat(v, 'f', -1, 64))
+	}
 	if !truncate {
 		rec[field] = value
 		return true
@@ -2779,7 +2783,7 @@ func (h *Handler) appendFieldScopes(fieldScopes []marshalFieldScope, k string, i
 }
 
 func (h *Handler) getMarshalFieldLen(i interface{}) int {
-	b, err := json.Marshal(i)
+	b, err := json2.Marshal(i)
 	if err != nil {
 		h.Logger.Error("highlight marshal field len error", zap.Any("value", i))
 	}
@@ -2859,7 +2863,7 @@ func (h *Handler) serveContextQueryLog(w http.ResponseWriter, r *http.Request, u
 		}
 		for k, _ := range currLog {
 			if content, ok := currLog[k]["content"]; ok {
-				contentJson, err := json.Marshal(content)
+				contentJson, err := json2.Marshal(content)
 				if err != nil {
 					h.Logger.Error("query log marshal res fail! ", zap.Error(err), zap.Any("r", r))
 					h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
@@ -2939,7 +2943,7 @@ func (h *Handler) serveContextQueryLog(w http.ResponseWriter, r *http.Request, u
 	res := QueryLogResponse{Success: true, Code: "200", Message: "", Request_id: uuid.TimeUUID().String(),
 		Count: count, Progress: progress, Logs: logs, Keys: getKeys(keysMap), Took_ms: time.Since(t).Milliseconds(), Scroll_id: scrollIDString, Complete_progress: completeProgress, Cursor_time: cursorTime}
 
-	b, err := json.Marshal(res)
+	b, err := json2.Marshal(res)
 	if err != nil {
 		h.Logger.Error("query log marshal res fail! ", zap.Error(err), zap.Any("r", r))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)

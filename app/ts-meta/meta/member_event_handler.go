@@ -126,19 +126,20 @@ func (bh *baseHandler) takeoverForRep(id uint64) {
 	dbPtInfos := globalService.store.getFailedDbPts(id, meta.Offline)
 	nodePtNumMap := globalService.store.getDbPtNumPerAliveNode()
 	logger.GetLogger().Info("handle join event takeoverForRep start")
-	// skip pts of same rg of this node
-	rgId := make(map[uint32]bool)
+	// skip pts of same dbRg of this node
+	rgId := make(map[string]bool)
 	for i, ptInfo := range dbPtInfos {
 		if ptInfo.DBBriefInfo.Replicas <= 1 {
 			bh.takeoverBase(dbPtInfos, nodePtNumMap, i, "rep", false)
 			continue
 		}
 		logger.GetLogger().Info("take over db pt for rep", zap.String("db", ptInfo.Db), zap.Uint32("ptId", ptInfo.Pti.PtId), zap.Uint32("rgId", ptInfo.Pti.RGID))
-		_, ok := rgId[ptInfo.Pti.RGID]
+		dbRg := ptInfo.Db + strconv.FormatUint(uint64(ptInfo.Pti.RGID), 10)
+		_, ok := rgId[dbRg]
 		if ok {
 			continue
 		}
-		rgId[ptInfo.Pti.RGID] = true
+		rgId[dbRg] = true
 		bh.takeoverBase(dbPtInfos, nodePtNumMap, i, "rep", true)
 	}
 	logger.GetLogger().Info("handle join event takeoverForRep end")

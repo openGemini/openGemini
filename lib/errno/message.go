@@ -234,7 +234,7 @@ var messageMap = map[Errno]*Message{
 	BucketLacks:                    newWarnMessage("get resources out of time: bucket lacks of resources", ModuleQueryEngine),
 	ShardBucketLacks:               newWarnMessage("get shard resources out of time: bucket lacks of resources", ModuleQueryEngine),
 	SeriesBucketLacks:              newWarnMessage("get series resources out of time: bucket lacks of resources", ModuleQueryEngine),
-	QueryAborted:                   newWarnMessage("query has been aborted, please check whether query is out of memory limit", ModuleQueryEngine),
+	QueryAborted:                   newWarnMessage("query has been aborted", ModuleQueryEngine),
 	SortTransformRunningErr:        newWarnMessage("SortTransform run error", ModuleQueryEngine),
 	HashMergeTransformRunningErr:   newWarnMessage("HashMergeTransform run error", ModuleQueryEngine),
 	HashAggTransformRunningErr:     newWarnMessage("HashAggTransform work error", ModuleQueryEngine),

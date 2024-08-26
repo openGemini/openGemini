@@ -18,7 +18,6 @@ package proxy
 
 import (
 	"bytes"
-	"crypto/tls"
 	"io"
 	"net/http"
 	"net/http/httputil"
@@ -26,11 +25,13 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/openGemini/openGemini/lib/config"
 )
 
 var (
 	defaultTransport = &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		TLSClientConfig: config.NewTLSConfig(true),
 	}
 )
 

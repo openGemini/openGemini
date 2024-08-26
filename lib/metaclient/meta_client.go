@@ -219,7 +219,7 @@ type MetaClient interface {
 	ShowShardGroups() models.Rows
 	ShowSubscriptions() models.Rows
 	ShowRetentionPolicies(database string) (models.Rows, error)
-	ShowCluster() models.Rows
+	ShowCluster(nodeType string, ID uint64) (models.Rows, error)
 	ShowClusterWithCondition(nodeType string, ID uint64) (models.Rows, error)
 	GetAliveShards(database string, sgi *meta2.ShardGroupInfo) []int
 	NewDownSamplePolicy(database, name string, info *meta2.DownSamplePolicyInfo) error
@@ -1041,16 +1041,101 @@ func (c *Client) ShowRetentionPolicies(database string) (models.Rows, error) {
 	return c.cacheData.ShowRetentionPolicies(database)
 }
 
-func (c *Client) ShowCluster() models.Rows {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.cacheData.ShowCluster()
+func (c *Client) buildClusterRows(clusterInfo *meta2.ShowClusterInfo) models.Rows {
+	srcNodeMap := make(map[uint64]interface{})
+	eventRow := &models.Row{Columns: []string{"opId", "eventType", "db", "ptId", "srcNodeId", "dstNodeId", "currState", "preState"}}
+	for _, event := range clusterInfo.Events {
+		srcNodeMap[event.SrcNodeId] = nil
+		eventRow.Values = append(eventRow.Values, []interface{}{event.OpId, event.EventType, event.Db, event.PtId, event.SrcNodeId, event.DstNodeId, event.CurrState, event.PreState})
+	}
+
+	var availability string
+	nodeRow := &models.Row{Columns: []string{"time", "status", "hostname", "nodeID", "nodeType", "availability"}}
+	for _, node := range clusterInfo.Nodes {
+		availability = "available"
+		if _, ok := srcNodeMap[node.NodeID]; ok {
+			availability = "unavailable"
+		}
+		nodeRow.Values = append(nodeRow.Values, []interface{}{node.Timestamp, node.Status, node.HostName, node.NodeID, node.NodeType, availability})
+	}
+	return []*models.Row{nodeRow, eventRow}
+}
+
+func (c *Client) ShowCluster(nodeType string, ID uint64) (models.Rows, error) {
+	val := &proto2.ShowClusterCommand{
+		NodeType: proto.String(nodeType),
+		ID:       proto.Uint64(ID),
+	}
+
+	t := proto2.Command_ShowClusterCommand
+	cmd := &proto2.Command{Type: &t}
+	if err := proto.SetExtension(cmd, proto2.E_ShowClusterCommand_Command, val); err != nil {
+		return nil, fmt.Errorf("setExtension err%v", err)
+	}
+	b, err := c.RetryShowCluster(cmd)
+	if err != nil {
+		return nil, err
+	}
+
+	clusterInfo := &meta2.ShowClusterInfo{}
+	if err := clusterInfo.UnmarshalBinary(b); err != nil {
+		return nil, err
+	}
+	return c.buildClusterRows(clusterInfo), err
+}
+
+func (c *Client) RetryShowCluster(cmd *proto2.Command) ([]byte, error) {
+	startTime := time.Now()
+	currentServer := connectedServer
+	var err error
+	var clusterMsg []byte
+	for {
+		c.mu.RLock()
+		select {
+		case <-c.closing:
+			c.mu.RUnlock()
+			return nil, meta2.ErrClientClosed
+		default:
+
+		}
+
+		if currentServer >= len(c.metaServers) {
+			currentServer = 0
+		}
+		c.mu.RUnlock()
+		clusterMsg, err = c.showCluster(currentServer, cmd)
+		if err == nil {
+			break
+		}
+
+		if time.Since(startTime).Nanoseconds() > int64(len(c.metaServers))*HttpReqTimeout.Nanoseconds() {
+			c.logger.Error("show cluster timeout", zap.String("cmd", cmd.String()), zap.Error(err))
+			break
+		}
+		c.logger.Error("retry show cluster timeout", zap.String("cmd", cmd.String()), zap.Error(err))
+		time.Sleep(errSleep)
+
+		currentServer++
+	}
+	return clusterMsg, err
+}
+
+func (c *Client) showCluster(currentServer int, cmd *proto2.Command) ([]byte, error) {
+	b, err := proto.Marshal(cmd)
+	if err != nil {
+		return nil, err
+	}
+	callback := &ShowClusterCallback{}
+	msg := message.NewMetaMessage(message.ShowClusterRequestMessage, &message.ShowClusterRequest{Body: b})
+	err = c.SendRPCMsg(currentServer, msg, callback)
+	if err != nil {
+		return nil, err
+	}
+	return callback.Data, nil
 }
 
 func (c *Client) ShowClusterWithCondition(nodeType string, ID uint64) (models.Rows, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.cacheData.ShowClusterWithCondition(nodeType, ID)
+	return c.ShowCluster(nodeType, ID)
 }
 
 func (c *Client) Schema(database string, retentionPolicy string, mst string) (fields map[string]int32,

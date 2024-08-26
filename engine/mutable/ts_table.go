@@ -46,14 +46,10 @@ func newTsMemTableImpl() *tsMemTableImpl {
 
 func (t *tsMemTableImpl) SetClient(_ metaclient.MetaClient) {}
 
-func (t *tsMemTableImpl) WriteRecordForFlush(rec *record.Record, msb *immutable.MsBuilder, tbStore immutable.TablesStore, id uint64, order bool,
-	lastFlushTime int64) *immutable.MsBuilder {
+func (t *tsMemTableImpl) WriteRecordForFlush(rec *record.Record, msb *immutable.MsBuilder, tbStore immutable.TablesStore, id uint64) *immutable.MsBuilder {
 	var err error
 
-	if !order && lastFlushTime == math.MaxInt64 {
-		msb.StoreTimes()
-	}
-
+	msb.StoreTimes()
 	msb, err = msb.WriteRecord(id, rec, func(fn immutable.TSSPFileName) (seq uint64, lv uint16, merge uint16, ext uint16) {
 		return tbStore.NextSequence(), 0, 0, 0
 	})
@@ -111,7 +107,7 @@ func (t *tsMemTableImpl) FlushChunks(table *MemTable, dataPath, msName, _, _ str
 				conf := immutable.GetTsStoreConfig()
 				orderMsBuilder = createMsBuilder(tbStore, true, lock, dataPath, msName, sidLen, orderRows, conf, config.TSSTORE)
 			}
-			orderMsBuilder = t.WriteRecordForFlush(orderRec, orderMsBuilder, tbStore, chunk.Sid, true, flushTime)
+			orderMsBuilder = t.WriteRecordForFlush(orderRec, orderMsBuilder, tbStore, chunk.Sid)
 			atomic.AddInt64(&Statistics.PerfStat.FlushOrderRowsCount, int64(orderRows))
 		}
 
@@ -121,8 +117,10 @@ func (t *tsMemTableImpl) FlushChunks(table *MemTable, dataPath, msName, _, _ str
 				conf := immutable.GetTsStoreConfig()
 				unOrderMsBuilder = createMsBuilder(tbStore, false, lock, dataPath, msName, sidLen, unOrderRows, conf, config.TSSTORE)
 			}
-			unOrderMsBuilder = t.WriteRecordForFlush(unOrderRec, unOrderMsBuilder, tbStore, chunk.Sid, false, flushTime)
+			unOrderMsBuilder = t.WriteRecordForFlush(unOrderRec, unOrderMsBuilder, tbStore, chunk.Sid)
 			atomic.AddInt64(&Statistics.PerfStat.FlushUnOrderRowsCount, int64(unOrderRows))
+
+			t.statUnordered(unOrderRec.Times(), flushTime)
 		}
 
 		atomic.AddInt64(&Statistics.PerfStat.FlushRowsCount, int64(orderRows+unOrderRows))
@@ -134,6 +132,17 @@ func (t *tsMemTableImpl) FlushChunks(table *MemTable, dataPath, msName, _, _ str
 	// add both ordered/unordered files to list
 	tbStore.AddBothTSSPFiles(msInfo.GetFlushed(), msName, orderFiles, unOrderFiles)
 	PutSidsImpl(sids)
+}
+
+func (t *tsMemTableImpl) statUnordered(times []int64, flushTime int64) {
+	if flushTime == math.MaxInt64 {
+		return
+	}
+
+	stat := Statistics.NewOOOTimeDistribution()
+	for i := range times {
+		stat.Add(flushTime-times[i], 1)
+	}
 }
 
 func (t *tsMemTableImpl) finish(msb *immutable.MsBuilder, fileInfos chan []immutable.FileInfoExtend) []immutable.TSSPFile {

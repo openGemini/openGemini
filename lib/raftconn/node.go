@@ -26,6 +26,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
@@ -52,6 +53,7 @@ type Commit struct {
 	Data           [][]byte // []entry data
 	ApplyDoneC     chan<- struct{}
 	CommittedIndex uint64
+	fromReplay     bool
 }
 
 type RaftNode struct {
@@ -59,6 +61,7 @@ type RaftNode struct {
 	proposeC    chan []byte            // proposed messages
 	confChangeC chan raftpb.ConfChange // proposed cluster config changes
 	commitC     chan *Commit           // entries committed to log (influx.Rows)
+	ReplayC     chan *Commit           // entries committed to log (influx.Rows)
 	errorC      chan<- error           // errors from raft session
 
 	nodeId   uint64 // real data node id
@@ -224,7 +227,7 @@ func (n *RaftNode) InitAndStartNode() error {
 		if err != nil {
 			panic("Unable to get existing snapshot")
 		}
-		if !raft.IsEmptySnap(sp) {
+		if raftlog.IsValidSnapshot(sp) {
 			// It is important that we pick up the conf state here.
 			n.SetConfState(&sp.Metadata.ConfState)
 			// replay wal
@@ -241,6 +244,7 @@ func (n *RaftNode) InitAndStartNode() error {
 	go n.proposals()
 	go n.serveChannels()
 	go n.snapshotAfterFlush()
+	go n.deleteEntryLogPeriodically()
 	return nil
 }
 
@@ -343,6 +347,11 @@ func (n *RaftNode) serveChannels() {
 	}
 }
 
+func (n *RaftNode) isLeader() bool {
+	r := n.node
+	return r.Status().Lead == r.Status().ID
+}
+
 // proposals sends proposals over raft
 func (n *RaftNode) proposals() {
 	confChangeCount := uint64(0)
@@ -439,6 +448,7 @@ func (n *RaftNode) PublishEntries(ents []raftpb.Entry) (<-chan struct{}, bool) {
 				continue
 			}
 			n.confState = n.node.ApplyConfChange(cc)
+			n.saveConfStateToMeta()
 			switch cc.Type {
 			case raftpb.ConfChangeAddNode:
 			case raftpb.ConfChangeRemoveNode:
@@ -467,6 +477,22 @@ func (n *RaftNode) PublishEntries(ents []raftpb.Entry) (<-chan struct{}, bool) {
 	n.appliedIndex = ents[len(ents)-1].Index
 
 	return applyDoneC, true
+}
+
+func (n *RaftNode) saveConfStateToMeta() {
+	// this is a special snapshot, which is used for store confState. This is to prevent the service from being suspended before the snapshot is taken.
+	snapshot := &raftpb.Snapshot{
+		Data: nil,
+		Metadata: raftpb.SnapshotMetadata{
+			ConfState: *n.confState,
+			Index:     0,
+			Term:      0,
+		},
+	}
+	err := n.Store.Save(nil, nil, snapshot)
+	if err != nil {
+		n.logger.Error("store confstate error", zap.Error(err))
+	}
 }
 
 func (n *RaftNode) waitWriteOK(applyDoneC <-chan struct{}) {
@@ -599,10 +625,6 @@ func (n *RaftNode) snapShot() error {
 		// We should never let CreateSnapshot have an error.
 		err := n.Store.CreateSnapshot(index, n.ConfState(), []byte("snapshot"))
 		if err == nil {
-			// Now we delete all the files which are below the snapshot index.
-			if n.CheckAllRgMembers() {
-				n.Store.DeleteBefore(index)
-			}
 			break
 		}
 		if errors.Is(err, raft.ErrSnapOutOfDate) {
@@ -621,16 +643,41 @@ func (n *RaftNode) replay(sp raftpb.Snapshot) error {
 	}
 	committedIndex := hardState.Commit
 	fromIndex := sp.Metadata.Index
-	entries, err1 := n.Store.Entries(fromIndex, committedIndex, math.MaxUint64)
+	if fromIndex == 0 {
+		fromIndex = 1
+	}
+	entries, err1 := n.Store.Entries(fromIndex, committedIndex+1, math.MaxUint64)
 	if err1 != nil {
 		return err1
 	}
-	applyDoneC, ok := n.PublishEntries(entries)
-	if !ok {
-		n.Stop()
-		return errors.New("publish entry error")
+	if len(entries) == 0 {
+		return nil
 	}
-	n.waitWriteOK(applyDoneC)
+
+	data := make([][]byte, 0, len(entries))
+	for i := range entries {
+		switch entries[i].Type {
+		case raftpb.EntryNormal:
+			if len(entries[i].Data) == 0 {
+				// ignore empty messages
+				continue
+			}
+			data = append(data, entries[i].Data)
+		}
+	}
+
+	if len(data) > 0 {
+		select {
+		case n.ReplayC <- &Commit{
+			Database:   n.database,
+			PtId:       GetPtId(n.id),
+			Data:       data,
+			fromReplay: true,
+		}:
+		case <-n.ctx.Done():
+			return nil
+		}
+	}
 	return nil
 }
 
@@ -647,6 +694,76 @@ func (n *RaftNode) CheckAllRgMembers() bool {
 		}
 	}
 	return true
+}
+
+func (n *RaftNode) deleteEntryLogPeriodically() {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			if err := n.deleteEntryLog(); err != nil {
+				logger.GetLogger().Error("Error while deleting EntryLog.", zap.Error(err))
+			}
+		case <-n.ctx.Done():
+			logger.GetLogger().Error("ctx done...")
+		}
+	}
+}
+
+func (n *RaftNode) deleteEntryLog() error {
+	sp, err := n.Store.Snapshot()
+	if err != nil {
+		return err
+	}
+	index := sp.Metadata.Index
+	if !n.CheckAllRgMembers() {
+		return errors.New("replica group status is unhealthy")
+	}
+	if n.isLeader() {
+		data, err2 := n.prepareDeleteEntryLogProposeData(index)
+		if err2 != nil {
+			return err2
+		}
+		n.proposeC <- data
+	}
+	return nil
+}
+
+func (n *RaftNode) prepareDeleteEntryLogProposeData(index uint64) ([]byte, error) {
+	filId, _ := n.Store.SlotGe(index)
+	progress := n.node.Status().Progress
+	var minMatch uint64 = math.MaxUint64
+	for _, v := range progress {
+		match := v.Match
+		if match < minMatch {
+			minMatch = match
+		}
+	}
+	var minIndex uint64
+	memberFilId, _ := n.Store.SlotGe(minMatch)
+	err := n.comparePeerFileIdWithLeaderFileId(memberFilId, filId)
+	if err != nil {
+		minIndex = minMatch
+	} else {
+		minIndex = index
+	}
+	// propose clean entry log
+	var dst []byte
+	dst = encoding.MarshalUint64(dst, minIndex)
+	wrapper := &raftlog.DataWrapper{
+		Data:     dst,
+		DataType: raftlog.ClearEntryLog,
+	}
+	marshal := wrapper.Marshal()
+	return marshal, nil
+}
+
+func (n *RaftNode) comparePeerFileIdWithLeaderFileId(memberFilId int, filId int) error {
+	if memberFilId != filId {
+		return errors.New("member file id is not equal leader file id ")
+	}
+	return nil
 }
 
 // GetRaftNodeId returns raft node id. Greater 1 than the ptId.

@@ -1209,3 +1209,63 @@ func (resp *SendSysCtrlToMetaResponse) Size() int {
 func (resp *SendSysCtrlToMetaResponse) Instance() transport.Codec {
 	return &SendSysCtrlToMetaResponse{}
 }
+
+func (o *ShowClusterRequest) Marshal(buf []byte) ([]byte, error) {
+	buf = codec.AppendBytes(buf, o.Body)
+
+	return buf, nil
+}
+
+func (o *ShowClusterRequest) Unmarshal(buf []byte) error {
+	if len(buf) == 0 {
+		return nil
+	}
+	dec := codec.NewBinaryDecoder(buf)
+	o.Body = dec.Bytes()
+
+	return nil
+}
+
+func (o *ShowClusterRequest) Size() int {
+	size := 0
+	size += codec.SizeOfByteSlice(o.Body)
+
+	return size
+}
+
+func (o *ShowClusterRequest) Instance() transport.Codec {
+	return &ShowClusterRequest{}
+}
+
+func (o *ShowClusterResponse) Marshal(buf []byte) ([]byte, error) {
+	buf = codec.AppendBytes(buf, o.Data)
+	buf = codec.AppendUint16(buf, uint16(o.ErrCode))
+	buf = codec.AppendString(buf, o.Err)
+
+	return buf, nil
+}
+
+func (o *ShowClusterResponse) Unmarshal(buf []byte) error {
+	if len(buf) == 0 {
+		return nil
+	}
+	dec := codec.NewBinaryDecoder(buf)
+	o.Data = dec.Bytes()
+	o.ErrCode = errno.Errno(dec.Uint16())
+	o.Err = dec.String()
+
+	return nil
+}
+
+func (o *ShowClusterResponse) Size() int {
+	size := 0
+	size += codec.SizeOfByteSlice(o.Data)
+	size += 2
+	size += codec.SizeOfString(o.Err)
+
+	return size
+}
+
+func (o *ShowClusterResponse) Instance() transport.Codec {
+	return &ShowClusterResponse{}
+}

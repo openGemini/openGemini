@@ -40,6 +40,7 @@ import (
 	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/raftconn"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
@@ -66,6 +67,7 @@ type DBPTInfo struct {
 
 	node     raftNodeRequest
 	proposeC chan<- []byte // proposed messages, only for raft replication
+	ReplayC  chan *raftconn.Commit
 
 	mu       sync.RWMutex
 	database string
@@ -1004,11 +1006,7 @@ func (dbPT *DBPTInfo) ShardIds(tr *influxql.TimeRange) []uint64 {
 }
 
 func (dbPT *DBPTInfo) walkShards(tr *influxql.TimeRange, callback func(sh Shard)) {
-	dbPT.ref()
-	defer dbPT.unref()
-
 	shardIDs := dbPT.ShardIds(tr)
-
 	for _, id := range shardIDs {
 		dbPT.mu.RLock()
 		sh, ok := dbPT.shards[id]

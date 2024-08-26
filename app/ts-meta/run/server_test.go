@@ -78,6 +78,7 @@ func Test_NewServer_Open_Close(t *testing.T) {
 	conf.Data.MetaDir = path.Join(tmpDir, "meta")
 	conf.Data.WALDir = path.Join(tmpDir, "wal")
 	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
+	conf.Common.PprofEnabled = true
 
 	server, err = NewServer(conf, app.ServerInfo{}, log)
 	require.NoError(t, err)

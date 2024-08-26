@@ -17,6 +17,7 @@ limitations under the License.
 package meta
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -26,6 +27,7 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
+	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
 	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -360,4 +362,54 @@ func Test_CreateSqlNode(t *testing.T) {
 	h1 := New(msg.Type())
 	h1.InitHandler(mockStore, nil, nil)
 	require.Error(t, h1.SetRequestMsg(msg1.Data()))
+}
+
+func Test_ShowCluster(t *testing.T) {
+	mockStore := NewMockRPCStore()
+	mockStore.stat = raft.Follower
+
+	val := &proto2.ShowClusterCommand{
+		NodeType: proto.String(""),
+		ID:       proto.Uint64(0),
+	}
+
+	c := proto2.Command_ShowClusterCommand
+	cmd := &proto2.Command{Type: &c}
+	if err := proto.SetExtension(cmd, proto2.E_ShowClusterCommand_Command, val); err != nil {
+		panic(err)
+	}
+	b, err := proto.Marshal(cmd)
+	if err != nil {
+		t.Fatal("cmd marshal err")
+	}
+	req := &message.ShowClusterRequest{Body: b}
+	msg := message.NewMetaMessage(message.ShowClusterRequestMessage, req)
+	h := New(msg.Type())
+	h.InitHandler(mockStore, nil, nil)
+	require.NoError(t, h.SetRequestMsg(msg.Data()))
+
+	mockStore.ShowClusterFn = func(body []byte) ([]byte, error) { return nil, nil }
+	_, err = h.Process()
+	assert.Equal(t, err, nil)
+
+	mockStore.ShowClusterFn = func(body []byte) ([]byte, error) { return nil, raft.ErrNotLeader }
+	_, err = h.Process()
+	assert.Equal(t, err, nil)
+
+	mockStore.ShowClusterFn = func(body []byte) ([]byte, error) { return nil, fmt.Errorf("show cluster err") }
+	_, err = h.Process()
+	assert.Equal(t, err, nil)
+
+	mockStore.ShowClusterFn = func(body []byte) ([]byte, error) { return nil, errno.NewError(errno.UnknownErr) }
+	_, err = h.Process()
+	assert.Equal(t, err, nil)
+
+	req.Body = []byte{'a', 'b'}
+	_, err = h.Process()
+	assert.Equal(t, err, nil)
+
+	h.Instance()
+
+	msg1 := message.NewMetaMessage(message.SnapshotV2RequestMessage, &message.SnapshotV2Request{})
+	require.Error(t, h.SetRequestMsg(msg1.Data()))
 }

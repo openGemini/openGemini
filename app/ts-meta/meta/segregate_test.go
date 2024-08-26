@@ -18,6 +18,7 @@ package meta
 
 import (
 	"testing"
+	"time"
 
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/lib/config"
@@ -304,7 +305,16 @@ func TestHandleSpecialCtlDataSetNodeStatusFail(t *testing.T) {
 	}
 }
 
+func SetCheckSegregateTimeout(v time.Duration) {
+	checkSegregateTimeout = v
+}
+
 func TestHandleSpecialCtlDataCheckTaskDoneFail(t *testing.T) {
+	SetCheckSegregateTimeout(time.Second)
+	defer func() {
+		SetCheckSegregateTimeout(60 * time.Second)
+	}()
+
 	s := &Store{
 		raft: &MockRaftForSG{isLeader: true},
 		data: &meta.Data{

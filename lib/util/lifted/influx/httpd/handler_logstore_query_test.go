@@ -135,7 +135,7 @@ func TestExtractFieldFragments(t *testing.T) {
 	for _, key := range fieldSlice {
 		fieldScopes = h.appendFieldScopes(fieldScopes, key, content[key])
 	}
-	b, err := json.MarshalToString(content)
+	b, err := json2.MarshalToString(content)
 	assert.Equal(t, nil, err)
 
 	contentTokenFinder := tokenizer.NewSimpleTokenFinder(tokenizer.CONTENT_SPLIT_TABLE)

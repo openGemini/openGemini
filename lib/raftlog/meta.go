@@ -174,7 +174,10 @@ func (m *metaFile) HardState() (raftpb.HardState, error) {
 }
 
 func (m *metaFile) StoreSnapshot(snap *raftpb.Snapshot) error {
-	if snap == nil || raft.IsEmptySnap(*snap) {
+	if snap == nil {
+		return nil
+	}
+	if !IsValidSnapshot(*snap) {
 		return nil
 	}
 	m.SetUint(SnapshotIndex, snap.Metadata.Index)
@@ -189,6 +192,16 @@ func (m *metaFile) StoreSnapshot(snap *raftpb.Snapshot) error {
 		return err
 	}
 	return nil
+}
+
+func IsValidSnapshot(snapshot raftpb.Snapshot) bool {
+	if !raft.IsEmptySnap(snapshot) {
+		return true
+	}
+	if snapshot.Metadata.ConfState.Voters != nil {
+		return true
+	}
+	return false
 }
 
 func (m *metaFile) snapshot() (raftpb.Snapshot, error) {

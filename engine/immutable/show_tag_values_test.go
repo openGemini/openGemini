@@ -416,6 +416,7 @@ type MockTableStore struct {
 	SequencerFn              func() *Sequencer
 	GetTSSPFilesFn           func(mm string, isOrder bool) (*TSSPFiles, bool)
 	GetCSFilesFn             func(mm string) (*TSSPFiles, bool)
+	CopyCSFilesFn            func(mm string) []TSSPFile
 	TierFn                   func() uint64
 	SetTierFn                func(tier uint64)
 	FileFn                   func(name string, namePath string, isOrder bool) TSSPFile
@@ -501,6 +502,9 @@ func (s *MockTableStore) GetTSSPFiles(mm string, isOrder bool) (*TSSPFiles, bool
 }
 func (s *MockTableStore) GetCSFiles(mm string) (*TSSPFiles, bool) {
 	return s.GetCSFilesFn(mm)
+}
+func (s *MockTableStore) CopyCSFiles(mm string) []TSSPFile {
+	return s.CopyCSFilesFn(mm)
 }
 func (s *MockTableStore) Tier() uint64 {
 	return s.TierFn()

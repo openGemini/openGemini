@@ -141,8 +141,11 @@ func Compile(stmt *influxql.SelectStatement, opt CompileOptions) (Statement, err
 	c.stmt.RewriteTimeFields()
 
 	// Rewrite any regex conditions that could make use of the index.
-	c.stmt.RewriteRegexConditions()
-
+	if !c.stmt.IsPromQuery {
+		c.stmt.RewriteRegexConditions()
+	} else {
+		c.stmt.RewriteRegexConditionsDFS()
+	}
 	// Convert PERCENTILE_OGSKETCH into the PERCENTILE_APPROX
 	c.stmt.RewritePercentileOGSketch()
 

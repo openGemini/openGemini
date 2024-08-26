@@ -183,3 +183,24 @@ func TestQueryMetric_Manual(t *testing.T) {
 		})
 	}
 }
+
+func TestHttpsQuery(t *testing.T) {
+	lg := logger.NewLogger(errno.ModuleUnknown)
+	conf := &config.MonitorQuery{
+		HTTPSEnabled:  true,
+		QueryEnable:   true,
+		HttpEndpoint:  "127.0.0.1:8086",
+		QueryInterval: toml.Duration(10 * time.Second), // 10s
+	}
+	obj := NewQueryMetric(logger.NewLogger(errno.ModuleUnknown), conf)
+	require.NotEmpty(t, obj)
+
+	rjConfig := config.NewTSMonitor()
+	rjConfig.ReportConfig.Address = "127.0.0.1/write"
+	rjConfig.ReportConfig.Database = "db0"
+	rjConfig.ReportConfig.Rp = "rp0"
+	rjConfig.ReportConfig.RpDuration = toml.Duration(time.Hour)
+	rjConfig.ReportConfig.HTTPSEnabled = true
+	job := NewReportJob(lg, rjConfig, false, "errLogHistory")
+	require.NotEmpty(t, job)
+}

@@ -552,6 +552,12 @@ func (data *Data) WalkMetaNodes(fn func(node *NodeInfo)) {
 	}
 }
 
+func (data *Data) WalkMigrateEvents(fn func(eventId string, info *MigrateEventInfo)) {
+	for k, v := range data.MigrateEvents {
+		fn(k, v)
+	}
+}
+
 func (data *Data) DurationInfos(dbPtIds map[string][]uint32) *ShardDurationResponse {
 	r := &ShardDurationResponse{DataIndex: data.Index}
 	data.WalkDatabases(func(db *DatabaseInfo) {
@@ -1998,54 +2004,126 @@ func (data *Data) ShowRetentionPolicies(database string) (models.Rows, error) {
 	return []*models.Row{row}, nil
 }
 
-func (data *Data) ShowCluster() models.Rows {
-	row := &models.Row{Columns: []string{"time", "status", "hostname", "nodeID", "nodeType"}}
-	timestamp := time.Now().UTC().UnixNano()
+func (data *Data) ShowCluster(nodeType string, ID uint64) (*ShowClusterInfo, error) {
+	clusterInfo := &ShowClusterInfo{}
 
-	data.WalkMetaNodes(func(node *NodeInfo) {
-		row.Values = append(row.Values, []interface{}{timestamp, node.Status.String(), node.Host, node.ID, METANODE})
-	})
-	data.WalkDataNodes(func(node *DataNode) {
-		row.Values = append(row.Values, []interface{}{timestamp, node.Status.String(), node.Host, node.ID, DATANODE})
-	})
-
-	return []*models.Row{row}
-}
-
-func (data *Data) ShowClusterWithCondition(nodeType string, ID uint64) (models.Rows, error) {
-	row := &models.Row{Columns: []string{"time", "status", "hostname", "nodeID", "nodeType"}}
 	timestamp := time.Now().UTC().UnixNano()
 
 	switch nodeType {
 	case METANODE:
 		data.WalkMetaNodes(func(node *NodeInfo) {
 			if ID == 0 || node.ID == ID {
-				row.Values = append(row.Values, []interface{}{timestamp, node.Status.String(), node.Host, node.ID, METANODE})
+				clusterInfo.Nodes = append(clusterInfo.Nodes, NodeRow{timestamp, node.Status.String(), node.Host, node.ID, METANODE})
 			}
 		})
 	case DATANODE:
 		data.WalkDataNodes(func(node *DataNode) {
 			if ID == 0 || node.ID == ID {
-				row.Values = append(row.Values, []interface{}{timestamp, node.Status.String(), node.Host, node.ID, DATANODE})
+				clusterInfo.Nodes = append(clusterInfo.Nodes, NodeRow{timestamp, node.Status.String(), node.Host, node.ID, DATANODE})
 			}
 		})
 	default:
 		data.WalkMetaNodes(func(node *NodeInfo) {
 			if ID == 0 || node.ID == ID {
-				row.Values = append(row.Values, []interface{}{timestamp, node.Status.String(), node.Host, node.ID, METANODE})
+				clusterInfo.Nodes = append(clusterInfo.Nodes, NodeRow{timestamp, node.Status.String(), node.Host, node.ID, METANODE})
 			}
 		})
 		data.WalkDataNodes(func(node *DataNode) {
 			if ID == 0 || node.ID == ID {
-				row.Values = append(row.Values, []interface{}{timestamp, node.Status.String(), node.Host, node.ID, DATANODE})
+				clusterInfo.Nodes = append(clusterInfo.Nodes, NodeRow{timestamp, node.Status.String(), node.Host, node.ID, DATANODE})
 			}
 		})
 	}
-	if len(row.Values) == 0 {
+	if len(clusterInfo.Nodes) == 0 {
 		return nil, errno.NewError(errno.InValidNodeID, ID)
 	}
 
-	return []*models.Row{row}, nil
+	data.WalkMigrateEvents(func(eventId string, info *MigrateEventInfo) {
+		if ID == 0 || (nodeType != METANODE && (ID == info.src || ID == info.dest)) {
+			eventTypeStr, currStateStr, preStateStr := getEventStr(EventType(info.eventType), info.currState, info.preState)
+			clusterInfo.Events = append(clusterInfo.Events, EventRow{info.opId, eventTypeStr, info.pt.Db, info.pt.Pti.PtId, info.src, info.dest, currStateStr, preStateStr})
+		}
+	})
+
+	return clusterInfo, nil
+}
+
+type AssignState int
+
+const (
+	Init         AssignState = 0
+	StartAssign  AssignState = 8
+	AssignFailed AssignState = 9
+	Assigned     AssignState = 10
+	Final        AssignState = 11
+)
+
+func getAssignEventStateStr(s AssignState) string {
+	switch s {
+	case Init:
+		return "init"
+	case StartAssign:
+		return "startAssign"
+	case Assigned:
+		return "assigned"
+	case AssignFailed:
+		return "assignFailed"
+	default:
+		return "unknown"
+	}
+}
+
+type EventType int
+
+const (
+	AssignType EventType = iota
+	OffloadType
+	MoveType
+)
+
+type MoveState int
+
+var MoveStateStr []string = []string{"move_init", "move_preOffload", "move_rollbackPreoffload", "move_preAssign",
+	"move_rollbackPreAssign", "move_offload", "move_offloadFailed", "move_offloaded", "move_assign", "move_assignFailed",
+	"move_assigned", "move_final"}
+
+const (
+	MoveInit               MoveState = 0
+	MovePreOffload         MoveState = 1
+	MoveRollbackPreOffload MoveState = 2
+	MovePreAssign          MoveState = 3
+	MoveRollbackPreAssign  MoveState = 4 // rollback preAssign in store when preAssign failed
+	MoveOffload            MoveState = 5 // if offload failed retry do not rollback preAssign
+	MoveOffloadFailed      MoveState = 6
+	MoveOffloaded          MoveState = 7
+	MoveAssign             MoveState = 8
+	MoveAssignFailed       MoveState = 9
+	MoveAssigned           MoveState = 10
+	MoveFinal              MoveState = 11
+)
+
+func (s MoveState) String() string {
+	if int(s) < len(MoveStateStr) {
+		return MoveStateStr[s]
+	}
+	return "unknown assign state"
+}
+
+func getEventStr(eventType EventType, currState, preState int) (string, string, string) {
+	eventTypeStr := "unknown"
+	currStateStr := ""
+	preStateStr := ""
+	switch eventType {
+	case AssignType:
+		eventTypeStr = "assign_event"
+		currStateStr, preStateStr = getAssignEventStateStr(AssignState(currState)), getAssignEventStateStr(AssignState(preState))
+	case OffloadType:
+		eventTypeStr = "offload_event"
+	case MoveType:
+		eventTypeStr = "move_event"
+		currStateStr, preStateStr = MoveState(currState).String(), MoveState(preState).String()
+	}
+	return eventTypeStr, currStateStr, preStateStr
 }
 
 func (data *Data) GetDbPtOwners(database string, ptIds []uint32) []uint64 {

@@ -74,7 +74,7 @@ func Init(dir string) (*RaftDiskStorage, error) {
 		return nil, err
 	}
 
-	first, err := rds.FirstIndex()
+	first, err := rds.FirstIndexWithSnap()
 	if err != nil {
 		return nil, err
 	}
@@ -189,15 +189,6 @@ func (rds *RaftDiskStorage) Term(idx uint64) (uint64, error) {
 	rds.lock.Lock()
 	defer rds.lock.Unlock()
 
-	si := rds.meta.Uint(SnapshotIndex)
-	if idx < si {
-		rds.logger.Error(fmt.Sprintf("TERM for %d = %v\n", idx, raft.ErrCompacted))
-		return 0, raft.ErrCompacted
-	}
-	if idx == si {
-		return rds.meta.Uint(SnapshotTerm), nil
-	}
-
 	term, err := rds.entryLog.Term(idx)
 	if err != nil {
 		rds.logger.Error(fmt.Sprintf("TERM for %d = %v\n", idx, err))
@@ -224,10 +215,17 @@ func (rds *RaftDiskStorage) FirstIndex() (uint64, error) {
 	return rds.firstIndex(), nil
 }
 
-func (rds *RaftDiskStorage) firstIndex() uint64 {
+// FirstIndex implements the Storage interface.
+func (rds *RaftDiskStorage) FirstIndexWithSnap() (uint64, error) {
+	rds.lock.Lock()
+	defer rds.lock.Unlock()
 	if si := rds.Uint(SnapshotIndex); si > 0 {
-		return si + 1
+		return si + 1, nil
 	}
+	return rds.entryLog.firstIndex(), nil
+}
+
+func (rds *RaftDiskStorage) firstIndex() uint64 {
 	return rds.entryLog.firstIndex()
 }
 
@@ -280,6 +278,10 @@ func (rds *RaftDiskStorage) CreateSnapshot(i uint64, cs *raftpb.ConfState, data 
 func (rds *RaftDiskStorage) DeleteBefore(index uint64) {
 	// Now we delete all the files which are below the snapshot index.
 	rds.entryLog.deleteBefore(index)
+}
+
+func (rds *RaftDiskStorage) SlotGe(index uint64) (int, int) {
+	return rds.entryLog.slotGe(index)
 }
 
 // Save would write Entries, HardState and Snapshot to persistent storage in order, i.e. Entries

@@ -121,7 +121,6 @@ func (h *Handler) servePromWriteBase(w http.ResponseWriter, r *http.Request, use
 		}
 
 		rs := pool.GetRows(maxPoints)
-		*rs = (*rs)[:maxPoints]
 		defer pool.PutRows(rs)
 		*rs, err = tansFunc(mst, *rs, tss)
 		if err != nil {
@@ -244,12 +243,17 @@ func (h *Handler) servePromReadBase(w http.ResponseWriter, r *http.Request, user
 
 	// Parse whether this is an async command.
 	async := r.FormValue("async") == "true"
-
+	chunked, chunkSize, innerChunkSize, err := h.parseChunkSize(r)
+	if err != nil {
+		h.httpError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	opts := query.ExecutionOptions{
+		ChunkSize:       chunkSize,
+		Chunked:         chunked,
+		InnerChunkSize:  innerChunkSize,
 		Database:        db,
 		RetentionPolicy: rp,
-		ChunkSize:       1,
-		Chunked:         true,
 		ReadOnly:        r.Method == "GET",
 		Quiet:           true,
 	}
@@ -668,7 +672,7 @@ func (h *Handler) servePromQueryLabelsBase(w http.ResponseWriter, r *http.Reques
 
 // servePromQueryLabels Executes a label-values query of the PromQL and returns the query result.
 func (h *Handler) servePromQueryLabelValues(w http.ResponseWriter, r *http.Request, user meta2.User) {
-	h.servePromQueryLabelsBase(w, r, user, &promQueryParam{getMetaQuery: getLabelValuesQuery})
+	h.servePromQueryLabelValuesBase(w, r, user, &promQueryParam{getMetaQuery: getLabelValuesQuery})
 
 }
 

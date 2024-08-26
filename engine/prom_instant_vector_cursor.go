@@ -64,6 +64,7 @@ func NewInstantVectorCursor(input comm.KeyCursor, schema *executor.QuerySchema, 
 		c.endSample = c.startSample
 		c.firstStep = c.startSample
 		c.reducerParams.lastStep = c.endSample
+		c.reducerParams.rangeDuration = schema.Options().GetPromRange().Nanoseconds()
 	} else {
 		c.endSample = c.start + c.lookUpDelta + (c.end-(c.start+c.lookUpDelta))/c.step*c.step
 		c.firstStep = getCurrStep(c.startSample, c.endSample, c.step, tr.Min)
@@ -323,6 +324,10 @@ func (r *floatSampler) Aggregate(p *ReducerEndpoint, param *ReducerParams) {
 	inOrdinal, outOrdinal := p.InputPoint.Ordinal, p.OutputPoint.Ordinal
 	values := inRecord.ColVals[inOrdinal].FloatValues()
 	timeIdx, numStep := outRecord.ColNums()-1, len(param.intervalIndex)/2
+	if param.step == 0 && param.rangeDuration > 0 {
+		outRecord.AppendRec(inRecord, 0, inRecord.RowNums())
+		return
+	}
 	var ts int64
 	for i := 0; i < numStep; i++ {
 		if param.sameWindow && i == numStep-1 {

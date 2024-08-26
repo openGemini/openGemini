@@ -243,3 +243,28 @@ func (p *AbortProcessor) Handle(w spdy.Responser, data interface{}) error {
 	}
 	return nil
 }
+
+type CrashProcessor struct {
+}
+
+func NewCrashProcessor() *CrashProcessor {
+	return &CrashProcessor{}
+}
+
+func (p *CrashProcessor) Handle(w spdy.Responser, data interface{}) error {
+	msg, ok := data.(*executor.Crash)
+	if !ok {
+		return executor.NewInvalidTypeError("*executor.Crash", data)
+	}
+
+	logger.GetLogger().Info("CrashProcessor.Handle",
+		zap.Uint64("qid", msg.QueryID),
+		zap.Uint64("clientID", msg.ClientID))
+
+	query.NewManager(msg.ClientID).Crash(msg.QueryID)
+	err := w.Response(executor.NewFinishMessage(), true)
+	if err != nil {
+		logger.GetLogger().Error("failed to response finish message", zap.Error(err))
+	}
+	return nil
+}

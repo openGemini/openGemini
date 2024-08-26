@@ -17,7 +17,6 @@ limitations under the License.
 package meta
 
 import (
-	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -67,7 +66,7 @@ var httpScheme = map[bool]string{
 
 // #nosec
 var httpsClient = &http.Client{Transport: &http.Transport{
-	TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	TLSClientConfig: config.NewTLSConfig(true),
 }}
 
 // handler represents an HTTP handler for the meta service.

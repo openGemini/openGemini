@@ -59,6 +59,10 @@ func (m *mockMetaClient4Replica) DBPtView(database string) (meta.DBPtInfos, erro
 	}, nil
 }
 
+func (m *mockMetaClient4Replica) DataNode(nodeId uint64) (*meta.DataNode, error) {
+	return &meta.DataNode{}, nil
+}
+
 func TestStartRaftNode(t *testing.T) {
 	client := &mockMetaClient4Replica{}
 	e := &Engine{

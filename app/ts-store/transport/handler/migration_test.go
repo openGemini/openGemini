@@ -19,19 +19,24 @@ package handler
 import (
 	"testing"
 
-	meta2 "github.com/openGemini/openGemini/app/ts-meta/meta"
 	"github.com/openGemini/openGemini/engine/executor/spdy"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	netdata "github.com/openGemini/openGemini/lib/netstorage/data"
 	"github.com/openGemini/openGemini/lib/tracing"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
 	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 	"github.com/stretchr/testify/require"
 )
 
 type MockNewResponser struct {
+	err error
+}
+
+func NewMockNewResponser(err error) *MockNewResponser {
+	return &MockNewResponser{err: err}
 }
 
 func (m MockNewResponser) Encode(bytes []byte, i interface{}) ([]byte, error) {
@@ -43,7 +48,7 @@ func (m MockNewResponser) Decode(bytes []byte) (interface{}, error) {
 }
 
 func (m MockNewResponser) Response(i interface{}, b bool) error {
-	return nil
+	return m.err
 }
 
 func (m MockNewResponser) Callback(i interface{}) error {
@@ -81,7 +86,7 @@ func Test_MigrationProcessor_Move(t *testing.T) {
 	}
 	resp := &MockNewResponser{}
 	var req *netstorage.PtRequest
-	mv := []meta2.MoveState{meta2.MovePreOffload, meta2.MoveRollbackPreOffload, meta2.MovePreAssign, meta2.MoveOffload, meta2.MoveAssign}
+	mv := []meta.MoveState{meta.MovePreOffload, meta.MoveRollbackPreOffload, meta.MovePreAssign, meta.MoveOffload, meta.MoveAssign}
 	for _, m := range mv {
 		req = &netstorage.PtRequest{
 			PtRequest: netdata.PtRequest{
@@ -134,7 +139,7 @@ func Test_MigrationProcessor_Move_error2(t *testing.T) {
 					PtId:   proto.Uint32(1),
 				},
 			},
-			MigrateType: proto.Int32(int32(meta2.MovePreAssign)),
+			MigrateType: proto.Int32(int32(meta.MovePreAssign)),
 			OpId:        proto.Uint64(1234),
 		},
 	}
@@ -154,7 +159,7 @@ func Test_MigrationProcessor_Move_error3(t *testing.T) {
 				Db: proto.String("0"),
 				Pt: nil,
 			},
-			MigrateType: proto.Int32(int32(meta2.MovePreAssign)),
+			MigrateType: proto.Int32(int32(meta.MovePreAssign)),
 			OpId:        proto.Uint64(1234),
 		},
 	}

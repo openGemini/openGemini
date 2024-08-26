@@ -577,6 +577,9 @@ func (s *shard) CreateTagSetInSerial(work func(int, int, bool, *sync.WaitGroup, 
 func (s *shard) CreateTagSetInParallel(work func(int, int, bool, *sync.WaitGroup, *tsi.TagSetInfo), subTagSetN int, tagSet *tsi.TagSetInfo) {
 	wg := &sync.WaitGroup{}
 	wg.Add(subTagSetN)
+	// add ref in advance to prevent ()) from being released while still in use
+	tagSet.Ref()
+	defer tagSet.Unref()
 	for j := 0; j < subTagSetN; j++ {
 		go work(j, subTagSetN, true, wg, tagSet)
 	}
@@ -942,7 +945,7 @@ func itrsInitWithLimit(ctx *idKeyCursorContext, span *tracing.Span, schema *exec
 	topNList := NewTopNLinkedList(schema.Options().GetLimit()+schema.Options().GetOffset(), schema.Options().IsAscending())
 	for i := start; i < len(tagSet.IDs); i += step {
 		if ctx.IsAborted() {
-			_ = itrs.Close()
+			topNList.Close()
 			return nil, errno.NewError(errno.QueryAborted)
 		}
 		var itr *seriesCursor

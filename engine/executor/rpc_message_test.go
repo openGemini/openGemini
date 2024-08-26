@@ -210,10 +210,29 @@ func (c *RPCAbort) Abort() {
 
 }
 
+type RPCCrash struct {
+}
+
+func (c *RPCCrash) Handle(_ spdy.Responser, data interface{}) error {
+	msg, ok := data.(*executor.Crash)
+	if !ok {
+		return fmt.Errorf("invalid data type, exp: *executor.Crash; got: %s", reflect.TypeOf(data))
+	}
+	fmt.Printf("RPCCrash Handle: %+v \n", msg)
+
+	query2.NewManager(clientID).Crash(msg.QueryID)
+	return nil
+}
+
+func (c *RPCCrash) Crash() {
+
+}
+
 func startServer(address string, rpcServer *RPCServer) *spdy.RRCServer {
 	server := spdy.NewRRCServer(spdy.DefaultConfiguration(), "tcp", address)
 	server.RegisterEHF(transport.NewEventHandlerFactory(spdy.SelectRequest, rpcServer, rpc.NewMessageWithHandler(executor.NewRPCMessage)))
 	server.RegisterEHF(transport.NewEventHandlerFactory(spdy.AbortRequest, &RPCAbort{}, &executor.Abort{}))
+	server.RegisterEHF(transport.NewEventHandlerFactory(spdy.CrashRequest, &RPCCrash{}, &executor.Crash{}))
 	if err := server.Start(); err != nil {
 		panic(err.Error())
 	}
@@ -274,6 +293,37 @@ func TestTransportAbort(t *testing.T) {
 		"abort failed")
 }
 
+func TestTransportCrash(t *testing.T) {
+	address := "127.0.0.12:18292"
+	var nodeID uint64 = 2
+	rpcServer := &RPCServer{}
+
+	// Server
+	server := startServer(address, rpcServer)
+	defer server.Stop()
+
+	// Client
+	transport.NewNodeManager().Add(nodeID, address)
+
+	time.Sleep(time.Second)
+
+	ctx := context.Background()
+	rq := makeRemoteQueryMsg(nodeID)
+	rq.Analyze = true
+	client := executor.NewRPCClient(rq)
+	client.Init(ctx, nil)
+
+	go func() {
+		time.Sleep(time.Second / 2)
+		client.Interrupt()
+	}()
+
+	err := client.Run()
+	assert.NoError(t, err)
+	assert.Equal(t, query2.NewManager(clientID).Aborted(rq.Opt.QueryId), true,
+		"crash failed")
+}
+
 func TestHandlerError(t *testing.T) {
 	msg := &executor.Abort{}
 	client := &executor.RPCClient{}
@@ -291,6 +341,17 @@ func TestNewRPCReaderTransform_Abort(t *testing.T) {
 
 	trans.Distribute(buildDag())
 	trans.Abort()
+	err := trans.Work(ctx)
+	require.NoError(t, err)
+}
+
+func TestNewRPCReaderTransform_Interrupt(t *testing.T) {
+	ctx := context.Background()
+	rt := hybridqp.NewRowDataTypeImpl(influxql.VarRef{})
+	trans := executor.NewRPCReaderTransform(rt, 0, &executor.RemoteQuery{})
+
+	trans.Distribute(buildDag())
+	trans.Interrupt()
 	err := trans.Work(ctx)
 	require.NoError(t, err)
 }

@@ -74,14 +74,18 @@ func (e *Engine) startRaftNode(opId uint64, nodeId uint64, dbPt *DBPTInfo, clien
 	store.SetUint(raftlog.RaftId, raftconn.GetRaftNodeId(ptId))
 	store.SetUint(raftlog.GroupId, 0) // All zeros have group zero.
 
+	replayC := make(chan *raftconn.Commit, 1)
 	node := raftconn.StartNode(store, nodeId, database, raftconn.GetRaftNodeId(ptId), peers, client, transPeers)
 	node.WithLogger(e.log.With(zap.String("service", "raft node")))
-	go readCommitFromRaft(node, client, storage)
+	node.ReplayC = replayC
 	if err = node.InitAndStartNode(); err != nil {
 		return err
 	}
+	close(replayC)
 	dbPt.node = node
 	dbPt.proposeC = dbPt.node.GetProposeC()
+	dbPt.ReplayC = replayC
+	go readCommitFromRaft(node, client, storage)
 
 	var leaderPtID = -1
 	raftGroups := e.metaClient.DBRepGroups(database)

@@ -18,12 +18,12 @@ package usage_client
 
 import (
 	"bytes"
-	"crypto/tls"
 	"encoding/json"
 	"io"
 	"net/http"
 	"time"
 
+	"github.com/openGemini/openGemini/lib/config"
 	"go.uber.org/zap"
 )
 
@@ -60,7 +60,7 @@ func (c *Client) Send(usage UsageValues) (*http.Response, error) {
 	}
 	tr := &http.Transport{
 		Proxy:               http.ProxyFromEnvironment,
-		TLSClientConfig:     &tls.Config{InsecureSkipVerify: true},
+		TLSClientConfig:     config.NewTLSConfig(true),
 		TLSHandshakeTimeout: 10 * time.Second,
 	}
 	cli := &http.Client{Transport: tr}

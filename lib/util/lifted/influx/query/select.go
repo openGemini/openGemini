@@ -372,6 +372,7 @@ func NewProcessorOptionsStmt(stmt *influxql.SelectStatement, sopt SelectOptions)
 		opt.IsCountValues = true
 	}
 	if len(exceptDimensions) > 0 {
+		// except: an error is reported if a tag does not exist.
 		if len(validExceptDimens) != len(exceptDimensions) && (stmt.GroupByAllDims && len(stmt.Dimensions) > 0) {
 			return ProcessorOptions{}, fmt.Errorf("except: invalid fields")
 		}

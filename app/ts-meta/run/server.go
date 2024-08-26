@@ -19,7 +19,6 @@ package run
 import (
 	"fmt"
 	"net"
-	"net/http"
 	"os"
 	"runtime"
 	"strconv"
@@ -37,6 +36,7 @@ import (
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/statisticsPusher"
 	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 	"github.com/openGemini/openGemini/services/sherlock"
 	"go.uber.org/zap"
@@ -123,13 +123,8 @@ func (s *Server) Open() error {
 	}
 	s.Listener = ln
 
-	if s.config.Meta.PprofEnabled {
-		host, _, err := net.SplitHostPort(s.BindAddress)
-		if err == nil {
-			go func() {
-				_ = http.ListenAndServe(net.JoinHostPort(host, "6062"), nil)
-			}()
-		}
+	if s.config.Common.PprofEnabled {
+		go util.OpenPprofServer(s.config.Common.PprofBindAddress, util.MetaPprofPort)
 	}
 
 	// Multiplex listener.

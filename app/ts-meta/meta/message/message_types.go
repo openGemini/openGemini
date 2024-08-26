@@ -88,6 +88,9 @@ const (
 
 	CreateSqlNodeRequestMessage
 	CreateSqlNodeResponseMessage
+
+	ShowClusterRequestMessage
+	ShowClusterResponseMessage
 )
 
 var MetaMessageBinaryCodec = make(map[uint8]func() transport.Codec, 20)
@@ -136,6 +139,8 @@ func init() {
 	MetaMessageBinaryCodec[VerifyDataNodeStatusResponseMessage] = func() transport.Codec { return &VerifyDataNodeStatusResponse{} }
 	MetaMessageBinaryCodec[SendSysCtrlToMetaRequestMessage] = func() transport.Codec { return &SendSysCtrlToMetaRequest{} }
 	MetaMessageBinaryCodec[SendSysCtrlToMetaResponseMessage] = func() transport.Codec { return &SendSysCtrlToMetaResponse{} }
+	MetaMessageBinaryCodec[ShowClusterRequestMessage] = func() transport.Codec { return &ShowClusterRequest{} }
+	MetaMessageBinaryCodec[ShowClusterResponseMessage] = func() transport.Codec { return &ShowClusterResponse{} }
 
 	MetaMessageResponseTyp = map[uint8]uint8{
 		PingRequestMessage:                    PingResponseMessage,
@@ -158,5 +163,6 @@ func init() {
 		GetContinuousQueryLeaseRequestMessage: GetContinuousQueryLeaseResponseMessage,
 		VerifyDataNodeStatusRequestMessage:    VerifyDataNodeStatusResponseMessage,
 		SendSysCtrlToMetaRequestMessage:       SendSysCtrlToMetaResponseMessage,
+		ShowClusterRequestMessage:             ShowClusterResponseMessage,
 	}
 }

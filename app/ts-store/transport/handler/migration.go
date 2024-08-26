@@ -17,7 +17,6 @@ limitations under the License.
 package handler
 
 import (
-	"github.com/openGemini/openGemini/app/ts-meta/meta"
 	"github.com/openGemini/openGemini/app/ts-store/storage"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/executor/spdy"
@@ -55,24 +54,24 @@ func (mp *MigrationProcessor) Handle(w spdy.Responser, data interface{}) error {
 	}
 	connId := mp.store.GetConnId()
 	aliveConnId := req.GetAliveConnId()
-	mp.log.Info("Start MigrationProcessor", zap.Uint64("opId", req.GetOpId()), zap.String("type", meta.MoveState(req.GetMigrateType()).String()),
+	mp.log.Info("Start MigrationProcessor", zap.Uint64("opId", req.GetOpId()), zap.String("type", meta2.MoveState(req.GetMigrateType()).String()),
 		zap.String("db", ptInfo.Db), zap.Uint32("pt", ptInfo.Pti.PtId), zap.Uint64("ver", ptInfo.Pti.Ver),
 		zap.Uint64("connId", connId), zap.Uint64("aliveConnId", aliveConnId))
 	var err error
 	rsp := netstorage.NewPtResponse()
-	switch meta.MoveState(req.GetMigrateType()) {
-	case meta.MovePreOffload:
+	switch meta2.MoveState(req.GetMigrateType()) {
+	case meta2.MovePreOffload:
 		err = mp.store.PreOffload(req.GetOpId(), ptInfo)
-	case meta.MoveRollbackPreOffload:
+	case meta2.MoveRollbackPreOffload:
 		err = mp.store.RollbackPreOffload(req.GetOpId(), ptInfo)
-	case meta.MovePreAssign:
+	case meta2.MovePreAssign:
 		err = errno.NewError(errno.DataNoAlive)
 		if connId == aliveConnId {
 			err = mp.store.PreAssign(req.GetOpId(), ptInfo)
 		}
-	case meta.MoveOffload:
+	case meta2.MoveOffload:
 		err = mp.store.Offload(req.GetOpId(), ptInfo)
-	case meta.MoveAssign:
+	case meta2.MoveAssign:
 		err = errno.NewError(errno.DataNoAlive)
 		if connId == aliveConnId {
 			err = mp.store.Assign(req.GetOpId(), ptInfo)

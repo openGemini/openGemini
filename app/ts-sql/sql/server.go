@@ -21,7 +21,6 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net"
-	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -129,7 +128,9 @@ func NewServer(conf config.Config, info app.ServerInfo, logger *Logger.Logger) (
 	s.initMetaClientFn = s.initializeMetaClient
 	s.MetaClient.SetHashAlgo(c.Common.OptHashAlgo)
 
-	go openPprofServer(c, logger)
+	if s.config.Common.PprofEnabled {
+		go util.OpenPprofServer(s.config.Common.PprofBindAddress, util.SqlPprofPort)
+	}
 
 	err = s.MetaClient.SetTier(c.Coordinator.ShardTier)
 	if err != nil {
@@ -238,6 +239,7 @@ func (s *Server) initQueryExecutor(c *config.TSSql) {
 		},
 		MetaExecutor:            metaExecutor,
 		MaxQueryMem:             int64(c.Coordinator.MaxQueryMem),
+		MaxRowSizeLimit:         int64(c.HTTP.MaxRowSizeLimit),
 		QueryTimeCompareEnabled: c.Coordinator.QueryTimeCompareEnabled,
 		RetentionPolicyLimit:    c.Coordinator.RetentionPolicyLimit,
 		StmtExecLogger:          Logger.NewLogger(errno.ModuleQueryEngine).With(zap.String("query", "StatementExecutor")),
@@ -253,29 +255,6 @@ func (s *Server) initQueryExecutor(c *config.TSSql) {
 	s.httpService.Handler.QueryExecutor = s.QueryExecutor
 	if s.cqService != nil {
 		s.cqService.QueryExecutor = s.QueryExecutor
-	}
-}
-
-func openPprofServer(c *config.TSSql, logger *Logger.Logger) {
-	if !c.HTTP.PprofEnabled {
-		return
-	}
-	hosts := strings.Split(c.HTTP.BindAddress, ",")
-	if len(hosts) == 0 || hosts[0] == "" {
-		return
-	}
-
-	host, _, err := net.SplitHostPort(hosts[0])
-	if err != nil {
-		logger.Error("failed to split host and port", zap.Error(err),
-			zap.String("addr", c.HTTP.BindAddress))
-		return
-	}
-
-	addr := net.JoinHostPort(host, "6061")
-	err = http.ListenAndServe(addr, nil)
-	if err != nil {
-		logger.Error("failed to start http server", zap.String("addr", addr))
 	}
 }
 

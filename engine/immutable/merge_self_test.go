@@ -109,3 +109,56 @@ func TestMergeSelf_Stop(t *testing.T) {
 	_, err = ms.Merge("mst", 1, files)
 	require.NoError(t, err)
 }
+
+func TestMergeOneFile(t *testing.T) {
+	var begin int64 = 1e12
+	defer beforeTest(t, 0)()
+	conf := config.GetStoreConfig()
+	conf.Merge.MaxMergeSelfLevel = 2
+	defer func() {
+		conf.Merge.MaxMergeSelfLevel = 0
+	}()
+
+	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
+	defer mh.store.Close()
+	rg := newRecordGenerator(begin, defaultInterval, true)
+
+	mh.addRecord(100, rg.generate(getDefaultSchemas(), 10))
+	require.NoError(t, mh.saveToOrder())
+
+	schema := getDefaultSchemas()
+	rg.setBegin(begin).incrBegin(-1)
+	mh.addRecord(100, rg.generate(schema, 10))
+	require.NoError(t, mh.saveToUnordered())
+
+	require.NoError(t, mh.mergeAndCompact(false))
+	require.NoError(t, compareRecords(mh.readExpectRecord(), mh.readMergedRecord()))
+}
+
+func TestCompactUnordered(t *testing.T) {
+	var run = func(rowCount int) {
+		var begin int64 = 1e12
+		defer beforeTest(t, 0)()
+		conf := config.GetStoreConfig()
+		conf.Compact.CorrectTimeDisorder = true
+		conf.Compact.CompactionMethod = 1
+		defer func() {
+			conf.Compact.CompactionMethod = 0
+			conf.Compact.CorrectTimeDisorder = false
+		}()
+
+		mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
+		defer mh.store.Close()
+		rg := newRecordGenerator(begin, defaultInterval, true)
+
+		for i := 0; i < 8; i++ {
+			mh.addRecord(100, rg.setBegin(begin+int64(i)).generate(getDefaultSchemas(), rowCount))
+			require.NoError(t, mh.saveToOrder())
+		}
+
+		require.NoError(t, mh.mergeAndCompact(false))
+		require.NoError(t, compareRecords(mh.readExpectRecord(), mh.readMergedRecord()))
+	}
+	run(1)
+	run(10)
+}

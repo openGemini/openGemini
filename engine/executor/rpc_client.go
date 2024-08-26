@@ -205,6 +205,31 @@ func (c *RPCClient) Abort() {
 	_ = trans.Wait()
 }
 
+func (c *RPCClient) Interrupt() {
+	if !c.setAbort() {
+		return
+	}
+
+	lg := logger.NewLogger(errno.ModuleNetwork)
+	lg.Info("send crash message", zap.Uint64("nodeID", c.query.NodeID))
+
+	crash := NewCrash(c.query.Opt.QueryId, machine.GetMachineID())
+	trans, err := transport.NewTransport(c.query.NodeID, spdy.CrashRequest, nil)
+	if err != nil {
+		lg.Error("failed to new transport", zap.Error(err),
+			zap.Uint64("nodeID", c.query.NodeID))
+		return
+	}
+
+	if err := trans.Send(crash); err != nil {
+		lg.Error("failed to send crash message", zap.Error(err),
+			zap.Uint64("nodeID", c.query.NodeID))
+		return
+	}
+
+	_ = trans.Wait()
+}
+
 func (c *RPCClient) AddHandler(msgType byte, handle Handler) {
 	if ValidRpcMessageType(msgType) {
 		c.handlers[msgType] = handle

@@ -107,7 +107,8 @@ func (ctx *MergeContext) MergeSelf() bool {
 	conf := config.GetStoreConfig()
 
 	return conf.Merge.MergeSelfOnly || conf.UnorderedOnly ||
-		(conf.Merge.MaxMergeSelfLevel > ctx.level && int64(conf.Merge.MaxUnorderedFileSize) > ctx.unordered.size)
+		(conf.Merge.MaxMergeSelfLevel > ctx.level &&
+			int64(conf.Merge.MaxUnorderedFileSize) > ctx.unordered.size && ctx.unordered.Len() > 1)
 }
 
 func (ctx *MergeContext) ToLevel() uint16 {

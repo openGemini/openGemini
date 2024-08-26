@@ -180,6 +180,9 @@ func UnmarshalCleanSchema(msti *MeasurementInfo, pb *proto2.MeasurementInfo, log
 			retSchema[record.SeqIDField] = SchemaVal{Typ: influx.Field_Type_Int, EndTime: 0}
 		}
 		msti.Schema = &retSchema
+	} else {
+		retSchema := NewCleanSchema(0)
+		msti.Schema = &retSchema
 	}
 }
 

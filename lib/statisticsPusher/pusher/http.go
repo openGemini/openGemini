@@ -19,7 +19,6 @@ package pusher
 import (
 	"bytes"
 	"compress/gzip"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -57,7 +56,7 @@ type HttpConfig struct {
 
 // #nosec
 var defaultHttpClient = &http.Client{Transport: &http.Transport{
-	TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	TLSClientConfig: config.NewTLSConfig(true),
 }}
 
 func (c *HttpConfig) PushURL() string {

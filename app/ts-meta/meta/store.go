@@ -92,10 +92,11 @@ const categoryMetadata = "metanode"
 const categoryParam = "param"
 
 var (
-	CapacityStatMap = &sync.Map{}
-	statRetryTimes  = 3
-	statConcurrency = cpu.GetCpuNum() * 2
-	statErrInfo     = "no such file"
+	CapacityStatMap       = &sync.Map{}
+	statRetryTimes        = 3
+	statConcurrency       = cpu.GetCpuNum() * 2
+	statErrInfo           = "no such file"
+	checkSegregateTimeout = 60 * time.Second
 )
 
 type CapacityStat struct {
@@ -2649,7 +2650,7 @@ func (s *Store) RemoveNode(nodeIds []uint64) error {
 
 // The check is performed every 500 ms. The check times out after 60s.
 func (s *Store) checkSegregateNodeTaskDone(nodeIds []uint64) error {
-	timer := time.NewTimer(60 * time.Second)
+	timer := time.NewTimer(checkSegregateTimeout)
 	for {
 		select {
 		case <-timer.C:
@@ -2711,4 +2712,27 @@ func (s *Store) ModifyRepDBMasterPt(db string, rgId uint32, newMasterPtId uint32
 		return err
 	}
 	return globalService.store.updateReplication(db, rgId, newMasterId, newPeers)
+}
+
+func (s *Store) ShowCluster(body []byte) ([]byte, error) {
+	if !s.IsLeader() {
+		return nil, raft.ErrNotLeader
+	}
+	var cmd mproto.Command
+	if err := proto.Unmarshal(body, &cmd); err != nil {
+		return nil, err
+	}
+
+	ext, _ := proto.GetExtension(&cmd, mproto.E_ShowClusterCommand_Command)
+	v, ok := ext.(*mproto.ShowClusterCommand)
+	if !ok {
+		panic(fmt.Errorf("%s is not a ShowClusterCommand", ext))
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	clusterInfo, err := s.data.ShowCluster(v.GetNodeType(), v.GetID())
+	if err != nil {
+		return nil, err
+	}
+	return clusterInfo.MarshalBinary()
 }

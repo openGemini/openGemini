@@ -200,9 +200,30 @@ func TestReplay(t *testing.T) {
 	}
 	err = mockNode.replay(snapshot2)
 	require.NotNilf(t, err, "err is not nil")
+
+	snapshot3 := raftpb.Snapshot{
+		Metadata: raftpb.SnapshotMetadata{
+			Index: 0,
+		},
+	}
+	err = mockNode.replay(snapshot3)
+	require.NotNilf(t, err, "err is not nil")
+
+	snapshot4 := raftpb.Snapshot{
+		Metadata: raftpb.SnapshotMetadata{
+			Index: 6,
+		},
+	}
+	err = mockNode.replay(snapshot4)
+	require.NoError(t, err)
+
 }
 
 func TestInitAndStartNode(t *testing.T) {
+	InitAndStartNode(t)
+}
+
+func InitAndStartNode(t *testing.T) *RaftNode {
 	tmpDir := t.TempDir()
 	rds, err := raftlog.Init(tmpDir)
 	if err != nil {
@@ -239,6 +260,35 @@ func TestInitAndStartNode(t *testing.T) {
 	err = node.InitAndStartNode()
 
 	require.Nil(t, err)
+
+	return node
+}
+
+func TestIsLeader(t *testing.T) {
+	node := InitAndStartNode(t)
+	leader := node.isLeader()
+	require.False(t, leader)
+}
+
+func TestDeleteEntryLog(t *testing.T) {
+	node := InitAndStartNode(t)
+	_, err := node.prepareDeleteEntryLogProposeData(5)
+	require.NoError(t, err)
+	err = node.deleteEntryLog()
+	require.NoError(t, err)
+}
+
+func TestSaveConfStateToMeta(t *testing.T) {
+	node := InitAndStartNode(t)
+	node.saveConfStateToMeta()
+}
+
+func TestComparePeerFileIdWithLeaderFileId(t *testing.T) {
+	node := InitAndStartNode(t)
+	err := node.comparePeerFileIdWithLeaderFileId(2, 1)
+	require.Error(t, err, "member's index is advanced")
+	err = node.comparePeerFileIdWithLeaderFileId(-1, -1)
+	require.NoError(t, err)
 }
 
 func TestCheckAllRgMembers(t *testing.T) {
@@ -454,7 +504,9 @@ func (client *MockMetaClient) ShowRetentionPolicies(database string) (models.Row
 func (client *MockMetaClient) ShowContinuousQueries() (models.Rows, error) {
 	return nil, nil
 }
-func (client *MockMetaClient) ShowCluster() models.Rows { return nil }
+func (client *MockMetaClient) ShowCluster(nodeType string, ID uint64) (models.Rows, error) {
+	return nil, nil
+}
 func (client *MockMetaClient) ShowClusterWithCondition(nodeType string, ID uint64) (models.Rows, error) {
 	return nil, nil
 }

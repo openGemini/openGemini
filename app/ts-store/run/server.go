@@ -18,7 +18,6 @@ package run
 
 import (
 	"fmt"
-	"net/http"
 	"os"
 	"runtime"
 	"strconv"
@@ -44,6 +43,7 @@ import (
 	"github.com/openGemini/openGemini/lib/statisticsPusher"
 	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/syscontrol"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/fs"
@@ -132,8 +132,10 @@ func NewServer(c config.Config, info app.ServerInfo, logger *Logger.Logger) (app
 
 	runtime.SetBlockProfileRate(int(1 * time.Second))
 	runtime.SetMutexProfileFraction(1)
-	listenIp := strings.Split(conf.Data.SelectAddress, ":")[0]
-	go func() { _ = http.ListenAndServe(fmt.Sprintf("%s:6060", listenIp), nil) }()
+
+	if s.config.Common.PprofEnabled {
+		go util.OpenPprofServer(s.config.Common.PprofBindAddress, util.StorePprofPort)
+	}
 
 	node := metaclient.NewNode(s.metaPath)
 	s.node = node
@@ -297,6 +299,45 @@ func (s *Server) initStatisticsPusher() {
 	}
 
 	s.config.Monitor.SetApp(s.info.App)
+	s.initStatistics()
+
+	s.statisticsPusher.Register(
+		stat.CollectPerfStatistics,
+		stat.CollectImmutableStatistics,
+		stat.CollectStoreSlowQueryStatistics,
+		stat.CollectRuntimeStatistics,
+		stat.CollectIOStatistics,
+		stat.NewMergeStatistics().Collect,
+		stat.NewCompactStatistics().Collect,
+		stat.NewDownSampleStatistics().Collect,
+		stat.CollectEngineStatStatistics,
+		stat.CollectExecutorStatistics,
+		s.storage.GetEngine().Statistics,
+		stat.NewErrnoStat().Collect,
+		stat.StoreTaskInstance.Collect,
+		stat.NewStreamStatistics().Collect,
+		stat.NewStreamWindowStatistics().Collect,
+		stat.NewRecordStatistics().Collect,
+		stat.NewHitRatioStatistics().Collect,
+		stat.CollectStoreQueryStatistics,
+		stat.CollectSpdyStatistics,
+		stat.NewOOOTimeDistribution().Collect,
+	)
+
+	s.statisticsPusher.RegisterOps(stat.CollectOpsPerfStatistics)
+	s.statisticsPusher.RegisterOps(stat.CollectOpsStoreSlowQueryStatistics)
+	s.statisticsPusher.RegisterOps(stat.CollectOpsRuntimeStatistics)
+	s.statisticsPusher.RegisterOps(stat.CollectOpsIOStatistics)
+	s.statisticsPusher.RegisterOps(stat.NewMergeStatistics().CollectOps)
+	s.statisticsPusher.RegisterOps(stat.NewCompactStatistics().CollectOps)
+	s.statisticsPusher.RegisterOps(stat.CollectOpsEngineStatStatistics)
+	s.statisticsPusher.RegisterOps(stat.NewErrnoStat().CollectOps)
+	s.statisticsPusher.RegisterOps(s.storage.GetEngine().StatisticsOps)
+	s.statisticsPusher.RegisterOps(stat.CollectOpsStoreQueryStatistics)
+	s.statisticsPusher.Start()
+}
+
+func (s *Server) initStatistics() {
 	globalTags := map[string]string{
 		"hostname": strings.ReplaceAll(config.CombineDomain(s.config.Data.Domain, s.selectAddr), ",", "_"),
 		"app":      "ts-" + string(s.info.App),
@@ -322,38 +363,5 @@ func (s *Server) initStatisticsPusher() {
 	stat.InitStoreQueryStatistics(globalTags)
 	stat.InitSpdyStatistics(globalTags)
 	spdyTransport.InitStatistics(spdyTransport.AppStore)
-
-	s.statisticsPusher.Register(
-		stat.CollectPerfStatistics,
-		stat.CollectImmutableStatistics,
-		stat.CollectStoreSlowQueryStatistics,
-		stat.CollectRuntimeStatistics,
-		stat.CollectIOStatistics,
-		stat.NewMergeStatistics().Collect,
-		stat.NewCompactStatistics().Collect,
-		stat.NewDownSampleStatistics().Collect,
-		stat.CollectEngineStatStatistics,
-		stat.CollectExecutorStatistics,
-		s.storage.GetEngine().Statistics,
-		stat.NewErrnoStat().Collect,
-		stat.StoreTaskInstance.Collect,
-		stat.NewStreamStatistics().Collect,
-		stat.NewStreamWindowStatistics().Collect,
-		stat.NewRecordStatistics().Collect,
-		stat.NewHitRatioStatistics().Collect,
-		stat.CollectStoreQueryStatistics,
-		stat.CollectSpdyStatistics,
-	)
-
-	s.statisticsPusher.RegisterOps(stat.CollectOpsPerfStatistics)
-	s.statisticsPusher.RegisterOps(stat.CollectOpsStoreSlowQueryStatistics)
-	s.statisticsPusher.RegisterOps(stat.CollectOpsRuntimeStatistics)
-	s.statisticsPusher.RegisterOps(stat.CollectOpsIOStatistics)
-	s.statisticsPusher.RegisterOps(stat.NewMergeStatistics().CollectOps)
-	s.statisticsPusher.RegisterOps(stat.NewCompactStatistics().CollectOps)
-	s.statisticsPusher.RegisterOps(stat.CollectOpsEngineStatStatistics)
-	s.statisticsPusher.RegisterOps(stat.NewErrnoStat().CollectOps)
-	s.statisticsPusher.RegisterOps(s.storage.GetEngine().StatisticsOps)
-	s.statisticsPusher.RegisterOps(stat.CollectOpsStoreQueryStatistics)
-	s.statisticsPusher.Start()
+	stat.NewOOOTimeDistribution().Init(globalTags)
 }
