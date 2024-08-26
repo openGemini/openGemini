@@ -125,10 +125,18 @@ func newSeriesLoopCursorInSerial(ctx *idKeyCursorContext, span *tracing.Span, sc
 	}
 	tagSetNumPerGroup, remainTagSet := len(tagSets)/group, len(tagSets)%group
 	s.tagSetStart = tagSetNumPerGroup * groupIdx
+	// 1. start add
 	if remainTagSet > 0 && remainTagSet >= groupIdx {
-		tagSetNumPerGroup += 1
 		s.tagSetStart += groupIdx
+	} else if remainTagSet > 0 && remainTagSet < groupIdx {
+		s.tagSetStart += remainTagSet
 	}
+
+	// 2. end add
+	if remainTagSet > groupIdx {
+		tagSetNumPerGroup += 1
+	}
+
 	s.tagSetEnd = util.Min(s.tagSetStart+tagSetNumPerGroup, len(tagSets))
 	s.oriSeriesStart, s.oriSeriesEnd = s.seriesStart, s.seriesEnd
 	s.oriTagSetStart, s.oriTagSetEnd = s.tagSetStart, s.tagSetEnd
