@@ -274,6 +274,7 @@ func (t *Transpiler) transpileBinOpOfBothVector(b *parser.BinaryExpr, op influxq
 		Sources:     influxql.Sources{binOp},
 		Fields:      influxql.Fields{&influxql.Field{Expr: &influxql.VarRef{Val: DefaultFieldKey, Alias: DefaultFieldKey}}},
 		IsPromQuery: true,
+		Step:        lStmt.Step,
 		QueryOffset: lStmt.QueryOffset,
 	}
 	// set query time range
