@@ -180,6 +180,36 @@ func (e *Abort) Instance() transport.Codec {
 	return &Abort{}
 }
 
+type Crash struct {
+	ClientID uint64
+	QueryID  uint64
+}
+
+func NewCrash(queryID uint64, clientID uint64) *Crash {
+	return &Crash{ClientID: clientID, QueryID: queryID}
+}
+
+func (c *Crash) Marshal(buf []byte) ([]byte, error) {
+	buf = codec.AppendUint64(buf, c.ClientID)
+	buf = codec.AppendUint64(buf, c.QueryID)
+	return buf, nil
+}
+
+func (c *Crash) Unmarshal(buf []byte) error {
+	dec := codec.NewBinaryDecoder(buf)
+	c.ClientID = dec.Uint64()
+	c.QueryID = dec.Uint64()
+	return nil
+}
+
+func (c *Crash) Size() int {
+	return codec.SizeOfUint64() * 2
+}
+
+func (c *Crash) Instance() transport.Codec {
+	return &Crash{}
+}
+
 type AnalyzeResponse struct {
 	trace *tracing.Trace
 }

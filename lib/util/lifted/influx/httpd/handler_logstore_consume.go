@@ -568,7 +568,7 @@ func (h *Handler) serveConsumeCursorTime(w http.ResponseWriter, r *http.Request,
 			continue
 		}
 	}
-	results, err := json.Marshal(consume.QueryConsumeCursorTimeResponse{CursorTime: t / int64(1e6), MaxCursorTime: maxT / int64(1e6)})
+	results, err := json2.Marshal(consume.QueryConsumeCursorTimeResponse{CursorTime: t / int64(1e6), MaxCursorTime: maxT / int64(1e6)})
 	if err != nil {
 		h.Logger.Error("consume logs get cursor time request error! ", zap.Error(err))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
@@ -878,7 +878,7 @@ func (h *Handler) serveGetConsumeCursors(w http.ResponseWriter, r *http.Request,
 			End:  base64.StdEncoding.EncodeToString(endCurEncode),
 		})
 	}
-	results, err := json.Marshal(resps)
+	results, err := json2.Marshal(resps)
 	if err != nil {
 		h.Logger.Error("consume get cursors request error! ", zap.Error(err))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)

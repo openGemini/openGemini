@@ -358,7 +358,7 @@ func TestStorageBig(t *testing.T) {
 		cs := &raftpb.ConfState{}
 		require.NoError(t, rds.CreateSnapshot(N-100, cs, buf))
 		rds.DeleteBefore(N - 100)
-		fi, err := rds.FirstIndex()
+		fi, err := rds.FirstIndexWithSnap()
 		require.NoError(t, err)
 		require.Equal(t, N-100+1, fi)
 

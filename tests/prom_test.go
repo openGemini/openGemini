@@ -1134,7 +1134,7 @@ func TestServer_PromQuery_timestamp(t *testing.T) {
 			name:    "instant query timestamp(3 + http_requests{group='canary',instance='0',job='api-server'} + 1)",
 			params:  url.Values{"db": []string{"db0"}, "time": []string{"1970-01-01T00:40:00Z"}},
 			command: `3 + timestamp(http_requests{group='canary',instance='0',job='api-server'}) + 1`,
-			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"__name__":"http_requests","group":"canary","instance":"0","job":"api-server"},"value":[2400,"2404"]}]}}`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"group":"canary","instance":"0","job":"api-server"},"value":[2400,"2404"]}]}}`,
 			path:    "/api/v1/query",
 		},
 
@@ -1150,7 +1150,7 @@ func TestServer_PromQuery_timestamp(t *testing.T) {
 			name:    "(timestamp(http_requests{group='canary',instance='0',job='api-server'}) + 1) * 2",
 			params:  url.Values{"db": []string{"db0"}, "time": []string{"1970-01-01T00:40:00Z"}},
 			command: `(timestamp(http_requests{group='canary',instance='0',job='api-server'}) + 1) * 2`,
-			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"__name__":"http_requests","group":"canary","instance":"0","job":"api-server"},"value":[2400,"4802"]}]}}`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"group":"canary","instance":"0","job":"api-server"},"value":[2400,"4802"]}]}}`,
 			path:    "/api/v1/query",
 		},
 
@@ -1166,7 +1166,7 @@ func TestServer_PromQuery_timestamp(t *testing.T) {
 			name:    "(timestamp(http_requests{group='canary',instance='0',job='api-server'} + 3) + 1) * 2",
 			params:  url.Values{"db": []string{"db0"}, "time": []string{"1970-01-01T00:40:00Z"}},
 			command: `(timestamp(http_requests{group='canary',instance='0',job='api-server'} + 3) + 1) * 2`,
-			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"__name__":"http_requests","group":"canary","instance":"0","job":"api-server"},"value":[2400,"4802"]}]}}`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"group":"canary","instance":"0","job":"api-server"},"value":[2400,"4802"]}]}}`,
 			path:    "/api/v1/query",
 		},
 	}...)
@@ -2348,6 +2348,98 @@ func TestServer_PromQuery_MultiAgg_HashAgg(t *testing.T) {
 			} else {
 				t.Error(query.failureMessage())
 			}
+		}
+	}
+}
+
+func TestServer_PromQuery_Regular_Match(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewConfig())
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("autogen", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		fmt.Sprintf(`up,__name__=up,instance=localhost:9090,job=prometheus value=1 %d`, 1709258312955000000),
+		fmt.Sprintf(`up,__name__=up,instance=localhost:9090,job=prometheus value=2 %d`, 1709258327955000000),
+		fmt.Sprintf(`up,__name__=up,instance=localhost:9090,job=prometheus value=3 %d`, 1709258342955000000),
+		fmt.Sprintf(`up,__name__=up,instance=localhost:9090,job=container value=4 %d`, 1709258342955000000),
+		fmt.Sprintf(`up,__name__=up,instance=localhost:8080,job=container value=5 %d`, 1709258342955000000),
+		fmt.Sprintf(`up,__name__=up,instance=localhost:7070,job=container value=6 %d`, 1709258357955000000),
+		fmt.Sprintf(`down,__name__=down,instance=localhost:9090,job=prometheus value=6 %d`, 1709258312955000000),
+		fmt.Sprintf(`down,__name__=down,instance=localhost:9090,job=prometheus value=5 %d`, 1709258327955000000),
+		fmt.Sprintf(`down,__name__=down,instance=localhost:9090,job=prometheus value=4 %d`, 1709258342955000000),
+		fmt.Sprintf(`down,__name__=down,instance=localhost:9090,job=container value=3 %d`, 1709258342955000000),
+		fmt.Sprintf(`down,__name__=down,instance=localhost:8080,job=container value=2 %d`, 1709258342955000000),
+		fmt.Sprintf(`down,__name__=down,instance=localhost:7070,job=container value=1 %d`, 1709258357955000000),
+	}
+
+	test := NewTest("db0", "autogen")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		&Query{
+			name:    "instant query",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"1709258357.955"}},
+			command: `up{instance=~".*7070|.*8080"}`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"__name__":"up","instance":"localhost:7070","job":"container"},"value":[1709258357.955,"6"]},{"metric":{"__name__":"up","instance":"localhost:8080","job":"container"},"value":[1709258357.955,"5"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "instant query",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"1709258357.955"}},
+			command: `up{job=~".*tainer$"}`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"__name__":"up","instance":"localhost:7070","job":"container"},"value":[1709258357.955,"6"]},{"metric":{"__name__":"up","instance":"localhost:8080","job":"container"},"value":[1709258357.955,"5"]},{"metric":{"__name__":"up","instance":"localhost:9090","job":"container"},"value":[1709258357.955,"4"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "instant query",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"1709258357.955"}},
+			command: `up{job=~"^prome.*"}`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"__name__":"up","instance":"localhost:9090","job":"prometheus"},"value":[1709258357.955,"3"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "instant query",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"1709258357.955"}},
+			command: `up{instance!~".*7070|.*8080"}`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"__name__":"up","instance":"localhost:9090","job":"container"},"value":[1709258357.955,"4"]},{"metric":{"__name__":"up","instance":"localhost:9090","job":"prometheus"},"value":[1709258357.955,"3"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "instant query",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"1709258357.955"}},
+			command: `up{job!~".*tainer$"}`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"__name__":"up","instance":"localhost:9090","job":"prometheus"},"value":[1709258357.955,"3"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "instant query",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"1709258357.955"}},
+			command: `up{job!~"^prome.*"}`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"__name__":"up","instance":"localhost:7070","job":"container"},"value":[1709258357.955,"6"]},{"metric":{"__name__":"up","instance":"localhost:8080","job":"container"},"value":[1709258357.955,"5"]},{"metric":{"__name__":"up","instance":"localhost:9090","job":"container"},"value":[1709258357.955,"4"]}]}}`,
+			path:    "/api/v1/query",
+		},
+	}...)
+
+	for i, query := range test.queries {
+		if i == 0 {
+			if err := test.init(s); err != nil {
+				t.Fatalf("test init failed: %s", err)
+			}
+		}
+		if query.skip {
+			t.Logf("SKIP:: %s", query.name)
+			continue
+		}
+		if err := query.ExecuteProm(s); err != nil {
+			t.Error(query.Error(err))
+		} else if !query.success() {
+			t.Error(query.failureMessage())
 		}
 	}
 }

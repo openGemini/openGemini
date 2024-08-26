@@ -28,6 +28,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hashicorp/raft"
 	"github.com/openGemini/openGemini/app/ts-meta/meta"
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
 	"github.com/openGemini/openGemini/coordinator"
@@ -1403,4 +1404,128 @@ func TestModifyRepDBMasterPt_Err(t *testing.T) {
 
 	err = mms.GetStore().ModifyRepDBMasterPt("db0", 0, 3)
 	assert.Equal(t, err.Error(), "newMasterPtId find err")
+}
+
+func TestShowClusterAllNode(t *testing.T) {
+	dir := t.TempDir()
+	mms, err := meta.NewMockMetaService(dir, "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mms.Close()
+	data := &meta2.Data{
+		MetaNodes: []meta2.NodeInfo{{ID: 0}},
+		DataNodes: []meta2.DataNode{{NodeInfo: meta2.NodeInfo{ID: 1}}},
+		MigrateEvents: map[string]*meta2.MigrateEventInfo{
+			"db0$0": meta2.NewMigrateEventInfo("db0$0", 0, &meta2.DbPtInfo{Db: "db0", Pti: &meta2.PtInfo{}, DBBriefInfo: &meta2.DatabaseBriefInfo{}}, 1, 0),
+		},
+	}
+	mms.GetStore().SetData(data)
+	val := &proto2.ShowClusterCommand{
+		NodeType: proto.String(""),
+		ID:       proto.Uint64(0),
+	}
+
+	c := proto2.Command_ShowClusterCommand
+	cmd := &proto2.Command{Type: &c}
+	if err := proto.SetExtension(cmd, proto2.E_ShowClusterCommand_Command, val); err != nil {
+		panic(err)
+	}
+	b, err := proto.Marshal(cmd)
+	assert.Equal(t, err, nil)
+	info, err := mms.GetStore().ShowCluster(b)
+	assert.Equal(t, err, nil)
+	clusterInfo := &meta2.ShowClusterInfo{}
+	clusterInfo.UnmarshalBinary(info)
+	assert.Equal(t, len(clusterInfo.Nodes), 2)
+	assert.Equal(t, clusterInfo.Events[0].Db, "db0")
+}
+
+func TestShowClusterMetaNode(t *testing.T) {
+	dir := t.TempDir()
+	mms, err := meta.NewMockMetaService(dir, "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mms.Close()
+	data := &meta2.Data{
+		MetaNodes: []meta2.NodeInfo{{ID: 0}},
+		DataNodes: []meta2.DataNode{{NodeInfo: meta2.NodeInfo{ID: 1}}},
+	}
+	mms.GetStore().SetData(data)
+	val := &proto2.ShowClusterCommand{
+		NodeType: proto.String("meta"),
+		ID:       proto.Uint64(0),
+	}
+
+	c := proto2.Command_ShowClusterCommand
+	cmd := &proto2.Command{Type: &c}
+	if err := proto.SetExtension(cmd, proto2.E_ShowClusterCommand_Command, val); err != nil {
+		panic(err)
+	}
+	b, err := proto.Marshal(cmd)
+	assert.Equal(t, err, nil)
+	info, err := mms.GetStore().ShowCluster(b)
+	assert.Equal(t, err, nil)
+	clusterInfo := &meta2.ShowClusterInfo{}
+	clusterInfo.UnmarshalBinary(info)
+	assert.Equal(t, len(clusterInfo.Nodes), 1)
+}
+func TestShowClusterDataNode(t *testing.T) {
+	dir := t.TempDir()
+	mms, err := meta.NewMockMetaService(dir, "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mms.Close()
+	data := &meta2.Data{
+		MetaNodes: []meta2.NodeInfo{{ID: 0}},
+		DataNodes: []meta2.DataNode{{NodeInfo: meta2.NodeInfo{ID: 1}}},
+	}
+	mms.GetStore().SetData(data)
+	val := &proto2.ShowClusterCommand{
+		NodeType: proto.String("data"),
+		ID:       proto.Uint64(0),
+	}
+
+	c := proto2.Command_ShowClusterCommand
+	cmd := &proto2.Command{Type: &c}
+	if err := proto.SetExtension(cmd, proto2.E_ShowClusterCommand_Command, val); err != nil {
+		panic(err)
+	}
+	b, err := proto.Marshal(cmd)
+	assert.Equal(t, err, nil)
+	info, err := mms.GetStore().ShowCluster(b)
+	assert.Equal(t, err, nil)
+	clusterInfo := &meta2.ShowClusterInfo{}
+	clusterInfo.UnmarshalBinary(info)
+	assert.Equal(t, len(clusterInfo.Nodes), 1)
+}
+func TestShowClusterErr(t *testing.T) {
+	dir := t.TempDir()
+	mms, err := meta.NewMockMetaService(dir, "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mms.Close()
+	data := &meta2.Data{}
+	mms.GetStore().SetData(data)
+	val := &proto2.ShowClusterCommand{
+		NodeType: proto.String(""),
+		ID:       proto.Uint64(0),
+	}
+
+	c := proto2.Command_ShowClusterCommand
+	cmd := &proto2.Command{Type: &c}
+	if err := proto.SetExtension(cmd, proto2.E_ShowClusterCommand_Command, val); err != nil {
+		panic(err)
+	}
+	b, err := proto.Marshal(cmd)
+	assert.Equal(t, err, nil)
+	_, err = mms.GetStore().ShowCluster(b)
+	assert.Equal(t, err.Error(), "invalid node id: 0")
+
+	errStore := &meta.Store{}
+	_, err = errStore.ShowCluster(nil)
+	assert.Equal(t, err.Error(), raft.ErrNotLeader.Error())
 }

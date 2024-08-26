@@ -18,6 +18,7 @@ package httpd
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -403,7 +404,7 @@ func (h *Handler) serveQueryLog(w http.ResponseWriter, r *http.Request, user met
 	res := QueryLogResponse{Success: true, Code: "200", Message: "", Request_id: uuid.TimeUUID().String(),
 		Count: count, Progress: progress, Logs: logs, Keys: getKeys(keysMap), Took_ms: time.Since(t).Milliseconds(),
 		Scroll_id: scrollIDString, Complete_progress: completeProgress, Cursor_time: cursorTime}
-	b, err := json.Marshal(res)
+	b, err := json2.Marshal(res)
 	if err != nil {
 		h.Logger.Error("query log marshal res fail! ", zap.Error(err))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
@@ -486,7 +487,7 @@ func (h *Handler) getHighlightFragments(slog map[string]interface{}, highlightWo
 	if val := slog[Content]; val != nil {
 		content, ok := val.(string)
 		if !ok {
-			b, err := json.Marshal(val)
+			b, err := json2.Marshal(val)
 			if err != nil {
 				h.Logger.Error("highlight failed, content field is nil")
 			}
@@ -634,6 +635,8 @@ func convertToString(i interface{}) string {
 		return strconv.FormatFloat(v, 'f', -1, 64)
 	case string:
 		return v
+	case json.Number:
+		return v.String()
 	default:
 		return Null
 	}
@@ -804,7 +807,7 @@ func (h *Handler) getNilAnalyticsRequest(w http.ResponseWriter, repository, logS
 		Dataset:    nil,
 		Took_ms:    time.Since(time.Now()).Milliseconds(),
 		Scroll_id:  fmt.Sprintf("%v-%s-%d", meta.DefaultMetaClient.NodeID(), para.QueryID, para.IterID)}
-	b, err := json.Marshal(res)
+	b, err := json2.Marshal(res)
 	if err != nil {
 		h.Logger.Error("query log marshal res fail! ", zap.Error(err))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
@@ -902,7 +905,7 @@ func (h *Handler) serveAnalytics(w http.ResponseWriter, r *http.Request, user me
 				Dataset:    results,
 				Took_ms:    time.Since(time.Now()).Milliseconds(),
 				Scroll_id:  fmt.Sprintf("%v-%s-%d", meta.DefaultMetaClient.NodeID(), para.QueryID, para.IterID)}
-			b, err := json.Marshal(res)
+			b, err := json2.Marshal(res)
 			if err != nil {
 				h.Logger.Error("query log marshal res fail! ", zap.Error(err))
 				h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
@@ -939,7 +942,7 @@ func (h *Handler) serveAnalytics(w http.ResponseWriter, r *http.Request, user me
 			Dataset:    nil,
 			Took_ms:    time.Since(time.Now()).Milliseconds(),
 			Scroll_id:  fmt.Sprintf("%v-%s-%d", meta.DefaultMetaClient.NodeID(), para.QueryID, para.IterID)}
-		b, err := json.Marshal(res)
+		b, err := json2.Marshal(res)
 		if err != nil {
 			h.Logger.Error("query log marshal res fail! ", zap.Error(err))
 			h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
@@ -974,7 +977,7 @@ func (h *Handler) serveAnalytics(w http.ResponseWriter, r *http.Request, user me
 		Dataset:    results,
 		Took_ms:    time.Since(time.Now()).Milliseconds(),
 		Scroll_id:  fmt.Sprintf("%v-%s-%d", meta.DefaultMetaClient.NodeID(), para.QueryID, para.IterID)}
-	b, err := json.Marshal(res)
+	b, err := json2.Marshal(res)
 	if err != nil {
 		h.Logger.Error("query log marshal res fail! ", zap.Error(err))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
@@ -1189,7 +1192,7 @@ func (h *Handler) serveAggLogQuery(w http.ResponseWriter, r *http.Request, user 
 			Scroll_id:  fmt.Sprintf("%v-%s-%d", meta.DefaultMetaClient.NodeID(), para.QueryID, para.IterID),
 			Explain:    explain,
 		}
-		b, err := json.Marshal(res)
+		b, err := json2.Marshal(res)
 		if err != nil {
 			h.Logger.Error("query log marshal res fail! ", zap.Error(err))
 			h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
@@ -1306,7 +1309,7 @@ func (h *Handler) ResponseAggLogQuery(w http.ResponseWriter, para *QueryParam, n
 		Histograms: hist,
 		Took_ms:    time.Since(now).Milliseconds(),
 		Scroll_id:  fmt.Sprintf("%v-%s-%d", meta.DefaultMetaClient.NodeID(), para.QueryID, para.IterID)}
-	b, err := json.Marshal(res)
+	b, err := json2.Marshal(res)
 	if err != nil {
 		h.Logger.Error("query log marshal res fail! ", zap.Error(err))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)

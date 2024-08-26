@@ -468,3 +468,28 @@ func (c *SendSysCtrlToMetaCallback) Handle(data interface{}) error {
 	}
 	return nil
 }
+
+type ShowClusterCallback struct {
+	BaseCallback
+
+	Data []byte
+}
+
+func (c *ShowClusterCallback) Handle(data interface{}) error {
+	metaMsg, err := c.Trans2MetaMsg(data)
+	if err != nil {
+		return err
+	}
+	msg, ok := metaMsg.Data().(*message.ShowClusterResponse)
+	if !ok {
+		return errors.New("data is not a ShowClusterResponse")
+	}
+	if msg.ErrCode != 0 {
+		return errno.NewError(msg.ErrCode, msg.Err)
+	}
+	if msg.Err != "" {
+		return errors.New(msg.Err)
+	}
+	c.Data = msg.Data
+	return nil
+}

@@ -549,7 +549,7 @@ func TestTimeSeries2Rows(t *testing.T) {
 		{
 			name: "Test with valid time series",
 			args: args{
-				dst: make([]influx.Row, 1),
+				dst: []influx.Row{},
 				tss: []prompb2.TimeSeries{
 					{
 						Labels: []prompb2.Label{
@@ -585,7 +585,7 @@ func TestTimeSeries2Rows(t *testing.T) {
 		{
 			name: "Test with invalid time series",
 			args: args{
-				dst: make([]influx.Row, 1),
+				dst: []influx.Row{},
 				tss: []prompb2.TimeSeries{
 					{
 						Labels: []prompb2.Label{

@@ -59,6 +59,7 @@ type MetaStoreInterface interface {
 	handlerSql2MetaHeartbeat(host string) error
 	getContinuousQueryLease(host string) ([]string, error)
 	verifyDataNodeStatus(nodeID uint64) error
+	ShowCluster(body []byte) ([]byte, error)
 }
 
 type RPCHandler interface {

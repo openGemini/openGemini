@@ -78,6 +78,14 @@ func (t *RPCReaderTransform) Abort() {
 	})
 }
 
+func (t *RPCReaderTransform) Interrupt() {
+	t.aborted = true
+	t.Once(func() {
+		t.client.Interrupt()
+		close(t.abortSignal)
+	})
+}
+
 func (t *RPCReaderTransform) Close() {
 	t.Abort()
 	t.Output.Close()

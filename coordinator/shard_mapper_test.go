@@ -392,7 +392,9 @@ func (m mocShardMapperMetaClient) ShowRetentionPolicies(database string) (models
 	return nil, nil
 }
 
-func (m mocShardMapperMetaClient) ShowCluster() models.Rows { return nil }
+func (m mocShardMapperMetaClient) ShowCluster(nodeType string, ID uint64) (models.Rows, error) {
+	return nil, nil
+}
 
 func (m mocShardMapperMetaClient) ShowClusterWithCondition(nodeType string, ID uint64) (models.Rows, error) {
 	return nil, nil

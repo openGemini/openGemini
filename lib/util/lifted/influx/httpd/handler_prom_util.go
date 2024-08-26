@@ -225,7 +225,7 @@ func getEmptyResponse(cmd promql2influxql.PromCommand) *promql2influxql.PromResu
 }
 
 func respondError(w http.ResponseWriter, apiErr *apiError, data interface{}) {
-	b, err := json.Marshal(&PromResponse{
+	b, err := json2.Marshal(&PromResponse{
 		Status:    StatusError,
 		ErrorType: apiErr.typ,
 		Error:     apiErr.err.Error(),
@@ -292,7 +292,7 @@ func (r PromResponse) MarshalJSON() ([]byte, error) {
 		o.Error = r.Error
 	}
 
-	return json.Marshal(&o)
+	return json2.Marshal(&o)
 }
 
 // UnmarshalJSON decodes the data into the Response struct.
@@ -304,7 +304,7 @@ func (r *PromResponse) UnmarshalJSON(b []byte) error {
 		Error     string      `json:"error,omitempty"`
 	}
 
-	err := json.Unmarshal(b, &o)
+	err := json2.Unmarshal(b, &o)
 	if err != nil {
 		return err
 	}
@@ -320,35 +320,27 @@ func (r *PromResponse) UnmarshalJSON(b []byte) error {
 type timeSeries2RowsFunc func(mst string, dst []influx.Row, tss []prompb2.TimeSeries) ([]influx.Row, error)
 
 func timeSeries2Rows(mst string, dst []influx.Row, tss []prompb2.TimeSeries) ([]influx.Row, error) {
-	var i int
+	var r influx.Row
+	var t time.Time
 	for _, ts := range tss {
-		dst[i].ResizeTags(len(ts.Labels))
-		tags := dst[i].Tags
+		tags := make(influx.PointTags, len(ts.Labels))
 		tags, mst = unmarshalPromTags(tags, ts)
-		for j, s := range ts.Samples {
+		for _, s := range ts.Samples {
 			// convert and append
-			dst[i].Timestamp = s.Timestamp * int64(time.Millisecond)
-			dst[i].Name = mst
-			if j == 0 {
-				dst[i].Tags = tags
-			} else {
-				dst[i].CloneTags(tags)
-			}
-			if cap(dst[i].Fields) > 0 {
-				dst[i].Fields = dst[i].Fields[:1]
-				dst[i].Fields[0].Type = influx.Field_Type_Float
-				dst[i].Fields[0].Key = promql2influxql.DefaultFieldKey
-				dst[i].Fields[0].NumValue = s.Value
-			} else {
-				dst[i].Fields = []influx.Field{
+			t = time.Unix(0, s.Timestamp*int64(time.Millisecond))
+			r = influx.Row{
+				Tags:      tags,
+				Name:      mst,
+				Timestamp: t.UnixNano(),
+				Fields: []influx.Field{
 					influx.Field{
 						Type:     influx.Field_Type_Float,
 						Key:      promql2influxql.DefaultFieldKey,
 						NumValue: s.Value,
 					},
-				}
+				},
 			}
-			i++
+			dst = append(dst, r)
 		}
 	}
 	return dst, nil
@@ -368,35 +360,27 @@ func unmarshalPromTags(dst influx.PointTags, ts prompb2.TimeSeries) (influx.Poin
 }
 
 func timeSeries2RowsV2(mst string, dst []influx.Row, tss []prompb2.TimeSeries) ([]influx.Row, error) {
-	var i int
+	var r influx.Row
+	var t time.Time
 	for _, ts := range tss {
-		dst[i].ResizeTags(len(ts.Labels))
-		tags := dst[i].Tags
+		tags := make(influx.PointTags, len(ts.Labels))
 		tags = unmarshalPromTagsV2(tags, ts)
-		for j, s := range ts.Samples {
+		for _, s := range ts.Samples {
 			// convert and append
-			dst[i].Timestamp = s.Timestamp * int64(time.Millisecond)
-			dst[i].Name = mst
-			if j == 0 {
-				dst[i].Tags = tags
-			} else {
-				dst[i].CloneTags(tags)
-			}
-			if cap(dst[i].Fields) > 0 {
-				dst[i].Fields = dst[i].Fields[:1]
-				dst[i].Fields[0].Type = influx.Field_Type_Float
-				dst[i].Fields[0].Key = promql2influxql.DefaultFieldKey
-				dst[i].Fields[0].NumValue = s.Value
-			} else {
-				dst[i].Fields = []influx.Field{
+			t = time.Unix(0, s.Timestamp*int64(time.Millisecond))
+			r = influx.Row{
+				Tags:      tags,
+				Name:      mst,
+				Timestamp: t.UnixNano(),
+				Fields: []influx.Field{
 					influx.Field{
 						Type:     influx.Field_Type_Float,
 						Key:      promql2influxql.DefaultFieldKey,
 						NumValue: s.Value,
 					},
-				}
+				},
 			}
-			i++
+			dst = append(dst, r)
 		}
 	}
 	return dst, nil
@@ -576,7 +560,7 @@ func getSeriesQuery(r *http.Request, w http.ResponseWriter, mst string) (q *infl
 
 	nodes := transpileToStat(r, w, promCommand)
 	if nodes == nil {
-		return
+		return nil, false
 	}
 	showSeriesStatement, ok := nodes.(*influxql.ShowSeriesStatement)
 	if !ok {

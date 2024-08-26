@@ -45,6 +45,7 @@ type Compact struct {
 	CompactionMethod             int           `toml:"compaction-method"` // 0:auto, 1: streaming, 2: non-streaming
 	CompactRecovery              bool          `toml:"compact-recovery"`
 	CsCompactionEnabled          bool          `toml:"column-store-compact-enabled"`
+	CorrectTimeDisorder          bool          `toml:"correct-time-disorder"`
 }
 
 func NewCompactConfig() Compact {

@@ -43,7 +43,7 @@ func GetRows(num int) *[]influx.Row {
 
 func PutRows(rows *[]influx.Row) {
 	for i := range *rows {
-		(*rows)[i].ReuseSet()
+		(*rows)[i].Reset()
 	}
 	*rows = (*rows)[:0]
 	RowsPool.Put(rows)

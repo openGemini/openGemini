@@ -234,6 +234,14 @@ func NewMockGenDataTransform(outRowDataType hybridqp.RowDataType) *MockGenDataTr
 	return trans
 }
 
+func NewMockGenDataTransformV1(outRowDataType hybridqp.RowDataType) *MockGenDataTransform {
+	trans := &MockGenDataTransform{
+		output: executor.NewChunkPort(outRowDataType),
+	}
+	trans.chunks = gen100Chunks(outRowDataType)
+	return trans
+}
+
 type mockChunks struct {
 	chunks []executor.Chunk
 }
@@ -255,6 +263,38 @@ func gen10000Chunks(outRowDataType hybridqp.RowDataType) []executor.Chunk {
 		for i := 0; i < 1024; i++ {
 			ck.AppendTime(int64(i))
 
+			ck.Column(0).AppendFloatValue(float64(i))
+			ck.Column(0).AppendNotNil()
+			ck.Column(1).AppendIntegerValue(int64(i))
+			ck.Column(1).AppendNotNil()
+			ck.Column(2).AppendBooleanValue(i%2 == 0)
+			ck.Column(2).AppendNotNil()
+			ck.Column(3).AppendStringValue(strconv.FormatInt(int64(i), 10))
+			ck.Column(3).AppendNotNil()
+			ck.Column(4).AppendStringValue("tv1")
+			ck.Column(4).AppendNotNil()
+			ck.Column(5).AppendStringValue("tv2")
+			ck.Column(5).AppendNotNil()
+		}
+		chunks = append(chunks, ck)
+	}
+	return chunks
+}
+
+// 100 * 1 rows
+func gen100Chunks(outRowDataType hybridqp.RowDataType) []executor.Chunk {
+	var chunks []executor.Chunk
+	cb := executor.NewChunkBuilder(outRowDataType)
+	for n := 0; n < 100; n++ {
+		ck := cb.NewChunk("cpu")
+		ck.AppendIntervalIndex(0)
+		if n <= 50 {
+			ck.AppendTagsAndIndex(*executor.NewChunkTags(nil, nil), 0)
+		} else {
+			ck.AppendTagsAndIndex(*executor.NewChunkTagsByTagKVs([]string{"A"}, []string{"a"}), 0)
+		}
+		for i := 0; i < 1; i++ {
+			ck.AppendTime(int64(i))
 			ck.Column(0).AppendFloatValue(float64(i))
 			ck.Column(0).AppendNotNil()
 			ck.Column(1).AppendIntegerValue(int64(i))
@@ -591,4 +631,113 @@ func Test_HttpSenderHintTransform_Except_Abort(t *testing.T) {
 	httpSender.SetVertex(vertex)
 	httpSender.AbortSinkTransform()
 	httpSender.Visit(vertex)
+}
+
+func Test_HttpSenderTransform_Except_Limit_Offset(t *testing.T) {
+	// 4 fields, 2 tags
+	fields := mockFieldsAndTags()
+	refs := varRefsFromFields(fields)
+	inRowDataType := hybridqp.NewRowDataTypeImpl(refs...)
+	ctx := context.Background()
+	outPutRowsChan := make(chan query.RowsChan)
+	opt := query.ProcessorOptions{
+		ChunkSize:   1,
+		ChunkedSize: 10000,
+		RowsChan:    outPutRowsChan,
+		Without:     true,
+		Limit:       10,
+		Offset:      1,
+	}
+	schema := executor.NewQuerySchema(fields, mockColumnNames(), &opt, nil)
+	schema.SetOpt(&opt)
+	mockInput := NewMockGenDataTransformV1(inRowDataType)
+	httpSender := executor.NewHttpSenderTransform(inRowDataType, schema)
+	httpSender.SetDag(nil)
+	httpSender.SetVertex(nil)
+	httpSender.GetInputs()[0].Connect(mockInput.GetOutputs()[0])
+
+	var processors executor.Processors
+	processors = append(processors, mockInput)
+	processors = append(processors, httpSender)
+	executors := executor.NewPipelineExecutor(processors)
+
+	ec := make(chan error, 1)
+	go func() {
+		ec <- executors.Execute(context.Background())
+		close(ec)
+		close(opt.RowsChan)
+	}()
+	var closed bool
+	var dstRows models.Rows
+	for {
+		select {
+		case data, ok := <-opt.RowsChan:
+			if !ok {
+				closed = true
+				break
+			}
+			dstRows = append(dstRows, data.Rows...)
+		case <-ctx.Done():
+			closed = true
+			break
+		}
+		if closed {
+			break
+		}
+	}
+	executors.Release()
+	assert.Equal(t, len(dstRows), len(buildRows()))
+}
+
+func TestRemoveCommonValues(t *testing.T) {
+	now := time.Now()
+	nowAdd1Min := now.Add(time.Minute)
+	nowAdd2Min := now.Add(2 * time.Minute)
+	type args struct {
+		prev [][]interface{}
+		curr [][]interface{}
+	}
+	tests := []struct {
+		name string
+		args args
+		want [][]interface{}
+	}{
+		{
+			name: "1",
+			args: args{
+				prev: nil,
+				curr: nil,
+			},
+			want: nil,
+		},
+		{
+			name: "2",
+			args: args{
+				prev: [][]interface{}{{now}},
+				curr: [][]interface{}{{nowAdd1Min}},
+			},
+			want: [][]interface{}{{nowAdd1Min}},
+		},
+		{
+			name: "3",
+			args: args{
+				prev: [][]interface{}{{now}},
+				curr: [][]interface{}{{now}},
+			},
+			want: [][]interface{}{},
+		},
+		{
+			name: "4",
+			args: args{
+				prev: [][]interface{}{{now}, {nowAdd1Min}},
+				curr: [][]interface{}{{now}, {nowAdd2Min}},
+			},
+			want: [][]interface{}{{nowAdd2Min}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equalf(t, tt.want, executor.RemoveCommonValues(tt.args.prev, tt.args.curr), "RemoveCommonValues(%v, %v)", tt.args.prev, tt.args.curr)
+		})
+	}
 }

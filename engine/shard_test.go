@@ -7286,7 +7286,9 @@ func (client *MockMetaClient) ShowRetentionPolicies(database string) (models.Row
 func (client *MockMetaClient) ShowContinuousQueries() (models.Rows, error) {
 	return nil, nil
 }
-func (client *MockMetaClient) ShowCluster() models.Rows { return nil }
+func (client *MockMetaClient) ShowCluster(nodeType string, ID uint64) (models.Rows, error) {
+	return nil, nil
+}
 func (client *MockMetaClient) ShowClusterWithCondition(nodeType string, ID uint64) (models.Rows, error) {
 	return nil, nil
 }

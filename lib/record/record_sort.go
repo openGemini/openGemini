@@ -395,3 +395,18 @@ func FastSortRecord(rec *Record, offset int) {
 		indexs[i], indexs[k] = indexs[k], indexs[i]
 	}
 }
+
+func SortRecordIfNeeded(rec *Record) *Record {
+	times := rec.Times()
+	// In golang 1.21, slice.IsSorted is recommended
+	if sort.SliceIsSorted(times, func(i, j int) bool {
+		return times[i] < times[j]
+	}) {
+		return rec
+	}
+
+	hlp := NewColumnSortHelper()
+	defer hlp.Release()
+
+	return hlp.Sort(rec)
+}

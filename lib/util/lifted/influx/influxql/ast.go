@@ -2385,6 +2385,15 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin boo
 	return other, nil
 }
 
+func (s *SelectStatement) RewriteRegexConditionsDFS() {
+	s.RewriteRegexConditions()
+	for _, s := range s.Sources {
+		if subquery, ok := s.(*SubQuery); ok {
+			subquery.Statement.RewriteRegexConditions()
+		}
+	}
+}
+
 // RewriteRegexConditions rewrites regex conditions to make better use of the
 // database index.
 //

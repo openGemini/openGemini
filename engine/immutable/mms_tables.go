@@ -62,6 +62,7 @@ type TablesStore interface {
 	Sequencer() *Sequencer
 	GetTSSPFiles(mm string, isOrder bool) (*TSSPFiles, bool)
 	GetCSFiles(mm string) (*TSSPFiles, bool)
+	CopyCSFiles(name string) []TSSPFile
 	Tier() uint64
 	SetTier(tier uint64)
 	File(name string, namePath string, isOrder bool) TSSPFile
@@ -609,6 +610,26 @@ func (m *MmsTables) GetCSFiles(name string) (files *TSSPFiles, ok bool) {
 	}
 	m.mu.RUnlock()
 	return
+}
+
+func (m *MmsTables) CopyCSFiles(name string) []TSSPFile {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	files, ok := m.CSFiles[name]
+	if !ok || files.Len() == 0 {
+		return nil
+	}
+	files.RLock()
+	fileList := files.Files()
+	refFiles := make([]TSSPFile, 0, len(files.Files()))
+	for i := range fileList {
+		file := fileList[i]
+		file.Ref()
+		file.RefFileReader()
+		refFiles = append(refFiles, file)
+	}
+	files.RUnlock()
+	return refFiles
 }
 
 func (m *MmsTables) DropMeasurement(_ context.Context, name string) error {

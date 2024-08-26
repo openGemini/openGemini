@@ -42,6 +42,14 @@ var DefaultCipherSuites = []uint16{
 	tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
 }
 
+func NewTLSConfig(skipVerify bool) *tls.Config {
+	return &tls.Config{
+		InsecureSkipVerify: skipVerify,
+		MinVersion:         tls.VersionTLS12,
+		CipherSuites:       DefaultCipherSuites,
+	}
+}
+
 type Validator interface {
 	Validate() error
 }
@@ -121,15 +129,18 @@ func fromToml(c Config, input string) error {
 
 // Common represents the CommonConfiguration format for the influxd binary.
 type Common struct {
-	MetaJoin       []string `toml:"meta-join"`
-	IgnoreEmptyTag bool     `toml:"ignore-empty-tag"`
-	ReportEnable   bool     `toml:"report-enable"`
-	CryptoConfig   string   `toml:"crypto-config"`
-	CryptoType     string   `toml:"crypto-type"`
-	ClusterID      string   `toml:"cluster-id"`
-	CPUNum         int      `toml:"cpu-num"`
-	ReaderStop     bool     `toml:"read-stop"`
-	WriterStop     bool     `toml:"write-stop"`
+	MetaJoin     []string `toml:"meta-join"`
+	CryptoConfig string   `toml:"crypto-config"`
+	CryptoType   string   `toml:"crypto-type"`
+	ClusterID    string   `toml:"cluster-id"`
+	CPUNum       int      `toml:"cpu-num"`
+
+	ReaderStop     bool `toml:"read-stop"`
+	WriterStop     bool `toml:"write-stop"`
+	IgnoreEmptyTag bool `toml:"ignore-empty-tag"`
+	ReportEnable   bool `toml:"report-enable"`
+	PreAggEnabled  bool `toml:"pre-agg-enabled"`
+	PprofEnabled   bool `toml:"pprof-enabled"`
 
 	MemorySize         itoml.Size     `toml:"memory-size"`
 	MemoryLimitSize    itoml.Size     `toml:"executor-memory-size-limit"`
@@ -139,7 +150,7 @@ type Common struct {
 	HaPolicy           string         `toml:"ha-policy"`
 	NodeRole           string         `toml:"node-role"`
 	ProductType        string         `toml:"product-type"`
-	PreAggEnabled      bool           `toml:"pre-agg-enabled"`
+	PprofBindAddress   string         `toml:"pprof-bind-address"`
 }
 
 // NewCommon builds a new CommonConfiguration with default values.

@@ -172,3 +172,11 @@ func (ts *Timestamp) update(v int64) {
 	ts.val = v
 	ts.buf = []byte(strconv.FormatInt(v, 10))
 }
+
+type Metric struct {
+	tags map[string]string
+}
+
+func (m *Metric) Init(tags map[string]string) {
+	m.tags = tags
+}

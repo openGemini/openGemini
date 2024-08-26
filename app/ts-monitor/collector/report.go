@@ -20,7 +20,6 @@ import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
-	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -116,7 +115,7 @@ func NewReportJob(logger *logger.Logger, c *config.TSMonitor, gzipped bool, errL
 	if c.ReportConfig.HTTPSEnabled {
 		protocol = "https"
 		tr := &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			TLSClientConfig: config.NewTLSConfig(true),
 		}
 		defaultClient = &http.Client{
 			Transport: tr,
