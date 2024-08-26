@@ -1,13 +1,5 @@
 # 贡献指南
 
-| 更新时间   | 更新人                                         |
-| ---------- | ---------------------------------------------- |
-| 2022年10月 | @[xiangyu5632](https://github.com/xiangyu5632) |
-| 2023年4月  | @[shilinlee](https://github.com/shilinlee)     |
-| 2023年4月  | @[xmh1011](https://github.com/xmh1011)         |
-| 2023年5月  | @[1156230954](https://github.com/1156230954)   |
-| 2023年12月 | @[xiangyu5632](https://github.com/xiangyu5632) |
-
 欢迎来到openGemini！
 
 ## 1. 源码目录结构
