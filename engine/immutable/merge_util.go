@@ -254,8 +254,6 @@ func buildLowLevelFullMergeContext(mst string, files *TSSPFiles, maxLevel uint16
 }
 
 func buildNormalMergeContext(mst string, files *TSSPFiles) *MergeContext {
-	files.RLock()
-	defer files.RUnlock()
 	ctx := NewMergeContext(mst, 0)
 
 	for _, f := range files.Files() {
