@@ -20,16 +20,16 @@ if [[ $? -ne 0 ]]; then
 fi
 rm -f COMMIT_EDITMSG
 
-########################### check licence header ###############################################
-splittingLine "start: check licence header"
+########################### check license header ###############################################
+splittingLine "start: check license header"
 
-make licence-check
+make license-check
 
 if [[ $? -ne 0 ]]; then
     exit 1
 fi
 
-splittingLine "end: check licence header"
+splittingLine "end: check license header"
 
 ########################### static check ###############################################
 splittingLine "start: static check and other go lint"

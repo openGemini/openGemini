@@ -26,19 +26,19 @@ go-build:
 buildsucc:
 	@echo Build openGemini successfully!
 
-licence-check:
-	@echo "run licence check"
+license-check:
+	@echo "run license check"
 	@for file in $(COPYRIGHT_GOFILE); \
 		do \
-  			cat $$file | grep -qsE $(COPYRIGHT_HEADER) || { echo $$file "has no licence header" >> licence-check.log; }; \
+  			cat $$file | grep -qsE $(COPYRIGHT_HEADER) || { echo $$file "has no license header" >> license-check.log; }; \
 	 	done
-	@if [ -f licence-check.log ]; \
+	@if [ -f license-check.log ]; \
   	then \
-		cat  licence-check.log; \
-		rm -f licence-check.log; \
+		cat  license-check.log; \
+		rm -f license-check.log; \
 		exit 1; \
 	else \
-		echo "licence check ok"; \
+		echo "license check ok"; \
 		exit 0; \
 	fi
 

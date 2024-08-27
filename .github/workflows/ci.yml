@@ -30,8 +30,8 @@ jobs:
           fetch-depth: 100
       - name: Run commitlint
         uses: wagoid/commitlint-github-action@v5
-      - name: Run licence check
-        run: make licence-check
+      - name: Run license check
+        run: make license-check
   GoLint:
     name: "static check, style check, go vet and other go lint"
     needs: CommitLint
