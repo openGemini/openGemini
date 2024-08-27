@@ -55,10 +55,10 @@ require (
 	go.opentelemetry.io/collector/pdata v0.50.0
 	go.opentelemetry.io/collector/semconv v0.99.0
 	go.uber.org/zap v1.19.1
-	golang.org/x/crypto v0.19.0
-	golang.org/x/sys v0.17.0
-	golang.org/x/term v0.17.0
-	golang.org/x/text v0.14.0
+	golang.org/x/crypto v0.26.0
+	golang.org/x/sys v0.23.0
+	golang.org/x/term v0.23.0
+	golang.org/x/text v0.17.0
 	golang.org/x/time v0.5.0
 	google.golang.org/grpc v1.62.1
 	google.golang.org/protobuf v1.33.0
@@ -203,11 +203,11 @@ require (
 	go.uber.org/multierr v1.7.0 // indirect
 	golang.org/x/arch v0.0.0-20210923205945-b76863e36670 // indirect
 	golang.org/x/exp v0.0.0-20230206171751-46f607a40771 // indirect
-	golang.org/x/mod v0.13.0 // indirect
-	golang.org/x/net v0.21.0 // indirect
+	golang.org/x/mod v0.17.0 // indirect
+	golang.org/x/net v0.25.0 // indirect
 	golang.org/x/oauth2 v0.17.0 // indirect
-	golang.org/x/sync v0.6.0 // indirect
-	golang.org/x/tools v0.14.0 // indirect
+	golang.org/x/sync v0.8.0 // indirect
+	golang.org/x/tools v0.21.1-0.20240508182429-e35e4ccd0d2d // indirect
 	golang.org/x/xerrors v0.0.0-20220907171357-04be3eba64a2 // indirect
 	google.golang.org/api v0.169.0 // indirect
 	google.golang.org/appengine v1.6.8 // indirect
