@@ -590,8 +590,7 @@ func (codec *colValCodec) encode(t *testing.T) {
 		Type: int(codec.typ),
 		Name: "",
 	}
-	builder.segCol = dataCols
-	data, err := builder.encode(ref, timeCols, 0)
+	data, err := builder.encode(ref, dataCols, timeCols, 0)
 
 	require.NoError(t, err)
 	codec.buf = data
@@ -780,4 +779,36 @@ func TestFilterByField(t *testing.T) {
 	result.Reset()
 	filterBitMap.Reset()
 	filterRec.Reuse()
+}
+
+func TestEncodeColumn_error(t *testing.T) {
+	codec := &colValCodec{}
+	codec.setTyp(encoding.BlockInteger)
+	codec.timeCol.AppendIntegers(1, 2, 3, 4)
+	codec.dataCol.AppendIntegers(1, 2, 3)
+
+	builder := NewColumnBuilder()
+	builder.colMeta = &ColumnMeta{}
+	builder.colMeta.growEntry()
+
+	timeCols := []record.ColVal{codec.timeCol}
+
+	ref := record.Field{
+		Type: int(codec.typ),
+		Name: "foo",
+	}
+
+	err := func() (err error) {
+		defer func() {
+			e := recover()
+			if e != nil {
+				err = fmt.Errorf("%v", e)
+			}
+		}()
+
+		_, err = builder.encode(ref, nil, timeCols, 0)
+		return err
+	}()
+
+	require.NotEmpty(t, err)
 }
