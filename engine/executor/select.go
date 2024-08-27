@@ -252,7 +252,7 @@ func (p *preparedStatement) Select(ctx context.Context) (hybridqp.Executor, erro
 		executorBuilder.Analyze(span)
 	}
 	// ts-server + tsEngine remove node_exchange
-	if localStorageForQuery != nil {
+	if localStorageForQuery != nil && req != nil {
 		executorBuilder.(*ExecutorBuilder).SetInfosAndTraits(req.([]*MultiMstReqs), ctx)
 	}
 	return executorBuilder.Build(best)
