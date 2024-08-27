@@ -37,6 +37,7 @@ import (
 const (
 	internalDatabase       = "_internal"
 	defaultRetentionPolicy = "autogen"
+	namespace              = "opengemini"
 )
 
 var (
@@ -80,8 +81,7 @@ func (c *OpenGeminiCollector) Collect(ch chan<- prometheus.Metric) {
 					labelValues = append(labelValues, value)
 				}
 
-				var desc = metrics.NewDesc("", metricName, "", labelKeys)
-
+				var desc = metrics.NewDesc(namespace+"_"+moduleName, metricName, "", labelKeys)
 				metric, ok := metricValue.(float64)
 				if !ok {
 					continue
