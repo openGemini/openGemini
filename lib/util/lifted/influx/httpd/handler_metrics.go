@@ -34,6 +34,11 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
+const (
+	internalDatabase       = "_internal"
+	defaultRetentionPolicy = "autogen"
+)
+
 var (
 	openGeminiCollector *OpenGeminiCollector
 	metricMsts          = []string{"httpd", "performance", "io", "executor", "system", "runtime",
@@ -92,6 +97,10 @@ func (c *OpenGeminiCollector) Collect(ch chan<- prometheus.Metric) {
 }
 
 func (h *Handler) serveMetrics(w http.ResponseWriter, r *http.Request, user meta.User) {
+	if _, err := h.MetaClient.Database(internalDatabase); err != nil {
+		promhttp.Handler().ServeHTTP(w, r)
+		return
+	}
 	for _, moduleName := range metricMsts {
 		moduleIndex, err := getMetrics(h, r, user, moduleName)
 		if err != nil {
@@ -105,6 +114,9 @@ func (h *Handler) serveMetrics(w http.ResponseWriter, r *http.Request, user meta
 
 // // getMetrics serverProm
 func getMetrics(h *Handler, r *http.Request, user meta.User, tableName string) ([]*metrics.ModuleIndex, error) {
+	if _, err := h.MetaClient.Measurement(internalDatabase, defaultRetentionPolicy, tableName); err != nil {
+		return nil, nil
+	}
 	nodeID, _ := strconv.ParseUint(r.FormValue("node_id"), 10, 64)
 	var q *influxql.Query
 	var err error
