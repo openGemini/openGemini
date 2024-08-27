@@ -1,12 +1,6 @@
-# Welcome to openGemini
+# Contribution Guide
 
-| Update Time   | Authors                                        |
-| ------------- | ---------------------------------------------- |
-| October 2022  | @[xiangyu5632](https://github.com/xiangyu5632) |
-| April 2023    | @[shilinlee](https://github.com/shilinlee)     |
-| April 2023    | @[xmh1011](https://github.com/xmh1011)         |
-| May 2023      | @[1156230954](https://github.com/1156230954)   |
-| December 2023 | @[xiangyu5632](https://github.com/xiangyu5632) |
+Welcome to openGemini!
 
 ## Directory structure
 
