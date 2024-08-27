@@ -28,6 +28,7 @@ import (
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable"
+	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/record"
@@ -922,6 +923,35 @@ func Test_PromqlQuery_Shard_Function(t *testing.T) {
 					t.Fail()
 				}
 			})
+		}
+	}
+}
+
+func Test_NewSeriesLoopCursorInSerial(t *testing.T) {
+	var tagSets []*tsi.TagSetInfo
+	for i := 0; i < 25; i++ {
+		tagSets = append(tagSets, &tsi.TagSetInfo{})
+	}
+	var cursors []*seriesLoopCursor
+	opt := query.ProcessorOptions{}
+	querySchema := executor.NewQuerySchema(nil, []string{"a"}, &opt, nil)
+	for i := 0; i < 12; i++ {
+		loopCursor := newSeriesLoopCursorInSerial(&idKeyCursorContext{}, nil, querySchema, tagSets, 12, i)
+		cursors = append(cursors, loopCursor)
+	}
+	var exp [][]int
+	exp = append(exp, []int{0, 3})
+	for i := 1; i < 12; i++ {
+		start := i*2 + 1
+		end := i*2 + 3
+		exp = append(exp, []int{start, end})
+	}
+	for i, cursor := range cursors {
+		if cursor.tagSetStart != exp[i][0] {
+			t.Fatal("Test_NewSeriesLoopCursorInSerial start err")
+		}
+		if cursor.tagSetEnd != exp[i][1] {
+			t.Fatal("Test_NewSeriesLoopCursorInSerial end err")
 		}
 	}
 }
