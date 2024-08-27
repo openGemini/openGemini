@@ -671,6 +671,13 @@ func TestServer_PromQuery_Basic(t *testing.T) {
 			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1709258342.955,"1.5"]}]}}`,
 			path:    "/api/v1/query",
 		},
+		&Query{
+			name:    "range query: (1 - (up/down)) * 100",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258507.955"}, "step": []string{"30s"}},
+			command: `(1 - (up/down)) * 100`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"instance":"localhost:7070","job":"container"},"values":[[1709258372.955,"-500"],[1709258402.955,"-500"],[1709258432.955,"-500"],[1709258462.955,"-500"],[1709258492.955,"-500"]]},{"metric":{"instance":"localhost:8080","job":"container"},"values":[[1709258342.955,"-150"],[1709258372.955,"-150"],[1709258402.955,"-150"],[1709258432.955,"-150"],[1709258462.955,"-150"],[1709258492.955,"-150"]]},{"metric":{"instance":"localhost:9090","job":"container"},"values":[[1709258342.955,"-33.33333333333333"],[1709258372.955,"-33.33333333333333"],[1709258402.955,"-33.33333333333333"],[1709258432.955,"-33.33333333333333"],[1709258462.955,"-33.33333333333333"],[1709258492.955,"-33.33333333333333"]]},{"metric":{"instance":"localhost:9090","job":"prometheus"},"values":[[1709258312.955,"83.33333333333334"],[1709258342.955,"25"],[1709258372.955,"25"],[1709258402.955,"25"],[1709258432.955,"25"],[1709258462.955,"25"],[1709258492.955,"25"]]}]}}`,
+			path:    "/api/v1/query_range",
+		},
 	}...)
 
 	for i, query := range test.queries {
