@@ -216,6 +216,8 @@ func (m *MmsTables) buildMergeContext(mst string, full bool, force bool) []*Merg
 	}
 
 	if force {
+		files.RLock()
+		defer files.RUnlock()
 		return []*MergeContext{buildNormalMergeContext(mst, files)}
 	}
 
