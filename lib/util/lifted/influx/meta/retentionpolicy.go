@@ -4,7 +4,7 @@ package meta
 Copyright (c) 2013-2016 Errplane Inc.
 This code is originally from: https://github.com/influxdata/influxdb/blob/1.7/services/meta/data.go
 
-2022.01.23 Add Measurements to store measurement meta data
+2022.01.23 Add Measurements to store measurement metadata
 Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
 */
 
