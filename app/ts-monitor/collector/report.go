@@ -43,6 +43,7 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/metrics"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/pusher"
 	"github.com/openGemini/openGemini/lib/util"
 	"go.uber.org/zap"
@@ -105,6 +106,9 @@ type ReportJob struct {
 
 	compress   bool // is metric file compressed
 	reportStat *ReportStat
+
+	mux            *sync.RWMutex
+	indexModuleMap map[string][]*metrics.ModuleIndex
 }
 
 func NewReportJob(logger *logger.Logger, c *config.TSMonitor, gzipped bool, errLogHistory string) *ReportJob {
@@ -133,20 +137,22 @@ func NewReportJob(logger *logger.Logger, c *config.TSMonitor, gzipped bool, errL
 	queryHeader.Add("Content-Type", "application/x-www-form-urlencoded")
 
 	mr := &ReportJob{
-		storeDatabase: r.Database,
-		storeRP:       r.Rp,
-		storeDuration: time.Duration(r.RpDuration),
-		writeUrl:      writeUrl,
-		writeHeader:   writeHeader,
-		queryUrl:      queryUrl,
-		queryHeader:   queryHeader,
-		compress:      m.Compress,
-		gzipped:       gzipped,
-		done:          make(chan struct{}),
-		logger:        logger,
-		errLogHistory: errLogHistory,
-		errLogStat:    make(map[string]string),
-		reportStat:    NewReportStat(),
+		storeDatabase:  r.Database,
+		storeRP:        r.Rp,
+		storeDuration:  time.Duration(r.RpDuration),
+		writeUrl:       writeUrl,
+		writeHeader:    writeHeader,
+		queryUrl:       queryUrl,
+		queryHeader:    queryHeader,
+		compress:       m.Compress,
+		gzipped:        gzipped,
+		done:           make(chan struct{}),
+		logger:         logger,
+		errLogHistory:  errLogHistory,
+		errLogStat:     make(map[string]string),
+		reportStat:     NewReportStat(),
+		mux:            new(sync.RWMutex),
+		indexModuleMap: make(map[string][]*metrics.ModuleIndex),
 	}
 	mr.Client = defaultClient
 	return mr
@@ -277,6 +283,7 @@ func (rb *ReportJob) ReportMetric(filename string) error {
 			buf.WriteByte('\n')
 
 			pusher.PutBuffer(line)
+			rb.parseIndex(line)
 			if err := rb.postData(&buf, &batch, MinBatchSize); err != nil {
 				return err
 			}
@@ -291,6 +298,67 @@ func (rb *ReportJob) ReportMetric(filename string) error {
 			return nil
 		}
 	}
+}
+
+func (rb *ReportJob) parseIndex(line []byte) {
+	var (
+		moduleName  string
+		metricSlice = make([]*metrics.ModuleIndex, 0)
+	)
+
+	lines := strings.Split(string(line), "\n")
+
+	//Data format of each row: {table name},{labels} {indicator data} {timestamp}
+	for _, value := range lines {
+		m := metrics.ModuleIndex{
+			LabelValues: make(map[string]string),
+			MetricsMap:  make(map[string]interface{}),
+			Timestamp:   time.Now(),
+		}
+		parts := strings.Split(value, " ")
+		if len(parts) != 3 {
+			rb.logger.Error("invalid metric line:", zap.String("line", value))
+			continue
+		}
+		tmp := strings.Split(parts[0], ",")
+		if len(tmp) != 2 {
+			rb.logger.Error("invalid metric line:", zap.String("line", value))
+			continue
+		}
+		moduleName = tmp[0]
+		// parse labels
+		labels := tmp[1:]
+		for _, label := range labels {
+			labelKv := strings.Split(label, "=")
+			m.LabelValues[labelKv[0]] = labelKv[1]
+		}
+		// parse index
+		indexes := strings.Split(parts[1], ",")
+		for _, index := range indexes {
+			indexKv := strings.Split(index, "=")
+			if len(indexKv) != 2 {
+				rb.logger.Error("invalid metric index:", zap.String("index", index))
+				continue
+			}
+			value, err := strconv.ParseFloat(indexKv[1], 64)
+			if err != nil {
+				rb.logger.Error("parse index failed", zap.String("file", moduleName), zap.String("index", index), zap.Error(err))
+				m.MetricsMap[indexKv[0]] = indexKv[1]
+			} else {
+				m.MetricsMap[indexKv[0]] = value
+			}
+		}
+		metricSlice = append(metricSlice, &m)
+	}
+	rb.mux.Lock()
+	rb.indexModuleMap[moduleName] = metricSlice
+	rb.mux.Unlock()
+}
+
+func (rb *ReportJob) GetIndexModuleMap() map[string][]*metrics.ModuleIndex {
+	rb.mux.RLock()
+	defer rb.mux.RUnlock()
+	return rb.indexModuleMap
 }
 
 func (rb *ReportJob) postData(buf *bytes.Buffer, batch *int, minSize int) error {

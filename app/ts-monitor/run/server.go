@@ -29,6 +29,7 @@ import (
 	"github.com/openGemini/openGemini/app/ts-monitor/collector"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 )
@@ -65,6 +66,8 @@ func NewServer(conf config.Config, cmd *cobra.Command, logger *logger.Logger) (a
 	s.nodeMonitor.Reporter = reporterJob
 	s.queryMetric.Reporter = reporterJob
 
+	monitorCollector := NewMonitorCollector(s.collector)
+	prometheus.MustRegister(monitorCollector)
 	go func() {
 		for {
 			err := s.collector.Reporter.CreateDatabase()
@@ -74,7 +77,13 @@ func NewServer(conf config.Config, cmd *cobra.Command, logger *logger.Logger) (a
 			time.Sleep(time.Second)
 		}
 	}()
-	go func() { _ = http.ListenAndServe("127.0.0.1:6066", nil) }()
+	http.HandleFunc("/metrics", serveMetrics)
+	go func() {
+		err := http.ListenAndServe("127.0.0.1:6066", nil)
+		if err != nil {
+			panic(err)
+		}
+	}()
 
 	// Prevent ts-monitor from preempting CPU resources.
 	// Set Two CPUs that can be executing.
