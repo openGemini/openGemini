@@ -107,6 +107,11 @@ func (storage *tsstoreImpl) WriteIndex(s *shard, rowsPointer *influx.Rows, mw *m
 		if ri.Timestamp > tm {
 			tm = ri.Timestamp
 		}
+
+		if idx.EnabledTagArray() && ri.HasTagArray() {
+			writeIndexRequired = true
+		}
+
 		if !writeIndexRequired {
 			ri.SeriesId, err = idx.GetSeriesIdBySeriesKey(rows[i].IndexKey)
 			if err != nil {

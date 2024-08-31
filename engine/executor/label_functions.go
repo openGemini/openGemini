@@ -72,8 +72,7 @@ func (s *labelReplaceFunc) CallFunc(name string, args []interface{}) (interface{
 	for _, tag := range tags {
 		v, ok := tag.GetChunkTagValue(src)
 		if !ok {
-			newTags = append(newTags, tag)
-			continue
+			v = ""
 		}
 		index := regex.FindStringSubmatchIndex(v)
 		if index == nil {
@@ -82,8 +81,17 @@ func (s *labelReplaceFunc) CallFunc(name string, args []interface{}) (interface{
 		}
 		res := regex.ExpandString([]byte{}, repl, v, index)
 		keys, values := tag.GetChunkTagAndValues()
-		keys = append(keys, dst)
-		values = append(values, string(res))
+		kLen := len(keys)
+		for i := 0; i < kLen; i++ {
+			if keys[i] == dst {
+				keys = append(keys[0:i], keys[i+1:kLen]...)
+				values = append(values[0:i], values[i+1:kLen]...)
+			}
+		}
+		if len(res) > 0 {
+			keys = append(keys, dst)
+			values = append(values, string(res))
+		}
 		newTags = append(newTags, *NewChunkTagsByTagKVs(keys, values))
 	}
 

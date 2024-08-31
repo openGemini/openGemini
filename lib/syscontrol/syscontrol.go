@@ -71,6 +71,7 @@ curl -i -XPOST 'http://127.0.0.1:8086/debug/ctrl?mod=backgroundReadLimiter&limit
 
 curl -i -XPOST 'http://127.0.0.1:8086/debug/ctrl?mod=interruptquery&switchon=true&allnodes=y'
 curl -i -XPOST 'http://127.0.0.1:8086/debug/ctrl?mod=uppermemusepct&limit=99&allnodes=y'
+curl -i -XPOST 'http://127.0.0.1:8086/debug/ctrl?mod=backup'
 
 Sql cmd:
 curl -i -XPOST 'http://127.0.0.1:8086/debug/ctrl?mod=chunk_reader_parallel&limit=4'
@@ -108,6 +109,7 @@ const (
 	NodeInterruptQuery = "interruptquery"
 	UpperMemUsePct     = "uppermemusepct"
 	ParallelQuery      = "parallelbatch"
+	Backup             = "backup"
 )
 
 var (
@@ -493,6 +495,46 @@ func ProcessRequest(req netstorage.SysCtrlRequest, resp *strings.Builder) (err e
 	default:
 		return fmt.Errorf("unknown sysctrl mod: %v", req.Mod())
 	}
+	return nil
+}
+
+func ProcessBackup(req netstorage.SysCtrlRequest, resp *strings.Builder, sqlHost string) (err error) {
+	var host string
+	s := strings.Split(sqlHost, ":")
+	if len(s) > 0 {
+		host = s[0]
+	}
+	params := req.Param()
+	isNode := params["isNode"] == "true"
+	// store SysCtrl cmd
+	dataNodes, err := SysCtrl.MetaClient.DataNodes()
+	if err != nil {
+		return err
+	}
+	var lock sync.Mutex
+	var wg sync.WaitGroup
+	for _, d := range dataNodes {
+		if !isNode || strings.Contains(d.Host, host) {
+			wg.Add(1)
+			go sendCmdToStoreAsync(req, resp, d.ID, d.Host, &lock, &wg)
+		}
+	}
+	wg.Wait()
+
+	var metaRes map[string]string
+	if isNode {
+		metaRes, err = SysCtrl.MetaClient.SendBackupToMeta(req.Mod(), req.Param(), host)
+	} else {
+		// meta SysCtrl cmd
+		metaRes, err = SysCtrl.MetaClient.SendSysCtrlToMeta(req.Mod(), req.Param())
+	}
+	if err != nil {
+		resp.WriteString(fmt.Sprintf("\n\t%v,", err))
+	}
+	for n, s := range metaRes {
+		resp.WriteString(fmt.Sprintf("\n\t%v: %s,", n, s))
+	}
+
 	return nil
 }
 

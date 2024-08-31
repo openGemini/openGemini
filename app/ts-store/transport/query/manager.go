@@ -175,13 +175,17 @@ func (qm *Manager) Finish(qid uint64, v IQuery) {
 		return
 	}
 	ptId := v.GetQueryExeInfo().PtID
-	newItems := make([]*Item, 0, len(h))
-	for _, item := range h {
-		if item.val.GetQueryExeInfo().PtID != ptId {
-			newItems = append(newItems, item)
+	hLen := len(h)
+	for i := 0; i < hLen; i++ {
+		if h[i].val.GetQueryExeInfo().PtID == ptId {
+			h[i] = h[hLen-1]
+			qm.items[qid] = h[:hLen-1]
+			break
 		}
 	}
-	qm.items[qid] = newItems
+	if len(qm.items[qid]) == 0 {
+		delete(qm.items, qid)
+	}
 }
 
 func (qm *Manager) SetAbortedExpire(d time.Duration) {

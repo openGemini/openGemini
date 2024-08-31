@@ -786,8 +786,8 @@ func (r *ChunkReader) initSpan() {
 func (r *ChunkReader) Work(ctx context.Context) error {
 	ctxValue := ctx.Value(query.QueryDurationKey)
 	if ctxValue != nil {
-		qDuration := ctxValue.(*statistics.StoreSlowQueryStatistics)
-		if qDuration != nil {
+		qDuration, ok := ctxValue.(*statistics.StoreSlowQueryStatistics)
+		if ok && qDuration != nil {
 			start := time.Now()
 			defer func() {
 				qDuration.AddChunkReaderCount(1)

@@ -68,6 +68,10 @@ const (
 	StatusClientClosedConnection = 499
 )
 
+func isPromReportedError(err error) bool {
+	return strings.Contains(err.Error(), `label_join`)
+}
+
 var (
 	minTime = time.Unix(math.MinInt64/1000+62135596801, 0).UTC()
 	maxTime = time.Unix(math.MaxInt64/1000-62135596801, 999999999).UTC()
@@ -144,7 +148,7 @@ func (h *Handler) getPromResult(w http.ResponseWriter, stmtID2Result map[int]*qu
 	r := &promql2influxql.Receiver{PromCommand: cmd, DropMetric: dropMetric, RemoveTableName: removeTableName, DuplicateResult: duplicateResult}
 	resp := PromResponse{Data: &promql2influxql.PromResult{}, Status: "success"}
 	if len(stmtID2Result) > 0 {
-		if stmtID2Result[0].Err != nil {
+		if stmtID2Result[0].Err != nil && !isPromReportedError(stmtID2Result[0].Err) {
 			resp.Data = getEmptyResponse(cmd)
 		} else {
 			data, err := r.InfluxResultToPromQLValue(stmtID2Result[0], expr, cmd)

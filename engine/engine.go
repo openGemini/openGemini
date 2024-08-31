@@ -1609,3 +1609,19 @@ func (e *Engine) HierarchicalStorage(db string, ptId uint32, shardID uint64) boo
 		zap.Uint32("pt", ptId), zap.Uint64("shard", shardID))
 	return true
 }
+
+func (e *Engine) GetDBPtIds() map[string][]uint32 {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	dbPts := make(map[string][]uint32, len(e.DBPartitions))
+	for name, ptMap := range e.DBPartitions {
+		pts := make([]uint32, 0, len(ptMap))
+		for ptId := range ptMap {
+			pts = append(pts, ptId)
+		}
+		dbPts[name] = pts
+	}
+
+	return dbPts
+}

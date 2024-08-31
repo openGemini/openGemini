@@ -63,7 +63,7 @@ func TestTranspiler_transpileCall(t1 *testing.T) {
 			args: args{
 				a: CallExpr(`quantile_over_time(0.5, go_gc_duration_seconds_count[5m])`),
 			},
-			want:    parseInfluxqlByYacc(`SELECT quantile_over_time(value, 0.500000000) AS value FROM go_gc_duration_seconds_count WHERE time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY *`),
+			want:    parseInfluxqlByYacc(`SELECT quantile_over_time_prom(value, 0.500000000) AS value FROM go_gc_duration_seconds_count WHERE time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY *`),
 			wantErr: false,
 		},
 		{
