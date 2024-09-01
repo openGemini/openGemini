@@ -301,6 +301,10 @@ func NewHandler(c config.Config) *Handler {
 			"GET", "/api/v1/label/{name}/values", true, true, h.servePromQueryLabelValues,
 		},
 		Route{
+			"prometheus-label-values-query", // Prometheus label-values query
+			"POST", "/api/v1/label/{name}/values", true, true, h.servePromQueryLabelValues,
+		},
+		Route{
 			"prometheus-series-query", // Prometheus series query
 			"GET", "/api/v1/series", true, true, h.servePromQuerySeries,
 		},
@@ -347,6 +351,10 @@ func NewHandler(c config.Config) *Handler {
 		Route{
 			"prometheus-label-values-query-metric-store", // Prometheus label-values query
 			"GET", "/prometheus/{metric_store}/api/v1/label/{name}/values", true, true, h.servePromQueryLabelValuesWithMetricStore,
+		},
+		Route{
+			"prometheus-label-values-query-metric-store", // Prometheus label-values query
+			"POST", "/prometheus/{metric_store}/api/v1/label/{name}/values", true, true, h.servePromQueryLabelValuesWithMetricStore,
 		},
 		Route{
 			"prometheus-series-query-metric-store", // Prometheus series query
