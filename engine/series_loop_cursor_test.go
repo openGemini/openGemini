@@ -466,7 +466,7 @@ func Test_PromqlQuery_Shard_Function(t *testing.T) {
 			genRes            func(rowDataType hybridqp.RowDataType) executor.Chunk
 			expect            func(chunks []executor.Chunk, expChunk executor.Chunk) bool
 		}{
-			// select rate_prom[float]
+			// select rate_prom[float] instant
 			{
 				name:          "select rate_prom[float] instant query",
 				q:             fmt.Sprintf(`SELECT rate_prom(field4_float) from cpu`),
@@ -516,6 +516,157 @@ func Test_PromqlQuery_Shard_Function(t *testing.T) {
 					return success
 				},
 			},
+			// select rate_prom[float] instant
+			{
+				name:          "select rate_prom[float] instant query",
+				q:             fmt.Sprintf(`SELECT rate_prom(field4_float) from cpu`),
+				tr:            util.TimeRange{Min: minT, Max: maxT},
+				step:          time.Duration(0),
+				rangeDuration: 4 * time.Second,
+				fields:        fields,
+				outputRowDataType: hybridqp.NewRowDataTypeImpl(
+					influxql.VarRef{Val: "val1", Type: influxql.Float},
+				),
+				readerOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.VarRef{Val: "val0", Type: influxql.Float},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				aggOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.Call{Name: "rate_prom", Args: []influxql.Expr{&influxql.VarRef{Val: "val1", Type: influxql.Float}}},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				genRes: func(rowDataType hybridqp.RowDataType) executor.Chunk {
+					b := executor.NewChunkBuilder(rowDataType)
+					// first chunk
+					inCk1 := b.NewChunk("cpu")
+					inCk1.AppendTagsAndIndexes(
+						[]executor.ChunkTags{executor.ChunkTags{}},
+						[]int{0})
+					inCk1.AppendIntervalIndexes([]int{0})
+					t := minT + int64(4)*int64(time.Second)
+					times := []int64{t, t, t, t, t}
+					values := []float64{24.874999999999996, 25.125, 25, 25, 25}
+					inCk1.AppendTimes(times)
+
+					inCk1.Column(0).AppendFloatValues(values)
+					inCk1.Column(0).AppendManyNotNil(1)
+
+					return inCk1
+				},
+				expect: func(chunks []executor.Chunk, expChunk executor.Chunk) bool {
+					ck := chunks[0]
+					success := true
+					success = ast.Equal(t, ck.Time(), expChunk.Time()) && success
+					//success = executor.almostEqual(ck.Column(0).FloatValues(), expChunk.Column(0).FloatValues())
+					success = ast.Equal(t, ck.Column(0).FloatValues(), expChunk.Column(0).FloatValues()) && success
+					return success
+				},
+			},
+			// select rate_prom[float] instant
+			{
+				name:          "select rate_prom[float] instant query",
+				q:             fmt.Sprintf(`SELECT rate_prom(field4_float) from cpu`),
+				tr:            util.TimeRange{Min: minT, Max: maxT},
+				step:          time.Duration(0),
+				rangeDuration: 1 * time.Second,
+				fields:        fields,
+				outputRowDataType: hybridqp.NewRowDataTypeImpl(
+					influxql.VarRef{Val: "val1", Type: influxql.Float},
+				),
+				readerOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.VarRef{Val: "val0", Type: influxql.Float},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				aggOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.Call{Name: "rate_prom", Args: []influxql.Expr{&influxql.VarRef{Val: "val1", Type: influxql.Float}}},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				genRes: func(rowDataType hybridqp.RowDataType) executor.Chunk {
+					b := executor.NewChunkBuilder(rowDataType)
+					// first chunk
+					inCk1 := b.NewChunk("cpu")
+					inCk1.AppendTagsAndIndexes(
+						[]executor.ChunkTags{executor.ChunkTags{}},
+						[]int{0})
+					inCk1.AppendIntervalIndexes([]int{0})
+					t := minT + int64(1)*int64(time.Second)
+					times := []int64{t, t, t, t, t}
+					values := []float64{100, 100, 98.5, 97.5, 96.5}
+					inCk1.AppendTimes(times)
+
+					inCk1.Column(0).AppendFloatValues(values)
+					inCk1.Column(0).AppendManyNotNil(1)
+
+					return inCk1
+				},
+				expect: func(chunks []executor.Chunk, expChunk executor.Chunk) bool {
+					ck := chunks[0]
+					success := true
+					success = ast.Equal(t, ck.Time(), expChunk.Time()) && success
+					//success = executor.almostEqual(ck.Column(0).FloatValues(), expChunk.Column(0).FloatValues())
+					success = ast.Equal(t, ck.Column(0).FloatValues(), expChunk.Column(0).FloatValues()) && success
+					return success
+				},
+			},
+			// select rate_prom[float] instant
+			{
+				name:          "select rate_prom[float] instant query",
+				q:             fmt.Sprintf(`SELECT rate_prom(field4_float) from cpu`),
+				tr:            util.TimeRange{Min: minT, Max: maxT},
+				step:          time.Duration(0),
+				rangeDuration: 3 * time.Second,
+				fields:        fields,
+				outputRowDataType: hybridqp.NewRowDataTypeImpl(
+					influxql.VarRef{Val: "val1", Type: influxql.Float},
+				),
+				readerOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.VarRef{Val: "val0", Type: influxql.Float},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				aggOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.Call{Name: "rate_prom", Args: []influxql.Expr{&influxql.VarRef{Val: "val1", Type: influxql.Float}}},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				genRes: func(rowDataType hybridqp.RowDataType) executor.Chunk {
+					b := executor.NewChunkBuilder(rowDataType)
+					// first chunk
+					inCk1 := b.NewChunk("cpu")
+					inCk1.AppendTagsAndIndexes(
+						[]executor.ChunkTags{executor.ChunkTags{}},
+						[]int{0})
+					inCk1.AppendIntervalIndexes([]int{0})
+					t := minT + int64(3)*int64(time.Second)
+					times := []int64{t, t, t, t, t}
+					values := []float64{33.166666666666664, 33.5, 33.333333333333336, 33.333333333333336, 33.333333333333336}
+					inCk1.AppendTimes(times)
+
+					inCk1.Column(0).AppendFloatValues(values)
+					inCk1.Column(0).AppendManyNotNil(1)
+
+					return inCk1
+				},
+				expect: func(chunks []executor.Chunk, expChunk executor.Chunk) bool {
+					ck := chunks[0]
+					success := true
+					success = ast.Equal(t, ck.Time(), expChunk.Time()) && success
+					//success = executor.almostEqual(ck.Column(0).FloatValues(), expChunk.Column(0).FloatValues())
+					success = ast.Equal(t, ck.Column(0).FloatValues(), expChunk.Column(0).FloatValues()) && success
+					return success
+				},
+			},
+			// select rate_prom[float] range
 			{
 				name:          "select rate_prom[float] range_query",
 				q:             fmt.Sprintf(`SELECT rate_prom(field4_float) from cpu`),
@@ -564,7 +715,154 @@ func Test_PromqlQuery_Shard_Function(t *testing.T) {
 					return success
 				},
 			},
-			// select irate_prom[float]
+			// select rate_prom[float] range
+			{
+				name:          "select rate_prom[float] range_query",
+				q:             fmt.Sprintf(`SELECT rate_prom(field4_float) from cpu`),
+				tr:            util.TimeRange{Min: minT, Max: maxT},
+				step:          1 * time.Second,
+				rangeDuration: 4 * time.Second,
+				fields:        fields,
+				outputRowDataType: hybridqp.NewRowDataTypeImpl(
+					influxql.VarRef{Val: "val1", Type: influxql.Float},
+				),
+				readerOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.VarRef{Val: "val0", Type: influxql.Float},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				aggOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.Call{Name: "rate_prom", Args: []influxql.Expr{&influxql.VarRef{Val: "val1", Type: influxql.Float}}},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				genRes: func(rowDataType hybridqp.RowDataType) executor.Chunk {
+					b := executor.NewChunkBuilder(rowDataType)
+					// first chunk
+					inCk1 := b.NewChunk("cpu")
+					inCk1.AppendTagsAndIndexes(
+						[]executor.ChunkTags{executor.ChunkTags{}},
+						[]int{0})
+					inCk1.AppendIntervalIndexes([]int{0})
+					t := minT + int64(4)*int64(time.Second)
+					times := []int64{t, t, t, t, t}
+					values := []float64{24.874999999999996, 25.125, 25, 25, 25}
+
+					inCk1.AppendTimes(times)
+					inCk1.Column(0).AppendFloatValues(values)
+					inCk1.Column(0).AppendManyNotNil(100)
+
+					return inCk1
+				},
+				expect: func(chunks []executor.Chunk, expChunk executor.Chunk) bool {
+					ck := chunks[0]
+					success := true
+					success = ast.Equal(t, ck.Time(), expChunk.Time()) && success
+					success = ast.Equal(t, ck.Column(0).FloatValues(), expChunk.Column(0).FloatValues()) && success
+					return success
+				},
+			},
+			// select rate_prom[float] range
+			{
+				name:          "select rate_prom[float] range_query",
+				q:             fmt.Sprintf(`SELECT rate_prom(field4_float) from cpu`),
+				tr:            util.TimeRange{Min: minT, Max: maxT},
+				step:          1 * time.Second,
+				rangeDuration: 1 * time.Second,
+				fields:        fields,
+				outputRowDataType: hybridqp.NewRowDataTypeImpl(
+					influxql.VarRef{Val: "val1", Type: influxql.Float},
+				),
+				readerOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.VarRef{Val: "val0", Type: influxql.Float},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				aggOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.Call{Name: "rate_prom", Args: []influxql.Expr{&influxql.VarRef{Val: "val1", Type: influxql.Float}}},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				genRes: func(rowDataType hybridqp.RowDataType) executor.Chunk {
+					b := executor.NewChunkBuilder(rowDataType)
+					// first chunk
+					inCk1 := b.NewChunk("cpu")
+					inCk1.AppendTagsAndIndexes(
+						[]executor.ChunkTags{executor.ChunkTags{}},
+						[]int{0})
+					inCk1.AppendIntervalIndexes([]int{0})
+					t := minT + int64(1)*int64(time.Second)
+					times := []int64{t, t, t, t, t}
+					values := []float64{100, 100, 98.5, 97.5, 96.5}
+
+					inCk1.AppendTimes(times)
+					inCk1.Column(0).AppendFloatValues(values)
+					inCk1.Column(0).AppendManyNotNil(100)
+
+					return inCk1
+				},
+				expect: func(chunks []executor.Chunk, expChunk executor.Chunk) bool {
+					ck := chunks[0]
+					success := true
+					success = ast.Equal(t, ck.Time(), expChunk.Time()) && success
+					success = ast.Equal(t, ck.Column(0).FloatValues(), expChunk.Column(0).FloatValues()) && success
+					return success
+				},
+			},
+			// select rate_prom[float] range
+			{
+				name:          "select rate_prom[float] range_query",
+				q:             fmt.Sprintf(`SELECT rate_prom(field4_float) from cpu`),
+				tr:            util.TimeRange{Min: minT, Max: maxT},
+				step:          1 * time.Second,
+				rangeDuration: 3 * time.Second,
+				fields:        fields,
+				outputRowDataType: hybridqp.NewRowDataTypeImpl(
+					influxql.VarRef{Val: "val1", Type: influxql.Float},
+				),
+				readerOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.VarRef{Val: "val0", Type: influxql.Float},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				aggOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.Call{Name: "rate_prom", Args: []influxql.Expr{&influxql.VarRef{Val: "val1", Type: influxql.Float}}},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				genRes: func(rowDataType hybridqp.RowDataType) executor.Chunk {
+					b := executor.NewChunkBuilder(rowDataType)
+					// first chunk
+					inCk1 := b.NewChunk("cpu")
+					inCk1.AppendTagsAndIndexes(
+						[]executor.ChunkTags{executor.ChunkTags{}},
+						[]int{0})
+					inCk1.AppendIntervalIndexes([]int{0})
+					t := minT + int64(3)*int64(time.Second)
+					times := []int64{t, t, t, t, t}
+					values := []float64{33.166666666666664, 33.5, 33.333333333333336, 33.333333333333336, 33.333333333333336}
+
+					inCk1.AppendTimes(times)
+					inCk1.Column(0).AppendFloatValues(values)
+					inCk1.Column(0).AppendManyNotNil(100)
+
+					return inCk1
+				},
+				expect: func(chunks []executor.Chunk, expChunk executor.Chunk) bool {
+					ck := chunks[0]
+					success := true
+					success = ast.Equal(t, ck.Time(), expChunk.Time()) && success
+					success = ast.Equal(t, ck.Column(0).FloatValues(), expChunk.Column(0).FloatValues()) && success
+					return success
+				},
+			},
+			// select irate_prom[float] instant
 			{
 				name:          "select irate_prom[float] instant query",
 				q:             fmt.Sprintf(`SELECT irate_prom(field4_float) from cpu`),
@@ -613,6 +911,154 @@ func Test_PromqlQuery_Shard_Function(t *testing.T) {
 					return success
 				},
 			},
+			// select irate_prom[float] instant
+			{
+				name:          "select irate_prom[float] instant query",
+				q:             fmt.Sprintf(`SELECT irate_prom(field4_float) from cpu`),
+				tr:            util.TimeRange{Min: minT, Max: maxT},
+				step:          time.Duration(0),
+				rangeDuration: 4 * time.Second,
+				fields:        fields,
+				outputRowDataType: hybridqp.NewRowDataTypeImpl(
+					influxql.VarRef{Val: "val1", Type: influxql.Float},
+				),
+				readerOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.VarRef{Val: "val0", Type: influxql.Float},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				aggOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.Call{Name: "irate_prom", Args: []influxql.Expr{&influxql.VarRef{Val: "val1", Type: influxql.Float}}},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				genRes: func(rowDataType hybridqp.RowDataType) executor.Chunk {
+					b := executor.NewChunkBuilder(rowDataType)
+					// first chunk
+					inCk1 := b.NewChunk("cpu")
+					inCk1.AppendTagsAndIndexes(
+						[]executor.ChunkTags{executor.ChunkTags{}},
+						[]int{0})
+					inCk1.AppendIntervalIndexes([]int{0})
+					t := minT + int64(4)*int64(time.Second)
+					times := []int64{t, t, t, t, t}
+					values := []float64{100, 100, 100, 100, 100}
+					inCk1.AppendTimes(times)
+
+					inCk1.Column(0).AppendFloatValues(values)
+					inCk1.Column(0).AppendManyNotNil(1)
+
+					return inCk1
+				},
+				expect: func(chunks []executor.Chunk, expChunk executor.Chunk) bool {
+					ck := chunks[0]
+					success := true
+					success = ast.Equal(t, ck.Time(), expChunk.Time()) && success
+					success = ast.Equal(t, ck.Column(0).FloatValues(), expChunk.Column(0).FloatValues()) && success
+					return success
+				},
+			},
+			// select irate_prom[float] instant
+			{
+				name:          "select irate_prom[float] instant query",
+				q:             fmt.Sprintf(`SELECT irate_prom(field4_float) from cpu`),
+				tr:            util.TimeRange{Min: minT, Max: maxT},
+				step:          time.Duration(0),
+				rangeDuration: 1 * time.Second,
+				fields:        fields,
+				outputRowDataType: hybridqp.NewRowDataTypeImpl(
+					influxql.VarRef{Val: "val1", Type: influxql.Float},
+				),
+				readerOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.VarRef{Val: "val0", Type: influxql.Float},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				aggOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.Call{Name: "irate_prom", Args: []influxql.Expr{&influxql.VarRef{Val: "val1", Type: influxql.Float}}},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				genRes: func(rowDataType hybridqp.RowDataType) executor.Chunk {
+					b := executor.NewChunkBuilder(rowDataType)
+					// first chunk
+					inCk1 := b.NewChunk("cpu")
+					inCk1.AppendTagsAndIndexes(
+						[]executor.ChunkTags{executor.ChunkTags{}},
+						[]int{0})
+					inCk1.AppendIntervalIndexes([]int{0})
+					t := minT + int64(1)*int64(time.Second)
+					times := []int64{t, t, t, t, t}
+					values := []float64{100, 100, 100, 100, 100}
+					inCk1.AppendTimes(times)
+
+					inCk1.Column(0).AppendFloatValues(values)
+					inCk1.Column(0).AppendManyNotNil(1)
+
+					return inCk1
+				},
+				expect: func(chunks []executor.Chunk, expChunk executor.Chunk) bool {
+					ck := chunks[0]
+					success := true
+					success = ast.Equal(t, ck.Time(), expChunk.Time()) && success
+					success = ast.Equal(t, ck.Column(0).FloatValues(), expChunk.Column(0).FloatValues()) && success
+					return success
+				},
+			},
+			// select irate_prom[float] instant
+			{
+				name:          "select irate_prom[float] instant query",
+				q:             fmt.Sprintf(`SELECT irate_prom(field4_float) from cpu`),
+				tr:            util.TimeRange{Min: minT, Max: maxT},
+				step:          time.Duration(0),
+				rangeDuration: 3 * time.Second,
+				fields:        fields,
+				outputRowDataType: hybridqp.NewRowDataTypeImpl(
+					influxql.VarRef{Val: "val1", Type: influxql.Float},
+				),
+				readerOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.VarRef{Val: "val0", Type: influxql.Float},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				aggOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.Call{Name: "irate_prom", Args: []influxql.Expr{&influxql.VarRef{Val: "val1", Type: influxql.Float}}},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				genRes: func(rowDataType hybridqp.RowDataType) executor.Chunk {
+					b := executor.NewChunkBuilder(rowDataType)
+					// first chunk
+					inCk1 := b.NewChunk("cpu")
+					inCk1.AppendTagsAndIndexes(
+						[]executor.ChunkTags{executor.ChunkTags{}},
+						[]int{0})
+					inCk1.AppendIntervalIndexes([]int{0})
+					t := minT + int64(3)*int64(time.Second)
+					times := []int64{t, t, t, t, t}
+					values := []float64{100, 100, 100, 100, 100}
+					inCk1.AppendTimes(times)
+
+					inCk1.Column(0).AppendFloatValues(values)
+					inCk1.Column(0).AppendManyNotNil(1)
+
+					return inCk1
+				},
+				expect: func(chunks []executor.Chunk, expChunk executor.Chunk) bool {
+					ck := chunks[0]
+					success := true
+					success = ast.Equal(t, ck.Time(), expChunk.Time()) && success
+					success = ast.Equal(t, ck.Column(0).FloatValues(), expChunk.Column(0).FloatValues()) && success
+					return success
+				},
+			},
+			// select irate_prom[float] range
 			{
 				name:          "select irate_prom[float] range_query",
 				q:             fmt.Sprintf(`SELECT irate_prom(field4_float) from cpu`),
@@ -661,7 +1107,154 @@ func Test_PromqlQuery_Shard_Function(t *testing.T) {
 					return success
 				},
 			},
-			// select delta_prom[float]
+			// select irate_prom[float] range
+			{
+				name:          "select irate_prom[float] range_query",
+				q:             fmt.Sprintf(`SELECT irate_prom(field4_float) from cpu`),
+				tr:            util.TimeRange{Min: minT, Max: maxT},
+				step:          1 * time.Second,
+				rangeDuration: 4 * time.Second,
+				fields:        fields,
+				outputRowDataType: hybridqp.NewRowDataTypeImpl(
+					influxql.VarRef{Val: "val1", Type: influxql.Float},
+				),
+				readerOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.VarRef{Val: "val0", Type: influxql.Float},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				aggOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.Call{Name: "irate_prom", Args: []influxql.Expr{&influxql.VarRef{Val: "val1", Type: influxql.Float}}},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				genRes: func(rowDataType hybridqp.RowDataType) executor.Chunk {
+					b := executor.NewChunkBuilder(rowDataType)
+					// first chunk
+					inCk1 := b.NewChunk("cpu")
+					inCk1.AppendTagsAndIndexes(
+						[]executor.ChunkTags{executor.ChunkTags{}},
+						[]int{0})
+					inCk1.AppendIntervalIndexes([]int{0})
+					t := minT + int64(4)*int64(time.Second)
+					times := []int64{t, t, t, t, t}
+					values := []float64{100, 100, 100, 100, 100}
+
+					inCk1.AppendTimes(times)
+					inCk1.Column(0).AppendFloatValues(values)
+					inCk1.Column(0).AppendManyNotNil(100)
+
+					return inCk1
+				},
+				expect: func(chunks []executor.Chunk, expChunk executor.Chunk) bool {
+					ck := chunks[0]
+					success := true
+					success = ast.Equal(t, ck.Time(), expChunk.Time()) && success
+					success = ast.Equal(t, ck.Column(0).FloatValues(), expChunk.Column(0).FloatValues()) && success
+					return success
+				},
+			},
+			// select irate_prom[float] range
+			{
+				name:          "select irate_prom[float] range_query",
+				q:             fmt.Sprintf(`SELECT irate_prom(field4_float) from cpu`),
+				tr:            util.TimeRange{Min: minT, Max: maxT},
+				step:          1 * time.Second,
+				rangeDuration: 1 * time.Second,
+				fields:        fields,
+				outputRowDataType: hybridqp.NewRowDataTypeImpl(
+					influxql.VarRef{Val: "val1", Type: influxql.Float},
+				),
+				readerOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.VarRef{Val: "val0", Type: influxql.Float},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				aggOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.Call{Name: "irate_prom", Args: []influxql.Expr{&influxql.VarRef{Val: "val1", Type: influxql.Float}}},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				genRes: func(rowDataType hybridqp.RowDataType) executor.Chunk {
+					b := executor.NewChunkBuilder(rowDataType)
+					// first chunk
+					inCk1 := b.NewChunk("cpu")
+					inCk1.AppendTagsAndIndexes(
+						[]executor.ChunkTags{executor.ChunkTags{}},
+						[]int{0})
+					inCk1.AppendIntervalIndexes([]int{0})
+					t := minT + int64(1)*int64(time.Second)
+					times := []int64{t, t, t, t, t}
+					values := []float64{100, 100, 100, 100, 100}
+
+					inCk1.AppendTimes(times)
+					inCk1.Column(0).AppendFloatValues(values)
+					inCk1.Column(0).AppendManyNotNil(100)
+
+					return inCk1
+				},
+				expect: func(chunks []executor.Chunk, expChunk executor.Chunk) bool {
+					ck := chunks[0]
+					success := true
+					success = ast.Equal(t, ck.Time(), expChunk.Time()) && success
+					success = ast.Equal(t, ck.Column(0).FloatValues(), expChunk.Column(0).FloatValues()) && success
+					return success
+				},
+			},
+			// select irate_prom[float] range
+			{
+				name:          "select irate_prom[float] range_query",
+				q:             fmt.Sprintf(`SELECT irate_prom(field4_float) from cpu`),
+				tr:            util.TimeRange{Min: minT, Max: maxT},
+				step:          1 * time.Second,
+				rangeDuration: 3 * time.Second,
+				fields:        fields,
+				outputRowDataType: hybridqp.NewRowDataTypeImpl(
+					influxql.VarRef{Val: "val1", Type: influxql.Float},
+				),
+				readerOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.VarRef{Val: "val0", Type: influxql.Float},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				aggOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.Call{Name: "irate_prom", Args: []influxql.Expr{&influxql.VarRef{Val: "val1", Type: influxql.Float}}},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				genRes: func(rowDataType hybridqp.RowDataType) executor.Chunk {
+					b := executor.NewChunkBuilder(rowDataType)
+					// first chunk
+					inCk1 := b.NewChunk("cpu")
+					inCk1.AppendTagsAndIndexes(
+						[]executor.ChunkTags{executor.ChunkTags{}},
+						[]int{0})
+					inCk1.AppendIntervalIndexes([]int{0})
+					t := minT + int64(3)*int64(time.Second)
+					times := []int64{t, t, t, t, t}
+					values := []float64{100, 100, 100, 100, 100}
+
+					inCk1.AppendTimes(times)
+					inCk1.Column(0).AppendFloatValues(values)
+					inCk1.Column(0).AppendManyNotNil(100)
+
+					return inCk1
+				},
+				expect: func(chunks []executor.Chunk, expChunk executor.Chunk) bool {
+					ck := chunks[0]
+					success := true
+					success = ast.Equal(t, ck.Time(), expChunk.Time()) && success
+					success = ast.Equal(t, ck.Column(0).FloatValues(), expChunk.Column(0).FloatValues()) && success
+					return success
+				},
+			},
+			// select delta_prom[float] instant
 			{
 				name:          "select delta_prom[float] instant query",
 				q:             fmt.Sprintf(`SELECT delta_prom(field4_float) from cpu`),
@@ -710,6 +1303,154 @@ func Test_PromqlQuery_Shard_Function(t *testing.T) {
 					return success
 				},
 			},
+			// select delta_prom[float] instant
+			{
+				name:          "select delta_prom[float] instant query",
+				q:             fmt.Sprintf(`SELECT delta_prom(field4_float) from cpu`),
+				tr:            util.TimeRange{Min: minT, Max: maxT},
+				step:          time.Duration(0),
+				rangeDuration: 4 * time.Second,
+				fields:        fields,
+				outputRowDataType: hybridqp.NewRowDataTypeImpl(
+					influxql.VarRef{Val: "val1", Type: influxql.Float},
+				),
+				readerOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.VarRef{Val: "val0", Type: influxql.Float},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				aggOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.Call{Name: "delta_prom", Args: []influxql.Expr{&influxql.VarRef{Val: "val1", Type: influxql.Float}}},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				genRes: func(rowDataType hybridqp.RowDataType) executor.Chunk {
+					b := executor.NewChunkBuilder(rowDataType)
+					// first chunk
+					inCk1 := b.NewChunk("cpu")
+					inCk1.AppendTagsAndIndexes(
+						[]executor.ChunkTags{executor.ChunkTags{}},
+						[]int{0})
+					inCk1.AppendIntervalIndexes([]int{0})
+					t := minT + int64(4)*int64(time.Second)
+					times := []int64{t, t, t, t, t}
+					values := []float64{99.49999999999999, 100.5, 100, 100, 100}
+					inCk1.AppendTimes(times)
+
+					inCk1.Column(0).AppendFloatValues(values)
+					inCk1.Column(0).AppendManyNotNil(1)
+
+					return inCk1
+				},
+				expect: func(chunks []executor.Chunk, expChunk executor.Chunk) bool {
+					ck := chunks[0]
+					success := true
+					success = ast.Equal(t, ck.Time(), expChunk.Time()) && success
+					success = ast.Equal(t, ck.Column(0).FloatValues(), expChunk.Column(0).FloatValues()) && success
+					return success
+				},
+			},
+			// select delta_prom[float] instant
+			{
+				name:          "select delta_prom[float] instant query",
+				q:             fmt.Sprintf(`SELECT delta_prom(field4_float) from cpu`),
+				tr:            util.TimeRange{Min: minT, Max: maxT},
+				step:          time.Duration(0),
+				rangeDuration: 1 * time.Second,
+				fields:        fields,
+				outputRowDataType: hybridqp.NewRowDataTypeImpl(
+					influxql.VarRef{Val: "val1", Type: influxql.Float},
+				),
+				readerOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.VarRef{Val: "val0", Type: influxql.Float},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				aggOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.Call{Name: "delta_prom", Args: []influxql.Expr{&influxql.VarRef{Val: "val1", Type: influxql.Float}}},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				genRes: func(rowDataType hybridqp.RowDataType) executor.Chunk {
+					b := executor.NewChunkBuilder(rowDataType)
+					// first chunk
+					inCk1 := b.NewChunk("cpu")
+					inCk1.AppendTagsAndIndexes(
+						[]executor.ChunkTags{executor.ChunkTags{}},
+						[]int{0})
+					inCk1.AppendIntervalIndexes([]int{0})
+					t := minT + int64(1)*int64(time.Second)
+					times := []int64{t, t, t, t, t}
+					values := []float64{100, 100, 98.5, 97.5, 96.5}
+					inCk1.AppendTimes(times)
+
+					inCk1.Column(0).AppendFloatValues(values)
+					inCk1.Column(0).AppendManyNotNil(1)
+
+					return inCk1
+				},
+				expect: func(chunks []executor.Chunk, expChunk executor.Chunk) bool {
+					ck := chunks[0]
+					success := true
+					success = ast.Equal(t, ck.Time(), expChunk.Time()) && success
+					success = ast.Equal(t, ck.Column(0).FloatValues(), expChunk.Column(0).FloatValues()) && success
+					return success
+				},
+			},
+			// select delta_prom[float] instant
+			{
+				name:          "select delta_prom[float] instant query",
+				q:             fmt.Sprintf(`SELECT delta_prom(field4_float) from cpu`),
+				tr:            util.TimeRange{Min: minT, Max: maxT},
+				step:          time.Duration(0),
+				rangeDuration: 3 * time.Second,
+				fields:        fields,
+				outputRowDataType: hybridqp.NewRowDataTypeImpl(
+					influxql.VarRef{Val: "val1", Type: influxql.Float},
+				),
+				readerOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.VarRef{Val: "val0", Type: influxql.Float},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				aggOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.Call{Name: "delta_prom", Args: []influxql.Expr{&influxql.VarRef{Val: "val1", Type: influxql.Float}}},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				genRes: func(rowDataType hybridqp.RowDataType) executor.Chunk {
+					b := executor.NewChunkBuilder(rowDataType)
+					// first chunk
+					inCk1 := b.NewChunk("cpu")
+					inCk1.AppendTagsAndIndexes(
+						[]executor.ChunkTags{executor.ChunkTags{}},
+						[]int{0})
+					inCk1.AppendIntervalIndexes([]int{0})
+					t := minT + int64(3)*int64(time.Second)
+					times := []int64{t, t, t, t, t}
+					values := []float64{99.49999999999999, 100.5, 100, 100, 100}
+					inCk1.AppendTimes(times)
+
+					inCk1.Column(0).AppendFloatValues(values)
+					inCk1.Column(0).AppendManyNotNil(1)
+
+					return inCk1
+				},
+				expect: func(chunks []executor.Chunk, expChunk executor.Chunk) bool {
+					ck := chunks[0]
+					success := true
+					success = ast.Equal(t, ck.Time(), expChunk.Time()) && success
+					success = ast.Equal(t, ck.Column(0).FloatValues(), expChunk.Column(0).FloatValues()) && success
+					return success
+				},
+			},
+			// select delta_prom[float] range
 			{
 				name:          "select delta_prom[float] range_query",
 				q:             fmt.Sprintf(`SELECT delta_prom(field4_float) from cpu`),
@@ -758,7 +1499,154 @@ func Test_PromqlQuery_Shard_Function(t *testing.T) {
 					return success
 				},
 			},
-			// select idelta_prom[float]
+			// select delta_prom[float] range
+			{
+				name:          "select delta_prom[float] range_query",
+				q:             fmt.Sprintf(`SELECT delta_prom(field4_float) from cpu`),
+				tr:            util.TimeRange{Min: minT, Max: maxT},
+				step:          1 * time.Second,
+				rangeDuration: 4 * time.Second,
+				fields:        fields,
+				outputRowDataType: hybridqp.NewRowDataTypeImpl(
+					influxql.VarRef{Val: "val1", Type: influxql.Float},
+				),
+				readerOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.VarRef{Val: "val0", Type: influxql.Float},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				aggOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.Call{Name: "delta_prom", Args: []influxql.Expr{&influxql.VarRef{Val: "val1", Type: influxql.Float}}},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				genRes: func(rowDataType hybridqp.RowDataType) executor.Chunk {
+					b := executor.NewChunkBuilder(rowDataType)
+					// first chunk
+					inCk1 := b.NewChunk("cpu")
+					inCk1.AppendTagsAndIndexes(
+						[]executor.ChunkTags{executor.ChunkTags{}},
+						[]int{0})
+					inCk1.AppendIntervalIndexes([]int{0})
+					t := minT + int64(4)*int64(time.Second)
+					times := []int64{t, t, t, t, t}
+					values := []float64{99.49999999999999, 100.5, 100, 100, 100}
+
+					inCk1.AppendTimes(times)
+					inCk1.Column(0).AppendFloatValues(values)
+					inCk1.Column(0).AppendManyNotNil(100)
+
+					return inCk1
+				},
+				expect: func(chunks []executor.Chunk, expChunk executor.Chunk) bool {
+					ck := chunks[0]
+					success := true
+					success = ast.Equal(t, ck.Time(), expChunk.Time()) && success
+					success = ast.Equal(t, ck.Column(0).FloatValues(), expChunk.Column(0).FloatValues()) && success
+					return success
+				},
+			},
+			// select delta_prom[float] range
+			{
+				name:          "select delta_prom[float] range_query",
+				q:             fmt.Sprintf(`SELECT delta_prom(field4_float) from cpu`),
+				tr:            util.TimeRange{Min: minT, Max: maxT},
+				step:          1 * time.Second,
+				rangeDuration: 1 * time.Second,
+				fields:        fields,
+				outputRowDataType: hybridqp.NewRowDataTypeImpl(
+					influxql.VarRef{Val: "val1", Type: influxql.Float},
+				),
+				readerOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.VarRef{Val: "val0", Type: influxql.Float},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				aggOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.Call{Name: "delta_prom", Args: []influxql.Expr{&influxql.VarRef{Val: "val1", Type: influxql.Float}}},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				genRes: func(rowDataType hybridqp.RowDataType) executor.Chunk {
+					b := executor.NewChunkBuilder(rowDataType)
+					// first chunk
+					inCk1 := b.NewChunk("cpu")
+					inCk1.AppendTagsAndIndexes(
+						[]executor.ChunkTags{executor.ChunkTags{}},
+						[]int{0})
+					inCk1.AppendIntervalIndexes([]int{0})
+					t := minT + int64(1)*int64(time.Second)
+					times := []int64{t, t, t, t, t}
+					values := []float64{100, 100, 98.5, 97.5, 96.5}
+
+					inCk1.AppendTimes(times)
+					inCk1.Column(0).AppendFloatValues(values)
+					inCk1.Column(0).AppendManyNotNil(100)
+
+					return inCk1
+				},
+				expect: func(chunks []executor.Chunk, expChunk executor.Chunk) bool {
+					ck := chunks[0]
+					success := true
+					success = ast.Equal(t, ck.Time(), expChunk.Time()) && success
+					success = ast.Equal(t, ck.Column(0).FloatValues(), expChunk.Column(0).FloatValues()) && success
+					return success
+				},
+			},
+			// select delta_prom[float] range
+			{
+				name:          "select delta_prom[float] range_query",
+				q:             fmt.Sprintf(`SELECT delta_prom(field4_float) from cpu`),
+				tr:            util.TimeRange{Min: minT, Max: maxT},
+				step:          1 * time.Second,
+				rangeDuration: 3 * time.Second,
+				fields:        fields,
+				outputRowDataType: hybridqp.NewRowDataTypeImpl(
+					influxql.VarRef{Val: "val1", Type: influxql.Float},
+				),
+				readerOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.VarRef{Val: "val0", Type: influxql.Float},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				aggOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.Call{Name: "delta_prom", Args: []influxql.Expr{&influxql.VarRef{Val: "val1", Type: influxql.Float}}},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				genRes: func(rowDataType hybridqp.RowDataType) executor.Chunk {
+					b := executor.NewChunkBuilder(rowDataType)
+					// first chunk
+					inCk1 := b.NewChunk("cpu")
+					inCk1.AppendTagsAndIndexes(
+						[]executor.ChunkTags{executor.ChunkTags{}},
+						[]int{0})
+					inCk1.AppendIntervalIndexes([]int{0})
+					t := minT + int64(3)*int64(time.Second)
+					times := []int64{t, t, t, t, t}
+					values := []float64{99.49999999999999, 100.5, 100, 100, 100}
+
+					inCk1.AppendTimes(times)
+					inCk1.Column(0).AppendFloatValues(values)
+					inCk1.Column(0).AppendManyNotNil(100)
+
+					return inCk1
+				},
+				expect: func(chunks []executor.Chunk, expChunk executor.Chunk) bool {
+					ck := chunks[0]
+					success := true
+					success = ast.Equal(t, ck.Time(), expChunk.Time()) && success
+					success = ast.Equal(t, ck.Column(0).FloatValues(), expChunk.Column(0).FloatValues()) && success
+					return success
+				},
+			},
+			// select idelta_prom[float] instant
 			{
 				name:          "select idelta_prom[float] instant query",
 				q:             fmt.Sprintf(`SELECT idelta_prom(field4_float) from cpu`),
@@ -807,6 +1695,154 @@ func Test_PromqlQuery_Shard_Function(t *testing.T) {
 					return success
 				},
 			},
+			// select idelta_prom[float] instant
+			{
+				name:          "select idelta_prom[float] instant query",
+				q:             fmt.Sprintf(`SELECT idelta_prom(field4_float) from cpu`),
+				tr:            util.TimeRange{Min: minT, Max: maxT},
+				step:          time.Duration(0),
+				rangeDuration: 4 * time.Second,
+				fields:        fields,
+				outputRowDataType: hybridqp.NewRowDataTypeImpl(
+					influxql.VarRef{Val: "val1", Type: influxql.Float},
+				),
+				readerOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.VarRef{Val: "val0", Type: influxql.Float},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				aggOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.Call{Name: "idelta_prom", Args: []influxql.Expr{&influxql.VarRef{Val: "val1", Type: influxql.Float}}},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				genRes: func(rowDataType hybridqp.RowDataType) executor.Chunk {
+					b := executor.NewChunkBuilder(rowDataType)
+					// first chunk
+					inCk1 := b.NewChunk("cpu")
+					inCk1.AppendTagsAndIndexes(
+						[]executor.ChunkTags{executor.ChunkTags{}},
+						[]int{0})
+					inCk1.AppendIntervalIndexes([]int{0})
+					t := minT + int64(4)*int64(time.Second)
+					times := []int64{t, t, t, t, t}
+					values := []float64{1, 1, 1, 1, 1}
+					inCk1.AppendTimes(times)
+
+					inCk1.Column(0).AppendFloatValues(values)
+					inCk1.Column(0).AppendManyNotNil(1)
+
+					return inCk1
+				},
+				expect: func(chunks []executor.Chunk, expChunk executor.Chunk) bool {
+					ck := chunks[0]
+					success := true
+					success = ast.Equal(t, ck.Time(), expChunk.Time()) && success
+					success = ast.Equal(t, ck.Column(0).FloatValues(), expChunk.Column(0).FloatValues()) && success
+					return success
+				},
+			},
+			// select idelta_prom[float] instant
+			{
+				name:          "select idelta_prom[float] instant query",
+				q:             fmt.Sprintf(`SELECT idelta_prom(field4_float) from cpu`),
+				tr:            util.TimeRange{Min: minT, Max: maxT},
+				step:          time.Duration(0),
+				rangeDuration: 1 * time.Second,
+				fields:        fields,
+				outputRowDataType: hybridqp.NewRowDataTypeImpl(
+					influxql.VarRef{Val: "val1", Type: influxql.Float},
+				),
+				readerOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.VarRef{Val: "val0", Type: influxql.Float},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				aggOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.Call{Name: "idelta_prom", Args: []influxql.Expr{&influxql.VarRef{Val: "val1", Type: influxql.Float}}},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				genRes: func(rowDataType hybridqp.RowDataType) executor.Chunk {
+					b := executor.NewChunkBuilder(rowDataType)
+					// first chunk
+					inCk1 := b.NewChunk("cpu")
+					inCk1.AppendTagsAndIndexes(
+						[]executor.ChunkTags{executor.ChunkTags{}},
+						[]int{0})
+					inCk1.AppendIntervalIndexes([]int{0})
+					t := minT + int64(1)*int64(time.Second)
+					times := []int64{t, t, t, t, t}
+					values := []float64{1, 1, 1, 1, 1}
+					inCk1.AppendTimes(times)
+
+					inCk1.Column(0).AppendFloatValues(values)
+					inCk1.Column(0).AppendManyNotNil(1)
+
+					return inCk1
+				},
+				expect: func(chunks []executor.Chunk, expChunk executor.Chunk) bool {
+					ck := chunks[0]
+					success := true
+					success = ast.Equal(t, ck.Time(), expChunk.Time()) && success
+					success = ast.Equal(t, ck.Column(0).FloatValues(), expChunk.Column(0).FloatValues()) && success
+					return success
+				},
+			},
+			// select idelta_prom[float] instant
+			{
+				name:          "select idelta_prom[float] instant query",
+				q:             fmt.Sprintf(`SELECT idelta_prom(field4_float) from cpu`),
+				tr:            util.TimeRange{Min: minT, Max: maxT},
+				step:          time.Duration(0),
+				rangeDuration: 3 * time.Second,
+				fields:        fields,
+				outputRowDataType: hybridqp.NewRowDataTypeImpl(
+					influxql.VarRef{Val: "val1", Type: influxql.Float},
+				),
+				readerOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.VarRef{Val: "val0", Type: influxql.Float},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				aggOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.Call{Name: "idelta_prom", Args: []influxql.Expr{&influxql.VarRef{Val: "val1", Type: influxql.Float}}},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				genRes: func(rowDataType hybridqp.RowDataType) executor.Chunk {
+					b := executor.NewChunkBuilder(rowDataType)
+					// first chunk
+					inCk1 := b.NewChunk("cpu")
+					inCk1.AppendTagsAndIndexes(
+						[]executor.ChunkTags{executor.ChunkTags{}},
+						[]int{0})
+					inCk1.AppendIntervalIndexes([]int{0})
+					t := minT + int64(3)*int64(time.Second)
+					times := []int64{t, t, t, t, t}
+					values := []float64{1, 1, 1, 1, 1}
+					inCk1.AppendTimes(times)
+
+					inCk1.Column(0).AppendFloatValues(values)
+					inCk1.Column(0).AppendManyNotNil(1)
+
+					return inCk1
+				},
+				expect: func(chunks []executor.Chunk, expChunk executor.Chunk) bool {
+					ck := chunks[0]
+					success := true
+					success = ast.Equal(t, ck.Time(), expChunk.Time()) && success
+					success = ast.Equal(t, ck.Column(0).FloatValues(), expChunk.Column(0).FloatValues()) && success
+					return success
+				},
+			},
+			// select idelta_prom[float] range
 			{
 				name:          "select idelta_prom[float] range_query",
 				q:             fmt.Sprintf(`SELECT idelta_prom(field4_float) from cpu`),
@@ -840,6 +1876,937 @@ func Test_PromqlQuery_Shard_Function(t *testing.T) {
 					t := minT + int64(2)*int64(time.Second)
 					times := []int64{t, t, t, t, t}
 					values := []float64{1, 1, 1, 1, 1}
+
+					inCk1.AppendTimes(times)
+					inCk1.Column(0).AppendFloatValues(values)
+					inCk1.Column(0).AppendManyNotNil(100)
+
+					return inCk1
+				},
+				expect: func(chunks []executor.Chunk, expChunk executor.Chunk) bool {
+					ck := chunks[0]
+					success := true
+					success = ast.Equal(t, ck.Time(), expChunk.Time()) && success
+					success = ast.Equal(t, ck.Column(0).FloatValues(), expChunk.Column(0).FloatValues()) && success
+					return success
+				},
+			},
+			// select idelta_prom[float] range
+			{
+				name:          "select idelta_prom[float] range_query",
+				q:             fmt.Sprintf(`SELECT idelta_prom(field4_float) from cpu`),
+				tr:            util.TimeRange{Min: minT, Max: maxT},
+				step:          1 * time.Second,
+				rangeDuration: 4 * time.Second,
+				fields:        fields,
+				outputRowDataType: hybridqp.NewRowDataTypeImpl(
+					influxql.VarRef{Val: "val1", Type: influxql.Float},
+				),
+				readerOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.VarRef{Val: "val0", Type: influxql.Float},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				aggOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.Call{Name: "idelta_prom", Args: []influxql.Expr{&influxql.VarRef{Val: "val1", Type: influxql.Float}}},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				genRes: func(rowDataType hybridqp.RowDataType) executor.Chunk {
+					b := executor.NewChunkBuilder(rowDataType)
+					// first chunk
+					inCk1 := b.NewChunk("cpu")
+					inCk1.AppendTagsAndIndexes(
+						[]executor.ChunkTags{executor.ChunkTags{}},
+						[]int{0})
+					inCk1.AppendIntervalIndexes([]int{0})
+					t := minT + int64(4)*int64(time.Second)
+					times := []int64{t, t, t, t, t}
+					values := []float64{1, 1, 1, 1, 1}
+
+					inCk1.AppendTimes(times)
+					inCk1.Column(0).AppendFloatValues(values)
+					inCk1.Column(0).AppendManyNotNil(100)
+
+					return inCk1
+				},
+				expect: func(chunks []executor.Chunk, expChunk executor.Chunk) bool {
+					ck := chunks[0]
+					success := true
+					success = ast.Equal(t, ck.Time(), expChunk.Time()) && success
+					success = ast.Equal(t, ck.Column(0).FloatValues(), expChunk.Column(0).FloatValues()) && success
+					return success
+				},
+			},
+			// select idelta_prom[float] range
+			{
+				name:          "select idelta_prom[float] range_query",
+				q:             fmt.Sprintf(`SELECT idelta_prom(field4_float) from cpu`),
+				tr:            util.TimeRange{Min: minT, Max: maxT},
+				step:          1 * time.Second,
+				rangeDuration: 1 * time.Second,
+				fields:        fields,
+				outputRowDataType: hybridqp.NewRowDataTypeImpl(
+					influxql.VarRef{Val: "val1", Type: influxql.Float},
+				),
+				readerOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.VarRef{Val: "val0", Type: influxql.Float},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				aggOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.Call{Name: "idelta_prom", Args: []influxql.Expr{&influxql.VarRef{Val: "val1", Type: influxql.Float}}},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				genRes: func(rowDataType hybridqp.RowDataType) executor.Chunk {
+					b := executor.NewChunkBuilder(rowDataType)
+					// first chunk
+					inCk1 := b.NewChunk("cpu")
+					inCk1.AppendTagsAndIndexes(
+						[]executor.ChunkTags{executor.ChunkTags{}},
+						[]int{0})
+					inCk1.AppendIntervalIndexes([]int{0})
+					t := minT + int64(1)*int64(time.Second)
+					times := []int64{t, t, t, t, t}
+					values := []float64{1, 1, 1, 1, 1}
+
+					inCk1.AppendTimes(times)
+					inCk1.Column(0).AppendFloatValues(values)
+					inCk1.Column(0).AppendManyNotNil(100)
+
+					return inCk1
+				},
+				expect: func(chunks []executor.Chunk, expChunk executor.Chunk) bool {
+					ck := chunks[0]
+					success := true
+					success = ast.Equal(t, ck.Time(), expChunk.Time()) && success
+					success = ast.Equal(t, ck.Column(0).FloatValues(), expChunk.Column(0).FloatValues()) && success
+					return success
+				},
+			},
+			// select idelta_prom[float] range
+			{
+				name:          "select idelta_prom[float] range_query",
+				q:             fmt.Sprintf(`SELECT idelta_prom(field4_float) from cpu`),
+				tr:            util.TimeRange{Min: minT, Max: maxT},
+				step:          1 * time.Second,
+				rangeDuration: 3 * time.Second,
+				fields:        fields,
+				outputRowDataType: hybridqp.NewRowDataTypeImpl(
+					influxql.VarRef{Val: "val1", Type: influxql.Float},
+				),
+				readerOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.VarRef{Val: "val0", Type: influxql.Float},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				aggOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.Call{Name: "idelta_prom", Args: []influxql.Expr{&influxql.VarRef{Val: "val1", Type: influxql.Float}}},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				genRes: func(rowDataType hybridqp.RowDataType) executor.Chunk {
+					b := executor.NewChunkBuilder(rowDataType)
+					// first chunk
+					inCk1 := b.NewChunk("cpu")
+					inCk1.AppendTagsAndIndexes(
+						[]executor.ChunkTags{executor.ChunkTags{}},
+						[]int{0})
+					inCk1.AppendIntervalIndexes([]int{0})
+					t := minT + int64(3)*int64(time.Second)
+					times := []int64{t, t, t, t, t}
+					values := []float64{1, 1, 1, 1, 1}
+
+					inCk1.AppendTimes(times)
+					inCk1.Column(0).AppendFloatValues(values)
+					inCk1.Column(0).AppendManyNotNil(100)
+
+					return inCk1
+				},
+				expect: func(chunks []executor.Chunk, expChunk executor.Chunk) bool {
+					ck := chunks[0]
+					success := true
+					success = ast.Equal(t, ck.Time(), expChunk.Time()) && success
+					success = ast.Equal(t, ck.Column(0).FloatValues(), expChunk.Column(0).FloatValues()) && success
+					return success
+				},
+			},
+			// select stdvar_over_time_prom[float] instant
+			{
+				name:          "select stdvar_over_time_prom[float] instant query",
+				q:             fmt.Sprintf(`SELECT stdvar_over_time_prom(field4_float) from cpu`),
+				tr:            util.TimeRange{Min: minT, Max: maxT},
+				step:          time.Duration(0),
+				rangeDuration: 2 * time.Second,
+				fields:        fields,
+				outputRowDataType: hybridqp.NewRowDataTypeImpl(
+					influxql.VarRef{Val: "val1", Type: influxql.Float},
+				),
+				readerOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.VarRef{Val: "val0", Type: influxql.Float},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				aggOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.Call{Name: "stdvar_over_time_prom", Args: []influxql.Expr{&influxql.VarRef{Val: "val1", Type: influxql.Float}}},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				genRes: func(rowDataType hybridqp.RowDataType) executor.Chunk {
+					b := executor.NewChunkBuilder(rowDataType)
+					// first chunk
+					inCk1 := b.NewChunk("cpu")
+					inCk1.AppendTagsAndIndexes(
+						[]executor.ChunkTags{executor.ChunkTags{}},
+						[]int{0})
+					inCk1.AppendIntervalIndexes([]int{0})
+					t := minT + int64(2)*int64(time.Second)
+					times := []int64{t, t, t, t, t}
+					values := []float64{833.2499999999999, 833.25, 833.25, 833.2500000000001, 833.25}
+					inCk1.AppendTimes(times)
+
+					inCk1.Column(0).AppendFloatValues(values)
+					inCk1.Column(0).AppendManyNotNil(1)
+
+					return inCk1
+				},
+				expect: func(chunks []executor.Chunk, expChunk executor.Chunk) bool {
+					ck := chunks[0]
+					success := true
+					success = ast.Equal(t, ck.Time(), expChunk.Time()) && success
+					success = ast.Equal(t, ck.Column(0).FloatValues(), expChunk.Column(0).FloatValues()) && success
+					return success
+				},
+			},
+			// select stdvar_over_time_prom[float] instant
+			{
+				name:          "select stdvar_over_time_prom[float] instant query",
+				q:             fmt.Sprintf(`SELECT stdvar_over_time_prom(field4_float) from cpu`),
+				tr:            util.TimeRange{Min: minT, Max: maxT},
+				step:          time.Duration(0),
+				rangeDuration: 4 * time.Second,
+				fields:        fields,
+				outputRowDataType: hybridqp.NewRowDataTypeImpl(
+					influxql.VarRef{Val: "val1", Type: influxql.Float},
+				),
+				readerOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.VarRef{Val: "val0", Type: influxql.Float},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				aggOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.Call{Name: "stdvar_over_time_prom", Args: []influxql.Expr{&influxql.VarRef{Val: "val1", Type: influxql.Float}}},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				genRes: func(rowDataType hybridqp.RowDataType) executor.Chunk {
+					b := executor.NewChunkBuilder(rowDataType)
+					// first chunk
+					inCk1 := b.NewChunk("cpu")
+					inCk1.AppendTagsAndIndexes(
+						[]executor.ChunkTags{executor.ChunkTags{}},
+						[]int{0})
+					inCk1.AppendIntervalIndexes([]int{0})
+					t := minT + int64(4)*int64(time.Second)
+					times := []int64{t, t, t, t, t}
+					values := []float64{833.2499999999999, 833.25, 833.25, 833.2500000000001, 833.25}
+					inCk1.AppendTimes(times)
+
+					inCk1.Column(0).AppendFloatValues(values)
+					inCk1.Column(0).AppendManyNotNil(1)
+
+					return inCk1
+				},
+				expect: func(chunks []executor.Chunk, expChunk executor.Chunk) bool {
+					ck := chunks[0]
+					success := true
+					success = ast.Equal(t, ck.Time(), expChunk.Time()) && success
+					success = ast.Equal(t, ck.Column(0).FloatValues(), expChunk.Column(0).FloatValues()) && success
+					return success
+				},
+			},
+			// select stdvar_over_time_prom[float] instant
+			{
+				name:          "select stdvar_over_time_prom[float] instant query",
+				q:             fmt.Sprintf(`SELECT stdvar_over_time_prom(field4_float) from cpu`),
+				tr:            util.TimeRange{Min: minT, Max: maxT},
+				step:          time.Duration(0),
+				rangeDuration: 1 * time.Second,
+				fields:        fields,
+				outputRowDataType: hybridqp.NewRowDataTypeImpl(
+					influxql.VarRef{Val: "val1", Type: influxql.Float},
+				),
+				readerOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.VarRef{Val: "val0", Type: influxql.Float},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				aggOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.Call{Name: "stdvar_over_time_prom", Args: []influxql.Expr{&influxql.VarRef{Val: "val1", Type: influxql.Float}}},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				genRes: func(rowDataType hybridqp.RowDataType) executor.Chunk {
+					b := executor.NewChunkBuilder(rowDataType)
+					// first chunk
+					inCk1 := b.NewChunk("cpu")
+					inCk1.AppendTagsAndIndexes(
+						[]executor.ChunkTags{executor.ChunkTags{}},
+						[]int{0})
+					inCk1.AppendIntervalIndexes([]int{0})
+					t := minT + int64(1)*int64(time.Second)
+					times := []int64{t, t, t, t, t}
+					values := []float64{833.2499999999999, 833.25, 833.25, 833.2500000000001, 833.25}
+					inCk1.AppendTimes(times)
+
+					inCk1.Column(0).AppendFloatValues(values)
+					inCk1.Column(0).AppendManyNotNil(1)
+
+					return inCk1
+				},
+				expect: func(chunks []executor.Chunk, expChunk executor.Chunk) bool {
+					ck := chunks[0]
+					success := true
+					success = ast.Equal(t, ck.Time(), expChunk.Time()) && success
+					success = ast.Equal(t, ck.Column(0).FloatValues(), expChunk.Column(0).FloatValues()) && success
+					return success
+				},
+			},
+			// select stdvar_over_time_prom[float] instant
+			{
+				name:          "select stdvar_over_time_prom[float] instant query",
+				q:             fmt.Sprintf(`SELECT stdvar_over_time_prom(field4_float) from cpu`),
+				tr:            util.TimeRange{Min: minT, Max: maxT},
+				step:          time.Duration(0),
+				rangeDuration: 3 * time.Second,
+				fields:        fields,
+				outputRowDataType: hybridqp.NewRowDataTypeImpl(
+					influxql.VarRef{Val: "val1", Type: influxql.Float},
+				),
+				readerOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.VarRef{Val: "val0", Type: influxql.Float},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				aggOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.Call{Name: "stdvar_over_time_prom", Args: []influxql.Expr{&influxql.VarRef{Val: "val1", Type: influxql.Float}}},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				genRes: func(rowDataType hybridqp.RowDataType) executor.Chunk {
+					b := executor.NewChunkBuilder(rowDataType)
+					// first chunk
+					inCk1 := b.NewChunk("cpu")
+					inCk1.AppendTagsAndIndexes(
+						[]executor.ChunkTags{executor.ChunkTags{}},
+						[]int{0})
+					inCk1.AppendIntervalIndexes([]int{0})
+					t := minT + int64(3)*int64(time.Second)
+					times := []int64{t, t, t, t, t}
+					values := []float64{833.2499999999999, 833.25, 833.25, 833.2500000000001, 833.25}
+					inCk1.AppendTimes(times)
+
+					inCk1.Column(0).AppendFloatValues(values)
+					inCk1.Column(0).AppendManyNotNil(1)
+
+					return inCk1
+				},
+				expect: func(chunks []executor.Chunk, expChunk executor.Chunk) bool {
+					ck := chunks[0]
+					success := true
+					success = ast.Equal(t, ck.Time(), expChunk.Time()) && success
+					success = ast.Equal(t, ck.Column(0).FloatValues(), expChunk.Column(0).FloatValues()) && success
+					return success
+				},
+			},
+			// select stdvar_over_time_prom[float] range
+			{
+				name:          "select stdvar_over_time_prom[float] range_query",
+				q:             fmt.Sprintf(`SELECT stdvar_over_time_prom(field4_float) from cpu`),
+				tr:            util.TimeRange{Min: minT, Max: maxT},
+				step:          1 * time.Second,
+				rangeDuration: 2 * time.Second,
+				fields:        fields,
+				outputRowDataType: hybridqp.NewRowDataTypeImpl(
+					influxql.VarRef{Val: "val1", Type: influxql.Float},
+				),
+				readerOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.VarRef{Val: "val0", Type: influxql.Float},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				aggOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.Call{Name: "stdvar_over_time_prom", Args: []influxql.Expr{&influxql.VarRef{Val: "val1", Type: influxql.Float}}},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				genRes: func(rowDataType hybridqp.RowDataType) executor.Chunk {
+					b := executor.NewChunkBuilder(rowDataType)
+					// first chunk
+					inCk1 := b.NewChunk("cpu")
+					inCk1.AppendTagsAndIndexes(
+						[]executor.ChunkTags{executor.ChunkTags{}},
+						[]int{0})
+					inCk1.AppendIntervalIndexes([]int{0})
+					t := minT + int64(2)*int64(time.Second)
+					times := []int64{t, t, t, t, t}
+					values := []float64{833.2499999999999, 833.25, 833.25, 833.2500000000001, 833.25}
+
+					inCk1.AppendTimes(times)
+					inCk1.Column(0).AppendFloatValues(values)
+					inCk1.Column(0).AppendManyNotNil(100)
+
+					return inCk1
+				},
+				expect: func(chunks []executor.Chunk, expChunk executor.Chunk) bool {
+					ck := chunks[0]
+					success := true
+					success = ast.Equal(t, ck.Time(), expChunk.Time()) && success
+					success = ast.Equal(t, ck.Column(0).FloatValues(), expChunk.Column(0).FloatValues()) && success
+					return success
+				},
+			},
+			// select stdvar_over_time_prom[float] range
+			{
+				name:          "select stdvar_over_time_prom[float] range_query",
+				q:             fmt.Sprintf(`SELECT stdvar_over_time_prom(field4_float) from cpu`),
+				tr:            util.TimeRange{Min: minT, Max: maxT},
+				step:          1 * time.Second,
+				rangeDuration: 4 * time.Second,
+				fields:        fields,
+				outputRowDataType: hybridqp.NewRowDataTypeImpl(
+					influxql.VarRef{Val: "val1", Type: influxql.Float},
+				),
+				readerOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.VarRef{Val: "val0", Type: influxql.Float},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				aggOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.Call{Name: "stdvar_over_time_prom", Args: []influxql.Expr{&influxql.VarRef{Val: "val1", Type: influxql.Float}}},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				genRes: func(rowDataType hybridqp.RowDataType) executor.Chunk {
+					b := executor.NewChunkBuilder(rowDataType)
+					// first chunk
+					inCk1 := b.NewChunk("cpu")
+					inCk1.AppendTagsAndIndexes(
+						[]executor.ChunkTags{executor.ChunkTags{}},
+						[]int{0})
+					inCk1.AppendIntervalIndexes([]int{0})
+					t := minT + int64(4)*int64(time.Second)
+					times := []int64{t, t, t, t, t}
+					values := []float64{833.2499999999999, 833.25, 833.25, 833.2500000000001, 833.25}
+
+					inCk1.AppendTimes(times)
+					inCk1.Column(0).AppendFloatValues(values)
+					inCk1.Column(0).AppendManyNotNil(100)
+
+					return inCk1
+				},
+				expect: func(chunks []executor.Chunk, expChunk executor.Chunk) bool {
+					ck := chunks[0]
+					success := true
+					success = ast.Equal(t, ck.Time(), expChunk.Time()) && success
+					success = ast.Equal(t, ck.Column(0).FloatValues(), expChunk.Column(0).FloatValues()) && success
+					return success
+				},
+			},
+			// select stdvar_over_time_prom[float] range
+			{
+				name:          "select stdvar_over_time_prom[float] range_query",
+				q:             fmt.Sprintf(`SELECT stdvar_over_time_prom(field4_float) from cpu`),
+				tr:            util.TimeRange{Min: minT, Max: maxT},
+				step:          1 * time.Second,
+				rangeDuration: 1 * time.Second,
+				fields:        fields,
+				outputRowDataType: hybridqp.NewRowDataTypeImpl(
+					influxql.VarRef{Val: "val1", Type: influxql.Float},
+				),
+				readerOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.VarRef{Val: "val0", Type: influxql.Float},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				aggOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.Call{Name: "stdvar_over_time_prom", Args: []influxql.Expr{&influxql.VarRef{Val: "val1", Type: influxql.Float}}},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				genRes: func(rowDataType hybridqp.RowDataType) executor.Chunk {
+					b := executor.NewChunkBuilder(rowDataType)
+					// first chunk
+					inCk1 := b.NewChunk("cpu")
+					inCk1.AppendTagsAndIndexes(
+						[]executor.ChunkTags{executor.ChunkTags{}},
+						[]int{0})
+					inCk1.AppendIntervalIndexes([]int{0})
+					t := minT + int64(1)*int64(time.Second)
+					times := []int64{t, t, t, t, t}
+					values := []float64{833.2499999999999, 833.25, 833.25, 833.2500000000001, 833.25}
+
+					inCk1.AppendTimes(times)
+					inCk1.Column(0).AppendFloatValues(values)
+					inCk1.Column(0).AppendManyNotNil(100)
+
+					return inCk1
+				},
+				expect: func(chunks []executor.Chunk, expChunk executor.Chunk) bool {
+					ck := chunks[0]
+					success := true
+					success = ast.Equal(t, ck.Time(), expChunk.Time()) && success
+					success = ast.Equal(t, ck.Column(0).FloatValues(), expChunk.Column(0).FloatValues()) && success
+					return success
+				},
+			},
+			// select stdvar_over_time_prom[float] range
+			{
+				name:          "select stdvar_over_time_prom[float] range_query",
+				q:             fmt.Sprintf(`SELECT stdvar_over_time_prom(field4_float) from cpu`),
+				tr:            util.TimeRange{Min: minT, Max: maxT},
+				step:          1 * time.Second,
+				rangeDuration: 3 * time.Second,
+				fields:        fields,
+				outputRowDataType: hybridqp.NewRowDataTypeImpl(
+					influxql.VarRef{Val: "val1", Type: influxql.Float},
+				),
+				readerOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.VarRef{Val: "val0", Type: influxql.Float},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				aggOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.Call{Name: "stdvar_over_time_prom", Args: []influxql.Expr{&influxql.VarRef{Val: "val1", Type: influxql.Float}}},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				genRes: func(rowDataType hybridqp.RowDataType) executor.Chunk {
+					b := executor.NewChunkBuilder(rowDataType)
+					// first chunk
+					inCk1 := b.NewChunk("cpu")
+					inCk1.AppendTagsAndIndexes(
+						[]executor.ChunkTags{executor.ChunkTags{}},
+						[]int{0})
+					inCk1.AppendIntervalIndexes([]int{0})
+					t := minT + int64(3)*int64(time.Second)
+					times := []int64{t, t, t, t, t}
+					values := []float64{833.2499999999999, 833.25, 833.25, 833.2500000000001, 833.25}
+
+					inCk1.AppendTimes(times)
+					inCk1.Column(0).AppendFloatValues(values)
+					inCk1.Column(0).AppendManyNotNil(100)
+
+					return inCk1
+				},
+				expect: func(chunks []executor.Chunk, expChunk executor.Chunk) bool {
+					ck := chunks[0]
+					success := true
+					success = ast.Equal(t, ck.Time(), expChunk.Time()) && success
+					success = ast.Equal(t, ck.Column(0).FloatValues(), expChunk.Column(0).FloatValues()) && success
+					return success
+				},
+			},
+			// select stddev_over_time_prom[float] instant
+			{
+				name:          "select stddev_over_time_prom[float] instant query",
+				q:             fmt.Sprintf(`SELECT stddev_over_time_prom(field4_float) from cpu`),
+				tr:            util.TimeRange{Min: minT, Max: maxT},
+				step:          time.Duration(0),
+				rangeDuration: 2 * time.Second,
+				fields:        fields,
+				outputRowDataType: hybridqp.NewRowDataTypeImpl(
+					influxql.VarRef{Val: "val1", Type: influxql.Float},
+				),
+				readerOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.VarRef{Val: "val0", Type: influxql.Float},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				aggOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.Call{Name: "stddev_over_time_prom", Args: []influxql.Expr{&influxql.VarRef{Val: "val1", Type: influxql.Float}}},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				genRes: func(rowDataType hybridqp.RowDataType) executor.Chunk {
+					b := executor.NewChunkBuilder(rowDataType)
+					// first chunk
+					inCk1 := b.NewChunk("cpu")
+					inCk1.AppendTagsAndIndexes(
+						[]executor.ChunkTags{executor.ChunkTags{}},
+						[]int{0})
+					inCk1.AppendIntervalIndexes([]int{0})
+					t := minT + int64(2)*int64(time.Second)
+					times := []int64{t, t, t, t, t}
+					values := []float64{28.866070047722115, 28.86607004772212, 28.86607004772212, 28.86607004772212, 28.86607004772212}
+					inCk1.AppendTimes(times)
+
+					inCk1.Column(0).AppendFloatValues(values)
+					inCk1.Column(0).AppendManyNotNil(1)
+
+					return inCk1
+				},
+				expect: func(chunks []executor.Chunk, expChunk executor.Chunk) bool {
+					ck := chunks[0]
+					success := true
+					success = ast.Equal(t, ck.Time(), expChunk.Time()) && success
+					success = ast.Equal(t, ck.Column(0).FloatValues(), expChunk.Column(0).FloatValues()) && success
+					return success
+				},
+			},
+			// select stddev_over_time_prom[float] instant
+			{
+				name:          "select stddev_over_time_prom[float] instant query",
+				q:             fmt.Sprintf(`SELECT stddev_over_time_prom(field4_float) from cpu`),
+				tr:            util.TimeRange{Min: minT, Max: maxT},
+				step:          time.Duration(0),
+				rangeDuration: 4 * time.Second,
+				fields:        fields,
+				outputRowDataType: hybridqp.NewRowDataTypeImpl(
+					influxql.VarRef{Val: "val1", Type: influxql.Float},
+				),
+				readerOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.VarRef{Val: "val0", Type: influxql.Float},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				aggOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.Call{Name: "stddev_over_time_prom", Args: []influxql.Expr{&influxql.VarRef{Val: "val1", Type: influxql.Float}}},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				genRes: func(rowDataType hybridqp.RowDataType) executor.Chunk {
+					b := executor.NewChunkBuilder(rowDataType)
+					// first chunk
+					inCk1 := b.NewChunk("cpu")
+					inCk1.AppendTagsAndIndexes(
+						[]executor.ChunkTags{executor.ChunkTags{}},
+						[]int{0})
+					inCk1.AppendIntervalIndexes([]int{0})
+					t := minT + int64(4)*int64(time.Second)
+					times := []int64{t, t, t, t, t}
+					values := []float64{28.866070047722115, 28.86607004772212, 28.86607004772212, 28.86607004772212, 28.86607004772212}
+					inCk1.AppendTimes(times)
+
+					inCk1.Column(0).AppendFloatValues(values)
+					inCk1.Column(0).AppendManyNotNil(1)
+
+					return inCk1
+				},
+				expect: func(chunks []executor.Chunk, expChunk executor.Chunk) bool {
+					ck := chunks[0]
+					success := true
+					success = ast.Equal(t, ck.Time(), expChunk.Time()) && success
+					success = ast.Equal(t, ck.Column(0).FloatValues(), expChunk.Column(0).FloatValues()) && success
+					return success
+				},
+			},
+			// select stddev_over_time_prom[float] instant
+			{
+				name:          "select stddev_over_time_prom[float] instant query",
+				q:             fmt.Sprintf(`SELECT stddev_over_time_prom(field4_float) from cpu`),
+				tr:            util.TimeRange{Min: minT, Max: maxT},
+				step:          time.Duration(0),
+				rangeDuration: 1 * time.Second,
+				fields:        fields,
+				outputRowDataType: hybridqp.NewRowDataTypeImpl(
+					influxql.VarRef{Val: "val1", Type: influxql.Float},
+				),
+				readerOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.VarRef{Val: "val0", Type: influxql.Float},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				aggOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.Call{Name: "stddev_over_time_prom", Args: []influxql.Expr{&influxql.VarRef{Val: "val1", Type: influxql.Float}}},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				genRes: func(rowDataType hybridqp.RowDataType) executor.Chunk {
+					b := executor.NewChunkBuilder(rowDataType)
+					// first chunk
+					inCk1 := b.NewChunk("cpu")
+					inCk1.AppendTagsAndIndexes(
+						[]executor.ChunkTags{executor.ChunkTags{}},
+						[]int{0})
+					inCk1.AppendIntervalIndexes([]int{0})
+					t := minT + int64(1)*int64(time.Second)
+					times := []int64{t, t, t, t, t}
+					values := []float64{28.866070047722115, 28.86607004772212, 28.86607004772212, 28.86607004772212, 28.86607004772212}
+					inCk1.AppendTimes(times)
+
+					inCk1.Column(0).AppendFloatValues(values)
+					inCk1.Column(0).AppendManyNotNil(1)
+
+					return inCk1
+				},
+				expect: func(chunks []executor.Chunk, expChunk executor.Chunk) bool {
+					ck := chunks[0]
+					success := true
+					success = ast.Equal(t, ck.Time(), expChunk.Time()) && success
+					success = ast.Equal(t, ck.Column(0).FloatValues(), expChunk.Column(0).FloatValues()) && success
+					return success
+				},
+			},
+			// select stddev_over_time_prom[float] instant
+			{
+				name:          "select stddev_over_time_prom[float] instant query",
+				q:             fmt.Sprintf(`SELECT stddev_over_time_prom(field4_float) from cpu`),
+				tr:            util.TimeRange{Min: minT, Max: maxT},
+				step:          time.Duration(0),
+				rangeDuration: 3 * time.Second,
+				fields:        fields,
+				outputRowDataType: hybridqp.NewRowDataTypeImpl(
+					influxql.VarRef{Val: "val1", Type: influxql.Float},
+				),
+				readerOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.VarRef{Val: "val0", Type: influxql.Float},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				aggOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.Call{Name: "stddev_over_time_prom", Args: []influxql.Expr{&influxql.VarRef{Val: "val1", Type: influxql.Float}}},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				genRes: func(rowDataType hybridqp.RowDataType) executor.Chunk {
+					b := executor.NewChunkBuilder(rowDataType)
+					// first chunk
+					inCk1 := b.NewChunk("cpu")
+					inCk1.AppendTagsAndIndexes(
+						[]executor.ChunkTags{executor.ChunkTags{}},
+						[]int{0})
+					inCk1.AppendIntervalIndexes([]int{0})
+					t := minT + int64(3)*int64(time.Second)
+					times := []int64{t, t, t, t, t}
+					values := []float64{28.866070047722115, 28.86607004772212, 28.86607004772212, 28.86607004772212, 28.86607004772212}
+					inCk1.AppendTimes(times)
+
+					inCk1.Column(0).AppendFloatValues(values)
+					inCk1.Column(0).AppendManyNotNil(1)
+
+					return inCk1
+				},
+				expect: func(chunks []executor.Chunk, expChunk executor.Chunk) bool {
+					ck := chunks[0]
+					success := true
+					success = ast.Equal(t, ck.Time(), expChunk.Time()) && success
+					success = ast.Equal(t, ck.Column(0).FloatValues(), expChunk.Column(0).FloatValues()) && success
+					return success
+				},
+			},
+			// select stddev_over_time_prom[float] range
+			{
+				name:          "select stddev_over_time_prom[float] range_query",
+				q:             fmt.Sprintf(`SELECT stddev_over_time_prom(field4_float) from cpu`),
+				tr:            util.TimeRange{Min: minT, Max: maxT},
+				step:          1 * time.Second,
+				rangeDuration: 2 * time.Second,
+				fields:        fields,
+				outputRowDataType: hybridqp.NewRowDataTypeImpl(
+					influxql.VarRef{Val: "val1", Type: influxql.Float},
+				),
+				readerOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.VarRef{Val: "val0", Type: influxql.Float},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				aggOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.Call{Name: "stddev_over_time_prom", Args: []influxql.Expr{&influxql.VarRef{Val: "val1", Type: influxql.Float}}},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				genRes: func(rowDataType hybridqp.RowDataType) executor.Chunk {
+					b := executor.NewChunkBuilder(rowDataType)
+					// first chunk
+					inCk1 := b.NewChunk("cpu")
+					inCk1.AppendTagsAndIndexes(
+						[]executor.ChunkTags{executor.ChunkTags{}},
+						[]int{0})
+					inCk1.AppendIntervalIndexes([]int{0})
+					t := minT + int64(2)*int64(time.Second)
+					times := []int64{t, t, t, t, t}
+					values := []float64{28.866070047722115, 28.86607004772212, 28.86607004772212, 28.86607004772212, 28.86607004772212}
+
+					inCk1.AppendTimes(times)
+					inCk1.Column(0).AppendFloatValues(values)
+					inCk1.Column(0).AppendManyNotNil(100)
+
+					return inCk1
+				},
+				expect: func(chunks []executor.Chunk, expChunk executor.Chunk) bool {
+					ck := chunks[0]
+					success := true
+					success = ast.Equal(t, ck.Time(), expChunk.Time()) && success
+					success = ast.Equal(t, ck.Column(0).FloatValues(), expChunk.Column(0).FloatValues()) && success
+					return success
+				},
+			},
+			// select stddev_over_time_prom[float] range
+			{
+				name:          "select stddev_over_time_prom[float] range_query",
+				q:             fmt.Sprintf(`SELECT stddev_over_time_prom(field4_float) from cpu`),
+				tr:            util.TimeRange{Min: minT, Max: maxT},
+				step:          1 * time.Second,
+				rangeDuration: 4 * time.Second,
+				fields:        fields,
+				outputRowDataType: hybridqp.NewRowDataTypeImpl(
+					influxql.VarRef{Val: "val1", Type: influxql.Float},
+				),
+				readerOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.VarRef{Val: "val0", Type: influxql.Float},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				aggOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.Call{Name: "stddev_over_time_prom", Args: []influxql.Expr{&influxql.VarRef{Val: "val1", Type: influxql.Float}}},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				genRes: func(rowDataType hybridqp.RowDataType) executor.Chunk {
+					b := executor.NewChunkBuilder(rowDataType)
+					// first chunk
+					inCk1 := b.NewChunk("cpu")
+					inCk1.AppendTagsAndIndexes(
+						[]executor.ChunkTags{executor.ChunkTags{}},
+						[]int{0})
+					inCk1.AppendIntervalIndexes([]int{0})
+					t := minT + int64(4)*int64(time.Second)
+					times := []int64{t, t, t, t, t}
+					values := []float64{28.866070047722115, 28.86607004772212, 28.86607004772212, 28.86607004772212, 28.86607004772212}
+
+					inCk1.AppendTimes(times)
+					inCk1.Column(0).AppendFloatValues(values)
+					inCk1.Column(0).AppendManyNotNil(100)
+
+					return inCk1
+				},
+				expect: func(chunks []executor.Chunk, expChunk executor.Chunk) bool {
+					ck := chunks[0]
+					success := true
+					success = ast.Equal(t, ck.Time(), expChunk.Time()) && success
+					success = ast.Equal(t, ck.Column(0).FloatValues(), expChunk.Column(0).FloatValues()) && success
+					return success
+				},
+			},
+			// select stddev_over_time_prom[float] range
+			{
+				name:          "select stddev_over_time_prom[float] range_query",
+				q:             fmt.Sprintf(`SELECT stddev_over_time_prom(field4_float) from cpu`),
+				tr:            util.TimeRange{Min: minT, Max: maxT},
+				step:          1 * time.Second,
+				rangeDuration: 1 * time.Second,
+				fields:        fields,
+				outputRowDataType: hybridqp.NewRowDataTypeImpl(
+					influxql.VarRef{Val: "val1", Type: influxql.Float},
+				),
+				readerOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.VarRef{Val: "val0", Type: influxql.Float},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				aggOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.Call{Name: "stddev_over_time_prom", Args: []influxql.Expr{&influxql.VarRef{Val: "val1", Type: influxql.Float}}},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				genRes: func(rowDataType hybridqp.RowDataType) executor.Chunk {
+					b := executor.NewChunkBuilder(rowDataType)
+					// first chunk
+					inCk1 := b.NewChunk("cpu")
+					inCk1.AppendTagsAndIndexes(
+						[]executor.ChunkTags{executor.ChunkTags{}},
+						[]int{0})
+					inCk1.AppendIntervalIndexes([]int{0})
+					t := minT + int64(1)*int64(time.Second)
+					times := []int64{t, t, t, t, t}
+					values := []float64{28.866070047722115, 28.86607004772212, 28.86607004772212, 28.86607004772212, 28.86607004772212}
+
+					inCk1.AppendTimes(times)
+					inCk1.Column(0).AppendFloatValues(values)
+					inCk1.Column(0).AppendManyNotNil(100)
+
+					return inCk1
+				},
+				expect: func(chunks []executor.Chunk, expChunk executor.Chunk) bool {
+					ck := chunks[0]
+					success := true
+					success = ast.Equal(t, ck.Time(), expChunk.Time()) && success
+					success = ast.Equal(t, ck.Column(0).FloatValues(), expChunk.Column(0).FloatValues()) && success
+					return success
+				},
+			},
+			// select stddev_over_time_prom[float] range
+			{
+				name:          "select stddev_over_time_prom[float] range_query",
+				q:             fmt.Sprintf(`SELECT stddev_over_time_prom(field4_float) from cpu`),
+				tr:            util.TimeRange{Min: minT, Max: maxT},
+				step:          1 * time.Second,
+				rangeDuration: 3 * time.Second,
+				fields:        fields,
+				outputRowDataType: hybridqp.NewRowDataTypeImpl(
+					influxql.VarRef{Val: "val1", Type: influxql.Float},
+				),
+				readerOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.VarRef{Val: "val0", Type: influxql.Float},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				aggOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.Call{Name: "stddev_over_time_prom", Args: []influxql.Expr{&influxql.VarRef{Val: "val1", Type: influxql.Float}}},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				genRes: func(rowDataType hybridqp.RowDataType) executor.Chunk {
+					b := executor.NewChunkBuilder(rowDataType)
+					// first chunk
+					inCk1 := b.NewChunk("cpu")
+					inCk1.AppendTagsAndIndexes(
+						[]executor.ChunkTags{executor.ChunkTags{}},
+						[]int{0})
+					inCk1.AppendIntervalIndexes([]int{0})
+					t := minT + int64(3)*int64(time.Second)
+					times := []int64{t, t, t, t, t}
+					values := []float64{28.866070047722115, 28.86607004772212, 28.86607004772212, 28.86607004772212, 28.86607004772212}
 
 					inCk1.AppendTimes(times)
 					inCk1.Column(0).AppendFloatValues(values)

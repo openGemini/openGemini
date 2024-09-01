@@ -49,6 +49,10 @@ func (m *MockRaftForSG) SetLeader(state bool) {
 	m.isLeader = state
 }
 
+func (m *MockRaftForSG) UserSnapshot() error {
+	return nil
+}
+
 /*
 ts-meta: 127.0.0.1
 ts-store1: 127.0.0.2 ts-store2: 127.0.0.3

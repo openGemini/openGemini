@@ -1539,6 +1539,8 @@ type SelectStatement struct {
 	IsPromQuery bool
 
 	PromSubCalls []*PromSubCall
+
+	SelectAllTags bool
 }
 
 func (s *SelectStatement) SetStmtId(id int) {
@@ -1946,6 +1948,33 @@ func (s *SelectStatement) hasCall() bool {
 	return false
 }
 
+func (s *SelectStatement) RewriteFieldsForSelectAllTags(m FieldMapper) error {
+	_, tagSet, err := FieldDimensions(s.Sources, m, &s.Schema)
+	if err != nil {
+		return err
+	}
+	if len(tagSet) == 0 {
+		return nil
+	}
+	tagWildIdx := 0
+	for tagWildIdx < len(s.Fields) {
+		if w, ok := s.Fields[tagWildIdx].Expr.(*Wildcard); ok && w.Type == TAG {
+			break
+		}
+		tagWildIdx++
+	}
+	s.Fields = append(s.Fields[:tagWildIdx], s.Fields[tagWildIdx+1:]...)
+	tagSlice := make([]string, 0, len(tagSet))
+	for tagKey := range tagSet {
+		tagSlice = append(tagSlice, tagKey)
+	}
+	sort.Strings(tagSlice)
+	for _, tagKey := range tagSlice {
+		s.Fields = append(s.Fields, &Field{Expr: &VarRef{Val: tagKey, Type: Tag}})
+	}
+	return nil
+}
+
 // RewriteFields returns the re-written form of the select statement. Any wildcard query
 // fields are replaced with the supplied fields, and any wildcard GROUP BY fields are replaced
 // with the supplied dimensions. Any fields with no type specifier are rewritten with the
@@ -2190,6 +2219,11 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin boo
 
 	if other.Without {
 		// 2.without dims + promquery
+		if other.SelectAllTags {
+			if err := other.RewriteFieldsForSelectAllTags(m); err != nil {
+				return nil, err
+			}
+		}
 		return other, nil
 	}
 

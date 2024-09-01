@@ -64,6 +64,25 @@ func TestEngine_processReq_snapshot(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestEngine_processReq_backup(t *testing.T) {
+	log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
+	e := Engine{
+		log: log,
+	}
+	req := &netstorage.SysCtrlRequest{}
+	req.SetMod(syscontrol.Backup)
+	_, err := e.processReq(req)
+	if err == nil {
+		t.Fatal()
+	}
+
+	req.SetParam(map[string]string{
+		"backupPath": "/tmp/openGemini/backup_dir",
+	})
+	_, err = e.processReq(req)
+	require.NoError(t, err)
+}
+
 func TestEngine_processReq_compaction(t *testing.T) {
 	log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
 	e := Engine{

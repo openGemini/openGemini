@@ -1,6 +1,7 @@
 package promql2influxql
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 	"time"
@@ -114,6 +115,32 @@ func GetTagCondition(v *parser.VectorSelector, haveMetricStore bool) (influxql.E
 		tagCond = CombineConditionAnd(tagCond, cond)
 	}
 	return tagCond, nil
+}
+
+// getMeasurementBySelector used to get measurement from vector selector
+func getMeasurementBySelector(v *parser.VectorSelector) (*influxql.Measurement, error) {
+	if len(v.Name) > 0 {
+		return &influxql.Measurement{Name: v.Name}, nil
+	}
+	for _, matcher := range v.LabelMatchers {
+		if _, ok := reservedTags[matcher.Name]; !ok {
+			continue
+		}
+		switch matcher.Type {
+		case labels.MatchEqual:
+			return &influxql.Measurement{Name: escapeSingleQuotes(matcher.Value)}, nil
+		case labels.MatchRegexp:
+			promRegexStr := escapeSlashes(matcher.Value)
+			re, err := regexp.Compile(promRegexStr)
+			if err != nil {
+				return nil, errno.NewError(errno.ErrRegularExpSyntax, err.Error())
+			}
+			return &influxql.Measurement{Regex: &influxql.RegexLiteral{Val: re}}, nil
+		default:
+			return nil, fmt.Errorf("invalid measurement for unsupported type: %s", matcher.Type.String())
+		}
+	}
+	return nil, fmt.Errorf("invalid measurement by vector selector")
 }
 
 // findStartEndTime return start and end time.
@@ -277,9 +304,8 @@ func (t *Transpiler) transpileInstantVectorSelector(v *parser.VectorSelector) (i
 		return &showSeriesStatement, nil
 	default:
 	}
-	// metricName is used as the measurement by default.
+
 	selectStatement := &influxql.SelectStatement{
-		Sources:     []influxql.Source{&influxql.Measurement{Name: v.Name}},
 		Condition:   condition,
 		Dimensions:  []*influxql.Dimension{{Expr: &influxql.Wildcard{}}},
 		IsPromQuery: true,
@@ -287,6 +313,13 @@ func (t *Transpiler) transpileInstantVectorSelector(v *parser.VectorSelector) (i
 	// if the API corresponding to MetricStore is used, MetricStore in the API is used as the measurement.
 	if t.HaveMetricStore() {
 		selectStatement.Sources = []influxql.Source{&influxql.Measurement{Name: t.Measurement}}
+	} else {
+		// metricName is used as the measurement by default.
+		mst, err := getMeasurementBySelector(v)
+		if err != nil {
+			return nil, err
+		}
+		selectStatement.Sources = []influxql.Source{mst}
 	}
 	valueFieldKey := DefaultFieldKey
 	if len(t.ValueFieldKey) == 0 {

@@ -297,6 +297,43 @@ func TestSendSysCtrlToMetaProcess(t *testing.T) {
 	}
 }
 
+func TestSendBackupToMetaProcess(t *testing.T) {
+	globalService = nil
+	mockStore := NewMockRPCStore()
+	type TestCase struct {
+		Param     map[string]string
+		ExpectErr string
+	}
+	for _, testcase := range []TestCase{
+		{
+			Param:     map[string]string{},
+			ExpectErr: "missing the required parameter backupPath",
+		},
+		{
+			Param: map[string]string{
+				"backupPath": "/tmp",
+				"isRemote":   "false",
+				"isNode":     "true",
+			},
+			ExpectErr: "meta global service is nil",
+		},
+	} {
+		msg := message.NewMetaMessage(message.SendSysCtrlToMetaRequestMessage, &message.SendSysCtrlToMetaRequest{
+			Mod:   "backup",
+			Param: testcase.Param,
+		})
+		h := New(msg.Type())
+		h.InitHandler(mockStore, nil, nil)
+		var err error
+		if err = h.SetRequestMsg(msg.Data()); err != nil {
+			t.Fatal(err)
+		}
+		res, err := h.Process()
+		assert.NoError(t, err)
+		assert.Equal(t, res.(*message.SendSysCtrlToMetaResponse).Err, testcase.ExpectErr)
+	}
+}
+
 func TestSnapshot(t *testing.T) {
 	mockStore := NewMockRPCStore()
 	mockStore.stat = raft.Follower

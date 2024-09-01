@@ -36,6 +36,7 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
@@ -9189,7 +9190,7 @@ func TestRecTransToChunk3(t *testing.T) {
 	}
 }
 
-func TestChunkReaderSend(t *testing.T) {
+func TestChunkReaderFunc(t *testing.T) {
 	r := &ChunkReader{
 		closed:       make(chan struct{}, 2),
 		closedSignal: true,
@@ -9198,4 +9199,11 @@ func TestChunkReaderSend(t *testing.T) {
 	_, ok := <-r.closed
 	assert2.True(t, ok)
 	close(r.closed)
+	qStat := &statistics.StoreSlowQueryStatistics{}
+	ctx := context.Background()
+	ctx, cancel := context.WithCancel(ctx)
+	ctx = context.WithValue(ctx, query.QueryDurationKey, qStat)
+	cancel()
+	r.Output = executor.NewChunkPort(hybridqp.NewRowDataTypeImpl(influxql.VarRef{Val: "value1", Type: influxql.Float}))
+	assert2.NoError(t, r.Work(ctx))
 }

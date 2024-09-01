@@ -13,6 +13,7 @@ type aggregateFn struct {
 	// keep the metric calculated by the upper layer as the label.
 	KeepFill               bool
 	keepMetric             bool
+	keepAuxLabel           bool
 	expectIntegerParameter bool
 	functionType           FunctionType
 	vectorPosition         int
@@ -25,8 +26,8 @@ var aggregateFns = map[parser.ItemType]aggregateFn{
 	parser.MIN:          {name: "min_prom", functionType: SELECTOR_FN},
 	parser.COUNT:        {name: "count_prom", functionType: AGGREGATE_FN},
 	parser.STDDEV:       {name: "stddev_prom", functionType: AGGREGATE_FN},
-	parser.TOPK:         {name: "top", functionType: SELECTOR_FN, expectIntegerParameter: true, keepMetric: true},
-	parser.BOTTOMK:      {name: "bottom", functionType: SELECTOR_FN, expectIntegerParameter: true, keepMetric: true},
+	parser.TOPK:         {name: "top", functionType: SELECTOR_FN, expectIntegerParameter: true, keepMetric: true, keepAuxLabel: true},
+	parser.BOTTOMK:      {name: "bottom", functionType: SELECTOR_FN, expectIntegerParameter: true, keepMetric: true, keepAuxLabel: true},
 	parser.QUANTILE:     {name: "quantile_prom", functionType: SELECTOR_FN},
 	parser.COUNT_VALUES: {name: "count_values_prom", functionType: AGGREGATE_FN},
 	parser.STDVAR:       {name: "stdvar_prom", functionType: AGGREGATE_FN},
@@ -145,6 +146,15 @@ func (t *Transpiler) setAggregateFields(selectStatement *influxql.SelectStatemen
 	fields = append(fields, &influxql.Field{
 		Expr: &influxql.Call{Name: aggFn.name, Args: aggArgs}, Alias: DefaultFieldKey,
 	})
+	if aggFn.keepMetric {
+		if aggFn.keepAuxLabel {
+			fields = append(fields, &influxql.Field{
+				Expr: &influxql.Wildcard{Type: influxql.TAG},
+			})
+			selectStatement.SelectAllTags = true
+		}
+		t.dropMetric = false
+	}
 	selectStatement.Fields = fields
 }
 
@@ -184,6 +194,10 @@ func (t *Transpiler) transpileAggregateExpr(a *parser.AggregateExpr) (influxql.N
 	case *influxql.SelectStatement:
 		// Get the last field of sub expression. The last field is the matrix value.
 		field := statement.Fields[len(statement.Fields)-1]
+		// The last field of the keepMetric agg is *::tag. Take the penultimate one as the field
+		if _, ok = field.Expr.(*influxql.Wildcard); ok && len(statement.Fields) >= 2 {
+			field = statement.Fields[len(statement.Fields)-2]
+		}
 		switch field.Expr.(type) {
 		case *influxql.Call, *influxql.BinaryExpr, *influxql.ParenExpr:
 			if t.canPushDownAggWithFunction(a, statement, field, parameter, aggFn) {
@@ -195,6 +209,7 @@ func (t *Transpiler) transpileAggregateExpr(a *parser.AggregateExpr) (influxql.N
 					&influxql.SubQuery{
 						Statement: statement,
 					}},
+				Step:        t.Step,
 				IsPromQuery: true,
 			}
 			wrappedField := &influxql.Field{
@@ -206,10 +221,6 @@ func (t *Transpiler) transpileAggregateExpr(a *parser.AggregateExpr) (influxql.N
 			}
 			t.setAggregateFields(selectStatement, wrappedField, parameter, aggFn)
 			t.setTimeCondition(selectStatement)
-			if aggFn.keepMetric {
-				selectStatement.Dimensions = statement.Dimensions
-				return selectStatement, nil
-			}
 			t.setAggregateDimension(selectStatement, a.Without, a.Grouping...)
 			if t.Step > 0 {
 				t.setTimeInterval(selectStatement)
@@ -218,10 +229,8 @@ func (t *Transpiler) transpileAggregateExpr(a *parser.AggregateExpr) (influxql.N
 			return selectStatement, nil
 		case *influxql.VarRef:
 			t.setAggregateFields(statement, field, parameter, aggFn)
-			if !aggFn.keepMetric {
-				statement.Dimensions = statement.Dimensions[:0]
-				t.setAggregateDimension(statement, a.Without, a.Grouping...)
-			}
+			statement.Dimensions = statement.Dimensions[:0]
+			t.setAggregateDimension(statement, a.Without, a.Grouping...)
 			if t.Step > 0 {
 				t.setTimeInterval(statement)
 				statement.Fill = influxql.NoFill
@@ -257,13 +266,11 @@ func (t *Transpiler) canPushDownAggWithFunction(agg *parser.AggregateExpr, state
 		return false
 	}
 	t.setAggregateFields(statement, field, parameter, aggFn)
-	if !aggFn.keepMetric {
-		statement.Dimensions = statement.Dimensions[:0]
-		t.setAggregateDimension(statement, agg.Without, agg.Grouping...)
-		if t.Step > 0 {
-			t.setTimeInterval(statement)
-			statement.Fill = influxql.NoFill
-		}
+	statement.Dimensions = statement.Dimensions[:0]
+	t.setAggregateDimension(statement, agg.Without, agg.Grouping...)
+	if t.Step > 0 {
+		t.setTimeInterval(statement)
+		statement.Fill = influxql.NoFill
 	}
 	return true
 }
@@ -274,6 +281,7 @@ func (t *Transpiler) transpileCountValues(statement *influxql.SelectStatement, a
 			&influxql.SubQuery{
 				Statement: statement,
 			}},
+		Step:        t.Step,
 		IsPromQuery: true,
 	}
 	wrappedField := &influxql.Field{
@@ -289,10 +297,6 @@ func (t *Transpiler) transpileCountValues(statement *influxql.SelectStatement, a
 	selectStatement.LookBackDelta = t.LookBackDelta
 	selectStatement.QueryOffset = statement.QueryOffset
 	selectStatement.Step = statement.Step
-	if sumFn.keepMetric {
-		selectStatement.Dimensions = statement.Dimensions
-		return selectStatement
-	}
 	grouping := getCountValuesGrouping(a)
 	t.setAggregateDimension(selectStatement, a.Without, grouping...)
 	if t.Step > 0 {

@@ -595,7 +595,7 @@ func NewStdReduce(isStddev bool) SliceReduce[float64] {
 	return func(floatSliceItem *SliceItem[float64]) (int, int64, float64, bool) {
 		length := len(floatSliceItem.value)
 		if length == 1 {
-			return -1, int64(0), float64(0), false
+			return -1, floatSliceItem.time[0], float64(0), false
 		}
 		if length == 0 {
 			return -1, int64(0), float64(0), true

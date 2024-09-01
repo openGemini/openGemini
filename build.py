@@ -29,6 +29,7 @@ targets = {
     'ts-server' : './app/ts-server',
     'ts-monitor' : './app/ts-monitor',
     'ts-data' : './app/ts-data',
+    'ts-recover': './app/ts-recover'
 }
 
 supported_builds = {

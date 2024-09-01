@@ -1101,9 +1101,6 @@ func (qs *QuerySchema) mapSymbol(key string, expr influxql.Expr) {
 			}
 			panic(fmt.Errorf("QuerySchema mapSymbol get derive type failed, %v", err.Error()))
 		}
-		if qs.opt.IsPromQuery() {
-			typ = influxql.Float
-		}
 		symbol = influxql.VarRef{
 			Val:  symbolName,
 			Type: typ,

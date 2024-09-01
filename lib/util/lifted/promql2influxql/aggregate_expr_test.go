@@ -49,7 +49,7 @@ func TestTranspiler_transpileAggregateExpr(t1 *testing.T) {
 			args: args{
 				a: AggregateExpr(`topk(3, go_gc_duration_seconds_count)`),
 			},
-			want:    parseInfluxqlByYacc(`SELECT top(value, 3) AS value FROM go_gc_duration_seconds_count WHERE time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY *`),
+			want:    parseInfluxqlByYacc(`SELECT top(value, 3) AS value, *::tag FROM go_gc_duration_seconds_count WHERE time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z'`),
 			wantErr: false,
 		},
 		{
@@ -71,7 +71,7 @@ func TestTranspiler_transpileAggregateExpr(t1 *testing.T) {
 			args: args{
 				a: AggregateExpr(`sum by (endpoint) (topk(1, go_gc_duration_seconds_count) by (container))`),
 			},
-			want:    parseInfluxqlByYacc(`SELECT sum(value) AS value FROM (SELECT top(value, 1) AS value FROM go_gc_duration_seconds_count WHERE time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY *) WHERE time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY endpoint`),
+			want:    parseInfluxqlByYacc(`SELECT sum(value) AS value FROM (SELECT top(value, 1) AS value, *::tag FROM go_gc_duration_seconds_count WHERE time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY container) WHERE time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY endpoint`),
 			wantErr: false,
 		},
 		{
@@ -93,7 +93,7 @@ func TestTranspiler_transpileAggregateExpr(t1 *testing.T) {
 			args: args{
 				a: AggregateExpr(`topk(3, go_gc_duration_seconds_count)`),
 			},
-			want:    parseInfluxqlByYacc(`SELECT top(value, 3) AS value FROM go_gc_duration_seconds_count WHERE time >= '2023-01-06T03:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY *, time(1m,0s) fill(none)`),
+			want:    parseInfluxqlByYacc(`SELECT top(value, 3) AS value, *::tag FROM go_gc_duration_seconds_count WHERE time >= '2023-01-06T03:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY time(1m, 0s) fill(none)`),
 			wantErr: false,
 		},
 		{
@@ -115,7 +115,7 @@ func TestTranspiler_transpileAggregateExpr(t1 *testing.T) {
 			args: args{
 				a: AggregateExpr(`sum by (endpoint) (topk(1, go_gc_duration_seconds_count) by (container))`),
 			},
-			want:    parseInfluxqlByYacc(`SELECT sum(value) AS value FROM (SELECT top(value, 1) AS value FROM go_gc_duration_seconds_count WHERE time >= '2023-01-06T03:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY *, time(1m,0s) fill(none)) WHERE time >= '2023-01-06T03:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY endpoint, time(1m,0s) fill(none)`),
+			want:    parseInfluxqlByYacc(`SELECT sum(value) AS value FROM (SELECT top(value, 1) AS value, *::tag FROM go_gc_duration_seconds_count WHERE time >= '2023-01-06T03:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY container, time(1m, 0s) fill(none)) WHERE time >= '2023-01-06T03:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY endpoint, time(1m, 0s) fill(none)`),
 			wantErr: false,
 		},
 		{

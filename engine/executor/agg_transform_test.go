@@ -4312,7 +4312,7 @@ func buildDstChunkPromStddev() []executor.Chunk {
 			*ParseChunkTags("country=japan")},
 		[]int{0, 4, 7})
 	chunk.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10})
-	chunk.AppendTimes([]int64{0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0})
+	chunk.AppendTimes([]int64{1, 2, 3, 4, 1, 2, 4, 1, 2, 3, 4})
 
 	chunk.Column(0).AppendFloatValues([]float64{0, 0, 0, 0, 0, 0.6000000000000014, 0, 0, 0, 0, 0})
 	chunk.Column(0).AppendManyNotNil(11)
@@ -4368,7 +4368,7 @@ func buildDstChunkPromStdvar() []executor.Chunk {
 			*ParseChunkTags("country=japan")},
 		[]int{0, 4, 7})
 	chunk.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10})
-	chunk.AppendTimes([]int64{0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0})
+	chunk.AppendTimes([]int64{1, 2, 3, 4, 1, 2, 4, 1, 2, 3, 4})
 
 	chunk.Column(0).AppendFloatValues([]float64{0, 0, 0, 0, 0, 0.3600000000000017, 0, 0, 0, 0, 0})
 	chunk.Column(0).AppendManyNotNil(11)

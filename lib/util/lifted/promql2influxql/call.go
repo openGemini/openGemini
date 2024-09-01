@@ -32,11 +32,20 @@ var rangeVectorFunctions = map[string]aggregateFn{
 		functionType: AGGREGATE_FN,
 	},
 	"stddev_over_time": {
-		name:         "stddev_over_time",
+		name:         "stddev_over_time_prom",
 		functionType: AGGREGATE_FN,
 	},
+	"present_over_time": {
+		name:         "present_over_time_prom",
+		functionType: AGGREGATE_FN,
+	},
+	"last_over_time": {
+		name:         "last_over_time_prom",
+		functionType: AGGREGATE_FN,
+		keepMetric:   true,
+	},
 	"quantile_over_time": {
-		name:           "quantile_over_time",
+		name:           "quantile_over_time_prom",
 		functionType:   SELECTOR_FN,
 		vectorPosition: 1,
 	},
@@ -68,6 +77,23 @@ var rangeVectorFunctions = map[string]aggregateFn{
 		name:         "idelta_prom",
 		functionType: TRANSFORM_FN,
 	},
+	"stdvar_over_time": {
+		name:         "stdvar_over_time_prom",
+		functionType: TRANSFORM_FN,
+	},
+	"holt_winters": {
+		name:           "holt_winters_prom",
+		functionType:   SELECTOR_FN,
+		vectorPosition: 0,
+	},
+	"changes": {
+		name:         "changes_prom",
+		functionType: TRANSFORM_FN,
+	},
+	"resets": {
+		name:         "resets_prom",
+		functionType: TRANSFORM_FN,
+	},
 }
 
 var instantVectorFunctions = map[string]aggregateFn{
@@ -78,6 +104,10 @@ var instantVectorFunctions = map[string]aggregateFn{
 	},
 	"scalar": {
 		name:         "scalar_prom",
+		functionType: AGGREGATE_FN,
+	},
+	"absent": {
+		name:         "absent",
 		functionType: AGGREGATE_FN,
 	},
 }
@@ -109,7 +139,7 @@ var vectorMathFunctions = map[string]aggregateFn{
 		KeepFill:     true,
 	},
 	"ln": {
-		name:         "log",
+		name:         "ln",
 		functionType: TRANSFORM_FN,
 		KeepFill:     true,
 	},
@@ -361,6 +391,7 @@ func (t *Transpiler) transpilePromFunc(aggFn aggregateFn, inArgs []influxql.Node
 					&influxql.SubQuery{
 						Statement: statement,
 					}},
+				Step:        t.Step,
 				IsPromQuery: true,
 			}
 			wrappedField := &influxql.Field{
@@ -459,6 +490,7 @@ func (t *Transpiler) transpileCall(a *parser.Call) (influxql.Node, error) {
 	}
 
 	if fn, ok := vectorTimeFunctions[a.Func.Name]; ok {
+		t.dropMetric = true
 		return t.transpileVectorTimeFunc(fn, args)
 	}
 	return nil, errno.NewError(errno.UnsupportedPromExpr)

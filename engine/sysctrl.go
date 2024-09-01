@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/openGemini/openGemini/lib/backup"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/memory"
 	"github.com/openGemini/openGemini/lib/metaclient"
@@ -186,6 +187,31 @@ func (e *Engine) processReq(req *netstorage.SysCtrlRequest) (map[string]string, 
 		}
 		syscontrol.SetUpperMemUsePct(upper)
 		return nil, nil
+	case syscontrol.Backup:
+		params := req.Param()
+		backupPath := params[backup.BackupPath]
+		if backupPath == "" {
+			err := fmt.Errorf("invalid parameter %s", backupPath)
+			return nil, err
+		}
+		isRemote := params[backup.IsRemote] == "true"
+		isInc := params[backup.IsInc] == "true"
+		onlyBackupMater := params[backup.OnlyBackupMaster] == "true"
+
+		b := &Backup{
+			IsInc:           isInc,
+			IsRemote:        isRemote,
+			BackupPath:      backupPath,
+			OnlyBackupMater: onlyBackupMater,
+			Engine:          e,
+		}
+		if err := b.RunBackupData(); err != nil {
+			log.Error("run backup error", zap.Error(err))
+			return nil, err
+		}
+
+		return nil, nil
+
 	default:
 		return nil, fmt.Errorf("unknown sys cmd %v", req.Mod())
 	}

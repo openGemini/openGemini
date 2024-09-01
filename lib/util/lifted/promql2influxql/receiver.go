@@ -16,6 +16,12 @@ import (
 	"github.com/prometheus/prometheus/promql/parser"
 )
 
+const (
+	SampleTimeColIdx  = 0
+	SampleValueColIdx = 1
+	SampleColNum      = 2
+)
+
 // Receiver is a query engine to run models.PromCommand.
 // It contains a reference to QueryCommandRunnerFactory instance for putting itself back to the factory from which it was born after work.
 type Receiver struct {
@@ -58,25 +64,50 @@ func (r *Receiver) populatePromSeriesByTag(promSeries *[]*promql.Series, table *
 	var metric labels.Labels
 	if !r.DropMetric {
 		metric = labels.FromMap(table.Tags)
-		if _, ok := table.Tags[DefaultMetricKeyLabel]; !ok && !r.RemoveTableName {
-			metric = append(metric, labels.FromStrings(DefaultMetricKeyLabel, table.Name)...)
-		}
 	} else {
 		metric = FromMapWithoutMetric(table.Tags)
 	}
-	var points []promql.Point
-	for _, row := range table.Values {
-		point, err := Row2Point(row)
-		if err != nil {
-			return err
+	if len(table.Columns) <= SampleColNum {
+		var points []promql.Point
+		for _, row := range table.Values {
+			point, err := Row2Point(row)
+			if err != nil {
+				return err
+			}
+			points = append(points, point)
 		}
-		points = append(points, point)
+		*promSeries = append(*promSeries, &promql.Series{
+			Metric: metric,
+			Points: points,
+		})
+	} else {
+		seriesMap := make(map[uint64]*promql.Series)
+		for _, row := range table.Values {
+			m := metric
+			for i := SampleColNum; i < len(table.Columns); i++ {
+				m = append(m, labels.Label{Name: table.Columns[i], Value: row[i].(string)})
+			}
+			point, err := Row2Point(row)
+			if err != nil {
+				return err
+			}
+			sort.Sort(m)
+			if series, exists := seriesMap[m.Hash()]; exists {
+				series.Points = append(series.Points, point)
+			} else {
+				seriesMap[m.Hash()] = &promql.Series{
+					Metric: m,
+					Points: []promql.Point{
+						point,
+					},
+				}
+			}
+		}
+		for _, series := range seriesMap {
+			*promSeries = append(*promSeries, series)
+		}
 	}
-	*promSeries = append(*promSeries, &promql.Series{
-		Metric: metric,
-		Points: points,
-	})
-	if !r.DuplicateResult || r.PromCommand.Step == 0 {
+	if !r.DuplicateResult || r.PromCommand.Step == 0 || len((*promSeries)[len(*promSeries)-1].Points) > 1 {
 		return nil
 	}
 	// For every evaluation while the value remains same, the timestamp for that
@@ -87,13 +118,13 @@ func (r *Receiver) populatePromSeriesByTag(promSeries *[]*promql.Series, table *
 	idx := len(series.Points)
 	ReservePoints(series, int((end-start-interval)/interval)+1)
 	for ts := start + interval; ts <= end; ts += interval {
-		series.Points[idx] = promql.Point{T: ts, V: points[0].V}
+		series.Points[idx] = promql.Point{T: ts, V: series.Points[0].V}
 		idx++
 	}
 	return nil
 }
 
-// populatePromSeriesByHash is used to populate *promql.Series slice from models.Row returned from InfluxDB
+// PopulatePromSeriesByHash is used to populate *promql.Series slice from models.Row returned from InfluxDB
 // when raw result has not grouped by series(measurement + tag key/value pairs).
 // Iterate the whole result table to collect all series into seriesMap. The map key is hash of label set, the map value is
 // a pointer to promql.Series. Each series may contain one or more points.
@@ -102,7 +133,7 @@ func (r *Receiver) PopulatePromSeriesByHash(promSeries *[]*promql.Series, table 
 	for _, row := range table.Values {
 		kvs := make(map[string]string)
 		for i, col := range row {
-			if i == 0 || i == len(row)-1 {
+			if i == SampleTimeColIdx || i == SampleValueColIdx {
 				continue
 			}
 			kvs[table.Columns[i]] = col.(string)
@@ -110,9 +141,6 @@ func (r *Receiver) PopulatePromSeriesByHash(promSeries *[]*promql.Series, table 
 		var metric labels.Labels
 		if !r.DropMetric {
 			metric = labels.FromMap(kvs)
-			if _, ok := kvs[DefaultMetricKeyLabel]; !ok && !r.RemoveTableName {
-				metric = append(metric, labels.FromStrings(DefaultMetricKeyLabel, table.Name)...)
-			}
 		} else {
 			metric = FromMapWithoutMetric(kvs)
 		}
@@ -134,7 +162,7 @@ func (r *Receiver) PopulatePromSeriesByHash(promSeries *[]*promql.Series, table 
 	for _, series := range seriesMap {
 		*promSeries = append(*promSeries, series)
 	}
-	if !r.DuplicateResult || r.PromCommand.Step == 0 {
+	if !r.DuplicateResult || r.PromCommand.Step == 0 || len((*promSeries)[len(*promSeries)-1].Points) > 1 {
 		return nil
 	}
 	// For every evaluation while the value remains same, the timestamp for that
@@ -296,7 +324,7 @@ func Row2Point(row []interface{}) (promql.Point, error) {
 	point := promql.Point{
 		T: timestamp.FromTime(ts),
 	}
-	switch number := row[len(row)-1].(type) {
+	switch number := row[1].(type) {
 	case json.Number:
 		if v, err := number.Float64(); err == nil {
 			point.V = v
