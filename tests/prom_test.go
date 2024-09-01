@@ -2678,6 +2678,27 @@ func TestServer_PromQuery_Compatibility(t *testing.T) {
 			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"__name__":"up","instance":"localhost:7070","job":"container"},"value":[1709258357.955,"6"]},{"metric":{"__name__":"up","instance":"localhost:8080","job":"container"},"value":[1709258357.955,"5"]},{"metric":{"__name__":"up","instance":"localhost:9090","job":"container"},"value":[1709258357.955,"4"]},{"metric":{"__name__":"up","instance":"localhost:9090","job":"prometheus"},"value":[1709258357.955,"3"]}]}}`,
 			path:    "/api/v1/query",
 		},
+		&Query{
+			name:    "label names",
+			params:  url.Values{"db": []string{"db0"}},
+			command: ``,
+			exp:     `{"status":"success","data":["__name__","instance","job"]}`,
+			path:    "/api/v1/labels",
+		},
+		&Query{
+			name:    "label values",
+			params:  url.Values{"db": []string{"db0"}},
+			command: ``,
+			exp:     `{"status":"success","data":["container","prometheus"]}`,
+			path:    "/api/v1/label/job/values",
+		},
+		&Query{
+			name:    "series",
+			params:  url.Values{"db": []string{"db0"}, "match[]": []string{"up"}},
+			command: ``,
+			exp:     `{"status":"success","data":[{"__name__":"up","instance":"localhost:7070","job":"container"},{"__name__":"up","instance":"localhost:8080","job":"container"},{"__name__":"up","instance":"localhost:9090","job":"container"},{"__name__":"up","instance":"localhost:9090","job":"prometheus"}]}`,
+			path:    "/api/v1/series",
+		},
 	}...)
 
 	for i, query := range test.queries {

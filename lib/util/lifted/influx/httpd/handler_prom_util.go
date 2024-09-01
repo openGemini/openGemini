@@ -73,8 +73,8 @@ func isPromReportedError(err error) bool {
 }
 
 var (
-	minTime = time.Unix(math.MinInt64/1000+62135596801, 0).UTC()
-	maxTime = time.Unix(math.MaxInt64/1000-62135596801, 999999999).UTC()
+	minTime = time.Unix(0, influxql.MinTime).UTC()
+	maxTime = time.Unix(0, influxql.MaxTime).UTC()
 
 	minTimeFormatted = minTime.Format(time.RFC3339Nano)
 	maxTimeFormatted = maxTime.Format(time.RFC3339Nano)
