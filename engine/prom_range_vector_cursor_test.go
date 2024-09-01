@@ -16,6 +16,7 @@ package engine_test
 
 import (
 	"fmt"
+	"math"
 	"testing"
 	"time"
 
@@ -85,6 +86,21 @@ var srcRecs4 = []*record.Record{
 	genRec(inSchema,
 		[]int{1},
 		[]float64{15},
+		[]int64{15 * 1e9}),
+}
+
+var srcRecs5 = []*record.Record{
+	genRec(inSchema,
+		[]int{1, 1, 1},
+		[]float64{3, 2, 5},
+		[]int64{2 * 1e9, 3 * 1e9, 5 * 1e9}),
+	genRec(inSchema,
+		[]int{1, 1, 1},
+		[]float64{15, 11, 9},
+		[]int64{9 * 1e9, 10 * 1e9, 11 * 1e9}),
+	genRec(inSchema,
+		[]int{1},
+		[]float64{10},
 		[]int64{15 * 1e9}),
 }
 
@@ -903,7 +919,7 @@ func TestMaxFunctions(t *testing.T) {
 func TestLastFunctions(t *testing.T) {
 	exprOpt := []hybridqp.ExprOptions{
 		{
-			Expr: &influxql.Call{Name: "last_over_time", Args: []influxql.Expr{hybridqp.MustParseExpr("float")}},
+			Expr: &influxql.Call{Name: "last_over_time_prom", Args: []influxql.Expr{hybridqp.MustParseExpr("float")}},
 			Ref:  influxql.VarRef{Val: "float", Type: influx.Field_Type_Float},
 		},
 	}
@@ -1241,5 +1257,705 @@ func TestPredictLinearFunctions(t *testing.T) {
 	)
 	t.Run("deriv_function5", func(t *testing.T) {
 		testRangeVectorCursor(t, inSchema, outSchema, srcRecs4, dstRecs5, exprOpt, querySchema)
+	})
+}
+
+func TestStdVarOverTime(t *testing.T) {
+	exprOpt := []hybridqp.ExprOptions{
+		{
+			Expr: &influxql.Call{Name: "stdvar_over_time_prom", Args: []influxql.Expr{hybridqp.MustParseExpr("float"), hybridqp.MustParseExpr("2")}},
+			Ref:  influxql.VarRef{Val: "float", Type: influx.Field_Type_Float},
+		},
+	}
+
+	//// 1. stdvar_over_time(value[5]) start=1,end=19,step=2
+	querySchema := executor.NewQuerySchema(nil, nil, opt5, nil)
+
+	var dstRecs1 []*record.Record
+	dstRecs1 = append(dstRecs1,
+		genRec(inSchema,
+			[]int{1, 1, 1, 1, 1},
+			[]float64{0.25, 1.5555555555555554, 1.5555555555555554, 4, 0.6666666666666666},
+			[]int64{3000000000, 5000000000, 7000000000, 9000000000, 11000000000}),
+		genRec(inSchema,
+			[]int{1, 1, 1, 1},
+			[]float64{0.6666666666666666, 4.666666666666667, 0, 0},
+			[]int64{13000000000, 15000000000, 17000000000, 19000000000}),
+	)
+	t.Run("stdvar_over_time1", func(t *testing.T) {
+		testRangeVectorCursor(t, inSchema, outSchema, srcRecs1, dstRecs1, exprOpt, querySchema)
+	})
+
+	// 2. stdvar_over_time(value[3]) start=1,end=19,step=2
+	var dstRecs2 []*record.Record
+	dstRecs2 = append(dstRecs2,
+		genRec(inSchema,
+			[]int{1, 1, 1, 1, 1},
+			[]float64{0.25, 1.5555555555555554, 0, 0, 0.6666666666666666},
+			[]int64{3000000000, 5000000000, 7000000000, 9000000000, 11000000000}),
+		genRec(inSchema,
+			[]int{1, 1, 1},
+			[]float64{0.25, 0, 0},
+			[]int64{13000000000, 15000000000, 17000000000}),
+	)
+	querySchema = executor.NewQuerySchema(nil, nil, opt6, nil)
+	t.Run("stdvar_over_time2", func(t *testing.T) {
+		testRangeVectorCursor(t, inSchema, outSchema, srcRecs1, dstRecs2, exprOpt, querySchema)
+	})
+
+	// 3. stdvar_over_time(value[5]) start=2,end=18,step=2
+	var dstRecs3 []*record.Record
+	dstRecs3 = append(dstRecs3,
+		genRec(inSchema,
+			[]int{1, 1, 1},
+			[]float64{0, 0.25, 1.5555555555555554},
+			[]int64{2000000000, 4000000000, 6000000000}),
+		genRec(inSchema,
+			[]int{1, 1, 1},
+			[]float64{1, 4.666666666666667, 0.6666666666666666},
+			[]int64{8000000000, 10000000000, 12000000000}),
+		genRec(inSchema,
+			[]int{1, 1, 1},
+			[]float64{0.6666666666666666, 4, 0},
+			[]int64{14000000000, 16000000000, 18000000000}),
+	)
+	querySchema = executor.NewQuerySchema(nil, nil, opt1, nil)
+	t.Run("stdvar_over_time3", func(t *testing.T) {
+		testRangeVectorCursor(t, inSchema, outSchema, srcRecs1, dstRecs3, exprOpt, querySchema)
+	})
+
+	//4. stdvar_over_time(value[3]) start=2,end=18,step=2
+	var dstRecs4 []*record.Record
+	dstRecs4 = append(dstRecs4,
+		genRec(inSchema,
+			[]int{1, 1, 1},
+			[]float64{0, 0.25, 1},
+			[]int64{2000000000, 4000000000, 6000000000}),
+		genRec(inSchema,
+			[]int{1, 1, 1},
+			[]float64{0, 0.25, 0.6666666666666666},
+			[]int64{8000000000, 10000000000, 12000000000}),
+		genRec(inSchema,
+			[]int{1, 1, 1},
+			[]float64{0, 0, 0},
+			[]int64{14000000000, 16000000000, 18000000000}),
+	)
+	querySchema = executor.NewQuerySchema(nil, nil, opt2, nil)
+	t.Run("stdvar_over_time4", func(t *testing.T) {
+		testRangeVectorCursor(t, inSchema, outSchema, srcRecs1, dstRecs4, exprOpt, querySchema)
+	})
+
+	// 5. stdvar_over_time(value[5]) start=1,end=19,step=2
+	querySchema = executor.NewQuerySchema(nil, nil, opt5, nil)
+
+	var dstRecs5 []*record.Record
+	dstRecs5 = append(dstRecs5,
+		genRec(inSchema,
+			[]int{1, 1, 1, 1, 1},
+			[]float64{0.25, 1.5555555555555554, 1.5555555555555554, 4, 0.6666666666666666},
+			[]int64{3000000000, 5000000000, 7000000000, 9000000000, 11000000000}),
+		genRec(inSchema,
+			[]int{1, 1, 1, 1},
+			[]float64{0.6666666666666666, 4.666666666666667, 0, 0},
+			[]int64{13000000000, 15000000000, 17000000000, 19000000000}),
+	)
+	t.Run("stdvar_over_time5", func(t *testing.T) {
+		testRangeVectorCursor(t, inSchema, outSchema, srcRecs4, dstRecs5, exprOpt, querySchema)
+	})
+}
+
+func TestStdDevOverTime(t *testing.T) {
+	exprOpt := []hybridqp.ExprOptions{
+		{
+			Expr: &influxql.Call{Name: "stddev_over_time_prom", Args: []influxql.Expr{hybridqp.MustParseExpr("float"), hybridqp.MustParseExpr("2")}},
+			Ref:  influxql.VarRef{Val: "float", Type: influx.Field_Type_Float},
+		},
+	}
+
+	// 1. stdvar_over_time(value[5]) start=1,end=19,step=2
+	querySchema := executor.NewQuerySchema(nil, nil, opt5, nil)
+
+	var dstRecs1 []*record.Record
+	dstRecs1 = append(dstRecs1,
+		genRec(inSchema,
+			[]int{1, 1, 1, 1, 1},
+			[]float64{0.5, 1.247219128924647, 1.247219128924647, 2, 0.816496580927726},
+			[]int64{3000000000, 5000000000, 7000000000, 9000000000, 11000000000}),
+		genRec(inSchema,
+			[]int{1, 1, 1, 1},
+			[]float64{0.816496580927726, 2.160246899469287, 0, 0},
+			[]int64{13000000000, 15000000000, 17000000000, 19000000000}),
+	)
+	t.Run("stddev_over_time1", func(t *testing.T) {
+		testRangeVectorCursor(t, inSchema, outSchema, srcRecs1, dstRecs1, exprOpt, querySchema)
+	})
+
+	// 2. stdvar_over_time(value[3]) start=1,end=19,step=2
+	var dstRecs2 []*record.Record
+	dstRecs2 = append(dstRecs2,
+		genRec(inSchema,
+			[]int{1, 1, 1, 1, 1},
+			[]float64{0.5, 1.247219128924647, 0, 0, 0.816496580927726},
+			[]int64{3000000000, 5000000000, 7000000000, 9000000000, 11000000000}),
+		genRec(inSchema,
+			[]int{1, 1, 1},
+			[]float64{0.5, 0, 0},
+			[]int64{13000000000, 15000000000, 17000000000}),
+	)
+	querySchema = executor.NewQuerySchema(nil, nil, opt6, nil)
+	t.Run("stddev_over_time2", func(t *testing.T) {
+		testRangeVectorCursor(t, inSchema, outSchema, srcRecs1, dstRecs2, exprOpt, querySchema)
+	})
+
+	// 3. stdvar_over_time(value[5]) start=2,end=18,step=2
+	var dstRecs3 []*record.Record
+	dstRecs3 = append(dstRecs3,
+		genRec(inSchema,
+			[]int{1, 1, 1},
+			[]float64{0, 0.5, 1.247219128924647},
+			[]int64{2000000000, 4000000000, 6000000000}),
+		genRec(inSchema,
+			[]int{1, 1, 1},
+			[]float64{1, 2.160246899469287, 0.816496580927726},
+			[]int64{8000000000, 10000000000, 12000000000}),
+		genRec(inSchema,
+			[]int{1, 1, 1},
+			[]float64{0.816496580927726, 2, 0},
+			[]int64{14000000000, 16000000000, 18000000000}),
+	)
+	querySchema = executor.NewQuerySchema(nil, nil, opt1, nil)
+	t.Run("stddev_over_time3", func(t *testing.T) {
+		testRangeVectorCursor(t, inSchema, outSchema, srcRecs1, dstRecs3, exprOpt, querySchema)
+	})
+
+	//4. stdvar_over_time(value[3]) start=2,end=18,step=2
+	var dstRecs4 []*record.Record
+	dstRecs4 = append(dstRecs4,
+		genRec(inSchema,
+			[]int{1, 1, 1},
+			[]float64{0, 0.5, 1},
+			[]int64{2000000000, 4000000000, 6000000000}),
+		genRec(inSchema,
+			[]int{1, 1, 1},
+			[]float64{0, 0.5, 0.816496580927726},
+			[]int64{8000000000, 10000000000, 12000000000}),
+		genRec(inSchema,
+			[]int{1, 1, 1},
+			[]float64{0, 0, 0},
+			[]int64{14000000000, 16000000000, 18000000000}),
+	)
+	querySchema = executor.NewQuerySchema(nil, nil, opt2, nil)
+	t.Run("stddev_over_time4", func(t *testing.T) {
+		testRangeVectorCursor(t, inSchema, outSchema, srcRecs1, dstRecs4, exprOpt, querySchema)
+	})
+
+	// 5. stdvar_over_time(value[5]) start=1,end=19,step=2
+	querySchema = executor.NewQuerySchema(nil, nil, opt5, nil)
+
+	var dstRecs5 []*record.Record
+	dstRecs5 = append(dstRecs5,
+		genRec(inSchema,
+			[]int{1, 1, 1, 1, 1},
+			[]float64{0.5, 1.247219128924647, 1.247219128924647, 2, 0.816496580927726},
+			[]int64{3000000000, 5000000000, 7000000000, 9000000000, 11000000000}),
+		genRec(inSchema,
+			[]int{1, 1, 1, 1},
+			[]float64{0.816496580927726, 2.160246899469287, 0, 0},
+			[]int64{13000000000, 15000000000, 17000000000, 19000000000}),
+	)
+	t.Run("stddev_over_time5", func(t *testing.T) {
+		testRangeVectorCursor(t, inSchema, outSchema, srcRecs4, dstRecs5, exprOpt, querySchema)
+	})
+}
+
+func TestHoltWinters(t *testing.T) {
+	exprOpt := []hybridqp.ExprOptions{
+		{
+			Expr: &influxql.Call{Name: "holt_winters_prom", Args: []influxql.Expr{hybridqp.MustParseExpr("float"), hybridqp.MustParseExpr("0.5"), hybridqp.MustParseExpr("0.5")}},
+			Ref:  influxql.VarRef{Val: "float", Type: influx.Field_Type_Float},
+		},
+	}
+
+	// 1. holt_winters(value[5],0.5,0.5) start=1,end=19,step=2
+	querySchema := executor.NewQuerySchema(nil, nil, opt5, nil)
+
+	var dstRecs1 []*record.Record
+	dstRecs1 = append(dstRecs1,
+		genRec(inSchema,
+			[]int{1, 1, 1, 1, 1},
+			[]float64{3, 4.5, 4.5, 9, 11},
+			[]int64{3000000000, 5000000000, 7000000000, 9000000000, 11000000000}),
+		genRec(inSchema,
+			[]int{1, 1, 1, 1},
+			[]float64{11, 13.5},
+			[]int64{13000000000, 15000000000}),
+	)
+	t.Run("holt_winters1", func(t *testing.T) {
+		testRangeVectorCursor(t, inSchema, outSchema, srcRecs1, dstRecs1, exprOpt, querySchema)
+	})
+
+	// 2. holt_winters(value[3],0.5,0.5) start=1,end=19,step=2
+	var dstRecs2 []*record.Record
+	dstRecs2 = append(dstRecs2,
+		genRec(inSchema,
+			[]int{1, 1, 1},
+			[]float64{3, 4.5, 11},
+			[]int64{3000000000, 5000000000, 11000000000}),
+		genRec(inSchema,
+			[]int{1},
+			[]float64{11},
+			[]int64{13000000000}),
+	)
+	querySchema = executor.NewQuerySchema(nil, nil, opt6, nil)
+	t.Run("holt_winters2", func(t *testing.T) {
+		testRangeVectorCursor(t, inSchema, outSchema, srcRecs1, dstRecs2, exprOpt, querySchema)
+	})
+
+	// 3. holt_winters(value[5],0.5,0.5) start=2,end=18,step=2
+	var dstRecs3 []*record.Record
+	dstRecs3 = append(dstRecs3,
+		genRec(inSchema,
+			[]int{1, 1, 1, 1, 1},
+			[]float64{3, 4.5, 5, 11.5, 11},
+			[]int64{4000000000, 6000000000, 8000000000, 10000000000, 12000000000}),
+		genRec(inSchema,
+			[]int{1, 1},
+			[]float64{11, 15},
+			[]int64{14000000000, 16000000000}),
+	)
+	querySchema = executor.NewQuerySchema(nil, nil, opt1, nil)
+	t.Run("holt_winters3", func(t *testing.T) {
+		testRangeVectorCursor(t, inSchema, outSchema, srcRecs1, dstRecs3, exprOpt, querySchema)
+	})
+
+	//4. holt_winters(value[3],0.5,0.5) start=2,end=18,step=2
+	var dstRecs4 []*record.Record
+	dstRecs4 = append(dstRecs4,
+		genRec(inSchema,
+			[]int{1, 1, 1, 1},
+			[]float64{3, 5, 10, 11},
+			[]int64{4000000000, 6000000000, 10000000000, 12000000000}),
+	)
+	querySchema = executor.NewQuerySchema(nil, nil, opt2, nil)
+	t.Run("holt_winters4", func(t *testing.T) {
+		testRangeVectorCursor(t, inSchema, outSchema, srcRecs1, dstRecs4, exprOpt, querySchema)
+	})
+
+	// 5. holt_winters(value[5],0.5,0.5) start=1,end=19,step=2
+	querySchema = executor.NewQuerySchema(nil, nil, opt5, nil)
+
+	var dstRecs5 []*record.Record
+	dstRecs5 = append(dstRecs5,
+		genRec(inSchema,
+			[]int{1, 1, 1, 1, 1},
+			[]float64{2, 3, 3, 9, 11},
+			[]int64{3000000000, 5000000000, 7000000000, 9000000000, 11000000000}),
+		genRec(inSchema,
+			[]int{1, 1, 1, 1},
+			[]float64{11, 13.5},
+			[]int64{13000000000, 15000000000}),
+	)
+	t.Run("holt_winters5", func(t *testing.T) {
+		testRangeVectorCursor(t, inSchema, outSchema, srcRecs4, dstRecs5, exprOpt, querySchema)
+	})
+
+	exprOpt1 := []hybridqp.ExprOptions{
+		{
+			Expr: &influxql.Call{Name: "holt_winters_prom", Args: []influxql.Expr{hybridqp.MustParseExpr("float"), hybridqp.MustParseExpr("1"), hybridqp.MustParseExpr("1")}},
+			Ref:  influxql.VarRef{Val: "float", Type: influx.Field_Type_Float},
+		},
+	}
+	// 5. holt_winters(value[5],0.5,0.5) start=1,end=19,step=2
+	querySchema = executor.NewQuerySchema(nil, nil, opt5, nil)
+
+	var dstRecs6 []*record.Record
+	dstRecs6 = append(dstRecs6,
+		genRec(inSchema,
+			[]int{1, 1, 1, 1, 1},
+			[]float64{2, 5, 5, 9, 11},
+			[]int64{3000000000, 5000000000, 7000000000, 9000000000, 11000000000}),
+		genRec(inSchema,
+			[]int{1, 1},
+			[]float64{11, 15},
+			[]int64{13000000000, 15000000000}),
+	)
+	t.Run("holt_winters5", func(t *testing.T) {
+		testRangeVectorCursor(t, inSchema, outSchema, srcRecs4, dstRecs6, exprOpt1, querySchema)
+	})
+}
+
+func TestChanges(t *testing.T) {
+	exprOpt := []hybridqp.ExprOptions{
+		{
+			Expr: &influxql.Call{Name: "changes_prom", Args: []influxql.Expr{hybridqp.MustParseExpr("float")}},
+			Ref:  influxql.VarRef{Val: "float", Type: influx.Field_Type_Float},
+		},
+	}
+
+	// 1. changes(value[5]) start=1,end=19,step=2
+	querySchema := executor.NewQuerySchema(nil, nil, opt5, nil)
+
+	var dstRecs1 []*record.Record
+	dstRecs1 = append(dstRecs1,
+		genRec(inSchema,
+			[]int{1, 1, 1, 1, 1},
+			[]float64{1, 2, 2, 1, 2},
+			[]int64{3000000000, 5000000000, 7000000000, 9000000000, 11000000000}),
+		genRec(inSchema,
+			[]int{1, 1, 1, 1},
+			[]float64{2, 2, 0, 0},
+			[]int64{13000000000, 15000000000, 17000000000, 19000000000}),
+	)
+	t.Run("changes1", func(t *testing.T) {
+		testRangeVectorCursor(t, inSchema, outSchema, srcRecs1, dstRecs1, exprOpt, querySchema)
+	})
+
+	// 2. changes(value[3]) start=1,end=19,step=2
+	var dstRecs2 []*record.Record
+	dstRecs2 = append(dstRecs2,
+		genRec(inSchema,
+			[]int{1, 1, 1, 1, 1},
+			[]float64{1, 2, 0, 0, 2},
+			[]int64{3000000000, 5000000000, 7000000000, 9000000000, 11000000000}),
+		genRec(inSchema,
+			[]int{1, 1, 1},
+			[]float64{1, 0, 0},
+			[]int64{13000000000, 15000000000, 17000000000}),
+	)
+	querySchema = executor.NewQuerySchema(nil, nil, opt6, nil)
+	t.Run("changes2", func(t *testing.T) {
+		testRangeVectorCursor(t, inSchema, outSchema, srcRecs1, dstRecs2, exprOpt, querySchema)
+	})
+
+	// 3. changes(value[5]) start=2,end=18,step=2
+	var dstRecs3 []*record.Record
+	dstRecs3 = append(dstRecs3,
+		genRec(inSchema,
+			[]int{1, 1, 1},
+			[]float64{0, 1, 2},
+			[]int64{2000000000, 4000000000, 6000000000}),
+		genRec(inSchema,
+			[]int{1, 1, 1},
+			[]float64{1, 2, 2},
+			[]int64{8000000000, 10000000000, 12000000000}),
+		genRec(inSchema,
+			[]int{1, 1, 1},
+			[]float64{2, 1, 0},
+			[]int64{14000000000, 16000000000, 18000000000}),
+	)
+	querySchema = executor.NewQuerySchema(nil, nil, opt1, nil)
+	t.Run("changes3", func(t *testing.T) {
+		testRangeVectorCursor(t, inSchema, outSchema, srcRecs1, dstRecs3, exprOpt, querySchema)
+	})
+
+	//4. changes(value[3]) start=2,end=18,step=2
+	var dstRecs4 []*record.Record
+	dstRecs4 = append(dstRecs4,
+		genRec(inSchema,
+			[]int{1, 1, 1},
+			[]float64{0, 1, 1},
+			[]int64{2000000000, 4000000000, 6000000000}),
+		genRec(inSchema,
+			[]int{1, 1, 1},
+			[]float64{0, 1, 2},
+			[]int64{8000000000, 10000000000, 12000000000}),
+		genRec(inSchema,
+			[]int{1, 1, 1},
+			[]float64{0, 0, 0},
+			[]int64{14000000000, 16000000000, 18000000000}),
+	)
+	querySchema = executor.NewQuerySchema(nil, nil, opt2, nil)
+	t.Run("changes4", func(t *testing.T) {
+		testRangeVectorCursor(t, inSchema, outSchema, srcRecs1, dstRecs4, exprOpt, querySchema)
+	})
+
+	// 5. changes(value[5]) start=1,end=19,step=2
+	querySchema = executor.NewQuerySchema(nil, nil, opt5, nil)
+
+	var dstRecs5 []*record.Record
+	dstRecs5 = append(dstRecs5,
+		genRec(inSchema,
+			[]int{1, 1, 1, 1, 1},
+			[]float64{1, 2, 2, 1, 2},
+			[]int64{3000000000, 5000000000, 7000000000, 9000000000, 11000000000}),
+		genRec(inSchema,
+			[]int{1, 1, 1, 1},
+			[]float64{2, 2, 0, 0},
+			[]int64{13000000000, 15000000000, 17000000000, 19000000000}),
+	)
+	t.Run("changes5", func(t *testing.T) {
+		testRangeVectorCursor(t, inSchema, outSchema, srcRecs4, dstRecs5, exprOpt, querySchema)
+	})
+}
+
+func TestQuantileOverTime(t *testing.T) {
+	exprOpt := []hybridqp.ExprOptions{
+		{
+			Expr: &influxql.Call{Name: "quantile_over_time_prom", Args: []influxql.Expr{hybridqp.MustParseExpr("float"), hybridqp.MustParseExpr("0.5")}},
+			Ref:  influxql.VarRef{Val: "float", Type: influx.Field_Type_Float},
+		},
+	}
+
+	// 1. quantile_over_time(0.5,value[5]) start=1,end=19,step=2
+	querySchema := executor.NewQuerySchema(nil, nil, opt5, nil)
+
+	var dstRecs1 []*record.Record
+	dstRecs1 = append(dstRecs1,
+		genRec(inSchema,
+			[]int{1, 1, 1, 1, 1},
+			[]float64{2.5, 3, 3, 7, 10},
+			[]int64{3000000000, 5000000000, 7000000000, 9000000000, 11000000000}),
+		genRec(inSchema,
+			[]int{1, 1, 1, 1},
+			[]float64{10, 11, 15, 15},
+			[]int64{13000000000, 15000000000, 17000000000, 19000000000}),
+	)
+	t.Run("quantile_over_time1", func(t *testing.T) {
+		testRangeVectorCursor(t, inSchema, outSchema, srcRecs1, dstRecs1, exprOpt, querySchema)
+	})
+
+	exprOpt2 := []hybridqp.ExprOptions{
+		{
+			Expr: &influxql.Call{Name: "quantile_over_time_prom", Args: []influxql.Expr{hybridqp.MustParseExpr("float"), hybridqp.MustParseExpr("2")}},
+			Ref:  influxql.VarRef{Val: "float", Type: influx.Field_Type_Float},
+		},
+	}
+
+	// 2. quantile_over_time(2,value[5]) start=1,end=19,step=2
+	var dstRecs2 []*record.Record
+	dstRecs2 = append(dstRecs2,
+		genRec(inSchema,
+			[]int{1, 1, 1, 1, 1},
+			[]float64{math.Inf(+1), math.Inf(+1), math.Inf(+1), math.Inf(+1), math.Inf(+1)},
+			[]int64{3000000000, 5000000000, 7000000000, 9000000000, 11000000000}),
+		genRec(inSchema,
+			[]int{1, 1, 1, 1},
+			[]float64{math.Inf(+1), math.Inf(+1), math.Inf(+1), math.Inf(+1)},
+			[]int64{13000000000, 15000000000, 17000000000, 19000000000}),
+	)
+	t.Run("quantile_over_time2", func(t *testing.T) {
+		testRangeVectorCursor(t, inSchema, outSchema, srcRecs1, dstRecs2, exprOpt2, querySchema)
+	})
+
+	exprOpt3 := []hybridqp.ExprOptions{
+		{
+			Expr: &influxql.Call{Name: "quantile_over_time_prom", Args: []influxql.Expr{hybridqp.MustParseExpr("float"), hybridqp.MustParseExpr("-1")}},
+			Ref:  influxql.VarRef{Val: "float", Type: influx.Field_Type_Float},
+		},
+	}
+
+	// 3. quantile_over_time(-1,value[5]) start=1,end=19,step=2
+	var dstRecs3 []*record.Record
+	dstRecs3 = append(dstRecs3,
+		genRec(inSchema,
+			[]int{1, 1, 1, 1, 1},
+			[]float64{math.Inf(-1), math.Inf(-1), math.Inf(-1), math.Inf(-1), math.Inf(-1)},
+			[]int64{3000000000, 5000000000, 7000000000, 9000000000, 11000000000}),
+		genRec(inSchema,
+			[]int{1, 1, 1, 1},
+			[]float64{math.Inf(-1), math.Inf(-1), math.Inf(-1), math.Inf(-1)},
+			[]int64{13000000000, 15000000000, 17000000000, 19000000000}),
+	)
+	t.Run("quantile_over_time3", func(t *testing.T) {
+		testRangeVectorCursor(t, inSchema, outSchema, srcRecs1, dstRecs3, exprOpt3, querySchema)
+	})
+
+	// 2. quantile_over_time(0.5,value[3]) start=1,end=19,step=2
+	var dstRecs4 []*record.Record
+	dstRecs4 = append(dstRecs4,
+		genRec(inSchema,
+			[]int{1, 1, 1, 1, 1},
+			[]float64{2.5, 3, 5, 9, 10},
+			[]int64{3000000000, 5000000000, 7000000000, 9000000000, 11000000000}),
+		genRec(inSchema,
+			[]int{1, 1, 1},
+			[]float64{10.5, 15, 15},
+			[]int64{13000000000, 15000000000, 17000000000}),
+	)
+	querySchema = executor.NewQuerySchema(nil, nil, opt6, nil)
+	t.Run("quantile_over_time4", func(t *testing.T) {
+		testRangeVectorCursor(t, inSchema, outSchema, srcRecs1, dstRecs4, exprOpt, querySchema)
+	})
+
+	// 3. quantile_over_time(0.5,value[5]) start=2,end=18,step=2
+	var dstRecs5 []*record.Record
+	dstRecs5 = append(dstRecs5,
+		genRec(inSchema,
+			[]int{1, 1, 1},
+			[]float64{2, 2.5, 3},
+			[]int64{2000000000, 4000000000, 6000000000}),
+		genRec(inSchema,
+			[]int{1, 1, 1},
+			[]float64{4, 9, 10},
+			[]int64{8000000000, 10000000000, 12000000000}),
+		genRec(inSchema,
+			[]int{1, 1, 1},
+			[]float64{10, 13, 15},
+			[]int64{14000000000, 16000000000, 18000000000}),
+	)
+	querySchema = executor.NewQuerySchema(nil, nil, opt1, nil)
+	t.Run("quantile_over_time5", func(t *testing.T) {
+		testRangeVectorCursor(t, inSchema, outSchema, srcRecs1, dstRecs5, exprOpt, querySchema)
+	})
+
+	//4. quantile_over_time(0.5,value[3]) start=2,end=18,step=2
+	var dstRecs6 []*record.Record
+	dstRecs6 = append(dstRecs6,
+		genRec(inSchema,
+			[]int{1, 1, 1},
+			[]float64{2, 2.5, 4},
+			[]int64{2000000000, 4000000000, 6000000000}),
+		genRec(inSchema,
+			[]int{1, 1, 1},
+			[]float64{5, 9.5, 10},
+			[]int64{8000000000, 10000000000, 12000000000}),
+		genRec(inSchema,
+			[]int{1, 1, 1},
+			[]float64{11, 15, 15},
+			[]int64{14000000000, 16000000000, 18000000000}),
+	)
+	querySchema = executor.NewQuerySchema(nil, nil, opt2, nil)
+	t.Run("quantile_over_time6", func(t *testing.T) {
+		testRangeVectorCursor(t, inSchema, outSchema, srcRecs1, dstRecs6, exprOpt, querySchema)
+	})
+
+	// 5. stdvar_over_time(value[5]) start=1,end=19,step=2
+	querySchema = executor.NewQuerySchema(nil, nil, opt5, nil)
+
+	var dstRecs7 []*record.Record
+	dstRecs7 = append(dstRecs7,
+		genRec(inSchema,
+			[]int{1, 1, 1, 1, 1},
+			[]float64{2.5, 3, 3, 7, 10},
+			[]int64{3000000000, 5000000000, 7000000000, 9000000000, 11000000000}),
+		genRec(inSchema,
+			[]int{1, 1, 1, 1},
+			[]float64{10, 11, 15, 15},
+			[]int64{13000000000, 15000000000, 17000000000, 19000000000}),
+	)
+	t.Run("quantile_over_time7", func(t *testing.T) {
+		testRangeVectorCursor(t, inSchema, outSchema, srcRecs4, dstRecs7, exprOpt, querySchema)
+	})
+}
+
+func TestResets(t *testing.T) {
+	exprOpt := []hybridqp.ExprOptions{
+		{
+			Expr: &influxql.Call{Name: "resets_prom", Args: []influxql.Expr{hybridqp.MustParseExpr("float")}},
+			Ref:  influxql.VarRef{Val: "float", Type: influx.Field_Type_Float},
+		},
+	}
+
+	// 1. resets(value[5]) start=1,end=19,step=2
+	querySchema := executor.NewQuerySchema(nil, nil, opt5, nil)
+
+	var dstRecs1 []*record.Record
+	dstRecs1 = append(dstRecs1,
+		genRec(inSchema,
+			[]int{1, 1, 1, 1, 1},
+			[]float64{0, 0, 0, 0, 0},
+			[]int64{3000000000, 5000000000, 7000000000, 9000000000, 11000000000}),
+		genRec(inSchema,
+			[]int{1, 1, 1, 1},
+			[]float64{0, 0, 0, 0},
+			[]int64{13000000000, 15000000000, 17000000000, 19000000000}),
+	)
+	t.Run("resets1", func(t *testing.T) {
+		testRangeVectorCursor(t, inSchema, outSchema, srcRecs1, dstRecs1, exprOpt, querySchema)
+	})
+
+	// 2. resets(value[3]) start=1,end=19,step=2
+	var dstRecs4 []*record.Record
+	dstRecs4 = append(dstRecs4,
+		genRec(inSchema,
+			[]int{1, 1, 1, 1, 1},
+			[]float64{0, 0, 0, 0, 0},
+			[]int64{3000000000, 5000000000, 7000000000, 9000000000, 11000000000}),
+		genRec(inSchema,
+			[]int{1, 1, 1},
+			[]float64{0, 0, 0},
+			[]int64{13000000000, 15000000000, 17000000000}),
+	)
+	querySchema = executor.NewQuerySchema(nil, nil, opt6, nil)
+	t.Run("resets2", func(t *testing.T) {
+		testRangeVectorCursor(t, inSchema, outSchema, srcRecs1, dstRecs4, exprOpt, querySchema)
+	})
+
+	// 3. resets(value[5]) start=2,end=18,step=2
+	var dstRecs5 []*record.Record
+	dstRecs5 = append(dstRecs5,
+		genRec(inSchema,
+			[]int{1, 1, 1},
+			[]float64{0, 0, 0},
+			[]int64{2000000000, 4000000000, 6000000000}),
+		genRec(inSchema,
+			[]int{1, 1, 1},
+			[]float64{0, 0, 0},
+			[]int64{8000000000, 10000000000, 12000000000}),
+		genRec(inSchema,
+			[]int{1, 1, 1},
+			[]float64{0, 0, 0},
+			[]int64{14000000000, 16000000000, 18000000000}),
+	)
+	querySchema = executor.NewQuerySchema(nil, nil, opt1, nil)
+	t.Run("resets3", func(t *testing.T) {
+		testRangeVectorCursor(t, inSchema, outSchema, srcRecs1, dstRecs5, exprOpt, querySchema)
+	})
+
+	//4. resets(value[3]) start=2,end=18,step=2
+	var dstRecs6 []*record.Record
+	dstRecs6 = append(dstRecs6,
+		genRec(inSchema,
+			[]int{1, 1, 1},
+			[]float64{0, 0, 0},
+			[]int64{2000000000, 4000000000, 6000000000}),
+		genRec(inSchema,
+			[]int{1, 1, 1},
+			[]float64{0, 0, 0},
+			[]int64{8000000000, 10000000000, 12000000000}),
+		genRec(inSchema,
+			[]int{1, 1, 1},
+			[]float64{0, 0, 0},
+			[]int64{14000000000, 16000000000, 18000000000}),
+	)
+	querySchema = executor.NewQuerySchema(nil, nil, opt2, nil)
+	t.Run("resets4", func(t *testing.T) {
+		testRangeVectorCursor(t, inSchema, outSchema, srcRecs1, dstRecs6, exprOpt, querySchema)
+	})
+
+	// 5. resets(value[5]) start=1,end=19,step=2
+	querySchema = executor.NewQuerySchema(nil, nil, opt5, nil)
+
+	var dstRecs7 []*record.Record
+	dstRecs7 = append(dstRecs7,
+		genRec(inSchema,
+			[]int{1, 1, 1, 1, 1},
+			[]float64{1, 1, 1, 0, 0},
+			[]int64{3000000000, 5000000000, 7000000000, 9000000000, 11000000000}),
+		genRec(inSchema,
+			[]int{1, 1, 1, 1},
+			[]float64{0, 0, 0, 0},
+			[]int64{13000000000, 15000000000, 17000000000, 19000000000}),
+	)
+	t.Run("resets5", func(t *testing.T) {
+		testRangeVectorCursor(t, inSchema, outSchema, srcRecs4, dstRecs7, exprOpt, querySchema)
+	})
+
+	// 5. resets(value[5]) start=1,end=19,step=2
+	querySchema = executor.NewQuerySchema(nil, nil, opt5, nil)
+
+	var dstRecs8 []*record.Record
+	dstRecs8 = append(dstRecs8,
+		genRec(inSchema,
+			[]int{1, 1, 1, 1, 1},
+			[]float64{1, 1, 1, 0, 2},
+			[]int64{3000000000, 5000000000, 7000000000, 9000000000, 11000000000}),
+		genRec(inSchema,
+			[]int{1, 1, 1, 1},
+			[]float64{2, 1, 0, 0},
+			[]int64{13000000000, 15000000000, 17000000000, 19000000000}),
+	)
+	t.Run("resets6", func(t *testing.T) {
+		testRangeVectorCursor(t, inSchema, outSchema, srcRecs5, dstRecs8, exprOpt, querySchema)
 	})
 }

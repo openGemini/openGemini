@@ -24,6 +24,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
+	model "github.com/prometheus/prometheus/pkg/value"
 )
 
 // InstantVectorCursor is used to sample and process data for prom instant_query or range_query.
@@ -304,6 +305,10 @@ func newFloatSampler(fn float2lFloatReduce, fv appendValueFunc) *floatSampler {
 }
 
 func (r *floatSampler) PopulateByPrevious(outRecord *record.Record, param *ReducerParams, nextStep, lastStep int64, outOrdinal, timeIdx int) {
+	if model.IsStaleNaN(r.prevBuf.value) {
+		return
+	}
+
 	for t := nextStep; t <= lastStep; t += param.step {
 		if r.prevBuf.time < t-param.lookBackDelta {
 			break
@@ -345,13 +350,16 @@ func (r *floatSampler) Aggregate(p *ReducerEndpoint, param *ReducerParams) {
 			ts = inRecord.Time(idx)
 		}
 		if !isNil {
+			if model.IsStaleNaN(value) {
+				continue
+			}
 			r.fv(outRecord.Column(outOrdinal), value)
 			// multi-column aggregation calculation time is processed only once.
 			if outOrdinal == 0 {
 				outRecord.AppendTime(ts + r.offset)
 			}
 		} else {
-			if r.prevBuf.isNil || r.prevBuf.time < ts-param.lookBackDelta {
+			if r.prevBuf.isNil || r.prevBuf.time < ts-param.lookBackDelta || model.IsStaleNaN(r.prevBuf.value) {
 				continue
 			}
 			r.fv(outRecord.Column(outOrdinal), r.prevBuf.value)
@@ -361,18 +369,25 @@ func (r *floatSampler) Aggregate(p *ReducerEndpoint, param *ReducerParams) {
 			}
 		}
 	}
+	// get the last row of each record as the latest point and assign the value to prev.
 	idx, value, isNil := r.fn(&inRecord.ColVals[inOrdinal], values, 0, inRecord.RowNums())
 	if !isNil {
-		r.prevBuf.time = inRecord.Time(idx)
-		r.prevBuf.index = int(param.firstStep + int64(numStep-1)*param.step)
-		r.prevBuf.value = value
-		r.prevBuf.isNil = false
+		r.prevBuf.set(int(param.firstStep+int64(numStep-1)*param.step), inRecord.Time(idx), value)
 	}
 	if param.step > 0 && param.lastRec && !r.prevBuf.isNil {
-		// padding is required after the last rec.
+		// pad after the last rec.
 		nextStep := ts + param.step
 		if nextStep <= param.lastStep {
 			r.PopulateByPrevious(outRecord, param, nextStep, param.lastStep, outOrdinal, timeIdx)
 		}
 	}
+	if param.lastRec {
+		// reset after processing the last rec.
+		r.reset()
+	}
+}
+
+func (r *floatSampler) reset() {
+	r.offset = 0
+	r.prevBuf.reset()
 }

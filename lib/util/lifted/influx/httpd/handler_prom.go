@@ -287,6 +287,8 @@ func (h *Handler) servePromReadBase(w http.ResponseWriter, r *http.Request, user
 		}()
 	}
 
+	h.Logger.Info("influxql", zap.String("query", q.String()))
+
 	// Execute query
 	results := h.QueryExecutor.ExecuteQuery(q, opts, closing, qDuration)
 
@@ -448,6 +450,10 @@ func (h *Handler) servePromBaseQuery(w http.ResponseWriter, r *http.Request, use
 	}
 	nodes, err := transpiler.Transpile(expr)
 	if err != nil {
+		if IsErrWithEmptyResp(err) {
+			WritePromEmptyResp(rw, expr, &promCommand)
+			return
+		}
 		respondError(w, &apiError{errorBadData, err}, nil)
 		return
 	}
@@ -858,4 +864,37 @@ func (t *PromTimeValuer) Call(name string, args []interface{}) (interface{}, boo
 }
 
 func (t *PromTimeValuer) SetValuer(_ influxql.Valuer, _ int) {
+}
+
+func WritePromEmptyResp(rw ResponseWriter, expr parser.Expr, cmd *promql2influxql.PromCommand) {
+	var dt parser.ValueType
+	switch expr.Type() {
+	case parser.ValueTypeMatrix:
+		dt = parser.ValueTypeMatrix
+	case parser.ValueTypeVector:
+		switch cmd.DataType {
+		case promql2influxql.GRAPH_DATA:
+			dt = parser.ValueTypeMatrix
+		default:
+			dt = parser.ValueTypeVector
+		}
+	case parser.ValueTypeScalar:
+		switch cmd.DataType {
+		case promql2influxql.GRAPH_DATA:
+			dt = parser.ValueTypeMatrix
+		default:
+			dt = parser.ValueTypeScalar
+		}
+	default:
+		dt = parser.ValueTypeNone
+	}
+	n, _ := rw.WritePromResponse(PromResponse{
+		Status: StatusSuccess,
+		Data:   promql2influxql.NewPromResult([]string{}, string(dt)),
+	})
+	atomic.AddInt64(&statistics.HandlerStat.QueryRequestBytesTransmitted, int64(n))
+}
+
+func IsErrWithEmptyResp(err error) bool {
+	return strings.Contains(err.Error(), "invalid measurement")
 }

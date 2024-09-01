@@ -44,6 +44,20 @@ func TestServer_PromQuery_Basic(t *testing.T) {
 		&Query{
 			name:    "instant query",
 			params:  url.Values{"db": []string{"db0"}, "time": []string{"1709258327.955"}},
+			command: `up + (1 != bool 2)`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"instance":"localhost:9090","job":"prometheus"},"value":[1709258327.955,"3"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "instant query",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"1709258327.955"}},
+			command: `up + (1 == bool 2)`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"instance":"localhost:9090","job":"prometheus"},"value":[1709258327.955,"2"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "instant query",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"1709258327.955"}},
 			command: `up`,
 			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"__name__":"up","instance":"localhost:9090","job":"prometheus"},"value":[1709258327.955,"2"]}]}}`,
 			path:    "/api/v1/query",
@@ -130,6 +144,13 @@ func TestServer_PromQuery_Basic(t *testing.T) {
 			params:  url.Values{"db": []string{"db0"}, "time": []string{"1709258357.955"}},
 			command: `topk(3, sum(up{job="container"}) by (job))`,
 			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"job":"container"},"value":[1709258357.955,"15"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "instant query: top-sum group by",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"1709258357"}},
+			command: `topk(3, sum by (job, instance) (increase(up[2m]))/2)`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"instance":"localhost:9090","job":"prometheus"},"value":[1709258357,"1.9681666666666666"]}]}}`,
 			path:    "/api/v1/query",
 		},
 		&Query{
@@ -336,6 +357,13 @@ func TestServer_PromQuery_Basic(t *testing.T) {
 			path:    "/api/v1/query_range",
 		},
 		&Query{
+			name:    "range query: top-sum group by",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258330"}, "end": []string{"1709259360"}, "step": []string{"1m"}},
+			command: `topk(3, sum by (job, instance) (increase(up[2m]))/2)`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"instance":"localhost:9090","job":"prometheus"},"values":[[1709258330,"1.0681666666666667"],[1709258390,"1.75"]]}]}}`,
+			path:    "/api/v1/query_range",
+		},
+		&Query{
 			name:    "range query: range vector selector with rate",
 			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258507.955"}, "step": []string{"30s"}},
 			command: `rate(up[3m])`,
@@ -507,7 +535,7 @@ func TestServer_PromQuery_Basic(t *testing.T) {
 			name:    "range query: stdvar",
 			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258507.955"}, "step": []string{"30s"}},
 			command: `stdvar(up)`,
-			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{},"values":[[-27.045,"0"],[1709258342.955,"0.6666666666666666"],[1709258372.955,"1.25"],[1709258402.955,"1.25"],[1709258432.955,"1.25"],[1709258462.955,"1.25"],[1709258492.955,"1.25"]]}]}}`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{},"values":[[1709258312.955,"0"],[1709258342.955,"0.6666666666666666"],[1709258372.955,"1.25"],[1709258402.955,"1.25"],[1709258432.955,"1.25"],[1709258462.955,"1.25"],[1709258492.955,"1.25"]]}]}}`,
 			path:    "/api/v1/query_range",
 		},
 		&Query{
@@ -521,7 +549,7 @@ func TestServer_PromQuery_Basic(t *testing.T) {
 			name:    "range query: stddev",
 			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258507.955"}, "step": []string{"30s"}},
 			command: `stddev(up)`,
-			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{},"values":[[-27.045,"0"],[1709258342.955,"0.816496580927726"],[1709258372.955,"1.118033988749895"],[1709258402.955,"1.118033988749895"],[1709258432.955,"1.118033988749895"],[1709258462.955,"1.118033988749895"],[1709258492.955,"1.118033988749895"]]}]}}`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{},"values":[[1709258312.955,"0"],[1709258342.955,"0.816496580927726"],[1709258372.955,"1.118033988749895"],[1709258402.955,"1.118033988749895"],[1709258432.955,"1.118033988749895"],[1709258462.955,"1.118033988749895"],[1709258492.955,"1.118033988749895"]]}]}}`,
 			path:    "/api/v1/query_range",
 		},
 		&Query{
@@ -676,6 +704,153 @@ func TestServer_PromQuery_Basic(t *testing.T) {
 			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258507.955"}, "step": []string{"30s"}},
 			command: `(1 - (up/down)) * 100`,
 			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"instance":"localhost:7070","job":"container"},"values":[[1709258372.955,"-500"],[1709258402.955,"-500"],[1709258432.955,"-500"],[1709258462.955,"-500"],[1709258492.955,"-500"]]},{"metric":{"instance":"localhost:8080","job":"container"},"values":[[1709258342.955,"-150"],[1709258372.955,"-150"],[1709258402.955,"-150"],[1709258432.955,"-150"],[1709258462.955,"-150"],[1709258492.955,"-150"]]},{"metric":{"instance":"localhost:9090","job":"container"},"values":[[1709258342.955,"-33.33333333333333"],[1709258372.955,"-33.33333333333333"],[1709258402.955,"-33.33333333333333"],[1709258432.955,"-33.33333333333333"],[1709258462.955,"-33.33333333333333"],[1709258492.955,"-33.33333333333333"]]},{"metric":{"instance":"localhost:9090","job":"prometheus"},"values":[[1709258312.955,"83.33333333333334"],[1709258342.955,"25"],[1709258372.955,"25"],[1709258402.955,"25"],[1709258432.955,"25"],[1709258462.955,"25"],[1709258492.955,"25"]]}]}}`,
+			path:    "/api/v1/query_range",
+		},
+		&Query{
+			name:    "range query: stdvar_over_time",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258507.955"}, "step": []string{"30s"}},
+			command: `stdvar_over_time(up[3m])`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"instance":"localhost:7070","job":"container"},"values":[[1709258372.955,"0"],[1709258402.955,"0"],[1709258432.955,"0"],[1709258462.955,"0"],[1709258492.955,"0"]]},{"metric":{"instance":"localhost:8080","job":"container"},"values":[[1709258342.955,"0"],[1709258372.955,"0"],[1709258402.955,"0"],[1709258432.955,"0"],[1709258462.955,"0"],[1709258492.955,"0"]]},{"metric":{"instance":"localhost:9090","job":"container"},"values":[[1709258342.955,"0"],[1709258372.955,"0"],[1709258402.955,"0"],[1709258432.955,"0"],[1709258462.955,"0"],[1709258492.955,"0"]]},{"metric":{"instance":"localhost:9090","job":"prometheus"},"values":[[1709258312.955,"0"],[1709258342.955,"0.6666666666666666"],[1709258372.955,"0.6666666666666666"],[1709258402.955,"0.6666666666666666"],[1709258432.955,"0.6666666666666666"],[1709258462.955,"0.6666666666666666"],[1709258492.955,"0.6666666666666666"]]}]}}`,
+			path:    "/api/v1/query_range",
+		},
+		&Query{
+			name:    "range query: stddev_over_time",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258507.955"}, "step": []string{"30s"}},
+			command: `stddev_over_time(up[3m])`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"instance":"localhost:7070","job":"container"},"values":[[1709258372.955,"0"],[1709258402.955,"0"],[1709258432.955,"0"],[1709258462.955,"0"],[1709258492.955,"0"]]},{"metric":{"instance":"localhost:8080","job":"container"},"values":[[1709258342.955,"0"],[1709258372.955,"0"],[1709258402.955,"0"],[1709258432.955,"0"],[1709258462.955,"0"],[1709258492.955,"0"]]},{"metric":{"instance":"localhost:9090","job":"container"},"values":[[1709258342.955,"0"],[1709258372.955,"0"],[1709258402.955,"0"],[1709258432.955,"0"],[1709258462.955,"0"],[1709258492.955,"0"]]},{"metric":{"instance":"localhost:9090","job":"prometheus"},"values":[[1709258312.955,"0"],[1709258342.955,"0.816496580927726"],[1709258372.955,"0.816496580927726"],[1709258402.955,"0.816496580927726"],[1709258432.955,"0.816496580927726"],[1709258462.955,"0.816496580927726"],[1709258492.955,"0.816496580927726"]]}]}}`,
+			path:    "/api/v1/query_range",
+		},
+		&Query{
+			name:    "range query: (1 - (up/down)) * 100",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258507.955"}, "step": []string{"30s"}},
+			command: `(1 - (up/down)) * 100`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"instance":"localhost:7070","job":"container"},"values":[[1709258372.955,"-500"],[1709258402.955,"-500"],[1709258432.955,"-500"],[1709258462.955,"-500"],[1709258492.955,"-500"]]},{"metric":{"instance":"localhost:8080","job":"container"},"values":[[1709258342.955,"-150"],[1709258372.955,"-150"],[1709258402.955,"-150"],[1709258432.955,"-150"],[1709258462.955,"-150"],[1709258492.955,"-150"]]},{"metric":{"instance":"localhost:9090","job":"container"},"values":[[1709258342.955,"-33.33333333333333"],[1709258372.955,"-33.33333333333333"],[1709258402.955,"-33.33333333333333"],[1709258432.955,"-33.33333333333333"],[1709258462.955,"-33.33333333333333"],[1709258492.955,"-33.33333333333333"]]},{"metric":{"instance":"localhost:9090","job":"prometheus"},"values":[[1709258312.955,"83.33333333333334"],[1709258342.955,"25"],[1709258372.955,"25"],[1709258402.955,"25"],[1709258432.955,"25"],[1709258462.955,"25"],[1709258492.955,"25"]]}]}}`,
+			path:    "/api/v1/query_range",
+		},
+		&Query{
+			name:    "range query: holt_winters",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258507.955"}, "step": []string{"30s"}},
+			command: `holt_winters(up[3m],0.5,0.5)`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"instance":"localhost:9090","job":"prometheus"},"values":[[1709258342.955,"3"],[1709258372.955,"3"],[1709258402.955,"3"],[1709258432.955,"3"],[1709258462.955,"3"],[1709258492.955,"3"]]}]}}`,
+			path:    "/api/v1/query_range",
+		},
+		&Query{
+			name:    "range query: changes",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258507.955"}, "step": []string{"30s"}},
+			command: `changes(up[3m])`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"instance":"localhost:7070","job":"container"},"values":[[1709258372.955,"0"],[1709258402.955,"0"],[1709258432.955,"0"],[1709258462.955,"0"],[1709258492.955,"0"]]},{"metric":{"instance":"localhost:8080","job":"container"},"values":[[1709258342.955,"0"],[1709258372.955,"0"],[1709258402.955,"0"],[1709258432.955,"0"],[1709258462.955,"0"],[1709258492.955,"0"]]},{"metric":{"instance":"localhost:9090","job":"container"},"values":[[1709258342.955,"0"],[1709258372.955,"0"],[1709258402.955,"0"],[1709258432.955,"0"],[1709258462.955,"0"],[1709258492.955,"0"]]},{"metric":{"instance":"localhost:9090","job":"prometheus"},"values":[[1709258312.955,"0"],[1709258342.955,"2"],[1709258372.955,"2"],[1709258402.955,"2"],[1709258432.955,"2"],[1709258462.955,"2"],[1709258492.955,"2"]]}]}}`,
+			path:    "/api/v1/query_range",
+		},
+		&Query{
+			name:    "range query: quantile_over_time",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258507.955"}, "step": []string{"30s"}},
+			command: `quantile_over_time(0.5,up[3m])`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"instance":"localhost:7070","job":"container"},"values":[[1709258372.955,"6"],[1709258402.955,"6"],[1709258432.955,"6"],[1709258462.955,"6"],[1709258492.955,"6"]]},{"metric":{"instance":"localhost:8080","job":"container"},"values":[[1709258342.955,"5"],[1709258372.955,"5"],[1709258402.955,"5"],[1709258432.955,"5"],[1709258462.955,"5"],[1709258492.955,"5"]]},{"metric":{"instance":"localhost:9090","job":"container"},"values":[[1709258342.955,"4"],[1709258372.955,"4"],[1709258402.955,"4"],[1709258432.955,"4"],[1709258462.955,"4"],[1709258492.955,"4"]]},{"metric":{"instance":"localhost:9090","job":"prometheus"},"values":[[1709258312.955,"1"],[1709258342.955,"2"],[1709258372.955,"2"],[1709258402.955,"2"],[1709258432.955,"2"],[1709258462.955,"2"],[1709258492.955,"2"]]}]}}`,
+			path:    "/api/v1/query_range",
+		},
+		&Query{
+			name:    "range query: resets",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258507.955"}, "step": []string{"30s"}},
+			command: `resets(up[3m])`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"instance":"localhost:7070","job":"container"},"values":[[1709258372.955,"0"],[1709258402.955,"0"],[1709258432.955,"0"],[1709258462.955,"0"],[1709258492.955,"0"]]},{"metric":{"instance":"localhost:8080","job":"container"},"values":[[1709258342.955,"0"],[1709258372.955,"0"],[1709258402.955,"0"],[1709258432.955,"0"],[1709258462.955,"0"],[1709258492.955,"0"]]},{"metric":{"instance":"localhost:9090","job":"container"},"values":[[1709258342.955,"0"],[1709258372.955,"0"],[1709258402.955,"0"],[1709258432.955,"0"],[1709258462.955,"0"],[1709258492.955,"0"]]},{"metric":{"instance":"localhost:9090","job":"prometheus"},"values":[[1709258312.955,"0"],[1709258342.955,"0"],[1709258372.955,"0"],[1709258402.955,"0"],[1709258432.955,"0"],[1709258462.955,"0"],[1709258492.955,"0"]]}]}}`,
+			path:    "/api/v1/query_range",
+		},
+		&Query{
+			name:    "range query: resets",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258507.955"}, "step": []string{"30s"}},
+			command: `resets(down[3m])`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"instance":"localhost:7070","job":"container"},"values":[[1709258372.955,"0"],[1709258402.955,"0"],[1709258432.955,"0"],[1709258462.955,"0"],[1709258492.955,"0"]]},{"metric":{"instance":"localhost:8080","job":"container"},"values":[[1709258342.955,"0"],[1709258372.955,"0"],[1709258402.955,"0"],[1709258432.955,"0"],[1709258462.955,"0"],[1709258492.955,"0"]]},{"metric":{"instance":"localhost:9090","job":"container"},"values":[[1709258342.955,"0"],[1709258372.955,"0"],[1709258402.955,"0"],[1709258432.955,"0"],[1709258462.955,"0"],[1709258492.955,"0"]]},{"metric":{"instance":"localhost:9090","job":"prometheus"},"values":[[1709258312.955,"0"],[1709258342.955,"2"],[1709258372.955,"2"],[1709258402.955,"2"],[1709258432.955,"2"],[1709258462.955,"2"],[1709258492.955,"2"]]}]}}`,
+			path:    "/api/v1/query_range",
+		},
+		&Query{
+			name:    "range query: regex measurement",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258507.955"}, "step": []string{"30s"}},
+			command: `count({__name__=~"down|up"} ) by (job)`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"job":"container"},"values":[[1709258342.955,"4"],[1709258372.955,"6"],[1709258402.955,"6"],[1709258432.955,"6"],[1709258462.955,"6"],[1709258492.955,"6"]]},{"metric":{"job":"prometheus"},"values":[[1709258312.955,"2"],[1709258342.955,"2"],[1709258372.955,"2"],[1709258402.955,"2"],[1709258432.955,"2"],[1709258462.955,"2"],[1709258492.955,"2"]]}]}}`,
+			path:    "/api/v1/query_range",
+		},
+		&Query{
+			name:    "range query: last_over_time",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258507.955"}, "step": []string{"30s"}},
+			command: `last_over_time(up[3m])`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"__name__":"up","instance":"localhost:7070","job":"container"},"values":[[1709258372.955,"6"],[1709258402.955,"6"],[1709258432.955,"6"],[1709258462.955,"6"],[1709258492.955,"6"]]},{"metric":{"__name__":"up","instance":"localhost:8080","job":"container"},"values":[[1709258342.955,"5"],[1709258372.955,"5"],[1709258402.955,"5"],[1709258432.955,"5"],[1709258462.955,"5"],[1709258492.955,"5"]]},{"metric":{"__name__":"up","instance":"localhost:9090","job":"container"},"values":[[1709258342.955,"4"],[1709258372.955,"4"],[1709258402.955,"4"],[1709258432.955,"4"],[1709258462.955,"4"],[1709258492.955,"4"]]},{"metric":{"__name__":"up","instance":"localhost:9090","job":"prometheus"},"values":[[1709258312.955,"1"],[1709258342.955,"3"],[1709258372.955,"3"],[1709258402.955,"3"],[1709258432.955,"3"],[1709258462.955,"3"],[1709258492.955,"3"]]}]}}`,
+			path:    "/api/v1/query_range",
+		},
+		&Query{
+			name:    "range query: stddev by",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258507.955"}, "step": []string{"30s"}},
+			command: `stddev by(job) (up)`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"job":"container"},"values":[[1709258342.955,"0.5"],[1709258372.955,"0.816496580927726"],[1709258402.955,"0.816496580927726"],[1709258432.955,"0.816496580927726"],[1709258462.955,"0.816496580927726"],[1709258492.955,"0.816496580927726"]]},{"metric":{"job":"prometheus"},"values":[[1709258312.955,"0"],[1709258342.955,"0"],[1709258372.955,"0"],[1709258402.955,"0"],[1709258432.955,"0"],[1709258462.955,"0"],[1709258492.955,"0"]]}]}}`,
+			path:    "/api/v1/query_range",
+		},
+		&Query{
+			name:    "range query: stdvar by",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258507.955"}, "step": []string{"30s"}},
+			command: `stdvar by(job) (up)`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"job":"container"},"values":[[1709258342.955,"0.25"],[1709258372.955,"0.6666666666666666"],[1709258402.955,"0.6666666666666666"],[1709258432.955,"0.6666666666666666"],[1709258462.955,"0.6666666666666666"],[1709258492.955,"0.6666666666666666"]]},{"metric":{"job":"prometheus"},"values":[[1709258312.955,"0"],[1709258342.955,"0"],[1709258372.955,"0"],[1709258402.955,"0"],[1709258432.955,"0"],[1709258462.955,"0"],[1709258492.955,"0"]]}]}}`,
+			path:    "/api/v1/query_range",
+		},
+		&Query{
+			name:    "range query: topk by",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258507.955"}, "step": []string{"30s"}},
+			command: `topk by(job) (2, up)`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"__name__":"up","instance":"localhost:7070","job":"container"},"values":[[1709258372.955,"6"],[1709258402.955,"6"],[1709258432.955,"6"],[1709258462.955,"6"],[1709258492.955,"6"]]},{"metric":{"__name__":"up","instance":"localhost:8080","job":"container"},"values":[[1709258342.955,"5"],[1709258372.955,"5"],[1709258402.955,"5"],[1709258432.955,"5"],[1709258462.955,"5"],[1709258492.955,"5"]]},{"metric":{"__name__":"up","instance":"localhost:9090","job":"container"},"values":[[1709258342.955,"4"]]},{"metric":{"__name__":"up","instance":"localhost:9090","job":"prometheus"},"values":[[1709258312.955,"1"],[1709258342.955,"3"],[1709258372.955,"3"],[1709258402.955,"3"],[1709258432.955,"3"],[1709258462.955,"3"],[1709258492.955,"3"]]}]}}`,
+			path:    "/api/v1/query_range",
+		},
+		&Query{
+			name:    "range query: bottomk by",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258507.955"}, "step": []string{"30s"}},
+			command: `bottomk by(job) (2, up)`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"__name__":"up","instance":"localhost:8080","job":"container"},"values":[[1709258342.955,"5"],[1709258372.955,"5"],[1709258402.955,"5"],[1709258432.955,"5"],[1709258462.955,"5"],[1709258492.955,"5"]]},{"metric":{"__name__":"up","instance":"localhost:9090","job":"container"},"values":[[1709258342.955,"4"],[1709258372.955,"4"],[1709258402.955,"4"],[1709258432.955,"4"],[1709258462.955,"4"],[1709258492.955,"4"]]},{"metric":{"__name__":"up","instance":"localhost:9090","job":"prometheus"},"values":[[1709258312.955,"1"],[1709258342.955,"3"],[1709258372.955,"3"],[1709258402.955,"3"],[1709258432.955,"3"],[1709258462.955,"3"],[1709258492.955,"3"]]}]}}`,
+			path:    "/api/v1/query_range",
+		},
+		&Query{
+			name:    "range query: vector + bool modifier ",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258507.955"}, "step": []string{"30s"}},
+			command: `up + (1 == bool 2)`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"instance":"localhost:7070","job":"container"},"values":[[1709258372.955,"6"],[1709258402.955,"6"],[1709258432.955,"6"],[1709258462.955,"6"],[1709258492.955,"6"]]},{"metric":{"instance":"localhost:8080","job":"container"},"values":[[1709258342.955,"5"],[1709258372.955,"5"],[1709258402.955,"5"],[1709258432.955,"5"],[1709258462.955,"5"],[1709258492.955,"5"]]},{"metric":{"instance":"localhost:9090","job":"container"},"values":[[1709258342.955,"4"],[1709258372.955,"4"],[1709258402.955,"4"],[1709258432.955,"4"],[1709258462.955,"4"],[1709258492.955,"4"]]},{"metric":{"instance":"localhost:9090","job":"prometheus"},"values":[[1709258312.955,"1"],[1709258342.955,"3"],[1709258372.955,"3"],[1709258402.955,"3"],[1709258432.955,"3"],[1709258462.955,"3"],[1709258492.955,"3"]]}]}}`,
+			path:    "/api/v1/query_range",
+		},
+		&Query{
+			name:    "range query: modifier + vector",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258507.955"}, "step": []string{"30s"}},
+			command: `(1 * 2 + 4 / 6 - (10%7)^2) + up`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"instance":"localhost:7070","job":"container"},"values":[[1709258372.955,"-0.3333333333333339"],[1709258402.955,"-0.3333333333333339"],[1709258432.955,"-0.3333333333333339"],[1709258462.955,"-0.3333333333333339"],[1709258492.955,"-0.3333333333333339"]]},{"metric":{"instance":"localhost:8080","job":"container"},"values":[[1709258342.955,"-1.333333333333334"],[1709258372.955,"-1.333333333333334"],[1709258402.955,"-1.333333333333334"],[1709258432.955,"-1.333333333333334"],[1709258462.955,"-1.333333333333334"],[1709258492.955,"-1.333333333333334"]]},{"metric":{"instance":"localhost:9090","job":"container"},"values":[[1709258342.955,"-2.333333333333334"],[1709258372.955,"-2.333333333333334"],[1709258402.955,"-2.333333333333334"],[1709258432.955,"-2.333333333333334"],[1709258462.955,"-2.333333333333334"],[1709258492.955,"-2.333333333333334"]]},{"metric":{"instance":"localhost:9090","job":"prometheus"},"values":[[1709258312.955,"-5.333333333333334"],[1709258342.955,"-3.333333333333334"],[1709258372.955,"-3.333333333333334"],[1709258402.955,"-3.333333333333334"],[1709258432.955,"-3.333333333333334"],[1709258462.955,"-3.333333333333334"],[1709258492.955,"-3.333333333333334"]]}]}}`,
+			path:    "/api/v1/query_range",
+		},
+		&Query{
+			name:    "range query: modifier - vector",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258507.955"}, "step": []string{"30s"}},
+			command: `(1 * 2 + 4 / 6 - (10%7)^2) - up`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"instance":"localhost:7070","job":"container"},"values":[[1709258372.955,"-12.333333333333334"],[1709258402.955,"-12.333333333333334"],[1709258432.955,"-12.333333333333334"],[1709258462.955,"-12.333333333333334"],[1709258492.955,"-12.333333333333334"]]},{"metric":{"instance":"localhost:8080","job":"container"},"values":[[1709258342.955,"-11.333333333333334"],[1709258372.955,"-11.333333333333334"],[1709258402.955,"-11.333333333333334"],[1709258432.955,"-11.333333333333334"],[1709258462.955,"-11.333333333333334"],[1709258492.955,"-11.333333333333334"]]},{"metric":{"instance":"localhost:9090","job":"container"},"values":[[1709258342.955,"-10.333333333333334"],[1709258372.955,"-10.333333333333334"],[1709258402.955,"-10.333333333333334"],[1709258432.955,"-10.333333333333334"],[1709258462.955,"-10.333333333333334"],[1709258492.955,"-10.333333333333334"]]},{"metric":{"instance":"localhost:9090","job":"prometheus"},"values":[[1709258312.955,"-7.333333333333334"],[1709258342.955,"-9.333333333333334"],[1709258372.955,"-9.333333333333334"],[1709258402.955,"-9.333333333333334"],[1709258432.955,"-9.333333333333334"],[1709258462.955,"-9.333333333333334"],[1709258492.955,"-9.333333333333334"]]}]}}`,
+			path:    "/api/v1/query_range",
+		},
+		&Query{
+			name:    "range query: modifier * vector",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258507.955"}, "step": []string{"30s"}},
+			command: `(1 * 2 + 4 / 6 - (10%7)^2) * up`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"instance":"localhost:7070","job":"container"},"values":[[1709258372.955,"-38"],[1709258402.955,"-38"],[1709258432.955,"-38"],[1709258462.955,"-38"],[1709258492.955,"-38"]]},{"metric":{"instance":"localhost:8080","job":"container"},"values":[[1709258342.955,"-31.66666666666667"],[1709258372.955,"-31.66666666666667"],[1709258402.955,"-31.66666666666667"],[1709258432.955,"-31.66666666666667"],[1709258462.955,"-31.66666666666667"],[1709258492.955,"-31.66666666666667"]]},{"metric":{"instance":"localhost:9090","job":"container"},"values":[[1709258342.955,"-25.333333333333336"],[1709258372.955,"-25.333333333333336"],[1709258402.955,"-25.333333333333336"],[1709258432.955,"-25.333333333333336"],[1709258462.955,"-25.333333333333336"],[1709258492.955,"-25.333333333333336"]]},{"metric":{"instance":"localhost:9090","job":"prometheus"},"values":[[1709258312.955,"-6.333333333333334"],[1709258342.955,"-19"],[1709258372.955,"-19"],[1709258402.955,"-19"],[1709258432.955,"-19"],[1709258462.955,"-19"],[1709258492.955,"-19"]]}]}}`,
+			path:    "/api/v1/query_range",
+		},
+		&Query{
+			name:    "range query: modifier / vector",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258507.955"}, "step": []string{"30s"}},
+			command: `(1 * 2 + 4 / 6 - (10%7)^2) / up`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"instance":"localhost:7070","job":"container"},"values":[[1709258372.955,"-1.0555555555555556"],[1709258402.955,"-1.0555555555555556"],[1709258432.955,"-1.0555555555555556"],[1709258462.955,"-1.0555555555555556"],[1709258492.955,"-1.0555555555555556"]]},{"metric":{"instance":"localhost:8080","job":"container"},"values":[[1709258342.955,"-1.2666666666666668"],[1709258372.955,"-1.2666666666666668"],[1709258402.955,"-1.2666666666666668"],[1709258432.955,"-1.2666666666666668"],[1709258462.955,"-1.2666666666666668"],[1709258492.955,"-1.2666666666666668"]]},{"metric":{"instance":"localhost:9090","job":"container"},"values":[[1709258342.955,"-1.5833333333333335"],[1709258372.955,"-1.5833333333333335"],[1709258402.955,"-1.5833333333333335"],[1709258432.955,"-1.5833333333333335"],[1709258462.955,"-1.5833333333333335"],[1709258492.955,"-1.5833333333333335"]]},{"metric":{"instance":"localhost:9090","job":"prometheus"},"values":[[1709258312.955,"-6.333333333333334"],[1709258342.955,"-2.111111111111111"],[1709258372.955,"-2.111111111111111"],[1709258402.955,"-2.111111111111111"],[1709258432.955,"-2.111111111111111"],[1709258462.955,"-2.111111111111111"],[1709258492.955,"-2.111111111111111"]]}]}}`,
+			path:    "/api/v1/query_range",
+		},
+		&Query{
+			name:    "range query: modifier % vector",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258507.955"}, "step": []string{"30s"}},
+			command: `(1 * 2 + 4 / 6 - (10%7)^2) % up`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"instance":"localhost:7070","job":"container"},"values":[[1709258372.955,"-0.3333333333333339"],[1709258402.955,"-0.3333333333333339"],[1709258432.955,"-0.3333333333333339"],[1709258462.955,"-0.3333333333333339"],[1709258492.955,"-0.3333333333333339"]]},{"metric":{"instance":"localhost:8080","job":"container"},"values":[[1709258342.955,"-1.333333333333334"],[1709258372.955,"-1.333333333333334"],[1709258402.955,"-1.333333333333334"],[1709258432.955,"-1.333333333333334"],[1709258462.955,"-1.333333333333334"],[1709258492.955,"-1.333333333333334"]]},{"metric":{"instance":"localhost:9090","job":"container"},"values":[[1709258342.955,"-2.333333333333334"],[1709258372.955,"-2.333333333333334"],[1709258402.955,"-2.333333333333334"],[1709258432.955,"-2.333333333333334"],[1709258462.955,"-2.333333333333334"],[1709258492.955,"-2.333333333333334"]]},{"metric":{"instance":"localhost:9090","job":"prometheus"},"values":[[1709258312.955,"-0.3333333333333339"],[1709258342.955,"-0.3333333333333339"],[1709258372.955,"-0.3333333333333339"],[1709258402.955,"-0.3333333333333339"],[1709258432.955,"-0.3333333333333339"],[1709258462.955,"-0.3333333333333339"],[1709258492.955,"-0.3333333333333339"]]}]}}`,
+			path:    "/api/v1/query_range",
+		},
+		&Query{
+			name:    "range query: modifier != vector",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258507.955"}, "step": []string{"30s"}},
+			command: `(1 * 2 + 4 / 6 - (10%7)^2) != up`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"__name__":"up","instance":"localhost:7070","job":"container"},"values":[[1709258372.955,"6"],[1709258402.955,"6"],[1709258432.955,"6"],[1709258462.955,"6"],[1709258492.955,"6"]]},{"metric":{"__name__":"up","instance":"localhost:8080","job":"container"},"values":[[1709258342.955,"5"],[1709258372.955,"5"],[1709258402.955,"5"],[1709258432.955,"5"],[1709258462.955,"5"],[1709258492.955,"5"]]},{"metric":{"__name__":"up","instance":"localhost:9090","job":"container"},"values":[[1709258342.955,"4"],[1709258372.955,"4"],[1709258402.955,"4"],[1709258432.955,"4"],[1709258462.955,"4"],[1709258492.955,"4"]]},{"metric":{"__name__":"up","instance":"localhost:9090","job":"prometheus"},"values":[[1709258312.955,"1"],[1709258342.955,"3"],[1709258372.955,"3"],[1709258402.955,"3"],[1709258432.955,"3"],[1709258462.955,"3"],[1709258492.955,"3"]]}]}}`,
 			path:    "/api/v1/query_range",
 		},
 	}...)
@@ -1133,7 +1308,7 @@ func TestServer_PromQuery_timestamp(t *testing.T) {
 			name:    "instant query timestamp(http_requests{group='canary',instance='0',job='api-server'})",
 			params:  url.Values{"db": []string{"db0"}, "time": []string{"1970-01-01T00:40:00Z"}},
 			command: `timestamp(http_requests{group='canary',instance='0',job='api-server'})`,
-			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"__name__":"http_requests","group":"canary","instance":"0","job":"api-server"},"value":[2400,"2400"]}]}}`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"group":"canary","instance":"0","job":"api-server"},"value":[2400,"2400"]}]}}`,
 			path:    "/api/v1/query",
 		},
 
@@ -1453,6 +1628,13 @@ func TestServer_PromQuery_Operators1(t *testing.T) {
 			command: `avg by (instance,job) (rate(http_requests[5m])) / avg by (instance,job) (http_requests)`,
 			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"instance":"0","job":"api-server"},"value":[3000,"0.0003333333333333333"]},{"metric":{"instance":"0","job":"app-server"},"value":[3000,"0.0003333333333333334"]},{"metric":{"instance":"1","job":"api-server"},"value":[3000,"0.0003333333333333334"]},{"metric":{"instance":"1","job":"app-server"},"value":[3000,"0.0003333333333333333"]}]}}`,
 			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "range query: http_requests",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1970-01-01T00:00:00Z"}, "end": []string{"1970-01-01T00:50:00Z"}, "step": []string{"15m"}},
+			command: `http_requests`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"__name__":"http_requests","group":"canary","instance":"0","job":"api-server"},"values":[[0,"0"],[900,"90"],[1800,"180"],[2700,"270"]]},{"metric":{"__name__":"http_requests","group":"canary","instance":"0","job":"app-server"},"values":[[0,"0"],[900,"210"],[1800,"420"],[2700,"630"]]},{"metric":{"__name__":"http_requests","group":"canary","instance":"1","job":"api-server"},"values":[[0,"0"],[900,"120"],[1800,"240"],[2700,"360"]]},{"metric":{"__name__":"http_requests","group":"canary","instance":"1","job":"app-server"},"values":[[0,"0"],[900,"240"],[1800,"480"],[2700,"720"]]},{"metric":{"__name__":"http_requests","group":"production","instance":"0","job":"api-server"},"values":[[0,"0"],[900,"30"],[1800,"60"],[2700,"90"]]},{"metric":{"__name__":"http_requests","group":"production","instance":"0","job":"app-server"},"values":[[0,"0"],[900,"150"],[1800,"300"],[2700,"450"]]},{"metric":{"__name__":"http_requests","group":"production","instance":"1","job":"api-server"},"values":[[0,"0"],[900,"60"],[1800,"120"],[2700,"180"]]},{"metric":{"__name__":"http_requests","group":"production","instance":"1","job":"app-server"},"values":[[0,"0"],[900,"180"],[1800,"360"],[2700,"540"]]}]}}`,
+			path:    "/api/v1/query_range",
 		},
 	}...)
 
@@ -1939,9 +2121,9 @@ func TestServer_PromQuery_Histogram(t *testing.T) {
 	for i := 0; i < len(buckets); i++ {
 		for j := 0; j < 5; j++ {
 			time := int64(initTime) + 15*int64(time.Second)*int64(j)
-			str := fmt.Sprintf(`up,__name__=up,instance=localhost:9090,job=prometheus,le=%s value=%d %d`, buckets[i], j+1, time)
+			str := fmt.Sprintf(`up,__name__=up,instance=localhost:9090,le=%s,zzz=prometheus value=%d %d`, buckets[i], j+1, time)
 			writes = append(writes, str)
-			str = fmt.Sprintf(`up,__name__=up,instance=localhost:9090,job=prometheus2,le=%s value=%d %d`, buckets[i], j*1000, time)
+			str = fmt.Sprintf(`up,__name__=up,instance=localhost:9090,le=%s,zzz=prometheus2 value=%d %d`, buckets[i], j*1000, time)
 			writes = append(writes, str)
 		}
 
@@ -1954,30 +2136,31 @@ func TestServer_PromQuery_Histogram(t *testing.T) {
 	test.addQueries([]*Query{
 		&Query{
 			name:    "instant query:  histogram_quantile",
+			skip:    true,
 			params:  url.Values{"db": []string{"db0"}, "time": []string{"1713768282.462"}},
 			command: `histogram_quantile(0.9,up)`,
-			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"instance":"localhost:9090","job":"prometheus"},"value":[1713768282.462,"0.09000000000000001"]},{"metric":{"instance":"localhost:9090","job":"prometheus2"},"value":[1713768282.462,"NaN"]}]}}`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"instance":"localhost:9090","zzz":"prometheus"},"value":[1713768282.462,"0.09000000000000001"]},{"metric":{"instance":"localhost:9090","zzz":"prometheus2"},"value":[1713768282.462,"NaN"]}]}}`,
 			path:    "/api/v1/query",
 		},
 		&Query{
 			name:    "range query:  histogram_quantile",
 			params:  url.Values{"db": []string{"db0"}, "start": []string{"1713768282.462"}, "end": []string{"1713768432.462"}, "step": []string{"30s"}},
 			command: `histogram_quantile(0.9,up)`,
-			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"instance":"localhost:9090","job":"prometheus"},"values":[[1713768282.462,"0.09000000000000001"],[1713768312.462,"0.09000000000000001"],[1713768342.462,"0.09000000000000001"],[1713768372.462,"0.09000000000000001"],[1713768402.462,"0.09000000000000001"],[1713768432.462,"0.09000000000000001"]]},{"metric":{"instance":"localhost:9090","job":"prometheus2"},"values":[[1713768282.462,"NaN"],[1713768312.462,"0.09000000000000001"],[1713768342.462,"0.09000000000000001"],[1713768372.462,"0.09000000000000001"],[1713768402.462,"0.09000000000000001"],[1713768432.462,"0.09000000000000001"]]}]}}`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"instance":"localhost:9090","zzz":"prometheus"},"values":[[1713768282.462,"0.09000000000000001"],[1713768312.462,"0.09000000000000001"],[1713768342.462,"0.09000000000000001"],[1713768372.462,"0.09000000000000001"],[1713768402.462,"0.09000000000000001"],[1713768432.462,"0.09000000000000001"]]},{"metric":{"instance":"localhost:9090","zzz":"prometheus2"},"values":[[1713768282.462,"NaN"],[1713768312.462,"0.09000000000000001"],[1713768342.462,"0.09000000000000001"],[1713768372.462,"0.09000000000000001"],[1713768402.462,"0.09000000000000001"],[1713768432.462,"0.09000000000000001"]]}]}}`,
 			path:    "/api/v1/query_range",
 		},
 		&Query{
 			name:    "range query:  histogram_quantile(sum(increase))",
 			params:  url.Values{"db": []string{"db0"}, "start": []string{"1713768282.462"}, "end": []string{"1713768432.462"}, "step": []string{"30s"}},
-			command: `histogram_quantile(0.9,sum(increase(up[1m])) by (le,job))`,
-			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"job":"prometheus"},"values":[[1713768312.462,"0.09000000000000001"],[1713768342.462,"0.09000000000000001"],[1713768372.462,"0.09000000000000001"]]},{"metric":{"job":"prometheus2"},"values":[[1713768312.462,"0.09000000000000001"],[1713768342.462,"0.09000000000000001"],[1713768372.462,"0.09000000000000001"]]}]}}`,
+			command: `histogram_quantile(0.9,sum(increase(up[1m])) by (le,zzz))`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"zzz":"prometheus"},"values":[[1713768312.462,"0.09000000000000001"],[1713768342.462,"0.09000000000000001"],[1713768372.462,"0.09000000000000001"]]},{"metric":{"zzz":"prometheus2"},"values":[[1713768312.462,"0.09000000000000001"],[1713768342.462,"0.09000000000000001"],[1713768372.462,"0.09000000000000001"]]}]}}`,
 			path:    "/api/v1/query_range",
 		},
 		&Query{
 			name:    "range query:  histogram_quantile(rate)",
 			params:  url.Values{"db": []string{"db0"}, "start": []string{"1713768282.462"}, "end": []string{"1713768432.462"}, "step": []string{"30s"}},
 			command: `histogram_quantile(0.9,rate(up[1m]))`,
-			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"instance":"localhost:9090","job":"prometheus"},"values":[[1713768312.462,"0.09000000000000001"],[1713768342.462,"0.09000000000000001"],[1713768372.462,"0.09000000000000001"]]},{"metric":{"instance":"localhost:9090","job":"prometheus2"},"values":[[1713768312.462,"0.09000000000000001"],[1713768342.462,"0.09000000000000001"],[1713768372.462,"0.09000000000000001"]]}]}}`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"instance":"localhost:9090","zzz":"prometheus"},"values":[[1713768312.462,"0.09000000000000001"],[1713768342.462,"0.09000000000000001"],[1713768372.462,"0.09000000000000001"]]},{"metric":{"instance":"localhost:9090","zzz":"prometheus2"},"values":[[1713768312.462,"0.09000000000000001"],[1713768342.462,"0.09000000000000001"],[1713768372.462,"0.09000000000000001"]]}]}}`,
 			path:    "/api/v1/query_range",
 		},
 	}...)
@@ -2429,6 +2612,70 @@ func TestServer_PromQuery_Regular_Match(t *testing.T) {
 			params:  url.Values{"db": []string{"db0"}, "time": []string{"1709258357.955"}},
 			command: `up{job!~"^prome.*"}`,
 			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"__name__":"up","instance":"localhost:7070","job":"container"},"value":[1709258357.955,"6"]},{"metric":{"__name__":"up","instance":"localhost:8080","job":"container"},"value":[1709258357.955,"5"]},{"metric":{"__name__":"up","instance":"localhost:9090","job":"container"},"value":[1709258357.955,"4"]}]}}`,
+			path:    "/api/v1/query",
+		},
+	}...)
+
+	for i, query := range test.queries {
+		if i == 0 {
+			if err := test.init(s); err != nil {
+				t.Fatalf("test init failed: %s", err)
+			}
+		}
+		if query.skip {
+			t.Logf("SKIP:: %s", query.name)
+			continue
+		}
+		if err := query.ExecuteProm(s); err != nil {
+			t.Error(query.Error(err))
+		} else if !query.success() {
+			t.Error(query.failureMessage())
+		}
+	}
+}
+
+func TestServer_PromQuery_Compatibility(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewConfig())
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("autogen", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		fmt.Sprintf(`up,__name__=up,instance=localhost:9090,job=prometheus value=1 %d`, 1709258312955000000),
+		fmt.Sprintf(`up,__name__=up,instance=localhost:9090,job=prometheus value=2 %d`, 1709258327955000000),
+		fmt.Sprintf(`up,__name__=up,instance=localhost:9090,job=prometheus value=3 %d`, 1709258342955000000),
+		fmt.Sprintf(`up,__name__=up,instance=localhost:9090,job=container value=4 %d`, 1709258342955000000),
+		fmt.Sprintf(`up,__name__=up,instance=localhost:8080,job=container value=5 %d`, 1709258342955000000),
+		fmt.Sprintf(`up,__name__=up,instance=localhost:7070,job=container value=6 %d`, 1709258357955000000),
+		fmt.Sprintf(`down,__name__=down,instance=localhost:9090,job=prometheus value=6 %d`, 1709258312955000000),
+		fmt.Sprintf(`down,__name__=down,instance=localhost:9090,job=prometheus value=5 %d`, 1709258327955000000),
+		fmt.Sprintf(`down,__name__=down,instance=localhost:9090,job=prometheus value=4 %d`, 1709258342955000000),
+		fmt.Sprintf(`down,__name__=down,instance=localhost:9090,job=container value=3 %d`, 1709258342955000000),
+		fmt.Sprintf(`down,__name__=down,instance=localhost:8080,job=container value=2 %d`, 1709258342955000000),
+		fmt.Sprintf(`down,__name__=down,instance=localhost:7070,job=container value=1 %d`, 1709258357955000000),
+	}
+
+	test := NewTest("db0", "autogen")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		&Query{
+			name:    "instant query",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"1709258357.955"}},
+			command: `{type="free", instance!="demo.promlabs.com:10000"}`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "instant query",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"1709258357.955"}},
+			command: `last_over_time(up[1m])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"__name__":"up","instance":"localhost:7070","job":"container"},"value":[1709258357.955,"6"]},{"metric":{"__name__":"up","instance":"localhost:8080","job":"container"},"value":[1709258357.955,"5"]},{"metric":{"__name__":"up","instance":"localhost:9090","job":"container"},"value":[1709258357.955,"4"]},{"metric":{"__name__":"up","instance":"localhost:9090","job":"prometheus"},"value":[1709258357.955,"3"]}]}}`,
 			path:    "/api/v1/query",
 		},
 	}...)

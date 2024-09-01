@@ -22,16 +22,15 @@ import (
 	"strconv"
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
-	"github.com/openGemini/openGemini/lib/util"
 )
 
 const leTagName = "le"
 
 type FloatColFloatHistogramIterator struct {
-	inOrdinal         int
-	outOrdinal        int
-	fn                FloatColReduceHistogramReduce
-	metricWithBuckets *metricWithBuckets
+	inOrdinal            int
+	outOrdinal           int
+	fn                   FloatColReduceHistogramReduce
+	metricWithBucketsMap map[string]*metricWithBuckets
 }
 
 type bucket struct {
@@ -55,24 +54,17 @@ func (b buckets) Swap(i, j int) {
 
 type metricWithBuckets struct {
 	name    string
+	init    bool
 	buckets []buckets
 	times   []int64
 }
 
-func (b *metricWithBuckets) clear() {
-	b.buckets = b.buckets[:0]
-	b.times = b.times[:0]
-}
-
 func NewFloatColFloatHistogramIterator(fn FloatColReduceHistogramReduce, inOrdinal, outOrdinal int, rowDataType hybridqp.RowDataType) *FloatColFloatHistogramIterator {
 	return &FloatColFloatHistogramIterator{
-		fn:         fn,
-		inOrdinal:  inOrdinal,
-		outOrdinal: outOrdinal,
-		metricWithBuckets: &metricWithBuckets{
-			times:   make([]int64, 0),
-			buckets: make([]buckets, 0),
-		},
+		fn:                   fn,
+		inOrdinal:            inOrdinal,
+		outOrdinal:           outOrdinal,
+		metricWithBucketsMap: make(map[string]*metricWithBuckets, 0),
 	}
 }
 
@@ -80,80 +72,75 @@ func (r *FloatColFloatHistogramIterator) Next(ie *IteratorEndpoint, p *IteratorP
 	inChunk, outChunk := ie.InputPoint.Chunk, ie.OutputPoint.Chunk
 	var upperBound float64
 	var insertIndex, tagInd int
-	var initBuckets bool
-	var metricNameBytes []byte
-	lastIndex := len(inChunk.IntervalIndex()) - 1
+	var metricName string
 	for i, curIndex := range inChunk.IntervalIndex() {
 		var err error
 		if curIndex == inChunk.TagIndex()[tagInd] {
 			insertIndex = 0
-			var le string
 			// get bytes without le
-			metricNameBytes, le = inChunk.Tags()[tagInd].DecodeTagsWithoutTag(leTagName)
+			metricNameBytes, le := inChunk.Tags()[tagInd].DecodeTagsWithoutTag(leTagName)
 
+			if tagInd < len(inChunk.TagIndex())-1 {
+				tagInd++
+			}
 			upperBound, err = strconv.ParseFloat(le, 64)
 			if err != nil {
 				continue
 			}
 
-			if len(metricNameBytes) == 0 {
-				if tagInd == 0 {
-					initBuckets = true
-				} else {
-					initBuckets = false
-				}
-				r.metricWithBuckets.name = string(metricNameBytes)
+			metricName = string(metricNameBytes)
 
+			if r.metricWithBucketsMap[metricName] == nil {
+				r.metricWithBucketsMap[metricName] = &metricWithBuckets{
+					name:    metricName,
+					times:   make([]int64, 0),
+					buckets: make([]buckets, 0),
+					init:    true,
+				}
 			} else {
-				if r.metricWithBuckets.name != util.Bytes2str(metricNameBytes) {
-					initBuckets = true
-					// process buckets
-					r.processBuckets(inChunk, outChunk)
-					r.metricWithBuckets.name = string(metricNameBytes)
-				} else {
-					initBuckets = false
-				}
+				r.metricWithBucketsMap[metricName].init = false
+			}
 
-			}
-			if tagInd < len(inChunk.TagIndex())-1 {
-				tagInd++
-			}
 		}
 		time := inChunk.TimeByIndex(i)
 		b := bucket{upperBound, inChunk.Column(r.inOrdinal).FloatValues()[curIndex]}
-		if initBuckets {
-			r.metricWithBuckets.buckets = append(r.metricWithBuckets.buckets, []bucket{b})
-			r.metricWithBuckets.times = append(r.metricWithBuckets.times, time)
+		curMetric := r.metricWithBucketsMap[metricName]
+		if curMetric.init {
+			curMetric.buckets = append(curMetric.buckets, []bucket{b})
+			curMetric.times = append(curMetric.times, time)
 		} else {
-			r.metricWithBuckets.buckets[insertIndex] = append(r.metricWithBuckets.buckets[insertIndex], b)
+			curMetric.buckets[insertIndex] = append(curMetric.buckets[insertIndex], b)
 		}
 		insertIndex++
-		if p.lastChunk && i == lastIndex {
-			r.processBuckets(inChunk, outChunk)
-		}
+	}
+	if p.lastChunk {
+		r.processBuckets(inChunk, outChunk)
 	}
 }
 
 func (r *FloatColFloatHistogramIterator) processBuckets(inChunk, outChunk Chunk) {
-	if len(r.metricWithBuckets.buckets) == 0 {
+	if len(r.metricWithBucketsMap) == 0 {
 		return
 	}
-	chunkTag := NewChunkTagsByBytes([]byte(r.metricWithBuckets.name))
-	outChunk.AppendTagsAndIndex(*chunkTag, outChunk.Len())
-	outColumn := outChunk.Column(r.outOrdinal)
-	for i, buckets := range r.metricWithBuckets.buckets {
-		if len(buckets) > 0 {
-			sort.Sort(buckets)
-			buckets = coalesceBuckets(buckets)
-			val := r.fn(buckets)
+	for name, m := range r.metricWithBucketsMap {
+		chunkTag := NewChunkTagsByBytes([]byte(name))
+		outChunk.AppendTagsAndIndex(*chunkTag, outChunk.Len())
+		outColumn := outChunk.Column(r.outOrdinal)
+		for i, buckets := range m.buckets {
+			if len(buckets) > 0 {
+				sort.Sort(buckets)
+				buckets = coalesceBuckets(buckets)
+				val := r.fn(buckets)
 
-			outChunk.AppendTime(r.metricWithBuckets.times[i])
-			outChunk.AppendIntervalIndex(outChunk.Len() - 1)
-			outColumn.AppendNotNil()
-			outColumn.AppendFloatValue(val)
+				outChunk.AppendTime(m.times[i])
+				outChunk.AppendIntervalIndex(outChunk.Len() - 1)
+				outColumn.AppendNotNil()
+				outColumn.AppendFloatValue(val)
+			}
 		}
+
 	}
-	r.metricWithBuckets.clear()
+	r.metricWithBucketsMap = make(map[string]*metricWithBuckets)
 }
 
 /*

@@ -84,11 +84,11 @@ func (s *labelJoinFunc) CompileFunc(expr *influxql.Call, c *compiledField) error
 		return fmt.Errorf("invalid number of arguments for %s, at least 3, got %d", expr.Name, got)
 	}
 	if ok, argVal := checkLabelName(expr.Args[1]); ok {
-		return fmt.Errorf("invalid source label name in label_join(): %s", argVal)
+		return fmt.Errorf("invalid destination label name in label_join(): %s", argVal)
 	}
 	for i := 3; i < len(expr.Args); i++ {
 		if ok, argVal := checkLabelName(expr.Args[i]); ok {
-			return fmt.Errorf("invalid source label name in label_join(): %s", argVal)
+			return fmt.Errorf("invalid destination label name in label_join(): %s", argVal)
 		}
 	}
 	return nil

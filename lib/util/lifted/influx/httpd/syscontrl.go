@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/syscontrol"
 )
@@ -74,7 +75,12 @@ func (h *Handler) serveDebug(w http.ResponseWriter, r *http.Request) {
 
 	var sb strings.Builder
 	sb.WriteString("{\n\t")
-	err := syscontrol.ProcessRequest(req, &sb)
+	var err error
+	if req.Mod() == syscontrol.Backup {
+		err = syscontrol.ProcessBackup(req, &sb, config.CombineDomain(h.SQLConfig.HTTP.Domain, h.Config.BindAddress))
+	} else {
+		err = syscontrol.ProcessRequest(req, &sb)
+	}
 	if err != nil {
 		h.httpError(w, "sysctrl execute error: "+err.Error(), http.StatusBadRequest)
 		return

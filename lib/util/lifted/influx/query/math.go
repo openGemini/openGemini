@@ -724,14 +724,18 @@ func (f *promClampFunc) CompileFunc(expr *influxql.Call, c *compiledField) error
 		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", name, exp, got)
 	}
 
-	err := checkNumberArg(args[1], expr.Name)
+	arg1, err := getNumberArg(args[1], expr.Name)
 	if err != nil {
 		return err
 	}
 
-	err = checkNumberArg(args[2], expr.Name)
+	arg2, err := getNumberArg(args[2], expr.Name)
 	if err != nil {
 		return err
+	}
+
+	if arg1 > arg2 {
+		return fmt.Errorf("expected argument1 < argument2")
 	}
 
 	return c.compileSymbol(expr.Name, expr.Args[0])
@@ -934,6 +938,18 @@ func checkNumberArg(arg influxql.Expr, callName string) error {
 		return fmt.Errorf("expected float argument in %s()", callName)
 	}
 	return nil
+}
+
+func getNumberArg(arg influxql.Expr, callName string) (float64, error) {
+	switch a := arg.(type) {
+	case *influxql.IntegerLiteral:
+		return float64(a.Val), nil
+	case *influxql.NumberLiteral:
+		return a.Val, nil
+	default:
+		return 0, fmt.Errorf("expected float argument in %s()", callName)
+	}
+	return 0, fmt.Errorf("expected float argument in %s()", callName)
 }
 
 func commonCallType1(name string, args []influxql.DataType) (influxql.DataType, error) {

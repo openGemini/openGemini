@@ -65,6 +65,11 @@ func TestPromLabelReplace(t *testing.T) {
 	act, _ = labelValuer.Call(callName, callArgs)
 	assert.Equal(t, expects, act)
 
+	callArgs = []interface{}{chunkTags, "job", "", "dst", ".*"}
+	expects = []executor.ChunkTags{*executor.NewChunkTagsByTagKVs([]string{"instance"}, []string{"localhost:9090"})}
+	act, _ = labelValuer.Call(callName, callArgs)
+	assert.Equal(t, expects, act)
+
 }
 
 func TestPromLabelJoin(t *testing.T) {

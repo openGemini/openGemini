@@ -633,6 +633,32 @@ func TestMergeTool_recentFile(t *testing.T) {
 	require.Equal(t, uint16(1), orderFiles.Files()[0].FileNameMerge())
 }
 
+func TestGetTSSPFileList(t *testing.T) {
+	var begin int64 = 1e12
+	defer beforeTest(t, 0)()
+
+	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
+	defer mh.store.Close()
+	rg := newRecordGenerator(begin, defaultInterval, false)
+
+	schema := getDefaultSchemas()
+	mh.addRecord(100, rg.generate(schema, 10))
+	require.NoError(t, mh.saveToOrder())
+
+	mh.addRecord(101, rg.setBegin(begin).incrBegin(-10).generate(schema, 100))
+	require.NoError(t, mh.saveToUnordered())
+
+	orders := mh.store.GetMstList(true)
+	if orders[0] != "mst" {
+		t.Fatal()
+	}
+
+	unorders := mh.store.GetMstList(false)
+	if unorders[0] != "mst" {
+		t.Fatal()
+	}
+}
+
 func TestMergeTool_SkipMerge(t *testing.T) {
 	var begin int64 = 1e12
 	defer beforeTest(t, 0)()

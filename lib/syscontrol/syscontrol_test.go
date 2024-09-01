@@ -49,6 +49,10 @@ func (mockMetaClient) DataNodes() ([]meta2.DataNode, error) {
 }
 
 func (mockMetaClient) SendSysCtrlToMeta(mod string, param map[string]string) (map[string]string, error) {
+	return map[string]string{"127.0.0.1": "success"}, nil
+}
+
+func (mockMetaClient) SendBackupToMeta(mod string, param map[string]string, host string) (map[string]string, error) {
 	return nil, nil
 }
 
@@ -338,5 +342,31 @@ func Test_Failpoint(t *testing.T) {
 	})
 	var sb strings.Builder
 	require.NoError(t, ProcessRequest(req, &sb))
+	require.Contains(t, sb.String(), "success")
+}
+
+func Test_ProcessBackup(t *testing.T) {
+	SysCtrl.MetaClient = &mockMetaClient{}
+	SysCtrl.NetStore = &mockStorage{}
+	var req netstorage.SysCtrlRequest
+	req.SetMod("backup")
+	req.SetParam(map[string]string{
+		"isNode": "true",
+	})
+	var sb strings.Builder
+	require.NoError(t, ProcessBackup(req, &sb, "127.0.0.1"))
+	require.Contains(t, sb.String(), "success")
+}
+
+func Test_ProcessBackup2(t *testing.T) {
+	SysCtrl.MetaClient = &mockMetaClient{}
+	SysCtrl.NetStore = &mockStorage{}
+	var req netstorage.SysCtrlRequest
+	req.SetMod("backup")
+	req.SetParam(map[string]string{
+		"isNode": "false",
+	})
+	var sb strings.Builder
+	require.NoError(t, ProcessBackup(req, &sb, "127.0.0.1"))
 	require.Contains(t, sb.String(), "success")
 }

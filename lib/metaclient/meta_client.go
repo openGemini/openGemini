@@ -252,6 +252,7 @@ type MetaClient interface {
 
 	// sysctrl for admin
 	SendSysCtrlToMeta(mod string, param map[string]string) (map[string]string, error)
+	SendBackupToMeta(mod string, param map[string]string, host string) (map[string]string, error)
 
 	// file infos
 	IsSQLiteEnabled() bool

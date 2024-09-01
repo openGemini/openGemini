@@ -173,6 +173,10 @@ func (iBuilder *IndexBuilder) Path() string {
 	return iBuilder.path
 }
 
+func (iBuilder *IndexBuilder) SetPath(path string) {
+	iBuilder.path = path
+}
+
 func (iBuilder *IndexBuilder) GetPrimaryIndex() PrimaryIndex {
 	return iBuilder.Relations[0].indexAmRoutine.index.(PrimaryIndex)
 }

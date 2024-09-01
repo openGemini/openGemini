@@ -128,6 +128,10 @@ func NewDBPTInfo(db string, id uint32, dataPath, walPath string, ctx *metaclient
 	}
 }
 
+func (dbPT *DBPTInfo) AddShard(id uint64, sh Shard) {
+	dbPT.shards[id] = sh
+}
+
 func (dbPT *DBPTInfo) doingShardMoveNInc() {
 	dbPT.doingShardMoveN++
 }

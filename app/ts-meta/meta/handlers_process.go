@@ -25,8 +25,11 @@ import (
 	"github.com/hashicorp/raft"
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
+	"github.com/openGemini/openGemini/lib/backup"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
+	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
 	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
@@ -462,6 +465,21 @@ func (h *VerifyDataNodeStatus) Process() (transport.Codec, error) {
 func (h *SendSysCtrlToMeta) Process() (transport.Codec, error) {
 	rsp := &message.SendSysCtrlToMetaResponse{}
 
+	var err error
+	switch h.req.Mod {
+	case syscontrol.Failpoint:
+		err = handleFailpoint(h)
+	case syscontrol.Backup:
+		err = handleBackup(h)
+	}
+
+	if err != nil {
+		rsp.Err = err.Error()
+	}
+	return rsp, nil
+}
+
+func handleFailpoint(h *SendSysCtrlToMeta) error {
 	var inner = func() (bool, string, string, error) {
 		switchStr, ok := h.req.Param["switchon"]
 		if !ok {
@@ -491,10 +509,30 @@ func (h *SendSysCtrlToMeta) Process() (transport.Codec, error) {
 	} else if err == nil {
 		err = failpoint.Enable(point, term)
 	}
-	if err != nil {
-		rsp.Err = err.Error()
+	return err
+}
+
+func handleBackup(h *SendSysCtrlToMeta) error {
+	backupPath := h.req.Param[backup.BackupPath]
+	if backupPath == "" {
+		err := fmt.Errorf("missing the required parameter backupPath")
+		return err
 	}
-	return rsp, nil
+	isRemote := h.req.Param[backup.IsRemote] == "true"
+	isNode := h.req.Param[backup.IsNode] == "true"
+
+	b := &Backup{
+		IsRemote:   isRemote,
+		IsNode:     isNode,
+		BackupPath: backupPath,
+	}
+	if err := b.RunBackupMeta(); err != nil {
+		logger.GetLogger().Error("run backup error", zap.Error(err))
+
+		fmt.Sprintln(err)
+		return err
+	}
+	return nil
 }
 
 func (h *ShowCluster) Process() (transport.Codec, error) {

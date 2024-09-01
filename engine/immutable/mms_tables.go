@@ -100,6 +100,7 @@ type TablesStore interface {
 	GetObsOption() *obs.ObsOptions
 	GetShardID() uint64
 	SetIndexMergeSet(idx IndexMergeSet)
+	GetMstList(isOrder bool) []string
 }
 
 type ImmTable interface {
@@ -579,6 +580,26 @@ func (m *MmsTables) sortTSSPFiles() {
 
 	for _, item := range m.CSFiles {
 		sort.Sort(item)
+	}
+}
+
+func (m *MmsTables) GetMstList(isOrder bool) []string {
+	m.mu.RLock()
+	defer func() {
+		m.mu.RUnlock()
+	}()
+	if isOrder {
+		fileList := make([]string, 0, len(m.Order))
+		for name := range m.Order {
+			fileList = append(fileList, name)
+		}
+		return fileList
+	} else {
+		fileList := make([]string, 0, len(m.OutOfOrder))
+		for name := range m.OutOfOrder {
+			fileList = append(fileList, name)
+		}
+		return fileList
 	}
 }
 
