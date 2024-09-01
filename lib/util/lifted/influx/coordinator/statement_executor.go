@@ -357,6 +357,9 @@ func (e *StatementExecutor) ExecuteStatement(stmt influxql.Statement, ctx *query
 		}
 		_, err = e.retryExecuteStatement(stmt, ctx, seq)
 		return err
+	case *influxql.ShowMeasurementsDetailStatement:
+		err = e.executeShowMeasurementsDetailStatement(stmt, ctx, seq)
+		return err
 	case *influxql.ShowMeasurementCardinalityStatement:
 		if stmt.Condition != nil {
 			return meta2.ErrUnsupportCommand
@@ -482,6 +485,8 @@ func (e *StatementExecutor) retryExecuteStatement(stmt influxql.Statement, ctx *
 			err = e.executeShowSeries(stmt, ctx, seq)
 		case *influxql.ShowMeasurementsStatement:
 			err = e.executeShowMeasurementsStatement(stmt, ctx, seq)
+		case *influxql.ShowMeasurementsDetailStatement:
+			err = e.executeShowMeasurementsDetailStatement(stmt, ctx, seq)
 		case *influxql.ShowMeasurementCardinalityStatement:
 			rows, err = e.executeShowMeasurementCardinalityStatement(stmt)
 		case *influxql.ShowSeriesCardinalityStatement:
@@ -1447,6 +1452,142 @@ func (e *StatementExecutor) executeShowMeasurementsStatement(q *influxql.ShowMea
 	}, seq)
 }
 
+func (e *StatementExecutor) executeShowMeasurementsDetailStatement(stmt *influxql.ShowMeasurementsDetailStatement, ctx *query.ExecutionContext, seq int) error {
+	if stmt.Database == "" {
+		return coordinator.ErrDatabaseNameRequired
+	}
+	var mms influxql.Measurements
+	if stmt.Source != nil {
+		mms = influxql.Measurements{stmt.Source.(*influxql.Measurement)}
+	}
+
+	measurements, err := e.MetaClient.MatchMeasurements(stmt.Database, mms)
+	if err != nil {
+		return err
+	}
+
+	var blank2Nil = func(s string) string {
+		// not return a empty string, return "<nil>" instead
+		if s == "" {
+			return "<nil>"
+		}
+		return s
+	}
+
+	// sliceFirstColumn gets all shard keys and indexes from the returned models.Row.Values array, then returns a sorted slice.
+	// sk: true if the values are shard keys.
+	var sliceFirstColumn = func(values [][]interface{}, sk bool) (ret []string) {
+		ret = make([]string, 0, len(values))
+		if sk {
+			for i := range values {
+				if values[i] == nil {
+					continue
+				}
+				if currValue, ok := values[i][0].([]string); ok {
+					ret = append(ret, currValue...)
+				}
+			}
+		} else {
+			for i := range values {
+				if values[i] == nil {
+					continue
+				}
+				if currValue, ok := values[i][0].(string); ok {
+					ret = append(ret, currValue)
+				}
+			}
+		}
+		sort.Strings(ret)
+		return
+	}
+	var emitted = false
+	for key, m := range measurements {
+		originName := m.OriginName()
+		row := &models.Row{Name: originName, Columns: []string{"Detail"}}
+		// the values has 9 rows (retention policy, shardKeys, fieldKeys etc.) at most.
+		values := make([][]interface{}, 0, 9)
+		// key: rpName.mstName
+		policyStr := "RETENTION POLICY: " + strings.Split(key, ".")[0]
+		values = append(values, []interface{}{policyStr})
+
+		indexStr := strings.Join(sliceFirstColumn(getIndex(m).Values, false), ", ")
+		indexStr = "INDEX: " + blank2Nil(indexStr)
+		values = append(values, []interface{}{indexStr})
+
+		shardKeyStr := strings.Join(sliceFirstColumn(getShardKey(m).Values, true), ", ")
+		shardKeyStr = "SHARD KEY: " + blank2Nil(shardKeyStr)
+		values = append(values, []interface{}{shardKeyStr})
+
+		engineTypeStr := config.EngineType2String[m.EngineType]
+		engineTypeStr = "ENGINE TYPE: " + engineTypeStr
+		values = append(values, []interface{}{engineTypeStr})
+
+		if m.EngineType == config.COLUMNSTORE {
+			primaryKeyStr := strings.Join(m.ColStoreInfo.PrimaryKey, ", ")
+			primaryKeyStr = "PRIMARY KEY: " + blank2Nil(primaryKeyStr)
+			values = append(values, []interface{}{primaryKeyStr})
+
+			sortKeyStr := strings.Join(m.ColStoreInfo.SortKey, ", ")
+			sortKeyStr = "SORT KEY: " + blank2Nil(sortKeyStr)
+			values = append(values, []interface{}{sortKeyStr})
+
+			compactionTypeStr := config.CompactionType2Str(m.ColStoreInfo.CompactionType)
+			compactionTypeStr = "COMPACTION_TYPE: " + blank2Nil(compactionTypeStr)
+			values = append(values, []interface{}{compactionTypeStr})
+		}
+
+		tagKeysMap := make(map[string]map[string]struct{}, 1)
+		tagKeysMap[m.Name] = make(map[string]struct{}, m.TagKeysTotal())
+		m.MatchTagKeys(nil, tagKeysMap)
+		tagStrs := make([]string, 0, m.TagKeysTotal())
+		for k := range tagKeysMap[m.Name] {
+			tagStrs = append(tagStrs, k)
+		}
+		sort.Strings(tagStrs)
+		var tagStr string
+		// cut if over-length
+		tagMaxLen := 10
+		if len(tagStrs) > tagMaxLen {
+			tagStr = strings.Join(tagStrs[:tagMaxLen], ", ")
+			tagStr += "..."
+		} else {
+			tagStr = strings.Join(tagStrs, ", ")
+		}
+		tagStr = "TAG KEYS: " + blank2Nil(tagStr)
+		values = append(values, []interface{}{tagStr})
+
+		fieldKeysMap := make(map[string]map[string]int32, 1)
+		fieldKeysMap[originName] = make(map[string]int32)
+		m.FieldKeys(fieldKeysMap)
+		fieldStrs := make([]string, 0, len(fieldKeysMap[originName]))
+		for field, fieldType := range fieldKeysMap[originName] {
+			fieldStrs = append(fieldStrs, fmt.Sprintf("%s(%s)", field, influx.FieldTypeString(fieldType)))
+		}
+		sort.Strings(fieldStrs)
+		var fieldStr string
+		// cut if over-length
+		fieldMaxLen := 10
+		if len(fieldStrs) > fieldMaxLen {
+			fieldStr = strings.Join(fieldStrs[:fieldMaxLen], ", ")
+			fieldStr += "..."
+		} else {
+			fieldStr = strings.Join(fieldStrs, ", ")
+		}
+		fieldStr = "FIELD KEYS: " + blank2Nil(fieldStr)
+		values = append(values, []interface{}{fieldStr})
+
+		row.Values = values
+		if err := ctx.Send(&query.Result{Series: []*models.Row{row}}, seq); err != nil {
+			return err
+		}
+		emitted = true
+	}
+	if !emitted {
+		return ctx.Send(&query.Result{}, seq)
+	}
+	return nil
+}
+
 func (e *StatementExecutor) executeShowMeasurementCardinalityStatement(stmt *influxql.ShowMeasurementCardinalityStatement) (models.Rows, error) {
 	if stmt.Database == "" {
 		return nil, coordinator.ErrDatabaseNameRequired
@@ -2128,6 +2269,10 @@ func (e *StatementExecutor) NormalizeStatement(stmt influxql.Statement, defaultD
 				node.Database = defaultDatabase
 			}
 		case *influxql.ShowMeasurementsStatement:
+			if node.Database == "" {
+				node.Database = defaultDatabase
+			}
+		case *influxql.ShowMeasurementsDetailStatement:
 			if node.Database == "" {
 				node.Database = defaultDatabase
 			}
