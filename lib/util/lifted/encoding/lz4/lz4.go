@@ -1,8 +1,10 @@
-//go:build !linux || !amd64
-
 package lz4
 
-import "github.com/pierrec/lz4/v4"
+import (
+	"errors"
+
+	"github.com/pierrec/lz4/v4"
+)
 
 /*
 Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
@@ -29,5 +31,12 @@ func CompressBlock(source, dest []byte) (int, error) {
 }
 
 func DecompressSafe(source, dest []byte) (int, error) {
-	return lz4.UncompressBlock(source, dest)
+	size, err := lz4.UncompressBlock(source, dest)
+	if err != nil {
+		return 0, err
+	}
+	if size <= 0 {
+		return size, errors.New("lz4: invalid source or destination buffer too short")
+	}
+	return size, nil
 }
