@@ -164,7 +164,7 @@ def run(command, allow_failure=False, shell=False):
             return None
         else:
             logging.error("Command '%s' failed with error: %s", command, e.output)
-            write_to_gobuild(e.output)
+            write_to_gobuild(e.output.decode("utf-8"))
             sys.exit(1)
     except OSError as e:
         if allow_failure:

@@ -12,7 +12,7 @@ require (
 	github.com/apache/arrow/go/v13 v13.0.0-20230630125530-5a06b2ec2a8e
 	github.com/armon/go-metrics v0.4.1
 	github.com/bits-and-blooms/bloom/v3 v3.5.0
-	github.com/bytedance/sonic v1.9.1
+	github.com/bytedance/sonic v1.12.2
 	github.com/cespare/xxhash/v2 v2.2.0
 	github.com/cockroachdb/errors v1.9.1
 	github.com/deckarep/golang-set v1.8.0
@@ -93,9 +93,11 @@ require (
 	github.com/bgentry/speakeasy v0.1.0 // indirect
 	github.com/bits-and-blooms/bitset v1.8.0 // indirect
 	github.com/bmizerany/pat v0.0.0-20170815010413-6226ea591a40 // indirect
+	github.com/bytedance/sonic/loader v0.2.0 // indirect
 	github.com/c-bata/go-prompt v0.2.6 // indirect
 	github.com/cespare/xxhash v1.1.0 // indirect
-	github.com/chenzhuoyu/base64x v0.0.0-20221115062448-fe3a3abad311 // indirect
+	github.com/cloudwego/base64x v0.1.4 // indirect
+	github.com/cloudwego/iasm v0.2.0 // indirect
 	github.com/cockroachdb/logtags v0.0.0-20211118104740-dabe8e521a4f // indirect
 	github.com/cockroachdb/redact v1.1.3 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
