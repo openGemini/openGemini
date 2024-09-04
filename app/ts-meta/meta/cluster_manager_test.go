@@ -292,10 +292,6 @@ func TestClusterManagerResendLastEventWhenLeaderChange(t *testing.T) {
 	}
 	defer mms.Close()
 
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	cmd := GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")
 	if err = mms.service.store.ApplyCmd(cmd); err != nil {
 		t.Fatal(err)

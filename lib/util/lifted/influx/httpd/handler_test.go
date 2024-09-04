@@ -702,9 +702,7 @@ func Benchmark_TimeSeries2Rows(t *testing.B) {
 		for j := 0; j < 1000000; j++ {
 			*rs, err = timeSeries2Rows(EmptyPromMst, *rs, tss)
 			if err != nil {
-				if err != nil {
-					t.Fatal("timeSeries2Rows fail")
-				}
+				t.Fatal("timeSeries2Rows fail")
 			}
 			t.StopTimer()
 		}

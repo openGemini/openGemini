@@ -476,9 +476,6 @@ func shardInfoMsgHandler(cmd *proto2.Command, mms *meta.MockMetaService) error {
 		return err
 	}
 	h.InitHandler(mms.GetStore(), mms.GetConfig(), nil)
-	if err != nil {
-		return err
-	}
 	resp, err := h.Process()
 	if err != nil {
 		return err
@@ -796,9 +793,6 @@ func TestDownSampleCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err = meta.ProcessExecuteRequest(ms.GetStore(), meta.GenerateCreateDatabaseCmd(db), ms.GetConfig()); err != nil {
-		t.Fatal(err)
-	}
-	if err != nil {
 		t.Fatal(err)
 	}
 	if err = ms.GetStore().ApplyCmd(meta.GenerateCreateDownSampleCmd(db, rp, duration, sampleIntervals, timeIntervals, calls)); err != nil {
