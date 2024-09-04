@@ -1429,6 +1429,22 @@ func (e *StatementExecutor) executeShowMeasurementsStatement(q *influxql.ShowMea
 	if err != nil {
 		return err
 	}
+
+	if q.Offset > 0 {
+		if q.Offset >= len(measurements) {
+			measurements = nil
+		} else {
+			measurements = measurements[q.Offset:]
+		}
+
+	}
+
+	if q.Limit > 0 {
+		if q.Limit < len(measurements) {
+			measurements = measurements[:q.Limit]
+		}
+	}
+
 	if len(measurements) == 0 {
 		return ctx.Send(&query.Result{}, seq)
 	}
