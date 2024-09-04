@@ -353,7 +353,7 @@ func (dag *TransformDag) SetVertexToInfo(vertex *TransformVertex, info *Transfor
 
 func (dag *TransformDag) AddVertex(vertex *TransformVertex) bool {
 	if _, ok := dag.mapVertexToInfo[vertex]; ok {
-		return !ok
+		return false
 	}
 
 	dag.mapVertexToInfo[vertex] = NewTransformVertexInfo()
@@ -364,7 +364,7 @@ func (dag *TransformDag) AddEdge(from *TransformVertex, to *TransformVertex) boo
 	edge := NewTransformEdge(from, to)
 
 	if _, ok := dag.edgeSet[edge]; ok {
-		return !ok
+		return false
 	}
 	dag.edgeSet[edge] = struct{}{}
 
