@@ -594,7 +594,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// changed 2023-06-30, use GeminiDB replace influxdb
 	// Add version and build header to all Geminidb requests.
-	w.Header().Add("X-Influxdb-Version", h.Version)
 	w.Header().Add("X-Geminidb-Version", h.Version)
 	w.Header().Add("X-Geminidb-Build", h.BuildType)
 
