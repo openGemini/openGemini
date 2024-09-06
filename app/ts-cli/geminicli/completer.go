@@ -15,7 +15,7 @@
 package geminicli
 
 import (
-	"github.com/StepY1aoZz/go-prompt"
+	"github.com/openGemini/go-prompt"
 )
 
 type Completer struct {
