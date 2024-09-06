@@ -29,10 +29,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/StepY1aoZz/go-prompt"
 	"github.com/influxdata/influxdb/client"
 	"github.com/influxdata/influxdb/models"
 	"github.com/olekukonko/tablewriter"
+	"github.com/openGemini/go-prompt"
 	"github.com/openGemini/openGemini/app"
 	"github.com/openGemini/openGemini/app/ts-cli/geminiql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"

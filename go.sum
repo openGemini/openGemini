@@ -189,8 +189,6 @@ github.com/Shopify/goreferrer v0.0.0-20181106222321-ec9c9a553398/go.mod h1:a1uqR
 github.com/Shopify/logrus-bugsnag v0.0.0-20171204204709-577dee27f20d/go.mod h1:HI8ITrYtUY+O+ZhtlqUnD8+KwNPOyugEhfP9fdUIaEQ=
 github.com/Shopify/sarama v1.19.0/go.mod h1:FVkBWblsNy7DGZRfXLU0O9RCGt5g3g3yEuWXgklEdEo=
 github.com/Shopify/toxiproxy v2.1.4+incompatible/go.mod h1:OXgGpZ6Cli1/URJOF1DMxUHB2q5Ap20/P/eIdh4G0pI=
-github.com/StepY1aoZz/go-prompt v0.0.0-20240714073756-61a575943cba h1:zn8iUFVBcJohty5a9bBgrfxgvNLwIsIffMNOX77EXYs=
-github.com/StepY1aoZz/go-prompt v0.0.0-20240714073756-61a575943cba/go.mod h1:zWMLnPy1Vppwy3vwOssF01Sr4bWtzu7BBoia+QtVkDQ=
 github.com/VictoriaMetrics/VictoriaMetrics v1.67.0 h1:CS+AZT9rykvIPNiTzwdE5d894bUnkeXV4qStEA6ki/E=
 github.com/VictoriaMetrics/VictoriaMetrics v1.67.0/go.mod h1:cgL5RdFv2yZW8eCsRjpmsHghpHw30ZG/knU0t4cRH0E=
 github.com/VictoriaMetrics/fastcache v1.7.0 h1:E6GibaGI685TafrI7E/QqZPkMsOzRw+3gpICQx08ISg=
@@ -1379,6 +1377,8 @@ github.com/onsi/gomega v1.10.1/go.mod h1:iN09h71vgCQne3DLsj+A5owkum+a2tYe+TOCB1y
 github.com/onsi/gomega v1.10.3/go.mod h1:V9xEwhxec5O8UDM77eCW8vLymOMltsqPVYWrpDsH8xc=
 github.com/onsi/gomega v1.13.0/go.mod h1:lRk9szgn8TxENtWd0Tp4c3wjlRfMTMH27I+3Je41yGY=
 github.com/op/go-logging v0.0.0-20160315200505-970db520ece7/go.mod h1:HzydrMdWErDVzsI23lYNej1Htcns9BCg93Dk0bBINWk=
+github.com/openGemini/go-prompt v0.0.0-20240906095849-29653678978f h1:XT64FJ274ZW1RuV1pXM04ZYCQlfzXUbHPf4oUX6TJl0=
+github.com/openGemini/go-prompt v0.0.0-20240906095849-29653678978f/go.mod h1:oSS/OisE9pPJxF3TCpsXNUB6pXabgnjuCZv9H3DhhM4=
 github.com/opencontainers/go-digest v0.0.0-20170106003457-a6d0ee40d420/go.mod h1:cMLVZDEM3+U2I4VmLI6N8jQYUd2OVphdqWwCJHrFt2s=
 github.com/opencontainers/go-digest v0.0.0-20180430190053-c9281466c8b2/go.mod h1:cMLVZDEM3+U2I4VmLI6N8jQYUd2OVphdqWwCJHrFt2s=
 github.com/opencontainers/go-digest v1.0.0-rc1/go.mod h1:cMLVZDEM3+U2I4VmLI6N8jQYUd2OVphdqWwCJHrFt2s=

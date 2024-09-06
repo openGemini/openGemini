@@ -5,7 +5,6 @@ go 1.20
 require (
 	github.com/BurntSushi/toml v0.4.1
 	github.com/RoaringBitmap/roaring v0.9.1
-	github.com/StepY1aoZz/go-prompt v0.0.0-20240714073756-61a575943cba
 	github.com/VictoriaMetrics/VictoriaMetrics v1.67.0
 	github.com/VictoriaMetrics/fastcache v1.7.0
 	github.com/agiledragon/gomonkey/v2 v2.10.1
@@ -35,6 +34,7 @@ require (
 	github.com/mitchellh/cli v1.1.5
 	github.com/nxadm/tail v1.4.11
 	github.com/olekukonko/tablewriter v0.0.0-20170122224234-a0225b3f23b5
+	github.com/openGemini/go-prompt v0.0.0-20240906095849-29653678978f
 	github.com/panjf2000/ants/v2 v2.5.0
 	github.com/pierrec/lz4/v4 v4.1.17
 	github.com/pingcap/failpoint v0.0.0-20220801062533-2eaa32854a6c
