@@ -20,6 +20,10 @@ openGemini是一款云原生分布式时序数据库，主要面向物联网和�
 
 如果您使用了openGemini，请让我们知道，[点击提交使用信息](https://github.com/openGemini/openGemini/issues/62)
 
+![cncf_logo](./images/cncf-logo.png)
+
+openGemini 是云原生计算基金会 (CNCF) 的一个沙箱项目。如果您是一家希望积极支持云原生生态系统成长和发展的组织，请考虑加入 CNCF。
+
 ## 特性
 
 与其他开源时序数据库相比，openGemini 具有以下优势：
@@ -52,23 +56,23 @@ openGemini是一款云原生分布式时序数据库，主要面向物联网和�
 
 - 容器化部署，[openGemini-Operator](https://github.com/openGemini/openGemini-operator) 支持一键容器化部署
 
-  <img src="./images/containerized.png" alt="image-20220927210909436" style="width:60%;" />
+  <img src="./images/containerized.png" alt=" " style="width:60%;" />
 
 - openTelemetry 后端存储, 简化系统架构
 
-  <img src="./images/openTelemetry.png" alt="image-20220927210909436" style="width:60%;" />
+  <img src="./images/openTelemetry.png" alt=" " style="width:60%;" />
 
-- Prometheus 后端存储，支持远程 read/write，**[WIP]** 支持 PromQL
+- Prometheus 后端存储，支持远程 read/write，支持 PromQL
 
-  <img src="./images/prometheus.png" alt="image-20220927210909436" style="width:60%;" />
+  <img src="./images/prometheus.png" alt=" " style="width:60%;" />
 
 - KubeEdge与openGemini集成, 更好管理边缘设备数据
 
-  <img src="./images/kubeedge.png" alt="image-20220927210909436" style="width:60%;" />
+  <img src="./images/kubeedge.png" alt=" " style="width:60%;" />
 
 ## 应用场景
 
-<img src="images/scenario_zh.png" alt="image-20220927211159737" style="width:90%;" />
+<img src="images/scenario_zh.png" alt=" " style="width:90%;" />
 
 ## 快速开始
 
@@ -98,6 +102,8 @@ export GO111MODULE=on
 export GONOSUMDB=*
 export GOSUMDB=off
 ```
+
+针对v1.3.0版本，需要更新GLIBC版本到[GLIBCXX_3.4.29 或更高](https://blog.csdn.net/weixin_42596778/article/details/141935013)
 
 ### 编译
 

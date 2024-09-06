@@ -21,6 +21,10 @@ openGemini is a cloud-native distributed time series database, focusing on the s
 
 If you have used openGemini, please let us know and [click submit Usage Information](https://github.com/openGemini/openGemini/issues/62)
 
+![cncf_logo](./images/cncf-logo.png)
+
+openGemini is an sandbox project of the [Cloud Native Computing Foundation](https://cncf.io/) (CNCF). Please consider joining the CNCF if you are an organization that wants to take an active role in supporting the growth and evolution of the cloud native ecosystem.
+
 ## Why openGemini
 
 Compared with other time series database, openGemini has the following advantages:
@@ -59,9 +63,9 @@ Compared with other time series database, openGemini has the following advantage
 
   <img src="./images/openTelemetry.png" alt="image-20220927210909436" style="width:60%;" />
 
-- Prometheus backend storage，support remote read/write, and Support PromQL **[WIP]** 
+- Prometheus backend storage，support remote read/write, and Support PromQL 
 
-  <img src="./images/prometheus.png" alt="image-20220927210909436" style="width:60%;" />
+  <img src="./images/prometheus.png" alt="" style="width:60%;" />
 
 - KubeEdge integration with openGemini, better manage edge device data
 
