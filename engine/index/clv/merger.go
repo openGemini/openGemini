@@ -155,17 +155,18 @@ func mergeDocIdxItems(data []byte, items []mergeset.Item) ([]byte, []mergeset.It
 			noMerge = keysEqual(firstItem, item)
 			comFirstItem = noMerge
 		}
-		if !comFirstItem {
+		if !comFirstItem && lastItem[0] == txPrefixPos {
 			noMerge = keysEqual(lastItem, item)
 		}
 
-		if len(item) == 0 || item[0] != txPrefixPos || i == 0 || i == len(items)-1 || noMerge {
+		if len(item) == 0 || item[0] != txPrefixPos || i == len(items)-1 || noMerge {
 			dstData, dstItems = m.flushPendingItem(dstData, dstItems)
 			dstData = append(dstData, item...)
 			dstItems = append(dstItems, mergeset.Item{
 				Start: uint32(len(dstData) - len(item)),
 				End:   uint32(len(dstData)),
 			})
+			noMerge = false
 			continue
 		}
 
