@@ -276,6 +276,42 @@ func TestParser(t *testing.T) {
 				Precision: "ns",
 			},
 		},
+		{
+			name: "tag array write with multi values",
+			cmd:  "insert cpu,t1=1,t2=[a,b] value=3",
+			expect: &InsertStatement{
+				DB:           "",
+				RP:           "",
+				LineProtocol: `cpu,t1=1,t2=[a,b] value=3`,
+			},
+		},
+		{
+			name: "tag array write with single value",
+			cmd:  "insert cpu,t1=1,t2=[a] value=3",
+			expect: &InsertStatement{
+				DB:           "",
+				RP:           "",
+				LineProtocol: `cpu,t1=1,t2=[a] value=3`,
+			},
+		},
+		{
+			name: "tag array write with multi values and escape value",
+			cmd:  "insert cpu,t1=[aaaaa,\"bbbbb\"] value=3",
+			expect: &InsertStatement{
+				DB:           "",
+				RP:           "",
+				LineProtocol: `cpu,t1=[aaaaa,"bbbbb"] value=3`,
+			},
+		},
+		{
+			name: "tag array write with multi values and single quota",
+			cmd:  "insert cpu,t1=[aaaaa,'bbbbb'] value=3",
+			expect: &InsertStatement{
+				DB:           "",
+				RP:           "",
+				LineProtocol: `cpu,t1=[aaaaa,'bbbbb'] value=3`,
+			},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ast := &QLAst{}
