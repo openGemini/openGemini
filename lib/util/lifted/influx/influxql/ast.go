@@ -307,6 +307,7 @@ func (*ShowFieldKeysStatement) node()              {}
 func (*ShowRetentionPoliciesStatement) node()      {}
 func (*ShowMeasurementCardinalityStatement) node() {}
 func (*ShowMeasurementsStatement) node()           {}
+func (*ShowMeasurementsDetailStatement) node()     {}
 func (*ShowQueriesStatement) node()                {}
 func (*ShowSeriesStatement) node()                 {}
 func (*ShowSeriesCardinalityStatement) node()      {}
@@ -469,6 +470,7 @@ func (*ShowFieldKeyCardinalityStatement) stmt()    {}
 func (*ShowFieldKeysStatement) stmt()              {}
 func (*ShowMeasurementCardinalityStatement) stmt() {}
 func (*ShowMeasurementsStatement) stmt()           {}
+func (*ShowMeasurementsDetailStatement) stmt()     {}
 func (*ShowQueriesStatement) stmt()                {}
 func (*ShowRetentionPoliciesStatement) stmt()      {}
 func (*ShowSeriesStatement) stmt()                 {}
@@ -3780,6 +3782,47 @@ func (s *ShowMeasurementsStatement) RequiredPrivileges() (ExecutionPrivileges, e
 
 // DefaultDatabase returns the default database from the statement.
 func (s *ShowMeasurementsStatement) DefaultDatabase() string {
+	return s.Database
+}
+
+// ShowMeasurementsDetailStatement represents a command for listing measurements detail, including retention policy,
+// tag keys, field keys, and schemas.
+type ShowMeasurementsDetailStatement struct {
+	// Database to query. If blank, use the default database.
+	Database string
+
+	// Measurement name or regex.
+	Source Source
+}
+
+// String returns a string representation of the statement.
+func (s *ShowMeasurementsDetailStatement) String() string {
+	var buf bytes.Buffer
+	_, _ = buf.WriteString("SHOW MEASUREMENTS DETAIL")
+
+	if s.Database != "" {
+		_, _ = buf.WriteString(" ON ")
+		_, _ = buf.WriteString(s.Database)
+	}
+	if s.Source != nil {
+		_, _ = buf.WriteString(" WITH MEASUREMENT ")
+		if m, ok := s.Source.(*Measurement); ok && m.Regex != nil {
+			_, _ = buf.WriteString("=~ ")
+		} else {
+			_, _ = buf.WriteString("= ")
+		}
+		_, _ = buf.WriteString(s.Source.String())
+	}
+	return buf.String()
+}
+
+// RequiredPrivileges returns the privilege(s) required to execute a ShowMeasurementsDetailStatement.
+func (s *ShowMeasurementsDetailStatement) RequiredPrivileges() (ExecutionPrivileges, error) {
+	return ExecutionPrivileges{{Admin: false, Name: s.Database, Rwuser: true, Privilege: ReadPrivilege}}, nil
+}
+
+// DefaultDatabase returns the default database from the statement.
+func (s *ShowMeasurementsDetailStatement) DefaultDatabase() string {
 	return s.Database
 }
 

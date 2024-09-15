@@ -9092,6 +9092,59 @@ func TestServer_Query_ShowMeasurementExactCardinality(t *testing.T) {
 	ReleaseHaTestEnv(t)
 }
 
+func TestServer_Query_ShowMeasurementsDetail(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateMeasurement("CREATE MEASUREMENT db0.rp0.cpu (region tag,  az tag, v1 int64,  v2 float64,  v3 bool, v4 string) WITH  ENGINETYPE = columnstore  SHARDKEY az,region PRIMARYKEY az,region,time"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateMeasurement("CREATE MEASUREMENT db0.rp0.gpu (region tag,  az tag, v1 int64,  v2 float64,  v3 bool, v4 string)"); err != nil {
+		t.Fatal(err)
+	}
+	test := NewTest("db0", "rp0")
+	test.addQueries([]*Query{
+		{
+			name:    "show details of measurements in column engine with shard keys",
+			command: `show measurements detail with measurement = cpu`,
+			params:  url.Values{"db": []string{"db0"}},
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["Detail"],"values":[["RETENTION POLICY: rp0"],["INDEX: \u003cnil\u003e"],["SHARD KEY: az, region"],["ENGINE TYPE: columnstore"],["PRIMARY KEY: az, region, time"],["SORT KEY: az, region, time"],["COMPACTION_TYPE: row"],["TAG KEYS: az, region"],["FIELD KEYS: v1(integer), v2(float), v3(boolean), v4(string)"]]}]}]}`,
+		},
+		{
+			name:    "show details of measurements in tsstore",
+			command: `show measurements detail with measurement = gpu`,
+			params:  url.Values{"db": []string{"db0"}},
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"gpu","columns":["Detail"],"values":[["RETENTION POLICY: rp0"],["INDEX: \u003cnil\u003e"],["SHARD KEY: \u003cnil\u003e"],["ENGINE TYPE: tsstore"],["TAG KEYS: az, region"],["FIELD KEYS: v1(integer), v2(float), v3(boolean), v4(string)"]]}]}]}`,
+		},
+	}...)
+	InitHaTestEnv(t)
+
+	for i, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if i == 0 {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
+			}
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+
+	ReleaseHaTestEnv(t)
+
+}
+
 func TestServer_Query_ShowSeries(t *testing.T) {
 	t.Parallel()
 	s := OpenServer(NewConfig())

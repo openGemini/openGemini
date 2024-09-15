@@ -132,7 +132,7 @@ func deal_Fill (fill interface{})  (FillOption , interface{},bool) {
 %right UMINUS
 
 %type <stmt>                        STATEMENT SHOW_DATABASES_STATEMENT CREATE_DATABASE_STATEMENT WITH_CLAUSES CREATE_USER_STATEMENT
-                                    SELECT_STATEMENT SHOW_MEASUREMENTS_STATEMENT SHOW_RETENTION_POLICIES_STATEMENT
+                                    SELECT_STATEMENT SHOW_MEASUREMENTS_STATEMENT SHOW_MEASUREMENTS_DETAIL_STATEMENT SHOW_RETENTION_POLICIES_STATEMENT
                                     CREATE_RENTRENTION_POLICY_STATEMENT RP_DURATION_OPTIONS SHOW_SERIES_STATEMENT
                                     SHOW_USERS_STATEMENT DROP_SERIES_STATEMENT DROP_DATABASE_STATEMENT DELETE_SERIES_STATEMENT
                                     ALTER_RENTRENTION_POLICY_STATEMENT
@@ -231,6 +231,10 @@ STATEMENT:
     	$$ = $1
     }
     |SHOW_MEASUREMENTS_STATEMENT
+    {
+        $$ = $1
+    }
+    |SHOW_MEASUREMENTS_DETAIL_STATEMENT
     {
         $$ = $1
     }
@@ -1585,6 +1589,21 @@ SHOW_MEASUREMENTS_STATEMENT:
          sms.Offset = $6[1]
          $$ = sms
      }
+
+SHOW_MEASUREMENTS_DETAIL_STATEMENT:
+    SHOW MEASUREMENTS DETAIL ON_DATABASE WITH MEASUREMENT MEASUREMENT_WITH
+    {
+        sms := &ShowMeasurementsDetailStatement{}
+        sms.Database = $4
+        sms.Source = $7
+        $$ = sms
+    }
+    |SHOW MEASUREMENTS DETAIL ON_DATABASE
+    {
+        sms := &ShowMeasurementsDetailStatement{}
+        sms.Database = $4
+        $$ = sms
+    }
 
 MEASUREMENT_WITH:
 
