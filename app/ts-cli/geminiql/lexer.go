@@ -45,6 +45,14 @@ func isSplitChar(ch rune) bool {
 	return ch == ',' || ch == ' ' || ch == '=' || ch == '.'
 }
 
+func isLBracket(ch rune) bool {
+	return ch == '['
+}
+
+func isRBracket(ch rune) bool {
+	return ch == ']'
+}
+
 type Tokenizer struct {
 	r        io.RuneScanner
 	keywords map[string]int
@@ -158,6 +166,7 @@ func (t *Tokenizer) scanKeywords(s string) int {
 func (t *Tokenizer) scanRaw() (int, string) {
 	var buf bytes.Buffer
 	isString := false
+	var bracket bool
 	for {
 		ch := t.read()
 		if !isString && ch == '"' {
@@ -185,7 +194,7 @@ func (t *Tokenizer) scanRaw() (int, string) {
 				buf.WriteRune(ch)
 				ch = t.read()
 				buf.WriteRune(ch)
-			} else if ch == ',' || ch == ' ' {
+			} else if (ch == ',' || ch == ' ') && !bracket {
 				if err := t.unRead(); err != nil {
 					return BAD_STRING, buf.String()
 				}
@@ -193,7 +202,13 @@ func (t *Tokenizer) scanRaw() (int, string) {
 			} else if ch == EOF {
 				return RAW, buf.String()
 			} else {
+				if isLBracket(ch) {
+					bracket = true
+				}
 				buf.WriteRune(ch)
+				if isRBracket(ch) {
+					return RAW, buf.String()
+				}
 			}
 		}
 	}
