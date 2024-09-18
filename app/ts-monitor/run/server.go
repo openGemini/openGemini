@@ -77,7 +77,7 @@ func NewServer(conf config.Config, cmd *cobra.Command, logger *logger.Logger) (a
 	}()
 	http.HandleFunc("/metrics", serveMetrics)
 	go func() {
-		err := http.ListenAndServe("127.0.0.1:6066", nil)
+		err := http.ListenAndServe(c.MonitorConfig.HttpEndpoint, nil)
 		if err != nil {
 			panic(err)
 		}
