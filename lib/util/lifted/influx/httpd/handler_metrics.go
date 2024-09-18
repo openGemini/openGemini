@@ -37,6 +37,7 @@ import (
 const (
 	internalDatabase       = "_internal"
 	defaultRetentionPolicy = "autogen"
+	namespace              = "opengemini"
 )
 
 var (
@@ -61,9 +62,7 @@ func NewOpenGeminiCollector() *OpenGeminiCollector {
 	return c
 }
 
-func (c *OpenGeminiCollector) Describe(ch chan<- *prometheus.Desc) {
-
-}
+func (c *OpenGeminiCollector) Describe(chan<- *prometheus.Desc) {}
 
 func (c *OpenGeminiCollector) Collect(ch chan<- prometheus.Metric) {
 	for _, moduleName := range metricMsts {
@@ -72,7 +71,6 @@ func (c *OpenGeminiCollector) Collect(ch chan<- prometheus.Metric) {
 			continue
 		}
 		for _, metricIndex := range metricSlice {
-
 			for metricName, metricValue := range metricIndex.MetricsMap {
 				var labelKeys, labelValues []string
 				for key, value := range metricIndex.LabelValues {
@@ -80,22 +78,21 @@ func (c *OpenGeminiCollector) Collect(ch chan<- prometheus.Metric) {
 					labelValues = append(labelValues, value)
 				}
 
-				var desc = metrics.NewDesc("", metricName, "", labelKeys)
-
 				metric, ok := metricValue.(float64)
 				if !ok {
 					continue
 				}
+
+				var desc = metrics.NewDesc(namespace+"_"+moduleName, metricName, "", labelKeys)
 				m := prometheus.MustNewConstMetric(desc, prometheus.GaugeValue,
 					metric, labelValues...)
-
 				ch <- prometheus.NewMetricWithTimestamp(metricIndex.Timestamp, m)
 			}
-
 		}
 	}
 }
 
+// serveMetrics rewrite the promhttp handler
 func (h *Handler) serveMetrics(w http.ResponseWriter, r *http.Request, user meta.User) {
 	if _, err := h.MetaClient.Database(internalDatabase); err != nil {
 		promhttp.Handler().ServeHTTP(w, r)
@@ -112,7 +109,7 @@ func (h *Handler) serveMetrics(w http.ResponseWriter, r *http.Request, user meta
 	promhttp.Handler().ServeHTTP(w, r)
 }
 
-// // getMetrics serverProm
+// getMetrics capture data from the internalDatabase
 func getMetrics(h *Handler, r *http.Request, user meta.User, tableName string) ([]*metrics.ModuleIndex, error) {
 	if _, err := h.MetaClient.Measurement(internalDatabase, defaultRetentionPolicy, tableName); err != nil {
 		return nil, nil
