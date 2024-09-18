@@ -405,6 +405,9 @@ def build(version=None,
 def write_to_gobuild(content):
     logging.info("write to file")
 
+    if isinstance(content,bytes):
+        content = content.decode("utf-8")
+        
     if get_system_platform() != "windows":
         with open(gobuild_out, 'w') as f:
             f.write("error\n")
