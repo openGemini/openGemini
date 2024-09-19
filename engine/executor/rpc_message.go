@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package executor
 
@@ -178,6 +176,36 @@ func (e *Abort) Size() int {
 
 func (e *Abort) Instance() transport.Codec {
 	return &Abort{}
+}
+
+type Crash struct {
+	ClientID uint64
+	QueryID  uint64
+}
+
+func NewCrash(queryID uint64, clientID uint64) *Crash {
+	return &Crash{ClientID: clientID, QueryID: queryID}
+}
+
+func (c *Crash) Marshal(buf []byte) ([]byte, error) {
+	buf = codec.AppendUint64(buf, c.ClientID)
+	buf = codec.AppendUint64(buf, c.QueryID)
+	return buf, nil
+}
+
+func (c *Crash) Unmarshal(buf []byte) error {
+	dec := codec.NewBinaryDecoder(buf)
+	c.ClientID = dec.Uint64()
+	c.QueryID = dec.Uint64()
+	return nil
+}
+
+func (c *Crash) Size() int {
+	return codec.SizeOfUint64() * 2
+}
+
+func (c *Crash) Instance() transport.Codec {
+	return &Crash{}
 }
 
 type AnalyzeResponse struct {

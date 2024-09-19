@@ -1,19 +1,17 @@
-//go:build linux
-/*
-Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+//go:build linux && amd64
+// Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include <algorithm>
 #include "FullTextIndex.h"
@@ -92,31 +90,34 @@ int32_t FullTextIndex::Init(const char *splitStr, uint32_t len, bool hasChin)
     return SUCCESS;
 }
 
-void FullTextIndex::PutToSortInvert(MemPool *pool, Invert *root)
+void FullTextIndex::PutToSortInvert(MemPool *pool, Invert *root, ListNode *hashSections, uint32_t nodeCount)
 {
     InvertGroup *invertGroup = pool->GetInvertGroup();
     invertGroup->Prepare(nodeCount);
     pool->invertIter = 0;
 
-    HashTable *hashTable = &root->hashTable;
-    for (int i = 0; i < hashTable->bktSize; i++) {
-        if (ListEmpty(&hashTable->bkts[i])) {
+    for (int i = 0; i < HASHTABLE_SECTION_SIZE; i++) {
+       if (ListEmpty(&hashSections[i])) {
             continue;
         }
+        int32_t tmpNodeCnt = 0;
+        InvertElement **curLoc = &invertGroup->group[invertGroup->len];
         ListNode *tmpNode = nullptr, *node = nullptr;
-        LIST_FOR_EACH_SAFE(node, tmpNode, &hashTable->bkts[i]) {
-            InvertElement *ele = (InvertElement *)NODE_ENTRTY(node, InvertElement, node);
-            ListRemove(node);
+        LIST_FOR_EACH_SAFE(node, tmpNode, &hashSections[i]) {
+            InvertElement *ele = (InvertElement *)NODE_ENTRTY(node, InvertElement, hashSection);
+            ListRemove(&ele->node);
+            ListRemove(&ele->hashSection);
             invertGroup->Insert(ele);
+            tmpNodeCnt++;
         }
+        qsort(curLoc, tmpNodeCnt, sizeof(InvertElement *), CompareEle);
     }
-    qsort(invertGroup->group, invertGroup->len, sizeof(InvertElement *), CompareEle);
 }
 
-void FullTextIndex::InsertPostingList(MemPool *pool, Invert *root, VToken *vtoken, uint32_t batchLen)
+uint32_t FullTextIndex::InsertPostingList(MemPool *pool, Invert *root, ListNode *hashSections, VToken *vtoken, uint32_t batchLen)
 {
+    uint32_t nodeCount = 0;
     HashTable *hashTable = &(root->hashTable);
- 
     InvertElement *ele = nullptr;
     for (int32_t i = 0; i < batchLen; i++) {
         for (int32_t j = 0; j < vtoken[i].len; j++) {
@@ -124,6 +125,7 @@ void FullTextIndex::InsertPostingList(MemPool *pool, Invert *root, VToken *vtoke
             if (node == nullptr) {
                 ele = pool->GetInvertElement();
                 ele->token = vtoken[i].tokens[j];
+                ListInsertToTail(&hashSections[ele->token.data[0]], &ele->hashSection);
                 hashTable->InsertByToken(&ele->node, &(vtoken[i].tokens[j]));
                 nodeCount++;
             } else {
@@ -133,6 +135,7 @@ void FullTextIndex::InsertPostingList(MemPool *pool, Invert *root, VToken *vtoke
         }
         vtoken[i].Reset();
     }
+    return nodeCount;
 }
 
 // the scope of the text-index to be constructed is [startRow, endRow), which includes startRow but does not include endRow.
@@ -143,22 +146,22 @@ MemPool *FullTextIndex::AddDocument(char *val, uint32_t valLen, uint32_t *offset
         return nullptr;
     }
     VToken *vtoken = pool->GetVToken();
-    Invert *root = pool->GetInvert(offLen);
+    Invert *root = pool->GetInvert();
+    ListNode *hashSections = pool->GetHashSections();
     ColVal colVal;
     InitColVal(&colVal, val, valLen, offset, offLen);
+    uint32_t nodeCount = 0;
 
-    nodeCount = 0;
     while (startRow < endRow) {
         uint32_t batchLen = TOKENIZE_STEP;
         if (startRow + TOKENIZE_STEP > endRow) {
             batchLen = endRow - startRow;
         }
         if (tokenizer.NextBatch(&colVal, startRow, vtoken, batchLen)) {
-            InsertPostingList(pool, root, vtoken, batchLen);
+            nodeCount += InsertPostingList(pool, root, hashSections, vtoken, batchLen);
         }
         startRow += batchLen;
     }
-    PutToSortInvert(pool, root);
-    pool->UpdateHashFactor(offLen, nodeCount);
+    PutToSortInvert(pool, root, hashSections, nodeCount);
     return pool;
 }

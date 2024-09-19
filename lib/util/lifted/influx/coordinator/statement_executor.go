@@ -89,6 +89,7 @@ type StatementExecutor struct {
 	MaxSelectFieldsN        int
 	MaxSelectBucketsN       int
 	MaxQueryMem             int64
+	MaxRowSizeLimit         int64
 	QueryTimeCompareEnabled bool
 	RetentionPolicyLimit    int
 	MaxQueryParallel        int
@@ -356,6 +357,9 @@ func (e *StatementExecutor) ExecuteStatement(stmt influxql.Statement, ctx *query
 		}
 		_, err = e.retryExecuteStatement(stmt, ctx, seq)
 		return err
+	case *influxql.ShowMeasurementsDetailStatement:
+		err = e.executeShowMeasurementsDetailStatement(stmt, ctx, seq)
+		return err
 	case *influxql.ShowMeasurementCardinalityStatement:
 		if stmt.Condition != nil {
 			return meta2.ErrUnsupportCommand
@@ -481,6 +485,8 @@ func (e *StatementExecutor) retryExecuteStatement(stmt influxql.Statement, ctx *
 			err = e.executeShowSeries(stmt, ctx, seq)
 		case *influxql.ShowMeasurementsStatement:
 			err = e.executeShowMeasurementsStatement(stmt, ctx, seq)
+		case *influxql.ShowMeasurementsDetailStatement:
+			err = e.executeShowMeasurementsDetailStatement(stmt, ctx, seq)
 		case *influxql.ShowMeasurementCardinalityStatement:
 			rows, err = e.executeShowMeasurementCardinalityStatement(stmt)
 		case *influxql.ShowSeriesCardinalityStatement:
@@ -865,7 +871,7 @@ func (e *StatementExecutor) executeDropMeasurementStatement(stmt *influxql.DropM
 		return err
 	}
 
-	return e.MetaClient.MarkMeasurementDelete(database, stmt.Name)
+	return e.MetaClient.MarkMeasurementDelete(database, stmt.RpName, stmt.Name)
 }
 
 func (e *StatementExecutor) executeDropRetentionPolicyStatement(stmt *influxql.DropRetentionPolicyStatement) error {
@@ -1098,6 +1104,10 @@ func (e *StatementExecutor) executeSelectStatement(stmt *influxql.SelectStatemen
 
 	var rowsChan query.RowsChan
 	var ok bool
+	var init bool
+	var byteSizePerRow int
+	var byteSizePerSeries int
+	var totalRowSize int
 	for {
 		select {
 		case rowsChan, ok = <-proxy.rc:
@@ -1109,16 +1119,54 @@ func (e *StatementExecutor) executeSelectStatement(stmt *influxql.SelectStatemen
 				Series:  rowsChan.Rows,
 				Partial: rowsChan.Partial,
 			}
+
 			// Send results or exit if closing.
 			if err := ctx.Send(result, seq); err != nil {
-				pipelineExecutor.Abort()
-				e.StmtExecLogger.Error("send result rows failed", zap.Error(err))
+				var abort, crash bool
+				if strings.Contains(err.Error(), query.ErrQueryTimeoutLimitExceeded.Error()) {
+					pipelineExecutor.Crash()
+					crash = true
+				} else {
+					pipelineExecutor.Abort()
+					abort = true
+				}
+				e.StmtExecLogger.Error("send result rows failed", zap.Error(err), zap.Bool("crash", crash), zap.Bool("abort", abort))
 				return err
 			}
 			emitted = true
+			if e.MaxRowSizeLimit > 0 {
+				if !init {
+					if len(result.Series) > 0 && len(result.Series[0].Values) > 0 {
+						byteSizePerSeries, byteSizePerRow = getPerSeriesAndRowSize(result.Series[0])
+						init = true
+					}
+				}
+				for i := range result.Series {
+					totalRowSize += byteSizePerSeries
+					totalRowSize += len(result.Series[i].Values) * byteSizePerRow
+				}
+				if totalRowSize > int(e.MaxRowSizeLimit) {
+					e.StmtExecLogger.Warn("the queried data volume exceeds the maximum memory threshold.",
+						zap.Float64("QueryMemory(Gb):", float64(totalRowSize)/config.GB),
+						zap.Float64("MemoryThreshold(GB):", float64(e.MaxRowSizeLimit)/config.GB),
+						zap.String("stmt", stmt.String()))
+					pipelineExecutor.Abort()
+					// Always emit at least one result.
+					return ctx.Send(&query.Result{
+						Series: make([]*models.Row, 0),
+					}, seq)
+				}
+			}
 		case <-ctx.Done():
-			e.StmtExecLogger.Info("aborted by user", zap.String("stmt", stmt.String()))
-			pipelineExecutor.Abort()
+			var abort, crash bool
+			if err := ctx.Err(); err != nil && strings.Contains(err.Error(), query.ErrQueryTimeoutLimitExceeded.Error()) {
+				pipelineExecutor.Crash()
+				crash = true
+			} else {
+				pipelineExecutor.Abort()
+				abort = true
+			}
+			e.StmtExecLogger.Info("aborted by user", zap.String("stmt", stmt.String()), zap.Bool("crash", crash), zap.Bool("abort", abort))
 			go proxy.wait()
 			return ctx.Err()
 		}
@@ -1289,7 +1337,9 @@ func getIndex(mst *meta2.MeasurementInfo) *models.Row {
 		for _, col := range mst.IndexRelation.IndexList[i].IList {
 			indexList += col + ","
 		}
-		indexList = indexList[:len(indexList)-1]
+		if len(indexList) > 0 {
+			indexList = indexList[:len(indexList)-1]
+		}
 		if id == uint32(index.TimeCluster) {
 			indexList = mst.ColStoreInfo.TimeClusterDuration.String()
 		}
@@ -1384,6 +1434,22 @@ func (e *StatementExecutor) executeShowMeasurementsStatement(q *influxql.ShowMea
 	if err != nil {
 		return err
 	}
+
+	if q.Offset > 0 {
+		if q.Offset >= len(measurements) {
+			measurements = nil
+		} else {
+			measurements = measurements[q.Offset:]
+		}
+
+	}
+
+	if q.Limit > 0 {
+		if q.Limit < len(measurements) {
+			measurements = measurements[:q.Limit]
+		}
+	}
+
 	if len(measurements) == 0 {
 		return ctx.Send(&query.Result{}, seq)
 	}
@@ -1400,6 +1466,142 @@ func (e *StatementExecutor) executeShowMeasurementsStatement(q *influxql.ShowMea
 			Values:  values,
 		}},
 	}, seq)
+}
+
+func (e *StatementExecutor) executeShowMeasurementsDetailStatement(stmt *influxql.ShowMeasurementsDetailStatement, ctx *query.ExecutionContext, seq int) error {
+	if stmt.Database == "" {
+		return coordinator.ErrDatabaseNameRequired
+	}
+	var mms influxql.Measurements
+	if stmt.Source != nil {
+		mms = influxql.Measurements{stmt.Source.(*influxql.Measurement)}
+	}
+
+	measurements, err := e.MetaClient.MatchMeasurements(stmt.Database, mms)
+	if err != nil {
+		return err
+	}
+
+	var blank2Nil = func(s string) string {
+		// not return a empty string, return "<nil>" instead
+		if s == "" {
+			return "<nil>"
+		}
+		return s
+	}
+
+	// sliceFirstColumn gets all shard keys and indexes from the returned models.Row.Values array, then returns a sorted slice.
+	// sk: true if the values are shard keys.
+	var sliceFirstColumn = func(values [][]interface{}, sk bool) (ret []string) {
+		ret = make([]string, 0, len(values))
+		if sk {
+			for i := range values {
+				if values[i] == nil {
+					continue
+				}
+				if currValue, ok := values[i][0].([]string); ok {
+					ret = append(ret, currValue...)
+				}
+			}
+		} else {
+			for i := range values {
+				if values[i] == nil {
+					continue
+				}
+				if currValue, ok := values[i][0].(string); ok {
+					ret = append(ret, currValue)
+				}
+			}
+		}
+		sort.Strings(ret)
+		return
+	}
+	var emitted = false
+	for key, m := range measurements {
+		originName := m.OriginName()
+		row := &models.Row{Name: originName, Columns: []string{"Detail"}}
+		// the values has 9 rows (retention policy, shardKeys, fieldKeys etc.) at most.
+		values := make([][]interface{}, 0, 9)
+		// key: rpName.mstName
+		policyStr := "RETENTION POLICY: " + strings.Split(key, ".")[0]
+		values = append(values, []interface{}{policyStr})
+
+		indexStr := strings.Join(sliceFirstColumn(getIndex(m).Values, false), ", ")
+		indexStr = "INDEX: " + blank2Nil(indexStr)
+		values = append(values, []interface{}{indexStr})
+
+		shardKeyStr := strings.Join(sliceFirstColumn(getShardKey(m).Values, true), ", ")
+		shardKeyStr = "SHARD KEY: " + blank2Nil(shardKeyStr)
+		values = append(values, []interface{}{shardKeyStr})
+
+		engineTypeStr := config.EngineType2String[m.EngineType]
+		engineTypeStr = "ENGINE TYPE: " + engineTypeStr
+		values = append(values, []interface{}{engineTypeStr})
+
+		if m.EngineType == config.COLUMNSTORE {
+			primaryKeyStr := strings.Join(m.ColStoreInfo.PrimaryKey, ", ")
+			primaryKeyStr = "PRIMARY KEY: " + blank2Nil(primaryKeyStr)
+			values = append(values, []interface{}{primaryKeyStr})
+
+			sortKeyStr := strings.Join(m.ColStoreInfo.SortKey, ", ")
+			sortKeyStr = "SORT KEY: " + blank2Nil(sortKeyStr)
+			values = append(values, []interface{}{sortKeyStr})
+
+			compactionTypeStr := config.CompactionType2Str(m.ColStoreInfo.CompactionType)
+			compactionTypeStr = "COMPACTION_TYPE: " + blank2Nil(compactionTypeStr)
+			values = append(values, []interface{}{compactionTypeStr})
+		}
+
+		tagKeysMap := make(map[string]map[string]struct{}, 1)
+		tagKeysMap[m.Name] = make(map[string]struct{}, m.TagKeysTotal())
+		m.MatchTagKeys(nil, tagKeysMap)
+		tagStrs := make([]string, 0, m.TagKeysTotal())
+		for k := range tagKeysMap[m.Name] {
+			tagStrs = append(tagStrs, k)
+		}
+		sort.Strings(tagStrs)
+		var tagStr string
+		// cut if over-length
+		tagMaxLen := 10
+		if len(tagStrs) > tagMaxLen {
+			tagStr = strings.Join(tagStrs[:tagMaxLen], ", ")
+			tagStr += "..."
+		} else {
+			tagStr = strings.Join(tagStrs, ", ")
+		}
+		tagStr = "TAG KEYS: " + blank2Nil(tagStr)
+		values = append(values, []interface{}{tagStr})
+
+		fieldKeysMap := make(map[string]map[string]int32, 1)
+		fieldKeysMap[originName] = make(map[string]int32)
+		m.FieldKeys(fieldKeysMap)
+		fieldStrs := make([]string, 0, len(fieldKeysMap[originName]))
+		for field, fieldType := range fieldKeysMap[originName] {
+			fieldStrs = append(fieldStrs, fmt.Sprintf("%s(%s)", field, influx.FieldTypeString(fieldType)))
+		}
+		sort.Strings(fieldStrs)
+		var fieldStr string
+		// cut if over-length
+		fieldMaxLen := 10
+		if len(fieldStrs) > fieldMaxLen {
+			fieldStr = strings.Join(fieldStrs[:fieldMaxLen], ", ")
+			fieldStr += "..."
+		} else {
+			fieldStr = strings.Join(fieldStrs, ", ")
+		}
+		fieldStr = "FIELD KEYS: " + blank2Nil(fieldStr)
+		values = append(values, []interface{}{fieldStr})
+
+		row.Values = values
+		if err := ctx.Send(&query.Result{Series: []*models.Row{row}}, seq); err != nil {
+			return err
+		}
+		emitted = true
+	}
+	if !emitted {
+		return ctx.Send(&query.Result{}, seq)
+	}
+	return nil
 }
 
 func (e *StatementExecutor) executeShowMeasurementCardinalityStatement(stmt *influxql.ShowMeasurementCardinalityStatement) (models.Rows, error) {
@@ -2086,6 +2288,10 @@ func (e *StatementExecutor) NormalizeStatement(stmt influxql.Statement, defaultD
 			if node.Database == "" {
 				node.Database = defaultDatabase
 			}
+		case *influxql.ShowMeasurementsDetailStatement:
+			if node.Database == "" {
+				node.Database = defaultDatabase
+			}
 		case *influxql.ShowFieldKeysStatement:
 			if node.Database == "" {
 				node.Database = defaultDatabase
@@ -2302,7 +2508,7 @@ func (e *StatementExecutor) executeShowCluster(stmt *influxql.ShowClusterStateme
 	if stmt.NodeID != 0 || stmt.NodeType != "" {
 		return e.executeShowClusterWithCondition(stmt)
 	}
-	return e.MetaClient.ShowCluster(), nil
+	return e.MetaClient.ShowCluster("", 0)
 }
 
 func (e *StatementExecutor) executeShowClusterWithCondition(stmt *influxql.ShowClusterStatement) (models.Rows, error) {
@@ -2606,4 +2812,29 @@ func (p *rowChanProxy) wait() {
 		case <-p.rc:
 		}
 	}
+}
+
+func getPerSeriesAndRowSize(s *models.Row) (int, int) {
+	var byteSizePerSeries, byteSizePerRow int
+	byteSizePerSeries += len(s.Name)
+	for k, v := range s.Tags {
+		byteSizePerSeries += len(k) + len(v)
+	}
+	for i := range s.Columns {
+		byteSizePerSeries += len(s.Columns[i])
+	}
+	for i := range s.Values[0] {
+		switch v := s.Values[0][i].(type) {
+		case float64, int64, uint64:
+			byteSizePerRow += 8
+		case bool:
+			byteSizePerRow += 1
+		case string:
+			byteSizePerRow += len(v)
+		case time.Time:
+			byteSizePerRow += 16
+		default:
+		}
+	}
+	return byteSizePerSeries, byteSizePerRow
 }

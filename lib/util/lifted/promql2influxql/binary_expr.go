@@ -160,7 +160,7 @@ func (t *Transpiler) transpileCompBinOps(b *parser.BinaryExpr, op influxql.Token
 				return statement, nil
 			}
 			// for the comparison operation of the non-source-table query, use the sub-query to implement the operation.
-			var selectStatement = &influxql.SelectStatement{IsPromQuery: true}
+			var selectStatement = &influxql.SelectStatement{IsPromQuery: true, Step: t.Step}
 			selectStatement.Sources = []influxql.Source{&influxql.SubQuery{Statement: statement}}
 			fieldExpr := &influxql.VarRef{Val: statement.Fields[len(statement.Fields)-1].Name()}
 			selectStatement.Fields = append(selectStatement.Fields, &influxql.Field{Expr: fieldExpr, Alias: DefaultFieldKey})
@@ -214,6 +214,7 @@ func (t *Transpiler) transpileBinaryExpr(b *parser.BinaryExpr) (influxql.Node, e
 	if b.ReturnBool {
 		t.dropMetric = true
 	}
+	t.removeTableName = true
 	switch {
 	case yieldsFloat(b.LHS) && yieldsFloat(b.RHS):
 		// Handle both sides return scalar value.
@@ -230,6 +231,7 @@ func (t *Transpiler) transpileBinaryExpr(b *parser.BinaryExpr) (influxql.Node, e
 		// Handle one side return scalar value, the other side return matrix or vector value.
 		swap := yieldsFloat(b.LHS) && yieldsVector(b.RHS)
 		if op, ok := arithBinOps[b.Op]; ok {
+			t.dropMetric = true
 			return t.transpileArithBinOps(b, op, lhs, rhs, swap)
 		}
 		if op, ok := compBinOps[b.Op]; ok {
@@ -249,6 +251,7 @@ func (t *Transpiler) transpileBinaryExpr(b *parser.BinaryExpr) (influxql.Node, e
 			// todo: vector(with mst)+vector(without mst)
 			return nil, errno.NewError(errno.UnsupportedExprType)
 		}
+		t.dropMetric = false
 		return t.transpileBinOpOfBothVector(b, influxql.Token(b.Op), lStmt, rStmt)
 	default:
 		return nil, errno.NewError(errno.UnsupportedBothVS, b.String())
@@ -273,10 +276,11 @@ func (t *Transpiler) transpileBinOpOfBothVector(b *parser.BinaryExpr, op influxq
 		Sources:     influxql.Sources{binOp},
 		Fields:      influxql.Fields{&influxql.Field{Expr: &influxql.VarRef{Val: DefaultFieldKey, Alias: DefaultFieldKey}}},
 		IsPromQuery: true,
+		Step:        lStmt.Step,
+		QueryOffset: lStmt.QueryOffset,
 	}
 	// set query time range
 	t.setTimeCondition(newStmt)
-	t.removeTableName = true
 	return newStmt, nil
 }
 

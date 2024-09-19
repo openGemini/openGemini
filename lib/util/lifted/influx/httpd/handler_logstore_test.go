@@ -2,8 +2,10 @@ package httpd
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +16,7 @@ import (
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/logparser"
 	"github.com/stretchr/testify/assert"
 )
@@ -24,6 +27,7 @@ func mockLogWriteRequest(mapping string) *LogWriteRequest {
 		logStream:      "test",
 		printFailLog:   getPrintFailLog(),
 		timeMultiplier: 1e6,
+		mstSchema:      &meta.CleanSchema{},
 	}
 	if len(mapping) > 0 {
 		req.mapping, _ = parseMapping(mapping)
@@ -48,6 +52,7 @@ func TestParseJsonTimeColumn(t *testing.T) {
 
 	ld := 7 * 24 * time.Hour
 	req.expiredTime = time.Now().UnixNano() - ld.Nanoseconds()
+	req.logSchema = logSchema
 	rows := record.NewRecord(logSchema, false)
 	failRows := record.NewRecord(failLogSchema, false)
 	_ = h.parseJson(scanner, req, rows, failRows)
@@ -73,6 +78,7 @@ func TestParseJsonNoMapping(t *testing.T) {
 	rows := record.NewRecord(logSchema, false)
 	failRows := record.NewRecord(failLogSchema, false)
 	req.printFailLog = getPrintFailLog()
+	req.logSchema = logSchema
 	_ = h.parseJson(scanner, req, rows, failRows)
 	assert.Equal(t, float64(4), rows.ColVals[1].FloatValues()[0])
 	assert.Equal(t, "127.0.0.1", string(rows.ColVals[2].Val))
@@ -90,6 +96,7 @@ func TestParseJsonFailLog(t *testing.T) {
 		retry:          false,
 		timeMultiplier: 1000,
 		requestTime:    123,
+		mstSchema:      &meta.CleanSchema{},
 	}
 	request.mapping = &JsonMapping{
 		timestamp: "timestamp",
@@ -105,8 +112,8 @@ func TestParseJsonFailLog(t *testing.T) {
 	rows := record.NewRecord(logSchema, false)
 	failRows := record.NewRecord(failLogSchema, false)
 	_ = h.parseJson(scanner, request, rows, failRows)
-	assert.Equal(t, "failLog", string(failRows.ColVals[0].Val))
-	assert.Equal(t, "{\"timestamp\":1234}", string(failRows.ColVals[1].Val))
+	assert.Equal(t, "failLog", string(failRows.ColVals[1].Val))
+	assert.Equal(t, "{\"timestamp\":1234}", string(failRows.ColVals[0].Val))
 	assert.Equal(t, int64(123), failRows.ColVals[failRows.ColNums()-1].IntegerValues()[0])
 
 	// Test parse big log
@@ -120,7 +127,7 @@ func TestParseJsonFailLog(t *testing.T) {
 	rows = record.NewRecord(logSchema, false)
 	failRows = record.NewRecord(failLogSchema, false)
 	_ = h.parseJson(scanner, request, rows, failRows)
-	res := failRows.ColVals[0].StringValues(nil)
+	res := failRows.ColVals[1].StringValues(nil)
 	assert.Equal(t, BigLogTag+"_1", res[0])
 	assert.Equal(t, BigLogTag+"_2", res[1])
 
@@ -128,7 +135,7 @@ func TestParseJsonFailLog(t *testing.T) {
 
 func TestParseLogTags(t *testing.T) {
 	logTags := `{"tag1":"this is tag1","tag2":"this is tag2","tag3":1715065030012,"tag4":{"ss":"this is string"}}`
-	req := &LogWriteRequest{logTagString: &logTags}
+	req := &LogWriteRequest{logTagString: &logTags, mstSchema: &meta.CleanSchema{}}
 	req.mapping = &JsonMapping{discardFields: map[string]bool{}}
 	tagsMap, err := parseLogTags(req)
 	assert.Equal(t, nil, err)
@@ -157,6 +164,7 @@ func TestClearFailRow(t *testing.T) {
 	rows := record.NewRecord(logSchema, false)
 	failRows := record.NewRecord(failLogSchema, false)
 	req.printFailLog = getPrintFailLog()
+	req.logSchema = logSchema
 	_ = h.parseJson(scanner, req, rows, failRows)
 	assert.Equal(t, 1, rows.RowNums())
 	assert.Equal(t, 1, failRows.RowNums())
@@ -167,40 +175,45 @@ func TestJsonHighlight(t *testing.T) {
 	parser.Scanner = logparser.NewScanner(strings.NewReader("json"))
 	parser.ParseTokens()
 	q, _ := parser.GetQuery()
+	query := map[string]map[string]bool{}
+	if q != nil {
+		expr := &(q.Statements[0].(*influxql.LogPipeStatement).Cond)
+		query = getHighlightWords(expr, query)
+	}
 
 	// test string field
-	res := getJsonHighlight("key", `this is json`, q)
+	res := getJsonHighlight("key", `this is json`, query)
 	assert.Equal(t, "json", res.Value[1].Fragment)
 	assert.Equal(t, true, res.Value[1].Highlight)
 
 	// test bool field
-	res = getJsonHighlight("key", false, q)
+	res = getJsonHighlight("key", false, query)
 	assert.Equal(t, "false", res.Value[0].Fragment)
 	assert.Equal(t, false, res.Value[0].Highlight)
 
 	// test int64 field
-	res = getJsonHighlight("key", int64(45), q)
+	res = getJsonHighlight("key", int64(45), query)
 	assert.Equal(t, "45", res.Value[0].Fragment)
 	assert.Equal(t, false, res.Value[0].Highlight)
 
 	// test float64 field
-	res = getJsonHighlight("key", 45.6, q)
+	res = getJsonHighlight("key", 45.6, query)
 	assert.Equal(t, "45.6", res.Value[0].Fragment)
 	assert.Equal(t, false, res.Value[0].Highlight)
 
 	// test nil field
-	res = getJsonHighlight("key", nil, q)
+	res = getJsonHighlight("key", nil, query)
 	assert.Equal(t, "null", res.Value[0].Fragment)
 	assert.Equal(t, false, res.Value[0].Highlight)
 
 	// test inner json
-	res = getJsonHighlight("key", `{"field": "this is json"}`, q)
+	res = getJsonHighlight("key", `{"field": "this is json"}`, query)
 	innerJsonRes := res.InnerJson["segments"].([]*JsonHighlightFragment)[0]
 	assert.Equal(t, "json", innerJsonRes.Value[1].Fragment)
 	assert.Equal(t, true, res.Value[1].Highlight)
 
 	// test without content
-	res = getJsonHighlight("key", ``, q)
+	res = getJsonHighlight("key", ``, query)
 	assert.Equal(t, 0, len(res.Value))
 }
 
@@ -222,6 +235,10 @@ func TestConvertToString(t *testing.T) {
 
 	res = convertToString(true)
 	assert.Equal(t, "true", res)
+
+	num := json.Number("2156465555555555555555000")
+	res = convertToString(num)
+	assert.Equal(t, num.String(), res)
 }
 
 func TestParsePPlQuery(t *testing.T) {
@@ -400,4 +417,173 @@ func TestGetTimeFormat(t *testing.T) {
 	assert.Equal(t, nil, err)
 	err = getTimeFormat(v, &jm)
 	assert.Equal(t, errno.NewError(errno.InvalidMappingTimeZoneVal), err)
+}
+
+func TestAppendValueOrNull(t *testing.T) {
+	cv := &record.ColVal{}
+	str1 := "test1"
+	str2 := []byte("test2")
+	appendValueOrNull(cv, str1)
+	assert.Equal(t, str1, string(cv.Val))
+
+	appendValueOrNull(cv, str2)
+	assert.Equal(t, str2, cv.Val[len(str1):])
+	assert.Equal(t, 0, cv.NilCount)
+
+	appendValueOrNull(cv, 12)
+	assert.Equal(t, str1+string(str2), string(cv.Val))
+	assert.Equal(t, 1, cv.NilCount)
+
+	appendValueOrNull(cv, "")
+	assert.Equal(t, str1+string(str2), string(cv.Val))
+	assert.Equal(t, 2, cv.NilCount)
+}
+
+func TestGetBulkRecords(t *testing.T) {
+	rows := record.GetRecordFromPool(record.LogStoreRecordPool, logSchema)
+	failRows := record.GetRecordFromPool(record.LogStoreRecordPool, logSchema)
+	req := &LogWriteRequest{
+		minTime:   1717025800001000000,
+		maxTime:   1717025800002000000,
+		mstSchema: &meta.CleanSchema{},
+	}
+
+	rows.ColVals[0].AppendBoolean(true)
+	rows.ColVals[1].AppendInteger(2)
+	rows.ColVals[0].AppendBoolean(true)
+	rows.ColVals[1].AppendInteger(1)
+	bulk, _ := getBulkRecords(rows, failRows, req, 0, 24*time.Hour)
+	assert.Equal(t, int64(2), bulk.Rec.Times()[0])
+
+	req.minTime = 1717025800001000000
+	req.maxTime = 1717035800001000000
+	bulk, _ = getBulkRecords(rows, failRows, req, 0, 24*time.Hour)
+	assert.Equal(t, int64(1), bulk.Rec.Times()[0])
+}
+
+func TestCheckField(t *testing.T) {
+	h := &Handler{
+		Logger: logger.NewLogger(errno.ModuleLogStore),
+	}
+
+	res := h.isNeedReply("test", nil)
+	assert.Equal(t, false, res)
+
+	res = h.isNeedReply("test", 12)
+	assert.Equal(t, true, res)
+
+	res = h.isNeedReply(RetryTag, false)
+	assert.Equal(t, false, res)
+
+	res = h.isNeedReply(RetryTag, true)
+	assert.Equal(t, true, res)
+}
+
+func TestAppendFieldScopes(t *testing.T) {
+	h := &Handler{
+		Logger: logger.NewLogger(errno.ModuleLogStore),
+	}
+
+	content := map[string]interface{}{}
+	content["int_field"] = 12
+	content["float_field"] = 12.5
+	content["string_field"] = "this is string"
+	content["json_field"] = `{"field1":"hello","field2":{"nest_field":12.8}}`
+	content["bool_field"] = true
+
+	fieldSlice := []string{"bool_field", "float_field", "int_field", "json_field", "string_field"}
+	var fieldScopes []marshalFieldScope
+	for _, key := range fieldSlice {
+		fieldScopes = h.appendFieldScopes(fieldScopes, key, content[key])
+	}
+
+	b, err := json.Marshal(content)
+	assert.Equal(t, nil, err)
+	for _, fieldScope := range fieldScopes {
+		switch v := content[fieldScope.key].(type) {
+		case bool:
+			assert.Equal(t, util.Bool2str(v), string(b[fieldScope.start:fieldScope.end]))
+		case int:
+			assert.Equal(t, strconv.Itoa(v), string(b[fieldScope.start:fieldScope.end]))
+		case float64:
+			assert.Equal(t, strconv.FormatFloat(v, 'f', -1, 64), string(b[fieldScope.start:fieldScope.end]))
+		case string:
+			assert.Equal(t, byte('"'), b[fieldScope.start])
+			assert.Equal(t, byte('"'), b[fieldScope.end-1])
+		}
+	}
+}
+
+func TestAddLogTagsField(t *testing.T) {
+	failRows := record.GetRecordFromPool(record.LogStoreFailRecordPool, failLogSchema)
+	logTagsMap := map[string][]byte{
+		"tag1": []byte("this is tag1"),
+		"tag2": []byte("this is tag2"),
+		"tag3": []byte("this is tag3"),
+	}
+	req := &LogWriteRequest{logSchema: logSchema}
+
+	assert.Equal(t, failLogSchema.Len(), failRows.ColNums())
+	assert.Equal(t, logSchema.Len(), req.logSchema.Len())
+
+	logTagsSlice, logTagsKey := addLogTagsField(failRows, logTagsMap, req)
+	assert.Equal(t, failLogSchema.Len()+len(logTagsMap), failRows.ColNums())
+	assert.Equal(t, logSchema.Len()+len(logTagsMap), req.logSchema.Len())
+	assert.Equal(t, len(logTagsMap), len(logTagsSlice))
+	for k := range logTagsMap {
+		assert.Equal(t, true, logTagsKey[k])
+	}
+}
+
+func TestParseFirstRowSchema(t *testing.T) {
+	schema := append(logSchema, record.Field{Type: 4, Name: "tag1"})
+	req := mockLogWriteRequest(`{"timestamp":"time"}`)
+	req.logSchema = schema
+	rows := record.LogStoreRecordPool.Get()
+	pf := getParseField(schema.Len())
+	p := parserPool.Get()
+	defer parserPool.Put(p)
+
+	s := `{"field1":"one","field2":"two","field2":"three"}`
+	v, err := p.ParseBytes([]byte(s))
+	assert.Equal(t, nil, err)
+	pf.object, err = v.Object()
+	assert.Equal(t, nil, err)
+	err = parseFirstRowSchema(req, pf)
+	assert.Equal(t, errno.NewError(errno.ErrFieldDuplication, "field2"), err)
+
+	pf = getParseField(schema.Len())
+	req.logSchema = req.logSchema[:logSchema.Len()+1]
+	s = `{"field1":"one","field2":"two","__retry_tag__":"three"}`
+	v, _ = p.ParseBytes([]byte(s))
+	pf.object, _ = v.Object()
+	err = parseFirstRowSchema(req, pf)
+	assert.Equal(t, errno.NewError(errno.ErrReservedFieldDuplication, RetryTag), err)
+
+	pf = getParseField(schema.Len())
+	req.logSchema = req.logSchema[:logSchema.Len()+1]
+	s = `{"field1":"one","field2":"two","field3":"three"}`
+	v, _ = p.ParseBytes([]byte(s))
+	pf.object, _ = v.Object()
+	err = parseFirstRowSchema(req, pf)
+	assert.Equal(t, nil, err)
+	reuseRecordSchema(rows, req)
+	assert.Equal(t, schema.Len()+3, rows.ColNums())
+	for i := 0; i < schema.Len(); i++ {
+		assert.Equal(t, schema[i].Name, rows.Schema[i].Name)
+	}
+	assert.Equal(t, "field3", rows.Schema[schema.Len()+2].Name)
+}
+
+func TestSetRecordFloat64(t *testing.T) {
+	h := &Handler{
+		Logger: logger.NewLogger(errno.ModuleLogStore),
+	}
+
+	var data = 2.1e21
+	rec := map[string]interface{}{}
+	h.setRecord(rec, "field", data, false)
+	val, ok := rec["field"].(json.Number)
+	assert.Equal(t, true, ok)
+	assert.Equal(t, 22, len(val))
 }

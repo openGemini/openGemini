@@ -1,7 +1,9 @@
 package promql2influxql
 
 import (
+	"fmt"
 	"strings"
+	"time"
 
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
@@ -30,11 +32,20 @@ var rangeVectorFunctions = map[string]aggregateFn{
 		functionType: AGGREGATE_FN,
 	},
 	"stddev_over_time": {
-		name:         "stddev_over_time",
+		name:         "stddev_over_time_prom",
 		functionType: AGGREGATE_FN,
 	},
+	"present_over_time": {
+		name:         "present_over_time_prom",
+		functionType: AGGREGATE_FN,
+	},
+	"last_over_time": {
+		name:         "last_over_time_prom",
+		functionType: AGGREGATE_FN,
+		keepMetric:   true,
+	},
 	"quantile_over_time": {
-		name:           "quantile_over_time",
+		name:           "quantile_over_time_prom",
 		functionType:   SELECTOR_FN,
 		vectorPosition: 1,
 	},
@@ -66,6 +77,23 @@ var rangeVectorFunctions = map[string]aggregateFn{
 		name:         "idelta_prom",
 		functionType: TRANSFORM_FN,
 	},
+	"stdvar_over_time": {
+		name:         "stdvar_over_time_prom",
+		functionType: TRANSFORM_FN,
+	},
+	"holt_winters": {
+		name:           "holt_winters_prom",
+		functionType:   SELECTOR_FN,
+		vectorPosition: 0,
+	},
+	"changes": {
+		name:         "changes_prom",
+		functionType: TRANSFORM_FN,
+	},
+	"resets": {
+		name:         "resets_prom",
+		functionType: TRANSFORM_FN,
+	},
 }
 
 var instantVectorFunctions = map[string]aggregateFn{
@@ -73,6 +101,14 @@ var instantVectorFunctions = map[string]aggregateFn{
 		name:           "histogram_quantile",
 		functionType:   AGGREGATE_FN,
 		vectorPosition: 1,
+	},
+	"scalar": {
+		name:         "scalar_prom",
+		functionType: AGGREGATE_FN,
+	},
+	"absent": {
+		name:         "absent",
+		functionType: AGGREGATE_FN,
 	},
 }
 
@@ -103,7 +139,7 @@ var vectorMathFunctions = map[string]aggregateFn{
 		KeepFill:     true,
 	},
 	"ln": {
-		name:         "log",
+		name:         "ln",
 		functionType: TRANSFORM_FN,
 		KeepFill:     true,
 	},
@@ -118,7 +154,7 @@ var vectorMathFunctions = map[string]aggregateFn{
 		KeepFill:     true,
 	},
 	"round": {
-		name:         "round",
+		name:         "round_prom",
 		functionType: TRANSFORM_FN,
 		KeepFill:     true,
 	},
@@ -167,6 +203,41 @@ var vectorMathFunctions = map[string]aggregateFn{
 		functionType: TRANSFORM_FN,
 		KeepFill:     true,
 	},
+	"rad": {
+		name:         "rad",
+		functionType: TRANSFORM_FN,
+		KeepFill:     true,
+	},
+	"deg": {
+		name:         "deg",
+		functionType: TRANSFORM_FN,
+		KeepFill:     true,
+	},
+	"sinh": {
+		name:         "sinh",
+		functionType: TRANSFORM_FN,
+		KeepFill:     true,
+	},
+	"cosh": {
+		name:         "cosh",
+		functionType: TRANSFORM_FN,
+		KeepFill:     true,
+	},
+	"tanh": {
+		name:         "tanh",
+		functionType: TRANSFORM_FN,
+		KeepFill:     true,
+	},
+	"asinh": {
+		name:         "asinh",
+		functionType: TRANSFORM_FN,
+		KeepFill:     true,
+	},
+	"atanh": {
+		name:         "atanh",
+		functionType: TRANSFORM_FN,
+		KeepFill:     true,
+	},
 }
 
 var vectorLabelFunctions = map[string]aggregateFn{
@@ -193,6 +264,13 @@ var vectorTimeFunctions = map[string]aggregateFn{
 		functionType: TRANSFORM_FN,
 		KeepFill:     true,
 	},
+
+	"timestamp": {
+		name:         "timestamp_prom",
+		functionType: TRANSFORM_FN,
+		KeepFill:     true,
+	},
+
 	"month": {
 		name:         "month_prom",
 		functionType: TRANSFORM_FN,
@@ -228,6 +306,11 @@ var vectorTimeFunctions = map[string]aggregateFn{
 		functionType: TRANSFORM_FN,
 		KeepFill:     true,
 	},
+	"pi": {
+		name:         "pi_prom",
+		functionType: TRANSFORM_FN,
+		KeepFill:     true,
+	},
 }
 
 func getOriCallName(call string) string {
@@ -259,6 +342,38 @@ func (t *Transpiler) transpilePromFuncWithExprArgs(aggFn aggregateFn, arg influx
 	return callExpr, nil
 }
 
+func (t *Transpiler) transpilePromSubqueryFunc(subExpr *parser.SubqueryExpr, aggFn aggregateFn, inArgs []influxql.Node) (influxql.Node, error) {
+	table, parameter := t.transpileParameter(aggFn.vectorPosition, inArgs)
+
+	node, ok := table.(influxql.Statement)
+	if !ok {
+		return nil, fmt.Errorf("transpilePromSubqueryFunc expr InArgs error")
+	}
+	switch statement := node.(type) {
+	case *influxql.SelectStatement:
+		subCall := influxql.PromSubCall{
+			Name:      aggFn.name,
+			StartTime: t.minT * int64(time.Millisecond),
+			EndTime:   t.maxT * int64(time.Millisecond),
+			Range:     subExpr.Range,
+			InArgs:    parameter,
+			Offset:    subExpr.Offset,
+		}
+		interval := t.Step.Nanoseconds()
+		if interval == 0 {
+			interval = t.timeRange.Nanoseconds()
+			if interval == 0 {
+				interval = 1
+			}
+		}
+		subCall.Interval = interval
+		statement.PromSubCalls = append(statement.PromSubCalls, &subCall)
+		return statement, nil
+	default:
+		return nil, errno.NewError(errno.UnsupportedPromExpr)
+	}
+}
+
 func (t *Transpiler) transpilePromFunc(aggFn aggregateFn, inArgs []influxql.Node, setFieldsFunc SetFieldsFunc) (influxql.Node, error) {
 	table, parameter := t.transpileParameter(aggFn.vectorPosition, inArgs)
 
@@ -276,6 +391,7 @@ func (t *Transpiler) transpilePromFunc(aggFn aggregateFn, inArgs []influxql.Node
 					&influxql.SubQuery{
 						Statement: statement,
 					}},
+				Step:        t.Step,
 				IsPromQuery: true,
 			}
 			wrappedField := &influxql.Field{
@@ -285,9 +401,13 @@ func (t *Transpiler) transpilePromFunc(aggFn aggregateFn, inArgs []influxql.Node
 				Alias: DefaultFieldKey,
 			}
 			setFieldsFunc(selectStatement, wrappedField, parameter, aggFn)
+			t.setTimeCondition(selectStatement)
 			if t.Step > 0 && !aggFn.KeepFill {
 				t.setTimeInterval(selectStatement)
 				selectStatement.Fill = influxql.NoFill
+			}
+			if aggFn.name == "histogram_quantile" {
+				selectStatement.Dimensions = statement.Dimensions
 			}
 			return selectStatement, nil
 		default:
@@ -349,6 +469,9 @@ func (t *Transpiler) transpileCall(a *parser.Call) (influxql.Node, error) {
 	// {count,avg,sum,min,max,...}_over_time()
 	if fn, ok := rangeVectorFunctions[a.Func.Name]; ok {
 		t.dropMetric = true
+		if subExpr, subOk := a.Args[fn.vectorPosition].(*parser.SubqueryExpr); subOk {
+			return t.transpilePromSubqueryFunc(subExpr, fn, args)
+		}
 		return t.transpilePromFunc(fn, args, t.setAggregateFields)
 	}
 
@@ -358,6 +481,7 @@ func (t *Transpiler) transpileCall(a *parser.Call) (influxql.Node, error) {
 	}
 
 	if fn, ok := vectorMathFunctions[a.Func.Name]; ok {
+		t.dropMetric = true
 		return t.transpileVectorMathFunc(fn, args)
 	}
 
@@ -366,6 +490,7 @@ func (t *Transpiler) transpileCall(a *parser.Call) (influxql.Node, error) {
 	}
 
 	if fn, ok := vectorTimeFunctions[a.Func.Name]; ok {
+		t.dropMetric = true
 		return t.transpileVectorTimeFunc(fn, args)
 	}
 	return nil, errno.NewError(errno.UnsupportedPromExpr)

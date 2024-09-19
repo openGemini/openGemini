@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package executor
 
@@ -197,6 +195,7 @@ type QuerySchema struct {
 	unnestCases       []*influxql.Unnest
 	hasFieldCondition bool
 	planType          PlanType
+	PromSubCalls      []*influxql.PromSubCall
 }
 
 func NewQuerySchema(fields influxql.Fields, columnNames []string, opt hybridqp.Options, sortFields influxql.SortFields) *QuerySchema {
@@ -1102,9 +1101,6 @@ func (qs *QuerySchema) mapSymbol(key string, expr influxql.Expr) {
 			}
 			panic(fmt.Errorf("QuerySchema mapSymbol get derive type failed, %v", err.Error()))
 		}
-		if qs.opt.IsPromQuery() {
-			typ = influxql.Float
-		}
 		symbol = influxql.VarRef{
 			Val:  symbolName,
 			Type: typ,
@@ -1234,7 +1230,7 @@ func (qs *QuerySchema) CanAggPushDown() bool {
 
 // CanAggTagSet indicates that aggregation is performed among multiple TagSets. File traversal and SeqAgg optimization are used.
 func (qs *QuerySchema) CanAggTagSet() bool {
-	return qs.HasCall() && qs.CanCallsPushdown() && !qs.ContainSeriesIgnoreCall() && !qs.Options().IsRangeVectorSelector()
+	return qs.HasCall() && qs.CanCallsPushdown() && !qs.ContainSeriesIgnoreCall()
 }
 
 func (qs *QuerySchema) ContainSeriesIgnoreCall() bool {
@@ -1426,6 +1422,18 @@ func (qs *QuerySchema) GetTimeRangeByTC() util.TimeRange {
 		interval = indexR.GetTimeClusterDuration()
 	}
 	return util.TimeRange{Min: window(startTime, interval), Max: window(endTime, interval)}
+}
+
+func (qs *QuerySchema) SetPromCalls(calls []*influxql.PromSubCall) {
+	qs.PromSubCalls = calls
+}
+
+func (qs *QuerySchema) GetPromCalls() []*influxql.PromSubCall {
+	return qs.PromSubCalls
+}
+
+func (qs *QuerySchema) SetSimpleTagset() {
+	qs.Options().SetSimpleTagset(len(qs.Options().GetDimensions()) > 0 && IsEnableFileCursor(qs) && !qs.HasAuxTag() && !qs.HasExcatLimit())
 }
 
 // window used to calculate the time point that belongs to a specific time window.

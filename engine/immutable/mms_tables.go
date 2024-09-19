@@ -36,6 +36,7 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/scheduler"
 	stats "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
@@ -61,6 +62,7 @@ type TablesStore interface {
 	Sequencer() *Sequencer
 	GetTSSPFiles(mm string, isOrder bool) (*TSSPFiles, bool)
 	GetCSFiles(mm string) (*TSSPFiles, bool)
+	CopyCSFiles(name string) []TSSPFile
 	Tier() uint64
 	SetTier(tier uint64)
 	File(name string, namePath string, isOrder bool) TSSPFile
@@ -97,6 +99,8 @@ type TablesStore interface {
 	SetObsOption(option *obs.ObsOptions)
 	GetObsOption() *obs.ObsOptions
 	GetShardID() uint64
+	SetIndexMergeSet(idx IndexMergeSet)
+	GetMstList(isOrder bool) []string
 }
 
 type ImmTable interface {
@@ -152,6 +156,9 @@ type MmsTables struct {
 
 	isAdded bool // set true if addFunc called
 	addFunc func(int64)
+
+	indexMergeSet IndexMergeSet
+	scheduler     *scheduler.TaskScheduler
 }
 
 func NewTableStore(dir string, lock *string, tier *uint64, compactRecovery bool, config *Config) *MmsTables {
@@ -176,6 +183,7 @@ func NewTableStore(dir string, lock *string, tier *uint64, compactRecovery bool,
 		Conf:            config,
 		logger:          logger.NewLogger(errno.ModuleShard),
 	}
+	store.scheduler = scheduler.NewTaskScheduler(store.Listen, compLimiter)
 	return store
 }
 
@@ -248,7 +256,7 @@ func (m *MmsTables) disableCompAndMerge() {
 
 func (m *MmsTables) DisableCompAndMerge() {
 	m.disableCompAndMerge()
-	m.wg.Wait()
+	m.Wait()
 }
 
 func (m *MmsTables) EnableCompAndMerge() {
@@ -307,6 +315,10 @@ func (m *MmsTables) GetShardID() uint64 {
 	return m.shardId
 }
 
+func (m *MmsTables) SetIndexMergeSet(idx IndexMergeSet) {
+	m.indexMergeSet = idx
+}
+
 func (m *MmsTables) Open() (int64, error) {
 	lg := m.logger.With(zap.String("path", m.path))
 	lg.Info("table store open start", zap.Uint64("id", m.shardId), zap.Uint64("opId", m.opId))
@@ -316,7 +328,7 @@ func (m *MmsTables) Open() (int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if err := recoverFile(shardDir, m.lock, m.ImmTable.GetEngineType()); err != nil {
+	if err := recoverFile(shardDir, m.lock, m.ImmTable.GetEngineType(), m.getEventContext()); err != nil {
 		errInfo := errno.NewError(errno.RecoverFileFailed, shardDir)
 		lg.Error("", zap.Error(errInfo))
 		return 0, errInfo
@@ -398,7 +410,7 @@ func (m *MmsTables) Close() error {
 	if !m.isClosed() {
 		close(m.closed)
 	}
-	m.wg.Wait()
+	m.Wait()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -571,6 +583,26 @@ func (m *MmsTables) sortTSSPFiles() {
 	}
 }
 
+func (m *MmsTables) GetMstList(isOrder bool) []string {
+	m.mu.RLock()
+	defer func() {
+		m.mu.RUnlock()
+	}()
+	if isOrder {
+		fileList := make([]string, 0, len(m.Order))
+		for name := range m.Order {
+			fileList = append(fileList, name)
+		}
+		return fileList
+	} else {
+		fileList := make([]string, 0, len(m.OutOfOrder))
+		for name := range m.OutOfOrder {
+			fileList = append(fileList, name)
+		}
+		return fileList
+	}
+}
+
 func (m *MmsTables) GetTSSPFiles(name string, isOrder bool) (files *TSSPFiles, ok bool) {
 	m.mu.RLock()
 	if isOrder {
@@ -599,6 +631,26 @@ func (m *MmsTables) GetCSFiles(name string) (files *TSSPFiles, ok bool) {
 	}
 	m.mu.RUnlock()
 	return
+}
+
+func (m *MmsTables) CopyCSFiles(name string) []TSSPFile {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	files, ok := m.CSFiles[name]
+	if !ok || files.Len() == 0 {
+		return nil
+	}
+	files.RLock()
+	fileList := files.Files()
+	refFiles := make([]TSSPFile, 0, len(files.Files()))
+	for i := range fileList {
+		file := fileList[i]
+		file.Ref()
+		file.RefFileReader()
+		refFiles = append(refFiles, file)
+	}
+	files.RUnlock()
+	return refFiles
 }
 
 func (m *MmsTables) DropMeasurement(_ context.Context, name string) error {
@@ -1007,6 +1059,19 @@ func (m *MmsTables) acquire(files []string) bool {
 	return true
 }
 
+func (m *MmsTables) busy(files []string) bool {
+	m.inCompLock.RLock()
+	defer m.inCompLock.RUnlock()
+
+	for i := range files {
+		if _, ok := m.inCompact[files[i]]; ok {
+			return true
+		}
+	}
+
+	return false
+}
+
 func (m *MmsTables) CompactDone(files []string) {
 	m.inCompLock.Lock()
 	defer m.inCompLock.Unlock()
@@ -1032,7 +1097,7 @@ func (m *MmsTables) genCompactGroup(seqMap *dictpool.Dict, name string, level ui
 		group.group[i] = fn
 	}
 
-	if !m.acquire(group.group) {
+	if m.busy(group.group) || InParquetProcess(group.group...) {
 		group.release()
 		return nil
 	}
@@ -1181,7 +1246,7 @@ func levelSequenceEqual(level uint16, seq uint64, f TSSPFile) bool {
 	return lv == level && seq == n
 }
 
-func recoverFile(shardDir string, lockPath *string, engineType config.EngineType) error {
+func recoverFile(shardDir string, lockPath *string, engineType config.EngineType, ctx EventContext) error {
 	dirs, err := fileops.ReadDir(shardDir)
 	if err != nil {
 		log.Error("read table store dir fail", zap.String("path", shardDir), zap.Error(err))
@@ -1189,15 +1254,18 @@ func recoverFile(shardDir string, lockPath *string, engineType config.EngineType
 	}
 
 	for i := range dirs {
-		mn := dirs[i].Name()
-		if mn != compactLogDir {
-			continue
-		}
-
-		logDir := filepath.Join(shardDir, compactLogDir)
-		err := procCompactLog(shardDir, logDir, lockPath, engineType)
-		if err != nil {
-			if err != ErrDirtyLog {
+		switch dirs[i].Name() {
+		case compactLogDir:
+			logDir := filepath.Join(shardDir, compactLogDir)
+			err := procCompactLog(shardDir, logDir, lockPath, engineType)
+			if err != nil {
+				if !errors.Is(err, ErrDirtyLog) {
+					return err
+				}
+			}
+		case parquetLogDir:
+			logDir := filepath.Join(shardDir, compactLogDir)
+			if err := ProcParquetLog(logDir, lockPath, ctx); err != nil {
 				return err
 			}
 		}

@@ -1,24 +1,25 @@
-/*
-Copyright 2023 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2023 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package coordinator
 
 import (
+	"context"
 	"fmt"
 	"io"
+	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"testing"
@@ -30,6 +31,7 @@ import (
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
 	"github.com/openGemini/openGemini/engine/executor/spdy"
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
+	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/metaclient"
@@ -289,6 +291,7 @@ func TestRetryWriteRecordErr(t *testing.T) {
 	_, err = createMeasurement(db, rp, mst, &MockRWMetaClient{MeasurementErr: meta.ErrMeasurementNotFound, CreateMeasurementErr: io.EOF}, &mstInfo, &sameSchema, config.COLUMNSTORE)
 	assert.Equal(t, err, io.EOF)
 
+	rpInfo := NewRetentionPolicy("rp0", time.Hour, config.COLUMNSTORE)
 	preSg := &rpInfo.ShardGroups[0]
 	sg, _, _ := createShardGroup(db, rp, &MockRWMetaClient{}, &preSg, time.Now(), 0, config.COLUMNSTORE)
 	assert.Equal(t, sg, &rpInfo.ShardGroups[0])
@@ -376,24 +379,38 @@ func TestRetryWriteRecordWriteErr(t *testing.T) {
 }
 
 func TestProcessRecord(t *testing.T) {
+	db, rp, mst := "db0", "rp0", "rtt"
 	rw := NewRecordWriter(10*time.Second, 1, 2)
 	rw.MetaClient = NewMockMetaClient()
 	rw.StorageEngine = NewMockStorageEngine()
-	recs := MockArrowRecords(1, 1)
 	client1 := &MockRWMetaClient{DatabaseErr: io.EOF}
 	rw.recWriterHelpers = append(rw.recWriterHelpers, newRecordWriterHelper(client1, 0))
 
-	msg := &RecMsg{Database: "db0", RetentionPolicy: "rp0", Measurement: "mst0", Rec: recs[0]}
-	rw.processRecord(msg, 0)
-	msg1 := &RecMsg{Database: "db0", RetentionPolicy: "rp0", Measurement: "mst0", Rec: &record.Record{}}
+	var logSchema = record.Schemas{record.Field{Type: influx.Field_Type_Int, Name: "time"}}
+	rec := record.NewRecord(logSchema, false)
+	rec.ColVals[0].AppendInteger(123)
+
+	msg1 := &RecMsg{Database: db, RetentionPolicy: rp, Measurement: mst, Rec: rec}
 	rw.processRecord(msg1, 0)
-	msg2 := &RecMsg{Database: "db0", RetentionPolicy: "rp0", Measurement: "mst0", Rec: 0}
+	msg2 := &RecMsg{Database: db, RetentionPolicy: rp, Measurement: mst, Rec: 0}
 	rw.processRecord(msg2, 0)
+
+	schema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	rec = record.GetRecordFromPool(record.LogStoreFailRecordPool, schema)
+	msg3 := &RecMsg{Database: "db0", RetentionPolicy: "rp0", Measurement: "mst0", Rec: rec, MsgType: record.LogStoreFailRecord}
+	rw.processRecord(msg3, 0)
+
+	rec = record.GetRecordFromPool(record.LogStoreRecordPool, schema)
+	msg4 := &RecMsg{Database: "db0", RetentionPolicy: "rp0", Measurement: "mst0", Rec: rec, MsgType: record.LogStoreRecord}
+	rw.processRecord(msg4, 0)
 }
 
 func TestWriteLogRecord(t *testing.T) {
 	var err error
-	db, rp, mst := "db0", "rp0", "rtt"
+	db, rp := "db0", "rp0"
 
 	// get the cur nodeId
 	startClient(t)
@@ -422,7 +439,9 @@ func TestWriteLogRecord(t *testing.T) {
 	if err = rw.Open(); err != nil {
 		t.Fatal(err)
 	}
-	if err = rw.RetryWriteLogRecord(db, rp, mst, rec); err != nil {
+
+	bulk := record.BulkRecords{TotalLen: 12, Repo: db, Logstream: rp, Rec: rec, MsgType: record.UnknownPool}
+	if err = rw.RetryWriteLogRecord(&bulk); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -440,10 +459,10 @@ func TestSplitAndWriteByShardErr(t *testing.T) {
 	sgi[0].StartTime = time.Unix(0, 0)
 	sgi[0].EndTime = time.Unix(0, 1)
 	sort.Sort(rec)
-	err = rw.splitAndWriteByShard(sgi, db, rp, mst, rec, 0, config.COLUMNSTORE)
+	err = rw.splitAndWriteByShard(sgi, db, rp, mst, 12, rec, 0, config.COLUMNSTORE)
 	assert.Equal(t, rec.Schema[0].Name < rec.Schema[1].Name, true)
 
-	err = rw.splitAndWriteByShard(sgi, db, rp, mst, rec, 0, config.COLUMNSTORE)
+	err = rw.splitAndWriteByShard(sgi, db, rp, mst, 12, rec, 0, config.COLUMNSTORE)
 	assert.Equal(t, errno.Equal(err, errno.ArrowFlightGetShardGroupErr), true)
 }
 
@@ -568,4 +587,61 @@ func TestCutPreSchema(t *testing.T) {
 		}
 	}
 	config.SetProductType("csstore")
+}
+
+func TestStoreAndLoadCapacity(t *testing.T) {
+	dir := t.TempDir()
+	dir += "/" + immutable.CapacityBinFile
+
+	err := StoreCapacity(dir, 12)
+	assert.Equal(t, nil, err)
+
+	res, err := LoadCapacity(dir, 0)
+	assert.Equal(t, nil, err)
+	assert.Equal(t, int64(12), res)
+
+	err = StoreCapacity(dir, 12)
+	res, err = LoadCapacity(dir, 0)
+	assert.Equal(t, nil, err)
+	assert.Equal(t, int64(24), res)
+
+	err = os.WriteFile(dir, []byte("hello"), 0640)
+	assert.Equal(t, nil, err)
+	res, err = LoadCapacity(dir, 0)
+	assert.NotEqual(t, nil, err)
+}
+
+func TestFlushCapacityPanic(t *testing.T) {
+	dir := t.TempDir()
+	CurrentCapacityMap.Store(path.Join(dir, "cap.txt"), 7)
+	w := NewRecordWriter(10*time.Second, 1, 2)
+	w.FlushCapacity()
+
+	err := os.WriteFile(path.Join(dir, "cap.txt"), []byte("hello"), 0640)
+	assert.Equal(t, nil, err)
+	CurrentCapacityMap.Store(path.Join(dir, "cap.txt"), int64(7))
+	w.FlushCapacity()
+
+	w.CacheCapacity(dir, 12)
+	w.CacheCapacity(dir, 12)
+	v, _ := CurrentCapacityMap.Load(dir)
+	assert.Equal(t, int64(24), v.(int64))
+	w.FlushCapacity()
+
+	CurrentCapacityMap.Store("/xx/wrong.txt", int64(7))
+	w.FlushCapacity()
+}
+
+func TestFlush(t *testing.T) {
+	w := NewRecordWriter(10*time.Second, 1, 2)
+	flushTime = 10 * time.Millisecond
+	go w.flush()
+	time.Sleep(100 * time.Millisecond)
+	flushTime = 30 * time.Second
+
+	ctx, cancelFunc := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	w.ctx = ctx
+	go w.flush()
+	time.Sleep(100 * time.Millisecond)
+	cancelFunc()
 }

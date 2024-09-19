@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package netstorage
 
@@ -432,6 +430,7 @@ func (r *ShowQueriesRequest) UnmarshalBinary(buf []byte) error {
 
 type QueryExeInfo struct {
 	QueryID   uint64
+	PtID      uint32
 	Stmt      string
 	Database  string
 	BeginTime int64
@@ -448,6 +447,7 @@ func (r *ShowQueriesResponse) MarshalBinary() ([]byte, error) {
 	for _, info := range r.QueryExeInfos {
 		pb.QueryExeInfos = append(pb.QueryExeInfos, &internal2.QueryExeInfo{
 			QueryID:   proto.Uint64(info.QueryID),
+			PtID:      proto.Uint32(info.PtID),
 			Stmt:      proto.String(info.Stmt),
 			Database:  proto.String(info.Database),
 			BeginTime: proto.Int64(info.BeginTime),
@@ -466,6 +466,7 @@ func (r *ShowQueriesResponse) UnmarshalBinary(buf []byte) error {
 	for _, pbInfo := range pb.QueryExeInfos {
 		r.QueryExeInfos = append(r.QueryExeInfos, &QueryExeInfo{
 			QueryID:   pbInfo.GetQueryID(),
+			PtID:      pbInfo.GetPtID(),
 			Stmt:      pbInfo.GetStmt(),
 			Database:  pbInfo.GetDatabase(),
 			BeginTime: pbInfo.GetBeginTime(),

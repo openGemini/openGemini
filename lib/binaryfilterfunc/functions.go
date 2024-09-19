@@ -1,18 +1,16 @@
-/*
-Copyright 2023 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2023 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package binaryfilterfunc
 
@@ -628,6 +626,7 @@ func (c *ConditionImpl) getNumFilter() (int, error) {
 }
 
 func (c *ConditionImpl) Filter(rec *record.Record, filterBitmap *bitmap.FilterBitmap) error {
+	rec.TryPadColumn2AlignBitmap()
 	if c.isSimpleExpr {
 		if err := c.filterSimplexExpr(rec, filterBitmap); err != nil {
 			return err
@@ -719,7 +718,7 @@ func (c *ConditionImpl) filterForOr(rec *record.Record, filterBitmap *bitmap.Fil
 		// Apply for a new bitmap.
 		idx++
 		b := filterBitmap.Bitmap[idx]
-		b.Val = append(b.Val, col.Bitmap...)
+		b.Val = append(b.Val[:0], col.Bitmap...)
 		// Save the compare result in the new bitmap.
 		params := &TypeFunParams{
 			col:     &col,
@@ -743,7 +742,7 @@ func (c *ConditionImpl) filterForOr(rec *record.Record, filterBitmap *bitmap.Fil
 			idx++
 		}
 		b1 := filterBitmap.Bitmap[idx]
-		b1.Val = append(b1.Val, col.Bitmap...)
+		b1.Val = append(b1.Val[:0], col.Bitmap...)
 		// Save the compare result in the new bitmap.
 		b1.Val = e1.rg.Function(&TypeFunParams{
 			col:     &col,
@@ -754,11 +753,11 @@ func (c *ConditionImpl) filterForOr(rec *record.Record, filterBitmap *bitmap.Fil
 			opt:     e1.rg.Opt,
 		})
 		// Apply for a new bitmap.
+		col = rec.ColVals[e2.rg.Idx]
 		idx++
 		b2 := filterBitmap.Bitmap[idx]
-		b2.Val = append(b2.Val, col.Bitmap...)
+		b2.Val = append(b2.Val[:0], col.Bitmap...)
 		// Save the compare result in the new bitmap.
-		col = rec.ColVals[e2.rg.Idx]
 		b2.Val = e2.rg.Function(&TypeFunParams{
 			col:     &col,
 			compare: e2.rg.Compare,
@@ -809,7 +808,7 @@ func (c *ConditionImpl) filterForAnd(rec *record.Record, filterBitmap *bitmap.Fi
 			idx++
 		}
 		b := filterBitmap.Bitmap[idx]
-		b.Val = append(b.Val, col.Bitmap...)
+		b.Val = append(b.Val[:0], col.Bitmap...)
 		// Save the AND result in the new bitmap.
 		b.Val = e1.rg.Function(&TypeFunParams{
 			col:     &col,

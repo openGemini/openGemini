@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package meta
 
@@ -85,7 +83,7 @@ func TestMoveEventTransition(t *testing.T) {
 	assert.Equal(t, nil, err)
 
 	event := NewMoveEvent(dbPt, dbPt.Pti.Owner.NodeID, 3, dataNode.AliveConnID, false)
-	assert.Equal(t, int(MoveInit), event.getCurrState())
+	assert.Equal(t, int(meta.MoveInit), event.getCurrState())
 	action, err := event.getNextAction()
 	if err != nil {
 		t.Fatal(err)
@@ -97,7 +95,7 @@ func TestMoveEventTransition(t *testing.T) {
 	assert.Equal(t, int(MoveType), events[dbPt.String()].GetEventType())
 	assert.Equal(t, uint64(2), events[dbPt.String()].GetSrc())
 	assert.Equal(t, uint64(3), events[dbPt.String()].GetDst())
-	assert.Equal(t, int(MovePreOffload), event.getCurrState())
+	assert.Equal(t, int(meta.MovePreOffload), event.getCurrState())
 	netStore := NewMockNetStorage()
 	globalService.store.NetStore = netStore
 	failFunc := func(nodeID uint64, data transport.Codec, cb transport.Callback) error {
@@ -112,12 +110,12 @@ func TestMoveEventTransition(t *testing.T) {
 	action, err = event.getNextAction()
 	assert.Equal(t, ActionWait, action)
 	assert.Equal(t, nil, err)
-	assert.Equal(t, int(MovePreOffload), event.getCurrState())
+	assert.Equal(t, int(meta.MovePreOffload), event.getCurrState())
 	assert.Equal(t, 1, event.retryNum)
 	netStore.MigratePtFn = sucFunc
 	// MovePreOffload--suc-->MovePreAssign
 	action, err = event.getNextAction()
-	assert.Equal(t, int(MovePreAssign), event.getCurrState())
+	assert.Equal(t, int(meta.MovePreAssign), event.getCurrState())
 
 	//globalService.store.NetStore = NewMockNetStorageFail()
 	// MovePreAssign--need change store-->MoveRollbackPreOffload
@@ -132,14 +130,14 @@ func TestMoveEventTransition(t *testing.T) {
 	}
 	netStore.MigratePtFn = failFunc
 	action, err = event.getNextAction()
-	assert.Equal(t, int(MoveRollbackPreOffload), event.getCurrState())
+	assert.Equal(t, int(meta.MoveRollbackPreOffload), event.getCurrState())
 	// MoveRollbackPreOffload--suc-->MoveFinal
 	netStore.MigratePtFn = sucFunc
 	//globalService.store.NetStore = NewMockNetStorageSuc()
 	action, err = event.getNextAction()
-	assert.Equal(t, int(MoveFinal), event.getCurrState())
+	assert.Equal(t, int(meta.MoveFinal), event.getCurrState())
 
 	// roll back to MoveRollbackPreOffload, if fail, need reAssign
-	event.curState = MoveRollbackPreOffload
+	event.curState = meta.MoveRollbackPreOffload
 	assert.Equal(t, true, event.isReassignNeeded())
 }

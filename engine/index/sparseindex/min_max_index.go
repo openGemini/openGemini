@@ -1,18 +1,16 @@
-/*
-Copyright 2023 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2023 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package sparseindex
 
@@ -21,6 +19,7 @@ import (
 	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/rpn"
+	"github.com/openGemini/openGemini/lib/tracing"
 )
 
 var _ = RegistrySKFileReaderCreator(uint32(index.MinMax), &MinMaxReaderCreator{})
@@ -55,6 +54,7 @@ type MinMaxIndexReader struct {
 	// read the data of the index according to the file and index fields.
 	ReadFunc func(file interface{}, rec *record.Record, isCache bool) (*record.Record, error)
 	sk       SKCondition
+	span     *tracing.Span
 }
 
 func NewMinMaxIndexReader(rpnExpr *rpn.RPNExpr, schema record.Schemas, option hybridqp.Options, isCache bool) (*MinMaxIndexReader, error) {
@@ -127,6 +127,10 @@ func (r *MinMaxIndexReader) ReInit(file interface{}) (err error) {
 		r.indexCols = append(r.indexCols, NewColumnRef(r.rec.Schemas()[i].Name, r.rec.Schemas()[i].Type, r.rec.Column(i)))
 	}
 	return
+}
+
+func (r *MinMaxIndexReader) StartSpan(span *tracing.Span) {
+	r.span = span
 }
 
 func (r *MinMaxIndexReader) Close() error {

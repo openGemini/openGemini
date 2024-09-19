@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package stream
 
@@ -31,6 +29,7 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	streamLib "github.com/openGemini/openGemini/lib/stream"
+	strings2 "github.com/openGemini/openGemini/lib/strings"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/panjf2000/ants/v2"
@@ -183,7 +182,7 @@ func Test_GenerateGroupKey(t *testing.T) {
 		corpusIndexes: []string{""},
 		corpusIndex:   0,
 		BaseTask:      &BaseTask{Logger: logger.NewLogger(errno.ModuleStream).With(zap.String("service", "stream"))},
-		bp:            streamLib.NewBuilderPool(),
+		bp:            strings2.NewBuilderPool(),
 	}
 	groupByKeyNum := 5
 	var keys []string
@@ -210,7 +209,7 @@ func Test_GenerateGroupKeyUint_NullTag(t *testing.T) {
 		corpusIndexes: []string{""},
 		corpusIndex:   0,
 		BaseTask:      &BaseTask{Logger: logger.NewLogger(errno.ModuleStream).With(zap.String("service", "stream"))},
-		bp:            streamLib.NewBuilderPool(),
+		bp:            strings2.NewBuilderPool(),
 	}
 	groupByKeyNum := 5
 	offset := 30
@@ -250,7 +249,7 @@ func Test_GenerateGroupKeyUint_EmptyKeys(t *testing.T) {
 		corpusIndexes: []string{""},
 		corpusIndex:   0,
 		BaseTask:      &BaseTask{Logger: logger.NewLogger(errno.ModuleStream).With(zap.String("service", "stream"))},
-		bp:            streamLib.NewBuilderPool(),
+		bp:            strings2.NewBuilderPool(),
 	}
 	var keys []string
 	r := buildRow("1", "xx", false)
@@ -267,7 +266,7 @@ func Benchmark_GenerateGroupKeyUint(t *testing.B) {
 		corpusIndexes: []string{""},
 		corpusIndex:   0,
 		BaseTask:      &BaseTask{Logger: logger.NewLogger(errno.ModuleStream).With(zap.String("service", "stream"))},
-		bp:            streamLib.NewBuilderPool(),
+		bp:            strings2.NewBuilderPool(),
 	}
 	groupByKeyNum := 5
 	var keys []string
@@ -336,7 +335,7 @@ func Benchmark_FlushRow(t *testing.B) {
 		corpus:        sync.Map{},
 		corpusIndexes: []string{""},
 		corpusIndex:   0,
-		bp:            streamLib.NewBuilderPool(),
+		bp:            strings2.NewBuilderPool(),
 		BaseTask: &BaseTask{Logger: logger.NewLogger(errno.ModuleStream).With(zap.String("service", "stream")),
 			des: &meta2.StreamMeasurementInfo{
 				Name:            "test",

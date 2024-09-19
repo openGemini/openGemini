@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package util
 
@@ -484,9 +482,9 @@ func Bool2str(b bool) string {
 	}
 }
 
-func MemorySet(buf []byte) {
+func MemorySet(buf []byte, val byte) {
 	for i := range buf {
-		buf[i] = 0
+		buf[i] = val
 	}
 }
 
@@ -541,4 +539,15 @@ func DivisionCeil(dividend, divisor int) int {
 		return 0
 	}
 	return (dividend + divisor - 1) / divisor
+}
+
+var zeroBuf = make([]byte, 8000)
+
+func PaddingZeroBuffer(out []byte, size int) []byte {
+	if size > len(zeroBuf) {
+		out = append(out, make([]byte, size)...)
+	} else {
+		out = append(out, zeroBuf[:size]...)
+	}
+	return out
 }

@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 // nolint
 package record
@@ -22,15 +20,17 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
 const (
-	TimeField           = "time"
-	SeqIDField          = "__seq_id___"
-	RecMaxLenForRuse    = 512
-	RecMaxRowNumForRuse = 2024
+	TimeField              = "time"
+	SeqIDField             = "__seq_id___"
+	RecMaxLenForRuse       = 512
+	RecMaxRowNumForRuse    = 2024
+	BigRecMaxRowNumForRuse = 32 * 1024
 )
 
 var intervalRecUpdateFunctions map[int]func(rec, iRec *Record, index, row, recRow int)
@@ -70,6 +70,14 @@ func NewRecord(schema Schemas, initColMeta bool) *Record {
 		record.ColMeta = make([]ColMeta, schemaLen)
 	}
 	return record
+}
+
+type BulkRecords struct {
+	TotalLen  int64
+	Repo      string
+	Logstream string
+	Rec       *Record
+	MsgType   RecordType
 }
 
 type ColAux struct {
@@ -1048,6 +1056,10 @@ func (rec *Record) ResetDeep() {
 	}
 }
 
+func (rec *Record) ReuseForWrite() {
+	rec.ResetForReuse()
+}
+
 func (rec *Record) ResetForReuse() {
 	for i := range rec.ColVals {
 		rec.ColVals[i].Init()
@@ -1224,6 +1236,24 @@ func (rec *Record) TryPadColumn() {
 	for i := range rec.ColVals {
 		if rec.ColVals[i].Len != rows {
 			rec.ColVals[i].PadColVal(rec.Schema[i].Type, rows-rec.ColVals[i].Len)
+		}
+	}
+}
+
+// TryPadColumn2AlignBitmap used to fill the empty columns and ensure bitmap alignment.
+func (rec *Record) TryPadColumn2AlignBitmap() {
+	rows := rec.RowNums()
+	timeCol := rec.TimeColumn()
+	bitMapOffSet := timeCol.BitMapOffset
+	if bitMapOffSet == 0 || rows == 0 {
+		return
+	}
+	bitMapLen := len(timeCol.Bitmap)
+	for i := range rec.ColVals {
+		if rec.ColVals[i].Len == 0 {
+			rec.ColVals[i].PadEmptyCol2AlignBitmap(rec.Schema[i].Type, rows, bitMapOffSet, bitMapLen)
+		} else if rec.ColVals[i].Len > 0 && rec.ColVals[i].Len == rec.ColVals[i].NilCount {
+			rec.ColVals[i].PadEmptyCol2FixBitmap(bitMapOffSet, bitMapLen)
 		}
 	}
 }
@@ -1480,4 +1510,36 @@ func appendRecMeta2Rec(rec, iRec *Record, index, row int) {
 	if rec.RecMeta != nil && len(iRec.RecMeta.Times) != 0 && len(iRec.RecMeta.Times[index]) != 0 {
 		rec.RecMeta.Times[index] = append(rec.RecMeta.Times[index], iRec.RecMeta.Times[index][row])
 	}
+}
+
+func AppendSeqIdSchema(rec *Record) error {
+	idx := rec.Schema.FieldIndex(SeqIDField)
+	if idx != -1 {
+		return errno.NewError(errno.KeyWordConflictErr, "", SeqIDField)
+	}
+	// update schema
+	seqIDSchema := Field{Type: influx.Field_Type_Int, Name: SeqIDField}
+	rec.Schema = append(rec.Schema, seqIDSchema)
+	// add seqIdCol
+	var seqIdCol ColVal
+	seqIdCol.AppendIntegerNulls(rec.RowNums())
+	rec.ColVals = append(rec.ColVals, seqIdCol)
+	sort.Sort(rec)
+	return nil
+}
+
+func UpdateSeqIdCol(startSeqId int64, rec *Record) {
+	idx := rec.Schema.FieldIndex(SeqIDField)
+	if idx == -1 {
+		return
+	}
+	//update seqIdCol
+	rowCount := rec.RowNums()
+	seqCol := make([]int64, rowCount)
+	for i := 0; i < rowCount; i++ {
+		seqCol[i] = startSeqId
+		startSeqId++
+	}
+	rec.ColVals[idx].Init()
+	rec.ColVals[idx].AppendIntegers(seqCol...)
 }

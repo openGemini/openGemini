@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package immutable
 
@@ -20,6 +18,7 @@ import (
 	"container/heap"
 	"errors"
 	"fmt"
+	"path"
 	"runtime/debug"
 	"sync"
 	"sync/atomic"
@@ -31,6 +30,7 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	Log "github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/scheduler"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"go.uber.org/zap"
 )
@@ -44,7 +44,7 @@ var (
 	fullCompactingCount   int64
 	maxFullCompactor      = cpu.GetCpuNum() / 2
 	maxCompactor          = cpu.GetCpuNum()
-	compLimiter           limiter.Fixed
+	compLimiter           = limiter.NewFixed(maxCompactor)
 	ErrCompStopped        = errors.New("compact stopped")
 	ErrDownSampleStopped  = errors.New("downSample stopped")
 	ErrDroppingMst        = errors.New("measurement is dropped")
@@ -118,53 +118,15 @@ func (m *MmsTables) unrefMmsTable(orderWg, outOfOrderWg *sync.WaitGroup) {
 
 func (m *MmsTables) LevelCompact(level uint16, shid uint64) error {
 	plans := m.ImmTable.LevelPlan(m, level)
-	for len(plans) > 0 {
-		plan := plans[0]
-		plan.shardId = shid
-		select {
-		case <-m.closed:
-			return ErrCompStopped
-		case <-m.stopCompMerge:
-			log.Info("stop LevelCompact", zap.Uint64("id", shid))
-			m.blockCompactStop(plan.name)
-			return nil
-		case compLimiter <- struct{}{}:
-			m.wg.Add(1)
-			go func(group *CompactGroup) {
-				orderWg, inorderWg := m.ImmTable.refMmsTable(m, group.name, false)
-				if m.compactRecovery {
-					defer CompactRecovery(m.path, group)
-				}
 
-				defer func() {
-					m.wg.Done()
-					m.ImmTable.unrefMmsTable(orderWg, inorderWg)
-					compLimiter.Release()
-					m.CompactDone(group.group)
-					m.blockCompactStop(group.name)
-					group.release()
-				}()
-
-				if !m.CompactionEnabled() {
-					return
-				}
-
-				fi, err := m.ImmTable.NewFileIterators(m, group)
-				if err != nil {
-					log.Error(err.Error())
-					compactStat.AddErrors(1)
-					return
-				}
-				err = m.ImmTable.compactToLevel(m, fi, false, NonStreamingCompaction(fi))
-				if err != nil {
-					compactStat.AddErrors(1)
-					log.Error("compact error", zap.Error(err))
-				}
-			}(plan)
-		}
-		plans = plans[1:]
+	if len(plans) == 0 {
+		return nil
 	}
 
+	taskGroups := m.buildCompactTaskGroup(plans, false, shid)
+	for _, group := range taskGroups {
+		m.scheduler.ExecuteTaskGroup(group, m.stopCompMerge)
+	}
 	return nil
 }
 
@@ -209,6 +171,9 @@ func (m *MmsTables) compact(itrs *ChunkIterators, files []TSSPFile, level uint16
 	fileName := NewTSSPFileName(seq, level, 0, 0, isOrder, m.lock)
 	tableBuilder := NewMsBuilder(m.path, itrs.name, m.lock, m.Conf, itrs.maxN, fileName, *m.tier, nil, itrs.estimateSize, config.TSSTORE, m.obsOpt, m.GetShardID())
 	tableBuilder.WithLog(cLog)
+
+	correctTimeDisorder := config.GetStoreConfig().Compact.CorrectTimeDisorder
+
 	for {
 		select {
 		case <-m.closed:
@@ -229,7 +194,13 @@ func (m *MmsTables) compact(itrs *ChunkIterators, files []TSSPFile, level uint16
 		}
 
 		record.CheckRecord(rec)
-		record.CheckTimes(rec.Times())
+		if correctTimeDisorder {
+			rec = record.SortRecordIfNeeded(rec)
+			itrs.merged = rec
+		} else {
+			record.CheckTimes(rec.Times())
+		}
+
 		tableBuilder, err = tableBuilder.WriteRecord(id, rec, func(fn TSSPFileName) (uint64, uint16, uint16, uint16) {
 			ext := fn.extent
 			ext++
@@ -321,34 +292,33 @@ func (m *MmsTables) loadIdTimes() (int64, error) {
 	return loader.ctx.getRowCount(), loader.Error()
 }
 
-func (m *MmsTables) mmsFiles(n int64) []*CompactGroup {
+func (m *MmsTables) buildFullCompactPlan(n int64, toLevel uint16) []*CompactGroup {
 	if !m.CompactionEnabled() {
 		return nil
 	}
 
+	builder := &CompactGroupBuilder{
+		limit:        int(n),
+		parquetLevel: config.GetStoreConfig().TSSPToParquetLevel,
+		lowLevelMode: toLevel > 0,
+		level:        toLevel,
+	}
+	defer builder.Release()
+
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	groups := make([]*CompactGroup, 0, n)
+
 	mmsTables := m.ImmTable.getFiles(m, true)
 	for k, v := range mmsTables {
 		if m.isClosed() || m.isCompMergeStopped() {
 			return nil
 		}
 
-		if v.fullCompacted() {
+		if m.scheduler.IsRunning(k) || atomic.LoadInt64(&v.closing) > 0 || v.fullCompacted() {
 			continue
 		}
 
-		if atomic.LoadInt64(&v.closing) > 0 {
-			continue
-		}
-
-		group := &CompactGroup{
-			dropping: &v.closing,
-			name:     k,
-			group:    make([]string, 0, v.Len()),
-		}
-
+		builder.Init(k, &v.closing, v.Len())
 		for _, f := range v.files {
 			if m.isClosed() || m.isCompMergeStopped() {
 				return nil
@@ -362,24 +332,18 @@ func (m *MmsTables) mmsFiles(n int64) []*CompactGroup {
 				continue
 			}
 
-			lv, _ := f.LevelAndSequence()
-			if group.toLevel < lv {
-				group.toLevel = lv
+			if !builder.AddFile(f) {
+				return nil
 			}
-			group.group = append(group.group, f.Path())
 		}
 
-		if m.acquire(group.group) {
-			group.toLevel++
-			groups = append(groups, group)
-		}
-
-		if len(groups) >= int(n) {
+		builder.SwitchGroup()
+		if builder.Limited() {
 			break
 		}
 	}
 
-	return groups
+	return builder.groups
 }
 
 func (m *MmsTables) SetAddFunc(addFunc func(int64)) {
@@ -442,64 +406,75 @@ func (m *MmsTables) FullCompact(shid uint64) error {
 		return nil
 	}
 
-	plans := m.mmsFiles(n)
-	if len(plans) == 0 {
-		return nil
-	}
-
-	return m.executeFullCompact(shid, plans)
-}
-
-func (m *MmsTables) executeFullCompact(shid uint64, plans []*CompactGroup) error {
-	for _, plan := range plans {
-		plan.shardId = shid
-		select {
-		case <-m.closed:
-			return ErrCompStopped
-		case <-m.stopCompMerge:
-			log.Info("stop FullCompact", zap.Uint64("id", shid))
+	if preLevel := config.PreFullCompactLevel(); preLevel > 0 {
+		plans := m.buildFullCompactPlan(n, preLevel)
+		if len(plans) > 0 {
+			m.scheduler.ExecuteBatch(m.buildCompactTasks(plans, true, shid), m.stopCompMerge)
 			return nil
-		case compLimiter <- struct{}{}:
-			m.wg.Add(1)
-			atomic.AddInt64(&fullCompactingCount, 1)
-			go func(group *CompactGroup) {
-				orderWg, inorderWg := m.ImmTable.refMmsTable(m, group.name, false)
-				if m.compactRecovery {
-					defer CompactRecovery(m.path, group)
-				}
-
-				defer func() {
-					m.wg.Done()
-					compLimiter.Release()
-					m.ImmTable.unrefMmsTable(orderWg, inorderWg)
-					atomic.AddInt64(&fullCompactingCount, -1)
-					m.CompactDone(group.group)
-				}()
-
-				if !m.CompactionEnabled() {
-					return
-				}
-
-				fi, err := m.ImmTable.NewFileIterators(m, group)
-				if err != nil {
-					log.Error(err.Error())
-					compactStat.AddErrors(1)
-					return
-				}
-
-				err = m.ImmTable.compactToLevel(m, fi, true, NonStreamingCompaction(fi))
-				if err != nil {
-					compactStat.AddErrors(1)
-					log.Error("compact error", zap.Error(err))
-				}
-			}(plan)
 		}
 	}
+
+	plans := m.buildFullCompactPlan(n, 0)
+	if len(plans) > 0 {
+		m.scheduler.ExecuteBatch(m.buildCompactTasks(plans, true, shid), m.stopCompMerge)
+	}
+
 	return nil
+}
+
+func (m *MmsTables) RenameFileToLevel(plan *CompactGroup) error {
+	files, err := m.getFilesByPath(plan.name, plan.group, true)
+	if err != nil {
+		return err
+	}
+	file := files.files[0]
+	tsspFileName := file.FileName()
+	tsspFileName.level = plan.toLevel
+	err = file.Rename(tsspFileName.Path(path.Dir(file.Path()), false))
+	if err == nil {
+		file.UpdateLevel(plan.toLevel)
+	}
+	return err
+}
+
+func (m *MmsTables) buildCompactTasks(plans []*CompactGroup, full bool, shardId uint64) []scheduler.Task {
+	tasks := make([]scheduler.Task, 0, len(plans))
+	for _, plan := range plans {
+		plan.shardId = shardId
+
+		task := NewCompactTask(m, plan, full)
+		tasks = append(tasks, task)
+	}
+	return tasks
+}
+
+func (m *MmsTables) buildCompactTaskGroup(plans []*CompactGroup, full bool, shardId uint64) []*scheduler.TaskGroup {
+	var taskGroups []*scheduler.TaskGroup
+	var taskGroup *scheduler.TaskGroup
+
+	var appendGroup = func() {
+		if taskGroup != nil && taskGroup.Len() > 0 {
+			taskGroups = append(taskGroups, taskGroup)
+		}
+	}
+
+	for _, plan := range plans {
+		if taskGroup == nil || taskGroup.Key() != plan.name {
+			appendGroup()
+			taskGroup = scheduler.NewTaskGroup(plan.name)
+		}
+
+		plan.shardId = shardId
+		taskGroup.Add(NewCompactTask(m, plan, full))
+	}
+
+	appendGroup()
+	return taskGroups
 }
 
 func (m *MmsTables) Wait() {
 	m.wg.Wait()
+	m.scheduler.Wait()
 }
 
 func (m *MmsTables) deleteFiles(files ...TSSPFile) error {

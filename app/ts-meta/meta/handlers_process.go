@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package meta
 
@@ -27,8 +25,11 @@ import (
 	"github.com/hashicorp/raft"
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
+	"github.com/openGemini/openGemini/lib/backup"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
+	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
 	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
@@ -62,7 +63,8 @@ func (h *CreateNode) Process() (transport.Codec, error) {
 	httpAddr := h.req.WriteHost
 	tcpAddr := h.req.QueryHost
 	role := h.req.Role
-	b, err := h.store.createDataNode(httpAddr, tcpAddr, role)
+	az := h.req.Az
+	b, err := h.store.createDataNode(httpAddr, tcpAddr, role, az)
 	if err != nil {
 		h.logger.Error("createNode fail", zap.Error(err))
 		rsp.Err = err.Error()
@@ -242,7 +244,7 @@ func createDatabase(cmd *proto2.Command) error {
 		return fmt.Errorf("%s is not a CreateDatabaseCommand", ext)
 	}
 
-	// 1.create db pt view
+	// 1.create db pt view, and create rgs if rep on
 	val := &proto2.CreateDbPtViewCommand{
 		DbName:     v.Name,
 		ReplicaNum: v.ReplicaNum,
@@ -256,8 +258,8 @@ func createDatabase(cmd *proto2.Command) error {
 		return err
 	}
 
-	// 2.assign db pt
-	dbPts, err := globalService.store.getDbPtsByDbname(v.GetName(), v.GetEnableTagArray())
+	// 2.assign db pt, if rep on make sure rg of pt if not UNFULL
+	dbPts, err := globalService.store.getDbPtsByDbname(v.GetName(), v.GetEnableTagArray(), v.GetReplicaNum())
 	if err != nil {
 		return err
 	}
@@ -463,6 +465,21 @@ func (h *VerifyDataNodeStatus) Process() (transport.Codec, error) {
 func (h *SendSysCtrlToMeta) Process() (transport.Codec, error) {
 	rsp := &message.SendSysCtrlToMetaResponse{}
 
+	var err error
+	switch h.req.Mod {
+	case syscontrol.Failpoint:
+		err = handleFailpoint(h)
+	case syscontrol.Backup:
+		err = handleBackup(h)
+	}
+
+	if err != nil {
+		rsp.Err = err.Error()
+	}
+	return rsp, nil
+}
+
+func handleFailpoint(h *SendSysCtrlToMeta) error {
 	var inner = func() (bool, string, string, error) {
 		switchStr, ok := h.req.Param["switchon"]
 		if !ok {
@@ -492,8 +509,59 @@ func (h *SendSysCtrlToMeta) Process() (transport.Codec, error) {
 	} else if err == nil {
 		err = failpoint.Enable(point, term)
 	}
-	if err != nil {
-		rsp.Err = err.Error()
+	return err
+}
+
+func handleBackup(h *SendSysCtrlToMeta) error {
+	backupPath := h.req.Param[backup.BackupPath]
+	if backupPath == "" {
+		err := fmt.Errorf("missing the required parameter backupPath")
+		return err
 	}
+	isRemote := h.req.Param[backup.IsRemote] == "true"
+	isNode := h.req.Param[backup.IsNode] == "true"
+
+	b := &Backup{
+		IsRemote:   isRemote,
+		IsNode:     isNode,
+		BackupPath: backupPath,
+	}
+	if err := b.RunBackupMeta(); err != nil {
+		logger.GetLogger().Error("run backup error", zap.Error(err))
+
+		fmt.Sprintln(err)
+		return err
+	}
+	return nil
+}
+
+func (h *ShowCluster) Process() (transport.Codec, error) {
+	rsp := &message.ShowClusterResponse{}
+
+	body := h.req.Body
+	// Make sure it's a valid command.
+	if _, err := validateCommand(body); err != nil {
+		rsp.Err = err.Error()
+		return rsp, nil
+	}
+
+	b, err := h.store.ShowCluster(body)
+
+	if err == raft.ErrNotLeader {
+		rsp.Err = "node is not the leader"
+		return rsp, nil
+	}
+
+	if err != nil {
+		h.logger.Error("show cluster fail", zap.Error(err))
+		switch stdErr := err.(type) {
+		case *errno.Error:
+			rsp.ErrCode = stdErr.Errno()
+		default:
+		}
+		rsp.Err = err.Error()
+		return rsp, nil
+	}
+	rsp.Data = b
 	return rsp, nil
 }

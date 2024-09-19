@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package handler
 
@@ -132,7 +130,22 @@ func (h *ShowTagValues) processDisorder() (codec.BinaryCodec, error) {
 	var plan netstorage.ShowTagValuesPlan
 
 	h.rsp.Err = processDDL(h.req.Condition, func(expr influxql.Expr, tr influxql.TimeRange) error {
-		plan = h.store.GetEngine().CreateShowTagValuesPlan(*h.req.Db, h.req.PtIDs, &tr)
+		engine := h.store.GetEngine()
+
+		ptIdRefSuc := make([]uint32, 0, len(h.req.PtIDs))
+		defer func() {
+			for _, ptId := range ptIdRefSuc {
+				engine.DbPTUnref(*h.req.Db, ptId)
+			}
+		}()
+		for _, ptId := range h.req.PtIDs {
+			if err := engine.DbPTRef(*h.req.Db, ptId); err != nil {
+				return err
+			}
+			ptIdRefSuc = append(ptIdRefSuc, ptId)
+		}
+
+		plan = engine.CreateShowTagValuesPlan(*h.req.Db, ptIdRefSuc, &tr)
 
 		tagValues, err := plan.Execute(h.req.GetTagKeysBytes(), expr, util.TimeRange{
 			Min: tr.Min.UnixNano(),
@@ -178,7 +191,7 @@ func (h *KillQuery) Process() (codec.BinaryCodec, error) {
 	var abortSuccess bool
 	killQueryByIDFn := func(manager *query.Manager) {
 		// qid is not in current manager, or it has been aborted successfully
-		if manager.Get(qid) == nil || abortSuccess {
+		if len(manager.Get(qid)) == 0 || abortSuccess {
 			return
 		}
 		isExist = true

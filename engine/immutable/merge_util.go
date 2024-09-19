@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package immutable
 
@@ -60,6 +58,12 @@ func (ctx *MergeContext) reset() {
 	ctx.unordered.reset()
 }
 
+func (ctx *MergeContext) UpdateLevel(l uint16) {
+	if ctx.level < l {
+		ctx.level = l
+	}
+}
+
 func (ctx *MergeContext) AddUnordered(f TSSPFile) {
 	min, max, err := f.MinMaxTime()
 	if err != nil {
@@ -101,17 +105,24 @@ func (ctx *MergeContext) MergeSelf() bool {
 	conf := config.GetStoreConfig()
 
 	return conf.Merge.MergeSelfOnly || conf.UnorderedOnly ||
-		(conf.Merge.MaxMergeSelfLevel > ctx.level && int64(conf.Merge.MaxUnorderedFileSize) > ctx.unordered.size)
+		(conf.Merge.MaxMergeSelfLevel > ctx.level &&
+			int64(conf.Merge.MaxUnorderedFileSize) > ctx.unordered.size && ctx.unordered.Len() > 1)
+}
+
+func (ctx *MergeContext) ToLevel() uint16 {
+	return ctx.level + 1
+}
+
+func (ctx *MergeContext) MergeSelfFast() bool {
+	return ctx.ToLevel() == config.GetStoreConfig().TSSPToParquetLevel || ctx.ToLevel() <= MergeSelfFastModeMaxLevel
 }
 
 var mergeContextPool = sync.Pool{}
 
 func NewMergeContext(mst string, level uint16) *MergeContext {
 	ctx, ok := mergeContextPool.Get().(*MergeContext)
-	if !ok {
-		return &MergeContext{
-			mst:       mst,
-			level:     level,
+	if !ok || ctx == nil {
+		ctx = &MergeContext{
 			order:     &mergeFileInfo{},
 			unordered: &mergeFileInfo{},
 			tr:        util.TimeRange{Min: math.MaxInt64, Max: math.MinInt64},
@@ -200,27 +211,51 @@ func buildLevelMergeContext(mst string, files *TSSPFiles, level uint16, callback
 }
 
 func buildFullMergeContext(mst string, files *TSSPFiles, callback func(ctx *MergeContext)) {
+	ok := buildLowLevelFullMergeContext(mst, files, config.GetStoreConfig().TSSPToParquetLevel, callback)
+	if ok {
+		return
+	}
+
 	conf := &config.GetStoreConfig().Merge
-	ctx := NewMergeContext(mst, math.MaxUint16)
+	ctx := NewMergeContext(mst, 0)
 
 	for _, f := range files.Files() {
 		if ctx.UnorderedLen() == 0 && f.FileSize() >= int64(conf.MaxUnorderedFileSize) {
 			continue
 		}
+
+		ctx.UpdateLevel(f.FileNameMerge())
 		ctx.AddUnordered(f)
 		if ctx.Limited() {
 			callback(ctx)
-			ctx = NewMergeContext(mst, math.MaxUint16)
+			ctx = NewMergeContext(mst, 0)
 		}
 	}
+	callback(ctx)
+}
+
+func buildLowLevelFullMergeContext(mst string, files *TSSPFiles, maxLevel uint16, callback func(ctx *MergeContext)) bool {
+	if maxLevel == 0 {
+		return false
+	}
+
+	ctx := NewMergeContext(mst, maxLevel)
+
+	for _, f := range files.Files() {
+		if f.FileNameMerge() >= maxLevel {
+			continue
+		}
+		ctx.AddUnordered(f)
+	}
+	callback(ctx)
+	return ctx.UnorderedLen() > 0
 }
 
 func buildNormalMergeContext(mst string, files *TSSPFiles) *MergeContext {
-	files.RLock()
-	defer files.RUnlock()
-	ctx := NewMergeContext(mst, math.MaxUint16)
+	ctx := NewMergeContext(mst, 0)
 
 	for _, f := range files.Files() {
+		ctx.UpdateLevel(f.FileNameMerge())
 		ctx.AddUnordered(f)
 		if ctx.Limited() {
 			break

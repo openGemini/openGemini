@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package stream
 
@@ -31,6 +29,7 @@ import (
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	streamLib "github.com/openGemini/openGemini/lib/stream"
+	"github.com/openGemini/openGemini/lib/strings"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
@@ -62,7 +61,7 @@ type WritePointsWorkIF interface {
 func NewStream(store Storage, Logger Logger, cli MetaClient, conf stream.Config) (Engine, error) {
 	cache := make(chan ChanData, conf.FilterCache)
 	rowPool := NewCacheRowPool()
-	bp := streamLib.NewBuilderPool()
+	bp := strings.NewBuilderPool()
 	windowCachePool := NewTaskCachePool()
 	goPool, err := ants.NewPool(conf.FilterConcurrency)
 	if err != nil {
@@ -110,7 +109,7 @@ type MetaClient interface {
 type Stream struct {
 	cache           chan ChanData
 	rowPool         *CacheRowPool
-	bp              *streamLib.BuilderPool
+	bp              *strings.BuilderPool
 	windowCachePool *TaskCachePool
 	goPool          *ants.Pool
 
@@ -213,13 +212,13 @@ func (s *Stream) Run() {
 				canRegisterTask := true
 				calls := make([]*streamLib.FieldCall, len(info.Calls))
 				for i, v := range info.Calls {
-					inFieldType, ok := srcSchema[v.Field]
+					inFieldType, ok := srcSchema.GetTyp(v.Field)
 					if !ok {
 						s.Logger.Error(fmt.Sprintf("streamName: %s, srcMst: %s, inField: %s, get input field type failed", info.Name, srcMst.Name, v.Field))
 						canRegisterTask = false
 						break
 					}
-					outFieldType, ok := dstSchema[v.Alias]
+					outFieldType, ok := dstSchema.GetTyp(v.Alias)
 					if !ok {
 						s.Logger.Error(fmt.Sprintf("streamName: %s, dstMst: %s, outField: %s, get output field type failed", info.Name, dstMst.Name, v.Alias))
 						canRegisterTask = false
@@ -234,7 +233,7 @@ func (s *Stream) Run() {
 				}
 				//TODO detect src schema change
 				for i := range info.Dims {
-					ty, ok := srcSchema[info.Dims[i]]
+					ty, ok := srcSchema.GetTyp(info.Dims[i])
 					if !ok || influx.Field_Type_Tag != ty {
 						s.Logger.Error(fmt.Sprintf("streamName: %s, dstMst: %s, dim: %s check fail", info.Name, dstMst.Name, info.Dims[i]))
 						canRegisterTask = false

@@ -1,22 +1,21 @@
-/*
-Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package textindex
 
 import (
+	"fmt"
 	"path"
 	"sync"
 
@@ -33,6 +32,7 @@ const (
 	dataBufSize      int   = 1 * 1024 * 1024
 	fixItemLen       uint8 = 8
 	segmentCntInPart int   = 16
+	maxParallelNum   int   = 4
 )
 
 var padZero []byte = make([]byte, fixItemLen)
@@ -143,6 +143,64 @@ func (bh *BlockHeader) Marshal(dst []byte) []byte {
 	return dst
 }
 
+func (bh *BlockHeader) Unmarshal(src []byte) ([]byte, error) {
+	// Unmarshal FirstItem
+	tail, fi, err := encoding.UnmarshalBytes(src)
+	if err != nil {
+		return tail, fmt.Errorf("cannot unmarshal FirstItem: %w", err)
+	}
+	bh.FirstItem = append(bh.FirstItem[:0], fi...)
+	src = tail
+
+	// Unmarshal LastItem
+	tail, la, err := encoding.UnmarshalBytes(src)
+	if err != nil {
+		return tail, fmt.Errorf("cannot unmarshal LastItem: %w", err)
+	}
+	bh.LastItem = append(bh.LastItem[:0], la...)
+	src = tail
+
+	// Unmarshal marshalType
+	if len(src) == 0 {
+		return src, fmt.Errorf("cannot unmarshal marshalType from zero bytes")
+	}
+	bh.MarshalType = uint8(src[0])
+	src = src[1:]
+	// Unmarshal itemsCount
+	if len(src) < 4 {
+		return src, fmt.Errorf("cannot unmarshal itemsCount from %d bytes; need at least %d bytes", len(src), 4)
+	}
+	bh.ItemsCount = encoding.UnmarshalUint32(src)
+	src = src[4:]
+
+	// Unmarshal Keys info
+	if len(src) < 20 {
+		return src, fmt.Errorf("cannot unmarshal keys info from %d bytes; neet at least %d bytes", len(src), 20)
+	}
+	bh.KeysOffset = encoding.UnmarshalUint64(src) // Unmarshal KeysOffset
+	src = src[8:]
+	bh.KeysUnpackSize = encoding.UnmarshalUint32(src) // Unmarshal KeysUnpackSize
+	src = src[4:]
+	bh.KeysPackSize = encoding.UnmarshalUint32(src) // Unmarshal KeysPackSize
+	src = src[4:]
+	bh.KeysSize = encoding.UnmarshalUint32(src) // Unmarshal KeysSize
+	src = src[4:]
+
+	// Unmarshal Post info
+	if len(src) < 20 {
+		return src, fmt.Errorf("cannot unmarshal post info from %d bytes; neet at least %d bytes", len(src), 20)
+	}
+	bh.PostOffset = encoding.UnmarshalUint64(src) // Unmarshal PostOffset
+	src = src[8:]
+	bh.PostUnpackSize = encoding.UnmarshalUint32(src) // Unmarshal PostUnpackSize
+	src = src[4:]
+	bh.PostPackSize = encoding.UnmarshalUint32(src) // Unmarshal PostPackSize
+	src = src[4:]
+	bh.PostSize = encoding.UnmarshalUint32(src) // Unmarshal PostSize
+	src = src[4:]
+	return src, nil
+}
+
 var bhPool sync.Pool
 
 func GetBlockReader() *BlockHeader {
@@ -169,7 +227,7 @@ type PartHeader struct {
 	BlockHeaderOffset uint64
 	BlockHeaderSize   uint32 // BlockHeaders + SegmentRanges
 	SegmentRangeCnt   uint32
-	SegmentRange      []uint32 // cap is segmentCntInPart
+	SegmentRange      []uint32 // cap is segmentCntInPart, record the starting RowID of each segment
 }
 
 func NewPartHeader() *PartHeader {
@@ -178,6 +236,14 @@ func NewPartHeader() *PartHeader {
 		LastItem:     make([]byte, 0, fixItemLen),
 		SegmentRange: make([]uint32, 0, segmentCntInPart),
 	}
+}
+
+func GetPartHeaderSize() int {
+	return 104 // 18+2+4+8+4+4+64 = 104
+}
+
+func (ph *PartHeader) Size() int {
+	return GetPartHeaderSize()
 }
 
 func (ph *PartHeader) Reset() {
@@ -216,16 +282,17 @@ func (ph *PartHeader) UpdateSegmentRange(rowsPerSegment []int, segId int) {
 	ph.SegmentRangeCnt = 0
 	ph.SegmentRange = ph.SegmentRange[:0]
 	for i < segmentCntInPart {
-		if segId < len(rowsPerSegment)-1 {
-			ph.SegmentRangeCnt++
-			ph.SegmentRange = append(ph.SegmentRange, uint32(rowsPerSegment[segId]))
-		} else if segId == len(rowsPerSegment)-1 {
-			ph.SegmentRangeCnt++
-			ph.SegmentRange = append(ph.SegmentRange, uint32(rowsPerSegment[segId]+1))
+		i++
+		if segId >= len(rowsPerSegment) {
+			ph.SegmentRange = append(ph.SegmentRange, 0)
+			continue
+		}
+		if segId != 0 {
+			ph.SegmentRange = append(ph.SegmentRange, uint32(rowsPerSegment[segId-1]))
 		} else {
 			ph.SegmentRange = append(ph.SegmentRange, 0)
 		}
-		i++
+		ph.SegmentRangeCnt++
 		segId++
 	}
 }
@@ -263,6 +330,58 @@ func (ph *PartHeader) Marshal(dst []byte) []byte {
 	return dst
 }
 
+func (ph *PartHeader) Unmarshal(src []byte) ([]byte, error) {
+	if len(src) < int(ph.Size()) {
+		return src, fmt.Errorf("cannot unmarshal MetaIndex from %d bytes; need at least %d bytes", len(src), ph.Size())
+	}
+	// FirstItemLen and LastItemLen
+	ph.FirstItemLen = src[0]
+	ph.LastItemLen = src[1]
+	src = src[2:]
+	// Unmarshal FirstItem
+	ph.FirstItem = append(ph.FirstItem[:0], src[:ph.FirstItemLen]...)
+	src = src[8:]
+	// Unmarshal LastItem
+	ph.LastItem = append(ph.LastItem[:0], src[:ph.LastItemLen]...)
+	src = src[8:]
+
+	// Unmarshal Flag
+	ph.Flag = encoding.UnmarshalUint16(src)
+	src = src[2:]
+	// Unmarshal BlockHeaderCount
+	ph.BlockHeaderCnt = encoding.UnmarshalUint32(src)
+	src = src[4:]
+	// Unmarshal BlockHeaderOffset
+	ph.BlockHeaderOffset = encoding.UnmarshalUint64(src)
+	src = src[8:]
+	// Unmarshal BlockHeaderSize
+	ph.BlockHeaderSize = encoding.UnmarshalUint32(src)
+	src = src[4:]
+	// Unmarshal SegmentRangeCnt
+	ph.SegmentRangeCnt = encoding.UnmarshalUint32(src)
+	src = src[4:]
+	ph.SegmentRange = ph.SegmentRange[:0]
+	for i := 0; i < segmentCntInPart; i++ {
+		ph.SegmentRange = append(ph.SegmentRange, encoding.UnmarshalUint32(src))
+		src = src[4:]
+	}
+	return src, nil
+}
+
+func (ph *PartHeader) Contain(queryStr string) bool {
+	var tmpStr string
+	if len(queryStr) > int(fixItemLen) {
+		tmpStr = queryStr[:fixItemLen]
+	} else {
+		tmpStr = queryStr
+	}
+	if tmpStr < string(ph.FirstItem) ||
+		tmpStr > string(ph.LastItem) {
+		return false
+	}
+	return true
+}
+
 var phPool sync.Pool
 
 func GetPartHeader() *PartHeader {
@@ -276,6 +395,25 @@ func GetPartHeader() *PartHeader {
 func PutPartHeader(ph *PartHeader) {
 	ph.Reset()
 	phPool.Put(ph)
+}
+
+func UnarshalUint32Slice(src []byte) []uint32 {
+	num := len(src) / 4 // 4 = sizeof(uint32)
+	dst := make([]uint32, num)
+	for i := 0; i < num; i++ {
+		dst[i] = encoding.UnmarshalUint32(src[i*4:])
+	}
+	return dst
+}
+
+func DecodeOffs(offs []uint32, i int) (start, end uint32) {
+	if i > 0 {
+		start = offs[i-1]
+	} else {
+		start = 0
+	}
+	end = offs[i]
+	return
 }
 
 type TextIndexWriter struct {
@@ -322,6 +460,7 @@ func (w *TextIndexWriter) Open() error {
 
 func (w *TextIndexWriter) Close() error {
 	FreeFullTextIndexBuilder(w.builder)
+	w.builder = nil
 	return nil
 }
 
@@ -357,6 +496,92 @@ func (w *TextIndexWriter) CloseIndexWriters(dataWriter, headWriter, partWriter *
 	partWriter.Reset()
 }
 
+type RowRange struct {
+	seq      int
+	segId    int
+	startRow int
+	endRow   int
+}
+
+func (r *RowRange) isEmpty() bool {
+	return r.startRow == r.endRow
+}
+
+type WritePartInfo struct {
+	rowRanges   []RowRange
+	memElements []*InvertMemElement
+	lock        sync.Mutex
+	err         error
+}
+
+func NewWritePartInfo(size int) *WritePartInfo {
+	return &WritePartInfo{
+		rowRanges:   make([]RowRange, 0, size),
+		memElements: make([]*InvertMemElement, size),
+	}
+}
+
+func (wp *WritePartInfo) GetRowRanges() RowRange {
+	wp.lock.Lock()
+	defer wp.lock.Unlock()
+	if len(wp.rowRanges) == 0 {
+		return RowRange{}
+	}
+	rowRage := wp.rowRanges[0]
+	wp.rowRanges = wp.rowRanges[1:]
+	return rowRage
+}
+
+func (wp *WritePartInfo) SetMemElements(memElements *InvertMemElement, seq int) {
+	wp.lock.Lock()
+	defer wp.lock.Unlock()
+	wp.memElements[seq] = memElements
+}
+
+func (wp *WritePartInfo) SetResError(err error) {
+	wp.lock.Lock()
+	defer wp.lock.Unlock()
+	wp.err = err
+}
+
+func getRowRange(rowsPerSegment []int, segId int) RowRange {
+	rowRange := RowRange{segId: segId, startRow: 0, endRow: 0}
+	if segId > 0 {
+		rowRange.startRow = rowsPerSegment[segId-1]
+	}
+	segmentCnt := len(rowsPerSegment)
+	if segId+segmentCntInPart < segmentCnt {
+		rowRange.endRow = rowsPerSegment[segId+segmentCntInPart-1]
+	} else {
+		rowRange.endRow = rowsPerSegment[segmentCnt-1] + 1
+	}
+	return rowRange
+}
+
+func splitPart(rowsPerSegment []int, partNum int) *WritePartInfo {
+	seq := 0
+	wp := NewWritePartInfo(partNum)
+	for seq < partNum {
+		rowRange := getRowRange(rowsPerSegment, seq*segmentCntInPart)
+		rowRange.seq = seq
+		wp.rowRanges = append(wp.rowRanges, rowRange)
+		seq++
+	}
+	return wp
+}
+
+func getPartNumAndParallelNum(segmentCnt int) (int, int) {
+	partNum := segmentCnt / segmentCntInPart
+	if segmentCnt%segmentCntInPart != 0 {
+		partNum += 1
+	}
+	maxParallel := partNum
+	if maxParallel > maxParallelNum {
+		maxParallel = maxParallelNum
+	}
+	return partNum, maxParallel
+}
+
 func (w *TextIndexWriter) CreateAttachIndex(writeRec *record.Record, schemaIdx, rowsPerSegment []int) error {
 	data := GetBlockData()
 	bh := GetBlockReader()
@@ -370,25 +595,42 @@ func (w *TextIndexWriter) CreateAttachIndex(writeRec *record.Record, schemaIdx, 
 		if err != nil {
 			return err
 		}
-		var dataOffset uint64
-		var headOffset uint64
-		segmentCnt := len(rowsPerSegment)
-		i := 0
-		for i < segmentCnt {
-			// Splitting words and constructing an inverted table
-			startRow, endRow := GetRowIdRange(rowsPerSegment, i)
-			i += segmentCntInPart
-			memElement, err := w.builder.AddDocument(writeRec.ColVals[idx].Val, writeRec.ColVals[idx].Offset, startRow, endRow)
-			if err != nil {
-				return err
-			}
+		dataOffset := uint64(0)
+		headOffset := uint64(0)
+		partNum, maxParallel := getPartNumAndParallelNum(len(rowsPerSegment))
+		wp := splitPart(rowsPerSegment, partNum)
+		wg := sync.WaitGroup{}
+		for i := 0; i < maxParallel; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for {
+					rowRange := wp.GetRowRanges()
+					if rowRange.isEmpty() {
+						return
+					}
+					memElement, err := w.builder.AddDocument(writeRec.ColVals[idx].Val, writeRec.ColVals[idx].Offset, rowRange.startRow, rowRange.endRow)
+					if err != nil {
+						wp.SetResError(err)
+						return
+					}
+					wp.SetMemElements(memElement, rowRange.seq)
+				}
+			}()
+		}
+		wg.Wait()
+		if wp.err != nil {
+			return wp.err
+		}
+		// write to file
+		for i := 0; i < len(wp.memElements); i++ {
 			// Get the block data
 			ph.BlockHeaderCnt = 0
 			ph.BlockHeaderOffset = headOffset
-			ph.UpdateSegmentRange(rowsPerSegment, i)
+			ph.UpdateSegmentRange(rowsPerSegment, i*segmentCntInPart)
 			next := true
 			for next {
-				next = w.builder.Next(memElement, data, bh)
+				next = RetrievePostingList(wp.memElements[i], data, bh)
 				// Compress LZ4 and Data write
 				keyDstLen := lz4.CompressBlockBound(int(bh.KeysUnpackSize))
 				postDstLen := lz4.CompressBlockBound(int(bh.PostUnpackSize))
@@ -436,7 +678,8 @@ func (w *TextIndexWriter) CreateAttachIndex(writeRec *record.Record, schemaIdx, 
 			partBuf = ph.Marshal(partBuf)
 			// reset
 			ph.Reset()
-			PutInvertMemElement(memElement)
+			PutInvertMemElement(wp.memElements[i])
+			wp.memElements[i] = nil
 		}
 		if err := headWriter.WriteData(headBuf); err != nil {
 			w.CloseIndexWriters(dataWriter, headWriter, partWriter)

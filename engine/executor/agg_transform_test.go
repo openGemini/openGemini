@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package executor_test
 
@@ -2680,6 +2678,175 @@ func TestStreamAggregateTransform_Multi_First_Boolean(t *testing.T) {
 	}
 }
 
+func buildDstRowDataTypePromQuantile() hybridqp.RowDataType {
+	schema := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "quantile_prom(\"height\")", Type: influxql.Float},
+	)
+	return schema
+}
+
+func buildPromQuantileInChunk() []executor.Chunk {
+	inChunks := make([]executor.Chunk, 0, 2)
+	rowDataType := buildFloatRowDataType()
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	// first chunk
+	inCk1 := b.NewChunk("mst")
+	inCk1.AppendTagsAndIndexes(
+		[]executor.ChunkTags{
+			*ParseChunkTags("country=china")},
+		[]int{0})
+	inCk1.AppendIntervalIndexes([]int{0, 3})
+	inCk1.AppendTimes([]int64{1, 2, 3, 4, 5, 6})
+
+	inCk1.Column(0).AppendFloatValues([]float64{102, 102, 52.7, 50, 50, 50})
+	inCk1.Column(0).AppendManyNotNil(6)
+
+	// second chunk
+	inCk2 := b.NewChunk("mst")
+	inCk2.AppendTagsAndIndexes(
+		[]executor.ChunkTags{
+			*ParseChunkTags("country=china")},
+		[]int{0})
+	inCk2.AppendIntervalIndexes([]int{0, 3})
+	inCk2.AppendTimes([]int64{7, 8, 9, 10, 11, 12})
+
+	inCk2.Column(0).AppendFloatValues([]float64{48.8, 48.8, 48.8, 48.8, 30, 50})
+	inCk2.Column(0).AppendManyNotNil(6)
+
+	inChunks = append(inChunks, inCk1, inCk2)
+
+	return inChunks
+}
+
+func buildDstChunkPromQuantile() []executor.Chunk {
+	rowDataType := buildDstRowDataTypePromStddev()
+	dstChunks := make([]executor.Chunk, 0, 1)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	chunk := b.NewChunk("mst")
+
+	chunk.AppendTagsAndIndexes(
+		[]executor.ChunkTags{
+			*ParseChunkTags("country=american"),
+			*ParseChunkTags("country=china"),
+			*ParseChunkTags("country=japan")},
+		[]int{0, 4, 7})
+	chunk.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10})
+	chunk.AppendTimes([]int64{1, 2, 3, 4, 1, 2, 4, 1, 2, 3, 4})
+
+	chunk.Column(0).AppendFloatValues([]float64{math.Inf(+1), math.Inf(+1), math.Inf(+1), math.Inf(+1), math.Inf(+1), math.Inf(+1), math.Inf(+1), math.Inf(+1), math.Inf(+1), math.Inf(+1), math.Inf(+1)})
+	chunk.Column(0).AppendManyNotNil(11)
+
+	dstChunks = append(dstChunks, chunk)
+	return dstChunks
+}
+
+func buildDstChunkPromQuantile1() []executor.Chunk {
+	rowDataType := buildDstRowDataTypePromStddev()
+	dstChunks := make([]executor.Chunk, 0, 1)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	chunk := b.NewChunk("mst")
+
+	chunk.AppendTagsAndIndexes(
+		[]executor.ChunkTags{
+			*ParseChunkTags("country=china")},
+		[]int{0})
+	chunk.AppendIntervalIndexes([]int{0, 1, 2})
+	chunk.AppendTimes([]int64{1, 9, 10})
+
+	chunk.Column(0).AppendFloatValues([]float64{102, 49.4, 48.8})
+	chunk.Column(0).AppendManyNotNil(3)
+
+	dstChunks = append(dstChunks, chunk)
+	return dstChunks
+}
+
+func buildDstChunkPromQuantile2() []executor.Chunk {
+	rowDataType := buildDstRowDataTypePromStddev()
+	dstChunks := make([]executor.Chunk, 0, 1)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	chunk := b.NewChunk("mst")
+
+	chunk.AppendTagsAndIndexes(
+		[]executor.ChunkTags{
+			*ParseChunkTags("country=china")},
+		[]int{0})
+	chunk.AppendIntervalIndexes([]int{0, 1, 2})
+	chunk.AppendTimes([]int64{1, 4, 10})
+
+	chunk.Column(0).AppendFloatValues([]float64{math.Inf(-1), math.Inf(-1), math.Inf(-1)})
+	chunk.Column(0).AppendManyNotNil(3)
+
+	dstChunks = append(dstChunks, chunk)
+	return dstChunks
+}
+
+func TestStreamAggregateTransformPromQuantile(t *testing.T) {
+
+	opt := query.ProcessorOptions{
+		Dimensions: []string{"country"},
+		Interval:   hybridqp.Interval{Duration: 20 * time.Nanosecond},
+		ChunkSize:  6,
+	}
+	t.Run("1", func(t *testing.T) {
+		exprOpt := []hybridqp.ExprOptions{
+			{
+				Expr: &influxql.Call{Name: "quantile_prom", Args: []influxql.Expr{hybridqp.MustParseExpr("height"), hybridqp.MustParseExpr("2")}},
+				Ref:  influxql.VarRef{Val: `quantile_prom("height")`, Type: influxql.Float},
+			},
+		}
+		inChunks := buildFloatInChunk()
+		dstChunks := buildDstChunkPromQuantile()
+		testStreamAggregateTransformProm(
+			t,
+			inChunks, dstChunks,
+			buildFloatRowDataType(), buildDstRowDataTypePromQuantile(),
+			exprOpt, &opt, false,
+		)
+	})
+
+	t.Run("2", func(t *testing.T) {
+		exprOpt := []hybridqp.ExprOptions{
+			{
+				Expr: &influxql.Call{Name: "quantile_prom", Args: []influxql.Expr{hybridqp.MustParseExpr("height"), hybridqp.MustParseExpr("0.5")}},
+				Ref:  influxql.VarRef{Val: `quantile_prom("height")`, Type: influxql.Float},
+			},
+		}
+		inChunks := buildPromQuantileInChunk()
+		dstChunks := buildDstChunkPromQuantile1()
+		testStreamAggregateTransformProm(
+			t,
+			inChunks, dstChunks,
+			buildFloatRowDataType(), buildDstRowDataTypePromQuantile(),
+			exprOpt, &opt, false,
+		)
+	})
+
+	t.Run("3", func(t *testing.T) {
+		exprOpt := []hybridqp.ExprOptions{
+			{
+				Expr: &influxql.Call{Name: "quantile_prom", Args: []influxql.Expr{hybridqp.MustParseExpr("height"), hybridqp.MustParseExpr("-1")}},
+				Ref:  influxql.VarRef{Val: `quantile_prom("height")`, Type: influxql.Float},
+			},
+		}
+		inChunks := buildPromQuantileInChunk()
+		dstChunks := buildDstChunkPromQuantile2()
+		testStreamAggregateTransformProm(
+			t,
+			inChunks, dstChunks,
+			buildFloatRowDataType(), buildDstRowDataTypePromQuantile(),
+			exprOpt, &opt, false,
+		)
+	})
+}
+
 func TestStreamAggregateTransformPercentile(t *testing.T) {
 	sourceChunk1, sourceChunk2 := buildSourceChunkPercentile1(), buildSourceChunkPercentile2()
 	targetChunk := buildTargetChunkPercentile()
@@ -3694,9 +3861,9 @@ func buildFloatInChunk() []executor.Chunk {
 		[]executor.ChunkTags{
 			*ParseChunkTags("country=american"),
 			*ParseChunkTags("country=china")},
-		[]int{0, 3})
-	inCk1.AppendIntervalIndexes([]int{0, 1, 3, 5})
-	inCk1.AppendTimes([]int64{1, 1, 3, 3, 3, 5})
+		[]int{0, 4})
+	inCk1.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5})
+	inCk1.AppendTimes([]int64{1, 2, 3, 4, 1, 2})
 
 	inCk1.Column(0).AppendFloatValues([]float64{102, 102, 52.7, 50, 50, 50})
 	inCk1.Column(0).AppendManyNotNil(6)
@@ -3707,12 +3874,47 @@ func buildFloatInChunk() []executor.Chunk {
 		[]executor.ChunkTags{
 			*ParseChunkTags("country=china"),
 			*ParseChunkTags("country=japan")},
-		[]int{0, 4})
-	inCk2.AppendIntervalIndexes([]int{0, 2, 4})
-	inCk2.AppendTimes([]int64{5, 6, 7, 7, 1})
+		[]int{0, 2})
+	inCk2.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5})
+	inCk2.AppendTimes([]int64{3, 4, 1, 2, 3, 4})
 
-	inCk2.Column(0).AppendFloatValues([]float64{48.8, 48.8, 48.8, 48.8, 30})
-	inCk2.Column(0).AppendManyNotNil(5)
+	inCk2.Column(0).AppendFloatValues([]float64{48.8, 48.8, 48.8, 48.8, 30, 50})
+	inCk2.Column(0).AppendManyNotNil(6)
+
+	inChunks = append(inChunks, inCk1, inCk2)
+
+	return inChunks
+}
+
+func buildCountValuesInChunk() []executor.Chunk {
+	inChunks := make([]executor.Chunk, 0, 2)
+	rowDataType := buildFloatRowDataType()
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	// first chunk
+	inCk1 := b.NewChunk("mst")
+	inCk1.AppendTagsAndIndexes(
+		[]executor.ChunkTags{
+			executor.ChunkTags{}},
+		[]int{0})
+	inCk1.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5})
+	inCk1.AppendTimes([]int64{1, 1, 1, 2, 2, 2})
+
+	inCk1.Column(0).AppendFloatValues([]float64{102, 102, 52.7, 50, 50, 50})
+	inCk1.Column(0).AppendManyNotNil(6)
+
+	// second chunk
+	inCk2 := b.NewChunk("mst")
+	inCk2.AppendTagsAndIndexes(
+		[]executor.ChunkTags{
+			executor.ChunkTags{}},
+		[]int{0})
+	inCk2.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5})
+	inCk2.AppendTimes([]int64{3, 3, 3, 4, 4, 4})
+
+	inCk2.Column(0).AppendFloatValues([]float64{48.8, 48.8, 48.8, 48.8, 30, 50})
+	inCk2.Column(0).AppendManyNotNil(6)
 
 	inChunks = append(inChunks, inCk1, inCk2)
 
@@ -3729,14 +3931,37 @@ func buildDstChunkCountValues() []executor.Chunk {
 
 	chunk.AppendTagsAndIndexes(
 		[]executor.ChunkTags{
-			*ParseChunkTags("country=american,value=52.7"), *ParseChunkTags("country=american,value=102"),
+			*ParseChunkTags("country=american,value=50"), *ParseChunkTags("country=american,value=52.7"), *ParseChunkTags("country=american,value=102"),
 			*ParseChunkTags("country=china,value=48.8"), *ParseChunkTags("country=china,value=50"),
-			*ParseChunkTags("country=japan,value=30")},
-		[]int{0, 1, 2, 4, 6})
-	chunk.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5, 6})
-	chunk.AppendTimes([]int64{1, 1, 5, 7, 3, 5, 1})
+			*ParseChunkTags("country=japan,value=30"), *ParseChunkTags("country=japan,value=48.8"), *ParseChunkTags("country=japan,value=50")},
+		[]int{0, 1, 2, 4, 6, 8, 9, 11})
+	chunk.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11})
+	chunk.AppendTimes([]int64{4, 3, 1, 2, 3, 4, 1, 2, 3, 1, 2, 4})
 
-	chunk.Column(0).AppendFloatValues([]float64{1, 2, 2, 2, 2, 1, 1})
+	chunk.Column(0).AppendFloatValues([]float64{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1})
+	chunk.Column(0).AppendManyNotNil(12)
+
+	dstChunks = append(dstChunks, chunk)
+	return dstChunks
+}
+
+func buildDstChunkCountValues2() []executor.Chunk {
+	rowDataType := buildDstRowDataTypeIrate()
+	dstChunks := make([]executor.Chunk, 0, 1)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	chunk := b.NewChunk("mst")
+
+	chunk.AppendTagsAndIndexes(
+		[]executor.ChunkTags{
+			*ParseChunkTags("value=30"), *ParseChunkTags("value=48.8"), *ParseChunkTags("value=50"),
+			*ParseChunkTags("value=52.7"), *ParseChunkTags("value=102")},
+		[]int{0, 1, 3, 5, 6})
+	chunk.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5, 6})
+	chunk.AppendTimes([]int64{4, 3, 4, 2, 4, 1, 1})
+
+	chunk.Column(0).AppendFloatValues([]float64{1, 3, 1, 3, 1, 1, 2})
 	chunk.Column(0).AppendManyNotNil(7)
 
 	dstChunks = append(dstChunks, chunk)
@@ -3744,9 +3969,6 @@ func buildDstChunkCountValues() []executor.Chunk {
 }
 
 func TestStreamAggregateTransformCountValues(t *testing.T) {
-	inChunks := buildFloatInChunk()
-	dstChunks := buildDstChunkCountValues()
-	var _ = hybridqp.MustParseExpr("value")
 	exprOpt := []hybridqp.ExprOptions{
 		{
 			Expr: &influxql.Call{Name: "count_values_prom", Args: []influxql.Expr{hybridqp.MustParseExpr("height"), &influxql.StringLiteral{Val: "value"}}},
@@ -3759,11 +3981,311 @@ func TestStreamAggregateTransformCountValues(t *testing.T) {
 		Interval:   hybridqp.Interval{Duration: 20 * time.Nanosecond},
 		ChunkSize:  6,
 	}
+	t.Run("1", func(t *testing.T) {
+		inChunks := buildFloatInChunk()
+		dstChunks := buildDstChunkCountValues()
+		testStreamAggregateTransformBase(
+			t,
+			inChunks, dstChunks,
+			buildFloatRowDataType(), buildDstRowDataTypeCountValues(),
+			exprOpt, &opt, false,
+		)
+	})
+
+	t.Run("2", func(t *testing.T) {
+		inChunks := buildCountValuesInChunk()
+		dstChunks := buildDstChunkCountValues2()
+		testStreamAggregateTransformBase(
+			t,
+			inChunks, dstChunks,
+			buildFloatRowDataType(), buildDstRowDataTypeCountValues(),
+			exprOpt, &opt, false,
+		)
+	})
+
+}
+
+func testStreamAggregateTransformProm(
+	t *testing.T,
+	inChunks []executor.Chunk, dstChunks []executor.Chunk,
+	inRowDataType, outRowDataType hybridqp.RowDataType,
+	exprOpt []hybridqp.ExprOptions, opt *query.ProcessorOptions,
+	isSubQuery bool,
+) {
+	// generate each executor node node to build a dag.
+	source := NewSourceFromMultiChunk(inRowDataType, inChunks)
+	trans, _ := executor.NewStreamAggregateTransform(
+		[]hybridqp.RowDataType{inRowDataType},
+		[]hybridqp.RowDataType{outRowDataType},
+		exprOpt,
+		opt, isSubQuery)
+	sink := NewNilSink(outRowDataType)
+	err := executor.Connect(source.Output, trans.Inputs[0])
+	if err != nil {
+		t.Fatalf("connect error")
+	}
+	err = executor.Connect(trans.Outputs[0], sink.Input)
+	if err != nil {
+		t.Fatalf("connect error")
+	}
+	var processors executor.Processors
+	processors = append(processors, source)
+	processors = append(processors, trans)
+	processors = append(processors, sink)
+
+	// build the pipeline executor from the dag
+	executors := executor.NewPipelineExecutor(processors)
+	err = executors.Execute(context.Background())
+	if err != nil {
+		t.Fatalf("connect error")
+	}
+	executors.Release()
+
+	// check the result
+	outChunks := sink.Chunks
+	if len(dstChunks) != len(outChunks) {
+		t.Fatalf("the chunk number is not the same as the target: %d != %d\n", len(dstChunks), len(outChunks))
+	}
+	for i := range outChunks {
+		assert.Equal(t, outChunks[i].Name(), dstChunks[i].Name())
+		assert.Equal(t, outChunks[i].Tags(), dstChunks[i].Tags())
+		assert.Equal(t, outChunks[i].Time(), dstChunks[i].Time())
+		assert.Equal(t, outChunks[i].TagIndex(), dstChunks[i].TagIndex())
+		assert.Equal(t, outChunks[i].IntervalIndex(), dstChunks[i].IntervalIndex())
+		for j := range outChunks[i].Columns() {
+			out := outChunks[i].Column(j).FloatValues()
+			dst := dstChunks[i].Column(j).FloatValues()
+			if len(out) != len(dst) {
+				assert.Fail(t, fmt.Sprintf("Not equal: \n"+
+					"expected: %v\n"+
+					"actual  : %v\n", dst, out))
+				continue
+			}
+			for k := 0; k < len(out); k++ {
+				if math.IsNaN(out[k]) && math.IsNaN(dst[k]) {
+					continue
+				}
+				if out[k] != dst[k] {
+					assert.Fail(t, fmt.Sprintf("Not equal: \n"+
+						"expected: %v\n"+
+						"actual  : %v\n", dst, out))
+					break
+				}
+			}
+		}
+	}
+}
+
+func buildCommonInChunk2() []executor.Chunk {
+	inChunks := make([]executor.Chunk, 0, 2)
+	rowDataType := buildFloatRowDataType()
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	// first chunk
+	inCk1 := b.NewChunk("mst")
+	inCk1.AppendTagsAndIndexes(
+		[]executor.ChunkTags{*ParseChunkTags("country=american")},
+		[]int{0})
+	inCk1.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5})
+	inCk1.AppendTimes([]int64{1, 2, 3, 4, 5, 6})
+
+	inCk1.Column(0).AppendFloatValues([]float64{102, 102, 52.7, 50, 50, 50})
+	inCk1.Column(0).AppendManyNotNil(6)
+
+	// second chunk
+	inCk2 := b.NewChunk("mst")
+	inCk2.AppendTagsAndIndexes(
+		[]executor.ChunkTags{*ParseChunkTags("country=china")},
+		[]int{0})
+	inCk2.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5})
+	inCk2.AppendTimes([]int64{1, 2, 3, 4, 5, 6})
+
+	inCk2.Column(0).AppendFloatValues([]float64{48.8, 48.8, 48.8, 48.8, 30, 50})
+	inCk2.Column(0).AppendManyNotNil(6)
+
+	inChunks = append(inChunks, inCk1, inCk2)
+
+	return inChunks
+}
+
+func buildScalarInChunk() []executor.Chunk {
+	inChunks := make([]executor.Chunk, 0, 2)
+	rowDataType := buildFloatRowDataType()
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	// first chunk
+	inCk1 := b.NewChunk("mst")
+	inCk1.AppendTagsAndIndexes(
+		[]executor.ChunkTags{*ParseChunkTags("country=american")},
+		[]int{0})
+	inCk1.AppendIntervalIndexes([]int{0, 1, 3, 5})
+	inCk1.AppendTimes([]int64{1, 1, 3, 3, 3, 5})
+
+	inCk1.Column(0).AppendFloatValues([]float64{102, 102, 52.7, 50, 50, 50})
+	inCk1.Column(0).AppendManyNotNil(6)
+
+	// second chunk
+	inCk2 := b.NewChunk("mst")
+	inCk2.AppendTagsAndIndexes(
+		[]executor.ChunkTags{*ParseChunkTags("country=american")},
+		[]int{0})
+	inCk2.AppendIntervalIndexes([]int{0, 2, 4})
+	inCk2.AppendTimes([]int64{5, 6, 7, 7, 1})
+
+	inCk2.Column(0).AppendFloatValues([]float64{48.8, 48.8, 48.8, 48.8, 30})
+	inCk2.Column(0).AppendManyNotNil(5)
+
+	inChunks = append(inChunks, inCk1, inCk2)
+
+	return inChunks
+}
+
+func buildDstChunkScalar() []executor.Chunk {
+	inChunks := make([]executor.Chunk, 0, 1)
+	rowDataType := buildFloatRowDataType()
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	// first chunk
+	inCk1 := b.NewChunk("mst")
+	inCk1.AppendTagsAndIndexes(
+		[]executor.ChunkTags{executor.ChunkTags{}},
+		[]int{0})
+	inCk1.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10})
+	inCk1.AppendTimes([]int64{1, 1, 3, 3, 3, 5, 5, 6, 7, 7, 1})
+
+	inCk1.Column(0).AppendFloatValues([]float64{102, 102, 52.7, 50, 50, 50, 48.8, 48.8, 48.8, 48.8, 30})
+	inCk1.Column(0).AppendManyNotNil(11)
+
+	inChunks = append(inChunks, inCk1)
+
+	return inChunks
+}
+
+func buildDstChunkScalar2() []executor.Chunk {
+	inChunks := make([]executor.Chunk, 0, 1)
+	rowDataType := buildFloatRowDataType()
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	// first chunk
+	inCk1 := b.NewChunk("mst")
+	inCk1.AppendTagsAndIndexes(
+		[]executor.ChunkTags{executor.ChunkTags{}},
+		[]int{0})
+	inCk1.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5})
+	inCk1.AppendTimes([]int64{1, 2, 3, 4, 5, 6})
+
+	nan := math.NaN()
+	inCk1.Column(0).AppendFloatValues([]float64{nan, nan, nan, nan, nan, nan})
+	inCk1.Column(0).AppendManyNotNil(6)
+
+	inChunks = append(inChunks, inCk1)
+
+	return inChunks
+}
+
+func buildDstRowDataTypeScalar() hybridqp.RowDataType {
+	schema := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "scalar_prom(\"height\")", Type: influxql.Float},
+	)
+	return schema
+}
+
+func TestStreamAggregateTransformScalar(t *testing.T) {
+
+	var _ = hybridqp.MustParseExpr("value")
+	exprOpt := []hybridqp.ExprOptions{
+		{
+			Expr: &influxql.Call{Name: "scalar_prom", Args: []influxql.Expr{hybridqp.MustParseExpr("height"), &influxql.StringLiteral{Val: "value"}}},
+			Ref:  influxql.VarRef{Val: `scalar_prom("height")`, Type: influxql.Float},
+		},
+	}
+
+	opt := query.ProcessorOptions{
+		Dimensions: []string{"country"},
+		Interval:   hybridqp.Interval{Duration: 20 * time.Nanosecond},
+		ChunkSize:  6,
+	}
+
+	t.Run("1", func(t *testing.T) {
+		inChunks := buildScalarInChunk()
+		dstChunks := buildDstChunkScalar()
+		testStreamAggregateTransformProm(
+			t,
+			inChunks, dstChunks,
+			buildFloatRowDataType(), buildDstRowDataTypeScalar(),
+			exprOpt, &opt, false,
+		)
+	})
+
+	t.Run("2", func(t *testing.T) {
+		inChunks := buildCommonInChunk2()
+		dstChunks := buildDstChunkScalar2()
+		testStreamAggregateTransformProm(
+			t,
+			inChunks, dstChunks,
+			buildFloatRowDataType(), buildDstRowDataTypeScalar(),
+			exprOpt, &opt, false,
+		)
+	})
+
+}
+
+func buildDstRowDataTypeGroup() hybridqp.RowDataType {
+	schema := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "group_prom(\"height\")", Type: influxql.Float},
+	)
+	return schema
+}
+
+func buildDstChunkGroup() []executor.Chunk {
+	rowDataType := buildDstRowDataTypeGroup()
+	dstChunks := make([]executor.Chunk, 0, 1)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	chunk := b.NewChunk("mst")
+
+	chunk.AppendTagsAndIndexes(
+		[]executor.ChunkTags{
+			*ParseChunkTags("country=american"),
+			*ParseChunkTags("country=china"),
+			*ParseChunkTags("country=japan")},
+		[]int{0, 4, 7})
+	chunk.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10})
+	chunk.AppendTimes([]int64{1, 2, 3, 4, 1, 2, 4, 1, 2, 3, 4})
+
+	chunk.Column(0).AppendFloatValues([]float64{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1})
+	chunk.Column(0).AppendManyNotNil(11)
+
+	dstChunks = append(dstChunks, chunk)
+	return dstChunks
+}
+
+func TestStreamAggregateTransformGroup(t *testing.T) {
+	inChunks := buildFloatInChunk()
+	dstChunks := buildDstChunkGroup()
+	var _ = hybridqp.MustParseExpr("value")
+	exprOpt := []hybridqp.ExprOptions{
+		{
+			Expr: &influxql.Call{Name: "group_prom", Args: []influxql.Expr{hybridqp.MustParseExpr("height"), &influxql.StringLiteral{Val: "value"}}},
+			Ref:  influxql.VarRef{Val: `group_prom("height")`, Type: influxql.Float},
+		},
+	}
+
+	opt := query.ProcessorOptions{
+		Dimensions: []string{"country"},
+		Interval:   hybridqp.Interval{Duration: 20 * time.Nanosecond},
+		ChunkSize:  6,
+	}
 
 	testStreamAggregateTransformBase(
 		t,
 		inChunks, dstChunks,
-		buildFloatRowDataType(), buildDstRowDataTypeCountValues(),
+		buildFloatRowDataType(), buildDstRowDataTypeGroup(),
 		exprOpt, &opt, false,
 	)
 }
@@ -3788,12 +4310,12 @@ func buildDstChunkPromStddev() []executor.Chunk {
 			*ParseChunkTags("country=american"),
 			*ParseChunkTags("country=china"),
 			*ParseChunkTags("country=japan")},
-		[]int{0, 2, 5})
-	chunk.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5})
-	chunk.AppendTimes([]int64{0, 1, 3, 5, 7, 0})
+		[]int{0, 4, 7})
+	chunk.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10})
+	chunk.AppendTimes([]int64{1, 2, 3, 4, 1, 2, 4, 1, 2, 3, 4})
 
-	chunk.Column(0).AppendFloatValues([]float64{0, 24.649999999999995, 0, 0.5656854249492389, 0, 0})
-	chunk.Column(0).AppendManyNotNil(6)
+	chunk.Column(0).AppendFloatValues([]float64{0, 0, 0, 0, 0, 0.6000000000000014, 0, 0, 0, 0, 0})
+	chunk.Column(0).AppendManyNotNil(11)
 
 	dstChunks = append(dstChunks, chunk)
 	return dstChunks
@@ -3844,12 +4366,12 @@ func buildDstChunkPromStdvar() []executor.Chunk {
 			*ParseChunkTags("country=american"),
 			*ParseChunkTags("country=china"),
 			*ParseChunkTags("country=japan")},
-		[]int{0, 2, 5})
-	chunk.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5})
-	chunk.AppendTimes([]int64{0, 1, 3, 5, 7, 0})
+		[]int{0, 4, 7})
+	chunk.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10})
+	chunk.AppendTimes([]int64{1, 2, 3, 4, 1, 2, 4, 1, 2, 3, 4})
 
-	chunk.Column(0).AppendFloatValues([]float64{0, 607.6224999999997, 0, 0.320000000000001, 0, 0})
-	chunk.Column(0).AppendManyNotNil(6)
+	chunk.Column(0).AppendFloatValues([]float64{0, 0, 0, 0, 0, 0.3600000000000017, 0, 0, 0, 0, 0})
+	chunk.Column(0).AppendManyNotNil(11)
 
 	dstChunks = append(dstChunks, chunk)
 	return dstChunks

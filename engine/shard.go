@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package engine
 
@@ -56,6 +54,7 @@ import (
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/obs"
+	"github.com/openGemini/openGemini/lib/raftlog"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/stringinterner"
@@ -106,10 +105,11 @@ type Storage interface {
 	ForceFlush(s *shard)
 }
 
-func findTagIndex(schema record.Schemas, metaSchema map[string]int32) []int {
+func findTagIndex(schema record.Schemas, metaSchema *meta.CleanSchema) []int {
 	var res []int
 	for i := range schema {
-		if metaSchema[schema[i].Name] == influx.Field_Type_Tag { // according to the meta schema
+		v, _ := metaSchema.GetTyp(schema[i].Name)
+		if v == influx.Field_Type_Tag { // according to the meta schema
 			res = append(res, i)
 		}
 	}
@@ -188,7 +188,10 @@ type Shard interface {
 	ExecShardMove() error
 	DisableHierarchicalStorage()
 	SetEnableHierarchicalStorage()
-	CreateShowTagValuesPlan() immutable.ShowTagValuesPlan
+	CreateShowTagValuesPlan(client metaclient.MetaClient) immutable.ShowTagValuesPlan
+
+	// raft SnapShot
+	SetSnapShotter(snp *raftlog.SnapShotter)
 }
 
 type shard struct {
@@ -269,6 +272,8 @@ type shard struct {
 	moveWorksCount int64
 
 	fileInfos chan []immutable.FileInfoExtend
+
+	SnapShotter *raftlog.SnapShotter
 }
 
 type shardDownSampleTaskInfo struct {
@@ -404,6 +409,12 @@ func NewShard(dataPath, walPath string, lockPath *string, ident *meta.ShardIdent
 	return s
 }
 
+func (s *shard) SetSnapShotter(snp *raftlog.SnapShotter) {
+	if s.SnapShotter == nil {
+		s.SnapShotter = snp
+	}
+}
+
 func (s *shard) writeCols(cols *record.Record, binaryCols []byte, mst string) error {
 	s.snapshotLock.RLock()
 	defer s.snapshotLock.RUnlock()
@@ -523,7 +534,6 @@ func (s *shard) WriteCols(mst string, cols *record.Record, binaryCols []byte) er
 		atomic.AddInt64(&statistics.PerfStat.WriteReqErrors, 1)
 		return err
 	}
-
 	s.addRowCounts(int64(cols.RowNums()))
 	atomic.AddInt64(&statistics.PerfStat.WriteRowsBatch, 1)
 	atomic.AddInt64(&statistics.PerfStat.WriteRowsCount, int64(cols.RowNums()))
@@ -1129,7 +1139,21 @@ func (s *shard) Open(client metaclient.MetaClient) error {
 		zap.Int64("maxTime", maxTime), zap.Uint64("opId", s.opId))
 
 	s.initSeriesLimiter(s.seriesLimit)
+	s.setMergeIndex2ImmTables()
 	return nil
+}
+
+func (s *shard) setMergeIndex2ImmTables() {
+	if s.indexBuilder != nil {
+		if len(s.indexBuilder.Relations) == 0 {
+			s.log.Warn("no index builder, will not set index merge set", zap.Uint64("id", s.ident.ShardID))
+			return
+		}
+		idx, ok := s.indexBuilder.GetPrimaryIndex().(*tsi.MergeSetIndex)
+		if ok {
+			s.immTables.SetIndexMergeSet(idx)
+		}
+	}
 }
 
 func (s *shard) IsOpened() bool {
@@ -1911,12 +1935,11 @@ func (s *shard) GetIndexInfo(schema *executor.QuerySchema) (*executor.AttachedIn
 	mst := schema.Options().GetSourcesNames()[0]
 
 	// get the data files by the measurement
-	dataFileRes, ok := s.immTables.GetCSFiles(mst)
-	if !ok {
+	dataFiles := s.immTables.CopyCSFiles(mst)
+	if len(dataFiles) == 0 {
 		s.log.Warn(fmt.Sprintf("ScanWithSparseIndex have not data file. mst: %s, shardID: %d", mst, s.GetID()))
 		return executor.NewAttachedIndexInfo(nil, nil), nil
 	}
-	dataFiles := dataFileRes.Files()
 
 	// get the pk infos by the measurement
 	pkInfos := make([]*colstore.PKInfo, 0, len(dataFiles))
@@ -1944,12 +1967,11 @@ func (s *shard) ScanWithSparseIndex(ctx context.Context, schema *executor.QueryS
 	mst := schema.Options().GetSourcesNames()[0]
 
 	// get the data files by the measurement
-	dataFileRes, ok := s.immTables.GetCSFiles(mst)
-	if !ok {
+	dataFiles := s.immTables.CopyCSFiles(mst)
+	if len(dataFiles) == 0 {
 		s.log.Warn(fmt.Sprintf("ScanWithSparseIndex have not data file. mst: %s, shardID: %d", mst, s.GetID()))
 		return nil, nil
 	}
-	dataFiles := dataFileRes.Files()
 
 	// get the shard fragments by the primary index and skip index
 	fileFrags, skipFileIdx, err := s.scanWithSparseIndex(dataFiles, schema, mst)
@@ -1989,6 +2011,8 @@ func (s *shard) scanWithSparseIndex(dataFiles []immutable.TSSPFile, schema *exec
 			// If the system is powered off abnormally, the index file may not be flushed to disks.
 			// When the system is powered on, the file can be played back based on the WAL and data can be read normally.
 			s.log.Warn(fmt.Sprintf("ScanWithSparseIndex have no primary index file. mst: %s, shardID: %d, file: %s", mst, s.GetID(), pkFileName))
+			skipFileIdx = append(skipFileIdx, i)
+			continue
 		}
 		if tcIdx := pkInfo.GetTCLocation(); !initCondition || (tcIdx > colstore.DefaultTCLocation && tcIdx != preTcIdx) {
 			pkSchema := pkInfo.GetRec().Schema
@@ -2305,7 +2329,7 @@ func (s *shard) startFilesMove(localFiles []immutable.TSSPFile, coldTmpFilesPath
 			s.copyFileRollBack(coldTmpFilesPath[i])
 			return err
 		}
-
+		failpoint.Inject("copy-file-delay", nil)
 		if err = s.renameFileOnOBS(tf, coldTmpFilesPath[i]); err != nil {
 			return err
 		}

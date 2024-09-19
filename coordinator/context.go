@@ -1,18 +1,16 @@
-/*
-Copyright 2023 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2023 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package coordinator
 
@@ -70,14 +68,16 @@ func (s *injestionCtx) getShardRow(id uint64) *ShardRow {
 func (s *injestionCtx) setShardRow(shardInfo *meta.ShardInfo, row *influx.Row) {
 	shardRows := s.getShardRow(shardInfo.ID)
 	if shardRows == nil {
+		// if the current length equals the capacity, append the new ShardRow
 		if cap(s.shardRowMap) == len(s.shardRowMap) {
-			s.shardRowMap = append(s.shardRowMap, ShardRow{shardInfo, nil})
+			s.shardRowMap = append(s.shardRowMap, ShardRow{shardInfo, []*influx.Row{row}})
 		} else {
-			s.shardRowMap = s.shardRowMap[:len(s.shardRowMap)+1]
-			s.shardRowMap[len(s.shardRowMap)-1].shardInfo = shardInfo
-			s.shardRowMap[len(s.shardRowMap)-1].rows = s.shardRowMap[len(s.shardRowMap)-1].rows[:0]
+			// otherwise, increase the length of the slice and append the new ShardRow
+			index := len(s.shardRowMap)
+			s.shardRowMap = s.shardRowMap[:index+1]
+			s.shardRowMap[index].shardInfo = shardInfo
+			s.shardRowMap[index].rows = append(s.shardRowMap[index].rows[:0], row)
 		}
-		s.shardRowMap[len(s.shardRowMap)-1].rows = append(s.shardRowMap[len(s.shardRowMap)-1].rows, row)
 		sort.Sort(s.shardRowMap)
 	} else {
 		shardRows.rows = append(shardRows.rows, row)

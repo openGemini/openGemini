@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/engine/immutable"
+	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/engine/index/sparseindex"
 	"github.com/openGemini/openGemini/engine/mutable"
 	"github.com/openGemini/openGemini/lib/config"
@@ -470,5 +471,54 @@ func TestLoadProcess(t *testing.T) {
 	err = closeShard(sh)
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCheckPkMetaIndexFileTruncate(t *testing.T) {
+	testDir := t.TempDir()
+	defer os.RemoveAll(testDir)
+
+	detachedInfo := NewDetachedMetaInfo()
+	fd, err := fileops.OpenObsFile(testDir, immutable.PrimaryMetaFile, nil, false)
+	if err != nil {
+		log.Error("open detached data file fail", zap.String("name", testDir), zap.Error(err))
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = fd.Close()
+	}()
+
+	buf := make([]byte, 0, int(immutable.PkMetaHeaderSize)+util.Uint32SizeBytes*2+immutable.PKMetaPrefixSize*5)
+	buf = numberenc.MarshalUint32Append(buf, 0)  // magic
+	buf = numberenc.MarshalUint32Append(buf, 0)  // versicon
+	buf = numberenc.MarshalUint32Append(buf, 16) // public info len
+	schemaLen := uint32(1)
+	buf = numberenc.MarshalUint32Append(buf, schemaLen) // schema len
+	// itor 5
+	for i := 0; i < 5; i++ {
+		colsOffs := make([]byte, 0, 4)
+		colsOffs = numberenc.MarshalUint32Append(colsOffs, schemaLen) // schema len
+		buf = colstore.MarshalPkMetaBlock(uint64(i), uint64(i+1), 0, 0, buf, colsOffs)
+	}
+
+	//buf := make([]byte, immutable.PKMetaPrefixSize+util.Uint32SizeBytes*2)
+	_, err = fd.Write(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detachedInfo.lastMetaIdxBlockId = 3
+	err = detachedInfo.checkAndTruncatePkMetaIdxFile(testDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fileinfo, err := fd.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	singleMetaItemSize := int(schemaLen)*util.Uint32SizeBytes + immutable.PKMetaPrefixSize + CRCLen
+	if int(fileinfo.Size()) != int(int(immutable.PkMetaHeaderSize)+util.Uint32SizeBytes*2+singleMetaItemSize*4) {
+		t.Errorf("pkMeta file size error, expect: %d, get: %d",
+			(int(immutable.PkMetaHeaderSize) + util.Uint32SizeBytes*2 + immutable.PKMetaPrefixSize*4), int(fileinfo.Size()),
+		)
 	}
 }

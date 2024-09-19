@@ -19,18 +19,21 @@ import (
 	"container/heap"
 
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
 type SortLimitRows struct {
 	isAscending bool
+	shardId     int64
 	sortIndex   []int
 	rows        [][]interface{}
 	schema      record.Schemas
 }
 
-func NewSortLimitRows(sortIndex []int, schema record.Schemas) *SortLimitRows {
+func NewSortLimitRows(sortIndex []int, schema record.Schemas, shardId int64) *SortLimitRows {
 	return &SortLimitRows{
+		shardId:   shardId,
 		sortIndex: sortIndex,
 		schema:    schema,
 	}
@@ -69,6 +72,10 @@ func (rs *SortLimitRows) PopToRec() *record.Record {
 	for rs.Len() > 0 {
 		data := heap.Pop(rs).([]interface{})
 		for i := 0; i < r.Schema.Len()-1; i += 1 {
+			if r.Schemas()[i].Name == influxql.ShardIDField {
+				r.ColVals[i].AppendInteger(rs.shardId)
+				continue
+			}
 			if data[i] == nil {
 				switch r.Schemas()[i].Type {
 				case influx.Field_Type_Float:
@@ -118,17 +125,23 @@ func compareRows(sortIndex []int, schema record.Schemas, row1, row2 []interface{
 		}
 		switch schema[index].Type {
 		case influx.Field_Type_Float:
-			if !CompareT(row1[index].(float64), row2[index].(float64), isAscending) {
-				return false
+			isSort, isEqual := CompareT(row1[index].(float64), row2[index].(float64), isAscending)
+			if isEqual {
+				continue
 			}
+			return isSort
 		case influx.Field_Type_Int:
-			if !CompareT(row1[index].(int64), row2[index].(int64), isAscending) {
-				return false
+			isSort, isEqual := CompareT(row1[index].(int64), row2[index].(int64), isAscending)
+			if isEqual {
+				continue
 			}
+			return isSort
 		case influx.Field_Type_String:
-			if !CompareT(row1[index].(string), row2[index].(string), isAscending) {
-				return false
+			isSort, isEqual := CompareT(row1[index].(string), row2[index].(string), isAscending)
+			if isEqual {
+				continue
 			}
+			return isSort
 		default:
 			continue
 		}
@@ -136,9 +149,12 @@ func compareRows(sortIndex []int, schema record.Schemas, row1, row2 []interface{
 	return true
 }
 
-func CompareT[T int | int64 | float64 | string](s1, s2 T, isAscending bool) bool {
-	if isAscending {
-		return s1 < s2
+func CompareT[T int | int64 | float64 | string](s1, s2 T, isAscending bool) (bool, bool) {
+	if s1 == s2 {
+		return false, true
 	}
-	return !(s1 < s2)
+	if isAscending {
+		return s1 < s2, false
+	}
+	return !(s1 < s2), false
 }

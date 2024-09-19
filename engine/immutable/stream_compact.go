@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package immutable
 
@@ -28,6 +26,7 @@ import (
 	"unsafe"
 
 	"github.com/influxdata/influxdb/pkg/bloom"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/encoding"
 	"github.com/openGemini/openGemini/lib/errno"
@@ -52,6 +51,10 @@ var (
 )
 
 func NonStreamingCompaction(fi FilesInfo) bool {
+	if config.GetStoreConfig().Compact.CorrectTimeDisorder {
+		return true
+	}
+
 	flag := GetMergeFlag4TsStore()
 	if flag == util.NonStreamingCompact {
 		return true
@@ -195,6 +198,13 @@ type StreamIterators struct {
 	log        *Log.Logger
 
 	maxTime int64
+
+	events *Events
+}
+
+func (c *StreamIterators) InitEvents(level uint16) *Events {
+	c.events = DefaultEventBus().NewEvents(EventTypeStreamCompact, c.name, level)
+	return c.events
 }
 
 func (c *StreamIterators) RemoveTmpFiles() {
@@ -505,6 +515,9 @@ func (c *StreamIterators) updateChunkStat(id uint64, maxT int64) {
 
 func (c *StreamIterators) writeMetaToDisk() error {
 	cm := &c.dstMeta
+
+	c.events.TriggerWriteChunkMeta(cm)
+
 	cm.size = uint32(c.writer.DataSize() - cm.offset)
 	cm.columnCount = uint32(len(cm.colMeta))
 	cm.segCount = uint32(len(cm.timeRange))
@@ -658,7 +671,7 @@ func (c *StreamIterators) genBloomFilter() {
 		c.bloomFilter = make([]byte, bmBytes)
 	} else {
 		c.bloomFilter = c.bloomFilter[:bmBytes]
-		util.MemorySet(c.bloomFilter)
+		util.MemorySet(c.bloomFilter, 0)
 	}
 	c.trailer.bloomM = bm
 	c.trailer.bloomK = bk
@@ -974,6 +987,8 @@ func (c *StreamIterators) compact(files []TSSPFile, level uint16, isOrder bool) 
 					return nil, err
 				}
 
+				c.events.TriggerNewFile(f)
+
 				c.log.Info("switch tssp file",
 					zap.String("file", f.Path()),
 					zap.Int("rowsLimit", c.Conf.maxSegmentLimit*c.Conf.maxRowsPerSegment),
@@ -999,6 +1014,7 @@ func (c *StreamIterators) compact(files []TSSPFile, level uint16, isOrder bool) 
 		}
 		if f != nil {
 			c.files = append(c.files, f)
+			c.events.TriggerNewFile(f)
 		}
 	} else {
 		c.removeEmptyFile()

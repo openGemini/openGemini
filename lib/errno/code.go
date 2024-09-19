@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package errno
 
@@ -108,6 +106,7 @@ const (
 	SeriesBucketLacks            = 1126
 	ChunkReaderCursor            = 1127
 	ApplyFuncErr                 = 1128
+	QueryAborted                 = 1129
 )
 
 // promql2influxql
@@ -291,6 +290,7 @@ const (
 	OpsMapInValid                      = 4054
 	OpMarshalErr                       = 4055
 	SqlNodeNotFound                    = 4056
+	PtIsDoingSomeShardMove             = 4057
 )
 
 // meta-client process
@@ -314,34 +314,38 @@ const (
 	WritePointMap2Shard             = 5008
 
 	// WriteMapMetaShardInfo abc
-	WriteMapMetaShardInfo        = 5009
-	ErrUnmarshalPoints           = 5010
-	ErrWriteReadonly             = 5011
-	ParseFieldTypeConflict       = 5012
-	WritePointOutOfRP            = 5013
-	WritePointShardKeyTooLarge   = 5014
-	EngineClosed                 = 5015
-	WriteMissTagValue            = 5016
-	ErrorTagArrayFormat          = 5017
-	WriteErrorArray              = 5018
-	TooManyTagKeys               = 5019
-	SeriesLimited                = 5020
-	RecordWriterFatalErr         = 5021
-	ArrowRecordTimeFieldErr      = 5022
-	ArrowFlightGetRoleErr        = 5023
-	ArrowFlightGetShardGroupErr  = 5024
-	ColumnStoreColNumErr         = 5025
-	ColumnStoreSchemaNullErr     = 5026
-	ColumnStorePrimaryKeyNullErr = 5027
-	ColumnStorePrimaryKeyLackErr = 5028
-	ColumnStoreFieldNameErr      = 5029
-	ColumnStoreFieldTypeErr      = 5030
-	WritePointHasInvalidTag      = 5031
-	WritePointHasInvalidField    = 5032
-	WritePointSchemaInvalid      = 5033
-	WritePointPrimaryKeyErr      = 5034
-	KeyWordConflictErr           = 5035
-	MeasurementNameTooLong       = 5036
+	WriteMapMetaShardInfo          = 5009
+	ErrUnmarshalPoints             = 5010
+	ErrWriteReadonly               = 5011
+	ParseFieldTypeConflict         = 5012
+	WritePointOutOfRP              = 5013
+	WritePointShardKeyTooLarge     = 5014
+	EngineClosed                   = 5015
+	WriteMissTagValue              = 5016
+	ErrorTagArrayFormat            = 5017
+	WriteErrorArray                = 5018
+	TooManyTagKeys                 = 5019
+	SeriesLimited                  = 5020
+	RecordWriterFatalErr           = 5021
+	ArrowRecordTimeFieldErr        = 5022
+	ArrowFlightGetRoleErr          = 5023
+	ArrowFlightGetShardGroupErr    = 5024
+	ColumnStoreColNumErr           = 5025
+	ColumnStoreSchemaNullErr       = 5026
+	ColumnStorePrimaryKeyNullErr   = 5027
+	ColumnStorePrimaryKeyLackErr   = 5028
+	ColumnStoreFieldNameErr        = 5029
+	ColumnStoreFieldTypeErr        = 5030
+	WritePointHasInvalidTag        = 5031
+	WritePointHasInvalidField      = 5032
+	WritePointSchemaInvalid        = 5033
+	WritePointPrimaryKeyErr        = 5034
+	KeyWordConflictErr             = 5035
+	MeasurementNameTooLong         = 5036
+	RepConfigWriteNoRepDB          = 5037
+	CleanSchemaCheckErr            = 5038
+	UsedProposeId                  = 5039
+	WriteToRaftTimeoutAfterPropose = 5040
 )
 
 // write interface

@@ -1,18 +1,16 @@
-/*
-Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package immutable
 
@@ -21,11 +19,15 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"time"
 
 	Log "github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
+	"go.uber.org/zap"
 )
 
 type IndexMergeSet interface {
@@ -37,9 +39,19 @@ type ShowTagValuesPlan interface {
 	Stop()
 }
 
+type EngineShard interface {
+	IsOpened() bool
+	OpenAndEnable(client metaclient.MetaClient) error
+	GetDataPath() string
+	GetIdent() *meta.ShardIdentifier
+}
+
 type showTagValuesPlan struct {
 	idx   IndexMergeSet
 	table TablesStore
+
+	metaClient metaclient.MetaClient
+	shard      EngineShard
 
 	mu      sync.RWMutex
 	handler SequenceIteratorHandler
@@ -49,11 +61,13 @@ type showTagValuesPlan struct {
 	logger *Log.Logger
 }
 
-func NewShowTagValuesPlan(table TablesStore, idx IndexMergeSet, logger *Log.Logger) ShowTagValuesPlan {
+func NewShowTagValuesPlan(table TablesStore, idx IndexMergeSet, logger *Log.Logger, sh EngineShard, client metaclient.MetaClient) ShowTagValuesPlan {
 	return &showTagValuesPlan{
-		table:  table,
-		idx:    idx,
-		logger: logger,
+		table:      table,
+		idx:        idx,
+		logger:     logger,
+		shard:      sh,
+		metaClient: client,
 	}
 }
 
@@ -82,16 +96,31 @@ func (p *showTagValuesPlan) Execute(dst map[string]*TagSets, tagKeys map[string]
 		p.itr.Release()
 	}()
 
+	// lazy shard open
+	if !p.shard.IsOpened() {
+		sh := p.shard
+		start := time.Now()
+		p.logger.Info("lazy shard open start", zap.String("path", sh.GetDataPath()), zap.Uint32("pt", sh.GetIdent().OwnerPt))
+		if err := sh.OpenAndEnable(p.metaClient); err != nil {
+			p.logger.Error("lazy shard open error", zap.Error(err), zap.Duration("duration", time.Since(start)))
+			return err
+		}
+		p.logger.Info("lazy shard open end", zap.Duration("duration", time.Since(start)))
+	}
+
 	var err error
+	var reachLimitCount int
 	for mst, keys := range tagKeys {
-		if _, ok := dst[mst]; !ok {
+		if tagSets, ok := dst[mst]; !ok {
 			dst[mst] = NewTagSets()
+		} else if limit > 0 && tagSets.TagKVCount() >= limit {
+			reachLimitCount++
+			continue
 		}
 
 		order, unordered, _ := p.table.GetBothFilesRef(mst, true, tr, nil)
 		p.itr.AddFiles(order)
 		p.itr.AddFiles(unordered)
-
 		err = p.handler.Init(map[string]interface{}{
 			InitParamKeyDst:         dst[mst],
 			InitParamKeyKeys:        keys,
@@ -104,6 +133,7 @@ func (p *showTagValuesPlan) Execute(dst map[string]*TagSets, tagKeys map[string]
 		err = p.itr.Run()
 		if errors.Is(err, io.EOF) {
 			// io.EOF represents that tagKV pair count reached the limit
+			reachLimitCount++
 			continue
 		} else if err != nil {
 			break
@@ -111,7 +141,18 @@ func (p *showTagValuesPlan) Execute(dst map[string]*TagSets, tagKeys map[string]
 		p.itr.Release()
 	}
 
-	return err
+	// If all measurements reach the limit, return io.EOF
+	if limit > 0 && reachLimitCount == len(dst) {
+		return io.EOF
+	}
+
+	// Because `err` is reused, io.EOF indicates that part of measurements reaches limit.
+	// Catch this exception.
+	if errors.Is(err, io.EOF) {
+		return nil
+	} else {
+		return err
+	}
 }
 
 type TagValuesIteratorHandler struct {

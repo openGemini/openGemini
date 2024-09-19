@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package storage
 
@@ -38,6 +36,7 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/raftlog"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
@@ -113,6 +112,11 @@ type Storage struct {
 	loadCtx *metaclient.LoadCtx
 
 	WriteLimit limiter.Fixed
+}
+
+// this function is used for UT testing
+func (s *Storage) SetMetaClient(c *metaclient.Client) {
+	s.metaClient = c
 }
 
 func (s *Storage) GetPath() string {
@@ -313,7 +317,7 @@ func WriteRows(s *Storage, db, rp string, ptId uint32, shardID uint64, rows []in
 	db = stringinterner.InternSafe(db)
 	rp = stringinterner.InternSafe(rp)
 	return s.Write(db, rp, rows[0].Name, ptId, shardID, func() error {
-		return s.engine.WriteRows(db, rp, ptId, shardID, rows, binaryRows)
+		return s.engine.WriteRows(db, rp, ptId, shardID, rows, binaryRows, nil)
 	})
 }
 
@@ -329,13 +333,15 @@ func WriteRowsForRep(s *Storage, db, rp string, ptId uint32, shardID uint64, row
 	db = stringinterner.InternSafe(db)
 	rp = stringinterner.InternSafe(rp)
 
+	if s.metaClient.RaftEnabledForDB(db) {
+		return writeRowsForRaft(s, db, rp, ptId, binaryRows)
+	}
+
 	// obtain the number of peers
 	info := s.MetaClient.GetReplicaInfo(db, ptId)
-	if info == nil || info.ReplicaRole != meta.Master || len(info.Peers) == 0 {
+	if info == nil {
 		// write master only
-		return s.Write(db, rp, rows[0].Name, ptId, shardID, func() error {
-			return s.engine.WriteRows(db, rp, ptId, shardID, rows, binaryRows)
-		})
+		return errno.NewError(errno.RepConfigWriteNoRepDB)
 	}
 
 	var errs error
@@ -346,7 +352,7 @@ func WriteRowsForRep(s *Storage, db, rp string, ptId uint32, shardID uint64, row
 	// write master shard
 	go func() {
 		err := s.Write(db, rp, rows[0].Name, ptId, shardID, func() error {
-			return s.engine.WriteRows(db, rp, ptId, shardID, rows, binaryRows)
+			return s.engine.WriteRows(db, rp, ptId, shardID, rows, binaryRows, nil)
 		})
 		handleError(&once, err, errs)
 		wg.Done()
@@ -367,6 +373,10 @@ func WriteRowsForRep(s *Storage, db, rp string, ptId uint32, shardID uint64, row
 	return errs
 }
 
+func writeRowsForRaft(s *Storage, db, rp string, ptId uint32, tail []byte) error {
+	return s.engine.WriteToRaft(db, rp, ptId, tail)
+}
+
 func (s *Storage) WriteRows(db, rp string, ptId uint32, shardID uint64, rows []influx.Row, binaryRows []byte) error {
 	return writeHandler[config.GetHaPolicy()](s, db, rp, ptId, shardID, rows, binaryRows)
 }
@@ -379,6 +389,10 @@ func (s *Storage) WriteRec(db, rp, mst string, ptId uint32, shardID uint64, rec 
 	return s.Write(db, rp, mst, ptId, shardID, func() error {
 		return s.engine.WriteRec(db, mst, ptId, shardID, rec, binaryRec)
 	})
+}
+
+func (s *Storage) WriteDataFunc(db, rp string, ptId uint32, shardID uint64, rows []influx.Row, binaryRows []byte, snp *raftlog.SnapShotter) error {
+	return s.engine.WriteRows(db, rp, ptId, shardID, rows, binaryRows, snp)
 }
 
 func (s *Storage) Write(db, rp, mst string, ptId uint32, shardID uint64, writeData func() error) error {
@@ -562,11 +576,15 @@ func (s *Storage) Offload(opId uint64, ptInfo *meta.DbPtInfo) error {
 }
 
 func (s *Storage) Assign(opId uint64, ptInfo *meta.DbPtInfo) error {
-	return s.engine.Assign(opId, ptInfo.Pti.Owner.NodeID, ptInfo.Db, ptInfo.Pti.PtId, ptInfo.Pti.Ver, ptInfo.Shards, ptInfo.DBBriefInfo, s.metaClient)
+	return s.engine.Assign(opId, ptInfo.Pti.Owner.NodeID, ptInfo.Db, ptInfo.Pti.PtId, ptInfo.Pti.Ver, ptInfo.Shards, ptInfo.DBBriefInfo, s.metaClient, s)
 }
 
 func (s *Storage) GetConnId() uint64 {
 	return s.node.ConnId
+}
+
+func (s *Storage) GetNodeId() uint64 {
+	return s.node.ID
 }
 
 func (s *Storage) SetEngine(engine netstorage.Engine) {

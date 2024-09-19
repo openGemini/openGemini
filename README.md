@@ -2,8 +2,8 @@
 
 ![color](./images/github_log_591x183.svg)
 
-![License](https://img.shields.io/badge/license-Apache2.0-green) ![Language](https://img.shields.io/badge/Language-Go-blue.svg)  ![codeCov](https://img.shields.io/codecov/c/gh/openGemini/openGemini)  ![release](https://img.shields.io/github/v/release/openGemini/openGemini)                                                                                                
-[简体中文](README_CN.md) | English
+![license](https://img.shields.io/badge/license-Apache2.0-green) ![language](https://img.shields.io/badge/Language-Go-blue.svg) ![codeCov](https://img.shields.io/codecov/c/gh/openGemini/openGemini) [![release](https://img.shields.io/github/v/tag/opengemini/opengemini?label=release&color=blue)](https://github.com/opengemini/opengemini/releases)                                                                                               
+English | [简体中文](README_CN.md)
 
 [Official Website](http://www.openGemini.org) | [Docs](https://docs.opengemini.org/guide) | [Contribution Guide](CONTRIBUTION.md) | [RoadMap](./ROADMAP.md) | [Performance](https://docs.opengemini.org/guide/introduction/performance.html)
 
@@ -20,6 +20,10 @@
 openGemini is a cloud-native distributed time series database, focusing on the storage and analysis of massive telemetry data. 
 
 If you have used openGemini, please let us know and [click submit Usage Information](https://github.com/openGemini/openGemini/issues/62)
+
+![cncf_logo](./images/cncf-logo.png)
+
+openGemini is an sandbox project of the [Cloud Native Computing Foundation](https://cncf.io/) (CNCF). Please consider joining the CNCF if you are an organization that wants to take an active role in supporting the growth and evolution of the cloud native ecosystem.
 
 ## Why openGemini
 
@@ -59,9 +63,9 @@ Compared with other time series database, openGemini has the following advantage
 
   <img src="./images/openTelemetry.png" alt="image-20220927210909436" style="width:60%;" />
 
-- Prometheus backend storage，support remote read/write, and Support PromQL **[WIP]** 
+- Prometheus backend storage，support remote read/write, and Support PromQL 
 
-  <img src="./images/prometheus.png" alt="image-20220927210909436" style="width:60%;" />
+  <img src="./images/prometheus.png" alt="" style="width:60%;" />
 
 - KubeEdge integration with openGemini, better manage edge device data
 
@@ -82,7 +86,7 @@ This section mainly contains the following:
 
 ### Compiling environment information
 
-[GO](https://golang.org/dl/) version v1.19+
+[GO](https://golang.org/dl/) version v1.20+
 
 [Python](https://www.python.org/downloads/) version v3.7+
 
@@ -209,9 +213,13 @@ Elapsed: 7.723332ms
 
 [Tips for Contribution](CONTRIBUTION.md)
 
+## Code of Conduct
+
+openGemini follows the [CNCF Code of Conduct](https://github.com/cncf/foundation/blob/master/code-of-conduct.md).
+
 ## Contact Us
 
-1. [Slack](https://join.slack.com/t/huawei-ipz9493/shared_invite/zt-1bvxs3s0i-h0BzP7ibpWfqmpJO2a4iKw)
+1. [Slack](https://join.slack.com/t/opengemini/shared_invite/zt-2naig1675-x3bcwgXR_Rw5OwDU5X~dUQ)
 
 2. [Twitter](https://twitter.com/openGemini)
 

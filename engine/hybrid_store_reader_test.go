@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package engine
 
@@ -39,6 +37,7 @@ import (
 	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
@@ -57,11 +56,11 @@ var (
 func NewMockColumnStoreHybridMstInfo() *meta2.MeasurementInfo {
 	primaryKey := []string{"time"}
 	sortKey := []string{"time"}
-	schema := make(map[string]int32)
+	schema := make(meta.CleanSchema)
 	for i := range primaryKey {
 		for j := range schemaForColumnStore {
 			if primaryKey[i] == schemaForColumnStore[j].Name {
-				schema[primaryKey[i]] = int32(schemaForColumnStore[j].Type)
+				schema[primaryKey[i]] = meta2.SchemaVal{Typ: int8(schemaForColumnStore[j].Type)}
 			}
 		}
 	}
@@ -73,7 +72,7 @@ func NewMockColumnStoreHybridMstInfo() *meta2.MeasurementInfo {
 			SortKey:        sortKey,
 			CompactionType: config.BLOCK,
 		},
-		Schema: schema,
+		Schema: &schema,
 		IndexRelation: influxql.IndexRelation{
 			IndexNames: []string{"bloomfilter", "bloomfilter"},
 			Oids:       []uint32{uint32(index.BloomFilter), uint32(index.BloomFilter)},
@@ -876,10 +875,16 @@ func TestNewDetachedLazyLoadIndexReader(t *testing.T) {
 	querySchema := executor.NewQuerySchema(stmt.Fields, stmt.ColumnNames(), &opt, nil)
 	readCtx := immutable.NewFileReaderContext(tr, schemaForColumnStore, immutable.NewReadContext(true), immutable.NewFilterOpts(nil, nil, nil, nil), nil, true)
 	indexReader := NewDetachedLazyLoadIndexReader(NewIndexContext(true, 8, querySchema, sh.filesPath), nil, readCtx)
+	indexReader.StartSpan(nil)
+	_, span := tracing.NewTrace("root")
+	indexReader.StartSpan(span)
 	c, _, _ := indexReader.CreateCursors()
 	re, _, _ := c[0].Next()
 	if re.RowNums() != 1 {
 		t.Errorf("readdata failed")
+	}
+	if re.Times()[0] != 1635731554000000000 {
+		t.Errorf("get wrong data")
 	}
 	testCur := c[0].(*immutable.SortLimitCursor).GetInput()
 	if testCur.Name() != "StreamDetachedReader" {
@@ -892,8 +897,8 @@ func TestNewDetachedLazyLoadIndexReader(t *testing.T) {
 	if testCur.Close() != nil {
 		t.Errorf("close err")
 	}
-	re, _, _ = testCur.NextAggData()
-	if re != nil {
+	reAgg, _, _ := testCur.NextAggData()
+	if reAgg != nil {
 		t.Errorf("get wrong data")
 	}
 
@@ -1089,8 +1094,39 @@ func TestNewDetachedLazyLoadIndexReaderWhenErr(t *testing.T) {
 	if err != nil {
 		t.Fatal("remove file failed")
 	}
-	_, _, err = indexReader.CreateCursors()
+	c, _, _ = indexReader.CreateCursors()
+	_, _, err = c[0].Next()
 	if err == nil {
-		t.Errorf("create cursor failed")
+		t.Errorf("readdata failed")
 	}
+}
+
+func TestHybridStoreReaderWhileAbort(t *testing.T) {
+	schema := createSortQuerySchema()
+	readerPlan := executor.NewLogicalColumnStoreReader(nil, schema)
+	reader := NewHybridStoreReader(readerPlan, executor.NewCSIndexInfo("", executor.NewAttachedIndexInfo(nil, nil), logstore.CurrentLogTokenizerVersion))
+	assert2.Equal(t, reader.Name(), "HybridStoreReader")
+	assert2.Equal(t, len(reader.Explain()), 1)
+	reader.Abort()
+	assert2.Equal(t, reader.IsSink(), true)
+	assert2.Equal(t, len(reader.GetOutputs()), 1)
+	assert2.Equal(t, len(reader.GetInputs()), 0)
+	assert2.Equal(t, reader.GetOutputNumber(nil), 0)
+	assert2.Equal(t, reader.GetInputNumber(nil), 0)
+	reader.schema = nil
+	err := reader.initQueryCtx()
+	assert2.Equal(t, errno.Equal(err, errno.InvalidQuerySchema), true)
+	err = reader.Work(context.Background())
+	assert2.Equal(t, errno.Equal(err, errno.InvalidQuerySchema), true)
+	schema.Options().(*query.ProcessorOptions).Sources[0] = &influxql.Measurement{Name: "students", IsTimeSorted: true}
+	reader.schema = schema
+	err = reader.initQueryCtx()
+	assert2.Equal(t, err, nil)
+	frag := executor.NewBaseFrags("", 3)
+	assert2.Equal(t, 72, frag.Size())
+	err = reader.initSchema()
+	assert2.Equal(t, err, nil)
+	reader.cursors = append(reader.cursors, immutable.NewSortLimitCursor(schema.Options(), reader.inSchema, nil, 0))
+	err = reader.Work(context.Background())
+	assert2.Equal(t, nil, err)
 }

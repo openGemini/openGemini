@@ -1,25 +1,22 @@
-/*
-Copyright 2023 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2023 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package engine
 
 import (
 	"context"
 	"fmt"
-	"sync/atomic"
 	"time"
 
 	"github.com/openGemini/openGemini/engine/executor"
@@ -73,7 +70,7 @@ type ColumnStoreReader struct {
 	outInIdxMap  map[int]int
 	inOutIdxMap  map[int]int
 	closedCh     chan struct{}
-	closedSignal *int32
+	closedSignal *bool
 }
 
 func NewColumnStoreReader(plan hybridqp.QueryNode, frags executor.ShardsFragments) *ColumnStoreReader {
@@ -94,7 +91,7 @@ func NewColumnStoreReader(plan hybridqp.QueryNode, frags executor.ShardsFragment
 	if len(r.schema.GetSortFields()) == 0 && !r.schema.HasCall() {
 		r.limit = plan.Schema().Options().GetLimit() + plan.Schema().Options().GetOffset()
 	}
-	closedSignal := int32(0)
+	closedSignal := false
 	r.closedSignal = &closedSignal
 	return r
 }
@@ -155,7 +152,7 @@ func (r *ColumnStoreReader) initSpan() {
 
 func (r *ColumnStoreReader) Close() {
 	r.Once(func() {
-		atomic.AddInt32(r.closedSignal, 1)
+		*r.closedSignal = true
 		r.output.Close()
 	})
 }
@@ -552,7 +549,7 @@ func (r *ColumnStoreReader) sendChunk(chunk executor.Chunk) {
 			r.closedCh <- struct{}{}
 		}
 	}()
-	if atomic.LoadInt32(r.closedSignal) == 0 {
+	if !*r.closedSignal {
 		statistics.ExecutorStat.SourceRows.Push(int64(chunk.NumberOfRows()))
 		r.output.State <- chunk
 	} else {

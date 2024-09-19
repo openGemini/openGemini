@@ -69,6 +69,8 @@ func (c *RPCServer) Handle(w spdy.Responser, data interface{}) error {
 		return c.HandleSnapshotV2(w, msg)
 	case *message.CreateSqlNodeRequest:
 		return c.HandleCreateSqlNode(w, msg)
+	case *message.ShowClusterRequest:
+		return c.HandleShowCluster(w, msg)
 	}
 	return nil
 }
@@ -86,6 +88,17 @@ func (c *RPCServer) HandleSnapshot(w spdy.Responser, msg *message.SnapshotReques
 		rsp.Err = server.err.Error()
 	}
 	return w.Response(message.NewMetaMessage(message.SnapshotResponseMessage, rsp), true)
+}
+
+func (c *RPCServer) HandleShowCluster(w spdy.Responser, msg *message.ShowClusterRequest) error {
+	fmt.Printf("server HandleShowCluster: %+v \n", msg)
+	showClusterInfo := meta2.ShowClusterInfo{Nodes: []meta2.NodeRow{{NodeID: 123}}, Events: []meta2.EventRow{{SrcNodeId: 123}}}
+	buf, _ := showClusterInfo.MarshalBinary()
+	rsp := &message.ShowClusterResponse{
+		Data: buf,
+		Err:  "",
+	}
+	return w.Response(message.NewMetaMessage(message.ShowClusterResponseMessage, rsp), true)
 }
 
 func (c *RPCServer) HandleSnapshotV2(w spdy.Responser, msg *message.SnapshotV2Request) error {
@@ -108,7 +121,7 @@ func (c *RPCServer) HandleSnapshotV2(w spdy.Responser, msg *message.SnapshotV2Re
 		}
 		return w.Response(message.NewMetaMessage(message.SnapshotV2ResponseMessage, rsp), true)
 	}
-	dataPb := c.metaData.Marshal()
+	dataPb := c.metaData.Marshal(false)
 	dataOps := meta2.NewDataOpsOfAllClear(int(meta2.AllClear), dataPb, *dataPb.Index)
 	buf := dataOps.Marshal()
 	rsp := &message.SnapshotV2Response{
@@ -452,28 +465,89 @@ func TestClient_UserCmd(t *testing.T) {
 	require.EqualError(t, c.UpdateUser("user1", "Suibian@123"), meta2.ErrPwdUsed.Error())
 }
 
-func TestClient_CreateShardGroup(t *testing.T) {
+type MockRPCMessageSender struct {
+	RPI *meta2.RetentionPolicyInfo
+}
+
+func (s *MockRPCMessageSender) SendRPCMsg(currentServer int, msg *message.MetaMessage, callback transport.Callback) error {
+	sgInfo1 := meta2.ShardGroupInfo{
+		ID:        1,
+		StartTime: time.Now().Add(-time.Duration(360000000000)),
+		EndTime:   time.Now().Add(time.Duration(360000000000)),
+		Shards:    []meta2.ShardInfo{{ID: 1}, {ID: 2}, {ID: 3}, {ID: 4}}, EngineType: config.COLUMNSTORE,
+	}
+	s.RPI.ShardGroups = []meta2.ShardGroupInfo{sgInfo1}
+
+	return nil
+}
+
+func TestClient_CreateShardGroup1(t *testing.T) {
+	ts := time.Now()
+	sgInfo1 := meta2.ShardGroupInfo{
+		ID:        1,
+		StartTime: ts,
+		EndTime:   time.Now().Add(time.Duration(360000000000)),
+		Shards:    []meta2.ShardInfo{{ID: 1}, {ID: 2}, {ID: 3}, {ID: 4}}, EngineType: config.COLUMNSTORE,
+	}
+	rpi := meta2.RetentionPolicyInfo{
+		Name:         "rp0",
+		Duration:     72 * time.Hour,
+		Measurements: map[string]*meta2.MeasurementInfo{"mst0": {Name: "mst0"}},
+		ShardGroups:  []meta2.ShardGroupInfo{sgInfo1}}
 	c := &Client{
 		cacheData: &meta2.Data{
 			Databases: map[string]*meta2.DatabaseInfo{"db0": {
 				Name:     "db0",
 				ShardKey: meta2.ShardKeyInfo{ShardKey: []string{"tag1", "tag2"}},
 				RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
-					"rp0": {
-						Name:         "rp0",
-						Duration:     72 * time.Hour,
-						Measurements: map[string]*meta2.MeasurementInfo{"mst0": {Name: "mst0"}},
-					},
+					"rp0": &rpi,
 				}},
 			},
 		},
+		changed:        make(chan chan struct{}, 1),
 		metaServers:    []string{"127.0.0.1"},
 		logger:         logger.NewLogger(errno.ModuleMetaClient),
-		SendRPCMessage: &RPCMessageSender{},
+		SendRPCMessage: &MockRPCMessageSender{RPI: &rpi},
 	}
-
 	_, err := c.CreateShardGroup("db0", "rp0", time.Now(), 0, config.COLUMNSTORE)
-	require.EqualError(t, err, "execute command timeout")
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestClient_CreateShardGroup2(t *testing.T) {
+	ts := time.Now()
+	sgInfo1 := meta2.ShardGroupInfo{
+		ID:        1,
+		StartTime: ts,
+		EndTime:   time.Now().Add(time.Duration(360000000000)),
+		DeletedAt: time.Now(),
+		Shards:    []meta2.ShardInfo{{ID: 1}, {ID: 2}, {ID: 3}, {ID: 4}}, EngineType: config.COLUMNSTORE,
+	}
+	rpi := meta2.RetentionPolicyInfo{
+		Name:         "rp0",
+		Duration:     72 * time.Hour,
+		Measurements: map[string]*meta2.MeasurementInfo{"mst0": {Name: "mst0"}},
+		ShardGroups:  []meta2.ShardGroupInfo{sgInfo1}}
+	c := &Client{
+		cacheData: &meta2.Data{
+			Databases: map[string]*meta2.DatabaseInfo{"db0": {
+				Name:     "db0",
+				ShardKey: meta2.ShardKeyInfo{ShardKey: []string{"tag1", "tag2"}},
+				RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+					"rp0": &rpi,
+				}},
+			},
+		},
+		changed:        make(chan chan struct{}, 1),
+		metaServers:    []string{"127.0.0.1"},
+		logger:         logger.NewLogger(errno.ModuleMetaClient),
+		SendRPCMessage: &MockRPCMessageSender{RPI: &rpi},
+	}
+	_, err := c.CreateShardGroup("db0", "rp0", time.Now(), 0, config.COLUMNSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestClient_GetShardInfoByTime(t *testing.T) {
@@ -1166,7 +1240,7 @@ func TestInitMetaClient(t *testing.T) {
 		t.Fatalf("fail")
 	}
 	joinPeers := []string{"127.0.0.1:8491", "127.0.0.2:8491"}
-	info := &StorageNodeInfo{"127.0.0.5:8081", "127.0.0.5:8082"}
+	info := &StorageNodeInfo{"127.0.0.5:8081", "127.0.0.5:8082", ""}
 	_, _, _, err = mc.InitMetaClient(joinPeers, true, info, nil, "", STORE)
 	if err != nil {
 		t.Fatalf("%v", err)
@@ -1795,7 +1869,7 @@ func TestGetAliveReadNode(t *testing.T) {
 
 	data.DataNodes = append(data.DataNodes, meta2.DataNode{NodeInfo: meta2.NodeInfo{ID: 5, Status: serf.StatusAlive, Role: meta2.NodeWriter}, ConnID: 0, AliveConnID: 0})
 	_, err := client.AliveReadNodes()
-	if err == nil {
+	if err != nil {
 		t.Fatalf("get alive readNodes failed")
 	}
 
@@ -1819,102 +1893,44 @@ func TestGetAliveReadNode(t *testing.T) {
 	}
 }
 
-func TestClient_ShowCluster(t *testing.T) {
-	m1 := meta2.NodeInfo{
-		ID:     1,
-		Host:   "127.0.0.2:8091",
-		Status: serf.MemberStatus(meta2.StatusAlive),
-	}
-	m2 := meta2.NodeInfo{
-		ID:     2,
-		Host:   "127.0.0.2:8091",
-		Status: serf.MemberStatus(meta2.StatusAlive),
-	}
-	m3 := meta2.NodeInfo{
-		ID:     3,
-		Host:   "127.0.0.2:8091",
-		Status: serf.MemberStatus(meta2.StatusAlive),
-	}
-	d1 := meta2.DataNode{
-		NodeInfo: meta2.NodeInfo{
-			ID:     4,
-			Host:   "127.0.0.2:8400",
-			Status: serf.MemberStatus(meta2.StatusAlive),
-		},
-	}
-	d2 := meta2.DataNode{
-		NodeInfo: meta2.NodeInfo{
-			ID:     5,
-			Host:   "127.0.0.2:8400",
-			Status: serf.MemberStatus(meta2.StatusAlive),
-		},
-	}
-	d3 := meta2.DataNode{
-		NodeInfo: meta2.NodeInfo{
-			ID:     6,
-			Host:   "127.0.0.2:8400",
-			Status: serf.MemberStatus(meta2.StatusAlive),
-		},
-	}
-	c := &Client{
-		cacheData: &meta2.Data{
-			MetaNodes: []meta2.NodeInfo{m1, m2, m3},
-			DataNodes: []meta2.DataNode{d1, d2, d3},
-		},
-	}
+func TestClient_ShowClusterWithCondition(t *testing.T) {
+	address := "127.0.0.1:8491"
+	nodeId := 1
+	transport.NewMetaNodeManager().Add(uint64(nodeId), address)
 
-	names := []string{"time", "status", "hostname", "nodeID", "nodeType"}
-	value1 := []interface{}{m1.Status.String(), m1.Host, m1.ID, "meta"}
-	value2 := []interface{}{m2.Status.String(), m2.Host, m2.ID, "meta"}
-	value3 := []interface{}{m3.Status.String(), m3.Host, m3.ID, "meta"}
-	value4 := []interface{}{d1.Status.String(), d1.Host, d1.ID, "data"}
-	value5 := []interface{}{d2.Status.String(), d2.Host, d2.ID, "data"}
-	value6 := []interface{}{d3.Status.String(), d3.Host, d3.ID, "data"}
-
-	row1 := c.ShowCluster()
-	values1 := [][]interface{}{value1, value2, value3, value4, value5, value6}
-	for i := range row1[0].Columns {
-		if row1[0].Columns[i] != names[i] {
-			t.Fatalf("wrong column names")
-		}
-		for j := range row1[0].Values {
-			if i != 0 && row1[0].Values[j][i] != values1[j][i-1] {
-				t.Fatalf("wrong column values %s %s", row1[0].Values[j][i], values1[j][i-1])
-			}
-		}
-	}
-
-	row2, err := c.ShowClusterWithCondition("meta", 0)
+	// Server
+	var err error
+	rrcServer, err := startServer(address)
 	if err != nil {
-		t.Fatalf("get cluster info failed")
+		t.Fatalf("%v", err)
 	}
-	values2 := [][]interface{}{value1, value2, value3}
-	for i := range row2[0].Columns {
-		if row2[0].Columns[i] != names[i] {
-			t.Fatalf("wrong column names")
-		}
-		for j := range row2[0].Values {
-			if i != 0 && row2[0].Values[j][i] != values2[j][i-1] {
-				t.Fatalf("wrong column values %s %s", row2[0].Values[j][i], values2[j][i-1])
-			}
-		}
-	}
+	defer rrcServer.Stop()
+	time.Sleep(time.Second)
 
-	row3, err := c.ShowClusterWithCondition("data", 5)
-	if err != nil {
-		t.Fatalf("get cluster info failed")
+	mc := Client{
+		logger:         logger.NewLogger(errno.ModuleUnknown),
+		SendRPCMessage: &RPCMessageSender{},
+		metaServers:    []string{"127.0.0.1:8491", "127.0.0.1:8492"},
+		cacheData:      &meta2.Data{},
 	}
-	values3 := [][]interface{}{value5}
-	for i := range row3[0].Columns {
-		if row3[0].Columns[i] != names[i] {
-			t.Fatalf("wrong column names")
-		}
-		for j := range row3[0].Values {
-			if i != 0 && row3[0].Values[j][i] != values3[j][i-1] {
-				t.Fatalf("wrong column values %s %s", row3[0].Values[j][i], values3[j][i-1])
-			}
-		}
+	connectedServer = nodeId
+	clusterRows, err := mc.ShowClusterWithCondition("", 0)
+	assert.Equal(t, err, nil)
+	ret1 := (clusterRows[0].Values[0][5]).(string)
+	ret2 := (clusterRows[1].Values[0][4]).(uint64)
+	assert.Equal(t, ret1, "unavailable")
+	assert.Equal(t, ret2, uint64(123))
+}
+
+func TestClient_ShowCluster_Err(t *testing.T) {
+	client := &Client{
+		cacheData:      &meta2.Data{},
+		metaServers:    []string{"127.0.0.1"},
+		logger:         logger.NewLogger(errno.ModuleMetaClient).With(zap.String("service", "metaclient")),
+		SendRPCMessage: &RPCMessageSender{},
 	}
+	_, err := client.ShowCluster("", 0)
+	assert.NotEqual(t, err, nil)
 }
 
 func TestCheckAndUpdateReplication(t *testing.T) {
@@ -1925,7 +1941,7 @@ func TestCheckAndUpdateReplication(t *testing.T) {
 
 	config.SetHaPolicy(config.RepPolicy)
 	defer config.SetHaPolicy(config.WAFPolicy)
-
+	noReplication := 0
 	oneReplication := 1
 	twoReplication := 2
 	threeReplication := 3
@@ -1978,6 +1994,16 @@ func TestCheckAndUpdateReplication(t *testing.T) {
 			want1:   &fourReplication,
 			wantErr: true,
 		},
+		{
+			name: "Test with both dbReplicaN and rpReplicaN as 0",
+			args: args{
+				dbReplicaN: 0,
+				rpReplicaN: &noReplication,
+			},
+			want:    1,
+			want1:   &oneReplication,
+			wantErr: false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1991,13 +2017,13 @@ func TestCheckAndUpdateReplication(t *testing.T) {
 
 func MocTestCacheData(dbName, logStreamName string) (*meta2.Data, error) {
 	data := &meta2.Data{PtNumPerNode: 1}
-	data.CreateDataNode("127.0.0.1:8086", "127.0.0.1:8188", "")
-	data.CreateDataNode("127.0.0.2:8086", "127.0.0.2:8188", "")
+	data.CreateDataNode("127.0.0.1:8086", "127.0.0.1:8188", "", "")
+	data.CreateDataNode("127.0.0.2:8086", "127.0.0.2:8188", "", "")
 
 	if err := data.CreateDatabase(dbName, nil, nil, false, 1, &proto2.ObsOptions{}); err != nil {
 		return nil, err
 	}
-	if err := data.CreateDBPtView(dbName); err != nil {
+	if _, err := data.CreateDBPtView(dbName); err != nil {
 		return nil, err
 	}
 
@@ -2071,13 +2097,13 @@ func MocTestCacheDataForExpired() (*meta2.Data, error) {
 	dbName := "testDb"
 	logStreamName := "testLogstrem"
 	data := &meta2.Data{PtNumPerNode: 1}
-	data.CreateDataNode("127.0.0.1:8086", "127.0.0.1:8188", "")
-	data.CreateDataNode("127.0.0.2:8086", "127.0.0.2:8188", "")
+	data.CreateDataNode("127.0.0.1:8086", "127.0.0.1:8188", "", "")
+	data.CreateDataNode("127.0.0.2:8086", "127.0.0.2:8188", "", "")
 
 	if err := data.CreateDatabase(dbName, nil, nil, false, 1, &proto2.ObsOptions{}); err != nil {
 		return nil, err
 	}
-	if err := data.CreateDBPtView(dbName); err != nil {
+	if _, err := data.CreateDBPtView(dbName); err != nil {
 		return nil, err
 	}
 	sgTtl := 1 * time.Hour
@@ -2127,7 +2153,7 @@ func MocTestCacheDataForExpired() (*meta2.Data, error) {
 	if err := data.CreateDatabase(dbName3, nil, nil, false, 1, &proto2.ObsOptions{}); err != nil {
 		return nil, err
 	}
-	if err := data.CreateDBPtView(dbName3); err != nil {
+	if _, err := data.CreateDBPtView(dbName3); err != nil {
 		return nil, err
 	}
 	rpi3 := &meta2.RetentionPolicyInfo{Name: logStreamName3, ReplicaN: 1, Duration: 0, ShardGroupDuration: 0,
@@ -2284,6 +2310,7 @@ func TestSnapshotV2_GetData(t *testing.T) {
 		SendRPCMessage: &RPCMessageSender{},
 		UseSnapshotV2:  true,
 		metaServers:    []string{"127.0.0.1:8491", "127.0.0.1:8492"},
+		cacheData:      &meta2.Data{},
 	}
 	connectedServer = nodeId
 
@@ -3013,9 +3040,10 @@ func TestUpdateSchema(t *testing.T) {
 	}
 	c.cacheData.Databases["db0"] = &meta2.DatabaseInfo{RetentionPolicies: make(map[string]*meta2.RetentionPolicyInfo)}
 	c.cacheData.Databases["db0"].RetentionPolicies["rp0"] = &meta2.RetentionPolicyInfo{Measurements: make(map[string]*meta2.MeasurementInfo), MstVersions: make(map[string]meta2.MeasurementVer)}
-	c.cacheData.Databases["db0"].RetentionPolicies["rp0"].Measurements["mst0"] = &meta2.MeasurementInfo{Schema: make(map[string]int32)}
+	schema := make(meta2.CleanSchema)
+	c.cacheData.Databases["db0"].RetentionPolicies["rp0"].Measurements["mst0"] = &meta2.MeasurementInfo{Schema: &schema}
 	c.cacheData.Databases["db0"].RetentionPolicies["rp0"].MstVersions["mst0"] = meta2.MeasurementVer{NameWithVersion: "mst0"}
-	c.cacheData.Databases["db0"].RetentionPolicies["rp0"].Measurements["mst0"].Schema["col1"] = 1
+	c.cacheData.Databases["db0"].RetentionPolicies["rp0"].Measurements["mst0"].Schema.SetTyp("col1", 1)
 	cmd1 := &proto2.UpdateSchemaCommand{
 		Database:      proto.String("db0"),
 		RpName:        proto.String("rp0"),
@@ -3201,4 +3229,24 @@ func TestClient_DatabaseOption(t *testing.T) {
 	if err == nil {
 		t.Fatalf("databases does not exist, but no error returned")
 	}
+}
+
+func TestClient_GetSgEndTimeErr(t *testing.T) {
+	c := &Client{
+		cacheData: &meta2.Data{
+			Databases: map[string]*meta2.DatabaseInfo{},
+		},
+	}
+	_, err := c.GetSgEndTime("db0", "rp0", time.Unix(1, 0), config.TSSTORE)
+	assert.NotEqual(t, err, nil)
+	c.cacheData.Databases["db0"] = &meta2.DatabaseInfo{RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{}}
+	_, err = c.GetSgEndTime("db0", "rp0", time.Unix(1, 0), config.TSSTORE)
+	assert.NotEqual(t, err, nil)
+	sg1 := meta2.ShardGroupInfo{ID: 1, StartTime: time.Unix(0, 0), EndTime: time.Unix(2, 0)}
+	c.cacheData.Databases["db0"].RetentionPolicies["rp0"] = &meta2.RetentionPolicyInfo{ShardGroups: []meta2.ShardGroupInfo{}}
+	_, err = c.GetSgEndTime("db0", "rp0", time.Unix(1, 0), config.TSSTORE)
+	assert.NotEqual(t, err, nil)
+	c.cacheData.Databases["db0"].RetentionPolicies["rp0"].ShardGroups = append(c.cacheData.Databases["db0"].RetentionPolicies["rp0"].ShardGroups, sg1)
+	endTime, _ := c.GetSgEndTime("db0", "rp0", time.Unix(1, 0), config.TSSTORE)
+	assert.NotEqual(t, endTime, 2000000000)
 }

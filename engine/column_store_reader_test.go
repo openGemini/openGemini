@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package engine
 
@@ -345,7 +343,7 @@ func TestColumnStoreReaderFunctions(t *testing.T) {
 	assert2.Equal(t, reader.GetOutputNumber(nil), 0)
 	assert2.Equal(t, reader.GetInputNumber(nil), 0)
 	reader.sendChunk(nil)
-	assert2.Equal(t, *(reader.closedSignal), int32(1))
+	assert2.Equal(t, *(reader.closedSignal), true)
 }
 
 type MockStoreEngine struct {
@@ -359,8 +357,8 @@ func NewMockStoreEngine() *MockStoreEngine {
 func (s *MockStoreEngine) ReportLoad() {
 }
 
-func (s *MockStoreEngine) CreateLogicPlan(_ context.Context, _ string, _ uint32, _ uint64, _ influxql.Sources, _ hybridqp.Catalog) (hybridqp.QueryNode, error) {
-	return nil, nil
+func (s *MockStoreEngine) CreateLogicPlan(ctx context.Context, db string, ptId uint32, shardID uint64, sources influxql.Sources, schema hybridqp.Catalog) (hybridqp.QueryNode, error) {
+	return s.shard.CreateLogicalPlan(ctx, sources, schema.(*executor.QuerySchema))
 }
 
 func (s *MockStoreEngine) GetIndexInfo(db string, ptId uint32, shardID uint64, schema hybridqp.Catalog) (interface{}, error) {
@@ -456,9 +454,8 @@ func TestColumnStoreReader(t *testing.T) {
 	if err = sh.WriteRows(pts, nil); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(time.Second * 1)
 	sh.ForceFlush()
-	time.Sleep(time.Second * 2)
+	sh.waitSnapshot()
 
 	// set the primary index reader
 	sh.pkIndexReader = sparseindex.NewPKIndexReader(util.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)

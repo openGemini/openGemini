@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package immutable_test
 
@@ -602,6 +600,7 @@ func TestMergeTool_Merge_mod18(t *testing.T) {
 	assert.NoError(t, mh.mergeAndCompact(true))
 	assert.NoError(t, mh.store.FullCompact(1))
 	mh.store.Wait()
+	require.Equal(t, 1, len(mh.store.Order["mst"].Files()))
 	for _, rec := range mh.readMergedRecord() {
 		record.CheckTimes(rec.Times())
 	}
@@ -632,6 +631,32 @@ func TestMergeTool_recentFile(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, 2, orderFiles.Len())
 	require.Equal(t, uint16(1), orderFiles.Files()[0].FileNameMerge())
+}
+
+func TestGetTSSPFileList(t *testing.T) {
+	var begin int64 = 1e12
+	defer beforeTest(t, 0)()
+
+	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
+	defer mh.store.Close()
+	rg := newRecordGenerator(begin, defaultInterval, false)
+
+	schema := getDefaultSchemas()
+	mh.addRecord(100, rg.generate(schema, 10))
+	require.NoError(t, mh.saveToOrder())
+
+	mh.addRecord(101, rg.setBegin(begin).incrBegin(-10).generate(schema, 100))
+	require.NoError(t, mh.saveToUnordered())
+
+	orders := mh.store.GetMstList(true)
+	if orders[0] != "mst" {
+		t.Fatal()
+	}
+
+	unorders := mh.store.GetMstList(false)
+	if unorders[0] != "mst" {
+		t.Fatal()
+	}
 }
 
 func TestMergeTool_SkipMerge(t *testing.T) {
@@ -724,6 +749,7 @@ func TestMergeTool_MergeAndCompact(t *testing.T) {
 
 	assert.NoError(t, mh.mergeAndCompact(true))
 	assert.NoError(t, compareRecords(mh.readExpectRecord(), mh.readMergedRecord()))
+	require.Equal(t, 3, len(mh.store.Order["mst"].Files()))
 }
 
 func TestMergeTool_PreAgg(t *testing.T) {
@@ -1174,6 +1200,6 @@ func TestMergePerformers_close(t *testing.T) {
 		performers.Push(p)
 	}
 
-	performers.Done()
 	performers.Close()
+	performers.Release()
 }

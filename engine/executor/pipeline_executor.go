@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package executor
 
@@ -132,6 +130,7 @@ func (exec *PipelineExecutor) Crash() {
 	}
 	exec.crashed = true
 	exec.cancel()
+	exec.processors.Interrupt()
 	exec.processors.Close()
 }
 
@@ -183,7 +182,7 @@ func (exec *PipelineExecutor) ExecuteExecutor(ctx context.Context) error {
 	return exec.Execute(ctx)
 }
 
-func (exec *PipelineExecutor) initContext(ctx context.Context) error {
+func (exec *PipelineExecutor) InitContext(ctx context.Context) error {
 	exec.contextMutex.Lock()
 	if exec.context != nil || exec.cancelFunc != nil {
 		exec.contextMutex.Unlock()
@@ -227,7 +226,12 @@ func (exec *PipelineExecutor) Execute(ctx context.Context) error {
 	exec.RunTimeStats.Begin()
 	defer exec.RunTimeStats.End()
 
-	if err := exec.initContext(ctx); err != nil {
+	err := exec.InitContext(ctx)
+	defer func() {
+		exec.Release()
+		exec.destroyContext()
+	}()
+	if err != nil {
 		return err
 	}
 
@@ -252,8 +256,6 @@ func (exec *PipelineExecutor) Execute(ctx context.Context) error {
 		}(p)
 	}
 	wg.Wait()
-	exec.Release()
-	exec.destroyContext()
 
 	if processorErr != nil {
 		// TODO: return an internel error like errors.New("internal error occurs in executor")
@@ -351,7 +353,7 @@ func (dag *TransformDag) SetVertexToInfo(vertex *TransformVertex, info *Transfor
 
 func (dag *TransformDag) AddVertex(vertex *TransformVertex) bool {
 	if _, ok := dag.mapVertexToInfo[vertex]; ok {
-		return !ok
+		return false
 	}
 
 	dag.mapVertexToInfo[vertex] = NewTransformVertexInfo()
@@ -362,7 +364,7 @@ func (dag *TransformDag) AddEdge(from *TransformVertex, to *TransformVertex) boo
 	edge := NewTransformEdge(from, to)
 
 	if _, ok := dag.edgeSet[edge]; ok {
-		return !ok
+		return false
 	}
 	dag.edgeSet[edge] = struct{}{}
 
@@ -1317,6 +1319,17 @@ func (builder *ExecutorBuilder) addDefaultToDag(node hybridqp.QueryNode) (*Trans
 			p.(*LimitTransform).SetVertex(vertex)
 		}
 
+		if node.Schema().Options().IsExcept() && node.Schema().Options().GetLimit() > 0 {
+			if _, ok := node.(*LogicalHttpSender); ok {
+				p.(*HttpSenderTransform).SetDag(builder.dag)
+				p.(*HttpSenderTransform).SetVertex(vertex)
+			}
+
+			if _, ok := node.(*LogicalHttpSenderHint); ok {
+				p.(*HttpSenderHintTransform).SetDag(builder.dag)
+				p.(*HttpSenderHintTransform).SetVertex(vertex)
+			}
+		}
 		return vertex, nil
 	} else {
 		return nil, errno.NewError(errno.LogicalPlanBuildFail, "unsupport logical plan, can't build processor from itr")

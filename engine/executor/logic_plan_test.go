@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package executor_test
 
@@ -792,7 +790,7 @@ func TestNewLogicalBinOp(t *testing.T) {
 	node := executor.NewLogicalSeries(schema)
 	leftSubquery := executor.NewLogicalSubQuery(node, schema)
 	rightSubquery := executor.NewLogicalSubQuery(node, schema)
-	binOp := executor.NewLogicalBinOp(leftSubquery, rightSubquery, nil, schema)
+	binOp := executor.NewLogicalBinOp(leftSubquery, rightSubquery, &influxql.BinOp{}, schema)
 	binOpClone := binOp.Clone()
 	if binOpClone.Type() != binOp.Type() {
 		t.Fatal("wrong type result")
@@ -805,15 +803,45 @@ func TestNewLogicalBinOp(t *testing.T) {
 	if binOp.Digest() == "" {
 		t.Fatal("wrong Digest result")
 	}
+	binOp.ReplaceChildren([]hybridqp.QueryNode{nil, nil})
 	binOp.ReplaceChild(0, nil)
 	binOp.ReplaceChild(1, nil)
-	binOp.ReplaceChildren([]hybridqp.QueryNode{nil, nil})
 	if binOp.Children()[0] != nil {
 		t.Fatal("wrong replace child result")
 	}
 	binOpClone.DeriveOperations()
 	if binOp.New(nil, nil, nil) != nil {
 		t.Fatal("wrong new result")
+	}
+}
+
+func TestNewLogicalBinOpOfNilMst(t *testing.T) {
+	para := &influxql.BinOp{
+		NilMst: influxql.LNilMst,
+	}
+	schema := createQuerySchema()
+	node := executor.NewLogicalSeries(schema)
+	rightSubquery := executor.NewLogicalSubQuery(node, schema)
+	binOp := executor.NewLogicalBinOp(nil, rightSubquery, para, schema)
+	if len(binOp.Children()) != 1 {
+		t.Fatal("wrong children len result")
+	}
+
+	binOp.ReplaceChild(0, binOp.Children()[0])
+	binOp.ReplaceChildren([]hybridqp.QueryNode{nil})
+	if binOp.Children()[0] != nil {
+		t.Fatal("wrong replace child result")
+	}
+	para.NilMst = influxql.RNilMst
+	binOp = executor.NewLogicalBinOp(rightSubquery, nil, para, schema)
+	if len(binOp.Children()) != 1 {
+		t.Fatal("wrong children len result")
+	}
+
+	binOp.ReplaceChild(0, binOp.Children()[0])
+	binOp.ReplaceChildren([]hybridqp.QueryNode{nil})
+	if binOp.Children()[0] != nil {
+		t.Fatal("wrong replace child result")
 	}
 }
 
@@ -846,6 +874,29 @@ func TestBuildBinOpPlan(t *testing.T) {
 	stmt.BinOpSource = nil
 	if _, err := executor.BuildBinOpQueryPlan(context.Background(), creator, stmt, schema); err == nil {
 		t.Fatal("TestBuildBinOpPlan error2")
+	}
+}
+
+func TestBuildBinOpPlanOfNilMst(t *testing.T) {
+	fields := []*influxql.Field{&influxql.Field{Expr: &influxql.VarRef{Val: "value", Type: influxql.Float, Alias: "value"}, Alias: "value"}}
+	stmt := &influxql.SelectStatement{
+		Fields:      fields,
+		Sources:     []influxql.Source{&influxql.SubQuery{Statement: &influxql.SelectStatement{Fields: fields, Sources: []influxql.Source{&influxql.Measurement{Name: "mst"}}}}},
+		BinOpSource: []*influxql.BinOp{&influxql.BinOp{NilMst: influxql.LNilMst}},
+	}
+	schema := createQuerySchema()
+
+	creator := NewMockShardGroup()
+	table := NewTable("mst")
+	table.AddDataTypes(map[string]influxql.DataType{"value": influxql.Float})
+	creator.AddShard(table)
+	_, err := executor.BuildBinOpQueryPlan(context.Background(), creator, stmt, schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stmt.BinOpSource[0].NilMst = influxql.RNilMst
+	if _, err := executor.BuildBinOpQueryPlan(context.Background(), creator, stmt, schema); err != nil {
+		t.Fatal("TestBuildBinOpPlanOfNilMst error1")
 	}
 }
 
@@ -1017,4 +1068,51 @@ func Test_ExplainNode(t *testing.T) {
 	groupBy := executor.NewLogicalGroupBy(logicSeries, schema)
 	orderBy := executor.NewLogicalOrderBy(groupBy, schema)
 	orderBy.Explain(planWriter)
+}
+
+func TestNewLogicalPromSubquery(t *testing.T) {
+	schema := createQuerySchema()
+	call := &influxql.PromSubCall{
+		Name: "rate_prom",
+	}
+	node := executor.NewLogicalSeries(schema)
+	op := executor.NewLogicalPromSubquery(node, schema, call)
+	opClone := op.Clone()
+	if opClone.Type() != op.Type() {
+		t.Fatal("wrong type result")
+	}
+	if len(op.Children()) != 1 {
+		t.Fatal("wrong children len result")
+	}
+	planWriter := executor.NewLogicalPlanWriterImpl(&strings.Builder{})
+	op.Explain(planWriter)
+	if op.Digest() == "" {
+		t.Fatal("wrong Digest result")
+	}
+	op.ReplaceChild(0, nil)
+	op.ReplaceChildren([]hybridqp.QueryNode{nil})
+	if op.Children()[0] != nil {
+		t.Fatal("wrong replace child result")
+	}
+	opClone.DeriveOperations()
+	if op.New(nil, nil, nil) != nil {
+		t.Fatal("wrong new result")
+	}
+}
+
+// except return err if it's a sub-query
+func TestBuildSubQuery_Except(t *testing.T) {
+	fields := []*influxql.Field{{Expr: &influxql.VarRef{Val: "value", Type: influxql.Float, Alias: "value"}, Alias: "value"}}
+	Sources := []influxql.Source{&influxql.SubQuery{Statement: &influxql.SelectStatement{
+		ExceptDimensions: make(influxql.Dimensions, 1),
+		Fields:           fields,
+		Sources:          []influxql.Source{&influxql.Measurement{Name: "mst"}}},
+	}}
+	schema := createQuerySchema()
+	creator := NewMockShardGroup()
+	table := NewTable("mst")
+	table.AddDataTypes(map[string]influxql.DataType{"value": influxql.Float})
+	creator.AddShard(table)
+	_, err := executor.BuildSources(context.Background(), creator, Sources, schema, false)
+	assert.True(t, strings.Contains(err.Error(), "except: sub-query or join-query is unsupported"))
 }

@@ -87,11 +87,15 @@ func (m *MmsTables) mergeOutOfOrder(mst string, shId uint64, full bool, force bo
 	}
 }
 
+func (m *MmsTables) getEventContext() EventContext {
+	return EventContext{mergeSet: m.indexMergeSet, scheduler: m.scheduler}
+}
+
 func (m *MmsTables) execMergeContext(ctx *MergeContext) {
 	stat := statistics.NewMergeStatistics()
 	stat.AddActive(1)
 	cLog, logEnd := logger.NewOperation(log, "MergeOutOfOrder", ctx.mst)
-	tool := newMergeTool(m, cLog)
+	tool := newMergeTool(m, m.getEventContext(), cLog)
 
 	defer func() {
 		tool.Release()
@@ -212,6 +216,8 @@ func (m *MmsTables) buildMergeContext(mst string, full bool, force bool) []*Merg
 	}
 
 	if force {
+		files.RLock()
+		defer files.RUnlock()
 		return []*MergeContext{buildNormalMergeContext(mst, files)}
 	}
 

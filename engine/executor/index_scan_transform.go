@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package executor
 
@@ -49,6 +47,7 @@ type IndexScanTransform struct {
 	info             *IndexScanExtraInfo
 	wg               sync.WaitGroup
 	aborted          bool
+	closedSignal     *bool
 	mutex            sync.RWMutex
 
 	inputPort             *ChunkPort
@@ -85,6 +84,8 @@ func NewIndexScanTransform(outRowDataType hybridqp.RowDataType, ops []hybridqp.E
 		limit:          limit,
 		oneShardState:  oneShardState,
 	}
+	closedSignal := false
+	trans.closedSignal = &closedSignal
 	return trans
 }
 
@@ -282,6 +283,10 @@ func (trans *IndexScanTransform) tsIndexScan() error {
 		return err
 	}
 	trans.GetResFromAllocator()
+	if info.ctx == nil {
+		info.ctx = context.Background()
+	}
+	info.ctx = context.WithValue(info.ctx, hybridqp.QueryAborted, trans.closedSignal)
 	plan, err := trans.info.Store.CreateLogicPlan(info.ctx, info.Req.Database, info.Req.PtID, shardInfo.ID,
 		info.Req.Opt.Sources, subPlanSchema)
 	trans.FreeResFromAllocator()
@@ -360,6 +365,10 @@ func (trans *IndexScanTransform) Explain() []ValuePair {
 	return pairs
 }
 
+func (trans *IndexScanTransform) Interrupt() {
+	*trans.closedSignal = true
+}
+
 func (trans *IndexScanTransform) Abort() {
 	trans.mutex.Lock()
 	defer trans.mutex.Unlock()
@@ -376,7 +385,6 @@ func (trans *IndexScanTransform) Abort() {
 
 func (trans *IndexScanTransform) Close() {
 	trans.output.Close()
-
 	trans.mutex.Lock()
 	defer trans.mutex.Unlock()
 	trans.aborted = true

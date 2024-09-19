@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package engine
 
@@ -181,7 +179,8 @@ type ChunkReader struct {
 	multiCallsWithFirst bool
 	transColumnFun      *map[influxql.DataType]func(recColumn *record.ColVal, column executor.Column)
 
-	closed chan struct{}
+	closed       chan struct{}
+	closedSignal bool
 
 	span       *tracing.Span
 	outputSpan *tracing.Span
@@ -219,13 +218,14 @@ func NewChunkReader(outputRowDataType hybridqp.RowDataType, ops []hybridqp.ExprO
 	}
 
 	r := &ChunkReader{
-		schema:   schema,
-		Output:   executor.NewChunkPort(outputRowDataType),
-		tags:     new(influx.PointTags),
-		ops:      ops,
-		cursor:   keyCursors,
-		isPreAgg: isPreAgg,
-		closed:   make(chan struct{}, 2),
+		schema:       schema,
+		Output:       executor.NewChunkPort(outputRowDataType),
+		tags:         new(influx.PointTags),
+		ops:          ops,
+		cursor:       keyCursors,
+		isPreAgg:     isPreAgg,
+		closed:       make(chan struct{}, 2),
+		closedSignal: false,
 	}
 	if isPreAgg {
 		r.initPreAggCallForAux()
@@ -786,8 +786,8 @@ func (r *ChunkReader) initSpan() {
 func (r *ChunkReader) Work(ctx context.Context) error {
 	ctxValue := ctx.Value(query.QueryDurationKey)
 	if ctxValue != nil {
-		qDuration := ctxValue.(*statistics.StoreSlowQueryStatistics)
-		if qDuration != nil {
+		qDuration, ok := ctxValue.(*statistics.StoreSlowQueryStatistics)
+		if ok && qDuration != nil {
 			start := time.Now()
 			defer func() {
 				qDuration.AddChunkReaderCount(1)
@@ -847,8 +847,12 @@ func (r *ChunkReader) sendChunk(chunk executor.Chunk) {
 			r.closed <- struct{}{}
 		}
 	}()
-	statistics.ExecutorStat.SourceRows.Push(int64(chunk.NumberOfRows()))
-	r.Output.State <- chunk
+	if !r.closedSignal {
+		statistics.ExecutorStat.SourceRows.Push(int64(chunk.NumberOfRows()))
+		r.Output.State <- chunk
+	} else {
+		r.closed <- struct{}{}
+	}
 }
 
 func (r *ChunkReader) IsSink() bool {
@@ -857,6 +861,7 @@ func (r *ChunkReader) IsSink() bool {
 
 func (r *ChunkReader) Close() {
 	r.Once(func() {
+		r.closedSignal = true
 		r.Output.Close()
 	})
 }

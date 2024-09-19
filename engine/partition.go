@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package engine
 
@@ -40,6 +38,7 @@ import (
 	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/raftconn"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
@@ -64,8 +63,9 @@ type DBPTInfo struct {
 	//lint:ignore U1000 use for replication feature
 	replicaInfo *message.ReplicaInfo
 
-	//lint:ignore U1000 use for replication feature
-	node raftNodeRequest
+	node     raftNodeRequest
+	proposeC chan<- []byte // proposed messages, only for raft replication
+	ReplayC  chan *raftconn.Commit
 
 	mu       sync.RWMutex
 	database string
@@ -99,6 +99,8 @@ type DBPTInfo struct {
 	lockPath            *string
 	enableTagArray      bool
 	fileInfos           chan []immutable.FileInfoExtend
+	doingOff            bool
+	doingShardMoveN     int
 }
 
 func NewDBPTInfo(db string, id uint32, dataPath, walPath string, ctx *metaclient.LoadCtx, ch chan []immutable.FileInfoExtend) *DBPTInfo {
@@ -124,6 +126,18 @@ func NewDBPTInfo(db string, id uint32, dataPath, walPath string, ctx *metaclient
 		bgrEnabled:          true,
 		fileInfos:           ch,
 	}
+}
+
+func (dbPT *DBPTInfo) AddShard(id uint64, sh Shard) {
+	dbPT.shards[id] = sh
+}
+
+func (dbPT *DBPTInfo) doingShardMoveNInc() {
+	dbPT.doingShardMoveN++
+}
+
+func (dbPT *DBPTInfo) doingShardMoveNDec() {
+	dbPT.doingShardMoveN--
 }
 
 func (dbPT *DBPTInfo) enableReportShardLoad() {
@@ -427,6 +441,10 @@ func (dbPT *DBPTInfo) openIndex(opId uint64, indexPath, indexDirName, rp string,
 	defer func() {
 		openShardsLimit.Release()
 	}()
+	if config.IsLogKeeper() {
+		resC <- &res{}
+		return
+	}
 	indexID, tr, err := parseIndexDir(indexDirName)
 	if err != nil {
 		dbPT.logger.Error("parse index dir failed", zap.Error(err))
@@ -684,6 +702,9 @@ func setAccumulateMetaIndex(d *DetachedMetaInfo, mstInfo *meta.MeasurementInfo, 
 }
 
 func (dbPT *DBPTInfo) getShardIndex(indexID uint64, duration time.Duration) (*tsi.IndexBuilder, error) {
+	if config.IsLogKeeper() {
+		return nil, nil
+	}
 	dbPT.mu.RLock()
 	indexBuilder, ok := dbPT.indexBuilder[indexID]
 	dbPT.mu.RUnlock()
@@ -738,11 +759,11 @@ func (dbPT *DBPTInfo) NewShard(rp string, shardID uint64, timeRangeInfo *meta.Sh
 	rpPath := path.Join(dbPT.path, rp)
 	walPath := path.Join(dbPT.walPath, rp)
 
+	indexID := timeRangeInfo.OwnerIndex.IndexID
 	lock := fileops.FileLockOption(*dbPT.lockPath)
-	indexBuilder, ok := dbPT.indexBuilder[timeRangeInfo.OwnerIndex.IndexID]
-	if !ok {
-		indexID := strconv.Itoa(int(timeRangeInfo.OwnerIndex.IndexID))
-		indexPath := indexID + pathSeparator + strconv.Itoa(int(meta.MarshalTime(timeRangeInfo.OwnerIndex.TimeRange.StartTime))) +
+	indexBuilder, ok := dbPT.indexBuilder[indexID]
+	if !ok && !config.IsLogKeeper() {
+		indexPath := strconv.Itoa(int(indexID)) + pathSeparator + strconv.Itoa(int(meta.MarshalTime(timeRangeInfo.OwnerIndex.TimeRange.StartTime))) +
 			pathSeparator + strconv.Itoa(int(meta.MarshalTime(timeRangeInfo.OwnerIndex.TimeRange.EndTime)))
 		iPath := path.Join(rpPath, config.IndexFileDirectory, indexPath)
 
@@ -751,7 +772,7 @@ func (dbPT *DBPTInfo) NewShard(rp string, shardID uint64, timeRangeInfo *meta.Sh
 		}
 
 		indexIdent := &meta.IndexIdentifier{OwnerDb: dbPT.database, OwnerPt: dbPT.id, Policy: rp}
-		indexIdent.Index = &meta.IndexDescriptor{IndexID: timeRangeInfo.OwnerIndex.IndexID,
+		indexIdent.Index = &meta.IndexDescriptor{IndexID: indexID,
 			IndexGroupID: timeRangeInfo.OwnerIndex.IndexGroupID, TimeRange: timeRangeInfo.OwnerIndex.TimeRange}
 
 		opts := new(tsi.Options).
@@ -770,12 +791,11 @@ func (dbPT *DBPTInfo) NewShard(rp string, shardID uint64, timeRangeInfo *meta.Sh
 		// init indexBuilder and default indexRelation
 		indexBuilder = tsi.NewIndexBuilder(opts)
 		indexBuilder.EnableTagArray = dbPT.enableTagArray
-		indexid := timeRangeInfo.OwnerIndex.IndexID
-		dbPT.indexBuilder[indexid] = indexBuilder
+		dbPT.indexBuilder[indexID] = indexBuilder
 		primaryIndex, _ := tsi.NewIndex(opts)
 		primaryIndex.SetIndexBuilder(indexBuilder)
 		indexRelation, _ := tsi.NewIndexRelation(opts, primaryIndex, indexBuilder)
-		dbPT.indexBuilder[indexid].Relations[uint32(index.MergeSet)] = indexRelation
+		dbPT.indexBuilder[indexID].Relations[uint32(index.MergeSet)] = indexRelation
 		err = indexBuilder.Open()
 		if err != nil {
 			return nil, err
@@ -785,7 +805,7 @@ func (dbPT *DBPTInfo) NewShard(rp string, shardID uint64, timeRangeInfo *meta.Sh
 	id := strconv.Itoa(int(shardID))
 	shardPath := id + pathSeparator + strconv.Itoa(int(meta.MarshalTime(timeRangeInfo.TimeRange.StartTime))) +
 		pathSeparator + strconv.Itoa(int(meta.MarshalTime(timeRangeInfo.TimeRange.EndTime))) +
-		pathSeparator + strconv.Itoa(int(timeRangeInfo.OwnerIndex.IndexID))
+		pathSeparator + strconv.Itoa(int(indexID))
 	dataPath := path.Join(rpPath, shardPath)
 	walPath = path.Join(walPath, shardPath)
 	if err = fileops.MkdirAll(dataPath, 0750, lock); err != nil {
@@ -822,6 +842,15 @@ func (dbPT *DBPTInfo) NewShard(rp string, shardID uint64, timeRangeInfo *meta.Sh
 func (dbPT *DBPTInfo) Shard(id uint64) Shard {
 	dbPT.mu.RLock()
 	defer dbPT.mu.RUnlock()
+	sh, ok := dbPT.shards[id]
+	if !ok {
+		return nil
+	}
+
+	return sh
+}
+
+func (dbPT *DBPTInfo) ShardNoLock(id uint64) Shard {
 	sh, ok := dbPT.shards[id]
 	if !ok {
 		return nil
@@ -979,11 +1008,7 @@ func (dbPT *DBPTInfo) ShardIds(tr *influxql.TimeRange) []uint64 {
 }
 
 func (dbPT *DBPTInfo) walkShards(tr *influxql.TimeRange, callback func(sh Shard)) {
-	dbPT.ref()
-	defer dbPT.unref()
-
 	shardIDs := dbPT.ShardIds(tr)
-
 	for _, id := range shardIDs {
 		dbPT.mu.RLock()
 		sh, ok := dbPT.shards[id]

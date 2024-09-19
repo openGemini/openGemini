@@ -1,18 +1,16 @@
-/*
-Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package httpd
 
@@ -243,12 +241,17 @@ func (h *Handler) servePromReadBase(w http.ResponseWriter, r *http.Request, user
 
 	// Parse whether this is an async command.
 	async := r.FormValue("async") == "true"
-
+	chunked, chunkSize, innerChunkSize, err := h.parseChunkSize(r)
+	if err != nil {
+		h.httpError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	opts := query.ExecutionOptions{
+		ChunkSize:       chunkSize,
+		Chunked:         chunked,
+		InnerChunkSize:  innerChunkSize,
 		Database:        db,
 		RetentionPolicy: rp,
-		ChunkSize:       1,
-		Chunked:         true,
 		ReadOnly:        r.Method == "GET",
 		Quiet:           true,
 	}
@@ -283,6 +286,8 @@ func (h *Handler) servePromReadBase(w http.ResponseWriter, r *http.Request, user
 			close(closing)
 		}()
 	}
+
+	h.Logger.Info("influxql", zap.String("query", q.String()))
 
 	// Execute query
 	results := h.QueryExecutor.ExecuteQuery(q, opts, closing, qDuration)
@@ -445,8 +450,23 @@ func (h *Handler) servePromBaseQuery(w http.ResponseWriter, r *http.Request, use
 	}
 	nodes, err := transpiler.Transpile(expr)
 	if err != nil {
+		if IsErrWithEmptyResp(err) {
+			WritePromEmptyResp(rw, expr, &promCommand)
+			return
+		}
 		respondError(w, &apiError{errorBadData, err}, nil)
 		return
+	}
+
+	// explain is used to output query delay analysis
+	isExplain := false
+	explain := r.FormValue("explain")
+	if len(explain) > 0 {
+		isExplain, err = strconv.ParseBool(explain)
+		if err != nil {
+			respondError(w, &apiError{errorBadData, err}, nil)
+			return
+		}
 	}
 
 	// PromQL2InfluxQL: there are two conversion methods.
@@ -455,7 +475,11 @@ func (h *Handler) servePromBaseQuery(w http.ResponseWriter, r *http.Request, use
 	var q *influxql.Query
 	switch statement := nodes.(type) {
 	case *influxql.SelectStatement:
-		q = &influxql.Query{Statements: []influxql.Statement{statement}}
+		if !isExplain {
+			q = &influxql.Query{Statements: []influxql.Statement{statement}}
+		} else {
+			q = &influxql.Query{Statements: []influxql.Statement{&influxql.ExplainStatement{Statement: statement, Analyze: true}}}
+		}
 	case *influxql.Call, *influxql.BinaryExpr, *influxql.IntegerLiteral, *influxql.NumberLiteral:
 		h.promExprQuery(&promCommand, statement, rw, expr.Type())
 		return
@@ -562,8 +586,15 @@ func (h *Handler) servePromBaseQuery(w http.ResponseWriter, r *http.Request, use
 		}
 	}
 
+	if isExplain {
+		resp := h.getStmtResult(stmtID2Result)
+		n, _ := rw.WriteResponse(resp)
+		atomic.AddInt64(&statistics.HandlerStat.QueryRequestBytesTransmitted, int64(n))
+		return
+	}
+
 	// Return the prometheus query result.
-	resp, ok := h.getPromResult(w, stmtID2Result, expr, promCommand, transpiler.DropMetric(), transpiler.RemoveTableName())
+	resp, ok := h.getPromResult(w, stmtID2Result, expr, promCommand, transpiler.DropMetric(), transpiler.RemoveTableName(), transpiler.DuplicateResult())
 	if !ok {
 		return
 	}
@@ -578,15 +609,15 @@ func (h *Handler) promExprQuery(promCommand *promql2influxql.PromCommand, statem
 			op.Valuer{},
 			query.MathValuer{},
 			query.StringValuer{},
-			executor.PromTimeValuer{},
 			promTimeValuer,
+			executor.PromTimeValuer{},
 		),
 		IntegerFloatDivision: true,
 	}
 	var resp *PromResponse
 	var ok bool
 	if promCommand.DataType == promql2influxql.GRAPH_DATA {
-		resp, ok = h.getRangePromResultForEmptySeries(statement.(influxql.Expr), promCommand, &valuer, promTimeValuer, typ)
+		resp, ok = h.getRangePromResultForEmptySeries(statement.(influxql.Expr), promCommand, &valuer, promTimeValuer)
 	} else {
 		resp, ok = h.getInstantPromResultForEmptySeries(statement.(influxql.Expr), promCommand, &valuer, promTimeValuer, typ)
 	}
@@ -645,7 +676,7 @@ func (h *Handler) servePromQueryLabelsBase(w http.ResponseWriter, r *http.Reques
 
 // servePromQueryLabels Executes a label-values query of the PromQL and returns the query result.
 func (h *Handler) servePromQueryLabelValues(w http.ResponseWriter, r *http.Request, user meta2.User) {
-	h.servePromQueryLabelsBase(w, r, user, &promQueryParam{getMetaQuery: getLabelValuesQuery})
+	h.servePromQueryLabelValuesBase(w, r, user, &promQueryParam{getMetaQuery: getLabelValuesQuery})
 
 }
 
@@ -825,5 +856,45 @@ func (t *PromTimeValuer) Value(key string) (interface{}, bool) {
 	return nil, false
 }
 
+func (t *PromTimeValuer) Call(name string, args []interface{}) (interface{}, bool) {
+	if timeFunc := executor.GetPromTimeFuncInstance()[name]; timeFunc != nil && name == "timestamp_prom" {
+		return timeFunc.CallFunc(name, []interface{}{float64(t.tmpTime / 1000)})
+	}
+	return nil, false
+}
+
 func (t *PromTimeValuer) SetValuer(_ influxql.Valuer, _ int) {
+}
+
+func WritePromEmptyResp(rw ResponseWriter, expr parser.Expr, cmd *promql2influxql.PromCommand) {
+	var dt parser.ValueType
+	switch expr.Type() {
+	case parser.ValueTypeMatrix:
+		dt = parser.ValueTypeMatrix
+	case parser.ValueTypeVector:
+		switch cmd.DataType {
+		case promql2influxql.GRAPH_DATA:
+			dt = parser.ValueTypeMatrix
+		default:
+			dt = parser.ValueTypeVector
+		}
+	case parser.ValueTypeScalar:
+		switch cmd.DataType {
+		case promql2influxql.GRAPH_DATA:
+			dt = parser.ValueTypeMatrix
+		default:
+			dt = parser.ValueTypeScalar
+		}
+	default:
+		dt = parser.ValueTypeNone
+	}
+	n, _ := rw.WritePromResponse(PromResponse{
+		Status: StatusSuccess,
+		Data:   promql2influxql.NewPromResult([]string{}, string(dt)),
+	})
+	atomic.AddInt64(&statistics.HandlerStat.QueryRequestBytesTransmitted, int64(n))
+}
+
+func IsErrWithEmptyResp(err error) bool {
+	return strings.Contains(err.Error(), "invalid measurement")
 }

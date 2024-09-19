@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package executor
 
@@ -26,6 +24,11 @@ import (
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 )
+
+// OrderbyChunkNum consists of 3 orderbyTransform chunks and 3 hash_agg_transform chunks
+// orderby_transform: 1 currChunk,1 bufChunk and 1 outCh
+// hash_agg_transform: 1 inCh, 1 inputChunk and 1 bufChunk
+const OrderbyChunkNum = 6
 
 type heapOrderByItems struct {
 	items []*heapOrderByItem
@@ -107,7 +110,7 @@ func NewOrderByTransform(inRowDataType hybridqp.RowDataType, outRowDataType hybr
 		trans.transferHelper = trans.transferFast
 	} else {
 		trans.transferHelper = trans.transferGroupByTime
-		trans.ResultChunkPool = NewCircularChunkPool(CircularChunkNum, NewChunkBuilder(outRowDataType))
+		trans.ResultChunkPool = NewCircularChunkPool(OrderbyChunkNum, NewChunkBuilder(outRowDataType))
 		trans.resultChunk = trans.ResultChunkPool.GetChunk()
 	}
 
@@ -195,7 +198,7 @@ func (trans *OrderByTransform) GetTagAndIndexes(chunk Chunk) {
 	for i := range chunk.Tags() {
 		if trans.opt.IsPromGroupAll() {
 			t = &chunk.Tags()[i]
-		} else if trans.opt.IsWithout() {
+		} else if trans.opt.IsPromWithout() {
 			t = chunk.Tags()[i].RemoveKeys(trans.opt.Dimensions)
 		} else {
 			t = chunk.Tags()[i].KeepKeys(trans.dimensions)
@@ -214,7 +217,7 @@ func (trans *OrderByTransform) GetTagsResetTagIndexes(chunk Chunk) {
 	for i := range chunk.Tags() {
 		if trans.opt.IsPromGroupAll() {
 			t = &chunk.Tags()[i]
-		} else if trans.opt.IsWithout() {
+		} else if trans.opt.IsPromWithout() {
 			t = chunk.Tags()[i].RemoveKeys(trans.opt.Dimensions)
 		} else {
 			t = chunk.Tags()[i].KeepKeys(trans.dimensions)

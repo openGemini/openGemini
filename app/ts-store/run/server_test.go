@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package run
 
@@ -65,6 +63,7 @@ func mockStorage() *storage.Storage {
 		Common:  config.NewCommon(),
 		Meta:    config.NewMeta(),
 	}
+	config.Common.PprofEnabled = true
 
 	storage, err := storage.OpenStorage(storageDataPath, node, nil, config)
 	if err != nil {
@@ -234,10 +233,14 @@ func TestNilService(t *testing.T) {
 }
 
 func TestNewServer(t *testing.T) {
-	config := config.NewTSStore(true)
-	config.Common.MetaJoin = []string{"127.0.0.1", "127.0.0.2", "127.0.0.3"}
+	conf := config.NewTSStore(true)
+	conf.Common.MetaJoin = []string{"127.0.0.1", "127.0.0.2", "127.0.0.3"}
 
-	NewServer(config, app.ServerInfo{}, logger.NewLogger(errno.ModuleUnknown))
+	conf.Index.MemoryAllowedPercent = 20
+	conf.Common.PprofEnabled = true
+
+	NewServer(conf, app.ServerInfo{}, logger.NewLogger(errno.ModuleUnknown))
+	require.Equal(t, 20, config.GetIndexConfig().MemoryAllowedPercent)
 }
 
 func TestNewServerErrRole(t *testing.T) {
@@ -385,7 +388,7 @@ func (client *MockMetaClient) MarkDatabaseDelete(name string) error {
 func (client *MockMetaClient) MarkRetentionPolicyDelete(database, name string) error {
 	return nil
 }
-func (client *MockMetaClient) MarkMeasurementDelete(database, mst string) error {
+func (client *MockMetaClient) MarkMeasurementDelete(database, policy, measurement string) error {
 	return nil
 }
 func (client *MockMetaClient) DBPtView(database string) (meta2.DBPtInfos, error) {
@@ -440,7 +443,9 @@ func (client *MockMetaClient) ShowRetentionPolicies(database string) (models.Row
 func (client *MockMetaClient) ShowContinuousQueries() (models.Rows, error) {
 	return nil, nil
 }
-func (client *MockMetaClient) ShowCluster() models.Rows { return nil }
+func (client *MockMetaClient) ShowCluster(nodeType string, ID uint64) (models.Rows, error) {
+	return nil, nil
+}
 func (client *MockMetaClient) ShowClusterWithCondition(nodeType string, ID uint64) (models.Rows, error) {
 	return nil, nil
 }
@@ -487,6 +492,10 @@ func (mmc *MockMetaClient) GetStreamInfos() map[string]*meta2.StreamInfo {
 
 func (mmc *MockMetaClient) GetDstStreamInfos(db, rp string, dstSis *[]*meta2.StreamInfo) bool {
 	return false
+}
+
+func (mmc *MockMetaClient) GetSgEndTime(database string, rp string, timestamp time.Time, engineType config.EngineType) (int64, error) {
+	return 0, nil
 }
 
 func (mmc *MockMetaClient) GetAllMst(dbName string) []string {

@@ -1,19 +1,17 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-//nolint
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//	http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+// nolint
 package executor
 
 import (
@@ -86,7 +84,7 @@ func GetEnableFileCursor() bool {
 }
 
 func IsEnableFileCursor(schema hybridqp.Catalog) bool {
-	return GetEnableFileCursor() && schema.HasOptimizeAgg() && !schema.Options().IsPromQuery()
+	return GetEnableFileCursor() && schema.HasOptimizeAgg()
 }
 
 func PrintPlan(planName string, plan hybridqp.QueryNode) {
@@ -2604,6 +2602,14 @@ func (b *LogicalPlanBuilderImpl) IncHashAgg() LogicalPlanBuilder {
 	return b
 }
 
+// only use for prom for build hashAggNode
+func (b *LogicalPlanBuilderImpl) HashAgg() LogicalPlanBuilder {
+	last := b.stack.Pop()
+	plan := NewLogicalHashAgg(last, b.schema, UNKNOWN_EXCHANGE, nil)
+	b.stack.Push(plan)
+	return b
+}
+
 func (b *LogicalPlanBuilderImpl) TagSetAggregate() LogicalPlanBuilder {
 	last := b.stack.Pop()
 	plan := NewLogicalTagSetAggregate(last, b.schema)
@@ -2839,6 +2845,14 @@ func (b *LogicalPlanBuilderImpl) Exchange(eType ExchangeType, eTraits []hybridqp
 	last := b.stack.Pop()
 
 	plan := NewLogicalExchange(last, eType, eTraits, b.schema)
+	b.stack.Push(plan)
+	return b
+}
+
+func (b *LogicalPlanBuilderImpl) PromSubquery(call *influxql.PromSubCall) LogicalPlanBuilder {
+	last := b.stack.Pop()
+
+	plan := NewLogicalPromSubquery(last, b.schema, call)
 	b.stack.Push(plan)
 	return b
 }
@@ -4262,8 +4276,12 @@ func (p *LogicalBinOp) DeriveOperations() {
 }
 
 func (p *LogicalBinOp) init() {
-	p.InitRef(p.right)
-	p.InitRef(p.left)
+	if p.right != nil {
+		p.InitRef(p.right)
+	}
+	if p.left != nil {
+		p.InitRef(p.left)
+	}
 }
 
 func (p *LogicalBinOp) Clone() hybridqp.QueryNode {
@@ -4274,15 +4292,23 @@ func (p *LogicalBinOp) Clone() hybridqp.QueryNode {
 }
 
 func (p *LogicalBinOp) Children() []hybridqp.QueryNode {
+	if p.left == nil {
+		return []hybridqp.QueryNode{p.right}
+	} else if p.right == nil {
+		return []hybridqp.QueryNode{p.left}
+	}
 	return []hybridqp.QueryNode{p.left, p.right}
 }
 
 func (p *LogicalBinOp) ReplaceChildren(children []hybridqp.QueryNode) {
-	if len(children) != 2 {
-		panic("children count in LogicalBinOp is not 2")
+	if p.left == nil {
+		p.right = children[0]
+	} else if p.right == nil {
+		p.left = children[0]
+	} else {
+		p.left = children[0]
+		p.right = children[1]
 	}
-	p.left = children[0]
-	p.right = children[1]
 }
 
 func (p *LogicalBinOp) ReplaceChild(ordinal int, child hybridqp.QueryNode) {
@@ -4290,7 +4316,11 @@ func (p *LogicalBinOp) ReplaceChild(ordinal int, child hybridqp.QueryNode) {
 		panic(fmt.Sprintf("index %d out of range %d", ordinal, 1))
 	}
 	if ordinal == 0 {
-		p.left = child
+		if p.Para.NilMst == influxql.LNilMst {
+			p.right = child
+		} else {
+			p.left = child
+		}
 	} else {
 		p.right = child
 	}
@@ -4312,7 +4342,84 @@ func (p *LogicalBinOp) Digest() string {
 	p.digest = true
 	p.digestName = p.digestName[:0]
 	p.digestName = encoding.MarshalUint32(p.digestName, uint32(p.LogicPlanType()))
-	p.digestName = encoding.MarshalUint64(p.digestName, p.left.ID())
-	p.digestName = encoding.MarshalUint64(p.digestName, p.right.ID())
+	if p.left != nil {
+		p.digestName = encoding.MarshalUint64(p.digestName, p.left.ID())
+	}
+	if p.right != nil {
+		p.digestName = encoding.MarshalUint64(p.digestName, p.right.ID())
+	}
+	return string(p.digestName)
+}
+
+type LogicalPromSubquery struct {
+	input hybridqp.QueryNode
+	Call  *influxql.PromSubCall
+	LogicalPlanBase
+}
+
+func NewLogicalPromSubquery(input hybridqp.QueryNode, schema hybridqp.Catalog, Call *influxql.PromSubCall) *LogicalPromSubquery {
+	project := &LogicalPromSubquery{
+		input: input,
+		Call:  Call,
+		LogicalPlanBase: LogicalPlanBase{
+			id:     hybridqp.GenerateNodeId(),
+			schema: schema,
+			rt:     nil,
+			ops:    nil,
+		},
+	}
+	project.init()
+	return project
+}
+
+// impl me
+func (p *LogicalPromSubquery) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	return nil
+}
+
+func (p *LogicalPromSubquery) DeriveOperations() {
+	p.init()
+}
+
+func (p *LogicalPromSubquery) init() {
+	p.InitRef(p.input)
+}
+
+func (p *LogicalPromSubquery) Clone() hybridqp.QueryNode {
+	clone := &LogicalPromSubquery{}
+	*clone = *p
+	clone.id = hybridqp.GenerateNodeId()
+	return clone
+}
+
+func (p *LogicalPromSubquery) Children() []hybridqp.QueryNode {
+	return []hybridqp.QueryNode{p.input}
+}
+
+func (p *LogicalPromSubquery) ReplaceChildren(children []hybridqp.QueryNode) {
+	p.input = children[0]
+}
+
+func (p *LogicalPromSubquery) ReplaceChild(ordinal int, child hybridqp.QueryNode) {
+	p.input = child
+}
+
+func (p *LogicalPromSubquery) Explain(writer LogicalPlanWriter) {
+	p.ExplainIterms(writer)
+	writer.Explain(p)
+}
+
+func (p *LogicalPromSubquery) Type() string {
+	return GetType(p)
+}
+
+func (p *LogicalPromSubquery) Digest() string {
+	if p.digest {
+		return string(p.digestName)
+	}
+	p.digest = true
+	p.digestName = p.digestName[:0]
+	p.digestName = encoding.MarshalUint32(p.digestName, uint32(p.LogicPlanType()))
+	p.digestName = encoding.MarshalUint64(p.digestName, p.input.ID())
 	return string(p.digestName)
 }

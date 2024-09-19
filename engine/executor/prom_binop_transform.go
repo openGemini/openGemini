@@ -1,18 +1,16 @@
-/*
-Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package executor
 
@@ -98,6 +96,7 @@ type BinOpTransform struct {
 	matchType                influxql.MatchCardinality
 	IncludeKeys              []string // group_left/group_right(IncludeKeys)
 	ReturnBool               bool
+	NilMst                   influxql.NilMstState
 
 	primaryLoc        int
 	secondaryLoc      int
@@ -154,6 +153,7 @@ func NewBinOpTransform(inRowDataTypes []hybridqp.RowDataType, outRowDataType hyb
 		resultTagValues:   make([]string, 0),
 		reserveLoc:        make([]int, 0),
 		delLoc:            make([]int, 0),
+		NilMst:            para.NilMst,
 	}
 	for i := range inRowDataTypes {
 		trans.inputs = append(trans.inputs, NewChunkPort(inRowDataTypes[i]))
@@ -282,7 +282,7 @@ func (trans *BinOpTransform) runnable(ctx context.Context, errs *errno.Errs, i i
 				return
 			}
 		case <-ctx.Done():
-			trans.closeNextChunks(i)
+			trans.closeNextChunk(i)
 			return
 		}
 	}
@@ -297,10 +297,15 @@ func (trans *BinOpTransform) Work(ctx context.Context) error {
 	}()
 
 	errs := &trans.errs
-	errs.Init(3, trans.Close)
 
-	go trans.runnable(ctx, errs, 0)
-	go trans.runnable(ctx, errs, 1)
+	if trans.NilMst == influxql.NoNilMst {
+		errs.Init(3, trans.Close)
+		go trans.runnable(ctx, errs, 0)
+		go trans.runnable(ctx, errs, 1)
+	} else {
+		errs.Init(2, trans.Close)
+		go trans.runnable(ctx, errs, 0)
+	}
 	go trans.BinOpHelper(ctx, errs)
 
 	return errs.Err()
@@ -313,7 +318,16 @@ func (trans *BinOpTransform) SendChunk() {
 	}
 }
 
-func (trans *BinOpTransform) closeNextChunks(i int) {
+func (trans *BinOpTransform) closeNextChunks() {
+	if trans.NilMst == influxql.NoNilMst {
+		trans.closeNextChunk(0)
+		trans.closeNextChunk(1)
+	} else {
+		trans.closeNextChunk(0)
+	}
+}
+
+func (trans *BinOpTransform) closeNextChunk(i int) {
 	trans.nextChunksCloseOnce[i].Do(func() {
 		close(trans.nextChunks[i])
 	})
@@ -439,11 +453,11 @@ func (trans *BinOpTransform) AddResult(secondaryChunk Chunk) error {
 		if err = trans.addResulMap(matchTags, tagsKeys, tagValues, tags[i], primaryGroups); err != nil {
 			return err
 		}
-		if err := trans.computeMatchResult(primaryGroups, secondaryChunk, i); err != nil {
-			return err
-		}
 		if trans.notSameGroup(tags[i]) {
 			primaryGroups.reset()
+		}
+		if err := trans.computeMatchResult(primaryGroups, secondaryChunk, i); err != nil {
+			return err
 		}
 		trans.preTags = string(tags[i].subset)
 	}
@@ -467,6 +481,7 @@ func (trans *BinOpTransform) computeMatchResult(primaryGroups *GroupLocs, second
 	var start, end int
 	var rVal float64
 	var keep bool
+	var pTime, sTime int64
 	preOutSize := trans.outputChunk.Len()
 	start = secondaryChunk.TagIndex()[secondaryGroupLoc]
 	if secondaryGroupLoc == secondaryChunk.TagLen()-1 {
@@ -474,15 +489,20 @@ func (trans *BinOpTransform) computeMatchResult(primaryGroups *GroupLocs, second
 	} else {
 		end = secondaryChunk.TagIndex()[secondaryGroupLoc+1]
 	}
-	for ; start < end; start++ {
+	for start < end {
 		if primaryGroups.Loc >= len(primaryGroups.Locs) {
-			return fmt.Errorf("primary point over")
+			break
 		}
 		pLoc := primaryGroups.Locs[primaryGroups.Loc]
 		pChunk := trans.primaryChunks[pLoc.ChunkLoc]
-		pTime := pChunk.Time()[pLoc.RowLoc]
-		if pTime != secondaryChunk.Time()[start] {
-			return fmt.Errorf("primary time: %d != secondary time: %d", pTime, secondaryChunk.Time()[start])
+		pTime = pChunk.Time()[pLoc.RowLoc]
+		sTime = secondaryChunk.Time()[start]
+		if pTime < sTime {
+			primaryGroups.add(pChunk.Len())
+			continue
+		} else if sTime < pTime {
+			start++
+			continue
 		}
 		pVal := pChunk.Columns()[0].FloatValues()[pLoc.RowLoc]
 		sVal := secondaryChunk.Columns()[0].FloatValues()[start]
@@ -498,10 +518,13 @@ func (trans *BinOpTransform) computeMatchResult(primaryGroups *GroupLocs, second
 				rVal = 0
 			}
 		} else if !keep {
+			primaryGroups.add(pChunk.Len())
+			start++
 			continue
 		}
 		trans.addOutputVal(pTime, rVal)
 		primaryGroups.add(pChunk.Len())
+		start++
 	}
 	if trans.outputChunk.Len() > preOutSize {
 		trans.addOutPutTags(preOutSize)
@@ -743,8 +766,7 @@ func (trans *BinOpTransform) encodeTags() string {
 
 func (trans *BinOpTransform) BinOpHelperOperator(ctx context.Context, errs *errno.Errs) {
 	defer func() {
-		trans.closeNextChunks(0)
-		trans.closeNextChunks(1)
+		trans.closeNextChunks()
 		if e := recover(); e != nil {
 			err := errno.NewError(errno.RecoverPanic, e)
 			trans.streamBinOpLogger.Error(err.Error(), zap.String("query", "BinOpTransform"),
@@ -789,8 +811,7 @@ func (trans *BinOpTransform) BinOpHelperOperator(ctx context.Context, errs *errn
 
 func (trans *BinOpTransform) BinOpHelperConditionSingle(ctx context.Context, errs *errno.Errs) {
 	defer func() {
-		trans.closeNextChunks(0)
-		trans.closeNextChunks(1)
+		trans.closeNextChunks()
 		if e := recover(); e != nil {
 			err := errno.NewError(errno.RecoverPanic, e)
 			trans.streamBinOpLogger.Error(err.Error(), zap.String("query", "BinOpTransform"),
@@ -800,6 +821,23 @@ func (trans *BinOpTransform) BinOpHelperConditionSingle(ctx context.Context, err
 			errs.Dispatch(nil)
 		}
 	}()
+	// 0. one side input is nilMst
+	if trans.NilMst == influxql.LNilMst {
+		<-trans.inputSignals[0]
+		return
+	} else if trans.NilMst == influxql.RNilMst {
+		for {
+			<-trans.inputSignals[0]
+			if trans.bufChunks[0] == nil {
+				return
+			}
+			trans.bufChunks[0].CopyTo(trans.outputChunk)
+			trans.output.State <- trans.outputChunk
+			trans.outputChunk = trans.chunkPool.GetChunk()
+			trans.nextChunks[0] <- signal
+		}
+	}
+
 	// 1. build PrimaryMapSimple by right
 	for {
 		<-trans.inputSignals[1]
@@ -826,8 +864,7 @@ func (trans *BinOpTransform) BinOpHelperConditionSingle(ctx context.Context, err
 
 func (trans *BinOpTransform) BinOpHelperConditionBoth(ctx context.Context, errs *errno.Errs) {
 	defer func() {
-		trans.closeNextChunks(0)
-		trans.closeNextChunks(1)
+		trans.closeNextChunks()
 		if e := recover(); e != nil {
 			err := errno.NewError(errno.RecoverPanic, e)
 			trans.streamBinOpLogger.Error(err.Error(), zap.String("query", "BinOpTransform"),
@@ -837,6 +874,20 @@ func (trans *BinOpTransform) BinOpHelperConditionBoth(ctx context.Context, errs 
 			errs.Dispatch(nil)
 		}
 	}()
+	// 0. one side input is nilMst
+	if trans.NilMst != influxql.NoNilMst {
+		for {
+			<-trans.inputSignals[0]
+			if trans.bufChunks[0] == nil {
+				return
+			}
+			trans.bufChunks[0].CopyTo(trans.outputChunk)
+			trans.output.State <- trans.outputChunk
+			trans.outputChunk = trans.chunkPool.GetChunk()
+			trans.nextChunks[0] <- signal
+		}
+	}
+
 	// 1. build PrimaryMapSimple and add result by left
 	for {
 		<-trans.inputSignals[0]

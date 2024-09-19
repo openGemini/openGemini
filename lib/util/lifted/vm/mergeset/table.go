@@ -63,11 +63,14 @@ const finalPartsToMerge = 2
 const maxPartSize = 400e9
 
 const (
-	rawItemsFlushInterval      = time.Second
-	BloomFilterDirName         = "bloomfilter"
-	BloomFilterFileName        = "mergeset.bf"
-	bloomFilterItems      uint = 1e8
-	falsePositiveRate          = 0.01
+	rawItemsFlushInterval          = time.Second
+	BloomFilterDirName             = "bloomfilter"
+	BloomFilterFileName            = "mergeset.bf"
+	LastBloomFilterFileSuffix      = ".last"
+	TmpBloomFilterFileSuffix       = ".init"
+	BloomFilterFileSuffix          = ".bf"
+	bloomFilterItems          uint = 1e8
+	falsePositiveRate              = 0.01
 )
 
 var (
@@ -258,16 +261,17 @@ func (pw *partWrapper) decRef() {
 		return
 	}
 
+	// Release the file handle before deleting the file to prevent the service from panicking when running on Windows.
+	pw.p.MustClose()
 	if pw.removeWG != nil {
 		fs.MustRemoveAllWithDoneCallback(pw.p.path, pw.lock, pw.removeWG.Done)
 	}
+	pw.p = nil
 
 	if pw.mp != nil {
 		putInmemoryPart(pw.mp)
 		pw.mp = nil
 	}
-	pw.p.MustClose()
-	pw.p = nil
 }
 
 // OpenTable opens a table on the given path.
@@ -363,7 +367,6 @@ func OpenBloomFilter(path string, lock *string, size int, enabled bool) ([]*bloo
 		return nil, nil
 	}
 	bfSlice := make([]*bloom.BloomFilter, 0, size)
-	filesPath := make([]string, 0, size)
 	// init mergeSet bloom filter path
 	bfDir := filepath.Join(path, BloomFilterDirName)
 	err := fs.MkdirAllIfNotExist(bfDir, lock)
@@ -371,48 +374,156 @@ func OpenBloomFilter(path string, lock *string, size int, enabled bool) ([]*bloo
 		return nil, err
 	}
 
+	err = checkBloomFilterFiles(bfDir)
+	if err != nil {
+		return nil, err
+	}
+
 	// bloomFilter exist,load from disk
 	itemCount := bloomFilterItems / uint(size)
+	// read bf from disk
+	buffer := GetIndexBuffer()
+	defer PutIndexBuffer(buffer)
 	var fileName, filePath string
 	for i := 0; i < size; i++ {
 		fileName = strconv.Itoa(i+1) + "_" + BloomFilterFileName
 		filePath = filepath.Join(bfDir, fileName)
-		filesPath = append(filesPath, filePath)
 		fileInfo, err := fileops.Stat(filePath)
 		if err != nil && !os.IsNotExist(err) {
 			return nil, err
 		}
 		if os.IsNotExist(err) || (fileInfo != nil && fileInfo.Size() == 0) {
 			bfSlice = append(bfSlice, bloom.NewWithEstimates(itemCount, falsePositiveRate))
+			continue
 		}
-	}
-
-	if len(bfSlice) == size {
-		return bfSlice, nil
-	}
-
-	// read bf from disk
-	buffer := GetIndexBuffer()
-	defer PutIndexBuffer(buffer)
-	for i := range filesPath {
-		f, err := fileops.Open(filesPath[i], fileops.FileLockOption(""), fileops.FilePriorityOption(fileops.IO_PRIORITY_NORMAL))
+		f, err := fileops.Open(filePath, fileops.FileLockOption(*lock), fileops.FilePriorityOption(fileops.IO_PRIORITY_NORMAL))
 		if err != nil {
+			_ = f.Close()
 			return nil, err
 		}
 
 		bf := &bloom.BloomFilter{}
 		_, err = buffer.ReadFrom(bufio.NewReader(f))
 		if err != nil {
+			_ = f.Close()
 			return nil, err
 		}
 		_, err = bf.ReadFrom(buffer)
 		if err != nil {
+			_ = f.Close()
 			return nil, err
 		}
+		_ = f.Close()
 		bfSlice = append(bfSlice, bf)
 		buffer.Reset()
 	}
 	return bfSlice, nil
+}
+
+func checkBloomFilterFiles(dir string) error {
+	nameDirs, err := fileops.ReadDir(dir)
+	if err != nil {
+		logger.Errorf("check bloom filter dir fail, path:%s, err:%s", dir, err)
+		return err
+	}
+
+	var item os.FileInfo
+	for i := range nameDirs {
+		item = nameDirs[i]
+		switch filepath.Ext(item.Name()) {
+		case TmpBloomFilterFileSuffix:
+			err = renameTmpBfFile(filepath.Join(dir, item.Name()))
+			if err != nil {
+				return err
+			}
+		case LastBloomFilterFileSuffix:
+			err = renameLastBfFile(filepath.Join(dir, item.Name()))
+			if err != nil {
+				return err
+			}
+		case BloomFilterFileSuffix:
+			continue
+		default:
+			logger.Errorf("unsupported bloom filter suffix, path:%s", item.Name())
+			return errors.New("unsupported bloom filter suffix")
+		}
+	}
+	return nil
+}
+
+func renameTmpBfFile(tmpFileName string) error {
+	// remove init file
+	return fileops.Remove(tmpFileName)
+}
+
+func renameLastBfFile(lastFileName string) error {
+	fileName := lastFileName[:len(lastFileName)-len(LastBloomFilterFileSuffix)]
+	_, err := fileops.Stat(fileName)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if os.IsNotExist(err) {
+		err = fileops.RenameFile(lastFileName, fileName)
+	} else {
+		err = fileops.Remove(lastFileName)
+	}
+	return err
+}
+
+// renameOldFile rename old bf file eg: xxx.bf -> xxx.bf.last
+func renameOldFile(filePath string) (bool, error) {
+	_, err := fileops.Stat(filePath)
+	if err != nil && !os.IsNotExist(err) {
+		return false, err
+	}
+
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+
+	lastFilePath := filePath + LastBloomFilterFileSuffix
+	err = fileops.RenameFile(filePath, lastFilePath)
+	return true, err
+}
+
+func FlushBloomFilter(i int, byteSize int64, dirPath string, buffer *bytes.Buffer, lock fileops.FileLockOption) error {
+	fileName := strconv.Itoa(i+1) + "_" + BloomFilterFileName
+	filePath := filepath.Join(dirPath, fileName)
+	// rename exist file to old file
+	exist, err := renameOldFile(filePath)
+	if err != nil {
+		return err
+	}
+	// write init file
+	tmpFilePath := filePath + TmpBloomFilterFileSuffix
+	pri := fileops.FilePriorityOption(fileops.IO_PRIORITY_NORMAL)
+	fd, err := fileops.OpenFile(tmpFilePath, os.O_CREATE|os.O_RDWR, 0640, lock, pri)
+	if err != nil {
+		logger.Errorf("open mergeSet bloom filter file error, err:%s, path:%s", err, tmpFilePath)
+		return err
+	}
+
+	n, err := fd.Write(buffer.Bytes())
+	_ = fd.Close()
+	if err != nil || byteSize != int64(n) {
+		logger.Errorf("write mergeSet bloom filter file error, err:%s, path:%s", err, tmpFilePath)
+		return err
+	}
+	// rename init file
+	err = fileops.RenameFile(tmpFilePath, filePath)
+	if err != nil {
+		logger.Errorf("rename tmp bloom filter file error, err:%s, path:%s", err, tmpFilePath)
+		return err
+	}
+	// remove old file
+	if exist {
+		err = fileops.Remove(filePath + LastBloomFilterFileSuffix)
+		if err != nil {
+			logger.Errorf("remove last bloom filter file error, err:%s, path:%s", err, filePath+LastBloomFilterFileSuffix)
+			return err
+		}
+	}
+	return nil
 }
 
 func (tb *Table) SetFlushBfCallback(flushBfCallback func()) {
@@ -693,14 +804,7 @@ func (tb *Table) DebugFlush() {
 }
 
 func (tb *Table) flushRawItems(isFinal bool) {
-	blocksToFlush := tb.rawItems.getFlushBlocks(tb, isFinal)
-	if len(blocksToFlush) == 0 {
-		return
-	}
-	if tb.flushBfCallback != nil {
-		tb.flushBfCallback()
-	}
-	tb.rawItems.flush(tb, isFinal, blocksToFlush)
+	tb.rawItems.flush(tb, isFinal)
 }
 
 func (riss *rawItemsShards) getFlushBlocks(tb *Table, isFinal bool) []*inmemoryBlock {
@@ -711,10 +815,18 @@ func (riss *rawItemsShards) getFlushBlocks(tb *Table, isFinal bool) []*inmemoryB
 	return blocksToFlush
 }
 
-func (riss *rawItemsShards) flush(tb *Table, isFinal bool, blocksToFlush []*inmemoryBlock) {
+func (riss *rawItemsShards) flush(tb *Table, isFinal bool) {
 	tb.rawItemsPendingFlushesWG.Add(1)
 	defer tb.rawItemsPendingFlushesWG.Done()
 
+	blocksToFlush := tb.rawItems.getFlushBlocks(tb, isFinal)
+	if len(blocksToFlush) == 0 {
+		return
+	}
+
+	if tb.flushBfCallback != nil {
+		tb.flushBfCallback()
+	}
 	tb.mergeRawItemsBlocks(blocksToFlush, isFinal)
 }
 

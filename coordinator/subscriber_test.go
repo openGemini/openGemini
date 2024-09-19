@@ -1,18 +1,16 @@
-/*
-Copyright 2023 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2023 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package coordinator
 
@@ -22,6 +20,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -31,6 +32,7 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	assert2 "github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type MockSubscriberClient struct {
@@ -373,4 +375,36 @@ func TestSendWriteRequest(t *testing.T) {
 	default:
 	}
 	s.StopAllWriters()
+}
+
+func TestNewHTTPSClient(t *testing.T) {
+	dir := t.TempDir()
+	err := execCommand([]string{
+		`openssl req -x509 -nodes -newkey rsa:2048 -keyout {{dir}}/gemini.key -out {{dir}}/gemini.crt -days 365 -subj "{{subj}}"`,
+		`echo "" > {{dir}}/gemini.pem; cat {{dir}}/gemini.key {{dir}}/gemini.crt >> {{dir}}/gemini.pem`,
+	}, dir)
+
+	require.NoError(t, err)
+
+	u, err := url.Parse("https://127.0.0.3:8086")
+	require.NoError(t, err)
+
+	_, err = NewHTTPSClient(u, time.Second, false, dir+"/gemini.pem")
+	require.NoError(t, err)
+}
+
+const subject = "/C=US/ST=CA/L=San Francisco/O=openGemini/OU=openGemini/CN=localhost"
+
+func execCommand(cmdList []string, dir string) error {
+	for _, c := range cmdList {
+		c = strings.ReplaceAll(c, "{{dir}}", dir)
+		c = strings.ReplaceAll(c, "{{subj}}", subject)
+		fmt.Println(c)
+		err := exec.Command("/bin/bash", "-c", c).Run()
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

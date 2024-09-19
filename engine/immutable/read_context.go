@@ -1,24 +1,20 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package immutable
 
 import (
-	"sync/atomic"
-
 	"github.com/openGemini/openGemini/engine/comm"
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/encoding"
@@ -45,7 +41,7 @@ type ReadContext struct {
 
 	readSpan     *tracing.Span
 	filterSpan   *tracing.Span
-	closedSignal *int32
+	closedSignal *bool
 }
 
 func NewReadContext(ascending bool) *ReadContext {
@@ -64,15 +60,12 @@ func NewReadContext(ascending bool) *ReadContext {
 	}
 }
 
-func (d *ReadContext) SetClosedSignal(s *int32) {
+func (d *ReadContext) SetClosedSignal(s *bool) {
 	d.closedSignal = s
 }
 
-func (d *ReadContext) isAborted() bool {
-	if d.closedSignal == nil {
-		return false
-	}
-	return atomic.LoadInt32(d.closedSignal) > 0
+func (d *ReadContext) IsAborted() bool {
+	return d.closedSignal != nil && *d.closedSignal
 }
 
 func (d *ReadContext) SetSpan(readSpan, filterSpan *tracing.Span) {

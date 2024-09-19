@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package coordinator
 
@@ -86,6 +84,125 @@ func (wh *writeHelper) sameMeasurement(name string) {
 	wh.sameMst = wh.preMst.OriginName() == name
 }
 
+func (wh *writeHelper) GetSgEndTime(database, rp string, ts int64, engineType config.EngineType) (int64, error) {
+	return wh.pw.MetaClient.GetSgEndTime(database, rp, time.Unix(0, ts), engineType)
+}
+
+func (wh *writeHelper) updateCleanSchemaTagsCheck(r *influx.Row, dropTagIndex *[]int, pkCount *int, originName string,
+	sgEndTime int64, fieldToCreatePool []*proto2.FieldSchema, cleanSchema *meta2.CleanSchema, mst *meta2.MeasurementInfo,
+	err *error) ([]*proto2.FieldSchema, bool, error) {
+	for i, tag := range r.Tags {
+		if tag.Key == "time" {
+			*dropTagIndex = append(*dropTagIndex, i)
+			*err = errno.NewError(errno.InvalidTagKey, originName)
+			continue
+		}
+		if err := r.CheckDuplicateTag(i); err != nil {
+			return fieldToCreatePool, true, err
+		}
+		if schemaVal, ok := (*cleanSchema)[tag.Key]; !ok {
+			fieldToCreatePool = appendField(fieldToCreatePool, tag.Key, influx.Field_Type_Tag)
+			setLastFieldEndTime(meta2.TimeReserveHigh32(sgEndTime), fieldToCreatePool)
+		} else {
+			endTime := meta2.TimeReserveHigh32(sgEndTime)
+			if schemaVal.EndTime < endTime {
+				fieldToCreatePool = appendField(fieldToCreatePool, tag.Key, influx.Field_Type_Tag)
+				setLastFieldEndTime(endTime, fieldToCreatePool)
+			}
+			if mst.EngineType == config.COLUMNSTORE {
+				if schemaVal.Typ != influx.Field_Type_Tag {
+					return fieldToCreatePool, true, errno.NewError(errno.WritePointHasInvalidTag, tag.Key)
+				}
+				m := wh.mstPrimaryKeyRowMap[r.Name]
+				if _, exist := m[tag.Key]; exist {
+					(*pkCount)++
+				}
+			}
+		}
+	}
+	return fieldToCreatePool, false, nil
+}
+
+func (wh *writeHelper) updateCleanSchemaFieldsCheck(r *influx.Row, dropFieldIndex *[]int, pkCount *int, originName string,
+	sgEndTime int64, fieldToCreatePool []*proto2.FieldSchema, cleanSchema *meta2.CleanSchema, mst *meta2.MeasurementInfo,
+	err *error) ([]*proto2.FieldSchema, bool, error) {
+	for i, field := range r.Fields {
+		schemaVal, ok := (*cleanSchema)[field.Key]
+		if ok {
+			if int32(schemaVal.Typ) != field.Type {
+				failpoint.Inject("skip-field-type-conflict", func(val failpoint.Value) {
+					if strings2.EqualInterface(val, field.Key) {
+						failpoint.Continue()
+					}
+				})
+				if mst.EngineType == config.COLUMNSTORE && schemaVal.Typ == influx.Field_Type_Tag {
+					return fieldToCreatePool, true, errno.NewError(errno.WritePointHasInvalidField, field.Key)
+				}
+				*err = errno.NewError(errno.FieldTypeConflict, field.Key, originName, influx.FieldTypeString(field.Type),
+					influx.FieldTypeString(int32(schemaVal.Typ))).SetModule(errno.ModuleWrite)
+				*dropFieldIndex = append(*dropFieldIndex, i)
+			}
+			if mst.EngineType == config.COLUMNSTORE {
+				m := wh.mstPrimaryKeyRowMap[r.Name]
+				if _, exist := m[field.Key]; exist {
+					(*pkCount)++
+				}
+			}
+			endTime := meta2.TimeReserveHigh32(sgEndTime)
+			if schemaVal.EndTime < endTime {
+				fieldToCreatePool = appendField(fieldToCreatePool, field.Key, field.Type)
+				setLastFieldEndTime(endTime, fieldToCreatePool)
+			}
+			continue
+		}
+		fieldToCreatePool = appendField(fieldToCreatePool, field.Key, field.Type)
+		setLastFieldEndTime(meta2.TimeReserveHigh32(sgEndTime), fieldToCreatePool)
+	}
+	return fieldToCreatePool, false, nil
+}
+
+// only use for SchemaCleanEn = true
+func (wh *writeHelper) updateCleanSchemaCheck(database, rp string, r *influx.Row, mst *meta2.MeasurementInfo,
+	originName string, fieldToCreatePool []*proto2.FieldSchema, sgEndTime int64) ([]*proto2.FieldSchema, bool, error) {
+	schemaMap := mst.Schema
+	var dropTagIndex []int
+	var err error
+	var subErr error
+	var pkCount int
+	var flag bool
+	fieldToCreatePool, flag, subErr = wh.updateCleanSchemaTagsCheck(r, &dropTagIndex, &pkCount, originName, sgEndTime, fieldToCreatePool, schemaMap, mst, &err)
+	if flag {
+		return fieldToCreatePool, flag, subErr
+	}
+
+	if len(dropTagIndex) > 0 {
+		dropTagByIndex(r, dropTagIndex)
+	}
+
+	if tl := GetTagLimit(); tl > 0 && len(fieldToCreatePool) > 0 && mst.TagKeysTotal() > tl {
+		return fieldToCreatePool, true, errno.NewError(errno.TooManyTagKeys)
+	}
+
+	// check field type is conflict or not
+	var dropFieldIndex []int
+	fieldToCreatePool, flag, subErr = wh.updateCleanSchemaFieldsCheck(r, &dropFieldIndex, &pkCount, originName, sgEndTime, fieldToCreatePool, schemaMap, mst, &err)
+	if flag {
+		return fieldToCreatePool, flag, subErr
+	}
+
+	if mst.EngineType == config.COLUMNSTORE && pkCount != wh.pkLength {
+		return fieldToCreatePool, true, errno.NewError(errno.WritePointPrimaryKeyErr, originName, len(mst.ColStoreInfo.PrimaryKey), pkCount)
+	}
+
+	if len(dropFieldIndex) > 0 {
+		dropFieldByIndex(r, dropFieldIndex)
+		if len(r.Fields) == 0 {
+			return fieldToCreatePool, true, err
+		}
+	}
+	return fieldToCreatePool, false, err
+}
+
 func (wh *writeHelper) updateSchemaCheck(database, rp string, r *influx.Row, mst *meta2.MeasurementInfo,
 	originName string, fieldToCreatePool []*proto2.FieldSchema) ([]*proto2.FieldSchema, bool, error) {
 	schemaMap := mst.Schema
@@ -104,12 +221,13 @@ func (wh *writeHelper) updateSchemaCheck(database, rp string, r *influx.Row, mst
 			return fieldToCreatePool, true, err
 		}
 
-		if _, ok := schemaMap[tag.Key]; !ok {
+		if _, ok := schemaMap.GetTyp(tag.Key); !ok {
 			fieldToCreatePool = appendField(fieldToCreatePool, tag.Key, influx.Field_Type_Tag)
 			continue
 		}
 		if mst.EngineType == config.COLUMNSTORE {
-			if schemaMap[tag.Key] != influx.Field_Type_Tag {
+			v, _ := schemaMap.GetTyp(tag.Key)
+			if v != influx.Field_Type_Tag {
 				return fieldToCreatePool, true, errno.NewError(errno.WritePointHasInvalidTag, tag.Key)
 			}
 			m := wh.mstPrimaryKeyRowMap[r.Name]
@@ -130,7 +248,7 @@ func (wh *writeHelper) updateSchemaCheck(database, rp string, r *influx.Row, mst
 	// check field type is conflict or not
 	var dropFieldIndex []int
 	for i, field := range r.Fields {
-		fieldType, ok := schemaMap[field.Key]
+		fieldType, ok := schemaMap.GetTyp(field.Key)
 		if ok {
 			if fieldType != field.Type {
 				failpoint.Inject("skip-field-type-conflict", func(val failpoint.Value) {
@@ -169,20 +287,34 @@ func (wh *writeHelper) updateSchemaCheck(database, rp string, r *influx.Row, mst
 	return fieldToCreatePool, false, err
 }
 
+func (wh *writeHelper) updateSchemaCheckBase(database, rp string, r *influx.Row, mst *meta2.MeasurementInfo,
+	originName string, fieldToCreatePool []*proto2.FieldSchema) ([]*proto2.FieldSchema, bool, error) {
+	if meta2.SchemaCleanEn {
+		// GetSgEndTime will Rlock metadata. Pay attention when the schemalock is Rlocked to avoid deadlock.
+		sgEndTime, err := wh.GetSgEndTime(database, rp, r.Timestamp, mst.EngineType)
+		if err != nil {
+			return fieldToCreatePool, true, err
+		}
+		mst.SchemaLock.RLock()
+		defer mst.SchemaLock.RUnlock()
+		return wh.updateCleanSchemaCheck(database, rp, r, mst, originName, fieldToCreatePool, sgEndTime)
+	}
+	mst.SchemaLock.RLock()
+	defer mst.SchemaLock.RUnlock()
+	return wh.updateSchemaCheck(database, rp, r, mst, originName, fieldToCreatePool)
+}
+
 func (wh *writeHelper) updateSchemaIfNeeded(database, rp string, r *influx.Row, mst *meta2.MeasurementInfo,
 	originName string, fieldToCreatePool []*proto2.FieldSchema) ([]*proto2.FieldSchema, bool, error) {
 	// update schema if needed
 	var err error
 	var isDropRow bool
-
-	mst.SchemaLock.RLock()
-	if fieldToCreatePool, isDropRow, err = wh.updateSchemaCheck(database, rp, r, mst, originName, fieldToCreatePool); err != nil {
+	if fieldToCreatePool, isDropRow, err = wh.updateSchemaCheckBase(database, rp, r, mst, originName, fieldToCreatePool); err != nil {
 		if isDropRow {
-			mst.SchemaLock.RUnlock()
 			return fieldToCreatePool, isDropRow, err
 		}
 	}
-	mst.SchemaLock.RUnlock()
+
 	if len(fieldToCreatePool) > 0 {
 		start := time.Now()
 		if errInner := wh.pw.MetaClient.UpdateSchema(database, rp, originName, fieldToCreatePool); errInner != nil {
@@ -239,6 +371,10 @@ func appendField(fields []*proto2.FieldSchema, name string, typ int32) []*proto2
 	fields[len(fields)-1].FieldName = proto.String(name)
 	fields[len(fields)-1].FieldType = proto.Int32(typ)
 	return fields
+}
+
+func setLastFieldEndTime(ts int32, fields []*proto2.FieldSchema) {
+	fields[len(fields)-1].EndTime = proto.Int32(ts)
 }
 
 type recordWriterHelper struct {
@@ -324,7 +460,7 @@ func (wh *recordWriterHelper) checkAndUpdateRecordSchema(db, rp, mst, originName
 	}
 
 	// check the mst info and schema
-	if wh.preMst == nil || wh.preMst.Name != mst || len(wh.preMst.Schema) == 0 {
+	if wh.preMst == nil || wh.preMst.Name != mst {
 		err = errno.NewError(errno.ColumnStoreSchemaNullErr, db, rp, mst)
 		return
 	}
@@ -357,14 +493,7 @@ func (wh *recordWriterHelper) checkAndUpdateRecordSchema(db, rp, mst, originName
 	}
 	wh.preMst.SchemaLock.RLock()
 	for i := 0; i < colNum; i++ {
-		// key field name protection
-		if rec.Schema.Field(i).Name == record.SeqIDField {
-			wh.preMst.SchemaLock.RUnlock()
-			err = errno.NewError(errno.KeyWordConflictErr, mst, rec.Schema.Field(i).Name)
-			return
-		}
-
-		_, ok := wh.preMst.Schema[rec.Schema.Field(i).Name]
+		_, ok := wh.preMst.Schema.GetTyp(rec.Schema.Field(i).Name)
 		if !ok {
 			wh.fieldToCreatePool = appendField(wh.fieldToCreatePool, rec.Schema.Field(i).Name, int32(rec.Schema.Field(i).Type))
 		}
@@ -398,7 +527,7 @@ func (wh *recordWriterHelper) checkAndUpdateSchema(db, rp, mst, originName strin
 	}
 
 	// check the mst info and schema
-	if wh.preMst == nil || wh.preMst.Name != mst || len(wh.preMst.Schema) == 0 {
+	if wh.preMst == nil || wh.preMst.Name != mst || wh.preMst.Schema.Len() == 0 {
 		err = errno.NewError(errno.ColumnStoreSchemaNullErr, db, rp, mst)
 		return
 	}
@@ -431,7 +560,7 @@ func (wh *recordWriterHelper) checkAndUpdateSchema(db, rp, mst, originName strin
 	}
 	wh.preMst.SchemaLock.Lock()
 	for i := 0; i < colNum; i++ {
-		colType, ok := wh.preMst.Schema[rec.ColumnName(i)]
+		colType, ok := wh.preMst.Schema.GetTyp(rec.ColumnName(i))
 		fieldType := record.ArrowTypeToNativeType(rec.Column(i).DataType())
 		if !ok {
 			if rec.Schema().HasMetadata() {
@@ -575,7 +704,7 @@ func createMeasurement(database, retentionPolicy, name string, client ComMetaCli
 func createShardGroup(database, retentionPolicy string, client ComMetaClient, preSg **meta2.ShardGroupInfo, ts time.Time,
 	version uint32, engineType config.EngineType) (*meta2.ShardGroupInfo, bool, error) {
 	// fast path, time is contained
-	if *preSg != nil && (*preSg).Contains(ts) {
+	if *preSg != nil && (*preSg).Contains(ts) && (*preSg).EngineType == engineType {
 		return *preSg, true, nil
 	}
 

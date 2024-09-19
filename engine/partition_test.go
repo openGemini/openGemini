@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package engine
 
@@ -26,6 +24,7 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/index"
+	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/stretchr/testify/require"
 )
@@ -104,6 +103,7 @@ func TestOpenShard(t *testing.T) {
 		SequenceId(&ltime).
 		Lock(&lockPath)
 	dbPTInfo.indexBuilder[100] = tsi.NewIndexBuilder(opts)
+	dbPTInfo.indexBuilder[100].Relations = make([]*tsi.IndexRelation, 0)
 	mst0 := &meta.MeasurementInfo{
 		Name: "mst0_0000",
 	}
@@ -125,4 +125,27 @@ func TestOpenShard(t *testing.T) {
 	sh, err = dbPTInfo.loadProcess(0, nil, dir+"10_1635724800000000000_1636329600000000000_100",
 		"1", 100, 10, durationInfos, &meta.TimeRangeInfo{StartTime: time.Now(), EndTime: time.Now().Add(1 * time.Hour)}, client)
 	require.NoError(t, err)
+	config.SetProductType(config.LogKeeperService)
+	defer config.SetProductType("")
+	sh, err = dbPTInfo.loadProcess(0, nil, dir+"10_1635724800000000000_1636329600000000000_100",
+		"1", 100, 10, durationInfos, &meta.TimeRangeInfo{StartTime: time.Now(), EndTime: time.Now().Add(1 * time.Hour)}, client)
+	require.NoError(t, err)
+}
+
+func TestPutTailBuf(t *testing.T) {
+	cacheData := &meta.Data{
+		Databases: map[string]*meta.DatabaseInfo{
+			"db0": {
+				Name: "db0",
+			},
+		},
+		ReplicaGroups: map[string][]meta.ReplicaGroup{},
+	}
+	c := &metaclient.Client{}
+	c.SetCacheData(cacheData)
+	tail := []byte{'a', 'b', 'c'}
+	putTailBuf(0, c, tail, "db0")
+	cacheData.ReplicaGroups["db0"] = []meta.ReplicaGroup{{MasterPtID: 0}}
+	putTailBuf(1, c, tail, "db0")
+	putTailBuf(0, c, tail, "db0")
 }

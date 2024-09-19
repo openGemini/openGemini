@@ -1,18 +1,16 @@
-/*
-Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package immutable
 
@@ -25,7 +23,10 @@ import (
 
 	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fragment"
+	Logger "github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/openGemini/openGemini/lib/record"
@@ -171,15 +172,20 @@ func TestShowTagValuesPlan_Execute(t *testing.T) {
 			return []TSSPFile{MocTsspFile{}}, []TSSPFile{MocTsspFile{}}, false
 		},
 	}
+	openShardFailErr := errors.New("openShardFailErr")
+	var IteratorRunFlag bool
 
 	for _, testcase := range []struct {
 		Name    string
+		Dst     map[string]TagSets
 		Itr     SequenceIterator
 		Handler SequenceIteratorHandler
+		Sh      EngineShard
 		Err     error
 	}{
 		{
 			Name: "normal",
+			Dst:  map[string]TagSets{},
 			Itr: &MockSequenceIterator{
 				RunFn:      func() error { return nil },
 				AddFilesFn: func(files []TSSPFile) {},
@@ -188,10 +194,12 @@ func TestShowTagValuesPlan_Execute(t *testing.T) {
 			Handler: &MockSequenceIteratorHandler{
 				InitFn: func(m map[string]interface{}) error { return nil },
 			},
+			Sh:  &MockEngineShard{IsOpenedFn: func() bool { return true }},
 			Err: nil,
 		},
 		{
-			Name: "io.EOF break",
+			Name: "reach limit all 1",
+			Dst:  map[string]TagSets{},
 			Itr: &MockSequenceIterator{
 				RunFn:      func() error { return io.EOF },
 				AddFilesFn: func(files []TSSPFile) {},
@@ -200,30 +208,156 @@ func TestShowTagValuesPlan_Execute(t *testing.T) {
 			Handler: &MockSequenceIteratorHandler{
 				InitFn: func(m map[string]interface{}) error { return nil },
 			},
+			Sh:  &MockEngineShard{IsOpenedFn: func() bool { return true }},
 			Err: io.EOF,
+		},
+		{
+			Name: "reach limit all 2",
+			Dst: map[string]TagSets{
+				"mst1": {totalCount: 3},
+			},
+			Itr: &MockSequenceIterator{
+				RunFn:      func() error { return io.EOF },
+				AddFilesFn: func(files []TSSPFile) {},
+				ReleaseFn:  func() {},
+			},
+			Handler: &MockSequenceIteratorHandler{
+				InitFn: func(m map[string]interface{}) error { return nil },
+			},
+			Sh:  &MockEngineShard{IsOpenedFn: func() bool { return true }},
+			Err: io.EOF,
+		},
+		{
+			Name: "reach limit part 1",
+			Dst:  map[string]TagSets{},
+			Itr: &MockSequenceIterator{
+				RunFn: func() error {
+					if IteratorRunFlag {
+						return nil
+					} else {
+						IteratorRunFlag = true
+						return io.EOF
+					}
+				},
+				AddFilesFn: func(files []TSSPFile) {},
+				ReleaseFn:  func() {},
+			},
+			Handler: &MockSequenceIteratorHandler{
+				InitFn: func(m map[string]interface{}) error { return nil },
+			},
+			Sh:  &MockEngineShard{IsOpenedFn: func() bool { return true }},
+			Err: nil,
+		},
+		{
+			Name: "reach limit part 2",
+			Dst: map[string]TagSets{
+				"mst1": {totalCount: 3},
+			},
+			Itr: &MockSequenceIterator{
+				RunFn: func() error {
+					if IteratorRunFlag {
+						return nil
+					} else {
+						IteratorRunFlag = true
+						return io.EOF
+					}
+				},
+				AddFilesFn: func(files []TSSPFile) {},
+				ReleaseFn:  func() {},
+			},
+			Handler: &MockSequenceIteratorHandler{
+				InitFn: func(m map[string]interface{}) error { return nil },
+			},
+			Sh:  &MockEngineShard{IsOpenedFn: func() bool { return true }},
+			Err: nil,
+		},
+		{
+			Name: "normal and open shard",
+			Dst:  map[string]TagSets{},
+			Itr: &MockSequenceIterator{
+				RunFn:      func() error { return nil },
+				AddFilesFn: func(files []TSSPFile) {},
+				ReleaseFn:  func() {},
+			},
+			Handler: &MockSequenceIteratorHandler{
+				InitFn: func(m map[string]interface{}) error { return nil },
+			},
+			Sh: &MockEngineShard{
+				IsOpenedFn:      func() bool { return false },
+				OpenAndEnableFn: func(client metaclient.MetaClient) error { return nil },
+				GetDataPathFn:   func() string { return "" },
+				GetIdentFn:      func() *meta.ShardIdentifier { return &meta.ShardIdentifier{} },
+			},
+			Err: nil,
+		},
+		{
+			Name: "normal and open shard failed",
+			Dst:  map[string]TagSets{},
+			Itr: &MockSequenceIterator{
+				RunFn:      func() error { return nil },
+				AddFilesFn: func(files []TSSPFile) {},
+				ReleaseFn:  func() {},
+			},
+			Handler: &MockSequenceIteratorHandler{
+				InitFn: func(m map[string]interface{}) error { return nil },
+			},
+			Sh: &MockEngineShard{
+				IsOpenedFn:      func() bool { return false },
+				OpenAndEnableFn: func(client metaclient.MetaClient) error { return openShardFailErr },
+				GetDataPathFn:   func() string { return "" },
+				GetIdentFn:      func() *meta.ShardIdentifier { return &meta.ShardIdentifier{} },
+			},
+			Err: openShardFailErr,
 		},
 	} {
 		t.Run(testcase.Name, func(t *testing.T) {
 			plan := &showTagValuesPlan{
-				table: mockStore,
-				idx:   idx,
+				table:  mockStore,
+				idx:    idx,
+				shard:  testcase.Sh,
+				logger: Logger.NewLogger(errno.ModuleUnknown),
 			}
 			plan.handler = testcase.Handler
 			plan.itr = testcase.Itr
 
 			dst := make(map[string]*TagSets)
+
 			tagKeys := map[string][][]byte{
 				"mst1": [][]byte{[]byte("tagKey")},
 				"mst2": [][]byte{[]byte("tagKey")},
+				"mst3": [][]byte{[]byte("tagKey")},
 			}
 			timeRange := util.TimeRange{Min: 100, Max: 200}
-			err := plan.Execute(dst, tagKeys, &influxql.VarRef{}, timeRange, 100)
+			err := plan.Execute(dst, tagKeys, &influxql.VarRef{}, timeRange, 3)
 			if !errors.Is(err, testcase.Err) {
 				t.Fatalf("ShowTagValuesPlan Execute failed, error: %v, want: %v", err, testcase.Err)
 			}
 		})
 	}
 
+}
+
+type MockEngineShard struct {
+	IsOpenedFn      func() bool
+	OpenAndEnableFn func(client metaclient.MetaClient) error
+	GetDataPathFn   func() string
+	GetIdentFn      func() *meta.ShardIdentifier
+}
+
+func (s *MockEngineShard) IsOpened() bool {
+	return s.IsOpenedFn()
+}
+
+func (s *MockEngineShard) OpenAndEnable(client metaclient.MetaClient) error {
+	return s.OpenAndEnableFn(client)
+}
+
+func (s *MockEngineShard) GetDataPath() string {
+	return s.GetDataPathFn()
+}
+
+func (s *MockEngineShard) GetIdent() *meta.ShardIdentifier {
+	return s.GetIdentFn()
 }
 
 type MockIndexMergeSet struct {
@@ -280,6 +414,7 @@ type MockTableStore struct {
 	SequencerFn              func() *Sequencer
 	GetTSSPFilesFn           func(mm string, isOrder bool) (*TSSPFiles, bool)
 	GetCSFilesFn             func(mm string) (*TSSPFiles, bool)
+	CopyCSFilesFn            func(mm string) []TSSPFile
 	TierFn                   func() uint64
 	SetTierFn                func(tier uint64)
 	FileFn                   func(name string, namePath string, isOrder bool) TSSPFile
@@ -315,6 +450,7 @@ type MockTableStore struct {
 	SetObsOptionFn           func(option *obs.ObsOptions)
 	GetObsOptionFn           func() *obs.ObsOptions
 	GetShardIDFn             func() uint64
+	SetIndexMergeSetFn       func(idx IndexMergeSet)
 }
 
 func (s *MockTableStore) SetOpId(shardId uint64, opId uint64) {
@@ -364,6 +500,9 @@ func (s *MockTableStore) GetTSSPFiles(mm string, isOrder bool) (*TSSPFiles, bool
 }
 func (s *MockTableStore) GetCSFiles(mm string) (*TSSPFiles, bool) {
 	return s.GetCSFilesFn(mm)
+}
+func (s *MockTableStore) CopyCSFiles(mm string) []TSSPFile {
+	return s.CopyCSFilesFn(mm)
 }
 func (s *MockTableStore) Tier() uint64 {
 	return s.TierFn()
@@ -470,4 +609,8 @@ func (s *MockTableStore) GetObsOption() *obs.ObsOptions {
 }
 func (s *MockTableStore) GetShardID() uint64 {
 	return s.GetShardIDFn()
+}
+
+func (s *MockTableStore) SetIndexMergeSet(idx IndexMergeSet) {
+	s.SetIndexMergeSetFn(idx)
 }

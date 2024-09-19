@@ -1,23 +1,22 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package engine
 
 import (
 	"fmt"
+	"math"
 	"sync"
 
 	"github.com/openGemini/openGemini/engine/comm"
@@ -30,20 +29,23 @@ import (
 )
 
 type groupCursor struct {
-	preAgg        bool
-	lazyInit      bool
-	pos           int
-	id            int
-	ctx           *idKeyCursorContext
-	span          *tracing.Span
-	querySchema   *executor.QuerySchema
-	recordPool    *record.CircularRecordPool
-	name          string
-	closeOnce     sync.Once
-	tagSetCursors comm.KeyCursors
-	seriesTagFunc func(sinfo comm.SeriesInfoIntf, pt *influx.PointTags, tmpSeriesKey []byte) ([]byte, error)
-	limitBound    int64
-	rowCount      int64
+	init             bool
+	isPromNoAggQuery bool
+	preAgg           bool
+	lazyInit         bool
+	pos              int
+	id               int
+	sid              uint64
+	ctx              *idKeyCursorContext
+	span             *tracing.Span
+	querySchema      *executor.QuerySchema
+	recordPool       *record.CircularRecordPool
+	name             string
+	closeOnce        sync.Once
+	tagSetCursors    comm.KeyCursors
+	seriesTagFunc    func(sinfo comm.SeriesInfoIntf, pt *influx.PointTags, tmpSeriesKey []byte) ([]byte, error)
+	limitBound       int64
+	rowCount         int64
 }
 
 func (c *groupCursor) SetOps(ops []*comm.CallOption) {
@@ -58,6 +60,11 @@ func (c *groupCursor) SinkPlan(plan hybridqp.QueryNode) {
 }
 
 func (c *groupCursor) Next() (*record.Record, comm.SeriesInfoIntf, error) {
+	if !c.init {
+		c.isPromNoAggQuery = c.querySchema.Options().IsPromQuery() && c.querySchema.Options().IsPromGroupAll() && !c.querySchema.HasCall()
+		c.sid = math.MaxUint64
+		c.init = true
+	}
 	if c.preAgg || hasMultipleColumnsWithFirst(c.querySchema) {
 		return c.next()
 	}
@@ -111,6 +118,10 @@ func (c *groupCursor) nextWithReuse() (*record.Record, comm.SeriesInfoIntf, erro
 			}
 			sameTag = false
 			continue
+		}
+		if c.isPromNoAggQuery && c.sid != info.GetSid() {
+			c.sid = info.GetSid()
+			sameTag = false
 		}
 		c.rowCount += int64(rec.RowNums())
 		if !sameTag {
@@ -190,7 +201,10 @@ func (c *groupCursor) Close() error {
 		c.recordPool.Put()
 		c.recordPool = nil
 	}
-
+	if c.ctx != nil && c.ctx.metaContext != nil {
+		c.ctx.metaContext.Release()
+		c.ctx.metaContext = nil
+	}
 	return err
 }
 
@@ -209,7 +223,12 @@ func (c *groupCursor) StartSpan(span *tracing.Span) {
 		c.span.CreateCounter(unorderDuration, "ns")
 		enableFileCursor := executor.GetEnableFileCursor() && c.querySchema.HasOptimizeAgg()
 		if enableFileCursor {
-			c.span.CreateCounter(fileCursorDurationSpan, "ns")
+			if c.querySchema.Options().IsPromQuery() {
+				c.span.CreateCounter(seriesCursorReadDuration, "ns")
+				c.span.CreateCounter(seriesCursorInitDuration, "ns")
+			} else {
+				c.span.CreateCounter(fileCursorDurationSpan, "ns")
+			}
 		} else {
 			c.span.CreateCounter(tsmIterCount, "")
 			c.span.CreateCounter(tsmIterDuration, "ns")

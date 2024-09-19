@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package coordinator
 
@@ -66,6 +64,7 @@ type MockMetaClient struct {
 	GetShardInfoByTimeFn func(database, retentionPolicy string, t time.Time, ptIdx int, nodeId uint64, engineType config.EngineType) (*meta2.ShardInfo, error)
 	DBRepGroupsFn        func(database string) []meta2.ReplicaGroup
 	GetReplicaNFn        func(database string) (int, error)
+	GetSgEndTimeFn       func(database string, rp string, timestamp time.Time, engineType config.EngineType) (int64, error)
 }
 
 func (mmc *MockMetaClient) Database(name string) (di *meta2.DatabaseInfo, err error) {
@@ -168,6 +167,10 @@ func (mmc *MockMetaClient) GetDstStreamInfos(db, rp string, dstSis *[]*meta2.Str
 	}
 	*dstSis = (*dstSis)[:i]
 	return len(*dstSis) > 0
+}
+
+func (mmc *MockMetaClient) GetSgEndTime(database string, rp string, timestamp time.Time, engineType config.EngineType) (int64, error) {
+	return mmc.GetSgEndTimeFn(database, rp, timestamp, engineType)
 }
 
 func (mmc *MockMetaClient) GetStreamInfos() map[string]*meta2.StreamInfo {
@@ -352,19 +355,19 @@ func NewMeasurement(mst string, engineType config.EngineType) *meta2.Measurement
 	}
 
 	if mst == "rtt" {
-		msti.Schema = map[string]int32{
-			"int":     influx.Field_Type_Int,
-			"float":   influx.Field_Type_Float,
-			"boolean": influx.Field_Type_Boolean,
-			"string":  influx.Field_Type_String,
+		msti.Schema = &meta2.CleanSchema{
+			"int":     meta2.SchemaVal{Typ: influx.Field_Type_Int},
+			"float":   meta2.SchemaVal{Typ: influx.Field_Type_Float},
+			"boolean": meta2.SchemaVal{Typ: influx.Field_Type_Boolean},
+			"string":  meta2.SchemaVal{Typ: influx.Field_Type_String},
 		}
 		msti.ColStoreInfo = &meta2.ColStoreInfo{PrimaryKey: []string{"time"}}
 	} else {
-		msti.Schema = map[string]int32{
-			"fk1": influx.Field_Type_Float,
-			"fk2": influx.Field_Type_Int,
-			"tk1": influx.Field_Type_Tag,
-			"tk2": influx.Field_Type_Tag,
+		msti.Schema = &meta2.CleanSchema{
+			"fk1": meta2.SchemaVal{Typ: influx.Field_Type_Float},
+			"fk2": meta2.SchemaVal{Typ: influx.Field_Type_Int},
+			"tk1": meta2.SchemaVal{Typ: influx.Field_Type_Tag},
+			"tk2": meta2.SchemaVal{Typ: influx.Field_Type_Tag},
 		}
 	}
 
@@ -430,9 +433,9 @@ func TestPointsWriter_WritePointRowsWithShardLists1(t *testing.T) {
 func TestPointsWriter_updateSchemaIfNeeded(t *testing.T) {
 	mstName := "mst_0000"
 	mi := meta2.NewMeasurementInfo(mstName, influx.GetOriginMstName(mstName), config.TSSTORE, 0)
-	mi.Schema = map[string]int32{
-		"value1": influx.Field_Type_Float,
-		"value2": influx.Field_Type_String,
+	mi.Schema = &meta2.CleanSchema{
+		"value1": meta2.SchemaVal{Typ: influx.Field_Type_Float},
+		"value2": meta2.SchemaVal{Typ: influx.Field_Type_String},
 	}
 
 	fs := make([]*proto2.FieldSchema, 0, 8)
@@ -444,7 +447,7 @@ func TestPointsWriter_updateSchemaIfNeeded(t *testing.T) {
 		}
 
 		for _, item := range fieldToCreate {
-			mi.Schema[item.GetFieldName()] = item.GetFieldType()
+			mi.Schema.SetTyp(item.GetFieldName(), item.GetFieldType())
 		}
 		return nil
 	}
@@ -494,9 +497,9 @@ func TestPointsWriter_updateSchemaIfNeeded(t *testing.T) {
 func TestPointsWriter_updateSchemaIfNeededError(t *testing.T) {
 	mstName := "mst_0000"
 	mi := meta2.NewMeasurementInfo(mstName, influx.GetOriginMstName(mstName), config.COLUMNSTORE, 0)
-	mi.Schema = map[string]int32{
-		"value1": influx.Field_Type_Float,
-		"value2": influx.Field_Type_Int,
+	mi.Schema = &meta2.CleanSchema{
+		"value1": meta2.SchemaVal{Typ: influx.Field_Type_Float},
+		"value2": meta2.SchemaVal{Typ: influx.Field_Type_Int},
 	}
 	mi.ColStoreInfo = &meta2.ColStoreInfo{}
 
@@ -509,7 +512,7 @@ func TestPointsWriter_updateSchemaIfNeededError(t *testing.T) {
 		}
 
 		for _, item := range fieldToCreate {
-			mi.Schema[item.GetFieldName()] = item.GetFieldType()
+			mi.Schema.SetTyp(item.GetFieldName(), item.GetFieldType())
 		}
 		return nil
 	}
@@ -554,10 +557,10 @@ func TestPointsWriter_updateSchemaIfNeededError(t *testing.T) {
 func TestPointsWriter_updateSchemaIfNeededErrorV2(t *testing.T) {
 	mstName := "mst_0000"
 	mi := meta2.NewMeasurementInfo(mstName, influx.GetOriginMstName(mstName), config.COLUMNSTORE, 0)
-	mi.Schema = map[string]int32{
-		"tk1":    influx.Field_Type_Tag,
-		"value1": influx.Field_Type_Float,
-		"value2": influx.Field_Type_Int,
+	mi.Schema = &meta2.CleanSchema{
+		"tk1":    meta2.SchemaVal{Typ: influx.Field_Type_Tag},
+		"value1": meta2.SchemaVal{Typ: influx.Field_Type_Float},
+		"value2": meta2.SchemaVal{Typ: influx.Field_Type_Int},
 	}
 
 	fs := make([]*proto2.FieldSchema, 0, 8)
@@ -569,7 +572,7 @@ func TestPointsWriter_updateSchemaIfNeededErrorV2(t *testing.T) {
 		}
 
 		for _, item := range fieldToCreate {
-			mi.Schema[item.GetFieldName()] = item.GetFieldType()
+			mi.Schema.SetTyp(item.GetFieldName(), item.GetFieldType())
 		}
 		return nil
 	}
@@ -604,6 +607,393 @@ func TestPointsWriter_updateSchemaIfNeededErrorV2(t *testing.T) {
 	buf.WriteString(`mst,tk1="value1",value1=1.1 value2=2`)
 	buf.WriteByte('\n')
 	buf.WriteString(`mst tk1=1,value2=22,value3=99`)
+	buf.WriteByte('\n')
+	unmarshal(buf.Bytes(), callback)
+}
+
+// new Tag and Field
+func TestPointsWriter_updateCleanSchemaIfNeeded1(t *testing.T) {
+	meta2.InitSchemaCleanEn(true)
+	defer meta2.InitSchemaCleanEn(false)
+	mstName := "mst_0000"
+	mi := meta2.NewMeasurementInfo(mstName, influx.GetOriginMstName(mstName), config.TSSTORE, 0)
+	mi.Schema = &meta2.CleanSchema{}
+
+	fs := make([]*proto2.FieldSchema, 0, 8)
+
+	mc := NewMockMetaClient()
+	mc.UpdateSchemaFn = func(database string, retentionPolicy string, mst string, fieldToCreate []*proto2.FieldSchema) error {
+		for _, item := range fieldToCreate {
+			mi.Schema.SetTyp(item.GetFieldName(), item.GetFieldType())
+		}
+		return nil
+	}
+	mc.GetSgEndTimeFn = func(database string, rp string, timestamp time.Time, engineType config.EngineType) (int64, error) {
+		return 0, nil
+	}
+
+	pw := NewPointsWriter(time.Second)
+	pw.MetaClient = mc
+	pw.TSDBStore = NewMockNetStore()
+	wh := newWriteHelper(pw)
+
+	var callback = func(db string, rows []influx.Row, err error) {
+		if !assert.NoError(t, err) {
+			return
+		}
+
+		for _, r := range rows {
+			_, _, err := wh.updateSchemaIfNeeded("db0", "rp0", &r, mi, mi.OriginName(), fs)
+			assert.NoError(t, err)
+			_, ok := mi.Schema.GetTyp("tk1")
+			assert.Equal(t, ok, true)
+			_, ok = mi.Schema.GetTyp("f1")
+			assert.Equal(t, ok, true)
+		}
+	}
+
+	buf := bytes.NewBuffer(nil)
+	buf.WriteString(`mst,tk1="tv1" f1=1.1 1`)
+	buf.WriteByte('\n')
+	unmarshal(buf.Bytes(), callback)
+}
+
+// new EndTime Tag and Field
+func TestPointsWriter_updateCleanSchemaIfNeeded2(t *testing.T) {
+	meta2.InitSchemaCleanEn(true)
+	defer meta2.InitSchemaCleanEn(false)
+	mstName := "mst_0000"
+	mi := meta2.NewMeasurementInfo(mstName, influx.GetOriginMstName(mstName), config.TSSTORE, 0)
+	mi.Schema = &meta2.CleanSchema{
+		"tk1": meta2.SchemaVal{Typ: influx.Field_Type_Tag},
+		"f1":  meta2.SchemaVal{Typ: influx.Field_Type_Float},
+	}
+	cs := mi.Schema
+
+	fs := make([]*proto2.FieldSchema, 0, 8)
+
+	mc := NewMockMetaClient()
+	mc.UpdateSchemaFn = func(database string, retentionPolicy string, mst string, fieldToCreate []*proto2.FieldSchema) error {
+		for _, item := range fieldToCreate {
+			(*cs)[item.GetFieldName()] = meta2.SchemaVal{Typ: int8(item.GetFieldType()), EndTime: item.GetEndTime()}
+		}
+		return nil
+	}
+	mc.GetSgEndTimeFn = func(database string, rp string, timestamp time.Time, engineType config.EngineType) (int64, error) {
+		return 1 << 32, nil
+	}
+
+	pw := NewPointsWriter(time.Second)
+	pw.MetaClient = mc
+	pw.TSDBStore = NewMockNetStore()
+	wh := newWriteHelper(pw)
+
+	var callback = func(db string, rows []influx.Row, err error) {
+		if !assert.NoError(t, err) {
+			return
+		}
+
+		for _, r := range rows {
+			_, _, err := wh.updateSchemaIfNeeded("db0", "rp0", &r, mi, mi.OriginName(), fs)
+			assert.NoError(t, err)
+			v, _ := (*cs)["tk1"]
+			assert.Equal(t, v.EndTime, int32(1))
+			v, _ = (*cs)["f1"]
+			assert.Equal(t, v.EndTime, int32(1))
+		}
+	}
+
+	buf := bytes.NewBuffer(nil)
+	buf.WriteString(`mst,tk1="tv1" f1=1.1 1`)
+	buf.WriteByte('\n')
+	unmarshal(buf.Bytes(), callback)
+}
+
+// tagkey errors: nameTime/duplicate tagkey
+func TestPointsWriter_updateCleanSchemaIfNeeded3(t *testing.T) {
+	meta2.InitSchemaCleanEn(true)
+	defer meta2.InitSchemaCleanEn(false)
+	mstName := "mst_0000"
+	mi := meta2.NewMeasurementInfo(mstName, influx.GetOriginMstName(mstName), config.TSSTORE, 0)
+	mi.Schema = &meta2.CleanSchema{}
+	cs := mi.Schema
+
+	fs := make([]*proto2.FieldSchema, 0, 8)
+
+	mc := NewMockMetaClient()
+	mc.UpdateSchemaFn = func(database string, retentionPolicy string, mst string, fieldToCreate []*proto2.FieldSchema) error {
+		for _, item := range fieldToCreate {
+			(*cs)[item.GetFieldName()] = meta2.SchemaVal{Typ: int8(item.GetFieldType()), EndTime: item.GetEndTime()}
+		}
+		return nil
+	}
+	mc.GetSgEndTimeFn = func(database string, rp string, timestamp time.Time, engineType config.EngineType) (int64, error) {
+		return 1 << 32, nil
+	}
+	var errors = []string{
+		"tag key can't be time, measurement is 'mst'",
+		"duplicate tag tk1",
+	}
+	pw := NewPointsWriter(time.Second)
+	pw.MetaClient = mc
+	pw.TSDBStore = NewMockNetStore()
+	wh := newWriteHelper(pw)
+
+	var callback = func(db string, rows []influx.Row, err error) {
+		if !assert.NoError(t, err) {
+			return
+		}
+
+		for i, r := range rows {
+			_, _, err := wh.updateSchemaIfNeeded("db0", "rp0", &r, mi, mi.OriginName(), fs)
+			assert.Equal(t, err.Error(), errors[i])
+			v, _ := (*cs)["f1"]
+			assert.Equal(t, v.EndTime, int32(1))
+		}
+	}
+
+	buf := bytes.NewBuffer(nil)
+	buf.WriteString(`mst,time="tv1" f1=1.1 1`)
+	buf.WriteByte('\n')
+	buf.WriteString(`mst,tk1="tv1",tk1="tv1" f1=1.1 1`)
+	buf.WriteByte('\n')
+	unmarshal(buf.Bytes(), callback)
+}
+
+// field Type conflict
+func TestPointsWriter_updateCleanSchemaIfNeeded4(t *testing.T) {
+	meta2.InitSchemaCleanEn(true)
+	defer meta2.InitSchemaCleanEn(false)
+	mstName := "mst_0000"
+	mi := meta2.NewMeasurementInfo(mstName, influx.GetOriginMstName(mstName), config.TSSTORE, 0)
+	mi.Schema = &meta2.CleanSchema{
+		"tk1": meta2.SchemaVal{Typ: influx.Field_Type_Tag},
+		"f1":  meta2.SchemaVal{Typ: influx.Field_Type_Int},
+	}
+	cs := mi.Schema
+
+	fs := make([]*proto2.FieldSchema, 0, 8)
+
+	mc := NewMockMetaClient()
+	mc.UpdateSchemaFn = func(database string, retentionPolicy string, mst string, fieldToCreate []*proto2.FieldSchema) error {
+		for _, item := range fieldToCreate {
+			(*cs)[item.GetFieldName()] = meta2.SchemaVal{Typ: int8(item.GetFieldType()), EndTime: item.GetEndTime()}
+		}
+		return nil
+	}
+	mc.GetSgEndTimeFn = func(database string, rp string, timestamp time.Time, engineType config.EngineType) (int64, error) {
+		return 1, nil
+	}
+
+	pw := NewPointsWriter(time.Second)
+	pw.MetaClient = mc
+	pw.TSDBStore = NewMockNetStore()
+	wh := newWriteHelper(pw)
+
+	var callback = func(db string, rows []influx.Row, err error) {
+		if !assert.NoError(t, err) {
+			return
+		}
+
+		for _, r := range rows {
+			_, _, err := wh.updateSchemaIfNeeded("db0", "rp0", &r, mi, mi.OriginName(), fs)
+			assert.Equal(t, err.Error(), "field type conflict: input field \"f1\" on measurement \"mst\" is type float, already exists as type integer")
+		}
+	}
+
+	buf := bytes.NewBuffer(nil)
+	buf.WriteString(`mst,tk1="tv1" f1=1.1 1`)
+	buf.WriteByte('\n')
+	unmarshal(buf.Bytes(), callback)
+}
+
+// colEngine + tag typ err
+func TestPointsWriter_updateCleanSchemaIfNeeded5(t *testing.T) {
+	meta2.InitSchemaCleanEn(true)
+	defer meta2.InitSchemaCleanEn(false)
+	mstName := "mst_0000"
+	mi := meta2.NewMeasurementInfo(mstName, influx.GetOriginMstName(mstName), config.COLUMNSTORE, 0)
+	mi.Schema = &meta2.CleanSchema{
+		"tk1": meta2.SchemaVal{Typ: influx.Field_Type_Int},
+	}
+	cs := mi.Schema
+
+	fs := make([]*proto2.FieldSchema, 0, 8)
+
+	mc := NewMockMetaClient()
+	mc.UpdateSchemaFn = func(database string, retentionPolicy string, mst string, fieldToCreate []*proto2.FieldSchema) error {
+		for _, item := range fieldToCreate {
+			(*cs)[item.GetFieldName()] = meta2.SchemaVal{Typ: int8(item.GetFieldType()), EndTime: item.GetEndTime()}
+		}
+		return nil
+	}
+	mc.GetSgEndTimeFn = func(database string, rp string, timestamp time.Time, engineType config.EngineType) (int64, error) {
+		return 1, nil
+	}
+
+	pw := NewPointsWriter(time.Second)
+	pw.MetaClient = mc
+	pw.TSDBStore = NewMockNetStore()
+	wh := newWriteHelper(pw)
+
+	var callback = func(db string, rows []influx.Row, err error) {
+		if !assert.NoError(t, err) {
+			return
+		}
+
+		for _, r := range rows {
+			_, _, err := wh.updateSchemaIfNeeded("db0", "rp0", &r, mi, mi.OriginName(), fs)
+			assert.Equal(t, err.Error(), "column store write point has Invalid tag :tk1")
+		}
+	}
+
+	buf := bytes.NewBuffer(nil)
+	buf.WriteString(`mst,tk1="tv1" f1=1.1 1`)
+	buf.WriteByte('\n')
+	unmarshal(buf.Bytes(), callback)
+}
+
+// colEngine + tag primKey++ -> colCount != primKeyLen
+func TestPointsWriter_updateCleanSchemaIfNeeded6(t *testing.T) {
+	meta2.InitSchemaCleanEn(true)
+	defer meta2.InitSchemaCleanEn(false)
+	mstName := "mst_0000"
+	mi := meta2.NewMeasurementInfo(mstName, influx.GetOriginMstName(mstName), config.COLUMNSTORE, 0)
+	mi.Schema = &meta2.CleanSchema{
+		"tk1": meta2.SchemaVal{Typ: influx.Field_Type_Tag},
+	}
+	mi.ColStoreInfo = &meta2.ColStoreInfo{}
+	cs := mi.Schema
+
+	fs := make([]*proto2.FieldSchema, 0, 8)
+
+	mc := NewMockMetaClient()
+	mc.UpdateSchemaFn = func(database string, retentionPolicy string, mst string, fieldToCreate []*proto2.FieldSchema) error {
+		for _, item := range fieldToCreate {
+			(*cs)[item.GetFieldName()] = meta2.SchemaVal{Typ: int8(item.GetFieldType()), EndTime: item.GetEndTime()}
+		}
+		return nil
+	}
+	mc.GetSgEndTimeFn = func(database string, rp string, timestamp time.Time, engineType config.EngineType) (int64, error) {
+		return 1, nil
+	}
+
+	pw := NewPointsWriter(time.Second)
+	pw.MetaClient = mc
+	pw.TSDBStore = NewMockNetStore()
+	wh := newWriteHelper(pw)
+
+	var callback = func(db string, rows []influx.Row, err error) {
+		if !assert.NoError(t, err) {
+			return
+		}
+		for _, r := range rows {
+			wh.mstPrimaryKeyRowMap = make(map[string]map[string]struct{})
+			wh.mstPrimaryKeyRowMap[r.Name] = make(map[string]struct{})
+			wh.mstPrimaryKeyRowMap[r.Name]["tk1"] = struct{}{}
+			_, _, err := wh.updateSchemaIfNeeded("db0", "rp0", &r, mi, mi.OriginName(), fs)
+			assert.Equal(t, err.Error(), "checkSchema: write point is not match the number of primary key. mst: mst,  expect:0 but:1")
+		}
+	}
+
+	buf := bytes.NewBuffer(nil)
+	buf.WriteString(`mst,tk1="tv1" f1=1.1 1`)
+	buf.WriteByte('\n')
+	unmarshal(buf.Bytes(), callback)
+}
+
+// colEngine + field Typ err
+func TestPointsWriter_updateCleanSchemaIfNeeded7(t *testing.T) {
+	meta2.InitSchemaCleanEn(true)
+	defer meta2.InitSchemaCleanEn(false)
+	mstName := "mst_0000"
+	mi := meta2.NewMeasurementInfo(mstName, influx.GetOriginMstName(mstName), config.COLUMNSTORE, 0)
+	mi.Schema = &meta2.CleanSchema{
+		"tk1": meta2.SchemaVal{Typ: influx.Field_Type_Tag},
+		"f1":  meta2.SchemaVal{Typ: influx.Field_Type_Tag},
+	}
+	mi.ColStoreInfo = &meta2.ColStoreInfo{}
+	cs := mi.Schema
+
+	fs := make([]*proto2.FieldSchema, 0, 8)
+
+	mc := NewMockMetaClient()
+	mc.UpdateSchemaFn = func(database string, retentionPolicy string, mst string, fieldToCreate []*proto2.FieldSchema) error {
+		for _, item := range fieldToCreate {
+			(*cs)[item.GetFieldName()] = meta2.SchemaVal{Typ: int8(item.GetFieldType()), EndTime: item.GetEndTime()}
+		}
+		return nil
+	}
+	mc.GetSgEndTimeFn = func(database string, rp string, timestamp time.Time, engineType config.EngineType) (int64, error) {
+		return 1, nil
+	}
+
+	pw := NewPointsWriter(time.Second)
+	pw.MetaClient = mc
+	pw.TSDBStore = NewMockNetStore()
+	wh := newWriteHelper(pw)
+
+	var callback = func(db string, rows []influx.Row, err error) {
+		if !assert.NoError(t, err) {
+			return
+		}
+		for _, r := range rows {
+			_, _, err := wh.updateSchemaIfNeeded("db0", "rp0", &r, mi, mi.OriginName(), fs)
+			assert.Equal(t, err.Error(), "column store write point has Invalid field :f1")
+		}
+	}
+
+	buf := bytes.NewBuffer(nil)
+	buf.WriteString(`mst,tk1="tv1" f1=1.1 1`)
+	buf.WriteByte('\n')
+	unmarshal(buf.Bytes(), callback)
+}
+
+// colEngine + field primKey++ -> colCount != primKeyLen
+func TestPointsWriter_updateCleanSchemaIfNeeded8(t *testing.T) {
+	meta2.InitSchemaCleanEn(true)
+	defer meta2.InitSchemaCleanEn(false)
+	mstName := "mst_0000"
+	mi := meta2.NewMeasurementInfo(mstName, influx.GetOriginMstName(mstName), config.COLUMNSTORE, 0)
+	mi.Schema = &meta2.CleanSchema{
+		"f1": meta2.SchemaVal{Typ: influx.Field_Type_Float},
+	}
+	mi.ColStoreInfo = &meta2.ColStoreInfo{}
+	cs := mi.Schema
+
+	fs := make([]*proto2.FieldSchema, 0, 8)
+
+	mc := NewMockMetaClient()
+	mc.UpdateSchemaFn = func(database string, retentionPolicy string, mst string, fieldToCreate []*proto2.FieldSchema) error {
+		for _, item := range fieldToCreate {
+			(*cs)[item.GetFieldName()] = meta2.SchemaVal{Typ: int8(item.GetFieldType()), EndTime: item.GetEndTime()}
+		}
+		return nil
+	}
+	mc.GetSgEndTimeFn = func(database string, rp string, timestamp time.Time, engineType config.EngineType) (int64, error) {
+		return 1, nil
+	}
+
+	pw := NewPointsWriter(time.Second)
+	pw.MetaClient = mc
+	pw.TSDBStore = NewMockNetStore()
+	wh := newWriteHelper(pw)
+
+	var callback = func(db string, rows []influx.Row, err error) {
+		if !assert.NoError(t, err) {
+			return
+		}
+		for _, r := range rows {
+			wh.mstPrimaryKeyRowMap = make(map[string]map[string]struct{})
+			wh.mstPrimaryKeyRowMap[r.Name] = make(map[string]struct{})
+			wh.mstPrimaryKeyRowMap[r.Name]["f1"] = struct{}{}
+			_, _, err := wh.updateSchemaIfNeeded("db0", "rp0", &r, mi, mi.OriginName(), fs)
+			assert.Equal(t, err.Error(), "checkSchema: write point is not match the number of primary key. mst: mst,  expect:0 but:1")
+		}
+	}
+
+	buf := bytes.NewBuffer(nil)
+	buf.WriteString(`mst,tk1="tv1" f1=1.1 1`)
 	buf.WriteByte('\n')
 	unmarshal(buf.Bytes(), callback)
 }
@@ -1210,6 +1600,40 @@ func TestPointsWriter_WritePointRows_TimeOutsideRange(t *testing.T) {
 	if err == nil {
 		t.Fatal(err)
 	}
+}
+
+func TestPointsWriter_TagLimit_CleanSchemOpen(t *testing.T) {
+	meta2.SchemaCleanEn = true
+	defer func() {
+		meta2.SchemaCleanEn = false
+	}()
+	streamDistribution = noStream
+	pw := NewPointsWriter(time.Second * 10)
+	mc := NewMockMetaClient()
+	mc.MeasurementFn = func(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error) {
+		mst := NewMeasurement("mst", config.TSSTORE)
+		binary, err := mst.MarshalBinary()
+		if err != nil {
+			return nil, err
+		}
+		err = mst.UnmarshalBinary(binary)
+		return mst, err
+	}
+	mc.GetSgEndTimeFn = func(database string, rp string, timestamp time.Time, engineType config.EngineType) (int64, error) {
+		return 1 << 32, nil
+	}
+
+	pw.MetaClient = mc
+	pw.TSDBStore = NewMockNetStore()
+	rows := make([]influx.Row, 10)
+
+	SetTagLimit(1)
+	rows = generateRows(5, rows)
+	err := pw.writePointRows("db0", "rp0", rows)
+	pw.Close()
+
+	exp := "partial write: " + errno.NewError(errno.TooManyTagKeys).Error() + " dropped=5"
+	assert.EqualError(t, err, exp)
 }
 
 func TestName(t *testing.T) {

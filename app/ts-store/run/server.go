@@ -1,24 +1,21 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package run
 
 import (
 	"fmt"
-	"net/http"
 	"os"
 	"runtime"
 	"strconv"
@@ -32,6 +29,7 @@ import (
 	spdyTransport "github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/mutable"
+	"github.com/openGemini/openGemini/lib/compress"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/httpserver"
@@ -43,7 +41,9 @@ import (
 	"github.com/openGemini/openGemini/lib/statisticsPusher"
 	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/syscontrol"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/fs"
 	"github.com/openGemini/openGemini/services"
 	"github.com/openGemini/openGemini/services/sherlock"
@@ -101,9 +101,11 @@ func NewServer(c config.Config, info app.ServerInfo, logger *Logger.Logger) (app
 	immutable.SetChunkMetaCompressMode(conf.Data.ChunkMetaCompressMode)
 	config.SetStoreConfig(conf.Data)
 	config.SetIndexConfig(conf.Index)
+	compress.Init()
 
 	s.config = conf
 	Logger.SetLogger(Logger.GetLogger().With(zap.String("hostname", conf.Data.IngesterAddress)))
+	Logger.InitSrLogger(conf.Logging)
 
 	// set query series limit
 	syscontrol.SetQuerySeriesLimit(conf.SelectSpec.QuerySeriesLimit)
@@ -128,8 +130,10 @@ func NewServer(c config.Config, info app.ServerInfo, logger *Logger.Logger) (app
 
 	runtime.SetBlockProfileRate(int(1 * time.Second))
 	runtime.SetMutexProfileFraction(1)
-	listenIp := strings.Split(conf.Data.SelectAddress, ":")[0]
-	go func() { _ = http.ListenAndServe(fmt.Sprintf("%s:6060", listenIp), nil) }()
+
+	if s.config.Common.PprofEnabled {
+		go util.OpenPprofServer(s.config.Common.PprofBindAddress, util.StorePprofPort)
+	}
 
 	node := metaclient.NewNode(s.metaPath)
 	s.node = node
@@ -168,6 +172,7 @@ func (s *Server) Open() error {
 	storageNodeInfo := metaclient.StorageNodeInfo{
 		InsertAddr: s.config.Data.InsertAddr(),
 		SelectAddr: s.config.Data.SelectAddr(),
+		Az:         s.config.Data.AvailabilityZone,
 	}
 	_ = metaclient.NewClient(s.metaPath, false, 20)
 	commHttpHandler := httpserver.NewHandler(s.config.HTTPD.AuthEnabled, "")
@@ -196,6 +201,7 @@ func (s *Server) Open() error {
 			c.EnableUseSnapshotV2(s.config.Meta.RetentionAutoCreate, s.config.Meta.ExpandShardsEnable)
 		}
 	}
+	meta.InitSchemaCleanEn(s.config.Meta.SchemaCleanEn)
 	if err := s.metaClient.OpenAtStore(); err != nil {
 		panic(err)
 	} // wait for ts-meta to be ready
@@ -291,6 +297,45 @@ func (s *Server) initStatisticsPusher() {
 	}
 
 	s.config.Monitor.SetApp(s.info.App)
+	s.initStatistics()
+
+	s.statisticsPusher.Register(
+		stat.CollectPerfStatistics,
+		stat.CollectImmutableStatistics,
+		stat.CollectStoreSlowQueryStatistics,
+		stat.CollectRuntimeStatistics,
+		stat.CollectIOStatistics,
+		stat.NewMergeStatistics().Collect,
+		stat.NewCompactStatistics().Collect,
+		stat.NewDownSampleStatistics().Collect,
+		stat.CollectEngineStatStatistics,
+		stat.CollectExecutorStatistics,
+		s.storage.GetEngine().Statistics,
+		stat.NewErrnoStat().Collect,
+		stat.StoreTaskInstance.Collect,
+		stat.NewStreamStatistics().Collect,
+		stat.NewStreamWindowStatistics().Collect,
+		stat.NewRecordStatistics().Collect,
+		stat.NewHitRatioStatistics().Collect,
+		stat.CollectStoreQueryStatistics,
+		stat.CollectSpdyStatistics,
+		stat.NewOOOTimeDistribution().Collect,
+	)
+
+	s.statisticsPusher.RegisterOps(stat.CollectOpsPerfStatistics)
+	s.statisticsPusher.RegisterOps(stat.CollectOpsStoreSlowQueryStatistics)
+	s.statisticsPusher.RegisterOps(stat.CollectOpsRuntimeStatistics)
+	s.statisticsPusher.RegisterOps(stat.CollectOpsIOStatistics)
+	s.statisticsPusher.RegisterOps(stat.NewMergeStatistics().CollectOps)
+	s.statisticsPusher.RegisterOps(stat.NewCompactStatistics().CollectOps)
+	s.statisticsPusher.RegisterOps(stat.CollectOpsEngineStatStatistics)
+	s.statisticsPusher.RegisterOps(stat.NewErrnoStat().CollectOps)
+	s.statisticsPusher.RegisterOps(s.storage.GetEngine().StatisticsOps)
+	s.statisticsPusher.RegisterOps(stat.CollectOpsStoreQueryStatistics)
+	s.statisticsPusher.Start()
+}
+
+func (s *Server) initStatistics() {
 	globalTags := map[string]string{
 		"hostname": strings.ReplaceAll(config.CombineDomain(s.config.Data.Domain, s.selectAddr), ",", "_"),
 		"app":      "ts-" + string(s.info.App),
@@ -316,38 +361,5 @@ func (s *Server) initStatisticsPusher() {
 	stat.InitStoreQueryStatistics(globalTags)
 	stat.InitSpdyStatistics(globalTags)
 	spdyTransport.InitStatistics(spdyTransport.AppStore)
-
-	s.statisticsPusher.Register(
-		stat.CollectPerfStatistics,
-		stat.CollectImmutableStatistics,
-		stat.CollectStoreSlowQueryStatistics,
-		stat.CollectRuntimeStatistics,
-		stat.CollectIOStatistics,
-		stat.NewMergeStatistics().Collect,
-		stat.NewCompactStatistics().Collect,
-		stat.NewDownSampleStatistics().Collect,
-		stat.CollectEngineStatStatistics,
-		stat.CollectExecutorStatistics,
-		s.storage.GetEngine().Statistics,
-		stat.NewErrnoStat().Collect,
-		stat.StoreTaskInstance.Collect,
-		stat.NewStreamStatistics().Collect,
-		stat.NewStreamWindowStatistics().Collect,
-		stat.NewRecordStatistics().Collect,
-		stat.NewHitRatioStatistics().Collect,
-		stat.CollectStoreQueryStatistics,
-		stat.CollectSpdyStatistics,
-	)
-
-	s.statisticsPusher.RegisterOps(stat.CollectOpsPerfStatistics)
-	s.statisticsPusher.RegisterOps(stat.CollectOpsStoreSlowQueryStatistics)
-	s.statisticsPusher.RegisterOps(stat.CollectOpsRuntimeStatistics)
-	s.statisticsPusher.RegisterOps(stat.CollectOpsIOStatistics)
-	s.statisticsPusher.RegisterOps(stat.NewMergeStatistics().CollectOps)
-	s.statisticsPusher.RegisterOps(stat.NewCompactStatistics().CollectOps)
-	s.statisticsPusher.RegisterOps(stat.CollectOpsEngineStatStatistics)
-	s.statisticsPusher.RegisterOps(stat.NewErrnoStat().CollectOps)
-	s.statisticsPusher.RegisterOps(s.storage.GetEngine().StatisticsOps)
-	s.statisticsPusher.RegisterOps(stat.CollectOpsStoreQueryStatistics)
-	s.statisticsPusher.Start()
+	stat.NewOOOTimeDistribution().Init(globalTags)
 }

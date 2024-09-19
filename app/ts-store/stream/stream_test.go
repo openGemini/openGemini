@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package stream
 
@@ -218,15 +216,15 @@ func (m MockMetaclient) Measurement(dbName string, rpName string, mstName string
 	if m.getInfoFail {
 		return nil, errors.New("get info fail")
 	}
-	schema := map[string]int32{}
-	schema["float"] = influx.Field_Type_Float
+	schema := meta.CleanSchema{}
+	schema["float"] = meta.SchemaVal{Typ: influx.Field_Type_Float}
 	for i := 0; i < 8; i++ {
-		schema[fmt.Sprintf("tagkey%v", i)] = influx.Field_Type_Tag
+		schema[fmt.Sprintf("tagkey%v", i)] = meta.SchemaVal{Typ: influx.Field_Type_Tag}
 	}
 	return &meta.MeasurementInfo{
 		Name:          "flow",
 		ShardKeys:     nil,
-		Schema:        schema,
+		Schema:        &schema,
 		IndexRelation: influxql.IndexRelation{},
 		MarkDeleted:   false,
 	}, nil

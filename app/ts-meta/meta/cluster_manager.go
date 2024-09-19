@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package meta
 
@@ -455,12 +453,12 @@ func (cm *ClusterManager) chooseNodeByPtNum(nodePtNumMap *map[uint64]uint32) uin
 }
 
 func (cm *ClusterManager) chooseNodeRandom(nodeIds []int) uint64 {
-	rand.Seed(time.Now().UnixNano())
-	i := rand.Intn(len(nodeIds))
+	source := rand.New(rand.NewSource(time.Now().UnixNano()))
+	i := source.Intn(len(nodeIds))
 	return uint64(nodeIds[i])
 }
 
-func (cm *ClusterManager) processFailedDbPt(dbPt *meta.DbPtInfo, nodePtNumMap *map[uint64]uint32, isRetry bool) error {
+func (cm *ClusterManager) processFailedDbPtNormal(dbPt *meta.DbPtInfo, nodePtNumMap *map[uint64]uint32, isRetry bool) error {
 	status, err := globalService.store.getPtStatus(dbPt.Db, dbPt.Pti.PtId)
 	if err != nil {
 		logger.GetLogger().Error("processFailedDbPt failed", zap.Error(err))
@@ -481,7 +479,37 @@ func (cm *ClusterManager) processFailedDbPt(dbPt *meta.DbPtInfo, nodePtNumMap *m
 	return globalService.balanceManager.assignDbPt(dbPt, targetId, aliveConnId, false)
 }
 
-func electRgMaster(rg *meta.ReplicaGroup, ptInfo meta.DBPtInfos) (uint32, []meta.Peer, bool) {
+func (cm *ClusterManager) processFailedDbPt(dbPt *meta.DbPtInfo, nodePtNumMap *map[uint64]uint32, isRetry bool, isRepDb bool) error {
+	if config.GetHaPolicy() != config.Replication || !isRepDb {
+		return cm.processFailedDbPtNormal(dbPt, nodePtNumMap, isRetry)
+	}
+
+	return cm.processFailedDbPtForRep(dbPt, nodePtNumMap, isRetry)
+}
+
+func (cm *ClusterManager) processFailedDbPtForRep(dbPt *meta.DbPtInfo, nodePtNumMap *map[uint64]uint32, isRetry bool) error {
+	rgFaildPtsOwnedAliveNode := globalService.store.getFullRGAllFailedPtsOwnedAliveNodeBasedPtId(dbPt, dbPt.Db)
+	var err1, err error
+	var aliveConnId, targetId uint64
+	for _, pt := range rgFaildPtsOwnedAliveNode {
+		targetId = pt.Pti.Owner.NodeID
+		logger.GetLogger().Info("processFailedDbPtForRep", zap.String("db", pt.Db), zap.Uint32("ptId", pt.Pti.PtId), zap.Uint64("nodeId", targetId), zap.Uint32("rgId", pt.Pti.RGID))
+		aliveConnId, err1 = globalService.store.getDataNodeAliveConnId(targetId)
+		if err1 != nil {
+			logger.GetLogger().Error("processFailedDbPtForRep get NodeAliveConnId failed", zap.String("db", pt.Db), zap.Uint32("ptId", pt.Pti.PtId), zap.Uint64("nodeId", targetId), zap.Error(err1))
+			err = err1
+			continue
+		}
+		err1 = globalService.balanceManager.assignDbPt(pt, targetId, aliveConnId, false)
+		if err1 != nil {
+			err = err1
+			logger.GetLogger().Error("processFailedDbPtForRep assignDbPt failed", zap.String("db", pt.Db), zap.Uint32("ptId", pt.Pti.PtId), zap.Uint64("nodeId", targetId), zap.Error(err1))
+		}
+	}
+	return err
+}
+
+func electRgMaster(rg *meta.ReplicaGroup, ptInfo meta.DBPtInfos, db string) (uint32, []meta.Peer, bool) {
 	var electSuccess bool
 	var newMasterId uint32
 
@@ -493,26 +521,15 @@ func electRgMaster(rg *meta.ReplicaGroup, ptInfo meta.DBPtInfos) (uint32, []meta
 		if peers[i].PtRole == meta.Slave && ptInfo[peers[i].ID].Status == meta.Online && !electSuccess {
 			newMasterId = peers[i].ID
 			newPeers[i].ID = rg.MasterPtID
-			newPeers[i].PtRole = meta.Catcher
+			newPeers[i].PtRole = meta.Slave
 			electSuccess = true
 		}
 	}
-
-	return newMasterId, newPeers, electSuccess
-}
-
-func generatePeers(rg *meta.ReplicaGroup, dbPt *meta.DbPtInfo) []meta.Peer {
-	peers := rg.Peers
-	newPeers := make([]meta.Peer, len(rg.Peers))
-	for i := range peers {
-		newPeers[i].ID = peers[i].ID
-		newPeers[i].PtRole = peers[i].PtRole
-		if peers[i].ID == dbPt.Pti.PtId {
-			newPeers[i].PtRole = meta.Catcher
-			continue
-		}
+	if !electSuccess {
+		// if all pts of rg is offline, electRgMater fail, then keep last MasterPtId
+		meta.DataLogger.Error("electRgMaster fail", zap.String("db", db), zap.Uint32("rg", rg.ID))
 	}
-	return newPeers
+	return newMasterId, newPeers, electSuccess
 }
 
 func (cm *ClusterManager) processReplication(dbPt *meta.DbPtInfo) error {
@@ -525,22 +542,18 @@ func (cm *ClusterManager) processReplication(dbPt *meta.DbPtInfo) error {
 	rgId := dbPt.Pti.RGID
 	rg := &rgs[rgId]
 	if rg.MasterPtID == dbPt.Pti.PtId {
-		masterId, newPeers, success := electRgMaster(rg, ptInfos)
+		masterId, newPeers, success := electRgMaster(rg, ptInfos, dbPt.Db)
 		if success {
 			logger.NewLogger(errno.ModuleHA).Info("master failed, elect rg new master success", zap.String("db", dbPt.Db),
 				zap.Uint32("oldMaster", rg.MasterPtID), zap.Uint32("newMaster", masterId),
 				zap.Any("old peers", rg.Peers), zap.Any("new peers", newPeers))
-			return globalService.store.updateReplication(dbPt.Db, rgId, masterId, newPeers, uint32(meta.SubHealth))
+			return globalService.store.updateReplication(dbPt.Db, rgId, masterId, newPeers)
 		}
 		logger.NewLogger(errno.ModuleHA).Info("master failed, elect rg new master failed", zap.String("db", dbPt.Db),
 			zap.Uint32("oldMaster", rg.MasterPtID), zap.Any("old peers", rg.Peers))
 		return nil
 	}
-
-	newPeers := generatePeers(rg, dbPt)
-	logger.NewLogger(errno.ModuleHA).Info("slave failed, update peers", zap.String("db", dbPt.Db),
-		zap.Any("old peers", rg.Peers), zap.Any("new peers", newPeers))
-	return globalService.store.updateReplication(dbPt.Db, rgId, rg.MasterPtID, newPeers, uint32(meta.SubHealth))
+	return nil
 }
 
 func (cm *ClusterManager) enableTakeover(enable bool) {

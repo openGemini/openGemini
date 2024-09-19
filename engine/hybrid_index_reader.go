@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package engine
 
@@ -34,6 +32,7 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 )
@@ -44,6 +43,7 @@ const (
 
 type IndexReader interface {
 	CreateCursors() ([]comm.KeyCursor, int, error)
+	StartSpan(span *tracing.Span)
 }
 
 type indexContext struct {
@@ -79,6 +79,7 @@ type attachedIndexReader struct {
 	info         *executor.AttachedIndexInfo
 	skFileReader []sparseindex.SKFileReader
 	readerCtx    *immutable.FileReaderContext
+	span         *tracing.Span
 }
 
 func NewAttachedIndexReader(ctx *indexContext, info *executor.AttachedIndexInfo, readerCtx *immutable.FileReaderContext) *attachedIndexReader {
@@ -97,6 +98,10 @@ func (r *attachedIndexReader) Init() (err error) {
 	}
 	err = initKeyCondition(r.info.Infos()[0].GetRec().Schema, r.ctx, r.info.Infos()[0].GetTCLocation())
 	return
+}
+
+func (t *attachedIndexReader) StartSpan(span *tracing.Span) {
+	t.span = span
 }
 
 func (r *attachedIndexReader) CreateCursors() ([]comm.KeyCursor, int, error) {
@@ -208,6 +213,7 @@ type detachedIndexReader struct {
 	skFileReader []sparseindex.SKFileReader
 	obsOptions   *obs.ObsOptions
 	readerCtx    *immutable.FileReaderContext
+	span         *tracing.Span
 }
 
 func NewDetachedIndexReader(ctx *indexContext, obsOption *obs.ObsOptions, readerCtx *immutable.FileReaderContext) *detachedIndexReader {
@@ -216,6 +222,10 @@ func NewDetachedIndexReader(ctx *indexContext, obsOption *obs.ObsOptions, reader
 		ctx:        ctx,
 		readerCtx:  readerCtx,
 	}
+}
+
+func (t *detachedIndexReader) StartSpan(span *tracing.Span) {
+	t.span = span
 }
 
 func (r *detachedIndexReader) CreateCursors() ([]comm.KeyCursor, int, error) {
@@ -265,7 +275,7 @@ func (r *detachedIndexReader) initFileReader(frags executor.IndexFrags) (comm.Ke
 		return nil, err
 	}
 	if r.ctx.schema.Options().CanLimitPushDown() {
-		sortLimitCursor := immutable.NewSortLimitCursor(r.ctx.schema.Options(), r.readerCtx.GetSchemas(), fileReader)
+		sortLimitCursor := immutable.NewSortLimitCursor(r.ctx.schema.Options(), r.readerCtx.GetSchemas(), fileReader, obs.GetShardID(r.dataPath))
 		return sortLimitCursor, nil
 	}
 	return fileReader, nil
@@ -451,6 +461,7 @@ func (r *detachedIndexReader) GetBatchFrag() (executor.IndexFrags, error) {
 			if err = r.skFileReader[j].ReInit(sparseindex.NewOBSFilterPath(r.localPath, r.dataPath, r.obsOptions)); err != nil {
 				return nil, err
 			}
+			r.skFileReader[j].StartSpan(r.span)
 			for k := range frs {
 				frs[k].Start += uint32(pkInfo.StartBlockId)
 				frs[k].End += uint32(pkInfo.StartBlockId)

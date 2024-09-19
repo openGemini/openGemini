@@ -1,23 +1,22 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package immutable
 
 import (
 	"container/heap"
+	"path/filepath"
 	"time"
 
 	"github.com/openGemini/openGemini/lib/errno"
@@ -29,17 +28,20 @@ import (
 )
 
 type mergeTool struct {
-	mts  *MmsTables
-	stat *statistics.MergeStatItem
-	lg   *logger.Logger
-	zlg  *zap.Logger
+	mts     *MmsTables
+	stat    *statistics.MergeStatItem
+	lg      *logger.Logger
+	zlg     *zap.Logger
+	context EventContext
 }
 
-func newMergeTool(mts *MmsTables, lg *zap.Logger) *mergeTool {
+func newMergeTool(mts *MmsTables, ctx EventContext, lg *zap.Logger) *mergeTool {
+
 	return &mergeTool{
-		mts: mts,
-		lg:  logger.NewLogger(errno.ModuleMerge),
-		zlg: lg,
+		mts:     mts,
+		context: ctx,
+		lg:      logger.NewLogger(errno.ModuleMerge),
+		zlg:     lg,
 	}
 }
 
@@ -141,9 +143,9 @@ func (mt *mergeTool) execute(mst string, order, unordered *TSSPFiles) (*TSSPFile
 	var tempFiles []fileops.File
 
 	defer func() {
-		performers.Done()
 		performers.Close()
 		ur.Close()
+		performers.Release()
 
 		if err != nil && len(tempFiles) > 0 {
 			for _, f := range tempFiles {
@@ -199,7 +201,11 @@ func (mt *mergeTool) Release() {
 func (mt *mergeTool) mergeSelf(ctx *MergeContext) {
 	mt.mts.lmt.Update(ctx.mst)
 
-	if ctx.level <= MergeSelfFastModeMaxLevel {
+	if ctx.UnorderedLen() <= 1 {
+		return
+	}
+
+	if ctx.MergeSelfFast() {
 		mt.mergeSelfFastMode(ctx)
 		return
 	}
@@ -217,25 +223,31 @@ func (mt *mergeTool) mergeSelfFastMode(ctx *MergeContext) {
 	ms := NewMergeSelf(mt.mts, mt.lg)
 	defer ms.Stop()
 
+	events := ms.InitEvents(ctx)
 	mt.mts.Listen(ms.signal, func() {
 		ms.Stop()
 	})
 
-	level := ctx.level
 	mergedSize := int64(0)
 	begin := time.Now()
 
-	merged, err := ms.Merge(ctx.mst, files.Files())
+	merged, err := ms.Merge(ctx.mst, ctx.ToLevel(), files.Files())
+
+	if err == nil {
+		err = events.TriggerReplaceFile(filepath.Dir(mt.mts.path), *mt.mts.lock)
+	}
+
 	if err == nil {
 		mergedSize = merged.FileSize()
 		err = mt.mts.ReplaceFiles(ctx.mst, files.Files(), []TSSPFile{merged}, false)
 	}
 
+	events.Finish(err == nil, mt.context)
 	mt.lg.Info("finish merge self",
 		zap.Int64("total size(MB)", ctx.unordered.size/1024/1024),
 		zap.Int64("merged size(MB)", mergedSize/1024/1024),
 		zap.Float64("time use(s)", time.Since(begin).Seconds()),
-		zap.Uint16("level", level),
+		zap.Uint16("level", ctx.ToLevel()),
 		zap.Any("err", err),
 		zap.String("mst", ctx.mst))
 }

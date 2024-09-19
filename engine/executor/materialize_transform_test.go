@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package executor_test
 
@@ -111,6 +109,7 @@ func buildMaterializeInRowDataType() hybridqp.RowDataType {
 		influxql.VarRef{Val: "age_cast", Type: influxql.Integer},
 		influxql.VarRef{Val: "alive_cast", Type: influxql.Boolean},
 		influxql.VarRef{Val: "name_cast", Type: influxql.String},
+		influxql.VarRef{Val: "val0", Type: influxql.Float},
 	)
 
 	return rowDataType
@@ -147,6 +146,7 @@ func buildMaterializeOutRowDataType() hybridqp.RowDataType {
 		influxql.VarRef{Val: "float_string", Type: influxql.String},
 		influxql.VarRef{Val: "int_string", Type: influxql.String},
 		influxql.VarRef{Val: "bool_string", Type: influxql.String},
+		influxql.VarRef{Val: "value", Type: influxql.Float},
 	)
 
 	return rowDataType
@@ -477,6 +477,17 @@ func createMaterializeOps() []hybridqp.ExprOptions {
 				Name: "cast_string",
 				Args: []influxql.Expr{
 					&influxql.VarRef{Val: "alive_cast", Type: influxql.Boolean},
+				},
+			},
+		},
+		{
+			Expr: &influxql.Call{
+				Name: "timestamp_prom",
+				Args: []influxql.Expr{
+					&influxql.VarRef{
+						Val:  "val0",
+						Type: influxql.Float,
+					},
 				},
 			},
 		},

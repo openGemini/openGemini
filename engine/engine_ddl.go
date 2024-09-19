@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package engine
 
@@ -41,6 +39,8 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"go.uber.org/zap"
 )
+
+var DeleteDatabaseTimeout = time.Second * 15
 
 func (e *Engine) DeleteDatabase(db string, ptId uint32) (err error) {
 	traceId := tsi.GenerateUUID()
@@ -88,7 +88,7 @@ func (e *Engine) DeleteDatabase(db string, ptId uint32) (err error) {
 	if ok = dbPTInfo.markOffload(done); !ok {
 		select {
 		case <-done:
-		case <-time.After(15 * time.Second):
+		case <-time.After(DeleteDatabaseTimeout):
 			log.Warn("offload dbPt timeout", zap.String("db", db), zap.Uint32("pt id", ptId))
 			dbPTInfo.unMarkOffload()
 			e.mu.RUnlock()
@@ -115,6 +115,9 @@ func (e *Engine) DeleteDatabase(db string, ptId uint32) (err error) {
 		return err
 	}
 
+	if dbPTInfo.node != nil {
+		dbPTInfo.node.Stop()
+	}
 	e.mu.RUnlock()
 	e.mu.Lock()
 	e.dropDBPTInfo(db, ptId)
@@ -577,7 +580,7 @@ func (e *Engine) CreateShowTagValuesPlan(db string, ptIDs []uint32, tr *influxql
 		}
 
 		dbPT.walkShards(tr, func(sh Shard) {
-			if p := sh.CreateShowTagValuesPlan(); p != nil {
+			if p := sh.CreateShowTagValuesPlan(e.metaClient); p != nil {
 				plan.AddPlan(p)
 			}
 		})

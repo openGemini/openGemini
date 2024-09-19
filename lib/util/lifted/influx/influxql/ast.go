@@ -37,6 +37,7 @@ import (
 	internal "github.com/openGemini/openGemini/lib/util/lifted/influx/influxql/internal"
 	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
+	"github.com/prometheus/prometheus/promql/parser"
 )
 
 // DataType represents the primitive data types available in InfluxQL.
@@ -94,7 +95,8 @@ const (
 	HASH  = "hash"
 	RANGE = "range"
 
-	SeqIDField = "__seq_id___"
+	SeqIDField   = "__seq_id___"
+	ShardIDField = "__shard_id___"
 )
 
 var (
@@ -305,6 +307,7 @@ func (*ShowFieldKeysStatement) node()              {}
 func (*ShowRetentionPoliciesStatement) node()      {}
 func (*ShowMeasurementCardinalityStatement) node() {}
 func (*ShowMeasurementsStatement) node()           {}
+func (*ShowMeasurementsDetailStatement) node()     {}
 func (*ShowQueriesStatement) node()                {}
 func (*ShowSeriesStatement) node()                 {}
 func (*ShowSeriesCardinalityStatement) node()      {}
@@ -467,6 +470,7 @@ func (*ShowFieldKeyCardinalityStatement) stmt()    {}
 func (*ShowFieldKeysStatement) stmt()              {}
 func (*ShowMeasurementCardinalityStatement) stmt() {}
 func (*ShowMeasurementsStatement) stmt()           {}
+func (*ShowMeasurementsDetailStatement) stmt()     {}
 func (*ShowQueriesStatement) stmt()                {}
 func (*ShowRetentionPoliciesStatement) stmt()      {}
 func (*ShowSeriesStatement) stmt()                 {}
@@ -1535,6 +1539,10 @@ type SelectStatement struct {
 	BinOpSource []*BinOp
 
 	IsPromQuery bool
+
+	PromSubCalls []*PromSubCall
+
+	SelectAllTags bool
 }
 
 func (s *SelectStatement) SetStmtId(id int) {
@@ -1664,6 +1672,7 @@ func cloneSource(s Source) Source {
 		c.MatchCard = s.MatchCard
 		c.IncludeKeys = s.IncludeKeys
 		c.ReturnBool = s.ReturnBool
+		c.NilMst = s.NilMst
 		return c
 	default:
 		panic("unreachable")
@@ -1923,7 +1932,49 @@ func (s *SelectStatement) RewriteSeqIdForLogStore(fields map[string]DataType) {
 		if !ok {
 			fields[SeqIDField] = influx.Field_Type_Int
 		}
+		if !s.hasCall() {
+			_, ok = fields[ShardIDField]
+			if !ok {
+				fields[ShardIDField] = Integer
+			}
+		}
 	}
+}
+
+func (s *SelectStatement) hasCall() bool {
+	for _, v := range s.Fields {
+		if _, ok := v.Expr.(*Call); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *SelectStatement) RewriteFieldsForSelectAllTags(m FieldMapper) error {
+	_, tagSet, err := FieldDimensions(s.Sources, m, &s.Schema)
+	if err != nil {
+		return err
+	}
+	if len(tagSet) == 0 {
+		return nil
+	}
+	tagWildIdx := 0
+	for tagWildIdx < len(s.Fields) {
+		if w, ok := s.Fields[tagWildIdx].Expr.(*Wildcard); ok && w.Type == TAG {
+			break
+		}
+		tagWildIdx++
+	}
+	s.Fields = append(s.Fields[:tagWildIdx], s.Fields[tagWildIdx+1:]...)
+	tagSlice := make([]string, 0, len(tagSet))
+	for tagKey := range tagSet {
+		tagSlice = append(tagSlice, tagKey)
+	}
+	sort.Strings(tagSlice)
+	for _, tagKey := range tagSlice {
+		s.Fields = append(s.Fields, &Field{Expr: &VarRef{Val: tagKey, Type: Tag}})
+	}
+	return nil
 }
 
 // RewriteFields returns the re-written form of the select statement. Any wildcard query
@@ -1961,16 +2012,20 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin boo
 			}
 			sources = append(sources, rSources)
 		case *BinOp:
-			lSources, lErr := s.RewriteJoinCase(src.LSrc, m, batchEn, other.Fields, false)
-			if lErr != nil {
-				return nil, lErr
+			if src.NilMst != LNilMst {
+				lSources, lErr := s.RewriteJoinCase(src.LSrc, m, batchEn, other.Fields, false)
+				if lErr != nil {
+					return nil, lErr
+				}
+				sources = append(sources, lSources)
 			}
-			sources = append(sources, lSources)
-			rSources, rErr := s.RewriteJoinCase(src.RSrc, m, batchEn, other.Fields, false)
-			if rErr != nil {
-				return nil, rErr
+			if src.NilMst != RNilMst {
+				rSources, rErr := s.RewriteJoinCase(src.RSrc, m, batchEn, other.Fields, false)
+				if rErr != nil {
+					return nil, rErr
+				}
+				sources = append(sources, rSources)
 			}
-			sources = append(sources, rSources)
 		default:
 			if e := RewriteMstNameSpace(other.Fields, src, hasJoin, src.GetName()); e != nil {
 				return nil, e
@@ -2153,20 +2208,6 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin boo
 
 	WalkFunc(other.Fields, rewriteDefaultTypeOfVarRef)
 
-	if !hasFieldWildcard && !hasDimensionWildcard {
-		if other.Without {
-			_, dimensionSet, err := FieldDimensions(other.Sources, m, &other.Schema)
-			if err != nil {
-				return nil, err
-			}
-			dimensions := stringSetSlice(dimensionSet)
-			if err = RewriteDimensionWithout(other, dimensions); err != nil {
-				return nil, err
-			}
-		}
-		return other, nil
-	}
-
 	if len(other.Dimensions) == 1 {
 		if _, ok := other.Dimensions[0].Expr.(*Wildcard); ok {
 			other.GroupByAllDims = true
@@ -2180,6 +2221,15 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin boo
 
 	if other.Without {
 		// 2.without dims + promquery
+		if other.SelectAllTags {
+			if err := other.RewriteFieldsForSelectAllTags(m); err != nil {
+				return nil, err
+			}
+		}
+		return other, nil
+	}
+
+	if !hasFieldWildcard && !hasDimensionWildcard {
 		return other, nil
 	}
 
@@ -2371,36 +2421,13 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin boo
 	return other, nil
 }
 
-// RewriteDimensionWithout used to extract the group field without from the full set to regenerate the dimension.
-func RewriteDimensionWithout(statement *SelectStatement, dimensions []string) error {
-	if len(statement.Sources) != 1 {
-		return fmt.Errorf("the number of source should be 1 for promql query")
-	}
-	statement.Without = false
-	_, dimRefs := statement.Dimensions.Normalize()
-	if len(dimRefs) == 0 {
-		for i := 0; i < len(dimensions); i++ {
-			statement.Dimensions = append(statement.Dimensions, &Dimension{Expr: &VarRef{Val: dimensions[i], Type: Tag}})
-		}
-		return nil
-	}
-	dimRefMap := make(map[string]bool, len(dimRefs))
-	for i := range dimRefs {
-		dimRefMap[dimRefs[i]] = true
-	}
-	var newDims Dimensions
-	for i := range dimensions {
-		if !dimRefMap[dimensions[i]] {
-			newDims = append(newDims, &Dimension{Expr: &VarRef{Val: dimensions[i], Type: Tag}})
+func (s *SelectStatement) RewriteRegexConditionsDFS() {
+	s.RewriteRegexConditions()
+	for _, s := range s.Sources {
+		if subquery, ok := s.(*SubQuery); ok {
+			subquery.Statement.RewriteRegexConditions()
 		}
 	}
-	for i := 0; i < len(statement.Dimensions); i++ {
-		if _, ok := statement.Dimensions[i].Expr.(*Call); ok {
-			newDims = append(newDims, statement.Dimensions[i])
-		}
-	}
-	statement.Dimensions = newDims
-	return nil
 }
 
 // RewriteRegexConditions rewrites regex conditions to make better use of the
@@ -3758,16 +3785,63 @@ func (s *ShowMeasurementsStatement) DefaultDatabase() string {
 	return s.Database
 }
 
+// ShowMeasurementsDetailStatement represents a command for listing measurements detail, including retention policy,
+// tag keys, field keys, and schemas.
+type ShowMeasurementsDetailStatement struct {
+	// Database to query. If blank, use the default database.
+	Database string
+
+	// Measurement name or regex.
+	Source Source
+}
+
+// String returns a string representation of the statement.
+func (s *ShowMeasurementsDetailStatement) String() string {
+	var buf bytes.Buffer
+	_, _ = buf.WriteString("SHOW MEASUREMENTS DETAIL")
+
+	if s.Database != "" {
+		_, _ = buf.WriteString(" ON ")
+		_, _ = buf.WriteString(s.Database)
+	}
+	if s.Source != nil {
+		_, _ = buf.WriteString(" WITH MEASUREMENT ")
+		if m, ok := s.Source.(*Measurement); ok && m.Regex != nil {
+			_, _ = buf.WriteString("=~ ")
+		} else {
+			_, _ = buf.WriteString("= ")
+		}
+		_, _ = buf.WriteString(s.Source.String())
+	}
+	return buf.String()
+}
+
+// RequiredPrivileges returns the privilege(s) required to execute a ShowMeasurementsDetailStatement.
+func (s *ShowMeasurementsDetailStatement) RequiredPrivileges() (ExecutionPrivileges, error) {
+	return ExecutionPrivileges{{Admin: false, Name: s.Database, Rwuser: true, Privilege: ReadPrivilege}}, nil
+}
+
+// DefaultDatabase returns the default database from the statement.
+func (s *ShowMeasurementsDetailStatement) DefaultDatabase() string {
+	return s.Database
+}
+
 // DropMeasurementStatement represents a command to drop a measurement.
 type DropMeasurementStatement struct {
 	// Name of the measurement to be dropped.
 	Name string
+	// retention policy of the measurement to be dropped
+	RpName string
 }
 
 // String returns a string representation of the drop measurement statement.
 func (s *DropMeasurementStatement) String() string {
 	var buf bytes.Buffer
 	_, _ = buf.WriteString("DROP MEASUREMENT ")
+	if s.RpName != "" {
+		_, _ = buf.WriteString(QuoteIdent(s.RpName))
+		_, _ = buf.WriteString(".")
+	}
 	_, _ = buf.WriteString(QuoteIdent(s.Name))
 	return buf.String()
 }
@@ -4830,6 +4904,14 @@ const (
 	OneToMany
 )
 
+type NilMstState int
+
+const (
+	NoNilMst NilMstState = iota
+	LNilMst
+	RNilMst
+)
+
 type BinOp struct {
 	LSrc        Source
 	RSrc        Source
@@ -4839,6 +4921,7 @@ type BinOp struct {
 	MatchCard   MatchCardinality
 	IncludeKeys []string // group_left/group_right(IncludeKeys)
 	ReturnBool  bool
+	NilMst      NilMstState
 }
 
 func (b *BinOp) String() string {
@@ -4855,6 +4938,20 @@ func (b *BinOp) String() string {
 
 func (b *BinOp) GetName() string {
 	return ""
+}
+
+func AllowNilMst(BinOpType int) bool {
+	return BinOpType == parser.LOR || BinOpType == parser.LUNLESS
+}
+
+type PromSubCall struct {
+	Name      string
+	Interval  int64         // ns
+	StartTime int64         // ns
+	EndTime   int64         // ns
+	Range     time.Duration // ns
+	Offset    time.Duration // ns
+	InArgs    []Expr
 }
 
 type InCondition struct {

@@ -1,25 +1,26 @@
-/*
-Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package engine
 
 import (
+	"errors"
 	"fmt"
 	"math"
+	"sort"
 
+	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/record"
@@ -34,12 +35,18 @@ func init() {
 	RegistryPromFunction("sum_over_time", &sumOp{})
 	RegistryPromFunction("min_over_time", &minOp{})
 	RegistryPromFunction("max_over_time", &maxOp{})
-	RegistryPromFunction("last_over_time", &lastOp{})
+	RegistryPromFunction("last_over_time_prom", &lastOp{})
 	RegistryPromFunction("increase", &increaseOp{})
 	RegistryPromFunction("deriv", &derivOp{})
 	RegistryPromFunction("predict_linear", &PredictLinearOp{})
 	RegistryPromFunction("delta_prom", &deltaOp{})
 	RegistryPromFunction("idelta_prom", &ideltaOp{})
+	RegistryPromFunction("stdvar_over_time_prom", &StdVarOverTime{})
+	RegistryPromFunction("stddev_over_time_prom", &StdDevOverTime{})
+	RegistryPromFunction("holt_winters_prom", &holtWintersOp{})
+	RegistryPromFunction("changes_prom", &changesOp{})
+	RegistryPromFunction("quantile_over_time_prom", &QuantileOverTime{})
+	RegistryPromFunction("resets_prom", &resetsOp{})
 }
 
 type PromFunction interface {
@@ -322,7 +329,7 @@ func floatPromRateMerge(isRate, isCounter bool) FloatSliceMergeFunc {
 		if pointCount <= 1 {
 			return 0, true
 		}
-		firstTime, lastTime, firstValue, _, reduceResult := calcReduceResult(prevT, currT, prevV, currV, isCounter)
+		firstTime, lastTime, firstValue, _, reduceResult := executor.CalcReduceResult(prevT, currT, prevV, currV, isCounter)
 		if lastTime == firstTime || param.rangeDuration == 0 {
 			return 0, true
 		}
@@ -365,42 +372,6 @@ func floatPromRateMerge(isRate, isCounter bool) FloatSliceMergeFunc {
 		}
 		return resultValue, false
 	}
-}
-
-func calcReduceResult(prevT, currT []int64, prevV, currV []float64, isCounter bool) (int64, int64, float64, float64, float64) {
-	var firstTime, lastTime int64
-	var firstValue, lastValue float64
-	if len(prevT) > 0 {
-		firstTime = prevT[0]
-		firstValue = prevV[0]
-		if len(currT) > 0 {
-			lastTime = currT[len(currT)-1]
-			lastValue = currV[len(currV)-1]
-		} else {
-			lastTime = prevT[len(prevT)-1]
-			lastValue = prevV[len(prevV)-1]
-		}
-	} else {
-		firstTime, lastTime = currT[0], currT[len(currT)-1]
-		firstValue, lastValue = currV[0], currV[len(currV)-1]
-	}
-	reduceResult := lastValue - firstValue
-	if isCounter {
-		prev := firstValue
-		for _, cur := range prevV {
-			if cur < prev {
-				reduceResult += prev
-			}
-			prev = cur
-		}
-		for _, cur := range currV {
-			if cur < prev {
-				reduceResult += prev
-			}
-			prev = cur
-		}
-	}
-	return firstTime, lastTime, firstValue, lastValue, reduceResult
 }
 
 func floatIRateReduce(times []int64, values []float64, start, end int) (int64, int64, float64, float64, bool) {
@@ -459,6 +430,9 @@ func floatPromDerivReduce(times []int64, values []float64, start, end int) ([]in
 
 func linearMergeFunc(isDeriv bool, scalar float64) FloatSliceMergeFunc {
 	return func(t1, t2 []int64, v1, v2 []float64, ts int64, pointCount int, param *ReducerParams) (float64, bool) {
+		if pointCount <= 1 {
+			return 0, true
+		}
 		var fv float64
 		if len(v1) > 0 {
 			fv = v1[0]
@@ -524,6 +498,13 @@ type floatBuffer struct {
 	times  []int64
 	values []float64
 	s, e   int
+}
+
+func (b *floatBuffer) reset() {
+	b.times = b.times[:0]
+	b.values = b.values[:0]
+	b.s = 0
+	b.e = 0
 }
 
 func newFloatBuffer() *floatBuffer {
@@ -687,6 +668,7 @@ func (r *floatRateReducer) Aggregate(p *ReducerEndpoint, param *ReducerParams) {
 	}
 	r.prevStep = rangeEnd
 	if param.lastRec {
+		defer r.reset()
 		if param.step == 0 {
 			return
 		}
@@ -781,6 +763,13 @@ func (r *floatRateReducer) populateByLast(outRecord *record.Record, outOrdinal i
 	}
 }
 
+func (r *floatRateReducer) reset() {
+	r.prevStep = 0
+	r.prevPoints[0].Reset()
+	r.prevPoints[1].Reset()
+	r.ringBuf.reset()
+}
+
 type FloatSliceReduceFunc func(times []int64, values []float64, start, end int) ([]int64, []float64, bool)
 
 type FloatSliceMergeFunc func(prevT, currT []int64, prevV, currV []float64, ts int64, count int, param *ReducerParams) (float64, bool)
@@ -841,6 +830,7 @@ func (r *floatSliceReducer) Aggregate(p *ReducerEndpoint, param *ReducerParams) 
 	}
 	r.prevStep = rangeEnd
 	if param.lastRec {
+		defer r.reset()
 		if param.step == 0 {
 			return
 		}
@@ -872,11 +862,7 @@ func (r *floatSliceReducer) populateByPrevious(outRecord *record.Record, outOrdi
 			}
 			n++
 		}
-		if n-m >= 2 {
-			r.doMiddleWindow(outRecord, outOrdinal, param, te, r.ringBuf.times[m:n], []int64{}, r.ringBuf.values[m:n], []float64{}, n-m)
-		} else {
-			break
-		}
+		r.doMiddleWindow(outRecord, outOrdinal, param, te, r.ringBuf.times[m:n], []int64{}, r.ringBuf.values[m:n], []float64{}, n-m)
 	}
 }
 
@@ -889,7 +875,7 @@ func (r *floatSliceReducer) populateByLast(outRecord *record.Record, outOrdinal 
 		if bufNil || r.ringBuf.s >= int(rangeStart) {
 			for start < len(times) {
 				if times[start] >= rangeStart {
-					r.doMiddleWindow(outRecord, outOrdinal, param, rangeEnd, times[start:rowNum], []int64{}, values[start:rowNum], []float64{}, rowNum-start)
+					r.doMiddleWindow(outRecord, outOrdinal, param, rangeEnd, []int64{}, times[start:rowNum], []float64{}, values[start:rowNum], rowNum-start)
 					break
 				}
 				start++
@@ -903,7 +889,7 @@ func (r *floatSliceReducer) populateByLast(outRecord *record.Record, outOrdinal 
 			r.ringBuf.s++
 		}
 		if r.ringBuf.s < bufCount {
-			r.doMiddleWindow(outRecord, outOrdinal, param, rangeEnd, r.ringBuf.times[r.ringBuf.s:rowNum], []int64{}, r.ringBuf.values[r.ringBuf.s:rowNum], []float64{}, rowNum+bufCount-r.ringBuf.s)
+			r.doMiddleWindow(outRecord, outOrdinal, param, rangeEnd, r.ringBuf.times[r.ringBuf.s:bufCount], times[:rowNum], r.ringBuf.values[r.ringBuf.s:bufCount], values[:rowNum], rowNum+bufCount-r.ringBuf.s)
 		}
 	}
 }
@@ -914,6 +900,12 @@ func (r *floatSliceReducer) doMiddleWindow(ourRec *record.Record, outOrdinal int
 		ourRec.ColVals[outOrdinal].AppendFloat(v)
 		ourRec.AppendTime(ts + param.offset)
 	}
+}
+
+func (r *floatSliceReducer) reset() {
+	r.prevStep = 0
+	r.prevPoints = r.prevPoints[:0]
+	r.ringBuf.reset()
 }
 
 // FloatIncAggReduceFunc is used to process intermediate calculation results.
@@ -989,6 +981,7 @@ func (r *floatIncAggReducer) Aggregate(p *ReducerEndpoint, param *ReducerParams)
 	}
 	r.prevStep = rangeEnd
 	if param.lastRec {
+		defer r.reset()
 		if param.step == 0 {
 			return
 		}
@@ -1091,6 +1084,13 @@ func (r *floatIncAggReducer) populateByLast(outRecord *record.Record, outOrdinal
 	}
 }
 
+func (r *floatIncAggReducer) reset() {
+	r.offset = 0
+	r.prevStep = 0
+	r.ringBuf.reset()
+	r.prevPoint.Reset()
+}
+
 func kahanSumInc(inc, sum, c float64) (newSum, newC float64) {
 	t := sum + inc
 	// Using Neumaier improvement, swap if next term larger than sum.
@@ -1100,4 +1100,277 @@ func kahanSumInc(inc, sum, c float64) (newSum, newC float64) {
 		c += (inc - t) + sum
 	}
 	return t, c
+}
+
+type StdVarOverTime struct{}
+
+func (r *StdVarOverTime) CreateRoutine(param *PromFuncParam) (Routine, error) {
+	return NewRoutineImpl(newFloatSliceReducer(floatStdVarOverTimeReducer, floatStdVarOverTimeMerger(false)), param.inOrdinal, param.outOrdinal), nil
+}
+
+func floatStdVarOverTimeReducer(times []int64, values []float64, start int, end int) ([]int64, []float64, bool) {
+	if start >= end {
+		return []int64{}, []float64{}, true
+	}
+	return times[start:end], values[start:end], false
+}
+
+func floatStdVarOverTimeMerger(isStdDev bool) FloatSliceMergeFunc {
+	return func(prevT []int64, currT []int64, prevV []float64, curV []float64, ts int64, c int, param *ReducerParams) (float64, bool) {
+		if c < 1 {
+			return 0, true
+		}
+		var count float64
+		var mean, cMean float64
+		var aux, cAux float64
+
+		if len(prevV) == 0 && len(curV) == 0 {
+			return 0.0, true
+		}
+
+		if len(prevV) != 0 {
+			for _, f := range prevV {
+				count++
+				delta := f - (mean + cMean)
+				mean, cMean = kahanSumInc(delta/count, mean, cMean)
+				aux, cAux = kahanSumInc(delta*(f-(mean+cMean)), aux, cAux)
+			}
+		}
+
+		if len(curV) != 0 {
+			for _, f := range curV {
+				count++
+				delta := f - (mean + cMean)
+				mean, cMean = kahanSumInc(delta/count, mean, cMean)
+				aux, cAux = kahanSumInc(delta*(f-(mean+cMean)), aux, cAux)
+			}
+		}
+		stdVar := (aux + cAux) / count
+		if isStdDev {
+			return math.Sqrt(stdVar), false
+		}
+		return stdVar, false
+	}
+}
+
+type StdDevOverTime struct{}
+
+func (r *StdDevOverTime) CreateRoutine(param *PromFuncParam) (Routine, error) {
+	return NewRoutineImpl(newFloatSliceReducer(floatStdVarOverTimeReducer, floatStdVarOverTimeMerger(true)), param.inOrdinal, param.outOrdinal), nil
+}
+
+type holtWintersOp struct{}
+
+func (r *holtWintersOp) CreateRoutine(param *PromFuncParam) (Routine, error) {
+	// The smoothing factor argument.
+	var sf float64
+	// The trend factor argument.
+	switch arg := param.args[1].(type) {
+	case *influxql.NumberLiteral:
+		sf = arg.Val
+	case *influxql.IntegerLiteral:
+		sf = float64(arg.Val)
+	default:
+		return nil, errors.New("the type of input args of holtWinters sf is unsupported")
+	}
+	var tf float64
+	switch arg2 := param.args[2].(type) {
+	case *influxql.NumberLiteral:
+		tf = arg2.Val
+	case *influxql.IntegerLiteral:
+		tf = float64(arg2.Val)
+	default:
+		return nil, errors.New("the type of input args of holtWinters tf is unsupported")
+	}
+
+	return NewRoutineImpl(newFloatSliceReducer(floatHoltWintersReducer, floatHoltWintersMerger(sf, tf)), param.inOrdinal, param.outOrdinal), nil
+}
+
+func floatHoltWintersReducer(times []int64, values []float64, start int, end int) ([]int64, []float64, bool) {
+	if start >= end {
+		return []int64{}, []float64{}, true
+	}
+	return times[start:end], values[start:end], false
+}
+
+func floatHoltWintersMerger(sf float64, tf float64) FloatSliceMergeFunc {
+	return func(prevT []int64, currT []int64, prevV []float64, curV []float64, ts int64, c int, param *ReducerParams) (float64, bool) {
+		if c < 2 {
+			return math.NaN(), true
+		}
+		var s0, s1, b float64
+
+		var tmp []float64
+		if len(prevV) > 0 {
+			tmp = append(tmp, prevV...)
+		}
+		if len(curV) > 0 {
+			tmp = append(tmp, curV...)
+		}
+		// Set initial values.
+		s1 = tmp[0]
+		b = tmp[1] - tmp[0]
+		// Run the smoothing operation.
+		var x, y float64
+		for i := 1; i < c; i++ {
+			// Scale the raw value against the smoothing factor.
+			x = sf * tmp[i]
+
+			// Scale the last smoothed value with the trend at this point.
+			b = calcTrendValue(i-1, tf, s0, s1, b)
+			y = (1 - sf) * (s1 + b)
+
+			s0, s1 = s1, x+y
+		}
+		return s1, false
+	}
+}
+
+// Calculate the trend value at the given index i in raw data d.
+// This is somewhat analogous to the slope of the trend at the given index.
+// The argument "tf" is the trend factor.
+// The argument "s0" is the computed smoothed value.
+// The argument "s1" is the computed trend factor.
+// The argument "b" is the raw input value.
+func calcTrendValue(i int, tf, s0, s1, b float64) float64 {
+	if i == 0 {
+		return b
+	}
+
+	x := tf * (s1 - s0)
+	y := (1 - tf) * b
+
+	return x + y
+}
+
+type changesOp struct{}
+
+func (r *changesOp) CreateRoutine(param *PromFuncParam) (Routine, error) {
+	return NewRoutineImpl(newFloatSliceReducer(floatChangesReducer, floatChangesMerger()), param.inOrdinal, param.outOrdinal), nil
+}
+
+func floatChangesReducer(times []int64, values []float64, start int, end int) ([]int64, []float64, bool) {
+	if start >= end {
+		return []int64{}, []float64{}, true
+	}
+	return times[start:end], values[start:end], false
+}
+
+func floatChangesMerger() FloatSliceMergeFunc {
+	return func(prevT []int64, currT []int64, prevV []float64, curV []float64, ts int64, c int, param *ReducerParams) (float64, bool) {
+		if c < 1 {
+			return math.NaN(), true
+		}
+		changes := 0
+		var prev float64
+		var init bool
+		if len(prevV) > 0 {
+			prev = prevV[0]
+			init = true
+			prev, changes = doCalculateChangeTimes(prevV[1:], prev, changes)
+		}
+		if len(curV) > 0 {
+			if !init {
+				prev = curV[0]
+				_, changes = doCalculateChangeTimes(curV[1:], prev, changes)
+			} else {
+				_, changes = doCalculateChangeTimes(curV, prev, changes)
+			}
+		}
+		return float64(changes), false
+	}
+}
+
+func doCalculateChangeTimes(curV []float64, prev float64, changes int) (float64, int) {
+	for _, sample := range curV {
+		current := sample
+		if current != prev && !(math.IsNaN(current) && math.IsNaN(prev)) {
+			changes++
+		}
+		prev = current
+	}
+	return prev, changes
+}
+
+type resetsOp struct{}
+
+func (r *resetsOp) CreateRoutine(param *PromFuncParam) (Routine, error) {
+	return NewRoutineImpl(newFloatSliceReducer(floatResetsReducer, floatResetsMerger()), param.inOrdinal, param.outOrdinal), nil
+}
+
+func floatResetsReducer(times []int64, values []float64, start int, end int) ([]int64, []float64, bool) {
+	if start >= end {
+		return []int64{}, []float64{}, true
+	}
+	return times[start:end], values[start:end], false
+}
+
+func floatResetsMerger() FloatSliceMergeFunc {
+	return func(prevT []int64, currT []int64, prevV []float64, curV []float64, ts int64, c int, param *ReducerParams) (float64, bool) {
+		resets := 0
+		var prev float64
+		var init bool
+		if len(prevV) > 0 {
+			prev = prevV[0]
+			init = true
+			prev, resets = doCalculateResetsTimes(prevV[1:], prev, resets)
+		}
+		if len(curV) > 0 {
+			if !init {
+				prev = curV[0]
+				_, resets = doCalculateResetsTimes(curV[1:], prev, resets)
+			} else {
+				_, resets = doCalculateResetsTimes(curV, prev, resets)
+			}
+		}
+		return float64(resets), false
+	}
+}
+
+func doCalculateResetsTimes(prevV []float64, prev float64, resets int) (float64, int) {
+	for _, sample := range prevV {
+		if sample < prev {
+			resets++
+		}
+		prev = sample
+	}
+	return prev, resets
+}
+
+type QuantileOverTime struct{}
+
+func (r *QuantileOverTime) CreateRoutine(param *PromFuncParam) (Routine, error) {
+	var percentile float64
+	switch arg := param.args[1].(type) {
+	case *influxql.NumberLiteral:
+		percentile = arg.Val
+	case *influxql.IntegerLiteral:
+		percentile = float64(arg.Val)
+	default:
+		return nil, errors.New("the type of input args of quantile_prom iterator is unsupported")
+	}
+	return NewRoutineImpl(newFloatSliceReducer(floatStdVarOverTimeReducer, floatQuantileOverTimeMerger(percentile)), param.inOrdinal, param.outOrdinal), nil
+}
+
+func floatQuantileOverTimeMerger(percentile float64) FloatSliceMergeFunc {
+	return func(prevT []int64, currT []int64, prevV []float64, curV []float64, ts int64, c int, param *ReducerParams) (float64, bool) {
+		if c == 0 {
+			return math.NaN(), false
+		}
+		if percentile < 0 {
+			return math.Inf(-1), false
+		} else if percentile > 1 {
+			return math.Inf(+1), false
+		}
+
+		prevV = append(prevV, curV...)
+
+		sort.Float64s(prevV)
+		n := float64(len(prevV))
+		rank := percentile * (n - 1)
+		lowerIndex := math.Max(0, math.Floor(rank))
+		upperIndex := math.Min(n-1, lowerIndex+1)
+		weight := rank - math.Floor(rank)
+		return prevV[int(lowerIndex)]*(1-weight) + prevV[int(upperIndex)]*weight, false
+	}
 }

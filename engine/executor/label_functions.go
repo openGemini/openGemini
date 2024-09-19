@@ -1,18 +1,16 @@
-/*
-Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package executor
 
@@ -74,8 +72,7 @@ func (s *labelReplaceFunc) CallFunc(name string, args []interface{}) (interface{
 	for _, tag := range tags {
 		v, ok := tag.GetChunkTagValue(src)
 		if !ok {
-			newTags = append(newTags, tag)
-			continue
+			v = ""
 		}
 		index := regex.FindStringSubmatchIndex(v)
 		if index == nil {
@@ -84,8 +81,17 @@ func (s *labelReplaceFunc) CallFunc(name string, args []interface{}) (interface{
 		}
 		res := regex.ExpandString([]byte{}, repl, v, index)
 		keys, values := tag.GetChunkTagAndValues()
-		keys = append(keys, dst)
-		values = append(values, string(res))
+		kLen := len(keys)
+		for i := 0; i < kLen; i++ {
+			if keys[i] == dst {
+				keys = append(keys[0:i], keys[i+1:kLen]...)
+				values = append(values[0:i], values[i+1:kLen]...)
+			}
+		}
+		if len(res) > 0 {
+			keys = append(keys, dst)
+			values = append(values, string(res))
+		}
 		newTags = append(newTags, *NewChunkTagsByTagKVs(keys, values))
 	}
 

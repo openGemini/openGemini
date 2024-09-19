@@ -121,6 +121,7 @@ message QueryExeInfo {
     required string Database = 3;
     required int64  BeginTime = 4;
     required int32  RunState = 5;
+    required uint32 PtID = 6;
 }
 
 message ShowQueriesResponse {

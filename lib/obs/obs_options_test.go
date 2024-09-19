@@ -83,3 +83,14 @@ func TestParseLogPath(t *testing.T) {
 		t.Fatal("Expect ParseLogPath failed")
 	}
 }
+
+func TestGetShardID(t *testing.T) {
+	shardId := GetShardID("data/test/8/mst/9_1756944000000000000_1757030400000000000_9/columnstore/mst_0000")
+	if shardId != 9 {
+		t.Errorf("get wrong shardID")
+	}
+	shardId = GetShardID("data/test/8/mst/x_1756944000000000000_1757030400000000000_9/columnstore/mst_0000")
+	if shardId != 0 {
+		t.Errorf("get wrong shardID")
+	}
+}

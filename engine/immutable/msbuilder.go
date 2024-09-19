@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package immutable
 
@@ -826,15 +824,15 @@ func (b *MsBuilder) WriteDetachedIndex(writeRec *record.Record, rowsPerSegment [
 		} else {
 			cols = len(schemaIdxes[i])
 		}
-		indexBuf := logstore.GetIndexBuf(cols)
+		indexBuf := logstore.GetSkipIndexBuf(cols)
 
 		*indexBuf, skipIndexFilePaths = skipWriters[i].CreateDetachIndex(writeRec, schemaIdxes[i], rowsPerSegment, *indexBuf)
 		err = b.flushIndexToDisk(*indexBuf, skipIndexFilePaths, i, len(rowsPerSegment))
 		if err != nil {
-			logstore.PutIndexBuf(indexBuf)
+			logstore.PutSkipIndexBuf(indexBuf)
 			return err
 		}
-		logstore.PutIndexBuf(indexBuf)
+		logstore.PutSkipIndexBuf(indexBuf)
 	}
 	return nil
 }
@@ -1345,7 +1343,7 @@ func (b *MsBuilder) genBloomFilter() {
 		b.bloomFilter = make([]byte, bmBytes)
 	} else {
 		b.bloomFilter = b.bloomFilter[:bmBytes]
-		util.MemorySet(b.bloomFilter)
+		util.MemorySet(b.bloomFilter, 0)
 	}
 	b.trailer.bloomM = bm
 	b.trailer.bloomK = bk

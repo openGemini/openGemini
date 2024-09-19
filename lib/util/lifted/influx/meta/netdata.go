@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package meta
 
@@ -429,4 +427,102 @@ func (c *CardinalityInfo) marshal() *proto2.CardinalityInfo {
 func (c *CardinalityInfo) unmarshal(pb *proto2.CardinalityInfo) {
 	c.TimeRange.unmarshal(pb.GetTimeRange())
 	c.Cardinality = pb.GetCardinality()
+}
+
+type NodeRow struct {
+	Timestamp int64
+	Status    string
+	HostName  string
+	NodeID    uint64
+	NodeType  string
+}
+
+func (n *NodeRow) marshal() *proto2.NodeRow {
+	pb := &proto2.NodeRow{
+		Timestamp: proto.Int64(n.Timestamp),
+		Status:    proto.String(n.Status),
+		HostName:  proto.String(n.HostName),
+		NodeID:    proto.Uint64(n.NodeID),
+		NodeType:  proto.String(n.NodeType),
+	}
+	return pb
+}
+
+func (n *NodeRow) unmarshal(pb *proto2.NodeRow) {
+	n.Timestamp = pb.GetTimestamp()
+	n.Status = pb.GetStatus()
+	n.HostName = pb.GetHostName()
+	n.NodeID = pb.GetNodeID()
+	n.NodeType = pb.GetNodeType()
+}
+
+type EventRow struct {
+	OpId      uint64
+	EventType string
+	Db        string
+	PtId      uint32
+	SrcNodeId uint64
+	DstNodeId uint64
+	CurrState string
+	PreState  string
+}
+
+func (e *EventRow) marshal() *proto2.EventRow {
+	pb := &proto2.EventRow{
+		OpId:      proto.Uint64(e.OpId),
+		EventType: proto.String(e.EventType),
+		Db:        proto.String(e.Db),
+		PtId:      proto.Uint32(e.PtId),
+		SrcNodeId: proto.Uint64(e.SrcNodeId),
+		DstNodeId: proto.Uint64(e.DstNodeId),
+		CurrState: proto.String(e.CurrState),
+		PreState:  proto.String(e.PreState),
+	}
+	return pb
+}
+
+func (e *EventRow) unmarshal(pb *proto2.EventRow) {
+	e.OpId = pb.GetOpId()
+	e.EventType = pb.GetEventType()
+	e.Db = pb.GetDb()
+	e.PtId = pb.GetPtId()
+	e.SrcNodeId = pb.GetSrcNodeId()
+	e.DstNodeId = pb.GetDstNodeId()
+	e.CurrState = pb.GetCurrState()
+	e.PreState = pb.GetPreState()
+}
+
+type ShowClusterInfo struct {
+	Nodes  []NodeRow
+	Events []EventRow
+}
+
+func (s *ShowClusterInfo) MarshalBinary() ([]byte, error) {
+	pb := &proto2.ShowClusterInfo{}
+	pb.Nodes = make([]*proto2.NodeRow, len(s.Nodes))
+	for i := range s.Nodes {
+		pb.Nodes[i] = s.Nodes[i].marshal()
+	}
+	pb.Events = make([]*proto2.EventRow, len(s.Events))
+	for i := range s.Events {
+		pb.Events[i] = s.Events[i].marshal()
+	}
+	return proto.Marshal(pb)
+}
+
+func (s *ShowClusterInfo) UnmarshalBinary(buf []byte) error {
+	pb := &proto2.ShowClusterInfo{}
+	if err := proto.Unmarshal(buf, pb); err != nil {
+		return err
+	}
+
+	s.Nodes = make([]NodeRow, len(pb.Nodes))
+	for i := range pb.Nodes {
+		s.Nodes[i].unmarshal(pb.Nodes[i])
+	}
+	s.Events = make([]EventRow, len(pb.Events))
+	for i := range pb.Events {
+		s.Events[i].unmarshal(pb.Events[i])
+	}
+	return nil
 }

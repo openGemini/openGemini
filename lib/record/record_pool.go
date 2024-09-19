@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 // nolint
 package record
@@ -22,6 +20,11 @@ import (
 
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+)
+
+var (
+	LogStoreRecordPool     = NewRecordPool(LogStoreRecord)
+	LogStoreFailRecordPool = NewRecordPool(LogStoreFailRecord)
 )
 
 type RecordPool struct {
@@ -49,6 +52,9 @@ const (
 	SeriesPool
 	ColumnReaderPool
 	LogStoreReaderPool
+	SeriesLoopPool
+	LogStoreRecord
+	LogStoreFailRecord
 	UnknownPool
 )
 
@@ -116,6 +122,21 @@ func NewRecordPool(recordType RecordType) *RecordPool {
 		get = statistics.NewRecordStatistics().AddSeriesPoolGet
 		reuse = statistics.NewRecordStatistics().AddSeriesPoolGetReUse
 		abort = statistics.NewRecordStatistics().AddSeriesPoolAbort
+	case SeriesLoopPool:
+		inUse = statistics.NewRecordStatistics().AddSeriesLoopPoolInUse
+		get = statistics.NewRecordStatistics().AddSeriesLoopPoolGet
+		reuse = statistics.NewRecordStatistics().AddSeriesLoopPoolGetReUse
+		abort = statistics.NewRecordStatistics().AddSeriesLoopPoolAbort
+	case LogStoreRecord:
+		inUse = statistics.NewRecordStatistics().AddLogstoreInUse
+		get = statistics.NewRecordStatistics().AddLogstoreGet
+		reuse = statistics.NewRecordStatistics().AddLogstoreReUse
+		abort = statistics.NewRecordStatistics().AddLogstoreAbort
+	case LogStoreFailRecord:
+		inUse = statistics.NewRecordStatistics().AddLogstoreInUse
+		get = statistics.NewRecordStatistics().AddLogstoreGet
+		reuse = statistics.NewRecordStatistics().AddLogstoreReUse
+		abort = statistics.NewRecordStatistics().AddLogstoreAbort
 	}
 
 	return &RecordPool{
@@ -153,6 +174,20 @@ func (p *RecordPool) Get() *Record {
 func (p *RecordPool) Put(rec *Record) {
 	p.inUse(-1)
 	if recLen := rec.Len(); (recLen > 0 && rec.RowNums() > RecMaxRowNumForRuse) || cap(rec.Schema) > RecMaxLenForRuse {
+		p.abort(1)
+		return
+	}
+	rec.ResetDeep()
+	select {
+	case p.cache <- rec:
+	default:
+		p.pool.Put(rec)
+	}
+}
+
+func (p *RecordPool) PutBigRecord(rec *Record) {
+	p.inUse(-1)
+	if rec.Len() == 0 || rec.RowNums() > BigRecMaxRowNumForRuse || cap(rec.Schema) > RecMaxLenForRuse {
 		p.abort(1)
 		return
 	}
@@ -256,4 +291,11 @@ func (p *CircularRecordPool) Put() {
 func (p *CircularRecordPool) PutRecordInCircularPool() {
 	recordNum := cap(p.records)
 	p.index = (p.index - 1 + recordNum) % recordNum
+}
+
+func GetRecordFromPool(p *RecordPool, schema Schemas) *Record {
+	record := p.Get()
+	record.ReserveSchemaAndColVal(schema.Len())
+	copy(record.Schema, schema)
+	return record
 }

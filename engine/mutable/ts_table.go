@@ -1,18 +1,16 @@
-/*
-Copyright 2023 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2023 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package mutable
 
@@ -46,14 +44,10 @@ func newTsMemTableImpl() *tsMemTableImpl {
 
 func (t *tsMemTableImpl) SetClient(_ metaclient.MetaClient) {}
 
-func (t *tsMemTableImpl) WriteRecordForFlush(rec *record.Record, msb *immutable.MsBuilder, tbStore immutable.TablesStore, id uint64, order bool,
-	lastFlushTime int64) *immutable.MsBuilder {
+func (t *tsMemTableImpl) WriteRecordForFlush(rec *record.Record, msb *immutable.MsBuilder, tbStore immutable.TablesStore, id uint64) *immutable.MsBuilder {
 	var err error
 
-	if !order && lastFlushTime == math.MaxInt64 {
-		msb.StoreTimes()
-	}
-
+	msb.StoreTimes()
 	msb, err = msb.WriteRecord(id, rec, func(fn immutable.TSSPFileName) (seq uint64, lv uint16, merge uint16, ext uint16) {
 		return tbStore.NextSequence(), 0, 0, 0
 	})
@@ -111,7 +105,7 @@ func (t *tsMemTableImpl) FlushChunks(table *MemTable, dataPath, msName, _, _ str
 				conf := immutable.GetTsStoreConfig()
 				orderMsBuilder = createMsBuilder(tbStore, true, lock, dataPath, msName, sidLen, orderRows, conf, config.TSSTORE)
 			}
-			orderMsBuilder = t.WriteRecordForFlush(orderRec, orderMsBuilder, tbStore, chunk.Sid, true, flushTime)
+			orderMsBuilder = t.WriteRecordForFlush(orderRec, orderMsBuilder, tbStore, chunk.Sid)
 			atomic.AddInt64(&Statistics.PerfStat.FlushOrderRowsCount, int64(orderRows))
 		}
 
@@ -121,8 +115,10 @@ func (t *tsMemTableImpl) FlushChunks(table *MemTable, dataPath, msName, _, _ str
 				conf := immutable.GetTsStoreConfig()
 				unOrderMsBuilder = createMsBuilder(tbStore, false, lock, dataPath, msName, sidLen, unOrderRows, conf, config.TSSTORE)
 			}
-			unOrderMsBuilder = t.WriteRecordForFlush(unOrderRec, unOrderMsBuilder, tbStore, chunk.Sid, false, flushTime)
+			unOrderMsBuilder = t.WriteRecordForFlush(unOrderRec, unOrderMsBuilder, tbStore, chunk.Sid)
 			atomic.AddInt64(&Statistics.PerfStat.FlushUnOrderRowsCount, int64(unOrderRows))
+
+			t.statUnordered(unOrderRec.Times(), flushTime)
 		}
 
 		atomic.AddInt64(&Statistics.PerfStat.FlushRowsCount, int64(orderRows+unOrderRows))
@@ -134,6 +130,17 @@ func (t *tsMemTableImpl) FlushChunks(table *MemTable, dataPath, msName, _, _ str
 	// add both ordered/unordered files to list
 	tbStore.AddBothTSSPFiles(msInfo.GetFlushed(), msName, orderFiles, unOrderFiles)
 	PutSidsImpl(sids)
+}
+
+func (t *tsMemTableImpl) statUnordered(times []int64, flushTime int64) {
+	if flushTime == math.MaxInt64 {
+		return
+	}
+
+	stat := Statistics.NewOOOTimeDistribution()
+	for i := range times {
+		stat.Add(flushTime-times[i], 1)
+	}
 }
 
 func (t *tsMemTableImpl) finish(msb *immutable.MsBuilder, fileInfos chan []immutable.FileInfoExtend) []immutable.TSSPFile {
@@ -186,14 +193,14 @@ func SplitRecordByTime(rec *record.Record, pool []record.Record, time int64) (*r
 
 		unOrderCol.Init()
 		unOrderCol.AppendColVal(col, field.Type, 0, n)
-		if len(unOrderCol.Val) > 0 {
+		if unOrderCol.NilCount != unOrderCol.Len {
 			unOrderRec.Schema = append(unOrderRec.Schema, field)
 			unOrderIdx++
 		}
 
 		orderCol.Init()
 		orderCol.AppendColVal(col, field.Type, n, col.Len)
-		if len(orderCol.Val) > 0 {
+		if orderCol.NilCount != orderCol.Len {
 			orderRec.Schema = append(orderRec.Schema, field)
 			orderIdx++
 		}
@@ -242,7 +249,6 @@ func (t *tsMemTableImpl) WriteRows(table *MemTable, rowsD *dictpool.Dict, wc Wri
 				}
 				atomic.AddInt64(&Statistics.PerfStat.WriteShardKeyIdxNs, time.Since(startTime).Nanoseconds())
 			}
-
 			_, err = t.appendFields(table, msInfo, chunk, rs[index].Timestamp, rs[index].Fields)
 			if err != nil {
 				return err

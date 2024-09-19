@@ -1,18 +1,16 @@
-/*
-Copyright 2023 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2023 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package clv
 
@@ -145,30 +143,30 @@ func mergeDocIdxItems(data []byte, items []mergeset.Item) ([]byte, []mergeset.It
 	dstData := data[:0]
 	dstItems := items[:0]
 
-	// The merged item of multiple items may be smaller than the old items. Special
-	// processing is required for the first item: Items with the same key as the first item will not be merged.
-	var noMerge bool
-	var item0 []byte
+	// The merged item of multiple items may be smaller than the old items.
+	// Special processing is required for the first and last item:
+	// Items with the same key as the first item or last item will not be merged.
+	noMerge := false
+	comFirstItem := true
 	m := mergerPool.Get()
 	for i, it := range items {
 		item := it.Bytes(data)
-
-		if i == 0 {
-			item0 = item
-			noMerge = true
+		if comFirstItem {
+			noMerge = keysEqual(firstItem, item)
+			comFirstItem = noMerge
+		}
+		if !comFirstItem && lastItem[0] == txPrefixPos {
+			noMerge = keysEqual(lastItem, item)
 		}
 
-		if noMerge {
-			noMerge = keysEqual(item0, item)
-		}
-
-		if len(item) == 0 || item[0] != txPrefixPos || i == 0 || i == len(items)-1 || noMerge {
+		if len(item) == 0 || item[0] != txPrefixPos || i == len(items)-1 || noMerge {
 			dstData, dstItems = m.flushPendingItem(dstData, dstItems)
 			dstData = append(dstData, item...)
 			dstItems = append(dstItems, mergeset.Item{
 				Start: uint32(len(dstData) - len(item)),
 				End:   uint32(len(dstData)),
 			})
+			noMerge = false
 			continue
 		}
 

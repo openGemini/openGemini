@@ -1,18 +1,16 @@
-/*
-Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package engine
 
@@ -22,6 +20,8 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
+	"github.com/openGemini/openGemini/lib/raftconn"
+	"github.com/openGemini/openGemini/lib/raftlog"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	assert1 "github.com/stretchr/testify/assert"
 	"go.etcd.io/etcd/raft/v3/raftpb"
@@ -57,6 +57,10 @@ func (m *mockMetaClient4Replica) DBPtView(database string) (meta.DBPtInfos, erro
 	}, nil
 }
 
+func (m *mockMetaClient4Replica) DataNode(nodeId uint64) (*meta.DataNode, error) {
+	return &meta.DataNode{}, nil
+}
+
 func TestStartRaftNode(t *testing.T) {
 	client := &mockMetaClient4Replica{}
 	e := &Engine{
@@ -73,7 +77,7 @@ func TestStartRaftNode(t *testing.T) {
 	}
 	dbPt := e.DBPartitions["test"][1]
 
-	err := e.startRaftNode(1, 1, dbPt, client)
+	err := e.startRaftNode(1, 1, dbPt, client, nil)
 	dbPt.node.Stop()
 	assert1.NoError(t, err)
 	if dbPt.node == nil {
@@ -81,7 +85,7 @@ func TestStartRaftNode(t *testing.T) {
 	}
 
 	dbPt.id = 4
-	err = e.startRaftNode(1, 1, dbPt, client)
+	err = e.startRaftNode(1, 1, dbPt, client, nil)
 	dbPt.node.Stop()
 	assert1.NoError(t, err)
 	if dbPt.node == nil {
@@ -90,7 +94,7 @@ func TestStartRaftNode(t *testing.T) {
 	dbPt.id = 1
 
 	dbPt.id = 7 // not existed
-	err = e.startRaftNode(1, 1, dbPt, client)
+	err = e.startRaftNode(1, 1, dbPt, client, nil)
 	assert1.Error(t, err)
 	assert1.EqualError(t, err, "Got database: test, ptId: 7 peers error, opId:1")
 }
@@ -116,9 +120,37 @@ func TestSendRaftMessage_PartitionNodeIsNil(t *testing.T) {
 
 type mockNode struct{}
 
+func (n mockNode) GetProposeC() chan []byte {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (n mockNode) GetCommitC() <-chan *raftconn.Commit {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (mockNode) StepRaftMessage(msg []raftpb.Message) {}
 
 func (mockNode) Stop() {}
+
+func (n mockNode) GenerateProposeId() uint64 {
+	return 0
+}
+
+func (n mockNode) GetIdentity() string {
+	return ""
+}
+
+func (n mockNode) AddCommittedDataC(dw *raftlog.DataWrapper) (chan error, error) {
+	return make(chan error), nil
+}
+
+func (n mockNode) RemoveCommittedDataC(dw *raftlog.DataWrapper) {
+}
+
+func (n mockNode) RetCommittedDataC(dw *raftlog.DataWrapper, err error) {
+}
 
 func TestSendRaftMessage_Success(t *testing.T) {
 	e := &Engine{
@@ -132,4 +164,23 @@ func TestSendRaftMessage_Success(t *testing.T) {
 	}
 	err := e.SendRaftMessage("testDB", 1, raftpb.Message{})
 	assert1.NoError(t, err)
+}
+
+func TestCheckRepGroupStatus(t *testing.T) {
+	e := &Engine{
+		DBPartitions: map[string]map[uint32]*DBPTInfo{
+			"testDB": {
+				1: &DBPTInfo{
+					node: &mockNode{},
+				},
+			},
+		},
+		metaClient: mockMetaClient(),
+	}
+
+	err := e.checkRepGroupStatus(1, "db", 1)
+	assert1.NoError(t, err)
+
+	err2 := e.checkRepGroupStatus(1, "testUnFull", 1)
+	assert1.Equal(t, "Got database: testUnFull, ptId: 1 raftGroup is still UnFull, opId:1", err2.Error())
 }

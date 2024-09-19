@@ -260,6 +260,10 @@ func (tf *tagFilter) SetRegexMatchAll(match bool) {
 	tf.isAllMatch = match
 }
 
+func (tf *tagFilter) IsFilterEmptyValue() bool {
+	return tf.isEmptyValue && !tf.isNegative
+}
+
 func reverseBytes(dst, src []byte) []byte {
 	for i := len(src) - 1; i >= 0; i-- {
 		dst = append(dst, src[i])

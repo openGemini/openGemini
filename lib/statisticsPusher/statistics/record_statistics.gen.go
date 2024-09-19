@@ -3,21 +3,19 @@
 //
 // Source: statistics.tmpl
 
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package statistics
 
@@ -68,6 +66,14 @@ type RecordStatistics struct {
 	itemSeriesPoolGet                      int64
 	itemSeriesPoolAbort                    int64
 	itemSeriesPoolGetReUse                 int64
+	itemSeriesLoopPoolInUse                int64
+	itemSeriesLoopPoolGet                  int64
+	itemSeriesLoopPoolAbort                int64
+	itemSeriesLoopPoolGetReUse             int64
+	itemLogstoreInUse                      int64
+	itemLogstoreGet                        int64
+	itemLogstoreAbort                      int64
+	itemLogstoreReUse                      int64
 
 	mu  sync.RWMutex
 	buf []byte
@@ -102,14 +108,14 @@ func (s *RecordStatistics) Collect(buffer []byte) ([]byte, error) {
 		"FileLoopCursorPoolGet":              s.itemFileLoopCursorPoolGet,
 		"FileLoopCursorPoolGetReUse":         s.itemFileLoopCursorPoolGetReUse,
 		"FileLoopCursorPoolAbort":            s.itemFileLoopCursorPoolAbort,
-		"FileCursorValidRowPoolInUse":        s.itemFileLoopCursorPoolInUse,
-		"FileCursorValidRowPoolGet":          s.itemFileLoopCursorPoolGet,
-		"FileCursorValidRowPoolGetReUse":     s.itemFileLoopCursorPoolGetReUse,
-		"FileCursorValidRowPoolAbort":        s.itemFileLoopCursorPoolAbort,
-		"FileCursorFilterRecordPoolInUse":    s.itemFileLoopCursorPoolInUse,
-		"FileCursorFilterRecordPoolGet":      s.itemFileLoopCursorPoolGet,
-		"FileCursorFilterRecordPoolGetReUse": s.itemFileLoopCursorPoolGetReUse,
-		"FileCursorFilterRecordPoolAbort":    s.itemFileLoopCursorPoolAbort,
+		"FileCursorValidRowPoolInUse":        s.itemFileCursorValidRowPoolInUse,
+		"FileCursorValidRowPoolGet":          s.itemFileCursorValidRowPoolGet,
+		"FileCursorValidRowPoolGetReUse":     s.itemFileCursorValidRowPoolGetReUse,
+		"FileCursorValidRowPoolAbort":        s.itemFileCursorValidRowPoolAbort,
+		"FileCursorFilterRecordPoolInUse":    s.itemFileCursorFilterRecordPoolInUse,
+		"FileCursorFilterRecordPoolGet":      s.itemFileCursorFilterRecordPoolGet,
+		"FileCursorFilterRecordPoolGetReUse": s.itemFileCursorFilterRecordPoolGetReUse,
+		"FileCursorFilterRecordPoolAbort":    s.itemFileCursorFilterRecordPoolAbort,
 		"AggPoolInUse":                       s.itemAggPoolInUse,
 		"AggPoolGet":                         s.itemAggPoolGet,
 		"AggPoolGetReUse":                    s.itemAggPoolGetReUse,
@@ -131,6 +137,14 @@ func (s *RecordStatistics) Collect(buffer []byte) ([]byte, error) {
 		"SeriesPoolGet":                      s.itemSeriesPoolGet,
 		"SeriesPoolAbort":                    s.itemSeriesPoolAbort,
 		"SeriesPoolGetReUse":                 s.itemSeriesPoolGetReUse,
+		"SeriesLoopPoolInUse":                s.itemSeriesLoopPoolInUse,
+		"SeriesLoopPoolGet":                  s.itemSeriesLoopPoolGet,
+		"SeriesLoopPoolAbort":                s.itemSeriesLoopPoolAbort,
+		"SeriesLoopPoolGetReUse":             s.itemSeriesLoopPoolGetReUse,
+		"LogstoreInUse":                      s.itemLogstoreInUse,
+		"LogstoreGet":                        s.itemLogstoreGet,
+		"LogstoreAbort":                      s.itemLogstoreAbort,
+		"LogstoreReUse":                      s.itemLogstoreReUse,
 	}
 
 	buffer = AddPointToBuffer("record", s.tags, data, buffer)
@@ -306,4 +320,36 @@ func (s *RecordStatistics) AddSeriesPoolAbort(i int64) {
 
 func (s *RecordStatistics) AddSeriesPoolGetReUse(i int64) {
 	atomic.AddInt64(&s.itemSeriesPoolGetReUse, i)
+}
+
+func (s *RecordStatistics) AddSeriesLoopPoolInUse(i int64) {
+	atomic.AddInt64(&s.itemSeriesLoopPoolInUse, i)
+}
+
+func (s *RecordStatistics) AddSeriesLoopPoolGet(i int64) {
+	atomic.AddInt64(&s.itemSeriesLoopPoolGet, i)
+}
+
+func (s *RecordStatistics) AddSeriesLoopPoolAbort(i int64) {
+	atomic.AddInt64(&s.itemSeriesLoopPoolAbort, i)
+}
+
+func (s *RecordStatistics) AddSeriesLoopPoolGetReUse(i int64) {
+	atomic.AddInt64(&s.itemSeriesLoopPoolGetReUse, i)
+}
+
+func (s *RecordStatistics) AddLogstoreInUse(i int64) {
+	atomic.AddInt64(&s.itemLogstoreInUse, i)
+}
+
+func (s *RecordStatistics) AddLogstoreGet(i int64) {
+	atomic.AddInt64(&s.itemLogstoreGet, i)
+}
+
+func (s *RecordStatistics) AddLogstoreAbort(i int64) {
+	atomic.AddInt64(&s.itemLogstoreAbort, i)
+}
+
+func (s *RecordStatistics) AddLogstoreReUse(i int64) {
+	atomic.AddInt64(&s.itemLogstoreReUse, i)
 }

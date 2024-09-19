@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package meta
 
@@ -33,17 +31,17 @@ type MoveEvent struct {
 	BaseEvent
 
 	startTime     time.Time
-	curState      MoveState
-	preState      MoveState
-	rollbackState MoveState
+	curState      meta.MoveState
+	preState      meta.MoveState
+	rollbackState meta.MoveState
 }
 
 func NewMoveEvent(pt *meta.DbPtInfo, src, dst uint64, aliveConnId uint64, isUserCommand bool) *MoveEvent {
 	e := &MoveEvent{
 		startTime:     time.Now(),
-		curState:      MoveInit,
-		preState:      MoveInit,
-		rollbackState: MoveInit}
+		curState:      meta.MoveInit,
+		preState:      meta.MoveInit,
+		rollbackState: meta.MoveInit}
 
 	e.pt = pt
 	e.eventId = pt.String()
@@ -105,12 +103,12 @@ func (e *MoveEvent) getTarget() uint64 {
 }
 
 func (e *MoveEvent) isDstEvent() bool {
-	return e.curState == MovePreAssign || e.curState == MoveAssign || e.curState == MoveRollbackPreAssign
+	return e.curState == meta.MovePreAssign || e.curState == meta.MoveAssign || e.curState == meta.MoveRollbackPreAssign
 }
 
 //lint:ignore U1000 keep this
 func (e *MoveEvent) isSrcEvent() bool {
-	return e.curState == MovePreOffload || e.curState == MoveOffload || e.curState == MoveRollbackPreOffload
+	return e.curState == meta.MovePreOffload || e.curState == meta.MoveOffload || e.curState == meta.MoveRollbackPreOffload
 }
 
 func (e *MoveEvent) String() string {
@@ -125,36 +123,36 @@ func (e *MoveEvent) StringForTest() string {
 func (e *MoveEvent) stateTransition(err error) {
 	nextState := e.curState
 	switch e.curState {
-	case MovePreOffload:
+	case meta.MovePreOffload:
 		if err == nil {
-			nextState = MovePreAssign
+			nextState = meta.MovePreAssign
 			break
 		}
-		nextState = MoveOffloaded
-	case MovePreAssign:
+		nextState = meta.MoveOffloaded
+	case meta.MovePreAssign:
 		if err == nil {
-			nextState = MoveOffload
+			nextState = meta.MoveOffload
 			break
 		}
-		nextState = MoveRollbackPreOffload // need change store or dst is not alive, rollback preOffload
-	case MoveOffload:
-		nextState = MoveOffloaded // err == nil or src is not alive
-	case MoveOffloaded:
-		nextState = MoveAssign
-	case MoveAssign:
+		nextState = meta.MoveRollbackPreOffload // need change store or dst is not alive, rollback preOffload
+	case meta.MoveOffload:
+		nextState = meta.MoveOffloaded // err == nil or src is not alive
+	case meta.MoveOffloaded:
+		nextState = meta.MoveAssign
+	case meta.MoveAssign:
 		if err == nil {
-			nextState = MoveAssigned
+			nextState = meta.MoveAssigned
 			break
 		}
 		// means dst is not alive or need change store
-		nextState = MoveAssignFailed
+		nextState = meta.MoveAssignFailed
 		e.eventRes.err = err
-	case MoveRollbackPreOffload:
+	case meta.MoveRollbackPreOffload:
 		if err == nil {
-			nextState = MoveFinal
+			nextState = meta.MoveFinal
 			break
 		}
-		nextState = MoveOffloaded // rollbackOffload failed and src is not alive, update db pt status to offline
+		nextState = meta.MoveOffloaded // rollbackOffload failed and src is not alive, update db pt status to offline
 	default:
 		logger.GetLogger().Error("Fail to transit the state, state is invalid", zap.String("event", e.String()))
 	}
@@ -169,7 +167,7 @@ func (e *MoveEvent) stateTransition(err error) {
 }
 
 func (e *MoveEvent) isReassignNeeded() bool {
-	if e.curState != MoveInit && e.curState != MoveAssigned && e.curState != MoveFinal {
+	if e.curState != meta.MoveInit && e.curState != meta.MoveAssigned && e.curState != meta.MoveFinal {
 		if !e.needIsolate {
 			return true
 		}
@@ -207,69 +205,21 @@ func (e *MoveEvent) handleCommandErr(err error) error {
 	return err
 }
 
-type MoveState int
-
-const (
-	MoveInit               MoveState = 0
-	MovePreOffload         MoveState = 1
-	MoveRollbackPreOffload MoveState = 2
-	MovePreAssign          MoveState = 3
-	MoveRollbackPreAssign  MoveState = 4 // rollback preAssign in store when preAssign failed
-	MoveOffload            MoveState = 5 // if offload failed retry do not rollback preAssign
-	MoveOffloadFailed      MoveState = 6
-	MoveOffloaded          MoveState = 7
-	MoveAssign             MoveState = 8
-	MoveAssignFailed       MoveState = 9
-	MoveAssigned           MoveState = 10
-	MoveFinal              MoveState = 11
-)
-
-func (s MoveState) String() string {
-	switch s {
-	case MoveInit:
-		return "move_init"
-	case MovePreOffload:
-		return "move_preOffload"
-	case MoveRollbackPreOffload:
-		return "move_rollbackPreoffload"
-	case MovePreAssign:
-		return "move_preAssign"
-	case MoveRollbackPreAssign:
-		return "move_rollbackPreAssign"
-	case MoveOffload:
-		return "move_offload"
-	case MoveOffloadFailed:
-		return "move_offloadFailed"
-	case MoveOffloaded:
-		return "move_offloaded"
-	case MoveAssign:
-		return "move_assign"
-	case MoveAssignFailed:
-		return "move_assignFailed"
-	case MoveAssigned:
-		return "move_assigned"
-	case MoveFinal:
-		return "move_final"
-	default:
-		return "unknown assign state"
-	}
-}
-
-var moveHandlerMap map[MoveState]func(e *MoveEvent) (NextAction, error)
+var moveHandlerMap map[meta.MoveState]func(e *MoveEvent) (NextAction, error)
 
 func init() {
-	moveHandlerMap = map[MoveState]func(e *MoveEvent) (NextAction, error){
-		MoveInit:               moveInitHandler,
-		MovePreOffload:         movePreOffloadHandler,
-		MoveRollbackPreOffload: moveRollbackPreOffloadHander,
-		MovePreAssign:          movePreAssignHandler,
-		MoveOffload:            moveOffloadHandler,
-		MoveOffloaded:          moveOffloadedHandler,
-		MoveOffloadFailed:      moveOffloadFailedHandler,
-		MoveAssign:             moveAssignHandler,
-		MoveAssignFailed:       moveAssignFailedHandler,
-		MoveAssigned:           moveAssignedHandler,
-		MoveFinal:              moveFinalHandler,
+	moveHandlerMap = map[meta.MoveState]func(e *MoveEvent) (NextAction, error){
+		meta.MoveInit:               moveInitHandler,
+		meta.MovePreOffload:         movePreOffloadHandler,
+		meta.MoveRollbackPreOffload: moveRollbackPreOffloadHander,
+		meta.MovePreAssign:          movePreAssignHandler,
+		meta.MoveOffload:            moveOffloadHandler,
+		meta.MoveOffloaded:          moveOffloadedHandler,
+		meta.MoveOffloadFailed:      moveOffloadFailedHandler,
+		meta.MoveAssign:             moveAssignHandler,
+		meta.MoveAssignFailed:       moveAssignFailedHandler,
+		meta.MoveAssigned:           moveAssignedHandler,
+		meta.MoveFinal:              moveFinalHandler,
 	}
 }
 
@@ -293,7 +243,7 @@ func moveInitHandler(e *MoveEvent) (NextAction, error) {
 	}
 	e.pt.Pti.Ver = globalService.store.getPtVersion(e.pt.Db, e.pt.Pti.PtId)
 	e.startTime = time.Now()
-	e.curState = MovePreOffload
+	e.curState = meta.MovePreOffload
 	statistics.MetaDBPTTaskInit(e.operateId, e.pt.Db, e.pt.Pti.PtId)
 	return ActionContinue, nil
 }

@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package executor
 
@@ -400,7 +398,7 @@ func (r *AggPushdownToReaderRule) OnMatch(call *OptRuleCall) {
 	}
 
 	canSlidingWindowPushDown := reader.Schema().HasSlidingWindowCall() && sysconfig.GetEnableSlidingWindowPushUp() != sysconfig.OnSlidingWindowPushUp
-	if !reader.Schema().CanCallsPushdown() || (!reader.Schema().HasPercentileOGSketch() && !canSlidingWindowPushDown && !reader.Schema().Options().IsPromQuery()) {
+	if !reader.Schema().CanCallsPushdown() || (!reader.Schema().HasPercentileOGSketch() && !canSlidingWindowPushDown) {
 		return
 	}
 
@@ -1110,6 +1108,12 @@ func (r *AggToProjectInSubQueryRule) OnMatch(call *OptRuleCall) {
 
 	if _, ok := node.(*LogicalSlidingWindow); ok {
 		return
+	}
+
+	if _, ok := node.(*LogicalHashAgg); ok {
+		if node.Schema().Options().IsPromQuery() {
+			return
+		}
 	}
 
 	if !node.Schema().HasCall() {

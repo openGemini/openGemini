@@ -1,24 +1,21 @@
-/*
-Copyright 2023 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2023 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package executor_test
 
 import (
 	"context"
-	"math"
 	"testing"
 	"time"
 
@@ -260,11 +257,11 @@ func buildDstHashChunkSum1() []executor.Chunk {
 	chunk.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5, 6, 7})
 	chunk.AppendTimes([]int64{0, 5, 0, 5, 0, 5, 0, 5})
 
-	chunk.Column(0).AppendIntegerValues([]int64{630, 0, 340, 200, 0, 200, 190, 0})
-	chunk.Column(0).AppendNilsV2(true, true, true, true, true, true, true, true)
+	chunk.Column(0).AppendIntegerValues([]int64{630, 340, 200, 200, 190})
+	chunk.Column(0).AppendNilsV2(true, false, true, true, false, true, true, false)
 
-	chunk.Column(1).AppendFloatValues([]float64{4262.5, 0, 1727.5, 825, 0, 825, 875, 0})
-	chunk.Column(1).AppendNilsV2(true, true, true, true, true, true, true, true)
+	chunk.Column(1).AppendFloatValues([]float64{4262.5, 1727.5, 825, 825, 875})
+	chunk.Column(1).AppendNilsV2(true, false, true, true, false, true, true, false)
 
 	dstChunks = append(dstChunks, chunk)
 	return dstChunks
@@ -284,11 +281,11 @@ func buildDstHashChunkSum2() []executor.Chunk {
 	chunk.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5, 6, 7})
 	chunk.AppendTimes([]int64{0, 5, 0, 5, 0, 5, 0, 5})
 
-	chunk.Column(0).AppendIntegerValues([]int64{630, 0, 340, 200, 0, 200, 190, 0})
-	chunk.Column(0).AppendNilsV2(true, true, true, true, true, true, true, true)
+	chunk.Column(0).AppendIntegerValues([]int64{630, 340, 200, 200, 190})
+	chunk.Column(0).AppendNilsV2(true, false, true, true, false, true, true, false)
 
-	chunk.Column(1).AppendFloatValues([]float64{4262.5, 0, 1727.5, 825, 0, 825, 875, 0})
-	chunk.Column(1).AppendNilsV2(true, true, true, true, true, true, true, true)
+	chunk.Column(1).AppendFloatValues([]float64{4262.5, 1727.5, 825, 825, 875})
+	chunk.Column(1).AppendNilsV2(true, false, true, true, false, true, true, false)
 
 	dstChunks = append(dstChunks, chunk)
 	return dstChunks
@@ -375,11 +372,11 @@ func buildDstHashChunkMin1() []executor.Chunk {
 	chunk.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5, 6, 7})
 	chunk.AppendTimes([]int64{0, 5, 0, 5, 0, 5, 0, 5})
 
-	chunk.Column(0).AppendIntegerValues([]int64{20, math.MaxInt64, 30, 40, math.MaxInt64, 40, 38, math.MaxInt64})
-	chunk.Column(0).AppendNilsV2(true, true, true, true, true, true, true, true)
+	chunk.Column(0).AppendIntegerValues([]int64{20, 30, 40, 40, 38})
+	chunk.Column(0).AppendNilsV2(true, false, true, true, false, true, true, false)
 
-	chunk.Column(1).AppendFloatValues([]float64{160.5, math.MaxFloat64, 170.5, 165, math.MaxFloat64, 165, 175, math.MaxFloat64})
-	chunk.Column(1).AppendNilsV2(true, true, true, true, true, true, true, true)
+	chunk.Column(1).AppendFloatValues([]float64{160.5, 170.5, 165, 165, 175})
+	chunk.Column(1).AppendNilsV2(true, false, true, true, false, true, true, false)
 
 	dstChunks = append(dstChunks, chunk)
 	return dstChunks
@@ -399,11 +396,11 @@ func buildDstHashChunkMin2() []executor.Chunk {
 	chunk.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5, 6, 7})
 	chunk.AppendTimes([]int64{0, 5, 0, 5, 0, 5, 0, 5})
 
-	chunk.Column(0).AppendIntegerValues([]int64{20, math.MaxInt64, 30, 40, math.MaxInt64, 40, 38, math.MaxInt64})
-	chunk.Column(0).AppendNilsV2(true, true, true, true, true, true, true, true)
+	chunk.Column(0).AppendIntegerValues([]int64{20, 30, 40, 40, 38})
+	chunk.Column(0).AppendNilsV2(true, false, true, true, false, true, true, false)
 
-	chunk.Column(1).AppendFloatValues([]float64{160.5, math.MaxFloat64, 170.5, 165, math.MaxFloat64, 165, 175, math.MaxFloat64})
-	chunk.Column(1).AppendNilsV2(true, true, true, true, true, true, true, true)
+	chunk.Column(1).AppendFloatValues([]float64{160.5, 170.5, 165, 165, 175})
+	chunk.Column(1).AppendNilsV2(true, false, true, true, false, true, true, false)
 
 	dstChunks = append(dstChunks, chunk)
 	return dstChunks
@@ -423,8 +420,8 @@ func buildDstHashChunkMin3() []executor.Chunk {
 	chunk.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5, 6, 7})
 	chunk.AppendTimes([]int64{0, 5, 0, 5, 0, 5, 0, 5})
 
-	chunk.Column(0).AppendBooleanValues([]bool{false, true, false, false, true, false, true, true})
-	chunk.Column(0).AppendNilsV2(true, true, true, true, true, true, true, true)
+	chunk.Column(0).AppendBooleanValues([]bool{false, false, false, false, true})
+	chunk.Column(0).AppendNilsV2(true, false, true, true, false, true, true, false)
 
 	dstChunks = append(dstChunks, chunk)
 	return dstChunks
@@ -578,11 +575,11 @@ func buildDstHashChunkMax1() []executor.Chunk {
 
 	//[20, 28, 30, 38, 40],[160.5, 180.5, 170.5, 175, 165]
 
-	chunk.Column(0).AppendIntegerValues([]int64{30, -math.MaxInt64, 38, 40, -math.MaxInt64, 40, 38, -math.MaxInt64})
-	chunk.Column(0).AppendNilsV2(true, true, true, true, true, true, true, true)
+	chunk.Column(0).AppendIntegerValues([]int64{30, 38, 40, 40, 38})
+	chunk.Column(0).AppendNilsV2(true, false, true, true, false, true, true, false)
 
-	chunk.Column(1).AppendFloatValues([]float64{180.5, -math.MaxFloat64, 175, 165, -math.MaxFloat64, 165, 175, -math.MaxFloat64})
-	chunk.Column(1).AppendNilsV2(true, true, true, true, true, true, true, true)
+	chunk.Column(1).AppendFloatValues([]float64{180.5, 175, 165, 165, 175})
+	chunk.Column(1).AppendNilsV2(true, false, true, true, false, true, true, false)
 
 	dstChunks = append(dstChunks, chunk)
 	return dstChunks
@@ -604,11 +601,11 @@ func buildDstHashChunkMax2() []executor.Chunk {
 
 	//[20, 28, 30, 38, 40],[160.5, 180.5, 170.5, 175, 165]
 
-	chunk.Column(0).AppendIntegerValues([]int64{30, -math.MaxInt64, 38, 40, -math.MaxInt64, 40, 38, -math.MaxInt64})
-	chunk.Column(0).AppendNilsV2(true, true, true, true, true, true, true, true)
+	chunk.Column(0).AppendIntegerValues([]int64{30, 38, 40, 40, 38})
+	chunk.Column(0).AppendNilsV2(true, false, true, true, false, true, true, false)
 
-	chunk.Column(1).AppendFloatValues([]float64{180.5, -math.MaxFloat64, 175, 165, -math.MaxFloat64, 165, 175, -math.MaxFloat64})
-	chunk.Column(1).AppendNilsV2(true, true, true, true, true, true, true, true)
+	chunk.Column(1).AppendFloatValues([]float64{180.5, 175, 165, 165, 175})
+	chunk.Column(1).AppendNilsV2(true, false, true, true, false, true, true, false)
 
 	dstChunks = append(dstChunks, chunk)
 	return dstChunks
@@ -630,8 +627,8 @@ func buildDstHashChunkMax3() []executor.Chunk {
 
 	//[20, 28, 30, 38, 40],[160.5, 180.5, 170.5, 175, 165],[true, true, false, true, false]
 
-	chunk.Column(0).AppendBooleanValues([]bool{true, false, true, false, false, false, true, false})
-	chunk.Column(0).AppendNilsV2(true, true, true, true, true, true, true, true)
+	chunk.Column(0).AppendBooleanValues([]bool{true, true, false, false, true})
+	chunk.Column(0).AppendNilsV2(true, false, true, true, false, true, true, false)
 
 	dstChunks = append(dstChunks, chunk)
 	return dstChunks
@@ -754,11 +751,11 @@ func buildDstHashChunkLimitGroups() []executor.Chunk {
 	chunk.AppendIntervalIndexes([]int{0, 1, 2, 3})
 	chunk.AppendTimes([]int64{0, 5, 0, 5})
 
-	chunk.Column(0).AppendIntegerValues([]int64{630, 0, 340, 200})
-	chunk.Column(0).AppendNilsV2(true, true, true, true)
+	chunk.Column(0).AppendIntegerValues([]int64{630, 340, 200})
+	chunk.Column(0).AppendNilsV2(true, false, true, true)
 
-	chunk.Column(1).AppendFloatValues([]float64{4262.5, 0, 1727.5, 825})
-	chunk.Column(1).AppendNilsV2(true, true, true, true)
+	chunk.Column(1).AppendFloatValues([]float64{4262.5, 1727.5, 825})
+	chunk.Column(1).AppendNilsV2(true, false, true, true)
 
 	dstChunks = append(dstChunks, chunk)
 	return dstChunks

@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package engine
 
@@ -24,6 +22,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -43,6 +42,8 @@ import (
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/obs"
+	"github.com/openGemini/openGemini/lib/raftconn"
+	"github.com/openGemini/openGemini/lib/raftlog"
 	"github.com/openGemini/openGemini/lib/record"
 	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/syscontrol"
@@ -476,17 +477,46 @@ func Test_Engine_DropDatabaseNoPt(t *testing.T) {
 func Test_Engine_DropDatabaseFail(t *testing.T) {
 	dir := t.TempDir()
 	eng, err := initEngine(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer eng.Close()
 
 	dbPT := eng.getDBPTInfo(defaultDb, defaultPtId)
 	dbPT.exeCount = 1
 
+	DeleteDatabaseTimeout = time.Second / 10
+	defer func() {
+		DeleteDatabaseTimeout = time.Second * 15
+	}()
+
 	err = eng.DeleteDatabase(defaultDb, defaultPtId)
 	assert(err != nil, "error is nil")
 	assert(len(eng.DBPartitions) > 0, "db pt should exist")
+}
+
+func TestEngine_DropRetentionPolicy_SkipLog(t *testing.T) {
+	dir := t.TempDir()
+	config.SetProductType(config.LogKeeperService)
+	defer config.SetProductType("")
+	eng, err := initEngine(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+
+	res := make(chan error)
+	n := 0
+	n++
+	go func(db, rp string) {
+		res <- eng.DropRetentionPolicy(db, rp, defaultPtId)
+	}("db0", "rp0")
+
+	for i := 0; i < n; i++ {
+		err = <-res
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	close(res)
 }
 
 func TestEngine_DropRetentionPolicy(t *testing.T) {
@@ -639,6 +669,7 @@ func TestEngine_OpenLimitShardError(t *testing.T) {
 	eng.CreateDBPT(defaultDb, defaultPtId, false)
 	msInfo := &meta.MeasurementInfo{
 		EngineType: config.TSSTORE,
+		Schema:     &meta.CleanSchema{},
 	}
 	require.NoError(t, eng.CreateShard(defaultDb, defaultRp, defaultPtId, 1, getTimeRangeInfoByShard(1), msInfo))
 	require.NoError(t, eng.CreateShard(defaultDb, defaultRp, defaultPtId, 2, getTimeRangeInfoByShard(2), msInfo)) // load fail
@@ -740,7 +771,7 @@ func TestEngine_TagKeys(t *testing.T) {
 	tm := time.Now().Truncate(time.Second)
 	rows, _, _ := GenDataRecord(msNames, 10, 200, time.Second, tm, false, true, false)
 
-	if err := eng.WriteRows("db0", "rp0", 0, 1, rows, nil); err != nil {
+	if err := eng.WriteRows("db0", "rp0", 0, 1, rows, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	dbInfo := eng.DBPartitions["db0"][0]
@@ -782,7 +813,7 @@ func TestEngine_SeriesKeys(t *testing.T) {
 	tm := time.Now().Truncate(time.Second)
 	rows, _, _ := GenDataRecord(msNames, 10, 200, time.Second, tm, false, true, false)
 
-	if err := eng.WriteRows("db0", "rp0", 0, 1, rows, nil); err != nil {
+	if err := eng.WriteRows("db0", "rp0", 0, 1, rows, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	dbInfo := eng.DBPartitions["db0"][0]
@@ -820,7 +851,7 @@ func TestEngine_SeriesCardinality(t *testing.T) {
 	tm := time.Now().Truncate(time.Second)
 	rows, _, _ := GenDataRecord(msNames, 10, 200, time.Second, tm, false, true, false)
 
-	if err := eng.WriteRows("db0", "rp0", 0, 1, rows, nil); err != nil {
+	if err := eng.WriteRows("db0", "rp0", 0, 1, rows, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	dbInfo := eng.DBPartitions["db0"][0]
@@ -889,7 +920,7 @@ func TestEngine_TagValues(t *testing.T) {
 	tm := time.Now().Truncate(time.Second)
 	rows, _, _ := GenDataRecord(msNames, 10, 200, time.Second, tm, false, true, false)
 
-	if err := eng.WriteRows("db0", "rp0", 0, 1, rows, nil); err != nil {
+	if err := eng.WriteRows("db0", "rp0", 0, 1, rows, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	dbInfo := eng.DBPartitions["db0"][0]
@@ -953,7 +984,7 @@ func TestEngine_TagValuesDisorder(t *testing.T) {
 	tm := time.Now().Truncate(time.Second)
 	rows, _, _ := GenDataRecord(msNames, 10, 200, time.Second, tm, false, true, false)
 
-	if err := eng.WriteRows("db0", "rp0", 0, 1, rows, nil); err != nil {
+	if err := eng.WriteRows("db0", "rp0", 0, 1, rows, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	eng.ForceFlush()
@@ -1017,7 +1048,7 @@ func TestEngine_TagValuesCardinality(t *testing.T) {
 	tm := time.Now().Truncate(time.Second)
 	rows, _, _ := GenDataRecord(msNames, 10, 200, time.Second, tm, false, true, false)
 
-	if err := eng.WriteRows("db0", "rp0", 0, 1, rows, nil); err != nil {
+	if err := eng.WriteRows("db0", "rp0", 0, 1, rows, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	dbInfo := eng.DBPartitions["db0"][0]
@@ -1239,14 +1270,14 @@ func TestEngine_StatisticsOps(t *testing.T) {
 	tm := time.Now().Truncate(time.Second)
 	rows, _, _ := GenDataRecord(msNames1, 10, 200, time.Second, tm, false, true, false)
 
-	if err := eng.WriteRows("db0", "rp0", 0, 1, rows, nil); err != nil {
+	if err := eng.WriteRows("db0", "rp0", 0, 1, rows, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 
 	msNames2 := []string{"mem"}
 	rows, _, _ = GenDataRecord(msNames2, 20, 200, time.Second, tm, false, true, false)
 
-	if err := eng.WriteRows("db0", "rp0", 0, 1, rows, nil); err != nil {
+	if err := eng.WriteRows("db0", "rp0", 0, 1, rows, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	dbInfo := eng.DBPartitions["db0"][0]
@@ -1281,6 +1312,25 @@ func TestUpdateShardDurationInfo(t *testing.T) {
 	sh, err := eng.GetShard(defaultDb, 0, 1)
 	assert2.NoError(t, err)
 	require.Equal(t, sh.GetDuration().Tier, uint64(util.Warm))
+}
+
+func TestSkipIndex(t *testing.T) {
+	dir := t.TempDir()
+	config.SetProductType(config.LogKeeperService)
+	eng, err := initEngine1(dir, config.TSSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+	shardDuration := getShardDurationInfo(1)
+	shardDuration.DurationInfo.Tier = util.Warm
+	shardDuration.Ident.OwnerPt = 0
+	err = eng.UpdateShardDurationInfo(shardDuration)
+	require.NoError(t, err)
+	sh, err := eng.GetShard(defaultDb, 0, 1)
+	assert2.NoError(t, err)
+	require.Equal(t, sh.GetDuration().Tier, uint64(util.Hot))
+	config.SetProductType("")
 }
 
 func TestEngine_SeriesLimited(t *testing.T) {
@@ -1342,7 +1392,7 @@ func TestEngine_RowCount_ShardLockPath(t *testing.T) {
 	tm := time.Now().Truncate(time.Second)
 	rows, _, _ := GenDataRecord(msNames, 10, 200, time.Second, tm, false, true, false)
 
-	if err := eng.WriteRows("db0", "rp0", 0, 1, rows, nil); err != nil {
+	if err := eng.WriteRows("db0", "rp0", 0, 1, rows, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -1359,7 +1409,7 @@ func (ms *mockShard) OpenAndEnable(client metaclient.MetaClient) error {
 	return nil
 }
 
-func (ms *mockShard) CreateShowTagValuesPlan() immutable.ShowTagValuesPlan {
+func (ms *mockShard) CreateShowTagValuesPlan(client metaclient.MetaClient) immutable.ShowTagValuesPlan {
 	return &MockImmutableShowTagValuesPlan{}
 }
 
@@ -1457,7 +1507,7 @@ func TestStoreHierarchicalStorage_CanNotDoShardMove(t *testing.T) {
 	tm := time.Now()
 	rows, _, _ := GenDataRecord(msNames, 10, 200, time.Second, tm, false, true, false)
 
-	if err := eng.WriteRows("db0", "rp0", 0, 1, rows, nil); err != nil {
+	if err := eng.WriteRows("db0", "rp0", 0, 1, rows, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1466,7 +1516,7 @@ func TestStoreHierarchicalStorage_CanNotDoShardMove(t *testing.T) {
 
 	tm = time.Now()
 	rows2, _, _ := GenDataRecord(msNames, 10, 200, time.Second*10, tm, false, true, false)
-	if err := eng.WriteRows("db0", "rp0", 0, 1, rows2, nil); err != nil {
+	if err := eng.WriteRows("db0", "rp0", 0, 1, rows2, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	shard.ForceFlush()
@@ -1538,6 +1588,20 @@ func TestStoreHierarchicalStorage_MoveStop(t *testing.T) {
 
 	sh.DisableHierarchicalStorage()
 	defer sh.SetEnableHierarchicalStorage()
+	syscontrol.SetWriteColdShardEnabled(true)
+	ok := eng.HierarchicalStorage("db0", 0, 1)
+	syscontrol.SetWriteColdShardEnabled(false)
+	require.Equal(t, ok, false)
+}
+
+func TestStoreHierarchicalStorage_DoingOff(t *testing.T) {
+	dir := t.TempDir()
+	eng, err := initEngine1(dir, config.TSSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+	eng.DBPartitions["db0"][0].doingOff = true
 	syscontrol.SetWriteColdShardEnabled(true)
 	ok := eng.HierarchicalStorage("db0", 0, 1)
 	syscontrol.SetWriteColdShardEnabled(false)
@@ -1901,4 +1965,119 @@ func TestEngine_CreateShowTagValuesPlan(t *testing.T) {
 	if len(plan.plans) != want {
 		t.Fatalf("CreateShowTagValuesPlan failed, actual: %v, expected: %v", len(plan.plans), want)
 	}
+}
+
+func TestWriteToRaft(t *testing.T) {
+	mockProposeC := make(chan []byte, 1)
+	defer close(mockProposeC)
+	mockEngine := &Engine{
+		DBPartitions: map[string]map[uint32]*DBPTInfo{
+			"db": {
+				1: &DBPTInfo{
+					shards: map[uint64]Shard{
+						11: &mockShard{},
+						12: &mockShard{},
+						13: &mockShard{},
+						14: &mockShard{},
+					},
+					proposeC: mockProposeC,
+					node:     &raftconn.RaftNode{DataCommittedC: make(map[uint64]chan error), Identity: "db_1"},
+				},
+			},
+		},
+	}
+	exp := "\x00\x00\x00\x00\x04db_1\x00\x00\x00\x00\x00\x00\x00\x01test"
+	same := false
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		dw := <-mockProposeC
+		mockEngine.DBPartitions["db"][1].node.RetCommittedDataC(&raftlog.DataWrapper{ProposeId: 1, Identity: "db_1"}, nil)
+		if strings.Compare(exp, string(dw)) == 0 {
+			same = true
+		}
+	}()
+	mockEngine.WriteToRaft("db", "autogen", 1, []byte("test"))
+	wg.Wait()
+	assert2.Equal(t, same, true)
+}
+
+func TestEngine_WriteToRaft(t *testing.T) {
+	proposeC := make(chan []byte)
+	mockEngine := &Engine{
+		DBPartitions: map[string]map[uint32]*DBPTInfo{
+			"testdb": {
+				1: &DBPTInfo{
+					proposeC: proposeC,
+					node:     &raftconn.RaftNode{DataCommittedC: make(map[uint64]chan error), Identity: "testdb_1"},
+				},
+			},
+		},
+	}
+	tail := []byte{'a', 'b', 'c'}
+	exp := "\x00\x00\x00\x00\btestdb_1\x00\x00\x00\x00\x00\x00\x00\x01abc"
+	same := false
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		reTail := <-proposeC
+		mockEngine.DBPartitions["testdb"][1].node.RetCommittedDataC(&raftlog.DataWrapper{ProposeId: 1, Identity: "testdb_1"}, nil)
+		if strings.Compare(exp, string(reTail)) == 0 {
+			same = true
+		}
+	}()
+	mockEngine.WriteToRaft("testdb", "", 1, tail)
+	wg.Wait()
+	assert2.Equal(t, same, true)
+}
+
+func TestEngine_WriteToRaft_UsedProposeId_Err(t *testing.T) {
+	proposeC := make(chan []byte)
+	mockEngine := &Engine{
+		DBPartitions: map[string]map[uint32]*DBPTInfo{
+			"testdb": {
+				1: &DBPTInfo{
+					proposeC: proposeC,
+					node:     &raftconn.RaftNode{DataCommittedC: map[uint64]chan error{1: make(chan error)}, Identity: "testdb_1"},
+				},
+			},
+		},
+	}
+
+	tail := []byte{'a', 'b', 'c'}
+	err := mockEngine.WriteToRaft("testdb", "", 1, tail)
+	assert2.Equal(t, true, errno.Equal(err, errno.UsedProposeId))
+}
+
+func TestEngine_WriteToRaft_Committed_Err(t *testing.T) {
+	proposeC := make(chan []byte)
+	mockEngine := &Engine{
+		DBPartitions: map[string]map[uint32]*DBPTInfo{
+			"testdb": {
+				1: &DBPTInfo{
+					proposeC: proposeC,
+					node:     &raftconn.RaftNode{DataCommittedC: make(map[uint64]chan error), Identity: "testdb_1"},
+				},
+			},
+		},
+	}
+	tail := []byte{'a', 'b', 'c'}
+	exp := "\x00\x00\x00\x00\btestdb_1\x00\x00\x00\x00\x00\x00\x00\x01abc"
+	same := false
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		reTail := <-proposeC
+		mockEngine.DBPartitions["testdb"][1].node.RetCommittedDataC(&raftlog.DataWrapper{ProposeId: 1, Identity: "testdb_1"}, fmt.Errorf("mem write err"))
+		if strings.Compare(exp, string(reTail)) == 0 {
+			same = true
+		}
+	}()
+	err := mockEngine.WriteToRaft("testdb", "", 1, tail)
+	wg.Wait()
+	assert2.Equal(t, same, true)
+	assert2.Equal(t, err.Error(), "mem write err")
 }

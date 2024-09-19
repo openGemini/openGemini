@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package meta
 
@@ -132,13 +130,125 @@ func (mo *Options) GetTagSplitChar() string {
 	return TransSplitChar(mo.TagsSplit)
 }
 
+func TimeReserveHigh32(time int64) int32 {
+	return int32(time >> 32)
+}
+
+var SchemaCleanEn bool
+
+func InitSchemaCleanEn(schemaCleanEn bool) {
+	SchemaCleanEn = schemaCleanEn
+}
+
+type SchemaVal struct {
+	Typ     int8
+	EndTime int32 // hign 32 bit of sg.EndTime
+}
+
+type CleanSchema map[string]SchemaVal // <name, {type, endtime}>
+
+func NewCleanSchema(len int) CleanSchema {
+	return make(map[string]SchemaVal, len)
+}
+
+func UnmarshalCleanSchema(msti *MeasurementInfo, pb *proto2.MeasurementInfo, logKeeper bool) {
+	pbSchema := pb.GetSchema()
+	pbCleanSchema := pb.GetSchemaUseForClean()
+	if pbSchema != nil {
+		retSchema := NewCleanSchema(len(pbSchema))
+		for k, v := range pbSchema {
+			retSchema[k] = SchemaVal{Typ: int8(v), EndTime: 0}
+			if v == influx.Field_Type_Tag {
+				msti.tagKeysTotal++
+			}
+		}
+		if logKeeper {
+			retSchema[record.SeqIDField] = SchemaVal{Typ: influx.Field_Type_Int, EndTime: 0}
+		}
+		msti.Schema = &retSchema
+	} else if pbCleanSchema != nil {
+		retSchema := NewCleanSchema(len(pbCleanSchema))
+		for k, v := range pbCleanSchema {
+			retSchema[k] = SchemaVal{Typ: int8(*v.Typ), EndTime: *v.EndTime}
+			if *v.Typ == influx.Field_Type_Tag {
+				msti.tagKeysTotal++
+			}
+		}
+		if logKeeper {
+			retSchema[record.SeqIDField] = SchemaVal{Typ: influx.Field_Type_Int, EndTime: 0}
+		}
+		msti.Schema = &retSchema
+	} else {
+		retSchema := NewCleanSchema(0)
+		msti.Schema = &retSchema
+	}
+}
+
+func (cs *CleanSchema) Len() int {
+	return len(*cs)
+}
+
+func (cs *CleanSchema) Marshal(snapshot bool, pb *proto2.MeasurementInfo) {
+	if snapshot {
+		cs.SnapshotMarshal(pb)
+	} else {
+		cs.NormalMarshal(pb)
+	}
+}
+
+func (cs *CleanSchema) SnapshotMarshal(pb *proto2.MeasurementInfo) {
+	if cs != nil {
+		pb.Schema = make(map[string]int32, len(*cs))
+		for n, t := range *cs {
+			pb.Schema[n] = int32(t.Typ)
+		}
+	}
+}
+
+func (cs *CleanSchema) NormalMarshal(pb *proto2.MeasurementInfo) {
+	if cs != nil {
+		pb.SchemaUseForClean = make(map[string]*proto2.SchemaVal, len(*cs))
+		for n, t := range *cs {
+			typ := int32(t.Typ)
+			endTime := t.EndTime
+			pb.SchemaUseForClean[n] = &proto2.SchemaVal{Typ: &typ, EndTime: &endTime}
+		}
+	}
+}
+
+func (cs *CleanSchema) RangeTypCall(callback func(string, int32)) {
+	for k, v := range *cs {
+		callback(k, int32(v.Typ))
+	}
+}
+
+func (cs *CleanSchema) Clone() *CleanSchema {
+	retSchema := NewCleanSchema(len(*cs))
+	for k, v := range *cs {
+		retSchema[k] = v
+	}
+	return &retSchema
+}
+
+func (cs *CleanSchema) GetTyp(k string) (int32, bool) {
+	v, ok := (*cs)[k]
+	if ok {
+		return int32(v.Typ), ok
+	}
+	return 0, ok
+}
+
+func (cs *CleanSchema) SetTyp(k string, v int32) {
+	(*cs)[k] = SchemaVal{Typ: int8(v), EndTime: 0}
+}
+
 type MeasurementInfo struct {
 	Name            string // measurement name with version
 	originName      string // cache original measurement name
 	ShardKeys       []ShardKeyInfo
 	ShardIdexes     map[uint64][]int // index of ShardInfo in each shard group which contains this measurement.
 	InitNumOfShards int32            // init number of shards which contains this measurement in each shard group.
-	Schema          map[string]int32
+	Schema          *CleanSchema
 	IndexRelation   influxql.IndexRelation
 	ColStoreInfo    *ColStoreInfo
 	MarkDeleted     bool
@@ -151,12 +261,15 @@ type MeasurementInfo struct {
 }
 
 func NewMeasurementInfo(nameWithVer string, name string, engineType config.EngineType, id uint64) *MeasurementInfo {
-	return &MeasurementInfo{
+	msti := &MeasurementInfo{
 		Name:       nameWithVer,
 		originName: name,
 		EngineType: engineType,
 		ID:         id,
 	}
+	newSchema := NewCleanSchema(0)
+	msti.Schema = &newSchema
+	return msti
 }
 
 func (msti *MeasurementInfo) IsBlockCompact() bool {
@@ -175,12 +288,13 @@ func (msti *MeasurementInfo) IsTimeSorted() bool {
 
 func (msti *MeasurementInfo) GetRecordSchema() record.Schemas {
 	var schema record.Schemas
-	schema = make([]record.Field, 0, len(msti.Schema))
+	schema = make([]record.Field, 0, msti.Schema.Len())
 	msti.SchemaLock.RLock()
 	defer msti.SchemaLock.RUnlock()
-	for k, v := range msti.Schema {
-		schema = append(schema, record.Field{Type: int(v), Name: k})
+	callback := func(k string, typ int32) {
+		schema = append(schema, record.Field{Type: int(typ), Name: k})
 	}
+	msti.Schema.RangeTypCall(callback)
 	sort.Sort(schema)
 	schema = append(schema, record.Field{Type: influx.Field_Type_Int, Name: "time"})
 	return schema
@@ -203,9 +317,7 @@ func (msti *MeasurementInfo) SetoriginName(originName string) {
 }
 
 func (msti *MeasurementInfo) walkSchema(fn func(fieldName string, fieldType int32)) {
-	for fieldName := range msti.Schema {
-		fn(fieldName, msti.Schema[fieldName])
-	}
+	msti.Schema.RangeTypCall(fn)
 }
 
 func (msti *MeasurementInfo) GetShardKey(ID uint64) *ShardKeyInfo {
@@ -217,7 +329,7 @@ func (msti *MeasurementInfo) GetShardKey(ID uint64) *ShardKeyInfo {
 	return nil
 }
 
-func (msti *MeasurementInfo) marshal() *proto2.MeasurementInfo {
+func (msti *MeasurementInfo) marshal(snapshot bool) *proto2.MeasurementInfo {
 	pb := &proto2.MeasurementInfo{
 		Name:        proto.String(msti.Name),
 		MarkDeleted: proto.Bool(msti.MarkDeleted),
@@ -232,12 +344,7 @@ func (msti *MeasurementInfo) marshal() *proto2.MeasurementInfo {
 		}
 	}
 	msti.SchemaLock.RLock()
-	if msti.Schema != nil {
-		pb.Schema = make(map[string]int32, len(msti.Schema))
-		for n, t := range msti.Schema {
-			pb.Schema[n] = t
-		}
-	}
+	msti.Schema.Marshal(snapshot, pb)
 	msti.SchemaLock.RUnlock()
 	if msti.ShardIdexes != nil {
 		pb.ShardIdxes = make(map[uint64]*proto2.Idxes, len(msti.ShardIdexes))
@@ -281,14 +388,7 @@ func (msti *MeasurementInfo) unmarshal(pb *proto2.MeasurementInfo) {
 		}
 	}
 
-	if pb.GetSchema() != nil {
-		if config.IsLogKeeper() {
-			msti.Schema = make(map[string]int32, len(pb.GetSchema())+1)
-			msti.Schema[record.SeqIDField] = influx.Field_Type_Int
-		} else {
-			msti.Schema = make(map[string]int32, len(pb.GetSchema()))
-		}
-	}
+	UnmarshalCleanSchema(msti, pb, config.IsLogKeeper())
 
 	if pb.GetShardIdxes() != nil {
 		msti.ShardIdexes = make(map[uint64][]int, len(pb.GetShardIdxes()))
@@ -301,13 +401,6 @@ func (msti *MeasurementInfo) unmarshal(pb *proto2.MeasurementInfo) {
 	}
 
 	msti.InitNumOfShards = pb.GetInitNumOfShards()
-
-	for name, t := range pb.GetSchema() {
-		msti.Schema[name] = t
-		if t == influx.Field_Type_Tag {
-			msti.tagKeysTotal++
-		}
-	}
 
 	if pb.GetIndexRelation() != nil {
 		msti.IndexRelation = *DecodeIndexRelation(pb.GetIndexRelation())
@@ -327,7 +420,7 @@ func (msti *MeasurementInfo) unmarshal(pb *proto2.MeasurementInfo) {
 }
 
 func (msti *MeasurementInfo) MarshalBinary() ([]byte, error) {
-	pb := msti.marshal()
+	pb := msti.marshal(false)
 	return proto.Marshal(pb)
 }
 
@@ -374,18 +467,13 @@ func (msti *MeasurementInfo) clone() *MeasurementInfo {
 	return other
 }
 
-func (msti *MeasurementInfo) CloneSchema() map[string]int32 {
+func (msti *MeasurementInfo) CloneSchema() *CleanSchema {
 	if msti.Schema == nil {
 		return nil
 	}
-
-	schema := make(map[string]int32, len(msti.Schema))
 	msti.SchemaLock.RLock()
 	defer msti.SchemaLock.RUnlock()
-	for name, info := range msti.Schema {
-		schema[name] = info
-	}
-	return schema
+	return msti.Schema.Clone()
 }
 
 func (msti *MeasurementInfo) CloneShardIdexes() map[uint64][]int {
@@ -401,27 +489,27 @@ func (msti *MeasurementInfo) CloneShardIdexes() map[uint64][]int {
 }
 
 func (msti *MeasurementInfo) FieldKeys(ret map[string]map[string]int32) {
-	for key := range msti.Schema {
-		if msti.Schema[key] == influx.Field_Type_Tag {
-			continue
+	callback := func(k string, v int32) {
+		if v != influx.Field_Type_Tag {
+			ret[msti.OriginName()][k] = v
 		}
-		ret[msti.OriginName()][key] = msti.Schema[key]
 	}
+	msti.Schema.RangeTypCall(callback)
 }
 
 func (msti *MeasurementInfo) MatchTagKeys(cond influxql.Expr, ret map[string]map[string]struct{}) {
-	for key, typ := range msti.Schema {
-		if typ != influx.Field_Type_Tag {
-			continue
-		}
-		valMap := map[string]interface{}{
-			"_tagKey": key,
-			"_name":   msti.OriginName(),
-		}
-		if cond == nil || influxql.EvalBool(cond, valMap) {
-			ret[msti.Name][key] = struct{}{}
+	callback := func(k string, v int32) {
+		if v == influx.Field_Type_Tag {
+			valMap := map[string]interface{}{
+				"_tagKey": k,
+				"_name":   msti.OriginName(),
+			}
+			if cond == nil || influxql.EvalBool(cond, valMap) {
+				ret[msti.Name][k] = struct{}{}
+			}
 		}
 	}
+	msti.Schema.RangeTypCall(callback)
 }
 
 func (msti *MeasurementInfo) TagKeysTotal() int {
@@ -432,13 +520,14 @@ type MeasurementsInfo struct {
 	MstsInfo []*MeasurementInfo
 }
 
+// for test
 func (mstsi *MeasurementsInfo) marshal() *proto2.MeasurementsInfo {
 	pb := &proto2.MeasurementsInfo{
 		MeasurementsInfo: make([]*proto2.MeasurementInfo, len(mstsi.MstsInfo)),
 	}
 
 	for i := range mstsi.MstsInfo {
-		pb.MeasurementsInfo[i] = mstsi.MstsInfo[i].marshal()
+		pb.MeasurementsInfo[i] = mstsi.MstsInfo[i].marshal(false)
 	}
 	return pb
 }
@@ -451,6 +540,7 @@ func (mstsi *MeasurementsInfo) unmarshal(pb *proto2.MeasurementsInfo) {
 	}
 }
 
+// for test
 func (mstsi *MeasurementsInfo) MarshalBinary() ([]byte, error) {
 	pb := mstsi.marshal()
 	return proto.Marshal(pb)
@@ -479,11 +569,13 @@ func (msti *MeasurementInfo) CompatibleForLogkeeper() {
 
 func (msti *MeasurementInfo) CompatibleForLogkeeperColstore() {
 	var IList []string
-	for name, ty := range msti.Schema {
-		if ty == influx.Field_Type_String {
-			IList = append(IList, name)
+	callback := func(k string, v int32) {
+		if v == influx.Field_Type_String {
+			IList = append(IList, k)
 		}
 	}
+	msti.Schema.RangeTypCall(callback)
+
 	contentSplit := msti.Options.GetSplitChar()
 	if contentSplit == "" {
 		contentSplit = tokenizer.CONTENT_SPLITTER
@@ -599,45 +691,65 @@ func (msti *MeasurementInfo) GetIndexRelation() influxql.IndexRelation {
 
 func (msti *MeasurementInfo) FindMstInfos(dataTypes []int64) []*MeasurementTypeFields {
 	infos := make([]*MeasurementTypeFields, 0, len(dataTypes))
+
 	for _, d := range dataTypes {
 		info := &MeasurementTypeFields{
 			Fields: make([]string, 0),
 		}
+
 		switch influxql.DataType(d) {
 		case influxql.Float:
+			callback := func(k string, v int32) {
+				if v == influx.Field_Type_Float {
+					info.Fields = append(info.Fields, k)
+				}
+			}
 			info.Type = int64(influxql.Float)
-			for name, ty := range msti.Schema {
-				if ty == influx.Field_Type_Float {
-					info.Fields = append(info.Fields, name)
-				}
-			}
+			msti.Schema.RangeTypCall(callback)
 		case influxql.Integer:
+			callback := func(k string, v int32) {
+				if v == influx.Field_Type_Int {
+					info.Fields = append(info.Fields, k)
+				}
+			}
 			info.Type = int64(influxql.Integer)
-			for name, ty := range msti.Schema {
-				if ty == influx.Field_Type_Int {
-					info.Fields = append(info.Fields, name)
-				}
-			}
+			msti.Schema.RangeTypCall(callback)
 		case influxql.String:
+			callback := func(k string, v int32) {
+				if v == influx.Field_Type_String {
+					info.Fields = append(info.Fields, k)
+				}
+			}
 			info.Type = int64(influxql.String)
-			for name, ty := range msti.Schema {
-				if ty == influx.Field_Type_String {
-					info.Fields = append(info.Fields, name)
-				}
-			}
+			msti.Schema.RangeTypCall(callback)
 		case influxql.Boolean:
-			info.Type = int64(influxql.Boolean)
-			for name, ty := range msti.Schema {
-				if ty == influx.Field_Type_Boolean {
-					info.Fields = append(info.Fields, name)
+			callback := func(k string, v int32) {
+				if v == influx.Field_Type_Boolean {
+					info.Fields = append(info.Fields, k)
 				}
 			}
+			info.Type = int64(influxql.Boolean)
+			msti.Schema.RangeTypCall(callback)
 		}
 		if len(info.Fields) > 0 {
 			infos = append(infos, info)
 		}
 	}
 	return infos
+}
+
+func (msti *MeasurementInfo) SchemaClean(sgEndTime int64) {
+	if msti.EngineType != config.TSSTORE {
+		return
+	}
+	endTime := TimeReserveHigh32(sgEndTime)
+	msti.SchemaLock.Lock()
+	defer msti.SchemaLock.Unlock()
+	for k, schemaVal := range *(msti.Schema) {
+		if schemaVal.EndTime <= endTime {
+			delete(*(msti.Schema), k)
+		}
+	}
 }
 
 func EncodeIndexOption(o *influxql.IndexOption) *proto2.IndexOption {

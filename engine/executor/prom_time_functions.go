@@ -1,22 +1,21 @@
-/*
-Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package executor
 
 import (
+	"math"
 	"time"
 
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
@@ -32,6 +31,8 @@ func init() {
 	RegistryPromTimeFunction("hour_prom", &hourPromFunc{})
 	RegistryPromTimeFunction("minute_prom", &minutePromFunc{})
 	RegistryPromTimeFunction("days_in_month_prom", &daysInMonthPromFunc{})
+	RegistryPromTimeFunction("pi_prom", &piPromFunc{})
+	RegistryPromTimeFunction("timestamp_prom", &timestampPromFunc{})
 }
 
 type PromTimeFunction interface {
@@ -39,6 +40,10 @@ type PromTimeFunction interface {
 }
 
 var promTimeFuncInstance = make(map[string]PromTimeFunction)
+
+func GetPromTimeFuncInstance() map[string]PromTimeFunction {
+	return promTimeFuncInstance
+}
 
 func RegistryPromTimeFunction(name string, timeFunc PromTimeFunction) {
 	_, ok := promTimeFuncInstance[name]
@@ -67,6 +72,17 @@ func (s *timePromFunc) CallFunc(name string, args []interface{}) (interface{}, b
 		if iVal, ok := args[0].(float64); ok {
 			rVals := float64(iVal)
 			return rVals, true
+		}
+	}
+	return nil, true
+}
+
+type timestampPromFunc struct{}
+
+func (s *timestampPromFunc) CallFunc(name string, args []interface{}) (interface{}, bool) {
+	if len(args) > 0 {
+		if iVal, ok := args[0].(float64); ok {
+			return iVal, true
 		}
 	}
 	return nil, true
@@ -153,6 +169,15 @@ func (s *daysInMonthPromFunc) CallFunc(name string, args []interface{}) (interfa
 			rVals := float64(32 - time.Date(v.Year(), v.Month(), 32, 0, 0, 0, 0, time.UTC).Day())
 			return rVals, true
 		}
+	}
+	return nil, true
+}
+
+type piPromFunc struct{}
+
+func (s *piPromFunc) CallFunc(name string, args []interface{}) (interface{}, bool) {
+	if len(args) > 0 {
+		return math.Pi, true
 	}
 	return nil, true
 }

@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package fileops
 
@@ -68,6 +66,7 @@ type File interface {
 	Stat() (os.FileInfo, error)
 	SyncUpdateLength() error
 	Fd() uintptr
+	Size() (int64, error)
 	StreamReadBatch([]int64, []int64, int64, chan *request.StreamReader, int, bool)
 }
 
@@ -109,6 +108,8 @@ type VFS interface {
 	// RemoveLocal removes the named file on local storage
 	// the optional opt is: FileLockOption
 	RemoveLocal(name string, opt ...FSOption) error
+	// RemoveLocalEnabled return whether remove the named file on local storage
+	RemoveLocalEnabled(obsOptValid bool) bool
 	// RemoveAll removes path and any children it contains.
 	// the optional opt is: FileLockOption
 	RemoveAll(path string, opt ...FSOption) error
@@ -196,6 +197,15 @@ func CreateV1(name string, opt ...FSOption) (File, error) {
 func Remove(name string, opt ...FSOption) error {
 	t := GetFsType(name)
 	return GetFs(t).Remove(name, opt...)
+}
+
+func RemoveLocalEnabled(localName string, obsOpt *obs.ObsOptions) bool {
+	t := GetFsType(localName)
+	var obsOptValid bool
+	if obsOpt != nil {
+		obsOptValid = obsOpt.Validate()
+	}
+	return GetFs(t).RemoveLocalEnabled(obsOptValid)
 }
 
 func RemoveLocal(localName string, opt ...FSOption) error {
@@ -441,7 +451,8 @@ func GetRemoteDataPath(obsOpt *obs.ObsOptions, dataPath string) string {
 		return dir
 	}
 	dataPrefix := dataPath[len(obs.GetPrefixDataPath()):]
-	dir = fmt.Sprintf("%s%s/%s/%s/%s/%s%s", ObsPrefix, obsOpt.Endpoint, obsOpt.Ak, obsOpt.Sk, obsOpt.BucketName, obsOpt.BasePath, dataPrefix)
+	basePath := path.Join(obsOpt.BasePath, dataPrefix)
+	dir = fmt.Sprintf("%s%s/%s/%s/%s/%s", ObsPrefix, obsOpt.Endpoint, obsOpt.Ak, obsOpt.Sk, obsOpt.BucketName, basePath)
 	return dir
 }
 

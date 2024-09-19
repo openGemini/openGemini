@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package executor_test
 
@@ -175,7 +173,7 @@ func (c *RPCServer) Handle(w spdy.Responser, data interface{}) error {
 	}
 
 	qm.Add(qid, c)
-	defer qm.Finish(qid)
+	defer qm.FinishAll(qid)
 
 	if err := w.Response(executor.NewErrorMessage(0, "some error"), true); err != nil {
 		return err
@@ -210,10 +208,29 @@ func (c *RPCAbort) Abort() {
 
 }
 
+type RPCCrash struct {
+}
+
+func (c *RPCCrash) Handle(_ spdy.Responser, data interface{}) error {
+	msg, ok := data.(*executor.Crash)
+	if !ok {
+		return fmt.Errorf("invalid data type, exp: *executor.Crash; got: %s", reflect.TypeOf(data))
+	}
+	fmt.Printf("RPCCrash Handle: %+v \n", msg)
+
+	query2.NewManager(clientID).Crash(msg.QueryID)
+	return nil
+}
+
+func (c *RPCCrash) Crash() {
+
+}
+
 func startServer(address string, rpcServer *RPCServer) *spdy.RRCServer {
 	server := spdy.NewRRCServer(spdy.DefaultConfiguration(), "tcp", address)
 	server.RegisterEHF(transport.NewEventHandlerFactory(spdy.SelectRequest, rpcServer, rpc.NewMessageWithHandler(executor.NewRPCMessage)))
 	server.RegisterEHF(transport.NewEventHandlerFactory(spdy.AbortRequest, &RPCAbort{}, &executor.Abort{}))
+	server.RegisterEHF(transport.NewEventHandlerFactory(spdy.CrashRequest, &RPCCrash{}, &executor.Crash{}))
 	if err := server.Start(); err != nil {
 		panic(err.Error())
 	}
@@ -274,6 +291,37 @@ func TestTransportAbort(t *testing.T) {
 		"abort failed")
 }
 
+func TestTransportCrash(t *testing.T) {
+	address := "127.0.0.12:18292"
+	var nodeID uint64 = 2
+	rpcServer := &RPCServer{}
+
+	// Server
+	server := startServer(address, rpcServer)
+	defer server.Stop()
+
+	// Client
+	transport.NewNodeManager().Add(nodeID, address)
+
+	time.Sleep(time.Second)
+
+	ctx := context.Background()
+	rq := makeRemoteQueryMsg(nodeID)
+	rq.Analyze = true
+	client := executor.NewRPCClient(rq)
+	client.Init(ctx, nil)
+
+	go func() {
+		time.Sleep(time.Second / 2)
+		client.Interrupt()
+	}()
+
+	err := client.Run()
+	assert.NoError(t, err)
+	assert.Equal(t, query2.NewManager(clientID).Aborted(rq.Opt.QueryId), true,
+		"crash failed")
+}
+
 func TestHandlerError(t *testing.T) {
 	msg := &executor.Abort{}
 	client := &executor.RPCClient{}
@@ -291,6 +339,17 @@ func TestNewRPCReaderTransform_Abort(t *testing.T) {
 
 	trans.Distribute(buildDag())
 	trans.Abort()
+	err := trans.Work(ctx)
+	require.NoError(t, err)
+}
+
+func TestNewRPCReaderTransform_Interrupt(t *testing.T) {
+	ctx := context.Background()
+	rt := hybridqp.NewRowDataTypeImpl(influxql.VarRef{})
+	trans := executor.NewRPCReaderTransform(rt, 0, &executor.RemoteQuery{})
+
+	trans.Distribute(buildDag())
+	trans.Interrupt()
 	err := trans.Work(ctx)
 	require.NoError(t, err)
 }

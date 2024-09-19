@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package record_test
 
@@ -330,12 +328,12 @@ func BenchmarkWriteRowsToColumnStore(t *testing.B) {
 	recs, s := MockFlowScopeNativeRecords(1, 10000, 8, 22, false)
 	rows := NativeRecordToInfluxRows(recs, mstName)
 	rowsD.Set(mstName, &rows)
-	mstSchema := make(map[string]int32)
+	mstSchema := make(meta.CleanSchema)
 	for i := 0; i < len(s); i++ {
-		mstSchema[s[i].Name] = int32(s[i].Type)
+		mstSchema[s[i].Name] = meta.SchemaVal{Typ: int8(s[i].Type)}
 	}
 	mstsInfo := &sync.Map{}
-	mInfo := &meta.MeasurementInfo{Name: mstName, Schema: mstSchema}
+	mInfo := &meta.MeasurementInfo{Name: mstName, Schema: &mstSchema}
 	mstsInfo.Store(mstName, mInfo)
 	var writeCtx = mutable.WriteRowsCtx{MstsInfo: mstsInfo}
 	t.SetParallelism(1)
@@ -357,12 +355,12 @@ func BenchmarkWriteRecsToColumnStore(t *testing.B) {
 	mstName := "mst"
 	recs, s := MockFlowScopeNativeRecords(1, 10000, 8, 22, false)
 	recsD.Set(mstName, &recs)
-	mstSchema := make(map[string]int32)
+	mstSchema := make(meta.CleanSchema)
 	for i := 0; i < len(s); i++ {
-		mstSchema[s[i].Name] = int32(s[i].Type)
+		mstSchema[s[i].Name] = meta.SchemaVal{Typ: int8(s[i].Type)}
 	}
 	mstsInfo := &sync.Map{}
-	mInfo := &meta.MeasurementInfo{Name: mstName, Schema: mstSchema}
+	mInfo := &meta.MeasurementInfo{Name: mstName, Schema: &mstSchema}
 	mstsInfo.Store(mstName, mInfo)
 	var writeCtx = mutable.WriteRowsCtx{MstsInfo: mstsInfo}
 	t.SetParallelism(1)

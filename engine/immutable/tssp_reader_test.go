@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package immutable
 
@@ -75,6 +73,7 @@ func (f *mockFile) Stat() (os.FileInfo, error)                                  
 func (f *mockFile) Sync() error                                                                    { return f.SyncFn() }
 func (f *mockFile) SyncUpdateLength() error                                                        { return f.SyncUpdateLengthFn() }
 func (f *mockFile) Fd() uintptr                                                                    { return f.FdFn() }
+func (f *mockFile) Size() (int64, error)                                                           { return 0, nil }
 func (f *mockFile) StreamReadBatch([]int64, []int64, int64, chan *request.StreamReader, int, bool) {}
 
 type FakeInfo struct {
@@ -1955,10 +1954,13 @@ func genTsspFile(name string) TSSPFile {
 	mr := &mockTableReader{name: name}
 	mr.FileNameFn = func() string { return mr.name }
 	mr.NameFn = func() string { return "mst" }
+	mr.RenameOnObsFn = func(string) error { return nil }
+	lock := ""
 	return &tsspFile{
 		ref:    1,
 		name:   fn,
 		reader: mr,
+		lock:   &lock,
 	}
 }
 
@@ -2317,4 +2319,25 @@ func TestTsspFileRenameOnObs(t *testing.T) {
 
 	err := file.RenameOnObs("tmp", false, nil)
 	require.Error(t, err)
+}
+
+func TestRenameOnObsRemoveFile(t *testing.T) {
+	dir := t.TempDir()
+	fileName := filepath.Join(dir, "00000001-0000-00000000.tssp")
+	_, _ = os.Create(fileName)
+	file := genTsspFile(fileName)
+	ObsOptions := &obs.ObsOptions{
+		Enabled:    true,
+		BucketName: "bucket",
+		Ak:         "ak",
+		Sk:         "sk",
+		BasePath:   "basePath",
+		Endpoint:   "endPoint",
+	}
+	err := file.RenameOnObs("tmp", false, ObsOptions)
+	assert.Equal(t, nil, err)
+
+	if _, err = fileops.Stat(fileName); !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
 }

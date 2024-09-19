@@ -1,26 +1,24 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package record
 
 import (
 	"sort"
-	"sync"
 	"time"
 
+	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
@@ -52,7 +50,9 @@ type SortHelper struct {
 	times    []int64
 }
 
-var sortHelperPool sync.Pool
+var (
+	sortHelperPool = pool.NewFixedCachePool()
+)
 
 func NewSortHelper() *SortHelper {
 	hlp, ok := sortHelperPool.Get().(*SortHelper)
@@ -66,6 +66,9 @@ func NewSortHelper() *SortHelper {
 }
 
 func (h *SortHelper) Release() {
+	if h.SortData != nil {
+		h.SortData.Reset()
+	}
 	sortHelperPool.Put(h)
 }
 
@@ -340,4 +343,68 @@ func (cv *ColVal) deleteLast(typ int) {
 		size = len(cv.Val) - int(cv.Offset[cv.Len])
 	}
 	cv.Val = cv.Val[:len(cv.Val)-size]
+}
+
+func FastSortRecord(rec *Record, offset int) {
+	indexs := pool.GetIntSlice(rec.Schema.Len())
+	defer pool.PutIntSlice(indexs)
+	indexs[offset-1] = rec.Schema.Len() - 1 // time column
+
+	i := 0
+	j := 0
+
+	// two slices split by offset are sequential
+	added := rec.Schema[offset:]
+	for i < added.Len() {
+		nameJ := rec.Schema[j].Name
+
+		if nameJ == TimeField {
+			break
+		}
+
+		nameI := added[i].Name
+		if nameJ < nameI {
+			indexs[j] = j + i
+			j++
+			continue
+		}
+
+		indexs[offset+i] = j + i
+		i++
+	}
+
+	for ; i < added.Len(); i++ {
+		indexs[offset+i] = j + i
+	}
+	for ; j < offset; j++ {
+		indexs[j] = j + i
+	}
+
+	i = 0
+	for i < rec.Len()-1 {
+		k := indexs[i]
+		if k == i {
+			i++
+			continue
+		}
+
+		rec.Schema[i], rec.Schema[k] = rec.Schema[k], rec.Schema[i]
+		rec.ColVals[i], rec.ColVals[k] = rec.ColVals[k], rec.ColVals[i]
+		indexs[i], indexs[k] = indexs[k], indexs[i]
+	}
+}
+
+func SortRecordIfNeeded(rec *Record) *Record {
+	times := rec.Times()
+	// In golang 1.21, slice.IsSorted is recommended
+	if sort.SliceIsSorted(times, func(i, j int) bool {
+		return times[i] < times[j]
+	}) {
+		return rec
+	}
+
+	hlp := NewColumnSortHelper()
+	defer hlp.Release()
+
+	return hlp.Sort(rec)
 }

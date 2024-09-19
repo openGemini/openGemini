@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package transport
 
@@ -108,14 +106,21 @@ func WritePointsForRep(ww *pointsdecoder.DecoderWork, log *logger.Logger, store 
 	db, rp, ptId, tail, err := ww.DecodeDBPT() // the tail contains data: [shard_id, streamShardIdList, rows...]
 	if err != nil {
 		err = errno.NewError(errno.ErrUnmarshalPoints, err)
-		log.Error("unmarshal rows failed", zap.String("db", db),
-			zap.String("rp", rp), zap.Uint32("ptId", ptId), zap.Error(err)) // 测试一下error格式
+		log.Error("unmarshal rows failed", zap.String("db", db), zap.String("rp", rp), zap.Uint32("ptId", ptId), zap.Error(err))
 		return err
 	}
 
 	if err = storage.WriteRowsForRep(store, db, rp, ptId, 0, ww.GetRows(), tail); err != nil {
-		log.Error("write rows failed", zap.String("db", db),
-			zap.String("rp", rp), zap.Uint32("ptId", ptId), zap.Error(err))
+		if errno.Equal(err, errno.RepConfigWriteNoRepDB) {
+			shard, _, newTail, err1 := ww.DecodeShardAndRows(db, rp, ptId, tail)
+			if err1 != nil {
+				err = errno.NewError(errno.ErrUnmarshalPoints, err1)
+				log.Error("unmarshal rows failed", zap.String("db", db), zap.String("rp", rp), zap.Uint32("ptId", ptId), zap.Error(err))
+				return err
+			}
+			return storage.WriteRows(store, db, rp, ptId, shard, ww.GetRows(), newTail)
+		}
+		log.Error("WritePointsForRep write rows failed", zap.String("db", db), zap.String("rp", rp), zap.Uint32("ptId", ptId), zap.Error(err))
 	}
 	return err
 }

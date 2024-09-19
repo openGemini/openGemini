@@ -1,19 +1,17 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
-//nolint
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//	http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+// nolint
 package executor
 
 import (
@@ -37,24 +35,38 @@ const (
 	ZeroTimeStamp = 0
 )
 
+type AbortProcessor interface {
+	AbortSinkTransform()
+}
+
 type HttpChunkSender struct {
 	buffRows models.Rows
 	RowChunk RowChunk
 	opt      *query.ProcessorOptions
 
 	rowsGenerator *RowsGenerator
+
+	except    bool
+	count     int
+	offsetPos int
+	limit     int
+	offset    int
+	prevRow   *models.Row
+	trans     AbortProcessor
 }
 
 func NewHttpChunkSender(opt *query.ProcessorOptions) *HttpChunkSender {
 	h := &HttpChunkSender{
 		opt:           opt,
 		rowsGenerator: NewRowsGenerator(),
+		except:        opt.IsExcept(),
+		limit:         opt.GetLimit(),
+		offset:        opt.GetOffset(),
 	}
 
 	if h.opt.Location == nil {
 		h.opt.Location = time.UTC
 	}
-
 	return h
 }
 
@@ -116,13 +128,13 @@ func (w *HttpChunkSender) Write(chunk Chunk, lastChunk bool) bool {
 }
 
 func (w *HttpChunkSender) GenRows(chunk Chunk) {
-	if chunk == nil {
+	if chunk == nil || (w.except && 0 < w.limit+w.offset && w.limit+w.offset <= w.count) {
 		return
 	}
 
 	statistics.ExecutorStat.SinkRows.Push(int64(chunk.NumberOfRows()))
 	rows := w.rowsGenerator.Generate(chunk, w.opt.Location)
-	if w.opt.Except {
+	if w.except {
 		for i := 0; i < len(rows); i++ {
 			rows[i].Values = removeDuplicationValues(rows[i].Values)
 		}
@@ -134,13 +146,66 @@ func (w *HttpChunkSender) GenRows(chunk Chunk) {
 		lastRow := w.buffRows[len(w.buffRows)-1]
 		if lastRow.Name == firstRow.Name && hybridqp.EqualMap(lastRow.Tags, firstRow.Tags) {
 			lastRow.Values = append(lastRow.Values, firstRow.Values...)
-			if w.opt.Except {
+			if w.except {
 				lastRow.Values = removeDuplicationValues(lastRow.Values)
 			}
 			rows = rows[1:]
 		}
 	}
-	w.buffRows = append(w.buffRows, rows...)
+
+	if !w.except || (w.limit+w.offset) == 0 {
+		w.buffRows = append(w.buffRows, rows...)
+		return
+	}
+	if w.prevRow != nil && rows.Len() > 0 {
+		firstRow, lastRow := w.prevRow, rows[0]
+		if lastRow.Name == firstRow.Name && hybridqp.EqualMap(lastRow.Tags, firstRow.Tags) {
+			lastRow.Values = RemoveCommonValues(firstRow.Values, lastRow.Values)
+			if len(lastRow.Values) == 0 {
+				rows = rows[1:]
+			}
+		}
+	}
+	if rows.Len() == 0 {
+		return
+	}
+	w.prevRow = rows[rows.Len()-1]
+	w.exceptLimit(rows)
+}
+
+func (w *HttpChunkSender) exceptLimit(rows models.Rows) {
+	for i := range rows {
+		count := len(rows[i].Values)
+		w.count += count
+		if w.count >= w.limit+w.offset {
+			start := w.offset - w.offsetPos
+			end := w.limit + w.offset - (w.count - count)
+			if start < end {
+				rows[i].Values = rows[i].Values[start:end]
+				w.buffRows = append(w.buffRows, rows[i])
+			}
+			w.trans.AbortSinkTransform()
+			break
+		}
+
+		if w.count < w.offset {
+			w.offsetPos += count
+			continue
+		}
+		if w.offset == w.offsetPos {
+			w.buffRows = append(w.buffRows, rows[i])
+		} else {
+			if remain := w.offset - w.offsetPos; remain < count {
+				rows[i].Values = rows[i].Values[remain:]
+				w.buffRows = append(w.buffRows, rows[i])
+			}
+			w.offsetPos = w.offset
+		}
+	}
+}
+
+func (w *HttpChunkSender) SetAbortProcessor(trans AbortProcessor) {
+	w.trans = trans
 }
 
 func removeDuplicationValues(values [][]interface{}) [][]interface{} {
@@ -158,8 +223,44 @@ func removeDuplicationValues(values [][]interface{}) [][]interface{} {
 			}
 		}
 	}
-
 	return values[:j+1]
+}
+
+func RemoveCommonValues(prev, curr [][]interface{}) [][]interface{} {
+	if len(prev) == 0 || len(curr) == 0 {
+		return curr
+	}
+	if prev[len(prev)-1][0].(time.Time).Before(curr[0][0].(time.Time)) {
+		return curr
+	}
+
+	i, j, k := 0, 0, 0
+	for i < len(prev) && j < len(curr) {
+		if prev[i][0] == curr[j][0] {
+			// Skip the element in curr since it is common to both
+			i++
+			j++
+		} else if prev[i][0].(time.Time).Before(curr[j][0].(time.Time)) {
+			// Move pointer in prev
+			i++
+		} else {
+			// Element only exists in curr, place it at position k and move pointers
+			curr[k] = curr[j]
+			k++
+			j++
+		}
+	}
+
+	// Append remaining elements from curr
+	for j < len(curr) {
+		curr[k] = curr[j]
+		k++
+		j++
+	}
+
+	// Truncate curr to the new length
+	curr = curr[:k]
+	return curr
 }
 
 // GetRows transfer Chunk to models.Rows
@@ -396,8 +497,6 @@ func (g *RowsGenerator) Generate(chunk Chunk, loc *time.Location) models.Rows {
 	rows := make(models.Rows, 0, len(tagIndex))
 	tmpRows := g.allocRows(len(tagIndex))
 	var start, end int
-
-	var lastRow *models.Row
 	for index := 0; index < len(tagIndex); index++ {
 		start = tagIndex[index]
 		if start == tagIndex[len(tagIndex)-1] {
@@ -411,12 +510,7 @@ func (g *RowsGenerator) Generate(chunk Chunk, loc *time.Location) models.Rows {
 		row.Tags = chunkTags[index].KeyValues()
 		row.Columns = columnNames
 		row.Values = g.buildValues(end, start, times, loc, columns)
-		if lastRow != nil && hybridqp.EqualMap(lastRow.Tags, row.Tags) {
-			lastRow.Values = append(lastRow.Values, row.Values...)
-		} else {
-			rows = append(rows, row)
-			lastRow = row
-		}
+		rows = append(rows, row)
 	}
 	return rows
 }
@@ -548,6 +642,9 @@ type HttpSenderTransform struct {
 	schema *QuerySchema
 	Sender *http.ResponseWriter
 	Writer *HttpChunkSender
+
+	dag    *TransformDag
+	vertex *TransformVertex
 }
 
 func NewHttpSenderTransform(inRowDataType hybridqp.RowDataType, schema *QuerySchema) *HttpSenderTransform {
@@ -557,6 +654,9 @@ func NewHttpSenderTransform(inRowDataType hybridqp.RowDataType, schema *QuerySch
 		schema: schema,
 	}
 
+	if schema.Options().IsExcept() && schema.Options().GetLimit() > 0 {
+		trans.Writer.SetAbortProcessor(trans)
+	}
 	return trans
 }
 
@@ -628,6 +728,35 @@ func (trans *HttpSenderTransform) GetInputNumber(_ Port) int {
 	return 0
 }
 
+func (trans *HttpSenderTransform) SetDag(dag *TransformDag) {
+	trans.dag = dag
+}
+
+func (trans *HttpSenderTransform) SetVertex(vertex *TransformVertex) {
+	trans.vertex = vertex
+}
+
+func (trans *HttpSenderTransform) Visit(vertex *TransformVertex) TransformVertexVisitor {
+	if !vertex.transform.IsSink() {
+		return trans
+	}
+
+	if rpc, ok := vertex.transform.(*RPCReaderTransform); ok {
+		rpc.Abort()
+	}
+	return trans
+}
+
+func (trans *HttpSenderTransform) AbortSinkTransform() {
+	if trans.dag == nil || trans.vertex == nil {
+		return
+	}
+
+	go func() {
+		trans.dag.DepthFirstWalkVertex(trans, trans.vertex)
+	}()
+}
+
 type HttpSenderHintTransformCreator struct {
 }
 
@@ -655,6 +784,9 @@ type HttpSenderHintTransform struct {
 	init      bool
 	chunks    []Chunk
 	ridIdxMap map[int]struct{} // null column index
+
+	dag    *TransformDag
+	vertex *TransformVertex
 }
 
 func NewHttpSenderHintTransform(inRowDataType hybridqp.RowDataType, schema *QuerySchema) *HttpSenderHintTransform {
@@ -663,7 +795,9 @@ func NewHttpSenderHintTransform(inRowDataType hybridqp.RowDataType, schema *Quer
 		Writer: NewHttpChunkSender(schema.Options().(*query.ProcessorOptions)),
 		schema: schema,
 	}
-
+	if schema.Options().IsExcept() && schema.Options().GetLimit() > 0 {
+		trans.Writer.SetAbortProcessor(trans)
+	}
 	return trans
 }
 
@@ -781,4 +915,33 @@ func (trans *HttpSenderHintTransform) GetOutputNumber(_ Port) int {
 
 func (trans *HttpSenderHintTransform) GetInputNumber(_ Port) int {
 	return 0
+}
+
+func (trans *HttpSenderHintTransform) SetDag(dag *TransformDag) {
+	trans.dag = dag
+}
+
+func (trans *HttpSenderHintTransform) SetVertex(vertex *TransformVertex) {
+	trans.vertex = vertex
+}
+
+func (trans *HttpSenderHintTransform) Visit(vertex *TransformVertex) TransformVertexVisitor {
+	if !vertex.transform.IsSink() {
+		return trans
+	}
+
+	if rpc, ok := vertex.transform.(*RPCReaderTransform); ok {
+		rpc.Abort()
+	}
+	return trans
+}
+
+func (trans *HttpSenderHintTransform) AbortSinkTransform() {
+	if trans.dag == nil || trans.vertex == nil {
+		return
+	}
+
+	go func() {
+		trans.dag.DepthFirstWalkVertex(trans, trans.vertex)
+	}()
 }

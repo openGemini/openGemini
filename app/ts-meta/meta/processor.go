@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package meta
 
@@ -36,7 +34,7 @@ import (
 type MetaStoreInterface interface {
 	leader() string
 	peers() []string
-	createDataNode(httpAddr, tcpAddr, role string) ([]byte, error)
+	createDataNode(httpAddr, tcpAddr, role, az string) ([]byte, error)
 	CreateSqlNode(httpAddr string, gossopAddr string) ([]byte, error)
 	afterIndex(index uint64) <-chan struct{}
 	getSnapshot(role metaclient.Role) []byte
@@ -59,6 +57,7 @@ type MetaStoreInterface interface {
 	handlerSql2MetaHeartbeat(host string) error
 	getContinuousQueryLease(host string) ([]string, error)
 	verifyDataNodeStatus(nodeID uint64) error
+	ShowCluster(body []byte) ([]byte, error)
 }
 
 type RPCHandler interface {

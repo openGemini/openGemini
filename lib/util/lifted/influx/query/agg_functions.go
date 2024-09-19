@@ -1,18 +1,16 @@
-/*
-Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package query
 
@@ -345,13 +343,73 @@ var (
 			mergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("stdvar_prom", &StddevFunc{
+	_ = RegistryAggregateFunction("stdvar_prom", &OneParamCompileFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
 		BaseAgg: BaseAgg{
 			mergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("stddev_prom", &StddevFunc{
+	_ = RegistryAggregateFunction("stddev_prom", &OneParamCompileFunc{
+		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
+		BaseAgg: BaseAgg{
+			mergeCall: true,
+		},
+	})
+	_ = RegistryAggregateFunction("group_prom", &PromGroupFunc{
+		BaseInfo: BaseInfo{FuncType: AGG_NORMAL},
+		BaseAgg: BaseAgg{
+			mergeCall: true,
+		},
+	})
+	_ = RegistryAggregateFunction("scalar_prom", &PromScalarFunc{
+		BaseInfo: BaseInfo{FuncType: AGG_NORMAL},
+		BaseAgg: BaseAgg{
+			mergeCall: true,
+		},
+	})
+	_ = RegistryAggregateFunction("quantile_prom", &PercentileFunc{
+		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
+		BaseAgg: BaseAgg{
+			mergeCall: true,
+		},
+	})
+	_ = RegistryAggregateFunction("stdvar_over_time_prom", &OneParamCompileFunc{
+		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
+		BaseAgg: BaseAgg{
+			mergeCall: true,
+		},
+	})
+	_ = RegistryAggregateFunction("stddev_over_time_prom", &OneParamCompileFunc{
+		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
+		BaseAgg: BaseAgg{
+			mergeCall: true,
+		},
+	})
+	_ = RegistryAggregateFunction("holt_winters_prom", &HoltWintersFunc{
+		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
+		BaseAgg: BaseAgg{
+			mergeCall: true,
+		},
+	})
+	_ = RegistryAggregateFunction("changes_prom", &PromIDeltaFunc{
+		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
+		BaseAgg: BaseAgg{
+			mergeCall: true,
+		},
+	})
+	_ = RegistryAggregateFunction("quantile_over_time_prom", &PercentileFunc{
+		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
+		BaseAgg: BaseAgg{
+			mergeCall: true,
+		},
+	})
+	_ = RegistryAggregateFunction("last_over_time_prom", &OneParamCompileFunc{
+		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
+		BaseAgg: BaseAgg{
+			mergeCall: true,
+		},
+	})
+	_ = RegistryAggregateFunction("resets_prom", &OneParamCompileFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
 		BaseAgg: BaseAgg{
 			mergeCall: true,
@@ -1026,6 +1084,68 @@ func (f *ModeFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql
 	return args[0], nil
 }
 
+type HoltWintersFunc struct {
+	BaseInfo
+	BaseAgg
+}
+
+func (f *HoltWintersFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
+	c.global.OnlySelectors = false
+	if exp, got := 3, len(expr.Args); exp != got {
+		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", expr.Name, exp, got)
+	}
+	args := expr.Args
+
+	var sf float64
+	switch arg := args[1].(type) {
+	case *influxql.NumberLiteral:
+		sf = arg.Val
+	case *influxql.IntegerLiteral:
+		sf = float64(arg.Val)
+	default:
+		return fmt.Errorf("expected float argument in holt_winters()")
+	}
+	if sf <= 0 || sf >= 1 {
+		return fmt.Errorf("invalid smoothing factor. Expected: 0 < sf < 1, got: %f", sf)
+	}
+	var tf float64
+	switch arg := args[2].(type) {
+	case *influxql.NumberLiteral:
+		tf = arg.Val
+	case *influxql.IntegerLiteral:
+		tf = float64(arg.Val)
+	default:
+		return fmt.Errorf("expected float argument in holt_winters()")
+	}
+	if tf <= 0 || tf >= 1 {
+		return fmt.Errorf("invalid trend factor. Expected: 0 < tf < 1, got: %f", tf)
+	}
+	return c.compileSymbol(expr.Name, expr.Args[0])
+}
+
+func (f *HoltWintersFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
+	return influxql.Float, nil
+}
+
+type OneParamCompileFunc struct {
+	BaseInfo
+	BaseAgg
+}
+
+func (f *OneParamCompileFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
+	args, name := expr.Args, expr.Name
+	if exp, got := 1, len(expr.Args); exp != got {
+		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", name, exp, got)
+	}
+	c.global.OnlySelectors = false
+	// Must be a variable reference, wildcard, or regexp.
+	return c.compileSymbol(name, args[0])
+}
+
+func (f *OneParamCompileFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
+	return influxql.Float, nil
+}
+
 type StddevFunc struct {
 	BaseInfo
 	BaseAgg
@@ -1350,7 +1470,7 @@ func (f *CountValuesFunc) CompileFunc(expr *influxql.Call, c *compiledField) err
 }
 
 func (f *CountValuesFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
-	return influxql.Integer, nil
+	return influxql.Float, nil
 }
 
 type PromDeltaFunc struct {
@@ -1388,5 +1508,43 @@ func (f *PromIDeltaFunc) CompileFunc(expr *influxql.Call, c *compiledField) erro
 }
 
 func (f *PromIDeltaFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
+	return influxql.Float, nil
+}
+
+type PromGroupFunc struct {
+	BaseInfo
+	BaseAgg
+}
+
+func (f *PromGroupFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
+	args, name := expr.Args, expr.Name
+	if exp, got := 1, len(expr.Args); exp != got {
+		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", name, exp, got)
+	}
+	c.global.OnlySelectors = false
+	// Must be a variable reference, wildcard, or regexp.
+	return c.compileSymbol(name, args[0])
+}
+
+func (f *PromGroupFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
+	return influxql.Float, nil
+}
+
+type PromScalarFunc struct {
+	BaseInfo
+	BaseAgg
+}
+
+func (f *PromScalarFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
+	args, name := expr.Args, expr.Name
+	if exp, got := 1, len(expr.Args); exp != got {
+		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", name, exp, got)
+	}
+	c.global.OnlySelectors = false
+	// Must be a variable reference, wildcard, or regexp.
+	return c.compileSymbol(name, args[0])
+}
+
+func (f *PromScalarFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
 	return influxql.Float, nil
 }

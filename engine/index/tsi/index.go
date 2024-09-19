@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 //nolint
 
@@ -80,6 +78,16 @@ func (t *TagSetInfo) Swap(i, j int) {
 	}
 }
 
+func (t *TagSetInfo) Cut(idx int) {
+	if idx >= len(t.IDs) {
+		return
+	}
+	t.SeriesKeys = t.SeriesKeys[:idx]
+	t.IDs = t.IDs[:idx]
+	t.TagsVec = t.TagsVec[:idx]
+	t.Filters = t.Filters[:idx]
+}
+
 func NewTagSetInfo() *TagSetInfo {
 	return setPool.getInit(32)
 }
@@ -100,6 +108,24 @@ func (t *TagSetInfo) reset() {
 	}
 }
 
+func (t *TagSetInfo) AppendWithOpt(id uint64, seriesKey []byte, filter influxql.Expr, tags influx.PointTags,
+	rowFilter []clv.RowFilter, opt *query.ProcessorOptions) {
+	t.IDs = append(t.IDs, id)
+	t.Filters = append(t.Filters, filter)
+	if opt.SimpleTagset {
+		t.SeriesKeys = append(t.SeriesKeys, nil)
+		if len(t.TagsVec) == 0 {
+			t.TagsVec = append(t.TagsVec, tags)
+		}
+	} else {
+		t.TagsVec = append(t.TagsVec, tags)
+		t.SeriesKeys = append(t.SeriesKeys, seriesKey)
+	}
+	if t.RowFilters != nil {
+		t.RowFilters.Append(rowFilter)
+	}
+}
+
 func (t *TagSetInfo) Append(id uint64, seriesKey []byte, filter influxql.Expr, tags influx.PointTags, rowFilter []clv.RowFilter) {
 	t.IDs = append(t.IDs, id)
 	t.Filters = append(t.Filters, filter)
@@ -108,6 +134,13 @@ func (t *TagSetInfo) Append(id uint64, seriesKey []byte, filter influxql.Expr, t
 	if t.RowFilters != nil {
 		t.RowFilters.Append(rowFilter)
 	}
+}
+
+func (t *TagSetInfo) GetTagsWithQuerySchema(i int, s *executor.QuerySchema) *influx.PointTags {
+	if s.Options().GetSimpleTagset() {
+		return &t.TagsVec[0]
+	}
+	return &t.TagsVec[i]
 }
 
 func (t *TagSetInfo) Ref() {

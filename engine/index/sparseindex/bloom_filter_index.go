@@ -1,18 +1,16 @@
-/*
-Copyright 2023 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2023 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package sparseindex
 
@@ -35,6 +33,7 @@ import (
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/rpn"
 	"github.com/openGemini/openGemini/lib/tokenizer"
+	"github.com/openGemini/openGemini/lib/tracing"
 	"go.uber.org/zap"
 )
 
@@ -89,6 +88,7 @@ type BloomFilterIndexReader struct {
 	option  hybridqp.Options
 	bf      rpn.SKBaseReader
 	sk      SKCondition
+	span    *tracing.Span
 }
 
 func NewBloomFilterIndexReader(rpnExpr *rpn.RPNExpr, schema record.Schemas, option hybridqp.Options, isCache bool) (*BloomFilterIndexReader, error) {
@@ -101,6 +101,10 @@ func NewBloomFilterIndexReader(rpnExpr *rpn.RPNExpr, schema record.Schemas, opti
 
 func (r *BloomFilterIndexReader) MayBeInFragment(fragId uint32) (bool, error) {
 	return r.sk.IsExist(int64(fragId), r.bf)
+}
+
+func (r *BloomFilterIndexReader) StartSpan(span *tracing.Span) {
+	r.span = span
 }
 
 func (r *BloomFilterIndexReader) ReInit(file interface{}) (err error) {

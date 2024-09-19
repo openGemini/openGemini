@@ -16,6 +16,8 @@ limitations under the License.
 package engine
 
 import (
+	"time"
+
 	"github.com/openGemini/openGemini/engine/comm"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
@@ -30,12 +32,18 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 )
 
+const (
+	MetaIndexAndBlockIdDuration = "meta_index_duration"
+	PrimaryKeyDuration          = "primary_key_duration"
+)
+
 // detachedLazyLoadIndexReader is used to reduce the number of BF in the "select  order by time limit" scenario
 type detachedLazyLoadIndexReader struct {
 	dataPath   string
 	ctx        *indexContext
 	obsOptions *obs.ObsOptions
 	readerCtx  *immutable.FileReaderContext
+	span       *tracing.Span
 }
 
 func NewDetachedLazyLoadIndexReader(ctx *indexContext, obsOption *obs.ObsOptions, readerCtx *immutable.FileReaderContext) *detachedLazyLoadIndexReader {
@@ -46,15 +54,20 @@ func NewDetachedLazyLoadIndexReader(ctx *indexContext, obsOption *obs.ObsOptions
 	}
 }
 
+func (t *detachedLazyLoadIndexReader) StartSpan(span *tracing.Span) {
+	if span == nil {
+		return
+	}
+	t.span = span
+}
+
 func (r *detachedLazyLoadIndexReader) CreateCursors() ([]comm.KeyCursor, int, error) {
 	cursors := make([]comm.KeyCursor, 0)
 	mst := r.ctx.schema.Options().GetMeasurements()[0]
 	r.dataPath = obs.GetBaseMstPath(r.ctx.shardPath, mst.Name)
-	c, err := NewStreamDetachedReader(r.readerCtx, sparseindex.NewOBSFilterPath("", r.dataPath, r.obsOptions), r.ctx)
-	if err != nil {
-		return nil, 0, err
-	}
-	sortLimitCursor := immutable.NewSortLimitCursor(r.ctx.schema.Options(), r.readerCtx.GetSchemas(), c)
+	c := NewStreamDetachedReader(r.readerCtx, sparseindex.NewOBSFilterPath("", r.dataPath, r.obsOptions), r.ctx)
+	sortLimitCursor := immutable.NewSortLimitCursor(r.ctx.schema.Options(), r.readerCtx.GetSchemas(), c, obs.GetShardID(r.dataPath))
+	sortLimitCursor.StartSpan(r.span)
 	cursors = append(cursors, sortLimitCursor)
 	return cursors, 0, nil
 }
@@ -62,10 +75,13 @@ func (r *detachedLazyLoadIndexReader) CreateCursors() ([]comm.KeyCursor, int, er
 // StreamDetachedReader implement comm.KeyCursor and comm.TimeCutKeyCursor, it can stream read detached data to reduce IO of BF.
 type StreamDetachedReader struct {
 	isInitDataReader bool
+	isClose          bool
+	isInit           bool
 	idx              int
 	blockId          uint64
 	localPath        string
 	dataPath         string
+	span             *tracing.Span
 	dataReader       comm.KeyCursor
 	tr               util.TimeRange
 	skFileReader     []sparseindex.SKFileReader
@@ -77,7 +93,7 @@ type StreamDetachedReader struct {
 	tempFrs          []*fragment.FragmentRange
 }
 
-func NewStreamDetachedReader(readerCtx *immutable.FileReaderContext, path *sparseindex.OBSFilterPath, ctx *indexContext) (*StreamDetachedReader, error) {
+func NewStreamDetachedReader(readerCtx *immutable.FileReaderContext, path *sparseindex.OBSFilterPath, ctx *indexContext) *StreamDetachedReader {
 	r := &StreamDetachedReader{
 		options:   ctx.schema.Options(),
 		ctx:       ctx,
@@ -87,12 +103,8 @@ func NewStreamDetachedReader(readerCtx *immutable.FileReaderContext, path *spars
 		tempFrs:   make([]*fragment.FragmentRange, 1),
 	}
 	r.tempFrs[0] = fragment.NewFragmentRange(uint32(0), uint32(0))
-	err := r.Init()
-	if err != nil {
-		return nil, err
-	}
 
-	return r, nil
+	return r
 }
 
 func (r *StreamDetachedReader) Init() (err error) {
@@ -108,9 +120,14 @@ func (r *StreamDetachedReader) Init() (err error) {
 	if chunkCount == 0 {
 		return
 	}
-
+	var tm time.Time
+	if r.span != nil {
+		tm = time.Now()
+	}
 	miChunkIds, miFiltered, err := immutable.GetMetaIndexAndBlockId(r.dataPath, r.path.Option(), chunkCount, r.ctx.tr)
-
+	if r.span != nil {
+		r.span.Count(MetaIndexAndBlockIdDuration, int64(time.Since(tm)))
+	}
 	if err != nil {
 		return
 	}
@@ -118,10 +135,15 @@ func (r *StreamDetachedReader) Init() (err error) {
 	if len(miFiltered) == 0 {
 		return nil
 	}
-
+	if r.span != nil {
+		tm = time.Now()
+	}
 	pkMetaInfo, pkItems, err := immutable.GetPKItems(r.dataPath, r.path.Option(), miChunkIds)
 	if err != nil {
 		return err
+	}
+	if r.span != nil {
+		r.span.Count(PrimaryKeyDuration, int64(time.Since(tm)))
 	}
 	r.info = executor.NewDetachedIndexInfo(miFiltered, pkItems)
 
@@ -139,7 +161,6 @@ func (r *StreamDetachedReader) Init() (err error) {
 			return err
 		}
 	}
-
 	return initKeyCondition(r.info.Infos()[0].Data.Schema, r.ctx, pkMetaInfo.TCLocation)
 }
 
@@ -148,6 +169,21 @@ func (t *StreamDetachedReader) Name() string {
 }
 
 func (t *StreamDetachedReader) StartSpan(span *tracing.Span) {
+	if span == nil {
+		return
+	}
+	t.span = span
+	if t.skFileReader != nil {
+		for _, sk := range t.skFileReader {
+			sk.StartSpan(span)
+		}
+	}
+	t.span.CreateCounter(immutable.ReaderContentNumSpan, "")
+	t.span.CreateCounter(immutable.ReaderContentSizeSpan, "")
+	t.span.CreateCounter(immutable.ReaderContentDuration, "ns")
+	t.span.CreateCounter(immutable.ReaderFilterDuration, "ns")
+	t.span.CreateCounter(MetaIndexAndBlockIdDuration, "ns")
+	t.span.CreateCounter(PrimaryKeyDuration, "ns")
 }
 
 func (t *StreamDetachedReader) EndSpan() {
@@ -169,7 +205,17 @@ func (t *StreamDetachedReader) UpdateTime(time int64) {
 }
 
 func (t *StreamDetachedReader) Next() (*record.Record, comm.SeriesInfoIntf, error) {
+	if !t.isInit {
+		err := t.Init()
+		if err != nil {
+			return nil, nil, err
+		}
+		t.isInit = true
+	}
 	for {
+		if t.isClose {
+			return nil, nil, nil
+		}
 		if t.info == nil {
 			return nil, nil, nil
 		}
@@ -211,12 +257,15 @@ func (t *StreamDetachedReader) initDataReader() (bool, error) {
 		t.resetIndex()
 		return false, nil
 	}
-	currBlocks := make([]int, 0, immutable.ChunkMetaReadNum)
+	currBlocks := make([]int, 0, immutable.BatchReaderRecordNum)
 	for {
+		if t.isClose {
+			return false, nil
+		}
 		if t.blockId >= currInfo.EndBlockId-currInfo.StartBlockId {
 			break
 		}
-		if len(currBlocks) >= immutable.ChunkMetaReadNum {
+		if len(currBlocks) >= immutable.BatchReaderRecordNum {
 			break
 		}
 		currBlockId := t.blockId
@@ -253,6 +302,8 @@ func (t *StreamDetachedReader) initDataReader() (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	t.dataReader.StartSpan(t.span)
+	t.isInitDataReader = true
 	return true, nil
 }
 
@@ -283,6 +334,10 @@ func (t *StreamDetachedReader) resetIndex() {
 }
 
 func (t *StreamDetachedReader) Close() error {
+	t.isClose = true
+	if !immutable.IsInterfaceNil(t.dataReader) {
+		return t.dataReader.Close()
+	}
 	return nil
 }
 

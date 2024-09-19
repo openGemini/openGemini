@@ -4,7 +4,7 @@ package meta
 Copyright (c) 2013-2016 Errplane Inc.
 This code is originally from: https://github.com/influxdata/influxdb/blob/1.7/services/meta/data.go
 
-2022.01.23 Add Measurements to store measurement meta data
+2022.01.23 Add Measurements to store measurement metadata
 Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
 */
 
@@ -307,7 +307,7 @@ func (rpi *RetentionPolicyInfo) walkSubscriptions(fn func(subscription *Subscrip
 }
 
 // Marshal serializes to a protobuf representation.
-func (rpi *RetentionPolicyInfo) Marshal() *proto2.RetentionPolicyInfo {
+func (rpi *RetentionPolicyInfo) Marshal(snapshot bool) *proto2.RetentionPolicyInfo {
 	pb := &proto2.RetentionPolicyInfo{
 		Name:               proto.String(rpi.Name),
 		ReplicaN:           proto.Uint32(uint32(rpi.ReplicaN)),
@@ -323,7 +323,7 @@ func (rpi *RetentionPolicyInfo) Marshal() *proto2.RetentionPolicyInfo {
 		pb.Measurements = make([]*proto2.MeasurementInfo, len(rpi.Measurements))
 		i := 0
 		for _, msti := range rpi.Measurements {
-			pb.Measurements[i] = msti.marshal()
+			pb.Measurements[i] = msti.marshal(snapshot)
 			i++
 		}
 	}
@@ -460,7 +460,7 @@ func (rpi RetentionPolicyInfo) Clone() *RetentionPolicyInfo {
 
 // MarshalBinary encodes rpi to a binary format.
 func (rpi *RetentionPolicyInfo) MarshalBinary() ([]byte, error) {
-	return proto.Marshal(rpi.Marshal())
+	return proto.Marshal(rpi.Marshal(false))
 }
 
 // UnmarshalBinary decodes rpi from a binary format.

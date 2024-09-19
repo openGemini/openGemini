@@ -1,3 +1,4 @@
+//go:build linux && amd64
 /*
  *  LZ4 - Fast LZ compression algorithm
  *  Header File

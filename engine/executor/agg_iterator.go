@@ -1,18 +1,16 @@
-/*
-Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package executor
 
@@ -2976,6 +2974,135 @@ func (r *OGSketchIterator) Next(ie *IteratorEndpoint, p *IteratorParams) {
 			r.processLastWindow(inChunk, start, end)
 		} else {
 			r.processMiddleWindow(inChunk, outChunk, start, end, time)
+		}
+	}
+}
+
+type IntegerTimeColIntegerIterator struct {
+	initTimeCol bool
+	inOrdinal   int
+	outOrdinal  int
+	prevPoint   *Point[int64]
+	currPoint   *Point[int64]
+	fn          TimeColReduceFunc[int64]
+	fv          ColMergeFunc[int64]
+}
+
+func NewIntegerTimeColIntegerIterator(
+	fn TimeColReduceFunc[int64], fv ColMergeFunc[int64], inOrdinal, outOrdinal int,
+) *IntegerTimeColIntegerIterator {
+	r := &IntegerTimeColIntegerIterator{
+		fn:         fn,
+		fv:         fv,
+		inOrdinal:  inOrdinal,
+		outOrdinal: outOrdinal,
+		prevPoint:  newPoint[int64](),
+		currPoint:  newPoint[int64](),
+	}
+	return r
+}
+
+func (r *IntegerTimeColIntegerIterator) mergePrevItem(
+	outChunk Chunk,
+) {
+	outColumn := outChunk.Column(r.outOrdinal)
+	outColumn.AppendIntegerValue(r.prevPoint.value)
+	outColumn.AppendColumnTime(r.prevPoint.time)
+	outColumn.AppendNotNil()
+}
+
+func (r *IntegerTimeColIntegerIterator) processFirstWindow(
+	inChunk, outChunk Chunk, isNil, sameInterval, onlyOneInterval bool, index int, value int64,
+) {
+	// To distinguish values between inChunk and auxChunk, r.currPoint.index incremented by 1.
+	if !isNil {
+		if r.initTimeCol {
+			r.currPoint.Set(index+1, inChunk.Column(r.inOrdinal).ColumnTime(index), value)
+		} else {
+			r.currPoint.Set(index+1, inChunk.TimeByIndex(index), value)
+		}
+		r.fv(r.prevPoint, r.currPoint)
+	}
+	if onlyOneInterval && sameInterval {
+		r.prevPoint.index = 0
+	} else {
+		if !r.prevPoint.isNil {
+			r.mergePrevItem(outChunk)
+		}
+		r.prevPoint.Reset()
+	}
+	r.currPoint.Reset()
+}
+
+func (r *IntegerTimeColIntegerIterator) processLastWindow(
+	inChunk Chunk, index int, isNil bool, value int64,
+) {
+	if isNil {
+		r.prevPoint.Reset()
+		return
+	}
+	if r.initTimeCol {
+		r.prevPoint.Set(0, inChunk.Column(r.inOrdinal).ColumnTime(index), value)
+	} else {
+		r.prevPoint.Set(0, inChunk.TimeByIndex(index), value)
+	}
+}
+
+func (r *IntegerTimeColIntegerIterator) processMiddleWindow(
+	inChunk, outChunk Chunk, index int, value int64,
+) {
+	outColumn := outChunk.Column(r.outOrdinal)
+	if r.initTimeCol {
+		outColumn.AppendColumnTime(inChunk.Column(r.inOrdinal).ColumnTime(index))
+	} else {
+		outColumn.AppendColumnTime(inChunk.TimeByIndex(index))
+	}
+	outColumn.AppendIntegerValue(value)
+	outColumn.AppendNotNil()
+}
+
+func (r *IntegerTimeColIntegerIterator) Next(ie *IteratorEndpoint, p *IteratorParams) {
+	inChunk, outChunk := ie.InputPoint.Chunk, ie.OutputPoint.Chunk
+	inColumn := inChunk.Column(r.inOrdinal)
+	outColumn := outChunk.Column(r.outOrdinal)
+	if inColumn.IsEmpty() && r.prevPoint.isNil {
+		var addIntervalLen int
+		if p.sameInterval {
+			addIntervalLen = inChunk.IntervalLen() - 1
+		} else {
+			addIntervalLen = inChunk.IntervalLen()
+		}
+		if addIntervalLen > 0 {
+			outColumn.AppendManyNil(addIntervalLen)
+		}
+		return
+	}
+
+	var end int
+	r.initTimeCol = len(inColumn.ColumnTimes()) > 0
+	firstIndex, lastIndex := 0, len(inChunk.IntervalIndex())-1
+	values := inColumn.IntegerValues()
+	for i, start := range inChunk.IntervalIndex() {
+		if i < lastIndex {
+			end = inChunk.IntervalIndex()[i+1]
+		} else {
+			end = inChunk.NumberOfRows()
+		}
+		index, value, isNil := r.fn(inChunk, values, r.inOrdinal, start, end)
+		if isNil && ((i > firstIndex && i < lastIndex) ||
+			(firstIndex == lastIndex && r.prevPoint.isNil && !p.sameInterval) ||
+			(firstIndex != lastIndex && i == firstIndex && r.prevPoint.isNil) ||
+			(firstIndex != lastIndex && i == lastIndex && !p.sameInterval)) {
+			outColumn.AppendNil()
+			continue
+		}
+		if i == firstIndex && !r.prevPoint.isNil {
+			r.processFirstWindow(inChunk, outChunk, isNil, p.sameInterval,
+				firstIndex == lastIndex, index, value)
+		} else if i == lastIndex && p.sameInterval {
+			r.processLastWindow(inChunk, index, isNil, value)
+		} else if !isNil {
+			r.processMiddleWindow(inChunk, outChunk, index, value)
 		}
 	}
 }

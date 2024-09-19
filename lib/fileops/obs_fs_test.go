@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package fileops
 
@@ -389,4 +387,31 @@ func TestDecodeRemotePathToLocal(t *testing.T) {
 	o := NewObsFs()
 	_, err := o.DecodeRemotePathToLocal(name)
 	assert.NotNil(t, err)
+}
+
+func TestObsFs_Size(t *testing.T) {
+	initializeEnv(t)
+	name := EncodeObsPath(endpoint, bucketName, "test_obs_fs_open.txt", ak, sk)
+	fd, err := testObsFs.OpenFile(name, os.O_CREATE|os.O_RDWR, os.ModePerm)
+	assert.Nil(t, err)
+	assert.NotNil(t, fd)
+	_, _ = fd.Write([]byte("hello"))
+	fileSize, err := fd.Size()
+	_ = fd.Close()
+	assert.Nil(t, err)
+	assert.Equal(t, int64(5), fileSize)
+	t.Cleanup(func() {
+		_ = testObsFs.Remove(name)
+	})
+}
+
+func TestObsFs_Size0(t *testing.T) {
+	fileSize := int64(100)
+	o := &obsFile{
+		offset: fileSize,
+		flag:   os.O_CREATE | os.O_APPEND,
+	}
+	tmpSize, err := o.Size()
+	assert.Nil(t, err)
+	assert.Equal(t, tmpSize, fileSize)
 }

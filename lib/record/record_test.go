@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package record_test
 
@@ -2717,5 +2715,116 @@ func TestFieldIndexs(t *testing.T) {
 	idx := rec.FieldIndexsFast("not exist")
 	if idx != -1 {
 		t.Fatal("error index, actual index", idx)
+	}
+}
+
+func TestRecord_TryPadColumn2AlignBitmap(t *testing.T) {
+	type fields struct {
+		RecMeta *record.RecMeta
+		ColVals []record.ColVal
+		Schema  record.Schemas
+	}
+	tests := []struct {
+		name   string
+		fields fields
+	}{
+		{
+			name: "1",
+			fields: fields{
+				RecMeta: nil,
+				ColVals: []record.ColVal{
+					{},
+					{
+						Len:          8,
+						NilCount:     8,
+						BitMapOffset: 0,
+						Offset:       make([]uint32, 8),
+						Bitmap:       make([]byte, 1),
+					},
+					{
+						Len:          8,
+						NilCount:     0,
+						BitMapOffset: 1,
+						Offset:       nil,
+						Val:          make([]byte, 32),
+						Bitmap:       make([]byte, 2),
+					},
+				},
+				Schema: []record.Field{
+					{
+						Name: "a",
+						Type: influx.Field_Type_String,
+					},
+					{
+						Name: "b",
+						Type: influx.Field_Type_String,
+					},
+					{
+						Name: "time",
+						Type: influx.Field_Type_Int,
+					},
+				},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := &record.Record{
+				RecMeta: tt.fields.RecMeta,
+				ColVals: tt.fields.ColVals,
+				Schema:  tt.fields.Schema,
+			}
+			rec.TryPadColumn2AlignBitmap()
+			assert.Equal(t, rec.ColVals[0].Len, 8)
+			assert.Equal(t, rec.ColVals[0].NilCount, 8)
+			assert.Equal(t, rec.ColVals[0].BitMapOffset, 1)
+			assert.Equal(t, len(rec.ColVals[0].Bitmap), 2)
+			assert.Equal(t, rec.ColVals[1].Len, 8)
+			assert.Equal(t, rec.ColVals[1].NilCount, 8)
+			assert.Equal(t, rec.ColVals[1].BitMapOffset, 1)
+			assert.Equal(t, len(rec.ColVals[1].Bitmap), 2)
+		})
+	}
+}
+
+func TestGetRecordFromPool(t *testing.T) {
+	rec := record.GetRecordFromPool(record.LogStoreRecordPool, testSchema)
+	assert.NotEqual(t, rec, nil)
+	record.LogStoreRecordPool.Put(rec)
+	rec0 := record.GetRecordFromPool(record.LogStoreRecordPool, testSchema)
+	assert.NotEqual(t, rec0, nil)
+	record.LogStoreRecordPool.Put(rec0)
+}
+
+func TestPutBigRecord(t *testing.T) {
+	rec := record.GetRecordFromPool(record.LogStoreRecordPool, nil)
+	assert.Equal(t, 0, rec.Len())
+	record.LogStoreRecordPool.PutBigRecord(rec)
+	rec0 := record.GetRecordFromPool(record.LogStoreRecordPool, testSchema)
+	assert.NotEqual(t, rec0, nil)
+	record.LogStoreRecordPool.PutBigRecord(rec0)
+}
+
+func TestUpdateSeqIdCol(t *testing.T) {
+	rec := genRowRec(testSchema,
+		[]int{0, 0, 0}, []int64{0, 0, 0},
+		[]int{1, 1, 1}, []float64{0, 2.2, 5.3},
+		[]int{1, 1, 1}, []string{"test", "hi", "world"},
+		[]int{1, 1, 1}, []bool{true, true, true},
+		[]int64{6, 1, 1})
+	sort.Sort(rec)
+	// do nothing
+	record.UpdateSeqIdCol(0, rec)
+	// append seq id
+	err := record.AppendSeqIdSchema(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// update seqId
+	record.UpdateSeqIdCol(0, rec)
+	// expecting AppendSeqIdSchema fail
+	err = record.AppendSeqIdSchema(rec)
+	if err == nil {
+		t.Fatalf("expecting AppendSeqIdSchema fail, but not")
 	}
 }

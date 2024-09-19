@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package immutable
 
@@ -590,8 +588,7 @@ func (codec *colValCodec) encode(t *testing.T) {
 		Type: int(codec.typ),
 		Name: "",
 	}
-	builder.segCol = dataCols
-	data, err := builder.encode(ref, timeCols, 0)
+	data, err := builder.encode(ref, dataCols, timeCols, 0)
 
 	require.NoError(t, err)
 	codec.buf = data
@@ -780,4 +777,36 @@ func TestFilterByField(t *testing.T) {
 	result.Reset()
 	filterBitMap.Reset()
 	filterRec.Reuse()
+}
+
+func TestEncodeColumn_error(t *testing.T) {
+	codec := &colValCodec{}
+	codec.setTyp(encoding.BlockInteger)
+	codec.timeCol.AppendIntegers(1, 2, 3, 4)
+	codec.dataCol.AppendIntegers(1, 2, 3)
+
+	builder := NewColumnBuilder()
+	builder.colMeta = &ColumnMeta{}
+	builder.colMeta.growEntry()
+
+	timeCols := []record.ColVal{codec.timeCol}
+
+	ref := record.Field{
+		Type: int(codec.typ),
+		Name: "foo",
+	}
+
+	err := func() (err error) {
+		defer func() {
+			e := recover()
+			if e != nil {
+				err = fmt.Errorf("%v", e)
+			}
+		}()
+
+		_, err = builder.encode(ref, nil, timeCols, 0)
+		return err
+	}()
+
+	require.NotEmpty(t, err)
 }

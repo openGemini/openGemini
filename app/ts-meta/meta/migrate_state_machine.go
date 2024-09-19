@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package meta
 
@@ -368,24 +366,30 @@ func (m *MigrateStateMachine) deleteEvent(e MigrateEvent) {
 		return
 	}
 
-	e.removeEventFromStore()
 	m.removeFromEventMap(e)
 	res := e.getEventRes()
 	if errno.Equal(res.err, errno.PtNotFound) || errno.Equal(res.err, errno.DatabaseIsBeingDelete) { // delete database is execute before this event
 		m.logger.Info("do not process this dbpt cause database is deleting", zap.Error(res.err))
+		e.removeEventFromStore()
 		return
 	}
 	m.logger.Debug("try to judge whether process this dbpt", zap.String("event", e.String()),
 		zap.Bool("canExecuteEvent", m.canExecuteEvent(false)),
 		zap.Bool("isReassignNeeded", e.isReassignNeeded()), zap.Error(res.err))
-	if res.err != nil && m.canExecuteEvent(false) && e.isReassignNeeded() {
-		time.Sleep(100 * time.Millisecond)
-		nodePtNumMap := globalService.store.getDbPtNumPerAliveNode()
-		m.logger.Error("process failed db pt failed", zap.String("event", e.String()), zap.Error(res.err))
-		go func() {
-			err := globalService.clusterManager.processFailedDbPt(e.getPtInfo(), nodePtNumMap, true)
-			m.logger.Error("retry to process failed db pt error", zap.String("event", e.String()), zap.Error(err))
-		}()
+
+	if res.err != nil && e.isReassignNeeded() {
+		if m.canExecuteEvent(false) {
+			e.removeEventFromStore()
+			time.Sleep(100 * time.Millisecond)
+			nodePtNumMap := globalService.store.getDbPtNumPerAliveNode()
+			m.logger.Error("process failed db pt failed", zap.String("event", e.String()), zap.Error(res.err))
+			go func() {
+				err := globalService.clusterManager.processFailedDbPt(e.getPtInfo(), nodePtNumMap, true, e.getPtInfo().DBBriefInfo.Replicas > 1)
+				m.logger.Error("retry to process failed db pt error", zap.String("event", e.String()), zap.Error(err))
+			}()
+		}
+	} else {
+		e.removeEventFromStore()
 	}
 }
 

@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package immutable
 
@@ -42,6 +40,7 @@ import (
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/readcache"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/scheduler"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
@@ -297,11 +296,11 @@ func TestFullCompactForColumnStore(t *testing.T) {
 	primaryKey := []string{"primaryKey_string1", "primaryKey_string2", "primaryKey_float1"}
 	sortKey := []string{"primaryKey_string1", "primaryKey_string2", "primaryKey_float1", "sortKey_int1"}
 	sort := []string{"primaryKey_string1", "primaryKey_string2", "primaryKey_float1", "time", "sortKey_int1"}
-	schema := make(map[string]int32)
+	schema := make(meta.CleanSchema)
 	for i := range primaryKey {
 		for j := range schemaForColumnStore {
 			if primaryKey[i] == schemaForColumnStore[j].Name {
-				schema[primaryKey[i]] = int32(schemaForColumnStore[j].Type)
+				schema[primaryKey[i]] = meta.SchemaVal{Typ: int8(schemaForColumnStore[j].Type)}
 			}
 		}
 	}
@@ -313,7 +312,7 @@ func TestFullCompactForColumnStore(t *testing.T) {
 			PrimaryKey: primaryKey,
 			SortKey:    sortKey,
 		},
-		Schema: schema,
+		Schema: &schema,
 	}
 	store.ImmTable.SetMstInfo("mst", &mstinfo)
 
@@ -416,8 +415,9 @@ func TestFullCompactForColumnStore(t *testing.T) {
 	pk := store.ImmTable.(*csImmTableImpl).mstsInfo["mst"].ColStoreInfo.PrimaryKey
 	pkSchema := make([]record.Field, len(pk))
 	for i := range pk {
+		v, _ := store.ImmTable.(*csImmTableImpl).mstsInfo["mst"].Schema.GetTyp(pk[i])
 		pkSchema[i] = record.Field{
-			Type: int(store.ImmTable.(*csImmTableImpl).mstsInfo["mst"].Schema[pk[i]]),
+			Type: int(v),
 			Name: pk[i],
 		}
 	}
@@ -522,11 +522,11 @@ func TestLevelCompactForColumnStore(t *testing.T) {
 	primaryKey := []string{"primaryKey_float1", "primaryKey_string1", "primaryKey_string2", "field3_bool", "field2_int"}
 	sortKey := []string{"primaryKey_float1", "primaryKey_string1", "primaryKey_string2", "sortKey_int1", "field3_bool", "field2_int"}
 	sort := []string{"primaryKey_float1", "primaryKey_string1", "primaryKey_string2", "time", "sortKey_int1", "field3_bool", "field2_int"}
-	schema := make(map[string]int32)
+	schema := make(meta.CleanSchema)
 	for i := range primaryKey {
 		for j := range schemaForColumnStore {
 			if primaryKey[i] == schemaForColumnStore[j].Name {
-				schema[primaryKey[i]] = int32(schemaForColumnStore[j].Type)
+				schema[primaryKey[i]] = meta.SchemaVal{Typ: int8(schemaForColumnStore[j].Type)}
 			}
 		}
 	}
@@ -537,7 +537,7 @@ func TestLevelCompactForColumnStore(t *testing.T) {
 			PrimaryKey: primaryKey,
 			SortKey:    sortKey,
 		},
-		Schema: schema,
+		Schema: &schema,
 	}
 	store.ImmTable.SetMstInfo("mst", &mstinfo)
 
@@ -638,8 +638,9 @@ func TestLevelCompactForColumnStore(t *testing.T) {
 	pk := store.ImmTable.(*csImmTableImpl).mstsInfo["mst"].ColStoreInfo.PrimaryKey
 	pkSchema := make([]record.Field, len(pk))
 	for i := range pk {
+		v, _ := store.ImmTable.(*csImmTableImpl).mstsInfo["mst"].Schema.GetTyp(pk[i])
 		pkSchema[i] = record.Field{
-			Type: int(store.ImmTable.(*csImmTableImpl).mstsInfo["mst"].Schema[pk[i]]),
+			Type: int(v),
 			Name: pk[i],
 		}
 	}
@@ -745,11 +746,11 @@ func TestLevelCompactForColumnStoreWithTimeCluster(t *testing.T) {
 	primaryKey := []string{"primaryKey_float1", "primaryKey_string1", "primaryKey_string2", "field3_bool", "field2_int", "time"}
 	sortKey := []string{"primaryKey_float1", "primaryKey_string1", "primaryKey_string2", "sortKey_int1", "field3_bool", "field2_int", "time"}
 	sort := []string{"primaryKey_float1", "primaryKey_string1", "primaryKey_string2", "sortKey_int1", "field3_bool", "field2_int", "time"}
-	schema := make(map[string]int32)
+	schema := make(meta.CleanSchema)
 	for i := range primaryKey {
 		for j := range schemaForColumnStore {
 			if primaryKey[i] == schemaForColumnStore[j].Name {
-				schema[primaryKey[i]] = int32(schemaForColumnStore[j].Type)
+				schema[primaryKey[i]] = meta.SchemaVal{Typ: int8(schemaForColumnStore[j].Type)}
 			}
 		}
 	}
@@ -761,7 +762,7 @@ func TestLevelCompactForColumnStoreWithTimeCluster(t *testing.T) {
 			SortKey:             sortKey,
 			TimeClusterDuration: tcDuration,
 		},
-		Schema: schema,
+		Schema: &schema,
 	}
 	store.ImmTable.SetMstInfo("mst", &mstinfo)
 
@@ -862,8 +863,9 @@ func TestLevelCompactForColumnStoreWithTimeCluster(t *testing.T) {
 	pk := store.ImmTable.(*csImmTableImpl).mstsInfo["mst"].ColStoreInfo.PrimaryKey
 	pkSchema := make([]record.Field, len(pk))
 	for i := range pk {
+		v, _ := store.ImmTable.(*csImmTableImpl).mstsInfo["mst"].Schema.GetTyp(pk[i])
 		pkSchema[i] = record.Field{
-			Type: int(store.ImmTable.(*csImmTableImpl).mstsInfo["mst"].Schema[pk[i]]),
+			Type: int(v),
 			Name: pk[i],
 		}
 	}
@@ -968,11 +970,11 @@ func TestLevelCompactForColumnStoreWithSchemaLess(t *testing.T) {
 	primaryKey := []string{"field1_float", "field2_int"}
 	sortKey := []string{"field1_float", "field2_int"}
 	sort := []string{"field1_float", "field2_int"}
-	schema := make(map[string]int32)
+	schema := make(meta.CleanSchema)
 	for i := range primaryKey {
 		for j := range schemaForColumnStore {
 			if primaryKey[i] == schemaForColumnStore[j].Name {
-				schema[primaryKey[i]] = int32(schemaForColumnStore[j].Type)
+				schema[primaryKey[i]] = meta.SchemaVal{Typ: int8(schemaForColumnStore[j].Type)}
 			}
 		}
 	}
@@ -984,7 +986,7 @@ func TestLevelCompactForColumnStoreWithSchemaLess(t *testing.T) {
 			PrimaryKey: primaryKey,
 			SortKey:    sortKey,
 		},
-		Schema: schema,
+		Schema: &schema,
 	}
 	store.ImmTable.SetMstInfo("mst", &mstinfo)
 
@@ -1089,8 +1091,9 @@ func TestLevelCompactForColumnStoreWithSchemaLess(t *testing.T) {
 	pk := store.ImmTable.(*csImmTableImpl).mstsInfo["mst"].ColStoreInfo.PrimaryKey
 	pkSchema := make([]record.Field, len(pk))
 	for i := range pk {
+		v, _ := store.ImmTable.(*csImmTableImpl).mstsInfo["mst"].Schema.GetTyp(pk[i])
 		pkSchema[i] = record.Field{
-			Type: int(store.ImmTable.(*csImmTableImpl).mstsInfo["mst"].Schema[pk[i]]),
+			Type: int(v),
 			Name: pk[i],
 		}
 	}
@@ -1192,11 +1195,11 @@ func TestCompactSwitchFilesForColumnStore(t *testing.T) {
 	primaryKey := []string{"primaryKey_float1", "primaryKey_string1", "primaryKey_string2", "field3_bool", "field2_int"}
 	sortKey := []string{"primaryKey_float1", "primaryKey_string1", "primaryKey_string2", "sortKey_int1", "field3_bool", "field2_int"}
 	sort := []string{"primaryKey_float1", "primaryKey_string1", "primaryKey_string2", "time", "sortKey_int1", "field3_bool", "field2_int"}
-	schema := make(map[string]int32)
+	schema := make(meta.CleanSchema)
 	for i := range primaryKey {
 		for j := range schemaForColumnStore {
 			if primaryKey[i] == schemaForColumnStore[j].Name {
-				schema[primaryKey[i]] = int32(schemaForColumnStore[j].Type)
+				schema[primaryKey[i]] = meta.SchemaVal{Typ: int8(schemaForColumnStore[j].Type)}
 			}
 		}
 	}
@@ -1207,7 +1210,7 @@ func TestCompactSwitchFilesForColumnStore(t *testing.T) {
 			PrimaryKey: primaryKey,
 			SortKey:    sortKey,
 		},
-		Schema: schema,
+		Schema: &schema,
 	}
 
 	sortKeyMap := genSortedKeyMap(sort)
@@ -1309,8 +1312,9 @@ func TestCompactSwitchFilesForColumnStore(t *testing.T) {
 	pk := store.ImmTable.(*csImmTableImpl).mstsInfo["mst"].ColStoreInfo.PrimaryKey
 	pkSchema := make([]record.Field, len(pk))
 	for i := range pk {
+		v, _ := store.ImmTable.(*csImmTableImpl).mstsInfo["mst"].Schema.GetTyp(pk[i])
 		pkSchema[i] = record.Field{
-			Type: int(store.ImmTable.(*csImmTableImpl).mstsInfo["mst"].Schema[pk[i]]),
+			Type: int(v),
 			Name: pk[i],
 		}
 	}
@@ -1597,11 +1601,11 @@ func TestBlockCompactionPrepareForColumnStore(t *testing.T) {
 	primaryKey := []string{"primaryKey_float1", "primaryKey_string1", "primaryKey_string2", "field3_bool", "field2_int"}
 	sortKey := []string{"primaryKey_float1", "primaryKey_string1", "primaryKey_string2", "sortKey_int1", "field3_bool", "field2_int"}
 	sort := []string{"primaryKey_float1", "primaryKey_string1", "primaryKey_string2", "time", "sortKey_int1", "field3_bool", "field2_int"}
-	schema := make(map[string]int32)
+	schema := make(meta.CleanSchema)
 	for i := range primaryKey {
 		for j := range schemaForColumnStore {
 			if primaryKey[i] == schemaForColumnStore[j].Name {
-				schema[primaryKey[i]] = int32(schemaForColumnStore[j].Type)
+				schema[primaryKey[i]] = meta.SchemaVal{Typ: int8(schemaForColumnStore[j].Type)}
 			}
 		}
 	}
@@ -1617,7 +1621,7 @@ func TestBlockCompactionPrepareForColumnStore(t *testing.T) {
 			SortKey:        sortKey,
 			CompactionType: config.BLOCK,
 		},
-		Schema: schema,
+		Schema: &schema,
 		IndexRelation: influxql.IndexRelation{IndexNames: []string{"bloomfilter"},
 			Oids:      []uint32{uint32(index.BloomFilter)},
 			IndexList: list},
@@ -1667,8 +1671,9 @@ func TestBlockCompactionPrepareForColumnStore(t *testing.T) {
 	pk := store.ImmTable.(*csImmTableImpl).mstsInfo["mst"].ColStoreInfo.PrimaryKey
 	pkSchema := make([]record.Field, len(pk))
 	for i := range pk {
+		v, _ := store.ImmTable.(*csImmTableImpl).mstsInfo["mst"].Schema.GetTyp(pk[i])
 		pkSchema[i] = record.Field{
-			Type: int(store.ImmTable.(*csImmTableImpl).mstsInfo["mst"].Schema[pk[i]]),
+			Type: int(v),
 			Name: pk[i],
 		}
 	}
@@ -1754,11 +1759,11 @@ func TestLevelBlockCompactForColumnStoreV1(t *testing.T) {
 	primaryKey := []string{"time"}
 	sortKey := []string{"time"}
 	sort := []string{"time"}
-	schema := make(map[string]int32)
+	schema := make(meta.CleanSchema)
 	for i := range primaryKey {
 		for j := range schemaForColumnStore {
 			if primaryKey[i] == schemaForColumnStore[j].Name {
-				schema[primaryKey[i]] = int32(schemaForColumnStore[j].Type)
+				schema[primaryKey[i]] = meta.SchemaVal{Typ: int8(schemaForColumnStore[j].Type)}
 			}
 		}
 	}
@@ -1774,7 +1779,7 @@ func TestLevelBlockCompactForColumnStoreV1(t *testing.T) {
 			SortKey:        sortKey,
 			CompactionType: config.BLOCK,
 		},
-		Schema: schema,
+		Schema: &schema,
 		IndexRelation: influxql.IndexRelation{IndexNames: []string{"bloomfilter"},
 			Oids:      []uint32{uint32(index.BloomFilter)},
 			IndexList: list},
@@ -1885,8 +1890,9 @@ func TestLevelBlockCompactForColumnStoreV1(t *testing.T) {
 	pk := store.ImmTable.(*csImmTableImpl).mstsInfo["mst"].ColStoreInfo.PrimaryKey
 	pkSchema := make([]record.Field, len(pk))
 	for i := range pk {
+		v, _ := store.ImmTable.(*csImmTableImpl).mstsInfo["mst"].Schema.GetTyp(pk[i])
 		pkSchema[i] = record.Field{
-			Type: int(store.ImmTable.(*csImmTableImpl).mstsInfo["mst"].Schema[pk[i]]),
+			Type: int(v),
 			Name: pk[i],
 		}
 	}
@@ -1979,11 +1985,11 @@ func TestLevelBlockCompactForColumnStoreV2(t *testing.T) {
 	primaryKey := []string{"time"}
 	sortKey := []string{"time"}
 	sort := []string{"time"}
-	schema := make(map[string]int32)
+	schema := make(meta.CleanSchema)
 	for i := range primaryKey {
 		for j := range schemaForColumnStore {
 			if primaryKey[i] == schemaForColumnStore[j].Name {
-				schema[primaryKey[i]] = int32(schemaForColumnStore[j].Type)
+				schema[primaryKey[i]] = meta.SchemaVal{Typ: int8(schemaForColumnStore[j].Type)}
 			}
 		}
 	}
@@ -1999,7 +2005,7 @@ func TestLevelBlockCompactForColumnStoreV2(t *testing.T) {
 			SortKey:        sortKey,
 			CompactionType: config.BLOCK,
 		},
-		Schema: schema,
+		Schema: &schema,
 		IndexRelation: influxql.IndexRelation{IndexNames: []string{"bloomfilter"},
 			Oids:      []uint32{uint32(index.BloomFilter)},
 			IndexList: list},
@@ -2110,8 +2116,9 @@ func TestLevelBlockCompactForColumnStoreV2(t *testing.T) {
 	pk := store.ImmTable.(*csImmTableImpl).mstsInfo["mst"].ColStoreInfo.PrimaryKey
 	pkSchema := make([]record.Field, len(pk))
 	for i := range pk {
+		v, _ := store.ImmTable.(*csImmTableImpl).mstsInfo["mst"].Schema.GetTyp(pk[i])
 		pkSchema[i] = record.Field{
-			Type: int(store.ImmTable.(*csImmTableImpl).mstsInfo["mst"].Schema[pk[i]]),
+			Type: int(v),
 			Name: pk[i],
 		}
 	}
@@ -2206,11 +2213,11 @@ func TestBlockCompactFileNameConflict(t *testing.T) {
 	primaryKey := []string{"time"}
 	sortKey := []string{"time"}
 	sort := []string{"time"}
-	schema := make(map[string]int32)
+	schema := make(meta.CleanSchema)
 	for i := range primaryKey {
 		for j := range schemaForColumnStore {
 			if primaryKey[i] == schemaForColumnStore[j].Name {
-				schema[primaryKey[i]] = int32(schemaForColumnStore[j].Type)
+				schema[primaryKey[i]] = meta.SchemaVal{Typ: int8(schemaForColumnStore[j].Type)}
 			}
 		}
 	}
@@ -2226,7 +2233,7 @@ func TestBlockCompactFileNameConflict(t *testing.T) {
 			SortKey:        sortKey,
 			CompactionType: config.BLOCK,
 		},
-		Schema: schema,
+		Schema: &schema,
 		IndexRelation: influxql.IndexRelation{IndexNames: []string{"bloomfilter"},
 			Oids:      []uint32{uint32(index.BloomFilter)},
 			IndexList: list},
@@ -2338,8 +2345,9 @@ func TestBlockCompactFileNameConflict(t *testing.T) {
 	pk := store.ImmTable.(*csImmTableImpl).mstsInfo["mst"].ColStoreInfo.PrimaryKey
 	pkSchema := make([]record.Field, len(pk))
 	for i := range pk {
+		v, _ := store.ImmTable.(*csImmTableImpl).mstsInfo["mst"].Schema.GetTyp(pk[i])
 		pkSchema[i] = record.Field{
-			Type: int(store.ImmTable.(*csImmTableImpl).mstsInfo["mst"].Schema[pk[i]]),
+			Type: int(v),
 			Name: pk[i],
 		}
 	}
@@ -2657,7 +2665,7 @@ func TestMmsTables_LevelCompact_With_FileHandle_Optimize(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store.wg.Wait()
+	store.Wait()
 
 	files = store.Order
 	if len(files) != 1 {
@@ -2815,7 +2823,7 @@ func TestMmsTables_LevelCompact_1ID5Segment(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store.wg.Wait()
+	store.Wait()
 
 	files = store.Order
 	if len(files) != 1 {
@@ -2973,7 +2981,7 @@ func TestMmsTables_FullCompact(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	store.wg.Wait()
+	store.Wait()
 
 	files = store.Order
 	if len(files) != 1 {
@@ -3150,7 +3158,7 @@ func TestMmsTables_LevelCompact_20ID10Segment(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		store.wg.Wait()
+		store.Wait()
 
 		files = store.Order
 		if len(files) != 1 {
@@ -3310,7 +3318,10 @@ func TestCompactLog_AllNewFileExist1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = recoverFile(testCompDir, &lockPath, config.TSSTORE); err != nil {
+	ctx := EventContext{mergeSet: &MockIndexMergeSet{func(sid uint64, buf []byte, condition influxql.Expr, callback func(key *influx.SeriesKey)) error {
+		return nil
+	}}, scheduler: nil}
+	if err = recoverFile(testCompDir, &lockPath, config.TSSTORE, ctx); err != nil {
 		t.Fatal(err)
 	}
 
@@ -3366,7 +3377,10 @@ func TestCompactLog_AllNewFileExist2(t *testing.T) {
 	//remove 1 old file
 	fName = filepath.Join(dir, info.OldFile[1])
 	_ = fileops.Remove(fName)
-	if err = recoverFile(testCompDir, &lockPath, config.TSSTORE); err != nil {
+	ctx := EventContext{mergeSet: &MockIndexMergeSet{func(sid uint64, buf []byte, condition influxql.Expr, callback func(key *influx.SeriesKey)) error {
+		return nil
+	}}, scheduler: nil}
+	if err = recoverFile(testCompDir, &lockPath, config.TSSTORE, ctx); err != nil {
 		t.Fatal(err)
 	}
 
@@ -3423,7 +3437,10 @@ func TestCompactLog_NewFileNotExit1(t *testing.T) {
 	// rename 1 old file
 	fName = filepath.Join(dir, info.OldFile[0])
 	_ = fileops.RenameFile(fName, fName+tmpFileSuffix)
-	if err = recoverFile(testCompDir, &lockPath, config.TSSTORE); err != nil {
+	ctx := EventContext{mergeSet: &MockIndexMergeSet{func(sid uint64, buf []byte, condition influxql.Expr, callback func(key *influx.SeriesKey)) error {
+		return nil
+	}}, scheduler: nil}
+	if err = recoverFile(testCompDir, &lockPath, config.TSSTORE, ctx); err != nil {
 		t.Fatal(err)
 	}
 
@@ -3481,7 +3498,10 @@ func TestCompactLog_NewFileNotExit2(t *testing.T) {
 	// rename 1 old file
 	fName = filepath.Join(dir, info.OldFile[0])
 	_ = fileops.RenameFile(fName, fName+tmpFileSuffix)
-	if err = recoverFile(testCompDir, &lockPath, config.TSSTORE); err != nil {
+	ctx := EventContext{mergeSet: &MockIndexMergeSet{func(sid uint64, buf []byte, condition influxql.Expr, callback func(key *influx.SeriesKey)) error {
+		return nil
+	}}, scheduler: nil}
+	if err = recoverFile(testCompDir, &lockPath, config.TSSTORE, ctx); err != nil {
 		t.Fatal(err)
 	}
 
@@ -3597,7 +3617,7 @@ func TestMmsTables_LevelCompact_SegmentLimit(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		store.wg.Wait()
+		store.Wait()
 
 		files = store.Order
 		fids, ok = files["mst"]
@@ -3747,7 +3767,10 @@ func TestMergeRecovery(t *testing.T) {
 }
 
 func TestDisableCompAndMerge(t *testing.T) {
-	mst := &MmsTables{inCompLock: sync.RWMutex{}}
+	mst := &MmsTables{
+		inCompLock: sync.RWMutex{},
+		scheduler:  scheduler.NewTaskScheduler(func(signal chan struct{}, onClose func()) {}, compLimiter),
+	}
 	mst.EnableCompAndMerge()
 	mst.EnableCompAndMerge()
 	require.True(t, mst.CompactionEnabled())

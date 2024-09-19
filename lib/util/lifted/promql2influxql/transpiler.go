@@ -15,12 +15,22 @@ import (
 // It will be gc-ed after its work done.
 type Transpiler struct {
 	PromCommand
-	timeRange       time.Duration
-	parenExprCount  int
-	dropMetric      bool
-	removeTableName bool
-	minT, maxT      int64
-	timeCondition   influxql.Expr
+	timeRange         time.Duration
+	parenExprCount    int
+	dropMetric        bool
+	removeTableName   bool
+	duplicateResult   bool
+	minT, maxT        int64
+	timeCondition     influxql.Expr
+	isStepVariantExpr bool
+}
+
+func (t *Transpiler) rewriteMinMaxTime() {
+	if t.Start != nil && t.End != nil {
+		t.minT, t.maxT = timestamp.FromTime(*t.Start), timestamp.FromTime(*t.End)
+	} else if t.Evaluation != nil {
+		t.minT, t.maxT = timestamp.FromTime(*t.Evaluation), timestamp.FromTime(*t.Evaluation)
+	}
 }
 
 // Transpile converts a PromQL expression with the time ranges set in the transpiler
@@ -33,7 +43,7 @@ type Transpiler struct {
 func (t *Transpiler) Transpile(expr parser.Expr) (influxql.Node, error) {
 	if !IsMetaQuery(t.DataType) {
 		s := t.newEvalStmt(expr)
-		t.minT, t.maxT = t.findMinMaxTime(s)
+		t.rewriteMinMaxTime()
 		// Modify the offset of vector and matrix selectors for the @ modifier
 		// w.r.t. the start time since only 1 evaluation will be done on them.
 		setOffsetForAtModifier(timeMilliseconds(s.Start), s.Expr)
@@ -78,7 +88,7 @@ func (t *Transpiler) transpileExpr(expr parser.Expr) (influxql.Node, error) {
 	case *parser.StepInvariantExpr:
 		return t.transpileStepInvariantExpr(e)
 	case *parser.SubqueryExpr:
-		return nil, errno.NewError(errno.UnsupportedNodeType, expr.String())
+		return t.transpileSubqueryExpr(e)
 	default:
 		return nil, errno.NewError(errno.UnsupportedNodeType, expr.String())
 	}
@@ -101,9 +111,6 @@ func (t *Transpiler) setTimeInterval(statement *influxql.SelectStatement) {
 		return
 	}
 	remain := t.Start.UnixNano() % t.Step.Nanoseconds()
-	if remain == 0 {
-		return
-	}
 	offset := time.Duration(remain) * time.Nanosecond
 	interval.Expr.(*influxql.Call).Args = append(
 		interval.Expr.(*influxql.Call).Args,
@@ -133,6 +140,10 @@ func (t *Transpiler) RemoveTableName() bool {
 	return t.removeTableName
 }
 
+func (t *Transpiler) DuplicateResult() bool {
+	return t.duplicateResult
+}
+
 func (t *Transpiler) newEvalStmt(expr parser.Expr) *parser.EvalStmt {
 	s := &parser.EvalStmt{}
 	if t.PromCommand.Step == 0 {
@@ -144,8 +155,19 @@ func (t *Transpiler) newEvalStmt(expr parser.Expr) *parser.EvalStmt {
 		s.End = *t.PromCommand.End
 		s.Interval = t.PromCommand.Step
 	}
-	s.Expr = promql.PreprocessExpr(expr, s.Start, s.End)
+	s.Expr = t.PreprocessExpr(expr, s.Start, s.End)
 	return s
+}
+
+// PreprocessExpr wraps all possible step invariant parts of the given expression with
+// StepInvariantExpr. It also resolves the preprocessors.
+func (t *Transpiler) PreprocessExpr(expr parser.Expr, start, end time.Time) parser.Expr {
+	isStepInvariant := preprocessExprHelper(expr, start, end)
+	if isStepInvariant {
+		t.isStepVariantExpr = true
+		return newStepInvariantExpr(expr)
+	}
+	return expr
 }
 
 func (t *Transpiler) findMinMaxTime(s *parser.EvalStmt) (int64, int64) {
@@ -234,8 +256,51 @@ func (t *Transpiler) transpileStepInvariantExpr(e *parser.StepInvariantExpr) (in
 	case *parser.StringLiteral, *parser.NumberLiteral:
 		return t.transpileExpr(ce)
 	}
-	t.End = t.Start // Always a single evaluation.
-	return t.transpileExpr(e.Expr)
+	if t.isStepVariantExpr {
+		t.maxT = t.minT // Always a single evaluation.
+	}
+	node, err := t.transpile(e.Expr)
+	switch e.Expr.(type) {
+	case *parser.MatrixSelector, *parser.SubqueryExpr:
+		// We do not duplicate results for range selectors since result is a matrix
+		// with their unique timestamps which does not depend on the step.
+		return node, err
+	}
+	// For every evaluation while the value remains same, the timestamp for that
+	// value would change for different eval times. Hence we duplicate the result
+	// with changed timestamps.
+	t.duplicateResult = true
+	return node, err
+}
+
+func (t *Transpiler) transpileSubqueryExpr(e *parser.SubqueryExpr) (influxql.Node, error) {
+	preMinT := t.minT
+	preMaxT := t.maxT
+	preInterval := t.Step
+
+	offsetMills := durationMilliseconds(e.Offset)
+	rangeMillis := durationMilliseconds(e.Range)
+	newEndTime := t.maxT - offsetMills
+	newInterval := rangeMillis
+	if e.Step != 0 {
+		newInterval = durationMilliseconds(e.Step)
+	}
+	newStartTime := newInterval * ((t.minT - offsetMills - rangeMillis) / newInterval)
+	if newStartTime < (t.minT - offsetMills - rangeMillis) {
+		newStartTime += newInterval
+	}
+	if newStartTime != t.minT {
+		// Adjust the offset of selectors based on the new
+		// start time of the evaluator since the calculation
+		// of the offset with @ happens w.r.t. the start time.
+		setOffsetForAtModifier(newStartTime, e.Expr)
+	}
+
+	t.minT, t.maxT, t.Step = newStartTime, newEndTime, time.Duration(newInterval*int64(time.Millisecond/time.Nanosecond))
+
+	node, err := t.transpileExpr(e.Expr)
+	t.minT, t.maxT, t.Step = preMinT, preMaxT, preInterval
+	return node, err
 }
 
 // setOffsetForAtModifier modifies the offset of vector and matrix selector
@@ -390,4 +455,96 @@ func CombineConditionOr(lhs, rhs influxql.Expr) influxql.Expr {
 		LHS: lhs,
 		RHS: rhs,
 	}
+}
+
+// preprocessExprHelper wraps the child nodes of the expression
+// with a StepInvariantExpr wherever it's step invariant. The returned boolean is true if the
+// passed expression qualifies to be wrapped by StepInvariantExpr.
+// It also resolves the preprocessors.
+func preprocessExprHelper(expr parser.Expr, start, end time.Time) bool {
+	switch n := expr.(type) {
+	case *parser.VectorSelector:
+		switch n.StartOrEnd {
+		case parser.START:
+			n.Timestamp = makeInt64Pointer(timestamp.FromTime(start))
+		case parser.END:
+			n.Timestamp = makeInt64Pointer(timestamp.FromTime(end))
+		}
+		return n.Timestamp != nil
+
+	case *parser.AggregateExpr:
+		return preprocessExprHelper(n.Expr, start, end)
+
+	case *parser.BinaryExpr:
+		isInvariant1, isInvariant2 := preprocessExprHelper(n.LHS, start, end), preprocessExprHelper(n.RHS, start, end)
+		if isInvariant1 && isInvariant2 {
+			return true
+		}
+
+		if isInvariant1 {
+			n.LHS = newStepInvariantExpr(n.LHS)
+		}
+		if isInvariant2 {
+			n.RHS = newStepInvariantExpr(n.RHS)
+		}
+
+		return false
+
+	case *parser.Call:
+		_, ok := promql.AtModifierUnsafeFunctions[n.Func.Name]
+		isStepInvariant := !ok
+		isStepInvariantSlice := make([]bool, len(n.Args))
+		for i := range n.Args {
+			isStepInvariantSlice[i] = preprocessExprHelper(n.Args[i], start, end)
+			isStepInvariant = isStepInvariant && isStepInvariantSlice[i]
+		}
+
+		if isStepInvariant {
+			// The function and all arguments are step invariant.
+			return true
+		}
+
+		for i, isi := range isStepInvariantSlice {
+			if isi {
+				n.Args[i] = newStepInvariantExpr(n.Args[i])
+			}
+		}
+		return false
+
+	case *parser.MatrixSelector:
+		return preprocessExprHelper(n.VectorSelector, start, end)
+
+	case *parser.SubqueryExpr:
+		// Since we adjust offset for the @ modifier evaluation,
+		// it gets tricky to adjust it for every subquery step.
+		// Hence we wrap the inside of subquery irrespective of
+		// @ on subquery (given it is also step invariant) so that
+		// it is evaluated only once w.r.t. the start time of subquery.
+		isInvariant := preprocessExprHelper(n.Expr, start, end)
+		if isInvariant {
+			n.Expr = newStepInvariantExpr(n.Expr)
+		}
+		switch n.StartOrEnd {
+		case parser.START:
+			n.Timestamp = makeInt64Pointer(timestamp.FromTime(start))
+		case parser.END:
+			n.Timestamp = makeInt64Pointer(timestamp.FromTime(end))
+		}
+		return n.Timestamp != nil
+
+	case *parser.ParenExpr:
+		return preprocessExprHelper(n.Expr, start, end)
+
+	case *parser.UnaryExpr:
+		return preprocessExprHelper(n.Expr, start, end)
+
+	case *parser.StringLiteral, *parser.NumberLiteral:
+		return true
+	}
+	// this can't happen
+	return false
+}
+
+func newStepInvariantExpr(expr parser.Expr) parser.Expr {
+	return &parser.StepInvariantExpr{Expr: expr}
 }

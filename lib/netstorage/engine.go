@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package netstorage
 
@@ -23,6 +21,7 @@ import (
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/metaclient"
+	"github.com/openGemini/openGemini/lib/raftlog"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics/opsStat"
 	"github.com/openGemini/openGemini/lib/util"
@@ -77,8 +76,9 @@ type Engine interface {
 	ChangeShardTierToWarm(db string, ptId uint32, shardID uint64) error
 
 	CreateShard(db, rp string, ptId uint32, shardID uint64, timeRangeInfo *meta.ShardTimeRangeInfo, mstInfo *meta.MeasurementInfo) error
-	WriteRows(db, rp string, ptId uint32, shardID uint64, points []influx.Row, binaryRows []byte) error
+	WriteRows(db, rp string, ptId uint32, shardID uint64, points []influx.Row, binaryRows []byte, snp *raftlog.SnapShotter) error
 	WriteRec(db, mst string, ptId uint32, shardID uint64, rec *record.Record, binaryRec []byte) error
+	WriteToRaft(db, rp string, ptId uint32, tail []byte) error
 	CreateDBPT(db string, pt uint32, enableTagArray bool)
 
 	GetShardDownSampleLevel(db string, ptId uint32, shardID uint64) int
@@ -116,7 +116,7 @@ type Engine interface {
 	RollbackPreOffload(opId uint64, db string, ptId uint32) error
 	PreAssign(opId uint64, db string, ptId uint32, durationInfos map[uint64]*meta.ShardDurationInfo, dbBriefInfo *meta.DatabaseBriefInfo, client metaclient.MetaClient) error
 	Offload(opId uint64, db string, ptId uint32) error
-	Assign(opId uint64, nodeId uint64, db string, ptId uint32, ver uint64, durationInfos map[uint64]*meta.ShardDurationInfo, dbBriefInfo *meta.DatabaseBriefInfo, client metaclient.MetaClient) error
+	Assign(opId uint64, nodeId uint64, db string, ptId uint32, ver uint64, durationInfos map[uint64]*meta.ShardDurationInfo, dbBriefInfo *meta.DatabaseBriefInfo, client metaclient.MetaClient, storage StorageService) error
 
 	SysCtrl(req *SysCtrlRequest) (map[string]string, error)
 	Statistics(buffer []byte) ([]byte, error)
@@ -146,4 +146,10 @@ type RaftMessage interface {
 type ShowTagValuesPlan interface {
 	Execute(tagKeys map[string][][]byte, condition influxql.Expr, tr util.TimeRange, limit int) (TablesTagSets, error)
 	Stop()
+}
+
+type StorageService interface {
+	Write(db, rp, mst string, ptId uint32, shardID uint64, writeData func() error) error
+	WriteDataFunc(db, rp string, ptId uint32, shardID uint64, rows []influx.Row, binaryRows []byte, index *raftlog.SnapShotter) error
+	GetNodeId() uint64
 }

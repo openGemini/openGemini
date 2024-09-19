@@ -1,18 +1,16 @@
-/*
-Copyright 2023 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2023 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package executor
 
@@ -76,7 +74,7 @@ type IncHashAggTransform struct {
 	aggLogger         *logger.Logger
 	span              *tracing.Span
 	ppIncAggCost      *tracing.Span
-	incAggFuncs       [][FuncPathCount]func(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, srcRow int)
+	incAggFuncs       [][FuncPathCount]func(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, srcRow int, bitmap *Bitmap)
 	incAggApproxFunc  []func(srcCol Column, iterCurrNum, iterMaxNum int32)
 	rewriteColumnFunc []func(chunk Chunk, srcCol, lastNum int)
 	incFuncIndex      []int
@@ -209,9 +207,34 @@ func (trans *IncHashAggTransform) computeApproxAndSendChunk() error {
 		if err != nil {
 			return err
 		}
-		trans.sendChunk(approxChunk)
+		chunk := trans.filterEmptyValue(approxChunk)
+		trans.sendChunk(chunk)
 	}
 	return nil
+}
+
+func (trans *IncHashAggTransform) filterEmptyValue(c Chunk) Chunk {
+	newChunk := NewChunkBuilder(c.RowDataType()).NewChunk(c.Name())
+	newChunk.AppendTagsAndIndexes(c.Tags(), c.TagIndex())
+	newChunk.AppendIntervalIndexes(c.IntervalIndex())
+	newChunk.SetTime(c.Time())
+	for i, column := range newChunk.Columns() {
+		dataType := column.DataType()
+		inColumn := c.Column(i)
+		switch dataType {
+		case influxql.Integer:
+			integerValues := filterValueByBitmap[int64](trans.incItem.bitmaps[i], inColumn.IntegerValues())
+			column.AppendIntegerValues(integerValues)
+		case influxql.Float:
+			floatValues := filterValueByBitmap[float64](trans.incItem.bitmaps[i], inColumn.FloatValues())
+			column.AppendFloatValues(floatValues)
+		case influxql.Boolean:
+			boolValues := filterValueByBitmap[bool](trans.incItem.bitmaps[i], inColumn.BooleanValues())
+			column.AppendBooleanValues(boolValues)
+		}
+		trans.incItem.bitmaps[i].CopyTo(column.NilsV2())
+	}
+	return newChunk
 }
 
 func (trans *IncHashAggTransform) computeApprox(chunk Chunk) (Chunk, error) {
@@ -308,6 +331,7 @@ func (trans *IncHashAggTransform) getDstChunkGroupOffset(tag ChunkTags) (int, in
 			trans.opt.IsAscending(),
 			tag,
 		)
+		trans.appendBitmaps()
 		trans.rewriteChunkColumn(lastChunk)
 	} else if groupIdx > len(incItem.groupIdxs) {
 		trans.aggLogger.Info("Get wrong groupIdx",
@@ -322,6 +346,11 @@ func (trans *IncHashAggTransform) getDstChunkGroupOffset(tag ChunkTags) (int, in
 	chunkIdex := int(groupPosition >> 16)
 	chunkOffset := int(groupPosition & 0xFFFF)
 	return chunkIdex, chunkOffset, true
+}
+func (trans *IncHashAggTransform) appendBitmaps() {
+	for _, bitmap := range trans.incItem.bitmaps {
+		bitmap.appendManyV2Nil(trans.bucketCount)
+	}
 }
 
 func (trans *IncHashAggTransform) rewriteChunkColumn(chunk Chunk) {
@@ -341,7 +370,7 @@ func (trans *IncHashAggTransform) updateChunk(srcRow, dstChunkIdx, dstRow int) {
 		}
 		idx := trans.funcInOutIdxMap[i]
 		srcCol, dstCol := idx[0], idx[1]
-		trans.incAggFuncs[i][trans.incFuncIndex[i]](trans.intervalChunk[dstChunkIdx], chunk, dstCol, srcCol, dstRow, srcRow)
+		trans.incAggFuncs[i][trans.incFuncIndex[i]](trans.intervalChunk[dstChunkIdx], chunk, dstCol, srcCol, dstRow, srcRow, trans.incItem.bitmaps[dstCol])
 	}
 }
 
@@ -437,7 +466,7 @@ func (trans *IncHashAggTransform) GetIndex(t int64) int64 {
 }
 
 func (trans *IncHashAggTransform) initIncAggFuncs() {
-	trans.incAggFuncs = make([][FuncPathCount]func(stChunk, srcChunk Chunk, dstCol, srcCol, dstRow, srcRow int), len(trans.ops))
+	trans.incAggFuncs = make([][FuncPathCount]func(stChunk, srcChunk Chunk, dstCol, srcCol, dstRow, srcRow int, bitmap *Bitmap), len(trans.ops))
 	trans.incAggApproxFunc = make([]func(srcCol Column, iterCurrNum, iterMaxNum int32), len(trans.ops))
 	trans.rewriteColumnFunc = make([]func(chunk Chunk, srcCol, lastNum int), len(trans.ops))
 	trans.incFuncIndex = make([]int, len(trans.ops))
@@ -515,15 +544,12 @@ func (trans *IncHashAggTransform) buildIncMinAggFuncs(i int) {
 
 	switch srcType {
 	case influxql.Integer:
-		trans.rewriteColumnFunc[srcCol] = rewriteInterMinColumnFunc
 		trans.incAggFuncs[srcCol][SlowFuncIdx] = UpdateHashInterMinSlow
 		trans.incAggFuncs[srcCol][FastFuncIdx] = UpdateHashInterMinFast
 	case influxql.Float:
-		trans.rewriteColumnFunc[srcCol] = rewriteFloatMinColumnFunc
 		trans.incAggFuncs[srcCol][SlowFuncIdx] = UpdateHashFloatMinSlow
 		trans.incAggFuncs[srcCol][FastFuncIdx] = UpdateHashFloatMinFast
 	case influxql.Boolean:
-		trans.rewriteColumnFunc[srcCol] = rewriteBooleanMinColumnFunc
 		trans.incAggFuncs[srcCol][SlowFuncIdx] = UpdateHashBooleanMinSlow
 		trans.incAggFuncs[srcCol][FastFuncIdx] = UpdateHashBooleanMinFast
 	default:
@@ -541,15 +567,12 @@ func (trans *IncHashAggTransform) buildIncMaxAggFuncs(i int) {
 	srcType := trans.inRowDataType.Field(srcCol).Expr.(*influxql.VarRef).Type
 	switch srcType {
 	case influxql.Integer:
-		trans.rewriteColumnFunc[srcCol] = rewriteInterMaxColumnFunc
 		trans.incAggFuncs[srcCol][SlowFuncIdx] = UpdateHashInterMaxSlow
 		trans.incAggFuncs[srcCol][FastFuncIdx] = UpdateHashInterMaxFast
 	case influxql.Float:
-		trans.rewriteColumnFunc[srcCol] = rewriteFloatMaxColumnFunc
 		trans.incAggFuncs[srcCol][SlowFuncIdx] = UpdateHashFloatMaxSlow
 		trans.incAggFuncs[srcCol][FastFuncIdx] = UpdateHashFloatMaxFast
 	case influxql.Boolean:
-		trans.rewriteColumnFunc[srcCol] = rewriteBooleanMaxColumnFunc
 		trans.incAggFuncs[srcCol][SlowFuncIdx] = UpdateHashBooleanMaxSlow
 		trans.incAggFuncs[srcCol][FastFuncIdx] = UpdateHashBooleanMaxFast
 	default:
@@ -561,17 +584,27 @@ type IncHashAggItem struct {
 	groupMap     *hashtable.StringHashMap // <group_key, group_id>
 	groupIdxs    []uint32                 // groupIdxs[group_id] = offset_in_chunk
 	chunks       []Chunk
+	bitmaps      []*Bitmap
 	groupMapSize int32 // estimated groupMap size
 	iterID       int32
 }
 
 func NewIncHashAggItem(iterID int32, chunks []Chunk) *IncHashAggItem {
-	return &IncHashAggItem{
+	incHashAggItem := &IncHashAggItem{
 		chunks:    chunks,
+		bitmaps:   make([]*Bitmap, 0),
 		groupMap:  hashtable.DefaultStringHashMap(),
 		groupIdxs: make([]uint32, 0),
 		iterID:    iterID,
 	}
+
+	if len(chunks) == 0 {
+		return incHashAggItem
+	}
+	for i := 0; i < chunks[len(chunks)-1].NumberOfCols(); i++ {
+		incHashAggItem.bitmaps = append(incHashAggItem.bitmaps, NewBitmap())
+	}
+	return incHashAggItem
 }
 
 func (item *IncHashAggItem) UpdateChunkAndIterID(iterID int32, chunks []Chunk) {
@@ -673,4 +706,20 @@ func GetIncHashAggItem(queryID string, iterID int32) (*IncHashAggItem, bool) {
 		return nil, false
 	}
 	return incAgg.value, true
+}
+
+func filterValueByBitmap[T int64 | float64 | bool](bitmap *Bitmap, values []T) []T {
+	var filterValues []T
+	var bitArray = make([]uint16, 0, bitmap.length)
+	for i, v := range values {
+		if bitmap.containsInt(i) {
+			filterValues = append(filterValues, v)
+			bitArray = append(bitArray, uint16(i))
+		}
+	}
+	if len(filterValues) != len(values) {
+		bitmap.array = bitArray
+	}
+
+	return filterValues
 }

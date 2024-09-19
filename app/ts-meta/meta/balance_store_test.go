@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package meta
 
@@ -35,9 +33,9 @@ func TestSelectDbPtsToMove(t *testing.T) {
 			TakeOverEnabled: true,
 		},
 	}
-	n1, _ := store.data.CreateDataNode("127.0.0.1:8401", "127.0.0.1:8402", "")
-	n2, _ := store.data.CreateDataNode("127.0.0.2:8401", "127.0.0.2:8402", "")
-	n3, _ := store.data.CreateDataNode("127.0.0.3:8401", "127.0.0.3:8402", "")
+	n1, _ := store.data.CreateDataNode("127.0.0.1:8401", "127.0.0.1:8402", "", "")
+	n2, _ := store.data.CreateDataNode("127.0.0.2:8401", "127.0.0.2:8402", "", "")
+	n3, _ := store.data.CreateDataNode("127.0.0.3:8401", "127.0.0.3:8402", "", "")
 	_ = store.data.UpdateNodeStatus(n1, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
 	_ = store.data.UpdateNodeStatus(n2, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
 	_ = store.data.UpdateNodeStatus(n3, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
@@ -118,9 +116,9 @@ func TestBalanceDBPts1(t *testing.T) {
 			TakeOverEnabled: true,
 		},
 	}
-	n1, _ := store.data.CreateDataNode("127.0.0.1:8401", "127.0.0.1:8402", "")
-	n2, _ := store.data.CreateDataNode("127.0.0.2:8401", "127.0.0.2:8402", "")
-	n3, _ := store.data.CreateDataNode("127.0.0.3:8401", "127.0.0.3:8402", "")
+	n1, _ := store.data.CreateDataNode("127.0.0.1:8401", "127.0.0.1:8402", "", "")
+	n2, _ := store.data.CreateDataNode("127.0.0.2:8401", "127.0.0.2:8402", "", "")
+	n3, _ := store.data.CreateDataNode("127.0.0.3:8401", "127.0.0.3:8402", "", "")
 	_ = store.data.UpdateNodeStatus(n1, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
 	_ = store.data.UpdateNodeStatus(n2, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
 	_ = store.data.UpdateNodeStatus(n3, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
@@ -155,9 +153,9 @@ func TestBalanceDBPts2(t *testing.T) {
 			TakeOverEnabled: true,
 		},
 	}
-	n1, _ := store.data.CreateDataNode("127.0.0.1:8401", "127.0.0.1:8402", "")
-	n2, _ := store.data.CreateDataNode("127.0.0.2:8401", "127.0.0.2:8402", "")
-	n3, _ := store.data.CreateDataNode("127.0.0.3:8401", "127.0.0.3:8402", "")
+	n1, _ := store.data.CreateDataNode("127.0.0.1:8401", "127.0.0.1:8402", "", "")
+	n2, _ := store.data.CreateDataNode("127.0.0.2:8401", "127.0.0.2:8402", "", "")
+	n3, _ := store.data.CreateDataNode("127.0.0.3:8401", "127.0.0.3:8402", "", "")
 	_ = store.data.UpdateNodeStatus(n1, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
 	_ = store.data.UpdateNodeStatus(n2, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
 	_ = store.data.UpdateNodeStatus(n3, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
@@ -193,9 +191,9 @@ func TestBalanceDBPts3(t *testing.T) {
 			TakeOverEnabled: true,
 		},
 	}
-	n1, _ := store.data.CreateDataNode("127.0.0.1:8401", "127.0.0.1:8402", "")
-	n2, _ := store.data.CreateDataNode("127.0.0.2:8401", "127.0.0.2:8402", "")
-	n3, _ := store.data.CreateDataNode("127.0.0.3:8401", "127.0.0.3:8402", "")
+	n1, _ := store.data.CreateDataNode("127.0.0.1:8401", "127.0.0.1:8402", "", "")
+	n2, _ := store.data.CreateDataNode("127.0.0.2:8401", "127.0.0.2:8402", "", "")
+	n3, _ := store.data.CreateDataNode("127.0.0.3:8401", "127.0.0.3:8402", "", "")
 	_ = store.data.UpdateNodeStatus(n1, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
 	_ = store.data.UpdateNodeStatus(n2, int32(serf.StatusAlive), 1, "127.0.0.1:8011")
 	_ = store.data.UpdateNodeStatus(n3, int32(serf.StatusAlive), 1, "127.0.0.1:8011")

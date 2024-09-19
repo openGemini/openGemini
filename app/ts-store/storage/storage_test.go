@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package storage
 
@@ -167,7 +165,7 @@ func TestStorage_Write(t *testing.T) {
 	var shardID uint64 = 1
 	st.engine.CreateDBPT(db, ptId, false)
 	err = st.Write(db, rp, mst, ptId, shardID, func() error {
-		return st.engine.WriteRows(db, rp, ptId, shardID, nil, nil)
+		return st.engine.WriteRows(db, rp, ptId, shardID, nil, nil, nil)
 	})
 	assert.Equal(t, nil, err)
 
@@ -188,7 +186,7 @@ func TestStorage_Write(t *testing.T) {
 	}
 
 	err = st.Write(db, rp, mst, ptId, 2, func() error {
-		return st.engine.WriteRows(db, rp, ptId, 2, nil, nil)
+		return st.engine.WriteRows(db, rp, ptId, 2, nil, nil, nil)
 	})
 	assert.Equal(t, true, errno.Equal(err, errno.NoNodeAvailable))
 }
@@ -253,7 +251,16 @@ func TestStorage_WriteToSlave(t *testing.T) {
 			return &meta.MeasurementInfo{Name: "mst"}, nil
 		},
 	}
+	mockData := meta.Data{
+		Databases: map[string]*meta.DatabaseInfo{
+			"db0": {
+				ReplicaN: 2,
+			},
+		},
+	}
 	st.MetaClient = mockClient
+	st.metaClient = &metaclient.Client{}
+	st.metaClient.SetCacheData(&mockData)
 	newEngineFn := netstorage.GetNewEngineFunction(config.DefaultEngine)
 
 	loadCtx := metaclient.LoadCtx{}
@@ -274,7 +281,9 @@ func TestStorage_WriteToSlave(t *testing.T) {
 	rows := mockRows(1)
 	binaryRows, _ := influx.FastMarshalMultiRows(nil, rows)
 	err = st.WriteRows(db, rp, ptId, shardID, rows, binaryRows)
-	assert.Equal(t, nil, err)
+	if !errno.Equal(err, errno.RepConfigWriteNoRepDB) {
+		t.Fatal("TestStorage_WriteToSlave err")
+	}
 
 	// replication write
 	mockClient.replicaInfo = &message.ReplicaInfo{

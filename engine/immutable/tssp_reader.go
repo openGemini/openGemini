@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package immutable
 
@@ -47,6 +45,7 @@ const (
 	TsspDirName        = "tssp"
 	ColumnStoreDirName = obs.ColumnStoreDirName
 	CountBinFile       = "count.txt"
+	CapacityBinFile    = "capacity.txt"
 
 	defaultCap = 64
 )
@@ -94,6 +93,7 @@ type TSSPFile interface {
 	LoadComponents() error
 	LoadIdTimes(p *IdTimePairs) error
 	Rename(newName string) error
+	UpdateLevel(level uint16)
 	Remove() error
 	FreeMemory(evictLock bool) int64
 	FreeFileHandle() error
@@ -579,6 +579,12 @@ func (f *tsspFile) Rename(newName string) error {
 	return f.reader.Rename(newName)
 }
 
+func (f *tsspFile) UpdateLevel(level uint16) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.name.level = level
+}
+
 func (f *tsspFile) Remove() error {
 	atomic.AddUint32(&f.flag, 1)
 	if atomic.AddInt32(&f.ref, -1) == 0 {
@@ -796,13 +802,13 @@ func (f *tsspFile) RenameOnObs(oldName string, tmp bool, obsOpt *obs.ObsOptions)
 	if err != nil {
 		return err
 	}
-	// check file exist(streamFs)
-	if _, err = fileops.Stat(localFileName); os.IsNotExist(err) {
-		return nil
+
+	if fileops.RemoveLocalEnabled(localFileName, obsOpt) {
+		// remove local file
+		lock := fileops.FileLockOption(*f.lock)
+		return fileops.RemoveLocal(localFileName, lock)
 	}
-	// remove local file
-	lock := fileops.FileLockOption(*f.lock)
-	return fileops.RemoveLocal(localFileName, lock)
+	return nil
 }
 
 func (f *tsspFile) ChunkMetaCompressMode() uint8 {
@@ -843,6 +849,20 @@ func (g *CompactGroup) reset() {
 func (g *CompactGroup) release() {
 	g.reset()
 	compactGroupPool.Put(g)
+}
+
+func (g *CompactGroup) Len() int {
+	return len(g.group)
+}
+
+func (g *CompactGroup) Add(item string) {
+	g.group = append(g.group, item)
+}
+
+func (g *CompactGroup) UpdateLevel(lv uint16) {
+	if g.toLevel < lv {
+		g.toLevel = lv
+	}
 }
 
 type FilesInfo struct {

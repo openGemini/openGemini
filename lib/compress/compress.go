@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package compress
 
@@ -27,8 +25,6 @@ import (
 const (
 	RLEBlockLimit = 1 << 14
 )
-
-var zeroBuf = make([]byte, 8000)
 
 type RLE struct {
 	step      int
@@ -58,7 +54,7 @@ func (rle *RLE) SameValueDecoding(in, out []byte) ([]byte, error) {
 
 	// all values are 0
 	if len(in) == 2 {
-		return paddingZeroBuffer(out, decSize), nil
+		return util.PaddingZeroBuffer(out, decSize), nil
 	}
 
 	if len(in) < rle.blockSize {
@@ -108,7 +104,7 @@ func (rle *RLE) Decoding(in, out []byte) ([]byte, error) {
 		// zero value
 		if n>>15 == 1 {
 			n -= 1 << 15
-			out = paddingZeroBuffer(out, int(n)*rle.step)
+			out = util.PaddingZeroBuffer(out, int(n)*rle.step)
 			in = in[2:]
 			continue
 		}
@@ -186,15 +182,6 @@ func paddingBuffer(pad, out []byte, size int) []byte {
 		}
 		size -= len(out[ofs:])
 		out = append(out, out[ofs:]...)
-	}
-	return out
-}
-
-func paddingZeroBuffer(out []byte, size int) []byte {
-	if size > len(zeroBuf) {
-		out = append(out, make([]byte, size)...)
-	} else {
-		out = append(out, zeroBuf[:size]...)
 	}
 	return out
 }

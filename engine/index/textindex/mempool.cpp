@@ -1,32 +1,19 @@
-//go:build linux
-/*
-Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+//go:build linux && amd64
+// Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include "mempool.h"
-
-bool InvertElementHashEqual(const struct ListNode *nodeA, const struct ListNode *nodeB)
-{
-    InvertElement *eleA = (InvertElement *)NODE_ENTRTY(nodeA, InvertElement, node);
-    InvertElement *eleB = (InvertElement *)NODE_ENTRTY(nodeB, InvertElement, node);
-    if (eleA->token.len != eleB->token.len ||
-        std::memcmp(eleA->token.data, eleB->token.data, eleA->token.len) != 0) {
-        return false;
-    }
-    return true;
-}
 
 RunContainer *GetRunContainerFromPool(void *memPool)
 {
@@ -52,7 +39,7 @@ Invert *NewInvert(uint32_t bktCapSize)
     if (invert == nullptr) {
         return nullptr;
     }
-    if (invert->hashTable.Init(bktCapSize, InvertElementHashEqual) == -1) {
+    if (invert->hashTable.Init(bktCapSize, nullptr) == -1) {
         free(invert);
         return nullptr;
     }
@@ -77,6 +64,7 @@ InvertElement *MemPool::GetInvertElement()
     stat.eleUsedCnt++;
     ListInit(&e->node);
     ListInit(&e->containers);
+    ListInit(&e->hashSection);
     e->curContainer = nullptr;
     e->getRunContainer = GetRunContainerFromPool;
     e->putRunContainer = PutRunContainerToPool;
@@ -145,54 +133,16 @@ void MemPool::PutRunPairGroup(RunPairGroup *p)
     ListInsertToTail(&pairGroupPool, &p->node);
 }
 
-uint32_t MemPool::GetHashTableBktCnt(uint32_t rowCnt)
-{
-    uint32_t factorIdx = rowCnt>>HASH_FACTOR_SHIFT;
-    if (factorIdx >= MAX_HASHCURVE_SIZE) {
-        factorIdx = MAX_HASHCURVE_SIZE - 1;
-    }
-    while (factorIdx < MAX_HASHCURVE_SIZE) {
-        if (hashFactors[factorIdx].rowCnt != 0) {
-            break;
-        }
-        factorIdx++;
-    }
-    uint32_t hashTableBkts = 0;
-    if (factorIdx < MAX_HASHCURVE_SIZE) {
-        hashTableBkts = uint32_t(uint64_t(hashFactors[factorIdx].tokenCnt) * uint64_t(rowCnt) / hashFactors[factorIdx].rowCnt);
-    } else {
-        hashTableBkts = rowCnt << 1;
-    }
-    hashTableBkts = ((hashTableBkts>>16) + 1) << 16;
-    if (hashTableBkts < MIN_HASHTABLE_BKTS) {
-        return MIN_HASHTABLE_BKTS;
-    }
-    if (hashTableBkts > MAX_HASHTABLE_BKTS) {
-        return MAX_HASHTABLE_BKTS;
-    }
-    return hashTableBkts;
-}
-
-void MemPool::UpdateHashFactor(uint32_t rowCnt, uint32_t tokenCnt)
-{
-    uint32_t factorIdx = rowCnt>>HASH_FACTOR_SHIFT;
-    if (factorIdx >= MAX_HASHCURVE_SIZE) {
-        factorIdx = MAX_HASHCURVE_SIZE - 1;
-    }
-    if (hashFactors[factorIdx].tokenCnt < tokenCnt) {
-        hashFactors[factorIdx].rowCnt = rowCnt;
-        hashFactors[factorIdx].tokenCnt = tokenCnt;
-    }
-}
-
 /* invert */
-Invert *MemPool::GetInvert(uint32_t rowCnt)
+Invert *MemPool::GetInvert()
 {
-    uint32_t bktsCnt = GetHashTableBktCnt(rowCnt);
     if (invert == nullptr) {
-        invert = NewInvert(MAX_HASHTABLE_BKTS);
+        invert = NewInvert(HASHTABLE_BKTS_SIZE);
+        if (invert == nullptr) {
+            return nullptr;
+        }
     }
-    invert->ReInitBkt(bktsCnt);
+    invert->ReInitBkt(HASHTABLE_BKTS_SIZE);
     return invert;
 }
 
@@ -218,6 +168,15 @@ InvertGroup *MemPool::GetInvertGroup()
     return &invertGroup;
 }
 
+/* hash section */
+ListNode *MemPool::GetHashSections()
+{
+    for (int i = 0; i < HASHTABLE_SECTION_SIZE; i++) {
+        ListInit(&hashSection[i]);
+    }
+    return hashSection;
+}
+
 #define SET_RES(res, FirstTokenStart, FirstTokenEnd, LastTokenSatrt, LastTokenEnd, \
     KeysSize, KeysToalSize, DataSize, DataTotalSize, ItemsCnt) do { \
     res[0] = FirstTokenStart;   \
@@ -231,15 +190,15 @@ InvertGroup *MemPool::GetInvertGroup()
     res[8] = ItemsCnt;          \
 } while(0)
 
-void MemPool::SerializedContainer(char *data, RunContainer *c) {
+uint32_t MemPool::SerializedContainer(char *data, RunContainer *c) {
     data[0] = c->seriType;
-    data[1] = char(c->cardinality>>8);
-    data[2] = char(c->cardinality);
-    data[3] = char(c->key>>8);
-    data[4] = char(c->key);
-    int nRunsInGroup = 0, nRuns = 0, idx = 5;
+    data[1] = char(c->key>>8);
+    data[2] = char(c->key);
+    data[3] = char(c->cardinality>>8);
+    data[4] = char(c->cardinality);
+    uint32_t nRunsInGroup = 0, nRuns = 0, idx = 5;
     ListNode *tmpNode = nullptr, *node = nullptr;
-    if (c->seriType = RUN_CONTAINER_TYPE) {
+    if (c->seriType == RUN_CONTAINER_TYPE) {
         data[5] = char(c->nRuns>>8);
         data[6] = char(c->nRuns);
         idx = 7;
@@ -247,7 +206,7 @@ void MemPool::SerializedContainer(char *data, RunContainer *c) {
             RunPairGroup *pg = (RunPairGroup *)NODE_ENTRTY(node, RunPairGroup, node);
             ListRemove(node);
             nRunsInGroup = 0;
-            for (int i = 0; i < PAIR_COUNT_PER_GROUP; i++) {
+            for (int i = 0; i < MAX_PAIRS_PER_GROUP; i++) {
                 if (nRuns >= c->nRuns) {
                     break;
                 }
@@ -264,20 +223,22 @@ void MemPool::SerializedContainer(char *data, RunContainer *c) {
             PutRunPairGroup(pg);
         }
         stat.runContainerCnt++;
-    } else if (c->seriType = BITSET_CONTAINER_TYPE) {
+    } else if (c->seriType == BITSET_CONTAINER_TYPE) {
+        std::memset(&data[idx], 0, BITSET_CONTAINER_SIZE);
         LIST_FOR_EACH_SAFE(node, tmpNode, &(c->pairs)) {
             RunPairGroup *pg = (RunPairGroup *)NODE_ENTRTY(node, RunPairGroup, node);
             ListRemove(node);
             nRunsInGroup = 0;
-            for (int i = 0; i < PAIR_COUNT_PER_GROUP; i++) {
+            for (int i = 0; i < MAX_PAIRS_PER_GROUP; i++) {
                 if (nRuns >= c->nRuns) {
                     break;
                 }
-                // serialize
+                // serialize to U64 BigEndian
                 RunPair *curPair = &(pg->pairs[nRunsInGroup]);
                 for (int j = 0; j <= curPair->length; j++) {
                     uint16_t val = curPair->value + j;
-                    int setIdx = idx + (val>>3);
+                    uint16_t byteIdx = val>>3;
+                    uint16_t setIdx = idx + (byteIdx&0xFFF8) + 7 - (byteIdx&0x7); // BigEndian
                     int setOff = val&0x7;
                     data[setIdx] |= (1<<setOff);
                 }
@@ -287,12 +248,13 @@ void MemPool::SerializedContainer(char *data, RunContainer *c) {
             PutRunPairGroup(pg);
         }
         stat.bitsetContainerCnt++;
-    } else if (c->seriType = ARRAY_CONTAINER_TYPE) {
+        return idx + BITSET_CONTAINER_SIZE;
+    } else if (c->seriType == ARRAY_CONTAINER_TYPE) {
         LIST_FOR_EACH_SAFE(node, tmpNode, &(c->pairs)) {
             RunPairGroup *pg = (RunPairGroup *)NODE_ENTRTY(node, RunPairGroup, node);
             ListRemove(node);
             nRunsInGroup = 0;
-            for (int i = 0; i < PAIR_COUNT_PER_GROUP; i++) {
+            for (int i = 0; i < MAX_PAIRS_PER_GROUP; i++) {
                 if (nRuns >= c->nRuns) {
                     break;
                 }
@@ -311,6 +273,17 @@ void MemPool::SerializedContainer(char *data, RunContainer *c) {
         }
         stat.arrayContainerCnt++;
     }
+    return idx;
+}
+
+void MemPool::SerializedCookieHeader(char *data, uint16_t containerCnt, uint32_t cardinalityCnt)
+{
+    data[0] = char(containerCnt>>8);
+    data[1] = char(containerCnt);
+    data[2] = char(cardinalityCnt>>24);
+    data[3] = char(cardinalityCnt>>16);
+    data[4] = char(cardinalityCnt>>8);
+    data[5] = char(cardinalityCnt);
 }
 
 /* output the data */
@@ -351,44 +324,74 @@ bool MemPool::Next(char *keys, uint32_t keysLen, char *data, uint32_t dataLen, u
         memcpy(&keys[keysOffset], ele->token.data, ele->token.len);
         keysOffset += ele->token.len;
         keysOffs.Append(keysOffset);
-
-        // move posting lists;
-        struct ListNode *list = &ele->containers;
-        char *cookieHeader = &data[dataOffset];
-        bool next = true;
-        uint32_t containerCnt = 0;
+        // reserve storage space for the cookie header for the inverted table
+        uint16_t containerCnt = 0;
         uint32_t cardinalityCnt = 0;
+        char *cookieHeader = &data[dataOffset];
+        dataOffset += COOKIE_HEADER_SIZE;
+        // move posting lists;
+        bool next = true;
+        struct ListNode *list = &ele->containers;
         LIST_FOR_EACH_SAFE(lnode, tmp, list) {
             RunContainer *container = (RunContainer *)NODE_ENTRTY(lnode, RunContainer, node);
             uint32_t seriSize = GetSeriSizeAndSetSeriType(container);
-            if (dataOffset + seriSize + dataOffs.len + 4 + COOKIE_HEADER_SIZE  > dataLen) {
+            if (dataOffset + seriSize + dataOffs.len + 4 > dataLen) {
                 next = false;
                 break;
             }
-            SerializedContainer(data, container);
             containerCnt++;
+            cardinalityCnt += uint32_t(container->cardinality) + 1;
+            uint32_t realSize = SerializedContainer(&data[dataOffset], container);
+            if (seriSize != realSize) {
+                LOG_ERROR("fetal error occurred in container serialization, type=%d, seriSize=%d, realSeriSize=%d",
+                    container->seriType, seriSize, realSize);
+            }
             dataOffset += seriSize;
             ListRemove(lnode);
             PutRunContainer(container);
         }
+        SerializedCookieHeader(cookieHeader, containerCnt, cardinalityCnt);
         dataOffs.Append(dataOffset);
         // Next Element
         if (next) {
+            invertGroup.group[invertIter] = nullptr;
             PutInvertElement(ele);
             invertIter++;
         }
     }
-
     // copy the key offs and data offs
     memcpy(&keys[keysOffset], keysOffs.buf, keysOffs.len);
     memcpy(&data[dataOffset], dataOffs.buf, dataOffs.len);
     SET_RES(res, 0, firstTokenEnd, lastTokenStart, keysOffset, keysOffset, keysOffset + keysOffs.len,
                 dataOffset, dataOffset + dataOffs.len, invertIter - startIter);
     if (invertIter >= invertGroup.len) {
-        stat.PrintUsedMem();
         stat.ResetContainerCnt();
         return false;
     }
+    return true;
+}
+
+// for test
+bool MemPool::AddPostingData(char *key, uint32_t keyLen, uint32_t rowId)
+{
+    for (int i = 0; i < invertGroup.len; i++) {
+        InvertElement *ele = invertGroup.group[i];
+        if (ele->token.len != keyLen ||
+            std::memcmp(ele->token.data, key, keyLen) != 0){
+            continue;
+        }
+        ele->AppendInvertState(this, rowId);
+        return true;
+    }
+    InvertElement *ele = GetInvertElement();
+    if (ele == nullptr) {
+        return false;
+    }
+    ele->token.data = key;
+    ele->token.len = keyLen;
+    ele->AppendInvertState(this, rowId);
+    invertGroup.group[invertGroup.len] = ele;
+    invertGroup.len++;
     return true;
 }
 
@@ -398,6 +401,7 @@ MemPool *MemPools::GetMemPool()
     lock.lock();
     if (poolStack.empty()) {
         pool = new MemPool;
+        LOG_INFO("allocate memory pool:%p", pool);
     } else {
         pool = poolStack.top();
         poolStack.pop();

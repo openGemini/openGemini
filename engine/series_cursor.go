@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package engine
 
@@ -70,6 +68,32 @@ type seriesCursor struct {
 	tsmRecIter     recordIter
 	limitFirstTime int64
 	colAux         *record.ColAux
+}
+
+func (s *seriesCursor) ReInit(tagSetInfo *tsi.TagSetInfo, idx int) (bool, error) {
+	s.tagSetRef = tagSetInfo
+	sid := s.tagSetRef.IDs[idx]
+	filter := s.tagSetRef.Filters[idx]
+	ptTags := &(s.tagSetRef.TagsVec[idx])
+	rowFilters := s.tagSetRef.GetRowFilter(idx)
+
+	memTableRecord := getMemTableRecord(s.ctx, s.span, s.ctx.querySchema, sid, filter, rowFilters, ptTags)
+	contain, err := s.tsmCursor.(*tsmMergeCursor).ReInit(sid, filter, rowFilters, ptTags)
+	if err != nil {
+		return false, err
+	}
+	if !contain && memTableRecord == nil {
+		return false, nil
+	}
+	s.init = true
+	s.memRecIter.reset()
+	s.tsmRecIter.reset()
+	s.sInfo.tags = *ptTags
+	s.sInfo.sid = sid
+	s.filter = filter
+	s.sInfo.key = s.tagSetRef.SeriesKeys[idx]
+	s.memRecIter.init(memTableRecord)
+	return true, nil
 }
 
 func (s *seriesCursor) SetFirstLimitTime(memTableRecord *record.Record, tsmCursor *tsmMergeCursor, schema *executor.QuerySchema) {
@@ -175,6 +199,10 @@ func (s *seriesCursor) nextInner() (*record.Record, *seriesInfo, error) {
 }
 
 func (s *seriesCursor) Next() (*record.Record, comm.SeriesInfoIntf, error) {
+	if s.ctx.IsAborted() {
+		return nil, nil, nil
+	}
+
 	if !s.init && s.lazyInit {
 		if s.span != nil {
 			s.span.CreateCounter(memTableDuration, "ns")

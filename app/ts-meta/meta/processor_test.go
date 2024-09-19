@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package meta
 
@@ -67,7 +65,8 @@ var mockAfterIndexFail bool = true
 type MockRPCStore struct {
 	MetaStoreInterface
 
-	stat raft.RaftState
+	stat          raft.RaftState
+	ShowClusterFn func(body []byte) ([]byte, error)
 }
 
 func NewMockRPCStore() *MockRPCStore {
@@ -84,11 +83,18 @@ func (s *MockRPCStore) peers() []string {
 	return []string{address}
 }
 
-func (s *MockRPCStore) createDataNode(httpAddr, tcpAddr, role string) ([]byte, error) {
+func (s *MockRPCStore) createDataNode(httpAddr, tcpAddr, role, az string) ([]byte, error) {
 	nodeStartInfo := meta.NodeStartInfo{}
 	nodeStartInfo.NodeId = 1
 	nodeStartInfo.ShardDurationInfos = nil
 	return nodeStartInfo.MarshalBinary()
+}
+
+func (s *MockRPCStore) ShowCluster(body []byte) ([]byte, error) {
+	if s.ShowClusterFn == nil {
+		return nil, nil
+	}
+	return s.ShowClusterFn(body)
 }
 
 func (s *MockRPCStore) CreateSqlNode(httpAddr string, gossipAddr string) ([]byte, error) {

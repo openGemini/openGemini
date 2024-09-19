@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package immutable
 
@@ -454,13 +452,12 @@ func NewObsWriter(path, fileName string, obsOpts *obs.ObsOptions) (*obsWriter, e
 	w.fd = fd
 	w.fileWriter = fileops.NewFileWriter(w.fd, fileops.DefaultWriterBufferSize, &lockPath)
 
-	fileInfo, err := w.fd.Stat()
+	fileFize, err := w.fd.Size()
 	if err != nil {
 		log.Error("execute stat() failed", zap.String("path", path), zap.Error(err))
 		return nil, err
 	}
-	w.fileSize = fileInfo.Size()
-
+	w.fileSize = fileFize
 	return w, nil
 }
 
@@ -470,12 +467,12 @@ func NewObsWriterByFd(fd fileops.File, obsOpts *obs.ObsOptions) (*obsWriter, err
 	w.fd = fd
 	w.fileWriter = fileops.NewFileWriter(w.fd, fileops.DefaultWriterBufferSize, &lockPath)
 
-	fileInfo, err := w.fd.Stat()
+	fileFize, err := w.fd.Size()
 	if err != nil {
 		log.Error("execute stat() failed", zap.Error(err))
 		return nil, err
 	}
-	w.fileSize = fileInfo.Size()
+	w.fileSize = fileFize
 	w.flag = w.flag | FD_OUTSIDE
 
 	return w, nil

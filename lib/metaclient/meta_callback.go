@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package metaclient
 
@@ -466,5 +464,30 @@ func (c *SendSysCtrlToMetaCallback) Handle(data interface{}) error {
 	if msg.Err != "" {
 		return fmt.Errorf("send sys ctrl to meta callback error: %s", msg.Err)
 	}
+	return nil
+}
+
+type ShowClusterCallback struct {
+	BaseCallback
+
+	Data []byte
+}
+
+func (c *ShowClusterCallback) Handle(data interface{}) error {
+	metaMsg, err := c.Trans2MetaMsg(data)
+	if err != nil {
+		return err
+	}
+	msg, ok := metaMsg.Data().(*message.ShowClusterResponse)
+	if !ok {
+		return errors.New("data is not a ShowClusterResponse")
+	}
+	if msg.ErrCode != 0 {
+		return errno.NewError(msg.ErrCode, msg.Err)
+	}
+	if msg.Err != "" {
+		return errors.New(msg.Err)
+	}
+	c.Data = msg.Data
 	return nil
 }

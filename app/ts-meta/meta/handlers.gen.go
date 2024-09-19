@@ -3,21 +3,19 @@
 //
 // Source: handlers.gen.go.tmpl
 
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package meta
 
@@ -69,6 +67,8 @@ func New(typ uint8) RPCHandler {
 		return &VerifyDataNodeStatus{}
 	case message.SendSysCtrlToMetaRequestMessage:
 		return &SendSysCtrlToMeta{}
+	case message.ShowClusterRequestMessage:
+		return &ShowCluster{}
 	default:
 		return nil
 	}
@@ -452,4 +452,23 @@ func (h *SendSysCtrlToMeta) SetRequestMsg(data transport.Codec) error {
 
 func (h *SendSysCtrlToMeta) Instance() RPCHandler {
 	return &SendSysCtrlToMeta{}
+}
+
+type ShowCluster struct {
+	BaseHandler
+
+	req *message.ShowClusterRequest
+}
+
+func (h *ShowCluster) SetRequestMsg(data transport.Codec) error {
+	msg, ok := data.(*message.ShowClusterRequest)
+	if !ok {
+		return executor.NewInvalidTypeError("*message.ShowClusterRequest", data)
+	}
+	h.req = msg
+	return nil
+}
+
+func (h *ShowCluster) Instance() RPCHandler {
+	return &ShowCluster{}
 }

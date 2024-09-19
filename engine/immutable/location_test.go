@@ -1,23 +1,20 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package immutable
 
 import (
-	"sync/atomic"
 	"testing"
 
 	"github.com/openGemini/openGemini/lib/fragment"
@@ -170,12 +167,12 @@ func TestNextSegmentLast(t *testing.T) {
 
 func TestReadCtx(t *testing.T) {
 	readCtx := NewReadContext(true)
-	assert.False(t, readCtx.isAborted())
-	s := int32(0)
+	assert.False(t, readCtx.IsAborted())
+	s := false
 	closedSignal := &s
 	readCtx.SetClosedSignal(closedSignal)
-	atomic.AddInt32(closedSignal, 1)
-	assert.True(t, readCtx.isAborted())
+	*closedSignal = true
+	assert.True(t, readCtx.IsAborted())
 
 	loc := NewLocation(nil, readCtx)
 	loc.ctx.tr.Min, loc.ctx.tr.Max = 0, 1

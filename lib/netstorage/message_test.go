@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package netstorage_test
 
@@ -22,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/netstorage"
@@ -508,4 +507,38 @@ func TestRaftMsgResponse_Marshal_Unmarshal(t *testing.T) {
 	err = req2.UnmarshalBinary(buf)
 	require.NoError(t, err)
 	require.EqualValues(t, req.String(), req2.String())
+}
+
+func Test_ShowClusterRequest_Unmarshal(t *testing.T) {
+	req := &message.ShowClusterRequest{}
+	buf, err := req.Marshal(nil)
+	assert.NoError(t, err)
+	myReq := &message.ShowClusterRequest{}
+	err = myReq.Unmarshal(buf)
+	assert.NoError(t, err)
+	assert.Equal(t, req, myReq)
+	err = myReq.Unmarshal(nil)
+	assert.NoError(t, err)
+	assert.Equal(t, req, myReq)
+	newRep := req.Instance()
+	if newRep.Size() == 0 {
+		t.Fatal("newRep.size() error")
+	}
+}
+
+func Test_ShowClusterResponse_Unmarshal(t *testing.T) {
+	resp := &message.ShowClusterResponse{}
+	buf, err := resp.Marshal(nil)
+	assert.NoError(t, err)
+	myResp := &message.ShowClusterResponse{}
+	err = myResp.Unmarshal(buf)
+	assert.NoError(t, err)
+	assert.Equal(t, resp, myResp)
+	err = myResp.Unmarshal(nil)
+	assert.NoError(t, err)
+	assert.Equal(t, resp, myResp)
+	newResp := resp.Instance()
+	if newResp.Size() == 0 {
+		t.Fatal("newResp.size() error")
+	}
 }

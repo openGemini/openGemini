@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package tsi
 
@@ -24,6 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/logger"
@@ -143,6 +142,9 @@ func (iBuilder *IndexBuilder) GenerateUUID() uint64 {
 }
 
 func (iBuilder *IndexBuilder) Flush() {
+	if config.IsLogKeeper() {
+		return
+	}
 	for i := range iBuilder.Relations {
 		if iBuilder.isRelationInited(uint32(i)) {
 			iBuilder.Relations[i].IndexFlush()
@@ -169,6 +171,10 @@ func (iBuilder *IndexBuilder) Open() error {
 
 func (iBuilder *IndexBuilder) Path() string {
 	return iBuilder.path
+}
+
+func (iBuilder *IndexBuilder) SetPath(path string) {
+	iBuilder.path = path
 }
 
 func (iBuilder *IndexBuilder) GetPrimaryIndex() PrimaryIndex {

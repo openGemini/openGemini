@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package executor
 
@@ -144,7 +142,6 @@ func (c *RPCClient) sendRequest() error {
 
 	begin := time.Now()
 	defer tracing.AddPP(c.requestSpan, begin)
-
 	msg := rpc.NewMessage(QueryMessage, c.query)
 	msg.SetHandler(NewRPCMessage)
 	msg.SetClientID(machine.GetMachineID())
@@ -199,6 +196,31 @@ func (c *RPCClient) Abort() {
 
 	if err := trans.Send(abort); err != nil {
 		lg.Error("failed to send abort message", zap.Error(err),
+			zap.Uint64("nodeID", c.query.NodeID))
+		return
+	}
+
+	_ = trans.Wait()
+}
+
+func (c *RPCClient) Interrupt() {
+	if !c.setAbort() {
+		return
+	}
+
+	lg := logger.NewLogger(errno.ModuleNetwork)
+	lg.Info("send crash message", zap.Uint64("nodeID", c.query.NodeID))
+
+	crash := NewCrash(c.query.Opt.QueryId, machine.GetMachineID())
+	trans, err := transport.NewTransport(c.query.NodeID, spdy.CrashRequest, nil)
+	if err != nil {
+		lg.Error("failed to new transport", zap.Error(err),
+			zap.Uint64("nodeID", c.query.NodeID))
+		return
+	}
+
+	if err := trans.Send(crash); err != nil {
+		lg.Error("failed to send crash message", zap.Error(err),
 			zap.Uint64("nodeID", c.query.NodeID))
 		return
 	}

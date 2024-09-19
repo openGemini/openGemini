@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package ingestserver
 
@@ -332,6 +330,7 @@ func Test_NewServer_IncSyncData_Enabled(t *testing.T) {
 
 	conf := config.NewTSSql(false)
 	conf.Common.ReportEnable = false
+	conf.Common.PprofEnabled = true
 	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
 	conf.Meta.UseIncSyncData = true
 	conf.Gossip.Enabled = true
@@ -347,15 +346,4 @@ func Test_NewServer_IncSyncData_Enabled(t *testing.T) {
 
 	err = server.Close()
 	require.NoError(t, err)
-}
-
-func TestOpenPprofServer(t *testing.T) {
-	lg := logger.NewLogger(errno.ModuleUnknown)
-	conf := config.NewTSSql(false)
-	conf.HTTP.BindAddress = ""
-
-	openPprofServer(conf, lg)
-
-	conf.HTTP.PprofEnabled = true
-	openPprofServer(conf, lg)
 }

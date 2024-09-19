@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package immutable
 
@@ -48,11 +46,12 @@ func (d *encodeDetached) setCrc(data []byte, pos int) []byte {
 }
 
 type ColumnBuilder struct {
-	data     []byte
-	position int
-	cm       *ChunkMeta
-	colMeta  *ColumnMeta
-	segCol   []record.ColVal
+	data      []byte
+	position  int
+	cm        *ChunkMeta
+	colMeta   *ColumnMeta
+	splitCols []record.ColVal
+	swapCols  []record.ColVal
 
 	intPreAggBuilder    PreAggBuilder
 	floatPreAggBuilder  PreAggBuilder
@@ -351,39 +350,40 @@ func (b *ColumnBuilder) encBooleanColumn(timeCols []record.ColVal, segCols []rec
 
 func (b *ColumnBuilder) EncodeColumn(ref record.Field, col *record.ColVal, timeCols []record.ColVal, segRowsLimit int, dataOffset int64) ([]byte, error) {
 	if col.Len > segRowsLimit {
-		b.segCol = col.Split(b.segCol[:0], segRowsLimit, ref.Type)
-	} else {
-		b.segCol = append(b.segCol[:0], *col)
+		b.splitCols = col.Split(b.splitCols[:0], segRowsLimit, ref.Type)
+		return b.encode(ref, b.splitCols, timeCols, dataOffset)
+
 	}
 
-	return b.encode(ref, timeCols, dataOffset)
+	b.swapCols = append(b.swapCols[:0], *col)
+	return b.encode(ref, b.swapCols, timeCols, dataOffset)
 }
 
 func (b *ColumnBuilder) EncodeColumnBySize(ref record.Field, col *record.ColVal, timeCols []record.ColVal, rowPerSegment []int, dataOffset int64) ([]byte, error) {
-	b.segCol = col.SplitColBySize(b.segCol[:0], rowPerSegment, ref.Type)
-	return b.encode(ref, timeCols, dataOffset)
+	b.splitCols = col.SplitColBySize(b.splitCols[:0], rowPerSegment, ref.Type)
+	return b.encode(ref, b.splitCols, timeCols, dataOffset)
 }
 
-func (b *ColumnBuilder) encode(ref record.Field, timeCols []record.ColVal, dataOffset int64) ([]byte, error) {
+func (b *ColumnBuilder) encode(ref record.Field, dataCols, timeCols []record.ColVal, dataOffset int64) ([]byte, error) {
 	b.colMeta.name = ref.Name
 	b.colMeta.ty = byte(ref.Type)
 
 	var err error
-	if len(b.segCol) != len(timeCols) {
-		err = fmt.Errorf("%v segment not equal time segment, %v != %v", ref.Name, len(b.segCol), len(timeCols))
+	if len(dataCols) != len(timeCols) {
+		err = fmt.Errorf("%v segment not equal time segment, %v != %v", ref.Name, len(dataCols), len(timeCols))
 		b.log.Error(err.Error())
 		panic(err)
 	}
 
 	switch ref.Type {
 	case influx.Field_Type_Int:
-		err = b.encIntegerColumn(timeCols, b.segCol, dataOffset)
+		err = b.encIntegerColumn(timeCols, dataCols, dataOffset)
 	case influx.Field_Type_Float:
-		err = b.encFloatColumn(timeCols, b.segCol, dataOffset)
+		err = b.encFloatColumn(timeCols, dataCols, dataOffset)
 	case influx.Field_Type_String:
-		err = b.encStringColumn(timeCols, b.segCol, dataOffset)
+		err = b.encStringColumn(timeCols, dataCols, dataOffset)
 	case influx.Field_Type_Boolean:
-		err = b.encBooleanColumn(timeCols, b.segCol, dataOffset)
+		err = b.encBooleanColumn(timeCols, dataCols, dataOffset)
 	}
 
 	if err != nil {

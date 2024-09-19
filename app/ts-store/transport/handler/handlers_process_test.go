@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package handler
 
@@ -61,32 +59,47 @@ func TestProcessShowTagValues(t *testing.T) {
 	db := path.Join(dataPath, "db0")
 	pts := []uint32{1}
 
+	returnErrDB := "test_return_error"
+
 	for _, testcase := range []struct {
 		Name                 string
 		ShowTagValuesRequest internal.ShowTagValuesRequest
+		Want                 *errno.Error
 	}{
 		{
-			Name: "show tag values with order by",
+			Name: "show tag values with order by 1",
 			ShowTagValuesRequest: internal.ShowTagValuesRequest{
 				Db:       &db,
 				PtIDs:    pts,
-				Disorder: proto.Bool(true),
+				Disorder: proto.Bool(false),
 			},
+			Want: nil,
+		},
+		{
+			Name: "show tag values with order by 2",
+			ShowTagValuesRequest: internal.ShowTagValuesRequest{
+				Db:    &db,
+				PtIDs: pts,
+			},
+			Want: nil,
 		},
 		{
 			Name: "show tag values without order by 1",
 			ShowTagValuesRequest: internal.ShowTagValuesRequest{
 				Db:       &db,
 				PtIDs:    pts,
-				Disorder: proto.Bool(false),
+				Disorder: proto.Bool(true),
 			},
+			Want: nil,
 		},
 		{
-			Name: "show tag values without order by 2",
+			Name: "show tag values without order by ref DBPT fail",
 			ShowTagValuesRequest: internal.ShowTagValuesRequest{
-				Db:    &db,
-				PtIDs: pts,
+				Db:       &returnErrDB,
+				PtIDs:    pts,
+				Disorder: proto.Bool(true),
 			},
+			Want: errno.NewError(errno.DBPTClosed, "pt", 1),
 		},
 	} {
 		t.Run(testcase.Name, func(t *testing.T) {
@@ -105,7 +118,13 @@ func TestProcessShowTagValues(t *testing.T) {
 			if !ok {
 				t.Fatal("response type is invalid")
 			}
-			assert.NotNil(t, response.GetErr())
+
+			if testcase.Want == nil {
+				assert.Equal(t, nil, netstorage.NormalizeError(response.Err))
+			} else {
+				assert.Equal(t, testcase.Want.Errno(), netstorage.NormalizeError(response.Err).(*errno.Error).Errno())
+			}
+
 			response.Err = nil
 		})
 	}
@@ -140,6 +159,16 @@ func (e *MockEngine) CreateShowTagValuesPlan(db string, ptIDs []uint32, tr *infl
 	}
 	return plan
 }
+
+func (e *MockEngine) DbPTRef(db string, ptId uint32) error {
+	fmt.Printf(db)
+	if db == "test_return_error" {
+		return errno.NewError(errno.DBPTClosed, "pt", 1)
+	}
+	return nil
+}
+
+func (e *MockEngine) DbPTUnref(db string, ptId uint32) {}
 
 type MockShowTagValuesPlan struct {
 	ExecuteFn func(tagKeys map[string][][]byte, condition influxql.Expr, tr util.TimeRange, limit int) (netstorage.TablesTagSets, error)

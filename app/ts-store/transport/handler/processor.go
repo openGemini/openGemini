@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package handler
 
@@ -178,7 +176,7 @@ func (p *SelectProcessor) Handle(w spdy.Responser, data interface{}) (err error)
 	w.Session().EnableDataACK()
 	defer func() {
 		w.Session().DisableDataACK()
-		qm.Finish(req.Opt.QueryId)
+		qm.Finish(req.Opt.QueryId, s)
 	}()
 
 	err = s.Process()
@@ -237,6 +235,31 @@ func (p *AbortProcessor) Handle(w spdy.Responser, data interface{}) error {
 		zap.Uint64("clientID", msg.ClientID))
 
 	query.NewManager(msg.ClientID).Abort(msg.QueryID)
+	err := w.Response(executor.NewFinishMessage(), true)
+	if err != nil {
+		logger.GetLogger().Error("failed to response finish message", zap.Error(err))
+	}
+	return nil
+}
+
+type CrashProcessor struct {
+}
+
+func NewCrashProcessor() *CrashProcessor {
+	return &CrashProcessor{}
+}
+
+func (p *CrashProcessor) Handle(w spdy.Responser, data interface{}) error {
+	msg, ok := data.(*executor.Crash)
+	if !ok {
+		return executor.NewInvalidTypeError("*executor.Crash", data)
+	}
+
+	logger.GetLogger().Info("CrashProcessor.Handle",
+		zap.Uint64("qid", msg.QueryID),
+		zap.Uint64("clientID", msg.ClientID))
+
+	query.NewManager(msg.ClientID).Crash(msg.QueryID)
 	err := w.Response(executor.NewFinishMessage(), true)
 	if err != nil {
 		logger.GetLogger().Error("failed to response finish message", zap.Error(err))

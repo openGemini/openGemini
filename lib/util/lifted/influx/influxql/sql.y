@@ -132,7 +132,7 @@ func deal_Fill (fill interface{})  (FillOption , interface{},bool) {
 %right UMINUS
 
 %type <stmt>                        STATEMENT SHOW_DATABASES_STATEMENT CREATE_DATABASE_STATEMENT WITH_CLAUSES CREATE_USER_STATEMENT
-                                    SELECT_STATEMENT SHOW_MEASUREMENTS_STATEMENT SHOW_RETENTION_POLICIES_STATEMENT
+                                    SELECT_STATEMENT SHOW_MEASUREMENTS_STATEMENT SHOW_MEASUREMENTS_DETAIL_STATEMENT SHOW_RETENTION_POLICIES_STATEMENT
                                     CREATE_RENTRENTION_POLICY_STATEMENT RP_DURATION_OPTIONS SHOW_SERIES_STATEMENT
                                     SHOW_USERS_STATEMENT DROP_SERIES_STATEMENT DROP_DATABASE_STATEMENT DELETE_SERIES_STATEMENT
                                     ALTER_RENTRENTION_POLICY_STATEMENT
@@ -231,6 +231,10 @@ STATEMENT:
     	$$ = $1
     }
     |SHOW_MEASUREMENTS_STATEMENT
+    {
+        $$ = $1
+    }
+    |SHOW_MEASUREMENTS_DETAIL_STATEMENT
     {
         $$ = $1
     }
@@ -1000,6 +1004,17 @@ FILLCONTENT:
     {
         $$ = $1
     }
+    |SUB FILLCONTENT
+    {
+        switch s := $2.(type) {
+        case int64:
+            $$ = -1 * s
+        case float64:
+            $$ = -1 * s
+        default:
+            $$ = $2
+        }
+    }
 
 WHERE_CLAUSE:
     WHERE CONDITION
@@ -1527,9 +1542,6 @@ CREAT_DATABASE_POLICY:
     }
     |REPLICATION INTEGER
     {
-        if $2 < 1 || $2 % 2 == 0 {
-            yylex.Error("REPLICATION must be an odd number")
-        }
         replicaN := int($2)
         $$ = &Durations{ShardGroupDuration: -1,HotDuration: -1,WarmDuration: -1,IndexGroupDuration: -1,Replication: &replicaN}
     }
@@ -1577,6 +1589,21 @@ SHOW_MEASUREMENTS_STATEMENT:
          sms.Offset = $6[1]
          $$ = sms
      }
+
+SHOW_MEASUREMENTS_DETAIL_STATEMENT:
+    SHOW MEASUREMENTS DETAIL ON_DATABASE WITH MEASUREMENT MEASUREMENT_WITH
+    {
+        sms := &ShowMeasurementsDetailStatement{}
+        sms.Database = $4
+        sms.Source = $7
+        $$ = sms
+    }
+    |SHOW MEASUREMENTS DETAIL ON_DATABASE
+    {
+        sms := &ShowMeasurementsDetailStatement{}
+        sms.Database = $4
+        $$ = sms
+    }
 
 MEASUREMENT_WITH:
 
@@ -1668,9 +1695,6 @@ RP_DURATION_OPTIONS:
     {
     	stmt := &CreateRetentionPolicyStatement{}
     	stmt.Duration = $2
-        if $4 < 1 || $4 % 2 == 0 {
-            yylex.Error("REPLICATION must be an odd number")
-        }
     	stmt.Replication = int($4)
 
     	if $5.ShardGroupDuration==-1||$5.ShardGroupDuration==0{
@@ -1703,9 +1727,6 @@ RP_DURATION_OPTIONS:
     {
     	stmt := &CreateRetentionPolicyStatement{}
     	stmt.Duration = $2
-        if $4 < 1 || $4 % 2 == 0 {
-            yylex.Error("REPLICATION must be an odd number")
-        }
     	stmt.Replication = int($4)
     	$$ = stmt
     }
@@ -3098,6 +3119,14 @@ DROP_MEASUREMENT_STATEMENT:
     {
         stmt := &DropMeasurementStatement{}
         stmt.Name = $3
+	    stmt.RpName = ""
+        $$ = stmt
+    }
+    | DROP MEASUREMENT IDENT DOT IDENT
+    {
+        stmt := &DropMeasurementStatement{}
+        stmt.Name = $5
+        stmt.RpName = $3
         $$ = stmt
     }
 

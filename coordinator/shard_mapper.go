@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package coordinator
 
@@ -185,10 +183,20 @@ func (csm *ClusterShardMapper) mapShards(csming *ClusterShardMapping, sources in
 				return err
 			}
 		case *influxql.BinOp:
-			if err := csm.mapShards(csming, influxql.Sources{s.LSrc}, tmin, tmax, condition, opt); err != nil {
+			err := csm.mapShards(csming, influxql.Sources{s.LSrc}, tmin, tmax, condition, opt)
+			if errno.Equal(err, errno.ErrMeasurementNotFound) && influxql.AllowNilMst(s.OpType) {
+				s.NilMst = influxql.LNilMst
+			} else if err != nil {
 				return err
 			}
-			if err := csm.mapShards(csming, influxql.Sources{s.RSrc}, tmin, tmax, condition, opt); err != nil {
+			err = csm.mapShards(csming, influxql.Sources{s.RSrc}, tmin, tmax, condition, opt)
+			if errno.Equal(err, errno.ErrMeasurementNotFound) && influxql.AllowNilMst(s.OpType) {
+				if s.NilMst == influxql.LNilMst {
+					return err
+				} else {
+					s.NilMst = influxql.RNilMst
+				}
+			} else if err != nil {
 				return err
 			}
 		}

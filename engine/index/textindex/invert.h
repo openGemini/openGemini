@@ -1,19 +1,17 @@
-//go:build linux
-/*
-Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+//go:build linux && amd64
+// Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #ifndef INVERT_HEADER_H
 #define INVERT_HEADER_H
@@ -34,8 +32,11 @@ limitations under the License.
 #define CGO_ERROR(status)                   ((status)<<ERR_START_BIT|__LINE__)
 #define CGO_SUCCESS(status)                 ((status)==SUCCESS)
 #define CGO_FAILURE(status)                 ((status)!=SUCCESS)
-#define MIN_HASHTABLE_BKTS                  32768  // 2^15
-#define MAX_HASHTABLE_BKTS                  1048576 // 2^20
+
+#define HASHTABLE_BKTS_SHFIT                21
+#define HASHTABLE_BKTS_SIZE                 (1<<HASHTABLE_BKTS_SHFIT) // 2^21=2097152
+#define HASHTABLE_BKTS_MASK                 0x1FFFFF // (HASHTABLE_BKTS_SIZE-1)
+#define HASHTABLE_SECTION_SIZE              256
 
 #define LOG_INFO(format, ...) do {                      \
     char tBuf[64] = {0};                                \
@@ -141,7 +142,7 @@ struct OffsBuf {
             return CGO_ERROR(ERROR_ALLOC_MEM_FAIL);
         }
         cap = newSize;
-        LOG_INFO("OffsBuf malloc success, len = %d, cap=%d", len, cap);
+        LOG_INFO("OffsBuf malloc success, expected size= %d, cap=%d", size, cap);
         return SUCCESS;
     }
 
@@ -183,11 +184,12 @@ static inline void InitColVal(ColVal *colVal, char *val, uint32_t valLen, uint32
 #define BITSET_CONTAINER_TYPE 1
 #define ARRAY_CONTAINER_TYPE 2
 #define RUN_CONTAINER_TYPE 3
-#define COOKIE_HEADER_SIZE 6 // sizeof(ContainerCount) + sizeof(CardinalityCount)
+#define COOKIE_HEADER_SIZE 6 // sizeof(uint16_t) + sizeof(uint32_t)
+#define BITSET_CONTAINER_SIZE 8192
 
-#define PAIR_COUNT_SHIFT_NUM 8
-#define PAIR_COUNT_PER_GROUP (1<<PAIR_COUNT_SHIFT_NUM)
-#define PAIR_NUMBER_MASK (PAIR_COUNT_PER_GROUP - 1)
+#define PAIR_GROUP_SHIFT 8
+#define MAX_PAIRS_PER_GROUP (1<<PAIR_GROUP_SHIFT)
+#define PAIR_MASK (MAX_PAIRS_PER_GROUP - 1)
 
 /*
  * value:  start position of the run
@@ -201,7 +203,7 @@ struct RunPair {
 
 struct RunPairGroup {
     ListNode node;
-    RunPair pairs[PAIR_COUNT_PER_GROUP];
+    RunPair pairs[MAX_PAIRS_PER_GROUP];
 };
 
 typedef RunPairGroup *(*GetRunPairGroup)(void *memPool);
@@ -212,7 +214,7 @@ struct RunContainer {
     RunPairGroup *curPairs;
     GetRunPairGroup getRunPariGroup; // func
     uint16_t key;
-    uint16_t cardinality;
+    uint16_t cardinality; // realCardinality = cardinality + 1;
     uint16_t nRuns;
     uint8_t  seriType;
 };
@@ -232,7 +234,7 @@ static inline int32_t GetRunContainerSerializedSize(int32_t nRuns) {
 static inline int32_t GetSeriSizeAndSetSeriType(RunContainer *c) {
     int32_t seriSize = GetRunContainerSerializedSize(c->nRuns);
     int32_t bitSetSize = GetBitsetContainerSerializedSize();
-    int32_t arraySize = GetArrayContainerSerializedSize(c->cardinality);
+    int32_t arraySize = GetArrayContainerSerializedSize(int32_t(c->cardinality) + 1);
 
     c->seriType = RUN_CONTAINER_TYPE;
     if (seriSize > bitSetSize) {
@@ -422,6 +424,7 @@ struct InvertElement {
     Token token;
 
     // posting list info
+    ListNode hashSection;
     ListNode containers;
     RunContainer *curContainer; // currently used Container
     GetRunContainer getRunContainer;
@@ -430,6 +433,7 @@ struct InvertElement {
     InvertElement()
     {
         ListInit(&node);
+        ListInit(&hashSection);
         ListInit(&containers);
         curContainer = nullptr;
     }
@@ -461,8 +465,8 @@ struct InvertElement {
                 return;
             }
             curContainer->key = key;
-            curContainer->cardinality = 1;
-            curContainer->nRuns = 0;
+            curContainer->cardinality = 0;
+            curContainer->nRuns = 1;
             curContainer->curPairs = pg;
             pg->pairs[0].value = val;
             pg->pairs[0].length = 0;
@@ -470,7 +474,7 @@ struct InvertElement {
             ListInsertToTail(&containers, &(curContainer->node));
             return;
         }
-        int pairNum = curContainer->nRuns & PAIR_NUMBER_MASK;
+        int pairNum = (curContainer->nRuns - 1) & PAIR_MASK;
         RunPair *curPair = &(curContainer->curPairs->pairs[pairNum]);
         if(val <= curPair->value + curPair->length) {
             return;
@@ -480,7 +484,7 @@ struct InvertElement {
             curPair->length++;
         } else {
             pairNum++;
-            if (pairNum == PAIR_COUNT_PER_GROUP) {
+            if (pairNum == MAX_PAIRS_PER_GROUP) {
                 RunPairGroup *pg = curContainer->getRunPariGroup(pool);
                 if (pg == nullptr) {
                     LOG_ERROR("New RunPairGroup failed When new runs");
@@ -528,8 +532,8 @@ struct InvertGroup {
                 free(group);
             }
         } else {
-            if (size < MAX_HASHTABLE_BKTS) {
-                size = MAX_HASHTABLE_BKTS;
+            if (size < HASHTABLE_BKTS_SIZE) {
+                size = HASHTABLE_BKTS_SIZE;
             }
         }
         group = (InvertElement **)malloc(size * sizeof(InvertElement *));
@@ -600,13 +604,13 @@ struct HashTable {
 
     void InsertByToken(struct ListNode *node, Token *token)
     {
-        size_t code = token->hashValue % bktSize;
+        size_t code = token->hashValue&HASHTABLE_BKTS_MASK;
         ListInsertToTail(&bkts[code], node);
     }
 
     ListNode *FindByToken(Token *token)
     {
-        size_t code = token->hashValue % bktSize;
+        size_t code = token->hashValue&HASHTABLE_BKTS_MASK;
         ListNode *list = &bkts[code];
         ListNode *tmpNode = nullptr;
         LIST_FOR_EACH(tmpNode, list) {

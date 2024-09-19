@@ -1,18 +1,16 @@
-/*
-Copyright 2023 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2023 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package engine
 
@@ -57,6 +55,7 @@ var (
 type HybridStoreReader struct {
 	executor.BaseProcessor
 
+	aborted        bool
 	span           *tracing.Span
 	readSpan       *tracing.Span
 	outputSpan     *tracing.Span
@@ -96,6 +95,7 @@ type HybridStoreReader struct {
 	obsOptions   *obs.ObsOptions
 	indexInfo    *executor.CSIndexInfo
 	indexReaders []IndexReader
+	cursors      []comm.KeyCursor
 }
 
 func NewHybridStoreReader(plan hybridqp.QueryNode, indexInfo *executor.CSIndexInfo) *HybridStoreReader {
@@ -143,12 +143,16 @@ func (r *HybridStoreReader) initSpan() {
 
 func (r *HybridStoreReader) Close() {
 	r.Once(func() {
+		for i := range r.cursors {
+			r.cursors[i].Close()
+		}
 		atomic.AddInt64(&r.closedCount, 1)
 		r.output.Close()
 	})
 }
 
 func (r *HybridStoreReader) Abort() {
+	r.aborted = true
 	r.Close()
 }
 
@@ -356,18 +360,26 @@ func (r *HybridStoreReader) initSchema() (err error) {
 	return
 }
 
-func (r *HybridStoreReader) CreateCursors() ([]comm.KeyCursor, error) {
-	cursors := make([]comm.KeyCursor, 0)
+func (r *HybridStoreReader) CreateCursors() error {
+	r.cursors = make([]comm.KeyCursor, 0)
 	r.initIndexReader()
 	for i := range r.indexReaders {
+		r.indexReaders[i].StartSpan(r.span)
 		keyCursors, fagCount, err := r.indexReaders[i].CreateCursors()
 		if err != nil {
-			return nil, err
+			return err
 		}
 		r.fragCount += fagCount
-		cursors = append(cursors, keyCursors...)
+		r.cursors = append(r.cursors, keyCursors...)
 	}
-	return cursors, nil
+	if r.aborted {
+		for _, cursor := range r.cursors {
+			cursor.Close()
+		}
+		r.cursors = r.cursors[:0]
+		return nil
+	}
+	return nil
 }
 
 func (r *HybridStoreReader) Work(ctx context.Context) (err error) {
@@ -391,12 +403,11 @@ func (r *HybridStoreReader) Work(ctx context.Context) (err error) {
 
 	rowCountBeforeFilter := r.fragCount * util.RowsNumPerFragment
 	tracing.StartPP(r.span)
-	cursors, err := r.CreateCursors()
+	err = r.CreateCursors()
 	if err != nil {
 		return err
 	}
 	tracing.EndPP(r.initReaderSpan)
-
 	defer func() {
 		if r.span != nil {
 			r.span.SetNameValue(fmt.Sprintf("frag_count=%d", r.fragCount))
@@ -405,13 +416,10 @@ func (r *HybridStoreReader) Work(ctx context.Context) (err error) {
 			r.span.SetNameValue(fmt.Sprintf("row_count_af=%d", r.rowCountAfterFilter))
 			tracing.Finish(r.span, r.initReaderSpan, r.readSpan, r.filterSpan, r.recToChunkSpan, r.outputSpan)
 		}
-		for i := range cursors {
-			err = cursors[i].Close()
-		}
 		r.Close()
 	}()
 
-	for _, cursor := range cursors {
+	for _, cursor := range r.cursors {
 		if err = r.run(ctx, cursor); err != nil {
 			return err
 		}

@@ -61,6 +61,7 @@ type Config struct {
 	HTTPSCertificate        string         `toml:"https-certificate"`
 	HTTPSPrivateKey         string         `toml:"https-private-key"`
 	MaxRowLimit             int            `toml:"max-row-limit"`
+	MaxRowSizeLimit         int            `toml:"max-row-size-limit"`
 	MaxConnectionLimit      int            `toml:"max-connection-limit"`
 	SharedSecret            string         `toml:"shared-secret"`
 	Realm                   string         `toml:"realm"`
@@ -124,6 +125,7 @@ func NewConfig() Config {
 		HTTPSEnabled:            false,
 		HTTPSCertificate:        "/etc/ssl/influxdb.pem",
 		MaxRowLimit:             DefaultMaxRowNum,
+		MaxRowSizeLimit:         0,
 		Realm:                   DefaultRealm,
 		UnixSocketEnabled:       false,
 		UnixSocketPermissions:   0777,
@@ -169,6 +171,9 @@ func (c Config) Validate() error {
 	}
 	if c.MaxBodySize < 0 {
 		return errors.New("http max-body-size can not be negative")
+	}
+	if c.MaxRowSizeLimit < 0 {
+		return errors.New("http max-row-size-limit can not be negative")
 	}
 	return nil
 }

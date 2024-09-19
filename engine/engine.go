@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package engine
 
@@ -45,6 +43,7 @@ import (
 	meta "github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/obs"
+	"github.com/openGemini/openGemini/lib/raftlog"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
 	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
@@ -814,10 +813,68 @@ func (e *Engine) getShard(db string, ptId uint32, shardID uint64) (Shard, error)
 	return sh, nil
 }
 
-func (e *Engine) WriteRows(db, rp string, ptId uint32, shardID uint64, rows []influx.Row, binaryRows []byte) error {
+// checkAndGetDBPTInfo returns DBPTInfo for replication write api
+func (e *Engine) checkAndGetDBPTInfo(db string, ptId uint32) (*DBPTInfo, error) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	if err := e.checkAndAddRefPTNoLock(db, ptId); err != nil {
+		return nil, err
+	}
+	defer e.unrefDBPT(db, ptId)
+
+	dbPTInfo := e.DBPartitions[db][ptId]
+	return dbPTInfo, nil
+}
+
+func (e *Engine) WriteToRaft(db, rp string, ptId uint32, tail []byte) error {
+	dbpt, err := e.checkAndGetDBPTInfo(db, ptId)
+	if err != nil {
+		return err
+	}
+	// 1.build dataWrapper
+	newTail := meta.GetTailBuf(len(tail))
+	newTail = append(newTail, tail...)
+	wrapper := &raftlog.DataWrapper{
+		DataType:  raftlog.Normal,
+		Data:      newTail,
+		Identity:  dbpt.node.GetIdentity(),
+		ProposeId: dbpt.node.GenerateProposeId(),
+	}
+	marshal := wrapper.Marshal()
+
+	// 2.add committedDataC
+	var c chan error
+	c, err = dbpt.node.AddCommittedDataC(wrapper)
+	if err != nil {
+		logger.GetLogger().Error("raftNode AddCommitedDataC err", zap.Error(err))
+		return err
+	}
+	defer dbpt.node.RemoveCommittedDataC(wrapper)
+
+	// 3.propose
+	dbpt.proposeC <- marshal
+
+	// 4.wait committed return
+	timeT := time.After(10 * time.Second)
+	select {
+	case commitedErr := <-c:
+		if commitedErr != nil {
+			logger.GetLogger().Error("raftNode commitedErr err", zap.Error(commitedErr))
+		}
+		return commitedErr
+	case <-timeT:
+		return errno.NewError(errno.WriteToRaftTimeoutAfterPropose, wrapper.Identity, wrapper.ProposeId)
+	}
+}
+
+func (e *Engine) WriteRows(db, rp string, ptId uint32, shardID uint64, rows []influx.Row, binaryRows []byte, snp *raftlog.SnapShotter) error {
 	sh, err := e.getShard(db, ptId, shardID)
 	if err != nil {
 		return err
+	}
+	if snp != nil {
+		sh.SetSnapShotter(snp)
 	}
 	return sh.WriteRows(rows, binaryRows)
 }
@@ -1036,6 +1093,9 @@ func (e *Engine) dropDBPt(db string) {
 }
 
 func (e *Engine) deleteIndexes(db string, pt uint32, rp string, fn func(dbPTInfo *DBPTInfo, shardID uint64, sh Shard) error) error {
+	if config.IsLogKeeper() {
+		return nil
+	}
 	resC := make(chan error)
 	indexes := make(map[uint64]struct{})
 
@@ -1502,10 +1562,17 @@ func (e *Engine) HierarchicalStorage(db string, ptId uint32, shardID uint64) boo
 	dbPTInfo := e.DBPartitions[db][ptId]
 	e.mu.RUnlock()
 	defer e.unrefDBPT(db, ptId)
-
-	dbPTInfo.mu.RLock()
-	sh := dbPTInfo.Shard(shardID)
-	dbPTInfo.mu.RUnlock()
+	dbPTInfo.mu.Lock()
+	if dbPTInfo.doingOff {
+		dbPTInfo.mu.Unlock()
+		e.log.Error("[hierarchical storage] pt is doingMigrate err", zap.String("db", db), zap.Uint32("pt", ptId))
+		return false
+	} else {
+		dbPTInfo.doingShardMoveNInc()
+		defer dbPTInfo.doingShardMoveNDec()
+	}
+	sh := dbPTInfo.ShardNoLock(shardID)
+	dbPTInfo.mu.Unlock()
 	if sh == nil {
 		e.log.Error("shard not found", zap.Error(errno.NewError(errno.ShardNotFound, shardID)))
 		return false
@@ -1541,4 +1608,20 @@ func (e *Engine) HierarchicalStorage(db string, ptId uint32, shardID uint64) boo
 	e.log.Info("[hierarchical storage] shard move success", zap.String("db", db),
 		zap.Uint32("pt", ptId), zap.Uint64("shard", shardID))
 	return true
+}
+
+func (e *Engine) GetDBPtIds() map[string][]uint32 {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	dbPts := make(map[string][]uint32, len(e.DBPartitions))
+	for name, ptMap := range e.DBPartitions {
+		pts := make([]uint32, 0, len(ptMap))
+		for ptId := range ptMap {
+			pts = append(pts, ptId)
+		}
+		dbPts[name] = pts
+	}
+
+	return dbPts
 }

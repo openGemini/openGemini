@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package engine
 
@@ -33,7 +31,7 @@ func Test_Engine_Assign_404PT(t *testing.T) {
 	dir := t.TempDir()
 	e, err := initEngine(dir)
 	defer e.Close()
-	err = e.Assign(0, 1, defaultDb, defaultPtId, 1, nil, nil, mockMetaClient())
+	err = e.Assign(0, 1, defaultDb, defaultPtId, 1, nil, nil, mockMetaClient(), nil)
 	require.NoError(t, err)
 }
 
@@ -53,7 +51,7 @@ func Test_Engine_Assign_success(t *testing.T) {
 		Name:           defaultDb,
 		EnableTagArray: false,
 	}
-	err = eng.Assign(0, 1, defaultDb, defaultPtId, 1, shardDurationInfo, dbBriefInfo, mockMetaClient())
+	err = eng.Assign(0, 1, defaultDb, defaultPtId, 1, shardDurationInfo, dbBriefInfo, mockMetaClient(), nil)
 	require.NoError(t, err)
 	eng.Close()
 }
@@ -361,7 +359,7 @@ func TestLoadPts001(t *testing.T) {
 		Name:           defaultDb,
 		EnableTagArray: false,
 	}
-	err = eng.Assign(0, 1, defaultDb, defaultPtId, 0, durationInfos, dbBriefInfo, mockMetaClient())
+	err = eng.Assign(0, 1, defaultDb, defaultPtId, 0, durationInfos, dbBriefInfo, mockMetaClient(), nil)
 	if err != nil {
 		t.Error("LoadPts failed", zap.Error(err))
 	}
@@ -393,7 +391,7 @@ func TestLoadPts002(t *testing.T) {
 		t.Error("PrepareLoadPts failed", zap.Error(err))
 	}
 	checkShard(t, eng, 1, defaultShardId, false, defaultDb, defaultPtId, true)
-	err = eng.Assign(0, 1, defaultDb, defaultPtId, 0, durationInfos, dbBriefInfo, mockMetaClient())
+	err = eng.Assign(0, 1, defaultDb, defaultPtId, 0, durationInfos, dbBriefInfo, mockMetaClient(), nil)
 	if err != nil {
 		t.Error("LoadPts failed", zap.Error(err))
 	}
@@ -412,7 +410,7 @@ func TestLoadPts003(t *testing.T) {
 		Name:           defaultDb,
 		EnableTagArray: false,
 	}
-	err := eng.Assign(0, 1, defaultDb, defaultPtId, 0, durationInfos, dbBriefInfo, mockMetaClient())
+	err := eng.Assign(0, 1, defaultDb, defaultPtId, 0, durationInfos, dbBriefInfo, mockMetaClient(), nil)
 	if err != nil {
 		t.Error("LoadPts failed", zap.Error(err))
 	}
@@ -468,6 +466,30 @@ func TestRollPreOffload002(t *testing.T) {
 	checkShard(t, eng, 0, defaultShardId, true, defaultDb, defaultPtId, true)
 }
 
+func TestPreOffloadDoShardMove(t *testing.T) {
+	dir := t.TempDir()
+	defer fileops.RemoveAll(dir)
+	eng := getEngineBeforeTest(t, dir)
+	defer eng.Close()
+	eng.DBPartitions[defaultDb][defaultPtId].doingShardMoveN = 1
+	err := eng.PreOffload(0, defaultDb, defaultPtId)
+	if !errno.Equal(err, errno.PtIsDoingSomeShardMove) {
+		t.Fatal("TestPreOffloadDoShardMove err")
+	}
+}
+
+func TestRollbackPreOffloadDoShardMove(t *testing.T) {
+	dir := t.TempDir()
+	defer fileops.RemoveAll(dir)
+	eng := getEngineBeforeTest(t, dir)
+	defer eng.Close()
+	eng.DBPartitions[defaultDb][defaultPtId].doingShardMoveN = 1
+	err := eng.RollbackPreOffload(0, defaultDb, defaultPtId)
+	if err != nil {
+		t.Fatal("TestRollbackPreOffloadDoShardMove err")
+	}
+}
+
 func checkShard(t *testing.T, e *Engine, shNum int, shardId uint64, hasIndex bool, db string, ptId uint32, able bool) {
 	hasDBPT := shNum != 0
 	if _, ok := e.DBPartitions[db]; ok != hasDBPT {
@@ -519,7 +541,7 @@ func getEngineBeforeTest(t *testing.T, dir string) *Engine {
 	msNames := []string{"cpu"}
 	tm := time.Now().Truncate(time.Second)
 	rows, _, _ := GenDataRecord(msNames, 10, 20, time.Second, tm, false, true, false)
-	if err := eng.WriteRows(defaultDb, defaultRp, defaultPtId, defaultShardId, rows, nil); err != nil {
+	if err := eng.WriteRows(defaultDb, defaultRp, defaultPtId, defaultShardId, rows, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	eng.ForceFlush()

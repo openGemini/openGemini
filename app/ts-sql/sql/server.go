@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package ingestserver
 
@@ -21,7 +19,6 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net"
-	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -45,6 +42,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 	coordinator2 "github.com/openGemini/openGemini/lib/util/lifted/influx/coordinator"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/httpd"
+	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/services"
 	"github.com/openGemini/openGemini/services/arrowflight"
@@ -128,7 +126,9 @@ func NewServer(conf config.Config, info app.ServerInfo, logger *Logger.Logger) (
 	s.initMetaClientFn = s.initializeMetaClient
 	s.MetaClient.SetHashAlgo(c.Common.OptHashAlgo)
 
-	go openPprofServer(c, logger)
+	if s.config.Common.PprofEnabled {
+		go util.OpenPprofServer(s.config.Common.PprofBindAddress, util.SqlPprofPort)
+	}
 
 	err = s.MetaClient.SetTier(c.Coordinator.ShardTier)
 	if err != nil {
@@ -200,6 +200,7 @@ func newServer(info app.ServerInfo, logger *Logger.Logger, c *config.TSSql, meta
 	if c.Meta.UseIncSyncData {
 		s.MetaClient.EnableUseSnapshotV2(c.Meta.RetentionAutoCreate, c.Meta.ExpandShardsEnable)
 	}
+	meta2.InitSchemaCleanEn(c.Meta.SchemaCleanEn)
 	return s
 }
 
@@ -236,6 +237,7 @@ func (s *Server) initQueryExecutor(c *config.TSSql) {
 		},
 		MetaExecutor:            metaExecutor,
 		MaxQueryMem:             int64(c.Coordinator.MaxQueryMem),
+		MaxRowSizeLimit:         int64(c.HTTP.MaxRowSizeLimit),
 		QueryTimeCompareEnabled: c.Coordinator.QueryTimeCompareEnabled,
 		RetentionPolicyLimit:    c.Coordinator.RetentionPolicyLimit,
 		StmtExecLogger:          Logger.NewLogger(errno.ModuleQueryEngine).With(zap.String("query", "StatementExecutor")),
@@ -251,29 +253,6 @@ func (s *Server) initQueryExecutor(c *config.TSSql) {
 	s.httpService.Handler.QueryExecutor = s.QueryExecutor
 	if s.cqService != nil {
 		s.cqService.QueryExecutor = s.QueryExecutor
-	}
-}
-
-func openPprofServer(c *config.TSSql, logger *Logger.Logger) {
-	if !c.HTTP.PprofEnabled {
-		return
-	}
-	hosts := strings.Split(c.HTTP.BindAddress, ",")
-	if len(hosts) == 0 || hosts[0] == "" {
-		return
-	}
-
-	host, _, err := net.SplitHostPort(hosts[0])
-	if err != nil {
-		logger.Error("failed to split host and port", zap.Error(err),
-			zap.String("addr", c.HTTP.BindAddress))
-		return
-	}
-
-	addr := net.JoinHostPort(host, "6061")
-	err = http.ListenAndServe(addr, nil)
-	if err != nil {
-		logger.Error("failed to start http server", zap.String("addr", addr))
 	}
 }
 

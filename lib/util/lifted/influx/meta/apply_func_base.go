@@ -1,18 +1,16 @@
-/*
-Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package meta
 
@@ -230,12 +228,15 @@ func ApplyCreateDataNode(data *Data, cmd *proto2.Command) error {
 	}
 	dataNode := data.DataNodeByHttpHost(v.GetHTTPAddr())
 	if dataNode != nil {
+		if AzHard == repDisPolicy && v.GetAz() != dataNode.Az {
+			return ErrAzChange
+		}
 		data.MaxConnID++
 		dataNode.ConnID = data.MaxConnID
 		return nil
 	}
 
-	_, err := data.CreateDataNode(v.GetHTTPAddr(), v.GetTCPAddr(), v.GetRole())
+	_, err := data.CreateDataNode(v.GetHTTPAddr(), v.GetTCPAddr(), v.GetRole(), v.GetAz())
 	return err
 }
 
@@ -406,12 +407,14 @@ func ApplyCreateDbPtViewCommand(data *Data, cmd *proto2.Command) error {
 	if !ok {
 		panic(fmt.Errorf("%s is not a CreateDbPtViewCommand", ext))
 	}
-
-	if err := data.CreateDBPtView(v.GetDbName()); err != nil {
+	var err error
+	if ok, err = data.CreateDBPtView(v.GetDbName()); err != nil {
 		return err
 	}
-
-	return data.CreateReplication(v.GetDbName(), v.GetReplicaNum())
+	if ok {
+		return data.CreateDBReplication(v.GetDbName(), v.GetReplicaNum())
+	}
+	return nil
 }
 
 func ApplyUpdateShardDownSampleInfo(data *Data, cmd *proto2.Command) error {
@@ -511,8 +514,7 @@ func ApplyUpdateReplication(data *Data, cmd *proto2.Command) error {
 	rgId := v.GetRepGroupId()
 	peers := v.GetPeers()
 	masterId := v.GetMasterId()
-	rgStatus := v.GetRgStatus()
-	return data.UpdateReplication(db, rgId, masterId, peers, rgStatus)
+	return data.UpdateReplication(db, rgId, masterId, peers)
 }
 
 func ApplyUpdateMeasurement(data *Data, cmd *proto2.Command) error {

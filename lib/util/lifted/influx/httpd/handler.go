@@ -3,7 +3,7 @@ package httpd
 import (
 	"bytes"
 	"context"
-	json2 "encoding/json"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -48,14 +48,13 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/pingcap/failpoint"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/prompb"
 	"go.uber.org/zap"
 	"golang.org/x/time/rate"
 )
 
-var json = jsoniter.ConfigCompatibleWithStandardLibrary
+var json2 = jsoniter.ConfigCompatibleWithStandardLibrary
 var handlerLogLimit int
 
 const (
@@ -174,7 +173,7 @@ type Handler struct {
 	}
 
 	RecordWriter interface {
-		RetryWriteLogRecord(database, retentionPolicy, measurement string, rec *record.Record) error
+		RetryWriteLogRecord(rec *record.BulkRecords) error
 	}
 
 	SubscriberManager
@@ -259,7 +258,7 @@ func NewHandler(c config.Config) *Handler {
 		},
 		Route{
 			"prometheus-metrics",
-			"GET", "/metrics", false, true, promhttp.Handler().ServeHTTP,
+			"GET", "/metrics", false, true, h.serveMetrics,
 		},
 		Route{
 			"failpoint",
@@ -300,6 +299,10 @@ func NewHandler(c config.Config) *Handler {
 		Route{
 			"prometheus-label-values-query", // Prometheus label-values query
 			"GET", "/api/v1/label/{name}/values", true, true, h.servePromQueryLabelValues,
+		},
+		Route{
+			"prometheus-label-values-query", // Prometheus label-values query
+			"POST", "/api/v1/label/{name}/values", true, true, h.servePromQueryLabelValues,
 		},
 		Route{
 			"prometheus-series-query", // Prometheus series query
@@ -348,6 +351,10 @@ func NewHandler(c config.Config) *Handler {
 		Route{
 			"prometheus-label-values-query-metric-store", // Prometheus label-values query
 			"GET", "/prometheus/{metric_store}/api/v1/label/{name}/values", true, true, h.servePromQueryLabelValuesWithMetricStore,
+		},
+		Route{
+			"prometheus-label-values-query-metric-store", // Prometheus label-values query
+			"POST", "/prometheus/{metric_store}/api/v1/label/{name}/values", true, true, h.servePromQueryLabelValuesWithMetricStore,
 		},
 		Route{
 			"prometheus-series-query-metric-store", // Prometheus series query
@@ -691,7 +698,7 @@ func (h *Handler) parseQueryParams(r *http.Request) (map[string]interface{}, err
 	}
 
 	var params map[string]interface{}
-	decoder := json.NewDecoder(strings.NewReader(rawParams))
+	decoder := json2.NewDecoder(strings.NewReader(rawParams))
 	decoder.UseNumber()
 	if err := decoder.Decode(&params); err != nil {
 		h.Logger.Error("query error! parsing query parameters", zap.Error(err), zap.String("db", r.FormValue("db")), zap.Any("r", r))
@@ -700,7 +707,7 @@ func (h *Handler) parseQueryParams(r *http.Request) (map[string]interface{}, err
 
 	// Convert json.Number into int64 and float64 values
 	for k, v := range params {
-		if v, ok := v.(json2.Number); ok {
+		if v, ok := v.(json.Number); ok {
 			var err error
 			if strings.Contains(string(v), ".") {
 				params[k], err = v.Float64()
@@ -1463,7 +1470,7 @@ func (h *Handler) servePing(w http.ResponseWriter, r *http.Request) {
 
 	if verbose != "" && verbose != "0" && verbose != "false" {
 		h.writeHeader(w, http.StatusOK)
-		b, _ := json.Marshal(map[string]string{"version": h.Version})
+		b, _ := json2.Marshal(map[string]string{"version": h.Version})
 		w.Write(b)
 	} else {
 		h.writeHeader(w, http.StatusNoContent)
@@ -1783,7 +1790,7 @@ func (h *Handler) serveDebugRequests(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintln(w, "{")
 	first := true
 	for req, st := range profile.Requests {
-		val, err := json.Marshal(st)
+		val, err := json2.Marshal(st)
 		if err != nil {
 			continue
 		}
@@ -1820,7 +1827,7 @@ func (h *Handler) httpError(w http.ResponseWriter, errmsg string, code int) {
 	// with our special response writer type.
 	w.Header().Add("Content-Type", "application/json")
 	h.writeHeader(w, code)
-	b, _ := json.Marshal(response)
+	b, _ := json2.Marshal(response)
 	w.Write(b)
 }
 
@@ -2083,7 +2090,9 @@ func (h *Handler) logging(inner http.Handler, name string) http.Handler {
 		l := &responseLogger{w: w}
 		inner.ServeHTTP(l, r)
 
-		if h.accessLogFilters.Match(l.Status()) {
+		if config2.IsLogKeeper() {
+			logger.GetLogger().Info(buildLogLine(l, r, start))
+		} else if h.accessLogFilters.Match(l.Status()) {
 			if handlerLogLimit >= 10 {
 				h.Logger.Info(buildLogLine(l, r, start))
 				handlerLogLimit = 0
@@ -2166,7 +2175,7 @@ func (r Response) MarshalJSON() ([]byte, error) {
 		o.Err = r.Err.Error()
 	}
 
-	return json.Marshal(&o)
+	return json2.Marshal(&o)
 }
 
 // UnmarshalJSON decodes the data into the Response struct.
@@ -2176,7 +2185,7 @@ func (r *Response) UnmarshalJSON(b []byte) error {
 		Err     string          `json:"error,omitempty"`
 	}
 
-	err := json.Unmarshal(b, &o)
+	err := json2.Unmarshal(b, &o)
 	if err != nil {
 		return err
 	}
@@ -2432,6 +2441,6 @@ func ErrorResponse(msg string, errCode string) []byte {
 		ErrorMsg:  msg,
 	}
 
-	by, _ := json.Marshal(res)
+	by, _ := json2.Marshal(res)
 	return by
 }

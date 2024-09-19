@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package immutable
 
@@ -44,7 +42,6 @@ type ColumnIterator struct {
 
 	mu     sync.RWMutex
 	closed bool
-	signal chan struct{}
 	field  record.Field
 
 	minTime int64
@@ -53,9 +50,8 @@ type ColumnIterator struct {
 
 func NewColumnIterator(fi *FileIterator) *ColumnIterator {
 	itr := &ColumnIterator{
-		fi:     fi,
-		sr:     NewSegmentReader(fi),
-		signal: make(chan struct{}),
+		fi: fi,
+		sr: NewSegmentReader(fi),
 	}
 	itr.NextChunkMeta()
 	return itr
@@ -126,6 +122,10 @@ func (itr *ColumnIterator) Run(p ColumnIteratorPerformer) error {
 func (itr *ColumnIterator) IterCurrentChunk(p ColumnIteratorPerformer) error {
 	if itr.isClosed() {
 		return errClosed
+	}
+
+	if itr.Error() != nil {
+		return itr.Error()
 	}
 
 	sid := itr.fi.curtChunkMeta.sid
@@ -226,7 +226,6 @@ func (itr *ColumnIterator) Close() {
 		return
 	}
 	itr.closed = true
-	close(itr.signal)
 }
 
 func (itr *ColumnIterator) resetCol() {

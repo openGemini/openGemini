@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package compress_test
 
@@ -21,13 +19,28 @@ import (
 	"testing"
 
 	"github.com/openGemini/openGemini/lib/compress"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/rand"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/stretchr/testify/require"
 )
 
-func codecFloatBlock(t *testing.T, values []float64) {
+func codecFloatBlockWithMLF(t *testing.T, values []float64) {
+	config.GetStoreConfig().FloatCompressAlgorithm = compress.FloatCompressAlgorithmMLF
+	compress.Init()
+
+	defer func() {
+		config.GetStoreConfig().FloatCompressAlgorithm = ""
+		compress.Init()
+	}()
+
+	codecFloatBlock(t, values)
+}
+
+func codecFloatBlock(t *testing.T, data []float64) {
+	values := append([]float64{}, data...)
+
 	size := len(values)
 	float := compress.NewFloat()
 	in := util.Float64Slice2byte(values)
@@ -54,6 +67,7 @@ func codecFloatBlock(t *testing.T, values []float64) {
 func TestCodecFloatBlock_one(t *testing.T) {
 	var values = []float64{0}
 	codecFloatBlock(t, values)
+	codecFloatBlockWithMLF(t, values)
 }
 
 func TestCodecFloatBlock_rand(t *testing.T) {
@@ -62,6 +76,7 @@ func TestCodecFloatBlock_rand(t *testing.T) {
 		values = append(values, rand.Float64()*1000)
 	}
 	codecFloatBlock(t, values)
+	codecFloatBlockWithMLF(t, values)
 }
 
 func TestCodecFloatBlock_small(t *testing.T) {
@@ -70,6 +85,7 @@ func TestCodecFloatBlock_small(t *testing.T) {
 		values = append(values, float64(rand.Int63()%10000)/100)
 	}
 	codecFloatBlock(t, values)
+	codecFloatBlockWithMLF(t, values)
 }
 
 func TestCodecFloatBlock_same(t *testing.T) {
@@ -80,11 +96,13 @@ func TestCodecFloatBlock_same(t *testing.T) {
 		values = append(values, v)
 	}
 	codecFloatBlock(t, values)
+	codecFloatBlockWithMLF(t, values)
 
 	for i := 0; i < 1000; i++ {
 		values[i] = 0
 	}
 	codecFloatBlock(t, values)
+	codecFloatBlockWithMLF(t, values)
 }
 
 func TestCodecFloatBlock_int(t *testing.T) {
@@ -93,6 +111,7 @@ func TestCodecFloatBlock_int(t *testing.T) {
 		values = append(values, float64(rand.Int31n(100)))
 	}
 	codecFloatBlock(t, values)
+	codecFloatBlockWithMLF(t, values)
 }
 
 func TestCodecFloatBlock_smallDelta(t *testing.T) {
@@ -101,6 +120,7 @@ func TestCodecFloatBlock_smallDelta(t *testing.T) {
 		values = append(values, 2+0.1+rand.Float64()/10)
 	}
 	codecFloatBlock(t, values)
+	codecFloatBlockWithMLF(t, values)
 }
 
 func TestCodecFloatBlock_RLE(t *testing.T) {
@@ -109,6 +129,7 @@ func TestCodecFloatBlock_RLE(t *testing.T) {
 		values = append(values, float64(i/180))
 	}
 	codecFloatBlock(t, values)
+	codecFloatBlockWithMLF(t, values)
 }
 
 func TestCodecFloatBlock_Snappy(t *testing.T) {
@@ -126,6 +147,7 @@ func TestCodecFloatBlock_NaN(t *testing.T) {
 	}
 	values[1] = math.NaN()
 	codecFloatBlock(t, values)
+	codecFloatBlockWithMLF(t, values)
 }
 
 func TestCodecFloatBlock_abnormal(t *testing.T) {

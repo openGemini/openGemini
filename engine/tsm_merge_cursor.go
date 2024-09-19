@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package engine
 
@@ -96,14 +94,14 @@ func newTsmMergeCursor(ctx *idKeyCursorContext, sid uint64, filter influxql.Expr
 	return c, nil
 }
 
-func AddLocationsWithInit(l *immutable.LocationCursor, files immutable.TableReaders, ctx *idKeyCursorContext, sid uint64) error {
-	chunkMetaContext := immutable.NewChunkMetaContext(ctx.schema)
-	defer chunkMetaContext.Release()
-
+func AddLocations(l *immutable.LocationCursor, files immutable.TableReaders, ctx *idKeyCursorContext, sid uint64, metaCtx *immutable.ChunkMetaContext) error {
 	for _, r := range files {
+		if ctx.IsAborted() {
+			return nil
+		}
 		r.RefFileReader()
 		loc := immutable.NewLocation(r, ctx.decs)
-		contains, err := loc.Contains(sid, ctx.tr, chunkMetaContext)
+		contains, err := loc.Contains(sid, ctx.tr, metaCtx)
 		if err != nil {
 			r.UnrefFileReader()
 			return err
@@ -113,6 +111,20 @@ func AddLocationsWithInit(l *immutable.LocationCursor, files immutable.TableRead
 		} else {
 			r.UnrefFileReader()
 		}
+	}
+	return nil
+}
+
+func AddLocationsWithInit(l *immutable.LocationCursor, files immutable.TableReaders, ctx *idKeyCursorContext, sid uint64) error {
+	var chunkMetaContext *immutable.ChunkMetaContext
+	if ctx.querySchema.Options().IsPromQuery() && ctx.metaContext != nil {
+		chunkMetaContext = ctx.metaContext
+	} else {
+		chunkMetaContext = immutable.NewChunkMetaContext(ctx.schema)
+		defer chunkMetaContext.Release()
+	}
+	if err := AddLocations(l, files, ctx, sid, chunkMetaContext); err != nil {
+		return err
 	}
 	return nil
 }
@@ -210,6 +222,30 @@ func AddLocationsWithFirstTime(l *immutable.LocationCursor, files immutable.Tabl
 	return firstTime, nil
 }
 
+func (c *tsmMergeCursor) ReInit(
+	sid uint64,
+	filter influxql.Expr,
+	rowFilters *[]clv.RowFilter,
+	tags *influx.PointTags,
+) (bool, error) {
+	c.init = true
+	c.filter = filter
+	c.rowFilters = rowFilters
+	c.tags = tags
+	c.sid = sid
+	c.orderRecIter.reset()
+	c.outOrderRecIter.reset()
+	c.locations.Reset()
+	c.outOfOrderLocations.Reset()
+	if err := c.AddLoc(); err != nil {
+		return false, err
+	}
+	if c.locations.Len() == 0 && c.outOfOrderLocations.Len() == 0 {
+		return false, nil
+	}
+	return true, nil
+}
+
 func (c *tsmMergeCursor) AddLoc() error {
 	var err error
 	var limitFirstTime int64
@@ -243,6 +279,7 @@ func (c *tsmMergeCursor) AddLoc() error {
 
 func (c *tsmMergeCursor) readData(orderLoc bool, dst *record.Record) (*record.Record, error) {
 	c.ctx.decs.Set(c.ctx.decs.Ascending, c.ctx.tr, c.onlyFirstOrLast, c.ops)
+	c.ctx.decs.SetClosedSignal(c.ctx.closedSignal)
 	filterOpts := immutable.NewFilterOpts(c.filter, &c.ctx.filterOption, c.tags, c.rowFilters)
 	if orderLoc {
 		return c.locations.ReadData(filterOpts, dst, nil, nil)
@@ -278,6 +315,10 @@ func (c *tsmMergeCursor) SetOps(ops []*comm.CallOption) {
 }
 
 func (c *tsmMergeCursor) Next() (*record.Record, error) {
+	if c.ctx.IsAborted() {
+		return nil, nil
+	}
+
 	if !c.init && c.lazyInit {
 		c.locations = immutable.NewLocationCursor(len(c.ctx.readers.Orders))
 		c.outOfOrderLocations = immutable.NewLocationCursor(len(c.ctx.readers.OutOfOrders))

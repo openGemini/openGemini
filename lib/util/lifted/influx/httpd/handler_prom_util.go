@@ -1,18 +1,16 @@
-/*
-Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package httpd
 
@@ -62,17 +60,21 @@ const (
 type status string
 
 const (
-	statusSuccess status = "success"
-	statusError   status = "error"
+	StatusSuccess status = "success"
+	StatusError   status = "error"
 
 	// Non-standard status code (originally introduced by nginx) for the case when a client closes
 	// the connection while the server is still processing the request.
-	statusClientClosedConnection = 499
+	StatusClientClosedConnection = 499
 )
 
+func isPromReportedError(err error) bool {
+	return strings.Contains(err.Error(), `label_join`)
+}
+
 var (
-	minTime = time.Unix(math.MinInt64/1000+62135596801, 0).UTC()
-	maxTime = time.Unix(math.MaxInt64/1000-62135596801, 999999999).UTC()
+	minTime = time.Unix(0, influxql.MinTime).UTC()
+	maxTime = time.Unix(0, influxql.MaxTime).UTC()
 
 	minTimeFormatted = minTime.Format(time.RFC3339Nano)
 	maxTimeFormatted = maxTime.Format(time.RFC3339Nano)
@@ -142,11 +144,11 @@ func invalidParamError(w http.ResponseWriter, err error, parameter string) {
 	}, nil)
 }
 
-func (h *Handler) getPromResult(w http.ResponseWriter, stmtID2Result map[int]*query.Result, expr parser.Expr, cmd promql2influxql.PromCommand, dropMetric bool, removeTableName bool) (PromResponse, bool) {
-	r := &promql2influxql.Receiver{DropMetric: dropMetric, RemoveTableName: removeTableName}
+func (h *Handler) getPromResult(w http.ResponseWriter, stmtID2Result map[int]*query.Result, expr parser.Expr, cmd promql2influxql.PromCommand, dropMetric, removeTableName, duplicateResult bool) (PromResponse, bool) {
+	r := &promql2influxql.Receiver{PromCommand: cmd, DropMetric: dropMetric, RemoveTableName: removeTableName, DuplicateResult: duplicateResult}
 	resp := PromResponse{Data: &promql2influxql.PromResult{}, Status: "success"}
 	if len(stmtID2Result) > 0 {
-		if stmtID2Result[0].Err != nil {
+		if stmtID2Result[0].Err != nil && !isPromReportedError(stmtID2Result[0].Err) {
 			resp.Data = getEmptyResponse(cmd)
 		} else {
 			data, err := r.InfluxResultToPromQLValue(stmtID2Result[0], expr, cmd)
@@ -161,16 +163,17 @@ func (h *Handler) getPromResult(w http.ResponseWriter, stmtID2Result map[int]*qu
 	return resp, true
 }
 
-func (h *Handler) getRangePromResultForEmptySeries(expr influxql.Expr, promCommand *promql2influxql.PromCommand, valuer *influxql.ValuerEval, timeValuer *PromTimeValuer, typ parser.ValueType) (*PromResponse, bool) {
-	vector := make(promql.Vector, 0)
+func (h *Handler) getRangePromResultForEmptySeries(expr influxql.Expr, promCommand *promql2influxql.PromCommand, valuer *influxql.ValuerEval, timeValuer *PromTimeValuer) (*PromResponse, bool) {
+	points := make([]promql.Point, 0)
 	start, end, step := GetRangeTimeForEmptySeriesResult(promCommand)
 	for s := start; s <= end; s += step {
 		timeValuer.tmpTime = s
 		value := valuer.Eval(expr)
-		Add2EmptySeriesResult(s, value.(float64), &vector)
+		points = append(points, promql.Point{T: s, V: value.(float64)})
 	}
+	matrix := promql.Matrix{promql.Series{Metric: labels.Labels{}, Points: points}}
 	resp := &PromResponse{Status: "success"}
-	resp.Data = &promql2influxql.PromResult{Result: vector, ResultType: string(typ)}
+	resp.Data = &promql2influxql.PromResult{Result: matrix, ResultType: string(parser.ValueTypeMatrix)}
 	return resp, true
 }
 
@@ -193,9 +196,9 @@ func Add2EmptySeriesResult(t int64, val float64, vector *promql.Vector) {
 func GetRangeTimeForEmptySeriesResult(promComand *promql2influxql.PromCommand) (int64, int64, int64) {
 	if promComand.Start != nil {
 		if promComand.End != nil {
-			return promComand.Start.UnixMilli(), promComand.End.UnixMilli(), promComand.Step.Microseconds()
+			return promComand.Start.UnixMilli(), promComand.End.UnixMilli(), promComand.Step.Milliseconds()
 		} else {
-			return promComand.Start.UnixMilli(), time.Now().UnixMilli(), promComand.Step.Microseconds()
+			return promComand.Start.UnixMilli(), time.Now().UnixMilli(), promComand.Step.Milliseconds()
 		}
 	} else {
 		if promComand.End != nil {
@@ -224,8 +227,8 @@ func getEmptyResponse(cmd promql2influxql.PromCommand) *promql2influxql.PromResu
 }
 
 func respondError(w http.ResponseWriter, apiErr *apiError, data interface{}) {
-	b, err := json.Marshal(&PromResponse{
-		Status:    statusError,
+	b, err := json2.Marshal(&PromResponse{
+		Status:    StatusError,
 		ErrorType: apiErr.typ,
 		Error:     apiErr.err.Error(),
 		Data:      data,
@@ -243,7 +246,7 @@ func respondError(w http.ResponseWriter, apiErr *apiError, data interface{}) {
 	case errorExec:
 		code = http.StatusUnprocessableEntity
 	case errorCanceled:
-		code = statusClientClosedConnection
+		code = StatusClientClosedConnection
 	case errorTimeout:
 		code = http.StatusServiceUnavailable
 	case errorInternal:
@@ -291,7 +294,7 @@ func (r PromResponse) MarshalJSON() ([]byte, error) {
 		o.Error = r.Error
 	}
 
-	return json.Marshal(&o)
+	return json2.Marshal(&o)
 }
 
 // UnmarshalJSON decodes the data into the Response struct.
@@ -303,7 +306,7 @@ func (r *PromResponse) UnmarshalJSON(b []byte) error {
 		Error     string      `json:"error,omitempty"`
 	}
 
-	err := json.Unmarshal(b, &o)
+	err := json2.Unmarshal(b, &o)
 	if err != nil {
 		return err
 	}
@@ -559,7 +562,7 @@ func getSeriesQuery(r *http.Request, w http.ResponseWriter, mst string) (q *infl
 
 	nodes := transpileToStat(r, w, promCommand)
 	if nodes == nil {
-		return
+		return nil, false
 	}
 	showSeriesStatement, ok := nodes.(*influxql.ShowSeriesStatement)
 	if !ok {

@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package engine
 
@@ -21,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/openGemini/openGemini/lib/backup"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/memory"
 	"github.com/openGemini/openGemini/lib/metaclient"
@@ -188,6 +187,31 @@ func (e *Engine) processReq(req *netstorage.SysCtrlRequest) (map[string]string, 
 		}
 		syscontrol.SetUpperMemUsePct(upper)
 		return nil, nil
+	case syscontrol.Backup:
+		params := req.Param()
+		backupPath := params[backup.BackupPath]
+		if backupPath == "" {
+			err := fmt.Errorf("invalid parameter %s", backupPath)
+			return nil, err
+		}
+		isRemote := params[backup.IsRemote] == "true"
+		isInc := params[backup.IsInc] == "true"
+		onlyBackupMater := params[backup.OnlyBackupMaster] == "true"
+
+		b := &Backup{
+			IsInc:           isInc,
+			IsRemote:        isRemote,
+			BackupPath:      backupPath,
+			OnlyBackupMater: onlyBackupMater,
+			Engine:          e,
+		}
+		if err := b.RunBackupData(); err != nil {
+			log.Error("run backup error", zap.Error(err))
+			return nil, err
+		}
+
+		return nil, nil
+
 	default:
 		return nil, fmt.Errorf("unknown sys cmd %v", req.Mod())
 	}

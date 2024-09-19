@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package config
 
@@ -49,7 +47,7 @@ const (
 	DefaultIngesterAddress = "127.0.0.1:8400"
 	DefaultSelectAddress   = "127.0.0.1:8401"
 
-	DefaultInterruptSqlMemPct = 90
+	DefaultInterruptSqlMemPct = 85
 
 	CompressAlgoLZ4    = "lz4"
 	CompressAlgoSnappy = "snappy"
@@ -272,9 +270,10 @@ type Store struct {
 	InterruptSqlMemPct   int           `toml:"interrupt-sql-mem-pct"`
 	ProactiveMgrInterval toml.Duration `toml:"proactive-manager-interval"`
 
-	TemporaryIndexCompressMode int  `toml:"temporary-index-compress-mode"`
-	ChunkMetaCompressMode      int  `toml:"chunk-meta-compress-mode"`
-	IndexReadCachePersistent   bool `toml:"index-read-cache-persistent"`
+	TemporaryIndexCompressMode int    `toml:"temporary-index-compress-mode"`
+	ChunkMetaCompressMode      int    `toml:"chunk-meta-compress-mode"`
+	IndexReadCachePersistent   bool   `toml:"index-read-cache-persistent"`
+	FloatCompressAlgorithm     string `toml:"float-compress-algorithm"`
 
 	StringCompressAlgo string `toml:"string-compress-algo"`
 	// Ordered data and unordered data are not distinguished. All data is processed as unordered data.
@@ -286,6 +285,11 @@ type Store struct {
 
 	// for hierarchical storage
 	SkipRegisterColdShard bool `toml:"skip-register-cold-shard"`
+
+	// the level of the TSSP file to be converted to a Parquet. 0: not convert
+	TSSPToParquetLevel uint16 `toml:"tssp-to-parquet-level"`
+
+	AvailabilityZone string `toml:"availability-zone"`
 }
 
 // NewStore returns the default configuration for tsdb.
@@ -343,6 +347,9 @@ func (c *Store) Corrector(cpuNum int, memorySize toml.Size) {
 	}
 	defaultShardMutableSizeLimit := toml.Size(uint64Limit(8*MB, 1*GB, uint64(memorySize/256)))
 	defaultNodeMutableSizeLimit := toml.Size(uint64Limit(32*MB, 16*GB, uint64(memorySize/16)))
+	if IsLogKeeper() {
+		defaultNodeMutableSizeLimit = toml.Size(uint64Limit(32*MB, 16*GB, uint64(memorySize/8)))
+	}
 
 	items := [][2]*toml.Size{
 		{&c.MemTable.ShardMutableSizeLimit, &defaultShardMutableSizeLimit},
@@ -509,4 +516,8 @@ func defaultMerge() Merge {
 		MinInterval:            toml.Duration(defaultMinInterval),
 		MaxMergeSelfLevel:      defaultMaxMergeSelfLevel,
 	}
+}
+
+func PreFullCompactLevel() uint16 {
+	return GetStoreConfig().TSSPToParquetLevel
 }

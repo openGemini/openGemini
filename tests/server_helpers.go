@@ -17,6 +17,7 @@ import (
 	_ "path/filepath"
 	"regexp"
 	_ "runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -26,8 +27,10 @@ import (
 	tssql "github.com/openGemini/openGemini/app/ts-sql/sql"
 	"github.com/openGemini/openGemini/lib/config"
 	_ "github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/httpd"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/prometheus/prometheus/pkg/labels"
 )
 
 var verboseServerLogs bool
@@ -162,7 +165,7 @@ func (s *RemoteServer) DropDatabase(db string) error {
 
 // Reset attempts to remove all database state by dropping everything
 func (s *RemoteServer) Reset() error {
-	stmt := fmt.Sprintf("SHOW+DATABASES")
+	stmt := "SHOW+DATABASES"
 	results, err := s.HTTPPost(s.URL()+"/query?q="+stmt, nil)
 	if err != nil {
 		return err
@@ -213,7 +216,7 @@ func (s *RemoteServer) CheckDropDatabases(dbs []string) error {
 }
 
 func (s *RemoteServer) ContainDatabase(name string) bool {
-	stmt := fmt.Sprintf("SHOW+DATABASES")
+	stmt := "SHOW+DATABASES"
 	results, err := s.HTTPPost(s.URL()+"/query?q="+stmt, nil)
 	if err != nil {
 		return false
@@ -719,6 +722,9 @@ type Query struct {
 	path     string
 	ordered  bool
 	fail     bool
+
+	promExp  map[uint64]*PromExp
+	evalTime int64
 }
 
 // Execute runs the command and returns an err if it fails
@@ -760,6 +766,135 @@ func (q *Query) success() bool {
 		FailCount++
 	}
 	return q.exp == q.act
+}
+
+func (q *Query) promSuccess() bool {
+	var promRes httpd.PromResponse
+	json.Unmarshal([]byte(q.act), &promRes)
+	data, ok := promRes.Data.(map[string]interface{})
+	if !ok {
+		return false
+	}
+	resultType, exit := data["resultType"]
+	if !exit {
+		return false
+	}
+	switch resultType {
+	case "vector":
+		return checkPromVector(q.promExp, q.act)
+	case "matrix":
+		return checkPromMatrix(q.promExp, q.act, q.evalTime)
+	case "scalar":
+		return checkPromScalar(q.promExp, q.act)
+	}
+
+	return true
+}
+
+func parseMetric(str string) uint64 {
+	metricRe, _ := regexp.Compile(`"([^\{\}"]+)":"([^\{\}"]+)"`)
+	label := metricRe.FindAllStringSubmatch(str, -1)
+
+	metric := make(labels.Labels, 0)
+	for _, m := range label {
+		if len(m) < 3 {
+			continue
+		}
+		metric = append(metric, labels.Label{
+			Name:  m[1],
+			Value: m[2],
+		})
+	}
+	h := metric.Hash()
+	return h
+}
+
+func checkPromVector(exps map[uint64]*PromExp, act string) bool {
+
+	re, _ := regexp.Compile(`"metric":\{([^\{\}]*)\},"value":\[([^\[\]]*),"([^\[\]]*)"\]`)
+	series := re.FindAllStringSubmatch(act, -1)
+
+	if len(series) != len(exps) {
+		return false
+	}
+
+	for _, s := range series {
+		if len(s) < 4 {
+			return false
+		}
+		h := parseMetric(s[1])
+		exp, ok := exps[h]
+		if !ok {
+			return false
+		}
+
+		actV, _ := strconv.ParseFloat(s[3], 64)
+		if !almostEqual(actV, exp.Value.Value) {
+			return false
+		}
+	}
+	return true
+}
+
+func checkPromMatrix(exps map[uint64]*PromExp, act string, evalTime int64) bool {
+	re, _ := regexp.Compile(`"metric":\{([^\{\}]*)\},"values":\[(.*?\])\]`)
+	series := re.FindAllStringSubmatch(act, -1)
+
+	if len(series) != len(exps) {
+		return false
+	}
+	re2, _ := regexp.Compile(`\[([^\[\]]*),"([^\[\]]*)"\]`)
+	for _, s := range series {
+		if len(s) < 3 {
+			return false
+		}
+		h := parseMetric(s[1])
+		exp, ok := exps[h]
+		if !ok {
+			return false
+		}
+		data := re2.FindAllStringSubmatch(s[2], -1)
+
+		for _, m := range data {
+			if len(m) < 3 {
+				return false
+			}
+			actV, _ := strconv.ParseFloat(m[2], 64)
+			if m[1] == strconv.FormatInt(evalTime, 10) && !almostEqual(actV, exp.Value.Value) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func checkPromScalar(exps map[uint64]*PromExp, act string) bool {
+	re, _ := regexp.Compile(`"result":\[([^\[\]]*),"([^\[\]]*)"\]`)
+	series := re.FindAllStringSubmatch(act, -1)
+
+	if len(series) != len(exps) {
+		return false
+	}
+
+	for _, s := range series {
+		if len(s) < 3 {
+			return false
+		}
+		actV, _ := strconv.ParseFloat(s[2], 64)
+		if !almostEqual(actV, exps[uint64(0)].Value.Value) {
+			return false
+		}
+	}
+	return true
+}
+
+func (q *Query) showTagValueDisorderSuc() bool {
+	if len(q.exp) == len(q.act) {
+		SuccessCount++
+	} else {
+		FailCount++
+	}
+	return len(q.exp) == len(q.act)
 }
 
 func (q *Query) isSuccess() bool {

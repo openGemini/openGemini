@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package executor
 
@@ -180,6 +178,7 @@ func (p *preparedStatement) BuildLogicalPlan(ctx context.Context) (hybridqp.Quer
 
 	schema := NewQuerySchemaWithJoinCase(p.stmt.Fields, p.stmt.Sources, p.stmt.ColumnNames(), opt, p.stmt.JoinSource,
 		p.stmt.UnnestSource, p.stmt.SortFields)
+	schema.SetPromCalls(p.stmt.PromSubCalls)
 
 	HaveOnlyCSStore := schema.Sources().HaveOnlyCSStore()
 	planType := GetPlanType(schema, p.stmt)
@@ -251,7 +250,7 @@ func (p *preparedStatement) Select(ctx context.Context) (hybridqp.Executor, erro
 		executorBuilder.Analyze(span)
 	}
 	// ts-server + tsEngine remove node_exchange
-	if localStorageForQuery != nil {
+	if localStorageForQuery != nil && req != nil {
 		executorBuilder.(*ExecutorBuilder).SetInfosAndTraits(req.([]*MultiMstReqs), ctx)
 	}
 	return executorBuilder.Build(best)
@@ -400,11 +399,7 @@ func BuildBinOpQueryPlan(ctx context.Context, qc query.LogicalPlanCreator, stmt 
 
 	for i := range stmt.Sources {
 		source := influxql.CloneSource(stmt.Sources[i])
-		optSource := influxql.Sources{source}
-		childOpt := schema.opt.(*query.ProcessorOptions).Clone()
-		childOpt.UpdateSources(optSource)
-		s := NewQuerySchemaWithSources(stmt.Fields, influxql.Sources{stmt.Sources[i]}, stmt.ColumnNames(), childOpt, nil)
-		child, err := BuildSources(ctx, qc, influxql.Sources{stmt.Sources[i]}, s, true)
+		child, err := BuildSources(ctx, qc, influxql.Sources{stmt.Sources[i]}, schema, true)
 		if err != nil {
 			return nil, err
 		}
@@ -417,7 +412,16 @@ func BuildBinOpQueryPlan(ctx context.Context, qc query.LogicalPlanCreator, stmt 
 	if len(binOpNodes) == 0 {
 		return nil, nil
 	}
-	binop := NewLogicalBinOp(binOpNodes[0], binOpNodes[1], binOps[0], schema)
+	var binop hybridqp.QueryNode
+	if binOps[0].NilMst == influxql.NoNilMst {
+		binop = NewLogicalBinOp(binOpNodes[0], binOpNodes[1], binOps[0], schema)
+	} else if binOps[0].NilMst == influxql.LNilMst {
+		binop = NewLogicalBinOp(nil, binOpNodes[0], binOps[0], schema)
+	} else {
+		binop = NewLogicalBinOp(binOpNodes[0], nil, binOps[0], schema)
+	}
+
+	schema.Options().SetBinOp(true)
 	if schema.HasCall() {
 		builder := NewLogicalPlanBuilderImpl(schema)
 		builder.Push(binop)
@@ -442,12 +446,115 @@ func hasDistinctSelectorCall(s *QuerySchema) (bool, bool) {
 	return hasDistinct, hasSelector
 }
 
+// whether subDims is subset of wholeDims
+func subDims(subDims, wholeDims []string) bool {
+	if len(subDims) > len(wholeDims) {
+		return false
+	}
+	find := false
+	for _, subD := range subDims {
+		find = false
+		for _, wholeD := range wholeDims {
+			if subD == wholeD {
+				find = true
+				break
+			}
+		}
+		if !find {
+			return false
+		}
+	}
+	return true
+}
+
+// whether suffixDims if suffix of wholeDims
+func suffixDims(suffixDims, wholeDims []string) bool {
+	i, j := len(suffixDims)-1, len(wholeDims)-1
+	for i >= 0 && j >= 0 {
+		if suffixDims[i] == wholeDims[j] {
+			i--
+			j--
+		} else {
+			return false
+		}
+	}
+	return i < 0
+}
+
+func prefixDims(prefixDims, wholeDims []string) bool {
+	i, j := 0, 0
+	for i < len(prefixDims) && j < len(wholeDims) {
+		if prefixDims[i] == wholeDims[j] {
+			i++
+			j++
+		} else {
+			return false
+		}
+	}
+	return i >= len(prefixDims)
+}
+
+func sameDims(dims1, dims2 []string) bool {
+	if len(dims1) != len(dims2) {
+		return false
+	}
+	for i := 0; i < len(dims1); i++ {
+		if dims1[i] != dims2[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// whether  upperOptDims is prefix of lowerOptDims: streamAgg: return true; hashAgg: return false
+func prefixDimsOfOpts(upperOpt, lowerOpt hybridqp.Options) bool {
+	upperDims, lowerDims := upperOpt.GetOptDimension(), lowerOpt.GetOptDimension()
+	if upperOpt.IsGroupByAllDims() {
+		return true
+	}
+	if upperOpt.IsWithout() {
+		if lowerOpt.IsGroupByAllDims() { // lower is call(xx)
+			return len(upperDims) == 0 // without() == groupByAll -> both is groupByAll return true
+		}
+		if lowerOpt.IsWithout() {
+			return subDims(upperDims, lowerDims)
+		}
+		return suffixDims(upperDims, lowerDims)
+	}
+	if lowerOpt.IsGroupByAllDims() && len(upperOpt.GetDimensions()) > 0 {
+		return false
+	}
+	if lowerOpt.IsWithout() {
+		return sameDims(upperDims, lowerDims)
+	}
+	return prefixDims(upperDims, lowerDims)
+}
+
+func isBuildHashAgg(options hybridqp.Options) bool {
+	lowerOpt := options.GetLowerOpt()
+	if !options.IsPromQuery() || lowerOpt == nil {
+		return false
+	}
+	processorOpt, ok := lowerOpt.(*query.ProcessorOptions)
+	if !ok || processorOpt == nil {
+		return false
+	}
+	if options.GetBinop() || !prefixDimsOfOpts(options, processorOpt) || processorOpt.IsCountValues {
+		return true
+	}
+	return false
+}
+
 func buildAggNode(builder *LogicalPlanBuilderImpl, schema hybridqp.Catalog, hasSlidingWindow bool) {
 	if hasSlidingWindow && (!schema.CanAggPushDown() ||
 		(schema.CanAggPushDown() && sysconfig.GetEnableSlidingWindowPushUp() == sysconfig.OnSlidingWindowPushUp) || schema.HasSubQuery()) {
 		builder.SlidingWindow()
 	} else {
 		if !schema.Options().IsRangeVectorSelector() || schema.HasPromNestedCall() {
+			if isBuildHashAgg(schema.Options()) {
+				builder.HashAgg()
+				return
+			}
 			builder.Aggregate()
 		}
 	}
@@ -483,6 +590,10 @@ func buildNodes(builder *LogicalPlanBuilderImpl, schema hybridqp.Catalog, s *Que
 
 	builder.Project()
 
+	for _, call := range s.PromSubCalls {
+		builder.PromSubquery(call)
+	}
+
 	if schema.HasBlankRowCall() {
 		builder.FilterBlank()
 	}
@@ -503,6 +614,9 @@ func buildNodes(builder *LogicalPlanBuilderImpl, schema hybridqp.Catalog, s *Que
 
 	// Apply limit & offset.
 	if schema.HasLimit() {
+		if schema.Options().IsExcept() {
+			return
+		}
 		limitType := schema.LimitType()
 		limit, offset := schema.LimitAndOffset()
 		builder.Limit(LimitTransformParameters{
@@ -526,7 +640,7 @@ func buildQueryPlan(ctx context.Context, stmt *influxql.SelectStatement, qc quer
 		sp, schema, err = BuildInConditionPlan(ctx, qc, stmt, s)
 	} else if schema.GetJoinCaseCount() > 0 && len(stmt.Sources) == 2 {
 		sp, err = BuildFullJoinQueryPlan(ctx, qc, stmt, s)
-	} else if len(stmt.BinOpSource) > 0 && len(stmt.Sources) == 2 {
+	} else if len(stmt.BinOpSource) > 0 {
 		sp, err = BuildBinOpQueryPlan(ctx, qc, stmt, s)
 	} else if stmt.Sources = qc.GetSources(stmt.Sources); len(stmt.Sources) > 1 {
 		sp, err = buildSortAppendQueryPlan(ctx, qc, stmt, s)
@@ -590,7 +704,7 @@ func BuildSources(ctx context.Context, qc query.LogicalPlanCreator, sources infl
 			qc:   qc,
 			stmt: source.Statement,
 		}
-		subQueryPlan, err := subQueryBuilder.Build(ctx, *schema.Options().(*query.ProcessorOptions))
+		subQueryPlan, err := subQueryBuilder.Build(ctx, schema.Options().(*query.ProcessorOptions))
 		if err != nil {
 			return nil, err
 		}

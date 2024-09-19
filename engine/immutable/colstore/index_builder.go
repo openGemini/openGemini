@@ -1,23 +1,20 @@
-/*
-Copyright 2023 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2023 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package colstore
 
 import (
-	"hash/crc32"
 	"io"
 	"os"
 
@@ -137,16 +134,8 @@ func (b *IndexBuilder) WriteDetachedData(rec *record.Record, tcLocation int8) er
 
 func (b *IndexBuilder) WriteDetachedMeta(startId, endId uint64, offset, size uint32, fd fileops.File) error {
 	b.reserveMeta()
-	pos := uint32(len(b.meta))
-	b.meta = numberenc.MarshalUint32Append(b.meta, 0) // reserve crc32
-	b.meta = numberenc.MarshalUint64Append(b.meta, startId)
-	b.meta = numberenc.MarshalUint64Append(b.meta, endId)
-	b.meta = numberenc.MarshalUint32Append(b.meta, offset)
-	b.meta = numberenc.MarshalUint32Append(b.meta, size)
-	b.meta = append(b.meta, b.colsOffset...)
-	crc := crc32.ChecksumIEEE(b.meta[pos+crcSize:])
-	numberenc.MarshalUint32Copy(b.meta[pos:pos+crcSize], crc)
-
+	// marshal primary key metablock
+	b.meta = MarshalPkMetaBlock(startId, endId, offset, size, b.meta, b.colsOffset)
 	//init encodeChunk writer
 	if b.writer != nil {
 		_ = b.writer.Close()
@@ -157,14 +146,11 @@ func (b *IndexBuilder) WriteDetachedMeta(startId, endId uint64, offset, size uin
 	var num int
 	var err error
 	if num, err = b.writer.WriteData(b.meta); err != nil {
-		return err
-	}
-
-	if err != nil {
 		err = errno.NewError(errno.WriteFileFailed, err)
 		b.log.Error("write pkIndex meta fail", zap.Error(err))
 		return err
 	}
+
 	if num != len(b.meta) {
 		b.log.Error("write pkIndex meta fail", zap.String("file", b.fd.Name()),
 			zap.Ints("size", []int{len(b.encodeChunk), num}))

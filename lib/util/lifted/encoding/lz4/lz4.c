@@ -1,4 +1,4 @@
-//go:build linux
+//go:build linux && amd64
 /*
    LZ4 - Fast LZ compression algorithm
    Copyright (C) 2011-2023, Yann Collet.

@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package engine
 
@@ -38,10 +36,12 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
+	assert2 "github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -83,7 +83,7 @@ func Test_PreAggregation_FullData_SingleCall(t *testing.T) {
 		t.Fatal(err)
 	}
 	sh.ForceFlush()
-	time.Sleep(time.Second * 1)
+	sh.waitSnapshot()
 
 	shardGroup := &mockShardGroup{
 		sh:     sh,
@@ -1905,7 +1905,7 @@ func Test_PreAggregation_MissingData_SingleCall(t *testing.T) {
 		t.Fatal(err)
 	}
 	sh.ForceFlush()
-	time.Sleep(time.Second * 2)
+	sh.waitSnapshot()
 
 	shardGroup := &mockShardGroup{
 		sh:     sh,
@@ -3415,14 +3415,14 @@ func Test_FieldFilter_NoPreAgg_SingleCall(t *testing.T) {
 		t.Fatal(err)
 	}
 	sh.ForceFlush()
-	time.Sleep(time.Second * 1)
+	sh.waitSnapshot()
 	startTimeMemTable := mustParseTime(time.RFC3339Nano, "2020-01-01T00:00:00Z")
 	ptsOut, minTOut, maxTOut := GenDataRecord(msNames, 5, 1000, time.Millisecond*100, startTimeMemTable, false, false, true)
 	if err := sh.WriteRows(ptsOut, nil); err != nil {
 		t.Fatal(err)
 	}
 	sh.ForceFlush()
-	time.Sleep(time.Second * 1)
+	sh.waitSnapshot()
 	var minFalseVOut int
 	first := true
 	for _, value := range ptsOut {
@@ -3588,7 +3588,7 @@ func Run_MissingData_SingCall(t *testing.T, isFlush bool) {
 		t.Fatal(err)
 	}
 	sh.ForceFlush()
-	time.Sleep(time.Second * 1)
+	sh.waitSnapshot()
 	startTimeMemTable := mustParseTime(time.RFC3339Nano, "2020-01-01T00:00:00Z")
 	ptsOut, minTOut, maxTOut := GenDataRecord(msNames, 5, 1000, time.Millisecond*100, startTimeMemTable, false, false, true)
 	if err := sh.WriteRows(ptsOut, nil); err != nil {
@@ -3596,7 +3596,7 @@ func Run_MissingData_SingCall(t *testing.T, isFlush bool) {
 	}
 	if isFlush {
 		sh.ForceFlush()
-		time.Sleep(time.Second * 1)
+		sh.waitSnapshot()
 	} else {
 		idx, ok := sh.indexBuilder.GetPrimaryIndex().(*tsi.MergeSetIndex)
 		if !ok {
@@ -5148,7 +5148,7 @@ func Test_PreAggregation_Memtable_After_Order_SingCall(t *testing.T) {
 		t.Fatal(err)
 	}
 	sh.ForceFlush()
-	time.Sleep(time.Second * 1)
+	sh.waitSnapshot()
 
 	startTimeMemTable := mustParseTime(time.RFC3339Nano, "2021-02-01T00:00:00Z")
 	ptsOut, minTOut, maxTOut := GenDataRecord(msNames, 5, 1000, time.Millisecond*100, startTimeMemTable, false, false, true)
@@ -6617,7 +6617,7 @@ func Test_PreAggregation_MemTableData_SingleCall(t *testing.T) {
 		t.Fatal(err)
 	}
 	sh.ForceFlush()
-	time.Sleep(time.Second * 1)
+	sh.waitSnapshot()
 
 	startTimeMemTable := mustParseTime(time.RFC3339Nano, "2021-01-01T00:00:00Z")
 	ptsOut, minTOut, maxTout := GenDataRecord(msNames, 5, 1000, time.Millisecond*100, startTimeMemTable, true, false, true)
@@ -8218,7 +8218,7 @@ func Test_PreAggregation_FullData_MultiCalls(t *testing.T) {
 		t.Fatal(err)
 	}
 	sh.ForceFlush()
-	time.Sleep(time.Second * 2)
+	sh.waitSnapshot()
 
 	shardGroup := &mockShardGroup{
 		sh:     sh,
@@ -8430,7 +8430,7 @@ func Test_PreAggregation_MissingData_MultiCalls(t *testing.T) {
 		t.Fatal(err)
 	}
 	sh.ForceFlush()
-	time.Sleep(time.Second * 2)
+	sh.waitSnapshot()
 
 	shardGroup := &mockShardGroup{
 		sh:     sh,
@@ -8778,7 +8778,7 @@ func TestReadLastFromPreAgg(t *testing.T) {
 		t.Fatal(err)
 	}
 	sh.ForceFlush()
-	time.Sleep(time.Second * 1)
+	sh.waitSnapshot()
 
 	shardGroup := &mockShardGroup{
 		sh:     sh,
@@ -8928,14 +8928,14 @@ func Test_CreateLogicalPlan(t *testing.T) {
 		t.Fatal(err)
 	}
 	sh.ForceFlush()
-	time.Sleep(time.Second * 1)
+	sh.waitSnapshot()
 	startTime2 := mustParseTime(time.RFC3339Nano, "2021-01-01T12:00:00Z")
 	pts2, _, _ := GenDataRecord(msNames, 5, 2000, time.Millisecond*10, startTime2, true, false, true)
 	if err := sh.WriteRows(pts2, nil); err != nil {
 		t.Fatal(err)
 	}
 	sh.ForceFlush()
-	time.Sleep(time.Second * 1)
+	sh.waitSnapshot()
 
 	shardGroup := &mockShardGroup{
 		sh:     sh,
@@ -9188,4 +9188,22 @@ func TestRecTransToChunk3(t *testing.T) {
 			t.Fatal("TestRecTransToChunk2 error2")
 		}
 	}
+}
+
+func TestChunkReaderFunc(t *testing.T) {
+	r := &ChunkReader{
+		closed:       make(chan struct{}, 2),
+		closedSignal: true,
+	}
+	r.sendChunk(nil)
+	_, ok := <-r.closed
+	assert2.True(t, ok)
+	close(r.closed)
+	qStat := &statistics.StoreSlowQueryStatistics{}
+	ctx := context.Background()
+	ctx, cancel := context.WithCancel(ctx)
+	ctx = context.WithValue(ctx, query.QueryDurationKey, qStat)
+	cancel()
+	r.Output = executor.NewChunkPort(hybridqp.NewRowDataTypeImpl(influxql.VarRef{Val: "value1", Type: influxql.Float}))
+	assert2.NoError(t, r.Work(ctx))
 }

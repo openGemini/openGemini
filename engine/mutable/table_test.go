@@ -1,18 +1,16 @@
-/*
-Copyright 2023 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2023 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package mutable_test
 
@@ -135,6 +133,26 @@ func TestSplitRecordByTime(t *testing.T) {
 	rec.Column(2).AppendIntegers(1, 2, 3, 7, 8)
 	order, unOrder = mutable.SplitRecordByTime(rec, nil, 4)
 
+	record.CheckRecord(order)
+	record.CheckRecord(unOrder)
+	require.Equal(t, 2, order.RowNums())
+	require.Equal(t, 3, unOrder.RowNums())
+	require.Equal(t, 2, order.Len())
+	require.Equal(t, 2, unOrder.Len())
+}
+
+func TestSplitRecordByTime_EmptyStringColumn(t *testing.T) {
+	var order, unOrder *record.Record
+	schema := record.Schemas{
+		record.Field{Type: influx.Field_Type_String, Name: "a1"},
+		record.Field{Type: influx.Field_Type_Int, Name: record.TimeField},
+	}
+	rec := &record.Record{}
+	rec.ResetWithSchema(schema)
+	rec.Column(0).AppendStrings("", "", "", "", "")
+	rec.Column(1).AppendIntegers(1, 2, 3, 4, 5)
+
+	order, unOrder = mutable.SplitRecordByTime(rec, nil, 3)
 	record.CheckRecord(order)
 	record.CheckRecord(unOrder)
 	require.Equal(t, 2, order.RowNums())

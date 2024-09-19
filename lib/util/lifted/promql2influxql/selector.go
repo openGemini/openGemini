@@ -1,7 +1,9 @@
 package promql2influxql
 
 import (
+	"fmt"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/openGemini/openGemini/lib/errno"
@@ -10,6 +12,14 @@ import (
 	"github.com/prometheus/prometheus/pkg/timestamp"
 	"github.com/prometheus/prometheus/promql/parser"
 )
+
+func escapeSlashes(str string) string {
+	return strings.Replace(str, `/`, `\/`, -1)
+}
+
+func escapeSingleQuotes(str string) string {
+	return strings.Replace(str, `'`, `\'`, -1)
+}
 
 var reservedTags = map[string]struct{}{
 	DefaultMetricKeyLabel: {},
@@ -68,29 +78,21 @@ func GetTagCondition(v *parser.VectorSelector, haveMetricStore bool) (influxql.E
 		}
 		var cond *influxql.BinaryExpr
 		switch item.Type {
-		case labels.MatchEqual:
+		case labels.MatchEqual, labels.MatchNotEqual:
 			cond = &influxql.BinaryExpr{
 				Op: influxql.EQ,
 				LHS: &influxql.VarRef{
 					Val: item.Name,
 				},
 				RHS: &influxql.StringLiteral{
-					Val: item.Value,
+					Val: escapeSingleQuotes(item.Value),
 				},
 			}
-		case labels.MatchNotEqual:
-			cond = &influxql.BinaryExpr{
-				Op: influxql.NEQ,
-				LHS: &influxql.VarRef{
-					Val: item.Name,
-				},
-				RHS: &influxql.StringLiteral{
-					Val: item.Value,
-				},
+			if item.Type == labels.MatchNotEqual {
+				cond.Op = influxql.NEQ
 			}
 		case labels.MatchRegexp, labels.MatchNotRegexp:
-			// TODO: to support the FastRegexMatcher
-			promRegexStr := "^(?:" + item.Value + ")$"
+			promRegexStr := escapeSlashes(item.Value)
 			re, err := regexp.Compile(promRegexStr)
 			if err != nil {
 				return nil, errno.NewError(errno.ErrRegularExpSyntax, err.Error())
@@ -113,6 +115,32 @@ func GetTagCondition(v *parser.VectorSelector, haveMetricStore bool) (influxql.E
 		tagCond = CombineConditionAnd(tagCond, cond)
 	}
 	return tagCond, nil
+}
+
+// getMeasurementBySelector used to get measurement from vector selector
+func getMeasurementBySelector(v *parser.VectorSelector) (*influxql.Measurement, error) {
+	if len(v.Name) > 0 {
+		return &influxql.Measurement{Name: v.Name}, nil
+	}
+	for _, matcher := range v.LabelMatchers {
+		if _, ok := reservedTags[matcher.Name]; !ok {
+			continue
+		}
+		switch matcher.Type {
+		case labels.MatchEqual:
+			return &influxql.Measurement{Name: escapeSingleQuotes(matcher.Value)}, nil
+		case labels.MatchRegexp:
+			promRegexStr := escapeSlashes(matcher.Value)
+			re, err := regexp.Compile(promRegexStr)
+			if err != nil {
+				return nil, errno.NewError(errno.ErrRegularExpSyntax, err.Error())
+			}
+			return &influxql.Measurement{Regex: &influxql.RegexLiteral{Val: re}}, nil
+		default:
+			return nil, fmt.Errorf("invalid measurement for unsupported type: %s", matcher.Type.String())
+		}
+	}
+	return nil, fmt.Errorf("invalid measurement by vector selector")
 }
 
 // findStartEndTime return start and end time.
@@ -191,7 +219,13 @@ func (t *Transpiler) transpileVectorSelector2ConditionExpr(v *parser.VectorSelec
 		start, end := t.findStartEndTime(v)
 		timeCondition = GetTimeCondition(start, end)
 	} else {
-		start, end := timestamp.Time(t.minT), timestamp.Time(t.maxT)
+		var backTime int64
+		if t.timeRange == 0 {
+			backTime = t.LookBackDelta.Milliseconds()
+		} else {
+			backTime = t.timeRange.Milliseconds()
+		}
+		start, end := timestamp.Time(t.minT-backTime-durationMilliseconds(v.Offset)), timestamp.Time(t.maxT-durationMilliseconds(v.Offset))
 		timeCondition = GetTimeCondition(&start, &end)
 	}
 	// if the API corresponding to MetricStore is used, the __name__ field is used as the condition, otherwise, drop it.
@@ -270,9 +304,8 @@ func (t *Transpiler) transpileInstantVectorSelector(v *parser.VectorSelector) (i
 		return &showSeriesStatement, nil
 	default:
 	}
-	// metricName is used as the measurement by default.
+
 	selectStatement := &influxql.SelectStatement{
-		Sources:     []influxql.Source{&influxql.Measurement{Name: v.Name}},
 		Condition:   condition,
 		Dimensions:  []*influxql.Dimension{{Expr: &influxql.Wildcard{}}},
 		IsPromQuery: true,
@@ -280,6 +313,13 @@ func (t *Transpiler) transpileInstantVectorSelector(v *parser.VectorSelector) (i
 	// if the API corresponding to MetricStore is used, MetricStore in the API is used as the measurement.
 	if t.HaveMetricStore() {
 		selectStatement.Sources = []influxql.Source{&influxql.Measurement{Name: t.Measurement}}
+	} else {
+		// metricName is used as the measurement by default.
+		mst, err := getMeasurementBySelector(v)
+		if err != nil {
+			return nil, err
+		}
+		selectStatement.Sources = []influxql.Source{mst}
 	}
 	valueFieldKey := DefaultFieldKey
 	if len(t.ValueFieldKey) == 0 {

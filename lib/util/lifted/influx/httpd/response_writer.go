@@ -133,7 +133,7 @@ func (f *sonicJsonFormatter) WriteResponse(w io.Writer, resp Response) error {
 	var b []byte
 	var err error
 	if f.Pretty {
-		b, err = json.MarshalIndent(resp, "", "    ")
+		b, err = json2.MarshalIndent(resp, "", "    ")
 	} else {
 		b, err = sonic.Marshal(resp)
 	}
@@ -143,7 +143,7 @@ func (f *sonicJsonFormatter) WriteResponse(w io.Writer, resp Response) error {
 		// ignore any errors in this section, we already have a 'real' error to return
 		resp := Response{Err: unnestedErr}
 		if f.Pretty {
-			b, _ = json.MarshalIndent(resp, "", "    ")
+			b, _ = json2.MarshalIndent(resp, "", "    ")
 		} else {
 			b, _ = sonic.Marshal(resp)
 		}

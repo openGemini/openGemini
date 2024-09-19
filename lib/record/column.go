@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package record
 
@@ -202,6 +200,44 @@ func (cv *ColVal) PadColVal(colType, padLen int) {
 
 	cv.Len += padLen
 	cv.NilCount += padLen
+}
+
+// PadEmptyCol2AlignBitmap used to fill the empty column, including setting bitMapOffset.
+func (cv *ColVal) PadEmptyCol2AlignBitmap(colType, padLen, bitMapOffset, bitMapLen int) {
+	if padLen == 0 {
+		return
+	}
+	if colType == influx.Field_Type_String {
+		cv.Offset = make([]uint32, padLen)
+	}
+
+	// pad bitmap
+	cv.Len = padLen
+	cv.NilCount = padLen
+	cv.BitMapOffset = bitMapOffset
+	cv.Val = cv.Val[:0]
+	cv.Bitmap = cv.Bitmap[:0]
+	cv.Bitmap = reserveBytes(cv.Bitmap, bitMapLen)
+	cv.Bitmap = cv.Bitmap[:bitMapLen]
+	for i := 0; i < bitMapLen; i++ {
+		cv.Bitmap[i] = 0
+	}
+}
+
+// PadEmptyCol2FixBitmap used to fix the empty column, including setting the bitMapOffset and appending the bitMap.
+func (cv *ColVal) PadEmptyCol2FixBitmap(bitMapOffset, bitMapLen int) {
+	if bitMapOffset == 0 {
+		return
+	}
+	cv.BitMapOffset = bitMapOffset
+	oriBitMapLen := len(cv.Bitmap)
+	if oriBitMapLen >= bitMapLen {
+		return
+	}
+	cv.Bitmap = reserveBytes(cv.Bitmap, bitMapLen-oriBitMapLen)
+	for i := oriBitMapLen; i < bitMapLen; i++ {
+		cv.Bitmap[i] = 0
+	}
 }
 
 func (cv *ColVal) RowBitmap(dst []bool) []bool {

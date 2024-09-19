@@ -1,24 +1,20 @@
-/*
-Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package executor
 
-import "math"
-
-func UpdateHashInterSumSlow(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, srcRow int) {
+func UpdateHashInterSumSlow(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, srcRow int, bitmap *Bitmap) {
 	srcColumn, dstColumn := srcChunk.Column(srcCol), dstChunk.Column(dstCol)
 	isNil := srcColumn.IsNilV2(srcRow)
 	if isNil {
@@ -27,17 +23,19 @@ func UpdateHashInterSumSlow(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, sr
 	srcRow = srcColumn.GetValueIndexV2(srcRow)
 	sv := srcColumn.IntegerValue(srcRow)
 	dv := dstColumn.IntegerValue(dstRow)
+	bitmap.setByIndex(dstRow)
 	dstColumn.UpdateIntegerValueFast(sv+dv, dstRow)
 }
 
-func UpdateHashInterSumFast(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, srcRow int) {
+func UpdateHashInterSumFast(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, srcRow int, bitmap *Bitmap) {
 	dstColumn := dstChunk.Column(dstCol)
 	sv := srcChunk.Column(srcCol).IntegerValue(srcRow)
 	dv := dstColumn.IntegerValue(dstRow)
+	bitmap.setByIndex(dstRow)
 	dstColumn.UpdateIntegerValueFast(sv+dv, dstRow)
 }
 
-func UpdateHashFloatSumSlow(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, srcRow int) {
+func UpdateHashFloatSumSlow(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, srcRow int, bitmap *Bitmap) {
 	srcColumn, dstColumn := srcChunk.Column(srcCol), dstChunk.Column(dstCol)
 	isNil := srcColumn.IsNilV2(srcRow)
 	if isNil {
@@ -46,17 +44,19 @@ func UpdateHashFloatSumSlow(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, sr
 	srcRow = srcColumn.GetValueIndexV2(srcRow)
 	sv := srcColumn.FloatValue(srcRow)
 	dv := dstColumn.FloatValue(dstRow)
+	bitmap.setByIndex(dstRow)
 	dstColumn.UpdateFloatValueFast(sv+dv, dstRow)
 }
 
-func UpdateHashFloatSumFast(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, srcRow int) {
+func UpdateHashFloatSumFast(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, srcRow int, bitmap *Bitmap) {
 	dstColumn := dstChunk.Column(dstCol)
 	sv := srcChunk.Column(srcCol).FloatValue(srcRow)
 	dv := dstColumn.FloatValue(dstRow)
+	bitmap.setByIndex(dstRow)
 	dstColumn.UpdateFloatValueFast(sv+dv, dstRow)
 }
 
-func UpdateHashInterMinSlow(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, srcRow int) {
+func UpdateHashInterMinSlow(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, srcRow int, bitmap *Bitmap) {
 	srcColumn, dstColumn := srcChunk.Column(srcCol), dstChunk.Column(dstCol)
 	isNil := srcColumn.IsNilV2(srcRow)
 	if isNil {
@@ -65,6 +65,12 @@ func UpdateHashInterMinSlow(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, sr
 	srcRow = srcColumn.GetValueIndexV2(srcRow)
 	sv := srcColumn.IntegerValue(srcRow)
 	dv := dstColumn.IntegerValue(dstRow)
+	if !bitmap.containsInt(dstRow) {
+		dstColumn.UpdateIntegerValueFast(sv, dstRow)
+		bitmap.setByIndex(dstRow)
+		return
+	}
+	bitmap.setByIndex(dstRow)
 	minV := sv
 	if dv < sv {
 		minV = dv
@@ -72,10 +78,16 @@ func UpdateHashInterMinSlow(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, sr
 	dstColumn.UpdateIntegerValueFast(minV, dstRow)
 }
 
-func UpdateHashInterMinFast(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, srcRow int) {
+func UpdateHashInterMinFast(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, srcRow int, bitmap *Bitmap) {
 	dstColumn := dstChunk.Column(dstCol)
 	sv := srcChunk.Column(srcCol).IntegerValue(srcRow)
 	dv := dstColumn.IntegerValue(dstRow)
+	if !bitmap.containsInt(dstRow) {
+		dstColumn.UpdateIntegerValueFast(sv, dstRow)
+		bitmap.setByIndex(dstRow)
+		return
+	}
+	bitmap.setByIndex(dstRow)
 	minV := sv
 	if dv < sv {
 		minV = dv
@@ -83,7 +95,7 @@ func UpdateHashInterMinFast(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, sr
 	dstColumn.UpdateIntegerValueFast(minV, dstRow)
 }
 
-func UpdateHashFloatMinSlow(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, srcRow int) {
+func UpdateHashFloatMinSlow(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, srcRow int, bitmap *Bitmap) {
 	srcColumn, dstColumn := srcChunk.Column(srcCol), dstChunk.Column(dstCol)
 	isNil := srcColumn.IsNilV2(srcRow)
 	if isNil {
@@ -92,6 +104,12 @@ func UpdateHashFloatMinSlow(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, sr
 	srcRow = srcColumn.GetValueIndexV2(srcRow)
 	sv := srcColumn.FloatValue(srcRow)
 	dv := dstColumn.FloatValue(dstRow)
+	if !bitmap.containsInt(dstRow) {
+		dstColumn.UpdateFloatValueFast(sv, dstRow)
+		bitmap.setByIndex(dstRow)
+		return
+	}
+	bitmap.setByIndex(dstRow)
 	minV := sv
 	if dv < sv {
 		minV = dv
@@ -99,10 +117,16 @@ func UpdateHashFloatMinSlow(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, sr
 	dstColumn.UpdateFloatValueFast(minV, dstRow)
 }
 
-func UpdateHashFloatMinFast(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, srcRow int) {
+func UpdateHashFloatMinFast(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, srcRow int, bitmap *Bitmap) {
 	dstColumn := dstChunk.Column(dstCol)
 	sv := srcChunk.Column(srcCol).FloatValue(srcRow)
 	dv := dstColumn.FloatValue(dstRow)
+	if !bitmap.containsInt(dstRow) {
+		dstColumn.UpdateFloatValueFast(sv, dstRow)
+		bitmap.setByIndex(dstRow)
+		return
+	}
+	bitmap.setByIndex(dstRow)
 	minV := sv
 	if dv < sv {
 		minV = dv
@@ -110,7 +134,7 @@ func UpdateHashFloatMinFast(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, sr
 	dstColumn.UpdateFloatValueFast(minV, dstRow)
 }
 
-func UpdateHashBooleanMinSlow(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, srcRow int) {
+func UpdateHashBooleanMinSlow(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, srcRow int, bitmap *Bitmap) {
 	srcColumn, dstColumn := srcChunk.Column(srcCol), dstChunk.Column(dstCol)
 	isNil := srcColumn.IsNilV2(srcRow)
 	if isNil {
@@ -119,6 +143,12 @@ func UpdateHashBooleanMinSlow(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, 
 	srcRow = srcColumn.GetValueIndexV2(srcRow)
 	sv := srcColumn.BooleanValue(srcRow)
 	dv := dstColumn.BooleanValue(dstRow)
+	if !bitmap.containsInt(dstRow) {
+		dstColumn.UpdateBooleanValueFast(sv, dstRow)
+		bitmap.setByIndex(dstRow)
+		return
+	}
+	bitmap.setByIndex(dstRow)
 	if !dv {
 		return
 	}
@@ -127,10 +157,16 @@ func UpdateHashBooleanMinSlow(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, 
 	}
 }
 
-func UpdateHashBooleanMinFast(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, srcRow int) {
+func UpdateHashBooleanMinFast(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, srcRow int, bitmap *Bitmap) {
 	dstColumn := dstChunk.Column(dstCol)
 	sv := srcChunk.Column(srcCol).BooleanValue(srcRow)
 	dv := dstColumn.BooleanValue(dstRow)
+	if !bitmap.containsInt(dstRow) {
+		dstColumn.UpdateBooleanValueFast(sv, dstRow)
+		bitmap.setByIndex(dstRow)
+		return
+	}
+	bitmap.setByIndex(dstRow)
 	if !dv {
 		return
 	}
@@ -139,43 +175,7 @@ func UpdateHashBooleanMinFast(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, 
 	}
 }
 
-func rewriteInterMinColumnFunc(chunk Chunk, srcCol, lastNum int) {
-	column := chunk.Column(srcCol)
-	lastIndex := len(column.IntegerValues()) - 1
-	firstIndex := lastIndex - lastNum + 1
-	if firstIndex < 0 {
-		return
-	}
-	for i := lastIndex; i >= firstIndex; i-- {
-		column.UpdateIntegerValueFast(math.MaxInt64, i)
-	}
-}
-
-func rewriteFloatMinColumnFunc(chunk Chunk, srcCol, lastNum int) {
-	column := chunk.Column(srcCol)
-	lastIndex := len(column.FloatValues()) - 1
-	firstIndex := lastIndex - lastNum + 1
-	if firstIndex < 0 {
-		return
-	}
-	for i := lastIndex; i >= firstIndex; i-- {
-		column.UpdateFloatValueFast(math.MaxFloat64, i)
-	}
-}
-
-func rewriteBooleanMinColumnFunc(chunk Chunk, srcCol, lastNum int) {
-	column := chunk.Column(srcCol)
-	lastIndex := len(column.BooleanValues()) - 1
-	firstIndex := lastIndex - lastNum + 1
-	if firstIndex < 0 {
-		return
-	}
-	for i := lastIndex; i >= firstIndex; i-- {
-		column.UpdateBooleanValueFast(true, i)
-	}
-}
-
-func UpdateHashInterMaxSlow(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, srcRow int) {
+func UpdateHashInterMaxSlow(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, srcRow int, bitmap *Bitmap) {
 	srcColumn, dstColumn := srcChunk.Column(srcCol), dstChunk.Column(dstCol)
 	isNil := srcColumn.IsNilV2(srcRow)
 	if isNil {
@@ -184,6 +184,12 @@ func UpdateHashInterMaxSlow(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, sr
 	srcRow = srcColumn.GetValueIndexV2(srcRow)
 	sv := srcColumn.IntegerValue(srcRow)
 	dv := dstColumn.IntegerValue(dstRow)
+	if !bitmap.containsInt(dstRow) {
+		dstColumn.UpdateIntegerValueFast(sv, dstRow)
+		bitmap.setByIndex(dstRow)
+		return
+	}
+	bitmap.setByIndex(dstRow)
 	maxV := sv
 	if dv > sv {
 		maxV = dv
@@ -191,10 +197,16 @@ func UpdateHashInterMaxSlow(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, sr
 	dstColumn.UpdateIntegerValueFast(maxV, dstRow)
 }
 
-func UpdateHashInterMaxFast(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, srcRow int) {
+func UpdateHashInterMaxFast(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, srcRow int, bitmap *Bitmap) {
 	dstColumn := dstChunk.Column(dstCol)
 	sv := srcChunk.Column(srcCol).IntegerValue(srcRow)
 	dv := dstColumn.IntegerValue(dstRow)
+	if !bitmap.containsInt(dstRow) {
+		dstColumn.UpdateIntegerValueFast(sv, dstRow)
+		bitmap.setByIndex(dstRow)
+		return
+	}
+	bitmap.setByIndex(dstRow)
 	maxV := sv
 	if dv > sv {
 		maxV = dv
@@ -202,7 +214,7 @@ func UpdateHashInterMaxFast(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, sr
 	dstColumn.UpdateIntegerValueFast(maxV, dstRow)
 }
 
-func UpdateHashFloatMaxSlow(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, srcRow int) {
+func UpdateHashFloatMaxSlow(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, srcRow int, bitmap *Bitmap) {
 	srcColumn, dstColumn := srcChunk.Column(srcCol), dstChunk.Column(dstCol)
 	isNil := srcColumn.IsNilV2(srcRow)
 	if isNil {
@@ -211,6 +223,12 @@ func UpdateHashFloatMaxSlow(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, sr
 	srcRow = srcColumn.GetValueIndexV2(srcRow)
 	sv := srcColumn.FloatValue(srcRow)
 	dv := dstColumn.FloatValue(dstRow)
+	if !bitmap.containsInt(dstRow) {
+		dstColumn.UpdateFloatValueFast(sv, dstRow)
+		bitmap.setByIndex(dstRow)
+		return
+	}
+	bitmap.setByIndex(dstRow)
 	maxV := sv
 	if dv > sv {
 		maxV = dv
@@ -218,10 +236,16 @@ func UpdateHashFloatMaxSlow(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, sr
 	dstColumn.UpdateFloatValueFast(maxV, dstRow)
 }
 
-func UpdateHashFloatMaxFast(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, srcRow int) {
+func UpdateHashFloatMaxFast(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, srcRow int, bitmap *Bitmap) {
 	dstColumn := dstChunk.Column(dstCol)
 	sv := srcChunk.Column(srcCol).FloatValue(srcRow)
 	dv := dstColumn.FloatValue(dstRow)
+	if !bitmap.containsInt(dstRow) {
+		dstColumn.UpdateFloatValueFast(sv, dstRow)
+		bitmap.setByIndex(dstRow)
+		return
+	}
+	bitmap.setByIndex(dstRow)
 	maxV := sv
 	if dv > sv {
 		maxV = dv
@@ -229,7 +253,7 @@ func UpdateHashFloatMaxFast(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, sr
 	dstColumn.UpdateFloatValueFast(maxV, dstRow)
 }
 
-func UpdateHashBooleanMaxSlow(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, srcRow int) {
+func UpdateHashBooleanMaxSlow(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, srcRow int, bitmap *Bitmap) {
 	srcColumn, dstColumn := srcChunk.Column(srcCol), dstChunk.Column(dstCol)
 	isNil := srcColumn.IsNilV2(srcRow)
 	if isNil {
@@ -238,6 +262,12 @@ func UpdateHashBooleanMaxSlow(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, 
 	srcRow = srcColumn.GetValueIndexV2(srcRow)
 	sv := srcColumn.BooleanValue(srcRow)
 	dv := dstColumn.BooleanValue(dstRow)
+	if !bitmap.containsInt(dstRow) {
+		dstColumn.UpdateBooleanValueFast(sv, dstRow)
+		bitmap.setByIndex(dstRow)
+		return
+	}
+	bitmap.setByIndex(dstRow)
 	if dv {
 		return
 	}
@@ -246,50 +276,20 @@ func UpdateHashBooleanMaxSlow(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, 
 	}
 }
 
-func UpdateHashBooleanMaxFast(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, srcRow int) {
+func UpdateHashBooleanMaxFast(dstChunk, srcChunk Chunk, dstCol, srcCol, dstRow, srcRow int, bitmap *Bitmap) {
 	dstColumn := dstChunk.Column(dstCol)
 	sv := srcChunk.Column(srcCol).BooleanValue(srcRow)
 	dv := dstColumn.BooleanValue(dstRow)
+	if !bitmap.containsInt(dstRow) {
+		dstColumn.UpdateBooleanValueFast(sv, dstRow)
+		bitmap.setByIndex(dstRow)
+		return
+	}
+	bitmap.setByIndex(dstRow)
 	if dv {
 		return
 	}
 	if sv {
 		dstColumn.UpdateBooleanValueFast(sv, dstRow)
-	}
-}
-
-func rewriteInterMaxColumnFunc(chunk Chunk, srcCol, lastNum int) {
-	column := chunk.Column(srcCol)
-	lastIndex := len(column.IntegerValues()) - 1
-	firstIndex := lastIndex - lastNum + 1
-	if firstIndex < 0 {
-		return
-	}
-	for i := lastIndex; i >= firstIndex; i-- {
-		column.UpdateIntegerValueFast(-math.MaxInt64, i)
-	}
-}
-
-func rewriteFloatMaxColumnFunc(chunk Chunk, srcCol, lastNum int) {
-	column := chunk.Column(srcCol)
-	lastIndex := len(column.FloatValues()) - 1
-	firstIndex := lastIndex - lastNum + 1
-	if firstIndex < 0 {
-		return
-	}
-	for i := lastIndex; i >= firstIndex; i-- {
-		column.UpdateFloatValueFast(-math.MaxFloat64, i)
-	}
-}
-
-func rewriteBooleanMaxColumnFunc(chunk Chunk, srcCol, lastNum int) {
-	column := chunk.Column(srcCol)
-	lastIndex := len(column.BooleanValues()) - 1
-	firstIndex := lastIndex - lastNum + 1
-	if firstIndex < 0 {
-		return
-	}
-	for i := lastIndex; i >= firstIndex; i-- {
-		column.UpdateBooleanValueFast(false, i)
 	}
 }

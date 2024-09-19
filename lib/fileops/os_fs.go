@@ -1,21 +1,19 @@
 //go:build !streamfs
 // +build !streamfs
 
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 // nolint
 package fileops
@@ -127,6 +125,14 @@ func (f *file) Stat() (os.FileInfo, error) {
 	return f.of.Stat()
 }
 
+func (f *file) Size() (int64, error) {
+	info, err := f.of.Stat()
+	if err != nil {
+		return 0, err
+	}
+	return info.Size(), nil
+}
+
 func (f *file) Readdir(n int) ([]os.FileInfo, error) {
 	return f.of.Readdir(n)
 }
@@ -174,6 +180,10 @@ func (vfs) Remove(name string, _ ...FSOption) error {
 
 func (vfs) RemoveLocal(name string, _ ...FSOption) error {
 	return os.Remove(name)
+}
+
+func (vfs) RemoveLocalEnabled(obsOptValid bool) bool {
+	return obsOptValid
 }
 
 func (vfs) RemoveAll(path string, _ ...FSOption) error {

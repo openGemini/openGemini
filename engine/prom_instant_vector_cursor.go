@@ -1,18 +1,16 @@
-/*
-Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package engine
 
@@ -26,6 +24,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
+	model "github.com/prometheus/prometheus/pkg/value"
 )
 
 // InstantVectorCursor is used to sample and process data for prom instant_query or range_query.
@@ -64,6 +63,7 @@ func NewInstantVectorCursor(input comm.KeyCursor, schema *executor.QuerySchema, 
 		c.endSample = c.startSample
 		c.firstStep = c.startSample
 		c.reducerParams.lastStep = c.endSample
+		c.reducerParams.rangeDuration = schema.Options().GetPromRange().Nanoseconds()
 	} else {
 		c.endSample = c.start + c.lookUpDelta + (c.end-(c.start+c.lookUpDelta))/c.step*c.step
 		c.firstStep = getCurrStep(c.startSample, c.endSample, c.step, tr.Min)
@@ -109,7 +109,7 @@ func (c *InstantVectorCursor) inNextWindowWithInfo(currRecord *record.Record) er
 		return err
 	}
 	// padding is required before and after the last rec. Padding is required only before the previous rec.
-	c.reducerParams.lastRec = nextRecord == nil
+	c.reducerParams.lastRec = (nextRecord == nil) || (c.fileInfo != nil && info != c.fileInfo)
 	c.inNextWin = isSameWindow(currRecord, nextRecord, c.fileInfo, info, c.schema, c.startSample, c.endSample, c.step)
 	return nil
 }
@@ -305,6 +305,10 @@ func newFloatSampler(fn float2lFloatReduce, fv appendValueFunc) *floatSampler {
 }
 
 func (r *floatSampler) PopulateByPrevious(outRecord *record.Record, param *ReducerParams, nextStep, lastStep int64, outOrdinal, timeIdx int) {
+	if model.IsStaleNaN(r.prevBuf.value) {
+		return
+	}
+
 	for t := nextStep; t <= lastStep; t += param.step {
 		if r.prevBuf.time < t-param.lookBackDelta {
 			break
@@ -323,6 +327,10 @@ func (r *floatSampler) Aggregate(p *ReducerEndpoint, param *ReducerParams) {
 	inOrdinal, outOrdinal := p.InputPoint.Ordinal, p.OutputPoint.Ordinal
 	values := inRecord.ColVals[inOrdinal].FloatValues()
 	timeIdx, numStep := outRecord.ColNums()-1, len(param.intervalIndex)/2
+	if param.step == 0 && param.rangeDuration > 0 {
+		outRecord.AppendRec(inRecord, 0, inRecord.RowNums())
+		return
+	}
 	var ts int64
 	for i := 0; i < numStep; i++ {
 		if param.sameWindow && i == numStep-1 {
@@ -342,13 +350,16 @@ func (r *floatSampler) Aggregate(p *ReducerEndpoint, param *ReducerParams) {
 			ts = inRecord.Time(idx)
 		}
 		if !isNil {
+			if model.IsStaleNaN(value) {
+				continue
+			}
 			r.fv(outRecord.Column(outOrdinal), value)
 			// multi-column aggregation calculation time is processed only once.
 			if outOrdinal == 0 {
 				outRecord.AppendTime(ts + r.offset)
 			}
 		} else {
-			if r.prevBuf.isNil || r.prevBuf.time < ts-param.lookBackDelta {
+			if r.prevBuf.isNil || r.prevBuf.time < ts-param.lookBackDelta || model.IsStaleNaN(r.prevBuf.value) {
 				continue
 			}
 			r.fv(outRecord.Column(outOrdinal), r.prevBuf.value)
@@ -358,18 +369,25 @@ func (r *floatSampler) Aggregate(p *ReducerEndpoint, param *ReducerParams) {
 			}
 		}
 	}
+	// get the last row of each record as the latest point and assign the value to prev.
 	idx, value, isNil := r.fn(&inRecord.ColVals[inOrdinal], values, 0, inRecord.RowNums())
 	if !isNil {
-		r.prevBuf.time = inRecord.Time(idx)
-		r.prevBuf.index = int(param.firstStep + int64(numStep-1)*param.step)
-		r.prevBuf.value = value
-		r.prevBuf.isNil = false
+		r.prevBuf.set(int(param.firstStep+int64(numStep-1)*param.step), inRecord.Time(idx), value)
 	}
 	if param.step > 0 && param.lastRec && !r.prevBuf.isNil {
-		// padding is required after the last rec.
+		// pad after the last rec.
 		nextStep := ts + param.step
 		if nextStep <= param.lastStep {
 			r.PopulateByPrevious(outRecord, param, nextStep, param.lastStep, outOrdinal, timeIdx)
 		}
 	}
+	if param.lastRec {
+		// reset after processing the last rec.
+		r.reset()
+	}
+}
+
+func (r *floatSampler) reset() {
+	r.offset = 0
+	r.prevBuf.reset()
 }

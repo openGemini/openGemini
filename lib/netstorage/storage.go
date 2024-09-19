@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package netstorage
 
@@ -78,6 +76,7 @@ type Storage interface {
 
 type SendRaftMessageToStorage interface {
 	SendRaftMessages(nodeID uint64, database string, pt uint32, msgs raftpb.Message) error
+	Client() meta.MetaClient
 }
 
 type NetStorage struct {
@@ -97,6 +96,10 @@ func NewNetStorage(mcli meta.MetaClient) Storage {
 		metaClient: mcli,
 		log:        logger.NewLogger(errno.ModuleNetwork).With(zap.String("service", "netstorage")),
 	}
+}
+
+func (s *NetStorage) Client() meta.MetaClient {
+	return s.metaClient
 }
 
 func (s *NetStorage) GetShardSplitPoints(node *meta2.DataNode, database string, pt uint32,

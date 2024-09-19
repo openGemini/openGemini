@@ -1,23 +1,22 @@
-/*
-Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package engine_test
 
 import (
 	"fmt"
+	"math"
 	"testing"
 	"time"
 
@@ -29,6 +28,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
+	model "github.com/prometheus/prometheus/pkg/value"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -278,6 +278,46 @@ func TestInstantVectorCursor(t *testing.T) {
 	dst2.AppendTime(13, 15, 17, 19, 21)
 	dstRecords = append(dstRecords, dst1, dst2)
 	t.Run("5", func(t *testing.T) {
+		testInstantVectorCursor(t, inSchema, outSchema, srcRecords1, dstRecords, exprOpt, querySchema)
+	})
+
+	// 6. select last(float) from mst group by time(2) with nan
+	opt = &query.ProcessorOptions{
+		Exprs:         []influxql.Expr{hybridqp.MustParseExpr(`last("float")`)},
+		Interval:      hybridqp.Interval{Duration: 2 * time.Nanosecond},
+		Step:          2 * time.Nanosecond,
+		LookBackDelta: 5 * time.Minute,
+		StartTime:     -299999999999,
+		EndTime:       21,
+		ChunkSize:     3,
+	}
+	querySchema = executor.NewQuerySchema(nil, nil, opt, nil)
+
+	srcRecords1 = make([]*record.Record, 0)
+	src11 = record.NewRecordBuilder(outSchema)
+	src11.ColVals[0].AppendFloats(3, math.Float64frombits(model.StaleNaN))
+	src11.AppendTime(3, 5)
+	src12 = record.NewRecordBuilder(outSchema)
+	src12.ColVals[0].AppendFloats(9, 11)
+	src12.AppendTime(9, 11)
+	src13 = record.NewRecordBuilder(outSchema)
+	src13.ColVals[0].AppendFloats(math.Float64frombits(model.StaleNaN))
+	src13.AppendTime(15)
+	srcRecords1 = append(srcRecords1, src11, src12, src13)
+
+	dstRecords = make([]*record.Record, 0)
+	dst1 = record.NewRecordBuilder(outSchema)
+	dst1.RecMeta = &record.RecMeta{}
+	dst1.IntervalIndex = append(dst1.IntervalIndex, 0, 1, 2)
+	dst1.ColVals[0].AppendFloats(3, 9, 11)
+	dst1.AppendTime(3, 9, 11)
+	dst2 = record.NewRecordBuilder(outSchema)
+	dst2.RecMeta = &record.RecMeta{}
+	dst2.IntervalIndex = append(dst2.IntervalIndex, 0)
+	dst2.ColVals[0].AppendFloats(11)
+	dst2.AppendTime(13)
+	dstRecords = append(dstRecords, dst1, dst2)
+	t.Run("6", func(t *testing.T) {
 		testInstantVectorCursor(t, inSchema, outSchema, srcRecords1, dstRecords, exprOpt, querySchema)
 	})
 }

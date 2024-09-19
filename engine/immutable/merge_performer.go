@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package immutable
 
@@ -501,7 +499,6 @@ func (cw *columnWriter) flush(sid uint64, ref *record.Field) error {
 type MergePerformers struct {
 	closed bool
 	signal chan struct{}
-	wg     sync.WaitGroup
 	once   sync.Once
 
 	items []*mergePerformer
@@ -516,7 +513,6 @@ func NewMergePerformers(ur *UnorderedReader) *MergePerformers {
 		signal:      make(chan struct{}),
 		ur:          ur,
 	}
-	performers.wg.Add(1)
 	return performers
 }
 
@@ -552,10 +548,6 @@ func (c *MergePerformers) Pop() interface{} {
 	return v
 }
 
-func (c *MergePerformers) Done() {
-	c.wg.Done()
-}
-
 func (c *MergePerformers) Close() {
 	c.once.Do(func() {
 		close(c.signal)
@@ -563,13 +555,15 @@ func (c *MergePerformers) Close() {
 		for _, item := range c.items {
 			item.Close()
 		}
-		c.wg.Wait()
-		for _, item := range c.items {
-			item.Release()
-		}
-		c.items = nil
-		c.ur = nil
 	})
+}
+
+func (c *MergePerformers) Release() {
+	for _, item := range c.items {
+		item.Release()
+	}
+	c.items = nil
+	c.ur = nil
 }
 
 func (c *MergePerformers) Closed() bool {

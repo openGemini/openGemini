@@ -58,7 +58,7 @@ func TestTranspiler_TranspileVectorSelector2ConditionExpr(t1 *testing.T) {
 			args: args{
 				v: VectorSelector(`cpu{host=~"tele.*"}`),
 			},
-			want:    influxql.MustParseExpr("host =~ /^(?:tele.*)$/"),
+			want:    influxql.MustParseExpr("host =~ /tele.*/"),
 			wantErr: false,
 		},
 		{
@@ -70,7 +70,7 @@ func TestTranspiler_TranspileVectorSelector2ConditionExpr(t1 *testing.T) {
 			args: args{
 				v: VectorSelector(`cpu{host=~"tele.*", cpu="cpu0"}`),
 			},
-			want:    influxql.MustParseExpr("host =~ /^(?:tele.*)$/ AND cpu = 'cpu0'"),
+			want:    influxql.MustParseExpr("host =~ /tele.*/ AND cpu = 'cpu0'"),
 			wantErr: false,
 		},
 	}
@@ -123,7 +123,7 @@ func TestTranspiler_transpileVectorSelector(t1 *testing.T) {
 			args: args{
 				v: VectorSelector(`cpu{host=~"tele.*"}`),
 			},
-			want:    influxql.MustParseStatement(`SELECT value AS value FROM cpu WHERE time >= '2023-01-06T04:00:00Z' AND time <= '2023-01-06T07:00:00Z' AND host =~ /^(?:tele.*)$/ GROUP BY *`),
+			want:    influxql.MustParseStatement(`SELECT value AS value FROM cpu WHERE time >= '2023-01-06T04:00:00Z' AND time <= '2023-01-06T07:00:00Z' AND host =~ /tele.*/ GROUP BY *`),
 			wantErr: false,
 		},
 		{
@@ -134,7 +134,7 @@ func TestTranspiler_transpileVectorSelector(t1 *testing.T) {
 			args: args{
 				v: VectorSelector(`cpu{host=~"tele.*"}`),
 			},
-			want:    influxql.MustParseStatement(`SELECT value AS value FROM cpu WHERE time >= '2023-01-08T02:00:00Z' AND time <= '2023-01-08T02:00:00Z' AND host =~ /^(?:tele.*)$/ GROUP BY *`),
+			want:    influxql.MustParseStatement(`SELECT value AS value FROM cpu WHERE time >= '2023-01-08T02:00:00Z' AND time <= '2023-01-08T02:00:00Z' AND host =~ /tele.*/ GROUP BY *`),
 			wantErr: false,
 		},
 		{
@@ -148,7 +148,7 @@ func TestTranspiler_transpileVectorSelector(t1 *testing.T) {
 			args: args{
 				v: VectorSelector(`go_goroutines{instance=~"192.168.*"}`),
 			},
-			want:    influxql.MustParseStatement(`SHOW TAG VALUES ON prometheus FROM go_goroutines WITH KEY = job WHERE time >= '2023-01-08T02:00:00Z' AND time <= '2023-01-08T02:00:00Z' AND instance =~ /^(?:192.168.*)$/`),
+			want:    influxql.MustParseStatement(`SHOW TAG VALUES ON prometheus FROM go_goroutines WITH KEY = job WHERE time >= '2023-01-08T02:00:00Z' AND time <= '2023-01-08T02:00:00Z' AND instance =~ /192.168.*/`),
 			wantErr: false,
 		},
 		{
@@ -161,7 +161,7 @@ func TestTranspiler_transpileVectorSelector(t1 *testing.T) {
 			args: args{
 				v: VectorSelector(`go_goroutines{instance=~"192.168.*"}`),
 			},
-			want:    influxql.MustParseStatement(`SHOW TAG VALUES ON prometheus FROM go_goroutines WITH KEY = "" WHERE time >= '2023-01-08T02:00:00Z' AND time <= '2023-01-08T02:00:00Z' AND instance =~ /^(?:192.168.*)$/`),
+			want:    influxql.MustParseStatement(`SHOW TAG VALUES ON prometheus FROM go_goroutines WITH KEY = "" WHERE time >= '2023-01-08T02:00:00Z' AND time <= '2023-01-08T02:00:00Z' AND instance =~ /192.168.*/`),
 			wantErr: false,
 		},
 		{
@@ -173,7 +173,7 @@ func TestTranspiler_transpileVectorSelector(t1 *testing.T) {
 			args: args{
 				v: VectorSelector(`go_goroutines{instance=~"192.168.*"}`),
 			},
-			want:    influxql.MustParseStatement(`SHOW TAG VALUES FROM go_goroutines WITH KEY = "" WHERE time >= '2023-01-08T02:00:00Z' AND time <= '2023-01-08T02:00:00Z' AND instance =~ /^(?:192.168.*)$/`),
+			want:    influxql.MustParseStatement(`SHOW TAG VALUES FROM go_goroutines WITH KEY = "" WHERE time >= '2023-01-08T02:00:00Z' AND time <= '2023-01-08T02:00:00Z' AND instance =~ /192.168.*/`),
 			wantErr: false,
 		},
 	}
@@ -230,7 +230,7 @@ func TestTranspiler_transpileRangeVectorSelector(t1 *testing.T) {
 			args: args{
 				v: MatrixSelector(`cpu{host=~"tele.*"}[5m]`),
 			},
-			want:    influxql.MustParseStatement(`SELECT value AS value FROM cpu WHERE time >= '2023-01-06T03:55:00Z' AND time <= '2023-01-06T07:00:00Z' AND host =~ /^(?:tele.*)$/ GROUP BY *`),
+			want:    influxql.MustParseStatement(`SELECT value AS value FROM cpu WHERE time >= '2023-01-06T03:55:00Z' AND time <= '2023-01-06T07:00:00Z' AND host =~ /tele.*/ GROUP BY *`),
 			wantErr: false,
 		},
 		{
@@ -241,7 +241,7 @@ func TestTranspiler_transpileRangeVectorSelector(t1 *testing.T) {
 			args: args{
 				v: MatrixSelector(`cpu{host=~"tele.*"}[5m]`),
 			},
-			want:    influxql.MustParseStatement(`SELECT value AS value FROM cpu WHERE time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z' AND host =~ /^(?:tele.*)$/ GROUP BY *`),
+			want:    influxql.MustParseStatement(`SELECT value AS value FROM cpu WHERE time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z' AND host =~ /tele.*/ GROUP BY *`),
 			wantErr: false,
 		},
 	}
@@ -256,7 +256,7 @@ func TestTranspiler_transpileRangeVectorSelector(t1 *testing.T) {
 					Evaluation: tt.fields.Evaluation,
 				},
 			}
-			t.minT, t.maxT = t.findMinMaxTime(t.newEvalStmt(tt.args.v))
+			t.rewriteMinMaxTime()
 			got, err := t.transpileRangeVectorSelector(tt.args.v)
 			if (err != nil) != tt.wantErr {
 				t1.Errorf("transpileRangeVectorSelector() error = %v, wantErr %v", err, tt.wantErr)
