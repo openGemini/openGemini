@@ -91,7 +91,11 @@ func NewServer(conf config.Config, info app.ServerInfo, logger *Logger.Logger) (
 	// initialize log
 	metaConf := c.Meta
 	metaConf.Logging = c.Logging
-	s.MetaService = meta.NewService(metaConf, c.TLS)
+	tlsConfig, err := c.TLS.Parse()
+	if err != nil {
+		return nil, err
+	}
+	s.MetaService = meta.NewService(metaConf, tlsConfig)
 	s.MetaService.Version = s.info.Version
 	s.MetaService.Node = s.Node
 
