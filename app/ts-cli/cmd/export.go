@@ -1,3 +1,17 @@
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package cmd
 
 import (
@@ -6,7 +20,6 @@ import (
 	"flag"
 	"github.com/openGemini/openGemini/app/ts-cli/geminicli"
 	"github.com/spf13/cobra"
-	"io"
 	"os"
 )
 
@@ -17,9 +30,9 @@ func init() {
 	exportCmd.Flags().StringVar(&options.DataDir, "data", "", "Data storage path to export.")
 	exportCmd.Flags().StringVar(&options.WalDir, "wal", "", "WAL storage path to export.")
 	exportCmd.Flags().StringVar(&options.Remote, "remote", "", "Remote address to export data.")
-	exportCmd.Flags().StringVar(&options.DBFilter, "dbfilter", "", "Optional.Databases to export.Default to all")
-	exportCmd.Flags().StringVar(&options.RetentionFilter, "retentionfilter", "", "Optional. Retention policies to export.")
-	exportCmd.Flags().StringVar(&options.MeasurementFilter, "mstfilter", "", "Optional.Measurements to export.")
+	exportCmd.Flags().StringVar(&options.DBFilter, "dbfilter", "", "Database to export")
+	exportCmd.Flags().StringVar(&options.RetentionFilter, "retentionfilter", "", "Optional. Retention policy to export.")
+	exportCmd.Flags().StringVar(&options.MeasurementFilter, "mstfilter", "", "Optional.Measurement to export.")
 	exportCmd.Flags().StringVar(&options.TimeFilter, "timefilter", "", "Optional.Export time range, support 'start~end'")
 	exportCmd.Flags().BoolVar(&options.Compress, "compress", false, "Optional. Compress the export output.")
 	exportCmd.Flags().StringVarP(&options.RemoteUsername, "remoteusername", "", "", "Remote export Optional.Username to connect to remote openGemini.")
@@ -34,6 +47,7 @@ var exportCmd = &cobra.Command{
 	Long:  `Export data from openGemini to file or remote`,
 	Example: `
 $ ts-cli export --format txt --out /tmp/openGemini/export/export.txt --data /tmp/openGemini/data --wal /tmp/openGemini/data
+--dbfilter NOAA_water_database
 
 $ ts-cli export --format csv --out /tmp/openGemini/export/export.csv --data /tmp/openGemini/data --wal /tmp/openGemini/data 
 --dbfilter NOAA_water_database --mstfilter h2o_pH --timefilter "2019-08-25T09:18:00Z~2019-08-26T07:48:00Z"
@@ -86,12 +100,7 @@ $ ts-cli export --format remote --remote ${host}:8086 --data /tmp/openGemini/dat
 }
 
 func getResumeConfig() (*geminicli.CommandLineConfig, error) {
-	jsonFile, err := os.Open(geminicli.ResumeJsonPath)
-	if err != nil {
-		return nil, err
-	}
-	defer jsonFile.Close()
-	jsonData, err := io.ReadAll(jsonFile)
+	jsonData, err := os.ReadFile(geminicli.ResumeJsonPath)
 	if err != nil {
 		return nil, err
 	}

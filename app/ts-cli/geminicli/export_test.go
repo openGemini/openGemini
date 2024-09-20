@@ -1,3 +1,17 @@
+// Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package geminicli
 
 import (
@@ -449,13 +463,13 @@ func TestExporter_Export(t *testing.T) {
 		ResumeJsonPath = filepath.Join(t.TempDir(), "progress.json")
 		ProgressedFilesPath = filepath.Join(t.TempDir(), "progressedFiles")
 		clc := &CommandLineConfig{
-			Database: "",
 			Export:   true,
 			DataDir:  dir,
 			WalDir:   dir,
 			Out:      exportPath,
 			Compress: false,
 			Format:   txtFormatExporter,
+			DBFilter: defaultDb,
 		}
 		err = e.Export(clc, nil)
 		assert.NoError(t, err)
@@ -470,13 +484,13 @@ func TestExporter_Export(t *testing.T) {
 		ResumeJsonPath = filepath.Join(t.TempDir(), "progress.json")
 		ProgressedFilesPath = filepath.Join(t.TempDir(), "progressedFiles")
 		clc := &CommandLineConfig{
-			Database: "",
 			Export:   true,
 			DataDir:  dir,
 			WalDir:   dir,
 			Out:      exportPath,
 			Compress: false,
 			Format:   csvFormatExporter,
+			DBFilter: defaultDb,
 		}
 		err = e.Export(clc, nil)
 		e.defaultLogger.Println(e.lineCount)
@@ -772,6 +786,7 @@ func TestDataFilter_timeFilter(t *testing.T) {
 	}
 }
 
+// check remote openGemini config before run
 func TestRemoteInit(t *testing.T) {
 	re := newRemoteExporter()
 	err := re.Init(&CommandLineConfig{

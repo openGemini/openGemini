@@ -1,3 +1,17 @@
+// Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package geminicli
 
 import (
@@ -30,7 +44,6 @@ import (
 	"math"
 	"net"
 	"os"
-	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -95,10 +108,8 @@ func ReadLatestProgressFile() error {
 	if err != nil {
 		return err
 	}
-	sort.Slice(dirs, func(i, j int) bool {
-		return dirs[i] > dirs[j]
-	})
-	latestDir := dirs[0]
+	sort.Strings(dirs)
+	latestDir := dirs[len(dirs)-1]
 	// read progress.json
 	ResumeJsonPath = filepath.Join(latestDir, "progress.json")
 	// read progressedFiles
@@ -118,8 +129,8 @@ func newDataFilter() *dataFilter {
 	return &dataFilter{
 		database:    "",
 		measurement: "",
-		startTime:   0,
-		endTime:     0,
+		startTime:   math.MinInt64,
+		endTime:     math.MaxInt64,
 	}
 }
 
@@ -132,15 +143,13 @@ func (d *dataFilter) parseTime(clc *CommandLineConfig) error {
 	} else if clc.TimeFilter != "" {
 		return fmt.Errorf("invalid time filter %q", clc.TimeFilter)
 	}
-	// set defaults
+
 	if start != "" {
 		st, err := convertTime(start)
 		if err != nil {
 			return err
 		}
 		d.startTime = st
-	} else {
-		d.startTime = math.MinInt64
 	}
 
 	if end != "" {
@@ -149,9 +158,6 @@ func (d *dataFilter) parseTime(clc *CommandLineConfig) error {
 			return err
 		}
 		d.endTime = ed
-	} else {
-		// set end time to max if it is not set.
-		d.endTime = math.MaxInt64
 	}
 
 	if d.startTime > d.endTime {
@@ -222,12 +228,12 @@ func (d *DatabaseDiskInfo) init(actualDataDir string, actualWalDir string, datab
 	d.dbName = databaseName
 
 	// check whether the database is in actualDataPath
-	dataDir := path.Join(actualDataDir, databaseName)
+	dataDir := filepath.Join(actualDataDir, databaseName)
 	if _, err := os.Stat(dataDir); err != nil {
 		return err
 	}
 	// check whether the database is in actualWalPath
-	walDir := path.Join(actualWalDir, databaseName)
+	walDir := filepath.Join(actualWalDir, databaseName)
 	if _, err := os.Stat(walDir); err != nil {
 		return err
 	}
@@ -241,21 +247,21 @@ func (d *DatabaseDiskInfo) init(actualDataDir string, actualWalDir string, datab
 	}
 	for _, ptDir := range ptDirs {
 		// ie. /tmp/openGemini/data/data/my_db/0
-		ptTsspPath := path.Join(d.dataDir, ptDir.Name())
+		ptTsspPath := filepath.Join(d.dataDir, ptDir.Name())
 		// ie. /tmp/openGemini/data/wal/my_db/0
-		ptWalPath := path.Join(d.walDir, ptDir.Name())
+		ptWalPath := filepath.Join(d.walDir, ptDir.Name())
 
 		if retentionPolicy != "" {
 			ptWithRp := ptDir.Name() + ":" + retentionPolicy
-			rpTsspPath := path.Join(ptTsspPath, retentionPolicy)
+			rpTsspPath := filepath.Join(ptTsspPath, retentionPolicy)
 			if _, err := os.Stat(rpTsspPath); err != nil {
 				return fmt.Errorf("retention policy %q invalid : %s", retentionPolicy, err)
 			} else {
 				d.rps[ptWithRp] = struct{}{}
 				d.rpToTsspDirMap[ptWithRp] = rpTsspPath
-				d.rpToIndexDirMap[ptWithRp] = path.Join(rpTsspPath, "index")
+				d.rpToIndexDirMap[ptWithRp] = filepath.Join(rpTsspPath, "index")
 			}
-			rpWalPath := path.Join(ptWalPath, retentionPolicy)
+			rpWalPath := filepath.Join(ptWalPath, retentionPolicy)
 			if _, err := os.Stat(rpWalPath); err != nil {
 				return fmt.Errorf("retention policy %q invalid : %s", retentionPolicy, err)
 			} else {
@@ -269,13 +275,14 @@ func (d *DatabaseDiskInfo) init(actualDataDir string, actualWalDir string, datab
 			return err1
 		}
 		for _, rpDir := range rpTsspDirs {
-			if rpDir.IsDir() {
-				ptWithRp := ptDir.Name() + ":" + rpDir.Name()
-				rpPath := path.Join(ptTsspPath, rpDir.Name())
-				d.rps[ptWithRp] = struct{}{}
-				d.rpToTsspDirMap[ptWithRp] = rpPath
-				d.rpToIndexDirMap[ptWithRp] = path.Join(rpPath, "index")
+			if !rpDir.IsDir() {
+				continue
 			}
+			ptWithRp := ptDir.Name() + ":" + rpDir.Name()
+			rpPath := filepath.Join(ptTsspPath, rpDir.Name())
+			d.rps[ptWithRp] = struct{}{}
+			d.rpToTsspDirMap[ptWithRp] = rpPath
+			d.rpToIndexDirMap[ptWithRp] = filepath.Join(rpPath, "index")
 		}
 
 		rpWalDirs, err2 := os.ReadDir(ptWalPath)
@@ -284,10 +291,11 @@ func (d *DatabaseDiskInfo) init(actualDataDir string, actualWalDir string, datab
 		}
 		for _, rpDir := range rpWalDirs {
 			ptWithRp := ptDir.Name() + ":" + rpDir.Name()
-			if rpDir.IsDir() {
-				rpPath := path.Join(ptWalPath, rpDir.Name())
-				d.rpToWalDirMap[ptWithRp] = rpPath
+			if !rpDir.IsDir() {
+				continue
 			}
+			rpPath := filepath.Join(ptWalPath, rpDir.Name())
+			d.rpToWalDirMap[ptWithRp] = rpPath
 		}
 	}
 	return nil
@@ -344,14 +352,14 @@ func NewExporter() *Exporter {
 
 // parseActualDir transforms user puts in datadir and waldir to actual dirs
 func (e *Exporter) parseActualDir(clc *CommandLineConfig) error {
-	actualDataDir := path.Join(clc.DataDir, config.DataDirectory)
+	actualDataDir := filepath.Join(clc.DataDir, config.DataDirectory)
 	if _, err := os.Stat(actualDataDir); err != nil {
 		return err
 	} else {
 		e.actualDataPath = actualDataDir
 	}
 
-	actualWalDir := path.Join(clc.WalDir, config.WalDirectory)
+	actualWalDir := filepath.Join(clc.WalDir, config.WalDirectory)
 	if _, err := os.Stat(actualWalDir); err != nil {
 		return err
 	} else {
@@ -374,14 +382,15 @@ func (e *Exporter) parseDatabaseInfos() error {
 			return err
 		}
 		for _, file := range files {
-			if file.IsDir() {
-				dbDiskInfo := newDatabaseDiskInfo()
-				err := dbDiskInfo.init(e.actualDataPath, e.actualWalPath, file.Name(), "")
-				if err != nil {
-					return err
-				}
-				e.databaseDiskInfos = append(e.databaseDiskInfos, dbDiskInfo)
+			if !file.IsDir() {
+				continue
 			}
+			dbDiskInfo := newDatabaseDiskInfo()
+			err := dbDiskInfo.init(e.actualDataPath, e.actualWalPath, file.Name(), "")
+			if err != nil {
+				return err
+			}
+			e.databaseDiskInfos = append(e.databaseDiskInfos, dbDiskInfo)
 		}
 		return nil
 	}
@@ -415,6 +424,9 @@ func (e *Exporter) Init(clc *CommandLineConfig, progressedFiles map[string]struc
 	}
 	if clc.DataDir == "" {
 		return fmt.Errorf("export flag data is required")
+	}
+	if clc.DBFilter == "" {
+		return fmt.Errorf("export flag dbfilter is required")
 	}
 	if clc.Format != csvFormatExporter && clc.Format != txtFormatExporter && clc.Format != remoteFormatExporter {
 		return fmt.Errorf("unsupported export format %q", clc.Format)
@@ -538,6 +550,10 @@ func (e *Exporter) write() error {
 	if e.remoteExporter.isExist {
 		outputWriter = io.Discard
 	} else {
+		err = os.MkdirAll(filepath.Dir(e.outPutPath), 0755)
+		if err != nil {
+			return err
+		}
 		var outputFile *os.File
 		if e.resume {
 			exportDir := filepath.Dir(e.outPutPath)
@@ -658,26 +674,27 @@ func (e *Exporter) walkIndexFiles(dbDiskInfo *DatabaseDiskInfo) error {
 			return err
 		}
 		for _, file := range files {
-			if file.IsDir() {
-				indexId, err2 := parseIndexDir(file.Name())
-				if err2 != nil {
-					return err2
-				}
-				// eg. "0:autogen" to ["0","autogen"]
-				splitPtWithRp := strings.Split(ptWithRp, ":")
-				key := dbDiskInfo.dbName + ":" + splitPtWithRp[1]
-				lockPath := ""
-				opt := &tsi.Options{}
-				opt.Path(path.Join(indexPath, file.Name()))
-				opt.IndexType(index.MergeSet)
-				opt.Lock(&lockPath)
-				if _, ok := e.rpNameToIdToIndexMap[key]; !ok {
-					e.rpNameToIdToIndexMap[key] = make(map[uint64]*tsi.MergeSetIndex)
-				}
-				e.manifest[key] = struct{}{}
-				if e.rpNameToIdToIndexMap[key][indexId], err = tsi.NewMergeSetIndex(opt); err != nil {
-					return err
-				}
+			if !file.IsDir() {
+				continue
+			}
+			indexId, err2 := parseIndexDir(file.Name())
+			if err2 != nil {
+				return err2
+			}
+			// eg. "0:autogen" to ["0","autogen"]
+			splitPtWithRp := strings.Split(ptWithRp, ":")
+			key := dbDiskInfo.dbName + ":" + splitPtWithRp[1]
+			lockPath := ""
+			opt := &tsi.Options{}
+			opt.Path(filepath.Join(indexPath, file.Name()))
+			opt.IndexType(index.MergeSet)
+			opt.Lock(&lockPath)
+			if _, ok := e.rpNameToIdToIndexMap[key]; !ok {
+				e.rpNameToIdToIndexMap[key] = make(map[uint64]*tsi.MergeSetIndex)
+			}
+			e.manifest[key] = struct{}{}
+			if e.rpNameToIdToIndexMap[key][indexId], err = tsi.NewMergeSetIndex(opt); err != nil {
+				return err
 			}
 		}
 	}

@@ -37,6 +37,7 @@ require (
 	github.com/mitchellh/cli v1.1.5
 	github.com/nxadm/tail v1.4.11
 	github.com/olekukonko/tablewriter v0.0.0-20170122224234-a0225b3f23b5
+	github.com/openGemini/go-prompt v0.0.0-20240906095849-29653678978f
 	github.com/openGemini/opengemini-client-go v0.4.0
 	github.com/panjf2000/ants/v2 v2.5.0
 	github.com/pierrec/lz4/v4 v4.1.17
