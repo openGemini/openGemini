@@ -16,10 +16,6 @@ package remote
 
 import (
 	"crypto/tls"
-	"github.com/openGemini/openGemini/app/ts-cli/geminicli"
-	"github.com/openGemini/openGemini/app/ts-cli/tests/export"
-	"github.com/openGemini/opengemini-client-go/opengemini"
-	"github.com/stretchr/testify/assert"
 	"os"
 	"path"
 	"path/filepath"
@@ -27,6 +23,11 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/openGemini/openGemini/app/ts-cli/geminicli"
+	"github.com/openGemini/openGemini/app/ts-cli/tests/export"
+	"github.com/openGemini/opengemini-client-go/opengemini"
+	"github.com/stretchr/testify/assert"
 )
 
 var (

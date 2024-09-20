@@ -17,15 +17,6 @@ package export
 import (
 	"bufio"
 	"fmt"
-	"github.com/openGemini/openGemini/engine"
-	"github.com/openGemini/openGemini/engine/index/tsi"
-	"github.com/openGemini/openGemini/lib/config"
-	"github.com/openGemini/openGemini/lib/index"
-	"github.com/openGemini/openGemini/lib/netstorage"
-	"github.com/openGemini/openGemini/lib/util"
-	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
-	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
-	"github.com/stretchr/testify/assert"
 	"io"
 	"os"
 	"path"
@@ -36,6 +27,16 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/openGemini/openGemini/engine"
+	"github.com/openGemini/openGemini/engine/index/tsi"
+	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/index"
+	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/util"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
+	"github.com/stretchr/testify/assert"
 )
 
 const (

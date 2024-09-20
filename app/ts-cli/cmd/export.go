@@ -18,9 +18,10 @@ import (
 	"bufio"
 	"encoding/json"
 	"flag"
+	"os"
+
 	"github.com/openGemini/openGemini/app/ts-cli/geminicli"
 	"github.com/spf13/cobra"
-	"os"
 )
 
 func init() {

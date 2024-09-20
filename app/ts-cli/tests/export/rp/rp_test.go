@@ -15,13 +15,14 @@
 package rp
 
 import (
-	"github.com/openGemini/openGemini/app/ts-cli/geminicli"
-	"github.com/openGemini/openGemini/app/ts-cli/tests/export"
-	"github.com/stretchr/testify/assert"
 	"os"
 	"path"
 	"path/filepath"
 	"testing"
+
+	"github.com/openGemini/openGemini/app/ts-cli/geminicli"
+	"github.com/openGemini/openGemini/app/ts-cli/tests/export"
+	"github.com/stretchr/testify/assert"
 )
 
 var (
