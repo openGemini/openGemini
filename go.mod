@@ -1,8 +1,6 @@
 module github.com/openGemini/openGemini
 
-go 1.21
-
-toolchain go1.21.12
+go 1.20
 
 require (
 	github.com/BurntSushi/toml v0.4.1

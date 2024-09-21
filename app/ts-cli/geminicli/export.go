@@ -453,7 +453,7 @@ func (e *Exporter) Init(clc *CommandLineConfig, progressedFiles map[string]struc
 	if clc.Resume {
 		e.resume = true
 		e.progress = progressedFiles
-		e.defaultLogger.Println(fmt.Sprintf("starting resume export file, you have exported %d files", len(e.progress)))
+		e.defaultLogger.Printf(fmt.Sprintf("starting resume export file, you have exported %d files \n", len(e.progress)))
 	}
 	if err := e.writeProgressJson(clc); err != nil {
 		return err
@@ -1276,7 +1276,7 @@ func (t *txtParser) getRowBuf(buf []byte, measurementName string, row influx.Row
 	fields := row.Fields
 	tm := row.Timestamp
 
-	buf = []byte(measurementName)
+	buf = append(buf, measurementName...)
 	buf = append(buf, ',')
 	for i, tag := range tags {
 		buf = append(buf, EscapeTagKey(tag.Key)+"="...)
@@ -1344,7 +1344,7 @@ func (t *txtParser) writeMetaInfo(metaWriter io.Writer, infoType InfoType, info 
 }
 
 func (t *txtParser) writeOutputInfo(outputWriter io.Writer, info string) {
-	fmt.Fprintf(outputWriter, info)
+	fmt.Fprint(outputWriter, info)
 }
 
 type csvParser struct {
@@ -1363,9 +1363,7 @@ func newCsvParser() *csvParser {
 // encoded index key format: [total len][ms len][ms][tagkey1 len][tagkey1 val]...]
 // parse to csv format: mst,tagval1,tagval2...
 func (c *csvParser) parse2SeriesKeyWithoutVersion(key []byte, dst []byte, splitWithNull bool, _ *opengemini.Point) ([]byte, error) {
-	msName, src, err := influx.MeasurementName(key)
-	originMstName := influx.GetOriginMstName(string(msName))
-	originMstName = EscapeMstName(originMstName)
+	_, src, err := influx.MeasurementName(key)
 	if err != nil {
 		return []byte{}, err
 	}
@@ -1455,10 +1453,13 @@ func (c *csvParser) writeMstInfoFromTssp(metaWriter io.Writer, outputWriter io.W
 	var seriesKeys [][]byte
 	var isExpectSeries []bool
 	// Use sid get series key's []byte
-	if seriesKeys, _, isExpectSeries, err = index.SearchSeriesWithTagArray(sid, seriesKeys, nil, combineKey, isExpectSeries, nil); err != nil {
+	if seriesKeys, _, _, err = index.SearchSeriesWithTagArray(sid, seriesKeys, nil, combineKey, isExpectSeries, nil); err != nil {
 		return err
 	}
 	_, src, err := influx.MeasurementName(seriesKeys[0])
+	if err != nil {
+		return err
+	}
 	tagsN := encoding.UnmarshalUint16(src)
 	src = src[2:]
 	var i uint16
@@ -1602,7 +1603,6 @@ func (c *csvParser) writeMetaInfo(metaWriter io.Writer, infoType InfoType, info 
 }
 
 func (c *csvParser) writeOutputInfo(_ io.Writer, _ string) {
-	return // do nothing
 }
 
 type remoteExporter struct {
