@@ -63,7 +63,7 @@ const (
 )
 
 var (
-	mpbProgress         = mpb.New(mpb.WithWidth(100))
+	MpbProgress         = mpb.New(mpb.WithWidth(100))
 	ResumeJsonPath      string
 	ProgressedFilesPath string
 )
@@ -372,30 +372,6 @@ func (e *Exporter) parseActualDir(clc *CommandLineConfig) error {
 
 // parseDatabaseInfos get all path infos for export.
 func (e *Exporter) parseDatabaseInfos() error {
-	// If the user does not specify a database, find all database and RP information
-	if e.filter.database == "" {
-		if e.filter.retention != "" {
-			return fmt.Errorf("retention policies can only be specified when specifying a database separately")
-		}
-		// If user doesn't specified a database, get all db's path info.
-		files, err := os.ReadDir(e.actualDataPath)
-		if err != nil {
-			return err
-		}
-		for _, file := range files {
-			if !file.IsDir() {
-				continue
-			}
-			dbDiskInfo := newDatabaseDiskInfo()
-			err := dbDiskInfo.init(e.actualDataPath, e.actualWalPath, file.Name(), "")
-			if err != nil {
-				return err
-			}
-			e.databaseDiskInfos = append(e.databaseDiskInfos, dbDiskInfo)
-		}
-		return nil
-	}
-
 	dbName := e.filter.database
 	// If the user specifies a database and specifies a retention
 	if e.filter.retention != "" {
@@ -527,7 +503,7 @@ func (e *Exporter) newBar() (*mpb.Bar, error) {
 	if e.filesTotalCount == 0 {
 		return nil, fmt.Errorf("no files to export.check your filter or datapath")
 	}
-	bar := mpbProgress.New(int64(e.filesTotalCount),
+	bar := MpbProgress.New(int64(e.filesTotalCount),
 		mpb.BarStyle().Lbound("[").Filler("=").Tip(">").Padding("-").Rbound("]"),
 		mpb.PrependDecorators(
 			decor.Name("Exporting Data:", decor.WC{W: 20, C: decor.DidentRight}),
@@ -768,7 +744,7 @@ func (e *Exporter) writeDML(metaWriter io.Writer, outputWriter io.Writer) error 
 			}
 		}
 	}
-	mpbProgress.Wait()
+	MpbProgress.Wait()
 	return nil
 }
 
@@ -1787,18 +1763,15 @@ func getFieldNameIndexFromRow(slice []influx.Field, str string) (int, bool) {
 }
 
 func convertTime(input string) (int64, error) {
-	// convert time format
 	t, err := time.Parse(time.RFC3339, input)
 	if err == nil {
 		return t.UnixNano(), nil
 	}
 
-	// convert timeStamp
 	timestamp, err := strconv.ParseInt(input, 10, 64)
 	if err == nil {
 		return timestamp, nil
 	}
 
-	// err
 	return 0, err
 }

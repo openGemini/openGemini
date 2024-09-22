@@ -40,6 +40,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
+	"github.com/vbauerster/mpb/v7"
 )
 
 const defaultDb = "db0"
@@ -463,6 +464,7 @@ func TestExporter_ExportTxt(t *testing.T) {
 		exportPath := filepath.Join(t.TempDir(), "export.txt")
 		ResumeJsonPath = filepath.Join(t.TempDir(), "progress.json")
 		ProgressedFilesPath = filepath.Join(t.TempDir(), "progressedFiles")
+		MpbProgress = mpb.New(mpb.WithWidth(100))
 		clc := &CommandLineConfig{
 			Export:   true,
 			DataDir:  dir,
@@ -501,6 +503,7 @@ func TestExporter_ExportCsv(t *testing.T) {
 		exportPath := filepath.Join(t.TempDir(), "export.txt")
 		ResumeJsonPath = filepath.Join(t.TempDir(), "progress.json")
 		ProgressedFilesPath = filepath.Join(t.TempDir(), "progressedFiles")
+		MpbProgress = mpb.New(mpb.WithWidth(100))
 		clc := &CommandLineConfig{
 			Export:   true,
 			DataDir:  dir,
