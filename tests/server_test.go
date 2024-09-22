@@ -24,6 +24,7 @@ import (
 	"github.com/openGemini/openGemini/app/ts-cli/geminicli"
 	"github.com/openGemini/openGemini/app/ts-cli/tests/export"
 	"github.com/stretchr/testify/assert"
+	"github.com/vbauerster/mpb/v7"
 )
 
 // Global server used by benchmarks
@@ -12325,6 +12326,11 @@ func TestServer_RemoteExport(t *testing.T) {
 	t.Run("test export data to remote", func(t *testing.T) {
 		geminicli.ResumeJsonPath = filepath.Join(t.TempDir(), "progress.json")
 		geminicli.ProgressedFilesPath = filepath.Join(t.TempDir(), "progressedFiles")
+		geminicli.MpbProgress = mpb.New(mpb.WithWidth(100))
+		URL, err := url.Parse(s.URL())
+		if err != nil {
+			t.Fatal(err)
+		}
 		e := geminicli.NewExporter()
 		clc := &geminicli.CommandLineConfig{
 			Export:            true,
@@ -12336,7 +12342,7 @@ func TestServer_RemoteExport(t *testing.T) {
 			RetentionFilter:   "rp0",
 			MeasurementFilter: "average_temperature",
 			TimeFilter:        "2019-08-25T09:18:00Z-2019-08-25T12:48:00Z",
-			Remote:            s.URL(),
+			Remote:            URL.Host,
 		}
 		err = e.Export(clc, nil)
 		assert.NoError(t, err)

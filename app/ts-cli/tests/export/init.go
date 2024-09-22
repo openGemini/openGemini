@@ -255,10 +255,7 @@ func writeData(sh engine.Shard, rs []influx.Row, forceFlush bool) error {
 		return err
 	}
 
-	// wait index flush
-	//time.Sleep(time.Second * 1)
 	if forceFlush {
-		// wait mem table flush
 		sh.ForceFlush()
 	}
 	return nil

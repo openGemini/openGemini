@@ -23,6 +23,7 @@ import (
 	"github.com/openGemini/openGemini/app/ts-cli/geminicli"
 	"github.com/openGemini/openGemini/app/ts-cli/tests/export"
 	"github.com/stretchr/testify/assert"
+	"github.com/vbauerster/mpb/v7"
 )
 
 var (
@@ -49,6 +50,7 @@ func TestFilterTime1ExportTxt(t *testing.T) {
 		exportPath := filepath.Join(t.TempDir(), "export.txt")
 		geminicli.ResumeJsonPath = filepath.Join(t.TempDir(), "progress.json")
 		geminicli.ProgressedFilesPath = filepath.Join(t.TempDir(), "progressedFiles")
+		geminicli.MpbProgress = mpb.New(mpb.WithWidth(100))
 		e := geminicli.NewExporter()
 		clc := &geminicli.CommandLineConfig{
 			Export:            true,
@@ -83,6 +85,7 @@ func TestFilterTime2ExportTxt(t *testing.T) {
 		exportPath := filepath.Join(t.TempDir(), "export.txt")
 		geminicli.ResumeJsonPath = filepath.Join(t.TempDir(), "progress.json")
 		geminicli.ProgressedFilesPath = filepath.Join(t.TempDir(), "progressedFiles")
+		geminicli.MpbProgress = mpb.New(mpb.WithWidth(100))
 		e := geminicli.NewExporter()
 		clc := &geminicli.CommandLineConfig{
 			Export:            true,
@@ -117,6 +120,7 @@ func TestFilterTime3ExportTxt(t *testing.T) {
 		exportPath := filepath.Join(t.TempDir(), "export.txt")
 		geminicli.ResumeJsonPath = filepath.Join(t.TempDir(), "progress.json")
 		geminicli.ProgressedFilesPath = filepath.Join(t.TempDir(), "progressedFiles")
+		geminicli.MpbProgress = mpb.New(mpb.WithWidth(100))
 		e := geminicli.NewExporter()
 		clc := &geminicli.CommandLineConfig{
 			Export:            true,
@@ -151,6 +155,7 @@ func TestFilterTime4ExportTxt(t *testing.T) {
 		exportPath := filepath.Join(t.TempDir(), "export.txt")
 		geminicli.ResumeJsonPath = filepath.Join(t.TempDir(), "progress.json")
 		geminicli.ProgressedFilesPath = filepath.Join(t.TempDir(), "progressedFiles")
+		geminicli.MpbProgress = mpb.New(mpb.WithWidth(100))
 		e := geminicli.NewExporter()
 		clc := &geminicli.CommandLineConfig{
 			Export:            true,
@@ -185,6 +190,7 @@ func TestFilterTimeExportCsv(t *testing.T) {
 		exportPath := filepath.Join(t.TempDir(), "export.csv")
 		geminicli.ResumeJsonPath = filepath.Join(t.TempDir(), "progress.json")
 		geminicli.ProgressedFilesPath = filepath.Join(t.TempDir(), "progressedFiles")
+		geminicli.MpbProgress = mpb.New(mpb.WithWidth(100))
 		e := geminicli.NewExporter()
 		clc := &geminicli.CommandLineConfig{
 			Export:            true,
