@@ -1,4 +1,4 @@
-// Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
+// Copyright right 2024 openGemini author.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -34,7 +34,7 @@ var (
 	FilterTimeName = "2019-08-25T09:18:00Z~2019-08-26T07:48:00Z"
 )
 
-func TestRPExport(t *testing.T) {
+func TestRPExportTxt(t *testing.T) {
 	dir := t.TempDir()
 	err := export.InitData(dir)
 	if err != nil {
@@ -67,6 +67,14 @@ func TestRPExport(t *testing.T) {
 		assert.NoError(t, err)
 		assert.NoError(t, export.CompareStrings(t, file, exportFile))
 	})
+}
+
+func TestRPExportCsv(t *testing.T) {
+	dir := t.TempDir()
+	err := export.InitData(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Run("test export csv data using retention:"+RPName, func(t *testing.T) {
 		exportPath := filepath.Join(t.TempDir(), "export.csv")
 		geminicli.ResumeJsonPath = filepath.Join(t.TempDir(), "progress.json")

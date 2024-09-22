@@ -1,4 +1,4 @@
-// Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
+// Copyright right 2024 openGemini author.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -443,7 +443,7 @@ func TestDatabaseDiskInfo_init(t *testing.T) {
 	}
 }
 
-func TestExporter_Export(t *testing.T) {
+func TestExporter_ExportTxt(t *testing.T) {
 	dir := t.TempDir()
 	msNames := []string{"cpu"}
 	sh, err := createShard(defaultDb, defaultRp, defaultPtId, dir)
@@ -479,8 +479,25 @@ func TestExporter_Export(t *testing.T) {
 		assert.NoError(t, err)
 		assert.NoError(t, compareStrings(t, lpOnlyReader, exportFile))
 	})
+}
+
+func TestExporter_ExportCsv(t *testing.T) {
+	dir := t.TempDir()
+	msNames := []string{"cpu"}
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = closeShard(sh)
+	}()
+	rows, _, _ := GenDataRecord(msNames, 8, 5, time.Second, false, true, true)
+	err = writeData(sh, rows, true)
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Run("test csv export", func(t *testing.T) {
-		e := NewExporter()
+		e1 := NewExporter()
 		exportPath := filepath.Join(t.TempDir(), "export.txt")
 		ResumeJsonPath = filepath.Join(t.TempDir(), "progress.json")
 		ProgressedFilesPath = filepath.Join(t.TempDir(), "progressedFiles")
@@ -493,8 +510,7 @@ func TestExporter_Export(t *testing.T) {
 			Format:   csvFormatExporter,
 			DBFilter: defaultDb,
 		}
-		err = e.Export(clc, nil)
-		e.defaultLogger.Println(e.lineCount)
+		err = e1.Export(clc, nil)
 		assert.NoError(t, err)
 		lpOnlyReader := strings.NewReader(lpOnlyCsvContent)
 		exportFile, err := os.Open(exportPath)
@@ -784,20 +800,6 @@ func TestDataFilter_timeFilter(t *testing.T) {
 			}
 			assert.Equalf(t, tt.want, d.timeFilter(tt.args.t), "Filter(%v)", tt.args.t)
 		})
-	}
-}
-
-// check remote openGemini config before run
-func TestRemoteInit(t *testing.T) {
-	re := newRemoteExporter()
-	err := re.Init(&CommandLineConfig{
-		Remote:         "127.0.0.1:8086",
-		RemoteUsername: "admin",
-		RemotePassword: "123456",
-		RemoteSsl:      true,
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
 }
 

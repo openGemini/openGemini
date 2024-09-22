@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"strconv"
@@ -20,6 +21,9 @@ import (
 	"time"
 
 	"github.com/influxdata/influxdb/models"
+	"github.com/openGemini/openGemini/app/ts-cli/geminicli"
+	"github.com/openGemini/openGemini/app/ts-cli/tests/export"
+	"github.com/stretchr/testify/assert"
 )
 
 // Global server used by benchmarks
@@ -12308,4 +12312,43 @@ func TestServer_DropMeasurementPerRP(t *testing.T) {
 			t.Error(query.failureMessage())
 		}
 	}
+}
+
+func TestServer_RemoteExport(t *testing.T) {
+	s := OpenServer(NewConfig())
+	defer s.Close()
+	dir := t.TempDir()
+	err := export.InitData(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Run("test export data to remote", func(t *testing.T) {
+		geminicli.ResumeJsonPath = filepath.Join(t.TempDir(), "progress.json")
+		geminicli.ProgressedFilesPath = filepath.Join(t.TempDir(), "progressedFiles")
+		e := geminicli.NewExporter()
+		clc := &geminicli.CommandLineConfig{
+			Export:            true,
+			DataDir:           dir,
+			WalDir:            dir,
+			Compress:          false,
+			Format:            export.RemoteFormatExporter,
+			DBFilter:          "db0",
+			RetentionFilter:   "rp0",
+			MeasurementFilter: "average_temperature",
+			TimeFilter:        "2019-08-25T09:18:00Z-2019-08-25T12:48:00Z",
+			Remote:            s.URL(),
+		}
+		err = e.Export(clc, nil)
+		assert.NoError(t, err)
+		// make sure data insert successful
+		time.Sleep(1 * time.Second)
+		data, err := export.QueryData(s.URL())
+		if err != nil {
+			t.Fatal(err)
+		}
+		file := strings.NewReader(export.RemoteTxt)
+		exportFile := strings.NewReader(data)
+		assert.NoError(t, err)
+		assert.NoError(t, export.CompareStrings(t, file, exportFile))
+	})
 }

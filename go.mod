@@ -35,12 +35,10 @@ require (
 	github.com/mitchellh/cli v1.1.5
 	github.com/nxadm/tail v1.4.11
 	github.com/olekukonko/tablewriter v0.0.0-20170122224234-a0225b3f23b5
-	github.com/openGemini/go-prompt v0.0.0-20240906095849-29653678978f
-	github.com/openGemini/opengemini-client-go v0.4.0
+	github.com/openGemini/opengemini-client-go v0.6.0
 	github.com/panjf2000/ants/v2 v2.5.0
 	github.com/pierrec/lz4/v4 v4.1.17
 	github.com/pingcap/failpoint v0.0.0-20220801062533-2eaa32854a6c
-	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.19.1
 	github.com/prometheus/common v0.48.0
 	github.com/prometheus/prometheus v1.8.2-0.20210914090109-37468d88dce8
@@ -166,6 +164,7 @@ require (
 	github.com/opentracing/opentracing-go v1.2.0 // indirect
 	github.com/philhofer/fwd v1.1.2 // indirect
 	github.com/pingcap/errors v0.11.4 // indirect
+	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pkg/term v1.2.0-beta.2 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/posener/complete v1.2.3 // indirect

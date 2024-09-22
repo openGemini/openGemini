@@ -1,4 +1,4 @@
-// Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
+// Copyright right 2024 openGemini author.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -32,7 +32,7 @@ var (
 	FilterMstName        = "average_temperature"
 )
 
-func TestFilterMstExport(t *testing.T) {
+func TestFilterMstExportTxt(t *testing.T) {
 	dir := t.TempDir()
 	err := export.InitData(dir)
 	if err != nil {
@@ -63,6 +63,14 @@ func TestFilterMstExport(t *testing.T) {
 		assert.NoError(t, err)
 		assert.NoError(t, export.CompareStrings(t, file, exportFile))
 	})
+}
+
+func TestFilterMstExportCsv(t *testing.T) {
+	dir := t.TempDir()
+	err := export.InitData(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Run("test export csv data using mstfilter:"+FilterMstName, func(t *testing.T) {
 		exportPath := filepath.Join(t.TempDir(), "export.csv")
 		geminicli.ResumeJsonPath = filepath.Join(t.TempDir(), "progress.json")

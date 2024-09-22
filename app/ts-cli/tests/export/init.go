@@ -1,4 +1,4 @@
-// Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
+// Copyright right 2024 openGemini author.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path"
 	"path/filepath"
@@ -36,6 +37,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
+	"github.com/openGemini/opengemini-client-go/opengemini"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -302,3 +304,145 @@ func GetCurrentPath() string {
 
 	return path.Dir(filename)
 }
+
+func QueryData(URL string) (string, error) {
+	ip, portStr, err := net.SplitHostPort(URL)
+	if err != nil {
+		return "", err
+	}
+	port, err := strconv.ParseInt(portStr, 10, 64)
+	if err != nil {
+		return "", err
+	}
+	clientConfig := initConfig(ip, port)
+	client, err := opengemini.NewClient(clientConfig)
+	if err != nil {
+		return "", err
+	}
+	q := opengemini.Query{
+		Database: "db0",
+		Command:  "select * from " + "average_temperature",
+	}
+	res, err := client.Query(q)
+	if err != nil {
+		return "", err
+	}
+	for _, r := range res.Results {
+		for _, s := range r.Series {
+			for _, v := range s.Values {
+				line := s.Name + ","
+				line += s.Columns[2] + "=" + v[2].(string) + " "
+				line += s.Columns[1] + "=" + v[1].(string) + " "
+				line += strconv.FormatFloat(v[0].(float64), 'f', -1, 64)
+				data += line + "\n"
+			}
+		}
+	}
+	return data, nil
+}
+
+func initConfig(ip string, port int64) *opengemini.Config {
+	config := &opengemini.Config{
+		Addresses: []*opengemini.Address{
+			{
+				Host: ip,
+				Port: int(port),
+			},
+		},
+	}
+	return config
+}
+
+var data = `# CONTEXT-DATABASE: db0
+# CONTEXT-MEASUREMENT: average_temperature
+# CONTEXT-RETENTION-POLICY: rp0
+# DDL
+# DML
+# FROM TSSP FILE
+# openGemini EXPORT: 2019-08-25T09:18:00Z - 2019-08-25T12:48:00Z
+CREATE DATABASE db0
+CREATE RETENTION POLICY rp0 ON db0 DURATION 0s REPLICATION 1
+`
+var RemoteTxt = `
+# CONTEXT-DATABASE: db0
+# CONTEXT-MEASUREMENT: average_temperature
+# CONTEXT-RETENTION-POLICY: rp0
+# DDL
+# DML
+# FROM TSSP FILE
+# openGemini EXPORT: 2019-08-25T09:18:00Z - 2019-08-25T12:48:00Z
+CREATE DATABASE db0
+CREATE RETENTION POLICY rp0 ON db0 DURATION 0s REPLICATION 1
+average_temperature,location=coyote_creek degrees=88 1566724680000000000
+average_temperature,location=coyote_creek degrees=75 1566725040000000000
+average_temperature,location=coyote_creek degrees=88 1566725400000000000
+average_temperature,location=coyote_creek degrees=79 1566725760000000000
+average_temperature,location=coyote_creek degrees=71 1566726120000000000
+average_temperature,location=coyote_creek degrees=74 1566726480000000000
+average_temperature,location=coyote_creek degrees=87 1566726840000000000
+average_temperature,location=coyote_creek degrees=81 1566727200000000000
+average_temperature,location=coyote_creek degrees=74 1566727560000000000
+average_temperature,location=coyote_creek degrees=72 1566727920000000000
+average_temperature,location=coyote_creek degrees=70 1566728280000000000
+average_temperature,location=coyote_creek degrees=76 1566728640000000000
+average_temperature,location=coyote_creek degrees=75 1566729000000000000
+average_temperature,location=coyote_creek degrees=72 1566729360000000000
+average_temperature,location=coyote_creek degrees=81 1566729720000000000
+average_temperature,location=coyote_creek degrees=90 1566730080000000000
+average_temperature,location=coyote_creek degrees=76 1566730440000000000
+average_temperature,location=coyote_creek degrees=75 1566730800000000000
+average_temperature,location=coyote_creek degrees=83 1566731160000000000
+average_temperature,location=coyote_creek degrees=84 1566731520000000000
+average_temperature,location=coyote_creek degrees=79 1566731880000000000
+average_temperature,location=coyote_creek degrees=78 1566732240000000000
+average_temperature,location=coyote_creek degrees=81 1566732600000000000
+average_temperature,location=coyote_creek degrees=86 1566732960000000000
+average_temperature,location=coyote_creek degrees=79 1566733320000000000
+average_temperature,location=coyote_creek degrees=70 1566733680000000000
+average_temperature,location=coyote_creek degrees=87 1566734040000000000
+average_temperature,location=coyote_creek degrees=78 1566734400000000000
+average_temperature,location=coyote_creek degrees=70 1566734760000000000
+average_temperature,location=coyote_creek degrees=82 1566735120000000000
+average_temperature,location=coyote_creek degrees=88 1566735480000000000
+average_temperature,location=coyote_creek degrees=74 1566735840000000000
+average_temperature,location=coyote_creek degrees=90 1566736200000000000
+average_temperature,location=coyote_creek degrees=82 1566736560000000000
+average_temperature,location=coyote_creek degrees=77 1566736920000000000
+average_temperature,location=coyote_creek degrees=75 1566737280000000000
+average_temperature,location=santa_monica degrees=88 1566724680000000000
+average_temperature,location=santa_monica degrees=73 1566725040000000000
+average_temperature,location=santa_monica degrees=87 1566725400000000000
+average_temperature,location=santa_monica degrees=89 1566725760000000000
+average_temperature,location=santa_monica degrees=79 1566726120000000000
+average_temperature,location=santa_monica degrees=73 1566726480000000000
+average_temperature,location=santa_monica degrees=74 1566726840000000000
+average_temperature,location=santa_monica degrees=82 1566727200000000000
+average_temperature,location=santa_monica degrees=78 1566727560000000000
+average_temperature,location=santa_monica degrees=82 1566727920000000000
+average_temperature,location=santa_monica degrees=83 1566728280000000000
+average_temperature,location=santa_monica degrees=70 1566728640000000000
+average_temperature,location=santa_monica degrees=74 1566729000000000000
+average_temperature,location=santa_monica degrees=70 1566729360000000000
+average_temperature,location=santa_monica degrees=71 1566729720000000000
+average_temperature,location=santa_monica degrees=73 1566730080000000000
+average_temperature,location=santa_monica degrees=72 1566730440000000000
+average_temperature,location=santa_monica degrees=80 1566730800000000000
+average_temperature,location=santa_monica degrees=72 1566731160000000000
+average_temperature,location=santa_monica degrees=78 1566731520000000000
+average_temperature,location=santa_monica degrees=78 1566731880000000000
+average_temperature,location=santa_monica degrees=73 1566732240000000000
+average_temperature,location=santa_monica degrees=82 1566732600000000000
+average_temperature,location=santa_monica degrees=81 1566732960000000000
+average_temperature,location=santa_monica degrees=89 1566733320000000000
+average_temperature,location=santa_monica degrees=83 1566733680000000000
+average_temperature,location=santa_monica degrees=70 1566734040000000000
+average_temperature,location=santa_monica degrees=75 1566734400000000000
+average_temperature,location=santa_monica degrees=73 1566734760000000000
+average_temperature,location=santa_monica degrees=87 1566735120000000000
+average_temperature,location=santa_monica degrees=75 1566735480000000000
+average_temperature,location=santa_monica degrees=90 1566735840000000000
+average_temperature,location=santa_monica degrees=72 1566736200000000000
+average_temperature,location=santa_monica degrees=79 1566736560000000000
+average_temperature,location=santa_monica degrees=81 1566736920000000000
+average_temperature,location=santa_monica degrees=72 1566737280000000000
+`
