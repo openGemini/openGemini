@@ -1662,7 +1662,7 @@ func (re *remoteExporter) createRetentionPolicy(dbName string, rpName string) er
 }
 
 func (re *remoteExporter) writeAllPoints() error {
-	err := re.client.WriteBatchPoints(context.Background(), re.database, re.points)
+	err := re.client.WriteBatchPointsWithRp(context.Background(), re.database, re.retentionPolicy, re.points)
 	if err != nil {
 		return err
 	}
