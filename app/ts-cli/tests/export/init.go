@@ -356,7 +356,7 @@ var data = `# CONTEXT-DATABASE: db0
 # DDL
 # DML
 # FROM TSSP FILE
-# openGemini EXPORT: 2019-08-25T09:18:00Z - 2019-08-25T12:48:00Z
+# openGemini EXPORT: 2019-08-25T22:18:00Z - 2019-08-26T01:48:00Z
 CREATE DATABASE db0
 CREATE RETENTION POLICY rp0 ON db0 DURATION 0s REPLICATION 1
 `
@@ -367,79 +367,79 @@ var RemoteTxt = `
 # DDL
 # DML
 # FROM TSSP FILE
-# openGemini EXPORT: 2019-08-25T09:18:00Z - 2019-08-25T12:48:00Z
+# openGemini EXPORT: 2019-08-25T22:18:00Z - 2019-08-26T01:48:00Z
 CREATE DATABASE db0
 CREATE RETENTION POLICY rp0 ON db0 DURATION 0s REPLICATION 1
-average_temperature,location=coyote_creek degrees=88 1566724680000000000
-average_temperature,location=coyote_creek degrees=75 1566725040000000000
-average_temperature,location=coyote_creek degrees=88 1566725400000000000
-average_temperature,location=coyote_creek degrees=79 1566725760000000000
-average_temperature,location=coyote_creek degrees=71 1566726120000000000
-average_temperature,location=coyote_creek degrees=74 1566726480000000000
-average_temperature,location=coyote_creek degrees=87 1566726840000000000
-average_temperature,location=coyote_creek degrees=81 1566727200000000000
-average_temperature,location=coyote_creek degrees=74 1566727560000000000
-average_temperature,location=coyote_creek degrees=72 1566727920000000000
-average_temperature,location=coyote_creek degrees=70 1566728280000000000
-average_temperature,location=coyote_creek degrees=76 1566728640000000000
-average_temperature,location=coyote_creek degrees=75 1566729000000000000
-average_temperature,location=coyote_creek degrees=72 1566729360000000000
-average_temperature,location=coyote_creek degrees=81 1566729720000000000
-average_temperature,location=coyote_creek degrees=90 1566730080000000000
-average_temperature,location=coyote_creek degrees=76 1566730440000000000
-average_temperature,location=coyote_creek degrees=75 1566730800000000000
-average_temperature,location=coyote_creek degrees=83 1566731160000000000
-average_temperature,location=coyote_creek degrees=84 1566731520000000000
-average_temperature,location=coyote_creek degrees=79 1566731880000000000
-average_temperature,location=coyote_creek degrees=78 1566732240000000000
-average_temperature,location=coyote_creek degrees=81 1566732600000000000
-average_temperature,location=coyote_creek degrees=86 1566732960000000000
-average_temperature,location=coyote_creek degrees=79 1566733320000000000
-average_temperature,location=coyote_creek degrees=70 1566733680000000000
-average_temperature,location=coyote_creek degrees=87 1566734040000000000
-average_temperature,location=coyote_creek degrees=78 1566734400000000000
-average_temperature,location=coyote_creek degrees=70 1566734760000000000
-average_temperature,location=coyote_creek degrees=82 1566735120000000000
-average_temperature,location=coyote_creek degrees=88 1566735480000000000
-average_temperature,location=coyote_creek degrees=74 1566735840000000000
-average_temperature,location=coyote_creek degrees=90 1566736200000000000
-average_temperature,location=coyote_creek degrees=82 1566736560000000000
-average_temperature,location=coyote_creek degrees=77 1566736920000000000
-average_temperature,location=coyote_creek degrees=75 1566737280000000000
-average_temperature,location=santa_monica degrees=88 1566724680000000000
-average_temperature,location=santa_monica degrees=73 1566725040000000000
-average_temperature,location=santa_monica degrees=87 1566725400000000000
-average_temperature,location=santa_monica degrees=89 1566725760000000000
-average_temperature,location=santa_monica degrees=79 1566726120000000000
-average_temperature,location=santa_monica degrees=73 1566726480000000000
-average_temperature,location=santa_monica degrees=74 1566726840000000000
-average_temperature,location=santa_monica degrees=82 1566727200000000000
-average_temperature,location=santa_monica degrees=78 1566727560000000000
-average_temperature,location=santa_monica degrees=82 1566727920000000000
-average_temperature,location=santa_monica degrees=83 1566728280000000000
-average_temperature,location=santa_monica degrees=70 1566728640000000000
-average_temperature,location=santa_monica degrees=74 1566729000000000000
-average_temperature,location=santa_monica degrees=70 1566729360000000000
-average_temperature,location=santa_monica degrees=71 1566729720000000000
-average_temperature,location=santa_monica degrees=73 1566730080000000000
-average_temperature,location=santa_monica degrees=72 1566730440000000000
-average_temperature,location=santa_monica degrees=80 1566730800000000000
-average_temperature,location=santa_monica degrees=72 1566731160000000000
-average_temperature,location=santa_monica degrees=78 1566731520000000000
-average_temperature,location=santa_monica degrees=78 1566731880000000000
-average_temperature,location=santa_monica degrees=73 1566732240000000000
-average_temperature,location=santa_monica degrees=82 1566732600000000000
-average_temperature,location=santa_monica degrees=81 1566732960000000000
-average_temperature,location=santa_monica degrees=89 1566733320000000000
-average_temperature,location=santa_monica degrees=83 1566733680000000000
-average_temperature,location=santa_monica degrees=70 1566734040000000000
-average_temperature,location=santa_monica degrees=75 1566734400000000000
-average_temperature,location=santa_monica degrees=73 1566734760000000000
-average_temperature,location=santa_monica degrees=87 1566735120000000000
-average_temperature,location=santa_monica degrees=75 1566735480000000000
-average_temperature,location=santa_monica degrees=90 1566735840000000000
-average_temperature,location=santa_monica degrees=72 1566736200000000000
-average_temperature,location=santa_monica degrees=79 1566736560000000000
-average_temperature,location=santa_monica degrees=81 1566736920000000000
-average_temperature,location=santa_monica degrees=72 1566737280000000000
+average_temperature,location=coyote_creek degrees=88 1566771480000000000
+average_temperature,location=coyote_creek degrees=90 1566771840000000000
+average_temperature,location=coyote_creek degrees=89 1566772200000000000
+average_temperature,location=coyote_creek degrees=85 1566772560000000000
+average_temperature,location=coyote_creek degrees=74 1566772920000000000
+average_temperature,location=coyote_creek degrees=88 1566773280000000000
+average_temperature,location=coyote_creek degrees=72 1566773640000000000
+average_temperature,location=coyote_creek degrees=75 1566774000000000000
+average_temperature,location=coyote_creek degrees=85 1566774360000000000
+average_temperature,location=coyote_creek degrees=82 1566774720000000000
+average_temperature,location=coyote_creek degrees=74 1566775080000000000
+average_temperature,location=coyote_creek degrees=72 1566775440000000000
+average_temperature,location=coyote_creek degrees=73 1566775800000000000
+average_temperature,location=coyote_creek degrees=82 1566776160000000000
+average_temperature,location=coyote_creek degrees=75 1566776520000000000
+average_temperature,location=coyote_creek degrees=75 1566776880000000000
+average_temperature,location=coyote_creek degrees=77 1566777240000000000
+average_temperature,location=santa_monica degrees=76 1566771480000000000
+average_temperature,location=santa_monica degrees=74 1566771840000000000
+average_temperature,location=santa_monica degrees=79 1566772200000000000
+average_temperature,location=santa_monica degrees=72 1566772560000000000
+average_temperature,location=santa_monica degrees=89 1566772920000000000
+average_temperature,location=santa_monica degrees=77 1566773280000000000
+average_temperature,location=santa_monica degrees=76 1566773640000000000
+average_temperature,location=santa_monica degrees=74 1566774000000000000
+average_temperature,location=santa_monica degrees=76 1566774360000000000
+average_temperature,location=santa_monica degrees=79 1566774720000000000
+average_temperature,location=santa_monica degrees=87 1566775080000000000
+average_temperature,location=santa_monica degrees=87 1566775440000000000
+average_temperature,location=santa_monica degrees=75 1566775800000000000
+average_temperature,location=santa_monica degrees=79 1566776160000000000
+average_temperature,location=santa_monica degrees=79 1566776520000000000
+average_temperature,location=santa_monica degrees=70 1566776880000000000
+average_temperature,location=santa_monica degrees=79 1566777240000000000
+average_temperature,location=coyote_creek degrees=79 1566777600000000000
+average_temperature,location=coyote_creek degrees=78 1566777960000000000
+average_temperature,location=coyote_creek degrees=75 1566778320000000000
+average_temperature,location=coyote_creek degrees=72 1566778680000000000
+average_temperature,location=coyote_creek degrees=81 1566779040000000000
+average_temperature,location=coyote_creek degrees=88 1566779400000000000
+average_temperature,location=coyote_creek degrees=75 1566779760000000000
+average_temperature,location=coyote_creek degrees=70 1566780120000000000
+average_temperature,location=coyote_creek degrees=72 1566780480000000000
+average_temperature,location=coyote_creek degrees=85 1566780840000000000
+average_temperature,location=coyote_creek degrees=70 1566781200000000000
+average_temperature,location=coyote_creek degrees=81 1566781560000000000
+average_temperature,location=coyote_creek degrees=88 1566781920000000000
+average_temperature,location=coyote_creek degrees=84 1566782280000000000
+average_temperature,location=coyote_creek degrees=88 1566782640000000000
+average_temperature,location=coyote_creek degrees=74 1566783000000000000
+average_temperature,location=coyote_creek degrees=85 1566783360000000000
+average_temperature,location=coyote_creek degrees=83 1566783720000000000
+average_temperature,location=coyote_creek degrees=81 1566784080000000000
+average_temperature,location=santa_monica degrees=81 1566777600000000000
+average_temperature,location=santa_monica degrees=76 1566777960000000000
+average_temperature,location=santa_monica degrees=75 1566778320000000000
+average_temperature,location=santa_monica degrees=86 1566778680000000000
+average_temperature,location=santa_monica degrees=79 1566779040000000000
+average_temperature,location=santa_monica degrees=70 1566779400000000000
+average_temperature,location=santa_monica degrees=80 1566779760000000000
+average_temperature,location=santa_monica degrees=84 1566780120000000000
+average_temperature,location=santa_monica degrees=83 1566780480000000000
+average_temperature,location=santa_monica degrees=79 1566780840000000000
+average_temperature,location=santa_monica degrees=73 1566781200000000000
+average_temperature,location=santa_monica degrees=78 1566781560000000000
+average_temperature,location=santa_monica degrees=87 1566781920000000000
+average_temperature,location=santa_monica degrees=86 1566782280000000000
+average_temperature,location=santa_monica degrees=72 1566782640000000000
+average_temperature,location=santa_monica degrees=78 1566783000000000000
+average_temperature,location=santa_monica degrees=70 1566783360000000000
+average_temperature,location=santa_monica degrees=70 1566783720000000000
+average_temperature,location=santa_monica degrees=90 1566784080000000000
 `

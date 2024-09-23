@@ -12341,7 +12341,7 @@ func TestServer_RemoteExport(t *testing.T) {
 			DBFilter:          "db0",
 			RetentionFilter:   "rp0",
 			MeasurementFilter: "average_temperature",
-			TimeFilter:        "2019-08-25T09:18:00Z~2019-08-25T12:48:00Z",
+			TimeFilter:        "2019-08-25T22:18:00Z~2019-08-26T01:48:00Z",
 			Remote:            URL.Host,
 		}
 		err = e.Export(clc, nil)
