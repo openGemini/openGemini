@@ -31,7 +31,7 @@ var (
 	CompressTxtFilePath = path.Join(export.GetCurrentPath(), "compress.txt")
 	CompressCsvFilePath = path.Join(export.GetCurrentPath(), "compress.csv")
 	DBFilterName        = "db0"
-	RPName              = "rp0"
+	FilterRpName        = "rp0"
 	FilterMstName       = "average_temperature"
 	FilterTimeName      = "2019-08-25T09:18:00Z~2019-08-26T07:48:00Z"
 )
@@ -56,7 +56,7 @@ func TestCompressExportTxt(t *testing.T) {
 			Compress:          true,
 			Format:            export.TxtFormatExporter,
 			DBFilter:          DBFilterName,
-			RetentionFilter:   RPName,
+			RetentionFilter:   FilterRpName,
 			MeasurementFilter: FilterMstName,
 			TimeFilter:        FilterTimeName,
 		}
@@ -93,7 +93,7 @@ func TestCompressExportCsv(t *testing.T) {
 			Compress:          true,
 			Format:            export.CsvFormatExporter,
 			DBFilter:          DBFilterName,
-			RetentionFilter:   RPName,
+			RetentionFilter:   FilterRpName,
 			MeasurementFilter: FilterMstName,
 			TimeFilter:        FilterTimeName,
 		}

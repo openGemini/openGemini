@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package rp
+package filterRp
 
 import (
 	"os"
@@ -27,21 +27,21 @@ import (
 )
 
 var (
-	RPTxtFilePath  = path.Join(export.GetCurrentPath(), "rp.txt")
-	RPCsvFilePath  = path.Join(export.GetCurrentPath(), "rp.csv")
+	RPTxtFilePath  = path.Join(export.GetCurrentPath(), "filterRp.txt")
+	RPCsvFilePath  = path.Join(export.GetCurrentPath(), "filterRp.csv")
 	DBFilterName   = "db0"
-	RPName         = "rp0"
+	FilterRpName   = "rp0"
 	FilterMstName  = "average_temperature"
 	FilterTimeName = "2019-08-25T09:18:00Z~2019-08-26T07:48:00Z"
 )
 
-func TestRPExportTxt(t *testing.T) {
+func TestFilterRpExportTxt(t *testing.T) {
 	dir := t.TempDir()
 	err := export.InitData(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Run("test export txt data using retention:"+RPName, func(t *testing.T) {
+	t.Run("test export txt data using retention:"+FilterRpName, func(t *testing.T) {
 		exportPath := filepath.Join(t.TempDir(), "export.txt")
 		geminicli.ResumeJsonPath = filepath.Join(t.TempDir(), "progress.json")
 		geminicli.ProgressedFilesPath = filepath.Join(t.TempDir(), "progressedFiles")
@@ -55,7 +55,7 @@ func TestRPExportTxt(t *testing.T) {
 			Compress:          false,
 			Format:            export.TxtFormatExporter,
 			DBFilter:          DBFilterName,
-			RetentionFilter:   RPName,
+			RetentionFilter:   FilterRpName,
 			MeasurementFilter: FilterMstName,
 			TimeFilter:        FilterTimeName,
 		}
@@ -71,13 +71,13 @@ func TestRPExportTxt(t *testing.T) {
 	})
 }
 
-func TestRPExportCsv(t *testing.T) {
+func TestFilterRpExportCsv(t *testing.T) {
 	dir := t.TempDir()
 	err := export.InitData(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Run("test export csv data using retention:"+RPName, func(t *testing.T) {
+	t.Run("test export csv data using retention:"+FilterRpName, func(t *testing.T) {
 		exportPath := filepath.Join(t.TempDir(), "export.csv")
 		geminicli.ResumeJsonPath = filepath.Join(t.TempDir(), "progress.json")
 		geminicli.ProgressedFilesPath = filepath.Join(t.TempDir(), "progressedFiles")
@@ -91,7 +91,7 @@ func TestRPExportCsv(t *testing.T) {
 			Compress:          false,
 			Format:            export.CsvFormatExporter,
 			DBFilter:          DBFilterName,
-			RetentionFilter:   RPName,
+			RetentionFilter:   FilterRpName,
 			MeasurementFilter: FilterMstName,
 			TimeFilter:        FilterTimeName,
 		}
