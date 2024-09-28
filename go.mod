@@ -35,7 +35,7 @@ require (
 	github.com/mitchellh/cli v1.1.5
 	github.com/nxadm/tail v1.4.11
 	github.com/olekukonko/tablewriter v0.0.0-20170122224234-a0225b3f23b5
-	github.com/openGemini/opengemini-client-go v0.6.0
+	github.com/openGemini/opengemini-client-go v0.4.0
 	github.com/panjf2000/ants/v2 v2.5.0
 	github.com/pierrec/lz4/v4 v4.1.17
 	github.com/pingcap/failpoint v0.0.0-20220801062533-2eaa32854a6c
