@@ -74,8 +74,8 @@ type CommandLineConfig struct {
 	DataDir           string `json:"data"`
 	WalDir            string `json:"wal"`
 	Remote            string `json:"remote"`
-	RemoteUsername    string `json:"remoteusername"`
-	RemotePassword    string `json:"remotepassword"`
+	RemoteUsername    string `json:"-"`
+	RemotePassword    string `json:"-"`
 	RemoteSsl         bool   `json:"remotessl"`
 	DBFilter          string `json:"dbfilter"`
 	RetentionFilter   string `json:"retentionfilter"`

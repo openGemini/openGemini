@@ -44,8 +44,8 @@ func init() {
 
 var exportCmd = &cobra.Command{
 	Use:   "export",
-	Short: "Export data from openGemini",
-	Long:  `Export data from openGemini to file or remote`,
+	Short: "(EXPERIMENTAL) Export data from openGemini",
+	Long:  `(EXPERIMENTAL) Export data from openGemini to file or remote`,
 	Example: `
 $ ts-cli export --format txt --out /tmp/openGemini/export/export.txt --data /tmp/openGemini/data --wal /tmp/openGemini/data
 --dbfilter NOAA_water_database
@@ -76,7 +76,7 @@ $ ts-cli export --format remote --remote ${host}:8086 --data /tmp/openGemini/dat
 			if err != nil {
 				return err
 			}
-			config, err := getResumeConfig()
+			config, err := getResumeConfig(&options)
 			if err != nil {
 				return err
 			}
@@ -100,7 +100,7 @@ $ ts-cli export --format remote --remote ${host}:8086 --data /tmp/openGemini/dat
 	},
 }
 
-func getResumeConfig() (*geminicli.CommandLineConfig, error) {
+func getResumeConfig(options *geminicli.CommandLineConfig) (*geminicli.CommandLineConfig, error) {
 	jsonData, err := os.ReadFile(geminicli.ResumeJsonPath)
 	if err != nil {
 		return nil, err
@@ -111,6 +111,8 @@ func getResumeConfig() (*geminicli.CommandLineConfig, error) {
 		return nil, err
 	}
 	config.Resume = true
+	config.RemoteUsername = options.RemoteUsername
+	config.RemotePassword = options.RemotePassword
 	return &config, nil
 }
 
