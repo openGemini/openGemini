@@ -66,6 +66,23 @@ type CommandLineConfig struct {
 	// import cmd options
 	Import bool
 	Path   string
+
+	// export cmd options
+	Export            bool
+	Format            string `json:"format"`
+	Out               string `json:"out"`
+	DataDir           string `json:"data"`
+	WalDir            string `json:"wal"`
+	Remote            string `json:"remote"`
+	RemoteUsername    string `json:"-"`
+	RemotePassword    string `json:"-"`
+	RemoteSsl         bool   `json:"remotessl"`
+	DBFilter          string `json:"dbfilter"`
+	RetentionFilter   string `json:"retentionfilter"`
+	MeasurementFilter string `json:"mstfilter"`
+	TimeFilter        string `json:"timefilter"`
+	Compress          bool   `json:"compress"`
+	Resume            bool
 }
 
 type HttpClient interface {
