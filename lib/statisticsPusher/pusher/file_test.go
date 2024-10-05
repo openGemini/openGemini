@@ -53,7 +53,7 @@ func TestFilePusher(t *testing.T) {
 	defer p.Stop()
 
 	lines := []string{
-		`mst,tid=t001,cid=c001 value=1.1  
+		`mst,tid=t001,cid=c001 value=1.1
 
 `,
 		`mst,tid=t002,cid=c002 value=1.2`,

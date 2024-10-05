@@ -8,7 +8,7 @@ import msgpack, msgpackrpc, sys, os, threading
 
 def get_test_data_list():
     # get list with all primitive types, and a combo type
-    l0 = [ 
+    l0 = [
         -8,
          -1616,
          -32323232,
@@ -40,12 +40,12 @@ def get_test_data_list():
           "false": False,
           "uint16(1616)": 1616 },
         { "list": [1616, 32323232, True, -3232.0, {"TRUE":True, "FALSE":False}, [True, False] ],
-          "int32":32323232, "bool": True, 
+          "int32":32323232, "bool": True,
           "LONG STRING": "123456789012345678901234567890123456789012345678901234567890",
-          "SHORT STRING": "1234567890" },	
+          "SHORT STRING": "1234567890" },
         { True: "true", 8: False, "false": 0 }
         ]
-    
+
     l = []
     l.extend(l0)
     l.append(l0)
@@ -67,7 +67,7 @@ def doRpcServer(port, stopTimeSec):
             return ("1:%s 2:%s 3:%s" % (msg1, msg2, msg3))
         def EchoStruct(self, msg):
             return ("%s" % msg)
-    
+
     addr = msgpackrpc.Address('localhost', port)
     server = msgpackrpc.Server(EchoHandler())
     server.listen(addr)
@@ -84,7 +84,7 @@ def doRpcClientToPythonSvc(port):
     client = msgpackrpc.Client(address, unpack_encoding='utf-8')
     print client.call("Echo123", "A1", "B2", "C3")
     print client.call("EchoStruct", {"A" :"Aa", "B":"Bb", "C":"Cc"})
-   
+
 def doRpcClientToGoSvc(port):
     # print ">>>> port: ", port, " <<<<<"
     address = msgpackrpc.Address('localhost', port)
@@ -102,9 +102,8 @@ def doMain(args):
     elif len(args) == 2 and args[0] == "rpc-client-go-service":
         doRpcClientToGoSvc(int(args[1]))
     else:
-        print("Usage: msgpack_test.py " + 
+        print("Usage: msgpack_test.py " +
               "[testdata|rpc-server|rpc-client-python-service|rpc-client-go-service] ...")
-    
+
 if __name__ == "__main__":
     doMain(sys.argv[1:])
-

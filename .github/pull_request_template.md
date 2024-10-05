@@ -7,7 +7,7 @@
 
 Please create an issue first to describe the problem.
 
-There MUST be one line starting with "Issue Number:  " and 
+There MUST be one line starting with "Issue Number:  " and
 linking the relevant issues via the "close","fix", "resolve" or "ref".
 -->
 
