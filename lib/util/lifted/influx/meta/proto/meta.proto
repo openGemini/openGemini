@@ -1257,7 +1257,7 @@ message ShowClusterCommand {
     required string nodeType = 1;
     required uint64 ID = 2;
 }
- 
+
 message NodeRow {
     required int64 timestamp = 1;
 	required string status = 2;
@@ -1265,7 +1265,7 @@ message NodeRow {
 	required uint64 nodeID = 4;
 	required string nodeType = 5;
 }
- 
+
 message EventRow {
 	required uint64 opId = 1;
 	required string eventType = 2;
@@ -1276,7 +1276,7 @@ message EventRow {
 	required string currState = 7;
 	required string preState = 8;
 }
- 
+
 message ShowClusterInfo {
     repeated NodeRow nodes = 1;
 	repeated EventRow events = 2;

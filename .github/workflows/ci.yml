@@ -32,6 +32,16 @@ jobs:
         uses: wagoid/commitlint-github-action@v5
       - name: Run license check
         run: make license-check
+  LineLint:
+    name: line lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: install linelint
+        run: cargo install linelint-cli
+      - name: Run linelint check
+        run: linelint check
   GoLint:
     name: "static check, style check, go vet and other go lint"
     needs: CommitLint

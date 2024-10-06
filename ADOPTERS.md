@@ -13,4 +13,3 @@ Please make a pull request on this document if any organization or project would
 | Databuff                 | OSS project      | Used for cloud-native serivce O&M monitoring               |
 | Yunnan Yuntianhua        | OSS project      | Used for Industrial manufacturing                          |
 | Kehua                    | OSS project      | Stores monitoring data for smart electric energy solutions |
-

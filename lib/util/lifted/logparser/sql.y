@@ -29,7 +29,7 @@ func setParseTree(yylex interface{}, stmts influxql.Statements) {
 
 func transCondOpToInflux(op int) int {
     switch op {
-        case EQ: 
+        case EQ:
             return influxql.MATCHPHRASE
         case LT:
             return influxql.LT
@@ -223,7 +223,7 @@ CONDITION:
     {
         $$ = &influxql.BinaryExpr{Op:influxql.Token(influxql.OR),LHS:$1,RHS:$3}
     }
- 
+
 CONDITION_COLUMN:
     COLUMN
     {

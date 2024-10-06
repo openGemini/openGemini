@@ -51,11 +51,11 @@ Please make sure to read and observe our [Code of Conduct](./CODE_OF_CONDUCT.md)
   There may have been exchanges and discussions between participants under each Issue. If you are interested, you can also express your opinions in the comment box.
 
 - **Find an Issue you are willing to handle**
-  If you would like to work on one of the issues, you can assign it to yourself. Just enter /assign or /assign @yourself in the comment box, and the robot will assign the question to you, and your name will be displayed in the list of responsible persons. 
-  
+  If you would like to work on one of the issues, you can assign it to yourself. Just enter /assign or /assign @yourself in the comment box, and the robot will assign the question to you, and your name will be displayed in the list of responsible persons.
+
   > Replace @yourself with your GitHub username, such as /assign @bob
 
-## Source Code Contribution 
+## Source Code Contribution
 
 ### Detailed steps for submitting a pull request
 
@@ -83,7 +83,7 @@ Please make sure to read and observe our [Code of Conduct](./CODE_OF_CONDUCT.md)
     ```shell
     //Add files to the staging area
     > git add .
-    
+
     // Submit the staging area to the local warehouse, add the -s parameter, and automatically sign
     > git commit -s -m "<your commit message>"
     ```
@@ -114,7 +114,7 @@ Please make sure to read and observe our [Code of Conduct](./CODE_OF_CONDUCT.md)
    - Fill in the complete submission information and sign the DCO.
 
    - If the amount of code submitted at one time is large, it is recommended to break down the large content into a series of logically smaller content. Submitting them separately will make it easier for the reviewer to understand your ideas.
-   
+
    > Note: If your PR request does not attract enough attention, you can send an email to [community.ts@opengemini.org](mailto:community.ts@opengemini.org) for help.
 
 ### Compile source code
@@ -166,17 +166,17 @@ After successful compilation, the binary is saved in the build directory.
 #### Start the stand-alone version
 
 - Start with default parameters
-   
+
    ```shell
    > ./build/ts-server
    ```
 - Start with configuration file
-   
+
    ```shell
    > ./build/ts-server run -config=config/openGemini.singlenode.conf
    ```
 - Launch using script
-   
+
    ```\
    > bash scripts/install.sh
    ```
@@ -206,27 +206,27 @@ This project uses the following static analysis tools. Failure to run any of the
 
 - [go vet](https://golang.org/cmd/vet/)  is used to analyze common errors and potential bugs in Go code. It can check various problems that may exist in the code, such as: unused variables, functions or packages, suspicious function calls, etc.
    By executing the following command in the root directory of this project:
-   
+
    ```sh
    > make go-vet-check
    ```
-   
+
 - [goimports-reviser](https://github.com/incu6us/goimports-reviser) import grouping sorting and code formatting.
    By executing the following command in the root directory of this project:
-   
+
    ```sh
    > make style-check
    ```
-   
+
 - [go mod tidy](https://tip.golang.org/cmd/go/#hdr-Add_missing_and_remove_unused_modules) downloads and adds the names and versions of the third-party open source components that the project depends on to the go.mod file to solve the problem of project missing dependencies. It will also remove the dependencies that the project does not need in the go.mod file.
 
 - [staticcheck](https://staticcheck.io/docs/)  checks for: unused code, code that can be simplified, incorrect code, unsafe code, and code that will have performance issues.
    By executing the following command in the root directory of this project:
-   
+
    ```sh
    > make static-check
    ```
-   
+
    > Note: Due to problems with static-check itself, it can only be executed if the local go version is 1.19 or above.
 
 

@@ -62,4 +62,4 @@ v0.1.0 (2024.01)
 
 v0.2.0 (2024.02)
 
-- [ ] Support Arrow flight 
+- [ ] Support Arrow flight

@@ -82,7 +82,7 @@ openGemini
     ```
     // 添加文件到暂存区
     git add .
-    
+
     // 提交暂存区到本地仓库，增加-s参数，自动签名
     git commit -s -m "<your commit message>"
     ```
@@ -95,7 +95,7 @@ openGemini
    - perf: performance的缩写, 提升代码性能
    - test: 测试文件的修改
    - chore: 其他的小改动. 一般为仅仅一两行的改动, 或者连续几次提交的小改动属于这种
-   
+
    更多详细信息，您可以参考[约定式提交](https://www.conventionalcommits.org/zh-hans/v1.0.0/)。
 
 8. 将您的分支推送到Github
@@ -168,7 +168,7 @@ python3 build.py --clean
 - 带配置文件启动
 
   ```
-  ./build/ts-server run -config=config/openGemini.singlenode.conf  
+  ./build/ts-server run -config=config/openGemini.singlenode.conf
   ```
 
 - 使用脚本启动
@@ -212,7 +212,7 @@ openGemini 项目在内部也有很多检查流程。 这可能需要一些时�
   ```
   make style-check
   ```
-  
+
 - [go mod tidy](https://tip.golang.org/cmd/go/#hdr-Add_missing_and_remove_unused_modules) 下载并增加项目依赖的第三方开源组件名称和版本到go.mod文件，解决项目丢失依赖问题，同时也会去掉go.mod文件中项目不需要的依赖。
 
 - [staticcheck](https://staticcheck.io/docs/) 检查以下内容：未使用的代码、可以简化的代码、不正确的代码、不安全的代码以及将出现性能问题的代码。
@@ -277,6 +277,5 @@ openGemini是一个开放的社区，我们希望所有参与社区的人都能�
 ### 6.2 技术委员会
 
 openGemini技术委员会（Technical Committee，简称TC）是openGemini社区的技术决策机构，负责社区技术决策和技术资源的协调。
-
 
 

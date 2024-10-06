@@ -35,7 +35,7 @@ TextIndexBuilder NewTextIndexBuilder(const char *splitStr, uint32_t len, bool ha
     return fullTextIndex;
 }
 
-void FreeTextIndexBuilder(TextIndexBuilder builder) 
+void FreeTextIndexBuilder(TextIndexBuilder builder)
 {
     FullTextIndex *textIndex = reinterpret_cast<FullTextIndex *>(builder);
     if (textIndex == nullptr) {

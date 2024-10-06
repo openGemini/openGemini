@@ -134,7 +134,7 @@ git clone https://github.com/openGemini/openGemini.git
 
 ```bash
 > ls build
-ts-cli  ts-meta  ts-monitor  ts-server  ts-sql  ts-store  
+ts-cli  ts-meta  ts-monitor  ts-server  ts-sql  ts-store
 ```
 
 ### 配置
@@ -210,7 +210,7 @@ name: sensor
 | 1657959880895515464 | d0       | f1     | s20      | 50.98 |
 +---------------------+----------+--------+----------+-------+
 5 columns,1 rows in set
-Elapsed: 7.723332ms  
+Elapsed: 7.723332ms
 ```
 
 ## 加入贡献
@@ -246,4 +246,3 @@ openGemini遵循[CNCF 行为守则](https://github.com/cncf/foundation/blob/mast
 openGemini采用 Apache 2.0 license. 详细见 [LICENSE](https://github.com/openGemini/openGemini/blob/main/LICENSE) .
 
 第三方软件使用声明，见[Open_Source_Software_Notice](./Open_Source_Software_Notice.md)
-

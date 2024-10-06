@@ -76,7 +76,7 @@ struct PoolStatistic {
 
 struct HashFactor {
     uint32_t rowCnt;
-    uint32_t tokenCnt; 
+    uint32_t tokenCnt;
 };
 
 class MemPool {

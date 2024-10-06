@@ -137,19 +137,19 @@ case $COMMAND in
     start)
         start
         ;;
-    
+
     stop)
         stop
         ;;
-    
+
     restart)
         restart
         ;;
-    
+
     status)
         status
         ;;
-    
+
     *)
         # For invalid arguments, print the usage message.
         echo "Usage: $0 {start|stop|restart|status}"

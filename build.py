@@ -386,7 +386,7 @@ def build(version=None,
             ldflags = "-ldflags=\"-s -X {package}.Version={version} -X {package}.GitBranch={branch} -X {package}.GitCommit={commit}\" "
         else:
             ldflags = "-ldflags=\"-X {package}.Version={version} -X {package}.GitBranch={branch} -X {package}.GitCommit={commit}\" "
-        
+
         build_command += ldflags.format(
                 package = "github.com/openGemini/openGemini/app",
                 version = version,
@@ -407,7 +407,7 @@ def write_to_gobuild(content):
 
     if isinstance(content,bytes):
         content = content.decode("utf-8")
-        
+
     if get_system_platform() != "windows":
         with open(gobuild_out, 'w') as f:
             f.write("error\n")
@@ -607,4 +607,3 @@ if __name__ == '__main__':
     main_args = parser.parse_args()
     print_banner()
     sys.exit(main(main_args))
-

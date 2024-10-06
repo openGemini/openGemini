@@ -46,7 +46,7 @@ openGemini 在配置文件中指定了 meta 节点的信息，用于节点发现
   ```shell
   # 全部启动
   export OPEN_GEMINI_LAUNCH=ts-meta,ts-sql,ts-store
-  
+
   # 仅启动 meta
   export OPEN_GEMINI_LAUNCH=ts-meta
   ```
@@ -65,7 +65,7 @@ openGemini 在配置文件中指定了 meta 节点的信息，用于节点发现
     rpc-bind-address = "{{addr}}:8092"
     # ts-mete和ts-store节点需要在此配置域名，docker 启动时，从环境变量获取，并替换该配置项
     domain = "{{domain}}"
-    
+
   [data]
     store-ingest-addr = "{{addr}}:8400"
     store-select-addr = "{{addr}}:8401"
@@ -160,7 +160,7 @@ metadata:
 spec:
   selector:
     app: opengemini-edge-001
-  #【必填】端口举证，根据实际情况配置，可以保持默认值  
+  #【必填】端口举证，根据实际情况配置，可以保持默认值
   ports:
     - name: sql
       port: 8086
@@ -238,4 +238,3 @@ spec:
   members = ["{{meta_addr_1}}:8010", "{{meta_addr_2}}:8010", "{{meta_addr_3}}:8010"]
 
 ```
-

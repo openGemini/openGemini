@@ -6,7 +6,7 @@ import sys
 setup_dir = path.dirname(__file__)
 sys.path.insert(0, setup_dir)
 
-from openGemini_udf import VERSION 
+from openGemini_udf import VERSION
 
 
 this_directory = path.abspath(path.dirname(__file__))
