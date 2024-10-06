@@ -20,7 +20,7 @@ the standard library (ie json, xml, gob, etc).
 Rich Feature Set includes:
 
   - Simple but extremely powerful and feature-rich API
-  - Very High Performance.   
+  - Very High Performance.
     Our extensive benchmarks show us outperforming Gob, Json and Bson by 2-4X.
     This was achieved by taking extreme care on:
       - managing allocation
@@ -28,32 +28,32 @@ Rich Feature Set includes:
       - reflection use (and by-passing reflection for common types)
       - recursion implications
       - zero-copy mode (encoding/decoding to byte slice without using temp buffers)
-  - Correct.  
-    Care was taken to precisely handle corner cases like: 
+  - Correct.
+    Care was taken to precisely handle corner cases like:
       overflows, nil maps and slices, nil value in stream, etc.
-  - Efficient zero-copying into temporary byte buffers  
+  - Efficient zero-copying into temporary byte buffers
     when encoding into or decoding from a byte slice.
   - Standard field renaming via tags
-  - Encoding from any value  
+  - Encoding from any value
     (struct, slice, map, primitives, pointers, interface{}, etc)
-  - Decoding into pointer to any non-nil typed value  
+  - Decoding into pointer to any non-nil typed value
     (struct, slice, map, int, float32, bool, string, reflect.Value, etc)
   - Supports extension functions to handle the encode/decode of custom types
   - Support Go 1.2 encoding.BinaryMarshaler/BinaryUnmarshaler
-  - Schema-less decoding  
-    (decode into a pointer to a nil interface{} as opposed to a typed non-nil value).  
-    Includes Options to configure what specific map or slice type to use 
+  - Schema-less decoding
+    (decode into a pointer to a nil interface{} as opposed to a typed non-nil value).
+    Includes Options to configure what specific map or slice type to use
     when decoding an encoded list or map into a nil interface{}
   - Provides a RPC Server and Client Codec for net/rpc communication protocol.
   - Msgpack Specific:
       - Provides extension functions to handle spec-defined extensions (binary, timestamp)
-      - Options to resolve ambiguities in handling raw bytes (as string or []byte)  
+      - Options to resolve ambiguities in handling raw bytes (as string or []byte)
         during schema-less decoding (decoding into a nil interface{})
-      - RPC Server/Client Codec for msgpack-rpc protocol defined at: 
+      - RPC Server/Client Codec for msgpack-rpc protocol defined at:
         https://github.com/msgpack-rpc/msgpack-rpc/blob/master/spec.md
-  - Fast Paths for some container types:  
+  - Fast Paths for some container types:
     For some container types, we circumvent reflection and its associated overhead
-    and allocation costs, and encode/decode directly. These types are:  
+    and allocation costs, and encode/decode directly. These types are:
 	    []interface{}
 	    []int
 	    []string
@@ -95,7 +95,7 @@ Typical usage model:
     )
 
     mh.MapType = reflect.TypeOf(map[string]interface{}(nil))
-    
+
     // configure extensions
     // e.g. for msgpack, define functions and enable Time support for tag 1
     // mh.AddExt(reflect.TypeOf(time.Time{}), 1, myMsgpackTimeEncodeExtFn, myMsgpackTimeDecodeExtFn)
@@ -107,15 +107,15 @@ Typical usage model:
       b []byte
       h = &bh // or mh to use msgpack
     )
-    
+
     dec = codec.NewDecoder(r, h)
     dec = codec.NewDecoderBytes(b, h)
-    err = dec.Decode(&v) 
-    
+    err = dec.Decode(&v)
+
     enc = codec.NewEncoder(w, h)
     enc = codec.NewEncoderBytes(&b, h)
     err = enc.Encode(v)
-    
+
     //RPC Server
     go func() {
         for {
@@ -137,11 +137,11 @@ Typical usage model:
 A sample run of benchmark using "go test -bi -bench=. -benchmem":
 
     /proc/cpuinfo: Intel(R) Core(TM) i7-2630QM CPU @ 2.00GHz (HT)
-    
+
     ..............................................
     BENCHMARK INIT: 2013-10-16 11:02:50.345970786 -0400 EDT
     To run full benchmark comparing encodings (MsgPack, Binc, JSON, GOB, etc), use: "go test -bench=."
-    Benchmark: 
+    Benchmark:
     	Struct recursive Depth:             1
     	ApproxDeepSize Of benchmark Struct: 4694 bytes
     Benchmark One-Pass Run:
@@ -169,6 +169,5 @@ A sample run of benchmark using "go test -bi -bench=. -benchmem":
     Benchmark__VMsgpack___Decode	   10000	    151609 ns/op	   20307 B/op	     571 allocs/op
     ok  	ugorji.net/codec	30.827s
 
-To run full benchmark suite (including against vmsgpack and bson), 
+To run full benchmark suite (including against vmsgpack and bson),
 see notes in ext\_dep\_test.go
-

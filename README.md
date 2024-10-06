@@ -2,7 +2,7 @@
 
 ![color](./images/github_log_591x183.svg)
 
-![license](https://img.shields.io/badge/license-Apache2.0-green) ![language](https://img.shields.io/badge/Language-Go-blue.svg) ![codeCov](https://img.shields.io/codecov/c/gh/openGemini/openGemini) [![release](https://img.shields.io/github/v/tag/opengemini/opengemini?label=release&color=blue)](https://github.com/opengemini/opengemini/releases)                                                                                               
+![license](https://img.shields.io/badge/license-Apache2.0-green) ![language](https://img.shields.io/badge/Language-Go-blue.svg) ![codeCov](https://img.shields.io/codecov/c/gh/openGemini/openGemini) [![release](https://img.shields.io/github/v/tag/opengemini/opengemini?label=release&color=blue)](https://github.com/opengemini/opengemini/releases)
 English | [简体中文](README_CN.md)
 
 [Official Website](http://www.openGemini.org) | [Docs](https://docs.opengemini.org/guide) | [Contribution Guide](CONTRIBUTION.md) | [RoadMap](./ROADMAP.md) | [Performance](https://docs.opengemini.org/guide/introduction/performance.html)
@@ -17,7 +17,7 @@ English | [简体中文](README_CN.md)
 
 ## About openGemini
 
-openGemini is a cloud-native distributed time series database, focusing on the storage and analysis of massive telemetry data. 
+openGemini is a cloud-native distributed time series database, focusing on the storage and analysis of massive telemetry data.
 
 If you have used openGemini, please let us know and [click submit Usage Information](https://github.com/openGemini/openGemini/issues/62)
 
@@ -63,7 +63,7 @@ Compared with other time series database, openGemini has the following advantage
 
   <img src="./images/openTelemetry.png" alt="image-20220927210909436" style="width:60%;" />
 
-- Prometheus backend storage，support remote read/write, and Support PromQL 
+- Prometheus backend storage，support remote read/write, and Support PromQL
 
   <img src="./images/prometheus.png" alt="" style="width:60%;" />
 
@@ -164,7 +164,7 @@ After successful login, the following message will be displayed
 > ts-cli --host 127.0.0.1 --port 8086
 openGemini CLI 0.1.0 (rev-revision)
 Please use 'quit', 'exit' or 'Ctrl-D' to exit this program
-> 
+>
 ```
 
 Create a database
@@ -206,7 +206,7 @@ name: sensor
 | 1657959880895515464 | d0       | f1     | s20      | 50.98 |
 +---------------------+----------+--------+----------+-------+
 5 columns,1 rows in set
-Elapsed: 7.723332ms  
+Elapsed: 7.723332ms
 ```
 
 ## Join & Contribute

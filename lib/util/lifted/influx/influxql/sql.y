@@ -27,7 +27,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
-const DefaultQueryTimeout = time.Duration(0) 
+const DefaultQueryTimeout = time.Duration(0)
 
 func setParseTree(yylex interface{}, stmts Statements) {
     for _,stmt :=range stmts{
