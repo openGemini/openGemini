@@ -16,9 +16,11 @@ package run
 
 import (
 	"path"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/influxdata/influxdb/pkg/tlsconfig"
 	"github.com/openGemini/openGemini/app"
 	"github.com/openGemini/openGemini/app/ts-meta/meta"
 	"github.com/openGemini/openGemini/lib/config"
@@ -192,4 +194,23 @@ func TestNewCommand(t *testing.T) {
 	cmd := NewCommand(app.ServerInfo{App: config.AppMeta}, false)
 	require.Equal(t, app.METALOGO, cmd.Logo)
 	require.Equal(t, config.AppMeta, cmd.Info.App)
+}
+
+func TestNewServer_ParseTls(t *testing.T) {
+	cfg := tlsconfig.Config{
+		Ciphers:    []string{"TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256"},
+		MinVersion: "tls1.0",
+		MaxVersion: "tls1.2",
+	}
+	_, err := cfg.Parse()
+	require.NoError(t, err)
+
+	cfg.Ciphers = []string{"not_support"}
+	_, err = cfg.Parse()
+	require.EqualValues(t, true, strings.Contains(err.Error(), "unknown cipher suite"))
+
+	cfg.Ciphers = []string{"TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256"}
+	cfg.MaxVersion = "tls1.10"
+	_, err = cfg.Parse()
+	require.EqualValues(t, true, strings.Contains(err.Error(), "unknown tls version"))
 }

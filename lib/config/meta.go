@@ -15,12 +15,12 @@
 package config
 
 import (
-	"crypto/tls"
 	"fmt"
 	"path/filepath"
 	"time"
 
 	"github.com/hashicorp/raft"
+	"github.com/influxdata/influxdb/pkg/tlsconfig"
 	"github.com/influxdata/influxdb/toml"
 	"github.com/openGemini/openGemini/lib/iodetector"
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
@@ -74,7 +74,7 @@ type TSMeta struct {
 	Spdy    Spdy    `toml:"spdy"`
 
 	// TLS provides configuration options for all https endpoints.
-	TLS *tls.Config `toml:"-"`
+	TLS tlsconfig.Config `toml:"tls"`
 
 	Sherlock   *SherlockConfig    `toml:"sherlock"`
 	IODetector *iodetector.Config `toml:"io-detector"`
