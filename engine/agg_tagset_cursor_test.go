@@ -68,6 +68,41 @@ func Test_fileLoopCursor_SinkPlan(t *testing.T) {
 	require.Equal(t, true, cursor.isCutSchema)
 }
 
+func Test_fileLoopCursor_SinkPlan2(t *testing.T) {
+	ctx := &idKeyCursorContext{
+		schema: record.Schemas{{Name: "value", Type: influx.Field_Type_Int}, {Name: "time", Type: influx.Field_Type_Int}},
+	}
+
+	opt := query.ProcessorOptions{}
+	fields := []*influxql.Field{
+		{
+			Expr: &influxql.Call{
+				Name: "sum",
+				Args: []influxql.Expr{
+					&influxql.VarRef{
+						Val:  "value",
+						Type: influxql.Integer,
+					},
+				},
+			},
+			Alias: "",
+		},
+	}
+	schema := executor.NewQuerySchema(fields, []string{"id", "value", "alive", "name"}, &opt, nil)
+	series := executor.NewLogicalSeries(schema)
+	plan_ := executor.NewLogicalAggregate(series, schema)
+	plan := executor.NewLogicalReader(plan_, schema)
+	cursor_series := &seriesCursor{
+		ctx: ctx,
+	}
+	cursor_aggregate := NewAggregateCursor(cursor_series, schema, nil, true)
+	cursor := NewAggTagSetCursor(schema, ctx, cursor_aggregate, true)
+	cursor.SinkPlan(plan)
+	if len(cursor.funcIndex) == 0 || cursor.funcIndex[0] != 0 {
+		t.Fatal()
+	}
+}
+
 func genRowRec(schema []record.Field, intValBitmap []int, intVal []int64, floatValBitmap []int, floatVal []float64,
 	stringValBitmap []int, stringVal []string, booleanValBitmap []int, boolVal []bool, time []int64) *record.Record {
 	var rec record.Record
