@@ -303,13 +303,13 @@ func (n *RaftNode) serveChannels() {
 				for i := range n.processMessages(rd.Messages) {
 					n.send(rd.Messages[i])
 				}
-				n.logger.Info("leader send message successful", zap.Duration("time used", time.Since(start)))
+				n.logger.Debug("leader send message successful", zap.Duration("time used", time.Since(start)))
 				start = time.Now()
 			}
 
 			// wal write
 			n.SaveToStorage(&rd.HardState, rd.Entries, &rd.Snapshot)
-			n.logger.Info("save to storage successful", zap.Duration("time used", time.Since(start)))
+			n.logger.Debug("save to storage successful", zap.Duration("time used", time.Since(start)))
 			start = time.Now()
 
 			for rd.MustSync {
@@ -318,7 +318,7 @@ func (n *RaftNode) serveChannels() {
 					time.Sleep(10 * time.Millisecond)
 					continue
 				}
-				n.logger.Info("sync store data to disk successful", zap.Duration("time used", time.Since(start)))
+				n.logger.Debug("sync store data to disk successful", zap.Duration("time used", time.Since(start)))
 				start = time.Now()
 				break
 			}
@@ -329,7 +329,7 @@ func (n *RaftNode) serveChannels() {
 				return
 			}
 			n.waitWriteOK(applyDoneC)
-			n.logger.Info("publish entries successful", zap.Duration("time used", time.Since(start)))
+			n.logger.Debug("publish entries successful", zap.Duration("time used", time.Since(start)))
 			start = time.Now()
 
 			if !leader {
@@ -337,7 +337,7 @@ func (n *RaftNode) serveChannels() {
 				for i := range n.processMessages(rd.Messages) {
 					n.send(rd.Messages[i])
 				}
-				n.logger.Info("follower send message successful", zap.Duration("time used", time.Since(start)))
+				n.logger.Debug("follower send message successful", zap.Duration("time used", time.Since(start)))
 			}
 
 			n.node.Advance()
