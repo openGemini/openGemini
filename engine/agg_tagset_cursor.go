@@ -875,7 +875,12 @@ func (s *AggTagSetCursor) SinkPlan(plan hybridqp.QueryNode) {
 			}
 		}
 		s.aggOps = callOps
-		s.baseCursorInfo.keyCursor.SinkPlan(plan.Children()[0].Children()[0])
+		_, ok := plan.Children()[0].Children()[0].(*executor.LogicalAggregate)
+		if ok {
+			s.baseCursorInfo.keyCursor.SinkPlan(plan.Children()[0].Children()[0])
+		} else {
+			s.baseCursorInfo.keyCursor.SinkPlan(plan.Children()[0])
+		}
 	}
 	fieldSchema := s.GetSchema()
 	if len(s.baseCursorInfo.ctx.auxTags) == 0 {
