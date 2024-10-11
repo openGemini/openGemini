@@ -107,14 +107,15 @@ func (c *TSMonitor) GetLogStoreConfig() *LogStoreConfig {
 }
 
 type MonitorMain struct {
-	Host        string `toml:"host"`
-	MetricPath  string `toml:"metric-path"`
-	ErrLogPath  string `toml:"error-log-path"`
-	Process     string `toml:"process"`
-	DiskPath    string `toml:"disk-path"`
-	AuxDiskPath string `toml:"aux-disk-path"`
-	History     string `toml:"history-file"`
-	Compress    bool   `toml:"compress"`
+	Host         string `toml:"host"`
+	MetricPath   string `toml:"metric-path"`
+	ErrLogPath   string `toml:"error-log-path"`
+	Process      string `toml:"process"`
+	DiskPath     string `toml:"disk-path"`
+	AuxDiskPath  string `toml:"aux-disk-path"`
+	History      string `toml:"history-file"`
+	Compress     bool   `toml:"compress"`
+	HttpEndpoint string `toml:"http-endpoint"`
 }
 
 func newMonitor() MonitorMain {
