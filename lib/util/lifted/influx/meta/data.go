@@ -3376,6 +3376,7 @@ func (pt *DbPtInfo) Marshal() *proto2.DbPt {
 	pb.DBBriefInfo = &proto2.DatabaseBriefInfo{
 		Name:           proto.String(pt.Db),
 		EnableTagArray: proto.Bool(pt.DBBriefInfo.EnableTagArray),
+		Replicas:       proto.Int(pt.DBBriefInfo.Replicas),
 	}
 	return pb
 }
@@ -3396,6 +3397,7 @@ func (pt *DbPtInfo) Unmarshal(pb *proto2.DbPt) {
 	pt.DBBriefInfo = &DatabaseBriefInfo{}
 	pt.DBBriefInfo.Name = pb.DBBriefInfo.GetName()
 	pt.DBBriefInfo.EnableTagArray = pb.DBBriefInfo.GetEnableTagArray()
+	pt.DBBriefInfo.Replicas = int(pb.DBBriefInfo.GetReplicas())
 }
 
 func (data *Data) GetShardDurationsByDbPt(db string, pt uint32) map[uint64]*ShardDurationInfo {

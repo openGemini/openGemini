@@ -1087,6 +1087,7 @@ message GetMeasurementsInfoCommand {
 message DatabaseBriefInfo {
 	required string Name = 1;
 	required bool EnableTagArray = 2;
+	optional int32 replicas = 3;
 }
 
 message MeasurementsInfo {

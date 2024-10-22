@@ -214,7 +214,8 @@ func (e *Engine) Assign(opId uint64, nodeId uint64, db string, ptId uint32, ver 
 		return err
 	}
 
-	if config.IsReplication() {
+	if config.IsReplication() && dbBriefInfo.Replicas > 1 {
+		e.log.Info("assign repDBPT", zap.String("db", db), zap.Uint32("pt", ptId), zap.Int("replicasN", dbBriefInfo.Replicas))
 		err = e.startRaftNode(opId, nodeId, dbPt, client, storage)
 		if err != nil {
 			e.log.Error("engine start raft node failed", zap.Uint64("opId", opId), zap.String("db", db), zap.Uint32("pt", ptId), zap.Error(err))

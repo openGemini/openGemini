@@ -333,8 +333,14 @@ func WriteRowsForRep(s *Storage, db, rp string, ptId uint32, shardID uint64, row
 	db = stringinterner.InternSafe(db)
 	rp = stringinterner.InternSafe(rp)
 
-	if s.metaClient.RaftEnabledForDB(db) {
+	t, err := s.metaClient.RaftEnabledForDB(db)
+	if err != nil {
+		return err
+	}
+	if t == metaclient.RAFTFORREPDB {
 		return writeRowsForRaft(s, db, rp, ptId, binaryRows)
+	} else if t == metaclient.NOREPDB {
+		return errno.NewError(errno.RepConfigWriteNoRepDB)
 	}
 
 	// obtain the number of peers
