@@ -3851,7 +3851,8 @@ func (data *Data) expandDBRG(db string) {
 
 func (data *Data) GetDBBriefInfo(name string) *DatabaseBriefInfo {
 	dbBriefInfo := &DatabaseBriefInfo{
-		Name: name,
+		Name:     name,
+		Replicas: data.Databases[name].ReplicaN,
 	}
 	dbBriefInfo.EnableTagArray = data.Databases[name].EnableTagArray
 	return dbBriefInfo
