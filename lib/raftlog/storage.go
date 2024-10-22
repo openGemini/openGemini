@@ -183,6 +183,10 @@ func (rds *RaftDiskStorage) Entries(lo, hi, maxSize uint64) ([]raftpb.Entry, err
 	return ents, nil
 }
 
+func (rds *RaftDiskStorage) GetFirstLast() (uint64, uint64) {
+	return rds.entryLog.firstIndex(), rds.entryLog.lastIndex()
+}
+
 func (rds *RaftDiskStorage) Term(idx uint64) (uint64, error) {
 	rds.lock.Lock()
 	defer rds.lock.Unlock()
