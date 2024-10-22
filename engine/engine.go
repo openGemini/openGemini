@@ -833,7 +833,7 @@ func (e *Engine) WriteToRaft(db, rp string, ptId uint32, tail []byte) error {
 		return err
 	}
 	// 1.build dataWrapper
-	newTail := meta.GetTailBuf(len(tail))
+	newTail := make([]byte, 0, len(tail))
 	newTail = append(newTail, tail...)
 	wrapper := &raftlog.DataWrapper{
 		DataType:  raftlog.Normal,
