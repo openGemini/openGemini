@@ -171,7 +171,10 @@ type AllWriter struct {
 
 func (w *AllWriter) Write(lineProtocol []byte) {
 	for i := 0; i < len(w.clients); i++ {
-		wr := &WriteRequest{i, lineProtocol}
+		wr := &WriteRequest{}
+		wr.Client = i
+		wr.LineProtocol = make([]byte, len(lineProtocol))
+		copy(wr.LineProtocol, lineProtocol)
 		w.Send(wr)
 	}
 }
