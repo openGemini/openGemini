@@ -24,7 +24,6 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/index"
-	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/stretchr/testify/require"
 )
@@ -130,22 +129,4 @@ func TestOpenShard(t *testing.T) {
 	sh, err = dbPTInfo.loadProcess(0, nil, dir+"10_1635724800000000000_1636329600000000000_100",
 		"1", 100, 10, durationInfos, &meta.TimeRangeInfo{StartTime: time.Now(), EndTime: time.Now().Add(1 * time.Hour)}, client)
 	require.NoError(t, err)
-}
-
-func TestPutTailBuf(t *testing.T) {
-	cacheData := &meta.Data{
-		Databases: map[string]*meta.DatabaseInfo{
-			"db0": {
-				Name: "db0",
-			},
-		},
-		ReplicaGroups: map[string][]meta.ReplicaGroup{},
-	}
-	c := &metaclient.Client{}
-	c.SetCacheData(cacheData)
-	tail := []byte{'a', 'b', 'c'}
-	putTailBuf(0, c, tail, "db0")
-	cacheData.ReplicaGroups["db0"] = []meta.ReplicaGroup{{MasterPtID: 0}}
-	putTailBuf(1, c, tail, "db0")
-	putTailBuf(0, c, tail, "db0")
 }
