@@ -132,21 +132,6 @@ var DefaultTypeMapper = influxql.MultiTypeMapper(
 var DefaultMetaClient *Client
 var cliOnce sync.Once
 
-var tailBufPool sync.Pool
-
-func GetTailBuf(size int) []byte {
-	v := tailBufPool.Get()
-	if v == nil {
-		return make([]byte, 0, size)
-	}
-	return *(v.(*[]byte))
-}
-
-func PutTailBuf(v *[]byte) {
-	(*v) = (*v)[:0]
-	tailBufPool.Put(v)
-}
-
 type StorageNodeInfo struct {
 	InsertAddr string
 	SelectAddr string

@@ -41,12 +41,6 @@ type raftNodeRequest interface {
 	Stop()
 }
 
-func putTailBuf(ptId uint32, client metaclient.MetaClient, tail []byte, database string) {
-	if client.IsMasterPt(ptId, database) {
-		metaclient.PutTailBuf(&tail)
-	}
-}
-
 func readReplayForReplication(ReplayC <-chan *raftconn.Commit, client metaclient.MetaClient, storage netstorage.StorageService) {
 	if len(ReplayC) == 0 {
 		return
@@ -118,7 +112,6 @@ func dealNormalData(dataWrapper *raftlog.DataWrapper, database string, ptId uint
 	storage netstorage.StorageService, node *raftconn.RaftNode) error {
 	tail := dataWrapper.GetData()
 	ww := pointsdecoder.GetDecoderWork()
-	defer putTailBuf(ptId, client, tail, database)
 	masterShId, _, _, err := ww.DecodeShardAndRows(database, "", ptId, tail)
 	if err != nil {
 		logger.GetLogger().Error("decode shard and rows failed", zap.Error(err))
