@@ -312,6 +312,7 @@ func (nsi *NodeStartInfo) UnMarshalBinary(buf []byte) error {
 		dbBriefInfo := &DatabaseBriefInfo{
 			Name:           pb.DBBriefInfo[i].GetName(),
 			EnableTagArray: pb.DBBriefInfo[i].GetEnableTagArray(),
+			Replicas:       int(pb.DBBriefInfo[i].GetReplicas()),
 		}
 		nsi.DBBriefInfo[pb.DBBriefInfo[i].GetName()] = dbBriefInfo
 	}
