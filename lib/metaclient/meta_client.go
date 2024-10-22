@@ -984,19 +984,30 @@ func (c *Client) Databases() map[string]*meta2.DatabaseInfo {
 	return c.cacheData.Databases
 }
 
-func (c *Client) RaftEnabledForDB(name string) bool {
+type RepConfWriteType uint32
+
+const (
+	NOREPDB RepConfWriteType = iota
+	RAFTFORREPDB
+	UNKOWN
+)
+
+func (c *Client) RaftEnabledForDB(name string) (RepConfWriteType, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
 	dbInfo, err := c.cacheData.GetDatabase(name)
 	if err != nil {
-		return false
+		return UNKOWN, errno.NewError(errno.DatabaseNotFound)
+	}
+	if dbInfo.ReplicaN <= 1 {
+		return NOREPDB, nil
 	}
 	// ReplicaN: 3, 5, 7...
 	if dbInfo.ReplicaN > 1 && dbInfo.ReplicaN%2 != 0 {
-		return true
+		return RAFTFORREPDB, nil
 	}
-	return false
+	return UNKOWN, nil
 }
 
 func (c *Client) ShowShards(db string, rp string, mst string) models.Rows {

@@ -325,3 +325,90 @@ func Test_StorageCheckPtsRemovedDone(t *testing.T) {
 		t.Fatal("Test_StorageCheckPtsRemovedDone one DBPartitions error")
 	}
 }
+
+func TestStorage_RepConfigWrite(t *testing.T) {
+	dir := t.TempDir()
+	st := &Storage{
+		log:          logger.NewLogger(errno.ModuleStorageEngine),
+		stop:         make(chan struct{}),
+		slaveStorage: &MockSlaveStorage{},
+	}
+	defer st.MustClose()
+
+	// no replication
+	mockClient := &MockMetaClient{
+		GetShardRangeInfoFn: func(db string, rp string, shardID uint64) (*meta.ShardTimeRangeInfo, error) {
+			return &meta.ShardTimeRangeInfo{
+				ShardDuration: &meta.ShardDurationInfo{
+					Ident:        meta.ShardIdentifier{ShardID: 1, Policy: "autogen", OwnerDb: "db0", OwnerPt: 1},
+					DurationInfo: meta.DurationDescriptor{Duration: time.Second}},
+				OwnerIndex: meta.IndexDescriptor{IndexID: 1, TimeRange: meta.TimeRangeInfo{StartTime: time.Now().UTC(), EndTime: time.Now().UTC().Add(time.Hour)}},
+				TimeRange:  meta.TimeRangeInfo{StartTime: time.Now().UTC(), EndTime: time.Now().UTC().Add(time.Hour)},
+			}, nil
+		},
+		GetMeasurementInfoStoreFn: func(dbName string, rpName string, mstName string) (*meta.MeasurementInfo, error) {
+			return &meta.MeasurementInfo{Name: "mst"}, nil
+		},
+	}
+	mockData := meta.Data{
+		Databases: map[string]*meta.DatabaseInfo{
+			"db0": {
+				ReplicaN: 1,
+			},
+			"db1": {
+				ReplicaN: 3,
+			},
+		},
+	}
+	st.MetaClient = mockClient
+	st.metaClient = &metaclient.Client{}
+	st.metaClient.SetCacheData(&mockData)
+	newEngineFn := netstorage.GetNewEngineFunction(config.DefaultEngine)
+
+	loadCtx := metaclient.LoadCtx{}
+	loadCtx.LoadCh = make(chan *metaclient.DBPTCtx, 100)
+	eng, err := newEngineFn(dir, dir, engineOption, &loadCtx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.engine = eng
+	db := "db0"
+	rp := "autogen"
+	var ptId uint32 = 1
+	var shardID uint64 = 1
+	st.engine.CreateDBPT(db, ptId, false)
+	_ = config.SetHaPolicy(config.RepPolicy)
+	defer config.SetHaPolicy(config.WAFPolicy)
+
+	rows := mockRows(1)
+	binaryRows, _ := influx.FastMarshalMultiRows(nil, rows)
+	err = st.WriteRows(db, rp, ptId, shardID, rows, binaryRows)
+	if !errno.Equal(err, errno.RepConfigWriteNoRepDB) {
+		t.Fatal("TestStorage_RepConfigWrite err0")
+	}
+
+	// replication write
+	mockClient.replicaInfo = &message.ReplicaInfo{
+		ReplicaRole: meta.Master,
+		Master:      nil,
+		Peers: []*message.PeerInfo{
+			{
+				PtId:   1,
+				NodeId: 1,
+				ShardMapper: map[uint64]uint64{
+					1: 2,
+				},
+			},
+		},
+		ReplicaStatus: meta.Health,
+		Term:          0,
+	}
+	err = st.WriteRows("db1", rp, ptId, shardID, rows, binaryRows)
+	if !errno.Equal(err, errno.PtNotFound) {
+		t.Fatal("TestStorage_RepConfigWrite err1")
+	}
+	err = st.WriteRows("db2", rp, ptId, shardID, rows, binaryRows)
+	if !errno.Equal(err, errno.DatabaseNotFound) {
+		t.Fatal("TestStorage_RepConfigWrite err2")
+	}
+}
