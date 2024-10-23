@@ -844,6 +844,38 @@ func TestParseShardDir(t *testing.T) {
 	assert.EqualValues(t, 1, u)
 }
 
+func TestCreateNewProgressFolder(t *testing.T) {
+	assert.NoError(t, CreateNewProgressFolder())
+}
+
+func TestReadLatestProgressFile(t *testing.T) {
+	err := CreateNewProgressFolder()
+	assert.NoError(t, err)
+	err = ReadLatestProgressFile()
+	assert.NoError(t, err)
+}
+
+func TestInitFail(t *testing.T) {
+	dir := t.TempDir()
+	e := NewExporter()
+	exportPath := filepath.Join(t.TempDir(), "export.txt")
+	ResumeJsonPath = filepath.Join(t.TempDir(), "progress.json")
+	ProgressedFilesPath = filepath.Join(t.TempDir(), "progressedFiles")
+	MpbProgress = mpb.New(mpb.WithWidth(100))
+	clc := &CommandLineConfig{
+		Export:   true,
+		DataDir:  dir,
+		WalDir:   dir,
+		Out:      exportPath,
+		Compress: false,
+		Format:   remoteFormatExporter,
+		DBFilter: defaultDb,
+		Remote:   "127.0.0.1:8086",
+	}
+	err := e.Export(clc, nil)
+	assert.NotNil(t, err)
+}
+
 var lpOnlyTxtContent = `# CONTEXT-DATABASE: db0
 # CONTEXT-MEASUREMENT: cpu
 # CONTEXT-RETENTION-POLICY: rp0
