@@ -644,6 +644,10 @@ func (n *RaftNode) replay(sp raftpb.Snapshot) error {
 	if fromIndex == 0 {
 		fromIndex = 1
 	}
+
+	first, last := n.Store.GetFirstLast()
+	n.logger.Info("raftNode replay range", zap.String("db", n.database), zap.Uint32("ptid", n.ptId), zap.Uint64("lo", fromIndex), zap.Uint64("hi", committedIndex+1), zap.Uint64("first", first), zap.Uint64("last", last))
+
 	entries, err1 := n.Store.Entries(fromIndex, committedIndex+1, math.MaxUint64)
 	if err1 != nil {
 		return err1

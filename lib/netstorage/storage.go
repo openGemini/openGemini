@@ -27,6 +27,7 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
+	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
@@ -523,6 +524,12 @@ func (s *NetStorage) SendRaftMessages(nodeID uint64, database string, pt uint32,
 	req.Database = database
 	req.PtId = pt
 	req.RaftMessage = msgs
+
+	node, err := s.Client().DataNode(nodeID)
+	if err != nil || node.Status != serf.StatusAlive {
+		return nil
+	}
+
 	v, err := s.ddlRequestWithNodeId(nodeID, RaftMessagesRequestMessage, req)
 	if err != nil {
 		return err

@@ -489,6 +489,10 @@ func FastUnmarshalMultiRows(src []byte, rows []Row, tagPool []Tag, fieldPool []F
 	var err error
 	var decodeN int
 	for len(src) > 0 {
+		if decodeN >= pointsN {
+			logger.GetLogger().Error("FastUnmarshalMultiRows over", zap.Int("decodeN", decodeN), zap.Int("pointsN", pointsN))
+			break
+		}
 		row := &rows[decodeN]
 		decodeN++
 
