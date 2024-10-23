@@ -23,6 +23,7 @@ import (
 	"math"
 	"os"
 	"path"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -828,6 +829,14 @@ func (e *Engine) checkAndGetDBPTInfo(db string, ptId uint32) (*DBPTInfo, error) 
 }
 
 func (e *Engine) WriteToRaft(db, rp string, ptId uint32, tail []byte) error {
+	defer func() {
+		if e := recover(); e != nil {
+			log.Error("runtime panic", zap.String("writeToRaft raise stack:", string(debug.Stack())),
+				zap.Error(errno.NewError(errno.RecoverPanic, e)),
+				zap.String("db", db),
+				zap.Uint32("ptId", ptId))
+		}
+	}()
 	dbpt, err := e.checkAndGetDBPTInfo(db, ptId)
 	if err != nil {
 		return err

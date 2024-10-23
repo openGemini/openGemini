@@ -25,6 +25,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.etcd.io/etcd/raft/v3/raftpb"
 )
 
 func TestWriteRows(t *testing.T) {
@@ -119,4 +120,12 @@ func TestNetStorage_ShowTagKeys(t *testing.T) {
 	arr, err := store.ShowTagKeys(exitNodeID, "db0", []uint32{0}, []string{"cpu"}, nil)
 	assert.Equal(t, 0, len(arr))
 	require.ErrorContains(t, err, fmt.Sprintf("no connections available, node: %d", exitNodeID))
+}
+
+func TestNetStorage_SetRaftMsg(t *testing.T) {
+	store := netstorage.NewNetStorage(&MockMetaClient{})
+	err := store.SendRaftMessages(1, "db0", 0, raftpb.Message{})
+	assert.Equal(t, nil, err)
+	err = store.SendRaftMessages(2, "db0", 0, raftpb.Message{})
+	assert.Equal(t, nil, err)
 }

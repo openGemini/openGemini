@@ -2081,3 +2081,21 @@ func TestEngine_WriteToRaft_Committed_Err(t *testing.T) {
 	assert2.Equal(t, same, true)
 	assert2.Equal(t, err.Error(), "mem write err")
 }
+
+func TestEngine_WriteToRaft_Panic(t *testing.T) {
+	proposeC := make(chan []byte)
+	mockEngine := &Engine{
+		DBPartitions: map[string]map[uint32]*DBPTInfo{
+			"testdb": {
+				1: &DBPTInfo{
+					proposeC: proposeC,
+					node:     &raftconn.RaftNode{DataCommittedC: make(map[uint64]chan error), Identity: "testdb_1"},
+				},
+			},
+		},
+	}
+	tail := []byte{'a', 'b', 'c'}
+	close(proposeC)
+	err := mockEngine.WriteToRaft("testdb", "", 1, tail)
+	assert2.Equal(t, err, nil)
+}
