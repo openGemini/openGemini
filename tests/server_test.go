@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"strconv"
@@ -20,6 +21,10 @@ import (
 	"time"
 
 	"github.com/influxdata/influxdb/models"
+	"github.com/openGemini/openGemini/app/ts-cli/geminicli"
+	"github.com/openGemini/openGemini/app/ts-cli/tests/export"
+	"github.com/stretchr/testify/assert"
+	"github.com/vbauerster/mpb/v7"
 )
 
 // Global server used by benchmarks
@@ -12308,4 +12313,45 @@ func TestServer_DropMeasurementPerRP(t *testing.T) {
 			t.Error(query.failureMessage())
 		}
 	}
+}
+
+func TestServer_RemoteExport(t *testing.T) {
+	s := OpenServer(NewConfig())
+	defer s.Close()
+	dir := t.TempDir()
+	err := export.InitData(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Run("test export data to remote", func(t *testing.T) {
+		geminicli.ResumeJsonPath = filepath.Join(t.TempDir(), "progress.json")
+		geminicli.ProgressedFilesPath = filepath.Join(t.TempDir(), "progressedFiles")
+		geminicli.MpbProgress = mpb.New(mpb.WithWidth(100))
+		URL, err := url.Parse(s.URL())
+		if err != nil {
+			t.Fatal(err)
+		}
+		e := geminicli.NewExporter()
+		clc := &geminicli.CommandLineConfig{
+			Export:            true,
+			DataDir:           dir,
+			WalDir:            dir,
+			Compress:          false,
+			Format:            export.RemoteFormatExporter,
+			DBFilter:          "db0",
+			RetentionFilter:   "rp0",
+			MeasurementFilter: "average_temperature",
+			TimeFilter:        "2019-08-25T22:18:00Z~2019-08-26T01:48:00Z",
+			Remote:            URL.Host,
+		}
+		err = e.Export(clc, nil)
+		assert.NoError(t, err)
+		time.Sleep(time.Second)
+		http.Post(s.URL()+"/debug/ctrl?mod=flush", "", nil)
+		if res, err := s.Query(`SELECT * FROM db0.rp0.average_temperature`); err != nil {
+			t.Fatal(err)
+		} else if exp := `{"results":[{"statement_id":0,"series":[{"name":"average_temperature","columns":["time","degrees","location"],"values":[["2019-08-25T22:18:00Z","76","santa_monica"],["2019-08-25T22:18:00Z","88","coyote_creek"],["2019-08-25T22:24:00Z","74","santa_monica"],["2019-08-25T22:24:00Z","90","coyote_creek"],["2019-08-25T22:30:00Z","79","santa_monica"],["2019-08-25T22:30:00Z","89","coyote_creek"],["2019-08-25T22:36:00Z","72","santa_monica"],["2019-08-25T22:36:00Z","85","coyote_creek"],["2019-08-25T22:42:00Z","74","coyote_creek"],["2019-08-25T22:42:00Z","89","santa_monica"],["2019-08-25T22:48:00Z","77","santa_monica"],["2019-08-25T22:48:00Z","88","coyote_creek"],["2019-08-25T22:54:00Z","72","coyote_creek"],["2019-08-25T22:54:00Z","76","santa_monica"],["2019-08-25T23:00:00Z","74","santa_monica"],["2019-08-25T23:00:00Z","75","coyote_creek"],["2019-08-25T23:06:00Z","76","santa_monica"],["2019-08-25T23:06:00Z","85","coyote_creek"],["2019-08-25T23:12:00Z","79","santa_monica"],["2019-08-25T23:12:00Z","82","coyote_creek"],["2019-08-25T23:18:00Z","74","coyote_creek"],["2019-08-25T23:18:00Z","87","santa_monica"],["2019-08-25T23:24:00Z","72","coyote_creek"],["2019-08-25T23:24:00Z","87","santa_monica"],["2019-08-25T23:30:00Z","73","coyote_creek"],["2019-08-25T23:30:00Z","75","santa_monica"],["2019-08-25T23:36:00Z","79","santa_monica"],["2019-08-25T23:36:00Z","82","coyote_creek"],["2019-08-25T23:42:00Z","75","coyote_creek"],["2019-08-25T23:42:00Z","79","santa_monica"],["2019-08-25T23:48:00Z","70","santa_monica"],["2019-08-25T23:48:00Z","75","coyote_creek"],["2019-08-25T23:54:00Z","77","coyote_creek"],["2019-08-25T23:54:00Z","79","santa_monica"],["2019-08-26T00:00:00Z","79","coyote_creek"],["2019-08-26T00:00:00Z","81","santa_monica"],["2019-08-26T00:06:00Z","76","santa_monica"],["2019-08-26T00:06:00Z","78","coyote_creek"],["2019-08-26T00:12:00Z","75","coyote_creek"],["2019-08-26T00:12:00Z","75","santa_monica"],["2019-08-26T00:18:00Z","72","coyote_creek"],["2019-08-26T00:18:00Z","86","santa_monica"],["2019-08-26T00:24:00Z","79","santa_monica"],["2019-08-26T00:24:00Z","81","coyote_creek"],["2019-08-26T00:30:00Z","70","santa_monica"],["2019-08-26T00:30:00Z","88","coyote_creek"],["2019-08-26T00:36:00Z","75","coyote_creek"],["2019-08-26T00:36:00Z","80","santa_monica"],["2019-08-26T00:42:00Z","70","coyote_creek"],["2019-08-26T00:42:00Z","84","santa_monica"],["2019-08-26T00:48:00Z","72","coyote_creek"],["2019-08-26T00:48:00Z","83","santa_monica"],["2019-08-26T00:54:00Z","79","santa_monica"],["2019-08-26T00:54:00Z","85","coyote_creek"],["2019-08-26T01:00:00Z","70","coyote_creek"],["2019-08-26T01:00:00Z","73","santa_monica"],["2019-08-26T01:06:00Z","78","santa_monica"],["2019-08-26T01:06:00Z","81","coyote_creek"],["2019-08-26T01:12:00Z","87","santa_monica"],["2019-08-26T01:12:00Z","88","coyote_creek"],["2019-08-26T01:18:00Z","84","coyote_creek"],["2019-08-26T01:18:00Z","86","santa_monica"],["2019-08-26T01:24:00Z","72","santa_monica"],["2019-08-26T01:24:00Z","88","coyote_creek"],["2019-08-26T01:30:00Z","74","coyote_creek"],["2019-08-26T01:30:00Z","78","santa_monica"],["2019-08-26T01:36:00Z","70","santa_monica"],["2019-08-26T01:36:00Z","85","coyote_creek"],["2019-08-26T01:42:00Z","70","santa_monica"],["2019-08-26T01:42:00Z","83","coyote_creek"],["2019-08-26T01:48:00Z","81","coyote_creek"],["2019-08-26T01:48:00Z","90","santa_monica"]]}]}]}`; exp != res {
+			t.Fatalf("unexpected results\nexp: %s\ngot: %s\n", exp, res)
+		}
+	})
 }
