@@ -35,11 +35,12 @@ require (
 	github.com/mitchellh/cli v1.1.5
 	github.com/nxadm/tail v1.4.11
 	github.com/olekukonko/tablewriter v0.0.0-20170122224234-a0225b3f23b5
+	github.com/openGemini/opengemini-client-go v0.4.0
 	github.com/panjf2000/ants/v2 v2.5.0
 	github.com/pierrec/lz4/v4 v4.1.17
 	github.com/pingcap/failpoint v0.0.0-20220801062533-2eaa32854a6c
-	github.com/prometheus/client_golang v1.12.1
-	github.com/prometheus/common v0.32.1
+	github.com/prometheus/client_golang v1.19.1
+	github.com/prometheus/common v0.48.0
 	github.com/prometheus/prometheus v1.8.2-0.20210914090109-37468d88dce8
 	github.com/savsgio/dictpool v0.0.0-20221023140959-7bf2e61cea94
 	github.com/shirou/gopsutil/v3 v3.22.1
@@ -48,6 +49,7 @@ require (
 	github.com/stretchr/testify v1.9.0
 	github.com/tinylib/msgp v1.1.8
 	github.com/valyala/fastjson v1.6.4
+	github.com/vbauerster/mpb/v7 v7.3.2
 	github.com/xlab/treeprint v1.2.0
 	go.etcd.io/bbolt v1.3.8
 	go.etcd.io/etcd/raft/v3 v3.5.10
@@ -75,7 +77,9 @@ require (
 	github.com/Masterminds/sprig/v3 v3.2.1 // indirect
 	github.com/VictoriaMetrics/metrics v1.18.0 // indirect
 	github.com/VictoriaMetrics/metricsql v0.26.0 // indirect
-	github.com/alecthomas/units v0.0.0-20210208195552-ff826a37aa15 // indirect
+	github.com/VividCortex/ewma v1.2.0 // indirect
+	github.com/acarl005/stripansi v0.0.0-20180116102854-5a71ef0e047d // indirect
+	github.com/alecthomas/units v0.0.0-20211218093645-b94a6e3cc137 // indirect
 	github.com/andreyvit/diff v0.0.0-20170406064948-c7f18ee00883 // indirect
 	github.com/aokoli/goutils v1.0.1 // indirect
 	github.com/apache/arrow/go/arrow v0.0.0-20200923215132-ac86123a3f01 // indirect
@@ -103,7 +107,7 @@ require (
 	github.com/getsentry/sentry-go v0.12.0 // indirect
 	github.com/glycerine/go-unsnap-stream v0.0.0-20180323001048-9f0cb55181dd // indirect
 	github.com/go-chi/chi v4.1.0+incompatible // indirect
-	github.com/go-kit/log v0.2.0 // indirect
+	github.com/go-kit/log v0.2.1 // indirect
 	github.com/go-logfmt/logfmt v0.5.1 // indirect
 	github.com/go-logr/logr v1.4.1 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
@@ -148,7 +152,6 @@ require (
 	github.com/mattn/go-isatty v0.0.19 // indirect
 	github.com/mattn/go-runewidth v0.0.13 // indirect
 	github.com/mattn/go-tty v0.0.3 // indirect
-	github.com/matttproud/golang_protobuf_extensions v1.0.2-0.20181231171920-c182affec369 // indirect
 	github.com/miekg/dns v1.1.43 // indirect
 	github.com/mitchellh/copystructure v1.0.0 // indirect
 	github.com/mitchellh/mapstructure v1.4.3 // indirect
@@ -168,7 +171,7 @@ require (
 	github.com/power-devops/perfstat v0.0.0-20210106213030-5aafc221ea8c // indirect
 	github.com/prometheus/client_model v0.5.0 // indirect
 	github.com/prometheus/common/sigv4 v0.1.0 // indirect
-	github.com/prometheus/procfs v0.7.3 // indirect
+	github.com/prometheus/procfs v0.12.0 // indirect
 	github.com/rivo/uniseg v0.2.0 // indirect
 	github.com/rogpeppe/go-internal v1.10.0 // indirect
 	github.com/ryanuber/columnize v2.1.0+incompatible // indirect
