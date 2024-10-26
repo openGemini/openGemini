@@ -79,6 +79,9 @@ const (
 
 	// measurementTagKey is the tag key that all measurement names use in the new storage processor
 	measurementTagKey = "_measurement"
+
+	// http config for response content compression
+	DefaultCompression = "gzip"
 )
 
 var (
@@ -103,12 +106,13 @@ const (
 
 // Route specifies how to handle a HTTP verb for a given endpoint.
 type Route struct {
-	Name           string
-	Method         string
-	Pattern        string
-	Gzipped        bool
-	LoggingEnabled bool
-	HandlerFunc    interface{}
+	Name           		string
+	Method         		string
+	Pattern        		string
+	CompressEnabled   bool
+	CompressMethod    string
+	LoggingEnabled    bool
+	HandlerFunc       interface{}
 }
 
 type SubscriberManager interface {
@@ -219,158 +223,163 @@ func NewHandler(c config.Config) *Handler {
 		writeLogEnabled = false
 	}
 
+	var compressMethod  = DefaultCompression
+	if c.CompressEnabled {
+		compressMethod = c.CompressMethod
+	}
+
 	h.AddRoutes([]Route{
 		Route{
 			"query-options", // Satisfy CORS checks.
-			"OPTIONS", "/query", false, true, h.serveOptions,
+			"OPTIONS", "/query", false, compressMethod, true, h.serveOptions,
 		},
 		Route{
 			"query", // Query serving route.
-			"GET", "/query", true, true, h.serveQuery,
+			"GET", "/query", true, compressMethod, true, h.serveQuery,
 		},
 		Route{
 			"query", // Query serving route.
-			"POST", "/query", true, true, h.serveQuery,
+			"POST", "/query", true, compressMethod, true, h.serveQuery,
 		},
 		Route{
 			"write-options", // Satisfy CORS checks.
-			"OPTIONS", "/write", false, true, h.serveOptions,
+			"OPTIONS", "/write", false, compressMethod, true, h.serveOptions,
 		},
 		Route{
 			"write", // Data-ingest route.
-			"POST", "/write", true, writeLogEnabled, h.serveWrite,
+			"POST", "/write", true, compressMethod, writeLogEnabled, h.serveWrite,
 		},
 		Route{ // Ping
 			"ping",
-			"GET", "/ping", false, true, h.servePing,
+			"GET", "/ping", false, compressMethod, true, h.servePing,
 		},
 		Route{ // Ping
 			"ping-head",
-			"HEAD", "/ping", false, true, h.servePing,
+			"HEAD", "/ping", false, compressMethod, true, h.servePing,
 		},
 		Route{ // Ping w/ status
 			"status",
-			"GET", "/status", false, true, h.serveStatus,
+			"GET", "/status", false, compressMethod, true, h.serveStatus,
 		},
 		Route{ // Ping w/ status
 			"status-head",
-			"HEAD", "/status", false, true, h.serveStatus,
+			"HEAD", "/status", false, compressMethod, true, h.serveStatus,
 		},
 		Route{
 			"prometheus-metrics",
-			"GET", "/metrics", false, true, h.serveMetrics,
+			"GET", "/metrics", false, compressMethod, true, h.serveMetrics,
 		},
 		Route{
 			"failpoint",
-			"POST", "/failpoint", false, true, h.failPoint,
+			"POST", "/failpoint", false, compressMethod, true, h.failPoint,
 		},
 		Route{
 			"prometheus-write", // Prometheus remote write
-			"POST", "/api/v1/prom/write", false, true, h.servePromWrite,
+			"POST", "/api/v1/prom/write", false, compressMethod, true, h.servePromWrite,
 		},
 		Route{
 			"prometheus-read", // Prometheus remote read
-			"POST", "/api/v1/prom/read", true, true, h.servePromRead,
+			"POST", "/api/v1/prom/read", true, compressMethod, true, h.servePromRead,
 		},
 		Route{
 			"prometheus-instant-query", // Prometheus instant query
-			"GET", "/api/v1/query", true, true, h.servePromQuery,
+			"GET", "/api/v1/query", true,  compressMethod, true, h.servePromQuery,
 		},
 		Route{
 			"prometheus-instant-query", // Prometheus instant query
-			"POST", "/api/v1/query", true, true, h.servePromQuery,
+			"POST", "/api/v1/query", true, compressMethod, true, h.servePromQuery,
 		},
 		Route{
 			"prometheus-range-query", // Prometheus range query
-			"GET", "/api/v1/query_range", true, true, h.servePromQueryRange,
+			"GET", "/api/v1/query_range", true, compressMethod, true, h.servePromQueryRange,
 		},
 		Route{
 			"prometheus-range-query", // Prometheus range query
-			"POST", "/api/v1/query_range", true, true, h.servePromQueryRange,
+			"POST", "/api/v1/query_range", true, compressMethod, true, h.servePromQueryRange,
 		},
 		Route{
 			"prometheus-labels-query", // Prometheus labels query
-			"GET", "/api/v1/labels", true, true, h.servePromQueryLabels,
+			"GET", "/api/v1/labels", true,  compressMethod, true, h.servePromQueryLabels,
 		},
 		Route{
 			"prometheus-labels-query", // Prometheus labels query
-			"POST", "/api/v1/labels", true, true, h.servePromQueryLabels,
+			"POST", "/api/v1/labels", true, compressMethod, true, h.servePromQueryLabels,
 		},
 		Route{
 			"prometheus-label-values-query", // Prometheus label-values query
-			"GET", "/api/v1/label/{name}/values", true, true, h.servePromQueryLabelValues,
+			"GET", "/api/v1/label/{name}/values", true, compressMethod, true, h.servePromQueryLabelValues,
 		},
 		Route{
 			"prometheus-label-values-query", // Prometheus label-values query
-			"POST", "/api/v1/label/{name}/values", true, true, h.servePromQueryLabelValues,
+			"POST", "/api/v1/label/{name}/values", true, compressMethod, true, h.servePromQueryLabelValues,
 		},
 		Route{
 			"prometheus-series-query", // Prometheus series query
-			"GET", "/api/v1/series", true, true, h.servePromQuerySeries,
+			"GET", "/api/v1/series", true, compressMethod, true, h.servePromQuerySeries,
 		},
 		Route{
 			"prometheus-series-query", // Prometheus series query
-			"POST", "/api/v1/series", true, true, h.servePromQuerySeries,
+			"POST", "/api/v1/series", true, compressMethod, true, h.servePromQuerySeries,
 		},
 		Route{
 			"prometheus-metadata-query", // Prometheus metadata query
-			"GET", "/api/v1/metadata", true, true, h.servePromQueryMetaData,
+			"GET", "/api/v1/metadata", true, compressMethod, true, h.servePromQueryMetaData,
 		},
 		Route{
 			"prometheus-write-metric-store", // Prometheus remote write
-			"POST", "/prometheus/{metric_store}/api/v1/prom/write", false, true, h.servePromWriteWithMetricStore,
+			"POST", "/prometheus/{metric_store}/api/v1/prom/write", false, compressMethod, true, h.servePromWriteWithMetricStore,
 		},
 		Route{
 			"prometheus-read-metric-store", // Prometheus remote read
-			"POST", "/prometheus/{metric_store}/api/v1/prom/read", true, true, h.servePromReadWithMetricStore,
+			"POST", "/prometheus/{metric_store}/api/v1/prom/read", true, compressMethod, true, h.servePromReadWithMetricStore,
 		},
 		Route{
 			"prometheus-instant-query-metric-store", // Prometheus instant query
-			"GET", "/prometheus/{metric_store}/api/v1/query", true, true, h.servePromQueryWithMetricStore,
+			"GET", "/prometheus/{metric_store}/api/v1/query", true, compressMethod, true, h.servePromQueryWithMetricStore,
 		},
 		Route{
 			"prometheus-instant-query-metric-store", // Prometheus instant query
-			"POST", "/prometheus/{metric_store}/api/v1/query", true, true, h.servePromQueryWithMetricStore,
+			"POST", "/prometheus/{metric_store}/api/v1/query", true, compressMethod, true, h.servePromQueryWithMetricStore,
 		},
 		Route{
 			"prometheus-range-query-metric-store", // Prometheus range query
-			"GET", "/prometheus/{metric_store}/api/v1/query_range", true, true, h.servePromQueryRangeWithMetricStore,
+			"GET", "/prometheus/{metric_store}/api/v1/query_range", true, compressMethod, true, h.servePromQueryRangeWithMetricStore,
 		},
 		Route{
 			"prometheus-range-query-metric-store", // Prometheus range query
-			"POST", "/prometheus/{metric_store}/api/v1/query_range", true, true, h.servePromQueryRangeWithMetricStore,
+			"POST", "/prometheus/{metric_store}/api/v1/query_range", true, compressMethod, true, h.servePromQueryRangeWithMetricStore,
 		},
 		Route{
 			"prometheus-labels-query-metric-store", // Prometheus labels query
-			"GET", "/prometheus/{metric_store}/api/v1/labels", true, true, h.servePromQueryLabelsWithMetricStore,
+			"GET", "/prometheus/{metric_store}/api/v1/labels", true, compressMethod, true, h.servePromQueryLabelsWithMetricStore,
 		},
 		Route{
 			"prometheus-labels-query-metric-store", // Prometheus labels query
-			"POST", "/prometheus/{metric_store}/api/v1/labels", true, true, h.servePromQueryLabelsWithMetricStore,
+			"POST", "/prometheus/{metric_store}/api/v1/labels", true, compressMethod, true, h.servePromQueryLabelsWithMetricStore,
 		},
 		Route{
 			"prometheus-label-values-query-metric-store", // Prometheus label-values query
-			"GET", "/prometheus/{metric_store}/api/v1/label/{name}/values", true, true, h.servePromQueryLabelValuesWithMetricStore,
+			"GET", "/prometheus/{metric_store}/api/v1/label/{name}/values", true, compressMethod, true, h.servePromQueryLabelValuesWithMetricStore,
 		},
 		Route{
 			"prometheus-label-values-query-metric-store", // Prometheus label-values query
-			"POST", "/prometheus/{metric_store}/api/v1/label/{name}/values", true, true, h.servePromQueryLabelValuesWithMetricStore,
+			"POST", "/prometheus/{metric_store}/api/v1/label/{name}/values", true, compressMethod, true, h.servePromQueryLabelValuesWithMetricStore,
 		},
 		Route{
 			"prometheus-series-query-metric-store", // Prometheus series query
-			"GET", "/prometheus/{metric_store}/api/v1/series", true, true, h.servePromQuerySeriesWithMetricStore,
+			"GET", "/prometheus/{metric_store}/api/v1/series", true, compressMethod, true, h.servePromQuerySeriesWithMetricStore,
 		},
 		Route{
 			"prometheus-series-query-metric-store", // Prometheus series query
-			"POST", "/prometheus/{metric_store}/api/v1/series", true, true, h.servePromQuerySeriesWithMetricStore,
+			"POST", "/prometheus/{metric_store}/api/v1/series", true, compressMethod, true, h.servePromQuerySeriesWithMetricStore,
 		},
 		Route{
 			"prometheus-metadata-query-metric-store", // Prometheus metadata query
-			"GET", "/prometheus/{metric_store}/api/v1/metadata", true, true, h.servePromQueryMetaDataWithMetricStore,
+			"GET", "/prometheus/{metric_store}/api/v1/metadata", true, compressMethod, true, h.servePromQueryMetaDataWithMetricStore,
 		},
 		Route{ // sysCtrl
 			"sysCtrl",
-			"POST", "/debug/ctrl", false, true, h.serveSysCtrl,
+			"POST", "/debug/ctrl", false, compressMethod, true, h.serveSysCtrl,
 		},
 	}...)
 	if config2.IsLogKeeper() {
@@ -378,111 +387,111 @@ func NewHandler(c config.Config) *Handler {
 			// repository related operations
 			Route{
 				"create-repository",
-				"POST", "/api/v1/repository/{repository}", false, true, h.serveCreateRepository,
+				"POST", "/api/v1/repository/{repository}", false, compressMethod, true, h.serveCreateRepository,
 			},
 			Route{
 				"delete-repository",
-				"DELETE", "/api/v1/repository/{repository}", false, true, h.serveDeleteRepository,
+				"DELETE", "/api/v1/repository/{repository}", false, compressMethod, true, h.serveDeleteRepository,
 			},
 			Route{
 				"list-repository",
-				"GET", "/api/v1/repository", false, true, h.serveListRepository,
+				"GET", "/api/v1/repository", false, compressMethod, true, h.serveListRepository,
 			},
 			Route{
 				"show-repository",
-				"GET", "/api/v1/repository/{repository}", false, true, h.serveShowRepository,
+				"GET", "/api/v1/repository/{repository}", false, compressMethod, true, h.serveShowRepository,
 			},
 			Route{
 				"update-repository",
-				"PUT", "/api/v1/repository/{repository}", false, true, h.serveUpdateRepository,
+				"PUT", "/api/v1/repository/{repository}", false, compressMethod, true, h.serveUpdateRepository,
 			},
 			// logstream related operations
 			Route{
 				"create-logStream",
-				"POST", "/api/v1/logstream/{repository}/{logStream}", false, true, h.serveCreateLogstream,
+				"POST", "/api/v1/logstream/{repository}/{logStream}", false, compressMethod, true, h.serveCreateLogstream,
 			},
 			Route{
 				"delete-logStream",
-				"DELETE", "/api/v1/logstream/{repository}/{logStream}", false, true, h.serveDeleteLogstream,
+				"DELETE", "/api/v1/logstream/{repository}/{logStream}", false, compressMethod, true, h.serveDeleteLogstream,
 			},
 			Route{
 				"list-logStream",
-				"GET", "/api/v1/logstream/{repository}", false, true, h.serveListLogstream,
+				"GET", "/api/v1/logstream/{repository}", false, compressMethod, true, h.serveListLogstream,
 			},
 			Route{
 				"show-logStream",
-				"GET", "/api/v1/logstream/{repository}/{logStream}", false, true, h.serveShowLogstream,
+				"GET", "/api/v1/logstream/{repository}/{logStream}", false, compressMethod, true, h.serveShowLogstream,
 			},
 			Route{
 				"update-logStream",
-				"PUT", "/api/v1/logstream/{repository}/{logStream}", false, true, h.serveUpdateLogstream,
+				"PUT", "/api/v1/logstream/{repository}/{logStream}", false, compressMethod, true, h.serveUpdateLogstream,
 			},
 			Route{
 				"write-log", // Data-ingest route.
-				"POST", "/repo/{repository}/logstreams/{logStream}/records", false, true, h.serveRecord,
+				"POST", "/repo/{repository}/logstreams/{logStream}/records", false, compressMethod, true, h.serveRecord,
 			},
 			Route{
 				"upload", // Data-upload route.
-				"POST", "/repo/{repository}/logstreams/{logStream}/upload", false, true, h.serveUpload,
+				"POST", "/repo/{repository}/logstreams/{logStream}/upload", false, compressMethod, true, h.serveUpload,
 			},
 			Route{
 				"log-list", // Query for Log.
-				"GET", "/repo/{repository}/logstreams/{logStream}/logs", true, true, h.serveQueryLog,
+				"GET", "/repo/{repository}/logstreams/{logStream}/logs", true, compressMethod, true, h.serveQueryLog,
 			},
 			Route{
 				"log-by-cursor", // Query for Log by cursor.
-				"GET", "/repo/{repository}/logstreams/{logStream}/logbycursor", true, true, h.serveQueryLogByCursor,
+				"GET", "/repo/{repository}/logstreams/{logStream}/logbycursor", true, compressMethod, true, h.serveQueryLogByCursor,
 			},
 			Route{
 				"log-consume", // Query for Log.
-				"GET", "/repo/{repository}/logstreams/{logStream}/consume/logs", true, true, h.serveConsumeLogs,
+				"GET", "/repo/{repository}/logstreams/{logStream}/consume/logs", true, compressMethod, true, h.serveConsumeLogs,
 			},
 			Route{
 				"log-consume-cursor-time", // Query for Log.
-				"GET", "/repo/{repository}/logstreams/{logStream}/consume/cursor-time", true, true, h.serveConsumeCursorTime,
+				"GET", "/repo/{repository}/logstreams/{logStream}/consume/cursor-time", true, compressMethod, true, h.serveConsumeCursorTime,
 			},
 			Route{
 				"log-consume-cursors", // Query for Log.
-				"GET", "/repo/{repository}/logstreams/{logStream}/consume/cursors", true, true, h.serveGetConsumeCursors,
+				"GET", "/repo/{repository}/logstreams/{logStream}/consume/cursors", true, compressMethod, true, h.serveGetConsumeCursors,
 			},
 			Route{
 				"log-context", // Query for Log.
-				"GET", "/repo/{repository}/logstreams/{logStream}/context", true, true, h.serveContextQueryLog,
+				"GET", "/repo/{repository}/logstreams/{logStream}/context", true, compressMethod, true, h.serveContextQueryLog,
 			},
 			Route{
 				"log-agg", // Query for Log.
-				"GET", "/repo/{repository}/logstreams/{logStream}/histogram", true, true, h.serveAggLogQuery,
+				"GET", "/repo/{repository}/logstreams/{logStream}/histogram", true, compressMethod, true, h.serveAggLogQuery,
 			},
 			Route{
 				"log-agg", // Query for Log.
-				"GET", "/repo/{repository}/logstreams/{logStream}/analytics", true, true, h.serveAnalytics,
+				"GET", "/repo/{repository}/logstreams/{logStream}/analytics", true, compressMethod, true, h.serveAnalytics,
 			},
 			Route{
 				"log-cursor", // Get Cursor for Log.
-				"GET", "/repo/{repository}/logstreams/{logStream}/cursor", true, true, h.serveGetCursor,
+				"GET", "/repo/{repository}/logstreams/{logStream}/cursor", true, compressMethod, true, h.serveGetCursor,
 			},
 			Route{
 				"log-pull-cursor", // Pull data for Log.
-				"GET", "/repo/{repository}/logstreams/{logStream}/cursor/{cursor}", true, true, h.servePullLog,
+				"GET", "/repo/{repository}/logstreams/{logStream}/cursor/{cursor}", true, compressMethod, true, h.servePullLog,
 			},
 			Route{
 				"recall-data",
-				"POST", "/repo/{repository}/logstreams/{logStream}/recalldata", false, true, h.serveRecallData,
+				"POST", "/repo/{repository}/logstreams/{logStream}/recalldata", false, compressMethod, true, h.serveRecallData,
 			},
 			Route{
 				"create-stream-task",
-				"POST", "/repo/{repository}/logstreams/{logStream}/stream-task", false, true, h.serveCreateStreamTask,
+				"POST", "/repo/{repository}/logstreams/{logStream}/stream-task", false, compressMethod, true, h.serveCreateStreamTask,
 			},
 			Route{
 				"delete-stream-task",
-				"DELETE", "/repo/{repository}/logstreams/{logStream}/stream-task/{taskId}", false, true, h.serveDeleteStreamTask,
+				"DELETE", "/repo/{repository}/logstreams/{logStream}/stream-task/{taskId}", false, compressMethod, true, h.serveDeleteStreamTask,
 			},
 		}...)
 
 	}
 	fluxRoute := Route{
 		"flux-read",
-		"POST", "/api/v2/query", true, true, nil,
+		"POST", "/api/v2/query", true, compressMethod, true, nil,
 	}
 
 	if !c.FluxEnabled {
@@ -571,8 +580,12 @@ func (h *Handler) AddRoutes(routes ...Route) {
 		}
 
 		handler = h.responseWriter(handler)
-		if r.Gzipped {
-			handler = gzipFilter(handler)
+		if r.CompressEnabled {
+			if(r.CompressMethod == "gzip") {
+				handler = gzipFilter(handler)
+			} else if r.CompressMethod == "zstd" {
+				handler = ZSTDFilter(handler)
+			}
 		}
 		handler = cors(handler)
 		handler = requestID(handler)

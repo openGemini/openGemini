@@ -51,6 +51,8 @@ type Config struct {
 	AuthEnabled             bool           `toml:"auth-enabled"`
 	WeakPwdPath             string         `toml:"weakpwd-path"`
 	LogEnabled              bool           `toml:"log-enabled"`
+	CompressEnabled         bool           `toml:"compress-enabled"`
+	CompressMethod          string         `toml:"compress-method"`
 	SuppressWriteLog        bool           `toml:"suppress-write-log"`
 	WriteTracing            bool           `toml:"write-tracing"`
 	FluxEnabled             bool           `toml:"flux-enabled"`

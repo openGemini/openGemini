@@ -11,11 +11,22 @@ import (
 )
 
 type lazyGzipResponseWriter struct {
-	io.Writer
-	http.ResponseWriter
-	http.Flusher
-	http.CloseNotifier
-	wroteHeader bool
+	BaseCompressedResponseWriter
+}
+
+// Header implements http.ResponseWriter.
+func (w *lazyGzipResponseWriter) Header() http.Header {
+	return w.ResponseWriter.Header()
+}
+
+func NewGzipResponseWriter(w http.ResponseWriter) *lazyGzipResponseWriter {
+	return &lazyGzipResponseWriter{
+		BaseCompressedResponseWriter: BaseCompressedResponseWriter{
+			ResponseWriter: w,
+			Writer:         w,
+			Flusher:        w.(http.Flusher),
+		},
+	}
 }
 
 // gzipFilter determines if the client can accept compressed responses, and encodes accordingly.
@@ -26,7 +37,7 @@ func gzipFilter(inner http.Handler) http.Handler {
 			return
 		}
 
-		gw := &lazyGzipResponseWriter{ResponseWriter: w, Writer: w}
+		gw := NewGzipResponseWriter(w)
 
 		if f, ok := w.(http.Flusher); ok {
 			gw.Flusher = f
