@@ -16,14 +16,12 @@ jobs:
       fail-fast: true
       matrix:
         os: ["ubuntu-latest"] # "macOS-latest"
-        go: ["1.20.x"]
+        go: ["1.20"]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-      - uses: WillAbides/setup-go-faster@v1.7.0
+      - uses: actions/setup-go@v5
         with:
           go-version: ${{ matrix.go }}
       - name: Run gotest

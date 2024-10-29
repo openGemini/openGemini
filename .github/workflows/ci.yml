@@ -49,11 +49,9 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
-          fetch-depth: 1
-      - uses: WillAbides/setup-go-faster@v1.7.0
-        with:
-          go-version: "1.20"
+          go-version-file: "go.mod"
       - name: Run static check
         run: make static-check
       - name: Run go version check
@@ -82,14 +80,12 @@ jobs:
       fail-fast: true
       matrix:
         os: ["ubuntu-latest"] # "macOS-latest"
-        go: ["1.20.x"]
+        go: ["1.20"]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-      - uses: WillAbides/setup-go-faster@v1.7.0
+      - uses: actions/setup-go@v5
         with:
           go-version: ${{ matrix.go }}
       - name: Run gotest
@@ -108,14 +104,12 @@ jobs:
       fail-fast: true
       matrix:
         os: ["ubuntu-latest"] # "macOS-latest"
-        go: ["1.20.x"]
+        go: ["1.20"]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-      - uses: WillAbides/setup-go-faster@v1.7.0
+      - uses: actions/setup-go@v5
         with:
           go-version: ${{ matrix.go }}
       - name: Run build and serve
