@@ -20,6 +20,12 @@ env:
   GOSUMDB: off
 
 jobs:
+  PrTitleLint:
+    name: pr title lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: PR Title Lint
+        uses: openGemini/pr-title-checker@v1.0.1
   CommitLint:
     name: commit lint
     runs-on: ubuntu-latest
