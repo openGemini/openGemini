@@ -327,7 +327,9 @@ func (trans *IndexScanTransform) tsIndexScan() error {
 	if !ok {
 		return errors.New("the PipelineExecutor is invalid for IndexScanTransform")
 	}
-	defer atomic.AddInt64(&statistics.StoreQueryStat.ChunkReaderDagBuildTimeTotal, time.Since(startTime).Nanoseconds())
+	defer func() {
+		atomic.AddInt64(&statistics.StoreQueryStat.ChunkReaderDagBuildTimeTotal, time.Since(startTime).Nanoseconds())
+	}()
 	output := trans.pipelineExecutor.root.transform.GetOutputs()
 	if len(output) > 1 {
 		return errors.New("the output should be 1")

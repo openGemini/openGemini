@@ -1,6 +1,6 @@
 module github.com/openGemini/openGemini
 
-go 1.20
+go 1.22
 
 require (
 	github.com/BurntSushi/toml v0.4.1
@@ -96,7 +96,6 @@ require (
 	github.com/bytedance/sonic/loader v0.2.0 // indirect
 	github.com/c-bata/go-prompt v0.2.6 // indirect
 	github.com/cespare/xxhash v1.1.0 // indirect
-	github.com/chenzhuoyu/base64x v0.0.0-20221115062448-fe3a3abad311 // indirect
 	github.com/cloudwego/base64x v0.1.4 // indirect
 	github.com/cloudwego/iasm v0.2.0 // indirect
 	github.com/cockroachdb/logtags v0.0.0-20211118104740-dabe8e521a4f // indirect
