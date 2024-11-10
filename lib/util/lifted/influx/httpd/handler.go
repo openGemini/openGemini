@@ -103,12 +103,12 @@ const (
 
 // Route specifies how to handle a HTTP verb for a given endpoint.
 type Route struct {
-	Name           string
-	Method         string
-	Pattern        string
-	Gzipped        bool
-	LoggingEnabled bool
-	HandlerFunc    interface{}
+	Name              string
+	Method            string
+	Pattern           string
+	CompressSupported bool
+	LoggingEnabled    bool
+	HandlerFunc       interface{}
 }
 
 type SubscriberManager interface {
@@ -571,8 +571,9 @@ func (h *Handler) AddRoutes(routes ...Route) {
 		}
 
 		handler = h.responseWriter(handler)
-		if r.Gzipped {
+		if r.CompressSupported {
 			handler = gzipFilter(handler)
+			handler = zstdFilter(handler)
 		}
 		handler = cors(handler)
 		handler = requestID(handler)

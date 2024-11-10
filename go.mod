@@ -29,7 +29,7 @@ require (
 	github.com/influxdata/influxdb-observability/otel2influx v0.2.19
 	github.com/influxdata/influxql v1.1.1-0.20211004132434-7e7d61973256
 	github.com/json-iterator/go v1.1.12
-	github.com/klauspost/compress v1.17.2
+	github.com/klauspost/compress v1.17.11
 	github.com/mattn/go-sqlite3 v1.14.19
 	github.com/mitchellh/cli v1.1.5
 	github.com/nxadm/tail v1.4.11
