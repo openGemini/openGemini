@@ -1910,10 +1910,16 @@ func (m MocTsspFile) MetaIndexAt(idx int) (*immutable.MetaIndex, error) {
 }
 
 func (m MocTsspFile) MetaIndex(id uint64, tr util.TimeRange) (int, *immutable.MetaIndex, error) {
+	if id == SID {
+		return 0, &immutable.MetaIndex{}, nil
+	}
 	return 0, nil, nil
 }
 
 func (m MocTsspFile) ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, ctx *immutable.ChunkMetaContext, ioPriority int) (*immutable.ChunkMeta, error) {
+	if id == SID {
+		return immutable.NewChunkMeta(SID, 0, 10, 10), nil
+	}
 	return nil, nil
 }
 
@@ -1954,6 +1960,9 @@ func (m MocTsspFile) ContainsByTime(tr util.TimeRange) (bool, error) {
 }
 
 func (m MocTsspFile) ContainsValue(id uint64, tr util.TimeRange) (bool, error) {
+	if id == SID {
+		return true, nil
+	}
 	return false, nil
 }
 

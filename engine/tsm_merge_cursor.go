@@ -177,7 +177,9 @@ func AddLocationsWithLimit(l *immutable.LocationCursor, files immutable.TableRea
 				r.UnrefFileReader()
 				return 0, err
 			}
-			orderRow += row
+			if ctx.tr.Contains(metaMinTime, metaMaxTime) {
+				orderRow += row
+			}
 
 			l.AddLocation(loc)
 			if orderRow >= int64(option.GetLimit()+option.GetOffset()) {
