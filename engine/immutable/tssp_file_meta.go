@@ -375,6 +375,19 @@ type ChunkMeta struct {
 	colMeta     []ColumnMeta
 }
 
+// NewChunkMeta only use for test,used by engine/record_plan_test.go
+func NewChunkMeta(sid uint64, minT, maxT int64, count int) *ChunkMeta {
+	b := newPreAggBuilders()
+	b.intBuilder.addCount(10)
+	var dst []byte
+	cm := &ChunkMeta{
+		sid:       sid,
+		timeRange: []SegmentRange{SegmentRange{minT, maxT}},
+		colMeta:   []ColumnMeta{ColumnMeta{preAgg: b.intBuilder.marshal(dst)}},
+	}
+	return cm
+}
+
 func (m *ChunkMeta) segmentCount() int {
 	return int(m.segCount)
 }

@@ -464,6 +464,10 @@ func (t TimeRange) Overlaps(min, max int64) bool {
 	return t.Min <= max && t.Max >= min
 }
 
+func (t TimeRange) Contains(min, max int64) bool {
+	return t.Min <= min && t.Max >= max
+}
+
 func Str2bytes(s string) []byte {
 	x := (*[2]uintptr)(unsafe.Pointer(&s))
 	h := [3]uintptr{x[0], x[1], x[1]}
