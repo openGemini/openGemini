@@ -73,7 +73,7 @@ func (p *DDLProcessor) Handle(w spdy.Responser, data interface{}) error {
 		return executor.NewInvalidTypeError("*netstorage.DDLMessage", data)
 	}
 
-	h := newHandler(msg.Typ)
+	h := NewHandler(msg.Typ)
 	if h == nil {
 		return fmt.Errorf("unsupported message type: %d", msg.Typ)
 	}

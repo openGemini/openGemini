@@ -21,6 +21,7 @@ import (
 
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
@@ -81,6 +82,7 @@ func (c *MockMetaClient) ShardOwner(shardID uint64) (database, policy string, sg
 
 var exitNodeID uint64 = 1
 var notExitNodeID uint64 = 2
+var aliveNodeID uint64 = 1024
 
 func (c *MockMetaClient) DataNode(id uint64) (*meta.DataNode, error) {
 	if id == exitNodeID {
@@ -88,6 +90,14 @@ func (c *MockMetaClient) DataNode(id uint64) (*meta.DataNode, error) {
 			NodeInfo: meta.NodeInfo{
 				ID:   1,
 				Host: "192.168.0.1:8400",
+			},
+		}, nil
+	} else if id == aliveNodeID {
+		return &meta.DataNode{
+			NodeInfo: meta.NodeInfo{
+				ID:     1024,
+				Host:   "192.168.0.1:8400",
+				Status: serf.MemberStatus(meta.StatusAlive),
 			},
 		}, nil
 	} else {
@@ -128,4 +138,6 @@ func TestNetStorage_SetRaftMsg(t *testing.T) {
 	assert.Equal(t, nil, err)
 	err = store.SendRaftMessages(2, "db0", 0, raftpb.Message{})
 	assert.Equal(t, nil, err)
+	err = store.SendRaftMessages(1024, "db0", 0, raftpb.Message{})
+	assert.Equal(t, "no connections available, node: 1024, 192.168.0.1:8400", err.Error())
 }

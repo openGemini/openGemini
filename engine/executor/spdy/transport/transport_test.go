@@ -153,8 +153,14 @@ func TestNewTransport(t *testing.T) {
 	_, err = transport.NewWriteTransport(nodeID, spdy.SelectRequest, nil)
 	assert.EqualError(t, err, noNodeAvailable)
 
+	_, err = transport.NewRaftMsgTransport(nodeID, spdy.RaftMsgRequest, nil)
+	assert.EqualError(t, err, noNodeAvailable)
+
 	transport.NewWriteNodeManager().Add(nodeID, address)
 	_, err = transport.NewWriteTransport(nodeID, spdy.SelectRequest, nil)
+	assert.EqualError(t, err, noConnectionAvailable)
+
+	_, err = transport.NewRaftMsgTransport(nodeID, spdy.RaftMsgRequest, nil)
 	assert.EqualError(t, err, noConnectionAvailable)
 }
 
