@@ -37,6 +37,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
+	"go.etcd.io/etcd/raft/v3/raftpb"
 )
 
 func TestServer(t *testing.T) {
@@ -287,4 +288,30 @@ func TestWritePointsForRep(t *testing.T) {
 	store.MetaClient = client
 	err = WritePointsForRep(ww, log, store)
 	assert.Equal(t, err.Error(), "unmarshal points error, err: too small bytes for row timestamp")
+}
+
+func TestRaftMsgProcessor(t *testing.T) {
+	store := mockStorage()
+	defer store.MustClose()
+	processor := NewRaftMsgProcessor(store)
+	w := &MockNewResponser{}
+	req := &netstorage.RaftMessagesRequest{}
+	req.Database = "db0"
+	req.PtId = 1
+	req.RaftMessage = raftpb.Message{}
+	req1 := netstorage.NewRaftMsgMessage(netstorage.RaftMessagesRequestMessage, req)
+	if err := processor.Handle(w, req1); err != nil {
+		t.Fatal("TestRaftMsgProcessor failed")
+	}
+	req2 := netstorage.NewDDLMessage(netstorage.SeriesKeysRequestMessage, nil)
+	err := processor.Handle(w, req2)
+	assert.Equal(t, err.Error(), "invalid data type, exp: *netstorage.RaftMsgMessage, got: *netstorage.DDLMessage")
+
+	req3 := netstorage.NewRaftMsgMessage(netstorage.UnknownMessage, req)
+	err = processor.Handle(w, req3)
+	assert.Equal(t, err.Error(), "unsupported message type: 0")
+
+	req4 := netstorage.NewRaftMsgMessage(netstorage.SeriesKeysRequestMessage, req)
+	err = processor.Handle(w, req4)
+	assert.Equal(t, err.Error(), "invalid data type, exp: *netstorage.SeriesKeysRequest, got: *netstorage.RaftMessagesRequest")
 }

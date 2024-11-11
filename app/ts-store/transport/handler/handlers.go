@@ -25,7 +25,7 @@ import (
 	"github.com/openGemini/openGemini/lib/netstorage"
 )
 
-func newHandler(typ uint8) RPCHandler {
+func NewHandler(typ uint8) RPCHandler {
 	switch typ {
 	case netstorage.SeriesKeysRequestMessage:
 		return &SeriesKeys{}

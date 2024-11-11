@@ -145,3 +145,25 @@ func (c *MigratePtCallback) GetResponse() interface{} {
 func (c *MigratePtCallback) CallFn(err error) {
 	c.fn(err)
 }
+
+type RaftMsgCallback struct {
+	data interface{}
+}
+
+func (c *RaftMsgCallback) Handle(data interface{}) error {
+	msg, ok := data.(*RaftMsgMessage)
+	if !ok {
+		return executor.NewInvalidTypeError("*netstorage.RaftMsgMessage", data)
+	}
+
+	c.data = msg.Data
+	return nil
+}
+
+func (c *RaftMsgCallback) GetCodec() transport.Codec {
+	return &RaftMsgMessage{}
+}
+
+func (c *RaftMsgCallback) GetResponse() interface{} {
+	return c.data
+}

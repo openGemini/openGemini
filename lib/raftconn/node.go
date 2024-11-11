@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
@@ -109,13 +110,14 @@ func StartNode(store *raftlog.RaftDiskStorage, nodeId uint64, database string, i
 
 	c := raft.Config{
 		ID:              id,
-		ElectionTick:    10,
-		HeartbeatTick:   1,
+		ElectionTick:    config.ElectionTick,
+		HeartbeatTick:   config.HeartbeatTick,
 		Storage:         store,
 		MaxSizePerMsg:   maxSizePerMsg,
 		MaxInflightMsgs: maxInflightMsgs,
 		Logger:          logger.GetSrLogger(),
 	}
+	logger.GetLogger().Info("StartRaftNode", zap.Int("electTick", c.ElectionTick), zap.Int("heartbeatTick", c.HeartbeatTick))
 
 	ctx := context.Background()
 	cctx, cancelFn := context.WithCancel(ctx)

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/engine/executor/spdy"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/strings"
 	"github.com/openGemini/openGemini/lib/tracing"
@@ -76,6 +77,14 @@ func NewWriteTransport(nodeId uint64, typ uint8, callback Callback) (*Transport,
 		return nil, errno.NewError(errno.NoNodeAvailable, nodeId)
 	}
 	return newTransport(node, typ, callback, writeTimeOut)
+}
+
+func NewRaftMsgTransport(nodeId uint64, typ uint8, callback Callback) (*Transport, error) {
+	node := NewWriteNodeManager().Get(nodeId)
+	if node == nil {
+		return nil, errno.NewError(errno.NoNodeAvailable, nodeId)
+	}
+	return newTransport(node, typ, callback, config.RaftMsgTimeout)
 }
 
 func newTransport(node *Node, typ uint8, callback Callback, timeout time.Duration) (*Transport, error) {

@@ -24,6 +24,7 @@ import (
 	"github.com/openGemini/openGemini/engine/executor/spdy"
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/lib/codec"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
@@ -530,7 +531,7 @@ func (s *NetStorage) SendRaftMessages(nodeID uint64, database string, pt uint32,
 		return nil
 	}
 
-	v, err := s.ddlRequestWithNodeId(nodeID, RaftMessagesRequestMessage, req)
+	v, err := s.raftRequestWithNodeId(nodeID, RaftMessagesRequestMessage, req)
 	if err != nil {
 		return err
 	}
@@ -542,4 +543,16 @@ func (s *NetStorage) SendRaftMessages(nodeID uint64, database string, pt uint32,
 		return errors.New(resp.GetErrMsg())
 	}
 	return nil
+}
+
+func (s *NetStorage) raftRequestWithNodeId(nodeID uint64, typ uint8, data codec.BinaryCodec) (interface{}, error) {
+	r := NewRequester(typ, data, s.metaClient)
+	r.setToInsert()
+	r.setTimeout(config.RaftMsgTimeout)
+	err := r.initWithNodeID(nodeID)
+	if err != nil {
+		return nil, err
+	}
+
+	return r.raftMsg()
 }
