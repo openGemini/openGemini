@@ -55,6 +55,7 @@ const (
 	WriteStreamPointsRequest
 	SegregateNodeRequest
 	CrashRequest
+	RaftMsgRequest
 	Unknown
 )
 

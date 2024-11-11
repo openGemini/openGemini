@@ -91,7 +91,7 @@ func TestBaseHandler_SetMessage(t *testing.T) {
 	}
 
 	for _, item := range items {
-		h := newHandler(item.typ)
+		h := NewHandler(item.typ)
 		require.NoError(t, h.SetMessage(item.msg))
 		require.NotNil(t, h.SetMessage(&mockCodec{}))
 	}
@@ -102,7 +102,7 @@ func TestCreateDataBase_Process(t *testing.T) {
 	pt := uint32(1)
 	rp := "rp0"
 
-	h := newHandler(netstorage.CreateDataBaseRequestMessage)
+	h := NewHandler(netstorage.CreateDataBaseRequestMessage)
 	if err := h.SetMessage(&netstorage.CreateDataBaseRequest{
 		CreateDataBaseRequest: internal.CreateDataBaseRequest{
 			Db: &db,
@@ -184,7 +184,7 @@ func TestShowQueries_Process(t *testing.T) {
 	}
 
 	// Simulate show queries, get the queryInfos
-	h := newHandler(netstorage.ShowQueriesRequestMessage)
+	h := NewHandler(netstorage.ShowQueriesRequestMessage)
 	if err := h.SetMessage(&netstorage.ShowQueriesRequest{}); err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +224,7 @@ func TestKillQuery_Process(t *testing.T) {
 	resp := &EmptyResponser{}
 	resp.session = spdy.NewMultiplexedSession(spdy.DefaultConfiguration(), nil, 0)
 
-	h := newHandler(netstorage.KillQueryRequestMessage)
+	h := NewHandler(netstorage.KillQueryRequestMessage)
 	req := netstorage.KillQueryRequest{}
 	req.QueryID = proto.Uint64(abortedQID)
 	if err := h.SetMessage(&req); err != nil {
@@ -260,7 +260,7 @@ func TestShowTagKeys_Process(t *testing.T) {
 	db := path.Join(dataPath, "db0")
 	condition := "tag1=tagkey"
 
-	h := newHandler(netstorage.ShowTagKeysRequestMessage)
+	h := NewHandler(netstorage.ShowTagKeysRequestMessage)
 	req := netstorage.ShowTagKeysRequest{}
 	req.Db = &db
 	req.Condition = &condition

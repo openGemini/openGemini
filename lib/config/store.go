@@ -290,6 +290,10 @@ type Store struct {
 	TSSPToParquetLevel uint16 `toml:"tssp-to-parquet-level"`
 
 	AvailabilityZone string `toml:"availability-zone"`
+
+	RaftMsgTimeout toml.Duration `toml:"raft-msg-time-out"`
+	ElectionTick   int           `toml:"election-tick"`
+	HeartbeatTick  int           `toml:"heartbeat-tick"`
 }
 
 // NewStore returns the default configuration for tsdb.
@@ -323,6 +327,9 @@ func NewStore() Store {
 		MaxRowsPerSegment:            util.DefaultMaxRowsPerSegment4TsStore,
 		ShardMoveLayoutSwitchEnabled: false,
 		SkipRegisterColdShard:        true,
+		RaftMsgTimeout:               toml.Duration(DefaultRaftMsgTimeout),
+		ElectionTick:                 DefaultElectionTick,
+		HeartbeatTick:                DefaultHeartbeatTick,
 	}
 }
 
@@ -337,6 +344,11 @@ func (c *Store) Corrector(cpuNum int, memorySize toml.Size) {
 	if c.OpenShardLimit <= 0 {
 		c.OpenShardLimit = cpuNum
 	}
+
+	SetRaftMsgTimeout(time.Duration(c.RaftMsgTimeout))
+	SetElectionTick(c.ElectionTick)
+	SetHeartbeatTick(c.HeartbeatTick)
+
 	SetReadMetaCachePct(int(c.ReadCache.ReadMetaCacheEnPct))
 	if c.ReadCache.ReadMetaCacheEn != 0 {
 		c.ReadCache.ReadMetaCacheEn = toml.Size(getReadMetaCacheLimitSize(uint64Limit(8*GB, 512*GB, uint64(memorySize))))

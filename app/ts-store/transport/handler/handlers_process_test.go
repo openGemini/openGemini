@@ -103,7 +103,7 @@ func TestProcessShowTagValues(t *testing.T) {
 		},
 	} {
 		t.Run(testcase.Name, func(t *testing.T) {
-			h := newHandler(netstorage.ShowTagValuesRequestMessage)
+			h := NewHandler(netstorage.ShowTagValuesRequestMessage)
 			if err := h.SetMessage(&netstorage.ShowTagValuesRequest{
 				ShowTagValuesRequest: testcase.ShowTagValuesRequest,
 			}); err != nil {
@@ -187,7 +187,7 @@ func TestProcessGetShardSplitPoints(t *testing.T) {
 	db := path.Join(dataPath, "db0")
 	pt := uint32(1)
 
-	h := newHandler(netstorage.GetShardSplitPointsRequestMessage)
+	h := NewHandler(netstorage.GetShardSplitPointsRequestMessage)
 	if err := h.SetMessage(&netstorage.GetShardSplitPointsRequest{
 		GetShardSplitPointsRequest: internal.GetShardSplitPointsRequest{
 			DB:   &db,
@@ -215,7 +215,7 @@ func TestProcessSeriesKeys(t *testing.T) {
 	pts := []uint32{1}
 	ms := []string{"cpu"}
 
-	h := newHandler(netstorage.SeriesKeysRequestMessage)
+	h := NewHandler(netstorage.SeriesKeysRequestMessage)
 	if err := h.SetMessage(&netstorage.SeriesKeysRequest{
 		SeriesKeysRequest: internal.SeriesKeysRequest{
 			Db:           &db,
@@ -240,7 +240,7 @@ func TestProcessSeriesKeys(t *testing.T) {
 }
 
 func TestProcessRaftMessages(t *testing.T) {
-	h := newHandler(netstorage.RaftMessagesRequestMessage)
+	h := NewHandler(netstorage.RaftMessagesRequestMessage)
 	if err := h.SetMessage(&netstorage.RaftMessagesRequest{
 		Database:    "test",
 		PtId:        1,

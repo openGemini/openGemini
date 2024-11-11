@@ -542,3 +542,12 @@ func Test_ShowClusterResponse_Unmarshal(t *testing.T) {
 		t.Fatal("newResp.size() error")
 	}
 }
+
+func Test_RaftMsgMessage_Unmarshal(t *testing.T) {
+	req := &netstorage.RaftMsgMessage{}
+	err := req.Unmarshal([]byte{})
+	assert.Equal(t, "invalid buffer size, expected greater than 0; actual 0", err.Error())
+	err = req.Unmarshal([]byte{'a'})
+	assert.Equal(t, "unknown message type: 97", err.Error())
+	req.Instance()
+}

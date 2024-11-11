@@ -15,10 +15,12 @@
 package transport
 
 import (
+	"fmt"
 	"sync/atomic"
 
 	"github.com/openGemini/openGemini/app/ts-store/storage"
 	"github.com/openGemini/openGemini/app/ts-store/stream"
+	"github.com/openGemini/openGemini/app/ts-store/transport/handler"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/executor/spdy"
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
@@ -60,6 +62,8 @@ func (s *InsertServer) register(store *storage.Storage, stream stream.Engine) {
 		NewInsertProcessor(store, stream), &netstorage.WritePointsRequest{}))
 	s.server.RegisterEHF(transport.NewEventHandlerFactory(spdy.WriteStreamPointsRequest,
 		NewInsertProcessor(store, stream), &netstorage.WriteStreamPointsRequest{}))
+	s.server.RegisterEHF(transport.NewEventHandlerFactory(spdy.RaftMsgRequest,
+		NewRaftMsgProcessor(store), &netstorage.RaftMsgMessage{}))
 }
 
 type InsertProcessor struct {
@@ -127,5 +131,46 @@ func (p *InsertProcessor) processWriteStreamPointsRequest(w spdy.Responser, msg 
 	default:
 		rsp = netstorage.NewWriteStreamPointsResponse(0, 0, "")
 	}
+	return w.Response(rsp, true)
+}
+
+type RaftMsgProcessor struct {
+	store *storage.Storage
+}
+
+func NewRaftMsgProcessor(store *storage.Storage) *RaftMsgProcessor {
+	return &RaftMsgProcessor{
+		store: store,
+	}
+}
+
+func (p *RaftMsgProcessor) Handle(w spdy.Responser, data interface{}) error {
+	msg, ok := data.(*netstorage.RaftMsgMessage)
+	if !ok {
+		return executor.NewInvalidTypeError("*netstorage.RaftMsgMessage", data)
+
+	}
+
+	h := handler.NewHandler(msg.Typ)
+	if h == nil {
+		return fmt.Errorf("unsupported message type: %d", msg.Typ)
+	}
+
+	if err := h.SetMessage(msg.Data); err != nil {
+		return err
+	}
+
+	h.SetStore(p.store)
+	rspMsg, err := h.Process()
+	if err != nil {
+		return err
+	}
+
+	rspTyp, ok := netstorage.MessageResponseTyp[msg.Typ]
+	if !ok {
+		return fmt.Errorf("no response message type: %d", msg.Typ)
+	}
+
+	rsp := netstorage.NewRaftMsgMessage(rspTyp, rspMsg)
 	return w.Response(rsp, true)
 }

@@ -85,6 +85,17 @@ func (r *Requester) ddl() (interface{}, error) {
 	return cb.GetResponse(), nil
 }
 
+func (r *Requester) raftMsg() (interface{}, error) {
+	data := NewRaftMsgMessage(r.msgTyp, r.data)
+	cb := &RaftMsgCallback{}
+
+	if err := r.requestRaftMsg(spdy.RaftMsgRequest, data, cb); err != nil {
+		return nil, err
+	}
+
+	return cb.GetResponse(), nil
+}
+
 func (r *Requester) sysCtrl(req *SysCtrlRequest) (interface{}, error) {
 	cb := &SysCtrlCallback{}
 
@@ -93,6 +104,25 @@ func (r *Requester) sysCtrl(req *SysCtrlRequest) (interface{}, error) {
 	}
 
 	return cb.GetResponse(), nil
+}
+
+func (r *Requester) requestRaftMsg(queryTyp uint8, data transport.Codec, cb transport.Callback) error {
+	var trans *transport.Transport
+	var err error
+
+	trans, err = transport.NewRaftMsgTransport(r.node.ID, queryTyp, cb)
+
+	if err != nil {
+		return err
+	}
+
+	if err := trans.Send(data); err != nil {
+		return err
+	}
+	if err := trans.Wait(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (r *Requester) request(queryTyp uint8, data transport.Codec, cb transport.Callback) error {

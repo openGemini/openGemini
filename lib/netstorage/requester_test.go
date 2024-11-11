@@ -45,6 +45,15 @@ func (c *RPCServer) Handle(w spdy.Responser, data interface{}) error {
 		return c.HandleDDL(w, msg)
 	case *WritePointsRequest:
 		return c.HandleWritePoints(w, msg)
+	case *RaftMsgMessage:
+		return c.HandleRaftMsg(w, msg)
+	}
+	return nil
+}
+
+func (c *RPCServer) HandleRaftMsg(w spdy.Responser, msg *RaftMsgMessage) error {
+	if err := w.Response(NewRaftMsgMessage(MessageResponseTyp[msg.Typ], &RaftMessagesResponse{}), true); err != nil {
+		return err
 	}
 	return nil
 }
@@ -85,6 +94,7 @@ func startServer(address string) (*spdy.RRCServer, error) {
 	rrcServer := spdy.NewRRCServer(spdy.DefaultConfiguration(), "tcp", address)
 	rrcServer.RegisterEHF(transport.NewEventHandlerFactory(spdy.DDLRequest, s, &DDLMessage{}))
 	rrcServer.RegisterEHF(transport.NewEventHandlerFactory(spdy.WritePointsRequest, s, &WritePointsRequest{}))
+	rrcServer.RegisterEHF(transport.NewEventHandlerFactory(spdy.RaftMsgRequest, s, &RaftMsgMessage{}))
 	if err := rrcServer.Start(); err != nil {
 		return nil, err
 	}
@@ -209,4 +219,30 @@ func TestRequesterError(t *testing.T) {
 
 	_, err := requester.sysCtrl(req)
 	assert.EqualError(t, err, fmt.Sprintf("no connections available, node: %d, %s", nodeId, address))
+}
+
+func TestRequesterRaftMsg(t *testing.T) {
+	address := "127.0.0.10:18491"
+	var nodeId uint64 = 1
+
+	// Server
+	rrcServer, err := startServer(address)
+	if !assert.NoError(t, err) {
+		return
+	}
+	defer rrcServer.Stop()
+
+	dataNode := newDataNode(nodeId, address)
+
+	req := &RaftMessagesRequest{}
+	req.Database = "db0"
+	req.PtId = 1
+
+	requester := NewRequester(RaftMessagesRequestMessage, req, nil)
+	requester.setToInsert()
+	requester.initWithNode(dataNode)
+
+	if _, err := requester.raftMsg(); err != nil {
+		t.Fatal("TestRequesterRaftMsg err")
+	}
 }

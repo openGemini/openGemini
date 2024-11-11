@@ -572,3 +572,32 @@ func (r *SegregateNodeResponse) Error() error {
 	}
 	return NormalizeError(r.Err)
 }
+
+type RaftMsgMessage struct {
+	BaseMessage
+}
+
+func NewRaftMsgMessage(typ uint8, data codec.BinaryCodec) *RaftMsgMessage {
+	msg := &RaftMsgMessage{}
+	msg.init(typ, data)
+	return msg
+}
+
+func (m *RaftMsgMessage) Unmarshal(buf []byte) error {
+	if len(buf) == 0 {
+		return errno.NewError(errno.ShortBufferSize, 0, 0)
+	}
+	m.Typ = buf[0]
+
+	msgFn, ok := MessageBinaryCodec[m.Typ]
+	if msgFn == nil || !ok {
+		return fmt.Errorf("unknown message type: %d", m.Typ)
+	}
+
+	m.Data = msgFn()
+	return m.Data.UnmarshalBinary(buf[1:])
+}
+
+func (m *RaftMsgMessage) Instance() transport.Codec {
+	return &RaftMsgMessage{}
+}
