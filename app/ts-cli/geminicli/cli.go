@@ -420,27 +420,57 @@ func (c *CommandLine) executeTimer(stmt *geminiql.TimerStatement) error {
 	return nil
 }
 
+// printExplainAnalyze prints the explain analyze result.
+//
+// It takes a Row from QueryResponse and an io.Writer. It iterates through the
+// row values and concatenates all strings into a single string. The string
+// is then written to the io.Writer with a prefix of "EXPLAIN ANALYZE\n---------------\n".
+func (c *CommandLine) printExplainAnalyze(result models.Row, w io.Writer) {
+	var buff []string
+	for _, value := range result.Values {
+		for _, content := range value {
+			s, ok := content.(string)
+			if !ok {
+				continue
+			}
+			buff = append(buff, s)
+		}
+	}
+	fmt.Fprintf(w, "EXPLAIN ANALYZE\n---------------\n%s\n", strings.Join(buff, "\n"))
+}
+
+// prettyResult takes a Result and an io.Writer and prints the results in a
+// pretty format. It prints the name and tags of each series, and then prints
+// the columns and values of the series in a table format. Finally, it prints
+// the number of columns and rows in the series.
 func (c *CommandLine) prettyResult(result client.Result, w io.Writer) {
-	for _, serie := range result.Series {
-		tags := []string{}
-		for k, v := range serie.Tags {
+	for _, series := range result.Series {
+		if len(series.Columns) == 0 {
+			continue
+		}
+		columnName := series.Columns[0]
+		if columnName == "EXPLAIN ANALYZE" {
+			c.printExplainAnalyze(series, w)
+			continue
+		}
+
+		var tags []string
+		for k, v := range series.Tags {
 			tags = append(tags, fmt.Sprintf("%s=%s", k, v))
 			sort.Strings(tags)
 		}
 
-		if serie.Name != "" {
-			fmt.Fprintf(w, "name: %s\n", serie.Name)
+		if series.Name != "" {
+			fmt.Fprintf(w, "name: %s\n", series.Name)
 		}
 		if len(tags) != 0 {
 			fmt.Fprintf(w, "tags: %s\n", strings.Join(tags, ", "))
 		}
 
 		writer := tablewriter.NewWriter(w)
-		c.prettyTable(serie, writer)
+		c.prettyTable(series, writer)
 		writer.Render()
-		caption := fmt.Sprintf("%d columns, %d rows in set", len(serie.Columns), len(serie.Values))
-		fmt.Println(caption)
-		fmt.Println("")
+		fmt.Fprintf(w, "%d columns, %d rows in set\n", len(series.Columns), len(series.Values))
 	}
 }
 
