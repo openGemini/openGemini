@@ -572,8 +572,7 @@ func (h *Handler) AddRoutes(routes ...Route) {
 
 		handler = h.responseWriter(handler)
 		if r.CompressSupported {
-			handler = gzipFilter(handler)
-			handler = zstdFilter(handler)
+			handler = compressFilter(handler)
 		}
 		handler = cors(handler)
 		handler = requestID(handler)
