@@ -890,6 +890,10 @@ func (r *AggPushDownToSubQueryRule) canPush(agg *LogicalAggregate, project *Logi
 		return false
 	}
 
+	if agg.Schema().CountDistinct() != nil {
+		return false
+	}
+
 	if len(project.Schema().(*QuerySchema).binarys) > 0 {
 		return false
 	}

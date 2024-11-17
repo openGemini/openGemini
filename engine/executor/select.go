@@ -584,7 +584,7 @@ func buildNodes(builder *LogicalPlanBuilderImpl, schema hybridqp.Catalog, s *Que
 		builder.CountDistinct()
 	}
 
-	if !hasSelector && !hasSlidingWindow && s.opt.HasInterval() || hasDistinct {
+	if !hasSelector && !hasSlidingWindow && s.opt.HasInterval() || (hasDistinct && !isSubQuery) {
 		builder.Interval()
 	}
 
