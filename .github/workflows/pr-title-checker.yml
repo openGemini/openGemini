@@ -1,0 +1,13 @@
+name: Lint
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+jobs:
+  PrTitleLint:
+    name: pr title lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: PR Title Lint
+        uses: openGemini/pr-title-checker@v1.0.2
