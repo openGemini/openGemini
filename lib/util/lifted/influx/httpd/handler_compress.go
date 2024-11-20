@@ -37,36 +37,44 @@ type lazyCompressResponseWriter struct {
 func compressFilter(inner http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var writer io.Writer = w
-		contentEncoding := r.Header.Get("Content-Encoding")
-		switch {
-		case strings.Contains(contentEncoding, "gzip"):
-			gz := getGzipWriter(w)
-			defer gz.Close()
-			writer = gz
-			w.Header().Set("Content-Encoding", "gzip")
-		case strings.Contains(contentEncoding, "zstd"):
-			enc := getZstdWriter(w)
-			defer enc.Close()
-			writer = enc
-			w.Header().Set("Content-Encoding", "zstd")
-		default:
+		acceptEncoding := r.Header.Get("Accept-Encoding")
+		encodings := strings.Split(acceptEncoding, ",")
+
+		// if mutliple encodings are supported, server will use the first one that is supported
+		for _, encoding := range encodings {
+			encoding = strings.TrimSpace(encoding)
+			switch encoding {
+			case "gzip":
+				gz := getGzipWriter(w)
+				defer gz.Close()
+				writer = gz
+				w.Header().Set("Content-Encoding", "gzip")
+				break
+			case "zstd":
+				enc := getZstdWriter(w)
+				defer enc.Close()
+				writer = enc
+				w.Header().Set("Content-Encoding", "zstd")
+				break
+			}
+			if writer != w {
+				break
+			}
+		}
+
+		if writer == w {
 			inner.ServeHTTP(w, r)
-			return
+		} else {
+			compressEnabledWriter := &lazyCompressResponseWriter{ResponseWriter: w, Writer: writer}
+			if f, ok := w.(http.Flusher); ok {
+				compressEnabledWriter.Flusher = f
+			}
+			if cn, ok := w.(http.CloseNotifier); ok {
+				compressEnabledWriter.CloseNotifier = cn
+			}
+			defer compressEnabledWriter.Close()
+			inner.ServeHTTP(compressEnabledWriter, r)
 		}
-
-		compressEnabledWriter := &lazyCompressResponseWriter{ResponseWriter: w, Writer: writer}
-
-		if f, ok := w.(http.Flusher); ok {
-			compressEnabledWriter.Flusher = f
-		}
-
-		if cn, ok := w.(http.CloseNotifier); ok {
-			compressEnabledWriter.CloseNotifier = cn
-		}
-
-		defer compressEnabledWriter.Close()
-
-		inner.ServeHTTP(compressEnabledWriter, r)
 	})
 }
 
