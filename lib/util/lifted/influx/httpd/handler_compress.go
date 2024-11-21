@@ -37,14 +37,14 @@ type lazyCompressResponseWriter struct {
 func compressFilter(inner http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var writer io.Writer = w
-		contentEncoding := r.Header.Get("Content-Encoding")
+		acceptEncoding := r.Header.Get("Accept-Encoding")
 		switch {
-		case strings.Contains(contentEncoding, "gzip"):
+		case strings.Contains(acceptEncoding, "gzip"):
 			gz := getGzipWriter(w)
 			defer gz.Close()
 			writer = gz
 			w.Header().Set("Content-Encoding", "gzip")
-		case strings.Contains(contentEncoding, "zstd"):
+		case strings.Contains(acceptEncoding, "zstd"):
 			enc := getZstdWriter(w)
 			defer enc.Close()
 			writer = enc
