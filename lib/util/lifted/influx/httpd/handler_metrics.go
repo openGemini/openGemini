@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -52,6 +53,7 @@ func init() {
 }
 
 type OpenGeminiCollector struct {
+	mux      sync.RWMutex
 	indexMap map[string][]*metrics.ModuleIndex
 }
 
@@ -66,7 +68,9 @@ func (c *OpenGeminiCollector) Describe(chan<- *prometheus.Desc) {}
 
 func (c *OpenGeminiCollector) Collect(ch chan<- prometheus.Metric) {
 	for _, moduleName := range metricMsts {
+		c.mux.RLock()
 		metricSlice, ok := c.indexMap[moduleName]
+		c.mux.RUnlock()
 		if !ok {
 			continue
 		}
@@ -103,7 +107,9 @@ func (h *Handler) serveMetrics(w http.ResponseWriter, r *http.Request, user meta
 		if err != nil {
 			continue
 		}
+		openGeminiCollector.mux.Lock()
 		openGeminiCollector.indexMap[moduleName] = moduleIndex
+		openGeminiCollector.mux.Unlock()
 	}
 
 	promhttp.Handler().ServeHTTP(w, r)
@@ -211,6 +217,9 @@ func getMetrics(h *Handler, r *http.Request, user meta.User, tableName string) (
 	}
 
 	resp := h.getStmtResult(stmtID2Result)
+	if len(resp.Results) == 0 {
+		return []*metrics.ModuleIndex{}, resp.Err
+	}
 	if resp.Results[0].Err != nil {
 		return nil, resp.Results[0].Err
 	}
