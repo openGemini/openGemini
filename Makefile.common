@@ -73,6 +73,7 @@ install-protoc-linux:
 	@sudo unzip -o $(PROTOC_ZIP_LINUX) -d /usr/local bin/protoc
 	@sudo unzip -o $(PROTOC_ZIP_LINUX) -d /usr/local 'include/*'
 	@sudo chmod +x /usr/local/bin/protoc
+	@sudo chmod 755 -R /usr/local/include/google
 	@rm -f $(PROTOC_ZIP_LINUX)
 
 install-protoc-darwin:
@@ -80,6 +81,7 @@ install-protoc-darwin:
 	@sudo unzip -X -o $(PROTOC_ZIP_MACOS) -d /usr/local bin/protoc
 	@sudo unzip -o $(PROTOC_ZIP_MACOS) -d /usr/local 'include/*'
 	@sudo chmod +x /usr/local/bin/protoc
+	@sudo chmod 755 -R /usr/local/include/google
 	@rm -f $(PROTOC_ZIP_MACOS)
 
 install-protoc-windows:
