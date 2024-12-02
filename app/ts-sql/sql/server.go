@@ -40,6 +40,7 @@ import (
 	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/auth"
 	coordinator2 "github.com/openGemini/openGemini/lib/util/lifted/influx/coordinator"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/httpd"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
@@ -49,6 +50,7 @@ import (
 	"github.com/openGemini/openGemini/services/castor"
 	"github.com/openGemini/openGemini/services/continuousquery"
 	"github.com/openGemini/openGemini/services/sherlock"
+	"github.com/openGemini/openGemini/services/writer"
 	gopscpu "github.com/shirou/gopsutil/v3/cpu"
 	"go.uber.org/zap"
 )
@@ -86,6 +88,8 @@ type Server struct {
 	sherlockService *sherlock.Service
 
 	cqService *continuousquery.Service
+
+	writerService *writer.Service
 
 	ctx          context.Context
 	ctxCancel    context.CancelFunc
@@ -174,6 +178,19 @@ func NewServer(conf config.Config, info app.ServerInfo, logger *Logger.Logger) (
 	s.castorService = castor.NewService(c.Analysis)
 	s.sherlockService = sherlock.NewService(c.Sherlock)
 	s.sherlockService.WithLogger(s.Logger)
+	if c.RecordWrite.Enabled {
+		s.writerService, err = writer.NewService(c.RecordWrite)
+		if err != nil {
+			return nil, err
+		}
+		s.writerService.WithLogger(s.Logger)
+		s.writerService.WithWriter(s.PointsWriter)
+		a := &writer.RecordWriteAuthorizer{
+			Client:          s.MetaClient,
+			WriteAuthorizer: &auth.WriteAuthorizer{Client: s.MetaClient},
+		}
+		s.writerService.WithAuthorizer(a)
+	}
 	return s, nil
 }
 
@@ -328,7 +345,11 @@ func (s *Server) Open() error {
 	if s.config.HTTP.CPUThreshold > 0 {
 		go s.handleCPUThreshold(s.config.HTTP.CPUThreshold, 5*time.Minute)
 	}
-
+	if s.writerService != nil {
+		if err := s.writerService.Open(); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -366,6 +387,10 @@ func (s *Server) Close() error {
 	// Close the listener first to stop any new connections
 	if s.Listener != nil {
 		util.MustClose(s.Listener)
+	}
+
+	if s.writerService != nil {
+		util.MustClose(s.writerService)
 	}
 
 	if s.httpService != nil {

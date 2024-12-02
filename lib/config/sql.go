@@ -90,6 +90,7 @@ type TSSql struct {
 
 	ContinuousQuery ContinuousQueryConfig `toml:"continuous_queries"`
 	Data            Store                 `toml:"data"`
+	RecordWrite     RecordWriteConfig     `toml:"record-write"`
 }
 
 // NewTSSql returns an instance of Config with reasonable defaults.
@@ -107,6 +108,7 @@ func NewTSSql(enableGossip bool) *TSSql {
 	c.Subscriber = NewSubscriber()
 	c.ContinuousQuery = NewContinuousQueryConfig()
 	c.Gossip = NewGossip(enableGossip)
+	c.RecordWrite = NewRecordWriteConfig()
 	return c
 }
 
@@ -167,6 +169,7 @@ func (c *TSSql) Validate() error {
 		c.Sherlock,
 		c.Subscriber,
 		c.ContinuousQuery,
+		c.RecordWrite,
 	}
 
 	for _, item := range items {
@@ -216,6 +219,9 @@ func (c *TSSql) ShowConfigs() map[string]interface{} {
 		sqlConfig[k] = v
 	}
 	for k, v := range c.HTTP.ShowConfigs() {
+		sqlConfig[k] = v
+	}
+	for k, v := range c.RecordWrite.ShowConfigs() {
 		sqlConfig[k] = v
 	}
 	return sqlConfig
