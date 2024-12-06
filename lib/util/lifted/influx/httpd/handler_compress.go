@@ -21,8 +21,10 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/golang/snappy"
 	"github.com/klauspost/compress/zstd"
 	"github.com/openGemini/openGemini/lib/cpu"
+	"github.com/pierrec/lz4/v4"
 )
 
 type lazyCompressResponseWriter struct {
@@ -37,6 +39,7 @@ type lazyCompressResponseWriter struct {
 func compressFilter(inner http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var writer io.Writer = w
+		// todo: consider Content_negotiation: https://developer.mozilla.org/en-US/docs/Web/HTTP/Content_negotiation
 		acceptEncoding := r.Header.Get("Accept-Encoding")
 		switch {
 		case strings.Contains(acceptEncoding, "gzip"):
@@ -49,6 +52,16 @@ func compressFilter(inner http.Handler) http.Handler {
 			defer enc.Close()
 			writer = enc
 			w.Header().Set("Content-Encoding", "zstd")
+		case strings.Contains(acceptEncoding, "snappy"):
+			sn := getSnappyWriter(w)
+			defer sn.Close()
+			writer = sn
+			w.Header().Set("Content-Encoding", "snappy")
+		case strings.Contains(acceptEncoding, "lz4"):
+			lz := getLz4Writer(w)
+			defer lz.Close()
+			writer = lz
+			w.Header().Set("Content-Encoding", "lz4")
 		default:
 			inner.ServeHTTP(w, r)
 			return
@@ -105,6 +118,12 @@ func (w *lazyCompressResponseWriter) Close() error {
 	}
 	if zw, ok := w.Writer.(*zstd.Encoder); ok {
 		putZstdWriter(zw)
+	}
+	if sw, ok := w.Writer.(*snappy.Writer); ok {
+		putSnappyWriter(sw)
+	}
+	if lw, ok := w.Writer.(*lz4.Writer); ok {
+		putLz4Writer(lw)
 	}
 	return nil
 }
@@ -242,3 +261,77 @@ func putZstdWriter(zstdEncoder *zstd.Encoder) {
 }
 
 // ******************** endregion zstd write pool ***********************
+
+// ******************** region snappy write pool ***************************
+type SnappyWriterPool struct {
+	pool *FixedCachePool
+}
+
+func NewSnappyWriterPool() *SnappyWriterPool {
+	p := &SnappyWriterPool{
+		pool: NewFixedCachePool(cpu.GetCpuNum()*2, func() interface{} {
+			return snappy.NewBufferedWriter(nil)
+		}),
+	}
+	return p
+}
+
+func (p *SnappyWriterPool) Get() *snappy.Writer {
+	return p.pool.Get().(*snappy.Writer)
+}
+
+func (p *SnappyWriterPool) Put(snappyWriter *snappy.Writer) {
+	p.pool.Put(snappyWriter)
+}
+
+var snappyWriterPool = NewSnappyWriterPool()
+
+func getSnappyWriter(w io.Writer) *snappy.Writer {
+	snappyWriter := snappyWriterPool.Get()
+	snappyWriter.Reset(w)
+	return snappyWriter
+}
+
+func putSnappyWriter(snappyWriter *snappy.Writer) {
+	snappyWriter.Close()
+	snappyWriterPool.Put(snappyWriter)
+}
+
+// ******************** endregion snappy write pool ***************************
+
+// ******************** region lz4 write pool ***************************
+type Lz4WriterPool struct {
+	pool *FixedCachePool
+}
+
+func NewLz4WriterPool() *Lz4WriterPool {
+	p := &Lz4WriterPool{
+		pool: NewFixedCachePool(cpu.GetCpuNum()*2, func() interface{} {
+			return lz4.NewWriter(nil)
+		}),
+	}
+	return p
+}
+
+func (p *Lz4WriterPool) Get() *lz4.Writer {
+	return p.pool.Get().(*lz4.Writer)
+}
+
+func (p *Lz4WriterPool) Put(lz4Writer *lz4.Writer) {
+	p.pool.Put(lz4Writer)
+}
+
+var lz4WriterPool = NewLz4WriterPool()
+
+func getLz4Writer(w io.Writer) *lz4.Writer {
+	lz4Writer := lz4WriterPool.Get()
+	lz4Writer.Reset(w)
+	return lz4Writer
+}
+
+func putLz4Writer(lz4Writer *lz4.Writer) {
+	lz4Writer.Close()
+	lz4WriterPool.Put(lz4Writer)
+}
+
+// ******************** endregion lz4 write pool ***************************
