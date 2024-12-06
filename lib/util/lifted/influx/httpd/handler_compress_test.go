@@ -22,6 +22,7 @@ import (
 
 	"github.com/golang/snappy"
 	"github.com/klauspost/compress/zstd"
+	"github.com/pierrec/lz4/v4"
 )
 
 func TestCompressFilter_Gzip(t *testing.T) {
@@ -121,6 +122,36 @@ func TestCompressFilter_Snappy(t *testing.T) {
 		t.Errorf("expected body 'test response', got %s", string(body))
 	}
 
+}
+
+func TestCompressFilter_Lz4(t *testing.T) {
+	handler := compressFilter(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("test response for lz4"))
+	}))
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("Accept-Encoding", "lz4")
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	resp := w.Result()
+	defer resp.Body.Close()
+
+	if resp.Header.Get("Content-Encoding") != "lz4" {
+		t.Errorf("expected lz4 encoding, got %s", resp.Header.Get("Content-Encoding"))
+	}
+
+	lz4Reader := lz4.NewReader(resp.Body)
+
+	body, err := io.ReadAll(lz4Reader)
+	if err != nil {
+		t.Fatalf("failed to read body: %v", err)
+	}
+
+	if string(body) != "test response for lz4" {
+		t.Errorf("expected body 'test response for lz4', got %s", string(body))
+	}
 }
 
 func TestCompressFilter_NoEncoding(t *testing.T) {
