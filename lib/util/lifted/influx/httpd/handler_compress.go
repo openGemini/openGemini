@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/golang/snappy"
 	"github.com/klauspost/compress/zstd"
 	"github.com/openGemini/openGemini/lib/cpu"
 )
@@ -49,6 +50,11 @@ func compressFilter(inner http.Handler) http.Handler {
 			defer enc.Close()
 			writer = enc
 			w.Header().Set("Content-Encoding", "zstd")
+		case strings.Contains(acceptEncoding, "snappy"):
+			sn := getSnappyWriter(w)
+			defer sn.Close()
+			writer = sn
+			w.Header().Set("Content-Encoding", "snappy")
 		default:
 			inner.ServeHTTP(w, r)
 			return
@@ -242,3 +248,40 @@ func putZstdWriter(zstdEncoder *zstd.Encoder) {
 }
 
 // ******************** endregion zstd write pool ***********************
+
+// ******************** region snappy write pool ***************************
+type SnappyWriterPool struct {
+	pool *FixedCachePool
+}
+
+func NewSnappyWriterPool() *SnappyWriterPool {
+	p := &SnappyWriterPool{
+		pool: NewFixedCachePool(cpu.GetCpuNum()*2, func() interface{} {
+			return snappy.NewBufferedWriter(nil)
+		}),
+	}
+	return p
+}
+
+func (p *SnappyWriterPool) Get() *snappy.Writer {
+	return p.pool.Get().(*snappy.Writer)
+}
+
+func (p *SnappyWriterPool) Put(snappyWriter *snappy.Writer) {
+	p.pool.Put(snappyWriter)
+}
+
+var snappyWriterPool = NewSnappyWriterPool()
+
+func getSnappyWriter(w io.Writer) *snappy.Writer {
+	snappyWriter := snappyWriterPool.Get()
+	snappyWriter.Reset(w)
+	return snappyWriter
+}
+
+func putSnappyWriter(snappyWriter *snappy.Writer) {
+	snappyWriter.Close()
+	snappyWriterPool.Put(snappyWriter)
+}
+
+// ******************** endregion snappy write pool ***************************
