@@ -35,6 +35,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/influxdata/influxdb/uuid"
 	"github.com/openGemini/openGemini/lib/bufferpool"
+	compression "github.com/openGemini/openGemini/lib/compress"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/crypto"
@@ -1698,14 +1699,14 @@ func (h *Handler) serveRecord(w http.ResponseWriter, r *http.Request, user meta2
 	body := r.Body
 	// Handle gzip decoding of the body
 	if xLogCompressType == "gzip" {
-		b, err := GetGzipReader(r.Body)
+		b, err := compression.GetGzipReader(r.Body)
 		if err != nil {
 			h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
 			h.Logger.Error("write error:Handle gzip decoding of the body err", zap.Error(errno.NewError(errno.HttpBadRequest)))
 			atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
 			return
 		}
-		defer PutGzipReader(b)
+		defer compression.PutGzipReader(b)
 		body = b
 	}
 	bodyLengthString := r.Header.Get("body-length")
