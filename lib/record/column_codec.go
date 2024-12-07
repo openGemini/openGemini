@@ -40,6 +40,19 @@ func (cv *ColVal) Unmarshal(buf []byte) {
 	return
 }
 
+func (cv *ColVal) UnmarshalUnsafe(buf []byte) {
+	if len(buf) == 0 {
+		return
+	}
+	dec := codec.NewBinaryDecoder(buf)
+	cv.Len = dec.Int()
+	cv.NilCount = dec.Int()
+	cv.BitMapOffset = dec.Int()
+	cv.Val = dec.BytesNoCopy()
+	cv.Bitmap = dec.BytesNoCopy()
+	cv.Offset = dec.Uint32SliceSafe()
+}
+
 func (cv *ColVal) Size() int {
 	size := 0
 	size += codec.SizeOfInt()                  // Len
