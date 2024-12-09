@@ -186,6 +186,26 @@ type Row struct {
 	skipMarshalShardKey bool
 }
 
+func (r *Row) AllocTag() *Tag {
+	size := len(r.Tags)
+	if cap(r.Tags) == size {
+		r.Tags = append(r.Tags, Tag{})
+	}
+
+	r.Tags = r.Tags[:size+1]
+	return &r.Tags[size]
+}
+
+func (r *Row) AllocField() *Field {
+	size := len(r.Fields)
+	if cap(r.Fields) == size {
+		r.Fields = append(r.Fields, Field{})
+	}
+
+	r.Fields = r.Fields[:size+1]
+	return &r.Fields[size]
+}
+
 func (r *Row) SkipMarshalShardKey() {
 	r.skipMarshalShardKey = true
 }
