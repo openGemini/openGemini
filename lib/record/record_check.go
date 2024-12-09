@@ -27,11 +27,11 @@ import (
 func CheckRecord(rec *Record) {
 	colN := len(rec.Schema)
 	if colN <= 1 || rec.Schema[colN-1].Name != TimeField {
-		panic(fmt.Sprintf("schema:%v", rec.Schema))
+		panic(fmt.Sprintf("the time column should be at last in schema, but received schema:%v", rec.Schema))
 	}
 
 	if rec.ColVals[colN-1].NilCount != 0 {
-		panic(rec.String())
+		panic(fmt.Sprintf("nil count of time column is not zero"))
 	}
 
 	for i := 1; i < colN; i++ {
@@ -45,7 +45,8 @@ func CheckRecord(rec *Record) {
 		col1, col2 := &rec.ColVals[i], &rec.ColVals[i+1]
 
 		if col1.Len != col2.Len {
-			panic(rec.String())
+			panic(fmt.Sprintf("column length not match: %s length is %d and %s length is %d",
+				rec.Schema[i].Name, col1.Len, rec.Schema[i+1].Name, col2.Len))
 		}
 		isOrderSchema = CheckSchema(i, rec, isOrderSchema)
 
