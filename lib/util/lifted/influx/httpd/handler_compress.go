@@ -20,10 +20,9 @@ import (
 	"net/http"
 	"strings"
 
-	compression "github.com/openGemini/openGemini/lib/compress"
-
 	"github.com/golang/snappy"
 	"github.com/klauspost/compress/zstd"
+	compression "github.com/openGemini/openGemini/lib/compress"
 	"github.com/pierrec/lz4/v4"
 )
 
