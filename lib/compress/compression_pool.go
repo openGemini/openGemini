@@ -22,74 +22,13 @@ import (
 	"github.com/golang/snappy"
 	"github.com/klauspost/compress/zstd"
 	"github.com/openGemini/openGemini/lib/cpu"
-	"github.com/pierrec/lz4/v4"
+	"github.com/openGemini/openGemini/lib/pool"
 )
 
-var (
-	gzipWriterPool   = NewGzipWriterPool()
-	zstdWriterPool   = NewZstdWriterPool()
-	snappyWriterPool = NewSnappyWriterPool()
-	lz4WriterPool    = NewLz4WriterPool()
-
-	gzipReaderPool sync.Pool
-)
-
-type FixedCachePool struct {
-	cache chan interface{}
-	sp    sync.Pool
-}
-
-func NewFixedCachePool(size int, newFunc func() interface{}) *FixedCachePool {
-	return &FixedCachePool{
-		cache: make(chan interface{}, size),
-		sp: sync.Pool{
-			New: newFunc,
-		},
-	}
-}
-
-func (p *FixedCachePool) Get() interface{} {
-	select {
-	case item := <-p.cache:
-		return item
-	default:
-		item := p.sp.Get()
-		if item == nil {
-			item = p.sp.New()
-		}
-		return item
-	}
-}
-
-func (p *FixedCachePool) Put(item interface{}) {
-	select {
-	case p.cache <- item:
-	default:
-		p.sp.Put(item)
-	}
-}
-
-// ******************** region gzip write pool ***********************
-type GzipWriterPool struct {
-	pool *FixedCachePool
-}
-
-func NewGzipWriterPool() *GzipWriterPool {
-	p := &GzipWriterPool{
-		pool: NewFixedCachePool(cpu.GetCpuNum()*2, func() interface{} {
-			return gzip.NewWriter(nil)
-		}),
-	}
-	return p
-}
-
-func (p *GzipWriterPool) Get() *gzip.Writer {
-	return p.pool.Get().(*gzip.Writer)
-}
-
-func (p *GzipWriterPool) Put(gz *gzip.Writer) {
-	p.pool.Put(gz)
-}
+// #region Gzip Writer Pool
+var gzipWriterPool *pool.FixedPoolV2[*gzip.Writer] = pool.NewFixedPoolV2[*gzip.Writer](func() *gzip.Writer {
+	return gzip.NewWriter(nil)
+}, cpu.GetCpuNum()*2)
 
 func GetGzipWriter(w io.Writer) *gzip.Writer {
 	gz := gzipWriterPool.Get()
@@ -102,9 +41,10 @@ func PutGzipWriter(gz *gzip.Writer) {
 	gzipWriterPool.Put(gz)
 }
 
-// ******************** endregion gzip write pool ***********************
+// #endregion
 
-// ******************** region gzip read pool ***************************
+// #region Gzip Reader Pool
+var gzipReaderPool sync.Pool
 
 func GetGzipReader(r io.Reader) (*gzip.Reader, error) {
 	v := gzipReaderPool.Get()
@@ -124,30 +64,13 @@ func PutGzipReader(zr *gzip.Reader) {
 	gzipReaderPool.Put(zr)
 }
 
-// ******************** endregion gzip read pool ***************************
+// #endregion
 
-// ******************** region zstd write pool ***********************
-type ZstdWriterPool struct {
-	pool *FixedCachePool
-}
-
-func NewZstdWriterPool() *ZstdWriterPool {
-	p := &ZstdWriterPool{
-		pool: NewFixedCachePool(cpu.GetCpuNum()*2, func() interface{} {
-			encoder, _ := zstd.NewWriter(nil)
-			return encoder
-		}),
-	}
-	return p
-}
-
-func (p *ZstdWriterPool) Get() *zstd.Encoder {
-	return p.pool.Get().(*zstd.Encoder)
-}
-
-func (p *ZstdWriterPool) Put(zstdEncoder *zstd.Encoder) {
-	p.pool.Put(zstdEncoder)
-}
+// #region Zstd Writer Pool
+var zstdWriterPool *pool.FixedPoolV2[*zstd.Encoder] = pool.NewFixedPoolV2[*zstd.Encoder](func() *zstd.Encoder {
+	encoder, _ := zstd.NewWriter(nil)
+	return encoder
+}, cpu.GetCpuNum()*2)
 
 func GetZstdWriter(w io.Writer) *zstd.Encoder {
 	zstdEncoder := zstdWriterPool.Get()
@@ -160,29 +83,12 @@ func PutZstdWriter(zstdEncoder *zstd.Encoder) {
 	zstdWriterPool.Put(zstdEncoder)
 }
 
-// ******************** endregion zstd write pool ***********************
+// #endregion
 
-// ******************** region snappy write pool ***************************
-type SnappyWriterPool struct {
-	pool *FixedCachePool
-}
-
-func NewSnappyWriterPool() *SnappyWriterPool {
-	p := &SnappyWriterPool{
-		pool: NewFixedCachePool(cpu.GetCpuNum()*2, func() interface{} {
-			return snappy.NewBufferedWriter(nil)
-		}),
-	}
-	return p
-}
-
-func (p *SnappyWriterPool) Get() *snappy.Writer {
-	return p.pool.Get().(*snappy.Writer)
-}
-
-func (p *SnappyWriterPool) Put(snappyWriter *snappy.Writer) {
-	p.pool.Put(snappyWriter)
-}
+// #region Zstd Reader Pool
+var snappyWriterPool = pool.NewFixedPoolV2[*snappy.Writer](func() *snappy.Writer {
+	return snappy.NewBufferedWriter(nil)
+}, cpu.GetCpuNum()*2)
 
 func GetSnappyWriter(w io.Writer) *snappy.Writer {
 	snappyWriter := snappyWriterPool.Get()
@@ -195,39 +101,4 @@ func PutSnappyWriter(snappyWriter *snappy.Writer) {
 	snappyWriterPool.Put(snappyWriter)
 }
 
-// ******************** endregion snappy write pool ***************************
-
-// ******************** region lz4 write pool ***************************
-type Lz4WriterPool struct {
-	pool *FixedCachePool
-}
-
-func NewLz4WriterPool() *Lz4WriterPool {
-	p := &Lz4WriterPool{
-		pool: NewFixedCachePool(cpu.GetCpuNum()*2, func() interface{} {
-			return lz4.NewWriter(nil)
-		}),
-	}
-	return p
-}
-
-func (p *Lz4WriterPool) Get() *lz4.Writer {
-	return p.pool.Get().(*lz4.Writer)
-}
-
-func (p *Lz4WriterPool) Put(lz4Writer *lz4.Writer) {
-	p.pool.Put(lz4Writer)
-}
-
-func GetLz4Writer(w io.Writer) *lz4.Writer {
-	lz4Writer := lz4WriterPool.Get()
-	lz4Writer.Reset(w)
-	return lz4Writer
-}
-
-func PutLz4Writer(lz4Writer *lz4.Writer) {
-	lz4Writer.Close()
-	lz4WriterPool.Put(lz4Writer)
-}
-
-// ******************** endregion lz4 write pool ***************************
+// #endregion

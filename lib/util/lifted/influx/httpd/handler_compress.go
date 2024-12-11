@@ -23,7 +23,6 @@ import (
 	"github.com/golang/snappy"
 	"github.com/klauspost/compress/zstd"
 	compression "github.com/openGemini/openGemini/lib/compress"
-	"github.com/pierrec/lz4/v4"
 )
 
 type lazyCompressResponseWriter struct {
@@ -56,11 +55,6 @@ func compressFilter(inner http.Handler) http.Handler {
 			defer sn.Close()
 			writer = sn
 			w.Header().Set("Content-Encoding", "snappy")
-		case strings.Contains(acceptEncoding, "lz4"):
-			lz := compression.GetLz4Writer(w)
-			defer lz.Close()
-			writer = lz
-			w.Header().Set("Content-Encoding", "lz4")
 		default:
 			inner.ServeHTTP(w, r)
 			return
@@ -120,9 +114,6 @@ func (w *lazyCompressResponseWriter) Close() error {
 	}
 	if sw, ok := w.Writer.(*snappy.Writer); ok {
 		compression.PutSnappyWriter(sw)
-	}
-	if lw, ok := w.Writer.(*lz4.Writer); ok {
-		compression.PutLz4Writer(lw)
 	}
 	return nil
 }
