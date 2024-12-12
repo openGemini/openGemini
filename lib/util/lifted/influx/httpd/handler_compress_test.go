@@ -20,6 +20,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/golang/snappy"
 	"github.com/klauspost/compress/zstd"
 )
 
@@ -89,6 +90,37 @@ func TestCompressFilter_Zstd(t *testing.T) {
 	if string(body) != "test response" {
 		t.Errorf("expected body 'test response', got %s", string(body))
 	}
+}
+
+func TestCompressFilter_Snappy(t *testing.T) {
+	handler := compressFilter(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("test response"))
+	}))
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("Accept-Encoding", "snappy")
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	resp := w.Result()
+	defer resp.Body.Close()
+
+	if resp.Header.Get("Content-Encoding") != "snappy" {
+		t.Errorf("expected snappy encoding, got %s", resp.Header.Get("Content-Encoding"))
+	}
+
+	snappyReader := snappy.NewReader(resp.Body)
+
+	body, err := io.ReadAll(snappyReader)
+	if err != nil {
+		t.Fatalf("failed to read snappy body: %v", err)
+	}
+
+	if string(body) != "test response" {
+		t.Errorf("expected body 'test response', got %s", string(body))
+	}
+
 }
 
 func TestCompressFilter_NoEncoding(t *testing.T) {

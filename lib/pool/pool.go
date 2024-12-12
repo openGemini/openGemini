@@ -191,6 +191,44 @@ func (p *FixedCachePool) Put(v interface{}) {
 	}
 }
 
+// FixedPoolV2 is a fixed size pool with object generic type information
+type FixedPoolV2[T any] struct {
+	pool chan T
+	new  func() T
+}
+
+func NewFixedPoolV2[T any](new func() T, size int) *FixedPoolV2[T] {
+	return &FixedPoolV2[T]{
+		pool: make(chan T, size),
+		new:  new,
+	}
+}
+
+func (p *FixedPoolV2[T]) Get() T {
+	select {
+	case item := <-p.pool:
+		return item
+	default:
+		return p.new()
+	}
+}
+
+func (p *FixedPoolV2[T]) Put(item T) {
+	select {
+	case p.pool <- item:
+	default:
+	}
+}
+
+func (p *FixedPoolV2[T]) Reset(size int, new func() T) {
+	p.pool = make(chan T, size)
+	p.new = new
+}
+
+func (p *FixedPoolV2[T]) Len() int {
+	return len(p.pool)
+}
+
 var intSlicePool sync.Pool
 
 func GetIntSlice(size int) []int {

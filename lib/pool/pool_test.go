@@ -73,3 +73,57 @@ func TestChunkMetaBuffer(t *testing.T) {
 	buf = pool.GetChunkMetaBuffer()
 	require.Equal(t, 10, len(buf.B))
 }
+
+func TestNewFixedPoolV2(t *testing.T) {
+	newFunc := func() int {
+		return 42
+	}
+	testPool := pool.NewFixedPoolV2(newFunc, 2)
+
+	require.NotNil(t, testPool)
+}
+
+func TestFixedPoolV2_Get(t *testing.T) {
+	newFunc := func() int {
+		return 42
+	}
+	pool := pool.NewFixedPoolV2(newFunc, 2)
+
+	// Test getting a new item when pool is empty
+	item := pool.Get()
+	require.Equal(t, 42, item)
+
+	// Test getting an item from the pool
+	pool.Put(100)
+	item = pool.Get()
+	require.Equal(t, 100, item)
+}
+
+func TestFixedPoolV2_Put(t *testing.T) {
+	newFunc := func() int {
+		return 42
+	}
+	pool := pool.NewFixedPoolV2(newFunc, 2)
+
+	// Test putting an item into the pool
+	pool.Put(100)
+	require.Equal(t, 1, pool.Len())
+
+	// Test putting an item into a full pool
+	pool.Put(200)
+	pool.Put(300)
+	require.Equal(t, 2, pool.Len())
+}
+
+func TestFixedPoolV2_Reset(t *testing.T) {
+	newFunc := func() int {
+		return 42
+	}
+	pool := pool.NewFixedPoolV2(newFunc, 2)
+
+	// Test resetting the pool
+	pool.Put(100)
+	pool.Put(200)
+	pool.Reset(2, newFunc)
+	require.Equal(t, 0, pool.Len())
+}
