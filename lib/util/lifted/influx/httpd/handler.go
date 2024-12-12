@@ -27,6 +27,7 @@ import (
 	jsoniter "github.com/json-iterator/go"
 	"github.com/openGemini/openGemini/app"
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	compression "github.com/openGemini/openGemini/lib/compress"
 	config2 "github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/errno"
@@ -1318,7 +1319,7 @@ func (h *Handler) serveWrite(w http.ResponseWriter, r *http.Request, user meta2.
 
 	// Handle gzip decoding of the body
 	if r.Header.Get("Content-Encoding") == "gzip" {
-		b, err := GetGzipReader(r.Body)
+		b, err := compression.GetGzipReader(r.Body)
 		if err != nil {
 			h.httpError(w, err.Error(), http.StatusBadRequest)
 			error := errno.NewError(errno.HttpBadRequest)
@@ -1326,7 +1327,7 @@ func (h *Handler) serveWrite(w http.ResponseWriter, r *http.Request, user meta2.
 			atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
 			return
 		}
-		defer PutGzipReader(b)
+		defer compression.PutGzipReader(b)
 		body = b
 	}
 
