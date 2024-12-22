@@ -1,0 +1,30 @@
+FROM fedora:latest AS builder
+
+WORKDIR /build
+
+ENV GOPROXY=https://mirrors.huaweicloud.com/repository/goproxy/,https://goproxy.cn,https://proxy.golang.org,direct
+ENV CGO_ENABLED=1
+
+RUN dnf install golang gcc gcc-c++ -y --setopt=tsflags=nodocs && dnf clean all
+
+COPY . .
+
+RUN rm -rf go.sum && go mod tidy
+
+RUN go build -ldflags "-s -w" -o ./bin/ts-cli ./app/ts-cli/ &&\
+    go build -ldflags "-s -w" -o ./bin/ts-server ./app/ts-server/
+
+FROM fedora:latest
+
+WORKDIR /home/opengemini
+
+ENV PATH=$PATH:/home/opengemini/bin
+
+RUN dnf install -y --setopt=tsflags=nodocs net-tools curl bind-utils procps && dnf clean all
+
+COPY --from=builder /build/bin/* /home/opengemini/bin/
+COPY --from=builder /build/config/openGemini.singlenode.conf /home/opengemini/config/opengemini.conf
+
+EXPOSE 8086
+
+ENTRYPOINT ["/home/opengemini/bin/ts-server", "-config", "/home/opengemini/config/opengemini.conf"]
