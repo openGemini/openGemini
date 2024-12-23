@@ -86,6 +86,25 @@ func PutZstdWriter(zstdEncoder *zstd.Encoder) {
 // #endregion
 
 // #region Zstd Reader Pool
+var zstdReaderPool *pool.FixedPoolV2[*zstd.Decoder] = pool.NewFixedPoolV2[*zstd.Decoder](func() *zstd.Decoder {
+	decoder, _ := zstd.NewReader(nil)
+	return decoder
+}, cpu.GetCpuNum()*2)
+
+func GetZstdReader(r io.Reader) *zstd.Decoder {
+	zstdDecoder := zstdReaderPool.Get()
+	zstdDecoder.Reset(r)
+	return zstdDecoder
+}
+
+func PutZstdReader(zstdDecoder *zstd.Decoder) {
+	zstdDecoder.Close()
+	zstdReaderPool.Put(zstdDecoder)
+}
+
+// #endregion
+
+// #region snappy Write Pool
 var snappyWriterPool = pool.NewFixedPoolV2[*snappy.Writer](func() *snappy.Writer {
 	return snappy.NewBufferedWriter(nil)
 }, cpu.GetCpuNum()*2)
@@ -99,6 +118,23 @@ func GetSnappyWriter(w io.Writer) *snappy.Writer {
 func PutSnappyWriter(snappyWriter *snappy.Writer) {
 	snappyWriter.Close()
 	snappyWriterPool.Put(snappyWriter)
+}
+
+// #endregion
+
+// #region Snappy Reader Pool
+var snappyReaderPool = pool.NewFixedPoolV2[*snappy.Reader](func() *snappy.Reader {
+	return snappy.NewReader(nil)
+}, cpu.GetCpuNum()*2)
+
+func GetSnappyReader(r io.Reader) *snappy.Reader {
+	snappyReader := snappyReaderPool.Get()
+	snappyReader.Reset(r)
+	return snappyReader
+}
+
+func PutSnappyReader(snappyReader *snappy.Reader) {
+	snappyReaderPool.Put(snappyReader)
 }
 
 // #endregion
