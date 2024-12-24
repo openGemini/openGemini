@@ -84,7 +84,7 @@ func (s *Backup) BackupPt(dbName string, ptId uint32) error {
 		if s.IsInc {
 			s.BackupLogInfo = &backup.BackupLogInfo{}
 			if err := backup.ReadBackupLogFile(filepath.Join(sh.GetDataPath(), backup.BackupLogPath, backup.FullBackupLog), s.BackupLogInfo); err != nil {
-				return err
+				log.Info("backupLog file not exist", zap.Error(err))
 			}
 			if err := s.IncBackup(sh, backupPath, p.path, peersPtIDMap); err != nil {
 				return err
