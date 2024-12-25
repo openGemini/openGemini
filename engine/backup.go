@@ -1,18 +1,16 @@
-/*
-Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package engine
 
@@ -22,11 +20,14 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/lib/backup"
+	"github.com/openGemini/openGemini/lib/errno"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
+	"github.com/openGemini/openGemini/lib/util"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"go.uber.org/zap"
 )
@@ -40,16 +41,35 @@ type Backup struct {
 	BackupPath      string
 	BackupLogInfo   *backup.BackupLogInfo
 	Engine          *Engine
+	IsAborted       bool
 }
 
 func (s *Backup) RunBackupData() error {
 	s.time = time.Now().UnixNano()
 	dbPtIds := s.Engine.GetDBPtIds()
+	ch := make(chan struct{})
+	var wg sync.WaitGroup
+
+	res := "backup success"
+	wg.Add(1)
+	go execTicker(ch, s.BackupPath, &wg)
+	defer func() {
+		close(ch)
+		wg.Wait()
+		if r := recover(); r != nil {
+			err := errno.NewError(errno.RecoverPanic, r)
+			log.Error(err.Error())
+			_ = backup.WriteBackupLogFile([]byte(err.Error()), s.BackupPath, backup.ResultLog)
+		} else {
+			_ = backup.WriteBackupLogFile([]byte(res), s.BackupPath, backup.ResultLog)
+		}
+	}()
 
 	for dbName, pts := range dbPtIds {
 		for _, ptId := range pts {
 			err := s.BackupPt(dbName, ptId)
 			if err != nil {
+				res = fmt.Sprintf("backup failed, error: %s", err.Error())
 				return err
 			}
 		}
@@ -111,47 +131,41 @@ func (s *Backup) BackupPt(dbName string, ptId uint32) error {
 func (s *Backup) FullBackup(sh Shard, dataPath, nodePath string, peersPtIDMap map[uint32]*NodeInfo) error {
 	t := sh.GetTableStore()
 	logPath := sh.GetDataPath()
-	orderFileListMap := make(map[string][][]string)
-	outOfOrderFileListMap := make(map[string][][]string)
+	fileListMap := make(map[string][][]string)
 
-	orderList := t.GetMstList(true)
+	fileList := t.GetAllMstList()
 
-	for _, name := range orderList {
+	for _, name := range fileList {
+		if fileListMap[name] != nil {
+			continue
+		}
 		fileList, err := s.FullBackupTableFile(sh, t, peersPtIDMap, name, true, nodePath, dataPath)
 		if err != nil {
 			return err
 		}
 		if len(fileList) > 0 {
-			orderFileListMap[name] = fileList
+			fileListMap[name] = fileList
 		}
 
 	}
-	outOfOrderList := t.GetMstList(false)
-	for _, name := range outOfOrderList {
-		fileList, err := s.FullBackupTableFile(sh, t, peersPtIDMap, name, false, nodePath, dataPath)
+
+	if len(fileListMap) > 0 {
+		backupLog := &backup.BackupLogInfo{
+			FullBackupTime: s.time,
+			FileListMap:    fileListMap,
+		}
+		content, err := json.MarshalIndent(&backupLog, "", "\t")
 		if err != nil {
 			return err
 		}
-		if len(fileList) > 0 {
-			outOfOrderFileListMap[name] = fileList
+		if err := backup.WriteBackupLogFile(content, logPath, backup.FullBackupLog); err != nil {
+			return err
+		}
+		if err := backup.WriteBackupLogFile(content, filepath.Join(dataPath, logPath), backup.FullBackupLog); err != nil {
+			return err
 		}
 	}
 
-	backupLog := &backup.BackupLogInfo{
-		FullBackupTime:        s.time,
-		OrderFileListMap:      orderFileListMap,
-		OutOfOrderFileListMap: outOfOrderFileListMap,
-	}
-	content, err := json.MarshalIndent(&backupLog, "", "\t")
-	if err != nil {
-		return err
-	}
-	if err := backup.WriteBackupLogFile(content, logPath, backup.FullBackupLog); err != nil {
-		return err
-	}
-	if err := backup.WriteBackupLogFile(content, filepath.Join(dataPath, logPath), backup.FullBackupLog); err != nil {
-		return err
-	}
 	return nil
 }
 
@@ -159,43 +173,29 @@ func (s *Backup) IncBackup(sh Shard, dataPath, nodePath string, peersPtIDMap map
 	t := sh.GetTableStore()
 	logPath := sh.GetDataPath()
 
-	orderList := t.GetMstList(true)
-	addOrderFileListMap := make(map[string][][]string, 0)
-	delOrderFileListMap := make(map[string][][]string, 0)
-	for _, name := range orderList {
+	fileList := t.GetAllMstList()
+	addFileListMap := make(map[string][][]string, 0)
+	delFileListMap := make(map[string][][]string, 0)
+	for _, name := range fileList {
+		if addFileListMap[name] != nil || delFileListMap[name] != nil {
+			continue
+		}
 		aList, dList, err := s.IncBackupTableFile(sh, t, peersPtIDMap, name, true, nodePath, dataPath)
 		if err != nil {
 			return err
 		}
 		if len(aList) > 0 {
-			addOrderFileListMap[name] = aList
+			addFileListMap[name] = aList
 		}
 		if len(dList) > 0 {
-			delOrderFileListMap[name] = dList
-		}
-	}
-	outOfOrderList := t.GetMstList(false)
-	addOutOfOrderFileListMap := make(map[string][][]string, 0)
-	delOutOfOrderFileListMap := make(map[string][][]string, 0)
-	for _, name := range outOfOrderList {
-		aList, dList, err := s.IncBackupTableFile(sh, t, peersPtIDMap, name, false, nodePath, dataPath)
-		if err != nil {
-			return err
-		}
-		if len(aList) > 0 {
-			addOutOfOrderFileListMap[name] = aList
-		}
-		if len(dList) > 0 {
-			delOutOfOrderFileListMap[name] = dList
+			delFileListMap[name] = dList
 		}
 	}
 
-	if len(addOrderFileListMap) > 0 || len(delOrderFileListMap) > 0 || len(addOutOfOrderFileListMap) > 0 || len(delOutOfOrderFileListMap) > 0 {
+	if len(addFileListMap) > 0 || len(delFileListMap) > 0 {
 		incBackupLog := &backup.IncBackupLogInfo{
-			AddOrderFileListMap:      addOrderFileListMap,
-			DelOrderFileListMap:      delOrderFileListMap,
-			AddOutOfOrderFileListMap: addOutOfOrderFileListMap,
-			DelOutOfOrderFileListMap: delOutOfOrderFileListMap,
+			AddFileListMap: addFileListMap,
+			DelFileListMap: delFileListMap,
 		}
 		content, err := json.MarshalIndent(&incBackupLog, "", "\t")
 		if err != nil {
@@ -214,30 +214,23 @@ func (s *Backup) IncBackup(sh Shard, dataPath, nodePath string, peersPtIDMap map
 }
 
 func (s *Backup) FullBackupTableFile(sh Shard, t immutable.TablesStore, peersPtIDMap map[uint32]*NodeInfo, name string, isOrder bool, nodePath, outPath string) ([][]string, error) {
-	files, ok := t.GetTSSPFiles(name, isOrder)
-	if !ok {
+	orderfiles, unOrderFiles, _ := t.GetBothFilesRef(name, false, util.TimeRange{}, nil)
+	if len(unOrderFiles) > 0 {
+		orderfiles = append(orderfiles, unOrderFiles...)
+	}
+	if len(orderfiles) == 0 {
 		return nil, nil
 	}
 	defer func() {
-		immutable.UnrefFilesReader(files.Files()...)
-		immutable.UnrefFiles(files.Files()...)
+		immutable.UnrefFiles(orderfiles...)
 	}()
 
-	fileList := make([][]string, len(files.Files()))
-	for i, f := range files.Files() {
-		fullPath := f.Path()
-		fileListItem := make([]string, 0, len(peersPtIDMap)+1)
-		fileListItem = append(fileListItem, fullPath)
-		shFilePath := strings.Replace(fullPath, sh.GetDataPath(), "", -1)
-		basicPath, _ := filepath.Split(nodePath)
-		for _, p := range peersPtIDMap {
-			fileListItem = append(fileListItem, filepath.Join(basicPath, p.shardDirName, shFilePath))
+	fileList := make([][]string, 0, len(orderfiles))
+	for _, f := range orderfiles {
+		if s.IsAborted {
+			return nil, fmt.Errorf("backup aborted")
 		}
-
-		fileList[i] = fileListItem
-		dstPath := filepath.Join(outPath, fullPath)
-		if err := backup.FileCopy(fullPath, dstPath); err != nil {
-			log.Error("backup file error", zap.Error(err))
+		if err := copyFullTableFile(f, sh, peersPtIDMap, nodePath, outPath, &fileList); err != nil {
 			return fileList, err
 		}
 	}
@@ -245,34 +238,47 @@ func (s *Backup) FullBackupTableFile(sh Shard, t immutable.TablesStore, peersPtI
 	return fileList, nil
 }
 
+func copyFullTableFile(f immutable.TSSPFile, sh Shard, peersPtIDMap map[uint32]*NodeInfo, nodePath, outPath string, fileList *[][]string) error {
+	f.RefFileReader()
+	defer func() {
+		f.UnrefFileReader()
+	}()
+	fullPath := f.Path()
+	fileListItem := GenPeerPtFilePath(sh, peersPtIDMap, nodePath, fullPath)
+	*fileList = append(*fileList, fileListItem)
+	dstPath := filepath.Join(outPath, fullPath)
+	if err := backup.FileCopy(fullPath, dstPath); err != nil {
+		log.Error("backup file error", zap.Error(err))
+		return err
+	}
+	return nil
+}
+
 func (s *Backup) IncBackupTableFile(sh Shard, t immutable.TablesStore, peersPtIDMap map[uint32]*NodeInfo, name string, isOrder bool, nodePath, outPath string) ([][]string, [][]string, error) {
-	files, ok := t.GetTSSPFiles(name, isOrder)
-	if !ok {
+	orderfiles, unOrderFiles, _ := t.GetBothFilesRef(name, false, util.TimeRange{}, nil)
+	if len(unOrderFiles) > 0 {
+		orderfiles = append(orderfiles, unOrderFiles...)
+	}
+	if len(orderfiles) == 0 {
 		return nil, nil, nil
 	}
 	defer func() {
-		immutable.UnrefFilesReader(files.Files()...)
-		immutable.UnrefFiles(files.Files()...)
+		immutable.UnrefFiles(orderfiles...)
 	}()
 
 	seen := make(map[string]bool)
-	oldFileList := s.BackupLogInfo.OrderFileListMap[name]
+	oldFileList := s.BackupLogInfo.FileListMap[name]
 	for _, f := range oldFileList {
 		seen[f[0]] = true
 	}
 	addFileList := make([][]string, 0)
 	deleteFileList := make([][]string, 0)
 
-	for _, f := range files.Files() {
-		fullPath := f.Path()
-		if seen[fullPath] {
-			seen[fullPath] = false
-			continue
+	for _, f := range orderfiles {
+		if s.IsAborted {
+			return nil, nil, fmt.Errorf("backup aborted")
 		}
-		addFileListItem := GenPeerPtFilePath(sh, peersPtIDMap, nodePath, fullPath)
-		addFileList = append(addFileList, addFileListItem)
-		dstPath := filepath.Join(outPath, fullPath)
-		if err := backup.FileCopy(fullPath, dstPath); err != nil {
+		if err := copyIncTableFile(f, seen, sh, peersPtIDMap, nodePath, outPath, &addFileList); err != nil {
 			return addFileList, deleteFileList, err
 		}
 	}
@@ -285,6 +291,25 @@ func (s *Backup) IncBackupTableFile(sh Shard, t immutable.TablesStore, peersPtID
 	}
 
 	return addFileList, deleteFileList, nil
+}
+
+func copyIncTableFile(f immutable.TSSPFile, seen map[string]bool, sh Shard, peersPtIDMap map[uint32]*NodeInfo, nodePath, outPath string, addFileList *[][]string) error {
+	f.RefFileReader()
+	defer func() {
+		f.UnrefFileReader()
+	}()
+	fullPath := f.Path()
+	if seen[fullPath] {
+		seen[fullPath] = false
+		return nil
+	}
+	addFileListItem := GenPeerPtFilePath(sh, peersPtIDMap, nodePath, fullPath)
+	*addFileList = append(*addFileList, addFileListItem)
+	dstPath := filepath.Join(outPath, fullPath)
+	if err := backup.FileCopy(fullPath, dstPath); err != nil {
+		return err
+	}
+	return nil
 }
 
 type NodeInfo struct {
@@ -361,4 +386,22 @@ func GenPeerPtFilePath(sh Shard, peersPtIDMap map[uint32]*NodeInfo, nodePath, fu
 		fileListItem = append(fileListItem, filepath.Join(basicPath, p.shardDirName, shFilePath))
 	}
 	return fileListItem
+}
+
+func execTicker(ch chan struct{}, path string, wg *sync.WaitGroup) {
+	t := time.NewTicker(1 * time.Minute)
+	defer func() {
+		t.Stop()
+		wg.Done()
+	}()
+	for {
+		select {
+		case <-t.C:
+			result := time.Now().String()
+			result = fmt.Sprintf("%s: Backing up...", result)
+			_ = backup.WriteBackupLogFile([]byte(result), path, backup.ResultLog)
+		case <-ch:
+			return
+		}
+	}
 }

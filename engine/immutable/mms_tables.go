@@ -1,18 +1,16 @@
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-	http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package immutable
 
@@ -100,7 +98,7 @@ type TablesStore interface {
 	GetObsOption() *obs.ObsOptions
 	GetShardID() uint64
 	SetIndexMergeSet(idx IndexMergeSet)
-	GetMstList(isOrder bool) []string
+	GetAllMstList() []string
 }
 
 type ImmTable interface {
@@ -583,24 +581,19 @@ func (m *MmsTables) sortTSSPFiles() {
 	}
 }
 
-func (m *MmsTables) GetMstList(isOrder bool) []string {
+func (m *MmsTables) GetAllMstList() []string {
 	m.mu.RLock()
 	defer func() {
 		m.mu.RUnlock()
 	}()
-	if isOrder {
-		fileList := make([]string, 0, len(m.Order))
-		for name := range m.Order {
-			fileList = append(fileList, name)
-		}
-		return fileList
-	} else {
-		fileList := make([]string, 0, len(m.OutOfOrder))
-		for name := range m.OutOfOrder {
-			fileList = append(fileList, name)
-		}
-		return fileList
+	fileList := make([]string, 0, len(m.Order)+len(m.OutOfOrder))
+	for name := range m.Order {
+		fileList = append(fileList, name)
 	}
+	for name := range m.OutOfOrder {
+		fileList = append(fileList, name)
+	}
+	return fileList
 }
 
 func (m *MmsTables) GetTSSPFiles(name string, isOrder bool) (files *TSSPFiles, ok bool) {

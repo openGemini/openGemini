@@ -1,4 +1,4 @@
-// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+// Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -110,6 +110,7 @@ const (
 	UpperMemUsePct     = "uppermemusepct"
 	ParallelQuery      = "parallelbatch"
 	Backup             = "backup"
+	AbortBackup        = "abort_backup"
 )
 
 var (
@@ -366,7 +367,7 @@ func ProcessRequest(req netstorage.SysCtrlRequest, resp *strings.Builder) (err e
 		for n, s := range metaRes {
 			resp.WriteString(fmt.Sprintf("\n\t%v: %s,", n, s))
 		}
-	case DataFlush, compactionEn, compmerge, snapshot, DownSampleInOrder, verifyNode, memUsageLimit, BackgroundReadLimiter:
+	case DataFlush, compactionEn, compmerge, snapshot, DownSampleInOrder, verifyNode, memUsageLimit, BackgroundReadLimiter, AbortBackup:
 		// store SysCtrl cmd
 		dataNodes, err := SysCtrl.MetaClient.DataNodes()
 		if err != nil {
@@ -511,15 +512,11 @@ func ProcessBackup(req netstorage.SysCtrlRequest, resp *strings.Builder, sqlHost
 	if err != nil {
 		return err
 	}
-	var lock sync.Mutex
-	var wg sync.WaitGroup
 	for _, d := range dataNodes {
 		if !isNode || strings.Contains(d.Host, host) {
-			wg.Add(1)
-			go sendCmdToStoreAsync(req, resp, d.ID, d.Host, &lock, &wg)
+			go sendBackupCmdToStoreAsync(req, d.ID, d.Host)
 		}
 	}
-	wg.Wait()
 
 	var metaRes map[string]string
 	if isNode {
@@ -565,6 +562,9 @@ func sendCmdToStoreAsync(req netstorage.SysCtrlRequest, resp *strings.Builder, n
 	wg.Done()
 }
 
+func sendBackupCmdToStoreAsync(req netstorage.SysCtrlRequest, nid uint64, host string) {
+	_ = sendCmdToStore(req, nid, host)
+}
 func handleLogRowsCmd(req netstorage.SysCtrlRequest) error {
 	switchon, err := GetBoolValue(req.Param(), "switchon")
 	if err != nil {

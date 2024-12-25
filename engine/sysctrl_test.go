@@ -17,6 +17,7 @@ package engine
 import (
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
@@ -65,22 +66,51 @@ func TestEngine_processReq_snapshot(t *testing.T) {
 }
 
 func TestEngine_processReq_backup(t *testing.T) {
+	t.Run("1", func(t *testing.T) {
+		log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
+		e := Engine{
+			log: log,
+		}
+		req := &netstorage.SysCtrlRequest{}
+		req.SetMod(syscontrol.Backup)
+		_, err := e.processReq(req)
+		if err == nil {
+			t.Fatal()
+		}
+	})
+
+	t.Run("2", func(t *testing.T) {
+		time.Sleep(2 * time.Second)
+		log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
+		e := Engine{
+			log: log,
+		}
+		req := &netstorage.SysCtrlRequest{}
+		req.SetMod(syscontrol.Backup)
+		_, err := e.processReq(req)
+		if err == nil {
+			t.Fatal()
+		}
+		req.SetParam(map[string]string{
+			"backupPath": "/tmp/openGemini/backup_dir",
+		})
+		_, err = e.processReq(req)
+		require.NoError(t, err)
+	})
+
+}
+
+func TestEngine_processReq_backup_abort(t *testing.T) {
 	log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
 	e := Engine{
 		log: log,
 	}
 	req := &netstorage.SysCtrlRequest{}
-	req.SetMod(syscontrol.Backup)
+	req.SetMod(syscontrol.AbortBackup)
 	_, err := e.processReq(req)
-	if err == nil {
+	if err != nil {
 		t.Fatal()
 	}
-
-	req.SetParam(map[string]string{
-		"backupPath": "/tmp/openGemini/backup_dir",
-	})
-	_, err = e.processReq(req)
-	require.NoError(t, err)
 }
 
 func TestEngine_processReq_compaction(t *testing.T) {
