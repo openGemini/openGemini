@@ -15,14 +15,17 @@
 package writer
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 
 	logger2 "github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
+	compression "github.com/openGemini/openGemini/lib/compress"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/crypto"
 	"github.com/openGemini/openGemini/lib/logger"
@@ -275,9 +278,13 @@ func uncompress(algo pb.CompressMethod, data []byte) ([]byte, error) {
 	case pb.CompressMethod_LZ4_FAST:
 		panic("please implement me")
 	case pb.CompressMethod_ZSTD_FAST:
-		panic("please implement me")
+		zstdReader := compression.GetZstdReader(bytes.NewReader(data))
+		defer compression.PutZstdReader(zstdReader)
+		return io.ReadAll(zstdReader)
 	case pb.CompressMethod_SNAPPY:
-		panic("please implement me")
+		snappyReader := compression.GetSnappyReader(bytes.NewReader(data))
+		defer compression.PutSnappyReader(snappyReader)
+		return io.ReadAll(snappyReader)
 	default:
 		return nil, fmt.Errorf("invalid compress algorithm")
 	}
