@@ -20,11 +20,14 @@ WORKDIR /home/opengemini
 
 ENV PATH=$PATH:/home/opengemini/bin
 
-RUN dnf install -y --setopt=tsflags=nodocs net-tools curl bind-utils procps && dnf clean all
-
 COPY --from=builder /build/bin/* /home/opengemini/bin/
 COPY --from=builder /build/config/openGemini.singlenode.conf /home/opengemini/config/opengemini.conf
 
+RUN dnf install -y --setopt=tsflags=nodocs net-tools curl bind-utils procps && dnf clean all &&\
+    sed -i 's/bind-address = "127.0.0.1:8086"/bind-address = "0.0.0.0:8086"/g' /home/opengemini/config/opengemini.conf &&\
+    sed -i 's/rpc-address = "127.0.0.1:8305"/rpc-address = "0.0.0.0:8305"/g' /home/opengemini/config/opengemini.conf
+
 EXPOSE 8086
+EXPOSE 8305
 
 ENTRYPOINT ["/home/opengemini/bin/ts-server", "-config", "/home/opengemini/config/opengemini.conf"]
