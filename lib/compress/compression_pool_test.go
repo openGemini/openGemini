@@ -72,3 +72,42 @@ func TestSnappyWriterPool(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "test data", result.String())
 }
+
+func TestSnappyReaderPool(t *testing.T) {
+	// Write data using Snappy writer
+	var buf bytes.Buffer
+	writer := snappy.NewBufferedWriter(&buf)
+	_, err := writer.Write([]byte("test data"))
+	assert.NoError(t, err)
+	writer.Close()
+
+	// Get Snappy reader from pool and read data
+	reader := GetSnappyReader(&buf)
+	result := new(bytes.Buffer)
+	_, err = io.Copy(result, reader)
+	assert.NoError(t, err)
+	assert.Equal(t, "test data", result.String())
+
+	// Put Snappy reader back to pool
+	PutSnappyReader(reader)
+}
+
+func TestZstdReaderPool(t *testing.T) {
+	// Write data using Zstd writer
+	var buf bytes.Buffer
+	writer, err := zstd.NewWriter(&buf)
+	assert.NoError(t, err)
+	_, err = writer.Write([]byte("test data"))
+	assert.NoError(t, err)
+	writer.Close()
+
+	// Get Zstd reader from pool and read data
+	reader := GetZstdReader(&buf)
+	result := new(bytes.Buffer)
+	_, err = io.Copy(result, reader)
+	assert.NoError(t, err)
+	assert.Equal(t, "test data", result.String())
+
+	// Put Zstd reader back to pool
+	PutZstdReader(reader)
+}

@@ -277,5 +277,3 @@ openGemini是一个开放的社区，我们希望所有参与社区的人都能�
 ### 6.2 技术委员会
 
 openGemini技术委员会（Technical Committee，简称TC）是openGemini社区的技术决策机构，负责社区技术决策和技术资源的协调。
-
-
