@@ -18,35 +18,27 @@ import (
 	"github.com/openGemini/openGemini/lib/codec"
 )
 
-func (rec *Record) Marshal(buf []byte) ([]byte, error) {
-	var err error
+func (rec *Record) Marshal(buf []byte) []byte {
 	// Schema
 	buf = codec.AppendUint32(buf, uint32(len(rec.Schema)))
 	for i := 0; i < len(rec.Schema); i++ {
 		buf = codec.AppendUint32(buf, uint32(rec.Schema[i].Size()))
-		buf, err = rec.Schema[i].Marshal(buf)
-		if err != nil {
-			return nil, err
-		}
+		buf = rec.Schema[i].Marshal(buf)
 	}
 
 	// ColVal
 	buf = codec.AppendUint32(buf, uint32(len(rec.ColVals)))
 	for i := 0; i < len(rec.ColVals); i++ {
 		buf = codec.AppendUint32(buf, uint32(rec.ColVals[i].Size()))
-		buf, err = rec.ColVals[i].Marshal(buf)
-		if err != nil {
-			return nil, err
-		}
+		buf = rec.ColVals[i].Marshal(buf)
 	}
-	return buf, nil
+	return buf
 }
 
-func (rec *Record) Unmarshal(buf []byte) error {
+func (rec *Record) Unmarshal(buf []byte) {
 	if len(buf) == 0 {
-		return nil
+		return
 	}
-	var err error
 	dec := codec.NewBinaryDecoder(buf)
 
 	// Schema
@@ -58,9 +50,7 @@ func (rec *Record) Unmarshal(buf []byte) error {
 			continue
 		}
 		rec.Schema[i] = Field{}
-		if err = rec.Schema[i].Unmarshal(subBuf); err != nil {
-			return err
-		}
+		rec.Schema[i].Unmarshal(subBuf)
 	}
 
 	// ColVal
@@ -72,11 +62,9 @@ func (rec *Record) Unmarshal(buf []byte) error {
 			continue
 		}
 		rec.ColVals[i] = ColVal{}
-		if err = rec.ColVals[i].Unmarshal(subBuf); err != nil {
-			return err
-		}
+		rec.ColVals[i].Unmarshal(subBuf)
 	}
-	return nil
+	return
 }
 
 func (rec *Record) CodecSize() int {

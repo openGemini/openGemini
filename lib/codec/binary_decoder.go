@@ -55,6 +55,12 @@ func (c *BinaryDecoder) Uint32() uint32 {
 	return i
 }
 
+func (c *BinaryDecoder) Uint32LE() uint32 {
+	i := binary.LittleEndian.Uint32(c.buf[c.offset : c.offset+4])
+	c.offset += 4
+	return i
+}
+
 func (c *BinaryDecoder) Uint64() uint64 {
 	i := binary.BigEndian.Uint64(c.buf[c.offset : c.offset+8])
 	c.offset += 8
@@ -166,6 +172,18 @@ func (c *BinaryDecoder) Uint32Slice() []uint32 {
 
 	size := int(l) * util.Uint32SizeBytes
 	a := util.Bytes2Uint32Slice(c.copy(size))
+	return a
+}
+
+func (c *BinaryDecoder) Uint32SliceSafe() []uint32 {
+	l := c.Uint32()
+	if l == 0 {
+		return nil
+	}
+	a := make([]uint32, l)
+	for i := range a {
+		a[i] = c.Uint32LE()
+	}
 	return a
 }
 
