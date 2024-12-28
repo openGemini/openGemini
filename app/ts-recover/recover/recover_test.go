@@ -1,18 +1,16 @@
-/*
-Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package recover
 
@@ -57,10 +55,9 @@ func TestRunBackupRecoverConfig(t *testing.T) {
 }
 
 func TestRecoverMeta(t *testing.T) {
-	tmpDir := t.TempDir()
+	fullBackupPath := "/tmp/openGemini/backup_dir/backup"
+	incBackupPath := "/tmp/openGemini/backup_dir/backup_inc"
 
-	fullBackupPath := filepath.Join(tmpDir, "openGemini/backup_dir/backup")
-	incBackupPath := filepath.Join(tmpDir, "openGemini/backup_dir/backup_inc")
 	recoverConfig := &RecoverConfig{
 		RecoverMode:        "2",
 		FullBackupDataPath: fullBackupPath,
@@ -68,24 +65,24 @@ func TestRecoverMeta(t *testing.T) {
 	}
 	tsRecover := &config.TsRecover{
 		Data: config.Store{
-			DataDir: filepath.Join(tmpDir, "openGemini/backup_dir/data"),
-			MetaDir: filepath.Join(tmpDir, "openGemini/backup_dir/meta"),
+			DataDir: "/tmp/openGemini/backup_dir/data",
+			MetaDir: "/tmp/openGemini/backup_dir/meta",
 		},
 	}
 
 	t.Run("isInc=true", func(t *testing.T) {
 		content := `{"metaIds":["1"],"isNode":true}`
-		CreateFile(filepath.Join(tmpDir, "openGemini/backup_dir/backup_inc/meta_backup/backup_log/meta_backup_log.json"), content)
+		CreateFile("/tmp/openGemini/backup_dir/backup_inc/meta_backup/backup_log/meta_backup_log.json", content)
 		recoverMeta(tsRecover, recoverConfig, true)
 	})
 
 	t.Run("isInc=false", func(t *testing.T) {
 		content := `{"metaIds":["1","2"],"isNode":false}`
-		CreateFile(filepath.Join(tmpDir, "openGemini/backup_dir/backup/meta_backup/backup_log/meta_backup_log.json"), content)
+		CreateFile("/tmp/openGemini/backup_dir/backup/meta_backup/backup_log/meta_backup_log.json", content)
 		recoverMeta(tsRecover, recoverConfig, false)
 	})
 
-	os.RemoveAll(filepath.Join(tmpDir, "openGemini/backup_dir"))
+	os.RemoveAll("/tmp/openGemini/backup_dir")
 }
 
 func TestRecoverError(t *testing.T) {
