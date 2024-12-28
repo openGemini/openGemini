@@ -149,17 +149,20 @@ type Common struct {
 	NodeRole           string         `toml:"node-role"`
 	ProductType        string         `toml:"product-type"`
 	PprofBindAddress   string         `toml:"pprof-bind-address"`
+
+	RaftSendGroutineNum int `toml:"raft-send-groutine-num"`
 }
 
 // NewCommon builds a new CommonConfiguration with default values.
 func NewCommon() *Common {
 	return &Common{
-		MetaJoin:           DefaultMetaJoin,
-		ReportEnable:       true,
-		OptHashAlgo:        DefaultHashAlgo,
-		CpuAllocationRatio: DefaultCpuAllocationRatio,
-		HaPolicy:           DefaultHaPolicy,
-		PreAggEnabled:      true,
+		MetaJoin:            DefaultMetaJoin,
+		ReportEnable:        true,
+		OptHashAlgo:         DefaultHashAlgo,
+		CpuAllocationRatio:  DefaultCpuAllocationRatio,
+		HaPolicy:            DefaultHaPolicy,
+		PreAggEnabled:       true,
+		RaftSendGroutineNum: DefaultRaftSendGroutineNum,
 	}
 }
 
@@ -194,6 +197,7 @@ func (c *Common) GetLogging() *Logger {
 func (c *Common) ShowConfigs() map[string]interface{} {
 	return map[string]interface{}{
 		"common.meta-join":                  c.MetaJoin,
+		"common.raft-send-groutine-num":     c.RaftSendGroutineNum,
 		"common.ignore-empty-tag":           c.IgnoreEmptyTag,
 		"common.report-enable":              c.ReportEnable,
 		"common.crypto-config":              c.CryptoConfig,

@@ -17,6 +17,7 @@ package config
 import (
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	"github.com/hashicorp/raft"
@@ -24,6 +25,10 @@ import (
 	"github.com/influxdata/influxdb/toml"
 	"github.com/openGemini/openGemini/lib/iodetector"
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
+)
+
+var (
+	DefaultRaftSendGroutineNum int = runtime.NumCPU()
 )
 
 const (

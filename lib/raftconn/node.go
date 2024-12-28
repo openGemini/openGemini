@@ -62,6 +62,7 @@ type RaftNode struct {
 	commitC     chan *Commit           // entries committed to log (influx.Rows)
 	ReplayC     chan *Commit           // entries committed to log (influx.Rows)
 	errorC      chan<- error           // errors from raft session
+	Messages    chan *raftpb.Message   // raft messages
 
 	nodeId   uint64 // real data node id
 	database string
@@ -149,6 +150,7 @@ func StartNode(store *raftlog.RaftDiskStorage, nodeId uint64, database string, i
 		MetaClient:     client,
 		ISend:          netstorage.NewNetStorage(client),
 		DataCommittedC: make(map[uint64]chan error),
+		Messages:       make(chan *raftpb.Message, 1024),
 	}
 	n.initIdentity()
 	return n
@@ -240,11 +242,11 @@ func (n *RaftNode) InitAndStartNode() error {
 	} else {
 		n.node = raft.StartNode(n.Cfg, n.RaftPeers)
 	}
-
 	go n.proposals()
 	go n.serveChannels()
 	go n.snapshotAfterFlush()
 	go n.deleteEntryLogPeriodically()
+	n.sendRaftMessages()
 	return nil
 }
 
@@ -303,7 +305,7 @@ func (n *RaftNode) serveChannels() {
 			if leader {
 				// Leader can send messages in parallel with writing to disk.
 				for i := range n.processMessages(rd.Messages) {
-					n.send(rd.Messages[i])
+					n.Messages <- &rd.Messages[i]
 				}
 				n.logger.Debug("leader send message successful", zap.Duration("time used", time.Since(start)))
 				start = time.Now()
@@ -337,7 +339,7 @@ func (n *RaftNode) serveChannels() {
 			if !leader {
 				// Followers should send messages later.
 				for i := range n.processMessages(rd.Messages) {
-					n.send(rd.Messages[i])
+					n.Messages <- &rd.Messages[i]
 				}
 				n.logger.Debug("follower send message successful", zap.Duration("time used", time.Since(start)))
 			}
@@ -516,6 +518,7 @@ func (n *RaftNode) Stop() {
 		close(n.confChangeC)
 		close(n.commitC)
 		close(n.errorC)
+		close(n.Messages)
 	})
 }
 
@@ -712,6 +715,21 @@ func (n *RaftNode) deleteEntryLogPeriodically() {
 		case <-n.ctx.Done():
 			logger.GetLogger().Error("ctx done...")
 		}
+	}
+}
+
+func (n *RaftNode) sendRaftMessages() {
+	for i := 0; i < config.GetCommon().RaftSendGroutineNum; i++ {
+		go func() {
+			for {
+				select {
+				case msg := <-n.Messages:
+					n.send(*msg)
+				case <-n.ctx.Done():
+					return
+				}
+			}
+		}()
 	}
 }
 
