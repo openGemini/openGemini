@@ -648,13 +648,8 @@ func TestGetTSSPFileList(t *testing.T) {
 	mh.addRecord(101, rg.setBegin(begin).incrBegin(-10).generate(schema, 100))
 	require.NoError(t, mh.saveToUnordered())
 
-	orders := mh.store.GetMstList(true)
-	if orders[0] != "mst" {
-		t.Fatal()
-	}
-
-	unorders := mh.store.GetMstList(false)
-	if unorders[0] != "mst" {
+	list := mh.store.GetAllMstList()
+	if list[0] != "mst" {
 		t.Fatal()
 	}
 }

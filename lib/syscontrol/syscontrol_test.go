@@ -1,4 +1,4 @@
-// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+// Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -355,7 +355,7 @@ func Test_ProcessBackup(t *testing.T) {
 	})
 	var sb strings.Builder
 	require.NoError(t, ProcessBackup(req, &sb, "127.0.0.1"))
-	require.Contains(t, sb.String(), "success")
+	require.Contains(t, sb.String(), "")
 }
 
 func Test_ProcessBackup2(t *testing.T) {

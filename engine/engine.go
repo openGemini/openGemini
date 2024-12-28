@@ -96,6 +96,7 @@ type Engine struct {
 	migratingDbPT map[string]map[uint32]struct{}
 	metaClient    meta.MetaClient
 	fileInfos     chan []immutable.FileInfoExtend
+	backup        *Backup
 }
 
 const maxInt = int(^uint(0) >> 1)

@@ -38,7 +38,7 @@ type TestType struct {
 
 var testType TestType
 
-func killInfluxDB3(t *testing.T) error {
+func killopenGemini(t *testing.T) error {
 	command := `ps -ef |grep -w config/openGemini-3.conf | grep ts-store | grep -v grep | cut -c 9-15 | xargs kill -9`
 	cmd := exec.Command("/bin/bash", "-c", command)
 
@@ -53,8 +53,8 @@ func killInfluxDB3(t *testing.T) error {
 	}
 }
 
-func startInfluxDB3(t *testing.T) {
-	_ = os.MkdirAll("/tmp/openGemini/logs/3", 600)
+func startopenGemini(t *testing.T) {
+	_ = os.MkdirAll("/tmp/openGemini/logs/3", 0750)
 	confFile := "config/openGemini-3.conf "
 	logFile := "/tmp/openGemini/logs/3/store_extra3.log"
 
@@ -73,17 +73,17 @@ func startInfluxDB3(t *testing.T) {
 
 func InitTestEnv(t *testing.T, bodyType string, body io.Reader) error {
 	if testType.HA {
-		if err := killInfluxDB3(t); err != nil {
+		if err := killopenGemini(t); err != nil {
 			fmt.Printf("kill influxdb3 error:%s", err.Error())
 			return err
 		}
 		time.Sleep(40 * time.Second)
 		return nil
 	} else if testType.ReStart {
-		if err := killInfluxDB3(t); err != nil {
+		if err := killopenGemini(t); err != nil {
 			return err
 		}
-		startInfluxDB3(t)
+		startopenGemini(t)
 	} else if testType.MovePT {
 		b := "http://127.0.0.1:8091" + bodyType
 		fmt.Printf(" movePT %s \n", b)
@@ -97,11 +97,11 @@ func InitTestEnv(t *testing.T, bodyType string, body io.Reader) error {
 			time.Sleep(20 * time.Second)
 		}
 	} else if testType.ReStore {
-		if err := killInfluxDB3(t); err != nil {
+		if err := killopenGemini(t); err != nil {
 			return err
 		}
 		time.Sleep(45 * time.Second)
-		startInfluxDB3(t)
+		startopenGemini(t)
 	}
 
 	return nil
@@ -109,7 +109,7 @@ func InitTestEnv(t *testing.T, bodyType string, body io.Reader) error {
 
 func InitHaTestEnv(t *testing.T) {
 	if testType.HA {
-		if err := killInfluxDB3(t); err != nil {
+		if err := killopenGemini(t); err != nil {
 			fmt.Printf("kill ts-store 3 error: %s\n", err.Error())
 			t.Fatal(err.Error())
 		}
@@ -118,7 +118,7 @@ func InitHaTestEnv(t *testing.T) {
 
 func ReleasTestEnv(t *testing.T, bodyType string, body io.Reader) error {
 	if testType.HA {
-		startInfluxDB3(t)
+		startopenGemini(t)
 	} else if testType.ReStart {
 		return nil
 	} else if testType.MovePT {
@@ -143,7 +143,7 @@ func ReleasTestEnv(t *testing.T, bodyType string, body io.Reader) error {
 
 func ReleaseHaTestEnv(t *testing.T) {
 	if testType.HA {
-		startInfluxDB3(t)
+		startopenGemini(t)
 	}
 }
 
@@ -11763,7 +11763,7 @@ func RegisteredIndexes() []string {
 	return a
 }
 
-func Test_killInfluxDB3(t *testing.T) {
+func Test_killopenGemini(t *testing.T) {
 	type args struct {
 		t *testing.T
 	}
@@ -11776,14 +11776,14 @@ func Test_killInfluxDB3(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if err := killInfluxDB3(tt.args.t); (err != nil) != tt.wantErr {
-				t.Errorf("killInfluxDB3() error = %v, wantErr %v", err, tt.wantErr)
+			if err := killopenGemini(tt.args.t); (err != nil) != tt.wantErr {
+				t.Errorf("killopenGemini() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
 	}
 }
 
-func Test_startInfluxDB3(t *testing.T) {
+func Test_startopenGemini(t *testing.T) {
 	type args struct {
 		t *testing.T
 	}
@@ -11795,7 +11795,7 @@ func Test_startInfluxDB3(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			startInfluxDB3(tt.args.t)
+			startopenGemini(tt.args.t)
 		})
 	}
 }
