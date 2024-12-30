@@ -2288,6 +2288,10 @@ func (e *StatementExecutor) NormalizeStatement(stmt influxql.Statement, defaultD
 			if node.Database == "" {
 				node.Database = defaultDatabase
 			}
+		case *influxql.DropMeasurementStatement:
+			if node.RpName == "" {
+				node.RpName = defaultRetentionPolicy
+			}
 		case *influxql.ShowMeasurementsDetailStatement:
 			if node.Database == "" {
 				node.Database = defaultDatabase
