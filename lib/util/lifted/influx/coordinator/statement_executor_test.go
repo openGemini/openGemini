@@ -366,3 +366,34 @@ func TestStatementExecutor_executeCreateContinuousQueryStatement(t *testing.T) {
 	cqQuery := stmt.String()
 	assert.Equal(t, `CREATE CONTINUOUS QUERY cq0 ON db0 RESAMPLE EVERY 10m FOR 1h BEGIN SELECT "field"::integer INTO db1..mst1 FROM db0.rp0.mst0 GROUP BY time(1m) END`, cqQuery)
 }
+
+func TestStatementExecutor_NormalizeStatement(t *testing.T) {
+	executor := newMockStatementExecutor()
+	testcases := []struct {
+		stmt         influxql.Statement
+		defaultDB    string
+		defaultRP    string
+		validateFunc func(influxql.Statement) error
+	}{
+		{
+			stmt:      &influxql.DropMeasurementStatement{},
+			defaultRP: "rp0",
+			validateFunc: func(stmt influxql.Statement) error {
+				dropStmt, ok := stmt.(*influxql.DropMeasurementStatement)
+				if !ok {
+					return errors.New("invalid statement type")
+				}
+				if dropStmt.RpName != "rp0" {
+					return errors.New("invalid retention policy")
+				}
+				return nil
+			},
+		},
+	}
+	for _, tc := range testcases {
+		err := executor.NormalizeStatement(tc.stmt, tc.defaultDB, tc.defaultRP)
+		assert.NoError(t, err)
+		err = tc.validateFunc(tc.stmt)
+		assert.NoError(t, err)
+	}
+}
