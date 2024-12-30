@@ -138,14 +138,8 @@ func mockCompressedPartialRecords() []*pb.Record {
 	mockRecord := NewRecord()
 	buf := make([]byte, 0)
 	invalidBuf := make([]byte, 0)
-	buf, err := mockRecord.Marshal(buf)
-	if err != nil {
-		panic(err)
-	}
-	invalidBuf, err = mockInvalidRecord.Marshal(invalidBuf)
-	if err != nil {
-		panic(err)
-	}
+	buf = mockRecord.Marshal(buf)
+	invalidBuf = mockInvalidRecord.Marshal(invalidBuf)
 
 	compressedBuf, err := compress(pb.CompressMethod_ZSTD_FAST, buf)
 	if err != nil {
@@ -166,10 +160,7 @@ func mockAllValidRecords() []*pb.Record {
 	mockRecord := NewRecord()
 	record.CheckRecord(mockRecord)
 	buf := make([]byte, 0)
-	buf, err := mockRecord.Marshal(buf)
-	if err != nil {
-		panic(err)
-	}
+	buf = mockRecord.Marshal(buf)
 	mockRow1 := &pb.Record{Measurement: "mst204", Block: buf}
 	mockRow2 := &pb.Record{Measurement: "mst205", Block: buf}
 	mockRow3 := &pb.Record{Measurement: "mst206", Block: buf}
@@ -179,10 +170,7 @@ func mockAllValidRecords() []*pb.Record {
 func mockAllInvalidRecords() []*pb.Record {
 	mockRecord := NewInvalidRecord()
 	buf := make([]byte, 0)
-	buf, err := mockRecord.Marshal(buf)
-	if err != nil {
-		panic(err)
-	}
+	buf = mockRecord.Marshal(buf)
 	mockRow1 := &pb.Record{Measurement: "mst204", Block: buf}
 	mockRow2 := &pb.Record{Measurement: "mst205", Block: buf}
 	mockRow3 := &pb.Record{Measurement: "mst206", Block: buf}
@@ -194,14 +182,8 @@ func mockPartialRecords() []*pb.Record {
 	mockRecord := NewRecord()
 	buf := make([]byte, 0)
 	invalidBuf := make([]byte, 0)
-	buf, err := mockRecord.Marshal(buf)
-	if err != nil {
-		panic(err)
-	}
-	invalidBuf, err = mockInvalidRecord.Marshal(invalidBuf)
-	if err != nil {
-		panic(err)
-	}
+	buf = mockRecord.Marshal(buf)
+	invalidBuf = mockInvalidRecord.Marshal(invalidBuf)
 	mockRow1 := &pb.Record{Measurement: "mst204", Block: buf}
 	mockRow2 := &pb.Record{Measurement: "mst205", Block: buf}
 	mockRow3 := &pb.Record{Measurement: "mst206", Block: invalidBuf}

@@ -16,21 +16,21 @@ package record
 
 import "github.com/openGemini/openGemini/lib/codec"
 
-func (f *Field) Marshal(buf []byte) ([]byte, error) {
+func (f *Field) Marshal(buf []byte) []byte {
 	buf = codec.AppendString(buf, f.Name)
 	buf = codec.AppendInt(buf, f.Type)
-	return buf, nil
+	return buf
 }
 
-func (f *Field) Unmarshal(buf []byte) error {
+func (f *Field) Unmarshal(buf []byte) {
 	if len(buf) == 0 {
-		return nil
+		return
 	}
 
 	dec := codec.NewBinaryDecoder(buf)
 	f.Name = dec.String()
 	f.Type = dec.Int()
-	return nil
+	return
 }
 
 func (f *Field) Size() int {

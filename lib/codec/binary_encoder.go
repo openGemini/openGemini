@@ -15,6 +15,8 @@
 package codec
 
 import (
+	"encoding/binary"
+
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/openGemini/openGemini/lib/util"
 )
@@ -130,6 +132,17 @@ func AppendUint32Slice(b []byte, a []uint32) []byte {
 	}
 
 	b = append(b, util.Uint32Slice2byte(a)...)
+	return b
+}
+
+func AppendUint32SliceSafe(b []byte, a []uint32) []byte {
+	b = AppendUint32(b, uint32(len(a)))
+	if len(a) == 0 {
+		return b
+	}
+	for _, v := range a {
+		b = binary.LittleEndian.AppendUint32(b, v)
+	}
 	return b
 }
 

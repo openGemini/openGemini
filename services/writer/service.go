@@ -292,10 +292,8 @@ func uncompress(algo pb.CompressMethod, data []byte) ([]byte, error) {
 
 func unmarshal(data []byte) (*record.Record, error) {
 	rec := &record.Record{}
-	err := rec.Unmarshal(data)
-	if err != nil {
-		return nil, err
-	}
+	var err error
+	rec.Unmarshal(data)
 	func() {
 		defer func() {
 			if r := recover(); r != nil {

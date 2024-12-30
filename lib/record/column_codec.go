@@ -16,19 +16,19 @@ package record
 
 import "github.com/openGemini/openGemini/lib/codec"
 
-func (cv *ColVal) Marshal(buf []byte) ([]byte, error) {
+func (cv *ColVal) Marshal(buf []byte) []byte {
 	buf = codec.AppendInt(buf, cv.Len)
 	buf = codec.AppendInt(buf, cv.NilCount)
 	buf = codec.AppendInt(buf, cv.BitMapOffset)
 	buf = codec.AppendBytes(buf, cv.Val)
 	buf = codec.AppendBytes(buf, cv.Bitmap)
-	buf = codec.AppendUint32Slice(buf, cv.Offset)
-	return buf, nil
+	buf = codec.AppendUint32SliceSafe(buf, cv.Offset)
+	return buf
 }
 
-func (cv *ColVal) Unmarshal(buf []byte) error {
+func (cv *ColVal) Unmarshal(buf []byte) {
 	if len(buf) == 0 {
-		return nil
+		return
 	}
 	dec := codec.NewBinaryDecoder(buf)
 	cv.Len = dec.Int()
@@ -36,8 +36,8 @@ func (cv *ColVal) Unmarshal(buf []byte) error {
 	cv.BitMapOffset = dec.Int()
 	cv.Val = dec.Bytes()
 	cv.Bitmap = dec.Bytes()
-	cv.Offset = dec.Uint32Slice()
-	return nil
+	cv.Offset = dec.Uint32SliceSafe()
+	return
 }
 
 func (cv *ColVal) Size() int {
