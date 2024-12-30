@@ -539,7 +539,7 @@ func MarshalWithMeasurements(buf []byte, mst string, rec *record.Record) ([]byte
 	buf = append(buf, uint8(len(name)))
 	buf = append(buf, name...)
 
-	return rec.Marshal(buf)
+	return rec.Marshal(buf), nil
 }
 
 func UnmarshalWithMeasurements(buf []byte, rec *record.Record) (string, error) {
@@ -552,7 +552,8 @@ func UnmarshalWithMeasurements(buf []byte, rec *record.Record) (string, error) {
 
 	name := util.Bytes2str(buf[:mLen])
 	buf = buf[mLen:]
-	return name, rec.Unmarshal(buf)
+	rec.Unmarshal(buf)
+	return name, nil
 }
 
 func IsKeepWritingErr(err error) bool {

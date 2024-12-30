@@ -37,21 +37,14 @@ func TestRecodeCodec(t *testing.T) {
 		[]int{1, 1, 1, 0}, []bool{true, true, true, false},
 		[]int64{1, 2, 3, 4})
 
-	var err error
 	pc := make([]byte, 0, rec.CodecSize())
-	pc, err = rec.Marshal(pc)
-	if err != nil {
-		t.Fatalf("%v", err)
-	}
+	pc = rec.Marshal(pc)
 	if len(pc) != rec.CodecSize() {
 		t.Fatalf("error size, exp: %d; got: %d", len(pc), rec.CodecSize())
 	}
 
 	newRec := &record.Record{}
-	err = newRec.Unmarshal(pc)
-	if err != nil {
-		t.Fatalf("%v", err)
-	}
+	newRec.Unmarshal(pc)
 
 	if !reflect.DeepEqual(rec.Schema, newRec.Schema) {
 		t.Fatalf("marshal schema failed")
