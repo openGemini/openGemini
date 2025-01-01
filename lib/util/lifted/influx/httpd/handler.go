@@ -1058,6 +1058,9 @@ func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.
 	}
 
 	epoch := strings.TrimSpace(r.FormValue("epoch"))
+	if epoch == "" {
+		epoch = "rfc3339"
+	}
 
 	db := r.FormValue("db")
 	var qDuration *statistics.SQLSlowQueryStatistics
