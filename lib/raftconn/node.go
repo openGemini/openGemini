@@ -135,7 +135,7 @@ func StartNode(store *raftlog.RaftDiskStorage, nodeId uint64, database string, i
 
 		proposeC:    make(chan []byte),
 		confChangeC: make(chan raftpb.ConfChange),
-		commitC:     make(chan *Commit),
+		commitC:     make(chan *Commit, 1024),
 		errorC:      make(chan error),
 		nodeId:      nodeId,
 		database:    database,
@@ -434,29 +434,37 @@ func (n *RaftNode) PublishEntries(ents []raftpb.Entry) (<-chan struct{}, bool) {
 	}
 
 	data := make([][]byte, 0, len(ents))
+	wg := sync.WaitGroup{}
 	for i := range ents {
-		switch ents[i].Type {
-		case raftpb.EntryNormal:
-			if len(ents[i].Data) == 0 {
-				// ignore empty messages
-				continue
+		wg.Add(1)
+		go func(i int) {
+			switch ents[i].Type {
+			case raftpb.EntryNormal:
+				if len(ents[i].Data) == 0 {
+					// ignore empty messages
+					wg.Done()
+					return
+				}
+				data = append(data, ents[i].Data)
+			case raftpb.EntryConfChange:
+				var cc raftpb.ConfChange
+				err := cc.Unmarshal(ents[i].Data)
+				if err != nil {
+					n.logger.Error("unmarshal conf changed failed", zap.Error(err))
+					wg.Done()
+					return
+				}
+				n.confState = n.node.ApplyConfChange(cc)
+				n.saveConfStateToMeta()
+				switch cc.Type {
+				case raftpb.ConfChangeAddNode:
+				case raftpb.ConfChangeRemoveNode:
+				}
 			}
-			data = append(data, ents[i].Data)
-		case raftpb.EntryConfChange:
-			var cc raftpb.ConfChange
-			err := cc.Unmarshal(ents[i].Data)
-			if err != nil {
-				n.logger.Error("unmarshal conf changed failed", zap.Error(err))
-				continue
-			}
-			n.confState = n.node.ApplyConfChange(cc)
-			n.saveConfStateToMeta()
-			switch cc.Type {
-			case raftpb.ConfChangeAddNode:
-			case raftpb.ConfChangeRemoveNode:
-			}
-		}
+			wg.Done()
+		}(i)
 	}
+	wg.Wait()
 
 	var applyDoneC chan struct{}
 
