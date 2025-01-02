@@ -1,18 +1,16 @@
-/*
-Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package recover
 
@@ -82,7 +80,6 @@ func recoverWithFull(tsRecover *config.TsRecover, rc *RecoverConfig) error {
 }
 
 func recoverWithFullAndInc(tsRecover *config.TsRecover, rc *RecoverConfig) error {
-
 	if err := recoverMeta(tsRecover, rc, true); err != nil {
 		return err
 	}
@@ -91,12 +88,14 @@ func recoverWithFullAndInc(tsRecover *config.TsRecover, rc *RecoverConfig) error
 	if err := os.RemoveAll(dataPath); err != nil {
 		return err
 	}
+	// recover full_backup
 	fullBackupDataPath := filepath.Join(rc.FullBackupDataPath, backup.DataBackupDir, dataPath)
 	if err := traversalBackupLogFile(rc, fullBackupDataPath, copyWithFullAndInc, true); err != nil {
 		return err
 	}
+	// recover inc_backup
 	incBackupDataPath := filepath.Join(rc.IncBackupDataPath, backup.DataBackupDir, dataPath)
-	if err := traversalIndexFile(rc, incBackupDataPath); err != nil {
+	if err := traversalIncBackupLogFile(rc, incBackupDataPath); err != nil {
 		return err
 	}
 	return nil
@@ -195,7 +194,7 @@ func traversalBackupLogFile(rc *RecoverConfig, path string, fn RecoverFunc, isIn
 	return nil
 }
 
-func traversalIndexFile(rc *RecoverConfig, path string) error {
+func traversalIncBackupLogFile(rc *RecoverConfig, path string) error {
 	var err error
 	var fds []fs.FileInfo
 
@@ -217,8 +216,19 @@ func traversalIndexFile(rc *RecoverConfig, path string) error {
 				}
 				continue
 			}
-			if err = traversalIndexFile(rc, srcfp); err != nil {
+			if err = traversalIncBackupLogFile(rc, srcfp); err != nil {
 				return err
+			}
+		} else {
+			if fd.Name() == backup.IncBackupLog {
+				if err := copyWithInc(rc, srcfp); err != nil {
+					return err
+				}
+				// recover log file
+				outPath := strings.Replace(srcfp, filepath.Join(rc.IncBackupDataPath, backup.DataBackupDir), "", -1)
+				if err := backup.FileMove(srcfp, outPath); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -232,7 +242,7 @@ func copyWithFull(rc *RecoverConfig, path string) error {
 	}
 
 	basicPath := filepath.Join(rc.FullBackupDataPath, backup.DataBackupDir)
-	for _, fileList := range backupLog.OrderFileListMap {
+	for _, fileList := range backupLog.FileListMap {
 		for _, files := range fileList {
 			srcPath := filepath.Join(basicPath, files[0])
 			for _, f := range files {
@@ -243,16 +253,6 @@ func copyWithFull(rc *RecoverConfig, path string) error {
 		}
 	}
 
-	for _, fileList := range backupLog.OutOfOrderFileListMap {
-		for _, files := range fileList {
-			srcPath := filepath.Join(basicPath, files[0])
-			for _, f := range files {
-				if err := backup.FileMove(srcPath, f); err != nil {
-					return err
-				}
-			}
-		}
-	}
 	return nil
 }
 
@@ -274,11 +274,7 @@ func copyWithFullAndInc(rc *RecoverConfig, fullPath string) error {
 		return err
 	}
 
-	err = mergeFileList(rc, backupLog.OrderFileListMap, incBackupLog.AddOrderFileListMap, incBackupLog.DelOrderFileListMap)
-	if err != nil {
-		return err
-	}
-	err = mergeFileList(rc, backupLog.OutOfOrderFileListMap, incBackupLog.AddOutOfOrderFileListMap, incBackupLog.DelOutOfOrderFileListMap)
+	err = mergeFileList(rc, backupLog.FileListMap, incBackupLog.DelFileListMap)
 	if err != nil {
 		return err
 	}
@@ -286,9 +282,29 @@ func copyWithFullAndInc(rc *RecoverConfig, fullPath string) error {
 	return nil
 }
 
-func mergeFileList(rc *RecoverConfig, listMap, addListMap, delListMap map[string][][]string) error {
+func copyWithInc(rc *RecoverConfig, incPath string) error {
+	backupLog := &backup.IncBackupLogInfo{}
+	if err := backup.ReadBackupLogFile(incPath, backupLog); err != nil {
+		return err
+	}
+
+	basicPath := filepath.Join(rc.IncBackupDataPath, backup.DataBackupDir)
+	for _, fileList := range backupLog.AddFileListMap {
+		for _, files := range fileList {
+			srcPath := filepath.Join(basicPath, files[0])
+			for _, f := range files {
+				if err := backup.FileMove(srcPath, f); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+func mergeFileList(rc *RecoverConfig, listMap, delListMap map[string][][]string) error {
 	fullBasicPath := filepath.Join(rc.FullBackupDataPath, backup.DataBackupDir)
-	incBasicPath := filepath.Join(rc.IncBackupDataPath, backup.DataBackupDir)
 	for name, fileList := range listMap {
 		dListSeen := make(map[string]bool)
 		if dLists, ok := delListMap[name]; ok {
@@ -309,16 +325,6 @@ func mergeFileList(rc *RecoverConfig, listMap, addListMap, delListMap map[string
 			}
 		}
 
-	}
-	for _, aLists := range addListMap {
-		for _, files := range aLists {
-			srcPath := filepath.Join(incBasicPath, files[0])
-			for _, f := range files {
-				if err := backup.FileMove(srcPath, f); err != nil {
-					return err
-				}
-			}
-		}
 	}
 	return nil
 }
