@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
 
 	logger2 "github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
 	compression "github.com/openGemini/openGemini/lib/compress"
@@ -59,6 +60,8 @@ type PointWriter interface {
 type Authorizer interface {
 	Authenticate(username, password, database string) error
 }
+
+var recordPool sync.Pool
 
 type RecordWriteAuthorizer struct {
 	Client          *metaclient.Client
@@ -114,6 +117,12 @@ func NewService(c config.RecordWriteConfig) (*Service, error) {
 	service.userAuthEnabled = c.AuthEnabled
 	service.maxRecvMsgSize = c.MaxRecvMsgSize
 	service.version = 1
+	recordPool = sync.Pool{
+		New: func() interface{} {
+			return new(record.Record)
+		},
+	}
+
 	return service, nil
 }
 
@@ -181,6 +190,7 @@ func (s *Service) Ping(_ context.Context, _ *pb.PingRequest) (*pb.PingResponse, 
 
 func (s *Service) processRows(db, rp string, rows []*pb.Record) (error, bool) {
 	rowErrors := make([]error, len(rows))
+	var influxRows []influx.Row
 	for index, row := range rows {
 		rawData := row.Block
 		mst := row.Measurement
@@ -208,12 +218,12 @@ func (s *Service) processRows(db, rp string, rows []*pb.Record) (error, bool) {
 			continue
 		}
 
-		var influxRows []influx.Row
 		influxRows = Record2Rows(influxRows, rec)
+		rec.Reset()
+		recordPool.Put(rec)
 		for i := range influxRows {
 			influxRows[i].Name = row.Measurement
 		}
-		logger2.Infof("record-write service recieved %d rows for measurement %s", len(influxRows), row.Measurement)
 		err = s.writer.RetryWritePointRows(db, rp, influxRows)
 		if err != nil {
 			rowErrors[index] = err
@@ -242,7 +252,6 @@ func generateError(rowErrors []error) (fullErr error, allErr bool) {
 
 func (s *Service) Close() error {
 	if s.server != nil {
-		// TODO Stop or GracefulStop here?
 		s.server.Stop()
 	}
 	if s.err != nil {
@@ -291,9 +300,9 @@ func uncompress(algo pb.CompressMethod, data []byte) ([]byte, error) {
 }
 
 func unmarshal(data []byte) (*record.Record, error) {
-	rec := &record.Record{}
-	var err error
+	rec := recordPool.Get().(*record.Record)
 	rec.Unmarshal(data)
+	var err error
 	func() {
 		defer func() {
 			if r := recover(); r != nil {
