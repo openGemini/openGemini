@@ -188,33 +188,55 @@ func (e *Engine) processReq(req *netstorage.SysCtrlRequest) (map[string]string, 
 		syscontrol.SetUpperMemUsePct(upper)
 		return nil, nil
 	case syscontrol.Backup:
-		params := req.Param()
-		backupPath := params[backup.BackupPath]
-		if backupPath == "" {
-			err := fmt.Errorf("invalid parameter %s", backupPath)
-			return nil, err
-		}
-		isRemote := params[backup.IsRemote] == "true"
-		isInc := params[backup.IsInc] == "true"
-		onlyBackupMater := params[backup.OnlyBackupMaster] == "true"
-
-		b := &Backup{
-			IsInc:           isInc,
-			IsRemote:        isRemote,
-			BackupPath:      backupPath,
-			OnlyBackupMater: onlyBackupMater,
-			Engine:          e,
-		}
-		if err := b.RunBackupData(); err != nil {
+		e.mu.Lock()
+		if e.backup != nil {
+			err := fmt.Errorf("node is backing up")
 			log.Error("run backup error", zap.Error(err))
+			e.mu.Unlock()
 			return nil, err
 		}
+		e.backup = &Backup{}
+		e.mu.Unlock()
+		return nil, e.processBackup(req)
 
+	case syscontrol.AbortBackup:
+		if e.backup == nil {
+			return nil, nil
+		}
+		e.backup.IsAborted = true
 		return nil, nil
-
 	default:
 		return nil, fmt.Errorf("unknown sys cmd %v", req.Mod())
 	}
+}
+
+func (e *Engine) processBackup(req *netstorage.SysCtrlRequest) error {
+	params := req.Param()
+	backupPath := params[backup.BackupPath]
+	defer func() {
+		e.backup = nil
+	}()
+	if backupPath == "" {
+		err := fmt.Errorf("invalid parameter %s", backupPath)
+		return err
+	}
+	isRemote := params[backup.IsRemote] == "true"
+	isInc := params[backup.IsInc] == "true"
+	onlyBackupMater := params[backup.OnlyBackupMaster] == "true"
+
+	e.backup = &Backup{
+		IsInc:           isInc,
+		IsRemote:        isRemote,
+		BackupPath:      backupPath,
+		OnlyBackupMater: onlyBackupMater,
+		Engine:          e,
+	}
+
+	if err := e.backup.RunBackupData(); err != nil {
+		log.Error("run backup error", zap.Error(err))
+		return err
+	}
+	return nil
 }
 
 func handleFailpoint(req *netstorage.SysCtrlRequest) error {
