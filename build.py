@@ -4,7 +4,7 @@ import sys
 import os
 import platform
 import subprocess
-from datetime import datetime
+import datetime
 import shutil
 import re
 import logging
@@ -394,10 +394,10 @@ def build(version=None,
                 commit = get_current_commit())
 
         build_command += path
-        start_time = datetime.utcnow()
+        start_time = datetime.datetime.now(datetime.UTC)
         logging.info(build_command)
         run(build_command, shell=True)
-        end_time = datetime.utcnow()
+        end_time = datetime.datetime.now(datetime.UTC)
         logging.info("Time taken: %ss", (end_time - start_time).total_seconds())
     return True
 
@@ -427,7 +427,7 @@ def main(args):
     if args.nightly:
         args.version = increment_minor_version(args.version)
         args.version = "{}~n{}".format(args.version,
-                                       datetime.utcnow().strftime("%Y%m%d%H%M"))
+        datetime.datetime.now(datetime.UTC).strftime("%Y%m%d%H%M"))
         args.iteration = 0
 
     # Pre-build checks
