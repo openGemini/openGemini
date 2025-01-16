@@ -306,3 +306,7 @@ func (c *BinaryDecoder) copy(size int) []byte {
 	c.offset += size
 	return b
 }
+
+func (c *BinaryDecoder) noCopy(size int) []byte {
+	return c.buf[c.offset : c.offset+size]
+}
