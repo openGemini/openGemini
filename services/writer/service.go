@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
 
 	logger2 "github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
 	compression "github.com/openGemini/openGemini/lib/compress"
@@ -58,6 +59,43 @@ type PointWriter interface {
 
 type Authorizer interface {
 	Authenticate(username, password, database string) error
+}
+
+var (
+	recordPool sync.Pool
+	rowPool    sync.Pool
+)
+
+func getRowSlice(size int) []influx.Row {
+	ptr := rowPool.Get()
+	if ptr == nil {
+		return make([]influx.Row, size)
+	}
+	rows := *(ptr.(*[]influx.Row))
+	if cap(rows) < size {
+		rows = make([]influx.Row, size)
+	}
+	return rows[:size]
+}
+
+func putRowSlice(rows []influx.Row) {
+	for i := range rows {
+		rows[i].ReuseSet()
+	}
+	rowPool.Put(&rows)
+}
+
+func getRecord() *record.Record {
+	rec, ok := recordPool.Get().(*record.Record)
+	if !ok || rec == nil {
+		return new(record.Record)
+	}
+	return rec
+}
+
+func putRecord(rec *record.Record) {
+	rec.Reset()
+	recordPool.Put(rec)
 }
 
 type RecordWriteAuthorizer struct {
@@ -114,6 +152,7 @@ func NewService(c config.RecordWriteConfig) (*Service, error) {
 	service.userAuthEnabled = c.AuthEnabled
 	service.maxRecvMsgSize = c.MaxRecvMsgSize
 	service.version = 1
+
 	return service, nil
 }
 
@@ -181,6 +220,8 @@ func (s *Service) Ping(_ context.Context, _ *pb.PingRequest) (*pb.PingResponse, 
 
 func (s *Service) processRows(db, rp string, rows []*pb.Record) (error, bool) {
 	rowErrors := make([]error, len(rows))
+	var rec *record.Record
+	var influxRows []influx.Row
 	for index, row := range rows {
 		rawData := row.Block
 		mst := row.Measurement
@@ -195,7 +236,7 @@ func (s *Service) processRows(db, rp string, rows []*pb.Record) (error, bool) {
 			continue
 		}
 
-		rec, err := unmarshal(data)
+		rec, err = unmarshal(data)
 		if err != nil {
 			recStr, err2 := json.Marshal(rec)
 			if err2 != nil {
@@ -207,19 +248,22 @@ func (s *Service) processRows(db, rp string, rows []*pb.Record) (error, bool) {
 			rowErrors[index] = err
 			continue
 		}
-
-		var influxRows []influx.Row
+		influxRows = getRowSlice(rec.RowNums())
 		influxRows = Record2Rows(influxRows, rec)
 		for i := range influxRows {
 			influxRows[i].Name = row.Measurement
 		}
-		logger2.Infof("record-write service recieved %d rows for measurement %s", len(influxRows), row.Measurement)
 		err = s.writer.RetryWritePointRows(db, rp, influxRows)
 		if err != nil {
 			rowErrors[index] = err
-			continue
+		}
+		rec.ResetForReuse()
+		for i := range influxRows {
+			influxRows[i].ReuseSet()
 		}
 	}
+	putRecord(rec)
+	putRowSlice(influxRows)
 	err, allErr := generateError(rowErrors)
 	return err, allErr
 }
@@ -242,7 +286,6 @@ func generateError(rowErrors []error) (fullErr error, allErr bool) {
 
 func (s *Service) Close() error {
 	if s.server != nil {
-		// TODO Stop or GracefulStop here?
 		s.server.Stop()
 	}
 	if s.err != nil {
@@ -291,9 +334,9 @@ func uncompress(algo pb.CompressMethod, data []byte) ([]byte, error) {
 }
 
 func unmarshal(data []byte) (*record.Record, error) {
-	rec := &record.Record{}
+	rec := getRecord()
+	rec.UnmarshalUnsafe(data)
 	var err error
-	rec.Unmarshal(data)
 	func() {
 		defer func() {
 			if r := recover(); r != nil {
