@@ -10,4 +10,4 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: PR Title Lint
-        uses: openGemini/pr-title-checker@v1.0.2
+        uses: openGemini/pr-title-checker@main
