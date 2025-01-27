@@ -410,11 +410,21 @@ func (c *Store) CorrectorThroughput(cpuNum int) {
 		defaultSnapshotThroughputBurst = DefaultSnapshotThroughput * 8
 		defaultBackGroundReadThroughput = DefaultBackGroundReadThroughput * 8
 	}
-	c.Compact.CompactThroughput = defaultCompactThroughput
-	c.Compact.CompactThroughputBurst = defaultCompactThroughputBurst
-	c.Compact.SnapshotThroughput = defaultSnapshotThroughput
-	c.Compact.SnapshotThroughputBurst = defaultSnapshotThroughputBurst
-	c.Compact.BackGroundReadThroughput = defaultBackGroundReadThroughput
+	if int64(c.Compact.CompactThroughput) == 0 {
+		c.Compact.CompactThroughput = defaultCompactThroughput
+	}
+	if int64(c.Compact.CompactThroughputBurst) == 0 {
+		c.Compact.CompactThroughputBurst = defaultCompactThroughputBurst
+	}
+	if int64(c.Compact.SnapshotThroughput) == 0 {
+		c.Compact.SnapshotThroughput = defaultSnapshotThroughput
+	}
+	if int64(c.Compact.SnapshotThroughputBurst) == 0 {
+		c.Compact.SnapshotThroughputBurst = defaultSnapshotThroughputBurst
+	}
+	if int64(c.Compact.BackGroundReadThroughput) == 0 {
+		c.Compact.BackGroundReadThroughput = defaultBackGroundReadThroughput
+	}
 }
 
 // Validate validates the configuration hold by c.
