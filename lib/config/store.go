@@ -74,7 +74,7 @@ func GetStoreConfig() *Store {
 	return &storeConfig
 }
 
-// TSStore represents the configuration format for the influxd binary.
+// TSStore represents the configuration format for the ts-store binary.
 type TSStore struct {
 	Common      *Common     `toml:"common"`
 	Data        Store       `toml:"data"`
