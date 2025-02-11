@@ -18,7 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"sort"
+	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -26,9 +26,11 @@ import (
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable"
+	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/resourceallocator"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util"
@@ -66,76 +68,89 @@ func (s *shard) CreateLogicalPlan(ctx context.Context, sources influxql.Sources,
 	if atomic.LoadInt32(&s.cacheClosed) > 0 {
 		return nil, errno.NewError(errno.ErrShardClosed, s.ident.ShardID)
 	}
-	schema.Options().(*query.ProcessorOptions).Sources = sources
-	srcCursors := make([][]comm.KeyCursor, 0, len(sources))
-	cursorsN := 0
-	for _, source := range sources {
-		mm, ok := source.(*influxql.Measurement)
-		if !ok {
-			panic(fmt.Sprintf("%v not a measurement", source.String()))
-		}
 
-		schema.Options().(*query.ProcessorOptions).Name = mm.Name
-
-		cursors, err := s.CreateCursor(ctx, schema) // source
-
-		if err != nil {
-			return nil, err
-		}
-
-		if len(cursors) > 0 {
-			cursorsN += len(cursors)
-			srcCursors = append(srcCursors, cursors)
-		}
+	if len(sources) != 1 {
+		return nil, fmt.Errorf("shard CreateLogicalPlan has only one table")
 	}
 
-	if len(srcCursors) == 0 {
+	mst, ok := sources[0].(*influxql.Measurement)
+	if !ok {
+		return nil, fmt.Errorf("%v not a measurement", sources[0].String())
+	}
+
+	schema.Options().SetSources(sources)
+	schema.Options().SetName(mst.Name)
+
+	info, err := s.CreateCursor(ctx, schema)
+	if err != nil || info == nil {
+		return nil, err
+	}
+
+	if info.IsEmpty() {
 		log.Debug("no data in shard", zap.Uint64("id", s.ident.ShardID))
 		return nil, nil
 	}
-
-	if len(srcCursors) > 1 {
-		return buildMultiSourcePlan(srcCursors, cursorsN)
-	}
-
-	return buildOneSourcePlan(srcCursors[0])
+	return executor.NewLogicalDummyShard(info), nil
 }
 
-func buildOneSourcePlan(cursors []comm.KeyCursor) (executor.LogicalPlan, error) {
-	readers := make([][]interface{}, 0, len(cursors))
-	for _, cur := range cursors {
-		readers = append(readers, []interface{}{cur})
+func (s *shard) ScanWithInvertedIndex(span *tracing.Span, ctx context.Context, sources influxql.Sources, schema *executor.QuerySchema) (tsi.GroupSeries, int64, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	qDuration, _ := ctx.Value(query.QueryDurationKey).(*hybridqp.SelectDuration)
+	if qDuration != nil {
+		start := time.Now()
+		defer func() {
+			end := time.Now()
+			qDuration.Duration("ScanWithInvertedIndex", end.Sub(start).Nanoseconds())
+		}()
+	}
+	if atomic.LoadInt32(&s.cacheClosed) > 0 {
+		return nil, 0, errno.NewError(errno.ErrShardClosed, s.ident.ShardID)
+	}
+	if len(sources) != 1 {
+		return nil, 0, fmt.Errorf("shard ScanWithInvertedIndex has only one table")
+	}
+	mst, ok := sources[0].(*influxql.Measurement)
+	if !ok {
+		return nil, 0, fmt.Errorf("%v not a measurement", sources[0].String())
+	}
+	schema.Options().SetSources(sources)
+	schema.Options().SetName(mst.Name)
+
+	if span != nil {
+		labels := []string{
+			"shard_id", strconv.Itoa(int(s.GetID())),
+			"measurement", schema.Options().OptionsName(),
+			"index_id", strconv.Itoa(int(s.indexBuilder.GetIndexID())),
+		}
+		if schema.Options().GetCondition() != nil {
+			labels = append(labels, "cond", schema.Options().GetCondition().String())
+		}
+		indexSpan := span.StartSpan("ScanWithInvertedIndex").StartPP()
+		indexSpan.SetLabels(labels...)
+		defer indexSpan.Finish()
 	}
 
-	plan := executor.NewLogicalDummyShard(readers)
+	// the query context can be used for index
+	start := time.Now()
+	schema.Options().SetCtx(ctx)
+	result, seriesNum, err := s.Scan(span, schema, resourceallocator.DefaultSeriesAllocateFunc)
+	defer func() {
+		_ = resourceallocator.FreeRes(resourceallocator.SeriesParallelismRes, seriesNum, seriesNum)
+	}()
 
-	return plan, nil
-}
-
-func buildMultiSourcePlan(srcCursors [][]comm.KeyCursor, cursorsN int) (executor.LogicalPlan, error) {
-	sort.Slice(srcCursors, func(i, j int) bool {
-		return srcCursors[i][0].Name() < srcCursors[j][0].Name()
-	})
-	readers := make([][]interface{}, 0, cursorsN/len(srcCursors)+1)
-	for cursorsN > 0 {
-		rCursors := make([]interface{}, 0, len(srcCursors))
-
-		for i := 0; i < len(srcCursors); i++ {
-			if len(srcCursors[i]) > 0 {
-				rCursors = append(rCursors, srcCursors[i][0])
-				srcCursors[i] = srcCursors[i][1:]
-				cursorsN--
-			}
-		}
-
-		if len(rCursors) > 0 {
-			readers = append(readers, rCursors)
-		}
+	if err != nil {
+		s.log.Error("get index result fail", zap.Error(err))
+		return nil, 0, err
 	}
-
-	plan := executor.NewLogicalDummyShard(readers)
-
-	return plan, nil
+	if result == nil {
+		s.log.Debug("get index result empty")
+		return nil, 0, nil
+	}
+	atomic.AddInt64(&statistics.StoreQueryStat.IndexScanRunTimeTotal, time.Since(start).Nanoseconds())
+	atomic.AddInt64(&statistics.StoreQueryStat.IndexScanSeriesNumTotal, seriesNum)
+	return result, seriesNum, nil
 }
 
 func (s *shard) LogicalPlanCost(_ influxql.Sources, _ query.ProcessorOptions) (hybridqp.LogicalPlanCost, error) {

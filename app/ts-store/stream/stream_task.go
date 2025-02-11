@@ -15,10 +15,12 @@
 package stream
 
 import (
+	"sync/atomic"
 	"time"
 
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	streamLib "github.com/openGemini/openGemini/lib/stream"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
@@ -28,18 +30,22 @@ type BaseTask struct {
 	startWindowID int64
 	offset        int
 	// current window start time
+	initTime       time.Time
 	start          time.Time
 	startTimeStamp int64
 	// current window end time
 	end          time.Time
 	endTimeStamp int64
 	maxTimeStamp int64
+	curFlushTime int64
 
 	// metadata, not change
-	src        *meta2.StreamMeasurementInfo
-	des        *meta2.StreamMeasurementInfo
-	info       *meta2.MeasurementInfo
-	fieldCalls []*streamLib.FieldCall
+	src         *meta2.StreamMeasurementInfo
+	des         *meta2.StreamMeasurementInfo
+	info        *meta2.MeasurementInfo
+	fieldCalls  []*streamLib.FieldCall
+	condition   *influxql.BinaryExpr
+	isSelectAll bool
 
 	// chan for process
 	abort        chan struct{}
@@ -49,11 +55,13 @@ type BaseTask struct {
 	indexKeyPool []byte
 
 	// config
-	id        uint64
-	name      string
-	windowNum int64
-	window    time.Duration
-	maxDelay  time.Duration
+	id           uint64
+	name         string
+	dataPath     string
+	windowNum    int64
+	ptNumPerNode uint32
+	window       time.Duration
+	maxDelay     time.Duration
 
 	// tmp data, reuse
 	fieldCallsLen int
@@ -66,4 +74,17 @@ type BaseTask struct {
 	store  Storage
 	Logger Logger
 	cli    MetaClient
+	init   bool
+}
+
+func (s *BaseTask) getCurrentTimestamp() int64 {
+	return atomic.LoadInt64(&s.curFlushTime)
+}
+
+func (s *BaseTask) setInit() {
+	s.init = true
+}
+
+func (s *BaseTask) IsInit() bool {
+	return s.init
 }

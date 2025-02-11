@@ -20,8 +20,9 @@ import (
 	"testing"
 	"time"
 
-	set "github.com/deckarep/golang-set"
+	set "github.com/deckarep/golang-set/v2"
 	"github.com/influxdata/influxdb/models"
+	"github.com/influxdata/influxdb/toml"
 	originql "github.com/influxdata/influxql"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
@@ -141,7 +142,7 @@ func TestTransferLeadership(t *testing.T) {
 
 func TestSnapShot(t *testing.T) {
 	tmpDir := t.TempDir()
-	rds, err := raftlog.Init(tmpDir)
+	rds, err := raftlog.Init(tmpDir, 0)
 	defer rds.Close()
 	entsInit := []raftpb.Entry{{Index: 3, Term: 3}, {Index: 4, Term: 4}, {Index: 5, Term: 5}}
 	rds.SaveEntries(nil, entsInit, nil)
@@ -164,7 +165,7 @@ func TestSnapShot(t *testing.T) {
 
 func TestReplay(t *testing.T) {
 	tmpDir := t.TempDir()
-	rds, err := raftlog.Init(tmpDir)
+	rds, err := raftlog.Init(tmpDir, 0)
 	if err != nil {
 		t.Errorf("Test replay failed, raft disk storage init failed, err is %v", err)
 	}
@@ -173,6 +174,7 @@ func TestReplay(t *testing.T) {
 		Store:    rds,
 		logger:   logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop()),
 	}
+	mockNode.WithLogger(logger.NewLogger(errno.ModuleUnknown))
 	ents := []raftpb.Entry{{Index: 3, Term: 3}, {Index: 4, Term: 4}, {Index: 5, Term: 5}}
 	hardState := &raftpb.HardState{
 		Term:   1,
@@ -224,7 +226,7 @@ func TestInitAndStartNode(t *testing.T) {
 
 func InitAndStartNode(t *testing.T) *RaftNode {
 	tmpDir := t.TempDir()
-	rds, err := raftlog.Init(tmpDir)
+	rds, err := raftlog.Init(tmpDir, 0)
 	if err != nil {
 		t.Errorf("Test replay failed, raft disk storage init failed, err is %v", err)
 	}
@@ -242,7 +244,6 @@ func InitAndStartNode(t *testing.T) *RaftNode {
 		Commit: 5,
 	}
 	err = rds.Save(hardState, ents, nil)
-	defer rds.Close()
 	if err != nil {
 		t.Errorf("raft disk storage save failed")
 	}
@@ -271,9 +272,8 @@ func TestIsLeader(t *testing.T) {
 
 func TestDeleteEntryLog(t *testing.T) {
 	node := InitAndStartNode(t)
-	_, err := node.prepareDeleteEntryLogProposeData(5)
-	require.NoError(t, err)
-	err = node.deleteEntryLog()
+	node.prepareDeleteEntryLogProposeData(5)
+	err := node.deleteEntryLog()
 	require.NoError(t, err)
 }
 
@@ -301,12 +301,102 @@ func TestCheckAllRgMembers(t *testing.T) {
 	node.CheckAllRgMembers()
 }
 
+func TestCheckAllRgMembers2(t *testing.T) {
+	node := &RaftNode{
+		MetaClient: &MockMetaClient{},
+		peers: map[uint32]uint64{
+			0: 1,
+			1: 3,
+		},
+	}
+	node.CheckAllRgMembers()
+}
+
 func TestCommittedDataCErr(t *testing.T) {
 	node := &RaftNode{
 		DataCommittedC: make(map[uint64]chan error),
 	}
 	node.RetCommittedDataC(&raftlog.DataWrapper{}, nil)
 	node.RemoveCommittedDataC(&raftlog.DataWrapper{})
+}
+
+func TestForceDeleteEntryLog(t *testing.T) {
+	tmpDir := t.TempDir()
+	rds, err := raftlog.Init(tmpDir, 0)
+	if err != nil {
+		t.Errorf("Test replay failed, raft disk storage init failed, err is %v", err)
+	}
+	mockTransPeers := make(map[uint32]uint64)
+	mockTransPeers[1] = 3
+	mockPeers := []raft.Peer{
+		{ID: 2}, {ID: 3},
+	}
+	client := &MockMetaClient{}
+	node := StartNode(rds, 1, "db", 1, mockPeers, client, mockTransPeers)
+	node.WithLogger(logger.NewLogger(errno.ModuleUnknown))
+	ents := []raftpb.Entry{{Index: 3, Term: 3}, {Index: 4, Term: 4}, {Index: 5, Term: 5}}
+	hardState := &raftpb.HardState{
+		Term:   1,
+		Vote:   1,
+		Commit: 5,
+	}
+	err = rds.Save(hardState, ents, nil)
+	defer rds.Close()
+	if err != nil {
+		t.Errorf("raft disk storage save failed")
+	}
+	store := config.Store{
+		ClearEntryLogTolerateTime: toml.Duration(1 * time.Second),
+	}
+	node.SetConfState(&raftpb.ConfState{})
+	err = node.InitAndStartNode()
+	config.SetStoreConfig(store)
+	flag, err := node.forceDeleteEntryLog(1)
+	require.False(t, flag)
+
+	time.Sleep(1 * time.Second)
+	flag, err = node.forceDeleteEntryLog(1)
+	require.False(t, flag)
+
+	mockTransPeers[1] = 2
+	node = StartNode(rds, 1, "db", 1, mockPeers, client, mockTransPeers)
+	flag, err = node.forceDeleteEntryLog(1)
+	require.True(t, flag)
+}
+
+func TestGenProposeData(t *testing.T) {
+	tmpDir := t.TempDir()
+	rds, err := raftlog.Init(tmpDir, 0)
+	if err != nil {
+		t.Errorf("Test replay failed, raft disk storage init failed, err is %v", err)
+	}
+	mockTransPeers := make(map[uint32]uint64)
+	mockTransPeers[1] = 3
+	mockPeers := []raft.Peer{
+		{ID: 2}, {ID: 3},
+	}
+	client := &MockMetaClient{}
+	node := StartNode(rds, 1, "db", 1, mockPeers, client, mockTransPeers)
+	node.WithLogger(logger.NewLogger(errno.ModuleUnknown))
+	ents := []raftpb.Entry{{Index: 3, Term: 3}, {Index: 4, Term: 4}, {Index: 5, Term: 5}}
+	hardState := &raftpb.HardState{
+		Term:   1,
+		Vote:   1,
+		Commit: 5,
+	}
+	err = rds.Save(hardState, ents, nil)
+	defer rds.Close()
+	if err != nil {
+		t.Errorf("raft disk storage save failed")
+	}
+
+	node.genProposeData(5, 4)
+}
+
+func TestDeleteEntryLogBySize(t *testing.T) {
+	node := InitAndStartNode(t)
+	err := node.deleteEntryLogBySize()
+	require.NoError(t, err)
 }
 
 type MockMetaClient struct {
@@ -377,10 +467,20 @@ func (client *MockMetaClient) DataNode(id uint64) (*meta2.DataNode, error) {
 	NodeInfo := meta2.NodeInfo{
 		Status: serf.StatusAlive,
 	}
-	node := &meta2.DataNode{
-		NodeInfo: NodeInfo,
+	var node meta2.DataNode
+	NodeInfo2 := meta2.NodeInfo{
+		Status: serf.StatusFailed,
 	}
-	return node, nil
+	if id == 3 {
+		node = meta2.DataNode{
+			NodeInfo: NodeInfo2,
+		}
+	} else {
+		node = meta2.DataNode{
+			NodeInfo: NodeInfo,
+		}
+	}
+	return &node, nil
 }
 func (client *MockMetaClient) DataNodes() ([]meta2.DataNode, error) {
 	return nil, nil
@@ -473,7 +573,7 @@ func (client *MockMetaClient) Schema(database string, retentionPolicy string, ms
 func (client *MockMetaClient) GetMeasurements(m *influxql.Measurement) ([]*meta2.MeasurementInfo, error) {
 	return nil, nil
 }
-func (client *MockMetaClient) TagKeys(database string) map[string]set.Set {
+func (client *MockMetaClient) TagKeys(database string) map[string]set.Set[string] {
 	return nil
 }
 func (client *MockMetaClient) FieldKeys(database string, ms influxql.Measurements) (map[string]map[string]int32, error) {
@@ -509,7 +609,7 @@ func (client *MockMetaClient) ShowCluster(nodeType string, ID uint64) (models.Ro
 func (client *MockMetaClient) ShowClusterWithCondition(nodeType string, ID uint64) (models.Rows, error) {
 	return nil, nil
 }
-func (client *MockMetaClient) GetAliveShards(database string, sgi *meta2.ShardGroupInfo) []int {
+func (client *MockMetaClient) GetAliveShards(database string, sgi *meta2.ShardGroupInfo, isRead bool) []int {
 	return nil
 }
 
@@ -552,4 +652,60 @@ func (mmc *MockMetaClient) GetAllMst(dbName string) []string {
 	msts = append(msts, "cpu")
 	msts = append(msts, "mem")
 	return msts
+}
+
+func TestSendRaftMessages1(t *testing.T) {
+	tmpDir := t.TempDir()
+	rds, err := raftlog.Init(tmpDir, 0)
+	if err != nil {
+		t.Errorf("Test replay failed, raft disk storage init failed, err is %v", err)
+	}
+	mockTransPeers := make(map[uint32]uint64)
+	mockTransPeers[1] = 3
+	mockPeers := []raft.Peer{
+		{ID: 2}, {ID: 3},
+	}
+	client := &MockMetaClient{}
+	node := StartNode(rds, 1, "db", 1, mockPeers, client, mockTransPeers)
+	node.WithLogger(logger.NewLogger(errno.ModuleUnknown))
+	ents := []raftpb.Entry{{Index: 3, Term: 3}, {Index: 4, Term: 4}, {Index: 5, Term: 5}}
+	hardState := &raftpb.HardState{
+		Term:   1,
+		Vote:   1,
+		Commit: 5,
+	}
+	err = rds.Save(hardState, ents, nil)
+	defer rds.Close()
+	if err != nil {
+		t.Errorf("raft disk storage save failed")
+	}
+	store := config.Store{
+		ClearEntryLogTolerateTime: toml.Duration(1 * time.Second),
+	}
+	node.SetConfState(&raftpb.ConfState{})
+	node.InitAndStartNode()
+	config.SetStoreConfig(store)
+	node.Messages <- &raftpb.Message{}
+	time.Sleep(2 * time.Second)
+	node.cancelFn()
+	time.Sleep(2 * time.Second)
+}
+
+func TestSendRaftMessages2(t *testing.T) {
+	n := &RaftNode{Messages: make(chan *raftpb.Message, 1), ctx: context.Background(), logger: logger.NewLogger(errno.ModuleStorageEngine)}
+	go n.sendRaftMessages()
+	close(n.Messages)
+	time.Sleep(2 * time.Second)
+}
+
+func TestPublishEntries(t *testing.T) {
+	n := &RaftNode{ctx: context.Background(), logger: logger.NewLogger(errno.ModuleStorageEngine), commitC: make(chan *Commit)}
+	ctx := context.Background()
+	cctx, cancelFn := context.WithCancel(ctx)
+	n.cancelFn = cancelFn
+	n.ctx = cctx
+	n.cancelFn()
+	if re := n.PublishEntries([]raftpb.Entry{raftpb.Entry{Index: 1, Data: []byte{'a'}}}); re != false {
+		t.Fatal("TestPublishEntries err")
+	}
 }

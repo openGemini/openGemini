@@ -21,7 +21,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/influxdata/influxdb/pkg/testing/assert"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
@@ -29,8 +28,8 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
-	"github.com/openGemini/openGemini/lib/util/lifted/vm/uint64set"
 	"github.com/savsgio/dictpool"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -589,8 +588,7 @@ func TestSeriesByExprIterator_TagArray(t *testing.T) {
 		is := index.getIndexSearch()
 		defer index.putIndexSearch(is)
 
-		var tsids *uint64set.Set
-		iterator, err := is.seriesByExprIterator(name, expr, &tsids, false)
+		iterator, err := is.measurementSeriesByExprIterator(name, expr, false, 0, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1415,8 +1413,7 @@ func TestSearchSeries_With_TagArray_By_MultiTagAnd(t *testing.T) {
 		is := index.getIndexSearch()
 		defer index.putIndexSearch(is)
 
-		var tsids *uint64set.Set
-		iterator, err := is.seriesByExprIterator(name, expr, &tsids, false)
+		iterator, err := is.measurementSeriesByExprIterator(name, expr, false, 0, false)
 		if err != nil {
 			t.Fatal(err)
 		}

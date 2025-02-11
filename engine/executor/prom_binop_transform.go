@@ -97,6 +97,9 @@ type BinOpTransform struct {
 	IncludeKeys              []string // group_left/group_right(IncludeKeys)
 	ReturnBool               bool
 	NilMst                   influxql.NilMstState
+	onSideExpr               influxql.Expr
+	exprLoc                  int
+	oneSideValue             float64
 
 	primaryLoc        int
 	secondaryLoc      int
@@ -134,13 +137,16 @@ func (c *BinOpTransformCreator) Create(plan LogicalPlan, _ *query.ProcessorOptio
 	if !ok {
 		return nil, fmt.Errorf("logicalplan isnot binOp")
 	}
-	p, err := NewBinOpTransform(inRowDataTypes, plan.RowDataType(), plan.Schema().(*QuerySchema), binOp.Para)
+	p, err := NewBinOpTransform(inRowDataTypes, plan.RowDataType(), plan.Schema().(*QuerySchema), binOp.Para, binOp.lExpr, binOp.rExpr)
 	return p, err
 }
 
 var _ = RegistryTransformCreator(&LogicalBinOp{}, &BinOpTransformCreator{})
 
-func NewBinOpTransform(inRowDataTypes []hybridqp.RowDataType, outRowDataType hybridqp.RowDataType, schema *QuerySchema, para *influxql.BinOp) (*BinOpTransform, error) {
+func NewBinOpTransform(inRowDataTypes []hybridqp.RowDataType, outRowDataType hybridqp.RowDataType, schema *QuerySchema, para *influxql.BinOp, lExpr, rExpr influxql.Expr) (*BinOpTransform, error) {
+	if (lExpr != nil || rExpr != nil) && len(inRowDataTypes) > 1 {
+		return nil, fmt.Errorf("binOpTransform input rt err")
+	}
 	trans := &BinOpTransform{
 		output:            NewChunkPort(outRowDataType),
 		chunkPool:         NewCircularChunkPool(CircularChunkNum, NewChunkBuilder(outRowDataType)),
@@ -163,11 +169,11 @@ func NewBinOpTransform(inRowDataTypes []hybridqp.RowDataType, outRowDataType hyb
 		trans.nextChunksCloseOnce = append(trans.nextChunksCloseOnce, sync.Once{})
 	}
 	trans.outputChunk = trans.chunkPool.GetChunk()
-	trans.initMatchType(para)
-	return trans, nil
+	err := trans.initMatchType(para, lExpr, rExpr)
+	return trans, err
 }
 
-func (trans *BinOpTransform) initMatchType(para *influxql.BinOp) {
+func (trans *BinOpTransform) initMatchType(para *influxql.BinOp, lExpr, rExpr influxql.Expr) error {
 	trans.matchType = para.MatchCard
 	trans.OpType = para.OpType
 	trans.On = para.On
@@ -194,6 +200,15 @@ func (trans *BinOpTransform) initMatchType(para *influxql.BinOp) {
 	} else {
 		trans.computeResultTags = trans.manyComputeResultTags
 	}
+	if lExpr != nil {
+		trans.onSideExpr = lExpr
+		trans.exprLoc = 0
+		return trans.initOneSideExpr()
+	} else if rExpr != nil {
+		trans.onSideExpr = rExpr
+		trans.exprLoc = 1
+		return trans.initOneSideExpr()
+	}
 	if trans.OpType == parser.LAND {
 		trans.BinOpHelper = trans.BinOpHelperConditionSingle
 		trans.skipFlag = false
@@ -207,6 +222,31 @@ func (trans *BinOpTransform) initMatchType(para *influxql.BinOp) {
 		trans.BinOpHelper = trans.BinOpHelperOperator
 		trans.initComputeFn()
 	}
+	return nil
+}
+
+func (trans *BinOpTransform) initOneSideExpr() error {
+	valuer := influxql.ValuerEval{
+		Valuer: influxql.MultiValuer(
+			PromTimeValuer{},
+		),
+		IntegerFloatDivision: true,
+	}
+	var ok bool
+	trans.oneSideValue, ok = valuer.Eval(trans.onSideExpr).(float64)
+	if !ok {
+		return fmt.Errorf("one size expr eval unsupported")
+	}
+	if trans.OpType == parser.LAND {
+		trans.BinOpHelper = trans.BinOpHelperConditionSingleExpr
+		trans.skipFlag = false
+	} else if trans.OpType == parser.LUNLESS {
+		trans.BinOpHelper = trans.BinOpHelperConditionSingleExpr
+		trans.skipFlag = true
+	} else {
+		return fmt.Errorf("unsupported")
+	}
+	return nil
 }
 
 func (trans *BinOpTransform) initComputeFn() {
@@ -235,6 +275,8 @@ func (trans *BinOpTransform) initComputeFn() {
 		trans.computeValue = BinOpGTE
 	case parser.LTE:
 		trans.computeValue = BinOpLTE
+	case parser.ATAN2:
+		trans.computeValue = BinOpATAN2
 	default:
 		panic(fmt.Errorf("operator %q not allowed", trans.OpType))
 	}
@@ -298,7 +340,7 @@ func (trans *BinOpTransform) Work(ctx context.Context) error {
 
 	errs := &trans.errs
 
-	if trans.NilMst == influxql.NoNilMst {
+	if trans.NilMst == influxql.NoNilMst && trans.onSideExpr == nil {
 		errs.Init(3, trans.Close)
 		go trans.runnable(ctx, errs, 0)
 		go trans.runnable(ctx, errs, 1)
@@ -321,7 +363,9 @@ func (trans *BinOpTransform) SendChunk() {
 func (trans *BinOpTransform) closeNextChunks() {
 	if trans.NilMst == influxql.NoNilMst {
 		trans.closeNextChunk(0)
-		trans.closeNextChunk(1)
+		if trans.onSideExpr == nil {
+			trans.closeNextChunk(1)
+		}
 	} else {
 		trans.closeNextChunk(0)
 	}
@@ -443,7 +487,6 @@ func (trans *BinOpTransform) AddResult(secondaryChunk Chunk) error {
 	var ok bool
 	var primaryGroups *GroupLocs
 	var err error
-	trans.preTags = ""
 	tags := secondaryChunk.Tags()
 	for i := range tags {
 		matchTags, tagsKeys, tagValues := trans.computeMatchTags(tags[i])
@@ -582,7 +625,7 @@ func BinOpPOW(lVal, rVal float64) (float64, bool) {
 }
 
 func BinOpMOD(lVal, rVal float64) (float64, bool) {
-	return math.Pow(lVal, rVal), true
+	return math.Mod(lVal, rVal), true
 }
 
 func BinOpEQLC(lVal, rVal float64) (float64, bool) {
@@ -607,6 +650,10 @@ func BinOpGTE(lVal, rVal float64) (float64, bool) {
 
 func BinOpLTE(lVal, rVal float64) (float64, bool) {
 	return lVal, lVal <= rVal
+}
+
+func BinOpATAN2(lVal, rVal float64) (float64, bool) {
+	return math.Atan2(lVal, rVal), true
 }
 
 func (trans *BinOpTransform) addOutputVal(t int64, v float64) {
@@ -790,6 +837,7 @@ func (trans *BinOpTransform) BinOpHelperOperator(ctx context.Context, errs *errn
 		}
 		trans.nextChunks[trans.primaryLoc] <- signal
 	}
+	trans.preTags = ""
 
 	// 2. add result
 	for {
@@ -807,6 +855,63 @@ func (trans *BinOpTransform) BinOpHelperOperator(ctx context.Context, errs *errn
 	if trans.outputChunk.Len() > 0 {
 		trans.output.State <- trans.outputChunk
 	}
+}
+
+func (trans *BinOpTransform) BinOpHelperConditionSingleExpr(ctx context.Context, errs *errno.Errs) {
+	defer func() {
+		trans.closeNextChunks()
+		if e := recover(); e != nil {
+			err := errno.NewError(errno.RecoverPanic, e)
+			trans.streamBinOpLogger.Error(err.Error(), zap.String("query", "BinOpTransform"),
+				zap.Uint64("query_id", trans.opt.QueryId))
+			errs.Dispatch(err)
+		} else {
+			errs.Dispatch(nil)
+		}
+	}()
+	// 1. build PrimaryMapSimple by right
+	if trans.exprLoc == 1 {
+		// 1.1 build primaryMap from vector(1)
+		trans.primaryMap[""] = nil
+	} else {
+		// 1.2 build primaryMap from mst
+		for {
+			<-trans.inputSignals[0]
+			if trans.bufChunks[0] == nil {
+				break
+			}
+			trans.addPrimaryMapSimple(trans.bufChunks[0])
+			trans.nextChunks[0] <- signal
+		}
+	}
+	trans.preTags = ""
+
+	// 2. add result by left
+	if trans.exprLoc == 0 {
+		// 2.1 add result from vector(1)
+		if _, ok := trans.primaryMap[""]; ok != trans.skipFlag {
+			trans.computeMatchResultSimpleExpr()
+		}
+	} else {
+		// 2.2 add result from mst
+		for {
+			<-trans.inputSignals[0]
+			if trans.bufChunks[0] == nil {
+				break
+			}
+			trans.AddResultSimple(trans.bufChunks[0])
+			trans.nextChunks[0] <- signal
+		}
+	}
+	if trans.outputChunk.Len() > 0 {
+		trans.output.State <- trans.outputChunk
+	}
+}
+
+func (trans *BinOpTransform) computeMatchResultSimpleExpr() {
+	trans.outputChunk.AddTagAndIndex(ChunkTags{}, trans.outputChunk.Len())
+	trans.addOutputVal(trans.opt.StartTime, trans.oneSideValue)
+	trans.SendChunk()
 }
 
 func (trans *BinOpTransform) BinOpHelperConditionSingle(ctx context.Context, errs *errno.Errs) {

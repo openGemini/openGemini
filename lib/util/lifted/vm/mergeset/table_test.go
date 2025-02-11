@@ -10,8 +10,8 @@ import (
 	"testing"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
-	"github.com/influxdata/influxdb/pkg/testing/assert"
 	"github.com/openGemini/openGemini/lib/fileops"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestTableOpenClose(t *testing.T) {

@@ -117,8 +117,9 @@ func (p *InsertProcessor) processWriteStreamPointsRequest(w spdy.Responser, msg 
 	ww := pointsdecoder.GetDecoderWork()
 	ww.SetReqBuf(msg.Points())
 	ww.SetStreamVars(msg.StreamVars())
+	ww.Ref()
 	err, inUse := WriteStreamPoints(ww, ww.GetLogger(), p.store, p.stream)
-	if !inUse {
+	if err != nil || !inUse || ww.UnRef() == 0 {
 		pointsdecoder.PutDecoderWork(ww)
 	}
 
@@ -148,7 +149,6 @@ func (p *RaftMsgProcessor) Handle(w spdy.Responser, data interface{}) error {
 	msg, ok := data.(*netstorage.RaftMsgMessage)
 	if !ok {
 		return executor.NewInvalidTypeError("*netstorage.RaftMsgMessage", data)
-
 	}
 
 	h := handler.NewHandler(msg.Typ)

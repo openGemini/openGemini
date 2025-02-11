@@ -1090,18 +1090,20 @@ func (rec *Record) ResetWithSchema(schema Schemas) {
 }
 
 func (rec *Record) addColumn(f *Field, rowNum int) {
-	newField := Field{Name: f.Name, Type: f.Type}
-	newCol := &ColVal{
-		NilCount: rowNum,
-		Len:      rowNum,
-		Bitmap:   make([]byte, util.DivisionCeil(rowNum, 8)),
-	}
-	if f.Type == influx.Field_Type_String {
-		newCol.Offset = make([]uint32, rowNum)
-	}
+	n := rec.Len()
+	rec.ReserveSchemaAndColVal(1)
+	rec.Schema[n].Name = f.Name
+	rec.Schema[n].Type = f.Type
 
-	rec.Schema = append(rec.Schema, newField)
-	rec.ColVals = append(rec.ColVals, *newCol)
+	col := &rec.ColVals[n]
+	col.NilCount = rowNum
+	col.Len = rowNum
+	col.BitMapOffset = 0
+	col.FillBitmap(0)
+	col.Val = col.Val[:0]
+	if f.Type == influx.Field_Type_String {
+		col.Offset = FillZeroUint32(col.Offset, rowNum)
+	}
 }
 
 func (rec *Record) PadRecord(other *Record) {

@@ -19,6 +19,7 @@ import (
 	"math"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -44,12 +45,61 @@ func TestStorageTerm(t *testing.T) {
 		{"ErrUnavailable", 6, raft.ErrUnavailable, 0, false},
 	}
 
-	rds, err := Init(tmpDir)
+	rds, err := Init(tmpDir, 0)
 	require.NoError(t, err)
 	defer rds.Close()
 	err = rds.Save(nil, ents, nil)
 	require.NoError(t, err)
 
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			defer func() {
+				if r := recover(); r != nil {
+					if !tt.wpanic {
+						t.Errorf("%d: panic = %v, want %v", i, true, tt.wpanic)
+					}
+				}
+			}()
+
+			term, err := rds.Term(tt.i)
+			if err != tt.werr {
+				t.Errorf("#%d: err = %v, want %v", i, err, tt.werr)
+			}
+			if term != tt.wterm {
+				t.Errorf("#%d: term = %d, want %d", i, term, tt.wterm)
+			}
+		})
+	}
+}
+
+func TestStorageTerm2(t *testing.T) {
+	tmpDir := t.TempDir()
+	ents := []raftpb.Entry{{Index: 3, Term: 3}, {Index: 4, Term: 4}, {Index: 5, Term: 5}}
+
+	sp := &raftpb.Snapshot{
+		Data: []byte("foo"),
+		Metadata: raftpb.SnapshotMetadata{
+			Term:  7,
+			Index: 12,
+		},
+	}
+	rds, err := Init(tmpDir, 0)
+	require.NoError(t, err)
+	defer rds.Close()
+	err = rds.Save(nil, ents, sp)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name string
+		i    uint64
+
+		werr   error
+		wterm  uint64
+		wpanic bool
+	}{
+		{"ErrCompacted", 11, raft.ErrCompacted, 0, false},
+		{"Normal3", 12, nil, 7, false},
+	}
 	for i, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			defer func() {
@@ -97,7 +147,7 @@ func TestStorageEntries(t *testing.T) {
 		{"Normal_all", 4, 7, uint64(ents[1].Size() + ents[2].Size() + ents[3].Size()), nil, []raftpb.Entry{{Index: 4, Term: 4}, {Index: 5, Term: 5}, {Index: 6, Term: 6}}},
 	}
 
-	rds, err := Init(tmpDir)
+	rds, err := Init(tmpDir, 0)
 	require.NoError(t, err)
 	defer rds.Close()
 	err = rds.Save(nil, ents, nil)
@@ -114,7 +164,7 @@ func TestStorageEntries(t *testing.T) {
 
 func TestStorageLastIndex(t *testing.T) {
 	tmpDir := t.TempDir()
-	rds, err := Init(tmpDir)
+	rds, err := Init(tmpDir, 0)
 	require.NoError(t, err)
 	defer rds.Close()
 
@@ -135,7 +185,7 @@ func TestStorageLastIndex(t *testing.T) {
 
 func TestStorageFirstIndex(t *testing.T) {
 	tmpDir := t.TempDir()
-	rds, err := Init(tmpDir)
+	rds, err := Init(tmpDir, 0)
 	require.NoError(t, err)
 	defer rds.Close()
 
@@ -194,7 +244,7 @@ func TestStorageAppend(t *testing.T) {
 	for i, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tmpDir := t.TempDir()
-			rds, err := Init(tmpDir)
+			rds, err := Init(tmpDir, 0)
 			require.NoError(t, err)
 			defer rds.Close()
 			err = rds.Save(nil, ents, nil)
@@ -281,7 +331,7 @@ func TestStorageBig(t *testing.T) {
 	test := func(t *testing.T) {
 		dir := t.TempDir()
 
-		rds, err := Init(dir)
+		rds, err := Init(dir, 0)
 		require.NoError(t, err)
 		defer rds.Close()
 
@@ -394,7 +444,7 @@ func TestStorageBig(t *testing.T) {
 			}
 		}
 
-		ks, err := Init(dir)
+		ks, err := Init(dir, 0)
 		require.NoError(t, err)
 		defer ks.Close()
 		ents = ks.entryLog.allEntries(start, math.MaxInt64, math.MaxInt64)
@@ -417,7 +467,7 @@ func getEntryForData(index uint64) raftpb.Entry {
 
 func TestRaftDiskStorage_InitialState(t *testing.T) {
 	temp := t.TempDir()
-	rds, err := Init(temp)
+	rds, err := Init(temp, 0)
 	require.NoError(t, err)
 	defer rds.Close()
 
@@ -433,7 +483,7 @@ func TestRaftDiskStorage_InitialState(t *testing.T) {
 
 func TestRaftDiskStorage_FirstIndex_LastIndex(t *testing.T) {
 	temp := t.TempDir()
-	rds, err := Init(temp)
+	rds, err := Init(temp, 0)
 	require.NoError(t, err)
 	defer rds.Close()
 
@@ -452,7 +502,7 @@ func TestRaftDiskStorage_FirstIndex_LastIndex(t *testing.T) {
 
 func TestRaftDiskStorage_AddEntries(t *testing.T) {
 	temp := t.TempDir()
-	rds, err := Init(temp)
+	rds, err := Init(temp, 0)
 	require.NoError(t, err)
 	defer rds.Close()
 
@@ -485,4 +535,70 @@ func TestRaftDiskStorage_AddEntries(t *testing.T) {
 	idx, err = rds.LastIndex()
 	require.NoError(t, err)
 	require.Equal(t, uint64(5), idx)
+}
+
+func TestStorageEntrySize(t *testing.T) {
+	temp := t.TempDir()
+	rds, err := Init(temp, 0)
+	require.NoError(t, err)
+	defer rds.Close()
+
+	entries := []raftpb.Entry{getEntryForData(1), getEntryForData(2), getEntryForData(3)}
+	err = rds.Save(&raftpb.HardState{}, entries, &raftpb.Snapshot{})
+
+	size := rds.EntrySize()
+	require.Equal(t, 1048615, size)
+
+	ent := raftpb.Entry{
+		Term: 1,
+		Type: raftpb.EntryNormal,
+	}
+
+	addEntries := func(start, end uint64) {
+		t.Logf("adding entries: %d -> %d\n", start, end)
+		for idx := start; idx <= end; idx++ {
+			ent.Index = idx
+			err = rds.entryLog.AddEntries([]raftpb.Entry{ent})
+			require.NoError(t, err)
+			li, err := rds.LastIndex()
+			require.NoError(t, err)
+			require.Equal(t, idx, li)
+		}
+	}
+
+	N := uint64(100000) // 3 times maxNumEntries
+	addEntries(1, N)
+
+	size = rds.EntrySize()
+	require.Equal(t, 4594304, size)
+}
+
+func TestStorageBackSync(t *testing.T) {
+	temp := t.TempDir()
+	rds, err := Init(temp, 1)
+	require.NoError(t, err)
+	defer rds.Close()
+
+	rds.firstSync = false
+	rds.TrySync()
+	time.Sleep(1 * time.Second)
+
+	rds.syncTaskCount.Store(1)
+	err = rds.TrySync()
+	require.NoError(t, err)
+}
+
+func TestStorageBackSyncErr(t *testing.T) {
+	temp := t.TempDir()
+	rds, err := Init(temp, 0)
+	require.NoError(t, err)
+
+	rds.entryLog.current.entry.Close()
+	if err = rds.TrySync(); err != nil {
+		t.Fatal("TestStorageBackSyncErr fail")
+	}
+	rds.meta.meta.Close()
+	if err = rds.TrySync(); err != nil {
+		t.Fatal("TestStorageBackSyncErr fail")
+	}
 }

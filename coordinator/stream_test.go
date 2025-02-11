@@ -401,7 +401,7 @@ func Benchmark_Map_String_Clone(t *testing.B) {
 		t.StartTimer()
 		for k := 0; k < repeat; k++ {
 			for j := 0; j < size; j++ {
-				m[strings2.Clone(keyTemp+strconv.Itoa(j))] = j
+				m[strings.Clone(keyTemp+strconv.Itoa(j))] = j
 			}
 		}
 		t.StopTimer()

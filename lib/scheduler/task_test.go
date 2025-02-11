@@ -70,16 +70,14 @@ func TestTaskExecuteBatch_CloseAll(t *testing.T) {
 	signal := make(chan struct{})
 	lm := limiter.NewFixed(2)
 
-	sch := scheduler.NewTaskScheduler(func(signal chan struct{}, onClose func()) {
-
-	}, lm)
+	sch := scheduler.NewTaskScheduler(func(signal chan struct{}, onClose func()) {}, lm)
 
 	var tasks []scheduler.Task
 	var n uint64
-	taskNum := 1000
+	taskNum := 2000
 
 	for i := 0; i < taskNum; i++ {
-		task := &CustomTask{n: &n, skip: i%2 == 0}
+		task := &CustomTask{n: &n, skip: false}
 		task.Init(fmt.Sprintf("task_%d", i))
 		tasks = append(tasks, task)
 	}
@@ -88,6 +86,8 @@ func TestTaskExecuteBatch_CloseAll(t *testing.T) {
 	time.Sleep(time.Second / 10)
 	sch.CloseAll()
 	sch.CloseAll()
+
+	time.Sleep(time.Second)
 	sch.Wait()
 	require.True(t, n < uint64(taskNum))
 }

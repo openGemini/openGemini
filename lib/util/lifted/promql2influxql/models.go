@@ -1,6 +1,16 @@
 package promql2influxql
 
-import "time"
+import (
+	"bytes"
+	"fmt"
+	"io"
+	"time"
+
+	jsoniter "github.com/json-iterator/go"
+	"github.com/prometheus/prometheus/promql"
+	"github.com/prometheus/prometheus/promql/parser"
+	"github.com/vmihailenco/msgpack/v5"
+)
 
 // DataType indicates a PromCommand is for table view or for graph view in data visualization platform like Grafana
 // Basically,
@@ -15,6 +25,7 @@ const (
 	LABEL_KEYS_DATA
 	LABEL_VALUES_DATA
 	SERIES_DATA
+	META_DATA
 	UNKNOWN_DATA
 )
 
@@ -24,6 +35,10 @@ type PromCommand struct {
 	Database        string
 	RetentionPolicy string
 	Measurement     string
+	// Exact is used to indicate whether the query is based on the exact time range of metadata.
+	// For exact query, chunk meta time is used for matching.
+	// Otherwise, index duration is used for matching.
+	Exact bool
 	// Start and End attributes are mainly used for PromQL currently
 	// as it doesn't support time-bounding query expression itself
 	Start      *time.Time
@@ -53,12 +68,195 @@ type PromCommand struct {
 	LabelName string
 }
 
-// RunResult wraps query result and possible error
-type PromResult struct {
-	ResultType string      `json:"resultType,omitempty"`
-	Result     interface{} `json:"result,omitempty"`
+func (c *PromCommand) WithStartEnd(start, end int64) *PromCommand {
+	new := *c
+	startTime := time.UnixMilli(start)
+	endTime := time.UnixMilli(end)
+	new.Start = &startTime
+	new.End = &endTime
+	return &new
 }
 
-func NewPromResult(result interface{}, resultType string) *PromResult {
-	return &PromResult{Result: result, ResultType: resultType}
+type Response interface {
+	IsPromResponse()
+}
+
+func (p *PromResponse) IsPromResponse()      {}
+func (p *PromQueryResponse) IsPromResponse() {}
+
+var json2 = jsoniter.ConfigCompatibleWithStandardLibrary
+
+// Response represents a list of statement results.
+type PromResponse struct {
+	Status    string      `json:"status"`
+	Data      interface{} `json:"data,omitempty"`
+	ErrorType string      `json:"errorType,omitempty"`
+	Error     string      `json:"error,omitempty"`
+}
+
+type PromQueryResponse struct {
+	Status    string    `json:"status"`
+	Data      *PromData `json:"data,omitempty"`
+	ErrorType string    `json:"errorType,omitempty"`
+	Error     string    `json:"error,omitempty"`
+}
+
+type PromData struct {
+	ResultType string `json:"resultType,omitempty"`
+	// Types that are valid to be assigned to Result:
+	//
+	//	*PromDataVector
+	//	*PromDataMatrix
+	//	*PromDataScalar
+	//	*PromDataString
+	Result PromDataResult `json:"result,omitempty"`
+}
+
+var _ msgpack.Marshaler = (*PromData)(nil)
+
+func (p *PromData) MarshalMsgpack() ([]byte, error) {
+	var b bytes.Buffer
+	enc := msgpack.NewEncoder(&b)
+
+	if err := enc.EncodeMapLen(2); err != nil {
+		return nil, err
+	}
+
+	if err := enc.Encode("ResultType"); err != nil {
+		return nil, err
+	}
+	if err := enc.Encode(p.ResultType); err != nil {
+		return nil, err
+	}
+
+	if err := enc.Encode("Result"); err != nil {
+		return nil, err
+	}
+	if err := enc.Encode(p.Result); err != nil {
+		return nil, err
+	}
+	return b.Bytes(), nil
+}
+
+var _ msgpack.Unmarshaler = (*PromData)(nil)
+
+func (p *PromData) UnmarshalMsgpack(b []byte) error {
+	dec := msgpack.NewDecoder(bytes.NewReader(b))
+
+	if _, err := dec.DecodeMapLen(); err != nil {
+		return err
+	}
+	for {
+		key, err := dec.DecodeString()
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return err
+		}
+
+		switch key {
+		case "ResultType":
+			p.ResultType, err = dec.DecodeString()
+			if err != nil {
+				return err
+			}
+		case "Result":
+			switch p.ResultType {
+			case string(parser.ValueTypeMatrix):
+				var dataValue PromDataMatrix
+				if err := dec.Decode(&dataValue); err != nil {
+					return err
+				}
+				p.Result = &dataValue
+			case string(parser.ValueTypeVector):
+				var dataValue PromDataVector
+				if err := dec.Decode(&dataValue); err != nil {
+					return err
+				}
+				p.Result = &dataValue
+			case string(parser.ValueTypeScalar):
+				var dataValue PromDataScalar
+				if err := dec.Decode(&dataValue); err != nil {
+					return err
+				}
+				p.Result = &dataValue
+			case string(parser.ValueTypeString):
+				var dataValue PromDataString
+				if err := dec.Decode(&dataValue); err != nil {
+					return err
+				}
+				p.Result = &dataValue
+			default:
+				return fmt.Errorf("not expected type,%v", p.ResultType)
+			}
+
+		}
+	}
+	return nil
+}
+
+func (p *PromData) GetMatrix() *promql.Matrix {
+	if m, ok := p.Result.(*PromDataMatrix); ok {
+		return m.Matrix
+	}
+	return nil
+}
+
+func (p *PromData) GetVector() *promql.Vector {
+	if m, ok := p.Result.(*PromDataVector); ok {
+		return m.Vector
+	}
+	return nil
+}
+
+type PromDataResult interface {
+	PromDataResult()
+}
+
+type PromDataVector struct {
+	Vector *promql.Vector `json:"vector,omitempty"`
+}
+type PromDataMatrix struct {
+	Matrix *promql.Matrix `json:"matrix,omitempty"`
+}
+type PromDataScalar struct {
+	Scalar *promql.Scalar `json:"scalar,omitempty"`
+}
+type PromDataString struct {
+	String *promql.String `json:"string,omitempty"`
+}
+
+func (*PromDataVector) PromDataResult() {}
+func (*PromDataMatrix) PromDataResult() {}
+func (*PromDataScalar) PromDataResult() {}
+func (*PromDataString) PromDataResult() {}
+
+func (p PromDataVector) MarshalJSON() ([]byte, error) {
+	if p.Vector == nil {
+		return jsoniter.Marshal([]promql.Sample{})
+	}
+	return jsoniter.Marshal(p.Vector)
+}
+func (p PromDataMatrix) MarshalJSON() ([]byte, error) {
+	if p.Matrix == nil {
+		return jsoniter.Marshal([]promql.Series{})
+	}
+	return jsoniter.Marshal(p.Matrix)
+}
+func (p PromDataScalar) MarshalJSON() ([]byte, error) {
+	if p.Scalar == nil {
+		return jsoniter.Marshal([]interface{}{})
+	}
+	return jsoniter.Marshal(p.Scalar)
+}
+func (p PromDataString) MarshalJSON() ([]byte, error) {
+	if p.String == nil {
+		return jsoniter.Marshal([]interface{}{})
+	}
+	return jsoniter.Marshal(p.String)
+}
+
+func NewPromData(result PromDataResult, resultType string) *PromData {
+	return &PromData{Result: result, ResultType: resultType}
 }

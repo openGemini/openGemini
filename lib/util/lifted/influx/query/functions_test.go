@@ -4,9 +4,9 @@ import (
 	"math"
 	"testing"
 
-	"github.com/influxdata/influxdb/pkg/testing/assert"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestFunctionTypeMapper(t *testing.T) {
@@ -294,6 +294,52 @@ func TestTrigFunc(t *testing.T) {
 		inputName := "atanh"
 		inputArgs := []float64{-0.5, 1, 0, 0.5, float64(1) / float64(3)}
 		expects := []interface{}{-0.5493061443340548, math.Inf(+1), float64(0), 0.5493061443340548, 0.34657359027997264}
+		outputs := make([]interface{}, 0, len(expects))
+		for _, arg := range inputArgs {
+			if out, ok := mathValuer.Call(inputName, []interface{}{arg}); ok {
+				outputs = append(outputs, out)
+			}
+		}
+		assert.Equal(t, outputs, expects)
+	})
+}
+
+func TestSgn(t *testing.T) {
+	mathValuer := query.MathValuer{}
+	inputName := "sgn"
+	t.Run("1", func(t *testing.T) {
+		inputArgs := []float64{180, 120, 60, 0, -60}
+		expects := []interface{}{float64(1), float64(1), float64(1), float64(0), float64(-1)}
+		outputs := make([]interface{}, 0, len(expects))
+		for _, arg := range inputArgs {
+			if out, ok := mathValuer.Call(inputName, []interface{}{arg}); ok {
+				outputs = append(outputs, out)
+			}
+		}
+		assert.Equal(t, outputs, expects)
+	})
+	t.Run("2", func(t *testing.T) {
+		inputArgs := []float64{360, 720, 30, 0, 60}
+		expects := []interface{}{float64(1), float64(1), float64(1), float64(0), float64(1)}
+		outputs := make([]interface{}, 0, len(expects))
+		for _, arg := range inputArgs {
+			if out, ok := mathValuer.Call(inputName, []interface{}{arg}); ok {
+				outputs = append(outputs, out)
+			}
+		}
+		assert.Equal(t, outputs, expects)
+	})
+}
+
+func TestAcosh(t *testing.T) {
+	mathValuer := query.MathValuer{}
+	inputName := "acosh"
+	t.Run("1", func(t *testing.T) {
+		inputArgs := []float64{2, 3, 4, 5, 1}
+		expects := make([]interface{}, 0, len(inputArgs))
+		for _, input := range inputArgs {
+			expects = append(expects, math.Acosh(input))
+		}
 		outputs := make([]interface{}, 0, len(expects))
 		for _, arg := range inputArgs {
 			if out, ok := mathValuer.Call(inputName, []interface{}{arg}); ok {

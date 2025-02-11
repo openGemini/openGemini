@@ -24,45 +24,11 @@ import (
 	"go.uber.org/zap"
 )
 
-type TagSets struct {
-	//   map[tag key][tag value]
-	sets       map[string]map[string]struct{}
-	totalCount int
-}
-
-func NewTagSets() *TagSets {
-	return &TagSets{
-		sets: make(map[string]map[string]struct{}),
-	}
-}
-
-func (s *TagSets) Add(key, val string) {
-	if valueSet, keyExist := s.sets[key]; !keyExist {
-		s.sets[key] = map[string]struct{}{val: {}}
-		s.totalCount++
-	} else if _, valueExist := valueSet[val]; !valueExist {
-		valueSet[val] = struct{}{}
-		s.totalCount++
-	}
-}
-
-func (s *TagSets) ForEach(process func(tagKey, tagValue string)) {
-	for tagKey, tagValues := range s.sets {
-		for tagValue := range tagValues {
-			process(tagKey, tagValue)
-		}
-	}
-}
-
-func (s *TagSets) TagKVCount() int {
-	return s.totalCount
-}
-
 type SequenceIteratorHandler interface {
 	Init(map[string]interface{}) error
 	Begin()
 	NextFile(TSSPFile)
-	NextChunkMeta([]byte) error
+	NextChunkMeta(cm *ChunkMeta) error
 	Limited() bool
 	Finish()
 }
@@ -138,6 +104,13 @@ func (itr *sequenceIterator) iterateFile(f TSSPFile) error {
 
 	itr.handler.NextFile(f)
 
+	cm := &ChunkMeta{}
+	columns := []string{"value"}
+
+	ctx := GetChunkMetaCodecCtx()
+	ctx.SetTrailer(f.FileStat())
+	defer ctx.Release()
+
 	n := int(f.MetaIndexItemNum())
 	for i := 0; i < n; i++ {
 		buf, offsets, err := itr.chunkMetaReader.ReadChunkMetas(f, i)
@@ -147,7 +120,13 @@ func (itr *sequenceIterator) iterateFile(f TSSPFile) error {
 
 		offsets = append(offsets, uint32(len(buf)))
 		for k := 0; k < len(offsets)-1; k++ {
-			err = itr.handler.NextChunkMeta(buf[offsets[k]:offsets[k+1]])
+			_, err = UnmarshalChunkMetaAdaptive(ctx, cm, columns, buf[offsets[k]:offsets[k+1]])
+			if err != nil {
+				itr.logger.Warn("failed to unmarshal chunk meta", zap.Error(err))
+				continue
+			}
+
+			err = itr.handler.NextChunkMeta(cm)
 			if err != nil && errno.Equal(err, errno.ErrSearchSeriesKey) {
 				// sid not found in index, skip
 				itr.logger.Warn("sequenceIterator.iterateFile NextChunkMeta search sid failed", zap.Error(err))

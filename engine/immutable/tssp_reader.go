@@ -15,13 +15,12 @@
 package immutable
 
 import (
-	"container/list"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sync"
 	"sync/atomic"
 
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
@@ -55,6 +54,40 @@ func RemoveTsspSuffix(dataPath string) string {
 }
 
 var errFileClosed = fmt.Errorf("tssp file closed")
+
+type tsspInfo struct {
+	order bool
+	file  string // the absolute path of the tssp file
+	name  TSSPFileName
+}
+
+func (fi *tsspInfo) Order() bool {
+	return fi.order
+}
+
+func (fi *tsspInfo) FilePath() string {
+	return fi.file
+}
+
+func (fi *tsspInfo) FileName() *TSSPFileName {
+	return &fi.name
+}
+
+func (fi *tsspInfo) LevelAndSequence() (uint16, uint64) {
+	return fi.name.level, fi.name.seq
+}
+
+func (fi *tsspInfo) FileNameExtend() uint16 {
+	return fi.name.extent
+}
+
+type TSSPInfo interface {
+	Order() bool
+	FilePath() string
+	FileName() *TSSPFileName
+	LevelAndSequence() (uint16, uint64)
+	FileNameExtend() uint16
+}
 
 type TSSPFile interface {
 	Path() string
@@ -95,14 +128,12 @@ type TSSPFile interface {
 	Rename(newName string) error
 	UpdateLevel(level uint16)
 	Remove() error
-	FreeMemory(evictLock bool) int64
+	FreeMemory()
 	FreeFileHandle() error
 	Version() uint64
 	AverageChunkRows() int
 	MaxChunkRows() int
 	MetaIndexItemNum() int64
-	AddToEvictList(level uint16)
-	RemoveFromEvictList(level uint16)
 	GetFileReaderRef() int64
 	RenameOnObs(obsName string, tmp bool, opt *obs.ObsOptions) error
 
@@ -110,17 +141,19 @@ type TSSPFile interface {
 }
 
 type TSSPFiles struct {
-	lock    sync.RWMutex
-	ref     int64
-	wg      sync.WaitGroup
-	closing int64
-	files   []TSSPFile
+	lock        sync.RWMutex
+	ref         int64
+	wg          sync.WaitGroup
+	closing     int64
+	files       []TSSPFile
+	unloadFiles []TSSPInfo // files which need to retry load
 }
 
 func NewTSSPFiles() *TSSPFiles {
 	return &TSSPFiles{
-		files: make([]TSSPFile, 0, 32),
-		ref:   1,
+		files:       make([]TSSPFile, 0, 32),
+		unloadFiles: make([]TSSPInfo, 0),
+		ref:         1,
 	}
 }
 
@@ -143,6 +176,28 @@ func (f *TSSPFiles) fullCompacted() bool {
 		}
 	}
 	return sameLeve
+}
+
+func (f *TSSPFiles) hasUnloadFile() bool {
+	f.lock.RLock()
+	defer f.lock.RUnlock()
+	return len(f.unloadFiles) != 0
+}
+
+func (f *TSSPFiles) splitByUnloadFile(idx int) bool {
+	if len(f.unloadFiles) == 0 || idx == 0 {
+		return false
+	}
+
+	_, lastSeq := f.files[idx-1].LevelAndSequence()
+	_, currSeq := f.files[idx].LevelAndSequence()
+	for i := 0; i < len(f.unloadFiles); i++ {
+		_, seq := f.unloadFiles[i].LevelAndSequence()
+		if seq >= lastSeq && seq <= currSeq {
+			return true
+		}
+	}
+	return false
 }
 
 func (f *TSSPFiles) Len() int      { return len(f.files) }
@@ -232,6 +287,20 @@ func (f *TSSPFiles) Append(file ...TSSPFile) {
 	f.files = append(f.files, file...)
 }
 
+func (f *TSSPFiles) AppendReloadFiles(file ...TSSPInfo) {
+	f.lock.RLock()
+	defer f.lock.RUnlock()
+	f.unloadFiles = append(f.unloadFiles, file...)
+}
+
+func (f *TSSPFiles) Lock() {
+	f.lock.Lock()
+}
+
+func (f *TSSPFiles) Unlock() {
+	f.lock.Unlock()
+}
+
 func (f *TSSPFiles) RLock() {
 	f.lock.RLock()
 }
@@ -255,6 +324,20 @@ func (f *TSSPFiles) MaxMerged() uint16 {
 	return maxMerged
 }
 
+func (f *TSSPFiles) MergedLevelCount(level uint16) int {
+	if f.Len() == 0 {
+		return 0
+	}
+
+	n := 0
+	for _, file := range f.files {
+		if file.FileNameMerge() == level {
+			n++
+		}
+	}
+	return n
+}
+
 type tsspFile struct {
 	mu sync.RWMutex
 	wg sync.WaitGroup
@@ -264,11 +347,10 @@ type tsspFile struct {
 	flag uint32 // flag > 0 indicates that the files is need close.
 	lock *string
 
-	memEle *list.Element // lru node
 	reader FileReader
 }
 
-func OpenTSSPFile(name string, lockPath *string, isOrder bool, cacheData bool) (TSSPFile, error) {
+func OpenTSSPFile(name string, lockPath *string, isOrder bool) (TSSPFile, error) {
 	var fileName TSSPFileName
 	if err := fileName.ParseFileName(name); err != nil {
 		return nil, err
@@ -278,12 +360,6 @@ func OpenTSSPFile(name string, lockPath *string, isOrder bool, cacheData bool) (
 	fr, err := NewTSSPFileReader(name, lockPath)
 	if err != nil || fr == nil {
 		return nil, err
-	}
-
-	fr.inMemBlock = emptyMemReader
-	if cacheData {
-		idx := calcBlockIndex(int(fr.trailer.dataSize))
-		fr.inMemBlock = NewMemoryReader(blockSize[idx])
 	}
 
 	if err = fr.Open(); err != nil {
@@ -407,32 +483,15 @@ func (f *tsspFile) IsOrder() bool {
 	return f.name.order
 }
 
-func (f *tsspFile) FreeMemory(evictLock bool) int64 {
+func (f *tsspFile) FreeMemory() {
 	f.mu.Lock()
-	if f.Inuse() {
-		f.mu.Unlock()
-		nodeTableStoreGC.Add(true, f)
-		return 0
+	defer f.mu.Unlock()
+
+	if f.stopped() {
+		return
 	}
 
-	size := f.reader.FreeMemory()
-	level := f.name.level
-	order := f.name.order
-	f.mu.Unlock()
-
-	if order {
-		addMemSize(levelName(level), -size, -size, 0)
-	} else {
-		addMemSize(levelName(level), -size, 0, -size)
-	}
-
-	if evictLock {
-		f.RemoveFromEvictList(level)
-	} else {
-		f.RemoveFromEvictListUnSafe(level)
-	}
-
-	return size
+	f.reader.FreeMemory()
 }
 
 func (f *tsspFile) FreeFileHandle() error {
@@ -586,6 +645,7 @@ func (f *tsspFile) UpdateLevel(level uint16) {
 }
 
 func (f *tsspFile) Remove() error {
+	f.Stop()
 	atomic.AddUint32(&f.flag, 1)
 	if atomic.AddInt32(&f.ref, -1) == 0 {
 		f.wg.Wait()
@@ -593,10 +653,6 @@ func (f *tsspFile) Remove() error {
 		f.mu.Lock()
 
 		name := f.reader.FileName()
-		memSize := f.reader.InMemSize()
-		level := f.name.level
-		order := f.name.order
-
 		log.Debug("remove file", zap.String("file", name))
 		_ = f.reader.Close()
 		lock := fileops.FileLockOption(*f.lock)
@@ -608,50 +664,20 @@ func (f *tsspFile) Remove() error {
 			return err
 		}
 		f.mu.Unlock()
-
-		evict := memSize > 0
-
-		if evict {
-			if order {
-				addMemSize(levelName(level), -memSize, -memSize, 0)
-			} else {
-				addMemSize(levelName(level), -memSize, 0, -memSize)
-			}
-			f.RemoveFromEvictList(level)
-		}
-
 	}
 	return nil
 }
 
 func (f *tsspFile) Close() error {
 	f.Stop()
-
-	f.mu.Lock()
-	memSize := f.reader.InMemSize()
-	level := f.name.level
-	order := f.name.order
-	name := f.reader.FileName()
-	tmp := IsTempleFile(filepath.Base(name))
-	f.mu.Unlock()
-
 	f.Unref()
 	f.wg.Wait()
 
 	f.mu.Lock()
-	_ = f.reader.Close()
+	err := f.reader.Close()
 	f.mu.Unlock()
 
-	if memSize > 0 && !tmp {
-		if order {
-			addMemSize(levelName(level), -memSize, -memSize, 0)
-		} else {
-			addMemSize(levelName(level), -memSize, 0, -memSize)
-		}
-		f.RemoveFromEvictList(level)
-	}
-
-	return nil
+	return err
 }
 
 func (f *tsspFile) Open() error {
@@ -693,32 +719,33 @@ func (f *tsspFile) LoadComponents() error {
 }
 
 func (f *tsspFile) LoadIntoMemory() error {
-	f.mu.Lock()
+	if f.stopped() ||
+		!config.HotModeEnabled() ||
+		!NewHotFileManager().InHotDuration(f) ||
+		!NewHotFileManager().AllocLoadMemory(f.reader.FileSize()) {
+		return nil
+	}
 
-	if f.reader == nil {
-		f.mu.Unlock()
-		err := fmt.Errorf("disk file not init")
-		log.Error("disk file not init", zap.Uint64("seq", f.name.seq), zap.Uint16("leve", f.name.level))
+	err := func() error {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+
+		if f.reader == nil {
+			return fmt.Errorf("disk file not init")
+		}
+
+		if err := f.reader.LoadIntoMemory(); err != nil {
+			return err
+		}
+		return nil
+	}()
+
+	if err != nil {
+		log.Error("failed to load file to memory", zap.String("file", f.reader.FileName()), zap.Error(err))
 		return err
 	}
 
-	if err := f.reader.LoadIntoMemory(); err != nil {
-		f.mu.Unlock()
-		return err
-	}
-
-	level := f.name.level
-	size := f.reader.InMemSize()
-	order := f.name.order
-	f.mu.Unlock()
-
-	if order {
-		addMemSize(levelName(level), size, size, 0)
-	} else {
-		addMemSize(levelName(level), size, 0, size)
-	}
-	f.AddToEvictList(level)
-
+	NewHotFileManager().Add(f)
 	return nil
 }
 
@@ -736,32 +763,6 @@ func (f *tsspFile) MinMaxTime() (int64, int64, error) {
 		return 0, 0, errFileClosed
 	}
 	return f.reader.MinMaxTime()
-}
-
-func (f *tsspFile) AddToEvictList(level uint16) {
-	l := levelEvictListLock(level)
-	if f.memEle != nil {
-		panic("memEle need to nil")
-	}
-	f.memEle = l.PushFront(f)
-	levelEvictListUnLock(level)
-}
-
-func (f *tsspFile) RemoveFromEvictList(level uint16) {
-	l := levelEvictListLock(level)
-	if f.memEle != nil {
-		l.Remove(f.memEle)
-		f.memEle = nil
-	}
-	levelEvictListUnLock(level)
-}
-
-func (f *tsspFile) RemoveFromEvictListUnSafe(level uint16) {
-	l := levelEvictList(level)
-	if f.memEle != nil {
-		l.Remove(f.memEle)
-		f.memEle = nil
-	}
 }
 
 func (f *tsspFile) AverageChunkRows() int {
@@ -938,6 +939,11 @@ func InitQueryFileCache(cap uint32, enable bool) {
 type QueryfileCache struct {
 	cache    chan TSSPFile
 	cacheCap uint32
+}
+
+// ResetQueryFileCache used to reset the file cache for ut
+func ResetQueryFileCache() {
+	fileQueryCache = nil
 }
 
 func GetQueryfileCache() *QueryfileCache {

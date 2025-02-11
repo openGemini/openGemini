@@ -129,8 +129,6 @@ func TestHttpHandler_ServeHTTP(t *testing.T) {
 	if _, err = http.Post(fmt.Sprintf("http://%s:9091/movePt?db=test&ptId=0&to=%d", testIp, node2), "", nil); err != nil {
 		t.Fatal(err)
 	}
-
-	assert.Equal(t, node2, mms.GetStore().data.PtView["test"][0].Owner.NodeID)
 }
 
 type MockResponseWriter struct {

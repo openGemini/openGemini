@@ -15,9 +15,8 @@
 package stringinterner
 
 import (
+	"strings"
 	"sync"
-
-	"github.com/openGemini/openGemini/lib/strings"
 )
 
 // split to two struct to store, key and value. avoid map too big to search
@@ -51,4 +50,49 @@ func loadValue(s string, si *SingleStringInterner) string {
 		return k
 	}
 	return v.(string)
+}
+
+const (
+	EmptyStr = ""
+)
+
+func NewStringDict() *StringDict {
+	return &StringDict{
+		corpus:        sync.Map{},
+		corpusIndexes: []string{EmptyStr},
+	}
+}
+
+type StringDict struct {
+	corpus        sync.Map
+	corpusLock    sync.Mutex
+	corpusIndex   uint64
+	corpusIndexes []string
+}
+
+func (s *StringDict) LoadIndex(key string) uint64 {
+	vv, ok := s.corpus.Load(key)
+	if ok {
+		index, _ := vv.(uint64)
+		return index
+	}
+	s.corpusLock.Lock()
+	s.corpusIndex = s.corpusIndex + 1
+	index := s.corpusIndex
+	if uint64(len(s.corpusIndexes)) <= index {
+		s.corpusIndexes = append(s.corpusIndexes, EmptyStr)
+		s.corpusIndexes = s.corpusIndexes[:cap(s.corpusIndexes)]
+	}
+	s.corpusLock.Unlock()
+	key = strings.Clone(key)
+	s.corpusIndexes[index] = key
+	s.corpus.Store(key, index)
+	return index
+}
+
+func (s *StringDict) LoadValue(key int) string {
+	if len(s.corpusIndexes) <= key {
+		return EmptyStr
+	}
+	return s.corpusIndexes[key]
 }

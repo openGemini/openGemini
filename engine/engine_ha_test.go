@@ -35,6 +35,14 @@ func Test_Engine_Assign_404PT(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func Test_Engine_Assign_ObsErr(t *testing.T) {
+	dir := t.TempDir()
+	e, err := initEngine(dir)
+	defer e.Close()
+	err = e.Assign(0, 1, defaultDb, defaultPtId, 1, nil, nil, &mockMetaClient4Obs{}, nil)
+	require.NoError(t, err)
+}
+
 func Test_Engine_Assign_success(t *testing.T) {
 	dir := t.TempDir()
 	eng, err := initEngine(dir)
@@ -338,6 +346,31 @@ func TestPrepareLoadPts004(t *testing.T) {
 		t.Error("PrepareLoadPts failed", zap.Error(err))
 	}
 	eng.ForceFlush()
+}
+
+func Test_PreAssign_Obs(t *testing.T) {
+	dir := t.TempDir()
+	defer fileops.RemoveAll(dir)
+	eng := getEngineBeforeTest(t, dir)
+	defer eng.Close()
+	checkShard(t, eng, 1, defaultShardId, true, defaultDb, defaultPtId, true)
+
+	err := eng.Offload(0, defaultDb, defaultPtId)
+	if err != nil {
+		t.Error("PrepareOffLoadPts failed, and err isn't dbPt close", zap.Error(err))
+	}
+	checkShard(t, eng, 0, defaultShardId, false, defaultDb, defaultPtId, false)
+
+	durationInfos := getDurationInfo(defaultShardId)
+	dbBriefInfo := &meta.DatabaseBriefInfo{
+		Name:           defaultDb,
+		EnableTagArray: false,
+	}
+	err = eng.PreAssign(0, defaultDb, defaultPtId, durationInfos, dbBriefInfo, &mockMetaClient4Obs{})
+	if err != nil {
+		t.Error("PrepareLoadPts failed", zap.Error(err))
+	}
+	checkShard(t, eng, 1, defaultShardId, false, defaultDb, defaultPtId, true)
 }
 
 // TestLoadPts001 test LoadPts. 1. off load DB PT, then 2.loadPts. check shard in the process.

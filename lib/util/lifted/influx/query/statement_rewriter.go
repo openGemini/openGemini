@@ -212,6 +212,7 @@ func rewriteShowTagValuesStatement(stmt *influxql.ShowTagValuesStatement) (influ
 		SortFields:      stmt.SortFields,
 		Limit:           stmt.Limit,
 		Offset:          stmt.Offset,
+		Hints:           stmt.Hints,
 	}, nil
 }
 

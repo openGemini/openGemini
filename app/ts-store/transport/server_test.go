@@ -130,12 +130,16 @@ func (m MockStream) WriteRec(db, rp, mst string, ptId uint32, shardID uint64, re
 	panic("implement me")
 }
 
-func (m MockStream) WriteRows(db, rp string, ptId uint32, shardID uint64, streamIdDstShardIdMap map[uint64]uint64, ww stream.WritePointsWorkIF) {
+func (m MockStream) WriteRows(writeCtx *stream.WriteStreamRowsCtx) (bool, error) {
+	return false, nil
+}
+
+func (m MockStream) WriteReplayRows(db, rp string, ptId uint32, shardID uint64, ww stream.WritePointsWorkIF) {
 	panic("implement me")
 }
 
 func (m MockStream) RegisterTask(info *meta.StreamInfo, fieldCalls []*streamLib.FieldCall) error {
-	panic("implement me")
+	return nil
 }
 
 func (m MockStream) Drain() {

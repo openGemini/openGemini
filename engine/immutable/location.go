@@ -17,13 +17,11 @@ package immutable
 import (
 	"github.com/openGemini/openGemini/engine/index/clv"
 	"github.com/openGemini/openGemini/lib/bitmap"
-	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/fragment"
 	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/openGemini/openGemini/lib/record"
-	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util"
 )
@@ -335,9 +333,10 @@ func (l *Location) ResetMeta() {
 }
 
 type ChunkMetaContext struct {
-	meta    *ChunkMeta
-	buf     *pool.Buffer
-	columns []string
+	codecCtx *ChunkMetaCodecCtx
+	meta     *ChunkMeta
+	buf      *pool.Buffer
+	columns  []string
 }
 
 func (ctx *ChunkMetaContext) initColumns(schema record.Schemas) {
@@ -358,12 +357,15 @@ func (ctx *ChunkMetaContext) chunkMeta() *ChunkMeta {
 	return ctx.meta
 }
 
-func (ctx *ChunkMetaContext) MemSize() int {
-	return ctx.buf.MemSize()
+func (ctx *ChunkMetaContext) CodecCtx() *ChunkMetaCodecCtx {
+	if ctx.codecCtx == nil {
+		ctx.codecCtx = &ChunkMetaCodecCtx{}
+	}
+	return ctx.codecCtx
 }
 
-func (ctx *ChunkMetaContext) Instance() pool.Object {
-	return newChunkMetaContext()
+func (ctx *ChunkMetaContext) MemSize() int {
+	return ctx.buf.MemSize()
 }
 
 func (ctx *ChunkMetaContext) Release() {
@@ -373,10 +375,7 @@ func (ctx *ChunkMetaContext) Release() {
 }
 
 func NewChunkMetaContext(schema record.Schemas) *ChunkMetaContext {
-	ctx, ok := chunkMetaContextPool.Get().(*ChunkMetaContext)
-	if !ok || ctx == nil {
-		ctx = newChunkMetaContext()
-	}
+	ctx := chunkMetaContextPool.Get()
 	ctx.initColumns(schema)
 	return ctx
 }
@@ -388,11 +387,12 @@ func newChunkMetaContext() *ChunkMetaContext {
 	}
 }
 
-var chunkMetaContextPool *pool.ObjectPool
+var chunkMetaContextPool *pool.UnionPool[ChunkMetaContext]
 
 func init() {
-	s := stat.NewHitRatioStatistics()
-	hook := pool.NewHitRatioHook(s.AddChunkMetaGetTotal, s.AddChunkMetaHitTotal)
-	chunkMetaContextPool = pool.NewObjectPool(cpu.GetCpuNum()*2, &ChunkMetaContext{}, bufferpool.MaxLocalCacheSize)
-	chunkMetaContextPool.SetHitRatioHook(hook)
+	chunkMetaContextPool = pool.NewUnionPool[ChunkMetaContext](cpu.GetCpuNum(),
+		pool.DefaultLocalCacheLen,
+		pool.DefaultMaxEleMemSize,
+		newChunkMetaContext)
+	chunkMetaContextPool.EnableHitRatioStat("ChunkMetaContext")
 }

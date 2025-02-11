@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/influxdata/influxdb/pkg/testing/assert"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestTaskManager_AssignQueryID(t1 *testing.T) {

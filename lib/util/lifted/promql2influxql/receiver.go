@@ -3,17 +3,23 @@ package promql2influxql
 import (
 	"encoding/json"
 	"fmt"
+	"math"
+	"runtime/debug"
 	"sort"
 	"time"
 
 	"github.com/influxdata/influxdb/models"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
-	"github.com/openGemini/openGemini/lib/util/lifted/promtheus/pkg/labels"
-	"github.com/openGemini/openGemini/lib/util/lifted/promtheus/promql"
-	"github.com/prometheus/prometheus/pkg/timestamp"
+	"github.com/prometheus/common/model"
+	"github.com/prometheus/prometheus/model/labels"
+	"github.com/prometheus/prometheus/model/timestamp"
+	"github.com/prometheus/prometheus/prompb"
+	"github.com/prometheus/prometheus/promql"
 	"github.com/prometheus/prometheus/promql/parser"
+	"go.uber.org/zap"
 )
 
 const (
@@ -60,32 +66,50 @@ func (r *Receiver) InfluxLiteralToPromQLValue(result influxql.Literal, cmd PromC
 }
 
 // populatePromSeriesByTag populates *promql.Series slice from models.Row returned by InfluxDB
-func (r *Receiver) populatePromSeriesByTag(promSeries *[]*promql.Series, table *models.Row) error {
+func (r *Receiver) populatePromSeriesByTag(pPreMetric *labels.Labels, promSeries *[]*promql.Series, table *models.Row) error {
 	var metric labels.Labels
 	if !r.DropMetric {
 		metric = labels.FromMap(table.Tags)
 	} else {
 		metric = FromMapWithoutMetric(table.Tags)
 	}
+	if *pPreMetric != nil && labels.Equal(metric, *pPreMetric) {
+		logger.GetLogger().Error(fmt.Sprintf("vector cannot contain metrics with the same labelset: metric=%v", metric.String()))
+		return fmt.Errorf("vector cannot contain metrics with the same labelset")
+	}
+	*pPreMetric = metric
+
 	if len(table.Columns) <= SampleColNum {
-		var points []promql.Point
+		var points []promql.FPoint
+		preT := int64(math.MinInt64)
 		for _, row := range table.Values {
 			point, err := Row2Point(row)
 			if err != nil {
 				return err
 			}
+			if preT >= point.T {
+				logger.GetLogger().Error(fmt.Sprintf("vector cannot contain metrics with the same labelset: metric=%v point=%v preT=%v", metric.String(), point.String(), preT))
+				return fmt.Errorf("vector cannot contain metrics with the same labelset")
+			}
+			preT = point.T
 			points = append(points, point)
 		}
 		*promSeries = append(*promSeries, &promql.Series{
 			Metric: metric,
-			Points: points,
+			Floats: points,
 		})
 	} else {
 		seriesMap := make(map[uint64]*promql.Series)
+		metricContainsMap := metricContainsCol(table.Columns, metric)
 		for _, row := range table.Values {
 			m := metric
 			for i := SampleColNum; i < len(table.Columns); i++ {
-				m = append(m, labels.Label{Name: table.Columns[i], Value: row[i].(string)})
+				if row[i] == nil || (r.DropMetric && DefaultMetricKeyLabel == table.Columns[i]) {
+					continue
+				}
+				if !metricContainsMap[table.Columns[i]] {
+					m = append(m, labels.Label{Name: table.Columns[i], Value: row[i].(string)})
+				}
 			}
 			point, err := Row2Point(row)
 			if err != nil {
@@ -93,11 +117,15 @@ func (r *Receiver) populatePromSeriesByTag(promSeries *[]*promql.Series, table *
 			}
 			sort.Sort(m)
 			if series, exists := seriesMap[m.Hash()]; exists {
-				series.Points = append(series.Points, point)
+				if series.Floats[len(series.Floats)-1].T == point.T {
+					logger.GetLogger().Error(fmt.Sprintf("vector cannot contain metrics with the same labelset: metric=%v point=%v", metric.String(), point.String()))
+					return fmt.Errorf("vector cannot contain metrics with the same labelset")
+				}
+				series.Floats = append(series.Floats, point)
 			} else {
 				seriesMap[m.Hash()] = &promql.Series{
 					Metric: m,
-					Points: []promql.Point{
+					Floats: []promql.FPoint{
 						point,
 					},
 				}
@@ -107,7 +135,7 @@ func (r *Receiver) populatePromSeriesByTag(promSeries *[]*promql.Series, table *
 			*promSeries = append(*promSeries, series)
 		}
 	}
-	if !r.DuplicateResult || r.PromCommand.Step == 0 || len((*promSeries)[len(*promSeries)-1].Points) > 1 {
+	if !r.DuplicateResult || r.PromCommand.Step == 0 || len((*promSeries)[len(*promSeries)-1].Floats) > 1 {
 		return nil
 	}
 	// For every evaluation while the value remains same, the timestamp for that
@@ -115,13 +143,34 @@ func (r *Receiver) populatePromSeriesByTag(promSeries *[]*promql.Series, table *
 	// with changed timestamps.
 	start, end, interval := r.Start.UnixMilli(), r.End.UnixMilli(), r.Step.Milliseconds()
 	series := (*promSeries)[len(*promSeries)-1]
-	idx := len(series.Points)
+	idx := len(series.Floats)
 	ReservePoints(series, int((end-start-interval)/interval)+1)
 	for ts := start + interval; ts <= end; ts += interval {
-		series.Points[idx] = promql.Point{T: ts, V: series.Points[0].V}
+		series.Floats[idx] = promql.FPoint{T: ts, F: series.Floats[0].F}
 		idx++
 	}
 	return nil
+}
+
+func metricContainsCol(columns []string, metric labels.Labels) map[string]bool {
+	var res map[string]bool = make(map[string]bool)
+	for i := range columns {
+		if contains(metric, columns[i]) {
+			res[columns[i]] = true
+		} else {
+			res[columns[i]] = false
+		}
+	}
+	return res
+}
+
+func contains(m labels.Labels, s string) bool {
+	for i := range m {
+		if m[i].Name == s {
+			return true
+		}
+	}
+	return false
 }
 
 // PopulatePromSeriesByHash is used to populate *promql.Series slice from models.Row returned from InfluxDB
@@ -130,10 +179,11 @@ func (r *Receiver) populatePromSeriesByTag(promSeries *[]*promql.Series, table *
 // a pointer to promql.Series. Each series may contain one or more points.
 func (r *Receiver) PopulatePromSeriesByHash(promSeries *[]*promql.Series, table *models.Row) error {
 	seriesMap := make(map[uint64]*promql.Series)
+	orderList := make([]uint64, 0)
 	for _, row := range table.Values {
 		kvs := make(map[string]string)
 		for i, col := range row {
-			if i == SampleTimeColIdx || i == SampleValueColIdx {
+			if i <= SampleValueColIdx || col == nil {
 				continue
 			}
 			kvs[table.Columns[i]] = col.(string)
@@ -149,20 +199,22 @@ func (r *Receiver) PopulatePromSeriesByHash(promSeries *[]*promql.Series, table 
 			return err
 		}
 		if series, exists := seriesMap[metric.Hash()]; exists {
-			series.Points = append(series.Points, point)
+			series.Floats = append(series.Floats, point)
 		} else {
-			seriesMap[metric.Hash()] = &promql.Series{
+			sid := metric.Hash()
+			orderList = append(orderList, sid)
+			seriesMap[sid] = &promql.Series{
 				Metric: metric,
-				Points: []promql.Point{
+				Floats: []promql.FPoint{
 					point,
 				},
 			}
 		}
 	}
-	for _, series := range seriesMap {
-		*promSeries = append(*promSeries, series)
+	for _, sid := range orderList {
+		*promSeries = append(*promSeries, seriesMap[sid])
 	}
-	if !r.DuplicateResult || r.PromCommand.Step == 0 || len((*promSeries)[len(*promSeries)-1].Points) > 1 {
+	if !r.DuplicateResult || r.PromCommand.Step == 0 || (len((*promSeries)[len(*promSeries)-1].Floats)) > 1 {
 		return nil
 	}
 	// For every evaluation while the value remains same, the timestamp for that
@@ -170,63 +222,76 @@ func (r *Receiver) PopulatePromSeriesByHash(promSeries *[]*promql.Series, table 
 	// with changed timestamps.
 	start, end, interval := r.Start.UnixMilli(), r.End.UnixMilli(), r.Step.Milliseconds()
 	for _, series := range *promSeries {
-		idx := len(series.Points)
+		idx := len(series.Floats)
 		ReservePoints(series, int((end-start-interval)/interval)+1)
 		for ts := start + interval; ts <= end; ts += interval {
-			series.Points[idx] = promql.Point{T: ts, V: series.Points[0].V}
+			series.Floats[idx] = promql.FPoint{T: ts, F: series.Floats[0].F}
 			idx++
 		}
 	}
 	return nil
 }
 
-// InfluxResultToPromQLValue converts query.Result slice to parser.Value of Prometheus
-func (r *Receiver) InfluxResultToPromQLValue(result *query.Result, expr parser.Expr, cmd PromCommand) (*PromResult, error) {
+// InfluxResultToPromQLValue converts query2.Result slice to parser.Value of Prometheus
+func (r *Receiver) InfluxResultToPromQLValue(result *query.Result, expr parser.Expr, cmd PromCommand) (promRes *PromData, promErr error) {
+	defer func() {
+		if re := recover(); re != nil {
+			promRes, promErr = NewPromData(nil, ""), errno.NewError(errno.PromReceiverErr)
+			logger.GetLogger().Error(promErr.Error(), zap.String("InfluxResultToPromQLValue", string(debug.Stack())))
+		}
+	}()
 	if result == nil {
-		return NewPromResult(nil, ""), nil
+		return NewPromData(nil, ""), nil
 	}
 	if result.Err != nil {
-		return NewPromResult(nil, ""), result.Err
+		return NewPromData(nil, ""), result.Err
 	}
 	var promSeries []*promql.Series
+	var preMetric labels.Labels
 	for _, item := range result.Series {
 		if len(item.Tags) > 0 {
-			if err := r.populatePromSeriesByTag(&promSeries, item); err != nil {
-				return NewPromResult(nil, ""), errno.NewError(errno.ErrPopulatePromSeries, err.Error())
+			if err := r.populatePromSeriesByTag(&preMetric, &promSeries, item); err != nil {
+				return NewPromData(nil, ""), errno.NewError(errno.ErrPopulatePromSeries, err.Error())
 			}
 		} else {
 			if err := r.PopulatePromSeriesByHash(&promSeries, item); err != nil {
-				return NewPromResult(nil, ""), errno.NewError(errno.ErrGroupResultBySeries, err.Error())
+				return NewPromData(nil, ""), errno.NewError(errno.ErrGroupResultBySeries, err.Error())
 			}
 		}
 	}
 
 	switch expr.Type() {
 	case parser.ValueTypeMatrix:
-		return NewPromResult(HandleValueTypeMatrix(promSeries), string(parser.ValueTypeMatrix)), nil
+		return NewPromData(HandleValueTypeMatrix(promSeries), string(parser.ValueTypeMatrix)), nil
 	case parser.ValueTypeVector:
 		switch cmd.DataType {
 		case GRAPH_DATA:
-			return NewPromResult(HandleValueTypeMatrix(promSeries), string(parser.ValueTypeMatrix)), nil
+			return NewPromData(HandleValueTypeMatrix(promSeries), string(parser.ValueTypeMatrix)), nil
 		default:
 			value, err := r.handleValueTypeVector(promSeries)
-			return NewPromResult(value, string(parser.ValueTypeVector)), err
+			return NewPromData(value, string(parser.ValueTypeVector)), err
 		}
 	case parser.ValueTypeScalar:
 		switch cmd.DataType {
 		case GRAPH_DATA:
-			return NewPromResult(HandleValueTypeMatrix(promSeries), string(parser.ValueTypeMatrix)), nil
+			return NewPromData(HandleValueTypeMatrix(promSeries), string(parser.ValueTypeMatrix)), nil
 		default:
 			value, err := r.handleValueTypeScalar(promSeries)
-			return NewPromResult(value, string(parser.ValueTypeScalar)), err
+			return NewPromData(value, string(parser.ValueTypeScalar)), err
 		}
 	default:
-		return NewPromResult(nil, ""), errno.NewError(errno.UnsupportedValueType, expr.Type())
+		return NewPromData(nil, ""), errno.NewError(errno.UnsupportedValueType, expr.Type())
 	}
 }
 
-// InfluxResultToStringSlice converts query.Result slice to string slice
-func (r *Receiver) InfluxResultToStringSlice(result *query.Result, dest *[]string) error {
+// InfluxResultToStringSlice converts query2.Result slice to string slice
+func (r *Receiver) InfluxResultToStringSlice(result *query.Result, dest *[]string) (promErr error) {
+	defer func() {
+		if re := recover(); re != nil {
+			promErr = errno.NewError(errno.PromReceiverErr)
+			logger.GetLogger().Error(promErr.Error(), zap.String("InfluxResultToStringSlice", string(debug.Stack())))
+		}
+	}()
 	if result == nil {
 		return nil
 	}
@@ -237,12 +302,12 @@ func (r *Receiver) InfluxResultToStringSlice(result *query.Result, dest *[]strin
 		return nil
 	}
 	tagValueMap := make(map[string]struct{})
-	for _, item := range result.Series {
-		for _, item1 := range item.Values {
-			if len(item1) <= 1 {
+	for _, row := range result.Series {
+		for _, item := range row.Values {
+			if len(item) < 2 || item[1] == nil {
 				continue
 			}
-			tagValue := item1[1].(string)
+			tagValue := item[1].(string)
 			if _, exists := tagValueMap[tagValue]; exists {
 				continue
 			} else {
@@ -254,7 +319,13 @@ func (r *Receiver) InfluxResultToStringSlice(result *query.Result, dest *[]strin
 	return nil
 }
 
-func (r *Receiver) InfluxTagsToPromLabels(result *query.Result) ([]string, error) {
+func (r *Receiver) InfluxTagsToPromLabels(result *query.Result) (promRes []string, promErr error) {
+	defer func() {
+		if re := recover(); re != nil {
+			promRes, promErr = []string{}, errno.NewError(errno.PromReceiverErr)
+			logger.GetLogger().Error(promErr.Error(), zap.String("InfluxTagsToPromLabels", string(debug.Stack())))
+		}
+	}()
 	if result == nil {
 		return []string{}, nil
 	}
@@ -264,10 +335,12 @@ func (r *Receiver) InfluxTagsToPromLabels(result *query.Result) ([]string, error
 
 	promLabelsMap := make(map[string]struct{})
 	promLabels := make([]string, 0)
-
-	for _, item := range result.Series {
-		for _, item1 := range item.Values {
-			tagValue, ok := item1[0].(string)
+	for _, row := range result.Series {
+		for _, item := range row.Values {
+			if len(item) < 1 || item[0] == nil {
+				continue
+			}
+			tagValue, ok := item[0].(string)
 			if !ok {
 				return promLabels, fmt.Errorf("label is not a string value")
 			}
@@ -283,62 +356,180 @@ func (r *Receiver) InfluxTagsToPromLabels(result *query.Result) ([]string, error
 	return promLabels, nil
 }
 
-func HandleValueTypeMatrix(promSeries []*promql.Series) promql.Matrix {
+func (r *Receiver) InfluxRowsToPromMetaData(result *query.Result) (promRes map[string][]Metadata, promErr error) {
+	defer func() {
+		if re := recover(); re != nil {
+			promRes, promErr = map[string][]Metadata{}, errno.NewError(errno.PromReceiverErr)
+			logger.GetLogger().Error(promErr.Error(), zap.String("InfluxRowsToPromMetaData", string(debug.Stack())))
+		}
+	}()
+	if result == nil {
+		return map[string][]Metadata{}, nil
+	}
+	if result.Err != nil {
+		return map[string][]Metadata{}, result.Err
+	}
+
+	res := map[string][]Metadata{}
+	for _, series := range result.Series {
+		metric, ok := series.Tags[PromMetric]
+		if !ok {
+			continue
+		}
+		metadata := make([]Metadata, len(series.Values))
+		res[metric] = metadata
+		for i, point := range series.Values {
+			for j := range series.Columns {
+				switch series.Columns[i] {
+				case PromMetaDataType:
+					metadata[i].Type = MetadataType2MetricType(point[j].(int64))
+				case PromMetaDataHelp:
+					if point[j] == nil {
+						metadata[i].Help = ""
+					} else {
+						metadata[i].Help = point[j].(string)
+					}
+				case PromMetaDataUnit:
+					if point[j] == nil {
+						metadata[i].Unit = ""
+					} else {
+						metadata[i].Unit = point[j].(string)
+					}
+				default:
+				}
+			}
+		}
+	}
+	return res, nil
+}
+
+func HandleValueTypeMatrix(promSeries []*promql.Series) PromDataResult {
 	matrix := make(promql.Matrix, 0, len(promSeries))
 	for _, ser := range promSeries {
 		matrix = append(matrix, *ser)
 	}
 	sort.Sort(matrix)
-	return matrix
+	return &PromDataMatrix{&matrix}
 }
 
-func (r *Receiver) handleValueTypeVector(promSeries []*promql.Series) (promql.Vector, error) {
+func (r *Receiver) handleValueTypeVector(promSeries []*promql.Series) (PromDataResult, error) {
 	vector := make(promql.Vector, 0, len(promSeries))
 	for _, ser := range promSeries {
-		if len(ser.Points) != 1 {
+		if len(ser.Floats) != 1 {
 			return nil, errno.NewError(errno.InvalidOutputPoint)
 		}
 		vector = append(vector, promql.Sample{
 			Metric: ser.Metric,
-			Point:  ser.Points[0],
+			T:      ser.Floats[0].T,
+			F:      ser.Floats[0].F,
 		})
 	}
-	return vector, nil
+	return &PromDataVector{&vector}, nil
 }
 
-func (r *Receiver) handleValueTypeScalar(promSeries []*promql.Series) (promql.Scalar, error) {
+func (r *Receiver) handleValueTypeScalar(promSeries []*promql.Series) (PromDataResult, error) {
 	scalar := promql.Scalar{}
-	if len(promSeries) > 0 && len(promSeries[0].Points) > 0 {
-		point := promSeries[0].Points[0]
+	if len(promSeries) > 0 && len(promSeries[0].Floats) > 0 {
+		point := promSeries[0].Floats[0]
 		scalar.T = point.T
-		scalar.V = point.V
+		scalar.V = point.F
 	}
-	return scalar, nil
+	return &PromDataScalar{&scalar}, nil
 }
 
-func Row2Point(row []interface{}) (promql.Point, error) {
+func (r *Receiver) AbsentNoMstResult(expr parser.Expr) (*PromData, error) {
+	if r.Evaluation != nil {
+		metric := getAbsentLabelsFromExpr(expr)
+		res := &promql.Vector{promql.Sample{T: r.Evaluation.UnixMilli(), F: 1, Metric: metric}}
+		return NewPromData(&PromDataVector{res}, string(parser.ValueTypeVector)), nil
+	}
+	start, end, interval := r.Start.UnixMilli(), r.End.UnixMilli(), r.Step.Milliseconds()
+	point := promql.FPoint{
+		T: start,
+		F: 1,
+	}
+	var points []promql.FPoint
+	points = append(points, point)
+	metric := getAbsentLabelsFromExpr(expr)
+	series := &promql.Series{
+		Metric: metric,
+		Floats: points,
+	}
+	idx := len(series.Floats)
+	ReservePoints(series, int((end-start-interval)/interval)+1)
+	for ts := start + interval; ts <= end; ts += interval {
+		series.Floats[idx] = promql.FPoint{T: ts, F: series.Floats[0].F}
+		idx++
+	}
+	var seriesSlice promql.Matrix
+	seriesSlice = append(seriesSlice, *series)
+	if r.DataType == GRAPH_DATA {
+		return NewPromData(&PromDataMatrix{&seriesSlice}, string(parser.ValueTypeMatrix)), nil
+	} else {
+		return NewPromData(&PromDataMatrix{&seriesSlice}, string(parser.ValueTypeVector)), nil
+	}
+}
+
+func getAbsentLabelsFromExpr(expr parser.Expr) labels.Labels {
+	b := labels.NewBuilder(labels.EmptyLabels())
+
+	e, ok := expr.(*parser.Call)
+	if !ok {
+		return labels.EmptyLabels()
+	}
+	if len(e.Args) == 0 {
+		return labels.EmptyLabels()
+	}
+
+	var lm []*labels.Matcher
+	switch n := e.Args[0].(type) {
+	case *parser.VectorSelector:
+		lm = n.LabelMatchers
+	case *parser.MatrixSelector:
+		lm = n.VectorSelector.(*parser.VectorSelector).LabelMatchers
+	default:
+		return labels.EmptyLabels()
+	}
+
+	exist := make(map[string]bool, len(lm))
+	for _, ma := range lm {
+		if ma.Name == labels.MetricName {
+			continue
+		}
+		if ma.Type == labels.MatchEqual && !exist[ma.Name] {
+			b.Set(ma.Name, ma.Value)
+			exist[ma.Name] = true
+		} else {
+			b.Del(ma.Name)
+		}
+	}
+
+	return b.Labels()
+}
+
+func Row2Point(row []interface{}) (promql.FPoint, error) {
 	ts, ok := row[0].(time.Time)
 	if !ok {
-		return promql.Point{}, errno.NewError(errno.ParseTimeFail)
+		return promql.FPoint{}, errno.NewError(errno.ParseTimeFail)
 	}
-	point := promql.Point{
+	point := promql.FPoint{
 		T: timestamp.FromTime(ts),
 	}
 	switch number := row[1].(type) {
 	case json.Number:
 		if v, err := number.Float64(); err == nil {
-			point.V = v
+			point.F = v
 		} else {
 			if v, err := number.Int64(); err == nil {
-				point.V = float64(v)
+				point.F = float64(v)
 			}
 		}
 	case float64:
-		point.V = number
+		point.F = number
 	case int64:
-		point.V = float64(number)
+		point.F = float64(number)
 	default:
-		return promql.Point{}, fmt.Errorf("invalid the data type for prom response")
+		return promql.FPoint{}, fmt.Errorf("invalid the data type for prom response")
 	}
 	return point, nil
 }
@@ -355,16 +546,26 @@ func FromMapWithoutMetric(m map[string]string) labels.Labels {
 }
 
 func ReservePoints(series *promql.Series, size int) {
-	sCap := cap(series.Points)
+	sCap := cap(series.Floats)
 	if sCap == 0 {
-		series.Points = make([]promql.Point, size)
+		series.Floats = make([]promql.FPoint, size)
 		return
 	}
-	sLen := len(series.Points)
+	sLen := len(series.Floats)
 	remain := sCap - sLen
 	if delta := size - remain; delta > 0 {
-		series.Points = append(series.Points[:sCap], make([]promql.Point, delta)...)
+		series.Floats = append(series.Floats[:sCap], make([]promql.FPoint, delta)...)
 	}
-	series.Points = series.Points[:sLen+size]
+	series.Floats = series.Floats[:sLen+size]
 	return
+}
+
+type Metadata struct {
+	Type model.MetricType `json:"type"`
+	Help string           `json:"help"`
+	Unit string           `json:"unit"`
+}
+
+func MetadataType2MetricType(dt int64) model.MetricType {
+	return model.MetricType(prompb.MetricMetadata_MetricType_name[int32(dt)])
 }

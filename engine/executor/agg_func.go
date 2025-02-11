@@ -23,6 +23,24 @@ import (
 	"github.com/openGemini/openGemini/lib/util"
 )
 
+func SortByValueDsc[T util.NumberOnly](f *HeapItem[T]) {
+	f.sortByTime = false
+	sort.Sort(sort.Reverse(f))
+}
+
+func SortByTimeAsc[T util.NumberOnly](f *HeapItem[T]) {
+	f.sortByTime = true
+	sort.Sort(f)
+}
+
+func TopCmpByValueReduceProm[T util.NumberOnly](a, b *PointItem[T]) bool {
+	return a.value < b.value || (math.IsNaN(float64(a.value)) && !math.IsNaN(float64(b.value)))
+}
+
+func BottomCmpByValueReduceProm[T util.NumberOnly](a, b *PointItem[T]) bool {
+	return a.value > b.value || (math.IsNaN(float64(a.value)) && !math.IsNaN(float64(b.value)))
+}
+
 func TopCmpByTimeReduce[T util.NumberOnly](a, b *PointItem[T]) bool {
 	if a.time != b.time {
 		return a.time < b.time

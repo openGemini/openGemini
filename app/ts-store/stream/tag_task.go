@@ -15,21 +15,22 @@
 package stream
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
+	"os"
+	"path"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	numenc "github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	atomic2 "github.com/openGemini/openGemini/lib/atomic"
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
-	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/stringinterner"
 	strings2 "github.com/openGemini/openGemini/lib/strings"
@@ -41,7 +42,8 @@ import (
 )
 
 var (
-	maxWindowNum           = 10
+	maxWindowNum           = 5
+	maxReplayWindowNum     = 100
 	FlushParallelMinRowNum = 10000
 	ErrEmptyCache          = errors.New("empty window cache")
 )
@@ -52,15 +54,10 @@ const (
 )
 
 type TagTask struct {
-	// compress dict
-	// corpus        map[string]uint64
-	corpus        sync.Map
-	corpusIndexes []string
-	corpusIndex   uint64
-	corpusLock    sync.Mutex
-
+	stringDict *stringinterner.StringDict
 	// key tag values
 	values sync.Map
+	lock   sync.Mutex
 	// store all ptIds for all window
 	ptIds []*uint32
 	// store all shardIds for all window
@@ -85,6 +82,13 @@ type TagTask struct {
 	flushWG sync.WaitGroup
 	goPool  *ants.Pool
 
+	// replay
+	replayValues    sync.Map
+	replayWindowNum int64
+	replayPtIds     []*uint32
+	replayShardIds  []*uint64
+
+	ptLoadStatus map[uint32]*flushStatus
 	*BaseTask
 }
 
@@ -93,6 +97,8 @@ type TaskCache struct {
 	shardId uint64
 	ptId    uint32
 	release func()
+
+	streamRows *[]influx.Row // rows for flush directly
 }
 
 func (s *TagTask) Put(r ChanData) {
@@ -116,6 +122,10 @@ func (s *TagTask) getName() string {
 	return s.name
 }
 
+func (s *TagTask) getLoadStatus() map[uint32]*flushStatus {
+	return s.ptLoadStatus
+}
+
 func (s *TagTask) run() error {
 	err := s.initVar()
 	if err != nil {
@@ -131,6 +141,7 @@ func (s *TagTask) run() error {
 	go s.parallelCalculate()
 	go s.cleanWindow()
 	go s.consumeDataAndUpdateMeta()
+	s.recoverStatus()
 	return nil
 }
 
@@ -144,9 +155,9 @@ func (s *TagTask) initVar() error {
 	if s.concurrency == 0 {
 		s.concurrency = 1
 	}
-
-	s.corpus = sync.Map{}
-	s.corpusIndexes = []string{EmptyGroupKey}
+	s.values = sync.Map{}
+	s.stringDict = stringinterner.NewStringDict()
+	s.ptLoadStatus = map[uint32]*flushStatus{}
 
 	s.innerCache = make(chan ChanData, s.concurrency)
 	s.innerRes = make(chan error, s.concurrency)
@@ -166,7 +177,6 @@ func (s *TagTask) initVar() error {
 }
 
 // cycle flush data form cache, period is group time
-// TODO support stream not contain group time
 func (s *TagTask) cycleFlush() {
 	var err error
 	defer func() {
@@ -189,7 +199,15 @@ func (s *TagTask) cycleFlush() {
 				ticker.Reset(s.window)
 				continue
 			}
-			err := s.flush()
+			for i := 0; i < int(s.replayWindowNum); i++ {
+				err := s.flushReplayData(i)
+				if err != nil {
+					s.Logger.Error("stream flush replay data error", zap.Error(err))
+				}
+				s.cleanReplayData(i)
+			}
+
+			err = s.flush()
 			if err != nil {
 				s.Logger.Error("stream flush error", zap.Error(err))
 			}
@@ -228,6 +246,17 @@ func (s *TagTask) parallelCalculate() {
 						default:
 							s.Logger.Error(fmt.Sprintf("stream innerRes is full, size %v", len(s.innerRes)))
 						}
+					case *ReplayRow:
+						err := s.replayWalRow(v)
+						if err != nil {
+							s.Logger.Error("calculate error", zap.String("window", s.name), zap.Error(err))
+						}
+						select {
+						case s.innerRes <- err:
+						default:
+							s.Logger.Error(fmt.Sprintf("stream innerRes is full, size %v", len(s.innerRes)))
+						}
+
 					default:
 						s.Logger.Error(fmt.Sprintf("not support type %T", cache))
 					}
@@ -249,12 +278,46 @@ func (s *TagTask) cleanWindow() {
 				return
 			}
 			t := time.Now()
-			s.values.Range(s.walkUpdate)
+			offset := atomic2.LoadModInt64AndADD(&s.startWindowID, -1, int64(s.windowNum))
+			s.values.Range(func(key, value any) bool {
+				v, ok := value.(*sync.Map)
+				if !ok {
+					return false
+				}
+				v.Range(s.walkUpdate(offset))
+				return true
+			})
 			s.stats.StatWindowUpdateCost(int64(time.Since(t)))
 		case <-s.abort:
 			return
 		}
 	}
+}
+
+func (s *TagTask) cleanReplayData(windowID int) {
+	cleanAll := true
+
+	s.replayPtIds[windowID] = nil
+	s.replayShardIds[windowID] = nil
+	for _, pt := range s.replayPtIds {
+		if pt != nil {
+			cleanAll = false
+		}
+	}
+	if cleanAll {
+		s.replayPtIds = s.replayPtIds[:0]
+		s.replayShardIds = s.replayShardIds[:0]
+		s.replayWindowNum = 0
+		s.replayValues = sync.Map{}
+	}
+	s.replayValues.Range(func(key, value any) bool {
+		v, ok := value.(*sync.Map)
+		if !ok {
+			return false
+		}
+		v.Range(s.walkUpdate(int64(windowID)))
+		return true
+	})
 }
 
 // consume data from window cache, and update window metadata, calculate cannot parallel with update window
@@ -317,15 +380,51 @@ func (s *TagTask) consumeDataAndUpdateMeta() {
 	}
 }
 
-func (s *TagTask) walkUpdate(k, vv interface{}) bool {
-	offset := atomic2.LoadModInt64AndADD(&s.startWindowID, -1, int64(s.windowNum))
-	// window values only store float64 pointer type, no need to check
-	v, _ := vv.([]*float64)
-	vs := v[int(offset)*s.fieldCallsLen : int(offset)*s.fieldCallsLen+s.fieldCallsLen]
-	for i := range vs {
-		vs[i] = nil
+func (s *TagTask) walkUpdate(offset int64) func(k, vv interface{}) bool {
+	return func(k, vv interface{}) bool {
+		// window values only store float64 pointer type, no need to check
+		v, _ := vv.([]*float64)
+		vs := v[int(offset)*s.fieldCallsLen : int(offset)*s.fieldCallsLen+s.fieldCallsLen]
+		for i := range vs {
+			vs[i] = nil
+		}
+		return true
 	}
-	return true
+}
+
+func (s *TagTask) getValue(ptID uint32) *sync.Map {
+	v, ok := s.values.Load(ptID)
+	if ok {
+		return v.(*sync.Map)
+	} else {
+		s.lock.Lock()
+		v, ok = s.values.Load(ptID)
+		if ok {
+			return v.(*sync.Map)
+		}
+		vv := &sync.Map{}
+		s.values.Store(ptID, vv)
+		s.lock.Unlock()
+		return vv
+	}
+}
+
+func (s *TagTask) genReplayValues(ptID uint32) *sync.Map {
+	v, ok := s.replayValues.Load(ptID)
+	if ok {
+		return v.(*sync.Map)
+	} else {
+		s.lock.Lock()
+		v, ok = s.replayValues.Load(ptID)
+		if ok {
+			return v.(*sync.Map)
+		}
+		vv := &sync.Map{}
+		s.replayValues.Store(ptID, vv)
+		s.lock.Unlock()
+		return vv
+	}
+
 }
 
 func (s *TagTask) calculateRec(cache *CacheRecord) error {
@@ -367,12 +466,13 @@ func (s *TagTask) calculateRec(cache *CacheRecord) error {
 			continue
 		}
 
+		values := s.getValue(cache.ptId)
 		key := s.generateRecGroupKeyUint(columnIDs, rec, i)
-		vv, exist := s.values.Load(key)
+		vv, exist := values.Load(key)
 		var vs []*float64
 		if !exist {
 			vs = make([]*float64, s.fieldCallsLen*int(s.windowNum))
-			s.values.Store(key, vs)
+			values.Store(key, vs)
 			s.stats.AddWindowGroupKeyCount(1)
 		} else {
 			vs, _ = vv.([]*float64)
@@ -425,6 +525,78 @@ func (s *TagTask) windowId(t int64) int {
 	return int(((t-s.startTimeStamp)/s.window.Nanoseconds() + atomic.LoadInt64(&s.startWindowID)) % s.windowNum)
 }
 
+func (s *TagTask) replayWalRow(cache *ReplayRow) error {
+	// occur release func
+	if cache == nil {
+		return ErrEmptyCache
+	}
+	flushTime, ok := s.ptLoadStatus[cache.ptID]
+	if !ok {
+		return fmt.Errorf("replay ptId not found")
+	}
+	windowNum := int64(math.Ceil(float64(s.initTime.UnixNano()-flushTime.Timestamp) / float64(s.window.Nanoseconds())))
+	if windowNum > int64(maxReplayWindowNum) {
+		windowNum = int64(maxReplayWindowNum)
+	}
+	if windowNum > s.replayWindowNum {
+		s.replayShardIds = append(s.replayShardIds, make([]*uint64, windowNum-s.replayWindowNum)...)
+		s.replayPtIds = append(s.replayPtIds, make([]*uint32, windowNum-s.replayWindowNum)...)
+		s.replayWindowNum = windowNum
+	}
+	values := s.genReplayValues(cache.ptID)
+
+	rows := cache.rows
+	for _, row := range rows {
+		if row.Timestamp >= s.initTime.UnixNano() || row.Timestamp < flushTime.Timestamp {
+			continue
+		}
+		key := s.generateGroupKeyUint(s.groupKeys, &row)
+
+		vv, exist := values.Load(key)
+		var vs []*float64
+		if !exist {
+			vs = make([]*float64, s.fieldCallsLen*int(s.replayWindowNum))
+			values.Store(key, vs)
+		} else {
+			vs, _ = vv.([]*float64)
+		}
+
+		windowId := int(((row.Timestamp - flushTime.Timestamp) / s.window.Nanoseconds()) % s.replayWindowNum)
+		if windowId < 0 {
+			s.Logger.Error("wrong windowID", zap.Int("windowId", windowId), zap.Int64("row time", row.Timestamp), zap.Int64("flushTime", flushTime.Timestamp))
+			continue
+		}
+		for c := range s.fieldCalls {
+			var curVal float64
+			// count op, if streamOnly, add value, else add 1
+			if s.fieldCalls[c].Call == "count" && !row.StreamOnly {
+				curVal = 1
+			} else {
+				for f := range row.Fields {
+					if row.Fields[f].Key == s.fieldCalls[c].Name || row.Fields[f].Key == s.fieldCalls[c].Alias {
+						curVal = row.Fields[f].NumValue
+						break
+					}
+				}
+			}
+			id := s.fieldCallsLen*windowId + c
+			if vs[id] == nil {
+				var t float64
+				if s.fieldCalls[c].Call == "min" {
+					t = math.MaxFloat64
+				} else if s.fieldCalls[c].Call == "max" {
+					t = -math.MaxFloat64
+				}
+				atomic2.SetAndSwapPointerFloat64(&vs[id], &t)
+			}
+			s.fieldCalls[c].ConcurrencyFunc(vs[id], curVal)
+		}
+		s.replayShardIds[windowId] = &cache.shardID
+		s.replayPtIds[windowId] = &cache.ptID
+	}
+	return nil
+}
+
 func (s *TagTask) calculateRow(cache *TaskCache) error {
 	// occur release func
 	if cache == nil {
@@ -439,6 +611,8 @@ func (s *TagTask) calculateRow(cache *TaskCache) error {
 	s.stats.AddWindowIn(int64(len(rows)))
 	s.stats.StatWindowStartTime(s.startTimeStamp)
 	s.stats.StatWindowEndTime(s.endTimeStamp)
+
+	values := s.getValue(cache.ptId)
 	for i := range rows {
 		row := rows[i]
 		if row.Timestamp < s.startTimeStamp || row.Timestamp >= s.maxTimeStamp {
@@ -451,11 +625,11 @@ func (s *TagTask) calculateRow(cache *TaskCache) error {
 			continue
 		}
 		key := s.generateGroupKeyUint(s.groupKeys, &row)
-		vv, exist := s.values.Load(key)
+		vv, exist := values.Load(key)
 		var vs []*float64
 		if !exist {
 			vs = make([]*float64, s.fieldCallsLen*int(s.windowNum))
-			s.values.Store(key, vs)
+			values.Store(key, vs)
 			s.stats.AddWindowGroupKeyCount(1)
 		} else {
 			vs, _ = vv.([]*float64)
@@ -495,85 +669,119 @@ func (s *TagTask) calculateRow(cache *TaskCache) error {
 }
 
 // generateRows generate rows from map cache, prepare data for flush
-func (s *TagTask) generateRows() {
+func (s *TagTask) generateRows(t int64) {
 	s.offset = int(atomic.LoadInt64(&s.startWindowID)) * s.fieldCallsLen
-	s.values.Range(s.buildRow)
+
+	s.Logger.Info("generateRows")
+	s.values.Range(func(key, value any) bool {
+		v, ok := value.(*sync.Map)
+		if !ok {
+			return false
+		}
+		v.Range(s.buildRow(t))
+		return true
+	})
+
 }
 
-func (s *TagTask) buildRow(k any, vv any) bool {
-	key, _ := k.(string)
-	// window values only store float64 pointer type, no need to check
-	v, _ := vv.([]*float64)
-	if s.validNum >= len(s.rows) {
-		s.rows = append(s.rows, influx.Row{Name: s.info.Name})
-	}
-	s.rows[s.validNum].ReFill()
-	// reuse rows body
-	fields := &s.rows[s.validNum].Fields
-	// once make, reuse every flush
-	if fields.Len() < len(s.fieldCalls) {
-		*fields = make([]influx.Field, len(s.fieldCalls))
-		for i := 0; i < fields.Len(); i++ {
-			(*fields)[i] = influx.Field{
-				Key:  s.fieldCalls[i].Alias,
-				Type: s.fieldCalls[i].OutFieldType,
-			}
+func (s *TagTask) buildRow(flushTime int64) func(k, vv any) bool {
+	return func(k any, vv any) bool {
+		key, _ := k.(string)
+		// window values only store float64 pointer type, no need to check
+		v, _ := vv.([]*float64)
+		if s.validNum >= len(s.rows) {
+			s.rows = append(s.rows, influx.Row{Name: s.info.Name})
 		}
-	}
-	validNum := 0
-	for i := range s.fieldCalls {
-		if v[s.offset+i] == nil {
-			continue
-		}
-		(*fields)[validNum].NumValue = atomic2.LoadFloat64(v[s.offset+i])
-		validNum++
-	}
-	if validNum == 0 {
-		return true
-	}
-	*fields = (*fields)[:validNum]
-	tags := &s.rows[s.validNum].Tags
-	if key == EmptyGroupKey {
-		if len(s.groupKeys) != 0 {
-			s.Logger.Error("buildRow fail", zap.Error(fmt.Errorf("cannot occur this groupkeys %v key %v", key, s.groupKeys)))
-			return true
-		}
-	} else {
-		var err error
-		values := strings.Split(key, config.StreamGroupValueStrSeparator)
-		if len(values) != len(s.groupKeys) {
-			s.Logger.Error("buildRow fail", zap.Error(fmt.Errorf("cannot occur this values %v len %v groupkeys %v key %v", values, len(values), s.groupKeys, key)))
-			return true
-		}
-		validNum = 0
+		s.rows[s.validNum].ReFill()
+		// reuse rows body
+		fields := &s.rows[s.validNum].Fields
 		// once make, reuse every flush
-		if tags.Len() < len(s.groupKeys) {
-			*tags = make([]influx.Tag, len(s.groupKeys))
-			for i := 0; i < tags.Len(); i++ {
-				(*tags)[i] = influx.Tag{}
+		if fields.Len() < len(s.fieldCalls) {
+			*fields = make([]influx.Field, len(s.fieldCalls))
+			for i := 0; i < fields.Len(); i++ {
+				(*fields)[i] = influx.Field{
+					Key:  s.fieldCalls[i].Alias,
+					Type: s.fieldCalls[i].OutFieldType,
+				}
 			}
 		}
-		for i := range s.groupKeys {
-			value := values[i]
-			value, err = s.unCompressDictKey(value)
-			if err != nil {
-				s.Logger.Error("unCompressDictKey fail", zap.Error(err))
-				return true
-			}
-			// empty value, skip
-			if value == EmptyTagValue {
+		validNum := 0
+		for i := range s.fieldCalls {
+			if v[s.offset+i] == nil {
 				continue
 			}
-			(*tags)[validNum].Value = value
-			(*tags)[validNum].Key = s.groupKeys[i]
+			(*fields)[validNum].NumValue = atomic2.LoadFloat64(v[s.offset+i])
 			validNum++
 		}
-		*tags = (*tags)[:validNum]
+
+		if validNum == 0 {
+			return true
+		}
+
+		*fields = (*fields)[:validNum]
+		tags := &s.rows[s.validNum].Tags
+		if key == EmptyGroupKey {
+			if len(s.groupKeys) != 0 {
+				s.Logger.Error("buildRow fail", zap.Error(fmt.Errorf("cannot occur this groupkeys %v key %v", key, s.groupKeys)))
+				return true
+			}
+		} else {
+			var err error
+			values := strings.Split(key, config.StreamGroupValueStrSeparator)
+			if len(values) != len(s.groupKeys) {
+				s.Logger.Error("buildRow fail", zap.Error(fmt.Errorf("cannot occur this values %v len %v groupkeys %v key %v", values, len(values), s.groupKeys, key)))
+				return true
+			}
+			validNum = 0
+			// once make, reuse every flush
+			if tags.Len() < len(s.groupKeys) {
+				*tags = make([]influx.Tag, len(s.groupKeys))
+				for i := 0; i < tags.Len(); i++ {
+					(*tags)[i] = influx.Tag{}
+				}
+			}
+			for i := range s.groupKeys {
+				value := values[i]
+				value, err = s.unCompressDictKey(value)
+				if err != nil {
+					s.Logger.Error("unCompressDictKey fail", zap.Error(err))
+					return true
+				}
+				// empty value, skip
+				if value == EmptyTagValue {
+					continue
+				}
+				(*tags)[validNum].Value = value
+				(*tags)[validNum].Key = s.groupKeys[i]
+				validNum++
+			}
+			*tags = (*tags)[:validNum]
+		}
+		s.Logger.Info("flush stream point", zap.String("name", s.rows[s.validNum].Name), zap.Int64("flushTime", flushTime), zap.Any("fields", s.rows[s.validNum].Fields))
+		s.rows[s.validNum].Timestamp = flushTime
+		s.indexKeyPool = s.rows[s.validNum].UnmarshalIndexKeys(s.indexKeyPool)
+		s.validNum++
+		return true
 	}
-	s.rows[s.validNum].Timestamp = s.startTimeStamp
-	s.indexKeyPool = s.rows[s.validNum].UnmarshalIndexKeys(s.indexKeyPool)
-	s.validNum++
-	return true
+}
+
+func (s *TagTask) generateReplayRows(windowID int, ptID uint32) {
+	s.offset = windowID * s.fieldCallsLen
+
+	s.replayValues.Range(func(key, value any) bool {
+		v, ok := value.(*sync.Map)
+		if !ok {
+			return false
+		}
+		flushTime, ok := s.ptLoadStatus[ptID]
+		if !ok {
+			return false
+		}
+		timeStamp := flushTime.Timestamp + int64(windowID)*s.window.Nanoseconds()
+		v.Range(s.buildRow(timeStamp))
+		return true
+	})
+
 }
 
 // corpusIndexes array not need lock
@@ -586,73 +794,28 @@ func (s *TagTask) unCompressDictKey(key string) (string, error) {
 		s.Logger.Error(fmt.Sprintf("invalid corpus key %v", key))
 		return "", err
 	}
-	if len(s.corpusIndexes) < intV-1 {
-		s.Logger.Error(fmt.Sprintf("corpusIndexes len is less than %v", intV-1))
-		return "", err
-	}
-	return s.corpusIndexes[intV], nil
+	return s.stringDict.LoadValue(intV), nil
 }
 
-// UnCompressDictKeyUint corpusIndexes array not need lock
-func (s *TagTask) UnCompressDictKeyUint(key uint64) (string, error) {
-	if uint64(len(s.corpusIndexes)) < key-1 {
-		return "", fmt.Errorf("corpusIndexes len is less than %v", key-1)
-	}
-	return s.corpusIndexes[key], nil
-}
-
-// no lock to compress dict key, compress string to int64
-func (s *TagTask) compressDictKeyUint(key string) uint64 {
-	vv, ok := s.corpus.Load(key)
-	if ok {
-		index, _ := vv.(uint64)
-		return index
-	}
-	index := atomic.AddUint64(&s.corpusIndex, 1)
-	for uint64(len(s.corpusIndexes)) <= index {
-		s.corpusLock.Lock()
-		if uint64(len(s.corpusIndexes)) > index {
-			s.corpusLock.Unlock()
-			break
-		}
-		s.corpusIndexes = append(s.corpusIndexes, "")
-		s.corpusIndexes = s.corpusIndexes[:cap(s.corpusIndexes)]
-		s.corpusLock.Unlock()
-	}
-	key = stringinterner.InternTagValue(key)
-	s.corpusIndexes[index] = key
-	s.corpus.Store(key, index)
-	// conflict situation, may overwrite kv, but do not difference for uncompress, because corpusIndexes not overwrite
-	return index
-}
-
-func (s *TagTask) flush() error {
+func (s *TagTask) flushReplayData(windowID int) error {
 	var err error
-	s.Logger.Info("stream start flush")
-	t := time.Now()
+	s.Logger.Info("stream replay data start flush", zap.Int64("endTime", s.endTimeStamp))
 	s.indexKeyPool = bufferpool.GetPoints()
-	defer func() {
-		bufferpool.Put(s.indexKeyPool)
-		s.indexKeyPool = nil
-		s.stats.StatWindowFlushCost(int64(time.Since(t)))
-		s.stats.Push()
-		select {
-		case s.updateWindow <- struct{}{}:
-			return
-		case <-s.abort:
-			return
-		}
-	}()
 
-	s.generateRows()
+	ptID, shardID := s.replayPtIds[windowID], s.replayShardIds[windowID]
+	if ptID == nil || shardID == nil {
+		return err
+	}
+	s.generateReplayRows(windowID, *ptID)
 	if s.validNum == 0 {
 		return err
 	}
 
 	// if the number of rows is not greater than the FlushParallelMinRowNum, the rows will be flushed serially.
 	if s.validNum <= FlushParallelMinRowNum {
-		err = s.WriteRowsToShard(0, s.validNum)
-		s.Logger.Info("stream flush over")
+		s.Logger.Info("replay data point", zap.Any("rows", s.rows))
+		err = s.WriteRowsToShard(0, s.validNum, *ptID, *shardID)
+		s.Logger.Info("stream replay data flush over")
 		s.rows = s.rows[0:]
 		s.validNum = 0
 		return err
@@ -669,7 +832,70 @@ func (s *TagTask) flush() error {
 		}
 		s.flushWG.Add(1)
 		_ = s.goPool.Submit(func() {
-			err = s.WriteRowsToShard(start, end)
+			err = s.WriteRowsToShard(start, end, *ptID, *shardID)
+			if err != nil {
+				s.Logger.Error("stream replay data flush fail", zap.Error(err))
+			}
+			s.flushWG.Done()
+		})
+	}
+	s.flushWG.Wait()
+	s.Logger.Info("stream replay data flush over", zap.Error(err))
+	s.rows = s.rows[0:]
+	s.validNum = 0
+	return err
+}
+
+func (s *TagTask) flush() error {
+	var err error
+	s.Logger.Info("stream start flush", zap.Int64("endTime", s.endTimeStamp))
+	t := time.Now()
+	s.indexKeyPool = bufferpool.GetPoints()
+	defer func() {
+		bufferpool.Put(s.indexKeyPool)
+		s.indexKeyPool = nil
+		s.stats.StatWindowFlushCost(int64(time.Since(t)))
+		s.stats.Push()
+		select {
+		case s.updateWindow <- struct{}{}:
+			return
+		case <-s.abort:
+			return
+		}
+	}()
+
+	atomic.StoreInt64(&s.curFlushTime, s.endTimeStamp)
+
+	s.generateRows(s.startTimeStamp)
+	if s.validNum == 0 {
+		return err
+	}
+
+	ptID, shardID := atomic.LoadUint32(s.ptIds[atomic.LoadInt64(&s.startWindowID)]), atomic.LoadUint64(s.shardIds[atomic.LoadInt64(&s.startWindowID)])
+	// if the number of rows is not greater than the FlushParallelMinRowNum, the rows will be flushed serially.
+	if s.validNum <= FlushParallelMinRowNum {
+		err = s.WriteRowsToShard(0, s.validNum, ptID, shardID)
+		s.Logger.Info("stream flush over")
+		if err == nil {
+			s.snapshot()
+		}
+		s.rows = s.rows[0:]
+		s.validNum = 0
+		return err
+	}
+
+	// if the number of rows is greater than the FlushParallelMinRowNum, the rows will be flushed in parallel.
+	conNum := s.validNum / s.concurrency
+	for i := 0; i < s.concurrency; i++ {
+		start, end := i*conNum, 0
+		if i < s.concurrency-1 {
+			end = (i + 1) * conNum
+		} else {
+			end = s.validNum
+		}
+		s.flushWG.Add(1)
+		_ = s.goPool.Submit(func() {
+			err = s.WriteRowsToShard(start, end, ptID, shardID)
 			if err != nil {
 				s.Logger.Error("stream flush fail", zap.Error(err))
 			}
@@ -678,31 +904,73 @@ func (s *TagTask) flush() error {
 	}
 	s.flushWG.Wait()
 
-	s.Logger.Info("stream flush over")
+	s.Logger.Info("stream flush over", zap.Error(err))
+
+	if err == nil {
+		s.snapshot()
+	}
+
 	s.rows = s.rows[0:]
 	s.validNum = 0
 	return err
 }
 
-func (s *TagTask) WriteRowsToShard(start, end int) error {
+func (s *TagTask) recoverStatus() {
+	ptIDs := s.cli.GetNodePT(s.des.Database)
+	for _, ptID := range ptIDs {
+		s.recoverPTStatus(ptID)
+	}
+	s.setInit()
+}
+
+func (s *TagTask) recoverPTStatus(ptID uint32) {
+	p := path.Join(s.dataPath, "data", s.des.Database, strconv.Itoa(int(ptID)), s.des.RetentionPolicy, strconv.FormatUint(s.id, 10))
+	by, err := os.ReadFile(p)
+	if err != nil {
+		s.Logger.Error("recoverStatus read file error", zap.Error(err))
+		return
+	}
+	st := &flushStatus{}
+	err = json.Unmarshal(by, st)
+	if err != nil {
+		s.Logger.Error("recoverStatus Unmarshal error", zap.Error(err))
+		return
+	}
+	s.ptLoadStatus[ptID] = st
+	s.Logger.Info("recoverPTStatus", zap.Uint32("ptID", ptID), zap.Int64("time", st.Timestamp))
+}
+
+func (s *TagTask) snapshot() {
+	st := &flushStatus{Timestamp: atomic.LoadInt64(&s.curFlushTime)}
+	by, err := json.Marshal(st)
+	if err != nil {
+		s.Logger.Error("Marshal flushStatus fail", zap.Error(err))
+		return
+	}
+
+	// skip empty ptID
+	s.values.Range(func(key, value any) bool {
+		ptID, _ := key.(uint32)
+		p := path.Join(s.dataPath, "data", s.des.Database, strconv.Itoa(int(ptID)), s.des.RetentionPolicy, strconv.FormatUint(s.id, 10))
+		if err := os.WriteFile(p, by, 0600); err != nil {
+			s.Logger.Error("write file error", zap.Error(err))
+		}
+		return true
+	})
+	s.Logger.Info("stream snapshot suc", zap.String("task", s.name))
+}
+
+type flushStatus struct {
+	Timestamp int64 `json:"timestamp"`
+}
+
+func (s *TagTask) WriteRowsToShard(start, end int, ptID uint32, shardID uint64) error {
 	pBuf := bufferpool.GetPoints()
 	defer func() {
 		bufferpool.PutPoints(pBuf)
 	}()
 
 	var err error
-	pBuf = append(pBuf[:0], netstorage.PackageTypeFast)
-	// db
-	pBuf = append(pBuf, uint8(len(s.des.Database)))
-	pBuf = append(pBuf, s.des.Database...)
-	// rp
-	pBuf = append(pBuf, uint8(len(s.des.RetentionPolicy)))
-	pBuf = append(pBuf, s.des.RetentionPolicy...)
-	// ptid
-
-	pBuf = numenc.MarshalUint32(pBuf, atomic.LoadUint32(s.ptIds[atomic.LoadInt64(&s.startWindowID)]))
-	// shardId
-	pBuf = numenc.MarshalUint64(pBuf, atomic.LoadUint64(s.shardIds[atomic.LoadInt64(&s.startWindowID)]))
 	// rows
 	pBuf, err = influx.FastMarshalMultiRows(pBuf, s.rows[start:end])
 
@@ -711,9 +979,7 @@ func (s *TagTask) WriteRowsToShard(start, end int) error {
 		return err
 	}
 
-	err = s.store.WriteRows(s.des.Database, s.des.RetentionPolicy,
-		atomic.LoadUint32(s.ptIds[atomic.LoadInt64(&s.startWindowID)]),
-		atomic.LoadUint64(s.shardIds[atomic.LoadInt64(&s.startWindowID)]), s.rows[start:end], pBuf)
+	err = s.store.WriteRows(s.des.Database, s.des.RetentionPolicy, ptID, shardID, s.rows[start:end], pBuf)
 	if err != nil {
 		s.Logger.Error("stream flush fail", zap.Error(err))
 	}
@@ -774,7 +1040,7 @@ func (s *TagTask) generateRecGroupKeyUint(columnIDs []int, value *record.Record,
 			continue
 		}
 		str, _ := val.StringValue(row)
-		v := s.compressDictKeyUint(string(str))
+		v := s.stringDict.LoadIndex(string(str))
 		builder.AppendString(strconv.FormatUint(v, 10))
 		if i < len(columnIDs)-1 {
 			builder.AppendByte(config.StreamGroupValueSeparator)
@@ -799,7 +1065,7 @@ func (s *TagTask) generateGroupKeyUint(keys []string, value *influx.Row) string 
 	for i := range keys {
 		idx := util.Search(tagIndex, len(value.Tags), func(j int) bool { return value.Tags[j].Key >= keys[i] })
 		if idx < len(value.Tags) && value.Tags[idx].Key == keys[i] {
-			v := s.compressDictKeyUint(value.Tags[idx].Value)
+			v := s.stringDict.LoadIndex(value.Tags[idx].Value)
 			builder.AppendString(strconv.FormatUint(v, 10))
 			if i < len(keys)-1 {
 				builder.AppendByte(config.StreamGroupValueSeparator)
@@ -813,4 +1079,33 @@ func (s *TagTask) generateGroupKeyUint(keys []string, value *influx.Row) string 
 		tagIndex = idx + 1
 	}
 	return builder.NewString()
+}
+
+func (s *TagTask) FilterRowsByCond(data ChanData) (bool, error) {
+	cache, ok := data.(*TaskCache)
+	if !ok {
+		return false, fmt.Errorf("not support type %T", cache)
+	}
+
+	// occur release func
+	if cache == nil {
+		return false, ErrEmptyCache
+	}
+	if s.condition == nil {
+		s.Put(cache)
+		return true, nil
+	}
+
+	matchedIndexes := filterRowsByExpr(cache.rows, s.condition)
+	if len(matchedIndexes) == 0 {
+		return false, nil
+	}
+	rows := splitMatchedRows(cache.rows, matchedIndexes, s.info, s.isSelectAll)
+	if len(rows) == 0 {
+		return false, nil
+	}
+
+	cache.rows = rows
+	s.Put(cache)
+	return true, nil
 }

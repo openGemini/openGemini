@@ -1,7 +1,6 @@
 package httpd
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -22,23 +21,22 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/influxdata/influxdb"
 	"github.com/influxdata/influxdb/models"
-	"github.com/influxdata/influxdb/services/httpd"
 	"github.com/influxdata/influxdb/uuid"
 	jsoniter "github.com/json-iterator/go"
-	"github.com/openGemini/openGemini/app"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	compression "github.com/openGemini/openGemini/lib/compress"
 	config2 "github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/memory"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/obs"
-	"github.com/openGemini/openGemini/lib/opentelemetry"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+	"github.com/openGemini/openGemini/lib/sysconfig"
 	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/auth"
@@ -48,6 +46,7 @@ import (
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/lib/validation"
 	"github.com/pingcap/failpoint"
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/prompb"
@@ -56,6 +55,7 @@ import (
 )
 
 var json2 = jsoniter.ConfigCompatibleWithStandardLibrary
+
 var handlerLogLimit int
 
 const (
@@ -80,6 +80,8 @@ const (
 
 	// measurementTagKey is the tag key that all measurement names use in the new storage processor
 	measurementTagKey = "_measurement"
+
+	periodOfInspection = 100 * time.Millisecond
 )
 
 var (
@@ -132,6 +134,7 @@ type Handler struct {
 		TagArrayEnabled(db string) bool
 		DataNode(id uint64) (*meta2.DataNode, error)
 		DataNodes() ([]meta2.DataNode, error)
+		SqlNodes() ([]meta2.DataNode, error)
 
 		CreateDatabase(name string, enableTagArray bool, replicaN uint32, options *obs.ObsOptions) (*meta2.DatabaseInfo, error)
 		Databases() map[string]*meta2.DatabaseInfo
@@ -185,32 +188,31 @@ type Handler struct {
 	accessLog        *os.File
 	accessLogFilters config.StatusFilters
 
-	requestTracker   *httpd.RequestTracker
 	writeThrottler   *Throttler
 	queryThrottler   *Throttler
 	slowQueries      chan *hybridqp.SelectDuration
 	StatisticsPusher *statisticsPusher.StatisticsPusher
 	SQLConfig        *config2.TSSql
+	ResultCache      *ResultsCache
 }
 
 // NewHandler returns a new instance of handler with routes.
 func NewHandler(c config.Config) *Handler {
 	h := &Handler{
-		mux:            mux.NewRouter(),
-		Config:         &c,
-		Logger:         logger.NewLogger(errno.ModuleHTTP),
-		CLFLogger:      logger.GetLogger(),
-		requestTracker: httpd.NewRequestTracker(),
-		slowQueries:    make(chan *hybridqp.SelectDuration, 256),
-		QueryExecutor:  query.NewExecutor(cpu.GetCpuNum()),
+		mux:           mux.NewRouter(),
+		Config:        &c,
+		Logger:        logger.NewLogger(errno.ModuleHTTP),
+		CLFLogger:     logger.GetLogger(),
+		slowQueries:   make(chan *hybridqp.SelectDuration, 256),
+		QueryExecutor: query.NewExecutor(cpu.GetCpuNum()),
 	}
 
 	// Limit the number of concurrent & enqueued write requests.
-	h.writeThrottler = NewThrottler(c.MaxConcurrentWriteLimit, c.MaxEnqueuedWriteLimit, c.WriteRequestRateLimit)
+	h.writeThrottler = NewThrottler(c.MaxConcurrentWriteLimit, c.MaxEnqueuedWriteLimit, c.WriteRequestRateLimit, false)
 	h.writeThrottler.EnqueueTimeout = time.Duration(c.EnqueuedWriteTimeout)
 	h.writeThrottler.Logger = logger.GetLogger()
 
-	h.queryThrottler = NewThrottler(c.MaxConcurrentQueryLimit, c.MaxEnqueuedQueryLimit, c.QueryRequestRateLimit)
+	h.queryThrottler = NewThrottler(c.MaxConcurrentQueryLimit, c.MaxEnqueuedQueryLimit, c.QueryRequestRateLimit, true)
 	h.queryThrottler.EnqueueTimeout = time.Duration(c.EnqueuedQueryTimeout)
 	h.queryThrottler.Logger = logger.GetLogger()
 
@@ -267,11 +269,15 @@ func NewHandler(c config.Config) *Handler {
 		},
 		Route{
 			"prometheus-write", // Prometheus remote write
-			"POST", "/api/v1/prom/write", false, true, h.servePromWrite,
+			"POST", "/api/v1/write", false, true, h.servePromWrite,
 		},
 		Route{
 			"prometheus-read", // Prometheus remote read
-			"POST", "/api/v1/prom/read", true, true, h.servePromRead,
+			"POST", "/api/v1/read", true, true, h.servePromRead,
+		},
+		Route{
+			"prometheus-read", // Prometheus remote read
+			"GET", "/api/v1/read", true, true, h.servePromRead,
 		},
 		Route{
 			"prometheus-instant-query", // Prometheus instant query
@@ -318,12 +324,20 @@ func NewHandler(c config.Config) *Handler {
 			"GET", "/api/v1/metadata", true, true, h.servePromQueryMetaData,
 		},
 		Route{
+			"prometheus-create-tsdb", // Prometheus create tsdb
+			"POST", "/api/v1/tsdb/{tsdb}", false, true, h.servePromCreateTSDB,
+		},
+		Route{
 			"prometheus-write-metric-store", // Prometheus remote write
-			"POST", "/prometheus/{metric_store}/api/v1/prom/write", false, true, h.servePromWriteWithMetricStore,
+			"POST", "/prometheus/{metric_store}/api/v1/write", false, true, h.servePromWriteWithMetricStore,
 		},
 		Route{
 			"prometheus-read-metric-store", // Prometheus remote read
-			"POST", "/prometheus/{metric_store}/api/v1/prom/read", true, true, h.servePromReadWithMetricStore,
+			"POST", "/prometheus/{metric_store}/api/v1/read", true, true, h.servePromReadWithMetricStore,
+		},
+		Route{
+			"prometheus-read-metric-store", // Prometheus remote read
+			"GET", "/prometheus/{metric_store}/api/v1/read", true, true, h.servePromReadWithMetricStore,
 		},
 		Route{
 			"prometheus-instant-query-metric-store", // Prometheus instant query
@@ -493,6 +507,9 @@ func NewHandler(c config.Config) *Handler {
 	} else {
 		fluxRoute.HandlerFunc = h.serveFluxQuery
 	}
+	if c.ResultCache.Enabled {
+		h.ResultCache = NewResultCache(h.Logger, c.ResultCache)
+	}
 	h.AddRoutes(fluxRoute)
 
 	return h
@@ -600,8 +617,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if strings.HasPrefix(r.URL.Path, "/debug/pprof") && h.Config.PprofEnabled {
 		h.handleProfiles(w, r)
-	} else if strings.HasPrefix(r.URL.Path, "/debug/requests") {
-		h.serveDebugRequests(w, r)
 	} else if strings.HasPrefix(r.URL.Path, "/debug/vars") {
 		h.serveExpvar(w, r)
 	} else if strings.HasPrefix(r.URL.Path, "/debug/query") {
@@ -630,8 +645,6 @@ func isInternalDatabase(dbName string) bool {
 }
 
 func (h *Handler) serveSysCtrl(w http.ResponseWriter, r *http.Request, user meta2.User) {
-	h.requestTracker.Add(r, user)
-
 	// Check authorization.
 	if h.Config.AuthEnabled {
 		if user == nil {
@@ -662,9 +675,9 @@ func (h *Handler) getQueryFromRequest(r *http.Request, param *QueryParam, user m
 
 	qp = strings.TrimSpace(qp)
 	if user != nil {
-		h.Logger.Info(app.HideQueryPassword(qp), zap.String("userID", user.ID()), zap.String("remote_addr", r.RemoteAddr))
+		h.Logger.Info(HideQueryPassword(qp), zap.String("userID", user.ID()), zap.String("remote_addr", r.RemoteAddr))
 	} else {
-		h.Logger.Info(app.HideQueryPassword(qp), zap.String("remote_addr", r.RemoteAddr))
+		h.Logger.Info(HideQueryPassword(qp), zap.String("remote_addr", r.RemoteAddr))
 	}
 
 	return qp
@@ -1007,7 +1020,6 @@ func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.
 		atomic.AddInt64(&statistics.HandlerStat.ActiveQueryRequests, -1)
 		atomic.AddInt64(&statistics.HandlerStat.QueryRequestDuration, time.Since(start).Nanoseconds())
 	}()
-	h.requestTracker.Add(r, user)
 
 	// Retrieve the underlying ResponseWriter or initialize our own.
 	rw, ok := w.(ResponseWriter)
@@ -1039,6 +1051,7 @@ func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.
 		q, _, err = h.parsePipeAndSqlForQuery(r, user, info)
 		if err != nil {
 			h.httpError(rw, err.Error(), http.StatusBadRequest)
+			h.Logger.Error("serveQuery: parsePipeAndSqlForQuery error!", zap.Error(err))
 			return
 		}
 	} else {
@@ -1046,6 +1059,7 @@ func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.
 		qr, f, err := h.newQueryReader(r, nil, user)
 		if err != nil {
 			h.httpError(rw, err.Error(), http.StatusBadRequest)
+			h.Logger.Error("serveQuery: newQueryReader error!", zap.Error(err))
 			return
 		}
 		if f != nil {
@@ -1054,6 +1068,7 @@ func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.
 		q, err, status = h.getSqlQuery(r, qr)
 		if err != nil {
 			h.httpError(rw, err.Error(), status)
+			h.Logger.Error("serveQuery: getSqlQuery error!", zap.Error(err))
 			return
 		}
 	}
@@ -1082,6 +1097,7 @@ func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.
 	err = h.checkAuthorization(user, q, db)
 	if err != nil {
 		h.httpError(rw, "error authorizing query: "+err.Error(), http.StatusForbidden)
+		h.Logger.Error("serveQuery error:user is not authorized to query to database", zap.Error(err))
 		return
 	}
 
@@ -1089,21 +1105,24 @@ func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.
 	chunked, chunkSize, innerChunkSize, err := h.parseChunkSize(r)
 	if err != nil {
 		h.httpError(rw, err.Error(), http.StatusBadRequest)
+		h.Logger.Error("serveQuery: parseChunkSize error!", zap.Error(err))
 	}
 	// Parse whether this is an async command.
 	async := r.FormValue("async") == "true"
 
+	isQuerySeriesLimit := r.FormValue("is_query_series_limit") == "true"
 	opts := query.ExecutionOptions{
-		Database:        db,
-		RetentionPolicy: r.FormValue("rp"),
-		ChunkSize:       chunkSize,
-		Chunked:         chunked,
-		ReadOnly:        r.Method == "GET",
-		NodeID:          nodeID,
-		InnerChunkSize:  innerChunkSize,
-		ParallelQuery:   atomic.LoadInt32(&syscontrol.ParallelQueryInBatch) == 1,
-		Quiet:           true,
-		Authorizer:      h.getAuthorizer(user),
+		IsQuerySeriesLimit: isQuerySeriesLimit,
+		Database:           db,
+		RetentionPolicy:    r.FormValue("rp"),
+		ChunkSize:          chunkSize,
+		Chunked:            chunked,
+		ReadOnly:           r.Method == "GET",
+		NodeID:             nodeID,
+		InnerChunkSize:     innerChunkSize,
+		ParallelQuery:      atomic.LoadInt32(&syscontrol.ParallelQueryInBatch) == 1,
+		Quiet:              true,
+		Authorizer:         h.getAuthorizer(user),
 	}
 
 	// Make sure if the client disconnects we signal the query to abort
@@ -1159,6 +1178,7 @@ func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.
 
 		if isPipe && r.Err != nil {
 			h.httpError(rw, r.Err.Error(), http.StatusBadRequest)
+			h.Logger.Error("serveQuery: executeQuery results error!", zap.Error(err))
 			return
 		}
 
@@ -1266,7 +1286,6 @@ func (h *Handler) serveWrite(w http.ResponseWriter, r *http.Request, user meta2.
 		atomic.AddInt64(&statistics.HandlerStat.ActiveWriteRequests, -1)
 		atomic.AddInt64(&statistics.HandlerStat.WriteRequestDuration, d)
 	}(time.Now())
-	h.requestTracker.Add(r, user)
 
 	if syscontrol.DisableWrites {
 		h.httpError(w, `disable write!`, http.StatusForbidden)
@@ -1276,6 +1295,7 @@ func (h *Handler) serveWrite(w http.ResponseWriter, r *http.Request, user meta2.
 
 	if syscontrol.IsReadonly() {
 		h.httpError(w, "readonly now and writing is not allowed", http.StatusBadRequest)
+		h.Logger.Error("serveWrite: readonly now and writing is not allowed", zap.Bool("IsReadonly", syscontrol.IsReadonly()))
 		return
 	}
 
@@ -1566,175 +1586,6 @@ func convertToEpoch(r *query.Result, epoch string) {
 		}
 	}
 }
-func (h *Handler) serveOTLP(w http.ResponseWriter, r *http.Request, user meta2.User) (io.ReadCloser, string, error) {
-	atomic.AddInt64(&statistics.HandlerStat.WriteRequests, 1)
-	atomic.AddInt64(&statistics.HandlerStat.ActiveWriteRequests, 1)
-	atomic.AddInt64(&statistics.HandlerStat.WriteRequestBytesIn, r.ContentLength)
-	defer func(start time.Time) {
-		d := time.Since(start).Nanoseconds()
-		atomic.AddInt64(&statistics.HandlerStat.ActiveWriteRequests, -1)
-		atomic.AddInt64(&statistics.HandlerStat.WriteRequestDuration, d)
-	}(time.Now())
-	h.requestTracker.Add(r, user)
-
-	database := r.URL.Query().Get("db")
-	if database == "" {
-		h.httpError(w, "database is required", http.StatusBadRequest)
-		return nil, "", fmt.Errorf("database is required")
-	}
-
-	if _, err := h.MetaClient.Database(database); err != nil {
-		h.httpError(w, err.Error(), http.StatusNotFound)
-		return nil, "", err
-	}
-
-	if h.Config.AuthEnabled {
-		if user == nil {
-			h.httpError(w, fmt.Sprintf("user is required to write to database %q", database), http.StatusForbidden)
-			err := errno.NewError(errno.HttpForbidden)
-			h.Logger.Error("write error: user is required to write to database", zap.Error(err), zap.String("db", database))
-			atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
-			return nil, "", err
-		}
-
-		if err := h.WriteAuthorizer.AuthorizeWrite(user.ID(), database); err != nil {
-			err1 := errno.NewError(errno.HttpForbidden)
-			h.httpError(w, fmt.Sprintf("%q user is not authorized to write to database %q", user.ID(), database), http.StatusForbidden)
-			h.Logger.Error("write error:user is not authorized to write to database", zap.Error(err1), zap.String("db", database), zap.String("user", user.ID()))
-			atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
-			return nil, "", err
-		}
-	}
-
-	body := r.Body
-	if h.Config.MaxBodySize > 0 {
-		body = truncateReader(body, int64(h.Config.MaxBodySize))
-	}
-
-	if r.ContentLength > 0 {
-		if h.Config.MaxBodySize > 0 && r.ContentLength > int64(h.Config.MaxBodySize) {
-			h.httpError(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
-			return nil, "", fmt.Errorf(http.StatusText(http.StatusRequestEntityTooLarge))
-		}
-	}
-
-	return body, database, nil
-}
-
-// serveTracesWrite receives data in the openTelemetry collector and writes it
-// to the database
-func (h *Handler) serveTracesWrite(w http.ResponseWriter, r *http.Request, user meta2.User) {
-	body, database, err := h.serveOTLP(w, r, user)
-	if err != nil {
-		return
-	}
-
-	ctx := context.Background()
-
-	octx := opentelemetry.GetOtelContext(body)
-	octx.Writer = h.PointsWriter
-	octx.Database = database
-	octx.RetentionPolicy = r.URL.Query().Get("rp")
-	defer opentelemetry.PutOtelContext(octx)
-
-	for octx.Read(int(r.ContentLength)) {
-		// Convert the OTLP remote write request to Influx Points
-		start := time.Now()
-		err := octx.WriteTraces(ctx)
-		if err != nil {
-			h.Logger.Error("write otlp traces failed", zap.Error(err))
-			h.httpError(w, err.Error(), http.StatusInternalServerError)
-			atomic.AddInt64(&statistics.HandlerStat.Write500ErrRequests, 1)
-			return
-		}
-		atomic.AddInt64(&statistics.HandlerStat.WriteRequestBytesReceived, int64(len(octx.ReqBuf)))
-		atomic.AddInt64(&statistics.HandlerStat.WriteScheduleUnMarshalDns, time.Since(start).Nanoseconds())
-	}
-
-	if err := octx.Error(); err != nil {
-		h.Logger.Error("write otlp traces error", zap.Error(err), zap.String("db", database))
-		h.httpError(w, err.Error(), http.StatusBadRequest)
-		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
-		return
-	}
-	h.writeHeader(w, http.StatusNoContent)
-}
-
-// serveMetricsWrite receives OTLP metrics data and writes it to the database
-func (h *Handler) serveMetricsWrite(w http.ResponseWriter, r *http.Request, user meta2.User) {
-	body, database, err := h.serveOTLP(w, r, user)
-	if err != nil {
-		return
-	}
-
-	ctx := context.Background()
-
-	octx := opentelemetry.GetOtelContext(body)
-	octx.Writer = h.PointsWriter
-	octx.Database = database
-	octx.RetentionPolicy = r.URL.Query().Get("rp")
-	defer opentelemetry.PutOtelContext(octx)
-
-	if octx.Read(int(r.ContentLength)) {
-		// Convert the OTLP remote write request to Influx Points
-		start := time.Now()
-		err := octx.WriteMetrics(ctx)
-		if err != nil {
-			h.Logger.Error("write otlp metrics failed", zap.Error(err))
-			h.httpError(w, err.Error(), http.StatusInternalServerError)
-			atomic.AddInt64(&statistics.HandlerStat.Write500ErrRequests, 1)
-			return
-		}
-		atomic.AddInt64(&statistics.HandlerStat.WriteRequestBytesReceived, int64(len(octx.ReqBuf)))
-		atomic.AddInt64(&statistics.HandlerStat.WriteScheduleUnMarshalDns, time.Since(start).Nanoseconds())
-	}
-
-	if err := octx.Error(); err != nil {
-		h.Logger.Error("write otlp metrics error", zap.Error(err), zap.String("db", database))
-		h.httpError(w, err.Error(), http.StatusBadRequest)
-		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
-		return
-	}
-	h.writeHeader(w, http.StatusNoContent)
-}
-
-// serveLogsWrite receives OTLP logs data and writes it to the database
-func (h *Handler) serveLogsWrite(w http.ResponseWriter, r *http.Request, user meta2.User) {
-	body, database, err := h.serveOTLP(w, r, user)
-	if err != nil {
-		return
-	}
-
-	ctx := context.Background()
-
-	octx := opentelemetry.GetOtelContext(body)
-	octx.Writer = h.PointsWriter
-	octx.Database = database
-	octx.RetentionPolicy = r.URL.Query().Get("rp")
-	defer opentelemetry.PutOtelContext(octx)
-
-	for octx.Read(int(r.ContentLength)) {
-		// Convert the OTLP remote write request to Influx Points
-		start := time.Now()
-		err := octx.WriteLogs(ctx)
-		if err != nil {
-			h.Logger.Error("write otlp logs failed", zap.Error(err))
-			h.httpError(w, err.Error(), http.StatusInternalServerError)
-			atomic.AddInt64(&statistics.HandlerStat.Write500ErrRequests, 1)
-			return
-		}
-		atomic.AddInt64(&statistics.HandlerStat.WriteRequestBytesReceived, int64(len(octx.ReqBuf)))
-		atomic.AddInt64(&statistics.HandlerStat.WriteScheduleUnMarshalDns, time.Since(start).Nanoseconds())
-	}
-
-	if err := octx.Error(); err != nil {
-		h.Logger.Error("write otlp logs error", zap.Error(err), zap.String("db", database))
-		h.httpError(w, err.Error(), http.StatusBadRequest)
-		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
-		return
-	}
-	h.writeHeader(w, http.StatusNoContent)
-}
 
 func (h *Handler) serveFluxQuery(w http.ResponseWriter, r *http.Request, user meta2.User) {
 	if syscontrol.DisableReads {
@@ -1748,65 +1599,7 @@ func (h *Handler) serveFluxQuery(w http.ResponseWriter, r *http.Request, user me
 
 // serveExpvar serves internal metrics in /debug/vars format over HTTP.
 func (h *Handler) serveExpvar(w http.ResponseWriter, r *http.Request) {
-	app.SetStatsResponse(h.StatisticsPusher, w, r)
-}
-
-// serveDebugRequests will track requests for a period of time.
-func (h *Handler) serveDebugRequests(w http.ResponseWriter, r *http.Request) {
-	var d time.Duration
-	if s := r.URL.Query().Get("seconds"); s == "" {
-		d = DefaultDebugRequestsInterval
-	} else if seconds, err := strconv.ParseInt(s, 10, 64); err != nil {
-		h.httpError(w, err.Error(), http.StatusBadRequest)
-		return
-	} else {
-		d = time.Duration(seconds) * time.Second
-		if d > MaxDebugRequestsInterval {
-			h.httpError(w, fmt.Sprintf("exceeded maximum interval time: %s > %s",
-				influxql.FormatDuration(d),
-				influxql.FormatDuration(MaxDebugRequestsInterval)),
-				http.StatusBadRequest)
-			return
-		}
-	}
-
-	var closing <-chan bool
-	if notifier, ok := w.(http.CloseNotifier); ok {
-		closing = notifier.CloseNotify()
-	}
-
-	profile := h.requestTracker.TrackRequests()
-
-	timer := time.NewTimer(d)
-	select {
-	case <-timer.C:
-		profile.Stop()
-	case <-closing:
-		// Connection was closed early.
-		profile.Stop()
-		timer.Stop()
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.Header().Add("Connection", "close")
-
-	fmt.Fprintln(w, "{")
-	first := true
-	for req, st := range profile.Requests {
-		val, err := json2.Marshal(st)
-		if err != nil {
-			continue
-		}
-
-		if !first {
-			fmt.Fprintln(w, ",")
-		}
-		first = false
-		fmt.Fprintf(w, "%q: ", req.String())
-		w.Write(bytes.TrimSpace(val))
-	}
-	fmt.Fprintln(w, "\n}")
+	SetStatsResponse(h.StatisticsPusher, w, r)
 }
 
 // httpError writes an error to the client in a standard format.
@@ -2059,6 +1852,10 @@ func cors(inner http.Handler) http.Handler {
 
 func requestID(inner http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(FORWARD) == "true" {
+			inner.ServeHTTP(w, r)
+			return
+		}
 		// X-Request-Id takes priority.
 		rid := r.Header.Get("X-Request-Id")
 
@@ -2229,11 +2026,14 @@ type Throttler struct {
 	limiter *rate.Limiter
 
 	ctx context.Context
+
+	// query is used to distinguish between a write and query throttler.
+	query bool
 }
 
 // NewThrottler returns a new instance of Throttler that limits to concurrentN.
 // requests processed at a time and maxEnqueueN requests waiting to be processed.
-func NewThrottler(concurrentN, maxEnqueueN int, rateValue int) *Throttler {
+func NewThrottler(concurrentN, maxEnqueueN int, rateValue int, query bool) *Throttler {
 	var limiter *rate.Limiter
 	if rateValue > 0 {
 		limiter = rate.NewLimiter(rate.Limit(rateValue), rateValue)
@@ -2245,6 +2045,7 @@ func NewThrottler(concurrentN, maxEnqueueN int, rateValue int) *Throttler {
 		Logger:   zap.NewNop(),
 		limiter:  limiter,
 		ctx:      context.Background(),
+		query:    query,
 	}
 }
 
@@ -2254,7 +2055,23 @@ func (t *Throttler) Handler(h http.Handler) http.Handler {
 
 	// Return original handler if concurrent requests is zero.
 	if cap(t.current) == 0 {
-		return h
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// If there is no limit for concurrent queries and queues, the memory usage
+			// exceeds the threshold the new query is canceled and an error is reported
+			if t.query && sysconfig.GetInterruptQuery() {
+				memUsed := memory.MemUsedPct()
+				memThre := float64(sysconfig.GetUpperMemPct())
+				if memUsed > memThre {
+					resMsg := "request throttled, query memory exceeds the threshold, query is canceled"
+					t.Logger.Warn(resMsg, zap.Float64("mem used", memUsed), zap.Float64("mem threshold", memThre))
+					http.Error(w, resMsg, http.StatusServiceUnavailable)
+					return
+				}
+			}
+
+			// Execute request.
+			h.ServeHTTP(w, r)
+		})
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -2271,6 +2088,32 @@ func (t *Throttler) Handler(h http.Handler) http.Handler {
 			select {
 			case t.enqueued <- struct{}{}:
 				defer func() { <-t.enqueued }()
+				// If there is limit for concurrent queries and queues, the memory usage exceeds the threshold
+				// the new query is blocked and wait until the memory is less than the threshold the query
+				// queue is full, or the query times out
+				if t.query && sysconfig.GetInterruptQuery() {
+					memUsed := memory.MemUsedPct()
+					memThre := float64(sysconfig.GetUpperMemPct())
+					if memUsed < memThre {
+						break
+					}
+					resMsg := "request throttled, query memory exceeds the threshold, query is blocked"
+					t.Logger.Warn(resMsg, zap.Float64("mem used", memUsed), zap.Float64("mem threshold", memThre))
+					ticker := time.NewTicker(periodOfInspection)
+					defer ticker.Stop()
+					for {
+						select {
+						case <-ticker.C:
+							if memory.MemUsedPct() < float64(sysconfig.GetUpperMemPct()) {
+								break
+							}
+						case <-timerCh:
+							t.Logger.Warn("request throttled, exceeds timeout", zap.Duration("d", timeout), zap.Int("current length", len(t.current)))
+							http.Error(w, "request throttled, exceeds timeout", http.StatusServiceUnavailable)
+							return
+						}
+					}
+				}
 			default:
 				t.Logger.Warn("request throttled, queue full", zap.Duration("d", timeout), zap.Int("enqueued length", len(t.enqueued)))
 				http.Error(w, "request throttled, queue full", http.StatusServiceUnavailable)
@@ -2335,8 +2178,8 @@ func buildCommand(q *prompb.Query, mst string) (string, error) {
 			return "", errors.New("unknown match type")
 		}
 	}
-	matchers = append(matchers, fmt.Sprintf("time >= %vms", q.StartTimestampMs))
-	matchers = append(matchers, fmt.Sprintf("time <= %vms", q.EndTimestampMs))
+	matchers = append(matchers, fmt.Sprintf("time >= %v", q.StartTimestampMs*1e6))
+	matchers = append(matchers, fmt.Sprintf("time <= %v", q.EndTimestampMs*1e6))
 
 	return fmt.Sprintf("SELECT value %s WHERE %v GROUP BY *", from, strings.Join(matchers, " AND ")), nil
 }
@@ -2352,6 +2195,10 @@ func escapeSingleQuotes(str string) string {
 func ReadRequestToInfluxQuery(req *prompb.ReadRequest, mst string) (string, error) {
 	var readRequest string
 	for _, q := range req.Queries {
+		if err := validation.ValidateQueryTimeRange(mst, time.UnixMilli(q.StartTimestampMs), time.UnixMilli(q.EndTimestampMs)); err != nil {
+			return "", err
+		}
+
 		if s, err := buildCommand(q, mst); err != nil {
 			return "", err
 		} else {
@@ -2378,46 +2225,6 @@ func TagsConverterRemoveInfluxSystemTag(tags map[string]string) models.Tags {
 	}
 	sort.Sort(t)
 	return t
-}
-
-func Points2Rows(points []models.Point) ([]influx.Row, error) {
-	rows := make([]influx.Row, 0, len(points))
-	for _, p := range points {
-		r := influx.Row{
-			Timestamp: p.UnixNano(),
-			Name:      string(p.Name()),
-		}
-		for _, t := range p.Tags() {
-			r.Tags = append(r.Tags, influx.Tag{
-				Key:   string(t.Key),
-				Value: string(t.Value),
-			})
-		}
-		f, err := p.Fields()
-		if err != nil {
-			return nil, err
-		}
-		if len(f) > 1 {
-			return nil, errors.New("point should have only one value")
-		}
-		for k, v := range f {
-			if value, ok := v.(float64); !ok {
-				return nil, errors.New("value should be float64")
-			} else {
-				r.Fields = []influx.Field{
-					influx.Field{
-						Type:     influx.Field_Type_Float,
-						Key:      k,
-						NumValue: value,
-					},
-				}
-			}
-
-		}
-
-		rows = append(rows, r)
-	}
-	return rows, nil
 }
 
 func (h *Handler) httpErrorRsp(w http.ResponseWriter, b []byte, code int) {

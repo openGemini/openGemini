@@ -84,14 +84,14 @@ func Test_WriterWriteRecord(t *testing.T) {
 	defer os.Remove(tmpFile.Name())
 
 	meta := MetaData{Mst: "test", Schemas: map[string]uint8{"field1_float": 3, "field2_int": 1, "field3_bool": 5, "field4_string": 4, "time": 1,
-		"field6_int": 1, "field7_float": 3, "field8_string": 4, "field9_bool": 5}}
+		"field6_int": 1, "field7_float": 3, "field8_string": 4, "field9_bool": 5, "test": 4}}
 	writer, err := NewWriter(tmpFile.Name(), "", meta)
 	if err != nil {
 		t.Fatal("new writer failed:", err.Error())
 	}
 	testTimeStart := time.Date(2024, 6, 6, 0, 0, 0, 0, time.UTC)
 	startV := float64(time.Now().Second())
-	if err := writer.WriteRecord("test", genTestData(10, &startV, &testTimeStart)); err != nil {
+	if err := writer.WriteRecord(map[string]string{"test": ""}, genTestData(10, &startV, &testTimeStart)); err != nil {
 		t.Fatal("write record failed:", err.Error())
 	}
 }

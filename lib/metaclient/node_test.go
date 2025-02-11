@@ -19,8 +19,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/influxdata/influxdb/pkg/testing/assert"
 	"github.com/openGemini/openGemini/lib/metaclient"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestLoadLogicalClock(t *testing.T) {

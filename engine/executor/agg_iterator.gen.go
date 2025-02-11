@@ -1394,8 +1394,7 @@ func (r *FloatColFloatHeapIterator) processFirstWindow(
 ) {
 	r.updatePrevItem(inChunk, start, end)
 	if hasMultiInterval || !sameInterval {
-		r.buf.sortByTime = true
-		sort.Sort(r.buf)
+		r.buf.sortFunc(r.buf)
 		if r.buf.Len() > 0 {
 			r.appendPrevItem(r.auxChunk, outChunk)
 		}
@@ -1419,8 +1418,7 @@ func (r *FloatColFloatHeapIterator) processMiddleWindow(
 		r.prevMaxIndex = r.buf.maxIndex + 1
 		r.windowIndex = r.buf.appendForAux(inChunk, start, end, r.inOrdinal, values)
 	}
-	r.buf.sortByTime = true
-	sort.Sort(r.buf)
+	r.buf.sortFunc(r.buf)
 	if r.buf.Len() > 0 {
 		r.appendCurrItem(inChunk, outChunk, start)
 	}
@@ -1667,8 +1665,7 @@ func (r *IntegerColIntegerHeapIterator) processFirstWindow(
 ) {
 	r.updatePrevItem(inChunk, start, end)
 	if hasMultiInterval || !sameInterval {
-		r.buf.sortByTime = true
-		sort.Sort(r.buf)
+		r.buf.sortFunc(r.buf)
 		if r.buf.Len() > 0 {
 			r.appendPrevItem(r.auxChunk, outChunk)
 		}
@@ -1692,8 +1689,7 @@ func (r *IntegerColIntegerHeapIterator) processMiddleWindow(
 		r.prevMaxIndex = r.buf.maxIndex + 1
 		r.windowIndex = r.buf.appendForAux(inChunk, start, end, r.inOrdinal, values)
 	}
-	r.buf.sortByTime = true
-	sort.Sort(r.buf)
+	r.buf.sortFunc(r.buf)
 	if r.buf.Len() > 0 {
 		r.appendCurrItem(inChunk, outChunk, start)
 	}

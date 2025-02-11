@@ -126,6 +126,9 @@ func (c *aggregateCursor) NextAggData() (*record.Record, *comm.FileInfo, error) 
 			if newRecord.RowNums() > 0 {
 				return newRecord, currInfo, err
 			}
+			if c.schema.Options().IsPromQuery() {
+				continue
+			}
 		}
 		if newRecord.RowNums() >= c.maxRecordSize {
 			currInfo := c.fileInfo

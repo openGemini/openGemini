@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/openGemini/openGemini/coordinator"
 	"github.com/openGemini/openGemini/engine/executor"
@@ -363,6 +364,37 @@ func TestNewLogicalSort(t *testing.T) {
 	node := executor.NewLogicalSeries(schema)
 	sort := executor.NewLogicalSort(node, schema)
 	newSort := sort.Clone().(*executor.LogicalSort)
+	str := newSort.Digest()
+	tStr := newSort.Type()
+	if newSort == nil {
+		t.Error("wrong result")
+	} else {
+		fmt.Println(tStr, str)
+	}
+}
+
+func createPromSortQuerySchema() *executor.QuerySchema {
+	m := createMeasurement()
+	opt := query.ProcessorOptions{Sources: []influxql.Source{m}}
+	fields := influxql.Fields{
+		&influxql.Field{
+			Expr: &influxql.VarRef{
+				Val:  "value",
+				Type: influxql.Float,
+			},
+		},
+	}
+	names := []string{"value"}
+	schema := executor.NewQuerySchema(fields, names, &opt, nil)
+	schema.AddTable(m, schema.MakeRefs())
+	return schema
+}
+
+func TestNewLogicalPromSort(t *testing.T) {
+	schema := createPromSortQuerySchema()
+	node := executor.NewLogicalSeries(schema)
+	sort := executor.NewLogicalPromSort(node, schema)
+	newSort := sort.Clone().(*executor.LogicalPromSort)
 	str := newSort.Digest()
 	tStr := newSort.Type()
 	if newSort == nil {
@@ -790,7 +822,7 @@ func TestNewLogicalBinOp(t *testing.T) {
 	node := executor.NewLogicalSeries(schema)
 	leftSubquery := executor.NewLogicalSubQuery(node, schema)
 	rightSubquery := executor.NewLogicalSubQuery(node, schema)
-	binOp := executor.NewLogicalBinOp(leftSubquery, rightSubquery, &influxql.BinOp{}, schema)
+	binOp := executor.NewLogicalBinOp(leftSubquery, rightSubquery, nil, nil, &influxql.BinOp{}, schema)
 	binOpClone := binOp.Clone()
 	if binOpClone.Type() != binOp.Type() {
 		t.Fatal("wrong type result")
@@ -804,6 +836,7 @@ func TestNewLogicalBinOp(t *testing.T) {
 		t.Fatal("wrong Digest result")
 	}
 	binOp.ReplaceChildren([]hybridqp.QueryNode{nil, nil})
+	binOp.ReplaceChild(0, nil)
 	binOp.ReplaceChild(0, nil)
 	binOp.ReplaceChild(1, nil)
 	if binOp.Children()[0] != nil {
@@ -822,7 +855,7 @@ func TestNewLogicalBinOpOfNilMst(t *testing.T) {
 	schema := createQuerySchema()
 	node := executor.NewLogicalSeries(schema)
 	rightSubquery := executor.NewLogicalSubQuery(node, schema)
-	binOp := executor.NewLogicalBinOp(nil, rightSubquery, para, schema)
+	binOp := executor.NewLogicalBinOp(nil, rightSubquery, nil, nil, para, schema)
 	if len(binOp.Children()) != 1 {
 		t.Fatal("wrong children len result")
 	}
@@ -833,7 +866,7 @@ func TestNewLogicalBinOpOfNilMst(t *testing.T) {
 		t.Fatal("wrong replace child result")
 	}
 	para.NilMst = influxql.RNilMst
-	binOp = executor.NewLogicalBinOp(rightSubquery, nil, para, schema)
+	binOp = executor.NewLogicalBinOp(rightSubquery, nil, nil, nil, para, schema)
 	if len(binOp.Children()) != 1 {
 		t.Fatal("wrong children len result")
 	}
@@ -940,7 +973,7 @@ func TestBuildPromPlanNoGroupByOfBinOp(t *testing.T) {
 	subquery1 := executor.NewLogicalSubQuery(project1, schema)
 	subquery2 := executor.NewLogicalSubQuery(project2, schema)
 
-	binop := executor.NewLogicalBinOp(subquery1, subquery2, nil, schema)
+	binop := executor.NewLogicalBinOp(subquery1, subquery2, nil, nil, nil, schema)
 	if !ComparePlanNode(plan, binop) {
 		t.Fatal("TestBuildPromPlanNoGroupByOfBinOp err")
 	}
@@ -1115,4 +1148,89 @@ func TestBuildSubQuery_Except(t *testing.T) {
 	creator.AddShard(table)
 	_, err := executor.BuildSources(context.Background(), creator, Sources, schema, false)
 	assert.True(t, strings.Contains(err.Error(), "except: sub-query or join-query is unsupported"))
+}
+
+func TestBuildSubQuery_TimeRange(t *testing.T) {
+	condition := &influxql.BinaryExpr{
+		Op:  influxql.AND,
+		LHS: &influxql.BinaryExpr{Op: influxql.GTE, LHS: &influxql.VarRef{Val: "time"}, RHS: &influxql.IntegerLiteral{Val: 1}},
+		RHS: &influxql.BinaryExpr{Op: influxql.LTE, LHS: &influxql.VarRef{Val: "time"}, RHS: &influxql.IntegerLiteral{Val: 2}},
+	}
+	fields := []*influxql.Field{{Expr: &influxql.VarRef{Val: "value", Type: influxql.Float, Alias: "value"}, Alias: "value"}}
+	Sources := []influxql.Source{&influxql.SubQuery{Statement: &influxql.SelectStatement{
+		Fields:    fields,
+		Sources:   []influxql.Source{&influxql.Measurement{Name: "mst"}},
+		Condition: condition,
+	}}}
+	schema := createQuerySchema()
+	schema.Options().(*query.ProcessorOptions).StartTime = 0
+	schema.Options().(*query.ProcessorOptions).EndTime = 3
+	creator := NewMockShardGroup()
+	table := NewTable("mst")
+	table.AddDataTypes(map[string]influxql.DataType{"value": influxql.Float})
+	creator.AddShard(table)
+	queryNode, err := executor.BuildSources(context.Background(), creator, Sources, schema, false)
+	opt := queryNode.Children()[0].Schema().Options()
+	assert.NoError(t, err)
+	assert.Equal(t, opt.GetStartTime(), int64(0))
+	assert.Equal(t, opt.GetEndTime(), int64(3))
+	schema.Options().(*query.ProcessorOptions).PromQuery = true
+	queryNode, err = executor.BuildSources(context.Background(), creator, Sources, schema, false)
+	opt = queryNode.Children()[0].Schema().Options()
+	assert.NoError(t, err)
+	assert.Equal(t, opt.GetStartTime(), int64(1))
+	assert.Equal(t, opt.GetEndTime(), int64(2))
+}
+
+func TestBuildBinOpPlanOfOneSideExpr(t *testing.T) {
+	fields := []*influxql.Field{&influxql.Field{Expr: &influxql.VarRef{Val: "value", Type: influxql.Float, Alias: "value"}, Alias: "value"}}
+	stmt := &influxql.SelectStatement{
+		Fields:      fields,
+		Sources:     []influxql.Source{&influxql.SubQuery{Statement: &influxql.SelectStatement{Fields: fields, Sources: []influxql.Source{&influxql.Measurement{Name: "mst"}}}}},
+		BinOpSource: []*influxql.BinOp{&influxql.BinOp{RExpr: &influxql.Call{Name: "vector_prom", Args: []influxql.Expr{&influxql.NumberLiteral{Val: 1}}}}},
+	}
+	schema := createQuerySchema()
+
+	creator := NewMockShardGroup()
+	table := NewTable("mst")
+	table.AddDataTypes(map[string]influxql.DataType{"value": influxql.Float})
+	creator.AddShard(table)
+	_, err := executor.BuildBinOpQueryPlan(context.Background(), creator, stmt, schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stmt.BinOpSource[0].LExpr = stmt.BinOpSource[0].RExpr
+	stmt.BinOpSource[0].RExpr = nil
+	if _, err := executor.BuildBinOpQueryPlan(context.Background(), creator, stmt, schema); err != nil {
+		t.Fatal("TestBuildBinOpPlanOfNilMst error1")
+	}
+}
+
+func TestNewLogicalAggForPromNestOp(t *testing.T) {
+	opt := &query.ProcessorOptions{PromQuery: true, Range: time.Second}
+	fields := influxql.Fields{
+		&influxql.Field{Expr: &influxql.Call{
+			Name: "count_prom",
+			Args: []influxql.Expr{
+				&influxql.Call{
+					Name: "rate",
+					Args: []influxql.Expr{
+						&influxql.VarRef{
+							Val:  "value",
+							Type: influxql.Float,
+						},
+					},
+				},
+			},
+		},
+			Alias: "value",
+		},
+	}
+	schema := executor.NewQuerySchema(fields, []string{"value"}, opt, nil)
+	series := executor.NewLogicalSeries(schema)
+	seriesAgg := executor.NewLogicalAggregate(series, schema)
+	tagSetAgg := executor.NewLogicalAggregate(seriesAgg, schema)
+	merge := executor.NewLogicalExchange(tagSetAgg, executor.SHARD_EXCHANGE, nil, schema)
+	shardAgg := executor.NewLogicalAggregate(merge, schema)
+	assert.Equal(t, len(shardAgg.Schema().Calls()), 1)
 }

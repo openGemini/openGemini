@@ -87,9 +87,12 @@ func testIncIterNumCacheEliminated(t *testing.T) {
 		testEqualIncIterNum(t, queryIDs[i], expectedIterNum[i])
 	}
 	_, ok1 := incIterNumCache.Get("2")
-	_, ok2 := incIterNumCache.Get("3")
-	if ok1 || !ok2 {
+	if ok1 {
 		t.Fatalf("it should be eliminated by size")
+	}
+	_, ok2 := incIterNumCache.Get("3")
+	if ok2 {
+		t.Fatalf("it should be eliminated by time")
 	}
 }
 

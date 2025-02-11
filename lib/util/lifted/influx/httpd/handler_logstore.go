@@ -25,6 +25,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -519,6 +520,7 @@ func (h *Handler) serveUpdateLogstream(w http.ResponseWriter, r *http.Request, u
 }
 
 type LogDataType uint8
+
 type FailLogType uint8
 
 const (
@@ -805,6 +807,13 @@ func parseLogTags(req *LogWriteRequest) (map[string][]byte, error) {
 	if *req.logTagString == "" {
 		return nil, nil
 	}
+
+	decodedStr, err := url.QueryUnescape(*req.logTagString)
+	if err != nil {
+		return nil, errno.NewError(errno.ErrLogTagsDecode, err)
+	}
+	*req.logTagString = decodedStr
+
 	if len(*req.logTagString) > MaxLogTagsLen {
 		return nil, errno.NewError(errno.InvalidLogTagsParmLength)
 	}
@@ -1650,7 +1659,6 @@ func (h *Handler) serveRecord(w http.ResponseWriter, r *http.Request, user meta2
 		atomic.AddInt64(&statistics.HandlerStat.ActiveWriteRequests, -1)
 		atomic.AddInt64(&statistics.HandlerStat.WriteRequestDuration, d)
 	}(time.Now())
-	h.requestTracker.Add(r, user)
 
 	if !h.IsWriteNode() {
 		h.Logger.Error("serveRecord checkNodeRole fail", zap.Error(ErrInvalidWriteNode))
@@ -1737,7 +1745,7 @@ func (h *Handler) serveRecord(w http.ResponseWriter, r *http.Request, user meta2
 	if req.dataType == JSON {
 		totalLen = h.parseJson(scanner, req, rows, failRows)
 	} else {
-		totalLen = h.parseJsonArray(r.Body, req, rows, failRows)
+		totalLen = h.parseJsonArray(body, req, rows, failRows)
 	}
 
 	if scanner.Err() != nil {
@@ -1832,7 +1840,6 @@ func (h *Handler) serveUpload(w http.ResponseWriter, r *http.Request, user meta2
 		atomic.AddInt64(&statistics.HandlerStat.ActiveWriteRequests, -1)
 		atomic.AddInt64(&statistics.HandlerStat.WriteRequestDuration, d)
 	}(start)
-	h.requestTracker.Add(r, user)
 
 	if !h.IsWriteNode() {
 		h.Logger.Error("serveRecord checkNodeRole fail", zap.Error(ErrInvalidWriteNode))
@@ -1949,6 +1956,7 @@ const (
 const (
 	ErrSyntax             = "syntax error"
 	ErrParsingQuery       = "error parsing query"
+	ErrNoFieldSelected    = "no field selected"
 	ErrShardGroupNotFound = "log shard group not found"
 	ErrShardNotFound      = "shard not found"
 )
@@ -2295,7 +2303,6 @@ func (h *Handler) serveLogQuery(w http.ResponseWriter, r *http.Request, param *Q
 		atomic.AddInt64(&statistics.HandlerStat.ActiveQueryRequests, -1)
 		atomic.AddInt64(&statistics.HandlerStat.QueryRequestDuration, time.Since(start).Nanoseconds())
 	}()
-	h.requestTracker.Add(r, user)
 
 	// Retrieve the underlying ResponseWriter or initialize our own.
 	rw, ok := w.(ResponseWriter)
@@ -2608,7 +2615,8 @@ func (h *Handler) serveQueryLogWhenErr(w http.ResponseWriter, err error, t time.
 		return
 	}
 
-	if strings.Contains(err.Error(), ErrSyntax) || strings.Contains(err.Error(), ErrParsingQuery) {
+	if strings.Contains(err.Error(), ErrSyntax) || strings.Contains(err.Error(), ErrParsingQuery) ||
+		strings.Contains(err.Error(), ErrNoFieldSelected) {
 		h.Logger.Error("query log fail! ", zap.Error(err))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
 	} else {
@@ -2689,7 +2697,8 @@ func (h *Handler) getQueryLogResult(resp *Response, logCond *influxql.Query, par
 	var logs []map[string]interface{}
 	var unnest *influxql.Unnest
 
-	highlightWords := map[string]map[string]bool{}
+	// map[highlightWord]map[finiteField][]int{operator...}
+	highlightWords := map[string]map[string][]int{}
 	if logCond != nil {
 		unnest = logCond.Statements[0].(*influxql.LogPipeStatement).Unnest
 		expr := &(logCond.Statements[0].(*influxql.LogPipeStatement).Cond)
@@ -3079,7 +3088,7 @@ func GetMSByScrollID(id string) (int64, error) {
 		return 0, nil
 	}
 	arr := strings.Split(arrFirst[0], "|")
-	if len(arr) == 2 {
+	if len(arr) == 3 {
 		time, err := strconv.ParseInt(arr[0], 10, 64)
 		if err != nil {
 			return 0, err

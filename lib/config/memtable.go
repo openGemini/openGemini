@@ -71,3 +71,50 @@ func SetShardMemTableSizeLimit(limit int64) {
 func GetShardMemTableSizeLimit() int64 {
 	return int64(GetMemTableConfig().ShardMutableSizeLimit)
 }
+
+const (
+	defaultMaxWalFileSize  = toml.Size(256 * MB)
+	defaultMaxWalDuration  = toml.Duration(300 * time.Second)
+	defaultWalCompressMode = 1 // LZ4
+)
+
+type ShelfMode struct {
+	Enabled        bool          `toml:"enabled"`
+	MaxWalFileSize toml.Size     `toml:"max-wal-file-size"`
+	MaxWalDuration toml.Duration `toml:"max-wal-duration"`
+
+	//WAL data compression mode. 0: not compressed; 1: LZ4 (default); 2: Snappy
+	WalCompressMode int `toml:"wal-compress-mode"`
+
+	// number of background write threads. default value is CPUNum
+	Concurrent int `toml:"concurrent"`
+
+	// by default, the table is grouped based on the hash value of the measurement name
+	// If this parameter is set to a value greater than 1,
+	// secondary grouping is performed based on the hash value of the series key
+	SeriesHashFactor int `toml:"series-hash-factor"`
+
+	// max number of concurrent WAL files to be converted to SSP files.
+	// default value is the same as Concurrent
+	TSSPConvertConcurrent int `toml:"tssp-convert-concurrent"`
+}
+
+func defaultBridgeMode() ShelfMode {
+	return ShelfMode{
+		Enabled:         false,
+		MaxWalFileSize:  defaultMaxWalFileSize,
+		MaxWalDuration:  defaultMaxWalDuration,
+		WalCompressMode: defaultWalCompressMode,
+	}
+}
+
+func (t *ShelfMode) Corrector(cpuNum int) {
+	ResetZero2Default(&t.MaxWalFileSize, 0, defaultMaxWalFileSize)
+	ResetZero2Default(&t.MaxWalDuration, 0, defaultMaxWalDuration)
+	ResetZero2Default(&t.Concurrent, 0, max(1, cpuNum/2))
+	ResetZero2Default(&t.TSSPConvertConcurrent, 0, max(1, cpuNum/8))
+}
+
+func ShelfModeEnabled() bool {
+	return GetStoreConfig().ShelfMode.Enabled
+}

@@ -101,7 +101,7 @@ func TestTranspiler_transpileBinaryExpr(t1 *testing.T) {
 			args: args{
 				b: BinaryExpr(`5 > go_gc_duration_seconds_count`),
 			},
-			want:    parseInfluxqlByYacc(`SELECT value AS value FROM go_gc_duration_seconds_count WHERE time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z' AND 5 > value GROUP BY *`),
+			want:    parseInfluxqlByYacc(`SELECT value AS value FROM (SELECT value AS value FROM go_gc_duration_seconds_count WHERE time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY *) WHERE 5 > value AND time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY *`),
 			wantErr: false,
 		},
 		{
@@ -167,7 +167,7 @@ func TestTranspiler_transpileBinaryExpr(t1 *testing.T) {
 			args: args{
 				b: BinaryExpr(`go_gc_duration_seconds_count>=3<4`),
 			},
-			want:    parseInfluxqlByYacc(`SELECT value AS value FROM go_gc_duration_seconds_count WHERE time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z' AND value >= 3 AND value < 4 GROUP BY *`),
+			want:    parseInfluxqlByYacc(`SELECT value AS value FROM (SELECT value AS value FROM (SELECT value AS value FROM go_gc_duration_seconds_count WHERE time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY *) WHERE value >= 3 AND time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY *) WHERE value < 4 AND time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY *`),
 			wantErr: false,
 		},
 		{
@@ -219,35 +219,73 @@ func TestTranspiler_transpileBinaryExpr(t1 *testing.T) {
 	}
 }
 
-func Test_BothVectorWithoutMstOfBinOp(t *testing.T) {
-	fields := fields{
-		Evaluation: &endTime2,
-	}
-	args := args{
-		expr: BinaryExpr("year() / year()"),
-	}
-	want := "year_prom(prom_time) / year_prom(prom_time)"
-	trans := &Transpiler{
-		PromCommand: PromCommand{
-			Start:         fields.Start,
-			End:           fields.End,
-			Timezone:      fields.Timezone,
-			Evaluation:    fields.Evaluation,
-			Step:          fields.Step,
-			DataType:      fields.DataType,
-			Database:      fields.Database,
-			LabelName:     fields.LabelName,
-			LookBackDelta: DefaultLookBackDelta,
+func Test_BothVectorOfBinOp(t1 *testing.T) {
+	tests := []struct {
+		name   string
+		fields fields
+		args   args
+		want   string
+		skip   bool
+	}{
+		{
+			name: "binop1",
+			fields: fields{
+				Evaluation: &endTime2,
+			},
+			args: args{
+				expr: BinaryExpr("year() / year()"),
+			},
+			want: "year_prom(prom_time) / year_prom(prom_time)",
 		},
-		timeRange:      fields.timeRange,
-		parenExprCount: fields.parenExprCount,
-		timeCondition:  fields.condition,
+		{
+			name: "binop2",
+			fields: fields{
+				Evaluation: &endTime2,
+			},
+			args: args{
+				expr: BinaryExpr(`sum_over_time(go_gc_duration_seconds_count[1d]) - sum_over_time(go_gc_duration_seconds_count[1m])`),
+			},
+			want: "SELECT value FROM (SELECT sum_over_time(value) AS value FROM go_gc_duration_seconds_count WHERE time >= '2023-01-05T07:00:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY *) binary op (SELECT sum_over_time(value) AS value FROM go_gc_duration_seconds_count WHERE time >= '2023-01-06T06:59:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY *) false false() 0() WHERE time >= '2023-01-05T07:00:00Z' AND time <= '2023-01-06T07:00:00Z'",
+		},
+		{
+			name: "binop3",
+			fields: fields{
+				Evaluation: &endTime2,
+			},
+			args: args{
+				expr: BinaryExpr(`sum_over_time(go_gc_duration_seconds_count[1d]) > 800`),
+			},
+			want: "SELECT value AS value FROM (SELECT sum_over_time(value) AS value FROM go_gc_duration_seconds_count WHERE time >= '2023-01-05T07:00:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY *) WHERE value > 800 AND time >= '2023-01-05T07:00:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY *",
+		},
 	}
-	got, err := trans.Transpile(args.expr)
-	if err != nil {
-		t.Fatal("Test_BothVectorWithoutMstOfBinOp err")
-	}
-	if !reflect.DeepEqual(got.String(), want) {
-		t.Errorf("transpile() got = %v, want %v", got, want)
+	for _, tt := range tests {
+		if tt.skip {
+			continue
+		}
+		t1.Run(tt.name, func(t1 *testing.T) {
+			t := &Transpiler{
+				PromCommand: PromCommand{
+					Start:         tt.fields.Start,
+					End:           tt.fields.End,
+					Timezone:      tt.fields.Timezone,
+					Evaluation:    tt.fields.Evaluation,
+					Step:          tt.fields.Step,
+					DataType:      tt.fields.DataType,
+					Database:      tt.fields.Database,
+					LabelName:     tt.fields.LabelName,
+					LookBackDelta: DefaultLookBackDelta,
+				},
+				timeRange:      tt.fields.timeRange,
+				parenExprCount: tt.fields.parenExprCount,
+				timeCondition:  tt.fields.condition,
+			}
+			got, err := t.Transpile(tt.args.expr)
+			if err != nil {
+				t1.Fatal("Test_BothVectorOfBinOp err")
+			}
+			if !reflect.DeepEqual(got.String(), tt.want) {
+				t1.Errorf("transpile() got = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

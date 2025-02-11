@@ -10,6 +10,7 @@ import (
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/fasttime"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/memory"
+	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/filestream"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/fs"
 )
@@ -100,7 +101,9 @@ func newPart(ph *partHeader, path string, size uint64, metaindexReader filestrea
 	if err != nil {
 		errors = append(errors, fmt.Errorf("cannot unmarshal metaindexRows: %w", err))
 	}
+
 	metaindexReader.MustClose()
+	path = fileops.NormalizeDirPath(path)
 
 	var p part
 	p.path = path

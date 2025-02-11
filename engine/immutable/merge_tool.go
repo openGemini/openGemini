@@ -32,10 +32,10 @@ type mergeTool struct {
 	stat    *statistics.MergeStatItem
 	lg      *logger.Logger
 	zlg     *zap.Logger
-	context EventContext
+	context *EventContext
 }
 
-func newMergeTool(mts *MmsTables, ctx EventContext, lg *zap.Logger) *mergeTool {
+func newMergeTool(mts *MmsTables, ctx *EventContext, lg *zap.Logger) *mergeTool {
 
 	return &mergeTool{
 		mts:     mts,
@@ -113,6 +113,7 @@ func (mt *mergeTool) merge(ctx *MergeContext) {
 			mt.zlg.Error("failed to replace merged files", zap.Error(err))
 			return
 		}
+		NewHotFileManager().AddAll(mergedFiles.Files())
 		mt.mts.deleteUnorderedFiles(ctx.mst, unordered.Files())
 		mt.stat.Push()
 		success = true
@@ -223,7 +224,13 @@ func (mt *mergeTool) mergeSelfFastMode(ctx *MergeContext) {
 	ms := NewMergeSelf(mt.mts, mt.lg)
 	defer ms.Stop()
 
+	success := false
 	events := ms.InitEvents(ctx)
+	defer func() {
+		// Ensures that file locks are released even in unexpected situations
+		defer events.Finish(success, mt.mts.getEventContext())
+	}()
+
 	mt.mts.Listen(ms.signal, func() {
 		ms.Stop()
 	})
@@ -242,7 +249,7 @@ func (mt *mergeTool) mergeSelfFastMode(ctx *MergeContext) {
 		err = mt.mts.ReplaceFiles(ctx.mst, files.Files(), []TSSPFile{merged}, false)
 	}
 
-	events.Finish(err == nil, mt.context)
+	success = err == nil
 	mt.lg.Info("finish merge self",
 		zap.Int64("total size(MB)", ctx.unordered.size/1024/1024),
 		zap.Int64("merged size(MB)", mergedSize/1024/1024),
@@ -291,6 +298,7 @@ func (mt *mergeTool) mergeSelfStreamMode(ctx *MergeContext) {
 			mt.zlg.Error("failed to replace merged files", zap.Error(err))
 			return
 		}
+		NewHotFileManager().AddAll(mergedFiles.Files())
 		mt.mts.deleteUnorderedFiles(ctx.mst, unordered.Files())
 		mt.stat.Push()
 		success = true

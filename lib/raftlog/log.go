@@ -233,7 +233,7 @@ func (lf *logFile) getEntry(idx int) entry {
 
 // getRaftEntry gets the entry at the index idx, reads the data from the appropriate
 // offset and converts it to a raftpb.Entry object.
-func (lf *logFile) getRaftEntry(idx int) raftpb.Entry {
+func (lf *logFile) getRaftEntry(idx int) (raftpb.Entry, error) {
 	entry := lf.getEntry(idx)
 	re := raftpb.Entry{
 		Term:  entry.Term(),
@@ -243,7 +243,8 @@ func (lf *logFile) getRaftEntry(idx int) raftpb.Entry {
 	offset := entry.Offset()
 	if offset > 0 {
 		if offset >= uint64(lf.entry.Size()) {
-			panic("valid offset error")
+			logger.GetLogger().Error("valid offset error", zap.Uint64("offset", offset), zap.Int("entrySize", lf.entry.Size()))
+			return re, errors.New("valid offset error")
 		}
 		data := lf.entry.ReadSlice(int64(offset))
 		if len(data) > 0 {
@@ -251,7 +252,7 @@ func (lf *logFile) getRaftEntry(idx int) raftpb.Entry {
 			re.Data = append(re.Data, data...)
 		}
 	}
-	return re
+	return re, nil
 }
 
 // firstIndex returns the first index in the file.

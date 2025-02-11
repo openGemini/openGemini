@@ -237,13 +237,13 @@ eval instant at 0m min(http_requests)
   {} 1
 
 eval instant at 0m max by (group) (http_requests)
-  {group="canary"} 4
+	{group="canary"} 4
   {group="production"} 2
-
+  
 eval instant at 0m min by (group) (http_requests)
-  {group="canary"} 3
+	{group="canary"} 3
   {group="production"} 1
-
+  
 clear
 
 # Tests for topk/bottomk.
@@ -354,23 +354,23 @@ eval instant at 5m count_values without (instance)("version", version)
 	{job="app-server", group="canary", version="7"} 2
 	{job="api-server", group="production", version="6"} 3
 	{job="app-server", group="production", version="6"} 2
-
+	
 # Overwrite label with output. Don't do this.
 eval instant at 5m count_values without (instance)("job", version)
 	{job="7", group="canary"} 2
 	{job="8", group="canary"} 2
 	{job="6", group="production"} 5
-
+	
 # Overwrite label with output. Don't do this.
 eval instant at 5m count_values by (job, group)("job", version)
 	{job="7", group="canary"} 2
 	{job="8", group="canary"} 2
 	{job="6", group="production"} 5
-
+	
 
 # Tests for quantile.
 clear
- 
+
 load 10s
 	data{test="two_samples",point="a"} 0
 	data{test="two_samples",point="b"} 1
@@ -381,27 +381,27 @@ load 10s
 	data{test="uneven_samples",point="b"} 1
 	data{test="uneven_samples",point="c"} 4
 	foo .8
- 
+
 eval instant at 1m quantile without(point)(0.8, data)
 	{test="three_samples"} 1.6
 	{test="two_samples"} 0.8
 	{test="uneven_samples"} 2.8
- 
+
 # Bug #5276.
 eval instant at 1m quantile without(point)(scalar(foo), data)
 	{test="three_samples"} 1.6
 	{test="two_samples"} 0.8
 	{test="uneven_samples"} 2.8
- 
- 
+
+
 eval instant at 1m quantile without(point)((scalar(foo)), data)
 	{test="three_samples"} 1.6
 	{test="two_samples"} 0.8
 	{test="uneven_samples"} 2.8
- 
+
 # Tests for group.
 clear
- 
+
 load 10s
 	data{test="two_samples",point="a"} 0
 	data{test="two_samples",point="b"} 1
@@ -412,18 +412,18 @@ load 10s
 	data{test="uneven_samples",point="b"} 1
 	data{test="uneven_samples",point="c"} 4
 	foo .8
- 
+
 eval instant at 1m group without(point)(data)
 	{test="three_samples"} 1
 	{test="two_samples"} 1
 	{test="uneven_samples"} 1
- 
+
 eval instant at 1m group(foo)
 	{} 1
- 
+
 # Tests for avg.
 clear
- 
+
 load 10s
 	data{test="ten",point="a"} 8
 	data{test="ten",point="b"} 10
@@ -464,36 +464,47 @@ load 10s
 	data{test="bigzero",point="b"} -9.988465674311579e+307
 	data{test="bigzero",point="c"} 9.988465674311579e+307
 	data{test="bigzero",point="d"} 9.988465674311579e+307
- 
-eval_skip instant at 1m avg(data{test="ten"})
+
+eval instant at 1m avg(data{test="ten"})
 	{} 10
- 
-eval_skip instant at 1m avg(data{test="inf"})
+
+eval instant at 1m avg(data{test="inf"})
 	{} Inf
- 
-eval_skip instant at 1m avg(data{test="inf2"})
+
+eval instant at 1m avg(data{test="inf2"})
 	{} Inf
- 
-eval_skip instant at 1m avg(data{test="inf3"})
+
+eval instant at 1m avg(data{test="inf3"})
 	{} NaN
- 
-eval_skip instant at 1m avg(data{test="-inf"})
+
+eval instant at 1m avg(data{test="-inf"})
 	{} -Inf
- 
-eval_skip instant at 1m avg(data{test="-inf2"})
+
+eval instant at 1m avg(data{test="-inf2"})
 	{} -Inf
- 
-eval_skip instant at 1m avg(data{test="-inf3"})
+
+eval instant at 1m avg(data{test="-inf3"})
 	{} NaN
- 
-eval_skip instant at 1m avg(data{test="nan"})
+
+eval instant at 1m avg(data{test="nan"})
 	{} NaN
- 
-eval_skip instant at 1m avg(data{test="big"})
+
+eval instant at 1m avg(data{test="big"})
 	{} 9.988465674311579e+307
- 
-eval_skip instant at 1m avg(data{test="-big"})
+
+eval instant at 1m avg(data{test="-big"})
 	{} -9.988465674311579e+307
- 
-eval_skip instant at 1m avg(data{test="bigzero"})
+
+eval instant at 1m avg(data{test="bigzero"})
 	{} 0
+
+clear
+
+# Test that aggregations are deterministic.
+# Commented because it is flaky in range mode.
+#load 10s
+#	up{job="prometheus"} 1
+#	up{job="prometheus2"} 1
+#
+#eval instant at 1m count(topk(1,max(up) without()) == topk(1,max(up) without()) == topk(1,max(up) without()) == topk(1,max(up) without()) == topk(1,max(up) without()))
+#	{} 1

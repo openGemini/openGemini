@@ -130,6 +130,10 @@ func (n mockNode) GetCommitC() <-chan *raftconn.Commit {
 	panic("implement me")
 }
 
+func (n mockNode) TransferLeadership(newLeader uint64) error {
+	return nil
+}
+
 func (mockNode) StepRaftMessage(msg []raftpb.Message) {}
 
 func (mockNode) Stop() {}
@@ -154,6 +158,7 @@ func (n mockNode) RetCommittedDataC(dw *raftlog.DataWrapper, err error) {
 
 func TestSendRaftMessage_Success(t *testing.T) {
 	e := &Engine{
+		log: logger.NewLogger(errno.ModuleUnknown),
 		DBPartitions: map[string]map[uint32]*DBPTInfo{
 			"testDB": {
 				1: &DBPTInfo{
@@ -168,6 +173,7 @@ func TestSendRaftMessage_Success(t *testing.T) {
 
 func TestCheckRepGroupStatus(t *testing.T) {
 	e := &Engine{
+		log: logger.NewLogger(errno.ModuleUnknown),
 		DBPartitions: map[string]map[uint32]*DBPTInfo{
 			"testDB": {
 				1: &DBPTInfo{

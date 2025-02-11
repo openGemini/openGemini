@@ -20,9 +20,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/influxdata/influxdb/pkg/limiter"
 	"github.com/influxdata/influxdb/toml"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/scheduler"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/require"
@@ -39,12 +41,22 @@ func TestFullCompactOneFile(t *testing.T) {
 	rg := newRecordGenerator(begin, defaultInterval, false)
 
 	conf := config.GetStoreConfig()
-	conf.TSSPToParquetLevel = 2
+	conf.ParquetTask.TSSPToParquetLevel = 2
 	conf.Compact.CompactRecovery = true
 	defer func() {
-		conf.TSSPToParquetLevel = 0
+		conf.ParquetTask.TSSPToParquetLevel = 0
 		conf.Compact.CompactRecovery = false
 	}()
+
+	mIndex := &immutable.MockIndexMergeSet{
+		GetSeriesFn: func(sid uint64, buf []byte, condition influxql.Expr, callback func(key *influx.SeriesKey)) error {
+			return nil
+		},
+		SearchSeriesKeysFn: func(series [][]byte, name []byte, condition influxql.Expr) ([][]byte, error) {
+			return [][]byte{}, nil
+		},
+	}
+	mh.store.SetIndexMergeSet(mIndex)
 
 	for i := 0; i < 5; i++ {
 		rg.setBegin(begin).incrBegin(i + 5)
@@ -71,13 +83,13 @@ func TestMergeWithParquetTask(t *testing.T) {
 	rg := newRecordGenerator(begin, defaultInterval, false)
 
 	conf := config.GetStoreConfig()
-	conf.TSSPToParquetLevel = 2
+	conf.ParquetTask.TSSPToParquetLevel = 2
 	conf.Merge.MergeSelfOnly = true
 	conf.Merge.MinInterval = 0
 	conf.Merge.MaxMergeSelfLevel = 4
 	defer func() {
 		conf.Merge.MinInterval = toml.Duration(300 * time.Second)
-		conf.TSSPToParquetLevel = 0
+		conf.ParquetTask.TSSPToParquetLevel = 0
 		conf.Merge.MaxMergeSelfLevel = 0
 		conf.Merge.MergeSelfOnly = false
 	}()
@@ -119,21 +131,29 @@ func TestReliabilityLog(t *testing.T) {
 	require.NoError(t, immutable.ReadReliabilityLog(logFile, other))
 	require.Equal(t, plan, other)
 
+	signal := make(chan struct{})
+	defer func() {
+		close(signal)
+	}()
+	lm := limiter.NewFixed(1)
+	sch := scheduler.NewTaskScheduler(func(signal chan struct{}, onClose func()) {}, lm)
+
 	ctx := immutable.NewEventContext(&immutable.MockIndexMergeSet{GetSeriesFn: func(sid uint64, buf []byte, condition influxql.Expr, callback func(key *influx.SeriesKey)) error {
 		return nil
-	}}, nil)
+	}}, sch, signal)
 
 	require.NotEmpty(t, immutable.ReadReliabilityLog(logFile+".not_exists", other))
-	require.NoError(t, immutable.ProcParquetLog(dir, &lockFile, *ctx))
+	require.NoError(t, immutable.ProcParquetLog(dir, &lockFile, ctx))
 
-	fp, err := os.OpenFile(logFile, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0640)
+	fp, err := os.OpenFile(logFile, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0600)
 	require.NoError(t, err)
+	_, err = fp.Write(make([]byte, 10))
+	require.NoError(t, err)
+	require.NoError(t, fp.Sync())
 	require.NoError(t, fp.Close())
 
-	require.NoError(t, os.Truncate(logFile, 10))
-	require.NotEmpty(t, immutable.ReadReliabilityLog(logFile, other))
-
-	require.NotEmpty(t, immutable.ProcParquetLog(logFile, &lockFile, *ctx))
+	require.NotEmpty(t, immutable.ReadReliabilityLog(dir, other))
+	require.NoError(t, immutable.ProcParquetLog(dir, &lockFile, ctx))
 }
 
 func assertDirFileNumber(t *testing.T, dir string, exp int) {
@@ -143,9 +163,9 @@ func assertDirFileNumber(t *testing.T, dir string, exp int) {
 }
 
 func TestTSSP2ParquetEvent(t *testing.T) {
-	config.GetStoreConfig().TSSPToParquetLevel = 2
+	config.GetStoreConfig().ParquetTask.TSSPToParquetLevel = 2
 	defer func() {
-		config.GetStoreConfig().TSSPToParquetLevel = 0
+		config.GetStoreConfig().ParquetTask.TSSPToParquetLevel = 0
 	}()
 
 	shardDir := filepath.Join(t.TempDir(), "shard")
@@ -164,13 +184,22 @@ func TestTSSP2ParquetEvent(t *testing.T) {
 		return event
 	}
 
+	signal := make(chan struct{})
+	defer func() {
+		close(signal)
+	}()
+	lm := limiter.NewFixed(1)
+	sch := scheduler.NewTaskScheduler(func(signal chan struct{}, onClose func()) {}, lm)
+
 	event := createEvent()
 	ctx := immutable.NewEventContext(&immutable.MockIndexMergeSet{GetSeriesFn: func(sid uint64, buf []byte, condition influxql.Expr, callback func(key *influx.SeriesKey)) error {
 		return nil
-	}}, nil)
+	}}, sch, signal)
+
 	require.NoError(t, event.OnReplaceFile(shardDir, lock))
 	assertDirFileNumber(t, logDir, 1)
-	event.OnFinish(*ctx)
+	event.OnFinish(ctx)
+	sch.Wait()
 	assertDirFileNumber(t, logDir, 0)
 
 	// interrupted before OnReplaceFile
@@ -178,7 +207,8 @@ func TestTSSP2ParquetEvent(t *testing.T) {
 	event.OnInterrupt()
 	require.NoError(t, event.OnReplaceFile(shardDir, lock))
 	assertDirFileNumber(t, logDir, 0)
-	event.OnFinish(*ctx)
+	event.OnFinish(ctx)
+	sch.Wait()
 
 	// interrupted before OnFinish
 	event = createEvent()
@@ -186,7 +216,8 @@ func TestTSSP2ParquetEvent(t *testing.T) {
 	assertDirFileNumber(t, logDir, 1)
 	event.OnInterrupt()
 	assertDirFileNumber(t, logDir, 0)
-	event.OnFinish(*ctx)
+	event.OnFinish(ctx)
+	sch.Wait()
 }
 
 func TestMergeWithParquetTask_full(t *testing.T) {
@@ -195,9 +226,9 @@ func TestMergeWithParquetTask_full(t *testing.T) {
 
 	conf := config.GetStoreConfig()
 	conf.Merge.MergeSelfOnly = true
-	conf.TSSPToParquetLevel = 2
+	conf.ParquetTask.TSSPToParquetLevel = 2
 	defer func() {
-		conf.TSSPToParquetLevel = 0
+		conf.ParquetTask.TSSPToParquetLevel = 0
 	}()
 
 	schemas := getDefaultSchemas()

@@ -17,6 +17,8 @@ package readcache
 import (
 	"hash"
 	"hash/fnv"
+	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -27,14 +29,17 @@ import (
 )
 
 var pageSizeValidConfs = []string{"1kb", "4kb", "8kb", "16kb", "32kb", "64kb", "variable"}
+var metaPageSizeValidConfs = []string{"1kb", "4kb", "8kb", "16kb", "32kb", "64kb"}
 var pageSizeValidNum = []int64{1 * 1024, 4 * 1024, 8 * 1024, 16 * 1024, 32 * 1024, 64 * 1024}
 var IsPageSizeVariable bool
+var IsMetaUseHierarchicalPool bool
 
 var (
-	cacheSizeMin     int64 = 256 * 1024 * 1024
-	blocksMax              = 256
-	refreshStatistic int64 = 100       // every 100 quests refresh statistic data
-	PageSize         int64 = 32 * 1024 // default 32kb
+	cacheSizeMin     int64   = 256 * 1024 * 1024
+	blocksMax                = 256
+	refreshStatistic int64   = 100       // every 100 quests refresh statistic data
+	PageSize         int64   = 32 * 1024 // default 32kb
+	MetaPageSizeList []int64 = []int64{}
 )
 
 // blockCache is the interface for Level2 cache for block.
@@ -71,6 +76,23 @@ func SetPageSizeByConf(confPageSize string) {
 	defaultSize = uint64(PageSize)
 }
 
+func SetMataPageListByConf(confPageList []string) {
+	for _, confPageSize := range confPageList {
+		for i, validConf := range metaPageSizeValidConfs {
+			if strings.EqualFold(confPageSize, validConf) {
+				MetaPageSizeList = append(MetaPageSizeList, pageSizeValidNum[i])
+			}
+		}
+	}
+	sort.Slice(MetaPageSizeList, func(i, j int) bool {
+		return MetaPageSizeList[i] < MetaPageSizeList[j]
+	})
+	if len(MetaPageSizeList) != 0 {
+		IsMetaUseHierarchicalPool = true
+	}
+	MetaCachePool.InitPools()
+}
+
 // newBlockCache constructs a fixed size cache with the given eviction callback.
 // size: all page count
 // blockSize: block count
@@ -101,14 +123,14 @@ func newBlockCache(sizeLimit int64, usePagePool bool) *blockCache {
 }
 
 // add a value to the cache. Returns true if an eviction occurred.
-func (c *blockCache) add(key string, value []byte, size int64) {
+func (c *blockCache) add(key string, value []byte, size int64, pool PagePool) {
 	block := c.getBlockCache(key)
-	block.add(key, value, size)
+	block.add(key, value, size, pool)
 }
 
-func (c *blockCache) addPageCache(key string, cachePage *CachePage, size int64) {
+func (c *blockCache) addPageCache(key string, cachePage *CachePage, size int64, pool PagePool) {
 	block := c.getBlockCache(key)
-	block.addPageCache(key, cachePage, size)
+	block.addPageCache(key, cachePage, size, pool)
 }
 
 // get looks up a key's value from the cache.
@@ -127,22 +149,15 @@ func (c *blockCache) getPageCache(key string) (value interface{}, hit bool) {
 }
 
 // purge is used to completely clear the cache.
-func (c *blockCache) purge() {
-	var sg sync.WaitGroup
-
-	sg.Add(c.blockSize)
+func (c *blockCache) purge(pool PagePool) {
 	for i := 0; i < c.blockSize; i++ {
-		go func(idx int) {
-			c.blocks[idx].purge()
-			sg.Done()
-		}(i)
+		c.blocks[i].purge(pool)
 	}
-	sg.Wait()
 }
 
-func (c *blockCache) purgeAndUnrefCachePage() {
+func (c *blockCache) purgeAndUnrefCachePage(pool PagePool) {
 	for i := 0; i < c.blockSize; i++ {
-		c.blocks[i].purgeAndUnrefCachePage()
+		c.blocks[i].purgeAndUnrefCachePage(pool)
 	}
 }
 
@@ -157,20 +172,13 @@ func (c *blockCache) contains(key string) bool {
 
 // remove all context about the file from the cache.
 func (c *blockCache) remove(filePath string) bool {
-	var sg sync.WaitGroup
 	isRemove := false
-
-	sg.Add(c.blockSize)
 	for i := 0; i < c.blockSize; i++ {
-		go func(idx int) {
-			n := c.blocks[idx].removeFile(filePath)
-			if n {
-				isRemove = true
-			}
-			sg.Done()
-		}(i)
+		n := c.blocks[i].removeFile(filePath)
+		if n {
+			isRemove = true
+		}
 	}
-	sg.Wait()
 	return isRemove
 }
 
@@ -218,21 +226,15 @@ func (c *blockCache) pageLen() int {
 }
 
 // refreshOldBuffer clear oldBuffer, put currBuffer to oldBuffer, then clear currBuffer.
-func (c *blockCache) refreshOldBuffer() {
-	var sg sync.WaitGroup
-	sg.Add(c.blockSize)
+func (c *blockCache) refreshOldBuffer(pool PagePool) {
 	for i := 0; i < c.blockSize; i++ {
-		go func(idx int) {
-			c.blocks[idx].refreshOldBuffer()
-			sg.Done()
-		}(i)
+		c.blocks[i].refreshOldBuffer(pool)
 	}
-	sg.Wait()
 }
 
-func (c *blockCache) refreshOldBufferAndUnrefCachePage() {
+func (c *blockCache) refreshOldBufferAndUnrefCachePage(pool PagePool) {
 	for i := 0; i < c.blockSize; i++ {
-		c.blocks[i].refreshOldBufferAndUnrefCachePage()
+		c.blocks[i].refreshOldBufferAndUnrefCachePage(pool)
 	}
 }
 
@@ -256,6 +258,20 @@ func (c *blockCache) getUseByteSize() (byteSize int64) {
 	return byteSize
 }
 
+func (c *blockCache) getCapByteSize() (byteSize int64) {
+	for i := 0; i < c.blockSize; i++ {
+		byteSize += c.blocks[i].getCapSize()
+	}
+	return byteSize
+}
+
+func (c *blockCache) getPageNum() (pageNum int64) {
+	for i := 0; i < c.blockSize; i++ {
+		pageNum += int64(c.blocks[i].getPageNum())
+	}
+	return pageNum
+}
+
 // recordHit Record Hit count.
 func (c *blockCache) recordMetaHit(isHit bool) {
 	atomic.AddInt64(&c.hitRecord.requests, 1)
@@ -269,6 +285,12 @@ func (c *blockCache) recordMetaHit(isHit bool) {
 		atomic.CompareAndSwapInt64(&statistics.IOStat.IOReadCacheRatio, statistics.IOStat.IOReadCacheRatio, rate)
 		memory := c.getUseByteSize()
 		atomic.CompareAndSwapInt64(&statistics.IOStat.IOReadCacheMem, statistics.IOStat.IOReadCacheMem, memory)
+		capMemory := c.getCapByteSize()
+		atomic.CompareAndSwapInt64(&statistics.IOStat.IOReadCacheCapMem, statistics.IOStat.IOReadCacheCapMem, capMemory)
+		poolSize := MetaCachePool.Size()
+		atomic.CompareAndSwapInt64(&statistics.IOStat.IOReadMetaPoolSize, statistics.IOStat.IOReadMetaPoolSize, poolSize)
+		pageNum := c.getPageNum()
+		atomic.CompareAndSwapInt64(&statistics.IOStat.IOReadMetaPageNum, statistics.IOStat.IOReadMetaPageNum, pageNum)
 	}
 }
 

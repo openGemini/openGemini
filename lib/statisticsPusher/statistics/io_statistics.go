@@ -39,9 +39,12 @@ type IOStatistics struct {
 	IOReadCacheCount     int64
 	IOReadCacheRatio     int64
 	IOReadCacheMem       int64
+	IOReadCacheCapMem    int64
 	IOReadPageCacheCount int64
 	IOReadPageCacheRatio int64
 	IOReadPageCacheMem   int64
+	IOReadMetaPageNum    int64
+	IOReadMetaPoolSize   int64
 
 	IOSyncTotalCount  int64
 	IOSyncActiveCount int64
@@ -91,9 +94,12 @@ const (
 	statIOReadCacheCount     = "readCacheCount"
 	statIOReadCacheRatio     = "readCacheRatio"
 	statIOReadCacheMem       = "readCacheMem"
+	statIOReadCacheCapMem    = "readCacheCapMem"
 	statIOReadPageCacheCount = "readPageCacheCount"
 	statIOReadPageCacheRatio = "readPageCacheRatio"
 	statIOReadPageCacheMem   = "readPageCacheMem"
+	statIOReadMetaPageNum    = "readMetaPageNum"
+	statIOReadMetaPoolSize   = "readMetaPoolSize"
 	statIOSnapshotCount      = "snapshotCount"
 	statIOSnapshotBytes      = "snapshotBytes"
 
@@ -163,9 +169,12 @@ func genIOValueMap() map[string]interface{} {
 		statIOReadCacheCount:     atomic.LoadInt64(&IOStat.IOReadCacheCount),
 		statIOReadCacheRatio:     atomic.LoadInt64(&IOStat.IOReadCacheRatio),
 		statIOReadCacheMem:       atomic.LoadInt64(&IOStat.IOReadCacheMem),
+		statIOReadCacheCapMem:    atomic.LoadInt64(&IOStat.IOReadCacheCapMem),
 		statIOReadPageCacheCount: atomic.LoadInt64(&IOStat.IOReadPageCacheCount),
 		statIOReadPageCacheRatio: atomic.LoadInt64(&IOStat.IOReadPageCacheRatio),
 		statIOReadPageCacheMem:   atomic.LoadInt64(&IOStat.IOReadPageCacheMem),
+		statIOReadMetaPageNum:    atomic.LoadInt64(&IOStat.IOReadMetaPageNum),
+		statIOReadMetaPoolSize:   atomic.LoadInt64(&IOStat.IOReadMetaPoolSize),
 		statIOSnapshotCount:      atomic.LoadInt64(&IOStat.IOSnapshotCount),
 		statIOSnapshotBytes:      atomic.LoadInt64(&IOStat.IOSnapshotBytes),
 

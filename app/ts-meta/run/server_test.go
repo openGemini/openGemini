@@ -138,7 +138,7 @@ func Test_NewServer_Statistics(t *testing.T) {
 
 	server := &Server{}
 	conf := config.NewMeta()
-	server.MetaService = meta.NewService(conf, nil)
+	server.MetaService = meta.NewService(conf, nil, nil)
 	server.config = tsMetaconfig
 	server.initStatisticsPusher()
 	puser := &statisticsPusher.StatisticsPusher{}
@@ -156,7 +156,7 @@ func Test_NewServer_Statistics_Single(t *testing.T) {
 	server := &Server{}
 	conf := config.NewMeta()
 	server.info.App = config.AppSingle
-	server.MetaService = meta.NewService(conf, nil)
+	server.MetaService = meta.NewService(conf, nil, nil)
 	server.config = tsMetaconfig
 	server.initStatisticsPusher()
 	pusher := &statisticsPusher.StatisticsPusher{}
@@ -171,7 +171,7 @@ func Test_NewServer_Statistics_Data(t *testing.T) {
 	server := &Server{}
 	conf := config.NewMeta()
 	server.info.App = config.AppData
-	server.MetaService = meta.NewService(conf, nil)
+	server.MetaService = meta.NewService(conf, nil, nil)
 	server.config = tsMetaconfig
 	server.initStatisticsPusher()
 	pusher := &statisticsPusher.StatisticsPusher{}
@@ -196,21 +196,41 @@ func TestNewCommand(t *testing.T) {
 	require.Equal(t, config.AppMeta, cmd.Info.App)
 }
 
-func TestNewServer_ParseTls(t *testing.T) {
-	cfg := tlsconfig.Config{
-		Ciphers:    []string{"TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256"},
-		MinVersion: "tls1.0",
-		MaxVersion: "tls1.2",
+func TestNewServerWithTlsUseCase(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	log := logger.NewLogger(errno.ModuleUnknown)
+
+	// case 2: normal config
+	conf := config.NewTSMeta(true)
+	conf.Data.DataDir = path.Join(tmpDir, "data")
+	conf.Data.MetaDir = path.Join(tmpDir, "meta")
+	conf.Data.WALDir = path.Join(tmpDir, "wal")
+	conf.Meta.Dir = path.Join(tmpDir, "meta")
+	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
+	// normal config
+	conf.TLS = tlsconfig.Config{
+		Ciphers:    nil,
+		MinVersion: "",
+		MaxVersion: "",
 	}
-	_, err := cfg.Parse()
+
+	server, err := NewServer(conf, app.ServerInfo{}, log)
 	require.NoError(t, err)
+	require.NotNil(t, server.(*Server).MetaService)
+	require.NotNil(t, server.(*Server).sherlockService)
 
-	cfg.Ciphers = []string{"not_support"}
-	_, err = cfg.Parse()
-	require.EqualValues(t, true, strings.Contains(err.Error(), "unknown cipher suite"))
-
-	cfg.Ciphers = []string{"TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256"}
-	cfg.MaxVersion = "tls1.10"
-	_, err = cfg.Parse()
-	require.EqualValues(t, true, strings.Contains(err.Error(), "unknown tls version"))
+	// abnormal config
+	conf.TLS = tlsconfig.Config{
+		Ciphers: []string{
+			"TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384_not_exist",
+		},
+		MinVersion: "",
+		MaxVersion: "",
+	}
+	server, err = NewServer(conf, app.ServerInfo{}, log)
+	require.Nil(t, server)
+	require.Error(t, err)
+	require.EqualValues(t, true, strings.HasPrefix(err.Error(),
+		"parse tls config failed"))
 }

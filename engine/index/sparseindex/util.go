@@ -46,7 +46,7 @@ func genRPNElementByOp(logicalOp influxql.Token, value *FieldRef, res *RPNElemen
 		res.rg = createLeftBounded(value, true, false)
 	case influxql.IN:
 		res.op = rpn.InSet
-	case influxql.MATCHPHRASE:
+	case influxql.MATCHPHRASE, influxql.IPINRANGE:
 		res.op = rpn.InRange
 		res.rg = NewRange(value, value, true, true)
 	default:

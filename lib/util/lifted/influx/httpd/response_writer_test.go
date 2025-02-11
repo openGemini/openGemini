@@ -21,7 +21,7 @@ import (
 	"github.com/influxdata/influxdb/models"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/promql2influxql"
-	"github.com/openGemini/openGemini/lib/util/lifted/promtheus/promql"
+	"github.com/prometheus/prometheus/promql"
 	"github.com/prometheus/prometheus/promql/parser"
 )
 
@@ -96,7 +96,7 @@ func BenchmarkSonicJsonFormatter(b *testing.B) {
 
 func BenchmarkPromJsonFormatter(b *testing.B) {
 	f := &jsonFormatter{}
-	resp := PromResponse{Data: &promql2influxql.PromResult{}, Status: "success"}
+	resp := &promql2influxql.PromQueryResponse{Data: &promql2influxql.PromData{}, Status: "success"}
 	r := &promql2influxql.Receiver{DropMetric: false, RemoveTableName: false}
 	res := &query.Result{}
 	t := time.Now()
@@ -125,7 +125,7 @@ func BenchmarkPromJsonFormatter(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
-	data := promql2influxql.NewPromResult(promql2influxql.HandleValueTypeMatrix(promSeries), string(parser.ValueTypeMatrix))
+	data := promql2influxql.NewPromData(promql2influxql.HandleValueTypeMatrix(promSeries), string(parser.ValueTypeMatrix))
 	resp.Data = data
 	writer := &mockWriter{}
 	b.ReportAllocs()

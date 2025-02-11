@@ -17,6 +17,7 @@ package executor
 import (
 	"bytes"
 	"context"
+	"sync"
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/binarysearch"
@@ -33,28 +34,32 @@ const AggBufChunkNum = 2
 type StreamAggregateTransform struct {
 	BaseProcessor
 
-	init                 bool
 	sameInterval         bool
 	prevSameInterval     bool
 	prevChunkIntervalLen int
 	bufChunkNum          int
+	closedSignal         *bool
 	proRes               *processorResults
 	iteratorParam        *IteratorParams
 	chunkPool            *CircularChunkPool
 	newChunk             Chunk
-	nextChunkCh          chan struct{}
-	reduceChunkCh        chan struct{}
-	bufChunk             []Chunk
+	inputChunk           chan Chunk
+	nextSignal           chan Semaphore
+	nextSignalOnce       sync.Once
+	bufChunk             Chunk
+	nextChunk            Chunk
 	Inputs               ChunkPorts
 	Outputs              ChunkPorts
 	opt                  *query.ProcessorOptions
 	aggLogger            *logger.Logger
 	postProcess          func(Chunk)
-
-	span        *tracing.Span
-	computeSpan *tracing.Span
-
-	errs errno.Errs
+	span                 *tracing.Span
+	computeSpan          *tracing.Span
+	errs                 errno.Errs
+	// whether the absent operator exists.
+	existAbsentOp bool
+	// Whether processed data
+	hadData bool
 }
 
 func NewStreamAggregateTransform(
@@ -65,17 +70,19 @@ func NewStreamAggregateTransform(
 	}
 
 	var err error
+	closedSignal := false
 	trans := &StreamAggregateTransform{
-		opt:           opt,
-		bufChunkNum:   AggBufChunkNum,
-		Inputs:        make(ChunkPorts, 0, len(inRowDataType)),
-		Outputs:       make(ChunkPorts, 0, len(outRowDataType)),
-		bufChunk:      make([]Chunk, 0, AggBufChunkNum),
-		nextChunkCh:   make(chan struct{}),
-		reduceChunkCh: make(chan struct{}),
-		iteratorParam: &IteratorParams{},
-		aggLogger:     logger.NewLogger(errno.ModuleQueryEngine),
-		chunkPool:     NewCircularChunkPool(CircularChunkNum, NewChunkBuilder(outRowDataType[0])),
+		closedSignal:   &closedSignal,
+		opt:            opt,
+		bufChunkNum:    AggBufChunkNum,
+		Inputs:         make(ChunkPorts, 0, len(inRowDataType)),
+		Outputs:        make(ChunkPorts, 0, len(outRowDataType)),
+		nextSignal:     make(chan Semaphore),
+		nextSignalOnce: sync.Once{},
+		inputChunk:     make(chan Chunk),
+		iteratorParam:  &IteratorParams{},
+		aggLogger:      logger.NewLogger(errno.ModuleQueryEngine),
+		chunkPool:      NewCircularChunkPool(CircularChunkNum, NewChunkBuilder(outRowDataType[0])),
 	}
 
 	for _, schema := range inRowDataType {
@@ -87,7 +94,7 @@ func NewStreamAggregateTransform(
 		output := NewChunkPort(schema)
 		trans.Outputs = append(trans.Outputs, output)
 	}
-
+	trans.existAbsentOp = existAbsentOp(exprOpt)
 	trans.proRes, err = NewProcessors(inRowDataType[0], outRowDataType[0], exprOpt, opt, isSubQuery)
 	if err != nil {
 		return nil, err
@@ -122,6 +129,15 @@ func NewStreamAggregateTransform(
 	return trans, nil
 }
 
+func existAbsentOp(opt []hybridqp.ExprOptions) bool {
+	for i := range opt {
+		if call, ok := opt[i].Expr.(*influxql.Call); ok && call.Name == "absent_prom" {
+			return true
+		}
+	}
+	return false
+}
+
 type StreamAggregateTransformCreator struct {
 }
 
@@ -152,11 +168,13 @@ func (trans *StreamAggregateTransform) Explain() []ValuePair {
 	return nil
 }
 
-func (trans *StreamAggregateTransform) Close() {
-	trans.Once(func() {
-		close(trans.reduceChunkCh)
-		close(trans.nextChunkCh)
+func (trans *StreamAggregateTransform) closeNextSignal() {
+	trans.nextSignalOnce.Do(func() {
+		close(trans.nextSignal)
 	})
+}
+
+func (trans *StreamAggregateTransform) Close() {
 	trans.Outputs.Close()
 	trans.chunkPool.Release()
 }
@@ -178,18 +196,15 @@ func (trans *StreamAggregateTransform) Work(ctx context.Context) error {
 	errs := &trans.errs
 	errs.Init(len(trans.Inputs)+1, trans.Close)
 
-	for i := range trans.Inputs {
-		go trans.runnable(i, ctx, errs)
-	}
-
+	go trans.run(ctx, errs)
 	go trans.reduce(ctx, errs)
-
 	return errs.Err()
 }
 
-func (trans *StreamAggregateTransform) runnable(in int, ctx context.Context, errs *errno.Errs) {
+func (trans *StreamAggregateTransform) run(ctx context.Context, errs *errno.Errs) {
 	defer func() {
 		tracing.Finish(trans.span)
+		close(trans.inputChunk)
 		if e := recover(); e != nil {
 			err := errno.NewError(errno.RecoverPanic, e)
 			trans.aggLogger.Error(err.Error(), zap.String("query", "AggregateTransform"), zap.Uint64("query_id", trans.opt.QueryId))
@@ -199,109 +214,74 @@ func (trans *StreamAggregateTransform) runnable(in int, ctx context.Context, err
 		}
 	}()
 
-	trans.running(ctx, in)
-}
-
-func (trans *StreamAggregateTransform) running(ctx context.Context, in int) {
 	for {
 		select {
-		case c, ok := <-trans.Inputs[in].State:
+		case c, ok := <-trans.Inputs[0].State:
 			tracing.StartPP(trans.span)
 			if !ok {
-				trans.doForLast()
 				return
 			}
-
-			trans.init = true
-			trans.appendChunk(c)
-			if len(trans.bufChunk) == trans.bufChunkNum {
-				trans.reduceChunkCh <- struct{}{}
+			trans.inputChunk <- c
+			if _, sOk := <-trans.nextSignal; !sOk {
+				return
 			}
-			<-trans.nextChunkCh
 			tracing.EndPP(trans.span)
 		case <-ctx.Done():
+			trans.closeNextSignal()
+			*trans.closedSignal = true
 			return
 		}
 	}
 }
 
-func (trans *StreamAggregateTransform) doForLast() {
-	if !trans.init {
-		<-trans.nextChunkCh
-		trans.reduceChunkCh <- struct{}{}
-		return
-	}
-
-	for len(trans.bufChunk) > 0 {
-		trans.reduceChunkCh <- struct{}{}
-		<-trans.nextChunkCh
-	}
-	trans.reduceChunkCh <- struct{}{}
-}
-
-func (trans *StreamAggregateTransform) appendChunk(c Chunk) {
-	trans.bufChunk = append(trans.bufChunk, c)
-}
-
-func (trans *StreamAggregateTransform) nextChunk() Chunk {
-	if len(trans.bufChunk) > 0 {
-		newChunk := trans.bufChunk[0]
-		trans.bufChunk = trans.bufChunk[1:]
-		return newChunk
-	}
-	return nil
-}
-
-func (trans *StreamAggregateTransform) peekChunk() Chunk {
-	c := trans.nextChunk()
-	if c == nil {
-		return nil
-	}
-	trans.unreadChunk(c)
-	return c
-}
-
-func (trans *StreamAggregateTransform) unreadChunk(c Chunk) {
-	trans.bufChunk = append([]Chunk{c}, trans.bufChunk...)
+func (trans *StreamAggregateTransform) NextChunk() {
+	trans.nextSignal <- signal
+	trans.nextChunk = <-trans.inputChunk
 }
 
 func (trans *StreamAggregateTransform) reduce(
-	_ context.Context, errs *errno.Errs,
+	ctx context.Context, errs *errno.Errs,
 ) {
+	var reduceErr error
 	defer func() {
+		trans.closeNextSignal()
 		if e := recover(); e != nil {
 			err := errno.NewError(errno.RecoverPanic, e)
 			trans.aggLogger.Error(err.Error(), zap.String("query", "AggregateTransform"), zap.Uint64("query_id", trans.opt.QueryId))
 			errs.Dispatch(err)
 		} else {
-			errs.Dispatch(nil)
+			errs.Dispatch(reduceErr)
 		}
 	}()
-
-	// return true if transform is canceled
-	reduceStart := func() {
-		<-trans.reduceChunkCh
-	}
-
-	// return true if transform is canceled
-	nextStart := func() {
-		trans.nextChunkCh <- struct{}{}
-	}
-
-	trans.newChunk = trans.chunkPool.GetChunk()
-	for {
-		nextStart()
-		reduceStart()
-
-		c := trans.nextChunk()
-		if c == nil {
+	var ok bool
+	// get first chunk
+	trans.bufChunk, ok = <-trans.inputChunk
+	if !ok {
+		if trans.existAbsentOp && !trans.hadData {
+			trans.newChunk = trans.chunkPool.GetChunk()
+			AbsentWithOutDataAlive(trans.opt, trans.newChunk)
 			if trans.newChunk.NumberOfRows() > 0 {
 				trans.sendChunk()
 			}
+		}
+		return
+	}
+	trans.newChunk = trans.chunkPool.GetChunk()
+	for {
+		if *trans.closedSignal {
 			return
 		}
+		if trans.bufChunk == nil {
+			if trans.newChunk.NumberOfRows() > 0 {
+				trans.sendChunk()
+				return
+			}
+			return
+		}
+		// processed data
+		trans.hadData = true
 		// if the input chunk is from other measurements, return the newChunk.
-		if trans.newChunk.NumberOfRows() > 0 && trans.newChunk.Name() != c.Name() {
+		if trans.newChunk.NumberOfRows() > 0 && trans.newChunk.Name() != trans.bufChunk.Name() {
 			trans.sendChunk()
 		} else if trans.newChunk.NumberOfRows() >= trans.opt.ChunkSize {
 			// if the size of newChunk is more than the the chunk size given, return the newChunk.
@@ -309,11 +289,11 @@ func (trans *StreamAggregateTransform) reduce(
 		}
 
 		tracing.SpanElapsed(trans.computeSpan, func() {
-			trans.compute(c)
-			if trans.iteratorParam.err != nil {
-				errs.Dispatch(trans.iteratorParam.err)
-			}
+			trans.compute(trans.bufChunk)
 		})
+		if trans.iteratorParam.err != nil {
+			reduceErr = trans.iteratorParam.err
+		}
 	}
 }
 
@@ -328,15 +308,17 @@ func (trans *StreamAggregateTransform) compute(c Chunk) {
 	trans.proRes.coProcessor.WorkOnChunk(c, trans.newChunk, trans.iteratorParam)
 	trans.postProcess(c)
 	trans.sameInterval = false
+	trans.bufChunk = trans.nextChunk
 }
 
 func (trans *StreamAggregateTransform) preProcess(c Chunk) {
 	trans.newChunk.SetName(c.Name())
+	trans.NextChunk()
 	trans.prevChunkIntervalLen = trans.newChunk.IntervalLen()
 	trans.sameInterval = trans.isSameGroup(c)
 	trans.iteratorParam.sameInterval = trans.sameInterval
 	trans.iteratorParam.sameTag = trans.isSameTag(c)
-	trans.iteratorParam.lastChunk = trans.peekChunk() == nil
+	trans.iteratorParam.lastChunk = trans.nextChunk == nil
 }
 
 func (trans *StreamAggregateTransform) postProcessSingleTimeUnique(_ Chunk) {
@@ -579,7 +561,7 @@ func (trans *StreamAggregateTransform) updateTagAndTagIndex(c Chunk) {
 }
 
 func (trans *StreamAggregateTransform) isSameGroup(c Chunk) bool {
-	nextChunk := trans.peekChunk()
+	nextChunk := trans.nextChunk
 	if nextChunk == nil || nextChunk.NumberOfRows() == 0 || c.NumberOfRows() == 0 {
 		return false
 	}
@@ -615,7 +597,7 @@ func (trans *StreamAggregateTransform) isSameGroup(c Chunk) bool {
 }
 
 func (trans *StreamAggregateTransform) isSameTag(c Chunk) bool {
-	nextChunk := trans.peekChunk()
+	nextChunk := trans.nextChunk
 	if nextChunk == nil || nextChunk.NumberOfRows() == 0 || c.NumberOfRows() == 0 || nextChunk.Name() != c.Name() {
 		return false
 	}

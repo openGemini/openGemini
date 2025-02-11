@@ -69,12 +69,15 @@ func TestMergeSelf_Stop(t *testing.T) {
 	defer beforeTest(t, 0)()
 	conf := config.GetStoreConfig()
 	conf.Merge.MergeSelfOnly = true
+	conf.Merge.StreamMergeModeLevel = 2
 
 	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
 	defer func() {
+		conf.Merge.StreamMergeModeLevel = 0
 		recover()
-		mh.store.Close()
 	}()
+
+	defer mh.store.Close()
 	rg := newRecordGenerator(begin, defaultInterval, true)
 
 	mh.addRecord(100, rg.generate(getDefaultSchemas(), 10))
@@ -159,4 +162,37 @@ func TestCompactUnordered(t *testing.T) {
 	}
 	run(1)
 	run(10)
+}
+
+func TestMergeInParquetProcess(t *testing.T) {
+	var begin int64 = 1e12
+	defer beforeTest(t, 0)()
+	conf := config.GetStoreConfig()
+	conf.Merge.MergeSelfOnly = true
+	defer func() {
+		conf.Merge.MergeSelfOnly = false
+	}()
+
+	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
+	defer mh.store.Close()
+	rg := newRecordGenerator(begin, defaultInterval, true)
+
+	mh.addRecord(100, rg.generate(getDefaultSchemas(), 10))
+	require.NoError(t, mh.saveToOrder())
+
+	for i := 0; i < 8; i++ {
+		mh.addRecord(100, rg.setBegin(begin+int64(i)).generate(getDefaultSchemas(), 10))
+		require.NoError(t, mh.saveToUnordered())
+	}
+
+	file0 := mh.store.OutOfOrder["mst"].Files()[0].Path()
+	immutable.AddTSSP2ParquetProcess(file0)
+	defer immutable.DelTSSP2ParquetProcess(file0)
+
+	require.NoError(t, mh.mergeAndCompact(false))
+	require.Equal(t, 8, len(mh.store.OutOfOrder["mst"].Files()))
+
+	immutable.DelTSSP2ParquetProcess(file0)
+	require.NoError(t, mh.mergeAndCompact(false))
+	require.Equal(t, 1, len(mh.store.OutOfOrder["mst"].Files()))
 }

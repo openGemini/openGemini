@@ -8,7 +8,9 @@ package tsi
 import (
 	"testing"
 
-	"github.com/influxdata/influxdb/pkg/testing/assert"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestGetRegexpPrefix(t *testing.T) {
@@ -118,4 +120,23 @@ func TestTagFilterMatchSuffix(t *testing.T) {
 
 	tf.Init(name, key, []byte(`192\.168\.1\.2`), false, true)
 	assert.Equal(t, tf.reSuffixMatch([]byte("192.168.1.2")), true)
+}
+
+func TestMatchSeriesKeyTagFilter_regexp(t *testing.T) {
+	var tf tagFilter
+	var tags influx.PointTags
+	tags = append(tags, influx.Tag{
+		Key:     "foo",
+		Value:   "foo-001",
+		IsArray: false,
+	})
+
+	tf.key = []byte("foo")
+	tf.value = []byte("foo-\\d+")
+	tf.isRegexp = true
+	require.Equal(t, true, matchSeriesKeyTagFilter(tags, &tf, false))
+
+	tf.key = []byte("not_exists")
+	tf.value = []byte("^$")
+	require.Equal(t, true, matchSeriesKeyTagFilter(tags, &tf, true))
 }

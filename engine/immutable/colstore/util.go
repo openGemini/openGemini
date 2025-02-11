@@ -60,7 +60,7 @@ func AppendSecondaryIndexSuffix(dataPath string, fieldName string, indexType ind
 		indexFileSuffix = MinMaxIndexFileSuffix
 	case index.Set:
 		indexFileSuffix = SetIndexFileSuffix
-	case index.BloomFilter, index.BloomFilterFullText:
+	case index.BloomFilter, index.BloomFilterFullText, index.BloomFilterIp:
 		indexFileSuffix = BloomFilterIndexFileSuffix
 	case index.Text:
 		if fileType == TextIndexData {

@@ -218,7 +218,7 @@ func StoreCapacity(capacityFile string, capacity int64) error {
 	sumCapacity += int(capacity)
 	str := strconv.Itoa(sumCapacity)
 
-	return os.WriteFile(capacityFile, []byte(str), 0640)
+	return os.WriteFile(capacityFile, []byte(str), 0600)
 }
 
 // LoadCapacity is used to load the shard-level capacity value.
@@ -515,7 +515,7 @@ func (w *RecordWriter) writeShard(shard *meta.ShardInfo, database, retentionPoli
 	var err error
 	for _, ptId := range shard.Owners {
 		err = w.StorageEngine.WriteRec(database, retentionPolicy, measurement, ptId, shard.ID, rec, pBuf)
-		if err != nil && IsRetryErrorForPtView(err) {
+		if err != nil && errno.IsRetryErrorForPtView(err) {
 			// maybe dbPt route to new node, retry get the right nodeID
 			w.logger.Error(fmt.Sprintf("[coordinator] retry write rows. db: %s, rp: %s, mst: %s", database, retentionPolicy, measurement), zap.Uint32("pt", ptId), zap.Error(err))
 

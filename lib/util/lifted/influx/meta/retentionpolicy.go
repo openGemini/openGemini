@@ -307,7 +307,7 @@ func (rpi *RetentionPolicyInfo) walkSubscriptions(fn func(subscription *Subscrip
 }
 
 // Marshal serializes to a protobuf representation.
-func (rpi *RetentionPolicyInfo) Marshal(snapshot bool) *proto2.RetentionPolicyInfo {
+func (rpi *RetentionPolicyInfo) Marshal() *proto2.RetentionPolicyInfo {
 	pb := &proto2.RetentionPolicyInfo{
 		Name:               proto.String(rpi.Name),
 		ReplicaN:           proto.Uint32(uint32(rpi.ReplicaN)),
@@ -323,7 +323,7 @@ func (rpi *RetentionPolicyInfo) Marshal(snapshot bool) *proto2.RetentionPolicyIn
 		pb.Measurements = make([]*proto2.MeasurementInfo, len(rpi.Measurements))
 		i := 0
 		for _, msti := range rpi.Measurements {
-			pb.Measurements[i] = msti.marshal(snapshot)
+			pb.Measurements[i] = msti.marshal()
 			i++
 		}
 	}
@@ -460,7 +460,7 @@ func (rpi RetentionPolicyInfo) Clone() *RetentionPolicyInfo {
 
 // MarshalBinary encodes rpi to a binary format.
 func (rpi *RetentionPolicyInfo) MarshalBinary() ([]byte, error) {
-	return proto.Marshal(rpi.Marshal(false))
+	return proto.Marshal(rpi.Marshal())
 }
 
 // UnmarshalBinary decodes rpi from a binary format.

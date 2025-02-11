@@ -15,8 +15,10 @@
 package raftlog
 
 import (
+	"encoding/binary"
 	"testing"
 
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/stretchr/testify/require"
 	"go.etcd.io/etcd/raft/v3/raftpb"
 )
@@ -67,4 +69,98 @@ func TestIsValidSnapshot(t *testing.T) {
 	}
 	isValid = IsValidSnapshot(snapShot2)
 	require.True(t, isValid)
+}
+
+func TestGetRaftEntryLog(t *testing.T) {
+	filewrap := &memoryFileWrap{}
+
+	logFile := &logFile{
+		fid:   -1,
+		entry: filewrap,
+	}
+	// write data
+	fixedSizeSlice := make([]byte, 2048)
+	filewrap.WriteSlice(100, fixedSizeSlice)
+	// write slot
+	entry := entry(make([]byte, entrySize))
+	marshalEntry(entry, 1, 1, 1, 100)
+	filewrap.WriteAt(0, entry)
+
+	raftEntry, _ := logFile.getRaftEntry(0)
+	require.NotNil(t, raftEntry)
+
+	// Simulate the file damage scenario.
+	filewrap.WriteSlice(3048, fixedSizeSlice)
+	entry2 := make([]byte, entrySize)
+	marshalEntry(entry2, 1, 1, 1, 6000)
+	filewrap.WriteAt(0, entry2)
+
+	raftEntry, err := logFile.getRaftEntry(0)
+	require.NotNil(t, raftEntry)
+	require.Error(t, err, "valid offset error")
+}
+
+type memoryFileWrap struct {
+	data []byte
+}
+
+func (e *memoryFileWrap) Name() string {
+	return "test"
+}
+
+func (e *memoryFileWrap) Size() int {
+	return len(e.data)
+}
+
+func (e *memoryFileWrap) GetEntryData(start, end int) []byte {
+	return e.data[start:end]
+}
+func (e *memoryFileWrap) Write(dat []byte) (int, error) {
+	e.data = append(e.data, dat...)
+	return len(e.data), nil
+}
+func (e *memoryFileWrap) WriteAt(offset int64, dat []byte) (int, error) {
+	copy(e.data[offset:], dat)
+	return len(e.data), nil
+}
+func (e *memoryFileWrap) WriteSlice(offset int64, dat []byte) error {
+	if int(offset)+unit32Size+len(dat) >= len(e.data) {
+		e.data = append(e.data, make([]byte, int(offset)-len(e.data)+unit32Size+len(dat))...)
+	}
+	dst := e.data[offset:]
+	binary.BigEndian.PutUint32(dst[:unit32Size], uint32(len(dat))) // size
+	copy(dst[unit32Size:], dat)                                    // data
+	return nil
+}
+func (e *memoryFileWrap) ReadSlice(offset int64) []byte {
+	sz := encoding.UnmarshalUint32(e.data[offset:])
+	start := offset + unit32Size
+	next := int(start) + int(sz)
+	if next > len(e.data) {
+		return []byte{}
+	}
+	return e.data[start:next]
+}
+func (e *memoryFileWrap) SliceSize(offset int) int {
+	sz := encoding.UnmarshalUint32(e.data[offset:])
+	return unit32Size + int(sz)
+}
+func (e *memoryFileWrap) Truncate(size int64) error {
+	return nil
+}
+func (e *memoryFileWrap) TrySync() error {
+	return nil
+}
+func (e *memoryFileWrap) Delete() error {
+	e.data = nil
+	return nil
+}
+func (e *memoryFileWrap) Close() error {
+	return nil
+}
+func (e *memoryFileWrap) setCurrent() {
+
+}
+func (e *memoryFileWrap) rotateCurrent() {
+
 }

@@ -504,7 +504,7 @@ func ApplyRemoveNode(data *Data, cmd *proto2.Command) error {
 	return nil
 }
 
-func ApplyUpdateReplication(data *Data, cmd *proto2.Command) error {
+func ApplyUpdateReplication(data *Data, cmd *proto2.Command, metaTransferLeadership func(string, uint32, uint32, uint32)) error {
 	ext, _ := proto.GetExtension(cmd, proto2.E_UpdateReplicationCommand_Command)
 	v, ok := ext.(*proto2.UpdateReplicationCommand)
 	if !ok {
@@ -514,7 +514,12 @@ func ApplyUpdateReplication(data *Data, cmd *proto2.Command) error {
 	rgId := v.GetRepGroupId()
 	peers := v.GetPeers()
 	masterId := v.GetMasterId()
-	return data.UpdateReplication(db, rgId, masterId, peers)
+	oldMasterPtId, err := data.UpdateReplication(db, rgId, masterId, peers)
+	if metaTransferLeadership != nil && err == nil {
+		// TransferLeader and updateMasterPt are updated asynchronously.
+		go metaTransferLeadership(db, rgId, oldMasterPtId, masterId)
+	}
+	return err
 }
 
 func ApplyUpdateMeasurement(data *Data, cmd *proto2.Command) error {

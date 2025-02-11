@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/numberenc"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
@@ -51,7 +52,9 @@ type FirstLastReader struct {
 	timeBuf []byte
 	dataBuf []byte
 
-	segIndex int
+	segIndex    int
+	floatPreAgg *FloatPreAgg
+	intPreAgg   *IntegerPreAgg
 }
 
 func (r *FirstLastReader) Init(cm *ChunkMeta, cr ColumnReader, ref *record.Field, dst *record.Record, first bool) *FirstLastReader {
@@ -218,13 +221,13 @@ func (r *FirstLastReader) readDataColVal(ctx *ReadContext, seg *Segment, copied 
 
 func (r *FirstLastReader) readFirstOrLastFromPreAgg(ctx *ReadContext, sr *SegmentRange, colMeta *ColumnMeta) (interface{}, int64, bool) {
 	if r.first && ctx.tr.Min <= sr.minTime() {
-		val, tm, ok := r.readMinFromPreAgg(colMeta)
+		val, tm, ok := r.ReadMinFromPreAgg(colMeta)
 
 		return val, tm, ok && tm == sr.minTime()
 	}
 
 	if !r.first && ctx.tr.Max >= sr.maxTime() {
-		val, tm, ok := r.readMaxFromPreAgg(colMeta)
+		val, tm, ok := r.ReadMaxFromPreAgg(colMeta)
 
 		return val, tm, ok && tm == sr.maxTime()
 	}
@@ -232,28 +235,56 @@ func (r *FirstLastReader) readFirstOrLastFromPreAgg(ctx *ReadContext, sr *Segmen
 	return 0, 0, false
 }
 
-func (r *FirstLastReader) readMinFromPreAgg(colMeta *ColumnMeta) (interface{}, int64, bool) {
-	return readFromPreAgg(colMeta.ty, colMeta.preAgg, 0)
-}
-
-func (r *FirstLastReader) readMaxFromPreAgg(colMeta *ColumnMeta) (interface{}, int64, bool) {
-	return readFromPreAgg(colMeta.ty, colMeta.preAgg, 8)
-}
-
-func readFromPreAgg(ty byte, agg []byte, offset int) (interface{}, int64, bool) {
-	timeOffset := offset + 16
-	if PreAggOnlyOneRow(agg) {
-		offset = 0
-		timeOffset = 8
+func (r *FirstLastReader) ReadMinFromPreAgg(colMeta *ColumnMeta) (interface{}, int64, bool) {
+	ab, ok := r.unmarshalPreAgg(colMeta)
+	if !ok {
+		return 0, 0, false
 	}
 
-	switch ty {
-	case influx.Field_Type_Float:
-		return numberenc.UnmarshalFloat64(agg[offset:]), numberenc.UnmarshalInt64(agg[timeOffset:]), true
+	val, tm := ab.min()
+	return val, tm, true
+}
+
+func (r *FirstLastReader) ReadMaxFromPreAgg(colMeta *ColumnMeta) (interface{}, int64, bool) {
+	ab, ok := r.unmarshalPreAgg(colMeta)
+	if !ok {
+		return 0, 0, false
+	}
+
+	val, tm := ab.max()
+	return val, tm, true
+}
+
+func (r *FirstLastReader) getIntPreAgg() PreAggBuilder {
+	if r.intPreAgg == nil {
+		r.intPreAgg = NewIntegerPreAgg()
+	}
+	return r.intPreAgg
+}
+
+func (r *FirstLastReader) getFloatPreAgg() PreAggBuilder {
+	if r.floatPreAgg == nil {
+		r.floatPreAgg = NewFloatPreAgg()
+	}
+	return r.floatPreAgg
+}
+
+func (r *FirstLastReader) unmarshalPreAgg(col *ColumnMeta) (PreAggBuilder, bool) {
+	var ab PreAggBuilder
+	switch col.ty {
 	case influx.Field_Type_Int:
-		return numberenc.UnmarshalInt64(agg[offset:]), numberenc.UnmarshalInt64(agg[timeOffset:]), true
+		ab = r.getIntPreAgg()
+	case influx.Field_Type_Float:
+		ab = r.getFloatPreAgg()
 	default:
-		break
+		return nil, false
 	}
-	return nil, 0, false
+
+	_, err := ab.unmarshal(col.preAgg)
+	if err != nil {
+		logger.GetLogger().Error("failed to unmarshal pre agg",
+			zap.Binary("data", col.preAgg), zap.Error(err))
+		return nil, false
+	}
+	return ab, true
 }

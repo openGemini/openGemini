@@ -67,6 +67,7 @@ func NewServer(conf config.Config, info app.ServerInfo, logger *Logger.Logger) (
 		return nil, fmt.Errorf("invalid meta config")
 	}
 	c.Meta.JoinPeers = c.Common.MetaJoin
+	c.Meta.BindPeers = c.Common.Bindjoin
 
 	c.Meta.DataDir = c.Data.DataDir
 	c.Meta.WalDir = c.Data.WALDir
@@ -91,11 +92,12 @@ func NewServer(conf config.Config, info app.ServerInfo, logger *Logger.Logger) (
 	// initialize log
 	metaConf := c.Meta
 	metaConf.Logging = c.Logging
+	gossipConf := c.Gossip
 	tlsConfig, err := c.TLS.Parse()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("parse tls config failed: %s", err)
 	}
-	s.MetaService = meta.NewService(metaConf, tlsConfig)
+	s.MetaService = meta.NewService(metaConf, gossipConf, tlsConfig)
 	s.MetaService.Version = s.info.Version
 	s.MetaService.Node = s.Node
 
@@ -171,6 +173,7 @@ func (s *Server) initSerf(cm *meta.ClusterManager) (err error) {
 	}
 
 	conf := gossip.BuildSerf(s.config.Logging, config.AppMeta, strconv.Itoa(int(s.Node.ID)), cm.GetEventCh())
+	// previousNode don't contain metaNodes, like dataNodes which gossipPort is 0, thus dial return err
 	s.serfInstance, err = app.CreateSerfInstance(conf, s.Node.Clock, gossip.Members, cm.PreviousNode())
 	return err
 }

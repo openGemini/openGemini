@@ -39,4 +39,13 @@ func TestCrashProcessor_Handle(t *testing.T) {
 	p = NewCrashProcessor()
 	err = p.Handle(w, data)
 	require.NoError(t, p.Handle(w, data))
+
+	w = NewMockNewResponser(errno.NewError(errno.QueryAborted))
+	data1 = &executor.Abort{}
+	p1 := NewAbortProcessor()
+	err = p1.Handle(w, data1)
+	assert.Equal(t, err, nil)
+	data1.NoMarkCrash = true
+	err = p1.Handle(w, data1)
+	assert.Equal(t, err, nil)
 }

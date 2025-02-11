@@ -4,7 +4,7 @@ import sys
 import os
 import platform
 import subprocess
-import datetime
+import time
 import shutil
 import re
 import logging
@@ -22,7 +22,6 @@ prereqs = [ 'git', 'go' ]
 go_vet_command = "go vet ./..."
 
 targets = {
-    'ts-cli' : './app/ts-cli',
     'ts-sql' : './app/ts-sql',
     'ts-meta' : './app/ts-meta',
     'ts-store' : './app/ts-store',
@@ -394,11 +393,11 @@ def build(version=None,
                 commit = get_current_commit())
 
         build_command += path
-        start_time = datetime.datetime.now(datetime.UTC)
+        # start_time = time.time()
         logging.info(build_command)
         run(build_command, shell=True)
-        end_time = datetime.datetime.now(datetime.UTC)
-        logging.info("Time taken: %ss", (end_time - start_time).total_seconds())
+        # end_time = time.time()
+        # logging.info("Time taken: %ss", (end_time - start_time).total_seconds())
     return True
 
 
@@ -427,7 +426,7 @@ def main(args):
     if args.nightly:
         args.version = increment_minor_version(args.version)
         args.version = "{}~n{}".format(args.version,
-        datetime.datetime.now(datetime.UTC).strftime("%Y%m%d%H%M"))
+        time.time().strftime("%Y%m%d%H%M"))
         args.iteration = 0
 
     # Pre-build checks

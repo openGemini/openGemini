@@ -30,7 +30,7 @@ import (
 	"sync"
 	"time"
 
-	set "github.com/deckarep/golang-set"
+	set "github.com/deckarep/golang-set/v2"
 	"github.com/influxdata/influxdb/models"
 	originql "github.com/influxdata/influxql"
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
@@ -61,7 +61,6 @@ import (
 const (
 	// errSleep is the time to sleep after we've failed on every metaserver
 	// before making another pass
-	errSleep = time.Second
 
 	// SaltBytes is the number of bytes used for salts.
 	SaltBytes = 32
@@ -113,11 +112,11 @@ const (
 )
 
 var (
-	ErrNameTooLong          = fmt.Errorf("database name must have fewer than %d characters", maxDbOrRpName)
-	RetryGetUserInfoTimeout = 5 * time.Second
-	RetryExecTimeout        = 60 * time.Second
-	RetryReportTimeout      = 60 * time.Second
-	HttpReqTimeout          = 10 * time.Second
+	errSleep           = time.Second
+	ErrNameTooLong     = fmt.Errorf("database name must have fewer than %d characters", maxDbOrRpName)
+	RetryExecTimeout   = 60 * time.Second
+	RetryReportTimeout = 60 * time.Second
+	HttpReqTimeout     = 10 * time.Second
 )
 
 var DefaultTypeMapper = influxql.MultiTypeMapper(
@@ -195,7 +194,7 @@ type MetaClient interface {
 	GetMeasurementID(database string, rpName string, mstName string) (uint64, error)
 	Schema(database string, retentionPolicy string, mst string) (fields map[string]int32, dimensions map[string]struct{}, err error)
 	GetMeasurements(m *influxql.Measurement) ([]*meta2.MeasurementInfo, error)
-	TagKeys(database string) map[string]set.Set
+	TagKeys(database string) map[string]set.Set[string]
 	FieldKeys(database string, ms influxql.Measurements) (map[string]map[string]int32, error)
 	QueryTagKeys(database string, ms influxql.Measurements, cond influxql.Expr) (map[string]map[string]struct{}, error)
 	MatchMeasurements(database string, ms influxql.Measurements) (map[string]*meta2.MeasurementInfo, error)
@@ -206,7 +205,7 @@ type MetaClient interface {
 	ShowRetentionPolicies(database string) (models.Rows, error)
 	ShowCluster(nodeType string, ID uint64) (models.Rows, error)
 	ShowClusterWithCondition(nodeType string, ID uint64) (models.Rows, error)
-	GetAliveShards(database string, sgi *meta2.ShardGroupInfo) []int
+	GetAliveShards(database string, sgi *meta2.ShardGroupInfo, isRead bool) []int
 	NewDownSamplePolicy(database, name string, info *meta2.DownSamplePolicyInfo) error
 	DropDownSamplePolicy(database, name string, dropAll bool) error
 	ShowDownSamplePolicies(database string) (models.Rows, error)
@@ -424,6 +423,7 @@ var applyFunc = map[proto2.Command_Type]func(c *Client, op *proto2.Command) erro
 	proto2.Command_RemoveNodeCommand:                applyRemoveNode,
 	proto2.Command_UpdateReplicationCommand:         applyUpdateReplication,
 	proto2.Command_UpdateMeasurementCommand:         applyUpdateMeasurement,
+	proto2.Command_UpdateMetaNodeStatusCommand:      applyUpdateMetaNodeStatus,
 }
 
 type authRcd struct {
@@ -784,6 +784,13 @@ func (c *Client) MetaNodes() ([]meta2.NodeInfo, error) {
 	return c.cacheData.MetaNodes, nil
 }
 
+// SqlNodes returns the sql nodes' info.
+func (c *Client) SqlNodes() ([]meta2.DataNode, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.cacheData.SqlNodes, nil
+}
+
 // MetaNodeByAddr returns the meta node's info.
 func (c *Client) MetaNodeByAddr(addr string) *meta2.NodeInfo {
 	c.mu.RLock()
@@ -815,15 +822,15 @@ func (c *Client) FieldKeys(database string, ms influxql.Measurements) (map[strin
 	return ret, nil
 }
 
-func (c *Client) TagKeys(database string) map[string]set.Set {
+func (c *Client) TagKeys(database string) map[string]set.Set[string] {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	dbi := c.cacheData.Database(database)
-	uniqueMap := make(map[string]set.Set)
+	uniqueMap := make(map[string]set.Set[string])
 
 	dbi.WalkRetentionPolicy(func(rp *meta2.RetentionPolicyInfo) {
 		rp.EachMeasurements(func(mst *meta2.MeasurementInfo) {
-			s := set.NewSet()
+			s := set.NewSet[string]()
 			callback := func(k string, v int32) {
 				if v == influx.Field_Type_Tag {
 					s.Add(k)
@@ -1050,8 +1057,14 @@ func (c *Client) buildClusterRows(clusterInfo *meta2.ShowClusterInfo) models.Row
 	nodeRow := &models.Row{Columns: []string{"time", "status", "hostname", "nodeID", "nodeType", "availability"}}
 	for _, node := range clusterInfo.Nodes {
 		availability = "available"
+		if node.Status != "alive" {
+			availability = "unavailable"
+		}
 		if _, ok := srcNodeMap[node.NodeID]; ok {
 			availability = "unavailable"
+		}
+		if node.NodeType == "meta" {
+			node.Status = "alive"
 		}
 		nodeRow.Values = append(nodeRow.Values, []interface{}{node.Timestamp, node.Status, node.HostName, node.NodeID, node.NodeType, availability})
 	}
@@ -1374,7 +1387,7 @@ func (c *Client) CreateDatabaseWithRetentionPolicy(name string, spec *meta2.Rete
 
 	cmd := &proto2.CreateDatabaseCommand{
 		Name:            proto.String(name),
-		RetentionPolicy: rpi.Marshal(false),
+		RetentionPolicy: rpi.Marshal(),
 		EnableTagArray:  proto.Bool(enableTagArray),
 		ReplicaNum:      proto.Uint32(replicaN),
 	}
@@ -1401,22 +1414,51 @@ func (c *Client) MarkMeasurementDelete(database, policy, measurement string) err
 	}
 
 	if policy == "" {
-		//  rp is not provided, use default retention policy
-		policy = dbi.DefaultRetentionPolicy
+		//  rp is not provided, delete all the mst
+		err := c.deleteAllRpMst(dbi, database, measurement)
+		return err
 	}
-	if rp, ok := dbi.RetentionPolicies[policy]; ok {
-		msti := rp.Measurement(measurement)
-		if msti != nil && msti.MarkDeleted {
-			return nil
-		}
+	rp, ok := dbi.RetentionPolicies[policy]
+	if !ok {
+		return fmt.Errorf("policy not exist")
+	}
+
+	msti := rp.Measurement(measurement)
+	if msti == nil {
+		c.logger.Error("measurement not found")
+		return nil
+	} else if msti.MarkDeleted {
+		return nil
 	}
 	cmd := &proto2.MarkMeasurementDeleteCommand{
 		Database:    proto.String(database),
 		Policy:      proto.String(policy),
 		Measurement: proto.String(measurement),
 	}
-
 	return c.retryUntilExec(proto2.Command_MarkMeasurementDeleteCommand, proto2.E_MarkMeasurementDeleteCommand_Command, cmd)
+}
+
+func (c *Client) deleteAllRpMst(dbi *meta2.DatabaseInfo, database, measurement string) error {
+	var err error
+	for _, rp := range dbi.RetentionPolicies {
+		msti := rp.Measurement(measurement)
+		if msti == nil {
+			continue
+		}
+		if msti.MarkDeleted {
+			return nil
+		}
+		cmd := &proto2.MarkMeasurementDeleteCommand{
+			Database:    proto.String(database),
+			Policy:      proto.String(rp.Name),
+			Measurement: proto.String(measurement),
+		}
+		err = c.retryUntilExec(proto2.Command_MarkMeasurementDeleteCommand, proto2.E_MarkMeasurementDeleteCommand_Command, cmd)
+		if err != nil {
+			break
+		}
+	}
+	return err
 }
 
 func (c *Client) MarkDatabaseDelete(name string) error {
@@ -1567,7 +1609,7 @@ func (c *Client) CreateRetentionPolicy(database string, spec *meta2.RetentionPol
 	}
 	cmd := &proto2.CreateRetentionPolicyCommand{
 		Database:        proto.String(database),
-		RetentionPolicy: rpi.Marshal(false),
+		RetentionPolicy: rpi.Marshal(),
 		DefaultRP:       proto.Bool(makeDefault),
 	}
 
@@ -2568,37 +2610,66 @@ func (c *Client) GetShardInfoByTime(database, retentionPolicy string, t time.Tim
 	return &shard, nil
 }
 
-func (c *Client) getAliveShardsForWAF(database string, sgi *meta2.ShardGroupInfo) []int {
+func (c *Client) getAliveShardsForWAF(database string, sgi *meta2.ShardGroupInfo, read bool) []int {
 	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if !read && config.IsHardWrite() {
+		return c.getAliveShardsForHardWrite(database, sgi)
+	}
 	aliveShardIdxes := make([]int, 0, len(sgi.Shards))
 	for i := range sgi.Shards {
 		if c.cacheData.PtView[database][sgi.Shards[i].Owners[0]].Status == meta2.Online {
 			aliveShardIdxes = append(aliveShardIdxes, i)
 		}
 	}
-	c.mu.RUnlock()
+	return aliveShardIdxes
+}
+
+func (c *Client) getAliveShardsForHardWrite(database string, sgi *meta2.ShardGroupInfo) []int {
+	aliveShardIdxes := make([]int, 0, len(sgi.Shards))
+	for i := range sgi.Shards {
+		aliveShardIdxes = append(aliveShardIdxes, i)
+	}
 	return aliveShardIdxes
 }
 
 func (c *Client) getAliveShardsForSSAndRep(database string, sgi *meta2.ShardGroupInfo) []int {
-	repGroups := c.DBRepGroups(database)
 	replicaN, err := c.GetReplicaN(database)
 	if replicaN == 0 || err != nil {
 		replicaN = 1
 	}
+	if replicaN > 1 {
+		return c.getAliveShardsForRepDB(database, sgi, replicaN)
+	}
 
 	c.mu.RLock()
 	aliveShardIdxes := make([]int, 0, len(sgi.Shards)/replicaN)
+	for i := range sgi.Shards {
+		aliveShardIdxes = append(aliveShardIdxes, i)
+	}
+	c.mu.RUnlock()
+	return aliveShardIdxes
+}
+
+func (c *Client) getAliveShardsForRepDB(database string, sgi *meta2.ShardGroupInfo, replicaN int) []int {
+	repGroups := c.DBRepGroups(database)
+	aliveShardIdxes := make([]int, 0, len(sgi.Shards)/replicaN)
+	addedRGID := make(map[uint32]interface{}, 0)
+
+	c.mu.RLock()
 	ptView := c.cacheData.PtView[database]
 	for i := range sgi.Shards {
 		for _, ptId := range sgi.Shards[i].Owners {
-			if replicaN == 1 {
-				aliveShardIdxes = append(aliveShardIdxes, i)
-				break
-			}
 			if repGroups[ptView[ptId].RGID].Status == meta2.Health && repGroups[ptView[ptId].RGID].IsMasterPt(ptId) {
 				aliveShardIdxes = append(aliveShardIdxes, i)
+				addedRGID[ptView[ptId].RGID] = nil
 				break
+			} else if repGroups[ptView[ptId].RGID].Status == meta2.SubHealth && ptView[ptId].Status == meta2.Online {
+				if _, ok := addedRGID[ptView[ptId].RGID]; !ok {
+					aliveShardIdxes = append(aliveShardIdxes, i)
+					addedRGID[ptView[ptId].RGID] = nil
+					break
+				}
 			}
 		}
 	}
@@ -2606,15 +2677,28 @@ func (c *Client) getAliveShardsForSSAndRep(database string, sgi *meta2.ShardGrou
 	return aliveShardIdxes
 }
 
+func (c *Client) GetNodePT(database string) []uint32 {
+	ptIds := []uint32{}
+	c.mu.RLock()
+	ptView := c.cacheData.PtView[database]
+	for _, ptInfo := range ptView {
+		if ptInfo.Owner.NodeID == c.nodeID {
+			ptIds = append(ptIds, ptInfo.PtId)
+		}
+	}
+	c.mu.RUnlock()
+	return ptIds
+}
+
 /*
 used for map shards in select and write progress.
 write progress shard for all shards in shared-storage and replication policy.
 */
-func (c *Client) GetAliveShards(database string, sgi *meta2.ShardGroupInfo) []int {
+func (c *Client) GetAliveShards(database string, sgi *meta2.ShardGroupInfo, isRead bool) []int {
 	if config.GetHaPolicy() != config.WriteAvailableFirst {
 		return c.getAliveShardsForSSAndRep(database, sgi)
 	}
-	return c.getAliveShardsForWAF(database, sgi)
+	return c.getAliveShardsForWAF(database, sgi, isRead)
 }
 
 func (c *Client) DeleteIndexGroup(database, policy string, id uint64) error {
@@ -2841,15 +2925,6 @@ func (c *Client) DropSubscription(database, rp, name string) error {
 
 func (c *Client) GetMaxSubscriptionID() uint64 {
 	return c.cacheData.MaxSubscriptionID
-}
-
-// SetData overwrites the underlying data in the meta store.
-func (c *Client) SetData(data *meta2.Data) error {
-	return c.retryUntilExec(proto2.Command_SetDataCommand, proto2.E_SetDataCommand_Command,
-		&proto2.SetDataCommand{
-			Data: data.Marshal(false),
-		},
-	)
 }
 
 // WaitForDataChanged returns a channel that will get a stuct{} when
@@ -3454,8 +3529,9 @@ func applySetData(c *Client, cmd *proto2.Command) error {
 		c.logger.Error("applySetData err")
 	}
 	// Overwrite data.
-	c.cacheData = &meta2.Data{}
-	c.cacheData.Unmarshal(v.GetData())
+	temData := &meta2.Data{}
+	temData.Unmarshal(v.GetData())
+	c.cacheData = temData
 
 	return nil
 }
@@ -3583,6 +3659,15 @@ func applyUpdateSqlNodeStatus(c *Client, cmd *proto2.Command) error {
 	return c.cacheData.UpdateSqlNodeStatus(v.GetID(), v.GetStatus(), v.GetLtime(), v.GetGossipAddr())
 }
 
+func applyUpdateMetaNodeStatus(c *Client, cmd *proto2.Command) error {
+	ext, _ := proto.GetExtension(cmd, proto2.E_UpdateMetaNodeStatusCommand_Command)
+	v, ok := ext.(*proto2.UpdateMetaNodeStatusCommand)
+	if !ok {
+		panic(fmt.Errorf("%s is not a UpdateMetaNodeStatusCommand", ext))
+	}
+	return c.cacheData.UpdateMetaNodeStatus(v.GetID(), v.GetStatus(), v.GetLtime(), v.GetGossipAddr())
+}
+
 func applyCreateDbPtView(c *Client, cmd *proto2.Command) error {
 	if err := meta2.ApplyCreateDbPtViewCommand(c.cacheData, cmd); err != nil {
 		return errno.NewError(errno.ApplyFuncErr, "applyCreateDbPtView", err.Error())
@@ -3655,7 +3740,7 @@ func applyRemoveNode(c *Client, cmd *proto2.Command) error {
 }
 
 func applyUpdateReplication(c *Client, cmd *proto2.Command) error {
-	return meta2.ApplyUpdateReplication(c.cacheData, cmd)
+	return meta2.ApplyUpdateReplication(c.cacheData, cmd, nil)
 }
 
 func applyUpdateMeasurement(c *Client, cmd *proto2.Command) error {
@@ -3805,6 +3890,25 @@ func (c *Client) GetShardDurationInfo(index uint64) (*meta2.ShardDurationRespons
 	return durationInfo, nil
 }
 
+func (c *Client) GetIndexDurationInfo(index uint64) (*meta2.IndexDurationResponse, error) {
+	val := &proto2.IndexDurationCommand{Index: proto.Uint64(index), Pts: nil, NodeId: proto.Uint64(c.nodeID)}
+	t := proto2.Command_IndexDurationCommand
+	cmd := &proto2.Command{Type: &t}
+	if err := proto.SetExtension(cmd, proto2.E_IndexDurationCommand_Command, val); err != nil {
+		panic(err)
+	}
+	b, err := c.RetryGetShardAuxInfo(cmd)
+	if err != nil {
+		return nil, err
+	}
+
+	durationInfo := &meta2.IndexDurationResponse{}
+	if err := durationInfo.UnmarshalBinary(b); err != nil {
+		return nil, err
+	}
+	return durationInfo, nil
+}
+
 func (c *Client) MetaServers() []string {
 	return c.metaServers
 }
@@ -3831,7 +3935,7 @@ func (c *Client) InitMetaClient(joinPeers []string, tlsEn bool, storageNodeInfo 
 	if t == SQL && storageNodeInfo == nil && sqlNodeInfo != nil && c.UseSnapshotV2 {
 		nid, clock, connId, err = c.CreateSqlNode(sqlNodeInfo.HttpAddr, sqlNodeInfo.GossipAddr)
 	}
-
+	config.SetNodeId(nid)
 	return nid, clock, connId, err
 }
 
@@ -3954,15 +4058,20 @@ func (c *Client) QueryTagKeys(database string, ms influxql.Measurements, cond in
 		return nil, nil
 	}
 
+	// split the condition by time and tag filter
+	cond, tr, err := influxql.SplitCondByTime(cond)
+	if err != nil {
+		return nil, err
+	}
+
 	// map[measurement name] map[tag key] struct{}
 	ret := make(map[string]map[string]struct{}, len(mis))
 	for _, m := range mis {
 		if _, ok := ret[m.Name]; !ok {
 			ret[m.Name] = make(map[string]struct{})
 		}
-		m.MatchTagKeys(cond, ret)
+		m.FilterTagKeys(cond, tr, ret)
 	}
-
 	return ret, nil
 }
 
@@ -4071,6 +4180,12 @@ func (c *Client) GetDstStreamInfos(db, rp string, dstSis *[]*meta2.StreamInfo) b
 }
 
 func (c *Client) UpdateStreamMstSchema(database string, retentionPolicy string, mst string, stmt *influxql.SelectStatement) error {
+	if interval, err := stmt.GroupByInterval(); err == nil && interval == 0 && len(stmt.Dimensions) == 0 {
+		return c.updateStreamMstSchemaNoGroupBy(database, retentionPolicy, mst, stmt)
+	} else if err != nil {
+		return err
+	}
+
 	fieldToCreate := make([]*proto2.FieldSchema, 0, len(stmt.Fields)+len(stmt.Dimensions))
 	fields := stmt.Fields
 	for i := range fields {
@@ -4117,6 +4232,50 @@ func (c *Client) UpdateStreamMstSchema(database string, retentionPolicy string, 
 			FieldName: proto.String(d.Val),
 			FieldType: proto.Int32(influx.Field_Type_Tag),
 		})
+	}
+	return c.UpdateSchema(database, retentionPolicy, mst, fieldToCreate)
+}
+
+func (c *Client) updateStreamMstSchemaNoGroupBy(database, retentionPolicy, mst string, stmt *influxql.SelectStatement) error {
+	fieldToCreate := make([]*proto2.FieldSchema, 0, len(stmt.Fields)+len(stmt.Dimensions))
+	fields := stmt.Fields
+	for i := range fields {
+		f, ok := fields[i].Expr.(*influxql.VarRef)
+		if !ok {
+			return errors.New("the filter-only stream task can contain only var_ref(tag or field)")
+		}
+
+		// tag
+		if f.Type == influxql.Tag {
+			fieldToCreate = append(fieldToCreate, &proto2.FieldSchema{
+				FieldName: proto.String(f.Val),
+				FieldType: proto.Int32(influx.Field_Type_Tag),
+			})
+			continue
+		}
+
+		// field
+		if f.Alias == "" {
+			fieldToCreate = append(fieldToCreate, &proto2.FieldSchema{
+				FieldName: proto.String(f.Val),
+			})
+		} else {
+			fieldToCreate = append(fieldToCreate, &proto2.FieldSchema{
+				FieldName: proto.String(f.Alias),
+			})
+		}
+		switch f.Type {
+		case influxql.Float:
+			fieldToCreate[i].FieldType = proto.Int32(influx.Field_Type_Float)
+		case influxql.Integer:
+			fieldToCreate[i].FieldType = proto.Int32(influx.Field_Type_Int)
+		case influxql.Boolean:
+			fieldToCreate[i].FieldType = proto.Int32(influx.Field_Type_Boolean)
+		case influxql.String:
+			fieldToCreate[i].FieldType = proto.Int32(influx.Field_Type_String)
+		default:
+			return errors.New("unexpected field type")
+		}
 	}
 	return c.UpdateSchema(database, retentionPolicy, mst, fieldToCreate)
 }

@@ -37,6 +37,7 @@ func init() {
 	RegistryAggOp("group_prom", &PromGroupOp{})
 	RegistryAggOp("scalar_prom", &PromScalarOp{})
 	RegistryAggOp("quantile_prom", &PromQuantileOp{})
+	RegistryAggOp("absent_prom", &PromAbsentOp{})
 }
 
 type MinOp struct{}
@@ -312,4 +313,21 @@ func (c *PromQuantileOp) CreateRoutine(params *AggCallFuncParams) (Routine, erro
 			inOrdinal, outOrdinal), nil
 	}
 	return nil, errno.NewError(errno.UnsupportedDataType, "quantile_prom", dataType.String())
+}
+
+type PromAbsentOp struct{}
+
+func (c *PromAbsentOp) CreateRoutine(params *AggCallFuncParams) (Routine, error) {
+	inRowDataType, outRowDataType, exprOpt, opt := params.InRowDataType, params.OutRowDataType, params.ExprOpt, params.Opt
+	inOrdinal := inRowDataType.FieldIndex(exprOpt.Expr.(*influxql.Call).Args[0].(*influxql.VarRef).Val)
+	outOrdinal := outRowDataType.FieldIndex(exprOpt.Ref.Val)
+	params.ProRes.isUDAFCall = true
+	if inOrdinal < 0 || outOrdinal < 0 {
+		return nil, errno.NewError(errno.SchemaNotAligned, "absent_prom", "input and output schemas are not aligned")
+	}
+	dataType := inRowDataType.Field(inOrdinal).Expr.(*influxql.VarRef).Type
+	if dataType == influxql.Float {
+		return NewRoutineImpl(NewAbsentIterator(inOrdinal, outOrdinal, opt), inOrdinal, outOrdinal), nil
+	}
+	return nil, errno.NewError(errno.UnsupportedDataType, "absent_prom", dataType.String())
 }

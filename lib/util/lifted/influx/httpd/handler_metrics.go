@@ -1,18 +1,16 @@
-/*
-Copyright right 2024 openGemini author.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2024 openGemini Authors
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package httpd
 
@@ -43,8 +41,8 @@ const (
 
 var (
 	openGeminiCollector *OpenGeminiCollector
-	metricMsts          = []string{"httpd", "performance", "io", "executor", "system", "runtime",
-		"spdy", "measurement_metric", "cluster_metric", "filestat_level", "sql_slow_queries", "errno"}
+	metricMsts          = []string{"httpd", "performance", "io", "executor", "runtime",
+		"spdy", "filestat_level", "errno", "compact", "merge", "hotMode", "resultCache"}
 )
 
 func init() {
@@ -64,17 +62,27 @@ func NewOpenGeminiCollector() *OpenGeminiCollector {
 	return c
 }
 
+func (c *OpenGeminiCollector) readIndexes(name string) []*metrics.ModuleIndex {
+	c.mux.RLock()
+	metricSlice, ok := c.indexMap[name]
+	c.mux.RUnlock()
+	if !ok {
+		return []*metrics.ModuleIndex{}
+	}
+	return metricSlice
+}
+
+func (c *OpenGeminiCollector) writeIndexes(name string, indexes []*metrics.ModuleIndex) {
+	c.mux.Lock()
+	c.indexMap[name] = indexes
+	c.mux.Unlock()
+}
+
 func (c *OpenGeminiCollector) Describe(chan<- *prometheus.Desc) {}
 
 func (c *OpenGeminiCollector) Collect(ch chan<- prometheus.Metric) {
 	for _, moduleName := range metricMsts {
-		c.mux.RLock()
-		metricSlice, ok := c.indexMap[moduleName]
-		c.mux.RUnlock()
-		if !ok {
-			continue
-		}
-		for _, metricIndex := range metricSlice {
+		for _, metricIndex := range c.readIndexes(moduleName) {
 			for metricName, metricValue := range metricIndex.MetricsMap {
 				var labelKeys, labelValues []string
 				for key, value := range metricIndex.LabelValues {
@@ -107,9 +115,7 @@ func (h *Handler) serveMetrics(w http.ResponseWriter, r *http.Request, user meta
 		if err != nil {
 			continue
 		}
-		openGeminiCollector.mux.Lock()
-		openGeminiCollector.indexMap[moduleName] = moduleIndex
-		openGeminiCollector.mux.Unlock()
+		openGeminiCollector.writeIndexes(moduleName, moduleIndex)
 	}
 
 	promhttp.Handler().ServeHTTP(w, r)

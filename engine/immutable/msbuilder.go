@@ -16,6 +16,7 @@ package immutable
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"io"
@@ -58,7 +59,6 @@ type MsBuilder struct {
 	bf              *bloom.Filter
 	MaxIds          int
 	currentCMOffset int
-	blockSizeIndex  int
 	dataOffset      int64
 	localBFCount    int64 //the block count of a local bloomFilter file
 	trailerOffset   int64
@@ -74,7 +74,6 @@ type MsBuilder struct {
 	encChunkMeta      []byte
 	encChunkIndexMeta []byte
 	encIdTime         []byte
-	chunkMetaBlocks   [][]byte
 	timeSorted        bool //if timeField isn't the first sortKey, then set timeSorted false
 	fullTextIdx       bool //whether write full text bloom filter index
 	inited            bool
@@ -97,6 +96,8 @@ type MsBuilder struct {
 	pkMark             []fragment.IndexFragment
 	indexWriterBuilder *index.IndexWriterBuilder
 	EncodeChunkDataImp EncodeChunkData
+
+	chunkMetaCodecCtx *ChunkMetaCodecCtx
 }
 
 type FileInfoExtend struct {
@@ -125,7 +126,7 @@ func NewMsBuilder(dir, name string, lockPath *string, conf *Config, idCount int,
 	if FlushRemoteEnabled(tier) {
 		msBuilder.fd, err = fileops.CreateV2(filePath, lock, pri)
 	} else {
-		msBuilder.fd, err = fileops.OpenFile(filePath, os.O_CREATE|os.O_RDWR, 0640, lock, pri)
+		msBuilder.fd, err = fileops.OpenFile(filePath, os.O_CREATE|os.O_RDWR, 0600, lock, pri)
 	}
 	if err != nil {
 		log.Error("create file fail", zap.String("name", filePath), zap.Error(err))
@@ -133,15 +134,17 @@ func NewMsBuilder(dir, name string, lockPath *string, conf *Config, idCount int,
 	}
 
 	limit := fileName.level > 0
-	if msBuilder.cacheMetaInMemory() {
-		msBuilder.diskFileWriter = newTsspFileWriter(msBuilder.fd, true, limit, lockPath)
-		n := idCount/util.DefaultMaxChunkMetaItemCount + 1
-		msBuilder.inMemBlock.ReserveMetaBlock(n)
-	} else {
-		msBuilder.diskFileWriter = newTsspFileWriter(msBuilder.fd, false, limit, lockPath)
-		if msBuilder.chunkBuilder.chunkMeta == nil {
-			msBuilder.chunkBuilder.chunkMeta = &ChunkMeta{}
-		}
+	msBuilder.diskFileWriter = newTsspFileWriter(msBuilder.fd, false, limit, lockPath)
+	if msBuilder.chunkBuilder.chunkMeta == nil {
+		msBuilder.chunkBuilder.chunkMeta = &ChunkMeta{}
+	}
+
+	if config.HotModeEnabled() && util.IsHot(tier) {
+		msBuilder.diskFileWriter = NewHotFileWriter(msBuilder.diskFileWriter)
+	}
+
+	if IsChunkMetaCompressSelf() {
+		msBuilder.chunkMetaCodecCtx = GetChunkMetaCodecCtx()
 	}
 
 	return msBuilder
@@ -155,7 +158,7 @@ func genFilePath(filePath string, fileName TSSPFileName, obsOpt *obs.ObsOptions,
 	if flushRemote && obsOpt != nil {
 		filePath = filePath[len(obs.GetPrefixDataPath()):]
 		filePath = filepath.Join(obsOpt.BasePath, filePath, fileName.path("")) + obs.ObsFileSuffix + tmpFileSuffix
-		filePath = fileops.EncodeObsPath(obsOpt.Endpoint, obsOpt.BucketName, filePath, obsOpt.Ak, obsOpt.Sk)
+		filePath = fileops.EncodeObsPath(obsOpt.Endpoint, obsOpt.BucketName, filePath, obsOpt.Ak, fileops.DecryptObsSk(obsOpt.Sk))
 		return filePath, fileName
 	}
 	return fileName.Path(filePath, true), fileName
@@ -208,11 +211,6 @@ func genMsBuilder(dir, name string, lockPath *string, conf *Config, idCount int,
 	msBuilder.timeSorted = true
 	msBuilder.trailer.name = append(msBuilder.trailer.name[:0], influx.GetOriginMstName(name)...)
 	msBuilder.Path = dir
-	msBuilder.inMemBlock = emptyMemReader
-	if msBuilder.cacheDataInMemory() || msBuilder.cacheMetaInMemory() {
-		idx := calcBlockIndex(estimateSize)
-		msBuilder.inMemBlock = NewMemoryReader(blockSize[idx])
-	}
 
 	msBuilder.keys = make(map[uint64]struct{}, 256)
 	msBuilder.sequencer = sequencer
@@ -223,6 +221,10 @@ func genMsBuilder(dir, name string, lockPath *string, conf *Config, idCount int,
 	msBuilder.bf = nil
 	msBuilder.tcLocation = colstore.DefaultTCLocation
 	return msBuilder
+}
+
+func (b *MsBuilder) SetToHot() {
+	b.tier = util.Hot
 }
 
 func (b *MsBuilder) SetFullTextIdx(fullTextIdx bool) {
@@ -238,7 +240,7 @@ func (b *MsBuilder) GetIndexBuilder() *index.IndexWriterBuilder {
 }
 
 func (b *MsBuilder) StoreTimes() {
-	b.trailer.SetData(IndexOfTimeStoreFlag, TimeStoreFlag)
+	b.trailer.EnableTimeStore()
 }
 
 func (b *MsBuilder) MaxRowsPerSegment() int {
@@ -297,6 +299,10 @@ func (b *MsBuilder) Reset() {
 	b.RowCount = 0
 	b.Files = b.Files[:0]
 	b.FilesInfo = b.FilesInfo[:0]
+	if b.chunkMetaCodecCtx != nil {
+		b.chunkMetaCodecCtx.Release()
+		b.chunkMetaCodecCtx = nil
+	}
 }
 
 func (b *MsBuilder) writeToDisk(rowCounts int64) error {
@@ -893,7 +899,7 @@ func (b *MsBuilder) clearLocalFile(skipIndexFilePaths []string) error {
 		err := func() error {
 			lock := fileops.FileLockOption(*b.lock)
 			pri := fileops.FilePriorityOption(fileops.IO_PRIORITY_NORMAL)
-			fd, err := fileops.OpenFile(skipIndexFilePaths[i], os.O_CREATE|os.O_RDWR, 0640, lock, pri)
+			fd, err := fileops.OpenFile(skipIndexFilePaths[i], os.O_CREATE|os.O_RDWR, 0600, lock, pri)
 			defer func() {
 				_ = fd.Close()
 			}()
@@ -1183,7 +1189,7 @@ func (b *MsBuilder) WriteRecord(id uint64, data *record.Record, nextFile func(fn
 
 func (b *MsBuilder) NewTSSPFile(tmp bool) (TSSPFile, error) {
 	if err := b.Flush(); err != nil {
-		if err == errEmptyFile {
+		if errors.Is(err, errEmptyFile) {
 			b.removeEmptyFile()
 			return nil, nil
 		}
@@ -1208,21 +1214,22 @@ func (b *MsBuilder) NewTSSPFile(tmp bool) (TSSPFile, error) {
 	}
 	dr.avgChunkRows /= len(b.pair.Rows)
 
-	size := dr.InMemSize()
-	if b.FileName.order {
-		addMemSize(levelName(b.FileName.level), size, size, 0)
-	} else {
-		addMemSize(levelName(b.FileName.level), size, 0, size)
-	}
-
-	///todo for test check, delete after the version is stable
 	validateFileName(b.FileName, dr.FileName(), b.lock)
-	return &tsspFile{
+	f := &tsspFile{
 		name:   b.FileName,
 		reader: dr,
 		ref:    1,
 		lock:   b.lock,
-	}, nil
+	}
+
+	hotWriter, hot := b.diskFileWriter.(*HotFileWriter)
+	if hot {
+		dr.ApplyHotReader(hotWriter.BuildHotFileReader(dr.GetBasicFileReader()))
+		NewHotFileManager().Add(f)
+		hotWriter.Release()
+	}
+	b.diskFileWriter = nil
+	return f, nil
 }
 
 func validateFileName(msbFileName TSSPFileName, filePath string, lockPath *string) {
@@ -1255,10 +1262,6 @@ func (b *MsBuilder) WriteData(id uint64, data *record.Record) error {
 		b.pair.Reset(b.msName)
 		b.inited = true
 		b.cmOffset = b.cmOffset[:0]
-		if b.cacheDataInMemory() {
-			size := EstimateBufferSize(data.Size(), b.MaxIds)
-			b.blockSizeIndex = calcBlockIndex(size)
-		}
 		b.encodeChunk = append(b.encodeChunk, tableMagic...)
 		b.encodeChunk = numberenc.MarshalUint64Append(b.encodeChunk, version)
 		b.dataOffset = int64(len(b.encodeChunk))
@@ -1295,12 +1298,6 @@ func (b *MsBuilder) WriteData(id uint64, data *record.Record) error {
 	}
 
 	b.keys[id] = struct{}{}
-
-	if !b.cacheDataInMemory() {
-		return nil
-	}
-
-	b.inMemBlock.AppendDataBlock(b.encodeChunk)
 
 	return nil
 }
@@ -1376,10 +1373,6 @@ func (b *MsBuilder) Flush() error {
 		b.log.Error("copy chunk meta fail", zap.String("name", b.fd.Name()), zap.Error(err))
 		return err
 	}
-	if b.cacheMetaInMemory() {
-		b.chunkMetaBlocks = b.diskFileWriter.MetaDataBlocks(b.chunkMetaBlocks[:0])
-		b.inMemBlock.SetMetaBlocks(b.chunkMetaBlocks)
-	}
 
 	miOff := b.diskFileWriter.DataSize()
 	for i := range b.metaIndexItems {
@@ -1406,14 +1399,17 @@ func (b *MsBuilder) Flush() error {
 		b.sequencer.BatchUpdateCheckTime(&b.pair, false)
 	}
 
-	b.encIdTime = b.pair.Marshal(b.FileName.order || b.trailer.EqualData(IndexOfTimeStoreFlag, TimeStoreFlag), b.encIdTime[:0], b.chunkBuilder.colBuilder.coder)
+	b.encIdTime = b.pair.Marshal(true, b.encIdTime[:0], b.chunkBuilder.colBuilder.coder)
 	b.trailer.idTimeSize = int64(len(b.encIdTime))
 	if _, err := b.diskFileWriter.WriteData(b.encIdTime); err != nil {
 		b.log.Error("write id time data fail", zap.String("name", b.fd.Name()), zap.Error(err))
 		return err
 	}
+
+	b.trailer.EnableTimeStore()
+	b.trailer.SetChunkMetaHeader(b.chunkMetaCodecCtx.GetHeader())
 	b.trailer.SetChunkMetaCompressFlag()
-	b.trailerData = b.trailer.marshal(b.trailerData[:0])
+	b.trailerData = b.trailer.Marshal(b.trailerData[:0])
 
 	b.trailerOffset = b.diskFileWriter.DataSize()
 	if _, err := b.diskFileWriter.WriteData(b.trailerData); err != nil {
@@ -1432,7 +1428,6 @@ func (b *MsBuilder) Flush() error {
 	if err := b.diskFileWriter.Close(); err != nil {
 		b.log.Error("close file fail", zap.String("name", b.fd.Name()), zap.Error(err))
 	}
-	b.diskFileWriter = nil
 
 	return nil
 }
@@ -1471,26 +1466,6 @@ func (b *MsBuilder) FileVersion() uint64 {
 	return version ///todo ???
 }
 
-func (b *MsBuilder) cacheDataInMemory() bool {
-	if b.tier == util.Hot {
-		return b.Conf.cacheDataBlock
-	} else if b.tier == util.Warm {
-		return false
-	}
-
-	return b.Conf.cacheDataBlock
-}
-
-func (b *MsBuilder) cacheMetaInMemory() bool {
-	if b.tier == util.Hot {
-		return b.Conf.cacheMetaData
-	} else if b.tier == util.Warm {
-		return false
-	}
-
-	return b.Conf.cacheMetaData
-}
-
 func (b *MsBuilder) GetPKInfoNum() int {
 	return len(b.pkRec)
 }
@@ -1525,7 +1500,12 @@ func (b *MsBuilder) SwitchChunkMeta() error {
 }
 
 func (b *MsBuilder) WriteChunkMeta(cm *ChunkMeta) (int, error) {
-	b.encChunkMeta = cm.marshal(b.encChunkMeta[:0])
+	buf, err := MarshalChunkMeta(b.chunkMetaCodecCtx, cm, b.encChunkMeta[:0])
+	if err != nil {
+		return 0, err
+	}
+
+	b.encChunkMeta = buf
 	b.cmOffset = append(b.cmOffset, uint32(b.currentCMOffset))
 	b.currentCMOffset += len(b.encChunkMeta)
 

@@ -27,14 +27,16 @@ import (
 type StreamInfos []*StreamInfo
 
 type StreamInfo struct {
-	Name     string
-	ID       uint64
-	SrcMst   *StreamMeasurementInfo
-	DesMst   *StreamMeasurementInfo
-	Interval time.Duration
-	Dims     []string
-	Calls    []*StreamCall
-	Delay    time.Duration
+	Name        string
+	ID          uint64
+	SrcMst      *StreamMeasurementInfo
+	DesMst      *StreamMeasurementInfo
+	Interval    time.Duration
+	Dims        []string
+	Calls       []*StreamCall
+	Delay       time.Duration
+	Cond        string
+	IsSelectAll bool
 }
 
 type StreamCall struct {
@@ -91,14 +93,58 @@ func NewStreamInfo(name string, delay time.Duration, srcMstInfo *influxql.Measur
 	return info
 }
 
+func NewStreamInfoNoCall(stmt *influxql.CreateStreamStatement, selectStmt *influxql.SelectStatement, isSelectAll bool) *StreamInfo {
+	info := &StreamInfo{
+		Name:        stmt.Name,
+		IsSelectAll: isSelectAll,
+	}
+
+	srcMst := selectStmt.Sources[0].(*influxql.Measurement)
+	info.SrcMst = &StreamMeasurementInfo{
+		Name:            srcMst.Name,
+		Database:        srcMst.Database,
+		RetentionPolicy: srcMst.RetentionPolicy,
+	}
+
+	desMst := stmt.Target.Measurement
+	info.DesMst = &StreamMeasurementInfo{
+		Name:            desMst.Name,
+		Database:        desMst.Database,
+		RetentionPolicy: desMst.RetentionPolicy,
+	}
+
+	info.Calls = make([]*StreamCall, 0, len(selectStmt.Fields))
+	for i := range selectStmt.Fields {
+		f, ok := selectStmt.Fields[i].Expr.(*influxql.VarRef)
+		if !ok {
+			panic("should be VarRef")
+		}
+		call := &StreamCall{
+			Call:  "",
+			Alias: selectStmt.Fields[i].Alias,
+			Field: f.Val,
+		}
+		if call.Alias == "" {
+			call.Alias = f.Val
+		}
+		info.Calls = append(info.Calls, call)
+	}
+
+	info.Cond = selectStmt.Condition.String()
+
+	return info
+}
+
 func (s *StreamInfo) Marshal() *proto2.StreamInfo {
 	pb := &proto2.StreamInfo{
-		Name:     proto.String(s.Name),
-		ID:       proto.Uint64(s.ID),
-		Interval: proto.Int64(int64(s.Interval)),
-		Delay:    proto.Int64(int64(s.Delay)),
-		SrcMst:   s.SrcMst.marshal(),
-		DesMst:   s.DesMst.marshal(),
+		Name:        proto.String(s.Name),
+		ID:          proto.Uint64(s.ID),
+		Interval:    proto.Int64(int64(s.Interval)),
+		Delay:       proto.Int64(int64(s.Delay)),
+		SrcMst:      s.SrcMst.marshal(),
+		DesMst:      s.DesMst.marshal(),
+		Cond:        proto.String(s.Cond),
+		IsSelectAll: proto.Bool(s.IsSelectAll),
 	}
 	if len(s.Dims) > 0 {
 		pb.Dims = make([]string, 0, len(s.Dims))
@@ -125,6 +171,8 @@ func (s *StreamInfo) Unmarshal(pb *proto2.StreamInfo) {
 	s.DesMst = &StreamMeasurementInfo{}
 	s.DesMst.unmarshal(pb.DesMst)
 	s.Dims = pb.GetDims()
+	s.Cond = pb.GetCond()
+	s.IsSelectAll = pb.GetIsSelectAll()
 	if len(pb.Calls) > 0 {
 		s.Calls = make([]*StreamCall, len(pb.Calls))
 		for i := range s.Calls {
@@ -136,10 +184,12 @@ func (s *StreamInfo) Unmarshal(pb *proto2.StreamInfo) {
 
 func (s StreamInfo) clone() *StreamInfo {
 	other := &StreamInfo{
-		Name:     s.Name,
-		ID:       s.ID,
-		Interval: s.Interval,
-		Delay:    s.Delay,
+		Name:        s.Name,
+		ID:          s.ID,
+		Interval:    s.Interval,
+		Delay:       s.Delay,
+		IsSelectAll: s.IsSelectAll,
+		Cond:        s.Cond,
 	}
 	other.SrcMst = s.SrcMst.Clone()
 	other.DesMst = s.DesMst.Clone()
@@ -159,6 +209,9 @@ func (s *StreamInfo) Dimensions() string {
 }
 
 func (s *StreamInfo) CallsName() string {
+	if s.IsSelectAll {
+		return "*"
+	}
 	var c []string
 	for i := range s.Calls {
 		c = append(c, s.Calls[i].String())

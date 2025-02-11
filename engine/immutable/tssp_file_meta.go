@@ -30,7 +30,8 @@ const (
 	ChunkMetaCompressNone   = 0
 	ChunkMetaCompressSnappy = 1
 	ChunkMetaCompressLZ4    = 2
-	ChunkMetaCompressEnd    = 3
+	ChunkMetaCompressSelf   = 3
+	ChunkMetaCompressEnd    = 4
 )
 
 var chunkMetaCompressMode = ChunkMetaCompressNone
@@ -45,6 +46,14 @@ func SetChunkMetaCompressMode(mode int) {
 
 func GetChunkMetaCompressMode() uint8 {
 	return uint8(chunkMetaCompressMode)
+}
+
+func UseIndexCompressWriter() bool {
+	return chunkMetaCompressMode == ChunkMetaCompressSnappy || chunkMetaCompressMode == ChunkMetaCompressLZ4
+}
+
+func IsChunkMetaCompressSelf() bool {
+	return chunkMetaCompressMode == ChunkMetaCompressSelf
 }
 
 // Segment offset/size/minT/maxT
@@ -367,15 +376,15 @@ func (m *ColumnMeta) growEntry() {
 
 type ChunkMeta struct {
 	sid         uint64
-	offset      int64
-	size        uint32
+	offset      int64  // chunk data offset
+	size        uint32 // chunk data size
 	columnCount uint32
 	segCount    uint32
 	timeRange   []SegmentRange
 	colMeta     []ColumnMeta
 }
 
-// NewChunkMeta only use for test,used by engine/record_plan_test.go
+// use for test
 func NewChunkMeta(sid uint64, minT, maxT int64, count int) *ChunkMeta {
 	b := newPreAggBuilders()
 	b.intBuilder.addCount(10)
@@ -553,7 +562,7 @@ func (m *ChunkMeta) marshal(dst []byte) []byte {
 	return dst
 }
 
-func (m *ChunkMeta) validation() {
+func (m *ChunkMeta) Validation() {
 	if m.sid == 0 {
 		panic("series is is 0")
 	}
@@ -733,6 +742,10 @@ func (m *MetaIndex) GetOffset() int64 {
 
 func (m *MetaIndex) GetSize() uint32 {
 	return m.size
+}
+
+func (m *MetaIndex) GetCount() uint32 {
+	return m.count
 }
 
 func (m *MetaIndex) marshal(dst []byte) []byte {

@@ -156,16 +156,16 @@ func (t *TSSPFileDetachedReader) parseSeqId(options hybridqp.Options) error {
 	if options.IsAscending() {
 		t.filterSeqFunc = func(cmp, origin int64) bool {
 			if t.filterShardId == t.shardId {
-				return cmp > origin
+				return cmp < origin
 			}
-			return t.filterShardId > t.shardId
+			return t.filterShardId < t.shardId
 		}
 	} else {
 		t.filterSeqFunc = func(cmp, origin int64) bool {
 			if t.filterShardId == t.shardId {
-				return cmp < origin
+				return cmp > origin
 			}
-			return t.filterShardId < t.shardId
+			return t.filterShardId > t.shardId
 		}
 	}
 	return nil

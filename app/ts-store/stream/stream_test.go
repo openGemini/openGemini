@@ -29,6 +29,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	stream2 "github.com/openGemini/openGemini/services/stream"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
@@ -205,11 +206,22 @@ func (m MockLogger) Debug(msg string, fields ...zap.Field) {
 }
 
 func (m MockLogger) Error(msg string, fields ...zap.Field) {
+	for _, f := range fields {
+		msg += ", "
+		msg += f.String
+		msg += "\n"
+	}
 	m.t.Log(msg)
 }
 
 type MockMetaclient struct {
 	getInfoFail bool
+}
+
+func (m MockMetaclient) GetNodePT(database string) []uint32 {
+	//TODO implement me
+	//panic("implement me")
+	return []uint32{1}
 }
 
 func (m MockMetaclient) Measurement(dbName string, rpName string, mstName string) (*meta.MeasurementInfo, error) {
@@ -275,12 +287,20 @@ func (ww *MockWritePointsWork) reset() {
 	ww.rows = ww.rows[:0]
 }
 
+func (ww *MockWritePointsWork) Ref() {
+
+}
+
+func (ww *MockWritePointsWork) UnRef() int64 {
+	return 0
+}
+
 func Test_Call(t *testing.T) {
 	m := &MockStorage{}
 	l := &MockLogger{t}
 	metaClient := &MockMetaclient{}
 	conf := stream2.NewConfig()
-	stream, err := NewStream(m, l, metaClient, conf)
+	stream, err := NewStream(m, l, metaClient, conf, "/tmp", "", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,6 +308,7 @@ func Test_Call(t *testing.T) {
 	dataBlock := &MockWritePointsWork{}
 	fieldRows := buildRows(30)
 	fieldRows2 := buildRows(1)
+	fieldRows3 := buildRows(2)
 	window := time.Second * 1
 	now := time.Now()
 	t.Log("now", now)
@@ -310,7 +331,8 @@ func Test_Call(t *testing.T) {
 	}
 	dataBlock.SetRows(fieldRows)
 
-	stream.WriteRows("test", "auto", 0, 0, map[uint64]uint64{}, dataBlock)
+	stream.WriteRows(&WriteStreamRowsCtx{
+		"test", "auto", 0, 0, map[uint64]uint64{}, dataBlock, nil})
 	//for test reuse object
 	stream.Drain()
 	for k := range fieldRows2 {
@@ -319,9 +341,20 @@ func Test_Call(t *testing.T) {
 	}
 	dataBlock2 := &MockWritePointsWork{}
 	dataBlock.SetRows(fieldRows2)
-	stream.WriteRows("test", "auto", 0, 0, map[uint64]uint64{}, dataBlock2)
+	stream.WriteRows(&WriteStreamRowsCtx{"test", "auto", 0, 0, map[uint64]uint64{}, dataBlock2, nil})
 	t.Log("write rows ", start, time.Now())
 	stream.Drain()
+
+	for k := range fieldRows3 {
+		fieldRows3[k].Timestamp = start.UnixNano()
+		fieldRows3[k].Tags[0].Value = fmt.Sprintf("%vkk%v", k, 1)
+	}
+	dataBlock3 := &MockWritePointsWork{}
+	dataBlock3.SetRows(fieldRows3)
+	stream.WriteReplayRows("test", "auto", 0, 0, dataBlock3)
+	t.Log("write rows ", start, time.Now())
+	stream.Drain()
+
 	select {
 	case <-after.C:
 	}
@@ -346,7 +379,7 @@ func Test_RecCall(t *testing.T) {
 	l := &MockLogger{t}
 	metaClient := &MockMetaclient{}
 	conf := stream2.NewConfig()
-	stream, err := NewStream(m, l, metaClient, conf)
+	stream, err := NewStream(m, l, metaClient, conf, "/tmp", "", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -399,7 +432,7 @@ func Test_RegisterFail(t *testing.T) {
 	l := &MockLogger{t}
 	metaClient := &MockMetaclient{getInfoFail: true}
 	conf := stream2.NewConfig()
-	stream, err := NewStream(m, l, metaClient, conf)
+	stream, err := NewStream(m, l, metaClient, conf, "/tmp", "", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -436,7 +469,7 @@ func Test_RegisterTimeTask(t *testing.T) {
 	l := &MockLogger{t}
 	metaClient := &MockMetaclient{getInfoFail: true}
 	conf := stream2.NewConfig()
-	stream, err := NewStream(m, l, metaClient, conf)
+	stream, err := NewStream(m, l, metaClient, conf, "/tmp", "", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -473,7 +506,7 @@ func Test_MaxDelay(t *testing.T) {
 	l := &MockLogger{t}
 	metaClient := &MockMetaclient{}
 	conf := stream2.NewConfig()
-	stream, err := NewStream(m, l, metaClient, conf)
+	stream, err := NewStream(m, l, metaClient, conf, "/tmp", "", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -514,7 +547,7 @@ func Test_MaxDelay(t *testing.T) {
 	}
 	dataBlock := &MockWritePointsWork{}
 	dataBlock.SetRows(fieldRows)
-	stream.WriteRows("test", "auto", 0, 0, map[uint64]uint64{}, dataBlock)
+	stream.WriteRows(&WriteStreamRowsCtx{"test", "auto", 0, 0, map[uint64]uint64{}, dataBlock, nil})
 	t.Log("write rows ", now, time.Now())
 	stream.Drain()
 	select {
@@ -540,7 +573,7 @@ func Test_MaxDelay(t *testing.T) {
 	if ex != m.TimeStamp().Truncate(time.Second) {
 		t.Error(fmt.Sprintf("expect %v ,got %v", ex, m.TimeStamp().Truncate(time.Second)))
 	}
-	stream.Close()
+	stream.DeleteTask(streamInfos["tt"].ID)
 }
 
 func buildStreamInfo(window, maxDelay time.Duration, calls []string) map[string]*meta.StreamInfo {
@@ -590,7 +623,7 @@ func Bench_Stream_POINT(t *testing.B, pointNum int) {
 	metaClient := &MockMetaclient{}
 	conf := stream2.NewConfig()
 	conf.FilterConcurrency = 1
-	stream, err := NewStream(m, l, metaClient, conf)
+	stream, err := NewStream(m, l, metaClient, conf, "/tmp", "", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -642,7 +675,7 @@ func Bench_Stream_POINT(t *testing.B, pointNum int) {
 		for j := 0; j < 20; j++ {
 			dataBlock := &MockWritePointsWork{}
 			dataBlock.SetRows(rows[j])
-			stream.WriteRows("test", "auto", 0, 0, map[uint64]uint64{}, dataBlock)
+			stream.WriteRows(&WriteStreamRowsCtx{"test", "auto", 0, 0, map[uint64]uint64{}, dataBlock, nil})
 		}
 		stream.Drain()
 		t.StopTimer()
@@ -702,4 +735,98 @@ func TestCacheRecord(t *testing.T) {
 	r.Release()
 	r.Release()
 	r.Wait()
+}
+
+func buildReplayRows(length int) []influx.Row {
+	fieldRows := &[]influx.Row{}
+	for j := 0; j < length; j++ {
+		r := buildRow("'贵阳''西南''公有云'", "", false)
+		r.Name = fmt.Sprintf("%v_0000", r.Name)
+		*fieldRows = append(*fieldRows, r)
+	}
+	return *fieldRows
+}
+
+func TestStreamHandler(t *testing.T) {
+	m := &MockStorage{}
+	l := &MockLogger{t}
+	metaClient := &MockMetaclient{}
+	conf := stream2.NewConfig()
+	stream, err := NewStream(m, l, metaClient, conf, "/tmp", "", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := stream.(*Stream)
+
+	start := time.Now()
+	fieldRows3 := buildReplayRows(2)
+	for k := range fieldRows3 {
+		fieldRows3[k].Timestamp = start.UnixNano()
+		fieldRows3[k].Tags[0].Value = fmt.Sprintf("%vkk%v", k, 1)
+	}
+	dataBlock3 := &MockWritePointsWork{}
+	dataBlock3.SetRows(fieldRows3)
+	db, rp := "test", "auto"
+	pt, shardID := 0, 0
+	fileNames := []string{fmt.Sprintf("xxx/wal/%s/%d/%s/%d_0_0_0/xxx.wal", db, pt, rp, shardID)}
+
+	err = s.StreamHandler(dataBlock3.GetRows(), fileNames)
+	if err != nil {
+		t.Fatal(err.Error())
+	}
+}
+
+func TestStreamHandlerError(t *testing.T) {
+	s := &Stream{
+		Logger: MockLogger{
+			t: t,
+		},
+	}
+	t.Run("1", func(t *testing.T) {
+		err := s.StreamHandler(influx.Rows{}, []string{"xxx"})
+		require.NoError(t, err)
+	})
+
+	t.Run("2", func(t *testing.T) {
+		err := s.StreamHandler(influx.Rows{influx.Row{}}, []string{"xxx"})
+		require.NotEmpty(t, err)
+	})
+}
+
+func TestParseFileName(t *testing.T) {
+	t.Run("parse should be success", func(t *testing.T) {
+		expDB, expRP := "db", "rp"
+		expPT, expSID := uint32(0), uint64(0)
+		fileName := fmt.Sprintf("xxx/wal/%s/%d/%s/%d_0_0_0/xxx.wal", expDB, expPT, expRP, expSID)
+		db, rp, pt, shardID, err := ParseFileName(fileName, "xxx")
+		if err != nil {
+			t.Fatal(err.Error())
+		}
+		assertEqual(t, expDB, db)
+		assertEqual(t, expRP, rp)
+		assertEqual(t, expPT, pt)
+		assertEqual(t, expSID, shardID)
+	})
+
+	t.Run("parse should be failed", func(t *testing.T) {
+		fileName := "xxx/wal/db/0/rp/0/xxx.wal"
+		_, _, _, _, err := ParseFileName(fileName, "xxx")
+		if err == nil {
+			t.Fatal(err.Error())
+		}
+	})
+
+	t.Run("parse should be failed2", func(t *testing.T) {
+		fileName := "xxx/wal/db/s/rp/0_0_0_0/xxx.wal"
+		_, _, _, _, err := ParseFileName(fileName, "xxx")
+		if err == nil {
+			t.Fatal(err.Error())
+		}
+	})
+}
+
+func assertEqual(t *testing.T, expected, actual interface{}) {
+	if expected != actual {
+		t.Errorf("Expected %v, got %v", expected, actual)
+	}
 }

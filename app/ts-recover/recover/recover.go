@@ -72,6 +72,10 @@ func recoverWithFull(tsRecover *config.TsRecover, rc *RecoverConfig) error {
 		return err
 	}
 	backupDataPath := filepath.Join(rc.FullBackupDataPath, backup.DataBackupDir, dataPath)
+	if _, err := os.Stat(backupDataPath); err != nil {
+		fmt.Println("backupDataPath empty !")
+		return nil
+	}
 	if err := traversalBackupLogFile(rc, backupDataPath, copyWithFull, false); err != nil {
 		return err
 	}
@@ -90,11 +94,18 @@ func recoverWithFullAndInc(tsRecover *config.TsRecover, rc *RecoverConfig) error
 	}
 	// recover full_backup
 	fullBackupDataPath := filepath.Join(rc.FullBackupDataPath, backup.DataBackupDir, dataPath)
-	if err := traversalBackupLogFile(rc, fullBackupDataPath, copyWithFullAndInc, true); err != nil {
-		return err
+	if _, err := os.Stat(fullBackupDataPath); err == nil {
+		if err := traversalBackupLogFile(rc, fullBackupDataPath, copyWithFullAndInc, true); err != nil {
+			return err
+		}
 	}
+
 	// recover inc_backup
 	incBackupDataPath := filepath.Join(rc.IncBackupDataPath, backup.DataBackupDir, dataPath)
+	if _, err := os.Stat(incBackupDataPath); err != nil {
+		fmt.Println("incBackupDataPath empty !")
+		return nil
+	}
 	if err := traversalIncBackupLogFile(rc, incBackupDataPath); err != nil {
 		return err
 	}

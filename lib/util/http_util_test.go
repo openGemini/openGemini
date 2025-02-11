@@ -23,11 +23,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openGemini/openGemini/lib/util"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/httpd"
 )
 
 var addr = "127.0.0.1:8602"
+
 var errMsg string
+
 var errCode int
 
 type handler struct {
@@ -39,7 +41,7 @@ func newHandler() *handler {
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	util.HttpError(w, errMsg, errCode)
+	httpd.HttpError(w, errMsg, errCode)
 }
 
 func mockHTTPServer(t *testing.T) {
