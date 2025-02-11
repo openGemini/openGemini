@@ -552,6 +552,97 @@ func TestGetIntegerLTEConditionBitMapWithoutNull(t *testing.T) {
 	assert.Equal(t, bitMap, []uint8{0x7})
 }
 
+func TestGetStringIPInRangeBitMapWithoutNull(t *testing.T) {
+	schema := []record.Field{
+		{Name: "srcIp", Type: influx.Field_Type_String},
+		{Name: "time", Type: influx.Field_Type_Int}}
+	rec := record.NewRecordBuilder(schema)
+	rec.ColVals[0].AppendStrings("1.1.1.1", "2.2.2.2", "3.3.3.3", "4.4.4.4")
+	rec.AppendTime(1, 2, 3, 4)
+	dstRec := record.NewRecord(schema, false)
+	dstRec.SliceFromRecord(rec, 0, 4)
+	var bitMap []byte
+	col := &dstRec.ColVals[0]
+	bitMap = append(bitMap, dstRec.ColVals[0].Bitmap...)
+	p := &TypeFunParams{
+		col:     col,
+		compare: "3.3.3.0/24",
+		pos:     bitMap,
+		bitMap:  col.Bitmap,
+		offset:  col.BitMapOffset,
+		opt:     &query.ProcessorOptions{},
+	}
+	GetStringIPInRangeBitMap(p)
+	assert.Equal(t, bitMap, []uint8{0x4})
+}
+
+func TestGetStringIPInRangeBitMapWithNull(t *testing.T) {
+	schema := []record.Field{
+		{Name: "srcIp", Type: influx.Field_Type_String},
+		{Name: "time", Type: influx.Field_Type_Int}}
+	rec := record.NewRecordBuilder(schema)
+	rec.ColVals[0].AppendStrings("1.1.1.1", "3.3.3.3", "4.4.4.4")
+	rec.ColVals[0].AppendStringNull()
+	rec.AppendTime(1, 2, 3, 4)
+	dstRec := record.NewRecord(schema, false)
+	dstRec.SliceFromRecord(rec, 0, 4)
+	var bitMap []byte
+	col := &dstRec.ColVals[0]
+	bitMap = append(bitMap, dstRec.ColVals[0].Bitmap...)
+	p := &TypeFunParams{
+		col:     col,
+		compare: "3.3.3.0/24",
+		pos:     bitMap,
+		bitMap:  col.Bitmap,
+		offset:  col.BitMapOffset,
+		opt:     &query.ProcessorOptions{},
+	}
+	GetStringIPInRangeBitMap(p)
+	assert.Equal(t, bitMap, []uint8{0x2})
+}
+
+func TestIsIpInRange(t *testing.T) {
+	type args struct {
+		ipStr     string
+		subnetStr string
+	}
+	tests := []struct {
+		name string
+		args args
+		want bool
+	}{
+		{
+			name: "test success",
+			args: args{
+				ipStr:     "1.1.1.1",
+				subnetStr: "1.1.1.0/24",
+			},
+			want: true,
+		},
+		{
+			name: "test nil ip",
+			args: args{
+				ipStr:     "1.1.1.",
+				subnetStr: "1.1.1.1/24",
+			},
+			want: false,
+		},
+		{
+			name: "test success",
+			args: args{
+				ipStr:     "1.1.1.1",
+				subnetStr: "1.1.1.1",
+			},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equalf(t, tt.want, IsIpInRange(tt.args.ipStr, tt.args.subnetStr), "IsIpInRange(%v, %v)", tt.args.ipStr, tt.args.subnetStr)
+		})
+	}
+}
+
 func BenchmarkStringCompareByBytes(b *testing.B) {
 	col, bitMap := prepareStringColValue(1, 8192)
 	b.ReportAllocs()

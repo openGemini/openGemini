@@ -23,10 +23,12 @@ import (
 	log "github.com/influxdata/influxdb/logger"
 	"github.com/openGemini/openGemini/engine"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
+	"github.com/stretchr/testify/assert"
 )
 
 func mustParseTime(layout, value string) time.Time {
@@ -37,9 +39,53 @@ func mustParseTime(layout, value string) time.Time {
 	return tm
 }
 
+type MockEngine struct {
+	DeleteIndexFn             func(db string, ptId uint32, indexID uint64) error
+	UpdateShardDurationInfoFn func(info *meta.ShardDurationInfo, nilShardMap *map[uint64]*meta.ShardDurationInfo) error
+	UpdateIndexDurationInfoFn func(info *meta.IndexDurationInfo, nilIndexMap *map[uint64]*meta.IndexDurationInfo) error
+	ExpiredShardsFn           func(nilShardMap *map[uint64]*meta.ShardDurationInfo) []*meta.ShardIdentifier
+	ExpiredIndexesFn          func(nilIndexMap *map[uint64]*meta.IndexDurationInfo) []*meta.IndexIdentifier
+	ExpiredCacheIndexesFn     func() []*meta.IndexIdentifier
+	DeleteShardFn             func(db string, ptId uint32, shardID uint64) error
+	ClearIndexCacheFn         func(db string, ptId uint32, indexID uint64) error
+}
+
+func (me *MockEngine) DeleteIndex(db string, ptId uint32, indexID uint64) error {
+	return me.DeleteIndexFn(db, ptId, indexID)
+}
+
+func (me *MockEngine) UpdateShardDurationInfo(info *meta.ShardDurationInfo, nilShardMap *map[uint64]*meta.ShardDurationInfo) error {
+	return me.UpdateShardDurationInfoFn(info, nilShardMap)
+}
+
+func (me *MockEngine) UpdateIndexDurationInfo(info *meta.IndexDurationInfo, nilIndexMap *map[uint64]*meta.IndexDurationInfo) error {
+	return me.UpdateIndexDurationInfoFn(info, nilIndexMap)
+}
+
+func (me *MockEngine) ExpiredShards(nilShardMap *map[uint64]*meta.ShardDurationInfo) []*meta.ShardIdentifier {
+	return me.ExpiredShardsFn(nilShardMap)
+}
+
+func (me *MockEngine) ExpiredIndexes(nilIndexMap *map[uint64]*meta.IndexDurationInfo) []*meta.IndexIdentifier {
+	return me.ExpiredIndexesFn(nilIndexMap)
+}
+
+func (me *MockEngine) ExpiredCacheIndexes() []*meta.IndexIdentifier {
+	return me.ExpiredCacheIndexesFn()
+}
+
+func (me *MockEngine) DeleteShard(db string, ptId uint32, shardID uint64) error {
+	return me.DeleteShardFn(db, ptId, shardID)
+}
+
+func (me *MockEngine) ClearIndexCache(db string, ptId uint32, indexID uint64) error {
+	return me.ClearIndexCacheFn(db, ptId, indexID)
+}
+
 type MockMetaClient struct {
 	PruneGroupsCommandFn    func(shardGroup bool, id uint64) error
 	GetShardDurationInfoFn  func(index uint64) (*meta.ShardDurationResponse, error)
+	GetIndexDurationInfoFn  func(index uint64) (*meta.IndexDurationResponse, error)
 	DeleteShardGroupFn      func(database, policy string, id uint64, deleteType int32) error
 	DeleteIndexGroupFn      func(database, policy string, id uint64) error
 	DelayDeleteShardGroupFn func(database, policy string, id uint64, deletedAt time.Time, deleteType int32) error
@@ -53,6 +99,10 @@ func (mc *MockMetaClient) PruneGroupsCommand(shardGroup bool, id uint64) error {
 
 func (mc *MockMetaClient) GetShardDurationInfo(index uint64) (*meta.ShardDurationResponse, error) {
 	return mc.GetShardDurationInfoFn(index)
+}
+
+func (mc *MockMetaClient) GetIndexDurationInfo(index uint64) (*meta.IndexDurationResponse, error) {
+	return mc.GetIndexDurationInfoFn(index)
 }
 
 func (mc *MockMetaClient) DeleteShardGroup(database, policy string, id uint64, deleteType int32) error {
@@ -82,6 +132,9 @@ func TestTTL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	client := metaclient.NewClient("", false, 0)
+	client.SetCacheData(&meta.Data{})
+	eng.SetMetaClient(client)
 	db := "db0"
 	pt := uint32(1)
 	rp := "rp0"
@@ -120,6 +173,10 @@ func TestTTL(t *testing.T) {
 
 	mockClient.GetShardDurationInfoFn = func(index uint64) (*meta.ShardDurationResponse, error) {
 		return &meta.ShardDurationResponse{}, nil
+	}
+
+	mockClient.GetIndexDurationInfoFn = func(index uint64) (*meta.IndexDurationResponse, error) {
+		return &meta.IndexDurationResponse{}, nil
 	}
 
 	mockClient.DelayDeleteShardGroupFn = func(database, policy string, id uint64, deletedAt time.Time, deleteType int32) error {
@@ -280,4 +337,82 @@ func TestShardDelete(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "delete shard failed") {
 		t.Errorf("get error info failed, err:%+v", err)
 	}
+}
+
+func TestUpdateDurationInfo(t *testing.T) {
+	path := t.TempDir()
+	_ = fileops.RemoveAll(path)
+	mockClient := &MockMetaClient{}
+	mockClient.PruneGroupsCommandFn = func(shardGroup bool, id uint64) error {
+		return nil
+	}
+	mockClient.DeleteIndexGroupFn = func(database, policy string, id uint64) error {
+		return nil
+	}
+	mockClient.DeleteShardGroupFn = func(database, policy string, id uint64, deleteType int32) error {
+		return nil
+	}
+
+	mockEngine := &MockEngine{}
+	mockEngine.ExpiredShardsFn = func(nilShardMap *map[uint64]*meta.ShardDurationInfo) []*meta.ShardIdentifier {
+		return []*meta.ShardIdentifier{&meta.ShardIdentifier{ShardID: 1}, &meta.ShardIdentifier{ShardID: 2}}
+	}
+	mockEngine.DeleteShardFn = func(db string, ptId uint32, shardID uint64) error {
+		if shardID == 1 {
+			return errno.NewError(errno.ShardNotFound)
+		}
+		return fmt.Errorf("invalid err")
+	}
+	mockEngine.ExpiredIndexesFn = func(nilIndexMap *map[uint64]*meta.IndexDurationInfo) []*meta.IndexIdentifier {
+		return nil
+	}
+	mockEngine.ExpiredCacheIndexesFn = func() []*meta.IndexIdentifier {
+		return nil
+	}
+
+	s := NewService(time.Second)
+	s.MetaClient = mockClient
+	s.Engine = mockEngine
+
+	nilShardMap := make(map[uint64]*meta.ShardDurationInfo)
+	nilIndexMap := make(map[uint64]*meta.IndexDurationInfo)
+	logger, _ := log.NewOperation(s.Logger.GetZapLogger(), "retention policy deletion check", "retention_delete_check")
+	retryNeeded := s.handleLocalStorage(logger, &nilShardMap, &nilIndexMap)
+	if !retryNeeded {
+		t.Fatal("retention operation injected a failed operation, but it was not retried")
+	}
+}
+
+func TestUpdateIndexDurationInfo(t *testing.T) {
+	path := t.TempDir()
+	_ = fileops.RemoveAll(path)
+	mockClient := &MockMetaClient{}
+	mockClient.GetIndexDurationInfoFn = func(index uint64) (*meta.IndexDurationResponse, error) {
+		return nil, fmt.Errorf("err1")
+	}
+
+	mockEngine := &MockEngine{}
+	mockEngine.UpdateIndexDurationInfoFn = func(info *meta.IndexDurationInfo, nilIndexMap *map[uint64]*meta.IndexDurationInfo) error {
+		return nil
+	}
+
+	s := NewService(time.Second)
+	s.MetaClient = mockClient
+	s.Engine = mockEngine
+
+	nilIndexMap := make(map[uint64]*meta.IndexDurationInfo)
+	err := s.updateIndexDurationInfo(&nilIndexMap)
+	assert.Equal(t, err.Error(), "err1")
+
+	mockClient.GetIndexDurationInfoFn = func(index uint64) (*meta.IndexDurationResponse, error) {
+		return &meta.IndexDurationResponse{DataIndex: 10, Durations: []meta.IndexDurationInfo{{Ident: meta.IndexBuilderIdentifier{IndexID: 1}}, {Ident: meta.IndexBuilderIdentifier{IndexID: 2}}}}, nil
+	}
+	mockEngine.UpdateIndexDurationInfoFn = func(info *meta.IndexDurationInfo, nilIndexMap *map[uint64]*meta.IndexDurationInfo) error {
+		if info.Ident.IndexID == 1 {
+			return errno.NewError(errno.PtNotFound)
+		}
+		return fmt.Errorf("err2")
+	}
+	err = s.updateIndexDurationInfo(&nilIndexMap)
+	assert.Equal(t, err.Error(), "err2")
 }

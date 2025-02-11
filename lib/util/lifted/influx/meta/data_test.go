@@ -1224,7 +1224,7 @@ func TestData_Marshal_Unmarshal(t *testing.T) {
 	dbPt1 := generateDbPtInfo("db0", 0, 1, dbBriefInfo)
 	mei := NewMigrateEventInfo(dbPt1.String(), 1, dbPt1, 1, 1)
 	data.MigrateEvents[mei.eventId] = mei
-	pb := data.Marshal(false)
+	pb := data.Marshal()
 	dataUnMarshal := &Data{}
 	dataUnMarshal.Unmarshal(pb)
 
@@ -3090,4 +3090,43 @@ func TestUpdatePtViewStatusForRep1(t *testing.T) {
 	data.updatePtViewStatus(1, Offline)
 	assert2.Equal(t, SubHealth, data.ReplicaGroups["db0"][0].Status)
 	data.updatePtViewStatus(3, Offline)
+}
+
+func TestData_indexGroupExpand(t *testing.T) {
+	data := initData()
+	duration := 24 * time.Hour
+	now := time.Now().Truncate(duration).UTC()
+	rpi := &RetentionPolicyInfo{
+		IndexGroupDuration: duration,
+	}
+	ptNum := data.GetClusterPtNum()
+	ig := data.createIndexGroupIfNeeded(rpi, now.Add(duration), config.TSSTORE, ptNum)
+	require.Equal(t, 1, len(rpi.IndexGroups))
+	require.Equal(t, &rpi.IndexGroups[0], ig)
+
+	ig = data.createIndexGroupIfNeeded(rpi, now.Add(2*duration), config.TSSTORE, ptNum)
+	require.Equal(t, 2, len(rpi.IndexGroups))
+	require.Equal(t, &rpi.IndexGroups[1], ig)
+
+	ig = data.createIndexGroupIfNeeded(rpi, now.Add(2*duration), config.TSSTORE, ptNum)
+	require.Equal(t, 2, len(rpi.IndexGroups))
+	require.Equal(t, &rpi.IndexGroups[1], ig)
+
+	ptNum = ptNum + 2
+	ig = data.createIndexGroupIfNeeded(rpi, now.Add(2*duration), config.TSSTORE, ptNum)
+	require.Equal(t, 3, len(rpi.IndexGroups))
+	require.Equal(t, &rpi.IndexGroups[2], ig)
+
+	ig = data.createIndexGroupIfNeeded(rpi, now.Add(2*duration), config.TSSTORE, ptNum)
+	require.Equal(t, 3, len(rpi.IndexGroups))
+	require.Equal(t, &rpi.IndexGroups[2], ig)
+
+	ptNum = ptNum + 2
+	ig = data.createIndexGroupIfNeeded(rpi, now.Add(2*duration), config.TSSTORE, ptNum)
+	require.Equal(t, 4, len(rpi.IndexGroups))
+	require.Equal(t, &rpi.IndexGroups[3], ig)
+
+	ig = data.createIndexGroupIfNeeded(rpi, now.Add(2*duration), config.TSSTORE, ptNum)
+	require.Equal(t, 4, len(rpi.IndexGroups))
+	require.Equal(t, &rpi.IndexGroups[3], ig)
 }

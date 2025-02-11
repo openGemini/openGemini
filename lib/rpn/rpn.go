@@ -48,6 +48,7 @@ var switchMap = map[influxql.Token]influxql.Token{
 	influxql.EQ:          influxql.EQ,
 	influxql.NEQ:         influxql.NEQ,
 	influxql.MATCHPHRASE: influxql.MATCHPHRASE,
+	influxql.IPINRANGE:   influxql.IPINRANGE,
 }
 
 func ConvertToRPNExpr(expr influxql.Expr) *RPNExpr {

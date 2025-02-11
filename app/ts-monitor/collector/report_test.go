@@ -65,6 +65,18 @@ func Test_Reporter_CreateDatabase(t *testing.T) {
 				return err
 			},
 		},
+		{
+			"create database error",
+			func(r *http.Request) (*http.Response, error) {
+				return nil, errors.New("connection refused")
+			},
+			func(err error) error {
+				if err.Error() == "request timeout" {
+					return nil
+				}
+				return err
+			},
+		},
 	}
 
 	for _, tt := range testCases {
@@ -90,4 +102,14 @@ func TestReportStat(t *testing.T) {
 
 	stat.Delete(file)
 	assert.Equal(t, true, stat.TryAgain(file))
+}
+
+func Test_Reporter_CreateRepDatabase(t *testing.T) {
+	r := config.NewTSMonitor()
+	r.ReportConfig.ReplicaN = 0
+	mr := NewReportJob(logger.NewLogger(errno.ModuleUnknown), r, false, config.DefaultHistoryFile)
+	assert.Equal(t, 1, mr.replicaN)
+	r.ReportConfig.ReplicaN = 2
+	mr = NewReportJob(logger.NewLogger(errno.ModuleUnknown), r, false, config.DefaultHistoryFile)
+	assert.Equal(t, 1, mr.replicaN)
 }

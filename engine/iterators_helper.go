@@ -41,11 +41,12 @@ func newCursorSchema(ctx *idKeyCursorContext, schema *executor.QuerySchema) erro
 	}
 	ctx.filterOption.FieldsIdx = ctx.filterOption.FieldsIdx[:0]
 	ctx.filterOption.FilterTags = ctx.filterOption.FilterTags[:0]
+	isPromQuery := schema.Options().IsPromQuery() || schema.Options().IsPromRemoteRead()
 	for _, f := range filterConditions {
 		idx := ctx.schema.FieldIndex(f.Val)
 		if idx >= 0 && f.Type != influxql.Unknown {
 			ctx.filterOption.FieldsIdx = append(ctx.filterOption.FieldsIdx, idx)
-		} else if f.Type != influxql.Unknown {
+		} else if f.Type != influxql.Unknown && !isPromQuery {
 			ctx.filterOption.FilterTags = append(ctx.filterOption.FilterTags, f.Val)
 		}
 	}

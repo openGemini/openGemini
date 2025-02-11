@@ -22,6 +22,20 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
+// TSIndexInfo indicates the index scan result of the tsstore,
+type TSIndexInfo interface {
+	// SetCursors used to set the created groupCursor
+	SetCursors([]KeyCursor)
+	// GetCursors used to get the created groupCursor
+	GetCursors() []KeyCursor
+	// IsEmpty used to check whether is empty based on groupCursor.
+	IsEmpty() bool
+	// Ref used to add reference counting to the file of the immTables, memTables and TagSetInfos.
+	Ref()
+	// Unref used to release reference counting to the file of the immTables, memTables and TagSetInfos.
+	Unref()
+}
+
 type SeriesInfoIntf interface {
 	GetSeriesKey() []byte
 	GetSeriesTags() *influx.PointTags

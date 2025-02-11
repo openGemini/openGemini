@@ -254,6 +254,18 @@ func generateSqlMemberEvent(t serf.EventType, name string, ltime uint64, status 
 	}
 }
 
+func generateMetaMemberEvent(t serf.EventType, name string, ltime uint64, status serf.MemberStatus) *serf.MemberEvent {
+	return &serf.MemberEvent{
+		Type:      t,
+		EventTime: serf.LamportTime(ltime),
+		Members: []serf.Member{
+			serf.Member{Name: name,
+				Tags:   map[string]string{"role": "meta"},
+				Status: status},
+		},
+	}
+}
+
 func TestClusterManagerReSendEvent(t *testing.T) {
 	dir := t.TempDir()
 	mms, err := NewMockMetaService(dir, testIp)
@@ -667,99 +679,81 @@ func TestClusterManagerReSendSqlEventFail(t *testing.T) {
 	assert.Equal(t, serf.StatusNone, dn1.Status)
 }
 
-// nodeN=2, unfull rg
-func TestJoinHandleForRep0(t *testing.T) {
+func TestClusterManagerReSendMetaEventFail(t *testing.T) {
 	dir := t.TempDir()
 	mms, err := NewMockMetaService(dir, testIp)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer mms.Close()
-	mms.service.store.data = &meta.Data{
-		TakeOverEnabled: true,
-		PtNumPerNode:    2,
-		Databases: map[string]*meta.DatabaseInfo{
-			"db0": &meta.DatabaseInfo{
-				Name:     "db0",
-				ReplicaN: 3,
-			},
-		},
-		ReplicaGroups: map[string][]meta.ReplicaGroup{
-			"db0": []meta.ReplicaGroup{
-				{
-					ID:         1,
-					MasterPtID: 1,
-					Peers:      []meta.Peer{{ID: 3}},
-					Status:     meta.UnFull,
-				},
-				{
-					ID:         2,
-					MasterPtID: 2,
-					Peers:      []meta.Peer{{ID: 4}},
-					Status:     meta.UnFull,
-				},
-			},
-		},
-		DataNodes: []meta.DataNode{
-			{
-				NodeInfo: meta.NodeInfo{ID: 1, Status: serf.StatusAlive},
-			},
-			{
-				NodeInfo: meta.NodeInfo{ID: 2, Status: serf.StatusFailed},
-			},
-		},
-		PtView: map[string]meta.DBPtInfos{
-			"db0": {
-				{
-					PtId:   1,
-					Owner:  meta.PtOwner{NodeID: 1},
-					Status: meta.Online,
-				},
-				{
-					PtId:   2,
-					Owner:  meta.PtOwner{NodeID: 1},
-					Status: meta.Online,
-				},
-				{
-					PtId:   3,
-					Owner:  meta.PtOwner{NodeID: 2},
-					Status: meta.Offline,
-				},
-				{
-					PtId:   4,
-					Owner:  meta.PtOwner{NodeID: 2},
-					Status: meta.Offline,
-				},
-			},
-		},
+	config.MetaEventHandleEn = true
+	defer func() {
+		config.MetaEventHandleEn = false
+	}()
+	e := generateMetaMemberEvent(serf.EventMemberJoin, "1", 0, serf.StatusAlive)
+	mms.service.clusterManager.eventMap["1"] = e
+	mms.service.clusterManager.resendPreviousEvent("test")
+
+	mms.service.store.data.MetaNodes[0].LTime = 1
+	mms.service.clusterManager.resendPreviousEvent("test")
+
+	e.EventTime = 1
+	mms.service.store.data.MetaNodes[0].Status = serf.StatusAlive
+	mms.service.clusterManager.resendPreviousEvent("test")
+
+	e.Type = serf.EventMemberFailed
+	mms.service.store.data.MetaNodes[0].Status = serf.StatusFailed
+	mms.service.clusterManager.resendPreviousEvent("test")
+}
+
+func TestHandleForMetaNode(t *testing.T) {
+	dir := t.TempDir()
+	mms, err := BuildMockMetaService(dir, testIp)
+	cm := NewClusterManager(mms.service.store)
+	if err != nil {
+		t.Fatal(err)
 	}
-	joinHanler := &joinHandler{baseHandler{mms.service.store.cm}}
-	e1 := generateMemberEvent(serf.EventMemberJoin, "2", 1, serf.StatusAlive)
+	config.MetaEventHandleEn = true
+	defer func() {
+		config.MetaEventHandleEn = false
+	}()
+	joinHanler := &joinHandler{baseHandler{cm}}
+	e1 := generateMetaMemberEvent(serf.EventMemberJoin, "1", 2, serf.StatusAlive)
 	e := &memberEvent{event: *e1}
-	config.SetHaPolicy(config.RepPolicy)
+
 	joinHanler.handle(e)
-	ptViews := mms.service.store.data.PtView["db0"]
-	pt2 := &meta.DbPtInfo{
-		Pti: &ptViews[2],
-	}
-	rePts := mms.service.store.getFullRGAllFailedPtsOwnedAliveNodeBasedPtId(pt2, "db0")
-	assert.Equal(t, 0, len(rePts))
-	pt3 := &meta.DbPtInfo{
-		Pti: &ptViews[3],
-	}
-	rePts = mms.service.store.getFullRGAllFailedPtsOwnedAliveNodeBasedPtId(pt3, "db0")
-	assert.Equal(t, 0, len(rePts))
+	e.event.EventTime = 1
+	joinHanler.handle(e)
+
+	e.event.EventTime = 0
+	e.event.Type = serf.EventMemberFailed
+	failHanler := &failedHandler{baseHandler{mms.service.store.cm}}
+	failHanler.handle(e)
 }
 
-// nodeN=3, rgs{rg0{pt1, pt3(off), pt5(off)}, rg1{pt2, pt4(off), pt6(off)}} -> rgs{rg0{pt1, pt3, pt5}, rg1{pt2, pt4, pt6}}
-func TestJoinHandleForRep1(t *testing.T) {
+func TestHandleEnForMetaNode(t *testing.T) {
 	dir := t.TempDir()
-	mms, err := NewMockMetaService(dir, testIp)
+	mms, err := BuildMockMetaService(dir, testIp)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer mms.Close()
-	mms.service.store.data = &meta.Data{
+	config.MetaEventHandleEn = false
+	joinHanler := &joinHandler{baseHandler{mms.service.store.cm}}
+	e1 := generateMetaMemberEvent(serf.EventMemberJoin, "1", 2, serf.StatusAlive)
+	e := &memberEvent{event: *e1}
+	joinHanler.handle(e)
+}
+
+func TestProcessedFailedForRep(t *testing.T) {
+	dir := t.TempDir()
+	mms, err := BuildMockMetaService(dir, testIp)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	c := CreateClusterManager()
+
+	data := &meta.Data{
 		TakeOverEnabled: true,
 		PtNumPerNode:    2,
 		Databases: map[string]*meta.DatabaseInfo{
@@ -767,102 +761,9 @@ func TestJoinHandleForRep1(t *testing.T) {
 				Name:     "db0",
 				ReplicaN: 3,
 			},
-		},
-		ReplicaGroups: map[string][]meta.ReplicaGroup{
-			"db0": []meta.ReplicaGroup{
-				{
-					ID:         1,
-					MasterPtID: 1,
-					Peers:      []meta.Peer{{ID: 3}, {ID: 5}},
-					Status:     meta.SubHealth,
-				},
-				{
-					ID:         2,
-					MasterPtID: 2,
-					Peers:      []meta.Peer{{ID: 4}, {ID: 6}},
-					Status:     meta.SubHealth,
-				},
-			},
-		},
-		DataNodes: []meta.DataNode{
-			{
-				NodeInfo: meta.NodeInfo{ID: 1, Status: serf.StatusAlive},
-			},
-			{
-				NodeInfo: meta.NodeInfo{ID: 2, Status: serf.StatusAlive},
-			},
-			{
-				NodeInfo: meta.NodeInfo{ID: 3, Status: serf.StatusAlive},
-			},
-		},
-		PtView: map[string]meta.DBPtInfos{
-			"db0": {
-				{
-					PtId:   1,
-					Owner:  meta.PtOwner{NodeID: 1},
-					Status: meta.Online,
-				},
-				{
-					PtId:   2,
-					Owner:  meta.PtOwner{NodeID: 1},
-					Status: meta.Online,
-				},
-				{
-					PtId:   3,
-					Owner:  meta.PtOwner{NodeID: 2},
-					Status: meta.Offline,
-				},
-				{
-					PtId:   4,
-					Owner:  meta.PtOwner{NodeID: 2},
-					Status: meta.Offline,
-				},
-				{
-					PtId:   5,
-					Owner:  meta.PtOwner{NodeID: 3},
-					Status: meta.Offline,
-					RGID:   0,
-				},
-				{
-					PtId:   6,
-					Owner:  meta.PtOwner{NodeID: 3},
-					Status: meta.Offline,
-					RGID:   1,
-				},
-			},
-		},
-	}
-	config.SetHaPolicy(config.RepPolicy)
-	ptViews := mms.service.store.data.PtView["db0"]
-	pt5 := &meta.DbPtInfo{
-		Pti: &ptViews[4],
-	}
-	rePts := mms.service.store.getFullRGAllFailedPtsOwnedAliveNodeBasedPtId(pt5, "db0")
-	assert.Equal(t, uint32(3), rePts[0].Pti.PtId)
-	assert.Equal(t, uint32(5), rePts[1].Pti.PtId)
-	pt6 := &meta.DbPtInfo{
-		Pti: &ptViews[5],
-	}
-	rePts = mms.service.store.getFullRGAllFailedPtsOwnedAliveNodeBasedPtId(pt6, "db0")
-	assert.Equal(t, uint32(4), rePts[0].Pti.PtId)
-	assert.Equal(t, uint32(6), rePts[1].Pti.PtId)
-}
-
-// nodeN=3, node2=failed, node3=alive, rgs{rg0{pt1, pt3(off), pt5(off)}, rg1{pt2, pt4(off), pt6(off)}} -> rgs{rg0{pt1, pt3(off), pt5}, rg1{pt2, pt4(off), pt6}}
-func TestJoinHandleForRep2(t *testing.T) {
-	dir := t.TempDir()
-	mms, err := NewMockMetaService(dir, testIp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer mms.Close()
-	mms.service.store.data = &meta.Data{
-		TakeOverEnabled: true,
-		PtNumPerNode:    2,
-		Databases: map[string]*meta.DatabaseInfo{
-			"db0": &meta.DatabaseInfo{
-				Name:     "db0",
-				ReplicaN: 3,
+			"db1": &meta.DatabaseInfo{
+				Name:     "db1",
+				ReplicaN: 1,
 			},
 		},
 		ReplicaGroups: map[string][]meta.ReplicaGroup{
@@ -927,88 +828,26 @@ func TestJoinHandleForRep2(t *testing.T) {
 					RGID:   1,
 				},
 			},
-		},
-	}
-
-	config.SetHaPolicy(config.RepPolicy)
-	ptViews := mms.service.store.data.PtView["db0"]
-	pt5 := &meta.DbPtInfo{
-		Pti: &ptViews[4],
-	}
-	rePts := mms.service.store.getFullRGAllFailedPtsOwnedAliveNodeBasedPtId(pt5, "db0")
-	assert.Equal(t, uint32(5), rePts[0].Pti.PtId)
-	pt6 := &meta.DbPtInfo{
-		Pti: &ptViews[5],
-	}
-	rePts = mms.service.store.getFullRGAllFailedPtsOwnedAliveNodeBasedPtId(pt6, "db0")
-	assert.Equal(t, uint32(6), rePts[0].Pti.PtId)
-}
-
-// nodeN=3, rgs{rg0{pt1(off), pt3, pt5(off)}, rg1{pt2(off), pt4, pt6(off)}} -> rgs{rg0{pt1, pt3, pt5}, rg1{pt2, pt4, pt6}}
-func TestJoinHandleForRep3(t *testing.T) {
-	dir := t.TempDir()
-	mms, err := NewMockMetaService(dir, testIp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer mms.Close()
-	mms.service.store.data = &meta.Data{
-		TakeOverEnabled: true,
-		PtNumPerNode:    2,
-		Databases: map[string]*meta.DatabaseInfo{
-			"db0": &meta.DatabaseInfo{
-				Name:     "db0",
-				ReplicaN: 3,
-			},
-		},
-		ReplicaGroups: map[string][]meta.ReplicaGroup{
-			"db0": []meta.ReplicaGroup{
-				{
-					ID:         1,
-					MasterPtID: 1,
-					Peers:      []meta.Peer{{ID: 3}, {ID: 5}},
-					Status:     meta.SubHealth,
-				},
-				{
-					ID:         2,
-					MasterPtID: 2,
-					Peers:      []meta.Peer{{ID: 4}, {ID: 6}},
-					Status:     meta.SubHealth,
-				},
-			},
-		},
-		DataNodes: []meta.DataNode{
-			{
-				NodeInfo: meta.NodeInfo{ID: 1, Status: serf.StatusAlive},
-			},
-			{
-				NodeInfo: meta.NodeInfo{ID: 2, Status: serf.StatusAlive},
-			},
-			{
-				NodeInfo: meta.NodeInfo{ID: 3, Status: serf.StatusAlive},
-			},
-		},
-		PtView: map[string]meta.DBPtInfos{
-			"db0": {
+			"db1": {
 				{
 					PtId:   1,
 					Owner:  meta.PtOwner{NodeID: 1},
-					Status: meta.Offline,
+					Status: meta.Online,
 				},
 				{
 					PtId:   2,
 					Owner:  meta.PtOwner{NodeID: 1},
-					Status: meta.Offline,
+					Status: meta.Online,
 				},
 				{
 					PtId:   3,
 					Owner:  meta.PtOwner{NodeID: 2},
-					Status: meta.Online,
+					Status: meta.Offline,
 				},
 				{
 					PtId:   4,
 					Owner:  meta.PtOwner{NodeID: 2},
-					Status: meta.Online,
+					Status: meta.Offline,
 				},
 				{
 					PtId:   5,
@@ -1025,63 +864,29 @@ func TestJoinHandleForRep3(t *testing.T) {
 			},
 		},
 	}
+	mms.GetStore().SetData(data)
+	c.store = mms.GetStore()
 
-	config.SetHaPolicy(config.RepPolicy)
-	ptViews := mms.service.store.data.PtView["db0"]
-	pt5 := &meta.DbPtInfo{
-		Pti: &ptViews[4],
-	}
-	rePts := mms.service.store.getFullRGAllFailedPtsOwnedAliveNodeBasedPtId(pt5, "db0")
-	assert.Equal(t, uint32(5), rePts[0].Pti.PtId)
-	assert.Equal(t, uint32(1), rePts[1].Pti.PtId)
-	pt6 := &meta.DbPtInfo{
-		Pti: &ptViews[5],
-	}
-	rePts = mms.service.store.getFullRGAllFailedPtsOwnedAliveNodeBasedPtId(pt6, "db0")
-	assert.Equal(t, uint32(6), rePts[0].Pti.PtId)
-	assert.Equal(t, uint32(2), rePts[1].Pti.PtId)
-}
-
-// db not found
-// skip
-/*
-func TestJoinHandleForRep4(t *testing.T) {
-	dir := t.TempDir()
-	mms, err := NewMockMetaService(dir, testIp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer mms.Close()
-	mms.service.store.data = &meta.Data{
-		TakeOverEnabled: true,
-		PtNumPerNode:    2,
-		DataNodes: []meta.DataNode{
-			{
-				NodeInfo: meta.NodeInfo{ID: 1, Status: serf.StatusAlive},
-			},
-		},
-		PtView: map[string]meta.DBPtInfos{
-			"db0": {
-				{
-					PtId:   1,
-					Owner:  meta.PtOwner{NodeID: 1},
-					Status: meta.Offline,
-				},
-				{
-					PtId:   2,
-					Owner:  meta.PtOwner{NodeID: 1},
-					Status: meta.Offline,
-				},
-			},
+	dbPt := &meta.DbPtInfo{
+		Db: "db2",
+		Pti: &meta.PtInfo{
+			PtId: 1,
 		},
 	}
-
 	config.SetHaPolicy(config.RepPolicy)
-	ptViews := mms.service.store.data.PtView["db0"]
-	pt := &meta.DbPtInfo{
-		Pti: &ptViews[0],
+	assert.EqualError(t, c.processFailedDbPt(dbPt, nil, true, true), "pt not found")
+	dbPt = &meta.DbPtInfo{
+		Db: "db0",
+		Pti: &meta.PtInfo{
+			PtId: 1,
+		},
 	}
-	rePts := mms.service.store.getFullRGAllFailedPtsOwnedAliveNodeBasedPtId(pt, "db0")
-	assert.Equal(t, 0, len(rePts))
+	assert.NoError(t, c.processFailedDbPtForRep(dbPt, nil, false))
+	dbPt = &meta.DbPtInfo{
+		Db: "db0",
+		Pti: &meta.PtInfo{
+			PtId: 3,
+		},
+	}
+	assert.EqualError(t, c.processFailedDbPtForRep(dbPt, nil, false), "dataNode(id=%!d(MISSING),host=%!s(MISSING)) not found")
 }
-*/

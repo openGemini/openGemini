@@ -509,6 +509,56 @@ func TestRaftMsgResponse_Marshal_Unmarshal(t *testing.T) {
 	require.EqualValues(t, req.String(), req2.String())
 }
 
+func TestTransferLeadershipRequest_Marshal_Unmarshal(t *testing.T) {
+	req := netstorage.NewTransferLeadershipRequest()
+	req.NodeId = proto.Uint64(1)
+	req.Database = proto.String("db0")
+	req.PtId = proto.Uint32(0)
+	req.NewMasterPtId = proto.Uint32(1)
+	var buf []byte
+	buf, err := req.Marshal(buf)
+	require.NoError(t, err)
+	req2 := netstorage.NewTransferLeadershipRequest()
+	err = req2.Unmarshal(buf)
+	require.NoError(t, err)
+	require.EqualValues(t, req.String(), req2.String())
+	newReq := req.Instance()
+	if newReq.Size() != 0 {
+		t.Fatal("newReq.size() error")
+	}
+}
+
+func TestTransferLeadershipRequest_Marshal_Err(t *testing.T) {
+	req := netstorage.NewTransferLeadershipRequest()
+	req.NodeId = proto.Uint64(1)
+	var buf []byte
+	_, err := req.Marshal(buf)
+	assert.NotEqual(t, err, nil)
+}
+
+func TestTransferLeadershipResponse_Marshal_Unmarshal(t *testing.T) {
+	resp := netstorage.NewTransferLeadershipResponse()
+	var msg string = "error"
+	resp.Err = &msg
+	var buf []byte
+	buf, err := resp.Marshal(buf)
+	require.NoError(t, err)
+	resp2 := netstorage.NewTransferLeadershipResponse()
+	err = resp2.Unmarshal(buf)
+	require.NoError(t, err)
+	require.EqualValues(t, resp.String(), resp2.String())
+	newResp := resp.Instance()
+	if newResp.Size() != 0 {
+		t.Fatal("newResp.size() error")
+	}
+	if newResp.(*netstorage.TransferLeadershipResponse).Error() != nil {
+		t.Fatal("newResp.Error() error")
+	}
+	if resp.Error() == nil {
+		t.Fatal("resp.Error() error")
+	}
+}
+
 func Test_ShowClusterRequest_Unmarshal(t *testing.T) {
 	req := &message.ShowClusterRequest{}
 	buf, err := req.Marshal(nil)

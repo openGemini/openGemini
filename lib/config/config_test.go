@@ -251,66 +251,21 @@ func TestTSStoreThroughput(t *testing.T) {
 	conf.Spdy.ConnPoolSize = 10
 	conf.Common.CPUNum = 4
 
-	assert.NoError(t, conf.Validate())
+	require.NoError(t, conf.Validate())
 	conf.Data.WALDir = "/opt/gemini/wal"
 
-	conf.Data.Corrector(conf.Common.CPUNum, 0)
-
-	assert.Equal(t, uint64(config.DefaultSnapshotThroughput), uint64(conf.Data.Compact.CompactThroughput))
-	assert.Equal(t, uint64(config.DefaultSnapshotThroughput), uint64(conf.Data.Compact.CompactThroughputBurst))
-	assert.Equal(t, uint64(config.DefaultSnapshotThroughput), uint64(conf.Data.Compact.SnapshotThroughput))
-	assert.Equal(t, uint64(config.DefaultSnapshotThroughput), uint64(conf.Data.Compact.SnapshotThroughputBurst))
-	assert.Equal(t, uint64(config.DefaultBackGroundReadThroughput), uint64(conf.Data.Compact.BackGroundReadThroughput))
-
-	conf.Common.CPUNum = 8
-	conf.Data.Corrector(conf.Common.CPUNum, 0)
-
-	assert.NotEqual(t, uint64(config.DefaultSnapshotThroughput*2), uint64(conf.Data.Compact.CompactThroughput))
-	assert.NotEqual(t, uint64(config.DefaultSnapshotThroughput*2), uint64(conf.Data.Compact.CompactThroughputBurst))
-	assert.NotEqual(t, uint64(config.DefaultSnapshotThroughput*2), uint64(conf.Data.Compact.SnapshotThroughput))
-	assert.NotEqual(t, uint64(config.DefaultSnapshotThroughput*2), uint64(conf.Data.Compact.SnapshotThroughputBurst))
-	assert.NotEqual(t, uint64(config.DefaultBackGroundReadThroughput*2), uint64(conf.Data.Compact.BackGroundReadThroughput))
-
-	setConfigToZero(conf)
-	conf.Data.Corrector(conf.Common.CPUNum, 0)
-
-	assert.Equal(t, uint64(config.DefaultSnapshotThroughput*2), uint64(conf.Data.Compact.CompactThroughput))
-	assert.Equal(t, uint64(config.DefaultSnapshotThroughput*2), uint64(conf.Data.Compact.CompactThroughputBurst))
-	assert.Equal(t, uint64(config.DefaultSnapshotThroughput*2), uint64(conf.Data.Compact.SnapshotThroughput))
-	assert.Equal(t, uint64(config.DefaultSnapshotThroughput*2), uint64(conf.Data.Compact.SnapshotThroughputBurst))
-	assert.Equal(t, uint64(config.DefaultBackGroundReadThroughput*2), uint64(conf.Data.Compact.BackGroundReadThroughput))
-
-	conf.Common.CPUNum = 16
-	conf.Data.Corrector(conf.Common.CPUNum, 0)
-	assert.NotEqual(t, uint64(config.DefaultSnapshotThroughput*4), uint64(conf.Data.Compact.CompactThroughput))
-	assert.NotEqual(t, uint64(config.DefaultSnapshotThroughput*4), uint64(conf.Data.Compact.CompactThroughputBurst))
-	assert.NotEqual(t, uint64(config.DefaultSnapshotThroughput*4), uint64(conf.Data.Compact.SnapshotThroughput))
-	assert.NotEqual(t, uint64(config.DefaultSnapshotThroughput*4), uint64(conf.Data.Compact.SnapshotThroughputBurst))
-	assert.NotEqual(t, uint64(config.DefaultBackGroundReadThroughput*4), uint64(conf.Data.Compact.BackGroundReadThroughput))
-
-	setConfigToZero(conf)
-	conf.Data.Corrector(conf.Common.CPUNum, 0)
-	assert.Equal(t, uint64(config.DefaultSnapshotThroughput*4), uint64(conf.Data.Compact.CompactThroughput))
-	assert.Equal(t, uint64(config.DefaultSnapshotThroughput*4), uint64(conf.Data.Compact.CompactThroughputBurst))
-	assert.Equal(t, uint64(config.DefaultSnapshotThroughput*4), uint64(conf.Data.Compact.SnapshotThroughput))
-	assert.Equal(t, uint64(config.DefaultSnapshotThroughput*4), uint64(conf.Data.Compact.SnapshotThroughputBurst))
-	assert.Equal(t, uint64(config.DefaultBackGroundReadThroughput*4), uint64(conf.Data.Compact.BackGroundReadThroughput))
-
-	conf.Common.CPUNum = 32
-	conf.Data.Corrector(conf.Common.CPUNum, 0)
-	assert.NotEqual(t, uint64(config.DefaultSnapshotThroughput*8), uint64(conf.Data.Compact.CompactThroughput))
-	assert.NotEqual(t, uint64(config.DefaultSnapshotThroughput*8), uint64(conf.Data.Compact.CompactThroughputBurst))
-	assert.NotEqual(t, uint64(config.DefaultSnapshotThroughput*8), uint64(conf.Data.Compact.SnapshotThroughput))
-	assert.NotEqual(t, uint64(config.DefaultSnapshotThroughput*8), uint64(conf.Data.Compact.SnapshotThroughputBurst))
-	assert.NotEqual(t, uint64(config.DefaultBackGroundReadThroughput*8), uint64(conf.Data.Compact.BackGroundReadThroughput))
-
-	setConfigToZero(conf)
-	conf.Data.Corrector(conf.Common.CPUNum, 0)
-	assert.Equal(t, uint64(config.DefaultSnapshotThroughput*8), uint64(conf.Data.Compact.CompactThroughput))
-	assert.Equal(t, uint64(config.DefaultSnapshotThroughput*8), uint64(conf.Data.Compact.CompactThroughputBurst))
-	assert.Equal(t, uint64(config.DefaultSnapshotThroughput*8), uint64(conf.Data.Compact.SnapshotThroughput))
-	assert.Equal(t, uint64(config.DefaultSnapshotThroughput*8), uint64(conf.Data.Compact.SnapshotThroughputBurst))
-	assert.Equal(t, uint64(config.DefaultBackGroundReadThroughput*8), uint64(conf.Data.Compact.BackGroundReadThroughput))
+	for _, cpu := range []int{4, 8, 16, 32} {
+		conf.Data = config.NewStore()
+		compact := &conf.Data.Compact
+		n := toml.Size(cpu / 4)
+		conf.Common.CPUNum = cpu
+		conf.Data.Corrector(conf.Common.CPUNum, 0)
+		require.Equal(t, config.DefaultSnapshotThroughput*n, compact.CompactThroughput)
+		require.Equal(t, config.DefaultSnapshotThroughputBurst*n, compact.CompactThroughputBurst)
+		require.Equal(t, config.DefaultSnapshotThroughput*n, compact.SnapshotThroughput)
+		require.Equal(t, config.DefaultSnapshotThroughputBurst*n, compact.SnapshotThroughputBurst)
+		require.Equal(t, config.DefaultBackGroundReadThroughput*n, compact.BackGroundReadThroughput)
+	}
 }
 
 func TestHAPolicy(t *testing.T) {
@@ -375,4 +330,44 @@ func TestProductType(t *testing.T) {
 	if config.IsLogKeeper() != true {
 		t.Fatalf("GetProductType failed, expect: logkeeper, real:%d", config.GetProductType())
 	}
+}
+
+func TestTSMetaBindJoinErr(t *testing.T) {
+	conf := config.NewTSMeta(false)
+	conf.Common.CPUNum = 10
+	conf.Common.Bindjoin = append(conf.Common.Bindjoin, "")
+	assert.Error(t, conf.Common.Validate())
+}
+
+func TestHotMode(t *testing.T) {
+	conf := config.HotMode{}
+	require.True(t, conf.GetMemoryAllowedPercent() == config.DefaultHotModeMemoryAllowedPercent)
+	require.True(t, conf.DurationSeconds() == int64(config.MaxHotDuration/1e9))
+	require.True(t, conf.TimeWindowSeconds() == int64(config.DefaultHotModeTimeWindow/1e9))
+
+	conf = config.HotMode{
+		Enabled:              true,
+		MemoryAllowedPercent: 20,
+		Duration:             10 * 1e9,
+		TimeWindow:           20 * 1e9,
+	}
+	require.True(t, conf.GetMemoryAllowedPercent() == 20)
+	require.True(t, conf.DurationSeconds() == 10)
+	require.True(t, conf.TimeWindowSeconds() == 20)
+}
+
+func TestResetZero2Default(t *testing.T) {
+	size := toml.Size(0)
+	def := toml.Size(100)
+	config.ResetZero2Default(&size, toml.Size(0), def)
+
+	require.Equal(t, size, def)
+}
+
+func TestParquetTaskConfig(t *testing.T) {
+	conf := config.NewParquetTaskConfig()
+	conf.OutputDir = ""
+	conf.ReliabilityLogDir = ""
+	require.NotEmpty(t, conf.GetOutputDir())
+	require.NotEmpty(t, conf.GetReliabilityLogDir())
 }

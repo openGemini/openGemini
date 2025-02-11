@@ -261,7 +261,7 @@ func (tf *tagFilter) SetRegexMatchAll(match bool) {
 }
 
 func (tf *tagFilter) IsFilterEmptyValue() bool {
-	return tf.isEmptyValue && !tf.isNegative
+	return tf.isEmptyValue
 }
 
 func reverseBytes(dst, src []byte) []byte {

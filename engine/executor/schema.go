@@ -252,7 +252,7 @@ func NewQuerySchemaWithJoinCase(fields influxql.Fields, sources influxql.Sources
 }
 
 func NewQuerySchemaWithSources(fields influxql.Fields, sources influxql.Sources, columnNames []string, opt hybridqp.Options, sortFields influxql.SortFields) *QuerySchema {
-	if len(sortFields) > 0 && sources.HaveOnlyTSStore() {
+	if !opt.IsPromQuery() && len(sortFields) > 0 && sources.HaveOnlyTSStore() {
 		sortFields = nil
 	}
 	schema := NewQuerySchema(fields, columnNames, opt, sortFields)
@@ -398,6 +398,15 @@ func (qs *QuerySchema) spreadToMaxSubMin(call *influxql.Call) influxql.Expr {
 
 func (qs *QuerySchema) HasCall() bool {
 	return len(qs.calls) > 0
+}
+
+func (qs *QuerySchema) HasPromAbsentCall() bool {
+	for _, c := range qs.calls {
+		if c != nil && c.Name == "absent_prom" {
+			return true
+		}
+	}
+	return false
 }
 
 // HasRowCount check whether all data is queried to use mst-level pre-aggregation.
@@ -573,6 +582,24 @@ func (qs *QuerySchema) HasPromNestedCall() bool {
 	return len(qs.promNestedCall) > 0
 }
 
+func (qs *QuerySchema) IsPromAbsentCall() bool {
+	for _, v := range qs.calls {
+		if v.Name == "absent_prom" {
+			return true
+		}
+	}
+	return false
+}
+
+func (qs *QuerySchema) IsPromNestedCountCall() bool {
+	for _, v := range qs.promNestedCall {
+		if v.GetAggCall().Name == "count_prom" {
+			return true
+		}
+	}
+	return false
+}
+
 func (qs *QuerySchema) CompositeCall() map[string]*hybridqp.OGSketchCompositeOperator {
 	return qs.compositeCall
 }
@@ -694,6 +721,22 @@ func (qs *QuerySchema) rewritePromNestedCall() {
 			ucOutRef.Val = outSymbolRef.Val
 			ucOutRef.Type = outSymbolRef.Type
 			qs.mapping[uc] = ucOutRef
+
+			// derive the schema of the trans-layer prom aggregate operator.
+			tc := nc.GetTransCall()
+			if tc == nil {
+				continue
+			}
+			tcInRef, ok := tc.Args[0].(*influxql.VarRef)
+			if !ok {
+				panic(fmt.Sprintf("the type of the %s should be *influxql.VarRef", dc.Args[0].String()))
+			}
+			tcInRef.Val = outSymbolRef.Val
+			tcInRef.Type = outSymbolRef.Type
+			tcOutRef := qs.mapping[tc]
+			tcOutRef.Val = outSymbolRef.Val
+			tcOutRef.Type = outSymbolRef.Type
+			qs.mapping[tc] = tcOutRef
 		}
 	}
 }
@@ -719,9 +762,15 @@ func (qs *QuerySchema) genPromNestedCall(call *influxql.Call) {
 	downRef := qs.mapping[aggCall]
 	aggCall.Args[0] = &influxql.VarRef{Val: downRef.Val, Type: downRef.Type}
 	qs.mapSymbol(aggCall.String(), aggCall)
-	qs.notIncI = false
 
-	qs.addPromNestedCall(call.String(), hybridqp.NewPromNestedCall(funcCall, aggCall))
+	// prom nested trans call
+	var transCall *influxql.Call
+	if np := hybridqp.GetPromNestOp(aggCall.Name); np != nil {
+		transCall = np.GenPromTransCall(aggCall)
+		qs.mapSymbol(transCall.String(), transCall)
+	}
+	qs.notIncI = false
+	qs.addPromNestedCall(call.String(), hybridqp.NewPromNestedCall(funcCall, aggCall, transCall))
 }
 
 func (qs *QuerySchema) HasInterval() bool {
@@ -1329,6 +1378,15 @@ func (qs *QuerySchema) HasSlidingWindowCall() bool {
 	return false
 }
 
+func (qs *QuerySchema) HasTopNDDCM() bool {
+	for _, call := range qs.calls {
+		if call.Name == "topn_ddcm" {
+			return true
+		}
+	}
+	return false
+}
+
 func (qs *QuerySchema) HasHoltWintersCall() bool {
 	return len(qs.holtWinters) > 0
 }
@@ -1364,7 +1422,8 @@ func (qs *QuerySchema) BuildDownSampleSchema(addPrefix bool) record.Schemas {
 }
 
 func (qs *QuerySchema) HasExcatLimit() bool {
-	return (!config.GetCommon().PreAggEnabled || qs.Options().GetHintType() == hybridqp.ExactStatisticQuery) &&
+	return (!config.GetCommon().PreAggEnabled ||
+		qs.Options().GetHintType() == hybridqp.ExactStatisticQuery) &&
 		qs.HasLimit() && !qs.HasOptimizeAgg()
 }
 

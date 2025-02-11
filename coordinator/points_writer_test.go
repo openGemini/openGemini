@@ -26,10 +26,10 @@ import (
 	"time"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
-	assert2 "github.com/influxdata/influxdb/pkg/testing/assert"
 	"github.com/influxdata/influxdb/toml"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
@@ -38,6 +38,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 const (
@@ -49,7 +50,9 @@ const (
 )
 
 var streamDistribution = noStream
+
 var enableFieldIndex = true
+
 var engineType = config.TSSTORE
 
 type MockMetaClient struct {
@@ -60,7 +63,7 @@ type MockMetaClient struct {
 	MeasurementFn        func(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error)
 	UpdateSchemaFn       func(database string, retentionPolicy string, mst string, fieldToCreate []*proto2.FieldSchema) error
 	CreateMeasurementFn  func(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, numOfShard int32, indexR *influxql.IndexRelation, engineType config.EngineType, colStoreInfo *meta2.ColStoreInfo) (*meta2.MeasurementInfo, error)
-	GetAliveShardsFn     func(database string, sgi *meta2.ShardGroupInfo) []int
+	GetAliveShardsFn     func(database string, sgi *meta2.ShardGroupInfo, isRead bool) []int
 	GetShardInfoByTimeFn func(database, retentionPolicy string, t time.Time, ptIdx int, nodeId uint64, engineType config.EngineType) (*meta2.ShardInfo, error)
 	DBRepGroupsFn        func(database string) []meta2.ReplicaGroup
 	GetReplicaNFn        func(database string) (int, error)
@@ -104,9 +107,10 @@ func (mmc *MockMetaClient) CreateMeasurement(database string, retentionPolicy st
 	return mmc.CreateMeasurementFn(database, retentionPolicy, mst, shardKey, numOfShards, indexR, engineType, nil)
 }
 
-func (mmc *MockMetaClient) GetAliveShards(database string, sgi *meta2.ShardGroupInfo) []int {
-	return mmc.GetAliveShardsFn(database, sgi)
+func (mmc *MockMetaClient) GetAliveShards(database string, sgi *meta2.ShardGroupInfo, isRead bool) []int {
+	return mmc.GetAliveShardsFn(database, sgi, isRead)
 }
+
 func (mmc *MockMetaClient) GetShardInfoByTime(database, retentionPolicy string, t time.Time, ptIdx int, nodeId uint64, engineType config.EngineType) (*meta2.ShardInfo, error) {
 	rp, err := mmc.RetentionPolicy(database, retentionPolicy)
 	if err != nil {
@@ -290,7 +294,7 @@ func NewMockMetaClient() *MockMetaClient {
 	mc.GetReplicaNFn = func(database string) (int, error) {
 		return 1, nil
 	}
-	mc.GetAliveShardsFn = func(database string, sgi *meta2.ShardGroupInfo) []int {
+	mc.GetAliveShardsFn = func(database string, sgi *meta2.ShardGroupInfo, isRead bool) []int {
 		ptView, _ := mc.DBPtViewFn(database)
 		idxes := make([]int, 0, len(ptView))
 		for i := range sgi.Shards {
@@ -1194,10 +1198,10 @@ func TestSelectIndexList(t *testing.T) {
 		indexList[i] = key
 	}
 	index, ok := selectIndexList(columnToIndex, indexList)
-	if !assert2.Equal(t, index, []uint16{0}) {
+	if !assert.Equal(t, index, []uint16{0}) {
 		t.Fatal("SelectIndexList failed")
 	}
-	if !assert2.Equal(t, ok, true) {
+	if !assert.Equal(t, ok, true) {
 		t.Fatal("SelectIndexList failed")
 	}
 }
@@ -1690,4 +1694,23 @@ type MockLocalStore struct {
 
 func (s *MockLocalStore) WriteRows(db, rp string, ptId uint32, shardID uint64, rows []influx.Row, binaryRows []byte) error {
 	return s.err
+}
+
+func TestPointsWriter_routeAndMapOriginRows_MapToStreamMstFail(t *testing.T) {
+	ctx := &injestionCtx{
+		streamInfos: []*meta2.StreamInfo{{Name: "test_stream"}},
+		streamDstMstNames: map[string]*meta2.StreamInfo{
+			"dst_mst": {Name: "test_stream", Cond: "a > 0"},
+		},
+	}
+	rows := []influx.Row{
+		{Name: "dst_mst"},
+	}
+	writer := &PointsWriter{
+		logger: logger.NewLogger(errno.NodeSql).SetZapLogger(zap.NewNop()),
+	}
+	partialErr, dropped, err := writer.routeAndMapOriginRows("db", "rp", rows, ctx)
+	require.Equal(t, 1, dropped)
+	require.EqualError(t, partialErr, "the stream destination measurement cannot be written. measurement name is dst_mst")
+	require.NoError(t, err)
 }

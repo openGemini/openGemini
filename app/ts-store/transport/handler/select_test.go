@@ -133,6 +133,10 @@ func (s *MockStoreEngine) CheckPtsRemovedDone() error {
 	return nil
 }
 
+func (s *MockStoreEngine) TransferLeadership(database string, nodeId uint64, oldMasterPtId, newMasterPtId uint32) error {
+	return nil
+}
+
 type DummySeriesTransform struct {
 	executor.BaseProcessor
 }
@@ -220,13 +224,14 @@ func TestCreateSerfInstance(t *testing.T) {
 	resp := &EmptyResponser{}
 	resp.session = spdy.NewMultiplexedSession(spdy.DefaultConfiguration(), nil, 0)
 	h := NewSelect(store, resp, req)
-
+	h.SetContext(context.Background())
 	require.EqualError(t, h.Process(), "pt not found")
 
 	req.PtID = 1
 	req.Analyze = true
 	resp.err = errors.New("some error")
 	h = NewSelect(store, resp, req)
+	h.SetContext(context.Background())
 	require.NoError(t, h.Process())
 
 	resp.err = nil
@@ -310,7 +315,7 @@ func TestSelectProcessor(t *testing.T) {
 	defer func() {
 		_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.ChunkReaderRes, 0, 0)
 	}()
-	p := NewSelectProcessor(nil)
+	p := NewSelectProcessor(mockStorage(t.TempDir()))
 	require.NoError(t, p.Handle(resp, msg1))
 	require.NoError(t, p.Handle(resp, msg2))
 	require.NoError(t, p.Handle(resp, msg3))
@@ -341,8 +346,11 @@ func mockStorage(dir string) *storage.Storage {
 		Common:  config.NewCommon(),
 		Meta:    config.NewMeta(),
 	}
+	data := &meta.Data{}
+	client := metaclient.NewClient("", false, 0)
+	client.SetCacheData(data)
 
-	storage, err := storage.OpenStorage(dir+"/data", node, nil, config)
+	storage, err := storage.OpenStorage(dir+"/data", node, client, config)
 	if err != nil {
 		return nil
 	}

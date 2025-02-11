@@ -41,9 +41,11 @@ type Compact struct {
 	SnapshotThroughputBurst      toml.Size     `toml:"snapshot-throughput-burst"`
 	BackGroundReadThroughput     toml.Size     `toml:"back-ground-read-throughput"`
 	CompactionMethod             int           `toml:"compaction-method"` // 0:auto, 1: streaming, 2: non-streaming
-	CompactRecovery              bool          `toml:"compact-recovery"`
-	CsCompactionEnabled          bool          `toml:"column-store-compact-enabled"`
-	CorrectTimeDisorder          bool          `toml:"correct-time-disorder"`
+	MaxCompactionLevel           int           `toml:"max-compaction-level"`
+
+	CompactRecovery     bool `toml:"compact-recovery"`
+	CsCompactionEnabled bool `toml:"column-store-compact-enabled"`
+	CorrectTimeDisorder bool `toml:"correct-time-disorder"`
 }
 
 func NewCompactConfig() Compact {
@@ -51,9 +53,9 @@ func NewCompactConfig() Compact {
 		CompactFullWriteColdDuration: toml.Duration(DefaultCompactFullWriteColdDuration),
 		MaxConcurrentCompactions:     DefaultMaxConcurrentCompactions,
 		MaxFullCompactions:           DefaultMaxConcurrentFullCompactions,
-		SnapshotThroughput:           toml.Size(DefaultSnapshotThroughput),
-		SnapshotThroughputBurst:      toml.Size(DefaultSnapshotThroughputBurst),
-		BackGroundReadThroughput:     toml.Size(DefaultBackGroundReadThroughput),
+		SnapshotThroughput:           0,
+		SnapshotThroughputBurst:      0,
+		BackGroundReadThroughput:     0,
 		CompactionMethod:             0, // 0:auto, 1: streaming, 2: non-streaming
 		CompactRecovery:              true,
 		CsCompactionEnabled:          false,

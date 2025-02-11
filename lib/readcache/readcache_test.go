@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 )
 
@@ -40,9 +41,9 @@ var (
 // TestReadCacheAddGet001 test basic add and get function
 func TestGetHitRatio001(t *testing.T) {
 	cacheIns := GetReadMetaCacheIns()
-	defer cacheIns.Purge()
+	defer cacheIns.Purge(MetaCachePool)
 	key := cacheIns.CreateCacheKey(path, int64(offset))
-	cacheIns.AddPage(key, data, size)
+	cacheIns.AddPage(key, data, size, MetaCachePool)
 	for i := 0; i < 10001; i++ {
 		checkGetResult(t, cacheIns, key, data)
 	}
@@ -55,14 +56,14 @@ func TestGetHitRatio001(t *testing.T) {
 
 func TestSegCacheGetHitRatio001(t *testing.T) {
 	cacheIns := GetReadDataCacheIns()
-	cacheIns.PurgeAndUnrefCachePage()
+	cacheIns.PurgeAndUnrefCachePage(CachePagePool)
 	defer func() {
-		cacheIns.PurgeAndUnrefCachePage()
+		cacheIns.PurgeAndUnrefCachePage(CachePagePool)
 		cachePage = &CachePage{Value: data, Size: int64(len(data)), ref: 1}
 	}()
 	key := cacheIns.CreateCacheKey(path, int64(offset))
-	cacheIns.AddPageCache(key, cachePage, size)
-	cacheIns.AddPageCache(key, cachePage, size)
+	cacheIns.AddPageCache(key, cachePage, size, CachePagePool)
+	cacheIns.AddPageCache(key, cachePage, size, CachePagePool)
 	for i := 0; i < 10001; i++ {
 		checkGetResult(t, cacheIns, key, data)
 	}
@@ -70,14 +71,14 @@ func TestSegCacheGetHitRatio001(t *testing.T) {
 	if !hit || page != cachePage {
 		t.Fatal("TestSegCacheGetHitRatio001 getCachePage1 error")
 	}
-	page.(*CachePage).Unref()
+	page.(*CachePage).Unref(CachePagePool)
 	var except int64 = 100
 	if !reflect.DeepEqual(except, int64(cacheIns.GetHitRatio())) &&
 		!reflect.DeepEqual(except, statistics.IOStat.IOReadCacheRatio) {
 		t.Fatal("except 100%")
 	}
-	cachePage.Unref()
-	cachePage.Unref()
+	cachePage.Unref(CachePagePool)
+	cachePage.Unref(CachePagePool)
 	page, hit = cacheIns.GetPageCache(key)
 	if hit || page == cachePage {
 		t.Fatal("TestSegCacheGetHitRatio001 getCachePage2 error")
@@ -87,18 +88,18 @@ func TestSegCacheGetHitRatio001(t *testing.T) {
 // TestReadCacheAddGet001 test basic add and get function
 func TestReadCacheAddGet001(t *testing.T) {
 	cacheIns := GetReadMetaCacheIns()
-	defer cacheIns.Purge()
+	defer cacheIns.Purge(MetaCachePool)
 	key := cacheIns.CreateCacheKey(path, int64(offset))
-	cacheIns.AddPage(key, data, size)
+	cacheIns.AddPage(key, data, size, MetaCachePool)
 	checkGetResult(t, cacheIns, key, data)
 }
 
 // TestReadCacheAddGet002 test add a page and get by several user
 func TestReadCacheAddGet002(t *testing.T) {
 	cacheIns := GetReadMetaCacheIns()
-	defer cacheIns.Purge()
+	defer cacheIns.Purge(MetaCachePool)
 	key := cacheIns.CreateCacheKey(path, int64(offset))
-	cacheIns.AddPage(key, data, size)
+	cacheIns.AddPage(key, data, size, MetaCachePool)
 
 	var sg sync.WaitGroup
 	sg.Add(20)
@@ -114,24 +115,24 @@ func TestReadCacheAddGet002(t *testing.T) {
 // TestReadCacheAddGet003 test get function with page changed.
 func TestReadCacheAddGet003(t *testing.T) {
 	cacheIns := GetReadMetaCacheIns()
-	defer cacheIns.Purge()
+	defer cacheIns.Purge(MetaCachePool)
 	key := cacheIns.CreateCacheKey(path, int64(offset))
-	cacheIns.AddPage(key, data, size)
+	cacheIns.AddPage(key, data, size, MetaCachePool)
 	checkGetResult(t, cacheIns, key, data)
 	data2 := append(data, 66)
-	cacheIns.AddPage(key, data2, int64(len(data2)))
+	cacheIns.AddPage(key, data2, int64(len(data2)), MetaCachePool)
 	checkGetResult(t, cacheIns, key, data2)
 }
 
 // TestReadCacheAddGet004 test get function with page changed, the reference value sync changed.
 func TestReadCacheAddGet004(t *testing.T) {
 	cacheIns := GetReadMetaCacheIns()
-	defer cacheIns.Purge()
+	defer cacheIns.Purge(MetaCachePool)
 	key := cacheIns.CreateCacheKey(path, int64(offset))
-	cacheIns.AddPage(key, data, size)
+	cacheIns.AddPage(key, data, size, MetaCachePool)
 	page := checkGetResult(t, cacheIns, key, data)
 	data2 := append(data, 66)
-	cacheIns.AddPage(key, data2, int64(len(data2)))
+	cacheIns.AddPage(key, data2, int64(len(data2)), MetaCachePool)
 	if !reflect.DeepEqual(page.Value, data2) || !reflect.DeepEqual(page.Size, int64(len(data2))) {
 		t.Fatal("except get page value equal to the add value, but can't")
 	}
@@ -140,9 +141,9 @@ func TestReadCacheAddGet004(t *testing.T) {
 // TestReadCacheContain test contain function.
 func TestReadCacheContain(t *testing.T) {
 	cacheIns := GetReadMetaCacheIns()
-	defer cacheIns.Purge()
+	defer cacheIns.Purge(MetaCachePool)
 	key := cacheIns.CreateCacheKey(path, int64(offset))
-	cacheIns.AddPage(key, data, size)
+	cacheIns.AddPage(key, data, size, MetaCachePool)
 
 	if !cacheIns.Contains(key) {
 		t.Fatal("except get page by key, but can't")
@@ -152,15 +153,15 @@ func TestReadCacheContain(t *testing.T) {
 // TestReadCacheRemove001 test remove function, then check left byte size and page size.
 func TestReadCacheRemove001(t *testing.T) {
 	cacheIns := GetReadMetaCacheIns()
-	defer cacheIns.Purge()
+	defer cacheIns.Purge(MetaCachePool)
 	for i := 0; i < offset; i++ {
 		key := cacheIns.CreateCacheKey(path, int64(i))
-		cacheIns.AddPage(key, data, size)
+		cacheIns.AddPage(key, data, size, MetaCachePool)
 	}
 	path2 := "opt/data/data.tsi"
 	for i := 0; i < offset; i++ {
 		key := cacheIns.CreateCacheKey(path2, int64(i))
-		cacheIns.AddPage(key, data, size)
+		cacheIns.AddPage(key, data, size, MetaCachePool)
 	}
 	if !cacheIns.Remove(path) {
 		t.Fatal("except remove hit, but can't")
@@ -175,21 +176,21 @@ func TestReadCacheRemove001(t *testing.T) {
 
 func TestSegCacheReadCacheRemove001(t *testing.T) {
 	cacheIns := GetReadDataCacheIns()
-	cacheIns.PurgeAndUnrefCachePage()
+	cacheIns.PurgeAndUnrefCachePage(CachePagePool)
 	defer func() {
-		cacheIns.PurgeAndUnrefCachePage()
+		cacheIns.PurgeAndUnrefCachePage(CachePagePool)
 		if cachePage.ref != 1 {
 			t.Fatal("TestSegCacheReadCacheRefreshBuffer001 error")
 		}
 	}()
 	for i := 0; i < offset; i++ {
 		key := cacheIns.CreateCacheKey(path, int64(i))
-		cacheIns.AddPageCache(key, cachePage, size)
+		cacheIns.AddPageCache(key, cachePage, size, CachePagePool)
 	}
 	path2 := "opt/data/data.tsi"
 	for i := 0; i < offset; i++ {
 		key := cacheIns.CreateCacheKey(path2, int64(i))
-		cacheIns.AddPageCache(key, cachePage, size)
+		cacheIns.AddPageCache(key, cachePage, size, CachePagePool)
 	}
 	if !cacheIns.RemovePageCache(path) {
 		t.Fatal("except remove hit, but can't")
@@ -205,10 +206,10 @@ func TestSegCacheReadCacheRemove001(t *testing.T) {
 // TestReadCacheRemove002 add same key-value several times, then remove, check left byte size and page size.
 func TestReadCacheRemove002(t *testing.T) {
 	cacheIns := GetReadMetaCacheIns()
-	defer cacheIns.Purge()
+	defer cacheIns.Purge(MetaCachePool)
 	for i := 0; i < offset; i++ {
 		key := cacheIns.CreateCacheKey(path, int64(offset))
-		cacheIns.AddPage(key, data, size)
+		cacheIns.AddPage(key, data, size, MetaCachePool)
 	}
 	if !reflect.DeepEqual(1, cacheIns.GetPageSize()) {
 		t.Fatal("except remove half page, but not, page size =", cacheIns.GetPageSize())
@@ -220,7 +221,7 @@ func TestReadCacheRemove002(t *testing.T) {
 	path2 := "opt/data/data.tsi"
 	for i := 0; i < offset; i++ {
 		key := cacheIns.CreateCacheKey(path2, int64(i))
-		cacheIns.AddPage(key, data, size)
+		cacheIns.AddPage(key, data, size, MetaCachePool)
 	}
 	if !cacheIns.Remove(path) {
 		t.Fatal("except remove hit, but can't")
@@ -236,16 +237,16 @@ func TestReadCacheRemove002(t *testing.T) {
 // TestReadCacheRemove003 multiple Get one key from readCache oldBuffer, only put to currBuffer once.
 func TestReadCacheRemove003(t *testing.T) {
 	cacheIns := GetReadMetaCacheIns()
-	defer cacheIns.Purge()
+	defer cacheIns.Purge(MetaCachePool)
 	key := cacheIns.CreateCacheKey(path, int64(offset))
-	cacheIns.AddPage(key, data, size)
+	cacheIns.AddPage(key, data, size, MetaCachePool)
 	if !reflect.DeepEqual(1, cacheIns.GetPageSize()) {
 		t.Fatal("except remove half page, but not, page size =", cacheIns.GetPageSize())
 	}
 	if !reflect.DeepEqual(int64(10), cacheIns.GetByteSize()) {
 		t.Fatal("except 10 byte size, but not, left size = ", cacheIns.GetByteSize())
 	}
-	cacheIns.RefreshOldBuffer()
+	cacheIns.RefreshOldBuffer(MetaCachePool)
 
 	var sg sync.WaitGroup
 	for i := 0; i < 10; i++ {
@@ -264,12 +265,12 @@ func TestReadCacheRemove003(t *testing.T) {
 // TestReadCacheAddGet001 test basic add and get function
 func TestReadCacheRefreshBuffer001(t *testing.T) {
 	cacheIns := GetReadMetaCacheIns()
-	defer cacheIns.Purge()
+	defer cacheIns.Purge(MetaCachePool)
 	key := cacheIns.CreateCacheKey(path, int64(offset))
-	cacheIns.AddPage(key, data, size)
+	cacheIns.AddPage(key, data, size, MetaCachePool)
 	checkGetResult(t, cacheIns, key, data)
 
-	cacheIns.RefreshOldBuffer()
+	cacheIns.RefreshOldBuffer(MetaCachePool)
 	checkGetResult(t, cacheIns, key, data) // get again, so copy page in oldBuffer to newBuffer.
 	if !reflect.DeepEqual(2, cacheIns.GetPageSize()) {
 		t.Fatal("except one page in each Buffer, but fact page size =", cacheIns.GetPageSize())
@@ -281,16 +282,16 @@ func TestReadCacheRefreshBuffer001(t *testing.T) {
 
 func TestSegCacheReadCacheRefreshBuffer001(t *testing.T) {
 	cacheIns := GetReadDataCacheIns()
-	cacheIns.PurgeAndUnrefCachePage()
+	cacheIns.PurgeAndUnrefCachePage(CachePagePool)
 	defer func() {
-		cacheIns.PurgeAndUnrefCachePage()
+		cacheIns.PurgeAndUnrefCachePage(CachePagePool)
 		if cachePage.ref != 1 {
 			t.Fatal("TestSegCacheReadCacheRefreshBuffer001 error")
 		}
 	}()
 	key := cacheIns.CreateCacheKey(path, int64(offset))
-	cacheIns.AddPageCache(key, cachePage, size)
-	cacheIns.RefreshOldBufferAndUnrefCachePage()
+	cacheIns.AddPageCache(key, cachePage, size, CachePagePool)
+	cacheIns.RefreshOldBufferAndUnrefCachePage(CachePagePool)
 	page, hit := cacheIns.GetPageCache(key)
 	if !hit || page != cachePage {
 		t.Fatal("TestSegCacheReadCacheRefreshBuffer001 getPageCache error")
@@ -301,24 +302,24 @@ func TestSegCacheReadCacheRefreshBuffer001(t *testing.T) {
 	if !reflect.DeepEqual(int64(20), cacheIns.GetByteSize()) {
 		t.Fatal("except 10 bytes in each Buffer, but fact page size =", cacheIns.GetByteSize())
 	}
-	cachePage.Unref()
+	cachePage.Unref(CachePagePool)
 }
 
 // TestReadCacheRemove002 add key-value several times, then refresh buffer and remove,
 // check left byte size and page size.
 func TestReadCacheRefreshBuffer002(t *testing.T) {
 	cacheIns := GetReadMetaCacheIns()
-	defer cacheIns.Purge()
+	defer cacheIns.Purge(MetaCachePool)
 	for i := 0; i < offset; i++ {
 		key := cacheIns.CreateCacheKey(path, int64(i))
-		cacheIns.AddPage(key, data, size)
+		cacheIns.AddPage(key, data, size, MetaCachePool)
 	}
 	path2 := "opt/data/data.tsi"
 	for i := 0; i < offset; i++ {
 		key := cacheIns.CreateCacheKey(path2, int64(i))
-		cacheIns.AddPage(key, data, size)
+		cacheIns.AddPage(key, data, size, MetaCachePool)
 	}
-	cacheIns.RefreshOldBuffer()
+	cacheIns.RefreshOldBuffer(MetaCachePool)
 	if !cacheIns.Remove(path) {
 		t.Fatal("except remove hit, but can't")
 	}
@@ -333,11 +334,11 @@ func TestReadCacheRefreshBuffer002(t *testing.T) {
 // TestReadCacheRefreshBuffer003 test Get and remove after refresh buffer, and check page and byte size.
 func TestReadCacheRefreshBuffer003(t *testing.T) {
 	cacheIns := GetReadMetaCacheIns()
-	defer cacheIns.Purge()
+	defer cacheIns.Purge(MetaCachePool)
 	key := cacheIns.CreateCacheKey(path, int64(offset))
-	cacheIns.AddPage(key, data, size)
+	cacheIns.AddPage(key, data, size, MetaCachePool)
 
-	cacheIns.RefreshOldBuffer()
+	cacheIns.RefreshOldBuffer(MetaCachePool)
 	checkGetResult(t, cacheIns, key, data)
 	if !reflect.DeepEqual(2, cacheIns.GetPageSize()) {
 		t.Fatal("except one page in each Buffer, but fact page size =", cacheIns.GetPageSize())
@@ -358,11 +359,11 @@ func TestReadCacheRefreshBuffer003(t *testing.T) {
 // and The reference value is normal.
 func TestReadCacheRefreshBuffer004(t *testing.T) {
 	cacheIns := GetReadMetaCacheIns()
-	defer cacheIns.Purge()
+	defer cacheIns.Purge(MetaCachePool)
 	key := cacheIns.CreateCacheKey(path, int64(offset))
-	cacheIns.AddPage(key, data, size)
+	cacheIns.AddPage(key, data, size, MetaCachePool)
 	page := checkGetResult(t, cacheIns, key, data)
-	cacheIns.RefreshOldBuffer()
+	cacheIns.RefreshOldBuffer(MetaCachePool)
 	if !reflect.DeepEqual(page.Value, data) || !reflect.DeepEqual(page.Size, int64(len(data))) {
 		t.Fatal("except get page value equal to the add value, but can't")
 	}
@@ -372,13 +373,13 @@ func TestReadCacheRefreshBuffer004(t *testing.T) {
 // then add a new value with same key, and The reference value isn't changed.
 func TestReadCacheRefreshBuffer005(t *testing.T) {
 	cacheIns := GetReadMetaCacheIns()
-	defer cacheIns.Purge()
+	defer cacheIns.Purge(MetaCachePool)
 	key := cacheIns.CreateCacheKey(path, int64(offset))
-	cacheIns.AddPage(key, data, size)
+	cacheIns.AddPage(key, data, size, MetaCachePool)
 	page := checkGetResult(t, cacheIns, key, data)
-	cacheIns.RefreshOldBuffer()
+	cacheIns.RefreshOldBuffer(MetaCachePool)
 	data2 := append(data, 66)
-	cacheIns.AddPage(key, data2, int64(len(data2)))
+	cacheIns.AddPage(key, data2, int64(len(data2)), MetaCachePool)
 	if !reflect.DeepEqual(page.Value, data) || !reflect.DeepEqual(page.Size, int64(len(data))) {
 		t.Fatal("except get page value equal to the add value, but can't")
 	}
@@ -387,20 +388,20 @@ func TestReadCacheRefreshBuffer005(t *testing.T) {
 // TestReadCacheAddGet006 test get one page but Refresh two times.
 func TestReadCacheRefreshBuffer006(t *testing.T) {
 	cacheIns := GetReadMetaCacheIns()
-	defer cacheIns.Purge()
+	defer cacheIns.Purge(MetaCachePool)
 	key := cacheIns.CreateCacheKey(path, int64(offset))
-	cacheIns.AddPage(key, data, size)
+	cacheIns.AddPage(key, data, size, MetaCachePool)
 	page := checkGetResult(t, cacheIns, key, data)
 	if !reflect.DeepEqual(page.Value, data) || !reflect.DeepEqual(page.Size, int64(len(data))) {
 		t.Fatal("except get page value equal to the add value, but can't")
 	}
 	var data2 = []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}
-	cacheIns.AddPage(key, data2, int64(len(data2)))
-	cacheIns.RefreshOldBuffer()
+	cacheIns.AddPage(key, data2, int64(len(data2)), MetaCachePool)
+	cacheIns.RefreshOldBuffer(MetaCachePool)
 	if !reflect.DeepEqual(page.Value, data2) || !reflect.DeepEqual(page.Size, int64(len(data2))) {
 		t.Fatal("except get page value equal to the add value, after Refresh, but can't")
 	}
-	cacheIns.RefreshOldBuffer()
+	cacheIns.RefreshOldBuffer(MetaCachePool)
 	if !reflect.DeepEqual(page.Value, data2) || !reflect.DeepEqual(page.Size, int64(len(data2))) {
 		t.Fatal("except get page value equal to the add value, after Refresh two times, but can't")
 	}
@@ -409,17 +410,17 @@ func TestReadCacheRefreshBuffer006(t *testing.T) {
 // TestReadCacheParallel001 several goroutines add Page and several get with the same key, the value is consistency.
 func TestReadCacheParallel001(t *testing.T) {
 	cacheIns := GetReadMetaCacheIns()
-	defer cacheIns.Purge()
+	defer cacheIns.Purge(MetaCachePool)
 	key := cacheIns.CreateCacheKey(path, int64(offset))
 	data2 := data
-	cacheIns.AddPage(key, data2, size)
+	cacheIns.AddPage(key, data2, size, MetaCachePool)
 	checkGetResult(t, cacheIns, key, data2)
 	var sg sync.WaitGroup
 	for i := 0; i < 10; i++ {
 		sg.Add(2)
 		data2 = append(data2, byte(i))
 		go func(value []byte, key string) {
-			cacheIns.AddPage(key, value, int64(len(value)))
+			cacheIns.AddPage(key, value, int64(len(value)), MetaCachePool)
 			sg.Done()
 		}(data2, key)
 		go func() {
@@ -434,7 +435,7 @@ func TestReadCacheParallel001(t *testing.T) {
 // TestReadCacheParallel002 several goroutines add Page and several get the value is consistency.
 func TestReadCacheParallel002(t *testing.T) {
 	cacheIns := GetReadMetaCacheIns()
-	defer cacheIns.Purge()
+	defer cacheIns.Purge(MetaCachePool)
 	data2 := data
 	var sg sync.WaitGroup
 	for i := 0; i < 10; i++ {
@@ -442,7 +443,7 @@ func TestReadCacheParallel002(t *testing.T) {
 		data2 = append(data2, byte(i))
 		sg.Add(2)
 		go func(value []byte, key string) {
-			cacheIns.AddPage(key, value, int64(len(value)))
+			cacheIns.AddPage(key, value, int64(len(value)), MetaCachePool)
 			sg.Done()
 		}(data2, key)
 		go func(value []byte, key string) {
@@ -458,9 +459,9 @@ func TestReadCacheParallel002(t *testing.T) {
 func TestReadCachePurge(t *testing.T) {
 	cacheIns := GetReadMetaCacheIns()
 	key := cacheIns.CreateCacheKey(path, int64(offset))
-	cacheIns.AddPage(key, data, size)
+	cacheIns.AddPage(key, data, size, MetaCachePool)
 	page := checkGetResult(t, cacheIns, key, data)
-	cacheIns.Purge()
+	cacheIns.Purge(MetaCachePool)
 	if !reflect.DeepEqual(page.Value, data) || !reflect.DeepEqual(page.Size, int64(len(data))) {
 		t.Fatal("except get page value equal to the add value, but can't")
 	}
@@ -475,11 +476,11 @@ func TestReadCachePurge(t *testing.T) {
 // TestReadCachePurge pool data changed, but reference page value reserved.
 func TestReadCacheAddCopy001(t *testing.T) {
 	cacheIns := GetReadMetaCacheIns()
-	defer cacheIns.Purge()
+	defer cacheIns.Purge(MetaCachePool)
 	key := cacheIns.CreateCacheKey(path, int64(offset))
 	var buf = make([]byte, 10, 10)
 	copy(buf, data)
-	cacheIns.AddPage(key, buf, size)
+	cacheIns.AddPage(key, buf, size, MetaCachePool)
 	page := checkGetResult(t, cacheIns, key, data)
 	buf[0] = 66
 	if !reflect.DeepEqual(page.Value, data) || !reflect.DeepEqual(page.Size, int64(len(data))) {
@@ -490,7 +491,7 @@ func TestReadCacheAddCopy001(t *testing.T) {
 func TestEntryNotFound(t *testing.T) {
 	// given
 	cacheIns := GetReadMetaCacheIns()
-	defer cacheIns.Purge()
+	defer cacheIns.Purge(MetaCachePool)
 
 	// when
 	_, ok := cacheIns.Get("nonExistingKey")
@@ -508,15 +509,15 @@ func TestGetValueWhenEvict(t *testing.T) {
 		blocksMax = 256
 	}()
 	cacheIns := GetReadMetaCacheIns()
-	defer cacheIns.Purge()
+	defer cacheIns.Purge(MetaCachePool)
 	key := cacheIns.CreateCacheKey(path, int64(offset))
-	cacheIns.AddPage(key, data, size)
+	cacheIns.AddPage(key, data, size, MetaCachePool)
 	value, _ := cacheIns.Get(key)
 
 	data1 := []byte{11, 12, 13, 14, 15, 16, 17, 18, 19, 20}
-	cacheIns.AddPage(key, data1, size)
-	cacheIns.AddPage(key, data1, size)
-	cacheIns.AddPage(key, data1, size)
+	cacheIns.AddPage(key, data1, size, MetaCachePool)
+	cacheIns.AddPage(key, data1, size, MetaCachePool)
+	cacheIns.AddPage(key, data1, size, MetaCachePool)
 
 	resultData := value.(*CachePage).Value
 	if !reflect.DeepEqual(resultData, data) || !reflect.DeepEqual(len(resultData), (len(data))) {
@@ -528,7 +529,7 @@ func TestGetValueWhenEvict(t *testing.T) {
 // TestCacheDelRandomly does simultaneous deletes, puts and gets, to check for corruption errors.
 func TestCacheDelRandomly(t *testing.T) {
 	cacheIns := GetReadMetaCacheIns()
-	defer cacheIns.Purge()
+	defer cacheIns.Purge(MetaCachePool)
 	var wg sync.WaitGroup
 	var ntest = 1000
 	wg.Add(3)
@@ -553,7 +554,7 @@ func TestCacheDelRandomly(t *testing.T) {
 			for j := 0; j < len(val); j++ {
 				val[j] = r
 			}
-			cacheIns.AddPage(testPath, val, int64(len(val)))
+			cacheIns.AddPage(testPath, val, int64(len(val)), MetaCachePool)
 		}
 		wg.Done()
 	}()
@@ -581,7 +582,7 @@ func TestCacheDelRandomly(t *testing.T) {
 func TestEntryUpdate(t *testing.T) {
 	// given
 	cacheIns := GetReadMetaCacheIns()
-	defer cacheIns.Purge()
+	defer cacheIns.Purge(MetaCachePool)
 
 	// when
 	var value1 = []byte("value")
@@ -589,24 +590,48 @@ func TestEntryUpdate(t *testing.T) {
 	var value3 = []byte("value3")
 	key := cacheIns.CreateCacheKey(path, int64(offset))
 	key2 := cacheIns.CreateCacheKey(path, int64(offset+1))
-	cacheIns.AddPage(key, value1, int64(len(value1)))
-	cacheIns.AddPage(key, value2, int64(len(value2)))
-	cacheIns.AddPage(key2, value3, int64(len(value3)))
+	cacheIns.AddPage(key, value1, int64(len(value1)), MetaCachePool)
+	cacheIns.AddPage(key, value2, int64(len(value2)), MetaCachePool)
+	cacheIns.AddPage(key2, value3, int64(len(value3)), MetaCachePool)
 	cachedValue, _ := cacheIns.Get(key)
 
 	// then
 	assertEqual(t, []byte("value2"), cachedValue.(*CachePage).Value)
 }
 
+func TestMetaPagePoolOp(t *testing.T) {
+	cpu.SetCpuNum(2, 1)
+	SetMataPageListByConf([]string{"4kb"})
+	metaCachePool := MetaCachePool
+	assertEqual(t, 2, len(metaCachePool.pools))
+
+	metaCachePool.SetLimit(uint64(40))
+	assertEqual(t, int64(40), metaCachePool.limit)
+
+	for i := 0; i < 10; i++ {
+		pageCache := &CachePage{
+			Value: []byte("value"),
+			Size:  int64(5),
+			ref:   int32(0),
+		}
+		metaCachePool.Put(pageCache)
+	}
+	assertEqual(t, int64(40), metaCachePool.size.Load())
+	for i := 0; i < 10; i++ {
+		metaCachePool.Get()
+	}
+	assertEqual(t, int64(0), metaCachePool.size.Load())
+}
+
 func TestNilValueCaching(t *testing.T) {
 	// given
 	cacheIns := GetReadMetaCacheIns()
-	defer cacheIns.Purge()
+	defer cacheIns.Purge(MetaCachePool)
 
 	// when
 	var value = []byte{}
 	key := cacheIns.CreateCacheKey(path, int64(offset))
-	cacheIns.AddPage(key, value, int64(len(value)))
+	cacheIns.AddPage(key, value, int64(len(value)), MetaCachePool)
 	cachedValue, _ := cacheIns.Get(key)
 
 	// then

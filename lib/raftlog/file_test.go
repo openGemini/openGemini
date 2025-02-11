@@ -82,7 +82,7 @@ func TestFileWrap_OpenFile(t *testing.T) {
 }
 
 func TestGetEntryData(t *testing.T) {
-	fw := FileWrap{data: []byte("Hello, World!")}
+	fw := FileWrap{data: []byte("Hello, World!"), current: true}
 
 	if result := fw.GetEntryData(0, 5); string(result) != "Hello" {
 		t.Errorf("Expected 'Hello', got %s", result)
@@ -96,7 +96,7 @@ func TestFileWrap_Write_WriteAt(t *testing.T) {
 		require.NoError(t, err)
 		file.Write([]byte("writeahead"))
 
-		fw := &FileWrap{fd: file}
+		fw := &FileWrap{fd: file, current: true}
 		defer fw.Close()
 		fw.data = []byte("writeahead")
 
@@ -179,7 +179,7 @@ func TestFileWrap_WriteSlice_ReadSlice(t *testing.T) {
 		file, err := fileops.OpenFile(filepath.Join(tmpDir, "test"), os.O_CREATE|os.O_RDWR, 0640)
 		require.NoError(t, err)
 
-		fw := &FileWrap{fd: file, data: make([]byte, 0)}
+		fw := &FileWrap{fd: file, data: make([]byte, 0), current: true}
 		defer fw.Close()
 		err = fw.WriteSlice(0, []byte("hello"))
 		require.NoError(t, err)
@@ -244,7 +244,6 @@ func TestFileWrap_Delete(t *testing.T) {
 		require.NoError(t, err)
 
 		fw := &FileWrap{fd: file}
-		defer fw.Close()
 		err = fw.Delete()
 		require.NoError(t, err)
 	})

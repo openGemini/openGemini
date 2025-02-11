@@ -87,7 +87,7 @@ func (a *DataACK) Dispatch() {
 	}
 
 	a.incr++
-	if a.incr%a.size == 0 {
+	if a.incr%a.size == 0 && a.handler != nil {
 		go a.handler()
 	}
 }

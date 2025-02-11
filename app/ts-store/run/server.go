@@ -29,6 +29,7 @@ import (
 	spdyTransport "github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/mutable"
+	"github.com/openGemini/openGemini/engine/shelf"
 	"github.com/openGemini/openGemini/lib/compress"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
@@ -56,6 +57,7 @@ type Server struct {
 
 	err chan error
 
+	ptNumPerNode     uint32
 	storageDataPath  string
 	metaPath         string
 	ingestAddr       string
@@ -95,13 +97,14 @@ func NewServer(c config.Config, info app.ServerInfo, logger *Logger.Logger) (app
 		conf.Common.NodeRole = ""
 	}
 
-	mutable.Init(cpu.GetCpuNum())
 	immutable.InitWriterPool(3 * cpu.GetCpuNum())
 	immutable.SetIndexCompressMode(conf.Data.TemporaryIndexCompressMode)
 	immutable.SetChunkMetaCompressMode(conf.Data.ChunkMetaCompressMode)
 	config.SetStoreConfig(conf.Data)
 	config.SetIndexConfig(conf.Index)
 	compress.Init()
+	mutable.Init(cpu.GetCpuNum())
+	shelf.Open()
 
 	s.config = conf
 	Logger.SetLogger(Logger.GetLogger().With(zap.String("hostname", conf.Data.IngesterAddress)))
@@ -115,6 +118,7 @@ func NewServer(c config.Config, info app.ServerInfo, logger *Logger.Logger) (app
 	syscontrol.SetWriteColdShardEnabled(conf.HierarchicalStore.EnableWriteColdShard)
 
 	s.storageDataPath = conf.Data.DataDir
+	s.ptNumPerNode = conf.Meta.PtNumPerNode
 	s.metaPath = conf.Data.MetaDir
 	s.ingestAddr = conf.Data.IngesterAddress
 	s.selectAddr = conf.Data.SelectAddress
@@ -144,6 +148,8 @@ func NewServer(c config.Config, info app.ServerInfo, logger *Logger.Logger) (app
 	s.sherlockService.WithLogger(s.Logger)
 	logstore.InitializeVlmCache()
 	logstore.StartHotDataDetector()
+	immutable.NewHotFileManager().Run()
+	immutable.NewCSParquetManager().Run()
 
 	return s, nil
 }
@@ -218,12 +224,11 @@ func (s *Server) Open() error {
 
 	fmt.Printf("successfully opened storage %q in %.3f seconds\n", s.storageDataPath, time.Since(startTime).Seconds())
 
-	s.stream, err = stream.NewStream(s.storage, s.Logger.With(zap.String("service", "stream")), commHttpHandler.MetaClient.(*metaclient.Client), stream2.NewConfig())
+	s.stream, err = stream.NewStream(s.storage, s.Logger.With(zap.String("service", "stream")),
+		commHttpHandler.MetaClient.(*metaclient.Client), stream2.NewConfig(), s.storageDataPath, s.config.Data.WALDir, s.ptNumPerNode)
 	if err != nil {
 		return err
 	}
-
-	s.transServer.Run(s.storage, s.stream)
 
 	if s.config.Gossip.Enabled {
 		conf := s.config.Gossip.BuildSerf(s.config.Logging, config.AppStore, strconv.Itoa(int(nid)), nil)
@@ -239,6 +244,8 @@ func (s *Server) Open() error {
 		s.StoreService.handler.SetstatisticsPusher(s.statisticsPusher)
 		s.StoreService.handler.metaClient = s.metaClient
 	}
+
+	s.transServer.Run(s.storage, s.stream)
 
 	if s.sherlockService != nil {
 		s.sherlockService.Open()
@@ -280,7 +287,10 @@ func (s *Server) Close() error {
 		s.iodetector.Close()
 	}
 
+	shelf.NewRunner().Close()
 	mutable.NewMemTablePoolManager().Close()
+	immutable.NewHotFileManager().Stop()
+	immutable.NewCSParquetManager().Stop()
 	log.Info("the storage has been stopped")
 	return nil
 }
@@ -301,7 +311,6 @@ func (s *Server) initStatisticsPusher() {
 
 	s.statisticsPusher.Register(
 		stat.CollectPerfStatistics,
-		stat.CollectImmutableStatistics,
 		stat.CollectStoreSlowQueryStatistics,
 		stat.CollectRuntimeStatistics,
 		stat.CollectIOStatistics,
@@ -320,6 +329,7 @@ func (s *Server) initStatisticsPusher() {
 		stat.CollectStoreQueryStatistics,
 		stat.CollectSpdyStatistics,
 		stat.NewOOOTimeDistribution().Collect,
+		stat.NewCollector().Collect,
 	)
 
 	s.statisticsPusher.RegisterOps(stat.CollectOpsPerfStatistics)
@@ -340,9 +350,9 @@ func (s *Server) initStatistics() {
 		"hostname": strings.ReplaceAll(config.CombineDomain(s.config.Data.Domain, s.selectAddr), ",", "_"),
 		"app":      "ts-" + string(s.info.App),
 	}
+	stat.NewCollector().SetGlobalTags(globalTags)
 
 	stat.InitPerfStatistics(globalTags)
-	stat.InitImmutableStatistics(globalTags)
 	stat.InitStoreSlowQueryStatistics(globalTags)
 	stat.InitRuntimeStatistics(globalTags, int(time.Duration(s.config.Monitor.StoreInterval).Seconds()))
 	stat.InitIOStatistics(globalTags)

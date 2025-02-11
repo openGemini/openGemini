@@ -170,6 +170,7 @@ func (p *Http) post(url string, data url.Values) error {
 	if err != nil {
 		return err
 	}
+	defer writeResp.Body.Close()
 	// make sure createdb/rp resp.StatusCode is ok/noContent when create success
 	if writeResp.StatusCode != http.StatusOK && writeResp.StatusCode != http.StatusNoContent {
 		return fmt.Errorf("create db/rp resp status err:%d", writeResp.StatusCode)
@@ -182,7 +183,6 @@ func (p *Http) post(url string, data url.Values) error {
 	if strings.Contains(string(body), "error") {
 		return fmt.Errorf("create db/rp return error:%s", string(body))
 	}
-	_ = writeResp.Body.Close()
 
 	return nil
 }

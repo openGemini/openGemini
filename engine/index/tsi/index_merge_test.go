@@ -16,9 +16,11 @@ import (
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/openGemini/openGemini/engine/index/mergeindex"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/mergeset"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestMergeIndexRows(t *testing.T) {
@@ -454,4 +456,15 @@ func TestMakeGroupTagsKey(t *testing.T) {
 
 	sort.Strings(sortResult)
 	assert.Equal(t, []string{"sex\x00female\x00address\x00beijing", "sex\x00female\x00address\x00shanghai", "sex\x00male\x00address\x00shanghai"}, sortResult)
+}
+
+func TestInitQueueSize(t *testing.T) {
+	idx := config.GetIndexConfig()
+	config.SetIndexConfig(idx)
+	idx.Concurrency = 100
+	defer func() {
+		idx.Concurrency = 0
+	}()
+	initQueueSize()
+	require.Equal(t, uint64(128), queueSize)
 }

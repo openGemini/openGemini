@@ -20,6 +20,7 @@ import (
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
+	model "github.com/prometheus/prometheus/model/value"
 )
 
 // RangeVectorCursor is used to process the calculation of the function with range duration for
@@ -83,6 +84,7 @@ func (c *RangeVectorCursor) SetSchema(inSchema, outSchema record.Schemas, exprOp
 }
 
 func (c *RangeVectorCursor) reduce(inRecord, newRecord *record.Record) {
+	inRecord = FilterRangeNANPoint(inRecord)
 	c.getIntervalIndex(inRecord)
 	c.setReducerParams()
 	c.coProcessor.WorkOnRecord(inRecord, newRecord, c.reducerParams)
@@ -96,7 +98,7 @@ func (c *RangeVectorCursor) inNextWindowWithInfo(currRecord *record.Record) erro
 	}
 	// padding is required before and after the last rec. Padding is required only before the previous rec.
 	c.reducerParams.lastRec = (nextRecord == nil) || (c.fileInfo != nil && info != c.fileInfo)
-	c.inNextWin = isSameWindow(currRecord, nextRecord, c.fileInfo, info, c.schema, c.startSample, c.endSample, c.step)
+	c.inNextWin = isSameWindow(currRecord, nextRecord, c.fileInfo, info, c.schema, c.startSample, c.endSample, c.step, c.rangeDuration)
 	return nil
 }
 
@@ -107,13 +109,16 @@ func (c *RangeVectorCursor) inNextWindow(currRecord *record.Record) error {
 	}
 	// padding is required before and after the last rec. Padding is required only before the previous rec.
 	c.reducerParams.lastRec = nextRecord == nil
-	c.inNextWin = isSameWindow(currRecord, nextRecord, nil, nil, c.schema, c.startSample, c.endSample, c.step)
+	c.inNextWin = isSameWindow(currRecord, nextRecord, nil, nil, c.schema, c.startSample, c.endSample, c.step, c.rangeDuration)
 	return nil
 }
 
 // getIntervalIndex as a key method ot use the dual-pointer algorithm to quickly find the start and end of the target step.
 // intervalIndex stores the interval of each group, left-closed and right-open, for example, [[0, 2), [1, 3)].
 func (c *RangeVectorCursor) getIntervalIndex(record *record.Record) {
+	if record.RowNums() == 0 {
+		return
+	}
 	if c.step == 0 {
 		c.firstStep = c.startSample
 		c.intervalIndex = append(c.intervalIndex, 0, uint16(record.RowNums()))
@@ -123,10 +128,6 @@ func (c *RangeVectorCursor) getIntervalIndex(record *record.Record) {
 	firstStep := getCurrStep(c.startSample, c.endSample, c.step, times[0])
 	lastStep := getCurrStep(c.startSample, c.endSample, c.step, times[len(times)-1])
 	c.firstStep = firstStep
-	if firstStep == lastStep {
-		c.intervalIndex = append(c.intervalIndex, 0, uint16(record.RowNums()))
-		return
-	}
 	var i, j int
 	for end := firstStep; end <= lastStep; end += c.step {
 		start := end - c.rangeDuration
@@ -168,4 +169,30 @@ func (c *RangeVectorCursor) resetReducerParams() {
 
 func (c *RangeVectorCursor) Name() string {
 	return "range_vector_cursor"
+}
+
+func FilterRangeNANPoint(rec *record.Record) *record.Record {
+	rowNum := rec.RowNums()
+	var outRecord *record.Record
+	vals := rec.ColVals[0].FloatValues()
+	var startIndex, endIndex int
+	for startIndex, endIndex = 0, 0; endIndex < rowNum; {
+		if model.IsStaleNaN(vals[endIndex]) {
+			if outRecord == nil {
+				outRecord = record.NewRecordBuilder(rec.Schema)
+				outRecord.RecMeta = rec.RecMeta
+			}
+			outRecord.AppendRec(rec, startIndex, endIndex)
+			endIndex++
+			startIndex = endIndex
+			continue
+		}
+
+		endIndex++
+	}
+	if startIndex == 0 {
+		return rec
+	}
+	outRecord.AppendRec(rec, startIndex, endIndex)
+	return outRecord
 }

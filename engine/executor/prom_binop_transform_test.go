@@ -51,7 +51,7 @@ func PromBinOpTransformTestBase(t *testing.T, chunks1, chunks2 []executor.Chunk,
 	inRowDataTypes = append(inRowDataTypes, source2.Output.RowDataType)
 	outRowDataType := buildPromBinOpOutputRowDataType()
 	schema := buildPromBinOpSchema()
-	trans, err := executor.NewBinOpTransform(inRowDataTypes, outRowDataType, schema, para)
+	trans, err := executor.NewBinOpTransform(inRowDataTypes, outRowDataType, schema, para, nil, nil)
 	if err != nil {
 		panic("")
 	}
@@ -288,6 +288,32 @@ func BuildBinOpInChunk13() executor.Chunk {
 	return chunk
 }
 
+func BuildBinOpInChunk14() executor.Chunk {
+	rowDataType := buildPromBinOpOutputRowDataType()
+	b := executor.NewChunkBuilder(rowDataType)
+	chunk := b.NewChunk("m2")
+	chunk.AppendTimes([]int64{1, 2, 3, 4})
+	chunk.AddTagAndIndex(*ParseChunkTags("tk1=2"), 0)
+	chunk.AddIntervalIndex(0)
+	chunk.Column(0).AppendFloatValues([]float64{1, 2, 3, 4})
+	chunk.Column(0).AppendColumnTimes([]int64{1, 2, 3, 4})
+	chunk.Column(0).AppendManyNotNil(4)
+	return chunk
+}
+
+func BuildBinOpInChunk15() executor.Chunk {
+	rowDataType := buildPromBinOpOutputRowDataType()
+	b := executor.NewChunkBuilder(rowDataType)
+	chunk := b.NewChunk("m2")
+	chunk.AppendTimes([]int64{1, 2, 3, 4})
+	chunk.AddTagAndIndex(*ParseChunkTags("tk1=2"), 0)
+	chunk.AddIntervalIndex(0)
+	chunk.Column(0).AppendFloatValues([]float64{1, 1, 2, 2})
+	chunk.Column(0).AppendColumnTimes([]int64{1, 2, 3, 4})
+	chunk.Column(0).AppendManyNotNil(4)
+	return chunk
+}
+
 func BuildBinOpResult() []executor.Chunk {
 	rowDataType := buildPromBinOpOutputRowDataType()
 	b := executor.NewChunkBuilder(rowDataType)
@@ -464,6 +490,44 @@ func BuildBinOpResult15() []executor.Chunk {
 	chunk1.AddTagAndIndex(*ParseChunkTags("tk1=2"), 0)
 	AppendFloatValues(chunk1, 0, []float64{2.2, 6.6}, []bool{true, true})
 	return []executor.Chunk{chunk1}
+}
+
+func BuildBinOpResult16() []executor.Chunk {
+	rowDataType := buildPromBinOpOutputRowDataType()
+	b := executor.NewChunkBuilder(rowDataType)
+	chunk1 := b.NewChunk("")
+	chunk1.AppendTimes([]int64{1, 2, 3, 4})
+	chunk1.AddTagAndIndex(*ParseChunkTags("tk1=2"), 0)
+	AppendFloatValues(chunk1, 0, []float64{0, 0, 1, 0}, []bool{true, true, true, true})
+	return []executor.Chunk{chunk1}
+}
+
+func BuildBinOpInChunk17() executor.Chunk {
+	rowDataType := buildPromBinOpOutputRowDataType()
+	b := executor.NewChunkBuilder(rowDataType)
+	chunk := b.NewChunk("m1")
+	chunk.AppendTimes([]int64{1, 1})
+	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1,tk2=1"), 0)
+	chunk.AddTagAndIndex(*ParseChunkTags("tk1=2,tk2=2"), 1)
+	chunk.AddIntervalIndex(0)
+	chunk.AddIntervalIndex(1)
+	chunk.Column(0).AppendFloatValues([]float64{1.1, 2.2})
+	chunk.Column(0).AppendColumnTimes([]int64{1, 1})
+	chunk.Column(0).AppendManyNotNil(2)
+	return chunk
+}
+
+func BuildBinOpResult17() executor.Chunk {
+	rowDataType := buildPromBinOpOutputRowDataType()
+	b := executor.NewChunkBuilder(rowDataType)
+	chunk := b.NewChunk("m1")
+	chunk.AppendTimes([]int64{1})
+	chunk.AddTagAndIndex(executor.ChunkTags{}, 0)
+	chunk.AddIntervalIndex(0)
+	chunk.Column(0).AppendFloatValues([]float64{1})
+	chunk.Column(0).AppendColumnTimes([]int64{1})
+	chunk.Column(0).AppendManyNotNil(1)
+	return chunk
 }
 
 func buildPromBinOpOutputRowDataType() hybridqp.RowDataType {
@@ -855,7 +919,7 @@ func PromBinOpTransformSingleInputTestBase(t *testing.T, chunks1 []executor.Chun
 	inRowDataTypes = append(inRowDataTypes, source1.Output.RowDataType)
 	outRowDataType := buildPromBinOpOutputRowDataType()
 	schema := buildPromBinOpSchema()
-	trans, err := executor.NewBinOpTransform(inRowDataTypes, outRowDataType, schema, para)
+	trans, err := executor.NewBinOpTransform(inRowDataTypes, outRowDataType, schema, para, nil, nil)
 	if err != nil {
 		panic("")
 	}
@@ -944,4 +1008,96 @@ func TestPromBinOpTransform32(t *testing.T) {
 	chunk1 = BuildBinOpInChunk13()
 	chunk2 = BuildBinOpInChunk12()
 	PromBinOpTransformTestBase(t, []executor.Chunk{chunk1}, []executor.Chunk{chunk2}, para, BuildBinOpResult15()[0])
+}
+
+// test mod op
+func TestPromBinOpTransform33(t *testing.T) {
+	chunk1 := BuildBinOpInChunk14()
+	chunk2 := BuildBinOpInChunk15()
+	para := &influxql.BinOp{
+		OpType:    parser.MOD,
+		MatchCard: influxql.OneToOne,
+	}
+	PromBinOpTransformTestBase(t, []executor.Chunk{chunk1}, []executor.Chunk{chunk2}, para, BuildBinOpResult16()[0])
+}
+
+func PromBinOpTransformSingleInputTestBase1(t *testing.T, chunks1 []executor.Chunk, para *influxql.BinOp, rChunk executor.Chunk, lExpr, rExpr influxql.Expr) {
+	source1 := NewSourceFromMultiChunk(chunks1[0].RowDataType(), chunks1)
+	var inRowDataTypes []hybridqp.RowDataType
+	inRowDataTypes = append(inRowDataTypes, source1.Output.RowDataType)
+	outRowDataType := buildPromBinOpOutputRowDataType()
+	schema := buildPromBinOpSchema()
+	trans, err := executor.NewBinOpTransform(inRowDataTypes, outRowDataType, schema, para, lExpr, rExpr)
+	if err != nil {
+		panic("")
+	}
+	checkResult := func(chunk executor.Chunk) error {
+		PromResultCompareMultiCol(chunk, rChunk, t)
+		return nil
+	}
+	sink := NewSinkFromFunction(outRowDataType, checkResult)
+	executor.Connect(source1.Output, trans.GetInputs()[0])
+	executor.Connect(trans.GetOutputs()[0], sink.Input)
+	var processors executor.Processors
+	processors = append(processors, source1)
+	processors = append(processors, trans)
+	processors = append(processors, sink)
+	executors := executor.NewPipelineExecutor(processors)
+	executors.Execute(context.Background())
+	executors.Release()
+}
+
+// mst AND vector(1)
+func TestPromBinOpTransform34(t *testing.T) {
+	chunk1 := BuildBinOpInChunk17()
+	para := &influxql.BinOp{
+		OpType:    parser.LAND,
+		On:        true,
+		MatchKeys: []string{"tk3"},
+		MatchCard: influxql.OneToOne,
+		RExpr:     &influxql.Call{Name: "vector_prom", Args: []influxql.Expr{&influxql.NumberLiteral{Val: 1}}},
+	}
+	PromBinOpTransformSingleInputTestBase1(t, []executor.Chunk{chunk1}, para, BuildBinOpInChunk17(), nil, para.RExpr)
+}
+
+// vector(1) AND mst
+func TestPromBinOpTransform35(t *testing.T) {
+	chunk1 := BuildBinOpInChunk17()
+	para := &influxql.BinOp{
+		OpType:    parser.LAND,
+		On:        true,
+		MatchKeys: []string{"tk3"},
+		MatchCard: influxql.OneToOne,
+		LExpr:     &influxql.Call{Name: "vector_prom", Args: []influxql.Expr{&influxql.NumberLiteral{Val: 1}}},
+	}
+	PromBinOpTransformSingleInputTestBase1(t, []executor.Chunk{chunk1}, para, BuildBinOpResult17(), para.LExpr, nil)
+}
+
+// mst AND vector(1)
+func TestPromBinOpTransform36(t *testing.T) {
+	chunk1 := BuildBinOpInChunk17()
+	para := &influxql.BinOp{
+		OpType:    parser.LUNLESS,
+		On:        true,
+		MatchKeys: []string{"tk3"},
+		MatchCard: influxql.OneToOne,
+		RExpr:     &influxql.Call{Name: "vector_prom", Args: []influxql.Expr{&influxql.NumberLiteral{Val: 1}}},
+	}
+	PromBinOpTransformSingleInputTestBase1(t, []executor.Chunk{chunk1}, para, nil, nil, para.RExpr)
+}
+
+func TestPromBinOpTransform37(t *testing.T) {
+	para := &influxql.BinOp{
+		OpType:    parser.LOR,
+		On:        true,
+		MatchKeys: []string{"tk3"},
+		MatchCard: influxql.OneToOne,
+		RExpr:     &influxql.Call{Name: "vector_prom", Args: []influxql.Expr{&influxql.NumberLiteral{Val: 1}}},
+	}
+	rowDataType := buildPromBinOpOutputRowDataType()
+	var inRowDataTypes []hybridqp.RowDataType
+	inRowDataTypes = append(inRowDataTypes, rowDataType)
+	schema := buildPromBinOpSchema()
+	_, err := executor.NewBinOpTransform(inRowDataTypes, rowDataType, schema, para, nil, para.RExpr)
+	assert.Equal(t, err.Error(), "unsupported")
 }

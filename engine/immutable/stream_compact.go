@@ -17,6 +17,7 @@ package immutable
 import (
 	"container/heap"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -175,7 +176,6 @@ type StreamIterators struct {
 	fileSize   int64
 
 	encChunkMeta      []byte
-	chunkMetaBlocks   [][]byte
 	encChunkIndexMeta []byte
 	encIdTime         []byte
 	crc               uint32
@@ -199,7 +199,8 @@ type StreamIterators struct {
 
 	maxTime int64
 
-	events *Events
+	events            *Events
+	chunkMetaCodecCtx *ChunkMetaCodecCtx
 }
 
 func (c *StreamIterators) InitEvents(level uint16) *Events {
@@ -271,6 +272,11 @@ func (c *StreamIterators) Close() {
 	c.resetSchemaMap()
 	c.fileSize = 0
 	c.colBuilder.resetPreAgg()
+
+	if c.chunkMetaCodecCtx != nil {
+		c.chunkMetaCodecCtx.Release()
+		c.chunkMetaCodecCtx = nil
+	}
 	putStreamIterators(c)
 }
 
@@ -386,31 +392,14 @@ func (m *MmsTables) NewStreamIterators(group FilesInfo) *StreamIterators {
 	compItrs.estimateSize = group.estimateSize
 	compItrs.chunkRows = 0
 	compItrs.maxChunkRows = 0
-	compItrs.tier = *m.tier
+	compItrs.tier = FilesMergedTire(group.oldFiles)
 
 	heap.Init(compItrs)
 
+	if IsChunkMetaCompressSelf() {
+		compItrs.chunkMetaCodecCtx = GetChunkMetaCodecCtx()
+	}
 	return compItrs
-}
-
-func (c *StreamIterators) cacheMetaInMemory() bool {
-	if c.tier == util.Hot {
-		return c.Conf.cacheMetaData
-	} else if c.tier == util.Warm {
-		return false
-	}
-
-	return c.Conf.cacheMetaData
-}
-
-func (c *StreamIterators) cacheDataInMemory() bool {
-	if c.tier == util.Hot {
-		return c.Conf.cacheDataBlock
-	} else if c.tier == util.Warm {
-		return false
-	}
-
-	return c.Conf.cacheDataBlock
 }
 
 func (c *StreamIterators) reset() {
@@ -433,11 +422,6 @@ func (c *StreamIterators) NewFile(addFileExt bool) error {
 	}
 	c.reset()
 	c.trailer.name = append(c.trailer.name[:0], influx.GetOriginMstName(c.name)...)
-	c.inMemBlock = emptyMemReader
-	if c.cacheDataInMemory() || c.cacheMetaInMemory() {
-		idx := calcBlockIndex(c.estimateSize)
-		c.inMemBlock = NewMemoryReader(blockSize[idx])
-	}
 
 	lock := fileops.FileLockOption(*c.lock)
 	pri := fileops.FilePriorityOption(fileops.IO_PRIORITY_NORMAL)
@@ -453,7 +437,7 @@ func (c *StreamIterators) NewFile(addFileExt bool) error {
 	if c.tier == util.Cold {
 		c.fd, err = fileops.CreateV2(filePath, lock, pri)
 	} else {
-		c.fd, err = fileops.OpenFile(filePath, os.O_CREATE|os.O_RDWR, 0640, lock, pri)
+		c.fd, err = fileops.OpenFile(filePath, os.O_CREATE|os.O_RDWR, 0600, lock, pri)
 	}
 	if err != nil {
 		log.Error("create file fail", zap.String("name", filePath), zap.Error(err))
@@ -461,10 +445,10 @@ func (c *StreamIterators) NewFile(addFileExt bool) error {
 	}
 
 	limit := c.fileName.level > 0
-	if c.cacheMetaInMemory() {
-		c.writer = newTsspFileWriter(c.fd, true, limit, c.lock)
-	} else {
-		c.writer = newTsspFileWriter(c.fd, false, limit, c.lock)
+
+	c.writer = newTsspFileWriter(c.fd, false, limit, c.lock)
+	if util.IsHot(c.tier) {
+		c.writer = NewHotFileWriter(c.writer)
 	}
 
 	var buf [16]byte
@@ -474,10 +458,6 @@ func (c *StreamIterators) NewFile(addFileExt bool) error {
 	if err != nil {
 		log.Error("write file fail", zap.String("name", filePath), zap.Error(err))
 		return err
-	}
-
-	if c.cacheDataInMemory() {
-		c.inMemBlock.AppendDataBlock(b)
 	}
 
 	c.version = version
@@ -534,7 +514,7 @@ func (c *StreamIterators) writeMetaToDisk() error {
 	c.updateChunkStat(cm.sid, maxT)
 	c.keys[cm.sid] = struct{}{}
 
-	cm.validation()
+	cm.Validation()
 
 	_, err := c.WriteChunkMeta(cm)
 	if err != nil {
@@ -595,7 +575,12 @@ func (c *StreamIterators) SwitchChunkMeta() error {
 }
 
 func (c *StreamIterators) WriteChunkMeta(cm *ChunkMeta) (int, error) {
-	c.encChunkMeta = cm.marshal(c.encChunkMeta[:0])
+	buf, err := MarshalChunkMeta(c.chunkMetaCodecCtx, cm, c.encChunkMeta[:0])
+	if err != nil {
+		return 0, err
+	}
+
+	c.encChunkMeta = buf
 	c.cmOffset = append(c.cmOffset, uint32(c.currentCMOffset))
 	c.currentCMOffset += len(c.encChunkMeta)
 
@@ -630,7 +615,7 @@ func (c *StreamIterators) removeEmptyFile() {
 
 func (c *StreamIterators) NewTSSPFile(tmp bool) (TSSPFile, error) {
 	if err := c.Flush(); err != nil {
-		if err == errEmptyFile {
+		if errors.Is(err, errEmptyFile) {
 			return nil, nil
 		}
 		c.log.Error("flush error", zap.String("name", c.fd.Name()), zap.Error(err))
@@ -649,19 +634,19 @@ func (c *StreamIterators) NewTSSPFile(tmp bool) (TSSPFile, error) {
 		dr.avgChunkRows = 1
 	}
 
-	size := dr.InMemSize()
-	if c.fileName.order {
-		addMemSize(levelName(c.fileName.level), size, size, 0)
-	} else {
-		addMemSize(levelName(c.fileName.level), size, 0, size)
-	}
-
-	return &tsspFile{
+	f := &tsspFile{
 		name:   c.fileName,
 		reader: dr,
 		ref:    1,
 		lock:   c.lock,
-	}, nil
+	}
+	hotWriter, hot := c.writer.(*HotFileWriter)
+	if hot {
+		dr.ApplyHotReader(hotWriter.BuildHotFileReader(dr.GetBasicFileReader()))
+		hotWriter.Release()
+	}
+	c.writer = nil
+	return f, nil
 }
 
 func (c *StreamIterators) genBloomFilter() {
@@ -704,10 +689,6 @@ func (c *StreamIterators) Flush() error {
 		c.log.Error("copy chunk meta fail", zap.String("name", c.fd.Name()), zap.Error(err))
 		return err
 	}
-	if c.cacheMetaInMemory() {
-		c.chunkMetaBlocks = c.writer.MetaDataBlocks(c.chunkMetaBlocks[:0])
-		c.inMemBlock.SetMetaBlocks(c.chunkMetaBlocks)
-	}
 
 	miOff := c.writer.DataSize()
 	for i := range c.metaIndexItems {
@@ -730,14 +711,16 @@ func (c *StreamIterators) Flush() error {
 		return err
 	}
 
-	c.encIdTime = c.pair.Marshal(c.fileName.order, c.encIdTime[:0], c.colBuilder.coder)
+	c.encIdTime = c.pair.Marshal(true, c.encIdTime[:0], c.colBuilder.coder)
 	c.trailer.idTimeSize = int64(len(c.encIdTime))
 	if _, err := c.writer.WriteData(c.encIdTime); err != nil {
 		c.log.Error("write id time data fail", zap.String("name", c.fd.Name()), zap.Error(err))
 		return err
 	}
+	c.trailer.EnableTimeStore()
+	c.trailer.SetChunkMetaHeader(c.chunkMetaCodecCtx.GetHeader())
 	c.trailer.SetChunkMetaCompressFlag()
-	c.trailerData = c.trailer.marshal(c.trailerData[:0])
+	c.trailerData = c.trailer.Marshal(c.trailerData[:0])
 
 	trailerOffset := c.writer.DataSize()
 	if _, err := c.writer.WriteData(c.trailerData); err != nil {
@@ -756,7 +739,6 @@ func (c *StreamIterators) Flush() error {
 	if err := c.writer.Close(); err != nil {
 		c.log.Error("close file fail", zap.String("name", c.fd.Name()), zap.Error(err))
 	}
-	c.writer = nil
 
 	return nil
 }
@@ -905,10 +887,6 @@ func (c *StreamIterators) writeLastSegment(segmentN int, ref record.Field, id ui
 func (c *StreamIterators) writeCrc(crc []byte) error {
 	if _, err := c.writer.WriteData(crc[:]); err != nil {
 		return err
-	}
-
-	if c.cacheDataInMemory() {
-		c.inMemBlock.AppendDataBlock(crc)
 	}
 
 	return nil
@@ -1139,10 +1117,6 @@ func (c *StreamIterators) writeSegment(id uint64, ref record.Field, needCalPreAg
 	if err != nil || wn != len(c.colBuilder.data) {
 		c.log.Error("write data segment fail", zap.String("file", c.fd.Name()), zap.Error(err))
 		return err
-	}
-
-	if c.cacheDataInMemory() {
-		c.inMemBlock.AppendDataBlock(c.colBuilder.data)
 	}
 
 	if splitCol {

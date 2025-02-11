@@ -103,7 +103,7 @@ func (storage *tsstoreImpl) WriteIndex(s *shard, rowsPointer *influx.Rows, mw *m
 			continue
 		}
 
-		ri := cloneRowToDict(mmPoints, mw, &rows[i])
+		ri := cloneRowToDict(mmPoints, mw, &rows[i], len(rows))
 		if ri.Timestamp > tm {
 			tm = ri.Timestamp
 		}
@@ -128,6 +128,7 @@ func (storage *tsstoreImpl) WriteIndex(s *shard, rowsPointer *influx.Rows, mw *m
 	}
 
 	s.setMaxTime(tm)
+	mw.maxTime = tm
 
 	failpoint.Inject("SlowDownCreateIndex", nil)
 	if writeIndexRequired {
@@ -208,7 +209,7 @@ func (storage *tsstoreImpl) writeSnapshot(s *shard) {
 	s.commitSnapshot(s.snapshotTbl)
 	nodeMutableLimit.freeResource(curSize)
 
-	err = s.wal.Remove(walFiles)
+	err = RemoveWalFiles(walFiles)
 	if err != nil {
 		panic("wal remove files failed: " + err.Error())
 	}
@@ -243,8 +244,15 @@ func (storage *tsstoreImpl) getAllFiles(s *shard, mstName string) ([]immutable.T
 	}
 
 	var err error
-	allFiles := make([]immutable.TSSPFile, 0, orderTsspFiles.Len())
-	coldTmpFilesPath := make([]string, 0, orderTsspFiles.Len())
+	var initLen int
+	if existOrderFiles {
+		initLen += orderTsspFiles.Len()
+	}
+	if existOutOfOrderFiles {
+		initLen += outOfOrderTsspFiles.Len()
+	}
+	allFiles := make([]immutable.TSSPFile, 0, initLen)
+	coldTmpFilesPath := make([]string, 0, initLen)
 	if existOrderFiles {
 		orderTsspFiles.RLock()
 		allFiles, coldTmpFilesPath, err = genAllFiles(s, orderTsspFiles.Files(), allFiles, coldTmpFilesPath)

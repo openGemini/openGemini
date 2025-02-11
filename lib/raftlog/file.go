@@ -20,16 +20,30 @@ import (
 	"bufio"
 	"encoding/binary"
 	"io"
+	"strings"
+	"sync"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/cockroachdb/errors"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/fileops"
+	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/pool"
+	"go.uber.org/zap"
 )
 
 const unit32Size = 4 // the byte size of unit32
 const unit64Size = 8 // the byte size of unit64
 
 var NewFile = errors.New("Create a new file")
+
+var cache *FileWrapCache = NewCache()
+
+var fileWrapPool *pool.UnionPool[FileWrap]
+
+func init() {
+	fileWrapPool = pool.NewUnionPool[FileWrap](config.FileWrapSize, 0, 0, NewNilFileWrap)
+}
 
 type FileWrapper interface {
 	Name() string
@@ -44,20 +58,60 @@ type FileWrapper interface {
 	TrySync() error
 	Delete() error
 	Close() error
+	setCurrent()
+	rotateCurrent()
 }
 
 // FileWrap represents a file and includes both the buffer to the data
 // and the file descriptor.
 type FileWrap struct {
-	fd   fileops.File
-	data []byte
+	fd      fileops.File
+	data    []byte
+	current bool
+	mu      sync.RWMutex
+}
+
+func NewNilFileWrap() *FileWrap {
+	return nil
+}
+
+func NewFileWrap(size int) *FileWrap {
+	return &FileWrap{data: make([]byte, size)}
+}
+
+func (fw *FileWrap) reset() {
+	fw.data = fw.data[:0]
+	fw.current = false
+	fw.fd = nil
+}
+
+func (fw *FileWrap) reSize(size int) {
+	if cap(fw.data) < size {
+		fw.data = append(fw.data[:cap(fw.data)], make([]byte, size-cap(fw.data))...)
+	}
+	fw.data = fw.data[:size]
+}
+
+func (fw *FileWrap) setCurrent() {
+	fw.current = false
+	content, err := fw.getContent()
+	if err != nil {
+		logger.GetLogger().Error("get content error ", zap.String("fw name", fw.Name()), zap.Error(err))
+	}
+	fw.current = true
+	fw.data = content
+}
+
+func (fw *FileWrap) rotateCurrent() {
+	fw.current = false
+	cache.cache.Add(fw.Name(), fw.data)
 }
 
 // OpenFile opens an existing file or creates a new file. If the file is
 // created, it would truncate the file to maxSz. In case the file is created, z.NewFile is
 // returned.
 func OpenFile(fpath string, flag int, maxSz int) (FileWrapper, error) {
-	fd, err := fileops.OpenFile(fpath, flag, 0640, fileops.FilePriorityOption(fileops.IO_PRIORITY_NORMAL))
+	fd, err := fileops.OpenFile(fpath, flag, 0600, fileops.FilePriorityOption(fileops.IO_PRIORITY_NORMAL))
 	if err != nil {
 		return nil, errors.Wrapf(err, "unable to open: %s", fpath)
 	}
@@ -68,8 +122,18 @@ func OpenFile(fpath string, flag int, maxSz int) (FileWrapper, error) {
 		return nil, errors.Wrapf(err, "cannot stat file: %s", filename)
 	}
 
-	fw := &FileWrap{
-		fd: fd,
+	var fw *FileWrap
+	if strings.HasSuffix(fpath, metaName) {
+		fw = &FileWrap{
+			fd: fd,
+		}
+	} else {
+		fw = fileWrapPool.Get()
+		if fw == nil {
+			fw = NewFileWrap(int(fi.Size()))
+		}
+		fw.reSize(int(fi.Size()))
+		fw.fd = fd
 	}
 
 	var rerr error
@@ -86,13 +150,53 @@ func OpenFile(fpath string, flag int, maxSz int) (FileWrapper, error) {
 		rerr = NewFile
 	} else {
 		reader := bufio.NewReader(fd)
-		content, err := io.ReadAll(reader)
-		if err != nil {
-			return nil, errors.Wrapf(err, "error while reading file:%s", fw.Name())
+		if strings.HasSuffix(fpath, metaName) {
+			content, err := io.ReadAll(reader)
+			if err != nil {
+				return nil, errors.Wrapf(err, "error while reading meta file:%s", fw.Name())
+			}
+			fw.data = content
+		} else {
+			n, err := io.ReadFull(reader, fw.data)
+			if err != nil || n != len(fw.data) {
+				return nil, errors.Wrapf(err, "error while reading raftlog file:%s, n:%d len(fw.data):%d", fw.Name(), n, len(fw.data))
+			}
+			cache.cache.Add(fw.Name(), fw.data)
 		}
-		fw.data = content
 	}
 	return fw, rerr
+}
+
+func (fw *FileWrap) getContent() ([]byte, error) {
+	// first judge is current log file
+	if fw.current || fw.isMetaFile() {
+		return fw.data, nil
+	}
+	// get content from cache
+	content, ok := cache.cache.Get(fw.Name())
+	if ok && len(content) != 0 {
+		return content, nil
+	}
+	fw.mu.RLock()
+	defer fw.mu.RUnlock()
+	// read from file begin
+	_, err := fw.fd.Seek(0, io.SeekStart)
+	if err != nil {
+		logger.GetLogger().Error("file seek error ", zap.String("fw name", fw.Name()), zap.Error(err))
+	}
+	// read file to get content
+	reader := bufio.NewReader(fw.fd)
+	size, err := fw.fd.Size()
+	if err != nil {
+		return nil, errors.Wrapf(err, "cannot get size of file: %s", fw.fd.Name())
+	}
+	fw.reSize(int(size))
+	n, err := io.ReadFull(reader, fw.data)
+	if err != nil || n != len(fw.data) {
+		return nil, errors.Wrapf(err, "error while reading raftlog file:%s, n:%d len(fw.data):%d", fw.Name(), n, len(fw.data))
+	}
+	cache.cache.Add(fw.Name(), fw.data)
+	return fw.data, nil
 }
 
 func (fw *FileWrap) Name() string {
@@ -102,25 +206,47 @@ func (fw *FileWrap) Name() string {
 	return fw.fd.Name()
 }
 
+func (fw *FileWrap) isMetaFile() bool {
+	return strings.HasSuffix(fw.Name(), metaName)
+}
+
 func (fw *FileWrap) Size() int {
-	return len(fw.data)
+	content, err := fw.getContent()
+	if err != nil {
+		logger.GetLogger().Error("get content error ", zap.String("fw name", fw.Name()), zap.Error(err))
+	}
+	return len(content)
 }
 
 // GetEntryData returns entry data
 func (fw *FileWrap) GetEntryData(start, end int) []byte {
-	return fw.data[start:end]
+	content, err := fw.getContent()
+	if err != nil {
+		logger.GetLogger().Error("get content error ", zap.String("fw name", fw.Name()), zap.Error(err))
+	}
+	return content[start:end]
 }
 
 func (fw *FileWrap) Write(dat []byte) (int, error) {
+	fw.mu.Lock()
+	defer fw.mu.Unlock()
 	n, err := fw.fd.Write(dat)
 	if err != nil {
 		return 0, errors.Wrapf(err, "write failed:%s", fw.Name())
 	}
-	fw.data = append(fw.data, dat...)
+
+	if fw.current || fw.isMetaFile() {
+		fw.data = append(fw.data, dat...)
+	} else {
+		// try to clean cache
+		cache.cache.Remove(fw.Name())
+	}
 	return n, err
 }
 
 func (fw *FileWrap) WriteAt(offset int64, dat []byte) (int, error) {
+	fw.mu.Lock()
+	defer fw.mu.Unlock()
 	_, err := fw.fd.Seek(offset, 0)
 	if err != nil {
 		return 0, errors.Wrapf(err, "seek unreachable file:%s", fw.Name())
@@ -129,12 +255,19 @@ func (fw *FileWrap) WriteAt(offset int64, dat []byte) (int, error) {
 	if err != nil {
 		return 0, errors.Wrapf(err, "write failed for file:%s", fw.Name())
 	}
-	copy(fw.data[offset:], dat)
+	if fw.current || fw.isMetaFile() {
+		copy(fw.data[offset:], dat)
+	} else {
+		// try to clean cache
+		cache.cache.Remove(fw.Name())
+	}
 	_, err = fw.fd.Seek(0, io.SeekEnd)
 	return n, errors.Wrapf(err, "seek unreachable file:%s", fw.Name())
 }
 
 func (fw *FileWrap) WriteSlice(offset int64, dat []byte) error {
+	fw.mu.Lock()
+	defer fw.mu.Unlock()
 	_, err := fw.fd.Seek(offset, 0)
 	if err != nil {
 		return errors.Wrapf(err, "seek unreachable file:%s", fw.Name())
@@ -150,29 +283,43 @@ func (fw *FileWrap) WriteSlice(offset int64, dat []byte) error {
 		return errors.Wrapf(err, "write failed for file:%s", fw.Name())
 	}
 	_, err = fw.fd.Seek(0, io.SeekEnd)
-
-	if int(offset)+unit32Size+len(dat) >= len(fw.data) {
-		fw.data = append(fw.data, make([]byte, int(offset)-len(fw.data)+unit32Size+len(dat))...)
+	if fw.current || fw.isMetaFile() {
+		if int(offset)+unit32Size+len(dat) >= len(fw.data) {
+			fw.reSize(int(offset) + unit32Size + len(dat))
+		}
+		dst := fw.data[offset:]
+		binary.BigEndian.PutUint32(dst[:unit32Size], uint32(len(dat))) // size
+		copy(dst[unit32Size:], dat)                                    // data
+	} else {
+		// try to clean cache
+		cache.cache.Remove(fw.Name())
 	}
-	dst := fw.data[offset:]
-	binary.BigEndian.PutUint32(dst[:unit32Size], uint32(len(dat))) // size
-	copy(dst[unit32Size:], dat)                                    // data
 
 	return errors.Wrapf(err, "seek unreachable file:%s", fw.Name())
 }
 
 func (fw *FileWrap) ReadSlice(offset int64) []byte {
-	sz := encoding.UnmarshalUint32(fw.data[offset:])
-	start := offset + unit32Size
-	next := int(start) + int(sz)
-	if next > len(fw.data) {
+	content, err := fw.getContent()
+	if err != nil {
+		logger.GetLogger().Error("get content error ", zap.String("fw name", fw.Name()), zap.Error(err))
 		return []byte{}
 	}
-	return fw.data[start:next]
+
+	sz := encoding.UnmarshalUint32(content[offset:])
+	start := offset + unit32Size
+	next := int(start) + int(sz)
+	if next > len(content) {
+		return []byte{}
+	}
+	return content[start:next]
 }
 
 func (fw *FileWrap) SliceSize(offset int) int {
-	sz := encoding.UnmarshalUint32(fw.data[offset:])
+	content, err := fw.getContent()
+	if err != nil {
+		logger.GetLogger().Error("get content error ", zap.String("fw name", fw.Name()), zap.Error(err))
+	}
+	sz := encoding.UnmarshalUint32(content[offset:])
 	return unit32Size + int(sz)
 }
 
@@ -181,27 +328,40 @@ func (fw *FileWrap) Truncate(size int64) error {
 }
 
 func (fw *FileWrap) Delete() error {
+	cache.cache.Remove(fw.Name())
 	// Badger can set the m.Data directly, without setting any Fd. In that case, this should be a
 	// NOOP.
 	if fw.fd == nil {
 		return nil
 	}
 
-	fw.data = nil
 	if err := fw.fd.Close(); err != nil {
 		return errors.Wrapf(err, "while close file:%s", fw.Name())
 	}
-	return fileops.Remove(fw.fd.Name())
+	if err := fileops.Remove(fw.fd.Name()); err != nil {
+		return errors.Wrapf(err, "while remove file:%s", fw.Name())
+	}
+	fw.reset()
+	fileWrapPool.Put(fw)
+	return nil
 }
 
 func (fw *FileWrap) Close() error {
 	if err := fw.TrySync(); err != nil {
 		return errors.Wrapf(err, "sync error:%s", fw.Name())
 	}
-	return fw.fd.Close()
+	cache.cache.Remove(fw.Name())
+	if err := fw.fd.Close(); err != nil {
+		return errors.Wrapf(err, "fw close error:%s", fw.Name())
+	}
+	fw.reset()
+	fileWrapPool.Put(fw)
+	return nil
 }
 
 func (fw *FileWrap) TrySync() error {
+	fw.mu.Lock()
+	defer fw.mu.Unlock()
 	if fw.fd == nil {
 		return nil
 	}

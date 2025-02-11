@@ -42,54 +42,55 @@ const (
 
 // Config represents a configuration for a HTTP service.
 type Config struct {
-	BindAddress             string         `toml:"bind-address"`
-	FlightAddress           string         `toml:"flight-address"`
-	FlightEnabled           bool           `toml:"flight-enabled"`
-	FlightAuthEnabled       bool           `toml:"flight-auth-enabled"`
-	FlightChFactor          int            `toml:"flight-ch-factor"`
-	Domain                  string         `toml:"domain"`
-	AuthEnabled             bool           `toml:"auth-enabled"`
-	WeakPwdPath             string         `toml:"weakpwd-path"`
-	LogEnabled              bool           `toml:"log-enabled"`
-	SuppressWriteLog        bool           `toml:"suppress-write-log"`
-	WriteTracing            bool           `toml:"write-tracing"`
-	FluxEnabled             bool           `toml:"flux-enabled"`
-	FluxLogEnabled          bool           `toml:"flux-log-enabled"`
-	PprofEnabled            bool           `toml:"pprof-enabled"`
-	DebugPprofEnabled       bool           `toml:"debug-pprof-enabled"`
-	HTTPSEnabled            bool           `toml:"https-enabled"`
-	HTTPSCertificate        string         `toml:"https-certificate"`
-	HTTPSPrivateKey         string         `toml:"https-private-key"`
-	MaxRowLimit             int            `toml:"max-row-limit"`
-	MaxRowSizeLimit         int            `toml:"max-row-size-limit"`
-	MaxConnectionLimit      int            `toml:"max-connection-limit"`
-	SharedSecret            string         `toml:"shared-secret"`
-	Realm                   string         `toml:"realm"`
-	UnixSocketEnabled       bool           `toml:"unix-socket-enabled"`
-	UnixSocketGroup         *toml.Group    `toml:"unix-socket-group"`
-	UnixSocketPermissions   toml.FileMode  `toml:"unix-socket-permissions"`
-	BindSocket              string         `toml:"bind-socket"`
-	MaxBodySize             int            `toml:"max-body-size"`
-	AccessLogPath           string         `toml:"access-log-path"`
-	AccessLogStatusFilters  []StatusFilter `toml:"access-log-status-filters"`
-	MaxConcurrentWriteLimit int            `toml:"max-concurrent-write-limit"`
-	MaxEnqueuedWriteLimit   int            `toml:"max-enqueued-write-limit"`
-	EnqueuedWriteTimeout    toml.Duration  `toml:"enqueued-write-timeout"`
-	MaxConcurrentQueryLimit int            `toml:"max-concurrent-query-limit"`
-	MaxEnqueuedQueryLimit   int            `toml:"max-enqueued-query-limit"`
-	QueryRequestRateLimit   int            `toml:"query-request-ratelimit"`
-	WriteRequestRateLimit   int            `toml:"write-request-ratelimit"`
-	EnqueuedQueryTimeout    toml.Duration  `toml:"enqueued-query-timeout"`
-	TLS                     *tls.Config    `toml:"-"`
-	WhiteList               string         `toml:"white_list"`
-	SlowQueryTime           toml.Duration  `toml:"slow-query-time"`
-	ParallelQueryInBatch    bool           `toml:"parallel-query-in-batch-enabled"`
-	QueryMemoryLimitEnabled bool           `toml:"query-memory-limit-enabled"`
-	ChunkReaderParallel     int            `toml:"chunk-reader-parallel"`
-	ReadBlockSize           toml.Size      `toml:"read-block-size"`
-	TimeFilterProtection    bool           `toml:"time-filter-protection"`
-	CPUThreshold            int            `toml:"cpu-threshold"`
-	MaxLineSize             int            `toml:"max-line-size"`
+	BindAddress             string            `toml:"bind-address"`
+	FlightAddress           string            `toml:"flight-address"`
+	FlightEnabled           bool              `toml:"flight-enabled"`
+	FlightAuthEnabled       bool              `toml:"flight-auth-enabled"`
+	FlightChFactor          int               `toml:"flight-ch-factor"`
+	Domain                  string            `toml:"domain"`
+	AuthEnabled             bool              `toml:"auth-enabled"`
+	WeakPwdPath             string            `toml:"weakpwd-path"`
+	LogEnabled              bool              `toml:"log-enabled"`
+	SuppressWriteLog        bool              `toml:"suppress-write-log"`
+	WriteTracing            bool              `toml:"write-tracing"`
+	FluxEnabled             bool              `toml:"flux-enabled"`
+	FluxLogEnabled          bool              `toml:"flux-log-enabled"`
+	PprofEnabled            bool              `toml:"pprof-enabled"`
+	DebugPprofEnabled       bool              `toml:"debug-pprof-enabled"`
+	HTTPSEnabled            bool              `toml:"https-enabled"`
+	HTTPSCertificate        string            `toml:"https-certificate"`
+	HTTPSPrivateKey         string            `toml:"https-private-key"`
+	MaxRowLimit             int               `toml:"max-row-limit"`
+	MaxRowSizeLimit         int               `toml:"max-row-size-limit"`
+	MaxConnectionLimit      int               `toml:"max-connection-limit"`
+	SharedSecret            string            `toml:"shared-secret"`
+	Realm                   string            `toml:"realm"`
+	UnixSocketEnabled       bool              `toml:"unix-socket-enabled"`
+	UnixSocketGroup         *toml.Group       `toml:"unix-socket-group"`
+	UnixSocketPermissions   toml.FileMode     `toml:"unix-socket-permissions"`
+	BindSocket              string            `toml:"bind-socket"`
+	MaxBodySize             int               `toml:"max-body-size"`
+	AccessLogPath           string            `toml:"access-log-path"`
+	AccessLogStatusFilters  []StatusFilter    `toml:"access-log-status-filters"`
+	MaxConcurrentWriteLimit int               `toml:"max-concurrent-write-limit"`
+	MaxEnqueuedWriteLimit   int               `toml:"max-enqueued-write-limit"`
+	EnqueuedWriteTimeout    toml.Duration     `toml:"enqueued-write-timeout"`
+	MaxConcurrentQueryLimit int               `toml:"max-concurrent-query-limit"`
+	MaxEnqueuedQueryLimit   int               `toml:"max-enqueued-query-limit"`
+	QueryRequestRateLimit   int               `toml:"query-request-ratelimit"`
+	WriteRequestRateLimit   int               `toml:"write-request-ratelimit"`
+	EnqueuedQueryTimeout    toml.Duration     `toml:"enqueued-query-timeout"`
+	TLS                     *tls.Config       `toml:"-"`
+	WhiteList               string            `toml:"white_list"`
+	SlowQueryTime           toml.Duration     `toml:"slow-query-time"`
+	ParallelQueryInBatch    bool              `toml:"parallel-query-in-batch-enabled"`
+	QueryMemoryLimitEnabled bool              `toml:"query-memory-limit-enabled"`
+	ChunkReaderParallel     int               `toml:"chunk-reader-parallel"`
+	ReadBlockSize           toml.Size         `toml:"read-block-size"`
+	TimeFilterProtection    bool              `toml:"time-filter-protection"`
+	CPUThreshold            int               `toml:"cpu-threshold"`
+	MaxLineSize             int               `toml:"max-line-size"`
+	ResultCache             ResultCacheConfig `toml:"result-cache"`
 }
 
 func CombineDomain(domain, addr string) string {
@@ -180,51 +181,57 @@ func (c Config) Validate() error {
 
 func (c *Config) ShowConfigs() map[string]interface{} {
 	return map[string]interface{}{
-		"http.bind-address":                    c.BindAddress,
-		"http.flight-address":                  c.FlightAddress,
-		"http.flight-enabled":                  c.FlightEnabled,
-		"http.flight-auth-enabled":             c.FlightAuthEnabled,
-		"http.flight-ch-factor":                c.FlightChFactor,
-		"http.domain":                          c.Domain,
-		"http.auth-enabled":                    c.AuthEnabled,
-		"http.weakpwd-path":                    c.WeakPwdPath,
-		"http.log-enabled":                     c.LogEnabled,
-		"http.suppress-write-log":              c.SuppressWriteLog,
-		"http.write-tracing":                   c.WriteTracing,
-		"http.flux-enabled":                    c.FluxEnabled,
-		"http.flux-log-enabled":                c.FluxLogEnabled,
-		"http.pprof-enabled":                   c.PprofEnabled,
-		"http.debug-pprof-enabled":             c.DebugPprofEnabled,
-		"http.https-enabled":                   c.HTTPSEnabled,
-		"http.https-certificate":               c.HTTPSCertificate,
-		"http.https-private-key":               c.HTTPSPrivateKey,
-		"http.max-row-limit":                   c.MaxRowLimit,
-		"http.max-connection-limit":            c.MaxConnectionLimit,
-		"http.shared-secret":                   c.SharedSecret,
-		"http.realm":                           c.Realm,
-		"http.unix-socket-enabled":             c.UnixSocketEnabled,
-		"http.unix-socket-group":               c.UnixSocketGroup,
-		"http.unix-socket-permissions":         c.UnixSocketPermissions,
-		"http.bind-socket":                     c.BindSocket,
-		"http.max-body-size":                   c.MaxBodySize,
-		"http.access-log-path":                 c.AccessLogPath,
-		"http.access-log-status-filters":       c.AccessLogStatusFilters,
-		"http.max-concurrent-write-limit":      c.MaxConcurrentWriteLimit,
-		"http.max-enqueued-write-limit":        c.MaxEnqueuedWriteLimit,
-		"http.enqueued-write-timeout":          c.EnqueuedWriteTimeout,
-		"http.max-concurrent-query-limit":      c.MaxConcurrentQueryLimit,
-		"http.max-enqueued-query-limit":        c.MaxEnqueuedQueryLimit,
-		"http.query-request-rate-limit":        c.QueryRequestRateLimit,
-		"http.write-request-rate-limit":        c.WriteRequestRateLimit,
-		"http.enqueued-query-timeout":          c.EnqueuedQueryTimeout,
-		"http.white_list":                      c.WhiteList,
-		"http.slow-query-time":                 c.SlowQueryTime,
-		"http.parallel-query-in-batch-enabled": c.ParallelQueryInBatch,
-		"http.query-memory-limit-enabled":      c.QueryMemoryLimitEnabled,
-		"http.chunk-reader-parallel":           c.ChunkReaderParallel,
-		"http.read-block-size":                 c.ReadBlockSize,
-		"http.time-filter-protection":          c.TimeFilterProtection,
-		"http.cpu-threshold":                   c.CPUThreshold,
+		"http.bind-address":                        c.BindAddress,
+		"http.flight-address":                      c.FlightAddress,
+		"http.flight-enabled":                      c.FlightEnabled,
+		"http.flight-auth-enabled":                 c.FlightAuthEnabled,
+		"http.flight-ch-factor":                    c.FlightChFactor,
+		"http.domain":                              c.Domain,
+		"http.auth-enabled":                        c.AuthEnabled,
+		"http.weakpwd-path":                        c.WeakPwdPath,
+		"http.log-enabled":                         c.LogEnabled,
+		"http.suppress-write-log":                  c.SuppressWriteLog,
+		"http.write-tracing":                       c.WriteTracing,
+		"http.flux-enabled":                        c.FluxEnabled,
+		"http.flux-log-enabled":                    c.FluxLogEnabled,
+		"http.pprof-enabled":                       c.PprofEnabled,
+		"http.debug-pprof-enabled":                 c.DebugPprofEnabled,
+		"http.https-enabled":                       c.HTTPSEnabled,
+		"http.https-certificate":                   c.HTTPSCertificate,
+		"http.https-private-key":                   c.HTTPSPrivateKey,
+		"http.max-row-limit":                       c.MaxRowLimit,
+		"http.max-connection-limit":                c.MaxConnectionLimit,
+		"http.shared-secret":                       c.SharedSecret,
+		"http.realm":                               c.Realm,
+		"http.unix-socket-enabled":                 c.UnixSocketEnabled,
+		"http.unix-socket-group":                   c.UnixSocketGroup,
+		"http.unix-socket-permissions":             c.UnixSocketPermissions,
+		"http.bind-socket":                         c.BindSocket,
+		"http.max-body-size":                       c.MaxBodySize,
+		"http.access-log-path":                     c.AccessLogPath,
+		"http.access-log-status-filters":           c.AccessLogStatusFilters,
+		"http.max-concurrent-write-limit":          c.MaxConcurrentWriteLimit,
+		"http.max-enqueued-write-limit":            c.MaxEnqueuedWriteLimit,
+		"http.enqueued-write-timeout":              c.EnqueuedWriteTimeout,
+		"http.max-concurrent-query-limit":          c.MaxConcurrentQueryLimit,
+		"http.max-enqueued-query-limit":            c.MaxEnqueuedQueryLimit,
+		"http.query-request-rate-limit":            c.QueryRequestRateLimit,
+		"http.write-request-rate-limit":            c.WriteRequestRateLimit,
+		"http.enqueued-query-timeout":              c.EnqueuedQueryTimeout,
+		"http.white_list":                          c.WhiteList,
+		"http.slow-query-time":                     c.SlowQueryTime,
+		"http.parallel-query-in-batch-enabled":     c.ParallelQueryInBatch,
+		"http.query-memory-limit-enabled":          c.QueryMemoryLimitEnabled,
+		"http.chunk-reader-parallel":               c.ChunkReaderParallel,
+		"http.read-block-size":                     c.ReadBlockSize,
+		"http.time-filter-protection":              c.TimeFilterProtection,
+		"http.cpu-threshold":                       c.CPUThreshold,
+		"http.result-cache.enabled":                c.ResultCache.Enabled,
+		"http.result-cache.SplitQueriesByInterval": c.ResultCache.SplitQueriesByInterval,
+		"http.result-cache.MaxCacheFreshness":      c.ResultCache.MaxCacheFreshness,
+		"http.result-cache.CacheType":              c.ResultCache.CacheType,
+		"http.result-cache.MemCacheSize":           c.ResultCache.MemCacheSize,
+		"http.result-cache.MemCacheExpiration":     c.ResultCache.MemCacheExpiration,
 	}
 }
 
@@ -317,4 +324,21 @@ func (filters StatusFilters) Match(statusCode int) bool {
 		}
 	}
 	return false
+}
+
+type ResultCacheType int8
+
+const (
+	MEM_CACHE ResultCacheType = iota
+	FILE_CACHE
+)
+
+type ResultCacheConfig struct {
+	Enabled                bool          `toml:"result-cache-enabled"`
+	SplitQueriesByInterval toml.Duration `toml:"split-queries-by-interval"`
+	// MaxCacheFreshness returns the period after which results are cacheable, to prevent caching of very recent results.
+	MaxCacheFreshness  toml.Duration   `toml:"max-cache-freshness"`
+	CacheType          ResultCacheType `toml:"cache-type"`
+	MemCacheSize       int             `toml:"memcache-size"`
+	MemCacheExpiration toml.Duration   `toml:"memcache-expiration"`
 }

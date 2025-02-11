@@ -57,6 +57,9 @@ func (fsm *storeFSM) ApplyBatch(logs []*raft.Log) []interface{} {
 		if ret[i] == nil {
 			dataChanged = true
 			fsm.data.AddCmdAsOpToOpMap(cmd, logs[i].Index)
+			if cmd.GetType() != proto2.Command_UpdateNodeTmpIndexCommand {
+				fsm.data.UpdateNodeTmpIndexCommandStart = logs[i].Index
+			}
 		}
 	}
 
@@ -96,6 +99,9 @@ func (fsm *storeFSM) Apply(l *raft.Log) interface{} {
 		return err
 	}
 	fsm.data.AddCmdAsOpToOpMap(cmd, l.Index)
+	if cmd.GetType() != proto2.Command_UpdateNodeTmpIndexCommand {
+		fsm.data.UpdateNodeTmpIndexCommandStart = l.Index
+	}
 	// signal that the data changed
 	close(s.dataChanged)
 	s.dataChanged = make(chan struct{})
@@ -165,6 +171,7 @@ var applyFunc = map[proto2.Command_Type]func(fsm *storeFSM, cmd *proto2.Command)
 	proto2.Command_UpdateMeasurementCommand:         applyUpdateMeasurement,
 	proto2.Command_UpdateNodeTmpIndexCommand:        applyUpdateNodeTmpIndexCommand,
 	proto2.Command_InsertFilesCommand:               applyInsertFilesCommand,
+	proto2.Command_UpdateMetaNodeStatusCommand:      applyUpdateMetaNodeStatus,
 }
 
 func applyCreateDatabase(fsm *storeFSM, cmd *proto2.Command) interface{} {
@@ -305,6 +312,10 @@ func applyUpdateNodeStatus(fsm *storeFSM, cmd *proto2.Command) interface{} {
 
 func applyUpdateSqlNodeStatus(fsm *storeFSM, cmd *proto2.Command) interface{} {
 	return fsm.applyUpdateSqlNodeStatusCommand(cmd)
+}
+
+func applyUpdateMetaNodeStatus(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyUpdateMetaNodeStatusCommand(cmd)
 }
 
 func applyCreateEvent(fsm *storeFSM, cmd *proto2.Command) interface{} {
@@ -714,6 +725,15 @@ func (fsm *storeFSM) applyUpdateSqlNodeStatusCommand(cmd *proto2.Command) interf
 	return fsm.data.UpdateSqlNodeStatus(v.GetID(), v.GetStatus(), v.GetLtime(), v.GetGossipAddr())
 }
 
+func (fsm *storeFSM) applyUpdateMetaNodeStatusCommand(cmd *proto2.Command) interface{} {
+	ext, _ := proto.GetExtension(cmd, proto2.E_UpdateMetaNodeStatusCommand_Command)
+	v, ok := ext.(*proto2.UpdateMetaNodeStatusCommand)
+	if !ok {
+		panic(fmt.Errorf("%s is not a UpdateMetaNodeStatusCommand", ext))
+	}
+	return fsm.data.UpdateMetaNodeStatus(v.GetID(), v.GetStatus(), v.GetLtime(), v.GetGossipAddr())
+}
+
 func (fsm *storeFSM) applyCreateEventCommand(cmd *proto2.Command) interface{} {
 	ext, _ := proto.GetExtension(cmd, proto2.E_CreateEventCommand_Command)
 	v := ext.(*proto2.CreateEventCommand)
@@ -824,7 +844,7 @@ func (fsm *storeFSM) applyRemoveNodeCommand(cmd *proto2.Command) interface{} {
 }
 
 func (fsm *storeFSM) applyUpdateReplicationCommand(cmd *proto2.Command) interface{} {
-	return meta2.ApplyUpdateReplication(fsm.data, cmd)
+	return meta2.ApplyUpdateReplication(fsm.data, cmd, ((*Store)(fsm)).TransferLeadership)
 }
 
 func (fsm *storeFSM) applyUpdateMeasurementCommand(cmd *proto2.Command) interface{} {

@@ -35,6 +35,7 @@ type injestionCtx struct {
 	mstShardIdRowMap       map[string]map[uint64]*[]*influx.Row
 
 	streamInfos           []*meta.StreamInfo
+	streamDstMstNames     map[string]*meta.StreamInfo
 	streamDBs             []*meta.DatabaseInfo
 	streamMSTs            []*meta.MeasurementInfo
 	streamShardKeyInfos   []*meta.ShardKeyInfo
@@ -199,6 +200,7 @@ func (s *injestionCtx) initStreamVar(w *PointsWriter) (err error) {
 	s.initStreamWriteHelpers(streamLen, w)
 	s.initStreamAliveShardIdxes(streamLen)
 	s.initStreamShardKeyInfos(streamLen)
+	s.streamDstMstNames = make(map[string]*meta.StreamInfo)
 
 	streamDBS := s.getStreamDBs()
 	streamMSTs := s.getStreamMSTs()
@@ -214,6 +216,8 @@ func (s *injestionCtx) initStreamVar(w *PointsWriter) (err error) {
 		if err != nil {
 			return
 		}
+
+		s.streamDstMstNames[(*streamMSTs)[i].OriginName()] = (*dstSis)[i]
 	}
 	return
 }

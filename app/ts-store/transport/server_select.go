@@ -68,6 +68,9 @@ func (s *SelectServer) register(store *storage.Storage) {
 	s.server.RegisterEHF(transport.NewEventHandlerFactory(spdy.SegregateNodeRequest,
 		handler.NewSegregateNodeProcessor(store), &netstorage.SegregateNodeRequest{}))
 
+	s.server.RegisterEHF(transport.NewEventHandlerFactory(spdy.TransferLeadershipRequest,
+		handler.NewTransferLeadershipProcessor(store), &netstorage.TransferLeadershipRequest{}))
+
 	s.server.RegisterEHF(transport.NewEventHandlerFactory(spdy.CrashRequest,
 		handler.NewCrashProcessor(), &executor.Crash{}))
 }

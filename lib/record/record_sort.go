@@ -51,18 +51,16 @@ type SortHelper struct {
 }
 
 var (
-	sortHelperPool = pool.NewFixedCachePool()
-)
-
-func NewSortHelper() *SortHelper {
-	hlp, ok := sortHelperPool.Get().(*SortHelper)
-	if !ok || hlp == nil {
-		hlp = &SortHelper{
+	sortHelperPool = pool.NewDefaultUnionPool[SortHelper](func() *SortHelper {
+		return &SortHelper{
 			aux:      &SortAux{},
 			SortData: &SortData{},
 		}
-	}
-	return hlp
+	})
+)
+
+func NewSortHelper() *SortHelper {
+	return sortHelperPool.Get()
 }
 
 func (h *SortHelper) Release() {
@@ -70,6 +68,10 @@ func (h *SortHelper) Release() {
 		h.SortData.Reset()
 	}
 	sortHelperPool.Put(h)
+}
+
+func (h *SortHelper) MemSize() int {
+	return 0
 }
 
 func (h *SortHelper) Sort(rec *Record) *Record {

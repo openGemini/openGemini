@@ -122,7 +122,7 @@ func (di DatabaseInfo) clone() *DatabaseInfo {
 }
 
 // marshal serializes to a protobuf representation.
-func (di DatabaseInfo) marshal(snapshot bool) *proto2.DatabaseInfo {
+func (di DatabaseInfo) marshal() *proto2.DatabaseInfo {
 	pb := &proto2.DatabaseInfo{}
 	pb.Name = proto.String(di.Name)
 	pb.DefaultRetentionPolicy = proto.String(di.DefaultRetentionPolicy)
@@ -130,7 +130,7 @@ func (di DatabaseInfo) marshal(snapshot bool) *proto2.DatabaseInfo {
 	pb.RetentionPolicies = make([]*proto2.RetentionPolicyInfo, len(di.RetentionPolicies))
 	i := 0
 	for _, rp := range di.RetentionPolicies {
-		pb.RetentionPolicies[i] = rp.Marshal(snapshot)
+		pb.RetentionPolicies[i] = rp.Marshal()
 		i++
 	}
 

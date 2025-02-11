@@ -91,6 +91,9 @@ var (
 )
 
 func initQueueSize() {
+	if config.GetIndexConfig().Concurrency > 0 {
+		concurrencySize = util.CeilToPower2(uint64(config.GetIndexConfig().Concurrency))
+	}
 	queueSize = concurrencySize
 	queueSizeMask = queueSize - 1
 }
@@ -267,7 +270,6 @@ type MergeSetIndex struct {
 	labelStoreQueues []chan *TagCol
 
 	bf    []*bloom.BloomFilter
-	wg    sync.WaitGroup
 	cache *IndexCache
 
 	// Deleted tsids
@@ -320,6 +322,8 @@ func (idx *MergeSetIndex) Open() error {
 	if err != nil {
 		return fmt.Errorf("check bloom filter enable error at %q: %w", tablePath, err)
 	}
+
+	once.Do(initQueueSize)
 	idx.bf, err = mergeset.OpenBloomFilter(tablePath, idx.lock, int(concurrencySize), bfEnabled)
 	if err != nil {
 		return fmt.Errorf("cannot open bloom filter at %q: %w", tablePath, err)
@@ -338,7 +342,7 @@ func (idx *MergeSetIndex) Open() error {
 	if err := idx.loadDeletedTSIDs(); err != nil {
 		return err
 	}
-	once.Do(initQueueSize)
+
 	idx.StorageIndex.initQueues(idx)
 	idx.run()
 	idx.isOpen = true
@@ -382,12 +386,13 @@ func (idx *MergeSetIndex) flushBloomFilter() {
 		return
 	}
 
+	wg := sync.WaitGroup{}
+	wg.Add(len(idx.queues))
 	for i := range idx.queues {
-		idx.wg.Add(1)
 		go func(i int) {
 			buffer := mergeset.GetIndexBuffer()
 			defer mergeset.PutIndexBuffer(buffer)
-			defer idx.wg.Done()
+			defer wg.Done()
 			b, err := idx.bf[i].WriteTo(buffer)
 			if err != nil {
 				idx.logger.Error("write mergeSet bloom filter file error", zap.Error(err))
@@ -400,7 +405,7 @@ func (idx *MergeSetIndex) flushBloomFilter() {
 			}
 		}(i)
 	}
-	idx.wg.Wait()
+	wg.Wait()
 }
 
 func (idx *MergeSetIndex) bfExist() bool {
@@ -468,6 +473,18 @@ func (idx *MergeSetIndex) putIndexSearch(is *indexSearch) {
 	is.idx = nil
 	is.tfs = is.tfs[:0]
 	indexSearchPool.Put(is)
+}
+
+func (idx *MergeSetIndex) GetSeriesIdBySeriesKeyFromCache(seriesKey []byte) (uint64, error) {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+
+	var sid uint64
+	exist, err := idx.cache.GetTSIDFromTSIDCache(&sid, seriesKey)
+	if !exist {
+		sid = 0
+	}
+	return sid, err
 }
 
 func (idx *MergeSetIndex) GetSeriesIdBySeriesKey(seriesKey []byte) (uint64, error) {
@@ -664,6 +681,25 @@ func (idx *MergeSetIndex) CreateIndexIfNotExistsByRow(row *influx.Row) (uint64, 
 
 	// original path
 	sid, err := idx.createIndexesIfNotExists(vkey.B, vname.B, row.Tags)
+	return sid, err
+}
+
+func (idx *MergeSetIndex) CreateIndexIfNotExistsBySeries(mst []byte, key []byte, tags influx.PointTags) (uint64, error) {
+	vkey := kbPool.Get()
+	defer kbPool.Put(vkey)
+	vname := kbPool.Get()
+	defer kbPool.Put(vname)
+
+	vname.B = append(vname.B[:0], mst...)
+	vkey.B = append(vkey.B[:0], key...)
+
+	if idx.indexBuilder.EnableTagArray && tags.HasTagArray() {
+		sid, err := idx.createIndexesIfNotExistsWithTagArray(vkey.B, vname.B, tags)
+		return sid, err
+	}
+
+	// original path
+	sid, err := idx.createIndexesIfNotExists(vkey.B, vname.B, tags)
 	return sid, err
 }
 
@@ -909,6 +945,36 @@ func (idx *MergeSetIndex) GetSeries(sid uint64, buf []byte, condition influxql.E
 	return nil
 }
 
+func (idx *MergeSetIndex) GetSeriesBytes(sid uint64, buf []byte, condition influxql.Expr, callback func(key *influx.SeriesBytes)) error {
+	var combineSeriesKey []byte
+	var combineKeys [][]byte
+	var isExpectSeries []bool
+	var err error
+
+	seriesBytes := &influx.SeriesBytes{}
+	combineKeys, _, isExpectSeries, err = idx.searchSeriesWithTagArray(sid, combineKeys, nil, combineSeriesKey, isExpectSeries, condition, true)
+	if err != nil {
+		idx.logger.Error("failed to get series", zap.Error(err), zap.Uint64("sid", sid))
+		return err
+	}
+
+	for j := range combineKeys {
+		if !isExpectSeries[j] {
+			continue
+		}
+		seriesBytes.Series = influx.Parse2SeriesKey(combineKeys[j], seriesBytes.Series[:0], false)
+		splits := bytes.Split(seriesBytes.Series, []byte{','})
+		if len(splits) > 0 {
+			seriesBytes.Measurement = append(seriesBytes.Measurement, splits[0]...)
+		}
+		nameWithVer := seriesBytes.Measurement
+		mstName := influx.GetOriginMstName(util.Bytes2str(nameWithVer))
+		seriesBytes.Series = bytes.Replace(seriesBytes.Series, seriesBytes.Measurement, []byte(mstName), 1)
+		callback(seriesBytes)
+	}
+	return nil
+}
+
 func (idx *MergeSetIndex) SearchSeriesIterator(span *tracing.Span, name []byte, opt *query.ProcessorOptions) (index.SeriesIDIterator, error) {
 	var search *tracing.Span
 
@@ -933,7 +999,7 @@ func (idx *MergeSetIndex) SearchSeriesIterator(span *tracing.Span, name []byte, 
 	is := idx.getIndexSearch()
 
 	is.setDeleted(idx.getDeletedTSIDs())
-	itr, err := is.measurementSeriesByExprIterator(name, opt.Condition, singleSeries, tsid)
+	itr, err := is.measurementSeriesByExprIterator(name, opt.Condition, singleSeries, tsid, opt.IsPromAbsentCall())
 	if search != nil {
 		search.Finish()
 	}
@@ -1204,7 +1270,13 @@ func (idx *MergeSetIndex) SearchSeriesWithOpts(span *tracing.Span, name []byte, 
 
 	var querySeriesUpperBound = syscontrol.GetQuerySeriesLimit()
 	if querySeriesUpperBound > 0 && int(seriesNum) > querySeriesUpperBound && !syscontrol.GetQueryEnabledWhenExceedSeries() {
-		return nil, 0, errno.NewError(errno.ErrQuerySeriesUpperBound, int(seriesNum), querySeriesUpperBound)
+		return nil, seriesNum, errno.NewError(errno.ErrQuerySeriesUpperBound, int(seriesNum), querySeriesUpperBound)
+	}
+	if querySeriesUpperBound > 0 && int(seriesNum) > querySeriesUpperBound && opt != nil && opt.GetCtx() != nil {
+		queryIndexState := opt.GetCtx().Value(indextype.QueryIndexState)
+		if queryIndexState != nil {
+			atomic.AddInt32(queryIndexState.(*int32), 1)
+		}
 	}
 
 	if indexSpan != nil {
@@ -1215,7 +1287,7 @@ func (idx *MergeSetIndex) SearchSeriesWithOpts(span *tracing.Span, name []byte, 
 	var tagSetSlice []*TagSetInfo
 	var totalSeriesKeyLen int64
 	var seriesN int
-	if opt.IsPromQuery() {
+	if opt.IsPromQuery() || opt.IsPromRemoteRead() {
 		tagSetsMap, tagSetSlice, totalSeriesKeyLen, seriesN, err = idx.SeriesGroup2MapOfProm(seriesNum, querySeriesUpperBound, itr, opt, name)
 		if err != nil {
 			return nil, seriesNum, err

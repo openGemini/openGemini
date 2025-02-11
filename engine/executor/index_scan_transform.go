@@ -63,7 +63,10 @@ type IndexScanTransform struct {
 	frags         ShardsFragments
 	schema        hybridqp.Catalog
 	indexInfo     *CSIndexInfo
+	tsIndexInfo   comm.TSIndexInfo
 	oneShardState bool
+	crossShard    bool
+	stop          bool
 }
 
 func NewIndexScanTransform(outRowDataType hybridqp.RowDataType, ops []hybridqp.ExprOptions, schema hybridqp.Catalog,
@@ -86,6 +89,7 @@ func NewIndexScanTransform(outRowDataType hybridqp.RowDataType, ops []hybridqp.E
 	}
 	closedSignal := false
 	trans.closedSignal = &closedSignal
+	trans.crossShard = trans.opt.IsPromQuery() && (info.Req != nil && len(info.Req.ShardIDs) > 1)
 	return trans
 }
 
@@ -254,6 +258,7 @@ func (trans *IndexScanTransform) sparseIndexScan() error {
 		return errors.New("the PipelineExecutor is invalid for hybridIndexScan")
 	}
 	trans.indexScanErr = false
+	trans.pipelineExecutor.Query = trans.opt.Query
 	return nil
 }
 
@@ -268,8 +273,9 @@ func (trans *IndexScanTransform) tsIndexScan() error {
 	}
 
 	info := trans.info
+
 	shardInfo := trans.info.Next()
-	if shardInfo == nil {
+	if shardInfo == nil || (trans.crossShard && trans.stop) {
 		return errors.New("nil plan")
 	}
 
@@ -287,7 +293,14 @@ func (trans *IndexScanTransform) tsIndexScan() error {
 		info.ctx = context.Background()
 	}
 	info.ctx = context.WithValue(info.ctx, hybridqp.QueryAborted, trans.closedSignal)
-	plan, err := trans.info.Store.CreateLogicPlan(info.ctx, info.Req.Database, info.Req.PtID, shardInfo.ID,
+	var shardIds []uint64
+	if !trans.crossShard {
+		shardIds = []uint64{shardInfo.ID}
+	} else {
+		shardIds = info.Req.ShardIDs
+		trans.stop = true
+	}
+	plan, err := trans.info.Store.CreateLogicPlan(info.ctx, info.Req.Database, info.Req.PtID, shardIds,
 		info.Req.Opt.Sources, subPlanSchema)
 	trans.FreeResFromAllocator()
 	defer trans.CursorsClose(plan)
@@ -297,13 +310,17 @@ func (trans *IndexScanTransform) tsIndexScan() error {
 	if plan == nil {
 		return errors.New("nil plan")
 	}
-	var keyCursors [][]interface{}
-	trans.chunkReaderNum += int64(len(plan.(*LogicalDummyShard).Readers()))
-	for _, curs := range plan.(*LogicalDummyShard).Readers() {
-		keyCursors = append(keyCursors, make([]interface{}, 0, len(curs)))
-		for _, cur := range curs {
-			keyCursors[len(keyCursors)-1] = append(keyCursors[len(keyCursors)-1], cur.(comm.KeyCursor))
-		}
+	planInfo, isOK := plan.(*LogicalDummyShard)
+	if !isOK {
+		return errors.New("invalid LogicalDummyShard")
+	}
+
+	trans.tsIndexInfo = planInfo.GetIndexInfo()
+	readers := trans.tsIndexInfo.GetCursors()
+	trans.chunkReaderNum += int64(len(readers))
+	keyCursors := make([][]interface{}, 0, len(readers))
+	for _, reader := range readers {
+		keyCursors = append(keyCursors, []interface{}{reader})
 	}
 	traits := &StoreExchangeTraits{
 		mapShardsToReaders: make(map[uint64][][]interface{}),
@@ -327,14 +344,14 @@ func (trans *IndexScanTransform) tsIndexScan() error {
 	if !ok {
 		return errors.New("the PipelineExecutor is invalid for IndexScanTransform")
 	}
-	defer func() {
-		atomic.AddInt64(&statistics.StoreQueryStat.ChunkReaderDagBuildTimeTotal, time.Since(startTime).Nanoseconds())
-	}()
 	output := trans.pipelineExecutor.root.transform.GetOutputs()
 	if len(output) > 1 {
+		atomic.AddInt64(&statistics.StoreQueryStat.ChunkReaderDagBuildTimeTotal, time.Since(startTime).Nanoseconds())
 		return errors.New("the output should be 1")
 	}
 	trans.indexScanErr = false
+	atomic.AddInt64(&statistics.StoreQueryStat.ChunkReaderDagBuildTimeTotal, time.Since(startTime).Nanoseconds())
+	trans.pipelineExecutor.Query = trans.opt.Query
 	return nil
 }
 
@@ -342,15 +359,16 @@ func (trans *IndexScanTransform) CursorsClose(plan hybridqp.QueryNode) {
 	if !trans.indexScanErr || plan == nil {
 		return
 	}
-	keyCursors := plan.(*LogicalDummyShard).Readers()
-	if len(keyCursors) > 0 {
-		for _, keyCursor := range keyCursors {
-			for _, cursor := range keyCursor {
-				if err := cursor.(comm.KeyCursor).Close(); err != nil {
-					// do not return err here, since no receiver will handle this error
-					log.Error("indexscantransform close cursor failed,", zap.Error(err))
-				}
-			}
+	planInfo, ok := plan.(*LogicalDummyShard)
+	if !ok || planInfo == nil || planInfo.GetIndexInfo() == nil {
+		return
+	}
+	indexInfo := planInfo.GetIndexInfo()
+	keyCursors := indexInfo.GetCursors()
+	for _, keyCursor := range keyCursors {
+		if err := keyCursor.Close(); err != nil {
+			// do not return err here, because no receiver will handle this error
+			log.Error("IndexScanTransform close cursor failed,", zap.Error(err))
 		}
 	}
 }
@@ -414,6 +432,9 @@ func (trans *IndexScanTransform) Release() error {
 				files[i].UnrefFileReader()
 				files[i].Unref()
 			}
+		}
+		if trans.tsIndexInfo != nil {
+			trans.tsIndexInfo.Unref()
 		}
 	})
 	return resourceallocator.FreeRes(resourceallocator.ChunkReaderRes, trans.chunkReaderNum, trans.chunkReaderNum)

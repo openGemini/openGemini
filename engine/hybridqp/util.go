@@ -22,6 +22,13 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 )
 
+type DDLType uint8
+
+const (
+	ShowTagValues DDLType = iota
+	ShowSeries
+)
+
 type ContextKey string
 
 const (
@@ -276,4 +283,8 @@ func MinInt64(x, y int64) int64 {
 		return x
 	}
 	return y
+}
+
+func ClampInt64(v, low, high int64) int64 {
+	return MinInt64(MaxInt64(v, low), high)
 }

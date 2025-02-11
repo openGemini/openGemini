@@ -18,6 +18,7 @@ import (
 	"errors"
 	"math"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"sync"
@@ -39,6 +40,15 @@ import (
 	"github.com/savsgio/dictpool"
 )
 
+type MemRecordReader func(shardID uint64, mst string, sid uint64, tr *util.TimeRange,
+	schema record.Schemas, ascending bool) *record.Record
+
+var shelfMemRecordReader MemRecordReader
+
+func SetShelfMemRecordReader(r MemRecordReader) {
+	shelfMemRecordReader = r
+}
+
 type WriteRowsCtx struct {
 	AddRowCountsBySid func(msName string, sid uint64, rowCounts int64)
 	MstsInfo          *sync.Map
@@ -54,10 +64,11 @@ func GetMsInfo(name string, mstsInfo *sync.Map) (*meta.MeasurementInfo, bool) {
 }
 
 type WriteRec struct {
-	rec            *record.Record
-	lastAppendTime int64
-	timeAsd        bool
-	schemaCopyed   bool
+	rec             *record.Record
+	firstAppendTime int64
+	lastAppendTime  int64
+	timeAsd         bool
+	schemaCopyed    bool
 }
 
 type WriteChunk struct {
@@ -117,6 +128,7 @@ func (writeRec *WriteRec) init(schema []record.Field) {
 		writeRec.rec.ResetWithSchema(schema)
 	}
 	writeRec.lastAppendTime = math.MinInt64
+	writeRec.firstAppendTime = math.MaxInt64
 	writeRec.timeAsd = true
 	writeRec.schemaCopyed = false
 }
@@ -129,6 +141,7 @@ func (writeRec *WriteRec) initForReuse(schema []record.Field) {
 	writeRec.rec = rec
 	writeRec.rec.ResetWithSchema(schema)
 	writeRec.lastAppendTime = math.MinInt64
+	writeRec.firstAppendTime = math.MaxInt64
 	writeRec.timeAsd = true
 }
 
@@ -250,6 +263,7 @@ type MTable interface {
 	initMsInfo(msInfo *MsInfo, row *influx.Row, rec *record.Record, name string) *MsInfo
 	FlushChunks(table *MemTable, dataPath, msName, db, rp string, lock *string, tbStore immutable.TablesStore, msRowCount int64, fileInfos chan []immutable.FileInfoExtend)
 	SetClient(client metaclient.MetaClient)
+	GetClient() metaclient.MetaClient
 	WriteRows(table *MemTable, rowsD *dictpool.Dict, wc WriteRowsCtx) error
 	WriteCols(table *MemTable, rec *record.Record, mstsInfo *sync.Map, mst string) error
 	SetFlushManagerInfo(manager map[string]FlushManager, accumulateMetaIndex *sync.Map)
@@ -260,12 +274,12 @@ type MTable interface {
 func StoreMstRowCount(countFile string, rowCount int) error {
 	str := strconv.Itoa(rowCount)
 
-	return os.WriteFile(countFile, []byte(str), 0640)
+	return os.WriteFile(countFile, []byte(str), 0600)
 }
 
 // LoadMstRowCount is used to load the rowcount value for mst-level pre-aggregation.
 func LoadMstRowCount(countFile string) (int, error) {
-	data, err := os.ReadFile(countFile)
+	data, err := os.ReadFile(filepath.Clean(countFile))
 	if err != nil {
 		return 0, err
 	}
@@ -282,7 +296,7 @@ func createMsBuilder(tbStore immutable.TablesStore, order bool, lockPath *string
 	defer seq.UnRef()
 
 	FileName := immutable.NewTSSPFileName(tbStore.NextSequence(), 0, 0, 0, order, lockPath)
-	msb := immutable.NewMsBuilder(dataPath, msName, lockPath, conf, totalChunks, FileName, tbStore.Tier(), seq, size, engineType, tbStore.GetObsOption(), tbStore.GetShardID())
+	msb := immutable.NewMsBuilder(dataPath, msName, lockPath, conf, totalChunks, FileName, util.Hot, seq, size, engineType, tbStore.GetObsOption(), tbStore.GetShardID())
 	return msb
 }
 
@@ -304,14 +318,21 @@ type MemTable struct {
 
 type MemTables struct {
 	readEnable  bool
+	shardID     uint64
 	activeTbl   *MemTable
 	snapshotTbl *MemTable
 }
 
-func (m *MemTables) Init(activeTbl, snapshotTbl *MemTable, readEnable bool) {
+func NewMemTables(shardID uint64, readEnable bool) *MemTables {
+	return &MemTables{
+		readEnable: readEnable,
+		shardID:    shardID,
+	}
+}
+
+func (m *MemTables) Init(activeTbl, snapshotTbl *MemTable) {
 	m.activeTbl = activeTbl
 	m.snapshotTbl = snapshotTbl
-	m.readEnable = readEnable
 }
 
 func (m *MemTables) Ref() {
@@ -327,6 +348,11 @@ func (m *MemTables) UnRef() {
 func (m *MemTables) Values(msName string, id uint64, tr util.TimeRange, schema record.Schemas, ascending bool) *record.Record {
 	if !m.readEnable {
 		return nil
+	}
+
+	if shelfMemRecordReader != nil {
+		// This branch is run when the value of [data.shelf-mode] enabled is true
+		return shelfMemRecordReader(m.shardID, msName, id, &tr, schema, ascending)
 	}
 
 	var getValues = func(mt *MemTable) *record.Record {
@@ -356,7 +382,7 @@ func (m *MemTables) Values(msName string, id uint64, tr util.TimeRange, schema r
 func (t *MemTable) initMTable(engineType config.EngineType) {
 	switch engineType {
 	case config.TSSTORE:
-		t.MTable = newTsMemTableImpl()
+		t.MTable = NewTsMemTableImpl()
 	case config.COLUMNSTORE:
 		t.MTable = &csMemTableImpl{
 			primaryKey:          make(map[string]record.Schemas),
@@ -598,106 +624,6 @@ func checkSchemaIsSameWithTag(msSchema record.Schemas, fields []influx.Field, ta
 	return true
 }
 
-func (t *MemTable) appendFieldToCol(col *record.ColVal, field *influx.Field, size *int64) error {
-	if field.Type == influx.Field_Type_Int || field.Type == influx.Field_Type_UInt {
-		col.AppendInteger(int64(field.NumValue))
-		*size += int64(util.Int64SizeBytes)
-	} else if field.Type == influx.Field_Type_Float {
-		col.AppendFloat(field.NumValue)
-		*size += int64(util.Float64SizeBytes)
-	} else if field.Type == influx.Field_Type_Boolean {
-		if field.NumValue == 0 {
-			col.AppendBoolean(false)
-		} else {
-			col.AppendBoolean(true)
-		}
-		*size += int64(util.BooleanSizeBytes)
-	} else if field.Type == influx.Field_Type_String {
-		col.AppendString(field.StrValue)
-		*size += int64(len(field.StrValue))
-	} else {
-		return errors.New("unsupport data type")
-	}
-	return nil
-}
-
-func (t *MemTable) appendFieldsToRecord(rec *record.Record, fields []influx.Field, time int64, sameSchema bool) (int64, error) {
-	// fast path
-	var size int64
-	if sameSchema {
-		for i := range fields {
-			if err := t.appendFieldToCol(&rec.ColVals[i], &fields[i], &size); err != nil {
-				return size, err
-			}
-		}
-		rec.ColVals[len(fields)].AppendInteger(time)
-		size += int64(util.Int64SizeBytes)
-		return size, nil
-	}
-
-	// slow path
-	return t.appendFieldsToRecordSlow(rec, fields, time)
-}
-
-func (t *MemTable) appendFieldsToRecordSlow(rec *record.Record, fields []influx.Field, time int64) (int64, error) {
-	var size int64
-	recSchemaIdx, pointSchemaIdx := 0, 0
-	recSchemaLen, pointSchemaLen := rec.ColNums()-1, len(fields)
-	appendColIdx := rec.ColNums()
-	oldRowNum, oldColNum := rec.RowNums(), rec.ColNums()
-	for recSchemaIdx < recSchemaLen && pointSchemaIdx < pointSchemaLen {
-		if rec.Schema[recSchemaIdx].Name == fields[pointSchemaIdx].Key {
-			if err := t.appendFieldToCol(&rec.ColVals[recSchemaIdx], &fields[pointSchemaIdx], &size); err != nil {
-				return size, err
-			}
-			recSchemaIdx++
-			pointSchemaIdx++
-		} else if rec.Schema[recSchemaIdx].Name < fields[pointSchemaIdx].Key {
-			// table field exists but point field not exist, exist field
-			rec.ColVals[recSchemaIdx].PadColVal(rec.Schema[recSchemaIdx].Type, 1)
-			recSchemaIdx++
-		} else {
-			// point field exists but table field not exist, new field
-			rec.ReserveSchemaAndColVal(1)
-			rec.Schema[appendColIdx].Name = stringinterner.InternSafe(fields[pointSchemaIdx].Key)
-			rec.Schema[appendColIdx].Type = int(fields[pointSchemaIdx].Type)
-			rec.ColVals[appendColIdx].PadColVal(int(fields[pointSchemaIdx].Type), oldRowNum)
-			if err := t.appendFieldToCol(&rec.ColVals[appendColIdx], &fields[pointSchemaIdx], &size); err != nil {
-				return size, err
-			}
-			pointSchemaIdx++
-			appendColIdx++
-		}
-	}
-
-	// table field exists but point field not exist, exist field
-	for recSchemaIdx < recSchemaLen {
-		rec.ColVals[recSchemaIdx].PadColVal(rec.Schema[recSchemaIdx].Type, 1)
-		recSchemaIdx++
-	}
-	// point field exists but table field not exist, new field
-	rec.ReserveSchemaAndColVal(pointSchemaLen - pointSchemaIdx)
-	for pointSchemaIdx < pointSchemaLen {
-		rec.Schema[appendColIdx].Name = stringinterner.InternSafe(fields[pointSchemaIdx].Key)
-		rec.Schema[appendColIdx].Type = int(fields[pointSchemaIdx].Type)
-		rec.ColVals[appendColIdx].PadColVal(int(fields[pointSchemaIdx].Type), oldRowNum)
-		if err := t.appendFieldToCol(&rec.ColVals[appendColIdx], &fields[pointSchemaIdx], &size); err != nil {
-			return size, err
-		}
-		pointSchemaIdx++
-		appendColIdx++
-	}
-
-	// check if added new field
-	newColNum := rec.ColNums()
-	if oldColNum != newColNum {
-		record.FastSortRecord(rec, oldColNum)
-	}
-	rec.ColVals[newColNum-1].AppendInteger(time)
-	size += int64(util.Int64SizeBytes)
-	return size, nil
-}
-
 func (t *MemTable) allocMsInfo() *MsInfo {
 	size := len(t.msInfos)
 	if cap(t.msInfos) == size {
@@ -751,7 +677,7 @@ func (t *MemTable) getSortedRecSafe(msName string, id uint64, tr util.TimeRange,
 	msInfo.mu.RLock()
 	chunk, ok := msInfo.sidMap[id]
 	msInfo.mu.RUnlock()
-	if !ok {
+	if !ok || chunk == nil || chunk.WriteRec.lastAppendTime < tr.Min || chunk.WriteRec.firstAppendTime > tr.Max {
 		return nil
 	}
 

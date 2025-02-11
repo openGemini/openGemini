@@ -141,7 +141,7 @@ func TestExtractFieldFragments(t *testing.T) {
 	contentTokenFinder := tokenizer.NewSimpleTokenFinder(tokenizer.CONTENT_SPLIT_TABLE)
 
 	// Test only field1 has the highlighted words
-	highlightWords := map[string]map[string]bool{"json": {"field1": true}}
+	highlightWords := map[string]map[string][]int{"json": {"field1": {influxql.MATCHPHRASE}}}
 	fragments := extractFieldFragments(b, highlightWords, contentTokenFinder, fieldScopes)
 	for _, fragment := range fragments {
 		assert.Equal(t, "json", b[fragment.Offset:fragment.Offset+fragment.Length])
@@ -149,7 +149,11 @@ func TestExtractFieldFragments(t *testing.T) {
 	assert.Equal(t, 1, len(fragments))
 
 	// Test that all three fields have this highlighted word
-	highlightWords = map[string]map[string]bool{"json": {"field1": true, "field2": true, "json": true}}
+	highlightWords = map[string]map[string][]int{"json": {
+		"field1": {influxql.MATCHPHRASE},
+		"field2": {influxql.MATCHPHRASE},
+		"json":   {influxql.MATCHPHRASE},
+	}}
 	fragments = extractFieldFragments(b, highlightWords, contentTokenFinder, fieldScopes)
 	for _, fragment := range fragments {
 		assert.Equal(t, "json", b[fragment.Offset:fragment.Offset+fragment.Length])
@@ -157,10 +161,87 @@ func TestExtractFieldFragments(t *testing.T) {
 	assert.Equal(t, 2, len(fragments))
 
 	// The full text of the test has this highlight word
-	highlightWords = map[string]map[string]bool{"json": {logparser.DefaultFieldForFullText: true}}
+	highlightWords = map[string]map[string][]int{"json": {logparser.DefaultFieldForFullText: {influxql.MATCHPHRASE}}}
 	fragments = extractFieldFragments(b, highlightWords, contentTokenFinder, fieldScopes)
 	for _, fragment := range fragments {
 		assert.Equal(t, "json", b[fragment.Offset:fragment.Offset+fragment.Length])
 	}
 	assert.Equal(t, 3, len(fragments))
+}
+
+func TestIsHighlight(t *testing.T) {
+	res := isHighlight(influxql.EQ, "12.2", "12.2")
+	assert.Equal(t, true, res)
+
+	res = isHighlight(influxql.LTE, "12.2", "12.2")
+	assert.Equal(t, true, res)
+
+	res = isHighlight(influxql.LT, "12.2", "12.2")
+	assert.Equal(t, false, res)
+
+	res = isHighlight(influxql.GT, "12.2", "12.1")
+	assert.Equal(t, true, res)
+
+	res = isHighlight(influxql.GTE, "12.2", "12.5")
+	assert.Equal(t, false, res)
+}
+
+func TestExtractNumericalFragments(t *testing.T) {
+	contentTokenFinder := tokenizer.NewSimpleTokenFinder(tokenizer.CONTENT_SPLIT_TABLE)
+
+	// Tests the numeric types that match the conditions
+	highlightWords := map[string][]int{"50": {influxql.GT}}
+	fragments := extractFragments("85", highlightWords, contentTokenFinder)
+	assert.Equal(t, 1, len(fragments))
+	assert.Equal(t, 0, fragments[0].Offset)
+	assert.Equal(t, len("85"), fragments[0].Length)
+
+	// Tests for numeric types that do not match a condition
+	highlightWords = map[string][]int{"50": {influxql.LT}}
+	fragments = extractFragments("85", highlightWords, contentTokenFinder)
+	assert.Equal(t, 0, len(fragments))
+
+	// Test part of the condition meets the highlight
+	highlightWords = map[string][]int{"50": {influxql.LT}, "85": {influxql.MATCHPHRASE}}
+	fragments = extractFragments("85", highlightWords, contentTokenFinder)
+	assert.Equal(t, 1, len(fragments))
+	assert.Equal(t, 0, fragments[0].Offset)
+	assert.Equal(t, len("85"), fragments[0].Length)
+
+	// Test multi-condition matching highlighting
+	highlightWords = map[string][]int{"50": {influxql.GT}, "85": {influxql.MATCHPHRASE}}
+	fragments = extractFragments("85", highlightWords, contentTokenFinder)
+	fragments = mergeFragments(fragments)
+	assert.Equal(t, 1, len(fragments))
+	assert.Equal(t, 0, fragments[0].Offset)
+	assert.Equal(t, len("85"), fragments[0].Length)
+}
+
+func TestGetHighlightFragments(t *testing.T) {
+	h := &Handler{
+		Logger: logger.NewLogger(errno.ModuleLogStore),
+	}
+
+	rec := map[string]interface{}{}
+	highlightWords := map[string]map[string][]int{}
+	var fieldScopes []marshalFieldScope
+
+	key := "content"
+	val := "<val:abc>"
+	content := map[string]interface{}{key: val}
+	rec[Content] = content
+	fieldScopes = h.appendFieldScopes(fieldScopes, key, val)
+	highlight1 := h.getHighlightFragments(rec, highlightWords, fieldScopes)
+	assert.Equal(t, `{"content":"<val:abc>"}`, highlight1[Content].([]HighlightFragment)[0].Fragment)
+	assert.Equal(t, false, highlight1[Content].([]HighlightFragment)[0].Highlight)
+
+	key = "content"
+	val = "\"\",\n"
+	content = map[string]interface{}{key: val}
+	rec[Content] = content
+	fieldScopes = fieldScopes[:0]
+	fieldScopes = h.appendFieldScopes(fieldScopes, key, val)
+	highlight2 := h.getHighlightFragments(rec, highlightWords, fieldScopes)
+	assert.Equal(t, `{"content":"\"\",\n"}`, highlight2[Content].([]HighlightFragment)[0].Fragment)
+	assert.Equal(t, false, highlight2[Content].([]HighlightFragment)[0].Highlight)
 }

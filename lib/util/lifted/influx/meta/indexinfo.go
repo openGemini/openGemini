@@ -43,6 +43,12 @@ type IndexGroupInfo struct {
 	EngineType config.EngineType
 }
 
+func (igi *IndexGroupInfo) walkIndexes(fn func(ii *IndexInfo)) {
+	for i := range igi.Indexes {
+		fn(&igi.Indexes[i])
+	}
+}
+
 func (igi *IndexGroupInfo) canDelete() bool {
 	for i := range igi.Indexes {
 		if !igi.Indexes[i].MarkDelete {

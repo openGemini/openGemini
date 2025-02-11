@@ -161,6 +161,28 @@ func Compile(stmt *influxql.SelectStatement, opt CompileOptions) (Statement, err
 
 var TimeFilterProtection bool
 
+func (c *compiledStatement) RewriteTimeRange(stmt *influxql.SelectStatement) error {
+	// if there are subqueries, check the timerange in the subqueries. If there are no subqueries, you need to check yourself.
+	if TimeFilterProtection && !stmt.IsCreateStream && !stmt.Sources.HasSubQuery() && c.TimeRange.Min.IsZero() && c.TimeRange.Max.IsZero() {
+		return fmt.Errorf("disabled the query because without specifying the time filter")
+	}
+	// Resolve the min and max times now that we know if there is an interval or not.
+	if c.TimeRange.Min.IsZero() {
+		c.TimeRange.Min = time.Unix(0, influxql.MinTime).UTC()
+	}
+	if c.TimeRange.Max.IsZero() {
+		// If the interval is non-zero, then we have an aggregate query and
+		// need to limit the maximum time to now() for backwards compatibility
+		// and usability.
+		if !c.Interval.IsZero() {
+			c.TimeRange.Max = c.Options.Now
+		} else {
+			c.TimeRange.Max = time.Unix(0, influxql.MaxTime).UTC()
+		}
+	}
+	return nil
+}
+
 // preprocess retrieves and records the global attributes of the current statement.
 func (c *compiledStatement) preprocess(stmt *influxql.SelectStatement) error {
 	c.Ascending = stmt.TimeAscending()
@@ -187,24 +209,7 @@ func (c *compiledStatement) preprocess(stmt *influxql.SelectStatement) error {
 
 	// Retrieve the fill option for the statement.
 	c.FillOption = stmt.Fill
-	if TimeFilterProtection && c.TimeRange.Min.IsZero() && c.TimeRange.Max.IsZero() {
-		return fmt.Errorf("disabled the query because without specifying the time filter")
-	}
 
-	// Resolve the min and max times now that we know if there is an interval or not.
-	if c.TimeRange.Min.IsZero() {
-		c.TimeRange.Min = time.Unix(0, influxql.MinTime).UTC()
-	}
-	if c.TimeRange.Max.IsZero() {
-		// If the interval is non-zero, then we have an aggregate query and
-		// need to limit the maximum time to now() for backwards compatibility
-		// and usability.
-		if !c.Interval.IsZero() {
-			c.TimeRange.Max = c.Options.Now
-		} else {
-			c.TimeRange.Max = time.Unix(0, influxql.MaxTime).UTC()
-		}
-	}
 	return nil
 }
 
@@ -263,7 +268,7 @@ func (c *compiledStatement) compile(stmt *influxql.SelectStatement) error {
 			}
 		}
 	}
-	return nil
+	return c.RewriteTimeRange(stmt)
 }
 
 func (c *compiledStatement) compileFields(stmt *influxql.SelectStatement) error {
@@ -886,7 +891,13 @@ func (c *compiledStatement) validateCondition(expr influxql.Expr) error {
 		return nil
 	case *influxql.Call:
 		if mathFunc := GetMathFunction(expr.Name); mathFunc == nil {
-			return fmt.Errorf("invalid function call in condition: %s", expr)
+			if c.stmt.IsPromQuery {
+				if promFunc := GetPromTimeFunction(expr.Name); promFunc == nil {
+					return fmt.Errorf("invalid promfunction call in condition: %s", expr)
+				}
+			} else {
+				return fmt.Errorf("invalid function call in condition: %s", expr)
+			}
 		}
 
 		// How many arguments are we expecting?
@@ -897,7 +908,7 @@ func (c *compiledStatement) validateCondition(expr influxql.Expr) error {
 		}
 
 		// Did we get the expected number of args?
-		if got := len(expr.Args); got != nargs {
+		if got := len(expr.Args); got != nargs && !c.stmt.IsPromQuery {
 			return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", expr.Name, nargs, got)
 		}
 
@@ -961,6 +972,7 @@ func (c *compiledStatement) validateUnnestSource() error {
 // this compiledStatement as the parent.
 func (c *compiledStatement) subquery(stmt *influxql.SelectStatement) error {
 	subquery := newCompiler(c.Options)
+	subquery.stmt = stmt
 	if err := subquery.preprocess(stmt); err != nil {
 		return err
 	}
@@ -998,6 +1010,7 @@ func (c *compiledStatement) subquery(stmt *influxql.SelectStatement) error {
 		subquery.Interval = c.Interval
 		subquery.InheritedInterval = true
 	}
+
 	return subquery.compile(stmt)
 }
 

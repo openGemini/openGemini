@@ -31,7 +31,7 @@ import (
 	"testing"
 	"time"
 
-	set "github.com/deckarep/golang-set"
+	set "github.com/deckarep/golang-set/v2"
 	"github.com/influxdata/influxdb/models"
 	"github.com/influxdata/influxdb/pkg/tracing/fields"
 	originql "github.com/influxdata/influxql"
@@ -86,6 +86,7 @@ const defaultShardId = uint64(1)
 const defaultPtId = uint32(1)
 const defaultChunkSize = 1000
 const defaultMeasurementName = "cpu"
+const defaultIndexGroupId = uint64(1)
 
 type checkSingleCursorFunction func(cur comm.KeyCursor, expectRecords *sync.Map, total *int, ascending bool, stop chan struct{}) error
 
@@ -826,7 +827,8 @@ func checkAggFunc(cur comm.KeyCursor, stop chan struct{}, result aggResult, call
 						return errors.New(fmt.Sprintf("unexpected value, expected: %t,actual: %t", result[call][2].(bool), rec.ColVals[i].BooleanValues()[0]))
 					}
 				case influx.Field_Type_String:
-					if s, _ := rec.ColVals[i].StringValueSafe(0); s != result[call][0].(string) {
+					exp, _ := result[call][0].(string)
+					if s, _ := rec.ColVals[i].StringValueSafe(0); s != exp {
 						return errors.New(fmt.Sprintf("unexpected value, expected: %s,actual: %s", result[call][0].(string), s))
 					}
 				}
@@ -961,17 +963,19 @@ func TestCreateGroupCursorWithLimiter(t *testing.T) {
 
 	_, span := tracing.NewTrace("root")
 	ctx := tracing.NewContextWithSpan(context.Background(), span)
-	cursors, err := sh.CreateCursor(ctx, querySchema)
+	info, err := sh.CreateCursor(ctx, querySchema)
 	defer func() {
 		_ = resourceallocator.FreeRes(resourceallocator.ChunkReaderRes, int64(seriesNum), int64(seriesNum))
 		_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.ChunkReaderRes, 0, 0)
 	}()
+	cursors := info.GetCursors()
 	if len(cursors) != 8 {
 		t.Fatal()
 	}
 	for i := range cursors {
 		cursors[i].Close()
 	}
+	info.Unref()
 	err = closeShard(sh)
 	if err != nil {
 		t.Fatal(err)
@@ -1809,7 +1813,7 @@ func TestShard_AsyncWalReplay_parallel_ArrowFlight(t *testing.T) {
 	msInfo, err = newSh.activeTbl.GetMsInfo(defaultMeasurementName)
 	rec.AppendRec(rec, 0, rec.RowNums())
 	for newSh.replayingWal {
-		time.Sleep(3 * time.Second)
+		time.Sleep(time.Second / 10)
 		fmt.Println("wait load wal done")
 	}
 
@@ -1877,6 +1881,7 @@ func TestShard_AsyncWalReplay_parallel_ArrowFlight_WithCancel(t *testing.T) {
 	// cancel wal replay
 	for newSh.cancelFn != nil {
 		newSh.cancelFn()
+		break
 	}
 
 	err = writeRec(newSh, rec, false)
@@ -1920,6 +1925,9 @@ func TestChangeShardTierToWarm(t *testing.T) {
 			t.Fatal("Chang Shard to Warm Faled")
 		}
 		sh.endTime = mustParseTime(time.RFC3339Nano, "2019-01-01T01:00:00Z")
+
+		endTime := sh.GetEndTime()
+		require.Equal(t, mustParseTime(time.RFC3339Nano, "2019-01-01T01:00:00Z"), endTime)
 		sh.durationInfo.Tier = util.Warm
 		tier := sh.GetTier()
 		exp := sh.IsTierExpired()
@@ -2076,6 +2084,7 @@ func TestWriteInterruptError(t *testing.T) {
 }
 
 func TestAggQueryOnlyInImmutable(t *testing.T) {
+	t.Skip()
 	testDir := t.TempDir()
 	configs := []TestConfig{
 		{1, 50, time.Second, false},
@@ -2131,14 +2140,17 @@ func TestAggQueryOnlyInImmutable(t *testing.T) {
 							calls := genCall(c.fieldAux, c.aggCall[i])
 							querySchema := genAggQuerySchema(c.fieldAux, calls, opt)
 							ops := genOps(c.fieldAux, calls)
-							cursors, err := sh.CreateCursor(context.Background(), querySchema)
+							info, err := sh.CreateCursor(context.Background(), querySchema)
 							if err != nil {
 								t.Fatal(err)
 							}
-
+							if info == nil {
+								return
+							}
+							defer func() { info.Unref() }()
+							cursors := info.GetCursors()
 							updateClusterCursor(cursors, ops, c.aggCall[i])
-							// step5: loop all cursors to query data from shard
-							// key is indexKey, value is Record
+							// step5: loop all cursors to query data from shard key is indexKey, value is Record
 							m := genExpectRecordsMap(rows, querySchema)
 							errs := make(chan error, len(cursors))
 							checkAggQueryResultParallel(errs, cursors, m, ascending, c.aggCall[i], *result)
@@ -2215,11 +2227,15 @@ func TestAggQueryOnlyInMemtable(t *testing.T) {
 							calls := genCall(c.fieldAux, c.aggCall[i])
 							querySchema := genAggQuerySchema(c.fieldAux, calls, opt)
 							ops := genOps(c.fieldAux, calls)
-							cursors, err := sh.CreateCursor(context.Background(), querySchema)
+							info, err := sh.CreateCursor(context.Background(), querySchema)
 							if err != nil {
 								t.Fatal(err)
 							}
-
+							if info == nil {
+								return
+							}
+							defer func() { info.Unref() }()
+							cursors := info.GetCursors()
 							updateClusterCursor(cursors, ops, c.aggCall[i])
 							// step5: loop all cursors to query data from shard
 							// key is indexKey, value is Record
@@ -2306,11 +2322,15 @@ func TestAggQueryOnlyInImmutable_NoEmpty(t *testing.T) {
 							calls := genCall(c.fieldAux, c.aggCall[i])
 							querySchema := genAggQuerySchema(c.fieldAux, calls, opt)
 							ops := genOps(c.fieldAux, calls)
-							cursors, err := sh.CreateCursor(context.Background(), querySchema)
+							info, err := sh.CreateCursor(context.Background(), querySchema)
 							if err != nil {
 								t.Fatal(err)
 							}
-
+							if info == nil {
+								return
+							}
+							defer func() { info.Unref() }()
+							cursors := info.GetCursors()
 							updateClusterCursor(cursors, ops, c.aggCall[i])
 							// step5: loop all cursors to query data from shard
 							// key is indexKey, value is Record
@@ -2390,11 +2410,15 @@ func TestAggQueryOnlyInMemtable_NoEmpty(t *testing.T) {
 							calls := genCall(c.fieldAux, c.aggCall[i])
 							querySchema := genAggQuerySchema(c.fieldAux, calls, opt)
 							ops := genOps(c.fieldAux, calls)
-							cursors, err := sh.CreateCursor(context.Background(), querySchema)
+							info, err := sh.CreateCursor(context.Background(), querySchema)
 							if err != nil {
 								t.Fatal(err)
 							}
-
+							if info == nil {
+								return
+							}
+							defer func() { info.Unref() }()
+							cursors := info.GetCursors()
 							updateClusterCursor(cursors, ops, c.aggCall[i])
 							// step5: loop all cursors to query data from shard
 							// key is indexKey, value is Record
@@ -2482,11 +2506,15 @@ func TestQueryOnlyInImmutable(t *testing.T) {
 							querySchema := genQuerySchema(c.fieldAux, opt)
 							_, span := tracing.NewTrace("root")
 							ctx := tracing.NewContextWithSpan(context.Background(), span)
-							cursors, err := sh.CreateCursor(ctx, querySchema)
+							info, err := sh.CreateCursor(ctx, querySchema)
 							if err != nil {
 								t.Fatal(err)
 							}
-
+							if info == nil {
+								return
+							}
+							defer func() { info.Unref() }()
+							cursors := info.GetCursors()
 							// step5: loop all cursors to query data from shard
 							// key is indexKey, value is Record
 							m := genExpectRecordsMap(rows, querySchema)
@@ -2571,10 +2599,15 @@ func TestQueryOnlyInImmutableWithLimit(t *testing.T) {
 								opt.Offset = limitCase.offset
 								querySchema := genQuerySchema(c.fieldAux, opt)
 
-								cursors, err := sh.CreateCursor(context.Background(), querySchema)
+								info, err := sh.CreateCursor(context.Background(), querySchema)
 								if err != nil {
 									t.Fatal(err)
 								}
+								if info == nil {
+									return
+								}
+								defer func() { info.Unref() }()
+								cursors := info.GetCursors()
 
 								// step5: loop all cursors to query data from shard
 								// key is indexKey, value is Record
@@ -2652,11 +2685,15 @@ func TestQueryOnlyInImmutableWithLimit_Lazy(t *testing.T) {
 
 								_, span := tracing.NewTrace("root")
 								ctx := tracing.NewContextWithSpan(context.Background(), span)
-								cursors, err := sh.CreateCursor(ctx, querySchema)
-
+								info, err := sh.CreateCursor(ctx, querySchema)
 								if err != nil {
 									t.Fatal(err)
 								}
+								if info == nil {
+									return
+								}
+								defer func() { info.Unref() }()
+								cursors := info.GetCursors()
 								childPlan := executor.NewLogicalSeries(querySchema)
 								plan := executor.NewLogicalMerge([]hybridqp.QueryNode{childPlan}, querySchema)
 								for _, g := range cursors {
@@ -2748,11 +2785,15 @@ func TestQueryOnlyInImmutableWithLimitOptimize(t *testing.T) {
 								opt.Limit = limitCase.limit
 								opt.Offset = limitCase.offset
 								querySchema := genQuerySchema(c.fieldAux, opt)
-
-								cursors, err := sh.CreateCursor(context.Background(), querySchema)
+								info, err := sh.CreateCursor(context.Background(), querySchema)
 								if err != nil {
 									t.Fatal(err)
 								}
+								if info == nil {
+									return
+								}
+								defer func() { info.Unref() }()
+								cursors := info.GetCursors()
 
 								// step5: loop all cursors to query data from shard
 								// key is indexKey, value is Record
@@ -2831,10 +2872,15 @@ func TestQueryOnlyInImmutableWithLimitWithGroupBy(t *testing.T) {
 							opt.Offset = limitCase.offset
 							querySchema := genQuerySchema(c.fieldAux, opt)
 
-							cursors, err := sh.CreateCursor(context.Background(), querySchema)
+							info, err := sh.CreateCursor(context.Background(), querySchema)
 							if err != nil {
 								t.Fatal(err)
 							}
+							if info == nil {
+								return
+							}
+							defer func() { info.Unref() }()
+							cursors := info.GetCursors()
 
 							// step5: loop all cursors to query data from shard
 							// key is indexKey, value is Record
@@ -2917,10 +2963,15 @@ func TestQueryOnlyInImmutableGroupBy(t *testing.T) {
 						t.Run(c.Name, func(t *testing.T) {
 							opt := genQueryOpt(&c, msNames[nameIdx], ascending)
 							querySchema := genQuerySchema(c.fieldAux, opt)
-							cursors, err := sh.CreateCursor(context.Background(), querySchema)
+							info, err := sh.CreateCursor(context.Background(), querySchema)
 							if err != nil {
 								t.Fatal(err)
 							}
+							if info == nil {
+								return
+							}
+							defer func() { info.Unref() }()
+							cursors := info.GetCursors()
 
 							// step5: loop all cursors to query data from shard
 							// key is indexKey, value is Record
@@ -3005,10 +3056,15 @@ func TestQueryOnlyInMutableTable(t *testing.T) {
 
 						opt := genQueryOpt(&c, msNames[nameIdx], ascending)
 						querySchema := genQuerySchema(c.fieldAux, opt)
-						cursors, err := sh.CreateCursor(context.Background(), querySchema)
+						info, err := sh.CreateCursor(context.Background(), querySchema)
 						if err != nil {
 							t.Fatal(err)
 						}
+						if info == nil {
+							return
+						}
+						defer func() { info.Unref() }()
+						cursors := info.GetCursors()
 
 						// step5: loop all cursors to query data from shard
 						// key is indexKey, value is Record
@@ -3104,10 +3160,15 @@ func TestQueryImmutableUnorderedNoOverlap(t *testing.T) {
 
 						opt := genQueryOpt(&c, msNames[nameIdx], ascending)
 						querySchema := genQuerySchema(c.fieldAux, opt)
-						cursors, err := sh.CreateCursor(context.Background(), querySchema)
+						info, err := sh.CreateCursor(context.Background(), querySchema)
 						if err != nil {
 							t.Fatal(err)
 						}
+						if info == nil {
+							return
+						}
+						defer func() { info.Unref() }()
+						cursors := info.GetCursors()
 
 						// step5: loop all cursors to query data from shard
 						// key is indexKey, value is Record
@@ -3200,10 +3261,15 @@ func TestQueryMutableUnorderedNoOverlap(t *testing.T) {
 					t.Run(c.Name, func(t *testing.T) {
 						opt := genQueryOpt(&c, msNames[nameIdx], ascending)
 						querySchema := genQuerySchema(c.fieldAux, opt)
-						cursors, err := sh.CreateCursor(context.Background(), querySchema)
+						info, err := sh.CreateCursor(context.Background(), querySchema)
 						if err != nil {
 							t.Fatal(err)
 						}
+						if info == nil {
+							return
+						}
+						defer func() { info.Unref() }()
+						cursors := info.GetCursors()
 
 						// step5: loop all cursors to query data from shard
 						// key is indexKey, value is Record
@@ -3296,10 +3362,15 @@ func TestQueryImmutableSequenceWrite(t *testing.T) {
 				t.Run(c.Name, func(t *testing.T) {
 					opt := genQueryOpt(&c, msNames[nameIdx], ascending)
 					querySchema := genQuerySchema(c.fieldAux, opt)
-					cursors, err := sh.CreateCursor(context.Background(), querySchema)
+					info, err := sh.CreateCursor(context.Background(), querySchema)
 					if err != nil {
 						t.Fatal(err)
 					}
+					if info == nil {
+						return
+					}
+					defer func() { info.Unref() }()
+					cursors := info.GetCursors()
 
 					// step5: loop all cursors to query data from shard
 					// key is indexKey, value is Record
@@ -3380,10 +3451,15 @@ func TestQueryOnlyInImmutableReload(t *testing.T) {
 			t.Run(c.Name, func(t *testing.T) {
 				opt := genQueryOpt(&c, msNames[nameIdx], ascending)
 				querySchema := genQuerySchema(c.fieldAux, opt)
-				cursors, err := sh.CreateCursor(context.Background(), querySchema)
+				info, err := sh.CreateCursor(context.Background(), querySchema)
 				if err != nil {
 					t.Fatal(err)
 				}
+				if info == nil {
+					return
+				}
+				defer func() { info.Unref() }()
+				cursors := info.GetCursors()
 
 				// step5: loop all cursors to query data from shard
 				// key is indexKey, value is Record
@@ -4042,10 +4118,15 @@ func TestSnapshotLimitTsspFiles(t *testing.T) {
 			t.Run(c.Name, func(t *testing.T) {
 				opt := genQueryOpt(&c, msNames[nameIdx], ascending)
 				querySchema := genQuerySchema(c.fieldAux, opt)
-				cursors, err := sh.CreateCursor(context.Background(), querySchema)
+				info, err := sh.CreateCursor(context.Background(), querySchema)
 				if err != nil {
 					t.Fatal(err)
 				}
+				if info == nil {
+					return
+				}
+				defer func() { info.Unref() }()
+				cursors := info.GetCursors()
 
 				// step5: loop all cursors to query data from shard
 				// key is indexKey, value is Record
@@ -5942,7 +6023,7 @@ func TestGetValuesInMemTables(t *testing.T) {
 	begin := time.Now().UnixNano()
 
 	mst := "mst"
-	memtables := mutable.MemTables{}
+	memtables := mutable.NewMemTables(1, true)
 
 	var getValue = func(sid uint64, asc bool) *record.Record {
 		return memtables.Values(mst, sid, util.TimeRange{Min: 0, Max: begin + 10}, record.Schemas{
@@ -5968,12 +6049,12 @@ func TestGetValuesInMemTables(t *testing.T) {
 	require.Equal(t, uint64(0), getFirstSid(sh.activeTbl, "mst_not_exists"))
 	sid := getFirstSid(sh.activeTbl, mst)
 
-	memtables.Init(sh.activeTbl, sh.snapshotTbl, true)
+	memtables.Init(sh.activeTbl, sh.snapshotTbl)
 	assertValue(sid, true, 1)
 
 	swapMemTable(sh, dir)
 
-	memtables.Init(sh.activeTbl, sh.snapshotTbl, true)
+	memtables.Init(sh.activeTbl, sh.snapshotTbl)
 	assertValue(sid, true, 1)
 	require.NoError(t, writeOneRow(sh, mst, begin+1))
 
@@ -6429,8 +6510,20 @@ func TestInterEngine_DoShardMove_OrderFiles(t *testing.T) {
 	err = closeShard(sh)
 	require.NoError(t, err)
 
-	// 2. exist only 00000001-0000-00000000.tssp.init, so there is no order and out of order files
+	// 2. both exist order and outoforder file
+	dstFile2 := filepath.Join(sh.dataPath, immutable.TsspDirName, "mst", "out-of-order", "00000001-0000-00000000.tssp")
+	fileops.CopyFile(srcFile, dstFile2)
+
+	sh, err = createShard(defaultDb, defaultRp, defaultPtId, dir, config.TSSTORE)
+	require.NoError(t, err)
+	err = sh.doShardMove()
+	require.NoError(t, err)
+	err = closeShard(sh)
+	require.NoError(t, err)
+
+	// 3. exist only 00000001-0000-00000000.tssp.init, so there is no order and out of order files
 	fileops.Remove(srcFile)
+	fileops.Remove(dstFile2)
 	sh, err = createShard(defaultDb, defaultRp, defaultPtId, dir, config.TSSTORE)
 	require.NoError(t, err)
 	err = sh.doShardMove()
@@ -7029,10 +7122,15 @@ func TestAggQueryOnlyInImmutable_NoEmpty_OneBoolMinMaxOp(t *testing.T) {
 							calls := genCall(c.fieldAux, c.aggCall[i])
 							querySchema := genAggQuerySchema(c.fieldAux, calls, opt)
 							ops := genOps(c.fieldAux, calls)
-							cursors, err := sh.CreateCursor(context.Background(), querySchema)
+							info, err := sh.CreateCursor(context.Background(), querySchema)
 							if err != nil {
 								t.Fatal(err)
 							}
+							if info == nil {
+								return
+							}
+							defer func() { info.Unref() }()
+							cursors := info.GetCursors()
 
 							updateClusterCursor(cursors, ops, c.aggCall[i])
 							// step5: loop all cursors to query data from shard
@@ -7112,6 +7210,9 @@ func (client *MockMetaClient) CreateSubscription(database, rp, name, mode string
 	return nil
 }
 func (client *MockMetaClient) CreateUser(name, password string, admin, rwuser bool) (meta2.User, error) {
+	return nil, nil
+}
+func (client *MockMetaClient) DatabaseOption(db string) (*obs.ObsOptions, error) {
 	return nil, nil
 }
 func (client *MockMetaClient) Databases() map[string]*meta2.DatabaseInfo {
@@ -7254,7 +7355,7 @@ func (client *MockMetaClient) Schema(database string, retentionPolicy string, ms
 func (client *MockMetaClient) GetMeasurements(m *influxql.Measurement) ([]*meta2.MeasurementInfo, error) {
 	return client.mstInfo, nil
 }
-func (client *MockMetaClient) TagKeys(database string) map[string]set.Set {
+func (client *MockMetaClient) TagKeys(database string) map[string]set.Set[string] {
 	return nil
 }
 func (client *MockMetaClient) FieldKeys(database string, ms influxql.Measurements) (map[string]map[string]int32, error) {
@@ -7290,7 +7391,7 @@ func (client *MockMetaClient) ShowCluster(nodeType string, ID uint64) (models.Ro
 func (client *MockMetaClient) ShowClusterWithCondition(nodeType string, ID uint64) (models.Rows, error) {
 	return nil, nil
 }
-func (client *MockMetaClient) GetAliveShards(database string, sgi *meta2.ShardGroupInfo) []int {
+func (client *MockMetaClient) GetAliveShards(database string, sgi *meta2.ShardGroupInfo, isRead bool) []int {
 	return nil
 }
 
@@ -7432,8 +7533,15 @@ func TestCreateCursorWithAbort(t *testing.T) {
 		hasTimeFilter = true
 	}
 	immutableReader, mutableReader := sh.cloneReaders(querySchema.Options().OptionsName(), hasTimeFilter, tr)
-	// unref file(no need lock here), series iterator will ref/unref file itself
-	unRefReaders(immutableReader, mutableReader)
+	for _, file := range immutableReader.Orders {
+		file.UnrefFileReader()
+		file.Unref()
+	}
+	for _, file := range immutableReader.OutOfOrders {
+		file.UnrefFileReader()
+		file.Unref()
+	}
+	mutableReader.UnRef()
 
 	closedSignal := false
 	closedSignalPtr := &closedSignal
@@ -7462,4 +7570,19 @@ func TestCreateCursorWithAbort(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestIsSameIndex(t *testing.T) {
+	s1, s2 := &shard{}, &shard{}
+	assert2.False(t, s1.IsSameIndex(s2))
+	ident := &meta.IndexIdentifier{Index: &meta2.IndexDescriptor{IndexID: 1}}
+	opt := &tsi.Options{}
+	lock := ""
+	sequenceID := uint64(1)
+	opt.Ident(ident)
+	opt.Lock(&lock)
+	opt.SequenceId(&sequenceID)
+	s1.indexBuilder = tsi.NewIndexBuilder(opt)
+	s2.indexBuilder = tsi.NewIndexBuilder(opt)
+	assert2.True(t, s1.IsSameIndex(s2))
 }

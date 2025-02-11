@@ -24,7 +24,7 @@ import (
 	"testing"
 	"time"
 
-	set "github.com/deckarep/golang-set"
+	set "github.com/deckarep/golang-set/v2"
 	"github.com/influxdata/influxdb/models"
 	"github.com/influxdata/influxdb/toml"
 	originql "github.com/influxdata/influxql"
@@ -413,7 +413,7 @@ func (client *MockMetaClient) Schema(database string, retentionPolicy string, ms
 func (client *MockMetaClient) GetMeasurements(m *influxql.Measurement) ([]*meta2.MeasurementInfo, error) {
 	return nil, nil
 }
-func (client *MockMetaClient) TagKeys(database string) map[string]set.Set {
+func (client *MockMetaClient) TagKeys(database string) map[string]set.Set[string] {
 	return nil
 }
 func (client *MockMetaClient) FieldKeys(database string, ms influxql.Measurements) (map[string]map[string]int32, error) {
@@ -449,7 +449,7 @@ func (client *MockMetaClient) ShowCluster(nodeType string, ID uint64) (models.Ro
 func (client *MockMetaClient) ShowClusterWithCondition(nodeType string, ID uint64) (models.Rows, error) {
 	return nil, nil
 }
-func (client *MockMetaClient) GetAliveShards(database string, sgi *meta2.ShardGroupInfo) []int {
+func (client *MockMetaClient) GetAliveShards(database string, sgi *meta2.ShardGroupInfo, isRead bool) []int {
 	return nil
 }
 

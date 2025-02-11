@@ -445,7 +445,7 @@ func TestSeqFilterShardIdReader(t *testing.T) {
 		QueryId: 1,
 		Query:   "select * from mst",
 	}
-	option.LogQueryCurrId = "1635724829000000000|0|0^^"
+	option.LogQueryCurrId = "1635724829000000000|3|3^^"
 	option.Limit = 10
 	schema3 := []record.Field{
 		{Name: record.SeqIDField, Type: influx.Field_Type_Int},
@@ -453,7 +453,7 @@ func TestSeqFilterShardIdReader(t *testing.T) {
 		{Name: "field2_int", Type: influx.Field_Type_Int},
 		{Name: "time", Type: influx.Field_Type_Int},
 	}
-	decs := NewFileReaderContext(util.TimeRange{Min: 1635724829000000000, Max: 1645724819000000000}, schema3, NewReadContext(true), NewFilterOpts(nil, nil, nil, nil), nil, false)
+	decs := NewFileReaderContext(util.TimeRange{Min: 1635724829000000000, Max: 1645724819000000000}, schema3, NewReadContext(false), NewFilterOpts(nil, nil, nil, nil), nil, false)
 	treader, _ := NewTSSPFileDetachedReader(metaIndex[:1], [][]int{[]int{0, 2}}, decs, sparseindex.NewOBSFilterPath("", p, nil), nil, true, &option)
 	totalRow := 0
 	for {
@@ -484,7 +484,7 @@ func TestSeqFilterShardIdReader(t *testing.T) {
 		t.Errorf("get wrong result")
 	}
 
-	option.Ascending = true
+	option.Ascending = false
 	option.LogQueryCurrId = "1635724829000000000|2|2^^"
 	treader, _ = NewTSSPFileDetachedReader(metaIndex[:1], [][]int{[]int{0, 2}}, decs, sparseindex.NewOBSFilterPath("", p, nil), nil, true, &option)
 	rec = &record.Record{}
@@ -493,6 +493,45 @@ func TestSeqFilterShardIdReader(t *testing.T) {
 	rec.AppendTime(1635724829000000000)
 	rec.ColVals[0].AppendInteger(1)
 	rec.ColVals[1].AppendInteger(2)
+	rec = treader.filterForLog(rec)
+	assert.Equal(t, 1, rec.RowNums())
+
+	option.Ascending = false
+	option.LogQueryCurrId = "1635724829000000000|1|1^^"
+	treader, _ = NewTSSPFileDetachedReader(metaIndex[:1], [][]int{[]int{0, 2}}, decs, sparseindex.NewOBSFilterPath("", p, nil), nil, true, &option)
+	rec = &record.Record{}
+	treader.shardId = 1
+	rec.SetSchema(schema3)
+	rec.ColVals = make([]record.ColVal, len(schema3))
+	rec.AppendTime(1635724829000000000)
+	rec.ColVals[0].AppendInteger(0)
+	rec.ColVals[1].AppendInteger(1)
+	rec = treader.filterForLog(rec)
+	assert.Equal(t, 1, rec.RowNums())
+
+	option.Ascending = true
+	option.LogQueryCurrId = "1635724829000000000|1|1^^"
+	treader, _ = NewTSSPFileDetachedReader(metaIndex[:1], [][]int{[]int{0, 2}}, decs, sparseindex.NewOBSFilterPath("", p, nil), nil, true, &option)
+	rec = &record.Record{}
+	treader.shardId = 1
+	rec.SetSchema(schema3)
+	rec.ColVals = make([]record.ColVal, len(schema3))
+	rec.AppendTime(1635724829000000000)
+	rec.ColVals[0].AppendInteger(3)
+	rec.ColVals[1].AppendInteger(1)
+	rec = treader.filterForLog(rec)
+	assert.Equal(t, 1, rec.RowNums())
+
+	option.Ascending = true
+	option.LogQueryCurrId = "1635724829000000000|1|1^^"
+	treader, _ = NewTSSPFileDetachedReader(metaIndex[:1], [][]int{[]int{0, 2}}, decs, sparseindex.NewOBSFilterPath("", p, nil), nil, true, &option)
+	rec = &record.Record{}
+	treader.shardId = 2
+	rec.SetSchema(schema3)
+	rec.ColVals = make([]record.ColVal, len(schema3))
+	rec.AppendTime(1635724829000000000)
+	rec.ColVals[0].AppendInteger(0)
+	rec.ColVals[1].AppendInteger(1)
 	rec = treader.filterForLog(rec)
 	assert.Equal(t, 1, rec.RowNums())
 

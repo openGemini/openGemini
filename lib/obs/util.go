@@ -22,7 +22,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/influxdata/influxdb/services/meta"
 	"github.com/openGemini/openGemini/lib/errno"
 )
 
@@ -39,8 +38,8 @@ const (
 
 // "data/dbName/ptID/rpName/shardId_startTime_endTime_indexId/columnstore"
 func GetShardPath(shardId, IndexId uint64, ptId uint32, startTime, endTime time.Time, databaseName, rpName string) string {
-	shardPath := strconv.FormatUint(shardId, 10) + shardSeparator + strconv.FormatInt(meta.MarshalTime(startTime), 10) +
-		shardSeparator + strconv.FormatInt(meta.MarshalTime(endTime), 10) +
+	shardPath := strconv.FormatUint(shardId, 10) + shardSeparator + strconv.FormatInt(MarshalTime(startTime), 10) +
+		shardSeparator + strconv.FormatInt(MarshalTime(endTime), 10) +
 		shardSeparator + strconv.FormatUint(IndexId, 10)
 	logPath := path.Join(StoreDirName, databaseName, strconv.FormatUint(uint64(ptId), 10), rpName, shardPath, ColumnStoreDirName)
 	return logPath
@@ -135,4 +134,12 @@ func ParseLogPath(logPath string) (*LogPathInfo, error) {
 	}
 
 	return logInfo, nil
+}
+
+// MarshalTime converts t to nanoseconds since epoch. A zero time returns 0.
+func MarshalTime(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.UnixNano()
 }

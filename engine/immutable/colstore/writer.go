@@ -132,7 +132,7 @@ func NewIndexWriter(lockPath *string, filePath string) (*IndexWriter, error) {
 	var err error
 	lock := fileops.FileLockOption(*lockPath)
 	pri := fileops.FilePriorityOption(fileops.IO_PRIORITY_NORMAL)
-	indexWriter.fd, err = fileops.OpenFile(filePath, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0640, lock, pri)
+	indexWriter.fd, err = fileops.OpenFile(filePath, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0600, lock, pri)
 	if err != nil {
 		log.Error("create file fail", zap.String("name", filePath), zap.Error(err))
 		return nil, err

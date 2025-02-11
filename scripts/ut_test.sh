@@ -35,7 +35,7 @@ splittingLine "end: check license header"
 splittingLine "start: static check and other go lint"
 
 [[ -s "$GVM_ROOT/scripts/gvm" ]] && source "$GVM_ROOT/scripts/gvm"
-gvm use go1.20 -y --default
+gvm use go1.22 -y --default
 
 rm -f go.sum
 go mod tidy
@@ -95,19 +95,15 @@ sed -i "s/# store-enabled = false/store-enabled = true/g" config/openGemini.conf
 sed -i "s~# store-path = \"/tmp/openGemini/metric/{{id}}/metric.data\"~store-path = \"/tmp/openGemini/metric/{{id}}/metric.data\"~g" config/openGemini.conf
 rm -rf /tmp/openGemini/metric/
 
-splittingLine "start run AT-hot duration test"
+cp config/openGemini.conf config/openGemini.conf.bk
+
+echo '[data.shelf-mode]' >> config/openGemini.conf
+echo '  enabled = false' >> config/openGemini.conf
+
+splittingLine "start run shelf write mode test"
 for t in "normal"
 do
     sed -i "s/# shard-tier = \"warm\"/shard-tier = \"hot\"/g" config/openGemini.conf
-
-    sed -i "s/cache-table-data-block = false/cache-table-data-block = true/g" config/openGemini.conf
-    sed -i "s/cache-table-meta-block = false/cache-table-meta-block = true/g" config/openGemini.conf
-
-    if [[ $t == "HA" ]]; then
-        sed -i "s/ha-enable = false/ha-enable = true/g" config/openGemini.conf
-    else
-        sed -i "s/ha-enable = true/ha-enable = false/g" config/openGemini.conf
-    fi
 
     sh scripts/install_cluster.sh
 
@@ -132,22 +128,15 @@ sed -i "s/DefaultInnerChunkSize = 1024/DefaultInnerChunkSize = 1/g" lib/util/lif
 
 python build.py  --clean
 
+rm config/openGemini.conf
+cp config/openGemini.conf.bk config/openGemini.conf
+
 splittingLine "start run AT-warm duration test, DefaultInnerChunkSize: 1"
 for t in "normal"
 do
-    sed -i "s/shard-tier = \"hot\"/shard-tier = \"warm\"/g" config/openGemini.conf
-
-    sed -i "s/cache-table-data-block = true/cache-table-data-block = false/g" config/openGemini.conf
-    sed -i "s/cache-table-meta-block = true/cache-table-meta-block = false/g" config/openGemini.conf
     sed -i "s/enable-mmap-read = true/enable-mmap-read = false/g" config/openGemini.conf
     sed -i "s/read-cache-limit = 0/read-cache-limit = 5368709120/g" config/openGemini.conf
     sed -i "/subscriber/a\  enabled = true"	config/openGemini.conf
-
-    if [[ $t == "HA" ]]; then
-        sed -i "s/ha-enable = false/ha-enable = true/g" config/openGemini.conf
-    else
-        sed -i "s/ha-enable = true/ha-enable = false/g" config/openGemini.conf
-    fi
 
     bash scripts/install_cluster.sh
 

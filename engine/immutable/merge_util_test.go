@@ -39,9 +39,9 @@ func TestLastMergeTime(t *testing.T) {
 }
 
 func TestMergeContext(t *testing.T) {
-	ctx := immutable.NewMergeContext("mst", 0)
+	ctx := immutable.NewMergeContext("mst", 0, false)
 	ctx.Release()
-	ctx = immutable.NewMergeContext("mst", 0)
+	ctx = immutable.NewMergeContext("mst", 0, true)
 
 	beforeTest(t, 0)
 	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())

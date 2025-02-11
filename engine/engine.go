@@ -24,13 +24,13 @@ import (
 	"os"
 	"path"
 	"runtime/debug"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/cgroup"
 	"github.com/influxdata/influxdb/pkg/limiter"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
@@ -49,7 +49,7 @@ import (
 	"github.com/openGemini/openGemini/lib/resourceallocator"
 	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/syscontrol"
-	"github.com/openGemini/openGemini/lib/sysinfo"
+	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
@@ -99,29 +99,6 @@ type Engine struct {
 	backup        *Backup
 }
 
-const maxInt = int(^uint(0) >> 1)
-
-func sysTotalMemory() int {
-	sysTotalMem, err := sysinfo.TotalMemory()
-	if err != nil {
-		panic(err)
-	}
-
-	totalMem := maxInt
-	if sysTotalMem < uint64(maxInt) {
-		totalMem = int(sysTotalMem)
-	}
-
-	mem := cgroup.GetMemoryLimit()
-	if mem <= 0 || int64(int(mem)) != mem || int(mem) > totalMem {
-		mem = cgroup.GetHierarchicalMemoryLimit()
-		if mem <= 0 || int64(int(mem)) != mem || int(mem) > totalMem {
-			return totalMem
-		}
-	}
-	return int(mem)
-}
-
 func NewEngine(dataPath, walPath string, options netstorage.EngineOptions, ctx *meta.LoadCtx) (netstorage.Engine, error) {
 	eng := &Engine{
 		closed:        interruptsignal.NewInterruptSignal(),
@@ -145,13 +122,11 @@ func NewEngine(dataPath, walPath string, options netstorage.EngineOptions, ctx *
 	SetFullCompColdDuration(options.FullCompactColdDuration)
 	fileops.EnableMmapRead(options.EnableMmapRead)
 	fileops.SetPageSize(options.ReadPageSize)
+	fileops.SetMetaPageList(options.ReadMetaPageSize)
 	fileops.EnableReadMetaCache(options.ReadMetaCacheLimit)
 	fileops.EnableReadDataCache(options.ReadDataCacheLimit)
 	immutable.SetMaxCompactor(options.MaxConcurrentCompactions)
 	immutable.SetMaxFullCompactor(options.MaxFullCompactions)
-	immutable.SetImmTableMaxMemoryPercentage(sysTotalMemory(), options.ImmTableMaxMemoryPercentage)
-	immutable.SetCacheDataBlock(options.CacheDataBlock)
-	immutable.SetCacheMetaData(options.CacheMetaBlock)
 	immutable.SetCompactLimit(options.CompactThroughput, options.CompactThroughputBurst)
 	immutable.SetSnapshotLimit(options.SnapshotThroughput, options.SnapshotThroughputBurst)
 	fileops.SetBackgroundReadLimiter(options.BackgroundReadThroughput)
@@ -461,7 +436,35 @@ func (e *Engine) ForceFlush() {
 	log.Info("shard flush done", zap.Duration("time used(s)", d))
 }
 
-func (e *Engine) UpdateShardDurationInfo(info *meta2.ShardDurationInfo) error {
+func (e *Engine) UpdateIndexDurationInfo(info *meta2.IndexDurationInfo, nilIndexMap *map[uint64]*meta2.IndexDurationInfo) error {
+	e.mu.RLock()
+	if err := e.checkAndAddRefPTNoLock(info.Ident.OwnerDb, info.Ident.OwnerPt); err != nil {
+		e.mu.RUnlock()
+		return err
+	}
+	dbPT := e.DBPartitions[info.Ident.OwnerDb][info.Ident.OwnerPt]
+	e.mu.RUnlock()
+	defer e.unrefDBPT(info.Ident.OwnerDb, info.Ident.OwnerPt)
+
+	dbPT.mu.RLock()
+	defer dbPT.mu.RUnlock()
+	index := dbPT.indexBuilder[info.Ident.IndexID]
+	if index == nil {
+		(*nilIndexMap)[info.Ident.IndexID] = info
+		log.Info("nil index duration info", zap.Uint64("indexId", info.Ident.IndexID),
+			zap.Uint64("index group id", info.Ident.IndexGroupID),
+			zap.Duration("duration", info.DurationInfo.Duration))
+		return nil
+	}
+	log.Info("duration info", zap.Uint64("indexId", info.Ident.IndexID),
+		zap.Uint64("index group id", info.Ident.IndexGroupID),
+		zap.Duration("duration", info.DurationInfo.Duration))
+	index.Ident().Index.IndexGroupID = info.Ident.IndexGroupID
+	index.SetDuration(info.DurationInfo.Duration)
+	return nil
+}
+
+func (e *Engine) UpdateShardDurationInfo(info *meta2.ShardDurationInfo, nilShardMap *map[uint64]*meta2.ShardDurationInfo) error {
 	e.mu.RLock()
 	if err := e.checkAndAddRefPTNoLock(info.Ident.OwnerDb, info.Ident.OwnerPt); err != nil {
 		e.mu.RUnlock()
@@ -475,6 +478,10 @@ func (e *Engine) UpdateShardDurationInfo(info *meta2.ShardDurationInfo) error {
 	defer dbPT.mu.RUnlock()
 	shard := dbPT.shards[info.Ident.ShardID]
 	if shard == nil || shard.GetIndexBuilder() == nil {
+		(*nilShardMap)[info.Ident.ShardID] = info
+		log.Info("nil shard duration info", zap.Uint64("shardId", info.Ident.ShardID),
+			zap.Uint64("shard group id", info.Ident.ShardGroupID),
+			zap.Duration("duration", info.DurationInfo.Duration))
 		return nil
 	}
 	log.Info("duration info", zap.Uint64("shardId", info.Ident.ShardID),
@@ -488,7 +495,33 @@ func (e *Engine) UpdateShardDurationInfo(info *meta2.ShardDurationInfo) error {
 	return nil
 }
 
-func (e *Engine) ExpiredShards() []*meta2.ShardIdentifier {
+func (e *Engine) containSid(shards []*meta2.ShardIdentifier, sid uint64) bool {
+	for _, s := range shards {
+		if s.ShardID == sid {
+			return true
+		}
+	}
+	return false
+}
+
+func (e *Engine) containIdxid(indexes []*meta2.IndexIdentifier, idxId uint64) bool {
+	for _, s := range indexes {
+		if s.Index.IndexID == idxId {
+			return true
+		}
+	}
+	return false
+}
+
+func (e *Engine) nilShardIsExpired(duration time.Duration, endTime time.Time) bool {
+	now := time.Now().UTC()
+	if duration != 0 && endTime.Add(duration).Before(now) {
+		return true
+	}
+	return false
+}
+
+func (e *Engine) ExpiredShards(nilShardMap *map[uint64]*meta2.ShardDurationInfo) []*meta2.ShardIdentifier {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
@@ -501,13 +534,21 @@ func (e *Engine) ExpiredShards() []*meta2.ShardIdentifier {
 					res = append(res, pti.shards[sid].GetIdent())
 				}
 			}
+			for sid, info := range *nilShardMap {
+				if e.containSid(res, sid) {
+					continue
+				}
+				if e.nilShardIsExpired(info.DurationInfo.Duration, info.Ident.EndTime) {
+					res = append(res, &info.Ident)
+				}
+			}
 			pti.mu.RUnlock()
 		}
 	}
 	return res
 }
 
-func (e *Engine) ExpiredIndexes() []*meta2.IndexIdentifier {
+func (e *Engine) ExpiredIndexes(nilIndexMap *map[uint64]*meta2.IndexDurationInfo) []*meta2.IndexIdentifier {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
@@ -518,6 +559,27 @@ func (e *Engine) ExpiredIndexes() []*meta2.IndexIdentifier {
 			for idxId := range e.DBPartitions[db][pti.id].indexBuilder {
 				if e.DBPartitions[db][pti.id].indexBuilder[idxId].Expired() {
 					res = append(res, e.DBPartitions[db][pti.id].indexBuilder[idxId].Ident())
+				}
+			}
+			for idxId, info := range *nilIndexMap {
+				if e.containIdxid(res, idxId) {
+					continue
+				}
+				if e.nilShardIsExpired(info.DurationInfo.Duration, info.Ident.EndTime) {
+					index := meta2.IndexDescriptor{
+						IndexID:      info.Ident.IndexID,
+						IndexGroupID: info.Ident.IndexGroupID,
+						TimeRange: meta2.TimeRangeInfo{
+							StartTime: info.Ident.StartTime,
+							EndTime:   info.Ident.EndTime,
+						},
+					}
+					res = append(res, &meta2.IndexIdentifier{
+						OwnerDb: info.Ident.OwnerDb,
+						OwnerPt: info.Ident.OwnerPt,
+						Policy:  info.Ident.Policy,
+						Index:   &index,
+					})
 				}
 			}
 			pti.mu.RUnlock()
@@ -716,14 +778,18 @@ func (e *Engine) ClearIndexCache(db string, ptId uint32, indexID uint64) error {
 func (e *Engine) FetchShardsNeedChangeStore() (shardsToWarm, shardsToCold []*meta2.ShardIdentifier) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
+	var latestShardID uint64
 
 	for db := range e.DBPartitions {
 		for pt := range e.DBPartitions[db] {
 			e.DBPartitions[db][pt].mu.RLock()
-			for _, shard := range e.DBPartitions[db][pt].shards {
+			if config.GetStoreConfig().EnableWriteHistoryOrderedData {
+				latestShardID = e.getLatestShard(e.DBPartitions[db][pt].shards)
+			}
+			for id, shard := range e.DBPartitions[db][pt].shards {
 				tier := shard.GetTier()
 				expired := shard.IsTierExpired()
-				if !expired || tier == util.Cold {
+				if !expired || tier == util.Cold || (config.GetStoreConfig().EnableWriteHistoryOrderedData && id == latestShardID) {
 					continue
 				}
 				if tier == util.Hot {
@@ -736,6 +802,18 @@ func (e *Engine) FetchShardsNeedChangeStore() (shardsToWarm, shardsToCold []*met
 		}
 	}
 	return shardsToWarm, shardsToCold
+}
+
+func (e *Engine) getLatestShard(shards map[uint64]Shard) uint64 {
+	minEndTime := time.Time{}
+	var latestShardID uint64
+	for id, shard := range shards {
+		if shard.GetEndTime().After(minEndTime) {
+			minEndTime = shard.GetEndTime()
+			latestShardID = id
+		}
+	}
+	return latestShardID
 }
 
 func (e *Engine) ChangeShardTierToWarm(db string, ptId uint32, shardID uint64) error {
@@ -866,7 +944,7 @@ func (e *Engine) WriteToRaft(db, rp string, ptId uint32, tail []byte) error {
 	dbpt.proposeC <- marshal
 
 	// 4.wait committed return
-	timeT := time.After(10 * time.Second)
+	timeT := time.After(config.WaitCommitTimeout)
 	select {
 	case commitedErr := <-c:
 		if commitedErr != nil {
@@ -912,7 +990,7 @@ func (e *Engine) CreateShard(db, rp string, ptId uint32, shardID uint64, timeRan
 	defer dbPTInfo.mu.Unlock()
 	_, ok := dbPTInfo.shards[shardID]
 	if !ok {
-		sh, err := dbPTInfo.NewShard(rp, shardID, timeRangeInfo, e.metaClient, mstInfo.EngineType)
+		sh, err := dbPTInfo.NewShard(rp, shardID, timeRangeInfo, e.metaClient, mstInfo)
 		if err != nil {
 			return err
 		}
@@ -985,7 +1063,10 @@ func (e *Engine) CreateDBPT(db string, pt uint32, enableTagArray bool) {
 	ptPath := path.Join(e.dataPath, config.DataDirectory, db, strconv.Itoa(int(pt)))
 	walPath := path.Join(e.walPath, config.WalDirectory, db, strconv.Itoa(int(pt)))
 	lockPath := path.Join(ptPath, "LOCK")
-	dbPTInfo := NewDBPTInfo(db, pt, ptPath, walPath, e.loadCtx, e.fileInfos)
+
+	options, _ := e.metaClient.DatabaseOption(db)
+
+	dbPTInfo := NewDBPTInfo(db, pt, ptPath, walPath, e.loadCtx, e.fileInfos, options)
 	dbPTInfo.lockPath = &lockPath
 	e.addDBPTInfo(dbPTInfo)
 	dbPTInfo.SetOption(e.engOpt)
@@ -1327,18 +1408,75 @@ func (e *Engine) getDBPTInfo(db string, ptId uint32) *DBPTInfo {
 	return e.DBPartitions[db][ptId]
 }
 
-func (e *Engine) CreateLogicalPlan(ctx context.Context, db string, ptId uint32, shardID uint64,
+func (e *Engine) CreateLogicalPlan(ctx context.Context, db string, ptId uint32, shardID []uint64,
 	sources influxql.Sources, schema *executor.QuerySchema) (hybridqp.QueryNode, error) {
-	sh, err := e.GetShard(db, ptId, shardID)
+	if len(shardID) == 1 {
+		return e.CreateLogicalPlanOneShard(ctx, db, ptId, shardID, sources, schema)
+	}
+	return e.CreateLogicalPlanCrossShard(ctx, db, ptId, shardID, sources, schema)
+}
+
+func (e *Engine) CreateLogicalPlanOneShard(ctx context.Context, db string, ptId uint32, shardID []uint64,
+	sources influxql.Sources, schema *executor.QuerySchema) (hybridqp.QueryNode, error) {
+	sh, err := e.GetShard(db, ptId, shardID[0])
 	if err != nil {
 		return nil, err
 	}
 	if sh == nil {
 		return nil, nil
 	}
-
-	// FIXME:context cancel func
 	return sh.CreateLogicalPlan(ctx, sources, schema)
+}
+
+func (e *Engine) CreateLogicalPlanCrossShard(ctx context.Context, db string, ptId uint32, shardID []uint64,
+	sources influxql.Sources, schema *executor.QuerySchema) (hybridqp.QueryNode, error) {
+	span := tracing.SpanFromContext(ctx)
+	defer tracing.Finish(span)
+
+	var seriesNum int
+	var tagSetMergeInfos []*tsi.TagSetMergeInfo
+	shards := make([]*shard, 0, len(shardID))
+	for i := range shardID {
+		sh, err := e.GetShard(db, ptId, shardID[i])
+		if err != nil {
+			return nil, err
+		}
+		if sh == nil {
+			return nil, nil
+		}
+		shards = append(shards, sh.(*shard))
+	}
+	sort.Slice(shards, func(i, j int) bool {
+		return shards[i].GetStartTime().Before(shards[j].GetStartTime())
+	})
+	for i := range shards {
+		if i > 0 && shards[i-1].IsSameIndex(shards[i]) {
+			tagSetMergeInfos = tsi.ExtendMergeTagSetInfos(tagSetMergeInfos, shards[i].GetID())
+			continue
+		}
+		tagSetInfos, _, err := shards[i].ScanWithInvertedIndex(span, ctx, sources, schema)
+		if err != nil {
+			return nil, err
+		}
+		if tagSetInfos == nil {
+			continue
+		}
+		tagSetMergeInfos = tsi.SortMergeTagSetInfos(tagSetMergeInfos, tagSetInfos, shards[i].GetID(), len(shards))
+	}
+	tagSets := make([]tsi.TagSet, len(tagSetMergeInfos))
+	for i := range tagSetMergeInfos {
+		seriesNum += tagSetMergeInfos[i].Len()
+		tagSets[i] = tagSetMergeInfos[i]
+	}
+	info, err := CreateCursor(ctx, schema, nil, shards, tagSets, seriesNum)
+	if err != nil {
+		return nil, err
+	}
+	if info == nil || info.IsEmpty() {
+		log.Debug("no data in shard", zap.Uint64s("id", shardID))
+		return nil, nil
+	}
+	return executor.NewLogicalDummyShard(info), nil
 }
 
 func (e *Engine) ScanWithSparseIndex(ctx context.Context, db string, ptId uint32, shardIDs []uint64, schema *executor.QuerySchema) (executor.ShardsFragments, error) {

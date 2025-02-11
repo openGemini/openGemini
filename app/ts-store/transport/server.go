@@ -23,6 +23,8 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/pointsdecoder"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
+	servicesstream "github.com/openGemini/openGemini/services/stream"
 	"go.uber.org/zap"
 )
 
@@ -133,34 +135,52 @@ func (s *Server) MustClose() {
 
 }
 
-func WriteStreamPoints(ww *pointsdecoder.DecoderWork, log *logger.Logger, store *storage.Storage, stream stream.Engine) (error, bool) {
+func WriteStreamPoints(ww *pointsdecoder.DecoderWork, log *logger.Logger, store *storage.Storage, streamEngine stream.Engine) (error, bool) {
 	var inUse bool
 	db, rp, ptId, shard, streamShardIdList, binaryRows, err := ww.DecodePoints()
 	if err != nil {
 		err = errno.NewError(errno.ErrUnmarshalPoints, err)
 		log.Error("unmarshal rows failed", zap.String("db", db),
 			zap.String("rp", rp), zap.Uint32("ptId", ptId), zap.Uint64("shardId", shard), zap.Error(err))
-		return err, inUse
+		return err, false
 	}
+
+	if streamEngine != nil && len(streamShardIdList) > 0 && servicesstream.IsWriteStreamPointsEnabled() {
+		streamIdDstShardIdMap := make(map[uint64]uint64)
+		if len(streamShardIdList)%2 != 0 {
+			err = errno.NewError(errno.ErrUnmarshalPoints, err)
+			return err, false
+		}
+		for i := 0; i < len(streamShardIdList); i += 2 {
+			streamIdDstShardIdMap[streamShardIdList[i]] = streamShardIdList[i+1]
+		}
+
+		streamRows := make([]influx.Row, 0)
+		inUse, err = streamEngine.WriteRows(&stream.WriteStreamRowsCtx{
+			DB:                    db,
+			RP:                    rp,
+			PtId:                  ptId,
+			ShardId:               shard,
+			StreamIdDstShardIdMap: streamIdDstShardIdMap,
+			WW:                    ww,
+			StreamRows:            &streamRows})
+		if err != nil {
+			return err, inUse
+		}
+		if len(streamRows) > 0 {
+			ww.SetRows(append(ww.GetRows(), streamRows...))
+			binaryRows = binaryRows[:0]
+			binaryRows, err = influx.FastMarshalMultiRows(binaryRows, ww.GetRows())
+			if err != nil {
+				return err, inUse
+			}
+		}
+	}
+
 	if err = store.WriteRows(db, rp, ptId, shard, ww.GetRows(), binaryRows); err != nil {
 		log.Error("write rows failed", zap.String("db", db),
 			zap.String("rp", rp), zap.Uint32("ptId", ptId), zap.Uint64("shardId", shard), zap.Error(err))
 	}
-	if stream == nil || len(streamShardIdList) == 0 {
-		return err, inUse
-	}
 
-	streamIdDstShardIdMap := make(map[uint64]uint64)
-	if len(streamShardIdList)%2 != 0 {
-		err = errno.NewError(errno.ErrUnmarshalPoints, err)
-		return err, inUse
-	}
-	for i := 0; i < len(streamShardIdList); i += 2 {
-		streamIdDstShardIdMap[streamShardIdList[i]] = streamShardIdList[i+1]
-	}
-	if err == nil && len(streamShardIdList) > 0 {
-		stream.WriteRows(db, rp, ptId, shard, streamIdDstShardIdMap, ww)
-		inUse = true
-	}
 	return err, inUse
 }

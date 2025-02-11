@@ -55,6 +55,10 @@ func SetPageSize(confPageSize string) {
 	readcache.SetPageSizeByConf(confPageSize)
 }
 
+func SetMetaPageList(confMetaPageList []string) {
+	readcache.SetMataPageListByConf(confMetaPageList)
+}
+
 func EnableReadMetaCache(en uint64) {
 	if en > 0 {
 		ReadMetaCacheEn = true
@@ -85,6 +89,7 @@ type BasicFileReader interface {
 	IsOpen() bool
 	FreeFileHandle() error
 	Close() error
+	ReadAll(dst []byte) ([]byte, error)
 }
 
 type fileReader struct {
@@ -120,6 +125,20 @@ func NewFileReader(f File, lock *string) *fileReader {
 
 func (r *fileReader) IsMmapRead() bool {
 	return len(r.mmapData) > 0
+}
+
+func (r *fileReader) ReadAll(dst []byte) ([]byte, error) {
+	if cap(dst) < int(r.fileSize) {
+		dst = make([]byte, r.fileSize)
+	}
+	n, err := io.ReadFull(r.fd, dst[:r.fileSize])
+	if err != nil {
+		return nil, err
+	}
+	if n < int(r.fileSize) {
+		err = errno.NewError(errno.ShortRead, n, r.fileSize)
+	}
+	return dst, err
 }
 
 func (r *fileReader) Size() (int64, error) {

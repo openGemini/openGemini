@@ -50,7 +50,6 @@ type Commit struct {
 	PtId           uint32
 	MasterShId     uint64
 	Data           [][]byte // []entry data
-	ApplyDoneC     chan<- struct{}
 	CommittedIndex uint64
 	fromReplay     bool
 }
@@ -102,6 +101,8 @@ type RaftNode struct {
 	DataCommittedC  map[uint64]chan error // key is proposeId
 
 	Identity string // db_ptId
+
+	tolerateStartTime atomic.Int64
 }
 
 func StartNode(store *raftlog.RaftDiskStorage, nodeId uint64, database string, id uint64,
@@ -118,7 +119,8 @@ func StartNode(store *raftlog.RaftDiskStorage, nodeId uint64, database string, i
 		MaxInflightMsgs: maxInflightMsgs,
 		Logger:          logger.GetSrLogger(),
 	}
-	logger.GetLogger().Info("StartRaftNode", zap.Int("electTick", c.ElectionTick), zap.Int("heartbeatTick", c.HeartbeatTick))
+	logger.GetLogger().Info("StartRaftNode", zap.Int("electTick", c.ElectionTick), zap.Int("heartbeatTick", c.HeartbeatTick),
+		zap.Int("raftMsgCacheSize", config.RaftMsgCacheSize), zap.Duration("waitCommitTimeout", config.WaitCommitTimeout))
 
 	ctx := context.Background()
 	cctx, cancelFn := context.WithCancel(ctx)
@@ -133,9 +135,9 @@ func StartNode(store *raftlog.RaftDiskStorage, nodeId uint64, database string, i
 		Store:     store,
 		RaftPeers: peers,
 
-		proposeC:    make(chan []byte),
+		proposeC:    make(chan []byte, 1),
 		confChangeC: make(chan raftpb.ConfChange),
-		commitC:     make(chan *Commit),
+		commitC:     make(chan *Commit, config.RaftMsgCacheSize),
 		errorC:      make(chan error),
 		nodeId:      nodeId,
 		database:    database,
@@ -150,7 +152,7 @@ func StartNode(store *raftlog.RaftDiskStorage, nodeId uint64, database string, i
 		MetaClient:     client,
 		ISend:          netstorage.NewNetStorage(client),
 		DataCommittedC: make(map[uint64]chan error),
-		Messages:       make(chan *raftpb.Message, 1024),
+		Messages:       make(chan *raftpb.Message, config.RaftMsgCacheSize),
 	}
 	n.initIdentity()
 	return n
@@ -235,7 +237,7 @@ func (n *RaftNode) InitAndStartNode() error {
 			// replay wal
 			err := n.replay(sp)
 			if err != nil {
-				panic("replay wal error")
+				n.logger.Error("replay wal error", zap.Error(err))
 			}
 		}
 		n.node = raft.RestartNode(n.Cfg)
@@ -246,16 +248,33 @@ func (n *RaftNode) InitAndStartNode() error {
 	go n.serveChannels()
 	go n.snapshotAfterFlush()
 	go n.deleteEntryLogPeriodically()
-	n.sendRaftMessages()
+	go n.sendRaftMessages()
 	return nil
 }
 
-func (n *RaftNode) TransferLeadership(newLeader uint64) {
+func (n *RaftNode) sendRaftMessages() {
+	for {
+		select {
+		case msg, ok := <-n.Messages:
+			if ok {
+				n.send(*msg)
+			} else {
+				n.logger.Info("RaftNode sendRaftMessages return")
+				return
+			}
+		case <-n.ctx.Done():
+			n.logger.Info("RaftNode sendRaftMessages ctx.done")
+			return
+		}
+	}
+}
+
+func (n *RaftNode) TransferLeadership(newLeader uint64) error {
 	// wait for electing a leader
 	for {
 		select {
 		case <-n.ctx.Done():
-			return
+			return nil
 		default:
 		}
 		if n.node.Status().Lead == 0 {
@@ -272,16 +291,17 @@ func (n *RaftNode) TransferLeadership(newLeader uint64) {
 	n.logger.Info("raft try to elect a new leader", zap.Uint32("old leader partition", GetPtId(oldLeader)), zap.Uint32("new leader partition", GetPtId(newLeader)))
 
 	var timer = time.NewTimer(10 * time.Second)
-	for loop := true; loop && n.node.Status().Lead != newLeader; {
+	for n.node.Status().Lead != newLeader {
 		select {
 		case <-timer.C:
-			loop = false
 			n.logger.Error("try to transfer leadership timeout")
+			return fmt.Errorf("try to transfer leadership timeout")
 		default:
 			time.Sleep(100 * time.Millisecond)
 		}
 	}
 	n.logger.Info("try to transfer leadership finish")
+	return nil
 }
 
 // serveChannels handles the raft messages
@@ -314,6 +334,12 @@ func (n *RaftNode) serveChannels() {
 			// wal write
 			n.SaveToStorage(&rd.HardState, rd.Entries, &rd.Snapshot)
 			n.logger.Debug("save to storage successful", zap.Duration("time used", time.Since(start)))
+
+			if raftlog.IsValidSnapshot(rd.Snapshot) {
+				n.confState = &rd.Snapshot.Metadata.ConfState
+				n.appliedIndex = rd.Snapshot.Metadata.Index
+			}
+
 			start = time.Now()
 
 			for rd.MustSync {
@@ -327,12 +353,11 @@ func (n *RaftNode) serveChannels() {
 				break
 			}
 
-			applyDoneC, ok := n.PublishEntries(n.entriesToApply(rd.CommittedEntries))
+			ok := n.PublishEntries(n.entriesToApply(rd.CommittedEntries))
 			if !ok {
 				n.Stop()
 				return
 			}
-			n.waitWriteOK(applyDoneC)
 			n.logger.Debug("publish entries successful", zap.Duration("time used", time.Since(start)))
 			start = time.Now()
 
@@ -385,6 +410,7 @@ func (n *RaftNode) proposals() {
 	}
 	// client closed channel; shutdown raft if not already
 	if n.cancelFn != nil {
+		n.logger.Error("cancel fn is executed!!!")
 		n.cancelFn()
 	}
 }
@@ -428,9 +454,9 @@ func (n *RaftNode) entriesToApply(ents []raftpb.Entry) (nents []raftpb.Entry) {
 
 // PublishEntries writes committed log entries to Commit channel and returns
 // whether all entries could be published.
-func (n *RaftNode) PublishEntries(ents []raftpb.Entry) (<-chan struct{}, bool) {
+func (n *RaftNode) PublishEntries(ents []raftpb.Entry) bool {
 	if len(ents) == 0 {
-		return nil, true
+		return true
 	}
 
 	data := make([][]byte, 0, len(ents))
@@ -458,27 +484,23 @@ func (n *RaftNode) PublishEntries(ents []raftpb.Entry) (<-chan struct{}, bool) {
 		}
 	}
 
-	var applyDoneC chan struct{}
-
 	if len(data) > 0 {
-		applyDoneC = make(chan struct{}, 1)
 		select {
 		case n.commitC <- &Commit{
 			Database:       n.database,
 			PtId:           GetPtId(n.id),
 			Data:           data,
-			ApplyDoneC:     applyDoneC,
 			CommittedIndex: ents[len(ents)-1].Index,
 		}:
 		case <-n.ctx.Done():
-			return nil, false
+			return false
 		}
 	}
 
 	// after Commit, update appliedIndex
 	n.appliedIndex = ents[len(ents)-1].Index
 
-	return applyDoneC, true
+	return true
 }
 
 func (n *RaftNode) saveConfStateToMeta() {
@@ -497,20 +519,10 @@ func (n *RaftNode) saveConfStateToMeta() {
 	}
 }
 
-func (n *RaftNode) waitWriteOK(applyDoneC <-chan struct{}) {
-	// wait until all committed entries are applied (or server is closed)
-	if applyDoneC != nil {
-		select {
-		case <-applyDoneC:
-		case <-n.ctx.Done():
-			return
-		}
-	}
-}
-
 // Stop stops this raft node
 func (n *RaftNode) Stop() {
 	if n.cancelFn != nil {
+		n.logger.Error("cancel fn is executed by stop!!!")
 		n.cancelFn()
 	}
 	n.once.Do(func() {
@@ -640,6 +652,7 @@ func (n *RaftNode) snapShot() error {
 }
 
 func (n *RaftNode) replay(sp raftpb.Snapshot) error {
+	n.logger.Info("replay from snapshot.")
 	hardState, err2 := n.Store.HardState()
 	if err2 != nil {
 		return err2
@@ -651,8 +664,8 @@ func (n *RaftNode) replay(sp raftpb.Snapshot) error {
 	}
 
 	first, last := n.Store.GetFirstLast()
-	n.logger.Info("raftNode replay range", zap.String("db", n.database), zap.Uint32("ptid", n.ptId), zap.Uint64("lo", fromIndex), zap.Uint64("hi", committedIndex+1), zap.Uint64("first", first), zap.Uint64("last", last))
-
+	n.logger.Info("raftNode replay range", zap.String("db", n.database), zap.Uint32("ptid", n.ptId), zap.Uint64("lo", fromIndex), zap.Uint64("hi", committedIndex+1),
+		zap.Uint64("first", first), zap.Uint64("last", last))
 	entries, err1 := n.Store.Entries(fromIndex, committedIndex+1, math.MaxUint64)
 	if err1 != nil {
 		return err1
@@ -688,72 +701,103 @@ func (n *RaftNode) replay(sp raftpb.Snapshot) error {
 	return nil
 }
 
-func (n *RaftNode) CheckAllRgMembers() bool {
+func (n *RaftNode) CheckAllRgMembers() (bool, []uint32) {
 	peers := n.peers
-	nodeIdSet := make(map[uint64]struct{})
-	for _, v := range peers {
-		nodeIdSet[v] = struct{}{}
-	}
-	for k := range nodeIdSet {
-		node, _ := n.MetaClient.DataNode(k)
-		if node.Status != serf.StatusAlive {
-			return false
+	var activePtSlice []uint32
+	for ptId, nodeId := range peers {
+		node, _ := n.MetaClient.DataNode(nodeId)
+		if node.Status == serf.StatusAlive {
+			activePtSlice = append(activePtSlice, ptId)
 		}
 	}
-	return true
+	if len(activePtSlice) == len(peers) {
+		return true, activePtSlice
+	}
+	logger.GetLogger().Info("rg member is not all active,active pt slice is ", zap.Uint32s("activePtSlice", activePtSlice))
+	return false, activePtSlice
 }
 
 func (n *RaftNode) deleteEntryLogPeriodically() {
+	logger.GetLogger().Info("delete entry log periodically")
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ticker.C:
+			logger.GetLogger().Info("delete entry log start")
 			if err := n.deleteEntryLog(); err != nil {
 				logger.GetLogger().Error("Error while deleting EntryLog.", zap.Error(err))
 			}
+			if err := n.deleteEntryLogBySize(); err != nil {
+				logger.GetLogger().Error("Error while deleting entryLog by size", zap.Error(err))
+			}
 		case <-n.ctx.Done():
-			logger.GetLogger().Error("ctx done...")
+			logger.GetLogger().Error("ctx done...", zap.String("db", n.database), zap.Uint32("ptId", n.ptId))
+			return
 		}
 	}
 }
 
-func (n *RaftNode) sendRaftMessages() {
-	for i := 0; i < config.GetCommon().RaftSendGroutineNum; i++ {
-		go func() {
-			for {
-				select {
-				case msg := <-n.Messages:
-					n.send(*msg)
-				case <-n.ctx.Done():
-					return
-				}
-			}
-		}()
-	}
-}
-
 func (n *RaftNode) deleteEntryLog() error {
+	if !n.isLeader() {
+		return nil
+	}
 	sp, err := n.Store.Snapshot()
 	if err != nil {
 		return err
 	}
 	index := sp.Metadata.Index
-	if !n.CheckAllRgMembers() {
-		return errors.New("replica group status is unhealthy")
+	if index == 0 {
+		logger.GetLogger().Error("dont have a snapshot yet", zap.String("db", n.database), zap.Uint32("ptId", n.ptId))
+		return errors.New("dont have a snapshot yet")
 	}
-	if n.isLeader() {
-		data, err2 := n.prepareDeleteEntryLogProposeData(index)
-		if err2 != nil {
-			return err2
-		}
-		n.proposeC <- data
+	toPropose, err := n.forceDeleteEntryLog(index)
+	if !toPropose {
+		return err
 	}
+	n.proposeC <- n.prepareDeleteEntryLogProposeData(index)
 	return nil
 }
 
-func (n *RaftNode) prepareDeleteEntryLogProposeData(index uint64) ([]byte, error) {
-	filId, _ := n.Store.SlotGe(index)
+func (n *RaftNode) deleteEntryLogBySize() error {
+	sp, err := n.Store.Snapshot()
+	if err != nil {
+		return err
+	}
+	index := sp.Metadata.Index
+	if index == 0 {
+		return errors.New("dont have a snapshot yet")
+	}
+	return n.forceDeleteEntryLogBySize(index)
+}
+
+func (n *RaftNode) forceDeleteEntryLog(index uint64) (bool, error) {
+	if healthy, activePtSlice := n.CheckAllRgMembers(); !healthy {
+		n.tolerateStartTime.CompareAndSwap(0, time.Now().UnixNano())
+		if time.Now().UnixNano()-n.tolerateStartTime.Load() > int64(config.GetStoreConfig().ClearEntryLogTolerateTime) {
+			// propose clean entry log
+			progress := n.node.Status().Progress
+			var minIndex uint64 = math.MaxUint64
+			for _, ptId := range activePtSlice {
+				if v, ok := progress[GetRaftNodeId(ptId)]; ok {
+					if v.Match < minIndex {
+						minIndex = v.Match
+					}
+				}
+			}
+			data := n.genProposeData(index, minIndex)
+			n.proposeC <- data
+			n.tolerateStartTime.Store(0)
+			return false, nil
+		}
+		return false, errors.New("replica group status is unhealthy")
+	} else {
+		n.tolerateStartTime.Store(0)
+	}
+	return true, nil
+}
+
+func (n *RaftNode) prepareDeleteEntryLogProposeData(index uint64) []byte {
 	progress := n.node.Status().Progress
 	var minMatch uint64 = math.MaxUint64
 	for _, v := range progress {
@@ -762,14 +806,26 @@ func (n *RaftNode) prepareDeleteEntryLogProposeData(index uint64) ([]byte, error
 			minMatch = match
 		}
 	}
+	marshal := n.genProposeData(index, minMatch)
+	return marshal
+}
+
+func (n *RaftNode) genProposeData(index uint64, minMatch uint64) []byte {
 	var minIndex uint64
-	memberFilId, _ := n.Store.SlotGe(minMatch)
-	err := n.comparePeerFileIdWithLeaderFileId(memberFilId, filId)
-	if err != nil {
-		minIndex = minMatch
-	} else {
+	if minMatch == math.MaxUint64 {
+		// have no active member,this can not happen
 		minIndex = index
+	} else {
+		memberFilId, _ := n.Store.SlotGe(minMatch)
+		filId, _ := n.Store.SlotGe(index)
+		err := n.comparePeerFileIdWithLeaderFileId(memberFilId, filId)
+		if err != nil {
+			minIndex = uint64(math.Min(float64(minMatch), float64(index)))
+		} else {
+			minIndex = index
+		}
 	}
+	logger.GetLogger().Info("genProposeData marshal index is", zap.Uint64("minIndex", minIndex))
 	// propose clean entry log
 	var dst []byte
 	dst = encoding.MarshalUint64(dst, minIndex)
@@ -778,12 +834,21 @@ func (n *RaftNode) prepareDeleteEntryLogProposeData(index uint64) ([]byte, error
 		DataType: raftlog.ClearEntryLog,
 	}
 	marshal := wrapper.Marshal()
-	return marshal, nil
+	return marshal
 }
 
 func (n *RaftNode) comparePeerFileIdWithLeaderFileId(memberFilId int, filId int) error {
 	if memberFilId != filId {
 		return errors.New("member file id is not equal leader file id ")
+	}
+	return nil
+}
+
+func (n *RaftNode) forceDeleteEntryLogBySize(index uint64) error {
+	size := n.Store.EntrySize()
+	if uint64(size) > uint64(config.GetStoreConfig().ClearEntryLogTolerateSize) {
+		logger.GetLogger().Info("clear entry log by size, ", zap.Int("size", size), zap.Uint64("current index is ", index))
+		n.Store.DeleteBefore(index)
 	}
 	return nil
 }

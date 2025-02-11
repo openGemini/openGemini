@@ -114,17 +114,7 @@ func (s *shard) Scan(span *tracing.Span, schema *executor.QuerySchema, callBack 
 	return tagSets, num, nil
 }
 
-func unRefReaders(immutableReader *immutable.MmsReaders, mutableReader *mutable.MemTables) {
-	for _, file := range immutableReader.Orders {
-		file.Unref()
-	}
-	for _, file := range immutableReader.OutOfOrders {
-		file.Unref()
-	}
-	mutableReader.UnRef()
-}
-
-func (s *shard) CreateCursor(ctx context.Context, schema *executor.QuerySchema) ([]comm.KeyCursor, error) {
+func (s *shard) CreateCursor(ctx context.Context, schema *executor.QuerySchema) (comm.TSIndexInfo, error) {
 	var span, cloneMsSpan *tracing.Span
 	if span = tracing.SpanFromContext(ctx); span != nil {
 		labels := []string{
@@ -195,18 +185,41 @@ func (s *shard) CreateCursor(ctx context.Context, schema *executor.QuerySchema) 
 		cloneMsSpan.SetNameValue(fmt.Sprintf("order=%d,unorder=%d", len(immutableReader.Orders), len(immutableReader.OutOfOrders)))
 		cloneMsSpan.Finish()
 	}
-	// unref file(no need lock here), series iterator will ref/unref file itself
-	defer unRefReaders(immutableReader, mutableReader)
-	groupCursors, err := s.createGroupCursors(ctx, span, schema, lazyInit, result, immutableReader, mutableReader, iTr)
-	return groupCursors, err
+	info := NewTsIndexInfo([]*immutable.MmsReaders{immutableReader}, []*mutable.MemTables{mutableReader}, nil)
+	var createErr error
+	var groupCursors []comm.KeyCursor
+	defer func() {
+		if panicErr := recover(); panicErr != nil {
+			info.Unref()
+			s.log.Error("createGroupCursors panic", zap.String("stack", string(debug.Stack())))
+			return
+		}
+		if createErr != nil || info.IsEmpty() {
+			info.Unref()
+		}
+	}()
+
+	groupCursors, createErr = s.createGroupCursors(ctx, span, schema, lazyInit, result, immutableReader, mutableReader, iTr)
+	if createErr != nil {
+		s.log.Error("createGroupCursors error", zap.Error(createErr))
+		return nil, createErr
+	}
+	if len(groupCursors) == 0 {
+		s.log.Warn("createGroupCursors empty")
+		return nil, nil
+	}
+	info.SetCursors(groupCursors)
+	return info, nil
 }
 
 func (s *shard) cloneReaders(mm string, hasTimeFilter bool, tr util.TimeRange) (*immutable.MmsReaders, *mutable.MemTables) {
 	var immutableReader immutable.MmsReaders
-	mutableReader := mutable.MemTables{}
+	mutableReader := mutable.NewMemTables(s.ident.ShardID, config.GetStoreConfig().MemTable.MemDataReadEnabled)
 	var flushed bool
 	var snapshotTblFlushed *bool
 	s.snapshotLock.RLock()
+	defer s.snapshotLock.RUnlock()
+
 	if s.snapshotTbl != nil {
 		msInfo, err := s.snapshotTbl.GetMsInfo(mm)
 		if err == nil && msInfo != nil {
@@ -214,14 +227,20 @@ func (s *shard) cloneReaders(mm string, hasTimeFilter bool, tr util.TimeRange) (
 		}
 	}
 	immutableReader.Orders, immutableReader.OutOfOrders, flushed = s.immTables.GetBothFilesRef(mm, hasTimeFilter, tr, snapshotTblFlushed)
+	immutable.RefFilesReader(immutableReader.Orders...)
+	immutable.RefFilesReader(immutableReader.OutOfOrders...)
+
+	if config.ShelfModeEnabled() {
+		return &immutableReader, mutableReader
+	}
+
 	if flushed {
-		mutableReader.Init(s.activeTbl, nil, s.memDataReadEnabled)
+		mutableReader.Init(s.activeTbl, nil)
 	} else {
-		mutableReader.Init(s.activeTbl, s.snapshotTbl, s.memDataReadEnabled)
+		mutableReader.Init(s.activeTbl, s.snapshotTbl)
 	}
 	mutableReader.Ref()
-	s.snapshotLock.RUnlock()
-	return &immutableReader, &mutableReader
+	return &immutableReader, mutableReader
 }
 
 func (s *shard) GetTSSPFiles(mm string, isOrder bool) (*immutable.TSSPFiles, bool) {
@@ -319,7 +338,6 @@ func (s *shard) initGroupCursors(ctx context.Context, querySchema *executor.Quer
 			c.ctx.queryTr.Min = queryMin
 			c.ctx.queryTr.Max = queryMax
 			c.ctx.decs.SetTr(c.ctx.tr)
-			c.ctx.Ref()
 		}
 		cursors = append(cursors, c)
 	}
@@ -367,10 +385,11 @@ func (s *shard) createGroupSubCursorInSerial(cursors comm.KeyCursors, tagSets []
 	releaseCursors := func() {
 		_ = cursors.Close()
 	}
+	tags := make([]tsi.TagSet, len(tagSets))
 	for i := 0; i < len(tagSets); i++ {
 		tagSet := tagSets[i]
 		tagSet.Sort(schema)
-		tagSet.Ref()
+		tags[i] = tagSet
 	}
 
 	for groupIdx := 0; groupIdx < parallelism; groupIdx++ {
@@ -378,7 +397,7 @@ func (s *shard) createGroupSubCursorInSerial(cursors comm.KeyCursors, tagSets []
 		if !ok {
 			return nil, fmt.Errorf("invalid the group cursor")
 		}
-		tsCursor, err := s.newAggTagSetCursorInSerial(groupCur.ctx, groupCur.span, schema, tagSets, parallelism, groupIdx)
+		tsCursor, err := s.newAggTagSetCursorInSerial(groupCur.ctx, groupCur.span, schema, tags, parallelism, groupIdx)
 		if err != nil {
 			releaseCursors()
 			return nil, err
@@ -479,11 +498,6 @@ func (s *shard) createGroupCursors(ctx context.Context, span *tracing.Span, sche
 
 	cursors, err := s.initGroupCursors(ctx, schema, parallelism, readers, memTables, iTr)
 	if err != nil {
-		if executor.GetEnableFileCursor() && schema.HasOptimizeAgg() {
-			for _, v := range cursors {
-				v.(*groupCursor).ctx.UnRef()
-			}
-		}
 		return nil, err
 	}
 	if len(cursors) == 0 {
@@ -523,7 +537,6 @@ func (s *shard) createGroupCursors(ctx context.Context, span *tracing.Span, sche
 		gCursor.seriesTagFunc = gCursor.getSeriesTags
 		if lazyInit {
 			gCursor.limitBound = int64(schema.Options().GetLimit() + schema.Options().GetOffset())
-			gCursor.ctx.Ref()
 		}
 	}
 
@@ -575,7 +588,7 @@ func (s *shard) CreateTagSetInSerial(work func(int, int, bool, *sync.WaitGroup, 
 func (s *shard) CreateTagSetInParallel(work func(int, int, bool, *sync.WaitGroup, *tsi.TagSetInfo), subTagSetN int, tagSet *tsi.TagSetInfo) {
 	wg := &sync.WaitGroup{}
 	wg.Add(subTagSetN)
-	// add ref in advance to prevent ()) from being released while still in use
+	// add ref in advance to prevent from being released while still in use
 	tagSet.Ref()
 	defer tagSet.Unref()
 	for j := 0; j < subTagSetN; j++ {
@@ -609,24 +622,26 @@ func (s *seriesInfo) GetSid() uint64 {
 }
 
 type idKeyCursorContext struct {
-	filterOption immutable.BaseFilterOptions
-	maxRowCnt    int
-	engineType   config.EngineType
-	tr           util.TimeRange
-	queryTr      util.TimeRange
-	interTr      util.TimeRange // intersection of the query time and shard time
-	auxTags      []string
-	schema       record.Schemas
-	readers      *immutable.MmsReaders
-	memTables    *mutable.MemTables
-	aggPool      *record.RecordPool
-	seriesPool   *record.RecordPool
-	tmsMergePool *record.RecordPool
-	querySchema  *executor.QuerySchema
-	decs         *immutable.ReadContext
-	colAux       *immutable.ColAux
-	metaContext  *immutable.ChunkMetaContext
-	closedSignal *bool
+	filterOption    immutable.BaseFilterOptions
+	maxRowCnt       int
+	engineType      config.EngineType
+	tr              util.TimeRange
+	queryTr         util.TimeRange
+	interTr         util.TimeRange // intersection of the query time and shard time
+	auxTags         []string
+	schema          record.Schemas
+	readers         *immutable.MmsReaders
+	memTables       *mutable.MemTables
+	aggPool         *record.RecordPool
+	seriesPool      *record.RecordPool
+	tmsMergePool    *record.RecordPool
+	querySchema     *executor.QuerySchema
+	decs            *immutable.ReadContext
+	colAux          *immutable.ColAux
+	metaContext     *immutable.ChunkMetaContext
+	closedSignal    *bool
+	immTableReaders map[uint64]*immutable.MmsReaders
+	memTableReader  map[uint64]*mutable.MemTables
 }
 
 func (i *idKeyCursorContext) IsAborted() bool {
@@ -641,65 +656,17 @@ func (i *idKeyCursorContext) hasFieldCondition() bool {
 	return len(i.filterOption.FieldsIdx) > 0
 }
 
-func (i *idKeyCursorContext) RefFiles() {
-	for _, f := range i.readers.Orders {
-		f.Ref()
-		f.RefFileReader()
-	}
-	for _, f := range i.readers.OutOfOrders {
-		f.Ref()
-		f.RefFileReader()
-	}
-}
-
-func (i *idKeyCursorContext) RefMemTables() {
-	i.memTables.Ref()
+func (i *idKeyCursorContext) SetSchema(r record.Schemas) {
+	i.schema = r
 }
 
 func (i *idKeyCursorContext) GetFilterOption() *immutable.BaseFilterOptions {
 	return &i.filterOption
 }
 
-func (i *idKeyCursorContext) Ref() {
-	i.RefFiles()
-	i.RefMemTables()
-}
-
-func (i *idKeyCursorContext) UnRef() {
-	i.UnRefFiles()
-	i.UnRefMemTables()
-}
-
-func (i *idKeyCursorContext) UnRefFiles() {
-	i.unRefFiles(i.readers.Orders)
-	i.unRefFiles(i.readers.OutOfOrders)
-}
-
-func (i *idKeyCursorContext) unRefFiles(files immutable.TableReaders) {
-	fileCacheManager := immutable.GetQueryfileCache()
-	if fileCacheManager != nil && len(files) <= int(fileCacheManager.GetCap()) {
-		for _, f := range files {
-			fileCacheManager.Put(f)
-			f.Unref()
-		}
-	} else {
-		for _, f := range files {
-			f.UnrefFileReader()
-			f.Unref()
-		}
-	}
-}
-
-func (i *idKeyCursorContext) UnRefMemTables() {
-	i.memTables.UnRef()
-}
-
-func (i *idKeyCursorContext) SetSchema(r record.Schemas) {
-	i.schema = r
-}
-
 func (s *shard) newLazyTagSetCursor(ctx *idKeyCursorContext, span *tracing.Span, schema *executor.QuerySchema,
 	tagSet *tsi.TagSetInfo, start, step int) (*tagSetCursor, error) {
+	tagSet.Ref()
 	para := &tagSetCursorPara{
 		tagSet:     tagSet,
 		start:      start,
@@ -754,7 +721,9 @@ func (s *shard) newTagSetCursor(ctx *idKeyCursorContext, span *tracing.Span, sch
 	}
 
 	if len(*itrs) > 0 {
+		tagSet.Ref()
 		tagSetItr := &tagSetCursor{
+			tagSet: tagSet,
 			schema: schema,
 			init:   false,
 			heapCursor: &heapCursor{
@@ -821,8 +790,8 @@ func (s *shard) getAllSeriesMemtableRecord(ctx *idKeyCursorContext, schema *exec
 }
 
 func (s *shard) newAggTagSetCursorInSerial(ctx *idKeyCursorContext, span *tracing.Span, schema *executor.QuerySchema,
-	tagSets []*tsi.TagSetInfo, group, groupIdx int) (comm.KeyCursor, error) {
-	scanCursor := newSeriesLoopCursorInSerial(ctx, span, schema, tagSets, group, groupIdx)
+	tagSets []tsi.TagSet, group, groupIdx int) (comm.KeyCursor, error) {
+	scanCursor := newSeriesLoopCursorInSerial(ctx, span, schema, tagSets, group, groupIdx, false)
 	sampleCursor := NewInstantVectorCursor(scanCursor, schema, ctx.aggPool, ctx.interTr)
 	return NewAggTagSetCursor(schema, ctx, sampleCursor, true), nil
 }
@@ -860,7 +829,7 @@ func (s *shard) iteratorInit(ctx *idKeyCursorContext, span *tracing.Span, schema
 	if !schema.Options().IsPromQuery() {
 		itr = NewFileLoopCursor(ctx, span, schema, tagSet, start, step, s)
 	} else {
-		itr = newSeriesLoopCursor(ctx, span, schema, tagSet, start, step)
+		itr = newSeriesLoopCursor(ctx, span, schema, tagSet, start, tagSet.Len(), step, false)
 	}
 	// determine whether the aggregation without pre-agg or sampling can be pushed down to the time series.
 	if !notAggOnSeriesFunc(schema.Calls()) && (len(schema.Calls()) > 0 && (!havePreAgg || schema.Options().IsPromQuery())) {
@@ -1035,8 +1004,6 @@ func newSeriesCursorLazyInit(ctx *idKeyCursorContext, span *tracing.Span, schema
 		seriesCursor.lazyInit = lazyInit
 		seriesCursor.filter = filter
 		seriesCursor.querySchema = schema
-
-		tagSet.Ref()
 		seriesCursor.tagSetRef = tagSet
 
 		return seriesCursor, nil
@@ -1056,6 +1023,28 @@ func getMemTableRecord(ctx *idKeyCursorContext, span *tracing.Span, schema *exec
 	memTableRecord := ctx.memTables.Values(nameWithVer, sid, ctx.tr, ctx.schema, schema.Options().IsAscending())
 	memTableRecord = immutable.FilterByField(memTableRecord, nil, &ctx.filterOption, filter, rowFilters, ptTags, nil, &ctx.colAux)
 
+	if span != nil {
+		span.Count(memTableDuration, int64(time.Since(tm)))
+		if memTableRecord != nil {
+			span.Count(memTableRowCount, int64(memTableRecord.RowNums()))
+		}
+	}
+	return memTableRecord
+}
+
+func getMemTableRecordWithShard(ctx *idKeyCursorContext, span *tracing.Span, schema *executor.QuerySchema, sid uint64, shardId uint64, filter influxql.Expr, rowFilters *[]clv.RowFilter,
+	ptTags *influx.PointTags) *record.Record {
+	memTable, ok := ctx.memTableReader[shardId]
+	if !ok {
+		return nil
+	}
+	var tm time.Time
+	if span != nil {
+		tm = time.Now()
+	}
+	nameWithVer := schema.Options().OptionsName()
+	memTableRecord := memTable.Values(nameWithVer, sid, ctx.tr, ctx.schema, schema.Options().IsAscending())
+	memTableRecord = immutable.FilterByField(memTableRecord, nil, &ctx.filterOption, filter, rowFilters, ptTags, nil, &ctx.colAux)
 	if span != nil {
 		span.Count(memTableDuration, int64(time.Since(tm)))
 		if memTableRecord != nil {
@@ -1098,10 +1087,53 @@ func newSeriesCursor(ctx *idKeyCursorContext, span *tracing.Span, schema *execut
 		seriesCursor.tsmRecIter.reset()
 		seriesCursor.lazyInit = lazyInit
 		seriesCursor.memRecIter.init(memTableRecord)
-
-		tagSet.Ref()
 		seriesCursor.tagSetRef = tagSet
 
+		return seriesCursor, nil
+	}
+	return nil, nil
+}
+
+func newSeriesCursorWithShard(ctx *idKeyCursorContext, span *tracing.Span, schema *executor.QuerySchema,
+	tagSet tsi.TagSet, sidIdx, shardIdx int, crossShard bool) (*seriesCursor, error) {
+	var err error
+	sid := tagSet.GetSid(sidIdx, shardIdx)
+	shardId := tagSet.GetShardId(sidIdx, shardIdx)
+	filter := tagSet.GetFilters(sidIdx)
+	ptTags := tagSet.GetTagsVec(sidIdx)
+	rowFilters := tagSet.GetRowFilter(sidIdx)
+
+	var memTableRecord *record.Record
+	var tsmCursor *tsmMergeCursor
+	if !crossShard {
+		memTableRecord = getMemTableRecord(ctx, span, schema, sid, filter, rowFilters, ptTags)
+		tsmCursor, err = newTsmMergeCursor(ctx, sid, filter, rowFilters, ptTags, false, span)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		memTableRecord = getMemTableRecordWithShard(ctx, span, schema, sid, shardId, filter, rowFilters, ptTags)
+		tsmCursor, err = newTsmMergeCursorWithShard(ctx, shardId, sid, filter, rowFilters, ptTags, span)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// only if tsm or mem table have data, we will create series cursor
+	if tsmCursor != nil || (memTableRecord != nil && memTableRecord.RowNums() > 0) {
+		seriesCursor := getSeriesKeyCursor()
+		seriesCursor.SetFirstLimitTime(memTableRecord, tsmCursor, schema)
+		seriesCursor.sInfo.key = tagSet.GetSeriesKeys(sidIdx)
+		seriesCursor.sInfo.tags = *ptTags
+		seriesCursor.sInfo.sid = tagSet.GetSid(sidIdx, 0)
+		seriesCursor.maxRowCnt = schema.Options().ChunkSizeNum()
+		seriesCursor.tsmCursor = tsmCursor
+		seriesCursor.ctx = ctx
+		seriesCursor.ascending = schema.Options().IsAscending()
+		seriesCursor.schema = ctx.schema
+		seriesCursor.tsmRecIter.reset()
+		seriesCursor.lazyInit = false
+		seriesCursor.memRecIter.init(memTableRecord)
 		return seriesCursor, nil
 	}
 	return nil, nil

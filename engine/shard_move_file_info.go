@@ -131,7 +131,7 @@ func readShardMoveLogFile(name string, info *ShardMoveFileInfo) error {
 	buf := make([]byte, int(fSize))
 	lock := fileops.FileLockOption("")
 	pri := fileops.FilePriorityOption(fileops.IO_PRIORITY_NORMAL)
-	fd, err := fileops.OpenFile(name, os.O_RDONLY, 0640, lock, pri)
+	fd, err := fileops.OpenFile(name, os.O_RDONLY, 0600, lock, pri)
 	if err != nil {
 		return fmt.Errorf("read shard move log file fail")
 	}

@@ -162,7 +162,7 @@ func (vfs) OpenFile(name string, flag int, perm os.FileMode, _ ...FSOption) (Fil
 }
 
 func (vfs) Create(name string, _ ...FSOption) (File, error) {
-	f, err := os.OpenFile(path.Clean(name), os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0640)
+	f, err := os.OpenFile(path.Clean(name), os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0600)
 	return &file{of: f}, err
 }
 
@@ -197,6 +197,10 @@ func (vfs) Mkdir(path string, perm os.FileMode, _ ...FSOption) error {
 
 func (vfs) MkdirAll(path string, perm os.FileMode, _ ...FSOption) error {
 	return os.MkdirAll(path, perm)
+}
+
+func (vfs) NormalizeDirPath(path string) string {
+	return path
 }
 
 func (vfs) ReadDir(dirname string) ([]fs.FileInfo, error) {
@@ -264,7 +268,7 @@ func (f vfs) IsObsFile(path string) (bool, error) {
 }
 
 func (f vfs) CopyFileFromDFVToOBS(srcPath, dstPath string, opt ...FSOption) error {
-	dstFd, err := OpenFile(dstPath, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0640)
+	dstFd, err := OpenFile(dstPath, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0600)
 	if err != nil {
 		log.Error("create dst file fail", zap.String("name", dstPath), zap.Error(err))
 		return err
@@ -294,7 +298,7 @@ func (f vfs) GetOBSTmpFileName(path string, obsOption *obs.ObsOptions) string {
 	if obsOption != nil {
 		path = path[len(obs.GetPrefixDataPath()):]
 		path = filepath.Join(obsOption.BasePath, path) + obs.ObsFileSuffix + obs.ObsFileTmpSuffix
-		path = EncodeObsPath(obsOption.Endpoint, obsOption.BucketName, path, obsOption.Ak, obsOption.Sk)
+		path = EncodeObsPath(obsOption.Endpoint, obsOption.BucketName, path, obsOption.Ak, DecryptObsSk(obsOption.Sk))
 		return path
 	}
 	return path + obs.ObsFileTmpSuffix
@@ -302,4 +306,7 @@ func (f vfs) GetOBSTmpFileName(path string, obsOption *obs.ObsOptions) string {
 
 func (f vfs) DecodeRemotePathToLocal(path string) (string, error) {
 	return "", nil
+}
+
+func SetLogger() {
 }

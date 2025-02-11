@@ -41,7 +41,7 @@ import (
 	"github.com/openGemini/openGemini/lib/resourceallocator"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/stringinterner"
-	"github.com/openGemini/openGemini/lib/syscontrol"
+	"github.com/openGemini/openGemini/lib/sysconfig"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
@@ -82,6 +82,7 @@ type StoreEngine interface {
 	Assign(uint64, *meta.DbPtInfo) error
 	GetConnId() uint64
 	CheckPtsRemovedDone() error
+	TransferLeadership(string, uint64, uint32, uint32) error
 }
 
 type SlaveStorage interface {
@@ -184,7 +185,6 @@ func OpenStorage(path string, node *metaclient.Node, cli *metaclient.Client, con
 	loadCtx := metaclient.LoadCtx{}
 	loadCtx.LoadCh = make(chan *metaclient.DBPTCtx)
 	opt := netstorage.NewEngineOptions()
-	opt.ImmTableMaxMemoryPercentage = conf.Data.ImmTableMaxMemoryPercentage
 
 	// for memTable
 	opt.WriteColdDuration = time.Duration(conf.Data.MemTable.WriteColdDuration)
@@ -204,6 +204,9 @@ func OpenStorage(path string, node *metaclient.Node, cli *metaclient.Client, con
 	opt.WalReplayAsync = conf.Data.Wal.WalReplayAsync
 	opt.WalReplayBatchSize = int(conf.Data.Wal.WalReplayBatchSize)
 
+	// for raft entry storage
+	opt.RaftEntrySyncInterval = time.Duration(conf.Data.RaftStorage.RaftEntrySyncInterval)
+
 	// for compact
 	opt.CompactThroughput = int64(conf.Data.Compact.CompactThroughput)
 	opt.CompactThroughputBurst = int64(conf.Data.Compact.CompactThroughputBurst)
@@ -219,11 +222,10 @@ func OpenStorage(path string, node *metaclient.Node, cli *metaclient.Client, con
 
 	// for readCache
 	opt.ReadPageSize = conf.Data.ReadCache.ReadPageSize
+	opt.ReadMetaPageSize = conf.Data.ReadCache.ReadMetaPageSize
 	opt.ReadMetaCacheLimit = uint64(conf.Data.ReadCache.ReadMetaCacheEn)
 	opt.ReadDataCacheLimit = uint64(conf.Data.ReadCache.ReadDataCacheEn)
 
-	opt.CacheDataBlock = conf.Data.CacheDataBlock
-	opt.CacheMetaBlock = conf.Data.CacheMetaBlock
 	opt.EnableMmapRead = conf.Data.EnableMmapRead
 	opt.OpenShardLimit = conf.Data.OpenShardLimit
 	opt.LazyLoadShardEnable = conf.Data.LazyLoadShardEnable
@@ -290,8 +292,8 @@ func OpenStorage(path string, node *metaclient.Node, cli *metaclient.Client, con
 	s.appendAnalysisService(conf.Analysis)
 	s.appendProactiveMgrService(conf.Data)
 
-	syscontrol.UpdateInterruptQuery(conf.Data.InterruptQuery)
-	syscontrol.SetUpperMemUsePct(int64(conf.Data.InterruptSqlMemPct))
+	sysconfig.SetInterruptQuery(conf.Data.InterruptQuery)
+	sysconfig.SetUpperMemPct(int64(conf.Data.InterruptSqlMemPct))
 
 	for _, service := range s.Services {
 		if err := service.Open(); err != nil {
@@ -506,7 +508,7 @@ func (s *Storage) GetShardDownSampleLevel(db string, ptId uint32, shardID uint64
 	return s.engine.GetShardDownSampleLevel(db, ptId, shardID)
 }
 
-func (s *Storage) CreateLogicPlan(ctx context.Context, db string, ptId uint32, shardID uint64, sources influxql.Sources, schema hybridqp.Catalog) (hybridqp.QueryNode, error) {
+func (s *Storage) CreateLogicPlan(ctx context.Context, db string, ptId uint32, shardID []uint64, sources influxql.Sources, schema hybridqp.Catalog) (hybridqp.QueryNode, error) {
 	plan, err := s.engine.CreateLogicalPlan(ctx, db, ptId, shardID, sources, schema.(*executor.QuerySchema))
 	return plan, err
 }
@@ -623,4 +625,8 @@ func stringSlice2BytesSlice(s []string) [][]byte {
 
 func (s *Storage) SendRaftMessage(database string, opId uint64, msg raftpb.Message) error {
 	return s.engine.SendRaftMessage(database, opId, msg)
+}
+
+func (s *Storage) TransferLeadership(database string, nodeId uint64, oldMasterPtId, newMasterPtId uint32) error {
+	return s.engine.TransferLeadership(database, nodeId, oldMasterPtId, newMasterPtId)
 }

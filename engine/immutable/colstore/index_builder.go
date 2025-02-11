@@ -43,7 +43,7 @@ func NewIndexBuilder(lockPath *string, filePath string) *IndexBuilder {
 	var err error
 	lock := fileops.FileLockOption(*lockPath)
 	pri := fileops.FilePriorityOption(fileops.IO_PRIORITY_NORMAL)
-	indexBuilder.fd, err = fileops.OpenFile(filePath, os.O_CREATE|os.O_RDWR, 0640, lock, pri)
+	indexBuilder.fd, err = fileops.OpenFile(filePath, os.O_CREATE|os.O_RDWR, 0600, lock, pri)
 	if err != nil {
 		log.Error("create file fail", zap.String("name", filePath), zap.Error(err))
 		panic(err)

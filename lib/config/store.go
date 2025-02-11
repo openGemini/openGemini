@@ -35,10 +35,9 @@ import (
 )
 
 const (
-	EngineType1                      = "tssp1"
-	EngineType2                      = "tssp2"
-	DefaultEngine                    = "tssp1"
-	DefaultImmutableMaxMemoryPercent = 10
+	EngineType1   = "tssp1"
+	EngineType2   = "tssp2"
+	DefaultEngine = "tssp1"
 
 	KB = 1024
 	MB = 1024 * 1024
@@ -60,10 +59,12 @@ const (
 )
 
 var storeConfig = Store{
-	Merge:     defaultMerge(),
-	MemTable:  NewMemTableConfig(),
-	Wal:       NewWalConfig(),
-	ReadCache: NewReadCacheConfig(),
+	Merge:       defaultMerge(),
+	MemTable:    NewMemTableConfig(),
+	Wal:         NewWalConfig(),
+	ReadCache:   NewReadCacheConfig(),
+	ParquetTask: NewParquetTaskConfig(),
+	ShelfMode:   defaultBridgeMode(),
 }
 
 func SetStoreConfig(conf Store) {
@@ -221,8 +222,6 @@ type Store struct {
 	Engine          string      `toml:"engine-type"`
 	Index           string      `toml:"index-version"`
 	OpsMonitor      *OpsMonitor `toml:"ops-monitor"`
-	// The max inmem percent of immutable
-	ImmTableMaxMemoryPercentage int `toml:"imm-table-max-memory-percentage"`
 
 	// configs for compact
 	Compact Compact `toml:"compact"`
@@ -233,11 +232,12 @@ type Store struct {
 	// configs for wal
 	Wal Wal `toml:"wal"`
 
+	// configs for raftStorage
+	RaftStorage RaftStorage `toml:"raft-storage"`
+
 	// configs for readCache
 	ReadCache ReadCache `toml:"readcache"`
 
-	CacheDataBlock bool `toml:"cache-table-data-block"`
-	CacheMetaBlock bool `toml:"cache-table-meta-block"`
 	EnableMmapRead bool `toml:"enable-mmap-read"`
 	Readonly       bool `toml:"readonly"`
 
@@ -283,17 +283,29 @@ type Store struct {
 
 	MaxRowsPerSegment int `toml:"max-rows-per-segment"`
 
+	// in some scenarios, it is allowed to write past time but ordered data(for examle, some scenarios allow to write the past 14 days data in order)
+	EnableWriteHistoryOrderedData bool `toml:"enable-write-history-ordered-data"`
+
 	// for hierarchical storage
 	SkipRegisterColdShard bool `toml:"skip-register-cold-shard"`
 
-	// the level of the TSSP file to be converted to a Parquet. 0: not convert
-	TSSPToParquetLevel uint16 `toml:"tssp-to-parquet-level"`
-
 	AvailabilityZone string `toml:"availability-zone"`
 
-	RaftMsgTimeout toml.Duration `toml:"raft-msg-time-out"`
-	ElectionTick   int           `toml:"election-tick"`
-	HeartbeatTick  int           `toml:"heartbeat-tick"`
+	ClearEntryLogTolerateTime toml.Duration `toml:"clear-entryLog-tolerate-time"`
+
+	ClearEntryLogTolerateSize toml.Size `toml:"clear-entryLog-tolerate-size"`
+
+	ParquetTask *ParquetTaskConfig `toml:"parquet-task"`
+
+	HotMode   HotMode   `toml:"hot-mode"`
+	ShelfMode ShelfMode `toml:"shelf-mode"`
+
+	RaftMsgTimeout    toml.Duration `toml:"raft-msg-time-out"`
+	ElectionTick      int           `toml:"election-tick"`
+	HeartbeatTick     int           `toml:"heartbeat-tick"`
+	RaftMsgCacheSize  int           `toml:"raft-msg-cache-size"`
+	FileWrapSize      int           `toml:"file-wrap-size"`
+	WaitCommitTimeout toml.Duration `toml:"wait-commit-time-out"`
 }
 
 // NewStore returns the default configuration for tsdb.
@@ -305,13 +317,11 @@ func NewStore() Store {
 		WALDir:                       filepath.Join(openGeminiDir(), WalDirectory),
 		MetaDir:                      filepath.Join(openGeminiDir(), MetaDirectory),
 		Engine:                       DefaultEngine,
-		ImmTableMaxMemoryPercentage:  DefaultImmutableMaxMemoryPercent,
 		Compact:                      NewCompactConfig(),
 		MemTable:                     NewMemTableConfig(),
 		Wal:                          NewWalConfig(),
 		ReadCache:                    NewReadCacheConfig(),
-		CacheDataBlock:               false,
-		CacheMetaBlock:               false,
+		RaftStorage:                  NewRaftStorageConfig(),
 		EnableMmapRead:               false,
 		WriteConcurrentLimit:         0,
 		OpsMonitor:                   NewOpsMonitorConfig(),
@@ -327,9 +337,16 @@ func NewStore() Store {
 		MaxRowsPerSegment:            util.DefaultMaxRowsPerSegment4TsStore,
 		ShardMoveLayoutSwitchEnabled: false,
 		SkipRegisterColdShard:        true,
+		ClearEntryLogTolerateTime:    toml.Duration(6 * time.Hour),
+		ClearEntryLogTolerateSize:    toml.Size(util.DefaultEntryLogSizeLimit),
+		ParquetTask:                  NewParquetTaskConfig(),
+		HotMode:                      defaultHotMode(),
 		RaftMsgTimeout:               toml.Duration(DefaultRaftMsgTimeout),
 		ElectionTick:                 DefaultElectionTick,
 		HeartbeatTick:                DefaultHeartbeatTick,
+		RaftMsgCacheSize:             DefaultRaftMsgCacheSize,
+		FileWrapSize:                 DefaultFileWrapSize,
+		WaitCommitTimeout:            toml.Duration(DefaultWaitCommitTimeout),
 	}
 }
 
@@ -344,10 +361,12 @@ func (c *Store) Corrector(cpuNum int, memorySize toml.Size) {
 	if c.OpenShardLimit <= 0 {
 		c.OpenShardLimit = cpuNum
 	}
-
 	SetRaftMsgTimeout(time.Duration(c.RaftMsgTimeout))
 	SetElectionTick(c.ElectionTick)
 	SetHeartbeatTick(c.HeartbeatTick)
+	SetRaftMsgCacheSize(c.RaftMsgCacheSize)
+	SetFileWrapSize(c.FileWrapSize)
+	SetWaitCommitTimeout(time.Duration(c.WaitCommitTimeout))
 
 	SetReadMetaCachePct(int(c.ReadCache.ReadMetaCacheEnPct))
 	if c.ReadCache.ReadMetaCacheEn != 0 {
@@ -362,69 +381,22 @@ func (c *Store) Corrector(cpuNum int, memorySize toml.Size) {
 	if IsLogKeeper() {
 		defaultNodeMutableSizeLimit = toml.Size(uint64Limit(32*MB, 16*GB, uint64(memorySize/8)))
 	}
-
-	items := [][2]*toml.Size{
-		{&c.MemTable.ShardMutableSizeLimit, &defaultShardMutableSizeLimit},
-		{&c.MemTable.NodeMutableSizeLimit, &defaultNodeMutableSizeLimit},
-	}
-
-	for i := range items {
-		if *items[i][0] == 0 {
-			*items[i][0] = *items[i][1]
-		}
-	}
+	ResetZero2Default(&c.MemTable.ShardMutableSizeLimit, toml.Size(0), defaultShardMutableSizeLimit)
+	ResetZero2Default(&c.MemTable.NodeMutableSizeLimit, toml.Size(0), defaultNodeMutableSizeLimit)
 
 	c.StringCompressAlgo = strings.ToLower(c.StringCompressAlgo)
 	c.CorrectorThroughput(cpuNum)
+	c.ShelfMode.Corrector(cpuNum)
 }
 
 func (c *Store) CorrectorThroughput(cpuNum int) {
-	var defaultCompactThroughput toml.Size
-	var defaultCompactThroughputBurst toml.Size
-	var defaultSnapshotThroughput toml.Size
-	var defaultSnapshotThroughputBurst toml.Size
-	var defaultBackGroundReadThroughput toml.Size
+	n := toml.Size(max(1, cpuNum/4))
 
-	if cpuNum <= 4 {
-		defaultCompactThroughput = DefaultSnapshotThroughput
-		defaultCompactThroughputBurst = DefaultSnapshotThroughput
-		defaultSnapshotThroughput = DefaultSnapshotThroughput
-		defaultSnapshotThroughputBurst = DefaultSnapshotThroughput
-		defaultBackGroundReadThroughput = DefaultBackGroundReadThroughput
-	} else if cpuNum <= 8 {
-		defaultCompactThroughput = DefaultSnapshotThroughput * 2
-		defaultCompactThroughputBurst = DefaultSnapshotThroughput * 2
-		defaultSnapshotThroughput = DefaultSnapshotThroughput * 2
-		defaultSnapshotThroughputBurst = DefaultSnapshotThroughput * 2
-		defaultBackGroundReadThroughput = DefaultBackGroundReadThroughput * 2
-	} else if cpuNum <= 16 {
-		defaultCompactThroughput = DefaultSnapshotThroughput * 4
-		defaultCompactThroughputBurst = DefaultSnapshotThroughput * 4
-		defaultSnapshotThroughput = DefaultSnapshotThroughput * 4
-		defaultSnapshotThroughputBurst = DefaultSnapshotThroughput * 4
-		defaultBackGroundReadThroughput = DefaultBackGroundReadThroughput * 4
-	} else {
-		defaultCompactThroughput = DefaultSnapshotThroughput * 8
-		defaultCompactThroughputBurst = DefaultSnapshotThroughput * 8
-		defaultSnapshotThroughput = DefaultSnapshotThroughput * 8
-		defaultSnapshotThroughputBurst = DefaultSnapshotThroughput * 8
-		defaultBackGroundReadThroughput = DefaultBackGroundReadThroughput * 8
-	}
-	if int64(c.Compact.CompactThroughput) == 0 {
-		c.Compact.CompactThroughput = defaultCompactThroughput
-	}
-	if int64(c.Compact.CompactThroughputBurst) == 0 {
-		c.Compact.CompactThroughputBurst = defaultCompactThroughputBurst
-	}
-	if int64(c.Compact.SnapshotThroughput) == 0 {
-		c.Compact.SnapshotThroughput = defaultSnapshotThroughput
-	}
-	if int64(c.Compact.SnapshotThroughputBurst) == 0 {
-		c.Compact.SnapshotThroughputBurst = defaultSnapshotThroughputBurst
-	}
-	if int64(c.Compact.BackGroundReadThroughput) == 0 {
-		c.Compact.BackGroundReadThroughput = defaultBackGroundReadThroughput
-	}
+	ResetZero2Default(&c.Compact.CompactThroughput, toml.Size(0), DefaultSnapshotThroughput*n)
+	ResetZero2Default(&c.Compact.CompactThroughputBurst, toml.Size(0), DefaultSnapshotThroughputBurst*n)
+	ResetZero2Default(&c.Compact.SnapshotThroughput, toml.Size(0), DefaultSnapshotThroughput*n)
+	ResetZero2Default(&c.Compact.SnapshotThroughputBurst, toml.Size(0), DefaultSnapshotThroughputBurst*n)
+	ResetZero2Default(&c.Compact.BackGroundReadThroughput, toml.Size(0), DefaultBackGroundReadThroughput*n)
 }
 
 // Validate validates the configuration hold by c.
@@ -445,7 +417,6 @@ func (c Store) Validate() error {
 	ivItems := []intValidatorItem{
 		{"data max-concurrent-compactions", int64(c.Compact.MaxConcurrentCompactions), true},
 		{"data max-full-compactions", int64(c.Compact.MaxFullCompactions), true},
-		{"data imm-table-max-memory-percentage", int64(c.ImmTableMaxMemoryPercentage), false},
 		{"data write-cold-duration", int64(c.MemTable.WriteColdDuration), false},
 		{"data max-write-hang-time", int64(c.MemTable.MaxWriteHangTime), false},
 	}
@@ -510,10 +481,18 @@ func NewClvConfig() *ClvConfig {
 }
 
 const (
-	defaultMaxUnorderedFileSize   = 8 * GB
-	defaultMaxUnorderedFileNumber = 64
-	defaultMaxMergeSelfLevel      = 0
-	defaultMinInterval            = 300 * time.Second
+	defaultMaxUnorderedFileSize        = 8 * GB
+	defaultMaxUnorderedFileNumber      = 64
+	defaultMaxMergeSelfLevel           = 0
+	defaultMinInterval                 = 300 * time.Second
+	defaultStreamMergeModeLevel        = 2
+	DefaultHotModeMemoryAllowedPercent = 5
+	DefaultHotModeTimeWindow           = time.Minute
+	DefaultHotDuration                 = time.Hour
+	MaxHotDuration                     = time.Hour * 24 * 30
+	DefaultMaxHotFileSize              = 2 * GB
+	DefaultHotModePoolObjectCnt        = 2
+	DefaultHotModeMaxCacheSize         = 1 * GB
 )
 
 type Merge struct {
@@ -528,6 +507,8 @@ type Merge struct {
 	MaxMergeSelfLevel uint16 `toml:"max-merge-self-level"`
 
 	MinInterval toml.Duration `toml:"min-interval"`
+
+	StreamMergeModeLevel int `toml:"stream-merge-mode-level"`
 }
 
 func defaultMerge() Merge {
@@ -537,9 +518,57 @@ func defaultMerge() Merge {
 		MaxUnorderedFileNumber: defaultMaxUnorderedFileNumber,
 		MinInterval:            toml.Duration(defaultMinInterval),
 		MaxMergeSelfLevel:      defaultMaxMergeSelfLevel,
+		StreamMergeModeLevel:   defaultStreamMergeModeLevel,
 	}
 }
 
+type HotMode struct {
+	Enabled              bool          `toml:"enabled"`
+	MemoryAllowedPercent uint8         `toml:"memory-allowed-percent"`
+	Duration             toml.Duration `toml:"duration"`
+	TimeWindow           toml.Duration `toml:"time-window"`
+	MaxFileSize          toml.Size     `toml:"max-file-size"`
+	PoolObjectCnt        int           `toml:"pool-object-cnt"`
+	MaxCacheSize         toml.Size     `toml:"max-cache-size"`
+}
+
+func defaultHotMode() HotMode {
+	return HotMode{
+		Enabled:              false,
+		MemoryAllowedPercent: DefaultHotModeMemoryAllowedPercent,
+		Duration:             toml.Duration(DefaultHotDuration),
+		TimeWindow:           toml.Duration(DefaultHotModeTimeWindow),
+		MaxFileSize:          toml.Size(DefaultMaxHotFileSize),
+		PoolObjectCnt:        DefaultHotModePoolObjectCnt,
+		MaxCacheSize:         toml.Size(DefaultHotModeMaxCacheSize),
+	}
+}
+
+func (m *HotMode) DurationSeconds() int64 {
+	if m.Duration <= 0 {
+		return int64(MaxHotDuration) / 1e9
+	}
+	return int64(m.Duration) / 1e9
+}
+
+func (m *HotMode) TimeWindowSeconds() int64 {
+	if m.TimeWindow <= 0 {
+		return int64(DefaultHotModeTimeWindow) / 1e9
+	}
+	return int64(m.TimeWindow) / 1e9
+}
+
+func (m *HotMode) GetMemoryAllowedPercent() int64 {
+	if m.MemoryAllowedPercent <= 0 {
+		return DefaultHotModeMemoryAllowedPercent
+	}
+	return int64(m.MemoryAllowedPercent)
+}
+
 func PreFullCompactLevel() uint16 {
-	return GetStoreConfig().TSSPToParquetLevel
+	return GetStoreConfig().ParquetTask.TSSPToParquetLevel
+}
+
+func HotModeEnabled() bool {
+	return GetStoreConfig().HotMode.Enabled
 }

@@ -176,6 +176,11 @@ func (c *ChunkIterator) Close() {
 	c.ctx = nil
 }
 
+func (c *ChunkIterator) IncrChunkUsed() {
+	c.chunkUsed++
+	c.curtChunkMeta = nil
+}
+
 func (c *ChunkIterator) Next() bool {
 	if c.err != nil {
 		return false

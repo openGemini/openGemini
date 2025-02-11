@@ -29,9 +29,9 @@ import (
 )
 
 func TestTagSets_Add(t *testing.T) {
-	tagSets := NewTagSets()
+	tagSets := NewTagSets().(*TagSets)
 	tagSets.Add("testKey", "testValue")
-	if tagSets.TagKVCount() != 1 {
+	if tagSets.Count() != 1 {
 		t.Fatalf("")
 	}
 	if !reflect.DeepEqual(tagSets.sets, map[string]map[string]struct{}{"testKey": {"testValue": struct{}{}}}) {
@@ -40,8 +40,8 @@ func TestTagSets_Add(t *testing.T) {
 
 	tagSets.Add("testKey", "testValue2")
 	tagSets.Add("testKey2", "testValue3")
-	if tagSets.TagKVCount() != 3 {
-		t.Fatalf("TagKVCount expected: %v, actual: %v", 3, tagSets.TagKVCount())
+	if tagSets.Count() != 3 {
+		t.Fatalf("Count expected: %v, actual: %v", 3, tagSets.Count())
 	}
 	want := map[string]map[string]struct{}{
 		"testKey":  {"testValue": struct{}{}, "testValue2": struct{}{}},
@@ -53,7 +53,7 @@ func TestTagSets_Add(t *testing.T) {
 }
 
 func TestTagSets_ForEach(t *testing.T) {
-	tagSets := NewTagSets()
+	tagSets := NewTagSets().(*TagSets)
 	tagSets.Add("testKey", "testValue")
 	tagSets.Add("testKey", "testValue2")
 	tagSets.Add("testKey2", "testValue3")
@@ -79,11 +79,28 @@ func TestSequenceIterator_Run(t *testing.T) {
 			MetaIndexItemNumFn: func() int64 { return 3 },
 			RefFileReaderFn:    func() {},
 			UnrefFileReaderFn:  func() {},
+			FileStatFn: func() *Trailer {
+				return &Trailer{}
+			},
 		},
 	}
 
+	cm := &ChunkMeta{
+		sid:         100,
+		offset:      10,
+		size:        200,
+		columnCount: 2,
+		segCount:    1,
+		timeRange:   []SegmentRange{{1, 1}},
+		colMeta: []ColumnMeta{
+			{name: "foo", ty: 1, preAgg: make([]byte, 16), entries: []Segment{{1, 100}}},
+			{name: "time", ty: 1, preAgg: make([]byte, 16), entries: []Segment{{100, 100}}},
+		},
+	}
+	buf := cm.marshal(nil)
+
 	metaReader := &MockChunkMetasReader{
-		ReadChunkMetasFn: func(f TSSPFile, idx int) ([]byte, []uint32, error) { return make([]byte, 10), make([]uint32, 10), nil },
+		ReadChunkMetasFn: func(f TSSPFile, idx int) ([]byte, []uint32, error) { return buf, make([]uint32, 1), nil },
 	}
 
 	errSearchSeriesKey := errno.NewError(errno.ErrSearchSeriesKey)
@@ -100,7 +117,7 @@ func TestSequenceIterator_Run(t *testing.T) {
 				BeginFn:         func() {},
 				FinishFn:        func() {},
 				NextFileFn:      func(file TSSPFile) {},
-				NextChunkMetaFn: func(bytes []byte) error { return nil },
+				NextChunkMetaFn: func(cm *ChunkMeta) error { return nil },
 				LimitedFn:       func() bool { return false },
 			},
 			Err: nil,
@@ -111,8 +128,10 @@ func TestSequenceIterator_Run(t *testing.T) {
 				BeginFn:         func() {},
 				FinishFn:        func() {},
 				NextFileFn:      func(file TSSPFile) {},
-				NextChunkMetaFn: func(bytes []byte) error { return nil },
-				LimitedFn:       func() bool { return true },
+				NextChunkMetaFn: func(cm *ChunkMeta) error { return nil },
+				LimitedFn: func() bool {
+					return true
+				},
 			},
 			Err: io.EOF,
 		},
@@ -122,7 +141,7 @@ func TestSequenceIterator_Run(t *testing.T) {
 				BeginFn:         func() {},
 				FinishFn:        func() {},
 				NextFileFn:      func(file TSSPFile) {},
-				NextChunkMetaFn: func(bytes []byte) error { return errSearchSeriesKey },
+				NextChunkMetaFn: func(cm *ChunkMeta) error { return errSearchSeriesKey },
 				LimitedFn:       func() bool { return false },
 			},
 			Err: nil,
@@ -133,7 +152,7 @@ func TestSequenceIterator_Run(t *testing.T) {
 				BeginFn:         func() {},
 				FinishFn:        func() {},
 				NextFileFn:      func(file TSSPFile) {},
-				NextChunkMetaFn: func(bytes []byte) error { return mockErr },
+				NextChunkMetaFn: func(cm *ChunkMeta) error { return mockErr },
 				LimitedFn:       func() bool { return false },
 			},
 			Err: mockErr,
@@ -156,7 +175,7 @@ type MockSequenceIteratorHandler struct {
 	InitFn          func(map[string]interface{}) error
 	BeginFn         func()
 	NextFileFn      func(TSSPFile)
-	NextChunkMetaFn func([]byte) error
+	NextChunkMetaFn func(cm *ChunkMeta) error
 	LimitedFn       func() bool
 	FinishFn        func()
 }
@@ -173,8 +192,8 @@ func (h *MockSequenceIteratorHandler) NextFile(f TSSPFile) {
 	h.NextFileFn(f)
 }
 
-func (h *MockSequenceIteratorHandler) NextChunkMeta(buf []byte) error {
-	return h.NextChunkMetaFn(buf)
+func (h *MockSequenceIteratorHandler) NextChunkMeta(cm *ChunkMeta) error {
+	return h.NextChunkMetaFn(cm)
 }
 
 func (h *MockSequenceIteratorHandler) Limited() bool {
@@ -220,14 +239,11 @@ type MockTSSPFileSeqIterator struct {
 	LoadIdTimesFn           func(p *IdTimePairs) error
 	RenameFn                func(newName string) error
 	RemoveFn                func() error
-	FreeMemoryFn            func(evictLock bool) int64
 	FreeFileHandleFn        func() error
 	VersionFn               func() uint64
 	AverageChunkRowsFn      func() int
 	MaxChunkRowsFn          func() int
 	MetaIndexItemNumFn      func() int64
-	AddToEvictListFn        func(level uint16)
-	RemoveFromEvictListFn   func(level uint16)
 	GetFileReaderRefFn      func() int64
 	RenameOnObsFn           func(obsName string, tmp bool, opt *obs.ObsOptions) error
 	ChunkMetaCompressModeFn func() uint8
@@ -284,19 +300,12 @@ func (file *MockTSSPFileSeqIterator) LoadComponents() error             { return
 func (file *MockTSSPFileSeqIterator) LoadIdTimes(p *IdTimePairs) error  { return file.LoadIdTimesFn(p) }
 func (file *MockTSSPFileSeqIterator) Rename(newName string) error       { return file.RenameFn(newName) }
 func (file *MockTSSPFileSeqIterator) Remove() error                     { return file.RemoveFn() }
-func (file *MockTSSPFileSeqIterator) FreeMemory(evictLock bool) int64 {
-	return file.FreeMemoryFn(evictLock)
-}
-func (file *MockTSSPFileSeqIterator) FreeFileHandle() error       { return file.FreeFileHandleFn() }
-func (file *MockTSSPFileSeqIterator) Version() uint64             { return file.VersionFn() }
-func (file *MockTSSPFileSeqIterator) AverageChunkRows() int       { return file.AverageChunkRowsFn() }
-func (file *MockTSSPFileSeqIterator) MaxChunkRows() int           { return file.MaxChunkRowsFn() }
-func (file *MockTSSPFileSeqIterator) MetaIndexItemNum() int64     { return file.MetaIndexItemNumFn() }
-func (file *MockTSSPFileSeqIterator) AddToEvictList(level uint16) { file.AddToEvictListFn(level) }
-func (file *MockTSSPFileSeqIterator) RemoveFromEvictList(level uint16) {
-	file.RemoveFromEvictListFn(level)
-}
-func (file *MockTSSPFileSeqIterator) GetFileReaderRef() int64 { return file.GetFileReaderRefFn() }
+func (file *MockTSSPFileSeqIterator) FreeFileHandle() error             { return file.FreeFileHandleFn() }
+func (file *MockTSSPFileSeqIterator) Version() uint64                   { return file.VersionFn() }
+func (file *MockTSSPFileSeqIterator) AverageChunkRows() int             { return file.AverageChunkRowsFn() }
+func (file *MockTSSPFileSeqIterator) MaxChunkRows() int                 { return file.MaxChunkRowsFn() }
+func (file *MockTSSPFileSeqIterator) MetaIndexItemNum() int64           { return file.MetaIndexItemNumFn() }
+func (file *MockTSSPFileSeqIterator) GetFileReaderRef() int64           { return file.GetFileReaderRefFn() }
 func (file *MockTSSPFileSeqIterator) RenameOnObs(obsName string, tmp bool, opt *obs.ObsOptions) error {
 	return file.RenameOnObsFn(obsName, tmp, opt)
 }

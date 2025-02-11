@@ -45,12 +45,12 @@ func createAndGetFileInfo(dumpOpt *dumpOptions, dumpType configureType) (*os.Fil
 	}
 	var directory = dumpOpt.dumpPath
 	filepath := formatFilename(directory, dumpType, pName)
-	f, err := os.OpenFile(filepath, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0640)
+	f, err := os.OpenFile(filepath, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0600)
 	if err != nil && os.IsNotExist(err) {
 		if err = os.MkdirAll(directory, 0750); err != nil {
 			return nil, filepath, err
 		}
-		f, err = os.OpenFile(filepath, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0640)
+		f, err = os.OpenFile(filepath, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0600)
 		if err != nil {
 			return nil, filepath, err
 		}

@@ -459,6 +459,10 @@ func (p *LogicalPromSubquery) String() string {
 	return "LogicalPromSubquery"
 }
 
+func (p *LogicalPromSort) String() string {
+	return "LogicalPromSort"
+}
+
 func MarshalBinary(q hybridqp.QueryNode) ([]byte, error) {
 	switch p := q.(type) {
 	case *HeuVertex:
