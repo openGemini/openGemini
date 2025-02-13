@@ -76,7 +76,7 @@ func TestFileIterator(t *testing.T) {
 	testCompDir := t.TempDir()
 	_ = fileops.RemoveAll(testCompDir)
 	cacheIns := readcache.GetReadMetaCacheIns()
-	cacheIns.Purge()
+	cacheIns.Purge(readcache.MetaCachePool)
 	sig := interruptsignal.NewInterruptSignal()
 	defer func() {
 		sig.Close()
@@ -242,7 +242,7 @@ func TestMmsTables_LevelCompact_20ID10Segment_SegLimit(t *testing.T) {
 	testCompDir := t.TempDir()
 	_ = fileops.RemoveAll(testCompDir)
 	cacheIns := readcache.GetReadMetaCacheIns()
-	cacheIns.Purge()
+	cacheIns.Purge(readcache.MetaCachePool)
 	sig := interruptsignal.NewInterruptSignal()
 	defer func() {
 		sig.Close()
@@ -607,7 +607,7 @@ func TestFileSizeExceedLimit(t *testing.T) {
 	testCompDir := t.TempDir()
 	_ = fileops.RemoveAll(testCompDir)
 	cacheIns := readcache.GetReadMetaCacheIns()
-	cacheIns.Purge()
+	cacheIns.Purge(readcache.MetaCachePool)
 	sig := interruptsignal.NewInterruptSignal()
 	defer func() {
 		sig.Close()
@@ -712,7 +712,7 @@ func TestFileSizeExceedLimit1(t *testing.T) {
 	testCompDir := t.TempDir()
 	_ = fileops.RemoveAll(testCompDir)
 	cacheIns := readcache.GetReadMetaCacheIns()
-	cacheIns.Purge()
+	cacheIns.Purge(readcache.MetaCachePool)
 	sig := interruptsignal.NewInterruptSignal()
 	defer func() {
 		sig.Close()

@@ -77,6 +77,8 @@ var (
 	PreadFailErr          = errors.New("pread fail")
 	getFileSizeInpPthFail = errors.New("get file size in path fail")
 	readLimiter           = limiter.NewFixed(950)
+
+	maxRetry = 50
 )
 
 const (
@@ -97,13 +99,27 @@ func NewStreamClient() *StreamClient {
 	usr := C.CString("Ruby")
 	defer C.free(unsafe.Pointer(usr))
 
-	f := C.streamConnectAsUser(nn, port, usr)
-	log := logger.GetLogger()
-	sc = &StreamClient{
-		fs:     f,
-		Logger: log.With(zap.String("service", "streamfs")),
+	var f C.streamFS
+	for i := 1; i <= maxRetry; i++ {
+		f = C.streamConnectAsUser(nn, port, usr)
+		if f != nil {
+			break
+		}
+		time.Sleep(time.Millisecond * 100 * time.Duration(i))
+		fmt.Printf("%s connect streamfs failed, retry: %d\n", time.Now().String(), i)
+	}
+	if f == nil {
+		panic("connect streamfs failed")
 	}
 
+	sc = &StreamClient{fs: f}
+	if l, err := zap.NewDevelopment(); err != nil {
+		sc.Logger = zap.NewNop()
+		fmt.Printf("%s streamfs init success, set Logger Nop, zap.NewDevelopment error: %v\n", time.Now().String(), err)
+	} else {
+		sc.Logger = l
+		sc.Logger.Info("streamfs init success")
+	}
 	return sc
 }
 
@@ -463,49 +479,28 @@ func (sc *StreamClient) RenameFileV2(src string, target string, LockFilePath str
 }
 
 func (sc *StreamClient) CreateFile(name string, priority int) (*StreamFile, error) {
-	flags := os.O_WRONLY
-
-	fd, err := sc.OpenFile(name, flags, priority)
+	// WRONLY means create|overwrite in libstream
+	fd, err := sc.OpenFile(name, os.O_WRONLY, priority)
 	if fd == nil {
-		sc.Logger.Error("open failed ", zap.Error(err))
+		sc.Logger.Error("open failed", zap.Error(err))
 		return nil, err
 	}
-
 	return fd, nil
 }
 
 func (sc *StreamClient) CreateFileV2(name string, lockFilePath string, priority int) (*StreamFile, error) {
-	flags := os.O_WRONLY
-	if err := sc.FileExists(name); err == nil {
-		flags = os.O_RDWR
-	} else if err == ErrStreamFileNotExist {
-		flags = os.O_CREATE
-	} else {
-		return nil, fmt.Errorf("file(%s) exist with create flag(%d)", name, flags)
-	}
-
-	fd, err := sc.OpenFileV2(name, flags, lockFilePath, priority)
+	fd, err := sc.OpenFileV2(name, os.O_WRONLY, lockFilePath, priority)
 	if fd == nil {
-		sc.Logger.Error("open fileV2 failed ", zap.Error(err))
+		sc.Logger.Error("open fileV2 failed", zap.Error(err))
 		return nil, err
 	}
-
 	return fd, nil
 }
 
 func (sc *StreamClient) CreateOBSFile(name string, lockFilePath string, priority int) (*StreamFile, error) {
-	flags := os.O_WRONLY
-	if err := sc.FileExists(name); err == nil {
-		flags = os.O_RDWR
-	} else if err == ErrStreamFileNotExist {
-		flags = os.O_CREATE
-	} else {
-		return nil, fmt.Errorf("file(%s) exist with create flag(%d): %s", name, flags, err.Error())
-	}
-
-	fd, err := sc.OpenFileV3(name, flags, lockFilePath, priority)
+	fd, err := sc.OpenFileV3(name, os.O_WRONLY, lockFilePath, priority)
 	if err != nil {
-		sc.Logger.Error("CreateOBS failed ", zap.Error(err))
+		sc.Logger.Error("CreateOBS failed", zap.Error(err))
 		return nil, err
 	}
 	return fd, nil
@@ -542,7 +537,6 @@ func (sc *StreamClient) fsync(file *StreamFile, trueSync bool) error {
 		err := fmt.Errorf("fsync file(%s) failed, true sync: %v", file.Name(), trueSync)
 		sc.Logger.Error("sync fail", zap.Error(err))
 		panic(err)
-		return err
 	}
 
 	return nil
@@ -558,7 +552,6 @@ func (sc *StreamClient) fsyncV2(file *StreamFile, trueSync bool, lockFilePath st
 			file.Name(), trueSync, lockFilePath, getStreamErrorString())
 		sc.Logger.Error("syncV2 fail", zap.Error(err))
 		panic(err)
-		return err
 	}
 
 	return nil
@@ -1377,6 +1370,10 @@ func (fs *streamVfs) ReadDir(dirname string) ([]os.FileInfo, error) {
 	return fs.sc.Readdir(dirname)
 }
 
+func (fs *streamVfs) NormalizeDirPath(path string) string {
+	return path
+}
+
 func (fs *streamVfs) Glob(pattern string) ([]string, error) {
 	var path string
 	dir, filePattern := filepath.Split(pattern)
@@ -1511,4 +1508,8 @@ func RecoverLease(lock string) error {
 
 func SealFile(path, lock string) error {
 	return GetStreamClient().SealFileV2(path, lock)
+}
+
+func SetLogger() {
+	GetStreamClient().WithLogger(logger.GetLogger())
 }

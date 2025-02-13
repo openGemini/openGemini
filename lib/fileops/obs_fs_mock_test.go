@@ -251,6 +251,18 @@ func TestMockObsFs_OpenFile(t *testing.T) {
 	client.mockErr = true
 	_, err = fs.OpenFile(path, os.O_CREATE, os.ModePerm)
 	assert.NotNil(t, err)
+
+	client.mockErr = true
+	client.errTimes, client.maxErrTimes = 0, ObsOpenRetryTimes-2
+	_, err = fs.OpenFile(path, os.O_CREATE, os.ModePerm)
+	assert.Nil(t, err)
+	client.errTimes, client.maxErrTimes = 0, 0
+
+	client.mockErr = true
+	client.statusCode = 404
+	_, err = fs.OpenFile(path, os.O_CREATE, os.ModePerm)
+	assert.NotNil(t, err)
+
 	client.mockErr = false
 	_ = fs.WriteFile(path, []byte("hello"), os.ModePerm)
 	fd, err := fs.OpenFile(path, os.O_CREATE|os.O_APPEND, os.ModePerm)
@@ -461,8 +473,11 @@ func TestMockObsFs_RemoveLocal(t *testing.T) {
 }
 
 type mockObsClient struct {
-	mockErr bool
-	dummy   map[string][]byte
+	mockErr     bool
+	errTimes    int
+	maxErrTimes int
+	statusCode  int
+	dummy       map[string][]byte
 }
 
 func newMockObsClient() *mockObsClient {
@@ -542,9 +557,16 @@ func (m *mockObsClient) PutObject(input *obs.PutObjectInput) (*obs.PutObjectOutp
 }
 
 func (m *mockObsClient) GetObjectMetadata(input *obs.GetObjectMetadataInput) (*obs.GetObjectMetadataOutput, error) {
-	if m.mockErr {
+	if m.mockErr && m.errTimes <= m.maxErrTimes {
 		err := obs.ObsError{}
-		err.StatusCode = 500
+		if m.statusCode != 0 {
+			err.StatusCode = m.statusCode
+		} else {
+			err.StatusCode = 500
+		}
+		if m.maxErrTimes != 0 {
+			m.errTimes++
+		}
 		return nil, err
 	}
 	if content, exist := m.dummy[input.Key]; exist {

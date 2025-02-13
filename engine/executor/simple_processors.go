@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/lib/errno"
 )
 
 type SourceFromSingleChunk struct {
@@ -351,5 +352,44 @@ func (trans *NilTransform) GetInputNumber(port Port) int {
 			return i
 		}
 	}
+	return INVALID_NUMBER
+}
+
+type RetryErrTransform struct {
+	BaseProcessor
+}
+
+func NewRetryErrTransform() *RetryErrTransform {
+	return &RetryErrTransform{}
+}
+
+func (source *RetryErrTransform) Name() string {
+	return "RetryErrTransform"
+}
+
+func (source *RetryErrTransform) Explain() []ValuePair {
+	return nil
+}
+
+func (source *RetryErrTransform) Close() {
+}
+
+func (source *RetryErrTransform) Work(ctx context.Context) error {
+	return errno.NewError(errno.DBPTClosed)
+}
+
+func (source *RetryErrTransform) GetOutputs() Ports {
+	return nil
+}
+
+func (source *RetryErrTransform) GetInputs() Ports {
+	return nil
+}
+
+func (source *RetryErrTransform) GetOutputNumber(_ Port) int {
+	return 0
+}
+
+func (source *RetryErrTransform) GetInputNumber(_ Port) int {
 	return INVALID_NUMBER
 }

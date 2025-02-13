@@ -276,9 +276,9 @@ func generateError(rowErrors []error) (fullErr error, allErr bool) {
 			continue
 		}
 		if fullErr == nil {
-			fullErr = fmt.Errorf("error in row %d: %v\n", index, err)
+			fullErr = fmt.Errorf("error in row %d: %v", index, err)
 		} else {
-			fullErr = fmt.Errorf("%verror in row %d: %v\n", fullErr, index, err)
+			fullErr = fmt.Errorf("%verror in row %d: %v", fullErr, index, err)
 		}
 	}
 	return
@@ -322,6 +322,9 @@ func uncompress(algo pb.CompressMethod, data []byte) ([]byte, error) {
 		panic("please implement me")
 	case pb.CompressMethod_ZSTD_FAST:
 		zstdReader := compression.GetZstdReader(bytes.NewReader(data))
+		if zstdReader == nil {
+			return nil, fmt.Errorf("zstdReader is nil")
+		}
 		defer compression.PutZstdReader(zstdReader)
 		return io.ReadAll(zstdReader)
 	case pb.CompressMethod_SNAPPY:
@@ -408,7 +411,6 @@ func column2StringFields(dst []influx.Row, key string, col *record.ColVal) {
 func column2IntegerFields(dst []influx.Row, key string, col *record.ColVal) {
 	values := col.IntegerValues()
 	hasNil := col.NilCount > 0
-
 	for i := range dst {
 		if hasNil && col.IsNil(i) {
 			continue
@@ -424,7 +426,6 @@ func column2IntegerFields(dst []influx.Row, key string, col *record.ColVal) {
 func column2FloatFields(dst []influx.Row, key string, col *record.ColVal) {
 	values := col.FloatValues()
 	hasNil := col.NilCount > 0
-
 	for i := range dst {
 		if hasNil && col.IsNil(i) {
 			continue
@@ -440,7 +441,6 @@ func column2FloatFields(dst []influx.Row, key string, col *record.ColVal) {
 func column2BoolFields(dst []influx.Row, key string, col *record.ColVal) {
 	values := col.BooleanValues()
 	hasNil := col.NilCount > 0
-
 	for i := range dst {
 		if hasNil && col.IsNil(i) {
 			continue
@@ -459,7 +459,6 @@ func column2BoolFields(dst []influx.Row, key string, col *record.ColVal) {
 func column2Time(dst []influx.Row, col *record.ColVal) {
 	values := col.IntegerValues()
 	hasNil := col.NilCount > 0
-
 	for i := range dst {
 		if hasNil && col.IsNil(i) {
 			continue

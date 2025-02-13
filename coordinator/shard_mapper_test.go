@@ -25,7 +25,7 @@ import (
 	"testing"
 	"time"
 
-	set "github.com/deckarep/golang-set"
+	set "github.com/deckarep/golang-set/v2"
 	"github.com/influxdata/influxdb/models"
 	originql "github.com/influxdata/influxql"
 	"github.com/openGemini/openGemini/engine/executor"
@@ -354,7 +354,7 @@ func (m mocShardMapperMetaClient) GetMeasurements(mst *influxql.Measurement) ([]
 	return measurements, nil
 }
 
-func (m mocShardMapperMetaClient) TagKeys(database string) map[string]set.Set {
+func (m mocShardMapperMetaClient) TagKeys(database string) map[string]set.Set[string] {
 	return nil
 }
 
@@ -402,7 +402,7 @@ func (m mocShardMapperMetaClient) ShowContinuousQueries() (models.Rows, error) {
 	return nil, nil
 }
 
-func (m mocShardMapperMetaClient) GetAliveShards(database string, sgi *meta.ShardGroupInfo) []int {
+func (m mocShardMapperMetaClient) GetAliveShards(database string, sgi *meta.ShardGroupInfo, isRead bool) []int {
 	aliveShardIdxes := make([]int, 0, len(sgi.Shards))
 	for i := range sgi.Shards {
 		aliveShardIdxes = append(aliveShardIdxes, i)
@@ -1348,6 +1348,17 @@ func Test_CreateLogicalPlanForRWSplit(t *testing.T) {
 	}
 	if !reflect.DeepEqual(plan.Schema().GetColumnNames(), []string{"v1", "u1"}) {
 		t.Fatal()
+	}
+
+	// not support subQuery
+	plan, err = shardMapping.CreateLogicalPlan(ctx, []influxql.Source{&influxql.SubQuery{}}, schema)
+	if err == nil {
+		t.Fatalf("subquery is not supported, but no error reported")
+	}
+	// not support joinQuery
+	plan, err = shardMapping.CreateLogicalPlan(ctx, []influxql.Source{&influxql.Join{}}, schema)
+	if err == nil {
+		t.Fatalf("joinquery is not supported, but no error reported")
 	}
 }
 

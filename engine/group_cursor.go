@@ -130,7 +130,7 @@ func (c *groupCursor) nextWithReuse() (*record.Record, comm.SeriesInfoIntf, erro
 				return nil, nil, e
 			}
 			var tag []byte
-			if c.querySchema.Options().IsPromGroupAllOrWithout() {
+			if c.querySchema.Options().IsPromGroupAllOrWithout() || c.querySchema.Options().IsPromRemoteRead() {
 				tag = executor.NewChunkTagsWithoutDims(*currTags, c.querySchema.Options().GetOptDimension()).GetTag()
 			} else {
 				tag = executor.NewChunkTags(*currTags, c.querySchema.Options().GetOptDimension()).GetTag()
@@ -182,9 +182,6 @@ func (c *groupCursor) Close() error {
 	var err error
 	c.closeOnce.Do(func() {
 		c.ctx.decs.Release()
-		if (executor.GetEnableFileCursor() && c.querySchema.HasOptimizeAgg()) || c.lazyInit {
-			c.ctx.UnRef()
-		}
 		startPos := c.pos
 		if c.lazyInit {
 			startPos = 0

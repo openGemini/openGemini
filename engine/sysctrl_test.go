@@ -369,3 +369,30 @@ func TestUpperMemUsePct(t *testing.T) {
 		t.Error("TestUpperMemUsePct fail")
 	}
 }
+
+func TestWriteStreamPointsEnable(t *testing.T) {
+	log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
+	e := Engine{
+		log: log,
+	}
+	req := &netstorage.SysCtrlRequest{}
+	req.SetMod(syscontrol.WriteStreamPointsEnable)
+	req.SetParam(map[string]string{
+		"switch": "true",
+	})
+	if _, err := e.processReq(req); err == nil {
+		t.Error("TestReSetWalEnabled fail")
+	}
+	req.SetParam(map[string]string{
+		"switchon": "true",
+	})
+	if _, err := e.processReq(req); err != nil {
+		t.Error("TestReSetWalEnabled fail")
+	}
+	req.SetParam(map[string]string{
+		"switchon": "false",
+	})
+	if _, err := e.processReq(req); err != nil {
+		t.Error("TestReSetWalEnabled fail")
+	}
+}

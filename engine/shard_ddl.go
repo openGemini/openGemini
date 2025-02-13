@@ -15,12 +15,13 @@
 package engine
 
 import (
+	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/lib/metaclient"
 )
 
-func (s *shard) CreateShowTagValuesPlan(client metaclient.MetaClient) immutable.ShowTagValuesPlan {
+func (s *shard) CreateDDLBasePlan(client metaclient.MetaClient, ddl hybridqp.DDLType) immutable.DDLBasePlan {
 	if s.indexBuilder == nil {
 		return nil
 	}
@@ -28,5 +29,5 @@ func (s *shard) CreateShowTagValuesPlan(client metaclient.MetaClient) immutable.
 	if !ok {
 		return nil
 	}
-	return immutable.NewShowTagValuesPlan(s.immTables, idx, s.log, s, client)
+	return immutable.NewDDLBasePlan(s.immTables, idx, s.log, s, client, ddl)
 }

@@ -250,8 +250,9 @@ func (e *ShowTagValuesExecutor) queryTagValues(q *influxql.ShowTagValuesStatemen
 
 	lock := new(sync.Mutex)
 
+	exact := influxql.IsExactStatisticQueryForDDL(q)
 	err = e.me.EachDBNodes(q.Database, func(nodeID uint64, pts []uint32) error {
-		s, err := e.store.TagValues(nodeID, q.Database, pts, tagKeys, q.Condition, q.Limit+q.Offset, len(q.SortFields) == 0 && !e.cardinality)
+		s, err := e.store.TagValues(nodeID, q.Database, pts, tagKeys, q.Condition, q.Limit+q.Offset, exact)
 		lock.Lock()
 		defer lock.Unlock()
 		if err != nil {

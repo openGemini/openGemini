@@ -60,3 +60,13 @@ func IsReplication() bool {
 func IsSharedStorage() bool {
 	return policy == SharedStorage
 }
+
+var hardWrite bool
+
+func SetHardWrite(hardWriteConf bool) {
+	hardWrite = hardWriteConf
+}
+
+func IsHardWrite() bool {
+	return hardWrite
+}

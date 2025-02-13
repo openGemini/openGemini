@@ -31,7 +31,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	set "github.com/deckarep/golang-set"
+	set "github.com/deckarep/golang-set/v2"
 	"github.com/influxdata/influxdb/models"
 	originql "github.com/influxdata/influxql"
 	"github.com/openGemini/openGemini/coordinator"
@@ -43,6 +43,7 @@ import (
 	meta "github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+	"github.com/openGemini/openGemini/lib/sysconfig"
 	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/lib/tokenizer"
 	"github.com/openGemini/openGemini/lib/tracing"
@@ -454,7 +455,7 @@ func (e *StatementExecutor) ExecuteStatement(stmt influxql.Statement, ctx *query
 	return ctx.Send(&query.Result{
 		Series:   rows,
 		Messages: messages,
-	}, seq)
+	}, seq, nil)
 }
 
 func (e *StatementExecutor) retryExecuteStatement(stmt influxql.Statement, ctx *query.ExecutionContext, seq int) (models.Rows, error) {
@@ -907,7 +908,7 @@ func (e *StatementExecutor) executeDropUserStatement(q *influxql.DropUserStateme
 }
 
 func (e *StatementExecutor) executeExplainStatement(q *influxql.ExplainStatement, ctx *query.ExecutionContext) (models.Rows, error) {
-	panic("impl me")
+	return nil, meta2.ErrUnsupportCommand
 }
 
 func (e *StatementExecutor) executeExplainAnalyzeStatement(q *influxql.ExplainStatement, ectx *query.ExecutionContext) (models.Rows, error) {
@@ -1018,7 +1019,7 @@ func (e *StatementExecutor) retryExecuteSelectStatement(stmt *influxql.SelectSta
 
 	for i := 0; i < maxRetrySelectCount; i++ {
 		err = e.executeSelectStatement(stmt, ctx, seq)
-		if err == nil || !coordinator.IsRetryErrorForPtView(err) {
+		if err == nil || !errno.IsRetryErrorForPtView(err) {
 			break
 		}
 		time.Sleep(retrySelectInterval * (1 << i))
@@ -1076,7 +1077,7 @@ func (e *StatementExecutor) executeSelectStatement(stmt *influxql.SelectStatemen
 		proxy.close()
 		return ctx.Send(&query.Result{
 			Series: make([]*models.Row, 0),
-		}, seq)
+		}, seq, nil)
 	}
 
 	end := time.Now()
@@ -1086,9 +1087,12 @@ func (e *StatementExecutor) executeSelectStatement(stmt *influxql.SelectStatemen
 	ec := make(chan error, 2)
 	var wg sync.WaitGroup
 	wg.Add(1)
+	var ctxWithWriter context.Context
 	go func() {
 		defer wg.Done()
-		ctxWithWriter := context.WithValue(context.Background(), executor.WRITER_CONTEXT, ctx.PointsWriter)
+		ctxWithWriter = context.WithValue(context.Background(), executor.WRITER_CONTEXT, ctx.PointsWriter)
+		var queryIndexState int32 = 0
+		ctxWithWriter = context.WithValue(ctxWithWriter, index.QueryIndexState, &queryIndexState)
 		ec <- pipelineExecutor.ExecuteExecutor(ctxWithWriter)
 		close(ec)
 		proxy.close()
@@ -1121,9 +1125,9 @@ func (e *StatementExecutor) executeSelectStatement(stmt *influxql.SelectStatemen
 			}
 
 			// Send results or exit if closing.
-			if err := ctx.Send(result, seq); err != nil {
+			if err := ctx.Send(result, seq, ctxWithWriter); err != nil {
 				var abort, crash bool
-				if strings.Contains(err.Error(), query.ErrQueryTimeoutLimitExceeded.Error()) {
+				if sysconfig.GetInterruptQuery() && strings.Contains(err.Error(), query.ErrQueryTimeoutLimitExceeded.Error()) {
 					pipelineExecutor.Crash()
 					crash = true
 				} else {
@@ -1154,12 +1158,12 @@ func (e *StatementExecutor) executeSelectStatement(stmt *influxql.SelectStatemen
 					// Always emit at least one result.
 					return ctx.Send(&query.Result{
 						Series: make([]*models.Row, 0),
-					}, seq)
+					}, seq, ctxWithWriter)
 				}
 			}
 		case <-ctx.Done():
 			var abort, crash bool
-			if err := ctx.Err(); err != nil && strings.Contains(err.Error(), query.ErrQueryTimeoutLimitExceeded.Error()) {
+			if err := ctx.Err(); sysconfig.GetInterruptQuery() && err != nil && strings.Contains(err.Error(), query.ErrQueryTimeoutLimitExceeded.Error()) {
 				pipelineExecutor.Crash()
 				crash = true
 			} else {
@@ -1185,7 +1189,7 @@ func (e *StatementExecutor) executeSelectStatement(stmt *influxql.SelectStatemen
 	if !emitted {
 		return ctx.Send(&query.Result{
 			Series: make([]*models.Row, 0),
-		}, seq)
+		}, seq, ctxWithWriter)
 	}
 	return nil
 }
@@ -1225,7 +1229,7 @@ func (e *StatementExecutor) createPipelineExecutor(ctx context.Context, stmt *in
 
 			stackInfo := fmt.Errorf("runtime panic: %v\n %s", e, string(debug.Stack())).Error()
 			logger.NewLogger(errno.ModuleQueryEngine).Error(stackInfo, zap.Any("query_id", ctx.Value(query.QueryIDKey).([]uint64)),
-				zap.String("query", "pipeline executor"))
+				zap.String("query", "pipeline executor"), zap.String("query stmt", stmt.String()))
 		}
 	}()
 
@@ -1235,7 +1239,7 @@ func (e *StatementExecutor) createPipelineExecutor(ctx context.Context, stmt *in
 		return nil, e_tmp
 	}
 	pipelineExecutor, err = p.(*executor.PipelineExecutor), e_tmp
-
+	pipelineExecutor.Query = stmt.String()
 	return pipelineExecutor, err
 }
 
@@ -1451,7 +1455,7 @@ func (e *StatementExecutor) executeShowMeasurementsStatement(q *influxql.ShowMea
 	}
 
 	if len(measurements) == 0 {
-		return ctx.Send(&query.Result{}, seq)
+		return ctx.Send(&query.Result{}, seq, nil)
 	}
 
 	values := make([][]interface{}, len(measurements))
@@ -1465,7 +1469,7 @@ func (e *StatementExecutor) executeShowMeasurementsStatement(q *influxql.ShowMea
 			Columns: []string{"name"},
 			Values:  values,
 		}},
-	}, seq)
+	}, seq, nil)
 }
 
 func (e *StatementExecutor) executeShowMeasurementsDetailStatement(stmt *influxql.ShowMeasurementsDetailStatement, ctx *query.ExecutionContext, seq int) error {
@@ -1593,13 +1597,13 @@ func (e *StatementExecutor) executeShowMeasurementsDetailStatement(stmt *influxq
 		values = append(values, []interface{}{fieldStr})
 
 		row.Values = values
-		if err := ctx.Send(&query.Result{Series: []*models.Row{row}}, seq); err != nil {
+		if err := ctx.Send(&query.Result{Series: []*models.Row{row}}, seq, nil); err != nil {
 			return err
 		}
 		emitted = true
 	}
 	if !emitted {
-		return ctx.Send(&query.Result{}, seq)
+		return ctx.Send(&query.Result{}, seq, nil)
 	}
 	return nil
 }
@@ -1700,14 +1704,14 @@ func (e *StatementExecutor) executeShowFieldKeys(q *influxql.ShowFieldKeysStatem
 
 		if err := ctx.Send(&query.Result{
 			Series: []*models.Row{row},
-		}, seq); err != nil {
+		}, seq, nil); err != nil {
 			return err
 		}
 		emitted = true
 
 	}
 	if !emitted {
-		return ctx.Send(&query.Result{}, seq)
+		return ctx.Send(&query.Result{}, seq, nil)
 	}
 	return nil
 }
@@ -1736,13 +1740,13 @@ func (e *StatementExecutor) executeShowFieldKeyCardinality(q *influxql.ShowField
 		}
 		if err := ctx.Send(&query.Result{
 			Series: []*models.Row{row},
-		}, seq); err != nil {
+		}, seq, nil); err != nil {
 			return err
 		}
 		emitted = true
 	}
 	if !emitted {
-		return ctx.Send(&query.Result{}, seq)
+		return ctx.Send(&query.Result{}, seq, nil)
 	}
 	return nil
 }
@@ -1769,11 +1773,11 @@ func (e *StatementExecutor) TagKeys(database string, measurements influxql.Measu
 func (e *StatementExecutor) executeShowTagKeys(q *influxql.ShowTagKeysStatement, ctx *query.ExecutionContext, seq int) error {
 	var tagKeys netstorage.TableTagKeys
 	var err error
-	if q.Condition != nil {
+	if influxql.OnlyHaveTimeCond(q.Condition) {
+		tagKeys, err = e.TagKeys(q.Database, q.Sources.Measurements(), q.Condition)
+	} else {
 		exec := coordinator.NewShowTagKeysExecutor(e.StmtExecLogger, e.MetaClient, e.MetaExecutor, e.NetStorage)
 		tagKeys, err = exec.Execute(q)
-	} else {
-		tagKeys, err = e.TagKeys(q.Database, q.Sources.Measurements(), q.Condition)
 	}
 
 	if err != nil {
@@ -1809,7 +1813,7 @@ func (e *StatementExecutor) executeShowTagKeys(q *influxql.ShowTagKeysStatement,
 
 		if err := ctx.Send(&query.Result{
 			Series: []*models.Row{row},
-		}, seq); err != nil {
+		}, seq, nil); err != nil {
 			return err
 		}
 		emitted = true
@@ -1817,7 +1821,7 @@ func (e *StatementExecutor) executeShowTagKeys(q *influxql.ShowTagKeysStatement,
 
 	// Ensure at least one result is emitted.
 	if !emitted {
-		return ctx.Send(&query.Result{}, seq)
+		return ctx.Send(&query.Result{}, seq, nil)
 	}
 	return nil
 
@@ -1848,13 +1852,13 @@ func (e *StatementExecutor) executeShowTagKeyCardinality(q *influxql.ShowTagKeyC
 		}
 		if err := ctx.Send(&query.Result{
 			Series: []*models.Row{row},
-		}, seq); err != nil {
+		}, seq, nil); err != nil {
 			return err
 		}
 		emitted = true
 	}
 	if !emitted {
-		return ctx.Send(&query.Result{}, seq)
+		return ctx.Send(&query.Result{}, seq, nil)
 	}
 	return nil
 }
@@ -1896,8 +1900,9 @@ func (e *StatementExecutor) executeShowSeries(q *influxql.ShowSeriesStatement, c
 	var series []string
 	lock := new(sync.Mutex)
 
+	exact := influxql.IsExactStatisticQueryForDDL(q)
 	err = e.MetaExecutor.EachDBNodes(q.Database, func(nodeID uint64, pts []uint32) error {
-		arr, err := e.NetStorage.ShowSeries(nodeID, q.Database, pts, names, q.Condition)
+		arr, err := e.NetStorage.ShowSeries(nodeID, q.Database, pts, names, q.Condition, exact)
 		lock.Lock()
 		defer lock.Unlock()
 		if err != nil {
@@ -1930,7 +1935,7 @@ func (e *StatementExecutor) executeShowSeries(q *influxql.ShowSeriesStatement, c
 
 	return ctx.Send(&query.Result{
 		Series: []*models.Row{row},
-	}, seq)
+	}, seq, nil)
 }
 
 func (e *StatementExecutor) executeShowSeriesCardinality(stmt *influxql.ShowSeriesCardinalityStatement) (models.Rows, error) {
@@ -2412,15 +2417,15 @@ func (e *StatementExecutor) normalizeMeasurement(m *influxql.Measurement, defaul
 }
 
 func (e *StatementExecutor) executePrepareSnapshotStatement(q *influxql.PrepareSnapshotStatement, ctx *query.ExecutionContext) error {
-	panic("impl me")
+	return meta2.ErrUnsupportCommand
 }
 
 func (e *StatementExecutor) executeEndPrepareSnapshotStatement(q *influxql.EndPrepareSnapshotStatement, ctx *query.ExecutionContext) error {
-	panic("impl me")
+	return meta2.ErrUnsupportCommand
 }
 
 func (e *StatementExecutor) executeGetRuntimeInfoStatement(q *influxql.GetRuntimeInfoStatement, ctx *query.ExecutionContext) (models.Rows, error) {
-	panic("impl me")
+	return nil, meta2.ErrUnsupportCommand
 }
 
 func (e *StatementExecutor) executeCreateStreamStatement(stmt *influxql.CreateStreamStatement, ctx *query.ExecutionContext) error {
@@ -2428,6 +2433,17 @@ func (e *StatementExecutor) executeCreateStreamStatement(stmt *influxql.CreateSt
 	if !ok {
 		return errors.New("create stream query must be select statement")
 	}
+	selectStmt.IsCreateStream = true
+	var isSelectAll bool // is select *
+	if len(selectStmt.Fields) == 1 {
+		field, ok := selectStmt.Fields[0].Expr.(*influxql.Wildcard)
+		// select *, not select *::tag and not select *::field
+		if ok && field.Type != influxql.TAG && field.Type != influxql.FIELD {
+			isSelectAll = true
+		}
+	}
+
+	mstInfo := stmt.Target.Measurement
 	proxy := newRowChanProxy()
 	opt := e.GetOptions(ctx.ExecutionOptions, proxy.rc)
 	s, er := query.Prepare(selectStmt, e.ShardMapper, opt)
@@ -2435,23 +2451,44 @@ func (e *StatementExecutor) executeCreateStreamStatement(stmt *influxql.CreateSt
 		return er
 	}
 	selectStmt = s.Statement()
-	if err := stmt.Check(selectStmt, streamSupportMap); err != nil {
+
+	// Check sources. Only one source can be queried, and the source must be *influxql.Measurement.
+	srcMst, err := stmt.CheckSource(selectStmt.Sources)
+	if err != nil {
 		return err
 	}
-	srcMst, ok := selectStmt.Sources[0].(*influxql.Measurement)
-	if !ok {
-		return errors.New("streamTask don't have source measurement")
+
+	// validate create stream statement
+	srcInfo, err := e.MetaClient.Measurement(srcMst.Database, srcMst.RetentionPolicy, srcMst.Name)
+	if err != nil {
+		return err
 	}
-	info := meta2.NewStreamInfo(stmt.Name, stmt.Delay, srcMst, &meta2.StreamMeasurementInfo{
-		Name:            stmt.Target.Measurement.Name,
-		Database:        stmt.Target.Measurement.Database,
-		RetentionPolicy: stmt.Target.Measurement.RetentionPolicy,
-	}, selectStmt)
-	mstInfo := stmt.Target.Measurement
-	if len(selectStmt.Sources) == 0 {
-		return errors.New("streamTask don't have source measurement")
+	var srcTagCount int
+	srcInfo.Schema.RangeTypCall(func(s string, i int32) {
+		if i == influx.Field_Type_Tag {
+			srcTagCount++
+		}
+	})
+	if err = stmt.Check(selectStmt, streamSupportMap, srcTagCount); err != nil {
+		return err
 	}
-	err := e.MetaClient.CreateStreamMeasurement(info, srcMst, mstInfo, selectStmt)
+	if mstInfo.Name == srcMst.Name {
+		return errors.New("the source measurement cannot be the same as the destination measurement")
+	}
+
+	var info *meta2.StreamInfo
+	if interval, err := selectStmt.GroupByInterval(); err == nil && interval == 0 && len(selectStmt.Dimensions) == 0 {
+		// no group by and select all tags, like: select * from mst where field >= 10
+		info = meta2.NewStreamInfoNoCall(stmt, selectStmt, isSelectAll)
+	} else {
+		info = meta2.NewStreamInfo(stmt.Name, stmt.Delay, srcMst, &meta2.StreamMeasurementInfo{
+			Name:            stmt.Target.Measurement.Name,
+			Database:        stmt.Target.Measurement.Database,
+			RetentionPolicy: stmt.Target.Measurement.RetentionPolicy,
+		}, selectStmt)
+	}
+
+	err = e.MetaClient.CreateStreamMeasurement(info, srcMst, mstInfo, selectStmt)
 	if err != nil {
 		return err
 	}
@@ -2580,11 +2617,11 @@ func MergeMeasurementsNames(otherNodeNamesMap map[uint64]*netstorage.ExecuteStat
 
 func MergeTagKeys(otherNodeTagKeysMap *map[uint64][]netstorage.TagKeys) (error, []netstorage.TagKeys) {
 
-	uniqueMap := make(map[string]set.Set)
+	uniqueMap := make(map[string]set.Set[string])
 
 	for _, nodeTagKeys := range *otherNodeTagKeysMap {
 		for _, tagKey := range nodeTagKeys {
-			s := set.NewSet()
+			s := set.NewSet[string]()
 			for _, v := range tagKey.Keys {
 				s.Add(v)
 			}
@@ -2602,7 +2639,7 @@ func MergeTagKeys(otherNodeTagKeysMap *map[uint64][]netstorage.TagKeys) (error, 
 		kSlice := v.ToSlice()
 		newSlice := make([]string, len(kSlice))
 		for i, data := range kSlice {
-			newSlice[i] = data.(string)
+			newSlice[i] = data
 		}
 		sort.Strings(newSlice)
 		tk := netstorage.TagKeys{Name: k, Keys: newSlice}
@@ -2630,10 +2667,10 @@ func (a KeyValues) Less(i, j int) bool {
 }
 
 func MergeTagValues(otherNodeTagKeysMap *map[uint64][]netstorage.TableTagSets) (error, []netstorage.TableTagSets) {
-	uniqueMap := make(map[string]set.Set)
+	uniqueMap := make(map[string]set.Set[netstorage.TagSet])
 	for _, nodeTagValues := range *otherNodeTagKeysMap {
 		for _, tagValues := range nodeTagValues {
-			s := set.NewSet()
+			s := set.NewSet[netstorage.TagSet]()
 			for _, v := range tagValues.Values {
 				s.Add(v)
 			}
@@ -2651,7 +2688,7 @@ func MergeTagValues(otherNodeTagKeysMap *map[uint64][]netstorage.TableTagSets) (
 		vSlice := v.ToSlice()
 		newSlice := make(netstorage.TagSets, len(vSlice))
 		for i, data := range vSlice {
-			newSlice[i] = data.(netstorage.TagSet)
+			newSlice[i] = data
 		}
 		sort.Stable(newSlice)
 		tk := netstorage.TableTagSets{Name: k, Values: newSlice}
@@ -2753,7 +2790,7 @@ func RemoveFiltered(result [][]byte, filetered [][]byte) [][]byte {
 		return result
 	}
 
-	s := set.NewSet()
+	s := set.NewSet[string]()
 	for _, v := range result {
 		s.Add(string(v))
 	}
@@ -2767,7 +2804,7 @@ func RemoveFiltered(result [][]byte, filetered [][]byte) [][]byte {
 	var last ByteStringSlice
 	sl := s.ToSlice()
 	for _, l := range sl {
-		last = append(last, []byte(l.(string)))
+		last = append(last, []byte(l))
 	}
 
 	sort.Sort(last)

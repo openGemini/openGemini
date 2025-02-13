@@ -15,12 +15,17 @@
 package sherlock
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 	"time"
 
+	"github.com/agiledragon/gomonkey/v2"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/shirou/gopsutil/v3/mem"
+	"github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -44,7 +49,6 @@ func Test_Sherlock_start_stop(t *testing.T) {
 	sh.EnableGrtDump()
 	sh.Start()
 	defer sh.Stop()
-	time.Sleep(15 * time.Second)
 	fmt.Println("on running")
 }
 
@@ -130,12 +134,11 @@ func Test_Sherlock_CPUDump(t *testing.T) {
 		WithCPURule(25, 10, 0, time.Minute),
 	)
 	sh.Set(WithLogger(logger.NewLogger(errno.ModuleUnknown)))
-	fmt.Println("sherlock initial success")
+
 	sh.EnableCPUDump()
-	var collector1 = func(cpuCore int, memoryLimit uint64) (int, int, int, error) {
+	sh.collectFn = func(cpuCore int, memoryLimit uint64) (int, int, int, error) {
 		return 50, 0, 0, nil
 	}
-	sh.collectFn = collector1
 
 	// case 1. disable dump
 	sh.DisableCPUDump()
@@ -145,10 +148,11 @@ func Test_Sherlock_CPUDump(t *testing.T) {
 	require.Equal(t, false, sh.opts.cpuOpts.Enable)
 	sh.EnableCPUDump()
 
+	defaultCPUSamplingTime = time.Second
 	// case 2. cool down
 	oldCoolDown := time.Now()
 	sh.Start()
-	time.Sleep(12 * time.Second)
+	time.Sleep(time.Second)
 	sh.Stop()
 	require.LessOrEqual(t, oldCoolDown.Add(time.Minute).UnixNano(), sh.cpuCoolDownTime.UnixNano())
 }
@@ -213,4 +217,33 @@ func Test_Sherlock_CollectError(t *testing.T) {
 	time.Sleep(1 * time.Second)
 	sh.Stop()
 	require.Greater(t, oldCoolDown.Add(time.Minute).UnixNano(), sh.memCoolDownTime.UnixNano())
+}
+
+func TestSherlock_getVMMemoryLimit(t *testing.T) {
+	tmpDir := t.TempDir()
+	sh := New(
+		WithMonitorInterval(time.Millisecond),
+		WithSavePath(tmpDir),
+		WithMemRule(25, 10, 0, time.Minute),
+	)
+	sh.Set(WithLogger(logger.NewLogger(errno.ModuleUnknown)))
+
+	convey.Convey("call failed", t, func() {
+		patches := gomonkey.ApplyFunc(mem.VirtualMemory, func() (*mem.VirtualMemoryStat, error) {
+			return nil, errors.New("failed")
+		})
+		defer patches.Reset()
+		limit, err := sh.getVMMemoryLimit()
+		assert.ErrorContains(t, err, "failed")
+		assert.Equal(t, uint64(0), limit)
+	})
+	convey.Convey("call ok", t, func() {
+		patches := gomonkey.ApplyFunc(mem.VirtualMemory, func() (*mem.VirtualMemoryStat, error) {
+			return &mem.VirtualMemoryStat{Total: 1}, nil
+		})
+		defer patches.Reset()
+		limit, err := sh.getVMMemoryLimit()
+		assert.NoError(t, err)
+		assert.Equal(t, uint64(1), limit)
+	})
 }

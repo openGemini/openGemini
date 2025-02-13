@@ -67,6 +67,7 @@ const (
 )
 
 var DefaultMetaJoin = []string{"127.0.0.1:8092"}
+var MetaEventHandleEn bool
 
 // TSMeta represents the configuration format for the ts-meta binary.
 type TSMeta struct {
@@ -191,6 +192,9 @@ type Meta struct {
 	SQLiteEnabled  bool  `toml:"sqlite-enabled"`
 	RepDisPolicy   uint8 `toml:"rep-dis-policy"`
 	SchemaCleanEn  bool  `toml:"schema-clean-enable"`
+
+	MetaEventHandleEn bool `toml:"meta-event-handle-enable"`
+	BindPeers         []string
 }
 
 // NewMeta builds a new configuration with default values.
@@ -222,6 +226,8 @@ func NewMeta() *Meta {
 		NumOfShards:             DefaultNumOfShards,
 		SQLiteEnabled:           DefalutSQLiteEnabled,
 		UseIncSyncData:          true,
+		SchemaCleanEn:           true,
+		BindPeers:               []string{},
 	}
 }
 

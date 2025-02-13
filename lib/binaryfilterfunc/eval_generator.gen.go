@@ -21,6 +21,7 @@ package binaryfilterfunc
 
 import (
 	"bytes"
+	"net"
 
 	"github.com/openGemini/openGemini/lib/bitmap"
 	"github.com/openGemini/openGemini/lib/tokenizer"
@@ -1220,4 +1221,71 @@ func GetStringMatchPhraseConditionBitMapWithNull(params *TypeFunParams) []byte {
 		}
 	}
 	return pos
+}
+
+func GetStringIPInRangeBitMap(params *TypeFunParams) []byte {
+	if params.col.NilCount == 0 {
+		return GetStringIPInRangeBitMapWithoutNull(params)
+	}
+	return GetStringIPInRangeBitMapWithNull(params)
+}
+
+func GetStringIPInRangeBitMapWithoutNull(params *TypeFunParams) []byte {
+	var idx int
+	compare, col, offset, pos := params.compare, params.col, params.offset, params.pos
+	subNet := compare.(string)
+	var ip []byte
+	for i := 0; i < col.Len; i++ {
+		idx = offset + i
+		if bitmap.IsNil(pos, idx) {
+			continue
+		}
+		if i == col.Len-1 {
+			ip = col.Val[col.Offset[i]:]
+		} else {
+			ip = col.Val[col.Offset[i]:col.Offset[i+1]]
+		}
+		if !IsIpInRange(util.Bytes2str(ip), subNet) {
+			bitmap.SetBitMap(pos, idx)
+		}
+	}
+	return pos
+}
+
+func GetStringIPInRangeBitMapWithNull(params *TypeFunParams) []byte {
+	var idx int
+	compare, col, offset, pos, bitMap := params.compare, params.col, params.offset, params.pos, params.bitMap
+	subNet := compare.(string)
+	var ip []byte
+	for i := 0; i < col.Len; i++ {
+		idx = offset + i
+		if bitmap.IsNil(pos, idx) {
+			continue
+		}
+		if bitmap.IsNil(bitMap, idx) {
+			bitmap.SetBitMap(pos, idx)
+			continue
+		}
+		if i == col.Len-1 {
+			ip = col.Val[col.Offset[i]:]
+		} else {
+			ip = col.Val[col.Offset[i]:col.Offset[i+1]]
+		}
+		if !IsIpInRange(util.Bytes2str(ip), subNet) {
+			bitmap.SetBitMap(pos, idx)
+		}
+	}
+	return pos
+}
+
+func IsIpInRange(ipStr, subnetStr string) bool {
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return false
+	}
+	_, subnet, err := net.ParseCIDR(subnetStr)
+	if err != nil {
+		return false
+	}
+	return subnet.Contains(ip)
 }

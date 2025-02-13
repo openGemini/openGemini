@@ -43,7 +43,7 @@ type generateParams struct {
 
 func recoverConfig(segLimit int) func() {
 	cacheIns := readcache.GetReadMetaCacheIns()
-	cacheIns.Purge()
+	cacheIns.Purge(readcache.MetaCachePool)
 
 	origSegLimit := immutable.GetMaxRowsPerSegment4TsStore()
 	if segLimit > 0 {
@@ -1043,6 +1043,13 @@ func TestCompressChunkMeta(t *testing.T) {
 		immutable.SetChunkMetaCompressMode(v)
 		run(2000)
 	}
+
+	// test case for self-codec
+	for _, v := range []int{immutable.ChunkMetaCompressSelf, immutable.ChunkMetaCompressNone, 200} {
+		immutable.SetChunkMetaCompressMode(v)
+		run(20)
+		run(2000)
+	}
 }
 
 func TestChunkMeta(t *testing.T) {
@@ -1197,4 +1204,64 @@ func TestMergePerformers_close(t *testing.T) {
 
 	performers.Close()
 	performers.Release()
+}
+
+func TestReadChunkMeta(t *testing.T) {
+	var begin int64 = 1e12
+	defer beforeTest(t, 10)()
+	schemas := getDefaultSchemas()
+
+	immutable.SetMergeFlag4TsStore(1)
+	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
+	defer mh.store.Close()
+	rg := newRecordGenerator(begin, defaultInterval, false)
+
+	rg.setBegin(begin)
+	for i := 0; i < 100; i++ {
+		mh.addRecord(uint64(100+i*8), rg.generate(schemas, 1))
+	}
+	require.NoError(t, mh.saveToOrder())
+
+	file := mh.store.Order["mst"].Files()[0]
+	metaIdx, _ := file.MetaIndexAt(0)
+	require.NotEmpty(t, metaIdx)
+	cm, err := file.ChunkMeta(101, metaIdx.GetOffset(), metaIdx.GetSize(), metaIdx.GetCount(), 0, nil, fileops.IO_PRIORITY_LOW_READ)
+	require.NoError(t, err)
+	require.Empty(t, cm)
+
+	cm, err = file.ChunkMeta(108, metaIdx.GetOffset(), metaIdx.GetSize(), metaIdx.GetCount(), 0, nil, fileops.IO_PRIORITY_LOW_READ)
+	require.NoError(t, err)
+	require.Equal(t, uint64(108), cm.GetSid())
+
+	for i := 0; i < 1000; i++ {
+		_, err = file.ChunkMeta(uint64(i%1000), metaIdx.GetOffset(), metaIdx.GetSize(), metaIdx.GetCount(), 0, nil, fileops.IO_PRIORITY_LOW_READ)
+		require.NoError(t, err)
+	}
+}
+
+func TestCompactionLevelLimited(t *testing.T) {
+	config.GetStoreConfig().Compact.MaxCompactionLevel = 1
+	var begin int64 = 1e12
+	defer beforeTest(t, 10)()
+	schemas := getDefaultSchemas()
+
+	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
+	defer func() {
+		config.GetStoreConfig().Compact.MaxCompactionLevel = 0
+		mh.store.Close()
+	}()
+	rg := newRecordGenerator(begin, defaultInterval, true)
+
+	for i := 0; i < 64; i++ {
+		rg.setBegin(begin)
+		mh.addRecord(uint64(100+i), rg.generate(schemas, 1))
+		require.NoError(t, mh.saveToOrder())
+	}
+
+	for i := 0; i < 3; i++ {
+		assert.NoError(t, mh.store.LevelCompact(uint16(i), 0))
+		mh.store.Wait()
+	}
+
+	assert.Equal(t, 8, len(mh.store.Order["mst"].Files()))
 }

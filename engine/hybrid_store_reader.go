@@ -261,10 +261,9 @@ func (r *HybridStoreReader) initSchemaByUnnest() error {
 	}
 	if call.Name == "match_all" {
 		field := call.Args[1].(*influxql.VarRef).Val
-		if r.inSchema.FieldIndex(field) != -1 {
-			return nil
+		if r.inSchema.FieldIndex(field) == -1 {
+			r.inSchema = append(r.inSchema, record.Field{Name: field, Type: influx.Field_Type_String})
 		}
-		r.inSchema = append(r.inSchema, record.Field{Name: field, Type: influx.Field_Type_String})
 	}
 
 	for i, alias := range unnest.Aliases {

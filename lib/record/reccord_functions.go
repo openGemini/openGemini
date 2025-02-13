@@ -750,6 +750,10 @@ func UpdateFloatCountProm(iRec, rec *Record, recColumn, iRecColumn, recRow, iRec
 	updateFloatCountPromImpl(v, iRec, iRecColumn, iRecRow)
 }
 
+func UpdateFloatCountOriginProm(iRec, rec *Record, recColumn, iRecColumn, recRow, iRecRow int) {
+	updateFloatCountPromImpl(1.0, iRec, iRecColumn, iRecRow)
+}
+
 func updateCountImpl(v int64, iRec *Record, iRecColumn, iRecRow int) {
 	srcVal, _ := iRec.ColVals[iRecColumn].IntegerValueWithNullReserve(iRecRow)
 	iRec.ColVals[iRecColumn].UpdateIntegerValue(v+srcVal, false, iRecRow)

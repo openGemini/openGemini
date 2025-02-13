@@ -26,12 +26,12 @@ import (
 	"github.com/apache/arrow/go/v13/parquet"
 	"github.com/apache/arrow/go/v13/parquet/compress"
 	"github.com/apache/arrow/go/v13/parquet/pqarrow"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
-
-var WriteLines uint64
 
 const tmpsuffix = ".tmp"
 
@@ -41,6 +41,7 @@ type Writer struct {
 	recordBuilder *array.RecordBuilder
 	schema        *arrow.Schema
 	fieldsInfo    map[string]FieldInfo
+	WriteLines    uint64
 }
 
 type FieldInfo struct {
@@ -55,11 +56,6 @@ type MetaData struct {
 }
 
 const (
-	DefaultMaxRowGroupLen = 1024 * 1024
-	DefaultPageSize       = 256 * 1024
-)
-
-const (
 	InvalidTimeStampBuilderTemplate = "invalid builder , want TimestampBuilder, get %v"
 	InvalidStringBuilderTemplate    = "invalid builder , want StringBuilder, get %v"
 	InvalidInt64BuilderTemplate     = "invalid builder , want Int64Builder, get %v"
@@ -68,7 +64,7 @@ const (
 )
 
 func NewWriter(filename, lockPath string, metaData MetaData) (*Writer, error) {
-	w := &Writer{filename, nil, nil, nil, make(map[string]FieldInfo)}
+	w := &Writer{filename, nil, nil, nil, make(map[string]FieldInfo), 0}
 
 	mem := memory.NewCheckedAllocator(memory.NewGoAllocator())
 
@@ -84,17 +80,19 @@ func NewWriter(filename, lockPath string, metaData MetaData) (*Writer, error) {
 	w.schema = sh
 
 	filename += tmpsuffix
-	f, err := fileops.OpenFile(filename, os.O_CREATE|os.O_APPEND|os.O_TRUNC|os.O_RDWR, 0640, fileops.FileLockOption(lockPath))
+	f, err := fileops.OpenFile(filename, os.O_CREATE|os.O_APPEND|os.O_TRUNC|os.O_RDWR, 0600, fileops.FileLockOption(lockPath))
 	if err != nil {
 		return nil, err
 	}
-	writerProps := parquet.NewWriterProperties(parquet.WithMaxRowGroupLength(DefaultMaxRowGroupLen), parquet.WithDataPageSize(DefaultPageSize),
-		parquet.WithDictionaryPageSizeLimit(DefaultPageSize), parquet.WithCompression(compress.Codecs.Zstd), parquet.WithBatchSize(DefaultPageSize))
+
+	conf := config.GetStoreConfig()
+	writerProps := parquet.NewWriterProperties(parquet.WithMaxRowGroupLength(int64(conf.ParquetTask.MaxRowGroupLen)), parquet.WithDataPageSize(int64(conf.ParquetTask.PageSize)),
+		parquet.WithDictionaryPageSizeLimit(int64(conf.ParquetTask.PageSize)), parquet.WithCompression(compress.Codecs.Zstd), parquet.WithBatchSize(int64(conf.ParquetTask.WriteBatchSize)))
 
 	arrowWritePros := pqarrow.NewArrowWriterProperties(pqarrow.WithCoerceTimestamps(arrow.Nanosecond))
 	writer, err := pqarrow.NewFileWriter(w.schema, f, writerProps, arrowWritePros)
 	if err != nil {
-		f.Close()
+		util.MustClose(f)
 		return w, err
 	}
 	w.arrowWriter = writer
@@ -103,7 +101,7 @@ func NewWriter(filename, lockPath string, metaData MetaData) (*Writer, error) {
 
 func (w *Writer) Close() {
 	w.recordBuilder.Release()
-	w.arrowWriter.Close()
+	util.MustClose(w.arrowWriter)
 }
 
 func (w *Writer) updateFieldInfo(key string, isWritten bool, fieldType uint8) {
@@ -115,7 +113,7 @@ func (w *Writer) updateFieldInfo(key string, isWritten bool, fieldType uint8) {
 	}
 }
 
-func (w *Writer) writeTsspRecord(series string, rec *record.Record) (lines int, nilFields map[string]FieldInfo, err error) {
+func (w *Writer) writeTsspRecord(series map[string]string, rec *record.Record) (lines int, nilFields map[string]FieldInfo, err error) {
 	b := w.recordBuilder
 	for i := range rec.Schema {
 		col := &rec.ColVals[i]
@@ -136,10 +134,12 @@ func (w *Writer) writeTsspRecord(series string, rec *record.Record) (lines int, 
 		w.updateFieldInfo(rec.Schema[i].Name, true, uint8(rec.Schema[i].Type))
 	}
 
-	if err = w.appendSeries(b.Field(w.fieldsInfo["series"].idx), series, lines); err != nil {
-		return
+	for tagK, tagV := range series {
+		if err = w.appendSeries(b.Field(w.fieldsInfo[tagK].idx), tagV, lines); err != nil {
+			return
+		}
+		w.updateFieldInfo(tagK, true, influx.Field_Type_String)
 	}
-	w.updateFieldInfo("series", true, influx.Field_Type_String)
 
 	// fill missing fields
 	nilFields = make(map[string]FieldInfo, len(w.fieldsInfo))
@@ -155,7 +155,7 @@ func (w *Writer) writeTsspRecord(series string, rec *record.Record) (lines int, 
 	return
 }
 
-func (w *Writer) WriteRecord(series string, rec *record.Record) error {
+func (w *Writer) WriteRecord(series map[string]string, rec *record.Record) error {
 	lines, nilFields, err := w.writeTsspRecord(series, rec)
 	if err != nil {
 		return err
@@ -175,7 +175,7 @@ func (w *Writer) WriteRecord(series string, rec *record.Record) error {
 		b.Release()
 		return err
 	}
-	atomic.AddUint64(&WriteLines, uint64(lines))
+	atomic.AddUint64(&w.WriteLines, uint64(lines))
 	arrowRecord.Release()
 
 	for k, v := range w.fieldsInfo {
@@ -269,7 +269,7 @@ func iterateFloatValue(callback func(float64, bool), cv *record.ColVal) {
 func (w *Writer) appendSeries(b array.Builder, series string, lines int) error {
 	builder, ok := b.(*array.StringBuilder)
 	if !ok {
-		return fmt.Errorf(InvalidTimeStampBuilderTemplate, b)
+		return fmt.Errorf(InvalidStringBuilderTemplate, b)
 	}
 	for i := 0; i < lines; i++ {
 		builder.Append(series)

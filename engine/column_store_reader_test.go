@@ -357,7 +357,7 @@ func NewMockStoreEngine() *MockStoreEngine {
 func (s *MockStoreEngine) ReportLoad() {
 }
 
-func (s *MockStoreEngine) CreateLogicPlan(ctx context.Context, db string, ptId uint32, shardID uint64, sources influxql.Sources, schema hybridqp.Catalog) (hybridqp.QueryNode, error) {
+func (s *MockStoreEngine) CreateLogicPlan(ctx context.Context, db string, ptId uint32, shardID []uint64, sources influxql.Sources, schema hybridqp.Catalog) (hybridqp.QueryNode, error) {
 	return s.shard.CreateLogicalPlan(ctx, sources, schema.(*executor.QuerySchema))
 }
 

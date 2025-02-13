@@ -28,9 +28,24 @@ func NewSignal() *Signal {
 	}
 }
 
+func (s *Signal) CloseOnce(onClose func()) {
+	s.mu.Lock()
+	closed := s.closed
+	s.close()
+	s.mu.Unlock()
+
+	if closed == 0 && onClose != nil {
+		onClose()
+	}
+}
+
 func (s *Signal) Close() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.close()
+	s.mu.Unlock()
+}
+
+func (s *Signal) close() {
 	s.closed++
 	if s.closed > 1 {
 		return

@@ -52,6 +52,12 @@ func TestSimpleTokenFInder(t *testing.T) {
 	assert.True(t, finder.Next())
 	assert.Equal(t, 21, finder.CurrentOffset())
 	assert.False(t, finder.Next())
+
+	content = ""
+	target = ""
+	finder.InitInput([]byte(content), []byte(target))
+
+	assert.True(t, finder.Next())
 }
 
 func TestIndexOf(t *testing.T) {
@@ -65,7 +71,7 @@ func TestIndexOf(t *testing.T) {
 	found = indexOf(source, target, -1)
 	assert.Equal(t, 0, found)
 	found = indexOf(source, emptyTarget, 0)
-	assert.Equal(t, 0, found)
+	assert.Equal(t, -1, found)
 	found = indexOf(source, target, 0)
 	assert.Equal(t, 0, found)
 	found = indexOf(source, target, 5)

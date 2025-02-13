@@ -1,6 +1,7 @@
 package mergeset
 
 import (
+	"flag"
 	"math/rand"
 	"reflect"
 	"sort"
@@ -10,6 +11,10 @@ import (
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
 )
+
+func init() {
+	_ = flag.Set("loggerLevel", "ERROR")
+}
 
 func TestInmemoryBlockAdd(t *testing.T) {
 	var ib inmemoryBlock

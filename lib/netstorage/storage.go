@@ -38,8 +38,9 @@ import (
 )
 
 var (
-	migrateTimeout   = 5 * time.Second
-	segregateTimeout = 5 * time.Second
+	migrateTimeout            = 5 * time.Second
+	segregateTimeout          = 5 * time.Second
+	transferLeadershipTimeout = 20 * time.Second
 )
 
 const (
@@ -50,12 +51,12 @@ type Storage interface {
 	WriteRows(ctx *WriteContext, nodeID uint64, pt uint32, database, rpName string, timeout time.Duration) error
 	DropShard(nodeID uint64, database, rpName string, dbPts []uint32, shardID uint64) error
 
-	TagValues(nodeID uint64, db string, ptIDs []uint32, tagKeys map[string]map[string]struct{}, cond influxql.Expr, limit int, disorder bool) (TablesTagSets, error)
+	TagValues(nodeID uint64, db string, ptIDs []uint32, tagKeys map[string]map[string]struct{}, cond influxql.Expr, limit int, exact bool) (TablesTagSets, error)
 	TagValuesCardinality(nodeID uint64, db string, ptIDs []uint32, tagKeys map[string]map[string]struct{}, cond influxql.Expr) (map[string]uint64, error)
 
 	ShowTagKeys(nodeID uint64, db string, ptId []uint32, measurements []string, condition influxql.Expr) ([]string, error)
 
-	ShowSeries(nodeID uint64, db string, ptId []uint32, measurements []string, condition influxql.Expr) ([]string, error)
+	ShowSeries(nodeID uint64, db string, ptId []uint32, measurements []string, condition influxql.Expr, exact bool) ([]string, error)
 	SeriesCardinality(nodeID uint64, db string, dbPts []uint32, measurements []string, condition influxql.Expr) ([]meta2.MeasurementCardinalityInfo, error)
 	SeriesExactCardinality(nodeID uint64, db string, dbPts []uint32, measurements []string, condition influxql.Expr) (map[string]uint64, error)
 
@@ -72,6 +73,7 @@ type Storage interface {
 	GetQueriesOnNode(nodeID uint64) ([]*QueryExeInfo, error)
 	KillQueryOnNode(nodeID, queryID uint64) error
 	SendSegregateNodeCmds(nodeIDs []uint64, address []string) (int, error)
+	TransferLeadership(database string, nodeId uint64, oldMasterPtId, newMasterPtId uint32) error
 
 	SendRaftMessageToStorage
 }
@@ -241,16 +243,16 @@ func (s *NetStorage) ddlRequestWithNode(node *meta2.DataNode, typ uint8, data co
 	return r.ddl()
 }
 
-func (s *NetStorage) TagValues(nodeID uint64, db string, ptIDs []uint32, tagKeys map[string]map[string]struct{}, cond influxql.Expr, limit int, disorder bool) (TablesTagSets, error) {
+func (s *NetStorage) TagValues(nodeID uint64, db string, ptIDs []uint32, tagKeys map[string]map[string]struct{}, cond influxql.Expr, limit int, exact bool) (TablesTagSets, error) {
 	req := &ShowTagValuesRequest{}
 	req.Db = proto.String(db)
 	req.PtIDs = ptIDs
+	req.Exact = &exact
 	if cond != nil {
 		req.Condition = proto.String(cond.String())
 	}
 	req.SetTagKeys(tagKeys)
 	req.Limit = proto.Int(limit)
-	req.Disorder = proto.Bool(disorder)
 
 	v, err := s.ddlRequestWithNodeId(nodeID, ShowTagValuesRequestMessage, req)
 	if err != nil {
@@ -360,10 +362,11 @@ func (s *NetStorage) ShowTagKeys(nodeID uint64, db string, ptIDs []uint32, measu
 	return resp.TagKeys, resp.Error()
 }
 
-func (s *NetStorage) ShowSeries(nodeID uint64, db string, ptIDs []uint32, measurements []string, condition influxql.Expr) ([]string, error) {
+func (s *NetStorage) ShowSeries(nodeID uint64, db string, ptIDs []uint32, measurements []string, condition influxql.Expr, exact bool) ([]string, error) {
 	req := &SeriesKeysRequest{}
 	req.Db = proto.String(db)
 	req.PtIDs = ptIDs
+	req.Exact = &exact
 	req.Measurements = measurements
 	if condition != nil {
 		req.Condition = proto.String(condition.String())
@@ -466,6 +469,24 @@ func (s *NetStorage) SendSegregateNodeCmds(nodeIDs []uint64, address []string) (
 		}
 	}
 	return -1, nil
+}
+
+func (s *NetStorage) TransferLeadership(database string, nodeId uint64, oldMasterPtId, newMasterPtId uint32) error {
+	transferLeadershipReq := NewTransferLeadershipRequest()
+	transferLeadershipReq.NodeId = &nodeId
+	transferLeadershipReq.Database = &database
+	transferLeadershipReq.PtId = &oldMasterPtId
+	transferLeadershipReq.NewMasterPtId = &newMasterPtId
+	trans, err := transport.NewTransport(nodeId, spdy.TransferLeadershipRequest, nil)
+	if err != nil {
+		return err
+	}
+	trans.SetTimeout(transferLeadershipTimeout)
+	if err := trans.Send(transferLeadershipReq); err != nil {
+		return err
+	}
+	err = trans.Wait()
+	return err
 }
 
 func MarshalRows(ctx *WriteContext, db, rp string, pt uint32) ([]byte, error) {

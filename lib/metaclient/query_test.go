@@ -29,6 +29,7 @@ import (
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
 	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
+	"github.com/stretchr/testify/assert"
 )
 
 type FuncExecutor struct {
@@ -165,4 +166,7 @@ func TestQueryTagKeys(t *testing.T) {
 	if _, ok := ret["cpu_0000"]["server_node"]; !ok {
 		t.Fatalf("tag keys query failed. exp: contain server_node")
 	}
+
+	_, err = mc.QueryTagKeys("foo", ms, &influxql.VarRef{Val: "_tagKey"})
+	assert.Error(t, err, fmt.Errorf("invalid condition expression"))
 }

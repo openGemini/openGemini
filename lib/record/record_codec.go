@@ -64,7 +64,6 @@ func (rec *Record) Unmarshal(buf []byte) {
 		rec.ColVals[i] = ColVal{}
 		rec.ColVals[i].Unmarshal(subBuf)
 	}
-	return
 }
 
 // UnmarshalUnsafe use pointers instead of copied slices when unmarshalling ColVals.
@@ -102,7 +101,6 @@ func (rec *Record) UnmarshalUnsafe(buf []byte) {
 		}
 		rec.ColVals[i].UnmarshalUnsafe(subBuf)
 	}
-	return
 }
 
 func (rec *Record) CodecSize() int {

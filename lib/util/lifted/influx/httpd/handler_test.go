@@ -13,7 +13,8 @@ import (
 
 	prompb2 "github.com/VictoriaMetrics/VictoriaMetrics/lib/prompb"
 	"github.com/gorilla/mux"
-	"github.com/influxdata/influxdb/services/httpd"
+	config2 "github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
@@ -23,8 +24,10 @@ import (
 	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/httpd/config"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/promql2influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/lib/validation"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -58,6 +61,10 @@ func (mockMetaClient) DataNodes() ([]meta.DataNode, error) {
 			},
 		},
 	}, nil
+}
+
+func (mockMetaClient) DataBase(name string) (*meta.DatabaseInfo, error) {
+	return meta.NewDatabase(name), nil
 }
 
 type mockStorage struct {
@@ -107,8 +114,7 @@ func TestHandler_ServeDebugQuery(t *testing.T) {
 
 func TestHandler_Disabled_Prom_Write_Read(t *testing.T) {
 	h := Handler{
-		requestTracker: httpd.NewRequestTracker(),
-		Logger:         logger.NewLogger(errno.ModuleHTTP),
+		Logger: logger.NewLogger(errno.ModuleHTTP),
 	}
 
 	var user meta.User
@@ -152,9 +158,8 @@ func TestHandler_Disabled_Prom_Write_Read(t *testing.T) {
 
 func TestHandler_Disabled_Prom_Query(t *testing.T) {
 	h := Handler{
-		requestTracker: httpd.NewRequestTracker(),
-		Logger:         logger.NewLogger(errno.ModuleHTTP),
-		Config:         &config.Config{},
+		Logger: logger.NewLogger(errno.ModuleHTTP),
+		Config: &config.Config{},
 	}
 	var user meta.User
 	t.Run("disable prom read", func(t *testing.T) {
@@ -223,23 +228,24 @@ func TestHandler_Disabled_Prom_Query(t *testing.T) {
 
 func TestHandler_Prom_Metadata_Query(t *testing.T) {
 	h := Handler{
-		requestTracker: httpd.NewRequestTracker(),
-		Logger:         logger.NewLogger(errno.ModuleHTTP),
-		Config:         &config.Config{},
+		Logger:        logger.NewLogger(errno.ModuleHTTP),
+		Config:        &config.Config{},
+		QueryExecutor: query.NewExecutor(cpu.GetCpuNum()),
 	}
 	var user meta.User
+	validation.InitOverrides(config2.NewLimits(), nil)
 
 	t.Run("prom meta query", func(t *testing.T) {
 		// check db
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/labels", nil)
-		h.servePromQuery(w, req, user)
-		assert.Equal(t, http.StatusBadRequest, w.Code)
+		h.servePromQueryLabels(w, req, user)
+		assert.Equal(t, http.StatusOK, w.Code)
 
 		// check start
 		w = httptest.NewRecorder()
 		req = httptest.NewRequest(http.MethodGet, "/api/v1/labels?db=prometheus&start=a", nil)
-		h.servePromQuery(w, req, user)
+		h.servePromQueryLabels(w, req, user)
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 	})
 
@@ -247,7 +253,7 @@ func TestHandler_Prom_Metadata_Query(t *testing.T) {
 		// check label name
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/label/up./values?db=prometheus", nil)
-		h.servePromQuery(w, req, user)
+		h.servePromQueryLabelValues(w, req, user)
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 	})
 
@@ -255,15 +261,21 @@ func TestHandler_Prom_Metadata_Query(t *testing.T) {
 		// check match[] exits
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/series?db=prometheus", nil)
-		h.servePromQuery(w, req, user)
+		h.servePromQuerySeries(w, req, user)
 		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+
+	t.Run("prom metadata query", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/metadata?db=prometheus", nil)
+		h.servePromQueryMetaData(w, req, user)
+		assert.Equal(t, http.StatusOK, w.Code)
 	})
 }
 
 func TestHandler_Disabled_Write_Read(t *testing.T) {
 	h := Handler{
-		requestTracker: httpd.NewRequestTracker(),
-		Logger:         logger.NewLogger(errno.ModuleHTTP),
+		Logger: logger.NewLogger(errno.ModuleHTTP),
 	}
 
 	var user meta.User
@@ -306,8 +318,7 @@ func TestHandler_Disabled_Write_Read(t *testing.T) {
 
 func TestHandler_Flux_Disabled_Read(t *testing.T) {
 	h := Handler{
-		requestTracker: httpd.NewRequestTracker(),
-		Logger:         logger.NewLogger(errno.ModuleHTTP),
+		Logger: logger.NewLogger(errno.ModuleHTTP),
 	}
 
 	var user meta.User
@@ -332,8 +343,7 @@ func TestHandler_Flux_Disabled_Read(t *testing.T) {
 
 func TestHandler_Invalid_Disabled_Write_Read(t *testing.T) {
 	h := Handler{
-		requestTracker: httpd.NewRequestTracker(),
-		Logger:         logger.NewLogger(errno.ModuleHTTP),
+		Logger: logger.NewLogger(errno.ModuleHTTP),
 	}
 
 	t.Run("disable read", func(t *testing.T) {
@@ -359,8 +369,7 @@ func TestHandler_Invalid_Disabled_Write_Read(t *testing.T) {
 
 func TestHandler_SysCtrl(t *testing.T) {
 	h := Handler{
-		requestTracker: httpd.NewRequestTracker(),
-		Logger:         logger.NewLogger(errno.ModuleHTTP),
+		Logger: logger.NewLogger(errno.ModuleHTTP),
 	}
 	t.Run("ChunkReaderParallel", func(t *testing.T) {
 		syscontrol.SysCtrl.MetaClient = &mockMetaClient{}
@@ -441,8 +450,7 @@ func TestHandler_SysCtrl(t *testing.T) {
 
 func TestHandler_ServeWrite_ReadOnly(t *testing.T) {
 	h := Handler{
-		requestTracker: httpd.NewRequestTracker(),
-		Logger:         logger.NewLogger(errno.ModuleHTTP),
+		Logger: logger.NewLogger(errno.ModuleHTTP),
 	}
 
 	var user meta.User
@@ -480,8 +488,7 @@ func TestTransYaccSyntaxErr(t *testing.T) {
 
 func TestGetSqlAndPplQuery(t *testing.T) {
 	h := Handler{
-		requestTracker: httpd.NewRequestTracker(),
-		Logger:         logger.NewLogger(errno.ModuleHTTP),
+		Logger: logger.NewLogger(errno.ModuleHTTP),
 	}
 	req := httptest.NewRequest(http.MethodGet, "/repo/repo0/logstreams/log0/logs", nil)
 	req.URL.RawQuery = "%3Arepository=repo0&%3AlogStream=log0&"
@@ -549,7 +556,7 @@ func TestTimeSeries2Rows(t *testing.T) {
 		{
 			name: "Test with valid time series",
 			args: args{
-				dst: []influx.Row{},
+				dst: make([]influx.Row, 1),
 				tss: []prompb2.TimeSeries{
 					{
 						Labels: []prompb2.Label{
@@ -585,7 +592,7 @@ func TestTimeSeries2Rows(t *testing.T) {
 		{
 			name: "Test with invalid time series",
 			args: args{
-				dst: []influx.Row{},
+				dst: make([]influx.Row, 1),
 				tss: []prompb2.TimeSeries{
 					{
 						Labels: []prompb2.Label{
@@ -621,7 +628,7 @@ func TestTimeSeries2Rows(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := timeSeries2Rows(EmptyPromMst, tt.args.dst, tt.args.tss)
+			got, err := timeSeries2Rows(EmptyPromMst, tt.args.dst, tt.args.tss, make(map[int]bool))
 			if (err != nil) != tt.wantErr {
 				t.Errorf("timeSeries2Rows() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -639,8 +646,7 @@ func TestParseJson(t *testing.T) {
 		Config: &config.Config{
 			AuthEnabled: false,
 		},
-		requestTracker: httpd.NewRequestTracker(),
-		Logger:         logger.NewLogger(errno.ModuleLogStore),
+		Logger: logger.NewLogger(errno.ModuleLogStore),
 	}
 	// {"time":%v, "http":"127.0.0.1", "cnt":4}
 	now := time.Now().UnixMilli()
@@ -700,7 +706,7 @@ func Benchmark_TimeSeries2Rows(t *testing.B) {
 	for i := 0; i < t.N; i++ {
 		t.StartTimer()
 		for j := 0; j < 1000000; j++ {
-			*rs, err = timeSeries2Rows(EmptyPromMst, *rs, tss)
+			*rs, err = timeSeries2Rows(EmptyPromMst, *rs, tss, make(map[int]bool))
 			if err != nil {
 				t.Fatal("timeSeries2Rows fail")
 			}

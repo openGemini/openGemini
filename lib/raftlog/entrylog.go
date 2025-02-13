@@ -24,9 +24,9 @@ package raftlog
 import (
 	"fmt"
 	"sort"
+	"sync"
 
 	"github.com/cockroachdb/errors"
-	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
 	"go.etcd.io/etcd/raft/v3"
 	"go.etcd.io/etcd/raft/v3/raftpb"
@@ -49,6 +49,9 @@ type entryLog struct {
 	nextEntryIdx int
 	// dir is the directory to use to store files.
 	dir string
+
+	filesSync   sync.RWMutex
+	currentSync sync.Mutex
 }
 
 // allEntries returns all the entries in the range [lo, hi).
@@ -73,10 +76,12 @@ func (l *entryLog) allEntries(lo, hi, maxSize uint64) []raftpb.Entry {
 
 			// Move to the next file.
 			fileIdx++
+			l.filesSync.RLock()
 			if fileIdx >= len(l.files) {
 				// We're beyond the list of files in l.files. Move to the latest file.
 				fileIdx = -1
 			}
+			l.filesSync.RUnlock()
 			currFile = l.getEntryFile(fileIdx)
 			if currFile == nil {
 				panic(fmt.Sprintf("get entry file failed, fileIdx:%d", fileIdx))
@@ -86,7 +91,11 @@ func (l *entryLog) allEntries(lo, hi, maxSize uint64) []raftpb.Entry {
 			offset = 0
 		}
 
-		re := currFile.getRaftEntry(offset)
+		re, err := currFile.getRaftEntry(offset)
+		if err != nil {
+			offset++
+			continue
+		}
 		if re.Index >= hi {
 			return entries
 		}
@@ -137,10 +146,10 @@ func (l *entryLog) AddEntries(entries []raftpb.Entry) error {
 			if firstIdx >= len(l.files) {
 				panic(fmt.Sprintf("file index:%d is greater than all files count:%d", firstIdx, len(l.files)))
 			}
+			l.filesSync.Lock()
 			extra := l.files[firstIdx+1:]
 			extra = append(extra, l.current)
 			l.current = l.files[firstIdx]
-
 			for _, ef := range extra {
 				logger.GetLogger().Info(fmt.Sprintf("Deleting extra file: %d\n", ef.fid))
 				if err := ef.delete(); err != nil {
@@ -148,7 +157,9 @@ func (l *entryLog) AddEntries(entries []raftpb.Entry) error {
 				}
 			}
 			_ = l.current.entry.WriteSlice(int64(entrySize*lastIdx), make([]byte, logFileOffset-entrySize*lastIdx))
+			l.current.entry.setCurrent()
 			l.files = l.files[:firstIdx]
+			l.filesSync.Unlock()
 		}
 		l.nextEntryIdx = lastIdx
 	}
@@ -206,6 +217,8 @@ func (l *entryLog) AddEntries(entries []raftpb.Entry) error {
 // A value of -1 for slot means that the raftIndex is lower than whatever is
 // present in the WAL, thus it is not present in the WAL.
 func (l *entryLog) slotGe(raftIndex uint64) (int, int) {
+	l.filesSync.RLock()
+	defer l.filesSync.RUnlock()
 	// Look for the offset in the current file.
 	if offset := l.current.slotGe(raftIndex); offset >= 0 {
 		return -1, offset
@@ -275,6 +288,8 @@ func (l *entryLog) Term(idx uint64) (uint64, error) {
 func (l *entryLog) deleteBefore(raftIndex uint64) {
 	fidx, off := l.slotGe(raftIndex)
 
+	l.filesSync.Lock()
+	defer l.filesSync.Unlock()
 	if off < 0 || fidx >= len(l.files) {
 		return
 	}
@@ -324,8 +339,15 @@ func (l *entryLog) rotate(firstIndex uint64, offset int) error {
 
 	// Move the existing current file to the end of the list of files and
 	// update the current file to the file that was just created.
+	l.filesSync.Lock()
 	l.files = append(l.files, l.current)
+	l.filesSync.Unlock()
+
+	l.currentSync.Lock()
+	defer l.currentSync.Unlock()
+	l.current.entry.rotateCurrent()
 	l.current = ef
+	l.current.entry.setCurrent()
 	return nil
 }
 
@@ -344,8 +366,7 @@ func openEntryLogs(dir string) (*entryLog, error) {
 			nextFid = ef.fid
 		}
 		if ef.firstIndex() == 0 {
-			lock := fileops.FileLockOption("")
-			if err = fileops.Remove(ef.entry.Name(), lock); err != nil {
+			if err = ef.entry.Delete(); err != nil {
 				return nil, err
 			}
 		} else {
@@ -355,6 +376,7 @@ func openEntryLogs(dir string) (*entryLog, error) {
 	e.files = out
 	if sz := len(e.files); sz > 0 {
 		e.current = e.files[sz-1]
+		e.current.entry.setCurrent()
 		e.nextEntryIdx = e.current.firstEmptySlot()
 
 		e.files = e.files[:sz-1]
@@ -365,6 +387,7 @@ func openEntryLogs(dir string) (*entryLog, error) {
 	nextFid += 1
 	ef, err := openLogFile(dir, nextFid)
 	e.current = ef
+	e.current.entry.setCurrent()
 	return e, err
 }
 
@@ -373,6 +396,8 @@ func (l *entryLog) firstIndex() uint64 {
 	if l == nil {
 		return 0
 	}
+	l.filesSync.RLock()
+	defer l.filesSync.RUnlock()
 	var fi uint64
 	if len(l.files) == 0 {
 		fi = l.current.getEntry(0).Index()
@@ -390,6 +415,8 @@ func (l *entryLog) firstIndex() uint64 {
 
 // lastIndex returns the last index in the log.
 func (l *entryLog) lastIndex() uint64 {
+	l.filesSync.RLock()
+	defer l.filesSync.RUnlock()
 	if l.nextEntryIdx-1 >= 0 {
 		e := l.current.getEntry(l.nextEntryIdx - 1)
 		return e.Index()
@@ -407,6 +434,8 @@ func (l *entryLog) lastIndex() uint64 {
 // getEntryFile returns right logFile corresponding to the fidx. A value of -1
 // is meant to represent the current file, which is not yet stored in l.files.
 func (l *entryLog) getEntryFile(fidx int) *logFile {
+	l.filesSync.RLock()
+	defer l.filesSync.RUnlock()
 	if fidx == -1 {
 		return l.current
 	}

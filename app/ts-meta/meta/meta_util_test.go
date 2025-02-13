@@ -146,6 +146,49 @@ func InitStore(dir string, ip string) (*MetaService, error) {
 	return ms, nil
 }
 
+func InitStoreBindPeers(dir string, ip string) (*MetaService, error) {
+	ms := &MetaService{}
+	var err error
+	ms.c, err = NewMetaConfig(dir, ip)
+	ms.c.BindPeers = []string{ip + ":8088"}
+	ms.c.JoinPeers = append(ms.c.JoinPeers, ip+":9092")
+	if err != nil {
+		return ms, err
+	}
+
+	ms.store = NewStore(ms.c, ms.c.HTTPBindAddress, ms.c.RPCBindAddress, ms.c.BindAddress)
+	globalService = &Service{store: ms.store}
+	log := zap.NewNop()
+	ms.store.Logger = logger2.NewLogger(errno.ModuleMeta).SetZapLogger(log)
+	ms.store.Node = metaclient.NewNode(ms.c.Dir)
+	meta2.DataLogger = logger2.GetLogger()
+
+	handler := &MockHandler{}
+	handler.store = ms.store
+	ms.httpLn, err = net.Listen("tcp", ms.c.HTTPBindAddress)
+	if err != nil {
+		return ms, err
+	}
+	go http.Serve(ms.httpLn, handler)
+
+	ms.metaServer = NewMetaServer(ms.c.RPCBindAddress, ms.store, ms.c)
+	if err := ms.metaServer.Start(); err != nil {
+		return ms, err
+	}
+
+	var raftListener net.Listener
+	ms.ln, raftListener, err = MakeRaftListen(ms.c)
+	if err != nil {
+		return ms, err
+	}
+	ms.store.SetClusterManager(NewClusterManager(ms.store))
+
+	if err := ms.store.Open(raftListener); err != nil {
+		return ms, err
+	}
+	return ms, nil
+}
+
 type MockMetaService struct {
 	ln      net.Listener
 	service *Service
@@ -159,7 +202,7 @@ func NewMockMetaService(dir, ip string) (*MockMetaService, error) {
 	}
 	config.SetHaPolicy(config.SSPolicy)
 	mms := &MockMetaService{}
-	mms.service = NewService(c, nil)
+	mms.service = NewService(c, nil, nil)
 	mms.service.Node = metaclient.NewNode(c.Dir)
 	mms.ln, mms.service.RaftListener, err = MakeRaftListen(c)
 	if err != nil {
@@ -173,6 +216,22 @@ func NewMockMetaService(dir, ip string) (*MockMetaService, error) {
 		mms.Close()
 		return nil, err
 	}
+	time.Sleep(time.Second / 2)
+	return mms, nil
+}
+
+func BuildMockMetaService(dir, ip string) (*MockMetaService, error) {
+	c, err := NewMetaConfig(dir, ip)
+	if err != nil {
+		return nil, err
+	}
+	config.SetHaPolicy(config.SSPolicy)
+	mms := &MockMetaService{}
+	mms.service = NewService(c, nil, nil)
+	mms.service.Node = metaclient.NewNode(c.Dir)
+	ar := NewAddrRewriter()
+	ar.SetHostname(mms.service.config.RemoteHostname)
+	mms.service.initStore(ar)
 	return mms, nil
 }
 
@@ -389,6 +448,21 @@ func GenerateGetShardRangeInfoCmd(db, rp string, shardId uint64) *proto2.Command
 	return cmd
 }
 
+func GenerateGetIndexDurationCommand(indexId int, rp string, shardId uint64) *proto2.Command {
+	val := &proto2.IndexDurationCommand{
+		Index:  proto.Uint64(uint64(indexId)),
+		Pts:    []uint32{0},
+		NodeId: proto.Uint64(1),
+	}
+
+	t := proto2.Command_IndexDurationCommand
+	cmd := &proto2.Command{Type: &t}
+	if err := proto.SetExtension(cmd, proto2.E_IndexDurationCommand_Command, val); err != nil {
+		panic(err)
+	}
+	return cmd
+}
+
 func GenerateShardDurationCmd(index uint64, pts []uint32, nodeId uint64) *proto2.Command {
 	val := &proto2.ShardDurationCommand{Index: proto.Uint64(index), Pts: pts, NodeId: proto.Uint64(nodeId)}
 	t := proto2.Command_ShardDurationCommand
@@ -522,6 +596,10 @@ func (s *MockNetStorage) SendSegregateNodeCmds(nodeIDs []uint64, address []strin
 		return 0, fmt.Errorf("first node segregate error")
 	}
 	return 0, nil
+}
+
+func (s *MockNetStorage) TransferLeadership(database string, nodeId uint64, oldMasterPtId, newMasterPtId uint32) error {
+	return nil
 }
 
 func NewMockNetStorage() *MockNetStorage {

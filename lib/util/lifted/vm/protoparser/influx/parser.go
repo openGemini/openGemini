@@ -251,6 +251,10 @@ func (r *Row) ReuseSet() {
 	r.StreamId = r.StreamId[:0]
 	r.StreamOnly = false
 	r.ColumnToIndex = nil
+	r.ReadyBuildColumnToIndex = false
+	r.tagArrayInitialized = false
+	r.hasTagArray = false
+	r.skipMarshalShardKey = false
 }
 
 func (r *Row) CheckValid() error {
@@ -979,6 +983,11 @@ func Parse2SeriesKey(key []byte, dst []byte, splittWithNull bool) []byte {
 	return dst[:len(dst)-1]
 }
 
+type SeriesBytes struct {
+	Measurement []byte
+	Series      []byte
+}
+
 type SeriesKey struct {
 	Measurement []byte
 	TagSet      []TagKV
@@ -1233,6 +1242,29 @@ func (r *Row) TagsSize() int {
 		total += r.Tags[i].Size()
 	}
 	return total
+}
+
+func (r *Row) ResizeTags(n int) {
+	if lack := n - cap(r.Tags); lack > 0 {
+		r.Tags = r.Tags[:cap(r.Tags)]
+		r.Tags = append(r.Tags, make(PointTags, lack)...)
+	} else {
+		r.Tags = r.Tags[:n]
+	}
+}
+
+func (r *Row) ResizeFields(n int) {
+	if lack := n - cap(r.Fields); lack > 0 {
+		r.Fields = r.Fields[:cap(r.Fields)]
+		r.Fields = append(r.Fields, make([]Field, lack)...)
+	} else {
+		r.Fields = r.Fields[:n]
+	}
+}
+
+func (r *Row) CloneTags(tags PointTags) {
+	r.ResizeTags(len(tags))
+	copy(r.Tags, tags)
 }
 
 // Tag PointTag represents influx tag.
@@ -1812,4 +1844,37 @@ func (opts *IndexOptions) Reset() {
 	for i := range *opts {
 		(*opts)[i].Reset()
 	}
+}
+
+func UnsafeParse2Tags(src []byte, dst []Tag) ([]byte, []Tag) {
+	// measurement
+	msName, src, err := MeasurementName(src)
+	if err != nil {
+		panic(err)
+	}
+
+	// tags
+	tagsN := int(encoding.UnmarshalUint16(src))
+	if cap(dst) < tagsN {
+		dst = make([]Tag, tagsN)
+	}
+	dst = dst[:tagsN]
+
+	src = src[2:]
+	var item []byte
+
+	for i := 0; i < tagsN; i++ {
+		item, src = parseItem(src)
+		dst[i].Key = util.Bytes2str(item)
+
+		item, src = parseItem(src)
+		dst[i].Value = util.Bytes2str(item)
+	}
+
+	return msName, dst
+}
+
+func parseItem(src []byte) ([]byte, []byte) {
+	size := encoding.UnmarshalUint16(src)
+	return src[2 : size+2], src[size+2:]
 }

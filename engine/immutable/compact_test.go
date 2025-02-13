@@ -2520,7 +2520,7 @@ func TestMmsTables_LevelCompact_With_FileHandle_Optimize(t *testing.T) {
 	testCompDir := t.TempDir()
 	_ = fileops.RemoveAll(testCompDir)
 	cacheIns := readcache.GetReadMetaCacheIns()
-	cacheIns.Purge()
+	cacheIns.Purge(readcache.MetaCachePool)
 	sig := interruptsignal.NewInterruptSignal()
 	defer func() {
 		sig.Close()
@@ -2688,7 +2688,7 @@ func TestMmsTables_LevelCompact_1ID5Segment(t *testing.T) {
 	testCompDir := t.TempDir()
 	_ = fileops.RemoveAll(testCompDir)
 	cacheIns := readcache.GetReadMetaCacheIns()
-	cacheIns.Purge()
+	cacheIns.Purge(readcache.MetaCachePool)
 	sig := interruptsignal.NewInterruptSignal()
 	defer func() {
 		sig.Close()
@@ -2846,7 +2846,7 @@ func TestMmsTables_FullCompact(t *testing.T) {
 	testCompDir := t.TempDir()
 	_ = fileops.RemoveAll(testCompDir)
 	cacheIns := readcache.GetReadMetaCacheIns()
-	cacheIns.Purge()
+	cacheIns.Purge(readcache.MetaCachePool)
 	sig := interruptsignal.NewInterruptSignal()
 	defer func() {
 		sig.Close()
@@ -3009,7 +3009,7 @@ func TestMmsTables_LevelCompact_20ID10Segment(t *testing.T) {
 	for _, flag := range mergeFlags {
 		_ = fileops.RemoveAll(testCompDir)
 		cacheIns := readcache.GetReadMetaCacheIns()
-		cacheIns.Purge()
+		cacheIns.Purge(readcache.MetaCachePool)
 		sig := interruptsignal.NewInterruptSignal()
 		defer func() {
 			sig.Close()
@@ -3202,8 +3202,7 @@ func mustCreateTsspFiles(path string, fileNames []string) []TSSPFile {
 		f := &tsspFile{
 			name: fileName,
 			reader: &tsspFileReader{
-				r:          dr,
-				inMemBlock: NewMemReader(),
+				r: dr,
 			},
 			lock: &lockPath,
 		}
@@ -3318,10 +3317,8 @@ func TestCompactLog_AllNewFileExist1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx := EventContext{mergeSet: &MockIndexMergeSet{func(sid uint64, buf []byte, condition influxql.Expr, callback func(key *influx.SeriesKey)) error {
-		return nil
-	}}, scheduler: nil}
-	if err = recoverFile(testCompDir, &lockPath, config.TSSTORE, ctx); err != nil {
+
+	if err = recoverFile(testCompDir, &lockPath, config.TSSTORE, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -3377,10 +3374,7 @@ func TestCompactLog_AllNewFileExist2(t *testing.T) {
 	//remove 1 old file
 	fName = filepath.Join(dir, info.OldFile[1])
 	_ = fileops.Remove(fName)
-	ctx := EventContext{mergeSet: &MockIndexMergeSet{func(sid uint64, buf []byte, condition influxql.Expr, callback func(key *influx.SeriesKey)) error {
-		return nil
-	}}, scheduler: nil}
-	if err = recoverFile(testCompDir, &lockPath, config.TSSTORE, ctx); err != nil {
+	if err = recoverFile(testCompDir, &lockPath, config.TSSTORE, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -3437,10 +3431,7 @@ func TestCompactLog_NewFileNotExit1(t *testing.T) {
 	// rename 1 old file
 	fName = filepath.Join(dir, info.OldFile[0])
 	_ = fileops.RenameFile(fName, fName+tmpFileSuffix)
-	ctx := EventContext{mergeSet: &MockIndexMergeSet{func(sid uint64, buf []byte, condition influxql.Expr, callback func(key *influx.SeriesKey)) error {
-		return nil
-	}}, scheduler: nil}
-	if err = recoverFile(testCompDir, &lockPath, config.TSSTORE, ctx); err != nil {
+	if err = recoverFile(testCompDir, &lockPath, config.TSSTORE, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -3498,10 +3489,7 @@ func TestCompactLog_NewFileNotExit2(t *testing.T) {
 	// rename 1 old file
 	fName = filepath.Join(dir, info.OldFile[0])
 	_ = fileops.RenameFile(fName, fName+tmpFileSuffix)
-	ctx := EventContext{mergeSet: &MockIndexMergeSet{func(sid uint64, buf []byte, condition influxql.Expr, callback func(key *influx.SeriesKey)) error {
-		return nil
-	}}, scheduler: nil}
-	if err = recoverFile(testCompDir, &lockPath, config.TSSTORE, ctx); err != nil {
+	if err = recoverFile(testCompDir, &lockPath, config.TSSTORE, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -3534,7 +3522,7 @@ func TestMmsTables_LevelCompact_SegmentLimit(t *testing.T) {
 	for _, cf := range confs {
 		_ = fileops.RemoveAll(testCompDir)
 		cacheIns := readcache.GetReadMetaCacheIns()
-		cacheIns.Purge()
+		cacheIns.Purge(readcache.MetaCachePool)
 		sig := interruptsignal.NewInterruptSignal()
 		defer func() {
 			sig.Close()
@@ -3710,7 +3698,7 @@ func TestCompactRecovery(t *testing.T) {
 	testCompDir := t.TempDir()
 	_ = fileops.RemoveAll(testCompDir)
 	cacheIns := readcache.GetReadMetaCacheIns()
-	cacheIns.Purge()
+	cacheIns.Purge(readcache.MetaCachePool)
 	sig := interruptsignal.NewInterruptSignal()
 	defer func() {
 		sig.Close()
@@ -3742,7 +3730,7 @@ func TestMergeRecovery(t *testing.T) {
 	testCompDir := t.TempDir()
 	_ = fileops.RemoveAll(testCompDir)
 	cacheIns := readcache.GetReadMetaCacheIns()
-	cacheIns.Purge()
+	cacheIns.Purge(readcache.MetaCachePool)
 	sig := interruptsignal.NewInterruptSignal()
 	defer func() {
 		sig.Close()
@@ -3759,7 +3747,7 @@ func TestMergeRecovery(t *testing.T) {
 
 	store.CompactionEnable()
 
-	ctx := NewMergeContext("mst", 0)
+	ctx := NewMergeContext("mst", 0, false)
 	ctx.order.seq = append(ctx.order.seq, 1)
 	defer MergeRecovery(testCompDir, "test_name", ctx)
 

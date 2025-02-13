@@ -37,7 +37,6 @@ func (cv *ColVal) Unmarshal(buf []byte) {
 	cv.Val = dec.Bytes()
 	cv.Bitmap = dec.Bytes()
 	cv.Offset = dec.Uint32SliceSafe()
-	return
 }
 
 func (cv *ColVal) UnmarshalUnsafe(buf []byte) {

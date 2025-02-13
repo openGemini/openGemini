@@ -38,6 +38,7 @@ type raftNodeRequest interface {
 	AddCommittedDataC(*raftlog.DataWrapper) (chan error, error)
 	RemoveCommittedDataC(*raftlog.DataWrapper)
 	RetCommittedDataC(*raftlog.DataWrapper, error)
+	TransferLeadership(newLeader uint64) error
 	Stop()
 }
 
@@ -51,6 +52,7 @@ func readReplayForReplication(ReplayC <-chan *raftconn.Commit, client metaclient
 		}
 		database := commit.Database
 		ptId := commit.PtId
+		logger.GetLogger().Info("start read replay for replication", zap.String("database", database), zap.Uint32("ptId", ptId))
 		for _, data := range commit.Data {
 			dataWrapper, _ := raftlog.Unmarshal(data)
 			if dataWrapper.DataType == raftlog.Normal {
@@ -67,7 +69,6 @@ func readCommitFromRaft(node *raftconn.RaftNode, client metaclient.MetaClient, s
 	commitC := node.GetCommitC()
 	for commit := range commitC {
 		if commit == nil {
-			// TODO: signaled to load snapshot
 			continue
 		}
 		committedIndex := commit.CommittedIndex
@@ -76,7 +77,6 @@ func readCommitFromRaft(node *raftconn.RaftNode, client metaclient.MetaClient, s
 		for _, data := range commit.Data {
 			dealCommitData(node, client, storage, data, database, ptId)
 		}
-		close(commit.ApplyDoneC)
 		node.SnapShotter.TryToUpdateCommittedIndex(committedIndex)
 	}
 }
@@ -112,10 +112,11 @@ func dealNormalData(dataWrapper *raftlog.DataWrapper, database string, ptId uint
 	storage netstorage.StorageService, node *raftconn.RaftNode) error {
 	tail := dataWrapper.GetData()
 	ww := pointsdecoder.GetDecoderWork()
+	ww.SetReqBuf(tail)
+	defer pointsdecoder.PutDecoderWork(ww)
 	masterShId, _, _, err := ww.DecodeShardAndRows(database, "", ptId, tail)
 	if err != nil {
 		logger.GetLogger().Error("decode shard and rows failed", zap.Error(err))
-		pointsdecoder.PutDecoderWork(ww)
 		return err
 	}
 
@@ -123,12 +124,10 @@ func dealNormalData(dataWrapper *raftlog.DataWrapper, database string, ptId uint
 	db, rp, sgi := client.ShardOwner(masterShId)
 	if db != database {
 		logger.GetLogger().Error(fmt.Sprintf("exp db: %v, but got: %v", database, db))
-		pointsdecoder.PutDecoderWork(ww)
 		return errors.New("db is not same")
 	}
 
 	if sgi == nil || len(sgi.Shards) <= int(ptId) {
-		pointsdecoder.PutDecoderWork(ww)
 		return errors.New("sgi shards less than ptid")
 	}
 	shardID := sgi.Shards[ptId].ID
@@ -142,7 +141,6 @@ func dealNormalData(dataWrapper *raftlog.DataWrapper, database string, ptId uint
 		return storage.WriteDataFunc(database, rp, ptId, shardID, ww.GetRows(), nil, snapShotter)
 	})
 	if err != nil {
-		pointsdecoder.PutDecoderWork(ww)
 		logger.GetLogger().Error("write points to storage failed", zap.Error(err))
 		return err
 	}

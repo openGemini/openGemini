@@ -84,22 +84,29 @@ func (e *Error) Instance() transport.Codec {
 }
 
 type Finish struct {
+	queryIndexState int32
 }
 
-func NewFinishMessage() *rpc.Message {
-	return rpc.NewMessage(FinishMessage, &Finish{})
+func NewFinishMessage(queryIndexState int32) *rpc.Message {
+	return rpc.NewMessage(FinishMessage, &Finish{queryIndexState: queryIndexState})
 }
 
 func (e *Finish) Marshal(buf []byte) ([]byte, error) {
+	buf = codec.AppendInt32(buf, e.queryIndexState)
 	return buf, nil
 }
 
-func (e *Finish) Unmarshal(_ []byte) error {
+func (e *Finish) Unmarshal(buf []byte) error {
+	if len(buf) < util.Int32SizeBytes {
+		return fmt.Errorf("invalid the finish length")
+	}
+	dec := codec.NewBinaryDecoder(buf)
+	e.queryIndexState = dec.Int32()
 	return nil
 }
 
 func (e *Finish) Size() int {
-	return 0
+	return util.Int32SizeBytes
 }
 
 func (e *Finish) Instance() transport.Codec {
@@ -149,17 +156,19 @@ func (e *IncQueryFinish) Instance() transport.Codec {
 }
 
 type Abort struct {
-	ClientID uint64
-	QueryID  uint64
+	ClientID    uint64
+	QueryID     uint64
+	NoMarkCrash bool
 }
 
-func NewAbort(queryID uint64, clientID uint64) *Abort {
-	return &Abort{ClientID: clientID, QueryID: queryID}
+func NewAbort(queryID uint64, clientID uint64, noMarkCrash bool) *Abort {
+	return &Abort{ClientID: clientID, QueryID: queryID, NoMarkCrash: noMarkCrash}
 }
 
 func (e *Abort) Marshal(buf []byte) ([]byte, error) {
 	buf = codec.AppendUint64(buf, e.ClientID)
 	buf = codec.AppendUint64(buf, e.QueryID)
+	buf = codec.AppendBool(buf, e.NoMarkCrash)
 	return buf, nil
 }
 
@@ -167,11 +176,12 @@ func (e *Abort) Unmarshal(buf []byte) error {
 	dec := codec.NewBinaryDecoder(buf)
 	e.ClientID = dec.Uint64()
 	e.QueryID = dec.Uint64()
+	e.NoMarkCrash = dec.Bool()
 	return nil
 }
 
 func (e *Abort) Size() int {
-	return codec.SizeOfUint64() * 2
+	return codec.SizeOfUint64()*2 + codec.SizeOfBool()
 }
 
 func (e *Abort) Instance() transport.Codec {
@@ -179,17 +189,19 @@ func (e *Abort) Instance() transport.Codec {
 }
 
 type Crash struct {
-	ClientID uint64
-	QueryID  uint64
+	ClientID    uint64
+	QueryID     uint64
+	NoMarkCrash bool
 }
 
-func NewCrash(queryID uint64, clientID uint64) *Crash {
-	return &Crash{ClientID: clientID, QueryID: queryID}
+func NewCrash(queryID uint64, clientID uint64, noMarkCrash bool) *Crash {
+	return &Crash{ClientID: clientID, QueryID: queryID, NoMarkCrash: noMarkCrash}
 }
 
 func (c *Crash) Marshal(buf []byte) ([]byte, error) {
 	buf = codec.AppendUint64(buf, c.ClientID)
 	buf = codec.AppendUint64(buf, c.QueryID)
+	buf = codec.AppendBool(buf, c.NoMarkCrash)
 	return buf, nil
 }
 
@@ -197,11 +209,14 @@ func (c *Crash) Unmarshal(buf []byte) error {
 	dec := codec.NewBinaryDecoder(buf)
 	c.ClientID = dec.Uint64()
 	c.QueryID = dec.Uint64()
+	if !dec.End() {
+		c.NoMarkCrash = dec.Bool()
+	}
 	return nil
 }
 
 func (c *Crash) Size() int {
-	return codec.SizeOfUint64() * 2
+	return codec.SizeOfUint64()*2 + codec.SizeOfBool()
 }
 
 func (c *Crash) Instance() transport.Codec {

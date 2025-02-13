@@ -80,6 +80,30 @@ func (c *cursor) Close() error {
 	return fmt.Errorf("cursor close err")
 }
 
+type MockTSIndexInfo struct {
+	cursors []comm.KeyCursor
+}
+
+func NewMockTSIndexInfo(cursors []comm.KeyCursor) comm.TSIndexInfo {
+	return &MockTSIndexInfo{cursors: cursors}
+}
+
+func (m *MockTSIndexInfo) IsEmpty() bool {
+	return len(m.cursors) == 0
+}
+
+func (m *MockTSIndexInfo) SetCursors(cursors []comm.KeyCursor) {
+	m.cursors = cursors
+}
+
+func (m *MockTSIndexInfo) GetCursors() []comm.KeyCursor {
+	return m.cursors
+}
+
+func (m *MockTSIndexInfo) Ref() {}
+
+func (m *MockTSIndexInfo) Unref() {}
+
 func buildIRowDataType() hybridqp.RowDataType {
 	rowDataType := hybridqp.NewRowDataTypeImpl(
 		influxql.VarRef{Val: "val0", Type: influxql.Float},
@@ -164,12 +188,9 @@ func TestIndexScanTransform_Abort(t *testing.T) {
 }
 
 func TestIndexScanCursorClose(t *testing.T) {
-	cursors := comm.KeyCursors{&cursor{}, &cursor{closeErr: true}}
-	keyCursors := make([][]interface{}, 1)
-	keyCursors[0] = make([]interface{}, 2)
-	keyCursors[0][0] = cursors[0]
-	keyCursors[0][1] = cursors[1]
-	plan := executor.NewLogicalDummyShard(keyCursors)
+	cursors := []comm.KeyCursor{&cursor{}, &cursor{closeErr: true}}
+	indexInfo := NewMockTSIndexInfo(cursors)
+	plan := executor.NewLogicalDummyShard(indexInfo)
 	trans1 := &executor.IndexScanTransform{}
 	trans1.CursorsClose(plan)
 	trans1.SetIndexScanErr(true)

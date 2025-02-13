@@ -46,7 +46,8 @@ func (m *MergeSelf) InitEvents(ctx *MergeContext) *Events {
 }
 
 func (m *MergeSelf) Merge(mst string, toLevel uint16, files []TSSPFile) (TSSPFile, error) {
-	builder := m.createMsBuilder(mst, toLevel, files[0].FileName())
+	builder := m.createMsBuilder(mst, toLevel, files[0].FileName(), FilesMergedTire(files))
+
 	sh := record.NewColumnSortHelper()
 	defer sh.Release()
 
@@ -111,11 +112,11 @@ func (m *MergeSelf) createIterators(files []TSSPFile) *ChunkIterators {
 	return itrs
 }
 
-func (m *MergeSelf) createMsBuilder(mst string, toLevel uint16, fileName TSSPFileName) *MsBuilder {
+func (m *MergeSelf) createMsBuilder(mst string, toLevel uint16, fileName TSSPFileName, tier uint64) *MsBuilder {
 	fileName.merge = toLevel
 	fileName.lock = m.mts.lock
 	builder := NewMsBuilder(m.mts.path, mst, m.mts.lock, m.mts.Conf,
-		0, fileName, 0, nil, 0, config.TSSTORE, nil, m.mts.shardId)
+		0, fileName, tier, nil, 0, config.TSSTORE, nil, m.mts.shardId)
 	return builder
 }
 

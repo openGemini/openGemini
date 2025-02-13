@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/stretchr/testify/require"
 )
@@ -60,70 +61,69 @@ func TestPool(t *testing.T) {
 }
 
 func TestChunkMetaBuffer(t *testing.T) {
-	buf := pool.GetChunkMetaBuffer()
-	require.Equal(t, 0, len(buf.B))
+	buf1, release1 := pool.GetChunkMetaBuffer()
+	require.Equal(t, 0, len(buf1.B))
 
-	pool.PutChunkMetaBuffer(&pool.Buffer{B: make([]byte, 10)})
-	buf = pool.GetChunkMetaBuffer()
+	buf2, release2 := pool.GetChunkMetaBuffer()
+	require.Equal(t, 0, len(buf2.B))
+
+	buf1.B = make([]byte, 64*1024*1024)
+	buf2.B = make([]byte, 10)
+	release1()
+	release2()
+
+	buf, _ := pool.GetChunkMetaBuffer()
 	require.Equal(t, 10, len(buf.B))
-
-	pool.PutChunkMetaBuffer(&pool.Buffer{B: make([]byte, 10)})
-	pool.PutChunkMetaBuffer(&pool.Buffer{B: make([]byte, 64*1024*1024)})
-
-	buf = pool.GetChunkMetaBuffer()
-	require.Equal(t, 10, len(buf.B))
 }
 
-func TestNewFixedPoolV2(t *testing.T) {
-	newFunc := func() int {
-		return 42
-	}
-	testPool := pool.NewFixedPoolV2(newFunc, 2)
-
-	require.NotNil(t, testPool)
+type FooObject struct {
+	name string
+	buf  []byte
 }
 
-func TestFixedPoolV2_Get(t *testing.T) {
-	newFunc := func() int {
-		return 42
-	}
-	pool := pool.NewFixedPoolV2(newFunc, 2)
-
-	// Test getting a new item when pool is empty
-	item := pool.Get()
-	require.Equal(t, 42, item)
-
-	// Test getting an item from the pool
-	pool.Put(100)
-	item = pool.Get()
-	require.Equal(t, 100, item)
+func (f *FooObject) MemSize() int {
+	return len(f.buf) + len(f.name)
 }
 
-func TestFixedPoolV2_Put(t *testing.T) {
-	newFunc := func() int {
-		return 42
+func TestUnionPoolObject(t *testing.T) {
+	p := pool.NewUnionPool[FooObject](8, 8*config.MB, 1*config.MB, func() *FooObject {
+		return &FooObject{}
+	})
+	p.EnableStatLocalMemSize()
+	p.EnableHitRatioStat("Foo")
+	p.Put(nil)
+
+	var assertPoolGet = func(callback func(o *FooObject), expLocalMemSize int) {
+		obj := p.Get()
+		require.NotNil(t, obj)
+		if callback != nil {
+			callback(obj)
+		}
+		p.Put(obj)
+
+		require.Equal(t, expLocalMemSize, p.LocalMemorySize())
 	}
-	pool := pool.NewFixedPoolV2(newFunc, 2)
 
-	// Test putting an item into the pool
-	pool.Put(100)
-	require.Equal(t, 1, pool.Len())
-
-	// Test putting an item into a full pool
-	pool.Put(200)
-	pool.Put(300)
-	require.Equal(t, 2, pool.Len())
+	assertPoolGet(nil, 0)
+	assertPoolGet(func(o *FooObject) {
+		o.name = "foo"
+	}, 3)
+	assertPoolGet(func(o *FooObject) {
+		o.name = "foo"
+		o.buf = make([]byte, 2*1024*1024)
+	}, 0)
 }
 
-func TestFixedPoolV2_Reset(t *testing.T) {
-	newFunc := func() int {
-		return 42
-	}
-	pool := pool.NewFixedPoolV2(newFunc, 2)
+func TestUnionPoolSlice(t *testing.T) {
+	p := pool.NewDefaultUnionPool[[]int64](func() *[]int64 {
+		s := make([]int64, 100)
+		return &s
+	})
 
-	// Test resetting the pool
-	pool.Put(100)
-	pool.Put(200)
-	pool.Reset(2, newFunc)
-	require.Equal(t, 0, pool.Len())
+	times := make([]int64, 100)
+	p.PutWithMemSize(&times, len(times)*8)
+
+	s := p.Get()
+	require.NotNil(t, s)
+	require.Equal(t, 100, len(*s))
 }

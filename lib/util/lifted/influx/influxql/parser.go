@@ -2849,6 +2849,12 @@ func (p *Parser) parseUnaryExpr() (Expr, error) {
 	tok, pos, lit := p.ScanIgnoreWhitespace()
 	switch tok {
 	case IDENT:
+		if strings.ToLower(lit) == "inf" {
+			return &NumberLiteral{Val: math.Inf(0)}, nil
+		}
+		if strings.ToLower(lit) == "nan" {
+			return &NumberLiteral{Val: math.NaN()}, nil
+		}
 		// If the next immediate token is a left parentheses, parse as function call.
 		// Otherwise parse as a variable reference.
 		if tok0, _, _ := p.Scan(); tok0 == LPAREN {

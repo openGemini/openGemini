@@ -57,7 +57,7 @@ func TestDealNormalData(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	entsInit := []raftpb.Entry{{Index: 3, Term: 3}, {Index: 4, Term: 4}, {Index: 5, Term: 5}}
-	rds, err := raftlog.Init(tmpDir)
+	rds, err := raftlog.Init(tmpDir, 0)
 	require.NoError(t, err)
 	defer rds.Close()
 	err = rds.Save(nil, entsInit, nil)
@@ -93,7 +93,7 @@ func TestDealCommitData(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	entsInit := []raftpb.Entry{{Index: 3, Term: 3}, {Index: 4, Term: 4}, {Index: 5, Term: 5}}
-	rds, err := raftlog.Init(tmpDir)
+	rds, err := raftlog.Init(tmpDir, 0)
 	require.NoError(t, err)
 	defer rds.Close()
 	err = rds.Save(nil, entsInit, nil)

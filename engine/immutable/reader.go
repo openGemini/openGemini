@@ -51,7 +51,7 @@ type FileReader interface {
 	MetaIndex(id uint64, tr util.TimeRange) (int, *MetaIndex, error)
 	ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, ctx *ChunkMetaContext, ioPriority int) (*ChunkMeta, error)
 
-	ReadMetaBlock(metaIdx int, id uint64, offset int64, size uint32, count uint32, buf *pool.Buffer, ioPriority int) ([]byte, error)
+	ReadMetaBlock(metaIdx int, id uint64, offset int64, size uint32, count uint32, buf *pool.Buffer, ioPriority int) ([]byte, *readcache.CachePage, error)
 	ReadDataBlock(offset int64, size uint32, dst *[]byte, ioPriority int) ([]byte, *readcache.CachePage, error)
 	Read(offset int64, size uint32, dst *[]byte, ioPriority int) ([]byte, error)
 	ReadChunkMetaData(metaIdx int, m *MetaIndex, dst []ChunkMeta, ioPriority int) ([]ChunkMeta, error)
@@ -70,7 +70,7 @@ type FileReader interface {
 	FileSize() int64
 	InMemSize() int64
 	Version() uint64
-	FreeMemory() int64
+	FreeMemory()
 	FreeFileHandle() error
 	LoadIntoMemory() error
 	LoadComponents() error
@@ -179,7 +179,7 @@ func readMinRowIndex(callRef *record.Field, callCol, timeCol *record.ColVal, met
 		min := int64(math.MaxInt64)
 		for i := rowIdxStart; i < rowIdxStop; i++ {
 			v, isNil := callCol.IntegerValue(i)
-			if !isNil && v < min {
+			if !isNil && (v < min || min == int64(math.MaxInt64)) {
 				min = v
 				rowIndex = i
 				seen = true
@@ -196,7 +196,7 @@ func readMinRowIndex(callRef *record.Field, callCol, timeCol *record.ColVal, met
 		min := math.MaxFloat64
 		for i := rowIdxStart; i < rowIdxStop; i++ {
 			v, isNil := callCol.FloatValue(i)
-			if !isNil && v < min {
+			if !isNil && (v < min || min == math.MaxFloat64) {
 				min = v
 				rowIndex = i
 				seen = true
@@ -275,7 +275,7 @@ func readMaxRowIndex(callRef *record.Field, callCol, timeCol *record.ColVal, met
 		max := int64(math.MinInt64)
 		for i := rowIdxStart; i < rowIdxStop; i++ {
 			v, isNil := callCol.IntegerValue(i)
-			if !isNil && v > max {
+			if !isNil && (v > max || max == int64(math.MinInt64)) {
 				max = v
 				rowIndex = i
 				seen = true
@@ -292,7 +292,7 @@ func readMaxRowIndex(callRef *record.Field, callCol, timeCol *record.ColVal, met
 		max := -math.MaxFloat64
 		for i := rowIdxStart; i < rowIdxStop; i++ {
 			v, isNil := callCol.FloatValue(i)
-			if !isNil && v > max {
+			if !isNil && (v > max || max == -math.MaxFloat64) {
 				max = v
 				rowIndex = i
 				seen = true
@@ -1040,7 +1040,7 @@ func reverseStringValues(val []byte, offs []uint32, col *record.ColVal, bmCol *r
 
 type ColumnReader interface {
 	ReadDataBlock(offset int64, size uint32, dst *[]byte, ioPriority int) ([]byte, *readcache.CachePage, error)
-	ReadMetaBlock(metaIdx int, id uint64, offset int64, size uint32, count uint32, dst *pool.Buffer, ioPriority int) ([]byte, error)
+	ReadMetaBlock(metaIdx int, id uint64, offset int64, size uint32, count uint32, dst *pool.Buffer, ioPriority int) ([]byte, *readcache.CachePage, error)
 	UnrefCachePage(cachePage *readcache.CachePage)
 }
 

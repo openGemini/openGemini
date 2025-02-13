@@ -47,11 +47,9 @@ func TestCheckLeaderChanged(t *testing.T) {
 	defer mms.Close()
 	s := mms.GetStore()
 	s.notifyCh <- false
-	time.Sleep(time.Second)
 	select {
 	case <-s.stepDown:
-
-	default:
+	case <-time.After(time.Second):
 		t.Fatal(fmt.Errorf("leader should step down"))
 	}
 }
@@ -582,11 +580,12 @@ func Test_getSnapshotV2(t *testing.T) {
 	schema := meta2.NewCleanSchema(0)
 	s := &Store{
 		data: &meta2.Data{
-			Term:         1,
-			Index:        2,
-			ClusterID:    3,
-			ClusterPtNum: 4,
-			PtNumPerNode: 5,
+			Term:                           1,
+			Index:                          2,
+			UpdateNodeTmpIndexCommandStart: 2,
+			ClusterID:                      3,
+			ClusterPtNum:                   4,
+			PtNumPerNode:                   5,
 
 			Databases: map[string]*meta2.DatabaseInfo{
 				"db0": {
@@ -617,7 +616,7 @@ func Test_getSnapshotV2(t *testing.T) {
 	}
 	var err error
 
-	dataPb := s.data.Marshal(false)
+	dataPb := s.data.Marshal()
 	dataOps := meta2.NewDataOpsOfAllClear(int(meta2.AllClear), dataPb, *dataPb.Index)
 	expStr1 := dataOps.Marshal()
 	meta2.DataLogger = logger.GetLogger().With(zap.String("service", "data"))
@@ -657,6 +656,7 @@ func Test_getSnapshotV2(t *testing.T) {
 	s.data.OpsMap = make(map[uint64]*meta2.Op)
 	s.data.AddCmdAsOpToOpMap(*cmd2, 3)
 	s.data.Index = 3
+	s.data.UpdateNodeTmpIndexCommandStart = 3
 	storeBytes2 := s.getSnapshotV2(metaclient.STORE, 2, 2)
 	dataOps = &meta2.DataOps{}
 	if err = dataOps.UnmarshalBinary(storeBytes2); err != nil {
@@ -684,10 +684,14 @@ func Test_getSnapshotV2(t *testing.T) {
 	storeBytes5 := s.getSnapshotV2(metaclient.STORE, 4, 2)
 	require.Equal(t, len(storeBytes5), 0)
 	s.data.Index = 4
+	s.data.UpdateNodeTmpIndexCommandStart = 4
 	dataOps6 := meta2.NewDataOps(nil, s.data.MaxCQChangeID, int(meta2.NoClear), s.data.Index)
 	expStr3 := dataOps6.Marshal()
 	storeBytes6 := s.getSnapshotV2(metaclient.STORE, 3, 2)
 	require.Equal(t, storeBytes6, expStr3)
+	s.data.Index = 5
+	storeBytes7 := s.getSnapshotV2(metaclient.STORE, 4, 2)
+	require.Equal(t, len(storeBytes7), 0)
 }
 
 func Test_ClearOpsMap(t *testing.T) {
@@ -901,7 +905,7 @@ func Test_DeleteDbForLogkeeper(t *testing.T) {
 			},
 			Databases: map[string]*meta2.DatabaseInfo{
 				"db0": &meta2.DatabaseInfo{Name: "db0"},
-				"db1": &meta2.DatabaseInfo{Name: "db0", Options: &obs.ObsOptions{}},
+				"db1": &meta2.DatabaseInfo{Name: "db1", Options: &obs.ObsOptions{}},
 			},
 		},
 		NetStore: NewMockNetStorage(),
@@ -917,6 +921,10 @@ func Test_DeleteDbForLogkeeper(t *testing.T) {
 	}
 	err = s.deleteDatabase("db2")
 	if err != nil {
+		t.Errorf("deleteDatabase failed, err:%+v", err)
+	}
+	err = s.deleteDbDir("db3", &obs.ObsOptions{})
+	if err == nil {
 		t.Errorf("deleteDatabase failed, err:%+v", err)
 	}
 }

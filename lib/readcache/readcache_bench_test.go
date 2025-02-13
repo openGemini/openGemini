@@ -30,7 +30,7 @@ func BenchmarkAdd(b *testing.B) {
 
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		cacheIns.AddPage(cacheIns.CreateCacheKey(path, int64(i)), dataB, int64(len(dataB)))
+		cacheIns.AddPage(cacheIns.CreateCacheKey(path, int64(i)), dataB, int64(len(dataB)), MetaCachePool)
 	}
 }
 
@@ -55,7 +55,7 @@ func BenchmarkParallelAdd(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			key := cacheIns.CreateCacheKey(path, int64(counterNew))
-			cacheIns.AddPage(key, dataB, int64(len(dataB)))
+			cacheIns.AddPage(key, dataB, int64(len(dataB)), MetaCachePool)
 			counterNew = atomic.AddInt32(&counter, 1)
 			counter = counterNew
 		}
@@ -87,7 +87,7 @@ func BenchmarkAddWithLimit(b *testing.B) {
 
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		cacheIns.AddPage(cacheIns.CreateCacheKey(path, int64(i)), dataB, int64(len(dataB)))
+		cacheIns.AddPage(cacheIns.CreateCacheKey(path, int64(i)), dataB, int64(len(dataB)), MetaCachePool)
 	}
 }
 
@@ -103,7 +103,7 @@ func BenchmarkParallelAddWithLimit(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			key := cacheIns.CreateCacheKey(path, int64(counter))
-			cacheIns.AddPage(key, dataB, int64(len(dataB)))
+			cacheIns.AddPage(key, dataB, int64(len(dataB)), MetaCachePool)
 			counterNew = atomic.AddInt32(&counter, 1)
 			counter = counterNew
 		}
@@ -116,7 +116,7 @@ func BenchmarkParallelRead(b *testing.B) {
 	cacheIns := GetReadMetaCacheIns()
 	for i := 0; i < 10000; i++ {
 		key := cacheIns.CreateCacheKey(path, int64(i))
-		cacheIns.AddPage(key, dataB, int64(len(dataB)))
+		cacheIns.AddPage(key, dataB, int64(len(dataB)), MetaCachePool)
 	}
 
 	b.StartTimer()
@@ -142,7 +142,7 @@ func BenchmarkParallelReadWrite(b *testing.B) {
 		id := rand.Intn(10000)
 		for pb.Next() {
 			key := cacheIns.CreateCacheKey(path, int64(id))
-			cacheIns.AddPage(key, dataB, int64(len(dataB)))
+			cacheIns.AddPage(key, dataB, int64(len(dataB)), MetaCachePool)
 			if _, isGet := cacheIns.Get(key); !isGet {
 				miss++
 			}
@@ -157,7 +157,7 @@ func BenchmarkFileDelete(b *testing.B) {
 		path_tmp := path + strconv.Itoa(i)
 		for j := 0; j < 100; j++ {
 			key := cacheIns.CreateCacheKey(path_tmp, int64(j))
-			cacheIns.AddPage(key, dataB, int64(len(dataB)))
+			cacheIns.AddPage(key, dataB, int64(len(dataB)), MetaCachePool)
 		}
 	}
 
@@ -178,7 +178,7 @@ func BenchmarkParallelFileDelete(b *testing.B) {
 		path_tmp := path + strconv.Itoa(i)
 		for j := 0; j < 100; j++ {
 			key := cacheIns.CreateCacheKey(path_tmp, int64(j))
-			cacheIns.AddPage(key, dataB, int64(len(dataB)))
+			cacheIns.AddPage(key, dataB, int64(len(dataB)), MetaCachePool)
 		}
 	}
 
@@ -200,7 +200,7 @@ func BenchmarkRefresh(b *testing.B) {
 
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		cacheIns.AddPage(cacheIns.CreateCacheKey(path, int64(i)), dataB, int64(len(dataB)))
+		cacheIns.AddPage(cacheIns.CreateCacheKey(path, int64(i)), dataB, int64(len(dataB)), MetaCachePool)
 	}
 }
 
@@ -216,7 +216,7 @@ func BenchmarkParallelRefresh(b *testing.B) {
 	b.StartTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			cacheIns.AddPage(cacheIns.CreateCacheKey(path, int64(counterNew)), dataB, int64(len(dataB)))
+			cacheIns.AddPage(cacheIns.CreateCacheKey(path, int64(counterNew)), dataB, int64(len(dataB)), MetaCachePool)
 			counterNew = atomic.AddInt32(&counter, 1)
 			counter = counterNew
 		}

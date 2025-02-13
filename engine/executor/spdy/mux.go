@@ -54,6 +54,7 @@ const (
 	PtRequest
 	WriteStreamPointsRequest
 	SegregateNodeRequest
+	TransferLeadershipRequest
 	CrashRequest
 	RaftMsgRequest
 	Unknown

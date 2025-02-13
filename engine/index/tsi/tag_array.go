@@ -246,8 +246,7 @@ func unmarshalCombineIndexKeys(indexKeys [][]byte, src []byte) ([][]byte, int, e
 	}
 	// fast path, only one indexkey
 	if hasOneKey(src) {
-		indexKeys = resizeSeriesKeys(indexKeys, 1)
-		indexKeys[0] = src
+		indexKeys = append(indexKeys[:0], src)
 		return indexKeys, 1, nil
 	}
 

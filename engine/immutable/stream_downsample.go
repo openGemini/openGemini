@@ -18,6 +18,7 @@ package immutable
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -88,6 +89,8 @@ type StreamWriteFile struct {
 	rowCount       map[string]int
 	enableValidate bool
 	tier           uint64
+
+	chunkMetaCodecCtx *ChunkMetaCodecCtx
 }
 
 func NewWriteScanFile(mst string, m *MmsTables, file TSSPFile, schema record.Schemas) (*StreamWriteFile, error) {
@@ -130,7 +133,6 @@ func (c *StreamWriteFile) NewFile(addFileExt bool) error {
 	}
 	c.reset()
 	c.trailer.name = append(c.trailer.name[:0], influx.GetOriginMstName(c.name)...)
-	c.inMemBlock = emptyMemReader
 
 	lock := fileops.FileLockOption(*c.lock)
 	pri := fileops.FilePriorityOption(fileops.IO_PRIORITY_NORMAL)
@@ -145,7 +147,7 @@ func (c *StreamWriteFile) NewFile(addFileExt bool) error {
 	if c.tier == util.Cold {
 		c.fd, err = fileops.CreateV2(filePath, lock, pri)
 	} else {
-		c.fd, err = fileops.OpenFile(filePath, os.O_CREATE|os.O_RDWR, 0640, lock, pri)
+		c.fd, err = fileops.OpenFile(filePath, os.O_CREATE|os.O_RDWR, 0600, lock, pri)
 	}
 
 	if err != nil {
@@ -154,6 +156,9 @@ func (c *StreamWriteFile) NewFile(addFileExt bool) error {
 	}
 
 	c.writer = newTsspFileWriter(c.fd, false, false, c.lock)
+	if c.file != nil && c.file.InMemSize() > 0 {
+		c.writer = NewHotFileWriter(c.writer)
+	}
 
 	var buf [16]byte
 	b := append(buf[:0], tableMagic...)
@@ -172,7 +177,7 @@ func (c *StreamWriteFile) NewFile(addFileExt bool) error {
 
 func (c *StreamWriteFile) NewTSSPFile(tmp bool) (TSSPFile, error) {
 	if err := c.Flush(); err != nil {
-		if err == errEmptyFile {
+		if errors.Is(err, errEmptyFile) {
 			return nil, nil
 		}
 		c.log.Error("flush error", zap.String("name", c.fd.Name()), zap.Error(err))
@@ -191,19 +196,19 @@ func (c *StreamWriteFile) NewTSSPFile(tmp bool) (TSSPFile, error) {
 		dr.avgChunkRows = 1
 	}
 
-	size := dr.InMemSize()
-	if c.fileName.order {
-		addMemSize(levelName(c.fileName.level), size, size, 0)
-	} else {
-		addMemSize(levelName(c.fileName.level), size, 0, size)
-	}
-
-	return &tsspFile{
+	f := &tsspFile{
 		name:   c.fileName,
 		reader: dr,
 		ref:    1,
 		lock:   c.lock,
-	}, nil
+	}
+	hotWriter, hot := c.writer.(*HotFileWriter)
+	if hot {
+		dr.ApplyHotReader(hotWriter.BuildHotFileReader(dr.GetBasicFileReader()))
+		hotWriter.Release()
+	}
+	c.writer = nil
+	return f, nil
 }
 
 func (c *StreamWriteFile) InitFile(seq uint64) error {
@@ -336,7 +341,7 @@ func (c *StreamWriteFile) WriteMeta(cm *ChunkMeta) error {
 	c.keys[cm.sid] = struct{}{}
 
 	if c.enableValidate {
-		cm.validation()
+		cm.Validation()
 	}
 
 	_, err := c.WriteChunkMeta(cm)
@@ -398,7 +403,12 @@ func (c *StreamWriteFile) SwitchChunkMeta() error {
 }
 
 func (c *StreamWriteFile) WriteChunkMeta(cm *ChunkMeta) (int, error) {
-	c.encChunkMeta = cm.marshal(c.encChunkMeta[:0])
+	buf, err := MarshalChunkMeta(c.chunkMetaCodecCtx, cm, c.encChunkMeta[:0])
+	if err != nil {
+		return 0, err
+	}
+
+	c.encChunkMeta = buf
 	c.cmOffset = append(c.cmOffset, uint32(c.currentCMOffset))
 	c.currentCMOffset += len(c.encChunkMeta)
 
@@ -530,14 +540,16 @@ func (c *StreamWriteFile) Flush() error {
 		return err
 	}
 
-	c.encIdTime = c.pair.Marshal(c.fileName.order, c.encIdTime[:0], c.colBuilder.coder)
+	c.encIdTime = c.pair.Marshal(true, c.encIdTime[:0], c.colBuilder.coder)
 	c.trailer.idTimeSize = int64(len(c.encIdTime))
 	if _, err := c.writer.WriteData(c.encIdTime); err != nil {
 		c.log.Error("write id time data fail", zap.String("name", c.fd.Name()), zap.Error(err))
 		return err
 	}
+	c.trailer.EnableTimeStore()
+	c.trailer.SetChunkMetaHeader(c.chunkMetaCodecCtx.GetHeader())
 	c.trailer.SetChunkMetaCompressFlag()
-	c.trailerData = c.trailer.marshal(c.trailerData[:0])
+	c.trailerData = c.trailer.Marshal(c.trailerData[:0])
 
 	trailerOffset := c.writer.DataSize()
 	if _, err := c.writer.WriteData(c.trailerData); err != nil {
@@ -556,7 +568,6 @@ func (c *StreamWriteFile) Flush() error {
 	if err := c.writer.Close(); err != nil {
 		c.log.Error("close file fail", zap.String("name", c.fd.Name()), zap.Error(err))
 	}
-	c.writer = nil
 
 	return nil
 }
