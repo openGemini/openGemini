@@ -16,7 +16,7 @@ require (
 	github.com/cockroachdb/errors v1.9.1
 	github.com/deckarep/golang-set v1.8.0
 	github.com/docker/go-units v0.5.0
-	github.com/golang-jwt/jwt/v5 v5.0.0
+	github.com/golang-jwt/jwt/v5 v5.2.2
 	github.com/golang/snappy v0.0.5-0.20231225225746-43d5d4cd4e0e
 	github.com/gorilla/mux v1.8.1
 	github.com/hashicorp/golang-lru/v2 v2.0.7
