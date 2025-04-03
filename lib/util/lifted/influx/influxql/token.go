@@ -221,6 +221,7 @@ var tokens = [...]string{
 	LIKE:           "LIKE",
 	MATCH:          "MATCH",
 	MATCHPHRASE:    "MATCHPHRASE",
+	IPINRANGE:      "IPINRANGE",
 	ENGINETYPE:     "ENGINETYPE",
 	COLUMNSTORE:    "COLUMNSTORE",
 	TSSTORE:        "TSSTORE",
@@ -382,6 +383,7 @@ var operatorMap = map[Token]int{
 
 	MATCH:       MATCH,
 	MATCHPHRASE: MATCHPHRASE,
+	IPINRANGE:   IPINRANGE,
 	LIKE:        LIKE,
 }
 
@@ -398,7 +400,7 @@ func (tok Token) Precedence() int {
 		return 4
 	case MUL, DIV, MOD, BITWISE_AND:
 		return 5
-	case MATCH, MATCHPHRASE, LIKE:
+	case MATCH, MATCHPHRASE, LIKE, IPINRANGE:
 		return 6
 	}
 	return 0

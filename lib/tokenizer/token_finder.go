@@ -50,6 +50,9 @@ func (t *SimpleTokenFinder) InitInput(content []byte, token []byte) {
 
 func (t *SimpleTokenFinder) Next() bool {
 	for {
+		if len(t.token) == 0 && len(t.content) == 0 {
+			return true
+		}
 		found := indexOf(t.content, t.token, t.fromIndex)
 		if found < 0 {
 			return false
@@ -94,7 +97,7 @@ func indexOf(source []byte, target []byte, from int) int {
 		from = 0
 	}
 	if targetCount == 0 {
-		return from
+		return -1
 	}
 
 	max := sourceCount - targetCount

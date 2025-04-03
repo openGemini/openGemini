@@ -111,10 +111,10 @@ func (storage *columnstoreImpl) writeSnapshot(s *shard) {
 	}()
 }
 
-func (storage *columnstoreImpl) flush(s *shard, idx int, curSize int64, walFiles []string, start time.Time) {
+func (storage *columnstoreImpl) flush(s *shard, idx int, curSize int64, walFiles *WalFiles, start time.Time) {
 	s.commitSnapshot(storage.snapshotContainer[idx])
 	nodeMutableLimit.freeResource(curSize)
-	err := s.wal.Remove(walFiles)
+	err := removeWalFiles(walFiles)
 	if err != nil {
 		panic("wal remove files failed: " + err.Error())
 	}
@@ -217,7 +217,7 @@ func (storage *columnstoreImpl) updateMstMap(s *shard, rows influx.Rows, mw *mst
 		if err != nil {
 			return err
 		}
-		ri := cloneRowToDict(mmPoints, mw, &rows[i])
+		ri := cloneRowToDict(mmPoints, mw, &rows[i], len(rows))
 		if ri.Timestamp > tm {
 			tm = ri.Timestamp
 		}

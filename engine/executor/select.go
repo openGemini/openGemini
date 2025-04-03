@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
@@ -159,6 +160,10 @@ func NewMultiMstReqs() *MultiMstReqs {
 	return &MultiMstReqs{
 		reqs: make([]*RemoteQuery, 0),
 	}
+}
+
+func (m *MultiMstReqs) SetReqs(reqs []*RemoteQuery) {
+	m.reqs = reqs
 }
 
 func (p *preparedStatement) BuildLogicalPlan(ctx context.Context) (hybridqp.QueryNode, hybridqp.Trait, error) {
@@ -412,13 +417,22 @@ func BuildBinOpQueryPlan(ctx context.Context, qc query.LogicalPlanCreator, stmt 
 	if len(binOpNodes) == 0 {
 		return nil, nil
 	}
+
 	var binop hybridqp.QueryNode
-	if binOps[0].NilMst == influxql.NoNilMst {
-		binop = NewLogicalBinOp(binOpNodes[0], binOpNodes[1], binOps[0], schema)
-	} else if binOps[0].NilMst == influxql.LNilMst {
-		binop = NewLogicalBinOp(nil, binOpNodes[0], binOps[0], schema)
+	if len(binOpNodes) == 1 && binOps[0].NilMst == influxql.NoNilMst {
+		if binOps[0].LExpr != nil {
+			binop = NewLogicalBinOp(nil, binOpNodes[0], binOps[0].LExpr, nil, binOps[0], schema)
+		} else if binOps[0].RExpr != nil {
+			binop = NewLogicalBinOp(binOpNodes[0], nil, nil, binOps[0].RExpr, binOps[0], schema)
+		}
 	} else {
-		binop = NewLogicalBinOp(binOpNodes[0], nil, binOps[0], schema)
+		if binOps[0].NilMst == influxql.NoNilMst {
+			binop = NewLogicalBinOp(binOpNodes[0], binOpNodes[1], nil, nil, binOps[0], schema)
+		} else if binOps[0].NilMst == influxql.LNilMst {
+			binop = NewLogicalBinOp(nil, binOpNodes[0], nil, nil, binOps[0], schema)
+		} else {
+			binop = NewLogicalBinOp(binOpNodes[0], nil, nil, nil, binOps[0], schema)
+		}
 	}
 
 	schema.Options().SetBinOp(true)
@@ -550,13 +564,24 @@ func buildAggNode(builder *LogicalPlanBuilderImpl, schema hybridqp.Catalog, hasS
 		(schema.CanAggPushDown() && sysconfig.GetEnableSlidingWindowPushUp() == sysconfig.OnSlidingWindowPushUp) || schema.HasSubQuery()) {
 		builder.SlidingWindow()
 	} else {
-		if !schema.Options().IsRangeVectorSelector() || schema.HasPromNestedCall() {
+		if !schema.Options().IsRangeVectorSelector() || schema.HasPromNestedCall() || schema.IsPromAbsentCall() {
 			if isBuildHashAgg(schema.Options()) {
 				builder.HashAgg()
 				return
 			}
 			builder.Aggregate()
 		}
+	}
+}
+
+func buildSortNode(builder *LogicalPlanBuilderImpl, schema hybridqp.Catalog, s *QuerySchema) {
+	isSubQuery := schema.Sources().IsSubQuery()
+	isPromQuery := schema.Options().IsPromQuery()
+	HaveOnlyCSStore := schema.Options().HaveOnlyCSStore()
+	if HaveOnlyCSStore || isSubQuery {
+		builder.Sort()
+	} else if isPromQuery {
+		builder.PromSort()
 	}
 }
 
@@ -590,8 +615,10 @@ func buildNodes(builder *LogicalPlanBuilderImpl, schema hybridqp.Catalog, s *Que
 
 	builder.Project()
 
-	for _, call := range s.PromSubCalls {
-		builder.PromSubquery(call)
+	if len(s.PromSubCalls) > 0 {
+		for _, call := range s.PromSubCalls {
+			builder.PromSubquery(call)
+		}
 	}
 
 	if schema.HasBlankRowCall() {
@@ -608,8 +635,8 @@ func buildNodes(builder *LogicalPlanBuilderImpl, schema hybridqp.Catalog, s *Que
 		builder.Fill()
 	}
 
-	if hasSort && (HaveOnlyCSStore || isSubQuery) {
-		builder.Sort()
+	if hasSort {
+		buildSortNode(builder, schema, s)
 	}
 
 	// Apply limit & offset.
@@ -716,7 +743,7 @@ func BuildSources(ctx context.Context, qc query.LogicalPlanCreator, sources infl
 			builder.Filter()
 		}
 		builder.SubQuery()
-		if !schema.opt.IsPromQuery() || (!outerBinOp && schema.HasCall()) {
+		if !schema.opt.IsPromQuery() || (!outerBinOp && schema.HasCall() && !schema.HasPromAbsentCall()) {
 			builder.GroupBy()
 			builder.OrderBy()
 		}
@@ -764,7 +791,7 @@ func RebuildColumnStorePlan(plan hybridqp.QueryNode) []hybridqp.QueryNode {
 			} else if n.eType == PARTITION_EXCHANGE {
 				eType = PARTITION_EXCHANGE
 			}
-			if plan.Schema().HasCall() && (plan.Schema().CanAggPushDown() || eType == NODE_EXCHANGE) {
+			if plan.Schema().HasCall() && (plan.Schema().CanAggPushDown() || eType == NODE_EXCHANGE || plan.Schema().HasTopNDDCM()) {
 				node := NewLogicalHashAgg(p[0], plan.Schema(), eType, eTraits)
 				if node.schema.HasCall() {
 					n := findChildAggNode(plan)
@@ -825,7 +852,7 @@ func RebuildAggNodes(plan hybridqp.QueryNode) {
 	}
 	if childPlan, ok := plan.Children()[0].(*LogicalAggregate); ok {
 		switch childPlan.Children()[0].(type) {
-		case *LogicalOrderBy, *LogicalSortAppend, *LogicalFullJoin, *LogicalGroupBy, *LogicalSubQuery, *LogicalSort:
+		case *LogicalOrderBy, *LogicalSortAppend, *LogicalFullJoin, *LogicalGroupBy, *LogicalSubQuery, *LogicalSort, *LogicalPromSort:
 		default:
 			plan.SetInputs(plan.Children()[0].Children())
 		}
@@ -846,7 +873,11 @@ func ReplaceSortAggWithHashAgg(plan hybridqp.QueryNode) []hybridqp.QueryNode {
 		p := ReplaceSortAggWithHashAgg(child)
 		switch plan.(type) {
 		case *LogicalAggregate:
-			node := NewLogicalHashAgg(p[0], plan.Schema(), NODE_EXCHANGE, nil)
+			eType := NODE_EXCHANGE
+			if len(plan.(*LogicalAggregate).callsOrder) == 1 && strings.HasPrefix(plan.(*LogicalAggregate).callsOrder[0], "topn_ddcm") {
+				eType = SUBQUERY_EXCHANGE
+			}
+			node := NewLogicalHashAgg(p[0], plan.Schema(), eType, nil)
 			if node.schema.HasCall() {
 				n1 := findChildAggNode(plan)
 				if n1 != nil {

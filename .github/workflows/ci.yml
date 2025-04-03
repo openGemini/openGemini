@@ -67,7 +67,7 @@ jobs:
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v3.6.0
         with:
-          version: v1.53
+          version: v1.56
 #          args: --timeout=10m --tests=false --skip-dirs=lifted --skip-dirs=tests
           args: --disable=staticcheck --timeout=10m --tests=false --skip-dirs=lifted --skip-dirs=tests
           only-new-issues: true

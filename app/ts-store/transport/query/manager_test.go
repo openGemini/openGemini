@@ -145,3 +145,17 @@ func TestVisitManagers(t *testing.T) {
 	VisitManagers(testFn)
 	assert.Equal(t, len(clientIDs)*mockQueriesNum, count)
 }
+
+func TestManager_NoMarkCrash(t *testing.T) {
+	var seq uint64 = 10
+	query := &mockQuery{id: 10}
+
+	qm := NewManager(clientIDs[0])
+	qm.Add(seq, query)
+
+	qm.NoMarkCrash(10)
+	assert.Equal(t, qm.Aborted(10), false)
+
+	qm.NoMarkAbort(10)
+	assert.Equal(t, qm.Aborted(10), false)
+}

@@ -381,27 +381,8 @@ func TestAggPushdownToExchangeRuleWithPreCount(t *testing.T) {
 	}
 }
 
-func TestAggPushDownToSubQueryRuleWithStr(t *testing.T) {
-	fieldsSub := influxql.Fields{}
-	columnsName := []string{"str"}
-	opt := query.ProcessorOptions{}
-
-	schema := executor.NewQuerySchema(fieldsSub, columnsName, &opt, nil)
-	stringCall := influxql.Call{
-		Name: "str",
-		Args: []influxql.Expr{
-			&influxql.VarRef{
-				Val:  "address",
-				Type: influxql.String,
-			},
-			&influxql.StringLiteral{
-				Val: "sh",
-			},
-		},
-	}
-	schema.AddString("str(address::string, 'sh')", &stringCall)
-	planBuilder := executor.NewLogicalPlanBuilderImpl(schema)
-
+func testAggPushDownToSubQueryRule(t *testing.T, schemaIn, schemaOut *executor.QuerySchema) hybridqp.QueryNode {
+	planBuilder := executor.NewLogicalPlanBuilderImpl(schemaIn)
 	var plan hybridqp.QueryNode
 	var err error
 	if plan, err = planBuilder.CreateSeriesPlan(); err != nil {
@@ -427,21 +408,6 @@ func TestAggPushDownToSubQueryRuleWithStr(t *testing.T) {
 		t.Error(err.Error())
 	}
 
-	fields := influxql.Fields{
-		&influxql.Field{
-			Expr: &influxql.Call{
-				Name: "count",
-				Args: []influxql.Expr{
-					&influxql.VarRef{
-						Val:  "str",
-						Type: influxql.String,
-					},
-				},
-			},
-		},
-	}
-
-	schemaOut := executor.NewQuerySchema(fields, columnsName, &opt, nil)
 	planBuilderOut := executor.NewLogicalPlanBuilderImpl(schemaOut)
 	planBuilderOut.Push(plan)
 	planBuilderOut.GroupBy()
@@ -472,12 +438,88 @@ func TestAggPushDownToSubQueryRuleWithStr(t *testing.T) {
 	planner.AddRule(spreadToReader)
 	planner.SetRoot(plan)
 
-	best := planner.FindBestExp()
+	return planner.FindBestExp()
+}
 
+func TestAggPushDownToSubQueryRuleWithCountDistinct(t *testing.T) {
+	fieldsSub := influxql.Fields{
+		&influxql.Field{
+			Expr: &influxql.VarRef{
+				Val:  "value",
+				Type: influxql.Float,
+			},
+			Alias: "a",
+		},
+	}
+	columnsName := []string{"a"}
+	opt := query.ProcessorOptions{}
+	schema := executor.NewQuerySchema(fieldsSub, columnsName, &opt, nil)
+	fields := influxql.Fields{
+		&influxql.Field{
+			Expr: &influxql.Call{
+				Name: "count",
+				Args: []influxql.Expr{
+					&influxql.Call{
+						Name: "distinct",
+						Args: []influxql.Expr{
+							&influxql.VarRef{Val: "a", Type: influxql.Float},
+						},
+					},
+				},
+			},
+		},
+	}
+	columnsName = []string{"count"}
+	schemaOut := executor.NewQuerySchema(fields, columnsName, &opt, nil)
+	best := testAggPushDownToSubQueryRule(t, schema, schemaOut)
 	if best == nil {
 		t.Error("no best plan found")
 	}
+	goal := best.Schema().GetColumnNames()[0]
+	if goal != "count" {
+		t.Errorf("subquery count(disintct) push down failed")
+	}
+	if !best.Schema().HasCall() {
+		t.Errorf("subquery count(disintct) push down failed")
+	}
+}
 
+func TestAggPushDownToSubQueryRuleWithStr(t *testing.T) {
+	fieldsSub := influxql.Fields{}
+	columnsName := []string{"str"}
+	opt := query.ProcessorOptions{}
+	schema := executor.NewQuerySchema(fieldsSub, columnsName, &opt, nil)
+	stringCall := influxql.Call{
+		Name: "str",
+		Args: []influxql.Expr{
+			&influxql.VarRef{
+				Val:  "address",
+				Type: influxql.String,
+			},
+			&influxql.StringLiteral{
+				Val: "sh",
+			},
+		},
+	}
+	schema.AddString("str(address::string, 'sh')", &stringCall)
+	fields := influxql.Fields{
+		&influxql.Field{
+			Expr: &influxql.Call{
+				Name: "count",
+				Args: []influxql.Expr{
+					&influxql.VarRef{
+						Val:  "str",
+						Type: influxql.String,
+					},
+				},
+			},
+		},
+	}
+	schemaOut := executor.NewQuerySchema(fields, columnsName, &opt, nil)
+	best := testAggPushDownToSubQueryRule(t, schema, schemaOut)
+	if best == nil {
+		t.Error("no best plan found")
+	}
 	if !best.Schema().HasCall() {
 		t.Errorf("agg can't push down while has string function ")
 	}
@@ -1544,4 +1586,21 @@ func TestAggPushDownWithPromNestedCall(t *testing.T) {
 	if verifier.AggCount() != 5 && executor.GetEnableFileCursor() {
 		t.Errorf("5 agg in plan tree, but %d", verifier.AggCount())
 	}
+}
+
+func TestAgg2SubQueryQueryCountDistinct(t *testing.T) {
+	fields := influxql.Fields{&influxql.Field{Expr: &influxql.VarRef{Val: "count", Type: influxql.Integer}}}
+	outSchema := executor.NewQuerySchema(fields, []string{"count"}, &query.ProcessorOptions{}, nil)
+	fields = influxql.Fields{&influxql.Field{Expr: &influxql.Call{Name: "count",
+		Args: []influxql.Expr{&influxql.Call{Name: "distinct",
+			Args: []influxql.Expr{&influxql.VarRef{Val: "value", Type: influxql.Float}}}}}}}
+	schema := executor.NewQuerySchema(fields, []string{"count"}, &query.ProcessorOptions{}, nil)
+	rule := executor.NewAggPushDownToSubQueryRule("")
+	reader := executor.NewLogicalReader(nil, schema)
+	agg := executor.NewLogicalAggregate(reader, schema)
+	merge := executor.NewLogicalExchange(agg, executor.READER_EXCHANGE, nil, agg.Schema())
+	project := executor.NewLogicalProject(merge, outSchema)
+	ruleCall := executor.NewOptRuleCall(nil, rule.GetOperand(), []hybridqp.QueryNode{agg, merge, project})
+	rule.OnMatch(ruleCall)
+	assert.False(t, project.Schema().HasCall())
 }

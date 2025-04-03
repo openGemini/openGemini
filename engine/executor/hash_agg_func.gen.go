@@ -45,6 +45,9 @@ const (
 	countPromFunc
 	minPromFunc
 	maxPromFunc
+	stdvarPromFunc
+	stddevPromFunc
+	groupPromFunc
 )
 
 const DefaultTime = 0

@@ -46,7 +46,10 @@ func TestOOOTimeDistribution(t *testing.T) {
 		"less240": int64(60),
 		"less480": int64(120),
 		"less960": int64(240),
-		"more960": int64(520),
+		"less1h":  int64(520),
+		"less8h":  int64(0),
+		"less24h": int64(0),
+		"more24h": int64(0),
 	}
 	require.NoError(t, compareBuffer(statistics.OOOTimeDistributionMst, tags, fields, buf))
 }

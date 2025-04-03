@@ -80,6 +80,17 @@ func TestSingleMeasurement(t *testing.T) {
 	checkFun(seq)
 }
 
+func TestMmsIdTimeOp(t *testing.T) {
+	seq := immutable.NewSequencer()
+	seq.AddRowCounts("mst1", 166000101, 2)
+	mmsIdTime := seq.GetMmsIdTime("mst1")
+	_, rowCount := mmsIdTime.Get(166000101)
+	assert.Equal(t, int64(2), rowCount)
+	assert.Equal(t, uint64(1), seq.SeriesTotal())
+	seq.DelMmsIdTime("mst1")
+	assert.Equal(t, uint64(0), seq.SeriesTotal())
+}
+
 func TestMultiMeasurement(t *testing.T) {
 	idTimess := map[string][]idTime{
 		"mst1": {
@@ -174,8 +185,12 @@ func TestMarshalIdTime(t *testing.T) {
 
 	encIdTime := immutable.GetIDTimePairs("mst")
 	defer immutable.PutIDTimePairs(encIdTime)
+	_, err := encIdTime.UnmarshalHeader(enc[:8])
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	_, err := encIdTime.Unmarshal(true, enc)
+	_, _, _, err = encIdTime.UnmarshalBlocks(true, enc[8:], 0, ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,21 +213,49 @@ func TestMarshalIdTime(t *testing.T) {
 }
 
 func TestMarshalIdTime_error(t *testing.T) {
+	ctx := encoding.NewCoderContext()
+	defer func() {
+		ctx.Release()
+	}()
+
 	idTimes := immutable.GetIDTimePairs("mst")
-	_, err := idTimes.Unmarshal(true, []byte{0, 0, 0, 0})
+	_, _, _, err := idTimes.UnmarshalBlocks(true, []byte{0, 0, 0, 0}, 0, ctx)
 	require.EqualError(t, err, "too small data for id time, 4")
 
 	idTimes.Add(1, 1)
 	idTimes.AddRowCounts(10)
 
-	buf := idTimes.Marshal(true, nil, encoding.NewCoderContext())
+	buf := idTimes.Marshal(true, nil, ctx)
+
+	_, err = idTimes.UnmarshalHeader(buf[:4])
+	require.EqualError(t, err, "too small data for id time header, 4")
+
+	_, err = idTimes.UnmarshalHeader(buf[:8])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	handleSize, _, _, err := idTimes.UnmarshalBlocks(true, buf[8:], 0, ctx)
+	require.NoError(t, err)
+	assert.Equal(t, len(buf)-8, handleSize)
+
+	handleSize, _, _, err = idTimes.UnmarshalBlocks(true, buf[8:48], 0, ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 0, handleSize)
+
 	buf[49] = 20
-	_, err = idTimes.Unmarshal(true, buf)
-	require.EqualError(t, err, "block smaller (20) data (17) for time length")
+	handleSize, _, _, err = idTimes.UnmarshalBlocks(true, buf[8:], 0, ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 0, handleSize)
 
 	buf[15] = 200
-	_, err = idTimes.Unmarshal(true, buf)
-	require.EqualError(t, err, "block smaller (200) data (51) for time length")
+	handleSize, _, _, err = idTimes.UnmarshalBlocks(true, buf[8:], 0, ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 0, handleSize)
+
+	buf[15] = 3
+	_, _, _, err = idTimes.UnmarshalBlocks(true, buf[8:], 0, ctx)
+	require.EqualError(t, err, "integer: invalid compressed len, 3")
 }
 
 func TestBatchUpdateCheckTime(t *testing.T) {

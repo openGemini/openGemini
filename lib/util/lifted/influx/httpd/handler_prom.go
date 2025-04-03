@@ -15,9 +15,12 @@
 package httpd
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"sort"
 	"strconv"
@@ -28,18 +31,29 @@ import (
 	prompb2 "github.com/VictoriaMetrics/VictoriaMetrics/lib/prompb"
 	Parser "github.com/VictoriaMetrics/VictoriaMetrics/lib/protoparser/promremotewrite"
 	"github.com/golang/snappy"
+	"github.com/gorilla/mux"
 	"github.com/influxdata/influxdb"
 	"github.com/influxdata/influxdb/models"
 	"github.com/influxdata/influxdb/prometheus"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/op"
+	"github.com/openGemini/openGemini/lib/bufferpool"
+	config2 "github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/consistenthash"
+	"github.com/openGemini/openGemini/lib/crypto"
+	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/pool"
+	"github.com/openGemini/openGemini/lib/proxy"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/syscontrol"
+	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/promql2influxql"
+	"github.com/openGemini/openGemini/lib/validation"
 	"github.com/prometheus/prometheus/prompb"
 	"github.com/prometheus/prometheus/promql/parser"
 	"go.uber.org/zap"
@@ -48,7 +62,25 @@ import (
 const (
 	EmptyPromMst string = ""
 	MetricStore  string = "metric_store"
+	WriteMetaOK  string = "true"
+
+	TSDB string = "tsdb"
 )
+
+var (
+	ErrTSDBNameEmpty   = errors.New("tsdb name should not be none")
+	ErrInvalidTSDBName = errors.New("invalid tsdb name")
+	ErrNoSamples       = errors.New("timeseries have no sample")
+	ErrNoMetadata      = errors.New("request have no metadata")
+)
+
+type RequestInfo struct {
+	h *Handler
+	w http.ResponseWriter
+	r *http.Request
+	u meta2.User
+	p *promQueryParam
+}
 
 // servePromWrite receives data in the Prometheus remote write protocol and writes into the database
 func (h *Handler) servePromWrite(w http.ResponseWriter, r *http.Request, user meta2.User) {
@@ -64,6 +96,23 @@ func (h *Handler) servePromWriteWithMetricStore(w http.ResponseWriter, r *http.R
 	h.servePromWriteBase(w, r, user, mst, timeSeries2RowsV2)
 }
 
+func (h *Handler) FilterInvalidTimeSeries(mst string, tss []prompb2.TimeSeries) (map[int]bool, error) {
+	inValidTs := make(map[int]bool)
+	if !validation.Limits().PromLimitEnabled(mst) {
+		return inValidTs, nil
+	}
+	var firstPartialErr error
+	for i, ts := range tss {
+		if err := validation.ValidateSeries(mst, &ts); err != nil {
+			inValidTs[i] = true
+			if firstPartialErr == nil {
+				firstPartialErr = err
+			}
+		}
+	}
+	return inValidTs, firstPartialErr
+}
+
 func (h *Handler) servePromWriteBase(w http.ResponseWriter, r *http.Request, user meta2.User, mst string, tansFunc timeSeries2RowsFunc) {
 	atomic.AddInt64(&statistics.HandlerStat.WriteRequests, 1)
 	atomic.AddInt64(&statistics.HandlerStat.ActiveWriteRequests, 1)
@@ -73,7 +122,6 @@ func (h *Handler) servePromWriteBase(w http.ResponseWriter, r *http.Request, use
 		atomic.AddInt64(&statistics.HandlerStat.ActiveWriteRequests, -1)
 		atomic.AddInt64(&statistics.HandlerStat.WriteRequestDuration, d)
 	}(time.Now())
-	h.requestTracker.Add(r, user)
 
 	if syscontrol.DisableWrites {
 		h.httpError(w, `disable write!`, http.StatusForbidden)
@@ -81,20 +129,23 @@ func (h *Handler) servePromWriteBase(w http.ResponseWriter, r *http.Request, use
 		return
 	}
 
-	db, rp := getDbRpByProm(r)
+	db, rp := getDbRpByProm(h, r)
 	if _, err := h.MetaClient.Database(db); err != nil {
 		h.httpError(w, fmt.Sprintf(err.Error()), http.StatusNotFound)
+		h.Logger.Error("servePromWriteBase error", zap.Error(err))
 		return
 	}
 
 	if h.Config.AuthEnabled {
 		if user == nil {
 			h.httpError(w, fmt.Sprintf("user is required to write to database %q", db), http.StatusForbidden)
+			h.Logger.Error("user is required to write to database", zap.String("db", db))
 			return
 		}
 
 		if err := h.WriteAuthorizer.AuthorizeWrite(user.ID(), db); err != nil {
 			h.httpError(w, fmt.Sprintf("%q user is not authorized to write to database %q", user.ID(), db), http.StatusForbidden)
+			h.Logger.Error("servePromWriteBase error", zap.Error(err))
 			return
 		}
 	}
@@ -107,20 +158,36 @@ func (h *Handler) servePromWriteBase(w http.ResponseWriter, r *http.Request, use
 	if r.ContentLength > 0 {
 		if h.Config.MaxBodySize > 0 && r.ContentLength > int64(h.Config.MaxBodySize) {
 			h.httpError(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
+			h.Logger.Error("servePromWriteBase error: request entity too large")
 			return
 		}
+	}
+
+	if isMetaDataReq(r) {
+		h.servePromWriteMetaData(w, body, db, rp, mst)
+		return
 	}
 
 	err := Parser.ParseStream(body, func(tss []prompb2.TimeSeries) error {
 		var maxPoints int
 		var err error
-		for _, ts := range tss {
+		inValidTs, partialErr := h.FilterInvalidTimeSeries(mst, tss)
+		for i, ts := range tss {
+			if inValidTs[i] {
+				continue
+			}
 			maxPoints += len(ts.Samples)
 		}
-
+		if maxPoints == 0 {
+			if partialErr != nil {
+				return partialErr
+			}
+			return ErrNoSamples
+		}
 		rs := pool.GetRows(maxPoints)
+		*rs = (*rs)[:maxPoints]
 		defer pool.PutRows(rs)
-		*rs, err = tansFunc(mst, *rs, tss)
+		*rs, err = tansFunc(mst, *rs, tss, inValidTs)
 		if err != nil {
 			h.httpError(w, err.Error(), http.StatusBadRequest)
 			return err
@@ -132,13 +199,103 @@ func (h *Handler) servePromWriteBase(w http.ResponseWriter, r *http.Request, use
 			h.httpError(w, err.Error(), http.StatusForbidden)
 		} else if err != nil {
 			h.httpError(w, err.Error(), http.StatusInternalServerError)
+		} else if partialErr != nil {
+			h.Logger.Error("servePromWriteBase partial error:", zap.Error(partialErr))
+			h.httpError(w, partialErr.Error(), http.StatusBadRequest)
 		}
 		return err
 	})
 
 	if err != nil {
 		h.httpError(w, err.Error(), http.StatusBadRequest)
+		h.Logger.Error("servePromWriteBase error", zap.Error(err))
 		return
+	}
+	h.writeHeader(w, http.StatusNoContent)
+}
+
+func (h *Handler) FilterInvalidMetaData(mst string, metadata []prompb.MetricMetadata) (map[int]bool, error) {
+	invalidMd := make(map[int]bool)
+	if !validation.Limits().PromLimitEnabled(mst) {
+		return invalidMd, nil
+	}
+	var firstPartialErr error
+	for i, md := range metadata {
+		if err := validation.ValidateMetadata(mst, &md); err != nil {
+			invalidMd[i] = true
+			if firstPartialErr == nil {
+				firstPartialErr = err
+			}
+		}
+	}
+	return invalidMd, firstPartialErr
+}
+
+// servePromWriteMetaData used to support the MetaData of prom writing
+// The Metadata and Timeseries are written in different batches.
+func (h *Handler) servePromWriteMetaData(w http.ResponseWriter, body io.Reader, db, rp, mst string) {
+	var err error
+	bf := bufferpool.Get()
+	defer bufferpool.Put(bf)
+	buf := bytes.NewBuffer(bf)
+	if _, err = buf.ReadFrom(body); err != nil {
+		h.Logger.Error("servePromWriteMetaData error", zap.Error(err))
+		if err == errTruncated {
+			h.httpError(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
+			return
+		}
+		h.httpError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if h.Config.WriteTracing {
+		h.Logger.Info("Prom write body received by handler", zap.ByteString("body", buf.Bytes()))
+	}
+	dst := bufferpool.Get()
+	defer bufferpool.Put(dst)
+	dst, err = snappy.Decode(dst, buf.Bytes())
+	if err != nil {
+		h.httpError(w, err.Error(), http.StatusBadRequest)
+		h.Logger.Error("servePromWriteMetaData error", zap.Error(err))
+		return
+	}
+	var req prompb.WriteRequest
+	if err = req.Unmarshal(dst); err != nil {
+		h.httpError(w, err.Error(), http.StatusBadRequest)
+		h.Logger.Error("servePromWriteMetaData error", zap.Error(err))
+		return
+	}
+	mds := req.Metadata
+	invalidMd, partialErr := h.FilterInvalidMetaData(mst, mds)
+	if len(mds) == 0 || len(invalidMd) == len(mds) {
+		if partialErr != nil {
+			h.httpError(w, partialErr.Error(), http.StatusBadRequest)
+			return
+		}
+		h.httpError(w, ErrNoMetadata.Error(), http.StatusBadRequest)
+		return
+	}
+	rs := pool.GetRows(len(mds))
+	*rs = (*rs)[:len(mds)]
+	defer pool.PutRows(rs)
+	timeStamp := int64(time.Now().Nanosecond())
+	for i := range mds {
+		if invalidMd[i] {
+			continue
+		}
+		promMetaData2Row(mst, &(*rs)[i], &mds[i], timeStamp)
+	}
+	if err = h.PointsWriter.RetryWritePointRows(db, rp, *rs); influxdb.IsClientError(err) {
+		h.httpError(w, err.Error(), http.StatusBadRequest)
+		h.Logger.Error("servePromWriteMetaData: client error", zap.Error(err))
+	} else if influxdb.IsAuthorizationError(err) {
+		h.httpError(w, err.Error(), http.StatusForbidden)
+		h.Logger.Error("servePromWriteMetaData: authorization error", zap.Error(err))
+	} else if err != nil {
+		h.httpError(w, err.Error(), http.StatusInternalServerError)
+		h.Logger.Error("servePromWriteMetaData error", zap.Error(err))
+	} else if partialErr != nil {
+		h.httpError(w, partialErr.Error(), http.StatusBadRequest)
+		h.Logger.Error("servePromWriteMetaData partial error", zap.Error(partialErr))
 	}
 	h.writeHeader(w, http.StatusNoContent)
 }
@@ -164,27 +321,34 @@ func (h *Handler) servePromReadBase(w http.ResponseWriter, r *http.Request, user
 		return
 	}
 	startTime := time.Now()
-	h.requestTracker.Add(r, user)
 	compressed, err := io.ReadAll(r.Body)
 	if err != nil {
 		h.httpError(w, err.Error(), http.StatusInternalServerError)
+		h.Logger.Error("servePromReadBase error", zap.Error(err))
 		return
 	}
 
 	reqBuf, err := snappy.Decode(nil, compressed)
 	if err != nil {
 		h.httpError(w, err.Error(), http.StatusBadRequest)
+		h.Logger.Error("servePromReadBase error", zap.Error(err))
 		return
 	}
 
 	var req prompb.ReadRequest
 	if err := req.Unmarshal(reqBuf); err != nil {
 		h.httpError(w, err.Error(), http.StatusBadRequest)
+		h.Logger.Error("servePromReadBase error", zap.Error(err))
 		return
 	}
 
-	db, rp := getDbRpByProm(r)
+	db, rp := getDbRpByProm(h, r)
 	queries, err := ReadRequestToInfluxQuery(&req, mst)
+	if err != nil {
+		h.httpError(w, err.Error(), http.StatusBadRequest)
+		h.Logger.Error("servePromReadBase error", zap.Error(err))
+		return
+	}
 	YyParser := &influxql.YyParser{
 		Query: influxql.Query{},
 	}
@@ -194,16 +358,20 @@ func (h *Handler) servePromReadBase(w http.ResponseWriter, r *http.Request, user
 
 	if err != nil {
 		h.httpError(w, err.Error(), http.StatusBadRequest)
+		h.Logger.Error("servePromReadBase error", zap.Error(err))
 		return
 	}
+	q.SetPromRemoteRead(true)
 
 	if h.Config.AuthEnabled {
 		if user == nil {
 			h.httpError(w, fmt.Sprintf("user is required to read from database %q", db), http.StatusForbidden)
+			h.Logger.Error("servePromReadBase error: user not exist")
 			return
 		}
 		if h.QueryAuthorizer.AuthorizeQuery(user, q, db) != nil {
 			h.httpError(w, fmt.Sprintf("user %q is not authorized to read from database %q", user.ID(), db), http.StatusForbidden)
+			h.Logger.Error("user is not authorized to read from database", zap.String("user", user.ID()), zap.String("db", db))
 			return
 		}
 	}
@@ -226,6 +394,7 @@ func (h *Handler) servePromReadBase(w http.ResponseWriter, r *http.Request, user
 		data, err := resp.Marshal()
 		if err != nil {
 			h.httpError(w, err.Error(), http.StatusInternalServerError)
+			h.Logger.Error("servePromReadBase error", zap.Error(err))
 			return
 		}
 
@@ -235,6 +404,7 @@ func (h *Handler) servePromReadBase(w http.ResponseWriter, r *http.Request, user
 		compressed = snappy.Encode(nil, data)
 		if _, err := w.Write(compressed); err != nil {
 			h.httpError(w, err.Error(), http.StatusInternalServerError)
+			h.Logger.Error("servePromReadBase error", zap.Error(err))
 			return
 		}
 	}
@@ -244,6 +414,7 @@ func (h *Handler) servePromReadBase(w http.ResponseWriter, r *http.Request, user
 	chunked, chunkSize, innerChunkSize, err := h.parseChunkSize(r)
 	if err != nil {
 		h.httpError(w, err.Error(), http.StatusBadRequest)
+		h.Logger.Error("servePromReadBase error", zap.Error(err))
 		return
 	}
 	opts := query.ExecutionOptions{
@@ -328,12 +499,14 @@ func (h *Handler) servePromReadBase(w http.ResponseWriter, r *http.Request, user
 				sample := &series.Samples[start+j]
 				if t, ok := s.Values[j][0].(time.Time); !ok {
 					h.httpError(w, "wrong time datatype, should be time.Time", http.StatusBadRequest)
+					h.Logger.Error("servePromReadBase error: wrong time datatype, should be time.Time", zap.Any("r", r))
 					return
 				} else {
 					sample.Timestamp = t.UnixNano() / int64(time.Millisecond)
 				}
 				if value, ok := s.Values[j][len(s.Values[j])-1].(float64); !ok {
 					h.httpError(w, "wrong value datatype, should be float64", http.StatusBadRequest)
+					h.Logger.Error("servePromReadBase error: wrong value datatype, should be float64", zap.Any("r", r))
 					return
 				} else {
 					sample.Value = value
@@ -395,8 +568,8 @@ func (h *Handler) servePromBaseQuery(w http.ResponseWriter, r *http.Request, use
 		atomic.AddInt64(&statistics.HandlerStat.ActiveQueryRequests, -1)
 		atomic.AddInt64(&statistics.HandlerStat.QueryRequestDuration, time.Since(start).Nanoseconds())
 	}()
-	h.requestTracker.Add(r, user)
 
+	var err error
 	// Retrieve the underlying ResponseWriter or initialize our own.
 	rw, ok := w.(ResponseWriter)
 	if !ok {
@@ -404,16 +577,23 @@ func (h *Handler) servePromBaseQuery(w http.ResponseWriter, r *http.Request, use
 	}
 
 	if syscontrol.DisableReads {
-		respondError(w, &apiError{errorForbidden, fmt.Errorf("disable read! ")}, nil)
+		respondError(w, &apiError{errorForbidden, fmt.Errorf("disable read! ")})
 		h.Logger.Error("read is forbidden!", zap.Bool("DisableReads", syscontrol.DisableReads))
 		return
 	}
-
-	// Retrieve the node id the query should be executed on.
-	nodeID, _ := strconv.ParseUint(r.FormValue("node_id"), 10, 64)
-
+	var bodyBytes []byte = nil
+	// Copy the request body flow. The conditions are as follows: 1. The result cache is enabled.
+	//2. The current request is not a forwarded request. 3. The result cache uses the memory for storage.
+	if h.Config.ResultCache.Enabled && !isForward(r) && h.Config.ResultCache.CacheType == 0 {
+		bodyBytes, err = io.ReadAll(r.Body)
+		if err != nil {
+			h.Logger.Error("read body error!", zap.Error(err))
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+	}
 	// Get the query parameters db and epoch from the query request.
-	db, rp := getDbRpByProm(r)
+	db, rp := getDbRpByProm(h, r)
 
 	ctx := r.Context()
 	if to := r.FormValue("timeout"); to != "" {
@@ -428,21 +608,180 @@ func (h *Handler) servePromBaseQuery(w http.ResponseWriter, r *http.Request, use
 		defer cancel()
 	}
 
-	// Use the native parser of Prometheus to parse and generate AST.
-	expr, err := parser.ParseExpr(r.FormValue("query"))
-	if err != nil {
-		invalidParamError(w, err, "query")
-		return
-	}
-
-	// Parse the query path parameters and generate the commands required for the prom query.
-	promCommand, ok := p.getQueryCmd(r, w)
+	promCommand, ok := p.getQueryCmd(r, w, p.mst)
 	if !ok {
 		return
 	}
-
 	// Assign db, rp, and mst to prom command.
 	promCommand.Database, promCommand.RetentionPolicy, promCommand.Measurement = db, rp, p.mst
+
+	// Parse whether this is an async command.
+	async := r.FormValue("async") == "true"
+
+	// explain is used to output query delay analysis
+	isExplain := false
+	explain := r.FormValue("explain")
+	if len(explain) > 0 {
+		isExplain, err = strconv.ParseBool(explain)
+		if err != nil {
+			apiErr := &apiError{errorBadData, err}
+			respondError(w, apiErr)
+			return
+		}
+	}
+
+	// TODO support instant query
+	if h.Config.ResultCache.Enabled && promCommand.Evaluation == nil && !async && !isExplain {
+		reqInfo := &RequestInfo{
+			h: h,
+			w: w,
+			r: r,
+			u: user,
+			p: p,
+		}
+		cmd := AlignWithStep(promCommand)
+		key := generateCacheKey(cmd, p.mst, h.ResultCache.SplitQueriesByInterval)
+		if doForward(h, r, key, rw, bodyBytes) {
+			return
+		}
+		resp, useCache, err := h.ResultCache.Do(reqInfo, cmd, key)
+		if useCache {
+			if err != nil {
+				ae, ok := err.(*apiError)
+				if !ok {
+					ae = &apiError{typ: errorBadData, err: fmt.Errorf("result cache error")}
+					h.Logger.Error("cache error", zap.Error(err))
+				}
+				respondError(rw, ae)
+				return
+			}
+			n, _ := rw.WritePromResponse(resp)
+			atomic.AddInt64(&statistics.HandlerStat.QueryRequestBytesTransmitted, int64(n))
+			return
+		}
+	}
+
+	resp, apiErr, isRespond := h.execQuery(rw, r, user, start, promCommand, async, isExplain)
+	if apiErr != nil {
+		respondError(rw, apiErr)
+		return
+	}
+	if isRespond {
+		return
+	}
+
+	n, _ := rw.WritePromResponse(resp)
+	atomic.AddInt64(&statistics.HandlerStat.QueryRequestBytesTransmitted, int64(n))
+}
+
+// doForward return true -- do forwarding; false -- don't do forwarding
+func doForward(h *Handler, r *http.Request, key string, rw ResponseWriter, body []byte) bool {
+	// only mem cache do forwarding
+	if h.Config.ResultCache.CacheType != 0 {
+		return false
+	}
+	if isForward(r) {
+		return false
+	}
+
+	nodes, ring, err := buildRing(h)
+	if err != nil {
+		h.Logger.Error("Failed to build ring", zap.Error(err))
+		return false
+	}
+	// If the key is handled by self
+	if isSelf(ring, key) {
+		return false
+	}
+
+	id := ring.Get(key)
+	nodeInfo := getNodeInfo(nodes, id)
+	if nodeInfo != nil && nodeInfo.Status == serf.StatusAlive {
+		targetHost := nodeInfo.TCPHost
+		reverseProxy, err := proxy.GetCustomProxy(r.URL, targetHost, body)
+		if err == nil {
+			defer func() {
+				if e := recover(); e != nil {
+					err = errno.NewError(errno.RecoverPanic, e)
+					h.Logger.Error("Panic during request forwarding", zap.Error(err))
+				}
+			}()
+			r.Header.Set(FORWARD, "true")
+			writer := GetOriginalResponseWriter(rw)
+			reverseProxy.ServeHTTP(writer, r)
+			return true
+		} else {
+			h.Logger.Error("get proxy fail! ", zap.Error(err), zap.String("targetHost", targetHost))
+		}
+	}
+	return false
+}
+
+func GetOriginalResponseWriter(rw ResponseWriter) http.ResponseWriter {
+	switch v := rw.(type) {
+	case *responseWriter:
+		return GetOriginalHTTPResponseWriter(v.ResponseWriter)
+	default:
+		panic("invalid response writer")
+	}
+}
+
+func GetOriginalHTTPResponseWriter(rw http.ResponseWriter) http.ResponseWriter {
+	switch v := rw.(type) {
+	case *lazyCompressResponseWriter:
+		return GetOriginalHTTPResponseWriter(v.ResponseWriter)
+	default:
+		return v
+	}
+}
+
+func isForward(r *http.Request) bool {
+	return r.Header.Get(FORWARD) == "true"
+}
+
+// isSelf If the key is handled by self
+func isSelf(ring *consistenthash.Map, key string) bool {
+	id := ring.Get(key)
+	nodeIdStr := strconv.FormatUint(config2.GetNodeId(), 10)
+	return id == nodeIdStr
+}
+
+func getNodeInfo(nodes []meta2.DataNode, id string) *meta2.DataNode {
+	for _, node := range nodes {
+		if strconv.FormatUint(node.ID, 10) == id {
+			return &node
+		}
+	}
+	return nil
+}
+
+func buildRing(h *Handler) ([]meta2.DataNode, *consistenthash.Map, error) {
+	nodes, err := h.MetaClient.SqlNodes()
+	if err != nil {
+		return nil, nil, err
+	}
+	ring := consistenthash.New(10, nil)
+	for _, node := range nodes {
+		ring.Add(strconv.FormatUint(node.ID, 10))
+	}
+	return nodes, ring, nil
+}
+
+func (h *Handler) execQuery(w ResponseWriter, r *http.Request, user meta2.User, start time.Time, promCommand promql2influxql.PromCommand, async, isExplain bool) (resp *promql2influxql.PromQueryResponse, apiErr *apiError, isRespond bool) {
+	// Retrieve the node id the query should be executed on.
+	nodeID, _ := strconv.ParseUint(r.FormValue("node_id"), 10, 64)
+
+	// Get the query parameters db and epoch from the query request.
+	db, rp := getDbRpByProm(h, r)
+
+	// Use the native parser of Prometheus to parse and generate AST.
+	expr, err := parser.ParseExpr(r.FormValue("query"))
+	if err != nil {
+		apiErr = &apiError{
+			errorBadData, fmt.Errorf("invalid parameter %q: %w", "query", err),
+		}
+		return
+	}
 
 	// Transpiler as the key converter for promql2influxql
 	transpiler := &promql2influxql.Transpiler{
@@ -451,22 +790,11 @@ func (h *Handler) servePromBaseQuery(w http.ResponseWriter, r *http.Request, use
 	nodes, err := transpiler.Transpile(expr)
 	if err != nil {
 		if IsErrWithEmptyResp(err) {
-			WritePromEmptyResp(rw, expr, &promCommand)
+			resp = CreatePromEmptyResp(expr, &promCommand)
 			return
 		}
-		respondError(w, &apiError{errorBadData, err}, nil)
+		apiErr = &apiError{errorBadData, err}
 		return
-	}
-
-	// explain is used to output query delay analysis
-	isExplain := false
-	explain := r.FormValue("explain")
-	if len(explain) > 0 {
-		isExplain, err = strconv.ParseBool(explain)
-		if err != nil {
-			respondError(w, &apiError{errorBadData, err}, nil)
-			return
-		}
 	}
 
 	// PromQL2InfluxQL: there are two conversion methods.
@@ -480,14 +808,20 @@ func (h *Handler) servePromBaseQuery(w http.ResponseWriter, r *http.Request, use
 		} else {
 			q = &influxql.Query{Statements: []influxql.Statement{&influxql.ExplainStatement{Statement: statement, Analyze: true}}}
 		}
-	case *influxql.Call, *influxql.BinaryExpr, *influxql.IntegerLiteral, *influxql.NumberLiteral:
-		h.promExprQuery(&promCommand, statement, rw, expr.Type())
+	case *influxql.Call, *influxql.BinaryExpr, *influxql.IntegerLiteral, *influxql.NumberLiteral, *influxql.StringLiteral, *influxql.ParenExpr:
+		resp, apiErr = h.promExprQuery(&promCommand, statement, expr.Type())
 		return
 	default:
-		respondError(w, &apiError{errorBadData, fmt.Errorf("invalid the select statement for promql")}, nil)
+		apiErr = &apiError{errorBadData, fmt.Errorf("invalid the select statement for promql")}
 		return
 	}
-	h.Logger.Info("promql", zap.String("query", r.FormValue("query")))
+	h.Logger.Info("promql",
+		zap.String("query", r.FormValue("query")),
+		zap.String("time", r.FormValue("time")),
+		zap.String("start", r.FormValue("start")),
+		zap.String("end", r.FormValue("end")),
+		zap.String("step", r.FormValue("step")),
+	)
 	h.Logger.Info("influxql", zap.String("query", q.String()))
 
 	var qDuration *statistics.SQLSlowQueryStatistics
@@ -507,18 +841,16 @@ func (h *Handler) servePromBaseQuery(w http.ResponseWriter, r *http.Request, use
 	// Check authorization.
 	err = h.checkAuthorization(user, q, db)
 	if err != nil {
-		respondError(w, &apiError{errorForbidden, fmt.Errorf("error authorizing query: %w", err)}, nil)
+		apiErr = &apiError{errorForbidden, fmt.Errorf("error authorizing query: %w", err)}
 		return
 	}
 
 	// Parse chunk size. Use default if not provided or unparsable.
 	chunked, chunkSize, innerChunkSize, err := h.parseChunkSize(r)
 	if err != nil {
-		respondError(w, &apiError{errorBadData, err}, nil)
+		apiErr = &apiError{errorBadData, err}
+		return
 	}
-
-	// Parse whether this is an async command.
-	async := r.FormValue("async") == "true"
 
 	opts := query.ExecutionOptions{
 		Database:        db,
@@ -561,6 +893,7 @@ func (h *Handler) servePromBaseQuery(w http.ResponseWriter, r *http.Request, use
 	if async {
 		go h.async(q, resultCh)
 		h.writeHeader(w, http.StatusNoContent)
+		isRespond = true
 		return
 	}
 
@@ -570,10 +903,6 @@ func (h *Handler) servePromBaseQuery(w http.ResponseWriter, r *http.Request, use
 	// Status header is OK once this point is reached.
 	// Attempt to flush the header immediately so the client gets the header information
 	// and knows the query was accepted.
-	h.writeHeader(rw, http.StatusOK)
-	if w, ok := w.(http.Flusher); ok {
-		w.Flush()
-	}
 
 	// pull all results from the channel
 	for result := range resultCh {
@@ -588,21 +917,19 @@ func (h *Handler) servePromBaseQuery(w http.ResponseWriter, r *http.Request, use
 
 	if isExplain {
 		resp := h.getStmtResult(stmtID2Result)
-		n, _ := rw.WriteResponse(resp)
+		n, _ := w.WriteResponse(resp)
+		isRespond = true
 		atomic.AddInt64(&statistics.HandlerStat.QueryRequestBytesTransmitted, int64(n))
-		return
+		return nil, nil, isRespond
 	}
 
 	// Return the prometheus query result.
-	resp, ok := h.getPromResult(w, stmtID2Result, expr, promCommand, transpiler.DropMetric(), transpiler.RemoveTableName(), transpiler.DuplicateResult())
-	if !ok {
-		return
-	}
-	n, _ := rw.WritePromResponse(resp)
-	atomic.AddInt64(&statistics.HandlerStat.QueryRequestBytesTransmitted, int64(n))
+	resp, apiErr = h.getPromResult(stmtID2Result, expr, promCommand, transpiler.DropMetric(), transpiler.RemoveTableName(), transpiler.DuplicateResult())
+
+	return
 }
 
-func (h *Handler) promExprQuery(promCommand *promql2influxql.PromCommand, statement influxql.Node, rw ResponseWriter, typ parser.ValueType) {
+func (h *Handler) promExprQuery(promCommand *promql2influxql.PromCommand, statement influxql.Node, typ parser.ValueType) (*promql2influxql.PromQueryResponse, *apiError) {
 	promTimeValuer := NewPromTimeValuer()
 	valuer := influxql.ValuerEval{
 		Valuer: influxql.MultiValuer(
@@ -614,23 +941,15 @@ func (h *Handler) promExprQuery(promCommand *promql2influxql.PromCommand, statem
 		),
 		IntegerFloatDivision: true,
 	}
-	var resp *PromResponse
-	var ok bool
+	var resp *promql2influxql.PromQueryResponse
+	var err *apiError
 	if promCommand.DataType == promql2influxql.GRAPH_DATA {
-		resp, ok = h.getRangePromResultForEmptySeries(statement.(influxql.Expr), promCommand, &valuer, promTimeValuer)
+		resp = h.getRangePromResultForEmptySeries(statement.(influxql.Expr), promCommand, &valuer, promTimeValuer)
 	} else {
-		resp, ok = h.getInstantPromResultForEmptySeries(statement.(influxql.Expr), promCommand, &valuer, promTimeValuer, typ)
+		resp, err = h.getInstantPromResultForEmptySeries(statement.(influxql.Expr), promCommand, &valuer, promTimeValuer, typ)
 	}
-	if !ok {
-		return
-	}
-	h.writeHeader(rw, http.StatusOK)
-	if w, ok := rw.(http.Flusher); ok {
-		w.Flush()
-	}
-	n, _ := rw.WritePromResponse(*resp)
-	atomic.AddInt64(&statistics.HandlerStat.QueryRequestBytesTransmitted, int64(n))
-	return
+
+	return resp, err
 }
 
 // servePromQueryLabels Executes a labels query of the PromQL and returns the query result.
@@ -660,24 +979,23 @@ func (h *Handler) servePromQueryLabelsBase(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	resp := PromResponse{Status: "success"}
+	resp := promql2influxql.PromResponse{Status: "success"}
 	receiver := &promql2influxql.Receiver{}
 	data, err := receiver.InfluxTagsToPromLabels(stmtID2Result[0])
 	if err != nil {
-		respondError(w, &apiError{errorBadData, err}, nil)
+		respondError(w, &apiError{errorBadData, err})
 		return
 	}
 	sort.Strings(data)
 	resp.Data = data
 
-	n, _ := rw.WritePromResponse(resp)
+	n, _ := rw.WritePromResponse(&resp)
 	atomic.AddInt64(&statistics.HandlerStat.QueryRequestBytesTransmitted, int64(n))
 }
 
 // servePromQueryLabels Executes a label-values query of the PromQL and returns the query result.
 func (h *Handler) servePromQueryLabelValues(w http.ResponseWriter, r *http.Request, user meta2.User) {
 	h.servePromQueryLabelValuesBase(w, r, user, &promQueryParam{getMetaQuery: getLabelValuesQuery})
-
 }
 
 // servePromQueryLabelValuesWithMetricStore Executes a label-values query of the PromQL and returns the query result.
@@ -686,7 +1004,7 @@ func (h *Handler) servePromQueryLabelValuesWithMetricStore(w http.ResponseWriter
 	if !ok {
 		return
 	}
-	h.servePromQueryLabelsBase(w, r, user, &promQueryParam{mst: mst, getMetaQuery: getLabelValuesQuery})
+	h.servePromQueryLabelValuesBase(w, r, user, &promQueryParam{mst: mst, getMetaQuery: getLabelValuesQuery})
 }
 
 // servePromQueryLabels Executes a label-values query of the PromQL and returns the query result.
@@ -702,18 +1020,18 @@ func (h *Handler) servePromQueryLabelValuesBase(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	resp := PromResponse{Status: "success"}
+	resp := promql2influxql.PromResponse{Status: "success"}
 	receiver := &promql2influxql.Receiver{}
 	var data = make([]string, 0)
 	err := receiver.InfluxResultToStringSlice(stmtID2Result[0], &data)
 	if err != nil {
-		respondError(w, &apiError{errorBadData, err}, nil)
+		respondError(w, &apiError{errorBadData, err})
 		return
 	}
 	sort.Strings(data)
 	resp.Data = data
 
-	n, _ := rw.WritePromResponse(resp)
+	n, _ := rw.WritePromResponse(&resp)
 	atomic.AddInt64(&statistics.HandlerStat.QueryRequestBytesTransmitted, int64(n))
 }
 
@@ -734,7 +1052,7 @@ func (h *Handler) servePromQuerySeriesWithMetricStore(w http.ResponseWriter, r *
 // servePromQuerySeriesBase Executes a series query of the PromQL and returns the query result.
 func (h *Handler) servePromQuerySeriesBase(w http.ResponseWriter, r *http.Request, user meta2.User, p *promQueryParam) {
 	if err := r.ParseForm(); err != nil {
-		respondError(w, &apiError{errorBadData, fmt.Errorf("error parsing form values: %w", err)}, nil)
+		respondError(w, &apiError{errorBadData, fmt.Errorf("error parsing form values: %w", err)})
 		return
 	}
 	// Retrieve the underlying ResponseWriter or initialize our own.
@@ -747,11 +1065,11 @@ func (h *Handler) servePromQuerySeriesBase(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	resp := PromResponse{Status: "success"}
+	resp := promql2influxql.PromResponse{Status: "success"}
 	receiver := &promql2influxql.Receiver{}
 	data, err := receiver.InfluxTagsToPromLabels(stmtID2Result[0])
 	if err != nil {
-		respondError(w, &apiError{errorBadData, err}, nil)
+		respondError(w, &apiError{errorBadData, err})
 		return
 	} else {
 		var seriesData []map[string]string
@@ -761,18 +1079,18 @@ func (h *Handler) servePromQuerySeriesBase(w http.ResponseWriter, r *http.Reques
 		resp.Data = seriesData
 	}
 
-	n, _ := rw.WritePromResponse(resp)
+	n, _ := rw.WritePromResponse(&resp)
 	atomic.AddInt64(&statistics.HandlerStat.QueryRequestBytesTransmitted, int64(n))
 }
 
 func (h *Handler) servePromBaseMetaQuery(w http.ResponseWriter, r *http.Request, user meta2.User, p *promQueryParam) (result map[int]*query.Result, ok bool) {
 	// Get the query parameters db and epoch from the query request.
-	db, rp := getDbRpByProm(r)
+	db, rp := getDbRpByProm(h, r)
 
 	// Retrieve the node id the query should be executed on.
 	nodeID, _ := strconv.ParseUint(r.FormValue("node_id"), 10, 64)
 
-	q, ok := p.getMetaQuery(r, w, p.mst)
+	q, ok := p.getMetaQuery(h, r, w, p.mst)
 	if !ok {
 		return
 	}
@@ -780,15 +1098,24 @@ func (h *Handler) servePromBaseMetaQuery(w http.ResponseWriter, r *http.Request,
 	// Check authorization.
 	err := h.checkAuthorization(user, q, db)
 	if err != nil {
-		respondError(w, &apiError{errorForbidden, fmt.Errorf("error authorizing query: %w", err)}, nil)
+		respondError(w, &apiError{errorForbidden, fmt.Errorf("error authorizing query: %w", err)})
 		return
 	}
+
 	// Parse whether this is an async command.
 	async := r.FormValue("async") == "true"
-
+	chunked, chunkSize, innerChunkSize, err := h.parseChunkSize(r)
+	if err != nil {
+		h.httpError(w, err.Error(), http.StatusBadRequest)
+		h.Logger.Error("servePromWriteBase error", zap.Error(err))
+		return
+	}
 	opts := query.ExecutionOptions{
 		Database:        db,
 		RetentionPolicy: rp,
+		ChunkSize:       chunkSize,
+		Chunked:         chunked,
+		InnerChunkSize:  innerChunkSize,
 		ReadOnly:        r.Method == "GET",
 		NodeID:          nodeID,
 		ParallelQuery:   atomic.LoadInt32(&syscontrol.ParallelQueryInBatch) == 1,
@@ -817,6 +1144,9 @@ func (h *Handler) servePromBaseMetaQuery(w http.ResponseWriter, r *http.Request,
 
 	stmtID2Result := make(map[int]*query.Result)
 
+	h.Logger.Info("promql", zap.String("query", r.RequestURI))
+	h.Logger.Info("influxql", zap.String("query", q.String()))
+
 	// Execute query
 	results := h.QueryExecutor.ExecuteQuery(q, opts, closing, nil)
 
@@ -829,13 +1159,106 @@ func (h *Handler) servePromBaseMetaQuery(w http.ResponseWriter, r *http.Request,
 	return stmtID2Result, true
 }
 
+// servePromQueryMetaDataBase Executes a series query of the PromQL and returns the query result.
+func (h *Handler) servePromQueryMetaDataBase(w http.ResponseWriter, r *http.Request, user meta2.User, p *promQueryParam) {
+	if err := r.ParseForm(); err != nil {
+		respondError(w, &apiError{errorBadData, fmt.Errorf("error parsing form values: %w", err)})
+		return
+	}
+	// Retrieve the underlying ResponseWriter or initialize our own.
+	rw, ok := w.(ResponseWriter)
+	if !ok {
+		rw = NewResponseWriter(w, r)
+	}
+	stmtID2Result, ok := h.servePromBaseMetaQuery(w, r, user, p)
+	if !ok {
+		return
+	}
+
+	resp := promql2influxql.PromResponse{Status: "success"}
+	receiver := &promql2influxql.Receiver{}
+	res, err := receiver.InfluxRowsToPromMetaData(stmtID2Result[0])
+	if err != nil {
+		respondError(w, &apiError{errorBadData, err})
+		return
+	} else {
+		resp.Data = res
+	}
+	n, _ := rw.WritePromResponse(&resp)
+	atomic.AddInt64(&statistics.HandlerStat.QueryRequestBytesTransmitted, int64(n))
+}
+
 // servePromQueryMetaData Executes a metadata query of the PromQL and returns the query result.
 func (h *Handler) servePromQueryMetaData(w http.ResponseWriter, r *http.Request, user meta2.User) {
-	// TODO query metadata
+	h.servePromQueryMetaDataBase(w, r, user, &promQueryParam{getMetaQuery: getMetaDataQuery})
 }
 
 // servePromQueryMetaDataWithMetricStore Executes a metadata query of the PromQL and returns the query result.
 func (h *Handler) servePromQueryMetaDataWithMetricStore(w http.ResponseWriter, r *http.Request, user meta2.User) {
+	mst, ok := getMstByProm(h, w, r)
+	if !ok {
+		return
+	}
+	h.servePromQueryMetaDataBase(w, r, user, &promQueryParam{mst: mst, getMetaQuery: getMetaDataQuery})
+}
+
+func (h *Handler) servePromCreateTSDB(w http.ResponseWriter, r *http.Request, user meta2.User) {
+	tsdb := mux.Vars(r)[TSDB]
+	var err error
+	if err := ValidataTSDB(tsdb); err != nil {
+		logger.GetLogger().Error("servePromCreateTSDB", zap.Error(err))
+		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
+		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		return
+	}
+	options := &obs.ObsOptions{}
+	dec := json2.NewDecoder(r.Body)
+	if err := dec.Decode(options); err != nil {
+		logger.GetLogger().Error("servePromCreateTSDB, decode CreateTSDBOptions", zap.Error(err))
+		if err != nil && err.Error() != "EOF" { // with body
+			h.httpErrorRsp(w, ErrorResponse("parse body error: "+err.Error(), LogReqErr), http.StatusBadRequest)
+			return
+		}
+	}
+	if options.Validate() {
+		options.Enabled = true
+	}
+	if options.Sk != "" {
+		options.Sk, err = crypto.Encrypt(options.Sk)
+		if err != nil {
+			h.httpErrorRsp(w, ErrorResponse("obs sk encrypt failed", LogReqErr), http.StatusBadRequest)
+			atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+			return
+		}
+	}
+	host, _, err := net.SplitHostPort(options.Endpoint)
+	if err != nil {
+		if err.(*net.AddrError).Err == "missing port in address" {
+			host = options.Endpoint
+		} else {
+			h.httpErrorRsp(w, ErrorResponse("get obs host failed", LogReqErr), http.StatusBadRequest)
+			atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+			return
+		}
+	}
+	options.Endpoint = host
+	logger.GetLogger().Info("servePromCreateTSDB", zap.String("tsdb", tsdb))
+	if _, err = h.MetaClient.CreateDatabase(tsdb, false, 1, options); err != nil {
+		logger.GetLogger().Error("servePromCreateTSDB, CreateDatabase", zap.Error(err))
+		h.httpError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	h.writeHeader(w, http.StatusOK)
+}
+
+func ValidataTSDB(tsdbName string) error {
+	if tsdbName == "" {
+		return ErrTSDBNameEmpty
+	}
+	if !meta2.ValidMeasurementName(tsdbName) {
+		return ErrInvalidTSDBName
+	}
+	return nil
 }
 
 type PromTimeValuer struct {
@@ -851,7 +1274,7 @@ func NewPromTimeValuer() *PromTimeValuer {
 func (t *PromTimeValuer) Value(key string) (interface{}, bool) {
 	if key == promql2influxql.ArgNameOfTimeFunc {
 		rTime := (t.tmpTime)
-		return float64(rTime / 1000), true
+		return float64(rTime) / 1000, true
 	}
 	return nil, false
 }
@@ -866,7 +1289,7 @@ func (t *PromTimeValuer) Call(name string, args []interface{}) (interface{}, boo
 func (t *PromTimeValuer) SetValuer(_ influxql.Valuer, _ int) {
 }
 
-func WritePromEmptyResp(rw ResponseWriter, expr parser.Expr, cmd *promql2influxql.PromCommand) {
+func CreatePromEmptyResp(expr parser.Expr, cmd *promql2influxql.PromCommand) *promql2influxql.PromQueryResponse {
 	var dt parser.ValueType
 	switch expr.Type() {
 	case parser.ValueTypeMatrix:
@@ -888,13 +1311,20 @@ func WritePromEmptyResp(rw ResponseWriter, expr parser.Expr, cmd *promql2influxq
 	default:
 		dt = parser.ValueTypeNone
 	}
-	n, _ := rw.WritePromResponse(PromResponse{
-		Status: StatusSuccess,
-		Data:   promql2influxql.NewPromResult([]string{}, string(dt)),
-	})
-	atomic.AddInt64(&statistics.HandlerStat.QueryRequestBytesTransmitted, int64(n))
+
+	return &promql2influxql.PromQueryResponse{
+		Status: string(StatusSuccess),
+		Data:   promql2influxql.NewPromData(&promql2influxql.PromDataVector{}, string(dt)),
+	}
 }
 
 func IsErrWithEmptyResp(err error) bool {
 	return strings.Contains(err.Error(), "invalid measurement")
+}
+
+func AlignWithStep(command promql2influxql.PromCommand) *promql2influxql.PromCommand {
+	start := (command.Start.UnixMilli() / command.Step.Milliseconds()) * command.Step.Milliseconds()
+	end := (command.End.UnixMilli() / command.Step.Milliseconds()) * command.Step.Milliseconds()
+
+	return command.WithStartEnd(start, end)
 }

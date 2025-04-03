@@ -90,7 +90,10 @@ type TSSql struct {
 
 	ContinuousQuery ContinuousQueryConfig `toml:"continuous_queries"`
 	Data            Store                 `toml:"data"`
-	RecordWrite     RecordWriteConfig     `toml:"record-write"`
+
+	Limits        Limits            `toml:"limits"`
+	RuntimeConfig RuntimeConfig     `toml:"runtime-config"`
+	RecordWrite   RecordWriteConfig `toml:"record-write"`
 }
 
 // NewTSSql returns an instance of Config with reasonable defaults.
@@ -108,6 +111,9 @@ func NewTSSql(enableGossip bool) *TSSql {
 	c.Subscriber = NewSubscriber()
 	c.ContinuousQuery = NewContinuousQueryConfig()
 	c.Gossip = NewGossip(enableGossip)
+	c.Data = NewStore()
+	c.Limits = NewLimits()
+	c.RuntimeConfig = NewRuntimeConfig()
 	c.RecordWrite = NewRecordWriteConfig()
 	return c
 }
@@ -169,6 +175,7 @@ func (c *TSSql) Validate() error {
 		c.Sherlock,
 		c.Subscriber,
 		c.ContinuousQuery,
+		c.RuntimeConfig,
 		c.RecordWrite,
 	}
 
@@ -254,6 +261,8 @@ type Coordinator struct {
 	QueryLimitFlag          bool `toml:"query-limit-flag"`
 	QueryTimeCompareEnabled bool `toml:"query-time-compare-enabled"`
 	ForceBroadcastQuery     bool `toml:"force-broadcast-query"`
+
+	HardWrite bool `toml:"hard-write"`
 }
 
 // NewCoordinator returns an instance of Config with defaults.
@@ -273,6 +282,7 @@ func NewCoordinator() Coordinator {
 		ShardTier:                DefaultShardTier,
 		RetentionPolicyLimit:     DefaultRetentionPolicyLimit,
 		ForceBroadcastQuery:      DefaultForceBroadcastQuery,
+		HardWrite:                false,
 	}
 }
 
@@ -309,5 +319,6 @@ func (c *Coordinator) ShowConfigs() map[string]interface{} {
 		"coordinator.rp-limit":                    c.RetentionPolicyLimit,
 		"coordinator.time-range-limit":            c.TimeRangeLimit,
 		"coordinator.tag-limit":                   c.TagLimit,
+		"coordinator.hard-write":                  c.HardWrite,
 	}
 }

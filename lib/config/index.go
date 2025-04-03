@@ -29,6 +29,7 @@ type Index struct {
 	SKeyCacheSize          int `toml:"skey-cache-size"`
 	TagCacheSize           int `toml:"tag-cache-size"`
 	TagFilterCostCacheSize int `toml:"tag-filter-cost-cache-size"`
+	Concurrency            int `toml:"concurrency"`
 
 	TagScanPruneThreshold int `toml:"tag-scan-prune-threshold"`
 	MemoryAllowedPercent  int `toml:"memory-allowed-percent"`

@@ -352,7 +352,6 @@ func (b *ColumnBuilder) EncodeColumn(ref record.Field, col *record.ColVal, timeC
 	if col.Len > segRowsLimit {
 		b.splitCols = col.Split(b.splitCols[:0], segRowsLimit, ref.Type)
 		return b.encode(ref, b.splitCols, timeCols, dataOffset)
-
 	}
 
 	b.swapCols = append(b.swapCols[:0], *col)

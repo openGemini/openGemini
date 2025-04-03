@@ -15,6 +15,7 @@
 package handler
 
 import (
+	"context"
 	"fmt"
 	"reflect"
 	"sync/atomic"
@@ -28,6 +29,7 @@ import (
 	"github.com/openGemini/openGemini/lib/cache"
 	"github.com/openGemini/openGemini/lib/codec"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
@@ -160,7 +162,7 @@ func (p *SelectProcessor) Handle(w spdy.Responser, data interface{}) (err error)
 
 	if qm.Aborted(req.Opt.QueryId) {
 		logger.GetLogger().Info("[SelectProcessor.Handle] aborted")
-		_ = w.Response(executor.NewFinishMessage(), true)
+		_ = w.Response(executor.NewFinishMessage(0), true)
 		return nil
 	}
 	atomic.AddInt64(&statistics.StoreQueryStat.StoreQueryRequests, 1)
@@ -178,7 +180,9 @@ func (p *SelectProcessor) Handle(w spdy.Responser, data interface{}) (err error)
 		w.Session().DisableDataACK()
 		qm.Finish(req.Opt.QueryId, s)
 	}()
-
+	var queryIndexState int32 = 0
+	con := context.WithValue(context.Background(), index.QueryIndexState, &queryIndexState)
+	s.SetContext(con)
 	err = s.Process()
 	if err != nil {
 		logger.GetLogger().Error("failed to process the query request", zap.Error(err))
@@ -205,7 +209,7 @@ func (p *SelectProcessor) Handle(w spdy.Responser, data interface{}) (err error)
 		}
 		return p.HandleIncQuery(w, req, false, iterMaxNum, 0)
 	}
-	err = w.Response(executor.NewFinishMessage(), true)
+	err = w.Response(executor.NewFinishMessage(queryIndexState), true)
 	if err != nil {
 		logger.GetLogger().Error("failed to response finish message", zap.Error(err))
 	}
@@ -232,10 +236,15 @@ func (p *AbortProcessor) Handle(w spdy.Responser, data interface{}) error {
 
 	logger.GetLogger().Info("AbortProcessor.Handle",
 		zap.Uint64("qid", msg.QueryID),
-		zap.Uint64("clientID", msg.ClientID))
+		zap.Uint64("clientID", msg.ClientID), zap.Bool("noMarkCrash", msg.NoMarkCrash))
 
-	query.NewManager(msg.ClientID).Abort(msg.QueryID)
-	err := w.Response(executor.NewFinishMessage(), true)
+	if msg.NoMarkCrash {
+		query.NewManager(msg.ClientID).NoMarkAbort(msg.QueryID)
+	} else {
+		query.NewManager(msg.ClientID).Abort(msg.QueryID)
+	}
+
+	err := w.Response(executor.NewFinishMessage(0), true)
 	if err != nil {
 		logger.GetLogger().Error("failed to response finish message", zap.Error(err))
 	}
@@ -257,10 +266,15 @@ func (p *CrashProcessor) Handle(w spdy.Responser, data interface{}) error {
 
 	logger.GetLogger().Info("CrashProcessor.Handle",
 		zap.Uint64("qid", msg.QueryID),
-		zap.Uint64("clientID", msg.ClientID))
+		zap.Uint64("clientID", msg.ClientID), zap.Bool("noMarkCrash", msg.NoMarkCrash))
 
-	query.NewManager(msg.ClientID).Crash(msg.QueryID)
-	err := w.Response(executor.NewFinishMessage(), true)
+	if msg.NoMarkCrash {
+		query.NewManager(msg.ClientID).NoMarkCrash(msg.QueryID)
+	} else {
+		query.NewManager(msg.ClientID).Crash(msg.QueryID)
+	}
+
+	err := w.Response(executor.NewFinishMessage(0), true)
 	if err != nil {
 		logger.GetLogger().Error("failed to response finish message", zap.Error(err))
 	}

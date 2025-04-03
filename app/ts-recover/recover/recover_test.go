@@ -103,14 +103,14 @@ func TestRecoverError(t *testing.T) {
 
 	t.Run("1", func(t *testing.T) {
 		err := recoverWithFull(tsRecover, recoverConfig)
-		if err == nil {
+		if err != nil {
 			t.Fail()
 		}
 	})
 
 	t.Run("2", func(t *testing.T) {
 		err := recoverWithFullAndInc(tsRecover, recoverConfig)
-		if err == nil {
+		if err != nil {
 			t.Fail()
 		}
 	})

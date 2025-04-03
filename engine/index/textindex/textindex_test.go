@@ -27,7 +27,7 @@ func NewRecordForTextIndex() *record.Record {
 	rec := record.NewRecord([]record.Field{{Name: "_log", Type: influx.Field_Type_String}, {Name: record.TimeField, Type: influx.Field_Type_Int}}, false)
 	rawData := []string{
 		"Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/534.24 (KHTML, like Gecko) Chrome/11.0.696.12 Safari/534.24",
-		"this is a 中文日志",
+		"北京是中国首都",
 		"client ip is 10.20.30.15",
 	}
 	for i := 0; i < len(rawData); i++ {

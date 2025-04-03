@@ -15,7 +15,6 @@
 package record
 
 import (
-	"reflect"
 	"unsafe"
 
 	"github.com/openGemini/openGemini/lib/util"
@@ -300,15 +299,11 @@ func updateIntoNull[T util.ExceptString](cv *ColVal, row int) {
 }
 
 func values[T util.ExceptString](cv *ColVal) []T {
-	h := (*reflect.SliceHeader)(unsafe.Pointer(&cv.Val))
-
-	var res []T
-	valueLen := int(unsafe.Sizeof(res[0]))
-	s := (*reflect.SliceHeader)(unsafe.Pointer(&res))
-	s.Data = h.Data
-	s.Len = h.Len / valueLen
-	s.Cap = h.Cap / valueLen
-	return res
+	if len(cv.Val) == 0 {
+		return nil
+	}
+	var defaultValue T
+	return unsafe.Slice((*T)(unsafe.Pointer(&cv.Val[0])), len(cv.Val)/int(unsafe.Sizeof(defaultValue)))
 }
 
 func subValues[T util.ExceptString](cv *ColVal, start, end int) []T {

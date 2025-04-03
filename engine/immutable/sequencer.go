@@ -26,6 +26,8 @@ import (
 	"github.com/openGemini/openGemini/lib/util"
 )
 
+const minIdTimeBlockSize = 8
+
 type idInfo struct {
 	lastFlushTime int64
 	rows          int64
@@ -33,7 +35,7 @@ type idInfo struct {
 
 type MmsIdTime struct {
 	mu     sync.RWMutex
-	idTime map[uint64]*idInfo
+	idTime map[uint32]map[uint32]*idInfo //map[seriesId's high4Bytes]map[seriesId's low4Bytes]*idInfo, series id split into high 4 Bytes and low 4 Bytes to reduce memory
 	sc     *SeriesCounter
 }
 
@@ -41,9 +43,44 @@ func (m *MmsIdTime) Get(id uint64) (int64, int64) {
 	return m.get(id)
 }
 
+func (m *MmsIdTime) getIdInfo(id uint64) (*idInfo, bool) {
+	high32 := uint32(id >> 32)
+	low32 := uint32(id)
+	infos, ok := m.idTime[high32]
+	if !ok {
+		return nil, false
+	}
+	info, ok := infos[low32]
+	if !ok {
+		return nil, false
+	}
+	return info, true
+}
+
+func (m *MmsIdTime) insertIdInfo(id uint64, info *idInfo) {
+	high32 := uint32(id >> 32)
+	low32 := uint32(id)
+	infos, ok := m.idTime[high32]
+	if !ok {
+		infos = make(map[uint32]*idInfo, 32)
+		m.idTime[high32] = infos
+	}
+	infos[low32] = info
+}
+
+func (m *MmsIdTime) getIdCount() int64 {
+	var count int64
+	m.mu.RLock()
+	for _, subM := range m.idTime {
+		count += int64(len(subM))
+	}
+	m.mu.RUnlock()
+	return count
+}
+
 func (m *MmsIdTime) get(id uint64) (int64, int64) {
 	m.mu.RLock()
-	info, ok := m.idTime[id]
+	info, ok := m.getIdInfo(id)
 	m.mu.RUnlock()
 	if !ok {
 		return math.MinInt64, 0
@@ -54,7 +91,7 @@ func (m *MmsIdTime) get(id uint64) (int64, int64) {
 
 func (m *MmsIdTime) addRowCounts(id uint64, rowCounts int64) {
 	m.mu.RLock()
-	info, ok := m.idTime[id]
+	info, ok := m.getIdInfo(id)
 	m.mu.RUnlock()
 
 	if !ok {
@@ -83,10 +120,10 @@ func (m *MmsIdTime) batchUpdateCheckTime(p *IdTimePairs, incrRows bool) {
 }
 
 func (m *MmsIdTime) createIdInfo(id uint64) *idInfo {
-	info, ok := m.idTime[id]
+	info, ok := m.getIdInfo(id)
 	if !ok {
 		info = &idInfo{lastFlushTime: math.MinInt64, rows: 0}
-		m.idTime[id] = info
+		m.insertIdInfo(id, info)
 		m.sc.Incr()
 	}
 	return info
@@ -95,7 +132,7 @@ func (m *MmsIdTime) createIdInfo(id uint64) *idInfo {
 func NewMmsIdTime(sc *SeriesCounter) *MmsIdTime {
 	return &MmsIdTime{
 		sc:     sc,
-		idTime: make(map[uint64]*idInfo, 32),
+		idTime: make(map[uint32]map[uint32]*idInfo, 32),
 	}
 }
 
@@ -224,7 +261,7 @@ func (s *Sequencer) DelMmsIdTime(name string) {
 		return
 	}
 
-	s.sc.DecrN(uint64(len(mmsIdTime.idTime)))
+	s.sc.DecrN(uint64(mmsIdTime.getIdCount()))
 }
 
 func (s *Sequencer) GetMmsIdTime(name string) *MmsIdTime {
@@ -364,85 +401,91 @@ func (p *IdTimePairs) reserve(size int) {
 	p.Rows = p.Rows[:size]
 }
 
-func (p *IdTimePairs) Unmarshal(decTimes bool, src []byte) ([]byte, error) {
+func (p *IdTimePairs) UnmarshalHeader(src []byte) (uint32, error) {
+	if int64(len(src)) < idTimeHeaderSize {
+		return 0, fmt.Errorf("too small data for id time header, %d", len(src))
+	}
+	rows := int(numberenc.UnmarshalUint32(src))
+	p.reserve(rows)
+	blocks := numberenc.UnmarshalUint32(src[4:])
+	return blocks, nil
+}
+
+func (p *IdTimePairs) UnmarshalBlocks(decTimes bool, src []byte, startIdx int, decoder *encoding.CoderContext) (int, int, int, error) {
 	var err error
-	if len(src) < 8 {
+	var hasIncompleteBlock bool
+	var startLen int
+	size := 0
+	blockNum := 0
+
+	if len(src) < minIdTimeBlockSize {
 		err = fmt.Errorf("too small data for id time, %d", len(src))
 		log.Error(err.Error())
-		return nil, err
+		return size, blockNum, startIdx, err
 	}
 
-	rows := int(numberenc.UnmarshalUint32(src))
-	src = src[4:]
-	p.reserve(rows)
-
-	blocks := numberenc.UnmarshalUint32(src)
-	src = src[4:]
-
-	decoder := encoding.NewCoderContext()
-	defer decoder.Release()
-
-	decoder.SetTimeCoder(encoding.GetTimeCoder())
-	startIdx := 0
-	for i := uint32(0); i < blocks; i++ {
-		if len(src) < 8 {
-			return nil, fmt.Errorf("block(%d) smaller data (%v) for number and id length", i, len(src))
-		}
+	for len(src) > minIdTimeBlockSize {
+		startLen = len(src)
 		// decode count
 		n := int(numberenc.UnmarshalUint32(src))
-		if startIdx+n > rows {
-			return nil, fmt.Errorf("block(%d) not enouph free id time slice to unmarshal %d, %d, %d", i, rows, n, startIdx)
-		}
 		src = src[4:]
 
 		// decode series ids
-		src, err = p.decodeUnsignedBlock(src, p.Ids[startIdx:startIdx+n], decoder)
-		if err != nil {
-			return nil, err
+		src, hasIncompleteBlock, err = p.decodeUnsignedBlock(src, p.Ids[startIdx:startIdx+n], decoder)
+		if err != nil || hasIncompleteBlock {
+			return size, blockNum, startIdx, err
 		}
 
 		// decode row counts
-		src, err = p.decodeIntegerBlock(src, p.Rows[startIdx:startIdx+n], decoder)
-		if err != nil {
-			return nil, err
+		src, hasIncompleteBlock, err = p.decodeIntegerBlock(src, p.Rows[startIdx:startIdx+n], decoder)
+		if err != nil || hasIncompleteBlock {
+			return size, blockNum, startIdx, err
 		}
 
 		if decTimes {
 			// decode last flush times
-			src, err = p.decodeIntegerBlock(src, p.Tms[startIdx:startIdx+n], decoder)
-			if err != nil {
-				return nil, err
+			src, hasIncompleteBlock, err = p.decodeIntegerBlock(src, p.Tms[startIdx:startIdx+n], decoder)
+			if err != nil || hasIncompleteBlock {
+				return size, blockNum, startIdx, err
 			}
 		}
+		size = size + (startLen - len(src))
+		blockNum++
 		startIdx += n
 	}
-	return src, nil
+	return size, blockNum, startIdx, nil
 }
 
-func (p *IdTimePairs) decodeIntegerBlock(src []byte, dst []int64, ctx *encoding.CoderContext) ([]byte, error) {
-	size := int(numberenc.UnmarshalUint32(src))
-	if len(src) < size {
-		return nil, fmt.Errorf("block smaller (%d) data (%v) for time length", size, len(src))
+func (p *IdTimePairs) decodeIntegerBlock(src []byte, dst []int64, ctx *encoding.CoderContext) ([]byte, bool, error) {
+	if len(src) < 4 {
+		return nil, true, nil
 	}
+	size := int(numberenc.UnmarshalUint32(src))
 	src = src[4:]
+	if len(src) < size {
+		return nil, true, nil
+	}
 	buf := util.Int64Slice2byte(dst)
 	buf = buf[:0]
 	_, err := encoding.DecodeIntegerBlock(src[:size], &buf, ctx)
 
-	return src[size:], err
+	return src[size:], false, err
 }
 
-func (p *IdTimePairs) decodeUnsignedBlock(src []byte, dst []uint64, ctx *encoding.CoderContext) ([]byte, error) {
-	size := int(numberenc.UnmarshalUint32(src))
-	if len(src) < size {
-		return nil, fmt.Errorf("block smaller (%d) data (%v) for time length", size, len(src))
+func (p *IdTimePairs) decodeUnsignedBlock(src []byte, dst []uint64, ctx *encoding.CoderContext) ([]byte, bool, error) {
+	if len(src) < 4 {
+		return nil, true, nil
 	}
+	size := int(numberenc.UnmarshalUint32(src))
 	src = src[4:]
+	if len(src) < size {
+		return nil, true, nil
+	}
 	buf := util.Uint64Slice2byte(dst)
 	buf = buf[:0]
 	_, err := encoding.DecodeUnsignedBlock(src[:size], &buf, ctx)
 
-	return src[size:], err
+	return src[size:], false, err
 }
 
 type SeriesCounter struct {

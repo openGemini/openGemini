@@ -22,10 +22,12 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/crypto"
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/request"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
@@ -119,6 +121,10 @@ type VFS interface {
 	// MkdirAll creates a directory named path, along with any necessary parents
 	// the optional opt is: FileLockOption
 	MkdirAll(path string, perm os.FileMode, opt ...FSOption) error
+
+	// NormalizeDirPath returns a standardized directory path
+	NormalizeDirPath(path string) string
+
 	// ReadDir reads the directory named by dirname and returns
 	// a list of fs.FileInfo for the directory's contents, sorted by filename.
 	ReadDir(dirname string) ([]fs.FileInfo, error)
@@ -241,6 +247,11 @@ func Mkdir(path string, perm os.FileMode, opt ...FSOption) error {
 func MkdirAll(path string, perm os.FileMode, opt ...FSOption) error {
 	t := GetFsType(path)
 	return GetFs(t).MkdirAll(path, perm, opt...)
+}
+
+func NormalizeDirPath(path string) string {
+	t := GetFsType(path)
+	return GetFs(t).NormalizeDirPath(path)
 }
 
 // ReadDir reads the directory named by dirname and returns
@@ -368,6 +379,13 @@ func opsStatEnd(startTime int64, opsType int, bytes int64) {
 	}
 }
 
+func DecryptObsSk(sk string) string {
+	if config.GetProductType() == config.LogKeeper {
+		return sk
+	}
+	return crypto.Decrypt(sk)
+}
+
 func EncodeObsPath(endpoint, bucket, path, ak, sk string) string {
 	return fmt.Sprintf("%s%s/%s/%s/%s/%s", ObsPrefix, endpoint, ak, sk, bucket, path)
 }
@@ -387,7 +405,7 @@ func DeleteObsPath(path string, obsOpts *obs.ObsOptions) error {
 	var obsPath string
 	if obsOpts != nil {
 		path = filepath.Join(obsOpts.BasePath, path)
-		obsPath = EncodeObsPath(obsOpts.Endpoint, obsOpts.BucketName, path, obsOpts.Ak, obsOpts.Sk)
+		obsPath = EncodeObsPath(obsOpts.Endpoint, obsOpts.BucketName, path, obsOpts.Ak, DecryptObsSk(obsOpts.Sk))
 	} else {
 		path := filepath.Join(config.GetDataDir(), path)
 		obsPath = path
@@ -428,16 +446,16 @@ func OpenObsFile(path, fileName string, obsOpts *obs.ObsOptions, onlyRead bool) 
 	var obsPath string
 	if obsOpts != nil {
 		path = filepath.Join(obsOpts.BasePath, path, fileName)
-		obsPath = EncodeObsPath(obsOpts.Endpoint, obsOpts.BucketName, path, obsOpts.Ak, obsOpts.Sk)
+		obsPath = EncodeObsPath(obsOpts.Endpoint, obsOpts.BucketName, path, obsOpts.Ak, DecryptObsSk(obsOpts.Sk))
 	} else {
 		obsPath = filepath.Join(path, fileName)
 	}
 	var fd File
 	var err error
 	if onlyRead {
-		fd, err = OpenFile(obsPath, os.O_RDWR, 0640)
+		fd, err = OpenFile(obsPath, os.O_RDWR, 0600)
 	} else {
-		fd, err = OpenFile(obsPath, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0640)
+		fd, err = OpenFile(obsPath, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0600)
 	}
 	if err != nil {
 		return nil, err
@@ -450,9 +468,12 @@ func GetRemoteDataPath(obsOpt *obs.ObsOptions, dataPath string) string {
 	if obsOpt == nil {
 		return dir
 	}
+	if strings.HasPrefix(dataPath, ObsPrefix) {
+		return dataPath
+	}
 	dataPrefix := dataPath[len(obs.GetPrefixDataPath()):]
 	basePath := path.Join(obsOpt.BasePath, dataPrefix)
-	dir = fmt.Sprintf("%s%s/%s/%s/%s/%s", ObsPrefix, obsOpt.Endpoint, obsOpt.Ak, obsOpt.Sk, obsOpt.BucketName, basePath)
+	dir = fmt.Sprintf("%s%s/%s/%s/%s/%s", ObsPrefix, obsOpt.Endpoint, obsOpt.Ak, DecryptObsSk(obsOpt.Sk), obsOpt.BucketName, basePath)
 	return dir
 }
 
@@ -461,7 +482,7 @@ func GetRemotePrefixPath(obsOpt *obs.ObsOptions) string {
 	if obsOpt == nil {
 		return dir
 	}
-	dir = fmt.Sprintf("%s%s/%s/%s/%s", ObsPrefix, obsOpt.Endpoint, obsOpt.Ak, obsOpt.Sk, obsOpt.BucketName)
+	dir = fmt.Sprintf("%s%s/%s/%s/%s", ObsPrefix, obsOpt.Endpoint, obsOpt.Ak, DecryptObsSk(obsOpt.Sk), obsOpt.BucketName)
 	return dir
 }
 
@@ -477,6 +498,7 @@ const (
 	HdfsPrefix = "hdfs://"
 )
 
+var once sync.Once
 var localFS = NewFS()
 var obsFS = NewObsFs()
 
@@ -500,6 +522,7 @@ func GetFsType(path string) FsType {
 func GetFs(t FsType) VFS {
 	switch t {
 	case Local:
+		once.Do(SetLogger)
 		return localFS
 	case Obs:
 		return obsFS

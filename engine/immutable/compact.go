@@ -48,6 +48,7 @@ var (
 	ErrCompStopped        = errors.New("compact stopped")
 	ErrDownSampleStopped  = errors.New("downSample stopped")
 	ErrDroppingMst        = errors.New("measurement is dropped")
+	ErrParquetStopped     = errors.New("parquet task stopped")
 	LevelCompactRule      = []uint16{0, 1, 0, 2, 0, 3, 0, 1, 2, 3, 0, 4, 0, 5, 0, 1, 2, 6}
 	LevelCompactRuleForCs = []uint16{0, 1, 0, 1, 0, 1} // columnStore currently only doing level 0 and level 1 compaction,but the full functionality is available
 	LeveLMinGroupFiles    = [CompactLevels]int{8, 4, 4, 4, 4, 4, 2}
@@ -117,6 +118,11 @@ func (m *MmsTables) unrefMmsTable(orderWg, outOfOrderWg *sync.WaitGroup) {
 }
 
 func (m *MmsTables) LevelCompact(level uint16, shid uint64) error {
+	levelLimited := config.GetStoreConfig().Compact.MaxCompactionLevel
+	if levelLimited > 0 && int(level) >= levelLimited {
+		return nil
+	}
+
 	plans := m.ImmTable.LevelPlan(m, level)
 
 	if len(plans) == 0 {
@@ -169,7 +175,8 @@ func (m *MmsTables) NewChunkIterators(group FilesInfo) *ChunkIterators {
 func (m *MmsTables) compact(itrs *ChunkIterators, files []TSSPFile, level uint16, isOrder bool, cLog *Log.Logger) ([]TSSPFile, error) {
 	_, seq := files[0].LevelAndSequence()
 	fileName := NewTSSPFileName(seq, level, 0, 0, isOrder, m.lock)
-	tableBuilder := NewMsBuilder(m.path, itrs.name, m.lock, m.Conf, itrs.maxN, fileName, *m.tier, nil, itrs.estimateSize, config.TSSTORE, m.obsOpt, m.GetShardID())
+	tableBuilder := NewMsBuilder(m.path, itrs.name, m.lock, m.Conf, itrs.maxN, fileName, FilesMergedTire(files),
+		nil, itrs.estimateSize, config.TSSTORE, m.obsOpt, m.GetShardID())
 	tableBuilder.WithLog(cLog)
 
 	correctTimeDisorder := config.GetStoreConfig().Compact.CorrectTimeDisorder
@@ -299,7 +306,7 @@ func (m *MmsTables) buildFullCompactPlan(n int64, toLevel uint16) []*CompactGrou
 
 	builder := &CompactGroupBuilder{
 		limit:        int(n),
-		parquetLevel: config.GetStoreConfig().TSSPToParquetLevel,
+		parquetLevel: config.TSSPToParquetLevel(),
 		lowLevelMode: toLevel > 0,
 		level:        toLevel,
 	}
@@ -314,7 +321,11 @@ func (m *MmsTables) buildFullCompactPlan(n int64, toLevel uint16) []*CompactGrou
 			return nil
 		}
 
-		if m.scheduler.IsRunning(k) || atomic.LoadInt64(&v.closing) > 0 || v.fullCompacted() {
+		if v.hasUnloadFile() {
+			ReloadSpecifiedFiles(m, k, v)
+		}
+
+		if m.scheduler.IsRunning(k) || atomic.LoadInt64(&v.closing) > 0 || v.fullCompacted() || v.hasUnloadFile() {
 			continue
 		}
 
@@ -488,7 +499,7 @@ func (m *MmsTables) deleteFiles(files ...TSSPFile) error {
 				log.Error("rename old file error", zap.String("name", fname), zap.Error(err))
 				return err
 			}
-			nodeTableStoreGC.Add(false, f)
+			nodeTableStoreGC.Add(f)
 		} else {
 			if err := f.Remove(); err != nil {
 				log.Error("remove compacted fail error", zap.String("name", fname), zap.Error(err))

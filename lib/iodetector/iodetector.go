@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/openGemini/openGemini/lib/sysinfo"
@@ -126,7 +127,7 @@ func (d *IODetector) detectIO() {
 
 func (d *IODetector) flush() {
 	for _, filePath := range d.detectFilePath {
-		file, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+		file, err := os.OpenFile(filepath.Clean(filePath), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 		if err != nil || file == nil {
 			return
 		}

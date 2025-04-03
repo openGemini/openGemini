@@ -19,11 +19,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/influxdata/influxdb/pkg/testing/assert"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/stretchr/testify/assert"
 )
 
 func buildFillRowDataType() hybridqp.RowDataType {
@@ -1116,7 +1116,6 @@ func prepareOptFillIssue58() (*executor.QuerySchema, []hybridqp.ExprOptions) {
 }
 
 // ready for issues58
-// https://codehub-g.huawei.com/CTO_Technical_Innovation/Database/Gemini/github.com/openGemini/openGemini/issues/58
 func TestFillTransform_Null_Fill_Issue58(t *testing.T) {
 	sourceChunks := []executor.Chunk{buildSrcNullChunk()}
 	expectChunks := []executor.Chunk{buildTarNullFillChunk()}

@@ -17,7 +17,11 @@ func TestReaderAt(t *testing.T) {
 func testReaderAt(t *testing.T, bufSize int) {
 	path := "TestReaderAt"
 	lockPath := ""
-	const fileSize = 8 * 1024 * 1024
+	fileSize := 8 * 1024 * 1024
+	if bufSize <= 10 {
+		fileSize = 1024 * 64
+	}
+
 	data := make([]byte, fileSize)
 	if err := os.WriteFile(path, data, 0600); err != nil {
 		t.Fatalf("cannot create %q: %s", path, err)

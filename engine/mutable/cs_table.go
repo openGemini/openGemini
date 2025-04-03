@@ -45,6 +45,7 @@ import (
 const defaultWriteRecNum = 8
 
 type FlushManager interface {
+	SetDBInfo(db string, rp string)
 	flushChunk(primaryKey record.Schemas, msName string, indexRelation *influxql.IndexRelation, tbStore immutable.TablesStore,
 		chunk *WriteChunkForColumnStore, writeMs *immutable.MsBuilder, tcLocation int8)
 	updateAccumulateMetaIndex(accumulateMetaIndex *immutable.AccumulateMetaIndex)
@@ -52,6 +53,13 @@ type FlushManager interface {
 }
 
 type writeAttached struct {
+	db string
+	rp string
+}
+
+func (w *writeAttached) SetDBInfo(db string, rp string) {
+	w.db = db
+	w.rp = rp
 }
 
 func (w *writeAttached) updateAccumulateMetaIndex(accumulateMetaIndex *immutable.AccumulateMetaIndex) {
@@ -74,6 +82,8 @@ func (w *writeAttached) flushChunk(primaryKey record.Schemas, msName string, ind
 			logger.GetLogger().Error("rename init file failed", zap.String("mstName", msName), zap.Error(err))
 			return
 		}
+
+		immutable.NewCSParquetManager().Convert(writeMs.Files, w.db, w.rp, msName)
 
 		tbStore.AddTSSPFiles(writeMs.Name(), false, writeMs.Files...)
 		if writeMs.GetPKInfoNum() != 0 {
@@ -120,6 +130,8 @@ type writeDetached struct {
 	firstFlush          bool
 	localBFCount        int64 //the block count of a local bloomFilter file
 }
+
+func (w *writeDetached) SetDBInfo(string, string) {}
 
 func (w *writeDetached) updateAccumulateMetaIndex(accumulateMetaIndex *immutable.AccumulateMetaIndex) {
 	w.accumulateMetaIndex = accumulateMetaIndex
@@ -170,6 +182,10 @@ func (c *csMemTableImpl) initMsInfo(msInfo *MsInfo, row *influx.Row, rec *record
 
 func (c *csMemTableImpl) SetClient(client metaclient.MetaClient) {
 	c.client = client
+}
+
+func (c *csMemTableImpl) GetClient() metaclient.MetaClient {
+	return c.client
 }
 
 func (c *csMemTableImpl) SetFlushManagerInfo(manager map[string]FlushManager, accumulateMetaIndex *sync.Map) {
@@ -286,6 +302,7 @@ func (c *csMemTableImpl) FlushChunks(table *MemTable, dataPath, msName, db, rp s
 	writeMs.NewIndexWriterBuilder(rec.Schema, indexRelation)
 
 	fManager := c.getFlushManager(immutable.GetDetachedFlushEnabled(), writeMs, rec.Schema, msName, *lock)
+	fManager.SetDBInfo(db, rp)
 	fManager.flushChunk(primaryKey, msName, &indexRelation, tbStore, chunk, writeMs, tcLocation) // column store flush one chunk each time
 	if fileInfos != nil {
 		fileInfos <- writeMs.FilesInfo
@@ -466,7 +483,7 @@ func (c *csMemTableImpl) appendTagsFieldsToRecord(t *MemTable, rec *record.Recor
 		filedsSchemaLen, tagSchemaLen := len(fields), len(tags)
 		for pointSchemaIdx < filedsSchemaLen && tagSchemaIdx < tagSchemaLen {
 			if fields[pointSchemaIdx].Key < tags[tagSchemaIdx].Key {
-				if err = t.appendFieldToCol(&rec.ColVals[recSchemaIdx], &fields[pointSchemaIdx], &size); err != nil {
+				if err = record.AppendFieldToCol(&rec.ColVals[recSchemaIdx], &fields[pointSchemaIdx], &size); err != nil {
 					return size, err
 				}
 				pointSchemaIdx++
@@ -480,7 +497,7 @@ func (c *csMemTableImpl) appendTagsFieldsToRecord(t *MemTable, rec *record.Recor
 		}
 
 		for pointSchemaIdx < filedsSchemaLen {
-			if err = t.appendFieldToCol(&rec.ColVals[recSchemaIdx], &fields[pointSchemaIdx], &size); err != nil {
+			if err = record.AppendFieldToCol(&rec.ColVals[recSchemaIdx], &fields[pointSchemaIdx], &size); err != nil {
 				return size, err
 			}
 			pointSchemaIdx++
@@ -505,7 +522,7 @@ func (c *csMemTableImpl) appendTagsFieldsToRecord(t *MemTable, rec *record.Recor
 func (c *csMemTableImpl) appendToRecordWithSchemaLess(t *MemTable, rec *record.Record, fields influx.Fields, tags []influx.Tag, time int64) (int64, error) {
 	fields = c.genRowFields(fields, tags)
 	sort.Sort(&fields)
-	return t.appendFieldsToRecordSlow(rec, fields, time)
+	return record.AppendFieldsToRecordSlow(rec, fields, time)
 }
 
 func (c *csMemTableImpl) appendTagToCol(col *record.ColVal, tag *influx.Tag, size *int64) {

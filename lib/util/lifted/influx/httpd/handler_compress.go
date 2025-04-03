@@ -23,6 +23,7 @@ import (
 	"github.com/golang/snappy"
 	"github.com/klauspost/compress/zstd"
 	compression "github.com/openGemini/openGemini/lib/compress"
+	"github.com/pierrec/lz4/v4"
 )
 
 type lazyCompressResponseWriter struct {
@@ -37,8 +38,7 @@ type lazyCompressResponseWriter struct {
 func compressFilter(inner http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var writer io.Writer = w
-		// todo: consider Content_negotiation: https://developer.mozilla.org/en-US/docs/Web/HTTP/Content_negotiation
-		acceptEncoding := r.Header.Get("Accept-Encoding")
+		acceptEncoding := strings.ToLower(r.Header.Get("Accept-Encoding"))
 		switch {
 		case strings.Contains(acceptEncoding, "gzip"):
 			gz := compression.GetGzipWriter(w)
@@ -55,6 +55,11 @@ func compressFilter(inner http.Handler) http.Handler {
 			defer sn.Close()
 			writer = sn
 			w.Header().Set("Content-Encoding", "snappy")
+		case strings.Contains(acceptEncoding, "lz4"):
+			lz4w := compression.GetLz4Writer(w)
+			defer lz4w.Close()
+			writer = lz4w
+			w.Header().Set("Content-Encoding", "lz4")
 		default:
 			inner.ServeHTTP(w, r)
 			return
@@ -91,11 +96,13 @@ func (w *lazyCompressResponseWriter) Write(p []byte) (int, error) {
 	return w.Writer.Write(p)
 }
 
+type Flushable interface {
+	Flush()
+}
+
 func (w *lazyCompressResponseWriter) Flush() {
 	// Flush writer, if supported
-	if f, ok := w.Writer.(interface {
-		Flush()
-	}); ok {
+	if f, ok := w.Writer.(Flushable); ok {
 		f.Flush()
 	}
 
@@ -106,14 +113,17 @@ func (w *lazyCompressResponseWriter) Flush() {
 }
 
 func (w *lazyCompressResponseWriter) Close() error {
-	if gw, ok := w.Writer.(*gzip.Writer); ok {
-		compression.PutGzipWriter(gw)
-	}
-	if zw, ok := w.Writer.(*zstd.Encoder); ok {
-		compression.PutZstdWriter(zw)
-	}
-	if sw, ok := w.Writer.(*snappy.Writer); ok {
-		compression.PutSnappyWriter(sw)
+	switch writer := w.Writer.(type) {
+	case *gzip.Writer:
+		compression.PutGzipWriter(writer)
+	case *zstd.Encoder:
+		compression.PutZstdWriter(writer)
+	case *snappy.Writer:
+		compression.PutSnappyWriter(writer)
+	case *lz4.Writer:
+		compression.PutLz4Writer(writer)
+	default:
+		return nil
 	}
 	return nil
 }

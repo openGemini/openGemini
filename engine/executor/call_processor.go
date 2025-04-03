@@ -141,10 +141,10 @@ func NewProcessors(inRowDataType, outRowDataType hybridqp.RowDataType, exprOpt [
 				routine, err = NewModeRoutineImpl(inRowDataType, outRowDataType, exprOpt[i], isSingleCall)
 				coProcessor.AppendRoutine(routine)
 			case "top":
-				routine, err = NewTopRoutineImpl(inRowDataType, outRowDataType, exprOpt[i], auxProcessor)
+				routine, err = NewTopRoutineImpl(inRowDataType, outRowDataType, exprOpt[i], auxProcessor, opt)
 				coProcessor.AppendRoutine(routine)
 			case "bottom":
-				routine, err = NewBottomRoutineImpl(inRowDataType, outRowDataType, exprOpt[i], auxProcessor)
+				routine, err = NewBottomRoutineImpl(inRowDataType, outRowDataType, exprOpt[i], auxProcessor, opt)
 				coProcessor.AppendRoutine(routine)
 			case "distinct":
 				routine, err = NewDistinctRoutineImpl(inRowDataType, outRowDataType, exprOpt[i])
@@ -623,7 +623,7 @@ func NewPercentileApproxRoutineImpl(inRowDataType, outRowDataType hybridqp.RowDa
 	return nil, errno.NewError(errno.UnsupportedDataType, name, dataType.String())
 }
 
-func NewTopRoutineImpl(inRowDataType, outRowDataType hybridqp.RowDataType, opt hybridqp.ExprOptions, auxProcessor []*AuxProcessor) (Routine, error) {
+func NewTopRoutineImpl(inRowDataType, outRowDataType hybridqp.RowDataType, opt hybridqp.ExprOptions, auxProcessor []*AuxProcessor, ops *query.ProcessorOptions) (Routine, error) {
 	expr, ok := opt.Expr.(*influxql.Call)
 	if !ok {
 		panic(fmt.Errorf("NewTopRoutineImpl input illegal, opt.Expr is not influxql.Call"))
@@ -654,18 +654,24 @@ func NewTopRoutineImpl(inRowDataType, outRowDataType hybridqp.RowDataType, opt h
 	dataType := inRowDataType.Field(inOrdinal).Expr.(*influxql.VarRef).Type
 	switch dataType {
 	case influxql.Float:
-		return NewRoutineImpl(NewFloatColFloatHeapIterator(inOrdinal, outOrdinal, auxProcessor, outRowDataType, NewHeapItem[float64](int(n.Val), TopCmpByValueReduce[float64], TopCmpByTimeReduce[float64])),
+		if ops.IsPromQuery() {
+			return NewRoutineImpl(NewFloatColFloatHeapIterator(inOrdinal, outOrdinal, auxProcessor, outRowDataType,
+				NewHeapItem[float64](int(n.Val), TopCmpByValueReduceProm[float64], TopCmpByTimeReduce[float64], SortByValueDsc[float64])),
+				inOrdinal, outOrdinal), nil
+		}
+		return NewRoutineImpl(NewFloatColFloatHeapIterator(inOrdinal, outOrdinal, auxProcessor, outRowDataType,
+			NewHeapItem[float64](int(n.Val), TopCmpByValueReduce[float64], TopCmpByTimeReduce[float64], SortByTimeAsc[float64])),
 			inOrdinal, outOrdinal), nil
-
 	case influxql.Integer:
-		return NewRoutineImpl(NewIntegerColIntegerHeapIterator(inOrdinal, outOrdinal, auxProcessor, outRowDataType, NewHeapItem[int64](int(n.Val), TopCmpByValueReduce[int64], TopCmpByTimeReduce[int64])),
+		return NewRoutineImpl(NewIntegerColIntegerHeapIterator(inOrdinal, outOrdinal, auxProcessor, outRowDataType,
+			NewHeapItem[int64](int(n.Val), TopCmpByValueReduce[int64], TopCmpByTimeReduce[int64], SortByTimeAsc[int64])),
 			inOrdinal, outOrdinal), nil
 	default:
 		return nil, errno.NewError(errno.UnsupportedDataType, "top", dataType.String())
 	}
 }
 
-func NewBottomRoutineImpl(inRowDataType, outRowDataType hybridqp.RowDataType, opt hybridqp.ExprOptions, auxProcessor []*AuxProcessor) (Routine, error) {
+func NewBottomRoutineImpl(inRowDataType, outRowDataType hybridqp.RowDataType, opt hybridqp.ExprOptions, auxProcessor []*AuxProcessor, ops *query.ProcessorOptions) (Routine, error) {
 	expr, ok := opt.Expr.(*influxql.Call)
 	if !ok {
 		panic(fmt.Errorf("NewBottomRoutineImpl input illegal, opt.Expr is not influxql.Call"))
@@ -695,10 +701,17 @@ func NewBottomRoutineImpl(inRowDataType, outRowDataType hybridqp.RowDataType, op
 	dataType := inRowDataType.Field(inOrdinal).Expr.(*influxql.VarRef).Type
 	switch dataType {
 	case influxql.Float:
-		return NewRoutineImpl(NewFloatColFloatHeapIterator(inOrdinal, outOrdinal, auxProcessor, outRowDataType, NewHeapItem(int(n.Val), BottomCmpByValueReduce[float64], BottomCmpByTimeReduce[float64])),
+		if ops.IsPromQuery() {
+			return NewRoutineImpl(NewFloatColFloatHeapIterator(inOrdinal, outOrdinal, auxProcessor, outRowDataType,
+				NewHeapItem(int(n.Val), BottomCmpByValueReduceProm[float64], BottomCmpByTimeReduce[float64], SortByValueDsc[float64])),
+				inOrdinal, outOrdinal), nil
+		}
+		return NewRoutineImpl(NewFloatColFloatHeapIterator(inOrdinal, outOrdinal, auxProcessor, outRowDataType,
+			NewHeapItem(int(n.Val), BottomCmpByValueReduce[float64], BottomCmpByTimeReduce[float64], SortByTimeAsc[float64])),
 			inOrdinal, outOrdinal), nil
 	case influxql.Integer:
-		return NewRoutineImpl(NewIntegerColIntegerHeapIterator(inOrdinal, outOrdinal, auxProcessor, outRowDataType, NewHeapItem(int(n.Val), BottomCmpByValueReduce[int64], BottomCmpByTimeReduce[int64])),
+		return NewRoutineImpl(NewIntegerColIntegerHeapIterator(inOrdinal, outOrdinal, auxProcessor, outRowDataType,
+			NewHeapItem(int(n.Val), BottomCmpByValueReduce[int64], BottomCmpByTimeReduce[int64], SortByTimeAsc[int64])),
 			inOrdinal, outOrdinal), nil
 	default:
 		return nil, errno.NewError(errno.UnsupportedDataType, "bottom", dataType.String())

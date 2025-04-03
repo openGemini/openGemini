@@ -20,16 +20,17 @@ import (
 	"testing"
 
 	"github.com/hashicorp/raft"
-	ast "github.com/influxdata/influxdb/pkg/testing/assert"
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
 	"github.com/openGemini/openGemini/engine/executor/spdy"
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
+	ast "github.com/stretchr/testify/assert"
 )
 
 const address = "127.0.0.1:18298"
+
 const currentServer = 0
 
 func startServer() *MetaServer {
@@ -90,18 +91,18 @@ func (s *MockRPCStore) createDataNode(httpAddr, tcpAddr, role, az string) ([]byt
 	return nodeStartInfo.MarshalBinary()
 }
 
-func (s *MockRPCStore) ShowCluster(body []byte) ([]byte, error) {
-	if s.ShowClusterFn == nil {
-		return nil, nil
-	}
-	return s.ShowClusterFn(body)
-}
-
 func (s *MockRPCStore) CreateSqlNode(httpAddr string, gossipAddr string) ([]byte, error) {
 	nodeStartInfo := meta.NodeStartInfo{}
 	nodeStartInfo.NodeId = 1
 	nodeStartInfo.ShardDurationInfos = nil
 	return nodeStartInfo.MarshalBinary()
+}
+
+func (s *MockRPCStore) ShowCluster(body []byte) ([]byte, error) {
+	if s.ShowClusterFn == nil {
+		return nil, nil
+	}
+	return s.ShowClusterFn(body)
 }
 
 func (s *MockRPCStore) afterIndex(index uint64) <-chan struct{} {
@@ -156,6 +157,7 @@ func (s *MockRPCStore) getMeasurementInfo(dbName, rpName, mstName string) ([]byt
 func (s *MockRPCStore) getMeasurementsInfo(dbName, rpName string) ([]byte, error) {
 	return []byte{}, nil
 }
+
 func (s *MockRPCStore) Join(n *meta.NodeInfo) (*meta.NodeInfo, error) {
 	node := &meta.NodeInfo{
 		Host:    address,

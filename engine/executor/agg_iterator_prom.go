@@ -22,6 +22,9 @@ import (
 	"strconv"
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/promql2influxql"
 )
 
 const leTagName = "le"
@@ -85,6 +88,7 @@ func (r *FloatColFloatHistogramIterator) Next(ie *IteratorEndpoint, p *IteratorP
 			}
 			upperBound, err = strconv.ParseFloat(le, 64)
 			if err != nil {
+				metricName = ""
 				continue
 			}
 
@@ -102,19 +106,44 @@ func (r *FloatColFloatHistogramIterator) Next(ie *IteratorEndpoint, p *IteratorP
 			}
 
 		}
+		curMetric := r.metricWithBucketsMap[metricName]
+		if curMetric == nil {
+			continue
+		}
 		time := inChunk.TimeByIndex(i)
 		b := bucket{upperBound, inChunk.Column(r.inOrdinal).FloatValues()[curIndex]}
-		curMetric := r.metricWithBucketsMap[metricName]
 		if curMetric.init {
 			curMetric.buckets = append(curMetric.buckets, []bucket{b})
 			curMetric.times = append(curMetric.times, time)
 		} else {
-			curMetric.buckets[insertIndex] = append(curMetric.buckets[insertIndex], b)
+			insertBucket(curMetric, &insertIndex, time, b)
+			insertIndex++
+
 		}
-		insertIndex++
 	}
 	if p.lastChunk {
 		r.processBuckets(inChunk, outChunk)
+	}
+}
+
+func insertBucket(curMetric *metricWithBuckets, insertIndex *int, time int64, b bucket) {
+	if *insertIndex >= len(curMetric.times) {
+		curMetric.times = append(curMetric.times, time)
+		bs := []bucket{b}
+		curMetric.buckets = append(curMetric.buckets, bs)
+		return
+	}
+	if time == curMetric.times[*insertIndex] {
+		curMetric.buckets[*insertIndex] = append(curMetric.buckets[*insertIndex], b)
+		return
+	}
+	if time < curMetric.times[*insertIndex] {
+		curMetric.times = append(curMetric.times[:*insertIndex], append([]int64{time}, curMetric.times[*insertIndex:]...)...)
+		bs := []bucket{b}
+		curMetric.buckets = append(curMetric.buckets[:*insertIndex], append([]buckets{bs}, curMetric.buckets[*insertIndex:]...)...)
+	} else {
+		*insertIndex++
+		insertBucket(curMetric, insertIndex, time, b)
 	}
 }
 
@@ -325,5 +354,189 @@ func (r *ScalarIterator) processBuffer(outChunk Chunk) {
 		outChunk.AppendIntervalIndex(outChunk.Len() - 1)
 		column.AppendNotNil()
 		column.AppendFloatValue(val)
+	}
+}
+
+type AbsentIterator struct {
+	inOrdinal    int
+	outOrdinal   int
+	steps        int
+	fullTimeFlag bool
+	opt          *query.ProcessorOptions
+	buf          *SliceItem[float64]
+	timeMap      map[int64]struct{}
+}
+
+func NewAbsentIterator(inOrdinal, outOrdinal int, opt *query.ProcessorOptions) *AbsentIterator {
+	var steps int
+	if opt.IsPromInstantQuery() {
+		steps = 1
+	} else if opt.IsRangeVectorSelector() {
+		steps = int((opt.EndTime-opt.StartTime-int64(opt.Range))/int64(opt.Step)) + 1
+	} else {
+		steps = int((opt.EndTime-opt.StartTime-int64(opt.LookBackDelta))/int64(opt.Step)) + 1
+	}
+	return &AbsentIterator{
+		inOrdinal:  inOrdinal,
+		outOrdinal: outOrdinal,
+		steps:      steps,
+		opt:        opt,
+		timeMap:    make(map[int64]struct{}),
+		buf:        NewSliceItem[float64](),
+	}
+}
+
+func (r *AbsentIterator) Next(ie *IteratorEndpoint, p *IteratorParams) {
+	if r.fullTimeFlag || r.opt.IsPromInstantQuery() {
+		return
+	}
+	inChunk, outChunk := ie.InputPoint.Chunk, ie.OutputPoint.Chunk
+	firstIndex, lastIndex := 0, len(inChunk.TagIndex())-1
+	times := inChunk.Time()
+	var end int
+	for i, start := range inChunk.TagIndex() {
+		if i < lastIndex {
+			end = inChunk.TagIndex()[i+1]
+		} else {
+			end = inChunk.NumberOfRows()
+
+		}
+
+		if i == firstIndex {
+			if r.buf.Len()+(end-start) == r.steps {
+				r.buf.Reset()
+				r.fullTimeFlag = true
+				return
+			}
+			r.processFirstWindow(start, end, times)
+		} else if i == lastIndex && p.sameTag {
+			r.buf.time = times[start:end]
+		} else {
+			if end-start == r.steps {
+				r.fullTimeFlag = true
+				return
+			}
+			r.processMiddleWindow(start, end, times)
+		}
+		if len(r.timeMap) == r.steps {
+			r.fullTimeFlag = true
+			break
+		}
+	}
+	if p.lastChunk {
+		r.processTimeMap(outChunk)
+		r.fullTimeFlag = false
+		r.timeMap = make(map[int64]struct{})
+	}
+}
+
+func (r *AbsentIterator) processFirstWindow(start, end int, times []int64) {
+	for _, t := range r.buf.time {
+		r.timeMap[t] = struct{}{}
+	}
+	for i := start; i < end; i++ {
+		r.timeMap[times[i]] = struct{}{}
+	}
+	r.buf.Reset()
+}
+
+func (r *AbsentIterator) processMiddleWindow(start, end int, times []int64) {
+	for i := start; i < end; i++ {
+		r.timeMap[times[i]] = struct{}{}
+	}
+}
+
+func (r *AbsentIterator) processTimeMap(outChunk Chunk) {
+	outColumn := outChunk.Column(r.outOrdinal)
+	keys := make([]string, 0)
+	values := make([]string, 0)
+	kvMap := make(map[string]string)
+	kCountMap := make(map[string]int)
+	createLabelsFromCondition(r.opt.Condition, kvMap, kCountMap)
+	for k, v := range kvMap {
+		if kCountMap[k] == 1 {
+			keys = append(keys, k)
+			values = append(values, v)
+		}
+	}
+	chunkTags := NewChunkTagsByTagKVs(keys, values)
+	outChunk.AppendTagsAndIndex(*chunkTags, outChunk.Len())
+	startTime := r.opt.StartTime
+	if r.opt.IsRangeVectorSelector() {
+		startTime += int64(r.opt.Range)
+	} else {
+		startTime += int64(r.opt.LookBackDelta)
+	}
+	step := int64(r.opt.Step)
+	for ts := startTime; ts <= r.opt.EndTime; ts += step {
+		if _, ok := r.timeMap[ts]; !ok {
+			outChunk.AppendTime(ts)
+			outChunk.AppendIntervalIndex(outChunk.Len() - 1)
+			outColumn.AppendNotNil()
+			outColumn.AppendFloatValue(1)
+		}
+	}
+}
+
+func createLabelsFromCondition(expr influxql.Expr, kvMap map[string]string, kCountMap map[string]int) {
+	e, ok := expr.(*influxql.BinaryExpr)
+	if !ok {
+		return
+	}
+	createLabelsFromCondition(e.LHS, kvMap, kCountMap)
+	createLabelsFromCondition(e.RHS, kvMap, kCountMap)
+	if e.Op != influxql.EQ {
+		return
+	}
+	k, ok1 := e.LHS.(*influxql.VarRef)
+	v, ok2 := e.RHS.(*influxql.StringLiteral)
+	if ok1 && ok2 {
+		if k.Val == promql2influxql.DefaultMetricKeyLabel {
+			return
+		}
+		if _, ok := kCountMap[k.Val]; ok {
+			kCountMap[k.Val]++
+			return
+		}
+		kCountMap[k.Val] = 1
+		kvMap[k.Val] = v.Val
+	}
+
+}
+
+func AbsentWithOutDataAlive(opt *query.ProcessorOptions, outChunk Chunk) {
+	outColumn := outChunk.Column(0)
+	keys := make([]string, 0)
+	values := make([]string, 0)
+	kvMap := make(map[string]string)
+	kCountMap := make(map[string]int)
+	createLabelsFromCondition(opt.Condition, kvMap, kCountMap)
+	for k, v := range kvMap {
+		if kCountMap[k] == 1 {
+			keys = append(keys, k)
+			values = append(values, v)
+		}
+	}
+	chunkTags := NewChunkTagsByTagKVs(keys, values)
+	outChunk.AppendTagsAndIndex(*chunkTags, outChunk.Len())
+	startTime := opt.StartTime
+	if opt.IsRangeVectorSelector() {
+		startTime += int64(opt.Range)
+	} else {
+		startTime += int64(opt.LookBackDelta)
+	}
+	if opt.IsPromInstantQuery() {
+		outChunk.AppendTime(startTime)
+		outChunk.AppendIntervalIndex(outChunk.Len() - 1)
+		outColumn.AppendNotNil()
+		outColumn.AppendFloatValue(1)
+		return
+	}
+	step := int64(opt.Step)
+	for ts := startTime; ts <= opt.EndTime; ts += step {
+		outChunk.AppendTime(ts)
+		outChunk.AppendIntervalIndex(outChunk.Len() - 1)
+		outColumn.AppendNotNil()
+		outColumn.AppendFloatValue(1)
 	}
 }

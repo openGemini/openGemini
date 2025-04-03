@@ -407,7 +407,7 @@ func (s *Stream) updateShardGroupAndShardKey(database, retentionPolicy string, r
 	}
 
 	if !sameSg {
-		*asis = s.MetaClient.GetAliveShards(database, sg)
+		*asis = s.MetaClient.GetAliveShards(database, sg, false)
 	}
 
 	if (*si).Type == influxql.RANGE {

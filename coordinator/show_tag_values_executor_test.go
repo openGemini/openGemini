@@ -376,7 +376,7 @@ func (m *mockNS) ShowTagKeys(nodeID uint64, db string, ptId []uint32, measuremen
 	return arr, nil
 }
 
-func (m *mockNS) TagValues(nodeID uint64, db string, ptIDs []uint32, tagKeys map[string]map[string]struct{}, cond influxql.Expr, limit int, disorder bool) (netstorage.TablesTagSets, error) {
+func (m *mockNS) TagValues(nodeID uint64, db string, ptIDs []uint32, tagKeys map[string]map[string]struct{}, cond influxql.Expr, limit int, exact bool) (netstorage.TablesTagSets, error) {
 	if nodeID == 1 {
 		return append(netstorage.TablesTagSets{}, netstorage.TableTagSets{
 			Name: "mst",

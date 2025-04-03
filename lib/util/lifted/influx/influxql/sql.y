@@ -1,19 +1,17 @@
 %{
-/*
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
- http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package influxql
 
@@ -112,7 +110,7 @@ func deal_Fill (fill interface{})  (FillOption , interface{},bool) {
                 EVERY RESAMPLE
                 DOWNSAMPLE DOWNSAMPLES SAMPLEINTERVAL TIMEINTERVAL STREAM DELAY STREAMS
                 QUERY PARTITION
-                TOKEN TOKENIZERS MATCH LIKE MATCHPHRASE CONFIG CONFIGS CLUSTER
+                TOKEN TOKENIZERS MATCH LIKE MATCHPHRASE CONFIG CONFIGS CLUSTER IPINRANGE
                 REPLICAS DETAIL DESTINATIONS
                 SCHEMA INDEXES AUTO EXCEPT
 %token <bool>   DESC ASC
@@ -1105,6 +1103,14 @@ CONDITION:
     		Op: MATCHPHRASE,
     	}
     }
+    |IPINRANGE LPAREN STRING_TYPE COMMA STRING_TYPE RPAREN
+    {
+        $$ = &BinaryExpr{
+            LHS:  &VarRef{Val: $3},
+            RHS:  &StringLiteral{Val: $5},
+            Op: IPINRANGE,
+        }
+    }
 
 OPERATION_EQUAL:
     CONDITION_COLUMN CONDITION_OPERATOR CONDITION_COLUMN
@@ -1816,6 +1822,29 @@ SHOW_SERIES_STATEMENT:
     	stmt.Offset = $6[1]
     	$$ = stmt
     }
+    |SHOW HINT SERIES ON_DATABASE FROM_CLAUSE WHERE_CLAUSE ORDER_CLAUSES LIMIT_OFFSET_OPTION
+    {
+        stmt := &ShowSeriesStatement{}
+        stmt.Hints = $2
+        stmt.Database = $4
+        stmt.Sources = $5
+        stmt.Condition = $6
+        stmt.SortFields = $7
+        stmt.Limit = $8[0]
+        stmt.Offset = $8[1]
+        $$ = stmt
+    }
+    |SHOW HINT SERIES ON_DATABASE WHERE_CLAUSE ORDER_CLAUSES LIMIT_OFFSET_OPTION
+    {
+        stmt := &ShowSeriesStatement{}
+        stmt.Hints = $2
+        stmt.Database = $4
+        stmt.Condition = $5
+        stmt.SortFields = $6
+        stmt.Limit = $7[0]
+        stmt.Offset = $7[1]
+        $$ = stmt
+    }
 
 SHOW_USERS_STATEMENT:
     SHOW USERS
@@ -2165,6 +2194,31 @@ SHOW_TAG_VALUES_STATEMENT:
        stmt.Offset = $10[1]
        $$ = stmt
    }
+  |SHOW HINT TAG VALUES ON_DATABASE FROM_CLAUSE WITH KEY TAG_VALUES_WITH WHERE_CLAUSE ORDER_CLAUSES LIMIT_OFFSET_OPTION
+  {
+       stmt := $9.(*ShowTagValuesStatement)
+       stmt.Hints = $2
+       stmt.TagKeyCondition = nil
+       stmt.Database = $5
+       stmt.Sources = $6
+       stmt.Condition = $10
+       stmt.SortFields = $11
+       stmt.Limit = $12[0]
+       stmt.Offset = $12[1]
+       $$ = stmt
+  }
+  |SHOW HINT TAG VALUES ON_DATABASE WITH KEY TAG_VALUES_WITH WHERE_CLAUSE ORDER_CLAUSES LIMIT_OFFSET_OPTION
+  {
+       stmt := $8.(*ShowTagValuesStatement)
+       stmt.Hints = $2
+       stmt.TagKeyCondition = nil
+       stmt.Database = $5
+       stmt.Condition = $9
+       stmt.SortFields = $10
+       stmt.Limit = $11[0]
+       stmt.Offset = $11[1]
+       $$ = stmt
+  }
 
 TAG_VALUES_WITH:
   EQ TAG_KEYS
@@ -2615,6 +2669,7 @@ CMOPTION_INDEXTYPE_CS:
     {
         validIndexType := map[string]struct{}{}
         validIndexType["bloomfilter"] = struct{}{}
+        validIndexType["bloomfilter_ip"] = struct{}{}
         validIndexType["minmax"] = struct{}{}
         validIndexType["text"] = struct{}{}
         if $2 == nil {
@@ -2642,6 +2697,7 @@ CMOPTION_INDEXTYPE_CS:
         }
         validIndexType := map[string]struct{}{}
         validIndexType["bloomfilter"] = struct{}{}
+        validIndexType["bloomfilter_ip"] = struct{}{}
         validIndexType["minmax"] = struct{}{}
         if $6 == nil {
             $$ = indextype
@@ -3119,7 +3175,7 @@ DROP_MEASUREMENT_STATEMENT:
     {
         stmt := &DropMeasurementStatement{}
         stmt.Name = $3
-	    stmt.RpName = ""
+        stmt.RpName = ""
         $$ = stmt
     }
     | DROP MEASUREMENT IDENT DOT IDENT

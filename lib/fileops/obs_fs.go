@@ -46,6 +46,7 @@ import (
 const (
 	ObsReadRetryTimes  = 3
 	ObsWriteRetryTimes = 3
+	ObsOpenRetryTimes  = 3
 )
 
 type obsFile struct {
@@ -64,7 +65,7 @@ func (o *obsFile) Close() error {
 func (o *obsFile) Read(dst []byte) (int, error) {
 	n, err := o.ReadAt(dst, o.offset)
 	if err != nil {
-		return 0, err
+		return n, err
 	}
 	o.offset += int64(len(dst))
 	return n, nil
@@ -102,7 +103,7 @@ func (o *obsFile) Write(src []byte) (int, error) {
 			break
 		}
 		logger.GetLogger().Error("retry append to object", zap.Error(err), zap.Int64("pos", modifyObjectInput.Position),
-			zap.Int("data size", size), zap.String("write stack", string(debug.Stack())))
+			zap.Int("data size", size), zap.Int("retry time", i), zap.String("write stack", string(debug.Stack())))
 	}
 	if err != nil {
 		return 0, fmt.Errorf("obsClient.ModifyObject failed, error: %v", err)
@@ -125,9 +126,14 @@ func (o *obsFile) ReadAt(dst []byte, off int64) (int, error) {
 	if getObjectOutput, err := o.client.GetObject(getObjectInput); err != nil {
 		return 0, fmt.Errorf("obsClient.GetObject failed, error: %v", err)
 	} else {
-		_, err = io.ReadFull(getObjectOutput.Body, dst)
+		defer getObjectOutput.Body.Close()
+		n, err := io.ReadFull(getObjectOutput.Body, dst)
 		if err != nil {
-			return 0, err
+			// for obs file if read full size is euqal with object length, regard as end of file.
+			if n == int(getObjectOutput.ContentLength) {
+				return n, io.EOF
+			}
+			return n, err
 		}
 	}
 	return size, nil
@@ -500,14 +506,20 @@ func (o *obsFs) OpenFile(path string, flag int, perm os.FileMode, opt ...FSOptio
 	if err != nil {
 		return nil, err
 	}
-	input := &obs.GetObjectMetadataInput{
-		Bucket: conf.bucket,
-		Key:    key,
-	}
 
-	meta, err := client.GetObjectMetadata(input)
-	if err != nil {
-		if err.(obs.ObsError).StatusCode == 404 && flag&os.O_CREATE > 0 { // object not found
+	var meta *obs.GetObjectMetadataOutput
+	for i := 0; i < ObsOpenRetryTimes; i++ {
+		input := &obs.GetObjectMetadataInput{
+			Bucket: conf.bucket,
+			Key:    key,
+		}
+		meta, err = client.GetObjectMetadata(input)
+		if err == nil {
+			break
+		}
+		logger.GetLogger().Error("get object meta data error ", zap.Error(err))
+		obsErr, ok := err.(obs.ObsError)
+		if ok && obsErr.StatusCode == 404 && flag&os.O_CREATE > 0 {
 			putObjectInput := &obs.PutObjectInput{
 				Body: bytes.NewReader([]byte{}),
 			}
@@ -517,10 +529,13 @@ func (o *obsFs) OpenFile(path string, flag int, perm os.FileMode, opt ...FSOptio
 			if err != nil {
 				return nil, err
 			}
-		} else {
-			return nil, err
 		}
+		logger.GetLogger().Error("retry open obs file failed ", zap.String("key", key), zap.Int("retry time", i), zap.Error(err))
 	}
+	if err != nil {
+		return nil, err
+	}
+
 	var offset int64
 	if flag&os.O_APPEND > 0 && meta != nil {
 		offset = meta.ContentLength
@@ -655,6 +670,7 @@ func (o *obsFs) ReadDir(path string) ([]os.FileInfo, error) {
 	listInput := &obs.ListObjectsInput{
 		Bucket: conf.bucket,
 	}
+
 	listInput.Prefix = o.NormalizeDirPath(key)
 	objs, err := client.ListObjects(listInput)
 	if err != nil {
@@ -697,10 +713,20 @@ func (o *obsFs) RenameFile(oldPath, newPath string, opt ...FSOption) error {
 		return err
 	}
 
+	var newKey string
+	if strings.HasSuffix(oldPath, OBS.ObsFileTmpSuffix) {
+		newKey = key[:len(key)-len(OBS.ObsFileTmpSuffix)]
+	} else {
+		_, newKey, _, err = o.prepare(newPath)
+		if err != nil {
+			return err
+		}
+	}
+
 	input := &obs.RenameFileInput{
 		Bucket:       conf.bucket,
 		Key:          key,
-		NewObjectKey: key[:len(key)-len(OBS.ObsFileTmpSuffix)],
+		NewObjectKey: newKey,
 	}
 
 	_, err = client.RenameFile(input)
@@ -737,6 +763,10 @@ func (o *obsFs) Stat(path string) (os.FileInfo, error) {
 	}
 	meta, err := client.GetObjectMetadata(input)
 	if err != nil {
+		obsErr, ok := err.(obs.ObsError)
+		if ok && obsErr.StatusCode == 404 {
+			return nil, os.ErrNotExist
+		}
 		return nil, err
 	}
 	return &obsFileInfo{
@@ -823,7 +853,7 @@ func (o *obsFs) CopyFileFromDFVToOBS(srcPath, dstPath string, opt ...FSOption) e
 }
 
 func (o *obsFs) CreateV2(name string, opt ...FSOption) (File, error) {
-	return o.OpenFile(name, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0640)
+	return o.OpenFile(name, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0600)
 }
 
 func (o *obsFs) GetAllFilesSizeInPath(path string) (int64, int64, int64, error) {

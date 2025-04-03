@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"path"
 	"path/filepath"
 	"testing"
 	"time"
@@ -118,10 +119,15 @@ func TestWalReplayParallel(t *testing.T) {
 			t.Run(c.Name, func(t *testing.T) {
 				opt := genQueryOpt(&c, msNames[nameIdx], ascending)
 				querySchema := genQuerySchema(c.fieldAux, opt)
-				cursors, err := newSh.CreateCursor(context.Background(), querySchema)
+				info, err := newSh.CreateCursor(context.Background(), querySchema)
 				if err != nil {
 					t.Fatal(err)
 				}
+				if info == nil {
+					return
+				}
+				defer func() { info.Unref() }()
+				cursors := info.GetCursors()
 
 				// step5: loop all cursors to query data from shard
 				// key is indexKey, value is Record
@@ -192,10 +198,15 @@ func TestWalReplaySerial(t *testing.T) {
 			t.Run(c.Name, func(t *testing.T) {
 				opt := genQueryOpt(&c, msNames[nameIdx], ascending)
 				querySchema := genQuerySchema(c.fieldAux, opt)
-				cursors, err := sh.CreateCursor(context.Background(), querySchema)
+				info, err := sh.CreateCursor(context.Background(), querySchema)
 				if err != nil {
 					t.Fatal(err)
 				}
+				if info == nil {
+					return
+				}
+				defer func() { info.Unref() }()
+				cursors := info.GetCursors()
 
 				// step5: loop all cursors to query data from shard
 				// key is indexKey, value is Record
@@ -340,8 +351,7 @@ func TestWalReplayWithUnKnowType(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wr := &walRecord{binary: buff, writeWalType: WriteWalUnKnownType}
-	err = sh.wal.Write(wr)
+	err = sh.wal.Write(buff, WriteWalUnKnownType, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -376,10 +386,15 @@ func TestWalReplayWithUnKnowType(t *testing.T) {
 			t.Run(c.Name, func(t *testing.T) {
 				opt := genQueryOpt(&c, msNames[nameIdx], ascending)
 				querySchema := genQuerySchema(c.fieldAux, opt)
-				cursors, err := newSh.CreateCursor(context.Background(), querySchema)
+				info, err := newSh.CreateCursor(context.Background(), querySchema)
 				if err != nil {
 					t.Fatal(err)
 				}
+				if info == nil {
+					return
+				}
+				defer func() { info.Unref() }()
+				cursors := info.GetCursors()
 
 				// step5: loop all cursors to query data from shard
 				// key is indexKey, value is Record
@@ -406,35 +421,11 @@ func TestWalReplayWithUnKnowType(t *testing.T) {
 
 func Test_batchReadWalFile(t *testing.T) {
 	testDir := t.TempDir()
-
-	rows := influx.Rows{
-		{
-			Name: "mst_0000",
-			Tags: influx.PointTags{
-				{
-					Key:   "server",
-					Value: "host1",
-				},
-			},
-			Fields: influx.Fields{
-				{
-					Key:      "cpu",
-					NumValue: 12,
-					Type:     influx.Field_Type_Int,
-				},
-			},
-		},
-	}
-	rowsBinary, err := influx.FastMarshalMultiRows(nil, rows)
-	require.NoError(t, err)
-	rowsBinary = snappy.Encode(nil, rowsBinary)
-
-	walBinary := []byte{1}
-	walBinary = binary.BigEndian.AppendUint32(walBinary, uint32(len(rowsBinary)))
-	walBinary = append(walBinary, rowsBinary...)
+	_, walBinary := buildRows(t, []int64{0})
 
 	wal := &WAL{
 		replayBatchSize: 256 * 1024,
+		log:             logger.NewLogger(errno.ModuleWal),
 	}
 	cxt := context.Background()
 	tmpFile := filepath.Join(testDir, "my1.wal")
@@ -450,4 +441,135 @@ func Test_batchReadWalFile(t *testing.T) {
 
 	err = wal.replayWalFile(cxt, tmpFile, callback)
 	require.Errorf(t, err, "mock callback error")
+}
+
+func streamWalConf(dir string) func() {
+	config.GetStoreConfig().Wal.WalUsedForStream = true
+	_ = os.MkdirAll(path.Join(dir, "wal"), 0700)
+	_ = os.MkdirAll(path.Join(dir, StreamWalDir), 0700)
+
+	return func() {
+		NewStreamWalManager().Free(math.MaxInt64)
+		config.GetStoreConfig().Wal.WalUsedForStream = false
+	}
+}
+
+func TestStreamWalManager(t *testing.T) {
+	lock := ""
+	dir := t.TempDir()
+	defer streamWalConf(dir)()
+
+	swm := NewStreamWalManager()
+
+	for _, maxTime := range []int64{100, 200, 120, 190, 140} {
+		walFiles := newWalFiles(maxTime, &lock, dir)
+		for i := 0; i < 2; i++ {
+			file := path.Join(dir, fmt.Sprintf("/wal/%d.wal", 100+i))
+			require.NoError(t, os.WriteFile(file, make([]byte, 1024), 0600))
+			walFiles.Add(file)
+		}
+
+		require.NoError(t, RemoveWalFiles(walFiles))
+	}
+
+	exps := []int{5, 4, 1, 1, 0}
+	for i, tm := range []int64{10, 101, 191, 192, 300} {
+		swm.Free(tm)
+		require.Equal(t, exps[i], len(swm.files))
+	}
+}
+
+func TestStreamWalManager_Load(t *testing.T) {
+	lock := ""
+	dir := t.TempDir()
+	defer streamWalConf(dir)()
+
+	swm := NewStreamWalManager()
+	swm.InitStreamHandler(func(rows influx.Rows, fileNames []string) error { return nil })
+	now := time.Now().UnixNano()
+	maxTime := now - now%1e9
+
+	buf := make([]byte, 1024)
+	var createFile = func(name string) {
+		file := path.Join(dir, fmt.Sprintf("/%s/%s.wal", StreamWalDir, name))
+		require.NoError(t, os.WriteFile(file, buf, 0600))
+	}
+
+	createFile(fmt.Sprintf("%d_%d", maxTime, now))
+	createFile(fmt.Sprintf("%d-%d", maxTime, 0))
+	createFile(fmt.Sprintf("%d_%d", maxTime, 0))
+	createFile(fmt.Sprintf("%d_%s", maxTime, "aaabbbcccaaabbbccca"))
+
+	require.NoError(t, swm.Load(dir, &lock))
+	require.Equal(t, 1, len(swm.loadFiles))
+
+	_, err := swm.Replay(context.Background(), 0, 0, 0)
+	require.NoError(t, err)
+
+	swm.CleanLoadFiles()
+}
+
+func TestStreamWalManager_Reply(t *testing.T) {
+	dir := t.TempDir()
+	defer streamWalConf(dir)()
+	var other influx.Row
+	swm := NewStreamWalManager()
+	swm.InitStreamHandler(func(rows influx.Rows, fileNames []string) error {
+		other = rows[1]
+		return nil
+	})
+	rows, walBinary := buildRows(t, []int64{100, 10000, 3000})
+
+	now := time.Now().UnixNano()
+	maxTime := now - now%1e9
+
+	file := path.Join(dir, fmt.Sprintf("/%s/%s.wal", StreamWalDir, fmt.Sprintf("%d_%d", maxTime, now)))
+	require.NoError(t, os.WriteFile(file, walBinary, 0600))
+
+	lock := ""
+	require.NoError(t, swm.Load(dir, &lock))
+	require.Equal(t, 1, len(swm.loadFiles))
+
+	_, err := swm.Replay(context.Background(), 8000, 0, 0)
+	require.NoError(t, err)
+
+	exp := rows[1]
+	require.Equal(t, exp.Timestamp, other.Timestamp)
+	require.Equal(t, exp.Name, other.Name)
+	require.Equal(t, exp.Tags, other.Tags)
+	require.Equal(t, exp.Fields, other.Fields)
+	swm.CleanLoadFiles()
+}
+
+func buildRows(t *testing.T, times []int64) (influx.Rows, []byte) {
+	rows := make(influx.Rows, len(times))
+
+	for i := range times {
+		rows[i] = influx.Row{
+			Timestamp: times[i],
+			Name:      "mst_0000",
+			Tags: influx.PointTags{
+				{
+					Key:   "server",
+					Value: "host1",
+				},
+			},
+			Fields: influx.Fields{
+				{
+					Key:      "cpu",
+					NumValue: float64(i + 1),
+					Type:     influx.Field_Type_Int,
+				},
+			},
+		}
+	}
+
+	rowsBinary, err := influx.FastMarshalMultiRows(nil, rows)
+	require.NoError(t, err)
+	rowsBinary = snappy.Encode(nil, rowsBinary)
+
+	walBinary := []byte{1}
+	walBinary = binary.BigEndian.AppendUint32(walBinary, uint32(len(rowsBinary)))
+	walBinary = append(walBinary, rowsBinary...)
+	return rows, walBinary
 }

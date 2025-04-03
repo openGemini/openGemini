@@ -15,11 +15,12 @@
 package handler
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
-	"github.com/influxdata/influxdb/kit/errors"
 	"github.com/openGemini/openGemini/app/ts-store/transport/query"
+	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/codec"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
@@ -75,7 +76,9 @@ func (h *SeriesExactCardinality) Process() (codec.BinaryCodec, error) {
 	return h.rsp, nil
 }
 
-func (h *SeriesKeys) Process() (codec.BinaryCodec, error) {
+// processRough used to search series keys from index
+// the query time range can match only the index time range.
+func (h *SeriesKeys) processRough() (codec.BinaryCodec, error) {
 	h.rsp.Err = processDDL(h.req.Condition, func(expr influxql.Expr, tr influxql.TimeRange) error {
 		var err error
 		h.rsp.Series, err = h.store.SeriesKeys(*h.req.Db, h.req.PtIDs, h.req.Measurements, expr, tr)
@@ -83,6 +86,54 @@ func (h *SeriesKeys) Process() (codec.BinaryCodec, error) {
 	})
 
 	return h.rsp, nil
+}
+
+// processExact used to search series keys from the chunk meta and index,
+// the query time range can match the chunk meta time range.
+func (h *SeriesKeys) processExact() (codec.BinaryCodec, error) {
+	var plan netstorage.DDLBasePlans
+
+	h.rsp.Err = processDDL(h.req.Condition, func(expr influxql.Expr, tr influxql.TimeRange) error {
+		engine := h.store.GetEngine()
+
+		ptIdRefSuc := make([]uint32, 0, len(h.req.PtIDs))
+		defer func() {
+			for _, ptId := range ptIdRefSuc {
+				engine.DbPTUnref(*h.req.Db, ptId)
+			}
+		}()
+		for _, ptId := range h.req.PtIDs {
+			if err := engine.DbPTRef(*h.req.Db, ptId); err != nil {
+				return err
+			}
+			ptIdRefSuc = append(ptIdRefSuc, ptId)
+		}
+
+		plan = engine.CreateDDLBasePlans(hybridqp.ShowSeries, *h.req.Db, ptIdRefSuc, &tr)
+		mstKeys := make(map[string][][]byte, len(h.req.Measurements))
+		for _, mst := range h.req.Measurements {
+			mstKeys[mst] = [][]byte{}
+		}
+		seriesKeys, err := plan.Execute(mstKeys, expr, util.TimeRange{
+			Min: tr.Min.UnixNano(),
+			Max: tr.Max.UnixNano(),
+		}, 0)
+		series, ok := seriesKeys.([]string)
+		if !ok {
+			return fmt.Errorf("invalid series")
+		}
+		h.rsp.Series = series
+		return err
+	})
+
+	return h.rsp, nil
+}
+
+func (h *SeriesKeys) Process() (codec.BinaryCodec, error) {
+	if !h.req.GetExact() {
+		return h.processRough()
+	}
+	return h.processExact()
 }
 
 func (h *ShowTagKeys) Process() (codec.BinaryCodec, error) {
@@ -104,13 +155,15 @@ func (h *CreateDataBase) Process() (codec.BinaryCodec, error) {
 }
 
 func (h *ShowTagValues) Process() (codec.BinaryCodec, error) {
-	if h.req.Disorder == nil || !h.req.GetDisorder() {
-		return h.process()
+	if !h.req.GetExact() {
+		return h.processRough()
 	}
-	return h.processDisorder()
+	return h.processExact()
 }
 
-func (h *ShowTagValues) process() (codec.BinaryCodec, error) {
+// processRough used to search tag values from the index,
+// the query time range can match the index time range.
+func (h *ShowTagValues) processRough() (codec.BinaryCodec, error) {
 	h.rsp.Err = processDDL(h.req.Condition, func(expr influxql.Expr, tr influxql.TimeRange) error {
 		tagKeys := h.req.GetTagKeysBytes()
 		if len(tagKeys) == 0 {
@@ -126,9 +179,10 @@ func (h *ShowTagValues) process() (codec.BinaryCodec, error) {
 	return h.rsp, nil
 }
 
-func (h *ShowTagValues) processDisorder() (codec.BinaryCodec, error) {
-	var plan netstorage.ShowTagValuesPlan
-
+// processExact used to search tag values from the chunk meta and index,
+// the query time range can match the chunk meta time range.
+func (h *ShowTagValues) processExact() (codec.BinaryCodec, error) {
+	var plan netstorage.DDLBasePlans
 	h.rsp.Err = processDDL(h.req.Condition, func(expr influxql.Expr, tr influxql.TimeRange) error {
 		engine := h.store.GetEngine()
 
@@ -145,14 +199,18 @@ func (h *ShowTagValues) processDisorder() (codec.BinaryCodec, error) {
 			ptIdRefSuc = append(ptIdRefSuc, ptId)
 		}
 
-		plan = engine.CreateShowTagValuesPlan(*h.req.Db, ptIdRefSuc, &tr)
+		plan = engine.CreateDDLBasePlans(hybridqp.ShowTagValues, *h.req.Db, ptIdRefSuc, &tr)
 
 		tagValues, err := plan.Execute(h.req.GetTagKeysBytes(), expr, util.TimeRange{
 			Min: tr.Min.UnixNano(),
 			Max: tr.Max.UnixNano(),
 		}, int(h.req.GetLimit()))
 
-		h.rsp.SetTagValuesSlice(tagValues)
+		tablesTagSets, ok := tagValues.(netstorage.TablesTagSets)
+		if !ok {
+			return fmt.Errorf("invalid TablesTagSets")
+		}
+		h.rsp.SetTagValuesSlice(tablesTagSets)
 
 		return err
 	})

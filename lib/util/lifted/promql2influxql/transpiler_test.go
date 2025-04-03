@@ -8,9 +8,10 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
-	"github.com/prometheus/prometheus/pkg/labels"
-	"github.com/prometheus/prometheus/pkg/timestamp"
+	"github.com/prometheus/prometheus/model/labels"
+	"github.com/prometheus/prometheus/model/timestamp"
 	"github.com/prometheus/prometheus/promql/parser"
+	"github.com/prometheus/prometheus/promql/parser/posrange"
 	"github.com/stretchr/testify/require"
 )
 
@@ -217,7 +218,7 @@ func TestTranspiler_transpile_sql(t1 *testing.T) {
 			args: args{
 				expr: BinaryExpr(`5 > go_gc_duration_seconds_count`),
 			},
-			want:    influxql.MustParseStatement(`SELECT value AS value FROM go_gc_duration_seconds_count WHERE time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z' AND 5 > value GROUP BY *`),
+			want:    influxql.MustParseStatement(`SELECT value AS value FROM (SELECT value AS value FROM go_gc_duration_seconds_count WHERE time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY *) WHERE 5 > value AND time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY *`),
 			wantErr: false,
 		},
 		{
@@ -283,7 +284,7 @@ func TestTranspiler_transpile_sql(t1 *testing.T) {
 			args: args{
 				expr: BinaryExpr(`go_gc_duration_seconds_count>=3<4`),
 			},
-			want:    influxql.MustParseStatement(`SELECT value AS value FROM go_gc_duration_seconds_count WHERE time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z' AND value >= 3 AND value < 4 GROUP BY *`),
+			want:    influxql.MustParseStatement(`SELECT value AS value FROM (SELECT value AS value FROM (SELECT value AS value FROM go_gc_duration_seconds_count WHERE time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY *) WHERE value >= 3 AND time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY *) WHERE value < 4 AND time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY *`),
 			wantErr: false,
 		},
 		{
@@ -294,7 +295,7 @@ func TestTranspiler_transpile_sql(t1 *testing.T) {
 			args: args{
 				expr: BinaryExpr(`sum(go_gc_duration_seconds_count>=1000) > 10000`),
 			},
-			want:    influxql.MustParseStatement(`SELECT value AS value FROM (SELECT sum(value) AS value FROM go_gc_duration_seconds_count WHERE time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z' AND value >= 1000) WHERE value > 10000 AND time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z'`),
+			want:    influxql.MustParseStatement(`SELECT value AS value FROM (SELECT sum(value) AS value FROM (SELECT value AS value FROM go_gc_duration_seconds_count WHERE time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY *) WHERE value >= 1000 AND time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z') WHERE value > 10000 AND time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z'`),
 			wantErr: false,
 		},
 		{
@@ -448,9 +449,25 @@ func TestTranspiler_transpile_sql(t1 *testing.T) {
 				DataType: GRAPH_DATA,
 			},
 			args: args{
+
 				expr: ParseExpr(`count({__name__="down"} ) by (job)`),
 			},
 			want:    parseInfluxqlByYacc(`SELECT count_prom(value) AS value FROM down WHERE time >= '2023-01-06T03:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY job, time(1m, 0s) fill(none)`),
+			wantErr: false,
+		},
+		{
+			name: "30",
+			fields: fields{
+				Start:    &startTime2,
+				End:      &endTime2,
+				Step:     step,
+				DataType: GRAPH_DATA,
+			},
+			args: args{
+				expr: ParseExpr(`label_replace(topk(5,count(up>=0) by (job)),"name","kube_pod_status_phase","","")`),
+			},
+			want: parseInfluxqlByYacc(`SELECT label_replace(value, 'name', 'kube_pod_status_phase', '', '') AS value FROM (SELECT top(value, 5) AS value, *::tag FROM (SELECT count_prom(value) AS value FROM (SELECT value AS value FROM up WHERE time >= '2023-01-06T03:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY *) WHERE value >= 0 AND time >= '2023-01-06T03:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY job, time(1m, 0s) fill(none)) WHERE time >= '2023-01-06T03:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY time(1m, 0s) fill(none)) WHERE time >= '2023-01-06T03:55:00Z' AND time <= '2023-01-06T07:00:00Z'`),
+
 			wantErr: false,
 		},
 	}
@@ -670,7 +687,7 @@ func TestPreprocessAndWrapWithStepInvariantExpr(t *testing.T) {
 			expected: &parser.StepInvariantExpr{
 				Expr: &parser.NumberLiteral{
 					Val:      123.4567,
-					PosRange: parser.PositionRange{Start: 0, End: 8},
+					PosRange: posrange.PositionRange{Start: 0, End: 8},
 				},
 			},
 		},
@@ -679,7 +696,7 @@ func TestPreprocessAndWrapWithStepInvariantExpr(t *testing.T) {
 			expected: &parser.StepInvariantExpr{
 				Expr: &parser.StringLiteral{
 					Val:      "foo",
-					PosRange: parser.PositionRange{Start: 0, End: 5},
+					PosRange: posrange.PositionRange{Start: 0, End: 5},
 				},
 			},
 		},
@@ -692,7 +709,7 @@ func TestPreprocessAndWrapWithStepInvariantExpr(t *testing.T) {
 					LabelMatchers: []*labels.Matcher{
 						parser.MustLabelMatcher(labels.MatchEqual, "__name__", "foo"),
 					},
-					PosRange: parser.PositionRange{
+					PosRange: posrange.PositionRange{
 						Start: 0,
 						End:   3,
 					},
@@ -702,7 +719,7 @@ func TestPreprocessAndWrapWithStepInvariantExpr(t *testing.T) {
 					LabelMatchers: []*labels.Matcher{
 						parser.MustLabelMatcher(labels.MatchEqual, "__name__", "bar"),
 					},
-					PosRange: parser.PositionRange{
+					PosRange: posrange.PositionRange{
 						Start: 6,
 						End:   9,
 					},
@@ -719,7 +736,7 @@ func TestPreprocessAndWrapWithStepInvariantExpr(t *testing.T) {
 					LabelMatchers: []*labels.Matcher{
 						parser.MustLabelMatcher(labels.MatchEqual, "__name__", "foo"),
 					},
-					PosRange: parser.PositionRange{
+					PosRange: posrange.PositionRange{
 						Start: 0,
 						End:   3,
 					},
@@ -730,7 +747,7 @@ func TestPreprocessAndWrapWithStepInvariantExpr(t *testing.T) {
 						LabelMatchers: []*labels.Matcher{
 							parser.MustLabelMatcher(labels.MatchEqual, "__name__", "bar"),
 						},
-						PosRange: parser.PositionRange{
+						PosRange: posrange.PositionRange{
 							Start: 6,
 							End:   14,
 						},
@@ -750,7 +767,7 @@ func TestPreprocessAndWrapWithStepInvariantExpr(t *testing.T) {
 						LabelMatchers: []*labels.Matcher{
 							parser.MustLabelMatcher(labels.MatchEqual, "__name__", "foo"),
 						},
-						PosRange: parser.PositionRange{
+						PosRange: posrange.PositionRange{
 							Start: 0,
 							End:   8,
 						},
@@ -761,7 +778,7 @@ func TestPreprocessAndWrapWithStepInvariantExpr(t *testing.T) {
 						LabelMatchers: []*labels.Matcher{
 							parser.MustLabelMatcher(labels.MatchEqual, "__name__", "bar"),
 						},
-						PosRange: parser.PositionRange{
+						PosRange: posrange.PositionRange{
 							Start: 11,
 							End:   19,
 						},
@@ -779,7 +796,7 @@ func TestPreprocessAndWrapWithStepInvariantExpr(t *testing.T) {
 					LabelMatchers: []*labels.Matcher{
 						parser.MustLabelMatcher(labels.MatchEqual, "__name__", "test"),
 					},
-					PosRange: parser.PositionRange{
+					PosRange: posrange.PositionRange{
 						Start: 0,
 						End:   4,
 					},
@@ -799,7 +816,7 @@ func TestPreprocessAndWrapWithStepInvariantExpr(t *testing.T) {
 							parser.MustLabelMatcher(labels.MatchEqual, "a", "b"),
 							parser.MustLabelMatcher(labels.MatchEqual, "__name__", "test"),
 						},
-						PosRange: parser.PositionRange{
+						PosRange: posrange.PositionRange{
 							Start: 0,
 							End:   11,
 						},
@@ -818,13 +835,13 @@ func TestPreprocessAndWrapWithStepInvariantExpr(t *testing.T) {
 					LabelMatchers: []*labels.Matcher{
 						parser.MustLabelMatcher(labels.MatchEqual, "__name__", "some_metric"),
 					},
-					PosRange: parser.PositionRange{
+					PosRange: posrange.PositionRange{
 						Start: 13,
 						End:   24,
 					},
 				},
 				Grouping: []string{"foo"},
-				PosRange: parser.PositionRange{
+				PosRange: posrange.PositionRange{
 					Start: 0,
 					End:   25,
 				},
@@ -840,14 +857,14 @@ func TestPreprocessAndWrapWithStepInvariantExpr(t *testing.T) {
 						LabelMatchers: []*labels.Matcher{
 							parser.MustLabelMatcher(labels.MatchEqual, "__name__", "some_metric"),
 						},
-						PosRange: parser.PositionRange{
+						PosRange: posrange.PositionRange{
 							Start: 13,
 							End:   29,
 						},
 						Timestamp: makeInt64Pointer(10000),
 					},
 					Grouping: []string{"foo"},
-					PosRange: parser.PositionRange{
+					PosRange: posrange.PositionRange{
 						Start: 0,
 						End:   30,
 					},
@@ -867,13 +884,13 @@ func TestPreprocessAndWrapWithStepInvariantExpr(t *testing.T) {
 							LabelMatchers: []*labels.Matcher{
 								parser.MustLabelMatcher(labels.MatchEqual, "__name__", "some_metric1"),
 							},
-							PosRange: parser.PositionRange{
+							PosRange: posrange.PositionRange{
 								Start: 4,
 								End:   21,
 							},
 							Timestamp: makeInt64Pointer(10000),
 						},
-						PosRange: parser.PositionRange{
+						PosRange: posrange.PositionRange{
 							Start: 0,
 							End:   22,
 						},
@@ -885,13 +902,13 @@ func TestPreprocessAndWrapWithStepInvariantExpr(t *testing.T) {
 							LabelMatchers: []*labels.Matcher{
 								parser.MustLabelMatcher(labels.MatchEqual, "__name__", "some_metric2"),
 							},
-							PosRange: parser.PositionRange{
+							PosRange: posrange.PositionRange{
 								Start: 29,
 								End:   46,
 							},
 							Timestamp: makeInt64Pointer(20000),
 						},
-						PosRange: parser.PositionRange{
+						PosRange: posrange.PositionRange{
 							Start: 25,
 							End:   47,
 						},
@@ -911,7 +928,7 @@ func TestPreprocessAndWrapWithStepInvariantExpr(t *testing.T) {
 					LabelMatchers: []*labels.Matcher{
 						parser.MustLabelMatcher(labels.MatchEqual, "__name__", "some_metric"),
 					},
-					PosRange: parser.PositionRange{
+					PosRange: posrange.PositionRange{
 						Start: 0,
 						End:   11,
 					},
@@ -928,7 +945,7 @@ func TestPreprocessAndWrapWithStepInvariantExpr(t *testing.T) {
 										LabelMatchers: []*labels.Matcher{
 											parser.MustLabelMatcher(labels.MatchEqual, "__name__", "some_metric"),
 										},
-										PosRange: parser.PositionRange{
+										PosRange: posrange.PositionRange{
 											Start: 29,
 											End:   40,
 										},
@@ -938,19 +955,19 @@ func TestPreprocessAndWrapWithStepInvariantExpr(t *testing.T) {
 									EndPos: 49,
 								},
 							},
-							PosRange: parser.PositionRange{
+							PosRange: posrange.PositionRange{
 								Start: 24,
 								End:   50,
 							},
 						},
 						Param: &parser.NumberLiteral{
 							Val: 5,
-							PosRange: parser.PositionRange{
+							PosRange: posrange.PositionRange{
 								Start: 21,
 								End:   22,
 							},
 						},
-						PosRange: parser.PositionRange{
+						PosRange: posrange.PositionRange{
 							Start: 16,
 							End:   51,
 						},
@@ -963,7 +980,7 @@ func TestPreprocessAndWrapWithStepInvariantExpr(t *testing.T) {
 			expected: &parser.Call{
 				Func: parser.MustGetFunction("time"),
 				Args: parser.Expressions{},
-				PosRange: parser.PositionRange{
+				PosRange: posrange.PositionRange{
 					Start: 0,
 					End:   6,
 				},
@@ -978,7 +995,7 @@ func TestPreprocessAndWrapWithStepInvariantExpr(t *testing.T) {
 						parser.MustLabelMatcher(labels.MatchEqual, "bar", "baz"),
 						parser.MustLabelMatcher(labels.MatchEqual, "__name__", "foo"),
 					},
-					PosRange: parser.PositionRange{
+					PosRange: posrange.PositionRange{
 						Start: 0,
 						End:   14,
 					},
@@ -998,7 +1015,7 @@ func TestPreprocessAndWrapWithStepInvariantExpr(t *testing.T) {
 							parser.MustLabelMatcher(labels.MatchEqual, "bar", "baz"),
 							parser.MustLabelMatcher(labels.MatchEqual, "__name__", "foo"),
 						},
-						PosRange: parser.PositionRange{
+						PosRange: posrange.PositionRange{
 							Start: 0,
 							End:   14,
 						},
@@ -1023,13 +1040,13 @@ func TestPreprocessAndWrapWithStepInvariantExpr(t *testing.T) {
 									parser.MustLabelMatcher(labels.MatchEqual, "bar", "baz"),
 									parser.MustLabelMatcher(labels.MatchEqual, "__name__", "foo"),
 								},
-								PosRange: parser.PositionRange{
+								PosRange: posrange.PositionRange{
 									Start: 4,
 									End:   23,
 								},
 								Timestamp: makeInt64Pointer(20000),
 							},
-							PosRange: parser.PositionRange{
+							PosRange: posrange.PositionRange{
 								Start: 0,
 								End:   24,
 							},
@@ -1060,7 +1077,7 @@ func TestPreprocessAndWrapWithStepInvariantExpr(t *testing.T) {
 													parser.MustLabelMatcher(labels.MatchEqual, "bar", "baz"),
 													parser.MustLabelMatcher(labels.MatchEqual, "__name__", "foo"),
 												},
-												PosRange: parser.PositionRange{
+												PosRange: posrange.PositionRange{
 													Start: 19,
 													End:   33,
 												},
@@ -1069,7 +1086,7 @@ func TestPreprocessAndWrapWithStepInvariantExpr(t *testing.T) {
 											EndPos: 37,
 										},
 									},
-									PosRange: parser.PositionRange{
+									PosRange: posrange.PositionRange{
 										Start: 14,
 										End:   38,
 									},
@@ -1079,7 +1096,7 @@ func TestPreprocessAndWrapWithStepInvariantExpr(t *testing.T) {
 								EndPos:    56,
 							},
 						},
-						PosRange: parser.PositionRange{
+						PosRange: posrange.PositionRange{
 							Start: 0,
 							End:   57,
 						},
@@ -1099,7 +1116,7 @@ func TestPreprocessAndWrapWithStepInvariantExpr(t *testing.T) {
 						LabelMatchers: []*labels.Matcher{
 							parser.MustLabelMatcher(labels.MatchEqual, "__name__", "some_metric"),
 						},
-						PosRange: parser.PositionRange{
+						PosRange: posrange.PositionRange{
 							Start: 0,
 							End:   27,
 						},
@@ -1121,7 +1138,7 @@ func TestPreprocessAndWrapWithStepInvariantExpr(t *testing.T) {
 						LabelMatchers: []*labels.Matcher{
 							parser.MustLabelMatcher(labels.MatchEqual, "__name__", "some_metric"),
 						},
-						PosRange: parser.PositionRange{
+						PosRange: posrange.PositionRange{
 							Start: 0,
 							End:   11,
 						},
@@ -1149,7 +1166,7 @@ func TestPreprocessAndWrapWithStepInvariantExpr(t *testing.T) {
 								LabelMatchers: []*labels.Matcher{
 									parser.MustLabelMatcher(labels.MatchEqual, "__name__", "foo"),
 								},
-								PosRange: parser.PositionRange{
+								PosRange: posrange.PositionRange{
 									Start: 1,
 									End:   4,
 								},
@@ -1162,14 +1179,14 @@ func TestPreprocessAndWrapWithStepInvariantExpr(t *testing.T) {
 										parser.MustLabelMatcher(labels.MatchEqual, "__name__", "bar"),
 									},
 									Timestamp: makeInt64Pointer(1234000),
-									PosRange: parser.PositionRange{
+									PosRange: posrange.PositionRange{
 										Start: 7,
 										End:   27,
 									},
 								},
 							},
 						},
-						PosRange: parser.PositionRange{
+						PosRange: posrange.PositionRange{
 							Start: 0,
 							End:   28,
 						},
@@ -1200,18 +1217,18 @@ func TestPreprocessAndWrapWithStepInvariantExpr(t *testing.T) {
 							LabelMatchers: []*labels.Matcher{
 								parser.MustLabelMatcher(labels.MatchEqual, "__name__", "metric"),
 							},
-							PosRange: parser.PositionRange{
+							PosRange: posrange.PositionRange{
 								Start: 8,
 								End:   19,
 							},
 							Timestamp: makeInt64Pointer(10000),
 						}},
-						PosRange: parser.PositionRange{
+						PosRange: posrange.PositionRange{
 							Start: 4,
 							End:   20,
 						},
 					}},
-					PosRange: parser.PositionRange{
+					PosRange: posrange.PositionRange{
 						Start: 0,
 						End:   21,
 					},
@@ -1233,13 +1250,13 @@ func TestPreprocessAndWrapWithStepInvariantExpr(t *testing.T) {
 								LabelMatchers: []*labels.Matcher{
 									parser.MustLabelMatcher(labels.MatchEqual, "__name__", "some_metric1"),
 								},
-								PosRange: parser.PositionRange{
+								PosRange: posrange.PositionRange{
 									Start: 8,
 									End:   25,
 								},
 								Timestamp: makeInt64Pointer(10000),
 							},
-							PosRange: parser.PositionRange{
+							PosRange: posrange.PositionRange{
 								Start: 4,
 								End:   26,
 							},
@@ -1251,19 +1268,19 @@ func TestPreprocessAndWrapWithStepInvariantExpr(t *testing.T) {
 								LabelMatchers: []*labels.Matcher{
 									parser.MustLabelMatcher(labels.MatchEqual, "__name__", "some_metric2"),
 								},
-								PosRange: parser.PositionRange{
+								PosRange: posrange.PositionRange{
 									Start: 33,
 									End:   50,
 								},
 								Timestamp: makeInt64Pointer(20000),
 							},
-							PosRange: parser.PositionRange{
+							PosRange: posrange.PositionRange{
 								Start: 29,
 								End:   52,
 							},
 						},
 					},
-					PosRange: parser.PositionRange{
+					PosRange: posrange.PositionRange{
 						Start: 0,
 						End:   52,
 					},
@@ -1278,7 +1295,7 @@ func TestPreprocessAndWrapWithStepInvariantExpr(t *testing.T) {
 					LabelMatchers: []*labels.Matcher{
 						parser.MustLabelMatcher(labels.MatchEqual, "__name__", "foo"),
 					},
-					PosRange: parser.PositionRange{
+					PosRange: posrange.PositionRange{
 						Start: 0,
 						End:   13,
 					},
@@ -1295,7 +1312,7 @@ func TestPreprocessAndWrapWithStepInvariantExpr(t *testing.T) {
 					LabelMatchers: []*labels.Matcher{
 						parser.MustLabelMatcher(labels.MatchEqual, "__name__", "foo"),
 					},
-					PosRange: parser.PositionRange{
+					PosRange: posrange.PositionRange{
 						Start: 0,
 						End:   11,
 					},
@@ -1315,7 +1332,7 @@ func TestPreprocessAndWrapWithStepInvariantExpr(t *testing.T) {
 						LabelMatchers: []*labels.Matcher{
 							parser.MustLabelMatcher(labels.MatchEqual, "__name__", "test"),
 						},
-						PosRange: parser.PositionRange{
+						PosRange: posrange.PositionRange{
 							Start: 0,
 							End:   4,
 						},
@@ -1336,7 +1353,7 @@ func TestPreprocessAndWrapWithStepInvariantExpr(t *testing.T) {
 						LabelMatchers: []*labels.Matcher{
 							parser.MustLabelMatcher(labels.MatchEqual, "__name__", "test"),
 						},
-						PosRange: parser.PositionRange{
+						PosRange: posrange.PositionRange{
 							Start: 0,
 							End:   4,
 						},
@@ -1355,7 +1372,7 @@ func TestPreprocessAndWrapWithStepInvariantExpr(t *testing.T) {
 						LabelMatchers: []*labels.Matcher{
 							parser.MustLabelMatcher(labels.MatchEqual, "__name__", "some_metric"),
 						},
-						PosRange: parser.PositionRange{
+						PosRange: posrange.PositionRange{
 							Start: 0,
 							End:   11,
 						},
@@ -1377,7 +1394,7 @@ func TestPreprocessAndWrapWithStepInvariantExpr(t *testing.T) {
 						LabelMatchers: []*labels.Matcher{
 							parser.MustLabelMatcher(labels.MatchEqual, "__name__", "some_metric"),
 						},
-						PosRange: parser.PositionRange{
+						PosRange: posrange.PositionRange{
 							Start: 0,
 							End:   11,
 						},
@@ -1407,7 +1424,7 @@ func TestPreprocessAndWrapWithStepInvariantExpr(t *testing.T) {
 							LabelMatchers: []*labels.Matcher{
 								parser.MustLabelMatcher(labels.MatchEqual, "__name__", "some_metric"),
 							},
-							PosRange: parser.PositionRange{
+							PosRange: posrange.PositionRange{
 								Start: 6,
 								End:   17,
 							},
@@ -1418,20 +1435,20 @@ func TestPreprocessAndWrapWithStepInvariantExpr(t *testing.T) {
 									Op: parser.MUL,
 									LHS: &parser.NumberLiteral{
 										Val: 3,
-										PosRange: parser.PositionRange{
+										PosRange: posrange.PositionRange{
 											Start: 21,
 											End:   22,
 										},
 									},
 									RHS: &parser.NumberLiteral{
 										Val: 1024,
-										PosRange: parser.PositionRange{
+										PosRange: posrange.PositionRange{
 											Start: 25,
 											End:   29,
 										},
 									},
 								},
-								PosRange: parser.PositionRange{
+								PosRange: posrange.PositionRange{
 									Start: 20,
 									End:   30,
 								},
@@ -1439,7 +1456,7 @@ func TestPreprocessAndWrapWithStepInvariantExpr(t *testing.T) {
 						},
 					},
 				},
-				PosRange: parser.PositionRange{
+				PosRange: posrange.PositionRange{
 					Start: 0,
 					End:   31,
 				},

@@ -408,10 +408,10 @@ func (d *DetachedMetaInfo) getBloomFilterFile(remotePath, localPath, msName, col
 	remoteFilePath := sparseindex.GetBloomFilterFilePath(remotePath, msName, columnName)
 	if d.obsOpt != nil {
 		path := filepath.Join(d.obsOpt.BasePath, remoteFilePath)
-		remoteFilePath = fileops.EncodeObsPath(d.obsOpt.Endpoint, d.obsOpt.BucketName, path, d.obsOpt.Ak, d.obsOpt.Sk)
+		remoteFilePath = fileops.EncodeObsPath(d.obsOpt.Endpoint, d.obsOpt.BucketName, path, d.obsOpt.Ak, fileops.DecryptObsSk(d.obsOpt.Sk))
 	}
 
-	fdr, err := fileops.OpenFile(remoteFilePath, os.O_CREATE|os.O_RDWR, 0640, lock, pri)
+	fdr, err := fileops.OpenFile(remoteFilePath, os.O_CREATE|os.O_RDWR, 0600, lock, pri)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -421,7 +421,7 @@ func (d *DetachedMetaInfo) getBloomFilterFile(remotePath, localPath, msName, col
 	if err != nil {
 		panic(err)
 	}
-	fdl, err := fileops.OpenFile(localFilePath, os.O_CREATE|os.O_RDWR, 0640, lock, pri)
+	fdl, err := fileops.OpenFile(localFilePath, os.O_CREATE|os.O_RDWR, 0600, lock, pri)
 	if err != nil {
 		return nil, nil, err
 	}

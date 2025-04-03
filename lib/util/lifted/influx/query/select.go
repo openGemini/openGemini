@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -254,6 +255,9 @@ type ProcessorOptions struct {
 	// PromQuery indicates whether the query is a promql query.
 	PromQuery bool
 
+	// PromRemoteRead indicates whether the query is a prom remote read.
+	PromRemoteRead bool
+
 	// Step is query resolution step width in duration format or float number of seconds for Prom.
 	Step time.Duration
 
@@ -367,12 +371,12 @@ func NewProcessorOptionsStmt(stmt *influxql.SelectStatement, sopt SelectOptions)
 	opt.LookBackDelta = stmt.LookBackDelta
 	opt.QueryOffset = stmt.QueryOffset
 	opt.PromQuery = stmt.IsPromQuery
+	opt.PromRemoteRead = stmt.IsPromRemoteRead
 	opt.Without = stmt.Without
 	if IsCountValues(stmt) {
 		opt.IsCountValues = true
 	}
 	if len(exceptDimensions) > 0 {
-		// except: an error is reported if a tag does not exist.
 		if len(validExceptDimens) != len(exceptDimensions) && (stmt.GroupByAllDims && len(stmt.Dimensions) > 0) {
 			return ProcessorOptions{}, fmt.Errorf("except: invalid fields")
 		}
@@ -490,6 +494,10 @@ func (opt *ProcessorOptions) IsPromRangeQuery() bool {
 
 func (opt *ProcessorOptions) IsPromQuery() bool {
 	return opt.PromQuery
+}
+
+func (opt *ProcessorOptions) IsPromRemoteRead() bool {
+	return opt.PromRemoteRead
 }
 
 func (opt *ProcessorOptions) GetPromStep() time.Duration {
@@ -852,6 +860,18 @@ func (opt *ProcessorOptions) SetCtx(ctx context.Context) {
 
 func (opt *ProcessorOptions) GetCtx() context.Context {
 	return opt.ctx
+}
+
+func (opt *ProcessorOptions) SetName(name string) {
+	opt.Name = name
+}
+
+func (opt *ProcessorOptions) SetSources(sources influxql.Sources) {
+	opt.Sources = sources
+}
+
+func (opt *ProcessorOptions) IsPromAbsentCall() bool {
+	return opt.IsPromQuery() && strings.Contains(opt.Query, "absent_prom")
 }
 
 func validateTypes(stmt *influxql.SelectStatement) error {

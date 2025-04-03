@@ -15,8 +15,11 @@
 package immutable
 
 import (
+	"fmt"
 	"testing"
+	"time"
 
+	"github.com/openGemini/openGemini/lib/codec"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/stretchr/testify/require"
 )
@@ -134,4 +137,96 @@ func TestFloatPreAgg_add(t *testing.T) {
 
 	agg.addMax(2, 30)
 	assertMax(2.0, 30)
+}
+
+func TestFloatPreAggVLC(t *testing.T) {
+	var assert = func(agg *FloatPreAgg) {
+		buf := agg.marshal(nil)
+		require.True(t, len(buf) != 16)
+		require.True(t, len(buf) > 0)
+		require.True(t, len(buf) <= 48)
+
+		other := NewFloatPreAgg()
+		_, err := other.unmarshal(buf)
+		require.NoError(t, err)
+		require.Equal(t, agg, other)
+	}
+	SetChunkMetaCompressMode(ChunkMetaCompressSelf)
+	defer SetChunkMetaCompressMode(ChunkMetaCompressNone)
+
+	now := time.Now().UnixNano() + 1
+	minValues := []float64{0, 1, 1.11, 0}
+	maxValues := []float64{0, 2, 2.22, 0}
+	sumValues := []float64{0, 333, 33.333, 0}
+	minTimes := []int64{10, 10000, now, now}
+	maxTimes := []int64{11, 11000, now - time.Hour.Nanoseconds()*12, now}
+	countValues := []int64{10, 10, now, 1 << 22}
+
+	agg := NewFloatPreAgg()
+	for i := range minValues {
+		agg.reset()
+		agg.addMin(minValues[i], minTimes[i])
+		agg.addMax(maxValues[i], maxTimes[i])
+		agg.addCount(countValues[i])
+		agg.addSum(sumValues[i])
+		assert(agg)
+	}
+}
+
+func TestIntegerPreAggVLC(t *testing.T) {
+	var assert = func(agg *IntegerPreAgg) {
+		buf := agg.marshal(nil)
+		require.True(t, len(buf) != 16)
+		require.True(t, len(buf) > 0)
+		require.True(t, len(buf) <= 48)
+
+		other := NewIntegerPreAgg()
+		_, err := other.unmarshal(buf)
+		require.NoError(t, err)
+		require.Equal(t, agg, other)
+	}
+	SetChunkMetaCompressMode(ChunkMetaCompressSelf)
+	defer SetChunkMetaCompressMode(ChunkMetaCompressNone)
+
+	now := time.Now().UnixNano() + 1
+	minValues := []float64{0, 1, 1 << 60, 1}
+	maxValues := []float64{0, 2, 1 << 60, 3}
+	sumValues := []float64{0, 333, 1 << 60, 333}
+	minTimes := []int64{10, 10000, now, now}
+	maxTimes := []int64{11, 11000, now - time.Hour.Nanoseconds()*12, now + 101}
+	countValues := []int64{10, 10, now, 12}
+
+	agg := NewIntegerPreAgg()
+	for i := range minValues {
+		agg.reset()
+		agg.addMin(minValues[i], minTimes[i])
+		agg.addMax(maxValues[i], maxTimes[i])
+		agg.addCount(countValues[i])
+		agg.addSum(sumValues[i])
+		assert(agg)
+	}
+}
+
+func TestDecodeAggTimes(t *testing.T) {
+	minTime := int64(1725345354123000000)
+	maxTime := int64(1725355355123000000)
+
+	var buf []byte
+	buf = codec.AppendInt64WithScale(buf, minTime)
+	buf = codec.AppendInt64WithScale(buf, maxTime-minTime)
+
+	_, minTime1, maxTime1, err := DecodeAggTimes(buf)
+	require.NoError(t, err)
+	require.Equal(t, minTime, minTime1)
+	require.Equal(t, maxTime, maxTime1)
+
+	buf[0] = 8
+	_, _, _, err = DecodeAggTimes(buf)
+	require.NotEmpty(t, err)
+
+	fmt.Println(buf)
+	buf[0] = 2
+	buf[7] = 8
+	_, _, _, err = DecodeAggTimes(buf)
+	require.NotEmpty(t, err)
 }

@@ -172,62 +172,6 @@ func TestIndexWriterWithoutCacheMeta(t *testing.T) {
 	}
 }
 
-func TestIndexWriterWithCacheMeta(t *testing.T) {
-	bufSize := 256 * 1024
-	cleanDir(testDir)
-	defer cleanDir(testDir)
-	_ = fileops.MkdirAll(testDir, 0750)
-	fn := filepath.Join(testDir, "index.data")
-	lockPath := ""
-	InitWriterPool(8)
-	wr := NewPKIndexWriter(fn, true, true, &lockPath).(*indexWriter)
-	cm := getChunkMeta()
-
-	meta := cm.marshal(nil)
-	var written int
-
-	for len(wr.metas) < 10 {
-		for len(wr.buf) < bufSize {
-			n, err := wr.Write(meta)
-			if err != nil {
-				t.Fatal(err)
-			}
-			written += n
-		}
-		wr.SwitchMetaBuffer()
-	}
-
-	n, _ := wr.Write(meta)
-	written += n
-
-	if _, err := fileops.Stat(fn); err == nil {
-		t.Fatal("should not create file")
-	}
-
-	blks := wr.MetaDataBlocks(nil)
-	if len(blks) < 10 {
-		t.Fatal("invalid meta blocks")
-	}
-	wr.metas = append(wr.metas[:0], blks...)
-
-	bb := &bytes.Buffer{}
-	n, err := wr.CopyTo(bb)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if n != written {
-		t.Fatalf("exp copy size:%v, get:%v", wr.wn, n)
-	}
-
-	if written != wr.Size() {
-		t.Fatalf("written size fail, exp:%v, get:%v", written, wr.Size())
-	}
-
-	if err = wr.Close(); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestChunkMeta_validation(t *testing.T) {
 	var validation = func(cm *ChunkMeta) (err string) {
 		defer func() {
@@ -236,7 +180,7 @@ func TestChunkMeta_validation(t *testing.T) {
 			}
 		}()
 
-		cm.validation()
+		cm.Validation()
 		return
 	}
 

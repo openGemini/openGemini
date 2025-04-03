@@ -85,3 +85,27 @@ func MergeHost(a, b string) string {
 	splitsB := strings.Split(b, ":")
 	return splitsA[0] + ":" + splitsB[1]
 }
+
+func GetCustomProxy(ul *url.URL, targetHost string, body []byte) (*httputil.ReverseProxy, error) {
+	uri := "http://"
+	if ul.Scheme == "https" {
+		uri = "https://"
+	}
+	uri = uri + targetHost
+	uu, err := url.Parse(uri)
+	if err != nil {
+		return nil, err
+	}
+	reverseProxy := httputil.NewSingleHostReverseProxy(uu)
+	originDirector := reverseProxy.Director
+	reverseProxy.Director = func(req *http.Request) {
+		originDirector(req)
+		if len(body) > 0 {
+			req.Body = io.NopCloser(bytes.NewBuffer(body))
+			req.ContentLength = int64(len(body))
+			req.Header.Set("Content-Length", strconv.Itoa(len(body)))
+		}
+	}
+	reverseProxy.Transport = defaultTransport
+	return reverseProxy, nil
+}

@@ -193,6 +193,8 @@ var (
 	ErrUserDropSelf = errors.New("forbidden to delete admin user")
 
 	// ErrPwdUsed is returned when use an old password
+	// Do not modify the description information in the text.
+	// The information is used by the `influxdb-agent` to determine whether the passwords are the same and skip the modification process.
 	ErrPwdUsed = errors.New("the password is the same as the old one, please enter a new password")
 
 	// ErrHashedLength is returned when hashed length err.

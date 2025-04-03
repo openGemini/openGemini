@@ -134,6 +134,10 @@ func TimeReserveHigh32(time int64) int32 {
 	return int32(time >> 32)
 }
 
+func TimeUndoHigh32(time int32) int64 {
+	return int64(time) << 32
+}
+
 var SchemaCleanEn bool
 
 func InitSchemaCleanEn(schemaCleanEn bool) {
@@ -188,24 +192,7 @@ func (cs *CleanSchema) Len() int {
 	return len(*cs)
 }
 
-func (cs *CleanSchema) Marshal(snapshot bool, pb *proto2.MeasurementInfo) {
-	if snapshot {
-		cs.SnapshotMarshal(pb)
-	} else {
-		cs.NormalMarshal(pb)
-	}
-}
-
-func (cs *CleanSchema) SnapshotMarshal(pb *proto2.MeasurementInfo) {
-	if cs != nil {
-		pb.Schema = make(map[string]int32, len(*cs))
-		for n, t := range *cs {
-			pb.Schema[n] = int32(t.Typ)
-		}
-	}
-}
-
-func (cs *CleanSchema) NormalMarshal(pb *proto2.MeasurementInfo) {
+func (cs *CleanSchema) Marshal(pb *proto2.MeasurementInfo) {
 	if cs != nil {
 		pb.SchemaUseForClean = make(map[string]*proto2.SchemaVal, len(*cs))
 		for n, t := range *cs {
@@ -219,6 +206,12 @@ func (cs *CleanSchema) NormalMarshal(pb *proto2.MeasurementInfo) {
 func (cs *CleanSchema) RangeTypCall(callback func(string, int32)) {
 	for k, v := range *cs {
 		callback(k, int32(v.Typ))
+	}
+}
+
+func (cs *CleanSchema) RangeTypTimeCall(callback func(string, int32, int32)) {
+	for k, v := range *cs {
+		callback(k, int32(v.Typ), v.EndTime)
 	}
 }
 
@@ -329,7 +322,7 @@ func (msti *MeasurementInfo) GetShardKey(ID uint64) *ShardKeyInfo {
 	return nil
 }
 
-func (msti *MeasurementInfo) marshal(snapshot bool) *proto2.MeasurementInfo {
+func (msti *MeasurementInfo) marshal() *proto2.MeasurementInfo {
 	pb := &proto2.MeasurementInfo{
 		Name:        proto.String(msti.Name),
 		MarkDeleted: proto.Bool(msti.MarkDeleted),
@@ -344,7 +337,7 @@ func (msti *MeasurementInfo) marshal(snapshot bool) *proto2.MeasurementInfo {
 		}
 	}
 	msti.SchemaLock.RLock()
-	msti.Schema.Marshal(snapshot, pb)
+	msti.Schema.Marshal(pb)
 	msti.SchemaLock.RUnlock()
 	if msti.ShardIdexes != nil {
 		pb.ShardIdxes = make(map[uint64]*proto2.Idxes, len(msti.ShardIdexes))
@@ -420,7 +413,7 @@ func (msti *MeasurementInfo) unmarshal(pb *proto2.MeasurementInfo) {
 }
 
 func (msti *MeasurementInfo) MarshalBinary() ([]byte, error) {
-	pb := msti.marshal(false)
+	pb := msti.marshal()
 	return proto.Marshal(pb)
 }
 
@@ -512,6 +505,21 @@ func (msti *MeasurementInfo) MatchTagKeys(cond influxql.Expr, ret map[string]map
 	msti.Schema.RangeTypCall(callback)
 }
 
+func (msti *MeasurementInfo) FilterTagKeys(cond influxql.Expr, tr influxql.TimeRangeValue, ret map[string]map[string]struct{}) {
+	callback := func(k string, v int32, t int32) {
+		if v == influx.Field_Type_Tag {
+			valMap := map[string]interface{}{
+				"_tagKey": k,
+				"_name":   msti.OriginName(),
+			}
+			if (cond == nil || influxql.EvalBool(cond, valMap)) && tr.Min <= TimeUndoHigh32(t) {
+				ret[msti.Name][k] = struct{}{}
+			}
+		}
+	}
+	msti.Schema.RangeTypTimeCall(callback)
+}
+
 func (msti *MeasurementInfo) TagKeysTotal() int {
 	return msti.tagKeysTotal
 }
@@ -527,7 +535,7 @@ func (mstsi *MeasurementsInfo) marshal() *proto2.MeasurementsInfo {
 	}
 
 	for i := range mstsi.MstsInfo {
-		pb.MeasurementsInfo[i] = mstsi.MstsInfo[i].marshal(false)
+		pb.MeasurementsInfo[i] = mstsi.MstsInfo[i].marshal()
 	}
 	return pb
 }
@@ -738,9 +746,9 @@ func (msti *MeasurementInfo) FindMstInfos(dataTypes []int64) []*MeasurementTypeF
 	return infos
 }
 
-func (msti *MeasurementInfo) SchemaClean(sgEndTime int64) {
+func (msti *MeasurementInfo) SchemaClean(sgEndTime int64) int {
 	if msti.EngineType != config.TSSTORE {
-		return
+		return 0
 	}
 	endTime := TimeReserveHigh32(sgEndTime)
 	msti.SchemaLock.Lock()
@@ -750,6 +758,7 @@ func (msti *MeasurementInfo) SchemaClean(sgEndTime int64) {
 			delete(*(msti.Schema), k)
 		}
 	}
+	return len(*msti.Schema)
 }
 
 func EncodeIndexOption(o *influxql.IndexOption) *proto2.IndexOption {

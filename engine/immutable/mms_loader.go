@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -32,7 +33,6 @@ import (
 	"github.com/openGemini/openGemini/lib/fragment"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/obs"
-	"github.com/openGemini/openGemini/lib/util"
 	"go.uber.org/zap"
 )
 
@@ -90,7 +90,7 @@ func (fl *fileLoader) Load(dir, mst string, isOrder bool) {
 			}
 			fl.loadPKIndexFile(filepath.Join(dir, item.Name()), mst)
 		case tsspFileSuffix:
-			fl.loadTsspFile(filepath.Join(dir, item.Name()), mst, isOrder)
+			fl.loadTsspFile(filepath.Join(dir, item.Name()), mst, isOrder, false)
 		default:
 			fl.removeTmpFile(filepath.Join(dir, item.Name())) // skip invalid file, remove if it is a temp file
 		}
@@ -119,12 +119,76 @@ func (fl *fileLoader) loadDirs(nameDirs []os.FileInfo, mst, remotePrefixPath str
 		item := nameDirs[i]
 		switch filepath.Ext(item.Name()) {
 		case obs.ObsFileSuffix:
-			fl.loadTsspFile(fmt.Sprintf("%s/%s", remotePrefixPath, item.Name()), mst, remoteDirIsOrder(item.Name()))
+			fl.loadTsspFile(fmt.Sprintf("%s/%s", remotePrefixPath, item.Name()), mst, remoteDirIsOrder(item.Name()), false)
 		default:
 			fl.removeTmpFile(fmt.Sprintf("%s/%s", remotePrefixPath, item.Name())) // skip invalid file, remove if it is a temp file
 		}
 		fl.total++
 	}
+}
+
+func (fl *fileLoader) ReloadFiles(maxRetries int) {
+	for retry := 0; retry <= maxRetries; retry++ {
+		files := fl.ctx.reloadFiles
+		if len(files) == 0 {
+			return
+		}
+		fl.lg.Warn("reload failed file", zap.Int("retrys", retry))
+		fl.ctx.resetForReload()
+		for mst, reloadFiles := range files {
+			for i := 0; i < len(reloadFiles); i++ {
+				if retry != maxRetries {
+					fl.loadTsspFile(reloadFiles[i].FilePath(), mst, reloadFiles[i].Order(), true)
+				} else {
+					fl.lg.Error("reload file failed", zap.String("measurement", mst), zap.String("file", reloadFiles[i].FilePath()))
+					reloadFile := &tsspInfo{
+						order: reloadFiles[i].Order(),
+						file:  reloadFiles[i].FilePath(),
+					}
+					_ = reloadFile.name.ParseFileName(reloadFile.FilePath())
+					fl.mst.ImmTable.addUnloadFile(fl.mst, reloadFile.Order(), reloadFile, mst)
+				}
+			}
+		}
+		fl.Wait()
+		if len(fl.ctx.reloadFiles) != 0 && retry != maxRetries {
+			time.Sleep(100 * time.Millisecond * (1 << retry))
+		}
+	}
+}
+
+func (fl *fileLoader) ReloadSpecifiedFiles(tsspFiles *TSSPFiles) {
+	maxRetries := 1
+	for retry := 0; retry <= maxRetries; retry++ {
+		files := fl.ctx.reloadFiles
+		if len(files) == 0 {
+			fl.lg.Info("retry to reload file successully", zap.Int("retrys", retry))
+			return
+		}
+		fl.ctx.resetForReload()
+		for mst, reloadFiles := range files {
+			for i := 0; i < len(reloadFiles); i++ {
+				if retry != maxRetries {
+					fl.serialLoadTsspFile(tsspFiles, reloadFiles[i].FilePath(), mst, reloadFiles[i].Order())
+				} else {
+					fl.lg.Error("reload file failed", zap.String("measurement", mst), zap.String("file", reloadFiles[i].FilePath()))
+					reloadFile := &tsspInfo{
+						order: reloadFiles[i].Order(),
+						file:  reloadFiles[i].FilePath(),
+					}
+					_ = reloadFile.name.ParseFileName(reloadFile.FilePath())
+					tsspFiles.AppendReloadFiles(reloadFile)
+				}
+			}
+		}
+	}
+}
+
+func ReloadSpecifiedFiles(m *MmsTables, mst string, tsspFiles *TSSPFiles) {
+	loader := newFileLoader(m, NewFileLoadContext())
+	loader.ctx.reloadFiles[mst] = tsspFiles.unloadFiles
+	tsspFiles.unloadFiles = make([]TSSPInfo, 0) // reinit
+	loader.ReloadSpecifiedFiles(tsspFiles)
 }
 
 func remoteDirIsOrder(path string) bool {
@@ -171,16 +235,18 @@ func (fl *fileLoader) loadPKIndexFile(file, mst string) {
 	}
 }
 
-func (fl *fileLoader) loadTsspFile(file, mst string, isOrder bool) {
-	if err := fl.fileName.ParseFileName(file); err != nil {
-		fl.lg.Error("failed to parse file name",
-			zap.Error(err), zap.String("file", file))
-		fl.removeFile(file)
-		return
-	}
+func (fl *fileLoader) loadTsspFile(file, mst string, isOrder, isReload bool) {
+	if !isReload {
+		if err := fl.fileName.ParseFileName(file); err != nil {
+			fl.lg.Error("failed to parse file name",
+				zap.Error(err), zap.String("file", file))
+			fl.removeFile(file)
+			return
+		}
 
-	if !fl.verifySeq(fl.fileName.seq, mst, isOrder) {
-		return
+		if !fl.verifySeq(fl.fileName.seq, mst, isOrder) {
+			return
+		}
 	}
 
 	select {
@@ -258,11 +324,33 @@ func (fl *fileLoader) openPKIndexFile(file, mst string) {
 }
 
 func (fl *fileLoader) openTSSPFile(file, mst string, isOrder bool) {
-	cacheData := fl.mst.cacheFileData()
-	f, err := OpenTSSPFile(file, fl.mst.lock, isOrder, cacheData)
+	defer func() {
+		if err := recover(); err != nil {
+			fmt.Println("failed to open tssp file:", file, "; ", err)
+			fl.lg.Error("open tssp file failed", zap.Any("error", err), zap.String("file", file))
+		}
+	}()
+
+	f, err := OpenTSSPFile(file, fl.mst.lock, isOrder)
 	if err != nil || f == nil {
 		fl.lg.Error("open tssp file failed", zap.Error(err), zap.String("file", file))
 		fl.ctx.setError(err)
+		if err != nil && !strings.Contains(err.Error(), "invalid") {
+			fl.mu.Lock()
+			defer fl.mu.Unlock()
+			fl.ctx.appendReloadFile(mst, &tsspInfo{file: file, order: isOrder})
+		}
+		return
+	}
+
+	fl.addTSSPFile(file, mst, isOrder, f)
+}
+
+// addTSSPFile if LoadComponents raises an error, addTSSPFile is not loaded to avoid subsequent errors.
+func (fl *fileLoader) addTSSPFile(file, mst string, isOrder bool, f TSSPFile) {
+	if err := f.LoadComponents(); err != nil {
+		fl.ctx.setError(err)
+		fl.lg.Error("LoadComponents failed", zap.Error(err), zap.String("mst", mst), zap.String("file", file))
 		return
 	}
 
@@ -272,21 +360,40 @@ func (fl *fileLoader) openTSSPFile(file, mst string, isOrder bool) {
 		fl.mst.ImmTable.addTSSPFile(fl.mst, isOrder, f, mst)
 	}()
 
-	fl.ctx.setError(f.LoadComponents())
 	fl.loadIntoMemory(f)
 	fl.ctx.update(f)
 }
 
+func (fl *fileLoader) serialLoadTsspFile(files *TSSPFiles, file, mst string, isOrder bool) {
+	select {
+	case fileLoadLimiter <- struct{}{}:
+		defer func() {
+			fileLoadLimiter.Release()
+		}()
+		f, err := OpenTSSPFile(file, fl.mst.lock, isOrder)
+		if err != nil || f == nil {
+			fl.lg.Error("open tssp file failed", zap.Error(err), zap.String("file", file))
+			fl.ctx.setError(err)
+			if err != nil && !strings.Contains(err.Error(), "invalid") {
+				fl.ctx.appendReloadFile(mst, &tsspInfo{file: file, order: isOrder})
+			}
+			return
+		}
+		// append and sort
+		files.Lock()
+		defer files.Unlock()
+		files.Append(f)
+		sort.Sort(files)
+		// statics
+		fl.ctx.setError(f.LoadComponents())
+		fl.loadIntoMemory(f)
+		fl.ctx.update(f)
+	case <-fl.mst.closed:
+		return
+	}
+}
+
 func (fl *fileLoader) loadIntoMemory(f TSSPFile) {
-	if *fl.mst.tier != util.Hot || !f.IsOrder() {
-		return
-	}
-
-	size := f.InMemSize()
-	if atomic.AddInt64(&loadSizeLimit, -size) < 0 {
-		return
-	}
-
 	fl.ctx.setError(f.LoadIntoMemory())
 }
 
@@ -297,7 +404,25 @@ type fileLoadContext struct {
 	maxTime  int64
 	rowCount int64
 
-	mu sync.Mutex
+	//reloadFiles []TSSPInfo
+	reloadFiles map[string][]TSSPInfo
+	mu          sync.Mutex
+}
+
+func NewFileLoadContext() *fileLoadContext {
+	return &fileLoadContext{
+		reloadFiles: make(map[string][]TSSPInfo, 0),
+	}
+}
+
+func (fc *fileLoadContext) resetForReload() {
+	fc.firstErr = nil
+	fc.errCount = 0
+	fc.reloadFiles = make(map[string][]TSSPInfo, 0)
+}
+
+func (fc *fileLoadContext) appendReloadFile(mst string, fi TSSPInfo) {
+	fc.reloadFiles[mst] = append(fc.reloadFiles[mst], fi)
 }
 
 func (fc *fileLoadContext) getMaxTime() int64 {

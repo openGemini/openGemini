@@ -38,6 +38,7 @@ import (
 
 const ColumnStoreReaderRecordNum = 7
 const ColumnStoreReaderChunkNum = 7
+const ColumnStoreReaderNoCopyChunkNum = 12 // hashMergeTransform noCopy send + topnTransform bufChunk cache
 
 type ColumnStoreReader struct {
 	executor.BaseProcessor
@@ -323,6 +324,11 @@ func (r *ColumnStoreReader) initSchemaAndPool() (err error) {
 			record.NewCircularRecordPool(record.NewRecordPool(record.ColumnReaderPool), ColumnStoreReaderRecordNum, r.inSchema, false))
 	}
 
+	chunkNum := ColumnStoreReaderChunkNum
+	if r.schema.HasTopNDDCM() {
+		chunkNum = ColumnStoreReaderNoCopyChunkNum
+	}
+
 	// init the chunk pool
 	if len(r.opt.Dimensions) > 0 {
 		refs := make([]influxql.VarRef, 0, len(r.opt.Dimensions))
@@ -336,10 +342,10 @@ func (r *ColumnStoreReader) initSchemaAndPool() (err error) {
 		}
 		b := executor.NewChunkBuilder(r.outSchema)
 		b.SetDim(hybridqp.NewRowDataTypeImpl(refs...))
-		r.chunkPool = executor.NewCircularChunkPool(ColumnStoreReaderChunkNum, b)
+		r.chunkPool = executor.NewCircularChunkPool(chunkNum, b)
 		return
 	}
-	r.chunkPool = executor.NewCircularChunkPool(ColumnStoreReaderChunkNum, executor.NewChunkBuilder(r.outSchema))
+	r.chunkPool = executor.NewCircularChunkPool(chunkNum, executor.NewChunkBuilder(r.outSchema))
 	return
 }
 

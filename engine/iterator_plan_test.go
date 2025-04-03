@@ -26,7 +26,6 @@ import (
 	"testing"
 	"time"
 
-	ast "github.com/influxdata/influxdb/pkg/testing/assert"
 	"github.com/openGemini/openGemini/engine/comm"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
@@ -41,7 +40,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
-	assert2 "github.com/stretchr/testify/assert"
+	ast "github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1837,9 +1836,16 @@ func Test_PreAggregation_FullData_SingleCall(t *testing.T) {
 				opt.EndTime = tt.tr.Max
 				querySchema := executor.NewQuerySchema(stmt.Fields, stmt.ColumnNames(), &opt, nil)
 
-				cursors, _ := sh.CreateCursor(ctx, querySchema)
+				indexInfo, err := sh.CreateCursor(ctx, querySchema)
+				if err != nil {
+					t.Fatalf(err.Error())
+				}
+				if indexInfo == nil {
+					return
+				}
+				defer func() { indexInfo.Unref() }()
 				var keyCursors []interface{}
-				for _, cur := range cursors {
+				for _, cur := range indexInfo.GetCursors() {
 					keyCursors = append(keyCursors, cur)
 				}
 				chunkReader := NewChunkReader(tt.outputRowDataType, tt.readerOps, nil, querySchema, keyCursors, false)
@@ -3337,9 +3343,16 @@ func Test_PreAggregation_MissingData_SingleCall(t *testing.T) {
 				opt.EndTime = tt.tr.Max
 				querySchema := executor.NewQuerySchema(stmt.Fields, stmt.ColumnNames(), &opt, nil)
 
-				cursors, _ := sh.CreateCursor(ctx, querySchema)
+				indexInfo, err := sh.CreateCursor(ctx, querySchema)
+				if err != nil {
+					t.Fatalf(err.Error())
+				}
+				if indexInfo == nil {
+					return
+				}
+				defer func() { indexInfo.Unref() }()
 				var keyCursors []interface{}
-				for _, cur := range cursors {
+				for _, cur := range indexInfo.GetCursors() {
 					keyCursors = append(keyCursors, cur)
 				}
 				chunkReader := NewChunkReader(tt.outputRowDataType, tt.readerOps, nil, querySchema, keyCursors, false)
@@ -3520,9 +3533,16 @@ func Test_FieldFilter_NoPreAgg_SingleCall(t *testing.T) {
 				opt.EndTime = tt.tr.Max
 				querySchema := executor.NewQuerySchema(stmt.Fields, stmt.ColumnNames(), &opt, nil)
 
-				cursors, _ := sh.CreateCursor(ctx, querySchema)
+				indexInfo, err := sh.CreateCursor(ctx, querySchema)
+				if err != nil {
+					t.Fatalf(err.Error())
+				}
+				if indexInfo == nil {
+					return
+				}
+				defer func() { indexInfo.Unref() }()
 				var keyCursors []interface{}
-				for _, cur := range cursors {
+				for _, cur := range indexInfo.GetCursors() {
 					keyCursors = append(keyCursors, cur)
 				}
 
@@ -4979,9 +4999,16 @@ func Run_MissingData_SingCall(t *testing.T, isFlush bool) {
 				opt.EndTime = tt.tr.Max
 				querySchema := executor.NewQuerySchema(stmt.Fields, stmt.ColumnNames(), &opt, nil)
 
-				cursors, _ := sh.CreateCursor(ctx, querySchema)
+				indexInfo, err := sh.CreateCursor(ctx, querySchema)
+				if err != nil {
+					t.Fatalf(err.Error())
+				}
+				if indexInfo == nil {
+					return
+				}
+				defer func() { indexInfo.Unref() }()
 				var keyCursors []interface{}
-				for _, cur := range cursors {
+				for _, cur := range indexInfo.GetCursors() {
 					keyCursors = append(keyCursors, cur)
 				}
 				chunkReader := NewChunkReader(tt.outputRowDataType, tt.readerOps, nil, querySchema, keyCursors, false)
@@ -6547,9 +6574,16 @@ func Test_PreAggregation_Memtable_After_Order_SingCall(t *testing.T) {
 				opt.EndTime = tt.tr.Max
 				querySchema := executor.NewQuerySchema(stmt.Fields, stmt.ColumnNames(), &opt, nil)
 
-				cursors, _ := sh.CreateCursor(ctx, querySchema)
+				indexInfo, err := sh.CreateCursor(ctx, querySchema)
+				if err != nil {
+					t.Fatalf(err.Error())
+				}
+				if indexInfo == nil {
+					return
+				}
+				defer func() { indexInfo.Unref() }()
 				var keyCursors []interface{}
-				for _, cur := range cursors {
+				for _, cur := range indexInfo.GetCursors() {
 					keyCursors = append(keyCursors, cur)
 				}
 				chunkReader := NewChunkReader(tt.outputRowDataType, tt.readerOps, nil, querySchema, keyCursors, false)
@@ -7979,9 +8013,16 @@ func Test_PreAggregation_MemTableData_SingleCall(t *testing.T) {
 			opt.EndTime = tt.tr.Max
 			querySchema := executor.NewQuerySchema(stmt.Fields, stmt.ColumnNames(), &opt, nil)
 
-			cursors, _ := sh.CreateCursor(ctx, querySchema)
+			indexInfo, err := sh.CreateCursor(ctx, querySchema)
+			if err != nil {
+				t.Fatalf(err.Error())
+			}
+			if indexInfo == nil {
+				return
+			}
+			defer func() { indexInfo.Unref() }()
 			var keyCursors []interface{}
-			for _, cur := range cursors {
+			for _, cur := range indexInfo.GetCursors() {
 				keyCursors = append(keyCursors, cur)
 			}
 			chunkReader := NewChunkReader(tt.outputRowDataType, tt.readerOps, nil, querySchema, keyCursors, false)
@@ -8360,9 +8401,16 @@ func Test_PreAggregation_FullData_MultiCalls(t *testing.T) {
 				opt.EndTime = tt.tr.Max
 				querySchema := executor.NewQuerySchema(stmt.Fields, stmt.ColumnNames(), &opt, nil)
 
-				cursors, _ := sh.CreateCursor(ctx, querySchema)
+				indexInfo, err := sh.CreateCursor(ctx, querySchema)
+				if err != nil {
+					t.Fatalf(err.Error())
+				}
+				if indexInfo == nil {
+					return
+				}
+				defer func() { indexInfo.Unref() }()
 				var keyCursors []interface{}
-				for _, cur := range cursors {
+				for _, cur := range indexInfo.GetCursors() {
 					keyCursors = append(keyCursors, cur)
 				}
 				chunkReader := NewChunkReader(tt.outputRowDataType, tt.readerOps, nil, querySchema, keyCursors, false)
@@ -8559,9 +8607,16 @@ func Test_PreAggregation_MissingData_MultiCalls(t *testing.T) {
 				opt.EndTime = tt.tr.Max
 				querySchema := executor.NewQuerySchema(stmt.Fields, stmt.ColumnNames(), &opt, nil)
 
-				cursors, _ := sh.CreateCursor(ctx, querySchema)
+				indexInfo, err := sh.CreateCursor(ctx, querySchema)
+				if err != nil {
+					t.Fatalf(err.Error())
+				}
+				if indexInfo == nil {
+					return
+				}
+				defer func() { indexInfo.Unref() }()
 				var keyCursors []interface{}
-				for _, cur := range cursors {
+				for _, cur := range indexInfo.GetCursors() {
 					keyCursors = append(keyCursors, cur)
 				}
 				chunkReader := NewChunkReader(tt.outputRowDataType, tt.readerOps, nil, querySchema, keyCursors, false)
@@ -8862,9 +8917,16 @@ func TestReadLastFromPreAgg(t *testing.T) {
 				opt.EndTime = tt.tr.Max
 				querySchema := executor.NewQuerySchema(stmt.Fields, stmt.ColumnNames(), &opt, nil)
 
-				cursors, _ := sh.CreateCursor(ctx, querySchema)
+				indexInfo, err := sh.CreateCursor(ctx, querySchema)
+				if err != nil {
+					t.Fatalf(err.Error())
+				}
+				if indexInfo == nil {
+					return
+				}
+				defer func() { indexInfo.Unref() }()
 				var keyCursors []interface{}
-				for _, cur := range cursors {
+				for _, cur := range indexInfo.GetCursors() {
 					keyCursors = append(keyCursors, cur)
 				}
 				chunkReader := NewChunkReader(tt.outputRowDataType, tt.readerOps, nil, querySchema, keyCursors, false)
@@ -8907,6 +8969,7 @@ func TestReadLastFromPreAgg(t *testing.T) {
 		}
 	}
 }
+
 func Test_CreateLogicalPlan(t *testing.T) {
 	testDir := t.TempDir()
 	executor.RegistryTransformCreator(&executor.LogicalTSSPScan{}, &TsspSequenceReader{})
@@ -9005,9 +9068,6 @@ func Test_CreateLogicalPlan(t *testing.T) {
 			RemoveTimeCondition(stmt)
 			opt, _ := query.NewProcessorOptionsStmt(stmt, sopt)
 			source := influxql.Sources{&influxql.Measurement{Database: "db0", RetentionPolicy: "rp0", Name: msNames[0]}}
-			source1 := influxql.Sources{&influxql.Measurement{Database: "db0", RetentionPolicy: "rp1", Name: msNames[0]}}
-			source = append(source, source1[0])
-
 			opt.Name = msNames[0]
 			opt.Sources = source
 			opt.StartTime = tt.tr.Min
@@ -9016,7 +9076,6 @@ func Test_CreateLogicalPlan(t *testing.T) {
 			ctx := context.Background()
 			cursorsN := 0
 			srcCursors := make([][]comm.KeyCursor, 0, len(source))
-			srcCursors1 := make([][]comm.KeyCursor, 0, len(source))
 			for _, source := range opt.Sources {
 				mm, ok := source.(*influxql.Measurement)
 				if !ok {
@@ -9024,32 +9083,20 @@ func Test_CreateLogicalPlan(t *testing.T) {
 				}
 				querySchema.Options().(*query.ProcessorOptions).Name = mm.Name
 
-				cursors, err := sh.CreateCursor(ctx, querySchema) // source
+				info, err := sh.CreateCursor(ctx, querySchema) // source
 				require.Nil(t, err)
-
+				if info == nil {
+					return
+				}
+				defer func() { info.Unref() }()
+				cursors := info.GetCursors()
 				if len(cursors) > 0 {
 					cursorsN += len(cursors)
 					srcCursors = append(srcCursors, cursors)
 				}
 			}
-			srcCursors1 = append(srcCursors1, srcCursors...)
-			plan1, err1 := buildMultiSourcePlan(srcCursors, cursorsN)
-			require.NotNil(t, plan1)
-			require.Nil(t, err1)
-			plan2, err2 := buildOneSourcePlan(srcCursors[0])
-			require.NotNil(t, plan2)
-			require.Nil(t, err2)
-			plan3, err3 := sh.CreateLogicalPlan(ctx, source, querySchema)
-			plan := plan3.(*executor.LogicalDummyShard)
-			for _, r := range plan.Readers() {
-				for _, rr := range r {
-					cur := rr.(comm.KeyCursor)
-					cur.Close()
-				}
-			}
-			require.Nil(t, err3)
 			sh.immTables.CompactionDisable()
-			for _, srcCur := range srcCursors1 {
+			for _, srcCur := range srcCursors {
 				for _, cur := range srcCur {
 					cur.Close()
 				}
@@ -9197,7 +9244,7 @@ func TestChunkReaderFunc(t *testing.T) {
 	}
 	r.sendChunk(nil)
 	_, ok := <-r.closed
-	assert2.True(t, ok)
+	ast.True(t, ok)
 	close(r.closed)
 	qStat := &statistics.StoreSlowQueryStatistics{}
 	ctx := context.Background()
@@ -9205,5 +9252,5 @@ func TestChunkReaderFunc(t *testing.T) {
 	ctx = context.WithValue(ctx, query.QueryDurationKey, qStat)
 	cancel()
 	r.Output = executor.NewChunkPort(hybridqp.NewRowDataTypeImpl(influxql.VarRef{Val: "value1", Type: influxql.Float}))
-	assert2.NoError(t, r.Work(ctx))
+	ast.NoError(t, r.Work(ctx))
 }

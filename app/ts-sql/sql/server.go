@@ -45,10 +45,12 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/httpd"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/openGemini/openGemini/lib/validation"
 	"github.com/openGemini/openGemini/services"
 	"github.com/openGemini/openGemini/services/arrowflight"
 	"github.com/openGemini/openGemini/services/castor"
 	"github.com/openGemini/openGemini/services/continuousquery"
+	"github.com/openGemini/openGemini/services/runtimecfg"
 	"github.com/openGemini/openGemini/services/sherlock"
 	"github.com/openGemini/openGemini/services/writer"
 	gopscpu "github.com/shirou/gopsutil/v3/cpu"
@@ -88,6 +90,8 @@ type Server struct {
 	sherlockService *sherlock.Service
 
 	cqService *continuousquery.Service
+	// reload runtimecfg
+	runtimeCfgService *runtimecfg.Service
 
 	writerService *writer.Service
 
@@ -178,6 +182,20 @@ func NewServer(conf config.Config, info app.ServerInfo, logger *Logger.Logger) (
 	s.castorService = castor.NewService(c.Analysis)
 	s.sherlockService = sherlock.NewService(c.Sherlock)
 	s.sherlockService.WithLogger(s.Logger)
+
+	// init runtimecfg service
+	s.runtimeCfgService = runtimecfg.NewService(c.RuntimeConfig, s.Logger)
+	// init limits for validate api
+	validation.InitOverrides(c.Limits, s.runtimeCfgService)
+	if s.runtimeCfgService != nil {
+		// make sure to set default limits before we start loading configuration into memory
+		config.SetDefaultLimitsForUnmarshalling(c.Limits)
+		// api for query current runtime config
+		s.httpService.Handler.AddRoutes(httpd.Route{
+			Name: "query-runtime-config", Method: "GET", Pattern: "/runtime_config", LoggingEnabled: true,
+			HandlerFunc: runtimecfg.RuntimeConfigHandler(s.runtimeCfgService, c.Limits),
+		})
+	}
 	if c.RecordWrite.Enabled {
 		s.writerService, err = writer.NewService(c.RecordWrite)
 		if err != nil {
@@ -266,6 +284,7 @@ func (s *Server) initQueryExecutor(c *config.TSSql) {
 	s.QueryExecutor.TaskManager.MaxConcurrentQueries = c.Coordinator.MaxConcurrentQueries
 	s.QueryExecutor.TaskManager.Register = s.MetaClient
 	s.QueryExecutor.TaskManager.Host = config.CombineDomain(c.HTTP.Domain, c.HTTP.BindAddress)
+	config.SetHardWrite(c.Coordinator.HardWrite)
 
 	s.httpService.Handler.QueryExecutor = s.QueryExecutor
 	if s.cqService != nil {
@@ -345,6 +364,15 @@ func (s *Server) Open() error {
 	if s.config.HTTP.CPUThreshold > 0 {
 		go s.handleCPUThreshold(s.config.HTTP.CPUThreshold, 5*time.Minute)
 	}
+
+	if s.runtimeCfgService != nil {
+		if err := s.runtimeCfgService.Open(); err != nil {
+			return err
+		}
+	}
+
+	sysconfig.SetInterruptQuery(s.config.Data.InterruptQuery)
+	sysconfig.SetUpperMemPct(int64(s.config.Data.InterruptSqlMemPct))
 	if s.writerService != nil {
 		if err := s.writerService.Open(); err != nil {
 			return err
@@ -429,6 +457,9 @@ func (s *Server) Close() error {
 		util.MustClose(s.cqService)
 	}
 
+	if s.runtimeCfgService != nil {
+		util.MustClose(s.runtimeCfgService)
+	}
 	return nil
 }
 
@@ -489,6 +520,7 @@ func (s *Server) initStatisticsPusher() {
 	stat.InitExecutorStatistics(globalTags)
 	stat.NewErrnoStat().Init(globalTags)
 	stat.NewLogKeeperStatistics().Init(globalTags)
+	stat.NewCollector().SetGlobalTags(globalTags)
 
 	s.statisticsPusher.Register(
 		stat.CollectHandlerStatistics,
@@ -498,6 +530,7 @@ func (s *Server) initStatisticsPusher() {
 		stat.CollectExecutorStatistics,
 		stat.NewErrnoStat().Collect,
 		stat.NewLogKeeperStatistics().Collect,
+		stat.NewCollector().Collect,
 	)
 
 	s.statisticsPusher.RegisterOps(stat.CollectOpsHandlerStatistics)

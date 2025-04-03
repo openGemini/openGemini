@@ -86,6 +86,7 @@ func (s *labelReplaceFunc) CallFunc(name string, args []interface{}) (interface{
 			if keys[i] == dst {
 				keys = append(keys[0:i], keys[i+1:kLen]...)
 				values = append(values[0:i], values[i+1:kLen]...)
+				break
 			}
 		}
 		if len(res) > 0 {

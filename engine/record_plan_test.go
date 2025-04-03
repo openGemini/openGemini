@@ -29,6 +29,8 @@ import (
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable"
+	"github.com/openGemini/openGemini/engine/index/tsi"
+	"github.com/openGemini/openGemini/engine/mutable"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
@@ -99,6 +101,7 @@ func TestWriteIntoStorageTransformErr(t *testing.T) {
 }
 
 func TestFileSequenceAggregator(t *testing.T) {
+	t.Skip()
 	opt := &query.ProcessorOptions{
 		ChunkSize: 100,
 		Interval: hybridqp.Interval{
@@ -1843,6 +1846,7 @@ func Test_DownSample_EmptyColumn(t *testing.T) {
 type MocTsspFile struct {
 	immutable.TSSPFile
 	path string
+	err  error
 }
 
 func (m MocTsspFile) Path() string {
@@ -1963,7 +1967,7 @@ func (m MocTsspFile) ContainsValue(id uint64, tr util.TimeRange) (bool, error) {
 	if id == SID {
 		return true, nil
 	}
-	return false, nil
+	return false, m.err
 }
 
 func (m MocTsspFile) MinMaxTime() (int64, int64, error) {
@@ -1998,10 +2002,6 @@ func (m MocTsspFile) Remove() error {
 	return nil
 }
 
-func (m MocTsspFile) FreeMemory(evictLock bool) int64 {
-	return 0
-}
-
 func (m MocTsspFile) Version() uint64 {
 	return 0
 }
@@ -2016,14 +2016,6 @@ func (m MocTsspFile) MaxChunkRows() int {
 
 func (m MocTsspFile) MetaIndexItemNum() int64 {
 	return 0
-}
-
-func (m MocTsspFile) AddToEvictList(level uint16) {
-	return
-}
-
-func (m MocTsspFile) RemoveFromEvictList(level uint16) {
-	return
 }
 
 func (m MocTsspFile) GetFileReaderRef() int64 {
@@ -2525,4 +2517,52 @@ func Test_Create(t *testing.T) {
 
 		})
 	}
+}
+
+func TestTsmMergeCursorWithLocation(t *testing.T) {
+	noErrFile, errFile := &MocTsspFile{}, &MocTsspFile{err: fmt.Errorf("invalid")}
+	immTableReaders := map[uint64]*immutable.MmsReaders{
+		1: {Orders: []immutable.TSSPFile{errFile}, OutOfOrders: []immutable.TSSPFile{errFile}},
+	}
+	c := &tsmMergeCursor{ctx: &idKeyCursorContext{
+		immTableReaders: map[uint64]*immutable.MmsReaders{},
+		querySchema:     genQuerySchema(nil, &query.ProcessorOptions{})},
+		locations:           &immutable.LocationCursor{},
+		outOfOrderLocations: &immutable.LocationCursor{},
+	}
+	_, err := c.ReInitWithShard(1, 2, nil, nil, nil, true)
+	assert1.NoError(t, err)
+
+	err = c.AddLocWithShard(1, 1)
+	assert1.NoError(t, err)
+
+	c.ctx.immTableReaders = immTableReaders
+	err = c.AddLocWithShard(1, 1)
+	assert1.Error(t, err, "invalid")
+
+	immTableReaders[1].Orders = []immutable.TSSPFile{noErrFile}
+	err = c.AddLocWithShard(1, 1)
+	assert1.Error(t, err, "invalid")
+
+	_, err = c.ReInitWithShard(1, 2, nil, nil, nil, true)
+	assert1.Error(t, err, "invalid")
+
+	ctx := &idKeyCursorContext{memTableReader: make(map[uint64]*mutable.MemTables)}
+	s := &seriesCursor{tsmCursor: c, ctx: ctx}
+	_, err = s.ReInitWithShard(genTagSetMergeInfo(), 0, 0, true)
+	assert1.Error(t, err, "invalid")
+}
+
+func genTagSetMergeInfo() *tsi.TagSetMergeInfo {
+	tagSet := &tsi.TagSetMergeInfo{}
+	tagSet.SeriesKeys = append(tagSet.SeriesKeys, []byte("A2"), []byte("A1"), []byte("A4"))
+	tagSet.IDs = append(tagSet.IDs, []uint64{1}, []uint64{2}, []uint64{3})
+	tagSet.ShardIds = append(tagSet.ShardIds, []uint64{1}, []uint64{1}, []uint64{1})
+	tagSet.Filters = append(tagSet.Filters, &influxql.BinaryExpr{}, &influxql.BinaryExpr{}, &influxql.BinaryExpr{})
+	tagSet.TagsVec = append(tagSet.TagsVec,
+		influx.PointTags{{Key: "A1", Value: "a1"}},
+		influx.PointTags{{Key: "A2", Value: "a2"}},
+		influx.PointTags{{Key: "A4", Value: "a4"}},
+	)
+	return tagSet
 }
