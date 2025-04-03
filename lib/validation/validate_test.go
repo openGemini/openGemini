@@ -309,7 +309,7 @@ func TestValidateQueryTimeRange(t *testing.T) {
 	// invalid time range
 	exceedEnd := time.Unix(12, 0) // 11s
 	err = ValidateQueryTimeRange("", start, exceedEnd)
-	require.Equal(t, "the query time range exceeds the limit (start: 1970-01-01 08:00:01 +0800 CST, end 1970-01-01 08:00:12 +0800 CST, query_len: 11s, limit: 10s)", err.Error())
+	require.Equal(t, "the query time range exceeds the limit (start: 1970-01-01 00:00:01 +0000 UTC, end 1970-01-01 00:00:12 +0000 UTC, query_len: 11s, limit: 10s)", err.Error())
 
 	// no time range limits
 	limits.defaultLimits.MaxQueryLength = 0
