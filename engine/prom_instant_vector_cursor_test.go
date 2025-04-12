@@ -28,7 +28,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
-	model "github.com/prometheus/prometheus/pkg/value"
+	model "github.com/prometheus/prometheus/model/value"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -139,6 +139,18 @@ func TestInstantVectorCursor(t *testing.T) {
 	src13.ColVals[0].AppendFloats(15)
 	src13.AppendTime(15)
 	srcRecords1 = append(srcRecords1, src11, src12, src13)
+
+	srcRecords2 := make([]*record.Record, 0)
+	src21 := record.NewRecordBuilder(outSchema)
+	src21.ColVals[0].AppendFloats(30, 30, 30)
+	src21.AppendTime(1718867655000000000, 1718867715000000000, 1718867775000000000)
+	src22 := record.NewRecordBuilder(outSchema)
+	src22.ColVals[0].AppendFloats(1, 1, 1)
+	src22.AppendTime(1718868435000000000, 1718868495000000000, 1718868555000000000)
+	src23 := record.NewRecordBuilder(outSchema)
+	src23.ColVals[0].AppendFloats(2, 2, 2)
+	src23.AppendTime(1718867355000000000, 1718867415000000000, 1718867475000000000)
+	srcRecords2 = append(srcRecords2, src21, src22, src23)
 
 	exprOpt := []hybridqp.ExprOptions{
 		{
@@ -320,6 +332,28 @@ func TestInstantVectorCursor(t *testing.T) {
 	t.Run("6", func(t *testing.T) {
 		testInstantVectorCursor(t, inSchema, outSchema, srcRecords1, dstRecords, exprOpt, querySchema)
 	})
+
+	// 7. select last(float) from mst
+	opt = &query.ProcessorOptions{
+		Exprs:         []influxql.Expr{hybridqp.MustParseExpr(`last("float")`)},
+		Step:          30 * time.Minute,
+		LookBackDelta: 5 * time.Minute,
+		StartTime:     1718866500000000000,
+		EndTime:       1718868600000000000,
+		ChunkSize:     3,
+	}
+	querySchema = executor.NewQuerySchema(nil, nil, opt, nil)
+
+	dstRecords = make([]*record.Record, 0)
+	dst1 = record.NewRecordBuilder(outSchema)
+	dst1.RecMeta = &record.RecMeta{}
+	dst1.IntervalIndex = append(dst1.IntervalIndex, 0)
+	dst1.ColVals[0].AppendFloat(1)
+	dst1.AppendTime(1718868600000000000)
+	dstRecords = append(dstRecords, dst1)
+	t.Run("7", func(t *testing.T) {
+		testInstantVectorCursor(t, inSchema, outSchema, srcRecords2, dstRecords, exprOpt, querySchema)
+	})
 }
 
 func benchmarkInstantVectorCursor(b *testing.B, recordCount, recordSize, tagPerRecord, intervalPerRecord int,
@@ -367,4 +401,112 @@ func BenchmarkInstantVectorCursor_Last_Float_Record_SingleTS(b *testing.B) {
 	}
 	querySchema := executor.NewQuerySchema(nil, nil, opt, nil)
 	benchmarkInstantVectorCursor(b, recordCount, recordSize, tagPerRecord, intervalPerRecord, exprOpt, querySchema, inSchema, outSchema)
+}
+
+func Test_IsSameStep(t *testing.T) {
+	type args struct {
+		startSample int64
+		endSample   int64
+		step        int64
+		duration    int64
+		currT       int64
+		nextT       int64
+	}
+	tests := []struct {
+		name string
+		args args
+		want bool
+	}{
+		{
+			name: "1",
+			args: args{
+				startSample: 1,
+				endSample:   11,
+				step:        5,
+				duration:    2,
+				currT:       9,
+				nextT:       10,
+			},
+			want: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, engine.IsSameStep(tt.args.startSample, tt.args.endSample, tt.args.step, tt.args.duration, tt.args.currT, tt.args.nextT))
+		})
+	}
+}
+
+func TestFilterInstantNANPoint(t *testing.T) {
+	t.Run("1", func(t *testing.T) {
+		srcRec := genRec(inSchema,
+			[]int{1, 1, 1, 1},
+			[]float64{3, 2, math.Float64frombits(model.StaleNaN), 5},
+			[]int64{2 * 1e9, 3 * 1e9, 4 * 1e9, 5 * 1e9})
+		outRec := genRec(inSchema,
+			[]int{1, 1, 1},
+			[]float64{3, 2, 5},
+			[]int64{2 * 1e9, 3 * 1e9, 5 * 1e9})
+
+		var out *record.Record
+		out = record.NewRecordBuilder(srcRec.Schema)
+		out.RecMeta = srcRec.RecMeta
+		engine.FilterInstantNANPoint(srcRec, out)
+
+		if !isRecEqual(outRec, out) {
+			t.Fatal(
+				fmt.Sprintf("***output record***:\n %s\n ***expect record***:\n %s\n",
+					out.String(),
+					outRec.String(),
+				))
+		}
+	})
+
+	t.Run("2", func(t *testing.T) {
+		srcRec := genRec(inSchema,
+			[]int{1, 1, 1, 1},
+			[]float64{math.Float64frombits(model.StaleNaN), 3, 2, 5},
+			[]int64{2 * 1e9, 3 * 1e9, 4 * 1e9, 5 * 1e9})
+		outRec := genRec(inSchema,
+			[]int{1, 1, 1},
+			[]float64{3, 2, 5},
+			[]int64{3 * 1e9, 4 * 1e9, 5 * 1e9})
+
+		var out *record.Record
+		out = record.NewRecordBuilder(srcRec.Schema)
+		out.RecMeta = srcRec.RecMeta
+		engine.FilterInstantNANPoint(srcRec, out)
+
+		if !isRecEqual(outRec, out) {
+			t.Fatal(
+				fmt.Sprintf("***output record***:\n %s\n ***expect record***:\n %s\n",
+					out.String(),
+					outRec.String(),
+				))
+		}
+	})
+
+	t.Run("3", func(t *testing.T) {
+		srcRec := genRec(inSchema,
+			[]int{1, 1, 1, 1},
+			[]float64{3, 2, 5, math.Float64frombits(model.StaleNaN)},
+			[]int64{2 * 1e9, 3 * 1e9, 4 * 1e9, 5 * 1e9})
+		outRec := genRec(inSchema,
+			[]int{1, 1, 1},
+			[]float64{3, 2, 5},
+			[]int64{2 * 1e9, 3 * 1e9, 4 * 1e9})
+
+		var out *record.Record
+		out = record.NewRecordBuilder(srcRec.Schema)
+		out.RecMeta = srcRec.RecMeta
+		engine.FilterInstantNANPoint(srcRec, out)
+
+		if !isRecEqual(outRec, out) {
+			t.Fatal(
+				fmt.Sprintf("***output record***:\n %s\n ***expect record***:\n %s\n",
+					out.String(),
+					outRec.String(),
+				))
+		}
+	})
 }

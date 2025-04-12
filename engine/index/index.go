@@ -64,6 +64,8 @@ func NewIndexWriter(dir, msName, dataFilePath, lockPath string, indexType indext
 	switch indexType {
 	case indextype.BloomFilter:
 		return sparseindex.NewBloomFilterWriter(dir, msName, dataFilePath, lockPath, tokens)
+	case indextype.BloomFilterIp:
+		return sparseindex.NewBloomFilterIpWriter(dir, msName, dataFilePath, lockPath, tokens)
 	case indextype.BloomFilterFullText:
 		return sparseindex.NewBloomFilterFullTextWriter(dir, msName, dataFilePath, lockPath, tokens)
 	case indextype.Set:

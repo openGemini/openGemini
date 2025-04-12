@@ -81,6 +81,7 @@ func (t *tsImmTableImpl) compactToLevel(m *MmsTables, group FilesInfo, full, isN
 	var newFiles []TSSPFile
 	var compactErr error
 	var events *Events
+	var success = false
 
 	if isNonStream {
 		compItrs := m.NewChunkIterators(group)
@@ -100,13 +101,15 @@ func (t *tsImmTableImpl) compactToLevel(m *MmsTables, group FilesInfo, full, isN
 		}
 
 		events = compItrs.InitEvents(group.toLevel)
+		defer func() {
+			// Ensures that file locks are released even in unexpected situations
+			events.Finish(success, m.getEventContext())
+		}()
 
 		compItrs.WithLog(lcLog)
 		oldFilesSize = compItrs.estimateSize
 		newFiles, compactErr = compItrs.compact(group.oldFiles, group.toLevel, true)
 		if compactErr != nil {
-			events.Finish(false, m.getEventContext())
-			events = nil
 			compItrs.RemoveTmpFiles()
 		}
 		compItrs.Close()
@@ -121,20 +124,20 @@ func (t *tsImmTableImpl) compactToLevel(m *MmsTables, group FilesInfo, full, isN
 		err := events.TriggerReplaceFile(filepath.Dir(m.path), *m.lock)
 		if err != nil {
 			lcLog.Error("failed to trigger event ReplaceFile", zap.Error(err))
-			events.Finish(false, m.getEventContext())
 			return err
 		}
 	}
 
 	if err := m.ReplaceFiles(group.name, group.oldFiles, newFiles, true); err != nil {
 		lcLog.Error("replace compacted file error", zap.Error(err))
-		events.Finish(false, m.getEventContext())
 		return err
 	}
 
-	if events != nil {
-		events.Finish(true, m.getEventContext())
+	if !isNonStream {
+		NewHotFileManager().AddAll(newFiles)
 	}
+
+	success = true
 	end := time.Now()
 	lcLog.Debug("compact file done", zap.Any("files", group.oldFids), zap.Time("end", end), zap.Duration("time used", end.Sub(start)))
 
@@ -243,6 +246,22 @@ func (t *tsImmTableImpl) addTSSPFile(m *MmsTables, isOrder bool, f TSSPFile, nam
 	}
 	v.lock.Lock()
 	v.files = append(v.files, f)
+	v.lock.Unlock()
+}
+
+func (t *tsImmTableImpl) addUnloadFile(m *MmsTables, isOrder bool, f TSSPInfo, nameWithVer string) {
+	mmsTbls := m.Order
+	if !isOrder {
+		mmsTbls = m.OutOfOrder
+	}
+
+	v, ok := mmsTbls[nameWithVer]
+	if !ok || v == nil {
+		v = NewTSSPFiles()
+		mmsTbls[nameWithVer] = v
+	}
+	v.lock.Lock()
+	v.unloadFiles = append(v.unloadFiles, f)
 	v.lock.Unlock()
 }
 

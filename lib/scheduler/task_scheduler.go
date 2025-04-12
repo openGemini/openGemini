@@ -118,7 +118,10 @@ func (ts *TaskScheduler) ExecuteTaskGroup(tg *TaskGroup, signal chan struct{}) {
 		tg.Finish()
 		return
 	}
+
+	ts.wg.Add(1)
 	tg.OnFinish(func() {
+		ts.wg.Done()
 		ts.delTaskMutex(tg.Key())
 	})
 
@@ -129,19 +132,29 @@ func (ts *TaskScheduler) ExecuteTaskGroup(tg *TaskGroup, signal chan struct{}) {
 
 func (ts *TaskScheduler) ExecuteBatch(tasks []Task, signal chan struct{}) {
 	for i := range tasks {
-		task := tasks[i]
-		if !ts.addTaskMutex(task.Key()) {
-			task.Finish()
-			continue
-		}
-
-		task.OnFinish(func() {
-			ts.delTaskMutex(task.Key())
-			ts.delTask(task)
-		})
-
-		ts.execute(task, signal)
+		ts.Execute(tasks[i], signal, false)
 	}
+}
+
+func (ts *TaskScheduler) Execute(task Task, signal chan struct{}, async bool) {
+	if !ts.addTaskMutex(task.Key()) {
+		task.Finish()
+		return
+	}
+
+	ts.wg.Add(1)
+	task.OnFinish(func() {
+		ts.delTaskMutex(task.Key())
+		ts.delTask(task)
+		ts.wg.Done()
+	})
+
+	if async {
+		go ts.execute(task, signal)
+		return
+	}
+
+	ts.execute(task, signal)
 }
 
 func (ts *TaskScheduler) execute(task Task, signal chan struct{}) {
@@ -159,12 +172,10 @@ func (ts *TaskScheduler) execute(task Task, signal chan struct{}) {
 			return
 		}
 
-		ts.wg.Add(1)
 		go func() {
 			defer func() {
 				task.Finish()
 				ts.limiter.Release()
-				ts.wg.Done()
 			}()
 
 			if task.BeforeExecute() {

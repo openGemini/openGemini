@@ -24,7 +24,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
-	model "github.com/prometheus/prometheus/pkg/value"
+	model "github.com/prometheus/prometheus/model/value"
 )
 
 // InstantVectorCursor is used to sample and process data for prom instant_query or range_query.
@@ -110,7 +110,7 @@ func (c *InstantVectorCursor) inNextWindowWithInfo(currRecord *record.Record) er
 	}
 	// padding is required before and after the last rec. Padding is required only before the previous rec.
 	c.reducerParams.lastRec = (nextRecord == nil) || (c.fileInfo != nil && info != c.fileInfo)
-	c.inNextWin = isSameWindow(currRecord, nextRecord, c.fileInfo, info, c.schema, c.startSample, c.endSample, c.step)
+	c.inNextWin = isSameWindow(currRecord, nextRecord, c.fileInfo, info, c.schema, c.startSample, c.endSample, c.step, c.lookUpDelta)
 	return nil
 }
 
@@ -121,7 +121,7 @@ func (c *InstantVectorCursor) inNextWindow(currRecord *record.Record) error {
 	}
 	// padding is required before and after the last rec. Padding is required only before the previous rec.
 	c.reducerParams.lastRec = nextRecord == nil
-	c.inNextWin = isSameWindow(currRecord, nextRecord, nil, nil, c.schema, c.startSample, c.endSample, c.step)
+	c.inNextWin = isSameWindow(currRecord, nextRecord, nil, nil, c.schema, c.startSample, c.endSample, c.step, c.lookUpDelta)
 	return nil
 }
 
@@ -135,10 +135,6 @@ func (c *InstantVectorCursor) computeIntervalIndex(record *record.Record) {
 	firstStep := getCurrStep(c.startSample, c.endSample, c.step, times[0])
 	lastStep := getCurrStep(c.startSample, c.endSample, c.step, times[len(times)-1])
 	c.firstStep = firstStep
-	if firstStep == lastStep {
-		c.intervalIndex = append(c.intervalIndex, 0, uint16(record.RowNums()))
-		return
-	}
 	var i, j int
 	for end := firstStep; end <= lastStep; end += c.step {
 		start := end - c.lookUpDelta
@@ -183,7 +179,7 @@ func (c *InstantVectorCursor) Name() string {
 
 func isSameWindow(
 	currRecord, nextRecord *record.Record, currInfo, nextInfo *comm.FileInfo, schema hybridqp.Catalog,
-	startSample, endSample, step int64,
+	startSample, endSample, step, rangeDuration int64,
 ) bool {
 	if nextRecord == nil || currRecord.RowNums() == 0 {
 		return false
@@ -199,7 +195,9 @@ func isSameWindow(
 	if schema.Options().GetPromStep() == 0 {
 		return true
 	}
-
+	if step > rangeDuration {
+		return IsSameStep(startSample, endSample, step, rangeDuration, currRecord.Times()[currRecord.RowNums()-1], nextRecord.Times()[0])
+	}
 	prevStep := getCurrStep(startSample, endSample, step, currRecord.Times()[currRecord.RowNums()-1])
 	nextStep := getCurrStep(startSample, endSample, step, nextRecord.Times()[0])
 	return prevStep == nextStep
@@ -225,6 +223,18 @@ func getCurrStep(startSample, endSample, step, t int64) int64 {
 		return hybridqp.MinInt64(startSample+(n+1)*step, endSample)
 	}
 	return hybridqp.MinInt64(t, endSample)
+}
+
+func IsSameStep(startSample, endSample, step, duration, currT, nextT int64) bool {
+	currT = hybridqp.ClampInt64(currT, startSample, endSample)
+	nextT = hybridqp.ClampInt64(nextT, startSample, endSample)
+	n1, r1 := (currT-startSample)/step, (currT-startSample)%step
+	n2, r2 := (nextT-startSample)/step, (nextT-startSample)%step
+	if n1 != n2 {
+		return false
+	}
+	delta := step - duration
+	return r1 >= delta && r2 >= delta
 }
 
 func newPromSampleProcessor(inSchema, outSchema record.Schemas, exprOpt []hybridqp.ExprOptions) (CoProcessor, error) {
@@ -321,6 +331,25 @@ func (r *floatSampler) PopulateByPrevious(outRecord *record.Record, param *Reduc
 	}
 }
 
+func FilterInstantNANPoint(rec, outRecord *record.Record) *record.Record {
+	rowNum := rec.RowNums()
+
+	vals := rec.ColVals[0].FloatValues()
+	var startIndex, endIndex int
+	for startIndex, endIndex = 0, 0; endIndex < rowNum; {
+		if model.IsStaleNaN(vals[endIndex]) {
+			outRecord.AppendRec(rec, startIndex, endIndex)
+			endIndex++
+			startIndex = endIndex
+			continue
+		}
+
+		endIndex++
+	}
+	outRecord.AppendRec(rec, startIndex, endIndex)
+	return outRecord
+}
+
 func (r *floatSampler) Aggregate(p *ReducerEndpoint, param *ReducerParams) {
 	r.offset = param.offset
 	inRecord, outRecord := p.InputPoint.Record, p.OutputPoint.Record
@@ -328,7 +357,7 @@ func (r *floatSampler) Aggregate(p *ReducerEndpoint, param *ReducerParams) {
 	values := inRecord.ColVals[inOrdinal].FloatValues()
 	timeIdx, numStep := outRecord.ColNums()-1, len(param.intervalIndex)/2
 	if param.step == 0 && param.rangeDuration > 0 {
-		outRecord.AppendRec(inRecord, 0, inRecord.RowNums())
+		FilterInstantNANPoint(inRecord, outRecord)
 		return
 	}
 	var ts int64
@@ -375,6 +404,9 @@ func (r *floatSampler) Aggregate(p *ReducerEndpoint, param *ReducerParams) {
 		r.prevBuf.set(int(param.firstStep+int64(numStep-1)*param.step), inRecord.Time(idx), value)
 	}
 	if param.step > 0 && param.lastRec && !r.prevBuf.isNil {
+		if len(param.intervalIndex) == 0 {
+			return
+		}
 		// pad after the last rec.
 		nextStep := ts + param.step
 		if nextStep <= param.lastStep {

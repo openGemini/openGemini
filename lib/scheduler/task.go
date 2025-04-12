@@ -15,6 +15,7 @@
 package scheduler
 
 import (
+	"strconv"
 	"sync"
 	"sync/atomic"
 )
@@ -75,6 +76,9 @@ type BaseTask struct {
 func (t *BaseTask) Init(key string) {
 	t.key = key
 	t.uuid = atomic.AddUint64(&taskUUID, 1)
+	if t.key == "" {
+		t.key = strconv.Itoa(int(t.uuid))
+	}
 }
 
 func (t *BaseTask) BeforeExecute() bool {

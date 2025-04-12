@@ -26,3 +26,13 @@ const (
 )
 
 const DefaultLookBackDelta = 5 * time.Minute
+const FieldCountForKeepMetric = 2
+
+const (
+	PromMetaDataMst  string = "prom_meta_data"
+	PromProjectID    string = "project_id"
+	PromMetric       string = "metric"
+	PromMetaDataHelp string = "help"
+	PromMetaDataType string = "type"
+	PromMetaDataUnit string = "unit"
+)

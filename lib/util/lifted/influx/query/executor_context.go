@@ -7,9 +7,11 @@ This code is originally from: https://github.com/influxdata/influxdb/blob/1.7/qu
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/openGemini/openGemini/lib/errno"
+	index2 "github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
@@ -118,7 +120,17 @@ func (ctx *ExecutionContext) send(result *Result, seq int) error {
 
 // Send sends a Result to the Results channel and will exit if the query has
 // been interrupted or aborted.
-func (ctx *ExecutionContext) Send(result *Result, seq int) error {
+func (ctx *ExecutionContext) Send(result *Result, seq int, ctxWithWriter context.Context) error {
+	if ctxWithWriter != nil {
+		queryIndexState := ctxWithWriter.Value(index2.QueryIndexState)
+		if ctx.ExecutionOptions.IsQuerySeriesLimit && queryIndexState != nil {
+			queryIndexStateV := queryIndexState.(*int32)
+			if *queryIndexStateV > 0 {
+				result.Err = fmt.Errorf("num of index over the series limit")
+			}
+		}
+	}
+
 	result.StatementID = seq
 	select {
 	case <-ctx.Done():

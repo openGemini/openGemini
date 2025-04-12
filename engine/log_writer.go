@@ -181,7 +181,7 @@ func (w *LogWriter) trySwitchFile(logPath string) error {
 		fileName := filepath.Join(logPath, fmt.Sprintf("%d.%s", w.fileSeq, WALFileSuffixes))
 		lock := fileops.FileLockOption(*w.lock)
 		pri := fileops.FilePriorityOption(fileops.IO_PRIORITY_ULTRA_HIGH)
-		fd, err := fileops.OpenFile(fileName, os.O_CREATE|os.O_RDWR, 0640, lock, pri)
+		fd, err := fileops.OpenFile(fileName, os.O_CREATE|os.O_RDWR, 0600, lock, pri)
 		if err != nil {
 			return err
 		}

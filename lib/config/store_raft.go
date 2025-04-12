@@ -17,14 +17,21 @@ package config
 import "time"
 
 const (
-	DefaultRaftMsgTimeout = 15 * time.Second
-	DefaultElectionTick   = 10
-	DefaultHeartbeatTick  = 1
+	DefaultRaftMsgTimeout    = 15 * time.Second
+	DefaultElectionTick      = 10
+	DefaultHeartbeatTick     = 1
+	DefaultRaftMsgCacheSize  = 1000
+	DefaultFileWrapSize      = 128
+	DefaultWaitCommitTimeout = 20 * time.Second
 )
 
 var RaftMsgTimeout = DefaultRaftMsgTimeout
 var ElectionTick = DefaultElectionTick
 var HeartbeatTick = DefaultHeartbeatTick
+var RaftMsgCacheSize = DefaultRaftMsgCacheSize
+var WaitCommitTimeout = DefaultWaitCommitTimeout
+
+var FileWrapSize = DefaultFileWrapSize
 
 func SetRaftMsgTimeout(timeout time.Duration) {
 	RaftMsgTimeout = timeout
@@ -36,4 +43,16 @@ func SetElectionTick(tick int) {
 
 func SetHeartbeatTick(tick int) {
 	HeartbeatTick = tick
+}
+
+func SetRaftMsgCacheSize(size int) {
+	RaftMsgCacheSize = size
+}
+
+func SetFileWrapSize(size int) {
+	FileWrapSize = size
+}
+
+func SetWaitCommitTimeout(timeout time.Duration) {
+	WaitCommitTimeout = timeout
 }

@@ -82,13 +82,23 @@ func (index *BloomFilterReaderCreator) CreateSKFileReader(rpnExpr *rpn.RPNExpr, 
 }
 
 type BloomFilterIndexReader struct {
-	isCache bool
-	version uint32
-	schema  record.Schemas
-	option  hybridqp.Options
-	bf      rpn.SKBaseReader
-	sk      SKCondition
-	span    *tracing.Span
+	isCache   bool
+	version   uint32
+	schema    record.Schemas
+	option    hybridqp.Options
+	bf        rpn.SKBaseReader
+	sk        SKCondition
+	span      *tracing.Span
+	indexType index.IndexType
+}
+
+func NewBloomFilterIndexReaderWithIndexType(rpnExpr *rpn.RPNExpr, schema record.Schemas, option hybridqp.Options, isCache bool, indexType index.IndexType) (*BloomFilterIndexReader, error) {
+	reader, err := NewBloomFilterIndexReader(rpnExpr, schema, option, isCache)
+	if err != nil {
+		return nil, err
+	}
+	reader.indexType = indexType
+	return reader, err
 }
 
 func NewBloomFilterIndexReader(rpnExpr *rpn.RPNExpr, schema record.Schemas, option hybridqp.Options, isCache bool) (*BloomFilterIndexReader, error) {
@@ -96,7 +106,7 @@ func NewBloomFilterIndexReader(rpnExpr *rpn.RPNExpr, schema record.Schemas, opti
 	if err != nil {
 		return nil, err
 	}
-	return &BloomFilterIndexReader{schema: schema, option: option, isCache: isCache, version: 4, sk: sk}, nil
+	return &BloomFilterIndexReader{schema: schema, option: option, isCache: isCache, version: 4, sk: sk, indexType: index.BloomFilter}, nil
 }
 
 func (r *BloomFilterIndexReader) MayBeInFragment(fragId uint32) (bool, error) {
@@ -136,7 +146,7 @@ func (r *BloomFilterIndexReader) ReInit(file interface{}) (err error) {
 		fileName = fileNameSlice[0] + "." + r.schema[0].Name + colstore.BloomFilterIndexFileSuffix
 		splitMap := make(map[string][]byte)
 		splitMap[r.schema[0].Name] = fullTextTokensTable
-		r.bf, err = bloomfilter.NewLineFilterReader(path, nil, r.option.GetCondition(), r.version, splitMap, fileName)
+		r.bf, err = bloomfilter.CreateFilterReader(r.indexType, path, nil, r.option.GetCondition(), r.version, splitMap, fileName)
 		if err != nil {
 			return err
 		}
@@ -167,7 +177,7 @@ func GetLocalBloomFilterBlockCnts(dir, msName, lockPath string, recSchema record
 
 	lock := fileops.FileLockOption(lockPath)
 	pri := fileops.FilePriorityOption(fileops.IO_PRIORITY_NORMAL)
-	fd, err := fileops.OpenFile(localPath, os.O_CREATE, 0640, lock, pri)
+	fd, err := fileops.OpenFile(localPath, os.O_CREATE, 0600, lock, pri)
 	defer func() {
 		_ = fd.Close()
 	}()

@@ -35,6 +35,7 @@ import (
 	"time"
 
 	"github.com/nxadm/tail"
+	"github.com/openGemini/openGemini/lib/atomic"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/crypto"
 	"github.com/openGemini/openGemini/lib/errno"
@@ -83,14 +84,15 @@ type HTTPClient interface {
 }
 
 type ReportJob struct {
-	storeDatabase string
-	storeRP       string
-	storeDuration time.Duration
-	writeUrl      string
-	writeHeader   http.Header
-	queryUrl      string
-	queryHeader   http.Header
-	gzipped       bool
+	storeDatabase  string
+	storeRP        string
+	storeDuration  time.Duration
+	rbAddress      []string
+	rbAddressIndex int64
+	writeHeader    http.Header
+	queryHeader    http.Header
+	gzipped        bool
+	protocol       string
 
 	Client HTTPClient
 	done   chan struct{}
@@ -104,6 +106,7 @@ type ReportJob struct {
 	compress   bool // is metric file compressed
 	reportStat *ReportStat
 
+	replicaN       int
 	mux            *sync.RWMutex
 	indexModuleMap map[string][]*metrics.ModuleIndex
 }
@@ -124,22 +127,28 @@ func NewReportJob(logger *logger.Logger, c *config.TSMonitor, gzipped bool, errL
 		}
 	}
 
-	writeUrl := fmt.Sprintf("%s://%s/write?db=%s&rp=%s", protocol, r.Address, r.Database, r.Rp)
 	writeHeader := http.Header{}
 	writeHeader.Set("Authorization", "Basic "+basicAuth(r.Username, crypto.Decrypt(r.Password)))
 
-	queryUrl := fmt.Sprintf("%s://%s/query", protocol, r.Address)
 	queryHeader := http.Header{}
 	queryHeader.Set("Authorization", "Basic "+basicAuth(q.Username, crypto.Decrypt(q.Password)))
 	queryHeader.Add("Content-Type", "application/x-www-form-urlencoded")
-
+	if r.ReplicaN <= 0 {
+		logger.Error("ts-monitor report config replicaN = 0, use replicaN = 1")
+		r.ReplicaN = 1
+	}
+	if r.ReplicaN > 1 && r.ReplicaN%2 == 0 {
+		logger.Error("ts-monitor report config replicaN > 1 add %2 = 0, use replicaN = 1")
+		r.ReplicaN = 1
+	}
+	logger.Info("ts-monitor new reportJob", zap.Int("replicaN", r.ReplicaN))
 	mr := &ReportJob{
 		storeDatabase:  r.Database,
 		storeRP:        r.Rp,
 		storeDuration:  time.Duration(r.RpDuration),
-		writeUrl:       writeUrl,
+		rbAddress:      strings.Split(r.Address, ","),
 		writeHeader:    writeHeader,
-		queryUrl:       queryUrl,
+		protocol:       protocol,
 		queryHeader:    queryHeader,
 		compress:       m.Compress,
 		gzipped:        gzipped,
@@ -148,6 +157,7 @@ func NewReportJob(logger *logger.Logger, c *config.TSMonitor, gzipped bool, errL
 		errLogHistory:  errLogHistory,
 		errLogStat:     make(map[string]string),
 		reportStat:     NewReportStat(),
+		replicaN:       r.ReplicaN,
 		mux:            new(sync.RWMutex),
 		indexModuleMap: make(map[string][]*metrics.ModuleIndex),
 	}
@@ -157,10 +167,11 @@ func NewReportJob(logger *logger.Logger, c *config.TSMonitor, gzipped bool, errL
 
 func (rb *ReportJob) CreateDatabase() error {
 	data := url.Values{}
-	cmd := fmt.Sprintf("CREATE DATABASE %s with duration %s replication 1 name %s", rb.storeDatabase, rb.storeDuration, rb.storeRP)
+	cmd := fmt.Sprintf("CREATE DATABASE %s with duration %s replication %d name %s", rb.storeDatabase, rb.storeDuration, rb.replicaN, rb.storeRP)
 	data.Set("q", cmd)
 	buf := data.Encode()
-	if err := rb.retryEver(rb.queryUrl, rb.queryHeader, buf, HttpTimeout); err != nil {
+	path := "/query"
+	if err := rb.retryEver(path, rb.queryHeader, buf, HttpTimeout); err != nil {
 		return err
 	}
 	return nil
@@ -172,7 +183,13 @@ func basicAuth(username, password string) string {
 }
 
 func (rb *ReportJob) WriteData(buf string) error {
-	return rb.retryEver(rb.writeUrl, rb.writeHeader, buf, 0)
+	path := "/write"
+	return rb.retryEver(path, rb.writeHeader, buf, 0)
+}
+
+func (rb *ReportJob) switchAddress() {
+	atomic.SetModInt64AndADD(&rb.rbAddressIndex, 1, int64(len(rb.rbAddress)))
+	rb.logger.Info("switch address", zap.Int64("address index: ", rb.rbAddressIndex))
 }
 
 func checkConnectionError(err error) bool {
@@ -186,7 +203,8 @@ func checkConnectionError(err error) bool {
 	return false
 }
 
-func (rb *ReportJob) retryEver(url string, headers http.Header, buf string, httpTimeout time.Duration) error {
+func (rb *ReportJob) retryEver(path string, headers http.Header, buf string, httpTimeout time.Duration) error {
+	url := rb.genUrl(path)
 	tries := 0
 	var timeout <-chan time.Time
 	if httpTimeout > 0 {
@@ -215,9 +233,13 @@ func (rb *ReportJob) retryEver(url string, headers http.Header, buf string, http
 				bytesBody, _ = io.ReadAll(resp.Body)
 				_ = resp.Body.Close()
 			}
-		} else if checkConnectionError(err) {
-			time.Sleep(time.Second)
-			continue
+		} else {
+			rb.switchAddress()
+			url = rb.genUrl(path)
+			if checkConnectionError(err) {
+				time.Sleep(time.Second)
+				continue
+			}
 		}
 		tries++
 		if tries > MaxRetryTimes {
@@ -228,6 +250,10 @@ func (rb *ReportJob) retryEver(url string, headers http.Header, buf string, http
 		body.Reset(buf)
 	}
 	return nil
+}
+
+func (rb *ReportJob) genUrl(path string) string {
+	return fmt.Sprintf("%s://%s%s?db=%s&rp=%s", rb.protocol, rb.rbAddress[rb.rbAddressIndex], path, rb.storeDatabase, rb.storeRP)
 }
 
 func (rb *ReportJob) StartErrLogJob(filename, errLogPath string, jobType JobType) error {
@@ -304,13 +330,14 @@ func (rb *ReportJob) parseIndex(line []byte) {
 	)
 
 	lines := strings.Split(string(line), "\n")
+	t := time.Now()
 
 	//Data format of each row: {table name},{labels} {indicator data} {timestamp}
 	for _, value := range lines {
 		m := metrics.ModuleIndex{
 			LabelValues: make(map[string]string),
 			MetricsMap:  make(map[string]interface{}),
-			Timestamp:   time.Now(),
+			Timestamp:   t,
 		}
 		parts := strings.Split(value, " ")
 		if len(parts) != 3 {
@@ -363,9 +390,6 @@ func (rb *ReportJob) postData(buf *bytes.Buffer, batch *int, minSize int) error 
 		return nil
 	}
 
-	if err := rb.CreateDatabase(); err != nil {
-		return err
-	}
 	if err := rb.WriteData(buf.String()); err != nil {
 		return err
 	}
@@ -523,9 +547,6 @@ func (rb *ReportJob) reportCurrentErrLog(filename, errLogPath string) error {
 			continue
 		case <-ticker.C:
 			if len(errnoMap) > 0 {
-				if err = rb.CreateDatabase(); err != nil {
-					return err
-				}
 				for _, data := range errnoMap {
 					buf.WriteString(data)
 					buf.WriteByte('\n')

@@ -26,6 +26,23 @@ type BinaryDecoder struct {
 	offset int
 }
 
+func (c *BinaryDecoder) End() bool {
+	return c.offset >= len(c.buf)
+}
+
+func (c *BinaryDecoder) Reset(buf []byte) {
+	c.buf = buf
+	c.offset = 0
+}
+
+func (c *BinaryDecoder) Remain() []byte {
+	return c.buf[c.offset:]
+}
+
+func (c *BinaryDecoder) RemainSize() int {
+	return len(c.buf) - c.offset
+}
+
 func (c *BinaryDecoder) Int() int {
 	i := encoding.UnmarshalInt64(c.buf[c.offset : c.offset+8])
 	c.offset += 8
@@ -265,12 +282,24 @@ func (c *BinaryDecoder) BytesNoCopy() []byte {
 	return b
 }
 
+func (c *BinaryDecoder) BytesNoCopyN(n int) []byte {
+	dst := c.buf[c.offset : c.offset+n]
+	c.offset += n
+	return dst
+}
+
 func (c *BinaryDecoder) Bytes() []byte {
 	l := c.Uint32()
 	if l == 0 {
 		return nil
 	}
 	return c.copy(int(l))
+}
+
+func (c *BinaryDecoder) BytesN(dst []byte, n int) []byte {
+	dst = append(dst, c.buf[c.offset:c.offset+n]...)
+	c.offset += n
+	return dst
 }
 
 func (c *BinaryDecoder) String() string {
@@ -307,6 +336,29 @@ func (c *BinaryDecoder) copy(size int) []byte {
 	return b
 }
 
-func (c *BinaryDecoder) noCopy(size int) []byte {
-	return c.buf[c.offset : c.offset+size]
+func (c *BinaryDecoder) Uvarint() (uint64, bool) {
+	u, n := binary.Uvarint(c.buf[c.offset:])
+	if n <= 0 {
+		return 0, false
+	}
+	c.offset += n
+	return u, true
+}
+
+func DecodeInt64WithScale(b []byte) ([]byte, int64, bool) {
+	if len(b) < 1 {
+		return b, 0, false
+	}
+	idx := b[0]
+	b = b[1:]
+	if int(idx) > len(scales) {
+		return b, 0, false
+	}
+
+	v, n := binary.Uvarint(b)
+	if n <= 0 {
+		return b, 0, false
+	}
+
+	return b[n:], int64(v) * scales[idx], true
 }

@@ -90,10 +90,17 @@ func (t *CompactTask) Execute() {
 		return
 	}
 
+	var tmpTSSP = fi.oldFiles[0].Path()
 	err = m.ImmTable.compactToLevel(m, fi, t.full, NonStreamingCompaction(fi))
 	if err != nil {
 		compactStat.AddErrors(1)
 		log.Error("compact error", zap.Error(err))
+	}
+
+	if t.full && config.TSSPToParquetLevel() > 0 {
+		if err := markParquetTaskDone(tmpTSSP, fi.shId); err != nil {
+			log.Error("mark parquet finish error", zap.String("tmpTSSP", tmpTSSP), zap.Error(err))
+		}
 	}
 }
 

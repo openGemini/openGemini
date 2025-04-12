@@ -25,6 +25,7 @@ import (
 	"strings"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
+	"github.com/openGemini/openGemini/engine/comm"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/lib/config"
@@ -647,6 +648,10 @@ func (p *LogicalAggregate) inferPromCallLevel() AggLevel {
 		if ok {
 			return SourceLevel
 		}
+		_, ok = p.Children()[0].(*LogicalAggregate)
+		if ok {
+			return MiddleLevel
+		}
 		return SinkLevel
 	}
 	_, ok = p.Children()[0].(*HeuVertex).node.(*LogicalExchange)
@@ -677,7 +682,11 @@ func (p *LogicalAggregate) getPromNestedCall(level AggLevel, call *hybridqp.Prom
 	if level == SourceLevel {
 		return call.GetFuncCall()
 	}
-	return call.GetAggCall()
+	agg := call.GetAggCall()
+	if hybridqp.GetPromNestOp(agg.Name) != nil && level == SinkLevel {
+		return call.GetTransCall()
+	}
+	return agg
 }
 
 func (p *LogicalAggregate) DeriveOperations() {
@@ -2073,6 +2082,7 @@ const (
 	SERIES_EXCHANGE
 	SEGMENT_EXCHANGE
 	PARTITION_EXCHANGE
+	SUBQUERY_EXCHANGE
 )
 
 type ExchangeRole uint8
@@ -2624,6 +2634,13 @@ func (b *LogicalPlanBuilderImpl) Sort() LogicalPlanBuilder {
 	return b
 }
 
+func (b *LogicalPlanBuilderImpl) PromSort() LogicalPlanBuilder {
+	last := b.stack.Pop()
+	plan := NewLogicalPromSort(last, b.schema)
+	b.stack.Push(plan)
+	return b
+}
+
 func (b *LogicalPlanBuilderImpl) SlidingWindow() LogicalPlanBuilder {
 	last := b.stack.Pop()
 	plan := NewLogicalSlidingWindow(last, b.schema)
@@ -3075,23 +3092,17 @@ func Walk(v LogicalPlanVisitor, plan hybridqp.QueryNode) {
 }
 
 type LogicalDummyShard struct {
-	readers [][]interface{}
+	indexInfo comm.TSIndexInfo
 	LogicalPlanBase
 }
 
-func NewLogicalDummyShard(readers [][]interface{}) *LogicalDummyShard {
-	return &LogicalDummyShard{
-		readers: readers,
-	}
+func NewLogicalDummyShard(info comm.TSIndexInfo) *LogicalDummyShard {
+	return &LogicalDummyShard{indexInfo: info}
 }
 
 // impl me
 func (p *LogicalDummyShard) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
 	return nil
-}
-
-func (p *LogicalDummyShard) Readers() [][]interface{} {
-	return p.readers
 }
 
 func (p *LogicalDummyShard) Clone() hybridqp.QueryNode {
@@ -3118,6 +3129,10 @@ func (p *LogicalDummyShard) Type() string {
 
 func (p *LogicalDummyShard) Digest() string {
 	return p.String()
+}
+
+func (p *LogicalDummyShard) GetIndexInfo() comm.TSIndexInfo {
+	return p.indexInfo
 }
 
 type LogicalIndexScan struct {
@@ -3780,6 +3795,8 @@ func (p *LogicalHashAgg) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalo
 func (p *LogicalHashAgg) setHashAggType() {
 	if p.eType == NODE_EXCHANGE {
 		p.hashAggType = Fill
+	} else if p.eType == SUBQUERY_EXCHANGE {
+		p.hashAggType = SubQuery
 	} else {
 		p.hashAggType = Normal
 	}
@@ -3976,6 +3993,59 @@ func (p *LogicalSort) Type() string {
 }
 
 func (p *LogicalSort) Digest() string {
+	return string(p.digestName)
+}
+
+type LogicalPromSort struct {
+	LogicalPlanSingle
+	sortFields influxql.SortFields
+}
+
+func NewLogicalPromSort(input hybridqp.QueryNode, schema hybridqp.Catalog) *LogicalPromSort {
+	sort := &LogicalPromSort{
+		LogicalPlanSingle: *NewLogicalPlanSingle(input, schema),
+		sortFields:        schema.GetSortFields(),
+	}
+	sort.init()
+	return sort
+}
+
+// impl me
+func (p *LogicalPromSort) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	return nil
+}
+
+func (p *LogicalPromSort) DeriveOperations() {
+	p.init()
+}
+
+func (p *LogicalPromSort) init() {
+	p.ForwardInit(p.inputs[0])
+}
+
+func (p *LogicalPromSort) Clone() hybridqp.QueryNode {
+	clone := &LogicalPromSort{}
+	*clone = *p
+	clone.id = hybridqp.GenerateNodeId()
+	clone.digest = false
+	return clone
+}
+
+func (p *LogicalPromSort) ExplainIterms(writer LogicalPlanWriter) {
+	p.LogicalPlanBase.ExplainIterms(writer)
+}
+
+func (p *LogicalPromSort) Explain(writer LogicalPlanWriter) {
+	p.ExplainIterms(writer)
+	p.LogicalPlanBase.ExplainIterms(writer)
+	writer.Explain(p)
+}
+
+func (p *LogicalPromSort) Type() string {
+	return GetType(p)
+}
+
+func (p *LogicalPromSort) Digest() string {
 	return string(p.digestName)
 }
 
@@ -4246,14 +4316,18 @@ func (p *LogicalColumnStoreReader) Digest() string {
 type LogicalBinOp struct {
 	left  hybridqp.QueryNode
 	right hybridqp.QueryNode
+	lExpr influxql.Expr
+	rExpr influxql.Expr
 	Para  *influxql.BinOp
 	LogicalPlanBase
 }
 
-func NewLogicalBinOp(left hybridqp.QueryNode, right hybridqp.QueryNode, para *influxql.BinOp, schema hybridqp.Catalog) *LogicalBinOp {
+func NewLogicalBinOp(left, right hybridqp.QueryNode, lExpr, rExpr influxql.Expr, para *influxql.BinOp, schema hybridqp.Catalog) *LogicalBinOp {
 	project := &LogicalBinOp{
 		left:  left,
 		right: right,
+		lExpr: lExpr,
+		rExpr: rExpr,
 		Para:  para,
 		LogicalPlanBase: LogicalPlanBase{
 			id:     hybridqp.GenerateNodeId(),
@@ -4316,7 +4390,7 @@ func (p *LogicalBinOp) ReplaceChild(ordinal int, child hybridqp.QueryNode) {
 		panic(fmt.Sprintf("index %d out of range %d", ordinal, 1))
 	}
 	if ordinal == 0 {
-		if p.Para.NilMst == influxql.LNilMst {
+		if p.Para.NilMst == influxql.LNilMst || p.left == nil {
 			p.right = child
 		} else {
 			p.left = child
@@ -4401,6 +4475,9 @@ func (p *LogicalPromSubquery) ReplaceChildren(children []hybridqp.QueryNode) {
 }
 
 func (p *LogicalPromSubquery) ReplaceChild(ordinal int, child hybridqp.QueryNode) {
+	if ordinal != 0 {
+		panic(fmt.Sprintf("index %d out of range %d", ordinal, 1))
+	}
 	p.input = child
 }
 

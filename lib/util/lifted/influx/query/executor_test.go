@@ -57,3 +57,33 @@ func newMockStatementExecutor() *coordinator.StatementExecutor {
 	}
 	return statementExecutor
 }
+
+type testRes struct {
+	query string
+	isOK  bool
+}
+
+func Test_TimerangePushDown(t *testing.T) {
+	cases := []testRes{
+		{"SELECT count(value) FROM cpu", false},
+		{"SELECT count(value) FROM cpu where time>1 and time<100", true},
+		{"SELECT sum / cnt  FROM (select SUM(value) AS sum, COUNT(value) AS cnt from cpu)", false},
+		{"SELECT sum / cnt  FROM (select SUM(value) AS sum, COUNT(value) AS cnt from cpu ) WHERE time>=1 AND time<100", true},
+		{"SELECT sum / cnt  FROM (select SUM(value) AS sum, COUNT(value) AS cnt from cpu WHERE time>=1 AND time<100)", true},
+		{"SELECT sum / cnt  FROM (select SUM(value) AS sum, COUNT(value) AS cnt from cpu WHERE time>=1 AND time<100) WHERE time>=10 AND time<20", true},
+	}
+
+	query.TimeFilterProtection = true
+	for i := 0; i < len(cases); i++ {
+		q, err := influxql.ParseQuery(cases[i].query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		statement := q.Statements[0].(*influxql.SelectStatement)
+		_, err = query.Compile(statement, query.CompileOptions{})
+		isOK := (err == nil)
+		if isOK != cases[i].isOK {
+			t.Fatalf("statement-%d timerange check failed. exepect: %+v == %+v, err:%+v", i, cases[i].isOK, isOK, err)
+		}
+	}
+}

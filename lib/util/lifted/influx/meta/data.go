@@ -184,7 +184,7 @@ type Data struct {
 	PtNumPerNode uint32
 	NumOfShards  int32 // default number of shard for measurement created by `CREATE MEASUREMENT ... SHARDS AUTO`
 
-	MetaNodes     []NodeInfo
+	MetaNodes     []NodeInfo                // careful: metaNode.gossipAddr is not use.
 	DataNodes     []DataNode                // data nodes
 	SqlNodes      []DataNode                // sql nodes
 	PtView        map[string]DBPtInfos      // PtView's key is dbname, value is PtInfo's slice.
@@ -205,23 +205,24 @@ type Data struct {
 	BalancerEnabled    bool
 	ExpandShardsEnable bool // set by config (not persistence)
 
-	MaxNodeID         uint64
-	MaxShardGroupID   uint64
-	MaxShardID        uint64
-	MaxMstID          uint64
-	MaxIndexGroupID   uint64
-	MaxIndexID        uint64
-	MaxEventOpId      uint64
-	MaxDownSampleID   uint64
-	MaxStreamID       uint64
-	MaxConnID         uint64
-	MaxSubscriptionID uint64 // +1 for any changes to subscriptions
-	MaxCQChangeID     uint64 // +1 for any changes to continuous queries
-	opsMapMu          sync.RWMutex
-	OpsMap            map[uint64]*Op
-	OpsMapMinIndex    uint64
-	OpsMapMaxIndex    uint64
-	OpsToMarshalIndex uint64
+	MaxNodeID                      uint64
+	MaxShardGroupID                uint64
+	MaxShardID                     uint64
+	MaxMstID                       uint64
+	MaxIndexGroupID                uint64
+	MaxIndexID                     uint64
+	MaxEventOpId                   uint64
+	MaxDownSampleID                uint64
+	MaxStreamID                    uint64
+	MaxConnID                      uint64
+	MaxSubscriptionID              uint64 // +1 for any changes to subscriptions
+	MaxCQChangeID                  uint64 // +1 for any changes to continuous queries
+	opsMapMu                       sync.RWMutex
+	OpsMap                         map[uint64]*Op
+	OpsMapMinIndex                 uint64
+	OpsMapMaxIndex                 uint64
+	OpsToMarshalIndex              uint64
+	UpdateNodeTmpIndexCommandStart uint64 // start of all UpdateNodeTmpIndexCommand
 
 	SQLite *SQLiteWrapper
 }
@@ -386,6 +387,7 @@ func init() {
 		proto2.Command_RemoveNodeCommand:                {},
 		proto2.Command_UpdateReplicationCommand:         {},
 		proto2.Command_UpdateMeasurementCommand:         {},
+		proto2.Command_UpdateMetaNodeStatusCommand:      {},
 	}
 }
 
@@ -558,6 +560,39 @@ func (data *Data) WalkMigrateEvents(fn func(eventId string, info *MigrateEventIn
 	}
 }
 
+func (data *Data) IndexDurationInfos(dbPtIds map[string][]uint32) *IndexDurationResponse {
+	r := &IndexDurationResponse{DataIndex: data.Index}
+	data.WalkDatabases(func(db *DatabaseInfo) {
+		if _, ok := dbPtIds[db.Name]; !ok {
+			return
+		}
+		db.WalkRetentionPolicy(func(rp *RetentionPolicyInfo) {
+			rp.walkIndexGroups(func(ig *IndexGroupInfo) {
+				ig.walkIndexes(func(ii *IndexInfo) {
+					for i := range dbPtIds[db.Name] {
+						if ii.Owners[0] == dbPtIds[db.Name][i] {
+							durationInfo := IndexDurationInfo{}
+							durationInfo.Ident = IndexBuilderIdentifier{}
+							durationInfo.Ident.IndexID = ii.ID
+							durationInfo.Ident.IndexGroupID = ig.ID
+							durationInfo.Ident.OwnerDb = db.Name
+							durationInfo.Ident.OwnerPt = dbPtIds[db.Name][i]
+							durationInfo.Ident.Policy = rp.Name
+							durationInfo.Ident.StartTime = ig.StartTime
+							durationInfo.Ident.EndTime = ig.EndTime
+							durationInfo.DurationInfo = DurationDescriptor{}
+							durationInfo.DurationInfo.Duration = rp.Duration
+							r.Durations = append(r.Durations, durationInfo)
+							return
+						}
+					}
+				})
+			})
+		})
+	})
+	return r
+}
+
 func (data *Data) DurationInfos(dbPtIds map[string][]uint32) *ShardDurationResponse {
 	r := &ShardDurationResponse{DataIndex: data.Index}
 	data.WalkDatabases(func(db *DatabaseInfo) {
@@ -580,6 +615,8 @@ func (data *Data) DurationInfos(dbPtIds map[string][]uint32) *ShardDurationRespo
 							durationInfo.Ident.DownSampleID = sh.DownSampleID
 							durationInfo.Ident.ReadOnly = sh.ReadOnly
 							durationInfo.Ident.EngineType = uint32(sg.EngineType)
+							durationInfo.Ident.StartTime = sg.StartTime
+							durationInfo.Ident.EndTime = sg.EndTime
 							durationInfo.DurationInfo = DurationDescriptor{}
 							durationInfo.DurationInfo.Duration = rp.Duration
 							durationInfo.DurationInfo.Tier = sh.Tier
@@ -1079,6 +1116,16 @@ func (data *Data) SqlNode(id uint64) *DataNode {
 	for i := range data.SqlNodes {
 		if data.SqlNodes[i].ID == id {
 			return &data.SqlNodes[i]
+		}
+	}
+	return nil
+}
+
+// MetaNode returns a meta node by id.
+func (data *Data) MetaNode(id uint64) *NodeInfo {
+	for i := range data.MetaNodes {
+		if data.MetaNodes[i].ID == id {
+			return &data.MetaNodes[i]
 		}
 	}
 	return nil
@@ -2006,7 +2053,6 @@ func (data *Data) ShowRetentionPolicies(database string) (models.Rows, error) {
 
 func (data *Data) ShowCluster(nodeType string, ID uint64) (*ShowClusterInfo, error) {
 	clusterInfo := &ShowClusterInfo{}
-
 	timestamp := time.Now().UTC().UnixNano()
 
 	switch nodeType {
@@ -2138,6 +2184,13 @@ func (data *Data) GetDbPtOwners(database string, ptIds []uint32) []uint64 {
 		ownerIDs[i] = nodeID
 	}
 	return ownerIDs
+}
+
+func (data *Data) GetDbPtOwner(database string, ptId uint32) (uint64, error) {
+	if data.PtView[database] == nil {
+		return 0, fmt.Errorf("pt Owner found no ptViews ptId:%d; database:%s", ptId, database)
+	}
+	return data.PtView[database][ptId].Owner.NodeID, nil
 }
 
 // UpdateRetentionPolicy updates an existing retention policy.
@@ -2456,12 +2509,12 @@ func (data *Data) createIndexGroupIfNeeded(rpi *RetentionPolicyInfo, timestamp t
 	}
 
 	var igIdx int
-	for igIdx = 0; igIdx < len(rpi.IndexGroups); igIdx++ {
+	for igIdx = len(rpi.IndexGroups) - 1; igIdx >= 0; igIdx-- {
 		if rpi.IndexGroups[igIdx].EngineType == engineType && rpi.IndexGroups[igIdx].Contains(timestamp) {
 			break
 		}
 	}
-	if igIdx < len(rpi.IndexGroups) && len(rpi.IndexGroups[igIdx].Indexes) >= int(ptNum) {
+	if igIdx >= 0 && len(rpi.IndexGroups[igIdx].Indexes) >= int(ptNum) {
 		return &rpi.IndexGroups[igIdx]
 	}
 	return data.CreateIndexGroup(rpi, timestamp, engineType, ptNum)
@@ -2643,16 +2696,19 @@ func (data *Data) pruneShardGroups(id uint64) error {
 				}
 			}
 			if SchemaCleanEn && deleteSg {
-				data.SchemaClean(rp, endTime)
+				data.SchemaClean(rp, endTime, db)
 			}
 		})
 	})
 	return nil
 }
 
-func (data *Data) SchemaClean(rp *RetentionPolicyInfo, sgEndTime int64) {
+func (data *Data) SchemaClean(rp *RetentionPolicyInfo, sgEndTime int64, db *DatabaseInfo) {
 	for _, msti := range rp.Measurements {
-		msti.SchemaClean(sgEndTime)
+		leftSchema := msti.SchemaClean(sgEndTime)
+		if msti.EngineType == config.TSSTORE && leftSchema == 0 {
+			data.MarkMeasurementDelete(db.Name, rp.Name, msti.originName)
+		}
 	}
 }
 
@@ -2913,8 +2969,8 @@ func (data *Data) Clone() *Data {
 }
 
 // Marshal serializes data to a protobuf representation.
-func (data *Data) Marshal(snapshot bool) *proto2.Data {
-	pb := data.MarshalBase(snapshot)
+func (data *Data) Marshal() *proto2.Data {
+	pb := data.MarshalBase()
 	pb.MigrateEvents = make([]*proto2.MigrateEventInfo, len(data.MigrateEvents))
 	i := 0
 	for eventStr := range data.MigrateEvents {
@@ -2924,7 +2980,7 @@ func (data *Data) Marshal(snapshot bool) *proto2.Data {
 	return pb
 }
 
-func (data *Data) MarshalBase(snapshot bool) *proto2.Data {
+func (data *Data) MarshalBase() *proto2.Data {
 	pb := &proto2.Data{
 		Term:         proto.Uint64(data.Term),
 		Index:        proto.Uint64(data.Index),
@@ -2985,7 +3041,7 @@ func (data *Data) MarshalBase(snapshot bool) *proto2.Data {
 	pb.Databases = make([]*proto2.DatabaseInfo, len(data.Databases))
 	i := 0
 	for dbName := range data.Databases {
-		pb.Databases[i] = data.Databases[dbName].marshal(snapshot)
+		pb.Databases[i] = data.Databases[dbName].marshal()
 		i++
 	}
 
@@ -3022,13 +3078,14 @@ func (data *Data) MarshalBase(snapshot bool) *proto2.Data {
 }
 
 func (data *Data) MarshalV2() *proto2.Data {
-	return data.MarshalBase(false)
+	return data.MarshalBase()
 }
 
 // unmarshal deserializes from a protobuf representation.
 func (data *Data) Unmarshal(pb *proto2.Data) {
 	data.Term = pb.GetTerm()
 	data.Index = pb.GetIndex()
+	data.UpdateNodeTmpIndexCommandStart = data.Index
 	data.ClusterID = pb.GetClusterID()
 	data.ClusterPtNum = pb.GetClusterPtNum()
 
@@ -3084,13 +3141,11 @@ func (data *Data) Unmarshal(pb *proto2.Data) {
 		data.Databases[dbi.Name] = dbi
 	}
 
-	if streams := pb.GetStreams(); len(streams) > 0 {
-		data.Streams = make(map[string]*StreamInfo, len(streams))
-		for _, s := range streams {
-			si := &StreamInfo{}
-			si.Unmarshal(s)
-			data.Streams[si.Name] = si
-		}
+	data.Streams = make(map[string]*StreamInfo, len(pb.GetStreams()))
+	for _, s := range pb.GetStreams() {
+		si := &StreamInfo{}
+		si.Unmarshal(s)
+		data.Streams[si.Name] = si
 	}
 
 	data.Users = make([]UserInfo, len(pb.GetUsers()))
@@ -3127,7 +3182,7 @@ func (data *Data) Unmarshal(pb *proto2.Data) {
 
 // MarshalBinary encodes the metadata to a binary format.
 func (data *Data) MarshalBinary() ([]byte, error) {
-	return proto.Marshal(data.Marshal(true))
+	return proto.Marshal(data.Marshal())
 }
 
 // UnmarshalBinary decodes the object from a binary format.
@@ -3321,6 +3376,23 @@ func (data *Data) UpdateSqlNodeStatus(id uint64, status int32, lTime uint64, gos
 		DataLogger.Error("UpdateSqlNodeStatus GossipAddr err", zap.String("dn.TCPHost", dn.TCPHost), zap.Uint64("id", id))
 	}
 
+	return nil
+}
+
+func (data *Data) UpdateMetaNodeStatus(id uint64, status int32, lTime uint64, gossipPort string) error {
+	dn := data.MetaNode(id)
+	if dn == nil {
+		return errno.NewError(errno.MetaNodeNotFound, id, gossipPort)
+	}
+
+	if lTime < dn.LTime {
+		DataLogger.Error("event is older", zap.Uint64("id", id), zap.Int32("status", status), zap.Uint64("ltime", lTime), zap.Uint64("dnLtime", dn.LTime))
+		return errno.NewError(errno.OlderEvent)
+	}
+
+	updateStatus := serf.MemberStatus(status)
+	dn.Status = updateStatus
+	dn.LTime = lTime
 	return nil
 }
 
@@ -3731,7 +3803,7 @@ func (data *Data) ShowStreams(database string, showAll bool) (models.Rows, error
 	if err != nil && !showAll {
 		return nil, err
 	}
-	row := &models.Row{Columns: []string{"database", "retention", "measurement", "Name", "source measurement", "dimensions", "calls", "interval", "delay"}}
+	row := &models.Row{Columns: []string{"database", "retention", "measurement", "Name", "source measurement", "dimensions", "calls", "interval", "delay", "condition"}}
 	for _, v := range data.Streams {
 		if showAll || v.DesMst.Database == database {
 			values := []interface{}{
@@ -3744,6 +3816,7 @@ func (data *Data) ShowStreams(database string, showAll bool) (models.Rows, error
 				v.CallsName(),
 				v.Interval.String(),
 				v.Delay.String(),
+				v.Cond,
 			}
 			row.Values = append(row.Values, values)
 		}
@@ -4000,12 +4073,13 @@ func (data *Data) RemoveNode(nodeIds []uint64) {
 }
 
 // when masterPtId is offline, elect a new masterPtId
-func (data *Data) UpdateReplication(database string, rgId, masterId uint32, peers []*proto2.Peer) error {
+func (data *Data) UpdateReplication(database string, rgId, masterId uint32, peers []*proto2.Peer) (uint32, error) {
 	rgs, ok := data.ReplicaGroups[database]
 	if !ok {
-		return errno.NewError(errno.DatabaseNotFound, database)
+		return 0, errno.NewError(errno.DatabaseNotFound, database)
 	}
 	rg := &rgs[rgId]
+	oldMasterPtID := rg.MasterPtID
 	rg.MasterPtID = masterId
 	if len(peers) > 0 {
 		rg.Peers = make([]Peer, len(peers))
@@ -4014,7 +4088,7 @@ func (data *Data) UpdateReplication(database string, rgId, masterId uint32, peer
 			rg.Peers[i].PtRole = Role(peers[i].GetRole())
 		}
 	}
-	return nil
+	return oldMasterPtID, nil
 }
 
 func (data *Data) CreateDBReplication(db string, replicaN uint32) error {
@@ -4090,6 +4164,37 @@ func (data *Data) GetNewRg(db string, rgId uint32, newMasterPtId uint32) (uint32
 		return 0, nil, fmt.Errorf("newMasterPtId find err")
 	}
 	return newMasterPtId, newPeers, nil
+}
+
+func (data *Data) GetRgsOfNodeMasterPts(node DataNode) ([]*ReplicaGroup, []string) {
+	rgs := make([]*ReplicaGroup, 0)
+	dbs := make([]string, 0)
+	for db, pts := range data.PtView {
+		// 1.skip noRep pts
+		dbInfo, ok := data.Databases[db]
+		if !ok || dbInfo.ReplicaN <= 1 {
+			continue
+		}
+		// 2.get full rgs those masterPts are node's pts
+		for _, pt := range pts {
+			if pt.Owner.NodeID == node.ID {
+				rg := data.GetReplicaGroup(db, pt.RGID)
+				if rg != nil && rg.Status != UnFull && rg.MasterPtID == pt.PtId {
+					rgs = append(rgs, rg)
+					dbs = append(dbs, db)
+				}
+			}
+		}
+	}
+	return rgs, dbs
+}
+
+func (data *Data) DBRGN() int {
+	rgn := 0
+	for _, rgs := range data.ReplicaGroups {
+		rgn += len(rgs)
+	}
+	return rgn
 }
 
 // MarshalTime converts t to nanoseconds since epoch. A zero time returns 0.

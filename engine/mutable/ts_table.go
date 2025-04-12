@@ -16,6 +16,7 @@ package mutable
 
 import (
 	"errors"
+	"io"
 	"math"
 	"sort"
 	"sync"
@@ -35,14 +36,25 @@ import (
 	"go.uber.org/zap"
 )
 
-type tsMemTableImpl struct {
+type RecordIterator interface {
+	Next(dst *record.Record) (uint64, error)
 }
 
-func newTsMemTableImpl() *tsMemTableImpl {
+type tsMemTableImpl struct {
+	client metaclient.MetaClient
+}
+
+func NewTsMemTableImpl() *tsMemTableImpl {
 	return &tsMemTableImpl{}
 }
 
-func (t *tsMemTableImpl) SetClient(_ metaclient.MetaClient) {}
+func (t *tsMemTableImpl) SetClient(client metaclient.MetaClient) {
+	t.client = client
+}
+
+func (t *tsMemTableImpl) GetClient() metaclient.MetaClient {
+	return t.client
+}
 
 func (t *tsMemTableImpl) WriteRecordForFlush(rec *record.Record, msb *immutable.MsBuilder, tbStore immutable.TablesStore, id uint64) *immutable.MsBuilder {
 	var err error
@@ -52,7 +64,7 @@ func (t *tsMemTableImpl) WriteRecordForFlush(rec *record.Record, msb *immutable.
 		return tbStore.NextSequence(), 0, 0, 0
 	})
 	if err != nil {
-		panic(err)
+		logger.GetLogger().Error("failed to write record", zap.Error(err))
 	}
 
 	return msb
@@ -130,6 +142,84 @@ func (t *tsMemTableImpl) FlushChunks(table *MemTable, dataPath, msName, _, _ str
 	// add both ordered/unordered files to list
 	tbStore.AddBothTSSPFiles(msInfo.GetFlushed(), msName, orderFiles, unOrderFiles)
 	PutSidsImpl(sids)
+}
+
+func (t *tsMemTableImpl) FlushRecords(tbStore immutable.TablesStore, itr RecordIterator, msName, dataPath string,
+	lock *string, fileInfos chan []immutable.FileInfoExtend) ([]immutable.TSSPFile, []immutable.TSSPFile) {
+
+	hlp := record.NewColumnSortHelper()
+	defer hlp.Release()
+
+	var orderMsBuilder, unOrderMsBuilder *immutable.MsBuilder
+	var mmsIdTime *immutable.MmsIdTime
+	var flushTime int64 = math.MinInt64
+
+	recPool := []record.Record{{}, {}}
+	hasOrderFile := tbStore.GetTableFileNum(msName, true) > 0
+
+	if hasOrderFile {
+		seq := tbStore.Sequencer()
+		defer func() {
+			seq.UnRef()
+		}()
+		mmsIdTime = seq.GetMmsIdTime(msName)
+	}
+
+	rec := &record.Record{}
+	for {
+		rec.ResetDeep()
+		sid, err := itr.Next(rec)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			logger.GetLogger().Error("failed to iterator record. skip it", zap.Error(err))
+			continue
+		}
+		if sid == 0 {
+			logger.GetLogger().Error("invalid series id. skip it")
+			continue
+		}
+
+		rec = hlp.Sort(rec)
+
+		if hasOrderFile {
+			flushTime = math.MaxInt64
+			if mmsIdTime != nil {
+				flushTime, _ = mmsIdTime.Get(sid)
+			}
+		}
+
+		orderRec, unOrderRec := SplitRecordByTime(rec, recPool, flushTime)
+		orderRows := orderRec.RowNums()
+		if orderRows > 0 {
+			if orderMsBuilder == nil {
+				conf := immutable.GetTsStoreConfig()
+				orderMsBuilder = createMsBuilder(tbStore, true, lock, dataPath, msName, 0, orderRows, conf, config.TSSTORE)
+			}
+			orderMsBuilder = t.WriteRecordForFlush(orderRec, orderMsBuilder, tbStore, sid)
+			atomic.AddInt64(&Statistics.PerfStat.FlushOrderRowsCount, int64(orderRows))
+		}
+
+		unOrderRows := unOrderRec.RowNums()
+		if unOrderRows > 0 {
+			if unOrderMsBuilder == nil {
+				conf := immutable.GetTsStoreConfig()
+				unOrderMsBuilder = createMsBuilder(tbStore, false, lock, dataPath, msName, 0, unOrderRows, conf, config.TSSTORE)
+			}
+			unOrderMsBuilder = t.WriteRecordForFlush(unOrderRec, unOrderMsBuilder, tbStore, sid)
+			atomic.AddInt64(&Statistics.PerfStat.FlushUnOrderRowsCount, int64(unOrderRows))
+
+			t.statUnordered(unOrderRec.Times(), flushTime)
+		}
+
+		atomic.AddInt64(&Statistics.PerfStat.FlushRowsCount, int64(orderRows+unOrderRows))
+	}
+
+	orderFiles := t.finish(orderMsBuilder, fileInfos)
+	unOrderFiles := t.finish(unOrderMsBuilder, fileInfos)
+
+	return orderFiles, unOrderFiles
 }
 
 func (t *tsMemTableImpl) statUnordered(times []int64, flushTime int64) {
@@ -249,7 +339,7 @@ func (t *tsMemTableImpl) WriteRows(table *MemTable, rowsD *dictpool.Dict, wc Wri
 				}
 				atomic.AddInt64(&Statistics.PerfStat.WriteShardKeyIdxNs, time.Since(startTime).Nanoseconds())
 			}
-			_, err = t.appendFields(table, msInfo, chunk, rs[index].Timestamp, rs[index].Fields)
+			_, err = t.appendFields(msInfo, chunk, rs[index].Timestamp, rs[index].Fields)
 			if err != nil {
 				return err
 			}
@@ -263,7 +353,7 @@ func (t *tsMemTableImpl) WriteRows(table *MemTable, rowsD *dictpool.Dict, wc Wri
 	return nil
 }
 
-func (t *tsMemTableImpl) appendFields(table *MemTable, msInfo *MsInfo, chunk *WriteChunk, time int64, fields []influx.Field) (int64, error) {
+func (t *tsMemTableImpl) appendFields(msInfo *MsInfo, chunk *WriteChunk, time int64, fields []influx.Field) (int64, error) {
 	chunk.Mu.Lock()
 	defer chunk.Mu.Unlock()
 
@@ -293,8 +383,11 @@ func (t *tsMemTableImpl) appendFields(table *MemTable, msInfo *MsInfo, chunk *Wr
 	} else {
 		writeRec.lastAppendTime = time
 	}
+	if time < writeRec.firstAppendTime {
+		writeRec.firstAppendTime = time
+	}
 
-	return table.appendFieldsToRecord(writeRec.rec, fields, time, sameSchema)
+	return record.AppendFieldsToRecord(writeRec.rec, fields, time, sameSchema)
 }
 
 func (t *tsMemTableImpl) WriteCols(table *MemTable, rec *record.Record, mstsInfo *sync.Map, mst string) error {

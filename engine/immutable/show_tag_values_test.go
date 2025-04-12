@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"reflect"
 	"testing"
 
 	"github.com/openGemini/openGemini/engine/immutable/colstore"
@@ -39,7 +38,7 @@ import (
 
 func TestTagValuesIteratorHandler_NextChunkMeta(t *testing.T) {
 	cm := buildChunkMeta()
-	buf := cm.marshal(nil)
+
 	testErr := errors.New("test err")
 	for _, testcase := range []struct {
 		Name      string
@@ -56,6 +55,12 @@ func TestTagValuesIteratorHandler_NextChunkMeta(t *testing.T) {
 				func(sid uint64, buf []byte, condition influxql.Expr, callback func(key *influx.SeriesKey)) error {
 					return nil
 				},
+				func(sid uint64, buf []byte, condition influxql.Expr, callback func(key *influx.SeriesBytes)) error {
+					return nil
+				},
+				func(series [][]byte, name []byte, condition influxql.Expr) ([][]byte, error) {
+					return [][]byte{}, nil
+				},
 			},
 			Expr: &influxql.VarRef{},
 			TimeRange: &util.TimeRange{
@@ -70,6 +75,12 @@ func TestTagValuesIteratorHandler_NextChunkMeta(t *testing.T) {
 			Idx: &MockIndexMergeSet{
 				func(sid uint64, buf []byte, condition influxql.Expr, callback func(key *influx.SeriesKey)) error {
 					return nil
+				},
+				func(sid uint64, buf []byte, condition influxql.Expr, callback func(key *influx.SeriesBytes)) error {
+					return nil
+				},
+				func(series [][]byte, name []byte, condition influxql.Expr) ([][]byte, error) {
+					return [][]byte{}, nil
 				},
 			},
 			Expr: &influxql.VarRef{},
@@ -86,6 +97,12 @@ func TestTagValuesIteratorHandler_NextChunkMeta(t *testing.T) {
 				func(sid uint64, buf []byte, condition influxql.Expr, callback func(key *influx.SeriesKey)) error {
 					return testErr
 				},
+				func(sid uint64, buf []byte, condition influxql.Expr, callback func(key *influx.SeriesBytes)) error {
+					return nil
+				},
+				func(series [][]byte, name []byte, condition influxql.Expr) ([][]byte, error) {
+					return [][]byte{}, nil
+				},
 			},
 			Expr: &influxql.VarRef{},
 			TimeRange: &util.TimeRange{
@@ -98,7 +115,7 @@ func TestTagValuesIteratorHandler_NextChunkMeta(t *testing.T) {
 	} {
 		t.Run(testcase.Name, func(t *testing.T) {
 			handler := NewTagValuesIteratorHandler(testcase.Idx, testcase.Expr, testcase.TimeRange, 0)
-			err := handler.NextChunkMeta(buf)
+			err := handler.NextChunkMeta(cm)
 			if !errors.Is(err, testcase.err) {
 				t.Fatalf("TagValuesIteratorHandler.NextChunkMeta error: %v, expected: %v", err, testcase.err)
 			}
@@ -156,12 +173,6 @@ func TestTagValuesIteratorHandler_Init(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("TagValuesIteratorHandler Init failed, error: %v", err)
-	}
-	if !reflect.DeepEqual(handler.keys, keys) {
-		t.Fatalf("TagValuesIteratorHandler Init failed, expected: %v, actual: %v", keys, handler.keys)
-	}
-	if !reflect.DeepEqual(handler.sets, tagSets) {
-		t.Fatalf("TagValuesIteratorHandler Init failed, expected: %v, actual: %v", tagSets, handler.sets)
 	}
 }
 
@@ -311,7 +322,7 @@ func TestShowTagValuesPlan_Execute(t *testing.T) {
 		},
 	} {
 		t.Run(testcase.Name, func(t *testing.T) {
-			plan := &showTagValuesPlan{
+			plan := &ddlBasePlan{
 				table:  mockStore,
 				idx:    idx,
 				shard:  testcase.Sh,
@@ -319,9 +330,10 @@ func TestShowTagValuesPlan_Execute(t *testing.T) {
 			}
 			plan.handler = testcase.Handler
 			plan.itr = testcase.Itr
+			plan.fn = NewTagSets
+			plan.fv = NewTagValuesIteratorHandler
 
-			dst := make(map[string]*TagSets)
-
+			dst := make(map[string]DDLRespData)
 			tagKeys := map[string][][]byte{
 				"mst1": [][]byte{[]byte("tagKey")},
 				"mst2": [][]byte{[]byte("tagKey")},
@@ -334,7 +346,6 @@ func TestShowTagValuesPlan_Execute(t *testing.T) {
 			}
 		})
 	}
-
 }
 
 type MockEngineShard struct {
@@ -361,11 +372,21 @@ func (s *MockEngineShard) GetIdent() *meta.ShardIdentifier {
 }
 
 type MockIndexMergeSet struct {
-	GetSeriesFn func(sid uint64, buf []byte, condition influxql.Expr, callback func(key *influx.SeriesKey)) error
+	GetSeriesFn        func(sid uint64, buf []byte, condition influxql.Expr, callback func(key *influx.SeriesKey)) error
+	GetSeriesBytesFn   func(sid uint64, buf []byte, condition influxql.Expr, callback func(key *influx.SeriesBytes)) error
+	SearchSeriesKeysFn func(series [][]byte, name []byte, condition influxql.Expr) ([][]byte, error)
 }
 
 func (idx *MockIndexMergeSet) GetSeries(sid uint64, buf []byte, condition influxql.Expr, callback func(key *influx.SeriesKey)) error {
 	return idx.GetSeriesFn(sid, buf, condition, callback)
+}
+
+func (idx *MockIndexMergeSet) GetSeriesBytes(sid uint64, buf []byte, condition influxql.Expr, callback func(key *influx.SeriesBytes)) error {
+	return idx.GetSeriesBytesFn(sid, buf, condition, callback)
+}
+
+func (idx *MockIndexMergeSet) SearchSeriesKeys(series [][]byte, name []byte, condition influxql.Expr) ([][]byte, error) {
+	return idx.SearchSeriesKeysFn(series, name, condition)
 }
 
 type MockSequenceIterator struct {

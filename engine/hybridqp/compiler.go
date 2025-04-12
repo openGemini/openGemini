@@ -62,6 +62,7 @@ type Options interface {
 	CanLimitPushDown() bool
 	SetPromQuery(bool)
 	IsPromQuery() bool
+	IsPromRemoteRead() bool
 	IsPromInstantQuery() bool
 	IsPromRangeQuery() bool
 	GetPromStep() time.Duration
@@ -82,4 +83,6 @@ type Options interface {
 	GetSimpleTagset() bool
 	SetCtx(ctx context.Context)
 	GetCtx() context.Context
+	SetName(name string)
+	SetSources(sources influxql.Sources)
 }

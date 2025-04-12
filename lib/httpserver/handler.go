@@ -20,7 +20,6 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
-	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/auth"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/httpd"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
@@ -76,7 +75,7 @@ func Authenticate(inner func(http.ResponseWriter, *http.Request), client meta.Me
 		if requireAuthentication && client.AdminUserExists() {
 			creds, err := httpd.ParseCredentials(r)
 			if err != nil {
-				util.HttpError(w, err.Error(), http.StatusUnauthorized)
+				httpd.HttpError(w, err.Error(), http.StatusUnauthorized)
 				return
 			}
 
@@ -87,7 +86,7 @@ func Authenticate(inner func(http.ResponseWriter, *http.Request), client meta.Me
 					err := errno.NewError(errno.HttpUnauthorized)
 					log := logger.NewLogger(errno.ModuleHTTP)
 					log.Error(errMsg, zap.Error(err))
-					util.HttpError(w, err.Error(), http.StatusUnauthorized)
+					httpd.HttpError(w, err.Error(), http.StatusUnauthorized)
 					return
 				}
 
@@ -100,11 +99,11 @@ func Authenticate(inner func(http.ResponseWriter, *http.Request), client meta.Me
 					err := errno.NewError(errno.HttpUnauthorized)
 					log := logger.NewLogger(errno.ModuleHTTP)
 					log.Error(errMsg, zap.Error(err))
-					util.HttpError(w, err.Error(), http.StatusUnauthorized)
+					httpd.HttpError(w, err.Error(), http.StatusUnauthorized)
 					return
 				}
 			default:
-				util.HttpError(w, "unsupported authentication", http.StatusUnauthorized)
+				httpd.HttpError(w, "unsupported authentication", http.StatusUnauthorized)
 			}
 
 		}

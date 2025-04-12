@@ -6,7 +6,7 @@ import (
 
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
-	"github.com/prometheus/prometheus/pkg/timestamp"
+	"github.com/prometheus/prometheus/model/timestamp"
 	"github.com/prometheus/prometheus/promql"
 	"github.com/prometheus/prometheus/promql/parser"
 )
@@ -15,14 +15,17 @@ import (
 // It will be gc-ed after its work done.
 type Transpiler struct {
 	PromCommand
-	timeRange         time.Duration
-	parenExprCount    int
-	dropMetric        bool
-	removeTableName   bool
-	duplicateResult   bool
-	minT, maxT        int64
-	timeCondition     influxql.Expr
-	isStepVariantExpr bool
+	timeRange          time.Duration
+	parenExprCount     int
+	dropMetric         bool
+	removeTableName    bool
+	duplicateResult    bool
+	minT, maxT         int64
+	timeCondition      influxql.Expr
+	isStepVariantExpr  bool
+	upperSubquery      int
+	subStartT, subEndT int64
+	lowerStepInvariant bool
 }
 
 func (t *Transpiler) rewriteMinMaxTime() {
@@ -64,7 +67,6 @@ func (t *Transpiler) transpile(expr parser.Expr) (influxql.Node, error) {
 }
 
 // transpileExpr recursively transpile PromQL expression.
-// TODO It doesn't support PromQL SubqueryExpr and StepInvariantExpr yet.
 func (t *Transpiler) transpileExpr(expr parser.Expr) (influxql.Node, error) {
 	switch e := expr.(type) {
 	case *parser.ParenExpr:
@@ -120,14 +122,37 @@ func (t *Transpiler) setTimeInterval(statement *influxql.SelectStatement) {
 }
 
 // setTimeCondition sets time range and timezone condition in InfluxQL WHERE clause
-func (t *Transpiler) setTimeCondition(node influxql.Statement) {
+func (t *Transpiler) setTimeCondition(node influxql.Statement, ignoreLookBack bool) {
+	if t.timeCondition == nil {
+		// Get the offset from the query
+		var offset time.Duration
+		if n, ok := node.(*influxql.SelectStatement); ok {
+			offset = n.QueryOffset
+		}
+		// Calculate the start and end times
+		var start, end time.Time
+		if ignoreLookBack {
+			start = timestamp.Time(t.minT - durationMilliseconds(offset))
+		} else {
+			if t.timeRange == 0 {
+				start = timestamp.Time(t.minT - t.LookBackDelta.Milliseconds() - durationMilliseconds(offset))
+			} else {
+				start = timestamp.Time(t.minT - t.timeRange.Milliseconds() - durationMilliseconds(offset))
+			}
+		}
+		end = timestamp.Time(t.maxT - durationMilliseconds(offset))
+		// Generate the time condition
+		t.timeCondition = GetTimeCondition(&start, &end)
+	}
 	switch statement := node.(type) {
 	case *influxql.SelectStatement:
 		statement.Condition = CombineConditionAnd(statement.Condition, t.timeCondition)
+		statement.LookBackDelta = t.LookBackDelta
 		statement.Location = t.Timezone
 	case *influxql.ShowTagValuesStatement:
 		statement.Condition = CombineConditionAnd(statement.Condition, t.timeCondition)
 	default:
+		// Handle other types of statements
 	}
 }
 
@@ -270,6 +295,9 @@ func (t *Transpiler) transpileStepInvariantExpr(e *parser.StepInvariantExpr) (in
 	// value would change for different eval times. Hence we duplicate the result
 	// with changed timestamps.
 	t.duplicateResult = true
+	if t.upperSubquery > 0 {
+		t.lowerStepInvariant = true
+	}
 	return node, err
 }
 
@@ -297,10 +325,53 @@ func (t *Transpiler) transpileSubqueryExpr(e *parser.SubqueryExpr) (influxql.Nod
 	}
 
 	t.minT, t.maxT, t.Step = newStartTime, newEndTime, time.Duration(newInterval*int64(time.Millisecond/time.Nanosecond))
-
+	t.upperSubquery++
 	node, err := t.transpileExpr(e.Expr)
+	if stmt, ok := node.(*influxql.SelectStatement); ok {
+		ReinitTimeWindowOffset(stmt, t.minT, rangeMillis, t.Step)
+	}
+	t.subStartT = newStartTime
+	t.subEndT = newEndTime
 	t.minT, t.maxT, t.Step = preMinT, preMaxT, preInterval
+	t.upperSubquery--
 	return node, err
+}
+
+func ReinitTimeWindowOffset(stmt *influxql.SelectStatement, minT, rangeMillis int64, step time.Duration) {
+	if step == 0 {
+		return
+	}
+	var fixed bool
+	for _, source := range stmt.Sources {
+		switch s := source.(type) {
+		case *influxql.SubQuery:
+			ReinitTimeWindowOffset(s.Statement, minT, rangeMillis, step)
+		case *influxql.Measurement:
+			if !fixed {
+				reinitTimeWindowOffset(stmt.Dimensions, minT, rangeMillis, step)
+				fixed = true
+			}
+		default:
+			return
+		}
+	}
+}
+
+func reinitTimeWindowOffset(dims influxql.Dimensions, minT, rangeMillis int64, step time.Duration) {
+	for _, d := range dims {
+		call, ok := d.Expr.(*influxql.Call)
+		if !ok {
+			continue
+		}
+		if call.Name != "time" || len(call.Args) != 2 {
+			continue
+		}
+		remain := ((minT + rangeMillis) * 1e6) % step.Nanoseconds()
+		offset := time.Duration(remain) * time.Nanosecond
+		call.Args[1] = &influxql.DurationLiteral{
+			Val: offset,
+		}
+	}
 }
 
 // setOffsetForAtModifier modifies the offset of vector and matrix selector
@@ -388,7 +459,7 @@ func unwrapStepInvariantExpr(e parser.Expr) parser.Expr {
 
 func IsMetaQuery(dt DataType) bool {
 	switch dt {
-	case LABEL_KEYS_DATA, LABEL_VALUES_DATA, SERIES_DATA:
+	case LABEL_KEYS_DATA, LABEL_VALUES_DATA, SERIES_DATA, META_DATA:
 		return true
 	}
 	return false

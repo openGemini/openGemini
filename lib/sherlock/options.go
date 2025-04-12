@@ -195,11 +195,12 @@ func (o *options) GetMemOpts() commonOption {
 }
 
 const (
-	defaultCPUTriggerMin   = 10               // 10%
-	defaultCPUTriggerDiff  = 25               // 25%
-	defaultCPUTriggerAbs   = 70               // 70%
-	defaultCPUSamplingTime = 10 * time.Second // collect 10s cpu profile
+	defaultCPUTriggerMin  = 10 // 10%
+	defaultCPUTriggerDiff = 25 // 25%
+	defaultCPUTriggerAbs  = 70 // 70%
 )
+
+var defaultCPUSamplingTime = 10 * time.Second // collect 10s cpu profile
 
 // newCPUOptions
 // enable the cpu dumper, should dump if one of the following requirements is matched

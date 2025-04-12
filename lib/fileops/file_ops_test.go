@@ -15,6 +15,7 @@
 package fileops
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"path"
@@ -23,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openGemini/openGemini/lib/crypto"
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/request"
 	"github.com/stretchr/testify/assert"
@@ -505,6 +507,10 @@ func TestGetRemoteDataPath(t *testing.T) {
 	obs.SetPrefixDataPath("/tmp/openGemini/data/")
 	targetPath = GetRemoteDataPath(obsOpt, rootDir)
 	assert.Equal(t, "obs://mock_endpoint/mock_ak/mock_sk/mock_BucketName/mock_basePath/GetRemoteDataPath", targetPath)
+
+	rootDir = "obs://mock_endpoint/mock_ak/mock_sk/mock_BucketName/mock_basePath/GetRemoteDataPath"
+	targetPath = GetRemoteDataPath(obsOpt, rootDir)
+	assert.Equal(t, "obs://mock_endpoint/mock_ak/mock_sk/mock_BucketName/mock_basePath/GetRemoteDataPath", targetPath)
 }
 
 func TestRemoveLocal(t *testing.T) {
@@ -563,4 +569,48 @@ func TestGetRemotePrefixPath(t *testing.T) {
 	res = GetRemotePrefixPath(obsOpt)
 	assert.Equal(t, "obs://mock_endpoint/mock_ak/mock_sk/mock_BucketName", res)
 
+}
+
+type mockDecipher struct {
+}
+
+func (d *mockDecipher) Initialize(conf string) {
+
+}
+
+func (d *mockDecipher) Decrypt(s string) (string, error) {
+	if s == "invalid" {
+		return "", fmt.Errorf("invalid")
+	}
+	return s, nil
+}
+
+func (d *mockDecipher) Encrypt(s string) (string, error) {
+	if s == "invalid" {
+		return "", fmt.Errorf("invalid")
+	}
+	return s, nil
+}
+
+func (d *mockDecipher) Destruct() {
+
+}
+func TestDecryptObsSk(t *testing.T) {
+	txt := "abcd1234"
+	crypto.SetDecipher(nil)
+	crypto.Initialize(t.TempDir() + "/mokc.conf")
+	res, _ := crypto.Encrypt(txt)
+	assert.Equal(t, txt, res)
+	assert.Equal(t, txt, crypto.Decrypt(txt))
+	crypto.Destruct()
+
+	crypto.SetDecipher(&mockDecipher{})
+	crypto.Initialize(t.TempDir() + "/mokc.conf")
+	defer crypto.Destruct()
+
+	res, _ = crypto.Encrypt(txt)
+	assert.Equal(t, txt, res)
+
+	_, err := crypto.Encrypt("invalid")
+	assert.NotNil(t, err)
 }

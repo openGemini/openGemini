@@ -15,11 +15,13 @@
 package immutable
 
 import (
+	"encoding/binary"
 	"fmt"
 	"math"
 	"sync"
 	"unsafe"
 
+	"github.com/openGemini/openGemini/lib/codec"
 	"github.com/openGemini/openGemini/lib/numberenc"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
@@ -217,6 +219,25 @@ func (m *IntegerPreAgg) marshal(dst []byte) []byte {
 		return dst
 	}
 
+	if IsChunkMetaCompressSelf() {
+		size := len(dst)
+		dst = m.VLCEncode(dst)
+
+		if PreAggOnlyOneRow(dst[size:]) {
+			//Conflict with the encoding mode of only one row of data
+			//Pad 0 at the end for placeholder
+			dst = append(dst, 0)
+			return dst
+		}
+
+		if len(dst)-size < m.size() {
+			return dst
+		}
+
+		//negative income, coded in the original way
+		dst = dst[:size]
+	}
+
 	for _, val := range m.values {
 		dst = numberenc.MarshalInt64Append(dst, val)
 	}
@@ -236,7 +257,7 @@ func (m *IntegerPreAgg) unmarshal(src []byte) ([]byte, error) {
 	}
 
 	if len(src) < m.size() {
-		return nil, fmt.Errorf("too small data %v for ColumnMetaInteger", len(src))
+		return m.VLCDecode(src)
 	}
 
 	for i := range m.values {
@@ -245,6 +266,54 @@ func (m *IntegerPreAgg) unmarshal(src []byte) ([]byte, error) {
 	}
 
 	return src, nil
+}
+
+func (m *IntegerPreAgg) VLCDecode(src []byte) ([]byte, error) {
+	var n int
+
+	m.values[minIndex], n = binary.Varint(src)
+	if n <= 0 {
+		return nil, fmt.Errorf("invalid min value")
+	}
+
+	src = src[n:]
+	m.values[maxIndex], n = binary.Varint(src)
+	if n <= 0 {
+		return nil, fmt.Errorf("invalid max value")
+	}
+
+	src = src[n:]
+	m.values[sumIndex], n = binary.Varint(src)
+	if n <= 0 {
+		return nil, fmt.Errorf("invalid sum value")
+	}
+
+	src = src[n:]
+	v, n := binary.Uvarint(src)
+	if n <= 0 {
+		return nil, fmt.Errorf("invalid count value")
+	}
+	m.values[countIndex] = int64(v)
+
+	src, minTime, maxTime, err := DecodeAggTimes(src[n:])
+	if err != nil {
+		return nil, err
+	}
+	m.values[minTIndex] = minTime
+	m.values[maxTIndex] = maxTime
+
+	return src, nil
+}
+
+func (m *IntegerPreAgg) VLCEncode(dst []byte) []byte {
+	dst = binary.AppendVarint(dst, m.values[minIndex])
+	dst = binary.AppendVarint(dst, m.values[maxIndex])
+	dst = binary.AppendVarint(dst, m.values[sumIndex])
+	dst = binary.AppendUvarint(dst, uint64(m.values[countIndex]))
+
+	dst = codec.AppendInt64WithScale(dst, m.values[minTIndex])
+	dst = codec.AppendInt64WithScale(dst, m.values[maxTIndex]-m.values[minTIndex])
+	return dst
 }
 
 func (m *IntegerPreAgg) reset() {
@@ -364,6 +433,24 @@ func (m *FloatPreAgg) marshal(dst []byte) []byte {
 		return dst
 	}
 
+	if IsChunkMetaCompressSelf() {
+		size := len(dst)
+		dst = m.VLCEncode(dst)
+
+		if PreAggOnlyOneRow(dst[size:]) {
+			//Conflict with the encoding mode of only one row of data
+			//Pad 0 at the end for placeholder
+			dst = append(dst, 0)
+			return dst
+		}
+
+		if len(dst)-size < m.size() {
+			return dst
+		}
+		//negative income, coded in the original way
+		dst = dst[:size]
+	}
+
 	dst = numberenc.MarshalFloat64(dst, m.minV)
 	dst = numberenc.MarshalFloat64(dst, m.maxV)
 	dst = numberenc.MarshalInt64Append(dst, m.minTime)
@@ -386,7 +473,7 @@ func (m *FloatPreAgg) unmarshal(src []byte) ([]byte, error) {
 	}
 
 	if len(src) < m.size() {
-		return nil, fmt.Errorf("too small data %v for ColumnMetaFloat", len(src))
+		return m.VLCDecode(src)
 	}
 
 	m.minV, src = numberenc.UnmarshalFloat64(src), src[8:]
@@ -395,6 +482,50 @@ func (m *FloatPreAgg) unmarshal(src []byte) ([]byte, error) {
 	m.maxTime, src = numberenc.UnmarshalInt64(src), src[8:]
 	m.sumV, src = numberenc.UnmarshalFloat64(src), src[8:]
 	m.countV, src = numberenc.UnmarshalInt64(src), src[8:]
+	return src, nil
+}
+
+func (m *FloatPreAgg) VLCEncode(dst []byte) []byte {
+	if m.maxV == 0 && m.minV == 0 {
+		dst = append(dst, 0)
+	} else {
+		dst = append(dst, 1)
+		dst = numberenc.MarshalFloat64(dst, m.minV)
+		dst = numberenc.MarshalFloat64(dst, m.maxV)
+		dst = numberenc.MarshalFloat64(dst, m.sumV)
+	}
+
+	dst = binary.AppendUvarint(dst, uint64(m.countV))
+	dst = codec.AppendInt64WithScale(dst, m.minTime)
+	dst = codec.AppendInt64WithScale(dst, m.maxTime-m.minTime)
+	return dst
+}
+
+func (m *FloatPreAgg) VLCDecode(src []byte) ([]byte, error) {
+	flag := src[0]
+	src = src[1:]
+
+	if flag == 0 {
+		m.minV, m.maxV, m.sumV = 0, 0, 0
+	} else {
+		m.minV, src = numberenc.UnmarshalFloat64(src), src[8:]
+		m.maxV, src = numberenc.UnmarshalFloat64(src), src[8:]
+		m.sumV, src = numberenc.UnmarshalFloat64(src), src[8:]
+	}
+
+	v, n := binary.Uvarint(src)
+	if n <= 0 {
+		return nil, fmt.Errorf("invalid count value")
+	}
+	m.countV = int64(v)
+
+	src, minTime, maxTime, err := DecodeAggTimes(src[n:])
+	if err != nil {
+		return nil, err
+	}
+	m.minTime = minTime
+	m.maxTime = maxTime
+
 	return src, nil
 }
 
@@ -728,4 +859,18 @@ func PreAggOnlyOneRow(buf []byte) bool {
 	// the pre-aggregation data retains only the minimum value and the corresponding time
 	// Therefore, the length of the pre-aggregated data is 16 bytes.
 	return len(buf) == 16
+}
+
+func DecodeAggTimes(buf []byte) ([]byte, int64, int64, error) {
+	buf, minTime, ok := codec.DecodeInt64WithScale(buf)
+	if !ok {
+		return nil, 0, 0, fmt.Errorf("invalid minTime value")
+	}
+
+	buf, duration, ok := codec.DecodeInt64WithScale(buf)
+	if !ok {
+		return nil, 0, 0, fmt.Errorf("invalid maxTime value")
+	}
+
+	return buf, minTime, minTime + duration, nil
 }

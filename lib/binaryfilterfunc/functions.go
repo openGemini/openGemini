@@ -214,6 +214,7 @@ const (
 	EQ
 	NEQ
 	MATHCHPHRASE
+	IPINRANGE
 	BOTTOM
 )
 
@@ -225,6 +226,7 @@ var operationMap = map[influxql.Token]int{
 	influxql.EQ:          EQ,
 	influxql.NEQ:         NEQ,
 	influxql.MATCHPHRASE: MATHCHPHRASE,
+	influxql.IPINRANGE:   IPINRANGE,
 }
 
 var switchOpMap = map[int]int{
@@ -235,6 +237,7 @@ var switchOpMap = map[int]int{
 	EQ:           EQ,
 	NEQ:          NEQ,
 	MATHCHPHRASE: MATHCHPHRASE,
+	IPINRANGE:    IPINRANGE,
 }
 
 type TypeFunParams struct {
@@ -261,6 +264,7 @@ func initIdxTypeFun() {
 		{GetStringEQConditionBitMap, GetFloatEQConditionBitMap, GetIntegerEQConditionBitMap, GetBooleanEQConditionBitMap},
 		{GetStringNEQConditionBitMap, GetFloatNEQConditionBitMap, GetIntegerNEQConditionBitMap, GetBooleanNEQConditionBitMap},
 		{GetStringMatchPhraseConditionBitMap, nilFunc, nilFunc, nilFunc},
+		{GetStringIPInRangeBitMap, nilFunc, nilFunc, nilFunc},
 	}
 }
 
@@ -489,7 +493,7 @@ func (c *ConditionImpl) convertToRPNElem(rpnExpr *rpn.RPNExpr, opt hybridqp.Opti
 			case influxql.OR:
 				c.isSimpleExpr = false
 				c.rpn = append(c.rpn, &RPNElement{op: rpn.OR})
-			case influxql.EQ, influxql.LT, influxql.LTE, influxql.GT, influxql.GTE, influxql.NEQ, influxql.MATCHPHRASE:
+			case influxql.EQ, influxql.LT, influxql.LTE, influxql.GT, influxql.GTE, influxql.NEQ, influxql.MATCHPHRASE, influxql.IPINRANGE:
 			default:
 				return errno.NewError(errno.ErrRPNOp, v)
 			}

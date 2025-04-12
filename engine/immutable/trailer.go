@@ -21,13 +21,6 @@ import (
 	"github.com/openGemini/openGemini/lib/util"
 )
 
-const (
-	IndexOfTimeStoreFlag         = 0
-	IndexOfChunkMetaCompressFlag = 1
-
-	TimeStoreFlag = 1
-)
-
 type Trailer struct {
 	dataOffset    int64
 	dataSize      int64
@@ -53,52 +46,26 @@ func (t *Trailer) reset() {
 	t.metaIndexItemNum = 0
 	t.bloomM = 0
 	t.bloomK = 0
-
-	t.data = t.data[:0]
 	t.name = t.name[:0]
+	t.ExtraData.Reset()
 }
 
 func (t *Trailer) SetChunkMetaCompressFlag() {
 	mode := GetChunkMetaCompressMode()
-	if mode != ChunkMetaCompressNone {
-		t.SetData(IndexOfChunkMetaCompressFlag, mode)
-	}
+	t.ExtraData.SetChunkMetaCompressFlag(mode)
 }
 
-func (t *Trailer) SetData(idx int, v byte) {
-	if cap(t.data) < (idx + 1) {
-		t.data = append(t.data[:cap(t.data)], make([]byte, idx+1-cap(t.data))...)
-	}
-	t.data = t.data[:idx+1]
-	t.data[idx] = v
-}
-
-func (t *Trailer) EqualData(idx int, v byte) bool {
-	if len(t.data) < idx+1 {
-		return false
-	}
-	return t.data[idx] == v
-}
-
-func (t *Trailer) GetData(idx int, def uint8) uint8 {
-	if len(t.data) < idx+1 {
-		return def
-	}
-	return t.data[idx]
-}
-
-func (t *Trailer) marshal(dst []byte) []byte {
+func (t *Trailer) Marshal(dst []byte) []byte {
 	dst = numberenc.MarshalInt64Append(dst, t.dataOffset)
 	dst = numberenc.MarshalInt64Append(dst, t.dataSize)
 	dst = numberenc.MarshalInt64Append(dst, t.indexSize)
 	dst = numberenc.MarshalInt64Append(dst, t.metaIndexSize)
 	dst = numberenc.MarshalInt64Append(dst, t.bloomSize)
 	dst = numberenc.MarshalInt64Append(dst, t.idTimeSize)
-
 	return t.marshalStat(dst)
 }
 
-func (t *Trailer) unmarshal(src []byte) ([]byte, error) {
+func (t *Trailer) Unmarshal(src []byte) ([]byte, error) {
 	if len(src) < trailerSize {
 		return nil, fmt.Errorf("tool small data (%v) for unmarshal file Trailer", len(src))
 	}
@@ -109,7 +76,12 @@ func (t *Trailer) unmarshal(src []byte) ([]byte, error) {
 	t.metaIndexSize, src = numberenc.UnmarshalInt64(src), src[8:]
 	t.bloomSize, src = numberenc.UnmarshalInt64(src), src[8:]
 	t.idTimeSize, src = numberenc.UnmarshalInt64(src), src[8:]
-	return t.unmarshalStat(src)
+	buf, err := t.unmarshalStat(src)
+	if err != nil {
+		return buf, err
+	}
+
+	return buf, err
 }
 
 func (t *Trailer) ContainsId(id uint64) bool {
@@ -139,12 +111,6 @@ func (t *Trailer) copyTo(tr *Trailer) {
 	tr.metaIndexItemNum = t.metaIndexItemNum
 	tr.bloomM, tr.bloomK = t.bloomM, t.bloomK
 	tr.idTimeSize = t.idTimeSize
-	if cap(tr.data) < len(t.data) {
-		tr.data = make([]byte, len(t.data))
-	} else {
-		tr.data = tr.data[:len(t.data)]
-	}
-	copy(tr.data, t.data)
 
 	if cap(tr.name) < len(t.name) {
 		tr.name = make([]byte, len(t.name))
@@ -152,6 +118,7 @@ func (t *Trailer) copyTo(tr *Trailer) {
 		tr.name = tr.name[:len(t.name)]
 	}
 	copy(tr.name, t.name)
+	t.ExtraData.CopyTo(&tr.ExtraData)
 }
 
 func (t *Trailer) metaOffsetSize() (int64, int64) {

@@ -231,3 +231,10 @@ func AppendMapStringString(b []byte, m map[string]string) []byte {
 	}
 	return b
 }
+
+func AppendInt64WithScale(b []byte, v int64) []byte {
+	idx := scale(v)
+	b = append(b, uint8(idx))
+	b = binary.AppendUvarint(b, uint64(v/scales[idx]))
+	return b
+}

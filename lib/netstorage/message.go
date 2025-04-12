@@ -573,6 +573,73 @@ func (r *SegregateNodeResponse) Error() error {
 	return NormalizeError(r.Err)
 }
 
+type TransferLeadershipRequest struct {
+	netdata.TransferLeadershipRequest
+}
+
+func NewTransferLeadershipRequest() *TransferLeadershipRequest {
+	return &TransferLeadershipRequest{}
+}
+
+func (r *TransferLeadershipRequest) Marshal(buf []byte) ([]byte, error) {
+	b, err := proto.Marshal(&r.TransferLeadershipRequest)
+	if err != nil {
+		return nil, err
+	}
+
+	buf = append(buf, b...)
+	return buf, nil
+}
+
+func (r *TransferLeadershipRequest) Unmarshal(buf []byte) error {
+	return proto.Unmarshal(buf, &r.TransferLeadershipRequest)
+}
+
+func (r *TransferLeadershipRequest) Instance() transport.Codec {
+	return &TransferLeadershipRequest{}
+}
+
+func (r *TransferLeadershipRequest) Size() int {
+	return 0
+}
+
+type TransferLeadershipResponse struct {
+	netdata.TransferLeadershipResponse
+}
+
+func NewTransferLeadershipResponse() *TransferLeadershipResponse {
+	return &TransferLeadershipResponse{}
+}
+
+func (r *TransferLeadershipResponse) Marshal(buf []byte) ([]byte, error) {
+	b, err := proto.Marshal(&r.TransferLeadershipResponse)
+	if err != nil {
+		return nil, err
+	}
+
+	buf = append(buf, b...)
+	return buf, nil
+}
+
+func (r *TransferLeadershipResponse) Unmarshal(buf []byte) error {
+	return proto.Unmarshal(buf, &r.TransferLeadershipResponse)
+}
+
+func (r *TransferLeadershipResponse) Instance() transport.Codec {
+	return &TransferLeadershipResponse{}
+}
+
+func (r *TransferLeadershipResponse) Size() int {
+	return 0
+}
+
+func (r *TransferLeadershipResponse) Error() error {
+	if r.Err == nil {
+		return nil
+	}
+	return NormalizeError(r.Err)
+}
+
 type RaftMsgMessage struct {
 	BaseMessage
 }

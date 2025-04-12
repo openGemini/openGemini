@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
-	"github.com/prometheus/prometheus/pkg/labels"
+	"github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/promql/parser"
 )
 
@@ -287,14 +287,17 @@ func TestTranspiler_transpileMetaQuery(t1 *testing.T) {
 		matchers []*labels.Matcher
 		want     influxql.Node
 		wantErr  bool
+		exact    bool
 	}{
 		{
 			name: "show tag keys",
 			fields: fields{
 				DataType: LABEL_KEYS_DATA,
 				Database: "prometheus",
+				Start:    &startTime2,
+				End:      &endTime2,
 			},
-			want:    influxql.MustParseStatement(`SHOW TAG KEYS ON prometheus`),
+			want:    influxql.MustParseStatement(`SHOW TAG KEYS ON prometheus WHERE time >= '2023-01-06T04:00:00Z' AND time <= '2023-01-06T07:00:00Z'`),
 			wantErr: false,
 		},
 		{
@@ -302,12 +305,14 @@ func TestTranspiler_transpileMetaQuery(t1 *testing.T) {
 			fields: fields{
 				DataType: LABEL_KEYS_DATA,
 				Database: "prometheus",
+				Start:    &startTime2,
+				End:      &endTime2,
 			},
 			matchers: []*labels.Matcher{
 				{Name: DefaultMetricKeyLabel, Value: "up1"},
 				{Name: DefaultMetricKeyLabel, Value: "up2"},
 			},
-			want:    influxql.MustParseStatement(`SHOW TAG KEYS ON prometheus FROM up1, up2`),
+			want:    influxql.MustParseStatement(`SHOW TAG KEYS ON prometheus FROM up1, up2 WHERE time >= '2023-01-06T04:00:00Z' AND time <= '2023-01-06T07:00:00Z'`),
 			wantErr: false,
 		},
 		{
@@ -335,7 +340,7 @@ func TestTranspiler_transpileMetaQuery(t1 *testing.T) {
 				{Name: DefaultMetricKeyLabel, Value: "up1"},
 				{Name: DefaultMetricKeyLabel, Value: "up2"},
 			},
-			want:    influxql.MustParseStatement(`SHOW TAG VALUES ON prometheus FROM up1,up2 WITH key = job WHERE time >= '2023-01-06T04:00:00Z' AND time <= '2023-01-06T07:00:00Z'`),
+			want:    influxql.MustParseStatement(`SHOW TAG VALUES ON prometheus FROM up1, up2 WITH KEY = job WHERE time >= '2023-01-06T04:00:00Z' AND time <= '2023-01-06T07:00:00Z'`),
 			wantErr: false,
 		},
 		{
@@ -343,8 +348,10 @@ func TestTranspiler_transpileMetaQuery(t1 *testing.T) {
 			fields: fields{
 				DataType: SERIES_DATA,
 				Database: "prometheus",
+				Start:    &startTime2,
+				End:      &endTime2,
 			},
-			want:    influxql.MustParseStatement(`SHOW SERIES ON prometheus`),
+			want:    influxql.MustParseStatement(`SHOW SERIES ON prometheus WHERE time >= '2023-01-06T04:00:00Z' AND time <= '2023-01-06T07:00:00Z'`),
 			wantErr: false,
 		},
 		{
@@ -352,13 +359,31 @@ func TestTranspiler_transpileMetaQuery(t1 *testing.T) {
 			fields: fields{
 				DataType: SERIES_DATA,
 				Database: "prometheus",
+				Start:    &startTime2,
+				End:      &endTime2,
 			},
 			matchers: []*labels.Matcher{
 				{Name: DefaultMetricKeyLabel, Value: "up1"},
 				{Name: DefaultMetricKeyLabel, Value: "up2"},
 			},
-			want:    influxql.MustParseStatement(`SHOW SERIES ON prometheus FROM up1,up2`),
+			want:    influxql.MustParseStatement(`SHOW SERIES ON prometheus FROM up1, up2 WHERE time >= '2023-01-06T04:00:00Z' AND time <= '2023-01-06T07:00:00Z'`),
 			wantErr: false,
+		},
+		{
+			name: "show series with matchers exact",
+			fields: fields{
+				DataType: SERIES_DATA,
+				Database: "prometheus",
+				Start:    &startTime2,
+				End:      &endTime2,
+			},
+			matchers: []*labels.Matcher{
+				{Name: DefaultMetricKeyLabel, Value: "up1"},
+				{Name: DefaultMetricKeyLabel, Value: "up2"},
+			},
+			want:    parseInfluxqlByYacc(`SHOW /*+ exact_statistic_query */ SERIES ON prometheus FROM up1, up2 WHERE time >= '2023-01-06T04:00:00Z' AND time <= '2023-01-06T07:00:00Z'`),
+			wantErr: false,
+			exact:   true,
 		},
 	}
 
@@ -373,6 +398,7 @@ func TestTranspiler_transpileMetaQuery(t1 *testing.T) {
 					DataType:   tt.fields.DataType,
 					Database:   tt.fields.Database,
 					LabelName:  tt.fields.LabelName,
+					Exact:      tt.exact,
 				},
 			}
 			selector := &parser.VectorSelector{

@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/openGemini/openGemini/app/ts-store/storage"
+	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	internal "github.com/openGemini/openGemini/lib/netstorage/data"
@@ -69,9 +70,9 @@ func TestProcessShowTagValues(t *testing.T) {
 		{
 			Name: "show tag values with order by 1",
 			ShowTagValuesRequest: internal.ShowTagValuesRequest{
-				Db:       &db,
-				PtIDs:    pts,
-				Disorder: proto.Bool(false),
+				Db:    &db,
+				PtIDs: pts,
+				Exact: proto.Bool(false),
 			},
 			Want: nil,
 		},
@@ -86,18 +87,18 @@ func TestProcessShowTagValues(t *testing.T) {
 		{
 			Name: "show tag values without order by 1",
 			ShowTagValuesRequest: internal.ShowTagValuesRequest{
-				Db:       &db,
-				PtIDs:    pts,
-				Disorder: proto.Bool(true),
+				Db:    &db,
+				PtIDs: pts,
+				Exact: proto.Bool(true),
 			},
 			Want: nil,
 		},
 		{
 			Name: "show tag values without order by ref DBPT fail",
 			ShowTagValuesRequest: internal.ShowTagValuesRequest{
-				Db:       &returnErrDB,
-				PtIDs:    pts,
-				Disorder: proto.Bool(true),
+				Db:    &returnErrDB,
+				PtIDs: pts,
+				Exact: proto.Bool(true),
 			},
 			Want: errno.NewError(errno.DBPTClosed, "pt", 1),
 		},
@@ -150,12 +151,17 @@ func (e *MockEngine) SendRaftMessage(database string, ptId uint64, msg raftpb.Me
 	return nil
 }
 
-func (e *MockEngine) CreateShowTagValuesPlan(db string, ptIDs []uint32, tr *influxql.TimeRange) netstorage.ShowTagValuesPlan {
-	plan := &MockShowTagValuesPlan{
-		ExecuteFn: func(tagKeys map[string][][]byte, condition influxql.Expr, tr util.TimeRange, limit int) (netstorage.TablesTagSets, error) {
-			return netstorage.TablesTagSets{}, nil
+func (e *MockEngine) CreateDDLBasePlans(planType hybridqp.DDLType, db string, ptIDs []uint32, tr *influxql.TimeRange) netstorage.DDLBasePlans {
+	plan := &MockDDLPlans{
+		planType: planType,
+		ExecuteFn: func(mstKeys map[string][][]byte, condition influxql.Expr, tr util.TimeRange, limit int) (interface{}, error) {
+			if planType == hybridqp.ShowTagValues {
+				return netstorage.TablesTagSets{}, nil
+			}
+			return []string{}, nil
 		},
-		StopFn: func() {},
+		StopFn:    func() {},
+		AddPlanFn: func(interface{}) {},
 	}
 	return plan
 }
@@ -170,17 +176,23 @@ func (e *MockEngine) DbPTRef(db string, ptId uint32) error {
 
 func (e *MockEngine) DbPTUnref(db string, ptId uint32) {}
 
-type MockShowTagValuesPlan struct {
-	ExecuteFn func(tagKeys map[string][][]byte, condition influxql.Expr, tr util.TimeRange, limit int) (netstorage.TablesTagSets, error)
+type MockDDLPlans struct {
+	ExecuteFn func(tagKeys map[string][][]byte, condition influxql.Expr, tr util.TimeRange, limit int) (interface{}, error)
 	StopFn    func()
+	AddPlanFn func(interface{})
+	planType  hybridqp.DDLType
 }
 
-func (p *MockShowTagValuesPlan) Execute(tagKeys map[string][][]byte, condition influxql.Expr, tr util.TimeRange, limit int) (netstorage.TablesTagSets, error) {
-	return p.ExecuteFn(tagKeys, condition, tr, limit)
+func (p *MockDDLPlans) Execute(mstKeys map[string][][]byte, condition influxql.Expr, tr util.TimeRange, limit int) (interface{}, error) {
+	return p.ExecuteFn(mstKeys, condition, tr, limit)
 }
 
-func (p *MockShowTagValuesPlan) Stop() {
+func (p *MockDDLPlans) Stop() {
 	p.StopFn()
+}
+
+func (p *MockDDLPlans) AddPlan(plan interface{}) {
+	p.AddPlanFn(plan)
 }
 
 func TestProcessGetShardSplitPoints(t *testing.T) {
@@ -259,4 +271,65 @@ func TestProcessRaftMessages(t *testing.T) {
 		t.Fatal("response type is invalid")
 	}
 	assert.Empty(t, response.GetErrMsg())
+}
+
+func TestProcessShowSeries(t *testing.T) {
+	db := path.Join(dataPath, "db0")
+	pts := []uint32{1}
+
+	returnErrDB := "test_return_error"
+
+	for _, testcase := range []struct {
+		Name              string
+		ShowSeriesRequest internal.SeriesKeysRequest
+		Want              *errno.Error
+	}{
+		{
+			Name: "show series",
+			ShowSeriesRequest: internal.SeriesKeysRequest{
+				Db:    &db,
+				PtIDs: pts,
+				Exact: proto.Bool(false),
+			},
+			Want: nil,
+		},
+		{
+			Name: "show /hint/ series",
+			ShowSeriesRequest: internal.SeriesKeysRequest{
+				Db:    &db,
+				PtIDs: pts,
+				Exact: proto.Bool(true),
+			},
+			Want: nil,
+		},
+		{
+			Name: "show series DBPT fail",
+			ShowSeriesRequest: internal.SeriesKeysRequest{
+				Db:    &returnErrDB,
+				PtIDs: pts,
+				Exact: proto.Bool(false),
+			},
+			Want: errno.NewError(errno.DBPTClosed, "pt", 1),
+		},
+	} {
+		t.Run(testcase.Name, func(t *testing.T) {
+			h := NewHandler(netstorage.SeriesKeysRequestMessage)
+			if err := h.SetMessage(&netstorage.SeriesKeysRequest{
+				SeriesKeysRequest: testcase.ShowSeriesRequest,
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			s := &storage.Storage{}
+			s.SetEngine(&MockEngine{})
+			h.SetStore(s)
+			rsp, _ := h.Process()
+			response, ok := rsp.(*netstorage.SeriesKeysResponse)
+			if !ok {
+				t.Fatal("response type is invalid")
+			}
+			assert.Equal(t, nil, netstorage.NormalizeError(response.Err))
+			response.Err = nil
+		})
+	}
 }

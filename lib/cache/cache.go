@@ -93,6 +93,7 @@ func (c *Cache) Get(key string) (Entry, bool) {
 			c.mutex.Lock()
 			c.removeElement(ele)
 			c.mutex.Unlock()
+			return nil, false
 		} else {
 			c.mutex.Lock()
 			c.ll.MoveToFront(ele)
@@ -139,6 +140,10 @@ func (c *Cache) Put(key string, value Entry, needUpdate func(old Entry, new Entr
 	for c.maxBytes != 0 && c.usedBytes > c.maxBytes {
 		c.removeOldest()
 	}
+}
+
+func (c *Cache) Size() int64 {
+	return c.usedBytes
 }
 
 // Len used to obtain the number of elements in the cache.

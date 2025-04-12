@@ -18,9 +18,12 @@ package engine
 import (
 	"testing"
 
-	assert2 "github.com/influxdata/influxdb/pkg/testing/assert"
+	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
+	ast "github.com/stretchr/testify/assert"
 )
 
 func Test_mergeData(t *testing.T) {
@@ -40,5 +43,38 @@ func Test_mergeData(t *testing.T) {
 	newRecordIter := &recordIter{record: rec1, rowCnt: rec1.RowNums()}
 	oldRecordIter := &recordIter{}
 	rec := mergeData(newRecordIter, oldRecordIter, 10, true)
-	assert2.Equal(t, rec1.RowNums(), rec.RowNums(), "invalid mergeData")
+	ast.Equal(t, rec1.RowNums(), rec.RowNums(), "invalid mergeData")
+}
+
+func Test_newCursorSchema(t *testing.T) {
+	type args struct {
+		ctx    *idKeyCursorContext
+		schema *executor.QuerySchema
+	}
+	tests := []struct {
+		name string
+		args args
+	}{
+		{
+			name: "1",
+			args: args{
+				ctx: &idKeyCursorContext{},
+				schema: executor.NewQuerySchema(
+					[]*influxql.Field{{Expr: &influxql.VarRef{Val: "value", Type: influxql.Float}}},
+					[]string{"value"},
+					&query.ProcessorOptions{Condition: &influxql.BinaryExpr{
+						Op:  influxql.EQ,
+						LHS: &influxql.VarRef{Val: "az", Type: influxql.Tag},
+						RHS: &influxql.StringLiteral{Val: "az"},
+					}},
+					nil,
+				),
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ast.NoError(t, newCursorSchema(tt.args.ctx, tt.args.schema))
+		})
+	}
 }

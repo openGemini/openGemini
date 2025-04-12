@@ -69,8 +69,8 @@ type Engine interface {
 	DeleteShard(db string, ptId uint32, shardID uint64) error
 	DeleteIndex(db string, pt uint32, indexID uint64) error
 	ClearIndexCache(db string, pt uint32, indexID uint64) error
-	ExpiredShards() []*meta.ShardIdentifier
-	ExpiredIndexes() []*meta.IndexIdentifier
+	ExpiredShards(nilShardMap *map[uint64]*meta.ShardDurationInfo) []*meta.ShardIdentifier
+	ExpiredIndexes(nilIndexMap *map[uint64]*meta.IndexDurationInfo) []*meta.IndexIdentifier
 	ExpiredCacheIndexes() []*meta.IndexIdentifier
 	FetchShardsNeedChangeStore() ([]*meta.ShardIdentifier, []*meta.ShardIdentifier)
 	ChangeShardTierToWarm(db string, ptId uint32, shardID uint64) error
@@ -103,14 +103,15 @@ type Engine interface {
 
 	DbPTRef(db string, ptId uint32) error
 	DbPTUnref(db string, ptId uint32)
-	CreateLogicalPlan(ctx context.Context, db string, ptId uint32, shardID uint64, sources influxql.Sources, schema *executor.QuerySchema) (hybridqp.QueryNode, error)
+	CreateLogicalPlan(ctx context.Context, db string, ptId uint32, shardID []uint64, sources influxql.Sources, schema *executor.QuerySchema) (hybridqp.QueryNode, error)
 	ScanWithSparseIndex(ctx context.Context, db string, ptId uint32, shardIDs []uint64, schema *executor.QuerySchema) (executor.ShardsFragments, error)
 	GetIndexInfo(db string, ptId uint32, shardIDs uint64, schema *executor.QuerySchema) (*executor.AttachedIndexInfo, error)
 	RowCount(db string, ptId uint32, shardIDs []uint64, schema *executor.QuerySchema) (int64, error)
 
 	LogicalPlanCost(db string, ptId uint32, sources influxql.Sources, opt query.ProcessorOptions) (hybridqp.LogicalPlanCost, error)
 
-	UpdateShardDurationInfo(info *meta.ShardDurationInfo) error
+	UpdateShardDurationInfo(info *meta.ShardDurationInfo, nilShardMap *map[uint64]*meta.ShardDurationInfo) error
+	UpdateIndexDurationInfo(info *meta.IndexDurationInfo, nilIndexMap *map[uint64]*meta.IndexDurationInfo) error
 
 	PreOffload(opId uint64, db string, ptId uint32) error
 	RollbackPreOffload(opId uint64, db string, ptId uint32) error
@@ -132,10 +133,11 @@ type Engine interface {
 	UpdateDownSampleInfo(policies *meta.DownSamplePoliciesInfoWithDbRp)
 	UpdateShardDownSampleInfo(infos *meta.ShardDownSampleUpdateInfos)
 	CheckPtsRemovedDone() bool
+	TransferLeadership(database string, nodeId uint64, oldMasterPtId, newMasterPtId uint32) error
 	HierarchicalStorage(db string, ptId uint32, shardID uint64) bool
 
 	RaftMessage
-	CreateShowTagValuesPlan(db string, ptIDs []uint32, tr *influxql.TimeRange) ShowTagValuesPlan
+	CreateDDLBasePlans(planType hybridqp.DDLType, db string, ptIDs []uint32, tr *influxql.TimeRange) DDLBasePlans
 	SetMetaClient(m metaclient.MetaClient)
 }
 
@@ -143,8 +145,9 @@ type RaftMessage interface {
 	SendRaftMessage(database string, ptId uint64, msg raftpb.Message) error
 }
 
-type ShowTagValuesPlan interface {
-	Execute(tagKeys map[string][][]byte, condition influxql.Expr, tr util.TimeRange, limit int) (TablesTagSets, error)
+type DDLBasePlans interface {
+	Execute(mstKeys map[string][][]byte, condition influxql.Expr, tr util.TimeRange, limit int) (interface{}, error)
+	AddPlan(plan interface{})
 	Stop()
 }
 

@@ -847,7 +847,7 @@ func NewStorage(catalog *Catalog) *Storage {
 func (s *Storage) ReportLoad() {
 
 }
-func (s *Storage) CreateLogicPlan(ctx context.Context, db string, ptId uint32, shardID uint64, sources influxql.Sources, schema hybridqp.Catalog) (hybridqp.QueryNode, error) {
+func (s *Storage) CreateLogicPlan(ctx context.Context, db string, ptId uint32, shardID []uint64, sources influxql.Sources, schema hybridqp.Catalog) (hybridqp.QueryNode, error) {
 	return nil, nil
 }
 

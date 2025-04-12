@@ -57,6 +57,7 @@ type Select struct {
 	buildPlanSpan  *tracing.Span
 	createPlanSpan *tracing.Span
 	rootSpan       *tracing.Span
+	context        context.Context
 }
 
 func NewSelect(store *storage.Storage, w spdy.Responser, req *executor.RemoteQuery) *Select {
@@ -124,6 +125,10 @@ func (s *Select) SetCrashHook(hook func()) bool {
 	}
 	s.crashHook = hook
 	return true
+}
+
+func (s *Select) SetContext(c context.Context) {
+	s.context = c
 }
 
 func (s *Select) Process() error {
@@ -206,7 +211,12 @@ func (s *Select) process(w spdy.Responser, node hybridqp.QueryNode, req *executo
 		}()
 	}
 	atomic.AddInt64(&statistics.StoreQueryStat.GetShardResourceTimeTotal, time.Since(start).Nanoseconds())
-	ctx := context.WithValue(context.Background(), QueryDurationKey, qDuration)
+	var ctx context.Context
+	if s.context == nil {
+		ctx = context.WithValue(context.Background(), QueryDurationKey, qDuration)
+	} else {
+		ctx = context.WithValue(s.context, QueryDurationKey, qDuration)
+	}
 	if req.Analyze {
 		ctx = s.initTrace(ctx)
 	}

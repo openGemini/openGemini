@@ -168,7 +168,7 @@ func (m *mockTableStore3) GetAllMstList() []string {
 
 func CreateEngine(mode int) *engine.Engine {
 	client := &mockMetaClient4Backup{}
-	dbPtInfo := engine.NewDBPTInfo("db0", 0, "/tmp/openGemini/backup_dir/data/data/db0/0", "", nil, nil)
+	dbPtInfo := engine.NewDBPTInfo("db0", 0, "/tmp/openGemini/backup_dir/data/data/db0/0", "", nil, nil, nil)
 	dbPtInfo.AddShard(11, &mockShard{mode: mode})
 	dbPtInfo.AddShard(12, &mockShard{mode: mode})
 	dbPtInfo.AddShard(13, &mockShard{mode: mode})

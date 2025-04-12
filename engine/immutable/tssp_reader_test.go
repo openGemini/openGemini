@@ -224,86 +224,6 @@ func TestTableStoreOpen(t *testing.T) {
 	}
 }
 
-func TestMemoryRead(t *testing.T) {
-	sig := interruptsignal.NewInterruptSignal()
-	defer func() {
-		sig.Close()
-		fileops.RemoveAll(testDir)
-	}()
-	_ = fileops.RemoveAll(testDir)
-	conf := NewTsStoreConfig()
-	conf.cacheDataBlock = true
-	conf.cacheMetaData = true
-	tier := uint64(util.Hot)
-	lockPath := ""
-	store := NewTableStore(testDir, &lockPath, &tier, false, conf)
-	store.SetImmTableType(config.TSSTORE)
-
-	write := func(ids []uint64, data map[uint64]*record.Record, msb *MsBuilder) {
-		for _, id := range ids {
-			rec := data[id]
-			err := msb.WriteData(id, rec)
-			if err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-
-	fileSeq := uint64(1)
-	var idMinMax, tmMinMax MinMax
-	ids, data := genMemTableData(1, 10, 100, &idMinMax, &tmMinMax)
-	fileName := NewTSSPFileName(fileSeq, 0, 0, 0, true, &lockPath)
-	msb := NewMsBuilder(testDir, "mst", &lockPath, conf, 10, fileName, 0, store.Sequencer(), 2, config.TSSTORE, nil, 0)
-
-	write(ids, data, msb)
-	fileSeq++
-	store.AddTable(msb, true, false)
-
-	fs := store.tableFiles("mst", true)
-	if fs == nil {
-		t.Fatal("get mst files fail")
-	}
-
-	f := store.File("mst", fs.Files()[0].Path(), true)
-	if f == nil {
-		t.Fatal("get file fail")
-	}
-	midx, _ := f.MetaIndexAt(0)
-	if midx == nil {
-		t.Fatalf("meta index not find")
-	}
-	decs := NewReadContext(true)
-	cms, err := f.ReadChunkMetaData(0, midx, nil, fileops.IO_PRIORITY_ULTRA_HIGH)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rec := record.NewRecordBuilder(schema)
-	fr := f.(*tsspFile).reader.(*tsspFileReader)
-
-	var wg sync.WaitGroup
-	for i := 0; i < 200; i++ {
-		wg.Add(1)
-		go func() {
-			fr.Ref()
-			_, err = f.ReadAt(&cms[0], 0, rec, decs, fileops.IO_PRIORITY_ULTRA_HIGH)
-			if err != nil {
-				t.Error(err)
-				return
-			}
-			fr.Unref()
-			defer wg.Done()
-		}()
-	}
-	wg.Wait()
-	if fr.ref != 0 {
-		t.Fatal("ref error")
-	}
-
-	if err := store.Close(); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestLazyInitError(t *testing.T) {
 	sig := interruptsignal.NewInterruptSignal()
 	defer func() {
@@ -410,90 +330,6 @@ func TestLazyInitError(t *testing.T) {
 
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestMemoryReadReload(t *testing.T) {
-	sig := interruptsignal.NewInterruptSignal()
-	defer func() {
-		sig.Close()
-		fileops.RemoveAll(testDir)
-	}()
-	_ = fileops.RemoveAll(testDir)
-	conf := NewTsStoreConfig()
-	conf.cacheDataBlock = true
-	conf.cacheMetaData = true
-	tier := uint64(util.Hot)
-	lockPath := ""
-	store := NewTableStore(testDir, &lockPath, &tier, false, conf)
-	store.SetImmTableType(config.TSSTORE)
-
-	write := func(ids []uint64, data map[uint64]*record.Record, msb *MsBuilder) {
-		for _, id := range ids {
-			rec := data[id]
-			err := msb.WriteData(id, rec)
-			if err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-
-	fileSeq := uint64(1)
-	var idMinMax, tmMinMax MinMax
-	ids, data := genMemTableData(1, 10, 100, &idMinMax, &tmMinMax)
-	fileName := NewTSSPFileName(fileSeq, 0, 0, 0, true, &lockPath)
-	msb := NewMsBuilder(testDir, "mst", &lockPath, conf, 10, fileName, 0, store.Sequencer(), 2, config.TSSTORE, nil, 0)
-	write(ids, data, msb)
-	fileSeq++
-	store.AddTable(msb, true, false)
-
-	if err := store.Close(); err != nil {
-		t.Fatal(err)
-	}
-	tier1 := uint64(util.Hot)
-	store = NewTableStore(testDir, &lockPath, &tier1, false, conf)
-	store.SetImmTableType(config.TSSTORE)
-	if _, err := store.Open(); err != nil {
-		t.Fatal(err)
-	}
-	fs := store.tableFiles("mst", true)
-	if fs == nil {
-		t.Fatal("get mst files fail")
-	}
-
-	f := store.File("mst", fs.Files()[0].Path(), true)
-	if f == nil {
-		t.Fatal("get file fail")
-	}
-	midx, _ := f.MetaIndexAt(0)
-	if midx == nil {
-		t.Fatalf("meta index not find")
-	}
-	decs := NewReadContext(true)
-	cms, err := f.ReadChunkMetaData(0, midx, nil, fileops.IO_PRIORITY_ULTRA_HIGH)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rec := record.NewRecordBuilder(schema)
-	fr := f.(*tsspFile).reader.(*tsspFileReader)
-
-	var wg sync.WaitGroup
-	for i := 0; i < 200; i++ {
-		wg.Add(1)
-		go func() {
-			fr.Ref()
-			_, err = f.ReadAt(&cms[0], 0, rec, decs, fileops.IO_PRIORITY_ULTRA_HIGH)
-			if err != nil {
-				t.Error(err)
-				return
-			}
-			fr.Unref()
-			defer wg.Done()
-		}()
-	}
-	wg.Wait()
-	if fr.ref != 0 {
-		t.Fatal("ref error")
 	}
 }
 
@@ -1101,7 +937,7 @@ func TestLoadIdTimes(t *testing.T) {
 
 	idTimes, ok := seq.mmsIdTime["mst"]
 	require.True(t, ok)
-	require.Equal(t, 10, len(idTimes.idTime))
+	require.Equal(t, int64(10), idTimes.getIdCount())
 
 	for seq.IsLoading() {
 		time.Sleep(100 * time.Millisecond)
@@ -1974,7 +1810,7 @@ type mockTableReader struct {
 	MetaIndexFn   func(id uint64, tr util.TimeRange) (int, *MetaIndex, error)
 	ChunkMetaFn   func(id uint64, offset int64, size, itemCount uint32, metaIdx int, dst *ChunkMeta, buffer *[]byte, ioPriority int) (*ChunkMeta, error)
 
-	ReadMetaBlockFn     func(metaIdx int, id uint64, offset int64, size uint32, count uint32, dst *[]byte, ioPriority int) ([]byte, error)
+	ReadMetaBlockFn     func(metaIdx int, id uint64, offset int64, size uint32, count uint32, dst *[]byte, ioPriority int) ([]byte, *readcache.CachePage, error)
 	ReadDataBlockFn     func(offset int64, size uint32, dst *[]byte, ioPriority int) ([]byte, *readcache.CachePage, error)
 	ReadFn              func(offset int64, size uint32, dst *[]byte, ioPriority int) ([]byte, error)
 	ReadChunkMetaDataFn func(metaIdx int, m *MetaIndex, dst []ChunkMeta, ioPriority int) ([]ChunkMeta, error)
@@ -1994,7 +1830,6 @@ type mockTableReader struct {
 	FileSizeFn         func() int64
 	InMemSizeFn        func() int64
 	VersionFn          func() uint64
-	FreeMemoryFn       func() int64
 	LoadIntoMemoryFn   func() error
 	LoadComponentsFn   func() error
 	AverageChunkRowsFn func() int
@@ -2017,7 +1852,7 @@ func (r *mockTableReader) ChunkMeta(id uint64, offset int64, size, itemCount uin
 	return r.ChunkMetaFn(id, offset, size, itemCount, metaIdx, nil, nil, ioPriority)
 }
 
-func (r *mockTableReader) ReadMetaBlock(metaIdx int, id uint64, offset int64, size uint32, count uint32, dst *pool.Buffer, ioPriority int) ([]byte, error) {
+func (r *mockTableReader) ReadMetaBlock(metaIdx int, id uint64, offset int64, size uint32, count uint32, dst *pool.Buffer, ioPriority int) ([]byte, *readcache.CachePage, error) {
 	return r.ReadMetaBlockFn(metaIdx, id, offset, size, count, &dst.B, ioPriority)
 }
 func (r *mockTableReader) ReadDataBlock(offset int64, size uint32, dst *[]byte, ioPriority int) ([]byte, *readcache.CachePage, error) {
@@ -2045,15 +1880,9 @@ func (r *mockTableReader) Rename(newName string) error                  { return
 func (r *mockTableReader) RenameOnObs(newName string, tmp bool, obsOpt *obs.ObsOptions) error {
 	return r.RenameOnObsFn(newName)
 }
-func (r *mockTableReader) FileSize() int64  { return r.FileSizeFn() }
-func (r *mockTableReader) InMemSize() int64 { return r.InMemSizeFn() }
-func (r *mockTableReader) Version() uint64  { return r.VersionFn() }
-func (r *mockTableReader) FreeMemory() int64 {
-	if r.FreeMemoryFn == nil {
-		return 0
-	}
-	return r.FreeMemoryFn()
-}
+func (r *mockTableReader) FileSize() int64         { return r.FileSizeFn() }
+func (r *mockTableReader) InMemSize() int64        { return r.InMemSizeFn() }
+func (r *mockTableReader) Version() uint64         { return r.VersionFn() }
 func (r *mockTableReader) LoadIntoMemory() error   { return r.LoadIntoMemoryFn() }
 func (r *mockTableReader) LoadComponents() error   { return r.LoadComponentsFn() }
 func (r *mockTableReader) AverageChunkRows() int   { return r.AverageChunkRowsFn() }
@@ -2088,28 +1917,6 @@ func TestCompareFile(t *testing.T) {
 	assert.True(t, compareFileByDescend(f1, f4))
 	assert.True(t, compareFileByDescend(f2, f4))
 	assert.True(t, !compareFileByDescend(f3, f4))
-}
-
-func TestFreeMemory(t *testing.T) {
-	f1 := genTsspFile("00000001-0000-00000000.tssp")
-
-	timer := time.NewTimer(3 * time.Second)
-	signal := make(chan struct{})
-
-	go func() {
-		defer close(signal)
-
-		f1.Ref()
-		require.Equal(t, int64(0), f1.FreeMemory(true))
-		f1.Unref()
-	}()
-
-	select {
-	case <-signal:
-		break
-	case <-timer.C:
-		t.Fatalf("failed to FreeMemory")
-	}
 }
 
 func TestReadError(t *testing.T) {
@@ -2340,4 +2147,189 @@ func TestRenameOnObsRemoveFile(t *testing.T) {
 	if _, err = fileops.Stat(fileName); !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
+}
+
+func genTsspInfo(name string, order bool) TSSPInfo {
+	var fn TSSPFileName
+	if err := fn.ParseFileName(name); err != nil {
+		return nil
+	}
+	return &tsspInfo{
+		order: order,
+		file:  name,
+		name:  fn,
+	}
+}
+
+func TestUnloadFilesCompactionPlan(t *testing.T) {
+	tier := uint64(util.Hot)
+	lockPath := ""
+	store := NewTableStore("", &lockPath, &tier, false, NewTsStoreConfig())
+	store.SetImmTableType(config.TSSTORE)
+
+	type TestCase struct {
+		name           string
+		tsspFileName   []string
+		unloadFileName []string
+		expGroups      [][]string
+	}
+
+	cases := []TestCase{
+		TestCase{
+			name: "compPlan0",
+			tsspFileName: []string{
+				"00000000-0000-00000000.tssp",
+				"00000001-0002-00000000.tssp",
+				"00000009-0002-00000000.tssp",
+				"00000011-0002-00000000.tssp",
+				"00000019-0002-00000000.tssp",
+				"00000021-0002-00000000.tssp",
+				"00000028-0002-00000000.tssp",
+				"00000029-0002-00000000.tssp",
+				"00000029-0002-00000001.tssp",
+				"00000031-0002-00000000.tssp",
+				"00000039-0002-00000000.tssp",
+				"00000039-0002-00000001.tssp",
+				"00000041-0002-00000000.tssp",
+				"00000049-0002-00000000.tssp",
+				"00000051-0002-00000000.tssp",
+				"00000059-0002-00000000.tssp",
+				"00000061-0002-00000000.tssp",
+			},
+			unloadFileName: []string{
+				"00000010-0002-00000000.tssp",
+				"00000042-0002-00000000.tssp",
+			},
+			expGroups: [][]string{
+				[]string{
+					"00000011-0002-00000000.tssp",
+					"00000019-0002-00000000.tssp",
+					"00000021-0002-00000000.tssp",
+					"00000028-0002-00000000.tssp",
+				},
+				[]string{
+					"00000049-0002-00000000.tssp",
+					"00000051-0002-00000000.tssp",
+					"00000059-0002-00000000.tssp",
+					"00000061-0002-00000000.tssp",
+				},
+			},
+		},
+	}
+
+	for _, c := range cases {
+		for _, fn := range c.tsspFileName {
+			f := genTsspFile(fn)
+			if f == nil {
+				t.Fatalf("parse file name (%v) fail", fn)
+			}
+			store.ImmTable.addTSSPFile(store, true, f, "mst")
+		}
+
+		for _, fn := range c.unloadFileName {
+			f := genTsspInfo(fn, true)
+			if f == nil {
+				t.Fatalf("parse file name (%v) fail", fn)
+			}
+			store.ImmTable.addUnloadFile(store, true, f, "mst")
+		}
+
+		fs := store.tableFiles("mst", true)
+		plans := store.mmsPlan("mst", fs, 2, LeveLMinGroupFiles[2], nil)
+		if len(plans) != len(c.expGroups) {
+			t.Fatalf("exp groups :%v, get:%v", len(c.expGroups), len(plans))
+		}
+		for i, group := range c.expGroups {
+			if !reflect.DeepEqual(group, plans[i].group) {
+				fmt.Println(plans, plans[0], plans[1])
+				t.Fatalf("exp groups :%v, get:%v", c.expGroups, plans)
+			}
+			store.CompactDone(group)
+		}
+
+		delete(store.Order, "mst")
+	}
+}
+
+func TestAddUloadFileForCstore(t *testing.T) {
+	tier := uint64(util.Hot)
+	lockPath := ""
+	store := NewTableStore("", &lockPath, &tier, false, NewTsStoreConfig())
+	store.SetImmTableType(config.COLUMNSTORE)
+
+	unloadFileNames := []string{
+		"00000000-0000-00000000.tssp",
+		"00000001-0000-00000000.tssp",
+		"00000002-0000-00000000.tssp",
+	}
+	for _, fn := range unloadFileNames {
+		f := genTsspInfo(fn, true)
+		if f == nil {
+			t.Fatalf("parse file name (%v) fail", fn)
+		}
+		store.ImmTable.addUnloadFile(store, true, f, "mst")
+	}
+	fs, _ := store.getTSSPFiles("mst", true)
+	if len(fs.unloadFiles) != len(unloadFileNames) {
+		t.Fatalf("addUnloadFile failed, expect: %d files, get: %d files", len(unloadFileNames), len(fs.unloadFiles))
+	}
+}
+
+func TestReadMetaBlockByMetaCache(t *testing.T) {
+	fileops.EnableReadMetaCache(102400)
+	defer fileops.EnableReadMetaCache(0)
+	fileops.SetMetaPageList([]string{})
+	sig := interruptsignal.NewInterruptSignal()
+	defer func() {
+		sig.Close()
+		fileops.RemoveAll(testDir)
+	}()
+	_ = fileops.RemoveAll(testDir)
+	conf := NewTsStoreConfig()
+	tier := uint64(util.Hot)
+	lockPath := ""
+	store := NewTableStore(testDir, &lockPath, &tier, false, conf)
+	store.SetImmTableType(config.TSSTORE)
+
+	write := func(ids []uint64, data map[uint64]*record.Record, msb *MsBuilder) {
+		for _, id := range ids {
+			rec := data[id]
+			err := msb.WriteData(id, rec)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	fileSeq := uint64(1)
+	var idMinMax, tmMinMax MinMax
+	ids, data := genMemTableData(1, 10, 100, &idMinMax, &tmMinMax)
+	fileName := NewTSSPFileName(fileSeq, 0, 0, 0, true, &lockPath)
+	msb := NewMsBuilder(testDir, "mst", &lockPath, conf, 10, fileName, 0, store.Sequencer(), 2, config.TSSTORE, nil, 0)
+
+	write(ids, data, msb)
+	fileSeq++
+	store.AddTable(msb, true, false)
+
+	fs := store.tableFiles("mst", true)
+	if fs == nil {
+		t.Fatal("get mst files fail")
+	}
+
+	f := store.File("mst", fs.Files()[0].Path(), true)
+	if f == nil {
+		t.Fatal("get file fail")
+	}
+	midx, _ := f.MetaIndexAt(0)
+	if midx == nil {
+		t.Fatalf("meta index not find")
+	}
+	var err error
+	var cm1, cm2 []ChunkMeta
+	cm1, err = f.ReadChunkMetaData(0, midx, nil, fileops.IO_PRIORITY_ULTRA_HIGH)
+	assert.Equal(t, err, nil)
+
+	cm2, err = f.ReadChunkMetaData(0, midx, nil, fileops.IO_PRIORITY_ULTRA_HIGH)
+	assert.Equal(t, err, nil)
+	assert.Equal(t, len(cm1), len(cm2))
 }

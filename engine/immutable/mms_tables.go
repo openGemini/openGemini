@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -106,6 +107,7 @@ type ImmTable interface {
 	unrefMmsTable(orderWg, outOfOrderWg *sync.WaitGroup)
 	addTSSPFile(m *MmsTables, isOrder bool, f TSSPFile, nameWithVer string)
 	getTSSPFiles(m *MmsTables, mstName string, isOrder bool) (*TSSPFiles, bool)
+	addUnloadFile(m *MmsTables, isOrder bool, f TSSPInfo, nameWithVer string)
 	GetEngineType() config.EngineType
 	GetCompactionType(name string) config.CompactionType
 	getFiles(m *MmsTables, isOrder bool) map[string]*TSSPFiles
@@ -183,16 +185,6 @@ func NewTableStore(dir string, lock *string, tier *uint64, compactRecovery bool,
 	}
 	store.scheduler = scheduler.NewTaskScheduler(store.Listen, compLimiter)
 	return store
-}
-
-func addMemSize(levelName string, memSize, memOrderSize, memUnOrderSize int64) {
-	if memSize == 0 && memOrderSize == 0 && memUnOrderSize == 0 {
-		return
-	}
-	atomic.AddInt64(&nodeImmTableSizeUsed, memSize)
-	stats.ImmutableStat.Mu.Lock()
-	stats.ImmutableStat.AddMemSize(levelName, memSize, memOrderSize, memUnOrderSize)
-	stats.ImmutableStat.Mu.Unlock()
 }
 
 func (m *MmsTables) SetImmTableType(engineType config.EngineType) {
@@ -294,16 +286,6 @@ func (m *MmsTables) MergeEnabled() bool {
 	return atomic.LoadInt32(&m.mergeEn) > 0
 }
 
-func (m *MmsTables) cacheFileData() bool {
-	conf := CacheMetaInMemory() || CacheDataInMemory()
-	if *m.tier == util.Hot {
-		return conf
-	} else if *m.tier == util.Warm {
-		return false
-	}
-
-	return conf
-}
 func (m *MmsTables) SetOpId(shardId uint64, opId uint64) {
 	m.shardId = shardId
 	m.opId = opId
@@ -345,11 +327,11 @@ func (m *MmsTables) Open() (int64, error) {
 	}
 
 	m.sequencer.free()
-	ctx := &fileLoadContext{}
+	ctx := NewFileLoadContext()
 	loader := newFileLoader(m, ctx)
 	loader.maxRowsPerSegment = m.Conf.maxRowsPerSegment
 	for i := range dirs {
-		mst := dirs[i].Name() // measurement name with version
+		mst := strings.TrimSuffix(dirs[i].Name(), "/") // measurement name with version
 		loader.Load(filepath.Join(m.path, mst), mst, true)
 		loader.LoadRemote(filepath.Join(m.path, mst), mst, m.obsOpt)
 	}
@@ -360,18 +342,19 @@ func (m *MmsTables) Open() (int64, error) {
 		return 0, nil
 	}
 
-	tm = time.Now()
-	maxSeq := ctx.getMaxSeq()
-	if maxSeq > m.fileSeq {
-		m.fileSeq = maxSeq
-	}
 	errCnt, err := ctx.getError()
 	// if not all file open success, just log error and continue
 	if errCnt > 0 {
 		errInfo := errno.NewError(errno.NotAllTsspFileOpenSuccess, loader.total, errCnt)
 		lg.Error("", zap.Error(errInfo), zap.String("first error", err.Error()))
+		loader.ReloadFiles(5) // maximum retry of 5 times
 	}
 
+	maxSeq := ctx.getMaxSeq()
+	if maxSeq > m.fileSeq {
+		m.fileSeq = maxSeq
+	}
+	tm = time.Now()
 	m.sortTSSPFiles()
 	stats.ShardStepDuration(m.shardId, m.opId, "SortTSSPFileDuration", time.Since(tm).Nanoseconds(), false)
 
@@ -764,17 +747,6 @@ func deleteFiles(tsspFiles *TSSPFiles, m *MmsTables) error {
 	return err
 }
 
-func (ctx *memReaderEvictCtx) runEvictMemReaders() {
-	timer := time.NewTicker(time.Millisecond * 200)
-	for range timer.C {
-		evictSize := getImmTableEvictSize()
-		if evictSize > 0 {
-			ctx.evictMemReader(evictSize)
-		}
-	}
-	timer.Stop()
-}
-
 // now not use for tsEngine
 func (m *MmsTables) AddTSSPFiles(name string, isOrder bool, files ...TSSPFile) {
 	m.ImmTable.AddTSSPFiles(m, name, isOrder, files...)
@@ -1024,11 +996,7 @@ func (m *MmsTables) FreeAllMemReader() {
 		for _, v := range kvEntry {
 			v.lock.Lock()
 			for _, f := range v.files {
-				if !f.Inuse() {
-					_ = f.FreeMemory(true)
-					continue
-				}
-				nodeTableStoreGC.Add(true, f)
+				f.FreeMemory()
 			}
 			v.lock.Unlock()
 		}
@@ -1123,6 +1091,9 @@ func (m *MmsTables) mmsPlan(name string, files *TSSPFiles, level uint16, minGrou
 		seqByte := record.Uint64ToBytesUnsafe(seq)
 		if !seqMap.HasBytes(seqByte) {
 			plans = m.genCompactPlan(seqMap, minGroupFileN, name, level, files, plans)
+			if files.splitByUnloadFile(idx) {
+				seqMap.Reset()
+			}
 			seqMap.SetBytes(seqByte, f)
 			idx++
 		} else {
@@ -1146,6 +1117,10 @@ func (m *MmsTables) mmsPlan(name string, files *TSSPFiles, level uint16, minGrou
 }
 
 func (m *MmsTables) getMmsPlan(name string, files *TSSPFiles, level uint16, minGroupFileN int, plans []*CompactGroup) []*CompactGroup {
+	if files.hasUnloadFile() {
+		ReloadSpecifiedFiles(m, name, files)
+	}
+
 	files.lock.RLock()
 	defer files.lock.RUnlock()
 	if atomic.LoadInt64(&files.closing) > 0 || files.Len() < minGroupFileN {
@@ -1208,6 +1183,9 @@ func (m *MmsTables) NewStreamWriteFile(mst string) *StreamWriteFile {
 	sw.colSegs = make([]record.ColVal, 1)
 	sw.lock = m.lock
 	sw.colBuilder.timePreAggBuilder = acquireTimePreAggBuilder()
+	if IsChunkMetaCompressSelf() {
+		sw.chunkMetaCodecCtx = GetChunkMetaCodecCtx()
+	}
 	return sw
 }
 
@@ -1239,7 +1217,7 @@ func levelSequenceEqual(level uint16, seq uint64, f TSSPFile) bool {
 	return lv == level && seq == n
 }
 
-func recoverFile(shardDir string, lockPath *string, engineType config.EngineType, ctx EventContext) error {
+func recoverFile(shardDir string, lockPath *string, engineType config.EngineType, ctx *EventContext) error {
 	dirs, err := fileops.ReadDir(shardDir)
 	if err != nil {
 		log.Error("read table store dir fail", zap.String("path", shardDir), zap.Error(err))

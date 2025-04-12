@@ -84,3 +84,12 @@ func TestBalanceIfNeededStart(t *testing.T) {
 	bm.wg.Add(1)
 	bm.balanceIfNeeded()
 }
+
+func TestMasterPtBalance(t *testing.T) {
+	config.SetHaPolicy(config.RepPolicy)
+	bm := NewMasterPtBalanceManager()
+	globalService = &Service{store: &Store{data: &meta.Data{}}}
+	bm.Start()
+	time.Sleep(2 * time.Second)
+	bm.Stop()
+}

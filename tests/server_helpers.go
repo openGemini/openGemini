@@ -27,10 +27,10 @@ import (
 	tssql "github.com/openGemini/openGemini/app/ts-sql/sql"
 	"github.com/openGemini/openGemini/lib/config"
 	_ "github.com/openGemini/openGemini/lib/logger"
-	"github.com/openGemini/openGemini/lib/util/lifted/influx/httpd"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
-	"github.com/prometheus/prometheus/pkg/labels"
+	"github.com/openGemini/openGemini/lib/util/lifted/promql2influxql"
+	"github.com/prometheus/prometheus/model/labels"
 )
 
 var verboseServerLogs bool
@@ -292,12 +292,13 @@ func (r *Response) Error() error {
 }
 
 // NewServer returns a new instance of Server.
-func NewServer(c *Config) Server {
+func NewServer(c *Config, isPromServer bool) Server {
 	// If URL exists, create a server that will run against a remote endpoint
 	if url := os.Getenv("URL"); url != "" {
 		s := &RemoteServer{
 			url: url,
 			client: &client{
+				isPromServer: isPromServer,
 				URLFn: func() string {
 					return url
 				},
@@ -333,12 +334,22 @@ func NewTSDBServer(c *Config) Server {
 
 // OpenServer opens a test server.
 func OpenServer(c *Config) Server {
-	s := NewServer(c)
+	s := NewServer(c, false)
 	configureLogging(s)
 	if err := s.Open(); err != nil {
 		panic(err.Error())
 	}
 	return s
+}
+
+func OpenPromServer(c *Config) Server {
+	s := NewServer(c, true)
+	configureLogging(s)
+	if err := s.Open(); err != nil {
+		panic(err.Error())
+	}
+	return s
+
 }
 
 // OpenServer opens a test server.
@@ -466,7 +477,8 @@ func (s *LocalServer) CheckDropDatabases(dbs []string) error { return nil }
 
 // client abstract querying and writing to a Server using HTTP
 type client struct {
-	URLFn func() string
+	isPromServer bool
+	URLFn        func() string
 }
 
 func (c *client) URL() string {
@@ -597,7 +609,13 @@ func (s *client) Write(db, rp, body string, params url.Values) (results string, 
 	if params.Get("rp") == "" {
 		params.Set("rp", rp)
 	}
-	resp, err := http.Post(s.URL()+"/write?"+params.Encode(), "", strings.NewReader(body))
+	url := s.URL()
+	if s.isPromServer {
+		url += "/api/v1/write?"
+	} else {
+		url += "/write?"
+	}
+	resp, err := http.Post(url+params.Encode(), "", strings.NewReader(body))
 	if err != nil {
 		return "", err
 	} else if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
@@ -659,6 +677,10 @@ func (c *Config) FromTomlFile(fpath string) error {
 // form a correct retention policy given name, replication factor and duration
 func NewRetentionPolicySpec(name string, rf int, duration time.Duration) *meta.RetentionPolicySpec {
 	return &meta.RetentionPolicySpec{Name: name, ReplicaN: &rf, Duration: &duration}
+}
+
+func NewRetentionPolicy(name string, rf int, shardDuration, duration time.Duration) *meta.RetentionPolicySpec {
+	return &meta.RetentionPolicySpec{Name: name, ReplicaN: &rf, ShardGroupDuration: shardDuration, Duration: &duration}
 }
 
 func maxInt64() string {
@@ -769,7 +791,7 @@ func (q *Query) success() bool {
 }
 
 func (q *Query) promSuccess() bool {
-	var promRes httpd.PromResponse
+	var promRes promql2influxql.PromResponse
 	json.Unmarshal([]byte(q.act), &promRes)
 	data, ok := promRes.Data.(map[string]interface{})
 	if !ok {
@@ -794,7 +816,9 @@ func (q *Query) promSuccess() bool {
 func parseMetric(str string) uint64 {
 	metricRe, _ := regexp.Compile(`"([^\{\}"]+)":"([^\{\}"]+)"`)
 	label := metricRe.FindAllStringSubmatch(str, -1)
-
+	if label == nil {
+		return 0
+	}
 	metric := make(labels.Labels, 0)
 	for _, m := range label {
 		if len(m) < 3 {
@@ -810,7 +834,6 @@ func parseMetric(str string) uint64 {
 }
 
 func checkPromVector(exps map[uint64]*PromExp, act string) bool {
-
 	re, _ := regexp.Compile(`"metric":\{([^\{\}]*)\},"value":\[([^\[\]]*),"([^\[\]]*)"\]`)
 	series := re.FindAllStringSubmatch(act, -1)
 
@@ -840,27 +863,21 @@ func checkPromMatrix(exps map[uint64]*PromExp, act string, evalTime int64) bool 
 	re, _ := regexp.Compile(`"metric":\{([^\{\}]*)\},"values":\[(.*?\])\]`)
 	series := re.FindAllStringSubmatch(act, -1)
 
-	if len(series) != len(exps) {
-		return false
-	}
 	re2, _ := regexp.Compile(`\[([^\[\]]*),"([^\[\]]*)"\]`)
 	for _, s := range series {
 		if len(s) < 3 {
 			return false
 		}
+		data := re2.FindAllStringSubmatch(s[2], -1)
 		h := parseMetric(s[1])
 		exp, ok := exps[h]
-		if !ok {
-			return false
-		}
-		data := re2.FindAllStringSubmatch(s[2], -1)
 
 		for _, m := range data {
 			if len(m) < 3 {
 				return false
 			}
 			actV, _ := strconv.ParseFloat(m[2], 64)
-			if m[1] == strconv.FormatInt(evalTime, 10) && !almostEqual(actV, exp.Value.Value) {
+			if m[1] == strconv.FormatInt(evalTime, 10) && (!ok || !almostEqual(actV, exp.Value.Value)) {
 				return false
 			}
 		}

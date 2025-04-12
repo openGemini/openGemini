@@ -109,3 +109,98 @@ func Test_NumberLiteralString(t *testing.T) {
 		}
 	}
 }
+
+func Test_rewriteIpString(t *testing.T) {
+	type args struct {
+		expr *BinaryExpr
+	}
+	tests := []struct {
+		name string
+		args args
+		want string
+	}{
+		{
+			name: "when IPINRANGE(ip, '99fa:25a4:b87c:3d56:99b2:46d0:3c9e:17b1') should rewrite to IPINRANGE(ip, '99fa:25a4:b87c:3d56:99b2:46d0:3c9e:17b1/128')",
+			args: args{
+				expr: &BinaryExpr{
+					Op:  IPINRANGE,
+					LHS: &VarRef{Val: "ip"},
+					RHS: &StringLiteral{Val: "99fa:25a4:b87c:3d56:99b2:46d0:3c9e:17b1"},
+				},
+			},
+			want: "'99fa:25a4:b87c:3d56:99b2:46d0:3c9e:17b1/128'",
+		},
+		{
+			name: "when IPINRANGE(ip, '1.2.3.4') should rewrite to IPINRANGE(ip, '1.2.3.4/32')",
+			args: args{
+				expr: &BinaryExpr{
+					Op:  IPINRANGE,
+					LHS: &VarRef{Val: "ip"},
+					RHS: &StringLiteral{Val: "1.2.3.4"},
+				},
+			},
+			want: "'1.2.3.4/32'",
+		},
+		{
+			name: "when IPINRANGE(ip, '1.2.3.4/32') should rewrite to IPINRANGE(ip, '1.2.3.4/32')",
+			args: args{
+				expr: &BinaryExpr{
+					Op:  IPINRANGE,
+					LHS: &VarRef{Val: "ip"},
+					RHS: &StringLiteral{Val: "1.2.3.4/32"},
+				},
+			},
+			want: "'1.2.3.4/32'",
+		},
+		{
+			name: "when IPINRANGE(ip, 'abc') should do nothing",
+			args: args{
+				expr: &BinaryExpr{
+					Op:  IPINRANGE,
+					LHS: &VarRef{Val: "ip"},
+					RHS: &StringLiteral{Val: "abc"},
+				},
+			},
+			want: "'abc'",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_ = rewriteIpString(tt.args.expr)
+			assert.Equalf(t, tt.want, tt.args.expr.RHS.String(), "rewriteIpString()")
+		})
+	}
+}
+
+func TestCreateStreamStatement_Check_NoGroupBy(t *testing.T) {
+	c := &CreateStreamStatement{Target: &Target{Measurement: &Measurement{Database: "testdb", RetentionPolicy: "autogen"}}}
+	for _, testcase := range []struct {
+		sql    string
+		expect string
+	}{
+		{"select a::tag, b::tag, c::field from testdb.autogen.mst where c::field >= 1.0", ""},
+		{"select sum(c::field) from testdb.autogen.mst where c::field >= 1.0", "the filter-only stream task can contain only var_ref(tag or field)"},
+		{"select a::tag, c::field from testdb.autogen.mst where c::field >= 1.0", "all tags must be selected for the filter-only stream task"},
+		{"select a::tag, b::tag, c::field from (select * from testdb.autogen.mst)", "only measurement is allowed for the data source"},
+		{"select a::tag, b::tag, c::field from testdb.autogen.mst1, testdb.autogen.mst2", "only one source can be selected"},
+		{"select a::tag, b::tag, c::field from testdb.autogen.mst1 where d::field =~ /test*/", "only support int/float/bool/string/field condition"},
+		{"select a::tag, b::tag, c::field from testdb2.autogen.mst1 where c::field >= 1.0", "the source and destination measurement must be in the same database"},
+		{"select a::tag, b::tag, c::field from testdb.testrp.mst1 where c::field >= 1.0", "the source and destination measurement must be in the same retention policy"},
+	} {
+		stmt, err := ParseStatement(testcase.sql)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		selectStmt, ok := stmt.(*SelectStatement)
+		if !ok {
+			t.Fatal("not a select")
+		}
+		err = c.Check(selectStmt, map[string]bool{}, 2)
+		if testcase.expect == "" {
+			assert.NoError(t, err)
+		} else {
+			assert.EqualError(t, err, testcase.expect)
+		}
+	}
+}

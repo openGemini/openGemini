@@ -28,6 +28,8 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/openGemini/openGemini/lib/validation"
+	"github.com/openGemini/openGemini/services/runtimecfg"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -346,4 +348,24 @@ func Test_NewServer_IncSyncData_Enabled(t *testing.T) {
 
 	err = server.Close()
 	require.NoError(t, err)
+}
+
+func TestRuntimeCfgDefaultDisabled(t *testing.T) {
+	cfg := config.NewRuntimeConfig()
+	cfg.Enabled = false
+	s := runtimecfg.NewService(cfg, logger.NewLogger(0))
+	// append limits to httpservice handle
+	limits := validation.InitOverrides(config.NewLimits(), s)
+	enable := limits.PromLimitEnabled("test")
+	require.Equal(t, false, enable)
+}
+
+func TestRuntimeCfgDefaultEnabled(t *testing.T) {
+	cfg := config.NewRuntimeConfig()
+	cfg.Enabled = true
+	s := runtimecfg.NewService(cfg, logger.NewLogger(0))
+	// append limits to httpservice handle
+	limits := validation.InitOverrides(config.NewLimits(), s)
+	enable := limits.PromLimitEnabled("test")
+	require.Equal(t, false, enable)
 }

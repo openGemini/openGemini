@@ -34,6 +34,11 @@ type ShardDurationInfo struct {
 	DurationInfo DurationDescriptor
 }
 
+type IndexDurationInfo struct {
+	Ident        IndexBuilderIdentifier
+	DurationInfo DurationDescriptor
+}
+
 type ShardDurationResponse struct {
 	DataIndex uint64
 	Durations []ShardDurationInfo
@@ -71,6 +76,43 @@ func (r *ShardDurationResponse) UnmarshalBinary(buf []byte) error {
 	return nil
 }
 
+type IndexDurationResponse struct {
+	DataIndex uint64
+	Durations []IndexDurationInfo
+}
+
+func (r *IndexDurationResponse) marshal() *proto2.IndexDurationResponse {
+	pb := &proto2.IndexDurationResponse{}
+	pb.DataIndex = proto.Uint64(r.DataIndex)
+	pb.Durations = make([]*proto2.IndexDurationInfo, len(r.Durations))
+	for i := range r.Durations {
+		pb.Durations[i] = r.Durations[i].marshal()
+	}
+	return pb
+}
+
+func (r *IndexDurationResponse) MarshalBinary() ([]byte, error) {
+	pb := r.marshal()
+	return proto.Marshal(pb)
+}
+
+func (r *IndexDurationResponse) unmarshal(pb *proto2.IndexDurationResponse) {
+	r.DataIndex = pb.GetDataIndex()
+	r.Durations = make([]IndexDurationInfo, len(pb.GetDurations()))
+	for i := range pb.GetDurations() {
+		r.Durations[i].unmarshal(pb.GetDurations()[i])
+	}
+}
+
+func (r *IndexDurationResponse) UnmarshalBinary(buf []byte) error {
+	pb := &proto2.IndexDurationResponse{}
+	if err := proto.Unmarshal(buf, pb); err != nil {
+		return err
+	}
+	r.unmarshal(pb)
+	return nil
+}
+
 type ShardTimeRangeInfo struct {
 	TimeRange     TimeRangeInfo
 	OwnerIndex    IndexDescriptor
@@ -89,6 +131,18 @@ type ShardIdentifier struct {
 	DownSampleID    uint64
 	ReadOnly        bool
 	EngineType      uint32
+	StartTime       time.Time
+	EndTime         time.Time
+}
+
+type IndexBuilderIdentifier struct {
+	IndexID      uint64
+	IndexGroupID uint64
+	Policy       string
+	OwnerDb      string
+	OwnerPt      uint32
+	StartTime    time.Time
+	EndTime      time.Time
 }
 
 type IndexIdentifier struct {
@@ -188,6 +242,33 @@ func (d *ShardDurationInfo) unmarshal(pb *proto2.ShardDurationInfo) {
 	d.DurationInfo.unmarshal(pb.GetDurationInfo())
 }
 
+func (d *IndexDurationInfo) MarshalBinary() ([]byte, error) {
+	return proto.Marshal(d.marshal())
+}
+
+func (d *IndexDurationInfo) UnmarshalBinary(buf []byte) error {
+	pb := &proto2.IndexDurationInfo{}
+	if err := proto.Unmarshal(buf, pb); err != nil {
+		return err
+	}
+	d.unmarshal(pb)
+	return nil
+}
+
+func (d *IndexDurationInfo) marshal() *proto2.IndexDurationInfo {
+	pb := &proto2.IndexDurationInfo{}
+	pb.Ident = d.Ident.marshal()
+	pb.DurationInfo = d.DurationInfo.marshal()
+	return pb
+}
+
+func (d *IndexDurationInfo) unmarshal(pb *proto2.IndexDurationInfo) {
+	if pb.Ident != nil {
+		d.Ident.unmarshal(pb.GetIdent())
+	}
+	d.DurationInfo.unmarshal(pb.GetDurationInfo())
+}
+
 func (d *DurationDescriptor) marshal() *proto2.DurationDescriptor {
 	pb := &proto2.DurationDescriptor{}
 	pb.TierType = proto.Uint64(d.Tier)
@@ -218,6 +299,8 @@ func (i *ShardIdentifier) marshal() *proto2.ShardIdentifier {
 	pb.DownSampleID = proto.Uint64(i.DownSampleID)
 	pb.ReadOnly = proto.Bool(i.ReadOnly)
 	pb.EngineType = proto.Uint32(i.EngineType)
+	pb.StartTime = proto.Int64(MarshalTime(i.StartTime))
+	pb.EndTime = proto.Int64(MarshalTime(i.EndTime))
 	return pb
 }
 
@@ -240,6 +323,30 @@ func (i *ShardIdentifier) unmarshal(ident *proto2.ShardIdentifier) {
 	i.DownSampleID = ident.GetDownSampleID()
 	i.ReadOnly = ident.GetReadOnly()
 	i.EngineType = ident.GetEngineType()
+	i.StartTime = UnmarshalTime(ident.GetStartTime())
+	i.EndTime = UnmarshalTime(ident.GetEndTime())
+}
+
+func (i *IndexBuilderIdentifier) marshal() *proto2.IndexIdentifier {
+	pb := &proto2.IndexIdentifier{}
+	pb.IndexID = proto.Uint64(i.IndexID)
+	pb.OwnerDb = proto.String(i.OwnerDb)
+	pb.OwnerPt = proto.Uint32(i.OwnerPt)
+	pb.IndexGroupID = proto.Uint64(i.IndexGroupID)
+	pb.Policy = proto.String(i.Policy)
+	pb.StartTime = proto.Int64(MarshalTime(i.StartTime))
+	pb.EndTime = proto.Int64(MarshalTime(i.EndTime))
+	return pb
+}
+
+func (i *IndexBuilderIdentifier) unmarshal(ident *proto2.IndexIdentifier) {
+	i.OwnerDb = ident.GetOwnerDb()
+	i.OwnerPt = ident.GetOwnerPt()
+	i.IndexID = ident.GetIndexID()
+	i.IndexGroupID = ident.GetIndexGroupID()
+	i.Policy = ident.GetPolicy()
+	i.StartTime = UnmarshalTime(ident.GetStartTime())
+	i.EndTime = UnmarshalTime(ident.GetEndTime())
 }
 
 type NodeStartInfo struct {

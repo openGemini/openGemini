@@ -230,6 +230,24 @@ func NewMultiSourceSchema() hybridqp.Catalog {
 	return schema
 }
 
+func NewFillNoneWithLimitSchema() hybridqp.Catalog {
+	fields := []*influxql.Field{
+		{
+			Expr: &influxql.VarRef{
+				Val:  "value",
+				Type: influxql.Integer,
+			},
+		},
+	}
+	opt := query.ProcessorOptions{
+		Dimensions: []string{"tag1"},
+		Limit:      1,
+		Fill:       influxql.NoFill,
+	}
+	schema := executor.NewQuerySchema(fields, []string{"value"}, &opt, nil)
+	return schema
+}
+
 func NewFullSeriesHintSchema() hybridqp.Catalog {
 	fields := []*influxql.Field{
 		{
@@ -248,9 +266,9 @@ func NewFullSeriesHintSchema() hybridqp.Catalog {
 
 func TestUnCachedPlanType(t *testing.T) {
 	schema := []hybridqp.Catalog{NewHintSchema(), NewHoltWinterSchema(), NewAggGroupSchema(), NewAggGroupLimitSchema(),
-		NewAggGroupSchema(), NewMultiSourceSchema()}
+		NewAggGroupSchema(), NewMultiSourceSchema(), NewFillNoneWithLimitSchema()}
 	stmt := []*influxql.SelectStatement{nil, nil, &influxql.SelectStatement{Target: &influxql.Target{}}, nil,
-		&influxql.SelectStatement{Sources: []influxql.Source{&influxql.Measurement{Regex: &influxql.RegexLiteral{}}}}, nil}
+		&influxql.SelectStatement{Sources: []influxql.Source{&influxql.Measurement{Regex: &influxql.RegexLiteral{}}}}, nil, nil}
 	for i, s := range schema {
 		planType := executor.NormalGetPlanType(s, stmt[i])
 		if planType != executor.UNKNOWN {

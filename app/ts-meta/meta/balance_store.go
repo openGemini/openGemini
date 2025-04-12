@@ -716,3 +716,103 @@ func (s *Store) isOldPt(db string, ptInfo meta.PtInfo) bool {
 	halfPtId := len(s.data.PtView[db]) / 2
 	return ptInfo.PtId < uint32(halfPtId)
 }
+
+// 1.pt online; 2.pt owner node alive; 3.pt owner node is not overLimit after Elect
+func (s *Store) CanElectAsNewRgMaster(newMasterPt uint32, db string, masterPtNumMap *map[uint64]int, limit int) (uint64, bool) {
+	pts := s.data.PtView[db]
+	for _, pt := range pts {
+		if pt.PtId == newMasterPt {
+			if pt.Status == meta.Online && s.data.DataNode(pt.Owner.NodeID).Status == serf.StatusAlive &&
+				(*masterPtNumMap)[pt.Owner.NodeID]+1 <= limit {
+				return pt.Owner.NodeID, true
+			} else {
+				return 0, false
+			}
+		}
+	}
+	return 0, false
+}
+
+func (s *Store) ElectNewRgMaster(rg *meta.ReplicaGroup, limit int, db string, masterPtNumMap *map[uint64]int) (uint64, uint32, bool) {
+	// 1.no slavePt to elect
+	if len(rg.Peers) == 0 {
+		return 0, 0, false
+	}
+
+	// 2.elect a satisficing slave pt as newRgMaster
+	var newMasterPt uint32
+	for _, peer := range rg.Peers {
+		newMasterPt = peer.ID
+		dstNode, ok := s.CanElectAsNewRgMaster(newMasterPt, db, masterPtNumMap, limit)
+		if ok {
+			return dstNode, newMasterPt, true
+		}
+	}
+	return 0, 0, false
+}
+
+func (s *Store) GetMasterPtLimitPerNode() int {
+	rgn := s.data.DBRGN()
+	if len(s.data.DataNodes) == 0 {
+		return 0
+	}
+	if rgn%len(s.data.DataNodes) > 0 {
+		return rgn/len(s.data.DataNodes) + 1
+	}
+	return rgn / len(s.data.DataNodes)
+}
+
+func (s *Store) selectUpdateRGEvents() ([]string, []uint32, []uint32, [][]meta.Peer) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if config.GetHaPolicy() != config.Replication || !s.data.BalancerEnabled {
+		return nil, nil, nil, nil
+	}
+	limit := s.GetMasterPtLimitPerNode()
+	masterPtNumMap := make(map[uint64]int) // <nodeId, materPtN>
+
+	rgss := make([][]*meta.ReplicaGroup, 0) // overLimit nodes' masterPtRgs
+	dbss := make([][]string, 0)
+	nodes := make([]uint64, 0)
+
+	eventPts := make([]uint32, 0)
+	eventPeers := make([][]meta.Peer, 0)
+	eventDbs := make([]string, 0)
+	eventRgs := make([]uint32, 0)
+
+	// 1.cal masterPtN each alive node; get masterPtRgs each alive overLimit node
+	for _, node := range s.data.DataNodes {
+		if node.Status != serf.StatusAlive {
+			continue
+		}
+		rgs, dbs := s.data.GetRgsOfNodeMasterPts(node)
+		masterPtNumMap[node.ID] = len(rgs)
+		if len(rgs) > limit {
+			rgss = append(rgss, rgs)
+			dbss = append(dbss, dbs)
+			nodes = append(nodes, node.ID)
+		}
+	}
+
+	var srcNode uint64
+	// 2.elect newRgMaster of each rg of each overLimit node until it's not overLimit
+	for i, rgs := range rgss {
+		srcNode = nodes[i]
+		for j, rg := range rgs {
+			dstNode, newMasterPt, ok := s.ElectNewRgMaster(rg, limit, dbss[i][j], &masterPtNumMap)
+			if ok {
+				masterPtNumMap[srcNode] = masterPtNumMap[srcNode] - 1
+				masterPtNumMap[dstNode] = masterPtNumMap[dstNode] + 1
+				eventPts = append(eventPts, newMasterPt)
+				eventPeers = append(eventPeers, rg.GenerateNewPeer(newMasterPt))
+				eventDbs = append(eventDbs, dbss[i][j])
+				eventRgs = append(eventRgs, rg.ID)
+				if masterPtNumMap[srcNode] <= limit {
+					break
+				}
+			}
+		}
+	}
+	return eventDbs, eventRgs, eventPts, eventPeers
+}

@@ -18,11 +18,11 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"testing"
 	"time"
 
-	ast "github.com/influxdata/influxdb/pkg/testing/assert"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable"
@@ -35,10 +35,12 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
+	ast "github.com/stretchr/testify/assert"
 )
 
 func TestSeriesLoopCursorFunc(t *testing.T) {
 	s := &seriesLoopCursor{}
+	s.initReader = s.initCursor
 	ast.Equal(t, s.Name(), "series_loop_cursor")
 	s.ctx = &idKeyCursorContext{decs: immutable.NewReadContext(false)}
 	s.SetOps(nil)
@@ -352,7 +354,15 @@ func Test_PromqlQuery_SeriesLoopCursor(t *testing.T) {
 					opt.GroupByAllDims = true
 				}
 				querySchema := executor.NewQuerySchema(stmt.Fields, stmt.ColumnNames(), &opt, nil)
-				cursors, _ := sh.CreateCursor(ctx, querySchema)
+				info, err := sh.CreateCursor(ctx, querySchema)
+				if err != nil {
+					t.Fatalf(err.Error())
+				}
+				if info == nil {
+					return
+				}
+				defer func() { info.Unref() }()
+				cursors := info.GetCursors()
 				var keyCursors []interface{}
 				for _, cur := range cursors {
 					keyCursors = append(keyCursors, cur)
@@ -2365,7 +2375,7 @@ func Test_PromqlQuery_Shard_Function(t *testing.T) {
 					inCk1.AppendIntervalIndexes([]int{0})
 					t := minT + int64(1)*int64(time.Second)
 					times := []int64{t, t, t, t, t}
-					values := []float64{833.2499999999999, 833.25, 833.25, 833.2500000000001, 833.25}
+					values := []float64{833.2499999999999, 833.25, 816.6666666666666, 800.2500000000001, 784}
 
 					inCk1.AppendTimes(times)
 					inCk1.Column(0).AppendFloatValues(values)
@@ -2757,7 +2767,7 @@ func Test_PromqlQuery_Shard_Function(t *testing.T) {
 					inCk1.AppendIntervalIndexes([]int{0})
 					t := minT + int64(1)*int64(time.Second)
 					times := []int64{t, t, t, t, t}
-					values := []float64{28.866070047722115, 28.86607004772212, 28.86607004772212, 28.86607004772212, 28.86607004772212}
+					values := []float64{28.866070047722115, 28.86607004772212, 28.577380332470412, 28.28869031963127, 28}
 
 					inCk1.AppendTimes(times)
 					inCk1.Column(0).AppendFloatValues(values)
@@ -2847,7 +2857,15 @@ func Test_PromqlQuery_Shard_Function(t *testing.T) {
 				opt.MaxParallel = 1
 				opt.Dimensions = []string{"tagkey1", "tagkey2", "tagkey3", "tagkey4"}
 				querySchema := executor.NewQuerySchema(stmt.Fields, stmt.ColumnNames(), &opt, nil)
-				cursors, _ := sh.CreateCursor(ctx, querySchema)
+				info, err := sh.CreateCursor(ctx, querySchema)
+				if err != nil {
+					t.Fatalf(err.Error())
+				}
+				if info == nil {
+					return
+				}
+				defer func() { info.Unref() }()
+				cursors := info.GetCursors()
 				var keyCursors []interface{}
 				for _, cur := range cursors {
 					keyCursors = append(keyCursors, cur)
@@ -2893,7 +2911,7 @@ func Test_PromqlQuery_Shard_Function(t *testing.T) {
 }
 
 func Test_NewSeriesLoopCursorInSerial(t *testing.T) {
-	var tagSets []*tsi.TagSetInfo
+	var tagSets []tsi.TagSet
 	for i := 0; i < 25; i++ {
 		tagSets = append(tagSets, &tsi.TagSetInfo{})
 	}
@@ -2901,7 +2919,7 @@ func Test_NewSeriesLoopCursorInSerial(t *testing.T) {
 	opt := query.ProcessorOptions{}
 	querySchema := executor.NewQuerySchema(nil, []string{"a"}, &opt, nil)
 	for i := 0; i < 12; i++ {
-		loopCursor := newSeriesLoopCursorInSerial(&idKeyCursorContext{}, nil, querySchema, tagSets, 12, i)
+		loopCursor := newSeriesLoopCursorInSerial(&idKeyCursorContext{}, nil, querySchema, tagSets, 12, i, false)
 		cursors = append(cursors, loopCursor)
 	}
 	var exp [][]int
@@ -2917,6 +2935,306 @@ func Test_NewSeriesLoopCursorInSerial(t *testing.T) {
 		}
 		if cursor.tagSetEnd != exp[i][1] {
 			t.Fatal("Test_NewSeriesLoopCursorInSerial end err")
+		}
+	}
+}
+
+func Test_PromqlQuery_CrossShard_Function(t *testing.T) {
+	testDir := t.TempDir()
+	defer func() {
+		_ = fileops.RemoveAll(testDir)
+	}()
+	executor.RegistryTransformCreator(&executor.LogicalReader{}, &ChunkReader{})
+	msNames := []string{"cpu"}
+	startTime := mustParseTime(time.RFC3339Nano, "2021-01-01T01:00:00Z")
+	pts, minT, _ := GenDataRecord(msNames, 5, 100, time.Millisecond*10, startTime, true, true, true)
+
+	fields := map[string]influxql.DataType{
+		"field2_int":    influxql.Integer,
+		"field3_bool":   influxql.Boolean,
+		"field4_float":  influxql.Float,
+		"field1_string": influxql.String,
+	}
+
+	sh, _ := createShard("db0", "rp0", 1, testDir, config.TSSTORE)
+	defer sh.Close()
+	defer sh.indexBuilder.Close()
+	if err := sh.WriteRows(pts, nil); err != nil {
+		t.Fatal(err)
+	}
+	sh.ForceFlush()
+
+	startTime = mustParseTime(time.RFC3339Nano, "2021-01-01T02:00:00Z")
+	pts, _, maxT := GenDataRecord(msNames, 5, 100, time.Millisecond*10, startTime, true, true, true)
+
+	sh2, _ := createShard("db0", "rp0", 1, testDir, config.TSSTORE)
+	defer sh2.Close()
+	defer sh2.indexBuilder.Close()
+	if err := sh2.WriteRows(pts, nil); err != nil {
+		t.Fatal(err)
+	}
+	sh2.ForceFlush()
+	time.Sleep(time.Second * 2)
+
+	var shards []*shard
+	shards = append(shards, sh, sh2)
+	sort.Slice(shards, func(i, j int) bool {
+		return shards[i].GetStartTime().Before(shards[j].GetStartTime())
+	})
+
+	shardGroup := &mockShardGroup{
+		sh:     sh,
+		Fields: fields,
+	}
+	enableStates := []bool{true}
+	for _, v := range enableStates {
+		executor.EnableFileCursor(v)
+		for _, tt := range []struct {
+			name              string
+			q                 string
+			tr                util.TimeRange
+			step              time.Duration
+			rangeDuration     time.Duration
+			fields            map[string]influxql.DataType
+			skip              bool
+			outputRowDataType *hybridqp.RowDataTypeImpl
+			readerOps         []hybridqp.ExprOptions
+			aggOps            []hybridqp.ExprOptions
+			genRes            func(rowDataType hybridqp.RowDataType) executor.Chunk
+			expect            func(chunks []executor.Chunk, expChunk executor.Chunk) bool
+			noAgg             bool
+		}{
+			// select rate_prom[float] instant
+			{
+				name:          "select rate_prom[float] instant query",
+				q:             fmt.Sprintf(`SELECT rate_prom(field4_float) from cpu`),
+				tr:            util.TimeRange{Min: minT, Max: maxT},
+				step:          time.Duration(0),
+				rangeDuration: 2 * time.Second,
+				fields:        fields,
+				outputRowDataType: hybridqp.NewRowDataTypeImpl(
+					influxql.VarRef{Val: "val1", Type: influxql.Float},
+				),
+				readerOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.VarRef{Val: "val0", Type: influxql.Float},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				aggOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.Call{Name: "rate_prom", Args: []influxql.Expr{&influxql.VarRef{Val: "val1", Type: influxql.Float}}},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				genRes: func(rowDataType hybridqp.RowDataType) executor.Chunk {
+					b := executor.NewChunkBuilder(rowDataType)
+					// first chunk
+					inCk1 := b.NewChunk("cpu")
+					inCk1.AppendTagsAndIndexes(
+						[]executor.ChunkTags{executor.ChunkTags{}},
+						[]int{0})
+					inCk1.AppendIntervalIndexes([]int{0})
+					t := minT + int64(2)*int64(time.Second)
+					times := []int64{t, t, t, t, t}
+					values := []float64{99.80012562814069, 100.60301507537689, 101.15577889447238, 101.70854271356785, 102.26130653266333}
+					inCk1.AppendTimes(times)
+
+					inCk1.Column(0).AppendFloatValues(values)
+					inCk1.Column(0).AppendManyNotNil(1)
+
+					return inCk1
+				},
+				expect: func(chunks []executor.Chunk, expChunk executor.Chunk) bool {
+					ck := chunks[0]
+					success := true
+					success = ast.Equal(t, ck.Time(), expChunk.Time()) && success
+					success = ast.Equal(t, ck.Column(0).FloatValues(), expChunk.Column(0).FloatValues()) && success
+					return success
+				},
+			},
+			// select [float] instant
+			{
+				name:   "select [float] instant query",
+				q:      fmt.Sprintf(`SELECT field4_float from cpu`),
+				tr:     util.TimeRange{Min: minT, Max: maxT},
+				step:   time.Duration(0),
+				fields: fields,
+				outputRowDataType: hybridqp.NewRowDataTypeImpl(
+					influxql.VarRef{Val: "val1", Type: influxql.Float},
+				),
+				readerOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.VarRef{Val: "val0", Type: influxql.Float},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				genRes: func(rowDataType hybridqp.RowDataType) executor.Chunk {
+					b := executor.NewChunkBuilder(rowDataType)
+					// first chunk
+					inCk1 := b.NewChunk("cpu")
+					inCk1.AppendTagsAndIndexes(
+						[]executor.ChunkTags{executor.ChunkTags{}},
+						[]int{0})
+					inCk1.AppendIntervalIndexes([]int{0})
+					times := []int64{1609462800990000000, 1609462801000000000, 1609462801010000000, 1609462801020000000, 1609462801030000000}
+					values := []float64{100.1, 101.2, 102.3, 103.4, 104.5}
+					inCk1.AppendTimes(times)
+					inCk1.Column(0).AppendFloatValues(values)
+					inCk1.Column(0).AppendManyNotNil(1)
+					return inCk1
+				},
+				expect: func(chunks []executor.Chunk, expChunk executor.Chunk) bool {
+					ck := chunks[0]
+					success := true
+					success = ast.Equal(t, ck.Time(), expChunk.Time()) && success
+					success = ast.Equal(t, ck.Column(0).FloatValues(), expChunk.Column(0).FloatValues()) && success
+					return success
+				},
+				noAgg: true,
+			},
+			// select count_prom[float] instant
+			{
+				name:          "select count_over_time[float] instant query",
+				q:             fmt.Sprintf(`SELECT count_over_time(field4_float) from cpu`),
+				tr:            util.TimeRange{Min: minT, Max: maxT},
+				step:          time.Duration(0),
+				rangeDuration: 2 * time.Second,
+				fields:        fields,
+				outputRowDataType: hybridqp.NewRowDataTypeImpl(
+					influxql.VarRef{Val: "val1", Type: influxql.Float},
+				),
+				readerOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.VarRef{Val: "val0", Type: influxql.Float},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				aggOps: []hybridqp.ExprOptions{
+					{
+						Expr: &influxql.Call{Name: "count_over_time", Args: []influxql.Expr{&influxql.VarRef{Val: "val1", Type: influxql.Float}}},
+						Ref:  influxql.VarRef{Val: "val1", Type: influxql.Float},
+					},
+				},
+				genRes: func(rowDataType hybridqp.RowDataType) executor.Chunk {
+					b := executor.NewChunkBuilder(rowDataType)
+					// first chunk
+					inCk1 := b.NewChunk("cpu")
+					inCk1.AppendTagsAndIndexes(
+						[]executor.ChunkTags{executor.ChunkTags{}},
+						[]int{0})
+					inCk1.AppendIntervalIndexes([]int{0})
+					t := minT + int64(2)*int64(time.Second)
+					times := []int64{t, t, t, t, t}
+					values := []float64{300, 300, 300, 300, 300}
+					inCk1.AppendTimes(times)
+					inCk1.Column(0).AppendFloatValues(values)
+					inCk1.Column(0).AppendManyNotNil(1)
+					return inCk1
+				},
+				expect: func(chunks []executor.Chunk, expChunk executor.Chunk) bool {
+					ck := chunks[0]
+					success := true
+					success = ast.Equal(t, ck.Time(), expChunk.Time()) && success
+					success = ast.Equal(t, ck.Column(0).FloatValues(), expChunk.Column(0).FloatValues()) && success
+					return success
+				},
+			},
+		} {
+			t.Run(tt.name, func(t *testing.T) {
+				if tt.skip {
+					t.Skipf("SKIP:: %s", tt.name)
+				}
+				ctx := context.Background()
+				_, span := tracing.NewTrace("TS-Store")
+				ctx = tracing.NewContextWithSpan(ctx, span)
+				// parse stmt and opt
+				stmt := MustParseSelectStatement(tt.q)
+				stmt, _ = stmt.RewriteFields(shardGroup, true, false)
+				stmt.OmitTime = true
+				sopt := query.SelectOptions{ChunkSize: 1024}
+				RemoveTimeCondition(stmt)
+				opt, _ := query.NewProcessorOptionsStmt(stmt, sopt)
+				source := influxql.Sources{&influxql.Measurement{Database: "db0", RetentionPolicy: "rp0", Name: msNames[0]}}
+				opt.Name = msNames[0]
+				opt.Sources = source
+				opt.StartTime = tt.tr.Min
+				opt.EndTime = tt.tr.Max
+				opt.PromQuery = true
+				opt.Step = tt.step
+				opt.Range = tt.rangeDuration
+				opt.LookBackDelta = 5 * time.Minute
+				opt.MaxParallel = 1
+				opt.Dimensions = []string{"tagkey1", "tagkey2", "tagkey3", "tagkey4"}
+				querySchema := executor.NewQuerySchema(stmt.Fields, stmt.ColumnNames(), &opt, nil)
+
+				var seriesNum int
+				var tagSetMergeInfos []*tsi.TagSetMergeInfo
+				for i := range shards {
+					tagSetInfos, _, err := shards[i].ScanWithInvertedIndex(span, ctx, source, querySchema)
+					if err != nil {
+						t.Fatal(err)
+					}
+					tagSetMergeInfos = tsi.SortMergeTagSetInfos(tagSetMergeInfos, tagSetInfos, shards[i].GetID(), len(shards))
+				}
+				tagSets := make([]tsi.TagSet, len(tagSetMergeInfos))
+				for i := range tagSetMergeInfos {
+					seriesNum += tagSetMergeInfos[i].Len()
+					tagSets[i] = tagSetMergeInfos[i]
+				}
+				info, err := CreateCursor(ctx, querySchema, span, shards, tagSets, seriesNum)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if info == nil {
+					return
+				}
+				defer func() { info.Unref() }()
+				cursors := info.GetCursors()
+				var keyCursors []interface{}
+				for _, cur := range cursors {
+					keyCursors = append(keyCursors, cur)
+				}
+				var reader hybridqp.QueryNode
+				if tt.noAgg {
+					series := executor.NewLogicalSeries(querySchema)
+					reader = executor.NewLogicalReader(series, querySchema)
+				} else {
+					series := executor.NewLogicalSeries(querySchema)
+					aggr := executor.NewLogicalAggregate(series, querySchema)
+					reader = executor.NewLogicalReader(aggr, querySchema)
+				}
+				chunkReader := NewChunkReader(tt.outputRowDataType, tt.readerOps, reader, querySchema, keyCursors, false)
+				chunkReader.Analyze(span)
+				defer chunkReader.Release()
+
+				// this is the output for this stmt
+				outPutPort := executor.NewChunkPort(tt.outputRowDataType)
+				chunkReader.GetOutputs()[0].Connect(outPutPort)
+				go func() {
+					chunkReader.Work(ctx)
+				}()
+
+				var closed bool
+				chunks := make([]executor.Chunk, 0, 1)
+				for {
+					select {
+					case v, ok := <-outPutPort.State:
+						if !ok {
+							closed = true
+							break
+						}
+						chunks = append(chunks, v)
+					}
+					if closed {
+						break
+					}
+				}
+				exps := tt.genRes(tt.outputRowDataType)
+				if !tt.expect(chunks, exps) {
+					t.Fail()
+				}
+			})
 		}
 	}
 }

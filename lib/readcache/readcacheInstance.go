@@ -40,6 +40,7 @@ type ReadCacheInstance struct {
 
 func SetReadMetaCacheLimitSize(size uint64) {
 	readMetaCacheLimitSize = size
+	MetaCachePool.SetLimit(size)
 }
 
 func SetReadDataCacheLimitSize(size uint64) {
@@ -127,23 +128,23 @@ func (c *ReadCacheInstance) GetPageCache(key string) (value interface{}, hit boo
 
 // AddPage adds a byteArray value to the ReadCacheInstance, and Without this key, it will build a new page.
 // Returns true if an eviction occurred.
-func (c *ReadCacheInstance) AddPage(key string, value []byte, size int64) {
-	c.cache.add(key, value, size)
+func (c *ReadCacheInstance) AddPage(key string, value []byte, size int64, pool PagePool) {
+	c.cache.add(key, value, size, pool)
 }
 
-func (c *ReadCacheInstance) AddPageCache(key string, cachePage *CachePage, size int64) {
-	c.cache.addPageCache(key, cachePage, size)
+func (c *ReadCacheInstance) AddPageCache(key string, cachePage *CachePage, size int64, pool PagePool) {
+	c.cache.addPageCache(key, cachePage, size, pool)
 }
 
 // RefreshOldBuffer clear oldBuffer, put currBuffer to oldBuffer, then clear currBuffer.
-func (c *ReadCacheInstance) RefreshOldBuffer() {
+func (c *ReadCacheInstance) RefreshOldBuffer(pool PagePool) {
 	logger.GetLogger().Info("enter ReadCacheInstance refreshOldBuffer function")
-	c.cache.refreshOldBuffer()
+	c.cache.refreshOldBuffer(pool)
 }
 
-func (c *ReadCacheInstance) RefreshOldBufferAndUnrefCachePage() {
+func (c *ReadCacheInstance) RefreshOldBufferAndUnrefCachePage(pool PagePool) {
 	logger.GetLogger().Info("enter ReadSegmentCacheInstance refreshOldBuffer function")
-	c.cache.refreshOldBufferAndUnrefCachePage()
+	c.cache.refreshOldBufferAndUnrefCachePage(pool)
 }
 
 // Contains checks if a key is in the cache.
@@ -152,14 +153,14 @@ func (c *ReadCacheInstance) Contains(key string) bool {
 }
 
 // Purge clear all data in the cache instance.
-func (c *ReadCacheInstance) Purge() {
+func (c *ReadCacheInstance) Purge(pool PagePool) {
 	logger.GetLogger().Info("enter ReadCacheInstance Purge function")
-	c.cache.purge()
+	c.cache.purge(pool)
 }
 
-func (c *ReadCacheInstance) PurgeAndUnrefCachePage() {
+func (c *ReadCacheInstance) PurgeAndUnrefCachePage(pool PagePool) {
 	logger.GetLogger().Info("enter ReadSegmentCacheInstance Purge function")
-	c.cache.purgeAndUnrefCachePage()
+	c.cache.purgeAndUnrefCachePage(pool)
 }
 
 // GetHitRatio get cache hit ratio

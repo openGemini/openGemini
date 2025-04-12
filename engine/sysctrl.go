@@ -24,7 +24,9 @@ import (
 	"github.com/openGemini/openGemini/lib/memory"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/sysconfig"
 	"github.com/openGemini/openGemini/lib/syscontrol"
+	"github.com/openGemini/openGemini/services/stream"
 	"github.com/pingcap/failpoint"
 	"go.uber.org/zap"
 )
@@ -178,14 +180,14 @@ func (e *Engine) processReq(req *netstorage.SysCtrlRequest) (map[string]string, 
 		if err != nil {
 			return nil, err
 		}
-		syscontrol.UpdateInterruptQuery(switchOn)
+		sysconfig.SetInterruptQuery(switchOn)
 		return nil, nil
 	case syscontrol.UpperMemUsePct:
 		upper, err := syscontrol.GetIntValue(req.Param(), "limit")
 		if err != nil {
 			return nil, err
 		}
-		syscontrol.SetUpperMemUsePct(upper)
+		sysconfig.SetUpperMemPct(upper)
 		return nil, nil
 	case syscontrol.Backup:
 		e.mu.Lock()
@@ -204,6 +206,13 @@ func (e *Engine) processReq(req *netstorage.SysCtrlRequest) (map[string]string, 
 			return nil, nil
 		}
 		e.backup.IsAborted = true
+		return nil, nil
+	case syscontrol.WriteStreamPointsEnable:
+		switchOn, err := syscontrol.GetBoolValue(req.Param(), "switchon")
+		if err != nil {
+			return nil, err
+		}
+		stream.SetWriteStreamPointsEnabled(switchOn)
 		return nil, nil
 	default:
 		return nil, fmt.Errorf("unknown sys cmd %v", req.Mod())

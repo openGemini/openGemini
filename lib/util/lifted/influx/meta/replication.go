@@ -136,8 +136,17 @@ func AzHardChooseRG(data *Data, db string, newNode *DataNode, replicasN int) {
 	joinRpGroup(data, db, newNode, replicasN, rgStart, currentNodeAz, joinForAzHard)
 }
 
+func notContainsRG(prePtRGIds []uint32, rgId uint32) bool {
+	for _, id := range prePtRGIds {
+		if id == rgId {
+			return false
+		}
+	}
+	return true
+}
+
 func joinRpGroup(data *Data, db string, newNode *DataNode, replicasN int, rgStart int, currentNodeAz string, joinFunc JoinForRgFn) {
-	var prePtRGId uint32
+	var prePtRGIds []uint32
 	initFirstPtRg := false
 	for ptLoc, pt := range data.PtView[db] {
 		if pt.Owner.NodeID == newNode.ID {
@@ -145,12 +154,12 @@ func joinRpGroup(data *Data, db string, newNode *DataNode, replicasN int, rgStar
 			for i := rgStart; i < len(data.ReplicaGroups[db]); i++ {
 				rgGroup := data.ReplicaGroups[db][i]
 				if joinFunc(data, db, rgGroup, currentNodeAz) {
-					if !initFirstPtRg || prePtRGId != data.ReplicaGroups[db][i].ID {
+					if !initFirstPtRg || notContainsRG(prePtRGIds, data.ReplicaGroups[db][i].ID) {
 						data.PtView[db][ptLoc].RGID = data.ReplicaGroups[db][i].ID
 						data.ReplicaGroups[db][i].addPeer(pt.PtId, replicasN)
 						data.ReplicaGroups[db][i].nextUnFull(replicasN, db)
 						choosed = true
-						prePtRGId = data.ReplicaGroups[db][i].ID
+						prePtRGIds = append(prePtRGIds, data.ReplicaGroups[db][i].ID)
 						initFirstPtRg = true
 						DataLogger.Info("NodeHardChooseRG addPeer", zap.String("db", db), zap.Uint32("ptId", pt.PtId), zap.Uint32("RGId", data.ReplicaGroups[db][i].ID))
 						break
@@ -160,9 +169,9 @@ func joinRpGroup(data *Data, db string, newNode *DataNode, replicasN int, rgStar
 			if !choosed {
 				// to create a new rg as owner Rg of this pt, first add pt is masterPt
 				newRg := NewReplicaGroup(uint32(len(data.ReplicaGroups[db])), pt.PtId, nil, UnFull, 0)
-				prePtRGId = uint32(len(data.ReplicaGroups[db]))
+				prePtRGIds = append(prePtRGIds, uint32(len(data.ReplicaGroups[db])))
 				initFirstPtRg = true
-				data.PtView[db][ptLoc].RGID = prePtRGId
+				data.PtView[db][ptLoc].RGID = uint32(len(data.ReplicaGroups[db]))
 				newRg.nextUnFull(replicasN, db)
 				data.ReplicaGroups[db] = append(data.ReplicaGroups[db], *newRg)
 				DataLogger.Info("NodeHardChooseRG newRG", zap.String("db", db), zap.Uint32("newRGId", newRg.ID), zap.Uint32("masterPtId", pt.PtId))
@@ -218,6 +227,21 @@ func NewReplicaGroup(id, masterPtId uint32, peers []Peer, status RGStatus, term 
 		Status:     status,
 		Term:       term,
 	}
+}
+
+func (rg *ReplicaGroup) GenerateNewPeer(newMasterPt uint32) []Peer {
+	if newMasterPt == rg.MasterPtID {
+		return rg.Peers
+	}
+	ret := make([]Peer, 0)
+	ret = append(ret, Peer{ID: rg.MasterPtID, PtRole: Slave})
+	for _, peer := range rg.Peers {
+		if peer.ID == newMasterPt {
+			continue
+		}
+		ret = append(ret, Peer{ID: peer.ID, PtRole: Slave})
+	}
+	return ret
 }
 
 func (rg *ReplicaGroup) hasPt(ptId uint32) bool {

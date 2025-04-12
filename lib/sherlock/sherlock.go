@@ -336,8 +336,8 @@ func (s *Sherlock) writeProfileDataToFile(data bytes.Buffer, dumpType configureT
 	s.opts.logger.Info("[Sherlock] profile write to file successfully", zap.String("type", dumpType.string()), zap.String("filename", filename))
 }
 
-func (s *Sherlock) getMemoryLimit() (uint64, error) {
-	// vm
+// getVMMemoryLimit get VM memory limit
+func (s *Sherlock) getVMMemoryLimit() (uint64, error) {
 	vm, err := mem.VirtualMemory()
 	if err != nil {
 		return 0, err

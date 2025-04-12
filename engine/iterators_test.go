@@ -21,7 +21,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/influxdata/influxdb/pkg/testing/assert"
 	"github.com/openGemini/openGemini/engine"
 	"github.com/openGemini/openGemini/engine/comm"
 	"github.com/openGemini/openGemini/engine/executor"
@@ -32,6 +31,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestTagSetCursorInRecord_Ascending(t *testing.T) {
@@ -3054,6 +3054,7 @@ func (m *MocSeriesInfo) GetSeriesKey() []byte {
 	copy(b, m.seriesKeys)
 	return b
 }
+
 func (m *MocSeriesInfo) GetSeriesTags() *influx.PointTags {
 	return m.seriesTags
 }

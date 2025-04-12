@@ -169,6 +169,7 @@ func (trans *FilterTransform) filterHelper(c Chunk) {
 	if trans.resultChunk.Name() != c.Name() {
 		trans.resultChunk.SetName(c.Name())
 	}
+	var multiValuer []influxql.Valuer
 	for i := 0; i < c.NumberOfRows(); i++ {
 		if index < len(c.TagIndex())-1 && i == c.TagIndex()[index+1] {
 			index++
@@ -177,10 +178,19 @@ func (trans *FilterTransform) filterHelper(c Chunk) {
 		for j, f := range trans.Output.RowDataType.Fields() {
 			trans.filterMap[f.Expr.(*influxql.VarRef).Val] = trans.valueFunc[j](i, c.Column(j))
 		}
+		multiValuer = multiValuer[:0]
+		multiValuer = append(multiValuer, influxql.MapValuer(trans.filterMap))
+		if trans.opt.IsPromQuery() {
+			cv := NewChunkValuer(trans.opt.IsPromQuery())
+			cv.SetValueFnOnlyPromTime()
+			cv.ref = c
+			cv.index = i
+			multiValuer = append(multiValuer, cv)
+			multiValuer = append(multiValuer, PromTimeValuer{})
+			multiValuer = append(multiValuer, query.MathValuer{})
+		}
 		valuer := influxql.ValuerEval{
-			Valuer: influxql.MultiValuer(
-				influxql.MapValuer(trans.filterMap),
-			),
+			Valuer: influxql.MultiValuer(multiValuer...),
 		}
 		if valuer.EvalBool(trans.opt.Condition) {
 			if len(trans.resultChunk.Tags()) == 0 ||

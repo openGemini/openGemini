@@ -27,6 +27,7 @@ const (
 	DefaultMonitorDatabase   = "monitor"
 	DefaultMonitorRP         = "autogen"
 	DefaultMonitorRPDuration = 7 * 24 * time.Hour
+	DefaultReplicaN          = 1
 
 	// DefaultStoreEnabled is whether the system writes gathered information in
 	// an InfluxDB system for historical analysis.
@@ -149,6 +150,7 @@ type MonitorReport struct {
 	Username     string        `toml:"username"`
 	Password     string        `toml:"password"`
 	HTTPSEnabled bool          `toml:"https-enable"`
+	ReplicaN     int           `toml:"replicaN"`
 }
 
 func newMonitorReport() MonitorReport {
@@ -157,6 +159,7 @@ func newMonitorReport() MonitorReport {
 		Database:   DefaultMonitorDatabase,
 		Rp:         DefaultMonitorRP,
 		RpDuration: toml.Duration(DefaultMonitorRPDuration),
+		ReplicaN:   DefaultReplicaN,
 	}
 }
 

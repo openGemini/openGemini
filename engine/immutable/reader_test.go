@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/influxdata/influxdb/pkg/testing/assert"
 	"github.com/openGemini/openGemini/lib/binaryfilterfunc"
 	"github.com/openGemini/openGemini/lib/bitmap"
 	"github.com/openGemini/openGemini/lib/encoding"
@@ -27,6 +26,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -118,6 +118,7 @@ func Test_AppendString(t *testing.T) {
 type MocTsspFile struct {
 	TSSPFile
 	path string
+	err  error
 }
 
 func (m MocTsspFile) Path() string {
@@ -165,7 +166,7 @@ func (m MocTsspFile) UnrefFileReader() {
 }
 
 func (m MocTsspFile) LoadComponents() error {
-	return nil
+	return m.err
 }
 
 func (m MocTsspFile) FreeFileHandle() error {
@@ -264,10 +265,6 @@ func (m MocTsspFile) Remove() error {
 	return nil
 }
 
-func (m MocTsspFile) FreeMemory(evictLock bool) int64 {
-	return 0
-}
-
 func (m MocTsspFile) Version() uint64 {
 	return 0
 }
@@ -282,14 +279,6 @@ func (m MocTsspFile) MaxChunkRows() int {
 
 func (m MocTsspFile) MetaIndexItemNum() int64 {
 	return 0
-}
-
-func (m MocTsspFile) AddToEvictList(level uint16) {
-	return
-}
-
-func (m MocTsspFile) RemoveFromEvictList(level uint16) {
-	return
 }
 
 func (m MocTsspFile) GetFileReaderRef() int64 {
@@ -588,8 +577,8 @@ func (codec *colValCodec) encode(t *testing.T) {
 		Type: int(codec.typ),
 		Name: "",
 	}
-	data, err := builder.encode(ref, dataCols, timeCols, 0)
 
+	data, err := builder.encode(ref, dataCols, timeCols, 0)
 	require.NoError(t, err)
 	codec.buf = data
 }
@@ -694,6 +683,38 @@ func TestUpgrade(t *testing.T) {
 	require.Equal(t, 1, len(col.Bitmap))
 }
 
+func TestEncodeColumn_error(t *testing.T) {
+	codec := &colValCodec{}
+	codec.setTyp(encoding.BlockInteger)
+	codec.timeCol.AppendIntegers(1, 2, 3, 4)
+	codec.dataCol.AppendIntegers(1, 2, 3)
+
+	builder := NewColumnBuilder()
+	builder.colMeta = &ColumnMeta{}
+	builder.colMeta.growEntry()
+
+	timeCols := []record.ColVal{codec.timeCol}
+
+	ref := record.Field{
+		Type: int(codec.typ),
+		Name: "foo",
+	}
+
+	err := func() (err error) {
+		defer func() {
+			e := recover()
+			if e != nil {
+				err = fmt.Errorf("%v", e)
+			}
+		}()
+
+		_, err = builder.encode(ref, nil, timeCols, 0)
+		return err
+	}()
+
+	require.NotEmpty(t, err)
+}
+
 func TestDecodeColumnHeader_error(t *testing.T) {
 	col := &record.ColVal{}
 	col.AppendFloat(1)
@@ -706,6 +727,7 @@ func TestDecodeColumnHeader_error(t *testing.T) {
 	exp := fmt.Sprintf("type(%d) in table not eq select type(%d)", invalidTyp, encoding.BlockInteger)
 	require.EqualError(t, err, exp)
 }
+
 func preparePreAggBaseRec1() *record.Record {
 	s := []record.Field{
 		{Name: "bps", Type: influx.Field_Type_Int},
@@ -752,6 +774,7 @@ func preparePreAggBaseRec1() *record.Record {
 	}
 	return rec
 }
+
 func TestFilterByField(t *testing.T) {
 	rec := preparePreAggBaseRec1()
 	filterRec := record.NewRecord(rec.Schema, false)
@@ -777,36 +800,4 @@ func TestFilterByField(t *testing.T) {
 	result.Reset()
 	filterBitMap.Reset()
 	filterRec.Reuse()
-}
-
-func TestEncodeColumn_error(t *testing.T) {
-	codec := &colValCodec{}
-	codec.setTyp(encoding.BlockInteger)
-	codec.timeCol.AppendIntegers(1, 2, 3, 4)
-	codec.dataCol.AppendIntegers(1, 2, 3)
-
-	builder := NewColumnBuilder()
-	builder.colMeta = &ColumnMeta{}
-	builder.colMeta.growEntry()
-
-	timeCols := []record.ColVal{codec.timeCol}
-
-	ref := record.Field{
-		Type: int(codec.typ),
-		Name: "foo",
-	}
-
-	err := func() (err error) {
-		defer func() {
-			e := recover()
-			if e != nil {
-				err = fmt.Errorf("%v", e)
-			}
-		}()
-
-		_, err = builder.encode(ref, nil, timeCols, 0)
-		return err
-	}()
-
-	require.NotEmpty(t, err)
 }

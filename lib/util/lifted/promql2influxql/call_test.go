@@ -88,6 +88,28 @@ func TestTranspiler_transpileCall(t1 *testing.T) {
 			want:    parseInfluxqlByYacc(`SELECT sqrt(value) AS value FROM (SELECT abs(value) AS value FROM go_gc_duration_seconds_count WHERE time >= '2023-01-06T04:00:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY *) WHERE time >= '2023-01-06T04:00:00Z' AND time <= '2023-01-06T07:00:00Z'`),
 			wantErr: false,
 		},
+		{
+			name: "5",
+			fields: fields{
+				Evaluation: &endTime2,
+			},
+			args: args{
+				a: CallExpr(`sort(go_gc_duration_seconds_count)`),
+			},
+			want:    parseInfluxqlByYacc(`SELECT value AS value FROM go_gc_duration_seconds_count WHERE time >= '2023-01-06T07:00:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY * ORDER BY value ASC`),
+			wantErr: false,
+		},
+		{
+			name: "6",
+			fields: fields{
+				Evaluation: &endTime2,
+			},
+			args: args{
+				a: CallExpr(`mad_over_time(go_gc_duration_seconds_count[5m])`),
+			},
+			want:    parseInfluxqlByYacc(`SELECT mad_over_time_prom(value) AS value FROM go_gc_duration_seconds_count WHERE time >= '2023-01-06T06:55:00Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY *`),
+			wantErr: false,
+		},
 	}
 	for _, tt := range tests {
 		t1.Run(tt.name, func(t1 *testing.T) {
@@ -114,5 +136,37 @@ func TestTranspiler_transpileCall(t1 *testing.T) {
 				t1.Errorf("transpileCall() got = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func Test_SubCall(t *testing.T) {
+	fields := fields{
+		Evaluation: &endTime2,
+	}
+	args := CallExpr(`absent_over_time(go_gc_duration_seconds_count[10s:1s])`)
+
+	want := "SELECT absent_prom(value) AS value FROM (SELECT value AS value FROM go_gc_duration_seconds_count WHERE time >= '2023-01-06T06:54:50Z' AND time <= '2023-01-06T07:00:00Z' GROUP BY * SUBCALL absent_over_time_prom(1, 1672988400000000000, 1672988400000000000, 10000000000, 0, false, 1672988390000000000, 1672988400000000000, 1000000000) ) WHERE time >= '2023-01-06T06:54:50Z' AND time <= '2023-01-06T07:00:00Z'"
+	trans := &Transpiler{
+		PromCommand: PromCommand{
+			Start:         fields.Start,
+			End:           fields.End,
+			Timezone:      fields.Timezone,
+			Evaluation:    fields.Evaluation,
+			Step:          fields.Step,
+			DataType:      fields.DataType,
+			Database:      fields.Database,
+			LabelName:     fields.LabelName,
+			LookBackDelta: DefaultLookBackDelta,
+		},
+		timeRange:      fields.timeRange,
+		parenExprCount: fields.parenExprCount,
+		timeCondition:  fields.condition,
+	}
+	got, err := trans.Transpile(args)
+	if err != nil {
+		t.Fatal("Test_SubCall err")
+	}
+	if !reflect.DeepEqual(got.String(), want) {
+		t.Errorf("transpile() got = %v, want %v", got, want)
 	}
 }

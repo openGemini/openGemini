@@ -25,6 +25,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/lib/config"
@@ -116,6 +117,7 @@ func (e *Engine) DeleteDatabase(db string, ptId uint32) (err error) {
 	}
 
 	if dbPTInfo.node != nil {
+		log.Error("delete database trigger raft node stop!!!")
 		dbPTInfo.node.Stop()
 	}
 	e.mu.RUnlock()
@@ -569,18 +571,18 @@ func (e *Engine) getAllDBPaths() map[string][]string {
 	return dpPath
 }
 
-func (e *Engine) CreateShowTagValuesPlan(db string, ptIDs []uint32, tr *influxql.TimeRange) netstorage.ShowTagValuesPlan {
-	plan := &ShowTagValuesPlan{}
+func (e *Engine) CreateDDLBasePlans(planType hybridqp.DDLType, db string, ptIDs []uint32, tr *influxql.TimeRange) netstorage.DDLBasePlans {
+	plan := &DDLBasePlans{planType: planType}
 
 	for i := range ptIDs {
 		dbPT := e.getDBPTInfo(db, ptIDs[i])
 		if dbPT == nil {
-			e.log.Info("CreateShowTagValuesPlan DBPT not found", zap.String("db", db), zap.Uint32("ptID", ptIDs[i]))
+			e.log.Info("CreateDDLBasePlans DBPT not found", zap.String("db", db), zap.Uint32("ptID", ptIDs[i]))
 			continue
 		}
 
 		dbPT.walkShards(tr, func(sh Shard) {
-			if p := sh.CreateShowTagValuesPlan(e.metaClient); p != nil {
+			if p := sh.CreateDDLBasePlan(e.metaClient, planType); p != nil {
 				plan.AddPlan(p)
 			}
 		})
@@ -589,16 +591,19 @@ func (e *Engine) CreateShowTagValuesPlan(db string, ptIDs []uint32, tr *influxql
 	return plan
 }
 
-type ShowTagValuesPlan struct {
-	plans []immutable.ShowTagValuesPlan
+type DDLBasePlans struct {
+	planType hybridqp.DDLType
+	plans    []immutable.DDLBasePlan
 }
 
-func (p *ShowTagValuesPlan) AddPlan(plan immutable.ShowTagValuesPlan) {
-	p.plans = append(p.plans, plan)
+func (p *DDLBasePlans) AddPlan(plan interface{}) {
+	p.plans = append(p.plans, plan.(immutable.DDLBasePlan))
 }
 
-func (p *ShowTagValuesPlan) Execute(tagKeys map[string][][]byte, condition influxql.Expr, tr util.TimeRange, limit int) (netstorage.TablesTagSets, error) {
-	dst := make(map[string]*immutable.TagSets)
+func (p *DDLBasePlans) Stop() {}
+
+func (p *DDLBasePlans) Execute(tagKeys map[string][][]byte, condition influxql.Expr, tr util.TimeRange, limit int) (interface{}, error) {
+	dst := make(map[string]immutable.DDLRespData)
 
 	var err error
 	for _, plan := range p.plans {
@@ -607,26 +612,37 @@ func (p *ShowTagValuesPlan) Execute(tagKeys map[string][][]byte, condition influ
 			break
 		}
 	}
-
 	if err != nil && err != io.EOF {
 		return nil, err
 	}
 
-	tableTagSets := make(netstorage.TablesTagSets, 0)
-	for mst, tagSet := range dst {
-		tv := netstorage.TableTagSets{
-			Name:   influx.GetOriginMstName(mst),
-			Values: make(netstorage.TagSets, 0),
+	// show tag values
+	if p.planType == hybridqp.ShowTagValues {
+		tableTagSets := make(netstorage.TablesTagSets, 0)
+		for mst, tagSet := range dst {
+			tv := netstorage.TableTagSets{
+				Name:   influx.GetOriginMstName(mst),
+				Values: make(netstorage.TagSets, 0),
+			}
+			tagSet.ForEach(func(tagKey, tagValue string) {
+				tv.Values = append(tv.Values, netstorage.TagSet{Key: tagKey, Value: tagValue})
+			})
+			tableTagSets = append(tableTagSets, tv)
 		}
-		tagSet.ForEach(func(tagKey, tagValue string) {
-			tv.Values = append(tv.Values, netstorage.TagSet{Key: tagKey, Value: tagValue})
-		})
-		tableTagSets = append(tableTagSets, tv)
+		return tableTagSets, nil
 	}
 
-	return tableTagSets, nil
-}
-
-func (p *ShowTagValuesPlan) Stop() {
-
+	// show series
+	seriesNum := 0
+	for _, v := range dst {
+		seriesNum += v.Count()
+	}
+	result := make([]string, 0, seriesNum)
+	for _, v := range dst {
+		v.ForEach(func(key, value string) {
+			result = append(result, key)
+		})
+	}
+	sort.Strings(result)
+	return result, nil
 }

@@ -40,6 +40,9 @@ func init() {
 	RegistryPromTimeFunction("day_of_week_prom", &dayOfWeekPromFunc{
 		BaseInfo: BaseInfo{FuncType: PROMTIME},
 	})
+	RegistryPromTimeFunction("day_of_year_prom", &dayOfYearPromFunc{
+		BaseInfo: BaseInfo{FuncType: PROMTIME},
+	})
 	RegistryPromTimeFunction("hour_prom", &hourPromFunc{
 		BaseInfo: BaseInfo{FuncType: PROMTIME},
 	})
@@ -143,6 +146,18 @@ func (s *dayOfWeekPromFunc) CompileFunc(expr *influxql.Call, c *compiledField) e
 }
 
 func (s *dayOfWeekPromFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
+	return influxql.Float, nil
+}
+
+type dayOfYearPromFunc struct {
+	BaseInfo
+}
+
+func (s *dayOfYearPromFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
+	return nil
+}
+
+func (s *dayOfYearPromFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
 	return influxql.Float, nil
 }
 

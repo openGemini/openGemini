@@ -59,7 +59,7 @@ func NewFileSwapper(file string, lock string, limitCompact bool, compressMode in
 }
 
 func (s *FileSwapper) open(limitCompact bool) error {
-	fd, err := fileops.OpenFile(s.file, os.O_CREATE|os.O_RDWR|os.O_TRUNC|os.O_APPEND, 0640, fileops.FileLockOption(s.lock))
+	fd, err := fileops.OpenFile(s.file, os.O_CREATE|os.O_RDWR|os.O_TRUNC|os.O_APPEND, 0600, fileops.FileLockOption(s.lock))
 	if err != nil {
 		log.Error("create file fail", zap.String("file", s.file), zap.Error(err))
 		return err
@@ -77,7 +77,7 @@ func (s *FileSwapper) CopyTo(to io.Writer, buf []byte) (int64, error) {
 		return 0, err
 	}
 
-	fd, err := fileops.OpenFile(s.file, os.O_RDONLY, 0640, fileops.FileLockOption(s.lock))
+	fd, err := fileops.OpenFile(s.file, os.O_RDONLY, 0600, fileops.FileLockOption(s.lock))
 	if err != nil {
 		return 0, err
 	}

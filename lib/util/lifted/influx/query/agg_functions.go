@@ -258,6 +258,12 @@ var (
 			mergeCall: true,
 		},
 	})
+	_ = RegistryAggregateFunction("present_over_time_prom", &PresentFunc{
+		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
+		BaseAgg: BaseAgg{
+			mergeCall: true,
+		},
+	})
 	_ = RegistryAggregateFunction("quantile_over_time", &PercentileFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
 		BaseAgg: BaseAgg{
@@ -413,6 +419,30 @@ var (
 		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
 		BaseAgg: BaseAgg{
 			mergeCall: true,
+		},
+	})
+	_ = RegistryAggregateFunction("absent_over_time_prom", &OneParamCompileFunc{
+		BaseInfo: BaseInfo{FuncType: AGG_NORMAL},
+		BaseAgg: BaseAgg{
+			mergeCall: true,
+		},
+	})
+	_ = RegistryAggregateFunction("absent_prom", &OneParamCompileFunc{
+		BaseInfo: BaseInfo{FuncType: AGG_NORMAL},
+		BaseAgg: BaseAgg{
+			mergeCall: true,
+		},
+	})
+	_ = RegistryAggregateFunction("mad_over_time_prom", &OneParamCompileFunc{
+		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
+		BaseAgg: BaseAgg{
+			mergeCall: true,
+		},
+	})
+	_ = RegistryAggregateFunction("topn_ddcm", &TopNDDCMFunc{
+		BaseInfo: BaseInfo{FuncType: AGG_NORMAL},
+		BaseAgg: BaseAgg{
+			canPushDown: false,
 		},
 	})
 )
@@ -1184,6 +1214,25 @@ func (f *StdvarFunc) CallTypeFunc(name string, args []influxql.DataType) (influx
 	return influxql.Float, nil
 }
 
+type PresentFunc struct {
+	BaseInfo
+	BaseAgg
+}
+
+func (f *PresentFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
+	args, name := expr.Args, expr.Name
+	if exp, got := 1, len(expr.Args); exp != got {
+		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", name, exp, got)
+	}
+	c.global.OnlySelectors = false
+	// Must be a variable reference, wildcard, or regexp.
+	return c.compileSymbol(name, args[0])
+}
+
+func (f *PresentFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
+	return influxql.Float, nil
+}
+
 type SpreadFunc struct {
 	BaseInfo
 	BaseAgg
@@ -1547,4 +1596,61 @@ func (f *PromScalarFunc) CompileFunc(expr *influxql.Call, c *compiledField) erro
 
 func (f *PromScalarFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
 	return influxql.Float, nil
+}
+
+type TopNDDCMFunc struct {
+	BaseInfo
+	BaseAgg
+}
+
+// topn_ddcm(field, countLowerBound, topNumber), countLowerBound use defaultNumber by set to zero
+func (f *TopNDDCMFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
+	args := expr.Args
+	name := "topN_ddcm"
+	if exp, got := 4, len(args); got != exp {
+		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", name, exp, got)
+	}
+
+	_, ok := args[1].(*influxql.NumberLiteral)
+	if !ok {
+		return fmt.Errorf("expected integer argument as second arg in %s", name)
+	}
+
+	s, ok := args[2].(*influxql.IntegerLiteral)
+	if !ok {
+		return fmt.Errorf("expected integer argument as third arg in %s", name)
+	} else if s.Val <= 0 {
+		return fmt.Errorf("third arg to %s cannot be negative or zero, got %d", name, s.Val)
+	}
+	c.global.OnlySelectors = false
+
+	fn, ok := args[3].(*influxql.StringLiteral)
+	if !ok {
+		return fmt.Errorf("expected string argument as fourth arg in %s", name)
+	} else if fn.Val == "count" {
+		expr.Args = append(expr.Args, &influxql.IntegerLiteral{Val: 0})
+	} else if fn.Val == "sum" {
+		expr.Args = append(expr.Args, &influxql.NumberLiteral{Val: 0})
+	} else {
+		return fmt.Errorf("fourth arg to %s can only be count or sum, got %d", name, s.Val)
+	}
+
+	_, ok = args[0].(*influxql.VarRef)
+	if !ok {
+		return fmt.Errorf("must use field name with %s", name)
+	} else if len(c.global.stmt.Dimensions) == 0 {
+		return fmt.Errorf("%s aggregate requires a GROUP BY dims", name)
+	}
+	c.global.TopBottomFunction = name
+	return nil
+}
+
+func (f *TopNDDCMFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
+	if args[len(args)-1] == influxql.Integer {
+		return influxql.Integer, nil
+	} else if args[len(args)-1] == influxql.Float && (args[0] == influxql.Integer || args[0] == influxql.Float) {
+		return args[0], nil
+	} else {
+		return influxql.Integer, fmt.Errorf("topn_ddcm call type func err")
+	}
 }

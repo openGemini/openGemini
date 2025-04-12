@@ -80,6 +80,12 @@ func TestMessage(t *testing.T) {
 			module: errno.ModuleNetwork,
 			level:  errno.LevelFatal,
 		},
+		{
+			err:    errno.NewError(errno.PromReceiverErr),
+			errno:  errno.PromReceiverErr,
+			module: errno.ModuleQueryEngine,
+			level:  errno.LevelFatal,
+		},
 	}
 
 	for _, item := range items {
@@ -141,6 +147,8 @@ func TestEqual(t *testing.T) {
 
 	assert.False(t, errno.Equal(err, errno.InvalidAddress))
 	assert.False(t, errno.Equal(fmt.Errorf("some error"), errno.InvalidBufferSize))
+
+	assert.False(t, errno.Equal(errno.NewError(0), errno.InvalidBufferSize))
 }
 
 func TestQueryError(t *testing.T) {

@@ -136,7 +136,6 @@ func (h *SnapshotV2) Process() (transport.Codec, error) {
 	for {
 		if h.store.index() > index {
 			rsp.Data = h.store.getSnapshotV2(metaclient.Role(h.req.Role), index, id)
-			h.logger.Info("serveSnapshotV2 ok", zap.Uint64("index", index), zap.Int64("len", int64(len(rsp.Data))))
 			return rsp, nil
 		}
 		select {

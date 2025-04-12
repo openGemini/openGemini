@@ -19,6 +19,8 @@ import (
 	"math"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/cockroachdb/errors"
 	"github.com/openGemini/openGemini/lib/errno"
@@ -43,14 +45,20 @@ type RaftDiskStorage struct {
 	meta     *metaFile
 	entryLog *entryLog
 	lock     sync.Mutex
+
+	SyncInterval  time.Duration
+	syncTaskCount atomic.Int32
+	firstSync     bool
 }
 
 // Init initializes an instance of DiskStorage.
-func Init(dir string) (*RaftDiskStorage, error) {
+func Init(dir string, SyncInterval time.Duration) (*RaftDiskStorage, error) {
 	dir = filepath.Join(dir, raftEntriesDir)
 	rds := &RaftDiskStorage{
-		dir:    dir,
-		logger: logger.NewLogger(errno.ModuleStorageEngine),
+		dir:          dir,
+		logger:       logger.NewLogger(errno.ModuleStorageEngine),
+		SyncInterval: SyncInterval,
+		firstSync:    true,
 	}
 
 	lockFile := fileops.FileLockOption("")
@@ -87,7 +95,8 @@ func Init(dir string) (*RaftDiskStorage, error) {
 	rds.entryLog.deleteBefore(first - 1)
 
 	last := rds.entryLog.lastIndex()
-	rds.logger.Info("Init Raft Storage with snap", zap.Uint64("index", snap.Metadata.Index), zap.Uint64("first", first), zap.Uint64("last", last))
+	rds.logger.Info("Init Raft Storage with snap", zap.Uint64("index", snap.Metadata.Index), zap.Uint64("first", first),
+		zap.Uint64("last", last), zap.Duration("syncInterval", rds.SyncInterval))
 	return rds, nil
 }
 
@@ -193,7 +202,14 @@ func (rds *RaftDiskStorage) Term(idx uint64) (uint64, error) {
 
 	term, err := rds.entryLog.Term(idx)
 	if err != nil {
-		rds.logger.Error(fmt.Sprintf("TERM for %d = %v\n", idx, err))
+		si := rds.meta.Uint(SnapshotIndex)
+		if idx < si {
+			rds.logger.Error(fmt.Sprintf("TERM for %d = %v\n", idx, raft.ErrCompacted))
+			return 0, raft.ErrCompacted
+		}
+		if idx == si {
+			return rds.meta.Uint(SnapshotTerm), nil
+		}
 	}
 	return term, err
 }
@@ -309,16 +325,41 @@ func (rds *RaftDiskStorage) Save(h *raftpb.HardState, entries []raftpb.Entry, sn
 
 // TrySync trys to write all the contents to disk.
 func (rds *RaftDiskStorage) TrySync() error {
-	rds.lock.Lock()
-	defer rds.lock.Unlock()
+	if rds.SyncInterval == 0 || rds.firstSync {
+		rds.lock.Lock()
+		defer rds.lock.Unlock()
 
+		if err := rds.meta.meta.TrySync(); err != nil {
+			return errors.Wrapf(err, "while syncing meta")
+		}
+		if err := rds.entryLog.current.entry.TrySync(); err != nil {
+			return errors.Wrapf(err, "while syncing current file")
+		}
+		rds.firstSync = false
+		rds.logger.Info("rds firstSync")
+		return nil
+	}
+	if !rds.syncTaskCount.CompareAndSwap(0, 1) {
+		return nil
+	}
+
+	go func() {
+		rds.backSync()
+	}()
+	return nil
+}
+
+func (rds *RaftDiskStorage) backSync() {
+	time.Sleep(rds.SyncInterval)
+	rds.lock.Lock()
 	if err := rds.meta.meta.TrySync(); err != nil {
-		return errors.Wrapf(err, "while syncing meta")
+		rds.logger.Error("Error while raftStorage syncing meta", zap.Error(err))
 	}
 	if err := rds.entryLog.current.entry.TrySync(); err != nil {
-		return errors.Wrapf(err, "while syncing current file")
+		rds.logger.Error("Error while raftStorage syncing current file", zap.Error(err))
 	}
-	return nil
+	rds.lock.Unlock()
+	rds.syncTaskCount.Store(0)
 }
 
 // Close closes the DiskStorage.
@@ -330,4 +371,16 @@ func (rds *RaftDiskStorage) Close() error {
 		return errors.Wrap(err, "close entryLog file")
 	}
 	return nil
+}
+
+func (rds *RaftDiskStorage) EntrySize() int {
+	rds.lock.Lock()
+	defer rds.lock.Unlock()
+
+	ret := rds.entryLog.current.entry.Size()
+	files := rds.entryLog.files
+	for _, file := range files {
+		ret += file.entry.Size()
+	}
+	return ret
 }

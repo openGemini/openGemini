@@ -16,7 +16,6 @@ package pool
 
 import (
 	"github.com/openGemini/openGemini/lib/cpu"
-	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 )
 
 const (
@@ -32,27 +31,18 @@ func (b *Buffer) MemSize() int {
 	return cap(b.B) + cap(b.Swap)
 }
 
-func (b *Buffer) Instance() Object {
-	return &Buffer{}
-}
-
-var chunkMetaPool *ObjectPool
+var chunkMetaPool *UnionPool[Buffer]
 
 func init() {
-	s := stat.NewHitRatioStatistics()
-	hook := NewHitRatioHook(s.AddChunkMetaGetTotal, s.AddChunkMetaHitTotal)
-	chunkMetaPool = NewObjectPool(cpu.GetCpuNum()*2, &Buffer{}, maxChunkMetaLocalCacheSize)
-	chunkMetaPool.SetHitRatioHook(hook)
+	chunkMetaPool = NewUnionPool[Buffer](cpu.GetCpuNum()*2, maxChunkMetaLocalCacheSize, DefaultMaxEleMemSize, func() *Buffer {
+		return &Buffer{}
+	})
+	chunkMetaPool.EnableHitRatioStat("ChunkMetaBuffer")
 }
 
-func GetChunkMetaBuffer() *Buffer {
-	b, ok := chunkMetaPool.Get().(*Buffer)
-	if !ok || b == nil {
-		b = &Buffer{}
+func GetChunkMetaBuffer() (*Buffer, func()) {
+	buf := chunkMetaPool.Get()
+	return buf, func() {
+		chunkMetaPool.Put(buf)
 	}
-	return b
-}
-
-func PutChunkMetaBuffer(b *Buffer) {
-	chunkMetaPool.Put(b)
 }

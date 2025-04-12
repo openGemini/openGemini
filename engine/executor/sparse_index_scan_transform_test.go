@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/engine"
+	"github.com/openGemini/openGemini/engine/comm"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable"
@@ -93,7 +94,7 @@ func NewMockStoreEngine() *MockStoreEngine {
 func (s *MockStoreEngine) ReportLoad() {
 }
 
-func (s *MockStoreEngine) CreateLogicPlan(_ context.Context, _ string, _ uint32, _ uint64, _ influxql.Sources, _ hybridqp.Catalog) (hybridqp.QueryNode, error) {
+func (s *MockStoreEngine) CreateLogicPlan(_ context.Context, _ string, _ uint32, _ []uint64, _ influxql.Sources, _ hybridqp.Catalog) (hybridqp.QueryNode, error) {
 	return nil, nil
 }
 
@@ -127,11 +128,10 @@ func NewMockStoreEngine1() *MockStoreEngine1 {
 func (s *MockStoreEngine1) ReportLoad() {
 }
 
-func (s *MockStoreEngine1) CreateLogicPlan(_ context.Context, _ string, _ uint32, _ uint64, _ influxql.Sources, schema hybridqp.Catalog) (hybridqp.QueryNode, error) {
-	readers := make([][]interface{}, 1)
-	readers[0] = make([]interface{}, 1)
-	readers[0][0] = engine.NewTagSetCursorForTest(schema.(*executor.QuerySchema), 0)
-	plan := executor.NewLogicalDummyShard(readers)
+func (s *MockStoreEngine1) CreateLogicPlan(_ context.Context, _ string, _ uint32, _ []uint64, _ influxql.Sources, schema hybridqp.Catalog) (hybridqp.QueryNode, error) {
+	cursors := []comm.KeyCursor{engine.NewTagSetCursorForTest(schema.(*executor.QuerySchema), 0)}
+	indexInfo := NewMockTSIndexInfo(cursors)
+	plan := executor.NewLogicalDummyShard(indexInfo)
 	return plan, nil
 }
 

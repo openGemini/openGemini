@@ -1329,3 +1329,82 @@ func TestCreateReplication10(t *testing.T) {
 	assert1.Equal(t, statusSet[SubHealth], int32(2))
 	assert1.Equal(t, statusSet[UnFull], int32(4))
 }
+
+// repN=3, nodeN=3, ptPerNode=3
+func Test_CreateDBReplication_fix(t *testing.T) {
+	SetRepDisPolicy(uint8(0))
+	DataLogger = logger.GetLogger().With(zap.String("service", "data"))
+	d := &Data{
+		Databases: map[string]*DatabaseInfo{
+			"testDB": &DatabaseInfo{
+				Name:     "testDB",
+				ReplicaN: 3,
+			},
+		},
+		DataNodes: []DataNode{
+			{
+				NodeInfo: NodeInfo{
+					ID: 1,
+				},
+			},
+			{
+				NodeInfo: NodeInfo{
+					ID: 2,
+				},
+			},
+			{
+				NodeInfo: NodeInfo{
+					ID: 3,
+				},
+			},
+		},
+		PtNumPerNode: 3,
+		PtView: map[string]DBPtInfos{
+			"testDB": {
+				{
+					PtId:  0,
+					Owner: PtOwner{NodeID: 1},
+				},
+				{
+					PtId:  1,
+					Owner: PtOwner{NodeID: 1},
+				},
+				{
+					PtId:  2,
+					Owner: PtOwner{NodeID: 1},
+				},
+				{
+					PtId:  3,
+					Owner: PtOwner{NodeID: 2},
+				},
+				{
+					PtId:  4,
+					Owner: PtOwner{NodeID: 2},
+				},
+				{
+					PtId:  5,
+					Owner: PtOwner{NodeID: 2},
+				},
+				{
+					PtId:  6,
+					Owner: PtOwner{NodeID: 3},
+				},
+				{
+					PtId:  7,
+					Owner: PtOwner{NodeID: 3},
+				},
+				{
+					PtId:  8,
+					Owner: PtOwner{NodeID: 3},
+				},
+			},
+		},
+	}
+	err := d.CreateDBReplication("testDB", 3)
+	assert1.NoError(t, err)
+	assert1.Equal(t, 3, len(d.ReplicaGroups["testDB"]))
+	for i := range d.ReplicaGroups["testDB"] {
+		assert1.Equal(t, SubHealth, d.ReplicaGroups["testDB"][i].Status)
+		assert1.Equal(t, uint32(i), d.ReplicaGroups["testDB"][i].MasterPtID)
+	}
+}

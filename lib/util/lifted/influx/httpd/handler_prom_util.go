@@ -30,11 +30,14 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/promql2influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/lib/validation"
 	"github.com/prometheus/common/model"
-	"github.com/prometheus/prometheus/pkg/labels"
+	"github.com/prometheus/prometheus/model/labels"
+	"github.com/prometheus/prometheus/prompb"
 	"github.com/prometheus/prometheus/promql"
 	"github.com/prometheus/prometheus/promql/parser"
 	"go.uber.org/zap"
@@ -68,8 +71,22 @@ const (
 	StatusClientClosedConnection = 499
 )
 
+var reportedError = map[errno.Errno]struct{}{
+	errno.ErrSameTagSet: struct{}{},
+}
+
 func isPromReportedError(err error) bool {
-	return strings.Contains(err.Error(), `label_join`)
+	if strings.Contains(err.Error(), `label_join`) || strings.Contains(err.Error(), `label_replace`) {
+		return true
+	}
+	e, ok := err.(*errno.Error)
+	if !ok {
+		return false
+	}
+	if _, ok := reportedError[e.Errno()]; ok {
+		return true
+	}
+	return false
 }
 
 var (
@@ -138,59 +155,82 @@ func (e *apiError) Error() string {
 	return fmt.Sprintf("%s: %s", e.typ, e.err)
 }
 
-func invalidParamError(w http.ResponseWriter, err error, parameter string) {
-	respondError(w, &apiError{
+func invalidParamError(w http.ResponseWriter, err error, parameter string) *apiError {
+	apiErr := &apiError{
 		errorBadData, fmt.Errorf("invalid parameter %q: %w", parameter, err),
-	}, nil)
+	}
+	respondError(w, apiErr)
+	return apiErr
 }
 
-func (h *Handler) getPromResult(w http.ResponseWriter, stmtID2Result map[int]*query.Result, expr parser.Expr, cmd promql2influxql.PromCommand, dropMetric, removeTableName, duplicateResult bool) (PromResponse, bool) {
+func (h *Handler) getPromResult(stmtID2Result map[int]*query.Result, expr parser.Expr, cmd promql2influxql.PromCommand, dropMetric, removeTableName, duplicateResult bool) (*promql2influxql.PromQueryResponse, *apiError) {
 	r := &promql2influxql.Receiver{PromCommand: cmd, DropMetric: dropMetric, RemoveTableName: removeTableName, DuplicateResult: duplicateResult}
-	resp := PromResponse{Data: &promql2influxql.PromResult{}, Status: "success"}
+	resp := &promql2influxql.PromQueryResponse{Data: &promql2influxql.PromData{}, Status: "success"}
 	if len(stmtID2Result) > 0 {
 		if stmtID2Result[0].Err != nil && !isPromReportedError(stmtID2Result[0].Err) {
-			resp.Data = getEmptyResponse(cmd)
+			if isPromAbsentCall(expr) && (errors.Is(stmtID2Result[0].Err, meta.ErrMeasurementNotFound) || errno.Equal(stmtID2Result[0].Err, errno.DatabaseNotFound)) {
+				result, err := r.AbsentNoMstResult(expr)
+				if err != nil {
+					apiErr := &apiError{errorBadData, err}
+					return resp, apiErr
+				} else {
+					resp.Data = result
+				}
+			} else {
+				resp.Data = getEmptyResponse(cmd)
+			}
 		} else {
 			data, err := r.InfluxResultToPromQLValue(stmtID2Result[0], expr, cmd)
 			if err != nil {
-				respondError(w, &apiError{errorBadData, err}, nil)
-				return resp, false
+				apiErr := &apiError{errorExec, err}
+				return resp, apiErr
 			} else {
 				resp.Data = data
 			}
 		}
 	}
-	return resp, true
+	return resp, nil
 }
 
-func (h *Handler) getRangePromResultForEmptySeries(expr influxql.Expr, promCommand *promql2influxql.PromCommand, valuer *influxql.ValuerEval, timeValuer *PromTimeValuer) (*PromResponse, bool) {
-	points := make([]promql.Point, 0)
+func isPromAbsentCall(expr parser.Expr) bool {
+	call, ok := expr.(*parser.Call)
+	return ok && (strings.EqualFold(call.Func.Name, "absent") || strings.EqualFold(call.Func.Name, "absent_over_time"))
+}
+
+func (h *Handler) getRangePromResultForEmptySeries(expr influxql.Expr, promCommand *promql2influxql.PromCommand, valuer *influxql.ValuerEval, timeValuer *PromTimeValuer) *promql2influxql.PromQueryResponse {
+	points := make([]promql.FPoint, 0)
 	start, end, step := GetRangeTimeForEmptySeriesResult(promCommand)
 	for s := start; s <= end; s += step {
 		timeValuer.tmpTime = s
 		value := valuer.Eval(expr)
-		points = append(points, promql.Point{T: s, V: value.(float64)})
+		points = append(points, promql.FPoint{T: s, F: value.(float64)})
 	}
-	matrix := promql.Matrix{promql.Series{Metric: labels.Labels{}, Points: points}}
-	resp := &PromResponse{Status: "success"}
-	resp.Data = &promql2influxql.PromResult{Result: matrix, ResultType: string(parser.ValueTypeMatrix)}
-	return resp, true
+	matrix := &promql2influxql.PromDataMatrix{Matrix: &promql.Matrix{promql.Series{Metric: labels.Labels{}, Floats: points}}}
+	resp := &promql2influxql.PromQueryResponse{Status: "success"}
+	resp.Data = &promql2influxql.PromData{Result: matrix, ResultType: string(parser.ValueTypeMatrix)}
+	return resp
 }
 
-func (h *Handler) getInstantPromResultForEmptySeries(expr influxql.Expr, promCommand *promql2influxql.PromCommand, valuer *influxql.ValuerEval, timeValuer *PromTimeValuer, typ parser.ValueType) (*PromResponse, bool) {
-	vector := make(promql.Vector, 0)
+func (h *Handler) getInstantPromResultForEmptySeries(expr influxql.Expr, promCommand *promql2influxql.PromCommand, valuer *influxql.ValuerEval, timeValuer *PromTimeValuer, typ parser.ValueType) (*promql2influxql.PromQueryResponse, *apiError) {
 	time := GetTimeForEmptySeriesResult(promCommand)
 	timeValuer.tmpTime = time
 	value := valuer.Eval(expr)
-	Add2EmptySeriesResult(time, value.(float64), &vector)
-	resp := &PromResponse{Status: "success"}
-	resp.Data = &promql2influxql.PromResult{Result: vector, ResultType: string(typ)}
-	return resp, true
-}
 
-func Add2EmptySeriesResult(t int64, val float64, vector *promql.Vector) {
-	point := promql.Sample{Point: promql.Point{T: t, V: val}, Metric: labels.Labels{}}
-	*vector = append(*vector, point)
+	var result promql2influxql.PromDataResult
+	switch typ {
+	case parser.ValueTypeScalar:
+		result = &promql2influxql.PromDataScalar{Scalar: &promql.Scalar{T: time, V: value.(float64)}}
+	case parser.ValueTypeVector:
+		result = &promql2influxql.PromDataVector{Vector: &promql.Vector{promql.Sample{T: time, F: value.(float64), Metric: labels.Labels{}}}}
+	case parser.ValueTypeString:
+		result = &promql2influxql.PromDataString{String: &promql.String{T: time, V: value.(string)}}
+	default:
+		return nil, &apiError{typ: errorBadData, err: fmt.Errorf("getInstantPromResultForEmptySeries: unexpected type: %s", typ)}
+	}
+
+	resp := &promql2influxql.PromQueryResponse{Status: "success"}
+	resp.Data = &promql2influxql.PromData{Result: result, ResultType: string(typ)}
+	return resp, nil
 }
 
 func GetRangeTimeForEmptySeriesResult(promComand *promql2influxql.PromCommand) (int64, int64, int64) {
@@ -217,21 +257,21 @@ func GetTimeForEmptySeriesResult(promComand *promql2influxql.PromCommand) int64 
 	}
 }
 
-func getEmptyResponse(cmd promql2influxql.PromCommand) *promql2influxql.PromResult {
+func getEmptyResponse(cmd promql2influxql.PromCommand) *promql2influxql.PromData {
 	if cmd.DataType == promql2influxql.GRAPH_DATA {
-		return promql2influxql.NewPromResult([]interface{}{}, string(parser.ValueTypeMatrix))
+		return promql2influxql.NewPromData(&promql2influxql.PromDataMatrix{}, string(parser.ValueTypeMatrix))
 	} else {
-		return promql2influxql.NewPromResult([]interface{}{}, string(parser.ValueTypeVector))
+		return promql2influxql.NewPromData(&promql2influxql.PromDataMatrix{}, string(parser.ValueTypeVector))
 
 	}
 }
 
-func respondError(w http.ResponseWriter, apiErr *apiError, data interface{}) {
-	b, err := json2.Marshal(&PromResponse{
-		Status:    StatusError,
-		ErrorType: apiErr.typ,
+func respondError(w http.ResponseWriter, apiErr *apiError) {
+	logger.GetLogger().Error("serve prom query error", zap.Error(apiErr.err))
+	b, err := json2.Marshal(&promql2influxql.PromQueryResponse{
+		Status:    string(StatusError),
+		ErrorType: string(apiErr.typ),
 		Error:     apiErr.err.Error(),
-		Data:      data,
 	})
 	if err != nil {
 		logger.GetLogger().Error("error marshaling json response", zap.String("err", err.Error()))
@@ -268,81 +308,41 @@ func respondError(w http.ResponseWriter, apiErr *apiError, data interface{}) {
 	}
 }
 
-// Response represents a list of statement results.
-type PromResponse struct {
-	Status    status      `json:"status"`
-	Data      interface{} `json:"data,omitempty"`
-	ErrorType errorType   `json:"errorType,omitempty"`
-	Error     string      `json:"error,omitempty"`
-}
+type timeSeries2RowsFunc func(mst string, dst []influx.Row, tss []prompb2.TimeSeries, invalidTss map[int]bool) ([]influx.Row, error)
 
-// MarshalJSON encodes a Response struct into JSON.
-func (r PromResponse) MarshalJSON() ([]byte, error) {
-	// Define a struct that outputs "error" as a string.
-	var o struct {
-		Status    status      `json:"status"`
-		Data      interface{} `json:"data,omitempty"`
-		ErrorType errorType   `json:"errorType,omitempty"`
-		Error     string      `json:"error,omitempty"`
-	}
-
-	// Copy fields to output struct.
-	o.Status = r.Status
-	o.ErrorType = r.ErrorType
-	o.Data = r.Data
-	if r.Error != "" {
-		o.Error = r.Error
-	}
-
-	return json2.Marshal(&o)
-}
-
-// UnmarshalJSON decodes the data into the Response struct.
-func (r *PromResponse) UnmarshalJSON(b []byte) error {
-	var o struct {
-		Status    status      `json:"status"`
-		Data      interface{} `json:"data,omitempty"`
-		ErrorType errorType   `json:"errorType,omitempty"`
-		Error     string      `json:"error,omitempty"`
-	}
-
-	err := json2.Unmarshal(b, &o)
-	if err != nil {
-		return err
-	}
-	r.Status = o.Status
-	r.ErrorType = o.ErrorType
-	r.Data = o.Data
-	if o.Error != "" {
-		r.Error = o.Error
-	}
-	return nil
-}
-
-type timeSeries2RowsFunc func(mst string, dst []influx.Row, tss []prompb2.TimeSeries) ([]influx.Row, error)
-
-func timeSeries2Rows(mst string, dst []influx.Row, tss []prompb2.TimeSeries) ([]influx.Row, error) {
-	var r influx.Row
-	var t time.Time
-	for _, ts := range tss {
-		tags := make(influx.PointTags, len(ts.Labels))
+func timeSeries2Rows(mst string, dst []influx.Row, tss []prompb2.TimeSeries, invalidTss map[int]bool) ([]influx.Row, error) {
+	var i int
+	for tsIdx, ts := range tss {
+		if invalidTss[tsIdx] {
+			continue
+		}
+		dst[i].ResizeTags(len(ts.Labels))
+		tags := dst[i].Tags
 		tags, mst = unmarshalPromTags(tags, ts)
-		for _, s := range ts.Samples {
+		for j, s := range ts.Samples {
 			// convert and append
-			t = time.Unix(0, s.Timestamp*int64(time.Millisecond))
-			r = influx.Row{
-				Tags:      tags,
-				Name:      mst,
-				Timestamp: t.UnixNano(),
-				Fields: []influx.Field{
+			dst[i].Timestamp = s.Timestamp * int64(time.Millisecond)
+			dst[i].Name = mst
+			if j == 0 {
+				dst[i].Tags = tags
+			} else {
+				dst[i].CloneTags(tags)
+			}
+			if cap(dst[i].Fields) > 0 {
+				dst[i].Fields = dst[i].Fields[:1]
+				dst[i].Fields[0].Type = influx.Field_Type_Float
+				dst[i].Fields[0].Key = promql2influxql.DefaultFieldKey
+				dst[i].Fields[0].NumValue = s.Value
+			} else {
+				dst[i].Fields = []influx.Field{
 					influx.Field{
 						Type:     influx.Field_Type_Float,
 						Key:      promql2influxql.DefaultFieldKey,
 						NumValue: s.Value,
 					},
-				},
+				}
 			}
-			dst = append(dst, r)
+			i++
 		}
 	}
 	return dst, nil
@@ -361,28 +361,39 @@ func unmarshalPromTags(dst influx.PointTags, ts prompb2.TimeSeries) (influx.Poin
 	return dst, measurement
 }
 
-func timeSeries2RowsV2(mst string, dst []influx.Row, tss []prompb2.TimeSeries) ([]influx.Row, error) {
-	var r influx.Row
-	var t time.Time
-	for _, ts := range tss {
-		tags := make(influx.PointTags, len(ts.Labels))
+func timeSeries2RowsV2(mst string, dst []influx.Row, tss []prompb2.TimeSeries, invalidTss map[int]bool) ([]influx.Row, error) {
+	var i int
+	for tsIdx, ts := range tss {
+		if invalidTss[tsIdx] {
+			continue
+		}
+		dst[i].ResizeTags(len(ts.Labels))
+		tags := dst[i].Tags
 		tags = unmarshalPromTagsV2(tags, ts)
-		for _, s := range ts.Samples {
+		for j, s := range ts.Samples {
 			// convert and append
-			t = time.Unix(0, s.Timestamp*int64(time.Millisecond))
-			r = influx.Row{
-				Tags:      tags,
-				Name:      mst,
-				Timestamp: t.UnixNano(),
-				Fields: []influx.Field{
+			dst[i].Timestamp = s.Timestamp * int64(time.Millisecond)
+			dst[i].Name = mst
+			if j == 0 {
+				dst[i].Tags = tags
+			} else {
+				dst[i].CloneTags(tags)
+			}
+			if cap(dst[i].Fields) > 0 {
+				dst[i].Fields = dst[i].Fields[:1]
+				dst[i].Fields[0].Type = influx.Field_Type_Float
+				dst[i].Fields[0].Key = promql2influxql.DefaultFieldKey
+				dst[i].Fields[0].NumValue = s.Value
+			} else {
+				dst[i].Fields = []influx.Field{
 					influx.Field{
 						Type:     influx.Field_Type_Float,
 						Key:      promql2influxql.DefaultFieldKey,
 						NumValue: s.Value,
 					},
-				},
+				}
 			}
-			dst = append(dst, r)
+			i++
 		}
 	}
 	return dst, nil
@@ -393,12 +404,51 @@ func unmarshalPromTagsV2(dst influx.PointTags, ts prompb2.TimeSeries) influx.Poi
 		dst[i].Key = *(*string)(unsafe.Pointer(&label.Name))
 		dst[i].Value = *(*string)(unsafe.Pointer(&label.Value))
 	}
+	sort.Sort(&dst)
 	return dst
 }
 
-type getQueryCmd func(r *http.Request, w http.ResponseWriter) (promql2influxql.PromCommand, bool)
+func promMetaData2Tag(mst string, row *influx.Row, md *prompb.MetricMetadata) {
+	if len(mst) > 0 {
+		row.ResizeTags(2)
+		row.Tags[0].Key = promql2influxql.PromMetric
+		row.Tags[0].Value = md.MetricFamilyName
+		row.Tags[1].Key = promql2influxql.PromProjectID
+		row.Tags[1].Value = mst
+		return
+	}
+	row.ResizeTags(1)
+	row.Tags[0].Key = promql2influxql.PromMetric
+	row.Tags[0].Value = md.MetricFamilyName
+}
 
-func getInstantQueryCmd(r *http.Request, w http.ResponseWriter) (cmd promql2influxql.PromCommand, ok bool) {
+func promMetaData2Field(row *influx.Row, md *prompb.MetricMetadata) {
+	row.ResizeFields(3)
+	row.Fields[0].Key = promql2influxql.PromMetaDataHelp
+	row.Fields[0].StrValue = md.Help
+	row.Fields[0].Type = influx.Field_Type_String
+	row.Fields[1].Key = promql2influxql.PromMetaDataType
+	row.Fields[1].StrValue = strconv.Itoa(int(md.Type))
+	row.Fields[1].Type = influx.Field_Type_Int
+	row.Fields[2].Key = promql2influxql.PromMetaDataUnit
+	row.Fields[2].StrValue = md.Unit
+	row.Fields[2].Type = influx.Field_Type_String
+}
+
+// promMetaData2Row used to convert metadata to row
+// mst: prom_meta_data
+// time |                  Field                    |                 Tag                  |
+// time | help(string) | type(int64) | unit(string) | metric(string) | project_id(string)  |
+func promMetaData2Row(mst string, row *influx.Row, md *prompb.MetricMetadata, timeStamp int64) {
+	row.Name = promql2influxql.PromMetaDataMst
+	row.Timestamp = timeStamp
+	promMetaData2Tag(mst, row, md)
+	promMetaData2Field(row, md)
+}
+
+type getQueryCmd func(r *http.Request, w http.ResponseWriter, mst string) (promql2influxql.PromCommand, bool)
+
+func getInstantQueryCmd(r *http.Request, w http.ResponseWriter, mst string) (cmd promql2influxql.PromCommand, ok bool) {
 	// Instant_query Query time. if this parameter is not specified, the current time is used by default.
 	ts, err := parseTimeParam(r, "time", time.Now())
 	if err != nil {
@@ -421,7 +471,7 @@ func getInstantQueryCmd(r *http.Request, w http.ResponseWriter) (cmd promql2infl
 	return promCommand, true
 }
 
-func getRangeQueryCmd(r *http.Request, w http.ResponseWriter) (cmd promql2influxql.PromCommand, ok bool) {
+func getRangeQueryCmd(r *http.Request, w http.ResponseWriter, mst string) (cmd promql2influxql.PromCommand, ok bool) {
 	// Range_query query time. if this parameter is not specified, the current time is used by default.
 	start, err := parseTime(r.FormValue("start"))
 	if err != nil {
@@ -437,6 +487,12 @@ func getRangeQueryCmd(r *http.Request, w http.ResponseWriter) (cmd promql2influx
 		invalidParamError(w, fmt.Errorf("end timestamp must not be before start time"), "end")
 		return
 	}
+
+	if err := validation.ValidateQueryTimeRange(mst, start, end); err != nil {
+		invalidParamError(w, err, "start_end")
+		return
+	}
+
 	step, err := parseDuration(r.FormValue("step"))
 	if err != nil {
 		invalidParamError(w, err, "step")
@@ -451,7 +507,7 @@ func getRangeQueryCmd(r *http.Request, w http.ResponseWriter) (cmd promql2influx
 	// For safety, limit the number of returned points per time series.
 	// This is sufficient for 60s resolution for a week or 1h resolution for a year.
 	if end.Sub(start)/step > MaxPointsForSeries {
-		respondError(w, &apiError{errorBadData, fmt.Errorf("exceeded maximum resolution of 11,000 points per timeseries. Try decreasing the query resolution (?step=XX)")}, nil)
+		respondError(w, &apiError{errorBadData, fmt.Errorf("exceeded maximum resolution of 11,000 points per timeseries. Try decreasing the query resolution (?step=XX)")})
 		return
 	}
 	lookBackDelta := promql2influxql.DefaultLookBackDelta
@@ -473,14 +529,14 @@ func getRangeQueryCmd(r *http.Request, w http.ResponseWriter) (cmd promql2influx
 	return promCommand, true
 }
 
-type getMetaQuery func(r *http.Request, w http.ResponseWriter, mst string) (*influxql.Query, bool)
+type getMetaQuery func(h *Handler, r *http.Request, w http.ResponseWriter, mst string) (*influxql.Query, bool)
 
-func getLabelsQuery(r *http.Request, w http.ResponseWriter, mst string) (q *influxql.Query, ok bool) {
-	start, end, ok := getTimeRange(w, r)
+func getLabelsQuery(h *Handler, r *http.Request, w http.ResponseWriter, mst string) (q *influxql.Query, ok bool) {
+	start, end, ok := getTimeRange(w, r, mst)
 	if !ok {
 		return
 	}
-	db, rp := getDbRpByProm(r)
+	db, rp := getDbRpByProm(h, r)
 	promCommand := promql2influxql.PromCommand{
 		Database:        db,
 		RetentionPolicy: rp,
@@ -496,30 +552,31 @@ func getLabelsQuery(r *http.Request, w http.ResponseWriter, mst string) (q *infl
 	}
 	showTagKeysStatement, ok := nodes.(*influxql.ShowTagKeysStatement)
 	if !ok {
-		respondError(w, &apiError{errorBadData, fmt.Errorf("invalid the show tag keys statement for promql")}, nil)
+		respondError(w, &apiError{errorBadData, fmt.Errorf("invalid labels query for promql")})
 	}
 	q = &influxql.Query{Statements: []influxql.Statement{showTagKeysStatement}}
 
 	return q, true
 }
 
-func getLabelValuesQuery(r *http.Request, w http.ResponseWriter, mst string) (q *influxql.Query, ok bool) {
+func getLabelValuesQuery(h *Handler, r *http.Request, w http.ResponseWriter, mst string) (q *influxql.Query, ok bool) {
 	name := mux.Vars(r)["name"]
 	if !model.LabelNameRE.MatchString(name) {
-		respondError(w, &apiError{errorBadData, fmt.Errorf("invalid label name: %q", name)}, nil)
+		respondError(w, &apiError{errorBadData, fmt.Errorf("invalid label name: %q", name)})
 		return
 	}
 
-	start, end, ok := getTimeRange(w, r)
+	start, end, ok := getTimeRange(w, r, mst)
 	if !ok {
 		return
 	}
 
-	db, rp := getDbRpByProm(r)
+	db, rp := getDbRpByProm(h, r)
 	promCommand := promql2influxql.PromCommand{
 		Database:        db,
 		RetentionPolicy: rp,
 		Measurement:     mst,
+		Exact:           isExact(r),
 		Start:           &start,
 		End:             &end,
 		LabelName:       name,
@@ -532,29 +589,30 @@ func getLabelValuesQuery(r *http.Request, w http.ResponseWriter, mst string) (q 
 	}
 	showTagValuesStatement, ok := nodes.(*influxql.ShowTagValuesStatement)
 	if !ok {
-		respondError(w, &apiError{errorBadData, fmt.Errorf("invalid the show tag values statement for promql")}, nil)
+		respondError(w, &apiError{errorBadData, fmt.Errorf("invalid label values query for promql")})
 	}
 	q = &influxql.Query{Statements: []influxql.Statement{showTagValuesStatement}}
 
 	return q, true
 }
 
-func getSeriesQuery(r *http.Request, w http.ResponseWriter, mst string) (q *influxql.Query, ok bool) {
+func getSeriesQuery(h *Handler, r *http.Request, w http.ResponseWriter, mst string) (q *influxql.Query, ok bool) {
 	if len(r.Form["match[]"]) == 0 {
-		respondError(w, &apiError{errorBadData, fmt.Errorf("no match[] parameter provided")}, nil)
+		respondError(w, &apiError{errorBadData, fmt.Errorf("no match[] parameter provided")})
 		return
 	}
 
-	start, end, ok := getTimeRange(w, r)
+	start, end, ok := getTimeRange(w, r, mst)
 	if !ok {
 		return
 	}
 
-	db, rp := getDbRpByProm(r)
+	db, rp := getDbRpByProm(h, r)
 	promCommand := promql2influxql.PromCommand{
 		Database:        db,
 		RetentionPolicy: rp,
 		Measurement:     mst,
+		Exact:           isExact(r),
 		Start:           &start,
 		End:             &end,
 		DataType:        promql2influxql.SERIES_DATA,
@@ -566,17 +624,105 @@ func getSeriesQuery(r *http.Request, w http.ResponseWriter, mst string) (q *infl
 	}
 	showSeriesStatement, ok := nodes.(*influxql.ShowSeriesStatement)
 	if !ok {
-		respondError(w, &apiError{errorBadData, fmt.Errorf("invalid the show tag keys statement for promql")}, nil)
+		respondError(w, &apiError{errorBadData, fmt.Errorf("invalid series query for promql")})
 	}
 	q = &influxql.Query{Statements: []influxql.Statement{showSeriesStatement}}
 
 	return q, true
 }
 
+func genFieldByCall(call string, field string, dt influxql.DataType) *influxql.Field {
+	return &influxql.Field{
+		Alias: field,
+		Expr: &influxql.Call{
+			Name: call,
+			Args: []influxql.Expr{
+				&influxql.VarRef{
+					Val:  field,
+					Type: dt,
+				},
+			},
+		},
+	}
+}
+
+func genConditionByReq(mst string, r *http.Request, cmd *promql2influxql.PromCommand) influxql.Expr {
+	condition := promql2influxql.GetTimeCondition(cmd.Start, cmd.End)
+	if len(mst) > 0 {
+		tagCond := &influxql.BinaryExpr{
+			Op:  influxql.EQ,
+			LHS: &influxql.VarRef{Val: promql2influxql.PromProjectID},
+			RHS: &influxql.StringLiteral{Val: mst},
+		}
+		condition = promql2influxql.CombineConditionAnd(condition, tagCond)
+	}
+	if metric := r.FormValue("metric"); len(metric) > 0 {
+		tagCond := &influxql.BinaryExpr{
+			Op:  influxql.EQ,
+			LHS: &influxql.VarRef{Val: promql2influxql.PromMetric},
+			RHS: &influxql.StringLiteral{Val: metric},
+		}
+		condition = promql2influxql.CombineConditionAnd(condition, tagCond)
+	}
+	return condition
+}
+
+func genDimensionByReq(mst string) influxql.Dimensions {
+	dims := []*influxql.Dimension{
+		{
+			Expr: &influxql.VarRef{
+				Val: promql2influxql.PromMetric,
+			},
+		},
+	}
+	if len(mst) > 0 {
+		dims = append(dims, &influxql.Dimension{
+			Expr: &influxql.VarRef{
+				Val: promql2influxql.PromProjectID,
+			},
+		})
+	}
+	return dims
+}
+
+func getMetaDataQuery(h *Handler, r *http.Request, w http.ResponseWriter, mst string) (q *influxql.Query, ok bool) {
+	db, rp := getDbRpByProm(h, r)
+	promCommand := promql2influxql.PromCommand{
+		Database:        db,
+		RetentionPolicy: rp,
+		Measurement:     promql2influxql.PromMetaDataMst,
+		DataType:        promql2influxql.META_DATA,
+	}
+	source := &influxql.Measurement{Database: db, RetentionPolicy: rp, Name: promCommand.Measurement}
+	fields := []*influxql.Field{
+		genFieldByCall("last", promql2influxql.PromMetaDataHelp, influxql.String),
+		genFieldByCall("last", promql2influxql.PromMetaDataType, influxql.Integer),
+		genFieldByCall("last", promql2influxql.PromMetaDataUnit, influxql.String),
+	}
+	condition := genConditionByReq(mst, r, &promCommand)
+	var limit int
+	if n, err := strconv.ParseInt(r.FormValue("limit"), 10, 64); err == nil && int(n) > 0 {
+		limit = int(n)
+	}
+	dimension := genDimensionByReq(mst)
+	statement := &influxql.SelectStatement{
+		Sources:    []influxql.Source{source},
+		Fields:     fields,
+		Condition:  condition,
+		Dimensions: dimension,
+		Limit:      limit,
+	}
+	q = &influxql.Query{Statements: []influxql.Statement{statement}}
+	return q, true
+}
+
 func transpileToStat(r *http.Request, w http.ResponseWriter, promCommand promql2influxql.PromCommand) influxql.Node {
+	if len(promCommand.Measurement) > 0 {
+		return transpileToStmtWithMetricStore(r, w, promCommand)
+	}
 	matcherSets, err := parseMatchersParam(r.Form["match[]"])
 	if err != nil {
-		respondError(w, &apiError{errorBadData, err}, nil)
+		respondError(w, &apiError{errorBadData, err})
 		return nil
 	}
 	labelMatchers := make([]*labels.Matcher, 0, len(matcherSets))
@@ -593,14 +739,57 @@ func transpileToStat(r *http.Request, w http.ResponseWriter, promCommand promql2
 	}
 	nodes, err := transpiler.Transpile(vectorSelector)
 	if err != nil {
-		respondError(w, &apiError{errorBadData, err}, nil)
+		respondError(w, &apiError{errorBadData, err})
 		return nil
 	}
-
 	return nodes
 }
 
-func getTimeRange(w http.ResponseWriter, r *http.Request) (time.Time, time.Time, bool) {
+func transpileToStmtWithMetricStore(r *http.Request, w http.ResponseWriter, promCommand promql2influxql.PromCommand) influxql.Node {
+	matcherSets, err := parseMatchersParam(r.Form["match[]"])
+	if err != nil {
+		respondError(w, &apiError{errorBadData, err})
+		return nil
+	}
+
+	var labelMatchers []*labels.Matcher
+	if len(matcherSets) >= 1 {
+		labelMatchers = matcherSets[0]
+	}
+	vectorSelector := &parser.VectorSelector{
+		LabelMatchers: labelMatchers,
+	}
+
+	// Transpiler as the key converter for promql2influxql
+	transpiler := &promql2influxql.Transpiler{
+		PromCommand: promCommand,
+	}
+	nodes, err := transpiler.Transpile(vectorSelector)
+	if err != nil {
+		respondError(w, &apiError{errorBadData, err})
+		return nil
+	}
+	if len(matcherSets) <= 1 {
+		return nodes
+	}
+
+	condition := getConditionByNode(nodes)
+	for _, matcher := range matcherSets[1:] {
+		vectorSelector = &parser.VectorSelector{
+			LabelMatchers: matcher,
+		}
+		LabelCondition, err := promql2influxql.GetTagCondition(vectorSelector, true)
+		if err != nil {
+			respondError(w, &apiError{errorBadData, err})
+			return nil
+		}
+		condition = promql2influxql.CombineConditionOr(condition, LabelCondition)
+	}
+	setConditionByNode(nodes, condition)
+	return nodes
+}
+
+func getTimeRange(w http.ResponseWriter, r *http.Request, mst string) (time.Time, time.Time, bool) {
 	start, err := parseTimeParam(r, "start", minTime)
 	if err != nil {
 		invalidParamError(w, err, "start")
@@ -611,7 +800,17 @@ func getTimeRange(w http.ResponseWriter, r *http.Request) (time.Time, time.Time,
 		invalidParamError(w, err, "end")
 		return time.Time{}, time.Time{}, false
 	}
+
+	if err := validation.ValidateQueryTimeRange(mst, start, end); err != nil {
+		invalidParamError(w, err, "start_end")
+		return time.Time{}, time.Time{}, false
+	}
+
 	return start, end, true
+}
+
+func isExact(r *http.Request) bool {
+	return strings.ToLower(r.FormValue("exact")) == "true"
 }
 
 func parseMatchersParam(matchers []string) ([][]*labels.Matcher, error) {
@@ -649,16 +848,27 @@ func seriesParse(s string) map[string]string {
 }
 
 // getDbRpByProm get the names of db and rp from the url parameters. if there is no value, use the default names.
-func getDbRpByProm(r *http.Request) (string, string) {
+func getDbRpByProm(h *Handler, r *http.Request) (string, string) {
 	db := r.FormValue("db")
 	if db == "" {
 		db = promql2influxql.DefaultDatabaseName
 	}
 	rp := r.FormValue("rp")
+	if rp == "" && h.MetaClient != nil {
+		dbi, err := h.MetaClient.Database(db)
+		if dbi != nil && err == nil {
+			rp = dbi.DefaultRetentionPolicy
+		}
+	}
 	if rp == "" {
 		rp = promql2influxql.DefaultRetentionPolicyName
 	}
 	return db, rp
+}
+
+// isMetaDataReq used to check whether to write metadata
+func isMetaDataReq(r *http.Request) bool {
+	return r.FormValue("metadata") == WriteMetaOK
 }
 
 // getMstByProm get the mst name from the url path parameters.
@@ -677,4 +887,33 @@ type promQueryParam struct {
 	mst          string
 	getQueryCmd  getQueryCmd
 	getMetaQuery getMetaQuery
+}
+
+func getConditionByNode(node influxql.Node) influxql.Expr {
+	switch stmt := node.(type) {
+	case *influxql.SelectStatement:
+		return stmt.Condition
+	case *influxql.ShowTagValuesStatement:
+		return stmt.Condition
+	case *influxql.ShowTagKeysStatement:
+		return stmt.Condition
+	case *influxql.ShowSeriesStatement:
+		return stmt.Condition
+	default:
+		return nil
+	}
+}
+
+func setConditionByNode(node influxql.Node, condition influxql.Expr) {
+	switch stmt := node.(type) {
+	case *influxql.SelectStatement:
+		stmt.Condition = condition
+	case *influxql.ShowTagValuesStatement:
+		stmt.Condition = condition
+	case *influxql.ShowTagKeysStatement:
+		stmt.Condition = condition
+	case *influxql.ShowSeriesStatement:
+		stmt.Condition = condition
+	default:
+	}
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/bytedance/sonic"
 	"github.com/influxdata/influxdb/models"
 	jsoniter "github.com/json-iterator/go"
+	"github.com/openGemini/openGemini/lib/util/lifted/promql2influxql"
 	"github.com/tinylib/msgp/msgp"
 )
 
@@ -18,14 +19,14 @@ import (
 type ResponseWriter interface {
 	// WriteResponse writes a response.
 	WriteResponse(resp Response) (int, error)
-	WritePromResponse(resp PromResponse) (int, error)
+	WritePromResponse(resp promql2influxql.Response) (int, error)
 
 	http.ResponseWriter
 }
 
 type formatter interface {
 	WriteResponse(w io.Writer, resp Response) error
-	WritePromResponse(w io.Writer, resp PromResponse) error
+	WritePromResponse(w io.Writer, resp promql2influxql.Response) error
 }
 
 type supportedContentType struct {
@@ -79,7 +80,7 @@ func match(ah accept, sct supportedContentType) bool {
 type responseWriter struct {
 	formatter interface {
 		WriteResponse(w io.Writer, resp Response) error
-		WritePromResponse(w io.Writer, resp PromResponse) error
+		WritePromResponse(w io.Writer, resp promql2influxql.Response) error
 	}
 	http.ResponseWriter
 }
@@ -103,7 +104,7 @@ func (w *responseWriter) WriteResponse(resp Response) (int, error) {
 }
 
 // WriteResponse writes the response using the formatter.
-func (w *responseWriter) WritePromResponse(resp PromResponse) (int, error) {
+func (w *responseWriter) WritePromResponse(resp promql2influxql.Response) (int, error) {
 	writer := bytesCountWriter{w: w.ResponseWriter}
 	err := w.formatter.WritePromResponse(&writer, resp)
 	return writer.n, err
@@ -196,7 +197,7 @@ func (f *jsonFormatter) WriteResponse(w io.Writer, resp Response) error {
 	return err
 }
 
-func (f *jsonFormatter) WritePromResponse(w io.Writer, resp PromResponse) error {
+func (f *jsonFormatter) WritePromResponse(w io.Writer, resp promql2influxql.Response) error {
 	var b []byte
 	var err error
 	var json = jsoniter.ConfigCompatibleWithStandardLibrary
@@ -345,7 +346,7 @@ func (f *csvFormatter) WriteResponse(w io.Writer, resp Response) (err error) {
 	return csv.Error()
 }
 
-func (f *csvFormatter) WritePromResponse(w io.Writer, resp PromResponse) (err error) {
+func (f *csvFormatter) WritePromResponse(w io.Writer, resp promql2influxql.Response) (err error) {
 	return nil
 }
 
@@ -449,7 +450,7 @@ func (f *msgpackFormatter) WriteResponse(w io.Writer, resp Response) (err error)
 	return nil
 }
 
-func (f *msgpackFormatter) WritePromResponse(w io.Writer, resp PromResponse) (err error) {
+func (f *msgpackFormatter) WritePromResponse(w io.Writer, resp promql2influxql.Response) (err error) {
 	return nil
 }
 

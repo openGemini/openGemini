@@ -84,7 +84,7 @@ func Open(path string, nocache bool) (*Reader, error) {
 		f:  f,
 		br: getBufioReader(f),
 	}
-	if nocache {
+	if nocache && fileops.GetFsType(path) != fileops.Obs {
 		r.st.fd = f.Fd()
 		r.st.file = f
 	}
@@ -178,7 +178,7 @@ func OpenWriterAt(path string, lockPath *string, offset int64, nocache bool) (*W
 // If nocache is set, the writer doesn't pollute OS page cache.
 func Create(path string, lockPath *string, nocache bool) (*Writer, error) {
 	lock := fileops.FileLockOption(*lockPath)
-	f, err := fileops.Create(path, lock)
+	f, err := fileops.CreateV2(path, lock)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create file %q: %w", path, err)
 	}

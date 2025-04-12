@@ -17,7 +17,6 @@ package run
 import (
 	"net/http"
 
-	"github.com/openGemini/openGemini/app"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/httpserver"
@@ -71,5 +70,5 @@ func (h *httpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *httpHandler) serveExpvar(w http.ResponseWriter, r *http.Request) {
-	app.SetStatsResponse(h.storePusher, w, r)
+	httpd.SetStatsResponse(h.storePusher, w, r)
 }

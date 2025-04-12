@@ -1271,6 +1271,64 @@ func TestServer_Query_Math(t *testing.T) {
 	}
 }
 
+// Currently, division by zero is not supported and needs to be determined by the client.
+func TestServer_Query_DivByZero(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	now := now()
+	writes := []string{
+		"inf value=42 " + strconv.FormatInt(now.UnixNano(), 10),
+		"negativeInf value=-42 " + strconv.FormatInt(now.UnixNano(), 10),
+		"nan value=0 " + strconv.FormatInt(now.UnixNano(), 10),
+	}
+
+	test := NewTest("db", "rp")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		{
+			name:    "SELECT value /0 of float value",
+			command: `SELECT value / 0 from db.rp.inf`,
+			exp:     fmt.Sprintf(`{"error":"struct { Results []*query.Result \"json:\\\"results,omitempty\\\"\"; Err string \"json:\\\"error,omitempty\\\"\" }.Results: []*query.Result: json: unsupported value: NaN or ±Infinite"}`),
+		},
+		{
+			name:    "SELECT negative value /0  of float value",
+			command: `SELECT value / 0 from db.rp.negativeInf`,
+			exp:     fmt.Sprintf(`{"error":"struct { Results []*query.Result \"json:\\\"results,omitempty\\\"\"; Err string \"json:\\\"error,omitempty\\\"\" }.Results: []*query.Result: json: unsupported value: NaN or ±Infinite"}`),
+		},
+		{
+			name:    "SELECT negative value /0  of float value",
+			command: `SELECT value / 0 from db.rp.nan`,
+			exp:     fmt.Sprintf(`{"error":"struct { Results []*query.Result \"json:\\\"results,omitempty\\\"\"; Err string \"json:\\\"error,omitempty\\\"\" }.Results: []*query.Result: json: unsupported value: NaN or ±Infinite"}`),
+		},
+	}...)
+
+	if err := test.init(s); err != nil {
+		if strings.Contains(err.Error(), "point without tags is unsupported") {
+			t.Log("fail ignore")
+			return
+		}
+		t.Fatalf("test init failed: %s", err)
+	}
+
+	for _, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}
+
 // Ensure the server can query with the count aggregate function
 func TestServer_Query_Count(t *testing.T) {
 	t.Parallel()
@@ -5050,6 +5108,18 @@ func TestServer_Query_Complex_Aggregate(t *testing.T) {
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","tags":{"az":"az_0","region":"region_0"},"columns":["time","distinct"],"values":[["1970-01-01T00:00:00Z",true],["1970-01-01T00:00:00Z",false]]},{"name":"cpu","tags":{"az":"az_1","region":"region_1"},"columns":["time","distinct"],"values":[["1970-01-01T00:00:00Z",true],["1970-01-01T00:00:00Z",false],["1970-01-01T01:00:00Z",true],["1970-01-01T01:00:00Z",false]]},{"name":"cpu","tags":{"az":"az_2","region":"region_2"},"columns":["time","distinct"],"values":[["1970-01-01T01:00:00Z",true],["1970-01-01T01:00:00Z",false]]},{"name":"cpu","tags":{"az":"az_3","region":"region_3"},"columns":["time","distinct"],"values":[["1970-01-01T01:00:00Z",true],["1970-01-01T01:00:00Z",false],["1970-01-01T02:00:00Z",true],["1970-01-01T02:00:00Z",false]]},{"name":"cpu","tags":{"az":"az_4","region":"region_4"},"columns":["time","distinct"],"values":[["1970-01-01T02:00:00Z",true],["1970-01-01T02:00:00Z",false]]},{"name":"cpu","tags":{"az":"az_5","region":"region_5"},"columns":["time","distinct"],"values":[["1970-01-01T02:00:00Z",true],["1970-01-01T02:00:00Z",false],["1970-01-01T03:00:00Z",true],["1970-01-01T03:00:00Z",false]]},{"name":"cpu","tags":{"az":"az_6","region":"region_6"},"columns":["time","distinct"],"values":[["1970-01-01T03:00:00Z",true],["1970-01-01T03:00:00Z",false]]},{"name":"cpu","tags":{"az":"az_7","region":"region_7"},"columns":["time","distinct"],"values":[["1970-01-01T03:00:00Z",true],["1970-01-01T03:00:00Z",false],["1970-01-01T04:00:00Z",true],["1970-01-01T04:00:00Z",false]]},{"name":"cpu","tags":{"az":"az_8","region":"region_8"},"columns":["time","distinct"],"values":[["1970-01-01T04:00:00Z",true],["1970-01-01T04:00:00Z",false],["1970-01-01T05:00:00Z",true],["1970-01-01T05:00:00Z",false]]},{"name":"cpu","tags":{"az":"az_9","region":"region_9"},"columns":["time","distinct"],"values":[["1970-01-01T05:00:00Z",true],["1970-01-01T05:00:00Z",false]]}]}]}`,
 		},
 		{
+			name:    "count(DISTINCT(v3))",
+			params:  url.Values{"inner_chunk_size": []string{"10"}},
+			command: `select count(DISTINCT(v3)) from (select v3 from db0.rp0.cpu where time >= '1970-01-01T00:00:00Z' AND time <= '1970-01-01T05:41:19Z')`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","count"],"values":[["1970-01-01T00:00:00Z",2]]}]}]}`,
+		},
+		{
+			name:    "count(v3) + DISTINCT(v3)",
+			params:  url.Values{"inner_chunk_size": []string{"10"}},
+			command: `select count(v3) from (select DISTINCT(v3) as v3 from (select v3 from db0.rp0.cpu where time >= '1970-01-01T00:00:00Z' AND time <= '1970-01-01T05:41:19Z'))`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","count"],"values":[["1970-01-01T00:00:00Z",2]]}]}]}`,
+		},
+		{
 			name:    "min(v1),max(v2),sum(v1),count(v2),mean(v1),spread(v2),stddev(v1) group by *",
 			params:  url.Values{"inner_chunk_size": []string{"5"}},
 			command: `select min(v1),max(v2),sum(v1),count(v2),mean(v1),spread(v2),stddev(v1) from db0.rp0.cpu where time >= '1970-01-01T00:00:00Z' AND time <= '1970-01-01T05:41:19Z' group by *`,
@@ -7991,6 +8061,74 @@ func TestServer_Query_WildcardExpansion(t *testing.T) {
 	}
 }
 
+func TestServer_Query_TagFilter(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		fmt.Sprintf(`test,tag1=1,tag2=2 value=1 %d`, 1709258312955000000),
+		fmt.Sprintf(`test,tag1=1,tag2=2 value=2 %d`, 1709258327955000000),
+		fmt.Sprintf(`test,tag1=1,tag2=2 value=3 %d`, 1709258342955000000),
+		fmt.Sprintf(`test,tag1=1,tag2=2 value=4 %d`, 1709258357955000000),
+		fmt.Sprintf(`test,tag1=1,tag2=3 value=5 %d`, 1709258372955000000),
+	}
+
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		{
+			name:    "tag1=1 and tag2=2,with agg",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `select sum(value) from test where tag1=1 and tag2=2`,
+			exp:     `{"results":[{"statement_id":0}]}`,
+		},
+		{
+			name:    "tag1=1 and tag2=2,not with agg",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `select value from test where tag1=1 and tag2=2`,
+			exp:     `{"results":[{"statement_id":0}]}`,
+		},
+		{
+			name:    "tag1='1' and tag2='2',with agg",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `select sum(value) from test where tag1='1' and tag2='2'`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"test","columns":["time","sum"],"values":[["1970-01-01T00:00:00Z",10]]}]}]}`,
+		},
+		{
+			name:    "tag1='1' and tag2='2',not with agg",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `select value from test where tag1='1' and tag2='2'`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"test","columns":["time","value"],"values":[["2024-03-01T01:58:32.955Z",1],["2024-03-01T01:58:47.955Z",2],["2024-03-01T01:59:02.955Z",3],["2024-03-01T01:59:17.955Z",4]]}]}]}`,
+		},
+	}...)
+
+	for i, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if i == 0 {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
+			}
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}
+
 func TestServer_Query_AcrossShardsAndFields(t *testing.T) {
 	t.Parallel()
 	s := OpenServer(NewParseConfig(testCfgPath))
@@ -9193,6 +9331,18 @@ func TestServer_Query_ShowSeries(t *testing.T) {
 			params:  url.Values{"db": []string{"db0"}},
 			exp:     `{"results":[{"statement_id":0,"series":[{"columns":["startTime","endTime","count"],"values":[["2009-11-09T00:00:00Z","2009-11-16T00:00:00Z",6]]}]}]}`,
 		},
+		{
+			name:    `show /hint/ series on db0 from cpu`,
+			command: "SHOW /*+ exact_statistic_query */ SERIES ON db0 FROM cpu where time = '2009-11-10T23:00:00Z'",
+			params:  url.Values{"db": []string{"db0"}},
+			exp:     `{"results":[{"statement_id":0,"series":[{"columns":["key"],"values":[["cpu,host=server01"],["cpu,host=server01,region=useast"],["cpu,host=server01,region=uswest"],["cpu,host=server02"],["cpu,host=server02,region=useast"],["cpu,host=server02,region=uswest"]]}]}]}`,
+		},
+		{
+			name:    `show /hint/ series from cpu`,
+			command: "SHOW /*+ exact_statistic_query */ SERIES FROM cpu where time = '2009-11-10T23:00:00Z'",
+			params:  url.Values{"db": []string{"db0"}},
+			exp:     `{"results":[{"statement_id":0,"series":[{"columns":["key"],"values":[["cpu,host=server01"],["cpu,host=server01,region=useast"],["cpu,host=server01,region=uswest"],["cpu,host=server02"],["cpu,host=server02,region=useast"],["cpu,host=server02,region=uswest"]]}]}]}`,
+		},
 	}...)
 
 	InitHaTestEnv(t)
@@ -9617,6 +9767,18 @@ func TestServer_Query_ShowTagValues(t *testing.T) {
 			name:    "show tag values with limit 1 offset 0",
 			command: "SHOW TAG VALUES WITH KEY = host order by value asc limit 1 offset 0",
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["key","value"],"values":[["host","server01"]]},{"name":"disk","columns":["key","value"],"values":[["host","server03"]]},{"name":"gpu","columns":["key","value"],"values":[["host","server02"]]}]}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+		},
+		{
+			name:    "show /hint/ tag values on db0 from gpu",
+			command: "SHOW /*+ exact_statistic_query */ TAG VALUES ON db0 FROM gpu WITH KEY = host where time = '2009-11-10T23:00:00Z' order by value asc",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"gpu","columns":["key","value"],"values":[["host","server02"],["host","server03"]]}]}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+		},
+		{
+			name:    "show /hint/ tag values from gpu",
+			command: "SHOW /*+ exact_statistic_query */ TAG VALUES FROM gpu WITH KEY = host where time = '2009-11-10T23:00:00Z' order by value asc",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"gpu","columns":["key","value"],"values":[["host","server02"],["host","server03"]]}]}]}`,
 			params:  url.Values{"db": []string{"db0"}},
 		},
 	}...)
@@ -12548,6 +12710,55 @@ func TestServer_TSSubQueryHasDifferentAscending(t *testing.T) {
 	}
 }
 
+func TestServer_Query_PreAgg_Min_Max_ExtremeValue(t *testing.T) {
+	t.Parallel()
+	s := OpenDefaultServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: strings.Join([]string{
+			fmt.Sprintf(`m_DDB8BA70_20240820193222_jsli,thing_id=DDB8BA70_20240820193222-T01 /ProductModel#string="test_string01",/OverdriveState#integer=1024,/RotationsPerSecond#double=1.7976931348623157e+308 %d`, mustParseTime(time.RFC3339Nano, "2024-08-20T19:32:26Z").UnixNano()),
+			fmt.Sprintf(`m_DDB8BA70_20240820193222_jsli,thing_id=DDB8BA70_20240820193222-T01 /ProductModel#string="test_string02",/OverdriveState#integer=10240,/RotationsPerSecond#double=-1.7976931348623157e+308 %d`, mustParseTime(time.RFC3339Nano, "2024-08-20T19:32:27Z").UnixNano()),
+			fmt.Sprintf(`m_DDB8BA70_20240820193222_jsli,thing_id=DDB8BA70_20240820193222-T01 /ProductModel#string="test_string03",/OverdriveState#integer=102400,/RotationsPerSecond#double=1.7976931348623157e+308 %d`, mustParseTime(time.RFC3339Nano, "2024-08-20T19:32:28Z").UnixNano()),
+			fmt.Sprintf(`m_DDB8BA70_20240820193222_jsli,thing_id=DDB8BA70_20240820193222-T01 /ProductModel#string="test_string04",/OverdriveState#integer=9007199254740991,/RotationsPerSecond#double=1.7976931348623157e+308 %d`, mustParseTime(time.RFC3339Nano, "2024-08-20T19:45:32Z").UnixNano()),
+		}, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		&Query{
+			name:    "exact agg: min + max",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `select /*+ Exact_Statistic_Query */ count("/ProductModel#string"),sum("/OverdriveState#integer"),max("/RotationsPerSecond#double"),min("/RotationsPerSecond#double"),mean("/RotationsPerSecond#double") from "m_DDB8BA70_20240820193222_jsli" where time >= '2024-08-20T19:45:00.000Z' and time < '2024-08-20T20:00:00.000Z'`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"m_DDB8BA70_20240820193222_jsli","columns":["time","count","sum","max","min","mean"],"values":[["2024-08-20T19:45:00Z",1,9007199254740991,1.7976931348623157e+308,1.7976931348623157e+308,1.7976931348623157e+308]]}]}]}`,
+		},
+		&Query{
+			name:    "pre agg: min + max",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `select count("/ProductModel#string"),sum("/OverdriveState#integer"),max("/RotationsPerSecond#double"),min("/RotationsPerSecond#double"),mean("/RotationsPerSecond#double") from "m_DDB8BA70_20240820193222_jsli" where time >= '2024-08-20T19:45:00.000Z' and time < '2024-08-20T20:00:00.000Z'`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"m_DDB8BA70_20240820193222_jsli","columns":["time","count","sum","max","min","mean"],"values":[["2024-08-20T19:45:00Z",1,9007199254740991,1.7976931348623157e+308,1.7976931348623157e+308,1.7976931348623157e+308]]}]}]}`,
+		},
+	}...)
+
+	for i, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if i == 0 {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
+			}
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}
+
 // Ensure the Drop Measurement work correctly when dropping measurements in specific RP.
 func TestServer_DropMeasurementPerRP(t *testing.T) {
 	t.Parallel()
@@ -12612,5 +12823,100 @@ func TestServer_DropMeasurementPerRP(t *testing.T) {
 		} else if !query.isSuccess() {
 			t.Error(query.failureMessage())
 		}
+	}
+}
+
+func TestServer_Query_FunctionIf(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+	if err := s.CreateDatabaseAndRetentionPolicy("flowscope", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateMeasurement("CREATE MEASUREMENT flowscope.rp0.traffic (area tag, country tag, province tag,  region string, pop string, level int64, bps int64, isisp bool, iseip bool, eqtype float64, percent float64) WITH  ENGINETYPE = columnstore  PRIMARYKEY country,area,time"); err != nil {
+		t.Fatal(err)
+	}
+	writes := []string{
+		fmt.Sprintf(`traffic,area=国内,country=中国,province=北京 region="华北",pop="五道口",level=1i,bps=111i,isisp=True,iseip=False,eqtype=1.1,percent=0.1 %d`, 1629129600000000000),
+		fmt.Sprintf(`traffic,area=国内,country=中国,province=上海 region="华东",pop="人民公园",level=2i,bps=222i,isisp=True,iseip=False,eqtype=2.2,percent=0.2 %d`, 1629129601000000000),
+		fmt.Sprintf(`traffic,area=国内,country=中国,province=广州 region="华南",pop="广州塔",level=3i,bps=333i,isisp=True,iseip=False,eqtype=3.3,percent=0.3 %d`, 1629129602000000000),
+		fmt.Sprintf(`traffic,area=海外,country=印度,province=孟买 region="海外",pop="恒河",level=4i,bps=444i,isisp=True,iseip=False,eqtype=4.4,percent=0.4 %d`, 1629129603000000000),
+		fmt.Sprintf(`traffic,area=海外,country=美国,province=好莱坞 region="海外",pop="A",level=5i,bps=555i,isisp=True,iseip=False,eqtype=5.5,percent=0.5 %d`, 1629129604000000000),
+		fmt.Sprintf(`traffic,area=海外,country=美国,province=拉斯维加斯 region="海外",pop="B",level=6i,bps=666i,isisp=True,iseip=False,eqtype=6.6,percent=0.6 %d`, 1629129605000000000),
+	}
+
+	test := NewTest("flowscope", "rp0")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		{
+			name:    "THEN:Tag, ELSE:Tag",
+			params:  url.Values{"db": []string{"flowscope"}},
+			command: `SELECT if('"area"=\'国内\'', province, country) From traffic`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"traffic","columns":["time","if"],"values":[["2021-08-16T16:00:00Z","北京"],["2021-08-16T16:00:01Z","上海"],["2021-08-16T16:00:02Z","广州"],["2021-08-16T16:00:03Z","印度"],["2021-08-16T16:00:04Z","美国"],["2021-08-16T16:00:05Z","美国"]]}]}]}`,
+		},
+		{
+			name:    "THEN:Integer, ELSE:Integer",
+			params:  url.Values{"db": []string{"flowscope"}},
+			command: `SELECT if('"area"=\'国内\'', bps, level) From traffic`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"traffic","columns":["time","if"],"values":[["2021-08-16T16:00:00Z",111],["2021-08-16T16:00:01Z",222],["2021-08-16T16:00:02Z",333],["2021-08-16T16:00:03Z",4],["2021-08-16T16:00:04Z",5],["2021-08-16T16:00:05Z",6]]}]}]}`,
+		},
+		{
+			name:    "THEN:Boolean, ELSE:Boolean",
+			params:  url.Values{"db": []string{"flowscope"}},
+			command: `SELECT if('"area"=\'国内\'', iseip, isisp) From traffic`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"traffic","columns":["time","if"],"values":[["2021-08-16T16:00:00Z",false],["2021-08-16T16:00:01Z",false],["2021-08-16T16:00:02Z",false],["2021-08-16T16:00:03Z",true],["2021-08-16T16:00:04Z",true],["2021-08-16T16:00:05Z",true]]}]}]}`,
+		},
+		{
+			name:    "THEN:Float, ELSE:Float",
+			params:  url.Values{"db": []string{"flowscope"}},
+			command: `SELECT if('"area"=\'国内\'', percent, eqtype) From traffic`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"traffic","columns":["time","if"],"values":[["2021-08-16T16:00:00Z",0.1],["2021-08-16T16:00:01Z",0.2],["2021-08-16T16:00:02Z",0.3],["2021-08-16T16:00:03Z",4.4],["2021-08-16T16:00:04Z",5.5],["2021-08-16T16:00:05Z",6.6]]}]}]}`,
+		},
+		{
+			name:    "CONDITION: KEY>x",
+			params:  url.Values{"db": []string{"flowscope"}},
+			command: `SELECT if('"level">3', percent, eqtype) From traffic`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"traffic","columns":["time","if"],"values":[["2021-08-16T16:00:00Z",1.1],["2021-08-16T16:00:01Z",2.2],["2021-08-16T16:00:02Z",3.3],["2021-08-16T16:00:03Z",0.4],["2021-08-16T16:00:04Z",0.5],["2021-08-16T16:00:05Z",0.6]]}]}]}`,
+		},
+		{
+			name:    "Different type of THEN and Else",
+			params:  url.Values{"db": []string{"flowscope"}},
+			command: `SELECT if('\"area\"=\'国内\'', province, level) From traffic`,
+			exp:     `{"results":[{"statement_id":0,"error":"the 2nd and 3rd argument must be of same type in if()"}]}`,
+		},
+		{
+			name:    "Invalid number of arguments",
+			params:  url.Values{"db": []string{"flowscope"}},
+			command: "SELECT if('\"area\"=\"国内\"', bps) From traffic",
+			exp:     `{"results":[{"statement_id":0,"error":"invalid number of arguments for if, expected 3, got 2"}]}`,
+		},
+		{
+			name:    "Invalid operator",
+			params:  url.Values{"db": []string{"flowscope"}},
+			command: "SELECT if('\"area\"==\"国内\"', bps, level) From traffic",
+			exp:     `{"results":[{"statement_id":0,"error":"invalid condition, input like '\"key\" [operator] \\'string\\'' or '\"key\" [operator] digit'"}]}`,
+		},
+	}...)
+
+	for i, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if i == 0 {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
+				time.Sleep(3 * time.Second)
+			}
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
 	}
 }
