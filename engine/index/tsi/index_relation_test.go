@@ -24,7 +24,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/influxdata/influxdb/pkg/testing/assert"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
@@ -33,7 +32,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/savsgio/dictpool"
-	assert1 "github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -635,21 +634,21 @@ func TestWriteFieldIndex(t *testing.T) {
 	}
 	mmPoints := genRowsByOpt(opt, SeriesKeys)
 	err := CreateIndexByRows(idxBuilder, mmPoints)
-	if !assert1.NotNil(t, err) {
+	if !assert.NotNil(t, err) {
 		t.Fatal()
 	}
 
 	opt.IndexList = []uint16{0, 3}
 	mmPoints = genRowsByOpt(opt, SeriesKeys)
 	err = CreateIndexByRows(idxBuilder, mmPoints)
-	if !assert1.NotNil(t, err) {
+	if !assert.NotNil(t, err) {
 		t.Fatal()
 	}
 
 	opt.IndexList = []uint16{3}
 	mmPoints = genRowsByOpt(opt, SeriesKeys)
 	err = CreateIndexByRows(idxBuilder, mmPoints)
-	if !assert1.Nil(t, err) {
+	if !assert.Nil(t, err) {
 		t.Fatal()
 	}
 	if err = idxBuilder.Close(); err != nil {
@@ -682,24 +681,24 @@ func TestFieldIndexSearch(t *testing.T) {
 	// No group by and without filter.
 	nameWithVer := "mn-1_0000"
 	result, _, err := idxBuilder.Scan(nil, []byte(nameWithVer), &query.ProcessorOptions{Name: nameWithVer}, resourceallocator.DefaultSeriesAllocateFunc)
-	if !assert1.Nil(t, err) {
+	if !assert.Nil(t, err) {
 		t.Fatal()
 	}
 	tagSets, ok := result.(GroupSeries)
 	if !ok {
 		t.Fatal()
 	}
-	if !assert1.Equal(t, 1, len(tagSets)) {
+	if !assert.Equal(t, 1, len(tagSets)) {
 		t.Fatal()
 	}
-	if !assert1.Equal(t, 5, len(tagSets[0].SeriesKeys)) {
+	if !assert.Equal(t, 5, len(tagSets[0].SeriesKeys)) {
 		t.Fatal()
 	}
 
 	sort.Strings(SeriesKeys)
 	sort.Sort(tagSets[0])
 	for i, key := range SeriesKeys {
-		if !assert1.True(t, strings.Contains(string(tagSets[0].SeriesKeys[i]), key)) {
+		if !assert.True(t, strings.Contains(string(tagSets[0].SeriesKeys[i]), key)) {
 			t.Fatal(string(tagSets[0].SeriesKeys[i]), key)
 		}
 	}
@@ -709,17 +708,17 @@ func TestFieldIndexSearch(t *testing.T) {
 		&query.ProcessorOptions{
 			Name:      "mn-1_0000",
 			Condition: MustParseExpr(`field_str0='value-1'`)}, resourceallocator.DefaultSeriesAllocateFunc)
-	if !assert1.Nil(t, err) {
+	if !assert.Nil(t, err) {
 		t.Fatal()
 	}
 	tagSets, ok = result.(GroupSeries)
 	if !ok {
 		t.Fatal()
 	}
-	if !assert1.Equal(t, 1, len(tagSets)) {
+	if !assert.Equal(t, 1, len(tagSets)) {
 		t.Fatal()
 	}
-	if !assert1.True(t, strings.Contains(string(tagSets[0].SeriesKeys[0]), "field_str0\x00value-1")) {
+	if !assert.True(t, strings.Contains(string(tagSets[0].SeriesKeys[0]), "field_str0\x00value-1")) {
 		t.Fatal()
 	}
 
@@ -728,18 +727,18 @@ func TestFieldIndexSearch(t *testing.T) {
 		&query.ProcessorOptions{
 			Name:       "mn-1_0000",
 			Dimensions: []string{"field_str0"}}, resourceallocator.DefaultSeriesAllocateFunc)
-	if !assert1.Nil(t, err) {
+	if !assert.Nil(t, err) {
 		t.Fatal()
 	}
 	tagSets, ok = result.(GroupSeries)
 	if !ok {
 		t.Fatal()
 	}
-	if !assert1.Equal(t, len(SeriesKeys), len(tagSets)) {
+	if !assert.Equal(t, len(SeriesKeys), len(tagSets)) {
 		t.Fatal()
 	}
 	for i, tagSet := range tagSets {
-		if !assert1.True(t, strings.Contains(string(tagSet.key), fmt.Sprintf("field_str0\x00value-%d", i))) {
+		if !assert.True(t, strings.Contains(string(tagSet.key), fmt.Sprintf("field_str0\x00value-%d", i))) {
 			t.Fatal()
 		}
 	}
@@ -770,17 +769,17 @@ func TestPartialFieldIndexSearch(t *testing.T) {
 	// No group by and without filter.
 	nameWithVer := "mn-1_0000"
 	result, _, err := idxBuilder.Scan(nil, []byte(nameWithVer), &query.ProcessorOptions{Name: nameWithVer}, resourceallocator.DefaultSeriesAllocateFunc)
-	if !assert1.Nil(t, err) {
+	if !assert.Nil(t, err) {
 		t.Fatal()
 	}
 	tagSets, ok := result.(GroupSeries)
 	if !ok {
 		t.Fatal()
 	}
-	if !assert1.Equal(t, 1, len(tagSets)) {
+	if !assert.Equal(t, 1, len(tagSets)) {
 		t.Fatal()
 	}
-	if !assert1.Equal(t, 5, len(tagSets[0].SeriesKeys)) {
+	if !assert.Equal(t, 5, len(tagSets[0].SeriesKeys)) {
 		t.Fatal()
 	}
 }
@@ -1115,24 +1114,24 @@ func TestCreateFieldIndex(t *testing.T) {
 	// No group by and without filter.
 	nameWithVer := "mn-1_0000"
 	result, _, err := idxBuilder.Scan(nil, []byte(nameWithVer), &query.ProcessorOptions{Name: nameWithVer}, resourceallocator.DefaultSeriesAllocateFunc)
-	if !assert1.Nil(t, err) {
+	if !assert.Nil(t, err) {
 		t.Fatal()
 	}
 	tagSets, ok := result.(GroupSeries)
 	if !ok {
 		t.Fatal()
 	}
-	if !assert1.Equal(t, 1, len(tagSets)) {
+	if !assert.Equal(t, 1, len(tagSets)) {
 		t.Fatal()
 	}
-	if !assert1.Equal(t, 5, len(tagSets[0].SeriesKeys)) {
+	if !assert.Equal(t, 5, len(tagSets[0].SeriesKeys)) {
 		t.Fatal()
 	}
 
 	sort.Strings(SeriesKeys)
 	sort.Sort(tagSets[0])
 	for i, key := range SeriesKeys {
-		if !assert1.True(t, strings.Contains(string(tagSets[0].SeriesKeys[i]), key)) {
+		if !assert.True(t, strings.Contains(string(tagSets[0].SeriesKeys[i]), key)) {
 			t.Fatal(string(tagSets[0].SeriesKeys[i]), key)
 		}
 	}
@@ -1142,17 +1141,17 @@ func TestCreateFieldIndex(t *testing.T) {
 		&query.ProcessorOptions{
 			Name:      "mn-1_0000",
 			Condition: MustParseExpr(`field_str0='value-1'`)}, resourceallocator.DefaultSeriesAllocateFunc)
-	if !assert1.Nil(t, err) {
+	if !assert.Nil(t, err) {
 		t.Fatal()
 	}
 	tagSets, ok = result.(GroupSeries)
 	if !ok {
 		t.Fatal()
 	}
-	if !assert1.Equal(t, 1, len(tagSets)) {
+	if !assert.Equal(t, 1, len(tagSets)) {
 		t.Fatal()
 	}
-	if !assert1.True(t, strings.Contains(string(tagSets[0].SeriesKeys[0]), "field_str0\x00value-1")) {
+	if !assert.True(t, strings.Contains(string(tagSets[0].SeriesKeys[0]), "field_str0\x00value-1")) {
 		t.Fatal()
 	}
 
@@ -1161,18 +1160,18 @@ func TestCreateFieldIndex(t *testing.T) {
 		&query.ProcessorOptions{
 			Name:       "mn-1_0000",
 			Dimensions: []string{"field_str0"}}, resourceallocator.DefaultSeriesAllocateFunc)
-	if !assert1.Nil(t, err) {
+	if !assert.Nil(t, err) {
 		t.Fatal()
 	}
 	tagSets, ok = result.(GroupSeries)
 	if !ok {
 		t.Fatal()
 	}
-	if !assert1.Equal(t, len(SeriesKeys), len(tagSets)) {
+	if !assert.Equal(t, len(SeriesKeys), len(tagSets)) {
 		t.Fatal()
 	}
 	for i, tagSet := range tagSets {
-		if !assert1.True(t, strings.Contains(string(tagSet.key), fmt.Sprintf("field_str0\x00value-%d", i))) {
+		if !assert.True(t, strings.Contains(string(tagSet.key), fmt.Sprintf("field_str0\x00value-%d", i))) {
 			t.Fatal()
 		}
 	}

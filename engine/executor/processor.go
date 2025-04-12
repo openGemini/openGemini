@@ -24,6 +24,7 @@ import (
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/sysconfig"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util"
 )
@@ -163,12 +164,17 @@ type Processor interface {
 	StartSpan(name string, withPP bool) *tracing.Span
 	FinishSpan()
 	Interrupt()
+	InterruptWithoutMark()
 }
 
 type BaseProcessor struct {
 	span  *tracing.Span
 	begin time.Time
 	once  sync.Once
+}
+
+func (bp *BaseProcessor) InterruptWithoutMark() {
+
 }
 
 func (bp *BaseProcessor) IsSink() bool {
@@ -248,7 +254,16 @@ func (ps Processors) Close() {
 	}
 }
 
+func (ps Processors) InterruptWithoutMark() {
+	for _, p := range ps {
+		p.InterruptWithoutMark()
+	}
+}
+
 func (ps Processors) Interrupt() {
+	if !sysconfig.GetInterruptQuery() {
+		return
+	}
 	for _, p := range ps {
 		p.Interrupt()
 	}

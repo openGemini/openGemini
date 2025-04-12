@@ -31,6 +31,7 @@ var TemplateSql []string = []string{
 	"SELECT * from mst where f1 > 1 and (tag1 = 'tag1val') and time > 1 and time < 2",
 	"SELECT last(*) from mst group by tag1",
 	"SELECT f1 from mst where tag1 = 'tag1val' order by time limit 1",
+	"SELECT max(f1) from mst WHERE (tag1 = 'tag1val') and time > 1 and time < 2 group by time(1ns) fill(none)",
 }
 
 type PlanTypeInitShardMapper struct {

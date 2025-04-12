@@ -22,8 +22,10 @@ import (
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/op"
+	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/tracing"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/promql2influxql"
@@ -345,11 +347,23 @@ func (c *ChunkValuer) ValueNormal(key string) (interface{}, bool) {
 
 func (c *ChunkValuer) ValueProm(key string) (interface{}, bool) {
 	if key == promql2influxql.ArgNameOfTimeFunc {
-		t := float64(c.ref.Time()[c.index] / 1000000000)
+		t := float64(c.ref.Time()[c.index]) / 1000000000
 		return t, true
 	} else {
 		return c.ValueNormal(key)
 	}
+}
+
+func (c *ChunkValuer) SetValueFnOnlyPromTime() {
+	c.value = c.ValuePromTime
+}
+
+func (c *ChunkValuer) ValuePromTime(key string) (interface{}, bool) {
+	if key == promql2influxql.ArgNameOfTimeFunc {
+		t := float64(c.ref.Time()[c.index]) / 1000000000
+		return t, true
+	}
+	return nil, false
 }
 
 func (c *ChunkValuer) SetValuer(_ influxql.Valuer, _ int) {
@@ -374,6 +388,7 @@ type MaterializeTransform struct {
 	ResetTime       bool
 	isPromQuery     bool
 	HasBinaryExpr   bool
+	removeMetric    bool
 	transparents    []func(dst Column, src Chunk, index []int)
 
 	ColumnMap [][]int
@@ -478,6 +493,7 @@ func NewMaterializeTransform(inRowDataType hybridqp.RowDataType, outRowDataType 
 		trans.promQueryTime = trans.opt.EndTime + trans.opt.QueryOffset.Nanoseconds()
 	}
 	trans.ColumnMapInit()
+	trans.removeMetric = trans.opt.IsPromQuery() && trans.HasBinaryExpr
 	return trans
 }
 
@@ -525,9 +541,12 @@ func (trans *MaterializeTransform) Work(ctx context.Context) error {
 			}
 			tracing.StartPP(span)
 
-			tracing.SpanElapsed(trans.ppMaterializeCost, func() {
-				trans.resultChunk = trans.materialize(chunk)
-			})
+			tracing.StartPP(trans.ppMaterializeCost)
+			trans.resultChunk = trans.materialize(chunk)
+			if trans.labelCall != nil && ContainsSameTagset(trans.resultChunk) {
+				return errno.NewError(errno.ErrSameTagSet)
+			}
+			tracing.EndPP(trans.ppMaterializeCost)
 
 			trans.output.State <- trans.resultChunk
 			tracing.EndPP(span)
@@ -535,6 +554,18 @@ func (trans *MaterializeTransform) Work(ctx context.Context) error {
 			return nil
 		}
 	}
+}
+
+func ContainsSameTagset(chunk Chunk) bool {
+	tagMap := make(map[string]struct{})
+	for _, tag := range chunk.Tags() {
+		s := util.Bytes2str(tag.Subset(nil))
+		if _, ok := tagMap[s]; ok {
+			return true
+		}
+		tagMap[s] = struct{}{}
+	}
+	return false
 }
 
 func (trans *MaterializeTransform) processVarRef(vr *influxql.VarRef, transparents []func(dst Column, src Chunk, index []int), i int) {
@@ -755,14 +786,8 @@ func (res *ResultEval) copyToForFloat(l int, dst *ColumnImpl) {
 		num = 0
 		for index < l && !res.IsNil(index) {
 			value := res.getFloat64(index)
-			if math.IsNaN(value) && !res.isPromQuery {
-				dst.AppendManyNotNil(num)
-				dst.AppendNil()
-				num = 0
-			} else {
-				dst.AppendFloatValue(value)
-				num += 1
-			}
+			dst.AppendFloatValue(value)
+			num += 1
 			index += 1
 		}
 		dst.AppendManyNotNil(num)
@@ -1173,11 +1198,7 @@ func resultEvalDIV(lhs *ResultEval, rhs *ResultEval, l int, IntegerFloatDivision
 					lhs.isNil[i] = true
 					continue
 				}
-				if rhs.getInteger(i) == 0 {
-					lhs.floatValue[i] = float64(0)
-				} else {
-					lhs.floatValue[i] = float64(lhs.getInteger(i)) / float64(rhs.getInteger(i))
-				}
+				lhs.floatValue[i] = float64(lhs.getInteger(i)) / float64(rhs.getInteger(i))
 			}
 
 			lhs.dataType = influxql.Float
@@ -1190,11 +1211,7 @@ func resultEvalDIV(lhs *ResultEval, rhs *ResultEval, l int, IntegerFloatDivision
 					lhs.isNil[i] = true
 					continue
 				}
-				if rhs.getFloat64(i) == 0 {
-					lhs.floatValue[i] = float64(0)
-				} else {
-					lhs.floatValue[i] = lhs.getFloat64(i) / rhs.getFloat64(i)
-				}
+				lhs.floatValue[i] = lhs.getFloat64(i) / rhs.getFloat64(i)
 			}
 			lhs.dataType = influxql.Float
 			return
@@ -1379,7 +1396,7 @@ func (trans *MaterializeTransform) materialize(chunk Chunk) Chunk {
 		oChunk.AppendTagsAndIndexes(chunk.Tags(), chunk.TagIndex())
 		oChunk.AppendIntervalIndexes(chunk.IntervalIndex())
 	}
-	if trans.HasBinaryExpr {
+	if trans.opt.IsPromQuery() && trans.HasBinaryExpr {
 		removeTableName(chunk, oChunk)
 	}
 	columnMap := make(map[string]*ColumnImpl)

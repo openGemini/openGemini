@@ -86,7 +86,7 @@ func (m *MetaExecutor) EachDBNodes(database string, fn func(nodeID uint64, pts [
 		retryable := true
 		for i := 0; i < len(nodePtMap); i++ {
 			if e := <-chErr; e != nil && retryable {
-				retryable = IsRetryErrorForPtView(e)
+				retryable = errno.IsRetryErrorForPtView(e)
 				err = e
 			}
 		}

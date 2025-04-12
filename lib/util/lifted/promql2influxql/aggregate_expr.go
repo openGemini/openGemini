@@ -152,6 +152,7 @@ func (t *Transpiler) setAggregateFields(selectStatement *influxql.SelectStatemen
 				Expr: &influxql.Wildcard{Type: influxql.TAG},
 			})
 			selectStatement.SelectAllTags = true
+			SetSelectTag2Aux(selectStatement)
 		}
 		t.dropMetric = false
 	}
@@ -166,6 +167,12 @@ func (t *Transpiler) transpileAggregateExpr(a *parser.AggregateExpr) (influxql.N
 	if err != nil {
 		return nil, errno.NewError(errno.TranspileAggFail, err.Error())
 	}
+
+	// If the aggregate expression has without, reset the dropMetric flag
+	if a.Without {
+		t.dropMetric = true
+	}
+
 	// Get Aggregate function parameter
 	var parameter []influxql.Expr
 	if a.Param != nil {
@@ -192,12 +199,7 @@ func (t *Transpiler) transpileAggregateExpr(a *parser.AggregateExpr) (influxql.N
 
 	switch statement := node.(type) {
 	case *influxql.SelectStatement:
-		// Get the last field of sub expression. The last field is the matrix value.
-		field := statement.Fields[len(statement.Fields)-1]
-		// The last field of the keepMetric agg is *::tag. Take the penultimate one as the field
-		if _, ok = field.Expr.(*influxql.Wildcard); ok && len(statement.Fields) >= 2 {
-			field = statement.Fields[len(statement.Fields)-2]
-		}
+		field, _ := getSelectFieldIdx(statement)
 		switch field.Expr.(type) {
 		case *influxql.Call, *influxql.BinaryExpr, *influxql.ParenExpr:
 			if t.canPushDownAggWithFunction(a, statement, field, parameter, aggFn) {
@@ -219,8 +221,9 @@ func (t *Transpiler) transpileAggregateExpr(a *parser.AggregateExpr) (influxql.N
 				},
 				Alias: DefaultFieldKey,
 			}
+			selectStatement.QueryOffset = statement.QueryOffset
 			t.setAggregateFields(selectStatement, wrappedField, parameter, aggFn)
-			t.setTimeCondition(selectStatement)
+			t.setTimeCondition(selectStatement, false)
 			t.setAggregateDimension(selectStatement, a.Without, a.Grouping...)
 			if t.Step > 0 {
 				t.setTimeInterval(selectStatement)
@@ -293,7 +296,7 @@ func (t *Transpiler) transpileCountValues(statement *influxql.SelectStatement, a
 	}
 	sumFn := aggregateFns[parser.SUM]
 	t.setAggregateFields(selectStatement, wrappedField, nil, sumFn)
-	t.setTimeCondition(selectStatement)
+	t.setTimeCondition(selectStatement, false)
 	selectStatement.LookBackDelta = t.LookBackDelta
 	selectStatement.QueryOffset = statement.QueryOffset
 	selectStatement.Step = statement.Step
@@ -333,4 +336,29 @@ func getCountValuesGrouping(a *parser.AggregateExpr) []string {
 	}
 
 	return grouping
+}
+
+func SetSelectTag2Aux(stmt *influxql.SelectStatement) {
+	if stmt == nil {
+		return
+	}
+	if len(stmt.Sources) == 0 {
+		return
+	}
+	for _, source := range stmt.Sources {
+		s, ok := source.(*influxql.SubQuery)
+		if !ok {
+			continue
+		}
+		if len(s.Statement.Dimensions) != 1 || len(s.Statement.Fields) == 0 {
+			continue
+		}
+		if _, ok = s.Statement.Dimensions[0].Expr.(*influxql.Wildcard); !ok {
+			continue
+		}
+		if _, ok = s.Statement.Fields[0].Expr.(*influxql.BinaryExpr); !ok {
+			continue
+		}
+		s.Statement.SelectTagToAux = true
+	}
 }

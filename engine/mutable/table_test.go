@@ -94,8 +94,8 @@ func TestMemTables_Values_Empty(t *testing.T) {
 	msInfo.CreateChunk(100)
 
 	var run = func(readEnable bool) {
-		tbs := &mutable.MemTables{}
-		tbs.Init(tb, nil, readEnable)
+		tbs := mutable.NewMemTables(1, true)
+		tbs.Init(tb, nil)
 		rec := tbs.Values("mst", 100, util.TimeRange{}, nil, true)
 		require.Empty(t, rec)
 	}

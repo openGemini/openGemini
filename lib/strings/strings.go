@@ -56,16 +56,6 @@ func EqualInterface(i interface{}, s string) bool {
 	return ss == s
 }
 
-// TODO: replace it when the go version upgrades 1.18
-func Clone(s string) string {
-	if len(s) == 0 {
-		return ""
-	}
-	b := make([]byte, len(s))
-	copy(b, s)
-	return *(*string)(unsafe.Pointer(&b))
-}
-
 // SortIsEqual compares if two sorted strings are the equal
 func SortIsEqual(a, b []string) bool {
 	if len(a) != len(b) {

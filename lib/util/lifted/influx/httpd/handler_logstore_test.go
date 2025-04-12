@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"strconv"
 	"strings"
 	"testing"
@@ -144,6 +145,22 @@ func TestParseLogTags(t *testing.T) {
 	assert.Equal(t, `this is tag2`, string(tagsMap["tag2"]))
 	assert.Equal(t, `1715065030012`, string(tagsMap["tag3"]))
 	assert.Equal(t, `{"ss":"this is string"}`, string(tagsMap["tag4"]))
+
+	urlEncodeTag := `{"tag1":"normal","tag2":"this is 中文","tag3":"全中文"}`
+	urlEncodeTag = url.QueryEscape(urlEncodeTag)
+	req = &LogWriteRequest{logTagString: &urlEncodeTag, mstSchema: &meta.CleanSchema{}}
+	req.mapping = &JsonMapping{discardFields: map[string]bool{}}
+	tagsMap, err = parseLogTags(req)
+	assert.Equal(t, nil, err)
+
+	assert.Equal(t, `normal`, string(tagsMap["tag1"]))
+	assert.Equal(t, `this is 中文`, string(tagsMap["tag2"]))
+	assert.Equal(t, `全中文`, string(tagsMap["tag3"]))
+
+	urlEncodeTag = `%%`
+	req = &LogWriteRequest{logTagString: &urlEncodeTag, mstSchema: &meta.CleanSchema{}}
+	tagsMap, err = parseLogTags(req)
+	assert.NotEqual(t, nil, err)
 }
 
 func TestClearFailRow(t *testing.T) {
@@ -175,7 +192,7 @@ func TestJsonHighlight(t *testing.T) {
 	parser.Scanner = logparser.NewScanner(strings.NewReader("json"))
 	parser.ParseTokens()
 	q, _ := parser.GetQuery()
-	query := map[string]map[string]bool{}
+	query := map[string]map[string][]int{}
 	if q != nil {
 		expr := &(q.Statements[0].(*influxql.LogPipeStatement).Cond)
 		query = getHighlightWords(expr, query)

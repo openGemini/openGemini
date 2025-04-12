@@ -132,6 +132,23 @@ func TestNetStorage_ShowTagKeys(t *testing.T) {
 	require.ErrorContains(t, err, fmt.Sprintf("no connections available, node: %d", exitNodeID))
 }
 
+func TestTransferLeadership(t *testing.T) {
+	store := netstorage.NewNetStorage(&MockMetaClient{})
+	store.TransferLeadership("db0", 1, 0, 0)
+}
+
+func TestTagValues(t *testing.T) {
+	store := netstorage.NewNetStorage(&MockMetaClient{})
+	_, err := store.TagValues(0, "db0", []uint32{0}, map[string]map[string]struct{}{"mst": {"tagkey1": {}}}, nil, 0, true)
+	require.ErrorContains(t, err, fmt.Sprintf("no data node"))
+}
+
+func TestShowSeries(t *testing.T) {
+	store := netstorage.NewNetStorage(&MockMetaClient{})
+	_, err := store.ShowSeries(0, "db0", []uint32{0}, []string{"mst"}, nil, true)
+	require.ErrorContains(t, err, fmt.Sprintf("no data node"))
+}
+
 func TestNetStorage_SetRaftMsg(t *testing.T) {
 	store := netstorage.NewNetStorage(&MockMetaClient{})
 	err := store.SendRaftMessages(1, "db0", 0, raftpb.Message{})

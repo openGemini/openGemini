@@ -30,7 +30,6 @@ func (f *Field) Unmarshal(buf []byte) {
 	dec := codec.NewBinaryDecoder(buf)
 	f.Name = dec.String()
 	f.Type = dec.Int()
-	return
 }
 
 func (f *Field) Size() int {

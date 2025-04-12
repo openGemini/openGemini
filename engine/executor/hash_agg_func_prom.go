@@ -30,6 +30,9 @@ func init() {
 	newPromFunc["count_prom"] = NewCountPromFunc
 	newPromFunc["min_prom"] = NewMinPromFunc
 	newPromFunc["max_prom"] = NewMaxPromFunc
+	newPromFunc["stdvar_prom"] = NewStdvarPromFunc
+	newPromFunc["stddev_prom"] = NewStddevPromFunc
+	newPromFunc["group_prom"] = NewGroupPromFunc
 }
 
 func GetOrdinal(inRowDataType, outRowDataType hybridqp.RowDataType, opt hybridqp.ExprOptions) (int, int) {
@@ -70,6 +73,30 @@ func NewMaxPromFunc(inRowDataType, outRowDataType hybridqp.RowDataType, opt hybr
 		return nil, fmt.Errorf("input and output schemas are not aligned for max_prom iterator")
 	}
 	return NewPromFunc(inRowDataType, maxPromFunc, NewMaxPromOperator, inOrdinal, outOrdinal)
+}
+
+func NewStdvarPromFunc(inRowDataType, outRowDataType hybridqp.RowDataType, opt hybridqp.ExprOptions) (*aggFunc, error) {
+	inOrdinal, outOrdinal := GetOrdinal(inRowDataType, outRowDataType, opt)
+	if inOrdinal < 0 || outOrdinal < 0 {
+		return nil, fmt.Errorf("input and output schemas are not aligned for stdvar_prom iterator")
+	}
+	return NewPromFunc(inRowDataType, stdvarPromFunc, func() aggOperator { return NewStdPromOperator(false) }, inOrdinal, outOrdinal)
+}
+
+func NewStddevPromFunc(inRowDataType, outRowDataType hybridqp.RowDataType, opt hybridqp.ExprOptions) (*aggFunc, error) {
+	inOrdinal, outOrdinal := GetOrdinal(inRowDataType, outRowDataType, opt)
+	if inOrdinal < 0 || outOrdinal < 0 {
+		return nil, fmt.Errorf("input and output schemas are not aligned for stddev_prom iterator")
+	}
+	return NewPromFunc(inRowDataType, stddevPromFunc, func() aggOperator { return NewStdPromOperator(true) }, inOrdinal, outOrdinal)
+}
+
+func NewGroupPromFunc(inRowDataType, outRowDataType hybridqp.RowDataType, opt hybridqp.ExprOptions) (*aggFunc, error) {
+	inOrdinal, outOrdinal := GetOrdinal(inRowDataType, outRowDataType, opt)
+	if inOrdinal < 0 || outOrdinal < 0 {
+		return nil, fmt.Errorf("input and output schemas are not aligned for group_prom iterator")
+	}
+	return NewPromFunc(inRowDataType, groupPromFunc, NewGroupPromOperator, inOrdinal, outOrdinal)
 }
 
 type countPromOperator struct {
@@ -172,5 +199,87 @@ func (s *maxPromOperator) SetNumFill(oc Chunk, colLoc int, fillVal interface{}, 
 }
 
 func (s *maxPromOperator) GetTime() int64 {
+	return DefaultTime
+}
+
+type stdPromOperator struct {
+	count      int
+	floatMean  float64
+	floatValue float64
+	val        float64
+	isStddev   bool // true: calculate standard deviation, false: calculate variance.
+}
+
+func NewStdPromOperator(flag bool) aggOperator {
+	return &stdPromOperator{
+		isStddev: flag,
+	}
+}
+
+func (s *stdPromOperator) Compute(c Chunk, colLoc int, startRowLoc int, endRowLoc int, _ any) error {
+	for i := startRowLoc; i < endRowLoc; i++ {
+		val := c.Column(colLoc).FloatValue(i)
+		if s.count == 0 {
+			s.floatMean = val
+		}
+		s.count++
+		delta := val - s.floatMean
+		s.floatMean += delta / float64(s.count)
+		s.floatValue += delta * (val - s.floatMean)
+	}
+	if s.count <= 1 {
+		s.val = 0
+	} else {
+		s.val = s.floatValue / float64(s.count)
+		if s.isStddev {
+			s.val = math.Sqrt(s.val)
+		}
+	}
+	return nil
+}
+
+func (s *stdPromOperator) SetOutVal(c Chunk, colLoc int, _ any) {
+	c.Column(colLoc).AppendFloatValue(s.val)
+	c.Column(colLoc).AppendNotNil()
+}
+
+type groupPromOperator struct {
+	hasVal bool
+}
+
+func NewGroupPromOperator() aggOperator {
+	return &groupPromOperator{}
+}
+
+func (s *groupPromOperator) Compute(c Chunk, colLoc, startRowLoc, endRowLoc int, _ any) error {
+	s.hasVal = s.hasVal || (startRowLoc < endRowLoc)
+	return nil
+}
+
+func (s *groupPromOperator) SetOutVal(c Chunk, colLoc int, _ any) {
+	if s.hasVal {
+		c.Column(colLoc).AppendFloatValue(1)
+		c.Column(colLoc).AppendNotNil()
+	}
+}
+
+// not use
+func (s *stdPromOperator) SetNullFill(oc Chunk, colLoc int, time int64) {
+}
+
+func (s *stdPromOperator) SetNumFill(oc Chunk, colLoc int, fillVal interface{}, time int64) {
+}
+
+func (s *stdPromOperator) GetTime() int64 {
+	return DefaultTime
+}
+
+func (s *groupPromOperator) SetNullFill(oc Chunk, colLoc int, time int64) {
+}
+
+func (s *groupPromOperator) SetNumFill(oc Chunk, colLoc int, fillVal interface{}, time int64) {
+}
+
+func (s *groupPromOperator) GetTime() int64 {
 	return DefaultTime
 }

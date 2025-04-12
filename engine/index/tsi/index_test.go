@@ -16,6 +16,7 @@ package tsi
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"math"
 	"os"
@@ -27,10 +28,11 @@ import (
 	"time"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
-	"github.com/influxdata/influxdb/pkg/testing/assert"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/engine/index/clv"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/rand"
@@ -41,8 +43,8 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/mergeset"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
-	"github.com/openGemini/openGemini/lib/util/lifted/vm/uint64set"
 	"github.com/savsgio/dictpool"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -58,6 +60,10 @@ var (
 		"field_str0":   influxql.String,
 	}
 )
+
+func init() {
+	_ = flag.Set("loggerLevel", "ERROR")
+}
 
 func TestSearchSeries(t *testing.T) {
 	path := t.TempDir()
@@ -242,8 +248,7 @@ func TestSeriesByExprIterator(t *testing.T) {
 
 		name = append(name, []byte("_0000")...)
 
-		var tsids *uint64set.Set
-		iterator, err := is.seriesByExprIterator(name, expr, &tsids, false)
+		iterator, err := is.measurementSeriesByExprIterator(name, expr, false, 0, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -435,13 +440,15 @@ func TestSearchSeriesWithOpts(t *testing.T) {
 			assert.Equal(t, keys[i], expectedSeriesKeys[i])
 		}
 	}
-
+	var queryIndexState int32 = 0
+	con := context.WithValue(context.Background(), index.QueryIndexState, &queryIndexState)
 	t.Run("single_series_search", func(t *testing.T) {
 		opt := &query.ProcessorOptions{
 			StartTime: DefaultTR.Min,
 			EndTime:   DefaultTR.Max,
 			Condition: MustParseExpr(`tk1='value1'`),
 		}
+		opt.SetCtx(con)
 		f([]byte("mn-1"), opt, []string{
 			"mn-1_0000,tk1\x00value1",
 			"mn-1_0000,tk1\x00value1\x00tk2\x00value2\x00tk3\x00value3",
@@ -547,6 +554,93 @@ func TestSearchSeriesWithExcept(t *testing.T) {
 	})
 }
 
+func TestSearchSeriesWithSeriesLimit(t *testing.T) {
+	path := t.TempDir()
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
+	defer idxBuilder.Close()
+	CreateIndexByPts(idx, []string{
+		"mn-1,tk1=value1,tk2=k2",
+		"mn-1,tk1=value2,tk2=k2",
+		"mn-1,tk1=value3,tk2=k2",
+		"mn-1,tk1=value4,tk2=k2",
+		"mn-1,tk1=value5,tk2=k2",
+	}...)
+	syscontrol.SetQuerySeriesLimit(2)
+	defer syscontrol.SetQuerySeriesLimit(0)
+	series := syscontrol.GetQueryEnabledWhenExceedSeries()
+	syscontrol.SetQueryEnabledWhenExceedSeries(false)
+	defer syscontrol.SetQueryEnabledWhenExceedSeries(series)
+
+	run := func(name []byte, opt *query.ProcessorOptions, expectedSeriesKeys []string) {
+		name = append(name, []byte("_0000")...)
+		_, span := tracing.NewTrace("root")
+		_, seriesLen, err := idx.SearchSeriesWithOpts(span, name, opt, func(num int64) error {
+			return nil
+		}, nil)
+		require.Error(t, err)
+		require.Equal(t, seriesLen, int64(5))
+	}
+
+	opt := &query.ProcessorOptions{
+		StartTime: DefaultTR.Min,
+		EndTime:   DefaultTR.Max,
+		Condition: MustParseExpr(`tk2='k2'`),
+		Without:   true,
+	}
+	run([]byte("mn-1"), opt, []string{
+		"mn-1_0000,tk1\x00value1\x00tk2\x00k2",
+	})
+}
+
+func TestSearchSeriesWithAllAndRegular(t *testing.T) {
+	path := t.TempDir()
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
+	defer idxBuilder.Close()
+	CreateIndexByPts(idx, []string{
+		"mn-1,tk1=value1,tk2=k2",
+		"mn-1,tk1=value2,tk2=k2",
+		"mn-1,tk1=value3,tk2=k2",
+		"mn-1,tk1=value4,tk2=k2",
+		"mn-1,tk1=value5,tk2=k2",
+	}...)
+
+	run := func(name []byte, opt *query.ProcessorOptions, expectedSeriesKeys []string) {
+		name = append(name, []byte("_0000")...)
+		_, span := tracing.NewTrace("root")
+		groups, _, err := idx.SearchSeriesWithOpts(span, name, opt, func(num int64) error {
+			return nil
+		}, nil)
+		require.NoError(t, err)
+
+		keys := make([]string, 0)
+		for _, group := range groups {
+			for _, key := range group.SeriesKeys {
+				keys = append(keys, string(key))
+			}
+		}
+		sort.Strings(keys)
+		sort.Strings(expectedSeriesKeys)
+		require.Equal(t, len(expectedSeriesKeys), len(keys))
+		for i := 0; i < len(keys); i++ {
+			require.Equal(t, keys[i], expectedSeriesKeys[i])
+		}
+	}
+
+	opt := &query.ProcessorOptions{
+		StartTime: DefaultTR.Min,
+		EndTime:   DefaultTR.Max,
+		Condition: MustParseExpr(`tk1 =~ /value1/ and tk2='k2'`),
+	}
+	// first search
+	run([]byte("mn-1"), opt, []string{
+		"mn-1_0000,tk1\x00value1\x00tk2\x00k2",
+	})
+	// second search
+	run([]byte("mn-1"), opt, []string{
+		"mn-1_0000,tk1\x00value1\x00tk2\x00k2",
+	})
+}
+
 func TestSearchSeriesWithAbort(t *testing.T) {
 	path := t.TempDir()
 	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
@@ -628,11 +722,14 @@ func TestSearchSeriesWithLimit(t *testing.T) {
 
 	syscontrol.SetQuerySeriesLimit(2)
 	defer syscontrol.SetQuerySeriesLimit(0)
+	var queryIndexState int32 = 0
+	con := context.WithValue(context.Background(), index.QueryIndexState, &queryIndexState)
 	opt := &query.ProcessorOptions{
 		StartTime: DefaultTR.Min,
 		EndTime:   DefaultTR.Max,
 		Condition: MustParseExpr(`tk2='k2'`),
 	}
+	opt.SetCtx(con)
 	run([]byte("mn-1"), opt, []string{
 		"mn-1_0000,tk1\x00value1\x00tk2\x00k2",
 		"mn-1_0000,tk1\x00value2\x00tk2\x00k2",
@@ -763,6 +860,50 @@ func TestSearchSeriesWithLimitFail(t *testing.T) {
 	run([]byte("mn-1"), opt, []string{
 		"mn-1_0000,tk1\x00value1\x00tk2\x00k2",
 		"mn-1_0000,tk1\x00value3\x00tk2\x00k2",
+	})
+}
+
+func TestSearchSeriesWithPromRemoteRead(t *testing.T) {
+	path := t.TempDir()
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
+	defer idxBuilder.Close()
+	CreateIndexByPtsWithoutTsid2Sk(idx, []string{
+		"mn-1,tk1=value1,tk2=k2",
+		"mn-1,tk1=value2,tk2=k2",
+		"mn-1,tk1=value3,tk2=k2",
+		"mn-1,tk1=value4,tk2=k2",
+		"mn-1,tk1=value5,tk2=k2",
+	}...)
+
+	run := func(name []byte, opt *query.ProcessorOptions, expectedSeriesKeys []string) {
+		name = append(name, []byte("_0000")...)
+		_, span := tracing.NewTrace("root")
+		groups, _, err := idx.SearchSeriesWithOpts(span, name, opt, func(num int64) error {
+			return nil
+		}, nil)
+		require.NoError(t, err)
+
+		keys := make([]string, 0)
+		for _, group := range groups {
+			for _, key := range group.SeriesKeys {
+				keys = append(keys, string(key))
+			}
+		}
+		sort.Strings(keys)
+		sort.Strings(expectedSeriesKeys)
+		require.Equal(t, len(expectedSeriesKeys), len(keys))
+		for i := 0; i < len(keys); i++ {
+			require.Equal(t, keys[i], expectedSeriesKeys[i])
+		}
+	}
+	opt := &query.ProcessorOptions{
+		StartTime:      DefaultTR.Min,
+		EndTime:        DefaultTR.Max,
+		Condition:      MustParseExpr(`tk1='value1'`),
+		PromRemoteRead: true,
+	}
+	run([]byte("mn-1"), opt, []string{
+		"mn-1_0000,tk1\x00value1\x00tk2\x00k2",
 	})
 }
 
@@ -1600,8 +1741,7 @@ func TestSeriesByAllAndExprIterator(t *testing.T) {
 
 		name = append(name, []byte("_0000")...)
 
-		var tsids *uint64set.Set
-		iterator, err := is.seriesByExprIterator(name, expr, &tsids, false)
+		iterator, err := is.measurementSeriesByExprIterator(name, expr, false, 0, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1681,6 +1821,14 @@ func TestSeriesByAllAndExprIterator(t *testing.T) {
 	t.Run("all AND tag, some varRef is rhs", func(t *testing.T) {
 		f([]byte("mn-1"), opt.Condition, defaultTR, []string{
 			"mn-1_0000,tag1\x001\x00tag2\x002\x00tag3\x004",
+		})
+	})
+
+	// all AND tag, contain regexp
+	opt.Condition = MustParseExpr(`tag1='1' AND tagX!~/./ AND tag3=~/1/`)
+	t.Run("all AND tag, contain regexp", func(t *testing.T) {
+		f([]byte("mn-1"), opt.Condition, defaultTR, []string{
+			"mn-1_0000,tag1\x001\x00tag2\x001\x00tag3\x001",
 		})
 	})
 	maxIndexMetrics = preMaxIndexMetrics
@@ -1826,8 +1974,7 @@ func TestSeriesByAllAndExprIteratorFilterBreak(t *testing.T) {
 
 		name = append(name, []byte("_0000")...)
 
-		var tsids *uint64set.Set
-		iterator, err := is.seriesByExprIterator(name, expr, &tsids, false)
+		iterator, err := is.measurementSeriesByExprIterator(name, expr, false, 0, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1986,4 +2133,164 @@ func TestBloomFilterEnable(t *testing.T) {
 		t.Fatal(err)
 	}
 	assert.Equal(t, false, enable)
+}
+
+func genTagSetMergeInfo(key string) *TagSetMergeInfo {
+	tagSet := &TagSetMergeInfo{key: []byte(key)}
+	tagSet.SeriesKeys = append(tagSet.SeriesKeys, []byte("A2"), []byte("A1"), []byte("A4"))
+	tagSet.IDs = append(tagSet.IDs, []uint64{1}, []uint64{2}, []uint64{3})
+	tagSet.ShardIds = append(tagSet.ShardIds, []uint64{1}, []uint64{1}, []uint64{1})
+	tagSet.Filters = append(tagSet.Filters, &influxql.BinaryExpr{}, &influxql.BinaryExpr{}, &influxql.BinaryExpr{})
+	tagSet.TagsVec = append(tagSet.TagsVec,
+		influx.PointTags{{Key: "A1", Value: "a1"}},
+		influx.PointTags{{Key: "A2", Value: "a2"}},
+		influx.PointTags{{Key: "A4", Value: "a4"}},
+	)
+	return tagSet
+}
+
+func genTagSetMergeInfoWithDiffSid(key string) *TagSetMergeInfo {
+	tagSet := &TagSetMergeInfo{key: []byte(key)}
+	tagSet.SeriesKeys = append(tagSet.SeriesKeys, []byte("A2"), []byte("A1"), []byte("A4"))
+	tagSet.IDs = append(tagSet.IDs, []uint64{1, 2}, []uint64{2}, []uint64{3})
+	tagSet.ShardIds = append(tagSet.ShardIds, []uint64{1, 2}, []uint64{1}, []uint64{1})
+	tagSet.Filters = append(tagSet.Filters, &influxql.BinaryExpr{}, &influxql.BinaryExpr{}, &influxql.BinaryExpr{})
+	tagSet.TagsVec = append(tagSet.TagsVec,
+		influx.PointTags{{Key: "A1", Value: "a1"}},
+		influx.PointTags{{Key: "A2", Value: "a2"}},
+		influx.PointTags{{Key: "A4", Value: "a4"}},
+	)
+	return tagSet
+}
+
+func genTagSetInfo(key string) *TagSetInfo {
+	tagSet := &TagSetInfo{key: []byte(key)}
+	tagSet.SeriesKeys = append(tagSet.SeriesKeys, []byte("A1"), []byte("A3"), []byte("A5"), []byte("A6"))
+	tagSet.IDs = append(tagSet.IDs, 1, 3, 5, 6)
+	tagSet.Filters = append(tagSet.Filters, &influxql.BinaryExpr{}, &influxql.BinaryExpr{},
+		&influxql.BinaryExpr{}, &influxql.BinaryExpr{})
+	tagSet.TagsVec = append(tagSet.TagsVec,
+		influx.PointTags{{Key: "A1", Value: "a1"}},
+		influx.PointTags{{Key: "A3", Value: "a3"}},
+		influx.PointTags{{Key: "A5", Value: "a5"}},
+		influx.PointTags{{Key: "A6", Value: "a6"}},
+	)
+	return tagSet
+}
+
+func TestTagSetMergeInfo(t *testing.T) {
+	tagSet := genTagSetMergeInfo("A1")
+	tagSet.RowFilters = &clv.RowFilters{}
+	sort.Sort(tagSet)
+	assert.Equal(t, len(tagSet.GetKey()), 2)
+	if tagSet.GetRowFilter(0) != nil {
+		t.Fatal("GetRowFilter failed")
+	}
+	tagSet.reset()
+	cpu.SetCpuNum(1, 1)
+	newTagSetMergePool()
+	assert.Equal(t, cpu.GetCpuNum(), 1)
+}
+
+func TestTagSetInfo(t *testing.T) {
+	tagSet := genTagSetInfo("A1")
+	tagSet.RowFilters = &clv.RowFilters{}
+	assert.Equal(t, tagSet.GetShardNum(0), 1)
+	assert.Equal(t, len(tagSet.GetKey()), 2)
+}
+
+func ValidateTagSetInfo(t *TagSetMergeInfo) error {
+	tLen := t.Len()
+	if len(t.IDs) != tLen || len(t.SeriesKeys) != tLen || len(t.TagsVec) != tLen ||
+		len(t.ShardIds) != tLen || len(t.Filters) != tLen {
+		return fmt.Errorf("invalid the SortMergeTagSetInfo")
+	}
+	return nil
+}
+
+func TestSortMergeTagSetInfos(t *testing.T) {
+	t1 := []*TagSetMergeInfo{
+		genTagSetMergeInfo("A1"), genTagSetMergeInfo("A2"), genTagSetMergeInfo("A4"),
+	}
+	t2 := []*TagSetInfo{
+		genTagSetInfo("A1"), genTagSetInfo("A3"), genTagSetInfo("A5"), genTagSetInfo("A6"),
+	}
+	t3 := SortMergeTagSetInfos(t1, t2, 1, 1)
+	var key string
+	for i := range t3 {
+		assert.NoError(t, ValidateTagSetInfo(t3[i]))
+		key = key + string(t3[i].key)
+	}
+	assert.Equal(t, key, "A1A2A3A4A5A6")
+}
+
+func TestExtendMergeTagSetInfos(t *testing.T) {
+	t1 := []*TagSetMergeInfo{genTagSetMergeInfo("A1")}
+	t2 := ExtendMergeTagSetInfos(t1, 2)
+	actSids := []uint64{}
+	expSids := []uint64{1, 1, 2, 2, 3, 3}
+	for i := range t2 {
+		for j := range t2[i].IDs {
+			actSids = append(actSids, t2[i].IDs[j]...)
+		}
+	}
+	assert.Equal(t, expSids, actSids)
+
+	t1 = []*TagSetMergeInfo{genTagSetMergeInfoWithDiffSid("A1")}
+	t2 = ExtendMergeTagSetInfos(t1, 2)
+	actSids = []uint64{}
+	expSids = []uint64{1, 2, 2, 2, 2, 3, 3}
+	for i := range t2 {
+		for j := range t2[i].IDs {
+			actSids = append(actSids, t2[i].IDs[j]...)
+		}
+	}
+	assert.Equal(t, expSids, actSids)
+}
+
+func TestGetSeriesIdBySeriesKeyFromCache(t *testing.T) {
+	path := t.TempDir()
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
+	defer idxBuilder.Close()
+	CreateIndexByPts(idx)
+
+	ms, ok := idx.(*MergeSetIndex)
+	require.True(t, ok)
+
+	row := &influx.Row{
+		Name: "mn-1_0000",
+		Tags: influx.PointTags{
+			{Key: "tk1", Value: "value1"},
+			{Key: "tk2", Value: "value2"},
+			{Key: "tk3", Value: "value3"},
+		},
+		Fields:   nil,
+		IndexKey: nil,
+	}
+	var assertGetSeries = func(check func(sid uint64) bool) {
+		row.UnmarshalIndexKeys(nil)
+		sid, err := ms.GetSeriesIdBySeriesKeyFromCache(row.IndexKey)
+		require.NoError(t, err)
+		require.True(t, check(sid))
+	}
+	var assertCreateSeries = func() {
+		sid, err := ms.CreateIndexIfNotExistsBySeries([]byte(row.Name), row.IndexKey, row.Tags)
+		require.NoError(t, err)
+		require.True(t, sid > 0)
+	}
+
+	assertGetSeries(func(sid uint64) bool {
+		return sid > 0
+	})
+
+	row.Tags[0].Value = "new series"
+	assertGetSeries(func(sid uint64) bool {
+		return sid == 0
+	})
+	assertCreateSeries()
+
+	// tag array
+	idxBuilder.EnableTagArray = true
+	row.Tags[0].Value = "[a,b,c]"
+	assertCreateSeries()
 }

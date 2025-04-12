@@ -21,7 +21,6 @@ import (
 	"unsafe"
 
 	"github.com/influxdata/influxdb/models"
-	"github.com/influxdata/influxdb/toml"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"go.uber.org/zap"
 )
@@ -36,6 +35,10 @@ const (
 	True      = "true"
 	False     = "false"
 )
+
+func IsHot(tier uint64) bool {
+	return tier == Hot
+}
 
 const (
 	BooleanSizeBytes = int(unsafe.Sizeof(false))
@@ -62,6 +65,8 @@ const (
 	AutoCompact                       = 0
 	DefaultExpectedSegmentSize uint32 = 8 * 1024 * 1024
 	DefaultFileSizeLimit              = 8 * 1024 * 1024 * 1024
+
+	DefaultEntryLogSizeLimit = 20 * 1024 * 1024 * 1024
 )
 
 const MaxMeasurementLengthWithVersion = 255
@@ -86,6 +91,10 @@ type ExceptString interface {
 
 type ExceptBool interface {
 	int64 | float64 | string
+}
+
+type NumberInt interface {
+	int | int8 | int32 | int64 | uint8 | uint32 | uint64
 }
 
 var logger *zap.Logger
@@ -129,51 +138,6 @@ func IsObjectNil(obj interface{}) bool {
 	}
 
 	return false
-}
-
-type Corrector struct {
-	intMin   int64
-	floatMin float64
-}
-
-func NewCorrector(intMin int64, floatMin float64) *Corrector {
-	return &Corrector{intMin: intMin, floatMin: floatMin}
-}
-
-func (c *Corrector) Int(v *int, def int) {
-	if int64(*v) <= c.intMin {
-		*v = def
-	}
-}
-
-func (c *Corrector) Uint64(v *uint64, def uint64) {
-	if *v <= uint64(c.intMin) {
-		*v = def
-	}
-}
-
-func (c *Corrector) Float64(v *float64, def float64) {
-	if *v <= c.floatMin {
-		*v = def
-	}
-}
-
-func (c *Corrector) String(v *string, def string) {
-	if *v == "" {
-		*v = def
-	}
-}
-
-func (c *Corrector) TomlDuration(v *toml.Duration, def toml.Duration) {
-	if int64(*v) <= c.intMin {
-		*v = def
-	}
-}
-
-func (c *Corrector) TomlSize(v *toml.Size, def toml.Size) {
-	if int64(*v) <= c.intMin {
-		*v = def
-	}
 }
 
 func TimeCost(option string) func() {
@@ -247,213 +211,135 @@ func IntLimit(min, max int, v int) int {
 }
 
 func Bytes2Uint16Slice(b []byte) []uint16 {
-	h := (*reflect.SliceHeader)(unsafe.Pointer(&b))
-
-	var res []uint16
-	s := (*reflect.SliceHeader)(unsafe.Pointer(&res))
-	s.Data = h.Data
-	s.Len = h.Len / Uint16SizeBytes
-	s.Cap = h.Cap / Uint16SizeBytes
-	return res
+	if len(b) == 0 {
+		return nil
+	}
+	return unsafe.Slice((*uint16)(unsafe.Pointer(&b[0])), len(b)/Uint16SizeBytes)
 }
 
 func Uint16Slice2byte(b []uint16) []byte {
-	h := (*reflect.SliceHeader)(unsafe.Pointer(&b))
-
-	var res []byte
-	s := (*reflect.SliceHeader)(unsafe.Pointer(&res))
-	s.Data = h.Data
-	s.Len = h.Len * Uint16SizeBytes
-	s.Cap = h.Cap * Uint16SizeBytes
-	return res
+	if len(b) == 0 {
+		return nil
+	}
+	return unsafe.Slice((*byte)(unsafe.Pointer(&b[0])), len(b)*Uint16SizeBytes)
 }
 
 func Bytes2Uint32Slice(b []byte) []uint32 {
-	h := (*reflect.SliceHeader)(unsafe.Pointer(&b))
-
-	var res []uint32
-	s := (*reflect.SliceHeader)(unsafe.Pointer(&res))
-	s.Data = h.Data
-	s.Len = h.Len / Uint32SizeBytes
-	s.Cap = h.Cap / Uint32SizeBytes
-	return res
+	if len(b) == 0 {
+		return nil
+	}
+	return unsafe.Slice((*uint32)(unsafe.Pointer(&b[0])), len(b)/Uint32SizeBytes)
 }
 
 func Uint32Slice2byte(b []uint32) []byte {
-	h := (*reflect.SliceHeader)(unsafe.Pointer(&b))
-
-	var res []byte
-	s := (*reflect.SliceHeader)(unsafe.Pointer(&res))
-	s.Data = h.Data
-	s.Len = h.Len * Uint32SizeBytes
-	s.Cap = h.Cap * Uint32SizeBytes
-	return res
-}
-
-func BooleanSlice2byte(b []bool) []byte {
-	h := (*reflect.SliceHeader)(unsafe.Pointer(&b))
-
-	var res []byte
-	s := (*reflect.SliceHeader)(unsafe.Pointer(&res))
-	s.Data = h.Data
-	s.Len = h.Len * BooleanSizeBytes
-	s.Cap = h.Cap * BooleanSizeBytes
-	return res
-}
-
-func Bytes2BooleanSlice(b []byte) []bool {
-	h := (*reflect.SliceHeader)(unsafe.Pointer(&b))
-
-	var res []bool
-	s := (*reflect.SliceHeader)(unsafe.Pointer(&res))
-	s.Data = h.Data
-	s.Len = h.Len / BooleanSizeBytes
-	s.Cap = h.Cap / BooleanSizeBytes
-	return res
-}
-
-func Int64Slice2byte(b []int64) []byte {
-	h := (*reflect.SliceHeader)(unsafe.Pointer(&b))
-
-	var res []byte
-	s := (*reflect.SliceHeader)(unsafe.Pointer(&res))
-	s.Data = h.Data
-	s.Len = h.Len * Int64SizeBytes
-	s.Cap = h.Cap * Int64SizeBytes
-	return res
-}
-
-func Uint64Slice2byte(b []uint64) []byte {
-	h := (*reflect.SliceHeader)(unsafe.Pointer(&b))
-
-	var res []byte
-	s := (*reflect.SliceHeader)(unsafe.Pointer(&res))
-	s.Data = h.Data
-	s.Len = h.Len * Uint64SizeBytes
-	s.Cap = h.Cap * Uint64SizeBytes
-	return res
-}
-
-func Bytes2Int16Slice(b []byte) []int16 {
-	h := (*reflect.SliceHeader)(unsafe.Pointer(&b))
-
-	var res []int16
-	s := (*reflect.SliceHeader)(unsafe.Pointer(&res))
-	s.Data = h.Data
-	s.Len = h.Len / Int16SizeBytes
-	s.Cap = h.Cap / Int16SizeBytes
-	return res
-}
-
-func Bytes2Int32Slice(b []byte) []int32 {
-	h := (*reflect.SliceHeader)(unsafe.Pointer(&b))
-
-	var res []int32
-	s := (*reflect.SliceHeader)(unsafe.Pointer(&res))
-	s.Data = h.Data
-	s.Len = h.Len / Int32SizeBytes
-	s.Cap = h.Cap / Int32SizeBytes
-	return res
-}
-
-func Bytes2Int64Slice(b []byte) []int64 {
-	h := (*reflect.SliceHeader)(unsafe.Pointer(&b))
-
-	var res []int64
-	s := (*reflect.SliceHeader)(unsafe.Pointer(&res))
-	s.Data = h.Data
-	s.Len = h.Len / Int64SizeBytes
-	s.Cap = h.Cap / Int64SizeBytes
-	return res
-}
-
-func Float32Slice2byte(b []float32) []byte {
-	h := (*reflect.SliceHeader)(unsafe.Pointer(&b))
-
-	var res []byte
-	s := (*reflect.SliceHeader)(unsafe.Pointer(&res))
-	s.Data = h.Data
-	s.Len = h.Len * Float32SizeBytes
-	s.Cap = h.Cap * Float32SizeBytes
-	return res
-}
-
-func Bytes2Float32Slice(b []byte) []float32 {
-	h := (*reflect.SliceHeader)(unsafe.Pointer(&b))
-
-	var res []float32
-	s := (*reflect.SliceHeader)(unsafe.Pointer(&res))
-	s.Data = h.Data
-	s.Len = h.Len / Float32SizeBytes
-	s.Cap = h.Cap / Float32SizeBytes
-	return res
-}
-
-func Float64Slice2byte(b []float64) []byte {
-	h := (*reflect.SliceHeader)(unsafe.Pointer(&b))
-
-	var res []byte
-	s := (*reflect.SliceHeader)(unsafe.Pointer(&res))
-	s.Data = h.Data
-	s.Len = h.Len * Float64SizeBytes
-	s.Cap = h.Cap * Float64SizeBytes
-	return res
-}
-
-func Bytes2Float64Slice(b []byte) []float64 {
-	h := (*reflect.SliceHeader)(unsafe.Pointer(&b))
-
-	var res []float64
-	s := (*reflect.SliceHeader)(unsafe.Pointer(&res))
-	s.Data = h.Data
-	s.Len = h.Len / Float64SizeBytes
-	s.Cap = h.Cap / Float64SizeBytes
-	return res
-}
-
-func Bytes2Int8Slice(b []byte) []int8 {
-	h := (*reflect.SliceHeader)(unsafe.Pointer(&b))
-
-	var res []int8
-	s := (*reflect.SliceHeader)(unsafe.Pointer(&res))
-	s.Data = h.Data
-	s.Len = h.Len / Int8SizeBytes
-	s.Cap = h.Cap / Int8SizeBytes
-
-	return res
+	if len(b) == 0 {
+		return nil
+	}
+	return unsafe.Slice((*byte)(unsafe.Pointer(&b[0])), len(b)*Uint32SizeBytes)
 }
 
 func Bytes2Uint64Slice(b []byte) []uint64 {
-	h := (*reflect.SliceHeader)(unsafe.Pointer(&b))
-
-	var res []uint64
-	s := (*reflect.SliceHeader)(unsafe.Pointer(&res))
-	s.Data = h.Data
-	s.Len = h.Len / Uint64SizeBytes
-	s.Cap = h.Cap / Uint64SizeBytes
-	return res
+	if len(b) == 0 {
+		return nil
+	}
+	return unsafe.Slice((*uint64)(unsafe.Pointer(&b[0])), len(b)/Uint64SizeBytes)
 }
 
-func Int16Slice2byte(b []int16) []byte {
-	h := (*reflect.SliceHeader)(unsafe.Pointer(&b))
+func Uint64Slice2byte(b []uint64) []byte {
+	if len(b) == 0 {
+		return nil
+	}
+	return unsafe.Slice((*byte)(unsafe.Pointer(&b[0])), len(b)*Uint64SizeBytes)
+}
 
-	var res []byte
-	s := (*reflect.SliceHeader)(unsafe.Pointer(&res))
-	s.Data = h.Data
-	s.Len = h.Len * Int16SizeBytes
-	s.Cap = h.Cap * Int16SizeBytes
-	return res
+func Bytes2BooleanSlice(b []byte) []bool {
+	if len(b) == 0 {
+		return nil
+	}
+	return unsafe.Slice((*bool)(unsafe.Pointer(&b[0])), len(b)/BooleanSizeBytes)
+}
+
+func BooleanSlice2byte(b []bool) []byte {
+	if len(b) == 0 {
+		return nil
+	}
+	return unsafe.Slice((*byte)(unsafe.Pointer(&b[0])), len(b)*BooleanSizeBytes)
+}
+func Bytes2Int64Slice(b []byte) []int64 {
+	if len(b) == 0 {
+		return nil
+	}
+	return unsafe.Slice((*int64)(unsafe.Pointer(&b[0])), len(b)/Int64SizeBytes)
+}
+
+func Int64Slice2byte(b []int64) []byte {
+	if len(b) == 0 {
+		return nil
+	}
+	return unsafe.Slice((*byte)(unsafe.Pointer(&b[0])), len(b)*Int64SizeBytes)
+}
+
+func Bytes2Int32Slice(b []byte) []int32 {
+	if len(b) == 0 {
+		return nil
+	}
+	return unsafe.Slice((*int32)(unsafe.Pointer(&b[0])), len(b)/Int32SizeBytes)
 }
 
 func Int32Slice2byte(b []int32) []byte {
-	h := (*reflect.SliceHeader)(unsafe.Pointer(&b))
+	if len(b) == 0 {
+		return nil
+	}
+	return unsafe.Slice((*byte)(unsafe.Pointer(&b[0])), len(b)*Int32SizeBytes)
+}
 
-	var res []byte
-	s := (*reflect.SliceHeader)(unsafe.Pointer(&res))
-	s.Data = h.Data
-	s.Len = h.Len * Int32SizeBytes
-	s.Cap = h.Cap * Int32SizeBytes
-	return res
+func Bytes2Int16Slice(b []byte) []int16 {
+	if len(b) == 0 {
+		return nil
+	}
+	return unsafe.Slice((*int16)(unsafe.Pointer(&b[0])), len(b)/Int16SizeBytes)
+}
+
+func Int16Slice2byte(b []int16) []byte {
+	if len(b) == 0 {
+		return nil
+	}
+	return unsafe.Slice((*byte)(unsafe.Pointer(&b[0])), len(b)*Int16SizeBytes)
+}
+
+func Bytes2Int8Slice(b []byte) []int8 {
+	if len(b) == 0 {
+		return nil
+	}
+	return unsafe.Slice((*int8)(unsafe.Pointer(&b[0])), len(b)/Int8SizeBytes)
+}
+
+func Bytes2Float32Slice(b []byte) []float32 {
+	if len(b) == 0 {
+		return nil
+	}
+	return unsafe.Slice((*float32)(unsafe.Pointer(&b[0])), len(b)/Float32SizeBytes)
+}
+
+func Float32Slice2byte(b []float32) []byte {
+	if len(b) == 0 {
+		return nil
+	}
+	return unsafe.Slice((*byte)(unsafe.Pointer(&b[0])), len(b)*Float32SizeBytes)
+}
+
+func Bytes2Float64Slice(b []byte) []float64 {
+	if len(b) == 0 {
+		return nil
+	}
+	return unsafe.Slice((*float64)(unsafe.Pointer(&b[0])), len(b)/Float64SizeBytes)
+}
+
+func Float64Slice2byte(b []float64) []byte {
+	if len(b) == 0 {
+		return nil
+	}
+	return unsafe.Slice((*byte)(unsafe.Pointer(&b[0])), len(b)*Float64SizeBytes)
 }
 
 type TimeRange struct {
@@ -469,13 +355,14 @@ func (t TimeRange) Contains(min, max int64) bool {
 }
 
 func Str2bytes(s string) []byte {
-	x := (*[2]uintptr)(unsafe.Pointer(&s))
-	h := [3]uintptr{x[0], x[1], x[1]}
-	return *(*[]byte)(unsafe.Pointer(&h))
+	return unsafe.Slice(unsafe.StringData(s), len(s))
 }
 
 func Bytes2str(b []byte) string {
-	return *(*string)(unsafe.Pointer(&b))
+	if len(b) == 0 {
+		return ""
+	}
+	return unsafe.String(&b[0], len(b))
 }
 
 func Bool2str(b bool) string {
@@ -494,6 +381,13 @@ func MemorySet(buf []byte, val byte) {
 
 func Min(x, y int) int {
 	if x < y {
+		return x
+	}
+	return y
+}
+
+func Max[T NumberInt](x, y T) T {
+	if x > y {
 		return x
 	}
 	return y
@@ -554,4 +448,81 @@ func PaddingZeroBuffer(out []byte, size int) []byte {
 		out = append(out, zeroBuf[:size]...)
 	}
 	return out
+}
+
+func SliceSplitFunc[E any](s []E, filter func(*E) bool) ([]E, []E) {
+	i, j := 0, len(s)
+	for {
+		if i == j {
+			break
+		}
+
+		if filter(&s[i]) {
+			j--
+			s[i], s[j] = s[j], s[i]
+			continue
+		}
+
+		i++
+	}
+	return s[j:], s[:j]
+}
+
+func TickerRun(d time.Duration, stopSignal <-chan struct{}, onTick func(), onStop func()) {
+	ticker := time.NewTicker(d)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			onTick()
+		case <-stopSignal:
+			onStop()
+			return
+		}
+	}
+}
+
+func IntersectSortedSliceInt(slice1, slice2 []int) []int {
+	var i, j int
+	intersection := make([]int, 0, len(slice1)+len(slice2))
+	for i < len(slice1) && j < len(slice2) {
+		if slice1[i] == slice2[j] {
+			intersection = append(intersection, slice1[i])
+			i++
+			j++
+		} else if slice1[i] < slice2[j] {
+			i++
+		} else {
+			j++
+		}
+	}
+	return intersection
+}
+
+func UnionSortedSliceInt(slice1, slice2 []int) []int {
+	union := make([]int, 0, len(slice1)+len(slice2))
+	var i, j int
+	for i < len(slice1) && j < len(slice2) {
+		if slice1[i] == slice2[j] {
+			union = append(union, slice1[i])
+			i++
+			j++
+		} else if slice1[i] < slice2[j] {
+			union = append(union, slice1[i])
+			i++
+		} else {
+			union = append(union, slice2[j])
+			j++
+		}
+	}
+	for i < len(slice1) {
+		union = append(union, slice1[i])
+		i++
+	}
+	for j < len(slice2) {
+		union = append(union, slice2[j])
+		j++
+	}
+	return union
 }

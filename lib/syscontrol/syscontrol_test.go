@@ -1,4 +1,4 @@
-// Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,11 +19,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/influxdata/influxdb/pkg/testing/assert"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/sysconfig"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -276,7 +276,7 @@ func Test_handleNodeInterruptQuery(t *testing.T) {
 	req.SetParam(map[string]string{
 		"unkown": "true",
 	})
-	assert.Equal(t, ProcessRequest(req, &sb), nil)
+	assert.Equal(t, strings.Contains(ProcessRequest(req, &sb).Error(), "no parameter find"), true)
 	req.SetParam(map[string]string{
 		"switchon": "true",
 	})
@@ -299,7 +299,7 @@ func Test_handleUpperMemUsePct(t *testing.T) {
 	req.SetParam(map[string]string{
 		"unkown": "true",
 	})
-	assert.Equal(t, ProcessRequest(req, &sb), nil)
+	assert.Equal(t, strings.Contains(ProcessRequest(req, &sb).Error(), "no parameter find"), true)
 	req.SetParam(map[string]string{
 		"limit": "99",
 	})
@@ -307,7 +307,7 @@ func Test_handleUpperMemUsePct(t *testing.T) {
 	assert.NotEqual(t, ProcessRequest(req, &sb), nil)
 	SysCtrl.MetaClient = &mockErrMetaClient{}
 	assert.NotEqual(t, ProcessRequest(req, &sb), nil)
-	SetUpperMemUsePct(0)
+	sysconfig.SetUpperMemPct(0)
 }
 
 func TestParallelQuery(t *testing.T) {

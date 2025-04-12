@@ -73,6 +73,11 @@ func (m *MmsTables) mergeOutOfOrder(mst string, shId uint64, full bool, force bo
 	}()
 
 	for _, item := range contexts {
+		if InParquetProcess(item.unordered.path...) {
+			m.logger.Info("in parquet process skip merge", zap.String("mst", item.mst))
+			continue
+		}
+
 		m.lmt.Update(mst)
 		item.shId = shId
 
@@ -87,8 +92,8 @@ func (m *MmsTables) mergeOutOfOrder(mst string, shId uint64, full bool, force bo
 	}
 }
 
-func (m *MmsTables) getEventContext() EventContext {
-	return EventContext{mergeSet: m.indexMergeSet, scheduler: m.scheduler}
+func (m *MmsTables) getEventContext() *EventContext {
+	return NewEventContext(m.indexMergeSet, m.scheduler, m.stopCompMerge)
 }
 
 func (m *MmsTables) execMergeContext(ctx *MergeContext) {
@@ -254,13 +259,13 @@ func (m *MmsTables) removeFile(f TSSPFile) {
 			log.Error("failed to rename file", zap.String("path", f.Path()), zap.Error(err))
 			return
 		}
-		nodeTableStoreGC.Add(false, f)
+		nodeTableStoreGC.Add(f)
 		return
 	}
 
 	err := f.Remove()
 	if err != nil {
-		nodeTableStoreGC.Add(false, f)
+		nodeTableStoreGC.Add(f)
 		log.Error("failed to remove file", zap.String("path", f.Path()), zap.Error(err))
 		return
 	}

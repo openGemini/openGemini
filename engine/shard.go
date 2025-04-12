@@ -41,6 +41,7 @@ import (
 	"github.com/openGemini/openGemini/engine/index/sparseindex"
 	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/engine/mutable"
+	"github.com/openGemini/openGemini/engine/shelf"
 	"github.com/openGemini/openGemini/lib/binaryfilterfunc"
 	"github.com/openGemini/openGemini/lib/bucket"
 	"github.com/openGemini/openGemini/lib/bufferpool"
@@ -123,8 +124,9 @@ type Shard interface {
 	ForceFlush()
 	WaitWriteFinish()
 	CreateLogicalPlan(ctx context.Context, sources influxql.Sources, schema *executor.QuerySchema) (hybridqp.QueryNode, error)
-	CreateCursor(ctx context.Context, schema *executor.QuerySchema) ([]comm.KeyCursor, error)
+	CreateCursor(ctx context.Context, schema *executor.QuerySchema) (comm.TSIndexInfo, error)
 	Scan(span *tracing.Span, schema *executor.QuerySchema, callBack func(num int64) error) (tsi.GroupSeries, int64, error)
+	ScanWithInvertedIndex(span *tracing.Span, ctx context.Context, sources influxql.Sources, schema *executor.QuerySchema) (tsi.GroupSeries, int64, error)
 	ScanWithSparseIndex(ctx context.Context, schema *executor.QuerySchema, callBack func(num int64) error) (*executor.FileFragments, error)
 	GetIndexInfo(schema *executor.QuerySchema) (*executor.AttachedIndexInfo, error)
 	RowCount(schema *executor.QuerySchema) (int64, error)
@@ -150,6 +152,7 @@ type Shard interface {
 	GetRPName() string
 	GetStatistics(buffer []byte) ([]byte, error)
 	GetMaxTime() int64
+	GetStartTime() time.Time
 	Intersect(tr *influxql.TimeRange) bool
 	GetIndexBuilder() *tsi.IndexBuilder                                // only work for tsstore(tsi)
 	GetSeriesCount() int                                               // only work for tsstore
@@ -158,6 +161,7 @@ type Shard interface {
 	GetTier() uint64
 	IsExpired() bool
 	IsTierExpired() bool
+	GetEndTime() time.Time
 
 	// downsample, only work for tsstore
 	CanDoDownSample() bool
@@ -188,7 +192,7 @@ type Shard interface {
 	ExecShardMove() error
 	DisableHierarchicalStorage()
 	SetEnableHierarchicalStorage()
-	CreateShowTagValuesPlan(client metaclient.MetaClient) immutable.ShowTagValuesPlan
+	CreateDDLBasePlan(client metaclient.MetaClient, ddl hybridqp.DDLType) immutable.DDLBasePlan
 
 	// raft SnapShot
 	SetSnapShotter(snp *raftlog.SnapShotter)
@@ -430,14 +434,10 @@ func (s *shard) writeCols(cols *record.Record, binaryCols []byte, mst string) er
 	atomic.AddInt64(&statistics.PerfStat.WriteRowsDurationNs, time.Since(start).Nanoseconds())
 
 	// write wal
-	start = time.Now()
-	failpoint.Inject("SlowDownWalWrite", nil)
-	wr := &walRecord{binary: binaryCols, writeWalType: WriteWalArrowFlight}
-	if err = s.wal.Write(wr); err != nil {
+	if err = s.wal.Write(binaryCols, WriteWalArrowFlight, 0); err != nil {
 		log.Error("write cols rec to wal fail", zap.Uint64("shard", s.ident.ShardID), zap.Error(err))
 		return err
 	}
-	atomic.AddInt64(&statistics.PerfStat.WriteWalDurationNs, time.Since(start).Nanoseconds())
 	return nil
 }
 
@@ -483,7 +483,14 @@ func (s *shard) WriteRows(rows []influx.Row, binaryRows []byte) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	if err := s.writeRowsToTable(rows, binaryRows); err != nil {
+	var err error
+	if config.ShelfModeEnabled() {
+		err = s.writeShelfMode(rows)
+	} else {
+		err = s.writeRowsToTable(rows, binaryRows)
+	}
+
+	if err != nil {
 		log.Error("write buffer failed", zap.Error(err))
 		atomic.AddInt64(&statistics.PerfStat.WriteReqErrors, 1)
 		return err
@@ -492,6 +499,33 @@ func (s *shard) WriteRows(rows []influx.Row, binaryRows []byte) error {
 	atomic.AddInt64(&statistics.PerfStat.WriteRowsBatch, 1)
 	atomic.AddInt64(&statistics.PerfStat.WriteRowsCount, int64(len(rows)))
 	return nil
+}
+
+func (s *shard) writeShelfMode(rows []influx.Row) error {
+	s.lastWriteTime = fasttime.UnixTimestamp()
+	runner := shelf.NewRunner()
+	groups, release := record.NewMemGroups(runner.Size(), config.GetStoreConfig().ShelfMode.SeriesHashFactor)
+	defer release()
+
+	for i := range rows {
+		err := groups.Add(&rows[i])
+		if err != nil {
+			return err
+		}
+	}
+	groups.BeforeWrite()
+
+	groups.ResetTime()
+	for i := range groups.GroupNum() {
+		group := groups.RowGroup(i)
+		if group.IsEmpty() {
+			continue
+		}
+		runner.Schedule(s.ident.ShardID, group)
+	}
+
+	groups.Wait()
+	return groups.Error()
 }
 
 // write data to mem table and write wal
@@ -510,15 +544,10 @@ func (s *shard) writeRows(mw *mstWriteCtx, binaryRows []byte, curSize int64) err
 	s.activeTbl.AddMemSize(curSize)
 	atomic.AddInt64(&statistics.PerfStat.WriteRowsDurationNs, time.Since(start).Nanoseconds())
 
-	// write wal
-	start = time.Now()
-	failpoint.Inject("SlowDownWalWrite", nil)
-	wr := &walRecord{binary: binaryRows, writeWalType: WriteWalLineProtocol}
-	if err = s.wal.Write(wr); err != nil {
+	if err = s.wal.Write(binaryRows, WriteWalLineProtocol, mw.maxTime); err != nil {
 		log.Error("write rows to wal fail", zap.Uint64("shard", s.ident.ShardID), zap.Error(err))
 		return err
 	}
-	atomic.AddInt64(&statistics.PerfStat.WriteWalDurationNs, time.Since(start).Nanoseconds())
 
 	return nil
 }
@@ -650,16 +679,18 @@ type mstWriteCtx struct {
 	timer        *time.Timer
 	writeRowsCtx mutable.WriteRowsCtx
 	engineType   config.EngineType
+	maxTime      int64
 }
 
 func (mw *mstWriteCtx) getMstMap() *dictpool.Dict {
 	return &mw.mstMap
 }
 
-func (mw *mstWriteCtx) getRowsPool() *[]influx.Row {
+func (mw *mstWriteCtx) getRowsPool(size int) *[]influx.Row {
 	v := mw.rowsPool.Get()
 	if v == nil {
-		return &[]influx.Row{}
+		rp := make([]influx.Row, 0, size)
+		return &rp
 	}
 	rp := v.(*[]influx.Row)
 
@@ -792,9 +823,9 @@ func calculateMemSize(rows influx.Rows) int64 {
 	return memCost
 }
 
-func cloneRowToDict(mmPoints *dictpool.Dict, mw *mstWriteCtx, row *influx.Row) *influx.Row {
+func cloneRowToDict(mmPoints *dictpool.Dict, mw *mstWriteCtx, row *influx.Row, maxNum int) *influx.Row {
 	if !mmPoints.Has(row.Name) {
-		rp := mw.getRowsPool()
+		rp := mw.getRowsPool(maxNum)
 		mmPoints.Set(row.Name, rp)
 	}
 	rowsPool := mmPoints.Get(row.Name)
@@ -836,7 +867,7 @@ func (s *shard) writeRowsToTable(rows influx.Rows, binaryRows []byte) error {
 	mw := getMstWriteCtx(nodeMutableLimit.timeOut, s.engineType)
 	defer putMstWriteCtx(mw)
 
-	// write data、wal and index
+	// write data, wal and index
 	err = s.storage.WriteRowsToTable(s, rows, mw, binaryRows)
 	s.addRowCounts(int64(len(rows)))
 	return err
@@ -917,6 +948,10 @@ func (s *shard) GetMaxTime() int64 {
 	return tm
 }
 
+func (s *shard) GetStartTime() time.Time {
+	return s.startTime
+}
+
 func (s *shard) GetSeriesCount() int {
 	if s.skIdx == nil {
 		return 0
@@ -959,6 +994,8 @@ func (s *shard) Close() error {
 	s.DisableDownSample()
 	s.DisableHierarchicalStorage()
 	s.DisableCompAndMerge()
+
+	shelf.NewRunner().UnregisterShard(s.ident.ShardID)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1082,7 +1119,18 @@ func (s *shard) syncReplayWal(ctx context.Context) error {
 	wStart := time.Now()
 
 	walFileNames, err := s.wal.Replay(ctx,
-		func(binary []byte, rowsCtx *walRowsObjects, writeWalType WalRecordType) error {
+		func(binary []byte, rowsCtx *walRowsObjects, writeWalType WalRecordType, logReplay LogReplay) error {
+			if rowsCtx != nil {
+				rows, streamData := util.SliceSplitFunc(rowsCtx.rows, func(row *influx.Row) bool {
+					return !row.StreamOnly
+				})
+				rowsCtx.rows = rows
+				if NewStreamWalManager().streamHandler != nil {
+					if err := NewStreamWalManager().streamHandler(streamData, logReplay.fileNames); err != nil {
+						s.log.Error("replay stream data error", zap.Error(err))
+					}
+				}
+			}
 			err := s.writeWalBuffer(binary, rowsCtx, writeWalType)
 			// SeriesLimited error is ignored in the wal playback process
 			if errno.Equal(err, errno.SeriesLimited) {
@@ -1140,6 +1188,11 @@ func (s *shard) Open(client metaclient.MetaClient) error {
 
 	s.initSeriesLimiter(s.seriesLimit)
 	s.setMergeIndex2ImmTables()
+
+	if config.ShelfModeEnabled() {
+		info := shelf.NewShardInfo(s.ident, s.filesPath, s.lock, s.GetTableStore(), s.getMergeIndex())
+		shelf.NewRunner().RegisterShard(s.ident.ShardID, info)
+	}
 	return nil
 }
 
@@ -1149,11 +1202,19 @@ func (s *shard) setMergeIndex2ImmTables() {
 			s.log.Warn("no index builder, will not set index merge set", zap.Uint64("id", s.ident.ShardID))
 			return
 		}
-		idx, ok := s.indexBuilder.GetPrimaryIndex().(*tsi.MergeSetIndex)
-		if ok {
+		idx := s.getMergeIndex()
+		if idx != nil {
 			s.immTables.SetIndexMergeSet(idx)
 		}
 	}
+}
+
+func (s *shard) getMergeIndex() *tsi.MergeSetIndex {
+	idx, ok := s.indexBuilder.GetPrimaryIndex().(*tsi.MergeSetIndex)
+	if !ok {
+		return nil
+	}
+	return idx
 }
 
 func (s *shard) IsOpened() bool {
@@ -1295,7 +1356,7 @@ func readDownSampleLogFile(name string, info *DownSampleFilesInfo) error {
 	buf := make([]byte, int(fSize))
 	lock := fileops.FileLockOption("")
 	pri := fileops.FilePriorityOption(fileops.IO_PRIORITY_NORMAL)
-	fd, err := fileops.OpenFile(name, os.O_RDONLY, 0640, lock, pri)
+	fd, err := fileops.OpenFile(name, os.O_RDONLY, 0600, lock, pri)
 	if err != nil {
 		return fmt.Errorf("read downSample log file fail")
 	}
@@ -1337,6 +1398,11 @@ func (s *shard) OpenAndEnable(client metaclient.MetaClient) error {
 		return err
 	}
 
+	if config.GetStoreConfig().Wal.WalUsedForStream {
+		if err := NewStreamWalManager().Load(s.walPath, s.lock); err != nil {
+			s.log.Error("load stream wal file error", zap.Error(err))
+		}
+	}
 	// replay wal files
 	s.log.Info("replay wal start", zap.Uint64("id", s.ident.ShardID), zap.Uint64("opId", s.opId), zap.Bool("async replay", s.isAsyncReplayWal))
 	wStart := time.Now()
@@ -1384,6 +1450,10 @@ func (s *shard) IsTierExpired() bool {
 		return true
 	}
 	return false
+}
+
+func (s *shard) GetEndTime() time.Time {
+	return s.endTime
 }
 
 func (s *shard) GetTier() (tier uint64) {
@@ -1630,7 +1700,7 @@ func (s *shard) writeDownSampleInfo(mstNames []string, originFiles [][]immutable
 	buf = info.marshal(buf[:0])
 
 	pri := fileops.FilePriorityOption(fileops.IO_PRIORITY_NORMAL)
-	fd, err := fileops.OpenFile(fName, os.O_CREATE|os.O_WRONLY, 0640, lock, pri)
+	fd, err := fileops.OpenFile(fName, os.O_CREATE|os.O_WRONLY, 0600, lock, pri)
 	if err != nil {
 		return "", err
 	}
@@ -2245,7 +2315,7 @@ func (s *shard) writeShardMoveInfo(mstName string, localFiles []immutable.TSSPFi
 
 	buf = info.marshal(buf[:0])
 	pri := fileops.FilePriorityOption(fileops.IO_PRIORITY_NORMAL)
-	fd, err := fileops.OpenFile(fName, os.O_CREATE|os.O_WRONLY, 0640, lock, pri)
+	fd, err := fileops.OpenFile(fName, os.O_CREATE|os.O_WRONLY, 0600, lock, pri)
 	defer func() {
 		_ = fd.Close()
 	}()
@@ -2318,6 +2388,10 @@ func (s *shard) startFilesMove(localFiles []immutable.TSSPFile, coldTmpFilesPath
 	lock := fileops.FileLockOption(*s.lock)
 	for i, tf := range localFiles {
 		filePath := tf.Path()
+		// avoid repeated moving cold operations on file
+		if strings.HasSuffix(filePath, obs.ObsFileSuffix) {
+			continue
+		}
 
 		// every time, we need check it should be stop by other operation
 		if s.stopMove() {
@@ -2386,6 +2460,13 @@ func (s *shard) SetEnableHierarchicalStorage() {
 
 func (s *shard) Intersect(tr *influxql.TimeRange) bool {
 	return !(s.startTime.After(tr.Max) || s.endTime.Before(tr.Min))
+}
+
+func (s *shard) IsSameIndex(s1 *shard) bool {
+	if s.indexBuilder == nil || s1.indexBuilder == nil {
+		return false
+	}
+	return s.indexBuilder.GetIndexID() == s1.indexBuilder.GetIndexID()
 }
 
 var (

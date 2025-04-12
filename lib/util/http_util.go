@@ -15,53 +15,15 @@
 package util
 
 import (
-	"encoding/json"
-	"errors"
-	"fmt"
 	"log"
-	"math"
 	"net"
 	"net/http"
 	"net/http/pprof"
 	"time"
-
-	"github.com/influxdata/influxdb/services/httpd"
 )
 
 func init() {
 	_ = pprof.Handler
-}
-
-// httpError writes an error to the client in a standard format.
-func HttpError(w http.ResponseWriter, errmsg string, code int) {
-	if code == http.StatusUnauthorized {
-		// If an unauthorized header will be sent back, add a WWW-Authenticate header
-		// as an authorization challenge.
-		w.Header().Set("WWW-Authenticate", fmt.Sprintf("Basic realm=\"%s\"", ""))
-	} else if code/100 != 2 {
-		sz := math.Min(float64(len(errmsg)), 1024.0)
-		w.Header().Set("X-InfluxDB-Error", errmsg[:int(sz)])
-	}
-
-	response := httpd.Response{Err: errors.New(errmsg)}
-	if rw, ok := w.(httpd.ResponseWriter); ok {
-		w.WriteHeader(code)
-		_, _ = rw.WriteResponse(response)
-		return
-	}
-
-	// Default implementation if the response writer hasn't been replaced
-	// with our special response writer type.
-	w.Header().Add("Content-Type", "application/json")
-	w.WriteHeader(code)
-	b, err := json.Marshal(response)
-	if err != nil {
-		fmt.Println("json marshal error", err)
-	}
-	_, err = w.Write(b)
-	if err != nil {
-		fmt.Println("ResponseWriter write error", err)
-	}
 }
 
 const (

@@ -16,9 +16,9 @@ package util_test
 
 import (
 	"fmt"
+	"reflect"
 	"testing"
 
-	"github.com/influxdata/influxdb/toml"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/stretchr/testify/assert"
@@ -68,27 +68,6 @@ func BenchmarkIsObjectNil(b *testing.B) {
 	}
 }
 
-func TestZeroToDefault(t *testing.T) {
-	vInt := 0
-	vUint64 := uint64(0)
-	vFloat64 := 0.0
-	vString := ""
-	vTomlDuration := toml.Duration(0)
-
-	def := util.NewCorrector(0, 0)
-	def.Int(&vInt, 1)
-	def.Uint64(&vUint64, 1)
-	def.Float64(&vFloat64, 1.1)
-	def.String(&vString, "a")
-	def.TomlDuration(&vTomlDuration, toml.Duration(1))
-
-	assert.Equal(t, vInt, 1)
-	assert.Equal(t, vUint64, uint64(1))
-	assert.Equal(t, vFloat64, 1.1)
-	assert.Equal(t, vString, "a")
-	assert.Equal(t, vTomlDuration, toml.Duration(1))
-}
-
 func TestCeilToPower2(t *testing.T) {
 	assert.Equal(t, uint64(1), util.CeilToPower2(1))
 	assert.Equal(t, uint64(2), util.CeilToPower2(2))
@@ -134,4 +113,148 @@ func TestDivisionCeil(t *testing.T) {
 	require.Equal(t, 2, util.DivisionCeil(10, 8))
 	require.Equal(t, 2, util.DivisionCeil(10, 9))
 	require.Equal(t, 1, util.DivisionCeil(10, 10))
+}
+
+func TestIntersectSortedSliceInt(t *testing.T) {
+	testCases := []struct {
+		name     string
+		a, b     []int
+		expected []int
+	}{
+		{
+			name:     "empty slices",
+			a:        []int{},
+			b:        []int{},
+			expected: []int{},
+		},
+		{
+			name:     "one empty slice",
+			a:        []int{1, 2, 3},
+			b:        []int{},
+			expected: []int{},
+		},
+		{
+			name:     "no intersection",
+			a:        []int{1, 2, 3},
+			b:        []int{4, 5, 6},
+			expected: []int{},
+		},
+		{
+			name:     "one element intersection 1",
+			a:        []int{1, 2, 3},
+			b:        []int{3, 4, 5},
+			expected: []int{3},
+		},
+		{
+			name:     "one element intersection 2",
+			a:        []int{1, 2, 3},
+			b:        []int{3, 4, 5, 6, 7},
+			expected: []int{3},
+		},
+		{
+			name:     "one element intersection 3",
+			a:        []int{1, 2, 3, 9, 10},
+			b:        []int{3, 4, 5},
+			expected: []int{3},
+		},
+		{
+			name:     "multiple element intersection 1",
+			a:        []int{1, 2, 3, 4, 5},
+			b:        []int{3, 4, 5, 6, 7},
+			expected: []int{3, 4, 5},
+		},
+		{
+			name:     "multiple element intersection 2",
+			a:        []int{3, 4, 5, 6, 7, 8, 9},
+			b:        []int{1, 2, 3, 4, 5},
+			expected: []int{3, 4, 5},
+		},
+		{
+			name:     "multiple element intersection 3",
+			a:        []int{1, 2, 3, 4, 5},
+			b:        []int{3, 4, 5, 6, 7, 8, 9},
+			expected: []int{3, 4, 5},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := util.IntersectSortedSliceInt(tc.a, tc.b)
+			if !reflect.DeepEqual(result, tc.expected) {
+				t.Errorf("expected %v, but got %v", tc.expected, result)
+			}
+		})
+	}
+}
+
+func TestUnionSortedSliceInt(t *testing.T) {
+	testCases := []struct {
+		name     string
+		a, b     []int
+		expected []int
+	}{
+		{
+			name:     "empty slices",
+			a:        []int{},
+			b:        []int{},
+			expected: []int{},
+		},
+		{
+			name:     "one empty slice",
+			a:        []int{1, 2, 3},
+			b:        []int{},
+			expected: []int{1, 2, 3},
+		},
+		{
+			name:     "no overlap",
+			a:        []int{1, 2, 3},
+			b:        []int{4, 5, 6},
+			expected: []int{1, 2, 3, 4, 5, 6},
+		},
+		{
+			name:     "one element overlap 1",
+			a:        []int{1, 2, 3},
+			b:        []int{3, 4, 5},
+			expected: []int{1, 2, 3, 4, 5},
+		},
+		{
+			name:     "one element overlap 2",
+			a:        []int{1, 2, 3},
+			b:        []int{3, 4, 5, 6, 7},
+			expected: []int{1, 2, 3, 4, 5, 6, 7},
+		},
+		{
+			name:     "one element overlap 3",
+			a:        []int{1, 2, 3, 6, 7},
+			b:        []int{3, 4, 5},
+			expected: []int{1, 2, 3, 4, 5, 6, 7},
+		},
+		{
+			name:     "multiple element overlap 1",
+			a:        []int{1, 2, 3, 4, 5},
+			b:        []int{3, 4, 5, 6, 7},
+			expected: []int{1, 2, 3, 4, 5, 6, 7},
+		},
+		{
+			name:     "multiple element overlap 2",
+			a:        []int{1, 2, 3, 4, 5},
+			b:        []int{3, 4, 5, 6, 7, 8, 9},
+			expected: []int{1, 2, 3, 4, 5, 6, 7, 8, 9},
+		},
+		{
+			name:     "multiple element overlap 3",
+			a:        []int{1, 2, 3, 4, 5, 8, 9},
+			b:        []int{3, 4, 5, 6, 7},
+			expected: []int{1, 2, 3, 4, 5, 6, 7, 8, 9},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := util.UnionSortedSliceInt(tc.a, tc.b)
+			if !reflect.DeepEqual(result, tc.expected) {
+				t.Errorf("expected %v, but got %v", tc.expected, result)
+			}
+		})
+	}
 }

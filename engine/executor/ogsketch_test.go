@@ -20,8 +20,8 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/influxdata/influxdb/pkg/testing/assert"
 	"github.com/openGemini/openGemini/engine/executor"
+	"github.com/stretchr/testify/assert"
 )
 
 const (

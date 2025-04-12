@@ -28,6 +28,7 @@ func init() {
 	RegistryPromTimeFunction("month_prom", &monthPromFunc{})
 	RegistryPromTimeFunction("day_of_month_prom", &dayOfMonthPromFunc{})
 	RegistryPromTimeFunction("day_of_week_prom", &dayOfWeekPromFunc{})
+	RegistryPromTimeFunction("day_of_year_prom", &dayOfYearPromFunc{})
 	RegistryPromTimeFunction("hour_prom", &hourPromFunc{})
 	RegistryPromTimeFunction("minute_prom", &minutePromFunc{})
 	RegistryPromTimeFunction("days_in_month_prom", &daysInMonthPromFunc{})
@@ -130,6 +131,18 @@ func (s *dayOfWeekPromFunc) CallFunc(name string, args []interface{}) (interface
 	if len(args) > 0 {
 		if iVal, ok := args[0].(float64); ok {
 			rVals := float64(time.Unix(int64(iVal), 0).UTC().Weekday())
+			return rVals, true
+		}
+	}
+	return nil, true
+}
+
+type dayOfYearPromFunc struct{}
+
+func (s *dayOfYearPromFunc) CallFunc(name string, args []interface{}) (interface{}, bool) {
+	if len(args) > 0 {
+		if iVal, ok := args[0].(float64); ok {
+			rVals := float64(time.Unix(int64(iVal), 0).UTC().YearDay())
 			return rVals, true
 		}
 	}

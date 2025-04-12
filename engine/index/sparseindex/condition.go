@@ -66,7 +66,7 @@ func (kc *KeyConditionImpl) convertToRPNElem(
 				kc.rpn = append(kc.rpn, &RPNElement{op: rpn.AND})
 			case influxql.OR:
 				kc.rpn = append(kc.rpn, &RPNElement{op: rpn.OR})
-			case influxql.EQ, influxql.LT, influxql.LTE, influxql.GT, influxql.GTE, influxql.NEQ, influxql.MATCHPHRASE:
+			case influxql.EQ, influxql.LT, influxql.LTE, influxql.GT, influxql.GTE, influxql.NEQ, influxql.MATCHPHRASE, influxql.IPINRANGE:
 			default:
 				return errno.NewError(errno.ErrRPNOp, v)
 			}
@@ -519,7 +519,7 @@ func (c *SKConditionImpl) convertToRPNElem(rpnExpr *rpn.RPNExpr) error {
 				c.rpn = append(c.rpn, &rpn.SKRPNElement{RPNOp: rpn.AND})
 			case influxql.OR:
 				c.rpn = append(c.rpn, &rpn.SKRPNElement{RPNOp: rpn.OR})
-			case influxql.EQ, influxql.LT, influxql.LTE, influxql.GT, influxql.GTE, influxql.NEQ, influxql.MATCHPHRASE:
+			case influxql.EQ, influxql.LT, influxql.LTE, influxql.GT, influxql.GTE, influxql.NEQ, influxql.MATCHPHRASE, influxql.IPINRANGE:
 			default:
 				return errno.NewError(errno.ErrRPNOp, v)
 			}

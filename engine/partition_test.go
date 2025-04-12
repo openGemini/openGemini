@@ -67,7 +67,7 @@ func TestParseShardDir(t *testing.T) {
 
 func TestOpenShard(t *testing.T) {
 	dir := t.TempDir()
-	dbPTInfo := NewDBPTInfo(defaultDb, defaultPtId, "", "", nil, nil)
+	dbPTInfo := NewDBPTInfo(defaultDb, defaultPtId, "", "", nil, nil, nil)
 	lockPath := path.Join("", "LOCK")
 	dbPTInfo.lockPath = &lockPath
 	durationInfos := make(map[uint64]*meta.ShardDurationInfo)

@@ -29,7 +29,7 @@ type SubQueryBuilder struct {
 	stmt *influxql.SelectStatement
 }
 
-func (b *SubQueryBuilder) newSubOptions(ctx context.Context, opt query.ProcessorOptions) (query.ProcessorOptions, error) {
+func (b *SubQueryBuilder) newSubOptions(ctx context.Context, opt *query.ProcessorOptions) (query.ProcessorOptions, error) {
 	if len(b.stmt.ExceptDimensions) > 0 {
 		return query.ProcessorOptions{}, fmt.Errorf("except: sub-query or join-query is unsupported")
 	}
@@ -78,10 +78,15 @@ func (b *SubQueryBuilder) newSubOptions(ctx context.Context, opt query.Processor
 		return query.ProcessorOptions{}, err
 	}
 	subOpt.Condition = cond
-	if !t.Min.IsZero() && t.MinTimeNano() > opt.StartTime {
+	if !opt.PromQuery {
+		if !t.Min.IsZero() && t.MinTimeNano() > opt.StartTime {
+			subOpt.StartTime = t.MinTimeNano()
+		}
+		if !t.Max.IsZero() && t.MaxTimeNano() < opt.EndTime {
+			subOpt.EndTime = t.MaxTimeNano()
+		}
+	} else {
 		subOpt.StartTime = t.MinTimeNano()
-	}
-	if !t.Max.IsZero() && t.MaxTimeNano() < opt.EndTime {
 		subOpt.EndTime = t.MaxTimeNano()
 	}
 
@@ -98,15 +103,16 @@ func (b *SubQueryBuilder) newSubOptions(ctx context.Context, opt query.Processor
 	subOpt.HintType = opt.HintType
 	subOpt.StmtId = opt.StmtId
 	subOpt.MaxParallel = opt.MaxParallel
-	opt.Step = b.stmt.Step
-	opt.Range = b.stmt.Range
-	opt.LookBackDelta = b.stmt.LookBackDelta
-	opt.QueryOffset = b.stmt.QueryOffset
+	if opt.PromQuery {
+		if opt.EndTime == subOpt.EndTime {
+			opt.QueryOffset = b.stmt.QueryOffset
+		}
+	}
 	return subOpt, nil
 }
 
 func (b *SubQueryBuilder) Build(ctx context.Context, opt *query.ProcessorOptions) (hybridqp.QueryNode, error) {
-	subOpt, err := b.newSubOptions(ctx, *opt)
+	subOpt, err := b.newSubOptions(ctx, opt)
 	if err != nil {
 		return nil, err
 	}

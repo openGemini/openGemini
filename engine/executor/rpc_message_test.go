@@ -29,6 +29,7 @@ import (
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/cache"
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
@@ -164,7 +165,7 @@ func (c *RPCServer) Handle(w spdy.Responser, data interface{}) error {
 
 	qm := query2.NewManager(clientID)
 	if qm.Aborted(qid) {
-		err := w.Response(executor.NewFinishMessage(), true)
+		err := w.Response(executor.NewFinishMessage(0), true)
 		if err != nil {
 			return err
 		}
@@ -260,6 +261,38 @@ func TestTransport(t *testing.T) {
 	assert.EqualError(t, err, fmt.Sprintf("unknown error"))
 }
 
+func TestEmptyMessage(t *testing.T) {
+	address := "127.0.0.11:18291"
+	var nodeID uint64 = 1
+
+	// Server
+	server := startServer(address, &RPCServer{})
+	defer server.Stop()
+
+	// Client
+	transport.NewNodeManager().Add(nodeID, address)
+
+	time.Sleep(time.Second)
+
+	client := executor.NewRPCClient(makeRemoteQueryMsg(nodeID))
+
+	_, span := tracing.NewTrace("root")
+	client.StartAnalyze(span)
+	var queryIndexState int32 = 0
+	con := context.WithValue(context.Background(), index.QueryIndexState, &queryIndexState)
+
+	client.Init(con, nil)
+	message := executor.NewFinishMessage(1)
+	err := client.Handle(message)
+	assert.NoError(t, err)
+	assert.Equal(t, int32(1), queryIndexState)
+	message2 := executor.NewFinishMessage(1)
+	err = message2.Unmarshal(nil)
+	if err == nil {
+		t.Errorf("unmarshal wrong")
+	}
+}
+
 func TestTransportAbort(t *testing.T) {
 	address := "127.0.0.12:18292"
 	var nodeID uint64 = 2
@@ -282,7 +315,7 @@ func TestTransportAbort(t *testing.T) {
 
 	go func() {
 		time.Sleep(time.Second / 2)
-		client.Abort()
+		client.Abort(false)
 	}()
 
 	err := client.Run()
@@ -313,7 +346,7 @@ func TestTransportCrash(t *testing.T) {
 
 	go func() {
 		time.Sleep(time.Second / 2)
-		client.Interrupt()
+		client.Interrupt(false)
 	}()
 
 	err := client.Run()
@@ -396,4 +429,13 @@ func TestIncQueryMessage(t *testing.T) {
 	require.Equal(t, err.Error(), "invalid the IncQueryFinish length")
 	msg1 := executor.NewRPCMessage(executor.IncQueryFinishMessage)
 	require.Equal(t, msg1, &executor.IncQueryFinish{})
+}
+
+func TestCrashUnmarshal(t *testing.T) {
+	c := executor.Crash{}
+	b := make([]byte, 0)
+	b, _ = c.Marshal(b)
+	c.Unmarshal(b)
+	b = b[:len(b)-1]
+	c.Unmarshal(b)
 }

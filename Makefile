@@ -76,7 +76,7 @@ golangci-lint-check: install-golangci-lint
 
 gotest: install-failpoint failpoint-enable
 	@echo "running gotest begin."
-	@index=0; for s in $(PACKAGES_OPEN_GEMINI_TESTS); do index=$$(($$index+1)); if ! $(GOTEST) -failfast -short -v -count 1 -p 1 -timeout 10m -coverprofile coverage_$$index.txt -coverpkg ./... $$s; then $(FAILPOINT_DISABLE); exit 1; fi; done
+	@index=0; for s in $(PACKAGES_OPEN_GEMINI_TESTS); do index=$$(($$index+1)); if ! $(GOTEST) -gcflags=all=-l -failfast -short -v -count 1 -p 1 -timeout 10m -coverprofile coverage_$$index.txt -coverpkg ./... $$s; then $(FAILPOINT_DISABLE); exit 1; fi; done
 	@$(FAILPOINT_DISABLE)
 
 build-check:
@@ -88,7 +88,7 @@ build-check:
 
 integration-test:
 	@echo "running integration test begin."
-	@URL=http://127.0.0.1:8086 $(GOTEST) -mod=mod -test.parallel 1 -timeout 10m ./tests -v GOCACHE=off -args "normal"
+	@URL=http://127.0.0.1:8086 $(GOTEST) -gcflags=all=-l -mod=mod -test.parallel 1 -timeout 10m ./tests -v GOCACHE=off -args "normal"
 
 start-subscriber:
 	sed -i '/\[subscriber\]/{n;s/.*/enabled = true/;}' config/openGemini.conf

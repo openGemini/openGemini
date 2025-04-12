@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/binarysearch"
@@ -34,7 +35,6 @@ const FillBufChunkNum = 2
 type FillTransform struct {
 	BaseProcessor
 
-	init                 bool
 	sameTag              bool
 	bufChunkNum          int
 	intervalNum          int
@@ -42,19 +42,22 @@ type FillTransform struct {
 	startTime            int64
 	endTime              int64
 	interval             int64
+	closedSignal         *bool
 	fillVal              interface{}
 	prevChunk            Chunk
 	newChunk             Chunk
 	tmpChunk             Chunk
 	coProcessor          CoProcessor
 	chunkPool            *CircularChunkPool
-	nextChunkCh          chan struct{}
-	fillChunkCh          chan struct{}
 	prevValues           []interface{}
 	prevReadAts          []int
 	inputReadAts         []int
 	fillReadAts          []int
-	bufChunk             []Chunk
+	inputChunk           chan Chunk
+	nextSignal           chan Semaphore
+	nextSignalOnce       sync.Once
+	bufChunk             Chunk
+	nextChunk            Chunk
 	fillItem             []*FillItem
 	fillProcessor        []FillProcessor
 	Inputs               ChunkPorts
@@ -96,21 +99,23 @@ func NewFillTransform(inRowDataType []hybridqp.RowDataType, outRowDataType []hyb
 		endTime, _ = opt.Window(opt.StartTime)
 	}
 
+	closedSignal := false
 	trans := &FillTransform{
-		opt:          opt,
-		startTime:    startTime,
-		endTime:      endTime,
-		bufChunkNum:  FillBufChunkNum,
-		interval:     int64(opt.Interval.Duration),
-		Inputs:       make(ChunkPorts, 0, len(inRowDataType)),
-		Outputs:      make(ChunkPorts, 0, len(outRowDataType)),
-		prevReadAts:  make([]int, outRowDataType[0].NumColumn()),
-		inputReadAts: make([]int, outRowDataType[0].NumColumn()),
-		bufChunk:     make([]Chunk, 0, FillBufChunkNum),
-		nextChunkCh:  make(chan struct{}),
-		fillChunkCh:  make(chan struct{}),
-		fillLogger:   logger.NewLogger(errno.ModuleQueryEngine),
-		chunkPool:    NewCircularChunkPool(CircularChunkNum, NewChunkBuilder(outRowDataType[0])),
+		closedSignal:   &closedSignal,
+		opt:            opt,
+		startTime:      startTime,
+		endTime:        endTime,
+		bufChunkNum:    FillBufChunkNum,
+		interval:       int64(opt.Interval.Duration),
+		Inputs:         make(ChunkPorts, 0, len(inRowDataType)),
+		Outputs:        make(ChunkPorts, 0, len(outRowDataType)),
+		prevReadAts:    make([]int, outRowDataType[0].NumColumn()),
+		inputReadAts:   make([]int, outRowDataType[0].NumColumn()),
+		nextSignal:     make(chan Semaphore),
+		nextSignalOnce: sync.Once{},
+		inputChunk:     make(chan Chunk),
+		fillLogger:     logger.NewLogger(errno.ModuleQueryEngine),
+		chunkPool:      NewCircularChunkPool(CircularChunkNum, NewChunkBuilder(outRowDataType[0])),
 	}
 
 	trans.fillVal = opt.FillValue
@@ -195,11 +200,13 @@ func (trans *FillTransform) Explain() []ValuePair {
 	return nil
 }
 
-func (trans *FillTransform) Close() {
-	trans.Once(func() {
-		close(trans.fillChunkCh)
-		close(trans.nextChunkCh)
+func (trans *FillTransform) closeNextSignal() {
+	trans.nextSignalOnce.Do(func() {
+		close(trans.nextSignal)
 	})
+}
+
+func (trans *FillTransform) Close() {
 	trans.Outputs.Close()
 	trans.chunkPool.Release()
 }
@@ -234,94 +241,55 @@ func (trans *FillTransform) Work(ctx context.Context) error {
 	}()
 
 	errs := &trans.errs
-	errs.Init(len(trans.Inputs)+1, trans.Close)
+	errs.Init(2, trans.Close)
 
-	runnable := func() {
-		defer func() {
-			tracing.Finish(trans.span)
-			if e := recover(); e != nil {
-				err := errno.NewError(errno.RecoverPanic, e)
-				trans.fillLogger.Error(err.Error(), zap.String("query", "FillTransform"), zap.Uint64("query_id", trans.opt.QueryId))
-				errs.Dispatch(err)
-			} else {
-				errs.Dispatch(nil)
-			}
-		}()
-
-		trans.running(ctx)
-	}
-
-	go runnable()
+	go trans.run(ctx, errs)
 	go trans.fill(ctx, errs)
 
 	return errs.Err()
 }
 
-func (trans *FillTransform) running(ctx context.Context) {
+func (trans *FillTransform) run(ctx context.Context, errs *errno.Errs) {
+	defer func() {
+		tracing.Finish(trans.span)
+		close(trans.inputChunk)
+		if e := recover(); e != nil {
+			err := errno.NewError(errno.RecoverPanic, e)
+			trans.fillLogger.Error(err.Error(), zap.String("query", "FillTransform"), zap.Uint64("query_id", trans.opt.QueryId))
+			errs.Dispatch(err)
+		} else {
+			errs.Dispatch(nil)
+		}
+	}()
 	for {
 		select {
 		case c, ok := <-trans.Inputs[0].State:
 			tracing.StartPP(trans.span)
 			if !ok {
-				trans.doForLast()
 				return
 			}
 
-			trans.init = true
-			trans.appendChunk(c)
-			if len(trans.bufChunk) == trans.bufChunkNum {
-				trans.fillChunkCh <- struct{}{}
+			trans.inputChunk <- c
+			if _, sOk := <-trans.nextSignal; !sOk {
+				return
 			}
-			<-trans.nextChunkCh
 			tracing.EndPP(trans.span)
 		case <-ctx.Done():
+			trans.closeNextSignal()
+			*trans.closedSignal = true
 			return
 		}
 	}
 }
 
-func (trans *FillTransform) doForLast() {
-	if !trans.init {
-		<-trans.nextChunkCh
-		trans.fillChunkCh <- struct{}{}
-		return
-	}
-
-	for len(trans.bufChunk) > 0 {
-		trans.fillChunkCh <- struct{}{}
-		<-trans.nextChunkCh
-	}
-	trans.fillChunkCh <- struct{}{}
+func (trans *FillTransform) NextChunk() {
+	trans.nextSignal <- signal
+	trans.nextChunk = <-trans.inputChunk
 }
 
-func (trans *FillTransform) appendChunk(c Chunk) {
-	trans.bufChunk = append(trans.bufChunk, c)
-}
-
-func (trans *FillTransform) nextChunk() Chunk {
-	if len(trans.bufChunk) > 0 {
-		newChunk := trans.bufChunk[0]
-		trans.bufChunk = trans.bufChunk[1:]
-		return newChunk
-	}
-	return nil
-}
-
-func (trans *FillTransform) peekChunk() Chunk {
-	c := trans.nextChunk()
-	if c == nil {
-		return nil
-	}
-	trans.unreadChunk(c)
-	return c
-}
-
-func (trans *FillTransform) unreadChunk(c Chunk) {
-	trans.bufChunk = append([]Chunk{c}, trans.bufChunk...)
-}
-
-func (trans *FillTransform) fill(_ context.Context, errs *errno.Errs) {
+func (trans *FillTransform) fill(ctx context.Context, errs *errno.Errs) {
 	defer func() {
+		trans.closeNextSignal()
 		if e := recover(); e != nil {
 			err := errno.NewError(errno.RecoverPanic, e)
 			trans.fillLogger.Error(err.Error(), zap.String("query", "FillTransform"), zap.Uint64("query_id", trans.opt.QueryId))
@@ -331,23 +299,19 @@ func (trans *FillTransform) fill(_ context.Context, errs *errno.Errs) {
 		}
 	}()
 
-	fillStart := func() {
-		<-trans.fillChunkCh
+	var ok bool
+	// get first chunk
+	trans.bufChunk, ok = <-trans.inputChunk
+	if !ok {
+		return
 	}
-
-	nextStart := func() {
-		trans.nextChunkCh <- struct{}{}
-	}
-
 	trans.newChunk = trans.chunkPool.GetChunk()
 	idx := 0
 	for {
-		nextStart()
-
-		fillStart()
-
-		c := trans.nextChunk()
-		if c == nil {
+		if *trans.closedSignal {
+			return
+		}
+		if trans.bufChunk == nil {
 			if trans.newChunk.Len() > 0 {
 				trans.sendChunk()
 			}
@@ -355,28 +319,33 @@ func (trans *FillTransform) fill(_ context.Context, errs *errno.Errs) {
 		}
 
 		// fast path, return chunk directly if there is only one trunk and group by time only
-		if idx == 0 && len(trans.bufChunk) == 0 && len(trans.opt.Dimensions) == 0 && trans.opt.Fill == influxql.NullFill {
+		if idx == 0 && trans.nextChunk == nil && len(trans.opt.Dimensions) == 0 && trans.opt.Fill == influxql.NullFill {
 			windowStart, _ := trans.opt.Window(trans.opt.StartTime)
 			_, windowEnd := trans.opt.Window(trans.opt.EndTime)
-			if (windowEnd-windowStart)/trans.opt.Interval.Duration.Nanoseconds() == int64(c.Len()) {
-				trans.Outputs[0].State <- c
+			if (windowEnd-windowStart)/trans.opt.Interval.Duration.Nanoseconds() == int64(trans.bufChunk.Len()) {
+				trans.Outputs[0].State <- trans.bufChunk
+				trans.NextChunk()
+				trans.bufChunk = trans.nextChunk
+				trans.nextChunk = nil
 				continue
 			}
 		}
 		idx++
 
 		// if the input chunk is from other measurements, return the newChunk.
-		if trans.newChunk.NumberOfRows() > 0 && trans.newChunk.Name() != c.Name() {
+		if trans.newChunk.NumberOfRows() > 0 && trans.newChunk.Name() != trans.bufChunk.Name() {
 			trans.sendChunk()
 		} else if trans.newChunk.NumberOfRows() > 0 {
 			// if the size of newChunk is more than the the chunk size given, return the newChunk.
 			trans.sendChunk()
 		}
 
-		trans.getFillChunkSize(c)
+		trans.NextChunk()
+		trans.getFillChunkSize(trans.bufChunk)
 		if trans.fillChunkSize > 2*trans.opt.ChunkSize {
 			tracing.SpanElapsed(trans.ppFillCost, func() {
-				trans.multiCompute(c)
+				trans.multiCompute(trans.bufChunk)
+				trans.bufChunk = trans.nextChunk
 			})
 			trans.fillReadAts = trans.fillReadAts[:0]
 			continue
@@ -384,7 +353,8 @@ func (trans *FillTransform) fill(_ context.Context, errs *errno.Errs) {
 
 		trans.fillReadAts = trans.fillReadAts[:0]
 		tracing.SpanElapsed(trans.ppFillCost, func() {
-			trans.compute(c)
+			trans.compute(trans.bufChunk)
+			trans.bufChunk = trans.nextChunk
 		})
 	}
 }
@@ -727,7 +697,7 @@ func (trans *FillTransform) isSameTag(c Chunk) bool {
 	if trans.tmpChunk.NumberOfRows() > 0 && trans.newChunk.NumberOfRows() > 0 {
 		return trans.sameTag
 	}
-	nextChunk := trans.peekChunk()
+	nextChunk := trans.nextChunk
 	if nextChunk == nil || nextChunk.NumberOfRows() == 0 || nextChunk.Name() != c.Name() {
 		return false
 	}

@@ -25,6 +25,7 @@ import (
 
 	"github.com/openGemini/openGemini/lib/bloomfilter"
 	"github.com/openGemini/openGemini/lib/fileops"
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/obs"
@@ -390,6 +391,11 @@ func NewLineFilterReader(path string, obsOpts *obs.ObsOptions, expr influxql.Exp
 	return l, nil
 }
 
+func NewLineFilterReaderBase(path string, obsOpts *obs.ObsOptions, expr influxql.Expr, version uint32, splitMap map[string][]byte, fileName string) (rpn.SKBaseReader, error) {
+	r, err := NewLineFilterReader(path, obsOpts, expr, version, splitMap, fileName)
+	return r, err
+}
+
 func (s *LineFilterReader) IsExist(blockId int64, elem *rpn.SKRPNElement) (bool, error) {
 	return s.isExist(blockId)
 }
@@ -474,4 +480,64 @@ func (s *LineFilterReader) close() {
 	if s.r != nil {
 		_ = s.r.Close()
 	}
+}
+
+type FilterReaderFactory struct {
+	creators map[index.IndexType]FilterReaderCreator
+}
+
+type FilterReaderCreator func(path string, obsOpts *obs.ObsOptions, expr influxql.Expr, version uint32, splitMap map[string][]byte, fileName string) (rpn.SKBaseReader, error)
+
+func NewFilterReaderFactory() *FilterReaderFactory {
+	return &FilterReaderFactory{
+		creators: make(map[index.IndexType]FilterReaderCreator),
+	}
+}
+
+func RegistryFilterReaderCreator(indexType index.IndexType, creator FilterReaderCreator) bool {
+	factory := GetFilterReaderFactoryInstance()
+	_, ok := factory.FindFilterReaderCreator(indexType)
+
+	if ok {
+		return ok
+	}
+
+	factory.AddFilterReaderCreator(indexType, creator)
+	return ok
+}
+
+func (r *FilterReaderFactory) AddFilterReaderCreator(indexType index.IndexType, creator FilterReaderCreator) {
+	r.creators[indexType] = creator
+}
+
+func (r *FilterReaderFactory) FindFilterReaderCreator(indexType index.IndexType) (FilterReaderCreator, bool) {
+	creator, ok := r.creators[indexType]
+	return creator, ok
+}
+
+var instanceFilterReaderFactory = NewFilterReaderFactory()
+
+var (
+	_ = RegistryFilterReaderCreator(index.BloomFilter, NewLineFilterReaderBase)
+	_ = RegistryFilterReaderCreator(index.BloomFilterIp, NewLineFilterIpReader)
+)
+
+func GetFilterReaderFactoryInstance() *FilterReaderFactory {
+	return instanceFilterReaderFactory
+}
+
+func GetFilterReader(indexType index.IndexType) (FilterReaderCreator, error) {
+	creator, ok := GetFilterReaderFactoryInstance().FindFilterReaderCreator(indexType)
+	if !ok {
+		return nil, fmt.Errorf("no filter reader found, unsupported index type: %d", indexType)
+	}
+	return creator, nil
+}
+
+func CreateFilterReader(indexType index.IndexType, path string, obsOpts *obs.ObsOptions, expr influxql.Expr, version uint32, splitMap map[string][]byte, fileName string) (rpn.SKBaseReader, error) {
+	creator, err := GetFilterReader(indexType)
+	if err != nil {
+		return nil, err
+	}
+	return creator(path, obsOpts, expr, version, splitMap, fileName)
 }

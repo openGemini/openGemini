@@ -163,7 +163,7 @@ func (m *MmsTables) writeCompactedFileInfo(name string, oldFiles, newFiles []TSS
 	buf = append(buf, compLogMagic...)
 
 	pri := fileops.FilePriorityOption(fileops.IO_PRIORITY_NORMAL)
-	fd, err := fileops.OpenFile(fName, os.O_CREATE|os.O_WRONLY, 0640, lock, pri)
+	fd, err := fileops.OpenFile(fName, os.O_CREATE|os.O_WRONLY, 0600, lock, pri)
 	if err != nil {
 		log.Error("create file error", zap.String("name", fName), zap.Error(err))
 		return "", err
@@ -201,7 +201,7 @@ func readCompactLogFile(name string, info *CompactedFileInfo) error {
 	buf := make([]byte, int(fSize))
 	lock := fileops.FileLockOption("")
 	pri := fileops.FilePriorityOption(fileops.IO_PRIORITY_NORMAL)
-	fd, err := fileops.OpenFile(name, os.O_RDONLY, 0640, lock, pri)
+	fd, err := fileops.OpenFile(name, os.O_RDONLY, 0600, lock, pri)
 	if err != nil {
 		log.Error("read compact log file fail", zap.String("name", name), zap.Error(err))
 		return err

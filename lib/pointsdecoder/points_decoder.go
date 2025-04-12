@@ -59,8 +59,16 @@ type DecoderWork struct {
 	indexKeypools    []byte
 	indexOptionpools []influx.IndexOption
 	lastResetTime    uint64
+	refCount         int64
 
 	logger *logger.Logger
+}
+
+func (ww *DecoderWork) Ref() {
+	atomic.AddInt64(&ww.refCount, 1)
+}
+func (ww *DecoderWork) UnRef() int64 {
+	return atomic.AddInt64(&ww.refCount, -1)
 }
 
 func (ww *DecoderWork) SetReqBuf(buff []byte) {
@@ -101,6 +109,7 @@ func (ww *DecoderWork) reset() {
 	ww.rows = ww.rows[:0]
 	ww.reqBuf = ww.reqBuf[:0]
 	ww.streamVars = ww.streamVars[:0]
+	ww.refCount = 0
 }
 
 // DecodePoints decodes the network data reqBuf to Points.

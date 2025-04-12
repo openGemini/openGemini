@@ -18,13 +18,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/influxdata/influxdb/pkg/testing/assert"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/stretchr/testify/assert"
 )
 
 func createRowDataType() hybridqp.RowDataType {
@@ -367,4 +367,17 @@ func TestCanSeqAggPushDown(t *testing.T) {
 	opt := query.ProcessorOptions{Sources: []influxql.Source{&influxql.Measurement{Name: "mst"}}, StartTime: influxql.MinTime, EndTime: 5001}
 	schema := executor.NewQuerySchema(nil, nil, &opt, nil)
 	assert.Equal(t, schema.CanSeqAggPushDown(), false)
+}
+
+func TestIsPromAbsentCall(t *testing.T) {
+	opt := query.ProcessorOptions{}
+	schema := executor.NewQuerySchema(influxql.Fields{&influxql.Field{
+		Expr: &influxql.ParenExpr{
+			Expr: &influxql.Call{
+				Name: "absent_prom",
+				Args: []influxql.Expr{&influxql.Call{Name: "absent_prom", Args: []influxql.Expr{}}},
+			},
+		},
+	}}, []string{"metric"}, &opt, nil)
+	assert.Equal(t, schema.IsPromAbsentCall(), true)
 }

@@ -35,6 +35,10 @@ const (
 	MultipleRowsIgnoreTagLimit LimitType = 4
 )
 
+func init() {
+	RegistryPromNestOp("count_prom", &CountPromOp{})
+}
+
 type RowDataType interface {
 	Aux() []int
 	Equal(RowDataType) bool
@@ -207,6 +211,8 @@ type Catalog interface {
 	HasFieldCondition() bool
 	HasAuxTag() bool
 	IsPromNestedCall(call *influxql.Call) bool
+	IsPromAbsentCall() bool
+	IsPromNestedCountCall() bool
 	HasPercentileOGSketch() bool
 	HasPromNestedCall() bool
 	Options() Options
@@ -263,6 +269,7 @@ type Catalog interface {
 	HasUnnests() bool
 	GetTimeRangeByTC() util.TimeRange
 	GetPromCalls() []*influxql.PromSubCall
+	HasTopNDDCM() bool
 }
 
 type CatalogCreator interface {
@@ -308,7 +315,7 @@ func GetCatalogFactoryInstance() *CatalogCreatorFactory {
 
 type StoreEngine interface {
 	ReportLoad()
-	CreateLogicPlan(ctx context.Context, db string, ptId uint32, shardID uint64, sources influxql.Sources, schema Catalog) (QueryNode, error)
+	CreateLogicPlan(ctx context.Context, db string, ptId uint32, shardID []uint64, sources influxql.Sources, schema Catalog) (QueryNode, error)
 	ScanWithSparseIndex(ctx context.Context, db string, ptId uint32, shardIDS []uint64, schema Catalog) (IShardsFragments, error)
 	GetIndexInfo(db string, ptId uint32, shardID uint64, schema Catalog) (interface{}, error)
 	RowCount(db string, ptId uint32, shardIDS []uint64, schema Catalog) (int64, error)
@@ -341,12 +348,13 @@ func (o *OGSketchCompositeOperator) GetQueryPerOp() *influxql.Call {
 }
 
 type PromNestedCall struct {
-	aggCall  *influxql.Call
-	funcCall *influxql.Call
+	aggCall   *influxql.Call
+	funcCall  *influxql.Call
+	transCall *influxql.Call
 }
 
-func NewPromNestedCall(fc, ac *influxql.Call) *PromNestedCall {
-	return &PromNestedCall{funcCall: fc, aggCall: ac}
+func NewPromNestedCall(fc, ac, tc *influxql.Call) *PromNestedCall {
+	return &PromNestedCall{funcCall: fc, aggCall: ac, transCall: tc}
 }
 
 func (c *PromNestedCall) GetAggCall() *influxql.Call {
@@ -355,4 +363,39 @@ func (c *PromNestedCall) GetAggCall() *influxql.Call {
 
 func (c *PromNestedCall) GetFuncCall() *influxql.Call {
 	return c.funcCall
+}
+
+func (c *PromNestedCall) GetTransCall() *influxql.Call {
+	return c.transCall
+}
+
+type PromNestOp interface {
+	GenPromTransCall(agg *influxql.Call) *influxql.Call
+}
+
+var factoryInstance = make(map[string]PromNestOp)
+
+func GetPromNestOp(name string) PromNestOp {
+	return factoryInstance[name]
+}
+
+func RegistryPromNestOp(name string, aggOp PromNestOp) {
+	_, ok := factoryInstance[name]
+	if ok {
+		return
+	}
+	factoryInstance[name] = aggOp
+}
+
+type CountPromOp struct {
+}
+
+func (c *CountPromOp) GenPromTransCall(agg *influxql.Call) (tc *influxql.Call) {
+	var ok bool
+	tc, ok = influxql.CloneExpr(agg).(*influxql.Call)
+	if !ok {
+		return
+	}
+	tc.Name = "sum"
+	return
 }

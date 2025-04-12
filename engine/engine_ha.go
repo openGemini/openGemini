@@ -24,6 +24,7 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/raftconn"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"go.uber.org/zap"
@@ -106,8 +107,11 @@ func (e *Engine) PreAssign(opId uint64, db string, ptId uint32, durationInfos ma
 	}
 	ptPath := path.Join(e.dataPath, config.DataDirectory, db, strconv.Itoa(int(ptId)))
 	walPath := path.Join(e.walPath, config.WalDirectory, db, strconv.Itoa(int(ptId)))
+
+	options, _ := e.metaClient.DatabaseOption(db)
+
 	lockPath := ""
-	dbPt := NewDBPTInfo(db, ptId, ptPath, walPath, e.loadCtx, e.fileInfos)
+	dbPt := NewDBPTInfo(db, ptId, ptPath, walPath, e.loadCtx, e.fileInfos, options)
 	dbPt.SetOption(e.engOpt)
 	dbPt.SetParams(true, &lockPath, dbBriefInfo.EnableTagArray)
 	start := time.Now()
@@ -151,7 +155,9 @@ func (e *Engine) Offload(opId uint64, db string, ptId uint32) error {
 }
 
 func (e *Engine) Assign(opId uint64, nodeId uint64, db string, ptId uint32, ver uint64, durationInfos map[uint64]*meta2.ShardDurationInfo, dbBriefInfo *meta2.DatabaseBriefInfo, client metaclient.MetaClient, storage netstorage.StorageService) error {
+	e.log.Info("[ASSIGN]engine start assign", zap.Uint64("opId", opId), zap.String("db", db), zap.Uint32("pt", ptId))
 	if !e.trySetDbPtMigrating(db, ptId) {
+		e.log.Error("[ASSIGN]engine start assign failed", zap.Uint64("opId", opId), zap.String("db", db), zap.Uint32("pt", ptId))
 		return errno.NewError(errno.PtIsAlreadyMigrating)
 	}
 	defer e.clearDbPtMigrating(db, ptId)
@@ -162,31 +168,35 @@ func (e *Engine) Assign(opId uint64, nodeId uint64, db string, ptId uint32, ver 
 			e.uploadFileInfos()
 		}()
 	}
-	e.log.Info("engine start to load all shards", zap.Uint64("opId", opId), zap.String("db", db), zap.Uint32("pt", ptId))
+	e.log.Info("[ASSIGN]engine start to load all shards", zap.Uint64("opId", opId), zap.String("db", db), zap.Uint32("pt", ptId))
 	start := time.Now()
 	ptPath := path.Join(e.dataPath, config.DataDirectory, db, strconv.Itoa(int(ptId)))
 	walPath := path.Join(e.walPath, config.WalDirectory, db, strconv.Itoa(int(ptId)))
+	options, _ := e.metaClient.DatabaseOption(db)
 	lockPath := path.Join(ptPath, "LOCK")
 	dbPt, err := e.getPartition(db, ptId, false)
 	if err != nil {
 		if errno.Equal(err, errno.DBPTClosed) {
+			e.log.Error("[ASSIGN]assign failed db pt is closed", zap.Uint64("opId", opId), zap.String("db", db), zap.Uint32("pt", ptId), zap.Error(err))
 			return err
 		}
-		dbPt = NewDBPTInfo(db, ptId, ptPath, walPath, e.loadCtx, e.fileInfos)
+		dbPt = NewDBPTInfo(db, ptId, ptPath, walPath, e.loadCtx, e.fileInfos, options)
 	} else if !dbPt.preload {
-		e.log.Info("engine already load all shards", zap.Uint64("opId", opId), zap.String("db", db), zap.Uint32("pt", ptId))
+		e.log.Info("[ASSIGN]engine already load all shards", zap.Uint64("opId", opId), zap.String("db", db), zap.Uint32("pt", ptId))
 		return nil
 	}
+	dbPt.dbObsOptions = options
 	if !dbPt.preload && IsMemUsageExceeded() {
+		e.log.Error("[ASSIGN]assign failed, mem usage is exceeded", zap.Uint64("opId", opId), zap.String("db", db), zap.Uint32("pt", ptId))
 		return errno.NewError(errno.MemUsageExceeded, GetMemUsageLimit())
 	}
 	statistics.DBPTTaskInit(opId, db, ptId)
 	// Fence to prevent split-brain.
 	fc := NewFencer(e.dataPath, e.walPath, db, ptId)
 	if err = fc.Fence(); err != nil {
-		e.log.Error("fence failed", zap.String("db", db), zap.Uint32("pt", ptId), zap.Uint64("opId", opId), zap.Error(err))
+		e.log.Error("[ASSIGN]fence failed", zap.String("db", db), zap.Uint32("pt", ptId), zap.Uint64("opId", opId), zap.Error(err))
 		if err1 := fc.ReleaseFence(); err1 != nil {
-			e.log.Error("release fence failed", zap.Uint64("opId", opId), zap.String("db", db), zap.Uint32("pt", ptId), zap.Error(err1))
+			e.log.Error("[ASSIGN]release fence failed", zap.Uint64("opId", opId), zap.String("db", db), zap.Uint32("pt", ptId), zap.Error(err1))
 		}
 		statistics.DBPTStepDuration(opId, "DBPTFenceError", time.Since(start).Nanoseconds(), statistics.DBPTLoadErr, err.Error())
 		return err
@@ -201,24 +211,25 @@ func (e *Engine) Assign(opId uint64, nodeId uint64, db string, ptId uint32, ver 
 	dbPt.SetOption(e.engOpt)
 	dbPt.SetParams(dbPt.preload, &lockPath, dbBriefInfo.EnableTagArray)
 
+	e.log.Info("[ASSIGN]start load dbpt shards", zap.Uint64("opId", opId), zap.String("db", db), zap.Uint32("pt", ptId))
 	if err = e.loadDbPtShards(opId, dbPt, durationInfos, immutable.LOAD, client); err != nil {
-		e.log.Error("engine load all shards failed", zap.Uint64("opId", opId), zap.String("db", db), zap.Uint32("pt", ptId), zap.Error(err))
+		e.log.Error("[ASSIGN]engine load all shards failed", zap.Uint64("opId", opId), zap.String("db", db), zap.Uint32("pt", ptId), zap.Error(err))
 		if rbErr := e.offloadDbPT(dbPt); rbErr != nil {
-			e.log.Error("both load pt and rollback failed", zap.Uint64("opId", opId), zap.String("db", db), zap.Uint32("pt", ptId), zap.Error(rbErr))
+			e.log.Error("[ASSIGN]both load pt and rollback failed", zap.Uint64("opId", opId), zap.String("db", db), zap.Uint32("pt", ptId), zap.Error(rbErr))
 			panic(rbErr.Error())
 		}
 		if err1 := fc.ReleaseFence(); err1 != nil {
-			e.log.Error("release fence failed", zap.Uint64("opId", opId), zap.String("db", db), zap.Uint32("pt", ptId), zap.Error(err1))
+			e.log.Error("[ASSIGN]release fence failed", zap.Uint64("opId", opId), zap.String("db", db), zap.Uint32("pt", ptId), zap.Error(err1))
 		}
 		statistics.DBPTStepDuration(opId, "DBPTLoadError", time.Since(start).Nanoseconds(), statistics.DBPTLoadErr, err.Error())
 		return err
 	}
 
 	if config.IsReplication() && dbBriefInfo.Replicas > 1 {
-		e.log.Info("assign repDBPT", zap.String("db", db), zap.Uint32("pt", ptId), zap.Int("replicasN", dbBriefInfo.Replicas))
+		e.log.Info("[ASSIGN]assign repDBPT", zap.String("db", db), zap.Uint32("pt", ptId), zap.Int("replicasN", dbBriefInfo.Replicas))
 		err = e.startRaftNode(opId, nodeId, dbPt, client, storage)
 		if err != nil {
-			e.log.Error("engine start raft node failed", zap.Uint64("opId", opId), zap.String("db", db), zap.Uint32("pt", ptId), zap.Error(err))
+			e.log.Error("[ASSIGN]engine start raft node failed", zap.Uint64("opId", opId), zap.String("db", db), zap.Uint32("pt", ptId), zap.Error(err))
 			return err
 		}
 	}
@@ -227,11 +238,13 @@ func (e *Engine) Assign(opId uint64, nodeId uint64, db string, ptId uint32, ver 
 	e.mu.Lock()
 	e.addDBPTInfo(dbPt)
 	e.mu.Unlock()
+	e.log.Info("[ASSIGN]start replay for replication", zap.String("db", db), zap.Uint32("pt", ptId), zap.Int("replicasN", dbBriefInfo.Replicas))
 	// replay is complete before 'assign' operation is complete.
 	readReplayForReplication(dbPt.ReplayC, client, storage)
+	e.log.Info("[ASSIGN]finish replay for replication", zap.String("db", db), zap.Uint32("pt", ptId), zap.Int("replicasN", dbBriefInfo.Replicas))
 	dbPt.enableReportShardLoad()
 	dbPt.preload = false
-	e.log.Info("engine load all shards success", zap.Uint64("opId", opId), zap.String("db", db), zap.Uint32("pt", ptId))
+	e.log.Info("[ASSIGN]engine load all shards success", zap.Uint64("opId", opId), zap.String("db", db), zap.Uint32("pt", ptId))
 	statistics.DBPTStepDuration(opId, "DBPTLoadFinishDuration", time.Since(start).Nanoseconds(), statistics.DBPTLoaded, "")
 	return nil
 }
@@ -326,9 +339,18 @@ func (e *Engine) clearDbPtMigrating(db string, ptId uint32) {
 		return
 	}
 	delete(e.migratingDbPT[db], ptId)
+	e.log.Info("[ASSIGN]clearDbPtMigrating", zap.String("db", db), zap.Uint32("pt", ptId))
 }
 func (e *Engine) CheckPtsRemovedDone() bool {
 	return len(e.DBPartitions) == 0
+}
+
+func (e *Engine) TransferLeadership(database string, nodeId uint64, oldMasterPtId, newMasterPtId uint32) error {
+	dbpt, err := e.getPartition(database, oldMasterPtId, false)
+	if err != nil {
+		return err
+	}
+	return dbpt.node.TransferLeadership(raftconn.GetRaftNodeId(newMasterPtId))
 }
 
 type fencer interface {

@@ -19,12 +19,12 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/fasttime"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/memory"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/storagepacelimiter"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/syncwg"
 	"github.com/bits-and-blooms/bloom/v3"
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/fileops"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/fs"
 )
 
@@ -382,8 +382,6 @@ func OpenBloomFilter(path string, lock *string, size int, enabled bool) ([]*bloo
 	// bloomFilter exist,load from disk
 	itemCount := bloomFilterItems / uint(size)
 	// read bf from disk
-	buffer := GetIndexBuffer()
-	defer PutIndexBuffer(buffer)
 	var fileName, filePath string
 	for i := 0; i < size; i++ {
 		fileName = strconv.Itoa(i+1) + "_" + BloomFilterFileName
@@ -396,28 +394,34 @@ func OpenBloomFilter(path string, lock *string, size int, enabled bool) ([]*bloo
 			bfSlice = append(bfSlice, bloom.NewWithEstimates(itemCount, falsePositiveRate))
 			continue
 		}
-		f, err := fileops.Open(filePath, fileops.FileLockOption(*lock), fileops.FilePriorityOption(fileops.IO_PRIORITY_NORMAL))
+
+		bf, err := OpenBloomFilterFile(filePath, *lock)
 		if err != nil {
-			_ = f.Close()
-			return nil, err
+			logger.Errorf("failed to open the bloom filter file. the file will be deleted. path:%s, err:%s", filePath, err)
+			util.MustRun(func() error {
+				return os.RemoveAll(filePath)
+			})
+			bf = bloom.NewWithEstimates(itemCount, falsePositiveRate)
 		}
 
-		bf := &bloom.BloomFilter{}
-		_, err = buffer.ReadFrom(bufio.NewReader(f))
-		if err != nil {
-			_ = f.Close()
-			return nil, err
-		}
-		_, err = bf.ReadFrom(buffer)
-		if err != nil {
-			_ = f.Close()
-			return nil, err
-		}
-		_ = f.Close()
 		bfSlice = append(bfSlice, bf)
-		buffer.Reset()
 	}
 	return bfSlice, nil
+}
+
+func OpenBloomFilterFile(file string, lock string) (*bloom.BloomFilter, error) {
+	f, err := fileops.Open(file, fileops.FileLockOption(lock), fileops.FilePriorityOption(fileops.IO_PRIORITY_NORMAL))
+	if err != nil {
+		return nil, err
+	}
+	defer util.MustClose(f)
+
+	bf := &bloom.BloomFilter{}
+	_, err = bf.ReadFrom(bufio.NewReader(f))
+	if err != nil {
+		return nil, err
+	}
+	return bf, nil
 }
 
 func checkBloomFilterFiles(dir string) error {
@@ -497,7 +501,7 @@ func FlushBloomFilter(i int, byteSize int64, dirPath string, buffer *bytes.Buffe
 	// write init file
 	tmpFilePath := filePath + TmpBloomFilterFileSuffix
 	pri := fileops.FilePriorityOption(fileops.IO_PRIORITY_NORMAL)
-	fd, err := fileops.OpenFile(tmpFilePath, os.O_CREATE|os.O_RDWR, 0640, lock, pri)
+	fd, err := fileops.OpenFile(tmpFilePath, os.O_CREATE|os.O_RDWR, 0600, lock, pri)
 	if err != nil {
 		logger.Errorf("open mergeSet bloom filter file error, err:%s, path:%s", err, tmpFilePath)
 		return err
@@ -906,9 +910,7 @@ func (tb *Table) mergeRawItemsBlocks(ibs []*inmemoryBlock, isFinal bool) {
 		// The added part exceeds maxParts count. Assist with merging other parts.
 		//
 		// Prioritize assisted merges over searches.
-		storagepacelimiter.Search.Inc()
 		err := tb.mergeExistingParts(false)
-		storagepacelimiter.Search.Dec()
 		if err == nil {
 			atomic.AddUint64(&tb.assistedMerges, 1)
 			continue
@@ -1169,6 +1171,7 @@ func (tb *Table) mergeParts(pws []*partWrapper, stopCh <-chan struct{}, isOuterP
 		}
 	}
 	dstPartPath := ph.Path(tb.path, mergeIdx)
+	dstPartPath = fileops.NormalizeDirPath(dstPartPath)
 	fmt.Fprintf(&bb, "%s -> %s\n", tmpPartPath, dstPartPath)
 	txnPath := fmt.Sprintf("%s/txn/%016X", tb.path, mergeIdx)
 	if err := fs.WriteFileAtomically(txnPath, tb.lock, bb.B); err != nil {
@@ -1291,6 +1294,7 @@ func openParts(path string, lock *string) ([]*partWrapper, error) {
 		return nil, fmt.Errorf("cannot create %q: %w", tmpDir, err)
 	}
 
+	path = fileops.NormalizeDirPath(path)
 	fs.MustSyncPath(path)
 
 	// Open parts.
@@ -1305,6 +1309,7 @@ func openParts(path string, lock *string) ([]*partWrapper, error) {
 			continue
 		}
 		fn := fi.Name()
+		fn = strings.TrimSuffix(fn, "/")
 		if isSpecialDir(fn) {
 			// Skip special dirs.
 			continue
@@ -1442,6 +1447,7 @@ func runTransactions(txnLock *sync.RWMutex, path string, lockPath *string) error
 			continue
 		}
 		txnPath := filepath.Join(txnDir, fn)
+		txnPath = fileops.NormalizeDirPath(txnPath)
 		if err := runTransaction(txnLock, path, txnPath, lockPath, nil); err != nil {
 			return fmt.Errorf("cannot run transaction from %q: %w", txnPath, err)
 		}
@@ -1535,15 +1541,16 @@ var pendingTxnDeletionsWG syncwg.WaitGroup
 
 func validatePath(pathPrefix, path string) (string, error) {
 	var err error
+	if fileops.GetFsType(pathPrefix) != fileops.Obs {
+		pathPrefix, err = filepath.Abs(pathPrefix)
+		if err != nil {
+			return path, fmt.Errorf("cannot determine absolute path for pathPrefix=%q: %w", pathPrefix, err)
+		}
 
-	pathPrefix, err = filepath.Abs(pathPrefix)
-	if err != nil {
-		return path, fmt.Errorf("cannot determine absolute path for pathPrefix=%q: %w", pathPrefix, err)
-	}
-
-	path, err = filepath.Abs(path)
-	if err != nil {
-		return path, fmt.Errorf("cannot determine absolute path for %q: %w", path, err)
+		path, err = filepath.Abs(path)
+		if err != nil {
+			return path, fmt.Errorf("cannot determine absolute path for %q: %w", path, err)
+		}
 	}
 	if !strings.HasPrefix(path, pathPrefix+string(os.PathSeparator)) {
 		return path, fmt.Errorf("invalid path %q; must start with %q", path, pathPrefix)

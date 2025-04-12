@@ -376,7 +376,9 @@ func (s *fileLoopCursor) Close() error {
 		s.recPool.Put()
 		s.recPool = nil
 	}
-	s.tagSetInfo.Unref()
+	if s.tagSetInfo != nil {
+		s.tagSetInfo.Unref()
+	}
 	if s.currAggCursor != nil {
 		s.currAggCursor.Close()
 		s.currAggCursor = nil
@@ -590,7 +592,7 @@ func NewAggTagSetCursor(schema *executor.QuerySchema, ctx *idKeyCursorContext, i
 		keyCursor: itr,
 		ctx:       ctx,
 	}
-	if singleSeries {
+	if singleSeries && !schema.IsPromNestedCountCall() {
 		c.nextFunction = c.NextWithSingleSeries
 	} else {
 		c.nextFunction = c.NextWithMultipleSeries
@@ -687,6 +689,11 @@ func (s *AggTagSetCursor) buildMinPromFunc() {
 
 func (s *AggTagSetCursor) buildFloatCountPromFuncs(i int) {
 	column := s.GetSchema().FieldIndex(s.aggOps[i].Ref.Val)
+	if s.baseCursorInfo.schema.IsPromNestedCountCall() {
+		s.functions[column][0] = record.UpdateFloatCountOriginProm
+		s.functions[column][1] = record.UpdateFloatCountOriginProm
+		return
+	}
 	s.functions[column][0] = record.UpdateFloatCountProm
 	s.functions[column][1] = record.UpdateFloatCountProm
 }

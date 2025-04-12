@@ -498,10 +498,14 @@ func BenchmarkTestQuery(b *testing.B) {
 	b.StartTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		cursors, err := sh.CreateCursor(context.Background(), querySchema)
+		info, err := sh.CreateCursor(context.Background(), querySchema)
 		if err != nil {
 			b.Fatal(err)
 		}
+		if info == nil {
+			continue
+		}
+		cursors := info.GetCursors()
 		for i := range cursors {
 			engine.SetNextMethod(cursors[i])
 			for {
@@ -511,6 +515,7 @@ func BenchmarkTestQuery(b *testing.B) {
 				}
 			}
 		}
+		info.Unref()
 	}
 	b.StopTimer()
 	// step6: close shard
@@ -552,10 +557,11 @@ func TestQuery(t *testing.T) {
 	querySchema := genQuerySchema(aux, opt)
 	time.Sleep(time.Second * 5)
 
-	cursors, err := sh.CreateCursor(context.Background(), querySchema)
+	info, err := sh.CreateCursor(context.Background(), querySchema)
 	if err != nil {
 		t.Fatal(err)
 	}
+	cursors := info.GetCursors()
 	for i := range cursors {
 		engine.SetNextMethod(cursors[i])
 		for {
@@ -564,6 +570,7 @@ func TestQuery(t *testing.T) {
 			}
 		}
 	}
+	info.Unref()
 
 	// step6: close shard
 	err = closeShard(sh)

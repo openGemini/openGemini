@@ -150,6 +150,19 @@ func TestCodecFloatBlock_NaN(t *testing.T) {
 	codecFloatBlockWithMLF(t, values)
 }
 
+func TestCodecFloatBlock_AllNaNorInf(t *testing.T) {
+	var run = func(v float64) {
+		var values []float64
+		for i := 0; i < 1000; i++ {
+			values = append(values, v)
+		}
+		codecFloatBlock(t, values)
+		codecFloatBlockWithMLF(t, values)
+	}
+	run(math.NaN())
+	run(math.Inf(0))
+}
+
 func TestCodecFloatBlock_abnormal(t *testing.T) {
 	enc := compress.NewFloat()
 	out, err := enc.AdaptiveEncoding(nil, nil)
@@ -159,6 +172,31 @@ func TestCodecFloatBlock_abnormal(t *testing.T) {
 	out, err = enc.AdaptiveDecoding([]byte{10 << 4, 1}, nil)
 	require.NotEmpty(t, err)
 	require.Equal(t, errno.NewError(errno.InvalidFloatBuffer, 10).Error(), err.Error())
+}
+
+func TestCodecFloatBlock_SameAbsoluteValue(t *testing.T) {
+	var values []float64
+	v := 10.0
+	for i := 0; i < 100; i++ {
+		p := 1.0
+		if rand.Float64() < 0.5 {
+			p = -1
+		}
+		values = append(values, v*p)
+	}
+	codecFloatBlock(t, values)
+	codecFloatBlockWithMLF(t, values)
+}
+
+func TestCodecFloatBlock_other(t *testing.T) {
+	var values = [][]float64{
+		{10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+		{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10},
+	}
+	for i := 0; i < len(values); i++ {
+		codecFloatBlock(t, values[i])
+		codecFloatBlockWithMLF(t, values[i])
+	}
 }
 
 func BenchmarkAdaptive(b *testing.B) {

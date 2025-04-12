@@ -30,6 +30,7 @@ type Wal struct {
 	WalEnabled         bool          `toml:"wal-enabled"`
 	WalReplayParallel  bool          `toml:"wal-replay-parallel"`
 	WalReplayAsync     bool          `toml:"wal-replay-async"`
+	WalUsedForStream   bool          `toml:"wal-used-for-stream"`
 	WalReplayBatchSize toml.Size     `toml:"wal-replay-batch-size"`
 }
 
@@ -39,6 +40,7 @@ func NewWalConfig() Wal {
 		WalEnabled:         true,
 		WalReplayParallel:  false,
 		WalReplayAsync:     false,
+		WalUsedForStream:   false,
 		WalReplayBatchSize: DefaultWalReplayBatchSize,
 	}
 }

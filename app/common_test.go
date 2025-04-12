@@ -32,6 +32,7 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/statisticsPusher"
 	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/httpd"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -51,6 +52,7 @@ func TestWritePIDFile(t *testing.T) {
 }
 
 var addr = "127.0.0.2:8502"
+
 var sp *statisticsPusher.StatisticsPusher
 
 type handler struct{}
@@ -61,7 +63,7 @@ func newHandler() *handler {
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	app.SetStatsResponse(sp, w, r)
+	httpd.SetStatsResponse(sp, w, r)
 }
 
 func mockHTTPServer(t *testing.T) {
@@ -120,7 +122,7 @@ func TestSetStatsResponse(t *testing.T) {
 }
 
 func TestSetStatsResponse_When_Nil(t *testing.T) {
-	app.SetStatsResponse(nil, nil, nil)
+	httpd.SetStatsResponse(nil, nil, nil)
 }
 
 func Test_InitParse(t *testing.T) {
@@ -145,6 +147,6 @@ func TestHideQueryPassword(t *testing.T) {
 	}
 
 	for _, item := range data {
-		require.Equal(t, item[1], strings.TrimSpace(app.HideQueryPassword(item[0])))
+		require.Equal(t, item[1], strings.TrimSpace(httpd.HideQueryPassword(item[0])))
 	}
 }

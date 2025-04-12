@@ -15,10 +15,15 @@
 package proxy_test
 
 import (
+	"bytes"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"testing"
 
 	"github.com/openGemini/openGemini/lib/proxy"
+	"github.com/stretchr/testify/require"
 )
 
 func TestMerge(t *testing.T) {
@@ -75,4 +80,32 @@ func TestGetURL(t *testing.T) {
 	if err == nil {
 		t.Fatal("url should err")
 	}
+}
+
+func TestGetCustomProxy(t *testing.T) {
+	u, err := url.Parse("http://127.0.0.1:8080")
+	customProxy, err := proxy.GetCustomProxy(u, "127.0.0.2:8086", bytes.NewBufferString("test").Bytes())
+	require.NoError(t, err)
+	require.NotNil(t, *customProxy)
+	r := httptest.NewRequest("POST", "http://localhost:8086/test", io.NopCloser(bytes.NewBufferString("test")))
+	w := httptest.NewRecorder()
+	customProxy.Transport = &CusTransport{}
+	customProxy.ServeHTTP(w, r)
+	require.NoError(t, err)
+
+	u, err = url.Parse("https://127.0.0.1:8080")
+	customProxy, err = proxy.GetCustomProxy(u, "127.0.0.2:8086", bytes.NewBufferString("test").Bytes())
+	require.NoError(t, err)
+	require.NotNil(t, *customProxy)
+}
+
+type CusTransport struct {
+}
+
+func (*CusTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return &http.Response{
+		StatusCode: 200,
+		Body:       io.NopCloser(bytes.NewBufferString("test")),
+		Header:     map[string][]string{},
+	}, nil
 }

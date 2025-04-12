@@ -29,8 +29,6 @@ type EngineOptions struct {
 	// Limits the concurrent number of TSM files that can be loaded at once.
 	OpenLimiter limiter.Fixed
 
-	ImmTableMaxMemoryPercentage int
-
 	// WriteColdDuration is the length of time at which the engine will snapshot the mutable
 	WriteColdDuration time.Duration
 
@@ -73,10 +71,9 @@ type EngineOptions struct {
 
 	// Immutable config
 	ReadPageSize       string
+	ReadMetaPageSize   []string
 	ReadMetaCacheLimit uint64
 	ReadDataCacheLimit uint64
-	CacheDataBlock     bool
-	CacheMetaBlock     bool
 	EnableMmapRead     bool
 	CompactionMethod   int // 0:auto, 1:stream, 2: non-stream
 
@@ -94,6 +91,9 @@ type EngineOptions struct {
 
 	// for hierarchical storage
 	SkipRegisterColdShard bool
+
+	// for raftNode
+	RaftEntrySyncInterval time.Duration
 }
 
 func NewEngineOptions() EngineOptions {

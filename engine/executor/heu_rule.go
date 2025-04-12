@@ -908,7 +908,7 @@ func (r *AggPushDownToSubQueryRule) canPush(agg *LogicalAggregate, project *Logi
 	if !config.GetCommon().PreAggEnabled || project.schema.Options().GetHintType() == hybridqp.ExactStatisticQuery {
 		return false
 	}
-	if project.Schema().Options().IsRangeVectorSelector() {
+	if project.Schema().Options().IsRangeVectorSelector() || project.schema.Options().IsInstantVectorSelector() {
 		return false
 	}
 	return true

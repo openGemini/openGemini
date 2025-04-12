@@ -46,9 +46,10 @@ type RPCReaderTransform struct {
 	abortSignal chan struct{}
 	aborted     bool
 
-	span       *tracing.Span
-	outputSpan *tracing.Span
-	queryId    uint64
+	span        *tracing.Span
+	outputSpan  *tracing.Span
+	queryId     uint64
+	NoMarkCrash bool
 }
 
 func (t *RPCReaderTransform) IsSink() bool {
@@ -71,15 +72,19 @@ func (t *RPCReaderTransform) Distribute(node hybridqp.QueryNode) {
 func (t *RPCReaderTransform) Abort() {
 	t.aborted = true
 	t.Once(func() {
-		t.client.Abort()
+		t.client.Abort(t.NoMarkCrash)
 		close(t.abortSignal)
 	})
+}
+
+func (t *RPCReaderTransform) InterruptWithoutMark() {
+	t.NoMarkCrash = true
 }
 
 func (t *RPCReaderTransform) Interrupt() {
 	t.aborted = true
 	t.Once(func() {
-		t.client.Interrupt()
+		t.client.Interrupt(t.NoMarkCrash)
 		close(t.abortSignal)
 	})
 }

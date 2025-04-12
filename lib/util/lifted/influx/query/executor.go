@@ -163,6 +163,9 @@ type RowsChan struct {
 
 // ExecutionOptions contains the options for executing a query.
 type ExecutionOptions struct {
+	// If is set true and the num of index over query-series-limit, it will get err
+	IsQuerySeriesLimit bool
+
 	// The database the query is running against.
 	Database string
 

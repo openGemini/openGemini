@@ -41,16 +41,16 @@ PROTOC_ZIP_MACOS=protoc-3.14.0-osx-x86_64.zip
 PROTOC_ZIP_WINDOWS=protoc-3.14.0-win64.zip
 
 install-goimports-reviser:
-	@$(GO) install github.com/incu6us/goimports-reviser/v3@v3.3.1
+	@$(GO) install github.com/incu6us/goimports-reviser/v3@v3.8.2
 
 install-staticcheck:
-	@$(GO) install honnef.co/go/tools/cmd/staticcheck@v0.4.3
+	@$(GO) install honnef.co/go/tools/cmd/staticcheck@v0.4.7
 
 install-golangci-lint:
-	@curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $$($(GO) env GOPATH)/bin v1.53.3
+	@$(GO) install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.56.0
 
 install-failpoint:
-	@$(GO) install github.com/pingcap/failpoint/failpoint-ctl
+	@$(GO) install github.com/pingcap/failpoint/failpoint-ctl@v0.0.0-20220801062533-2eaa32854a6c
 
 install-tmpl:
 	@$(GO) install github.com/benbjohnson/tmpl@v1.1.0

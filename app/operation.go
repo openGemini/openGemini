@@ -20,7 +20,6 @@ import (
 	"errors"
 	"sort"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/openGemini/openGemini/app/ts-store/transport/query"
@@ -28,7 +27,7 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/memory"
 	"github.com/openGemini/openGemini/lib/netstorage"
-	"github.com/openGemini/openGemini/lib/syscontrol"
+	"github.com/openGemini/openGemini/lib/sysconfig"
 	"github.com/pingcap/failpoint"
 	"go.uber.org/zap"
 )
@@ -150,7 +149,7 @@ func (pm *ProactiveManager) GetQueryList(cnt int) []uint64 {
 }
 
 func (pm *ProactiveManager) interruptQuery(memPct float64) {
-	if !syscontrol.InterruptQuery {
+	if !sysconfig.GetInterruptQuery() {
 		return
 	}
 
@@ -163,7 +162,7 @@ func (pm *ProactiveManager) interruptQuery(memPct float64) {
 		}
 	})
 
-	upperMemPct := atomic.LoadInt64(&syscontrol.UpperMemPct)
+	upperMemPct := sysconfig.GetUpperMemPct()
 	if int64(memPct) <= upperMemPct {
 		return
 	}
@@ -176,7 +175,7 @@ func (pm *ProactiveManager) interruptQuery(memPct float64) {
 }
 
 func (pm *ProactiveManager) inspectMem() {
-	if !syscontrol.InterruptQuery {
+	if !sysconfig.GetInterruptQuery() {
 		return
 	}
 	currMemPct := memory.MemUsedPct()

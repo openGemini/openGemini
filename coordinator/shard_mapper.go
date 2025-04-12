@@ -100,7 +100,7 @@ func (csm *ClusterShardMapper) mapMstShards(s *influxql.Measurement, csming *Clu
 			if shardKeyInfo == nil {
 				shardKeyInfo = measurements[0].GetShardKey(groups[i].ID)
 			}
-			aliveShardIdxes := csm.MetaClient.GetAliveShards(s.Database, &groups[i])
+			aliveShardIdxes := csm.MetaClient.GetAliveShards(s.Database, &groups[i], true)
 			var shs []meta2.ShardInfo
 			if opt.HintType == hybridqp.FullSeriesQuery || opt.HintType == hybridqp.SpecificSeriesQuery {
 				shs, csming.seriesKey = groups[i].TargetShardsHintQuery(measurements[0], shardKeyInfo, condition, opt, aliveShardIdxes)
@@ -494,9 +494,9 @@ func (csm *ClusterShardMapping) GetShardAndSourcesMap(sources influxql.Sources) 
 				return nil, nil, err
 			}
 		case *influxql.SubQuery:
-			panic("subquery is not supported.")
+			return nil, nil, fmt.Errorf("subquery is not supported in logical plan creation")
 		default:
-			panic("unknown measurement.")
+			return nil, nil, fmt.Errorf("unknown source in logical plan creation")
 		}
 	}
 	return shardsMapByNode, sourcesMapByPtId, nil
@@ -600,6 +600,11 @@ func (csm *ClusterShardMapping) GetETraits(ctx context.Context, sources influxql
 	shardsMapByNode, sourcesMapByPtId, err := csm.GetShardAndSourcesMap(sources)
 	if err != nil {
 		return nil, err
+	}
+	// The time ranges of the left and right binaryOperator of the promql may be different.
+	// The time ranges of the left and right sub-forms cannot be intersected with the outer time.
+	if opts.IsPromQuery() {
+		return csm.RemoteQueryETraitsAndSrc(ctx, opts, schema, shardsMapByNode, sourcesMapByPtId)
 	}
 	// Override the time constraints if they don't match each other.
 	if !csm.MinTime.IsZero() && opts.StartTime < csm.MinTime.UnixNano() {

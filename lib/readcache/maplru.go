@@ -27,14 +27,14 @@ import (
 
 // mapLruCache Cache is the interface for all cache algorithm.
 type mapLruCache interface {
-	add(key string, value []byte, size int64)
-	addPageCache(key string, cachePage *CachePage, size int64)
+	add(key string, value []byte, size int64, pool PagePool)
+	addPageCache(key string, cachePage *CachePage, size int64, pool PagePool)
 
 	get(key string) (interface{}, bool)
 	getPageCache(key string) (value interface{}, isGet bool)
 
-	purge()
-	purgeAndUnrefCachePage()
+	purge(pool PagePool)
+	purgeAndUnrefCachePage(pool PagePool)
 
 	// contains Checks if a key exists in cache without updating the recent-ness.
 	contains(key string) (ok bool)
@@ -44,32 +44,35 @@ type mapLruCache interface {
 
 	pageLen() int
 
-	refreshOldBuffer()
-	refreshOldBufferAndUnrefCachePage()
+	refreshOldBuffer(pool PagePool)
+	refreshOldBufferAndUnrefCachePage(pool PagePool)
 
 	getUseSize() int64
+	getPageNum() int32
+	getCapSize() int64
 }
 
 const maxCacheLen = 32
+const metaPoolDefaultLimit = 2 * 1024 * 1024 * 1024
 
 var defaultSize uint64 = 32 * 1024 // default 32k
 
-type PagePool struct {
+type DataPagePool struct {
 	pool  sync.Pool
 	cache chan *CachePage
 }
 
 var CachePagePool = NewPagePool()
 
-func NewPagePool() *PagePool {
+func NewPagePool() *DataPagePool {
 	n := cpu.GetCpuNum() * 2
 	if n > maxCacheLen {
 		n = maxCacheLen
 	}
-	return &PagePool{cache: make(chan *CachePage, n)}
+	return &DataPagePool{cache: make(chan *CachePage, n)}
 }
 
-func (p *PagePool) Get() *CachePage {
+func (p *DataPagePool) Get() *CachePage {
 	select {
 	case pp := <-p.cache:
 		return pp
@@ -82,7 +85,122 @@ func (p *PagePool) Get() *CachePage {
 	}
 }
 
-func (p *PagePool) Put(pp *CachePage) {
+func (p *DataPagePool) Put(pp *CachePage) {
+	pp.Value = pp.Value[:0]
+	pp.ref = 0
+	pp.Size = 0
+	select {
+	case p.cache <- pp:
+	default:
+		p.pool.Put(pp)
+	}
+}
+
+type PagePool interface {
+	Get() *CachePage
+	Put(*CachePage)
+}
+
+type MetaPagePool struct {
+	pools []*MetaPagePoolItem
+	size  atomic.Int64
+	limit int64
+}
+
+type MetaPagePoolItem struct {
+	pool  sync.Pool
+	cache chan *CachePage
+}
+
+var MetaCachePool = NewMetaPagePool()
+
+func NewMetaPagePool() *MetaPagePool {
+	return &MetaPagePool{limit: metaPoolDefaultLimit}
+}
+
+func (p *MetaPagePool) InitPools() {
+	n := cpu.GetCpuNum() * 2
+	if n > maxCacheLen {
+		n = maxCacheLen
+	}
+	if !IsMetaUseHierarchicalPool {
+		p.pools = []*MetaPagePoolItem{&MetaPagePoolItem{cache: make(chan *CachePage, n)}}
+		return
+	}
+	for i := 0; i <= len(MetaPageSizeList); i++ {
+		p.pools = append(p.pools, &MetaPagePoolItem{cache: make(chan *CachePage, n)})
+	}
+}
+
+func (p *MetaPagePool) SetLimit(val uint64) {
+	p.limit = int64(val)
+}
+
+func getPoolLevel(size int64) int {
+	if !IsMetaUseHierarchicalPool {
+		return 0
+	}
+	for i, pageSize := range MetaPageSizeList {
+		if size < pageSize {
+			return i
+		}
+	}
+	return len(MetaPageSizeList)
+}
+
+func (p *MetaPagePool) GetBySize(size int64) *CachePage {
+	level := getPoolLevel(size)
+	page, getFromPool := p.pools[level].GetBySize(size)
+	if getFromPool {
+		p.size.Add(-int64(cap(page.Value)))
+	}
+	return page
+}
+
+func (p *MetaPagePool) Get() *CachePage {
+	return p.GetBySize(int64(0))
+}
+
+func (p *MetaPagePool) Put(pp *CachePage) {
+	if p.size.Load() >= p.limit {
+		return
+	}
+	level := getPoolLevel(int64(cap(pp.Value)))
+	p.pools[level].Put(pp)
+	p.size.Add(int64(cap(pp.Value)))
+}
+
+func (p *MetaPagePool) Size() int64 {
+	return p.size.Load()
+}
+
+func (p *MetaPagePoolItem) Get() *CachePage {
+	select {
+	case pp := <-p.cache:
+		return pp
+	default:
+		v := p.pool.Get()
+		if v != nil {
+			return v.(*CachePage)
+		}
+		return &CachePage{Value: make([]byte, 0, defaultSize)}
+	}
+}
+
+func (p *MetaPagePoolItem) GetBySize(size int64) (*CachePage, bool) {
+	select {
+	case pp := <-p.cache:
+		return pp, true
+	default:
+		v := p.pool.Get()
+		if v != nil {
+			return v.(*CachePage), true
+		}
+		return &CachePage{Value: make([]byte, 0, size)}, false
+	}
+}
+
+func (p *MetaPagePoolItem) Put(pp *CachePage) {
 	pp.Value = pp.Value[:0]
 	pp.ref = 0
 	pp.Size = 0
@@ -107,6 +225,7 @@ type buffer struct {
 	kvMap    map[string]*CachePage
 	pathMap  map[string][]string
 	byteSize int64
+	capSize  int64
 	pageSize int32
 }
 
@@ -120,14 +239,18 @@ func (cp *CachePage) Ref() {
 	atomic.AddInt32(&cp.ref, 1)
 }
 
-func (cp *CachePage) Unref() {
+func (cp *CachePage) Unref(pool PagePool) {
 	if atomic.AddInt32(&cp.ref, -1) == 0 {
-		CachePagePool.Put(cp)
+		pool.Put(cp)
 	}
 }
 
 func UnrefCachePage(cp *CachePage) {
-	cp.Unref()
+	cp.Unref(CachePagePool)
+}
+
+func UnrefMetaCachePage(cp *CachePage) {
+	cp.Unref(MetaCachePool)
 }
 
 func RefCachePage(cp *CachePage) {
@@ -144,6 +267,7 @@ func newLRUCache(size int64) mapLruCache {
 				kvMap:    make(map[string]*CachePage),
 				pathMap:  make(map[string][]string),
 				byteSize: 0,
+				capSize:  0,
 				pageSize: 0,
 			}
 		},
@@ -160,18 +284,18 @@ func newLRUCache(size int64) mapLruCache {
 	return c
 }
 
-func (L *lruCache) addPageCache(key string, cachePage *CachePage, size int64) {
+func (L *lruCache) addPageCache(key string, cachePage *CachePage, size int64, pool PagePool) {
 	L.lock.Lock()
-	if L.currBuffer.byteSize+size >= L.bufferSize {
-		L.refreshBufferAndUnrefCachePage()
+	if L.currBuffer.capSize+size >= L.bufferSize {
+		L.refreshBufferAndUnrefCachePage(pool)
 	}
 	L.addNormal(key, cachePage.Value, size, cachePage, L.noCopyFn)
 }
 
-func (L *lruCache) add(key string, value []byte, size int64) {
+func (L *lruCache) add(key string, value []byte, size int64, pool PagePool) {
 	L.lock.Lock()
-	if L.currBuffer.byteSize+size >= L.bufferSize {
-		L.refreshBuffer()
+	if L.currBuffer.capSize+size >= L.bufferSize {
+		L.refreshBuffer(pool)
 	}
 	L.addNormal(key, value, size, nil, L.copyFn)
 }
@@ -187,8 +311,11 @@ func (L *lruCache) addNormal(key string, value []byte, size int64, cp *CachePage
 		changeSize := element.Size - size
 		if changeSize < 0 {
 			L.currBuffer.byteSize = L.currBuffer.byteSize - changeSize
+			cap1 := cap(element.Value)
 			element.Value = append(element.Value, value[element.Size:]...)
+			cap2 := cap((element.Value))
 			element.Size = size
+			L.currBuffer.capSize = L.currBuffer.capSize + int64(cap2-cap1)
 		}
 	} else {
 		addFn(filePath, key, size, value, cp)
@@ -205,6 +332,7 @@ func (L *lruCache) copyFn(filePath string, key string, size int64, value []byte,
 		Size:  size,
 	}
 	L.currBuffer.byteSize += size
+	L.currBuffer.capSize += int64(cap(pageValue))
 	L.currBuffer.pageSize += 1
 }
 
@@ -213,21 +341,30 @@ func (L *lruCache) noCopyFn(filePath string, key string, size int64, value []byt
 	cachePage.Ref()
 	L.currBuffer.kvMap[key] = cachePage
 	L.currBuffer.byteSize += size
+	L.currBuffer.capSize += int64(cap(cachePage.Value))
 	L.currBuffer.pageSize += 1
 }
 
-func (B *buffer) clearBuffer() {
+func (B *buffer) clearBufferBase() {
 	B.kvMap = make(map[string]*CachePage)
 	B.pathMap = make(map[string][]string)
 	B.byteSize = 0
+	B.capSize = 0
 	B.pageSize = 0
 }
 
-func (B *buffer) clearBufferAndUnrefCachePage() {
+func (B *buffer) clearBuffer(pool PagePool) {
 	for _, page := range B.kvMap {
-		page.Unref()
+		page.Unref(pool)
 	}
-	B.clearBuffer()
+	B.clearBufferBase()
+}
+
+func (B *buffer) clearBufferAndUnrefCachePage(pool PagePool) {
+	for _, page := range B.kvMap {
+		page.Unref(pool)
+	}
+	B.clearBufferBase()
 }
 
 func (L *lruCache) getPageCache(key string) (value interface{}, isGet bool) {
@@ -271,6 +408,7 @@ func (L *lruCache) getOld(key string, refFn func(cp *CachePage)) (value interfac
 		L.currBuffer.kvMap[key] = value
 		refFn(value)
 		L.currBuffer.byteSize += value.Size
+		L.currBuffer.capSize += int64(cap(value.Value))
 		L.currBuffer.pageSize += 1
 		refFn(value)
 		return value, true
@@ -278,17 +416,17 @@ func (L *lruCache) getOld(key string, refFn func(cp *CachePage)) (value interfac
 	return nil, false
 }
 
-func (L *lruCache) purge() {
+func (L *lruCache) purge(pool PagePool) {
 	L.lock.Lock()
-	L.oldBuffer.clearBuffer()
-	L.currBuffer.clearBuffer()
+	L.oldBuffer.clearBuffer(pool)
+	L.currBuffer.clearBuffer(pool)
 	L.lock.Unlock()
 }
 
-func (L *lruCache) purgeAndUnrefCachePage() {
+func (L *lruCache) purgeAndUnrefCachePage(pool PagePool) {
 	L.lock.Lock()
-	L.oldBuffer.clearBufferAndUnrefCachePage()
-	L.currBuffer.clearBufferAndUnrefCachePage()
+	L.oldBuffer.clearBufferAndUnrefCachePage(pool)
+	L.currBuffer.clearBufferAndUnrefCachePage(pool)
 	L.lock.Unlock()
 }
 
@@ -307,8 +445,8 @@ func (L *lruCache) contains(key string) (has bool) {
 func (L *lruCache) removeFile(filePath string) bool {
 	L.lock.Lock()
 	defer L.lock.Unlock()
-	currHas := L.currBuffer.removeFilePath(filePath, NoRefOrUnrefCachePage)
-	oldHas := L.oldBuffer.removeFilePath(filePath, NoRefOrUnrefCachePage)
+	currHas := L.currBuffer.removeFilePath(filePath, UnrefMetaCachePage)
+	oldHas := L.oldBuffer.removeFilePath(filePath, UnrefMetaCachePage)
 	return currHas || oldHas
 }
 
@@ -323,17 +461,20 @@ func (L *lruCache) removePageCache(filePath string) bool {
 func (B *buffer) removeFilePath(filePath string, unRefFn func(cp *CachePage)) bool {
 	if keys, isGet := B.pathMap[filePath]; isGet {
 		var cutSize int64 = 0
+		var cutCapSize int64 = 0
 		for _, key := range keys {
 			page, has := B.kvMap[key]
 			if !has {
 				continue
 			}
 			cutSize += page.Size
+			cutCapSize += int64(cap(page.Value))
 			B.pageSize -= 1
 			delete(B.kvMap, key)
 			unRefFn(page)
 		}
 		B.byteSize -= cutSize
+		B.capSize -= cutCapSize
 		delete(B.pathMap, filePath)
 		return true
 	}
@@ -344,29 +485,37 @@ func (L *lruCache) pageLen() int {
 	return int(L.oldBuffer.pageSize + L.currBuffer.pageSize)
 }
 
+func (L *lruCache) getPageNum() int32 {
+	return L.oldBuffer.pageSize + L.currBuffer.pageSize
+}
+
 func (L *lruCache) getUseSize() int64 {
 	return L.currBuffer.byteSize + L.oldBuffer.byteSize
 }
 
-func (L *lruCache) refreshOldBuffer() {
+func (L *lruCache) getCapSize() int64 {
+	return L.currBuffer.capSize + L.oldBuffer.capSize
+}
+
+func (L *lruCache) refreshOldBuffer(pool PagePool) {
 	L.lock.Lock()
-	L.refreshBuffer()
+	L.refreshBuffer(pool)
 	L.lock.Unlock()
 }
 
-func (L *lruCache) refreshOldBufferAndUnrefCachePage() {
+func (L *lruCache) refreshOldBufferAndUnrefCachePage(pool PagePool) {
 	L.lock.Lock()
-	L.refreshBufferAndUnrefCachePage()
+	L.refreshBufferAndUnrefCachePage(pool)
 	L.lock.Unlock()
 }
 
-func (L *lruCache) refreshBuffer() {
-	L.oldBuffer.clearBuffer()
+func (L *lruCache) refreshBuffer(pool PagePool) {
+	L.oldBuffer.clearBuffer(pool)
 	L.refresh()
 }
 
-func (L *lruCache) refreshBufferAndUnrefCachePage() {
-	L.oldBuffer.clearBufferAndUnrefCachePage()
+func (L *lruCache) refreshBufferAndUnrefCachePage(pool PagePool) {
+	L.oldBuffer.clearBufferAndUnrefCachePage(pool)
 	L.refresh()
 }
 
@@ -379,6 +528,7 @@ func (L *lruCache) refresh() {
 			kvMap:    make(map[string]*CachePage),
 			pathMap:  make(map[string][]string),
 			byteSize: 0,
+			capSize:  0,
 			pageSize: 0,
 		}
 	}

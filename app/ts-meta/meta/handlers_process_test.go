@@ -298,6 +298,10 @@ func TestSendSysCtrlToMetaProcess(t *testing.T) {
 }
 
 func TestSendBackupToMetaProcess(t *testing.T) {
+	svc := globalService
+	defer func() {
+		globalService = svc
+	}()
 	globalService = nil
 	mockStore := NewMockRPCStore()
 	type TestCase struct {

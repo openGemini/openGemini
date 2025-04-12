@@ -16,6 +16,7 @@ package crypto
 
 import (
 	"os"
+	"path/filepath"
 	"sync"
 
 	"go.uber.org/zap"
@@ -60,14 +61,15 @@ func Destruct() {
 type Decipher interface {
 	Initialize(string)
 	Decrypt(string) (string, error)
+	Encrypt(string) (string, error)
 	Destruct()
 }
 
 func DecryptFromFile(path string) string {
+	path = filepath.Clean(path)
 	if path == "" {
 		return ""
 	}
-
 	cacheMu.RLock()
 	s, ok := cacheData[path]
 	cacheMu.RUnlock()
@@ -98,4 +100,17 @@ func Decrypt(s string) string {
 		logger.Error("decrypt failed", zap.Error(err), zap.String("input", s))
 	}
 	return out
+}
+
+func Encrypt(s string) (string, error) {
+	if s == "" || defaultDecipher == nil {
+		return s, nil
+	}
+
+	out, err := defaultDecipher.Encrypt(s)
+	if err != nil {
+		out = ""
+		logger.Error("encrypt failed", zap.Error(err))
+	}
+	return out, err
 }

@@ -18,6 +18,7 @@ import (
 	"math"
 	"sync"
 
+	"github.com/openGemini/openGemini/lib/compress/mlf"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/util"
 )
@@ -29,6 +30,7 @@ const (
 	floatCompressedGorilla    = 3
 	floatCompressedSame       = 4
 	floatCompressedRLE        = 5
+	floatCompressMLF          = 6
 
 	// if the length of the float slice is smaller than this value, not compress it
 	floatCompressThreshold    = 4
@@ -38,7 +40,9 @@ const (
 )
 
 type Float struct {
-	rle *RLE
+	rle             *RLE
+	mlfCompressor   mlf.Compressor
+	mlfDecompressor mlf.Decompressor
 }
 
 func NewFloat() *Float {
@@ -46,6 +50,10 @@ func NewFloat() *Float {
 }
 
 func (c *Float) AdaptiveEncoding(in []byte, out []byte) ([]byte, error) {
+	if IsEnableMLF() {
+		return c.adaptiveEncodingWithMLF(in, out)
+	}
+
 	return c.adaptiveEncoding(in, out)
 }
 
@@ -92,6 +100,36 @@ func (c *Float) adaptiveEncoding(in []byte, out []byte) ([]byte, error) {
 	return out, nil
 }
 
+func (c *Float) adaptiveEncodingWithMLF(in []byte, out []byte) ([]byte, error) {
+	values := util.Bytes2Float64Slice(in)
+	if len(values) <= floatCompressThreshold {
+		return c.compressNull(in, out), nil
+	}
+
+	ctx := c.mlfCompressor.Prepare(values)
+	if ctx.AllSkip() {
+		var err error
+		out, err = SnappyEncoding(in, out)
+		out = append(out[:1], out...)
+		out[0] = floatCompressedSnappy << 4
+		return out, err
+	}
+
+	if ctx.Same() {
+		out = append(out, floatCompressedSame<<4)
+		return c.rle.SameValueEncoding(in, out)
+	}
+
+	if ctx.RepeatedBlockCount() <= floatRLECompressThreshold {
+		out = append(out, floatCompressedRLE<<4)
+		return c.rle.Encoding(in, out)
+	}
+
+	out = append(out, floatCompressMLF<<4)
+	out = c.mlfCompressor.Encode(out, values)
+	return out, nil
+}
+
 func (c *Float) compressNull(in []byte, out []byte) []byte {
 	out = append(out, floatCompressedNull<<4)
 	out = append(out, in...)
@@ -113,6 +151,10 @@ func (c *Float) AdaptiveDecoding(in, out []byte) ([]byte, error) {
 		return c.rle.SameValueDecoding(in[1:], out)
 	case floatCompressedRLE:
 		return c.rle.Decoding(in[1:], out)
+	case floatCompressMLF:
+		values := c.mlfDecompressor.Decode(in[1:])
+		out = append(out, util.Float64Slice2byte(values)...)
+		return out, nil
 	default:
 		return nil, errno.NewError(errno.InvalidFloatBuffer, algo)
 	}

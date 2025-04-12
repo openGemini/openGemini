@@ -38,6 +38,7 @@ import (
 	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/raftconn"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util"
@@ -101,9 +102,10 @@ type DBPTInfo struct {
 	fileInfos           chan []immutable.FileInfoExtend
 	doingOff            bool
 	doingShardMoveN     int
+	dbObsOptions        *obs.ObsOptions
 }
 
-func NewDBPTInfo(db string, id uint32, dataPath, walPath string, ctx *metaclient.LoadCtx, ch chan []immutable.FileInfoExtend) *DBPTInfo {
+func NewDBPTInfo(db string, id uint32, dataPath, walPath string, ctx *metaclient.LoadCtx, ch chan []immutable.FileInfoExtend, options *obs.ObsOptions) *DBPTInfo {
 	return &DBPTInfo{
 		database:            db,
 		id:                  id,
@@ -125,6 +127,7 @@ func NewDBPTInfo(db string, id uint32, dataPath, walPath string, ctx *metaclient
 		sequenceID:          uint64(time.Now().Unix()),
 		bgrEnabled:          true,
 		fileInfos:           ch,
+		dbObsOptions:        options,
 	}
 }
 
@@ -284,6 +287,7 @@ func (dbPT *DBPTInfo) unref() {
 }
 
 func parseIndexDir(indexDirName string) (uint64, *meta.TimeRangeInfo, error) {
+	indexDirName = strings.TrimRight(indexDirName, "/")
 	indexDir := strings.Split(indexDirName, pathSeparator)
 	if len(indexDir) != 3 {
 		return 0, nil, errno.NewError(errno.InvalidDataDir)
@@ -369,6 +373,7 @@ func containOtherIndexes(dirName string) bool {
 }
 
 func parseShardDir(shardDirName string) (uint64, uint64, *meta.TimeRangeInfo, error) {
+	shardDirName = strings.TrimRight(shardDirName, "/")
 	shardDir := strings.Split(shardDirName, pathSeparator)
 	if len(shardDir) != 4 {
 		return 0, 0, nil, errno.NewError(errno.InvalidDataDir)
@@ -418,13 +423,16 @@ func (dbPT *DBPTInfo) OpenShards(opId uint64, rp string, durationInfos map[uint6
 		}
 		return err
 	}
+	if len(shardDirs) == 0 {
+		return nil
+	}
 
 	thermalShards := dbPT.thermalShards(client)
 
 	resC := make(chan *res, len(shardDirs)-1)
 	n := 0
 	for shIdx := range shardDirs {
-		if shardDirs[shIdx].Name() == config.IndexFileDirectory {
+		if strings.TrimSuffix(shardDirs[shIdx].Name(), "/") == config.IndexFileDirectory {
 			continue
 		}
 		n++
@@ -503,7 +511,7 @@ func (dbPT *DBPTInfo) openIndex(opId uint64, indexPath, indexDirName, rp string,
 
 	// init other indexRelations if exist
 	for idx := range allIndexDirs {
-		if containOtherIndexes(allIndexDirs[idx].Name()) {
+		if containOtherIndexes(strings.TrimSuffix(allIndexDirs[idx].Name(), "/")) {
 			idxType, _ := index.GetIndexTypeByName(allIndexDirs[idx].Name())
 			opts := new(tsi.Options).
 				Ident(indexIdent).
@@ -541,7 +549,6 @@ func (dbPT *DBPTInfo) openShard(opId uint64, thermalShards map[uint64]struct{}, 
 		resC <- &res{}
 		return
 	}
-
 	rpPath := path.Join(dbPT.path, rp)
 	shardPath := path.Join(rpPath, shardDirName)
 	walPath := path.Join(dbPT.walPath, rp)
@@ -620,7 +627,7 @@ func (dbPT *DBPTInfo) loadProcess(opId uint64, thermalShards map[uint64]struct{}
 		}
 	}()
 	start := time.Now()
-	sh.indexBuilder = i
+	sh.SetIndexBuilder(i)
 	sh.SetLockPath(dbPT.lockPath)
 	if err = sh.NewShardKeyIdx(durationInfos[shardId].Ident.ShardType, shardPath, dbPT.lockPath); err != nil {
 		statistics.ShardStepDuration(sh.GetID(), sh.opId, "ShardOpenErr", time.Since(start).Nanoseconds(), true)
@@ -754,7 +761,7 @@ func (dbPT *DBPTInfo) SetParams(preload bool, lockPath *string, enableTagArray b
 	dbPT.enableTagArray = enableTagArray
 }
 
-func (dbPT *DBPTInfo) NewShard(rp string, shardID uint64, timeRangeInfo *meta.ShardTimeRangeInfo, client metaclient.MetaClient, engineType config.EngineType) (Shard, error) {
+func (dbPT *DBPTInfo) NewShard(rp string, shardID uint64, timeRangeInfo *meta.ShardTimeRangeInfo, client metaclient.MetaClient, mstInfo *meta.MeasurementInfo) (Shard, error) {
 	var err error
 	rpPath := path.Join(dbPT.path, rp)
 	walPath := path.Join(dbPT.walPath, rp)
@@ -779,7 +786,7 @@ func (dbPT *DBPTInfo) NewShard(rp string, shardID uint64, timeRangeInfo *meta.Sh
 			Ident(indexIdent).
 			Path(iPath).
 			IndexType(index.MergeSet).
-			EngineType(engineType).
+			EngineType(mstInfo.EngineType).
 			StartTime(timeRangeInfo.OwnerIndex.TimeRange.StartTime).
 			EndTime(timeRangeInfo.OwnerIndex.TimeRange.EndTime).
 			Duration(timeRangeInfo.ShardDuration.DurationInfo.Duration).
@@ -812,10 +819,10 @@ func (dbPT *DBPTInfo) NewShard(rp string, shardID uint64, timeRangeInfo *meta.Sh
 		return nil, err
 	}
 	shardIdent := &meta.ShardIdentifier{ShardID: shardID, Policy: rp, OwnerDb: dbPT.database, OwnerPt: dbPT.id}
-	sh := NewShard(dataPath, walPath, dbPT.lockPath, shardIdent, &timeRangeInfo.ShardDuration.DurationInfo, &timeRangeInfo.TimeRange, dbPT.opt, engineType, dbPT.fileInfos)
+	sh := NewShard(dataPath, walPath, dbPT.lockPath, shardIdent, &timeRangeInfo.ShardDuration.DurationInfo, &timeRangeInfo.TimeRange, dbPT.opt, mstInfo.EngineType, dbPT.fileInfos)
 	sh.SetClient(client)
 
-	sh.indexBuilder = indexBuilder
+	sh.SetIndexBuilder(indexBuilder)
 
 	err = sh.NewShardKeyIdx(timeRangeInfo.ShardType, dataPath, dbPT.lockPath)
 	if err != nil {
@@ -890,6 +897,7 @@ func (dbPT *DBPTInfo) closeDBPt() error {
 		}
 	}
 	if dbPT.node != nil {
+		log.Error("close dbpt trigger raft node stop!!!")
 		dbPT.node.Stop()
 	}
 	dbPT.mu.Unlock()

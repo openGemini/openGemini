@@ -146,6 +146,19 @@ func (c *csImmTableImpl) addTSSPFile(m *MmsTables, isOrder bool, f TSSPFile, nam
 	v.lock.Unlock()
 }
 
+func (c *csImmTableImpl) addUnloadFile(m *MmsTables, isOrder bool, f TSSPInfo, nameWithVer string) {
+	mmsTbls := m.CSFiles
+	v, ok := mmsTbls[nameWithVer]
+	if !ok || v == nil {
+		v = NewTSSPFiles()
+		mmsTbls[nameWithVer] = v
+	}
+
+	v.lock.Lock()
+	v.unloadFiles = append(v.unloadFiles, f)
+	v.lock.Unlock()
+}
+
 func (c *csImmTableImpl) getFiles(m *MmsTables, isOrder bool) map[string]*TSSPFiles {
 	return m.CSFiles
 }
@@ -343,6 +356,11 @@ func TimeSorted(sortKeys []string) bool {
 }
 
 func (c *csImmTableImpl) compactToLevel(m *MmsTables, group FilesInfo, full, isNonStream bool) error {
+	if InParquetProcess(group.oldFids...) {
+		m.logger.Info("in parquet process skip compact", zap.String("mst", group.name))
+		return nil
+	}
+
 	compactStatItem := statistics.NewCompactStatItem(group.name, group.shId)
 	compactStatItem.Full = full
 	compactStatItem.Level = group.toLevel - 1

@@ -43,14 +43,16 @@ type HeapItem[T util.NumberOnly] struct {
 	maxIndex   int
 	cmpByValue func(a, b *PointItem[T]) bool
 	cmpByTime  func(a, b *PointItem[T]) bool
+	sortFunc   func(item *HeapItem[T])
 	items      []PointItem[T]
 }
 
-func NewHeapItem[T util.NumberOnly](n int, cmpByValue, cmpByTime func(a, b *PointItem[T]) bool) *HeapItem[T] {
+func NewHeapItem[T util.NumberOnly](n int, cmpByValue, cmpByTime func(a, b *PointItem[T]) bool, sortFunc func(item *HeapItem[T])) *HeapItem[T] {
 	return &HeapItem[T]{
 		items:      make([]PointItem[T], 0, n),
 		cmpByValue: cmpByValue,
 		cmpByTime:  cmpByTime,
+		sortFunc:   sortFunc,
 	}
 }
 

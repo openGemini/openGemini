@@ -41,6 +41,30 @@ type baseHandler struct {
 	cm *ClusterManager
 }
 
+func (bh *baseHandler) handleMetaEvent(m *serf.Member, e *serf.MemberEvent, id uint64, from eventFrom) error {
+	if !config.MetaEventHandleEn {
+		return nil
+	}
+	// do not take over meta
+	if uint64(e.EventTime) == 0 {
+		return nil
+	}
+	bh.cm.addEventMap(m.Name, e)
+	logger.GetLogger().Info("handle metanode event", zap.String("type", e.String()), zap.String("addr", m.Addr.String()),
+		zap.String("name", m.Name), zap.Int("status", int(m.Status)), zap.Uint64("lTime", uint64(e.EventTime)),
+		zap.Any("from", from))
+	if bh.cm.isStopped() {
+		return nil
+	}
+	err := bh.cm.store.UpdateMetaNodeStatus(id, int32(m.Status), uint64(e.EventTime), fmt.Sprintf("%d", m.Port))
+	logger.GetLogger().Info("UpdateMetaNodeStatus", zap.Uint64("id", id), zap.Int("status", int(m.Status)), zap.String("name", m.Name), zap.String("event", e.String()), zap.Error(err))
+	if errno.Equal(err, errno.OlderEvent) {
+		logger.GetLogger().Error("ignore handle metaNode event", zap.String("name", m.Name), zap.String("event", e.String()), zap.Error(err))
+		return nil
+	}
+	return err
+}
+
 func (bh *baseHandler) handleSqlEvent(m *serf.Member, e *serf.MemberEvent, id uint64, from eventFrom) error {
 	// do not take over meta
 	if m.Tags["role"] == "meta" || uint64(e.EventTime) == 0 {
@@ -72,9 +96,10 @@ func (bh *baseHandler) handleStoreEvent(m *serf.Member, e *serf.MemberEvent, id 
 		zap.String("name", m.Name), zap.Int("status", int(m.Status)), zap.Uint64("lTime", uint64(e.EventTime)),
 		zap.Any("from", from))
 	if bh.cm.isStopped() {
+		logger.GetLogger().Info("cluster manager is stopped")
 		return nil
 	}
-
+	logger.GetLogger().Info("update node status ", zap.Uint64("id", id), zap.Int32("status", int32(m.Status)))
 	err := bh.cm.store.updateNodeStatus(id, int32(m.Status), uint64(e.EventTime), fmt.Sprintf("%d", m.Port))
 	if errno.Equal(err, errno.OlderEvent) || errno.Equal(err, errno.DataNodeSplitBrain) {
 		logger.GetLogger().Error("ignore handle event", zap.String("name", m.Name), zap.String("event", e.String()), zap.Error(err))
@@ -121,24 +146,22 @@ func (bh *baseHandler) takeoverBase(dbPtInfos []*meta.DbPtInfo, nodePtNumMap *ma
 
 func (bh *baseHandler) takeoverForRep(id uint64) {
 	// get pts and add to failed dbPts
-	dbPtInfos := globalService.store.getFailedDbPts(id, meta.Offline)
+	rgPtInfosMap, dbPtInfos := globalService.store.GetFailedDbPtsForRep(id, meta.Offline)
 	nodePtNumMap := globalService.store.getDbPtNumPerAliveNode()
 	logger.GetLogger().Info("handle join event takeoverForRep start")
-	// skip pts of same dbRg of this node
-	rgId := make(map[string]bool)
 	for i, ptInfo := range dbPtInfos {
 		if ptInfo.DBBriefInfo.Replicas <= 1 {
 			bh.takeoverBase(dbPtInfos, nodePtNumMap, i, "rep", false)
-			continue
 		}
-		logger.GetLogger().Info("take over db pt for rep", zap.String("db", ptInfo.Db), zap.Uint32("ptId", ptInfo.Pti.PtId), zap.Uint32("rgId", ptInfo.Pti.RGID))
-		dbRg := ptInfo.Db + strconv.FormatUint(uint64(ptInfo.Pti.RGID), 10)
-		_, ok := rgId[dbRg]
-		if ok {
-			continue
+	}
+	for _, ptInfos := range rgPtInfosMap {
+		for i := range ptInfos {
+			logger.GetLogger().Info("take over db pt for rep", zap.String("db", ptInfos[i].Db), zap.Uint32("ptId", ptInfos[i].Pti.PtId), zap.Uint32("rgId", ptInfos[i].Pti.RGID))
+			if ptInfos[i].Pti.Status == meta.Offline && globalService.store.data.DataNodeAlive(ptInfos[i].Pti.Owner.NodeID) {
+				logger.GetLogger().Info("take over db pt for rep,data is alive", zap.String("db", ptInfos[i].Db), zap.Uint32("ptId", ptInfos[i].Pti.PtId), zap.Uint32("rgId", ptInfos[i].Pti.RGID))
+				bh.takeoverBase(ptInfos, nodePtNumMap, i, "rep", true)
+			}
 		}
-		rgId[dbRg] = true
-		bh.takeoverBase(dbPtInfos, nodePtNumMap, i, "rep", true)
 	}
 	logger.GetLogger().Info("handle join event takeoverForRep end")
 }
@@ -169,6 +192,7 @@ func joinHandlerForSSOrWAF(jh *joinHandler, id uint64, event *serf.MemberEvent, 
 }
 
 func joinHandlerForRep(jh *joinHandler, id uint64, event *serf.MemberEvent, member *serf.Member, from eventFrom) error {
+	logger.GetLogger().Info("start handler join event for replication mode")
 	err := jh.handleStoreEvent(member, event, id, from)
 	if err != nil {
 		return err
@@ -185,6 +209,10 @@ func (jh *joinHandler) handle(e *memberEvent) error {
 			panic(err)
 		}
 		if e.event.Members[i].Tags["role"] == "meta" {
+			err = jh.handleMetaEvent(&e.event.Members[i], &e.event, id, e.from)
+			if err != nil {
+				return err
+			}
 			continue
 		}
 		if e.event.Members[i].Tags["role"] == "sql" {
@@ -208,8 +236,8 @@ var failHandler []failHandle
 
 func initFailHandlers() {
 	failHandler = make([]failHandle, config.PolicyEnd)
-	failHandler[config.WriteAvailableFirst] = failHandlerForSSOrWAF
-	failHandler[config.SharedStorage] = failHandlerForSSOrWAF
+	failHandler[config.WriteAvailableFirst] = failHandlerForWAF
+	failHandler[config.SharedStorage] = failHandlerForSS
 	failHandler[config.Replication] = failHandlerForRep
 }
 
@@ -247,10 +275,27 @@ func failHandlerForRep(fh *failedHandler, id uint64, event *serf.MemberEvent, me
 	return fh.failOverForRep(id)
 }
 
-func failHandlerForSSOrWAF(fh *failedHandler, id uint64, event *serf.MemberEvent, member *serf.Member, from eventFrom) error {
+func failHandlerForWAF(fh *failedHandler, id uint64, event *serf.MemberEvent, member *serf.Member, from eventFrom) error {
 	if member.Tags["role"] == "sql" {
 		return fh.handleSqlEvent(member, event, id, from)
 	}
+
+	return handleStoreEvent(fh, id, event, member, from)
+}
+
+func failHandlerForSS(fh *failedHandler, id uint64, event *serf.MemberEvent, member *serf.Member, from eventFrom) error {
+	if member.Tags["role"] == "sql" {
+		return fh.handleSqlEvent(member, event, id, from)
+	}
+
+	err := handleStoreEvent(fh, id, event, member, from)
+	if err == nil {
+		go fh.takeoverDbPts(id)
+	}
+	return err
+}
+
+func handleStoreEvent(fh *failedHandler, id uint64, event *serf.MemberEvent, member *serf.Member, from eventFrom) error {
 	err := fh.handleStoreEvent(member, event, id, from)
 	if err != nil {
 		logger.GetLogger().Error("handle event failed", zap.String("name", member.Name), zap.String("event", event.String()),
@@ -274,7 +319,6 @@ func failHandlerForSSOrWAF(fh *failedHandler, id uint64, event *serf.MemberEvent
 		}
 	})
 	fh.cm.handleClusterMember(id, event)
-	fh.takeoverDbPts(id)
 	return nil
 }
 
@@ -283,6 +327,13 @@ func (fh *failedHandler) handle(e *memberEvent) error {
 		id, err := strconv.ParseUint(e.event.Members[i].Name, 10, 64)
 		if err != nil {
 			panic(err)
+		}
+		if e.event.Members[i].Tags["role"] == "meta" {
+			err = fh.handleMetaEvent(&e.event.Members[i], &e.event, id, e.from)
+			if err != nil {
+				return err
+			}
+			continue
 		}
 		err = failHandler[config.GetHaPolicy()](fh, id, &e.event, &e.event.Members[i], e.from)
 		if err != nil {

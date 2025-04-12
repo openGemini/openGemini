@@ -193,6 +193,32 @@ func TestMmsLoader_verifySeq(t *testing.T) {
 	require.Equal(t, 2, files.Len())
 }
 
+func TestMmsLoader_addTSSPFile_WithErr(t *testing.T) {
+	ctx := &fileLoadContext{}
+	dir := t.TempDir()
+
+	loader := newFileLoader(buildMmsTables(dir), ctx)
+	defer loader.mst.Close()
+
+	loader.addTSSPFile(filepath.Join(dir, "mst0", "xxx.tssp"), "mst0", true, &MocTsspFile{err: errFileClosed})
+	loader.Wait()
+	_, err := ctx.getError()
+	require.Error(t, err)
+}
+
+func TestMmsLoader_addTSSPFile_WithoutErr(t *testing.T) {
+	ctx := &fileLoadContext{}
+	dir := t.TempDir()
+
+	loader := newFileLoader(buildMmsTables(dir), ctx)
+	defer loader.mst.Close()
+
+	loader.addTSSPFile(filepath.Join(dir, "mst0", "xxx.tssp"), "mst0", true, &MocTsspFile{})
+	loader.Wait()
+	_, err := ctx.getError()
+	require.NoError(t, err)
+}
+
 func buildMmsTables(dir string) *MmsTables {
 	conf := NewTsStoreConfig()
 	tier := uint64(util.Hot)
@@ -227,4 +253,75 @@ func buildTSSPFile(dir string, seq uint64, mst string) {
 	write(ids, data, msb)
 	store.AddTable(msb, true, false)
 	store.Close()
+}
+
+func readDirForReload(ctx *fileLoadContext, dir, mst string, isOrder bool) {
+	nameDirs, err := fileops.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for i := range nameDirs {
+		item := nameDirs[i]
+		ctx.appendReloadFile(mst, &tsspInfo{file: filepath.Join(dir, item.Name()), order: isOrder})
+	}
+}
+
+func TestMmsReLoadFiles(t *testing.T) {
+	ctx := NewFileLoadContext()
+	dir := t.TempDir()
+	defer fileops.RemoveAll(dir)
+
+	buildTSSPFile(dir, 0, "mst0")
+	buildTSSPFile(dir, 1, "mst0")
+	buildTSSPFile(dir, 2, "mst0")
+	buildTSSPFile(dir, 0, "mst1")
+	buildTSSPFile(dir, 1, "mst1")
+	buildTSSPFile(dir, 2, "mst1")
+
+	for _, mst := range []string{"mst0", "mst1"} {
+		readDirForReload(ctx, filepath.Join(dir, mst), mst, true)
+	}
+
+	loader := newFileLoader(buildMmsTables(dir), ctx)
+	defer loader.mst.Close()
+
+	loader.ReloadFiles(5)
+	_, err := ctx.getError()
+	require.NoError(t, err)
+
+	if len(ctx.reloadFiles) != 0 {
+		t.Fatalf("there are still %d files that have not been loaded", len(ctx.reloadFiles))
+	}
+}
+
+func readDirForReloadSpecifiedFiles(tsspFiles *TSSPFiles, dir, mst string, isOrder bool) {
+	nameDirs, err := fileops.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for i := range nameDirs {
+		item := nameDirs[i]
+		tsspFiles.AppendReloadFiles(&tsspInfo{file: filepath.Join(dir, item.Name()), order: isOrder})
+	}
+}
+
+func TestMmsReloadSpecifiedFiles(t *testing.T) {
+	ctx := NewFileLoadContext()
+	dir := t.TempDir()
+	defer fileops.RemoveAll(dir)
+
+	mst := "mst0"
+	buildTSSPFile(dir, 0, mst)
+	buildTSSPFile(dir, 1, mst)
+	buildTSSPFile(dir, 2, mst)
+
+	tsspFiles := NewTSSPFiles()
+	readDirForReloadSpecifiedFiles(tsspFiles, filepath.Join(dir, mst), mst, true)
+
+	ReloadSpecifiedFiles(buildMmsTables(dir), mst, tsspFiles)
+	_, err := ctx.getError()
+	require.NoError(t, err)
+	if len(ctx.reloadFiles) != 0 {
+		t.Fatalf("there are still %d files that have not been loaded", len(ctx.reloadFiles))
+	}
 }

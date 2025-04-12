@@ -1,13 +1,12 @@
+// Copyright (c) 2013-2016 Errplane Inc.
+// This code is originally from: https://github.com/influxdata/influxdb/blob/1.7/services/meta/internal/meta.proto
+//
+// 2022.01.23 Add PtView,MeasurementInfo,etc.
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+
 syntax = "proto2";
 package proto;
 option go_package="../proto";
-/*
-Copyright (c) 2013-2016 Errplane Inc.
-This code is originally from: https://github.com/influxdata/influxdb/blob/1.7/services/meta/internal/meta.proto
-
-2022.01.23 Add PtView,MeasurementInfo,etc.
-Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-*/
 
 //========================================================================
 //
@@ -261,6 +260,8 @@ message StreamInfo {
     required int64 Delay = 6;
     repeated string Dims = 7;
     repeated StreamCall Calls = 8;
+    optional string Cond = 9;
+    optional bool IsSelectAll = 10;
 }
 
 message StreamInfos {
@@ -384,6 +385,7 @@ message Command {
 		UpdateMeasurementCommand                   = 101;
 		UpdateMetaNodeStatusCommand                = 102;
 		ShowClusterCommand                         = 103;
+		IndexDurationCommand                       = 104;
 	}
 
 	required Type type = 1;
@@ -844,6 +846,18 @@ message ShardIdentifier {
     optional uint64 DownSampleID  = 8;
     optional bool   ReadOnly      = 9;
     optional uint32 EngineType = 10;
+	optional int64 StartTime = 11;
+	optional int64 EndTime = 12;
+}
+
+message IndexIdentifier {
+    required uint64 IndexID = 1;
+    required uint64 IndexGroupID = 2;
+    required string OwnerDb = 3;
+    required uint32 OwnerPt = 4;
+    required string Policy = 5;
+	optional int64 StartTime = 6;
+	optional int64 EndTime = 7;
 }
 
 message TimeRangeInfo {
@@ -863,6 +877,12 @@ message ShardDurationInfo {
 	repeated MeasurementInfo MeasurementInfo = 3;
 }
 
+message IndexDurationInfo {
+	optional IndexIdentifier Ident = 1;
+	required DurationDescriptor DurationInfo = 2;
+	repeated MeasurementInfo MeasurementInfo = 3;
+}
+
 message ShardTimeRangeInfo {
 	required TimeRangeInfo TimeRange = 1;
 	required IndexDescriptor OwnerIndex = 2;
@@ -873,6 +893,11 @@ message ShardTimeRangeInfo {
 message ShardDurationResponse {
     required uint64 DataIndex = 1;
     repeated ShardDurationInfo Durations = 2;
+}
+
+message IndexDurationResponse {
+    required uint64 DataIndex = 1;
+    repeated IndexDurationInfo Durations = 2;
 }
 
 message DeleteIndexGroupCommand {
@@ -1251,6 +1276,16 @@ message InsertFilesCommand {
 	repeated FileInfo FileInfos = 1;
 }
 
+message UpdateMetaNodeStatusCommand {
+    extend Command {
+        optional UpdateMetaNodeStatusCommand command = 199;
+    }
+    required uint64 ID     = 1;
+    required int32 Status  = 2;
+    required uint64 Ltime  = 3;
+    optional string GossipAddr = 4;
+}
+
 message ShowClusterCommand {
     extend Command {
         optional ShowClusterCommand command = 200;
@@ -1281,4 +1316,13 @@ message EventRow {
 message ShowClusterInfo {
     repeated NodeRow nodes = 1;
 	repeated EventRow events = 2;
+}
+
+message IndexDurationCommand {
+    extend Command {
+        optional IndexDurationCommand command = 201;
+    }
+    required uint64 Index = 1;
+    repeated uint32 Pts = 2;
+    optional uint64 nodeId = 3;
 }

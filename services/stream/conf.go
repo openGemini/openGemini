@@ -15,18 +15,51 @@
 package stream
 
 import (
+	"fmt"
+	"sync/atomic"
+	"time"
+
+	"github.com/influxdata/influxdb/toml"
 	"github.com/openGemini/openGemini/lib/cpu"
 )
 
 type Config struct {
-	WindowConcurrency int `toml:"windowConcurrency"`
-	FilterConcurrency int `toml:"filterConcurrency"`
-	FilterCache       int `toml:"filterCache"`
+	CheckInterval     toml.Duration `toml:"check-interval"`
+	WindowConcurrency int           `toml:"windowConcurrency"`
+	FilterConcurrency int           `toml:"filterConcurrency"`
+	FilterCache       int           `toml:"filterCache"`
+	WriteEnabled      bool          `toml:"write-enabled"`
 }
 
 func NewConfig() Config {
 	//default use cpu num
 	concurrency := cpu.GetCpuNum() / 2
 	//FilterConcurrency may block write, so set it bigger
-	return Config{FilterConcurrency: concurrency, WindowConcurrency: concurrency, FilterCache: 4 * concurrency}
+	return Config{
+		CheckInterval:     toml.Duration(10 * time.Second),
+		FilterConcurrency: concurrency,
+		WindowConcurrency: concurrency,
+		FilterCache:       4 * concurrency,
+		WriteEnabled:      true,
+	}
+}
+
+var writeStreamPointsEnabled int64
+
+const (
+	writeStreamPointsEnable  = 0
+	writeStreamPointsDisable = 1
+)
+
+func SetWriteStreamPointsEnabled(enable bool) {
+	if enable {
+		atomic.StoreInt64(&writeStreamPointsEnabled, writeStreamPointsEnable)
+	} else {
+		atomic.StoreInt64(&writeStreamPointsEnabled, writeStreamPointsDisable)
+	}
+	fmt.Println("SetWriteStreamPointsEnabled: ", enable)
+}
+
+func IsWriteStreamPointsEnabled() bool {
+	return atomic.LoadInt64(&writeStreamPointsEnabled) == writeStreamPointsEnable
 }

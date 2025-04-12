@@ -36,14 +36,16 @@ import (
 func (e *Engine) startRaftNode(opId uint64, nodeId uint64, dbPt *DBPTInfo, client metaclient.MetaClient, storage netstorage.StorageService) error {
 	database := dbPt.database
 	ptId := dbPt.id
-
+	e.log.Info("[ASSIGN]start raft node check rep group status ", zap.String("db", database), zap.Uint32("pt", ptId))
 	err2 := e.checkRepGroupStatus(opId, database, ptId)
 	if err2 != nil {
+		e.log.Error("[ASSIGN]start raft node failed ", zap.String("db", database), zap.Uint32("pt", ptId), zap.Error(err2))
 		return err2
 	}
 
 	ptViews, err := e.metaClient.DBPtView(database)
 	if err != nil {
+		e.log.Error("[ASSIGN]start raft node failed,get pt view failed", zap.String("db", database), zap.Uint32("pt", ptId), zap.Error(err))
 		return err
 	}
 	var rgId = -1
@@ -57,6 +59,7 @@ func (e *Engine) startRaftNode(opId uint64, nodeId uint64, dbPt *DBPTInfo, clien
 		transPeers[view.PtId] = view.Owner.NodeID
 	}
 	if rgId == -1 || len(ptGroup[uint32(rgId)]) <= 0 {
+		e.log.Error("[ASSIGN]Got database: %s, ptId: %d peers error, opId:%d", zap.String("db", database), zap.Uint32("pt", ptId))
 		return errors.Newf("Got database: %s, ptId: %d peers error, opId:%d", database, ptId, opId)
 	}
 	var peers []raft.Peer
@@ -65,7 +68,7 @@ func (e *Engine) startRaftNode(opId uint64, nodeId uint64, dbPt *DBPTInfo, clien
 		peers = append(peers, raft.Peer{ID: raftconn.GetRaftNodeId(ptid)})
 	}
 	walPath := path.Join(e.walPath, config.WalDirectory, database, strconv.Itoa(int(ptId)))
-	store, err := raftlog.Init(walPath)
+	store, err := raftlog.Init(walPath, dbPt.opt.RaftEntrySyncInterval)
 	if err != nil {
 		return err
 	}
@@ -73,10 +76,13 @@ func (e *Engine) startRaftNode(opId uint64, nodeId uint64, dbPt *DBPTInfo, clien
 	store.SetUint(raftlog.GroupId, 0) // All zeros have group zero.
 
 	replayC := make(chan *raftconn.Commit, 1)
+	e.log.Info("[ASSIGN]start raft node", zap.String("db", database), zap.Uint32("pt", ptId))
 	node := raftconn.StartNode(store, nodeId, database, raftconn.GetRaftNodeId(ptId), peers, client, transPeers)
 	node.WithLogger(e.log.With(zap.String("service", "raft node")))
 	node.ReplayC = replayC
+	e.log.Info("[ASSIGN]init and start node", zap.String("db", database), zap.Uint32("pt", ptId))
 	if err = node.InitAndStartNode(); err != nil {
+		e.log.Error("[ASSIGN]InitAndStartNode failed", zap.String("db", database), zap.Uint32("pt", ptId), zap.Error(err))
 		return err
 	}
 	close(replayC)
@@ -93,7 +99,12 @@ func (e *Engine) startRaftNode(opId uint64, nodeId uint64, dbPt *DBPTInfo, clien
 			break
 		}
 	}
-	go node.TransferLeadership(raftconn.GetRaftNodeId(uint32(leaderPtID)))
+	go func() {
+		err1 := node.TransferLeadership(raftconn.GetRaftNodeId(uint32(leaderPtID)))
+		if err1 != nil {
+			e.log.Error("startRaftNode transferLeaderShip fail", zap.Error(err1))
+		}
+	}()
 	return nil
 }
 
@@ -104,6 +115,7 @@ func (e *Engine) checkRepGroupStatus(opId uint64, database string, ptId uint32) 
 		var needTry bool
 		raftGroupId, err := e.getRaftGroupId(database, ptId)
 		if err != nil {
+			e.log.Error("[ASSIGN]start raft node", zap.String("db", database), zap.Uint32("pt", ptId), zap.Error(err))
 			return err
 		}
 		groups := e.metaClient.DBRepGroups(database)
@@ -116,6 +128,8 @@ func (e *Engine) checkRepGroupStatus(opId uint64, database string, ptId uint32) 
 		}
 		if !needTry {
 			break
+		} else {
+			e.log.Error("[ASSIGN]start raft node failed,rep status is UnFull, need retry", zap.String("db", database), zap.Uint32("pt", ptId), zap.Error(err))
 		}
 		if retryNum < 0 {
 			return errors.Newf("Got database: %s, ptId: %d raftGroup is still UnFull, opId:%d", database, ptId, opId)

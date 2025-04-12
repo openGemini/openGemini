@@ -17,7 +17,6 @@ package immutable
 import (
 	"fmt"
 	"io"
-	"sync"
 
 	"github.com/openGemini/openGemini/engine/index/sparseindex"
 	"github.com/openGemini/openGemini/lib/bufferpool"
@@ -147,12 +146,11 @@ func (w *tsspFileWriter) SwitchMetaBuffer() (int, error) {
 }
 
 func (w *tsspFileWriter) MetaDataBlocks(dst [][]byte) [][]byte {
-	return w.cmw.MetaDataBlocks(dst)
+	return dst
 }
 
 var (
 	indexWriterPool pool.FixedPool
-	metaBlkPool     = sync.Pool{}
 )
 
 func InitWriterPool(size int) {
@@ -162,33 +160,6 @@ func InitWriterPool(size int) {
 	}, pool.NewHitRatioHook(stat.AddIndexWriterGetTotal, stat.AddIndexWriterHitTotal))
 
 	fileops.InitWriterPool(size)
-}
-
-func getMetaBlockBuffer(size int) []byte {
-	v := metaBlkPool.Get()
-	if v == nil {
-		return make([]byte, 0, size)
-	}
-	buf, ok := v.([]byte)
-	if !ok {
-		return make([]byte, 0, size)
-	}
-	return buf[:0]
-}
-
-// nolint
-func freeMetaBlockBuffer(b []byte) {
-	//lint:ignore SA6002 argument should be pointer-like to avoid allocations
-	metaBlkPool.Put(b[:0])
-}
-
-func freeMetaBlocks(buffers [][]byte) int {
-	n := 0
-	for i := range buffers {
-		n += cap(buffers[i])
-		freeMetaBlockBuffer(buffers[i])
-	}
-	return n
 }
 
 type indexWriter struct {
@@ -202,28 +173,21 @@ type indexWriter struct {
 	tmp     []byte
 
 	blockSize    int
-	cacheMeta    bool
 	limitCompact bool
-	metas        [][]byte
 
 	indexBlockSize int
 }
 
-func (w *indexWriter) Init(name string, lock *string, cacheMeta bool, limitCompact bool) {
+func (w *indexWriter) Init(name string, lock *string, _ bool, limitCompact bool) {
 	w.limitCompact = limitCompact
 	w.name = name
 	w.lock = lock
-	w.cacheMeta = cacheMeta
 	w.reset()
 
-	if w.cacheMeta {
-		w.buf = getMetaBlockBuffer(w.blockSize)
+	if cap(w.buf) >= w.blockSize {
+		w.buf = w.buf[:w.blockSize]
 	} else {
-		if cap(w.buf) >= w.blockSize {
-			w.buf = w.buf[:w.blockSize]
-		} else {
-			w.buf = make([]byte, w.blockSize)
-		}
+		w.buf = make([]byte, w.blockSize)
 	}
 }
 
@@ -234,7 +198,6 @@ func (w *indexWriter) reset() {
 	}
 
 	w.blockSize = fileops.DefaultWriterBufferSize
-	w.metas = w.metas[:0]
 	w.buf = w.buf[:0]
 	w.n = 0
 	w.wn = 0
@@ -296,18 +259,7 @@ func (w *indexWriter) writeBuffer(p []byte) (int, error) {
 	return wn, nil
 }
 
-func (w *indexWriter) writeCacheBlocks(p []byte) (int, error) {
-	w.buf = append(w.buf, p...)
-	w.wn += len(p)
-	w.indexBlockSize += len(p)
-	return len(p), nil
-}
-
 func (w *indexWriter) Write(p []byte) (nn int, err error) {
-	if w.cacheMeta {
-		return w.writeCacheBlocks(p)
-	}
-
 	return w.writeBuffer(p)
 }
 
@@ -317,16 +269,6 @@ func (w *indexWriter) Close() error {
 		lock := fileops.FileLockOption(*w.lock)
 		_ = fileops.Remove(w.name, lock)
 		w.swapper = nil
-	}
-
-	if w.cacheMeta {
-		for _, b := range w.metas {
-			freeMetaBlockBuffer(b)
-		}
-		if w.buf != nil {
-			freeMetaBlockBuffer(w.buf)
-		}
-		w.buf = nil
 	}
 
 	w.reset()
@@ -347,37 +289,11 @@ func (w *indexWriter) bytes() []byte {
 	return w.buf[:w.n]
 }
 
-func (w *indexWriter) copyFromCacheTo(to io.Writer) (int, error) {
-	n := 0
-
-	if len(w.buf) > 0 {
-		w.metas = append(w.metas, w.buf)
-		w.buf = nil
-	}
-
-	for i := range w.metas {
-		if len(w.metas[i]) == 0 {
-			continue
-		}
-		s, err := to.Write(w.metas[i])
-		if err != nil {
-			return n, err
-		}
-		n += s
-	}
-
-	return n, nil
-}
-
 func (w *indexWriter) allInBuffer() bool {
 	return w.swapper == nil && w.n <= w.wn
 }
 
 func (w *indexWriter) CopyTo(to io.Writer) (int, error) {
-	if w.cacheMeta {
-		return w.copyFromCacheTo(to)
-	}
-
 	if w.allInBuffer() {
 		buf := w.bytes()
 		return to.Write(buf)
@@ -397,29 +313,12 @@ func (w *indexWriter) CopyTo(to io.Writer) (int, error) {
 }
 
 func (w *indexWriter) SwitchMetaBuffer() (int, error) {
-	if w.cacheMeta {
-		w.metas = append(w.metas, w.buf)
-		w.buf = getMetaBlockBuffer(len(w.buf))
-	}
 	size := w.indexBlockSize
 	w.indexBlockSize = 0
 	return size, nil
 }
 
 func (w *indexWriter) MetaDataBlocks(dst [][]byte) [][]byte {
-	dst = dst[:0]
-	if w.cacheMeta {
-		if len(w.buf) > 0 {
-			w.metas = append(w.metas, w.buf)
-			w.buf = nil
-		}
-		for i := range w.metas {
-			if len(w.metas[i]) > 0 {
-				dst = append(dst, w.metas[i])
-			}
-		}
-		w.metas = w.metas[:0]
-	}
 	return dst
 }
 

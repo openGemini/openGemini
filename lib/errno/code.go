@@ -42,6 +42,8 @@ const (
 	ShortWrite         = 9009
 	ShortRead          = 9010
 	InvalidMeasurement = 9011
+	TooSmallData       = 9012
+	TooSmallOrOverflow = 9013
 )
 
 // network module error codes
@@ -137,6 +139,7 @@ const (
 	TranspileUnaryExprFail = 1224
 	InvalidUnaryExpr       = 1225
 	InvalidPromMstName     = 1226
+	PromReceiverErr        = 1227
 )
 
 // query interface error codes
@@ -159,47 +162,48 @@ const (
 	WrongScrollId           = 1516
 	ScrollIdIllegal         = 1517
 	SetValueFailed          = 1518
+	JsonPathIllegal         = 1519
 )
 
 // store engine error codes
 const (
-	CreateIndexFailPointRowType        = 2101
-	InvalidDataDir                     = 2102
-	InvalidMetaDir                     = 2103
-	InvalidImmTableMaxMemoryPercentage = 2104
-	InvalidMaxConcurrentCompactions    = 2105
-	InvalidMaxFullCompactions          = 2106
-	InvalidShardMutableSizeLimit       = 2107
-	InvalidNodeMutableSizeLimit        = 2108
-	UnrecognizedEngine                 = 2109
-	RecoverFileFailed                  = 2110
-	NotAllTsspFileOpenSuccess          = 2111
-	NotAllTsspFileLoadSuccess          = 2112
-	ProcessCompactLogFailed            = 2113
-	LoadFilesFailed                    = 2114
-	CreateFileFailed                   = 2115
-	RenameFileFailed                   = 2116
-	WriteFileFailed                    = 2117
-	RemoveFileFailed                   = 2118
-	ReadFileFailed                     = 2119
-	OpenFileFailed                     = 2120
-	MapFileFailed                      = 2121
-	CloseFileFailed                    = 2122
-	ReadWalFileFailed                  = 2123
-	DecompressWalRecordFailed          = 2124
-	WalRecordHeaderCorrupted           = 2125
-	WalRecordUnmarshalFailed           = 2126
-	CompactPanicFail                   = 2127
-	ErrShardClosed                     = 2128
-	DBPTClosed                         = 2129
-	ShardNotFound                      = 2130
-	IndexNotFound                      = 2131
-	FailedToDecodeFloatArray           = 2132
-	InvalidFloatBuffer                 = 2133
-	MemUsageExceeded                   = 2134
-	ShardCannotMove                    = 2135
-	ShardIsMoving                      = 2136
-	ShardMovingStopped                 = 2137
+	CreateIndexFailPointRowType     = 2101
+	InvalidDataDir                  = 2102
+	InvalidMetaDir                  = 2103
+	InvalidMaxConcurrentCompactions = 2105
+	InvalidMaxFullCompactions       = 2106
+	InvalidShardMutableSizeLimit    = 2107
+	InvalidNodeMutableSizeLimit     = 2108
+	UnrecognizedEngine              = 2109
+	RecoverFileFailed               = 2110
+	NotAllTsspFileOpenSuccess       = 2111
+	NotAllTsspFileLoadSuccess       = 2112
+	ProcessCompactLogFailed         = 2113
+	LoadFilesFailed                 = 2114
+	CreateFileFailed                = 2115
+	RenameFileFailed                = 2116
+	WriteFileFailed                 = 2117
+	RemoveFileFailed                = 2118
+	ReadFileFailed                  = 2119
+	OpenFileFailed                  = 2120
+	MapFileFailed                   = 2121
+	CloseFileFailed                 = 2122
+	ReadWalFileFailed               = 2123
+	DecompressWalRecordFailed       = 2124
+	WalRecordHeaderCorrupted        = 2125
+	WalRecordUnmarshalFailed        = 2126
+	CompactPanicFail                = 2127
+	ErrShardClosed                  = 2128
+	DBPTClosed                      = 2129
+	ShardNotFound                   = 2130
+	IndexNotFound                   = 2131
+	FailedToDecodeFloatArray        = 2132
+	InvalidFloatBuffer              = 2133
+	MemUsageExceeded                = 2134
+	ShardCannotMove                 = 2135
+	ShardIsMoving                   = 2136
+	ShardMovingStopped              = 2137
+	AlreadyHotFile                  = 2138
 )
 
 // merge out of order
@@ -230,6 +234,7 @@ const (
 	ErrIncAggIterID                = 3017
 	ErrInputTimeExceedTimeRange    = 3018
 	FailedPutNodeMaxIterNum        = 3019
+	ErrSameTagSet                  = 3020
 )
 
 // meta
@@ -291,6 +296,7 @@ const (
 	OpMarshalErr                       = 4055
 	SqlNodeNotFound                    = 4056
 	PtIsDoingSomeShardMove             = 4057
+	MetaNodeNotFound                   = 4058
 )
 
 // meta-client process
@@ -346,6 +352,7 @@ const (
 	CleanSchemaCheckErr            = 5038
 	UsedProposeId                  = 5039
 	WriteToRaftTimeoutAfterPropose = 5040
+	WriteDstStreamMstNotAllowed    = 5041
 )
 
 // write interface
@@ -372,32 +379,34 @@ const (
 	ErrTagFieldDuplication          = 5520
 	ErrReservedFieldDuplication     = 5521
 	ErrParseTimestamp               = 5522
+	ErrLogTagsDecode                = 5523
 )
 
 // index
 const (
-	ConvertToBinaryExprFailed  = 6001
-	ErrQuerySeriesUpperBound   = 6002
-	ErrTooSmallKeyCount        = 6003
-	ErrTooSmallIndexKey        = 6004
-	ErrGetNonExistingMark      = 6005
-	ErrMarkRangeInserting      = 6006
-	ErrUnknownOpInCondition    = 6007
-	ErrInvalidStackInCondition = 6008
-	ErrRPNSetInNotCreated      = 6009
-	ErrRPNIsNullForNOT         = 6010
-	ErrRPNIsNullForAnd         = 6011
-	ErrRPNIsNullForOR          = 6012
-	ErrRPNElemSchema           = 6013
-	ErrRPNElemNum              = 6014
-	ErrRPNElemOp               = 6015
-	ErrRPNOp                   = 6016
-	ErrRPNExpr                 = 6017
-	ErrRPNElement              = 6018
-	ErrCoarseIndexFragment     = 6019
-	ErrQuerySchemaUpperBound   = 6020
-	ErrValueTypeFullTextIndex  = 6021
-	ErrSearchSeriesKey         = 6022
+	ConvertToBinaryExprFailed   = 6001
+	ErrQuerySeriesUpperBound    = 6002
+	ErrTooSmallKeyCount         = 6003
+	ErrTooSmallIndexKey         = 6004
+	ErrGetNonExistingMark       = 6005
+	ErrMarkRangeInserting       = 6006
+	ErrUnknownOpInCondition     = 6007
+	ErrInvalidStackInCondition  = 6008
+	ErrRPNSetInNotCreated       = 6009
+	ErrRPNIsNullForNOT          = 6010
+	ErrRPNIsNullForAnd          = 6011
+	ErrRPNIsNullForOR           = 6012
+	ErrRPNElemSchema            = 6013
+	ErrRPNElemNum               = 6014
+	ErrRPNElemOp                = 6015
+	ErrRPNOp                    = 6016
+	ErrRPNExpr                  = 6017
+	ErrRPNElement               = 6018
+	ErrCoarseIndexFragment      = 6019
+	ErrQuerySchemaUpperBound    = 6020
+	ErrValueTypeFullTextIndex   = 6021
+	ErrSearchSeriesKey          = 6022
+	ErrUnsupportedConditionType = 6023
 )
 
 const (

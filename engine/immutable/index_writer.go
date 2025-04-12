@@ -40,11 +40,11 @@ type IndexWriter interface {
 }
 
 func newIndexWriter() IndexWriter {
-	if GetChunkMetaCompressMode() == ChunkMetaCompressNone {
-		return &indexWriter{}
+	if UseIndexCompressWriter() {
+		return newIndexCompressWriter()
 	}
 
-	return newIndexCompressWriter()
+	return &indexWriter{}
 }
 
 func NewPKIndexWriter(indexName string, cacheMeta bool, limitCompact bool, lockPath *string) IndexWriter {

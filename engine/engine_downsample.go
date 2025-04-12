@@ -61,10 +61,12 @@ func (e *Engine) GetShardDownSamplePolicyInfos(meta interface {
 				}
 				if err := e.openShardLazy(shardData); err != nil {
 					ptInfo.mu.RUnlock()
+					e.unrefDBPTNoLock(dbName, ptId)
 					return nil, err
 				}
 				if err := shardData.UpdateShardReadOnly(meta); err != nil {
 					ptInfo.mu.RUnlock()
+					e.unrefDBPTNoLock(dbName, ptId)
 					return nil, err
 				}
 				shardData.WaitWriteFinish()

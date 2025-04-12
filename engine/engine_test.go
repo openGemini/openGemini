@@ -15,6 +15,7 @@
 package engine
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"path"
@@ -47,6 +48,7 @@ import (
 	"github.com/openGemini/openGemini/lib/record"
 	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/syscontrol"
+	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
@@ -64,6 +66,25 @@ type mockMetaClient4Drop struct {
 
 func (m *mockMetaClient4Drop) DatabaseOption(database string) (*obs.ObsOptions, error) {
 	return nil, nil
+}
+
+func (m *mockMetaClient4Drop) Databases() map[string]*meta.DatabaseInfo {
+	return nil
+}
+
+type mockMetaClient4Obs struct {
+	metaclient.MetaClient
+}
+
+func (m *mockMetaClient4Obs) DatabaseOption(database string) (*obs.ObsOptions, error) {
+	opt := &obs.ObsOptions{
+		Enabled: true,
+	}
+	return opt, nil
+}
+
+func (client *mockMetaClient4Obs) IsSQLiteEnabled() bool {
+	return false
 }
 
 type shardMock struct {
@@ -197,6 +218,9 @@ func initEngine(dir string) (*Engine, error) {
 	eng.engOpt.ShardMutableSizeLimit = 30 * 1024 * 1024
 	eng.engOpt.NodeMutableSizeLimit = 1e9
 	eng.engOpt.MaxWriteHangTime = time.Second
+	client := metaclient.NewClient("", false, 0)
+	client.SetCacheData(&meta.Data{})
+	eng.SetMetaClient(client)
 
 	loadCtx := getLoadCtx()
 	eng.loadCtx = loadCtx
@@ -278,7 +302,7 @@ func initEngine1(dir string, engineType config.EngineType) (*Engine, error) {
 
 	loadCtx := getLoadCtx()
 	lockPath := filepath.Join(eng.dataPath, "LOCK")
-	dbPTInfo := NewDBPTInfo("db0", 0, eng.dataPath, eng.walPath, loadCtx, eng.fileInfos)
+	dbPTInfo := NewDBPTInfo("db0", 0, eng.dataPath, eng.walPath, loadCtx, eng.fileInfos, nil)
 	dbPTInfo.lockPath = &lockPath
 	dbPTInfo.logger = eng.log
 	eng.addDBPTInfo(dbPTInfo)
@@ -295,7 +319,7 @@ func initEngine1(dir string, engineType config.EngineType) (*Engine, error) {
 
 	indexBuilder := dbPTInfo.indexBuilder[659]
 	shardIdent := &meta.ShardIdentifier{ShardID: 1, ShardGroupID: 1, Policy: "rp0", OwnerDb: "db0", OwnerPt: 0}
-	shardDuration := &meta.DurationDescriptor{Tier: util.Hot, TierDuration: time.Hour}
+	shardDuration := &meta.DurationDescriptor{Tier: util.Hot, TierDuration: time.Hour, Duration: 1}
 	tr := &meta.TimeRangeInfo{StartTime: mustParseTime(time.RFC3339Nano, "1999-01-01T01:00:00Z"),
 		EndTime: mustParseTime(time.RFC3339Nano, "2000-01-01T01:00:00Z")}
 	shard := NewShard(eng.dataPath, eng.walPath, &lockPath, shardIdent, shardDuration, tr, DefaultEngineOption, engineType, nil)
@@ -327,7 +351,7 @@ func initEngineWithColdShard(dir string, engineType config.EngineType) (*Engine,
 
 	loadCtx := getLoadCtx()
 	lockPath := filepath.Join(eng.dataPath, "LOCK")
-	dbPTInfo := NewDBPTInfo("db0", 0, eng.dataPath, eng.walPath, loadCtx, eng.fileInfos)
+	dbPTInfo := NewDBPTInfo("db0", 0, eng.dataPath, eng.walPath, loadCtx, eng.fileInfos, nil)
 	dbPTInfo.lockPath = &lockPath
 	dbPTInfo.logger = eng.log
 	eng.addDBPTInfo(dbPTInfo)
@@ -376,7 +400,7 @@ func initEngineWithNoLockPath(dir string, engineType config.EngineType) (*Engine
 
 	loadCtx := getLoadCtx()
 	lockPath := ""
-	dbPTInfo := NewDBPTInfo("db0", 0, eng.dataPath, eng.walPath, loadCtx, eng.fileInfos)
+	dbPTInfo := NewDBPTInfo("db0", 0, eng.dataPath, eng.walPath, loadCtx, eng.fileInfos, nil)
 	dbPTInfo.lockPath = &lockPath
 	dbPTInfo.logger = eng.log
 	eng.addDBPTInfo(dbPTInfo)
@@ -649,6 +673,9 @@ func TestEngine_OpenLimitShardError(t *testing.T) {
 	eng.engOpt.ShardMutableSizeLimit = 30 * 1024 * 1024
 	eng.engOpt.NodeMutableSizeLimit = 1e9
 	eng.engOpt.MaxWriteHangTime = time.Second
+	client := metaclient.NewClient("", false, 0)
+	client.SetCacheData(&meta.Data{})
+	eng.SetMetaClient(client)
 
 	getTimeRangeInfoByShard := func(shId uint64) *meta.ShardTimeRangeInfo {
 		tr := meta.TimeRangeInfo{StartTime: mustParseTime(time.RFC3339Nano, "1999-01-01T01:00:00Z"),
@@ -732,6 +759,27 @@ func TestEngine_OpenLimitShardError(t *testing.T) {
 	}
 }
 
+func TestCreateDBPT_ObsErr(t *testing.T) {
+	dir := t.TempDir()
+	dataPath := filepath.Join(dir, dPath)
+	eng := &Engine{
+		closed:       interruptsignal.NewInterruptSignal(),
+		dataPath:     dataPath + "/data",
+		walPath:      dataPath + "/wal",
+		DBPartitions: make(map[string]map[uint32]*DBPTInfo, 64),
+		droppingDB:   make(map[string]string),
+		droppingRP:   make(map[string]string),
+		droppingMst:  make(map[string]string),
+		loadCtx:      getLoadCtx(),
+		engOpt:       DefaultEngineOption,
+	}
+	eng.log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
+	eng.engOpt.ShardMutableSizeLimit = 30 * 1024 * 1024
+	eng.engOpt.NodeMutableSizeLimit = 1e9
+	eng.engOpt.MaxWriteHangTime = time.Second
+	eng.metaClient = &mockMetaClient4Obs{}
+	eng.CreateDBPT(defaultDb, defaultPtId, false)
+}
 func TestEngine_handleTagKeys(t *testing.T) {
 	dir := t.TempDir()
 	eng, err := initEngine1(dir, config.TSSTORE)
@@ -971,6 +1019,69 @@ func TestEngine_TagValues(t *testing.T) {
 	require.Equal(t, 0, len(tagsets))
 }
 
+func TestEngine_ShowSeriesExact(t *testing.T) {
+	dir := t.TempDir()
+	fmt.Println(dir)
+	eng, err := initEngine1(dir, config.TSSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+
+	msNames := []string{"cpu"}
+	tm := time.Now().Truncate(time.Second)
+	rows, _, _ := GenDataRecord(msNames, 10, 200, time.Second, tm, false, true, false)
+
+	if err := eng.WriteRows("db0", "rp0", 0, 1, rows, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	eng.ForceFlush()
+	dbInfo := eng.DBPartitions["db0"][0]
+	idx := dbInfo.indexBuilder[659].GetPrimaryIndex().(*tsi.MergeSetIndex)
+	idx.DebugFlush()
+
+	// normal
+	plan := eng.CreateDDLBasePlans(hybridqp.ShowSeries, "db0", []uint32{0}, &influxql.TimeRange{
+		Min: time.Unix(0, influxql.MinTime),
+		Max: time.Unix(0, influxql.MaxTime),
+	})
+	series, err := plan.Execute(
+		map[string][][]byte{msNames[0]: {[]byte("tagkey1")}},
+		nil,
+		util.TimeRange{Min: influxql.MinTime, Max: influxql.MaxTime},
+		0)
+	seriesKeys, _ := series.([]string)
+	require.Equal(t, err, nil)
+	require.Equal(t, 10, len(seriesKeys))
+
+	// no dbpt
+	plan = eng.CreateDDLBasePlans(hybridqp.ShowSeries, "db0", []uint32{0xff}, &influxql.TimeRange{
+		Min: time.Unix(0, influxql.MinTime),
+		Max: time.Unix(0, influxql.MaxTime),
+	})
+	series, err = plan.Execute(
+		map[string][][]byte{msNames[0]: {[]byte("tagkey1")}},
+		nil,
+		util.TimeRange{Min: influxql.MinTime, Max: influxql.MaxTime},
+		0)
+	fmt.Printf("%+v", series)
+	require.Equal(t, err, nil)
+
+	// reach limit
+	plan = eng.CreateDDLBasePlans(hybridqp.ShowSeries, "db0", []uint32{0}, &influxql.TimeRange{
+		Min: time.Unix(0, influxql.MinTime),
+		Max: time.Unix(0, influxql.MaxTime),
+	})
+	series, err = plan.Execute(
+		map[string][][]byte{msNames[0]: {[]byte("tagkey1")}},
+		nil,
+		util.TimeRange{Min: influxql.MinTime, Max: influxql.MaxTime},
+		3)
+	seriesKeys, _ = series.([]string)
+	require.Equal(t, err, nil)
+	require.Equal(t, 3, len(seriesKeys))
+}
+
 func TestEngine_TagValuesDisorder(t *testing.T) {
 	dir := t.TempDir()
 	fmt.Println(dir)
@@ -993,7 +1104,7 @@ func TestEngine_TagValuesDisorder(t *testing.T) {
 	idx.DebugFlush()
 
 	// normal
-	plan := eng.CreateShowTagValuesPlan("db0", []uint32{0}, &influxql.TimeRange{
+	plan := eng.CreateDDLBasePlans(hybridqp.ShowTagValues, "db0", []uint32{0}, &influxql.TimeRange{
 		Min: time.Unix(0, influxql.MinTime),
 		Max: time.Unix(0, influxql.MaxTime),
 	})
@@ -1002,13 +1113,14 @@ func TestEngine_TagValuesDisorder(t *testing.T) {
 		nil,
 		util.TimeRange{Min: influxql.MinTime, Max: influxql.MaxTime},
 		0)
+	tableTagSets, _ := tagsets.(netstorage.TablesTagSets)
 	fmt.Printf("%+v", tagsets)
 	require.Equal(t, err, nil)
-	require.Equal(t, 1, len(tagsets))
-	require.Equal(t, 10, len(tagsets[0].Values))
+	require.Equal(t, 1, len(tableTagSets))
+	require.Equal(t, 10, len(tableTagSets[0].Values))
 
 	// no dbpt
-	plan = eng.CreateShowTagValuesPlan("db0", []uint32{0xff}, &influxql.TimeRange{
+	plan = eng.CreateDDLBasePlans(hybridqp.ShowTagValues, "db0", []uint32{0xff}, &influxql.TimeRange{
 		Min: time.Unix(0, influxql.MinTime),
 		Max: time.Unix(0, influxql.MaxTime),
 	})
@@ -1021,7 +1133,7 @@ func TestEngine_TagValuesDisorder(t *testing.T) {
 	require.Equal(t, err, nil)
 
 	// reach limit
-	plan = eng.CreateShowTagValuesPlan("db0", []uint32{0}, &influxql.TimeRange{
+	plan = eng.CreateDDLBasePlans(hybridqp.ShowTagValues, "db0", []uint32{0}, &influxql.TimeRange{
 		Min: time.Unix(0, influxql.MinTime),
 		Max: time.Unix(0, influxql.MaxTime),
 	})
@@ -1030,10 +1142,11 @@ func TestEngine_TagValuesDisorder(t *testing.T) {
 		nil,
 		util.TimeRange{Min: influxql.MinTime, Max: influxql.MaxTime},
 		3)
+	tableTagSets, _ = tagsets.(netstorage.TablesTagSets)
 	fmt.Printf("%+v", tagsets)
 	require.Equal(t, err, nil)
-	require.Equal(t, 1, len(tagsets))
-	require.Equal(t, 3, len(tagsets[0].Values))
+	require.Equal(t, 1, len(tableTagSets))
+	require.Equal(t, 3, len(tableTagSets[0].Values))
 }
 
 func TestEngine_TagValuesCardinality(t *testing.T) {
@@ -1123,7 +1236,8 @@ func TestEngine_UpdateShardDurationInfo(t *testing.T) {
 	defer eng.Close()
 
 	info := &meta.ShardDurationInfo{Ident: meta.ShardIdentifier{ShardID: 0, OwnerDb: defaultDb, OwnerPt: defaultPtId}}
-	assert2.Equal(t, nil, eng.UpdateShardDurationInfo(info))
+	nilShardMap := make(map[uint64]*meta.ShardDurationInfo)
+	assert2.Equal(t, nil, eng.UpdateShardDurationInfo(info, &nilShardMap))
 }
 
 func TestGetShard(t *testing.T) {
@@ -1174,6 +1288,9 @@ func TestEngine_OpenShardGetDBBriefInfoError(t *testing.T) {
 	eng.engOpt.ShardMutableSizeLimit = 30 * 1024 * 1024
 	eng.engOpt.NodeMutableSizeLimit = 1e9
 	eng.engOpt.MaxWriteHangTime = time.Second
+	client := metaclient.NewClient("", false, 0)
+	client.SetCacheData(&meta.Data{})
+	eng.SetMetaClient(client)
 
 	getTimeRangeInfoByShard := func(shId uint64) *meta.ShardTimeRangeInfo {
 		tr := meta.TimeRangeInfo{StartTime: mustParseTime(time.RFC3339Nano, "1999-01-01T01:00:00Z"),
@@ -1307,7 +1424,8 @@ func TestUpdateShardDurationInfo(t *testing.T) {
 	shardDuration := getShardDurationInfo(1)
 	shardDuration.DurationInfo.Tier = util.Warm
 	shardDuration.Ident.OwnerPt = 0
-	err = eng.UpdateShardDurationInfo(shardDuration)
+	nilShardMap := make(map[uint64]*meta.ShardDurationInfo)
+	err = eng.UpdateShardDurationInfo(shardDuration, &nilShardMap)
 	require.NoError(t, err)
 	sh, err := eng.GetShard(defaultDb, 0, 1)
 	assert2.NoError(t, err)
@@ -1325,7 +1443,8 @@ func TestSkipIndex(t *testing.T) {
 	shardDuration := getShardDurationInfo(1)
 	shardDuration.DurationInfo.Tier = util.Warm
 	shardDuration.Ident.OwnerPt = 0
-	err = eng.UpdateShardDurationInfo(shardDuration)
+	nilShardMap := make(map[uint64]*meta.ShardDurationInfo)
+	err = eng.UpdateShardDurationInfo(shardDuration, &nilShardMap)
 	require.NoError(t, err)
 	sh, err := eng.GetShard(defaultDb, 0, 1)
 	assert2.NoError(t, err)
@@ -1409,7 +1528,7 @@ func (ms *mockShard) OpenAndEnable(client metaclient.MetaClient) error {
 	return nil
 }
 
-func (ms *mockShard) CreateShowTagValuesPlan(client metaclient.MetaClient) immutable.ShowTagValuesPlan {
+func (ms *mockShard) CreateDDLBasePlan(client metaclient.MetaClient, ddl hybridqp.DDLType) immutable.DDLBasePlan {
 	return &MockImmutableShowTagValuesPlan{}
 }
 
@@ -1615,6 +1734,10 @@ func TestStoreHierarchicalStorage_FetchShardsNeedChangeStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer eng.Close()
+
+	id := eng.getLatestShard(eng.DBPartitions["db0"][0].shards)
+	require.Equal(t, uint64(1), id)
+
 	sh := eng.DBPartitions["db0"][0].shards[1]
 	sh.GetDuration().Tier = util.Cold
 
@@ -1693,7 +1816,8 @@ func TestRangeVectorCursorFunc(t *testing.T) {
 	rec := record.NewRecord([]record.Field{{Name: "time", Type: influx.Field_Type_Int}}, false)
 	c.getIntervalIndex(rec)
 	assert2.Equal(t, c.Name(), "range_vector_cursor")
-	assert2.Equal(t, c.intervalIndex, []uint16{0, 0})
+	var act []uint16
+	assert2.Equal(t, c.intervalIndex, act)
 }
 
 func TestIteratorInit(t *testing.T) {
@@ -1882,10 +2006,10 @@ func TestEngine_uploadFileInfos(t *testing.T) {
 }
 
 type MockImmutableShowTagValuesPlan struct {
-	immutable.ShowTagValuesPlan
+	immutable.DDLBasePlan
 }
 
-func (p *MockImmutableShowTagValuesPlan) Execute(dst map[string]*immutable.TagSets, tagKeys map[string][][]byte, condition influxql.Expr, tr util.TimeRange, limit int) error {
+func (p *MockImmutableShowTagValuesPlan) Execute(dst map[string]immutable.DDLRespData, tagKeys map[string][][]byte, condition influxql.Expr, tr util.TimeRange, limit int) error {
 	tagSets := immutable.NewTagSets()
 	tagSets.Add("k1", "v1")
 	tagSets.Add("k2", "v2")
@@ -1895,7 +2019,7 @@ func (p *MockImmutableShowTagValuesPlan) Execute(dst map[string]*immutable.TagSe
 }
 
 func TestShowTagValuesPlan_AddPlan(t *testing.T) {
-	plan := &ShowTagValuesPlan{}
+	plan := &DDLBasePlans{planType: hybridqp.ShowTagValues}
 	plan.AddPlan(&MockImmutableShowTagValuesPlan{})
 	plan.AddPlan(&MockImmutableShowTagValuesPlan{})
 	if len(plan.plans) != 2 {
@@ -1904,16 +2028,17 @@ func TestShowTagValuesPlan_AddPlan(t *testing.T) {
 }
 
 func TestShowTagValuesPlan_Execute(t *testing.T) {
-	plan := &ShowTagValuesPlan{
-		plans: []immutable.ShowTagValuesPlan{
+	plan := &DDLBasePlans{
+		plans: []immutable.DDLBasePlan{
 			&MockImmutableShowTagValuesPlan{},
 		},
+		planType: hybridqp.ShowTagValues,
 	}
-	tagSets, err := plan.Execute(make(map[string][][]byte), &influxql.VarRef{}, util.TimeRange{}, 10)
+	resp, err := plan.Execute(make(map[string][][]byte), &influxql.VarRef{}, util.TimeRange{}, 10)
 	if err != nil {
 		return
 	}
-
+	tagSets, _ := resp.(netstorage.TablesTagSets)
 	want := []netstorage.TableTagSets{
 		{
 			Name: "mst",
@@ -1956,8 +2081,8 @@ func TestEngine_CreateShowTagValuesPlan(t *testing.T) {
 			},
 		},
 	}
-	got := mockEngine.CreateShowTagValuesPlan("testdb", []uint32{1}, &influxql.TimeRange{})
-	plan, ok := got.(*ShowTagValuesPlan)
+	got := mockEngine.CreateDDLBasePlans(hybridqp.ShowTagValues, "testdb", []uint32{1}, &influxql.TimeRange{})
+	plan, ok := got.(*DDLBasePlans)
 	if !ok {
 		t.Fatalf("CreateShowTagValuesPlan failed: %v", got)
 	}
@@ -2082,6 +2207,22 @@ func TestEngine_WriteToRaft_Committed_Err(t *testing.T) {
 	assert2.Equal(t, err.Error(), "mem write err")
 }
 
+func Test_EngineTransferLeadership(t *testing.T) {
+	e1 := &Engine{}
+	if e1.TransferLeadership("db0", 1, 0, 0) == nil {
+		t.Fatal("Test_EngineTransferLeadership nil DBPartitions error")
+	}
+
+	pts := make(map[uint32]*DBPTInfo, 0)
+	pts[0] = &DBPTInfo{node: &mockNode{}}
+	dbpts := make(map[string]map[uint32]*DBPTInfo, 0)
+	dbpts["db0"] = pts
+	e2 := &Engine{DBPartitions: dbpts}
+	if e2.TransferLeadership("db0", 1, 0, 0) != nil {
+		t.Fatal("Test_StorageTransferLeadership one DBPartitions error")
+	}
+}
+
 func TestEngine_WriteToRaft_Panic(t *testing.T) {
 	proposeC := make(chan []byte)
 	mockEngine := &Engine{
@@ -2098,4 +2239,134 @@ func TestEngine_WriteToRaft_Panic(t *testing.T) {
 	close(proposeC)
 	err := mockEngine.WriteToRaft("testdb", "", 1, tail)
 	assert2.Equal(t, err, nil)
+}
+
+func buildSchema() *executor.QuerySchema {
+	outPutRowsChan := make(chan query.RowsChan)
+	opt := query.ProcessorOptions{
+		Sources: []influxql.Source{&influxql.Measurement{Name: "m", EngineType: config.TSSTORE}},
+		Condition: &influxql.BinaryExpr{
+			LHS: &influxql.VarRef{Val: "A", Type: influxql.String},
+			RHS: &influxql.StringLiteral{Val: "a"},
+			Op:  influxql.EQ},
+		RowsChan:  outPutRowsChan,
+		PromQuery: true,
+	}
+	schema := executor.NewQuerySchema(nil, nil, &opt, nil)
+	return schema
+}
+
+func TestEngine_CreateLogicalPlan(t *testing.T) {
+	dir := t.TempDir()
+	eng, err := initEngine1(dir, config.TSSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+
+	ctx := context.Background()
+	_, span := tracing.NewTrace("TS-Store")
+	ctx = tracing.NewContextWithSpan(ctx, span)
+	schema := buildSchema()
+	var source influxql.Sources
+	for _, mst := range schema.Options().GetMeasurements() {
+		source = append(source, mst)
+	}
+	ctx = context.WithValue(ctx, query.QueryDurationKey, &hybridqp.SelectDuration{})
+	_, err = eng.CreateLogicalPlan(ctx, "db0", 0, []uint64{1}, source, schema)
+	assert2.NoError(t, err)
+	_, err = eng.CreateLogicalPlanCrossShard(ctx, "db0", 0, []uint64{1}, source, schema)
+	assert2.NoError(t, err)
+	_, err = eng.CreateLogicalPlanCrossShard(ctx, "db0", 0, []uint64{1}, influxql.Sources{}, schema)
+	assert2.Error(t, err, "shard ScanWithInvertedIndex has only one table")
+	_, err = eng.CreateLogicalPlanCrossShard(ctx, "db0", 0, []uint64{1},
+		influxql.Sources{&influxql.SubQuery{Statement: &influxql.SelectStatement{}}}, schema)
+	assert2.Error(t, err, "not a measurement")
+}
+
+func TestExpiredShards(t *testing.T) {
+	dir := t.TempDir()
+	config.SetProductType(config.LogKeeperService)
+	eng, err := initEngine1(dir, config.TSSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+	shardDuration := getShardDurationInfo(1)
+	shardDuration.DurationInfo.Tier = util.Warm
+	shardDuration.Ident.OwnerPt = 0
+
+	nilShardMap := make(map[uint64]*meta.ShardDurationInfo)
+	shard1Info := &meta.ShardDurationInfo{}
+	shard1Info.Ident.ShardID = 123
+	shard1Info.DurationInfo.Duration = 1
+	nilShardMap[123] = shard1Info
+	shard2Info := &meta.ShardDurationInfo{}
+	shard2Info.Ident.ShardID = 124
+	shard2Info.DurationInfo.Duration = 0
+	nilShardMap[124] = shard2Info
+	shard3Info := &meta.ShardDurationInfo{}
+	shard3Info.Ident.ShardID = 1
+	shard3Info.DurationInfo.Duration = 1
+	nilShardMap[1] = shard3Info
+
+	res := eng.ExpiredShards(&nilShardMap)
+	require.Equal(t, len(res), 2)
+}
+
+func getIndexDurationInfo(indexId uint64) *meta.IndexDurationInfo {
+	indexDuration := &meta.IndexDurationInfo{
+		Ident: meta.IndexBuilderIdentifier{
+			IndexID:      indexId,
+			IndexGroupID: defaultIndexGroupId,
+			Policy:       defaultRp,
+			OwnerDb:      defaultDb,
+			OwnerPt:      0},
+		DurationInfo: meta.DurationDescriptor{
+			Duration: time.Hour,
+		},
+	}
+	return indexDuration
+}
+
+func TestExpiredIndexes(t *testing.T) {
+	dir := t.TempDir()
+	eng, err := initEngine1(dir, config.TSSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+
+	nilIndexMap := make(map[uint64]*meta.IndexDurationInfo)
+	index1Info := &meta.IndexDurationInfo{}
+	index1Info.Ident.IndexID = 124
+	index1Info.DurationInfo.Duration = 1
+	nilIndexMap[123] = index1Info
+	index2Info := &meta.IndexDurationInfo{}
+	index2Info.Ident.IndexID = 124
+	index2Info.DurationInfo.Duration = 0
+	nilIndexMap[124] = index2Info
+
+	res := eng.ExpiredIndexes(&nilIndexMap)
+	require.Equal(t, len(res), 1)
+}
+
+func TestUpdateIndexDurationInfo(t *testing.T) {
+	dir := t.TempDir()
+	eng, err := initEngine1(dir, config.TSSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+	indexDuration := getIndexDurationInfo(659)
+
+	nilIndexMap := make(map[uint64]*meta.IndexDurationInfo)
+	err = eng.UpdateIndexDurationInfo(indexDuration, &nilIndexMap)
+	require.NoError(t, err)
+	indexDuration.Ident.IndexID = 1
+	err = eng.UpdateIndexDurationInfo(indexDuration, &nilIndexMap)
+	require.NoError(t, err)
+	indexDuration.Ident.OwnerPt = 1
+	err = eng.UpdateIndexDurationInfo(indexDuration, &nilIndexMap)
+	require.Equal(t, err.Error(), "pt not found")
 }

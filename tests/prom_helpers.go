@@ -25,13 +25,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/snappy"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/httpd"
 	"github.com/openGemini/openGemini/lib/util/lifted/promql2influxql"
 	"github.com/prometheus/common/model"
-	"github.com/prometheus/prometheus/pkg/labels"
-	"github.com/prometheus/prometheus/pkg/timestamp"
+	"github.com/prometheus/prometheus/model/labels"
+	"github.com/prometheus/prometheus/model/timestamp"
+	"github.com/prometheus/prometheus/prompb"
 	"github.com/prometheus/prometheus/promql"
 	"github.com/prometheus/prometheus/promql/parser"
+	"github.com/prometheus/prometheus/promql/parser/posrange"
 )
 
 var (
@@ -51,23 +54,31 @@ const (
 // against a test storage.
 type PromTest struct {
 	Test
-	s Server
+	s          Server
+	queryCount float64
+	failCount  float64
 }
 
-func NewPromTestFromFile(t *testing.T, filename string, db string, rp string, s Server) error {
+func NewPromTestFromFile(t *testing.T, filename string, db string, rp string, s Server) (float64, error) {
 	content, err := os.ReadFile(filename)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	test := &PromTest{}
 	test.db = db
 	test.rp = rp
 	test.s = s
+	test.queryCount = 0
+	test.failCount = 0
 	test.writes = make(Writes, 0)
 
 	err = test.parse(string(content), t, s)
 	test.clear()
-	return err
+	if err != nil {
+		return 0, err
+	}
+
+	return 1 - (test.failCount / test.queryCount), err
 }
 
 func raise(line int, format string, v ...interface{}) error {
@@ -88,6 +99,7 @@ func parseLoad(lines []string, i int) (int, []string, error) {
 		return i, nil, raise(i, "invalid step definition %q: %s", parts[1], err)
 	}
 	data := make([]string, 0)
+	timeSeries := make([]prompb.TimeSeries, 0)
 	for i+1 < len(lines) {
 		i++
 		defLine := lines[i]
@@ -96,18 +108,9 @@ func parseLoad(lines []string, i int) (int, []string, error) {
 			break
 		}
 		metric, vals, err := parser.ParseSeriesDesc(defLine)
-		ts := testStartTime
-		samples := make([]promql.Point, 0, len(vals))
-		for _, v := range vals {
-			if !v.Omitted {
-				samples = append(samples, promql.Point{
-					T: ts.UnixNano(),
-					V: v.Value,
-				})
-			}
-			ts = ts.Add(time.Duration(gap))
+		if len(metric) > 0 {
+			timeSeries = append(timeSeries, *GenTimeSeries(metric, vals, gap))
 		}
-		AppendData(&data, metric, samples)
 		if err != nil {
 			if perr, ok := err.(*parser.ParseErr); ok {
 				perr.LineOffset = i
@@ -115,20 +118,47 @@ func parseLoad(lines []string, i int) (int, []string, error) {
 			return i, nil, err
 		}
 	}
+
+	wq := &prompb.WriteRequest{
+		Timeseries: timeSeries,
+	}
+	wqByte, err := wq.Marshal()
+
+	if err != nil {
+		return i, nil, err
+	}
+
+	data = append(data, string(snappy.Encode(nil, wqByte)))
+
 	return i, data, nil
 }
 
-func AppendData(data *[]string, metric labels.Labels, samples []promql.Point) {
+func GenTimeSeries(metric labels.Labels, vals []parser.SequenceValue, gap model.Duration) *prompb.TimeSeries {
 	if len(metric) == 0 {
-		return
+		return nil
 	}
-	writes := metric[0].Value
-	for _, label := range metric {
-		writes += fmt.Sprintf(",%s=%s", label.Name, label.Value)
+	labels := make([]prompb.Label, 0, len(metric))
+	for _, m := range metric {
+		labels = append(labels, prompb.Label{
+			Name:  m.Name,
+			Value: m.Value,
+		})
 	}
 
-	for _, val := range samples {
-		*data = append(*data, fmt.Sprintf(`%s value=%f %d`, writes, val.V, val.T))
+	ts := testStartTime
+	samples := make([]prompb.Sample, 0, len(vals))
+	for _, v := range vals {
+		if !v.Omitted {
+			samples = append(samples, prompb.Sample{
+				Timestamp: ts.UnixMilli(),
+				Value:     v.Value,
+			})
+		}
+		ts = ts.Add(time.Duration(gap))
+	}
+	return &prompb.TimeSeries{
+		Labels:  labels,
+		Samples: samples,
 	}
 }
 
@@ -151,7 +181,7 @@ func (t *PromTest) parseEval(lines []string, i int) (int, []*Query, error) {
 	if err != nil {
 		if perr, ok := err.(*parser.ParseErr); ok {
 			perr.LineOffset = i
-			posOffset := parser.Pos(strings.Index(lines[i], expr))
+			posOffset := posrange.Pos(strings.Index(lines[i], expr))
 			perr.PositionRange.Start += posOffset
 			perr.PositionRange.End += posOffset
 			perr.Query = lines[i]
@@ -217,7 +247,7 @@ func AppendQueries(queries *[]*Query, line int, expr string, startTime time.Time
 	promExps := map[uint64]*PromExp{}
 	for _, e := range exps {
 		var h uint64 = 0
-		if e.Metric != nil {
+		if e.Metric != nil && len(e.Metric) > 0 {
 			h = e.Metric.Hash()
 		}
 		promExps[h] = e
@@ -229,12 +259,12 @@ func AppendQueries(queries *[]*Query, line int, expr string, startTime time.Time
 	}
 	qs = append(qs, atModifierTestCase{expr: expr, evalTime: startTime})
 	for _, q := range qs {
-		evalTime := q.evalTime.Unix()
+		evalTime := float64(q.evalTime.UnixMilli()) / 1000
 		insExp, rangeExp := buildExp(exps, q.evalTime)
 		*queries = append(*queries, &Query{
 			name:    strconv.Itoa(line),
 			command: q.expr,
-			params:  url.Values{"db": []string{"db0"}, "time": []string{strconv.FormatInt(evalTime, 10)}},
+			params:  url.Values{"db": []string{"prom"}, "time": []string{strconv.FormatFloat(evalTime, 'f', 3, 64)}},
 			exp:     insExp,
 			promExp: promExps,
 			path:    "/api/v1/query",
@@ -245,9 +275,9 @@ func AppendQueries(queries *[]*Query, line int, expr string, startTime time.Time
 		*queries = append(*queries, &Query{
 			name:     strconv.Itoa(line),
 			command:  q.expr,
-			params:   url.Values{"db": []string{"db0"}, "start": []string{strconv.FormatInt(q.evalTime.Add(-time.Minute).Unix(), 10)}, "end": []string{strconv.FormatInt(q.evalTime.Add(time.Minute).Unix(), 10)}, "step": []string{"60"}},
+			params:   url.Values{"db": []string{"prom"}, "start": []string{strconv.FormatFloat(float64(q.evalTime.Add(-time.Minute).UnixMilli())/1000, 'f', 3, 64)}, "end": []string{strconv.FormatFloat(float64(q.evalTime.Add(time.Minute).UnixMilli())/1000, 'f', 3, 64)}, "step": []string{"60"}},
 			exp:      rangeExp,
-			evalTime: q.evalTime.Unix() * 1000,
+			evalTime: q.evalTime.Unix(),
 			promExp:  promExps,
 			path:     "/api/v1/query_range",
 			ordered:  ordered,
@@ -262,35 +292,32 @@ func buildExp(promExps []*PromExp, evalTime time.Time) (string, string) {
 	matrix := make(promql.Matrix, 0, len(promExps))
 	vector := make(promql.Vector, 0, len(promExps))
 	for _, exp := range promExps {
-		instantPoint := promql.Point{
-			T: evalTime.Unix() * 1000,
-			V: exp.Value.Value,
-		}
-		rangePoint := promql.Point{
+		rangePoint := promql.FPoint{
 			T: evalTime.Add(-time.Minute).Unix() * 1000,
-			V: exp.Value.Value,
+			F: exp.Value.Value,
 		}
 		vector = append(vector, promql.Sample{
 			Metric: exp.Metric,
-			Point:  instantPoint,
+			T:      evalTime.Unix() * 1000,
+			F:      exp.Value.Value,
 		})
 		matrix = append(matrix, promql.Series{
 			Metric: exp.Metric,
-			Points: []promql.Point{rangePoint},
+			Floats: []promql.FPoint{rangePoint},
 		})
 	}
-	instantRes := &httpd.PromResponse{
-		Status: httpd.StatusSuccess,
-		Data: &promql2influxql.PromResult{
+	instantRes := &promql2influxql.PromQueryResponse{
+		Status: string(httpd.StatusSuccess),
+		Data: &promql2influxql.PromData{
 			ResultType: string(parser.ValueTypeVector),
-			Result:     vector,
+			Result:     &promql2influxql.PromDataVector{Vector: &vector},
 		},
 	}
-	rangeRes := &httpd.PromResponse{
-		Status: httpd.StatusSuccess,
-		Data: &promql2influxql.PromResult{
+	rangeRes := &promql2influxql.PromQueryResponse{
+		Status: string(httpd.StatusSuccess),
+		Data: &promql2influxql.PromData{
 			ResultType: string(parser.ValueTypeMatrix),
-			Result:     matrix,
+			Result:     &promql2influxql.PromDataMatrix{Matrix: &matrix},
 		},
 	}
 	instantExp, _ := json.Marshal(instantRes)
@@ -329,6 +356,7 @@ func (test *PromTest) parse(input string, t *testing.T, s Server) error {
 		case c == "load":
 			var writes []string
 			isLoad = true
+			test.initialized = false
 			i, writes, err = parseLoad(lines, i)
 			if err != nil {
 				return err
@@ -347,7 +375,7 @@ func (test *PromTest) parse(input string, t *testing.T, s Server) error {
 			}
 			var queries []*Query
 			i, queries, err = test.parseEval(lines, i)
-			RunQueries(queries, t, s)
+			test.runQueries(queries, t, s)
 		default:
 			return raise(i, "invalid command %q", l)
 		}
@@ -462,9 +490,10 @@ func (t *PromTest) clear() {
 	}
 }
 
-func RunQueries(queries []*Query, t *testing.T, s Server) {
+func (test *PromTest) runQueries(queries []*Query, t *testing.T, s Server) {
 	for _, query := range queries {
 		t.Run(query.name, func(t *testing.T) {
+			test.queryCount++
 			if query.skip {
 				t.Skipf("SKIP:: %s", query.name)
 			}
@@ -475,13 +504,17 @@ func RunQueries(queries []*Query, t *testing.T, s Server) {
 				t.Error(query.Error(err))
 			} else {
 				if query.fail {
+					test.failCount++
 					t.Error(fmt.Errorf("expected error evaluating query %q (line %s) but got none", query.command, query.name))
+					return
 				}
 				if query.ordered && query.path == "/api/v1/query_range" {
 					// Ordering isn't defined for range queries.
 					t.Skipf("SKIP:: %s", query.name)
+					return
 				}
 				if !query.promSuccess() {
+					test.failCount++
 					t.Error(query.failureMessage())
 				}
 			}

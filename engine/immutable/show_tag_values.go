@@ -15,28 +15,25 @@
 package immutable
 
 import (
-	"errors"
 	"fmt"
-	"io"
-	"sync"
-	"time"
 
-	Log "github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
-	"go.uber.org/zap"
 )
+
+func init() {
+	RegistryDDLRespData(hybridqp.ShowTagValues, NewTagSets)
+	RegistryDDLSequenceHandler(hybridqp.ShowTagValues, NewTagValuesIteratorHandler)
+}
 
 type IndexMergeSet interface {
 	GetSeries(sid uint64, buf []byte, condition influxql.Expr, callback func(key *influx.SeriesKey)) error
-}
-
-type ShowTagValuesPlan interface {
-	Execute(dst map[string]*TagSets, tagKeys map[string][][]byte, condition influxql.Expr, tr util.TimeRange, limit int) error
-	Stop()
+	GetSeriesBytes(sid uint64, buf []byte, condition influxql.Expr, callback func(key *influx.SeriesBytes)) error
+	SearchSeriesKeys(series [][]byte, name []byte, condition influxql.Expr) ([][]byte, error)
 }
 
 type EngineShard interface {
@@ -46,118 +43,42 @@ type EngineShard interface {
 	GetIdent() *meta.ShardIdentifier
 }
 
-type showTagValuesPlan struct {
-	idx   IndexMergeSet
-	table TablesStore
-
-	metaClient metaclient.MetaClient
-	shard      EngineShard
-
-	mu      sync.RWMutex
-	handler SequenceIteratorHandler
-	itr     SequenceIterator
-	stopped bool
-
-	logger *Log.Logger
+type TagSets struct {
+	//   map[tag key][tag value]struct{}
+	sets       map[string]map[string]struct{}
+	totalCount int
 }
 
-func NewShowTagValuesPlan(table TablesStore, idx IndexMergeSet, logger *Log.Logger, sh EngineShard, client metaclient.MetaClient) ShowTagValuesPlan {
-	return &showTagValuesPlan{
-		table:      table,
-		idx:        idx,
-		logger:     logger,
-		shard:      sh,
-		metaClient: client,
+func NewTagSets() DDLRespData {
+	return &TagSets{
+		sets: make(map[string]map[string]struct{}),
 	}
 }
 
-func (p *showTagValuesPlan) Stop() {
-	p.mu.Lock()
-	p.stopped = true
-	if p.itr != nil {
-		p.itr.Stop()
+func (s *TagSets) Add(key, val string) {
+	if valueSet, keyExist := s.sets[key]; !keyExist {
+		s.sets[key] = map[string]struct{}{val: {}}
+		s.totalCount++
+	} else if _, valueExist := valueSet[val]; !valueExist {
+		valueSet[val] = struct{}{}
+		s.totalCount++
 	}
-	p.mu.Unlock()
 }
 
-func (p *showTagValuesPlan) Execute(dst map[string]*TagSets, tagKeys map[string][][]byte, condition influxql.Expr, tr util.TimeRange, limit int) error {
-	p.mu.Lock()
-	if p.stopped {
-		p.mu.Unlock()
-		return nil
-	}
-	if p.handler == nil || p.itr == nil {
-		p.handler = NewTagValuesIteratorHandler(p.idx, condition, &tr, limit)
-		p.itr = NewSequenceIterator(p.handler, p.logger)
-	}
-	p.mu.Unlock()
-
-	defer func() {
-		p.itr.Release()
-	}()
-
-	// lazy shard open
-	if !p.shard.IsOpened() {
-		sh := p.shard
-		start := time.Now()
-		p.logger.Info("lazy shard open start", zap.String("path", sh.GetDataPath()), zap.Uint32("pt", sh.GetIdent().OwnerPt))
-		if err := sh.OpenAndEnable(p.metaClient); err != nil {
-			p.logger.Error("lazy shard open error", zap.Error(err), zap.Duration("duration", time.Since(start)))
-			return err
+func (s *TagSets) ForEach(process func(tagKey, tagValue string)) {
+	for tagKey, tagValues := range s.sets {
+		for tagValue := range tagValues {
+			process(tagKey, tagValue)
 		}
-		p.logger.Info("lazy shard open end", zap.Duration("duration", time.Since(start)))
 	}
+}
 
-	var err error
-	var reachLimitCount int
-	for mst, keys := range tagKeys {
-		if tagSets, ok := dst[mst]; !ok {
-			dst[mst] = NewTagSets()
-		} else if limit > 0 && tagSets.TagKVCount() >= limit {
-			reachLimitCount++
-			continue
-		}
-
-		order, unordered, _ := p.table.GetBothFilesRef(mst, true, tr, nil)
-		p.itr.AddFiles(order)
-		p.itr.AddFiles(unordered)
-		err = p.handler.Init(map[string]interface{}{
-			InitParamKeyDst:         dst[mst],
-			InitParamKeyKeys:        keys,
-			InitParamKeyMeasurement: mst,
-		})
-		if err != nil {
-			return err
-		}
-
-		err = p.itr.Run()
-		if errors.Is(err, io.EOF) {
-			// io.EOF represents that tagKV pair count reached the limit
-			reachLimitCount++
-			continue
-		} else if err != nil {
-			break
-		}
-		p.itr.Release()
-	}
-
-	// If all measurements reach the limit, return io.EOF
-	if limit > 0 && reachLimitCount == len(dst) {
-		return io.EOF
-	}
-
-	// Because `err` is reused, io.EOF indicates that part of measurements reaches limit.
-	// Catch this exception.
-	if errors.Is(err, io.EOF) {
-		return nil
-	} else {
-		return err
-	}
+func (s *TagSets) Count() int {
+	return s.totalCount
 }
 
 type TagValuesIteratorHandler struct {
-	chunkMeta ChunkMeta
-	idx       IndexMergeSet
+	idx IndexMergeSet
 
 	limit       int
 	tr          *util.TimeRange
@@ -170,7 +91,7 @@ type TagValuesIteratorHandler struct {
 	sidSet map[uint64]struct{}
 }
 
-func NewTagValuesIteratorHandler(idx IndexMergeSet, condition influxql.Expr, tr *util.TimeRange, limit int) *TagValuesIteratorHandler {
+func NewTagValuesIteratorHandler(idx IndexMergeSet, condition influxql.Expr, tr *util.TimeRange, limit int) SequenceIteratorHandler {
 	return &TagValuesIteratorHandler{
 		idx:       idx,
 		condition: condition,
@@ -231,14 +152,7 @@ func (h *TagValuesIteratorHandler) Begin() {}
 
 func (h *TagValuesIteratorHandler) NextFile(TSSPFile) {}
 
-func (h *TagValuesIteratorHandler) NextChunkMeta(buf []byte) error {
-	cm := &h.chunkMeta
-	cm.reset()
-	_, err := cm.UnmarshalWithColumns(buf, []string{"value"})
-	if err != nil {
-		return err
-	}
-
+func (h *TagValuesIteratorHandler) NextChunkMeta(cm *ChunkMeta) error {
 	// SeriesID may be duplicate in multiple TSSP files.
 	if _, exists := h.sidSet[cm.sid]; exists {
 		return nil
@@ -250,7 +164,7 @@ func (h *TagValuesIteratorHandler) NextChunkMeta(buf []byte) error {
 		return nil
 	}
 
-	err = h.idx.GetSeries(cm.sid, buf[:0], h.condition, func(key *influx.SeriesKey) {
+	err := h.idx.GetSeries(cm.sid, nil, h.condition, func(key *influx.SeriesKey) {
 		if string(key.Measurement) != h.measurement {
 			return
 		}
@@ -269,7 +183,7 @@ func (h *TagValuesIteratorHandler) NextChunkMeta(buf []byte) error {
 }
 
 func (h *TagValuesIteratorHandler) Limited() bool {
-	return h.limit > 0 && h.sets.TagKVCount() >= h.limit
+	return h.limit > 0 && h.sets.Count() >= h.limit
 }
 
 func (h *TagValuesIteratorHandler) Finish() {}

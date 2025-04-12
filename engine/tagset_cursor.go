@@ -118,6 +118,7 @@ type tagSetCursor struct {
 	keyCursors   comm.KeyCursors
 	init         bool
 	recordSchema record.Schemas
+	tagSet       *tsi.TagSetInfo
 
 	RecordResult    *record.Record
 	recordPool      *record.CircularRecordPool
@@ -546,8 +547,15 @@ func (t *tagSetCursor) Close() error {
 	if t.recordPool != nil {
 		t.recordPool.Put()
 	}
+	if t.tagSet != nil {
+		t.tagSet.Unref()
+	}
+	if t.lazyTagSetCursorPara != nil && t.lazyTagSetCursorPara.tagSet != nil {
+		t.lazyTagSetCursorPara.tagSet.Unref()
+	}
 	return t.keyCursors.Close()
 }
+
 func (t *tagSetCursor) StartSpan(span *tracing.Span) {
 	t.span = span
 	for _, cursor := range t.keyCursors {

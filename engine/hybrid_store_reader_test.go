@@ -357,7 +357,6 @@ func TestHybridStoreReader(t *testing.T) {
 	}
 
 	// start to compact
-	time.Sleep(time.Second * 3)
 	err = sh.immTables.LevelCompact(0, sh.GetID())
 	if err != nil {
 		t.Fatal(err)
@@ -685,6 +684,7 @@ func TestHybridStoreReaderForInc(t *testing.T) {
 
 func TestInitSchemaByUnnest(t *testing.T) {
 	field := "content"
+	alias := "key1"
 	unnest := &influxql.Unnest{
 		Expr: &influxql.Call{
 			Name: "match_all",
@@ -693,7 +693,7 @@ func TestInitSchemaByUnnest(t *testing.T) {
 				&influxql.VarRef{Val: field, Type: influxql.String},
 			},
 		},
-		Aliases: []string{"key1", "value1"},
+		Aliases: []string{alias},
 		DstType: []influxql.DataType{influxql.String, influxql.String},
 	}
 	schema := createSortQuerySchema()
@@ -707,9 +707,21 @@ func TestInitSchemaByUnnest(t *testing.T) {
 	if reader.inSchema.FieldIndex(field) == -1 {
 		t.Fatalf("initSchemaByUnnest failed, %s is not existed in schema", field)
 	}
-	reader.initSchemaByUnnest()
+	if reader.inSchema.FieldIndex(alias) == -1 {
+		t.Fatalf("initSchemaByUnnest failed, %s is not existed in schema", alias)
+	}
+
+	reader.inSchema = make(record.Schemas, 0)
+	reader.inSchema = append(reader.inSchema, record.Field{Name: field, Type: influx.Field_Type_String})
+	err = reader.initSchemaByUnnest()
+	if err != nil {
+		t.Fatal("initSchemaByUnnest failed")
+	}
 	if reader.inSchema.FieldIndex(field) == -1 {
 		t.Fatalf("initSchemaByUnnest failed, %s is not existed in schema", field)
+	}
+	if reader.inSchema.FieldIndex(alias) == -1 {
+		t.Fatalf("initSchemaByUnnest failed, %s is not existed in schema", alias)
 	}
 }
 

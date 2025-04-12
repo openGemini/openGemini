@@ -27,6 +27,7 @@ import (
 var MinMaxTimeRange = util.TimeRange{Min: influxql.MinTime, Max: influxql.MaxTime}
 var typeSize = make([]int, influx.Field_Type_Last)
 var zeroBuf = make([]byte, 1024)
+var zeroUint32 = make([]uint32, 1024)
 
 func init() {
 	typeSize[influx.Field_Type_Int] = util.Int64SizeBytes
@@ -103,12 +104,27 @@ func GetTimeRangeStartIndexDescend(times []int64, startPos int, startTime int64)
 	for start <= end {
 		mid := (start + end) / 2
 		if times[mid] == startTime {
-			return mid
+			start = mid
+			break
 		} else if times[mid] < startTime {
 			end = mid - 1
 		} else {
 			start = mid + 1
 		}
+	}
+
+	// fix the data loss issue when query logs by /repo/{repository}/logstreams/{logStream}/logs or column engine type
+	// When GetTimeRangeStartIndexDescend is used to find the start index of startTime in times[],
+	// if many items that have the same value with startTime exists in times,
+	// the start position of the found data is inaccurate when the binary search algorithm is used.
+	// So we added the following 'for loop' code
+	for (start - 1) >= startPos {
+		if times[start-1] <= startTime {
+
+			start = start - 1
+			continue
+		}
+		break
 	}
 	return start
 }
@@ -133,17 +149,34 @@ func GetTimeRangeEndIndex(times []int64, startPos int, endTime int64) int {
 func GetTimeRangeEndIndexDescend(times []int64, startPos int, endTime int64) int {
 	start := startPos
 	end := len(times) - 1
+	endPos := end
+
 	for start <= end {
 		mid := (start + end) / 2
 		if times[mid] == endTime {
-			return mid
+			end = mid
+			break
 		} else if times[mid] < endTime {
 			end = mid - 1
 		} else {
 			start = mid + 1
 		}
 	}
-	return start - 1
+
+	// fix the data loss issue when query logs by /repo/{repository}/logstreams/{logStream}/logs or column engine type , PR #4082
+	// When GetTimeRangeEndIndexDescend is used to find the End index of endTime in times[],
+	// if many items that have the same value with endTime exists in times,
+	// the end position of the found data is inaccurate when the binary search algorithm is used.
+	// So we added the following 'for loop' code
+	for (end + 1) <= endPos {
+		if times[end+1] >= endTime {
+			end = end + 1
+			continue
+		}
+		break
+	}
+
+	return end
 }
 
 func Uint64ToBytesUnsafe(id uint64) []byte {
@@ -235,4 +268,11 @@ func valueIndexRangeWithSingle(bitMap []byte, bitStart int, bitEnd int) int {
 	}
 
 	return total
+}
+
+func FillZeroUint32(dst []uint32, size int) []uint32 {
+	if size > len(zeroUint32) {
+		return make([]uint32, size)
+	}
+	return append(dst[:0], zeroUint32[:size]...)
 }

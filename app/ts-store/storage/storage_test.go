@@ -157,6 +157,10 @@ func TestStorage_Write(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	data := &meta.Data{}
+	client := metaclient.NewClient("", false, 0)
+	client.SetCacheData(data)
+	eng.SetMetaClient(client)
 	st.engine = eng
 	db := "db0"
 	rp := "autogen"
@@ -269,6 +273,7 @@ func TestStorage_WriteToSlave(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	eng.SetMetaClient(st.metaClient)
 	st.engine = eng
 	db := "db0"
 	rp := "autogen"
@@ -371,6 +376,7 @@ func TestStorage_RepConfigWrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	eng.SetMetaClient(st.metaClient)
 	st.engine = eng
 	db := "db0"
 	rp := "autogen"

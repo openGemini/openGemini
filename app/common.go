@@ -15,23 +15,17 @@
 package app
 
 import (
-	"bytes"
-	"encoding/json"
 	"flag"
 	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/logger"
-	"github.com/openGemini/openGemini/lib/statisticsPusher"
-	"github.com/openGemini/openGemini/lib/util"
 	"go.uber.org/zap"
 )
 
@@ -196,89 +190,6 @@ func WritePIDFile(pidfile string) error {
 	}
 
 	return nil
-}
-
-func hasSensitiveWord(url string) bool {
-	url = strings.ToLower(url)
-	sensitiveInfo := "password"
-	return strings.Contains(url, sensitiveInfo)
-}
-
-func HideQueryPassword(url string) string {
-	if !hasSensitiveWord(url) {
-		return url
-	}
-	var buf strings.Builder
-
-	create := "with password"
-	url = strings.ToLower(url)
-	if strings.Contains(url, create) {
-		fields := strings.Fields(url)
-		for i, s := range fields {
-			if s == "password" {
-				buf.WriteString(strings.Join(fields[:i+1], " "))
-				buf.WriteString(" [REDACTED] ")
-				if i < len(fields)-2 {
-					buf.WriteString(strings.Join(fields[i+2:], " "))
-				}
-				return buf.String()
-			}
-		}
-	}
-	set := "set password"
-	if strings.Contains(url, set) {
-		fields := strings.SplitAfter(url, "=")
-		buf.WriteString(fields[0])
-		buf.WriteString(" [REDACTED]")
-		return buf.String()
-	}
-	return url
-}
-
-func SetStatsResponse(pusher *statisticsPusher.StatisticsPusher, w http.ResponseWriter, r *http.Request) {
-	if pusher == nil {
-		return
-	}
-
-	stats, err := pusher.CollectOpsStatistics()
-	if err != nil {
-		util.HttpError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	fmt.Fprintln(w, "{")
-
-	first := true
-	uniqueKeys := make(map[string]int)
-	for _, s := range stats {
-		val, err := json.Marshal(s)
-		if err != nil {
-			continue
-		}
-
-		// Very hackily create a unique key.
-		buf := bytes.NewBufferString(s.Name)
-		key := buf.String()
-		v := uniqueKeys[key]
-		uniqueKeys[key] = v + 1
-		if v > 0 {
-			fmt.Fprintf(buf, ":%d", v)
-			key = buf.String()
-		}
-
-		if !first {
-			fmt.Fprintln(w, ",")
-		}
-		first = false
-		fmt.Fprintf(w, "%q: ", key)
-		_, err = w.Write(bytes.TrimSpace(val))
-		if err != nil {
-			util.HttpError(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-	}
-	fmt.Fprintln(w, "\n}")
 }
 
 type ServerInfo struct {

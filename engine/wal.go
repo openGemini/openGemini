@@ -21,6 +21,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -37,6 +38,7 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/pingcap/failpoint"
@@ -46,6 +48,7 @@ import (
 const (
 	DefaultFileSize   = 10 * 1024 * 1024
 	WALFileSuffixes   = "wal"
+	StreamWalDir      = "stream"
 	WalRecordHeadSize = 1 + 4
 	WalCompBufSize    = 256 * 1024
 	WalCompMaxBufSize = 2 * 1024 * 1024
@@ -63,6 +66,8 @@ const (
 var (
 	walCompBufPool = bufferpool.NewByteBufferPool(WalCompBufSize, cpu.GetCpuNum(), bufferpool.MaxLocalCacheLen)
 )
+
+type ReplayCallFuncType func(binary []byte, rowsCtx *walRowsObjects, writeWalType WalRecordType, logReplay LogReplay) error
 
 var walRowsObjectsPool sync.Pool
 
@@ -122,6 +127,7 @@ type WAL struct {
 	walEnabled      bool
 	replayParallel  bool
 	replayBatchSize int
+	maxRowTime      int64
 }
 
 func NewWAL(path string, lockPath *string, shardID uint64, walSyncInterval time.Duration, walEnabled, replayParallel bool, partitionNum int, walReplayBatchSize int) *WAL {
@@ -140,6 +146,7 @@ func NewWAL(path string, lockPath *string, shardID uint64, walSyncInterval time.
 		replayBatchSize: walReplayBatchSize,
 		log:             logger.NewLogger(errno.ModuleWal),
 		lock:            lockPath,
+		maxRowTime:      math.MinInt64,
 	}
 
 	lock := fileops.FileLockOption(*lockPath)
@@ -233,50 +240,49 @@ func (l *WAL) writeBinary(walRecord *walRecord) error {
 	return nil
 }
 
-func (l *WAL) Write(walRecord *walRecord) error {
+func (l *WAL) Write(rows []byte, typ WalRecordType, maxRowTime int64) error {
 	if !l.walEnabled {
 		return nil
 	}
-	if len(walRecord.binary) == 0 {
+	if len(rows) == 0 {
 		return nil
 	}
-	return l.writeBinary(walRecord)
+
+	l.mu.Lock()
+	l.maxRowTime = max(l.maxRowTime, maxRowTime)
+	l.mu.Unlock()
+
+	// write wal
+	start := time.Now()
+	failpoint.Inject("SlowDownWalWrite", nil)
+	err := l.writeBinary(&walRecord{binary: rows, writeWalType: typ})
+	atomic.AddInt64(&statistics.PerfStat.WriteWalDurationNs, time.Since(start).Nanoseconds())
+	return err
 }
 
-func (l *WAL) Switch() ([]string, error) {
+func (l *WAL) Switch() (*WalFiles, error) {
 	if !l.walEnabled {
 		return nil, nil
 	}
+	errs := errno.NewErrs()
+	errs.Init(l.partitionNum, nil)
+
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	var mu = sync.Mutex{}
-	var errs []error
-	var wg sync.WaitGroup
-	var totalFiles []string
+	walFiles := newWalFiles(l.maxRowTime, l.lock, l.logPath)
+	l.maxRowTime = math.MinInt64
 
-	wg.Add(l.partitionNum)
 	for i := 0; i < l.partitionNum; i++ {
 		go func(lw *LogWriter) {
 			files, err := lw.Switch()
-
-			mu.Lock()
-			if err != nil {
-				errs = append(errs, err)
-			}
-			totalFiles = append(totalFiles, files...)
-			mu.Unlock()
-
-			wg.Done()
+			errs.Dispatch(err)
+			walFiles.Add(files...)
 		}(&l.logWriter[i])
 	}
-	wg.Wait()
 
-	for _, err := range errs {
-		return nil, err
-	}
-
-	return totalFiles, nil
+	err := errs.Err()
+	return walFiles, err
 }
 
 func (l *WAL) Remove(files []string) error {
@@ -325,7 +331,7 @@ func (l *WAL) replayPhysicRecord(fr *bufio.Reader, walFileName string, recordCom
 	wr := &walRecord{
 		writeWalType: writeWalType,
 	}
-	_, err = io.ReadFull(fr, recordCompBuff)
+	n, err = io.ReadFull(fr, recordCompBuff)
 	if err == nil || err == io.EOF {
 		var innerErr error
 		binaryBuff, innerErr = snappy.Decode(binaryBuff, recordCompBuff)
@@ -346,9 +352,12 @@ func (l *WAL) replayPhysicRecord(fr *bufio.Reader, walFileName string, recordCom
 		}
 
 		innerErr = callBack(wr)
+		if innerErr != nil {
+			l.log.Error("callBack error", zap.Error(innerErr), zap.String("wal", walFileName))
+		}
 		return recordCompBuff, innerErr
 	}
-	l.log.Error(errno.NewError(errno.ReadWalFileFailed).Error())
+	l.log.Error(errno.NewError(errno.ReadWalFileFailed).Error(), zap.Error(err), zap.String("wal", walFileName), zap.Int("read", n), zap.Uint32("expected", compBinaryLen))
 	return recordCompBuff, io.EOF
 }
 
@@ -385,7 +394,7 @@ func (l *WAL) replayWalFile(ctx context.Context, walFileName string, callBack fu
 	})
 	lock := fileops.FileLockOption("")
 	pri := fileops.FilePriorityOption(fileops.IO_PRIORITY_NORMAL)
-	fd, err := fileops.OpenFile(walFileName, os.O_RDONLY, 0640, lock, pri)
+	fd, err := fileops.OpenFile(walFileName, os.O_RDONLY, 0600, lock, pri)
 	if err != nil {
 		return err
 	}
@@ -399,7 +408,7 @@ func (l *WAL) replayWalFile(ctx context.Context, walFileName string, callBack fu
 	if fileSize == 0 {
 		return nil
 	}
-	logger.GetLogger().Info("start to replay wal file", zap.Uint64("shardID", l.shardID), zap.String("filename", walFileName), zap.String("file size", units.HumanSize(float64(fileSize))))
+	logger.GetLogger().Info("start to replay wal file", zap.Uint64("shardID", l.shardID), zap.String("filename", walFileName), zap.Int64("file size", fileSize))
 	recordCompBuff := walCompBufPool.Get()
 	defer func() {
 		if len(recordCompBuff) <= WalCompMaxBufSize {
@@ -442,8 +451,8 @@ func (l *WAL) replayOnePartition(ctx context.Context, idx int, callBack func(pc 
 	return nil
 }
 
-func consumeRecordSerial(ctx context.Context, mu *sync.Mutex, ptChs []chan *walRecord, errs *[]error, finish chan<- struct{},
-	callBack func(binary []byte, rowsCtx *walRowsObjects, writeWalType WalRecordType) error) {
+func consumeRecordSerial(ctx context.Context, mu *sync.Mutex, ptChs []chan *walRecord, errs *[]error, finish chan<- struct{}, logReplay LogReplays,
+	callBack ReplayCallFuncType) {
 	// consume wal data according to partition order from channel
 	ptFinish := make([]bool, len(ptChs))
 	ptFinishNum := 0
@@ -469,7 +478,7 @@ func consumeRecordSerial(ctx context.Context, mu *sync.Mutex, ptChs []chan *walR
 				continue
 			}
 
-			err := callBack(pc.binary, pc.rowsObjs, pc.writeWalType)
+			err := callBack(pc.binary, pc.rowsObjs, pc.writeWalType, logReplay[i])
 			if err != nil {
 				mu.Lock()
 				*errs = append(*errs, err)
@@ -479,8 +488,8 @@ func consumeRecordSerial(ctx context.Context, mu *sync.Mutex, ptChs []chan *walR
 	}
 }
 
-func consumeRecordParallel(ctx context.Context, mu *sync.Mutex, ptChs []chan *walRecord, errs *[]error, finish chan<- struct{},
-	callBack func(binary []byte, rowsCtx *walRowsObjects, writeWalType WalRecordType) error) {
+func consumeRecordParallel(ctx context.Context, mu *sync.Mutex, ptChs []chan *walRecord, errs *[]error, finish chan<- struct{}, logReplay LogReplays,
+	callBack ReplayCallFuncType) {
 	var wg sync.WaitGroup
 	wg.Add(len(ptChs))
 	for i := 0; i < len(ptChs); i++ {
@@ -494,7 +503,7 @@ func consumeRecordParallel(ctx context.Context, mu *sync.Mutex, ptChs []chan *wa
 					if len(pc.binary) == 0 && (pc.rowsObjs == nil || len(pc.rowsObjs.rows) == 0) {
 						return
 					}
-					err := callBack(pc.binary, pc.rowsObjs, pc.writeWalType)
+					err := callBack(pc.binary, pc.rowsObjs, pc.writeWalType, logReplay[idx])
 					if err != nil {
 						mu.Lock()
 						*errs = append(*errs, err)
@@ -559,7 +568,7 @@ type walRecord struct {
 	writeWalType WalRecordType
 }
 
-func (l *WAL) Replay(ctx context.Context, callBack func(binary []byte, rowsCtx *walRowsObjects, writeWalType WalRecordType) error) ([]string, error) {
+func (l *WAL) Replay(ctx context.Context, callBack ReplayCallFuncType) ([]string, error) {
 	if !l.walEnabled {
 		return nil, nil
 	}
@@ -578,14 +587,14 @@ func (l *WAL) Replay(ctx context.Context, callBack func(binary []byte, rowsCtx *
 		l.ref()
 		go func() {
 			defer l.unref()
-			consumeRecordParallel(ctx, &mu, ptChs, &errs, consumeFinish, callBack)
+			consumeRecordParallel(ctx, &mu, ptChs, &errs, consumeFinish, l.logReplay, callBack)
 		}()
 	} else {
 		l.ref()
 		// multi partition wal files replayed serial, the update of the same time at a certain series is guaranteed
 		go func() {
 			defer l.unref()
-			consumeRecordSerial(ctx, &mu, ptChs, &errs, consumeFinish, callBack)
+			consumeRecordSerial(ctx, &mu, ptChs, &errs, consumeFinish, l.logReplay, callBack)
 		}()
 	}
 

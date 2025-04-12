@@ -150,19 +150,18 @@ type Common struct {
 	ProductType        string         `toml:"product-type"`
 	PprofBindAddress   string         `toml:"pprof-bind-address"`
 
-	RaftSendGroutineNum int `toml:"raft-send-groutine-num"`
+	Bindjoin []string `toml:"bind-join"`
 }
 
 // NewCommon builds a new CommonConfiguration with default values.
 func NewCommon() *Common {
 	return &Common{
-		MetaJoin:            DefaultMetaJoin,
-		ReportEnable:        true,
-		OptHashAlgo:         DefaultHashAlgo,
-		CpuAllocationRatio:  DefaultCpuAllocationRatio,
-		HaPolicy:            DefaultHaPolicy,
-		PreAggEnabled:       true,
-		RaftSendGroutineNum: DefaultRaftSendGroutineNum,
+		MetaJoin:           DefaultMetaJoin,
+		ReportEnable:       true,
+		OptHashAlgo:        DefaultHashAlgo,
+		CpuAllocationRatio: DefaultCpuAllocationRatio,
+		HaPolicy:           DefaultHaPolicy,
+		PreAggEnabled:      true,
 	}
 }
 
@@ -176,6 +175,11 @@ func (c Common) Validate() error {
 	for i := range c.MetaJoin {
 		if c.MetaJoin[i] == "" {
 			return errors.New("comm meta-join must be specified")
+		}
+	}
+	for i := range c.Bindjoin {
+		if c.Bindjoin[i] == "" {
+			return errors.New("comm bind-join must be specified")
 		}
 	}
 	return nil
@@ -197,7 +201,6 @@ func (c *Common) GetLogging() *Logger {
 func (c *Common) ShowConfigs() map[string]interface{} {
 	return map[string]interface{}{
 		"common.meta-join":                  c.MetaJoin,
-		"common.raft-send-groutine-num":     c.RaftSendGroutineNum,
 		"common.ignore-empty-tag":           c.IgnoreEmptyTag,
 		"common.report-enable":              c.ReportEnable,
 		"common.crypto-config":              c.CryptoConfig,
@@ -213,6 +216,7 @@ func (c *Common) ShowConfigs() map[string]interface{} {
 		"common.ha-policy":                  c.HaPolicy,
 		"common.node-role":                  c.NodeRole,
 		"common.product-type":               c.ProductType,
+		"common.bind-join":                  c.Bindjoin,
 	}
 }
 
@@ -315,4 +319,10 @@ func GetProductType() ProductType {
 
 func IsLogKeeper() bool {
 	return productTypeOfService == LogKeeper
+}
+
+func ResetZero2Default[T comparable](v *T, zero T, def T) {
+	if *v == zero {
+		*v = def
+	}
 }

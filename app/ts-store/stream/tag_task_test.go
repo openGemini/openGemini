@@ -15,7 +15,7 @@
 package stream
 
 import (
-	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,16 +23,20 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agiledragon/gomonkey/v2"
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	streamLib "github.com/openGemini/openGemini/lib/stream"
+	"github.com/openGemini/openGemini/lib/stringinterner"
 	strings2 "github.com/openGemini/openGemini/lib/strings"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/panjf2000/ants/v2"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
@@ -46,88 +50,6 @@ func Test_WindowDataPool(t *testing.T) {
 		t.Log("timer occur")
 	case kk <- pool.Get():
 		t.Fatal("should be block")
-	}
-}
-
-func Test_CompressDictKey(t *testing.T) {
-	task := &TagTask{
-		corpus:        sync.Map{},
-		corpusIndexes: []string{""},
-		corpusIndex:   0,
-		BaseTask:      &BaseTask{Logger: logger.NewLogger(errno.ModuleStream).With(zap.String("service", "stream"))},
-	}
-	key := "ty"
-	vv := task.compressDictKeyUint(key)
-	vvv := strconv.FormatUint(vv, 10)
-	v, err := task.unCompressDictKey(vvv)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if key != v {
-		t.Error(fmt.Sprintf("expect %v ,got %v", key, v))
-	}
-}
-
-func Test_CompressDictKeyUint(t *testing.T) {
-	task := &TagTask{
-		corpus:        sync.Map{},
-		corpusIndexes: []string{""},
-		corpusIndex:   0,
-		BaseTask:      &BaseTask{Logger: logger.NewLogger(errno.ModuleStream).With(zap.String("service", "stream"))},
-	}
-	key := "ty"
-	vv := task.compressDictKeyUint(key)
-	v, err := task.UnCompressDictKeyUint(vv)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if key != v {
-		t.Error(fmt.Sprintf("expect %v ,got %v", key, v))
-	}
-}
-
-func Benchmark_CompressDictKey(t *testing.B) {
-	task := &TagTask{
-		corpus:        sync.Map{},
-		corpusIndexes: []string{""},
-		corpusIndex:   0,
-		BaseTask:      &BaseTask{Logger: logger.NewLogger(errno.ModuleStream).With(zap.String("service", "stream"))},
-	}
-	t.ReportAllocs()
-	t.ResetTimer()
-	for i := 0; i < t.N; i++ {
-		key := "testKey" + strconv.Itoa(i)
-		vv := task.compressDictKeyUint(key)
-		vvv := strconv.FormatUint(vv, 10)
-		v, err := task.unCompressDictKey(vvv)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if key != v {
-			t.Error(fmt.Sprintf("expect %v ,got %v", key, v))
-		}
-	}
-}
-
-func Benchmark_CompressDictKeyUint(t *testing.B) {
-	task := &TagTask{
-		corpus:        sync.Map{},
-		corpusIndexes: []string{""},
-		corpusIndex:   0,
-		BaseTask:      &BaseTask{Logger: logger.NewLogger(errno.ModuleStream).With(zap.String("service", "stream"))},
-	}
-	t.ReportAllocs()
-	t.ResetTimer()
-	for i := 0; i < t.N; i++ {
-		key := "testKey" + strconv.Itoa(i)
-		vv := task.compressDictKeyUint(key)
-		v, err := task.UnCompressDictKeyUint(vv)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if key != v {
-			t.Error(fmt.Sprintf("expect %v ,got %v", key, v))
-		}
 	}
 }
 
@@ -178,11 +100,9 @@ func Test_FlushUpdate(t *testing.T) {
 
 func Test_GenerateGroupKey(t *testing.T) {
 	task := &TagTask{
-		corpus:        sync.Map{},
-		corpusIndexes: []string{""},
-		corpusIndex:   0,
-		BaseTask:      &BaseTask{Logger: logger.NewLogger(errno.ModuleStream).With(zap.String("service", "stream"))},
-		bp:            strings2.NewBuilderPool(),
+		stringDict: stringinterner.NewStringDict(),
+		BaseTask:   &BaseTask{Logger: logger.NewLogger(errno.ModuleStream).With(zap.String("service", "stream"))},
+		bp:         strings2.NewBuilderPool(),
 	}
 	groupByKeyNum := 5
 	var keys []string
@@ -205,11 +125,9 @@ func Test_GenerateGroupKey(t *testing.T) {
 
 func Test_GenerateGroupKeyUint_NullTag(t *testing.T) {
 	task := &TagTask{
-		corpus:        sync.Map{},
-		corpusIndexes: []string{""},
-		corpusIndex:   0,
-		BaseTask:      &BaseTask{Logger: logger.NewLogger(errno.ModuleStream).With(zap.String("service", "stream"))},
-		bp:            strings2.NewBuilderPool(),
+		stringDict: stringinterner.NewStringDict(),
+		BaseTask:   &BaseTask{Logger: logger.NewLogger(errno.ModuleStream).With(zap.String("service", "stream"))},
+		bp:         strings2.NewBuilderPool(),
 	}
 	groupByKeyNum := 5
 	offset := 30
@@ -245,11 +163,9 @@ func Test_GenerateGroupKeyUint_NullTag(t *testing.T) {
 
 func Test_GenerateGroupKeyUint_EmptyKeys(t *testing.T) {
 	task := &TagTask{
-		corpus:        sync.Map{},
-		corpusIndexes: []string{""},
-		corpusIndex:   0,
-		BaseTask:      &BaseTask{Logger: logger.NewLogger(errno.ModuleStream).With(zap.String("service", "stream"))},
-		bp:            strings2.NewBuilderPool(),
+		stringDict: stringinterner.NewStringDict(),
+		BaseTask:   &BaseTask{Logger: logger.NewLogger(errno.ModuleStream).With(zap.String("service", "stream"))},
+		bp:         strings2.NewBuilderPool(),
 	}
 	var keys []string
 	r := buildRow("1", "xx", false)
@@ -260,13 +176,153 @@ func Test_GenerateGroupKeyUint_EmptyKeys(t *testing.T) {
 	}
 }
 
+func Test_ReplayData(t *testing.T) {
+	now := time.Now()
+	task := &TagTask{
+		ptLoadStatus: map[uint32]*flushStatus{0: {Timestamp: now.Add(-20 * time.Second).UnixNano()}},
+		BaseTask: &BaseTask{Logger: MockLogger{t},
+			initTime: now.Add(20 * time.Second),
+			window:   10 * time.Second,
+			rows:     []influx.Row{},
+			info:     &meta2.MeasurementInfo{Name: "bps"},
+			des:      &meta2.StreamMeasurementInfo{Database: "test", RetentionPolicy: "autogen"},
+			store:    &MockStorage{},
+		},
+	}
+
+	fieldCalls := make([]*streamLib.FieldCall, 0, 3)
+	call, _ := streamLib.NewFieldCall(influx.Field_Type_Float, influx.Field_Type_Float, "bps", "bps", "max", true)
+	fieldCalls = append(fieldCalls, call)
+	call, _ = streamLib.NewFieldCall(influx.Field_Type_Float, influx.Field_Type_Float, "bps", "bps", "min", true)
+	fieldCalls = append(fieldCalls, call)
+	call, _ = streamLib.NewFieldCall(influx.Field_Type_Float, influx.Field_Type_Float, "bps", "bps", "count", true)
+	fieldCalls = append(fieldCalls, call)
+	task.fieldCalls = fieldCalls
+	task.fieldCallsLen = 3
+
+	t.Run("1", func(t *testing.T) {
+		replayRow := &ReplayRow{
+			db:      "test",
+			rp:      "autogen",
+			ptID:    0,
+			shardID: 0,
+			rows:    buildReplayRows(2),
+		}
+
+		task.replayWalRow(replayRow)
+
+		expPtID := make([]*uint32, 4)
+		expPtID[2] = &replayRow.ptID
+		expShards := make([]*uint64, 4)
+		expShards[2] = &replayRow.shardID
+
+		if ok := slices.Equal(expPtID, task.replayPtIds); !ok {
+			t.Errorf("Expected %v, got %v", expPtID, task.replayPtIds)
+		}
+		if ok := slices.Equal(expShards, task.replayShardIds); !ok {
+			t.Errorf("Expected %v, got %v", expShards, task.replayShardIds)
+		}
+
+		task.flushReplayData(2)
+		s := task.store.(*MockStorage)
+		assertEqual(t, s.count, 1)
+		assertEqual(t, s.value, float64(2))
+
+		task.cleanReplayData(2)
+	})
+
+	t.Run("2", func(t *testing.T) {
+		task.BaseTask.store = &MockStorage{}
+		FlushParallelMinRowNum = 0
+		replayRow := &ReplayRow{
+			db:      "test",
+			rp:      "autogen",
+			ptID:    0,
+			shardID: 0,
+			rows:    buildReplayRows(30),
+		}
+
+		goPool, err := ants.NewPool(1)
+		require.NoError(t, err)
+		task.goPool = goPool
+		task.concurrency = 1
+		task.replayWalRow(replayRow)
+
+		task.flushReplayData(2)
+
+		s := task.store.(*MockStorage)
+		assertEqual(t, s.count, 1)
+		assertEqual(t, s.value, float64(30))
+
+		task.cleanReplayData(2)
+	})
+
+}
+
+func Test_ReplayWalRow_Error(t *testing.T) {
+	t.Run("1", func(t *testing.T) {
+		task := &TagTask{}
+
+		err := task.replayWalRow(nil)
+		require.NotEmpty(t, err)
+	})
+	t.Run("2", func(t *testing.T) {
+		now := time.Now()
+		task := &TagTask{
+			ptLoadStatus: map[uint32]*flushStatus{0: {Timestamp: now.Add(-2000 * time.Second).UnixNano()}},
+			BaseTask: &BaseTask{Logger: MockLogger{t},
+				initTime: now.Add(2000 * time.Second),
+				window:   10 * time.Second,
+				rows:     []influx.Row{},
+				info:     &meta2.MeasurementInfo{Name: "bps"},
+				des:      &meta2.StreamMeasurementInfo{Database: "test", RetentionPolicy: "autogen"},
+				store:    &MockStorage{},
+			},
+		}
+
+		replayRow := &ReplayRow{
+			db:      "test",
+			rp:      "autogen",
+			ptID:    0,
+			shardID: 0,
+			rows:    buildReplayRows(2),
+		}
+
+		task.replayWalRow(replayRow)
+		if task.replayWindowNum != int64(maxReplayWindowNum) {
+			t.Fatal("task.replayWindowNum and maxReplayWindowNum not equal")
+		}
+	})
+}
+
+func Test_FlushReplayData(t *testing.T) {
+	var ptID uint32 = 1
+	var shardID uint64 = 1
+	task := &TagTask{
+		values:         sync.Map{},
+		TaskDataPool:   NewTaskDataPool(),
+		cleanPreWindow: make(chan struct{}),
+		replayPtIds:    []*uint32{&ptID},
+		replayShardIds: []*uint64{&shardID},
+		BaseTask: &BaseTask{Logger: MockLogger{t},
+			updateWindow: make(chan struct{}),
+			abort:        make(chan struct{}),
+			windowNum:    10,
+			stats:        statistics.NewStreamWindowStatItem(0),
+		},
+	}
+	task.flushReplayData(0)
+}
+
+func Test_CleanReplayData(t *testing.T) {
+
+}
+
 func Benchmark_GenerateGroupKeyUint(t *testing.B) {
 	task := &TagTask{
-		corpus:        sync.Map{},
-		corpusIndexes: []string{""},
-		corpusIndex:   0,
-		BaseTask:      &BaseTask{Logger: logger.NewLogger(errno.ModuleStream).With(zap.String("service", "stream"))},
-		bp:            strings2.NewBuilderPool(),
+		stringDict: stringinterner.NewStringDict(),
+		BaseTask:   &BaseTask{Logger: logger.NewLogger(errno.ModuleStream).With(zap.String("service", "stream"))},
+		bp:         strings2.NewBuilderPool(),
 	}
 	groupByKeyNum := 5
 	var keys []string
@@ -331,11 +387,9 @@ func Benchmark_Atomic_Count(t *testing.B) {
 
 func Benchmark_FlushRow(t *testing.B) {
 	task := &TagTask{
-		values:        sync.Map{},
-		corpus:        sync.Map{},
-		corpusIndexes: []string{""},
-		corpusIndex:   0,
-		bp:            strings2.NewBuilderPool(),
+		values:     sync.Map{},
+		stringDict: stringinterner.NewStringDict(),
+		bp:         strings2.NewBuilderPool(),
 		BaseTask: &BaseTask{Logger: logger.NewLogger(errno.ModuleStream).With(zap.String("service", "stream")),
 			des: &meta2.StreamMeasurementInfo{
 				Name:            "test",
@@ -374,7 +428,7 @@ func Benchmark_FlushRow(t *testing.B) {
 	t.ResetTimer()
 	for i := 0; i < t.N; i++ {
 		task.indexKeyPool = bufferpool.GetPoints()
-		task.generateRows()
+		task.generateRows(task.startTimeStamp)
 		bufferpool.Put(task.indexKeyPool)
 		if task.validNum == 0 {
 			continue
@@ -450,4 +504,32 @@ func Benchmark_Map(t *testing.B) {
 			_ = v
 		}
 	}
+}
+
+func TestTagTask_FilterRowsByCond_FilterAgg(t *testing.T) {
+	task := &TagTask{
+		TaskDataPool:    &TaskDataPool{cache: make(chan ChanData, 2)},
+		windowCachePool: NewTaskCachePool(),
+		BaseTask: &BaseTask{
+			condition: &influxql.BinaryExpr{},
+			window:    1,
+		},
+	}
+
+	patch1 := gomonkey.ApplyFunc(filterRowsByExpr, func(rows []influx.Row, expr influxql.Expr) []int {
+		return []int{0, 1, 2}
+	})
+	patch2 := gomonkey.ApplyFunc(splitMatchedRows,
+		func(srcRows []influx.Row, matchedIndexes []int, dstMstInfo *meta2.MeasurementInfo, isSelectAll bool) []influx.Row {
+			return []influx.Row{{SeriesId: 1}, {SeriesId: 2}, {SeriesId: 3}}
+		})
+	defer func() {
+		patch1.Reset()
+		patch2.Reset()
+	}()
+
+	res, err := task.FilterRowsByCond(task.windowCachePool.Get())
+	require.NoError(t, err)
+	require.Equal(t, true, res)
+	require.Equal(t, int64(1), task.TaskDataPool.Len())
 }

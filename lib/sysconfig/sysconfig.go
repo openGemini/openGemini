@@ -16,6 +16,9 @@ package sysconfig
 
 import (
 	"sync/atomic"
+
+	"github.com/openGemini/openGemini/lib/logger"
+	"go.uber.org/zap"
 )
 
 var (
@@ -28,6 +31,9 @@ var (
 	OnForceBroadcastQuery     int64 = 1
 
 	querySchemaLimit int = 0 // query schema upper bound
+
+	InterruptQuery       = false
+	UpperMemPct    int64 = 0
 )
 
 func SetEnableBinaryTreeMerge(enabled int64) {
@@ -68,4 +74,25 @@ func SetQuerySchemaLimit(limit int) {
 
 func GetQuerySchemaLimit() int {
 	return querySchemaLimit
+}
+
+func SetInterruptQuery(interrupt bool) {
+	logger.GetLogger().Info("SetInterruptQuery:", zap.Bool("InterruptQuery", interrupt))
+	InterruptQuery = interrupt
+}
+
+func GetInterruptQuery() bool {
+	return InterruptQuery
+}
+
+func SetUpperMemPct(memPct int64) {
+	logger.GetLogger().Info("SetUpperMemPct:", zap.Int64("UpperMemPct", memPct))
+	if memPct <= 0 || memPct > 100 {
+		return
+	}
+	atomic.StoreInt64(&UpperMemPct, memPct)
+}
+
+func GetUpperMemPct() int64 {
+	return atomic.LoadInt64(&UpperMemPct)
 }

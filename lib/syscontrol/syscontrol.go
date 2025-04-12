@@ -1,4 +1,4 @@
-// Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -111,6 +111,8 @@ const (
 	ParallelQuery      = "parallelbatch"
 	Backup             = "backup"
 	AbortBackup        = "abort_backup"
+
+	WriteStreamPointsEnable = "write_stream_points_enable"
 )
 
 var (
@@ -123,9 +125,6 @@ var (
 	DisableReads  = false
 	DisableWrites = false
 
-	InterruptQuery       = false
-	UpperMemPct    int64 = 0
-
 	ParallelQueryInBatch int32 = 0 // this determines whether to use parallel query when a query is combined with multi queries
 
 	Readonly = false
@@ -136,18 +135,6 @@ var (
 
 	indexReadCachePersistent bool = true
 )
-
-func UpdateInterruptQuery(switchOn bool) {
-	InterruptQuery = switchOn
-}
-
-func SetUpperMemUsePct(d int64) {
-	logger.GetLogger().Info("SetUpperMemPct:", zap.Int64("UpperMemPct", d))
-	if d <= 0 || d > 100 {
-		return
-	}
-	atomic.StoreInt64(&UpperMemPct, d)
-}
 
 func SetDisableWrite(en bool) {
 	DisableWrites = en
@@ -479,11 +466,25 @@ func ProcessRequest(req netstorage.SysCtrlRequest, resp *strings.Builder) (err e
 		if err != nil {
 			return err
 		}
+		// update InterruptQuery status for ts-sql
+		switchOn, err := GetBoolValue(req.Param(), "switchon")
+		if err != nil {
+			return err
+		}
+		sysconfig.SetInterruptQuery(switchOn)
+		// update InterruptQuery status for all of ts-store
 		return broadcastCmdToStore(req, resp)
 	case UpperMemUsePct:
 		if err != nil {
 			return err
 		}
+		// update UpperMemUsePct for ts-sql
+		upper, err := GetIntValue(req.Param(), "limit")
+		if err != nil {
+			return err
+		}
+		sysconfig.SetUpperMemPct(upper)
+		// update UpperMemUsePct  for all of ts-store
 		return broadcastCmdToStore(req, resp)
 	case ParallelQuery:
 		enabled, err := GetBoolValue(req.Param(), "enabled")
@@ -493,6 +494,12 @@ func ProcessRequest(req netstorage.SysCtrlRequest, resp *strings.Builder) (err e
 		SetParallelQueryInBatch(enabled)
 		res := "\n\tsuccess"
 		resp.WriteString(res)
+	case WriteStreamPointsEnable:
+		_, err := GetBoolValue(req.Param(), "switchon")
+		if err != nil {
+			return err
+		}
+		return broadcastCmdToStore(req, resp)
 	default:
 		return fmt.Errorf("unknown sysctrl mod: %v", req.Mod())
 	}

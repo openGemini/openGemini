@@ -25,7 +25,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/openGemini/openGemini/app"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/httpserver"
@@ -307,7 +306,7 @@ func (h *httpHandler) userSnapshot(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *httpHandler) serveExpvar(w http.ResponseWriter, r *http.Request) {
-	app.SetStatsResponse(h.statisticsPusher, w, r)
+	httpd.SetStatsResponse(h.statisticsPusher, w, r)
 }
 
 func (h *httpHandler) executeCmdOnStore(w http.ResponseWriter, r *http.Request, f func(store IStore, enable bool) error) error {

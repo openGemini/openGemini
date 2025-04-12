@@ -37,6 +37,7 @@ type HashAggType uint32
 const (
 	Fill HashAggType = iota
 	Normal
+	SubQuery
 )
 
 const HashAggTransformBufCap = 8192
@@ -291,7 +292,10 @@ func (c *HashAggTransformCreator) Create(plan LogicalPlan, _ *query.ProcessorOpt
 var _ = RegistryTransformCreator(&LogicalHashAgg{}, &HashAggTransformCreator{})
 
 func NewHashAggTransform(
-	inRowDataType, outRowDataType []hybridqp.RowDataType, exprOpt []hybridqp.ExprOptions, s *QuerySchema, t HashAggType) (*HashAggTransform, error) {
+	inRowDataType, outRowDataType []hybridqp.RowDataType, exprOpt []hybridqp.ExprOptions, s *QuerySchema, t HashAggType) (Processor, error) {
+	if s.HasTopNDDCM() {
+		return NewTopNTransform(inRowDataType, outRowDataType, exprOpt, s, t)
+	}
 	if len(inRowDataType) == 0 || len(outRowDataType) != 1 {
 		return nil, fmt.Errorf("NewHashAggTransform raise error: input or output numbers error")
 	}

@@ -55,9 +55,9 @@ type PipelineExecutor struct {
 	context      context.Context
 	cancelFunc   context.CancelFunc
 	contextMutex sync.Mutex
-
-	aborted bool
-	crashed bool
+	Query        string
+	aborted      bool
+	crashed      bool
 
 	RunTimeStats *statistics.StatisticTimer
 }
@@ -122,6 +122,15 @@ func (exec *PipelineExecutor) closeSinkTransform() {
 }
 
 func (exec *PipelineExecutor) Crash() {
+	defer func() {
+		if e := recover(); e != nil {
+			log.Error("Crash revover",
+				zap.String("Pipelineexecutor Crash raise stack:", string(debug.Stack())),
+				zap.Error(errno.NewError(errno.RecoverPanic, e)),
+				zap.Bool("aborted", exec.aborted),
+				zap.Bool("crashed", exec.crashed))
+		}
+	}()
 	exec.contextMutex.Lock()
 	defer exec.contextMutex.Unlock()
 
@@ -130,6 +139,29 @@ func (exec *PipelineExecutor) Crash() {
 	}
 	exec.crashed = true
 	exec.cancel()
+	exec.processors.Interrupt()
+	exec.processors.Close()
+}
+
+func (exec *PipelineExecutor) NoMarkCrash() {
+	defer func() {
+		if e := recover(); e != nil {
+			log.Error("NoMarkCrash recover",
+				zap.String("PipelineExecutor NoMarkCrash raise stack:", string(debug.Stack())),
+				zap.Error(errno.NewError(errno.RecoverPanic, e)),
+				zap.Bool("aborted", exec.aborted),
+				zap.Bool("crashed", exec.crashed))
+		}
+	}()
+	exec.contextMutex.Lock()
+	defer exec.contextMutex.Unlock()
+
+	if exec.crashed {
+		return
+	}
+	exec.crashed = true
+	exec.cancel()
+	exec.processors.InterruptWithoutMark()
 	exec.processors.Interrupt()
 	exec.processors.Close()
 }
@@ -205,7 +237,8 @@ func (exec *PipelineExecutor) work(processor Processor) error {
 			log.Error("runtime panic", zap.String("PipelineExecutor Execute raise stack:", string(debug.Stack())),
 				zap.Error(errno.NewError(errno.RecoverPanic, e)),
 				zap.Bool("aborted", exec.aborted),
-				zap.Bool("crashed", exec.crashed), zap.String("query", "PipelineExecutor"))
+				zap.Bool("crashed", exec.crashed), zap.String("query", "PipelineExecutor"),
+				zap.String("query stmt", exec.Query))
 			exec.Crash()
 		}
 	}()
@@ -217,7 +250,8 @@ func (exec *PipelineExecutor) work(processor Processor) error {
 			zap.Error(err),
 			zap.Bool("aborted", exec.aborted),
 			zap.Bool("crashed", exec.crashed),
-			zap.String("query", "PipelineExecutor"))
+			zap.String("query", "PipelineExecutor"),
+			zap.String("query stmt", exec.Query))
 	}
 	return err
 }
@@ -248,7 +282,11 @@ func (exec *PipelineExecutor) Execute(ctx context.Context) error {
 				once.Do(func() {
 					processorErr = err
 					statistics.ExecutorStat.ExecFailed.Increase()
-					exec.Crash()
+					if errno.IsRetryErrorForPtView(processorErr) {
+						exec.NoMarkCrash()
+					} else {
+						exec.Crash()
+					}
 				})
 			}
 			processor.FinishSpan()
@@ -680,6 +718,8 @@ func (builder *ExecutorBuilder) SetInfosAndTraits(mstsReqs []*MultiMstReqs, ctx 
 	builder.SetTraits(multiMstTraits[0])
 
 	multiMstInfos := make([]*IndexScanExtraInfo, 0)
+	// crossShard optimizes serial scanning of multiple shards of a PT.
+	crossShard := len(mstsReqs[0].reqs) > 0 && mstsReqs[0].reqs[0].Opt.IsPromQuery()
 	for _, mstReqs := range mstsReqs {
 		for _, r := range mstReqs.reqs {
 			for i := 0; i < len(r.ShardIDs); i++ {
@@ -689,6 +729,9 @@ func (builder *ExecutorBuilder) SetInfosAndTraits(mstsReqs []*MultiMstReqs, ctx 
 					ctx:   ctx,
 				}
 				multiMstInfos = append(multiMstInfos, info)
+				if crossShard {
+					break
+				}
 			}
 		}
 	}
@@ -897,7 +940,7 @@ func (builder *ExecutorBuilder) addShardExchange(exchange Exchange) (*TransformV
 		exchange.AddTrait(shard)
 	}
 	// ts-server can also support oneShard optimization
-	if len(exchange.ETraits()) == 1 {
+	if len(exchange.ETraits()) == 1 || (exchange.Schema().Options().IsPromQuery() && len(exchange.ETraits()) > 1) {
 		builder.oneShardState = true
 		vertex, err := builder.addOneShardExchange(exchange)
 		builder.oneShardState = false
@@ -1389,10 +1432,52 @@ func (builder *ExecutorBuilder) IsMultiMstPlanNode(node hybridqp.QueryNode) bool
 	return false
 }
 
+// CanOptimizeExchange used for optimizing one shard or multiple shards in the same prom PT.
+// Eliminate redundant Merge and Agg on the IndexScan upper layer.
+func (builder *ExecutorBuilder) CanOptimizeExchange(node hybridqp.QueryNode, children []*TransformVertex) (*TransformVertex, bool) {
+	if len(node.Children()) != 1 {
+		return nil, false
+	}
+
+	exchange, ok := node.Children()[0].(Exchange)
+	if !ok {
+		return nil, false
+	}
+
+	if exchange.EType() == READER_EXCHANGE && len(builder.traits.mapShardsToReaders[builder.traits.shards[0]]) == 1 {
+		return children[0], true
+	}
+
+	if exchange.EType() != SHARD_EXCHANGE {
+		return nil, false
+	}
+
+	// isPtCrossShard is used for prom query of multiple shards in the same PT. Indexes are combined based on time series.
+	isPtCrossShard := len(builder.traits.shards) > 1 && exchange.Schema().Options().IsPromQuery()
+	if !(len(builder.traits.shards) == 1 || isPtCrossShard) {
+		return nil, false
+	}
+
+	// ts-server can also support oneShard optimization but must reserve top logicalAgg and logicalProject
+	_, ok = node.(*LogicalProject)
+	if ok {
+		return nil, false
+	}
+
+	if builder.multiMstInfosForLocalStore != nil {
+		if _, ok := node.(*LogicalAggregate); !ok {
+			return children[0], true
+		}
+	} else {
+		return children[0], true
+	}
+	return nil, false
+}
+
 func (builder *ExecutorBuilder) addDefaultNode(node hybridqp.QueryNode) (*TransformVertex, error) {
 	nodeChildren := node.Children()
 	children := make([]*TransformVertex, 0, len(node.Children()))
-	for _, nodeChild := range nodeChildren {
+	for i, nodeChild := range nodeChildren {
 		n := nodeChild.Clone()
 		n.ApplyTrait(node.Trait())
 		child, err := builder.addNodeToDag(n)
@@ -1403,27 +1488,12 @@ func (builder *ExecutorBuilder) addDefaultNode(node hybridqp.QueryNode) (*Transf
 			continue
 		}
 		children = append(children, child)
-		if builder.IsMultiMstPlanNode(node) {
+		if i < len(node.Children())-1 && builder.IsMultiMstPlanNode(node) {
 			builder.NextMst()
 		}
 	}
-	if len(node.Children()) == 1 {
-		if exchange, ok := node.Children()[0].(Exchange); ok {
-			if exchange.EType() == SHARD_EXCHANGE && len(builder.traits.shards) == 1 {
-				// ts-server can also support oneShard optimization but must reserve top logicalAgg and logicalProject
-				if _, ok := node.(*LogicalProject); !ok {
-					if builder.multiMstInfosForLocalStore != nil {
-						if _, ok := node.(*LogicalAggregate); !ok {
-							return children[0], nil
-						}
-					} else {
-						return children[0], nil
-					}
-				}
-			} else if exchange.EType() == READER_EXCHANGE && len(builder.traits.mapShardsToReaders[builder.traits.shards[0]]) == 1 {
-				return children[0], nil
-			}
-		}
+	if res, ok := builder.CanOptimizeExchange(node, children); ok {
+		return res, nil
 	}
 	vertex, err := builder.addDefaultToDag(node)
 	if err != nil {

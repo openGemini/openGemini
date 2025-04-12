@@ -3642,6 +3642,136 @@ func buildHistogramInChunk(floatValues []float64) []executor.Chunk {
 	return inChunks
 }
 
+func buildHistogramInChunk2(floatValues []float64) executor.Chunk {
+	rowDataType := buildHistogramRowDataType()
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	// first chunk
+	inCk1 := b.NewChunk("mst")
+	inCk1.AppendTagsAndIndexes(
+		[]executor.ChunkTags{
+			*ParseChunkTags("job=prometheus,notle=abc"), *ParseChunkTags("job=prometheus,notle=abc"),
+			*ParseChunkTags("job=prometheus,notle=abc"), *ParseChunkTags("job=prometheus,notle=abc"),
+			*ParseChunkTags("job=prometheus,notle=abc"), *ParseChunkTags("job=prometheus,notle=abc"),
+			*ParseChunkTags("job=prometheus,notle=abc"), *ParseChunkTags("job=prometheus,notle=abc"),
+			*ParseChunkTags("job=prometheus,notle=abc"), *ParseChunkTags("job=prometheus,notle=abc"),
+		},
+		[]int{0, 6, 12, 18, 24, 30, 36, 42, 48, 54})
+
+	intervalIndex := make([]int, 0, 60)
+	for i := 0; i < 60; i++ {
+		intervalIndex = append(intervalIndex, i)
+	}
+
+	inCk1.AppendIntervalIndexes(intervalIndex)
+
+	times := make([]int64, 0, 60)
+	for i := 0; i < 10; i++ {
+		var initTime int64 = 1713768282462000000
+		for j := 0; j < 6; j++ {
+			times = append(times, initTime+15*int64(time.Second)*int64(j))
+		}
+	}
+	inCk1.AppendTimes(times)
+
+	inCk1.Column(0).AppendFloatValues(floatValues)
+	inCk1.Column(0).AppendManyNotNil(60)
+
+	return inCk1
+}
+
+func buildHistogramInChunk3(floatValues []float64) []executor.Chunk {
+	inChunks := make([]executor.Chunk, 0, 2)
+	rowDataType := buildHistogramRowDataType()
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	// first chunk
+	inCk1 := b.NewChunk("mst")
+	inCk1.AppendTagsAndIndexes(
+		[]executor.ChunkTags{
+			*ParseChunkTags("job=prometheus,le=+Inf"), *ParseChunkTags("job=prometheus,le=0.1"),
+			*ParseChunkTags("job=prometheus,le=0.2"), *ParseChunkTags("job=prometheus,le=0.4"),
+			*ParseChunkTags("job=prometheus,le=1"), *ParseChunkTags("job=prometheus,le=120"),
+			*ParseChunkTags("job=prometheus,le=20"), *ParseChunkTags("job=prometheus,le=3"),
+			*ParseChunkTags("job=prometheus,le=60"), *ParseChunkTags("job=prometheus,le=8"),
+		},
+		[]int{0, 6, 12, 18, 24, 30, 36, 42, 48, 54})
+
+	intervalIndex := make([]int, 0, 61)
+	for i := 0; i < 61; i++ {
+		intervalIndex = append(intervalIndex, i)
+	}
+
+	inCk1.AppendIntervalIndexes(intervalIndex)
+
+	times := make([]int64, 0, 60)
+	for i := 0; i < 10; i++ {
+		var initTime int64 = 1713768282462000000
+		for j := 0; j < 6; j++ {
+			times = append(times, initTime+15*int64(time.Second)*int64(j))
+		}
+	}
+	times = append(times, 1713768372462000000)
+	inCk1.AppendTimes(times)
+
+	inCk1.Column(0).AppendFloatValues(floatValues)
+	inCk1.Column(0).AppendManyNotNil(61)
+
+	inChunks = append(inChunks, inCk1)
+	return inChunks
+}
+
+func buildHistogramInChunk4(floatValues []float64) []executor.Chunk {
+	inChunks := make([]executor.Chunk, 0, 2)
+	rowDataType := buildHistogramRowDataType()
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	// first chunk
+	inCk1 := b.NewChunk("mst")
+	inCk1.AppendTagsAndIndexes(
+		[]executor.ChunkTags{
+			*ParseChunkTags("job=prometheus,le=+Inf"), *ParseChunkTags("job=prometheus,le=0.1"),
+			*ParseChunkTags("job=prometheus,le=0.2"), *ParseChunkTags("job=prometheus,le=0.4"),
+			*ParseChunkTags("job=prometheus,le=1"), *ParseChunkTags("job=prometheus,le=120"),
+			*ParseChunkTags("job=prometheus,le=20"), *ParseChunkTags("job=prometheus,le=3"),
+			*ParseChunkTags("job=prometheus,le=60"), *ParseChunkTags("job=prometheus,le=8"),
+		},
+		[]int{0, 6, 13, 19, 25, 31, 37, 43, 49, 55})
+
+	intervalIndex := make([]int, 0, 61)
+	for i := 0; i < 61; i++ {
+		intervalIndex = append(intervalIndex, i)
+	}
+
+	inCk1.AppendIntervalIndexes(intervalIndex)
+
+	times := make([]int64, 0, 60)
+	for i := 0; i < 10; i++ {
+		var initTime int64 = 1713768282462000000
+		for j := 0; j < 7; j++ {
+			if i == 1 && j == 1 {
+				times = append(times, 1713768297462000000)
+			}
+			if j == 1 {
+				continue
+			}
+			times = append(times, initTime+15*int64(time.Second)*int64(j))
+		}
+
+	}
+
+	inCk1.AppendTimes(times)
+
+	inCk1.Column(0).AppendFloatValues(floatValues)
+	inCk1.Column(0).AppendManyNotNil(61)
+
+	inChunks = append(inChunks, inCk1)
+	return inChunks
+}
+
 func buildHistogramDstChunk(res float64) []executor.Chunk {
 	dstChunks := make([]executor.Chunk, 0, 2)
 	rowDataType := buildHistogramRowDataType()
@@ -3676,6 +3806,34 @@ func buildHistogramDstChunk(res float64) []executor.Chunk {
 	}
 	inCk1.Column(0).AppendFloatValues(floatValues)
 	inCk1.Column(0).AppendManyNotNil(6)
+
+	dstChunks = append(dstChunks, inCk1)
+	return dstChunks
+}
+
+func buildHistogramDstChunk2(floatValues []float64, times []int64) []executor.Chunk {
+	dstChunks := make([]executor.Chunk, 0, 2)
+	rowDataType := buildHistogramRowDataType()
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	// first chunk
+	inCk1 := b.NewChunk("mst")
+	inCk1.AppendTagsAndIndexes(
+		[]executor.ChunkTags{
+			*ParseChunkTags("job=prometheus"),
+		},
+		[]int{0})
+
+	intervalIndex := make([]int, 0, 7)
+	for i := 0; i < 7; i++ {
+		intervalIndex = append(intervalIndex, i)
+	}
+
+	inCk1.AppendIntervalIndexes(intervalIndex)
+	inCk1.AppendTimes(times)
+	inCk1.Column(0).AppendFloatValues(floatValues)
+	inCk1.Column(0).AppendManyNotNil(7)
 
 	dstChunks = append(dstChunks, inCk1)
 	return dstChunks
@@ -3833,6 +3991,289 @@ func TestStreamAggregateTransformHistogram(t *testing.T) {
 			exprOpt, &opt, false,
 		)
 	})
+
+	t.Run("7", func(t *testing.T) {
+		floatValues := make([]float64, 0, 60)
+		for i := 0; i < 10; i++ {
+			for j := 0; j < 6; j++ {
+				if i == 0 {
+					floatValues = append(floatValues, 5)
+				} else {
+					floatValues = append(floatValues, 3)
+				}
+
+			}
+		}
+		inChunks := buildHistogramInChunk(floatValues)
+		inChunk2 := buildHistogramInChunk2(floatValues)
+		inChunks = append(inChunks, inChunk2)
+		dstChunks := buildHistogramDstChunk(120)
+		exprOpt := []hybridqp.ExprOptions{
+			{
+				Expr: &influxql.Call{Name: "histogram_quantile", Args: []influxql.Expr{hybridqp.MustParseExpr("value"), hybridqp.MustParseExpr("0.9")}},
+				Ref:  influxql.VarRef{Val: `histogram_quantile("value")`, Type: influxql.Float},
+			},
+		}
+
+		testStreamAggregateTransformBase(
+			t,
+			inChunks, dstChunks,
+			buildHistogramRowDataType(), buildHistogramQuantileRowDataType(),
+			exprOpt, &opt, false,
+		)
+	})
+
+	t.Run("8", func(t *testing.T) {
+		floatValues := make([]float64, 0, 60)
+		for i := 0; i < 10; i++ {
+			for j := 0; j < 6; j++ {
+				if i == 0 {
+					floatValues = append(floatValues, 5)
+				} else {
+					floatValues = append(floatValues, 3)
+				}
+
+			}
+		}
+		floatValues = append(floatValues, 9)
+
+		inChunks := buildHistogramInChunk3(floatValues)
+		inChunk2 := buildHistogramInChunk2(floatValues)
+		inChunks = append(inChunks, inChunk2)
+
+		res := make([]float64, 0, 6)
+		for i := 0; i < 6; i++ {
+			res = append(res, 120)
+		}
+		res = append(res, math.NaN())
+		times := make([]int64, 0, 7)
+		var initTime int64 = 1713768282462000000
+		for j := 0; j < 6; j++ {
+			times = append(times, initTime+15*int64(time.Second)*int64(j))
+		}
+		times = append(times, 1713768372462000000)
+		dstChunks := buildHistogramDstChunk2(res, times)
+		exprOpt := []hybridqp.ExprOptions{
+			{
+				Expr: &influxql.Call{Name: "histogram_quantile", Args: []influxql.Expr{hybridqp.MustParseExpr("value"), hybridqp.MustParseExpr("0.9")}},
+				Ref:  influxql.VarRef{Val: `histogram_quantile("value")`, Type: influxql.Float},
+			},
+		}
+
+		testStreamAggregateTransformProm(
+			t,
+			inChunks, dstChunks,
+			buildHistogramRowDataType(), buildHistogramQuantileRowDataType(),
+			exprOpt, &opt, false,
+		)
+	})
+
+	t.Run("9", func(t *testing.T) {
+		floatValues := make([]float64, 0, 60)
+		for i := 0; i < 10; i++ {
+			for j := 0; j < 6; j++ {
+				if i == 0 {
+					floatValues = append(floatValues, 5)
+				} else if i == 1 && j == 1 {
+					floatValues = append(floatValues, 9)
+					floatValues = append(floatValues, 3)
+				} else {
+					floatValues = append(floatValues, 3)
+				}
+			}
+		}
+
+		inChunks := buildHistogramInChunk4(floatValues)
+		inChunk2 := buildHistogramInChunk2(floatValues)
+		inChunks = append(inChunks, inChunk2)
+
+		res := make([]float64, 0, 6)
+		for i := 0; i < 6; i++ {
+			if i == 1 {
+				res = append(res, math.NaN())
+			}
+			res = append(res, 120)
+		}
+		times := make([]int64, 0, 7)
+		var initTime int64 = 1713768282462000000
+		for j := 0; j < 7; j++ {
+			times = append(times, initTime+15*int64(time.Second)*int64(j))
+		}
+
+		dstChunks := buildHistogramDstChunk2(res, times)
+		exprOpt := []hybridqp.ExprOptions{
+			{
+				Expr: &influxql.Call{Name: "histogram_quantile", Args: []influxql.Expr{hybridqp.MustParseExpr("value"), hybridqp.MustParseExpr("0.9")}},
+				Ref:  influxql.VarRef{Val: `histogram_quantile("value")`, Type: influxql.Float},
+			},
+		}
+
+		testStreamAggregateTransformProm(
+			t,
+			inChunks, dstChunks,
+			buildHistogramRowDataType(), buildHistogramQuantileRowDataType(),
+			exprOpt, &opt, false,
+		)
+	})
+
+}
+
+func buildDstRowDataTypeAbsentProm() hybridqp.RowDataType {
+	schema := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "absent_prom(\"height\")", Type: influxql.Float},
+	)
+	return schema
+}
+
+func buildAbsentPromInChunk() []executor.Chunk {
+	inChunks := make([]executor.Chunk, 0, 2)
+	rowDataType := buildFloatRowDataType()
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	// first chunk
+	inCk1 := b.NewChunk("mst")
+	inCk1.AppendTagsAndIndexes(
+		[]executor.ChunkTags{
+			*ParseChunkTags("country=american"),
+			*ParseChunkTags("country=china")},
+		[]int{0, 4})
+	inCk1.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5})
+	inCk1.AppendTimes([]int64{3, 5, 7, 9, 1, 3})
+
+	inCk1.Column(0).AppendFloatValues([]float64{102, 102, 52.7, 50, 50, 50})
+	inCk1.Column(0).AppendManyNotNil(6)
+
+	// second chunk
+	inCk2 := b.NewChunk("mst")
+	inCk2.AppendTagsAndIndexes(
+		[]executor.ChunkTags{
+			*ParseChunkTags("country=china"),
+			*ParseChunkTags("country=japan")},
+		[]int{0, 2})
+	inCk2.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5})
+	inCk2.AppendTimes([]int64{7, 9, 1, 3, 5, 7})
+
+	inCk2.Column(0).AppendFloatValues([]float64{48.8, 48.8, 48.8, 48.8, 30, 50})
+	inCk2.Column(0).AppendManyNotNil(6)
+
+	inChunks = append(inChunks, inCk1, inCk2)
+
+	return inChunks
+}
+
+func buildAbsentPromDstChunk() []executor.Chunk {
+	rowDataType := buildDstRowDataTypeIrate()
+	dstChunks := make([]executor.Chunk, 0, 1)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	chunk := b.NewChunk("mst")
+
+	chunk.AppendTagsAndIndexes(
+		[]executor.ChunkTags{
+			*executor.NewChunkTagsByTagKVs([]string{}, []string{}),
+		},
+		[]int{0})
+	chunk.AppendIntervalIndexes([]int{0})
+	chunk.AppendTimes([]int64{11})
+
+	chunk.Column(0).AppendFloatValues([]float64{1})
+	chunk.Column(0).AppendManyNotNil(1)
+
+	dstChunks = append(dstChunks, chunk)
+	return dstChunks
+}
+
+func TestStreamAggregateTransformAbsentProm(t *testing.T) {
+	exprOpt := []hybridqp.ExprOptions{
+		{
+			Expr: &influxql.Call{Name: "absent_prom", Args: []influxql.Expr{hybridqp.MustParseExpr("height"), &influxql.StringLiteral{Val: "value"}}},
+			Ref:  influxql.VarRef{Val: `absent_prom("height")`, Type: influxql.Float},
+		},
+	}
+
+	opt := query.ProcessorOptions{
+		Dimensions: []string{"country"},
+		Interval:   hybridqp.Interval{Duration: 20 * time.Nanosecond},
+		ChunkSize:  6,
+		Step:       1,
+		StartTime:  1,
+		EndTime:    4,
+	}
+	t.Run("1", func(t *testing.T) {
+		inChunks := buildFloatInChunk()
+		testStreamAggregateTransformBase(
+			t,
+			inChunks, nil,
+			buildFloatRowDataType(), buildDstRowDataTypeAbsentProm(),
+			exprOpt, &opt, false,
+		)
+	})
+
+	t.Run("2", func(t *testing.T) {
+		inChunks := buildAbsentPromInChunk()
+		dstChunks := buildAbsentPromDstChunk()
+
+		opt := query.ProcessorOptions{
+			Dimensions: []string{"country"},
+			Interval:   hybridqp.Interval{Duration: 20 * time.Nanosecond},
+			ChunkSize:  6,
+			Step:       2,
+			StartTime:  1,
+			EndTime:    11,
+		}
+		testStreamAggregateTransformBase(
+			t,
+			inChunks, dstChunks,
+			buildFloatRowDataType(), buildDstRowDataTypeAbsentProm(),
+			exprOpt, &opt, false,
+		)
+	})
+
+	t.Run("absentNoData", func(t *testing.T) {
+		dstChunks := buildAbsentPromDstChunkWithNoData()
+		expr := hybridqp.MustParseExpr("test = a")
+		opt := query.ProcessorOptions{
+			Dimensions: []string{"country"},
+			Interval:   hybridqp.Interval{Duration: 20 * time.Nanosecond},
+			ChunkSize:  6,
+			Step:       2,
+			StartTime:  1,
+			EndTime:    11,
+			Condition:  expr,
+		}
+		testStreamAggregateTransformBase(
+			t,
+			nil, dstChunks,
+			buildFloatRowDataType(), buildDstRowDataTypeAbsentProm(),
+			exprOpt, &opt, false,
+		)
+	})
+}
+
+func buildAbsentPromDstChunkWithNoData() []executor.Chunk {
+	inChunks := make([]executor.Chunk, 0, 2)
+	rowDataType := buildFloatRowDataType()
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	inCk1 := b.NewChunk("")
+	keys := make([]string, 0)
+	values := make([]string, 0)
+	chunkTags := executor.NewChunkTagsByTagKVs(keys, values)
+	//c := &executor.ChunkTags{}
+	//c.encodeTagsByTagKVs(k, v)
+	inCk1.AppendTagsAndIndex(*chunkTags, 0)
+	inCk1.AppendIntervalIndexes([]int{0, 1, 2, 3, 4, 5})
+	inCk1.AppendTimes([]int64{1, 3, 5, 7, 9, 11})
+
+	inCk1.Column(0).AppendFloatValues([]float64{1, 1, 1, 1, 1, 1})
+	inCk1.Column(0).AppendManyNotNil(6)
+
+	inChunks = append(inChunks, inCk1)
+
+	return inChunks
 }
 
 func buildDstRowDataTypeCountValues() hybridqp.RowDataType {

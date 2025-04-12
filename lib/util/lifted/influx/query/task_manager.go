@@ -126,7 +126,7 @@ func (t *TaskManager) ExecuteStatement(stmt influxql.Statement, ctx *ExecutionCo
 
 		ctx.Send(&Result{
 			Series: rows,
-		}, seq)
+		}, seq, nil)
 	case *influxql.KillQueryStatement:
 		var messages []*Message
 		if ctx.ReadOnly {
@@ -138,7 +138,7 @@ func (t *TaskManager) ExecuteStatement(stmt influxql.Statement, ctx *ExecutionCo
 		}
 		ctx.Send(&Result{
 			Messages: messages,
-		}, seq)
+		}, seq, nil)
 	default:
 		return ErrInvalidQuery
 	}
@@ -247,7 +247,6 @@ func (t *TaskManager) AttachQuery(q *influxql.Query, opt ExecutionOptions, inter
 			})
 		}
 	}
-
 	qCtx := context.Background()
 	qCtx = context.WithValue(qCtx, QueryIDKey, qids)
 	qCtx = context.WithValue(qCtx, QueryDurationKey, qStat)

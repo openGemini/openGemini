@@ -125,7 +125,7 @@ uint32_t FullTextIndex::InsertPostingList(MemPool *pool, Invert *root, ListNode 
             if (node == nullptr) {
                 ele = pool->GetInvertElement();
                 ele->token = vtoken[i].tokens[j];
-                ListInsertToTail(&hashSections[ele->token.data[0]], &ele->hashSection);
+                ListInsertToTail(&hashSections[uint8_t(ele->token.data[0])], &ele->hashSection);
                 hashTable->InsertByToken(&ele->node, &(vtoken[i].tokens[j]));
                 nodeCount++;
             } else {

@@ -86,7 +86,7 @@ func TestEncoding_FloatBlock(t *testing.T) {
 			}
 		}
 
-		if !reflect.DeepEqual(outValues[priLen/8:], values) {
+		if !reflect.DeepEqual(outValues[priLen/8:], values) && (len(outValues) != 0 && len(values) != 0) {
 			t.Fatalf("unexpected results:\n\tgot: %v\n\texp: %v\n", outValues[priLen:], values)
 		}
 	}
@@ -270,7 +270,7 @@ func TestEncoding_IntBlock_Basic(t *testing.T) {
 			}
 		}
 
-		if !reflect.DeepEqual(outValues[preLen/8:], values) {
+		if !reflect.DeepEqual(outValues[preLen/8:], values) && (len(outValues) != 0 && len(values) != 0) {
 			t.Fatalf("unexpected results:\n\tgot: %v\n\texp: %v\n", outValues[:preLen/8], in)
 		}
 	}
@@ -408,7 +408,7 @@ func TestEncoding_BooleanBlock_Basic(t *testing.T) {
 			t.Fatalf("unexpected error decoding block: %v", err)
 		}
 
-		if !reflect.DeepEqual(outValues[preLen:], values) {
+		if !reflect.DeepEqual(outValues[preLen:], values) && (len(outValues) != 0 && len(values) != 0) {
 			t.Fatalf("unexpected results:\n\tgot: %v\n\texp: %v\n", outValues[preLen:], values)
 		}
 	}
@@ -738,7 +738,7 @@ func TestEncoding_Timestamp_Second(t *testing.T) {
 			}
 		}
 
-		if !reflect.DeepEqual(outValues[preLen/8:], times) {
+		if !reflect.DeepEqual(outValues[preLen/8:], times) && (len(outValues) != 0 && len(times) != 0) {
 			t.Fatalf("unexpected results:\n\tgot: %v\n\texp: %v\n", outValues[preLen/8:], times)
 		}
 

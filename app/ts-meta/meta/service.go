@@ -50,14 +50,15 @@ type Service struct {
 	RaftListener net.Listener
 	closing      chan struct{}
 
-	Version        string
-	config         *config.Meta
-	raftAddr       string
-	Logger         *logger.Logger
-	store          *Store
-	clusterManager *ClusterManager
-	msm            *MigrateStateMachine
-	balanceManager *BalanceManager
+	Version                string
+	config                 *config.Meta
+	raftAddr               string
+	Logger                 *logger.Logger
+	store                  *Store
+	clusterManager         *ClusterManager
+	msm                    *MigrateStateMachine
+	balanceManager         *BalanceManager
+	masterPtBalanceManager *MasterPtBalanceManager
 
 	httpServer *httpServer
 	metaServer *MetaServer
@@ -66,16 +67,19 @@ type Service struct {
 	tlsConfig        *tls.Config
 	statisticsPusher *statisticsPusher.StatisticsPusher
 	handler          *httpHandler
+
+	gossipConfig *config.Gossip
 }
 
 // NewService returns a new instance of Service.
-func NewService(c *config.Meta, tlsConfig *tls.Config) *Service {
+func NewService(c *config.Meta, gc *config.Gossip, tlsConfig *tls.Config) *Service {
 	globalService = &Service{
-		closing:   make(chan struct{}),
-		config:    c,
-		tlsConfig: tlsConfig,
-		raftAddr:  c.BindAddress,
-		Logger:    logger.NewLogger(errno.ModuleMeta).With(zap.String("service", "meta")),
+		closing:      make(chan struct{}),
+		config:       c,
+		gossipConfig: gc,
+		tlsConfig:    tlsConfig,
+		raftAddr:     c.BindAddress,
+		Logger:       logger.NewLogger(errno.ModuleMeta).With(zap.String("service", "meta")),
 	}
 	if globalService.tlsConfig == nil {
 		globalService.tlsConfig = new(tls.Config)
@@ -89,7 +93,7 @@ func (s *Service) initStore(ar *AddrRewriter) {
 		ar.RewriteHost(s.config.HTTPBindAddress),
 		ar.RewriteHost(s.config.RPCBindAddress),
 		s.raftAddr)
-
+	s.store.GossipConfig = s.gossipConfig
 	s.store.Logger = s.Logger
 	meta.DataLogger = logger.GetLogger().With(zap.String("service", "data"))
 	s.store.Node = s.Node
@@ -103,6 +107,7 @@ func (s *Service) startMetaServer() error {
 
 	s.clusterManager = NewClusterManager(s.store)
 	s.balanceManager = NewBalanceManager(s.config.BalanceAlgo)
+	s.masterPtBalanceManager = NewMasterPtBalanceManager()
 	s.msm = NewMigrateStateMachine()
 	s.store.cm = s.clusterManager
 	return nil
@@ -204,6 +209,9 @@ func (s *Service) Close() error {
 	}
 	if s.balanceManager != nil {
 		s.balanceManager.Stop()
+	}
+	if s.masterPtBalanceManager != nil {
+		s.masterPtBalanceManager.Stop()
 	}
 	if s.msm != nil {
 		s.msm.Stop()

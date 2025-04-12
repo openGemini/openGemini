@@ -2,11 +2,14 @@ package influxql_test
 
 import (
 	"fmt"
+	"math"
+	"strings"
 	"sync"
 	"testing"
 
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestParseExpr(t *testing.T) {
@@ -50,4 +53,27 @@ func BenchmarkParseExpr(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		_, _ = influxql.ParseExpr(cond)
 	}
+}
+
+func TestInfAndNan(t *testing.T) {
+	s := "value::float * -Inf AS value"
+	rhs := setupParse(s)
+	require.Equal(t, rhs.Val, math.Inf(-1))
+
+	s1 := "value::float * +Inf AS value"
+	rhs1 := setupParse(s1)
+	require.Equal(t, rhs1.Val, math.Inf(1))
+
+	s2 := "value::float * NaN AS value"
+	rhs2 := setupParse(s2)
+	require.True(t, math.IsNaN(rhs2.Val))
+}
+
+func setupParse(s string) *influxql.NumberLiteral {
+	p := influxql.NewParser(strings.NewReader("SELECT " + s + " FROM mock"))
+	expr, _ := p.ParseStatement()
+	statement := expr.(*influxql.SelectStatement)
+	binaryExpr := statement.Fields[0].Expr.(*influxql.BinaryExpr)
+	rhs := binaryExpr.RHS.(*influxql.NumberLiteral)
+	return rhs
 }

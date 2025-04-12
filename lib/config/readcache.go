@@ -29,6 +29,7 @@ var ReadDataCachePct = DefaultReadDataCachePercent
 
 type ReadCache struct {
 	ReadPageSize       string    `toml:"read-page-size"`
+	ReadMetaPageSize   []string  `toml:"read-meta-page-size"`
 	ReadMetaCacheEn    toml.Size `toml:"enable-meta-cache"`
 	ReadMetaCacheEnPct toml.Size `toml:"read-meta-cache-limit-pct"`
 	ReadDataCacheEn    toml.Size `toml:"enable-data-cache"`
@@ -40,6 +41,7 @@ func NewReadCacheConfig() ReadCache {
 	memorySize := toml.Size(size * KB)
 	return ReadCache{
 		ReadPageSize:       "32kb",
+		ReadMetaPageSize:   []string{},
 		ReadMetaCacheEn:    toml.Size(1),
 		ReadMetaCacheEnPct: DefaultReadMetaCachePercent,
 		ReadDataCacheEn:    toml.Size(getReadMetaCacheLimitSize(uint64(memorySize))),

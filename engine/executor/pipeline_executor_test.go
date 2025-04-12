@@ -21,13 +21,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/influxdata/influxdb/pkg/testing/assert"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/lib/sysconfig"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	qry "github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -69,6 +70,7 @@ func MockNewExecutorBuilder() (hybridqp.PipelineExecutorBuilder, *executor.Query
 	var executorBuilder *executor.ExecutorBuilder = executor.NewMocStoreExecutorBuilder(traits, nil, nil, 0)
 	return executorBuilder, schema, traits
 }
+
 func buildRowDataType() hybridqp.RowDataType {
 	rowDataType := hybridqp.NewRowDataTypeImpl(
 		influxql.VarRef{Val: "id", Type: influxql.Integer},
@@ -78,6 +80,7 @@ func buildRowDataType() hybridqp.RowDataType {
 
 	return rowDataType
 }
+
 func buildSubQueryRowDataType() hybridqp.RowDataType {
 	rowDataType := hybridqp.NewRowDataTypeImpl(
 		influxql.VarRef{Val: "id", Type: influxql.Integer},
@@ -88,6 +91,7 @@ func buildSubQueryRowDataType() hybridqp.RowDataType {
 
 	return rowDataType
 }
+
 func buildRowDataType1() hybridqp.RowDataType {
 	rowDataType := hybridqp.NewRowDataTypeImpl(
 		influxql.VarRef{Val: "val0", Type: influxql.Integer},
@@ -2108,6 +2112,26 @@ func TestExecutorBuilder_addPartitionExchange1(t *testing.T) {
 	require.Equal(t, pipelineExecutor.GetProcessors().Empty(), true)
 }
 
+type MockProcessor struct {
+	executor.Processor
+}
+
+func (m *MockProcessor) Close() {
+	panic("err")
+}
+
+func TestPipelineExecutorCrash(t *testing.T) {
+	pe := executor.NewPipelineExecutor(executor.Processors{&MockProcessor{}})
+	pe.Crash()
+	assert.Equal(t, pe.Crashed(), true)
+
+	sysconfig.SetInterruptQuery(true)
+	defer sysconfig.SetInterruptQuery(true)
+	pe = executor.NewPipelineExecutor(executor.Processors{&MockProcessor{}})
+	pe.Crash()
+	assert.Equal(t, pe.Crashed(), true)
+}
+
 func TestIsMultiMstPlanNode(t *testing.T) {
 	node := &executor.LogicalBinOp{}
 	builder := &executor.ExecutorBuilder{}
@@ -2155,4 +2179,84 @@ func TestExecutorBuilder_Except_Limit(t *testing.T) {
 	p, _ = builder.Build(sender1)
 	pipelineExecutor = p.(*executor.PipelineExecutor)
 	require.Equal(t, pipelineExecutor.GetProcessors().Empty(), false)
+}
+
+func TestNoMarkCrashPipeline(t *testing.T) {
+	source := executor.NewRetryErrTransform()
+	var processors executor.Processors
+	processors = append(processors, source)
+	executor := executor.NewPipelineExecutor(processors)
+	err := executor.Execute(context.Background())
+	assert.Equal(t, err.Error(), "DBPT is being closing or closed")
+	executor.NoMarkCrash()
+}
+
+func TestCanOptimizeOneIndexCan(t *testing.T) {
+	var schema *executor.QuerySchema
+	var builder hybridqp.PipelineExecutorBuilder
+	var traits *executor.StoreExchangeTraits
+	builder, schema, traits = MockNewExecutorBuilder()
+	input := executor.NewLogicalReader(nil, schema)
+	agg := executor.NewLogicalAggregate(input, schema)
+	exchange := executor.NewLogicalExchange(agg, executor.READER_EXCHANGE, []hybridqp.Trait{traits}, schema)
+
+	children := make([]*executor.TransformVertex, 1)
+	_, ok := builder.(*executor.ExecutorBuilder).CanOptimizeExchange(input, children)
+	assert.Equal(t, ok, false)
+
+	_, ok = builder.(*executor.ExecutorBuilder).CanOptimizeExchange(exchange, children)
+	assert.Equal(t, ok, false)
+
+	exchange = executor.NewLogicalExchange(exchange, executor.SHARD_EXCHANGE, []hybridqp.Trait{traits}, schema)
+	_, ok = builder.(*executor.ExecutorBuilder).CanOptimizeExchange(exchange, children)
+	assert.Equal(t, ok, true)
+
+	exchange = executor.NewLogicalExchange(input, executor.NODE_EXCHANGE, []hybridqp.Trait{traits}, schema)
+	exchange = executor.NewLogicalExchange(exchange, executor.SHARD_EXCHANGE, []hybridqp.Trait{traits}, schema)
+	_, ok = builder.(*executor.ExecutorBuilder).CanOptimizeExchange(exchange, children)
+	assert.Equal(t, ok, false)
+
+	exchange = executor.NewLogicalExchange(input, executor.SHARD_EXCHANGE, []hybridqp.Trait{traits}, schema)
+	exchange = executor.NewLogicalExchange(exchange, executor.SHARD_EXCHANGE, []hybridqp.Trait{traits}, schema)
+	builder.(*executor.ExecutorBuilder).SetMultiMstInfosForLocalStore(make([]*executor.IndexScanExtraInfo, 1))
+	_, ok = builder.(*executor.ExecutorBuilder).CanOptimizeExchange(exchange, children)
+	assert.Equal(t, ok, true)
+
+	exchange = executor.NewLogicalExchange(input, executor.SHARD_EXCHANGE, []hybridqp.Trait{traits}, schema)
+	project := executor.NewLogicalProject(exchange, schema)
+	_, ok = builder.(*executor.ExecutorBuilder).CanOptimizeExchange(project, children)
+	assert.Equal(t, ok, false)
+}
+
+func TestExecutorBuilder_SetInfosAndTraits(t *testing.T) {
+	type args struct {
+		mstsReqs []*executor.MultiMstReqs
+		ctx      context.Context
+	}
+	mstsReqs := executor.NewMultiMstReqs()
+	mstsReqs.SetReqs([]*executor.RemoteQuery{
+		{
+			PtQuerys: []executor.PtQuery{{PtID: 0, ShardInfos: []executor.ShardInfo{{ID: 1}}}},
+			ShardIDs: []uint64{1},
+			Opt:      query.ProcessorOptions{PromQuery: true},
+		},
+	})
+	tests := []struct {
+		name string
+		args args
+	}{
+		{
+			name: "1",
+			args: args{
+				mstsReqs: []*executor.MultiMstReqs{mstsReqs},
+				ctx:      context.Background(),
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			builder := &executor.ExecutorBuilder{}
+			builder.SetInfosAndTraits(tt.args.mstsReqs, tt.args.ctx)
+		})
+	}
 }

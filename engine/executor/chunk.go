@@ -33,6 +33,13 @@ import (
 
 //go:generate tmpl -data=@./tmpldata column.gen.go.tmpl
 
+type PromStepInvariantType int
+
+const (
+	SkipLastGroup PromStepInvariantType = iota
+	OnlyLastGroup
+)
+
 func init() {
 	initColumnTypeFunc()
 }
@@ -209,6 +216,7 @@ type Chunk interface {
 	CreatePointRowIterator(string, *FieldsValuer) PointRowIterator
 
 	CopyByRowDataType(c Chunk, fromRt hybridqp.RowDataType, dstRt hybridqp.RowDataType) error
+	PromStepInvariant(typ PromStepInvariantType, preGroup []byte, nextGroup []byte, step, startT, endT int64, dst Chunk) Chunk
 }
 
 type ChunkWriter interface {
@@ -661,6 +669,71 @@ func (c *ChunkImpl) String() string {
 
 func (c *ChunkImpl) CreatePointRowIterator(name string, valuer *FieldsValuer) PointRowIterator {
 	return NewChunkIteratorFromValuer(c, name, valuer)
+}
+
+func (c *ChunkImpl) CopyTags(dst Chunk, tagLoc int) Chunk {
+	tags := ChunkTags{subset: make([]byte, 0, len(c.tags[tagLoc].subset)), offsets: make([]uint16, 0, len(c.tags[tagLoc].offsets))}
+	tags.subset = append(tags.subset, c.tags[tagLoc].subset...)
+	tags.offsets = append(tags.offsets, c.tags[tagLoc].offsets...)
+	dst.AddTagAndIndex(tags, dst.Len())
+	return dst
+}
+
+func (c *ChunkImpl) CopyGroup(dst Chunk, tagLoc, start, end int) Chunk {
+	dst = c.CopyTags(dst, tagLoc)
+	for ; start < end; start++ {
+		dst.Column(0).AppendFloatValue(c.columns[0].FloatValue(start))
+		dst.Column(0).AppendNotNil()
+		dst.AppendTime(c.time[start])
+	}
+	return dst
+}
+
+func (c *ChunkImpl) PromStepInvariantSkipLastGroup(preGroup []byte, step, startT, endT int64, dst Chunk) Chunk {
+	for i := 0; i < c.TagLen()-1; i++ {
+		val := c.columns[0].FloatValue(c.tagIndex[i])
+		time := c.time[c.tagIndex[i]]
+		start := c.tagIndex[i]
+		end := c.tagIndex[i+1]
+		if bytes.Equal(preGroup, c.tags[i].subset) || end-start != 1 || time != startT {
+			dst = c.CopyGroup(dst, i, c.tagIndex[i], c.tagIndex[i+1])
+		} else {
+			dst = c.CopyTags(dst, i)
+			preStartT := startT
+			for startT += step; startT <= endT; startT += step {
+				dst.Column(0).AppendFloatValue(val)
+				dst.Column(0).AppendNotNil()
+				dst.AppendTime(time)
+			}
+			startT = preStartT
+		}
+		preGroup = c.tags[i].subset
+	}
+	dst = c.CopyGroup(dst, c.TagLen()-1, c.tagIndex[c.TagLen()-1], c.Len())
+	return dst
+}
+
+func (c *ChunkImpl) PromStepInvariantOnlyLastGroup(preGroup []byte, nextGroup []byte, step, startT, endT int64) Chunk {
+	if bytes.Equal(c.tags[c.TagLen()-1].subset, preGroup) || bytes.Equal(c.tags[c.TagLen()-1].subset, nextGroup) {
+		return c
+	}
+	if c.Len()-1 != c.tagIndex[c.TagLen()-1] || c.time[c.Len()-1] != startT {
+		return c
+	}
+	val := c.columns[0].FloatValue(c.Len() - 1)
+	for startT += step; startT <= endT; startT += step {
+		c.time = append(c.time, startT)
+		c.columns[0].AppendFloatValue(val)
+		c.Column(0).AppendNotNil()
+	}
+	return c
+}
+
+func (c *ChunkImpl) PromStepInvariant(typ PromStepInvariantType, preGroup []byte, nextGroup []byte, step, startT, endT int64, dst Chunk) Chunk {
+	if typ == SkipLastGroup {
+		return c.PromStepInvariantSkipLastGroup(preGroup, step, startT, endT, dst)
+	}
+	return c.PromStepInvariantOnlyLastGroup(preGroup, nextGroup, step, startT, endT)
 }
 
 type IntegerFieldValuer struct {

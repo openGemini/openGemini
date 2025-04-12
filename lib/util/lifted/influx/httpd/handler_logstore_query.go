@@ -15,9 +15,11 @@
 package httpd
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
 	"sort"
@@ -62,6 +64,8 @@ const (
 
 	MaxScrollIdLen = 400
 	MinScrollIdLen = 10
+
+	Epsilon = 1e-10
 )
 
 // URL query parameter
@@ -72,6 +76,7 @@ const (
 	InComplete     = "InComplete"
 	XContentLength = "X-Content-Length"
 	LogProxy       = "Log-Proxy"
+	FORWARD        = "x-result-cache-forward"
 
 	Null = "null"
 )
@@ -447,7 +452,7 @@ type JsonHighlightFragment struct {
 	InnerJson map[string]interface{} `json:"innerJson"`
 }
 
-func getHighlightWords(expr *influxql.Expr, words map[string]map[string]bool) map[string]map[string]bool {
+func getHighlightWords(expr *influxql.Expr, words map[string]map[string][]int) map[string]map[string][]int {
 	if expr == nil {
 		return words
 	}
@@ -460,18 +465,20 @@ func getHighlightWords(expr *influxql.Expr, words map[string]map[string]bool) ma
 		case influxql.OR:
 			words = getHighlightWords(&n.LHS, words)
 			words = getHighlightWords(&n.RHS, words)
-		case influxql.MATCHPHRASE:
+		case influxql.MATCHPHRASE, influxql.EQ, influxql.NEQ,
+			influxql.GT, influxql.GTE, influxql.LT, influxql.LTE:
 			val := n.RHS.(*influxql.StringLiteral).Val
 			if val == EmptyValue {
 				break
 			}
 
 			if len(words[val]) == 0 {
-				words[val] = map[string]bool{n.LHS.(*influxql.VarRef).Val: true}
+				words[val] = map[string][]int{n.LHS.(*influxql.VarRef).Val: {int(n.Op)}}
 			} else {
-				words[val][n.LHS.(*influxql.VarRef).Val] = true
+				words[val][n.LHS.(*influxql.VarRef).Val] = append(words[val][n.LHS.(*influxql.VarRef).Val], int(n.Op))
 			}
 		}
+
 	case *influxql.ParenExpr:
 		words = getHighlightWords(&n.Expr, words)
 	}
@@ -479,16 +486,29 @@ func getHighlightWords(expr *influxql.Expr, words map[string]map[string]bool) ma
 	return words
 }
 
-func (h *Handler) getHighlightFragments(slog map[string]interface{}, highlightWords map[string]map[string]bool, fieldScopes []marshalFieldScope) map[string]interface{} {
+func (h *Handler) getHighlightFragments(slog map[string]interface{}, highlightWords map[string]map[string][]int, fieldScopes []marshalFieldScope) map[string]interface{} {
 	highlight := map[string]interface{}{}
 
 	if val := slog[Content]; val != nil {
 		content, ok := val.(string)
 		if !ok {
-			b, err := json2.Marshal(val)
+			var b []byte
+			bf := bytes.NewBuffer([]byte{})
+			jsonEncoder := json.NewEncoder(bf)
+			jsonEncoder.SetEscapeHTML(false)
+			err := jsonEncoder.Encode(val)
 			if err != nil {
-				h.Logger.Error("highlight failed, content field is nil")
+				b, err = json2.Marshal(val)
+				if err != nil {
+					h.Logger.Error("highlight failed, content field is nil")
+				}
+			} else {
+				b = bf.Bytes()
+				if len(b) > 0 && b[len(b)-1] == '\n' {
+					b = b[:len(b)-1]
+				}
 			}
+
 			content = util.Bytes2str(b)
 		}
 
@@ -521,7 +541,7 @@ func (h *Handler) getHighlightFragments(slog map[string]interface{}, highlightWo
 }
 
 // Get the highlights of individual fields when presented in json format
-func getJsonHighlight(k string, v interface{}, highlightWords map[string]map[string]bool) *JsonHighlightFragment {
+func getJsonHighlight(k string, v interface{}, highlightWords map[string]map[string][]int) *JsonHighlightFragment {
 	p := parserPool.Get()
 	defer parserPool.Put(p)
 	finder := tokenizer.NewSimpleTokenFinder(tokenizer.CONTENT_SPLIT_TABLE)
@@ -545,18 +565,20 @@ func getJsonHighlight(k string, v interface{}, highlightWords map[string]map[str
 }
 
 // The inner json field name also needs to be highlighted, highlighting the full text
-func getInnerJsonHighlightWords(k string, highlightWords map[string]map[string]bool) map[string]map[string]bool {
-	innerJsonHighlightWords := map[string]map[string]bool{}
+func getInnerJsonHighlightWords(k string, highlightWords map[string]map[string][]int) map[string]map[string][]int {
+	innerJsonHighlightWords := map[string]map[string][]int{}
 	for word, finiteFields := range highlightWords {
-		if finiteFields[logparser.DefaultFieldForFullText] {
-			innerJsonHighlightWords[word] = map[string]bool{logparser.DefaultFieldForFullText: true}
+		if len(finiteFields[logparser.DefaultFieldForFullText]) > 0 {
+			innerJsonHighlightWords[word] = map[string][]int{logparser.DefaultFieldForFullText: {influxql.MATCHPHRASE}}
 			continue
 		}
 
-		for finiteField := range finiteFields {
-			if k == finiteField {
-				innerJsonHighlightWords[word] = map[string]bool{logparser.DefaultFieldForFullText: true}
-				break
+		if len(finiteFields[k]) > 0 {
+			for _, op := range finiteFields[k] {
+				if op == influxql.MATCHPHRASE {
+					innerJsonHighlightWords[word] = map[string][]int{logparser.DefaultFieldForFullText: {influxql.MATCHPHRASE}}
+					break
+				}
 			}
 		}
 	}
@@ -564,7 +586,7 @@ func getInnerJsonHighlightWords(k string, highlightWords map[string]map[string]b
 	return innerJsonHighlightWords
 }
 
-func getJsonSegments(k, v string, highlightWords map[string]map[string]bool, finder *tokenizer.SimpleTokenFinder) *JsonHighlightFragment {
+func getJsonSegments(k, v string, highlightWords map[string]map[string][]int, finder *tokenizer.SimpleTokenFinder) *JsonHighlightFragment {
 	keyWords, valueWords := getFieldHighlightWords(k, highlightWords)
 
 	segments := JsonHighlightFragment{}
@@ -585,19 +607,18 @@ func getJsonSegments(k, v string, highlightWords map[string]map[string]bool, fin
 	return &segments
 }
 
-func getFieldHighlightWords(key string, highlightWords map[string]map[string]bool) ([]string, []string) {
-	var keyWords []string
-	var valueWords []string
+func getFieldHighlightWords(key string, highlightWords map[string]map[string][]int) (map[string][]int, map[string][]int) {
+	keyWords := map[string][]int{}
+	valueWords := map[string][]int{}
 	for highlightWord, finiteFields := range highlightWords {
-		if finiteFields[logparser.DefaultFieldForFullText] {
-			keyWords = append(keyWords, highlightWord)
-			valueWords = append(valueWords, highlightWord)
-			continue
+		if len(finiteFields[logparser.DefaultFieldForFullText]) > 0 {
+			keyWords[highlightWord] = []int{influxql.MATCHPHRASE}
+			valueWords[highlightWord] = append(valueWords[highlightWord], finiteFields[logparser.DefaultFieldForFullText]...)
 		}
 
-		for finiteField := range finiteFields {
+		for finiteField, ops := range finiteFields {
 			if finiteField == key {
-				valueWords = append(valueWords, highlightWord)
+				valueWords[highlightWord] = append(valueWords[highlightWord], ops...)
 			}
 		}
 	}
@@ -605,7 +626,7 @@ func getFieldHighlightWords(key string, highlightWords map[string]map[string]boo
 	return keyWords, valueWords
 }
 
-func parseInnerJson(ob *fastjson.Object, highlightWords map[string]map[string]bool, finder *tokenizer.SimpleTokenFinder) map[string]interface{} {
+func parseInnerJson(ob *fastjson.Object, highlightWords map[string]map[string][]int, finder *tokenizer.SimpleTokenFinder) map[string]interface{} {
 	var jsonHighlight []*JsonHighlightFragment
 
 	ob.Visit(func(key []byte, value *fastjson.Value) {
@@ -640,23 +661,33 @@ func convertToString(i interface{}) string {
 	}
 }
 
-func extractFragments(source string, highlightWords []string, finder *tokenizer.SimpleTokenFinder) []Fragment {
+func extractFragments(source string, highlightWords map[string][]int, finder *tokenizer.SimpleTokenFinder) []Fragment {
 	var fragments []Fragment
 	if finder == nil || len(highlightWords) == 0 {
 		return fragments
 	}
 
-	for _, highlightWord := range highlightWords {
+	for highlightWord, ops := range highlightWords {
 		length := len(highlightWord)
-		finder.InitInput([]byte(source), []byte(highlightWord))
-		for finder.Next() {
-			fragments = append(fragments, Fragment{Offset: finder.CurrentOffset(), Length: length})
+		for _, op := range ops {
+			if op == influxql.MATCHPHRASE {
+				finder.InitInput([]byte(source), []byte(highlightWord))
+				for finder.Next() {
+					fragments = append(fragments, Fragment{Offset: finder.CurrentOffset(), Length: length})
+				}
+				continue
+			}
+
+			if isHighlight(op, source, highlightWord) {
+				fragments = append(fragments, Fragment{Offset: 0, Length: len(source)})
+				return fragments
+			}
 		}
 	}
 	return fragments
 }
 
-func extractFieldFragments(source string, highlightWords map[string]map[string]bool, finder *tokenizer.SimpleTokenFinder, fieldScopes []marshalFieldScope) []Fragment {
+func extractFieldFragments(source string, highlightWords map[string]map[string][]int, finder *tokenizer.SimpleTokenFinder, fieldScopes []marshalFieldScope) []Fragment {
 	var fragments []Fragment
 	if finder == nil || len(highlightWords) == 0 {
 		return fragments
@@ -664,24 +695,56 @@ func extractFieldFragments(source string, highlightWords map[string]map[string]b
 	fieldScopesMap := fieldScopesSlice2Map(fieldScopes)
 	for highlightWord, finiteFields := range highlightWords {
 		length := len(highlightWord)
-		if finiteFields[logparser.DefaultFieldForFullText] {
-			finder.InitInput([]byte(source), []byte(highlightWord))
-			for finder.Next() {
-				fragments = append(fragments, Fragment{Offset: finder.CurrentOffset(), Length: length})
+		for key, ops := range finiteFields {
+			if key == logparser.DefaultFieldForFullText {
+				finder.InitInput([]byte(source), []byte(highlightWord))
+				for finder.Next() {
+					fragments = append(fragments, Fragment{Offset: finder.CurrentOffset(), Length: length})
+				}
+				continue
 			}
-			continue
-		}
 
-		for key := range finiteFields {
-			fieldScope := fieldScopesMap[key]
-			finder.InitInput([]byte(source[fieldScope.start:fieldScope.end]), []byte(highlightWord))
-			for finder.Next() {
-				fragments = append(fragments, Fragment{Offset: finder.CurrentOffset() + fieldScope.start, Length: length})
+			for _, op := range ops {
+				if op == influxql.MATCHPHRASE {
+					fieldScope := fieldScopesMap[key]
+					finder.InitInput([]byte(source[fieldScope.start:fieldScope.end]), []byte(highlightWord))
+					for finder.Next() {
+						fragments = append(fragments, Fragment{Offset: finder.CurrentOffset() + fieldScope.start, Length: length})
+					}
+					continue
+				}
+
+				fieldScope := fieldScopesMap[key]
+				if isHighlight(op, source[fieldScope.start:fieldScope.end], highlightWord) {
+					fragments = append(fragments, Fragment{Offset: fieldScope.start, Length: fieldScope.end - fieldScope.start})
+					break
+				}
 			}
 		}
 	}
 
 	return fragments
+}
+
+func isHighlight(operator int, val, dst string) bool {
+	v, _ := strconv.ParseFloat(val, 64)
+	d, _ := strconv.ParseFloat(dst, 64)
+
+	switch operator {
+	case influxql.EQ:
+		return math.Abs(v-d) < Epsilon
+	case influxql.NEQ:
+		return math.Abs(v-d) > Epsilon
+	case influxql.LT:
+		return d-v > Epsilon
+	case influxql.LTE:
+		return d-v > Epsilon || math.Abs(v-d) < Epsilon
+	case influxql.GT:
+		return v-d > Epsilon
+	case influxql.GTE:
+		return v-d > Epsilon || math.Abs(v-d) < Epsilon
+	}
+	return false
 }
 
 func fieldScopesSlice2Map(fieldScopes []marshalFieldScope) map[string]marshalFieldScope {
@@ -1147,7 +1210,8 @@ func (h *Handler) serveAggLogQuery(w http.ResponseWriter, r *http.Request, user 
 			addLogQueryStatistics(repository, logStream)
 			return
 		}
-		if strings.Contains(err.Error(), ErrSyntax) || strings.Contains(err.Error(), ErrParsingQuery) {
+		if strings.Contains(err.Error(), ErrSyntax) || strings.Contains(err.Error(), ErrParsingQuery) ||
+			strings.Contains(err.Error(), ErrNoFieldSelected) {
 			h.Logger.Error("query agg fail! ", zap.Error(err))
 			h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
 			return

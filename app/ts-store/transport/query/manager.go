@@ -144,11 +144,32 @@ func (qm *Manager) Abort(qid uint64) {
 	}
 }
 
+func (qm *Manager) NoMarkAbort(qid uint64) {
+	h := qm.Get(qid)
+	for _, iQuery := range h {
+		iQuery.Abort()
+	}
+}
+
 func (qm *Manager) Crash(qid uint64) {
 	qm.abortedMu.Lock()
 	qm.aborted[qid] = time.Now()
 	qm.abortedMu.Unlock()
 
+	h := qm.Get(qid)
+	var wg sync.WaitGroup
+	for _, iQuery := range h {
+		wg.Add(1)
+		// multiple PTs of the same query concurrently crash.
+		go func(ptQuery IQuery) {
+			defer wg.Done()
+			ptQuery.Crash()
+		}(iQuery)
+	}
+	wg.Wait()
+}
+
+func (qm *Manager) NoMarkCrash(qid uint64) {
 	h := qm.Get(qid)
 	for _, iQuery := range h {
 		iQuery.Crash()

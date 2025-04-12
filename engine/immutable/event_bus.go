@@ -36,16 +36,17 @@ type Event interface {
 	OnNewFile(f TSSPFile)
 	OnReplaceFile(shardDir string, lockFile string) error
 	OnInterrupt()
-	OnFinish(ctx EventContext)
+	OnFinish(ctx *EventContext)
 }
 
 type EventContext struct {
 	mergeSet  IndexMergeSet
 	scheduler *scheduler.TaskScheduler
+	signal    chan struct{}
 }
 
-func NewEventContext(idx IndexMergeSet, scheduler *scheduler.TaskScheduler) *EventContext {
-	return &EventContext{idx, scheduler}
+func NewEventContext(idx IndexMergeSet, scheduler *scheduler.TaskScheduler, signal chan struct{}) *EventContext {
+	return &EventContext{mergeSet: idx, scheduler: scheduler, signal: signal}
 }
 
 type Events struct {
@@ -90,7 +91,7 @@ func (es *Events) TriggerReplaceFile(shardDir, lock string) error {
 	return err
 }
 
-func (es *Events) Finish(success bool, ctx EventContext) {
+func (es *Events) Finish(success bool, ctx *EventContext) {
 	es.walkEvents(func(e Event) {
 		if success {
 			e.OnFinish(ctx)

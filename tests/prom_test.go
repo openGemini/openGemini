@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -137,6 +138,13 @@ func TestServer_PromQuery_Basic(t *testing.T) {
 			params:  url.Values{"db": []string{"db0"}, "time": []string{"1709258357.955"}},
 			command: `avg(up) by (instance)`,
 			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"instance":"localhost:7070"},"value":[1709258357.955,"6"]},{"metric":{"instance":"localhost:8080"},"value":[1709258357.955,"5"]},{"metric":{"instance":"localhost:9090"},"value":[1709258357.955,"3.5"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "instant query: topk(1, up*100) group by",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"1709258357.955"}},
+			command: `topk(1, up*100)`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"instance":"localhost:7070","job":"container"},"value":[1709258357.955,"600"]}]}}`,
 			path:    "/api/v1/query",
 		},
 		&Query{
@@ -350,6 +358,13 @@ func TestServer_PromQuery_Basic(t *testing.T) {
 			path:    "/api/v1/query_range",
 		},
 		&Query{
+			name:    "range query: topk(1, up*100)",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258330"}, "end": []string{"1709259360"}, "step": []string{"1m"}},
+			command: `topk(1, up*100)`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"instance":"localhost:7070","job":"container"},"values":[[1709258390,"600"],[1709258450,"600"],[1709258510,"600"],[1709258570,"600"],[1709258630,"600"]]},{"metric":{"instance":"localhost:9090","job":"prometheus"},"values":[[1709258330,"200"]]}]}}`,
+			path:    "/api/v1/query_range",
+		},
+		&Query{
 			name:    "range query: top-sum group by",
 			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258330"}, "end": []string{"1709259360"}, "step": []string{"1m"}},
 			command: `topk(3, sum(up{job="container"}) by (job))`,
@@ -521,7 +536,7 @@ func TestServer_PromQuery_Basic(t *testing.T) {
 			name:    "range query: idelta",
 			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258507.955"}, "step": []string{"30s"}},
 			command: `idelta(up[3m])`,
-			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"instance":"localhost:9090","job":"prometheus"},"values":[[1709258342.955,"1"],[1709258372.955,"2"],[1709258402.955,"2"],[1709258432.955,"2"],[1709258462.955,"2"],[1709258492.955,"2"]]}]}}`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"instance":"localhost:9090","job":"prometheus"},"values":[[1709258342.955,"1"],[1709258372.955,"1"],[1709258402.955,"1"],[1709258432.955,"1"],[1709258462.955,"1"],[1709258492.955,"1"]]}]}}`,
 			path:    "/api/v1/query_range",
 		},
 		&Query{
@@ -700,13 +715,6 @@ func TestServer_PromQuery_Basic(t *testing.T) {
 			path:    "/api/v1/query",
 		},
 		&Query{
-			name:    "range query: (1 - (up/down)) * 100",
-			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258507.955"}, "step": []string{"30s"}},
-			command: `(1 - (up/down)) * 100`,
-			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"instance":"localhost:7070","job":"container"},"values":[[1709258372.955,"-500"],[1709258402.955,"-500"],[1709258432.955,"-500"],[1709258462.955,"-500"],[1709258492.955,"-500"]]},{"metric":{"instance":"localhost:8080","job":"container"},"values":[[1709258342.955,"-150"],[1709258372.955,"-150"],[1709258402.955,"-150"],[1709258432.955,"-150"],[1709258462.955,"-150"],[1709258492.955,"-150"]]},{"metric":{"instance":"localhost:9090","job":"container"},"values":[[1709258342.955,"-33.33333333333333"],[1709258372.955,"-33.33333333333333"],[1709258402.955,"-33.33333333333333"],[1709258432.955,"-33.33333333333333"],[1709258462.955,"-33.33333333333333"],[1709258492.955,"-33.33333333333333"]]},{"metric":{"instance":"localhost:9090","job":"prometheus"},"values":[[1709258312.955,"83.33333333333334"],[1709258342.955,"25"],[1709258372.955,"25"],[1709258402.955,"25"],[1709258432.955,"25"],[1709258462.955,"25"],[1709258492.955,"25"]]}]}}`,
-			path:    "/api/v1/query_range",
-		},
-		&Query{
 			name:    "range query: stdvar_over_time",
 			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258507.955"}, "step": []string{"30s"}},
 			command: `stdvar_over_time(up[3m])`,
@@ -718,6 +726,13 @@ func TestServer_PromQuery_Basic(t *testing.T) {
 			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258507.955"}, "step": []string{"30s"}},
 			command: `stddev_over_time(up[3m])`,
 			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"instance":"localhost:7070","job":"container"},"values":[[1709258372.955,"0"],[1709258402.955,"0"],[1709258432.955,"0"],[1709258462.955,"0"],[1709258492.955,"0"]]},{"metric":{"instance":"localhost:8080","job":"container"},"values":[[1709258342.955,"0"],[1709258372.955,"0"],[1709258402.955,"0"],[1709258432.955,"0"],[1709258462.955,"0"],[1709258492.955,"0"]]},{"metric":{"instance":"localhost:9090","job":"container"},"values":[[1709258342.955,"0"],[1709258372.955,"0"],[1709258402.955,"0"],[1709258432.955,"0"],[1709258462.955,"0"],[1709258492.955,"0"]]},{"metric":{"instance":"localhost:9090","job":"prometheus"},"values":[[1709258312.955,"0"],[1709258342.955,"0.816496580927726"],[1709258372.955,"0.816496580927726"],[1709258402.955,"0.816496580927726"],[1709258432.955,"0.816496580927726"],[1709258462.955,"0.816496580927726"],[1709258492.955,"0.816496580927726"]]}]}}`,
+			path:    "/api/v1/query_range",
+		},
+		&Query{
+			name:    "range query: present_over_time",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258507.955"}, "step": []string{"30s"}},
+			command: `present_over_time(up[3m])`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"instance":"localhost:7070","job":"container"},"values":[[1709258372.955,"1"],[1709258402.955,"1"],[1709258432.955,"1"],[1709258462.955,"1"],[1709258492.955,"1"]]},{"metric":{"instance":"localhost:8080","job":"container"},"values":[[1709258342.955,"1"],[1709258372.955,"1"],[1709258402.955,"1"],[1709258432.955,"1"],[1709258462.955,"1"],[1709258492.955,"1"]]},{"metric":{"instance":"localhost:9090","job":"container"},"values":[[1709258342.955,"1"],[1709258372.955,"1"],[1709258402.955,"1"],[1709258432.955,"1"],[1709258462.955,"1"],[1709258492.955,"1"]]},{"metric":{"instance":"localhost:9090","job":"prometheus"},"values":[[1709258312.955,"1"],[1709258342.955,"1"],[1709258372.955,"1"],[1709258402.955,"1"],[1709258432.955,"1"],[1709258462.955,"1"],[1709258492.955,"1"]]}]}}`,
 			path:    "/api/v1/query_range",
 		},
 		&Query{
@@ -805,7 +820,7 @@ func TestServer_PromQuery_Basic(t *testing.T) {
 			path:    "/api/v1/query_range",
 		},
 		&Query{
-			name:    "range query: vector + bool modifier ",
+			name:    "range query: vector + bool modifier",
 			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258507.955"}, "step": []string{"30s"}},
 			command: `up + (1 == bool 2)`,
 			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"instance":"localhost:7070","job":"container"},"values":[[1709258372.955,"6"],[1709258402.955,"6"],[1709258432.955,"6"],[1709258462.955,"6"],[1709258492.955,"6"]]},{"metric":{"instance":"localhost:8080","job":"container"},"values":[[1709258342.955,"5"],[1709258372.955,"5"],[1709258402.955,"5"],[1709258432.955,"5"],[1709258462.955,"5"],[1709258492.955,"5"]]},{"metric":{"instance":"localhost:9090","job":"container"},"values":[[1709258342.955,"4"],[1709258372.955,"4"],[1709258402.955,"4"],[1709258432.955,"4"],[1709258462.955,"4"],[1709258492.955,"4"]]},{"metric":{"instance":"localhost:9090","job":"prometheus"},"values":[[1709258312.955,"1"],[1709258342.955,"3"],[1709258372.955,"3"],[1709258402.955,"3"],[1709258432.955,"3"],[1709258462.955,"3"],[1709258492.955,"3"]]}]}}`,
@@ -853,6 +868,125 @@ func TestServer_PromQuery_Basic(t *testing.T) {
 			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"__name__":"up","instance":"localhost:7070","job":"container"},"values":[[1709258372.955,"6"],[1709258402.955,"6"],[1709258432.955,"6"],[1709258462.955,"6"],[1709258492.955,"6"]]},{"metric":{"__name__":"up","instance":"localhost:8080","job":"container"},"values":[[1709258342.955,"5"],[1709258372.955,"5"],[1709258402.955,"5"],[1709258432.955,"5"],[1709258462.955,"5"],[1709258492.955,"5"]]},{"metric":{"__name__":"up","instance":"localhost:9090","job":"container"},"values":[[1709258342.955,"4"],[1709258372.955,"4"],[1709258402.955,"4"],[1709258432.955,"4"],[1709258462.955,"4"],[1709258492.955,"4"]]},{"metric":{"__name__":"up","instance":"localhost:9090","job":"prometheus"},"values":[[1709258312.955,"1"],[1709258342.955,"3"],[1709258372.955,"3"],[1709258402.955,"3"],[1709258432.955,"3"],[1709258462.955,"3"],[1709258492.955,"3"]]}]}}`,
 			path:    "/api/v1/query_range",
 		},
+		&Query{
+			name:    "instant query:  absent",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"1709258320.955"}, "lookback-delta": []string{"2s"}},
+			command: `absent(up)`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1709258320.955,"1"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "instant query:  absent",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"1709258328.955"}, "lookback-delta": []string{"2s"}},
+			command: `absent(up)`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "range query:  absent",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258507.955"}, "step": []string{"10s"}, "lookback-delta": []string{"1s"}},
+			command: `absent(up)`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{},"values":[[1709258322.955,"1"],[1709258332.955,"1"],[1709258352.955,"1"],[1709258362.955,"1"],[1709258372.955,"1"],[1709258382.955,"1"],[1709258392.955,"1"],[1709258402.955,"1"],[1709258412.955,"1"],[1709258422.955,"1"],[1709258432.955,"1"],[1709258442.955,"1"],[1709258452.955,"1"],[1709258462.955,"1"],[1709258472.955,"1"],[1709258482.955,"1"],[1709258492.955,"1"],[1709258502.955,"1"]]}]}}`,
+			path:    "/api/v1/query_range",
+		},
+		&Query{
+			name:    "instant query:  absent_over_time",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"1709258320.955"}},
+			command: `absent_over_time(up[5s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1709258320.955,"1"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "instant query:  absent_over_time",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"1709258328.955"}},
+			command: `absent_over_time(up[5s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "range query:  absent_over_time",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258507.955"}, "step": []string{"10s"}},
+			command: `absent_over_time(up[5s])`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{},"values":[[1709258322.955,"1"],[1709258352.955,"1"],[1709258372.955,"1"],[1709258382.955,"1"],[1709258392.955,"1"],[1709258402.955,"1"],[1709258412.955,"1"],[1709258422.955,"1"],[1709258432.955,"1"],[1709258442.955,"1"],[1709258452.955,"1"],[1709258462.955,"1"],[1709258472.955,"1"],[1709258482.955,"1"],[1709258492.955,"1"],[1709258502.955,"1"]]}]}}`,
+			path:    "/api/v1/query_range",
+		},
+		&Query{
+			name:    "range query:  absent_over_time",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258507.955"}, "step": []string{"10s"}},
+			command: `absent_over_time(up{instance="localhost:9090"}[5s])`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"instance":"localhost:9090"},"values":[[1709258322.955,"1"],[1709258352.955,"1"],[1709258362.955,"1"],[1709258372.955,"1"],[1709258382.955,"1"],[1709258392.955,"1"],[1709258402.955,"1"],[1709258412.955,"1"],[1709258422.955,"1"],[1709258432.955,"1"],[1709258442.955,"1"],[1709258452.955,"1"],[1709258462.955,"1"],[1709258472.955,"1"],[1709258482.955,"1"],[1709258492.955,"1"],[1709258502.955,"1"]]}]}}`,
+			path:    "/api/v1/query_range",
+		},
+		&Query{
+			name:    "range query:  absent_over_time",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258507.955"}, "step": []string{"10s"}},
+			command: `absent_over_time(up{instance="localhost:9090",instance="localhost:9090"}[5s])`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{},"values":[[1709258322.955,"1"],[1709258352.955,"1"],[1709258362.955,"1"],[1709258372.955,"1"],[1709258382.955,"1"],[1709258392.955,"1"],[1709258402.955,"1"],[1709258412.955,"1"],[1709258422.955,"1"],[1709258432.955,"1"],[1709258442.955,"1"],[1709258452.955,"1"],[1709258462.955,"1"],[1709258472.955,"1"],[1709258482.955,"1"],[1709258492.955,"1"],[1709258502.955,"1"]]}]}}`,
+			path:    "/api/v1/query_range",
+		},
+		&Query{
+			name:    "instant query:  metric * +Inf",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"1709258328.955"}},
+			command: `up * +Inf`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"instance":"localhost:9090","job":"prometheus"},"value":[1709258328.955,"+Inf"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "instant query:  metric * -Inf",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"1709258328.955"}},
+			command: `up * -Inf`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"instance":"localhost:9090","job":"prometheus"},"value":[1709258328.955,"-Inf"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "instant query:  metric * NaN",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"1709258328.955"}},
+			command: `up * NaN`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"instance":"localhost:9090","job":"prometheus"},"value":[1709258328.955,"NaN"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "instant query:  absent with no point",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"1709258320.955"}, "lookback-delta": []string{"2s"}},
+			command: `absent(sum(up) by (job))`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1709258320.955,"1"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "range query:  absent with no point",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258417.955"}, "end": []string{"1709258477.955"}, "step": []string{"10s"}, "lookback-delta": []string{"1s"}},
+			command: `absent(up)`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{},"values":[[1709258417.955,"1"],[1709258427.955,"1"],[1709258437.955,"1"],[1709258447.955,"1"],[1709258457.955,"1"],[1709258467.955,"1"],[1709258477.955,"1"]]}]}}`,
+			path:    "/api/v1/query_range",
+		},
+		&Query{
+			name:    "range query:  absent with no shard",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1730104970.955"}, "end": []string{"1730104990.955"}, "step": []string{"10s"}, "lookback-delta": []string{"1s"}},
+			command: `absent(up)`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[]}}`,
+			path:    "/api/v1/query_range",
+		},
+		&Query{
+			name:    "range query:  absent with no tag",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258417.955"}, "end": []string{"1709258477.955"}, "step": []string{"10s"}, "lookback-delta": []string{"1s"}},
+			command: `absent(up{test="a"})`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"test":"a"},"values":[[1709258417.955,"1"],[1709258427.955,"1"],[1709258437.955,"1"],[1709258447.955,"1"],[1709258457.955,"1"],[1709258467.955,"1"],[1709258477.955,"1"]]}]}}`,
+			path:    "/api/v1/query_range",
+		},
+		&Query{
+			name:    "range query:  absent with no mst",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258417.955"}, "end": []string{"1709258477.955"}, "step": []string{"10s"}, "lookback-delta": []string{"1s"}},
+			command: `absent(test)`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{},"values":[[1709258417.955,"1"],[1709258427.955,"1"],[1709258437.955,"1"],[1709258447.955,"1"],[1709258457.955,"1"],[1709258467.955,"1"],[1709258477.955,"1"]]}]}}`,
+			path:    "/api/v1/query_range",
+		},
+		&Query{
+			name:    "range query: mad_over_time",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258507.955"}, "step": []string{"30s"}},
+			command: `mad_over_time(up[3m])`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"instance":"localhost:7070","job":"container"},"values":[[1709258372.955,"0"],[1709258402.955,"0"],[1709258432.955,"0"],[1709258462.955,"0"],[1709258492.955,"0"]]},{"metric":{"instance":"localhost:8080","job":"container"},"values":[[1709258342.955,"0"],[1709258372.955,"0"],[1709258402.955,"0"],[1709258432.955,"0"],[1709258462.955,"0"],[1709258492.955,"0"]]},{"metric":{"instance":"localhost:9090","job":"container"},"values":[[1709258342.955,"0"],[1709258372.955,"0"],[1709258402.955,"0"],[1709258432.955,"0"],[1709258462.955,"0"],[1709258492.955,"0"]]},{"metric":{"instance":"localhost:9090","job":"prometheus"},"values":[[1709258312.955,"0"],[1709258342.955,"1"],[1709258372.955,"1"],[1709258402.955,"1"],[1709258432.955,"1"],[1709258462.955,"1"],[1709258492.955,"1"]]}]}}`,
+			path:    "/api/v1/query_range",
+		},
 	}...)
 
 	for i, query := range test.queries {
@@ -867,6 +1001,64 @@ func TestServer_PromQuery_Basic(t *testing.T) {
 		}
 		if err := query.ExecuteProm(s); err != nil {
 			t.Error(query.Error(err))
+		} else if !query.success() {
+			t.Error(query.failureMessage())
+		}
+	}
+}
+
+func TestServer_PromWithError(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewConfig())
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("autogen", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		fmt.Sprintf(`up,__name__=up,instance=localhost:9090,job=prometheus value=1 %d`, 1709258312955000000),
+		fmt.Sprintf(`up,__name__=up,instance=localhost:9090,job=prometheus value=2 %d`, 1709258327955000000),
+		fmt.Sprintf(`up,__name__=up,instance=localhost:9090,job=prometheus value=3 %d`, 1709258342955000000),
+		fmt.Sprintf(`up,__name__=up,instance=localhost:9090,job=container value=4 %d`, 1709258342955000000),
+		fmt.Sprintf(`up,__name__=up,instance=localhost:8080,job=container value=5 %d`, 1709258342955000000),
+		fmt.Sprintf(`up,__name__=up,instance=localhost:7070,job=container value=6 %d`, 1709258357955000000),
+		fmt.Sprintf(`down,__name__=down,instance=localhost:9090,job=prometheus value=6 %d`, 1709258312955000000),
+		fmt.Sprintf(`down,__name__=down,instance=localhost:9090,job=prometheus value=5 %d`, 1709258327955000000),
+		fmt.Sprintf(`down,__name__=down,instance=localhost:9090,job=prometheus value=4 %d`, 1709258342955000000),
+		fmt.Sprintf(`down,__name__=down,instance=localhost:9090,job=container value=3 %d`, 1709258342955000000),
+		fmt.Sprintf(`down,__name__=down,instance=localhost:8080,job=container value=2 %d`, 1709258342955000000),
+		fmt.Sprintf(`down,__name__=down,instance=localhost:7070,job=container value=1 %d`, 1709258357955000000),
+	}
+
+	test := NewTest("db0", "autogen")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		&Query{
+			name:    "range query: label_replace + topk",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258507.955"}, "step": []string{"30s"}},
+			command: `label_replace(topk(5,count(up>=0) by (job)),"name","kube_pod_status_phase","","")`,
+			exp:     `unexpected status code: code=422, body={"status":"error","errorType":"execution","error":"populatePromSeries raise err: vector cannot contain metrics with the same labelset"}`,
+			path:    "/api/v1/query_range",
+		},
+	}...)
+	for i, query := range test.queries {
+		if i == 0 {
+			if err := test.init(s); err != nil {
+				t.Fatalf("test init failed: %s", err)
+			}
+		}
+		if query.skip {
+			t.Logf("SKIP:: %s", query.name)
+			continue
+		}
+		if err := query.ExecuteProm(s); err != nil {
+			if query.exp != err.Error() {
+				t.Error(query.Error(err))
+			}
 		} else if !query.success() {
 			t.Error(query.failureMessage())
 		}
@@ -1225,29 +1417,63 @@ func TestServer_PromQuery_At_Modifier(t *testing.T) {
 }
 */
 
+type FileInfo struct {
+	enabled bool
+	rate    float64
+}
+
 func TestServer_Prom_Evaluations(t *testing.T) {
 	files, err := filepath.Glob("./testdata/*.test")
 	require.NoError(t, err)
 
+	fileMap := map[string]*FileInfo{
+		"testdata/aggregators.test": {enabled: false},
+		"testdata/at_modifier.test": {enabled: false},
+		"testdata/collision.test":   {enabled: true},
+		"testdata/functions.test":   {enabled: false},
+		"testdata/histograms.test":  {enabled: true},
+		"testdata/literals.test":    {enabled: true},
+		"testdata/operators.test":   {enabled: true},
+		"testdata/selectors.test":   {enabled: true},
+		"testdata/staleness.test":   {enabled: true},
+		"testdata/subquery.test":    {enabled: true},
+	}
+
+	var wg sync.WaitGroup
 	for _, fn := range files {
+		f, ok := fileMap[fn]
+		if !ok || !f.enabled {
+			continue
+		}
+		wg.Add(1)
 		t.Run(fn, func(t *testing.T) {
-			runTestFile(t, fn)
+			rate := runTestFile(t, fn)
+			f.rate = rate
+			wg.Done()
 		})
+	}
+
+	wg.Wait()
+	for n, f := range fileMap {
+		if f.enabled {
+			fmt.Printf("%s success rate: %f \n", n, f.rate)
+		}
 	}
 }
 
-func runTestFile(t *testing.T, fn string) {
-	t.Skip()
-	t.Parallel()
-	s := OpenServer(NewConfig())
+func runTestFile(t *testing.T, fn string) float64 {
+	s := OpenPromServer(NewConfig())
 	defer s.Close()
 
-	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("autogen", 1, 0), true); err != nil {
+	if err := s.CreateDatabaseAndRetentionPolicy("prom", NewRetentionPolicySpec("autogen", 1, 0), true); err != nil {
 		t.Fatal(err)
 	}
 
-	err := NewPromTestFromFile(t, fn, "db0", "autogen", s)
-	t.Error(err)
+	rate, err := NewPromTestFromFile(t, fn, "prom", "autogen", s)
+	if err != nil {
+		t.Error(err)
+	}
+	return rate
 }
 
 //skip
@@ -1630,11 +1856,25 @@ func TestServer_PromQuery_Operators1(t *testing.T) {
 			path:    "/api/v1/query",
 		},
 		&Query{
+			name:    "instant query with self join: http_requests",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"1970-01-01T00:50:00Z"}},
+			command: `http_requests + http_requests + http_requests + http_requests`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"group":"canary","instance":"0","job":"api-server"},"value":[3000,"1200"]},{"metric":{"group":"canary","instance":"0","job":"app-server"},"value":[3000,"2800"]},{"metric":{"group":"canary","instance":"1","job":"api-server"},"value":[3000,"1600"]},{"metric":{"group":"canary","instance":"1","job":"app-server"},"value":[3000,"3200"]},{"metric":{"group":"production","instance":"0","job":"api-server"},"value":[3000,"400"]},{"metric":{"group":"production","instance":"0","job":"app-server"},"value":[3000,"2000"]},{"metric":{"group":"production","instance":"1","job":"api-server"},"value":[3000,"800"]},{"metric":{"group":"production","instance":"1","job":"app-server"},"value":[3000,"2400"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
 			name:    "range query: http_requests",
 			params:  url.Values{"db": []string{"db0"}, "start": []string{"1970-01-01T00:00:00Z"}, "end": []string{"1970-01-01T00:50:00Z"}, "step": []string{"15m"}},
 			command: `http_requests`,
 			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"__name__":"http_requests","group":"canary","instance":"0","job":"api-server"},"values":[[0,"0"],[900,"90"],[1800,"180"],[2700,"270"]]},{"metric":{"__name__":"http_requests","group":"canary","instance":"0","job":"app-server"},"values":[[0,"0"],[900,"210"],[1800,"420"],[2700,"630"]]},{"metric":{"__name__":"http_requests","group":"canary","instance":"1","job":"api-server"},"values":[[0,"0"],[900,"120"],[1800,"240"],[2700,"360"]]},{"metric":{"__name__":"http_requests","group":"canary","instance":"1","job":"app-server"},"values":[[0,"0"],[900,"240"],[1800,"480"],[2700,"720"]]},{"metric":{"__name__":"http_requests","group":"production","instance":"0","job":"api-server"},"values":[[0,"0"],[900,"30"],[1800,"60"],[2700,"90"]]},{"metric":{"__name__":"http_requests","group":"production","instance":"0","job":"app-server"},"values":[[0,"0"],[900,"150"],[1800,"300"],[2700,"450"]]},{"metric":{"__name__":"http_requests","group":"production","instance":"1","job":"api-server"},"values":[[0,"0"],[900,"60"],[1800,"120"],[2700,"180"]]},{"metric":{"__name__":"http_requests","group":"production","instance":"1","job":"app-server"},"values":[[0,"0"],[900,"180"],[1800,"360"],[2700,"540"]]}]}}`,
 			path:    "/api/v1/query_range",
+		},
+		&Query{
+			name:    "instant query with self join: http_requests",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"1970-01-01T00:50:00Z"}},
+			command: `SUM(http_requests) BY (job) % 2 ^ 3 ^ 2 ^ 2`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"job":"api-server"},"value":[3000,"1000"]},{"metric":{"job":"app-server"},"value":[3000,"2600"]}]}}`,
+			path:    "/api/v1/query",
 		},
 	}...)
 
@@ -1964,7 +2204,7 @@ func TestServer_PromQuery_Operators5(t *testing.T) {
 			name:    "instant query time() 50m",
 			params:  url.Values{"db": []string{"db0"}, "time": []string{"1970-01-01T00:50:00Z"}},
 			command: `time()`,
-			exp:     `{"status":"success","data":{"resultType":"scalar","result":[{"metric":{},"value":[3000,"3000"]}]}}`,
+			exp:     `{"status":"success","data":{"resultType":"scalar","result":[3000,"3000"]}}`,
 			path:    "/api/v1/query",
 		},
 		&Query{
@@ -2014,6 +2254,20 @@ func TestServer_PromQuery_Operators5(t *testing.T) {
 			params:  url.Values{"db": []string{"db0"}, "time": []string{"1970-01-01T00:00:00Z"}},
 			command: `day_of_week(vector(1136239445))`,
 			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"1"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "instant query day_of_year()",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"1970-01-01T00:00:00Z"}},
+			command: `day_of_year()`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"1"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "instant query day_of_year(vector(1136239445))",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"1970-01-01T00:00:00Z"}},
+			command: `day_of_year(vector(1136239445))`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"2"]}]}}`,
 			path:    "/api/v1/query",
 		},
 		&Query{
@@ -2106,8 +2360,69 @@ func TestServer_PromQuery_Operators5(t *testing.T) {
 	}
 }
 
+func TestServer_PromQuery_Operators6(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewConfig())
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("autogen", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	startTime := 1704067200000000000 // which mapped to 2024-01-01T00:00:10Z
+	writes := make([]string, 0)
+
+	writes = append(writes, fmt.Sprintf(`test,__name__=test,instance=localhost,version=canary,os=linux value=%d %d`, 1, startTime))
+	writes = append(writes, fmt.Sprintf(`test,__name__=test,instance=localhost,version=canary,os=windows value=%d %d`, 2, startTime))
+	writes = append(writes, fmt.Sprintf(`test,__name__=test,instance=localhost,version=beta,os=linux value=%d %d`, 3, startTime))
+	writes = append(writes, fmt.Sprintf(`test,__name__=test,instance=localhost,version=beta,os=windows value=%d %d`, 4, startTime))
+	writes = append(writes, fmt.Sprintf(`test,__name__=test,instance=10.0.0.1,version=canary,os=linux value=%d %d`, 5, startTime))
+	writes = append(writes, fmt.Sprintf(`test,__name__=test,instance=10.0.0.1,version=canary,os=windows value=%d %d`, 6, startTime))
+	writes = append(writes, fmt.Sprintf(`test,__name__=test,instance=10.0.0.1,version=beta,os=linux value=%d %d`, 7, startTime))
+	writes = append(writes, fmt.Sprintf(`test,__name__=test,instance=10.0.0.1,version=beta,os=windows value=%d %d`, 8, startTime))
+
+	test := NewTest("db0", "autogen")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		{
+			name:    "instant query: group",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:10Z"}, "inner_chunk_size": []string{"1"}},
+			command: `group by(version) (test + test)`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"version":"beta"},"value":[1704067210,"1"]},{"metric":{"version":"canary"},"value":[1704067210,"1"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instant query: group",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:10Z"}},
+			command: `group without(version) (test + test)`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"instance":"10.0.0.1","os":"linux"},"value":[1704067210,"1"]},{"metric":{"instance":"10.0.0.1","os":"windows"},"value":[1704067210,"1"]},{"metric":{"instance":"localhost","os":"linux"},"value":[1704067210,"1"]},{"metric":{"instance":"localhost","os":"windows"},"value":[1704067210,"1"]}]}}`,
+			path:    "/api/v1/query",
+		},
+	}...)
+
+	for i, query := range test.queries {
+		if i == 0 {
+			if err := test.init(s); err != nil {
+				t.Fatalf("test init failed: %s", err)
+			}
+		}
+		if query.skip {
+			t.Logf("SKIP:: %s", query.name)
+			continue
+		}
+		if err := query.ExecuteProm(s); err != nil {
+			t.Error(query.Error(err))
+		} else if !query.success() {
+			t.Error(query.failureMessage())
+		}
+	}
+}
+
 // histogram
-func TestServer_PromQuery_Histogram(t *testing.T) {
+func TestServer_PromQuery_Histogram0(t *testing.T) {
 	t.Parallel()
 	s := OpenServer(NewConfig())
 	defer s.Close()
@@ -2161,6 +2476,126 @@ func TestServer_PromQuery_Histogram(t *testing.T) {
 			params:  url.Values{"db": []string{"db0"}, "start": []string{"1713768282.462"}, "end": []string{"1713768432.462"}, "step": []string{"30s"}},
 			command: `histogram_quantile(0.9,rate(up[1m]))`,
 			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"instance":"localhost:9090","zzz":"prometheus"},"values":[[1713768312.462,"0.09000000000000001"],[1713768342.462,"0.09000000000000001"],[1713768372.462,"0.09000000000000001"]]},{"metric":{"instance":"localhost:9090","zzz":"prometheus2"},"values":[[1713768312.462,"0.09000000000000001"],[1713768342.462,"0.09000000000000001"],[1713768372.462,"0.09000000000000001"]]}]}}`,
+			path:    "/api/v1/query_range",
+		},
+		&Query{
+			name:    "query offset",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"-30060"}, "end": []string{"-29940"}, "step": []string{"60"}},
+			command: `avg by (le) (rate(up[5m] @ 1713768342.462))`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"le":"+Inf"},"values":[[-30060,"6.675000000000001"],[-30000,"6.675000000000001"],[-29940,"6.675000000000001"]]},{"metric":{"le":"0.1"},"values":[[-30060,"6.675000000000001"],[-30000,"6.675000000000001"],[-29940,"6.675000000000001"]]},{"metric":{"le":"0.2"},"values":[[-30060,"6.675000000000001"],[-30000,"6.675000000000001"],[-29940,"6.675000000000001"]]},{"metric":{"le":"0.4"},"values":[[-30060,"6.675000000000001"],[-30000,"6.675000000000001"],[-29940,"6.675000000000001"]]},{"metric":{"le":"1"},"values":[[-30060,"6.675000000000001"],[-30000,"6.675000000000001"],[-29940,"6.675000000000001"]]},{"metric":{"le":"120"},"values":[[-30060,"6.675000000000001"],[-30000,"6.675000000000001"],[-29940,"6.675000000000001"]]},{"metric":{"le":"20"},"values":[[-30060,"6.675000000000001"],[-30000,"6.675000000000001"],[-29940,"6.675000000000001"]]},{"metric":{"le":"3"},"values":[[-30060,"6.675000000000001"],[-30000,"6.675000000000001"],[-29940,"6.675000000000001"]]},{"metric":{"le":"60"},"values":[[-30060,"6.675000000000001"],[-30000,"6.675000000000001"],[-29940,"6.675000000000001"]]},{"metric":{"le":"8"},"values":[[-30060,"6.675000000000001"],[-30000,"6.675000000000001"],[-29940,"6.675000000000001"]]}]}}`,
+			path:    "/api/v1/query_range",
+		},
+	}...)
+
+	for i, query := range test.queries {
+		if i == 0 {
+			if err := test.init(s); err != nil {
+				t.Fatalf("test init failed: %s", err)
+			}
+		}
+		if query.skip {
+			t.Logf("SKIP:: %s", query.name)
+			continue
+		}
+		if err := query.ExecuteProm(s); err != nil {
+			t.Error(query.Error(err))
+		} else if !query.success() {
+			t.Error(query.failureMessage())
+		}
+	}
+}
+
+func TestServer_PromQuery_Histogram1(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewConfig())
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("autogen", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+	initTime := 1713768282462000000
+	buckets := []string{"+Inf", "0.1", "0.2", "0.4", "1", "120", "20", "3", "60", "8"}
+	writes := make([]string, 0, 2*len(buckets))
+	for i := 0; i < len(buckets); i++ {
+		for j := 0; j < 5; j++ {
+			time := int64(initTime) + 15*int64(time.Second)*int64(j)
+			str := fmt.Sprintf(`up,__name__=up,instance=localhost:9090,le=%s,zzz=prometheus value=%d %d`, buckets[i], j+1, time)
+			writes = append(writes, str)
+			str = fmt.Sprintf(`up,__name__=up,instance=localhost:9090,le=%s,zzz=prometheus2 value=%d %d`, buckets[i], j*1000, time)
+			writes = append(writes, str)
+
+			str = fmt.Sprintf(`up,__name__=up,instance=localhost:9090,notle=abc,zzz=prometheus2 value=%d %d`, j*1000, time)
+			writes = append(writes, str)
+		}
+
+	}
+
+	test := NewTest("db0", "autogen")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+	test.addQueries([]*Query{
+		&Query{
+			name:    "range query:  histogram_quantile",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1713768282.462"}, "end": []string{"1713768432.462"}, "step": []string{"30s"}, "inner_chunk_size": []string{"3"}},
+			command: `histogram_quantile(0.9,up)`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"instance":"localhost:9090","zzz":"prometheus"},"values":[[1713768282.462,"0.09000000000000001"],[1713768312.462,"0.09000000000000001"],[1713768342.462,"0.09000000000000001"],[1713768372.462,"0.09000000000000001"],[1713768402.462,"0.09000000000000001"],[1713768432.462,"0.09000000000000001"]]},{"metric":{"instance":"localhost:9090","zzz":"prometheus2"},"values":[[1713768282.462,"NaN"],[1713768312.462,"0.09000000000000001"],[1713768342.462,"0.09000000000000001"],[1713768372.462,"0.09000000000000001"],[1713768402.462,"0.09000000000000001"],[1713768432.462,"0.09000000000000001"]]}]}}`,
+			path:    "/api/v1/query_range",
+		},
+	}...)
+
+	for i, query := range test.queries {
+		if i == 0 {
+			if err := test.init(s); err != nil {
+				t.Fatalf("test init failed: %s", err)
+			}
+		}
+		if query.skip {
+			t.Logf("SKIP:: %s", query.name)
+			continue
+		}
+		if err := query.ExecuteProm(s); err != nil {
+			t.Error(query.Error(err))
+		} else if !query.success() {
+			t.Error(query.failureMessage())
+		}
+	}
+}
+
+func TestServer_PromQuery_Histogram2(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewConfig())
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("autogen", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+	initTime := 1713768282462000000
+	buckets := []string{"+Inf", "0.1", "0.2", "0.4", "1", "120", "20", "3", "60", "8"}
+	writes := make([]string, 0, 2*len(buckets))
+	for i := 0; i < len(buckets); i++ {
+		for j := 0; j < 5; j++ {
+			time := int64(initTime) + 15*int64(time.Second)*int64(j)
+			str := fmt.Sprintf(`up,__name__=up,instance=localhost:9090,le=%s,zzz=prometheus value=%d %d`, buckets[i], j+1, time)
+			writes = append(writes, str)
+			//str = fmt.Sprintf(`up,__name__=up,instance=localhost:9090,le=%s,zzz=prometheus2 value=%d %d`, buckets[i], j*1000, time)
+			//writes = append(writes, str)
+		}
+
+	}
+	str := fmt.Sprintf(`up,__name__=up,instance=localhost:9090,le=8,zzz=prometheus value=%d %d`, 7, int64(initTime)+15*int64(time.Second)*7)
+	writes = append(writes, str)
+
+	test := NewTest("db0", "autogen")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+	test.addQueries([]*Query{
+		&Query{
+			name:    "range query:  histogram_quantile",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1713768282.462"}, "end": []string{"1713768582.462"}, "step": []string{"15s"}, "lookback-delta": []string{"10s"}},
+			command: `histogram_quantile(0.9,up)`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"instance":"localhost:9090","zzz":"prometheus"},"values":[[1713768282.462,"0.09000000000000001"],[1713768297.462,"0.09000000000000001"],[1713768312.462,"0.09000000000000001"],[1713768327.462,"0.09000000000000001"],[1713768342.462,"0.09000000000000001"],[1713768387.462,"NaN"]]}]}}`,
 			path:    "/api/v1/query_range",
 		},
 	}...)
@@ -2634,7 +3069,7 @@ func TestServer_PromQuery_Regular_Match(t *testing.T) {
 	}
 }
 
-func TestServer_PromQuery_Compatibility(t *testing.T) {
+func TestServer_PromQuery_MetaData(t *testing.T) {
 	t.Parallel()
 	s := OpenServer(NewConfig())
 	defer s.Close()
@@ -2656,6 +3091,164 @@ func TestServer_PromQuery_Compatibility(t *testing.T) {
 		fmt.Sprintf(`down,__name__=down,instance=localhost:9090,job=container value=3 %d`, 1709258342955000000),
 		fmt.Sprintf(`down,__name__=down,instance=localhost:8080,job=container value=2 %d`, 1709258342955000000),
 		fmt.Sprintf(`down,__name__=down,instance=localhost:7070,job=container value=1 %d`, 1709258357955000000),
+	}
+
+	test := NewTest("db0", "autogen")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		&Query{
+			name:    "label names without match",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258357.955"}},
+			command: ``,
+			exp:     `{"status":"success","data":["__name__","instance","job"]}`,
+			path:    "/api/v1/labels",
+		},
+		&Query{
+			name:    "labels names with match",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258357.955"}, "match[]": []string{"up{job=\"container\"}"}},
+			command: ``,
+			exp:     `{"status":"success","data":["__name__","instance","job"]}`,
+			path:    "/api/v1/labels",
+		},
+		&Query{
+			name:    "label values without match",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258357.955"}},
+			command: ``,
+			exp:     `{"status":"success","data":["localhost:7070","localhost:8080","localhost:9090"]}`,
+			path:    "/api/v1/label/instance/values",
+		},
+		&Query{
+			name:    "labels values with match",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258357.955"}, "match[]": []string{"up{job=\"container\"}"}},
+			command: ``,
+			exp:     `{"status":"success","data":["container"]}`,
+			path:    "/api/v1/label/job/values",
+		},
+		&Query{
+			name:    "series with match up",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258357.955"}, "match[]": []string{"up"}},
+			command: ``,
+			exp:     `{"status":"success","data":[{"__name__":"up","instance":"localhost:7070","job":"container"},{"__name__":"up","instance":"localhost:8080","job":"container"},{"__name__":"up","instance":"localhost:9090","job":"container"},{"__name__":"up","instance":"localhost:9090","job":"prometheus"}]}`,
+			path:    "/api/v1/series",
+		},
+		&Query{
+			name:    "series with match up{job}",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258357.955"}, "match[]": []string{"up{job=\"container\"}"}},
+			command: ``,
+			exp:     `{"status":"success","data":[{"__name__":"up","instance":"localhost:7070","job":"container"},{"__name__":"up","instance":"localhost:8080","job":"container"},{"__name__":"up","instance":"localhost:9090","job":"container"}]}`,
+			path:    "/api/v1/series",
+		},
+		// with metric store
+		&Query{
+			name:    "label names without match",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258357.955"}},
+			command: ``,
+			exp:     `{"status":"success","data":["__name__","instance","job"]}`,
+			path:    "/prometheus/up/api/v1/labels",
+		},
+		&Query{
+			name:    "labels names with match",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258357.955"}, "match[]": []string{"up{job=\"container\"}"}},
+			command: ``,
+			exp:     `{"status":"success","data":["__name__","instance","job"]}`,
+			path:    "/prometheus/up/api/v1/labels",
+		},
+		&Query{
+			name:    "label values without match",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258357.955"}},
+			command: ``,
+			exp:     `{"status":"success","data":["localhost:7070","localhost:8080","localhost:9090"]}`,
+			path:    "/prometheus/up/api/v1/label/instance/values",
+		},
+		&Query{
+			name:    "labels values with match",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258357.955"}, "match[]": []string{"up{job=\"container\"}"}},
+			command: ``,
+			exp:     `{"status":"success","data":["container"]}`,
+			path:    "/prometheus/up/api/v1/label/job/values",
+		},
+		&Query{
+			name:    "series with match up",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258357.955"}, "match[]": []string{"up"}},
+			command: ``,
+			exp:     `{"status":"success","data":[{"__name__":"up","instance":"localhost:7070","job":"container"},{"__name__":"up","instance":"localhost:8080","job":"container"},{"__name__":"up","instance":"localhost:9090","job":"container"},{"__name__":"up","instance":"localhost:9090","job":"prometheus"}]}`,
+			path:    "/prometheus/up/api/v1/series",
+		},
+		&Query{
+			name:    "series with match up{job}",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258357.955"}, "match[]": []string{"up{job=\"container\"}"}},
+			command: ``,
+			exp:     `{"status":"success","data":[{"__name__":"up","instance":"localhost:7070","job":"container"},{"__name__":"up","instance":"localhost:8080","job":"container"},{"__name__":"up","instance":"localhost:9090","job":"container"}]}`,
+			path:    "/prometheus/up/api/v1/series",
+		},
+		&Query{
+			name:    "labels names with match",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258357.955"}, "match[]": []string{"up{job=\"container\"}", "up{job=\"prometheus\"}"}},
+			command: ``,
+			exp:     `{"status":"success","data":["__name__","instance","job"]}`,
+			path:    "/prometheus/up/api/v1/labels",
+		},
+		&Query{
+			name:    "labels values with match",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258357.955"}, "match[]": []string{"up{job=\"container\"}", "up{job=\"prometheus\"}"}},
+			command: ``,
+			exp:     `{"status":"success","data":["container","prometheus"]}`,
+			path:    "/prometheus/up/api/v1/label/job/values",
+		},
+		&Query{
+			name:    "series with match up{job}",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258357.955"}, "match[]": []string{"up{job=\"container\"}", "up{job=\"prometheus\"}"}},
+			command: ``,
+			exp:     `{"status":"success","data":[{"__name__":"up","instance":"localhost:7070","job":"container"},{"__name__":"up","instance":"localhost:8080","job":"container"},{"__name__":"up","instance":"localhost:9090","job":"container"},{"__name__":"up","instance":"localhost:9090","job":"prometheus"}]}`,
+			path:    "/prometheus/up/api/v1/series",
+		},
+	}...)
+
+	for i, query := range test.queries {
+		if i == 0 {
+			if err := test.init(s); err != nil {
+				t.Fatalf("test init failed: %s", err)
+			}
+		}
+		if query.skip {
+			t.Logf("SKIP:: %s", query.name)
+			continue
+		}
+		if err := query.ExecuteProm(s); err != nil {
+			t.Error(query.Error(err))
+		} else if !query.success() {
+			t.Error(query.failureMessage())
+		}
+	}
+}
+
+func TestServer_PromQuery_Compatibility(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewConfig())
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("autogen", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		fmt.Sprintf(`up,__name__=up,instance=localhost:9090,job=prometheus value=1 %d`, 1709258312955000000),
+		fmt.Sprintf(`up,__name__=up,instance=localhost:9090,job=prometheus value=2 %d`, 1709258327955000000),
+		fmt.Sprintf(`up,__name__=up,instance=localhost:9090,job=prometheus value=3 %d`, 1709258342955000000),
+		fmt.Sprintf(`up,__name__=up,instance=localhost:9090,job=container value=4 %d`, 1709258342955000000),
+		fmt.Sprintf(`up,__name__=up,instance=localhost:8080,job=container value=5 %d`, 1709258342955000000),
+		fmt.Sprintf(`up,__name__=up,instance=localhost:7070,job=container value=6 %d`, 1709258357955000000),
+		fmt.Sprintf(`up,__name__=up,instance=localhost:7070,job=vm value=6 %d`, 1709258358955000000),
+		fmt.Sprintf(`down,__name__=down,instance=localhost:9090,job=prometheus value=6 %d`, 1709258312955000000),
+		fmt.Sprintf(`down,__name__=down,instance=localhost:9090,job=prometheus value=5 %d`, 1709258327955000000),
+		fmt.Sprintf(`down,__name__=down,instance=localhost:9090,job=prometheus value=4 %d`, 1709258342955000000),
+		fmt.Sprintf(`down,__name__=down,instance=localhost:9090,job=container value=3 %d`, 1709258342955000000),
+		fmt.Sprintf(`down,__name__=down,instance=localhost:8080,job=container value=2 %d`, 1709258342955000000),
+		fmt.Sprintf(`down,__name__=down,instance=localhost:7070,job=container value=1 %d`, 1709258357955000000),
+		fmt.Sprintf(`down,__name__=down,instance=localhost:7070,job=vm value=1 %d`, 1709258358955000000),
 	}
 
 	test := NewTest("db0", "autogen")
@@ -2689,14 +3282,28 @@ func TestServer_PromQuery_Compatibility(t *testing.T) {
 			name:    "label values",
 			params:  url.Values{"db": []string{"db0"}},
 			command: ``,
-			exp:     `{"status":"success","data":["container","prometheus"]}`,
+			exp:     `{"status":"success","data":["container","prometheus","vm"]}`,
 			path:    "/api/v1/label/job/values",
 		},
 		&Query{
 			name:    "series",
 			params:  url.Values{"db": []string{"db0"}, "match[]": []string{"up"}},
 			command: ``,
-			exp:     `{"status":"success","data":[{"__name__":"up","instance":"localhost:7070","job":"container"},{"__name__":"up","instance":"localhost:8080","job":"container"},{"__name__":"up","instance":"localhost:9090","job":"container"},{"__name__":"up","instance":"localhost:9090","job":"prometheus"}]}`,
+			exp:     `{"status":"success","data":[{"__name__":"up","instance":"localhost:7070","job":"container"},{"__name__":"up","instance":"localhost:7070","job":"vm"},{"__name__":"up","instance":"localhost:8080","job":"container"},{"__name__":"up","instance":"localhost:9090","job":"container"},{"__name__":"up","instance":"localhost:9090","job":"prometheus"}]}`,
+			path:    "/api/v1/series",
+		},
+		&Query{
+			name:    "label values exact",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258358.955"}, "end": []string{"1709258358.955"}, "exact": []string{"true"}},
+			command: ``,
+			exp:     `{"status":"success","data":["vm"]}`,
+			path:    "/api/v1/label/job/values",
+		},
+		&Query{
+			name:    "series exact",
+			params:  url.Values{"db": []string{"db0"}, "match[]": []string{"up"}, "start": []string{"1709258358.955"}, "end": []string{"1709258358.955"}, "exact": []string{"true"}},
+			command: ``,
+			exp:     `{"status":"success","data":[{"__name__":"up","instance":"localhost:7070","job":"vm"}]}`,
 			path:    "/api/v1/series",
 		},
 	}...)
@@ -2713,6 +3320,1891 @@ func TestServer_PromQuery_Compatibility(t *testing.T) {
 		}
 		if err := query.ExecuteProm(s); err != nil {
 			t.Error(query.Error(err))
+		} else if !query.success() {
+			t.Error(query.failureMessage())
+		}
+	}
+}
+
+func TestServer_PromQuery_Subquery_IrateAndIdelta(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewConfig())
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("autogen", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		fmt.Sprintf(`metric,__name__=metric value=1 %d`, 1704067200000000000),
+		fmt.Sprintf(`metric,__name__=metric value=2 %d`, 1704067201000000000),
+		fmt.Sprintf(`metric,__name__=metric value=3 %d`, 1704067202000000000),
+		fmt.Sprintf(`metric,__name__=metric value=4 %d`, 1704067203000000000),
+		fmt.Sprintf(`metric,__name__=metric value=7 %d`, 1704067204000000000),
+		fmt.Sprintf(`metric,__name__=metric value=10 %d`, 1704067205000000000),
+		fmt.Sprintf(`metric,__name__=metric value=14 %d`, 1704067206000000000),
+		fmt.Sprintf(`metric,__name__=metric value=22 %d`, 1704067207000000000),
+		fmt.Sprintf(`metric,__name__=metric value=25 %d`, 1704067208000000000),
+		fmt.Sprintf(`metric,__name__=metric value=21 %d`, 1704067209000000000),
+		fmt.Sprintf(`metric,__name__=metric value=21 %d`, 1704067210000000000),
+	}
+
+	test := NewTest("db0", "autogen")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		&Query{
+			name:    "instant query:  irate(subquery)1",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:00Z"}},
+			command: `irate(metric[10s:1s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "instant query:  irate(subquery)2",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:08Z"}},
+			command: `irate(metric[10s:1s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067208,"3"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "instant query:  irate(subquery)3",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:09Z"}},
+			command: `irate(metric[10s:1s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067209,"21"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "instant query:  irate(subquery)4",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:10Z"}},
+			command: `irate(metric[10s:1s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067210,"0"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "instant query:  irate(subquery)5",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:10Z"}},
+			command: `irate(metric[10s:3s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067210,"2.3333333333333335"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "instant query:  irate(subquery)6",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:10Z"}},
+			command: `irate(metric[10s:5s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067210,"2.2"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "instant query:  irate(subquery)7",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:10Z"}},
+			command: `irate(metric[5s:2s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067210,"10.5"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "instant query:  idelta(subquery)1",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:00Z"}},
+			command: `idelta(metric[10s:1s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "instant query:  idelta(subquery)2",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:08Z"}},
+			command: `idelta(metric[10s:1s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067208,"3"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "instant query:  idelta(subquery)3",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:09Z"}},
+			command: `idelta(metric[10s:1s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067209,"-4"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "instant query:  idelta(subquery)4",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:10Z"}},
+			command: `idelta(metric[10s:1s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067210,"0"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "instant query:  idelta(subquery)5",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:10Z"}},
+			command: `idelta(metric[10s:3s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067210,"7"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "instant query:  idelta(subquery)6",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:10Z"}},
+			command: `idelta(metric[10s:5s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067210,"11"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "instant query:  idelta(subquery)7",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:10Z"}},
+			command: `idelta(metric[5s:2s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067210,"-4"]}]}}`,
+			path:    "/api/v1/query",
+		},
+	}...)
+
+	for i, query := range test.queries {
+		if i == 0 {
+			if err := test.init(s); err != nil {
+				t.Fatalf("test init failed: %s", err)
+			}
+		}
+		if query.skip {
+			t.Logf("SKIP:: %s", query.name)
+			continue
+		}
+		if err := query.ExecuteProm(s); err != nil {
+			t.Error(query.Error(err))
+		} else if !query.success() {
+			t.Error(query.failureMessage())
+		}
+	}
+}
+
+func TestServerPromQuerySubQueryStdVarOverTime(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewConfig())
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("autogen", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		fmt.Sprintf(`metric,__name__=metric value=1 %d`, 1704067200000000000),
+		fmt.Sprintf(`metric,__name__=metric value=2 %d`, 1704067201000000000),
+		fmt.Sprintf(`metric,__name__=metric value=3 %d`, 1704067202000000000),
+		fmt.Sprintf(`metric,__name__=metric value=4 %d`, 1704067203000000000),
+		fmt.Sprintf(`metric,__name__=metric value=7 %d`, 1704067204000000000),
+		fmt.Sprintf(`metric,__name__=metric value=10 %d`, 1704067205000000000),
+		fmt.Sprintf(`metric,__name__=metric value=14 %d`, 1704067206000000000),
+		fmt.Sprintf(`metric,__name__=metric value=22 %d`, 1704067207000000000),
+		fmt.Sprintf(`metric,__name__=metric value=25 %d`, 1704067208000000000),
+		fmt.Sprintf(`metric,__name__=metric value=26 %d`, 1704067209000000000),
+		fmt.Sprintf(`metric,__name__=metric value=28 %d`, 1704067210000000000),
+		fmt.Sprintf(`metric,__name__=metric value=38 %d`, 1704067211000000000),
+		fmt.Sprintf(`metric,__name__=metric value=40 %d`, 1704067212000000000),
+		fmt.Sprintf(`metric,__name__=metric value=1000000 %d`, 1704067213000000000),
+		fmt.Sprintf(`metric,__name__=metric value=2 %d`, 1704067214000000000),
+		fmt.Sprintf(`metric,__name__=metric value=200000000 %d`, 1704067215000000000),
+		fmt.Sprintf(`metric,__name__=metric value=3 %d`, 1704067216000000000),
+	}
+
+	test := NewTest("db0", "autogen")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		&Query{
+			name:    "Case: Beyond the left boundary",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:00Z"}},
+			command: `stdvar_over_time(metric[10s:1s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "Case: Beyond the right boundary",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:40Z"}},
+			command: `stdvar_over_time(metric[4s:2s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067240,"0"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "Case: Overlap with the left border",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:01Z"}},
+			command: `stdvar_over_time(metric[10s:1s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067201,"0.25"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "Case: Overlap with the right border",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:20Z"}},
+			command: `stdvar_over_time(metric[5s:1s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067220,"5555555388888890"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "Case: Normal situation",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:08Z"}},
+			command: `stdvar_over_time(metric[4s:2s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067208,"54.88888888888889"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "Case: Huge data differences",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:16Z"}},
+			command: `stdvar_over_time(metric[3s:1s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067216,"7475187374375002"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "Case: IsDev = true",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:08Z"}},
+			command: `stddev_over_time(metric[4s:2s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067208,"7.408703590297623"]}]}}`,
+			path:    "/api/v1/query",
+		},
+	}...)
+
+	for i, query := range test.queries {
+		if i == 0 {
+			if err := test.init(s); err != nil {
+				t.Fatalf("test init failed: %s", err)
+			}
+		}
+		if query.skip {
+			t.Logf("SKIP:: %s", query.name)
+			continue
+		}
+		if err := query.ExecuteProm(s); err != nil {
+			t.Error(query.Error(err))
+		} else if !query.success() {
+			t.Error(query.failureMessage())
+		}
+	}
+}
+
+func TestServer_PromQuery_MultiAgg_HashAgg_StdvarAndStddev(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewConfig())
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("autogen", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		fmt.Sprintf(`metric,__name__=metric,instance=1 value=1 %d`, 1704067200000000000),
+		fmt.Sprintf(`metric,__name__=metric,instance=1 value=2 %d`, 1704067201000000000),
+		fmt.Sprintf(`metric,__name__=metric,instance=1 value=3 %d`, 1704067202000000000),
+		fmt.Sprintf(`metric,__name__=metric,instance=1 value=4 %d`, 1704067203000000000),
+		fmt.Sprintf(`metric,__name__=metric,instance=1 value=7 %d`, 1704067204000000000),
+		fmt.Sprintf(`metric,__name__=metric,instance=1 value=10 %d`, 1704067205000000000),
+		fmt.Sprintf(`metric,__name__=metric,instance=1 value=14 %d`, 1704067206000000000),
+		fmt.Sprintf(`metric,__name__=metric,instance=1 value=22 %d`, 1704067207000000000),
+		fmt.Sprintf(`metric,__name__=metric,instance=1 value=25 %d`, 1704067208000000000),
+		fmt.Sprintf(`metric,__name__=metric,instance=1 value=21 %d`, 1704067209000000000),
+		fmt.Sprintf(`metric,__name__=metric,instance=1 value=21 %d`, 1704067210000000000),
+		fmt.Sprintf(`metric,__name__=metric,instance=2 value=4 %d`, 1704067202000000000),
+		fmt.Sprintf(`metric,__name__=metric,instance=2 value=7 %d`, 1704067203000000000),
+		fmt.Sprintf(`metric,__name__=metric,instance=2 value=10 %d`, 1704067204000000000),
+		fmt.Sprintf(`metric,__name__=metric,instance=2 value=14 %d`, 1704067205000000000),
+		fmt.Sprintf(`metric,__name__=metric,instance=2 value=22 %d`, 1704067206000000000),
+		fmt.Sprintf(`metric,__name__=metric,instance=3 value=25 %d`, 1704067207000000000),
+		fmt.Sprintf(`metric,__name__=metric,instance=3 value=28 %d`, 1704067208000000000),
+		fmt.Sprintf(`metric,__name__=metric,instance=3 value=21 %d`, 1704067209000000000),
+		fmt.Sprintf(`metric,__name__=metric,instance=3 value=21 %d`, 1704067210000000000),
+	}
+
+	test := NewTest("db0", "autogen")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		&Query{
+			name:    "instant query:  stddev(query)1",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:00Z"}},
+			command: `stddev(metric + metric + metric)`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067200,"0"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "instant query:  stddev(query)2",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:00Z"}},
+			command: `stddev(rate(metric[10s]) + rate(metric[10s]) + rate(metric[10s]))`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "instant query:  stddev(query)3",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:00Z"}},
+			command: `stddev(stddev_over_time(metric[10s]) + stddev_over_time(metric[10s]) + stddev_over_time(metric[10s]))`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067200,"0"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "instant query:  stddev(query)4",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:04Z"}},
+			command: `stddev(metric + metric + metric)`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067204,"4.5"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "instant query:  stddev(query)5",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:04Z"}},
+			command: `stddev(rate(metric[10s]) + rate(metric[10s]) + rate(metric[10s]))`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067204,"0.07500000000000018"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "instant query:  stddev(query)6",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:04Z"}},
+			command: `stddev(stddev_over_time(metric[10s]) + stddev_over_time(metric[10s]) + stddev_over_time(metric[10s]))`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067204,"0.5855455718786668"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "instant query:  stddev(query)7",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:08Z"}},
+			command: `stddev(metric + metric + metric)`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067208,"7.3484692283495345"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "instant query:  stddev(query)8",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:08Z"}},
+			command: `stddev(rate(metric[10s]) + rate(metric[10s]) + rate(metric[10s]))`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067208,"2.847586697538812"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "instant query:  stddev(query)9",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:08Z"}},
+			command: `stddev(stddev_over_time(metric[10s]) + stddev_over_time(metric[10s]) + stddev_over_time(metric[10s]))`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067208,"8.568310835456089"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "instant query:  stdvar(query)1",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:10Z"}},
+			command: `stdvar(metric + metric + metric)`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067210,"2"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "instant query:  stdvar(query)2",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:10Z"}},
+			command: `stdvar(rate(metric[10s]) + rate(metric[10s]) + rate(metric[10s]))`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067210,"7.336250000000001"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "instant query:  stdvar(query)3",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:10Z"}},
+			command: `stdvar(stddev_over_time(metric[10s]) + stddev_over_time(metric[10s]) + stddev_over_time(metric[10s]))`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067210,"49.745024058332234"]}]}}`,
+			path:    "/api/v1/query",
+		},
+	}...)
+
+	for i, query := range test.queries {
+		if i == 0 {
+			if err := test.init(s); err != nil {
+				t.Fatalf("test init failed: %s", err)
+			}
+		}
+		if query.skip {
+			t.Logf("SKIP:: %s", query.name)
+			continue
+		}
+		if err := query.ExecuteProm(s); err != nil {
+			t.Error(query.Error(err))
+		} else if !query.success() {
+			t.Error(query.failureMessage())
+		}
+	}
+}
+
+func TestServer_PromQuery_Subquery_FuncOverTime(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewConfig())
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("autogen", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		fmt.Sprintf(`metric1,__name__=metric1 value=14 %d`, 1704067200000000000),
+		fmt.Sprintf(`metric1,__name__=metric1 value=15 %d`, 1704067201000000000),
+		fmt.Sprintf(`metric1,__name__=metric1 value=64 %d`, 1704067202000000000),
+		fmt.Sprintf(`metric1,__name__=metric1 value=71 %d`, 1704067203000000000),
+		fmt.Sprintf(`metric1,__name__=metric1 value=15 %d`, 1704067204000000000),
+		fmt.Sprintf(`metric1,__name__=metric1 value=51 %d`, 1704067205000000000),
+		fmt.Sprintf(`metric1,__name__=metric1 value=52 %d`, 1704067206000000000),
+		fmt.Sprintf(`metric1,__name__=metric1 value=15 %d`, 1704067207000000000),
+		fmt.Sprintf(`metric1,__name__=metric1 value=65 %d`, 1704067208000000000),
+		fmt.Sprintf(`metric1,__name__=metric1 value=11 %d`, 1704067209000000000),
+		fmt.Sprintf(`metric1,__name__=metric1 value=13 %d`, 1704067210000000000),
+
+		fmt.Sprintf(`metric2,__name__=metric2 value=7 %d`, 1704067200000000000),
+		fmt.Sprintf(`metric2,__name__=metric2 value=8 %d`, 1704067201000000000),
+		fmt.Sprintf(`metric2,__name__=metric2 value=6 %d`, 1704067202000000000),
+		fmt.Sprintf(`metric2,__name__=metric2 value=7 %d`, 1704067203000000000),
+		fmt.Sprintf(`metric2,__name__=metric2 value=4 %d`, 1704067204000000000),
+		fmt.Sprintf(`metric2,__name__=metric2 value=2 %d`, 1704067205000000000),
+		fmt.Sprintf(`metric2,__name__=metric2 value=10 %d`, 1704067206000000000),
+		fmt.Sprintf(`metric2,__name__=metric2 value=12 %d`, 1704067207000000000),
+		fmt.Sprintf(`metric2,__name__=metric2 value=14 %d`, 1704067208000000000),
+		fmt.Sprintf(`metric2,__name__=metric2 value=7 %d`, 1704067209000000000),
+		fmt.Sprintf(`metric2,__name__=metric2 value=8 %d`, 1704067210000000000),
+	}
+
+	test := NewTest("db0", "autogen")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		{
+			name:    "instant query: min_over_time(subquery)",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:10Z"}},
+			command: `min_over_time(metric1[10s:1s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067210,"11"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instant query: max_over_time(subquery)",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:10Z"}},
+			command: `max_over_time(metric1[10s:1s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067210,"71"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instant query: sum_over_time(subquery)",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:10Z"}},
+			command: `sum_over_time(metric1[10s:1s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067210,"386"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instant query: avg_over_time(subquery)",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:10Z"}},
+			command: `avg_over_time(metric1[10s:1s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067210,"35.09090909090909"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instant query: count_over_time(subquery)",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:10Z"}},
+			command: `count_over_time(metric1[10s:1s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067210,"11"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instant query: rate(subquery)",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:10Z"}},
+			command: `rate(metric1[10s:1s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067210,"18.7"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instant query: delta(subquery)",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:10Z"}},
+			command: `delta(metric1[10s:1s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067210,"-1"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instant query: increase(subquery)",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:10Z"}},
+			command: `increase(metric1[10s:1s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067210,"187"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instant query: mad_over_time(subquery)",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:10Z"}},
+			command: `mad_over_time(metric1[10s:1s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067210,"4"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instant query with odd data: min_over_time(subquery)",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:10Z"}},
+			command: `min_over_time(((metric1 - 14) / (metric2 - 7))[10s:1s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067210,"-Inf"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instant query with odd data: max_over_time(subquery)",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:10Z"}},
+			command: `max_over_time(((metric1 - 14) / (metric2 - 7))[10s:1s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067210,"+Inf"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instant query with odd data: sum_over_time(subquery)",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:10Z"}},
+			command: `sum_over_time(((metric1 - 14) / (metric2 - 7))[10s:1s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067210,"NaN"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instant query with odd data: avg_over_time(subquery)",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:10Z"}},
+			command: `avg_over_time(((metric1 - 14) / (metric2 - 7))[10s:1s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067210,"NaN"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instant query with odd data: count_over_time(subquery)",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:10Z"}},
+			command: `count_over_time(((metric1 - 14) / (metric2 - 7))[10s:1s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067210,"11"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instant query with odd data: rate(subquery)",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:10Z"}},
+			command: `rate(((metric1 - 14) / (metric2 - 7))[10s:1s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067210,"NaN"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instant query with odd data: delta(subquery)",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:10Z"}},
+			command: `delta(((metric1 - 14) / (metric2 - 7))[10s:1s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067210,"NaN"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instant query with odd data: increase(subquery)",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:10Z"}},
+			command: `increase(((metric1 - 14) / (metric2 - 7))[10s:1s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067210,"NaN"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instant query with odd data: mad_over_time(subquery)",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:10Z"}},
+			command: `mad_over_time(((metric1 - 14) / (metric2 - 7))[10s:1s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067210,"7.066666666666667"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "range query: increase(subquery)",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1704067200"}, "end": []string{"1704067210"}, "step": []string{"1s"}},
+			command: `max_over_time((time() - max(metric1))[2s:1s] offset 2s)`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{},"values":[[1704067202,"1704067186"],[1704067203,"1704067186"],[1704067204,"1704067186"],[1704067205,"1704067186"],[1704067206,"1704067189"],[1704067207,"1704067189"],[1704067208,"1704067189"],[1704067209,"1704067192"],[1704067210,"1704067192"]]}]}}`,
+			path:    "/api/v1/query_range",
+		},
+	}...)
+
+	for i, query := range test.queries {
+		if i == 0 {
+			if err := test.init(s); err != nil {
+				t.Fatalf("test init failed: %s", err)
+			}
+		}
+		if query.skip {
+			t.Logf("SKIP:: %s", query.name)
+			continue
+		}
+		if err := query.ExecuteProm(s); err != nil {
+			t.Error(query.Error(err))
+		} else if !query.success() {
+			t.Error(query.failureMessage())
+		}
+	}
+}
+
+// fix: value [Comparison op] time_prom()
+func TestServer_PromQuery_Comparison_Op_Fix(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewConfig())
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("autogen", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		fmt.Sprintf(`metric,__name__=metric,tag=1 value=1 %d`, 0),
+		fmt.Sprintf(`metric,__name__=metric,tag=2 value=4000 %d`, 1000000000),
+		fmt.Sprintf(`metric,__name__=metric,tag=3 value=2 %d`, 2000000000),
+		fmt.Sprintf(`metric,__name__=metric,tag=4 value=5000 %d`, 3000000000),
+		fmt.Sprintf(`metric,__name__=metric,tag=5 value=3 %d`, 4000000000),
+		fmt.Sprintf(`metric,__name__=metric,tag=6 value=6000 %d`, 5000000000),
+		fmt.Sprintf(`metric,__name__=metric,tag=7 value=4 %d`, 6000000000),
+		fmt.Sprintf(`metric,__name__=metric,tag=8 value=7000 %d`, 7000000000),
+		fmt.Sprintf(`metric,__name__=metric,tag=9 value=5 %d`, 8000000000),
+	}
+
+	test := NewTest("db0", "autogen")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		&Query{
+			name:    "instant query:  metric > time()",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"1970-01-01T00:00:10Z"}},
+			command: `metric > time()`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"__name__":"metric","tag":"2"},"value":[10,"4000"]},{"metric":{"__name__":"metric","tag":"4"},"value":[10,"5000"]},{"metric":{"__name__":"metric","tag":"6"},"value":[10,"6000"]},{"metric":{"__name__":"metric","tag":"8"},"value":[10,"7000"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "instant query:  metric > time() < time()",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"1970-01-01T00:00:10Z"}},
+			command: `metric > time() < time()`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "instant query:  time() >= time() < metric",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"1970-01-01T00:00:10Z"}},
+			command: `time() >= (time() < metric)`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[]}}`,
+			path:    "/api/v1/query",
+		},
+		&Query{
+			name:    "instant query:  time() > metric - time()",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"1970-01-01T00:00:10Z"}},
+			command: `time() > metric - time()`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"tag":"1"},"value":[10,"1"]},{"metric":{"tag":"3"},"value":[10,"0"]},{"metric":{"tag":"5"},"value":[10,"-1"]},{"metric":{"tag":"7"},"value":[10,"-2"]},{"metric":{"tag":"9"},"value":[10,"-3"]}]}}`,
+			path:    "/api/v1/query",
+		},
+	}...)
+
+	for i, query := range test.queries {
+		if i == 0 {
+			if err := test.init(s); err != nil {
+				t.Fatalf("test init failed: %s", err)
+			}
+		}
+		if query.skip {
+			t.Logf("SKIP:: %s", query.name)
+			continue
+		}
+		if err := query.ExecuteProm(s); err != nil {
+			t.Error(query.Error(err))
+		} else if !query.success() {
+			t.Error(query.failureMessage())
+		}
+	}
+}
+
+func TestServerPromQuerySubQueryPredictLinear(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewConfig())
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("autogen", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		fmt.Sprintf(`metric,__name__=metric value=14 %d`, 1704067200000000000),
+		fmt.Sprintf(`metric,__name__=metric value=15 %d`, 1704067201000000000),
+		fmt.Sprintf(`metric,__name__=metric value=64 %d`, 1704067202000000000),
+		fmt.Sprintf(`metric,__name__=metric value=71 %d`, 1704067203000000000),
+		fmt.Sprintf(`metric,__name__=metric value=15 %d`, 1704067204000000000),
+		fmt.Sprintf(`metric,__name__=metric value=51 %d`, 1704067205000000000),
+		fmt.Sprintf(`metric,__name__=metric value=52 %d`, 1704067206000000000),
+		fmt.Sprintf(`metric,__name__=metric value=15 %d`, 1704067207000000000),
+		fmt.Sprintf(`metric,__name__=metric value=65 %d`, 1704067208000000000),
+		fmt.Sprintf(`metric,__name__=metric value=11 %d`, 1704067209000000000),
+		fmt.Sprintf(`metric,__name__=metric value=13 %d`, 1704067210000000000),
+	}
+
+	test := NewTest("db0", "autogen")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		{
+			name:    "instant query: predict_linear(subquery)",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:08Z"}},
+			command: `predict_linear(metric[8s:1s], 10)`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067208,"77.55555555555554"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instant query: deriv(subquery)",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:08Z"}},
+			command: `deriv(metric[8s:1s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067208,"2.6666666666666665"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instant query with odd data: predict_linear(subquery)",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:08Z"}},
+			command: `predict_linear((metric / (metric - 14))[8s:1s], 10)`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067208,"NaN"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instant query with odd data: predict_linear(subquery)",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:08Z"}},
+			command: `predict_linear(((metric - 14) / (metric - 14))[8s:1s], 10)`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067208,"NaN"]}]}}`,
+			path:    "/api/v1/query",
+		},
+	}...)
+
+	for i, query := range test.queries {
+		if i == 0 {
+			if err := test.init(s); err != nil {
+				t.Fatalf("test init failed: %s", err)
+			}
+		}
+		if query.skip {
+			t.Logf("SKIP:: %s", query.name)
+			continue
+		}
+		if err := query.ExecuteProm(s); err != nil {
+			t.Error(query.Error(err))
+		} else if !query.success() {
+			t.Error(query.failureMessage())
+		}
+	}
+}
+
+func TestServer_PromQuery_ScalarExpression(t *testing.T) {
+	s := OpenServer(NewConfig())
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("autogen", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+	test := NewTest("db0", "autogen")
+
+	test.addQueries([]*Query{
+		{
+			name:    "instant query: 1 + 1",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"4"}},
+			command: `1 + 1`,
+			exp:     `{"status":"success","data":{"resultType":"scalar","result":[4,"2"]}}`,
+			path:    "/api/v1/query",
+		},
+	}...)
+
+	for i, query := range test.queries {
+		if i == 0 {
+			if err := test.init(s); err != nil {
+				t.Fatalf("test init failed: %s", err)
+			}
+		}
+		if query.skip {
+			t.Logf("SKIP:: %s", query.name)
+			continue
+		}
+		if err := query.ExecuteProm(s); err != nil {
+			t.Error(query.Error(err))
+		} else if !query.success() {
+			t.Error(query.failureMessage())
+		}
+	}
+}
+
+func TestServerPromQuerySubQueryAbsentOverTime(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewConfig())
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("autogen", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+	writes := []string{
+		fmt.Sprintf(`metric,__name__=metric value=1 %d`, 1704067200000000000),
+		fmt.Sprintf(`metric,__name__=metric value=1 %d`, 1704067201000000000),
+		fmt.Sprintf(`metric,__name__=metric value=1 %d`, 1704067202000000000),
+		fmt.Sprintf(`metric,__name__=metric value=1 %d`, 1704067211000000000),
+	}
+	test := NewTest("db0", "autogen")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+	test.addQueries([]*Query{
+		{
+			name:    "range query:  absent_over_time",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1704067180"}, "end": []string{"1704067220"}, "step": []string{"10s"}},
+			command: `absent_over_time(metric[10s:2s])`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{},"values":[[1704067180,"1"],[1704067190,"1"]]}]}}`,
+			path:    "/api/v1/query_range",
+		},
+		{
+			name:    "range query:  present_over_time",
+			params:  url.Values{"db": []string{"db0"}, "start": []string{"1704067180"}, "end": []string{"1704067220"}, "step": []string{"10s"}},
+			command: `present_over_time(metric[10s:2s])`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{},"values":[[1704067200,"1"],[1704067210,"1"],[1704067220,"1"]]}]}}`,
+			path:    "/api/v1/query_range",
+		},
+		{
+			name:    "instant query with odd data:  absent_over_time",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:02Z"}},
+			command: `absent_over_time(((metric-1) / (metric-1))[2s:1s])[2s:1s]`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instant query with odd data:  absent_over_time",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:02Z"}},
+			command: `absent_over_time(((metric) / (metric-1))[2s:1s])[2s:1s]`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[]}}`,
+			path:    "/api/v1/query",
+		},
+	}...)
+
+	for i, query := range test.queries {
+		if i == 0 {
+			if err := test.init(s); err != nil {
+				t.Fatalf("test init failed: %s", err)
+			}
+		}
+		if query.skip {
+			t.Logf("SKIP:: %s", query.name)
+			continue
+		}
+		if err := query.ExecuteProm(s); err != nil {
+			t.Error(query.Error(err))
+		} else if !query.success() {
+			t.Error(query.failureMessage())
+		}
+	}
+}
+func TestServer_PromQuery_Subquery_LastAndQuantile(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewConfig())
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("autogen", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		fmt.Sprintf(`metric,__name__=metric value=1 %d`, 1704067200000000000),
+		fmt.Sprintf(`metric,__name__=metric value=2 %d`, 1704067201000000000),
+		fmt.Sprintf(`metric,__name__=metric value=3 %d`, 1704067202000000000),
+		fmt.Sprintf(`metric,__name__=metric value=4 %d`, 1704067203000000000),
+		fmt.Sprintf(`metric,__name__=metric value=7 %d`, 1704067204000000000),
+		fmt.Sprintf(`metric,__name__=metric value=10 %d`, 1704067205000000000),
+		fmt.Sprintf(`metric,__name__=metric value=14 %d`, 1704067206000000000),
+		fmt.Sprintf(`metric,__name__=metric value=22 %d`, 1704067207000000000),
+		fmt.Sprintf(`metric,__name__=metric value=25 %d`, 1704067208000000000),
+	}
+
+	test := NewTest("db0", "autogen")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+	test.addQueries([]*Query{
+		{
+			name:    "instant query:  last_over_time(subquery)1",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:00Z"}},
+			command: `last_over_time(metric[10s:1s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067200,"1"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instant query:  last_over_time(subquery)2",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:30Z"}},
+			command: `last_over_time(metric[10s:1s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067230,"25"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instant query:  last_over_time(subquery)3",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:08Z"}},
+			command: `last_over_time(metric[10s:1s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067208,"25"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instant query:  last_over_time(subquery)4",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:08Z"}},
+			command: `last_over_time(metric[10s:3s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067208,"14"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instant query:  last_over_time(subquery)5",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:06:30Z"}},
+			command: `last_over_time(metric[10s:3s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instant query:  quantile_over_time(subquery)1",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:08Z"}},
+			command: `quantile_over_time(1,metric[10s:1s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067208,"25"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instant query:  quantile_over_time(subquery)2",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:10Z"}},
+			command: `quantile_over_time(0,metric[10s:1s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067210,"1"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instant query:  quantile_over_time(subquery)3",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:10Z"}},
+			command: `quantile_over_time(1.5,metric[10s:1s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067210,"+Inf"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instant query:  quantile_over_time(subquery)4",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:10Z"}},
+			command: `quantile_over_time(-1.5,metric[10s:1s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067210,"-Inf"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instant query:  quantile_over_time(subquery)5",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:00:30Z"}},
+			command: `quantile_over_time(0.5,metric[10s:1s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067230,"25"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instant query:  quantile_over_time(subquery)6",
+			params:  url.Values{"db": []string{"db0"}, "time": []string{"2024-01-01T00:05:30Z"}},
+			command: `quantile_over_time(0.5,metric[10s:1s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[]}}`,
+			path:    "/api/v1/query",
+		},
+	}...)
+
+	for i, query := range test.queries {
+		if i == 0 {
+			if err := test.init(s); err != nil {
+				t.Fatalf("test init failed: %s", err)
+			}
+		}
+		if query.skip {
+			t.Logf("SKIP:: %s", query.name)
+			continue
+		}
+		if err := query.ExecuteProm(s); err != nil {
+			t.Error(query.Error(err))
+		} else if !query.success() {
+			t.Error(query.failureMessage())
+		}
+	}
+}
+
+func TestServer_PromQuery_Subquery_ChangesAndResetsAndHoltWinters(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewConfig())
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("prom", NewRetentionPolicySpec("autogen", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		fmt.Sprintf(`metric1,__name__=metric1 value=1 %d`, 1704067200000000000),
+		fmt.Sprintf(`metric1,__name__=metric1 value=1 %d`, 1704067201000000000),
+		fmt.Sprintf(`metric1,__name__=metric1 value=3 %d`, 1704067202000000000),
+		fmt.Sprintf(`metric1,__name__=metric1 value=4 %d`, 1704067203000000000),
+		fmt.Sprintf(`metric1,__name__=metric1 value=4 %d`, 1704067204000000000),
+		fmt.Sprintf(`metric1,__name__=metric1 value=8 %d`, 1704067205000000000),
+		fmt.Sprintf(`metric1,__name__=metric1 value=14 %d`, 1704067206000000000),
+		fmt.Sprintf(`metric1,__name__=metric1 value=22 %d`, 1704067207000000000),
+		fmt.Sprintf(`metric1,__name__=metric1 value=25 %d`, 1704067208000000000),
+		fmt.Sprintf(`metric1,__name__=metric1 value=21 %d`, 1704067209000000000),
+		fmt.Sprintf(`metric1,__name__=metric1 value=21 %d`, 1704067210000000000),
+
+		fmt.Sprintf(`metric2,__name__=metric2 value=7 %d`, 1704067200000000000),
+		fmt.Sprintf(`metric2,__name__=metric2 value=8 %d`, 1704067201000000000),
+		fmt.Sprintf(`metric2,__name__=metric2 value=6 %d`, 1704067202000000000),
+		fmt.Sprintf(`metric2,__name__=metric2 value=4 %d`, 1704067203000000000),
+		fmt.Sprintf(`metric2,__name__=metric2 value=4 %d`, 1704067204000000000),
+		fmt.Sprintf(`metric2,__name__=metric2 value=2 %d`, 1704067205000000000),
+		fmt.Sprintf(`metric2,__name__=metric2 value=10 %d`, 1704067206000000000),
+		fmt.Sprintf(`metric2,__name__=metric2 value=12 %d`, 1704067207000000000),
+		fmt.Sprintf(`metric2,__name__=metric2 value=14 %d`, 1704067208000000000),
+		fmt.Sprintf(`metric2,__name__=metric2 value=7 %d`, 1704067209000000000),
+		fmt.Sprintf(`metric2,__name__=metric2 value=8 %d`, 1704067210000000000),
+	}
+	test := NewTest("prom", "autogen")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+	test.addQueries([]*Query{
+		{
+			name:    "instant query:  changes(subquery)1",
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"2024-01-01T00:00:05Z"}},
+			command: `changes(metric1[5s:1s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067205,"3"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instant query:  changes(subquery)2",
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"2024-01-01T00:00:35Z"}},
+			command: `changes(metric1[10s:1s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067235,"0"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instant query:  changes(subquery)3",
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"2024-01-01T00:05:35Z"}},
+			command: `changes(metric1[10s:1s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instant query:  changes(subquery)4",
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"2024-01-01T00:00:10Z"}},
+			command: `changes((metric1/(metric1-4))[10s:1s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067210,"7"]}]}}`,
+			path:    "/api/v1/query",
+		}, {
+			name:    "instant query:  resets(subquery)1",
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"2024-01-01T00:00:05Z"}},
+			command: `resets(metric1[5s:1s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067205,"0"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instant query:  resets(subquery)2",
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"2024-01-01T00:00:35Z"}},
+			command: `resets(metric1[10s:1s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067235,"0"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instant query:  resets(subquery)3",
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"2024-01-01T00:05:35Z"}},
+			command: `resets(metric1[10s:1s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instant query:  resets(subquery)4",
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"2024-01-01T00:00:10Z"}},
+			command: `resets(metric1[10s:1s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067210,"1"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instant query:  resets(subquery)5",
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"2024-01-01T00:00:10Z"}},
+			command: `resets((metric1/(metric1-4))[10s:1s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067210,"5"]}]}}`,
+			path:    "/api/v1/query",
+		}, {
+			name:    "instant query:  holtWinters(subquery)1",
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"2024-01-01T00:00:10Z"}},
+			command: `holt_winters(metric1[10s:1s],0.5,0.5)`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067210,"24.841201782226562"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instant query:  holtWinters(subquery)2",
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"2024-01-01T00:00:10Z"}},
+			command: `holt_winters(((metric1-1)/(metric1-22))[10s:1s],0.9,0.2)`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067210,"NaN"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instant query:  holtWinters(subquery)3",
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"2024-01-01T00:00:10Z"}},
+			command: `holt_winters(((metric1-1)/(metric1-1))[10s:1s],0.9,0.2)`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1704067210,"NaN"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instant query:  holtWinters(subquery)4",
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"2024-01-01T00:00:10Z"}},
+			command: `holt_winters(metric1[10s:1s],1.1,0.8)`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[]}}`,
+			path:    "/api/v1/query",
+		},
+	}...)
+	for i, query := range test.queries {
+		if i == 0 {
+			if err := test.init(s); err != nil {
+				t.Fatalf("test init failed: %s", err)
+			}
+		}
+		if query.skip {
+			t.Logf("SKIP:: %s", query.name)
+			continue
+		}
+		if err := query.ExecuteProm(s); err != nil {
+			t.Error(query.Error(err))
+		} else if !query.success() {
+			t.Error(query.failureMessage())
+		}
+	}
+}
+
+func TestServer_PromQuery_BinOp_BugFix(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewConfig())
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("prom", NewRetentionPolicySpec("autogen", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		fmt.Sprintf(`metric1,__name__=metric1,a=a value=1 %d`, 1704067200000000000),
+		fmt.Sprintf(`metric1,__name__=metric1,a=a value=1 %d`, 1704067201000000000),
+
+		fmt.Sprintf(`metric2,__name__=metric2,b=b value=7 %d`, 1704067208000000000),
+		fmt.Sprintf(`metric2,__name__=metric2,b=b value=8 %d`, 1704067209000000000),
+	}
+	test := NewTest("prom", "autogen")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+	test.addQueries([]*Query{
+		{
+			name:    "range query:  metric1 offset 8s or metric2 offset 1s",
+			params:  url.Values{"db": []string{"prom"}, "start": []string{"1704067208"}, "end": []string{"1704067209"}, "step": []string{"1s"}, "lookback-delta": []string{"0s"}},
+			command: `metric1 offset 8s or metric2 offset 1s`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"__name__":"metric1","a":"a"},"values":[[1704067208,"1"],[1704067209,"1"]]},{"metric":{"__name__":"metric2","b":"b"},"values":[[1704067209,"7"]]}]}}`,
+			path:    "/api/v1/query_range",
+		},
+		{
+			name:    "range query:  metric1 offset 8s or metric2 offset 1s",
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"1704067209"}, "lookback-delta": []string{"0s"}},
+			command: `metric1 offset 8s or metric2 offset 1s`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"__name__":"metric1","a":"a"},"value":[1704067209,"1"]},{"metric":{"__name__":"metric2","b":"b"},"value":[1704067209,"7"]}]}}`,
+			path:    "/api/v1/query",
+		},
+	}...)
+	for i, query := range test.queries {
+		if i == 0 {
+			if err := test.init(s); err != nil {
+				t.Fatalf("test init failed: %s", err)
+			}
+		}
+		if query.skip {
+			t.Logf("SKIP:: %s", query.name)
+			continue
+		}
+		if err := query.ExecuteProm(s); err != nil {
+			t.Error(query.Error(err))
+		} else if !query.success() {
+			t.Error(query.failureMessage())
+		}
+	}
+}
+
+func TestServer_PromQuery_Selector_BugFix(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewConfig())
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("prom", NewRetentionPolicySpec("autogen", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		fmt.Sprintf(`metric1,__name__=metric1,a=abb value=1 %d`, 1704067200000000000),
+		fmt.Sprintf(`metric1,__name__=metric1,aa=bb value=2 %d`, 1704067200000000000),
+	}
+	test := NewTest("prom", "autogen")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+	test.addQueries([]*Query{
+		{
+			name:    "instant query:  metric1",
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"1704067200"}},
+			command: `metric1`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"__name__":"metric1","a":"abb"},"value":[1704067200,"1"]},{"metric":{"__name__":"metric1","aa":"bb"},"value":[1704067200,"2"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instant query:  metric1{b=\"b\"}",
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"1704067200"}},
+			command: `metric1{b!="b"}`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"__name__":"metric1","a":"abb"},"value":[1704067200,"1"]},{"metric":{"__name__":"metric1","aa":"bb"},"value":[1704067200,"2"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instant query:  metric1{b=\"b\", a=\"abb\"}",
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"1704067200"}},
+			command: `metric1{foo!~"bar", a="abb", x!="y", z="", group!=""}`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"__name__":"metric1","a":"abb"},"value":[1704067200,"1"]}]}}`,
+			path:    "/api/v1/query",
+		},
+	}...)
+	for i, query := range test.queries {
+		if i == 0 {
+			if err := test.init(s); err != nil {
+				t.Fatalf("test init failed: %s", err)
+			}
+		}
+		if query.skip {
+			t.Logf("SKIP:: %s", query.name)
+			continue
+		}
+		if err := query.ExecuteProm(s); err != nil {
+			t.Error(query.Error(err))
+		} else if !query.success() {
+			t.Error(query.failureMessage())
+		}
+	}
+}
+
+func TestServer_PromQuery_SortFunc(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewConfig())
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("prom", NewRetentionPolicySpec("autogen", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		fmt.Sprintf(`metric,rank=1 value=32 %d`, 1704067200000000000),
+		fmt.Sprintf(`metric,rank=2 value=256 %d`, 1704067201000000000),
+		fmt.Sprintf(`metric,rank=3 value=1024 %d`, 1704067202000000000),
+		fmt.Sprintf(`metric,rank=4 value=1 %d`, 1704067203000000000),
+		fmt.Sprintf(`metric,rank=5 value=64 %d`, 1704067204000000000),
+		fmt.Sprintf(`metric,rank=6 value=512 %d`, 1704067205000000000),
+		fmt.Sprintf(`metric,rank=7 value=128 %d`, 1704067206000000000),
+		fmt.Sprintf(`metric,rank=8 value=8 %d`, 1704067207000000000),
+		fmt.Sprintf(`metric,rank=9 value=2 %d`, 1704067208000000000),
+		fmt.Sprintf(`metric,rank=10 value=4 %d`, 1704067209000000000),
+		fmt.Sprintf(`metric,rank=11 value=16 %d`, 1704067210000000000),
+	}
+	test := NewTest("prom", "autogen")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		{
+			name:    "instant query: sort(metric)",
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"2024-01-01T00:00:10Z"}},
+			command: `sort(metric)`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"rank":"4"},"value":[1704067210,"1"]},{"metric":{"rank":"9"},"value":[1704067210,"2"]},{"metric":{"rank":"10"},"value":[1704067210,"4"]},{"metric":{"rank":"8"},"value":[1704067210,"8"]},{"metric":{"rank":"11"},"value":[1704067210,"16"]},{"metric":{"rank":"1"},"value":[1704067210,"32"]},{"metric":{"rank":"5"},"value":[1704067210,"64"]},{"metric":{"rank":"7"},"value":[1704067210,"128"]},{"metric":{"rank":"2"},"value":[1704067210,"256"]},{"metric":{"rank":"6"},"value":[1704067210,"512"]},{"metric":{"rank":"3"},"value":[1704067210,"1024"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instant query: sort_desc(metric)",
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"2024-01-01T00:00:10Z"}},
+			command: `sort_desc(metric)`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"rank":"3"},"value":[1704067210,"1024"]},{"metric":{"rank":"6"},"value":[1704067210,"512"]},{"metric":{"rank":"2"},"value":[1704067210,"256"]},{"metric":{"rank":"7"},"value":[1704067210,"128"]},{"metric":{"rank":"5"},"value":[1704067210,"64"]},{"metric":{"rank":"1"},"value":[1704067210,"32"]},{"metric":{"rank":"11"},"value":[1704067210,"16"]},{"metric":{"rank":"8"},"value":[1704067210,"8"]},{"metric":{"rank":"10"},"value":[1704067210,"4"]},{"metric":{"rank":"9"},"value":[1704067210,"2"]},{"metric":{"rank":"4"},"value":[1704067210,"1"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    `instant query: sort_by_label(metric, "rank")`,
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"2024-01-01T00:00:10Z"}},
+			command: `sort_by_label(metric, "rank")`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"rank":"1"},"value":[1704067210,"32"]},{"metric":{"rank":"2"},"value":[1704067210,"256"]},{"metric":{"rank":"3"},"value":[1704067210,"1024"]},{"metric":{"rank":"4"},"value":[1704067210,"1"]},{"metric":{"rank":"5"},"value":[1704067210,"64"]},{"metric":{"rank":"6"},"value":[1704067210,"512"]},{"metric":{"rank":"7"},"value":[1704067210,"128"]},{"metric":{"rank":"8"},"value":[1704067210,"8"]},{"metric":{"rank":"9"},"value":[1704067210,"2"]},{"metric":{"rank":"10"},"value":[1704067210,"4"]},{"metric":{"rank":"11"},"value":[1704067210,"16"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    `instant query: sort_by_label_desc(metric, "rank")`,
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"2024-01-01T00:00:10Z"}},
+			command: `sort_by_label_desc(metric, "rank")`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"rank":"11"},"value":[1704067210,"16"]},{"metric":{"rank":"10"},"value":[1704067210,"4"]},{"metric":{"rank":"9"},"value":[1704067210,"2"]},{"metric":{"rank":"8"},"value":[1704067210,"8"]},{"metric":{"rank":"7"},"value":[1704067210,"128"]},{"metric":{"rank":"6"},"value":[1704067210,"512"]},{"metric":{"rank":"5"},"value":[1704067210,"64"]},{"metric":{"rank":"4"},"value":[1704067210,"1"]},{"metric":{"rank":"3"},"value":[1704067210,"1024"]},{"metric":{"rank":"2"},"value":[1704067210,"256"]},{"metric":{"rank":"1"},"value":[1704067210,"32"]}]}}`,
+			path:    "/api/v1/query",
+		},
+	}...)
+
+	for i, query := range test.queries {
+		if i == 0 {
+			if err := test.init(s); err != nil {
+				t.Fatalf("test init failed: %s", err)
+			}
+		}
+		if query.skip {
+			t.Logf("SKIP:: %s", query.name)
+			continue
+		}
+		if err := query.ExecuteProm(s); err != nil {
+			t.Error(query.Error(err))
+		} else if !query.success() {
+			t.Error(query.failureMessage())
+		}
+	}
+}
+
+func TestServer_PromQuery_IntervalIndex_BugFix(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewConfig())
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("prom", NewRetentionPolicySpec("autogen", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		fmt.Sprintf(`metric1,__name__=metric1,appName=adc-batch,deviceIp=127.0.0.1 value=0 %d`, 1718867655000000000),
+		fmt.Sprintf(`metric1,__name__=metric1,appName=adc-batch,deviceIp=127.0.0.1 value=0 %d`, 1718867715000000000),
+		fmt.Sprintf(`metric1,__name__=metric1,appName=adc-batch,deviceIp=127.0.0.1 value=0 %d`, 1718867775000000000),
+		fmt.Sprintf(`metric1,__name__=metric1,appName=adc-batch,deviceIp=127.0.0.1 value=0 %d`, 1718867835000000000),
+		fmt.Sprintf(`metric1,__name__=metric1,appName=adc-bpm,deviceIp=127.0.0.1 value=2 %d`, 1718868375000000000),
+		fmt.Sprintf(`metric1,__name__=metric1,appName=adc-bpm,deviceIp=127.0.0.1 value=2 %d`, 1718868435000000000),
+		fmt.Sprintf(`metric1,__name__=metric1,appName=adc-bpm,deviceIp=127.0.0.1 value=2 %d`, 1718868495000000000),
+		fmt.Sprintf(`metric1,__name__=metric1,appName=adc-bpm,deviceIp=127.0.0.1 value=2 %d`, 1718868555000000000),
+		fmt.Sprintf(`metric1,__name__=metric1,appName=adc-model,deviceIp=127.0.0.1 value=2 %d`, 1718868375000000000),
+		fmt.Sprintf(`metric1,__name__=metric1,appName=adc-model,deviceIp=127.0.0.1 value=2 %d`, 1718868435000000000),
+		fmt.Sprintf(`metric1,__name__=metric1,appName=adc-model,deviceIp=127.0.0.1 value=2 %d`, 1718868495000000000),
+		fmt.Sprintf(`metric1,__name__=metric1,appName=adc-model,deviceIp=127.0.0.1 value=2 %d`, 1718868555000000000),
+		fmt.Sprintf(`metric1,__name__=metric1,appName=adc-schedule-job,deviceIp=127.0.0.1 value=1 %d`, 1718867295000000000),
+		fmt.Sprintf(`metric1,__name__=metric1,appName=adc-schedule-job,deviceIp=127.0.0.1 value=1 %d`, 1718867355000000000),
+		fmt.Sprintf(`metric1,__name__=metric1,appName=adc-schedule-job,deviceIp=127.0.0.1 value=1 %d`, 1718867415000000000),
+		fmt.Sprintf(`metric1,__name__=metric1,appName=adc-schedule-job,deviceIp=127.0.0.1 value=1 %d`, 1718867475000000000),
+		fmt.Sprintf(`metric1,__name__=metric1,appName=adc-service,deviceIp=127.0.0.1 value=30 %d`, 1718868375000000000),
+		fmt.Sprintf(`metric1,__name__=metric1,appName=adc-service,deviceIp=127.0.0.1 value=30 %d`, 1718868435000000000),
+		fmt.Sprintf(`metric1,__name__=metric1,appName=adc-service,deviceIp=127.0.0.1 value=30 %d`, 1718868495000000000),
+		fmt.Sprintf(`metric1,__name__=metric1,appName=adc-service,deviceIp=127.0.0.1 value=30 %d`, 1718868555000000000),
+	}
+	test := NewTest("prom", "autogen")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+	test.addQueries([]*Query{
+		{
+			name:    "range query: metric1{deviceIp=xxx}",
+			params:  url.Values{"db": []string{"prom"}, "start": []string{"1718866800"}, "end": []string{"1718868600"}, "step": []string{"30m"}},
+			command: `metric1{deviceIp="127.0.0.1"}`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"__name__":"metric1","appName":"adc-bpm","deviceIp":"127.0.0.1"},"values":[[1718868600,"2"]]},{"metric":{"__name__":"metric1","appName":"adc-model","deviceIp":"127.0.0.1"},"values":[[1718868600,"2"]]},{"metric":{"__name__":"metric1","appName":"adc-service","deviceIp":"127.0.0.1"},"values":[[1718868600,"30"]]}]}}`,
+			path:    "/api/v1/query_range",
+		},
+		{
+			name:    "instance query:  metric1{deviceIp=xxx}",
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"1718868600"}},
+			command: `metric1{deviceIp="127.0.0.1"}`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"__name__":"metric1","appName":"adc-bpm","deviceIp":"127.0.0.1"},"value":[1718868600,"2"]},{"metric":{"__name__":"metric1","appName":"adc-model","deviceIp":"127.0.0.1"},"value":[1718868600,"2"]},{"metric":{"__name__":"metric1","appName":"adc-service","deviceIp":"127.0.0.1"},"value":[1718868600,"30"]}]}}`,
+			path:    "/api/v1/query",
+		},
+	}...)
+	for i, query := range test.queries {
+		if i == 0 {
+			if err := test.init(s); err != nil {
+				t.Fatalf("test init failed: %s", err)
+			}
+		}
+		if query.skip {
+			t.Logf("SKIP:: %s", query.name)
+			continue
+		}
+		if err := query.ExecuteProm(s); err != nil {
+			t.Error(query.Error(err))
+		} else if !query.success() {
+			t.Error(query.failureMessage())
+		}
+	}
+}
+
+func TestServer_PromQuery_PredictLinear_BugFix(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewConfig())
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("prom", NewRetentionPolicySpec("autogen", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		fmt.Sprintf(`metric1,__name__=metric1 value=0 %d`, 0),
+		fmt.Sprintf(`metric1,__name__=metric1 value=10 %d`, 300000000000),
+		fmt.Sprintf(`metric1,__name__=metric1 value=20 %d`, 600000000000),
+		fmt.Sprintf(`metric1,__name__=metric1 value=30 %d`, 900000000000),
+		fmt.Sprintf(`metric1,__name__=metric1 value=40 %d`, 1200000000000),
+		fmt.Sprintf(`metric1,__name__=metric1 value=0 %d`, 1500000000000),
+		fmt.Sprintf(`metric1,__name__=metric1 value=10 %d`, 1800000000000),
+		fmt.Sprintf(`metric1,__name__=metric1 value=20 %d`, 2100000000000),
+		fmt.Sprintf(`metric1,__name__=metric1 value=30 %d`, 2400000000000),
+		fmt.Sprintf(`metric1,__name__=metric1 value=40 %d`, 2700000000000),
+		fmt.Sprintf(`metric1,__name__=metric1 value=50 %d`, 3000000000000),
+	}
+	test := NewTest("prom", "autogen")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+	test.addQueries([]*Query{
+		{
+			name:    "instance query:  predict_linear(metric1[100m] @ 2000, 3600)",
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"0"}},
+			command: `predict_linear(metric1[100m] @ 2000, 3600)`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"25.357142857142854"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instance query:  predict_linear(metric1[100m] @ 2000, 3600)",
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"1800"}},
+			command: `predict_linear(metric1[100m] @ 2000, 3600)`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1800,"31.785714285714285"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instance query:  predict_linear(metric1[100m] @ 3000, 3600)",
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"0"}},
+			command: `predict_linear(metric1[100m] @ 3000, 3600)`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[0,"45.00000000000001"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instance query:  predict_linear(metric1[100m] @ 3000, 3600)",
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"1800"}},
+			command: `predict_linear(metric1[100m] @ 3000, 3600)`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1800,"64.0909090909091"]}]}}`,
+			path:    "/api/v1/query",
+		},
+	}...)
+	for i, query := range test.queries {
+		if i == 0 {
+			if err := test.init(s); err != nil {
+				t.Fatalf("test init failed: %s", err)
+			}
+		}
+		if query.skip {
+			t.Logf("SKIP:: %s", query.name)
+			continue
+		}
+		if err := query.ExecuteProm(s); err != nil {
+			t.Error(query.Error(err))
+		} else if !query.success() {
+			t.Error(query.failureMessage())
+		}
+	}
+}
+
+func TestServer_PromQuery_PredictLinearAndDeriv_ConstantYFix(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewConfig())
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("prom", NewRetentionPolicySpec("autogen", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		fmt.Sprintf(`metric1,__name__=metric1 value=37 %d`, 0),
+		fmt.Sprintf(`metric1,__name__=metric1 value=37 %d`, 100000000000),
+		fmt.Sprintf(`metric1,__name__=metric1 value=37 %d`, 200000000000),
+		fmt.Sprintf(`metric1,__name__=metric1 value=37 %d`, 300000000000),
+	}
+	test := NewTest("prom", "autogen")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+	test.addQueries([]*Query{
+		{
+			name:    "instance query: predict_linear(metric1[300s], 100)",
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"300"}},
+			command: `predict_linear(metric1[300s], 100)`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[300,"37"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instance query: predict_linear(metric1[300s], 200)",
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"300"}},
+			command: `predict_linear(metric1[300s], 200)`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[300,"37"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instance query: deriv(metric1[300s])",
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"300"}},
+			command: `deriv(metric1[300s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[300,"0"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "subquery: predict_linear(metric1[300s:100s])",
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"300"}},
+			command: `predict_linear(metric1[300s:100s], 233)`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[300,"37"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "subquery: deriv(metric1[300s:100s])",
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"300"}},
+			command: `deriv(metric1[300s:100s])`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[300,"0"]}]}}`,
+			path:    "/api/v1/query",
+		},
+	}...)
+	for i, query := range test.queries {
+		if i == 0 {
+			if err := test.init(s); err != nil {
+				t.Fatalf("test init failed: %s", err)
+			}
+		}
+		if query.skip {
+			t.Logf("SKIP:: %s", query.name)
+			continue
+		}
+		if err := query.ExecuteProm(s); err != nil {
+			t.Error(query.Error(err))
+		} else if !query.success() {
+			t.Error(query.failureMessage())
+		}
+	}
+}
+
+func TestServer_PromQuery_NameTag_BugFix(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewConfig())
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("prom", NewRetentionPolicySpec("autogen", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	startValue := 0
+	valueNum := 10
+	timeGap := 300 * 1000 * 1000 * 1000
+	startTime := 0
+	writes := make([]string, 0)
+	for i := 0; i <= valueNum; i++ {
+		writes = append(writes, fmt.Sprintf(`http_requests,__name__=http_requests,job=api-server,instance=0,group=production value=%d %d`, startValue+i*10, startTime+i*timeGap))
+		writes = append(writes, fmt.Sprintf(`http_requests,__name__=http_requests,job=api-server,instance=1,group=production value=%d %d`, startValue+i*20, startTime+i*timeGap))
+		writes = append(writes, fmt.Sprintf(`http_requests,__name__=http_requests,job=api-server,instance=0,group=canary value=%d %d`, startValue+i*30, startTime+i*timeGap))
+		writes = append(writes, fmt.Sprintf(`http_requests,__name__=http_requests,job=api-server,instance=1,group=canary value=%d %d`, startValue+i*40, startTime+i*timeGap))
+		writes = append(writes, fmt.Sprintf(`foo,__name__=foo,job=api-server,instance=0,region=europe value=%d %d`, startValue+i*90, startTime+i*timeGap))
+		writes = append(writes, fmt.Sprintf(`foo,__name__=foo,job=api-server value=%d %d`, startValue+i*100, startTime+i*timeGap))
+	}
+
+	test := NewTest("prom", "autogen")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+	test.addQueries([]*Query{
+		{
+			name:    "instance query: sum without (instance) - 1",
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"3000"}},
+			command: `sum without (instance) (http_requests{job="api-server"} or foo)`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"group":"canary","job":"api-server"},"value":[3000,"700"]},{"metric":{"group":"production","job":"api-server"},"value":[3000,"300"]},{"metric":{"job":"api-server","region":"europe"},"value":[3000,"900"]},{"metric":{"job":"api-server"},"value":[3000,"1000"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instance query: sum without (instance) - 2",
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"3000"}},
+			command: `sum without (instance) (http_requests{job="api-server"})`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"group":"canary","job":"api-server"},"value":[3000,"700"]},{"metric":{"group":"production","job":"api-server"},"value":[3000,"300"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "range query: sum without (instance) - 3",
+			params:  url.Values{"db": []string{"prom"}, "start": []string{"0"}, "end": []string{"3000"}, "step": []string{"3000"}},
+			command: `sum without (instance) (http_requests{job="api-server"} or foo)`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"group":"canary","job":"api-server"},"values":[[0,"0"],[3000,"700"]]},{"metric":{"group":"production","job":"api-server"},"values":[[0,"0"],[3000,"300"]]},{"metric":{"job":"api-server"},"values":[[0,"0"],[3000,"1000"]]},{"metric":{"job":"api-server","region":"europe"},"values":[[0,"0"],[3000,"900"]]}]}}`,
+			path:    "/api/v1/query_range",
+		},
+		{
+			name:    "range query: sum without (instance) - 4",
+			params:  url.Values{"db": []string{"prom"}, "start": []string{"0"}, "end": []string{"3000"}, "step": []string{"3000"}},
+			command: `sum without (instance) (http_requests{job="api-server"})`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"group":"canary","job":"api-server"},"values":[[0,"0"],[3000,"700"]]},{"metric":{"group":"production","job":"api-server"},"values":[[0,"0"],[3000,"300"]]}]}}`,
+			path:    "/api/v1/query_range",
+		},
+	}...)
+	for i, query := range test.queries {
+		if i == 0 {
+			if err := test.init(s); err != nil {
+				t.Fatalf("test init failed: %s", err)
+			}
+		}
+		if query.skip {
+			t.Logf("SKIP:: %s", query.name)
+			continue
+		}
+		if err := query.ExecuteProm(s); err != nil {
+			t.Error(query.Error(err))
+		} else if !query.success() {
+			t.Error(query.failureMessage())
+		}
+	}
+}
+
+func TestServer_PromQuery_Filter_BugFix(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewConfig())
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("prom", NewRetentionPolicySpec("autogen", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		fmt.Sprintf(`up,__name__=up,instance=localhost:9090,job=container value=5 %d`, 1709258342955000000),
+		fmt.Sprintf(`up,__name__=up,instance=localhost:8080,job=container value=4 %d`, 1709258342955000000),
+		fmt.Sprintf(`up,__name__=up,instance=localhost:7070,job=container value=5 %d`, 1709258341955000000),
+		fmt.Sprintf(`up,__name__=up,instance=localhost:7070,job=container value=4 %d`, 1709258342955000000),
+	}
+	test := NewTest("prom", "autogen")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+	test.addQueries([]*Query{
+		{
+			name:    "instant query:  up >= 5",
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"1709258342.955"}},
+			command: `up >= 5`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"__name__":"up","instance":"localhost:9090","job":"container"},"value":[1709258342.955,"5"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instant query: up >= ((5*3+5*2)/5)",
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"1709258342.955"}},
+			command: `up >= ((5*3+5*2)/5)`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"__name__":"up","instance":"localhost:9090","job":"container"},"value":[1709258342.955,"5"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instant query: up >= bool 5",
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"1709258342.955"}},
+			command: `up >= bool 5`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"instance":"localhost:7070","job":"container"},"value":[1709258342.955,"0"]},{"metric":{"instance":"localhost:8080","job":"container"},"value":[1709258342.955,"0"]},{"metric":{"instance":"localhost:9090","job":"container"},"value":[1709258342.955,"1"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instant query: count(up >= 5)",
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"1709258342.955"}},
+			command: `count(up >= 5)`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1709258342.955,"1"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "range query: count(up >= 5)",
+			params:  url.Values{"db": []string{"prom"}, "start": []string{"1709258312.955"}, "end": []string{"1709258342.955"}, "step": []string{"15s"}},
+			command: `count(up >= 5)`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{},"values":[[1709258342.955,"1"]]}]}}`,
+			path:    "/api/v1/query_range",
+		},
+		{
+			name:    "range query: count(up >= 5) / count(up) * 100",
+			params:  url.Values{"db": []string{"prom"}, "start": []string{"1709258312.955"}, "end": []string{"1709258342.955"}, "step": []string{"15s"}},
+			command: `count(up >= 5) / count(up) * 100`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{},"values":[[1709258342.955,"33.33333333333333"]]}]}}`,
+			path:    "/api/v1/query_range",
+		},
+	}...)
+	for i, query := range test.queries {
+		if i == 0 {
+			if err := test.init(s); err != nil {
+				t.Fatalf("test init failed: %s", err)
+			}
+		}
+		if query.skip {
+			t.Logf("SKIP:: %s", query.name)
+			continue
+		}
+		if err := query.ExecuteProm(s); err != nil {
+			t.Error(query.Error(err))
+		} else if !query.success() {
+			t.Error(query.failureMessage())
+		}
+	}
+}
+
+func TestServer_PromQuery_Idelta_BugFix(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewConfig())
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("prom", NewRetentionPolicySpec("autogen", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		fmt.Sprintf(`metric1,__name__=metric1,path=/foo value=0 %d`, 0),
+		fmt.Sprintf(`metric1,__name__=metric1,path=/foo value=50 %d`, 300000000000),
+		fmt.Sprintf(`metric1,__name__=metric1,path=/foo value=100 %d`, 600000000000),
+		fmt.Sprintf(`metric1,__name__=metric1,path=/foo value=150 %d`, 900000000000),
+		fmt.Sprintf(`metric1,__name__=metric1,path=/bar value=0 %d`, 0),
+		fmt.Sprintf(`metric1,__name__=metric1,path=/bar value=50 %d`, 300000000000),
+		fmt.Sprintf(`metric1,__name__=metric1,path=/bar value=100 %d`, 600000000000),
+		fmt.Sprintf(`metric1,__name__=metric1,path=/bar value=50 %d`, 900000000000),
+	}
+	test := NewTest("prom", "autogen")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+	test.addQueries([]*Query{
+		{
+			name:    "range query: idelta(metric1[20m]) - 1",
+			params:  url.Values{"db": []string{"prom"}, "start": []string{"1140"}, "end": []string{"1260"}, "step": []string{"60s"}},
+			command: `idelta(metric1[20m])`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"path":"/bar"},"values":[[1140,"-50"],[1200,"-50"],[1260,"-50"]]},{"metric":{"path":"/foo"},"values":[[1140,"50"],[1200,"50"],[1260,"50"]]}]}}`,
+			path:    "/api/v1/query_range",
+		},
+	}...)
+	for i, query := range test.queries {
+		if i == 0 {
+			if err := test.init(s); err != nil {
+				t.Fatalf("test init failed: %s", err)
+			}
+		}
+		if query.skip {
+			t.Logf("SKIP:: %s", query.name)
+			continue
+		}
+		if err := query.ExecuteProm(s); err != nil {
+			t.Error(query.Error(err))
+		} else if !query.success() {
+			t.Error(query.failureMessage())
+		}
+	}
+}
+
+func TestServer_PromQuery_DuplicateLabels_BugFix(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewConfig())
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("prom", NewRetentionPolicySpec("autogen", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		fmt.Sprintf(`testmetric1,__name__=testmetric1,src=a,dst=b value=0 %d`, 0),
+		fmt.Sprintf(`testmetric1,__name__=testmetric1,src=a,dst=b value=10 %d`, 300000000000),
+		fmt.Sprintf(`testmetric2,__name__=testmetric2,src=a,dst=b value=1 %d`, 0),
+		fmt.Sprintf(`testmetric2,__name__=testmetric2,src=a,dst=b value=11 %d`, 300000000000),
+	}
+	test := NewTest("prom", "autogen")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+	test.addQueries([]*Query{
+		{
+			name:    "instance query:  {__name__=~\"testmetric1|testmetric2\"}[5m]",
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"300"}},
+			command: `{__name__=~"testmetric1|testmetric2"}[5m]`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"__name__":"testmetric1","dst":"b","src":"a"},"values":[[0,"0"],[300,"10"]]},{"metric":{"__name__":"testmetric2","dst":"b","src":"a"},"values":[[0,"1"],[300,"11"]]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instance query:  changes({__name__=~\"testmetric1|testmetric2\"}[5m])",
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"300"}},
+			command: `changes({__name__=~"testmetric1|testmetric2"}[5m])`,
+			exp:     `unexpected status code: code=422, body={"status":"error","errorType":"execution","error":"populatePromSeries raise err: vector cannot contain metrics with the same labelset"}`,
+			path:    "/api/v1/query",
+		},
+	}...)
+	for i, query := range test.queries {
+		if i == 0 {
+			if err := test.init(s); err != nil {
+				t.Fatalf("test init failed: %s", err)
+			}
+		}
+		if query.skip {
+			t.Logf("SKIP:: %s", query.name)
+			continue
+		}
+		if err := query.ExecuteProm(s); err != nil {
+			if query.exp != err.Error() {
+				t.Error(query.Error(err))
+			}
+		} else if !query.success() {
+			t.Error(query.failureMessage())
+		}
+	}
+}
+
+func TestServer_PromQuery_NestedCount_Bugfix(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewConfig())
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("prom", NewRetentionPolicySpec("autogen", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		fmt.Sprintf(`metric1,__name__=metric1,id=1 value=1 %d`, 1000000000),
+		fmt.Sprintf(`metric1,__name__=metric1,id=1 value=2 %d`, 2000000000),
+		fmt.Sprintf(`metric1,__name__=metric1,id=1 value=3 %d`, 3000000000),
+		fmt.Sprintf(`metric1,__name__=metric1,id=1 value=4 %d`, 4000000000),
+		fmt.Sprintf(`metric1,__name__=metric1,id=1 value=5 %d`, 5000000000),
+		fmt.Sprintf(`metric1,__name__=metric1,id=2 value=6 %d`, 1000000000),
+		fmt.Sprintf(`metric1,__name__=metric1,id=2 value=7 %d`, 2000000000),
+		fmt.Sprintf(`metric1,__name__=metric1,id=2 value=8 %d`, 3000000000),
+		fmt.Sprintf(`metric1,__name__=metric1,id=3 value=9 %d`, 4000000000),
+		fmt.Sprintf(`metric1,__name__=metric1,id=3 value=0 %d`, 5000000000),
+	}
+	test := NewTest("prom", "autogen")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+	test.addQueries([]*Query{
+		{
+			name:    "instance query: count(rate(metric1[5s]))",
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"5"}},
+			command: `count(rate(metric1[5s]))`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[5,"3"]}]}}`,
+			path:    "/api/v1/query",
+		},
+	}...)
+	for i, query := range test.queries {
+		if i == 0 {
+			if err := test.init(s); err != nil {
+				t.Fatalf("test init failed: %s", err)
+			}
+		}
+		if query.skip {
+			t.Logf("SKIP:: %s", query.name)
+			continue
+		}
+		if err := query.ExecuteProm(s); err != nil {
+			if query.exp != err.Error() {
+				t.Error(query.Error(err))
+			}
+		} else if !query.success() {
+			t.Error(query.failureMessage())
+		}
+	}
+}
+
+func TestServer_PromQuery_MultiShard_MultiMetric_BugFix(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewConfig())
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("prom", NewRetentionPolicy("autogen", 1, 6*time.Hour, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		fmt.Sprintf(`up,__name__=up,instance=localhost:8086,job1=prometheus value=2 %d`, 1709348312955000000),
+		fmt.Sprintf(`up,__name__=up,instance=localhost:8086,job1=prometheus value=2 %d`, 1709438312955000000),
+		fmt.Sprintf(`up,__name__=up,instance=localhost:8086,job2=prometheus value=3 %d`, 1709348312955000000),
+		fmt.Sprintf(`up,__name__=up,instance=localhost:8086,job3=prometheus value=5 %d`, 1709438312955000000),
+		fmt.Sprintf(`down,__name__=down,instance=localhost:8086,job1=prometheus value=2 %d`, 1709348312955000000),
+		fmt.Sprintf(`down,__name__=down,instance=localhost:8086,job1=prometheus value=2 %d`, 1709438312955000000),
+		fmt.Sprintf(`down,__name__=down,instance=localhost:8086,job2=prometheus value=3 %d`, 1709348312955000000),
+		fmt.Sprintf(`down,__name__=down,instance=localhost:8086,job3=prometheus value=5 %d`, 1709438312955000000),
+	}
+	test := NewTest("prom", "autogen")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+	test.addQueries([]*Query{
+		{
+			name:    "instance query:  (sum_over_time(up[1d])) or (sum_over_time(down[1d]))",
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"1709438312.955"}},
+			command: `(sum_over_time(up[1d])) or (sum_over_time(down[1d]))`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"instance":"localhost:8086","job1":"prometheus"},"value":[1709438312.955,"2"]},{"metric":{"instance":"localhost:8086","job3":"prometheus"},"value":[1709438312.955,"5"]}]}}`,
+			path:    "/api/v1/query",
+		},
+	}...)
+	for i, query := range test.queries {
+		if i == 0 {
+			if err := test.init(s); err != nil {
+				t.Fatalf("test init failed: %s", err)
+			}
+		}
+		if query.skip {
+			t.Logf("SKIP:: %s", query.name)
+			continue
+		}
+		if err := query.ExecuteProm(s); err != nil {
+			if query.exp != err.Error() {
+				t.Error(query.Error(err))
+			}
 		} else if !query.success() {
 			t.Error(query.failureMessage())
 		}

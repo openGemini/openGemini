@@ -70,6 +70,9 @@ func buildHashAggResultRowDataTypeProm() hybridqp.RowDataType {
 		influxql.VarRef{Val: "countVal0", Type: influxql.Float},
 		influxql.VarRef{Val: "minVal0", Type: influxql.Float},
 		influxql.VarRef{Val: "maxVal0", Type: influxql.Float},
+		influxql.VarRef{Val: "stdvarVal0", Type: influxql.Float},
+		influxql.VarRef{Val: "stddevVal0", Type: influxql.Float},
+		influxql.VarRef{Val: "group0", Type: influxql.Float},
 	)
 	return rowDataType
 }
@@ -107,6 +110,9 @@ func buildHashAggInputRowDataTypeProm() hybridqp.RowDataType {
 		influxql.VarRef{Val: "val0", Type: influxql.Float},
 		influxql.VarRef{Val: "val1", Type: influxql.Float},
 		influxql.VarRef{Val: "val2", Type: influxql.Float},
+		influxql.VarRef{Val: "val3", Type: influxql.Float},
+		influxql.VarRef{Val: "val4", Type: influxql.Float},
+		influxql.VarRef{Val: "val5", Type: influxql.Float},
 	)
 	return rowDataType
 }
@@ -408,6 +414,12 @@ func BuildHashAggResultProm() []executor.Chunk {
 	AppendFloatValues(chunk1, 1, []float64{1.1, 2.2}, []bool{true, true})
 
 	AppendFloatValues(chunk1, 2, []float64{3.3, 4.4}, []bool{true, true})
+
+	AppendFloatValues(chunk1, 3, []float64{1.2099999999999995, 1.2100000000000002}, []bool{true, true})
+
+	AppendFloatValues(chunk1, 4, []float64{1.0999999999999999, 1.1}, []bool{true, true})
+
+	AppendFloatValues(chunk1, 5, []float64{1, 1}, []bool{true, true})
 
 	return []executor.Chunk{chunk1}
 }
@@ -1132,7 +1144,7 @@ func buildAggFuncsName() []string {
 
 func buildPromAggFuncsName() []string {
 	return []string{
-		"count_prom", "min_prom", "max_prom"}
+		"count_prom", "min_prom", "max_prom", "stdvar_prom", "stddev_prom", "group_prom"}
 }
 
 func TestHashAggTransformGroupByNoFixIntervalNullFillForDimsInForAllAggForNormal(t *testing.T) {

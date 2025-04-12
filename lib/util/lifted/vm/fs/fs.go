@@ -59,12 +59,15 @@ func WriteFileAtomically(path string, lockPath *string, data []byte) error {
 
 	// Sync the containing directory, so the file is guaranteed to appear in the directory.
 	// See https://www.quora.com/When-should-you-fsync-the-containing-directory-in-addition-to-the-file-itself
-	absPath, err := filepath.Abs(path)
-	if err != nil {
-		return fmt.Errorf("cannot obtain absolute path to %q: %w", path, err)
+
+	if fileops.GetFsType(path) != fileops.Obs {
+		absPath, err := filepath.Abs(path)
+		if err != nil {
+			return fmt.Errorf("cannot obtain absolute path to %q: %w", path, err)
+		}
+		parentDirPath := filepath.Dir(absPath)
+		MustSyncPath(parentDirPath)
 	}
-	parentDirPath := filepath.Dir(absPath)
-	MustSyncPath(parentDirPath)
 
 	return nil
 }
@@ -218,7 +221,7 @@ func HardLinkFiles(srcDir, dstDir string) error {
 		return fmt.Errorf("cannot create dstDir=%q: %w", dstDir, err)
 	}
 
-	d, err := os.Open(srcDir)
+	d, err := os.Open(filepath.Clean(srcDir))
 	if err != nil {
 		return fmt.Errorf("cannot open srcDir=%q: %w", srcDir, err)
 	}

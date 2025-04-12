@@ -84,6 +84,7 @@ type Service struct {
 	MetaClient interface {
 		PruneGroupsCommand(shardGroup bool, id uint64) error
 		GetShardDurationInfo(index uint64) (*meta.ShardDurationResponse, error)
+		GetIndexDurationInfo(index uint64) (*meta.IndexDurationResponse, error)
 		DeleteShardGroup(database, policy string, id uint64, deleteType int32) error
 		DeleteIndexGroup(database, policy string, id uint64) error
 		DelayDeleteShardGroup(database, policy string, id uint64, deletedAt time.Time, deleteType int32) error
@@ -93,9 +94,10 @@ type Service struct {
 
 	Engine interface {
 		DeleteIndex(db string, ptId uint32, indexID uint64) error
-		UpdateShardDurationInfo(info *meta.ShardDurationInfo) error
-		ExpiredShards() []*meta.ShardIdentifier
-		ExpiredIndexes() []*meta.IndexIdentifier
+		UpdateShardDurationInfo(info *meta.ShardDurationInfo, nilShardMap *map[uint64]*meta.ShardDurationInfo) error
+		UpdateIndexDurationInfo(info *meta.IndexDurationInfo, nilIndexMap *map[uint64]*meta.IndexDurationInfo) error
+		ExpiredShards(nilShardMap *map[uint64]*meta.ShardDurationInfo) []*meta.ShardIdentifier
+		ExpiredIndexes(nilIndexMap *map[uint64]*meta.IndexDurationInfo) []*meta.IndexIdentifier
 		ExpiredCacheIndexes() []*meta.IndexIdentifier
 		DeleteShard(db string, ptId uint32, shardID uint64) error
 		ClearIndexCache(db string, ptId uint32, indexID uint64) error
@@ -234,9 +236,9 @@ func (s *Service) DeleteShardOrIndex(db string, ptId uint32, id uint64, delType 
 }
 
 // ShardGroup Retention Policy check and IndexGroup Retention Policy check.
-func (s *Service) handleLocalStorage(logger *zap.Logger) bool {
+func (s *Service) handleLocalStorage(logger *zap.Logger, nilShardMap *map[uint64]*meta.ShardDurationInfo, nilIndexMap *map[uint64]*meta.IndexDurationInfo) bool {
 	var retryNeeded bool
-	expiredShards := s.Engine.ExpiredShards()
+	expiredShards := s.Engine.ExpiredShards(nilShardMap)
 	for i := range expiredShards {
 		if err := s.MetaClient.DeleteShardGroup(expiredShards[i].OwnerDb, expiredShards[i].Policy, expiredShards[i].ShardGroupID, meta.MarkDelete); err != nil {
 			logger.Info("Failed to delete shard group",
@@ -245,7 +247,6 @@ func (s *Service) handleLocalStorage(logger *zap.Logger) bool {
 				log.RetentionPolicy(expiredShards[i].Policy),
 				zap.Error(err))
 			retryNeeded = true
-			continue
 		}
 
 		if err := s.DeleteShardOrIndex(expiredShards[i].OwnerDb, expiredShards[i].OwnerPt, expiredShards[i].ShardID, ShardDelete); err != nil {
@@ -253,9 +254,9 @@ func (s *Service) handleLocalStorage(logger *zap.Logger) bool {
 				log.Database(expiredShards[i].OwnerDb),
 				log.Shard(expiredShards[i].ShardID),
 				zap.Error(err))
-
-			retryNeeded = true
-			continue
+			if !errno.Equal(err, errno.ShardNotFound) && !errno.Equal(err, errno.IndexNotFound) {
+				retryNeeded = true
+			}
 		}
 
 		if err := s.MetaClient.PruneGroupsCommand(true, expiredShards[i].ShardID); err != nil {
@@ -263,7 +264,7 @@ func (s *Service) handleLocalStorage(logger *zap.Logger) bool {
 		}
 	}
 
-	expiredIndexes := s.Engine.ExpiredIndexes()
+	expiredIndexes := s.Engine.ExpiredIndexes(nilIndexMap)
 	for i := range expiredIndexes {
 		if err := s.MetaClient.DeleteIndexGroup(expiredIndexes[i].OwnerDb, expiredIndexes[i].Policy, expiredIndexes[i].Index.IndexGroupID); err != nil {
 			logger.Error("Failed to mark delete index group", log.Database(expiredIndexes[i].OwnerDb),
@@ -272,7 +273,6 @@ func (s *Service) handleLocalStorage(logger *zap.Logger) bool {
 				zap.Error(err))
 
 			retryNeeded = true
-			continue
 		}
 
 		if err := s.DeleteShardOrIndex(expiredIndexes[i].OwnerDb, expiredIndexes[i].OwnerPt, expiredIndexes[i].Index.IndexID, IndexDelete); err != nil {
@@ -282,7 +282,6 @@ func (s *Service) handleLocalStorage(logger *zap.Logger) bool {
 				zap.Error(err))
 
 			retryNeeded = true
-			continue
 		}
 
 		// send request to clear deleted shard group from PyMeta.
@@ -300,14 +299,13 @@ func (s *Service) handleLocalStorage(logger *zap.Logger) bool {
 				zap.Error(err))
 
 			retryNeeded = true
-			continue
 		}
 	}
 
 	return retryNeeded
 }
 
-func (s *Service) updateDurationInfo() error {
+func (s *Service) updateShardDurationInfo(nilShardMap *map[uint64]*meta.ShardDurationInfo) error {
 	res, err := s.MetaClient.GetShardDurationInfo(s.index)
 	if err != nil {
 		return err
@@ -317,7 +315,7 @@ func (s *Service) updateDurationInfo() error {
 	}
 
 	for i := range res.Durations {
-		err = s.Engine.UpdateShardDurationInfo(&res.Durations[i])
+		err = s.Engine.UpdateShardDurationInfo(&res.Durations[i], nilShardMap)
 		if errno.Equal(err, errno.PtNotFound) || errno.Equal(err, errno.DBPTClosed) {
 			continue
 		}
@@ -328,9 +326,41 @@ func (s *Service) updateDurationInfo() error {
 	return nil
 }
 
+func (s *Service) updateIndexDurationInfo(nilIndexMap *map[uint64]*meta.IndexDurationInfo) error {
+	res, err := s.MetaClient.GetIndexDurationInfo(s.index)
+	if err != nil {
+		return err
+	}
+	if res.DataIndex > s.index {
+		s.index = res.DataIndex
+	}
+
+	for i := range res.Durations {
+		err = s.Engine.UpdateIndexDurationInfo(&res.Durations[i], nilIndexMap)
+		if errno.Equal(err, errno.PtNotFound) || errno.Equal(err, errno.DBPTClosed) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Service) updateDurationInfo(nilShardMap *map[uint64]*meta.ShardDurationInfo, nilIndexMap *map[uint64]*meta.IndexDurationInfo) error {
+	err1 := s.updateShardDurationInfo(nilShardMap)
+	err2 := s.updateIndexDurationInfo(nilIndexMap)
+	if err1 != nil {
+		return err1
+	}
+	return err2
+}
+
 func (s *Service) handle() {
 	logger, logEnd := log.NewOperation(s.Logger.GetZapLogger(), "retention policy deletion check", "retention_delete_check")
-	if err := s.updateDurationInfo(); err != nil {
+	nilShardMap := make(map[uint64]*meta.ShardDurationInfo)
+	nilIndexMap := make(map[uint64]*meta.IndexDurationInfo)
+	if err := s.updateDurationInfo(&nilShardMap, &nilIndexMap); err != nil {
 		logger.Warn("update duration info failed", zap.Error(err))
 		return
 	}
@@ -343,7 +373,7 @@ func (s *Service) handle() {
 	if config.IsLogKeeper() {
 		retryNeeded = s.handleSharedStorage(logger)
 	} else {
-		retryNeeded = s.handleLocalStorage(logger)
+		retryNeeded = s.handleLocalStorage(logger, &nilShardMap, &nilIndexMap)
 	}
 
 	if retryNeeded {

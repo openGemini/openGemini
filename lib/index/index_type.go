@@ -31,6 +31,7 @@ const (
 	MinMax
 	Set
 	IndexTypeAll
+	BloomFilterIp
 )
 
 const (
@@ -42,6 +43,7 @@ const (
 	BloomFilterFullTextIndex = "bloomfilter_fulltext"
 	MinMaxIndex              = "minmax"
 	SetIndex                 = "set"
+	BloomFilterIpIndex       = "bloomfilter_ip"
 )
 
 var (
@@ -54,6 +56,7 @@ var (
 		BloomFilterFullTextIndex: BloomFilterFullText,
 		MinMaxIndex:              MinMax,
 		SetIndex:                 Set,
+		BloomFilterIpIndex:       BloomFilterIp,
 	}
 	IndexTypeToName = map[IndexType]string{
 		MergeSet:            MergeSetIndex,
@@ -64,7 +67,14 @@ var (
 		BloomFilterFullText: BloomFilterFullTextIndex,
 		MinMax:              MinMaxIndex,
 		Set:                 SetIndex,
+		BloomFilterIp:       BloomFilterIpIndex,
 	}
+)
+
+type ContextKey string
+
+const (
+	QueryIndexState ContextKey = "QueryIndexState"
 )
 
 func GetIndexTypeByName(name string) (IndexType, error) {

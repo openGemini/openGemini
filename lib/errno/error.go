@@ -17,6 +17,7 @@ package errno
 import (
 	"fmt"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -165,7 +166,7 @@ func Equal(err error, errno ...Errno) bool {
 	}
 
 	e, ok := err.(*Error)
-	if !ok {
+	if !ok || e == nil {
 		return false
 	}
 
@@ -307,4 +308,40 @@ func (u *ErrsPool) Get() *Errs {
 func (u *ErrsPool) Put(v *Errs) {
 	v.Clean()
 	u.pool.Put(v)
+}
+
+// Errors that need to be retried in both HA and non-HA scenarios.
+var retryableErrnos = []Errno{
+	NoConnectionAvailable,
+	ConnectionClosed,
+	NoNodeAvailable,
+	SelectClosedConn,
+	SessionSelectTimeout,
+	OpenSessionTimeout,
+	PtNotFound,
+	DBPTClosed,
+	ShardMetaNotFound,
+}
+
+var retryableErrStrs = []string{
+	"connection reset by peer",
+	"connection refused",
+	"broken pipe",
+	"write: connection timed out",
+	"use of closed network connection",
+	"measurement already exists",
+}
+
+// IsRetryErrorForPtView returns true if dbpt is not on this node.
+func IsRetryErrorForPtView(err error) bool {
+	if Equal(err, retryableErrnos...) {
+		return true
+	}
+	str := err.Error()
+	for _, s := range retryableErrStrs {
+		if strings.Contains(str, s) {
+			return true
+		}
+	}
+	return false
 }

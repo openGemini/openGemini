@@ -31,7 +31,7 @@ func CheckRecord(rec *Record) {
 	}
 
 	if rec.ColVals[colN-1].NilCount != 0 {
-		panic(fmt.Sprintf("nil count of time column is not zero"))
+		panic("nil count of time column is not zero")
 	}
 
 	for i := 1; i < colN; i++ {

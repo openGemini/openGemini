@@ -96,12 +96,12 @@ func (pcr *PageCacheReader) ReadSinglePage(cacheKey string, pageOffset int64, pa
 		pageCache.Ref()
 		tempPage, err := pcr.r.Read(pageOffset, uint32(pageSize), &pageCache.Value, ioPriority)
 		if err != nil {
-			pageCache.Unref()
+			pageCache.Unref(readcache.CachePagePool)
 			log.Error("read TSSPFile failed", zap.Error(err))
 			return nil, nil, err
 		}
 		pageCache.Size = int64(len(tempPage))
-		cacheIns.AddPageCache(cacheKey, pageCache, int64(len(tempPage)))
+		cacheIns.AddPageCache(cacheKey, pageCache, int64(len(tempPage)), readcache.CachePagePool)
 		return pageCache, tempPage, nil
 	}
 }
@@ -110,6 +110,7 @@ func (pcr *PageCacheReader) Read(offset int64, size uint32, buf *[]byte, ioPrior
 	return pcr.read(offset, size, buf, ioPriority)
 }
 
+// variablePage use Get/AddPage, thus not reuse buf in dataCacheIns
 func (pcr *PageCacheReader) ReadVariablePageSize(offset int64, size uint32, buf *[]byte, ioPriority int) ([]byte, *readcache.CachePage, error) {
 	var err error
 	cacheIns := readcache.GetReadDataCacheIns()
@@ -133,7 +134,7 @@ func (pcr *PageCacheReader) ReadVariablePageSize(offset int64, size uint32, buf 
 		log.Error("read TSSPFile failed", zap.Error(err))
 		return nil, nil, err
 	}
-	cacheIns.AddPage(cacheKey, b, int64(size))
+	cacheIns.AddPage(cacheKey, b, int64(size), readcache.CachePagePool)
 	return b, nil, nil
 }
 

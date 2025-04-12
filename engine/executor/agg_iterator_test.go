@@ -22,7 +22,32 @@ import (
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
+	"github.com/stretchr/testify/assert"
 )
+
+func TestHeapItem_SortByValue(t *testing.T) {
+	chunk := NewChunkImpl(hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "val1", Type: influxql.Integer},
+		influxql.VarRef{Val: "time", Type: influxql.Integer},
+	), "test")
+
+	c1 := NewColumnImpl(influxql.Integer)
+	c1.AppendManyNotNil(5)
+	c1.AppendIntegerValues([]int64{1, 8, 9, 2, 3})
+
+	chunk.SetTime([]int64{1, 2, 3, 4, 5})
+	chunk.ResetIntervalIndex(0)
+	chunk.AddColumn(c1)
+	topN := 3
+	heapItem := NewHeapItem(topN, TopCmpByValueReduceProm[int64], TopCmpByTimeReduce[int64], SortByValueDsc[int64])
+	heapItem.append(chunk, 0, c1.Length(), 0, c1.IntegerValues())
+	expValues := []int64{9, 8, 3}
+	// sort by value
+	heapItem.sortFunc(heapItem)
+	for i, v := range heapItem.items {
+		assert.Equal(t, expValues[i], v.value)
+	}
+}
 
 func TestHeapItem_AppendFast(t *testing.T) {
 	chunk := NewChunkImpl(hybridqp.NewRowDataTypeImpl(
@@ -39,7 +64,7 @@ func TestHeapItem_AppendFast(t *testing.T) {
 	chunk.AddColumn(c1)
 
 	topN := 3
-	heapItem := NewHeapItem(topN, TopCmpByValueReduce[int64], TopCmpByTimeReduce[int64])
+	heapItem := NewHeapItem(topN, TopCmpByValueReduce[int64], TopCmpByTimeReduce[int64], SortByTimeAsc[int64])
 	heapItem.append(chunk, 0, c1.Length(), 0, c1.IntegerValues())
 
 	expectPointItems := []PointItem[int64]{
@@ -88,7 +113,7 @@ func TestHeapItem_AppendSlow(t *testing.T) {
 	chunk.AddColumn(c1)
 
 	topN := 3
-	heapItem := NewHeapItem(topN, TopCmpByValueReduce[int64], TopCmpByTimeReduce[int64])
+	heapItem := NewHeapItem(topN, TopCmpByValueReduce[int64], TopCmpByTimeReduce[int64], SortByTimeAsc[int64])
 	heapItem.append(chunk, 0, c1.Length(), 0, c1.IntegerValues())
 
 	expectPointItems := []PointItem[int64]{
@@ -137,7 +162,7 @@ func TestHeapItem_AppendForAuxFast(t *testing.T) {
 	chunk.AddColumn(c1)
 
 	topN := 3
-	heapItem := NewHeapItem(topN, TopCmpByValueReduce[int64], TopCmpByTimeReduce[int64])
+	heapItem := NewHeapItem(topN, TopCmpByValueReduce[int64], TopCmpByTimeReduce[int64], SortByTimeAsc[int64])
 	heapItem.appendForAux(chunk, 0, c1.Length(), 0, c1.IntegerValues())
 
 	expectPointItems := []PointItem[int64]{
@@ -186,7 +211,7 @@ func TestHeapItem_AppendForAuxSlow(t *testing.T) {
 	chunk.AddColumn(c1)
 
 	topN := 3
-	heapItem := NewHeapItem(topN, TopCmpByValueReduce[int64], TopCmpByTimeReduce[int64])
+	heapItem := NewHeapItem(topN, TopCmpByValueReduce[int64], TopCmpByTimeReduce[int64], SortByTimeAsc[int64])
 	heapItem.appendForAux(chunk, 0, c1.Length(), 0, c1.IntegerValues())
 
 	expectPointItems := []PointItem[int64]{
@@ -568,6 +593,39 @@ func TestIntegerTimeColIntegerIteratorNext(t *testing.T) {
 	p2 := &IteratorParams{}
 	iter.Next(ie2, p2)
 	if len(ie2.OutputPoint.Chunk.Columns()) != 2 {
+		t.Fatal("not expect result")
+	}
+}
+
+func TestCreateLabelsFromCondition(t *testing.T) {
+	expr := &influxql.BinaryExpr{
+		Op: influxql.AND,
+		LHS: &influxql.BinaryExpr{
+			Op: influxql.EQREGEX,
+			LHS: &influxql.VarRef{
+				Val: "job",
+			},
+			RHS: &influxql.RegexLiteral{
+				Val: nil,
+			},
+		},
+		RHS: &influxql.BinaryExpr{
+			Op: influxql.EQ,
+			LHS: &influxql.VarRef{
+				Val: "handler",
+			},
+			RHS: &influxql.StringLiteral{
+				Val: "/",
+			},
+		},
+	}
+	kvMap := make(map[string]string)
+	kCountMap := make(map[string]int)
+	createLabelsFromCondition(expr, kvMap, kCountMap)
+	if len(kvMap) != 1 && len(kCountMap) != 1 {
+		t.Fatal("not expect result length")
+	}
+	if _, ok := kvMap["handler"]; !ok {
 		t.Fatal("not expect result")
 	}
 }

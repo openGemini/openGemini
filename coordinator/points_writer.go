@@ -75,7 +75,7 @@ type PWMetaClient interface {
 	UpdateSchema(database string, retentionPolicy string, mst string, fieldToCreate []*proto2.FieldSchema) error
 	CreateMeasurement(database string, retentionPolicy string, mst string, shardKey *meta2.ShardKeyInfo, numOfShards int32, indexR *influxql.IndexRelation, engineType config.EngineType,
 		colStoreInfo *meta2.ColStoreInfo, schemaInfo []*proto2.FieldSchema, options *meta2.Options) (*meta2.MeasurementInfo, error)
-	GetAliveShards(database string, sgi *meta2.ShardGroupInfo) []int
+	GetAliveShards(database string, sgi *meta2.ShardGroupInfo, isRead bool) []int
 	GetStreamInfos() map[string]*meta2.StreamInfo
 	GetDstStreamInfos(db, rp string, dstSis *[]*meta2.StreamInfo) bool
 	DBRepGroups(database string) []meta2.ReplicaGroup
@@ -118,7 +118,7 @@ func (srs ShardRows) Swap(i, j int)      { srs[i], srs[j] = srs[j], srs[i] }
 
 func buildColumnToIndex(r *influx.Row) {
 	if r.ColumnToIndex == nil {
-		r.ColumnToIndex = make(map[string]int)
+		r.ColumnToIndex = make(map[string]int, r.Tags.Len()+r.Fields.Len())
 	}
 	index := 0
 	for i := range r.Tags {
@@ -235,7 +235,7 @@ func (w *PointsWriter) RetryWritePointRows(database, retentionPolicy string, row
 			break
 		}
 		// if pt is offline, retry to get alive shards to write in write-available-first policy
-		if !IsRetryErrorForPtView(err) {
+		if !errno.IsRetryErrorForPtView(err) {
 			w.logger.Error("write point rows failed",
 				zap.String("db", database),
 				zap.String("rp", retentionPolicy),
@@ -376,9 +376,32 @@ func (w *PointsWriter) routeAndMapOriginRows(
 	var r *influx.Row
 	var originName string
 
+	// Check whether all stream tasks are filter-only.
+	// If yes, skip the 'buildColumnToIndex' procedure.
+	var isAllStreamFilterOnly = true
+	for i := range *(ctx.getDstSis()) {
+		streamInfo := (*ctx.getDstSis())[i]
+		if streamInfo.Interval > 0 || len(streamInfo.Dims) > 0 {
+			isAllStreamFilterOnly = false
+			break
+		}
+	}
+
 	wh := ctx.getWriteHelper(w)
 	for i := range rows {
 		r = &rows[i]
+
+		// the filter-only stream destination measurement cannot be written
+		if len(ctx.streamDstMstNames) > 0 {
+			streamInfo, exist := ctx.streamDstMstNames[r.Name]
+			if exist && streamInfo.Interval == 0 && len(streamInfo.Dims) == 0 && streamInfo.Cond != "" {
+				errInfo := errno.NewError(errno.WriteDstStreamMstNotAllowed, r.Name)
+				w.logger.Error("write failed", zap.Error(errInfo), zap.String("measurement", r.Name))
+				partialErr = errInfo
+				dropped++
+				continue
+			}
+		}
 
 		//check point is between rp duration
 		if r.Timestamp < ctx.minTime || !w.inTimeRange(r.Timestamp) {
@@ -432,9 +455,25 @@ func (w *PointsWriter) routeAndMapOriginRows(
 				}
 			}
 		}
-
 		if len(*ctx.getDstSis()) > 0 {
-			buildColumnToIndex(r)
+			if !isAllStreamFilterOnly {
+				buildColumnToIndex(r)
+			}
+
+			// update stream measurement schema for 'select *'
+			if len(ctx.fieldToCreatePool) > 0 {
+				for j := range *ctx.getDstSis() {
+					streamInfo := (*ctx.getDstSis())[j]
+					if streamInfo.SrcMst.Name != originName || !streamInfo.IsSelectAll {
+						continue
+					}
+					err = w.MetaClient.UpdateSchema(
+						database, retentionPolicy, streamInfo.DesMst.Name, ctx.fieldToCreatePool)
+					if err != nil {
+						return nil, dropped, err
+					}
+				}
+			}
 		}
 		updateIndexOptions(r, ctx.ms.GetIndexRelation())
 
@@ -577,6 +616,24 @@ func (w *PointsWriter) routeAndCalculateStreamRows(ctx *injestionCtx) (err error
 						}
 						continue
 					}
+				} else if len((*dstSis)[idx].Dims) == 0 && (*dstSis)[idx].Interval == 0 && (*dstSis)[idx].Cond != "" {
+					// filter only, no group by and no call
+					for _, v := range (*dstSis)[idx].Calls {
+						if v.Call != "" {
+							return errors.New("the filter-only stream task can contain only var_ref(tag or field)")
+						}
+					}
+
+					if (*dstSis)[idx].SrcMst.Database != (*dstSis)[idx].DesMst.Database {
+						return errors.New("the source and destination measurement must be in the same database")
+					}
+
+					if (*dstSis)[idx].SrcMst.RetentionPolicy != (*dstSis)[idx].DesMst.RetentionPolicy {
+						return errors.New("the source and destination measurement must be in the same retention policy")
+					}
+
+					w.updateSrcStreamDstShardIdMap(rs, (*dstSis)[idx].ID, shardId, srcStreamDstShardIdMap)
+					continue
 				}
 
 				// Case4: different distribution, if the source table and the target table are not belong to the same distribution,
@@ -695,7 +752,7 @@ func (w *PointsWriter) updateShardGroupAndShardKey(
 	}
 
 	if !sameSg {
-		*asis = w.MetaClient.GetAliveShards(database, sg)
+		*asis = w.MetaClient.GetAliveShards(database, sg, false)
 	}
 
 	if (*si).Type == influxql.RANGE {
@@ -792,7 +849,7 @@ RETRY:
 				w.logger.Error("[coordinator] store write failed", zap.String("db", database), zap.Uint32("pt", ptId), zap.Error(err))
 				break RETRY
 			}
-			if err != nil && IsRetryErrorForPtView(err) {
+			if err != nil && errno.IsRetryErrorForPtView(err) {
 				// maybe dbpt route to new node, retry get the right nodeID
 				w.logger.Error("[coordinator] retry write rows", zap.String("db", database), zap.Uint32("pt", ptId), zap.Error(err))
 
@@ -862,42 +919,6 @@ func (w *PointsWriter) ApplyTimeRangeLimit(limit []toml.Duration) {
 
 func (w *PointsWriter) Close() {
 	close(w.signal)
-}
-
-// Errors that need to be retried in both HA and non-HA scenarios.
-var retryableErrnos = []errno.Errno{
-	errno.NoConnectionAvailable,
-	errno.ConnectionClosed,
-	errno.NoNodeAvailable,
-	errno.SelectClosedConn,
-	errno.SessionSelectTimeout,
-	errno.OpenSessionTimeout,
-	errno.PtNotFound,
-	errno.DBPTClosed,
-	errno.ShardMetaNotFound,
-}
-
-var retryableErrStrs = []string{
-	"connection reset by peer",
-	"connection refused",
-	"broken pipe",
-	"write: connection timed out",
-	"use of closed network connection",
-	"measurement already exists",
-}
-
-// IsRetryErrorForPtView returns true if dbpt is not on this node.
-func IsRetryErrorForPtView(err error) bool {
-	if errno.Equal(err, retryableErrnos...) {
-		return true
-	}
-	str := err.Error()
-	for _, s := range retryableErrStrs {
-		if strings.Contains(str, s) {
-			return true
-		}
-	}
-	return false
 }
 
 func selectIndexList(columnToIndex map[string]int, indexList []string) ([]uint16, bool) {

@@ -78,6 +78,9 @@ var (
 	_ = RegistryMaterializeFunction("row_max", &rowMaxFunc{
 		BaseInfo: BaseInfo{FuncType: MATH},
 	})
+	_ = RegistryMaterializeFunction("if", &ifFunc{
+		BaseInfo: BaseInfo{FuncType: MATH},
+	})
 	_ = RegistryMaterializeFunction("cast_int64", &castInt64Func{
 		BaseInfo: BaseInfo{FuncType: MATH},
 	})
@@ -114,10 +117,19 @@ var (
 	_ = RegistryMaterializeFunction("tanh", &tanhFunc{
 		BaseInfo: BaseInfo{FuncType: MATH},
 	})
+	_ = RegistryMaterializeFunction("truncate", &truncateFunc{
+		BaseInfo: BaseInfo{FuncType: MATH},
+	})
 	_ = RegistryMaterializeFunction("asinh", &asinhFunc{
 		BaseInfo: BaseInfo{FuncType: MATH},
 	})
 	_ = RegistryMaterializeFunction("atanh", &atanhFunc{
+		BaseInfo: BaseInfo{FuncType: MATH},
+	})
+	_ = RegistryMaterializeFunction("sgn", &sgnFunc{
+		BaseInfo: BaseInfo{FuncType: MATH},
+	})
+	_ = RegistryMaterializeFunction("acosh", &acoshFunc{
 		BaseInfo: BaseInfo{FuncType: MATH},
 	})
 )
@@ -148,6 +160,18 @@ func compileMathFunction(expr *influxql.Call, c *compiledField, n int) error {
 
 type absFunc struct {
 	BaseInfo
+}
+
+func processFunctionIf(expr *influxql.Call) error {
+	conditionString := expr.Args[0].String()[1 : len(expr.Args[0].String())-1]
+	conditionString = strings.Replace(conditionString, "\\", "", -1)
+	condition, err := influxql.ParseExpr(conditionString)
+	if err != nil {
+		return fmt.Errorf("invalid condition, input like '\"key\" [operator] \\'string\\'' or '\"key\" [operator] digit'")
+	}
+
+	expr.Args[0] = condition
+	return nil
 }
 
 func (f *absFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
@@ -570,6 +594,35 @@ func (f *rowMaxFunc) CallFunc(name string, args []interface{}) (interface{}, boo
 	}
 }
 
+type ifFunc struct {
+	BaseInfo
+}
+
+func (f *ifFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
+	// Syntax like if(CONDITION, THEN, ELSE), the CONDITION is an expression like '"key"=/'value/''
+	// the THEN and ELSE are names of Tag or Field in ColumnStore and only support field in tsStore.
+	err := compileMathFunction(expr, c, 3)
+	if err != nil {
+		return err
+	}
+	return processFunctionIf(expr)
+}
+
+func (f *ifFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
+	return callTypeFunctionIf(name, args)
+}
+
+func (f *ifFunc) CallFunc(name string, args []interface{}) (interface{}, bool) {
+	conditionMet, noError := args[0].(bool)
+	if noError {
+		if conditionMet {
+			return args[1], true
+		}
+		return args[2], true
+	}
+	return nil, false
+}
+
 type castInt64Func struct {
 	BaseInfo
 }
@@ -892,6 +945,29 @@ func (f *tanhFunc) CallFunc(name string, args []interface{}) (interface{}, bool)
 	return nil, true
 }
 
+type truncateFunc struct {
+	BaseInfo
+}
+
+func (f *truncateFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
+	if len(expr.Args) != 1 {
+		return fmt.Errorf("invalid argument number in %s(): %d", expr.Name, len(expr.Args))
+	}
+
+	return compileMathFunction(expr, c, 1)
+}
+
+func (f *truncateFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
+	return commonCallType1(name, args)
+}
+
+func (f *truncateFunc) CallFunc(name string, args []interface{}) (interface{}, bool) {
+	if arg0, ok := asFloat(args[0]); ok {
+		return math.Trunc(arg0), true
+	}
+	return nil, true
+}
+
 type asinhFunc struct {
 	BaseInfo
 }
@@ -926,6 +1002,51 @@ func (f *atanhFunc) CallTypeFunc(name string, args []influxql.DataType) (influxq
 func (f *atanhFunc) CallFunc(name string, args []interface{}) (interface{}, bool) {
 	if arg0, ok := asFloat(args[0]); ok {
 		return math.Atanh(arg0), true
+	}
+	return nil, true
+}
+
+type sgnFunc struct {
+	BaseInfo
+}
+
+func (f *sgnFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
+	return compileMathFunction(expr, c, 1)
+}
+
+func (f *sgnFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
+	return commonCallType1(name, args)
+}
+
+func (f *sgnFunc) CallFunc(name string, args []interface{}) (interface{}, bool) {
+	if arg0, ok := asFloat(args[0]); ok {
+		switch {
+		case arg0 < 0:
+			return float64(-1), true
+		case arg0 > 0:
+			return float64(1), true
+		default:
+			return arg0, true
+		}
+	}
+	return nil, true
+}
+
+type acoshFunc struct {
+	BaseInfo
+}
+
+func (f *acoshFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
+	return compileMathFunction(expr, c, 1)
+}
+
+func (f *acoshFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
+	return commonCallType1(name, args)
+}
+
+func (f *acoshFunc) CallFunc(name string, args []interface{}) (interface{}, bool) {
+	if arg0, ok := asFloat(args[0]); ok {
+		return math.Acosh(arg0), true
 	}
 	return nil, true
 }
@@ -1012,6 +1133,21 @@ func commonCallType4(name string, args []influxql.DataType) (influxql.DataType, 
 		return args[0], nil
 	default:
 		return influxql.Unknown, fmt.Errorf("invalid argument type for the first argument in %s(): %s", name, arg0)
+	}
+}
+
+func callTypeFunctionIf(name string, args []influxql.DataType) (influxql.DataType, error) {
+	if args[1] != args[2] {
+		return influxql.Unknown, fmt.Errorf("the 2nd and 3rd argument must be of same type in %s()", name)
+	}
+	callType := args[1]
+	switch callType {
+	case influxql.Float, influxql.Integer, influxql.String, influxql.Boolean, influxql.Time, influxql.Duration, influxql.Unsigned:
+		return callType, nil
+	case influxql.Tag:
+		return influxql.String, nil
+	default:
+		return influxql.Unknown, fmt.Errorf("unkonw data type")
 	}
 }
 

@@ -15,7 +15,6 @@
 package statistics
 
 import (
-	"sync"
 	"sync/atomic"
 
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics/opsStat"
@@ -117,69 +116,4 @@ func CollectOpsEngineStatStatistics() []opsStat.OpsStatistic {
 		Values: data,
 	},
 	}
-}
-
-type ImmuStats struct {
-	ImmuMemSize        int64
-	ImmuMemOrderSize   int64
-	ImmuMemUnOrderSize int64
-}
-
-// ImmutableStatistics keeps statistics related to the Immutable
-type ImmutableStatistics struct {
-	Mu    sync.RWMutex
-	Stats map[string]*ImmuStats
-}
-
-const (
-	StatImmuLevel          = "level"
-	StatImmuMemSize        = "ImmuMemSize"
-	StatImmuMemOrderSize   = "ImmuMemOrderSize"
-	StatImmuMemUnOrderSize = "ImmuMemUnOrderSize"
-)
-
-var ImmutableStat = NewImmutableStatistics()
-var ImmutableTagMap map[string]string
-var ImmutableStatisticsName = "immutable"
-
-func NewImmutableStatistics() *ImmutableStatistics {
-	return &ImmutableStatistics{
-		Stats: make(map[string]*ImmuStats),
-	}
-}
-
-func InitImmutableStatistics(tags map[string]string) {
-	ImmutableTagMap = tags
-}
-
-func (immu *ImmutableStatistics) AddMemSize(path string, memSize, memOrderSize, memUnOrderSize int64) {
-	if _, ok := ImmutableStat.Stats[path]; ok {
-		stat := ImmutableStat.Stats[path]
-		atomic.AddInt64(&stat.ImmuMemSize, memSize)
-		atomic.AddInt64(&stat.ImmuMemOrderSize, memOrderSize)
-		atomic.AddInt64(&stat.ImmuMemUnOrderSize, memUnOrderSize)
-	} else {
-		stat := &ImmuStats{
-			ImmuMemSize:        memSize,
-			ImmuMemOrderSize:   memOrderSize,
-			ImmuMemUnOrderSize: memUnOrderSize,
-		}
-		ImmutableStat.Stats[path] = stat
-	}
-}
-
-func CollectImmutableStatistics(buffer []byte) ([]byte, error) {
-	for path, stats := range ImmutableStat.Stats {
-		tagMap := make(map[string]string)
-		AllocTagMap(tagMap, ImmutableTagMap)
-		tagMap[StatImmuLevel] = path
-		valueMap := map[string]interface{}{
-			StatImmuMemSize:        atomic.LoadInt64(&stats.ImmuMemSize),
-			StatImmuMemOrderSize:   atomic.LoadInt64(&stats.ImmuMemOrderSize),
-			StatImmuMemUnOrderSize: atomic.LoadInt64(&stats.ImmuMemUnOrderSize),
-		}
-		buffer = AddPointToBuffer(ImmutableStatisticsName, tagMap, valueMap, buffer)
-	}
-
-	return buffer, nil
 }

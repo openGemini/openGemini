@@ -18,7 +18,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/influxdata/influxdb/pkg/testing/assert"
+	"github.com/stretchr/testify/assert"
 )
 
 var testPath = "/tmp/ski/index_test"

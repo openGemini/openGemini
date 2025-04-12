@@ -96,6 +96,42 @@ func (s *seriesCursor) ReInit(tagSetInfo *tsi.TagSetInfo, idx int) (bool, error)
 	return true, nil
 }
 
+func (s *seriesCursor) ReInitWithShard(tagSet tsi.TagSet, sidIdx, shardIdx int, crossShard bool) (bool, error) {
+	var err error
+	sid := tagSet.GetSid(sidIdx, shardIdx)
+	shardId := tagSet.GetShardId(sidIdx, shardIdx)
+	filter := tagSet.GetFilters(sidIdx)
+	ptTags := tagSet.GetTagsVec(sidIdx)
+	rowFilters := tagSet.GetRowFilter(sidIdx)
+
+	var memTableRecord *record.Record
+	if !crossShard {
+		memTableRecord = getMemTableRecord(s.ctx, s.span, s.ctx.querySchema, sid, filter, rowFilters, ptTags)
+	} else {
+		memTableRecord = getMemTableRecordWithShard(s.ctx, s.span, s.ctx.querySchema, sid, shardId, filter, rowFilters, ptTags)
+	}
+
+	contain := false
+	if tsmCursor, ok := s.tsmCursor.(*tsmMergeCursor); ok && tsmCursor != nil {
+		contain, err = tsmCursor.ReInitWithShard(shardId, sid, filter, rowFilters, ptTags, crossShard)
+		if err != nil {
+			return false, err
+		}
+	}
+	if !contain && memTableRecord == nil {
+		return false, nil
+	}
+	s.init = true
+	s.memRecIter.reset()
+	s.tsmRecIter.reset()
+	s.sInfo.tags = *ptTags
+	s.sInfo.sid = tagSet.GetSid(sidIdx, 0)
+	s.filter = filter
+	s.sInfo.key = tagSet.GetSeriesKeys(sidIdx)
+	s.memRecIter.init(memTableRecord)
+	return true, nil
+}
+
 func (s *seriesCursor) SetFirstLimitTime(memTableRecord *record.Record, tsmCursor *tsmMergeCursor, schema *executor.QuerySchema) {
 	if !schema.CanLimitCut() {
 		return
@@ -260,7 +296,6 @@ func (s *seriesCursor) GetSchema() record.Schemas {
 
 func (s *seriesCursor) reset() {
 	s.maxRowCnt = 0
-	s.tagSetRef.Unref() // *tsi.TagSetInfo
 	s.span = nil
 	s.ascending = true
 	s.memRecIter.reset()

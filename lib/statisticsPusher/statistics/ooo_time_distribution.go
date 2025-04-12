@@ -28,8 +28,9 @@ var oooTimeDistribution *OOOTimeDistribution
 
 func init() {
 	oooTimeDistribution = &OOOTimeDistribution{
-		intervals: []int64{15, 30, 60, 120, 240, 480, 960, math.MaxInt64}, // Second
-		keys:      []string{"less15", "less30", "less60", "less120", "less240", "less480", "less960", "more960"},
+		intervals: []int64{15, 30, 60, 120, 240, 480, 960, 3600, 28800, 86400, math.MaxInt64}, // Second
+		keys: []string{"less15", "less30", "less60", "less120", "less240", "less480", "less960",
+			"less1h", "less8h", "less24h", "more24h"},
 	}
 
 	oooTimeDistribution.counts = make([]int64, len(oooTimeDistribution.intervals))

@@ -15,13 +15,17 @@
 package crypto_test
 
 import (
+	"bytes"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/openGemini/openGemini/lib/crypto"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 func TestDecipher(t *testing.T) {
@@ -30,6 +34,8 @@ func TestDecipher(t *testing.T) {
 	crypto.SetDecipher(nil)
 	crypto.Initialize(t.TempDir() + "/mokc.conf")
 	require.Equal(t, txt, crypto.Decrypt(txt))
+	res, _ := crypto.Encrypt(txt)
+	require.Equal(t, txt, res)
 	crypto.Destruct()
 
 	crypto.SetDecipher(&mockDecipher{})
@@ -47,6 +53,38 @@ func TestDecipher(t *testing.T) {
 	require.Equal(t, "", crypto.Decrypt("invalid"))
 	require.Equal(t, "", crypto.DecryptFromFile(t.TempDir()+"/no_exists.data"))
 	require.Equal(t, "", crypto.DecryptFromFile(""))
+
+	res, _ = crypto.Encrypt("invalid")
+	require.Equal(t, "", res)
+}
+
+func newMockLogger() (*zap.Logger, *bytes.Buffer) {
+	buf := new(bytes.Buffer)
+	core := zapcore.NewCore(
+		zapcore.NewJSONEncoder(zap.NewProductionEncoderConfig()),
+		zapcore.AddSync(buf), // 将输出重定向到缓冲区 便于行覆盖测试
+		zapcore.DebugLevel,
+	)
+	l := zap.New(core)
+	return l, buf
+}
+
+func TestDecrypt_DecryptError(t *testing.T) {
+	l, buffer := newMockLogger()
+	crypto.SetLogger(l)
+	defer l.Sync()
+	crypto.SetDecipher(&mockDecipher{})
+	crypto.Initialize(t.TempDir() + "/mokc.conf")
+	defer crypto.Destruct()
+	decrypt := crypto.Decrypt("invalid")
+	require.Equal(t, "", decrypt)
+	require.Equal(t, true, strings.Contains(buffer.String(), "decrypt failed"))
+
+	res, _ := crypto.Encrypt("invalid")
+	require.Equal(t, "", res)
+
+	res, _ = crypto.Encrypt("")
+	require.Equal(t, "", res)
 }
 
 type mockDecipher struct {
@@ -57,6 +95,13 @@ func (d *mockDecipher) Initialize(conf string) {
 }
 
 func (d *mockDecipher) Decrypt(s string) (string, error) {
+	if s == "invalid" {
+		return "", fmt.Errorf("invalid")
+	}
+	return s, nil
+}
+
+func (d *mockDecipher) Encrypt(s string) (string, error) {
 	if s == "invalid" {
 		return "", fmt.Errorf("invalid")
 	}

@@ -64,6 +64,7 @@ func NewMigrateStateMachine() *MigrateStateMachine {
 }
 
 func (m *MigrateStateMachine) Start() {
+	m.logger.Info("migrate state machine start")
 	m.mu.Lock()
 	m.state = Running
 	m.eventsRecovered = false
@@ -81,6 +82,7 @@ func (m *MigrateStateMachine) Start() {
 }
 
 func (m *MigrateStateMachine) Stop() {
+	m.logger.Info("migrate state machine stop")
 	m.mu.Lock()
 	m.state = Stopping
 	m.recoverNotify = make(chan struct{})

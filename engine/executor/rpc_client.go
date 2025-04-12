@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/openGemini/openGemini/engine/executor/spdy"
@@ -25,6 +26,7 @@ import (
 	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/lib/cache"
 	"github.com/openGemini/openGemini/lib/errno"
+	index2 "github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/machine"
 	"github.com/openGemini/openGemini/lib/tracing"
@@ -52,6 +54,7 @@ type RPCClient struct {
 	trans *transport.Transport
 	query *RemoteQuery
 
+	ctx      context.Context
 	handlers [MessageEof]Handler
 	aborted  bool
 	mu       sync.RWMutex
@@ -73,7 +76,7 @@ func NewRPCClient(query *RemoteQuery) *RPCClient {
 func (c *RPCClient) Init(ctx context.Context, queryNode []byte) {
 	c.query.Node = queryNode
 	c.trace = tracing.TraceFromContext(ctx)
-
+	c.ctx = ctx
 	c.AddHandler(AnalyzeResponseMessage, c.analyzeResponse)
 	c.AddHandler(ErrorMessage, c.errorMessage)
 	c.AddHandler(FinishMessage, c.emptyMessage)
@@ -178,7 +181,7 @@ func (c *RPCClient) setAbort() bool {
 	return c.trans != nil
 }
 
-func (c *RPCClient) Abort() {
+func (c *RPCClient) Abort(noMarkCrash bool) {
 	if !c.setAbort() {
 		return
 	}
@@ -186,7 +189,7 @@ func (c *RPCClient) Abort() {
 	lg := logger.NewLogger(errno.ModuleNetwork)
 	lg.Info("send abort message", zap.Uint64("nodeID", c.query.NodeID))
 
-	abort := NewAbort(c.query.Opt.QueryId, machine.GetMachineID())
+	abort := NewAbort(c.query.Opt.QueryId, machine.GetMachineID(), noMarkCrash)
 	trans, err := transport.NewTransport(c.query.NodeID, spdy.AbortRequest, nil)
 	if err != nil {
 		lg.Error("failed to new transport", zap.Error(err),
@@ -203,7 +206,7 @@ func (c *RPCClient) Abort() {
 	_ = trans.Wait()
 }
 
-func (c *RPCClient) Interrupt() {
+func (c *RPCClient) Interrupt(noMarkCrash bool) {
 	if !c.setAbort() {
 		return
 	}
@@ -211,7 +214,7 @@ func (c *RPCClient) Interrupt() {
 	lg := logger.NewLogger(errno.ModuleNetwork)
 	lg.Info("send crash message", zap.Uint64("nodeID", c.query.NodeID))
 
-	crash := NewCrash(c.query.Opt.QueryId, machine.GetMachineID())
+	crash := NewCrash(c.query.Opt.QueryId, machine.GetMachineID(), noMarkCrash)
 	trans, err := transport.NewTransport(c.query.NodeID, spdy.CrashRequest, nil)
 	if err != nil {
 		lg.Error("failed to new transport", zap.Error(err),
@@ -265,6 +268,12 @@ func (c *RPCClient) errorMessage(data interface{}) error {
 }
 
 func (c *RPCClient) emptyMessage(data interface{}) error {
+	queryIndexState := c.ctx.Value(index2.QueryIndexState)
+	if queryIndexState != nil {
+		if message, ok := data.(*Finish); ok {
+			atomic.AddInt32(queryIndexState.(*int32), message.queryIndexState)
+		}
+	}
 	return nil
 }
 

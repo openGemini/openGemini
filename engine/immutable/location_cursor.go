@@ -45,7 +45,6 @@ func (l *LocationCursor) RowCount() int {
 }
 
 func (l *LocationCursor) Reset() {
-	l.Unref()
 	l.rowNum = 0
 	l.pos = 0
 	l.lcs = l.lcs[:0]
@@ -90,26 +89,6 @@ func (l *LocationCursor) Close() {
 	l.lcs = l.lcs[:0]
 	if l.filterRecPool != nil {
 		l.filterRecPool.Put()
-	}
-}
-
-func (l *LocationCursor) AddRef() {
-	for i := range l.lcs {
-		l.lcs[i].r.Ref()
-	}
-}
-
-func (l *LocationCursor) Unref() {
-	if fileQueryCache != nil && len(l.lcs) <= int(fileQueryCache.GetCap()) {
-		for i := range l.lcs {
-			fileQueryCache.Put(l.lcs[i].r)
-			l.lcs[i].r.Unref()
-		}
-	} else {
-		for i := range l.lcs {
-			l.lcs[i].r.UnrefFileReader()
-			l.lcs[i].r.Unref()
-		}
 	}
 }
 

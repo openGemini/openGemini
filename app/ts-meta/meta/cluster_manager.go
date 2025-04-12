@@ -16,7 +16,6 @@ package meta
 
 import (
 	"math"
-	"math/rand"
 	"net"
 	"sort"
 	"strconv"
@@ -28,6 +27,7 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/rand"
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"go.uber.org/zap"
@@ -47,8 +47,11 @@ const (
 type storeInterface interface {
 	updateNodeStatus(id uint64, status int32, lTime uint64, gossipPort string) error
 	UpdateSqlNodeStatus(id uint64, status int32, lTime uint64, gossipPort string) error
+	UpdateMetaNodeStatus(id uint64, status int32, lTime uint64, gossipPort string) error
 	dataNodes() meta.DataNodeInfos
 	sqlNodes() meta.DataNodeInfos
+	metaNodes() []meta.NodeInfo
+	GetGossipConfig() *config.Gossip
 }
 
 type chooseTakeoverNodeFn func(cm *ClusterManager, oid uint64, nodePtNumMap *map[uint64]uint32, isRetry bool) (uint64, error)
@@ -142,6 +145,7 @@ func (cm *ClusterManager) Start() {
 	cm.retryEventCh = make(chan serf.Event, 1024)
 	cm.reOpen = make(chan struct{})
 	globalService.msm.waitRecovery() // wait exist pt event execute first
+	logger.GetLogger().Info("start cluster manager", zap.Int32("stop", cm.stop))
 	atomic.CompareAndSwapInt32(&cm.stop, 1, 0)
 	cm.resendPreviousEvent(fromLeaderChanged)
 	cm.wg.Add(1)
@@ -149,6 +153,7 @@ func (cm *ClusterManager) Start() {
 }
 
 func (cm *ClusterManager) Stop() {
+	logger.GetLogger().Info("stop cluster manager")
 	atomic.CompareAndSwapInt32(&cm.stop, 0, 1)
 }
 
@@ -169,6 +174,7 @@ func (cm *ClusterManager) isClosed() bool {
 func (cm *ClusterManager) resendPreviousEvent(from eventFrom) {
 	dataNodes := globalService.store.dataNodes()
 	sqlNodes := globalService.store.sqlNodes()
+	metaNodes := globalService.store.metaNodes()
 	cm.mu.RLock()
 	for i := range dataNodes {
 		if dataNodes[i].Status == serf.StatusAlive {
@@ -213,6 +219,26 @@ func (cm *ClusterManager) resendPreviousEvent(from eventFrom) {
 		cm.eventWg.Add(1)
 		go cm.processEvent(*e, from)
 	}
+	for i := range metaNodes {
+		e := cm.eventMap[strconv.FormatUint(metaNodes[i].ID, 10)]
+		if e == nil || uint64(e.EventTime) < metaNodes[i].LTime {
+			continue
+		}
+
+		// if event has processed, do not process event repeatedly
+		if uint64(e.EventTime) == metaNodes[i].LTime {
+			if e.Type == serf.EventMemberJoin && metaNodes[i].Status == serf.StatusAlive {
+				continue
+			}
+			if e.Type == serf.EventMemberFailed && metaNodes[i].Status == serf.StatusFailed {
+				continue
+			}
+		}
+
+		logger.NewLogger(errno.ModuleHA).Error("resend metanode event", zap.String("event", e.String()), zap.Any("members", e.Members), zap.Uint64("lTime", uint64(e.EventTime)))
+		cm.eventWg.Add(1)
+		go cm.processEvent(*e, from)
+	}
 	cm.mu.RUnlock()
 }
 
@@ -233,6 +259,22 @@ func (cm *ClusterManager) checkEvents() {
 	defer cm.wg.Done()
 	check := time.After(10 * time.Second)
 	sendFailedEvent := false
+
+	var preEventType serf.EventType
+	var processEvent = func(event serf.Event, from eventFrom) {
+		et := event.EventType()
+		if et == preEventType {
+			cm.eventWg.Add(1)
+			go cm.processEvent(event, from)
+			return
+		}
+
+		preEventType = et
+		cm.eventWg.Wait()
+		cm.eventWg.Add(1)
+		cm.processEvent(event, from)
+	}
+
 	for {
 		select {
 		case <-cm.reOpen:
@@ -241,18 +283,15 @@ func (cm *ClusterManager) checkEvents() {
 			// clear all events, and add to eventMap when leader changed
 			for i := 0; i < len(cm.eventCh); i++ {
 				e := <-cm.eventCh
-				cm.eventWg.Add(1)
-				go cm.processEvent(e, fromReopen)
+				processEvent(e, fromReopen)
 			}
 			return
 		case <-cm.closing: // meta node is closing
 			return
 		case event := <-cm.eventCh:
-			cm.eventWg.Add(1)
-			go cm.processEvent(event, fromGossip)
+			processEvent(event, fromGossip)
 		case event := <-cm.retryEventCh:
-			cm.eventWg.Add(1)
-			go cm.processEvent(event, fromRetryChan)
+			processEvent(event, fromRetryChan)
 		case <-check:
 			if !sendFailedEvent {
 				sendFailedEvent = true
@@ -260,16 +299,21 @@ func (cm *ClusterManager) checkEvents() {
 			}
 		case takeoverEnable := <-cm.takeover:
 			if takeoverEnable {
-				cm.eventWg.Wait()
-				cm.resendPreviousEvent(fromTakeover)
+				go cm.checkTakeover()
 			}
 		}
 	}
 }
 
+func (cm *ClusterManager) checkTakeover() {
+	cm.eventWg.Wait()
+	cm.resendPreviousEvent(fromTakeover)
+}
+
 func (cm *ClusterManager) checkFailedNode() {
 	dataNodes := cm.store.dataNodes()
 	sqlNodes := cm.store.sqlNodes()
+	metaNodes := cm.store.metaNodes()
 	cm.mu.RLock()
 	for i := range dataNodes {
 		if dataNodes[i].LTime == 0 {
@@ -313,6 +357,33 @@ func (cm *ClusterManager) checkFailedNode() {
 			}
 			logger.GetLogger().Error("check failed sqlnode", zap.String("event", e.String()),
 				zap.Uint64("lTime", uint64(e.EventTime)), zap.Uint64("nodeId", sqlNodes[i].ID))
+			cm.eventWg.Add(1)
+			go cm.processEvent(*e, fromSelfCheck)
+		}
+	}
+	for i := range metaNodes {
+		if metaNodes[i].LTime == 0 {
+			continue
+		}
+		e := cm.eventMap[strconv.FormatUint(metaNodes[i].ID, 10)]
+		if e == nil {
+			/*
+				For compatibility, the conf is used to obtain gossipAddr of metaNode.
+				Metadata.metanode.gossipAddr is not use.
+			*/
+			host := cm.store.GetGossipConfig().BindAddr
+			e = &serf.MemberEvent{
+				Type:      serf.EventMemberFailed,
+				EventTime: serf.LamportTime(metaNodes[i].LTime),
+				Members: []serf.Member{{
+					Name:   strconv.FormatUint(metaNodes[i].ID, 10),
+					Addr:   net.ParseIP(host),
+					Tags:   map[string]string{"role": "meta"},
+					Status: serf.StatusFailed,
+				}},
+			}
+			logger.GetLogger().Error("check failed metanode", zap.String("event", e.String()),
+				zap.Uint64("lTime", uint64(e.EventTime)), zap.Uint64("nodeId", metaNodes[i].ID))
 			cm.eventWg.Add(1)
 			go cm.processEvent(*e, fromSelfCheck)
 		}
@@ -453,8 +524,7 @@ func (cm *ClusterManager) chooseNodeByPtNum(nodePtNumMap *map[uint64]uint32) uin
 }
 
 func (cm *ClusterManager) chooseNodeRandom(nodeIds []int) uint64 {
-	source := rand.New(rand.NewSource(time.Now().UnixNano()))
-	i := source.Intn(len(nodeIds))
+	i := rand.Intn(len(nodeIds))
 	return uint64(nodeIds[i])
 }
 
@@ -487,28 +557,37 @@ func (cm *ClusterManager) processFailedDbPt(dbPt *meta.DbPtInfo, nodePtNumMap *m
 	return cm.processFailedDbPtForRep(dbPt, nodePtNumMap, isRetry)
 }
 
-func (cm *ClusterManager) processFailedDbPtForRep(dbPt *meta.DbPtInfo, nodePtNumMap *map[uint64]uint32, isRetry bool) error {
-	rgFaildPtsOwnedAliveNode := globalService.store.getFullRGAllFailedPtsOwnedAliveNodeBasedPtId(dbPt, dbPt.Db)
-	var err1, err error
-	var aliveConnId, targetId uint64
-	for _, pt := range rgFaildPtsOwnedAliveNode {
-		targetId = pt.Pti.Owner.NodeID
-		logger.GetLogger().Info("processFailedDbPtForRep", zap.String("db", pt.Db), zap.Uint32("ptId", pt.Pti.PtId), zap.Uint64("nodeId", targetId), zap.Uint32("rgId", pt.Pti.RGID))
-		aliveConnId, err1 = globalService.store.getDataNodeAliveConnId(targetId)
-		if err1 != nil {
-			logger.GetLogger().Error("processFailedDbPtForRep get NodeAliveConnId failed", zap.String("db", pt.Db), zap.Uint32("ptId", pt.Pti.PtId), zap.Uint64("nodeId", targetId), zap.Error(err1))
-			err = err1
-			continue
-		}
-		err1 = globalService.balanceManager.assignDbPt(pt, targetId, aliveConnId, false)
-		if err1 != nil {
-			err = err1
-			logger.GetLogger().Error("processFailedDbPtForRep assignDbPt failed", zap.String("db", pt.Db), zap.Uint32("ptId", pt.Pti.PtId), zap.Uint64("nodeId", targetId), zap.Error(err1))
-		}
+func (cm *ClusterManager) processFailedDbPtForRep(pt *meta.DbPtInfo, nodePtNumMap *map[uint64]uint32, isRetry bool) error {
+	status, errGetStatus := globalService.store.getPtStatus(pt.Db, pt.Pti.PtId)
+	if errGetStatus != nil {
+		logger.GetLogger().Error("processFailedDbPt failed", zap.Error(errGetStatus))
+		return errGetStatus
 	}
-	return err
+	if status == meta.Online {
+		logger.GetLogger().Info("no need to assign online pt", zap.String("db", pt.Db), zap.Uint32("pt", pt.Pti.PtId))
+		return nil
+	}
+
+	targetId := pt.Pti.Owner.NodeID
+	logger.GetLogger().Info("processFailedDbPtForRep", zap.String("db", pt.Db), zap.Uint32("ptId", pt.Pti.PtId), zap.Uint64("nodeId", targetId), zap.Uint32("rgId", pt.Pti.RGID))
+	aliveConnId, err := globalService.store.getDataNodeAliveConnId(targetId)
+	if err != nil {
+		logger.GetLogger().Error("processFailedDbPtForRep get NodeAliveConnId failed", zap.String("db", pt.Db), zap.Uint32("ptId", pt.Pti.PtId), zap.Uint64("nodeId", targetId), zap.Error(err))
+		return err
+	}
+	err1 := globalService.balanceManager.assignDbPt(pt, targetId, aliveConnId, false)
+	if err1 != nil {
+		logger.GetLogger().Error("processFailedDbPtForRep assignDbPt failed", zap.String("db", pt.Db), zap.Uint32("ptId", pt.Pti.PtId), zap.Uint64("nodeId", targetId), zap.Error(err1))
+		return err1
+	}
+	return nil
 }
 
+/*
+The rgMaster balancer should give priority to normal read and write services.
+A new rgMaster is selected as soon as possible.
+The background MasterPtBalanceManager of ts-meta completes the balancer.
+*/
 func electRgMaster(rg *meta.ReplicaGroup, ptInfo meta.DBPtInfos, db string) (uint32, []meta.Peer, bool) {
 	var electSuccess bool
 	var newMasterId uint32
@@ -561,6 +640,7 @@ func (cm *ClusterManager) enableTakeover(enable bool) {
 }
 
 func (cm *ClusterManager) SetStop(stop int32) {
+	logger.GetLogger().Info("cluster manager set stop")
 	atomic.StoreInt32(&cm.stop, stop)
 }
 

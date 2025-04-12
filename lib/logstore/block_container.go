@@ -63,7 +63,7 @@ func NewBlockFileContainer(basePath string, bankNum int32, blockNum int32, block
 
 func (c *BlockFileContainer) initBank(bankSize int64) ([]byte, error) {
 	fileName := c.basePath + uuid.TimeUUID().String()
-	file, err := fileops.OpenFile(fileName, os.O_CREATE|os.O_RDWR, 0640)
+	file, err := fileops.OpenFile(fileName, os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return nil, err
 	}

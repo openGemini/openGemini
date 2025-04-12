@@ -17,6 +17,7 @@ package logger
 import (
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/crypto"
@@ -63,6 +64,7 @@ func InitLogger(conf config.Logger) {
 	}
 	util.SetLogger(logger)
 	crypto.SetLogger(logger)
+	fmt.Printf("%s init logger, conf: %+v\n", time.Now().String(), conf)
 }
 
 func GetLogger() *zap.Logger {

@@ -8,8 +8,8 @@ import (
 
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
-	"github.com/prometheus/prometheus/pkg/labels"
-	"github.com/prometheus/prometheus/pkg/timestamp"
+	"github.com/prometheus/prometheus/model/labels"
+	"github.com/prometheus/prometheus/model/timestamp"
 	"github.com/prometheus/prometheus/promql/parser"
 )
 
@@ -53,6 +53,9 @@ func GetTimeCondition(start, end *time.Time) influxql.Expr {
 			},
 		}
 	}
+	if timeLhs == nil && timeRhs == nil {
+		return nil
+	}
 	if timeLhs == nil {
 		return timeRhs
 	}
@@ -92,6 +95,7 @@ func GetTagCondition(v *parser.VectorSelector, haveMetricStore bool) (influxql.E
 				cond.Op = influxql.NEQ
 			}
 		case labels.MatchRegexp, labels.MatchNotRegexp:
+			// TODO: to support the FastRegexMatcher
 			promRegexStr := escapeSlashes(item.Value)
 			re, err := regexp.Compile(promRegexStr)
 			if err != nil {
@@ -117,7 +121,6 @@ func GetTagCondition(v *parser.VectorSelector, haveMetricStore bool) (influxql.E
 	return tagCond, nil
 }
 
-// getMeasurementBySelector used to get measurement from vector selector
 func getMeasurementBySelector(v *parser.VectorSelector) (*influxql.Measurement, error) {
 	if len(v.Name) > 0 {
 		return &influxql.Measurement{Name: v.Name}, nil
@@ -143,6 +146,18 @@ func getMeasurementBySelector(v *parser.VectorSelector) (*influxql.Measurement, 
 	return nil, fmt.Errorf("invalid measurement by vector selector")
 }
 
+// getSelectFieldIdx used to get the select field and idx
+func getSelectFieldIdx(s *influxql.SelectStatement) (*influxql.Field, int) {
+	// Get the last field of sub expression. The last field is the matrix value.
+	field := s.Fields[len(s.Fields)-1]
+	// The last field of the keepMetric agg is *::tag. Take the penultimate one as the field
+	if _, ok := field.Expr.(*influxql.Wildcard); ok && len(s.Fields) >= FieldCountForKeepMetric {
+		field = s.Fields[len(s.Fields)-FieldCountForKeepMetric]
+		return field, len(s.Fields) - FieldCountForKeepMetric
+	}
+	return field, len(s.Fields) - 1
+}
+
 // findStartEndTime return start and end time.
 // End time is calculated as below priority order from highest to lowest:
 //   - ```Timestamp``` attribute of PromQL VectorSelector v
@@ -166,7 +181,6 @@ func (t *Transpiler) findStartEndTime(v *parser.VectorSelector) (startTime, endT
 		end = timestamp.FromTime(*t.End)
 	}
 
-	// TODO: to support the subquery
 	if start >= 0 && v.StartOrEnd == parser.START {
 		v.Timestamp = makeInt64Pointer(start)
 	}
@@ -236,20 +250,20 @@ func (t *Transpiler) transpileVectorSelector2ConditionExpr(v *parser.VectorSelec
 // transpileInstantVectorSelector transpiles PromQL VectorSelector to InfluxQL statement
 func (t *Transpiler) transpileInstantVectorSelector(v *parser.VectorSelector) (influxql.Node, error) {
 	var (
-		err          error
-		tagCondition influxql.Expr
+		err           error
+		timeCondition influxql.Expr
+		tagCondition  influxql.Expr
 	)
-	t.timeCondition, tagCondition, err = t.transpileVectorSelector2ConditionExpr(v)
+	timeCondition, tagCondition, err = t.transpileVectorSelector2ConditionExpr(v)
 	if err != nil {
 		return nil, errno.NewError(errno.TranspileIVSFail, err.Error())
 	}
-	condition := CombineConditionAnd(t.timeCondition, tagCondition)
+	condition := CombineConditionAnd(timeCondition, tagCondition)
 	switch t.DataType {
 	case LABEL_KEYS_DATA:
 		showTagKeysStatement := influxql.ShowTagKeysStatement{
-			Database: t.Database,
-			// TODO support time condition
-			Condition: tagCondition,
+			Database:  t.Database,
+			Condition: condition,
 		}
 		if len(v.LabelMatchers) > 0 {
 			showTagKeysStatement.Sources = make([]influxql.Source, 0, len(v.LabelMatchers))
@@ -269,8 +283,10 @@ func (t *Transpiler) transpileInstantVectorSelector(v *parser.VectorSelector) (i
 			Database:   t.Database,
 			Op:         influxql.EQ,
 			TagKeyExpr: &influxql.StringLiteral{Val: t.LabelName},
-			// TODO support time condition
-			Condition: condition,
+			Condition:  condition,
+		}
+		if t.Exact {
+			showTagValuesStatement.Hints = influxql.Hints{{&influxql.StringLiteral{Val: influxql.ExactStatisticQuery}}}
 		}
 		if t.HaveMetricStore() {
 			showTagValuesStatement.Sources = append(showTagValuesStatement.Sources, &influxql.Measurement{Name: t.Measurement})
@@ -287,9 +303,11 @@ func (t *Transpiler) transpileInstantVectorSelector(v *parser.VectorSelector) (i
 		return &showTagValuesStatement, nil
 	case SERIES_DATA:
 		showSeriesStatement := influxql.ShowSeriesStatement{
-			Database: t.Database,
-			// TODO support time condition
-			Condition: tagCondition,
+			Database:  t.Database,
+			Condition: condition,
+		}
+		if t.Exact {
+			showSeriesStatement.Hints = influxql.Hints{{&influxql.StringLiteral{Val: influxql.ExactStatisticQuery}}}
 		}
 		if t.HaveMetricStore() {
 			showSeriesStatement.Sources = append(showSeriesStatement.Sources, &influxql.Measurement{Name: t.Measurement})

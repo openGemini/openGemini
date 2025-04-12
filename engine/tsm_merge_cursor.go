@@ -94,22 +94,37 @@ func newTsmMergeCursor(ctx *idKeyCursorContext, sid uint64, filter influxql.Expr
 	return c, nil
 }
 
+func newTsmMergeCursorWithShard(ctx *idKeyCursorContext, shardId, sid uint64, filter influxql.Expr, rowFilters *[]clv.RowFilter,
+	tags *influx.PointTags, _ *tracing.Span) (*tsmMergeCursor, error) {
+	c := getTsmCursor()
+	c.ctx = ctx
+	c.filter = filter
+	c.rowFilters = rowFilters
+	c.tags = tags
+	c.orderRecIter.reset()
+	c.outOrderRecIter.reset()
+	c.sid = sid
+	if err := c.AddLocWithShard(shardId, sid); err != nil {
+		return nil, err
+	}
+	if c.locations.Len() == 0 && c.outOfOrderLocations.Len() == 0 {
+		return nil, nil
+	}
+	return c, nil
+}
+
 func AddLocations(l *immutable.LocationCursor, files immutable.TableReaders, ctx *idKeyCursorContext, sid uint64, metaCtx *immutable.ChunkMetaContext) error {
 	for _, r := range files {
 		if ctx.IsAborted() {
 			return nil
 		}
-		r.RefFileReader()
 		loc := immutable.NewLocation(r, ctx.decs)
 		contains, err := loc.Contains(sid, ctx.tr, metaCtx)
 		if err != nil {
-			r.UnrefFileReader()
 			return err
 		}
 		if contains {
 			l.AddLocation(loc)
-		} else {
-			r.UnrefFileReader()
 		}
 	}
 	return nil
@@ -152,11 +167,9 @@ func AddLocationsWithLimit(l *immutable.LocationCursor, files immutable.TableRea
 		}
 
 		r := files[filesIndex]
-		r.RefFileReader()
 		loc := immutable.NewLocation(r, ctx.decs)
 		contains, err := loc.Contains(sid, ctx.tr, chunkMetaContext)
 		if err != nil {
-			r.UnrefFileReader()
 			return 0, err
 		}
 		if contains {
@@ -174,7 +187,6 @@ func AddLocationsWithLimit(l *immutable.LocationCursor, files immutable.TableRea
 			row, err := loc.GetChunkMeta().TimeMeta().RowCount(schema.Field(schema.Len()-1), ctx.decs)
 
 			if err != nil {
-				r.UnrefFileReader()
 				return 0, err
 			}
 			if ctx.tr.Contains(metaMinTime, metaMaxTime) {
@@ -185,10 +197,7 @@ func AddLocationsWithLimit(l *immutable.LocationCursor, files immutable.TableRea
 			if orderRow >= int64(option.GetLimit()+option.GetOffset()) {
 				break
 			}
-		} else {
-			r.UnrefFileReader()
 		}
-
 	}
 	return firstTime, nil
 }
@@ -202,11 +211,9 @@ func AddLocationsWithFirstTime(l *immutable.LocationCursor, files immutable.Tabl
 	defer chunkMetaContext.Release()
 
 	for _, r := range files {
-		r.RefFileReader()
 		loc := immutable.NewLocation(r, ctx.decs)
 		contains, err := loc.Contains(sid, ctx.tr, chunkMetaContext)
 		if err != nil {
-			r.UnrefFileReader()
 			return -1, err
 		}
 		if contains {
@@ -217,8 +224,6 @@ func AddLocationsWithFirstTime(l *immutable.LocationCursor, files immutable.Tabl
 			} else {
 				firstTime = getFirstTime(metaMaxTime, firstTime, ascending)
 			}
-		} else {
-			r.UnrefFileReader()
 		}
 	}
 	return firstTime, nil
@@ -241,6 +246,38 @@ func (c *tsmMergeCursor) ReInit(
 	c.outOfOrderLocations.Reset()
 	if err := c.AddLoc(); err != nil {
 		return false, err
+	}
+	if c.locations.Len() == 0 && c.outOfOrderLocations.Len() == 0 {
+		return false, nil
+	}
+	return true, nil
+}
+
+func (c *tsmMergeCursor) ReInitWithShard(
+	shardId uint64,
+	sid uint64,
+	filter influxql.Expr,
+	rowFilters *[]clv.RowFilter,
+	tags *influx.PointTags,
+	crossShard bool,
+) (bool, error) {
+	c.init = true
+	c.filter = filter
+	c.rowFilters = rowFilters
+	c.tags = tags
+	c.sid = sid
+	c.orderRecIter.reset()
+	c.outOrderRecIter.reset()
+	c.locations.Reset()
+	c.outOfOrderLocations.Reset()
+	if !crossShard {
+		if err := c.AddLoc(); err != nil {
+			return false, err
+		}
+	} else {
+		if err := c.AddLocWithShard(shardId, sid); err != nil {
+			return false, err
+		}
 	}
 	if c.locations.Len() == 0 && c.outOfOrderLocations.Len() == 0 {
 		return false, nil
@@ -274,8 +311,25 @@ func (c *tsmMergeCursor) AddLoc() error {
 		}
 	}
 	c.limitFirstTime = limitFirstTime
-	c.locations.AddRef()
-	c.outOfOrderLocations.AddRef()
+	return nil
+}
+
+func (c *tsmMergeCursor) AddLocWithShard(shardId uint64, sid uint64) error {
+	var err error
+	immTable, ok := c.ctx.immTableReaders[shardId]
+	if !ok {
+		return nil
+	}
+	c.locations = immutable.NewLocationCursor(len(immTable.Orders))
+	c.outOfOrderLocations = immutable.NewLocationCursor(len(immTable.OutOfOrders))
+	err = AddLocationsWithInit(c.locations, immTable.Orders, c.ctx, sid)
+	if err != nil {
+		return err
+	}
+	err = AddLocationsWithInit(c.outOfOrderLocations, immTable.OutOfOrders, c.ctx, sid)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -392,12 +446,6 @@ func (c *tsmMergeCursor) reset() {
 }
 
 func (c *tsmMergeCursor) Close() error {
-	if c.locations != nil {
-		c.locations.Unref()
-	}
-	if c.outOfOrderLocations != nil {
-		c.outOfOrderLocations.Unref()
-	}
 	c.reset()
 	putTsmCursor(c)
 	return nil

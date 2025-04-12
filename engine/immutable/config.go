@@ -27,8 +27,6 @@ var tsStoreConf = Config{
 	maxChunkMetaItemSize:  util.DefaultMaxChunkMetaItemSize,
 	maxChunkMetaItemCount: util.DefaultMaxChunkMetaItemCount,
 	fileSizeLimit:         util.DefaultFileSizeLimit,
-	cacheDataBlock:        false,
-	cacheMetaData:         false,
 	streamingCompact:      util.AutoCompact,
 }
 
@@ -40,8 +38,6 @@ var colStoreConf = Config{
 	fileSizeLimit:         util.DefaultFileSizeLimit,
 	detachedFlushEnabled:  false,
 	compactionEnabled:     false,
-	cacheDataBlock:        false,
-	cacheMetaData:         false,
 	streamingCompact:      util.AutoCompact,
 	expectedSegmentSize:   util.DefaultExpectedSegmentSize,
 }
@@ -76,12 +72,8 @@ type Config struct {
 	FragmentsNumPerFlush  int
 	compactionEnabled     bool
 	detachedFlushEnabled  bool
-	// Whether to cache data blocks in hot shard
-	cacheDataBlock bool
-	// Whether to cache meta blocks in hot shard
-	cacheMetaData       bool
-	streamingCompact    int32
-	expectedSegmentSize uint32
+	streamingCompact      int32
+	expectedSegmentSize   uint32
 }
 
 func GetTsStoreConfig() *Config {
@@ -160,28 +152,6 @@ func SetCompactionEnabled(compactionEnabled bool) {
 
 func SetDetachedFlushEnabled(detachFlushEnabled bool) {
 	colStoreConf.detachedFlushEnabled = detachFlushEnabled
-}
-
-func SetCacheDataBlock(en bool) {
-	tsStoreConf.cacheDataBlock = en
-	colStoreConf.cacheDataBlock = en
-	log.Info("Set cacheDataBlock", zap.Bool("en", en))
-}
-
-func SetCacheMetaData(en bool) {
-	tsStoreConf.cacheMetaData = en
-	colStoreConf.cacheMetaData = en
-	log.Info("Set cacheMetaData", zap.Bool("en", en))
-}
-
-func CacheMetaInMemory() bool {
-	// cacheMetaData for tsStoreConf & colStoreConf would be the same.
-	return tsStoreConf.cacheMetaData
-}
-
-func CacheDataInMemory() bool {
-	// cacheDataBlock for tsStoreConf & colStoreConf would be the same.
-	return tsStoreConf.cacheDataBlock
 }
 
 func GetMaxRowsPerSegment4TsStore() int {

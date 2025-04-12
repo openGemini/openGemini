@@ -47,6 +47,7 @@ message ProcessorOptions {
     int64       LookBackDelta = 42;
     int64       QueryOffset = 43;
     bool        Without = 44;
+    bool        PromRemoteRead = 45;
 }
 
 message Measurement {
@@ -238,4 +239,5 @@ enum LogicPlanType
     LogicalJoin = 37;
     LogicalBinOp = 38;
     LogicalPromSubquery = 39;
+    LogicalPromSort = 40;
 }
