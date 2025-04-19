@@ -229,9 +229,17 @@ func (l *entryLog) slotGe(raftIndex uint64) (int, int) {
 		return -1, -1
 	}
 
+	var hasNilFile bool
 	fileIdx := sort.Search(len(l.files), func(i int) bool {
-		return l.files[i].firstIndex() >= raftIndex
+		entry := l.files[i].firstEntry()
+		if entry == nil {
+			hasNilFile = true
+		}
+		return entry != nil && l.files[i].firstIndex() >= raftIndex
 	})
+	if hasNilFile {
+		return -1, -1
+	}
 	// fileIdx points to the first log file, whose firstIndex is >= raftIndex.
 	// If the firstIndex == raftIndex, then return.
 	if fileIdx < len(l.files) && l.files[fileIdx].firstIndex() == raftIndex {
@@ -285,13 +293,13 @@ func (l *entryLog) Term(idx uint64) (uint64, error) {
 }
 
 // deleteBefore deletes all the files before the logFile containing the given raftIndex.
-func (l *entryLog) deleteBefore(raftIndex uint64) {
+func (l *entryLog) deleteBefore(raftIndex uint64) error {
 	fidx, off := l.slotGe(raftIndex)
 
 	l.filesSync.Lock()
 	defer l.filesSync.Unlock()
 	if off < 0 || fidx >= len(l.files) {
-		return
+		return fmt.Errorf("deleteBefore slotGe return inValid")
 	}
 
 	var before []*logFile
@@ -308,6 +316,7 @@ func (l *entryLog) deleteBefore(raftIndex uint64) {
 			logger.GetLogger().Error(fmt.Sprintf("while deleting file: %s", ef.entry.Name()), zap.Error(err))
 		}
 	}
+	return nil
 }
 
 // Moves the current logFile into l.files and creates a new logFile.
