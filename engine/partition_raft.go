@@ -102,7 +102,10 @@ func dealCommitData(node *raftconn.RaftNode, client metaclient.MetaClient, stora
 	} else if dataWrapper.DataType == raftlog.ClearEntryLog {
 		bytes := dataWrapper.Data
 		index := encoding.UnmarshalUint64(bytes)
-		node.Store.DeleteBefore(index)
+		err := node.Store.DeleteBefore(index)
+		if err != nil {
+			logger.GetLogger().Error("deleting entryLog err when dealCommitData", zap.Error(err), zap.String("db", database), zap.Uint32("pt", ptId))
+		}
 	} else {
 		logger.GetLogger().Error("not support this data type")
 	}
