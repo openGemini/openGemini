@@ -37,7 +37,7 @@ const unit64Size = 8 // the byte size of unit64
 
 var NewFile = errors.New("Create a new file")
 
-var cache *FileWrapCache = NewCache()
+var cache *FileWrapCache = NewCache() // cache files not Updated of limit size
 
 var fileWrapPool *pool.UnionPool[FileWrap]
 
@@ -68,7 +68,7 @@ type FileWrap struct {
 	fd      fileops.File
 	data    []byte
 	current bool
-	mu      sync.RWMutex
+	mu      sync.Mutex
 }
 
 func NewNilFileWrap() *FileWrap {
@@ -96,7 +96,8 @@ func (fw *FileWrap) setCurrent() {
 	fw.current = false
 	content, err := fw.getContent()
 	if err != nil {
-		logger.GetLogger().Error("get content error ", zap.String("fw name", fw.Name()), zap.Error(err))
+		logger.GetLogger().Error("setCurrent get content error ", zap.String("fw name", fw.Name()), zap.Error(err))
+		return
 	}
 	fw.current = true
 	fw.data = content
@@ -177,8 +178,8 @@ func (fw *FileWrap) getContent() ([]byte, error) {
 	if ok && len(content) != 0 {
 		return content, nil
 	}
-	fw.mu.RLock()
-	defer fw.mu.RUnlock()
+	fw.mu.Lock()
+	defer fw.mu.Unlock()
 	// read from file begin
 	_, err := fw.fd.Seek(0, io.SeekStart)
 	if err != nil {
@@ -210,10 +211,11 @@ func (fw *FileWrap) isMetaFile() bool {
 	return strings.HasSuffix(fw.Name(), metaName)
 }
 
+// todo: don't need getContent, clear by size will be slow when fileNum is big, which read from disk mostly
 func (fw *FileWrap) Size() int {
 	content, err := fw.getContent()
 	if err != nil {
-		logger.GetLogger().Error("get content error ", zap.String("fw name", fw.Name()), zap.Error(err))
+		logger.GetLogger().Error("fw.Size() get content error ", zap.String("fw name", fw.Name()), zap.Error(err))
 	}
 	return len(content)
 }
@@ -222,7 +224,8 @@ func (fw *FileWrap) Size() int {
 func (fw *FileWrap) GetEntryData(start, end int) []byte {
 	content, err := fw.getContent()
 	if err != nil {
-		logger.GetLogger().Error("get content error ", zap.String("fw name", fw.Name()), zap.Error(err))
+		logger.GetLogger().Error("GetEntryData get content error ", zap.String("fw name", fw.Name()), zap.Error(err))
+		return nil
 	}
 	return content[start:end]
 }
@@ -301,7 +304,7 @@ func (fw *FileWrap) WriteSlice(offset int64, dat []byte) error {
 func (fw *FileWrap) ReadSlice(offset int64) []byte {
 	content, err := fw.getContent()
 	if err != nil {
-		logger.GetLogger().Error("get content error ", zap.String("fw name", fw.Name()), zap.Error(err))
+		logger.GetLogger().Error("ReadSlice get content error ", zap.String("fw name", fw.Name()), zap.Error(err))
 		return []byte{}
 	}
 
@@ -317,13 +320,16 @@ func (fw *FileWrap) ReadSlice(offset int64) []byte {
 func (fw *FileWrap) SliceSize(offset int) int {
 	content, err := fw.getContent()
 	if err != nil {
-		logger.GetLogger().Error("get content error ", zap.String("fw name", fw.Name()), zap.Error(err))
+		logger.GetLogger().Error("SliceSize get content error ", zap.String("fw name", fw.Name()), zap.Error(err))
+		return 0
 	}
 	sz := encoding.UnmarshalUint32(content[offset:])
 	return unit32Size + int(sz)
 }
 
 func (fw *FileWrap) Truncate(size int64) error {
+	fw.mu.Lock()
+	defer fw.mu.Unlock()
 	return fw.fd.Truncate(size)
 }
 
@@ -334,7 +340,8 @@ func (fw *FileWrap) Delete() error {
 	if fw.fd == nil {
 		return nil
 	}
-
+	fw.mu.Lock()
+	defer fw.mu.Unlock()
 	if err := fw.fd.Close(); err != nil {
 		return errors.Wrapf(err, "while close file:%s", fw.Name())
 	}
@@ -351,6 +358,8 @@ func (fw *FileWrap) Close() error {
 		return errors.Wrapf(err, "sync error:%s", fw.Name())
 	}
 	cache.cache.Remove(fw.Name())
+	fw.mu.Lock()
+	defer fw.mu.Unlock()
 	if err := fw.fd.Close(); err != nil {
 		return errors.Wrapf(err, "fw close error:%s", fw.Name())
 	}

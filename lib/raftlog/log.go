@@ -260,6 +260,10 @@ func (lf *logFile) firstIndex() uint64 {
 	return lf.getEntry(0).Index()
 }
 
+func (lf *logFile) firstEntry() entry {
+	return lf.getEntry(0)
+}
+
 // firstEmptySlot returns the index of the first empty slot in the file.
 func (lf *logFile) firstEmptySlot() int {
 	return sort.Search(maxNumEntries, func(i int) bool {

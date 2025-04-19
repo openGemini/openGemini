@@ -92,8 +92,10 @@ func Init(dir string, SyncInterval time.Duration) (*RaftDiskStorage, error) {
 
 	// If db is not closed properly, there might be index ranges for which delete entries are not
 	// inserted. So insert delete entries for those ranges starting from 0 to (first-1).
-	rds.entryLog.deleteBefore(first - 1)
-
+	err = rds.entryLog.deleteBefore(first - 1)
+	if err != nil {
+		rds.logger.Error("init deleteBefore err", zap.Error(err), zap.String("dir", dir), zap.Uint64("first", first))
+	}
 	last := rds.entryLog.lastIndex()
 	rds.logger.Info("Init Raft Storage with snap", zap.Uint64("index", snap.Metadata.Index), zap.Uint64("first", first),
 		zap.Uint64("last", last), zap.Duration("syncInterval", rds.SyncInterval))
@@ -262,8 +264,6 @@ func (rds *RaftDiskStorage) Snapshot() (raftpb.Snapshot, error) {
 
 // CreateSnapshot generates a snapshot with the given ConfState and data and writes it to disk.
 func (rds *RaftDiskStorage) CreateSnapshot(i uint64, cs *raftpb.ConfState, data []byte) error {
-	rds.logger.Info(fmt.Sprintf("CreateSnapshot i=%d, cs=%+v", i, cs))
-
 	rds.lock.Lock()
 	defer rds.lock.Unlock()
 
@@ -293,9 +293,9 @@ func (rds *RaftDiskStorage) CreateSnapshot(i uint64, cs *raftpb.ConfState, data 
 	return nil
 }
 
-func (rds *RaftDiskStorage) DeleteBefore(index uint64) {
+func (rds *RaftDiskStorage) DeleteBefore(index uint64) error {
 	// Now we delete all the files which are below the snapshot index.
-	rds.entryLog.deleteBefore(index)
+	return rds.entryLog.deleteBefore(index)
 }
 
 func (rds *RaftDiskStorage) SlotGe(index uint64) (int, int) {
