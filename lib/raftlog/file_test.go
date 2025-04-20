@@ -87,6 +87,16 @@ func TestGetEntryData(t *testing.T) {
 	if result := fw.GetEntryData(0, 5); string(result) != "Hello" {
 		t.Errorf("Expected 'Hello', got %s", result)
 	}
+
+	tmpDir := t.TempDir()
+	file, err := fileops.OpenFile(filepath.Join(tmpDir, "test"), os.O_CREATE|os.O_RDWR, 0640)
+	file.Close()
+	require.NoError(t, err)
+	fw.fd = file
+	fw.current = false
+	if result := fw.GetEntryData(0, 5); result != nil {
+		t.Errorf("expected nil result")
+	}
 }
 
 func TestFileWrap_Write_WriteAt(t *testing.T) {
@@ -237,6 +247,13 @@ func (badCloser) Close() error {
 	return fmt.Errorf("test close error")
 }
 
+func (badCloser) Seek(offset int64, whence int) (int64, error) {
+	return 0, fmt.Errorf("seek error")
+}
+
+func (badCloser) Size() (int64, error) {
+	return 0, fmt.Errorf("size error")
+}
 func TestFileWrap_Delete(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Run("Delete a file successfully", func(t *testing.T) {
@@ -259,4 +276,12 @@ func TestFileWrap_Delete(t *testing.T) {
 		err := fw.Delete()
 		require.EqualError(t, err, "while close file:mock file: test close error")
 	})
+}
+
+func TestFileWrap_GetContentErr(t *testing.T) {
+	fw := &FileWrap{fd: &badCloser{}}
+	fw.setCurrent()
+	assert.Equal(t, 0, fw.Size())
+	assert.NotEqual(t, nil, fw.ReadSlice(0))
+	assert.Equal(t, 0, fw.SliceSize(0))
 }
