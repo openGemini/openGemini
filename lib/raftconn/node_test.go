@@ -34,6 +34,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.etcd.io/etcd/raft/v3"
 	"go.etcd.io/etcd/raft/v3/raftpb"
@@ -318,6 +319,16 @@ func TestCommittedDataCErr(t *testing.T) {
 	}
 	node.RetCommittedDataC(&raftlog.DataWrapper{}, nil)
 	node.RemoveCommittedDataC(&raftlog.DataWrapper{})
+}
+
+func TestCommittedDataCPanic(t *testing.T) {
+	node := &RaftNode{
+		DataCommittedC: make(map[uint64]chan error),
+	}
+	node.DataCommittedC[1] = make(chan error)
+	c := node.DataCommittedC[1]
+	close(c)
+	node.RetCommittedDataC(&raftlog.DataWrapper{ProposeId: 1}, nil)
 }
 
 func TestForceDeleteEntryLog(t *testing.T) {
@@ -705,7 +716,14 @@ func TestPublishEntries(t *testing.T) {
 	n.cancelFn = cancelFn
 	n.ctx = cctx
 	n.cancelFn()
-	if re := n.PublishEntries([]raftpb.Entry{raftpb.Entry{Index: 1, Data: []byte{'a'}}}); re != false {
+	if re := n.PublishEntries([]raftpb.Entry{{Index: 1, Data: []byte{'a'}}}); re != false {
 		t.Fatal("TestPublishEntries err")
 	}
+}
+
+func TestEntriesToApply(t *testing.T) {
+	node := &RaftNode{}
+	node.WithLogger(logger.NewLogger(errno.ModuleUnknown))
+	entries := node.entriesToApply([]raftpb.Entry{{Index: 10}})
+	assert.Equal(t, len(entries), 1)
 }

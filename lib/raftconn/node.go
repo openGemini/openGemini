@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"runtime/debug"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -198,15 +199,23 @@ func (n *RaftNode) RemoveCommittedDataC(dw *raftlog.DataWrapper) {
 
 // make sure dw.identity == n.identify before call
 func (n *RaftNode) RetCommittedDataC(dw *raftlog.DataWrapper, committedErr error) {
+	defer func() {
+		if e := recover(); e != nil {
+			logger.GetLogger().Error("runtime panic", zap.String("RetCommittedDataC raise stack: ", string(debug.Stack())),
+				zap.Error(errno.NewError(errno.RecoverPanic, e)),
+				zap.String("db", n.database),
+				zap.Uint32("ptId", n.ptId))
+		}
+	}()
 	n.dataCommittedMu.RLock()
-	defer n.dataCommittedMu.RUnlock()
-	_, ok := n.DataCommittedC[dw.ProposeId]
+	c, ok := n.DataCommittedC[dw.ProposeId]
+	n.dataCommittedMu.RUnlock()
 	if !ok {
 		// maybe wait committed return timeout or node restarted
 		logger.GetLogger().Error("PushCommittedDataC proposeId not exist", zap.String("identity", dw.Identity), zap.Uint64("proposeId", dw.ProposeId))
 		return
 	}
-	n.DataCommittedC[dw.ProposeId] <- committedErr
+	c <- committedErr
 }
 
 // WithLogger sets logger to the RaftNode
@@ -444,6 +453,7 @@ func (n *RaftNode) entriesToApply(ents []raftpb.Entry) (nents []raftpb.Entry) {
 	firstIdx := ents[0].Index
 	if firstIdx > n.appliedIndex+1 {
 		n.logger.Warn(fmt.Sprintf("first index of committed entry[%d] should <= progress.appliedIndex[%d]+1", firstIdx, n.appliedIndex))
+		return ents
 	}
 
 	if n.appliedIndex-firstIdx+1 < uint64(len(ents)) {
@@ -636,6 +646,7 @@ func (n *RaftNode) snapshotAfterFlush() {
 
 func (n *RaftNode) snapShot() error {
 	index := n.SnapShotter.CommittedIndex
+	n.logger.Info(fmt.Sprintf("CreateSnapshot i=%d,cs=%+v", index, n.ConfState()), zap.String("db", n.database), zap.Uint32("pt", n.ptId))
 	for {
 		// We should never let CreateSnapshot have an error.
 		err := n.Store.CreateSnapshot(index, n.ConfState(), []byte("snapshot"))
@@ -726,10 +737,10 @@ func (n *RaftNode) deleteEntryLogPeriodically() {
 		case <-ticker.C:
 			logger.GetLogger().Info("delete entry log start")
 			if err := n.deleteEntryLog(); err != nil {
-				logger.GetLogger().Error("Error while deleting EntryLog.", zap.Error(err))
+				logger.GetLogger().Error("Error while deleting EntryLog.", zap.Error(err), zap.String("db", n.database), zap.Uint32("pt", n.ptId))
 			}
 			if err := n.deleteEntryLogBySize(); err != nil {
-				logger.GetLogger().Error("Error while deleting entryLog by size", zap.Error(err))
+				logger.GetLogger().Error("Error while deleting entryLog by size", zap.Error(err), zap.String("db", n.database), zap.Uint32("pt", n.ptId))
 			}
 		case <-n.ctx.Done():
 			logger.GetLogger().Error("ctx done...", zap.String("db", n.database), zap.Uint32("ptId", n.ptId))
@@ -848,7 +859,10 @@ func (n *RaftNode) forceDeleteEntryLogBySize(index uint64) error {
 	size := n.Store.EntrySize()
 	if uint64(size) > uint64(config.GetStoreConfig().ClearEntryLogTolerateSize) {
 		logger.GetLogger().Info("clear entry log by size, ", zap.Int("size", size), zap.Uint64("current index is ", index))
-		n.Store.DeleteBefore(index)
+		err := n.Store.DeleteBefore(index)
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
