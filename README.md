@@ -152,7 +152,7 @@ Refer to cluster deployments in [User Guide](https://docs.opengemini.org/guide/q
 
 #### Using openGemini
 
-Use the client to connect to openGemini
+Use the [openGemini-cli](https://github.com/openGemini/openGemini-cli) to connect to openGemini
 
 ```shell
 > ts-cli --host 127.0.0.1 --port 8086
