@@ -118,14 +118,18 @@ func (p *YyParser) Lex(lval *yySymType) int {
 			}
 		case BOUNDPARAM:
 			{
-				k := strings.TrimPrefix(val, "$")
-				if len(k) == 0 {
-					p.Error("empty bound parameter")
+				if !strings.HasPrefix(val, "$") {
+					p.Error(fmt.Sprintf("illegal bound parameter: %s, must start with $ the symbol", val))
+					break
 				}
-
-				v := p.Params[k]
+				trimParameter := strings.TrimPrefix(val, "$")
+				if len(trimParameter) == 0 {
+					p.Error("empty bound parameter")
+					break
+				}
+				v := p.Params[val]
 				if v == nil {
-					p.Error(fmt.Sprintf("missing parameter: %s", k))
+					p.Error(fmt.Sprintf("missing parameter: %s", trimParameter))
 					break
 				}
 
