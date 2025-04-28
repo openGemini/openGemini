@@ -86,11 +86,16 @@ func MergeHost(a, b string) string {
 	return splitsA[0] + ":" + splitsB[1]
 }
 
-func GetCustomProxy(ul *url.URL, targetHost string, body []byte) (*httputil.ReverseProxy, error) {
+func GetCustomProxy(ul *url.URL, targetHost string, body []byte, httpsEnabled bool) (*httputil.ReverseProxy, error) {
 	uri := "http://"
 	if ul.Scheme == "https" {
 		uri = "https://"
 	}
+
+	if httpsEnabled {
+		uri = "https://"
+	}
+
 	uri = uri + targetHost
 	uu, err := url.Parse(uri)
 	if err != nil {

@@ -38,7 +38,8 @@ import (
 
 const ColumnStoreReaderRecordNum = 7
 const ColumnStoreReaderChunkNum = 7
-const ColumnStoreReaderNoCopyChunkNum = 12 // hashMergeTransform noCopy send + topnTransform bufChunk cache
+const ColumnStoreReaderNoCopyRecordNum = 12 // hashMerge 4 + indexScan 3 + topn 2 + reader 3
+const ColumnStoreReaderNoCopyChunkNum = 12  // hashMergeTransform noCopy send + topnTransform bufChunk cache
 
 type ColumnStoreReader struct {
 	executor.BaseProcessor
@@ -219,7 +220,7 @@ func (r *ColumnStoreReader) initQueryCtx() (tr util.TimeRange, readCtx *immutabl
 	return
 }
 
-func (r *ColumnStoreReader) initReadCursor() (err error) {
+func (r *ColumnStoreReader) initReadCursor(queryCtx context.Context) (err error) {
 	var tr util.TimeRange
 	var readCtx *immutable.ReadContext
 	tr, readCtx, err = r.initQueryCtx()
@@ -315,18 +316,19 @@ func (r *ColumnStoreReader) initSchemaAndPool() (err error) {
 	// init the filter functions
 	r.filterOpt.SetCondFuncs(&r.queryCtx.filterOption)
 
+	recordNum := ColumnStoreReaderRecordNum
+	chunkNum := ColumnStoreReaderChunkNum
 	// init the data record pool
-	r.recordPool = record.NewCircularRecordPool(record.NewRecordPool(record.ColumnReaderPool), ColumnStoreReaderRecordNum, r.inSchema, false)
+	if r.schema.HasTopNDDCM() {
+		recordNum = ColumnStoreReaderNoCopyRecordNum
+		chunkNum = ColumnStoreReaderNoCopyChunkNum
+	}
+	r.recordPool = record.NewCircularRecordPool(record.NewRecordPool(record.ColumnReaderPool), recordNum, r.inSchema, false)
 
 	// init the filter record pool
 	if r.queryCtx.filterOption.CondFunctions.HaveFilter() {
 		r.readCursor.AddFilterRecPool(
-			record.NewCircularRecordPool(record.NewRecordPool(record.ColumnReaderPool), ColumnStoreReaderRecordNum, r.inSchema, false))
-	}
-
-	chunkNum := ColumnStoreReaderChunkNum
-	if r.schema.HasTopNDDCM() {
-		chunkNum = ColumnStoreReaderNoCopyChunkNum
+			record.NewCircularRecordPool(record.NewRecordPool(record.ColumnReaderPool), recordNum, r.inSchema, false))
 	}
 
 	// init the chunk pool
@@ -373,7 +375,7 @@ func (r *ColumnStoreReader) Work(ctx context.Context) error {
 	r.initSpan()
 
 	tracing.StartPP(r.initReaderSpan)
-	err = r.initReadCursor()
+	err = r.initReadCursor(ctx)
 	if err != nil {
 		return err
 	}

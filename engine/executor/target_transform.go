@@ -158,7 +158,6 @@ func (trans *TargetTransform) Work(ctx context.Context) error {
 	}()
 
 	var ok bool
-	//var err error
 	if trans.writer, ok = ctx.Value(WRITER_CONTEXT).(pointerWriter); !ok {
 		return fmt.Errorf("no point writer can be worked for into target transform")
 	}

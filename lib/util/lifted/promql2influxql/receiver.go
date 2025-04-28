@@ -13,11 +13,12 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/prometheus/model/labels"
+	"github.com/openGemini/openGemini/lib/util/lifted/prometheus/promql"
 	"github.com/prometheus/common/model"
-	"github.com/prometheus/prometheus/model/labels"
+	labels2 "github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/model/timestamp"
 	"github.com/prometheus/prometheus/prompb"
-	"github.com/prometheus/prometheus/promql"
 	"github.com/prometheus/prometheus/promql/parser"
 	"go.uber.org/zap"
 )
@@ -34,7 +35,6 @@ type Receiver struct {
 	PromCommand
 
 	DropMetric      bool
-	RemoveTableName bool
 	DuplicateResult bool
 }
 
@@ -481,7 +481,7 @@ func getAbsentLabelsFromExpr(expr parser.Expr) labels.Labels {
 		return labels.EmptyLabels()
 	}
 
-	var lm []*labels.Matcher
+	var lm []*labels2.Matcher
 	switch n := e.Args[0].(type) {
 	case *parser.VectorSelector:
 		lm = n.LabelMatchers
@@ -496,7 +496,7 @@ func getAbsentLabelsFromExpr(expr parser.Expr) labels.Labels {
 		if ma.Name == labels.MetricName {
 			continue
 		}
-		if ma.Type == labels.MatchEqual && !exist[ma.Name] {
+		if ma.Type == labels2.MatchEqual && !exist[ma.Name] {
 			b.Set(ma.Name, ma.Value)
 			exist[ma.Name] = true
 		} else {

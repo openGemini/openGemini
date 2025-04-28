@@ -15,6 +15,9 @@
 package stream
 
 import (
+	"encoding/json"
+	"os"
+	"path"
 	"slices"
 	"strconv"
 	"strings"
@@ -180,6 +183,8 @@ func Test_ReplayData(t *testing.T) {
 	now := time.Now()
 	task := &TagTask{
 		ptLoadStatus: map[uint32]*flushStatus{0: {Timestamp: now.Add(-20 * time.Second).UnixNano()}},
+		nodePts:      []uint32{0},
+
 		BaseTask: &BaseTask{Logger: MockLogger{t},
 			initTime: now.Add(20 * time.Second),
 			window:   10 * time.Second,
@@ -187,6 +192,7 @@ func Test_ReplayData(t *testing.T) {
 			info:     &meta2.MeasurementInfo{Name: "bps"},
 			des:      &meta2.StreamMeasurementInfo{Database: "test", RetentionPolicy: "autogen"},
 			store:    &MockStorage{},
+			cli:      MockMetaclient{},
 		},
 	}
 
@@ -201,6 +207,7 @@ func Test_ReplayData(t *testing.T) {
 	task.fieldCallsLen = 3
 
 	t.Run("1", func(t *testing.T) {
+		task.initReplayVar()
 		replayRow := &ReplayRow{
 			db:      "test",
 			rp:      "autogen",
@@ -210,28 +217,21 @@ func Test_ReplayData(t *testing.T) {
 		}
 
 		task.replayWalRow(replayRow)
-
-		expPtID := make([]*uint32, 4)
-		expPtID[2] = &replayRow.ptID
 		expShards := make([]*uint64, 4)
 		expShards[2] = &replayRow.shardID
 
-		if ok := slices.Equal(expPtID, task.replayPtIds); !ok {
-			t.Errorf("Expected %v, got %v", expPtID, task.replayPtIds)
-		}
-		if ok := slices.Equal(expShards, task.replayShardIds); !ok {
+		if ok := slices.Equal(expShards, task.replayShardIds[0]); !ok {
 			t.Errorf("Expected %v, got %v", expShards, task.replayShardIds)
 		}
 
-		task.flushReplayData(2)
+		task.flushReplayData()
 		s := task.store.(*MockStorage)
 		assertEqual(t, s.count, 1)
 		assertEqual(t, s.value, float64(2))
-
-		task.cleanReplayData(2)
 	})
 
 	t.Run("2", func(t *testing.T) {
+		task.initReplayVar()
 		task.BaseTask.store = &MockStorage{}
 		FlushParallelMinRowNum = 0
 		replayRow := &ReplayRow{
@@ -248,13 +248,11 @@ func Test_ReplayData(t *testing.T) {
 		task.concurrency = 1
 		task.replayWalRow(replayRow)
 
-		task.flushReplayData(2)
+		task.flushReplayData()
 
 		s := task.store.(*MockStorage)
 		assertEqual(t, s.count, 1)
 		assertEqual(t, s.value, float64(30))
-
-		task.cleanReplayData(2)
 	})
 
 }
@@ -270,6 +268,7 @@ func Test_ReplayWalRow_Error(t *testing.T) {
 		now := time.Now()
 		task := &TagTask{
 			ptLoadStatus: map[uint32]*flushStatus{0: {Timestamp: now.Add(-2000 * time.Second).UnixNano()}},
+			nodePts:      []uint32{0},
 			BaseTask: &BaseTask{Logger: MockLogger{t},
 				initTime: now.Add(2000 * time.Second),
 				window:   10 * time.Second,
@@ -280,15 +279,7 @@ func Test_ReplayWalRow_Error(t *testing.T) {
 			},
 		}
 
-		replayRow := &ReplayRow{
-			db:      "test",
-			rp:      "autogen",
-			ptID:    0,
-			shardID: 0,
-			rows:    buildReplayRows(2),
-		}
-
-		task.replayWalRow(replayRow)
+		task.initReplayVar()
 		if task.replayWindowNum != int64(maxReplayWindowNum) {
 			t.Fatal("task.replayWindowNum and maxReplayWindowNum not equal")
 		}
@@ -296,14 +287,12 @@ func Test_ReplayWalRow_Error(t *testing.T) {
 }
 
 func Test_FlushReplayData(t *testing.T) {
-	var ptID uint32 = 1
 	var shardID uint64 = 1
 	task := &TagTask{
 		values:         sync.Map{},
 		TaskDataPool:   NewTaskDataPool(),
 		cleanPreWindow: make(chan struct{}),
-		replayPtIds:    []*uint32{&ptID},
-		replayShardIds: []*uint64{&shardID},
+		replayShardIds: map[uint32][]*uint64{1: []*uint64{&shardID}},
 		BaseTask: &BaseTask{Logger: MockLogger{t},
 			updateWindow: make(chan struct{}),
 			abort:        make(chan struct{}),
@@ -311,11 +300,39 @@ func Test_FlushReplayData(t *testing.T) {
 			stats:        statistics.NewStreamWindowStatItem(0),
 		},
 	}
-	task.flushReplayData(0)
+	task.flushReplayData()
 }
 
-func Test_CleanReplayData(t *testing.T) {
+func Test_ResetReplayVar(t *testing.T) {
+	task := &TagTask{
+		BaseTask: &BaseTask{Logger: MockLogger{t},
+			window: 10 * time.Second,
+			rows:   []influx.Row{},
+			info:   &meta2.MeasurementInfo{Name: "bps"},
+			des:    &meta2.StreamMeasurementInfo{Database: "test", RetentionPolicy: "autogen"},
+			store:  &MockStorage{},
+			cli:    MockMetaclient{},
+			id:     1,
+		},
+	}
+	p := path.Join(task.dataPath, "data", task.des.Database, strconv.Itoa(0), task.des.RetentionPolicy)
 
+	st := &flushStatus{Timestamp: time.Now().UnixNano()}
+	b, err := json.Marshal(st)
+	if err != nil {
+		t.Fatal()
+	}
+	if err := os.MkdirAll(p, 0700); err == nil {
+		if _, err := os.Stat(p); err == nil {
+			os.WriteFile(path.Join(p, strconv.FormatUint(task.id, 10)), b, 0)
+		}
+	}
+	task.shardIds = make(map[uint32][]*uint64)
+	task.resetReplayVar()
+	os.RemoveAll(p)
+	if _, ok := task.replayShardIds[0]; !ok {
+		t.Fatal()
+	}
 }
 
 func Benchmark_GenerateGroupKeyUint(t *testing.B) {

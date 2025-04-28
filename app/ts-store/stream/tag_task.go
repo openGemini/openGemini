@@ -58,13 +58,12 @@ type TagTask struct {
 	// key tag values
 	values sync.Map
 	lock   sync.Mutex
-	// store all ptIds for all window
-	ptIds []*uint32
 	// store all shardIds for all window
-	shardIds []*uint64
+	shardIds map[uint32][]*uint64
 	// metadata, not change
 	groupKeys []string
 
+	nodePts []uint32
 	// chan for process
 	innerCache     chan ChanData
 	innerRes       chan error
@@ -79,14 +78,13 @@ type TagTask struct {
 	concurrency int
 
 	// tools
-	flushWG sync.WaitGroup
-	goPool  *ants.Pool
+	goPool *ants.Pool
 
 	// replay
 	replayValues    sync.Map
 	replayWindowNum int64
-	replayPtIds     []*uint32
-	replayShardIds  []*uint64
+	replayShardIds  map[uint32][]*uint64
+	mu              sync.Mutex
 
 	ptLoadStatus map[uint32]*flushStatus
 	*BaseTask
@@ -141,11 +139,11 @@ func (s *TagTask) run() error {
 	go s.parallelCalculate()
 	go s.cleanWindow()
 	go s.consumeDataAndUpdateMeta()
-	s.recoverStatus()
 	return nil
 }
 
 func (s *TagTask) initVar() error {
+	s.recoverStatus()
 	s.maxDuration = int64(s.windowNum) * s.window.Nanoseconds()
 	s.abort = make(chan struct{})
 	// chan len zero, make updateWindow cannot parallel execute with flush
@@ -157,23 +155,105 @@ func (s *TagTask) initVar() error {
 	}
 	s.values = sync.Map{}
 	s.stringDict = stringinterner.NewStringDict()
-	s.ptLoadStatus = map[uint32]*flushStatus{}
-
 	s.innerCache = make(chan ChanData, s.concurrency)
 	s.innerRes = make(chan error, s.concurrency)
-
-	s.ptIds = make([]*uint32, maxWindowNum)
-	s.shardIds = make([]*uint64, maxWindowNum)
-	for i := 0; i < maxWindowNum; i++ {
-		var pt uint32
-		var shard uint64
-		s.ptIds[i] = &pt
-		s.shardIds[i] = &shard
+	s.shardIds = make(map[uint32][]*uint64)
+	for _, ptID := range s.nodePts {
+		s.shardIds[ptID] = make([]*uint64, maxWindowNum)
+		for i := range s.shardIds[ptID] {
+			var shardId uint64
+			s.shardIds[ptID][i] = &shardId
+		}
 	}
 	s.startTimeStamp = s.start.UnixNano()
 	s.endTimeStamp = s.end.UnixNano()
 	s.maxTimeStamp = s.startTimeStamp + s.maxDuration
+	s.initReplayVar()
 	return nil
+}
+
+func (s *TagTask) initReplayVar() {
+	minFlushTime := s.initTime.UnixNano()
+	for _, st := range s.ptLoadStatus {
+		if st.Timestamp < minFlushTime {
+			minFlushTime = st.Timestamp
+		}
+	}
+	windowNum := (s.initTime.UnixNano() - minFlushTime) / s.window.Nanoseconds()
+	if windowNum > int64(maxReplayWindowNum) {
+		windowNum = int64(maxReplayWindowNum)
+	}
+	s.replayWindowNum = windowNum
+	s.replayShardIds = make(map[uint32][]*uint64)
+	s.replayValues = sync.Map{}
+	for _, ptID := range s.nodePts {
+		if _, ok := s.replayShardIds[ptID]; !ok {
+			s.replayShardIds[ptID] = make([]*uint64, windowNum)
+		}
+	}
+}
+
+func (s *TagTask) resetReplayVar() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var ptChanged, flushTimeChanged bool
+	pts := s.cli.GetNodePT(s.des.Database)
+	s.nodePts = pts
+	oldPtStatus := s.ptLoadStatus
+	s.ptLoadStatus = map[uint32]*flushStatus{}
+	for _, ptID := range pts {
+		s.recoverPTStatus(ptID)
+	}
+	if len(s.ptLoadStatus) != len(oldPtStatus) {
+		ptChanged = true
+	}
+	s.initTime = time.Now().Truncate(s.window).Add(s.window)
+	ptInitTime := s.initTime.UnixNano()
+	minFlushTime := ptInitTime
+	for k, v := range s.ptLoadStatus {
+		if v.Timestamp < minFlushTime {
+			minFlushTime = v.Timestamp
+		}
+		oldV, ok := oldPtStatus[k]
+		if !ok {
+			ptChanged = true
+			continue
+		}
+		if v.Timestamp != oldV.Timestamp {
+			flushTimeChanged = true
+		}
+	}
+
+	if !flushTimeChanged {
+		if ptChanged {
+			now := time.Now()
+			next := now.Truncate(s.window).Add(s.window).Add(s.maxDelay)
+			time.Sleep(next.Sub(now))
+		} else {
+			return
+		}
+	}
+
+	windowNum := (ptInitTime - minFlushTime) / s.window.Nanoseconds()
+	if windowNum > int64(maxReplayWindowNum) {
+		windowNum = int64(maxReplayWindowNum)
+	}
+
+	s.replayWindowNum = windowNum
+	s.replayShardIds = make(map[uint32][]*uint64)
+	s.replayValues = sync.Map{}
+	for _, ptID := range s.nodePts {
+		if _, ok := s.replayShardIds[ptID]; !ok {
+			s.replayShardIds[ptID] = make([]*uint64, windowNum)
+		}
+		if !s.ptIDExist(ptID) {
+			s.shardIds[ptID] = make([]*uint64, maxWindowNum)
+			for i := range s.shardIds[ptID] {
+				var shardId uint64
+				s.shardIds[ptID][i] = &shardId
+			}
+		}
+	}
 }
 
 // cycle flush data form cache, period is group time
@@ -199,14 +279,13 @@ func (s *TagTask) cycleFlush() {
 				ticker.Reset(s.window)
 				continue
 			}
-			for i := 0; i < int(s.replayWindowNum); i++ {
-				err := s.flushReplayData(i)
-				if err != nil {
-					s.Logger.Error("stream flush replay data error", zap.Error(err))
-				}
-				s.cleanReplayData(i)
+			err := s.flushReplayData()
+			if err != nil {
+				s.Logger.Error("stream flush replay data error", zap.Error(err))
 			}
+			s.cleanReplayData()
 
+			s.Logger.Info("stream replay data flush over")
 			err = s.flush()
 			if err != nil {
 				s.Logger.Error("stream flush error", zap.Error(err))
@@ -247,6 +326,7 @@ func (s *TagTask) parallelCalculate() {
 							s.Logger.Error(fmt.Sprintf("stream innerRes is full, size %v", len(s.innerRes)))
 						}
 					case *ReplayRow:
+						s.resetReplayVar()
 						err := s.replayWalRow(v)
 						if err != nil {
 							s.Logger.Error("calculate error", zap.String("window", s.name), zap.Error(err))
@@ -294,30 +374,22 @@ func (s *TagTask) cleanWindow() {
 	}
 }
 
-func (s *TagTask) cleanReplayData(windowID int) {
-	cleanAll := true
+func (s *TagTask) cleanPtInfo(ptID uint32) {
+	s.values.Delete(ptID)
+	delete(s.shardIds, ptID)
+	delete(s.ptLoadStatus, ptID)
+	for i, p := range s.nodePts {
+		if ptID == p {
+			s.nodePts = append(s.nodePts[:i], s.nodePts[i+1:]...)
+			break
+		}
+	}
+}
 
-	s.replayPtIds[windowID] = nil
-	s.replayShardIds[windowID] = nil
-	for _, pt := range s.replayPtIds {
-		if pt != nil {
-			cleanAll = false
-		}
-	}
-	if cleanAll {
-		s.replayPtIds = s.replayPtIds[:0]
-		s.replayShardIds = s.replayShardIds[:0]
-		s.replayWindowNum = 0
-		s.replayValues = sync.Map{}
-	}
-	s.replayValues.Range(func(key, value any) bool {
-		v, ok := value.(*sync.Map)
-		if !ok {
-			return false
-		}
-		v.Range(s.walkUpdate(int64(windowID)))
-		return true
-	})
+func (s *TagTask) cleanReplayData() {
+	s.replayValues = sync.Map{}
+	s.replayWindowNum = 0
+	s.replayShardIds = make(map[uint32][]*uint64)
 }
 
 // consume data from window cache, and update window metadata, calculate cannot parallel with update window
@@ -453,6 +525,9 @@ func (s *TagTask) calculateRec(cache *CacheRecord) error {
 		callIds[c] = id
 	}
 
+	if !s.ptIDExist(cache.ptId) {
+		return fmt.Errorf("ptId not found,calculateRec")
+	}
 	for i := 0; i < rec.RowNums(); i++ {
 		t := times[i]
 		if t < s.startTimeStamp || t >= s.maxTimeStamp {
@@ -510,8 +585,7 @@ func (s *TagTask) calculateRec(cache *CacheRecord) error {
 			s.fieldCalls[c].ConcurrencyFunc(vs[id], curVal)
 		}
 		if windowId != lastWindowID {
-			atomic.SwapUint64(s.shardIds[windowId], cache.shardID)
-			atomic.StoreUint32(s.ptIds[windowId], cache.ptId)
+			atomic.SwapUint64(s.shardIds[cache.ptId][windowId], cache.shardID)
 			lastWindowID = windowId
 		}
 
@@ -519,6 +593,11 @@ func (s *TagTask) calculateRec(cache *CacheRecord) error {
 	}
 	s.stats.AddWindowSkip(int64(skip))
 	return nil
+}
+
+func (s *TagTask) ptIDExist(ptID uint32) bool {
+	_, ok := s.shardIds[ptID]
+	return ok
 }
 
 func (s *TagTask) windowId(t int64) int {
@@ -530,18 +609,10 @@ func (s *TagTask) replayWalRow(cache *ReplayRow) error {
 	if cache == nil {
 		return ErrEmptyCache
 	}
-	flushTime, ok := s.ptLoadStatus[cache.ptID]
-	if !ok {
+	flushTime, ok1 := s.ptLoadStatus[cache.ptID]
+	_, ok2 := s.replayShardIds[cache.ptID]
+	if !ok1 || !ok2 {
 		return fmt.Errorf("replay ptId not found")
-	}
-	windowNum := int64(math.Ceil(float64(s.initTime.UnixNano()-flushTime.Timestamp) / float64(s.window.Nanoseconds())))
-	if windowNum > int64(maxReplayWindowNum) {
-		windowNum = int64(maxReplayWindowNum)
-	}
-	if windowNum > s.replayWindowNum {
-		s.replayShardIds = append(s.replayShardIds, make([]*uint64, windowNum-s.replayWindowNum)...)
-		s.replayPtIds = append(s.replayPtIds, make([]*uint32, windowNum-s.replayWindowNum)...)
-		s.replayWindowNum = windowNum
 	}
 	values := s.genReplayValues(cache.ptID)
 
@@ -591,8 +662,7 @@ func (s *TagTask) replayWalRow(cache *ReplayRow) error {
 			}
 			s.fieldCalls[c].ConcurrencyFunc(vs[id], curVal)
 		}
-		s.replayShardIds[windowId] = &cache.shardID
-		s.replayPtIds[windowId] = &cache.ptID
+		s.replayShardIds[cache.ptID][windowId] = &cache.shardID
 	}
 	return nil
 }
@@ -613,6 +683,9 @@ func (s *TagTask) calculateRow(cache *TaskCache) error {
 	s.stats.StatWindowEndTime(s.endTimeStamp)
 
 	values := s.getValue(cache.ptId)
+	if !s.ptIDExist(cache.ptId) {
+		return fmt.Errorf("ptId not found,calculateRow")
+	}
 	for i := range rows {
 		row := rows[i]
 		if row.Timestamp < s.startTimeStamp || row.Timestamp >= s.maxTimeStamp {
@@ -660,28 +733,11 @@ func (s *TagTask) calculateRow(cache *TaskCache) error {
 			}
 			s.fieldCalls[c].ConcurrencyFunc(vs[id], curVal)
 		}
-		atomic.SwapUint64(s.shardIds[windowId], cache.shardId)
-		atomic.StoreUint32(s.ptIds[windowId], cache.ptId)
+		atomic.SwapUint64(s.shardIds[cache.ptId][windowId], cache.shardId)
 		s.stats.AddWindowProcess(1)
 	}
 
 	return nil
-}
-
-// generateRows generate rows from map cache, prepare data for flush
-func (s *TagTask) generateRows(t int64) {
-	s.offset = int(atomic.LoadInt64(&s.startWindowID)) * s.fieldCallsLen
-
-	s.Logger.Info("generateRows")
-	s.values.Range(func(key, value any) bool {
-		v, ok := value.(*sync.Map)
-		if !ok {
-			return false
-		}
-		v.Range(s.buildRow(t))
-		return true
-	})
-
 }
 
 func (s *TagTask) buildRow(flushTime int64) func(k, vv any) bool {
@@ -765,85 +821,53 @@ func (s *TagTask) buildRow(flushTime int64) func(k, vv any) bool {
 	}
 }
 
-func (s *TagTask) generateReplayRows(windowID int, ptID uint32) {
-	s.offset = windowID * s.fieldCallsLen
+func (s *TagTask) flushReplayData() error {
+	var err error
+	s.Logger.Info("stream replay data start flush", zap.Int64("endTime", s.endTimeStamp))
+	s.indexKeyPool = bufferpool.GetPoints()
 
+	s.generateReplayRows()
+
+	return err
+}
+
+func (s *TagTask) generateReplayRows() {
 	s.replayValues.Range(func(key, value any) bool {
 		v, ok := value.(*sync.Map)
 		if !ok {
 			return false
 		}
+		ptID, ok := key.(uint32)
+		if !ok {
+			return true
+		}
 		flushTime, ok := s.ptLoadStatus[ptID]
 		if !ok {
 			return false
 		}
-		timeStamp := flushTime.Timestamp + int64(windowID)*s.window.Nanoseconds()
-		v.Range(s.buildRow(timeStamp))
+		for i := 0; i < int(s.replayWindowNum); i++ {
+			s.offset = i * s.fieldCallsLen
+			timeStamp := flushTime.Timestamp + int64(i)*s.window.Nanoseconds()
+			v.Range(s.buildRow(timeStamp))
+			s.WriteReplayRows(i, ptID)
+		}
 		return true
 	})
-
 }
 
-// corpusIndexes array not need lock
-func (s *TagTask) unCompressDictKey(key string) (string, error) {
-	if key == EmptyTagValue {
-		return EmptyTagValue, nil
-	}
-	intV, err := strconv.Atoi(key)
-	if err != nil {
-		s.Logger.Error(fmt.Sprintf("invalid corpus key %v", key))
-		return "", err
-	}
-	return s.stringDict.LoadValue(intV), nil
-}
-
-func (s *TagTask) flushReplayData(windowID int) error {
-	var err error
-	s.Logger.Info("stream replay data start flush", zap.Int64("endTime", s.endTimeStamp))
-	s.indexKeyPool = bufferpool.GetPoints()
-
-	ptID, shardID := s.replayPtIds[windowID], s.replayShardIds[windowID]
-	if ptID == nil || shardID == nil {
-		return err
-	}
-	s.generateReplayRows(windowID, *ptID)
+func (s *TagTask) WriteReplayRows(windowID int, ptID uint32) {
 	if s.validNum == 0 {
-		return err
+		return
 	}
 
-	// if the number of rows is not greater than the FlushParallelMinRowNum, the rows will be flushed serially.
-	if s.validNum <= FlushParallelMinRowNum {
-		s.Logger.Info("replay data point", zap.Any("rows", s.rows))
-		err = s.WriteRowsToShard(0, s.validNum, *ptID, *shardID)
-		s.Logger.Info("stream replay data flush over")
-		s.rows = s.rows[0:]
-		s.validNum = 0
-		return err
+	s.Logger.Info("replay data point", zap.Any("rows", s.rows))
+	shardID := s.replayShardIds[ptID][windowID]
+	err := s.WriteRowsToShard(0, s.validNum, ptID, *shardID)
+	if err != nil {
+		s.Logger.Error("WriteRowsToShard fail", zap.Error(err))
 	}
-
-	// if the number of rows is greater than the FlushParallelMinRowNum, the rows will be flushed in parallel.
-	conNum := s.validNum / s.concurrency
-	for i := 0; i < s.concurrency; i++ {
-		start, end := i*conNum, 0
-		if i < s.concurrency-1 {
-			end = (i + 1) * conNum
-		} else {
-			end = s.validNum
-		}
-		s.flushWG.Add(1)
-		_ = s.goPool.Submit(func() {
-			err = s.WriteRowsToShard(start, end, *ptID, *shardID)
-			if err != nil {
-				s.Logger.Error("stream replay data flush fail", zap.Error(err))
-			}
-			s.flushWG.Done()
-		})
-	}
-	s.flushWG.Wait()
-	s.Logger.Info("stream replay data flush over", zap.Error(err))
 	s.rows = s.rows[0:]
 	s.validNum = 0
-	return err
 }
 
 func (s *TagTask) flush() error {
@@ -867,57 +891,50 @@ func (s *TagTask) flush() error {
 	atomic.StoreInt64(&s.curFlushTime, s.endTimeStamp)
 
 	s.generateRows(s.startTimeStamp)
-	if s.validNum == 0 {
-		return err
-	}
-
-	ptID, shardID := atomic.LoadUint32(s.ptIds[atomic.LoadInt64(&s.startWindowID)]), atomic.LoadUint64(s.shardIds[atomic.LoadInt64(&s.startWindowID)])
-	// if the number of rows is not greater than the FlushParallelMinRowNum, the rows will be flushed serially.
-	if s.validNum <= FlushParallelMinRowNum {
-		err = s.WriteRowsToShard(0, s.validNum, ptID, shardID)
-		s.Logger.Info("stream flush over")
-		if err == nil {
-			s.snapshot()
-		}
-		s.rows = s.rows[0:]
-		s.validNum = 0
-		return err
-	}
-
-	// if the number of rows is greater than the FlushParallelMinRowNum, the rows will be flushed in parallel.
-	conNum := s.validNum / s.concurrency
-	for i := 0; i < s.concurrency; i++ {
-		start, end := i*conNum, 0
-		if i < s.concurrency-1 {
-			end = (i + 1) * conNum
-		} else {
-			end = s.validNum
-		}
-		s.flushWG.Add(1)
-		_ = s.goPool.Submit(func() {
-			err = s.WriteRowsToShard(start, end, ptID, shardID)
-			if err != nil {
-				s.Logger.Error("stream flush fail", zap.Error(err))
-			}
-			s.flushWG.Done()
-		})
-	}
-	s.flushWG.Wait()
-
-	s.Logger.Info("stream flush over", zap.Error(err))
-
-	if err == nil {
-		s.snapshot()
-	}
-
-	s.rows = s.rows[0:]
-	s.validNum = 0
+	s.Logger.Info("stream flush over")
 	return err
 }
 
+// generateRows generate rows from map cache, prepare data for flush
+func (s *TagTask) generateRows(t int64) {
+	s.offset = int(atomic.LoadInt64(&s.startWindowID)) * s.fieldCallsLen
+
+	s.Logger.Info("generateRows")
+	s.values.Range(func(key, value any) bool {
+		v, ok := value.(*sync.Map)
+		if !ok {
+			return false
+		}
+		v.Range(s.buildRow(t))
+		s.WriteRows(key.(uint32))
+		return true
+	})
+}
+
+func (s *TagTask) WriteRows(ptID uint32) {
+	var err error
+	if s.validNum == 0 {
+		return
+	}
+	if !s.ptIDExist(ptID) {
+		return
+	}
+	shardID := atomic.LoadUint64(s.shardIds[ptID][s.startWindowID])
+	err = s.WriteRowsToShard(0, s.validNum, ptID, shardID)
+
+	if err == nil {
+		s.snapshot(ptID)
+	}
+	s.rows = s.rows[0:]
+	s.validNum = 0
+
+}
+
 func (s *TagTask) recoverStatus() {
-	ptIDs := s.cli.GetNodePT(s.des.Database)
-	for _, ptID := range ptIDs {
+	s.ptLoadStatus = map[uint32]*flushStatus{}
+	pts := s.cli.GetNodePT(s.des.Database)
+	s.nodePts = pts
+	for _, ptID := range pts {
 		s.recoverPTStatus(ptID)
 	}
 	s.setInit()
@@ -940,7 +957,7 @@ func (s *TagTask) recoverPTStatus(ptID uint32) {
 	s.Logger.Info("recoverPTStatus", zap.Uint32("ptID", ptID), zap.Int64("time", st.Timestamp))
 }
 
-func (s *TagTask) snapshot() {
+func (s *TagTask) snapshot(ptID uint32) {
 	st := &flushStatus{Timestamp: atomic.LoadInt64(&s.curFlushTime)}
 	by, err := json.Marshal(st)
 	if err != nil {
@@ -948,15 +965,11 @@ func (s *TagTask) snapshot() {
 		return
 	}
 
-	// skip empty ptID
-	s.values.Range(func(key, value any) bool {
-		ptID, _ := key.(uint32)
-		p := path.Join(s.dataPath, "data", s.des.Database, strconv.Itoa(int(ptID)), s.des.RetentionPolicy, strconv.FormatUint(s.id, 10))
-		if err := os.WriteFile(p, by, 0600); err != nil {
-			s.Logger.Error("write file error", zap.Error(err))
-		}
-		return true
-	})
+	p := path.Join(s.dataPath, "data", s.des.Database, strconv.Itoa(int(ptID)), s.des.RetentionPolicy, strconv.FormatUint(s.id, 10))
+	if err := os.WriteFile(p, by, 0600); err != nil {
+		s.Logger.Error("write file error", zap.Error(err))
+	}
+
 	s.Logger.Info("stream snapshot suc", zap.String("task", s.name))
 }
 
@@ -984,6 +997,19 @@ func (s *TagTask) WriteRowsToShard(start, end int, ptID uint32, shardID uint64) 
 		s.Logger.Error("stream flush fail", zap.Error(err))
 	}
 	return nil
+}
+
+// corpusIndexes array not need lock
+func (s *TagTask) unCompressDictKey(key string) (string, error) {
+	if key == EmptyTagValue {
+		return EmptyTagValue, nil
+	}
+	intV, err := strconv.Atoi(key)
+	if err != nil {
+		s.Logger.Error(fmt.Sprintf("invalid corpus key %v", key))
+		return "", err
+	}
+	return s.stringDict.LoadValue(intV), nil
 }
 
 func (s *TagTask) Drain() {

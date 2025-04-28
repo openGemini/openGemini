@@ -26,7 +26,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/bytedance/sonic"
@@ -40,7 +39,6 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/rand"
-	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/coordinator"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/httpd/consume"
@@ -63,12 +61,12 @@ func (h *Handler) getRequestInfo(r *http.Request) (*consume.ConsumeInfo, error) 
 	repository := mux.Vars(r)[Repository]
 	logStream := mux.Vars(r)[LogStream]
 	if err := h.ValidateAndCheckLogStreamExists(repository, logStream); err != nil {
-		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		handlerStat.Write400ErrRequests.Incr()
 		return nil, err
 	}
 	db, err := h.MetaClient.Database(repository)
 	if err != nil {
-		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		handlerStat.Write400ErrRequests.Incr()
 		return nil, err
 	}
 	queryLogRequest, err := consume.GetQueryConsumeLogsRequest(r)
@@ -684,14 +682,14 @@ func (h *Handler) serveGetConsumeCursors(w http.ResponseWriter, r *http.Request,
 	if err := h.ValidateAndCheckLogStreamExists(repository, logStream); err != nil {
 		h.Logger.Error("query log scan request error! ", zap.Error(err), zap.Any("r", r))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
-		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		handlerStat.Write400ErrRequests.Incr()
 		return
 	}
 	db, err := h.MetaClient.Database(repository)
 	if err != nil {
 		h.Logger.Error("query log request error! ", zap.Error(err), zap.Any("r", r))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
-		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		handlerStat.Write400ErrRequests.Incr()
 		return
 	}
 	queryLogRequest, err := getQueryConsumeCursorsRequest(r)

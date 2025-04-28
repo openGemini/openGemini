@@ -18,21 +18,19 @@ import (
 	"context"
 	"fmt"
 	"reflect"
-	"sync/atomic"
 	"time"
 
 	"github.com/openGemini/openGemini/app/ts-store/storage"
 	"github.com/openGemini/openGemini/app/ts-store/transport/query"
 	"github.com/openGemini/openGemini/engine/executor"
-	"github.com/openGemini/openGemini/engine/executor/spdy"
-	"github.com/openGemini/openGemini/engine/executor/spdy/rpc"
 	"github.com/openGemini/openGemini/lib/cache"
 	"github.com/openGemini/openGemini/lib/codec"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/netstorage"
-	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+	"github.com/openGemini/openGemini/lib/spdy"
+	"github.com/openGemini/openGemini/lib/spdy/rpc"
 	"go.uber.org/zap"
 )
 
@@ -165,12 +163,14 @@ func (p *SelectProcessor) Handle(w spdy.Responser, data interface{}) (err error)
 		_ = w.Response(executor.NewFinishMessage(0), true)
 		return nil
 	}
-	atomic.AddInt64(&statistics.StoreQueryStat.StoreQueryRequests, 1)
-	atomic.AddInt64(&statistics.StoreQueryStat.StoreActiveQueryRequests, 1)
+
+	queryStat.StoreQueryRequests.Incr()
+	queryStat.StoreActiveQueryRequests.Incr()
+
 	start := time.Now()
 	defer func() {
-		atomic.AddInt64(&statistics.StoreQueryStat.StoreActiveQueryRequests, -1)
-		atomic.AddInt64(&statistics.StoreQueryStat.StoreQueryRequestDuration, time.Since(start).Nanoseconds())
+		queryStat.StoreActiveQueryRequests.Decr()
+		queryStat.StoreQueryRequestDuration.AddSinceNano(start)
 	}()
 	s := NewSelect(p.store, w, req)
 	qm.Add(req.Opt.QueryId, s)
@@ -276,6 +276,20 @@ func (p *CrashProcessor) Handle(w spdy.Responser, data interface{}) error {
 
 	err := w.Response(executor.NewFinishMessage(0), true)
 	if err != nil {
+		logger.GetLogger().Error("failed to response finish message", zap.Error(err))
+	}
+	return nil
+}
+
+type PingProcessor struct {
+}
+
+func NewPingProcessor() *PingProcessor {
+	return &PingProcessor{}
+}
+
+func (p *PingProcessor) Handle(w spdy.Responser, data interface{}) error {
+	if err := w.Response(executor.NewFinishMessage(0), true); err != nil {
 		logger.GetLogger().Error("failed to response finish message", zap.Error(err))
 	}
 	return nil

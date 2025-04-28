@@ -127,6 +127,22 @@ func TestService_RunShardHierarchicalStorage(t *testing.T) {
 		assert.Equal(t, 3, called)
 	})
 
+	t.Run("close success", func(t *testing.T) {
+		called := 0
+		c.UpdateShardInfoTierFn = func(shardID uint64, tier uint64, dbName, rpName string) error {
+			called += 1
+			time.Sleep(20 * time.Millisecond)
+			return nil
+		}
+		s := testService(c, e)
+		go s.handle()
+		time.Sleep(10 * time.Millisecond)
+		s.Close()
+		time.Sleep(60 * time.Millisecond)
+		assert.Equal(t, 2, called)
+		assert.Nil(t, s.Close())
+	})
+
 	t.Run("UpdateShardInfoTier return error", func(t *testing.T) {
 		called := 0
 		c.UpdateShardInfoTierFn = func(shardID uint64, tier uint64, dbName, rpName string) error {

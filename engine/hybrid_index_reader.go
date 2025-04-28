@@ -96,8 +96,7 @@ func (r *attachedIndexReader) Init() (err error) {
 	if err != nil {
 		return err
 	}
-	err = initKeyCondition(r.info.Infos()[0].GetRec().Schema, r.ctx, r.info.Infos()[0].GetTCLocation())
-	return
+	return initKeyCondition(r.info.Infos()[0].GetRec().Schema, r.ctx, r.info.Infos()[0].GetTCLocation())
 }
 
 func (t *attachedIndexReader) StartSpan(span *tracing.Span) {
@@ -322,8 +321,7 @@ func (r *detachedIndexReader) Init() (err error) {
 		return
 	}
 
-	err = initKeyCondition(r.info.Infos()[0].Data.Schema, r.ctx, pkMetaInfo.TCLocation)
-	return
+	return initKeyCondition(r.info.Infos()[0].Data.Schema, r.ctx, pkMetaInfo.TCLocation)
 }
 
 func (r *detachedIndexReader) InitInc(frag executor.IndexFrags) (executor.IndexFrags, error) {

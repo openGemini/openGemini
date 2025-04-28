@@ -85,6 +85,10 @@ func (f *FooObject) MemSize() int {
 	return len(f.buf) + len(f.name)
 }
 
+func (f *FooObject) Instance() *FooObject {
+	return f
+}
+
 func TestUnionPoolObject(t *testing.T) {
 	p := pool.NewUnionPool[FooObject](8, 8*config.MB, 1*config.MB, func() *FooObject {
 		return &FooObject{}

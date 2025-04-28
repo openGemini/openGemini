@@ -376,3 +376,11 @@ func (fw *FileWrap) TrySync() error {
 	}
 	return fw.fd.Sync()
 }
+
+func (fw *FileWrap) MemSize() int {
+	return cap(fw.data)
+}
+
+func (fw *FileWrap) Instance() *FileWrap {
+	return fw
+}

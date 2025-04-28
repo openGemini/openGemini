@@ -19,7 +19,6 @@ import (
 	"net"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
@@ -47,7 +46,7 @@ type limitListener struct {
 
 func (l *limitListener) release() {
 	<-l.listenChan
-	atomic.AddInt64(&statistics.HandlerStat.ConnectionNums, -1)
+	statistics.NewHandler().ConnectionNums.Decr()
 }
 
 func (l *limitListener) Accept() (net.Conn, error) {
@@ -64,7 +63,7 @@ func (l *limitListener) Accept() (net.Conn, error) {
 
 		select {
 		case l.listenChan <- struct{}{}:
-			atomic.AddInt64(&statistics.HandlerStat.ConnectionNums, 1)
+			statistics.NewHandler().ConnectionNums.Incr()
 			return &limitListenerConn{Conn: c, releaseFunc: l.release}, nil
 		default:
 			fmt.Printf("%s, connection exceed! Max Connection Limit is: %d\n",

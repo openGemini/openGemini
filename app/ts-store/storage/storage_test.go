@@ -22,6 +22,7 @@ import (
 	retention2 "github.com/influxdata/influxdb/services/retention"
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
 	"github.com/openGemini/openGemini/engine"
+	"github.com/openGemini/openGemini/engine/shelf"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
@@ -417,4 +418,26 @@ func TestStorage_RepConfigWrite(t *testing.T) {
 	if !errno.Equal(err, errno.DatabaseNotFound) {
 		t.Fatal("TestStorage_RepConfigWrite err2")
 	}
+}
+
+func TestWriteBlobs(t *testing.T) {
+	st := &Storage{
+		log:          logger.NewLogger(errno.ModuleStorageEngine),
+		stop:         make(chan struct{}),
+		slaveStorage: &MockSlaveStorage{},
+	}
+
+	dir := t.TempDir()
+	loadCtx := metaclient.LoadCtx{}
+	loadCtx.LoadCh = make(chan *metaclient.DBPTCtx, 100)
+	newEngineFn := netstorage.GetNewEngineFunction(config.DefaultEngine)
+	eng, err := newEngineFn(dir, dir, engineOption, &loadCtx)
+	require.NoError(t, err)
+	eng.SetMetaClient(st.metaClient)
+	st.engine = eng
+	defer st.MustClose()
+
+	bg, _ := shelf.NewBlobGroup(1)
+	err = st.WriteBlobs("db", "rp", 1, 1, bg)
+	require.Error(t, err)
 }

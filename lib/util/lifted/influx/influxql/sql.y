@@ -99,6 +99,8 @@ func deal_Fill (fill interface{})  (FillOption , interface{},bool) {
     indexOption         *IndexOption
     databasePolicy      DatabasePolicy
     cmOption            *CreateMeasurementStatementOption
+    cte                 *CTE
+    ctes                CTES
 }
 
 %token <str>    FROM MEASUREMENT INTO ON SELECT WHERE AS GROUP BY ORDER LIMIT OFFSET SLIMIT SOFFSET SHOW CREATE FULL PRIVILEGES OUTER JOIN
@@ -144,7 +146,7 @@ func deal_Fill (fill interface{})  (FillOption , interface{},bool) {
                                     CREATE_DOWNSAMPLE_STATEMENT DOWNSAMPLE_INTERVALS DROP_DOWNSAMPLE_STATEMENT SHOW_DOWNSAMPLE_STATEMENT
                                     CREATE_STREAM_STATEMENT SHOW_STREAM_STATEMENT DROP_STREAM_STATEMENT COLUMN_LISTS SHOW_MEASUREMENT_KEYS_STATEMENT
                                     SHOW_QUERIES_STATEMENT KILL_QUERY_STATEMENT SHOW_CONFIGS_STATEMENT SET_CONFIG_STATEMENT SHOW_CLUSTER_STATEMENT
-                                    CREATE_SUBSCRIPTION_STATEMENT SHOW_SUBSCRIPTION_STATEMENT DROP_SUBSCRIPTION_STATEMENT
+                                    CREATE_SUBSCRIPTION_STATEMENT SHOW_SUBSCRIPTION_STATEMENT DROP_SUBSCRIPTION_STATEMENT WITH_SELECT_STATEMENT
 %type <fields>                      COLUMN_CLAUSES IDENTS
 %type <field>                       COLUMN_CLAUSE
 %type <stmts>                       ALL_QUERIES ALL_QUERY
@@ -178,6 +180,8 @@ func deal_Fill (fill interface{})  (FillOption , interface{},bool) {
 %type <databasePolicy>              DATABASE_POLICY
 %type <cmOption>                    CMOPTIONS_TS CMOPTIONS_CS
 %type <str>                         CMOPTION_ENGINETYPE_TS CMOPTION_ENGINETYPE_CS
+%type <ctes>                        CTE_CLAUSES
+%type <cte>                         CTE_CLAUSE
 
 %%
 
@@ -427,6 +431,10 @@ STATEMENT:
     |SHOW_CLUSTER_STATEMENT
     {
     	$$ = $1
+    }
+    |WITH_SELECT_STATEMENT
+    {
+        $$ = $1
     }
 
 SELECT_STATEMENT:
@@ -3557,5 +3565,33 @@ SHOW_CLUSTER_STATEMENT:
 	 }
 	 $$ = stmt
       }
+
+WITH_SELECT_STATEMENT:
+    WITH CTE_CLAUSES SELECT_STATEMENT
+    {
+        $$ = &WithSelectStatement{
+            CTEs: $2,
+            Query: $3.(*SelectStatement),
+        }
+    }
+
+CTE_CLAUSES:
+    CTE_CLAUSE
+    {
+        $$ = []*CTE{$1}
+    }
+    |CTE_CLAUSE COMMA CTE_CLAUSES
+    {
+        $$ = append([]*CTE{$1},$3...)
+    }
+
+CTE_CLAUSE:
+    STRING_TYPE AS LPAREN SELECT_STATEMENT RPAREN
+    {
+        $$ = &CTE{
+            Alias: $1,
+            Query: $4.(*SelectStatement),
+        }
+    }
 
 %%

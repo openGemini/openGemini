@@ -21,13 +21,13 @@ import (
 	numenc "github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/cockroachdb/errors"
 	"github.com/openGemini/openGemini/engine/executor"
-	"github.com/openGemini/openGemini/engine/executor/spdy"
-	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/lib/codec"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
+	"github.com/openGemini/openGemini/lib/spdy"
+	"github.com/openGemini/openGemini/lib/spdy/transport"
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
@@ -63,8 +63,7 @@ type Storage interface {
 	SendQueryRequestOnNode(nodeID uint64, req SysCtrlRequest) (map[string]string, error)
 	SendSysCtrlOnNode(nodID uint64, req SysCtrlRequest) (map[string]string, error)
 
-	GetShardSplitPoints(node *meta2.DataNode, database string, pt uint32,
-		shardId uint64, idxes []int64) ([]string, error)
+	GetShardSplitPoints(node *meta2.DataNode, database string, pt uint32, shardId uint64, idxes []int64) ([]string, error)
 	DeleteDatabase(node *meta2.DataNode, database string, pt uint32) error
 	DeleteRetentionPolicy(node *meta2.DataNode, db string, rp string, pt uint32) error
 	DeleteMeasurement(node *meta2.DataNode, db string, rp string, name string, shardIds []uint64) error
@@ -73,6 +72,8 @@ type Storage interface {
 	GetQueriesOnNode(nodeID uint64) ([]*QueryExeInfo, error)
 	KillQueryOnNode(nodeID, queryID uint64) error
 	SendSegregateNodeCmds(nodeIDs []uint64, address []string) (int, error)
+
+	Ping(nodeID uint64, address string, timeout time.Duration) error
 	TransferLeadership(database string, nodeId uint64, oldMasterPtId, newMasterPtId uint32) error
 
 	SendRaftMessageToStorage
@@ -576,4 +577,16 @@ func (s *NetStorage) raftRequestWithNodeId(nodeID uint64, typ uint8, data codec.
 	}
 
 	return r.raftMsg()
+}
+
+func (s *NetStorage) Ping(nodeID uint64, address string, timeout time.Duration) error {
+	trans, err := transport.NewTransportByAddress(nodeID, address, spdy.PingRequest, nil)
+	if err != nil {
+		return err
+	}
+	trans.SetTimeout(timeout)
+	if err = trans.Send(NewPingRequest()); err != nil {
+		return err
+	}
+	return trans.Wait()
 }

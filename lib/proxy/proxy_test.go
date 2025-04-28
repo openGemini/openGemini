@@ -84,7 +84,7 @@ func TestGetURL(t *testing.T) {
 
 func TestGetCustomProxy(t *testing.T) {
 	u, err := url.Parse("http://127.0.0.1:8080")
-	customProxy, err := proxy.GetCustomProxy(u, "127.0.0.2:8086", bytes.NewBufferString("test").Bytes())
+	customProxy, err := proxy.GetCustomProxy(u, "127.0.0.2:8086", bytes.NewBufferString("test").Bytes(), true)
 	require.NoError(t, err)
 	require.NotNil(t, *customProxy)
 	r := httptest.NewRequest("POST", "http://localhost:8086/test", io.NopCloser(bytes.NewBufferString("test")))
@@ -94,7 +94,7 @@ func TestGetCustomProxy(t *testing.T) {
 	require.NoError(t, err)
 
 	u, err = url.Parse("https://127.0.0.1:8080")
-	customProxy, err = proxy.GetCustomProxy(u, "127.0.0.2:8086", bytes.NewBufferString("test").Bytes())
+	customProxy, err = proxy.GetCustomProxy(u, "127.0.0.2:8086", bytes.NewBufferString("test").Bytes(), true)
 	require.NoError(t, err)
 	require.NotNil(t, *customProxy)
 }

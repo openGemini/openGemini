@@ -36,6 +36,7 @@ import (
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/index/tsi"
+	"github.com/openGemini/openGemini/engine/shelf"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
@@ -97,6 +98,8 @@ type Engine struct {
 	metaClient    meta.MetaClient
 	fileInfos     chan []immutable.FileInfoExtend
 	backup        *Backup
+
+	onPTOffload map[uint64]func(ptID uint32)
 }
 
 func NewEngine(dataPath, walPath string, options netstorage.EngineOptions, ctx *meta.LoadCtx) (netstorage.Engine, error) {
@@ -113,6 +116,7 @@ func NewEngine(dataPath, walPath string, options netstorage.EngineOptions, ctx *
 		droppingMst:   make(map[string]string),
 		migratingDbPT: make(map[string]map[uint32]struct{}),
 		fileInfos:     nil,
+		onPTOffload:   make(map[uint64]func(ptID uint32)),
 	}
 
 	eng.DownSamplePolicies = make(map[string]*meta2.StoreDownSamplePolicy)
@@ -994,8 +998,10 @@ func (e *Engine) CreateShard(db, rp string, ptId uint32, shardID uint64, timeRan
 		if err != nil {
 			return err
 		}
-		sh.SetMstInfo(mstInfo)
-		sh.SetObsOption(mstInfo.ObsOptions)
+		if mstInfo != nil {
+			sh.SetMstInfo(mstInfo)
+			sh.SetObsOption(mstInfo.ObsOptions)
+		}
 		dbPTInfo.shards[shardID] = sh
 		newestShardID, ok := dbPTInfo.newestRpShard[rp]
 		if !ok || newestShardID < shardID {
@@ -1772,4 +1778,13 @@ func (e *Engine) GetDBPtIds() map[string][]uint32 {
 	}
 
 	return dbPts
+}
+
+func (e *Engine) WriteBlobs(db string, ptId uint32, shardID uint64, group *shelf.BlobGroup) error {
+	sh, err := e.getShard(db, ptId, shardID)
+	if err != nil {
+		return err
+	}
+
+	return sh.WriteBlobs(group)
 }

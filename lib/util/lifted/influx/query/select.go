@@ -285,6 +285,8 @@ type ProcessorOptions struct {
 
 	SimpleTagset bool
 
+	RemoveMetric bool
+
 	// query context
 	ctx context.Context
 }
@@ -373,6 +375,7 @@ func NewProcessorOptionsStmt(stmt *influxql.SelectStatement, sopt SelectOptions)
 	opt.PromQuery = stmt.IsPromQuery
 	opt.PromRemoteRead = stmt.IsPromRemoteRead
 	opt.Without = stmt.Without
+	opt.RemoveMetric = stmt.RemoveMetric
 	if IsCountValues(stmt) {
 		opt.IsCountValues = true
 	}
@@ -828,6 +831,10 @@ func (opt *ProcessorOptions) IsPromWithout() bool {
 
 func (opt *ProcessorOptions) IsWithout() bool {
 	return opt.Without
+}
+
+func (opt *ProcessorOptions) IsRemoveMetric() bool {
+	return opt.RemoveMetric
 }
 
 func (opt *ProcessorOptions) IsExcept() bool {

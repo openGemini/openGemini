@@ -519,9 +519,6 @@ func (s *client) QueryWithParams(query string, values url.Values) (results strin
 	} else {
 		v, _ = url.ParseQuery(values.Encode())
 	}
-	if !v.Has("epoch") {
-		v.Add("epoch", "rfc3339")
-	}
 	if v.Get("chunked") == "true" {
 		v.Set("chunked", "true")
 	} else {

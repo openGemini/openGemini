@@ -129,7 +129,6 @@ func fromToml(c Config, input string) error {
 type Common struct {
 	MetaJoin     []string `toml:"meta-join"`
 	CryptoConfig string   `toml:"crypto-config"`
-	CryptoType   string   `toml:"crypto-type"`
 	ClusterID    string   `toml:"cluster-id"`
 	CPUNum       int      `toml:"cpu-num"`
 
@@ -150,7 +149,8 @@ type Common struct {
 	ProductType        string         `toml:"product-type"`
 	PprofBindAddress   string         `toml:"pprof-bind-address"`
 
-	Bindjoin []string `toml:"bind-join"`
+	Bindjoin        []string `toml:"bind-join"`
+	GlobalDictFiles []string `toml:"global-dict-files"`
 }
 
 // NewCommon builds a new CommonConfiguration with default values.
@@ -323,6 +323,20 @@ func IsLogKeeper() bool {
 
 func ResetZero2Default[T comparable](v *T, zero T, def T) {
 	if *v == zero {
+		*v = def
+	}
+}
+
+type Comparable interface {
+	int | float64
+}
+
+func LimitRange[T Comparable](v *T, minV, maxV, def T) {
+	if v == nil {
+		return
+	}
+
+	if *v < minV || *v > maxV {
 		*v = def
 	}
 }

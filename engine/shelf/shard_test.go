@@ -24,7 +24,6 @@ import (
 	"github.com/influxdata/influxdb/toml"
 	"github.com/openGemini/openGemini/engine/shelf"
 	"github.com/openGemini/openGemini/lib/config"
-	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/stretchr/testify/require"
 )
@@ -40,16 +39,9 @@ func TestAsyncCreateIndex(t *testing.T) {
 	shard.Run()
 
 	rec := buildRecord(10, 1)
-	recs := []*record.MemRecord{
-		{
-			Name:     "foo",
-			IndexKey: []byte{0, 0, 0, 0},
-			Rec:      *rec,
-		},
-	}
-
 	idx.sidCache = 0
-	err := shard.Write(recs)
+
+	err := writeRecordToShard(shard, rec, 0, nil)
 	require.NoError(t, err)
 
 	time.Sleep(time.Second)
@@ -59,8 +51,6 @@ func TestAsyncCreateIndex(t *testing.T) {
 func TestAsyncCovertTSSP(t *testing.T) {
 	defer initConfig(2)()
 	dir := t.TempDir()
-	config.GetStoreConfig().Wal.WalSyncInterval = toml.Duration(config.DefaultWALSyncInterval)
-	config.GetStoreConfig().ShelfMode.MaxWalDuration = toml.Duration(time.Second)
 	shelf.Open()
 
 	shard, _, store := newShard(10, dir)
@@ -69,19 +59,11 @@ func TestAsyncCovertTSSP(t *testing.T) {
 	shard.Run()
 
 	rec := buildRecord(10, 1)
-	recs := []*record.MemRecord{
-		{
-			Name:     "foo",
-			IndexKey: []byte{0, 0, 0, 0},
-			Rec:      *rec,
-		},
-	}
-
-	err := shard.Write(recs)
+	err := writeRecordToShard(shard, rec, 10, nil)
 	require.NoError(t, err)
 
 	shard.AsyncConvertToTSSP()
-	time.Sleep(time.Second)
+	shard.ForceFlush()
 
 	for range 10 {
 		shard.AsyncConvertToTSSP()
@@ -108,15 +90,7 @@ func TestFreeShard(t *testing.T) {
 	shard.Run()
 
 	rec := buildRecord(10, 1)
-	recs := []*record.MemRecord{
-		{
-			Name:     "foo",
-			IndexKey: []byte{0, 0, 0, 0},
-			Rec:      *rec,
-		},
-	}
-
-	err := shard.Write(recs)
+	err := writeRecordToShard(shard, rec, 10, nil)
 	require.NoError(t, err)
 
 	for range 1000 {
@@ -140,15 +114,8 @@ func TestWriteRecordFailed(t *testing.T) {
 	defer shard.Stop()
 
 	rec := buildRecord(10, 1)
-	recs := []*record.MemRecord{
-		{
-			Name:     "foo",
-			IndexKey: []byte{0, 0, 0, 0},
-			Rec:      *rec,
-		},
-	}
-
-	require.NoError(t, shard.Write(recs))
+	err := writeRecordToShard(shard, rec, 10, nil)
+	require.NoError(t, err)
 
 	tr := &util.TimeRange{Min: 0, Max: math.MaxInt64}
 
@@ -161,11 +128,18 @@ func TestWriteRecordFailed(t *testing.T) {
 	})
 	defer p1.Reset()
 
-	require.EqualError(t, shard.Write(recs), mockErr.Error())
+	err = writeRecordToShard(shard, rec, 10, nil)
+	require.EqualError(t, err, mockErr.Error())
 
 	p1.Reset()
-	require.NoError(t, shard.Write(recs))
+
+	config.GetStoreConfig().ShelfMode.MaxWalFileSize = 1
+	defer func() {
+		config.GetStoreConfig().ShelfMode.MaxWalFileSize = config.MB * 128
+	}()
+	err = writeRecordToShard(shard, rec, 10, nil)
+	require.NoError(t, err)
 
 	wal = shard.GetWalReaders(nil, "foo", tr)
-	require.True(t, len(wal) == 2)
+	require.Equal(t, 2, len(wal))
 }

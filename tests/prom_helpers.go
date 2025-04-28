@@ -306,18 +306,18 @@ func buildExp(promExps []*PromExp, evalTime time.Time) (string, string) {
 			Floats: []promql.FPoint{rangePoint},
 		})
 	}
-	instantRes := &promql2influxql.PromQueryResponse{
+	instantRes := &promql2influxql.PromResponse{
 		Status: string(httpd.StatusSuccess),
-		Data: &promql2influxql.PromData{
+		Data: &promql2influxql.PromResult{
 			ResultType: string(parser.ValueTypeVector),
-			Result:     &promql2influxql.PromDataVector{Vector: &vector},
+			Result:     vector,
 		},
 	}
-	rangeRes := &promql2influxql.PromQueryResponse{
+	rangeRes := &promql2influxql.PromResponse{
 		Status: string(httpd.StatusSuccess),
-		Data: &promql2influxql.PromData{
+		Data: &promql2influxql.PromResult{
 			ResultType: string(parser.ValueTypeMatrix),
-			Result:     &promql2influxql.PromDataMatrix{Matrix: &matrix},
+			Result:     matrix,
 		},
 	}
 	instantExp, _ := json.Marshal(instantRes)
