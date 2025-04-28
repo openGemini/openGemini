@@ -16,17 +16,20 @@ package run_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/openGemini/openGemini/app/ts-server/run"
 	ingestserver "github.com/openGemini/openGemini/app/ts-sql/sql"
 	store "github.com/openGemini/openGemini/app/ts-store/run"
 	"github.com/openGemini/openGemini/coordinator"
+	"github.com/openGemini/openGemini/services/writer"
 )
 
 func TestInitStorage(t *testing.T) {
 	storeServer := &store.Server{}
 	sqlServer := &ingestserver.Server{}
 	sqlServer.PointsWriter = &coordinator.PointsWriter{}
+	sqlServer.RPCRecordWriter = writer.NewRecordWriter(nil, time.Second)
 
 	run.InitStorage(sqlServer, storeServer)
 	run.InitStorage(sqlServer, sqlServer)

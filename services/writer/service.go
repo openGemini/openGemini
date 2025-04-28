@@ -15,27 +15,25 @@
 package writer
 
 import (
-	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net"
-	"sync"
+	"time"
 
-	logger2 "github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
-	compression "github.com/openGemini/openGemini/lib/compress"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/crypto"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
+	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/auth"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	pb "github.com/openGemini/opengemini-client-go/proto"
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 )
@@ -43,12 +41,14 @@ import (
 type Service struct {
 	err             chan error
 	userAuthEnabled bool
+	shelfMode       bool
 	maxRecvMsgSize  int
 	version         uint32
 	server          *grpc.Server
 	logger          *logger.Logger
 	listener        net.Listener
 	writer          PointWriter
+	recordWriter    *RecordWriter
 	writeAuthorizer Authorizer
 	pb.UnimplementedWriteServiceServer
 }
@@ -61,41 +61,15 @@ type Authorizer interface {
 	Authenticate(username, password, database string) error
 }
 
-var (
-	recordPool sync.Pool
-	rowPool    sync.Pool
-)
+var rowPool = pool.NewDefaultUnionPool(func() *[]influx.Row {
+	return &[]influx.Row{}
+})
 
-func getRowSlice(size int) []influx.Row {
-	ptr := rowPool.Get()
-	if ptr == nil {
-		return make([]influx.Row, size)
+func getRowSlice() ([]influx.Row, func()) {
+	rows := rowPool.Get()
+	return *rows, func() {
+		rowPool.PutWithMemSize(rows, 0)
 	}
-	rows := *(ptr.(*[]influx.Row))
-	if cap(rows) < size {
-		rows = make([]influx.Row, size)
-	}
-	return rows[:size]
-}
-
-func putRowSlice(rows []influx.Row) {
-	for i := range rows {
-		rows[i].ReuseSet()
-	}
-	rowPool.Put(&rows)
-}
-
-func getRecord() *record.Record {
-	rec, ok := recordPool.Get().(*record.Record)
-	if !ok || rec == nil {
-		return new(record.Record)
-	}
-	return rec
-}
-
-func putRecord(rec *record.Record) {
-	rec.Reset()
-	recordPool.Put(rec)
 }
 
 type RecordWriteAuthorizer struct {
@@ -152,6 +126,7 @@ func NewService(c config.RecordWriteConfig) (*Service, error) {
 	service.userAuthEnabled = c.AuthEnabled
 	service.maxRecvMsgSize = c.MaxRecvMsgSize
 	service.version = 1
+	service.shelfMode = c.ShelfMode
 
 	return service, nil
 }
@@ -160,15 +135,15 @@ func (s *Service) Open() error {
 	go func() {
 		err := s.server.Serve(s.listener)
 		if err != nil {
+			s.logger.Error("record-write service start failed", zap.Error(err))
 			s.err <- err
-			logger2.Errorf("record-write service start failed")
 		}
 	}()
 	select {
 	case err := <-s.err:
 		return err
 	default:
-		logger2.Infof("record-write service started")
+		fmt.Println("record-write service started")
 		return nil
 	}
 }
@@ -185,6 +160,10 @@ func (s *Service) WithAuthorizer(a Authorizer) {
 	s.writeAuthorizer = a
 }
 
+func (s *Service) SetRecordWriter(writer *RecordWriter) {
+	s.recordWriter = writer
+}
+
 func (s *Service) Write(_ context.Context, req *pb.WriteRequest) (*pb.WriteResponse, error) {
 	res := &pb.WriteResponse{}
 	db := req.Database
@@ -199,7 +178,8 @@ func (s *Service) Write(_ context.Context, req *pb.WriteRequest) (*pb.WriteRespo
 		res.Code = pb.ResponseCode_Failed
 		return res, nil
 	}
-	err, allErr := s.processRows(db, rp, req.Records)
+
+	err, allErr := s.write(db, rp, req.Records)
 	if err != nil {
 		if allErr {
 			res.Code = pb.ResponseCode_Failed
@@ -218,52 +198,52 @@ func (s *Service) Ping(_ context.Context, _ *pb.PingRequest) (*pb.PingResponse, 
 	return res, nil
 }
 
-func (s *Service) processRows(db, rp string, rows []*pb.Record) (error, bool) {
-	rowErrors := make([]error, len(rows))
-	var rec *record.Record
-	var influxRows []influx.Row
-	for index, row := range rows {
-		rawData := row.Block
-		mst := row.Measurement
-		if mst == "" {
-			err := fmt.Errorf("measurement must be specified")
-			rowErrors[index] = err
-			continue
-		}
-		data, err := uncompress(row.CompressMethod, rawData)
-		if err != nil {
-			rowErrors[index] = err
-			continue
-		}
+func (s *Service) write(db, rp string, rows []*pb.Record) (error, bool) {
+	start := time.Now()
+	stat := statistics.NewHandler()
+	stat.WriteRequests.Incr()
+	stat.ActiveWriteRequests.Incr()
+	defer func() {
+		stat.ActiveWriteRequests.Decr()
+		stat.WriteRequestDuration.AddSinceNano(start)
+	}()
 
-		rec, err = unmarshal(data)
-		if err != nil {
-			recStr, err2 := json.Marshal(rec)
-			if err2 != nil {
-				logger2.Errorf("Invalid Record: null")
-				rowErrors[index] = err
-				continue
-			}
-			logger2.Errorf("Invalid Record: %s", recStr)
-			rowErrors[index] = err
-			continue
-		}
-		influxRows = getRowSlice(rec.RowNums())
-		influxRows = Record2Rows(influxRows, rec)
+	dec, release := NewRecordDecoder()
+	defer release()
+
+	recs, errs := dec.Decode(rows)
+	err, allErr := generateError(errs)
+	if err != nil {
+		return err, allErr
+	}
+
+	// Convert to inflxdb line protocol and use the old process for data writing
+	if !s.shelfMode {
+		return s.writeRows(db, rp, recs)
+	}
+
+	err = s.recordWriter.RetryWriteRecords(db, rp, recs)
+	if err != nil {
+		return err, true
+	}
+
+	return nil, false
+}
+
+func (s *Service) writeRows(db, rp string, recs []*MstRecord) (error, bool) {
+	rowErrors := make([]error, len(recs))
+	influxRows, release := getRowSlice()
+	for idx, rec := range recs {
+		influxRows = Record2Rows(influxRows, &rec.Rec)
 		for i := range influxRows {
-			influxRows[i].Name = row.Measurement
+			influxRows[i].Name = rec.Mst
 		}
-		err = s.writer.RetryWritePointRows(db, rp, influxRows)
+		err := s.writer.RetryWritePointRows(db, rp, influxRows)
 		if err != nil {
-			rowErrors[index] = err
-		}
-		rec.ResetForReuse()
-		for i := range influxRows {
-			influxRows[i].ReuseSet()
+			rowErrors[idx] = err
 		}
 	}
-	putRecord(rec)
-	putRowSlice(influxRows)
+	release()
 	err, allErr := generateError(rowErrors)
 	return err, allErr
 }
@@ -312,46 +292,6 @@ func (s *Service) authenticate(username, password, database string) error {
 		return err
 	}
 	return nil
-}
-
-func uncompress(algo pb.CompressMethod, data []byte) ([]byte, error) {
-	switch algo {
-	case pb.CompressMethod_UNCOMPRESSED:
-		return data, nil
-	case pb.CompressMethod_LZ4_FAST:
-		panic("please implement me")
-	case pb.CompressMethod_ZSTD_FAST:
-		zstdReader := compression.GetZstdReader(bytes.NewReader(data))
-		if zstdReader == nil {
-			return nil, fmt.Errorf("zstdReader is nil")
-		}
-		defer compression.PutZstdReader(zstdReader)
-		return io.ReadAll(zstdReader)
-	case pb.CompressMethod_SNAPPY:
-		snappyReader := compression.GetSnappyReader(bytes.NewReader(data))
-		defer compression.PutSnappyReader(snappyReader)
-		return io.ReadAll(snappyReader)
-	default:
-		return nil, fmt.Errorf("invalid compress algorithm")
-	}
-}
-
-func unmarshal(data []byte) (*record.Record, error) {
-	rec := getRecord()
-	rec.UnmarshalUnsafe(data)
-	var err error
-	func() {
-		defer func() {
-			if r := recover(); r != nil {
-				err = fmt.Errorf("invalid record:%v", r)
-			}
-		}()
-		record.CheckRecord(rec)
-	}()
-	if err != nil {
-		return rec, err
-	}
-	return rec, nil
 }
 
 func Record2Rows(dst []influx.Row, rec *record.Record) []influx.Row {
@@ -411,36 +351,39 @@ func column2StringFields(dst []influx.Row, key string, col *record.ColVal) {
 func column2IntegerFields(dst []influx.Row, key string, col *record.ColVal) {
 	values := col.IntegerValues()
 	hasNil := col.NilCount > 0
+	index := 0
 	for i := range dst {
 		if hasNil && col.IsNil(i) {
 			continue
 		}
 		f := dst[i].AllocField()
 		f.Key = key
-		f.NumValue = float64(values[0])
+		f.NumValue = float64(values[index])
 		f.Type = influx.Field_Type_Int
-		values = values[1:]
+		index++
 	}
 }
 
 func column2FloatFields(dst []influx.Row, key string, col *record.ColVal) {
 	values := col.FloatValues()
 	hasNil := col.NilCount > 0
+	index := 0
 	for i := range dst {
 		if hasNil && col.IsNil(i) {
 			continue
 		}
 		f := dst[i].AllocField()
 		f.Key = key
-		f.NumValue = values[0]
+		f.NumValue = values[index]
 		f.Type = influx.Field_Type_Float
-		values = values[1:]
+		index++
 	}
 }
 
 func column2BoolFields(dst []influx.Row, key string, col *record.ColVal) {
 	values := col.BooleanValues()
 	hasNil := col.NilCount > 0
+	index := 0
 	for i := range dst {
 		if hasNil && col.IsNil(i) {
 			continue
@@ -448,22 +391,23 @@ func column2BoolFields(dst []influx.Row, key string, col *record.ColVal) {
 		f := dst[i].AllocField()
 		f.Key = key
 		f.NumValue = 0
-		if values[0] {
+		if values[index] {
 			f.NumValue = 1
 		}
 		f.Type = influx.Field_Type_Boolean
-		values = values[1:]
+		index++
 	}
 }
 
 func column2Time(dst []influx.Row, col *record.ColVal) {
 	values := col.IntegerValues()
 	hasNil := col.NilCount > 0
+	index := 0
 	for i := range dst {
 		if hasNil && col.IsNil(i) {
 			continue
 		}
-		dst[i].Timestamp = values[0]
-		values = values[1:]
+		dst[i].Timestamp = values[index]
+		index++
 	}
 }

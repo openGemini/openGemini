@@ -18,8 +18,8 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/openGemini/openGemini/lib/util/lifted/prometheus/promql"
 	"github.com/openGemini/openGemini/lib/util/lifted/promql2influxql"
-	"github.com/prometheus/prometheus/promql"
 	"github.com/prometheus/prometheus/promql/parser"
 )
 

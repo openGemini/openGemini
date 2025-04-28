@@ -30,10 +30,10 @@ import (
 func TestGzipWriterPool(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		var buf bytes.Buffer
-		writer := GetGzipWriter(&buf)
+		writer, release := GetGzipWriter(&buf)
 		_, err := writer.Write([]byte("test data"))
 		assert.NoError(t, err)
-		PutGzipWriter(writer)
+		release()
 
 		reader, err := GetGzipReader(&buf)
 		assert.NoError(t, err)
@@ -50,10 +50,10 @@ func TestGzipWriterPool(t *testing.T) {
 
 func TestZstdWriterPool(t *testing.T) {
 	var buf bytes.Buffer
-	writer := GetZstdWriter(&buf)
+	writer, release := GetZstdWriter(&buf)
 	_, err := writer.Write([]byte("test data"))
 	assert.NoError(t, err)
-	PutZstdWriter(writer)
+	release()
 
 	reader, err := zstd.NewReader(&buf)
 	assert.NoError(t, err)
@@ -67,10 +67,10 @@ func TestZstdWriterPool(t *testing.T) {
 
 func TestSnappyWriterPool(t *testing.T) {
 	var buf bytes.Buffer
-	writer := GetSnappyWriter(&buf)
+	writer, release := GetSnappyWriter(&buf)
 	_, err := writer.Write([]byte("test data"))
 	assert.NoError(t, err)
-	PutSnappyWriter(writer)
+	release()
 
 	reader := snappy.NewReader(&buf)
 	result := new(bytes.Buffer)
@@ -81,10 +81,10 @@ func TestSnappyWriterPool(t *testing.T) {
 
 func TestLz4WriterPool(t *testing.T) {
 	var buf bytes.Buffer
-	writer := GetLz4Writer(&buf)
+	writer, release := GetLz4Writer(&buf)
 	_, err := writer.Write([]byte("test data"))
 	assert.NoError(t, err)
-	PutLz4Writer(writer)
+	release()
 
 	reader := lz4.NewReader(&buf)
 	result := new(bytes.Buffer)

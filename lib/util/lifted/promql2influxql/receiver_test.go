@@ -6,7 +6,7 @@ import (
 
 	"github.com/influxdata/influxdb/models"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
-	"github.com/prometheus/prometheus/model/labels"
+	"github.com/openGemini/openGemini/lib/util/lifted/prometheus/model/labels"
 	"github.com/prometheus/prometheus/promql/parser"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -29,7 +29,6 @@ func TestReceiver_InfluxResultToPromQLValue(t *testing.T) {
 	type fields struct {
 		PromCommand     PromCommand
 		DropMetric      bool
-		RemoveTableName bool
 		DuplicateResult bool
 	}
 	type args struct {
@@ -62,7 +61,6 @@ func TestReceiver_InfluxResultToPromQLValue(t *testing.T) {
 			r := &Receiver{
 				PromCommand:     tt.fields.PromCommand,
 				DropMetric:      tt.fields.DropMetric,
-				RemoveTableName: tt.fields.RemoveTableName,
 				DuplicateResult: tt.fields.DuplicateResult,
 			}
 			got, err := r.InfluxResultToPromQLValue(tt.args.result, tt.args.expr, tt.args.cmd)

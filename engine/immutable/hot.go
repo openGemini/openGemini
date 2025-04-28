@@ -80,6 +80,10 @@ func (w *HotFileWriter) MemSize() int {
 	return len(w.data)
 }
 
+func (w *HotFileWriter) Instance() *HotFileWriter {
+	return w
+}
+
 type HotFileReader struct {
 	fileops.BasicFileReader
 

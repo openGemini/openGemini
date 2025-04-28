@@ -329,6 +329,7 @@ func (*ShowTagKeysStatement) node()                {}
 func (*ShowTagValuesCardinalityStatement) node()   {}
 func (*ShowTagValuesStatement) node()              {}
 func (*ShowUsersStatement) node()                  {}
+func (*WithSelectStatement) node()                 {}
 
 func (*BinaryExpr) node()                  {}
 func (*BooleanLiteral) node()              {}
@@ -367,6 +368,8 @@ func (*MatchExpr) node()                   {}
 func (*InCondition) node()                 {}
 func (*Unnest) node()                      {}
 func (*BinOp) node()                       {}
+func (*CTE) node()                         {}
+func (CTES) node()                         {}
 
 // Query represents a collection of ordered statements.
 type Query struct {
@@ -509,6 +512,7 @@ func (*SetPasswordUserStatement) stmt()            {}
 func (*PrepareSnapshotStatement) stmt()            {}
 func (*EndPrepareSnapshotStatement) stmt()         {}
 func (*GetRuntimeInfoStatement) stmt()             {}
+func (*WithSelectStatement) stmt()                 {}
 
 // Expr represents an expression that can be evaluated to a value.
 type Expr interface {
@@ -1579,6 +1583,10 @@ type SelectStatement struct {
 	SelectTagToAux bool
 
 	IsCreateStream bool
+
+	// RemoveMetric indicates whether to remove the metric label during the materialize transformation
+	// in the query execution of PromQL
+	RemoveMetric bool
 }
 
 func (s *SelectStatement) SetStmtId(id int) {
@@ -8471,4 +8479,33 @@ func IsExactStatisticQueryForDDL(stmt Statement) bool {
 		}
 	}
 	return false
+}
+
+type WithSelectStatement struct {
+	CTEs  CTES
+	Query *SelectStatement
+}
+
+type CTE struct {
+	Query *SelectStatement
+	Alias string
+}
+
+type CTES []*CTE
+
+func (s *WithSelectStatement) String() string {
+	var buf bytes.Buffer
+	buf.WriteString("With")
+	for _, cte := range s.CTEs {
+		_, _ = buf.WriteString(cte.Alias)
+		_, _ = buf.WriteString(" AS (")
+		_, _ = buf.WriteString(cte.Query.String())
+		_, _ = buf.WriteString(" ),")
+	}
+	buf.WriteString(s.Query.String())
+	return buf.String()
+}
+
+func (s *WithSelectStatement) RequiredPrivileges() (ExecutionPrivileges, error) {
+	return ExecutionPrivileges{{Admin: true, Name: "", Rwuser: true, Privilege: AllPrivileges}}, nil
 }

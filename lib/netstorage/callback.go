@@ -18,8 +18,8 @@ import (
 	"errors"
 
 	"github.com/openGemini/openGemini/engine/executor"
-	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/spdy/transport"
 )
 
 type DDLCallback struct {

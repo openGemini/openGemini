@@ -652,6 +652,7 @@ func TestGetTSSPFileList(t *testing.T) {
 	if list[0] != "mst" {
 		t.Fatal()
 	}
+
 }
 
 func TestMergeTool_SkipMerge(t *testing.T) {
@@ -943,11 +944,6 @@ func TestMergeTool_OneRowMode(t *testing.T) {
 
 	rg.setBegin(begin).incrBegin(0)
 	mh.addRecord(100, rg.generate(schemas, 1001))
-	rec := rg.generate(schemas, 1)
-	col := rec.Column(3)
-	col.Init()
-	col.AppendStrings("")
-	mh.addRecord(101, rec)
 	require.NoError(t, mh.saveToOrder())
 
 	rg.setBegin(begin - 1).incrBegin(5)

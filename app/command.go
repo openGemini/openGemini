@@ -21,12 +21,13 @@ import (
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/procutil"
 	"github.com/influxdata/influxdb/cmd"
-	"github.com/openGemini/openGemini/engine/executor/spdy"
+	"github.com/openGemini/openGemini/lib/compress/dict"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/crypto"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/spdy"
 	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/lib/util"
@@ -128,12 +129,14 @@ func (cmd *Command) InitConfig(conf config.Config, path string) error {
 		if err := config.SetHaPolicy(common.HaPolicy); err != nil {
 			return err
 		}
-		if common.CryptoType == "pem" {
-			crypto.InitPassKeyDecipher()
-		}
 		crypto.Initialize(common.CryptoConfig)
 		config.SetProductType(common.ProductType)
 		config.SetCommon(*common)
+
+		err := dict.DefaultDict().LoadFromFiles(dict.DefaultSep, common.GlobalDictFiles...)
+		if err != nil {
+			return fmt.Errorf("failed to load default dict: %s", err)
+		}
 	}
 
 	if err := conf.Validate(); err != nil {

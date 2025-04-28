@@ -40,15 +40,6 @@ import (
 	"github.com/savsgio/dictpool"
 )
 
-type MemRecordReader func(shardID uint64, mst string, sid uint64, tr *util.TimeRange,
-	schema record.Schemas, ascending bool) *record.Record
-
-var shelfMemRecordReader MemRecordReader
-
-func SetShelfMemRecordReader(r MemRecordReader) {
-	shelfMemRecordReader = r
-}
-
 type WriteRowsCtx struct {
 	AddRowCountsBySid func(msName string, sid uint64, rowCounts int64)
 	MstsInfo          *sync.Map
@@ -318,15 +309,13 @@ type MemTable struct {
 
 type MemTables struct {
 	readEnable  bool
-	shardID     uint64
 	activeTbl   *MemTable
 	snapshotTbl *MemTable
 }
 
-func NewMemTables(shardID uint64, readEnable bool) *MemTables {
+func NewMemTables(readEnable bool) *MemTables {
 	return &MemTables{
 		readEnable: readEnable,
-		shardID:    shardID,
 	}
 }
 
@@ -348,11 +337,6 @@ func (m *MemTables) UnRef() {
 func (m *MemTables) Values(msName string, id uint64, tr util.TimeRange, schema record.Schemas, ascending bool) *record.Record {
 	if !m.readEnable {
 		return nil
-	}
-
-	if shelfMemRecordReader != nil {
-		// This branch is run when the value of [data.shelf-mode] enabled is true
-		return shelfMemRecordReader(m.shardID, msName, id, &tr, schema, ascending)
 	}
 
 	var getValues = func(mt *MemTable) *record.Record {

@@ -266,9 +266,7 @@ func (s *Sequencer) DelMmsIdTime(name string) {
 
 func (s *Sequencer) GetMmsIdTime(name string) *MmsIdTime {
 	s.mu.RLock()
-	defer func() {
-		s.mu.RUnlock()
-	}()
+	defer s.mu.RUnlock()
 
 	if s.isFree || s.isLoading {
 		return nil

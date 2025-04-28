@@ -16,3 +16,4 @@ then
 else
     python3 build.py --build-tags logstore
 fi
+

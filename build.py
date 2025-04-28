@@ -4,7 +4,7 @@ import sys
 import os
 import platform
 import subprocess
-import time
+from datetime import datetime
 import shutil
 import re
 import logging
@@ -385,7 +385,7 @@ def build(version=None,
             ldflags = "-ldflags=\"-s -X {package}.Version={version} -X {package}.GitBranch={branch} -X {package}.GitCommit={commit}\" "
         else:
             ldflags = "-ldflags=\"-X {package}.Version={version} -X {package}.GitBranch={branch} -X {package}.GitCommit={commit}\" "
-
+        
         build_command += ldflags.format(
                 package = "github.com/openGemini/openGemini/app",
                 version = version,
@@ -393,19 +393,15 @@ def build(version=None,
                 commit = get_current_commit())
 
         build_command += path
-        # start_time = time.time()
+        start_time = datetime.utcnow()
         logging.info(build_command)
         run(build_command, shell=True)
-        # end_time = time.time()
-        # logging.info("Time taken: %ss", (end_time - start_time).total_seconds())
+        end_time = datetime.utcnow()
+        logging.info("Time taken: %ss", (end_time - start_time).total_seconds())
     return True
-
 
 def write_to_gobuild(content):
     logging.info("write to file")
-
-    if isinstance(content,bytes):
-        content = content.decode("utf-8")
 
     if get_system_platform() != "windows":
         with open(gobuild_out, 'w') as f:
@@ -426,7 +422,7 @@ def main(args):
     if args.nightly:
         args.version = increment_minor_version(args.version)
         args.version = "{}~n{}".format(args.version,
-        time.time().strftime("%Y%m%d%H%M"))
+                                       datetime.utcnow().strftime("%Y%m%d%H%M"))
         args.iteration = 0
 
     # Pre-build checks
@@ -606,3 +602,4 @@ if __name__ == '__main__':
     main_args = parser.parse_args()
     print_banner()
     sys.exit(main(main_args))
+

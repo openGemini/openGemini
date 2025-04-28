@@ -35,6 +35,9 @@ func readFirstOrLast(cm *ChunkMeta, ref *record.Field, dst *record.Record, ctx *
 	defer reader.Release()
 
 	reader.Init(cm, cr, ref, dst, first)
+	if reader.ref.Name == record.TimeField {
+		return reader.ReadTime(ctx, copied, ioPriority)
+	}
 	return reader.Read(ctx, copied, ioPriority)
 }
 
@@ -88,6 +91,17 @@ func (r *FirstLastReader) Read(ctx *ReadContext, copied bool, ioPriority int) er
 	colMeta := &r.cm.colMeta[idx]
 	tmMeta := r.cm.timeMeta()
 
+	if r.timeCol.Length() > 0 {
+		prevTm, _ := r.timeCol.IntegerValue(r.timeCol.Length() - 1)
+		defer func() {
+			if r.meta.IsEmpty() {
+				setColumnNullValue(r.ref, r.dataCol)
+				r.timeCol.Init()
+				r.timeCol.AppendInteger(prevTm)
+			}
+		}()
+	}
+
 	var err error
 	for r.next() {
 		minMaxSeg := &r.cm.timeRange[r.segIndex]
@@ -130,7 +144,7 @@ func (r *FirstLastReader) Read(ctx *ReadContext, copied bool, ioPriority int) er
 				return err
 			}
 
-			rowIndex = r.readRowIndex(ctx)
+			rowIndex = r.readRowIndex(ctx, r.timeCol, r.dataCol)
 			if rowIndex >= r.timeCol.Length() {
 				continue
 			}
@@ -142,6 +156,49 @@ func (r *FirstLastReader) Read(ctx *ReadContext, copied bool, ioPriority int) er
 		break
 	}
 
+	return err
+}
+
+func (r *FirstLastReader) ReadTime(ctx *ReadContext, copied bool, ioPriority int) error {
+	tmMeta := r.cm.timeMeta()
+
+	var err error
+	for r.next() {
+		minMaxSeg := &r.cm.timeRange[r.segIndex]
+		minTime, maxTime := minMaxSeg.minTime(), minMaxSeg.maxTime()
+		if !ctx.tr.Overlaps(minTime, maxTime) {
+			continue
+		}
+
+		var val interface{}
+		var tm int64
+		rowIndex := 0
+		if r.first && ctx.tr.Min <= minTime {
+			// query time range:   --------------
+			// segment time range:     ---------------
+			// If there is no null value, the first row of data is the result
+			val, tm, rowIndex = minTime, minTime, 0
+		} else if !r.first && ctx.tr.Max >= maxTime {
+			// query time range:        --------------
+			// segment time range: ---------------
+			// If there is no null value, the last row of data is the result
+			val, tm, rowIndex = maxTime, maxTime, int(numberenc.UnmarshalUint32(r.cm.timeMeta().preAgg))-1
+		} else {
+			if err := r.readTimeColVal(ctx, &tmMeta.entries[r.segIndex], copied, ioPriority); err != nil {
+				return err
+			}
+			// time column is a query column.
+			// do not need to read the time column repeatedly.
+			rowIndex = r.readRowIndex(ctx, r.timeCol, r.timeCol)
+			if rowIndex >= r.timeCol.Length() {
+				continue
+			}
+			tm, _ = r.timeCol.IntegerValue(rowIndex)
+			val = tm
+		}
+		err = r.after(val, tm, rowIndex, ctx, copied, ioPriority)
+		break
+	}
 	return err
 }
 
@@ -177,11 +234,11 @@ func (r *FirstLastReader) after(val interface{}, tm int64, rowIndex int, ctx *Re
 	return nil
 }
 
-func (r *FirstLastReader) readRowIndex(ctx *ReadContext) int {
+func (r *FirstLastReader) readRowIndex(ctx *ReadContext, timeCol, dataCol *record.ColVal) int {
 	if r.first {
-		return readFirstRowIndex(r.timeCol, r.dataCol, ctx.tr)
+		return readFirstRowIndex(timeCol, dataCol, ctx.tr, ctx.Ascending)
 	}
-	return readLastRowIndex(r.timeCol, r.dataCol, ctx.tr)
+	return readLastRowIndex(timeCol, dataCol, ctx.tr, ctx.Ascending)
 }
 
 func (r *FirstLastReader) next() bool {

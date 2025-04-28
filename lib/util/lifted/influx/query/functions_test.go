@@ -1,6 +1,7 @@
 package query_test
 
 import (
+	"fmt"
 	"math"
 	"testing"
 
@@ -348,4 +349,196 @@ func TestAcosh(t *testing.T) {
 		}
 		assert.Equal(t, outputs, expects)
 	})
+}
+
+func TestGetRules(t *testing.T) {
+
+	materialize := query.GetFunctionFactoryInstance().GetMaterializeOp()
+	for _, function := range materialize {
+		function.GetRules("test")
+	}
+	aggregate := query.GetFunctionFactoryInstance().GetAggregateOp()
+	for _, function := range aggregate {
+		function.GetRules("test")
+	}
+	label := query.GetFunctionFactoryInstance().GetLabelOp()
+	for _, function := range label {
+		function.GetRules("test")
+	}
+	promTime := query.GetFunctionFactoryInstance().GetPromTimeOp()
+	for _, function := range promTime {
+		function.GetRules("test")
+	}
+
+	// pick one instance to test
+	testFunction := query.GetStringFunction("regexp_extract")
+	rules := testFunction.GetRules("test")
+	assert.Equal(t, 3, len(rules))
+}
+
+func TestArgNumberCheckRule_Check(t *testing.T) {
+	a := &query.ArgNumberCheckRule{
+		Name: "test",
+		Min:  1,
+		Max:  2,
+	}
+	b := &query.ArgNumberCheckRule{
+		Name: "test",
+		Min:  2,
+		Max:  2,
+	}
+	tests := []struct {
+		checkRule *query.ArgNumberCheckRule
+		expr      *influxql.Call
+		err       error
+	}{
+		{
+			checkRule: a,
+			expr: &influxql.Call{
+				Name: "test",
+				Args: []influxql.Expr{
+					&influxql.VarRef{},
+					&influxql.StringLiteral{},
+				},
+			},
+			err: nil,
+		},
+		{
+			checkRule: a,
+			expr: &influxql.Call{
+				Name: "test",
+				Args: []influxql.Expr{
+					&influxql.VarRef{},
+				},
+			},
+			err: nil,
+		},
+		{
+			checkRule: a,
+			expr: &influxql.Call{
+				Name: "test",
+				Args: []influxql.Expr{
+					&influxql.VarRef{},
+					&influxql.StringLiteral{},
+					&influxql.StringLiteral{},
+				},
+			},
+			err: fmt.Errorf("invalid number of arguments for %s, expected %d-%d, got %d", "test", a.Min, a.Max, 3),
+		},
+		{
+			checkRule: b,
+			expr: &influxql.Call{
+				Name: "test",
+				Args: []influxql.Expr{
+					&influxql.VarRef{},
+					&influxql.StringLiteral{},
+				},
+			},
+			err: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		assert.Equal(t, tt.checkRule.Check(tt.expr), tt.err)
+	}
+}
+
+func TestTypeCheckRule_Check(t *testing.T) {
+	a := &query.TypeCheckRule{
+		Name:  "test",
+		Index: 1,
+		Asserts: []func(interface{}) bool{
+			query.AssertStringLiteral,
+		},
+	}
+	b := &query.TypeCheckRule{
+		Name:  "test",
+		Index: 1,
+		Asserts: []func(interface{}) bool{
+			query.AssertIntegerLiteral,
+		},
+	}
+	c := &query.TypeCheckRule{
+		Name:  "test",
+		Index: 1,
+		Asserts: []func(interface{}) bool{
+			query.AssertNumberLiteral,
+		},
+	}
+	tests := []struct {
+		checkRule *query.TypeCheckRule
+		expr      *influxql.Call
+		err       error
+	}{
+		{
+			checkRule: a,
+			expr: &influxql.Call{
+				Name: "test",
+				Args: []influxql.Expr{
+					&influxql.VarRef{},
+					&influxql.StringLiteral{},
+				},
+			},
+			err: nil,
+		},
+		{
+			checkRule: a,
+			expr: &influxql.Call{
+				Name: "test",
+				Args: []influxql.Expr{
+					&influxql.VarRef{},
+					&influxql.IntegerLiteral{Val: 1},
+				},
+			},
+			err: fmt.Errorf("invalid argument type for the %s argument in %s(): %s", "2nd", "test", "1"),
+		},
+		{
+			checkRule: b,
+			expr: &influxql.Call{
+				Name: "test",
+				Args: []influxql.Expr{
+					&influxql.VarRef{},
+					&influxql.StringLiteral{Val: "1"},
+				},
+			},
+			err: fmt.Errorf("invalid argument type for the %s argument in %s(): %s", "2nd", "test", "'1'"),
+		},
+		{
+			checkRule: b,
+			expr: &influxql.Call{
+				Name: "test",
+				Args: []influxql.Expr{
+					&influxql.VarRef{},
+					&influxql.IntegerLiteral{},
+				},
+			},
+			err: nil,
+		},
+		{
+			checkRule: c,
+			expr: &influxql.Call{
+				Name: "test",
+				Args: []influxql.Expr{
+					&influxql.VarRef{},
+					&influxql.NumberLiteral{},
+				},
+			},
+			err: nil,
+		},
+		{
+			checkRule: c,
+			expr: &influxql.Call{
+				Name: "test",
+				Args: []influxql.Expr{
+					&influxql.VarRef{},
+					&influxql.IntegerLiteral{Val: 1},
+				},
+			},
+			err: fmt.Errorf("invalid argument type for the %s argument in %s(): %s", "2nd", "test", "1"),
+		},
+	}
+
+	for _, tt := range tests {
+		assert.Equal(t, tt.checkRule.Check(tt.expr), tt.err)
+	}
 }

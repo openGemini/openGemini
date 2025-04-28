@@ -102,7 +102,7 @@ func NewCodecGen(pkg string) *CodecGen {
 	return &CodecGen{
 		pkg: pkg,
 		imports: []string{
-			"github.com/openGemini/openGemini/engine/executor/spdy/transport",
+			"github.com/openGemini/openGemini/lib/spdy/transport",
 			"github.com/openGemini/openGemini/lib/codec",
 		},
 		am:         make(map[string]*Arguments),

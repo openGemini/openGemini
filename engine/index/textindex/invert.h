@@ -251,13 +251,13 @@ static inline int32_t GetSeriSizeAndSetSeriType(RunContainer *c) {
 // RowData
 struct RowData {
     char *data; // data alloced by the caller, and cannot be held for a long time
-    int32_t len; // length of data
+    int32_t len; // length of data 
     int32_t off; // current reading offset of the data, private variable.
     int32_t number; // the term number in the current data. eg:"get a pencil", the number of  "pencil" is 2.
 };
 
 // Token
-static inline size_t BkdrHash(const char *input, int32_t len)
+static inline size_t BkdrHash(const char *input, int32_t len) 
 {
     if (input == nullptr) {
         return 0;
@@ -303,8 +303,8 @@ struct Token {
 
     bool operator==(const Token& t) const
     {
-        if (len != t.len ||
-            hashValue != t.hashValue ||
+        if (len != t.len || 
+            hashValue != t.hashValue || 
             std::memcmp(data, t.data, len) != 0) {
             return false;
         }
@@ -342,7 +342,7 @@ struct Token {
 
 struct hash_fn
 {
-    size_t operator() (const Token& node) const
+    size_t operator() (const Token& node) const 
     {
         if (node.hashValue != 0) {
             return node.hashValue;

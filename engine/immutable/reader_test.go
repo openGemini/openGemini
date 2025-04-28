@@ -801,3 +801,138 @@ func TestFilterByField(t *testing.T) {
 	filterBitMap.Reset()
 	filterRec.Reuse()
 }
+
+func TestReadAuxData(t *testing.T) {
+	dst := record.NewRecord(
+		[]record.Field{
+			{Name: "time", Type: influx.Field_Type_Int},
+			{Name: "time", Type: influx.Field_Type_Int},
+		},
+		true)
+	cm := &ChunkMeta{colMeta: []ColumnMeta{{name: record.TimeField, ty: influx.Field_Type_Int}}}
+	require.Error(t, readAuxData(cm, 0, 0, dst, &ReadContext{}, nil, true, 0), "read time failed")
+	dst.AppendTime(0)
+	require.NoError(t, readAuxData(cm, 0, 0, dst, &ReadContext{}, nil, true, 0))
+	require.Equal(t, dst.Column(0).IntegerValues(), []int64{0})
+}
+
+func Test_setColumnNullValue(t *testing.T) {
+	mySchema := []record.Field{
+		{Name: "field0_int", Type: influx.Field_Type_Int},
+		{Name: "field1_float", Type: influx.Field_Type_Float},
+		{Name: "field2_bool", Type: influx.Field_Type_Boolean},
+		{Name: "field3_string", Type: influx.Field_Type_String},
+		{Name: "time", Type: influx.Field_Type_Int},
+	}
+	rec := record.NewRecordBuilder(mySchema)
+	rec.Column(0).AppendIntegerNull()
+	rec.Column(0).AppendInteger(8)
+	rec.Column(1).AppendFloat(10.0)
+	rec.Column(1).AppendFloatNull()
+	rec.Column(2).AppendBoolean(false)
+	rec.Column(2).AppendBooleanNull()
+	rec.Column(3).AppendStringNull()
+	rec.Column(3).AppendString("xx")
+	rec.Column(4).AppendIntegers(1465839850000000000, 1465839852000000000)
+	setColumnNullValue(&rec.Schema[0], rec.Column(0))
+	setColumnNullValue(&rec.Schema[1], rec.Column(1))
+	setColumnNullValue(&rec.Schema[2], rec.Column(2))
+	setColumnNullValue(&rec.Schema[3], rec.Column(3))
+
+	assert.Equal(t, len(rec.Column(0).Val), 0)
+	assert.Equal(t, rec.Column(0).Offset, []uint32(nil))
+	assert.Equal(t, len(rec.Column(0).Bitmap), 1)
+	assert.Equal(t, rec.Column(0).Bitmap[0], uint8(0x0))
+	assert.Equal(t, rec.Column(0).BitMapOffset, 0)
+	assert.Equal(t, rec.Column(0).Len, 1)
+	assert.Equal(t, rec.Column(0).NilCount, 1)
+	assert.Equal(t, len(rec.Column(1).Val), 0)
+	assert.Equal(t, rec.Column(1).Offset, []uint32(nil))
+	assert.Equal(t, len(rec.Column(1).Bitmap), 1)
+	assert.Equal(t, rec.Column(1).Bitmap[0], uint8(0x0))
+	assert.Equal(t, rec.Column(1).BitMapOffset, 0)
+	assert.Equal(t, rec.Column(1).Len, 1)
+	assert.Equal(t, rec.Column(1).NilCount, 1)
+	assert.Equal(t, len(rec.Column(2).Val), 0)
+	assert.Equal(t, rec.Column(2).Offset, []uint32(nil))
+	assert.Equal(t, len(rec.Column(2).Bitmap), 1)
+	assert.Equal(t, rec.Column(2).Bitmap[0], uint8(0x0))
+	assert.Equal(t, rec.Column(2).BitMapOffset, 0)
+	assert.Equal(t, rec.Column(2).Len, 1)
+	assert.Equal(t, rec.Column(2).NilCount, 1)
+	assert.Equal(t, len(rec.Column(3).Val), 0)
+	assert.Equal(t, rec.Column(3).Offset, []uint32{0x0})
+	assert.Equal(t, len(rec.Column(3).Bitmap), 1)
+	assert.Equal(t, rec.Column(3).Bitmap[0], uint8(0x0))
+	assert.Equal(t, rec.Column(3).BitMapOffset, 0)
+	assert.Equal(t, rec.Column(3).Len, 1)
+	assert.Equal(t, rec.Column(3).NilCount, 1)
+}
+
+func Test_findRowIdxRange(t *testing.T) {
+	type args struct {
+		timeCol   *record.ColVal
+		tr        util.TimeRange
+		ascending bool
+	}
+	timeCol := &record.ColVal{}
+	timeCol.Init()
+	timeCol.AppendIntegers(1, 2, 3, 4, 5)
+	timeCol1 := &record.ColVal{}
+	timeCol1.Init()
+	timeCol1.AppendIntegers(5, 4, 3, 2, 1)
+	tests := []struct {
+		name  string
+		args  args
+		want  int
+		want1 int
+	}{
+		{
+			name: "asc",
+			args: args{
+				timeCol:   timeCol,
+				tr:        util.TimeRange{Min: 1, Max: 5},
+				ascending: true,
+			},
+			want:  0,
+			want1: 5,
+		},
+		{
+			name: "dsc",
+			args: args{
+				timeCol:   timeCol1,
+				tr:        util.TimeRange{Min: 1, Max: 5},
+				ascending: false,
+			},
+			want:  0,
+			want1: 5,
+		},
+		{
+			name: "asc1",
+			args: args{
+				timeCol:   timeCol,
+				tr:        util.TimeRange{Min: 0, Max: 2},
+				ascending: true,
+			},
+			want:  0,
+			want1: 2,
+		},
+		{
+			name: "dsc1",
+			args: args{
+				timeCol:   timeCol1,
+				tr:        util.TimeRange{Min: 4, Max: 6},
+				ascending: false,
+			},
+			want:  0,
+			want1: 2,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, got1 := findRowIdxRange(tt.args.timeCol, tt.args.tr, tt.args.ascending)
+			assert.Equal(t, tt.want, got)
+			assert.Equal(t, tt.want1, got1)
+		})
+	}
+}

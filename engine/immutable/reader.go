@@ -120,30 +120,43 @@ func searchMetaIndexItem(metaIndexItems []MetaIndex, id uint64) int {
 }
 
 // return timeCol.Len if t not in timeCol
-func findRowIdxStart(timeCol *record.ColVal, t int64) int {
+func findRowIdxStart(timeCol *record.ColVal, t int64, ascending bool) int {
 	times := timeCol.IntegerValues()
-	n := sort.Search(len(times), func(i int) bool { return times[i] >= t })
+	var n int
+	if ascending {
+		n = sort.Search(len(times), func(i int) bool { return times[i] >= t })
+	} else {
+		n = sort.Search(len(times), func(i int) bool { return times[i] < t })
+	}
 	return n
 }
 
-func findRowIdxStop(timeCol *record.ColVal, t int64) int {
+func findRowIdxStop(timeCol *record.ColVal, t int64, ascending bool) int {
 	times := timeCol.IntegerValues()
-	n := sort.Search(len(times), func(i int) bool { return times[i] > t })
+	var n int
+	if ascending {
+		n = sort.Search(len(times), func(i int) bool { return times[i] > t })
+	} else {
+		n = sort.Search(len(times), func(i int) bool { return times[i] <= t })
+	}
 	return n
 }
 
 // findRowIdxRange return the index is like [rowIdxStart, rowIdxStop).
-func findRowIdxRange(timeCol *record.ColVal, tr util.TimeRange) (int, int) {
-	rowIdxStart := findRowIdxStart(timeCol, tr.Min)
-	rowIdxStop := findRowIdxStop(timeCol, tr.Max)
+func findRowIdxRange(timeCol *record.ColVal, tr util.TimeRange, ascending bool) (int, int) {
+	rowIdxStart := findRowIdxStart(timeCol, tr.Min, ascending)
+	rowIdxStop := findRowIdxStop(timeCol, tr.Max, ascending)
+	if !ascending {
+		rowIdxStart, rowIdxStop = rowIdxStop, rowIdxStart
+	}
 	return rowIdxStart, rowIdxStop
 }
 
-func readFirstRowIndex(timeCol, callCol *record.ColVal, tr util.TimeRange) int {
+func readFirstRowIndex(timeCol, callCol *record.ColVal, tr util.TimeRange, ascending bool) int {
 	rowIndex := timeCol.Length() + 1
 
 	var rowIdxStart, rowIdxStop int
-	rowIdxStart, rowIdxStop = findRowIdxRange(timeCol, tr)
+	rowIdxStart, rowIdxStop = findRowIdxRange(timeCol, tr, ascending)
 
 	for i := rowIdxStart; i < rowIdxStop; i++ {
 		if !callCol.IsNil(i) {
@@ -154,11 +167,11 @@ func readFirstRowIndex(timeCol, callCol *record.ColVal, tr util.TimeRange) int {
 	return rowIndex
 }
 
-func readLastRowIndex(timeCol, callCol *record.ColVal, tr util.TimeRange) int {
+func readLastRowIndex(timeCol, callCol *record.ColVal, tr util.TimeRange, ascending bool) int {
 	rowIndex := timeCol.Length()
 
 	var rowIdxStart, rowIdxStop int
-	rowIdxStart, rowIdxStop = findRowIdxRange(timeCol, tr)
+	rowIdxStart, rowIdxStop = findRowIdxRange(timeCol, tr, ascending)
 
 	for i := rowIdxStop - 1; i >= rowIdxStart; i-- {
 		if !callCol.IsNil(i) {
@@ -225,7 +238,7 @@ func readMinRowIndex(callRef *record.Field, callCol, timeCol *record.ColVal, met
 func readMinMaxRowIndex(callRef *record.Field, callCol, timeCol *record.ColVal, ctx *ReadContext, meta *record.ColMeta,
 	copied, isMin bool) (int, bool, error) {
 
-	rowIdxStart, rowIdxStop := findRowIdxRange(timeCol, ctx.tr)
+	rowIdxStart, rowIdxStop := findRowIdxRange(timeCol, ctx.tr, ctx.Ascending)
 	if rowIdxStart == timeCol.Length() {
 		return timeCol.Len, false, nil
 	}
@@ -421,6 +434,23 @@ func setColumnDefaultValue(ref *record.Field, col *record.ColVal) {
 	case influx.Field_Type_String:
 		col.Init()
 		col.AppendString("")
+	}
+}
+
+func setColumnNullValue(ref *record.Field, col *record.ColVal) {
+	switch ref.Type {
+	case influx.Field_Type_Int:
+		col.Init()
+		col.AppendIntegerNull()
+	case influx.Field_Type_Float:
+		col.Init()
+		col.AppendFloatNull()
+	case influx.Field_Type_Boolean:
+		col.Init()
+		col.AppendBooleanNull()
+	case influx.Field_Type_String:
+		col.Init()
+		col.AppendStringNull()
 	}
 }
 
@@ -949,7 +979,6 @@ func FilterByFieldFuncs(rec, filterRec *record.Record, filterOption *BaseFilterO
 	}
 
 	filterBitmap.Reset()
-
 	if err := filterOption.CondFunctions.Filter(rec, filterBitmap); err != nil {
 		panic(err)
 	}
@@ -1069,6 +1098,16 @@ func readAuxData(cm *ChunkMeta, segment int, rowIndex int, dst *record.Record, c
 			}
 			continue
 		}
+		if field.Name == record.TimeField {
+			timeRowIndex := dst.TimeColumn().Len - 1
+			if timeRowIndex < 0 {
+				err := fmt.Errorf("read time failed")
+				log.Error("readAuxData failed", zap.Error(err))
+				return err
+			}
+			col.AppendInteger(dst.Time(timeRowIndex))
+			continue
+		}
 
 		colMeta := cm.colMeta[colIdx]
 		seg := colMeta.entries[segment]
@@ -1182,7 +1221,7 @@ func findRowIndex(cm *ChunkMeta, ctx *ReadContext, cr ColumnReader, timeCol *rec
 			return
 		}
 
-		n := findRowIdxStart(timeCol, tm)
+		n := findRowIdxStart(timeCol, tm, ctx.Ascending)
 		if n >= timeCol.Len {
 			continue
 		}
@@ -1299,7 +1338,7 @@ func readSumCountFromData(cm *ChunkMeta, colIndex int, dst *record.Record, callI
 			return err
 		}
 
-		rowIdxStart, rowIdxStop := findRowIdxRange(timeCol, ctx.tr)
+		rowIdxStart, rowIdxStop := findRowIdxRange(timeCol, ctx.tr, ctx.Ascending)
 		if isSum {
 			sumRangeValues(ref, col, rowIdxStart, rowIdxStop, meta)
 		} else {
@@ -1392,7 +1431,7 @@ func readTimeCount(cm *ChunkMeta, ref *record.Field, dst *record.Record, ctx *Re
 			log.Error("decode time data fail", zap.Error(err))
 		}
 
-		start, end := findRowIdxRange(col, ctx.tr)
+		start, end := findRowIdxRange(col, ctx.tr, ctx.Ascending)
 		countN += end - start
 	}
 

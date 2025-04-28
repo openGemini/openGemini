@@ -26,7 +26,6 @@ import (
 	"github.com/openGemini/openGemini/app/ts-store/storage"
 	"github.com/openGemini/openGemini/app/ts-store/stream"
 	"github.com/openGemini/openGemini/app/ts-store/transport"
-	spdyTransport "github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/mutable"
 	"github.com/openGemini/openGemini/engine/shelf"
@@ -39,6 +38,7 @@ import (
 	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	spdyTransport "github.com/openGemini/openGemini/lib/spdy/transport"
 	"github.com/openGemini/openGemini/lib/statisticsPusher"
 	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/syscontrol"
@@ -326,7 +326,6 @@ func (s *Server) initStatisticsPusher() {
 		stat.NewStreamWindowStatistics().Collect,
 		stat.NewRecordStatistics().Collect,
 		stat.NewHitRatioStatistics().Collect,
-		stat.CollectStoreQueryStatistics,
 		stat.CollectSpdyStatistics,
 		stat.NewOOOTimeDistribution().Collect,
 		stat.NewCollector().Collect,
@@ -341,7 +340,7 @@ func (s *Server) initStatisticsPusher() {
 	s.statisticsPusher.RegisterOps(stat.CollectOpsEngineStatStatistics)
 	s.statisticsPusher.RegisterOps(stat.NewErrnoStat().CollectOps)
 	s.statisticsPusher.RegisterOps(s.storage.GetEngine().StatisticsOps)
-	s.statisticsPusher.RegisterOps(stat.CollectOpsStoreQueryStatistics)
+	s.statisticsPusher.RegisterOps(stat.NewCollector().CollectOps)
 	s.statisticsPusher.Start()
 }
 
@@ -368,7 +367,6 @@ func (s *Server) initStatistics() {
 	stat.NewRecordStatistics().Init(globalTags)
 	stat.NewHitRatioStatistics().Init(globalTags)
 	stat.InitDatabaseStatistics(globalTags)
-	stat.InitStoreQueryStatistics(globalTags)
 	stat.InitSpdyStatistics(globalTags)
 	spdyTransport.InitStatistics(spdyTransport.AppStore)
 	stat.NewOOOTimeDistribution().Init(globalTags)

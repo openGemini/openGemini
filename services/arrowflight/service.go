@@ -23,7 +23,6 @@ import (
 	"io"
 	"math/big"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/apache/arrow/go/v13/arrow"
@@ -279,12 +278,13 @@ func (w *writeServer) DoPut(server flight.FlightService_DoPutServer) error {
 	if err != nil {
 		return err
 	}
-	atomic.AddInt64(&statistics.HandlerStat.WriteRequests, 1)
-	atomic.AddInt64(&statistics.HandlerStat.ActiveWriteRequests, 1)
+	handler := statistics.NewHandler()
+	handler.WriteRequests.Incr()
+	handler.ActiveWriteRequests.Incr()
 	defer func(start time.Time) {
 		d := time.Since(start).Nanoseconds()
-		atomic.AddInt64(&statistics.HandlerStat.ActiveWriteRequests, -1)
-		atomic.AddInt64(&statistics.HandlerStat.WriteRequestDuration, d)
+		handler.ActiveWriteRequests.Decr()
+		handler.WriteRequestDuration.Add(d)
 		wr.Release()
 	}(time.Now())
 

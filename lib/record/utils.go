@@ -35,6 +35,10 @@ func init() {
 	typeSize[influx.Field_Type_Boolean] = util.BooleanSizeBytes
 }
 
+func GetTypeSize(typ int) int {
+	return typeSize[typ]
+}
+
 func ToModelTypes(ty influxql.DataType) int {
 	switch ty {
 	case influxql.Tag:
@@ -221,8 +225,8 @@ func valueIndexRange(bitMap []byte, bitOffset int, bmStart, bmEnd int, pos int, 
 		start = posValidCount
 		firstIndex = pos
 	}
-	start += valueIndexRangeWithSingle(bitMap, firstIndex+bitOffset, bmStart+bitOffset)
-	end += start + valueIndexRangeWithSingle(bitMap, bmStart+bitOffset, bmEnd+bitOffset)
+	start += ValueIndexRangeWithSingle(bitMap, firstIndex+bitOffset, bmStart+bitOffset)
+	end += start + ValueIndexRangeWithSingle(bitMap, bmStart+bitOffset, bmEnd+bitOffset)
 
 	return start, end
 }
@@ -231,7 +235,7 @@ func ValueIndexRange(bitMap []byte, bitOffset int, bmStart, bmEnd int, pos int, 
 	return valueIndexRange(bitMap, bitOffset, bmStart, bmEnd, pos, posValidCount)
 }
 
-func valueIndexRangeWithSingle(bitMap []byte, bitStart int, bitEnd int) int {
+func ValueIndexRangeWithSingle(bitMap []byte, bitStart int, bitEnd int) int {
 	bm := bitMap[bitStart>>3 : (bitEnd+7)>>3]
 	size := len(bm)
 	total := 0

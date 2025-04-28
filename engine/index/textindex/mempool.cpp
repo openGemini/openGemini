@@ -85,7 +85,7 @@ RunContainer *MemPool::GetRunContainer()
         c = (RunContainer *)malloc(sizeof(RunContainer));
         if (c == nullptr) {
             return nullptr;
-        }
+        } 
         stat.containerCnt++;
     } else {
          ListNode *onode = containerPool.next;
@@ -311,7 +311,7 @@ bool MemPool::Next(char *keys, uint32_t keysLen, char *data, uint32_t dataLen, u
         }
         // at least there is still memory space to copy a post container
         uint32_t seriSize = GetSeriSizeAndSetSeriType(ele->curContainer) + COOKIE_HEADER_SIZE;
-        if (keysOffset + ele->token.len + keysOffs.len + 4 > keysLen ||
+        if (keysOffset + ele->token.len + keysOffs.len + 4 > keysLen || 
             dataOffset + seriSize + dataOffs.len + 4 > dataLen) {
             break;
         }

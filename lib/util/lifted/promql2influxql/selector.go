@@ -233,14 +233,13 @@ func (t *Transpiler) transpileVectorSelector2ConditionExpr(v *parser.VectorSelec
 		start, end := t.findStartEndTime(v)
 		timeCondition = GetTimeCondition(start, end)
 	} else {
-		var backTime int64
 		if t.timeRange == 0 {
-			backTime = t.LookBackDelta.Milliseconds()
+			start, end := timestamp.Time(t.minT-t.LookBackDelta.Milliseconds()-durationMilliseconds(v.Offset)), timestamp.Time(t.maxT-durationMilliseconds(v.Offset))
+			timeCondition = GetTimeCondition(&start, &end)
 		} else {
-			backTime = t.timeRange.Milliseconds()
+			start, end := timestamp.Time(t.minT-t.timeRange.Milliseconds()-durationMilliseconds(v.Offset)), timestamp.Time(t.maxT-durationMilliseconds(v.Offset))
+			timeCondition = GetTimeCondition(&start, &end)
 		}
-		start, end := timestamp.Time(t.minT-backTime-durationMilliseconds(v.Offset)), timestamp.Time(t.maxT-durationMilliseconds(v.Offset))
-		timeCondition = GetTimeCondition(&start, &end)
 	}
 	// if the API corresponding to MetricStore is used, the __name__ field is used as the condition, otherwise, drop it.
 	tagCondition, err := GetTagCondition(v, t.HaveMetricStore())

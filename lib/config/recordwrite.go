@@ -19,6 +19,7 @@ import "fmt"
 type RecordWriteConfig struct {
 	Enabled        bool      `toml:"enabled"`
 	AuthEnabled    bool      `toml:"auth-enabled"`
+	ShelfMode      bool      `toml:"shelf-mode"`
 	TLS            tlsConfig `toml:"TLS"`
 	RPCAddress     string    `toml:"rpc-address"`
 	MaxRecvMsgSize int       `toml:"max-message-size"`
@@ -36,6 +37,7 @@ func NewRecordWriteConfig() RecordWriteConfig {
 	return RecordWriteConfig{
 		Enabled:        false,
 		AuthEnabled:    false,
+		ShelfMode:      false,
 		TLS:            tlsConfig{Enabled: false, KeyFile: "", CertFile: "", ClientAuth: false, CARoot: ""},
 		RPCAddress:     "127.0.0.1:8305",
 		MaxRecvMsgSize: 4 * 1024 * 1024,

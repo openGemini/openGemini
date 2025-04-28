@@ -97,6 +97,9 @@ install-protoc-gen-gogo:
 install-protoc-gen-go:
 	@$(GO) install github.com/golang/protobuf/protoc-gen-go@latest
 
+install-msgp:
+	@$(GO) install github.com/tinylib/msgp@latest
+
 failpoint-enable:
 	@$(FAILPOINT_ENABLE)
 

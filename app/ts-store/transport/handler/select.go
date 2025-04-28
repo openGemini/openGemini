@@ -19,17 +19,16 @@ import (
 	"fmt"
 	"runtime/debug"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/openGemini/openGemini/app/ts-store/storage"
 	"github.com/openGemini/openGemini/engine/executor"
-	"github.com/openGemini/openGemini/engine/executor/spdy"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
+	"github.com/openGemini/openGemini/lib/spdy"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/tracing"
 	query2 "github.com/openGemini/openGemini/lib/util/lifted/influx/query"
@@ -41,6 +40,8 @@ type ContextKey string
 const (
 	QueryDurationKey ContextKey = "QueryDuration"
 )
+
+var queryStat = statistics.NewStoreQuery()
 
 type Select struct {
 	BaseHandler
@@ -146,7 +147,7 @@ func (s *Select) Process() error {
 			s.logger().Error("failed to unmarshal QueryNode", zap.Error(err))
 			return err
 		}
-		atomic.AddInt64(&statistics.StoreQueryStat.UnmarshalQueryTimeTotal, time.Since(start).Nanoseconds())
+		queryStat.UnmarshalQueryTimeTotal.AddSinceNano(start)
 	}
 
 	return s.process(s.w, node, s.req)
@@ -210,7 +211,8 @@ func (s *Select) process(w spdy.Responser, node hybridqp.QueryNode, req *executo
 			_ = resourceallocator.FreeParallelismRes(resourceallocator.ShardsParallelismRes, parallelism, 0)
 		}()
 	}
-	atomic.AddInt64(&statistics.StoreQueryStat.GetShardResourceTimeTotal, time.Since(start).Nanoseconds())
+
+	queryStat.GetShardResourceTimeTotal.AddSinceNano(start)
 	var ctx context.Context
 	if s.context == nil {
 		ctx = context.WithValue(context.Background(), QueryDurationKey, qDuration)
@@ -241,8 +243,8 @@ func (s *Select) process(w spdy.Responser, node hybridqp.QueryNode, req *executo
 	if err != nil {
 		return err
 	}
-	atomic.AddInt64(&statistics.StoreQueryStat.IndexScanDagBuildTimeTotal, time.Since(start).Nanoseconds())
-	atomic.AddInt64(&statistics.StoreQueryStat.QueryShardNumTotal, shardsNum)
+	queryStat.IndexScanDagBuildTimeTotal.AddSinceNano(start)
+	queryStat.QueryShardNumTotal.Add(shardsNum)
 	if err := s.execute(ctx, p); err != nil {
 		return err
 	}

@@ -49,7 +49,7 @@ func Test_Time_ConsumeData(t *testing.T) {
 	}
 	interval := 5 * time.Second
 	start := time.Now().Truncate(interval).Add(-interval)
-	var fieldCalls []*streamLib.FieldCall
+	fieldCalls := []*streamLib.FieldCall{}
 	calls := []string{"sum", "min", "max", "count"}
 	for _, c := range calls {
 		call, err := streamLib.NewFieldCall(influx.Field_Type_Float, influx.Field_Type_Float, "float", "float", c, false)

@@ -20,8 +20,8 @@ import (
 
 	"github.com/influxdata/influxdb/models"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/prometheus/promql"
 	"github.com/openGemini/openGemini/lib/util/lifted/promql2influxql"
-	"github.com/prometheus/prometheus/promql"
 	"github.com/prometheus/prometheus/promql/parser"
 )
 
@@ -97,7 +97,7 @@ func BenchmarkSonicJsonFormatter(b *testing.B) {
 func BenchmarkPromJsonFormatter(b *testing.B) {
 	f := &jsonFormatter{}
 	resp := &promql2influxql.PromQueryResponse{Data: &promql2influxql.PromData{}, Status: "success"}
-	r := &promql2influxql.Receiver{DropMetric: false, RemoveTableName: false}
+	r := &promql2influxql.Receiver{DropMetric: false}
 	res := &query.Result{}
 	t := time.Now()
 	for i := 0; i < 100; i++ {

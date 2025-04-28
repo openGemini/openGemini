@@ -17,10 +17,10 @@ package netstorage
 import (
 	"time"
 
-	"github.com/openGemini/openGemini/engine/executor/spdy"
-	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/lib/codec"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
+	"github.com/openGemini/openGemini/lib/spdy"
+	"github.com/openGemini/openGemini/lib/spdy/transport"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 )
 

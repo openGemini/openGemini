@@ -28,8 +28,9 @@ const (
 	DefaultMaxEleMemSize      = 128 * 1024 * 1024
 )
 
-type MemSizeSupported interface {
+type MemSizeSupported[T any] interface {
 	MemSize() int
+	Instance() *T
 }
 
 type UnionPool[T any] struct {
@@ -113,12 +114,12 @@ func (p *UnionPool[T]) Get() *T {
 // Put object v back into the object pool
 // Object v must implement the MemSizeSupported interface
 // Otherwise, use the PutWithMemSize method instead
-func (p *UnionPool[T]) Put(v *T) {
+func (p *UnionPool[T]) Put(v MemSizeSupported[T]) {
 	if v == nil {
 		return
 	}
 
-	p.put(v, p.getMemSize(v))
+	p.put(v.Instance(), v.MemSize())
 }
 
 func (p *UnionPool[T]) PutWithMemSize(v *T, memSize int) {
@@ -154,7 +155,7 @@ func (p *UnionPool[T]) LocalMemorySize() int {
 }
 
 func (p *UnionPool[T]) getMemSize(v interface{}) int {
-	obj, ok := v.(MemSizeSupported)
+	obj, ok := v.(MemSizeSupported[T])
 	if ok {
 		return obj.MemSize()
 	}

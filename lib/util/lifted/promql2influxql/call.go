@@ -419,14 +419,14 @@ func (t *Transpiler) transpilePromSubqueryFunc(subExpr *parser.SubqueryExpr, agg
 			subCall.LowerStepInvariant = true
 			t.lowerStepInvariant = false
 		}
-		interval := t.Step.Nanoseconds()
-		if interval == 0 {
-			interval = t.timeRange.Nanoseconds()
-			if interval == 0 {
-				interval = 1
+		if t.Step != 0 {
+			subCall.Interval = t.Step.Nanoseconds()
+		} else {
+			subCall.Interval = t.timeRange.Nanoseconds()
+			if subCall.Interval == 0 {
+				subCall.Interval = 1
 			}
 		}
-		subCall.Interval = interval
 		statement.PromSubCalls = append(statement.PromSubCalls, &subCall)
 		if aggFn.name == "absent_over_time_prom" {
 			field, _ := getSelectFieldIdx(statement)

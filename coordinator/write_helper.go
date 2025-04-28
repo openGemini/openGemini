@@ -18,7 +18,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/fasttime"
@@ -320,7 +319,7 @@ func (wh *writeHelper) updateSchemaIfNeeded(database, rp string, r *influx.Row, 
 		if errInner := wh.pw.MetaClient.UpdateSchema(database, rp, originName, fieldToCreatePool); errInner != nil {
 			return fieldToCreatePool, strings.Contains(errInner.Error(), "field type conflict"), errInner
 		}
-		atomic.AddInt64(&statistics.HandlerStat.WriteUpdateSchemaDuration, time.Since(start).Nanoseconds())
+		statistics.NewHandler().WriteUpdateSchemaDuration.AddSinceNano(start)
 		wh.sameSchema = false
 	}
 	return fieldToCreatePool, false, err
@@ -685,7 +684,7 @@ func createMeasurement(database, retentionPolicy, name string, client ComMetaCli
 
 	start := time.Now()
 	defer func() {
-		atomic.AddInt64(&statistics.HandlerStat.WriteCreateMstDuration, time.Since(start).Nanoseconds())
+		statistics.NewHandler().WriteCreateMstDuration.AddSinceNano(start)
 	}()
 
 	mst, err := client.Measurement(database, retentionPolicy, name)

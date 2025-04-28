@@ -69,16 +69,14 @@ func (s *injestionCtx) getShardRow(id uint64) *ShardRow {
 func (s *injestionCtx) setShardRow(shardInfo *meta.ShardInfo, row *influx.Row) {
 	shardRows := s.getShardRow(shardInfo.ID)
 	if shardRows == nil {
-		// if the current length equals the capacity, append the new ShardRow
 		if cap(s.shardRowMap) == len(s.shardRowMap) {
-			s.shardRowMap = append(s.shardRowMap, ShardRow{shardInfo, []*influx.Row{row}})
+			s.shardRowMap = append(s.shardRowMap, ShardRow{shardInfo, nil})
 		} else {
-			// otherwise, increase the length of the slice and append the new ShardRow
-			index := len(s.shardRowMap)
-			s.shardRowMap = s.shardRowMap[:index+1]
-			s.shardRowMap[index].shardInfo = shardInfo
-			s.shardRowMap[index].rows = append(s.shardRowMap[index].rows[:0], row)
+			s.shardRowMap = s.shardRowMap[:len(s.shardRowMap)+1]
+			s.shardRowMap[len(s.shardRowMap)-1].shardInfo = shardInfo
+			s.shardRowMap[len(s.shardRowMap)-1].rows = s.shardRowMap[len(s.shardRowMap)-1].rows[:0]
 		}
+		s.shardRowMap[len(s.shardRowMap)-1].rows = append(s.shardRowMap[len(s.shardRowMap)-1].rows, row)
 		sort.Sort(s.shardRowMap)
 	} else {
 		shardRows.rows = append(shardRows.rows, row)

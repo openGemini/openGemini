@@ -15,6 +15,7 @@
 package tsi
 
 import (
+	"bytes"
 	"context"
 	"flag"
 	"fmt"
@@ -2293,4 +2294,126 @@ func TestGetSeriesIdBySeriesKeyFromCache(t *testing.T) {
 	idxBuilder.EnableTagArray = true
 	row.Tags[0].Value = "[a,b,c]"
 	assertCreateSeries()
+
+	row.Tags[1].Value = "[e,f,g]"
+	assertGetSeries(func(sid uint64) bool {
+		return sid == 0
+	})
+	assertCreateSeries()
+	assertGetSeries(func(sid uint64) bool {
+		return sid > 0
+	})
+
+	row.Tags[1].Key = "[]tk2"
+	assertGetSeries(func(sid uint64) bool {
+		return sid == 0
+	})
+	assertCreateSeries()
+	assertGetSeries(func(sid uint64) bool {
+		return sid > 0
+	})
+
+	row.Tags[0].Key = "tk[1"
+	row.Tags[1].Key = "tk]2"
+	assertGetSeries(func(sid uint64) bool {
+		return sid == 0
+	})
+	assertCreateSeries()
+	assertGetSeries(func(sid uint64) bool {
+		return sid > 0
+	})
+
+	row.Tags[0].Key = "tk1"
+	row.Tags[1].Key = "tk2"
+	row.Tags[0].Value = "val[ue1"
+	row.Tags[1].Value = "valu]e2"
+	assertGetSeries(func(sid uint64) bool {
+		return sid == 0
+	})
+	assertCreateSeries()
+	assertGetSeries(func(sid uint64) bool {
+		return sid > 0
+	})
+
+	row.Tags[0].Key = "t[k1"
+	row.Tags[1].Key = "tk2"
+	row.Tags[0].Value = "value1"
+	row.Tags[1].Value = "valu]e2"
+	assertGetSeries(func(sid uint64) bool {
+		return sid == 0
+	})
+	assertCreateSeries()
+	assertGetSeries(func(sid uint64) bool {
+		return sid > 0
+	})
+
+	row.Tags[0].Key = "t]k1"
+	row.Tags[1].Key = "tk2"
+	row.Tags[0].Value = "value1"
+	row.Tags[1].Value = "value2"
+	assertGetSeries(func(sid uint64) bool {
+		return sid == 0
+	})
+	assertCreateSeries()
+	assertGetSeries(func(sid uint64) bool {
+		return sid > 0
+	})
+
+	row.Tags[0].Key = "tk1"
+	row.Tags[1].Key = "tk2"
+	row.Tags[0].Value = "value1"
+	row.Tags[1].Value = "valu]e2"
+	assertGetSeries(func(sid uint64) bool {
+		return sid == 0
+	})
+	assertCreateSeries()
+	assertGetSeries(func(sid uint64) bool {
+		return sid > 0
+	})
+
+	row.Tags[0].Key = "tk1]"
+	row.Tags[1].Key = "tk2"
+	row.Tags[0].Value = "value1"
+	row.Tags[1].Value = "valu[e2"
+	assertGetSeries(func(sid uint64) bool {
+		return sid == 0
+	})
+	assertCreateSeries()
+	assertGetSeries(func(sid uint64) bool {
+		return sid > 0
+	})
+
+	row.Tags[0].Key = "tk1"
+	row.Tags[1].Key = "tk2"
+	row.Tags[0].Value = "[a,b]"
+	row.Tags[1].Value = "[c,d,e]"
+	row.UnmarshalIndexKeys(nil)
+	_, err := ms.GetSeriesIdBySeriesKeyFromCache(row.IndexKey)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "error tag array format")
+
+}
+
+func BenchmarkIndexByteVsContains(b *testing.B) {
+	data := []byte("example data wi[thexample data with[example data with[example data wit[hand")
+
+	b.Run("IndexByte", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			_ = bytes.IndexByte(data, '[') != -1 && bytes.IndexByte(data, ']') != -1
+		}
+	})
+
+	b.Run("Contains", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			_ = bytes.Contains(data, []byte{'['}) && bytes.Contains(data, []byte{']'})
+		}
+	})
+
+	b.Run("Contains", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			offset := bytes.IndexByte(data, '[')
+			_ = offset != -1 && bytes.IndexByte(data[offset:], ']') != -1
+		}
+	})
+
 }

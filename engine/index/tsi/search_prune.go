@@ -39,6 +39,10 @@ func (ctx *PruneContext) MemSize() int {
 	return len(ctx.SeriesKey) + len(ctx.Ids)*util.Uint64SizeBytes
 }
 
+func (ctx *PruneContext) Instance() *PruneContext {
+	return ctx
+}
+
 func (is *indexSearch) doPrune(set *uint64set.Set, tfs []*tagFilter) (*uint64set.Set, error) {
 	ctx := pruneContextPool.Get()
 	defer pruneContextPool.Put(ctx)

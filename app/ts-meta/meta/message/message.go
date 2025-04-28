@@ -17,9 +17,9 @@ package message
 import (
 	"fmt"
 
-	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/lib/codec"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/spdy/transport"
 )
 
 type MetaMessage struct {
