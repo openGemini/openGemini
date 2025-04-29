@@ -155,93 +155,136 @@ func (a FieldKeys) Less(i, j int) bool { return a[i].Field < a[j].Field }
 
 // MetaClient is an interface for accessing meta data.
 type MetaClient interface {
+	MetadataManager
+	DatabaseManager
+	NodeManager
+	ShardManager
+	UserManager
+	SystemManager
+	SubscriptionManager
+	ContinuousQueryManager
+	DownSampleManager
+	RepManager
+	MeasurementManager
+	StreamManager
+	OpenAtStore() error
+	RetryRegisterQueryIDOffset(host string) (uint64, error)
+}
+
+type MeasurementManager interface {
 	CreateMeasurement(database, retentionPolicy, mst string, shardKey *meta2.ShardKeyInfo, numOfShards int32, indexR *influxql.IndexRelation, engineType config.EngineType,
 		colStoreInfo *meta2.ColStoreInfo, schemaInfo []*proto2.FieldSchema, options *meta2.Options) (*meta2.MeasurementInfo, error)
 	AlterShardKey(database, retentionPolicy, mst string, shardKey *meta2.ShardKeyInfo) error
-	CreateDatabase(name string, enableTagArray bool, replicaN uint32, options *obs.ObsOptions) (*meta2.DatabaseInfo, error)
-	CreateDatabaseWithRetentionPolicy(name string, spec *meta2.RetentionPolicySpec, shardKey *meta2.ShardKeyInfo, enableTagArray bool, replicaN uint32) (*meta2.DatabaseInfo, error)
-	CreateRetentionPolicy(database string, spec *meta2.RetentionPolicySpec, makeDefault bool) (*meta2.RetentionPolicyInfo, error)
-	CreateSubscription(database, rp, name, mode string, destinations []string) error
-	CreateUser(name, password string, admin, rwuser bool) (meta2.User, error)
-	Databases() map[string]*meta2.DatabaseInfo
-	Database(name string) (*meta2.DatabaseInfo, error)
-	DatabaseOption(name string) (*obs.ObsOptions, error)
-	DataNode(id uint64) (*meta2.DataNode, error)
-	DataNodes() ([]meta2.DataNode, error)
-	AliveReadNodes() ([]meta2.DataNode, error)
-	DeleteDataNode(id uint64) error
-	DeleteMetaNode(id uint64) error
-	DropShard(id uint64) error
-	DropSubscription(database, rp, name string) error
-	DropUser(name string) error
-	MetaNodes() ([]meta2.NodeInfo, error)
-	RetentionPolicy(database, name string) (rpi *meta2.RetentionPolicyInfo, err error)
-	SetAdminPrivilege(username string, admin bool) error
-	SetPrivilege(username, database string, p originql.Privilege) error
-	ShardsByTimeRange(sources influxql.Sources, tmin, tmax time.Time) (a []meta2.ShardInfo, err error)
-	ShardGroupsByTimeRange(database, policy string, min, max time.Time) (a []meta2.ShardGroupInfo, err error)
-	UpdateRetentionPolicy(database, name string, rpu *meta2.RetentionPolicyUpdate, makeDefault bool) error
-	UpdateUser(name, password string) error
-	UserPrivilege(username, database string) (*originql.Privilege, error)
-	UserPrivileges(username string) (map[string]originql.Privilege, error)
-	Users() []meta2.UserInfo
-	MarkDatabaseDelete(name string) error
-	MarkRetentionPolicyDelete(database, name string) error
 	MarkMeasurementDelete(database, policy, measurement string) error
-	DBPtView(database string) (meta2.DBPtInfos, error)
-	ShardOwner(shardID uint64) (database, policy string, sgi *meta2.ShardGroupInfo)
-	Measurement(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error)
 	GetMeasurementID(database string, rpName string, mstName string) (uint64, error)
-	Schema(database string, retentionPolicy string, mst string) (fields map[string]int32, dimensions map[string]struct{}, err error)
-	GetMeasurements(m *influxql.Measurement) ([]*meta2.MeasurementInfo, error)
-	TagKeys(database string) map[string]set.Set[string]
-	FieldKeys(database string, ms influxql.Measurements) (map[string]map[string]int32, error)
 	QueryTagKeys(database string, ms influxql.Measurements, cond influxql.Expr) (map[string]map[string]struct{}, error)
 	MatchMeasurements(database string, ms influxql.Measurements) (map[string]*meta2.MeasurementInfo, error)
 	Measurements(database string, ms influxql.Measurements) ([]string, error)
-	ShowShards(database string, rp string, mst string) models.Rows
-	ShowShardGroups() models.Rows
-	ShowSubscriptions() models.Rows
-	ShowRetentionPolicies(database string) (models.Rows, error)
-	ShowCluster(nodeType string, ID uint64) (models.Rows, error)
-	ShowClusterWithCondition(nodeType string, ID uint64) (models.Rows, error)
-	GetAliveShards(database string, sgi *meta2.ShardGroupInfo, isRead bool) []int
+}
+
+type RepManager interface {
+	ThermalShards(db string, start, end time.Duration) map[uint64]struct{}
+	DBRepGroups(database string) []meta2.ReplicaGroup
+	GetReplicaN(database string) (int, error)
+}
+
+type DownSampleManager interface {
 	NewDownSamplePolicy(database, name string, info *meta2.DownSamplePolicyInfo) error
 	DropDownSamplePolicy(database, name string, dropAll bool) error
 	ShowDownSamplePolicies(database string) (models.Rows, error)
 	GetMstInfoWithInRp(dbName, rpName string, dataTypes []int64) (*meta2.RpMeasurementsFieldsInfo, error)
-	AdminUserExists() bool
-	Authenticate(username, password string) (u meta2.User, e error)
-	UpdateShardDownSampleInfo(Ident *meta2.ShardIdentifier) error
-	OpenAtStore() error
-	UpdateStreamMstSchema(database string, retentionPolicy string, mst string, stmt *influxql.SelectStatement) error
-	CreateStreamPolicy(info *meta2.StreamInfo) error
-	CreateStreamMeasurement(info *meta2.StreamInfo, src, dest *influxql.Measurement, stmt *influxql.SelectStatement) error
-	GetStreamInfos() map[string]*meta2.StreamInfo
-	ShowStreams(database string, showAll bool) (models.Rows, error)
-	DropStream(name string) error
-	GetAllMst(dbName string) []string
-	RetryRegisterQueryIDOffset(host string) (uint64, error)
-	ThermalShards(db string, start, end time.Duration) map[uint64]struct{}
-	GetNodePtsMap(database string) (map[uint64][]uint32, error)
-	DBRepGroups(database string) []meta2.ReplicaGroup
-	GetReplicaN(database string) (int, error)
+}
 
-	// for continuous query
-	SendSql2MetaHeartbeat(host string) error
+type ContinuousQueryManager interface {
 	CreateContinuousQuery(database, name, query string) error
 	ShowContinuousQueries() (models.Rows, error)
 	DropContinuousQuery(name string, database string) error
-	UpdateShardInfoTier(shardID uint64, tier uint64, dbName, rpName string) error
+	SendSql2MetaHeartbeat(host string) error
+}
 
-	// sysctrl for admin
+type SubscriptionManager interface {
+	CreateSubscription(database, rp, name, mode string, destinations []string) error
+	DropSubscription(database, rp, name string) error
+	ShowSubscriptions() models.Rows
+}
+
+type SystemManager interface {
 	SendSysCtrlToMeta(mod string, param map[string]string) (map[string]string, error)
 	SendBackupToMeta(mod string, param map[string]string, host string) (map[string]string, error)
-
-	// file infos
 	IsSQLiteEnabled() bool
 	InsertFiles([]meta2.FileInfo) error
 	IsMasterPt(uint32, string) bool
+}
+
+type StreamManager interface {
+	CreateStreamPolicy(info *meta2.StreamInfo) error
+	CreateStreamMeasurement(info *meta2.StreamInfo, src, dest *influxql.Measurement, stmt *influxql.SelectStatement) error
+	UpdateStreamMstSchema(database string, retentionPolicy string, mst string, stmt *influxql.SelectStatement) error
+	GetStreamInfos() map[string]*meta2.StreamInfo
+	ShowStreams(database string, showAll bool) (models.Rows, error)
+	DropStream(name string) error
+}
+
+type UserManager interface {
+	CreateUser(name, password string, admin, rwuser bool) (meta2.User, error)
+	DropUser(name string) error
+	SetAdminPrivilege(username string, admin bool) error
+	SetPrivilege(username, database string, p originql.Privilege) error
+	UpdateUser(name, password string) error
+	UserPrivilege(username, database string) (*originql.Privilege, error)
+	UserPrivileges(username string) (map[string]originql.Privilege, error)
+	Users() []meta2.UserInfo
+	Authenticate(username, password string) (u meta2.User, e error)
+	AdminUserExists() bool
+}
+
+type ShardManager interface {
+	ShowShardGroups() models.Rows
+	ShardOwner(shardID uint64) (database, policy string, sgi *meta2.ShardGroupInfo)
+	GetAliveShards(database string, sgi *meta2.ShardGroupInfo, isRead bool) []int
+	DropShard(id uint64) error
+	UpdateShardInfoTier(shardID uint64, tier uint64, dbName, rpName string) error
+	UpdateShardDownSampleInfo(Ident *meta2.ShardIdentifier) error
+	ShardsByTimeRange(sources influxql.Sources, tmin, tmax time.Time) (a []meta2.ShardInfo, err error)
+	ShardGroupsByTimeRange(database, policy string, min, max time.Time) (a []meta2.ShardGroupInfo, err error)
+}
+
+type MetadataManager interface {
+	GetAllMst(dbName string) []string
+	DatabaseOption(name string) (*obs.ObsOptions, error)
+	DBPtView(database string) (meta2.DBPtInfos, error)
+	GetNodePtsMap(database string) (map[uint64][]uint32, error)
+	Databases() map[string]*meta2.DatabaseInfo
+	Database(name string) (*meta2.DatabaseInfo, error)
+	RetentionPolicy(database, name string) (*meta2.RetentionPolicyInfo, error)
+	Measurement(database string, rpName string, mstName string) (*meta2.MeasurementInfo, error)
+	GetMeasurements(m *influxql.Measurement) ([]*meta2.MeasurementInfo, error)
+	TagKeys(database string) map[string]set.Set[string]
+	FieldKeys(database string, ms influxql.Measurements) (map[string]map[string]int32, error)
+	Schema(database string, retentionPolicy string, mst string) (fields map[string]int32, dimensions map[string]struct{}, err error)
+	ShowShards(database string, rp string, mst string) models.Rows
+	ShowRetentionPolicies(database string) (models.Rows, error)
+}
+
+type DatabaseManager interface {
+	CreateDatabase(name string, enableTagArray bool, replicaN uint32, options *obs.ObsOptions) (*meta2.DatabaseInfo, error)
+	CreateDatabaseWithRetentionPolicy(name string, spec *meta2.RetentionPolicySpec, shardKey *meta2.ShardKeyInfo, enableTagArray bool, replicaN uint32) (*meta2.DatabaseInfo, error)
+	MarkDatabaseDelete(name string) error
+	CreateRetentionPolicy(database string, spec *meta2.RetentionPolicySpec, makeDefault bool) (*meta2.RetentionPolicyInfo, error)
+	MarkRetentionPolicyDelete(database, name string) error
+	UpdateRetentionPolicy(database, name string, rpu *meta2.RetentionPolicyUpdate, makeDefault bool) error
+}
+
+type NodeManager interface {
+	ShowCluster(nodeType string, ID uint64) (models.Rows, error)
+	ShowClusterWithCondition(nodeType string, ID uint64) (models.Rows, error)
+	CreateDataNode(writeHost, queryHost, role, az string) (uint64, uint64, uint64, error)
+	DeleteDataNode(id uint64) error
+	DataNode(id uint64) (*meta2.DataNode, error)
+	DataNodes() ([]meta2.DataNode, error)
+	AliveReadNodes() ([]meta2.DataNode, error)
+	DeleteMetaNode(id uint64) error
+	MetaNodes() ([]meta2.NodeInfo, error)
 }
 
 type LoadCtx struct {
