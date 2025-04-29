@@ -25,38 +25,33 @@ import (
 	"github.com/klauspost/compress/zstd"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/pool"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/pierrec/lz4/v4"
 )
 
-// #region Gzip Writer Pool
-var gzipWriterPool *pool.UnionPool[gzip.Writer] = pool.NewUnionPool[gzip.Writer](
+var gzipWriterPool = pool.NewUnionPool[gzip.Writer](
 	cpu.GetCpuNum()*2, pool.DefaultMaxEleMemSize, pool.DefaultMaxLocalEleMemSize,
 	func() *gzip.Writer {
 		return gzip.NewWriter(nil)
 	})
 
-func GetGzipWriter(w io.Writer) *gzip.Writer {
+func GetGzipWriter(w io.Writer) (io.Writer, func()) {
 	gz := gzipWriterPool.Get()
 	gz.Reset(w)
-	return gz
+	return gz, func() {
+		util.MustClose(gz)
+		gzipWriterPool.PutWithMemSize(gz, 0)
+	}
 }
 
-func PutGzipWriter(gz *gzip.Writer) {
-	gz.Close()
-	gzipWriterPool.Put(gz)
-}
-
-// #endregion
-
-// #region Gzip Reader Pool
 var gzipReaderPool sync.Pool
 
 func GetGzipReader(r io.Reader) (*gzip.Reader, error) {
-	v := gzipReaderPool.Get()
-	if v == nil {
+	zr, ok := gzipReaderPool.Get().(*gzip.Reader)
+	if zr == nil || !ok {
 		return gzip.NewReader(r)
 	}
-	zr := v.(*gzip.Reader)
+
 	if err := zr.Reset(r); err != nil {
 		return nil, err
 	}
@@ -65,112 +60,69 @@ func GetGzipReader(r io.Reader) (*gzip.Reader, error) {
 
 // PutGzipReader returns back gzip reader obtained via GetGzipReader.
 func PutGzipReader(zr *gzip.Reader) {
-	_ = zr.Close()
+	util.MustClose(zr)
 	gzipReaderPool.Put(zr)
 }
 
-// #endregion
-
-// #region Zstd Writer Pool
-var zstdWriterPool *pool.UnionPool[zstd.Encoder] = pool.NewUnionPool[zstd.Encoder](
+var zstdWriterPool = pool.NewUnionPool[zstd.Encoder](
 	cpu.GetCpuNum()*2, pool.DefaultMaxEleMemSize, pool.DefaultMaxLocalEleMemSize,
 	func() *zstd.Encoder {
 		encoder, _ := zstd.NewWriter(nil)
 		return encoder
 	})
 
-func GetZstdWriter(w io.Writer) *zstd.Encoder {
-	zstdEncoder := zstdWriterPool.Get()
-	zstdEncoder.Reset(w)
-	return zstdEncoder
-}
-
-func PutZstdWriter(zstdEncoder *zstd.Encoder) {
-	zstdEncoder.Close()
-	zstdWriterPool.Put(zstdEncoder)
-}
-
-// #endregion
-
-// #region Zstd Reader Pool
-var zstdReaderPool *pool.UnionPool[zstd.Decoder] = pool.NewUnionPool[zstd.Decoder](
-	cpu.GetCpuNum()*2, pool.DefaultMaxEleMemSize, pool.DefaultMaxLocalEleMemSize,
-	func() *zstd.Decoder {
-		decoder, _ := zstd.NewReader(nil)
-		return decoder
-	})
-
-func GetZstdReader(r io.Reader) *zstd.Decoder {
-	zstdDecoder := zstdReaderPool.Get()
-	err := zstdDecoder.Reset(r)
-	if err != nil {
-		return nil
+func GetZstdWriter(w io.Writer) (io.Writer, func()) {
+	writer := zstdWriterPool.Get()
+	writer.Reset(w)
+	return writer, func() {
+		util.MustClose(writer)
+		writer.Reset(nil)
+		zstdWriterPool.PutWithMemSize(writer, 0)
 	}
-	return zstdDecoder
 }
 
-func PutZstdReader(zstdDecoder *zstd.Decoder) {
-	zstdDecoder.Close()
-	zstdReaderPool.Put(zstdDecoder)
+var snappyBlockWriterPool = pool.NewUnionPool[SnappyBlockWriter](
+	cpu.GetCpuNum()*2, pool.DefaultMaxEleMemSize, pool.DefaultMaxLocalEleMemSize,
+	func() *SnappyBlockWriter { return NewSnappyBlockWriter(nil) })
+
+func GetSnappyBlockWriter(w io.Writer) (io.Writer, func()) {
+	writer := snappyBlockWriterPool.Get()
+	writer.Reset(w)
+	return writer, func() {
+		util.MustClose(writer)
+		writer.Reset(nil)
+		snappyBlockWriterPool.PutWithMemSize(writer, 0)
+	}
 }
 
-// #endregion
-
-// #region sanppy Writer Pool
-var snappyWriterPool *pool.UnionPool[snappy.Writer] = pool.NewUnionPool[snappy.Writer](
+var snappyWriterPool = pool.NewUnionPool[snappy.Writer](
 	cpu.GetCpuNum()*2, pool.DefaultMaxEleMemSize, pool.DefaultMaxLocalEleMemSize,
 	func() *snappy.Writer {
 		return snappy.NewBufferedWriter(nil)
 	})
 
-func GetSnappyWriter(w io.Writer) *snappy.Writer {
-	snappyWriter := snappyWriterPool.Get()
-	snappyWriter.Reset(w)
-	return snappyWriter
+func GetSnappyWriter(w io.Writer) (io.Writer, func()) {
+	writer := snappyWriterPool.Get()
+	writer.Reset(w)
+	return writer, func() {
+		util.MustClose(writer)
+		writer.Reset(nil)
+		snappyWriterPool.PutWithMemSize(writer, 0)
+	}
 }
 
-func PutSnappyWriter(snappyWriter *snappy.Writer) {
-	snappyWriter.Close()
-	snappyWriterPool.Put(snappyWriter)
-}
-
-// #endregion
-
-// #region Snappy Reader Pool
-var snappyReaderPool *pool.UnionPool[snappy.Reader] = pool.NewUnionPool[snappy.Reader](
-	cpu.GetCpuNum()*2, pool.DefaultMaxEleMemSize, pool.DefaultMaxLocalEleMemSize,
-	func() *snappy.Reader {
-		return snappy.NewReader(nil)
-	})
-
-func GetSnappyReader(r io.Reader) *snappy.Reader {
-	snappyReader := snappyReaderPool.Get()
-	snappyReader.Reset(r)
-	return snappyReader
-}
-
-func PutSnappyReader(snappyReader *snappy.Reader) {
-	snappyReaderPool.Put(snappyReader)
-}
-
-// #endregion
-
-// #region lz4 Writer Pool
-var lz4WriterPool *pool.UnionPool[lz4.Writer] = pool.NewUnionPool[lz4.Writer](
+var lz4WriterPool = pool.NewUnionPool[lz4.Writer](
 	cpu.GetCpuNum()*2, pool.DefaultMaxEleMemSize, pool.DefaultMaxLocalEleMemSize,
 	func() *lz4.Writer {
 		return lz4.NewWriter(nil)
 	})
 
-func GetLz4Writer(w io.Writer) *lz4.Writer {
-	lz4Writer := lz4WriterPool.Get()
-	lz4Writer.Reset(w)
-	return lz4Writer
+func GetLz4Writer(w io.Writer) (io.Writer, func()) {
+	writer := lz4WriterPool.Get()
+	writer.Reset(w)
+	return writer, func() {
+		util.MustClose(writer)
+		writer.Reset(nil)
+		lz4WriterPool.PutWithMemSize(writer, 0)
+	}
 }
-
-func PutLz4Writer(lz4Writer *lz4.Writer) {
-	lz4Writer.Close()
-	lz4WriterPool.Put(lz4Writer)
-}
-
-// #endregion

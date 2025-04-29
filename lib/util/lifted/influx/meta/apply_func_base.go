@@ -357,6 +357,15 @@ func ApplyUpdateShardInfoTier(data *Data, cmd *proto2.Command) error {
 	return data.UpdateShardInfoTier(v.GetShardID(), v.GetTier(), v.GetDbName(), v.GetRpName())
 }
 
+func ApplyUpdateIndexInfoTier(data *Data, cmd *proto2.Command) error {
+	ext, _ := proto.GetExtension(cmd, proto2.E_UpdateIndexInfoTierCommand_Command)
+	v, ok := ext.(*proto2.UpdateIndexInfoTierCommand)
+	if !ok {
+		DataLogger.Error("applyUpdateIndexInfoTier err")
+	}
+	return data.UpdateIndexInfoTier(v.GetIndexID(), v.GetTier(), v.GetDbName(), v.GetRpName())
+}
+
 func ApplyUpdateNodeStatus(data *Data, cmd *proto2.Command) error {
 	ext, _ := proto.GetExtension(cmd, proto2.E_UpdateNodeStatusCommand_Command)
 	v, ok := ext.(*proto2.UpdateNodeStatusCommand)

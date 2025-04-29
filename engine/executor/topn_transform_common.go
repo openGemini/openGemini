@@ -91,8 +91,6 @@ func (k *TKey) ChangeBit(i int) {
 	k.Data[i>>3] ^= (1 << (i & 7))
 }
 
-// var DefaultSigma float64 = 1e-3
-// var DefaultDelta float64 = 1e-3
 var DefaultPhi float64 = 3e-5
 var DefaultEps float64 = DefaultPhi / 10
 

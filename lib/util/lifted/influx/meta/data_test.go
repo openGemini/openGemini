@@ -22,12 +22,12 @@ import (
 	"reflect"
 	"runtime"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/influxdata/influxdb/logger"
 	"github.com/influxdata/influxdb/models"
-	_ "github.com/mattn/go-sqlite3"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	logger1 "github.com/openGemini/openGemini/lib/logger"
@@ -38,6 +38,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	assert2 "github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	_ "modernc.org/sqlite"
 )
 
 func TestShardGroupSort(t *testing.T) {
@@ -1849,7 +1850,7 @@ func Test_SQLITE_SIMPLE(t *testing.T) {
 	os.Remove("./simple.db")
 	defer os.Remove("./simple.db")
 
-	db, err := sql.Open("sqlite3", "./simple.db")
+	db, err := sql.Open("sqlite", "./simple.db")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1946,7 +1947,7 @@ func Test_SQLite_TESTSQL(t *testing.T) {
 	os.Remove("./testsql.db")
 	defer os.Remove("./testsql.db")
 
-	db, err := sql.Open("sqlite3", "./testsql.db")
+	db, err := sql.Open("sqlite", "./testsql.db")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2004,11 +2005,11 @@ func Test_SQLite_TESTSQL(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = insertRP.Exec(3, fmt.Sprintf("rp%02d", 3))
-	if err.Error() != "UNIQUE constraint failed: rps.db_id, rps.name" {
+	if !strings.Contains(err.Error(), "UNIQUE constraint failed: rps.db_id, rps.name") {
 		t.Fatal(err)
 	}
 	_, err = insertRP.Exec(30, fmt.Sprintf("rp%02d", 3))
-	if err.Error() != "FOREIGN KEY constraint failed" {
+	if !strings.Contains(err.Error(), "FOREIGN KEY constraint failed") {
 		t.Fatal(err)
 	}
 
@@ -2038,11 +2039,11 @@ func Test_SQLite_TESTSQL(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = insertMST.Exec(6, fmt.Sprintf("mst%02d", 0))
-	if err.Error() != "UNIQUE constraint failed: msts.rp_id, msts.name" {
+	if !strings.Contains(err.Error(), "UNIQUE constraint failed: msts.rp_id, msts.name") {
 		t.Fatal(err)
 	}
 	_, err = insertMST.Exec(60, fmt.Sprintf("mst%02d", 0))
-	if err.Error() != "FOREIGN KEY constraint failed" {
+	if !strings.Contains(err.Error(), "FOREIGN KEY constraint failed") {
 		t.Fatal(err)
 	}
 
@@ -2517,7 +2518,7 @@ func TestData_Files(t *testing.T) {
 			os.Remove("./files.db")
 			defer os.Remove("./files.db")
 
-			db, err := sql.Open("sqlite3", "./files.db?cache=shared")
+			db, err := sql.Open("sqlite", "./files.db?cache=shared")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2564,7 +2565,7 @@ func TestData_Files(t *testing.T) {
 func Test_SQLite_Transaction(t *testing.T) {
 	os.Remove("./transaction.db")
 	defer os.Remove("./transaction.db")
-	db, err := sql.Open("sqlite3", "file:transaction.db//?cache=shared")
+	db, err := sql.Open("sqlite", "file:transaction.db?cache=shared")
 
 	if err != nil {
 		t.Fatal(err)
@@ -2594,6 +2595,12 @@ func Test_SQLite_Transaction(t *testing.T) {
 		log.Fatal(err)
 	}
 
+	// commit the first transaction
+	err = tx1.Commit()
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	// second transaction
 	tx2, err := db.Begin()
 	if err != nil {
@@ -2609,29 +2616,6 @@ func Test_SQLite_Transaction(t *testing.T) {
 	defer rows.Close()
 
 	fmt.Println("Users in second transaction:")
-	for rows.Next() {
-		var name string
-		err := rows.Scan(&name)
-		if err != nil {
-			log.Fatal(err)
-		}
-		fmt.Println(name)
-	}
-
-	// commit the first transaction
-	err = tx1.Commit()
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// query for second transaction
-	rows, err = tx2.Query("SELECT name FROM users")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer rows.Close()
-
-	fmt.Println("Users after first transaction commit:")
 	for rows.Next() {
 		var name string
 		err := rows.Scan(&name)

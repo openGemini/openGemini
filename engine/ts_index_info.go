@@ -17,16 +17,15 @@ package engine
 import (
 	"github.com/openGemini/openGemini/engine/comm"
 	"github.com/openGemini/openGemini/engine/immutable"
-	"github.com/openGemini/openGemini/engine/mutable"
 )
 
 type TSIndexInfoImpl struct {
 	immTables []*immutable.MmsReaders
-	memTables []*mutable.MemTables
+	memTables []MemDataReader
 	cursors   []comm.KeyCursor
 }
 
-func NewTsIndexInfo(immTables []*immutable.MmsReaders, memTables []*mutable.MemTables, cursors []comm.KeyCursor) comm.TSIndexInfo {
+func NewTsIndexInfo(immTables []*immutable.MmsReaders, memTables []MemDataReader, cursors []comm.KeyCursor) comm.TSIndexInfo {
 	return &TSIndexInfoImpl{
 		immTables: immTables,
 		memTables: memTables,

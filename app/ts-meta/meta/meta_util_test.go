@@ -26,12 +26,12 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/influxdata/influxdb/tcp"
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
-	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	logger2 "github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/spdy/transport"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
 	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
@@ -568,6 +568,7 @@ type MockNetStorage struct {
 	DeleteRetentionPolicyFn func(node *meta2.DataNode, db string, rp string, ptId uint32) error
 	DeleteMeasurementFn     func(node *meta2.DataNode, db string, rp, name string, shardIds []uint64) error
 	MigratePtFn             func(nodeID uint64, data transport.Codec, cb transport.Callback) error
+	PingFn                  func(nodeId uint64, address string, timeout time.Duration) error
 }
 
 func (s *MockNetStorage) GetShardSplitPoints(node *meta2.DataNode, database string, pt uint32,
@@ -589,6 +590,10 @@ func (s *MockNetStorage) DeleteMeasurement(node *meta2.DataNode, db, rp, name st
 
 func (s *MockNetStorage) MigratePt(nodeID uint64, data transport.Codec, cb transport.Callback) error {
 	return s.MigratePtFn(nodeID, data, cb)
+}
+
+func (s *MockNetStorage) Ping(nodeId uint64, address string, timeout time.Duration) error {
+	return s.PingFn(nodeId, address, timeout)
 }
 
 func (s *MockNetStorage) SendSegregateNodeCmds(nodeIDs []uint64, address []string) (int, error) {
@@ -618,6 +623,9 @@ func NewMockNetStorage() *MockNetStorage {
 	}
 	netStore.MigratePtFn = func(nodeID uint64, data transport.Codec, cb transport.Callback) error {
 		cb.Handle(&netstorage.PtResponse{})
+		return nil
+	}
+	netStore.PingFn = func(nodeId uint64, address string, timeout time.Duration) error {
 		return nil
 	}
 	return netStore

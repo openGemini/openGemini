@@ -18,6 +18,7 @@ import (
 	"encoding/binary"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
+	"github.com/openGemini/openGemini/lib/sysinfo"
 	"github.com/openGemini/openGemini/lib/util"
 )
 
@@ -192,16 +193,21 @@ func (c *BinaryDecoder) Uint32Slice() []uint32 {
 	return a
 }
 
-func (c *BinaryDecoder) Uint32SliceSafe() []uint32 {
-	l := c.Uint32()
-	if l == 0 {
-		return nil
+func (c *BinaryDecoder) Uint32SliceLE(dst []uint32) []uint32 {
+	size := c.Uint32()
+	if size == 0 {
+		return dst
 	}
-	a := make([]uint32, l)
-	for i := range a {
-		a[i] = c.Uint32LE()
+
+	if sysinfo.IsLittleEndian() {
+		dst = append(dst, util.Bytes2Uint32Slice(c.BytesNoCopyN(int(size)*util.Uint32SizeBytes))...)
+		return dst
 	}
-	return a
+
+	for range size {
+		dst = append(dst, c.Uint32LE())
+	}
+	return dst
 }
 
 func (c *BinaryDecoder) Uint64Slice() []uint64 {

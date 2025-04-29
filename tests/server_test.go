@@ -38,7 +38,7 @@ type TestType struct {
 
 var testType TestType
 
-func killopenGemini(t *testing.T) error {
+func killInfluxDB3(t *testing.T) error {
 	command := `ps -ef |grep -w config/openGemini-3.conf | grep ts-store | grep -v grep | cut -c 9-15 | xargs kill -9`
 	cmd := exec.Command("/bin/bash", "-c", command)
 
@@ -53,8 +53,8 @@ func killopenGemini(t *testing.T) error {
 	}
 }
 
-func startopenGemini(t *testing.T) {
-	_ = os.MkdirAll("/tmp/openGemini/logs/3", 0750)
+func startInfluxDB3(t *testing.T) {
+	_ = os.MkdirAll("/tmp/openGemini/logs/3", 600)
 	confFile := "config/openGemini-3.conf "
 	logFile := "/tmp/openGemini/logs/3/store_extra3.log"
 
@@ -73,17 +73,17 @@ func startopenGemini(t *testing.T) {
 
 func InitTestEnv(t *testing.T, bodyType string, body io.Reader) error {
 	if testType.HA {
-		if err := killopenGemini(t); err != nil {
+		if err := killInfluxDB3(t); err != nil {
 			fmt.Printf("kill influxdb3 error:%s", err.Error())
 			return err
 		}
 		time.Sleep(40 * time.Second)
 		return nil
 	} else if testType.ReStart {
-		if err := killopenGemini(t); err != nil {
+		if err := killInfluxDB3(t); err != nil {
 			return err
 		}
-		startopenGemini(t)
+		startInfluxDB3(t)
 	} else if testType.MovePT {
 		b := "http://127.0.0.1:8091" + bodyType
 		fmt.Printf(" movePT %s \n", b)
@@ -97,11 +97,11 @@ func InitTestEnv(t *testing.T, bodyType string, body io.Reader) error {
 			time.Sleep(20 * time.Second)
 		}
 	} else if testType.ReStore {
-		if err := killopenGemini(t); err != nil {
+		if err := killInfluxDB3(t); err != nil {
 			return err
 		}
 		time.Sleep(45 * time.Second)
-		startopenGemini(t)
+		startInfluxDB3(t)
 	}
 
 	return nil
@@ -109,7 +109,7 @@ func InitTestEnv(t *testing.T, bodyType string, body io.Reader) error {
 
 func InitHaTestEnv(t *testing.T) {
 	if testType.HA {
-		if err := killopenGemini(t); err != nil {
+		if err := killInfluxDB3(t); err != nil {
 			fmt.Printf("kill ts-store 3 error: %s\n", err.Error())
 			t.Fatal(err.Error())
 		}
@@ -118,7 +118,7 @@ func InitHaTestEnv(t *testing.T) {
 
 func ReleasTestEnv(t *testing.T, bodyType string, body io.Reader) error {
 	if testType.HA {
-		startopenGemini(t)
+		startInfluxDB3(t)
 	} else if testType.ReStart {
 		return nil
 	} else if testType.MovePT {
@@ -143,7 +143,7 @@ func ReleasTestEnv(t *testing.T, bodyType string, body io.Reader) error {
 
 func ReleaseHaTestEnv(t *testing.T) {
 	if testType.HA {
-		startopenGemini(t)
+		startInfluxDB3(t)
 	}
 }
 
@@ -2465,6 +2465,10 @@ func TestServer_Query_Aggregates_IntMany_GroupBy(t *testing.T) {
 			fmt.Sprintf(`intmany,host=server06 value=5.0 %d`, mustParseTime(time.RFC3339Nano, "2000-01-01T00:00:50Z").UnixNano()),
 			fmt.Sprintf(`intmany,host=server07 value=7.0 %d`, mustParseTime(time.RFC3339Nano, "2000-01-01T00:01:00Z").UnixNano()),
 			fmt.Sprintf(`intmany,host=server08 value=9.0 %d`, mustParseTime(time.RFC3339Nano, "2000-01-01T00:01:10Z").UnixNano()),
+			fmt.Sprintf(`intmany,host=server11 value1=1.0,value3=3.0 1577836871000000000`),
+			fmt.Sprintf(`intmany,host=server11 value2=12.0,value3=4.0 1577836872000000000`),
+			fmt.Sprintf(`intmany,host=server11 value1=9.0 1577836873000000000`),
+			fmt.Sprintf(`intmany,host=server11 value2=32.0 1577836874000000000`),
 		}, "\n")},
 	}
 
@@ -2522,6 +2526,18 @@ func TestServer_Query_Aggregates_IntMany_GroupBy(t *testing.T) {
 			params:  url.Values{"db": []string{"db0"}},
 			command: `SELECT time, last(value) FROM intmany where time >= '2000-01-01T00:00:00Z' AND time <= '2000-01-01T00:01:14Z' group by time(15s)`,
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"intmany","columns":["time","last"],"values":[["2000-01-01T00:00:00Z",4],["2000-01-01T00:00:15Z",4],["2000-01-01T00:00:30Z",5],["2000-01-01T00:00:45Z",5],["2000-01-01T00:01:00Z",9]]}]}]}`,
+		},
+		{
+			name:    "last time and value with null",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `SELECT last(time),last(value1) FROM intmany where time >= '2020-01-01T00:01:11Z' AND time <= '2020-01-01T00:01:14Z'`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"intmany","columns":["time","last","last_1"],"values":[["2020-01-01T00:01:11Z",1577836874000000000,9]]}]}]}`,
+		},
+		{
+			name:    "last time and two columns",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `SELECT last(time),last(value2),last(value3) FROM intmany where time >= '2020-01-01T00:01:11Z' AND time <= '2020-01-01T00:01:13Z'`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"intmany","columns":["time","last","last_1","last_2"],"values":[["2020-01-01T00:01:11Z",1577836873000000000,12,4]]}]}]}`,
 		},
 	}...)
 
@@ -3293,6 +3309,31 @@ func TestServer_Query_Aggregate_For_String_Functions(t *testing.T) {
 			name:    "SELECT substr(address, 1, 4) GROUP BY",
 			command: `SELECT substr(address, 1, 4) FROM db0.rp0.mst GROUP BY country`,
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","tags":{"country":""},"columns":["time","substr"],"values":[["2021-08-16T16:00:10Z","anji"]]},{"name":"mst","tags":{"country":"american"},"columns":["time","substr"],"values":[["2021-08-16T16:00:01Z","hang"]]},{"name":"mst","tags":{"country":"canada"},"columns":["time","substr"],"values":[["2021-08-16T16:00:04Z","heng"],["2021-08-16T16:00:09Z","angz"]]},{"name":"mst","tags":{"country":"china"},"columns":["time","substr"],"values":[["2021-08-16T16:00:00Z","henz"],["2021-08-16T16:00:05Z","uhan"],["2021-08-16T16:00:11Z","heng"]]},{"name":"mst","tags":{"country":"germany"},"columns":["time","substr"],"values":[["2021-08-16T16:00:02Z","eiji"],["2021-08-16T16:00:07Z","nhui"]]},{"name":"mst","tags":{"country":"japan"},"columns":["time","substr"],"values":[["2021-08-16T16:00:03Z","uang"],["2021-08-16T16:00:08Z","ian"]]}]}]}`,
+		},
+		{
+			name:    "SELECT position(address, 'an')",
+			command: `SELECT position(address, 'an') FROM db0.rp0.mst`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","position"],"values":[["2021-08-16T16:00:00Z",0],["2021-08-16T16:00:01Z",3],["2021-08-16T16:00:02Z",0],["2021-08-16T16:00:03Z",3],["2021-08-16T16:00:04Z",0],["2021-08-16T16:00:05Z",4],["2021-08-16T16:00:07Z",1],["2021-08-16T16:00:08Z",3],["2021-08-16T16:00:09Z",2],["2021-08-16T16:00:10Z",2],["2021-08-16T16:00:11Z",0]]}]}]}`,
+		},
+		{
+			name:    "SELECT position(address, 'an')",
+			command: `SELECT position(address, 'an') FROM db0.rp0.mst GROUP BY country`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","tags":{"country":""},"columns":["time","position"],"values":[["2021-08-16T16:00:10Z",2]]},{"name":"mst","tags":{"country":"american"},"columns":["time","position"],"values":[["2021-08-16T16:00:01Z",3]]},{"name":"mst","tags":{"country":"canada"},"columns":["time","position"],"values":[["2021-08-16T16:00:04Z",0],["2021-08-16T16:00:09Z",2]]},{"name":"mst","tags":{"country":"china"},"columns":["time","position"],"values":[["2021-08-16T16:00:00Z",0],["2021-08-16T16:00:05Z",4],["2021-08-16T16:00:11Z",0]]},{"name":"mst","tags":{"country":"germany"},"columns":["time","position"],"values":[["2021-08-16T16:00:02Z",0],["2021-08-16T16:00:07Z",1]]},{"name":"mst","tags":{"country":"japan"},"columns":["time","position"],"values":[["2021-08-16T16:00:03Z",3],["2021-08-16T16:00:08Z",3]]}]}]}`,
+		},
+		{
+			name:    "SELECT position(address, 'an')",
+			command: `SELECT position(address, 'an', 1) FROM db0.rp0.mst`,
+			exp:     `{"results":[{"statement_id":0,"error":"invalid number of arguments for position, expected 2, got 3"}]}`,
+		},
+		{
+			name:    "SELECT position(address, 'an')",
+			command: `SELECT position(address, 111) FROM db0.rp0.mst`,
+			exp:     `{"results":[{"statement_id":0,"error":"invalid argument type for the 2nd argument in position(): 111"}]}`,
+		},
+		{
+			name:    "SELECT position(address, 'an')",
+			command: `SELECT position(age, 'add') FROM db0.rp0.mst`,
+			exp:     `{"results":[{"statement_id":0,"error":"invalid argument type for the first argument in position(): float"}]}`,
 		},
 	}...)
 
@@ -5034,6 +5075,56 @@ func TestServer_Query_Complex_Aggregate(t *testing.T) {
 		},
 
 		{
+			name:    "first(time)",
+			params:  url.Values{"inner_chunk_size": []string{"10"}},
+			command: `select first(time) from db0.rp0.cpu where time >= '1970-01-01T00:00:00Z' AND time <= '1970-01-01T05:41:19Z'`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","first"],"values":[["1970-01-01T00:00:00Z",0]]}]}]}`,
+		},
+		{
+			name:    "first(time),* group by time",
+			params:  url.Values{"inner_chunk_size": []string{"10"}},
+			command: `select first(time),* from db0.rp0.cpu where time >= '1970-01-01T00:00:00Z' AND time <= '1970-01-01T05:41:19Z' group by time(1h)`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","first","az","region","v1","v2","v3","v4"],"values":[["1970-01-01T00:00:00Z",0,"az_0","region_0",0,0,true,"abc0"],["1970-01-01T01:00:00Z",3600000000000,"az_1","region_1",3600,3600,true,"abc3600"],["1970-01-01T02:00:00Z",7200000000000,"az_3","region_3",7200,7200,true,"abc7200"],["1970-01-01T03:00:00Z",10800000000000,"az_5","region_5",10800,10800,true,"abc10800"],["1970-01-01T04:00:00Z",14400000000000,"az_7","region_7",14400,14400,true,"abc14400"],["1970-01-01T05:00:00Z",18000000000000,"az_8","region_8",18000,18000,true,"abc18000"]]}]}]}`,
+		},
+		{
+			name:    "first(time),* group by *",
+			params:  url.Values{"inner_chunk_size": []string{"10"}},
+			command: `select first(time),* from db0.rp0.cpu where time >= '1970-01-01T00:00:00Z' AND time <= '1970-01-01T05:41:19Z' group by *`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","tags":{"az":"az_0","region":"region_0"},"columns":["time","first","v1","v2","v3","v4"],"values":[["1970-01-01T00:00:00Z",0,0,0,true,"abc0"]]},{"name":"cpu","tags":{"az":"az_1","region":"region_1"},"columns":["time","first","v1","v2","v3","v4"],"values":[["1970-01-01T00:34:08Z",2048000000000,2048,2048,true,"abc2048"]]},{"name":"cpu","tags":{"az":"az_2","region":"region_2"},"columns":["time","first","v1","v2","v3","v4"],"values":[["1970-01-01T01:08:16Z",4096000000000,4096,4096,true,"abc4096"]]},{"name":"cpu","tags":{"az":"az_3","region":"region_3"},"columns":["time","first","v1","v2","v3","v4"],"values":[["1970-01-01T01:42:24Z",6144000000000,6144,6144,true,"abc6144"]]},{"name":"cpu","tags":{"az":"az_4","region":"region_4"},"columns":["time","first","v1","v2","v3","v4"],"values":[["1970-01-01T02:16:32Z",8192000000000,8192,8192,true,"abc8192"]]},{"name":"cpu","tags":{"az":"az_5","region":"region_5"},"columns":["time","first","v1","v2","v3","v4"],"values":[["1970-01-01T02:50:40Z",10240000000000,10240,10240,true,"abc10240"]]},{"name":"cpu","tags":{"az":"az_6","region":"region_6"},"columns":["time","first","v1","v2","v3","v4"],"values":[["1970-01-01T03:24:48Z",12288000000000,12288,12288,true,"abc12288"]]},{"name":"cpu","tags":{"az":"az_7","region":"region_7"},"columns":["time","first","v1","v2","v3","v4"],"values":[["1970-01-01T03:58:56Z",14336000000000,14336,14336,true,"abc14336"]]},{"name":"cpu","tags":{"az":"az_8","region":"region_8"},"columns":["time","first","v1","v2","v3","v4"],"values":[["1970-01-01T04:33:04Z",16384000000000,16384,16384,true,"abc16384"]]},{"name":"cpu","tags":{"az":"az_9","region":"region_9"},"columns":["time","first","v1","v2","v3","v4"],"values":[["1970-01-01T05:07:12Z",18432000000000,18432,18432,true,"abc18432"]]}]}]}`,
+		},
+		{
+			name:    "first(time),* group by time, *",
+			params:  url.Values{"inner_chunk_size": []string{"10"}},
+			command: `select first(time),* from db0.rp0.cpu where time >= '1970-01-01T00:00:00Z' AND time <= '1970-01-01T05:41:19Z' group by time(1h),*`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","tags":{"az":"az_0","region":"region_0"},"columns":["time","first","v1","v2","v3","v4"],"values":[["1970-01-01T00:00:00Z",0,0,0,true,"abc0"],["1970-01-01T01:00:00Z",null,null,null,null,null],["1970-01-01T02:00:00Z",null,null,null,null,null],["1970-01-01T03:00:00Z",null,null,null,null,null],["1970-01-01T04:00:00Z",null,null,null,null,null],["1970-01-01T05:00:00Z",null,null,null,null,null]]},{"name":"cpu","tags":{"az":"az_1","region":"region_1"},"columns":["time","first","v1","v2","v3","v4"],"values":[["1970-01-01T00:00:00Z",2048000000000,2048,2048,true,"abc2048"],["1970-01-01T01:00:00Z",3600000000000,3600,3600,true,"abc3600"],["1970-01-01T02:00:00Z",null,null,null,null,null],["1970-01-01T03:00:00Z",null,null,null,null,null],["1970-01-01T04:00:00Z",null,null,null,null,null],["1970-01-01T05:00:00Z",null,null,null,null,null]]},{"name":"cpu","tags":{"az":"az_2","region":"region_2"},"columns":["time","first","v1","v2","v3","v4"],"values":[["1970-01-01T00:00:00Z",null,null,null,null,null],["1970-01-01T01:00:00Z",4096000000000,4096,4096,true,"abc4096"],["1970-01-01T02:00:00Z",null,null,null,null,null],["1970-01-01T03:00:00Z",null,null,null,null,null],["1970-01-01T04:00:00Z",null,null,null,null,null],["1970-01-01T05:00:00Z",null,null,null,null,null]]},{"name":"cpu","tags":{"az":"az_3","region":"region_3"},"columns":["time","first","v1","v2","v3","v4"],"values":[["1970-01-01T00:00:00Z",null,null,null,null,null],["1970-01-01T01:00:00Z",6144000000000,6144,6144,true,"abc6144"],["1970-01-01T02:00:00Z",7200000000000,7200,7200,true,"abc7200"],["1970-01-01T03:00:00Z",null,null,null,null,null],["1970-01-01T04:00:00Z",null,null,null,null,null],["1970-01-01T05:00:00Z",null,null,null,null,null]]},{"name":"cpu","tags":{"az":"az_4","region":"region_4"},"columns":["time","first","v1","v2","v3","v4"],"values":[["1970-01-01T00:00:00Z",null,null,null,null,null],["1970-01-01T01:00:00Z",null,null,null,null,null],["1970-01-01T02:00:00Z",8192000000000,8192,8192,true,"abc8192"],["1970-01-01T03:00:00Z",null,null,null,null,null],["1970-01-01T04:00:00Z",null,null,null,null,null],["1970-01-01T05:00:00Z",null,null,null,null,null]]},{"name":"cpu","tags":{"az":"az_5","region":"region_5"},"columns":["time","first","v1","v2","v3","v4"],"values":[["1970-01-01T00:00:00Z",null,null,null,null,null],["1970-01-01T01:00:00Z",null,null,null,null,null],["1970-01-01T02:00:00Z",10240000000000,10240,10240,true,"abc10240"],["1970-01-01T03:00:00Z",10800000000000,10800,10800,true,"abc10800"],["1970-01-01T04:00:00Z",null,null,null,null,null],["1970-01-01T05:00:00Z",null,null,null,null,null]]},{"name":"cpu","tags":{"az":"az_6","region":"region_6"},"columns":["time","first","v1","v2","v3","v4"],"values":[["1970-01-01T00:00:00Z",null,null,null,null,null],["1970-01-01T01:00:00Z",null,null,null,null,null],["1970-01-01T02:00:00Z",null,null,null,null,null],["1970-01-01T03:00:00Z",12288000000000,12288,12288,true,"abc12288"],["1970-01-01T04:00:00Z",null,null,null,null,null],["1970-01-01T05:00:00Z",null,null,null,null,null]]},{"name":"cpu","tags":{"az":"az_7","region":"region_7"},"columns":["time","first","v1","v2","v3","v4"],"values":[["1970-01-01T00:00:00Z",null,null,null,null,null],["1970-01-01T01:00:00Z",null,null,null,null,null],["1970-01-01T02:00:00Z",null,null,null,null,null],["1970-01-01T03:00:00Z",14336000000000,14336,14336,true,"abc14336"],["1970-01-01T04:00:00Z",14400000000000,14400,14400,true,"abc14400"],["1970-01-01T05:00:00Z",null,null,null,null,null]]},{"name":"cpu","tags":{"az":"az_8","region":"region_8"},"columns":["time","first","v1","v2","v3","v4"],"values":[["1970-01-01T00:00:00Z",null,null,null,null,null],["1970-01-01T01:00:00Z",null,null,null,null,null],["1970-01-01T02:00:00Z",null,null,null,null,null],["1970-01-01T03:00:00Z",null,null,null,null,null],["1970-01-01T04:00:00Z",16384000000000,16384,16384,true,"abc16384"],["1970-01-01T05:00:00Z",18000000000000,18000,18000,true,"abc18000"]]},{"name":"cpu","tags":{"az":"az_9","region":"region_9"},"columns":["time","first","v1","v2","v3","v4"],"values":[["1970-01-01T00:00:00Z",null,null,null,null,null],["1970-01-01T01:00:00Z",null,null,null,null,null],["1970-01-01T02:00:00Z",null,null,null,null,null],["1970-01-01T03:00:00Z",null,null,null,null,null],["1970-01-01T04:00:00Z",null,null,null,null,null],["1970-01-01T05:00:00Z",18432000000000,18432,18432,true,"abc18432"]]}]}]}`,
+		},
+
+		{
+			name:    "last(time)",
+			params:  url.Values{"inner_chunk_size": []string{"10"}},
+			command: `select last(time) from db0.rp0.cpu where time >= '1970-01-01T00:00:00Z' AND time <= '1970-01-01T05:41:19Z'`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","last"],"values":[["1970-01-01T05:41:19Z",20479000000000]]}]}]}`,
+		},
+		{
+			name:    "last(time),* group by time",
+			params:  url.Values{"inner_chunk_size": []string{"10"}},
+			command: `select last(time),* from db0.rp0.cpu where time >= '1970-01-01T00:00:00Z' AND time <= '1970-01-01T05:41:19Z' group by time(1h)`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","last","az","region","v1","v2","v3","v4"],"values":[["1970-01-01T00:00:00Z",3599000000000,"az_1","region_1",3599,3599,false,"abc3599"],["1970-01-01T01:00:00Z",7199000000000,"az_3","region_3",7199,7199,false,"abc7199"],["1970-01-01T02:00:00Z",10799000000000,"az_5","region_5",10799,10799,false,"abc10799"],["1970-01-01T03:00:00Z",14399000000000,"az_7","region_7",14399,14399,false,"abc14399"],["1970-01-01T04:00:00Z",17999000000000,"az_8","region_8",17999,17999,false,"abc17999"],["1970-01-01T05:00:00Z",20479000000000,"az_9","region_9",20479,20479,false,"abc20479"]]}]}]}`,
+		},
+		{
+			name:    "last(time),* group by *",
+			params:  url.Values{"inner_chunk_size": []string{"10"}},
+			command: `select last(time),* from db0.rp0.cpu where time >= '1970-01-01T00:00:00Z' AND time <= '1970-01-01T05:41:19Z' group by *`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","tags":{"az":"az_0","region":"region_0"},"columns":["time","last","v1","v2","v3","v4"],"values":[["1970-01-01T00:34:07Z",2047000000000,null,null,null,null]]},{"name":"cpu","tags":{"az":"az_1","region":"region_1"},"columns":["time","last","v1","v2","v3","v4"],"values":[["1970-01-01T01:08:15Z",4095000000000,null,null,null,null]]},{"name":"cpu","tags":{"az":"az_2","region":"region_2"},"columns":["time","last","v1","v2","v3","v4"],"values":[["1970-01-01T01:42:23Z",6143000000000,null,null,null,null]]},{"name":"cpu","tags":{"az":"az_3","region":"region_3"},"columns":["time","last","v1","v2","v3","v4"],"values":[["1970-01-01T02:16:31Z",8191000000000,null,null,null,null]]},{"name":"cpu","tags":{"az":"az_4","region":"region_4"},"columns":["time","last","v1","v2","v3","v4"],"values":[["1970-01-01T02:50:39Z",10239000000000,null,null,null,null]]},{"name":"cpu","tags":{"az":"az_5","region":"region_5"},"columns":["time","last","v1","v2","v3","v4"],"values":[["1970-01-01T03:24:47Z",12287000000000,null,null,null,null]]},{"name":"cpu","tags":{"az":"az_6","region":"region_6"},"columns":["time","last","v1","v2","v3","v4"],"values":[["1970-01-01T03:58:55Z",14335000000000,null,null,null,null]]},{"name":"cpu","tags":{"az":"az_7","region":"region_7"},"columns":["time","last","v1","v2","v3","v4"],"values":[["1970-01-01T04:33:03Z",16383000000000,null,null,null,null]]},{"name":"cpu","tags":{"az":"az_8","region":"region_8"},"columns":["time","last","v1","v2","v3","v4"],"values":[["1970-01-01T05:07:11Z",18431000000000,null,null,null,null]]},{"name":"cpu","tags":{"az":"az_9","region":"region_9"},"columns":["time","last","v1","v2","v3","v4"],"values":[["1970-01-01T05:41:19Z",20479000000000,null,null,null,null]]}]}]}`,
+		},
+		{
+			name:    "last(time),* group by time, *",
+			params:  url.Values{"inner_chunk_size": []string{"10"}},
+			command: `select last(time),* from db0.rp0.cpu where time >= '1970-01-01T00:00:00Z' AND time <= '1970-01-01T05:41:19Z' group by time(1h),*`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","tags":{"az":"az_0","region":"region_0"},"columns":["time","last","v1","v2","v3","v4"],"values":[["1970-01-01T00:00:00Z",2047000000000,2047,2047,false,"abc2047"],["1970-01-01T01:00:00Z",null,null,null,null,null],["1970-01-01T02:00:00Z",null,null,null,null,null],["1970-01-01T03:00:00Z",null,null,null,null,null],["1970-01-01T04:00:00Z",null,null,null,null,null],["1970-01-01T05:00:00Z",null,null,null,null,null]]},{"name":"cpu","tags":{"az":"az_1","region":"region_1"},"columns":["time","last","v1","v2","v3","v4"],"values":[["1970-01-01T00:00:00Z",3599000000000,3599,3599,false,"abc3599"],["1970-01-01T01:00:00Z",4095000000000,4095,4095,false,"abc4095"],["1970-01-01T02:00:00Z",null,null,null,null,null],["1970-01-01T03:00:00Z",null,null,null,null,null],["1970-01-01T04:00:00Z",null,null,null,null,null],["1970-01-01T05:00:00Z",null,null,null,null,null]]},{"name":"cpu","tags":{"az":"az_2","region":"region_2"},"columns":["time","last","v1","v2","v3","v4"],"values":[["1970-01-01T00:00:00Z",null,null,null,null,null],["1970-01-01T01:00:00Z",6143000000000,6143,6143,false,"abc6143"],["1970-01-01T02:00:00Z",null,null,null,null,null],["1970-01-01T03:00:00Z",null,null,null,null,null],["1970-01-01T04:00:00Z",null,null,null,null,null],["1970-01-01T05:00:00Z",null,null,null,null,null]]},{"name":"cpu","tags":{"az":"az_3","region":"region_3"},"columns":["time","last","v1","v2","v3","v4"],"values":[["1970-01-01T00:00:00Z",null,null,null,null,null],["1970-01-01T01:00:00Z",7199000000000,7199,7199,false,"abc7199"],["1970-01-01T02:00:00Z",8191000000000,8191,8191,false,"abc8191"],["1970-01-01T03:00:00Z",null,null,null,null,null],["1970-01-01T04:00:00Z",null,null,null,null,null],["1970-01-01T05:00:00Z",null,null,null,null,null]]},{"name":"cpu","tags":{"az":"az_4","region":"region_4"},"columns":["time","last","v1","v2","v3","v4"],"values":[["1970-01-01T00:00:00Z",null,null,null,null,null],["1970-01-01T01:00:00Z",null,null,null,null,null],["1970-01-01T02:00:00Z",10239000000000,10239,10239,false,"abc10239"],["1970-01-01T03:00:00Z",null,null,null,null,null],["1970-01-01T04:00:00Z",null,null,null,null,null],["1970-01-01T05:00:00Z",null,null,null,null,null]]},{"name":"cpu","tags":{"az":"az_5","region":"region_5"},"columns":["time","last","v1","v2","v3","v4"],"values":[["1970-01-01T00:00:00Z",null,null,null,null,null],["1970-01-01T01:00:00Z",null,null,null,null,null],["1970-01-01T02:00:00Z",10799000000000,10799,10799,false,"abc10799"],["1970-01-01T03:00:00Z",12287000000000,12287,12287,false,"abc12287"],["1970-01-01T04:00:00Z",null,null,null,null,null],["1970-01-01T05:00:00Z",null,null,null,null,null]]},{"name":"cpu","tags":{"az":"az_6","region":"region_6"},"columns":["time","last","v1","v2","v3","v4"],"values":[["1970-01-01T00:00:00Z",null,null,null,null,null],["1970-01-01T01:00:00Z",null,null,null,null,null],["1970-01-01T02:00:00Z",null,null,null,null,null],["1970-01-01T03:00:00Z",14335000000000,14335,14335,false,"abc14335"],["1970-01-01T04:00:00Z",null,null,null,null,null],["1970-01-01T05:00:00Z",null,null,null,null,null]]},{"name":"cpu","tags":{"az":"az_7","region":"region_7"},"columns":["time","last","v1","v2","v3","v4"],"values":[["1970-01-01T00:00:00Z",null,null,null,null,null],["1970-01-01T01:00:00Z",null,null,null,null,null],["1970-01-01T02:00:00Z",null,null,null,null,null],["1970-01-01T03:00:00Z",14399000000000,14399,14399,false,"abc14399"],["1970-01-01T04:00:00Z",16383000000000,16383,16383,false,"abc16383"],["1970-01-01T05:00:00Z",null,null,null,null,null]]},{"name":"cpu","tags":{"az":"az_8","region":"region_8"},"columns":["time","last","v1","v2","v3","v4"],"values":[["1970-01-01T00:00:00Z",null,null,null,null,null],["1970-01-01T01:00:00Z",null,null,null,null,null],["1970-01-01T02:00:00Z",null,null,null,null,null],["1970-01-01T03:00:00Z",null,null,null,null,null],["1970-01-01T04:00:00Z",17999000000000,17999,17999,false,"abc17999"],["1970-01-01T05:00:00Z",18431000000000,18431,18431,false,"abc18431"]]},{"name":"cpu","tags":{"az":"az_9","region":"region_9"},"columns":["time","last","v1","v2","v3","v4"],"values":[["1970-01-01T00:00:00Z",null,null,null,null,null],["1970-01-01T01:00:00Z",null,null,null,null,null],["1970-01-01T02:00:00Z",null,null,null,null,null],["1970-01-01T03:00:00Z",null,null,null,null,null],["1970-01-01T04:00:00Z",null,null,null,null,null],["1970-01-01T05:00:00Z",20479000000000,20479,20479,false,"abc20479"]]}]}]}`,
+		},
+
+		{
 			name:    "percentile(v1, 0.01),* group by time",
 			params:  url.Values{"inner_chunk_size": []string{"10"}},
 			command: `select percentile(v1, 0.01),* from db0.rp0.cpu where time >= '1970-01-01T00:00:00Z' AND time <= '1970-01-01T05:41:19Z' group by time(1h)`,
@@ -6038,6 +6129,12 @@ func TestServer_Query_TopBottomInt(t *testing.T) {
 			params:  url.Values{"db": []string{"db0"}},
 			command: `SELECT BOTTOM(value, host, service, 3) FROM memory`,
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"memory","columns":["time","bottom","host","service"],"values":[["2000-01-01T00:00:00Z",1000,"a","redis"],["2000-01-01T00:00:00Z",1500,"b","redis"],["2000-01-01T00:00:00Z",2000,"b","mysql"]]}]}]}`,
+		},
+		{
+			name:    "top - cpu - combined with other functions",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `SELECT holt_winters(TOP(value, 2), 3, 5) FROM cpu where time >= '2000-01-01T00:00:00Z' and time <= '2000-01-01T02:00:10Z' group by time(1h)`,
+			exp:     `{"results":[{"statement_id":0,"error":"selector function top() cannot be combined with other functions"}]}`,
 		},
 
 		// TODO
@@ -11179,7 +11276,6 @@ func TestServer_Write_OutOfOrder(t *testing.T) {
 				name:    "create database with shard group duration and index duration should succeed",
 				command: `CREATE DATABASE db3 WITH SHARD DURATION 12h index duration 24h name rp3`,
 				exp:     `{"results":[{"statement_id":0}]}`,
-				skip:    true,
 			},
 		},
 	}
@@ -11223,19 +11319,16 @@ func TestServer_Write_OutOfOrder(t *testing.T) {
 			name:    "select val from in date 2021-11-26 should success",
 			command: `select val from db3.rp3.cpu where time>='2021-11-26T00:00:00Z' and time<='2021-11-26T23:00:00Z' and "host"='serverB'`,
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","val"],"values":[["2021-11-26T10:00:00Z",200],["2021-11-26T14:00:00Z",23.2]]}]}]}`,
-			skip:    true,
 		},
 		{
 			name:    "select val from in date 2021-11-27 should success",
 			command: `select val from db3.rp3.cpu where time>='2021-11-27T00:00:00Z' and time<='2021-11-27T23:00:00Z' and "host"='serverB'`,
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","val"],"values":[["2021-11-27T10:00:00Z",106]]}]}]}`,
-			skip:    true,
 		},
 		{
 			name:    "select val from 25 to 26 should success",
 			command: `select val from db3.rp3.cpu where time>='2021-11-25T00:00:00Z' and time<='2021-11-26T23:00:00Z' and "host"='serverB'`,
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","val"],"values":[["2021-11-25T13:00:00Z",23.3],["2021-11-26T10:00:00Z",200],["2021-11-26T14:00:00Z",23.2]]}]}]}`,
-			skip:    true,
 		},
 	}
 
@@ -11435,7 +11528,6 @@ func TestServer_Query_SpecificSeries(t *testing.T) {
 			params:  url.Values{"db": []string{"db0"}},
 			command: `select /*+ specific_series */ value from cpu where (host = 'server01')`,
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","value"],"values":[["2009-11-10T23:00:00Z",100],["2009-11-10T23:00:00Z",101],["2009-11-10T23:00:00Z",102]]}]}]}`,
-			skip:    true,
 		},
 		{
 			name:    "specific series normal",
@@ -11925,7 +12017,7 @@ func RegisteredIndexes() []string {
 	return a
 }
 
-func Test_killopenGemini(t *testing.T) {
+func Test_killInfluxDB3(t *testing.T) {
 	type args struct {
 		t *testing.T
 	}
@@ -11938,14 +12030,14 @@ func Test_killopenGemini(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if err := killopenGemini(tt.args.t); (err != nil) != tt.wantErr {
-				t.Errorf("killopenGemini() error = %v, wantErr %v", err, tt.wantErr)
+			if err := killInfluxDB3(tt.args.t); (err != nil) != tt.wantErr {
+				t.Errorf("killInfluxDB3() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
 	}
 }
 
-func Test_startopenGemini(t *testing.T) {
+func Test_startInfluxDB3(t *testing.T) {
 	type args struct {
 		t *testing.T
 	}
@@ -11957,7 +12049,7 @@ func Test_startopenGemini(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			startopenGemini(tt.args.t)
+			startInfluxDB3(tt.args.t)
 		})
 	}
 }
@@ -12823,6 +12915,10 @@ func TestServer_DropMeasurementPerRP(t *testing.T) {
 		} else if !query.isSuccess() {
 			t.Error(query.failureMessage())
 		}
+		if strings.HasPrefix(strings.ToLower(query.command), "drop") {
+			// drop is async, wait some seconds
+			time.Sleep(time.Second)
+		}
 	}
 }
 
@@ -12908,6 +13004,79 @@ func TestServer_Query_FunctionIf(t *testing.T) {
 					t.Fatalf("test init failed: %s", err)
 				}
 				time.Sleep(3 * time.Second)
+			}
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}
+
+func TestServer_Query_IP_For_String_Functions(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		`ip_test,location=us-me ip="101.44.55.66",len=12 1741058850000000000`,
+		`ip_test,location=us-me ip="102.66.55.44",len=16 1741058860000000000`,
+		`ip_test,location=us-me ip="300.66.55.44",len=16 1741058870000000000`,
+		`ip_test,location=us-me ip="ff02::1",len=16 1741058880000000000`,
+		`ip_test,location=us-me ip="fd12:3456:789a:bcde:f012:3456:789a:bcde",len=16 1741058890000000000`,
+	}
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		{
+			name:    "invalid argument number",
+			command: `SELECT ip_mask(ip) FROM db0.rp0.ip_test`,
+			exp:     `{"results":[{"statement_id":0,"error":"invalid number of arguments for ip_mask, expected 2-3, got 1"}]}`,
+		},
+		{
+			name:    "invalid first argument type",
+			command: `SELECT ip_mask(12, 12) FROM db0.rp0.ip_test`,
+			exp:     `{"results":[{"statement_id":0,"error":"invalid argument type for the first argument in ip_mask(): 12"}]}`,
+		},
+		{
+			name:    "invalid second argument type",
+			command: `SELECT ip_mask(ip, '12') FROM db0.rp0.ip_test`,
+			exp:     `{"results":[{"statement_id":0,"error":"invalid argument type for the 2nd argument in ip_mask(): '12'"}]}`,
+		},
+		{
+			name:    "invalid third argument type",
+			command: `SELECT ip_mask(ip, 12, '12') FROM db0.rp0.ip_test`,
+			exp:     `{"results":[{"statement_id":0,"error":"invalid argument type for the 3rd argument in ip_mask(): '12'"}]}`,
+		},
+		{
+			name:    "two params test",
+			command: `SELECT ip_mask(ip, 12) FROM db0.rp0.ip_test`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"ip_test","columns":["time","ip_mask"],"values":[["2025-03-04T03:27:30Z","101.32.0.0"],["2025-03-04T03:27:40Z","102.64.0.0"],["2025-03-04T03:27:50Z",null],["2025-03-04T03:28:00Z","ff00::"],["2025-03-04T03:28:10Z","fd10::"]]}]}]}`,
+		},
+		{
+			name:    "three params test",
+			command: `SELECT ip_mask(ip, 12, 40) FROM db0.rp0.ip_test`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"ip_test","columns":["time","ip_mask"],"values":[["2025-03-04T03:27:30Z","101.32.0.0"],["2025-03-04T03:27:40Z","102.64.0.0"],["2025-03-04T03:27:50Z",null],["2025-03-04T03:28:00Z","ff02::"],["2025-03-04T03:28:10Z","fd12:3456:7800::"]]}]}]}`,
+		},
+	}...)
+
+	for i, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if i == 0 {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
 			}
 			if query.skip {
 				t.Skipf("SKIP:: %s", query.name)

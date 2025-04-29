@@ -26,8 +26,6 @@ import (
 	assert2 "github.com/stretchr/testify/assert"
 )
 
-const SID = 0527
-
 func TestAddLocationsWithLimit(t *testing.T) {
 	files := []immutable.TSSPFile{MocTsspFile{}, MocTsspFile{}}
 	l := &immutable.LocationCursor{}
@@ -45,7 +43,7 @@ func TestAddLocationsWithLimit(t *testing.T) {
 		decs:        immutable.NewReadContext(qs.Options().IsAscending()),
 		tr:          util.TimeRange{Min: 0, Max: 10},
 	}
-	AddLocationsWithLimit(l, files, ctx, SID)
+	AddLocationsWithLimit(l, files, ctx, 0527)
 	assert2.Equal(t, 1, l.Len())
 }
 
@@ -66,6 +64,6 @@ func TestNotAddLocationsWithLimit(t *testing.T) {
 		decs:        immutable.NewReadContext(qs.Options().IsAscending()),
 		tr:          util.TimeRange{Min: 0, Max: 5},
 	}
-	AddLocationsWithLimit(l, files, ctx, SID)
+	AddLocationsWithLimit(l, files, ctx, 0527)
 	assert2.Equal(t, 2, l.Len())
 }

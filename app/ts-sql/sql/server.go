@@ -26,7 +26,6 @@ import (
 	"github.com/openGemini/openGemini/app"
 	"github.com/openGemini/openGemini/coordinator"
 	"github.com/openGemini/openGemini/engine/executor"
-	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/errno"
@@ -34,6 +33,7 @@ import (
 	"github.com/openGemini/openGemini/lib/machine"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/spdy/transport"
 	"github.com/openGemini/openGemini/lib/statisticsPusher"
 	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/sysconfig"
@@ -76,6 +76,7 @@ type Server struct {
 
 	arrowFlightService *arrowflight.Service
 	RecordWriter       *coordinator.RecordWriter
+	RPCRecordWriter    *writer.RecordWriter
 
 	// joinPeers are the metaservers specified at run time to join this server to
 	metaJoinPeers []string
@@ -145,9 +146,7 @@ func NewServer(conf config.Config, info app.ServerInfo, logger *Logger.Logger) (
 	store := netstorage.NewNetStorage(s.MetaClient)
 	s.TSDBStore = store
 
-	s.PointsWriter = coordinator.NewPointsWriter(time.Duration(c.Coordinator.ShardWriterTimeout))
-	s.PointsWriter.TSDBStore = s.TSDBStore
-	go s.PointsWriter.ApplyTimeRangeLimit(c.Coordinator.TimeRangeLimit)
+	s.initWriter()
 	coordinator.SetTagLimit(c.Coordinator.TagLimit)
 
 	if s.config.Subscriber.Enabled {
@@ -196,19 +195,8 @@ func NewServer(conf config.Config, info app.ServerInfo, logger *Logger.Logger) (
 			HandlerFunc: runtimecfg.RuntimeConfigHandler(s.runtimeCfgService, c.Limits),
 		})
 	}
-	if c.RecordWrite.Enabled {
-		s.writerService, err = writer.NewService(c.RecordWrite)
-		if err != nil {
-			return nil, err
-		}
-		s.writerService.WithLogger(s.Logger)
-		s.writerService.WithWriter(s.PointsWriter)
-		a := &writer.RecordWriteAuthorizer{
-			Client:          s.MetaClient,
-			WriteAuthorizer: &auth.WriteAuthorizer{Client: s.MetaClient},
-		}
-		s.writerService.WithAuthorizer(a)
-	}
+
+	s.initRecordWriterService()
 	return s, nil
 }
 
@@ -237,6 +225,43 @@ func newServer(info app.ServerInfo, logger *Logger.Logger, c *config.TSSql, meta
 	}
 	meta2.InitSchemaCleanEn(c.Meta.SchemaCleanEn)
 	return s
+}
+
+func (s *Server) GetWriteService() *writer.Service {
+	return s.writerService
+}
+
+func (s *Server) initWriter() {
+	conf := &s.config.Coordinator
+
+	s.PointsWriter = coordinator.NewPointsWriter(time.Duration(conf.ShardWriterTimeout))
+	s.PointsWriter.TSDBStore = s.TSDBStore
+	go s.PointsWriter.ApplyTimeRangeLimit(conf.TimeRangeLimit)
+
+	s.RPCRecordWriter = writer.NewRecordWriter(s.MetaClient, time.Duration(conf.WriteTimeout))
+	s.RPCRecordWriter.WithLogger(s.Logger)
+	go s.RPCRecordWriter.ApplyTimeRangeLimit(conf.TimeRangeLimit)
+}
+
+func (s *Server) initRecordWriterService() {
+	if !s.config.RecordWrite.Enabled {
+		return
+	}
+
+	ws, err := writer.NewService(s.config.RecordWrite)
+	if err != nil {
+		s.Logger.Error("Failed to create record writer", zap.Error(err))
+		return
+	}
+	ws.WithLogger(s.Logger)
+	ws.WithWriter(s.PointsWriter)
+	ws.SetRecordWriter(s.RPCRecordWriter)
+	a := &writer.RecordWriteAuthorizer{
+		Client:          s.MetaClient,
+		WriteAuthorizer: &auth.WriteAuthorizer{Client: s.MetaClient},
+	}
+	ws.WithAuthorizer(a)
+	s.writerService = ws
 }
 
 func (s *Server) initArrowFlightService(c *config.TSSql) error {
@@ -511,7 +536,6 @@ func (s *Server) initStatisticsPusher() {
 		"app":      "ts-" + string(s.info.App),
 	}
 
-	stat.InitHandlerStatistics(globalTags)
 	stat.InitSpdyStatistics(globalTags)
 	transport.InitStatistics(transport.AppSql)
 	stat.InitSlowQueryStatistics(globalTags)
@@ -523,7 +547,6 @@ func (s *Server) initStatisticsPusher() {
 	stat.NewCollector().SetGlobalTags(globalTags)
 
 	s.statisticsPusher.Register(
-		stat.CollectHandlerStatistics,
 		stat.CollectSpdyStatistics,
 		stat.CollectSqlSlowQueryStatistics,
 		stat.CollectRuntimeStatistics,
@@ -533,7 +556,7 @@ func (s *Server) initStatisticsPusher() {
 		stat.NewCollector().Collect,
 	)
 
-	s.statisticsPusher.RegisterOps(stat.CollectOpsHandlerStatistics)
+	s.statisticsPusher.RegisterOps(stat.NewCollector().CollectOps)
 	s.statisticsPusher.RegisterOps(stat.CollectOpsSpdyStatistics)
 	s.statisticsPusher.RegisterOps(stat.CollectOpsSqlSlowQueryStatistics)
 	s.statisticsPusher.RegisterOps(stat.CollectOpsRuntimeStatistics)

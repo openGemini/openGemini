@@ -114,13 +114,13 @@ func (h *Handler) FilterInvalidTimeSeries(mst string, tss []prompb2.TimeSeries) 
 }
 
 func (h *Handler) servePromWriteBase(w http.ResponseWriter, r *http.Request, user meta2.User, mst string, tansFunc timeSeries2RowsFunc) {
-	atomic.AddInt64(&statistics.HandlerStat.WriteRequests, 1)
-	atomic.AddInt64(&statistics.HandlerStat.ActiveWriteRequests, 1)
-	atomic.AddInt64(&statistics.HandlerStat.WriteRequestBytesIn, r.ContentLength)
+	handlerStat.WriteRequests.Incr()
+	handlerStat.ActiveWriteRequests.Incr()
+	handlerStat.WriteRequestBytesIn.Add(r.ContentLength)
 	defer func(start time.Time) {
 		d := time.Since(start).Nanoseconds()
-		atomic.AddInt64(&statistics.HandlerStat.ActiveWriteRequests, -1)
-		atomic.AddInt64(&statistics.HandlerStat.WriteRequestDuration, d)
+		handlerStat.ActiveWriteRequests.Decr()
+		handlerStat.WriteRequestDuration.Add(d)
 	}(time.Now())
 
 	if syscontrol.DisableWrites {
@@ -401,8 +401,7 @@ func (h *Handler) servePromReadBase(w http.ResponseWriter, r *http.Request, user
 		w.Header().Set("Content-Type", "application/x-protobuf")
 		w.Header().Set("Content-Encoding", "snappy")
 
-		compressed = snappy.Encode(nil, data)
-		if _, err := w.Write(compressed); err != nil {
+		if _, err := w.Write(data); err != nil {
 			h.httpError(w, err.Error(), http.StatusInternalServerError)
 			h.Logger.Error("servePromReadBase error", zap.Error(err))
 			return
@@ -561,12 +560,12 @@ func (h *Handler) servePromQueryRangeWithMetricStore(w http.ResponseWriter, r *h
 
 // servePromBaseQuery Executes a query of the PromQL and returns the query result.
 func (h *Handler) servePromBaseQuery(w http.ResponseWriter, r *http.Request, user meta2.User, p *promQueryParam) {
-	atomic.AddInt64(&statistics.HandlerStat.QueryRequests, 1)
-	atomic.AddInt64(&statistics.HandlerStat.ActiveQueryRequests, 1)
+	handlerStat.QueryRequests.Incr()
+	handlerStat.ActiveQueryRequests.Incr()
 	start := time.Now()
 	defer func() {
-		atomic.AddInt64(&statistics.HandlerStat.ActiveQueryRequests, -1)
-		atomic.AddInt64(&statistics.HandlerStat.QueryRequestDuration, time.Since(start).Nanoseconds())
+		handlerStat.ActiveQueryRequests.Decr()
+		handlerStat.QueryRequestDuration.AddSinceNano(start)
 	}()
 
 	var err error
@@ -656,7 +655,7 @@ func (h *Handler) servePromBaseQuery(w http.ResponseWriter, r *http.Request, use
 				return
 			}
 			n, _ := rw.WritePromResponse(resp)
-			atomic.AddInt64(&statistics.HandlerStat.QueryRequestBytesTransmitted, int64(n))
+			handlerStat.QueryRequestBytesTransmitted.Add(int64(n))
 			return
 		}
 	}
@@ -671,7 +670,7 @@ func (h *Handler) servePromBaseQuery(w http.ResponseWriter, r *http.Request, use
 	}
 
 	n, _ := rw.WritePromResponse(resp)
-	atomic.AddInt64(&statistics.HandlerStat.QueryRequestBytesTransmitted, int64(n))
+	handlerStat.QueryRequestBytesTransmitted.Add(int64(n))
 }
 
 // doForward return true -- do forwarding; false -- don't do forwarding
@@ -698,7 +697,7 @@ func doForward(h *Handler, r *http.Request, key string, rw ResponseWriter, body 
 	nodeInfo := getNodeInfo(nodes, id)
 	if nodeInfo != nil && nodeInfo.Status == serf.StatusAlive {
 		targetHost := nodeInfo.TCPHost
-		reverseProxy, err := proxy.GetCustomProxy(r.URL, targetHost, body)
+		reverseProxy, err := proxy.GetCustomProxy(r.URL, targetHost, body, h.SQLConfig.HTTP.HTTPSEnabled)
 		if err == nil {
 			defer func() {
 				if e := recover(); e != nil {
@@ -919,12 +918,12 @@ func (h *Handler) execQuery(w ResponseWriter, r *http.Request, user meta2.User, 
 		resp := h.getStmtResult(stmtID2Result)
 		n, _ := w.WriteResponse(resp)
 		isRespond = true
-		atomic.AddInt64(&statistics.HandlerStat.QueryRequestBytesTransmitted, int64(n))
+		handlerStat.QueryRequestBytesTransmitted.Add(int64(n))
 		return nil, nil, isRespond
 	}
 
 	// Return the prometheus query result.
-	resp, apiErr = h.getPromResult(stmtID2Result, expr, promCommand, transpiler.DropMetric(), transpiler.RemoveTableName(), transpiler.DuplicateResult())
+	resp, apiErr = h.getPromResult(stmtID2Result, expr, promCommand, transpiler.DropMetric(), transpiler.DuplicateResult())
 
 	return
 }
@@ -990,7 +989,7 @@ func (h *Handler) servePromQueryLabelsBase(w http.ResponseWriter, r *http.Reques
 	resp.Data = data
 
 	n, _ := rw.WritePromResponse(&resp)
-	atomic.AddInt64(&statistics.HandlerStat.QueryRequestBytesTransmitted, int64(n))
+	handlerStat.QueryRequestBytesTransmitted.Add(int64(n))
 }
 
 // servePromQueryLabels Executes a label-values query of the PromQL and returns the query result.
@@ -1032,7 +1031,7 @@ func (h *Handler) servePromQueryLabelValuesBase(w http.ResponseWriter, r *http.R
 	resp.Data = data
 
 	n, _ := rw.WritePromResponse(&resp)
-	atomic.AddInt64(&statistics.HandlerStat.QueryRequestBytesTransmitted, int64(n))
+	handlerStat.QueryRequestBytesTransmitted.Add(int64(n))
 }
 
 // servePromQueryLabels Executes a series query of the PromQL and returns the query result.
@@ -1080,7 +1079,7 @@ func (h *Handler) servePromQuerySeriesBase(w http.ResponseWriter, r *http.Reques
 	}
 
 	n, _ := rw.WritePromResponse(&resp)
-	atomic.AddInt64(&statistics.HandlerStat.QueryRequestBytesTransmitted, int64(n))
+	handlerStat.QueryRequestBytesTransmitted.Add(int64(n))
 }
 
 func (h *Handler) servePromBaseMetaQuery(w http.ResponseWriter, r *http.Request, user meta2.User, p *promQueryParam) (result map[int]*query.Result, ok bool) {
@@ -1185,7 +1184,7 @@ func (h *Handler) servePromQueryMetaDataBase(w http.ResponseWriter, r *http.Requ
 		resp.Data = res
 	}
 	n, _ := rw.WritePromResponse(&resp)
-	atomic.AddInt64(&statistics.HandlerStat.QueryRequestBytesTransmitted, int64(n))
+	handlerStat.QueryRequestBytesTransmitted.Add(int64(n))
 }
 
 // servePromQueryMetaData Executes a metadata query of the PromQL and returns the query result.
@@ -1208,7 +1207,7 @@ func (h *Handler) servePromCreateTSDB(w http.ResponseWriter, r *http.Request, us
 	if err := ValidataTSDB(tsdb); err != nil {
 		logger.GetLogger().Error("servePromCreateTSDB", zap.Error(err))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
-		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		handlerStat.Write400ErrRequests.Incr()
 		return
 	}
 	options := &obs.ObsOptions{}
@@ -1227,7 +1226,7 @@ func (h *Handler) servePromCreateTSDB(w http.ResponseWriter, r *http.Request, us
 		options.Sk, err = crypto.Encrypt(options.Sk)
 		if err != nil {
 			h.httpErrorRsp(w, ErrorResponse("obs sk encrypt failed", LogReqErr), http.StatusBadRequest)
-			atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+			handlerStat.Write400ErrRequests.Incr()
 			return
 		}
 	}
@@ -1237,7 +1236,7 @@ func (h *Handler) servePromCreateTSDB(w http.ResponseWriter, r *http.Request, us
 			host = options.Endpoint
 		} else {
 			h.httpErrorRsp(w, ErrorResponse("get obs host failed", LogReqErr), http.StatusBadRequest)
-			atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+			handlerStat.Write400ErrRequests.Incr()
 			return
 		}
 	}

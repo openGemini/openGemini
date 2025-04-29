@@ -73,6 +73,12 @@ func (m *MockStorage) TimeStamp() time.Time {
 	return m.timestamp
 }
 
+func (m *MockStorage) RegisterOnPTOffload(id uint64, f func(ptID uint32)) {
+}
+
+func (m *MockStorage) UninstallOnPTOffload(id uint64) {
+}
+
 func buildRow(tagValue, eipValue string, fieldIndex bool) influx.Row {
 	tags := &[]influx.Tag{}
 	if len(*tags) == 26 {
@@ -221,7 +227,7 @@ type MockMetaclient struct {
 func (m MockMetaclient) GetNodePT(database string) []uint32 {
 	//TODO implement me
 	//panic("implement me")
-	return []uint32{1}
+	return []uint32{0}
 }
 
 func (m MockMetaclient) Measurement(dbName string, rpName string, mstName string) (*meta.MeasurementInfo, error) {

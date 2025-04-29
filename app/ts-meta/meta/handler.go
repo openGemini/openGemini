@@ -45,6 +45,7 @@ type IStore interface {
 	otherMetaServersHTTP() []string
 	showDebugInfo(witch string) ([]byte, error)
 	GetData() *meta.Data //get the Data in the store
+	GetMarshalData(parts []string) ([]byte, error)
 	IsLeader() bool
 	markTakeOver(enable bool) error
 	markBalancer(enable bool) error
@@ -117,7 +118,6 @@ func (h *httpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		case "/debug/vars":
 			h.WrapHandler(h.serveExpvar).ServeHTTP(w, r)
 		}
-		h.logger.Info("serve get")
 	case "POST":
 		switch r.URL.Path {
 		case "/userSnapshot":
@@ -142,10 +142,10 @@ func (h *httpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		case "/modifyRepDBMasterPt":
 			h.WrapHandler(h.modifyRepDBMasterPt).ServeHTTP(w, r)
 		}
-		h.logger.Info("serve post")
 	default:
 		http.Error(w, "", http.StatusBadRequest)
 	}
+	h.logger.Info("serve http", zap.String("method", r.Method), zap.String("path", r.URL.Path), zap.String("from", r.RemoteAddr))
 }
 
 // for got raf node status
@@ -233,10 +233,11 @@ func (h *httpHandler) getOtherStat(errorMap map[string]string, status map[string
 			}
 			if value, ok := m[n]; ok {
 				status[n] = value
+				h.logger.Info(fmt.Sprintf("get node[%s] raft stat: %s", n, value))
+
 			} else {
 				h.logger.Info(fmt.Sprintf("failed: get node[%s] raft stat", n))
 			}
-			h.logger.Info(fmt.Sprintf("get node[%s] raft stat: %s", n, status))
 		}
 	}
 }
@@ -247,6 +248,7 @@ func (h *httpHandler) httpErr(err error, w http.ResponseWriter, status int) {
 
 // get the status of Data include MetaNodes and DataNodes
 // do this way:curl -i GET 'http://127.0.0.1:8091/getdata?nodeStatus=ok'
+// if want get part info, do this way: curl -i GET 'http://127.0.0.1:8091/getdata?parts=MetaNodes,DataNodes...'
 func (h *httpHandler) serveGetdata(w http.ResponseWriter, r *http.Request) {
 	w.Header().Add("Content-Type", "application/json")
 
@@ -254,8 +256,15 @@ func (h *httpHandler) serveGetdata(w http.ResponseWriter, r *http.Request) {
 	nodeStatus := q.Get("nodeStatus")
 	h.logger.Info("show nodeStatus:" + nodeStatus)
 
-	allNode := h.store.GetData()
-	result, err := json.Marshal(&allNode) //convert the Data struct to the format json
+	partsData := q.Get("parts")
+	parts := strings.FieldsFunc(partsData, func(r rune) bool {
+		return r == ','
+	})
+	if len(parts) != 0 {
+		h.logger.Info("get metadata filter by parts: " + partsData)
+	}
+	result, err := h.store.GetMarshalData(parts)
+
 	if err != nil {
 		h.logger.Error("get data failed", zap.Error(err))
 		h.httpErr(err, w, http.StatusInternalServerError)

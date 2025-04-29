@@ -157,7 +157,6 @@ func (s *seriesCursor) SetOps(ops []*comm.CallOption) {
 	if len(ops) > 0 {
 		// omit memTable records if pre agg
 		s.memRecIter.readMemTableMetaRecord(ops)
-		//c.memRecIter.reset()
 		s.hasPreAgg = true
 	}
 	if !s.isTsmCursorNil() {

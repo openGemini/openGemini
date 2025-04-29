@@ -22,7 +22,9 @@ import (
 	"math"
 	"net"
 	"path"
+	"reflect"
 	"runtime/debug"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -32,7 +34,6 @@ import (
 
 	"github.com/hashicorp/raft"
 	"github.com/openGemini/openGemini/coordinator"
-	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
@@ -43,6 +44,7 @@ import (
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/rand"
+	"github.com/openGemini/openGemini/lib/spdy/transport"
 	sp "github.com/openGemini/openGemini/lib/statisticsPusher"
 	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
@@ -406,6 +408,7 @@ type Store struct {
 		MigratePt(nodeID uint64, data transport.Codec, cb transport.Callback) error
 		SendSegregateNodeCmds(nodeIDs []uint64, address []string) (int, error)
 		TransferLeadership(database string, nodeId uint64, oldMasterPtId, newMasterPtId uint32) error
+		Ping(nodeID uint64, address string, timeout time.Duration) error
 	}
 
 	statMu       sync.RWMutex
@@ -848,9 +851,41 @@ func (s *Store) setOpen() error {
 // getData is used to get the Data in the Store
 func (s *Store) GetData() *meta.Data {
 	s.mu.RLock()
+
 	data := s.data
 	s.mu.RUnlock()
 	return data
+}
+
+func (s *Store) GetMarshalData(parts []string) ([]byte, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	data := s.data
+
+	if len(parts) == 0 {
+		return json.Marshal(data)
+	}
+	vo := reflect.ValueOf(data)
+	to := reflect.TypeOf(data)
+	if vo.Kind() == reflect.Ptr {
+		to = to.Elem()
+		vo = vo.Elem()
+	}
+	var newData = make(map[string]interface{})
+	for i := 0; i < to.NumField(); i++ {
+		fieldName := to.Field(i).Name
+		if !slices.Contains(parts, fieldName) {
+			continue
+		}
+		if !vo.IsValid() {
+			continue
+		}
+		if !vo.Field(i).IsValid() {
+			continue
+		}
+		newData[fieldName] = vo.Field(i).Interface()
+	}
+	return json.Marshal(newData)
 }
 
 // setData is used for ut test
@@ -1876,7 +1911,6 @@ func (s *Store) CreateSqlNode(httpHost string, gossipAddr string) ([]byte, error
 	nodeStartInfo.NodeId = dn.ID
 	nodeStartInfo.LTime = dn.LTime
 	nodeStartInfo.ConnId = dn.ConnID
-	//status := dn.Status
 	s.mu.RUnlock()
 	// todo it is not approtiate to judge as single node, please modify it later
 	if len(s.config.JoinPeers) == 1 {
@@ -2801,6 +2835,20 @@ func (s *Store) verifyDataNodeStatus(nodeID uint64) error {
 	}
 	if dataNode.Status == serf.StatusFailed {
 		return errno.NewError(errno.DataNoAlive, nodeID)
+	}
+
+	return s.PtCheck(nodeID, s.data.PtView)
+}
+
+func (s *Store) PtCheck(nodeID uint64, pts map[string]meta.DBPtInfos) error {
+	for _, value := range pts {
+		for _, pt := range value {
+			owner := pt.Owner
+			status := pt.Status
+			if owner.NodeID == nodeID && status != meta.Online {
+				return errno.NewError(errno.PtNotFound, nodeID)
+			}
+		}
 	}
 	return nil
 }

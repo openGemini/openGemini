@@ -5,7 +5,7 @@ IMPROVEMENTS:
 
 ## 0.8.4 (September 19, 2019)
 
-FEATURES:
+FEATURES: 
 * Force Leave command can now take `prune` option to completely remove members [GH-574]
 
 IMPROVEMENTS:

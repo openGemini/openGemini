@@ -32,13 +32,14 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/prometheus/model/labels"
+	"github.com/openGemini/openGemini/lib/util/lifted/prometheus/promql"
 	"github.com/openGemini/openGemini/lib/util/lifted/promql2influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/openGemini/openGemini/lib/validation"
 	"github.com/prometheus/common/model"
-	"github.com/prometheus/prometheus/model/labels"
+	labels2 "github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/prompb"
-	"github.com/prometheus/prometheus/promql"
 	"github.com/prometheus/prometheus/promql/parser"
 	"go.uber.org/zap"
 )
@@ -163,8 +164,8 @@ func invalidParamError(w http.ResponseWriter, err error, parameter string) *apiE
 	return apiErr
 }
 
-func (h *Handler) getPromResult(stmtID2Result map[int]*query.Result, expr parser.Expr, cmd promql2influxql.PromCommand, dropMetric, removeTableName, duplicateResult bool) (*promql2influxql.PromQueryResponse, *apiError) {
-	r := &promql2influxql.Receiver{PromCommand: cmd, DropMetric: dropMetric, RemoveTableName: removeTableName, DuplicateResult: duplicateResult}
+func (h *Handler) getPromResult(stmtID2Result map[int]*query.Result, expr parser.Expr, cmd promql2influxql.PromCommand, dropMetric, duplicateResult bool) (*promql2influxql.PromQueryResponse, *apiError) {
+	r := &promql2influxql.Receiver{PromCommand: cmd, DropMetric: dropMetric, DuplicateResult: duplicateResult}
 	resp := &promql2influxql.PromQueryResponse{Data: &promql2influxql.PromData{}, Status: "success"}
 	if len(stmtID2Result) > 0 {
 		if stmtID2Result[0].Err != nil && !isPromReportedError(stmtID2Result[0].Err) {
@@ -725,7 +726,7 @@ func transpileToStat(r *http.Request, w http.ResponseWriter, promCommand promql2
 		respondError(w, &apiError{errorBadData, err})
 		return nil
 	}
-	labelMatchers := make([]*labels.Matcher, 0, len(matcherSets))
+	labelMatchers := make([]*labels2.Matcher, 0, len(matcherSets))
 	for _, matchers := range matcherSets {
 		labelMatchers = append(labelMatchers, matchers...)
 	}
@@ -752,7 +753,7 @@ func transpileToStmtWithMetricStore(r *http.Request, w http.ResponseWriter, prom
 		return nil
 	}
 
-	var labelMatchers []*labels.Matcher
+	var labelMatchers []*labels2.Matcher
 	if len(matcherSets) >= 1 {
 		labelMatchers = matcherSets[0]
 	}
@@ -813,8 +814,8 @@ func isExact(r *http.Request) bool {
 	return strings.ToLower(r.FormValue("exact")) == "true"
 }
 
-func parseMatchersParam(matchers []string) ([][]*labels.Matcher, error) {
-	var matcherSets [][]*labels.Matcher
+func parseMatchersParam(matchers []string) ([][]*labels2.Matcher, error) {
+	var matcherSets [][]*labels2.Matcher
 	for _, s := range matchers {
 		matchers, err := parser.ParseMetricSelector(s)
 		if err != nil {

@@ -31,6 +31,10 @@ func (b *Buffer) MemSize() int {
 	return cap(b.B) + cap(b.Swap)
 }
 
+func (b *Buffer) Instance() *Buffer {
+	return b
+}
+
 var chunkMetaPool *UnionPool[Buffer]
 
 func init() {

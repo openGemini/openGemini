@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"flag"
 	"fmt"
 	"math"
 	"os"
@@ -38,6 +39,7 @@ import (
 )
 
 func init() {
+	_ = flag.Set("loggerLevel", "ERROR")
 	_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.ChunkReaderRes, 0, 0)
 }
 

@@ -148,8 +148,11 @@ func (s *shard) ScanWithInvertedIndex(span *tracing.Span, ctx context.Context, s
 		s.log.Debug("get index result empty")
 		return nil, 0, nil
 	}
-	atomic.AddInt64(&statistics.StoreQueryStat.IndexScanRunTimeTotal, time.Since(start).Nanoseconds())
-	atomic.AddInt64(&statistics.StoreQueryStat.IndexScanSeriesNumTotal, seriesNum)
+
+	queryStat := statistics.NewStoreQuery()
+	queryStat.IndexScanRunTimeTotal.AddSinceNano(start)
+	queryStat.IndexScanSeriesNumTotal.Add(seriesNum)
+
 	return result, seriesNum, nil
 }
 

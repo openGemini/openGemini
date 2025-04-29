@@ -318,6 +318,148 @@ func TestSearchSeries_Relation(t *testing.T) {
 	})
 }
 
+func TestSearchPerlSeries_Relation(t *testing.T) {
+
+	config.GetStoreConfig().EnablePerlRegrep = true
+	path := t.TempDir()
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
+	defer idxBuilder.Close()
+	CreateIndexByBuild(idxBuilder, idx)
+
+	f := func(name []byte, opts influxql.Expr, tr TimeRange, expectedSeriesKeys []string) {
+		dst := make([][]byte, 1)
+		dst, err := idx.SearchSeries(dst[:0], name, opts, tr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sort.Slice(dst, func(i, j int) bool {
+			return string(dst[i]) < string(dst[j])
+		})
+		for i := 0; i < len(dst); i++ {
+			assert.Equal(t, string(dst[i]), expectedSeriesKeys[i])
+		}
+		for _, key := range dst {
+			influx.PutBytesBuffer(key)
+		}
+	}
+
+	t.Run("NoCond", func(t *testing.T) {
+		f([]byte("mn-1"), nil, defaultTR, []string{
+			"mn-1,tk1=value1,tk2=value2,tk3=value3",
+			"mn-1,tk1=value1,tk2=value22,tk3=value3",
+			"mn-1,tk1=value11,tk2=value2,tk3=value33",
+			"mn-1,tk1=value11,tk2=value22,tk3=value3",
+			"mn-1,tk1=value11,tk2=value22,tk3=value33",
+		})
+	})
+
+	t.Run("EQ", func(t *testing.T) {
+		f([]byte("mn-1"), MustParseExpr(`tk1='value1'`), defaultTR, []string{
+			"mn-1,tk1=value1,tk2=value2,tk3=value3",
+			"mn-1,tk1=value1,tk2=value22,tk3=value3",
+		})
+	})
+
+	t.Run("NEQ", func(t *testing.T) {
+		f([]byte("mn-1"), MustParseExpr(`tk1!='value1'`), defaultTR, []string{
+			"mn-1,tk1=value11,tk2=value2,tk3=value33",
+			"mn-1,tk1=value11,tk2=value22,tk3=value3",
+			"mn-1,tk1=value11,tk2=value22,tk3=value33",
+		})
+	})
+
+	t.Run("EQEmpty", func(t *testing.T) {
+		f([]byte("mn-1"), MustParseExpr(`tk1=''`), defaultTR, []string{})
+	})
+
+	t.Run("NEQEmpty", func(t *testing.T) {
+		f([]byte("mn-1"), MustParseExpr(`tk1!=''`), defaultTR, []string{
+			"mn-1,tk1=value1,tk2=value2,tk3=value3",
+			"mn-1,tk1=value1,tk2=value22,tk3=value3",
+			"mn-1,tk1=value11,tk2=value2,tk3=value33",
+			"mn-1,tk1=value11,tk2=value22,tk3=value3",
+			"mn-1,tk1=value11,tk2=value22,tk3=value33",
+		})
+	})
+
+	t.Run("AND", func(t *testing.T) {
+		f([]byte("mn-1"), MustParseExpr(`(tk1='value11') AND (tk2='value22')`), defaultTR, []string{
+			"mn-1,tk1=value11,tk2=value22,tk3=value3",
+			"mn-1,tk1=value11,tk2=value22,tk3=value33",
+		})
+	})
+
+	t.Run("OR", func(t *testing.T) {
+		f([]byte("mn-1"), MustParseExpr(`(tk1='value1') OR (tk3='value33')`), defaultTR, []string{
+			"mn-1,tk1=value1,tk2=value2,tk3=value3",
+			"mn-1,tk1=value1,tk2=value22,tk3=value3",
+			"mn-1,tk1=value11,tk2=value2,tk3=value33",
+			"mn-1,tk1=value11,tk2=value22,tk3=value33",
+		})
+	})
+
+	t.Run("RegEQ", func(t *testing.T) {
+		f([]byte("mn-1"), MustParseExpr(`tk1=~/val.*1/`), defaultTR, []string{
+			"mn-1,tk1=value1,tk2=value2,tk3=value3",
+			"mn-1,tk1=value1,tk2=value22,tk3=value3",
+			"mn-1,tk1=value11,tk2=value2,tk3=value33",
+			"mn-1,tk1=value11,tk2=value22,tk3=value3",
+			"mn-1,tk1=value11,tk2=value22,tk3=value33",
+		})
+
+		f([]byte("mn-1"), MustParseExpr(`tk1=~/val.*11/`), defaultTR, []string{
+			"mn-1,tk1=value11,tk2=value2,tk3=value33",
+			"mn-1,tk1=value11,tk2=value22,tk3=value3",
+			"mn-1,tk1=value11,tk2=value22,tk3=value33",
+		})
+
+		f([]byte("mn-1"), MustParseExpr(`tk1=~/(val.*e1|val.*11)/`), defaultTR, []string{
+			"mn-1,tk1=value1,tk2=value2,tk3=value3",
+			"mn-1,tk1=value1,tk2=value22,tk3=value3",
+			"mn-1,tk1=value11,tk2=value2,tk3=value33",
+			"mn-1,tk1=value11,tk2=value22,tk3=value3",
+			"mn-1,tk1=value11,tk2=value22,tk3=value33",
+		})
+	})
+
+	t.Run("RegNEQ", func(t *testing.T) {
+		f([]byte("mn-1"), MustParseExpr(`tk1!~/val.*11/`), defaultTR, []string{
+			"mn-1,tk1=value1,tk2=value2,tk3=value3",
+			"mn-1,tk1=value1,tk2=value22,tk3=value3",
+		})
+	})
+
+	t.Run("UnlimitedTR", func(t *testing.T) {
+		f([]byte("mn-1"), nil, TimeRange{Min: math.MinInt64, Max: math.MaxInt64}, []string{
+			"mn-1,tk1=value1,tk2=value2,tk3=value3",
+			"mn-1,tk1=value1,tk2=value22,tk3=value3",
+			"mn-1,tk1=value11,tk2=value2,tk3=value33",
+			"mn-1,tk1=value11,tk2=value22,tk3=value3",
+			"mn-1,tk1=value11,tk2=value22,tk3=value33",
+		})
+	})
+
+	t.Run("ExistFieldKey", func(t *testing.T) {
+		f([]byte("mn-1"), MustParseExpr(`tk1='value1' or field_float1>1.0`), defaultTR, []string{
+			"mn-1,tk1=value1,tk2=value2,tk3=value3",
+			"mn-1,tk1=value1,tk2=value22,tk3=value3",
+			"mn-1,tk1=value11,tk2=value2,tk3=value33",
+			"mn-1,tk1=value11,tk2=value22,tk3=value3",
+			"mn-1,tk1=value11,tk2=value22,tk3=value33",
+		})
+	})
+
+	t.Run("RegNEQ2", func(t *testing.T) {
+		f([]byte("mn-1"), MustParseExpr(`tk1!~/[val]/`), defaultTR, []string{
+			"mn-1,tk1=value1,tk2=value2,tk3=value3",
+			"mn-1,tk1=value1,tk2=value22,tk3=value3",
+			"mn-1,tk1=value11,tk2=value2,tk3=value33",
+			"mn-1,tk1=value11,tk2=value22,tk3=value3",
+			"mn-1,tk1=value11,tk2=value22,tk3=value33",
+		})
+	})
+}
+
 func TestSearchSeriesKeys_Relation(t *testing.T) {
 	path := t.TempDir()
 	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)

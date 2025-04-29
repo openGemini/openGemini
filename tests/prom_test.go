@@ -1215,8 +1215,6 @@ func TestServer_PromQuery_Bool_Modifier(t *testing.T) {
 	}
 }
 
-//skip
-/*
 func TestServer_PromQuery_Offset(t *testing.T) {
 	t.Parallel()
 	s := OpenServer(NewConfig())
@@ -1279,7 +1277,7 @@ func TestServer_PromQuery_Offset(t *testing.T) {
 			name:    "range query: sum vector offset",
 			params:  url.Values{"db": []string{"db0"}, "start": []string{"1709258312.955"}, "end": []string{"1709258357.955"}, "step": []string{"15s"}},
 			command: `sum(up offset 15s)`,
-			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{},"values":[[1709258327.955,"1"],[1709258342.955,"2"],[1709258357.955,"3"]]}]}}`,
+			exp:     `{"status":"success","data":{"resultType":"matrix","result":[{"metric":{},"values":[[1709258327.955,"1"],[1709258342.955,"2"],[1709258357.955,"12"]]}]}}`,
 			path:    "/api/v1/query_range",
 		},
 		&Query{
@@ -1308,7 +1306,6 @@ func TestServer_PromQuery_Offset(t *testing.T) {
 		}
 	}
 }
-
 
 func TestServer_PromQuery_At_Modifier(t *testing.T) {
 	t.Parallel()
@@ -1415,7 +1412,6 @@ func TestServer_PromQuery_At_Modifier(t *testing.T) {
 		}
 	}
 }
-*/
 
 type FileInfo struct {
 	enabled bool
@@ -1476,8 +1472,6 @@ func runTestFile(t *testing.T, fn string) float64 {
 	return rate
 }
 
-//skip
-/*
 func TestServer_PromQuery_timestamp(t *testing.T) {
 	t.Parallel()
 	s := OpenServer(NewConfig())
@@ -1596,7 +1590,6 @@ func TestServer_PromQuery_timestamp(t *testing.T) {
 		}
 	}
 }
-
 
 // testData/*.test: load [timeGap] mst{tags} [startValue]+[valueGap]x[valueNum]...
 func TestServer_PromQuery_Operators1(t *testing.T) {
@@ -1895,7 +1888,6 @@ func TestServer_PromQuery_Operators1(t *testing.T) {
 		}
 	}
 }
-*/
 
 // group_left/group_right
 func TestServer_PromQuery_Operators2(t *testing.T) {
@@ -5188,6 +5180,160 @@ func TestServer_PromQuery_MultiShard_MultiMetric_BugFix(t *testing.T) {
 			params:  url.Values{"db": []string{"prom"}, "time": []string{"1709438312.955"}},
 			command: `(sum_over_time(up[1d])) or (sum_over_time(down[1d]))`,
 			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"instance":"localhost:8086","job1":"prometheus"},"value":[1709438312.955,"2"]},{"metric":{"instance":"localhost:8086","job3":"prometheus"},"value":[1709438312.955,"5"]}]}}`,
+			path:    "/api/v1/query",
+		},
+	}...)
+	for i, query := range test.queries {
+		if i == 0 {
+			if err := test.init(s); err != nil {
+				t.Fatalf("test init failed: %s", err)
+			}
+		}
+		if query.skip {
+			t.Logf("SKIP:: %s", query.name)
+			continue
+		}
+		if err := query.ExecuteProm(s); err != nil {
+			if query.exp != err.Error() {
+				t.Error(query.Error(err))
+			}
+		} else if !query.success() {
+			t.Error(query.failureMessage())
+		}
+	}
+}
+
+func TestServer_PromQuery_BinaryExpr_RemoveMetric_BugFix(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewConfig())
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("prom", NewRetentionPolicySpec("autogen", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		fmt.Sprintf(`up,__name__=up,instance=localhost:8086,job=prometheus value=1 %d`, 1709258312955000000),
+		fmt.Sprintf(`up,__name__=up,instance=localhost:8086,job=prometheus value=2 %d`, 1709258327955000000),
+		fmt.Sprintf(`up,__name__=up,instance=localhost:8086,job=prometheus value=4 %d`, 1709258342955000000),
+		fmt.Sprintf(`up,__name__=up,instance=localhost:8086,job=prometheus value=6 %d`, 1709258357955000000),
+	}
+	test := NewTest("prom", "autogen")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+	test.addQueries([]*Query{
+		{
+			name:    "instance query:  (avg_over_time(up[60s]) > 3) or (up > 3)",
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"1709258357.955"}},
+			command: `(avg_over_time(up[60s]) > 3) or (up > 3)`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"instance":"localhost:8086","job":"prometheus"},"value":[1709258357.955,"3.25"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instance query:  (avg_over_time(up[60s]) > 10) or (up > 3)",
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"1709258357.955"}},
+			command: `(avg_over_time(up[60s]) > 10) or (up > 3)`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"__name__":"up","instance":"localhost:8086","job":"prometheus"},"value":[1709258357.955,"6"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instance query:  (avg_over_time(up[60s]) > 3) and (up > 3)",
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"1709258357.955"}},
+			command: `(avg_over_time(up[60s]) > 3) and (up > 3)`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"instance":"localhost:8086","job":"prometheus"},"value":[1709258357.955,"3.25"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instance query:  (avg_over_time(up[60s]) > 10) and (up > 3)",
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"1709258357.955"}},
+			command: `(avg_over_time(up[60s]) > 10) and (up > 3)`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[]}}`,
+			path:    "/api/v1/query",
+		},
+	}...)
+	for i, query := range test.queries {
+		if i == 0 {
+			if err := test.init(s); err != nil {
+				t.Fatalf("test init failed: %s", err)
+			}
+		}
+		if query.skip {
+			t.Logf("SKIP:: %s", query.name)
+			continue
+		}
+		if err := query.ExecuteProm(s); err != nil {
+			if query.exp != err.Error() {
+				t.Error(query.Error(err))
+			}
+		} else if !query.success() {
+			t.Error(query.failureMessage())
+		}
+	}
+}
+
+func TestServer_PromQuery_AggrExpr_ByMetricLabel_BugFix(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewConfig())
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("prom", NewRetentionPolicySpec("autogen", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		fmt.Sprintf(`up,__name__=up,instance=localhost:8086,job1=prometheus value=1 %d`, 1709348312955000000),
+		fmt.Sprintf(`up,__name__=up,instance=localhost:8086,job1=prometheus value=2 %d`, 1709438312955000000),
+		fmt.Sprintf(`up,__name__=up,instance=localhost:9090,job2=prometheus value=3 %d`, 1709348312955000000),
+		fmt.Sprintf(`up,__name__=up,instance=localhost:9090,job3=prometheus value=5 %d`, 1709438312955000000),
+		fmt.Sprintf(`up,__name__=up,instance=localhost:9092,job4=prometheus value=4 %d`, 1709348312955000000),
+		fmt.Sprintf(`up,__name__=up,instance=localhost:9092,job5=prometheus value=6 %d`, 1709438312955000000),
+	}
+	test := NewTest("prom", "autogen")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+	test.addQueries([]*Query{
+		{
+			name:    "instance query: count(up) by(__name__)",
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"1709438312.955"}},
+			command: `count(up) by(__name__)`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"__name__":"up"},"value":[1709438312.955,"3"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instance query: count(up) by(__name__, instance)",
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"1709438312.955"}},
+			command: `count(up) by(__name__, instance)`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"__name__":"up","instance":"localhost:8086"},"value":[1709438312.955,"1"]},{"metric":{"__name__":"up","instance":"localhost:9090"},"value":[1709438312.955,"1"]},{"metric":{"__name__":"up","instance":"localhost:9092"},"value":[1709438312.955,"1"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instance query: count(up) by(instance)",
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"1709438312.955"}},
+			command: `count(up) by(instance)`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"instance":"localhost:8086"},"value":[1709438312.955,"1"]},{"metric":{"instance":"localhost:9090"},"value":[1709438312.955,"1"]},{"metric":{"instance":"localhost:9092"},"value":[1709438312.955,"1"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instance query: count(up) without(__name__)",
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"1709438312.955"}},
+			command: `count(up) without(__name__)`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"instance":"localhost:8086","job1":"prometheus"},"value":[1709438312.955,"1"]},{"metric":{"instance":"localhost:9090","job3":"prometheus"},"value":[1709438312.955,"1"]},{"metric":{"instance":"localhost:9092","job5":"prometheus"},"value":[1709438312.955,"1"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instance query: count(up) without(__name__, instance)",
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"1709438312.955"}},
+			command: `count(up) without(__name__, instance)`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"job1":"prometheus"},"value":[1709438312.955,"1"]},{"metric":{"job3":"prometheus"},"value":[1709438312.955,"1"]},{"metric":{"job5":"prometheus"},"value":[1709438312.955,"1"]}]}}`,
+			path:    "/api/v1/query",
+		},
+		{
+			name:    "instance query: count(up) without(instance)",
+			params:  url.Values{"db": []string{"prom"}, "time": []string{"1709438312.955"}},
+			command: `count(up) without(instance)`,
+			exp:     `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"job1":"prometheus"},"value":[1709438312.955,"1"]},{"metric":{"job3":"prometheus"},"value":[1709438312.955,"1"]},{"metric":{"job5":"prometheus"},"value":[1709438312.955,"1"]}]}}`,
 			path:    "/api/v1/query",
 		},
 	}...)

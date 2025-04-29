@@ -15,16 +15,20 @@
 package app_test
 
 import (
+	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/openGemini/openGemini/app"
-	"github.com/openGemini/openGemini/engine/executor/spdy"
+	"github.com/openGemini/openGemini/lib/compress/dict"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
+	"github.com/openGemini/openGemini/lib/spdy"
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCreateSerfInstance(t *testing.T) {
@@ -95,4 +99,32 @@ func TestCommand_InitConfig(t *testing.T) {
 	assert.Equal(t, conf.Spdy.ConnPoolSize, spdy.DefaultConfiguration().ConnPoolSize)
 	assert.Equal(t, uint64(16*config.GB), uint64(conf.Common.MemorySize))
 	assert.Equal(t, 10, cpu.GetCpuNum())
+}
+
+func TestCommand_LoadDict(t *testing.T) {
+	dir := t.TempDir()
+	txt := `
+[common]
+  memory-size = "16G"
+  cpu-num = 10
+  global-dict-files = ["%s"]
+`
+
+	dictFile := strings.ReplaceAll(filepath.Join(dir, "normal.dict"), "\\", "/")
+	txt = fmt.Sprintf(txt, dictFile)
+
+	err := os.WriteFile(dictFile, []byte("hostname,user,name"), 0600)
+	require.NoError(t, err)
+
+	err = os.WriteFile(dir+"/gemini.conf", []byte(txt), 0600)
+	require.NoError(t, err)
+
+	conf := config.NewTSSql(false)
+	cmd := app.NewCommand()
+	defer cmd.Close()
+
+	require.NoError(t, cmd.InitConfig(conf, dir+"/gemini.conf"))
+
+	id := dict.DefaultDict().GetID("hostname")
+	require.True(t, id > 0)
 }

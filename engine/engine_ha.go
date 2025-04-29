@@ -249,6 +249,14 @@ func (e *Engine) Assign(opId uint64, nodeId uint64, db string, ptId uint32, ver 
 	return nil
 }
 
+func (e *Engine) RegisterOnPTOffload(id uint64, f func(ptID uint32)) {
+	e.onPTOffload[id] = f
+}
+
+func (e *Engine) UninstallOnPTOffload(id uint64) {
+	delete(e.onPTOffload, id)
+}
+
 func (e *Engine) offloadDbPT(pt *DBPTInfo) error {
 	var err error
 	done := make(chan bool, 1)
@@ -277,6 +285,9 @@ func (e *Engine) offloadDbPT(pt *DBPTInfo) error {
 	}
 	e.mu.Lock()
 	e.dropDBPTInfo(pt.database, pt.id)
+	for _, f := range e.onPTOffload {
+		f(pt.id)
+	}
 	e.mu.Unlock()
 	return nil
 }

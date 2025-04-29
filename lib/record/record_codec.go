@@ -15,6 +15,8 @@
 package record
 
 import (
+	"slices"
+
 	"github.com/openGemini/openGemini/lib/codec"
 )
 
@@ -43,63 +45,24 @@ func (rec *Record) Unmarshal(buf []byte) {
 
 	// Schema
 	fieldLen := int(dec.Uint32())
-	rec.Schema = make([]Field, fieldLen)
+	rec.Schema = slices.Grow(rec.Schema[:0], fieldLen)[:fieldLen]
 	for i := 0; i < fieldLen; i++ {
 		subBuf := dec.BytesNoCopy()
 		if len(subBuf) == 0 {
 			continue
 		}
-		rec.Schema[i] = Field{}
 		rec.Schema[i].Unmarshal(subBuf)
 	}
 
 	// ColVal
 	colLen := int(dec.Uint32())
-	rec.ColVals = make([]ColVal, colLen)
+	rec.ColVals = slices.Grow(rec.ColVals[:0], colLen)[:colLen]
 	for i := 0; i < colLen; i++ {
 		subBuf := dec.BytesNoCopy()
 		if len(subBuf) == 0 {
 			continue
 		}
-		rec.ColVals[i] = ColVal{}
 		rec.ColVals[i].Unmarshal(subBuf)
-	}
-}
-
-// UnmarshalUnsafe use pointers instead of copied slices when unmarshalling ColVals.
-// After calling this function, the buf []byte must not be modified.
-func (rec *Record) UnmarshalUnsafe(buf []byte) {
-	if len(buf) == 0 {
-		return
-	}
-	dec := codec.NewBinaryDecoder(buf)
-
-	// Schema
-	fieldLen := int(dec.Uint32())
-	if fieldLen > cap(rec.Schema) {
-		rec.Schema = make(Schemas, fieldLen)
-	}
-	rec.Schema = rec.Schema[:fieldLen]
-	for i := 0; i < fieldLen; i++ {
-		subBuf := dec.BytesNoCopy()
-		if len(subBuf) == 0 {
-			continue
-		}
-		rec.Schema[i].Unmarshal(subBuf)
-	}
-
-	// ColVal
-	colLen := int(dec.Uint32())
-	if colLen > cap(rec.ColVals) {
-		rec.ColVals = make([]ColVal, colLen)
-	}
-	rec.ColVals = rec.ColVals[:colLen]
-	for i := 0; i < colLen; i++ {
-		subBuf := dec.BytesNoCopy()
-		if len(subBuf) == 0 {
-			continue
-		}
-		rec.ColVals[i].UnmarshalUnsafe(subBuf)
 	}
 }
 

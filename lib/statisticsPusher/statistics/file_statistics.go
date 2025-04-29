@@ -29,6 +29,23 @@ const (
 	fileStatisticsReportInterval = time.Minute * 5
 )
 
+func init() {
+	NewCollector().Register(indexFileStat)
+}
+
+var indexFileStat = &IndexFileStat{}
+
+func NewIndexFileStat() *IndexFileStat {
+	indexFileStat.enabled = true
+	return indexFileStat
+}
+
+type IndexFileStat struct {
+	BaseCollector
+
+	IndexFileTotal *ItemInt64
+}
+
 var FileTagMap map[string]string
 
 type FileStatistics struct {

@@ -172,6 +172,7 @@ var applyFunc = map[proto2.Command_Type]func(fsm *storeFSM, cmd *proto2.Command)
 	proto2.Command_UpdateNodeTmpIndexCommand:        applyUpdateNodeTmpIndexCommand,
 	proto2.Command_InsertFilesCommand:               applyInsertFilesCommand,
 	proto2.Command_UpdateMetaNodeStatusCommand:      applyUpdateMetaNodeStatus,
+	proto2.Command_UpdateIndexInfoTierCommand:       applyUpdateIndexInfoTier,
 }
 
 func applyCreateDatabase(fsm *storeFSM, cmd *proto2.Command) interface{} {
@@ -304,6 +305,10 @@ func applyDeleteIndexGroup(fsm *storeFSM, cmd *proto2.Command) interface{} {
 
 func applyUpdateShardInfoTier(fsm *storeFSM, cmd *proto2.Command) interface{} {
 	return fsm.applyUpdateShardInfoTierCommand(cmd)
+}
+
+func applyUpdateIndexInfoTier(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyUpdateIndexInfoTierCommand(cmd)
 }
 
 func applyUpdateNodeStatus(fsm *storeFSM, cmd *proto2.Command) interface{} {
@@ -710,6 +715,10 @@ func (fsm *storeFSM) Snapshot() (raft.FSMSnapshot, error) {
 
 func (fsm *storeFSM) applyUpdateShardInfoTierCommand(cmd *proto2.Command) interface{} {
 	return meta2.ApplyUpdateShardInfoTier(fsm.data, cmd)
+}
+
+func (fsm *storeFSM) applyUpdateIndexInfoTierCommand(cmd *proto2.Command) interface{} {
+	return meta2.ApplyUpdateIndexInfoTier(fsm.data, cmd)
 }
 
 func (fsm *storeFSM) applyUpdateNodeStatusCommand(cmd *proto2.Command) interface{} {

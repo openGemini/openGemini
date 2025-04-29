@@ -30,6 +30,7 @@ import (
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/index/clv"
+	"github.com/openGemini/openGemini/engine/shelf"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/errno"
@@ -389,6 +390,36 @@ func (s *Storage) WriteRows(db, rp string, ptId uint32, shardID uint64, rows []i
 	return writeHandler[config.GetHaPolicy()](s, db, rp, ptId, shardID, rows, binaryRows)
 }
 
+func (s *Storage) WriteBlobs(db, rp string, pt uint32, shard uint64, blobs *shelf.BlobGroup) error {
+	defer func(start time.Time) {
+		d := time.Since(start).Nanoseconds()
+		atomic.AddInt64(&statistics.PerfStat.WriteStorageDurationNs, d)
+	}(time.Now())
+
+	err := s.engine.WriteBlobs(db, pt, shard, blobs)
+	if !errno.Equal(err, errno.ShardNotFound) {
+		return err
+	}
+
+	startT := time.Now()
+	timeRangeInfo, err := s.MetaClient.GetShardRangeInfo(db, rp, shard)
+	if err != nil {
+		s.log.Error("Storage Write GetShardRangeInfo err", zap.String("err", err.Error()))
+		return err
+	}
+
+	mstInfo := &meta.MeasurementInfo{
+		EngineType: config.TSSTORE,
+	}
+	err = s.engine.CreateShard(db, rp, pt, shard, timeRangeInfo, mstInfo)
+	atomic.AddInt64(&statistics.PerfStat.WriteCreateShardNs, time.Since(startT).Nanoseconds())
+
+	if err != nil {
+		return err
+	}
+	return s.engine.WriteBlobs(db, pt, shard, blobs)
+}
+
 func (s *Storage) WriteRec(db, rp, mst string, ptId uint32, shardID uint64, rec *record.Record, binaryRec []byte) error {
 	atomic.AddInt64(&statistics.PerfStat.WriteActiveRequests, 1)
 	defer atomic.AddInt64(&statistics.PerfStat.WriteActiveRequests, -1)
@@ -565,6 +596,14 @@ func (s *Storage) SeriesExactCardinality(db string, ptIDs []uint32, measurements
 
 func (s *Storage) GetEngine() netstorage.Engine {
 	return s.engine
+}
+
+func (s *Storage) RegisterOnPTOffload(id uint64, f func(ptID uint32)) {
+	s.engine.RegisterOnPTOffload(id, f)
+}
+
+func (s *Storage) UninstallOnPTOffload(id uint64) {
+	s.engine.UninstallOnPTOffload(id)
 }
 
 func (s *Storage) PreOffload(opId uint64, ptInfo *meta.DbPtInfo) error {

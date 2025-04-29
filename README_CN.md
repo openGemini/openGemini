@@ -134,7 +134,7 @@ git clone https://github.com/openGemini/openGemini.git
 
 ```bash
 > ls build
-ts-cli  ts-meta  ts-monitor  ts-server  ts-sql  ts-store
+ts-meta  ts-monitor  ts-server  ts-sql  ts-store
 ```
 
 ### 配置
@@ -154,6 +154,12 @@ ts-cli  ts-meta  ts-monitor  ts-server  ts-sql  ts-store
 集群部署见[用户指南](https://docs.opengemini.org/zh/guide/quick_start/get_started.html)
 
 #### 使用openGemini
+
+安装 ts-cli
+
+```
+> go install github.com/openGemini/openGemini-cli/cmd/ts-cli@latest
+```
 
 使用客户端ts-cli连接openGemini
 

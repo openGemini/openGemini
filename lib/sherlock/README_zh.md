@@ -27,11 +27,11 @@ sherlock 每隔一段时间收集一次以下应用指标：
 ```go
 func main() {
   s := initSherlock()
-
+  
   // start the metrics collect and dump loop
   s.Start()
   ......
-
+  
   // quit the application and stop the dumper
   s.Stop()
 }
@@ -56,8 +56,8 @@ func initSherlock() *Sherlock {
 ## sherlock支持对以下几种应用指标进行监控:
 
 ```
-* mem: 内存分配
-* cpu: cpu使用率
+* mem: 内存分配     
+* cpu: cpu使用率      
 * goroutine: 协程数
 ```
 

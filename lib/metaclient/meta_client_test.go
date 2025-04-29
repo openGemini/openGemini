@@ -24,12 +24,12 @@ import (
 	"github.com/agiledragon/gomonkey/v2"
 	"github.com/influxdata/influxdb/toml"
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
-	"github.com/openGemini/openGemini/engine/executor/spdy"
-	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/obs"
+	"github.com/openGemini/openGemini/lib/spdy"
+	"github.com/openGemini/openGemini/lib/spdy/transport"
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
@@ -682,6 +682,9 @@ func TestClient_CreateMeasurement(t *testing.T) {
 
 	_, err = c.CreateMeasurement("db0", "rp0", "measurement", nil, 0, nil, config.COLUMNSTORE, colStoreInfo, schemaInfo, options)
 	require.EqualError(t, err, "execute command timeout")
+
+	_, err = c.SimpleCreateMeasurement("db0", "rp0", "measurement", config.COLUMNSTORE)
+	require.EqualError(t, err, "execute command timeout")
 }
 
 func TestClient_CreateDatabase(t *testing.T) {
@@ -1295,6 +1298,9 @@ func TestCreateMeasurement(t *testing.T) {
 
 	for _, mst := range invalidMst {
 		_, err = c.CreateMeasurement("db0", "rp0", mst, nil, 0, nil, config.TSSTORE, nil, nil, nil)
+		require.EqualError(t, err, errno.NewError(errno.InvalidMeasurement, mst).Error())
+
+		_, err = c.SimpleCreateMeasurement("db0", "rp0", mst, config.TSSTORE)
 		require.EqualError(t, err, errno.NewError(errno.InvalidMeasurement, mst).Error())
 	}
 
@@ -2620,6 +2626,7 @@ var newPbFunc = map[proto2.Command_Type]func() (interface{}, *proto.ExtensionDes
 	proto2.Command_UpdateReplicationCommand:         newUpdateReplicationPb,
 	proto2.Command_UpdateMeasurementCommand:         newUpdateMeasurementPb,
 	proto2.Command_UpdateMetaNodeStatusCommand:      newUpdateMetaNodeStatusPb,
+	proto2.Command_UpdateIndexInfoTierCommand:       newUpdateIndexInfoTierPb,
 }
 
 func newCreateDatabasePb() (interface{}, *proto.ExtensionDesc) {
@@ -2808,6 +2815,10 @@ func newDeleteIndexGroupPb() (interface{}, *proto.ExtensionDesc) {
 
 func newUpdateShardInfoTierPb() (interface{}, *proto.ExtensionDesc) {
 	return &proto2.UpdateShardInfoTierCommand{}, proto2.E_UpdateShardInfoTierCommand_Command
+}
+
+func newUpdateIndexInfoTierPb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.UpdateIndexInfoTierCommand{}, proto2.E_UpdateIndexInfoTierCommand_Command
 }
 
 func newUpdateNodeStatusPb() (interface{}, *proto.ExtensionDesc) {
@@ -3562,4 +3573,16 @@ func TestClient_TagKeys(t *testing.T) {
 	var client = &Client{cacheData: cacheData}
 	keys := client.TagKeys("")
 	assert.Equal(t, 1, len(keys))
+}
+
+func TestClient_UpdateIndexInfoTier(t *testing.T) {
+	defer initEnv()()
+	client := &Client{
+		cacheData:      &meta2.Data{},
+		metaServers:    []string{"127.0.0.1"},
+		logger:         logger.NewLogger(errno.ModuleMetaClient).With(zap.String("service", "metaclient")),
+		SendRPCMessage: &RPCMessageSender{},
+	}
+	err := client.UpdateIndexInfoTier(1, 1, "db1", "rp1")
+	assert.Equal(t, err.Error(), "execute command timeout")
 }

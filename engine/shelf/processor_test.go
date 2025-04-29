@@ -21,7 +21,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/influxdata/influxdb/toml"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/shelf"
 	"github.com/openGemini/openGemini/lib/config"
@@ -39,11 +38,11 @@ func initConfig(n int) func() {
 	conf.SeriesHashFactor = 2
 	conf.Concurrent = n
 	conf.TSSPConvertConcurrent = max(1, n/4)
-	config.GetStoreConfig().Wal.WalSyncInterval = 0
+	conf.ReliabilityLevel = config.ReliabilityLevelHigh
 
 	shelf.Open()
 	return func() {
-		config.GetStoreConfig().Wal.WalSyncInterval = toml.Duration(config.DefaultWALSyncInterval)
+		conf.ReliabilityLevel = config.ReliabilityLevelMedium
 		conf.Enabled = false
 	}
 }
@@ -54,8 +53,9 @@ func TestRunner(t *testing.T) {
 	shardIDNotExits := uint64(100)
 
 	var runner = newNilRunner()
-	runner.RegisterShard(10, nil)
-	runner.UnregisterShard(10)
+	runner.RegisterShard(shardID, nil)
+	runner.UnregisterShard(shardID)
+	runner.ForceFlush(shardID)
 	runner.Close()
 
 	runner = newRunner(shardID, t.TempDir())
@@ -63,6 +63,7 @@ func TestRunner(t *testing.T) {
 	require.NotEmpty(t, writeRows(runner, shardIDNotExits)) // shard not exists
 
 	runner.RegisterShard(shardID, nil)
+	runner.ForceFlush(shardID)
 	runner.UnregisterShard(shardID)
 	runner.UnregisterShard(shardIDNotExits) // shard not exists
 
@@ -112,6 +113,18 @@ func TestAllocTSSPConvertSource(t *testing.T) {
 	}
 }
 
+func TestBlobGroup(t *testing.T) {
+	bg, release := shelf.NewBlobGroup(1)
+	defer release()
+
+	bg.GroupingRow("mst", []byte{0, 0}, buildRecord(1, 1), 0)
+	ok := false
+	bg.Walk(func(blob *shelf.Blob) {
+		ok = true
+	})
+	require.True(t, ok)
+}
+
 func newNilRunner() *shelf.Runner {
 	return nil
 }
@@ -125,7 +138,7 @@ func newRunner(shardID uint64, dir string) *shelf.Runner {
 		OwnerDb: "db0",
 		OwnerPt: 1,
 	}
-	shardInfo := shelf.NewShardInfo(ident, dir, &lock, nil, &EmptyIndex{sidCache: 10, sidCreate: 100})
+	shardInfo := shelf.NewShardInfo(ident, dir, &lock, &MockTbStore{}, &EmptyIndex{sidCache: 10, sidCreate: 100})
 
 	runner := shelf.NewRunner()
 	runner.RegisterShard(shardID, shardInfo)
@@ -149,28 +162,24 @@ func newShard(shardID uint64, dir string) (*shelf.Shard, *EmptyIndex, *MockTbSto
 }
 
 func writeRows(runner *shelf.Runner, shardID uint64) error {
-	rgs := buildRowGroups()
-	rgs.BeforeWrite()
+	group := buildRowGroups()
 
-	for i := range rgs.GroupNum() {
-		rg := rgs.RowGroup(i)
-		runner.Schedule(shardID, rg)
-	}
-
-	rgs.Wait()
-	return rgs.Error()
+	return runner.ScheduleGroup(shardID, group)
 }
 
-func buildRowGroups() *record.MemGroups {
-	rg, _ := record.NewMemGroups(shelf.NewRunner().Size(), 1)
+func buildRowGroups() *shelf.BlobGroup {
+	group, _ := shelf.NewBlobGroup(shelf.NewRunner().Size())
 
 	now := time.Now().UnixNano()
 	now -= now % 1e9
 	for i := 0; i < 100; i++ {
-		rg.Add(buildRow(now+int64(1000-i), fmt.Sprintf("foo_%d", i%5), i))
+		row := buildRow(now+int64(1000-i), fmt.Sprintf("foo_%d", i%5), i)
+		rec := &record.Record{}
+		_ = record.AppendRowToRecord(rec, row)
+		group.GroupingRow(row.Name, row.IndexKey, rec, 0)
 	}
 
-	return rg
+	return group
 }
 
 func buildRow(ts int64, name string, i int) *influx.Row {
@@ -301,4 +310,16 @@ func itrTSSPFile(f immutable.TSSPFile, hook func(sid uint64, rec *record.Record)
 
 		hook(sid, rec)
 	}
+}
+func TestIsUniqueSorted(t *testing.T) {
+
+	var list []int
+	list = append(list, 1, 2, 3, 4)
+	sorted := shelf.IsUniqueSorted(list)
+	require.Equal(t, true, sorted)
+
+	list = append(list, 3, 2, 1)
+	sorted = shelf.IsUniqueSorted(list)
+	require.Equal(t, false, sorted)
+
 }

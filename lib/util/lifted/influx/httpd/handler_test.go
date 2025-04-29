@@ -708,7 +708,9 @@ func Benchmark_TimeSeries2Rows(t *testing.B) {
 		for j := 0; j < 1000000; j++ {
 			*rs, err = timeSeries2Rows(EmptyPromMst, *rs, tss, make(map[int]bool))
 			if err != nil {
-				t.Fatal("timeSeries2Rows fail")
+				if err != nil {
+					t.Fatal("timeSeries2Rows fail")
+				}
 			}
 			t.StopTimer()
 		}

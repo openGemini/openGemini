@@ -15,8 +15,8 @@
 package codec_test
 
 import (
-	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/lib/codec"
+	"github.com/openGemini/openGemini/lib/spdy/transport"
 )
 
 func (o *CodecObject) Marshal(buf []byte) ([]byte, error) {

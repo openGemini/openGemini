@@ -64,7 +64,9 @@ func (wg *WaitGroup) Done() {
 }
 
 func (wg *WaitGroup) Wait() {
-	wg.wg.Wait()
+	if wg.wg != nil {
+		wg.wg.Wait()
+	}
 }
 
 func (wg *WaitGroup) Close() {
@@ -83,6 +85,8 @@ type Service struct {
 
 	Engine engine
 
+	closing chan struct{}
+
 	// max concurrency number for move shards
 	HsWaitGroup *WaitGroup
 }
@@ -92,6 +96,7 @@ func NewService(c config.HierarchicalConfig) *Service {
 		Logger:      logger.NewLogger(errno.ModuleHierarchical),
 		Config:      &c,
 		HsWaitGroup: NewWaitGroup(c.MaxProcessN),
+		closing:     make(chan struct{}),
 	}
 	s.base.Init("hierarchical", time.Duration(c.RunInterval), s.handle)
 	return s
@@ -107,12 +112,14 @@ func (s *Service) Open() error {
 }
 
 func (s *Service) Close() error {
+	if s.closing == nil {
+		return nil
+	}
+	close(s.closing)
 	if err := s.base.Close(); err != nil {
 		return err
 	}
 
-	s.HsWaitGroup.Close()
-	s.HsWaitGroup = nil
 	return nil
 }
 
@@ -139,6 +146,13 @@ func (s *Service) handle() {
 func (s *Service) runShardHierarchicalStorage(shardsToCold []*meta.ShardIdentifier) {
 	for _, shard := range shardsToCold {
 		s.HsWaitGroup.Add(1)
+		select {
+		case <-s.closing:
+			s.HsWaitGroup.Done()
+			s.closing = nil
+			return
+		default:
+		}
 		go func(s *Service, shard *meta.ShardIdentifier) {
 			defer func() {
 				s.HsWaitGroup.Done()

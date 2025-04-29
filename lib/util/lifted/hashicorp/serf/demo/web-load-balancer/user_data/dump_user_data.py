@@ -16,3 +16,4 @@ for sh in shell_scripts:
     print "Base64 for %s:" % sh
     print enc
     print
+
