@@ -14,7 +14,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
-	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -3562,16 +3561,16 @@ func TestClient_GetIndexDurationInfo(t *testing.T) {
 
 func TestClient_TagKeys(t *testing.T) {
 	var cacheData = new(meta2.Data)
-	patchCacheData := gomonkey.ApplyMethodFunc(reflect.TypeOf(cacheData), "Database", func(name string) *meta2.DatabaseInfo {
-		return &meta2.DatabaseInfo{RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
-			"rp1": {Measurements: map[string]*meta2.MeasurementInfo{"mst1": {Schema: &meta2.CleanSchema{}}}},
-			"rp2": {Measurements: map[string]*meta2.MeasurementInfo{"mst2": {Schema: &meta2.CleanSchema{}}}},
-		}}
-	})
-	defer patchCacheData.Reset()
+	cacheData.Databases = map[string]*meta2.DatabaseInfo{
+		"db0": {
+			RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+				"rp1": {Measurements: map[string]*meta2.MeasurementInfo{"mst1": {Schema: &meta2.CleanSchema{}}}},
+				"rp2": {Measurements: map[string]*meta2.MeasurementInfo{"mst2": {Schema: &meta2.CleanSchema{}}}},
+			}},
+	}
 
 	var client = &Client{cacheData: cacheData}
-	keys := client.TagKeys("")
+	keys := client.TagKeys("db0")
 	assert.Equal(t, 1, len(keys))
 }
 

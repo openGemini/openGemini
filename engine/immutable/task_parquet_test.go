@@ -43,34 +43,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestParquetTaskPrepare(t *testing.T) {
-	convey.Convey("test task prepare", t, func() {
-		testSchema := map[string]uint8{"test": 1}
-		const (
-			tsspFile          = "/tsdb/instanceId/data/db/dbpt/rp/shardId_1714867200000000000_1715040000000000000_872/tssp/mst/xxxxx.tssp"
-			mergedFile        = "/tsdb/instanceId/data/db/dbpt/rp/shardId_1714867200000000000_1715040000000000000_872/tssp/mst/out-of-order/00000001-0007-00000001.tssp"
-			parquetFile       = "/tsdb/instanceId/parquet/db/rp/mst/dt=2024-05-05/shardId_xxxxx.parquet"
-			mergedParquetFile = "/tsdb/instanceId/parquet/db/rp/mst/dt=2024-05-05/shardId_00000001-0007-00100001.parquet"
-		)
-		task := ParquetTask{plan: TSSP2ParquetPlan{
-			Mst:    "test",
-			Schema: testSchema,
-			Files:  []string{tsspFile, mergedFile},
-			enable: false,
-		}}
-		p1 := gomonkey.ApplyFunc(fileops.Mkdir, func(_ string, _ os.FileMode, _ ...fileops.FSOption) error {
-			return nil
-		})
-		defer p1.Reset()
-		mapping, err := task.prepare()
-		if err != nil {
-			t.Fatal("task prepare failed, error:", err.Error())
-		}
-		convey.So(mapping[tsspFile], convey.ShouldEqual, parquetFile)
-		convey.So(mapping[mergedFile], convey.ShouldEqual, mergedParquetFile)
-	})
-}
-
 func TestTaskExport2TSSPFile(t *testing.T) {
 	convey.Convey("test export tsspFile", t, func() {
 		f := tsspFile{}

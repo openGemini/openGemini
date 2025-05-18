@@ -322,9 +322,11 @@ func Test_ResetReplayVar(t *testing.T) {
 	if err != nil {
 		t.Fatal()
 	}
-	if err := os.MkdirAll(p, 0700); err == nil {
+	if err := os.MkdirAll(p, 0750); err == nil {
 		if _, err := os.Stat(p); err == nil {
-			os.WriteFile(path.Join(p, strconv.FormatUint(task.id, 10)), b, 0)
+			if err := os.WriteFile(path.Join(p, strconv.FormatUint(task.id, 10)), b, 0640); err != nil {
+				t.Fatal()
+			}
 		}
 	}
 	task.shardIds = make(map[uint32][]*uint64)
