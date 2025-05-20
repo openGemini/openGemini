@@ -76,14 +76,24 @@ const (
 	defaultMaxWalFileSize  = toml.Size(256 * MB)
 	defaultMaxWalDuration  = toml.Duration(300 * time.Second)
 	defaultWalCompressMode = 1 // LZ4
+
+	ReliabilityLevelLow    = 1
+	ReliabilityLevelMedium = 2
+	ReliabilityLevelHigh   = 3
 )
 
 type ShelfMode struct {
-	Enabled        bool          `toml:"enabled"`
-	MaxWalFileSize toml.Size     `toml:"max-wal-file-size"`
-	MaxWalDuration toml.Duration `toml:"max-wal-duration"`
+	Enabled bool `toml:"enabled"`
 
-	//WAL data compression mode. 0: not compressed; 1: LZ4 (default); 2: Snappy
+	// Reliability requirements for data writing
+	// 1: Low reliability. Data may be lost due to process faults.
+	// 2: Medium reliability. Data may be lost due to container or VM faults. (default)
+	// 3: High reliability. Data may be lost when a storage medium is faulty.
+	ReliabilityLevel int           `toml:"reliability-level"`
+	MaxWalFileSize   toml.Size     `toml:"max-wal-file-size"`
+	MaxWalDuration   toml.Duration `toml:"max-wal-duration"`
+
+	// WAL data compression mode. 0: not compressed; 1: LZ4 (default); 2: Snappy
 	WalCompressMode int `toml:"wal-compress-mode"`
 
 	// number of background write threads. default value is CPUNum
@@ -101,10 +111,11 @@ type ShelfMode struct {
 
 func defaultBridgeMode() ShelfMode {
 	return ShelfMode{
-		Enabled:         false,
-		MaxWalFileSize:  defaultMaxWalFileSize,
-		MaxWalDuration:  defaultMaxWalDuration,
-		WalCompressMode: defaultWalCompressMode,
+		Enabled:          false,
+		MaxWalFileSize:   defaultMaxWalFileSize,
+		MaxWalDuration:   defaultMaxWalDuration,
+		WalCompressMode:  defaultWalCompressMode,
+		ReliabilityLevel: ReliabilityLevelMedium,
 	}
 }
 
@@ -113,6 +124,7 @@ func (t *ShelfMode) Corrector(cpuNum int) {
 	ResetZero2Default(&t.MaxWalDuration, 0, defaultMaxWalDuration)
 	ResetZero2Default(&t.Concurrent, 0, max(1, cpuNum/2))
 	ResetZero2Default(&t.TSSPConvertConcurrent, 0, max(1, cpuNum/8))
+	LimitRange(&t.ReliabilityLevel, ReliabilityLevelLow, ReliabilityLevelHigh, ReliabilityLevelMedium)
 }
 
 func ShelfModeEnabled() bool {

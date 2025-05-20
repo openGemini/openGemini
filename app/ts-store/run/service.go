@@ -76,10 +76,12 @@ func (s *Service) Open() error {
 }
 
 func (s *Service) Close() error {
-	if s.httpServer != nil {
-		return s.httpServer.close()
+	var err error
+	if s.httpServer != nil && err == nil {
+		err = s.httpServer.close()
 	}
-	return nil
+
+	return err
 }
 
 // openHttpServer Used only for debugging.

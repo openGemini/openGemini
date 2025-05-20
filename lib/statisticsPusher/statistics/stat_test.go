@@ -28,7 +28,7 @@ func TestShelf(t *testing.T) {
 	obj.WALFileCount.Incr()
 	obj.WALFileCount.Decr()
 
-	runTest(t, "shelf", "WALConverting=10", "WALFileCount=1")
+	assertCollect(t, "shelf", "WALConverting=10", "WALFileCount=1")
 }
 
 func TestHotMode(t *testing.T) {
@@ -36,7 +36,7 @@ func TestHotMode(t *testing.T) {
 	obj.ReadBytesTotal.Add(11)
 	obj.TotalMemorySize.Add(2)
 
-	runTest(t, "hotMode", "ReadBytesTotal=11")
+	assertCollect(t, "hotMode", "ReadBytesTotal=11")
 }
 
 func TestResultCache(t *testing.T) {
@@ -45,10 +45,38 @@ func TestResultCache(t *testing.T) {
 	obj.InuseCacheSize.Store(800)
 	obj.CacheTotal.Add(1)
 
-	runTest(t, "resultCache", "TotalCacheSize=1000", "InuseCacheSize=800", "CacheTotal=1")
+	assertCollect(t, "resultCache", "TotalCacheSize=1000", "InuseCacheSize=800", "CacheTotal=1")
 }
 
-func runTest(t *testing.T, mst string, contents ...string) {
+func TestStoreQuery(t *testing.T) {
+	obj := stat.NewStoreQuery()
+	obj.StoreQueryRequests.Store(10)
+	obj.UnmarshalQueryTimeTotal.Store(100)
+
+	assertCollect(t, obj.MeasurementName(), "storeQueryReq=10", "UnmarshalQueryTimeTotal=100")
+	assertCollectOps(t, obj.MeasurementName(), map[string]interface{}{
+		"storeQueryReq":           int64(10),
+		"UnmarshalQueryTimeTotal": int64(100),
+	})
+}
+
+func TestHandler(t *testing.T) {
+	obj := stat.NewHandler()
+	obj.QueryRequests.Store(10)
+	obj.Query400ErrorStmtCount.Store(10)
+	obj.Query400ErrorStmtCount.Add(5)
+	obj.Query400ErrorStmtCount.Incr()
+	obj.Query400ErrorStmtCount.Decr()
+	obj.Query400ErrorStmtCount.Decr()
+
+	assertCollect(t, obj.MeasurementName(), "queryStmtCount=14", "queryErrorStmtCount=10")
+	assertCollectOps(t, obj.MeasurementName(), map[string]interface{}{
+		"queryStmtCount":      int64(14),
+		"queryErrorStmtCount": int64(10),
+	})
+}
+
+func assertCollect(t *testing.T, mst string, contents ...string) {
 	col := stat.NewCollector()
 	col.SetGlobalTags(map[string]string{
 		"host": "127.0.0.1",
@@ -62,4 +90,25 @@ func runTest(t *testing.T, mst string, contents ...string) {
 		require.Contains(t, string(buf), content)
 	}
 	require.Contains(t, string(buf), "host=127.0.0.1")
+}
+
+func assertCollectOps(t *testing.T, mst string, exp map[string]interface{}) {
+	col := stat.NewCollector()
+	col.SetGlobalTags(map[string]string{
+		"host": "127.0.0.1",
+	})
+
+	mstExists := false
+	items := col.CollectOps()
+	for _, item := range items {
+		if item.Name != mst {
+			continue
+		}
+
+		for key, value := range exp {
+			require.Equal(t, value, item.Values[key])
+		}
+		mstExists = true
+	}
+	require.True(t, mstExists)
 }

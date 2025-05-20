@@ -26,7 +26,7 @@ import (
 func TestTsIndexInfo(t *testing.T) {
 	type args struct {
 		immTables *immutable.MmsReaders
-		memTables *mutable.MemTables
+		memTables MemDataReader
 		cursors   []comm.KeyCursor
 	}
 	tests := []struct {
@@ -51,7 +51,7 @@ func TestTsIndexInfo(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			immutable.InitQueryFileCache(2, true)
 			defer immutable.ResetQueryFileCache()
-			info := NewTsIndexInfo([]*immutable.MmsReaders{tt.args.immTables}, []*mutable.MemTables{tt.args.memTables}, tt.args.cursors)
+			info := NewTsIndexInfo([]*immutable.MmsReaders{tt.args.immTables}, []MemDataReader{tt.args.memTables}, tt.args.cursors)
 			info.Ref()
 			info.Unref()
 			assert2.Equal(t, len(info.GetCursors()), 1)

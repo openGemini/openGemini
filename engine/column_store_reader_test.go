@@ -686,7 +686,7 @@ func TestColumnStoreReaderTranRecToChunk(t *testing.T) {
 	schema := createQuerySchemaForTranRec()
 	readerPlan := executor.NewLogicalColumnStoreReader(nil, schema)
 	reader := NewColumnStoreReader(readerPlan, nil)
-	if err := reader.initReadCursor(); err != nil {
+	if err := reader.initReadCursor(context.Background()); err != nil {
 		t.Fatalf("ColumnStoreReader initReadCursor, err: %+v", err)
 	}
 	if err := reader.initSchemaAndPool(); err != nil {
@@ -700,5 +700,32 @@ func TestColumnStoreReaderTranRecToChunk(t *testing.T) {
 	// compare column and dim for the filed "string"
 	if !reflect.DeepEqual(chk.Column(3), chk.Dim(0)) {
 		t.Fatal("trans rec to dim failed. The column[3] not equal to dim[0]")
+	}
+}
+
+func createQuerySchemaForTopnDDCM() *executor.QuerySchema {
+	var fields influxql.Fields
+	m := &influxql.Measurement{Name: "tranRec"}
+	opt := query.ProcessorOptions{Sources: []influxql.Source{m}, Dimensions: []string{"string", "float"}}
+	fields = append(fields, influxql.Fields{
+		{Expr: &influxql.Call{Name: "topn_ddcm", Args: []influxql.Expr{&influxql.VarRef{Val: "int", Type: influxql.Integer},
+			&influxql.NumberLiteral{Val: 0.000003}, &influxql.IntegerLiteral{Val: 12}, &influxql.StringLiteral{Val: "count"},
+			&influxql.NumberLiteral{Val: 0}}}},
+	}...)
+	names := []string{"int"}
+	schema := executor.NewQuerySchema(fields, names, &opt, nil)
+	schema.AddTable(m, schema.MakeRefs())
+	return schema
+}
+
+func TestColumnStoreReaderTopnDDCMInit(t *testing.T) {
+	schema := createQuerySchemaForTopnDDCM()
+	readerPlan := executor.NewLogicalColumnStoreReader(nil, schema)
+	reader := NewColumnStoreReader(readerPlan, nil)
+	if err := reader.initReadCursor(context.Background()); err != nil {
+		t.Fatalf("ColumnStoreReader TopnDDCMInit, err1: %+v", err)
+	}
+	if err := reader.initSchemaAndPool(); err != nil {
+		t.Fatalf("ColumnStoreReader TopnDDCMInit, err2: %+v", err)
 	}
 }

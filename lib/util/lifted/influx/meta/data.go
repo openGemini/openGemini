@@ -3320,6 +3320,23 @@ func (data *Data) UpdateShardInfoTier(shardID uint64, shardTier uint64, dbName, 
 	return fmt.Errorf("cannot find shard %d for rp %s on database %s", shardID, rpName, dbName)
 }
 
+func (data *Data) UpdateIndexInfoTier(indexID uint64, indexTier uint64, dbName, rpName string) error {
+	rpi, err := data.RetentionPolicy(dbName, rpName)
+	if err != nil {
+		return err
+	}
+
+	for i := range rpi.IndexGroups {
+		for j := range rpi.IndexGroups[i].Indexes {
+			if rpi.IndexGroups[i].Indexes[j].ID == indexID {
+				// todo: rpi.IndexGroups[i].Indexes[j].Tier = indexTier
+				return nil
+			}
+		}
+	}
+	return fmt.Errorf("cannot find index %d for rp %s on database %s", indexID, rpName, dbName)
+}
+
 func (data *Data) UpdateNodeStatus(id uint64, status int32, lTime uint64, gossipPort string) error {
 	// do not take over
 	if !data.TakeOverEnabled {

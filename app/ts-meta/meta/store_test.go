@@ -30,12 +30,12 @@ import (
 	"github.com/openGemini/openGemini/app/ts-meta/meta"
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
 	"github.com/openGemini/openGemini/coordinator"
-	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	logger2 "github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/obs"
+	"github.com/openGemini/openGemini/lib/spdy/transport"
 	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
@@ -190,6 +190,7 @@ type MockStore interface {
 	MigratePt(uint64, transport.Codec, transport.Callback) error
 	SendSegregateNodeCmds(nodeIDs []uint64, address []string) (int, error)
 	TransferLeadership(database string, nodeId uint64, oldMasterPtId, newMasterPtId uint32) error
+	Ping(nodeID uint64, address string, timeout time.Duration) error
 }
 
 type MockNetStorage struct {
@@ -236,6 +237,10 @@ func (s *MockNetStorage) SendSegregateNodeCmds(nodeIDs []uint64, address []strin
 }
 
 func (s *MockNetStorage) TransferLeadership(database string, nodeId uint64, oldMasterPtId, newMasterPtId uint32) error {
+	return nil
+}
+
+func (s *MockNetStorage) Ping(nodeID uint64, address string, timeout time.Duration) error {
 	return nil
 }
 
@@ -481,6 +486,9 @@ func shardInfoMsgHandler(cmd *proto2.Command, mms *meta.MockMetaService) error {
 		return err
 	}
 	h.InitHandler(mms.GetStore(), mms.GetConfig(), nil)
+	if err != nil {
+		return err
+	}
 	resp, err := h.Process()
 	if err != nil {
 		return err
@@ -800,6 +808,9 @@ func TestDownSampleCommands(t *testing.T) {
 	if err = meta.ProcessExecuteRequest(ms.GetStore(), meta.GenerateCreateDatabaseCmd(db), ms.GetConfig()); err != nil {
 		t.Fatal(err)
 	}
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err = ms.GetStore().ApplyCmd(meta.GenerateCreateDownSampleCmd(db, rp, duration, sampleIntervals, timeIntervals, calls)); err != nil {
 		t.Fatal(err)
 	}
@@ -901,7 +912,45 @@ func TestStoreExpandGroups(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+func TestPtCheck(t *testing.T) {
+	dir := t.TempDir()
+	config, err := meta.NewMetaConfig(dir, "")
+	require.NoError(t, err)
 
+	config.UseIncSyncData = true
+	s := meta.NewStore(config, "", "", "")
+
+	data := &meta2.Data{
+		PtView: map[string]meta2.DBPtInfos{
+			"db0": {
+				{
+					PtId:   1,
+					Owner:  meta2.PtOwner{NodeID: 1},
+					Status: meta2.Online,
+				},
+				{
+					PtId:   2,
+					Owner:  meta2.PtOwner{NodeID: 2},
+					Status: meta2.Online,
+				},
+				{
+					PtId:   4,
+					Owner:  meta2.PtOwner{NodeID: 4},
+					Status: meta2.Offline,
+				},
+			},
+		},
+	}
+	s.SetData(data)
+	nodeID := 2
+	err = s.PtCheck(uint64(nodeID), s.GetData().PtView)
+	require.NoError(t, err)
+
+	nodeID = 4
+	err = s.PtCheck(uint64(nodeID), s.GetData().PtView)
+	require.Error(t, errno.NewError(errno.PtNotFound, nodeID), "Pt un found，msg:")
+
+}
 func TestCreateDataNodeRepeat(t *testing.T) {
 	dir := t.TempDir()
 	mms, err := meta.NewMockMetaService(dir, "127.0.0.1")

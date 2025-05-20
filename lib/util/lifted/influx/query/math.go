@@ -949,11 +949,13 @@ type truncateFunc struct {
 	BaseInfo
 }
 
-func (f *truncateFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
-	if len(expr.Args) != 1 {
-		return fmt.Errorf("invalid argument number in %s(): %d", expr.Name, len(expr.Args))
+func (f *truncateFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 1, Max: 1},
 	}
+}
 
+func (f *truncateFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	return compileMathFunction(expr, c, 1)
 }
 

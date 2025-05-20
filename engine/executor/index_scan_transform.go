@@ -19,7 +19,6 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/openGemini/openGemini/engine/comm"
@@ -346,11 +345,11 @@ func (trans *IndexScanTransform) tsIndexScan() error {
 	}
 	output := trans.pipelineExecutor.root.transform.GetOutputs()
 	if len(output) > 1 {
-		atomic.AddInt64(&statistics.StoreQueryStat.ChunkReaderDagBuildTimeTotal, time.Since(startTime).Nanoseconds())
+		statistics.NewStoreQuery().ChunkReaderDagBuildTimeTotal.AddSinceNano(startTime)
 		return errors.New("the output should be 1")
 	}
 	trans.indexScanErr = false
-	atomic.AddInt64(&statistics.StoreQueryStat.ChunkReaderDagBuildTimeTotal, time.Since(startTime).Nanoseconds())
+	statistics.NewStoreQuery().ChunkReaderDagBuildTimeTotal.AddSinceNano(startTime)
 	trans.pipelineExecutor.Query = trans.opt.Query
 	return nil
 }
@@ -483,13 +482,13 @@ func (trans *IndexScanTransform) WorkHelper(ctx context.Context) (error, bool) {
 	wgChild.Add(1)
 	startTime := ctx.Value(query.IndexScanDagStartTimeKey)
 	if startTime, ok := startTime.(time.Time); ok {
-		atomic.AddInt64(&statistics.StoreQueryStat.IndexScanDagRunTimeTotal, time.Since(startTime).Nanoseconds())
+		statistics.NewStoreQuery().IndexScanDagRunTimeTotal.AddSinceNano(startTime)
 	}
 	go func() {
 		defer wgChild.Done()
 		startTime := time.Now()
 		pipError = trans.pipelineExecutor.ExecuteExecutor(ctx)
-		atomic.AddInt64(&statistics.StoreQueryStat.ChunkReaderDagRunTimeTotal, time.Since(startTime).Nanoseconds())
+		statistics.NewStoreQuery().ChunkReaderDagRunTimeTotal.AddSinceNano(startTime)
 	}()
 
 	done := trans.Running(ctx)

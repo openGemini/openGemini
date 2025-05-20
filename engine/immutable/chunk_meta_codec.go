@@ -123,6 +123,10 @@ func (ctx *ChunkMetaCodecCtx) MemSize() int {
 	return (cap(ctx.int64s) + cap(ctx.int64ps)) * util.Int64SizeBytes
 }
 
+func (ctx *ChunkMetaCodecCtx) Instance() *ChunkMetaCodecCtx {
+	return ctx
+}
+
 func (ctx *ChunkMetaCodecCtx) Release() {
 	ctx.header.Reset()
 	ctx.trailer = nil

@@ -201,7 +201,7 @@ func (h *Handler) serveCreateRepository(w http.ResponseWriter, r *http.Request, 
 	if err := ValidateRepository(repository); err != nil {
 		logger.GetLogger().Error("serveCreateRepository", zap.Error(err))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
-		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		handlerStat.Write400ErrRequests.Incr()
 		return
 	}
 	options := &obs.ObsOptions{}
@@ -220,7 +220,7 @@ func (h *Handler) serveCreateRepository(w http.ResponseWriter, r *http.Request, 
 		options.Sk = crypto.Decrypt(options.Sk)
 		if options.Sk == "" {
 			h.httpErrorRsp(w, ErrorResponse("obs sk decrypt failed", LogReqErr), http.StatusBadRequest)
-			atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+			handlerStat.Write400ErrRequests.Incr()
 			return
 		}
 	}
@@ -230,7 +230,7 @@ func (h *Handler) serveCreateRepository(w http.ResponseWriter, r *http.Request, 
 			host = options.Endpoint
 		} else {
 			h.httpErrorRsp(w, ErrorResponse("obs sk decrypt failed", LogReqErr), http.StatusBadRequest)
-			atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+			handlerStat.Write400ErrRequests.Incr()
 			return
 		}
 	}
@@ -249,7 +249,7 @@ func (h *Handler) serveDeleteRepository(w http.ResponseWriter, r *http.Request, 
 	if err := ValidateRepository(repository); err != nil {
 		logger.GetLogger().Error("serveDeleteRepository", zap.Error(err))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
-		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		handlerStat.Write400ErrRequests.Incr()
 		return
 	}
 	logger.GetLogger().Info("serveDeleteRepository", zap.String("repository", repository))
@@ -294,7 +294,7 @@ func (h *Handler) serveShowRepository(w http.ResponseWriter, r *http.Request, us
 	if err := ValidateRepository(repository); err != nil {
 		h.Logger.Error("serveRepository", zap.Error(err))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
-		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		handlerStat.Write400ErrRequests.Incr()
 		return
 	}
 	h.Logger.Info("serveRepository", zap.String("repository", repository))
@@ -325,7 +325,7 @@ func (h *Handler) serveUpdateRepository(w http.ResponseWriter, r *http.Request, 
 	if err := ValidateRepository(repository); err != nil {
 		logger.GetLogger().Error("serveUpdateRepository", zap.Error(err))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
-		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		handlerStat.Write400ErrRequests.Incr()
 		return
 	}
 	logger.GetLogger().Info("serveUpdateRepository", zap.String("repository", repository))
@@ -354,7 +354,7 @@ func (h *Handler) serveCreateLogstream(w http.ResponseWriter, r *http.Request, u
 	if err := ValidateRepoAndLogStream(repository, logStream); err != nil {
 		logger.GetLogger().Error("serveCreateLogstream", zap.Error(err))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
-		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		handlerStat.Write400ErrRequests.Incr()
 		return
 	}
 	options := &meta2.Options{}
@@ -399,7 +399,7 @@ func (h *Handler) serveDeleteLogstream(w http.ResponseWriter, r *http.Request, u
 	if err := ValidateRepoAndLogStream(repository, logStream); err != nil {
 		logger.GetLogger().Error("serveDeleteLogstream", zap.Error(err))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
-		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		handlerStat.Write400ErrRequests.Incr()
 		return
 	}
 	logger.GetLogger().Info("serveDeleteLogstream", zap.String("logStream", logStream), zap.String("repository", repository))
@@ -416,7 +416,7 @@ func (h *Handler) serveListLogstream(w http.ResponseWriter, r *http.Request, use
 	if err := ValidateRepository(repository); err != nil {
 		h.Logger.Error("serveListLogstream", zap.Error(err))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
-		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		handlerStat.Write400ErrRequests.Incr()
 		return
 	}
 	h.Logger.Info("serveListLogstream", zap.String("repository", repository))
@@ -454,7 +454,7 @@ func (h *Handler) serveShowLogstream(w http.ResponseWriter, r *http.Request, use
 	if err := ValidateRepoAndLogStream(repository, logStream); err != nil {
 		h.Logger.Error("serveLogstream", zap.Error(err))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
-		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		handlerStat.Write400ErrRequests.Incr()
 		return
 	}
 	rpi, err := h.MetaClient.RetentionPolicy(repository, logStream)
@@ -466,7 +466,7 @@ func (h *Handler) serveShowLogstream(w http.ResponseWriter, r *http.Request, use
 	if rpi == nil {
 		h.Logger.Error("serveLogstream fail", zap.Error(ErrLogStreamInvalid))
 		h.httpErrorRsp(w, ErrorResponse(ErrLogStreamInvalid.Error(), LogReqErr), http.StatusBadRequest)
-		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		handlerStat.Write400ErrRequests.Incr()
 		return
 	}
 	bf := bytes.NewBuffer([]byte{})
@@ -493,7 +493,7 @@ func (h *Handler) serveUpdateLogstream(w http.ResponseWriter, r *http.Request, u
 	if err := ValidateRepoAndLogStream(repository, logStream); err != nil {
 		logger.GetLogger().Error("serveUpdateLogstream", zap.Error(err))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
-		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		handlerStat.Write400ErrRequests.Incr()
 		return
 	}
 	option := &meta2.Options{}
@@ -1651,19 +1651,19 @@ func (h *Handler) IsWriteNode() bool {
 
 // serveWrite receives incoming series data in line protocol format and writes it to the database.
 func (h *Handler) serveRecord(w http.ResponseWriter, r *http.Request, user meta2.User) {
-	atomic.AddInt64(&statistics.HandlerStat.WriteRequests, 1)
-	atomic.AddInt64(&statistics.HandlerStat.ActiveWriteRequests, 1)
-	atomic.AddInt64(&statistics.HandlerStat.WriteRequestBytesIn, r.ContentLength)
+	handlerStat.WriteRequests.Incr()
+	handlerStat.ActiveWriteRequests.Incr()
+	handlerStat.WriteRequestBytesIn.Add(r.ContentLength)
 	defer func(start time.Time) {
 		d := time.Since(start).Nanoseconds()
-		atomic.AddInt64(&statistics.HandlerStat.ActiveWriteRequests, -1)
-		atomic.AddInt64(&statistics.HandlerStat.WriteRequestDuration, d)
+		handlerStat.ActiveWriteRequests.Decr()
+		handlerStat.WriteRequestDuration.Add(d)
 	}(time.Now())
 
 	if !h.IsWriteNode() {
 		h.Logger.Error("serveRecord checkNodeRole fail", zap.Error(ErrInvalidWriteNode))
 		h.httpErrorRsp(w, ErrorResponse(ErrInvalidWriteNode.Error(), LogReqErr), http.StatusBadRequest)
-		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		handlerStat.Write400ErrRequests.Incr()
 		return
 	}
 
@@ -1671,7 +1671,7 @@ func (h *Handler) serveRecord(w http.ResponseWriter, r *http.Request, user meta2
 	if err != nil {
 		h.Logger.Error("serveRecord parameterValidate fail", zap.Error(err))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
-		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		handlerStat.Write400ErrRequests.Incr()
 		return
 	}
 
@@ -1679,7 +1679,7 @@ func (h *Handler) serveRecord(w http.ResponseWriter, r *http.Request, user meta2
 	if err != nil {
 		h.Logger.Error("serveRecord getLogWriteRequest fail", zap.Error(err))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
-		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		handlerStat.Write400ErrRequests.Incr()
 		return
 	}
 
@@ -1688,7 +1688,7 @@ func (h *Handler) serveRecord(w http.ResponseWriter, r *http.Request, user meta2
 		h.Logger.Error("GetLogStreamByName fail", zap.Error(err), zap.String("repository", req.repository),
 			zap.String("logStream", req.logStream))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
-		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		handlerStat.Write400ErrRequests.Incr()
 		return
 	}
 	req.mstSchema = logInfo.Measurements[req.logStream+MstSuffix].Schema
@@ -1698,7 +1698,7 @@ func (h *Handler) serveRecord(w http.ResponseWriter, r *http.Request, user meta2
 	if err != nil {
 		h.Logger.Error("serveRecord parseLogTags fail", zap.Error(err))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
-		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		handlerStat.Write400ErrRequests.Incr()
 		return
 	}
 
@@ -1711,7 +1711,7 @@ func (h *Handler) serveRecord(w http.ResponseWriter, r *http.Request, user meta2
 		if err != nil {
 			h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
 			h.Logger.Error("write error:Handle gzip decoding of the body err", zap.Error(errno.NewError(errno.HttpBadRequest)))
-			atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+			handlerStat.Write400ErrRequests.Incr()
 			return
 		}
 		defer compression.PutGzipReader(b)
@@ -1723,7 +1723,7 @@ func (h *Handler) serveRecord(w http.ResponseWriter, r *http.Request, user meta2
 		h.Logger.Error("body-length  is not equal to request ContentLength", zap.Int64("body-length", bodyLengthInt64),
 			zap.Int64("request ContentLength", r.ContentLength), zap.String("x-log-compresstype", xLogCompressType))
 		h.httpErrorRsp(w, ErrorResponse("body-length  is not equal to request ContentLength", LogReqErr), http.StatusBadRequest)
-		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		handlerStat.Write400ErrRequests.Incr()
 		return
 	}
 
@@ -1752,14 +1752,14 @@ func (h *Handler) serveRecord(w http.ResponseWriter, r *http.Request, user meta2
 		h.Logger.Error("scanner internal error", zap.Error(scanner.Err()), zap.String("repo", req.repository),
 			zap.String("logstream", req.logStream))
 		h.httpErrorRsp(w, ErrorResponse("scanner internal error:"+scanner.Err().Error(), LogReqErr), http.StatusBadRequest)
-		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		handlerStat.Write400ErrRequests.Incr()
 		return
 	}
 	if bodyLengthInt64 != totalLen && bodyLengthInt64 != 0 {
 		h.Logger.Error("body-length  is not equal to scanner totalLen", zap.Int64("body-length", bodyLengthInt64),
 			zap.Int64("scanner totalLen", totalLen), zap.String("x-log-compresstype", xLogCompressType))
 		h.httpErrorRsp(w, ErrorResponse("body-length  is not equal to scanner totalLen", LogReqErr), http.StatusBadRequest)
-		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		handlerStat.Write400ErrRequests.Incr()
 		return
 	}
 
@@ -1769,7 +1769,7 @@ func (h *Handler) serveRecord(w http.ResponseWriter, r *http.Request, user meta2
 		if err != nil {
 			h.Logger.Error("serve records", zap.Error(err))
 			h.httpErrorRsp(w, ErrorResponse("write log error", LogReqErr), http.StatusBadRequest)
-			atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+			handlerStat.Write400ErrRequests.Incr()
 			return
 		}
 	} else {
@@ -1781,7 +1781,7 @@ func (h *Handler) serveRecord(w http.ResponseWriter, r *http.Request, user meta2
 		if err != nil {
 			h.Logger.Error("serve records", zap.Error(err))
 			h.httpErrorRsp(w, ErrorResponse("write fail log error", LogReqErr), http.StatusBadRequest)
-			atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+			handlerStat.Write400ErrRequests.Incr()
 			return
 		}
 	} else {
@@ -1831,20 +1831,20 @@ func getLogTimestamp(t int64) int64 {
 }
 
 func (h *Handler) serveUpload(w http.ResponseWriter, r *http.Request, user meta2.User) {
-	atomic.AddInt64(&statistics.HandlerStat.WriteRequests, 1)
-	atomic.AddInt64(&statistics.HandlerStat.ActiveWriteRequests, 1)
-	atomic.AddInt64(&statistics.HandlerStat.WriteRequestBytesIn, r.ContentLength)
+	handlerStat.WriteRequests.Incr()
+	handlerStat.ActiveWriteRequests.Incr()
+	handlerStat.WriteRequestBytesIn.Add(r.ContentLength)
 	start := time.Now()
 	defer func(start time.Time) {
 		d := time.Since(start).Nanoseconds()
-		atomic.AddInt64(&statistics.HandlerStat.ActiveWriteRequests, -1)
-		atomic.AddInt64(&statistics.HandlerStat.WriteRequestDuration, d)
+		handlerStat.ActiveWriteRequests.Decr()
+		handlerStat.WriteRequestDuration.Add(d)
 	}(start)
 
 	if !h.IsWriteNode() {
 		h.Logger.Error("serveRecord checkNodeRole fail", zap.Error(ErrInvalidWriteNode))
 		h.httpErrorRsp(w, ErrorResponse(ErrInvalidWriteNode.Error(), LogReqErr), http.StatusBadRequest)
-		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		handlerStat.Write400ErrRequests.Incr()
 		return
 	}
 
@@ -1854,7 +1854,7 @@ func (h *Handler) serveUpload(w http.ResponseWriter, r *http.Request, user meta2
 		h.Logger.Error("ValidateRepoAndLogStream fail", zap.Error(err), zap.String("repository", repository),
 			zap.String("logStream", logStream))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
-		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		handlerStat.Write400ErrRequests.Incr()
 		return
 	}
 
@@ -1868,7 +1868,7 @@ func (h *Handler) serveUpload(w http.ResponseWriter, r *http.Request, user meta2
 		h.Logger.Error("GetLogStreamByName fail", zap.Error(err), zap.String("repository", repository),
 			zap.String("logStream", logStream))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
-		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		handlerStat.Write400ErrRequests.Incr()
 		return
 	}
 
@@ -1899,7 +1899,7 @@ func (h *Handler) serveUpload(w http.ResponseWriter, r *http.Request, user meta2
 			if err != nil {
 				h.Logger.Error("serve upload", zap.Error(err))
 				h.httpErrorRsp(w, ErrorResponse("upload log error", LogReqErr), http.StatusBadRequest)
-				atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+				handlerStat.Write400ErrRequests.Incr()
 				return
 			}
 			rows = record.GetRecordFromPool(record.LogStoreRecordPool, uploadSchema)
@@ -1910,7 +1910,7 @@ func (h *Handler) serveUpload(w http.ResponseWriter, r *http.Request, user meta2
 			if err != nil {
 				h.Logger.Error("serve upload", zap.Error(err))
 				h.httpErrorRsp(w, ErrorResponse("upload log error", LogReqErr), http.StatusBadRequest)
-				atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+				handlerStat.Write400ErrRequests.Incr()
 				return
 			}
 			rows = record.GetRecordFromPool(record.LogStoreRecordPool, uploadSchema)
@@ -1925,7 +1925,7 @@ func (h *Handler) serveUpload(w http.ResponseWriter, r *http.Request, user meta2
 		if err != nil {
 			h.Logger.Error("serve upload", zap.Error(err))
 			h.httpErrorRsp(w, ErrorResponse("upload log error", LogReqErr), http.StatusBadRequest)
-			atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+			handlerStat.Write400ErrRequests.Incr()
 			return
 		}
 	}
@@ -2296,12 +2296,12 @@ func (h *Handler) ValidateAndCheckLogStreamExists(repoName, streamName string) e
 }
 
 func (h *Handler) serveLogQuery(w http.ResponseWriter, r *http.Request, param *QueryParam, user meta2.User, info *measurementInfo) (*Response, *influxql.Query, *influxql.Query, int, error) {
-	atomic.AddInt64(&statistics.HandlerStat.QueryRequests, 1)
-	atomic.AddInt64(&statistics.HandlerStat.ActiveQueryRequests, 1)
+	handlerStat.QueryRequests.Incr()
+	handlerStat.ActiveQueryRequests.Incr()
 	start := time.Now()
 	defer func() {
-		atomic.AddInt64(&statistics.HandlerStat.ActiveQueryRequests, -1)
-		atomic.AddInt64(&statistics.HandlerStat.QueryRequestDuration, time.Since(start).Nanoseconds())
+		handlerStat.ActiveQueryRequests.Decr()
+		handlerStat.QueryRequestDuration.AddSinceNano(start)
 	}()
 
 	// Retrieve the underlying ResponseWriter or initialize our own.
@@ -2324,6 +2324,7 @@ func (h *Handler) serveLogQuery(w http.ResponseWriter, r *http.Request, param *Q
 	}
 	// If an error occurs during the query, an error must be returned to avoid error shielding.
 	q.SetReturnErr(true)
+
 	epoch := strings.TrimSpace(r.FormValue("epoch"))
 	var qDuration *statistics.SQLSlowQueryStatistics
 	if !isInternalDatabase(info.database) {
@@ -2419,7 +2420,7 @@ func (h *Handler) serveLogQuery(w http.ResponseWriter, r *http.Request, param *Q
 			n, _ := rw.WriteResponse(Response{
 				Results: []*query.Result{r},
 			})
-			atomic.AddInt64(&statistics.HandlerStat.QueryRequestBytesTransmitted, int64(n))
+			handlerStat.QueryRequestBytesTransmitted.Add(int64(n))
 			w.(http.Flusher).Flush()
 			continue
 		}
@@ -2450,7 +2451,7 @@ func (h *Handler) serveLogQuery(w http.ResponseWriter, r *http.Request, param *Q
 	if !chunked {
 		if param == nil {
 			n, _ := rw.WriteResponse(resp)
-			atomic.AddInt64(&statistics.HandlerStat.QueryRequestBytesTransmitted, int64(n))
+			handlerStat.QueryRequestBytesTransmitted.Add(int64(n))
 		} else {
 			param.IterID = opts.IterID
 			return &resp, pplQuery, q, http.StatusOK, nil
@@ -2458,7 +2459,7 @@ func (h *Handler) serveLogQuery(w http.ResponseWriter, r *http.Request, param *Q
 	}
 	if !chunked {
 		n, _ := rw.WriteResponse(resp)
-		atomic.AddInt64(&statistics.HandlerStat.QueryRequestBytesTransmitted, int64(n))
+		handlerStat.QueryRequestBytesTransmitted.Add(int64(n))
 	}
 
 	return nil, nil, nil, http.StatusOK, nil
@@ -2804,7 +2805,7 @@ func (h *Handler) serveContextQueryLog(w http.ResponseWriter, r *http.Request, u
 	if err := h.ValidateAndCheckLogStreamExists(repository, logStream); err != nil {
 		h.Logger.Error("query log scan request error! ", zap.Error(err), zap.Any("r", r))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
-		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		handlerStat.Write400ErrRequests.Incr()
 		return
 	}
 	t := time.Now()
@@ -3209,7 +3210,7 @@ func (h *Handler) serveRecallData(w http.ResponseWriter, r *http.Request, user m
 	if err := ValidateRepoAndLogStream(repository, logStream); err != nil {
 		h.Logger.Error("serveRecallData", zap.Error(err))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
-		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		handlerStat.Write400ErrRequests.Incr()
 		return
 	}
 

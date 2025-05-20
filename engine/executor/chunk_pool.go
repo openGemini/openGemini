@@ -44,9 +44,6 @@ func (cp *CircularChunkPool) GetChunk() Chunk {
 }
 
 func (cp *CircularChunkPool) Release() {
-	for i := 0; i < len(cp.chunks); i++ {
-		cp.chunks[i].Release()
-	}
 }
 
 // BlockChunkPool fixed-capacity memory pool that blocks when the pool is empty or full.

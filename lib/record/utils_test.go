@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -241,4 +242,19 @@ func TestGetTimeRangeEndIndexDescend(t *testing.T) {
 	times3 := []int64{1729588702000, 1729588701969, 1729588701969, 1729588701969, 1729588701730}
 	end = record.GetTimeRangeEndIndexDescend(times3, 0, endTime)
 	assert.Equal(t, 3, end, "wrong")
+}
+
+func TestDropColByIndex(t *testing.T) {
+	sc := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Float, Name: "float"},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
+		record.Field{Type: influx.Field_Type_String, Name: "string"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	rec := &record.Record{}
+	rec.ResetWithSchema(sc)
+
+	record.DropColByIndex(rec, []int{1})
+	require.Equal(t, "boolean", rec.Schema[1].Name)
 }

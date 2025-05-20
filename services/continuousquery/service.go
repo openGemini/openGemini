@@ -240,7 +240,7 @@ func (s *Service) ExecuteContinuousQuery(cq *ContinuousQuery, now time.Time) (bo
 
 	// Calculate and set the time range for the query.
 	// startTime should be earlier than current time.
-	startTime := nextRun.Add(-cq.resampleEvery - cq.groupByOffset - 1).Truncate(cq.resampleEvery).Add(cq.groupByOffset)
+	startTime := nextRun.Add(-cq.resampleEvery - cq.groupByOffset).Truncate(cq.resampleEvery).Add(cq.groupByOffset)
 	endTime := startTime.Add(cq.resampleEvery - cq.groupByOffset).Truncate(cq.resampleEvery).Add(cq.groupByOffset)
 	if err := cq.source.SetTimeRange(startTime, endTime); err != nil {
 		return false, fmt.Errorf("unable to set time range: %s", err)

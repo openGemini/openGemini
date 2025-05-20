@@ -168,9 +168,17 @@ func (t *Transpiler) transpileAggregateExpr(a *parser.AggregateExpr) (influxql.N
 		return nil, errno.NewError(errno.TranspileAggFail, err.Error())
 	}
 
-	// If the aggregate expression has without, reset the dropMetric flag
+	// If the aggregate expression contains the "without" and it is true, reset the dropMetric flag to true
+	// Otherwise, if the "__name__" field is found in grouping fields, set the dropMetric flag to false
 	if a.Without {
 		t.dropMetric = true
+	} else {
+		for _, field := range a.Grouping {
+			if field == DefaultMetricKeyLabel {
+				t.dropMetric = false
+				break
+			}
+		}
 	}
 
 	// Get Aggregate function parameter

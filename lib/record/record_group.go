@@ -15,223 +15,14 @@
 package record
 
 import (
+	"encoding/binary"
 	"errors"
-	"sync"
-	"time"
 
-	"github.com/cespare/xxhash/v2"
-	"github.com/openGemini/openGemini/lib/pool"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/openGemini/openGemini/lib/stringinterner"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
-
-var recordGroupsPool = pool.NewDefaultUnionPool(func() *MemGroups {
-	return &MemGroups{}
-})
-
-type MemGroups struct {
-	wg               sync.WaitGroup
-	groups           []MemGroup
-	size             int
-	seriesHashFactor int
-}
-
-func NewMemGroups(size, seriesHashFactor int) (*MemGroups, func()) {
-	rgs := recordGroupsPool.Get()
-	rgs.Init(size, seriesHashFactor)
-	return rgs, func() {
-		rgs.Reset()
-		recordGroupsPool.Put(rgs)
-	}
-}
-
-func (rs *MemGroups) Init(size, seriesHashFactor int) {
-	rs.size = size
-	rs.seriesHashFactor = seriesHashFactor
-	if cap(rs.groups) < size {
-		rs.groups = make([]MemGroup, size)
-	}
-	rs.groups = rs.groups[:size]
-}
-
-func (rs *MemGroups) ResetTime() {
-	for i := range rs.groups {
-		rs.groups[i].ResetTime()
-	}
-}
-
-func (rs *MemGroups) Add(row *influx.Row) error {
-	idx := xxhash.Sum64String(row.Name) % uint64(rs.size)
-	factor := uint64(rs.seriesHashFactor)
-	if factor > 1 {
-		idx = (idx + xxhash.Sum64(row.IndexKey)%factor) % uint64(rs.size)
-	}
-	return rs.groups[idx].Add(idx, row)
-}
-
-func (rs *MemGroups) BeforeWrite() {
-	for i := range rs.groups {
-		if !rs.groups[i].IsEmpty() {
-			rs.wg.Add(1)
-			rs.groups[i].done = rs.wg.Done
-		}
-	}
-}
-
-func (rs *MemGroups) RowGroup(i int) *MemGroup {
-	return &rs.groups[i]
-}
-
-func (rs *MemGroups) GroupNum() int {
-	return len(rs.groups)
-}
-
-func (rs *MemGroups) Wait() {
-	rs.wg.Wait()
-}
-
-func (rs *MemGroups) Reset() {
-	for i := range rs.groups {
-		rs.groups[i].Reset()
-	}
-}
-
-func (rs *MemGroups) MemSize() int {
-	return 0
-}
-
-func (rs *MemGroups) Error() error {
-	for _, rg := range rs.groups {
-		if err := rg.Error(); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-type MemGroup struct {
-	tm      time.Time
-	err     error
-	done    func()
-	shardID uint64
-	hash    uint64
-	recs    []*MemRecord
-	recMap  map[string]*MemRecord
-}
-
-func (g *MemGroup) ResetTime() {
-	g.tm = time.Now()
-}
-
-func (g *MemGroup) MicroSince() int64 {
-	return time.Since(g.tm).Microseconds()
-}
-
-func (g *MemGroup) Records() []*MemRecord {
-	return g.recs
-}
-
-func (g *MemGroup) SetShardID(id uint64) {
-	g.shardID = id
-}
-
-func (g *MemGroup) ShardID() uint64 {
-	return g.shardID
-}
-
-func (g *MemGroup) Hash() uint64 {
-	return g.hash
-}
-
-func (g *MemGroup) Add(hash uint64, row *influx.Row) error {
-	if g.recMap == nil {
-		g.recMap = make(map[string]*MemRecord)
-	}
-	g.hash = hash
-
-	key := util.Bytes2str(row.IndexKey)
-	rec, ok := g.recMap[key]
-	if !ok {
-		rec = g.allocRecord()
-		rec.Name = row.Name
-		rec.IndexKey = row.IndexKey
-		rec.Rec.ResetDeep()
-		g.recMap[key] = rec
-	}
-
-	return rec.appendRow(row)
-}
-
-func (g *MemGroup) allocRecord() *MemRecord {
-	idx := len(g.recs)
-	if cap(g.recs) == idx {
-		g.recs = append(g.recs, &MemRecord{})
-	} else {
-		g.recs = g.recs[:idx+1]
-		if g.recs[idx] == nil {
-			g.recs[idx] = &MemRecord{}
-		}
-	}
-	return g.recs[idx]
-}
-
-func (g *MemGroup) IsEmpty() bool {
-	return len(g.recMap) == 0
-}
-
-func (g *MemGroup) Reset() {
-	g.err = nil
-	g.done = nil
-	g.hash = 0
-	g.shardID = 0
-	g.recs = g.recs[:0]
-	clear(g.recMap)
-}
-
-func (g *MemGroup) Done(err error) {
-	g.err = err
-	if g.done != nil {
-		g.done()
-	}
-}
-
-func (g *MemGroup) Error() error {
-	return g.err
-}
-
-type MemRecord struct {
-	Name     string
-	IndexKey []byte
-	Rec      Record
-}
-
-func (r *MemRecord) appendRow(row *influx.Row) error {
-	sameSchema := false
-	rec := &r.Rec
-	if rec.RowNums() == 0 {
-		sameSchema = true
-		r.genMsSchema(row.Fields)
-		rec.ReserveColVal(rec.Len())
-	}
-
-	_, err := AppendFieldsToRecord(rec, row.Fields, row.Timestamp, sameSchema)
-	return err
-}
-
-func (r *MemRecord) genMsSchema(fields []influx.Field) {
-	rec := &r.Rec
-	schemaLen := len(fields) + 1
-	rec.ReserveSchema(schemaLen)
-
-	for i := range fields {
-		rec.Schema[i].Type = int(fields[i].Type)
-		rec.Schema[i].Name = fields[i].Key
-	}
-
-	rec.Schema[schemaLen-1].Type = influx.Field_Type_Int
-	rec.Schema[schemaLen-1].Name = TimeField
-}
 
 func AppendFieldToCol(col *ColVal, field *influx.Field, size *int64) error {
 	switch field.Type {
@@ -248,7 +39,7 @@ func AppendFieldToCol(col *ColVal, field *influx.Field, size *int64) error {
 			col.AppendBoolean(true)
 		}
 		*size += int64(util.BooleanSizeBytes)
-	case influx.Field_Type_String:
+	case influx.Field_Type_String, influx.Field_Type_Tag:
 		col.AppendString(field.StrValue)
 		*size += int64(len(field.StrValue))
 	default:
@@ -332,4 +123,100 @@ func AppendFieldsToRecordSlow(rec *Record, fields []influx.Field, time int64) (i
 	rec.ColVals[newColNum-1].AppendInteger(time)
 	size += int64(util.Int64SizeBytes)
 	return size, nil
+}
+
+func AppendRowToRecord(rec *Record, row *influx.Row) error {
+	sameSchema := false
+	if rec.RowNums() == 0 {
+		sameSchema = true
+		genMsSchema(rec, row.Fields)
+		rec.ReserveColVal(rec.Len())
+	}
+
+	_, err := AppendFieldsToRecord(rec, row.Fields, row.Timestamp, sameSchema)
+	return err
+}
+
+func genMsSchema(rec *Record, fields []influx.Field) {
+	schemaLen := len(fields) + 1
+	rec.ReserveSchema(schemaLen)
+
+	for i := range fields {
+		rec.Schema[i].Type = int(fields[i].Type)
+		rec.Schema[i].Name = fields[i].Key
+	}
+
+	rec.Schema[schemaLen-1].Type = influx.Field_Type_Int
+	rec.Schema[schemaLen-1].Name = TimeField
+}
+
+func ReadMstFromSeriesKey(b []byte) []byte {
+	size := encoding.UnmarshalUint16(b[util.Uint32SizeBytes:])
+	start := util.Float32SizeBytes + util.Uint16SizeBytes
+	return b[start : start+int(size)]
+}
+
+func SplitTagField(rec *Record) (*Record, *Record) {
+	fields := &Record{}
+	tags := &Record{}
+
+	var dst *Record
+	for i := range rec.Len() {
+		dst = fields
+		if rec.Schema[i].Type == influx.Field_Type_Tag {
+			dst = tags
+		}
+
+		dst.Schema = append(dst.Schema, rec.Schema[i])
+		dst.ColVals = append(dst.ColVals, rec.ColVals[i])
+	}
+
+	return tags, fields
+}
+
+func UnmarshalIndexKeys(mst string, tags *Record, rowIndex int, dst []byte) []byte {
+	dst = encoding.MarshalUint32(dst, uint32(0)) // reserved for storing the total length
+	dst = encoding.MarshalUint16(dst, uint16(len(mst)))
+	dst = append(dst, mst...)
+
+	tagCountOffset := len(dst)
+	dst = encoding.MarshalUint16(dst, uint16(0)) // reserved for storing the total number of tags
+
+	tagCount := uint16(0)
+	for i := range tags.Len() {
+		val, isNil := tags.ColVals[i].StringValue(rowIndex)
+		if isNil {
+			continue
+		}
+
+		tagCount++
+		key := tags.Schema[i].Name
+		dst = encoding.MarshalUint16(dst, uint16(len(key)))
+		dst = append(dst, key...)
+		dst = encoding.MarshalUint16(dst, uint16(len(val)))
+		dst = append(dst, val...)
+	}
+
+	binary.BigEndian.PutUint32(dst[:4], uint32(len(dst)))
+	binary.BigEndian.PutUint16(dst[tagCountOffset:tagCountOffset+2], tagCount)
+	return dst
+}
+
+func DropColByIndex(rec *Record, dropIndex []int) {
+	schemas := rec.Schema[:0]
+	cols := rec.ColVals[:0]
+
+	for i := range rec.Schema {
+		if len(dropIndex) > 0 && i == dropIndex[0] {
+			dropIndex = dropIndex[1:]
+			continue
+		}
+
+		schemas = append(schemas, rec.Schema[i])
+		cols = append(cols, rec.ColVals[i])
+	}
+
+	size := len(schemas)
+	rec.Schema = schemas[:size:size]
+	rec.ColVals = cols[:size:size]
 }

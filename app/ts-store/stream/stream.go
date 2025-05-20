@@ -59,6 +59,8 @@ type Engine interface {
 type Storage interface {
 	WriteRows(db, rp string, ptId uint32, shardID uint64, rows []influx.Row, binaryRows []byte) error
 	WriteRec(db, rp, mst string, ptId uint32, shardID uint64, rec *record.Record, binaryRec []byte) error
+	RegisterOnPTOffload(id uint64, f func(ptID uint32))
+	UninstallOnPTOffload(id uint64)
 }
 
 type WritePointsWorkIF interface {
@@ -155,6 +157,7 @@ type Task interface {
 	getLoadStatus() map[uint32]*flushStatus
 	IsInit() bool
 	FilterRowsByCond(cache ChanData) (bool, error)
+	cleanPtInfo(ptID uint32)
 }
 
 type ChanData interface {
@@ -345,7 +348,7 @@ func (s *Stream) Run() {
 }
 
 func (s *Stream) detectRelay() {
-	ticker := time.NewTimer(5 * time.Second)
+	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	index := 0
 	engine.NewStreamWalManager().InitStreamHandler(s.StreamHandler)
@@ -393,7 +396,6 @@ func (s *Stream) detectRelay() {
 				}
 			}
 			s.Logger.Info("stream replay task init over")
-			return
 		}
 	}
 }
@@ -488,6 +490,7 @@ func (s *Stream) DeleteTask(id uint64) {
 				zap.Error(err))
 		}
 		s.tasks.Delete(id)
+		s.store.UninstallOnPTOffload(id)
 	}
 }
 
@@ -562,6 +565,7 @@ func (s *Stream) RegisterTask(info *meta.StreamInfo, fieldCalls []*streamLib.Fie
 			concurrency:     s.conf.WindowConcurrency,
 			BaseTask:        baseTask,
 		}
+		s.store.RegisterOnPTOffload(info.ID, task.cleanPtInfo)
 	}
 	go func() {
 		err := task.run()
