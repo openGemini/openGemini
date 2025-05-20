@@ -19,7 +19,7 @@ export GOARCH=$(shell go env GOARCH)
 export PATH := $(PATH):$(GOROOT)/bin:$(GOPATH)/bin
 
 GO          := GO111MODULE=on go
-GOTEST      := $(GO) test
+GOTEST      := $(GO) test -gcflags "all=-N -l"
 PYTHON      := python
 STATICCHECK := staticcheck
 
@@ -96,6 +96,9 @@ install-protoc-gen-gogo:
 
 install-protoc-gen-go:
 	@$(GO) install github.com/golang/protobuf/protoc-gen-go@latest
+
+install-msgp:
+	@$(GO) install github.com/tinylib/msgp@latest
 
 failpoint-enable:
 	@$(FAILPOINT_ENABLE)

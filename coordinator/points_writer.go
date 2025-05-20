@@ -20,7 +20,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
@@ -299,11 +298,12 @@ func (w *PointsWriter) writePointRows(database, retentionPolicy string, rows []i
 			return err
 		}
 	}
-	atomic.AddInt64(&statistics.HandlerStat.WriteStreamRoutineDuration, time.Since(start).Nanoseconds())
+	handlerStat := statistics.NewHandler()
+	handlerStat.WriteStreamRoutineDuration.AddSinceNano(start)
 
 	start = time.Now()
 	err = w.writeShardMap(database, retentionPolicy, ctx)
-	atomic.AddInt64(&statistics.HandlerStat.WriteStoresDuration, time.Since(start).Nanoseconds())
+	handlerStat.WriteStoresDuration.AddSinceNano(start)
 
 	if err != nil {
 		if errno.Equal(err, errno.ErrorTagArrayFormat, errno.WriteErrorArray, errno.SeriesLimited) {
@@ -508,11 +508,12 @@ func (w *PointsWriter) routeAndMapOriginRows(
 		}
 
 		ctx.setShardRow(sh, r)
+		handlerStat := statistics.NewHandler()
 		switch ctx.ms.EngineType {
 		case config.TSSTORE:
-			atomic.AddInt64(&statistics.HandlerStat.FieldsWritten, int64(r.Fields.Len()))
+			handlerStat.FieldsWritten.Add(int64(r.Fields.Len()))
 		case config.COLUMNSTORE:
-			atomic.AddInt64(&statistics.HandlerStat.FieldsWritten, int64(r.Fields.Len()+r.Tags.Len()))
+			handlerStat.FieldsWritten.Add(int64(r.Fields.Len() + r.Tags.Len()))
 		default:
 			return nil, dropped, errors.New("unknown engine type")
 		}
@@ -596,6 +597,7 @@ func (w *PointsWriter) routeAndCalculateStreamRows(ctx *injestionCtx) (err error
 						w.updateSrcStreamDstShardIdMap(rs, (*dstSis)[idx].ID, shardId, srcStreamDstShardIdMap)
 						continue
 					}
+
 					// Case2: same distribution, same node, which db set shardKey with same db and different rp,
 					// so dst measurement of the stream share the same node with src measurement.
 					// reuse shardKey, avoid calculate shardKey

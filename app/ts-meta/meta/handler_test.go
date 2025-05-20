@@ -15,20 +15,26 @@
 package meta
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/agiledragon/gomonkey/v2"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/statisticsPusher"
 	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
+	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -177,6 +183,10 @@ func (s *MockIStore) GetData() *meta2.Data {
 	return nil
 }
 
+func (s *MockIStore) GetMarshalData(parts []string) ([]byte, error) {
+	return nil, nil
+}
+
 func (s *MockIStore) IsLeader() bool {
 	return true
 }
@@ -233,4 +243,59 @@ func TestGetDBBriefInfo_FromStore(t *testing.T) {
 	if err == nil {
 		t.Fatal(err)
 	}
+}
+func Test_GetMarshalData(t *testing.T) {
+	var httpserver = &httpHandler{logger: logger.NewLogger(errno.NodeSql), store: &Store{data: &meta2.Data{}}}
+	convey.Convey("parts", t, func() {
+		parts := []string{"Users"}
+		expectedData := map[string]interface{}{"Users": interface{}(nil)}
+		expectedBytes, _ := json.Marshal(expectedData)
+		actualBytes, err := httpserver.store.GetMarshalData(parts)
+		assert.NoError(t, err)
+		assert.JSONEq(t, string(expectedBytes), string(actualBytes))
+	})
+	convey.Convey("no parts", t, func() {
+		parts := []string{}
+		expectedData, err := json.Marshal(&meta2.Data{})
+		actualBytes, err := httpserver.store.GetMarshalData(parts)
+		assert.NoError(t, err)
+		assert.EqualValues(t, len(expectedData), len(actualBytes))
+	})
+}
+
+func Test_httpHandler_serveGetdata(t *testing.T) {
+	var httpserver = &httpHandler{logger: logger.NewLogger(errno.NodeSql), store: new(MockIStore)}
+
+	convey.Convey("parts", t, func() {
+		expectedData := []byte("c")
+		patches := gomonkey.ApplyMethodFunc(httpserver.store, "GetMarshalData", func(parts []string) ([]byte, error) {
+			return expectedData, nil
+		})
+		defer patches.Reset()
+		req, err := http.NewRequest("GET", "/getdata?parts=a", nil)
+		assert.NoError(t, err)
+
+		resp := httptest.NewRecorder()
+		httpserver.serveGetdata(resp, req)
+
+		bytes, err := io.ReadAll(resp.Body)
+		assert.EqualValues(t, expectedData, bytes)
+		assert.EqualValues(t, nil, err)
+	})
+
+	convey.Convey("no parts", t, func() {
+		patches := gomonkey.ApplyMethodFunc(httpserver.store, "GetMarshalData", func(parts []string) ([]byte, error) {
+			return []byte{}, nil
+		})
+		defer patches.Reset()
+
+		req, err := http.NewRequest("GET", "/getdata", nil)
+		assert.NoError(t, err)
+
+		resp := httptest.NewRecorder()
+		httpserver.serveGetdata(resp, req)
+		bytes, err := io.ReadAll(resp.Body)
+		assert.EqualValues(t, []byte{}, bytes)
+		assert.EqualValues(t, nil, err)
+	})
 }

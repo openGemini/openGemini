@@ -121,6 +121,7 @@ type Shard interface {
 	// IO interface
 	WriteRows(rows []influx.Row, binaryRows []byte) error               // line protocol
 	WriteCols(mst string, cols *record.Record, binaryCols []byte) error // native protocol
+	WriteBlobs(group *shelf.BlobGroup) error
 	ForceFlush()
 	WaitWriteFinish()
 	CreateLogicalPlan(ctx context.Context, sources influxql.Sources, schema *executor.QuerySchema) (hybridqp.QueryNode, error)
@@ -485,7 +486,7 @@ func (s *shard) WriteRows(rows []influx.Row, binaryRows []byte) error {
 
 	var err error
 	if config.ShelfModeEnabled() {
-		err = s.writeShelfMode(rows)
+		err = s.writeRowsShelfMode(rows)
 	} else {
 		err = s.writeRowsToTable(rows, binaryRows)
 	}
@@ -501,31 +502,33 @@ func (s *shard) WriteRows(rows []influx.Row, binaryRows []byte) error {
 	return nil
 }
 
-func (s *shard) writeShelfMode(rows []influx.Row) error {
+func (s *shard) WriteBlobs(group *shelf.BlobGroup) error {
+	s.lastWriteTime = fasttime.UnixTimestamp()
+	return shelf.NewRunner().ScheduleGroup(s.ident.ShardID, group)
+}
+
+func (s *shard) writeRowsShelfMode(rows []influx.Row) error {
+	s.immTables.LoadSequencer()
 	s.lastWriteTime = fasttime.UnixTimestamp()
 	runner := shelf.NewRunner()
-	groups, release := record.NewMemGroups(runner.Size(), config.GetStoreConfig().ShelfMode.SeriesHashFactor)
+	group, release := shelf.NewBlobGroup(runner.Size())
 	defer release()
 
+	var rec = &record.Record{}
+	var buf []byte
+
 	for i := range rows {
-		err := groups.Add(&rows[i])
+		rec.Reset()
+		buf = rows[i].UnmarshalIndexKeys(buf[:0])
+		err := record.AppendRowToRecord(rec, &rows[i])
 		if err != nil {
 			return err
 		}
-	}
-	groups.BeforeWrite()
 
-	groups.ResetTime()
-	for i := range groups.GroupNum() {
-		group := groups.RowGroup(i)
-		if group.IsEmpty() {
-			continue
-		}
-		runner.Schedule(s.ident.ShardID, group)
+		group.GroupingRow(rows[i].Name, rows[i].IndexKey, rec, 0)
 	}
 
-	groups.Wait()
-	return groups.Error()
+	return runner.ScheduleGroup(s.ident.ShardID, group)
 }
 
 // write data to mem table and write wal
@@ -892,6 +895,9 @@ func (s *shard) forceFlushing() bool {
 }
 
 func (s *shard) ForceFlush() {
+	if config.ShelfModeEnabled() {
+		shelf.NewRunner().ForceFlush(s.ident.ShardID)
+	}
 	s.storage.ForceFlush(s)
 }
 
@@ -1120,17 +1126,6 @@ func (s *shard) syncReplayWal(ctx context.Context) error {
 
 	walFileNames, err := s.wal.Replay(ctx,
 		func(binary []byte, rowsCtx *walRowsObjects, writeWalType WalRecordType, logReplay LogReplay) error {
-			if rowsCtx != nil {
-				rows, streamData := util.SliceSplitFunc(rowsCtx.rows, func(row *influx.Row) bool {
-					return !row.StreamOnly
-				})
-				rowsCtx.rows = rows
-				if NewStreamWalManager().streamHandler != nil {
-					if err := NewStreamWalManager().streamHandler(streamData, logReplay.fileNames); err != nil {
-						s.log.Error("replay stream data error", zap.Error(err))
-					}
-				}
-			}
 			err := s.writeWalBuffer(binary, rowsCtx, writeWalType)
 			// SeriesLimited error is ignored in the wal playback process
 			if errno.Equal(err, errno.SeriesLimited) {
@@ -1189,10 +1184,6 @@ func (s *shard) Open(client metaclient.MetaClient) error {
 	s.initSeriesLimiter(s.seriesLimit)
 	s.setMergeIndex2ImmTables()
 
-	if config.ShelfModeEnabled() {
-		info := shelf.NewShardInfo(s.ident, s.filesPath, s.lock, s.GetTableStore(), s.getMergeIndex())
-		shelf.NewRunner().RegisterShard(s.ident.ShardID, info)
-	}
 	return nil
 }
 
@@ -1396,6 +1387,11 @@ func (s *shard) OpenAndEnable(client metaclient.MetaClient) error {
 	err := s.Open(client)
 	if err != nil {
 		return err
+	}
+
+	if config.ShelfModeEnabled() {
+		info := shelf.NewShardInfo(s.ident, s.filesPath, s.lock, s.GetTableStore(), s.getMergeIndex())
+		shelf.NewRunner().RegisterShard(s.ident.ShardID, info)
 	}
 
 	if config.GetStoreConfig().Wal.WalUsedForStream {

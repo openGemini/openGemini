@@ -67,11 +67,7 @@ func (h *SortHelper) Release() {
 	if h.SortData != nil {
 		h.SortData.Reset()
 	}
-	sortHelperPool.Put(h)
-}
-
-func (h *SortHelper) MemSize() int {
-	return 0
+	sortHelperPool.PutWithMemSize(h, 0)
 }
 
 func (h *SortHelper) Sort(rec *Record) *Record {

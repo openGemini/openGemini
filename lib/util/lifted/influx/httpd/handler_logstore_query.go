@@ -280,7 +280,7 @@ func (h *Handler) serveQueryLog(w http.ResponseWriter, r *http.Request, user met
 	if err := h.ValidateAndCheckLogStreamExists(repository, logStream); err != nil {
 		h.Logger.Error("query log scan request error! ", zap.Error(err), zap.Any("r", r))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
-		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		handlerStat.Write400ErrRequests.Incr()
 		return
 	}
 	t := time.Now()
@@ -890,7 +890,7 @@ func (h *Handler) serveAnalytics(w http.ResponseWriter, r *http.Request, user me
 		if err := recover(); err != nil {
 			h.Logger.Error("query log agg request error! ")
 			h.httpErrorRsp(w, ErrorResponse("query log agg request error! ", LogReqErr), http.StatusBadRequest)
-			atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+			handlerStat.Write400ErrRequests.Incr()
 			return
 		}
 	}()
@@ -898,7 +898,7 @@ func (h *Handler) serveAnalytics(w http.ResponseWriter, r *http.Request, user me
 	if err := h.ValidateAndCheckLogStreamExists(repository, logStream); err != nil {
 		h.Logger.Error("query log agg request error! ", zap.Error(err))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
-		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		handlerStat.Write400ErrRequests.Incr()
 		return
 	}
 	queryAggRequest, err := getQueryAnaRequest(r)
@@ -1148,7 +1148,7 @@ func (h *Handler) serveAggLogQuery(w http.ResponseWriter, r *http.Request, user 
 	if err := h.ValidateAndCheckLogStreamExists(repository, logStream); err != nil {
 		h.Logger.Error("query log agg request error! ", zap.Error(err))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
-		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		handlerStat.Write400ErrRequests.Incr()
 		return
 	}
 	queryAggRequest, err := getQueryAggRequest(r)

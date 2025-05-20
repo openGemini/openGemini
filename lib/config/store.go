@@ -75,7 +75,7 @@ func GetStoreConfig() *Store {
 	return &storeConfig
 }
 
-// TSStore represents the configuration format for the ts-store binary.
+// TSStore represents the configuration format for the influxd binary.
 type TSStore struct {
 	Common      *Common     `toml:"common"`
 	Data        Store       `toml:"data"`
@@ -306,6 +306,7 @@ type Store struct {
 	RaftMsgCacheSize  int           `toml:"raft-msg-cache-size"`
 	FileWrapSize      int           `toml:"file-wrap-size"`
 	WaitCommitTimeout toml.Duration `toml:"wait-commit-time-out"`
+	EnablePerlRegrep  bool          `toml:"enable-perl-regrep"`
 }
 
 // NewStore returns the default configuration for tsdb.

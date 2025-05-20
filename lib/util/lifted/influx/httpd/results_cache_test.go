@@ -20,9 +20,9 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/util/lifted/prometheus/model/labels"
+	"github.com/openGemini/openGemini/lib/util/lifted/prometheus/promql"
 	"github.com/openGemini/openGemini/lib/util/lifted/promql2influxql"
-	"github.com/prometheus/prometheus/model/labels"
-	"github.com/prometheus/prometheus/promql"
 	"github.com/prometheus/prometheus/promql/parser"
 	"go.uber.org/zap"
 )
@@ -374,6 +374,51 @@ func Test_IsOffsetCacheable(t *testing.T) {
 		ok := rc.shouldCacheResponse(200, cmd)
 		if !ok {
 			t.Fatalf("should be ok")
+		}
+	})
+}
+
+func TestFilterRecentExtents(t *testing.T) {
+	t.Run("1", func(t *testing.T) {
+		rc := &ResultsCache{}
+		exs := []promql2influxql.Extent{
+			{Start: time.Now().Add(-time.Minute * 2).UnixNano(), Response: &promql2influxql.PromQueryResponse{Data: nil}},
+		}
+		step := time.Minute.Nanoseconds()
+		extents := rc.filterRecentExtents(exs, step, time.Duration(0))
+		if len(extents) != 0 {
+			t.Fatalf("should have no extents")
+		}
+
+	})
+	t.Run("2", func(t *testing.T) {
+		rc := &ResultsCache{}
+		exs := []promql2influxql.Extent{
+			{
+				Start: time.Now().Add(-time.Minute * 2).UnixNano(),
+				Response: &promql2influxql.PromQueryResponse{
+					Data: &promql2influxql.PromData{Result: &promql2influxql.PromDataMatrix{}},
+				}},
+		}
+		step := time.Minute.Nanoseconds()
+		extents := rc.filterRecentExtents(exs, step, time.Duration(0))
+		if len(extents) != 0 {
+			t.Fatalf("should have no extents")
+		}
+	})
+	t.Run("3", func(t *testing.T) {
+		rc := &ResultsCache{}
+		exs := []promql2influxql.Extent{
+			{
+				Start: time.Now().Add(-time.Minute * 2).UnixNano(),
+				Response: &promql2influxql.PromQueryResponse{
+					Data: &promql2influxql.PromData{Result: &promql2influxql.PromDataVector{}},
+				}},
+		}
+		step := time.Minute.Nanoseconds()
+		extents := rc.filterRecentExtents(exs, step, time.Duration(0))
+		if len(extents) != 0 {
+			t.Fatalf("should have no extents")
 		}
 	})
 }

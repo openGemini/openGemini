@@ -18,11 +18,11 @@ import (
 	"fmt"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
-	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/codec"
 	"github.com/openGemini/openGemini/lib/errno"
 	netdata "github.com/openGemini/openGemini/lib/netstorage/data"
+	"github.com/openGemini/openGemini/lib/spdy/transport"
 	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 )
 
@@ -667,4 +667,27 @@ func (m *RaftMsgMessage) Unmarshal(buf []byte) error {
 
 func (m *RaftMsgMessage) Instance() transport.Codec {
 	return &RaftMsgMessage{}
+}
+
+type PingRequest struct {
+}
+
+func NewPingRequest() *PingRequest {
+	return &PingRequest{}
+}
+
+func (r *PingRequest) Size() int {
+	return 0
+}
+
+func (r *PingRequest) Marshal(buf []byte) ([]byte, error) {
+	return buf, nil
+}
+
+func (r *PingRequest) Unmarshal(buf []byte) error {
+	return nil
+}
+
+func (r *PingRequest) Instance() transport.Codec {
+	return &PingRequest{}
 }

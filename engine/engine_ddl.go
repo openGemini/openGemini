@@ -559,10 +559,6 @@ func (e *Engine) getAllDBPaths() map[string][]string {
 	dbs := e.metaClient.Databases()
 	dpPath := make(map[string][]string, len(dbs))
 	for _, db := range dbs {
-		if db.Name == "_internal" {
-			continue
-		}
-
 		path := make([]string, 2)
 		path[0] = filepath.Join(e.dataPath, config.DataDirectory, db.Name)
 		path[1] = filepath.Join(e.walPath, config.WalDirectory, db.Name)

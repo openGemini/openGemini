@@ -31,7 +31,6 @@ import (
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/promql"
 	"github.com/prometheus/prometheus/promql/parser"
-	"github.com/vmihailenco/msgpack/v5"
 	"go.uber.org/zap"
 )
 
@@ -40,17 +39,6 @@ const (
 	noStoreValue       = "no-store"
 	MaxRequestCount    = 3
 )
-
-type CachedResponse struct {
-	Key     string
-	Extents []Extent
-}
-
-type Extent struct {
-	Start    int64
-	End      int64
-	Response *promql2influxql.PromQueryResponse
-}
 
 type ResultsCache struct {
 	SplitQueriesByInterval time.Duration
@@ -80,7 +68,7 @@ func (rc *ResultsCache) Do(reqInfo *RequestInfo, command *promql2influxql.PromCo
 	}
 
 	response := &promql2influxql.PromQueryResponse{}
-	var extents []Extent
+	var extents []promql2influxql.Extent
 	var err error
 
 	maxCacheFreshness := rc.MaxCacheFreshness
@@ -90,10 +78,11 @@ func (rc *ResultsCache) Do(reqInfo *RequestInfo, command *promql2influxql.PromCo
 		return nil, false, nil
 	}
 
+	fullHit := false
 	cached, ok := rc.get(key)
 	if ok {
 		rc.Logger.Debug("hit result cache", zap.String("key", key))
-		response, extents, err = rc.handleHit(reqInfo, command, cached, maxCacheTime)
+		response, extents, err = rc.handleHit(reqInfo, command, cached, maxCacheTime, &fullHit)
 	} else {
 		rc.Logger.Debug("miss result cache", zap.String("key", key))
 		response, extents, err = rc.handleMiss(reqInfo, command, maxCacheTime)
@@ -101,8 +90,11 @@ func (rc *ResultsCache) Do(reqInfo *RequestInfo, command *promql2influxql.PromCo
 	if err != nil {
 		return nil, true, err
 	}
+	if fullHit {
+		return response, true, nil
+	}
 
-	extents = rc.filterRecentExtents(extents, command, maxCacheFreshness)
+	extents = rc.filterRecentExtents(extents, command.Step.Nanoseconds(), maxCacheFreshness)
 	if len(extents) > 0 {
 		rc.put(key, extents)
 	}
@@ -110,7 +102,7 @@ func (rc *ResultsCache) Do(reqInfo *RequestInfo, command *promql2influxql.PromCo
 	return response, true, nil
 }
 
-func (rc *ResultsCache) handleHit(reqInfo *RequestInfo, command *promql2influxql.PromCommand, extents []Extent, maxCacheTime int64) (*promql2influxql.PromQueryResponse, []Extent, error) {
+func (rc *ResultsCache) handleHit(reqInfo *RequestInfo, command *promql2influxql.PromCommand, extents []promql2influxql.Extent, maxCacheTime int64, fullHit *bool) (*promql2influxql.PromQueryResponse, []promql2influxql.Extent, error) {
 	statistics.NewResultCache().CacheTotal.Add(1)
 	cmds, responses := rc.partition(command, extents)
 	statistics.NewResultCache().CacheRequestTotal.Add(int64(len(cmds)))
@@ -119,11 +111,12 @@ func (rc *ResultsCache) handleHit(reqInfo *RequestInfo, command *promql2influxql
 	}
 
 	if len(cmds) == 0 {
+		*fullHit = true
 		response, err := MergeResponse(command, responses...)
 		return response, extents, err
 	}
 
-	var reqResps []Extent
+	var reqResps []promql2influxql.Extent
 	var err error
 	// TODO based on a series of rules,decision to use cache or request data directly
 	if len(cmds) > MaxRequestCount {
@@ -162,7 +155,7 @@ func (rc *ResultsCache) handleHit(reqInfo *RequestInfo, command *promql2influxql
 		return extents[i].Start < extents[j].Start
 	})
 
-	mergeExtents := make([]Extent, 0, len(extents))
+	mergeExtents := make([]promql2influxql.Extent, 0, len(extents))
 	accumulator := extents[0]
 	// extents merge
 	for i := 1; i < len(extents); i++ {
@@ -187,19 +180,19 @@ func (rc *ResultsCache) handleHit(reqInfo *RequestInfo, command *promql2influxql
 	return response, mergeExtents, nil
 }
 
-func (rc *ResultsCache) handleMiss(reqInfo *RequestInfo, command *promql2influxql.PromCommand, maxCacheTime int64) (*promql2influxql.PromQueryResponse, []Extent, error) {
+func (rc *ResultsCache) handleMiss(reqInfo *RequestInfo, command *promql2influxql.PromCommand, maxCacheTime int64) (*promql2influxql.PromQueryResponse, []promql2influxql.Extent, error) {
 	res, err := DoRequests(reqInfo, []*promql2influxql.PromCommand{command})
 	if err != nil {
 		return nil, nil, err
 	}
 
 	if !rc.shouldCacheResponse(maxCacheTime, command) {
-		return res[0].Response, []Extent{}, nil
+		return res[0].Response, []promql2influxql.Extent{}, nil
 	}
-	return res[0].Response, []Extent{res[0]}, nil
+	return res[0].Response, []promql2influxql.Extent{res[0]}, nil
 }
 
-func (rc *ResultsCache) partition(command *promql2influxql.PromCommand, extents []Extent) ([]*promql2influxql.PromCommand, []*promql2influxql.PromQueryResponse) {
+func (rc *ResultsCache) partition(command *promql2influxql.PromCommand, extents []promql2influxql.Extent) ([]*promql2influxql.PromCommand, []*promql2influxql.PromQueryResponse) {
 	var cmds []*promql2influxql.PromCommand
 	var cachedResponses []*promql2influxql.PromQueryResponse
 	reqStart := command.Start.UnixMilli()
@@ -236,13 +229,13 @@ func (rc *ResultsCache) partition(command *promql2influxql.PromCommand, extents 
 	return cmds, cachedResponses
 }
 
-func (rc *ResultsCache) get(key string) ([]Extent, bool) {
+func (rc *ResultsCache) get(key string) ([]promql2influxql.Extent, bool) {
 	bufs, ok := rc.cache.Get(key)
 	if !ok {
 		return nil, false
 	}
-	var resp CachedResponse
-	if err := msgpack.Unmarshal(bufs, &resp); err != nil {
+	var resp promql2influxql.CachedResponse
+	if _, err := resp.UnmarshalMsg(bufs); err != nil {
 		rc.Logger.Error("error unmarshalling cached value", zap.Error(err))
 		return nil, false
 	}
@@ -259,26 +252,30 @@ func (rc *ResultsCache) get(key string) ([]Extent, bool) {
 	return resp.Extents, true
 }
 
-func (rc *ResultsCache) put(key string, extents []Extent) {
-	cache := &CachedResponse{
+func (rc *ResultsCache) put(key string, extents []promql2influxql.Extent) {
+	cache := &promql2influxql.CachedResponse{
 		Key:     key,
 		Extents: extents,
 	}
-	bufs, err := msgpack.Marshal(cache)
+	bufs, err := cache.MarshalMsg(nil)
 	if err != nil {
 		rc.Logger.Error("marshalling cached value error", zap.Error(err))
+		return
 	}
 	rc.cache.Put(key, bufs)
 }
 
-func (rc *ResultsCache) filterRecentExtents(extents []Extent, command *promql2influxql.PromCommand, maxCacheFreshness time.Duration) []Extent {
-	maxCacheTime := (time.Now().Add(-maxCacheFreshness).UnixNano() / command.Step.Nanoseconds()) * command.Step.Nanoseconds()
-	filterExtents := make([]Extent, 0, len(extents))
+func (rc *ResultsCache) filterRecentExtents(extents []promql2influxql.Extent, step int64, maxCacheFreshness time.Duration) []promql2influxql.Extent {
+	maxCacheTime := (time.Now().Add(-maxCacheFreshness).UnixNano() / step) * step
+	filterExtents := make([]promql2influxql.Extent, 0, len(extents))
 	for _, extent := range extents {
 		if extent.Start > maxCacheTime {
 			continue
 		}
-		if extent.Response == nil {
+		if extent.Response == nil || extent.Response.Data == nil {
+			continue
+		}
+		if extent.Response.Data.IsEmptyData() {
 			continue
 		}
 		if extent.End > maxCacheTime {
@@ -409,12 +406,12 @@ func generateCacheKey(command *promql2influxql.PromCommand, mst string, interval
 	return builder.String()
 }
 
-func DoRequests(reqInfo *RequestInfo, cmds []*promql2influxql.PromCommand) ([]Extent, error) {
+func DoRequests(reqInfo *RequestInfo, cmds []*promql2influxql.PromCommand) ([]promql2influxql.Extent, error) {
 	rw, ok := reqInfo.w.(ResponseWriter)
 	if !ok {
 		rw = NewResponseWriter(reqInfo.w, reqInfo.r)
 	}
-	resps := make([]Extent, len(cmds))
+	resps := make([]promql2influxql.Extent, len(cmds))
 	start := time.Now()
 	var queryErr error
 	mu := sync.RWMutex{}
@@ -432,7 +429,7 @@ func DoRequests(reqInfo *RequestInfo, cmds []*promql2influxql.PromCommand) ([]Ex
 				mu.Unlock()
 				return
 			}
-			resps[i] = Extent{
+			resps[i] = promql2influxql.Extent{
 				Start:    cmd.Start.UnixMilli(),
 				End:      cmd.End.UnixMilli(),
 				Response: res,

@@ -19,9 +19,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/lib/codec"
 	"github.com/openGemini/openGemini/lib/codec/gen"
+	"github.com/openGemini/openGemini/lib/spdy/transport"
 	"github.com/stretchr/testify/assert"
 )
 

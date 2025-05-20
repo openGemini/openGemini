@@ -28,8 +28,6 @@ type THashVector THashValue
 const MersennePower int = 31
 const MersennePrime TExtendedHashValue = (TExtendedHashValue(1) << MersennePower) - 1
 
-// var hashN int = 1
-
 type THasher struct {
 	Depth                          int
 	WidthLog2                      int

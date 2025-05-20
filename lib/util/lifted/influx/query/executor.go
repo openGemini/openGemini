@@ -15,7 +15,6 @@ import (
 	"runtime/debug"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/influxdata/influxdb/models"
@@ -49,6 +48,8 @@ var (
 
 	// ErrAlreadyKilled is returned when attempting to kill a query that has already been killed.
 	ErrAlreadyKilled = errors.New("already killed")
+
+	handlerStat = statistics.NewHandler()
 )
 
 // Statistics for the Executor
@@ -331,7 +332,7 @@ func (e *Executor) executeQuery(query *influxql.Query, opt ExecutionOptions, clo
 	ctx.PointsWriter = e.PointsWriter
 	// Setup the execution context that will be used when executing statements.
 	ctx.Results = results
-	atomic.AddInt64(&statistics.HandlerStat.QueryStmtCount, int64(len(query.Statements)))
+	handlerStat.QueryStmtCount.Add(int64(len(query.Statements)))
 
 	var i int
 LOOP:
@@ -450,7 +451,7 @@ func (e *Executor) executeParallelQuery(query *influxql.Query, opt ExecutionOpti
 	// Setup the execution context that will be used when executing statements.
 	ctx.Results = results
 
-	atomic.AddInt64(&statistics.HandlerStat.QueryStmtCount, int64(len(query.Statements)))
+	handlerStat.QueryStmtCount.Add(int64(len(query.Statements)))
 
 	var wg sync.WaitGroup
 	var i int

@@ -276,6 +276,10 @@ func failHandlerForRep(fh *failedHandler, id uint64, event *serf.MemberEvent, me
 }
 
 func failHandlerForWAF(fh *failedHandler, id uint64, event *serf.MemberEvent, member *serf.Member, from eventFrom) error {
+	if !fh.cm.isHeartbeatTimeout(id) {
+		return nil
+	}
+
 	if member.Tags["role"] == "sql" {
 		return fh.handleSqlEvent(member, event, id, from)
 	}
@@ -284,6 +288,11 @@ func failHandlerForWAF(fh *failedHandler, id uint64, event *serf.MemberEvent, me
 }
 
 func failHandlerForSS(fh *failedHandler, id uint64, event *serf.MemberEvent, member *serf.Member, from eventFrom) error {
+
+	if !fh.cm.isHeartbeatTimeout(id) {
+		return nil
+	}
+
 	if member.Tags["role"] == "sql" {
 		return fh.handleSqlEvent(member, event, id, from)
 	}

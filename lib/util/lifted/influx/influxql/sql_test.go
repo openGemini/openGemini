@@ -180,6 +180,9 @@ func init() {
 		"SHOW CLUSTER WHERE nodeType = data",
 		"SHOW CLUSTER WHERE nodeType = data AND nodeID = 2",
 		"SHOW CLUSTER WHERE nodeID = 2 AND nodeType = \"data\"",
+
+		// cte syntax
+		"with t1 as (select * from mst) select * from t1",
 	}
 
 	benchCases = []string{

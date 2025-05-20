@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/influxdata/influxdb/toml"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
@@ -304,6 +305,10 @@ func TestClusterManagerResendLastEventWhenLeaderChange(t *testing.T) {
 	}
 	defer mms.Close()
 
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	cmd := GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")
 	if err = mms.service.store.ApplyCmd(cmd); err != nil {
 		t.Fatal(err)
@@ -399,7 +404,7 @@ func TestClusterManager_ActiveTakeover(t *testing.T) {
 	// wait db pt got to process
 waitEventProcess:
 	for {
-		if 1 == len(globalService.store.data.MigrateEvents) {
+		if len(globalService.store.data.MigrateEvents) == 1 {
 			break
 		}
 		select {
@@ -458,7 +463,7 @@ func TestClusterManager_LeaderChanged(t *testing.T) {
 	// wait db pt got to process
 waitEventProcess:
 	for {
-		if 1 == len(globalService.store.data.MigrateEvents) {
+		if len(globalService.store.data.MigrateEvents) == 1 {
 			break
 		}
 		select {
@@ -530,8 +535,8 @@ func TestClusterManager_getTakeoverNode(t *testing.T) {
 	assert.Equal(t, nil, err)
 	assert.Equal(t, uint64(1), nid)
 	wg := &sync.WaitGroup{}
+	wg.Add(1)
 	go func() {
-		wg.Add(1)
 		nid, err = c.getTakeOverNode(c, 2, nil, false)
 		wg.Done()
 	}()
@@ -623,8 +628,6 @@ func TestClusterManagerCheckFailSqlEvent(t *testing.T) {
 	assert.Equal(t, serf.StatusFailed, dn.Status)
 }
 
-// skip
-/*
 func TestClusterManagerCheckRepFailSqlEvent(t *testing.T) {
 	dir := t.TempDir()
 	mms, err := NewMockMetaService(dir, testIp)
@@ -646,7 +649,6 @@ func TestClusterManagerCheckRepFailSqlEvent(t *testing.T) {
 	mms.service.clusterManager.eventWg.Wait()
 	assert.Equal(t, serf.StatusFailed, dn.Status)
 }
-*/
 
 func TestClusterManagerReSendSqlEventFail(t *testing.T) {
 	dir := t.TempDir()
@@ -889,4 +891,96 @@ func TestProcessedFailedForRep(t *testing.T) {
 		},
 	}
 	assert.EqualError(t, c.processFailedDbPtForRep(dbPt, nil, false), "dataNode(id=%!d(MISSING),host=%!s(MISSING)) not found")
+}
+
+func TestClusterManager_SendFailedEvent(t *testing.T) {
+	cm := CreateClusterManager()
+	d := &meta.DataNode{NodeInfo: meta.NodeInfo{Host: ""}}
+	got := cm.sendFailedEvent(d)
+	assert.NotEqual(t, got, nil, "net.SplitHostPort error")
+
+	d.Host = "mock-domain:8635"
+	got = cm.sendFailedEvent(d)
+	assert.NotEqual(t, got, nil, "net.Lookup error")
+
+	d.Host = "localhost:8635"
+	got = cm.sendFailedEvent(d)
+	assert.Equal(t, got, nil, "valid Host and send success")
+}
+
+func TestClusterManager_IsHeartbeatTimeout(t *testing.T) {
+	cm := CreateClusterManager()
+	cm.heartbeatConfig = config.NewHeartbeatConfig()
+	cm.heartbeatConfig.Enabled = true
+
+	got := cm.isHeartbeatTimeout(4)
+	assert.True(t, got, "return true if node id not found")
+
+	cm.joins[4] = time.Now()
+	got = cm.isHeartbeatTimeout(4)
+	assert.False(t, got, "return false if node id existed and no timeout")
+
+	cm.joins[4] = time.Now().Add(-time.Minute)
+	got = cm.isHeartbeatTimeout(4)
+	assert.True(t, got, "return true if node id existed and timeout")
+}
+func TestClusterManager_SendHeartbeat(t *testing.T) {
+	mms, err := NewMockMetaService(t.TempDir(), testIp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mms.Close()
+
+	cm := CreateClusterManager()
+	cm.heartbeatConfig = config.NewHeartbeatConfig()
+	cm.heartbeatConfig.PingTimeout = toml.Duration(time.Millisecond)
+
+	mockNetStore := NewMockNetStorage()
+	globalService.store.NetStore = mockNetStore
+
+	d := &meta.DataNode{NodeInfo: meta.NodeInfo{ID: 4, Host: "localhost:8900"}}
+	got := cm.sendHeartbeat(d)
+	assert.Equal(t, got, nil, "send success")
+
+	mockNetStore.PingFn = func(nodeId uint64, address string, timeout time.Duration) error {
+		time.Sleep(2 * time.Millisecond)
+		return nil
+	}
+	got = cm.sendHeartbeat(d)
+	assert.NotEqual(t, got, nil, "send failed because of ping timeout")
+}
+
+func TestClusterManager_UpdateStoreHeartbeat(t *testing.T) {
+	dir := t.TempDir()
+	mms, err := NewMockMetaService(dir, testIp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mms.Close()
+
+	if err = globalService.store.ApplyCmd(GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")); err != nil {
+		t.Fatal(err)
+	}
+
+	e := *generateMemberEvent(serf.EventMemberJoin, "2", 1, serf.StatusAlive)
+	eventCh := mms.service.clusterManager.GetEventCh()
+	eventCh <- e
+	time.Sleep(1 * time.Second)
+	mms.service.clusterManager.WaitEventDone()
+
+	mockHeartbeatConfig := config.NewHeartbeatConfig()
+	mockHeartbeatConfig.PingTimeout = toml.Duration(time.Millisecond)
+
+	cm := NewClusterManager(globalService.store, WithHeartbeatConfig(mockHeartbeatConfig))
+	last := time.Now().Add(-time.Minute)
+	cm.joins[2] = last
+	cm.updateStoreHeartbeat()
+	got := cm.joins[2]
+	assert.Equal(t, got, last, "last unchanged because ping failed")
+
+	mockNetStore := NewMockNetStorage()
+	globalService.store.NetStore = mockNetStore
+	cm.updateStoreHeartbeat()
+	got = cm.joins[2]
+	assert.Greater(t, got, last, "last update because of ping success")
 }

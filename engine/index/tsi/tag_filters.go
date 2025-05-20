@@ -1,8 +1,12 @@
 package tsi
 
 /*
-Copyright 2019-2022 VictoriaMetrics, Inc.
-This code is originally from: This code is originally from: https://github.com/VictoriaMetrics/VictoriaMetrics/blob/v1.67.0/lib/storage/tag_filters.go and has been modified and used for quickly search tag
+	Copyright 2019-2022 VictoriaMetrics, Inc.
+
+This code is originally from:
+https://github.com/VictoriaMetrics/VictoriaMetrics/blob/v1.67.0/lib/storage/tag_filters.go and
+https://github.com/VictoriaMetrics/VictoriaMetrics/blob/v1.109.1/lib/storage/storage.go，
+we has been modified and used for quickly search tag
 */
 
 import (
@@ -14,10 +18,15 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"unsafe"
 
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/lrucache"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/memory"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/regexutil"
 	"github.com/openGemini/openGemini/engine/index/mergeindex"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
@@ -45,8 +54,7 @@ type tagFilter struct {
 	graphiteReverseSuffix []byte
 
 	// matchCost is a cost for matching a filter against a single string.
-	matchCost uint64
-
+	matchCost  uint64
 	isNegative bool
 	isRegexp   bool
 
@@ -58,6 +66,8 @@ type tagFilter struct {
 
 	// eg, host ='' or host != ''
 	isEmptyValue bool
+
+	regexpPrefix string
 }
 
 type TagFilters struct {
@@ -71,6 +81,7 @@ type TagFilters struct {
 var (
 	prefixesCacheMap  = make(map[string]prefixSuffix)
 	prefixesCacheLock sync.RWMutex
+	prefixesCache     = lrucache.NewCache(getMaxPrefixesCacheSize)
 )
 
 type prefixSuffix struct {
@@ -81,6 +92,7 @@ type prefixSuffix struct {
 var (
 	maxRegexpCacheSize     int
 	maxRegexpCacheSizeOnce sync.Once
+	regexpCache            = lrucache.NewCache(getMaxRegexpCacheSize)
 )
 
 var (
@@ -96,6 +108,16 @@ type regexpCacheValue struct {
 	reMatch       func(b []byte) bool
 	reCost        uint64
 	literalSuffix string
+	sizeBytes     int
+}
+
+type openGeminiPrefixSuffix struct {
+	prefix string
+	suffix string
+}
+
+func (ps *openGeminiPrefixSuffix) SizeBytes() int {
+	return len(ps.prefix) + len(ps.suffix) + int(unsafe.Sizeof(*ps))
 }
 
 const (
@@ -220,6 +242,44 @@ func (tf *tagFilter) Init(name, key, value []byte, isNegative, isRegexp bool) er
 	tf.prefix = marshalTagValue(tf.prefix, compositeKey.B)
 	kbPool.Put(compositeKey)
 
+	if config.GetStoreConfig().EnablePerlRegrep {
+		rcv, err := tf.OpGeminiRegrep()
+		if rcv.reMatch == nil {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		tf.orSuffixes = append(tf.orSuffixes[:0], rcv.orValues...)
+		tf.reSuffixMatch = rcv.reMatch
+		tf.matchCost = rcv.reCost
+		tf.isEmptyMatch = len(tf.value) == 0 && tf.reSuffixMatch(nil)
+		if !tf.isNegative && len(key) == 0 && strings.IndexByte(rcv.literalSuffix, '.') >= 0 {
+			// Reverse suffix is needed only for non-negative regexp filters on __name__ that contains dots.
+			tf.graphiteReverseSuffix = reverseBytes(tf.graphiteReverseSuffix[:0], []byte(rcv.literalSuffix))
+		}
+	} else {
+		rcv, err := tf.InfluxRegrep()
+		if rcv.reMatch == nil {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		tf.orSuffixes = append(tf.orSuffixes[:0], rcv.orValues...)
+		tf.reSuffixMatch = rcv.reMatch
+		tf.matchCost = rcv.reCost
+		tf.isEmptyMatch = len(tf.value) == 0 && tf.reSuffixMatch(nil)
+		if !tf.isNegative && len(key) == 0 && strings.IndexByte(rcv.literalSuffix, '.') >= 0 {
+			// Reverse suffix is needed only for non-negative regexp filters on __name__ that contains dots.
+			tf.graphiteReverseSuffix = reverseBytes(tf.graphiteReverseSuffix[:0], []byte(rcv.literalSuffix))
+		}
+	}
+
+	return nil
+}
+
+func (tf *tagFilter) InfluxRegrep() (regexpCacheValue, error) {
 	var expr []byte
 	prefix := tf.value
 	if tf.isRegexp {
@@ -230,7 +290,7 @@ func (tf *tagFilter) Init(name, key, value []byte, isNegative, isRegexp bool) er
 			tf.reSuffixMatch = func(b []byte) bool {
 				return bytes.Contains(b, tf.value)
 			}
-			return nil
+			return regexpCacheValue{}, nil
 		}
 	}
 	tf.prefix = marshalTagValueNoTrailingTagSeparator(tf.prefix, prefix)
@@ -239,21 +299,110 @@ func (tf *tagFilter) Init(name, key, value []byte, isNegative, isRegexp bool) er
 		// Add empty orSuffix in order to trigger fast path for orSuffixes
 		// during the search for matching metricIDs.
 		tf.isEmptyMatch = len(prefix) == 0
-		return nil
+		return regexpCacheValue{}, nil
 	}
 	rcv, err := getRegexpFromCache(expr)
+	return rcv, err
+}
+
+func (tf *tagFilter) OpGeminiRegrep() (*regexpCacheValue, error) {
+	var expr string
+	prefix := bytesutil.ToUnsafeString(tf.value)
+	if tf.isRegexp {
+		prefix, expr = openGeminiSimplifyRegexp(prefix)
+		if len(expr) == 0 {
+			tf.value = append(tf.value[:0], prefix...)
+			// select /Ubuntu/ should return match value which contain Ubuntu
+			tf.reSuffixMatch = func(b []byte) bool {
+				return bytes.Contains(b, tf.value)
+			}
+			return &regexpCacheValue{}, nil
+		} else {
+			tf.regexpPrefix = prefix
+		}
+	}
+	tf.prefix = marshalTagValueNoTrailingTagSeparator(tf.prefix, bytesutil.ToUnsafeBytes(prefix))
+	if !tf.isRegexp {
+		// tf contains plain value without regexp.
+		// Add empty orSuffix in order to trigger fast path for orSuffixes
+		// during the search for matching metricIDs.
+		tf.isEmptyMatch = len(prefix) == 0
+		return &regexpCacheValue{}, nil
+	}
+	rcv, err := getOpenGeminiRegexpFromCache(expr)
+	return rcv, err
+}
+
+// SizeBytes implements lrucache.Entry interface
+func (rcv *regexpCacheValue) SizeBytes() int {
+	return rcv.sizeBytes
+}
+func getOpenGeminiRegexpFromCache(expr string) (*regexpCacheValue, error) {
+	if rcv := regexpCache.GetEntry(expr); rcv != nil {
+		// Fast path - the regexp found in the cache.
+		return rcv.(*regexpCacheValue), nil
+	}
+
+	// Slow path - build the regexp.
+	exprOrig := expr
+
+	expr = tagCharsRegexpEscaper.Replace(exprOrig)
+	exprStr := fmt.Sprintf("^(%s)$", expr)
+	re, err := regexp.Compile(exprStr)
 	if err != nil {
-		return err
+		return nil, fmt.Errorf("invalid regexp %q: %w", exprStr, err)
 	}
-	tf.orSuffixes = append(tf.orSuffixes[:0], rcv.orValues...)
-	tf.reSuffixMatch = rcv.reMatch
-	tf.matchCost = rcv.reCost
-	tf.isEmptyMatch = len(prefix) == 0 && tf.reSuffixMatch(nil)
-	if !tf.isNegative && len(key) == 0 && strings.IndexByte(rcv.literalSuffix, '.') >= 0 {
-		// Reverse suffix is needed only for non-negative regexp filters on __name__ that contains dots.
-		tf.graphiteReverseSuffix = reverseBytes(tf.graphiteReverseSuffix[:0], []byte(rcv.literalSuffix))
+
+	sExpr := expr
+	orValues := regexutil.GetOrValuesPromRegex(sExpr)
+	var reMatch func(b []byte) bool
+	var reCost uint64
+	var literalSuffix string
+	if len(orValues) > 0 {
+		reMatch, reCost = newMatchFuncForOrSuffixes(orValues)
+	} else {
+		reMatch, literalSuffix, reCost = getOptimizedReMatchFunc(re.Match, sExpr)
 	}
-	return nil
+
+	// Put the reMatch in the cache.
+	var rcv regexpCacheValue
+	rcv.orValues = orValues
+	rcv.reMatch = reMatch
+	rcv.reCost = reCost
+	rcv.literalSuffix = literalSuffix
+	// heuristic for rcv in-memory size
+	rcv.sizeBytes = 8*len(exprOrig) + len(literalSuffix)
+	regexpCache.PutEntry(exprOrig, &rcv)
+
+	return &rcv, nil
+}
+func openGeminiSimplifyRegexp(expr string) (string, string) {
+	// It is safe to pass the expr constructed via bytesutil.ToUnsafeString()
+	// to GetEntry() here.
+	if ps := prefixesCache.GetEntry(expr); ps != nil {
+		// Fast path - the simplified expr is found in the cache.
+		ps, ok := ps.(*openGeminiPrefixSuffix)
+		if !ok {
+			logger.Panicf("BUG: the simplifiled expr %s not match the type of prifixSuffix", expr)
+		}
+		return ps.prefix, ps.suffix
+	}
+
+	// Slow path - simplify the expr.
+
+	// Make a copy of expr before using it,
+	// since it may be constructed via bytesutil.ToUnsafeString()
+	expr = string(append([]byte{}, expr...))
+	prefix, suffix := regexutil.SimplifyPromRegex(expr)
+
+	// Put the prefix and the suffix to the cache.
+	ps := &openGeminiPrefixSuffix{
+		prefix: prefix,
+		suffix: suffix,
+	}
+	prefixesCache.PutEntry(expr, ps)
+
+	return prefix, suffix
 }
 
 func (tf *tagFilter) SetRegexMatchAll(match bool) {
@@ -800,6 +949,11 @@ func simplifyRegexpExt(sre *syntax.Regexp, hasPrefix, hasSuffix bool) *syntax.Re
 		if tail.Op == syntax.OpEndText && sre.Sub[0].Op == syntax.OpLiteral {
 			sreNew, _ := syntax.Parse(".*", syntax.Perl)
 			sre.Sub = append([]*syntax.Regexp{sreNew}, sre.Sub...)
+		}
+		// if the tail of regex string is $, append $
+		if tail.Op == syntax.OpEndText && len(sre.Sub) > 0 && sre.Sub[len(sre.Sub)-1].Op != syntax.OpEndText {
+			endText, _ := syntax.Parse("$", syntax.Perl)
+			sre.Sub = append(sre.Sub, endText)
 		}
 
 		return sre

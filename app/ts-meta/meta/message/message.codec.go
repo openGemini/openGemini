@@ -14,9 +14,9 @@ limitations under the License.
 package message
 
 import (
-	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/lib/codec"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/spdy/transport"
 )
 
 func (o *CreateNodeRequest) Marshal(buf []byte) ([]byte, error) {

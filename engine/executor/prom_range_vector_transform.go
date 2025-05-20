@@ -152,8 +152,9 @@ func NewPromRangeVectorTransform(inRowDataType hybridqp.RowDataType, outRowDataT
 func (trans *PromRangeVectorTransform) NewPromSubqueryCallFunc(call *influxql.PromSubCall) (CallFn, error) {
 	if fn, ok := promSubqueryFunc[call.Name]; ok {
 		return fn, nil
+	} else {
+		return nil, fmt.Errorf("NewPromSubqueryCallFunc not found func %s", call.Name)
 	}
-	return nil, fmt.Errorf("NewPromSubqueryCallFunc not found func %s", call.Name)
 }
 
 func (trans *PromRangeVectorTransform) addPreBuf() {

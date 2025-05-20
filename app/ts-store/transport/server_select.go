@@ -18,10 +18,10 @@ import (
 	"github.com/openGemini/openGemini/app/ts-store/storage"
 	"github.com/openGemini/openGemini/app/ts-store/transport/handler"
 	"github.com/openGemini/openGemini/engine/executor"
-	"github.com/openGemini/openGemini/engine/executor/spdy"
-	"github.com/openGemini/openGemini/engine/executor/spdy/rpc"
-	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/spdy"
+	"github.com/openGemini/openGemini/lib/spdy/rpc"
+	"github.com/openGemini/openGemini/lib/spdy/transport"
 )
 
 type SelectServer struct {
@@ -73,4 +73,7 @@ func (s *SelectServer) register(store *storage.Storage) {
 
 	s.server.RegisterEHF(transport.NewEventHandlerFactory(spdy.CrashRequest,
 		handler.NewCrashProcessor(), &executor.Crash{}))
+
+	s.server.RegisterEHF(transport.NewEventHandlerFactory(spdy.PingRequest,
+		handler.NewPingProcessor(), &netstorage.PingRequest{}))
 }

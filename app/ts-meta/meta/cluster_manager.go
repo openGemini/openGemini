@@ -15,6 +15,7 @@
 package meta
 
 import (
+	"fmt"
 	"math"
 	"net"
 	"sort"
@@ -28,9 +29,14 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/rand"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"go.uber.org/zap"
+)
+
+var (
+	timerPool = util.NewTimePool()
 )
 
 type eventFrom string
@@ -80,30 +86,74 @@ type ClusterManager struct {
 	stop            int32               // used for meta leader step down and do not process any event
 	takeover        chan bool
 	getTakeOverNode chooseTakeoverNodeFn
+
+	heartbeatConfig *config.HeartbeatConfig
+	pingTasks       int32
+	// key: node id; value: last connectable time
+	joins map[uint64]time.Time
 }
 
-func CreateClusterManager() *ClusterManager {
+type Option func(*ClusterManager)
+
+func WithHeartbeatConfig(config *config.HeartbeatConfig) Option {
+	if config != nil {
+		logger.GetLogger().Info("heartbeat config", zap.Any("config", config))
+	}
+	return func(cm *ClusterManager) {
+		cm.heartbeatConfig = config
+	}
+}
+
+func CreateClusterManager(options ...Option) *ClusterManager {
 	c := &ClusterManager{
 		reOpen:    make(chan struct{}),
 		closing:   make(chan struct{}),
 		eventCh:   make(chan serf.Event, 1024),
 		eventMap:  make(map[string]*serf.MemberEvent),
 		memberIds: make(map[uint64]struct{}),
-		takeover:  make(chan bool)}
+		takeover:  make(chan bool),
+		joins:     make(map[uint64]time.Time),
+	}
 
 	c.handlerMap = map[serf.EventType]memberEventHandler{
 		serf.EventMemberJoin:   &joinHandler{baseHandler{c}},
 		serf.EventMemberFailed: &failedHandler{baseHandler{c}},
 		serf.EventMemberLeave:  &leaveHandler{baseHandler{c}}}
 	c.getTakeOverNode = takeOverNodeChoose[config.GetHaPolicy()]
+
+	for _, opt := range options {
+		opt(c)
+	}
+
 	return c
 }
 
-func NewClusterManager(store storeInterface) *ClusterManager {
-	c := CreateClusterManager()
+// isHeartbeatTimeout check whether the heartbeat of the node times out
+// if heartbeatConfig is nil or disabled, or node id not existed, return true to keep the old process unchanged
+func (cm *ClusterManager) isHeartbeatTimeout(id uint64) bool {
+	if cm.heartbeatConfig == nil || !cm.heartbeatConfig.Enabled {
+		return true
+	}
+
+	cm.mu.RLock()
+	last, ok := cm.joins[id]
+	cm.mu.RUnlock()
+	if ok {
+		logger.GetLogger().Info("last heartbeat time", zap.Uint64("id", id), zap.Time("join", last))
+		return time.Since(last) > time.Duration(cm.heartbeatConfig.JoinTimeout)
+	}
+	return true
+}
+
+func NewClusterManager(store storeInterface, options ...Option) *ClusterManager {
+	c := CreateClusterManager(options...)
 	atomic.StoreInt32(&c.stop, 1)
 	c.wg.Add(1)
 	go c.checkEvents()
+
+	c.wg.Add(1)
+	go c.checkStoreHeartbeat()
+
 	c.store = store
 	return c
 }
@@ -150,6 +200,9 @@ func (cm *ClusterManager) Start() {
 	cm.resendPreviousEvent(fromLeaderChanged)
 	cm.wg.Add(1)
 	go cm.checkEvents()
+
+	cm.wg.Add(1)
+	go cm.checkStoreHeartbeat()
 }
 
 func (cm *ClusterManager) Stop() {
@@ -646,4 +699,156 @@ func (cm *ClusterManager) SetStop(stop int32) {
 
 func (cm *ClusterManager) SetMemberIds(memberIds map[uint64]struct{}) {
 	cm.memberIds = memberIds
+}
+
+func (cm *ClusterManager) checkStoreHeartbeat() {
+	defer cm.wg.Done()
+
+	if cm.heartbeatConfig == nil || !cm.heartbeatConfig.Enabled {
+		return
+	}
+
+	check := time.NewTicker(time.Duration(cm.heartbeatConfig.CheckInterval))
+	defer check.Stop()
+
+	for {
+		select {
+		case <-cm.reOpen:
+			return
+		case <-cm.closing:
+			return
+		case <-check.C:
+			if !cm.isStopped() {
+				cm.updateStoreHeartbeat()
+			}
+		}
+	}
+}
+
+type verifyResult struct {
+	idx int
+	err error
+}
+
+func (cm *ClusterManager) updateStoreHeartbeat() {
+	joins := make(map[uint64]time.Time)
+	cm.mu.RLock()
+	for id, last := range cm.joins {
+		joins[id] = last
+	}
+	cm.mu.RUnlock()
+
+	dataNodes := cm.store.dataNodes()
+	out := make(chan verifyResult, dataNodes.Len())
+	n := cm.heartbeatConfig.CheckConcurrentLimit
+	if n > dataNodes.Len() {
+		n = dataNodes.Len()
+	}
+	var pidx uint32
+	for k := 0; k < n; k++ {
+		go func() {
+			for {
+				idx := int(atomic.AddUint32(&pidx, 1) - 1)
+				if idx >= dataNodes.Len() {
+					return
+				}
+				start := time.Now()
+				d := &dataNodes[idx]
+				err := cm.sendHeartbeat(d)
+				out <- verifyResult{idx: idx, err: err}
+				if err != nil {
+					pingTasks := atomic.LoadInt32(&cm.pingTasks)
+					logger.GetLogger().Error("ping store failed", zap.Error(err), zap.Int32("pingTasks", pingTasks), zap.Uint64("nodeId", d.ID), zap.Duration("elapsed", time.Since(start)))
+				}
+			}
+		}()
+	}
+
+	for i := 0; i < dataNodes.Len(); i++ {
+		r := <-out
+		d := &dataNodes[r.idx]
+		if r.err == nil {
+			joins[d.ID] = time.Now()
+			continue
+		}
+		last, ok := joins[d.ID]
+		if ok && time.Since(last) > time.Duration(cm.heartbeatConfig.JoinTimeout) && d.Status == serf.StatusAlive {
+			logger.GetLogger().Error("failed node", zap.Error(r.err), zap.Uint64("lTime", d.LTime), zap.Uint64("nodeId", d.ID), zap.String("addr", d.Host), zap.Time("last", last))
+			if err := cm.sendFailedEvent(d); err != nil {
+				logger.GetLogger().Error("send failed event error", zap.Error(err), zap.Uint64("nodeId", d.ID), zap.String("addr", d.Host))
+			}
+		}
+	}
+
+	pingTasks := atomic.LoadInt32(&cm.pingTasks)
+	if pingTasks > int32(cm.heartbeatConfig.MaxPingTasks) {
+		panic(fmt.Sprintf("block ping tasks %d > %d", pingTasks, cm.heartbeatConfig.MaxPingTasks))
+	}
+
+	cm.mu.Lock()
+	for id, last := range joins {
+		cm.joins[id] = last
+	}
+	cm.mu.Unlock()
+}
+
+func (cm *ClusterManager) sendHeartbeat(d *meta.DataNode) error {
+	timeout := time.Duration(cm.heartbeatConfig.PingTimeout)
+	timer := timerPool.GetTimer(timeout)
+	defer timerPool.PutTimer(timer)
+
+	errC := make(chan error)
+	defer close(errC)
+	go func() {
+		start := time.Now()
+		atomic.AddInt32(&cm.pingTasks, 1)
+		err := globalService.store.NetStore.Ping(d.ID, d.TCPHost, timeout)
+		select {
+		case <-errC:
+			logger.GetLogger().Error("channel errC closed", zap.Error(err), zap.Duration("elapsed", time.Since(start)), zap.Uint64("nodeId", d.ID))
+		default:
+			errC <- err
+		}
+		atomic.AddInt32(&cm.pingTasks, -1)
+	}()
+
+	select {
+	case <-timer.C:
+		return fmt.Errorf("ping store %d,%s timeout in %v", d.ID, d.Host, timeout)
+	case err := <-errC:
+		return err
+	}
+}
+
+func (cm *ClusterManager) sendFailedEvent(d *meta.DataNode) error {
+	host, _, err := net.SplitHostPort(d.Host)
+	if err != nil {
+		return err
+	}
+	addr := net.ParseIP(host)
+	// if addr is nil, host maybe domain name, LoopupIP again
+	if addr == nil {
+		ips, err := net.LookupIP(host)
+		if err != nil {
+			return err
+		}
+		if len(ips) > 0 {
+			addr = ips[0]
+		}
+	}
+
+	e := serf.MemberEvent{
+		Type:      serf.EventMemberFailed,
+		EventTime: serf.LamportTime(d.LTime),
+		Members: []serf.Member{{
+			Name:   strconv.FormatUint(d.ID, 10),
+			Addr:   addr,
+			Tags:   map[string]string{"role": "store"},
+			Status: serf.StatusFailed,
+		}},
+	}
+
+	cm.eventWg.Add(1)
+	go cm.processEvent(e, fromSelfCheck)
+	return nil
 }

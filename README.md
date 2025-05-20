@@ -131,7 +131,7 @@ The compiled binary file is in the build directory
 
 ```
 > ls build
-ts-cli ts-meta ts-monitor ts-server  ts-sql  ts-store
+ts-meta ts-monitor ts-server  ts-sql  ts-store
 ```
 
 ### Configuration
@@ -151,6 +151,12 @@ Standalone operation
 Refer to cluster deployments in [User Guide](https://docs.opengemini.org/guide/quick_start/get_started.html)
 
 #### Using openGemini
+
+Install ts-cli
+
+```
+> go install github.com/openGemini/openGemini-cli/cmd/ts-cli@latest
+```
 
 Use the [openGemini-cli](https://github.com/openGemini/openGemini-cli) to connect to openGemini
 

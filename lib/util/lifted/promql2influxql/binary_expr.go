@@ -236,7 +236,6 @@ func (t *Transpiler) transpileBinaryExpr(b *parser.BinaryExpr) (influxql.Node, e
 		t.dropMetric = true
 	}
 	t.dropMetric = rDropMetric || (!rDropMetric && lDropMetric)
-	t.removeTableName = true
 	switch {
 	case yieldsFloat(b.LHS) && yieldsFloat(b.RHS):
 		// Handle both sides return scalar value.
@@ -275,6 +274,12 @@ func (t *Transpiler) transpileBinaryExpr(b *parser.BinaryExpr) (influxql.Node, e
 			return t.transpileBinOpOfOneVector(b, influxql.Token(b.Op), lhs, rhs)
 		}
 		t.dropMetric = lDropMetric && rDropMetric
+		if lDropMetric {
+			lStmt.RemoveMetric = true
+		}
+		if rDropMetric {
+			rStmt.RemoveMetric = true
+		}
 		return t.transpileBinOpOfBothVector(b, influxql.Token(b.Op), lStmt, rStmt)
 	default:
 		return nil, errno.NewError(errno.UnsupportedBothVS, b.String())

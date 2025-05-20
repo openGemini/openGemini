@@ -25,7 +25,6 @@ import (
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/index/tsi"
-	"github.com/openGemini/openGemini/engine/mutable"
 	"github.com/openGemini/openGemini/lib/binaryfilterfunc"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/errno"
@@ -50,8 +49,8 @@ func CreateCursor(ctx context.Context, schema *executor.QuerySchema, span *traci
 	var OrderFileCount, outOrderFileCount int
 	startTime, endTime := schema.Options().GetStartTime(), schema.Options().GetEndTime()
 	tr := util.TimeRange{Min: startTime, Max: endTime}
-	qCtx := &idKeyCursorContext{immTableReaders: make(map[uint64]*immutable.MmsReaders), memTableReader: make(map[uint64]*mutable.MemTables)}
-	immTables, memTables := make([]*immutable.MmsReaders, len(shards)), make([]*mutable.MemTables, len(shards))
+	qCtx := &idKeyCursorContext{immTableReaders: make(map[uint64]*immutable.MmsReaders), memTableReader: make(map[uint64]MemDataReader)}
+	immTables, memTables := make([]*immutable.MmsReaders, len(shards)), make([]MemDataReader, len(shards))
 	for i, s := range shards {
 		shardStartTime, shardEndTime := s.startTime.UnixNano(), s.endTime.UnixNano()
 		hasTimeFilter := (startTime >= shardStartTime && startTime <= shardEndTime) || (endTime >= shardStartTime && endTime <= shardEndTime)

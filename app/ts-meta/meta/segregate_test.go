@@ -18,11 +18,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/spdy/transport"
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
@@ -168,8 +168,6 @@ func TestHandleSpecialCtlDataInvalidCmd(t *testing.T) {
 	}
 }
 
-//skip
-/*
 func TestHandleSpecialCtlDataInvalidNodeIp(t *testing.T) {
 	dir := t.TempDir()
 	mms, err := NewMockMetaService(dir, "127.0.0.1")
@@ -206,7 +204,6 @@ func TestHandleSpecialCtlDataInvalidNodeIp(t *testing.T) {
 		t.Fatal("TestHandleSpecialCtlDataInvalidNodeIp deleteCmd error")
 	}
 }
-*/
 
 func TestHandleSpecialCtlDataNoHa(t *testing.T) {
 	dir := t.TempDir()

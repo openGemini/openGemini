@@ -21,7 +21,6 @@ import (
 	"runtime/debug"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/openGemini/openGemini/engine/comm"
@@ -31,6 +30,7 @@ import (
 	"github.com/openGemini/openGemini/engine/index/clv"
 	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/engine/mutable"
+	"github.com/openGemini/openGemini/engine/shelf"
 	"github.com/openGemini/openGemini/lib/binaryfilterfunc"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
@@ -97,6 +97,12 @@ func init() {
 	}
 }
 
+type MemDataReader interface {
+	Ref()
+	UnRef()
+	Values(msName string, id uint64, tr util.TimeRange, schema record.Schemas, ascending bool) *record.Record
+}
+
 func (s *shard) Scan(span *tracing.Span, schema *executor.QuerySchema, callBack func(num int64) error) (tsi.GroupSeries, int64, error) {
 	schema.SetSimpleTagset()
 	result, num, err := s.indexBuilder.Scan(span, util.Str2bytes(schema.Options().OptionsName()), schema.Options().(*query.ProcessorOptions), callBack)
@@ -154,8 +160,10 @@ func (s *shard) CreateCursor(ctx context.Context, schema *executor.QuerySchema) 
 		s.log.Debug("get index result empty")
 		return nil, nil
 	}
-	atomic.AddInt64(&statistics.StoreQueryStat.IndexScanRunTimeTotal, time.Since(start).Nanoseconds())
-	atomic.AddInt64(&statistics.StoreQueryStat.IndexScanSeriesNumTotal, seriesNum)
+
+	queryStat := statistics.NewStoreQuery()
+	queryStat.IndexScanRunTimeTotal.AddSinceNano(start)
+	queryStat.IndexScanSeriesNumTotal.Add(seriesNum)
 
 	qDuration, _ := ctx.Value(query.QueryDurationKey).(*statistics.StoreSlowQueryStatistics)
 	if qDuration != nil {
@@ -185,7 +193,7 @@ func (s *shard) CreateCursor(ctx context.Context, schema *executor.QuerySchema) 
 		cloneMsSpan.SetNameValue(fmt.Sprintf("order=%d,unorder=%d", len(immutableReader.Orders), len(immutableReader.OutOfOrders)))
 		cloneMsSpan.Finish()
 	}
-	info := NewTsIndexInfo([]*immutable.MmsReaders{immutableReader}, []*mutable.MemTables{mutableReader}, nil)
+	info := NewTsIndexInfo([]*immutable.MmsReaders{immutableReader}, []MemDataReader{mutableReader}, nil)
 	var createErr error
 	var groupCursors []comm.KeyCursor
 	defer func() {
@@ -212,10 +220,12 @@ func (s *shard) CreateCursor(ctx context.Context, schema *executor.QuerySchema) 
 	return info, nil
 }
 
-func (s *shard) cloneReaders(mm string, hasTimeFilter bool, tr util.TimeRange) (*immutable.MmsReaders, *mutable.MemTables) {
-	var immutableReader immutable.MmsReaders
-	mutableReader := mutable.NewMemTables(s.ident.ShardID, config.GetStoreConfig().MemTable.MemDataReadEnabled)
-	var flushed bool
+func (s *shard) cloneReaders(mm string, hasTimeFilter bool, tr util.TimeRange) (*immutable.MmsReaders, MemDataReader) {
+	if config.ShelfModeEnabled() {
+		return s.cloneShelfModeReaders(mm, hasTimeFilter, tr)
+	}
+
+	mutableReader := mutable.NewMemTables(config.GetStoreConfig().MemTable.MemDataReadEnabled)
 	var snapshotTblFlushed *bool
 	s.snapshotLock.RLock()
 	defer s.snapshotLock.RUnlock()
@@ -226,13 +236,7 @@ func (s *shard) cloneReaders(mm string, hasTimeFilter bool, tr util.TimeRange) (
 			snapshotTblFlushed = msInfo.GetFlushed()
 		}
 	}
-	immutableReader.Orders, immutableReader.OutOfOrders, flushed = s.immTables.GetBothFilesRef(mm, hasTimeFilter, tr, snapshotTblFlushed)
-	immutable.RefFilesReader(immutableReader.Orders...)
-	immutable.RefFilesReader(immutableReader.OutOfOrders...)
-
-	if config.ShelfModeEnabled() {
-		return &immutableReader, mutableReader
-	}
+	immutableReader, flushed := s.createImmutableReader(mm, hasTimeFilter, tr, snapshotTblFlushed)
 
 	if flushed {
 		mutableReader.Init(s.activeTbl, nil)
@@ -240,7 +244,24 @@ func (s *shard) cloneReaders(mm string, hasTimeFilter bool, tr util.TimeRange) (
 		mutableReader.Init(s.activeTbl, s.snapshotTbl)
 	}
 	mutableReader.Ref()
-	return &immutableReader, mutableReader
+	return immutableReader, mutableReader
+}
+
+func (s *shard) cloneShelfModeReaders(mm string, hasTimeFilter bool, tr util.TimeRange) (*immutable.MmsReaders, MemDataReader) {
+	walReader := shelf.NewWalReader(s.ident.ShardID, mm, &tr)
+	immutableReader, _ := s.createImmutableReader(mm, hasTimeFilter, tr, nil)
+	return immutableReader, walReader
+}
+
+func (s *shard) createImmutableReader(mm string, hasTimeFilter bool, tr util.TimeRange, snapshotTblFlushed *bool) (*immutable.MmsReaders, bool) {
+	var flushed bool
+	var immutableReader immutable.MmsReaders
+
+	immutableReader.Orders, immutableReader.OutOfOrders, flushed = s.immTables.GetBothFilesRef(mm, hasTimeFilter, tr, snapshotTblFlushed)
+	immutable.RefFilesReader(immutableReader.Orders...)
+	immutable.RefFilesReader(immutableReader.OutOfOrders...)
+
+	return &immutableReader, flushed
 }
 
 func (s *shard) GetTSSPFiles(mm string, isOrder bool) (*immutable.TSSPFiles, bool) {
@@ -248,7 +269,7 @@ func (s *shard) GetTSSPFiles(mm string, isOrder bool) (*immutable.TSSPFiles, boo
 }
 
 func (s *shard) initGroupCursors(ctx context.Context, querySchema *executor.QuerySchema, parallelism int,
-	readers *immutable.MmsReaders, memTables *mutable.MemTables, iTr util.TimeRange) (comm.KeyCursors, error) {
+	readers *immutable.MmsReaders, memTables MemDataReader, iTr util.TimeRange) (comm.KeyCursors, error) {
 	var schema record.Schemas
 	var filterFieldsIdx []int
 	var filterTags []string
@@ -483,7 +504,7 @@ func (s *shard) createGroupSubCursor(cursors comm.KeyCursors, tagSets []*tsi.Tag
 }
 
 func (s *shard) createGroupCursors(ctx context.Context, span *tracing.Span, schema *executor.QuerySchema, lazyInit bool, tagSets []*tsi.TagSetInfo,
-	readers *immutable.MmsReaders, memTables *mutable.MemTables, iTr util.TimeRange) ([]comm.KeyCursor, error) {
+	readers *immutable.MmsReaders, memTables MemDataReader, iTr util.TimeRange) ([]comm.KeyCursor, error) {
 
 	parallelism, totalSid := getParallelismNumAndSidNum(schema, tagSets)
 
@@ -631,7 +652,7 @@ type idKeyCursorContext struct {
 	auxTags         []string
 	schema          record.Schemas
 	readers         *immutable.MmsReaders
-	memTables       *mutable.MemTables
+	memTables       MemDataReader
 	aggPool         *record.RecordPool
 	seriesPool      *record.RecordPool
 	tmsMergePool    *record.RecordPool
@@ -641,7 +662,7 @@ type idKeyCursorContext struct {
 	metaContext     *immutable.ChunkMetaContext
 	closedSignal    *bool
 	immTableReaders map[uint64]*immutable.MmsReaders
-	memTableReader  map[uint64]*mutable.MemTables
+	memTableReader  map[uint64]MemDataReader
 }
 
 func (i *idKeyCursorContext) IsAborted() bool {

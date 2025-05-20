@@ -233,15 +233,6 @@ func TestCombineDomain(t *testing.T) {
 	assert.Equal(t, "127.0.0.1", config.CombineDomain("", "127.0.0.1"))
 }
 
-func setConfigToZero(conf *config.TSStore) {
-	conf.Data.Compact.CompactThroughput = toml.Size(0)
-	conf.Data.Compact.CompactThroughputBurst = toml.Size(0)
-	conf.Data.Compact.SnapshotThroughput = toml.Size(0)
-	conf.Data.Compact.SnapshotThroughputBurst = toml.Size(0)
-	conf.Data.Compact.BackGroundReadThroughput = toml.Size(0)
-
-}
-
 func TestTSStoreThroughput(t *testing.T) {
 	conf := config.NewTSStore(true)
 	conf.Data.IngesterAddress = "127.0.0.1:8800"

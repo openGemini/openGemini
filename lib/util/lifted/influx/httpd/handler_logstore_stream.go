@@ -19,7 +19,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"sync/atomic"
 
 	"github.com/gorilla/mux"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
@@ -30,6 +29,7 @@ import (
 
 var (
 	streamSupportMap = map[string]bool{"min": true, "max": true, "sum": true, "count": true}
+	handlerStat      = statistics.NewHandler()
 )
 
 type StreamTaskConfig struct {
@@ -49,7 +49,7 @@ func (h *Handler) serveCreateStreamTask(w http.ResponseWriter, r *http.Request, 
 	if err := ValidateRepoAndLogStream(repository, logStream); err != nil {
 		h.Logger.Error("serveCreateStreamTask", zap.Error(err))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
-		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		handlerStat.Write400ErrRequests.Incr()
 		return
 	}
 
@@ -59,7 +59,7 @@ func (h *Handler) serveCreateStreamTask(w http.ResponseWriter, r *http.Request, 
 	if err != nil {
 		h.Logger.Error("serveCreateStreamTask fail", zap.Error(err))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
-		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		handlerStat.Write400ErrRequests.Incr()
 		return
 	}
 	streamTaskConfig := &StreamTaskConfig{}
@@ -67,7 +67,7 @@ func (h *Handler) serveCreateStreamTask(w http.ResponseWriter, r *http.Request, 
 	if err != nil {
 		h.Logger.Error("serveCreateStreamTask fail", zap.Error(err))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
-		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		handlerStat.Write400ErrRequests.Incr()
 		return
 	}
 
@@ -79,28 +79,28 @@ func (h *Handler) serveCreateStreamTask(w http.ResponseWriter, r *http.Request, 
 	if err != nil {
 		h.Logger.Error("serveCreateStreamTask fail", zap.Error(err))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
-		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		handlerStat.Write400ErrRequests.Incr()
 		return
 	}
 
 	if len(query.Statements) == 0 {
 		h.Logger.Error("serveCreateStreamTask fail", zap.String("query", streamTaskConfig.Query))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
-		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		handlerStat.Write400ErrRequests.Incr()
 		return
 	}
 	selectStatement, ok := query.Statements[0].(*influxql.SelectStatement)
 	if !ok {
 		h.Logger.Error("serveCreateStreamTask fail", zap.String("query", query.Statements[0].String()))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
-		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		handlerStat.Write400ErrRequests.Incr()
 		return
 	}
 	err = selectStatement.StreamCheck(streamSupportMap)
 	if err != nil {
 		h.Logger.Error("serveCreateStreamTask", zap.Error(err))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
-		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		handlerStat.Write400ErrRequests.Incr()
 		return
 	}
 
@@ -115,14 +115,14 @@ func (h *Handler) serveCreateStreamTask(w http.ResponseWriter, r *http.Request, 
 	if err != nil {
 		h.Logger.Error("serveCreateStreamTask", zap.Error(err))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
-		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		handlerStat.Write400ErrRequests.Incr()
 		return
 	}
 	err = h.MetaClient.CreateStreamPolicy(info)
 	if err != nil {
 		h.Logger.Error("serveCreateStreamTask", zap.Error(err))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
-		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		handlerStat.Write400ErrRequests.Incr()
 		return
 	}
 	rewriteQueryForStream(query)
@@ -226,7 +226,7 @@ func (h *Handler) serveDeleteStreamTask(w http.ResponseWriter, r *http.Request, 
 	if err := ValidateRepoAndLogStream(repository, logStream); err != nil {
 		h.Logger.Error("serveDeleteStreamTask", zap.Error(err))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
-		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		handlerStat.Write400ErrRequests.Incr()
 		return
 	}
 	taskId := mux.Vars(r)["taskId"]
@@ -237,7 +237,7 @@ func (h *Handler) serveDeleteStreamTask(w http.ResponseWriter, r *http.Request, 
 	if err != nil {
 		h.Logger.Error("serveDeleteStreamTask", zap.Error(err))
 		h.httpErrorRsp(w, ErrorResponse(err.Error(), LogReqErr), http.StatusBadRequest)
-		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		handlerStat.Write400ErrRequests.Incr()
 		return
 	}
 	w.WriteHeader(http.StatusOK)

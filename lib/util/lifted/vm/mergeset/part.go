@@ -11,8 +11,22 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/fasttime"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/memory"
 	"github.com/openGemini/openGemini/lib/fileops"
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/filestream"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/fs"
+)
+
+const (
+	/**
+
+	  5 files :
+	1. index.bin: Secondary index data
+	2. items.bin: Specific inverted index data
+	3. lens.bin: length of items.bin
+	4. metaIndex.bin: Metadata for secondary indexes
+	5. metadata.bin: Metadata for PartHeader
+	*/
+	INDEX_FILE_STAT = 5
 )
 
 func getMaxCachedIndexBlocksPerPart() int {
@@ -96,6 +110,7 @@ func openFilePart(path string) (*part, error) {
 }
 
 func newPart(ph *partHeader, path string, size uint64, metaindexReader filestream.ReadCloser, indexFile, itemsFile, lensFile fs.MustReadAtCloser) (*part, error) {
+	statistics.NewIndexFileStat().IndexFileTotal.Add(INDEX_FILE_STAT)
 	var errors []error
 	mrs, err := unmarshalMetaindexRows(nil, metaindexReader)
 	if err != nil {
@@ -189,6 +204,7 @@ func newIndexBlockCache() *indexBlockCache {
 }
 
 func (idxbc *indexBlockCache) MustClose() {
+	statistics.NewIndexFileStat().IndexFileTotal.Add(-INDEX_FILE_STAT)
 	close(idxbc.cleanerStopCh)
 	idxbc.cleanerWG.Wait()
 	idxbc.m = nil

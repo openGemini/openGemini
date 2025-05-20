@@ -15,9 +15,9 @@
 package handler
 
 import (
-	"github.com/openGemini/openGemini/engine/executor/spdy"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/spdy"
 	"go.uber.org/zap"
 )
 

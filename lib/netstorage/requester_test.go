@@ -20,11 +20,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openGemini/openGemini/engine/executor/spdy"
-	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/lib/codec"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	netstorage_data "github.com/openGemini/openGemini/lib/netstorage/data"
+	"github.com/openGemini/openGemini/lib/spdy"
+	"github.com/openGemini/openGemini/lib/spdy/transport"
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"

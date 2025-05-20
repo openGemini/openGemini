@@ -218,15 +218,15 @@ func (e *StatementExecutor) ExecuteStatement(stmt influxql.Statement, ctx *query
 			}
 			return nil
 		}
-
+		handler := statistics.NewHandler()
 		if errno.Equal(err, errno.DatabaseNotFound, errno.ErrMeasurementNotFound) {
 			e.StmtExecLogger.Error("execute select statement 400 error", zap.Any("stmt", stmtString),
 				zap.Error(err), zap.Float64("duration", dur.Seconds()))
-			atomic.AddInt64(&statistics.HandlerStat.Query400ErrorStmtCount, 1)
+			handler.Query400ErrorStmtCount.Incr()
 		} else {
 			e.StmtExecLogger.Error("execute select statement 500 error", zap.Any("stmt", stmtString),
 				zap.Error(err), zap.Float64("duration", dur.Seconds()))
-			atomic.AddInt64(&statistics.HandlerStat.QueryErrorStmtCount, 1)
+			handler.QueryErrorStmtCount.Incr()
 		}
 		return err
 	}
@@ -444,6 +444,8 @@ func (e *StatementExecutor) ExecuteStatement(stmt influxql.Statement, ctx *query
 		err = e.executeSetConfig(stmt)
 	case *influxql.ShowClusterStatement:
 		rows, err = e.executeShowCluster(stmt)
+	case *influxql.WithSelectStatement:
+		err = e.executeWithSelectStatement(stmt)
 	default:
 		return query.ErrInvalidQuery
 	}
@@ -2559,6 +2561,10 @@ func (e *StatementExecutor) executeShowClusterWithCondition(stmt *influxql.ShowC
 		return nil, errno.NewError(errno.InValidNodeType, stmt.NodeType)
 	}
 	return e.MetaClient.ShowClusterWithCondition(stmt.NodeType, ID)
+}
+
+func (e StatementExecutor) executeWithSelectStatement(stmt *influxql.WithSelectStatement) error {
+	return nil
 }
 
 type ByteStringSlice [][]byte

@@ -45,6 +45,7 @@ func Test_NewServer(t *testing.T) {
 	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
 	conf.ContinuousQuery.Enabled = true
 	conf.Meta.UseIncSyncData = true
+	conf.RecordWrite.Enabled = true
 
 	server, err := NewServer(conf, app.ServerInfo{}, log)
 	require.NoError(t, err)

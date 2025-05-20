@@ -1,12 +1,13 @@
-// Copyright (c) 2013-2016 Errplane Inc.
-// This code is originally from: https://github.com/influxdata/influxdb/blob/1.7/services/meta/internal/meta.proto
-//
-// 2022.01.23 Add PtView,MeasurementInfo,etc.
-// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
-
 syntax = "proto2";
 package proto;
 option go_package="../proto";
+/*
+Copyright (c) 2013-2016 Errplane Inc.
+This code is originally from: https://github.com/influxdata/influxdb/blob/1.7/services/meta/internal/meta.proto
+
+2022.01.23 Add PtView,MeasurementInfo,etc.
+Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+*/
 
 //========================================================================
 //
@@ -386,6 +387,7 @@ message Command {
 		UpdateMetaNodeStatusCommand                = 102;
 		ShowClusterCommand                         = 103;
 		IndexDurationCommand                       = 104;
+		UpdateIndexInfoTierCommand                 = 105;
 	}
 
 	required Type type = 1;
@@ -1325,4 +1327,14 @@ message IndexDurationCommand {
     required uint64 Index = 1;
     repeated uint32 Pts = 2;
     optional uint64 nodeId = 3;
+}
+
+message UpdateIndexInfoTierCommand {
+    extend Command {
+        optional UpdateIndexInfoTierCommand command = 202;
+    }
+    required uint64 IndexID = 1;
+    required uint64 Tier    = 2;
+    required string DbName  = 3;
+    required string RpName  = 4;
 }

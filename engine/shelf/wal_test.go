@@ -23,10 +23,11 @@ import (
 	"testing"
 
 	"github.com/openGemini/openGemini/engine/shelf"
+	"github.com/openGemini/openGemini/lib/codec"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/record"
-	"github.com/openGemini/openGemini/lib/util"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/require"
 )
 
@@ -57,10 +58,10 @@ func runWalTest(t *testing.T) {
 	wal := shelf.NewWal(t.TempDir(), &lock, "foo")
 	wal.BackgroundSync()
 
-	err := wal.WriteRecord(sid, row.IndexKey, rec)
+	err := writeRecordToWal(wal, rec, sid, row.IndexKey)
 	require.NoError(t, err)
 
-	err = wal.WriteRecord(sid, row.IndexKey, rec)
+	err = writeRecordToWal(wal, rec, sid, row.IndexKey)
 	require.NoError(t, err)
 	require.NoError(t, wal.Sync())
 	wal.BackgroundSync()
@@ -135,7 +136,7 @@ func TestLoadWalFiles(t *testing.T) {
 			data[id] = exp
 		}
 
-		err := wal.WriteRecord(id, row.IndexKey, rec)
+		err := writeRecordToWal(wal, rec, id, row.IndexKey)
 		require.NoError(t, err)
 	}
 
@@ -178,7 +179,7 @@ func TestMemWalReader(t *testing.T) {
 	wal := shelf.NewWal(t.TempDir(), &lock, "foo")
 	defer wal.MustClose()
 
-	err := wal.WriteRecord(sid, row.IndexKey, rec)
+	err := writeRecordToWal(wal, rec, sid, row.IndexKey)
 	require.NoError(t, err)
 
 	wal.LoadIntoMemory()
@@ -195,18 +196,9 @@ func TestMemWalReader(t *testing.T) {
 func TestWalRecordCodec(t *testing.T) {
 	rec := &record.Record{}
 	rec.Schema = record.Schemas{
-		record.Field{
-			Type: 1,
-			Name: "foo",
-		},
-		record.Field{
-			Type: 1,
-			Name: "foo1",
-		},
-		record.Field{
-			Type: 1,
-			Name: "time",
-		},
+		{Type: 1, Name: "foo"},
+		{Type: 1, Name: "foo1"},
+		{Type: 1, Name: "time"},
 	}
 	rec.ReserveColVal(3)
 	rec.ColVals[0].AppendIntegers(1)
@@ -216,11 +208,11 @@ func TestWalRecordCodec(t *testing.T) {
 
 	record.CheckRecord(rec)
 
-	codec := shelf.NewWalRecordCodec()
-	buf := codec.Encode(rec, nil)
+	decoder := shelf.NewWalRecordDecoder()
+	buf := shelf.EncodeRecord(nil, rec)
 
 	other := &record.Record{}
-	err := codec.Decode(other, slices.Clone(buf))
+	err := decoder.Decode(other, slices.Clone(buf))
 	require.NoError(t, err)
 	require.Equal(t, rec.Schema, other.Schema)
 
@@ -229,21 +221,44 @@ func TestWalRecordCodec(t *testing.T) {
 	require.Equal(t, rec.Times(), other.Times())
 }
 
-func TestWalRecordCodecError(t *testing.T) {
+func TestWalRecordCodecOneRowMode(t *testing.T) {
 	rec := &record.Record{}
-	var buf []byte
-	codec := shelf.NewWalRecordCodec()
+	rec.Schema = record.Schemas{
+		{Type: 1, Name: "foo"},
+		{Type: 1, Name: "foo1"},
+		{Type: 1, Name: "time"},
+	}
+	rec.ReserveColVal(3)
+	rec.ColVals[0].AppendIntegers(1)
+	rec.ColVals[0].AppendIntegerNull()
+	rec.ColVals[1].AppendInteger(2)
+	rec.ColVals[1].AppendInteger(2)
+	rec.AppendTime(10, 20)
 
+	record.CheckRecord(rec)
+
+	decoder := shelf.NewWalRecordDecoder()
+	buf := shelf.EncodeRecordRow(nil, rec, 1)
+
+	other := &record.Record{}
+	err := decoder.Decode(other, slices.Clone(buf))
+	require.NoError(t, err)
+	require.Equal(t, 2, other.Schema.Len())
+
+	require.Equal(t, int64(2), other.ColVals[0].IntegerValues()[0])
+	require.Equal(t, int64(20), other.Times()[0])
+}
+
+func TestDecodeColValError(t *testing.T) {
+	col := &record.ColVal{}
+	var buf []byte
+	decoder := shelf.NewWalRecordDecoder()
+	dec := codec.NewBinaryDecoder(buf)
 	var decode = func(exp string) {
-		err := codec.Decode(rec, buf)
+		dec.Reset(buf)
+		err := decoder.DecodeColVal(dec, influx.Field_Type_Int, col)
 		require.EqualError(t, err, exp)
 	}
-
-	decode("invalid field length")
-
-	buf = binary.AppendUvarint(buf[:0], 1) // field length = 1
-	decode("invalid field length")
-	buf = append(buf, 0, 0, 4) // field type = 4
 
 	decode(errno.NewError(errno.TooSmallOrOverflow, "ColVal.Len").Error())
 
@@ -252,8 +267,31 @@ func TestWalRecordCodecError(t *testing.T) {
 
 	buf = binary.AppendUvarint(buf, 0)  // ColVal.NilCount = 0
 	buf = append(buf, 0, 0, 0, 2, 1, 1) // ColVal.Val = []byte{1, 1}
-	decode(errno.NewError(errno.TooSmallData, "ColVal.Offset", util.Uint32SizeBytes, 0).Error())
+	decode(errno.NewError(errno.TooSmallData, "ColVal.Val", 8, 6).Error())
+}
 
-	buf = append(buf, 0, 0, 0, 1) // len(ColVal.Offset) = 1
-	decode(errno.NewError(errno.TooSmallData, "ColVal.Offset", util.Uint32SizeBytes, 0).Error())
+func writeRecordToShard(shard *shelf.Shard, rec *record.Record, sid uint64, seriesKey []byte) error {
+	wal := shard.CreateWal("foo")
+	defer wal.EndWrite()
+
+	return writeRecordToWal(wal, rec, sid, seriesKey)
+}
+
+func writeRecordToWal(wal *shelf.Wal, rec *record.Record, sid uint64, seriesKey []byte) error {
+	if len(seriesKey) == 0 {
+		seriesKey = []byte{0, 0, 0, 6, 0, 0}
+	}
+
+	blob := &shelf.Blob{}
+	blob.WriteRecordRow(seriesKey, rec, 0)
+
+	itr := blob.Iterator()
+
+	_, buf, err := itr.Next()
+	if err != nil {
+		return err
+	}
+
+	wal.UpdateTimeRange(blob.TimeRange())
+	return wal.WriteRecord(sid, seriesKey, buf)
 }

@@ -95,7 +95,7 @@ func TestGetEntryData(t *testing.T) {
 	fw.fd = file
 	fw.current = false
 	if result := fw.GetEntryData(0, 5); result != nil {
-		t.Errorf("expected nil result")
+		t.Errorf("Expected nil result")
 	}
 }
 

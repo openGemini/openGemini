@@ -20,10 +20,16 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics/opsStat"
 )
 
 type CollectSupported interface {
 	Enabled() *bool
+}
+
+type MeasurementSupported interface {
+	MeasurementName() string
 }
 
 type Item interface {
@@ -104,6 +110,10 @@ func (i *ItemInt64) GetValue() any {
 	return i.Load()
 }
 
+func (i *ItemInt64) AddSinceNano(begin time.Time) {
+	i.Add(time.Since(begin).Nanoseconds())
+}
+
 var collector = &Collector{values: make(map[string]interface{})}
 
 func NewCollector() *Collector {
@@ -133,6 +143,28 @@ func (c *Collector) Register(obj CollectSupported) {
 	}
 	c.initStatObject(obj, proxy)
 	c.proxies = append(c.proxies, proxy)
+}
+
+func (c *Collector) CollectOps() []opsStat.OpsStatistic {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	dst := make([]opsStat.OpsStatistic, len(c.proxies))
+	for i, proxy := range c.proxies {
+		if proxy.Enabled() {
+			c.collectOps(&dst[i], proxy)
+		}
+	}
+	return dst
+}
+
+func (c *Collector) collectOps(dst *opsStat.OpsStatistic, proxy *CollectorProxy) {
+	dst.Name = proxy.GetMst()
+	dst.Tags = proxy.GetTags()
+	dst.Values = make(map[string]interface{})
+	for _, item := range proxy.GetItems() {
+		dst.Values[item.GetName()] = item.GetValue()
+	}
 }
 
 func (c *Collector) Collect(dst []byte) ([]byte, error) {
@@ -166,7 +198,11 @@ func (c *Collector) initStatObject(obj interface{}, proxy *CollectorProxy) {
 	}
 
 	v = v.Elem()
-	proxy.SetMst(v.Type().Name())
+	if ms, ok := obj.(MeasurementSupported); ok {
+		proxy.SetMst(ms.MeasurementName())
+	} else {
+		proxy.SetMst(v.Type().Name())
+	}
 
 	for i := range v.NumField() {
 		field := v.Field(i)

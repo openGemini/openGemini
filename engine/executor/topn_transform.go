@@ -65,9 +65,15 @@ type TopNTransform struct {
 }
 
 func count(c Chunk, start, end int) TCounter {
+	if c.Column(0).NilCount() > 0 {
+		start, end = c.Column(0).GetRangeValueIndexV2(start, end)
+	}
 	return TCounter(end - start)
 }
 func sumInt(c Chunk, start, end int) TCounter {
+	if c.Column(0).NilCount() > 0 {
+		start, end = c.Column(0).GetRangeValueIndexV2(start, end)
+	}
 	var re int64 = 0
 	for start != end {
 		re += c.Column(0).IntegerValue(start)
@@ -77,6 +83,9 @@ func sumInt(c Chunk, start, end int) TCounter {
 }
 
 func sumFloat(c Chunk, start, end int) TCounter {
+	if c.Column(0).NilCount() > 0 {
+		start, end = c.Column(0).GetRangeValueIndexV2(start, end)
+	}
 	var re float64 = 0
 	for start != end {
 		re += c.Column(0).FloatValue(start)
@@ -499,6 +508,9 @@ func (trans *TopNTransform) generateOutPut() {
 	trans.topNlogger.Info("TopNTransform GetFrequentKey", zap.Int64("countLowerBound", int64(trans.countLowerBound)), zap.Int64("totalCount", int64(trans.ddcm.GetTotalCount())))
 	keys, values := trans.ddcm.GetFrequentKeys(trans.countLowerBound)
 	trans.topNlogger.Info("TopNTransform GetFrequentKey", zap.Int("len(keys)", len(keys)))
+	if trans.bufChunk == nil {
+		return
+	}
 	trans.outputChunk.SetName(trans.bufChunk.Name())
 	result := &FrequentResult{keys: keys, values: values}
 	if trans.topN > 0 {
@@ -565,5 +577,6 @@ func (trans *TopNTransform) Close() {
 	trans.Once(func() {
 		atomic.AddInt32(&trans.closedSignal, 1)
 		trans.output.Close()
+		trans.outputChunkPool.Release()
 	})
 }

@@ -19,10 +19,10 @@ import (
 	"reflect"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
-	"github.com/openGemini/openGemini/engine/executor/spdy/rpc"
-	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/lib/codec"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/spdy/rpc"
+	"github.com/openGemini/openGemini/lib/spdy/transport"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"

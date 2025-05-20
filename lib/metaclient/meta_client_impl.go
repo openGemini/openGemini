@@ -38,12 +38,12 @@ import (
 	"github.com/influxdata/influxdb/models"
 	originql "github.com/influxdata/influxql"
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
-	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/rand"
+	"github.com/openGemini/openGemini/lib/spdy/transport"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/sysinfo"
 	"github.com/openGemini/openGemini/lib/util"
@@ -137,6 +137,7 @@ var applyFunc = map[proto2.Command_Type]func(c *Client, op *proto2.Command) erro
 	proto2.Command_DropMeasurementCommand:           applyDropMeasurement,
 	proto2.Command_DeleteIndexGroupCommand:          applyDeleteIndexGroup,
 	proto2.Command_UpdateShardInfoTierCommand:       applyUpdateShardInfoTier,
+	proto2.Command_UpdateIndexInfoTierCommand:       applyUpdateIndexInfoTier,
 	proto2.Command_UpdateNodeStatusCommand:          applyUpdateNodeStatus,
 	proto2.Command_UpdateSqlNodeStatusCommand:       applyUpdateSqlNodeStatus,
 	proto2.Command_UpdatePtInfoCommand:              applyUpdatePtInfo,
@@ -991,6 +992,37 @@ func (c *Client) CreateMeasurement(database, retentionPolicy, mst string, shardK
 		return nil, err
 	}
 	return c.Measurement(database, retentionPolicy, mst)
+}
+
+func (c *Client) SimpleCreateMeasurement(db, rp, mst string, engineType config.EngineType) (*meta2.MeasurementInfo, error) {
+	msti, err := c.Measurement(db, rp, mst)
+	if msti != nil {
+		return msti, nil
+	}
+	if !errors.Is(err, meta2.ErrMeasurementNotFound) {
+		return nil, err
+	}
+	if !meta2.ValidMeasurementName(mst) {
+		return nil, errno.NewError(errno.InvalidMeasurement, mst)
+	}
+
+	cmd := &proto2.CreateMeasurementCommand{
+		DBName:     proto.String(db),
+		RpName:     proto.String(rp),
+		Name:       proto.String(mst),
+		EngineType: proto.Uint32(uint32(engineType)),
+	}
+	shardKey := &meta2.ShardKeyInfo{
+		ShardKey: nil,
+		Type:     meta2.HASH,
+	}
+	cmd.Ski = shardKey.Marshal()
+
+	err = c.retryUntilExec(proto2.Command_CreateMeasurementCommand, proto2.E_CreateMeasurementCommand_Command, cmd)
+	if err != nil {
+		return nil, err
+	}
+	return c.Measurement(db, rp, mst)
 }
 
 func (c *Client) AlterShardKey(database, retentionPolicy, mst string, shardKey *meta2.ShardKeyInfo) error {
@@ -2498,6 +2530,20 @@ func (c *Client) UpdateShardInfoTier(shardID uint64, tier uint64, dbName, rpName
 	return nil
 }
 
+func (c *Client) UpdateIndexInfoTier(indexID uint64, tier uint64, dbName, rpName string) error {
+	cmd := &proto2.UpdateIndexInfoTierCommand{
+		IndexID: proto.Uint64(indexID),
+		Tier:    proto.Uint64(tier),
+		DbName:  proto.String(dbName),
+		RpName:  proto.String(rpName),
+	}
+	_, err := c.retryExec(proto2.Command_UpdateIndexInfoTierCommand, proto2.E_UpdateIndexInfoTierCommand_Command, cmd)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 // ShardOwner returns the owning shard group info for a specific shard.
 func (c *Client) ShardOwner(shardID uint64) (database, policy string, sgi *meta2.ShardGroupInfo) {
 	c.mu.RLock()
@@ -3362,6 +3408,10 @@ func applyDeleteIndexGroup(c *Client, cmd *proto2.Command) error {
 
 func applyUpdateShardInfoTier(c *Client, cmd *proto2.Command) error {
 	return meta2.ApplyUpdateShardInfoTier(c.cacheData, cmd)
+}
+
+func applyUpdateIndexInfoTier(c *Client, cmd *proto2.Command) error {
+	return meta2.ApplyUpdateIndexInfoTier(c.cacheData, cmd)
 }
 
 func applyUpdateNodeStatus(c *Client, cmd *proto2.Command) error {

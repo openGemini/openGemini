@@ -341,31 +341,23 @@ func (c *compiledField) compileExpr(expr influxql.Expr) error {
 			return c.compileProjectOp(expr)
 		}
 
-		if mathFunc := GetMathFunction(expr.Name); mathFunc != nil {
-			return mathFunc.CompileFunc(expr, c)
-		}
-
-		if stringFunc := GetStringFunction(expr.Name); stringFunc != nil {
-			return stringFunc.CompileFunc(expr, c)
-		}
-
-		if labelFunc := GetLabelFunction(expr.Name); labelFunc != nil {
-			return labelFunc.CompileFunc(expr, c)
-		}
-
-		if promTimeFunc := GetPromTimeFunction(expr.Name); promTimeFunc != nil {
-			return promTimeFunc.CompileFunc(expr, c)
-		}
-
-		// Register the function call in the list of function calls.
-		c.global.FunctionCalls = append(c.global.FunctionCalls, expr)
-
 		if op.IsAggregateOp(expr) {
+			// Register the function call in the list of function calls.
+			c.global.FunctionCalls = append(c.global.FunctionCalls, expr)
 			return c.compileAggregateOp(expr)
 		}
 
-		if aggFunc := GetAggregateOperator(expr.Name); aggFunc != nil {
-			return aggFunc.CompileFunc(expr, c)
+		call := c.GetFunction(expr, true)
+		if call != nil {
+			// valid parameters
+			rules := call.GetRules(expr.Name)
+			for _, rule := range rules {
+				err := rule.Check(expr)
+				if err != nil {
+					return err
+				}
+			}
+			return call.CompileFunc(expr, c)
 		}
 
 		switch expr.Name {
@@ -720,28 +712,21 @@ func (c *compiledField) compileCall(expr *influxql.Call) error {
 		return c.compileProjectOp(expr)
 	}
 
-	if mathFunc := GetMathFunction(expr.Name); mathFunc != nil {
-		return mathFunc.CompileFunc(expr, c)
-	}
-
-	if stringFunc := GetStringFunction(expr.Name); stringFunc != nil {
-		return stringFunc.CompileFunc(expr, c)
-	}
-
-	if labelFunc := GetLabelFunction(expr.Name); labelFunc != nil {
-		return labelFunc.CompileFunc(expr, c)
-	}
-
-	if promTimeFunc := GetPromTimeFunction(expr.Name); promTimeFunc != nil {
-		return promTimeFunc.CompileFunc(expr, c)
-	}
-
 	if op.IsAggregateOp(expr) {
 		return c.compileAggregateOp(expr)
 	}
 
-	if aggFunc := GetAggregateOperator(expr.Name); aggFunc != nil {
-		return aggFunc.CompileFunc(expr, c)
+	call := c.GetFunction(expr, false)
+	if call != nil {
+		// valid parameters
+		rules := call.GetRules(expr.Name)
+		for _, rule := range rules {
+			err := rule.Check(expr)
+			if err != nil {
+				return err
+			}
+		}
+		return call.CompileFunc(expr, c)
 	}
 
 	switch expr.Name {
@@ -757,6 +742,34 @@ func (c *compiledField) compileCall(expr *influxql.Call) error {
 	default:
 		return fmt.Errorf("undefined function %s()", expr.Name)
 	}
+}
+
+func (c *compiledField) GetFunction(expr *influxql.Call, addToGlobalFunctionCalls bool) BaseFunc {
+	if mathFunc := GetMathFunction(expr.Name); mathFunc != nil {
+		return mathFunc
+	}
+
+	if stringFunc := GetStringFunction(expr.Name); stringFunc != nil {
+		return stringFunc
+	}
+
+	if labelFunc := GetLabelFunction(expr.Name); labelFunc != nil {
+		return labelFunc
+	}
+
+	if promTimeFunc := GetPromTimeFunction(expr.Name); promTimeFunc != nil {
+		return promTimeFunc
+	}
+
+	// Register the function call in the list of function calls, functions need added should be below these lines
+	if addToGlobalFunctionCalls {
+		c.global.FunctionCalls = append(c.global.FunctionCalls, expr)
+	}
+
+	if aggFunc := GetAggregateOperator(expr.Name); aggFunc != nil {
+		return aggFunc
+	}
+	return nil
 }
 
 func (c *compiledStatement) compileDimensions(stmt *influxql.SelectStatement) error {

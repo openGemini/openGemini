@@ -476,15 +476,48 @@ func (idx *MergeSetIndex) putIndexSearch(is *indexSearch) {
 }
 
 func (idx *MergeSetIndex) GetSeriesIdBySeriesKeyFromCache(seriesKey []byte) (uint64, error) {
+	var err error
+	if idx.indexBuilder.EnableTagArray && FastCheckTagArray(seriesKey) {
+		combineIndexKey := kbPool.Get()
+		defer kbPool.Put(combineIndexKey)
+		seriesKey, err = idx.analyzeSeriesKeyWithArray(seriesKey, combineIndexKey)
+		if err != nil {
+			return 0, err
+		}
+	}
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
-
 	var sid uint64
 	exist, err := idx.cache.GetTSIDFromTSIDCache(&sid, seriesKey)
 	if !exist {
 		sid = 0
 	}
 	return sid, err
+}
+
+func FastCheckTagArray(src []byte) bool {
+	offset := bytes.IndexByte(src, '[')
+	return offset != -1 && bytes.IndexByte(src[offset:], ']') != -1
+}
+
+func (idx *MergeSetIndex) analyzeSeriesKeyWithArray(seriesKey []byte, combineIndexKey *bytesutil.ByteBuffer) ([]byte, error) {
+	var tags influx.PointTags
+	var mst []byte
+	mst, tags = influx.UnsafeParse2Tags(seriesKey, tags)
+	if !tags.HasTagArray() {
+		return seriesKey, nil
+	}
+	dstTagSets := dstTagSetsPool.Get()
+	defer dstTagSetsPool.Put(dstTagSets)
+	err := AnalyzeTagSets(dstTagSets, tags)
+	if err != nil {
+		return nil, err
+	}
+	combineIndexKey.B, err = marshalCombineIndexKeys(mst, dstTagSets.tagsArray, combineIndexKey.B)
+	if err != nil {
+		return nil, err
+	}
+	return combineIndexKey.B, nil
 }
 
 func (idx *MergeSetIndex) GetSeriesIdBySeriesKey(seriesKey []byte) (uint64, error) {

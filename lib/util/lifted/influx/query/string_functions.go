@@ -31,6 +31,14 @@ import (
 	"go.uber.org/zap"
 )
 
+// IP`s type and length
+const (
+	IPv4       = "IPv4"
+	IPv6       = "IPv6"
+	IPv4LENGTH = 32
+	IPv6LENGTH = 128
+)
+
 var (
 	_ = RegistryMaterializeFunction("levenshtein_distance", &levenshteinDistanceFunc{
 		BaseInfo: BaseInfo{FuncType: STRING},
@@ -66,6 +74,9 @@ var (
 		BaseInfo: BaseInfo{FuncType: STRING},
 	})
 	_ = RegistryMaterializeFunction("strlen", &strLenFunc{
+		BaseInfo: BaseInfo{FuncType: STRING},
+	})
+	_ = RegistryMaterializeFunction("position", &positionFunc{
 		BaseInfo: BaseInfo{FuncType: STRING},
 	})
 	_ = RegistryMaterializeFunction("strpos", &strPosFunc{
@@ -122,6 +133,9 @@ var (
 
 // IP
 var (
+	_ = RegistryMaterializeFunction("ip_mask", &ipMaskFunc{
+		BaseInfo: BaseInfo{FuncType: STRING},
+	})
 	_ = RegistryMaterializeFunction("ip_to_domain", &ipToDomainFunc{
 		BaseInfo: BaseInfo{FuncType: STRING},
 	})
@@ -174,11 +188,13 @@ type levenshteinDistanceFunc struct {
 	BaseInfo
 }
 
-func (s *levenshteinDistanceFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
-	if got := len(expr.Args); len(expr.Args) != 2 {
-		return fmt.Errorf("invalid number of arguments for %s, expected %s, got %d", expr.Name, "2", got)
+func (s *levenshteinDistanceFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 2, Max: 2},
 	}
+}
 
+func (s *levenshteinDistanceFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	return compileAllStringArgs(expr, c)
 }
 
@@ -244,21 +260,17 @@ type lpadFunc struct {
 	BaseInfo
 }
 
+func (s *lpadFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 3, Max: 3},
+		&TypeCheckRule{Name: name, Index: 1, Asserts: []func(interface{}) bool{AssertIntegerLiteral}},
+		&TypeCheckRule{Name: name, Index: 2, Asserts: []func(interface{}) bool{AssertStringLiteral}},
+	}
+}
+
 func (s *lpadFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	if expr.Name != "lpad" {
 		return fmt.Errorf("invalid name, expected %s, got %s", "lpad", expr.Name)
-	}
-
-	// Did we get the expected number of args?
-	if got := len(expr.Args); len(expr.Args) != 3 {
-		return fmt.Errorf("invalid number of arguments for %s, expected %s, got %d", expr.Name, "3", got)
-	}
-
-	if _, ok := expr.Args[1].(*influxql.IntegerLiteral); !ok {
-		return fmt.Errorf("invalid argument type for the second argument in %s(): %s", expr.Name, expr.Args[1])
-	}
-	if _, ok := expr.Args[2].(*influxql.StringLiteral); !ok {
-		return fmt.Errorf("invalid argument type for the third argument in %s(): %s", expr.Name, expr.Args[2])
 	}
 
 	return compileAllStringArgs(expr, c)
@@ -296,24 +308,17 @@ type regexpExtractFunc struct {
 	BaseInfo
 }
 
+func (s *regexpExtractFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 2, Max: 3},
+		&TypeCheckRule{Name: name, Index: 1, Asserts: []func(interface{}) bool{AssertStringLiteral}},
+		&TypeCheckRule{Name: name, Index: 2, Asserts: []func(interface{}) bool{AssertIntegerLiteral}},
+	}
+}
+
 func (s *regexpExtractFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	if expr.Name != "regexp_extract" {
 		return fmt.Errorf("invalid name, expected %s, got %s", "regexp_extract", expr.Name)
-	}
-
-	// Did we get the expected number of args?
-	if got := len(expr.Args); len(expr.Args) < 2 || len(expr.Args) > 3 {
-		return fmt.Errorf("invalid number of arguments for %s, expected %s, got %d", expr.Name, "2-3", got)
-	}
-
-	if _, ok := expr.Args[1].(*influxql.StringLiteral); !ok {
-		return fmt.Errorf("invalid argument type for the second argument in %s(): %s", expr.Name, expr.Args[1])
-	}
-
-	if len(expr.Args) == 3 {
-		if _, ok := expr.Args[2].(*influxql.IntegerLiteral); !ok {
-			return fmt.Errorf("invalid argument type for the third argument in %s(): %s", expr.Name, expr.Args[2])
-		}
 	}
 
 	return compileAllStringArgs(expr, c)
@@ -358,18 +363,16 @@ type regexpLikeFunc struct {
 	BaseInfo
 }
 
+func (s *regexpLikeFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 2, Max: 2},
+		&TypeCheckRule{Name: name, Index: 1, Asserts: []func(interface{}) bool{AssertStringLiteral}},
+	}
+}
+
 func (s *regexpLikeFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	if expr.Name != "regexp_like" {
 		return fmt.Errorf("invalid name, expected %s, got %s", "regexp_like", expr.Name)
-	}
-
-	// Did we get the expected number of args?
-	if got := len(expr.Args); got != 2 {
-		return fmt.Errorf("invalid number of arguments for %s, expected %s, got %d", expr.Name, "2", got)
-	}
-
-	if _, ok := expr.Args[1].(*influxql.StringLiteral); !ok {
-		return fmt.Errorf("invalid argument type for the second argument in %s(): %s", expr.Name, expr.Args[1])
 	}
 
 	return compileAllStringArgs(expr, c)
@@ -401,25 +404,18 @@ type replaceFunc struct {
 	BaseInfo
 }
 
+func (s *replaceFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 2, Max: 3},
+		&TypeCheckRule{Name: name, Index: 1, Asserts: []func(interface{}) bool{AssertStringLiteral}},
+		&TypeCheckRule{Name: name, Index: 2, Asserts: []func(interface{}) bool{AssertStringLiteral}},
+	}
+}
+
 func (s *replaceFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	if expr.Name != "replace" {
 		return fmt.Errorf("invalid name, expected %s, got %s", "replace", expr.Name)
 	}
-
-	// Did we get the expected number of args?
-	if got := len(expr.Args); len(expr.Args) < 2 || len(expr.Args) > 3 {
-		return fmt.Errorf("invalid number of arguments for %s, expected %s, got %d", expr.Name, "2-3", got)
-	}
-
-	if _, ok := expr.Args[1].(*influxql.StringLiteral); !ok {
-		return fmt.Errorf("invalid argument type for the second argument in %s(): %s", expr.Name, expr.Args[1])
-	}
-	if len(expr.Args) == 3 {
-		if _, ok := expr.Args[2].(*influxql.StringLiteral); !ok {
-			return fmt.Errorf("invalid argument type for the third argument in %s(): %s", expr.Name, expr.Args[2])
-		}
-	}
-
 	return compileAllStringArgs(expr, c)
 }
 
@@ -443,11 +439,13 @@ type reverseFunc struct {
 	BaseInfo
 }
 
-func (s *reverseFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
-	if len(expr.Args) != 1 {
-		return fmt.Errorf("invalid argument number in %s(): %d", expr.Name, len(expr.Args))
+func (s *reverseFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 1, Max: 1},
 	}
+}
 
+func (s *reverseFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	return compileAllStringArgs(expr, c)
 }
 
@@ -478,21 +476,17 @@ type rpadFunc struct {
 	BaseInfo
 }
 
+func (s *rpadFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 3, Max: 3},
+		&TypeCheckRule{Name: name, Index: 1, Asserts: []func(interface{}) bool{AssertIntegerLiteral}},
+		&TypeCheckRule{Name: name, Index: 2, Asserts: []func(interface{}) bool{AssertStringLiteral}},
+	}
+}
+
 func (s *rpadFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	if expr.Name != "rpad" {
 		return fmt.Errorf("invalid name, expected %s, got %s", "rpad", expr.Name)
-	}
-
-	// Did we get the expected number of args?
-	if got := len(expr.Args); len(expr.Args) != 3 {
-		return fmt.Errorf("invalid number of arguments for %s, expected %s, got %d", expr.Name, "3", got)
-	}
-
-	if _, ok := expr.Args[1].(*influxql.IntegerLiteral); !ok {
-		return fmt.Errorf("invalid argument type for the second argument in %s(): %s", expr.Name, expr.Args[1])
-	}
-	if _, ok := expr.Args[2].(*influxql.StringLiteral); !ok {
-		return fmt.Errorf("invalid argument type for the third argument in %s(): %s", expr.Name, expr.Args[2])
 	}
 
 	return compileAllStringArgs(expr, c)
@@ -530,23 +524,17 @@ type splitFunc struct {
 	BaseInfo
 }
 
+func (s *splitFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 2, Max: 3},
+		&TypeCheckRule{Name: name, Index: 1, Asserts: []func(interface{}) bool{AssertStringLiteral}},
+		&TypeCheckRule{Name: name, Index: 2, Asserts: []func(interface{}) bool{AssertIntegerLiteral}},
+	}
+}
+
 func (s *splitFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	if expr.Name != "split" {
 		return fmt.Errorf("invalid name, expected %s, got %s", "split", expr.Name)
-	}
-
-	// Did we get the expected number of args?
-	if got := len(expr.Args); len(expr.Args) < 2 || len(expr.Args) > 3 {
-		return fmt.Errorf("invalid number of arguments for %s, expected %s, got %d", expr.Name, "2-3", got)
-	}
-
-	if _, ok := expr.Args[1].(*influxql.StringLiteral); !ok {
-		return fmt.Errorf("invalid argument type for the second argument in %s(): %s", expr.Name, expr.Args[1])
-	}
-	if len(expr.Args) == 3 {
-		if _, ok := expr.Args[2].(*influxql.IntegerLiteral); !ok {
-			return fmt.Errorf("invalid argument type for the second argument in %s(): %s", expr.Name, expr.Args[2])
-		}
 	}
 
 	return compileAllStringArgs(expr, c)
@@ -577,21 +565,17 @@ type splitPartFunc struct {
 	BaseInfo
 }
 
+func (s *splitPartFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 3, Max: 3},
+		&TypeCheckRule{Name: name, Index: 1, Asserts: []func(interface{}) bool{AssertStringLiteral}},
+		&TypeCheckRule{Name: name, Index: 2, Asserts: []func(interface{}) bool{AssertIntegerLiteral}},
+	}
+}
+
 func (s *splitPartFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	if expr.Name != "split_part" {
 		return fmt.Errorf("invalid name, expected %s, got %s", "split_part", expr.Name)
-	}
-
-	// Did we get the expected number of args?
-	if got := len(expr.Args); len(expr.Args) != 3 {
-		return fmt.Errorf("invalid number of arguments for %s, expected %s, got %d", expr.Name, "3", got)
-	}
-
-	if _, ok := expr.Args[1].(*influxql.StringLiteral); !ok {
-		return fmt.Errorf("invalid argument type for the second argument in %s(): %s", expr.Name, expr.Args[1])
-	}
-	if _, ok := expr.Args[2].(*influxql.IntegerLiteral); !ok {
-		return fmt.Errorf("invalid argument type for the third argument in %s(): %s", expr.Name, expr.Args[2])
 	}
 
 	return compileAllStringArgs(expr, c)
@@ -621,19 +605,15 @@ type splitToMapFunc struct {
 	BaseInfo
 }
 
+func (s *splitToMapFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 3, Max: 3},
+		&TypeCheckRule{Name: name, Index: 1, Asserts: []func(interface{}) bool{AssertStringLiteral}},
+		&TypeCheckRule{Name: name, Index: 2, Asserts: []func(interface{}) bool{AssertStringLiteral}},
+	}
+}
+
 func (s *splitToMapFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
-	// Did we get the expected number of args?
-	if got := len(expr.Args); len(expr.Args) != 3 {
-		return fmt.Errorf("invalid number of arguments for %s, expected %s, got %d", expr.Name, "3", got)
-	}
-
-	if _, ok := expr.Args[1].(*influxql.StringLiteral); !ok {
-		return fmt.Errorf("invalid argument type for the second argument in %s(): %s", expr.Name, expr.Args[1])
-	}
-	if _, ok := expr.Args[2].(*influxql.StringLiteral); !ok {
-		return fmt.Errorf("invalid argument type for the third argument in %s(): %s", expr.Name, expr.Args[2])
-	}
-
 	return compileAllStringArgs(expr, c)
 }
 
@@ -682,13 +662,14 @@ type strFunc struct {
 	BaseInfo
 }
 
+func (s *strFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 2, Max: 2},
+		&TypeCheckRule{Name: name, Index: 1, Asserts: []func(interface{}) bool{AssertStringLiteral}},
+	}
+}
+
 func (s *strFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
-	if got := len(expr.Args); got != 2 {
-		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", expr.Name, 2, got)
-	}
-	if _, ok := expr.Args[1].(*influxql.StringLiteral); !ok {
-		return fmt.Errorf("expected string argument in str()")
-	}
 	return compileAllStringArgs(expr, c)
 }
 
@@ -733,6 +714,12 @@ type strLenFunc struct {
 	BaseInfo
 }
 
+func (s *strLenFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 1, Max: 1},
+	}
+}
+
 func (s *strLenFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	return compileAllStringArgs(expr, c)
 }
@@ -761,20 +748,56 @@ func (s *strLenFunc) CallFunc(name string, args []interface{}) (interface{}, boo
 	return nil, true
 }
 
+type positionFunc struct {
+	BaseInfo
+}
+
+func (s *positionFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 2, Max: 2},
+		&TypeCheckRule{Name: name, Index: 1, Asserts: []func(interface{}) bool{AssertStringLiteral}},
+	}
+}
+
+func (s *positionFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
+	return compileAllStringArgs(expr, c)
+}
+
+func (s *positionFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
+	arg0 := args[0]
+	switch arg0 {
+	case influxql.String:
+		return influxql.Integer, nil
+	default:
+		return influxql.Unknown, fmt.Errorf("invalid argument type for the first argument in %s(): %s", name, arg0)
+	}
+}
+
+func (s *positionFunc) CallFunc(name string, args []interface{}) (interface{}, bool) {
+	arg0, ok := args[0].(string)
+	if !ok {
+		return nil, false
+	}
+	arg1, ok := args[1].(string)
+	if !ok {
+		return nil, false
+	}
+	index := strings.Index(arg0, arg1)
+	return int64(index) + 1, true
+}
+
 type strPosFunc struct {
 	BaseInfo
 }
 
+func (s *strPosFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 2, Max: 2},
+		&TypeCheckRule{Name: name, Index: 1, Asserts: []func(interface{}) bool{AssertStringLiteral}},
+	}
+}
+
 func (s *strPosFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
-	// Did we get the expected number of args?
-	if got := len(expr.Args); len(expr.Args) != 2 {
-		return fmt.Errorf("invalid number of arguments for %s, expected %s, got %d", expr.Name, "2", got)
-	}
-
-	if _, ok := expr.Args[1].(*influxql.StringLiteral); !ok {
-		return fmt.Errorf("invalid argument type for the second argument in %s(): %s", expr.Name, expr.Args[1])
-	}
-
 	return compileAllStringArgs(expr, c)
 }
 
@@ -882,11 +905,13 @@ type typeofFunc struct {
 	BaseInfo
 }
 
-func (s *typeofFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
-	if len(expr.Args) != 1 {
-		return fmt.Errorf("invalid argument number in %s(): %d", expr.Name, len(expr.Args))
+func (s *typeofFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 1, Max: 1},
 	}
+}
 
+func (s *typeofFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	return compileAllStringArgs(expr, c)
 }
 
@@ -939,12 +964,13 @@ type urlDecodeFunc struct {
 	BaseInfo
 }
 
-func (u *urlDecodeFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
-	// Did we get the expected number of args?
-	if len(expr.Args) != 1 {
-		return fmt.Errorf("invalid argument number in %s(): %d", expr.Name, len(expr.Args))
+func (u *urlDecodeFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 1, Max: 1},
 	}
+}
 
+func (u *urlDecodeFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	return compileAllStringArgs(expr, c)
 }
 
@@ -972,12 +998,13 @@ type urlEncodeFunc struct {
 	BaseInfo
 }
 
-func (u *urlEncodeFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
-	// Did we get the expected number of args?
-	if len(expr.Args) != 1 {
-		return fmt.Errorf("invalid argument number in %s(): %d", expr.Name, len(expr.Args))
+func (u *urlEncodeFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 1, Max: 1},
 	}
+}
 
+func (u *urlEncodeFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	return compileAllStringArgs(expr, c)
 }
 
@@ -1000,12 +1027,13 @@ type urlExtractFragmentFunc struct {
 	BaseInfo
 }
 
-func (u *urlExtractFragmentFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
-	// Did we get the expected number of args?
-	if len(expr.Args) != 1 {
-		return fmt.Errorf("invalid argument number in %s(): %d", expr.Name, len(expr.Args))
+func (u *urlExtractFragmentFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 1, Max: 1},
 	}
+}
 
+func (u *urlExtractFragmentFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	return compileAllStringArgs(expr, c)
 }
 
@@ -1033,12 +1061,13 @@ type urlExtractHostFunc struct {
 	BaseInfo
 }
 
-func (u *urlExtractHostFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
-	// Did we get the expected number of args?
-	if len(expr.Args) != 1 {
-		return fmt.Errorf("invalid argument number in %s(): %d", expr.Name, len(expr.Args))
+func (u *urlExtractHostFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 1, Max: 1},
 	}
+}
 
+func (u *urlExtractHostFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	return compileAllStringArgs(expr, c)
 }
 
@@ -1066,12 +1095,13 @@ type urlExtractParameterFunc struct {
 	BaseInfo
 }
 
-func (u *urlExtractParameterFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
-	// Did we get the expected number of args?
-	if len(expr.Args) != 2 {
-		return fmt.Errorf("invalid argument number in %s(): %d", expr.Name, len(expr.Args))
+func (u *urlExtractParameterFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 2, Max: 2},
 	}
+}
 
+func (u *urlExtractParameterFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	return compileAllStringArgs(expr, c)
 }
 
@@ -1109,12 +1139,13 @@ type urlExtractPathFunc struct {
 	BaseInfo
 }
 
-func (u *urlExtractPathFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
-	// Did we get the expected number of args?
-	if len(expr.Args) != 1 {
-		return fmt.Errorf("invalid argument number in %s(): %d", expr.Name, len(expr.Args))
+func (u *urlExtractPathFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 1, Max: 1},
 	}
+}
 
+func (u *urlExtractPathFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	return compileAllStringArgs(expr, c)
 }
 
@@ -1142,12 +1173,13 @@ type urlExtractPortFunc struct {
 	BaseInfo
 }
 
-func (u *urlExtractPortFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
-	// Did we get the expected number of args?
-	if len(expr.Args) != 1 {
-		return fmt.Errorf("invalid argument number in %s(): %d", expr.Name, len(expr.Args))
+func (u *urlExtractPortFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 1, Max: 1},
 	}
+}
 
+func (u *urlExtractPortFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	return compileAllStringArgs(expr, c)
 }
 
@@ -1175,12 +1207,13 @@ type urlExtractProtocolFunc struct {
 	BaseInfo
 }
 
-func (u *urlExtractProtocolFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
-	// Did we get the expected number of args?
-	if len(expr.Args) != 1 {
-		return fmt.Errorf("invalid argument number in %s(): %d", expr.Name, len(expr.Args))
+func (u *urlExtractProtocolFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 1, Max: 1},
 	}
+}
 
+func (u *urlExtractProtocolFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	return compileAllStringArgs(expr, c)
 }
 
@@ -1208,12 +1241,13 @@ type urlExtractQueryFunc struct {
 	BaseInfo
 }
 
-func (u *urlExtractQueryFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
-	// Did we get the expected number of args?
-	if len(expr.Args) != 1 {
-		return fmt.Errorf("invalid argument number in %s(): %d", expr.Name, len(expr.Args))
+func (u *urlExtractQueryFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 1, Max: 1},
 	}
+}
 
+func (u *urlExtractQueryFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	return compileAllStringArgs(expr, c)
 }
 
@@ -1242,12 +1276,13 @@ type jsonExtractFunc struct {
 	BaseInfo
 }
 
-func (u *jsonExtractFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
-	// Did we get the expected number of args?
-	if len(expr.Args) != 2 {
-		return fmt.Errorf("invalid argument number in %s(): %d", expr.Name, len(expr.Args))
+func (u *jsonExtractFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 2, Max: 2},
 	}
+}
 
+func (u *jsonExtractFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	return compileAllStringArgs(expr, c)
 }
 
@@ -1355,16 +1390,14 @@ type jsonExtractScalarFunc struct {
 	BaseInfo
 }
 
+func (u *jsonExtractScalarFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 2, Max: 2},
+		&TypeCheckRule{Name: name, Index: 1, Asserts: []func(interface{}) bool{AssertStringLiteral}},
+	}
+}
+
 func (u *jsonExtractScalarFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
-	// Did we get the expected number of args?
-	if len(expr.Args) != 2 {
-		return fmt.Errorf("invalid argument number in %s(): %d", expr.Name, len(expr.Args))
-	}
-
-	if _, ok := expr.Args[1].(*influxql.StringLiteral); !ok {
-		return fmt.Errorf("invalid argument type for the second argument in %s(): %s", expr.Name, expr.Args[1])
-	}
-
 	return compileAllStringArgs(expr, c)
 }
 
@@ -1393,15 +1426,92 @@ func (u *jsonExtractScalarFunc) CallFunc(name string, args []interface{}) (inter
 }
 
 // IP
+type ipMaskFunc struct {
+	BaseInfo
+}
+
+func (s *ipMaskFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 2, Max: 3},
+		&TypeCheckRule{Name: name, Index: 1, Asserts: []func(interface{}) bool{AssertIntegerLiteral}},
+		&TypeCheckRule{Name: name, Index: 2, Asserts: []func(interface{}) bool{AssertIntegerLiteral}},
+	}
+}
+
+func (s *ipMaskFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
+	if _, ok := expr.Args[0].(*influxql.VarRef); !ok {
+		return fmt.Errorf("invalid argument type for the first argument in %s(): %s", expr.Name, expr.Args[0])
+	}
+	return compileAllStringArgs(expr, c)
+}
+
+func (s *ipMaskFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
+	return influxql.String, nil
+}
+
+func (s *ipMaskFunc) CallFunc(name string, args []interface{}) (interface{}, bool) {
+	arg0, ok0 := args[0].(string)
+	if !ok0 {
+		return nil, false
+	}
+	arg1, ok1 := args[1].(int64)
+	if !ok1 {
+		return nil, false
+	}
+	arg2ForIPv6 := int64(-1)
+	if len(args) == 3 {
+		arg2, ok2 := args[2].(int64)
+		if !ok2 {
+			return nil, false
+		}
+		arg2ForIPv6 = arg2
+	}
+
+	res, err := ipMask(arg0, int(arg1), int(arg2ForIPv6))
+	if err != nil {
+		logger.GetLogger().Error("ip_mask operator error", zap.Error(err))
+		return nil, false
+	}
+	return res, true
+}
+
+func ipMask(ipAddress string, arg1Len int, arg2Len int) (string, error) {
+	ip := net.ParseIP(ipAddress)
+	if ip == nil {
+		return "", errors.New("invalid ip")
+	}
+	ipType := ""
+	ipLen := 0
+	maskLen := arg1Len
+	if ip.To4() != nil {
+		ipType = IPv4
+		ipLen = IPv4LENGTH
+	} else {
+		ipType = IPv6
+		ipLen = IPv6LENGTH
+		if arg2Len >= 0 {
+			maskLen = arg2Len
+		}
+	}
+	if maskLen < 0 || maskLen > ipLen {
+		return "", errors.New(fmt.Sprintf("prefix out of range (0 - %d) for %s", ipLen, ipType))
+	}
+	mask := net.CIDRMask(maskLen, ipLen)
+	ipMask := ip.Mask(mask).String()
+	return ipMask, nil
+}
+
 type ipToDomainFunc struct {
 	BaseInfo
 }
 
-func (s *ipToDomainFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
-	if len(expr.Args) != 1 {
-		return fmt.Errorf("invalid argument number in %s(): %d", expr.Name, len(expr.Args))
+func (s *ipToDomainFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 1, Max: 1},
 	}
+}
 
+func (s *ipToDomainFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	return compileAllStringArgs(expr, c)
 }
 
@@ -1447,11 +1557,13 @@ type ipPrefixFunc struct {
 	BaseInfo
 }
 
-func (s *ipPrefixFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
-	if len(expr.Args) != 2 {
-		return fmt.Errorf("invalid argument number in %s(): %d", expr.Name, len(expr.Args))
+func (s *ipPrefixFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 2, Max: 2},
 	}
+}
 
+func (s *ipPrefixFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	return compileAllStringArgs(expr, c)
 }
 
@@ -1503,11 +1615,13 @@ type isSubnetOfFunc struct {
 	BaseInfo
 }
 
-func (s *isSubnetOfFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
-	if len(expr.Args) != 2 {
-		return fmt.Errorf("invalid argument number in %s(): %d", expr.Name, len(expr.Args))
+func (s *isSubnetOfFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 2, Max: 2},
 	}
+}
 
+func (s *isSubnetOfFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	return compileAllStringArgs(expr, c)
 }
 
@@ -1554,11 +1668,13 @@ type ipSubnetMinFunc struct {
 	BaseInfo
 }
 
-func (s *ipSubnetMinFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
-	if len(expr.Args) != 1 {
-		return fmt.Errorf("invalid argument number in %s(): %d", expr.Name, len(expr.Args))
+func (s *ipSubnetMinFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 1, Max: 1},
 	}
+}
 
+func (s *ipSubnetMinFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	return compileAllStringArgs(expr, c)
 }
 
@@ -1596,11 +1712,13 @@ type ipSubnetMaxFunc struct {
 	BaseInfo
 }
 
-func (s *ipSubnetMaxFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
-	if len(expr.Args) != 1 {
-		return fmt.Errorf("invalid argument number in %s(): %d", expr.Name, len(expr.Args))
+func (s *ipSubnetMaxFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 1, Max: 1},
 	}
+}
 
+func (s *ipSubnetMaxFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	return compileAllStringArgs(expr, c)
 }
 
@@ -1636,11 +1754,13 @@ type ipSubnetRangeFunc struct {
 	BaseInfo
 }
 
-func (s *ipSubnetRangeFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
-	if len(expr.Args) != 1 {
-		return fmt.Errorf("invalid argument number in %s(): %d", expr.Name, len(expr.Args))
+func (s *ipSubnetRangeFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 1, Max: 1},
 	}
+}
 
+func (s *ipSubnetRangeFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	return compileAllStringArgs(expr, c)
 }
 
@@ -1676,11 +1796,13 @@ type mobileCarrierFunc struct {
 	BaseInfo
 }
 
-func (s *mobileCarrierFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
-	if len(expr.Args) != 1 {
-		return fmt.Errorf("invalid argument number in %s(): %d", expr.Name, len(expr.Args))
+func (s *mobileCarrierFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 1, Max: 1},
 	}
+}
 
+func (s *mobileCarrierFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	return compileAllStringArgs(expr, c)
 }
 

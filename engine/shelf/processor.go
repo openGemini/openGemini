@@ -15,17 +15,15 @@
 package shelf
 
 import (
+	"cmp"
 	"fmt"
 	"io"
 	"log"
-	"slices"
-	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/influxdata/influxdb/pkg/limiter"
-	"github.com/openGemini/openGemini/engine/mutable"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/record"
@@ -38,7 +36,7 @@ import (
 var walSeq = uint64(time.Now().UnixNano())
 var runner *Runner
 var conf = &config.GetStoreConfig().ShelfMode
-var stat = statistics.NewShelf()
+var stat *statistics.Shelf
 var tsspConvertLimited limiter.Fixed
 
 func AllocTSSPConvertSource() (bool, func()) {
@@ -58,10 +56,10 @@ func Open() {
 	if !conf.Enabled {
 		return
 	}
+	stat = statistics.NewShelf()
 	log.Println("Open shelf runner. Concurrent:", conf.Concurrent, conf.TSSPConvertConcurrent)
 	runner = newRunner(conf.Concurrent)
 	initWalCtxPool()
-	mutable.SetShelfMemRecordReader(ReadRecord)
 	tsspConvertLimited = limiter.NewFixed(conf.TSSPConvertConcurrent)
 }
 
@@ -76,16 +74,32 @@ type Index interface {
 
 type Runner struct {
 	processors []*Processor
-	runner     *util.ConcurrentRunner[record.MemGroup]
+	runner     *util.ConcurrentRunner[Blob]
 }
 
 func (r *Runner) Size() int {
 	return r.runner.Size()
 }
 
-func (r *Runner) Schedule(shardID uint64, rg *record.MemGroup) {
-	rg.SetShardID(shardID)
-	r.runner.Schedule(rg.Hash(), rg)
+func (r *Runner) ScheduleGroup(shardID uint64, group *BlobGroup) error {
+	group.ResetTime()
+	for i := range group.blobs {
+		blob := &group.blobs[i]
+		if blob.IsEmpty() {
+			continue
+		}
+		group.wg.Add(1)
+		blob.done = group.wg.Done
+		runner.Schedule(shardID, blob)
+	}
+
+	group.Wait()
+	return group.Error()
+}
+
+func (r *Runner) Schedule(shardID uint64, blob *Blob) {
+	blob.SetShardID(shardID)
+	r.runner.Schedule(blob.Hash(), blob)
 }
 
 func (r *Runner) Close() {
@@ -114,6 +128,15 @@ func (r *Runner) UnregisterShard(id uint64) {
 	}
 }
 
+func (r *Runner) ForceFlush(shardID uint64) {
+	if r == nil {
+		return
+	}
+	for _, p := range r.processors {
+		p.ForceFlush(shardID)
+	}
+}
+
 func (r *Runner) GetWALs(shardID uint64, mst string, tr *util.TimeRange) ([]*Wal, func()) {
 	var wals []*Wal
 	for idx := range r.processors {
@@ -133,7 +156,7 @@ func (r *Runner) GetWALs(shardID uint64, mst string, tr *util.TimeRange) ([]*Wal
 type Processor struct {
 	id     int
 	signal *util.Signal
-	queue  *util.Queue[record.MemGroup]
+	queue  *util.Queue[Blob]
 
 	mu sync.RWMutex
 	// map key is ShardID
@@ -143,9 +166,9 @@ type Processor struct {
 func newRunner(size int) *Runner {
 	r := &Runner{processors: make([]*Processor, size)}
 
-	queues := make([]*util.Queue[record.MemGroup], size)
+	queues := make([]*util.Queue[Blob], size)
 	for i := 0; i < size; i++ {
-		queues[i] = util.NewQueue[record.MemGroup](max(1, size/2))
+		queues[i] = util.NewQueue[Blob](max(1, size/2))
 	}
 	processors := make([]util.Processor, size)
 	for i := 0; i < size; i++ {
@@ -154,11 +177,11 @@ func newRunner(size int) *Runner {
 		processors[i] = p
 	}
 
-	r.runner = util.NewConcurrentRunner[record.MemGroup](queues, processors)
+	r.runner = util.NewConcurrentRunner[Blob](queues, processors)
 	return r
 }
 
-func NewProcessor(id int, queue *util.Queue[record.MemGroup]) *Processor {
+func NewProcessor(id int, queue *util.Queue[Blob]) *Processor {
 	p := &Processor{
 		id:     id,
 		signal: util.NewSignal(),
@@ -193,11 +216,21 @@ func (p *Processor) UnRegisterShard(id uint64) {
 	shard.Stop()
 }
 
-func (p *Processor) GetShards(sharID uint64) *Shard {
+func (p *Processor) ForceFlush(shardID uint64) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
-	return p.shards[sharID]
+	shard, ok := p.shards[shardID]
+	if ok && shard != nil {
+		shard.ForceFlush()
+	}
+}
+
+func (p *Processor) GetShards(shardID uint64) *Shard {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	return p.shards[shardID]
 }
 
 func (p *Processor) Run() {
@@ -228,59 +261,101 @@ func (p *Processor) Close() {
 
 }
 
-func (p *Processor) process(rg *record.MemGroup) (err error) {
+func (p *Processor) process(blob *Blob) (err error) {
 	defer func() {
 		if e := recover(); e != nil {
+			logger.GetLogger().Error("panic", zap.Any("recover", e))
 			err = fmt.Errorf("recover: %s", e)
 		}
 	}()
 
-	stat.ScheduleDurSum.Add(rg.MicroSince())
+	stat.ScheduleDurSum.Add(blob.MicroSince())
 	defer statistics.MicroTimeUse(stat.WriteCount, stat.WriteDurSum)()
 
-	recs := rg.Records()
-	sort.Slice(recs, func(i, j int) bool {
-		return recs[i].Name < recs[j].Name
-	})
-
 	p.mu.RLock()
-	shard, ok := p.shards[rg.ShardID()]
+	shard, ok := p.shards[blob.ShardID()]
 	p.mu.RUnlock()
 
 	if !ok || shard == nil {
-		return fmt.Errorf("shard %d not exist", rg.ShardID())
+		return fmt.Errorf("shard %d not exist", blob.ShardID())
 	}
 
-	j := 0
-	for i := 1; i < len(recs); i++ {
-		if recs[i].Name == recs[i-1].Name {
-			continue
+	var wal *Wal
+	itr := blob.Iterator()
+	for {
+		seriesKey, data, err := itr.Next()
+		if err == io.EOF {
+			break
 		}
-
-		err = shard.Write(recs[j:i])
 		if err != nil {
 			return err
 		}
-		j = i
+
+		wal, err = shard.UpdateWal(wal, seriesKey, blob.TimeRange())
+		if err != nil {
+			return err
+		}
+
+		err = shard.Write(wal, seriesKey, data)
+		if err != nil {
+			return err
+		}
 	}
 
-	return shard.Write(recs[j:])
+	return nil
 }
 
 func ReadRecord(shardID uint64, mst string, sid uint64, tr *util.TimeRange,
 	schema record.Schemas, ascending bool) *record.Record {
 
+	reader := NewWalReader(shardID, mst, tr)
+	reader.Ref()
+	defer func() {
+		reader.UnRef()
+	}()
+	return reader.Values(mst, sid, *tr, schema, ascending)
+}
+
+type WalReader struct {
+	wals    []*Wal
+	release func()
+}
+
+func (r *WalReader) Ref() {
+
+}
+
+func (r *WalReader) UnRef() {
+	if r.release != nil {
+		r.release()
+		r.release = nil
+		r.wals = nil
+	}
+}
+
+func NewWalReader(shardID uint64, mst string, tr *util.TimeRange) *WalReader {
+	wals, release := NewRunner().GetWALs(shardID, mst, tr)
+	return &WalReader{
+		wals:    wals,
+		release: release,
+	}
+}
+
+func (r *WalReader) Values(_ string, sid uint64, tr util.TimeRange, schema record.Schemas, ascending bool) *record.Record {
+	if len(r.wals) == 0 {
+		return nil
+	}
+
 	swap := &record.Record{}
 	rec := &record.Record{}
-
 	ctx, release := NewWalCtx()
-	wals, unref := NewRunner().GetWALs(shardID, mst, tr)
-	defer func() {
-		unref()
-		release()
-	}()
+	defer release()
 
-	for _, wal := range wals {
+	for _, wal := range r.wals {
+		if wal.Converted() {
+			continue
+		}
+
 		swap.ResetDeep()
 		err := wal.ReadRecord(ctx, sid, swap)
 		if err == io.EOF {
@@ -303,15 +378,24 @@ func ReadRecord(shardID uint64, mst string, sid uint64, tr *util.TimeRange,
 		rec.Merge(swap)
 	}
 
-	if !slices.IsSorted(rec.Times()) {
+	if rec == nil || rec.RowNums() == 0 {
+		return nil
+	}
+
+	if !IsUniqueSorted(rec.Times()) {
 		hlp := record.NewColumnSortHelper()
 		defer hlp.Release()
 		rec = hlp.Sort(rec)
 	}
 
-	if rec == nil || rec.RowNums() == 0 {
-		return nil
-	}
+	return rec.Copy(ascending, &tr, schema)
+}
 
-	return rec.Copy(ascending, tr, schema)
+func IsUniqueSorted[S ~[]E, E cmp.Ordered](x S) bool {
+	for i := len(x) - 1; i > 0; i-- {
+		if x[i] <= x[i-1] {
+			return false
+		}
+	}
+	return true
 }

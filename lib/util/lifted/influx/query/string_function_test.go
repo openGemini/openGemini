@@ -66,6 +66,21 @@ func TestStringFunctionStrLen(t *testing.T) {
 	assert.Equal(t, outputs, expects)
 }
 
+func TestStringFunctionPosition(t *testing.T) {
+	stringValuer := query.StringValuer{}
+	inputName := "position"
+	inputArgs := []interface{}{"", "abc", "bcd", "cde"}
+	subStr := "bc"
+	expects := []interface{}{int64(0), int64(2), int64(1), int64(0)}
+	outputs := make([]interface{}, 0, len(expects))
+	for _, arg := range inputArgs {
+		if out, ok := stringValuer.Call(inputName, []interface{}{arg, subStr}); ok {
+			outputs = append(outputs, out)
+		}
+	}
+	assert.Equal(t, expects, outputs)
+}
+
 func TestStringFunctionSubStrOnePara(t *testing.T) {
 	stringValuer := query.StringValuer{}
 	inputName := "substr"
@@ -567,6 +582,88 @@ func TestSplitPath(t *testing.T) {
 	res, err = query.SplitPath(jsonPath)
 	assert.Equal(t, len(res), 0)
 	assert.Equal(t, err, errno.NewError(errno.JsonPathIllegal))
+}
+
+func TestIpFunctionIpMaskFunc(t *testing.T) {
+	urlValuer := query.StringValuer{}
+	inputName := "ip_mask"
+
+	// Wrong test case
+	out, ok := urlValuer.Call(inputName, []interface{}{int64(12), "112.170.22.41"})
+	assert.Equal(t, false, ok)
+	assert.Equal(t, nil, out)
+
+	out, ok = urlValuer.Call(inputName, []interface{}{"112.170.22.41", "a"})
+	assert.Equal(t, false, ok)
+	assert.Equal(t, nil, out)
+
+	out, ok = urlValuer.Call(inputName, []interface{}{"112.170.22.41", int64(12), "12"})
+	assert.Equal(t, false, ok)
+	assert.Equal(t, nil, out)
+
+	out, ok = urlValuer.Call(inputName, []interface{}{"112.170.22.41", int64(64)})
+	assert.Equal(t, false, ok)
+	assert.Equal(t, nil, out)
+
+	out, ok = urlValuer.Call(inputName, []interface{}{"2001:db8:85a3::", int64(10), int64(200)})
+	assert.Equal(t, false, ok)
+	assert.Equal(t, nil, out)
+
+	out, ok = urlValuer.Call(inputName, []interface{}{"322.170.22.41", int64(12)})
+	assert.Equal(t, false, ok)
+	assert.Equal(t, nil, out)
+
+	out, ok = urlValuer.Call(inputName, []interface{}{"q001:0db8:85a3::", int64(12), int64(64)})
+	assert.Equal(t, false, ok)
+	assert.Equal(t, nil, out)
+
+	//// Correct test cases
+	inputArgs := make([]interface{}, 10)
+	inputArgs2 := [10]int{16, 8, 12, 0, 32, 0, 12, 24, 68, 128}
+	inputArgs3 := [10]int{8, 12, 16, 24, 0, 64, 24, 32, 88, 40}
+	inputArgs[0] = "192.168.1.1"
+	inputArgs[1] = "10.0.0.1"
+	inputArgs[2] = "172.16.254.1"
+	inputArgs[3] = "8.8.8.8"
+	inputArgs[4] = "203.0.113.5"
+	inputArgs[5] = "1a2b:3c4d:5e6f:7036:9ef5:ffff:0521:424e"
+	inputArgs[6] = "6789:abcd:ef01:2345:6789:abcd:ef01:2345"
+	inputArgs[7] = "0:0:0:0:0:0:0:1"
+	inputArgs[8] = "2001:0db8:85a3:0000:0000:8a2e:0370:7334"
+	inputArgs[9] = "fe80::1ff:fe23:4567:890a"
+	expects := make([]interface{}, 20)
+	expects[0] = "192.168.0.0"
+	expects[1] = "10.0.0.0"
+	expects[2] = "172.16.0.0"
+	expects[3] = "0.0.0.0"
+	expects[4] = "203.0.113.5"
+	expects[5] = "::"
+	expects[6] = "6780::"
+	expects[7] = "::"
+	expects[8] = "2001:db8:85a3::"
+	expects[9] = "fe80::1ff:fe23:4567:890a"
+	expects[10] = "192.168.0.0"
+	expects[11] = "10.0.0.0"
+	expects[12] = "172.16.0.0"
+	expects[13] = "0.0.0.0"
+	expects[14] = "203.0.113.5"
+	expects[15] = "1a2b:3c4d:5e6f:7036::"
+	expects[16] = "6789:ab00::"
+	expects[17] = "::"
+	expects[18] = "2001:db8:85a3::8a00:0:0"
+	expects[19] = "fe80::"
+	outputs := make([]interface{}, 0, len(expects))
+	for i, arg := range inputArgs {
+		if out, ok := urlValuer.Call(inputName, []interface{}{arg, int64(inputArgs2[i])}); ok {
+			outputs = append(outputs, out)
+		}
+	}
+	for i, arg := range inputArgs {
+		if out, ok := urlValuer.Call(inputName, []interface{}{arg, int64(inputArgs2[i]), int64(inputArgs3[i])}); ok {
+			outputs = append(outputs, out)
+		}
+	}
+	assert.Equal(t, expects, outputs)
 }
 
 func TestIpFunctionIpToDomainFunc(t *testing.T) {

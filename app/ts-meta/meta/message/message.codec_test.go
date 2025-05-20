@@ -18,8 +18,8 @@ import (
 	"testing"
 
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
-	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/spdy/transport"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

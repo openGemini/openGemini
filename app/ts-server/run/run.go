@@ -31,6 +31,7 @@ func InitStorage(sqlServer app.Server, storeServer app.Server) {
 		return
 	}
 	sql.PointsWriter.SetStore(s.GetStore())
+	sql.RPCRecordWriter.SetStorage(s.GetStore())
 	executor.SetLocalStorageForQuery(s.GetStore())
 	executor.InitLocalStoreTemplatePlan()
 }

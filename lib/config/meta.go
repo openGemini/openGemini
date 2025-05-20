@@ -17,7 +17,6 @@ package config
 import (
 	"fmt"
 	"path/filepath"
-	"runtime"
 	"time"
 
 	"github.com/hashicorp/raft"
@@ -25,10 +24,6 @@ import (
 	"github.com/influxdata/influxdb/toml"
 	"github.com/openGemini/openGemini/lib/iodetector"
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
-)
-
-var (
-	DefaultRaftSendGroutineNum int = runtime.NumCPU()
 )
 
 const (
@@ -195,6 +190,8 @@ type Meta struct {
 
 	MetaEventHandleEn bool `toml:"meta-event-handle-enable"`
 	BindPeers         []string
+
+	Heartbeat *HeartbeatConfig `toml:"heartbeat"`
 }
 
 // NewMeta builds a new configuration with default values.
@@ -228,6 +225,7 @@ func NewMeta() *Meta {
 		UseIncSyncData:          true,
 		SchemaCleanEn:           true,
 		BindPeers:               []string{},
+		Heartbeat:               NewHeartbeatConfig(),
 	}
 }
 
@@ -256,6 +254,10 @@ func (c *Meta) Validate() error {
 	}
 	iv := intValidator{0, MaxNumOfShards}
 	if err := iv.Validate(ivItems); err != nil {
+		return err
+	}
+
+	if err := c.Heartbeat.Validate(); err != nil {
 		return err
 	}
 

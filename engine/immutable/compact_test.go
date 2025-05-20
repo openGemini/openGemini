@@ -1587,9 +1587,6 @@ func TestBlockCompactionPrepareForColumnStore(t *testing.T) {
 	conf := NewColumnStoreConfig()
 	conf.maxRowsPerSegment = 8192
 	conf.FragmentsNumPerFlush = 1
-	defer func() {
-		conf.maxRowsPerSegment = util.DefaultMaxRowsPerSegment4ColStore
-	}()
 	tier := uint64(util.Hot)
 	recRows := 10000
 	lockPath := ""

@@ -25,7 +25,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/apache/arrow/go/v13/arrow"
@@ -51,6 +50,7 @@ var (
 	errInfo            = "no such file"
 	flushTime          = 30 * time.Second
 	CurrentCapacityMap = &sync.Map{}
+	handlerStat        = statistics.NewHandler()
 )
 
 type RWMetaClient interface {
@@ -336,8 +336,8 @@ func (w *RecordWriter) processRecord(msg *RecMsg, ptIdx int) {
 		w.recWriterHelpers[ptIdx].reset()
 		return
 	}
-	atomic.AddInt64(&statistics.HandlerStat.PointsWrittenOK, rowNums)
-	atomic.AddInt64(&statistics.HandlerStat.WriteStoresDuration, time.Since(start).Nanoseconds())
+	handlerStat.PointsWrittenOK.Add(rowNums)
+	handlerStat.WriteStoresDuration.AddSinceNano(start)
 }
 
 func (w *RecordWriter) writeRecord(db, rp, mst string, rec arrow.Record, ptIdx int) error {
@@ -387,7 +387,7 @@ func (w *RecordWriter) writeRecord(db, rp, mst string, rec arrow.Record, ptIdx i
 		w.logger.Error("create shard group failed", zap.String("db", db), zap.String("rp", rp), zap.String("mst", mst), zap.Error(err))
 		return err
 	}
-	atomic.AddInt64(&statistics.HandlerStat.FieldsWritten, rec.NumRows()*rec.NumCols())
+	handlerStat.FieldsWritten.Add(rec.NumRows() * rec.NumCols())
 	return w.splitAndWriteByShard(sgis, db, rp, mst, 0, r, ptIdx, ctx.ms.EngineType)
 }
 
@@ -436,7 +436,7 @@ func (w *RecordWriter) writeLogRecord(db, rp, mst string, totalLen int64, rec *r
 		w.logger.Error("create shard group failed", zap.String("db", db), zap.String("rp", rp), zap.String("mst", mst), zap.Error(err))
 		return err
 	}
-	atomic.AddInt64(&statistics.HandlerStat.FieldsWritten, int64(rec.RowNums()*rec.ColNums()))
+	handlerStat.FieldsWritten.Add(int64(rec.RowNums() * rec.ColNums()))
 	return w.splitAndWriteByShard(sgis, db, rp, mst, totalLen, rec, ptIdx, ctx.ms.EngineType)
 }
 
@@ -493,9 +493,8 @@ func (w *RecordWriter) writeRecordToShard(shard *meta.ShardInfo, database, reten
 		w.logger.Error(fmt.Sprintf("record marshal failed. db: %s, rp: %s, mst: %s", database, retentionPolicy, measurement), zap.Error(err))
 		return err
 	}
-	atomic.AddInt64(&statistics.HandlerStat.WriteRequestBytesReceived, int64(len(pBuf)))
-	atomic.AddInt64(&statistics.HandlerStat.WriteRequestBytesIn, int64(len(pBuf)))
-
+	handlerStat.WriteRequestBytesReceived.Add(int64(len(pBuf)))
+	handlerStat.WriteRequestBytesIn.Add(int64(len(pBuf)))
 	for {
 		// retry timeout
 		if time.Since(start).Nanoseconds() >= w.timeout.Nanoseconds() {

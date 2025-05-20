@@ -55,6 +55,9 @@ type TimeTask struct {
 	*BaseTask
 }
 
+func (s *TimeTask) cleanPtInfo(ptID uint32) {
+}
+
 func (s *TimeTask) getSrcInfo() *meta2.StreamMeasurementInfo {
 	return s.src
 }

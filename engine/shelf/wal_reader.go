@@ -35,6 +35,10 @@ func (ctx *WalCtx) MemSize() int {
 	return cap(ctx.buf.B) + cap(ctx.buf.Swap)
 }
 
+func (ctx *WalCtx) Instance() *WalCtx {
+	return ctx
+}
+
 var walCtxPool *pool.UnionPool[WalCtx]
 
 func initWalCtxPool() {

@@ -18,7 +18,6 @@ type Transpiler struct {
 	timeRange          time.Duration
 	parenExprCount     int
 	dropMetric         bool
-	removeTableName    bool
 	duplicateResult    bool
 	minT, maxT         int64
 	timeCondition      influxql.Expr
@@ -159,10 +158,6 @@ func (t *Transpiler) setTimeCondition(node influxql.Statement, ignoreLookBack bo
 // DropMetric determines whether the promql is an aggregate query.
 func (t *Transpiler) DropMetric() bool {
 	return t.dropMetric
-}
-
-func (t *Transpiler) RemoveTableName() bool {
-	return t.removeTableName
 }
 
 func (t *Transpiler) DuplicateResult() bool {
@@ -309,9 +304,11 @@ func (t *Transpiler) transpileSubqueryExpr(e *parser.SubqueryExpr) (influxql.Nod
 	offsetMills := durationMilliseconds(e.Offset)
 	rangeMillis := durationMilliseconds(e.Range)
 	newEndTime := t.maxT - offsetMills
-	newInterval := rangeMillis
+	var newInterval int64
 	if e.Step != 0 {
 		newInterval = durationMilliseconds(e.Step)
+	} else {
+		newInterval = rangeMillis
 	}
 	newStartTime := newInterval * ((t.minT - offsetMills - rangeMillis) / newInterval)
 	if newStartTime < (t.minT - offsetMills - rangeMillis) {

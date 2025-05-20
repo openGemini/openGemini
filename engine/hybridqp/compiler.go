@@ -75,6 +75,7 @@ type Options interface {
 	IsPromGroupAll() bool
 	IsPromWithout() bool
 	IsWithout() bool
+	IsRemoveMetric() bool
 	IsExcept() bool
 	GetLowerOpt() Options
 	SetBinOp(bool)

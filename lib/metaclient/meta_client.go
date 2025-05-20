@@ -19,11 +19,11 @@ import (
 	"github.com/influxdata/influxdb/models"
 	originql "github.com/influxdata/influxql"
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
-	"github.com/openGemini/openGemini/engine/executor/spdy"
-	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/engine/op"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/obs"
+	"github.com/openGemini/openGemini/lib/spdy"
+	"github.com/openGemini/openGemini/lib/spdy/transport"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
@@ -341,7 +341,6 @@ func (s *RPCMessageSender) SendRPCMsg(currentServer int, msg *message.MetaMessag
 	refreshConnectedServer(currentServer)
 	return nil
 }
-
 func refreshConnectedServer(currentServer int) {
 	if currentServer != connectedServer {
 		connectedServer = currentServer

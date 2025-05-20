@@ -460,11 +460,14 @@ type MeanFunc struct {
 	BaseAgg
 }
 
+func (f *MeanFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 1, Max: 1},
+	}
+}
+
 func (f *MeanFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	c.global.OnlySelectors = false
-	if exp, got := 1, len(expr.Args); exp != got {
-		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", expr.Name, exp, got)
-	}
 	return c.compileSymbol(expr.Name, expr.Args[0])
 }
 
@@ -501,11 +504,14 @@ type CountPromFunc struct {
 	BaseAgg
 }
 
+func (f *CountPromFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 1, Max: 1},
+	}
+}
+
 func (f *CountPromFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	c.global.OnlySelectors = false
-	if exp, got := 1, len(expr.Args); exp != got {
-		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", expr.Name, exp, got)
-	}
 	return c.compileSymbol(expr.Name, expr.Args[0])
 }
 
@@ -518,10 +524,13 @@ type LastFunc struct {
 	BaseAgg
 }
 
-func (f *LastFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
-	if exp, got := 1, len(expr.Args); exp != got {
-		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", expr.Name, exp, got)
+func (f *LastFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 1, Max: 1},
 	}
+}
+
+func (f *LastFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	return c.compileSymbol(expr.Name, expr.Args[0])
 }
 
@@ -534,10 +543,13 @@ type FirstFunc struct {
 	BaseAgg
 }
 
-func (f *FirstFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
-	if exp, got := 1, len(expr.Args); exp != got {
-		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", expr.Name, exp, got)
+func (f *FirstFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 1, Max: 1},
 	}
+}
+
+func (f *FirstFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	return c.compileSymbol(expr.Name, expr.Args[0])
 }
 
@@ -550,10 +562,13 @@ type MinFunc struct {
 	BaseAgg
 }
 
-func (f *MinFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
-	if exp, got := 1, len(expr.Args); exp != got {
-		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", expr.Name, exp, got)
+func (f *MinFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 1, Max: 1},
 	}
+}
+
+func (f *MinFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	return c.compileSymbol(expr.Name, expr.Args[0])
 }
 
@@ -566,10 +581,13 @@ type MaxFunc struct {
 	BaseAgg
 }
 
-func (f *MaxFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
-	if exp, got := 1, len(expr.Args); exp != got {
-		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", expr.Name, exp, got)
+func (f *MaxFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 1, Max: 1},
 	}
+}
+
+func (f *MaxFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	return c.compileSymbol(expr.Name, expr.Args[0])
 }
 
@@ -582,11 +600,14 @@ type SumFunc struct {
 	BaseAgg
 }
 
+func (f *SumFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 1, Max: 1},
+	}
+}
+
 func (f *SumFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	c.global.OnlySelectors = false
-	if exp, got := 1, len(expr.Args); exp != got {
-		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", expr.Name, exp, got)
-	}
 	return c.compileSymbol(expr.Name, expr.Args[0])
 }
 
@@ -599,18 +620,14 @@ type PercentileFunc struct {
 	BaseAgg
 }
 
-func (f *PercentileFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
-	args := expr.Args
-	if exp, got := 2, len(args); got != exp {
-		return fmt.Errorf("invalid number of arguments for percentile, expected %d, got %d", exp, got)
+func (f *PercentileFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 2, Max: 2},
+		&TypeCheckRule{Name: name, Index: 1, Asserts: []func(interface{}) bool{AssertIntegerLiteral, AssertNumberLiteral}},
 	}
+}
 
-	switch args[1].(type) {
-	case *influxql.IntegerLiteral:
-	case *influxql.NumberLiteral:
-	default:
-		return fmt.Errorf("expected float argument in percentile()")
-	}
+func (f *PercentileFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	return c.compileSymbol(expr.Name, expr.Args[0])
 }
 
@@ -623,26 +640,16 @@ type PercentileOGSketchFunc struct {
 	BaseAgg
 }
 
+func (f *PercentileOGSketchFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 2, Max: 3},
+		&TypeCheckRule{Name: name, Index: 1, Asserts: []func(interface{}) bool{AssertIntegerLiteral, AssertNumberLiteral}},
+		&TypeCheckRule{Name: name, Index: 2, Asserts: []func(interface{}) bool{AssertIntegerLiteral}},
+	}
+}
+
 func (f *PercentileOGSketchFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
-
-	args, name := expr.Args, expr.Name
-	if min, max, got := 2, 3, len(args); got > max || got < min {
-		return fmt.Errorf("invalid number of arguments for %s, expected at least %d but no more than %d, got %d", name, min, max, got)
-	}
-
-	switch args[1].(type) {
-	case *influxql.IntegerLiteral:
-	case *influxql.NumberLiteral:
-	default:
-		return fmt.Errorf("expected integer or float argument as second arg in %s", name)
-	}
-	if len(args) == 3 {
-		switch args[2].(type) {
-		case *influxql.IntegerLiteral:
-		default:
-			return fmt.Errorf("expected integer argument as third arg in %s", name)
-		}
-	}
+	name := expr.Name
 	c.global.OnlySelectors = false
 	c.global.PercentileOGSketchFunction = name
 	return c.compileSymbol(expr.Name, expr.Args[0])
@@ -657,25 +664,15 @@ type PercentileApproxFunc struct {
 	BaseAgg
 }
 
-func (f *PercentileApproxFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
-	args, name := expr.Args, expr.Name
-	if min, max, got := 2, 3, len(args); got > max || got < min {
-		return fmt.Errorf("invalid number of arguments for %s, expected at least %d but no more than %d, got %d", name, min, max, got)
+func (f *PercentileApproxFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 2, Max: 3},
+		&TypeCheckRule{Name: name, Index: 1, Asserts: []func(interface{}) bool{AssertIntegerLiteral, AssertNumberLiteral}},
+		&TypeCheckRule{Name: name, Index: 2, Asserts: []func(interface{}) bool{AssertIntegerLiteral}},
 	}
+}
 
-	switch args[1].(type) {
-	case *influxql.IntegerLiteral:
-	case *influxql.NumberLiteral:
-	default:
-		return fmt.Errorf("expected integer or float argument as second arg in %s", name)
-	}
-	if len(args) == 3 {
-		switch args[2].(type) {
-		case *influxql.IntegerLiteral:
-		default:
-			return fmt.Errorf("expected integer argument as third arg in %s", name)
-		}
-	}
+func (f *PercentileApproxFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	c.global.OnlySelectors = false
 	return c.compileSymbol(expr.Name, expr.Args[0])
 }
@@ -689,16 +686,14 @@ type HistogramFunc struct {
 	BaseAgg
 }
 
-func (f *HistogramFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
-	args := expr.Args
-	switch args[1].(type) {
-	case *influxql.StringLiteral:
-
-	case *influxql.IntegerLiteral:
-	case *influxql.NumberLiteral:
-	default:
-		return fmt.Errorf("expected string argument in histogram()")
+func (f *HistogramFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 2, Max: 2},
+		&TypeCheckRule{Name: name, Index: 1, Asserts: []func(interface{}) bool{AssertIntegerLiteral, AssertNumberLiteral, AssertStringLiteral}},
 	}
+}
+
+func (f *HistogramFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	return c.compileSymbol(expr.Name, expr.Args[0])
 }
 
@@ -1100,11 +1095,14 @@ type ModeFunc struct {
 	BaseAgg
 }
 
+func (f *ModeFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 1, Max: 1},
+	}
+}
+
 func (f *ModeFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	args, name := expr.Args, expr.Name
-	if exp, got := 1, len(expr.Args); exp != got {
-		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", name, exp, got)
-	}
 	c.global.OnlySelectors = false
 	// Must be a variable reference, wildcard, or regexp.
 	return c.compileSymbol(name, args[0])
@@ -1162,11 +1160,14 @@ type OneParamCompileFunc struct {
 	BaseAgg
 }
 
+func (f *OneParamCompileFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 1, Max: 1},
+	}
+}
+
 func (f *OneParamCompileFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	args, name := expr.Args, expr.Name
-	if exp, got := 1, len(expr.Args); exp != got {
-		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", name, exp, got)
-	}
 	c.global.OnlySelectors = false
 	// Must be a variable reference, wildcard, or regexp.
 	return c.compileSymbol(name, args[0])
@@ -1181,11 +1182,14 @@ type StddevFunc struct {
 	BaseAgg
 }
 
+func (f *StddevFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 1, Max: 1},
+	}
+}
+
 func (f *StddevFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	args, name := expr.Args, expr.Name
-	if exp, got := 1, len(expr.Args); exp != got {
-		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", name, exp, got)
-	}
 	c.global.OnlySelectors = false
 	// Must be a variable reference, wildcard, or regexp.
 	return c.compileSymbol(name, args[0])
@@ -1200,11 +1204,14 @@ type StdvarFunc struct {
 	BaseAgg
 }
 
+func (f *StdvarFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 1, Max: 1},
+	}
+}
+
 func (f *StdvarFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	args, name := expr.Args, expr.Name
-	if exp, got := 1, len(expr.Args); exp != got {
-		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", name, exp, got)
-	}
 	c.global.OnlySelectors = false
 	// Must be a variable reference, wildcard, or regexp.
 	return c.compileSymbol(name, args[0])
@@ -1219,11 +1226,14 @@ type PresentFunc struct {
 	BaseAgg
 }
 
+func (f *PresentFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 1, Max: 1},
+	}
+}
+
 func (f *PresentFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	args, name := expr.Args, expr.Name
-	if exp, got := 1, len(expr.Args); exp != got {
-		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", name, exp, got)
-	}
 	c.global.OnlySelectors = false
 	// Must be a variable reference, wildcard, or regexp.
 	return c.compileSymbol(name, args[0])
@@ -1238,11 +1248,14 @@ type SpreadFunc struct {
 	BaseAgg
 }
 
+func (f *SpreadFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 1, Max: 1},
+	}
+}
+
 func (f *SpreadFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	args, name := expr.Args, expr.Name
-	if exp, got := 1, len(expr.Args); exp != got {
-		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", name, exp, got)
-	}
 	c.global.OnlySelectors = false
 	// Must be a variable reference, wildcard, or regexp.
 	return c.compileSymbol(name, args[0])
@@ -1257,11 +1270,14 @@ type RateFunc struct {
 	BaseAgg
 }
 
+func (f *RateFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 1, Max: 1},
+	}
+}
+
 func (f *RateFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	args, name := expr.Args, expr.Name
-	if exp, got := 1, len(expr.Args); exp != got {
-		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", name, exp, got)
-	}
 	c.global.OnlySelectors = false
 	// Must be a variable reference, wildcard, or regexp.
 	return c.compileSymbol(name, args[0])
@@ -1276,11 +1292,14 @@ type IRateFunc struct {
 	BaseAgg
 }
 
+func (f *IRateFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 1, Max: 1},
+	}
+}
+
 func (f *IRateFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	args, name := expr.Args, expr.Name
-	if exp, got := 1, len(expr.Args); exp != got {
-		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", name, exp, got)
-	}
 	c.global.OnlySelectors = false
 	// Must be a variable reference, wildcard, or regexp.
 	return c.compileSymbol(name, args[0])
@@ -1295,11 +1314,14 @@ type AbsentFunc struct {
 	BaseAgg
 }
 
+func (f *AbsentFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 1, Max: 1},
+	}
+}
+
 func (f *AbsentFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	args, name := expr.Args, expr.Name
-	if exp, got := 1, len(expr.Args); exp != got {
-		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", name, exp, got)
-	}
 	c.global.OnlySelectors = false
 	// Must be a variable reference, wildcard, or regexp.
 	return c.compileSymbol(name, args[0])
@@ -1314,11 +1336,14 @@ type MedianFunc struct {
 	BaseAgg
 }
 
+func (f *MedianFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 1, Max: 1},
+	}
+}
+
 func (f *MedianFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	args, name := expr.Args, expr.Name
-	if exp, got := 1, len(expr.Args); exp != got {
-		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", name, exp, got)
-	}
 	c.global.OnlySelectors = false
 	// Must be a variable reference, wildcard, or regexp.
 	return c.compileSymbol(name, args[0])
@@ -1371,11 +1396,14 @@ type DerivFunc struct {
 	BaseAgg
 }
 
+func (f *DerivFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 1, Max: 1},
+	}
+}
+
 func (f *DerivFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	args, name := expr.Args, expr.Name
-	if exp, got := 1, len(expr.Args); exp != got {
-		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", name, exp, got)
-	}
 	c.global.OnlySelectors = false
 	// Must be a variable reference, wildcard, or regexp.
 	return c.compileSymbol(name, args[0])
@@ -1390,11 +1418,14 @@ type IncreaseFunc struct {
 	BaseAgg
 }
 
+func (f *IncreaseFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 1, Max: 1},
+	}
+}
+
 func (f *IncreaseFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	args, name := expr.Args, expr.Name
-	if exp, got := 1, len(expr.Args); exp != got {
-		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", name, exp, got)
-	}
 	c.global.OnlySelectors = false
 	// Must be a variable reference, wildcard, or regexp.
 	return c.compileSymbol(name, args[0])
@@ -1409,18 +1440,14 @@ type PredictLinearFunc struct {
 	BaseAgg
 }
 
-func (f *PredictLinearFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
-	args := expr.Args
-	if exp, got := 2, len(args); got != exp {
-		return fmt.Errorf("invalid number of arguments for predict_linear, expected %d, got %d", exp, got)
+func (f *PredictLinearFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 2, Max: 2},
+		&TypeCheckRule{Name: name, Index: 1, Asserts: []func(interface{}) bool{AssertIntegerLiteral, AssertNumberLiteral}},
 	}
+}
 
-	switch args[1].(type) {
-	case *influxql.IntegerLiteral:
-	case *influxql.NumberLiteral:
-	default:
-		return fmt.Errorf("expected float argument in predict_linear()")
-	}
+func (f *PredictLinearFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	return c.compileSymbol(expr.Name, expr.Args[0])
 }
 
@@ -1433,10 +1460,13 @@ type MinPromFunc struct {
 	BaseAgg
 }
 
-func (f *MinPromFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
-	if exp, got := 1, len(expr.Args); exp != got {
-		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", expr.Name, exp, got)
+func (f *MinPromFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 1, Max: 1},
 	}
+}
+
+func (f *MinPromFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	return c.compileSymbol(expr.Name, expr.Args[0])
 }
 
@@ -1449,10 +1479,13 @@ type MaxPromFunc struct {
 	BaseAgg
 }
 
-func (f *MaxPromFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
-	if exp, got := 1, len(expr.Args); exp != got {
-		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", expr.Name, exp, got)
+func (f *MaxPromFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 1, Max: 1},
 	}
+}
+
+func (f *MaxPromFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	return c.compileSymbol(expr.Name, expr.Args[0])
 }
 
@@ -1465,10 +1498,13 @@ type FloatCountPromFunc struct {
 	BaseAgg
 }
 
-func (f *FloatCountPromFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
-	if exp, got := 1, len(expr.Args); exp != got {
-		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", expr.Name, exp, got)
+func (f *FloatCountPromFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 1, Max: 1},
 	}
+}
+
+func (f *FloatCountPromFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	return c.compileSymbol(expr.Name, expr.Args[0])
 }
 
@@ -1481,18 +1517,14 @@ type HistogramQuantileFunc struct {
 	BaseAgg
 }
 
-func (f *HistogramQuantileFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
-	args := expr.Args
-	if exp, got := 2, len(args); got != exp {
-		return fmt.Errorf("invalid number of arguments for histogram_quantile, expected %d, got %d", exp, got)
+func (f *HistogramQuantileFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 2, Max: 2},
+		&TypeCheckRule{Name: name, Index: 1, Asserts: []func(interface{}) bool{AssertIntegerLiteral, AssertNumberLiteral}},
 	}
+}
 
-	switch args[1].(type) {
-	case *influxql.IntegerLiteral:
-	case *influxql.NumberLiteral:
-	default:
-		return fmt.Errorf("expected float argument in histogram_quantile()")
-	}
+func (f *HistogramQuantileFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	return c.compileSymbol(expr.Name, expr.Args[0])
 }
 
@@ -1505,16 +1537,14 @@ type CountValuesFunc struct {
 	BaseAgg
 }
 
+func (f *CountValuesFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 2, Max: 2},
+		&TypeCheckRule{Name: name, Index: 1, Asserts: []func(interface{}) bool{AssertStringLiteral}},
+	}
+}
+
 func (f *CountValuesFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
-	args := expr.Args
-	if exp, got := 2, len(args); got != exp {
-		return fmt.Errorf("invalid number of arguments for count_values, expected %d, got %d", exp, got)
-	}
-
-	if _, ok := args[1].(*influxql.StringLiteral); !ok {
-		return fmt.Errorf("expected string argument in count_values()")
-	}
-
 	return c.compileSymbol(expr.Name, expr.Args[0])
 }
 
@@ -1527,11 +1557,14 @@ type PromDeltaFunc struct {
 	BaseAgg
 }
 
+func (f *PromDeltaFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 1, Max: 1},
+	}
+}
+
 func (f *PromDeltaFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	args, name := expr.Args, expr.Name
-	if exp, got := 1, len(expr.Args); exp != got {
-		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", name, exp, got)
-	}
 	c.global.OnlySelectors = false
 	// Must be a variable reference, wildcard, or regexp.
 	return c.compileSymbol(name, args[0])
@@ -1546,11 +1579,14 @@ type PromIDeltaFunc struct {
 	BaseAgg
 }
 
+func (f *PromIDeltaFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 1, Max: 1},
+	}
+}
+
 func (f *PromIDeltaFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	args, name := expr.Args, expr.Name
-	if exp, got := 1, len(expr.Args); exp != got {
-		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", name, exp, got)
-	}
 	c.global.OnlySelectors = false
 	// Must be a variable reference, wildcard, or regexp.
 	return c.compileSymbol(name, args[0])
@@ -1565,11 +1601,14 @@ type PromGroupFunc struct {
 	BaseAgg
 }
 
+func (f *PromGroupFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 1, Max: 1},
+	}
+}
+
 func (f *PromGroupFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	args, name := expr.Args, expr.Name
-	if exp, got := 1, len(expr.Args); exp != got {
-		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", name, exp, got)
-	}
 	c.global.OnlySelectors = false
 	// Must be a variable reference, wildcard, or regexp.
 	return c.compileSymbol(name, args[0])
@@ -1584,11 +1623,14 @@ type PromScalarFunc struct {
 	BaseAgg
 }
 
+func (f *PromScalarFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 1, Max: 1},
+	}
+}
+
 func (f *PromScalarFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	args, name := expr.Args, expr.Name
-	if exp, got := 1, len(expr.Args); exp != got {
-		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", name, exp, got)
-	}
 	c.global.OnlySelectors = false
 	// Must be a variable reference, wildcard, or regexp.
 	return c.compileSymbol(name, args[0])

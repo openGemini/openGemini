@@ -173,7 +173,6 @@ func TestReplay(t *testing.T) {
 	mockNode := &RaftNode{
 		proposeC: make(chan []byte, 1),
 		Store:    rds,
-		logger:   logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop()),
 	}
 	mockNode.WithLogger(logger.NewLogger(errno.ModuleUnknown))
 	ents := []raftpb.Entry{{Index: 3, Term: 3}, {Index: 4, Term: 4}, {Index: 5, Term: 5}}

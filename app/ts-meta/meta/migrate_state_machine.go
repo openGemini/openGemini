@@ -19,10 +19,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/spdy/transport"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
@@ -190,7 +190,7 @@ func (m *MigrateStateMachine) sendMigrateCommand(e MigrateEvent) (NextAction, er
 			zap.Uint64("target", e.getTarget()), zap.String("event", e.String()), zap.Error(err))
 	} else {
 		m.logger.Info("[MSM] send migrate command to store successfully", zap.String("pt", pti.String()),
-			zap.Uint64("target", e.getTarget()), zap.String("event", e.String()), zap.String("event", e.String()))
+			zap.Uint64("target", e.getTarget()), zap.String("event", e.String()))
 	}
 	return ActionWait, nil
 }
@@ -226,7 +226,6 @@ func (m *MigrateStateMachine) handleCmdResult(err error, e MigrateEvent) Schedul
 	}
 	if e.exhaustRetries() {
 		// set isolate db pt and alarm
-		//e.setIsolate(true)
 		m.logger.Error("fail to handle migration", zap.Error(errno.NewError(errno.InternalError, err)), zap.String("event", e.String()))
 	}
 	time.Sleep(100 * time.Millisecond)
@@ -347,6 +346,7 @@ func (m *MigrateStateMachine) executeEvent(e MigrateEvent) error {
 	}
 	return err
 }
+
 func (m *MigrateStateMachine) forceExecuteEvent(e MigrateEvent) error {
 	if !m.canExecuteEvent(!e.isInRecovery() && e.getUserCommand()) {
 		return errno.NewError(errno.StateMachineIsNotRunning)

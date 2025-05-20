@@ -52,7 +52,7 @@ func (s *Base) Open() error {
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
-		go s.run()
+		s.run()
 	}()
 	return nil
 }

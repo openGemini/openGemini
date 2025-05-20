@@ -96,6 +96,10 @@ func (ts *TaskScheduler) addTaskMutex(key string) bool {
 		return false
 	}
 
+	if ts.closed {
+		return false
+	}
+	ts.wg.Add(1)
 	ts.taskMutex[key] = struct{}{}
 	return true
 }
@@ -119,7 +123,6 @@ func (ts *TaskScheduler) ExecuteTaskGroup(tg *TaskGroup, signal chan struct{}) {
 		return
 	}
 
-	ts.wg.Add(1)
 	tg.OnFinish(func() {
 		ts.wg.Done()
 		ts.delTaskMutex(tg.Key())
@@ -142,7 +145,6 @@ func (ts *TaskScheduler) Execute(task Task, signal chan struct{}, async bool) {
 		return
 	}
 
-	ts.wg.Add(1)
 	task.OnFinish(func() {
 		ts.delTaskMutex(task.Key())
 		ts.delTask(task)

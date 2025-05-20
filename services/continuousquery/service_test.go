@@ -99,6 +99,7 @@ func TestTTL(t *testing.T) {
 		GetCqLeaseFn: func() ([]string, error) {
 			return nil, nil
 		},
+		changed: make(chan chan struct{}, 10),
 	}
 	err := s.Open()
 	if err != nil {

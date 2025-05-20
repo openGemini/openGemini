@@ -8,6 +8,7 @@ package tsi
 import (
 	"testing"
 
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -61,9 +62,9 @@ func TestGetRegexpPrefix(t *testing.T) {
 	assert.Equal(t, rcv.reMatch([]byte("Unnt")), false)
 
 	f(t, "Ubuntu", "Ubuntu", "")
-	f(t, "^U|s$", "", "(?-s:U.*|.*s.*)")
+	f(t, "^U|s$", "", "(?-ms:U.*|.*s$)")
 	f(t, "^U", "U", "(?-s:.*)")
-	f(t, "s$", "", "(?-s:.*s.*)")
+	f(t, "s$", "", "(?-ms:.*s$)")
 	f(t, "", "", "")
 	f(t, "^", "", "")
 	f(t, "$", "", "")
@@ -117,6 +118,17 @@ func TestTagFilterMatchSuffix(t *testing.T) {
 	name := []byte("mst")
 	key := []byte("key")
 	var tf tagFilter
+
+	tf.Init(name, key, []byte(`192\.168\.1\.2`), false, true)
+	assert.Equal(t, tf.reSuffixMatch([]byte("192.168.1.2")), true)
+}
+
+func TestTagFilterPerlMatchSuffix(t *testing.T) {
+	name := []byte("mst")
+	key := []byte("key")
+	var tf tagFilter
+
+	config.GetStoreConfig().EnablePerlRegrep = true
 
 	tf.Init(name, key, []byte(`192\.168\.1\.2`), false, true)
 	assert.Equal(t, tf.reSuffixMatch([]byte("192.168.1.2")), true)
