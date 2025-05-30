@@ -93,8 +93,9 @@ func (l *entryLog) allEntries(lo, hi, maxSize uint64) []raftpb.Entry {
 
 		re, err := currFile.getRaftEntry(offset)
 		if err != nil {
-			offset++
-			continue
+			logger.GetLogger().Error("allEntries getRaftEntry err", zap.Error(err), zap.Uint64("lo", lo), zap.Uint64("hi", hi),
+				zap.String("dir", l.dir), zap.String("file", currFile.entry.Name()))
+			return entries
 		}
 		if re.Index >= hi {
 			return entries

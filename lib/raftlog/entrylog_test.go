@@ -123,3 +123,16 @@ func TestEntryLogs_lastIndex(t *testing.T) {
 		assert.Equal(t, 3, int(idx))
 	})
 }
+
+func TestEntryLogs_allEntriesErr(t *testing.T) {
+	tmpDir := t.TempDir()
+	el, err := openEntryLogs(tmpDir)
+	require.NoError(t, err)
+	defer el.Close()
+	el.current.entry.WriteSlice(1048576, nil)
+	buf := el.current.getEntry(0)
+	marshalEntry(buf, 4, 2, 0, 1148576)
+	el.current.entry.WriteAt(0, buf)
+	entries := el.allEntries(2, 3, maxNumEntries)
+	require.Equal(t, 0, len(entries))
+}
