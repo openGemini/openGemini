@@ -678,7 +678,7 @@ func (r *Row) unmarshalFields(src []byte, fieldpool []Field) ([]byte, []Field, e
 	fieldpool = fieldpool[:start+fieldN]
 
 	for i := 0; i < fieldN; i++ {
-		if len(src) < 1 {
+		if len(src) < 2 {
 			return nil, fieldpool, errors.New("too small for field key length")
 		}
 		l := int(encoding.UnmarshalUint16(src[:2])) //int(src[0])
