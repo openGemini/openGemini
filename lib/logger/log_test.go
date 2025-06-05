@@ -337,5 +337,11 @@ func TestSuppressLogger(t *testing.T) {
 }
 
 func TestSrLoggerErr(t *testing.T) {
+	logger.InitSrLogger(config.Logger{Level: zap.PanicLevel})
+	logger.GetSrLogger().Panic("panic")
+	logger.GetSrLogger().Panicf("panicf")
+	logger.GetSrLogger().Warning("warn")
+	logger.GetSrLogger().Warningf("warnf")
+
 	logger.InitSrLogger(config.Logger{Level: 20})
 }
