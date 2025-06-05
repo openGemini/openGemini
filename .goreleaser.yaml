@@ -7,23 +7,6 @@ before:
     - go mod tidy
 
 builds:
-  - id: "ts-cli"
-    binary: usr/bin/ts-cli
-    main: ./app/ts-cli
-    goos:
-      - linux
-      - darwin
-      - windows
-    goarch:
-      - amd64
-      - arm64
-    ignore:
-      - goos: windows
-        goarch: arm64
-    ldflags:
-      - -s -w -X main.TsVersion={{.Tag}} -X main.TsBranch={{.Branch}} -X main.TsCommit={{.Commit}} -X main.TsBuildTime={{.Date}}
-    env:
-      - CGO_ENABLED=0
   - id: "ts-meta"
     binary: usr/bin/ts-meta
     main: ./app/ts-meta
