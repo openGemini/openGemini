@@ -153,14 +153,30 @@ var srLogger raft.Logger
 func InitSrLogger(conf config.Logger) {
 	level = conf.Level
 	zapLogger := getLogger(conf, config.DefaultStoreRaftLoggerName)
-	logger, err := zap.NewStdLogAt(zapLogger, level)
-	if err != nil {
-		fmt.Printf("init sr logger err: %s\n", err.Error())
-	}
+
 	fmt.Printf("%s init sr logger, conf: %+v\n", time.Now().String(), conf)
-	srLogger = &raft.DefaultLogger{Logger: logger}
+	srLogger = &SugarLogger{zapLogger.Sugar()}
 }
 
 func GetSrLogger() raft.Logger {
 	return srLogger
+}
+
+type SugarLogger struct {
+	*zap.SugaredLogger
+}
+
+func (sl *SugarLogger) Warning(v ...interface{}) {
+	sl.Warn(v...)
+}
+
+func (sl *SugarLogger) Warningf(format string, v ...interface{}) {
+	sl.Warnf(format, v...)
+}
+
+func (sl *SugarLogger) Panic(args ...interface{}) {
+	sl.Error(args...)
+}
+func (sl *SugarLogger) Panicf(template string, args ...interface{}) {
+	sl.Errorf(template, args...)
 }
