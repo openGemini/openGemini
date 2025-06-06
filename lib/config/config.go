@@ -129,6 +129,7 @@ func fromToml(c Config, input string) error {
 type Common struct {
 	MetaJoin     []string `toml:"meta-join"`
 	CryptoConfig string   `toml:"crypto-config"`
+	CryptoType   string   `toml:"crypto-type"`
 	ClusterID    string   `toml:"cluster-id"`
 	CPUNum       int      `toml:"cpu-num"`
 
