@@ -23,7 +23,7 @@ builds:
     ldflags:
       - -s -w -X main.TsVersion={{.Tag}} -X main.TsBranch={{.Branch}} -X main.TsCommit={{.Commit}} -X main.TsBuildTime={{.Date}}
     env:
-      - CGO_ENABLED=0
+      - CGO_ENABLED=1
   - id: "ts-monitor"
     binary: usr/bin/ts-monitor
     main: ./app/ts-monitor
@@ -40,7 +40,7 @@ builds:
     ldflags:
       - -s -w -X main.TsVersion={{.Tag}} -X main.TsBranch={{.Branch}} -X main.TsCommit={{.Commit}} -X main.TsBuildTime={{.Date}}
     env:
-      - CGO_ENABLED=0
+      - CGO_ENABLED=1
   - id: "ts-server"
     binary: usr/bin/ts-server
     main: ./app/ts-server
@@ -57,7 +57,7 @@ builds:
     ldflags:
       - -s -w -X main.TsVersion={{.Tag}} -X main.TsBranch={{.Branch}} -X main.TsCommit={{.Commit}} -X main.TsBuildTime={{.Date}}
     env:
-      - CGO_ENABLED=0
+      - CGO_ENABLED=1
   - id: "ts-sql"
     binary: usr/bin/ts-sql
     main: ./app/ts-sql
@@ -74,7 +74,7 @@ builds:
     ldflags:
       - -s -w -X main.TsVersion={{.Tag}} -X main.TsBranch={{.Branch}} -X main.TsCommit={{.Commit}} -X main.TsBuildTime={{.Date}}
     env:
-      - CGO_ENABLED=0
+      - CGO_ENABLED=1
   - id: "ts-store"
     binary: usr/bin/ts-store
     main: ./app/ts-store
@@ -91,7 +91,7 @@ builds:
     ldflags:
       - -s -w -X main.TsVersion={{.Tag}} -X main.TsBranch={{.Branch}} -X main.TsCommit={{.Commit}} -X main.TsBuildTime={{.Date}}
     env:
-      - CGO_ENABLED=0
+      - CGO_ENABLED=1
 archives:
   - format: tar.gz
     # this name template makes the OS and Arch compatible with the results of uname.
