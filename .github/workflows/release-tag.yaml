@@ -8,7 +8,7 @@ on:
     types: [ created ]
 
 jobs:
-  nightly-docker:
+  release-tag-docker:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,8 +22,6 @@ jobs:
         with:
           images: opengeminidb/opengemini-server
           tags: |
-            type=semver,pattern={{major}}
-            type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{version}}
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
