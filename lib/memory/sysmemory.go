@@ -45,26 +45,48 @@ func ReadSysMemory() (int64, int64) {
 	return int64(info.Total / 1024), int64(info.Available / 1024)
 }
 
-func ReadSysMemoryLinux() (int64, int64) {
+func ReadSysMemoryLinux() (total int64, available int64) {
 	var buf [256]byte
 	n1 := readSysMemInfo(buf[:])
 	if n1 != 0 {
-		totalStart := bytes.Index(buf[:], []byte("MemTotal:")) + len("MemTotal:")
-		freeStart := bytes.Index(buf[totalStart:], []byte("MemAvailable:")) + len("MemAvailable:")
-		memTotal := buf[totalStart:]
-		memFree := buf[freeStart+totalStart:]
-		end := bytes.Index(memTotal, []byte("kB"))
-		memTotal = memTotal[:end]
-		end = bytes.Index(memFree, []byte("kB"))
-		memFree = memFree[:end]
 
-		memTotal = bytes.TrimSpace(memTotal)
-		memFree = bytes.TrimSpace(memFree)
+		// the first 256 bytes
+		// MemTotal
+		mTotalLeft := bytes.Index(buf[:], []byte("MemTotal"))
+		// MemAvailable
+		mAvailableLeft := bytes.Index(buf[:], []byte("MemAvailable"))
+		// MemFree
+		mFreeLeft := bytes.Index(buf[:], []byte("MemFree"))
+		// Buffers
+		mBuffersLeft := bytes.Index(buf[:], []byte("Buffers"))
+		// Cached
+		mCachedLeft := bytes.Index(buf[:], []byte("Cached"))
 
-		total_ := bytes2Int(memTotal)
-		free_ := bytes2Int(memFree)
+		if mTotalLeft == -1 {
+			return maxMemUse, maxMemUse
+		}
+		total = getMemInt64(buf[:], "MemTotal:", mTotalLeft)
 
-		return total_, free_
+		if mAvailableLeft != -1 {
+			available = getMemInt64(buf[:], "MemAvailable:", mAvailableLeft)
+			return
+		}
+
+		// lower kernel system
+		// MemAvailable = MemFree + Buffers + Cached
+		if mFreeLeft != -1 {
+			available += getMemInt64(buf[:], "MemFree:", mFreeLeft)
+		}
+
+		if mBuffersLeft != -1 {
+			available += getMemInt64(buf[:], "Buffers:", mBuffersLeft)
+		}
+
+		if mCachedLeft != -1 {
+			available += getMemInt64(buf[:], "Cached:", mCachedLeft)
+		}
+
+		return
 	}
 	/*
 		output like:
@@ -122,4 +144,15 @@ func bytes2Int(b []byte) int64 {
 func MemUsedPct() float64 {
 	total, available := SysMem()
 	return (1 - float64(available)/float64(total)) * 100
+}
+
+// converts a memory value string (e.g., "MemTotal:     789745 kB") into an integer (e.g., 789745).
+func getMemInt64(buf []byte, prefix string, left int) int64 {
+	left += len(prefix)
+	right := bytes.Index(buf[left:], []byte("kB")) + left
+	if left > right {
+		return 0
+	}
+	mByte := bytes.TrimSpace(buf[left:right]) // [left, right)
+	return bytes2Int(mByte)
 }

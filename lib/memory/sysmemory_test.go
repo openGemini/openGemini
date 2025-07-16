@@ -51,3 +51,69 @@ func BenchmarkReadSysMemory_Parallel(b *testing.B) {
 	}
 	wg.Wait()
 }
+
+func TestGetMemInt64(t *testing.T) {
+
+	type testCase struct {
+		info   string
+		prefix string
+		left   int
+		ans    int64
+	}
+
+	testCases := []testCase{
+		{
+			"MemTotal:       14528572 kB",
+			"MemTotal:",
+			0,
+			14528572,
+		},
+		{
+			"MemFree:         6194012 kB",
+			"MemFree:",
+			0,
+			6194012,
+		},
+		{
+			"MemAvailable:    6254489 kB",
+			"MemAvailable:",
+			0,
+			6254489,
+		},
+		{
+			"Buffers:           34032 kB",
+			"Buffers:",
+			0,
+			34032,
+		},
+		{
+			"Cached:           188576 kB",
+			"Cached:",
+			0,
+			188576,
+		},
+		{
+			"SwapCached:            0 kB",
+			"SwapCached:",
+			0,
+			0,
+		},
+		{
+			"HugePages_Total:       0",
+			"HugePages_Total:",
+			0,
+			0,
+		},
+		{
+			"   test:       55 kB",
+			"test:",
+			3,
+			55,
+		},
+	}
+
+	for _, tcase := range testCases {
+		act := getMemInt64([]byte(tcase.info), tcase.prefix, tcase.left)
+		require.Equal(t, tcase.ans, act)
+	}
+}
