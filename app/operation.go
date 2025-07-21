@@ -178,7 +178,7 @@ func (pm *ProactiveManager) inspectMem() {
 	if !sysconfig.GetInterruptQuery() {
 		return
 	}
-	currMemPct := memory.MemUsedPct()
+	currMemPct := memory.GetMemMonitor().MemUsedPct()
 	pm.interruptQuery(currMemPct)
 }
 
