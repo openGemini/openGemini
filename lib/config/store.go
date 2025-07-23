@@ -356,7 +356,7 @@ func (c *Store) Corrector(cpuNum int, memorySize toml.Size) {
 		cpuNum = runtime.NumCPU()
 	}
 	if memorySize == 0 {
-		size, _ := memory.SysMem()
+		size, _ := memory.GetMemMonitor().SysMem()
 		memorySize = toml.Size(size * KB)
 	}
 	if c.OpenShardLimit <= 0 {

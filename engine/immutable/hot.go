@@ -166,7 +166,7 @@ func (m *HotFileManager) Run() {
 		return
 	}
 
-	memoryTotal, _ := memory.SysMem()
+	memoryTotal, _ := memory.GetMemMonitor().SysMem()
 	m.SetMaxMemorySize(config.KB * memoryTotal * m.conf.GetMemoryAllowedPercent() / 100)
 	hotFileWriterPool = pool.NewUnionPool[HotFileWriter](m.conf.PoolObjectCnt, int(m.conf.MaxCacheSize),
 		int(m.conf.MaxCacheSize), func() *HotFileWriter {
