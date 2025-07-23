@@ -295,7 +295,7 @@ func IsMemUsageExceeded() bool {
 	if memLimitPct < 1 || memLimitPct >= 100 {
 		return false
 	}
-	memUsedPct := memory.MemUsedPct()
+	memUsedPct := memory.GetMemMonitor().MemUsedPct()
 	exceeded := memUsedPct > float64(memLimitPct)
 	log.Info("system mem usage", zap.Float64("memUsedPct", memUsedPct), zap.Float64("memLimitPct", float64(memLimitPct)), zap.Bool("exceeded", exceeded))
 	return exceeded

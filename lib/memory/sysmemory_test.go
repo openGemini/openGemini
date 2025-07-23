@@ -12,42 +12,35 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package memory
+package memory_test
 
 import (
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/openGemini/openGemini/lib/memory"
 	"github.com/stretchr/testify/require"
 )
 
 func TestReadSysMemory(t *testing.T) {
-	total, available := ReadSysMemory()
-	MemUsedPct()
-	readSysMemInfo(nil)
+	total, available := memory.ReadSysMemory()
+	memUsed := memory.GetMemMonitor().MemUsedPct()
+	t.Log(total, available, memUsed)
 	require.NotEmpty(t, total)
 	require.NotEmpty(t, available)
+	require.NotEmpty(t, memUsed)
 }
 
-func BenchmarkReadSysMemory(b *testing.B) {
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		MemUsedPct()
-	}
-}
-
-func BenchmarkReadSysMemory_Parallel(b *testing.B) {
-	b.ReportAllocs()
+func TestSysMem(t *testing.T) {
 	var wg sync.WaitGroup
-	f := func() {
-		defer wg.Done()
-		for i := 0; i < b.N; i++ {
-			MemUsedPct()
-		}
-	}
-	for i := 0; i < 4; i++ {
+	for i := 0; i < 100; i++ {
+		time.Sleep(time.Millisecond)
 		wg.Add(1)
-		go f()
+		go func() {
+			defer wg.Done()
+			memory.GetMemMonitor().SysMem() // t.Log(memory.GetMemMonitor().SysMem())
+		}()
 	}
 	wg.Wait()
 }

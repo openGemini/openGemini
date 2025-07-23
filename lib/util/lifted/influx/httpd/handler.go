@@ -2062,7 +2062,7 @@ func (t *Throttler) Handler(h http.Handler) http.Handler {
 			// If there is no limit for concurrent queries and queues, the memory usage
 			// exceeds the threshold the new query is canceled and an error is reported
 			if t.query && sysconfig.GetInterruptQuery() {
-				memUsed := memory.MemUsedPct()
+				memUsed := memory.GetMemMonitor().MemUsedPct()
 				memThre := float64(sysconfig.GetUpperMemPct())
 				if memUsed > memThre {
 					resMsg := "request throttled, query memory exceeds the threshold, query is canceled"
@@ -2095,7 +2095,7 @@ func (t *Throttler) Handler(h http.Handler) http.Handler {
 				// the new query is blocked and wait until the memory is less than the threshold the query
 				// queue is full, or the query times out
 				if t.query && sysconfig.GetInterruptQuery() {
-					memUsed := memory.MemUsedPct()
+					memUsed := memory.GetMemMonitor().MemUsedPct()
 					memThre := float64(sysconfig.GetUpperMemPct())
 					if memUsed < memThre {
 						break
@@ -2107,7 +2107,7 @@ func (t *Throttler) Handler(h http.Handler) http.Handler {
 					for {
 						select {
 						case <-ticker.C:
-							if memory.MemUsedPct() < float64(sysconfig.GetUpperMemPct()) {
+							if memory.GetMemMonitor().MemUsedPct() < float64(sysconfig.GetUpperMemPct()) {
 								break
 							}
 						case <-timerCh:

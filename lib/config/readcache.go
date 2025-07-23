@@ -37,7 +37,7 @@ type ReadCache struct {
 }
 
 func NewReadCacheConfig() ReadCache {
-	size, _ := memory.SysMem()
+	size, _ := memory.GetMemMonitor().SysMem()
 	memorySize := toml.Size(size * KB)
 	return ReadCache{
 		ReadPageSize:       "32kb",
