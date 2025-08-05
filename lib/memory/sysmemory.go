@@ -71,6 +71,14 @@ func (m *memoryMonitor) SysMem() (total, available int64) {
 	}
 
 	total, available = ReadSysMemory()
+	if total <= 0 || available <= 0 {
+		if m.totalCache > 0 && m.availableCache > 0 { // cache exist
+			total, available = m.totalCache, m.availableCache
+		} else {
+			total, available = defaultMaxMem, defaultMaxMem
+		}
+		return
+	}
 	m.lastGetTime = now
 	m.totalCache = total
 	m.availableCache = available
@@ -86,7 +94,7 @@ func (m *memoryMonitor) MemUsedPct() float64 {
 
 // return total available memory (kB)
 func ReadSysMemory() (int64, int64) {
-	if info, err := mem.VirtualMemory(); err != nil { // can not read memory, block it.
+	if info, err := mem.VirtualMemory(); err != nil {
 		return defaultMaxMem, 0
 	} else {
 		return int64(info.Total >> 10), int64(info.Available >> 10)
