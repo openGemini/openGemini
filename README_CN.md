@@ -2,7 +2,11 @@
 
 ![color](./images/github_log_591x183.svg)
 
-![license](https://img.shields.io/badge/开源许可证-Apache2.0-green) ![language](https://img.shields.io/badge/语言-Go-blue.svg) ![codeCov](https://img.shields.io/codecov/c/gh/openGemini/openGemini) [![release](https://img.shields.io/github/v/tag/opengemini/opengemini?label=发布版本&color=blue)](https://github.com/opengemini/opengemini/releases)
+![license](https://img.shields.io/badge/开源许可证-Apache2.0-green)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/11007/badge)](https://www.bestpractices.dev/projects/11007)
+![language](https://img.shields.io/badge/语言-Go-blue.svg)
+![codeCov](https://img.shields.io/codecov/c/gh/openGemini/openGemini)
+[![release](https://img.shields.io/github/v/tag/opengemini/opengemini?label=发布版本&color=blue)](https://github.com/opengemini/opengemini/releases)
 
 [English](README.md) | 简体中文
 
