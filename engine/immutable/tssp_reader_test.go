@@ -219,7 +219,7 @@ func TestTableStoreOpen(t *testing.T) {
 	tier1 := uint64(util.Hot)
 	store = NewTableStore(testDir, &lockPath, &tier1, false, conf)
 	store.SetImmTableType(config.TSSTORE)
-	if _, err := store.Open(); err != nil {
+	if _, err := store.Open(nil); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -2332,4 +2332,10 @@ func TestReadMetaBlockByMetaCache(t *testing.T) {
 	cm2, err = f.ReadChunkMetaData(0, midx, nil, fileops.IO_PRIORITY_ULTRA_HIGH)
 	assert.Equal(t, err, nil)
 	assert.Equal(t, len(cm1), len(cm2))
+}
+
+func TestGetFilesAndUnref(t *testing.T) {
+	var files *TSSPFiles
+	allFiles := files.GetFilesAndUnref()
+	assert.Equal(t, len(allFiles), 0)
 }

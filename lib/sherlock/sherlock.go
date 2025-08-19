@@ -22,12 +22,14 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/lib/cpu"
+	"github.com/openGemini/openGemini/lib/cpu/cgroup"
 	"github.com/shirou/gopsutil/v3/mem"
 	"go.uber.org/zap"
 )
 
 type Sherlock struct {
-	opts *options
+	opts        *options
+	isContainer bool
 
 	// stats
 	collectCount    int
@@ -54,8 +56,9 @@ type Sherlock struct {
 // New creates a sherlock dumper.
 func New(opts ...Option) *Sherlock {
 	sherlock := &Sherlock{
-		opts:      newOptions(),
-		collectFn: collectMetrics,
+		opts:        newOptions(),
+		collectFn:   collectMetrics,
+		isContainer: isContainer(),
 	}
 
 	for _, opt := range opts {
@@ -144,7 +147,17 @@ func (s *Sherlock) startDumpLoop() {
 		case <-ticker.C:
 		}
 
-		cpuCore := cpu.GetCpuNum()
+		var cpuCore int
+		if s.isContainer {
+			limit, err := cgroup.GetCPULimit()
+			if err != nil {
+				s.opts.logger.Error("[Sherlock] get CPU core from container env failed", zap.Error(err))
+				return
+			}
+			cpuCore = int(limit)
+		} else {
+			cpuCore = cpu.GetCpuNum()
+		}
 		if cpuCore == 0 {
 			s.opts.logger.Error("[Sherlock] get CPU core failed", zap.Int("core", cpuCore))
 			return

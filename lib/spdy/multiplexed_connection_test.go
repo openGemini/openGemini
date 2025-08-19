@@ -249,10 +249,10 @@ func TestEstablishConnection(t *testing.T) {
 	feature := client.conn.OpenSession()
 	session, err := feature()
 	if err != nil {
-		t.Fatalf(err.Error())
+		t.Fatalf("%s", err.Error())
 	}
 	if data, err := session.Select(); err != nil {
-		t.Errorf(err.Error())
+		t.Errorf("%s", err.Error())
 	} else {
 		if !bytes.Equal([]byte(echo), data) {
 			t.Errorf("expect receive %s, but %s", echo, string(data))
@@ -277,10 +277,10 @@ func TestCloseMultiplexedConnection(t *testing.T) {
 	feature := client.conn.OpenSession()
 	session, err := feature()
 	if err != nil {
-		t.Errorf(err.Error())
+		t.Errorf("%s", err.Error())
 	}
 	if data, err := session.Select(); err != nil {
-		t.Errorf(err.Error())
+		t.Errorf("%s", err.Error())
 	} else {
 		if !bytes.Equal([]byte(echo), data) {
 			t.Errorf("expect receive %s, but %s", echo, string(data))
@@ -320,10 +320,10 @@ func TestCloseSession(t *testing.T) {
 	feature := client.conn.OpenSession()
 	session, err := feature()
 	if err != nil {
-		t.Errorf(err.Error())
+		t.Errorf("%s", err.Error())
 	}
 	if data, err := session.Select(); err != nil {
-		t.Errorf(err.Error())
+		t.Errorf("%s", err.Error())
 	} else {
 		if !bytes.Equal([]byte(echo), data) {
 			t.Errorf("expect receive %s, but %s", echo, string(data))

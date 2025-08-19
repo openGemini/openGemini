@@ -441,7 +441,7 @@ func Test_batchReadWalFile(t *testing.T) {
 		return errors.New("mock callback error")
 	}
 
-	err = wal.replayWalFile(cxt, tmpFile, callback)
+	err = wal.replayWalFile(cxt, tmpFile, false, callback)
 	require.Errorf(t, err, "mock callback error")
 }
 
@@ -485,15 +485,18 @@ func TestStreamWalManager_Load(t *testing.T) {
 	lock := ""
 	dir := t.TempDir()
 	defer streamWalConf(dir)()
+	replayDir := path.Join(dir, fmt.Sprintf("/wal/db/2/rp/001_0_0_0"))
+	streamDir := path.Join(replayDir, StreamWalDir)
+	os.MkdirAll(streamDir, 0600)
 
 	swm := NewStreamWalManager()
-	swm.InitStreamHandler(func(rows influx.Rows, fileNames []string) error { return nil })
+	swm.InitStreamHandler(func(rows influx.Rows, isLast bool, fileNames []string) error { return nil })
 	now := time.Now().UnixNano()
 	maxTime := now - now%1e9
 
 	buf := make([]byte, 1024)
 	var createFile = func(name string) {
-		file := path.Join(dir, fmt.Sprintf("/%s/%s.wal", StreamWalDir, name))
+		file := path.Join(streamDir, fmt.Sprintf("/%s.wal", name))
 		require.NoError(t, os.WriteFile(file, buf, 0600))
 	}
 
@@ -502,10 +505,10 @@ func TestStreamWalManager_Load(t *testing.T) {
 	createFile(fmt.Sprintf("%d_%d", maxTime, 0))
 	createFile(fmt.Sprintf("%d_%s", maxTime, "aaabbbcccaaabbbccca"))
 
-	require.NoError(t, swm.Load(dir, &lock))
+	require.NoError(t, swm.Load(replayDir, &lock))
 	require.Equal(t, 1, len(swm.loadFiles))
 
-	_, err := swm.Replay(context.Background(), 0, 0, 0)
+	err := swm.Replay(context.Background(), 0, false)
 	require.NoError(t, err)
 
 	swm.CleanLoadFiles()
@@ -514,10 +517,15 @@ func TestStreamWalManager_Load(t *testing.T) {
 func TestStreamWalManager_Reply(t *testing.T) {
 	dir := t.TempDir()
 	defer streamWalConf(dir)()
+	replayDir := path.Join(dir, fmt.Sprintf("/wal/db/2/rp/001_0_0_0"))
+	streamDir := path.Join(replayDir, StreamWalDir)
+	os.MkdirAll(streamDir, 0600)
 	var other influx.Row
 	swm := NewStreamWalManager()
-	swm.InitStreamHandler(func(rows influx.Rows, fileNames []string) error {
-		other = rows[1]
+	swm.InitStreamHandler(func(rows influx.Rows, isLast bool, fileNames []string) error {
+		if !isLast {
+			other = rows[1]
+		}
 		return nil
 	})
 	rows, walBinary := buildRows(t, []int64{100, 10000, 3000})
@@ -525,14 +533,14 @@ func TestStreamWalManager_Reply(t *testing.T) {
 	now := time.Now().UnixNano()
 	maxTime := now - now%1e9
 
-	file := path.Join(dir, fmt.Sprintf("/%s/%s.wal", StreamWalDir, fmt.Sprintf("%d_%d", maxTime, now)))
+	file := path.Join(streamDir, fmt.Sprintf("/%d_%d.wal", maxTime, now))
 	require.NoError(t, os.WriteFile(file, walBinary, 0600))
 
 	lock := ""
-	require.NoError(t, swm.Load(dir, &lock))
+	require.NoError(t, swm.Load(replayDir, &lock))
 	require.Equal(t, 1, len(swm.loadFiles))
 
-	_, err := swm.Replay(context.Background(), 8000, 0, 0)
+	err := swm.Replay(context.Background(), 2, true)
 	require.NoError(t, err)
 
 	exp := rows[1]

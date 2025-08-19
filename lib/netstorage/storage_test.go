@@ -15,18 +15,21 @@
 package netstorage_test
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 	"time"
 
+	"github.com/agiledragon/gomonkey/v2"
 	"github.com/openGemini/openGemini/lib/metaclient"
+	"github.com/openGemini/openGemini/lib/msgservice"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.etcd.io/etcd/raft/v3/raftpb"
 )
 
 func TestWriteRows(t *testing.T) {
@@ -132,6 +135,17 @@ func TestNetStorage_ShowTagKeys(t *testing.T) {
 	require.ErrorContains(t, err, fmt.Sprintf("no connections available, node: %d", exitNodeID))
 }
 
+func TestNetStorage_DropSeries(t *testing.T) {
+	store := netstorage.NewNetStorage(&MockMetaClient{})
+	condition := &influxql.BinaryExpr{
+		LHS: &influxql.VarRef{Val: "A", Type: influxql.String},
+		RHS: &influxql.StringLiteral{Val: "a"},
+		Op:  influxql.EQ}
+	err := store.DropSeries(exitNodeID, "db0", []uint32{0}, []string{"cpu"}, condition)
+	require.ErrorContains(t, err, "no connections available, node: 1")
+	require.ErrorContains(t, err, fmt.Sprintf("no connections available, node: %d", exitNodeID))
+}
+
 func TestTransferLeadership(t *testing.T) {
 	store := netstorage.NewNetStorage(&MockMetaClient{})
 	store.TransferLeadership("db0", 1, 0, 0)
@@ -149,12 +163,153 @@ func TestShowSeries(t *testing.T) {
 	require.ErrorContains(t, err, fmt.Sprintf("no data node"))
 }
 
-func TestNetStorage_SetRaftMsg(t *testing.T) {
+func TestNetStorage_GetShardSplitPoints(t *testing.T) {
 	store := netstorage.NewNetStorage(&MockMetaClient{})
-	err := store.SendRaftMessages(1, "db0", 0, raftpb.Message{})
-	assert.Equal(t, nil, err)
-	err = store.SendRaftMessages(2, "db0", 0, raftpb.Message{})
-	assert.Equal(t, nil, err)
-	err = store.SendRaftMessages(1024, "db0", 0, raftpb.Message{})
-	assert.Equal(t, "no connections available, node: 1024, 192.168.0.1:8400", err.Error())
+	patches := gomonkey.ApplyPrivateMethod(store, "ddlRequestWithNode", func(_ *netstorage.NetStorage) (interface{}, error) {
+		return []int64{1}, nil
+	})
+
+	defer patches.Reset()
+	_, err := store.GetShardSplitPoints(nil, "db0", 1, 0, nil)
+	assert.EqualError(t, err, "invalid data type, exp: *msgservice.GetShardSplitPointsResponse, got: []int64")
+}
+
+func TestNetStorage_handleDeleteReq(t *testing.T) {
+	store := netstorage.NewNetStorage(&MockMetaClient{})
+	patches := gomonkey.ApplyPrivateMethod(store, "ddlRequestWithNode", func(_ *netstorage.NetStorage) (interface{}, error) {
+		return []int64{1}, nil
+	})
+
+	defer patches.Reset()
+	err := store.DeleteDatabase(nil, "db0", 1)
+	assert.EqualError(t, err, "invalid data type, exp: *msgservice.DeleteResponse, got: []int64")
+}
+
+func TestNetStorage_TagValues(t *testing.T) {
+	store := netstorage.NewNetStorage(&MockMetaClient{})
+	patches := gomonkey.ApplyPrivateMethod(store, "ddlRequestWithNodeId", func(_ *netstorage.NetStorage) (interface{}, error) {
+		return []int64{1}, nil
+	})
+
+	defer patches.Reset()
+	_, err := store.TagValues(1, "db0", nil, nil, nil, 1, false)
+	assert.EqualError(t, err, "invalid data type, exp: *msgservice.ShowTagValuesResponse, got: []int64")
+}
+
+func TestNetStorage_TagValuesCardinality(t *testing.T) {
+	store := netstorage.NewNetStorage(&MockMetaClient{})
+	patches := gomonkey.ApplyPrivateMethod(store, "ddlRequestWithNodeId", func(_ *netstorage.NetStorage) (interface{}, error) {
+		return []int64{1}, nil
+	})
+
+	defer patches.Reset()
+	_, err := store.TagValuesCardinality(1, "db0", nil, nil, nil)
+	assert.EqualError(t, err, "invalid data type, exp: *msgservice.ShowTagValuesCardinalityResponse, got: []int64")
+}
+
+func TestNetStorage_SeriesCardinality(t *testing.T) {
+	store := netstorage.NewNetStorage(&MockMetaClient{})
+	patches := gomonkey.ApplyPrivateMethod(store, "ddlRequestWithNodeId", func(_ *netstorage.NetStorage) (interface{}, error) {
+		return []int64{1}, nil
+	})
+
+	defer patches.Reset()
+	_, err := store.SeriesCardinality(1, "db0", nil, nil, nil)
+	assert.EqualError(t, err, "invalid data type, exp: *msgservice.SeriesCardinalityResponse, got: []int64")
+}
+
+func TestNetStorage_SeriesExactCardinality(t *testing.T) {
+	store := netstorage.NewNetStorage(&MockMetaClient{})
+	patches := gomonkey.ApplyPrivateMethod(store, "ddlRequestWithNodeId", func(_ *netstorage.NetStorage) (interface{}, error) {
+		return []int64{1}, nil
+	})
+
+	defer patches.Reset()
+	_, err := store.SeriesExactCardinality(1, "db0", nil, nil, nil)
+	assert.EqualError(t, err, "invalid data type, exp: *msgservice.SeriesExactCardinalityResponse, got: []int64")
+}
+
+func TestNetStorage_ShowTagKeys2(t *testing.T) {
+	store := netstorage.NewNetStorage(&MockMetaClient{})
+	patches := gomonkey.ApplyPrivateMethod(store, "ddlRequestWithNodeId", func(_ *netstorage.NetStorage) (interface{}, error) {
+		return []int64{1}, nil
+	})
+
+	defer patches.Reset()
+	_, err := store.ShowTagKeys(1, "db0", nil, nil, nil)
+	assert.EqualError(t, err, "invalid data type, exp: *msgservice.ShowTagKeysResponse, got: []int64")
+}
+
+func TestNetStorage_ShowSeries(t *testing.T) {
+	store := netstorage.NewNetStorage(&MockMetaClient{})
+	patches := gomonkey.ApplyPrivateMethod(store, "ddlRequestWithNodeId", func(_ *netstorage.NetStorage) (interface{}, error) {
+		return []int64{1}, nil
+	})
+
+	defer patches.Reset()
+	_, err := store.ShowSeries(1, "db0", nil, nil, nil, true)
+	assert.EqualError(t, err, "invalid data type, exp: *msgservice.SeriesKeysResponse, got: []int64")
+}
+
+func TestNetStorage_GetQueriesOnNode2(t *testing.T) {
+	store := netstorage.NewNetStorage(&MockMetaClient{})
+	patches := gomonkey.ApplyPrivateMethod(store, "ddlRequestWithNodeId", func(_ *netstorage.NetStorage) (interface{}, error) {
+		return []int64{1}, nil
+	})
+
+	defer patches.Reset()
+	_, err := store.GetQueriesOnNode(1)
+	assert.EqualError(t, err, "invalid data type, exp: *msgservice.ShowQueriesResponse, got: []int64")
+}
+
+func TestNetStorage_KillQueryOnNode2(t *testing.T) {
+	store := netstorage.NewNetStorage(&MockMetaClient{})
+	patches := gomonkey.ApplyPrivateMethod(store, "ddlRequestWithNodeId", func(_ *netstorage.NetStorage) (interface{}, error) {
+		return []int64{1}, nil
+	})
+
+	defer patches.Reset()
+	err := store.KillQueryOnNode(1, 1)
+	assert.EqualError(t, err, "invalid data type, exp: *msgservice.KillQueryResponse, got: []int64")
+}
+
+func TestNetStorage_DeleteMeasurement(t *testing.T) {
+	store := netstorage.NewNetStorage(&MockMetaClient{})
+	patches := gomonkey.ApplyPrivateMethod(store, "handleDeleteReq", func(_ *netstorage.NetStorage) error {
+		return nil
+	})
+
+	defer patches.Reset()
+	err := store.DeleteMeasurement(nil, "db0", "rp1", "mst", nil)
+	assert.NoError(t, err)
+}
+
+func TestNetStorage_DeleteRetentionPolicy(t *testing.T) {
+	store := netstorage.NewNetStorage(&MockMetaClient{})
+	patches := gomonkey.ApplyPrivateMethod(store, "handleDeleteReq", func(_ *netstorage.NetStorage) error {
+		return nil
+	})
+
+	defer patches.Reset()
+	err := store.DeleteRetentionPolicy(nil, "db0", "rp0", 1)
+	assert.NoError(t, err)
+}
+
+func TestNetStorage_DeleteRetentionPolicy2(t *testing.T) {
+	store := netstorage.NewNetStorage(&MockMetaClient{})
+	patches := gomonkey.NewPatches()
+	defer patches.Reset()
+	patches.ApplyMethod((*msgservice.Requester)(nil), "InitWithNode", func(_ *msgservice.Requester) {
+	})
+	patches.ApplyMethod((*msgservice.Requester)(nil), "DDL", func(_ *msgservice.Requester) (interface{}, error) {
+		return nil, errors.New("DDL Failed")
+	})
+	err := store.DeleteRetentionPolicy(nil, "db0", "rp0", 1)
+	assert.EqualError(t, err, "DDL Failed")
+}
+
+func TestNetStorage_SendClearEvents(t *testing.T) {
+	store := netstorage.NewNetStorage(&MockMetaClient{})
+	err := store.SendClearEvents(1, nil)
+	assert.Error(t, err)
 }

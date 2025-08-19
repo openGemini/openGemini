@@ -128,7 +128,11 @@ func (s *Server) Open() error {
 	s.Listener = ln
 
 	if s.config.Common.PprofEnabled {
-		go util.OpenPprofServer(s.config.Common.PprofBindAddress, util.MetaPprofPort)
+		port := s.config.Common.MetaPprofPort
+		if port == "" {
+			port = util.MetaPprofPort
+		}
+		go util.OpenPprofServer(s.config.Common.PprofBindAddress, port)
 	}
 
 	// Multiplex listener.
@@ -159,7 +163,7 @@ func (s *Server) Open() error {
 	}
 
 	if s.sherlockService != nil {
-		s.sherlockService.Open()
+		util.MustRun(s.sherlockService.Open)
 	}
 
 	s.iodetector = iodetector.OpenIODetection(s.config.IODetector)

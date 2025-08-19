@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.etcd.io/etcd/raft/v3"
@@ -199,6 +200,8 @@ func TestStorageFirstIndex(t *testing.T) {
 }
 
 func TestStorageAppend(t *testing.T) {
+	config.EntryFileRWType = 1
+	defer func() { config.EntryFileRWType = 2 }()
 	ents := []raftpb.Entry{{Index: 3, Term: 3}, {Index: 4, Term: 4}, {Index: 5, Term: 5}}
 	tests := []struct {
 		name    string
@@ -328,6 +331,8 @@ func TestEntryFile(t *testing.T) {
 }
 
 func TestStorageBig(t *testing.T) {
+	config.EntryFileRWType = 1
+	defer func() { config.EntryFileRWType = 2 }()
 	test := func(t *testing.T) {
 		dir := t.TempDir()
 
@@ -538,6 +543,8 @@ func TestRaftDiskStorage_AddEntries(t *testing.T) {
 }
 
 func TestStorageEntrySize(t *testing.T) {
+	config.EntryFileRWType = 1
+	defer func() { config.EntryFileRWType = 2 }()
 	temp := t.TempDir()
 	rds, err := Init(temp, 0)
 	require.NoError(t, err)
@@ -589,6 +596,8 @@ func TestStorageBackSync(t *testing.T) {
 }
 
 func TestStorageBackSyncErr(t *testing.T) {
+	config.EntryFileRWType = 1
+	defer func() { config.EntryFileRWType = 2 }()
 	temp := t.TempDir()
 	rds, err := Init(temp, 0)
 	require.NoError(t, err)

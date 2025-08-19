@@ -80,20 +80,20 @@ func TestGetRaftEntryLog(t *testing.T) {
 	}
 	// write data
 	fixedSizeSlice := make([]byte, 2048)
-	filewrap.WriteSlice(100, fixedSizeSlice)
+	filewrap.WriteSlice(0, 0, 100, fixedSizeSlice, false, false)
 	// write slot
 	entry := entry(make([]byte, entrySize))
 	marshalEntry(entry, 1, 1, 1, 100)
-	filewrap.WriteAt(0, entry)
+	filewrap.WriteAt(0, 0, entry, false)
 
 	raftEntry, _ := logFile.getRaftEntry(0)
 	require.NotNil(t, raftEntry)
 
 	// Simulate the file damage scenario.
-	filewrap.WriteSlice(3048, fixedSizeSlice)
+	filewrap.WriteSlice(0, 0, 3048, fixedSizeSlice, false, false)
 	entry2 := make([]byte, entrySize)
 	marshalEntry(entry2, 1, 1, 1, 6000)
-	filewrap.WriteAt(0, entry2)
+	filewrap.WriteAt(0, 0, entry2, false)
 
 	raftEntry, err := logFile.getRaftEntry(0)
 	require.NotNil(t, raftEntry)
@@ -112,18 +112,18 @@ func (e *memoryFileWrap) Size() int {
 	return len(e.data)
 }
 
-func (e *memoryFileWrap) GetEntryData(start, end int) []byte {
+func (e *memoryFileWrap) GetEntryData(slotIdx int, start, end int, isMeta bool) []byte {
 	return e.data[start:end]
 }
 func (e *memoryFileWrap) Write(dat []byte) (int, error) {
 	e.data = append(e.data, dat...)
 	return len(e.data), nil
 }
-func (e *memoryFileWrap) WriteAt(offset int64, dat []byte) (int, error) {
+func (e *memoryFileWrap) WriteAt(slotIdx int, offset int64, dat []byte, isMeta bool) (int, error) {
 	copy(e.data[offset:], dat)
 	return len(e.data), nil
 }
-func (e *memoryFileWrap) WriteSlice(offset int64, dat []byte) error {
+func (e *memoryFileWrap) WriteSlice(slotIdx int, endSlotIdx int, offset int64, dat []byte, isMeta bool, clearSlots bool) error {
 	if int(offset)+unit32Size+len(dat) >= len(e.data) {
 		e.data = append(e.data, make([]byte, int(offset)-len(e.data)+unit32Size+len(dat))...)
 	}
@@ -132,7 +132,7 @@ func (e *memoryFileWrap) WriteSlice(offset int64, dat []byte) error {
 	copy(dst[unit32Size:], dat)                                    // data
 	return nil
 }
-func (e *memoryFileWrap) ReadSlice(offset int64) []byte {
+func (e *memoryFileWrap) ReadSlice(slotIdx int, offset int64, isMeta bool) []byte {
 	sz := encoding.UnmarshalUint32(e.data[offset:])
 	start := offset + unit32Size
 	next := int(start) + int(sz)
@@ -141,7 +141,7 @@ func (e *memoryFileWrap) ReadSlice(offset int64) []byte {
 	}
 	return e.data[start:next]
 }
-func (e *memoryFileWrap) SliceSize(offset int) int {
+func (e *memoryFileWrap) SliceSize(slotIdx int, offset int) int {
 	sz := encoding.UnmarshalUint32(e.data[offset:])
 	return unit32Size + int(sz)
 }

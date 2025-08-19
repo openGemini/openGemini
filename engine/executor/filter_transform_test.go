@@ -21,6 +21,7 @@ import (
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/stretchr/testify/assert"
 )
 
 func buildFilterSchemaForProm() (*executor.QuerySchema, *query.ProcessorOptions) {
@@ -58,7 +59,8 @@ func FilterTransformTestBase(t *testing.T, chunks1 []executor.Chunk, rChunk exec
 	schema, opt := buildFilterSchemaForProm()
 	trans := executor.NewFilterTransform(source1.Output.RowDataType, outRowDataType, schema, opt)
 	checkResult := func(chunk executor.Chunk) error {
-		PromResultCompareMultiCol(chunk, rChunk, t)
+		err := PromResultCompareMultiCol(chunk, rChunk)
+		assert.Equal(t, err, nil)
 		return nil
 	}
 	sink := NewSinkFromFunction(outRowDataType, checkResult)
@@ -78,8 +80,8 @@ func BuildFilterInChunk1() executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("m1")
 	chunk.AppendTimes([]int64{10000000000, 10000000000, 10000000000, 10000000000, 10000000000, 10000000000, 10000000000, 10000000000, 10000000000})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 0)
-	chunk.AddIntervalIndex(0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 0)
+	chunk.AppendIntervalIndex(0)
 	chunk.Column(0).AppendFloatValues([]float64{1, 4000, 2, 5000, 3, 6000, 4, 7000, 5})
 	chunk.Column(0).AppendManyNotNil(9)
 	return chunk
@@ -90,7 +92,7 @@ func BuildFilterResult1() []executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk1 := b.NewChunk("")
 	chunk1.AppendTimes([]int64{10000000000, 10000000000, 10000000000, 10000000000})
-	chunk1.AddTagAndIndex(*ParseChunkTags("tk1=1"), 0)
+	chunk1.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 0)
 	AppendFloatValues(chunk1, 0, []float64{4000, 5000, 6000, 7000}, []bool{true, true, true, true})
 	return []executor.Chunk{chunk1}
 }

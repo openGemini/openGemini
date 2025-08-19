@@ -66,7 +66,7 @@ const (
 	//LPAREN // (
 	//RPAREN // )
 	//COMMA       // ,
-	COLON // :
+	//COLON // :
 	//DOUBLECOLON // ::
 	//SEMICOLON   // ;
 	//DOT // .
@@ -264,6 +264,7 @@ var tokens = [...]string{
 	GROUPS:         "GROUPS",
 	IN:             "IN",
 	NOT:            "NOT",
+	NOTIN:          "NOTIN",
 	EXISTS:         "EXISTS",
 	INF:            "INF",
 	INSERT:         "INSERT",
@@ -318,10 +319,12 @@ var tokens = [...]string{
 	HINT:           "HINT",
 	HOT:            "HOT",
 	WARM:           "WARM",
+	INDEXCOLD:      "INDEXCOLD",
 	INDEX:          "INDEX",
 	FULL:           "FULL",
 	OUTER:          "OUTER",
 	JOIN:           "JOIN",
+	UNION:          "UNION",
 	FILL:           "FILL",
 	REPLICANUM:     "REPLICANUM",
 	INDEXTYPE:      "INDEXTYPE",
@@ -340,6 +343,20 @@ var tokens = [...]string{
 	COMPACT:        "COMPACT",
 	AUTO:           "AUTO",
 	EXCEPT:         "EXCEPT",
+	SHARDMERGE:     "SHARDMERGE",
+	INNER:          "INNER",
+	LEFT:           "LEFT",
+	RIGHT:          "RIGHT",
+	GRAPH:          "GRAPH",
+	NODE:           "NODE",
+	EDGE:           "EDGE",
+	TTL:            "TTL",
+	LBRACKET:       "{",
+	RBRACKET:       "}",
+	LSQUARE:        "[",
+	RSQUARE:        "]",
+	RETURN:         "RETURN",
+	MULTIHOP:       "*..",
 }
 
 var keywords map[string]int
@@ -385,6 +402,8 @@ var operatorMap = map[Token]int{
 	MATCHPHRASE: MATCHPHRASE,
 	IPINRANGE:   IPINRANGE,
 	LIKE:        LIKE,
+	IN:          IN,
+	NOTIN:       NOTIN,
 }
 
 // Precedence returns the operator precedence of the binary operator token.
@@ -394,7 +413,7 @@ func (tok Token) Precedence() int {
 		return 1
 	case AND:
 		return 2
-	case EQ, NEQ, EQREGEX, NEQREGEX, LT, LTE, GT, GTE:
+	case EQ, NEQ, EQREGEX, NEQREGEX, LT, LTE, GT, GTE, IN, NOTIN:
 		return 3
 	case ADD, SUB, BITWISE_OR, BITWISE_XOR:
 		return 4

@@ -190,7 +190,7 @@ func (s *MultiplexedSession) Select() ([]byte, error) {
 	case <-s.closed:
 		return nil, errno.NewError(errno.SelectClosedConn, s.conn.RemoteAddr(), s.conn.LocalAddr())
 	case <-timer.C:
-		return nil, errno.NewError(errno.SessionSelectTimeout, s.selectTimeout)
+		return nil, errno.NewError(errno.SessionSelectTimeout, s.selectTimeout, s.conn.RemoteAddr(), s.conn.LocalAddr())
 	}
 }
 

@@ -191,40 +191,47 @@ type QuerySchema struct {
 	// Options is interface now, it must be cloned in internal
 	opt hybridqp.Options
 
-	joinCases         []*influxql.Join
-	unnestCases       []*influxql.Unnest
-	hasFieldCondition bool
-	planType          PlanType
-	PromSubCalls      []*influxql.PromSubCall
+	joinCases          []*influxql.Join
+	unionCases         []*influxql.Union
+	unnestCases        []*influxql.Unnest
+	hasFieldCondition  bool
+	planType           PlanType
+	PromSubCalls       []*influxql.PromSubCall
+	isCompareCall      bool
+	InConditons        []*influxql.InCondition
+	isInSubquerySchema bool
+	isDistinct         bool
 }
 
 func NewQuerySchema(fields influxql.Fields, columnNames []string, opt hybridqp.Options, sortFields influxql.SortFields) *QuerySchema {
 	schema := &QuerySchema{
-		tables:         make(map[string]*QueryTable),
-		queryFields:    fields,
-		columnNames:    columnNames,
-		fields:         make(influxql.Fields, 0, len(fields)),
-		fieldsRef:      make(influxql.VarRefs, 0, len(fields)),
-		mapDeriveType:  make(map[influxql.Expr]influxql.DataType),
-		mapping:        make(map[influxql.Expr]influxql.VarRef),
-		symbols:        make(map[string]influxql.VarRef),
-		calls:          make(map[string]*influxql.Call),
-		origCalls:      make(map[string]*influxql.Call),
-		refs:           make(map[string]*influxql.VarRef),
-		binarys:        make(map[string]*influxql.BinaryExpr),
-		maths:          make(map[string]*influxql.Call),
-		strings:        make(map[string]*influxql.Call),
-		labelCalls:     make(map[string]*influxql.Call),
-		promTimeCalls:  make(map[string]*influxql.Call),
-		slidingWindow:  make(map[string]*influxql.Call),
-		holtWinters:    make([]*influxql.Field, 0),
-		compositeCall:  make(map[string]*hybridqp.OGSketchCompositeOperator),
-		promNestedCall: make(map[string]*hybridqp.PromNestedCall),
-		i:              0,
-		notIncI:        false,
-		opt:            opt,
-		sources:        nil,
-		planType:       UNKNOWN,
+		tables:             make(map[string]*QueryTable),
+		queryFields:        fields,
+		columnNames:        columnNames,
+		fields:             make(influxql.Fields, 0, len(fields)),
+		fieldsRef:          make(influxql.VarRefs, 0, len(fields)),
+		mapDeriveType:      make(map[influxql.Expr]influxql.DataType),
+		mapping:            make(map[influxql.Expr]influxql.VarRef),
+		symbols:            make(map[string]influxql.VarRef),
+		calls:              make(map[string]*influxql.Call),
+		origCalls:          make(map[string]*influxql.Call),
+		refs:               make(map[string]*influxql.VarRef),
+		binarys:            make(map[string]*influxql.BinaryExpr),
+		maths:              make(map[string]*influxql.Call),
+		strings:            make(map[string]*influxql.Call),
+		labelCalls:         make(map[string]*influxql.Call),
+		promTimeCalls:      make(map[string]*influxql.Call),
+		slidingWindow:      make(map[string]*influxql.Call),
+		holtWinters:        make([]*influxql.Field, 0),
+		compositeCall:      make(map[string]*hybridqp.OGSketchCompositeOperator),
+		promNestedCall:     make(map[string]*hybridqp.PromNestedCall),
+		i:                  0,
+		notIncI:            false,
+		opt:                opt,
+		sources:            nil,
+		planType:           UNKNOWN,
+		InConditons:        opt.GetInConditions(),
+		isInSubquerySchema: false,
 	}
 	if len(sortFields) > 0 && len(opt.GetSortFields()) == 0 {
 		schema.opt.SetSortFields(sortFields)
@@ -244,9 +251,10 @@ func NewQuerySchema(fields influxql.Fields, columnNames []string, opt hybridqp.O
 }
 
 func NewQuerySchemaWithJoinCase(fields influxql.Fields, sources influxql.Sources, columnNames []string, opt hybridqp.Options,
-	joinCases []*influxql.Join, unnest []*influxql.Unnest, sortFields influxql.SortFields) *QuerySchema {
+	joinCases []*influxql.Join, unionCases []*influxql.Union, unnest []*influxql.Unnest, sortFields influxql.SortFields) *QuerySchema {
 	q := NewQuerySchemaWithSources(fields, sources, columnNames, opt, sortFields)
-	q.joinCases = joinCases
+	q.SetJoinCases(joinCases)
+	q.SetUnionCases(unionCases)
 	q.SetUnnests(unnest)
 	return q
 }
@@ -256,7 +264,7 @@ func NewQuerySchemaWithSources(fields influxql.Fields, sources influxql.Sources,
 		sortFields = nil
 	}
 	schema := NewQuerySchema(fields, columnNames, opt, sortFields)
-	schema.sources = sources
+	schema.SetSources(sources)
 	if !schema.Options().IsAscending() && schema.MatchPreAgg() && len(schema.opt.GetGroupBy()) == 0 {
 		schema.Options().SetAscending(true)
 	}
@@ -301,7 +309,7 @@ func (qs *QuerySchema) init() {
 			}
 		}
 		clone.Expr = qs.rewriteBaseCallTransformExprCall(clone.Expr)
-		influxql.Walk(qs, clone.Expr)
+		qs.RecordExpr(clone.Expr)
 		clone.Expr = influxql.RewriteExpr(clone.Expr, qs.rewriteExpr)
 		qs.fields = append(qs.fields, clone)
 	}
@@ -316,6 +324,19 @@ func (qs *QuerySchema) init() {
 	}
 	qs.InitFieldCondition()
 }
+
+func (qs *QuerySchema) RecordExpr(expr influxql.Node) {
+	if expr != nil {
+		// Walk thru the expression, to construct map of expressions, using single string representation
+		qsev := QuerySchemaExpressionVisitor{
+			QuerySchema: qs,
+			ExprString:  influxql.NewNestedNodeStringRepresentation(expr),
+		}
+		influxql.Walk(&qsev, expr)
+	}
+}
+
+func (qs *QuerySchema) IsCompareCall() bool { return qs.isCompareCall }
 
 func (qs *QuerySchema) GetColumnNames() []string {
 	return qs.columnNames
@@ -336,15 +357,21 @@ func (qs *QuerySchema) CloneField(f *influxql.Field) *influxql.Field {
 	return clone
 }
 
+// Function does in-place rewrite, not cloning the original expr.
+// Rewrite is done in node-to-args fashion to not rewrite arguments of mean() and spread()
+// hence done there not using inflixql.Rewrite().
 func (qs *QuerySchema) rewriteBaseCallTransformExprCall(expr influxql.Expr) influxql.Expr {
 	if expr == nil {
 		return nil
 	}
 	switch expr := expr.(type) {
 	case *influxql.BinaryExpr:
-		return &influxql.BinaryExpr{Op: expr.Op, LHS: qs.rewriteBaseCallTransformExprCall(expr.LHS), RHS: qs.rewriteBaseCallTransformExprCall(expr.RHS), ReturnBool: expr.ReturnBool}
+		expr.LHS = qs.rewriteBaseCallTransformExprCall(expr.LHS)
+		expr.RHS = qs.rewriteBaseCallTransformExprCall(expr.RHS)
+		return expr
 	case *influxql.ParenExpr:
-		return &influxql.ParenExpr{Expr: qs.rewriteBaseCallTransformExprCall(expr.Expr)}
+		expr.Expr = qs.rewriteBaseCallTransformExprCall(expr.Expr)
+		return expr
 	case *influxql.Call:
 		if expr.Name == "mean" {
 			replacement := qs.meanToSumDivCount(expr)
@@ -362,20 +389,23 @@ func (qs *QuerySchema) rewriteBaseCallTransformExprCall(expr influxql.Expr) infl
 			}
 			qs.mapDeriveType[replacement] = typ
 			return replacement
-		} else {
-			for i, arg := range expr.Args {
-				expr.Args[i] = qs.rewriteBaseCallTransformExprCall(arg)
-			}
 		}
-		return influxql.CloneExpr(expr)
+
+		for i, arg := range expr.Args {
+			expr.Args[i] = qs.rewriteBaseCallTransformExprCall(arg)
+		}
+		return expr
+	case *influxql.CaseWhenExpr:
+		// support for mean() and spread() in case when is omitted.
+		return expr
 	default:
-		return influxql.CloneExpr(expr)
+		return expr
 	}
 }
 
 func (qs *QuerySchema) meanToSumDivCount(call *influxql.Call) influxql.Expr {
 	lhs := &influxql.Call{Name: "sum", Args: nil}
-	lhs.Args = append(lhs.Args, influxql.CloneExpr(call.Args[0]))
+	lhs.Args = append(lhs.Args, call.Args[0])
 	rhs := &influxql.Call{Args: nil}
 	if qs.opt.IsPromQuery() {
 		rhs.Name = "count_prom"
@@ -383,15 +413,17 @@ func (qs *QuerySchema) meanToSumDivCount(call *influxql.Call) influxql.Expr {
 		rhs.Name = "count"
 	}
 	rhs.Args = append(rhs.Args, influxql.CloneExpr(call.Args[0]))
+	// LHS now refers to original mean arguments, RHS uses clone of them
 	be := &influxql.BinaryExpr{Op: influxql.DIV, LHS: lhs, RHS: rhs}
 	return be
 }
 
 func (qs *QuerySchema) spreadToMaxSubMin(call *influxql.Call) influxql.Expr {
 	lhs := &influxql.Call{Name: "max", Args: nil}
-	lhs.Args = append(lhs.Args, influxql.CloneExpr(call.Args[0]))
+	lhs.Args = append(lhs.Args, call.Args[0])
 	rhs := &influxql.Call{Name: "min", Args: nil}
 	rhs.Args = append(rhs.Args, influxql.CloneExpr(call.Args[0]))
+	// LHS now refers to original spread arguments, RHS uses clone of them
 	be := &influxql.BinaryExpr{Op: influxql.SUB, LHS: lhs, RHS: rhs}
 	return be
 }
@@ -521,6 +553,10 @@ func (qs *QuerySchema) HasSubQuery() bool {
 		return true
 	}
 	return false
+}
+
+func (qs *QuerySchema) SetSources(sources influxql.Sources) {
+	qs.sources = sources
 }
 
 func (qs *QuerySchema) Sources() influxql.Sources {
@@ -793,6 +829,18 @@ func (qs *QuerySchema) HasFieldCondition() bool {
 	return qs.hasFieldCondition
 }
 
+func (qs *QuerySchema) HasInCondition() bool {
+	return len(qs.InConditons) > 0
+}
+
+func (qs *QuerySchema) IsInSubquerySchema() bool {
+	return qs.isInSubquerySchema
+}
+
+func (qs *QuerySchema) ClearInConditions() {
+	qs.InConditons = nil
+}
+
 func (qs *QuerySchema) IsMultiMeasurements() bool {
 	if qs.sources == nil {
 		return false
@@ -928,7 +976,7 @@ func (qs *QuerySchema) CountDistinct() *influxql.Call {
 
 func (qs *QuerySchema) HasCastorCall() bool {
 	for _, v := range qs.calls {
-		if v.Name == "castor" {
+		if strings.HasPrefix(v.Name, "castor") {
 			return true
 		}
 	}
@@ -995,69 +1043,75 @@ func (qs *QuerySchema) AddHoltWinters(call *influxql.Call, alias string) {
 	qs.holtWinters = append(qs.holtWinters, f)
 }
 
-func (qs *QuerySchema) Visit(n influxql.Node) influxql.Visitor {
+type QuerySchemaExpressionVisitor struct {
+	QuerySchema *QuerySchema
+	ExprString  *influxql.NestedNodeStringRepresentation
+}
+
+func (qsev *QuerySchemaExpressionVisitor) Visit(n influxql.Node) influxql.Visitor {
 	expr, ok := n.(influxql.Expr)
 	if !ok {
-		return qs
+		return qsev
 	}
 
-	key := expr.String()
+	key := qsev.ExprString.NodeString(expr)
+	qs := qsev.QuerySchema
 
 	switch n := n.(type) {
 	case *influxql.BinaryExpr:
 		qs.addBinary(key, n)
-		return qs
+		return qsev
 	case *influxql.Call:
 		if qs.isSlidingWindow(n) {
 			qs.AddSlidingWindow(key, n)
 			qs.mapSymbol(key, expr)
-			return qs
+			return qsev
 		}
 		if qs.isMathFunction(n) || op.IsProjectOp(n) {
 			qs.AddMath(key, n)
-			return qs
+			return qsev
 		}
 		if qs.isStringFunction(n) {
 			qs.AddString(key, n)
-			return qs
+			return qsev
 		}
 		if qs.isLabelFunction(n) {
 			qs.AddLabelCalls(key, n)
-			return qs
+			return qsev
 		}
 
 		if qs.isPromTimeFunction(n) {
 			qs.AddPromTimeCalls(key, n)
-			return qs
+			return qsev
 		}
 
 		if qs.isCountDistinct(n) {
 			qs.countDistinct = n
 			qs.mapSymbol(key, expr)
-			return qs
+			return qsev
 		}
 
 		if qs.isPercentileOGSketch(n) {
 			qs.genOGSketchOperator(n)
-			return qs
+			return qsev
 		}
 
 		if qs.IsPromNestedCall(n) {
 			qs.genPromNestedCall(n)
-			return qs
+			return qsev
 		}
 
 		if qs.opt.IsRangeVectorSelector() {
 			for name := range qs.calls {
 				if strings.Contains(name, key) {
-					return qs
+					return qsev
 				}
 			}
 		}
 
 		qs.addCall(key, n)
 		qs.mapSymbol(key, expr)
-		return qs
+		return qsev
 	case *influxql.VarRef:
 		if n.Val == promql2influxql.ArgNameOfTimeFunc {
 			return nil
@@ -1066,7 +1120,7 @@ func (qs *QuerySchema) Visit(n influxql.Node) influxql.Visitor {
 		qs.mapSymbol(key, expr)
 		return nil
 	default:
-		return qs
+		return qsev
 	}
 }
 
@@ -1378,13 +1432,13 @@ func (qs *QuerySchema) HasSlidingWindowCall() bool {
 	return false
 }
 
-func (qs *QuerySchema) HasTopNDDCM() bool {
+func (qs *QuerySchema) HasTopN() (string, bool) {
 	for _, call := range qs.calls {
-		if call.Name == "topn_ddcm" {
-			return true
+		if call.Name == "topn_ddcm" || call.Name == nagtName {
+			return call.Name, true
 		}
 	}
-	return false
+	return "", false
 }
 
 func (qs *QuerySchema) HasHoltWintersCall() bool {
@@ -1435,8 +1489,20 @@ func (qs *QuerySchema) GetJoinCaseCount() int {
 	return len(qs.joinCases)
 }
 
+func (qs *QuerySchema) SetJoinCases(joinCase []*influxql.Join) {
+	qs.joinCases = joinCase
+}
+
+func (qs *QuerySchema) SetUnionCases(unionCase []*influxql.Union) {
+	qs.unionCases = unionCase
+}
+
 func (qs *QuerySchema) GetJoinCases() []*influxql.Join {
 	return qs.joinCases
+}
+
+func (qs *QuerySchema) GetUnionCases() []*influxql.Union {
+	return qs.unionCases
 }
 
 func (qs *QuerySchema) HasSort() bool {
@@ -1456,6 +1522,10 @@ func (qs *QuerySchema) SetFill(fill influxql.FillOption) {
 
 func (qs *QuerySchema) SetPlanType(planType PlanType) {
 	qs.planType = planType
+}
+
+func (qs *QuerySchema) SetIsInSubquerySchema(isInSubquerySchema bool) {
+	qs.isInSubquerySchema = isInSubquerySchema
 }
 
 func (qs *QuerySchema) GetPlanType() PlanType {
@@ -1487,12 +1557,24 @@ func (qs *QuerySchema) SetPromCalls(calls []*influxql.PromSubCall) {
 	qs.PromSubCalls = calls
 }
 
+func (qs *QuerySchema) SetCompareCall() {
+	qs.isCompareCall = true
+}
+
 func (qs *QuerySchema) GetPromCalls() []*influxql.PromSubCall {
 	return qs.PromSubCalls
 }
 
 func (qs *QuerySchema) SetSimpleTagset() {
 	qs.Options().SetSimpleTagset(len(qs.Options().GetDimensions()) > 0 && IsEnableFileCursor(qs) && !qs.HasAuxTag() && !qs.HasExcatLimit())
+}
+
+func (qs *QuerySchema) SetDistinct(isDistinct bool) {
+	qs.isDistinct = isDistinct
+}
+
+func (qs *QuerySchema) HasDistinct() bool {
+	return qs.isDistinct
 }
 
 // window used to calculate the time point that belongs to a specific time window.

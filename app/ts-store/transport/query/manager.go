@@ -18,7 +18,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/msgservice"
 )
 
 const (
@@ -26,9 +26,9 @@ const (
 )
 
 type IQuery interface {
-	Abort()
+	Abort(source string)
 	Crash()
-	GetQueryExeInfo() *netstorage.QueryExeInfo
+	GetQueryExeInfo() *msgservice.QueryExeInfo
 }
 
 type Manager struct {
@@ -133,21 +133,21 @@ func (qm *Manager) Kill(qid uint64) {
 	qm.abortedMu.Unlock()
 }
 
-func (qm *Manager) Abort(qid uint64) {
+func (qm *Manager) Abort(qid uint64, source string) {
 	qm.abortedMu.Lock()
 	qm.aborted[qid] = time.Now()
 	qm.abortedMu.Unlock()
 
 	h := qm.Get(qid)
 	for _, iQuery := range h {
-		iQuery.Abort()
+		iQuery.Abort(source)
 	}
 }
 
-func (qm *Manager) NoMarkAbort(qid uint64) {
+func (qm *Manager) NoMarkAbort(qid uint64, source string) {
 	h := qm.Get(qid)
 	for _, iQuery := range h {
-		iQuery.Abort()
+		iQuery.Abort(source)
 	}
 }
 
@@ -241,20 +241,20 @@ func (qm *Manager) cleanAbort() {
 }
 
 // GetAll return the all query exe infos keeping by a manager
-func (qm *Manager) GetAll() []*netstorage.QueryExeInfo {
+func (qm *Manager) GetAll() []*msgservice.QueryExeInfo {
 	qm.mu.RLock()
 	defer qm.mu.RUnlock()
 
-	exeInfos := make([]*netstorage.QueryExeInfo, 0, len(qm.items))
+	exeInfos := make([]*msgservice.QueryExeInfo, 0, len(qm.items))
 	for qid, item := range qm.items {
 		for _, q := range item {
 			// unchangeable information
 			info := q.val.GetQueryExeInfo()
 			// changeable information
 			if qm.Aborted(qid) {
-				info.RunState = netstorage.Killed
+				info.RunState = msgservice.Killed
 			} else {
-				info.RunState = netstorage.Running
+				info.RunState = msgservice.Running
 			}
 			info.BeginTime = q.begin.UnixNano()
 			exeInfos = append(exeInfos, info)
@@ -264,8 +264,8 @@ func (qm *Manager) GetAll() []*netstorage.QueryExeInfo {
 	return exeInfos
 }
 
-func GetAllQueries() []*netstorage.QueryExeInfo {
-	var queries []*netstorage.QueryExeInfo
+func GetAllQueries() []*msgservice.QueryExeInfo {
+	var queries []*msgservice.QueryExeInfo
 
 	// get all query exe info from all query managers
 	getAllQueries := func(manager *Manager) {

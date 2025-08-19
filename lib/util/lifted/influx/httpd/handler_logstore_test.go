@@ -170,7 +170,7 @@ func TestClearFailRow(t *testing.T) {
 
 	s1 := "{\"time\":1719862212771, \"strType\":\"127\", \"numType\":4,\"boolType\":true,\"numType\":4 }\n"
 	s2 := "{\"time\":1719862212772, \"strType\":\"127\", \"numType\":4,\"boolType\":true}\n"
-	s := fmt.Sprintf(s1 + s2)
+	s := s1 + s2
 	req := mockLogWriteRequest("{\"timestamp\":\"time\"}")
 
 	scanner := bufio.NewScanner(strings.NewReader(s))

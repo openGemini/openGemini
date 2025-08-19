@@ -19,7 +19,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"regexp"
 	"runtime/debug"
 	"sort"
 	"strconv"
@@ -42,8 +41,6 @@ import (
 	"github.com/panjf2000/ants/v2"
 	"go.uber.org/zap"
 )
-
-const WalFilePathReg = "/wal/(\\w+)/(\\d+)/(\\w+)/(\\d+)_(\\d+)_(\\d+)_(\\d+)/(.*)"
 
 type Engine interface {
 	WriteRows(writeCtx *WriteStreamRowsCtx) (bool, error)
@@ -143,6 +140,7 @@ type Stream struct {
 	dataPath     string
 	walPath      string
 	ptNumPerNode uint32
+	initTask     bool
 }
 
 type Task interface {
@@ -197,10 +195,14 @@ func (r *CacheRow) IsStreamRow(name string, v Task, row influx.Row, key uint64) 
 }
 
 type ReplayRow struct {
-	rows    []influx.Row
-	db, rp  string
-	ptID    uint32
-	shardID uint64
+	rows       []influx.Row
+	db, rp     string
+	ptID       uint32
+	shardID    uint64
+	isLastRows bool
+}
+
+type LastReplayRow struct {
 }
 
 func (r *ReplayRow) GetRows() []influx.Row {
@@ -334,23 +336,24 @@ func (s *Stream) updateTask() {
 		s.DeleteTask(id)
 		return true
 	})
+	s.initTask = true
 	atomic.StoreInt32(&s.taskNum, cnt)
 }
 
 func (s *Stream) Run() {
 	s.Logger.Info("start stream")
 	s.updateTask()
-	go s.cleanStreamWAl()
-	go s.detectRelay()
+	go s.cleanStreamWal()
+	go s.detectReplay()
 
 	d := 10 * time.Second
 	util.TickerRun(d, s.abort, s.updateTask, s.AbortFunc)
 }
 
-func (s *Stream) detectRelay() {
+func (s *Stream) detectReplay() {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
-	index := 0
+
 	engine.NewStreamWalManager().InitStreamHandler(s.StreamHandler)
 	for {
 		select {
@@ -386,33 +389,35 @@ func (s *Stream) detectRelay() {
 			if !init {
 				continue
 			}
-			s.Logger.Info("stream replay task init")
+			s.Logger.Debug("stream replay task init", zap.Any("initTime", initTime))
+			var replayCount int
 			// TODO: replay function support get data based pt
-			for ptID, ti := range initTime {
+			for ptID := range initTime {
 				var err error
-				index, err = engine.NewStreamWalManager().Replay(ctx, ti, ptID, index)
+				isLastPT := replayCount == len(initTime)-1
+				replayCount++
+				err = engine.NewStreamWalManager().Replay(ctx, ptID, isLastPT)
 				if err != nil {
 					s.Logger.Error("replay task init error", zap.Error(err))
 				}
 			}
-			s.Logger.Info("stream replay task init over")
+			s.Logger.Debug("stream replay task init over")
 		}
 	}
 }
 
-func (s *Stream) StreamHandler(rows influx.Rows, fileNames []string) error {
-	s.Logger.Info("row data", zap.Int("len", rows.Len()))
-
-	if len(rows) == 0 || len(fileNames) == 0 {
+func (s *Stream) StreamHandler(rows influx.Rows, isLastRows bool, fileNames []string) error {
+	if (len(rows) == 0 || len(fileNames) == 0) && !isLastRows {
 		return nil
 	}
 
-	db, rp, ptID, shardID, err := ParseFileName(fileNames[0], s.walPath)
+	db, rp, ptID, shardID, err := engine.ParseWalFilePath(fileNames[0], s.walPath)
 	if err != nil {
 		return err
 	}
 
 	r := &ReplayRow{}
+	r.isLastRows = isLastRows
 	r.rows = rows
 	r.ptID = ptID
 	r.shardID = shardID
@@ -426,52 +431,33 @@ func (s *Stream) StreamHandler(rows influx.Rows, fileNames []string) error {
 	return nil
 }
 
-func ParseFileName(name, walPath string) (db, rp string, ptID uint32, shardID uint64, err error) {
-	var re *regexp.Regexp
-	re, err = regexp.Compile(fmt.Sprintf("%s%s", walPath, WalFilePathReg))
-	if err != nil {
-		return
-	}
-	info := re.FindStringSubmatch(name)
-	if len(info) != 9 {
-		err = fmt.Errorf("filePath non-conformance to specifications")
-		return
-	}
-	db, rp = info[1], info[3]
-	pt, err := strconv.ParseUint(info[2], 10, 32)
-	if err != nil {
-		return
-	}
-	ptID = uint32(pt)
-	shardID, err = strconv.ParseUint(info[4], 10, 64)
-
-	return
+func (s *Stream) cleanStreamWal() {
+	d := 30 * time.Second
+	util.TickerRun(d, s.abort, s.deleteStreamWal, s.AbortFunc)
 }
 
-func (s *Stream) cleanStreamWAl() {
+func (s *Stream) deleteStreamWal() {
 	var flushWindowTime = int64(math.MinInt64)
-	d := 30 * time.Second
-	util.TickerRun(d, s.abort, func() {
-		if atomic.LoadInt32(&s.taskNum) == 0 {
-			flushWindowTime = time.Now().UnixNano()
-		} else {
-			flushWindowTime = int64(math.MaxInt64)
-			s.tasks.Range(func(key, value any) bool {
-				w, _ := value.(Task)
-				if flushWindowTime > w.getCurrentTimestamp() {
-					flushWindowTime = w.getCurrentTimestamp()
-				}
-				return true
-			})
-		}
-		engine.NewStreamWalManager().Free(flushWindowTime)
-		s.Logger.Info("clean stream wal", zap.Int64("flushWindowTime", flushWindowTime))
-	}, s.AbortFunc)
+	if atomic.LoadInt32(&s.taskNum) == 0 {
+		flushWindowTime = time.Now().UnixNano()
+	} else {
+		flushWindowTime = int64(math.MaxInt64)
+		s.tasks.Range(func(key, value any) bool {
+			w, _ := value.(Task)
+			if flushWindowTime > w.getCurrentTimestamp() {
+				flushWindowTime = w.getCurrentTimestamp()
+			}
+			return true
+		})
+	}
+	engine.NewStreamWalManager().Free(flushWindowTime)
+	s.Logger.Debug("clean stream wal", zap.Int64("flushWindowTime", flushWindowTime))
 }
 
 // Close shutdown
 func (s *Stream) Close() {
 	close(s.abort)
+	s.deleteStreamWal()
 	s.tasks.Range(func(key, value interface{}) bool {
 		id, _ := key.(uint64)
 		s.DeleteTask(id)
@@ -513,16 +499,17 @@ func (s *Stream) RegisterTask(info *meta.StreamInfo, fieldCalls []*streamLib.Fie
 		}
 	}
 
-	var cond *influxql.BinaryExpr
+	var cond influxql.Expr
 	if info.Cond != "" && info.Interval == 0 && len(info.Dims) == 0 {
 		expr, err := influxql.ParseExpr(info.Cond)
 		if err != nil {
 			return err
 		}
-		if binaryExpr, ok := expr.(*influxql.BinaryExpr); ok {
-			cond = binaryExpr
-		} else {
-			return fmt.Errorf("invalid condition, expr: %s", expr.String())
+
+		valuer := influxql.NowValuer{Now: time.Now()}
+		cond, _, err = influxql.ConditionExpr(expr, &valuer)
+		if err != nil {
+			return err
 		}
 	}
 
@@ -556,7 +543,7 @@ func (s *Stream) RegisterTask(info *meta.StreamInfo, fieldCalls []*streamLib.Fie
 			BaseTask:        baseTask,
 		}
 	} else {
-		task = &TagTask{
+		tagTask := &TagTask{
 			TaskDataPool:    NewTaskDataPool(),
 			goPool:          s.goPool,
 			groupKeys:       info.Dims,
@@ -565,6 +552,16 @@ func (s *Stream) RegisterTask(info *meta.StreamInfo, fieldCalls []*streamLib.Fie
 			concurrency:     s.conf.WindowConcurrency,
 			BaseTask:        baseTask,
 		}
+		tagTask.curFlushTime = start.UnixNano()
+		if s.initTask {
+			// if s.initTask true,means old tasks are registed,so this is a new task.
+			// new task need write a flush time,which used to replay data
+			pts := s.cli.GetNodePT(baseTask.des.Database)
+			for _, pt := range pts {
+				tagTask.snapshot(pt)
+			}
+		}
+		task = tagTask
 		s.store.RegisterOnPTOffload(info.ID, task.cleanPtInfo)
 	}
 	go func() {
@@ -644,6 +641,17 @@ func (s *Stream) filter() {
 			case *ReplayRow:
 				_, indexes := s.rowsRangeTask(r)
 
+				if r.isLastRows {
+					for i := range indexes {
+						newRows := &LastReplayRow{}
+						v, ok := s.tasks.Load(i)
+						if ok {
+							w, _ := v.(Task)
+							w.Put(newRows)
+						}
+					}
+					continue
+				}
 				for i, vs := range indexes {
 					for j := 0; j+1 < len(vs); j = j + 2 {
 						newRows := &ReplayRow{}

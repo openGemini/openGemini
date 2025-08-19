@@ -18,10 +18,12 @@ package executor
 
 import (
 	"bytes"
+	"math"
 	"testing"
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestIntegerFirstReduce(t *testing.T) {
@@ -542,6 +544,72 @@ func TestBooleanLastTimeColReduce(t *testing.T) {
 	}
 }
 
+func TestAnomalyDetectReduce(t *testing.T) {
+	intSliceItems := []*SliceItem[int64]{
+		{},
+		{
+			value: []int64{0},
+			time:  []int64{0},
+		},
+		{
+			value: []int64{1, 2, 3, 4},
+			time:  []int64{0, 0, 0, 0},
+		},
+		{
+			value: []int64{5, 4, 3, 2, 1},
+			time:  []int64{0, 0, 0, 0, 0},
+		},
+	}
+	floatSliceItems := []*SliceItem[float64]{
+		{},
+		{
+			value: []float64{0},
+			time:  []int64{0},
+		},
+		{
+			value: []float64{1.1, 2.2, 3.3, 4.4},
+			time:  []int64{0, 0, 0, 0},
+		},
+		{
+			value: []float64{0.1, 0.2, 0.3, 0.4, 0.5},
+			time:  []int64{0, 0, 0, 0, 0},
+		},
+	}
+	type resultType struct {
+		index int
+		time  int64
+		value float64
+		isNil bool
+	}
+	expects1 := []resultType{
+		{-1, 0, 0, true},
+		{-1, 0, 0, false},
+		{-1, 0, 1.3333333333, false},
+		{-1, 0, 2, false},
+	}
+	expects2 := []resultType{
+		{-1, 0, 0, true},
+		{-1, 0, 0, false},
+		{-1, 0, 1.3333333333, false},
+		{-1, 0, 0.3, false},
+	}
+	tolerance := 1e-9
+	for i, expect := range expects1 {
+		index, time, value, isNil := ADRMseExtReduce(intSliceItems[i])
+		assert.Equal(t, expect.index, index)
+		assert.Equal(t, expect.time, time)
+		assert.Equal(t, math.Abs(expect.value-value) < tolerance, true)
+		assert.Equal(t, expect.isNil, isNil)
+	}
+	for i, expect := range expects2 {
+		index, time, value, isNil := ADRMseExtReduce(floatSliceItems[i])
+		assert.Equal(t, expect.index, index)
+		assert.Equal(t, expect.time, time)
+		assert.Equal(t, math.Abs(expect.value-value) < tolerance, true)
+		assert.Equal(t, expect.isNil, isNil)
+	}
+}
+
 func TestFloatStdReduce(t *testing.T) {
 	sliceItem := &SliceItem[float64]{
 		value: []float64{1, 2, 3, 4, 5},
@@ -558,4 +626,82 @@ func TestFloatStdReduce(t *testing.T) {
 	if time != 1 || val != 2 {
 		t.Fatal("not expect, value ", val, "time", time)
 	}
+}
+
+func TestNewTrendDetectReduce(t *testing.T) {
+	intSliceItems := []*SliceItem[int64]{
+		{},
+		{
+			value: []int64{1},
+			time:  []int64{0},
+		},
+		{
+			value: []int64{1, 2, 3, 4},
+			time:  []int64{0, 1, 2, 3},
+		},
+		{
+			value: []int64{0, 0, 0, 0},
+			time:  []int64{0, 1, 2, 3},
+		},
+	}
+	floatSliceItems := []*SliceItem[float64]{
+		{},
+		{
+			value: []float64{1},
+			time:  []int64{0},
+		},
+		{
+			value: []float64{1, 2, 3, 4},
+			time:  []int64{0, 1, 2, 3},
+		},
+		{
+			value: []float64{0, 0, 0, 0},
+			time:  []int64{0, 1, 2, 3},
+		},
+	}
+	expects := []struct {
+		index int
+		time  int64
+		value float64
+		isNil bool
+	}{
+		{
+			index: -1,
+			time:  0,
+			value: 0,
+			isNil: true,
+		},
+		{
+			index: -1,
+			time:  0,
+			value: 0,
+			isNil: false,
+		},
+		{
+			index: -1,
+			time:  0,
+			value: 1,
+			isNil: false,
+		},
+		{
+			index: -1,
+			time:  0,
+			value: 0,
+			isNil: false,
+		},
+	}
+
+	for i, expect := range expects {
+		index, time, value, isNil := RegrSlopeReduce(intSliceItems[i])
+		assert.Equal(t, expect.index, index)
+		assert.Equal(t, expect.time, time)
+		assert.Equal(t, expect.value, value)
+		assert.Equal(t, expect.isNil, isNil)
+		index, time, value, isNil = RegrSlopeReduce(floatSliceItems[i])
+		assert.Equal(t, expect.index, index)
+		assert.Equal(t, expect.time, time)
+		assert.Equal(t, expect.value, value)
+		assert.Equal(t, expect.isNil, isNil)
+	}
+
 }

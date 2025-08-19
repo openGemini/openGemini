@@ -16,6 +16,7 @@ package errno
 
 import (
 	"fmt"
+	"reflect"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -43,31 +44,34 @@ const (
 )
 
 const (
-	ModuleUnknown        = 0
-	ModuleQueryEngine    = 1
-	ModuleWrite          = 2
-	ModuleIndex          = 3
-	ModuleMeta           = 4
-	ModuleMetaRaft       = 5
-	ModuleNetwork        = 6
-	ModuleCompact        = 7
-	ModuleMerge          = 8
-	ModuleStorageEngine  = 9
-	ModuleHA             = 10
-	ModuleHTTP           = 11
-	ModuleMetaClient     = 12
-	ModuleTssp           = 13
-	ModuleCoordinator    = 14
-	ModuleWal            = 15
-	ModuleStat           = 16
-	ModuleShard          = 17
-	ModuleDownSample     = 18
-	ModuleCastor         = 19
-	ModuleStream         = 20
-	ModuleWriteInterface = 21
-	ModuleQueryInterface = 22
-	ModuleLogStore       = 23
-	ModuleHierarchical   = 24
+	ModuleUnknown           = 0
+	ModuleQueryEngine       = 1
+	ModuleWrite             = 2
+	ModuleIndex             = 3
+	ModuleMeta              = 4
+	ModuleMetaRaft          = 5
+	ModuleNetwork           = 6
+	ModuleCompact           = 7
+	ModuleMerge             = 8
+	ModuleStorageEngine     = 9
+	ModuleHA                = 10
+	ModuleHTTP              = 11
+	ModuleMetaClient        = 12
+	ModuleTssp              = 13
+	ModuleCoordinator       = 14
+	ModuleWal               = 15
+	ModuleStat              = 16
+	ModuleShard             = 17
+	ModuleDownSample        = 18
+	ModuleCastor            = 19
+	ModuleStream            = 20
+	ModuleWriteInterface    = 21
+	ModuleQueryInterface    = 22
+	ModuleLogStore          = 23
+	ModuleHierarchical      = 24
+	ModuleShardMerge        = 25
+	ModuleIndexHierarchical = 26
+	ModuleConsume           = 27
 )
 
 const (
@@ -344,4 +348,8 @@ func IsRetryErrorForPtView(err error) bool {
 		}
 	}
 	return false
+}
+
+func NewInvalidTypeError(exp string, data interface{}) error {
+	return NewError(InvalidDataType, exp, reflect.TypeOf(data).String())
 }

@@ -1,0 +1,153 @@
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package msgservice
+
+import (
+	"time"
+
+	"github.com/openGemini/openGemini/lib/codec"
+	meta "github.com/openGemini/openGemini/lib/metaclient"
+	"github.com/openGemini/openGemini/lib/spdy"
+	"github.com/openGemini/openGemini/lib/spdy/transport"
+	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
+)
+
+const (
+	retryInterval  = time.Millisecond * 100
+	defaultTimeout = 30 * time.Second
+)
+
+type Requester struct {
+	msgTyp uint8
+	data   codec.BinaryCodec
+	mc     meta.MetaClient
+	node   *meta2.DataNode
+
+	insert  bool
+	timeout time.Duration
+}
+
+func NewRequester(msgTyp uint8, data codec.BinaryCodec, mc meta.MetaClient) *Requester {
+	return &Requester{
+		msgTyp:  msgTyp,
+		data:    data,
+		mc:      mc,
+		timeout: defaultTimeout,
+	}
+}
+
+func (r *Requester) SetToInsert() {
+	r.insert = true
+}
+
+func (r *Requester) SetTimeout(timeout time.Duration) {
+	r.timeout = timeout
+}
+
+func (r *Requester) InitWithNodeID(nodeID uint64) error {
+	node, err := r.mc.DataNode(nodeID)
+	if err != nil {
+		return err
+	}
+	r.InitWithNode(node)
+	return nil
+}
+
+func (r *Requester) InitWithNode(node *meta2.DataNode) {
+	r.node = node
+	if r.insert {
+		transport.NewWriteNodeManager().Add(node.ID, node.Host)
+	} else {
+		transport.NewNodeManager().Add(node.ID, node.TCPHost)
+	}
+}
+
+func (r *Requester) DDL() (interface{}, error) {
+	data := NewDDLMessage(r.msgTyp, r.data)
+	cb := &DDLCallback{}
+
+	if err := r.Request(spdy.DDLRequest, data, cb); err != nil {
+		return nil, err
+	}
+
+	return cb.GetResponse(), nil
+}
+
+func (r *Requester) RaftMsg() (interface{}, error) {
+	data := NewRaftMsgMessage(r.msgTyp, r.data)
+	cb := &RaftMsgCallback{}
+
+	if err := r.requestRaftMsg(spdy.RaftMsgRequest, data, cb); err != nil {
+		return nil, err
+	}
+
+	return cb.GetResponse(), nil
+}
+
+func (r *Requester) SysCtrl(req *SysCtrlRequest) (interface{}, error) {
+	cb := &SysCtrlCallback{}
+
+	if err := r.Request(spdy.SysCtrlRequest, req, cb); err != nil {
+		return nil, err
+	}
+
+	return cb.GetResponse(), nil
+}
+
+func (r *Requester) requestRaftMsg(queryTyp uint8, data transport.Codec, cb transport.Callback) error {
+	var trans *transport.Transport
+	var err error
+
+	trans, err = transport.NewRaftMsgTransport(r.node.ID, queryTyp, cb)
+
+	if err != nil {
+		return err
+	}
+
+	if err := trans.Send(data); err != nil {
+		return err
+	}
+	if err := trans.Wait(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (r *Requester) Request(queryTyp uint8, data transport.Codec, cb transport.Callback) error {
+	var trans *transport.Transport
+	var err error
+
+	if r.insert {
+		trans, err = transport.NewWriteTransport(r.node.ID, queryTyp, cb)
+	} else {
+		trans, err = transport.NewTransport(r.node.ID, queryTyp, cb)
+	}
+
+	if err != nil {
+		return err
+	}
+
+	if err := trans.Send(data); err != nil {
+		return err
+	}
+	if err := trans.Wait(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (r *Requester) GetNode() *meta2.DataNode {
+	return r.node
+}

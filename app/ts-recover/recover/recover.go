@@ -15,10 +15,14 @@
 package recover
 
 import (
+	"crypto/tls"
+	"errors"
 	"fmt"
+	"io"
 	"io/fs"
+	"net/http"
+	"net/url"
 	"os"
-	"path"
 	"path/filepath"
 	"strings"
 
@@ -32,16 +36,21 @@ const FullRecoverMode = "2"
 
 type RecoverConfig struct {
 	RecoverMode        string
-	ConfigPath         string
+	DataDir            string
 	FullBackupDataPath string
 	IncBackupDataPath  string
+	SSL                bool
+	InsecureTLS        bool
+	Force              bool
+	// leader meta address
+	Host string
 }
 
 type RecoverFunc func(rc *RecoverConfig, path string) error
 
-func BackupRecover(opt *RecoverConfig, tsRecover *config.TsRecover) error {
+func BackupRecover(opt *RecoverConfig) error {
 	if opt.FullBackupDataPath == "" {
-		return fmt.Errorf("`missing required config: fullBackupDataPath")
+		return fmt.Errorf("`missing required parameter: fullBackupDataPath")
 	}
 	if opt.RecoverMode == "1" && opt.IncBackupDataPath == "" {
 		return fmt.Errorf("`missing required parameter: incBackupDataPath")
@@ -49,9 +58,9 @@ func BackupRecover(opt *RecoverConfig, tsRecover *config.TsRecover) error {
 	var err error
 	switch opt.RecoverMode {
 	case FullAndIncRecoverMode:
-		err = recoverWithFullAndInc(tsRecover, opt)
+		err = runRecover(opt, true)
 	case FullRecoverMode:
-		err = recoverWithFull(tsRecover, opt)
+		err = runRecover(opt, false)
 	default:
 		return fmt.Errorf("invalid recovermode")
 	}
@@ -62,42 +71,58 @@ func BackupRecover(opt *RecoverConfig, tsRecover *config.TsRecover) error {
 	return nil
 }
 
-func recoverWithFull(tsRecover *config.TsRecover, rc *RecoverConfig) error {
-	if err := recoverMeta(tsRecover, rc, false); err != nil {
+func runRecover(rc *RecoverConfig, isInc bool) error {
+	dbs, err := getDatabases(rc)
+	if err != nil {
+		return err
+	}
+	if err := recoverData(rc, dbs, isInc); err != nil {
 		return err
 	}
 
-	dataPath := filepath.Join(tsRecover.Data.DataDir, config.DataDirectory)
-	if err := os.RemoveAll(dataPath); err != nil {
-		return err
-	}
-	backupDataPath := filepath.Join(rc.FullBackupDataPath, backup.DataBackupDir, dataPath)
-	if _, err := os.Stat(backupDataPath); err != nil {
-		fmt.Println("backupDataPath empty !")
-		return nil
-	}
-	if err := traversalBackupLogFile(rc, backupDataPath, copyWithFull, false); err != nil {
-		return err
-	}
-
-	return nil
+	return recoverMeta(rc, isInc, dbs)
 }
 
-func recoverWithFullAndInc(tsRecover *config.TsRecover, rc *RecoverConfig) error {
-	if err := recoverMeta(tsRecover, rc, true); err != nil {
+func recoverData(rc *RecoverConfig, dbs []string, isInc bool) error {
+	dataPath := filepath.Join(rc.DataDir, config.DataDirectory)
+	// check clear data path
+	if len(dbs) > 0 {
+		for _, db := range dbs {
+			p := filepath.Join(dataPath, db)
+			_, err := os.Stat(p)
+			if !rc.Force && err == nil {
+				return fmt.Errorf("target database file exist,db : %s.if you still recover,please use --force", db)
+			}
+			if err := os.RemoveAll(p); err != nil {
+				return err
+			}
+		}
+	} else {
+		_, err := os.Stat(dataPath)
+		if !rc.Force && err == nil {
+			return fmt.Errorf("data file exist.if you still recover,please use --force")
+		}
+		if err := os.RemoveAll(filepath.Join(dataPath)); err != nil {
+			return err
+		}
+	}
+
+	copyFunc := copyWithFull
+	if isInc {
+		copyFunc = copyWithFullAndInc
+	}
+
+	// recover full_backup
+	fullBackupDataPath := filepath.Join(rc.FullBackupDataPath, backup.DataBackupDir, dataPath)
+	if _, err := os.Stat(fullBackupDataPath); err != nil {
+		return errors.New("backupDataPath empty")
+	}
+	if err := traversalBackupLogFile(rc, fullBackupDataPath, copyFunc, isInc); err != nil {
 		return err
 	}
 
-	dataPath := filepath.Join(tsRecover.Data.DataDir, config.DataDirectory)
-	if err := os.RemoveAll(dataPath); err != nil {
-		return err
-	}
-	// recover full_backup
-	fullBackupDataPath := filepath.Join(rc.FullBackupDataPath, backup.DataBackupDir, dataPath)
-	if _, err := os.Stat(fullBackupDataPath); err == nil {
-		if err := traversalBackupLogFile(rc, fullBackupDataPath, copyWithFullAndInc, true); err != nil {
-			return err
-		}
+	if !isInc {
+		return nil
 	}
 
 	// recover inc_backup
@@ -109,10 +134,11 @@ func recoverWithFullAndInc(tsRecover *config.TsRecover, rc *RecoverConfig) error
 	if err := traversalIncBackupLogFile(rc, incBackupDataPath); err != nil {
 		return err
 	}
+
 	return nil
 }
 
-func recoverMeta(tsRecover *config.TsRecover, rc *RecoverConfig, isInc bool) error {
+func recoverMeta(rc *RecoverConfig, isInc bool, dbs []string) error {
 	var backupPath string
 	if isInc {
 		backupPath = rc.IncBackupDataPath
@@ -120,49 +146,54 @@ func recoverMeta(tsRecover *config.TsRecover, rc *RecoverConfig, isInc bool) err
 		backupPath = rc.FullBackupDataPath
 	}
 	backupMetaPath := filepath.Join(backupPath, backup.MetaBackupDir)
-	backupLog := &backup.MetaBackupLogInfo{}
-	var noMeta bool
-	if err := backup.ReadBackupLogFile(path.Join(backupMetaPath, backup.BackupLogPath, backup.MetaBackupLog), backupLog); err != nil {
-		noMeta = true
-		backupLog.IsNode = true
-		backupLog.MetaIds = make([]string, 0)
-	}
-
-	metaPath, err := removeMeta(tsRecover, backupLog)
+	buf, err := os.ReadFile(filepath.Join(backupMetaPath, backup.MetaInfo))
 	if err != nil {
-		return nil
+		return err
 	}
 
-	if !noMeta {
-		// single node
-		if len(backupLog.MetaIds) == 1 || backupLog.IsNode {
-			if err := backup.FolderMove(backupMetaPath, metaPath); err != nil {
-				return err
-			}
-		} else {
-			for _, id := range backupLog.MetaIds {
-				if err := backup.FolderCopy(backupMetaPath, filepath.Join(metaPath, id)); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	return nil
+	return sendRequestToMeta(rc, dbs, string(buf))
 }
 
-func removeMeta(tsRecover *config.TsRecover, backupLog *backup.MetaBackupLogInfo) (metaPath string, err error) {
-	//single node
-	if len(backupLog.MetaIds) == 1 || backupLog.IsNode {
-		metaPath = tsRecover.Data.MetaDir
-	} else {
-		metaPath, _ = filepath.Split(tsRecover.Data.MetaDir)
+func sendRequestToMeta(rc *RecoverConfig, dbs []string, metaData string) error {
+	protocol := "http"
+	if rc.SSL {
+		protocol = "https"
+	}
+	urlValues := url.Values{}
+	urlValues.Add(backup.DataBases, strings.Join(dbs, ","))
+	urlValues.Add(backup.MetaData, metaData)
+
+	Url, err := url.Parse(fmt.Sprintf("%s://%s/recoverMeta", protocol, rc.Host))
+	if err != nil {
+		return err
+	}
+	Url.RawQuery = urlValues.Encode()
+
+	transport := &http.Transport{}
+	client := &http.Client{
+		Transport: transport,
+	}
+	if rc.InsecureTLS {
+		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	}
+	res, err := client.PostForm(Url.String(), urlValues)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	return resolveResponseError(res)
+}
+
+func resolveResponseError(resp *http.Response) error {
+	if resp.StatusCode == http.StatusOK {
+		return nil
+	}
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("recover meta request error,read response body faild,%s", err.Error())
 	}
 
-	if err = os.RemoveAll(metaPath); err != nil {
-		return
-	}
-
-	return
+	return fmt.Errorf("recover meta error,%s", string(b))
 }
 
 func traversalBackupLogFile(rc *RecoverConfig, path string, fn RecoverFunc, isInc bool) error {
@@ -268,8 +299,8 @@ func copyWithFull(rc *RecoverConfig, path string) error {
 }
 
 func copyWithFullAndInc(rc *RecoverConfig, fullPath string) error {
-	p, _ := path.Split(strings.Replace(fullPath, rc.FullBackupDataPath, rc.IncBackupDataPath, -1))
-	incPath := path.Join(p, backup.IncBackupLog)
+	p, _ := filepath.Split(strings.Replace(fullPath, rc.FullBackupDataPath, rc.IncBackupDataPath, -1))
+	incPath := filepath.Join(p, backup.IncBackupLog)
 	incBackupLog := &backup.IncBackupLogInfo{}
 	_, err := fileops.Stat(incPath)
 	if err != nil {
@@ -338,4 +369,49 @@ func mergeFileList(rc *RecoverConfig, listMap, delListMap map[string][][]string)
 
 	}
 	return nil
+}
+
+func getDatabases(rc *RecoverConfig) ([]string, error) {
+	path := fileops.Join(rc.FullBackupDataPath, backup.BackupLogPath, backup.ResultLog)
+	if _, err := os.Stat(path); err != nil {
+		return nil, err
+	}
+	fullRes := &backup.BackupResult{}
+	if err := backup.ReadBackupLogFile(path, fullRes); err != nil {
+		return nil, err
+	}
+	databases := make([]string, 0, len(fullRes.DataBases))
+
+	if rc.RecoverMode == FullRecoverMode {
+		for db := range fullRes.DataBases {
+			databases = append(databases, db)
+		}
+		return databases, nil
+	}
+
+	path = fileops.Join(rc.IncBackupDataPath, backup.BackupLogPath, backup.ResultLog)
+	if _, err := os.Stat(path); err != nil {
+		return nil, err
+	}
+	incRes := &backup.BackupResult{}
+	if err := backup.ReadBackupLogFile(path, incRes); err != nil {
+		return nil, err
+	}
+
+	if fullRes.Time > incRes.Time {
+		return nil, errors.New("fullBackup time should earlier than incBackup")
+	}
+
+	if len(fullRes.DataBases) != len(incRes.DataBases) {
+		return nil, errors.New("databases not equal in full Backup and inc Backup")
+	}
+
+	for db := range fullRes.DataBases {
+		if _, ok := incRes.DataBases[db]; !ok {
+			return nil, errors.New("databases not equal in full Backup and inc Backup")
+		}
+		databases = append(databases, db)
+	}
+
+	return databases, nil
 }

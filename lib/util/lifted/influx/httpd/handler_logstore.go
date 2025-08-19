@@ -1989,7 +1989,7 @@ func (h *Handler) parseLogQuery(logP *logparser.Parser, info *measurementInfo, q
 	if err != nil {
 		h.Logger.Error("query error! parsing query value", zap.Error(err), zap.String("db", info.database))
 		errorInfo := TransYaccSyntaxErr(err.Error())
-		return nil, fmt.Errorf("error parsing query: " + errorInfo), http.StatusBadRequest
+		return nil, fmt.Errorf("error parsing query: %s", errorInfo), http.StatusBadRequest
 	}
 	var selectStmt *influxql.SelectStatement
 	var ok bool
@@ -2003,7 +2003,7 @@ func (h *Handler) parseLogQuery(logP *logparser.Parser, info *measurementInfo, q
 		errMsgMark := "can not combine log parser statement with statement which is not select statement"
 		errMsg := fmt.Sprintf("%s: %v, %v", errMsgMark, zap.Error(err), zap.String("db", info.database))
 		h.Logger.Error(errMsg)
-		return nil, fmt.Errorf(errMsgMark), http.StatusBadRequest
+		return nil, fmt.Errorf("%s", errMsgMark), http.StatusBadRequest
 	}
 
 	// Filter condition
@@ -2183,7 +2183,7 @@ func (h *Handler) rewriteStatementForLogStore(selectStmt *influxql.SelectStateme
 				errMsg := fmt.Sprintf("The query start time and end time are invalid. ascending: %t, startTime:%d, endTime:%d",
 					param.Ascending, param.TimeRange.start/1e6, param.TimeRange.end/1e6)
 				h.Logger.Error(errMsg)
-				return fmt.Errorf(errMsg)
+				return errors.New(errMsg)
 			}
 			if param.isHistogram {
 				groupByTimeInterval := logstore.GetAdaptiveTimeBucket(time.Unix(0, param.TimeRange.start), time.Unix(0, param.TimeRange.end), param.Ascending)
@@ -2347,7 +2347,7 @@ func (h *Handler) serveLogQuery(w http.ResponseWriter, r *http.Request, param *Q
 	// Check authorization.
 	err = h.checkAuthorization(user, q, info.database)
 	if err != nil {
-		return nil, nil, nil, http.StatusForbidden, fmt.Errorf("error authorizing query: " + err.Error())
+		return nil, nil, nil, http.StatusForbidden, fmt.Errorf("error authorizing query: %s", err.Error())
 	}
 
 	// Parse chunk size. Use default if not provided or unparsable.

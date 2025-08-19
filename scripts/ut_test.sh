@@ -35,10 +35,12 @@ splittingLine "end: check license header"
 splittingLine "start: static check and other go lint"
 
 [[ -s "$GVM_ROOT/scripts/gvm" ]] && source "$GVM_ROOT/scripts/gvm"
-gvm use go1.22 -y --default
+gvm use go1.24 -y --default
 
 rm -f go.sum
 go mod tidy
+
+go env
 
 make static-check
 golang_static_status=$?
@@ -63,6 +65,9 @@ splittingLine "end: static check and other go lint"
 if [[ $golang_static_status -ne 0 || $golang_version_status -ne 0
       || $golang_generate_status -ne 0 || $golang_style_status  -ne 0
       || $golang_vet_status  -ne 0 || $golang_lint_status -ne 0 ]]; then
+        echo "golang_static_status=$golang_static_status; golang_version_status=$golang_version_status"
+        echo "golang_generate_status=$golang_generate_status; golang_style_status=$golang_style_status"
+        echo "golang_vet_status=$golang_vet_status; golang_lint_status=$golang_lint_status"
     exit 1
 fi
 
@@ -97,7 +102,7 @@ rm -rf /tmp/openGemini/metric/
 
 cp config/openGemini.conf config/openGemini.conf.bk
 
-echo '[data.shelf-mode]' >> config/openGemini.conf
+echo '[shelf-mode]' >> config/openGemini.conf
 echo '  enabled = false' >> config/openGemini.conf
 
 splittingLine "start run shelf write mode test"
@@ -118,6 +123,10 @@ do
 
     FAIL_COUNT=`grep 'FAIL' /tmp/openGemini/logs/test_at_hot_*.log | wc -l`
     if [ $FAIL_COUNT -ne 0 ]; then
+        for log in 1/sql_extra1; do
+            splittingLine "Log contents of $log"
+            cat /tmp/openGemini/logs/$log.log
+        done
         git restore config/openGemini.conf
         exit 1
     fi

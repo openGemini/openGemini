@@ -64,8 +64,8 @@ func CalcDdcmParameters(errRate, minSearchableFrequency, wrongAnswerProbability 
 	return parameters, nil
 }
 
-func NewTDdcm(parameters *TDdcmParameters, seed uint64, cycleManager TDdcmCycleManagerBase) TDdcm {
-	ddcm := TDdcm{
+func NewTDdcm(parameters *TDdcmParameters, seed uint64, cycleManager TDdcmCycleManagerBase) *TDdcm {
+	ddcm := &TDdcm{
 		Parameters:   *parameters,
 		LargeSketch:  NewTCountMinSketch(parameters.LargeCountMinSketchDepth, parameters.CountMinSketchWidthLog2),
 		CycleManager: cycleManager.Copy(),
@@ -77,6 +77,10 @@ func NewTDdcm(parameters *TDdcmParameters, seed uint64, cycleManager TDdcmCycleM
 	ddcm.SmallSketchIndices = make([]int, parameters.SmallCountMinSketchDepth)
 	ddcm.LargeSketchIndices = make([]int, parameters.LargeCountMinSketchDepth)
 	return ddcm
+}
+
+func (ddcm *TDdcm) Name() string {
+	return "ddcm"
 }
 
 func (ddcm *TDdcm) GetTotalCount() TCounter {
@@ -204,7 +208,7 @@ func (ddcm *TDdcm) CalcHashesAndGetIndices(key TKey, level int, indices *[]int) 
 }
 
 // sigma, delta, epsilon, Phi
-func CreateDdcmWithWdm(failureProbability, wrongAnswerProbability, errRate, minSearchableFrequency float64, seed uint64) TDdcm {
+func CreateDdcmWithWdm(failureProbability, wrongAnswerProbability, errRate, minSearchableFrequency float64, seed uint64) *TDdcm {
 	parameters, err1 := CalcDdcmParameters(errRate, minSearchableFrequency, wrongAnswerProbability)
 	if err1 != nil || (failureProbability <= 0 || failureProbability >= 1) {
 		panic("CreateDdcmWithWdm error")

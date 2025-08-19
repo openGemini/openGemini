@@ -20,37 +20,39 @@
 package handler
 
 import (
-	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/lib/codec"
-	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/msgservice"
 )
 
 func NewHandler(typ uint8) RPCHandler {
 	switch typ {
-	case netstorage.SeriesKeysRequestMessage:
+	case msgservice.SeriesKeysRequestMessage:
 		return &SeriesKeys{}
-	case netstorage.SeriesExactCardinalityRequestMessage:
+	case msgservice.SeriesExactCardinalityRequestMessage:
 		return &SeriesExactCardinality{}
-	case netstorage.SeriesCardinalityRequestMessage:
+	case msgservice.SeriesCardinalityRequestMessage:
 		return &SeriesCardinality{}
-	case netstorage.ShowTagValuesRequestMessage:
+	case msgservice.ShowTagValuesRequestMessage:
 		return &ShowTagValues{}
-	case netstorage.ShowTagValuesCardinalityRequestMessage:
+	case msgservice.ShowTagValuesCardinalityRequestMessage:
 		return &ShowTagValuesCardinality{}
-	case netstorage.GetShardSplitPointsRequestMessage:
+	case msgservice.GetShardSplitPointsRequestMessage:
 		return &GetShardSplitPoints{}
-	case netstorage.DeleteRequestMessage:
+	case msgservice.DeleteRequestMessage:
 		return &Delete{}
-	case netstorage.CreateDataBaseRequestMessage:
+	case msgservice.CreateDataBaseRequestMessage:
 		return &CreateDataBase{}
-	case netstorage.ShowQueriesRequestMessage:
+	case msgservice.ShowQueriesRequestMessage:
 		return &ShowQueries{}
-	case netstorage.KillQueryRequestMessage:
+	case msgservice.KillQueryRequestMessage:
 		return &KillQuery{}
-	case netstorage.ShowTagKeysRequestMessage:
+	case msgservice.ShowTagKeysRequestMessage:
 		return &ShowTagKeys{}
-	case netstorage.RaftMessagesRequestMessage:
+	case msgservice.RaftMessagesRequestMessage:
 		return &RaftMessages{}
+	case msgservice.DropSeriesRequestMessage:
+		return &DropSeries{}
 	default:
 		return nil
 	}
@@ -59,15 +61,15 @@ func NewHandler(typ uint8) RPCHandler {
 type SeriesKeys struct {
 	BaseHandler
 
-	req *netstorage.SeriesKeysRequest
-	rsp *netstorage.SeriesKeysResponse
+	req *msgservice.SeriesKeysRequest
+	rsp *msgservice.SeriesKeysResponse
 }
 
 func (h *SeriesKeys) SetMessage(msg codec.BinaryCodec) error {
-	h.rsp = &netstorage.SeriesKeysResponse{}
-	req, ok := msg.(*netstorage.SeriesKeysRequest)
+	h.rsp = &msgservice.SeriesKeysResponse{}
+	req, ok := msg.(*msgservice.SeriesKeysRequest)
 	if !ok {
-		return executor.NewInvalidTypeError("*netstorage.SeriesKeysRequest", msg)
+		return errno.NewInvalidTypeError("*msgservice.SeriesKeysRequest", msg)
 	}
 	h.req = req
 	return nil
@@ -76,15 +78,15 @@ func (h *SeriesKeys) SetMessage(msg codec.BinaryCodec) error {
 type SeriesExactCardinality struct {
 	BaseHandler
 
-	req *netstorage.SeriesExactCardinalityRequest
-	rsp *netstorage.SeriesExactCardinalityResponse
+	req *msgservice.SeriesExactCardinalityRequest
+	rsp *msgservice.SeriesExactCardinalityResponse
 }
 
 func (h *SeriesExactCardinality) SetMessage(msg codec.BinaryCodec) error {
-	h.rsp = &netstorage.SeriesExactCardinalityResponse{}
-	req, ok := msg.(*netstorage.SeriesExactCardinalityRequest)
+	h.rsp = &msgservice.SeriesExactCardinalityResponse{}
+	req, ok := msg.(*msgservice.SeriesExactCardinalityRequest)
 	if !ok {
-		return executor.NewInvalidTypeError("*netstorage.SeriesExactCardinalityRequest", msg)
+		return errno.NewInvalidTypeError("*msgservice.SeriesExactCardinalityRequest", msg)
 	}
 	h.req = req
 	return nil
@@ -93,15 +95,15 @@ func (h *SeriesExactCardinality) SetMessage(msg codec.BinaryCodec) error {
 type SeriesCardinality struct {
 	BaseHandler
 
-	req *netstorage.SeriesCardinalityRequest
-	rsp *netstorage.SeriesCardinalityResponse
+	req *msgservice.SeriesCardinalityRequest
+	rsp *msgservice.SeriesCardinalityResponse
 }
 
 func (h *SeriesCardinality) SetMessage(msg codec.BinaryCodec) error {
-	h.rsp = &netstorage.SeriesCardinalityResponse{}
-	req, ok := msg.(*netstorage.SeriesCardinalityRequest)
+	h.rsp = &msgservice.SeriesCardinalityResponse{}
+	req, ok := msg.(*msgservice.SeriesCardinalityRequest)
 	if !ok {
-		return executor.NewInvalidTypeError("*netstorage.SeriesCardinalityRequest", msg)
+		return errno.NewInvalidTypeError("*msgservice.SeriesCardinalityRequest", msg)
 	}
 	h.req = req
 	return nil
@@ -110,15 +112,15 @@ func (h *SeriesCardinality) SetMessage(msg codec.BinaryCodec) error {
 type ShowTagValues struct {
 	BaseHandler
 
-	req *netstorage.ShowTagValuesRequest
-	rsp *netstorage.ShowTagValuesResponse
+	req *msgservice.ShowTagValuesRequest
+	rsp *msgservice.ShowTagValuesResponse
 }
 
 func (h *ShowTagValues) SetMessage(msg codec.BinaryCodec) error {
-	h.rsp = &netstorage.ShowTagValuesResponse{}
-	req, ok := msg.(*netstorage.ShowTagValuesRequest)
+	h.rsp = &msgservice.ShowTagValuesResponse{}
+	req, ok := msg.(*msgservice.ShowTagValuesRequest)
 	if !ok {
-		return executor.NewInvalidTypeError("*netstorage.ShowTagValuesRequest", msg)
+		return errno.NewInvalidTypeError("*msgservice.ShowTagValuesRequest", msg)
 	}
 	h.req = req
 	return nil
@@ -127,15 +129,15 @@ func (h *ShowTagValues) SetMessage(msg codec.BinaryCodec) error {
 type ShowTagValuesCardinality struct {
 	BaseHandler
 
-	req *netstorage.ShowTagValuesCardinalityRequest
-	rsp *netstorage.ShowTagValuesCardinalityResponse
+	req *msgservice.ShowTagValuesCardinalityRequest
+	rsp *msgservice.ShowTagValuesCardinalityResponse
 }
 
 func (h *ShowTagValuesCardinality) SetMessage(msg codec.BinaryCodec) error {
-	h.rsp = &netstorage.ShowTagValuesCardinalityResponse{}
-	req, ok := msg.(*netstorage.ShowTagValuesCardinalityRequest)
+	h.rsp = &msgservice.ShowTagValuesCardinalityResponse{}
+	req, ok := msg.(*msgservice.ShowTagValuesCardinalityRequest)
 	if !ok {
-		return executor.NewInvalidTypeError("*netstorage.ShowTagValuesCardinalityRequest", msg)
+		return errno.NewInvalidTypeError("*msgservice.ShowTagValuesCardinalityRequest", msg)
 	}
 	h.req = req
 	return nil
@@ -144,15 +146,15 @@ func (h *ShowTagValuesCardinality) SetMessage(msg codec.BinaryCodec) error {
 type GetShardSplitPoints struct {
 	BaseHandler
 
-	req *netstorage.GetShardSplitPointsRequest
-	rsp *netstorage.GetShardSplitPointsResponse
+	req *msgservice.GetShardSplitPointsRequest
+	rsp *msgservice.GetShardSplitPointsResponse
 }
 
 func (h *GetShardSplitPoints) SetMessage(msg codec.BinaryCodec) error {
-	h.rsp = &netstorage.GetShardSplitPointsResponse{}
-	req, ok := msg.(*netstorage.GetShardSplitPointsRequest)
+	h.rsp = &msgservice.GetShardSplitPointsResponse{}
+	req, ok := msg.(*msgservice.GetShardSplitPointsRequest)
 	if !ok {
-		return executor.NewInvalidTypeError("*netstorage.GetShardSplitPointsRequest", msg)
+		return errno.NewInvalidTypeError("*msgservice.GetShardSplitPointsRequest", msg)
 	}
 	h.req = req
 	return nil
@@ -161,15 +163,15 @@ func (h *GetShardSplitPoints) SetMessage(msg codec.BinaryCodec) error {
 type Delete struct {
 	BaseHandler
 
-	req *netstorage.DeleteRequest
-	rsp *netstorage.DeleteResponse
+	req *msgservice.DeleteRequest
+	rsp *msgservice.DeleteResponse
 }
 
 func (h *Delete) SetMessage(msg codec.BinaryCodec) error {
-	h.rsp = &netstorage.DeleteResponse{}
-	req, ok := msg.(*netstorage.DeleteRequest)
+	h.rsp = &msgservice.DeleteResponse{}
+	req, ok := msg.(*msgservice.DeleteRequest)
 	if !ok {
-		return executor.NewInvalidTypeError("*netstorage.DeleteRequest", msg)
+		return errno.NewInvalidTypeError("*msgservice.DeleteRequest", msg)
 	}
 	h.req = req
 	return nil
@@ -178,15 +180,15 @@ func (h *Delete) SetMessage(msg codec.BinaryCodec) error {
 type CreateDataBase struct {
 	BaseHandler
 
-	req *netstorage.CreateDataBaseRequest
-	rsp *netstorage.CreateDataBaseResponse
+	req *msgservice.CreateDataBaseRequest
+	rsp *msgservice.CreateDataBaseResponse
 }
 
 func (h *CreateDataBase) SetMessage(msg codec.BinaryCodec) error {
-	h.rsp = &netstorage.CreateDataBaseResponse{}
-	req, ok := msg.(*netstorage.CreateDataBaseRequest)
+	h.rsp = &msgservice.CreateDataBaseResponse{}
+	req, ok := msg.(*msgservice.CreateDataBaseRequest)
 	if !ok {
-		return executor.NewInvalidTypeError("*netstorage.CreateDataBaseRequest", msg)
+		return errno.NewInvalidTypeError("*msgservice.CreateDataBaseRequest", msg)
 	}
 	h.req = req
 	return nil
@@ -195,15 +197,15 @@ func (h *CreateDataBase) SetMessage(msg codec.BinaryCodec) error {
 type ShowQueries struct {
 	BaseHandler
 
-	req *netstorage.ShowQueriesRequest
-	rsp *netstorage.ShowQueriesResponse
+	req *msgservice.ShowQueriesRequest
+	rsp *msgservice.ShowQueriesResponse
 }
 
 func (h *ShowQueries) SetMessage(msg codec.BinaryCodec) error {
-	h.rsp = &netstorage.ShowQueriesResponse{}
-	req, ok := msg.(*netstorage.ShowQueriesRequest)
+	h.rsp = &msgservice.ShowQueriesResponse{}
+	req, ok := msg.(*msgservice.ShowQueriesRequest)
 	if !ok {
-		return executor.NewInvalidTypeError("*netstorage.ShowQueriesRequest", msg)
+		return errno.NewInvalidTypeError("*msgservice.ShowQueriesRequest", msg)
 	}
 	h.req = req
 	return nil
@@ -212,15 +214,15 @@ func (h *ShowQueries) SetMessage(msg codec.BinaryCodec) error {
 type KillQuery struct {
 	BaseHandler
 
-	req *netstorage.KillQueryRequest
-	rsp *netstorage.KillQueryResponse
+	req *msgservice.KillQueryRequest
+	rsp *msgservice.KillQueryResponse
 }
 
 func (h *KillQuery) SetMessage(msg codec.BinaryCodec) error {
-	h.rsp = &netstorage.KillQueryResponse{}
-	req, ok := msg.(*netstorage.KillQueryRequest)
+	h.rsp = &msgservice.KillQueryResponse{}
+	req, ok := msg.(*msgservice.KillQueryRequest)
 	if !ok {
-		return executor.NewInvalidTypeError("*netstorage.KillQueryRequest", msg)
+		return errno.NewInvalidTypeError("*msgservice.KillQueryRequest", msg)
 	}
 	h.req = req
 	return nil
@@ -229,15 +231,15 @@ func (h *KillQuery) SetMessage(msg codec.BinaryCodec) error {
 type ShowTagKeys struct {
 	BaseHandler
 
-	req *netstorage.ShowTagKeysRequest
-	rsp *netstorage.ShowTagKeysResponse
+	req *msgservice.ShowTagKeysRequest
+	rsp *msgservice.ShowTagKeysResponse
 }
 
 func (h *ShowTagKeys) SetMessage(msg codec.BinaryCodec) error {
-	h.rsp = &netstorage.ShowTagKeysResponse{}
-	req, ok := msg.(*netstorage.ShowTagKeysRequest)
+	h.rsp = &msgservice.ShowTagKeysResponse{}
+	req, ok := msg.(*msgservice.ShowTagKeysRequest)
 	if !ok {
-		return executor.NewInvalidTypeError("*netstorage.ShowTagKeysRequest", msg)
+		return errno.NewInvalidTypeError("*msgservice.ShowTagKeysRequest", msg)
 	}
 	h.req = req
 	return nil
@@ -246,15 +248,32 @@ func (h *ShowTagKeys) SetMessage(msg codec.BinaryCodec) error {
 type RaftMessages struct {
 	BaseHandler
 
-	req *netstorage.RaftMessagesRequest
-	rsp *netstorage.RaftMessagesResponse
+	req *msgservice.RaftMessagesRequest
+	rsp *msgservice.RaftMessagesResponse
 }
 
 func (h *RaftMessages) SetMessage(msg codec.BinaryCodec) error {
-	h.rsp = &netstorage.RaftMessagesResponse{}
-	req, ok := msg.(*netstorage.RaftMessagesRequest)
+	h.rsp = &msgservice.RaftMessagesResponse{}
+	req, ok := msg.(*msgservice.RaftMessagesRequest)
 	if !ok {
-		return executor.NewInvalidTypeError("*netstorage.RaftMessagesRequest", msg)
+		return errno.NewInvalidTypeError("*msgservice.RaftMessagesRequest", msg)
+	}
+	h.req = req
+	return nil
+}
+
+type DropSeries struct {
+	BaseHandler
+
+	req *msgservice.DropSeriesRequest
+	rsp *msgservice.DropSeriesResponse
+}
+
+func (h *DropSeries) SetMessage(msg codec.BinaryCodec) error {
+	h.rsp = &msgservice.DropSeriesResponse{}
+	req, ok := msg.(*msgservice.DropSeriesRequest)
+	if !ok {
+		return errno.NewInvalidTypeError("*msgservice.DropSeriesRequest", msg)
 	}
 	h.req = req
 	return nil

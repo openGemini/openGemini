@@ -1,5 +1,10 @@
-#!/usr/bin/python2.7 -u
+"""
+Copyright (c) 2018 InfluxData
+This code is originally from: https://github.com/influxdata/influxdb/blob/v1.8.8/build.py
 
+Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+"""
+#!/usr/bin/env python3
 import sys
 import os
 import platform
@@ -8,41 +13,191 @@ from datetime import datetime
 import shutil
 import re
 import logging
-import argparse
 import stat
+import click
+from typing import List, Dict, Optional, Tuple, Union
 
 ################
-#### OpenGemini Variables
+# Configuration Constants
 ################
 
-# Packaging variables
-PACKAGE_NAME = "OpenGemini"
-gobuild_out = 'gobuild.txt'
-prereqs = [ 'git', 'go' ]
-go_vet_command = "go vet ./..."
+PACKAGE_NAME = "openGemini"
+GOBUILD_OUT = 'gobuild.txt'
+PREREQS = ['git', 'go']
+GO_VET_COMMAND = "go vet ./..."
 
-targets = {
-    'ts-sql' : './app/ts-sql',
-    'ts-meta' : './app/ts-meta',
-    'ts-store' : './app/ts-store',
-    'ts-server' : './app/ts-server',
-    'ts-monitor' : './app/ts-monitor',
-    'ts-data' : './app/ts-data',
+TARGETS: Dict[str, str] = {
+    'ts-sql': './app/ts-sql',
+    'ts-meta': './app/ts-meta',
+    'ts-store': './app/ts-store',
+    'ts-server': './app/ts-server',
+    'ts-monitor': './app/ts-monitor',
+    'ts-data': './app/ts-data',
     'ts-recover': './app/ts-recover'
 }
 
-supported_builds = {
-    'linux': [ "amd64","arm64"],
-    'darwin': [ "amd64","arm64"],
-    'windows': [ "amd64","arm64"],
+SUPPORTED_BUILDS: Dict[str, List[str]] = {
+    'linux': ["amd64", "arm64"],
+    'darwin': ["amd64", "arm64"],
+    'windows': ["amd64", "arm64"],
 }
 
 ################
-#### OpenGemini Functions
+# Logging Configuration
 ################
 
-def print_banner():
-    logging.info("""
+def init_logging(verbose: bool) -> None:
+    """Initialize logging configuration"""
+    log_level = logging.DEBUG if verbose else logging.INFO
+    logging.basicConfig(
+        level=log_level,
+        format='[%(levelname)s] %(funcName)s: %(message)s'
+    )
+    logging.info(f"Writing error details to")
+
+################
+# Utility Functions
+################
+
+def run_command(
+    command: str,
+    allow_failure: bool = False,
+    shell: bool = False
+) -> Optional[str]:
+    """Execute a shell command with error handling"""
+    logging.debug(f"Executing command: {command}")
+    try:
+        if shell:
+            if get_system_platform() != "windows":
+                result = subprocess.check_output(
+                    command,
+                    stderr=subprocess.STDOUT,
+                    shell=shell,
+                    text=True
+                )
+            else:
+                envs = os.environ.copy()
+                cmd_parts = command.split()
+                env_extra = {p.split("=")[0]: p.split("=")[1] for p in cmd_parts[:2] if "=" in p}
+                envs.update(env_extra)
+                command_new = ' '.join(cmd_parts[2:]) if len(cmd_parts) > 2 else ''
+
+                result = subprocess.check_output(
+                    command_new,
+                    stderr=subprocess.STDOUT,
+                    shell=shell,
+                    env=envs,
+                    text=True
+                )
+        else:
+            result = subprocess.check_output(
+                command.split(),
+                stderr=subprocess.STDOUT,
+                text=True
+            )
+        return result.strip()
+
+    except subprocess.CalledProcessError as e:
+        if allow_failure:
+            logging.warning(f"Command failed: {command}, Error: {e.output}")
+            return None
+        else:
+            logging.error(f"Command failed: {command}, Error: {e.output}")
+            write_to_gobuild(e.output)
+            sys.exit(1)
+    except OSError as e:
+        if allow_failure:
+            logging.warning(f"Command environment error: {command}, Error: {e}")
+            return None
+        else:
+            logging.error(f"Command environment error: {command}, Error: {e}")
+            write_to_gobuild(str(e))
+            sys.exit(1)
+
+def write_to_gobuild(content: str) -> None:
+    """Write build error information to log file"""
+    logging.info(f"Writing error details to {GOBUILD_OUT}")
+    try:
+        with open(GOBUILD_OUT, 'w', encoding='utf-8') as f:
+            f.write("error\n")
+            f.write(content)
+    except IOError as e:
+        logging.error(f"Failed to write to {GOBUILD_OUT}: {e}")
+
+def get_system_arch() -> str:
+    """Get current system architecture in Go-compatible format"""
+    arch = platform.uname()[4].lower()
+    arch_map = {
+        "x86_64": "amd64",
+        "386": "i386",
+        "aarch64": "arm64"
+    }
+    if arch in arch_map:
+        return arch_map[arch]
+    if 'arm' in arch:
+        return "arm64"
+    return arch
+
+def get_system_platform() -> str:
+    """Get current operating system in Go-compatible format"""
+    if sys.platform.startswith("linux"):
+        return "linux"
+    elif sys.platform.startswith("win"):
+        return "windows"
+    return sys.platform
+
+def local_changes_exist() -> bool:
+    """Check for uncommitted local changes"""
+    output = run_command("git diff-files --ignore-submodules --", allow_failure=True) or ""
+    return len(output.strip()) > 0
+
+def get_current_version() -> str:
+    """Parse version information from git tag"""
+    version_tag = run_command("git describe --always --tags --abbrev=0") or ""
+    if isinstance(version_tag, str) and version_tag.startswith('v'):
+        version_tag = version_tag[1:]
+    return version_tag.replace("-", "~").replace("_", "~")
+
+def get_current_commit(short: bool = False) -> str:
+    """Get current git commit hash"""
+    cmd = "git log --pretty=format:'%h' -n 1" if short else "git rev-parse HEAD"
+    result = run_command(cmd)
+    return result.strip('\'\n\r ') if result else ""
+
+def get_current_branch() -> str:
+    """Get current git branch name"""
+    result = run_command("git rev-parse --abbrev-ref HEAD")
+    return result.strip() if result else ""
+
+def get_go_version() -> Optional[str]:
+    """Get installed Go version"""
+    out = run_command("go version")
+    if not out:
+        return None
+    match = re.search(r'go version go(\S+)', out)
+    return match.group(1).strip() if match else None
+
+def check_dependency(binary: str) -> Optional[str]:
+    """Check if a binary exists in system PATH"""
+    def is_executable(path: str) -> bool:
+        return os.path.isfile(path) and os.access(path, os.X_OK)
+
+    for path in os.environ["PATH"].split(os.pathsep):
+        path = path.strip('"')
+        if get_system_platform() == "windows" and isinstance(path, str) and binary.upper() in path.upper():
+            return path
+        full_path = os.path.join(path, binary)
+        if is_executable(full_path):
+            return full_path
+    return None
+
+################
+# Core Build Logic
+################
+
+def print_banner() -> None:
+    """Print project banner"""
+    banner = r"""
                                   ______                        _             _
                                  .' ___  |                      (_)           (_)
   .--.   _ .--.   .---.  _ .--. / .'   \_|  .---.  _ .--..--.   __   _ .--.   __
@@ -52,553 +207,414 @@ def print_banner():
         [__|
 
   Build Script
-""")
+"""
+    logging.info(banner)
 
-def go_get(branch, update=False, no_uncommitted=False):
-    """Retrieve build dependencies or restore pinned dependencies.
-    """
-    if local_changes() and no_uncommitted:
-        logging.error("There are uncommitted changes in the current directory.")
+def check_environment(build_dir: Optional[str] = None) -> None:
+    """Verify build environment is valid"""
+    logging.info("Checking build environment...")
+
+    # Check required dependencies
+    for tool in PREREQS:
+        if not check_dependency(tool):
+            raise RuntimeError(f"Missing required dependency: {tool}. Please install it first.")
+
+    # Verify Go installation
+    go_version = get_go_version()
+    if not go_version:
+        raise RuntimeError("Could not determine Go version. Ensure Go is properly installed.")
+    logging.info(f"Using Go version: {go_version}")
+
+    # Log relevant environment variables
+    for env_var in ["GOPATH", "GOBIN", "GOROOT"]:
+        logging.debug(f"{env_var}: {os.environ.get(env_var, 'Not set')}")
+
+def go_get_dependencies(branch: str, update: bool = False, no_uncommitted: bool = False) -> bool:
+    """Retrieve or update Go dependencies"""
+    if local_changes_exist() and no_uncommitted:
+        logging.error("There are uncommitted changes. Commit or stash them first.")
         return False
     return True
 
-def run_tests(race, parallel, timeout, no_vet, junit=False):
-    """Run the Go test suite on binary output.
-    """
+def run_tests(
+    race: bool = False,
+    parallel: Optional[int] = None,
+    timeout: Optional[str] = None,
+    no_vet: bool = False,
+    junit: bool = False
+) -> bool:
+    """Run test suite with optional race detection and reporting"""
     logging.info("Starting tests...")
     if race:
-        logging.info("Race is enabled.")
+        logging.info("Race detection enabled")
     if parallel is not None:
-        logging.info("Using parallel: %s", parallel)
+        logging.info(f"Parallel test processes: {parallel}")
     if timeout is not None:
-        logging.info("Using timeout: %s", parallel)
+        logging.info(f"Test timeout: {timeout}")
 
-    logging.info("Fetching module dependencies...")
-    run("go mod download")
+    # Download module dependencies
+    run_command("go mod download")
 
-    logging.info("Ensuring code is properly formatted with go fmt...")
-    out = run("go fmt ./...")
-    if len(out) > 0:
-        logging.error("Code not formatted. Please use 'go fmt ./...' to fix formatting errors.")
-        logging.error(out)
+    # Check code formatting
+    logging.info("Checking code formatting with go fmt...")
+    fmt_output = run_command("go fmt ./...")
+    if fmt_output:
+        logging.error("Code formatting issues found. Run 'go fmt ./...' to fix.")
+        logging.error(fmt_output)
         return False
+
+    # Run go vet if enabled
     if not no_vet:
-        logging.info("Running 'go vet'...")
-        out = run(go_vet_command)
-        if len(out) > 0:
-            logging.error("Go vet failed. Please run 'go vet ./...' and fix any errors.")
-            logging.error(out)
-            write_to_gobuild(out)
+        logging.info("Running code analysis with go vet...")
+        vet_output = run_command(GO_VET_COMMAND)
+        if vet_output:
+            logging.error("go vet found issues. Fix them before proceeding.")
+            logging.error(vet_output)
+            write_to_gobuild(vet_output)
             return False
     else:
-        logging.info("Skipping 'go vet' call...")
-    test_command = "go test -v"
+        logging.info("Skipping go vet as requested")
+
+    # Build test command
+    test_cmd_parts = ["go test -v"]
     if race:
-        test_command += " -race"
+        test_cmd_parts.append("-race")
     if parallel is not None:
-        test_command += " -parallel {}".format(parallel)
+        test_cmd_parts.append(f"-parallel {parallel}")
     if timeout is not None:
-        test_command += " -timeout {}".format(timeout)
-    test_command += " ./..."
+        test_cmd_parts.append(f"-timeout {timeout}")
+    test_cmd_parts.append("./...")
+    full_test_cmd = " ".join(test_cmd_parts)
+
+    # Execute tests
     if junit:
-        logging.info("Retrieving go-junit-report...")
-        run("go get github.com/jstemmer/go-junit-report")
+        return _run_tests_with_junit(full_test_cmd)
+    else:
+        return _run_tests_normal(full_test_cmd)
 
-        # Retrieve the output from this command.
-        logging.info("Running tests...")
-        logging.debug(test_command)
-        proc = subprocess.Popen(test_command.split(), stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        output, unused_err = proc.communicate(timeout=30)
-        output = output.decode('utf-8').strip()
+def _run_tests_normal(test_cmd: str) -> bool:
+    """Run tests in normal mode"""
+    try:
+        output = run_command(test_cmd)
+        if output and "FAIL" in output:
+            write_to_gobuild(output)
+            return False
+        logging.debug(f"Test output:\n{output}")
+        return True
+    except Exception as e:
+        logging.error(f"Test execution failed: {e}")
+        return False
 
-        file = 'test-results.xml'
-        flags = os.O_WRONLY | os.O_CREAT
-        modes = stat.S_IWUSR | stat.S_IRUSR
-        # Process the output through go-junit-report.
-        with os.fdopen(os.open(file, flags, modes), 'w', encoding="utf-8") as f:
-            logging.debug("go-junit-report")
-            junit_proc = subprocess.Popen(["go-junit-report"], stdin=subprocess.PIPE, stdout=f, stderr=subprocess.PIPE)
-            unused_output, err = junit_proc.communicate(output.encode('ascii', 'ignore'), timeout=30)
+def _run_tests_with_junit(test_cmd: str) -> bool:
+    """Run tests and generate JUnit-style report"""
+    logging.info("Installing go-junit-report...")
+    run_command("go get github.com/jstemmer/go-junit-report")
+
+    try:
+        # Execute tests and capture output as string
+        proc = subprocess.Popen(
+            test_cmd.split(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True
+        )
+        output, _ = proc.communicate(timeout=30)
+
+        # Generate JUnit report
+        with open('test-results.xml', 'w', encoding='utf-8') as f:
+            junit_proc = subprocess.Popen(
+                ["go-junit-report"],
+                stdin=subprocess.PIPE,
+                stdout=f,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            _, err = junit_proc.communicate(output)
             if junit_proc.returncode != 0:
-                logging.error("Command '%s' failed with error: %s", "go-junit-report", err)
-                sys.exit(1)
+                logging.error(f"Failed to generate JUnit report: {err}")
+                return False
 
         if proc.returncode != 0:
-            logging.error("Command '%s' failed with error: %s", test_command, output.encode('ascii', 'ignore'))
-            sys.exit(1)
-    else:
-        logging.info("Running tests...")
-        output = run(test_command)
-        if "FAIL" in output:
-            write_to_gobuild(output)
-        logging.debug("Test output:\n%s", out.encode('ascii', 'ignore'))
-    return True
-
-################
-#### All OpenGemini-specific content above this line
-################
-
-def run(command, allow_failure=False, shell=False):
-    """Run shell command (convenience wrapper around subprocess).
-    """
-    out = None
-
-    logging.debug(command)
-    try:
-        if shell:
-            if get_system_platform() != "windows":
-                out = subprocess.check_output(command, stderr=subprocess.STDOUT, shell=shell)
-            else:
-                envs = os.environ.copy()
-                env_extra = {env.split("=")[0]:env.split("=")[1] for env in command.split()[:2]}
-                envs.update(env_extra)
-                command_new = ' '.join(command.split()[2:]) # remove GOOS=windows GOARCH=arm64
-                out = subprocess.check_output(command_new, stderr=subprocess.STDOUT, shell=shell, env=envs)
-        else:
-            out = subprocess.check_output(command.split(), stderr=subprocess.STDOUT)
-        out = out.decode('utf-8').strip()
-    except subprocess.CalledProcessError as e:
-        if allow_failure:
-            logging.warning("Command '%s' failed with error: %s", command, e.output)
-            return None
-        else:
-            logging.error("Command '%s' failed with error: %s", command, e.output)
-            write_to_gobuild(e.output)
-            sys.exit(1)
-    except OSError as e:
-        if allow_failure:
-            logging.warning("Command '%s' failed with error: %s", command, e)
-            return out
-        else:
-            logging.error("Command '%s' failed with error: %s", command, e)
-            write_to_gobuild(e.output)
-            sys.exit(1)
-    else:
-        return out
-
-def increment_minor_version(version):
-    """Return the version with the minor version incremented and patch
-    version set to zero.
-    """
-    ver_list = version.split('.')
-    if len(ver_list) != 3:
-        logging.warning("Could not determine how to increment version '%s', will just use provided version.", version)
-        return version
-    ver_list[1] = str(int(ver_list[1]) + 1)
-    ver_list[2] = str(0)
-    inc_version = '.'.join(ver_list)
-    logging.debug("Incremented version from '%s' to '%s'.", version, inc_version)
-    return inc_version
-
-def get_current_version_tag():
-    """Retrieve the raw git version tag.
-    """
-    version = run("git describe --always --tags --abbrev=0")
-    return version
-
-def get_current_version():
-    """Parse version information from git tag output.
-    """
-    version_tag = get_current_version_tag()
-    # Remove leading 'v'
-    if version_tag[0] == 'v':
-        version_tag = version_tag[1:]
-    # Replace any '-'/'_' with '~'
-    if '-' in version_tag:
-        version_tag = version_tag.replace("-","~")
-    if '_' in version_tag:
-        version_tag = version_tag.replace("_","~")
-    return version_tag
-
-def get_current_commit(short=False):
-    """Retrieve the current git commit.
-    """
-    command = None
-    if short:
-        command = "git log --pretty=format:'%h' -n 1"
-    else:
-        command = "git rev-parse HEAD"
-    out = run(command)
-    return out.strip('\'\n\r ')
-
-def get_current_branch():
-    """Retrieve the current git branch.
-    """
-    command = "git rev-parse --abbrev-ref HEAD"
-    out = run(command)
-    return out.strip()
-
-def local_changes():
-    """Return True if there are local un-committed changes.
-    """
-    output = run("git diff-files --ignore-submodules --").strip()
-    if len(output) > 0:
-        return True
-    return False
-
-def get_system_arch():
-    """Retrieve current system architecture.
-    """
-    arch = platform.uname()[4].lower()
-    if arch == "x86_64":
-        arch = "amd64"
-    elif arch == "386":
-        arch = "i386"
-    elif arch == "aarch64":
-        arch = "arm64"
-    elif 'arm' in arch:
-        # Prevent uname from reporting full ARM arch (eg 'armv7l')
-        arch = "arm64"
-    return arch
-
-def get_system_platform():
-    """Retrieve current system platform.
-    """
-    if sys.platform.startswith("linux"):
-        return "linux"
-    elif sys.platform.startswith("win"):
-        return "windows"
-    else:
-        return sys.platform
-
-def get_go_version():
-    """Retrieve version information for Go.
-    """
-    out = run("go version")
-    matches = re.search('go version go(\S+)', out)
-    if matches is not None:
-        return matches.groups()[0].strip()
-    return None
-
-def check_path_for(b):
-    """Check the the user's path for the provided binary.
-    """
-    def is_exe(fpath):
-        return os.path.isfile(fpath) and os.access(fpath, os.X_OK)
-
-    for path in os.environ["PATH"].split(os.pathsep):
-        path = path.strip('"')
-        if b.upper() in path.upper():
-            return path#windows
-        full_path = os.path.join(path, b)
-        if os.path.isfile(full_path) and os.access(full_path, os.X_OK):
-            return full_path
-
-def check_environ(build_dir = None):
-    """Check environment for common Go variables.
-    """
-    logging.info("Checking environment...")
-    for v in [ "GOPATH", "GOBIN", "GOROOT" ]:
-        logging.debug("Using '%s' for %s", os.environ.get(v), v)
-
-    cwd = os.getcwd()
-    if build_dir is None and os.environ.get("GOPATH") and os.environ.get("GOPATH") in cwd:
-        logging.warning("Your current directory is under your GOPATH. This may lead to build failures when using modules.")
-    return True
-
-def check_prereqs():
-    """Check user path for required dependencies.
-    """
-    logging.info("Checking for dependencies...")
-    for req in prereqs:
-        if not check_path_for(req):
-            logging.error("Could not find dependency: %s", req)
+            logging.error(f"Tests failed: {output}")
             return False
-    return True
+        return True
+    except Exception as e:
+        logging.error(f"Test execution failed: {e}")
+        return False
 
-def build(version=None,
-          sys_platform=None,
-          arch=None,
-          nightly=False,
-          race=False,
-          clean=False,
-          outdir=".",
-          tags=None,
-          static=False):
-    """Build each target for the specified architecture and platform.
-    """
-    if tags is None:
-        tags = []
-    logging.info("Starting build for %s/%s...", sys_platform, arch)
-    logging.info("Using Go version: %s", get_go_version())
-    logging.info("Using git branch: %s", get_current_branch())
-    logging.info("Using git commit: %s", get_current_commit())
-    if static:
-        logging.info("Using statically-compiled output.")
-    if race:
-        logging.info("Race is enabled.")
-    if len(tags) > 0:
-        logging.info("Using build tags: %s", ','.join(tags))
+def build_targets(
+    platform: str,
+    arch: str,
+    version: str,
+    clean: bool = False,
+    outdir: str = ".",
+    tags: List[str] = None,
+    static: bool = False,
+    race: bool = False
+) -> None:
+    """Build targets for specified platform and architecture"""
+    tags = tags or []
+    if platform not in SUPPORTED_BUILDS:
+        raise ValueError(f"Unsupported platform: {platform}")
+    if arch not in SUPPORTED_BUILDS[platform]:
+        raise ValueError(f"Unsupported architecture {arch} for platform {platform}")
 
-    logging.info("Sending build output to: %s", outdir)
+    # Prepare output directory
     if not os.path.exists(outdir):
         os.makedirs(outdir)
-    elif clean and outdir != '/' and outdir != ".":
-        logging.info("Cleaning build directory '%s' before building.", outdir)
+    elif clean and outdir not in ('/', '.'):
+        logging.info(f"Cleaning build directory: {outdir}")
         shutil.rmtree(outdir)
         os.makedirs(outdir)
 
-    logging.info("Using version '%s' for build.", version)
+    logging.info(f"Building for {platform}/{arch}...")
+    logging.info(f"Output directory: {outdir}")
 
-    for target, path in targets.items():
-        if sys_platform == "windows":
-            target += ".exe"
+    # Build each target
+    for target_name, target_path in TARGETS.items():
+        # Add .exe extension for Windows
+        output_filename = f"{target_name}.exe" if platform == "windows" else target_name
+        output_path = os.path.join(outdir, output_filename)
 
-        logging.info("Building target: %s", target)
-        build_command = ""
+        # Construct build command
+        build_cmd_parts = []
 
-        # Handle static binary output
-        if static is True or "static_" in arch:
+        # Handle static build
+        if static or "static_" in arch:
             if "static_" in arch:
                 static = True
                 arch = arch.replace("static_", "")
-            build_command += "CGO_ENABLED=0 "
+            build_cmd_parts.append("CGO_ENABLED=0")
 
-        # Handle variations in architecture output
-        if arch == "i386" or arch == "i686":
-            arch = "386"
-        build_command += "GOOS={} GOARCH={} ".format(sys_platform, arch)
+        # Set GOOS and GOARCH
+        build_cmd_parts.append(f"GOOS={platform} GOARCH={arch}")
 
-        if "arm" in arch and sys_platform != "windows":
+        # Handle ARM specific flags
+        if "arm" in arch and platform != "windows":
             if arch == "armel":
-                build_command += "GOARM=5 "
-            elif arch == "armhf" or arch == "arm":
-                build_command += "GOARM=6 "
+                build_cmd_parts.append("GOARM=5")
+            elif arch in ("armhf", "arm"):
+                build_cmd_parts.append("GOARM=6")
             elif arch == "arm64":
-                # TODO(rossmcdonald) - Verify this is the correct setting for arm64
-                build_command += "GOARM=7 "
-            else:
-                logging.error("Invalid ARM architecture specified: %s", arch)
-                logging.error("Please specify either 'armel', 'armhf', or 'arm64'.")
-                return False
+                build_cmd_parts.append("GOARM=7")
+
+        # Base build command
         if "arm" in arch:
-            build_command += "go build -o {} ".format(os.path.join(outdir, target))
+            build_cmd_parts.append(f"go build -o {output_path}")
         else:
-            build_command += "go build -mod=mod -o {} ".format(os.path.join(outdir, target))
+            build_cmd_parts.append(f"go build -mod=mod -o {output_path}")
+
+        # Add build tags and race detection
         if race:
-            build_command += "-race "
-        if len(tags) > 0:
-            build_command += "-tags {} ".format(','.join(tags))
+            build_cmd_parts.append("-race")
+        if tags:
+            build_cmd_parts.append(f"-tags {','.join(tags)}")
 
-        if static:
-            build_command += "-a -installsuffix cgo "
-            ldflags = "-ldflags=\"-s -X {package}.Version={version} -X {package}.GitBranch={branch} -X {package}.GitCommit={commit}\" "
-        else:
-            ldflags = "-ldflags=\"-X {package}.Version={version} -X {package}.GitBranch={branch} -X {package}.GitCommit={commit}\" "
+        # Add linker flags with version info
+        ldflags = (
+            f"-ldflags=\"-X github.com/openGemini/openGemini/app.Version={version} "
+            f"-X github.com/openGemini/openGemini/app.GitBranch={get_current_branch()} "
+            f"-X github.com/openGemini/openGemini/app.GitCommit={get_current_commit()}\""
+        )
+        build_cmd_parts.append(ldflags)
 
-        build_command += ldflags.format(
-                package = "github.com/openGemini/openGemini/app",
-                version = version,
-                branch = get_current_branch(),
-                commit = get_current_commit())
+        # Add source path
+        build_cmd_parts.append(target_path)
 
-        build_command += path
+        # Execute build
+        build_cmd = " ".join(build_cmd_parts)
         start_time = datetime.utcnow()
-        logging.info(build_command)
-        run(build_command, shell=True)
+        logging.info(f"Building {target_name}: {build_cmd}")
+        run_command(build_cmd, shell=True)
         end_time = datetime.utcnow()
-        logging.info("Time taken: %ss", (end_time - start_time).total_seconds())
-    return True
+        logging.info(f"Build completed in {(end_time - start_time).total_seconds():.2f}s")
 
-def write_to_gobuild(content):
-    logging.info("write to file")
 
-    if get_system_platform() != "windows":
-        with open(gobuild_out, 'w') as f:
-            f.write("error\n")
-            f.write(content)
-    else:
-        with open(gobuild_out, 'w') as f:
-            f.write("error\n")
-            f.write(content.decode("utf-8"))
+# Initialize logging
+init_logging(True)
+################
+# Click Command Configuration
+################
 
-def main(args):
-    global PACKAGE_NAME
+@click.command(context_settings=dict(help_option_names=['-h', '--help']))
+@click.option('--outdir', '-o',
+              default='./build/',
+              type=click.Path(),
+              help='Output directory for built binaries')
+@click.option('--name', '-n',
+              default=PACKAGE_NAME,
+              help='Name used for packaging')
+@click.option('--arch',
+              default=get_system_arch(),
+              help=f'Target architecture (supported: {", ".join(sum(SUPPORTED_BUILDS.values(), []))})')
+@click.option('--platform',
+              default=get_system_platform(),
+              help=f'Target platform (supported: {", ".join(SUPPORTED_BUILDS.keys())})')
+@click.option('--branch',
+              default=get_current_branch(),
+              help='Git branch to build from')
+@click.option('--commit',
+              default=get_current_commit(short=True),
+              help='Git commit to build from')
+@click.option('--version',
+              default=get_current_version(),
+              help='Version string for the build (e.g., 0.1.0)')
+@click.option('--iteration',
+              default="1",
+              help='Package iteration number')
+@click.option('--nightly',
+              is_flag=True,
+              help='Mark build as nightly (increments minor version)')
+@click.option('--update',
+              is_flag=True,
+              help='Update dependencies before building')
+@click.option('--release',
+              is_flag=True,
+              help='Mark build as official release')
+@click.option('--clean',
+              is_flag=True,
+              help='Clean output directory before building')
+@click.option('--no-get',
+              is_flag=True,
+              help='Skip retrieving dependencies')
+@click.option('--no-uncommitted',
+              is_flag=True,
+              help='Fail if uncommitted changes exist')
+@click.option('--build-tags',
+              help='Comma-separated list of build tags')
+@click.option('--static',
+              is_flag=True,
+              help='Build statically linked binaries')
+@click.option('--test',
+              is_flag=True,
+              help='Run tests instead of building')
+@click.option('--junit-report',
+              is_flag=True,
+              help='Generate JUnit-style test report')
+@click.option('--no-vet',
+              is_flag=True,
+              help='Skip go vet during tests')
+@click.option('--race',
+              is_flag=True,
+              help='Enable race detection in tests/builds')
+@click.option('--parallel',
+              type=int,
+              help='Number of parallel test processes')
+@click.option('--timeout',
+              help='Test timeout (e.g., 30s)')
 
-    if args.release and args.nightly:
-        logging.error("Cannot be both a nightly and a release.")
-        return 1
+def main(
+    outdir: str,
+    name: str,
+    arch: str,
+    platform: str,
+    branch: str,
+    commit: str,
+    version: str,
+    iteration: str,
+    nightly: bool,
+    update: bool,
+    release: bool,
+    clean: bool,
+    no_get: bool,
+    no_uncommitted: bool,
+    build_tags: str,
+    static: bool,
+    test: bool,
+    junit_report: bool,
+    no_vet: bool,
+    race: bool,
+    parallel: int,
+    timeout: str
+) -> None:
+    """openGemini build and packaging script"""
 
-    if args.nightly:
-        args.version = increment_minor_version(args.version)
-        args.version = "{}~n{}".format(args.version,
-                                       datetime.utcnow().strftime("%Y%m%d%H%M"))
-        args.iteration = 0
+    try:
+        # Validate mutually exclusive options
+        if release and nightly:
+            raise click.BadParameter("Cannot specify both --release and --nightly")
 
-    # Pre-build checks
-    check_environ()
-    if not check_prereqs():
-        return 1
-    if args.build_tags is None:
-        args.build_tags = []
-    else:
-        args.build_tags = args.build_tags.split(',')
+        # Handle nightly versioning
+        if nightly:
+            ver_parts = version.split('.')
+            if len(ver_parts) == 3:
+                try:
+                    ver_parts[1] = str(int(ver_parts[1]) + 1)
+                    ver_parts[2] = "0"
+                    version = ".".join(ver_parts)
+                except (ValueError, IndexError):
+                    logging.warning("Could not increment version, using original")
+            version = f"{version}~n{datetime.utcnow().strftime('%Y%m%d%H%M')}"
 
-    orig_commit = get_current_commit(short=True)
-    orig_branch = get_current_branch()
+        # Process build tags
+        build_tags_list = build_tags.split(',') if build_tags else []
 
-    if args.platform not in supported_builds and args.platform != 'all':
-        logging.error("Invalid build platform: %s", args.platform)
-        return 1
+        # Store original git state
+        orig_commit = get_current_commit(short=True)
+        orig_branch = get_current_branch()
 
-    build_output = {}
+        # Validate platform
+        if platform not in SUPPORTED_BUILDS and platform != 'all':
+            raise click.BadParameter(f"Unsupported platform: {platform}. Supported: {', '.join(SUPPORTED_BUILDS.keys())}")
 
-    if args.branch != orig_branch and args.commit != orig_commit:
-        logging.error("Can only specify one branch or commit to build from.")
-        return 1
-    elif args.branch != orig_branch:
-        logging.info("Moving to git branch: %s", args.branch)
-        run("git checkout {}".format(args.branch))
-    elif args.commit != orig_commit:
-        logging.info("Moving to git commit: %s", args.commit)
-        run("git checkout {}".format(args.commit))
+        # Checkout specified branch/commit if needed
+        if branch != orig_branch and commit != orig_commit:
+            raise click.BadParameter("Specify either --branch or --commit, not both")
+        elif branch != orig_branch:
+            logging.info(f"Checking out branch: {branch}")
+            run_command(f"git checkout {branch}")
+        elif commit != orig_commit:
+            logging.info(f"Checking out commit: {commit}")
+            run_command(f"git checkout {commit}")
 
-    if not args.no_get:
-        if not go_get(args.branch, update=args.update, no_uncommitted=args.no_uncommitted):
-            return 1
+        # Check environment and dependencies
+        check_environment()
+        if not no_get:
+            if not go_get_dependencies(branch, update, no_uncommitted):
+                sys.exit(1)
 
-    if args.test:
-        if not run_tests(args.race, args.parallel, args.timeout, args.no_vet, args.junit_report):
-            return 1
+        # Run tests if requested
+        if test:
+            if not run_tests(race, parallel, timeout, no_vet, junit_report):
+                sys.exit(1)
+            sys.exit(0)
 
-    platforms = []
-    single_build = True
-    if args.platform == 'all':
-        platforms = supported_builds.keys()
-        single_build = False
-    else:
-        platforms = [args.platform]
-    for plf in platforms:
-        build_output.update( { plf : {} } )
-        archs = []
-        if args.arch == "all":
-            single_build = False
-            archs = supported_builds.get(plf)
-        else:
-            if args.arch not in supported_builds.get(plf):
-                logging.error("Invalid build arch: %s", args.arch)
-                return 1
-            archs = [args.arch]
+        # Determine build platforms and architectures
+        platforms = SUPPORTED_BUILDS.keys() if platform == 'all' else [platform]
+        single_build = platform != 'all' and arch != 'all'
 
-        for arch in archs:
-            od = args.outdir
-            if not single_build:
-                od = os.path.join(args.outdir, plf, arch)
-            if not build(version=args.version,
-                         sys_platform=plf,
-                         arch=arch,
-                         nightly=args.nightly,
-                         race=args.race,
-                         clean=args.clean,
-                         outdir=od,
-                         tags=args.build_tags,
-                         static=args.static):
-                return 1
-            build_output.get(plf).update( { arch : od } )
+        for plf in platforms:
+            archs = SUPPORTED_BUILDS[plf] if arch == 'all' else [arch]
 
-    if orig_branch != get_current_branch():
-        logging.info("Moving back to original git branch: %s", orig_branch)
-        run("git checkout {}".format(orig_branch))
+            for arch_target in archs:
+                # Determine output directory
+                output_dir = outdir
+                if not single_build:
+                    output_dir = os.path.join(outdir, plf, arch_target)
 
-    return 0
+                # Build targets
+                build_targets(
+                    platform=plf,
+                    arch=arch_target,
+                    version=version,
+                    clean=clean,
+                    outdir=output_dir,
+                    tags=build_tags_list,
+                    static=static,
+                    race=race
+                )
 
+        # Restore original git branch
+        if orig_branch != get_current_branch():
+            logging.info(f"Restoring original branch: {orig_branch}")
+            run_command(f"git checkout {orig_branch}")
+
+        logging.info("Build completed successfully!")
+
+    except Exception as e:
+        logging.error(f"Build failed: {str(e)}")
+        sys.exit(1)
 
 if __name__ == '__main__':
-    LOG_LEVEL = logging.INFO
-    if '--debug' in sys.argv[1:]:
-        LOG_LEVEL = logging.DEBUG
-    log_format = '[%(levelname)s] %(funcName)s: %(message)s'
-    logging.basicConfig(level=LOG_LEVEL,
-                        format=log_format)
-
-    parser = argparse.ArgumentParser(description='OpenGemini build and packaging script.')
-    parser.add_argument('--verbose','-v','--debug',
-                        action='store_true',
-                        help='Use debug output')
-    parser.add_argument('--outdir', '-o',
-                        metavar='<output directory>',
-                        default='./build/',
-                        type=os.path.abspath,
-                        help='Output directory')
-    parser.add_argument('--name', '-n',
-                        metavar='<name>',
-                        default=PACKAGE_NAME,
-                        type=str,
-                        help='Name to use for package name (when package is specified)')
-    parser.add_argument('--arch',
-                        metavar='<amd64|all>',
-                        type=str,
-                        default=get_system_arch(),
-                        help='Target architecture for build output')
-    parser.add_argument('--platform',
-                        metavar='<linux|all>',
-                        type=str,
-                        default=get_system_platform(),
-                        help='Target platform for build output')
-    parser.add_argument('--branch',
-                        metavar='<branch>',
-                        type=str,
-                        default=get_current_branch(),
-                        help='Build from a specific branch')
-    parser.add_argument('--commit',
-                        metavar='<commit>',
-                        type=str,
-                        default=get_current_commit(short=True),
-                        help='Build from a specific commit')
-    parser.add_argument('--version',
-                        metavar='<version>',
-                        type=str,
-                        default=get_current_version(),
-                        help='Version information to apply to build output (ex: 0.12.0)')
-    parser.add_argument('--iteration',
-                        metavar='<package iteration>',
-                        type=str,
-                        default="1",
-                        help='Package iteration to apply to build output (defaults to 1)')
-    parser.add_argument('--nightly',
-                        action='store_true',
-                        help='Mark build output as nightly build (will increment the minor version)')
-    parser.add_argument('--update',
-                        action='store_true',
-                        help='Update build dependencies prior to building')
-    parser.add_argument('--release',
-                        action='store_true',
-                        help='Mark build output as release')
-    parser.add_argument('--clean',
-                        action='store_true',
-                        help='Clean output directory before building')
-    parser.add_argument('--no-get',
-                        action='store_true',
-                        help='Do not retrieve pinned dependencies when building')
-    parser.add_argument('--no-uncommitted',
-                        action='store_true',
-                        help='Fail if uncommitted changes exist in the working directory')
-    parser.add_argument('--build-tags',
-                        metavar='<tags>',
-                        help='Optional build tags to use for compilation')
-    parser.add_argument('--static',
-                        action='store_true',
-                        help='Create statically-compiled binary output')
-    parser.add_argument('--test',
-                        action='store_true',
-                        help='Run tests (does not produce build output)')
-    parser.add_argument('--junit-report',
-                        action='store_true',
-                        help='Output tests in the JUnit XML format')
-    parser.add_argument('--no-vet',
-                        action='store_true',
-                        help='Do not run "go vet" when running tests')
-    parser.add_argument('--race',
-                        action='store_true',
-                        help='Enable race flag for build output')
-    parser.add_argument('--parallel',
-                        metavar='<num threads>',
-                        type=int,
-                        help='Number of tests to run simultaneously')
-    parser.add_argument('--timeout',
-                        metavar='<timeout>',
-                        type=str,
-                        help='Timeout for tests before failing')
-    main_args = parser.parse_args()
     print_banner()
-    sys.exit(main(main_args))
+    main()

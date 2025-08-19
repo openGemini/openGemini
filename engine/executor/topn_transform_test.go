@@ -17,8 +17,10 @@ package executor_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"net/http"
 	_ "net/http/pprof"
+	"slices"
 	"strconv"
 	"testing"
 
@@ -43,6 +45,45 @@ func TopNCompareMultiCol(c1 executor.Chunk, c2 executor.Chunk, t *testing.T) {
 	for i := range c1.Columns() {
 		assert.Equal(t, c1.Columns()[i].IntegerValues(), c2.Columns()[i].IntegerValues())
 	}
+}
+
+func TopNCompareMultiColV2(c1 executor.Chunk, c2 executor.Chunk, t *testing.T) error {
+	if c1 == nil && c2 == nil {
+		return nil
+	}
+	assert.Equal(t, c1.TagLen(), c2.TagLen())
+
+	for i, tag1s := range c1.Tags() {
+		find := false
+		for j, tag2s := range c2.Tags() {
+			if bytes.Equal(tag1s.GetTag(), tag2s.GetTag()) {
+				s1 := c1.TagIndex()[i]
+				e1 := 0
+				if i == c1.TagLen()-1 {
+					e1 = c1.Len()
+				} else {
+					e1 = c1.TagIndex()[i+1]
+				}
+				s2 := c2.TagIndex()[j]
+				e2 := 0
+				if j == c2.TagLen()-1 {
+					e2 = c2.Len()
+				} else {
+					e2 = c2.TagIndex()[j+1]
+				}
+				vals1 := c1.Column(0).IntegerValues()[s1:e1]
+				vals2 := c2.Column(0).IntegerValues()[s2:e2]
+				if slices.Equal(vals1, vals2) {
+					find = true
+					break
+				}
+			}
+		}
+		if !find {
+			return fmt.Errorf("not find tag1s in c2 %s", string(tag1s.GetTag()))
+		}
+	}
+	return nil
 }
 
 func buildTopNRowDataType() hybridqp.RowDataType {
@@ -120,9 +161,9 @@ func BuildTopNInChunk2() executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("m1")
 	chunk.AppendTimes([]int64{1, 2, 3})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=tv1"), 0)
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=tv2"), 1)
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=tv3"), 2)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=tv1"), 0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=tv2"), 1)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=tv3"), 2)
 	for _, col := range chunk.Columns() {
 		switch col.DataType() {
 		case influxql.Integer:
@@ -147,8 +188,8 @@ func BuildTopNResult1() executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk1 := b.NewChunk("m1")
 	chunk1.AppendTimes([]int64{0, 0})
-	chunk1.AddTagAndIndex(*ParseChunkTags("tk1=tv1"), 0)
-	chunk1.AddTagAndIndex(*ParseChunkTags("tk1=tv2"), 1)
+	chunk1.AppendTagsAndIndex(*ParseChunkTags("tk1=tv1"), 0)
+	chunk1.AppendTagsAndIndex(*ParseChunkTags("tk1=tv2"), 1)
 	AppendIntegerValues(chunk1, 0, []int64{2, 1}, []bool{true, true})
 	return chunk1
 }
@@ -158,9 +199,9 @@ func BuildTopNResult2() executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk1 := b.NewChunk("m1")
 	chunk1.AppendTimes([]int64{0, 0, 0})
-	chunk1.AddTagAndIndex(*ParseChunkTags("tk1=tv3"), 0)
-	chunk1.AddTagAndIndex(*ParseChunkTags("tk1=tv2"), 1)
-	chunk1.AddTagAndIndex(*ParseChunkTags("tk1=tv1"), 2)
+	chunk1.AppendTagsAndIndex(*ParseChunkTags("tk1=tv3"), 0)
+	chunk1.AppendTagsAndIndex(*ParseChunkTags("tk1=tv2"), 1)
+	chunk1.AppendTagsAndIndex(*ParseChunkTags("tk1=tv1"), 2)
 	AppendIntegerValues(chunk1, 0, []int64{3, 2, 1}, []bool{true, true, true})
 	return chunk1
 }
@@ -170,8 +211,8 @@ func BuildTopNResult3() executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk1 := b.NewChunk("m1")
 	chunk1.AppendTimes([]int64{0, 0})
-	chunk1.AddTagAndIndex(*ParseChunkTags("tk1=tv1"), 0)
-	chunk1.AddTagAndIndex(*ParseChunkTags("tk1=tv2"), 1)
+	chunk1.AppendTagsAndIndex(*ParseChunkTags("tk1=tv1"), 0)
+	chunk1.AppendTagsAndIndex(*ParseChunkTags("tk1=tv2"), 1)
 	AppendFloatValues(chunk1, 0, []float64{4.4, 2.2}, []bool{true, true})
 	return chunk1
 }
@@ -206,13 +247,51 @@ func TestTopnTransform1(t *testing.T) {
 			Ref: influxql.VarRef{Val: outRowDataType.Field(0).Expr.(*influxql.VarRef).Val, Type: outRowDataType.Field(0).Expr.(*influxql.VarRef).Type},
 		},
 	}
-	trans, err := executor.NewTopNTransform(inRowDataTypes, outRowDataTypes, exprOpt, schema, executor.Fill)
+	trans, err := executor.NewTopNTransform(inRowDataTypes, outRowDataTypes, exprOpt, schema, executor.Fill, "topn_ddcm")
 	if err != nil {
 		panic(err.Error())
 	}
 	checkResult := func(chunk executor.Chunk) error {
 		TopNCompareMultiCol(chunk, expResult, t)
 		return nil
+	}
+	sink := NewSinkFromFunction(outRowDataType, checkResult)
+	executor.Connect(source1.Output, trans.GetInputs()[0])
+	executor.Connect(trans.GetOutputs()[0], sink.Input)
+	var processors executor.Processors
+	processors = append(processors, source1)
+	processors = append(processors, trans)
+	processors = append(processors, sink)
+	executors := executor.NewPipelineExecutor(processors)
+	executors.Execute(context.Background())
+	executors.Release()
+}
+
+func TestTopnTransform1_1(t *testing.T) {
+	executor.InitNagtPool(1)
+	chunk1 := BuildTopNInChunk1()
+	expResult := BuildTopNResult1()
+	source1 := NewSourceFromMultiChunk(chunk1.RowDataType(), []executor.Chunk{chunk1})
+	var inRowDataTypes []hybridqp.RowDataType
+	inRowDataTypes = append(inRowDataTypes, source1.Output.RowDataType)
+	var outRowDataTypes []hybridqp.RowDataType
+	outRowDataType := buildTopNRowDataType()
+	outRowDataTypes = append(outRowDataTypes, outRowDataType)
+	schema := builTopNSchema()
+
+	exprOpt := []hybridqp.ExprOptions{
+		{
+			Expr: &influxql.Call{Name: "topn_nagt2", Args: []influxql.Expr{&influxql.VarRef{Val: "f1", Type: influxql.Integer},
+				&influxql.NumberLiteral{Val: 0.000003}, &influxql.IntegerLiteral{Val: 12}, &influxql.StringLiteral{Val: "count"}}},
+			Ref: influxql.VarRef{Val: outRowDataType.Field(0).Expr.(*influxql.VarRef).Val, Type: outRowDataType.Field(0).Expr.(*influxql.VarRef).Type},
+		},
+	}
+	trans, err := executor.NewTopNTransform(inRowDataTypes, outRowDataTypes, exprOpt, schema, executor.Fill, "topn_nagt2")
+	if err != nil {
+		panic(err.Error())
+	}
+	checkResult := func(chunk executor.Chunk) error {
+		return TopNCompareMultiColV2(chunk, expResult, t)
 	}
 	sink := NewSinkFromFunction(outRowDataType, checkResult)
 	executor.Connect(source1.Output, trans.GetInputs()[0])
@@ -244,7 +323,46 @@ func TestTopnTransform2(t *testing.T) {
 			Ref: influxql.VarRef{Val: outRowDataType.Field(0).Expr.(*influxql.VarRef).Val, Type: outRowDataType.Field(0).Expr.(*influxql.VarRef).Type},
 		},
 	}
-	trans, err := executor.NewTopNTransform(inRowDataTypes, outRowDataTypes, exprOpt, schema, executor.Fill)
+	trans, err := executor.NewTopNTransform(inRowDataTypes, outRowDataTypes, exprOpt, schema, executor.Fill, "topn_ddcm")
+	if err != nil {
+		panic(err.Error())
+	}
+	checkResult := func(chunk executor.Chunk) error {
+		TopNCompareMultiCol(chunk, expResult, t)
+		return nil
+	}
+	sink := NewSinkFromFunction(outRowDataType, checkResult)
+	executor.Connect(source1.Output, trans.GetInputs()[0])
+	executor.Connect(trans.GetOutputs()[0], sink.Input)
+	var processors executor.Processors
+	processors = append(processors, source1)
+	processors = append(processors, trans)
+	processors = append(processors, sink)
+	executors := executor.NewPipelineExecutor(processors)
+	executors.Execute(context.Background())
+	executors.Release()
+}
+
+func TestTopnTransform2_2(t *testing.T) {
+	executor.InitNagtPool(1)
+	chunk1 := BuildTopNInChunk2()
+	expResult := BuildTopNResult2()
+	source1 := NewSourceFromMultiChunk(chunk1.RowDataType(), []executor.Chunk{chunk1})
+	var inRowDataTypes []hybridqp.RowDataType
+	inRowDataTypes = append(inRowDataTypes, source1.Output.RowDataType)
+	var outRowDataTypes []hybridqp.RowDataType
+	outRowDataType := buildTopNRowDataType()
+	outRowDataTypes = append(outRowDataTypes, outRowDataType)
+	schema := builTopNSchema()
+
+	exprOpt := []hybridqp.ExprOptions{
+		{
+			Expr: &influxql.Call{Name: "topn_ddcm", Args: []influxql.Expr{&influxql.VarRef{Val: "f1", Type: influxql.Integer},
+				&influxql.NumberLiteral{Val: 0.000003}, &influxql.IntegerLiteral{Val: 12}, &influxql.StringLiteral{Val: "sum"}}},
+			Ref: influxql.VarRef{Val: outRowDataType.Field(0).Expr.(*influxql.VarRef).Val, Type: outRowDataType.Field(0).Expr.(*influxql.VarRef).Type},
+		},
+	}
+	trans, err := executor.NewTopNTransform(inRowDataTypes, outRowDataTypes, exprOpt, schema, executor.TopN, "topn_nagt2")
 	if err != nil {
 		panic(err.Error())
 	}
@@ -282,7 +400,7 @@ func TestTopnTransform3(t *testing.T) {
 			Ref: influxql.VarRef{Val: outRowDataType.Field(0).Expr.(*influxql.VarRef).Val, Type: outRowDataType.Field(0).Expr.(*influxql.VarRef).Type},
 		},
 	}
-	trans, err := executor.NewTopNTransform(inRowDataTypes, outRowDataTypes, exprOpt, schema, executor.Fill)
+	trans, err := executor.NewTopNTransform(inRowDataTypes, outRowDataTypes, exprOpt, schema, executor.Fill, "topn_ddcm")
 	if err != nil {
 		panic(err.Error())
 	}
@@ -318,7 +436,7 @@ func TestTopnTransformInputNil(t *testing.T) {
 			Ref: influxql.VarRef{Val: outRowDataType.Field(0).Expr.(*influxql.VarRef).Val, Type: outRowDataType.Field(0).Expr.(*influxql.VarRef).Type},
 		},
 	}
-	trans, err := executor.NewTopNTransform(inRowDataTypes, outRowDataTypes, exprOpt, schema, executor.Fill)
+	trans, err := executor.NewTopNTransform(inRowDataTypes, outRowDataTypes, exprOpt, schema, executor.Fill, "topn_ddcm")
 	if err != nil {
 		panic(err.Error())
 	}
@@ -336,6 +454,26 @@ func TestTopnTransformInputNil(t *testing.T) {
 	executors := executor.NewPipelineExecutor(processors)
 	executors.Execute(context.Background())
 	executors.Release()
+}
+
+func TestTopnTransformErr(t *testing.T) {
+	source1 := NewSourceFromMultiChunk(buildTopNRowDataType1(), []executor.Chunk{})
+	var inRowDataTypes []hybridqp.RowDataType
+	inRowDataTypes = append(inRowDataTypes, source1.Output.RowDataType)
+	var outRowDataTypes []hybridqp.RowDataType
+	outRowDataType := buildTopNRowDataType1()
+	outRowDataTypes = append(outRowDataTypes, outRowDataType)
+	schema := builTopNSchema()
+
+	exprOpt := []hybridqp.ExprOptions{
+		{
+			Expr: &influxql.Call{Name: "topn_ddcm", Args: []influxql.Expr{&influxql.VarRef{Val: "f1", Type: influxql.Float},
+				&influxql.NumberLiteral{Val: 0.000003}, &influxql.IntegerLiteral{Val: 12}, &influxql.StringLiteral{Val: "sum"}}},
+			Ref: influxql.VarRef{Val: outRowDataType.Field(0).Expr.(*influxql.VarRef).Val, Type: outRowDataType.Field(0).Expr.(*influxql.VarRef).Type},
+		},
+	}
+	_, err := executor.NewTopNTransform(inRowDataTypes, outRowDataTypes, exprOpt, schema, executor.Fill, "errName")
+	assert.Equal(t, err.Error(), "topn algo name err")
 }
 
 func buildBenchmarkTopNSchema() *executor.QuerySchema {
@@ -473,7 +611,7 @@ func BenchmarkTopnTransform1(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		source := NewSourceFromMultiChunk(srcRowDataType, chunks)
-		trans1, _ := executor.NewTopNTransform([]hybridqp.RowDataType{srcRowDataType}, []hybridqp.RowDataType{dstRowDataType}, exprOpt, schema, executor.Fill)
+		trans1, _ := executor.NewTopNTransform([]hybridqp.RowDataType{srcRowDataType}, []hybridqp.RowDataType{dstRowDataType}, exprOpt, schema, executor.Fill, "topn_ddcm")
 		sink := NewNilSink(dstRowDataType)
 		err := executor.Connect(source.Output, trans1.GetInputs()[0])
 		if err != nil {
@@ -518,7 +656,7 @@ func BenchmarkTopnTransformDims1(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		source := NewSourceFromMultiChunk(srcRowDataType, chunks)
-		trans1, _ := executor.NewTopNTransform([]hybridqp.RowDataType{srcRowDataType}, []hybridqp.RowDataType{dstRowDataType}, exprOpt, schema, executor.Fill)
+		trans1, _ := executor.NewTopNTransform([]hybridqp.RowDataType{srcRowDataType}, []hybridqp.RowDataType{dstRowDataType}, exprOpt, schema, executor.Fill, "topn_ddcm")
 		sink := NewNilSink(dstRowDataType)
 		err := executor.Connect(source.Output, trans1.GetInputs()[0])
 		if err != nil {

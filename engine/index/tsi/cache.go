@@ -15,6 +15,7 @@
 package tsi
 
 import (
+	"fmt"
 	"path/filepath"
 	"time"
 	"unsafe"
@@ -174,19 +175,20 @@ func UnMarshalTSIDs(dst []uint64, src []byte) ([]uint64, error) {
 	if len(src) == 0 {
 		return nil, nil
 	}
-	tail, length, err := encoding.UnmarshalVarUint64(src)
-	if err != nil {
-		return nil, err
+	length, nSize := encoding.UnmarshalVarUint64(src)
+	if nSize <= 0 {
+		return nil, fmt.Errorf("unmarshal TSID Fail")
 	}
+	tail := src[nSize:]
 
 	if length == 0 {
 		return []uint64{}, nil
 	}
 
 	if length == 1 {
-		_, id, err := encoding.UnmarshalVarUint64(tail)
-		if err != nil {
-			return nil, err
+		id, nSize := encoding.UnmarshalVarUint64(tail)
+		if nSize <= 0 {
+			return nil, fmt.Errorf("unmarshal TSID Fail")
 		}
 		return append(dst, id), nil
 	}
@@ -196,7 +198,7 @@ func UnMarshalTSIDs(dst []uint64, src []byte) ([]uint64, error) {
 		dst = append(dst, make([]uint64, int(length)-cap(dst))...)
 	}
 	dst = dst[:length]
-	_, err = encoding.UnmarshalVarUint64s(dst, tail)
+	_, err := encoding.UnmarshalVarUint64s(dst, tail)
 	if err != nil {
 		return nil, err
 	}

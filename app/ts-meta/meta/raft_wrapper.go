@@ -187,7 +187,7 @@ func (r *raftWrapper) ShowDebugInfo(witch string) ([]byte, error) {
 		if err != nil {
 			e := fmt.Sprintf("marshal stat fail: %s", err)
 			logger.GetLogger().Error(e)
-			return nil, fmt.Errorf(e)
+			return nil, fmt.Errorf("%s", e)
 		}
 		return b, nil
 	default:

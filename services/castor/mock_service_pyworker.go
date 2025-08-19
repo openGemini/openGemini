@@ -119,6 +119,30 @@ func BuildNumericRecord() arrow.Record {
 	return rec
 }
 
+// mock castor_ad response
+func BuildStringRecord() arrow.Record {
+	metaKeys := []string{"t", string(AnomalyNum), string(MessageType), string(TaskID)}
+	metaVals := []string{"1", "1", string(DATA), ""}
+	metaData := arrow.NewMetadata(metaKeys, metaVals)
+
+	fields := []arrow.Field{
+		{Name: "string", Type: &arrow.StringType{}},
+		{Name: string(DataTimeStamp), Type: arrow.PrimitiveTypes.Int64}, // timestamp must store at last column
+	}
+
+	schema := arrow.NewSchema(fields, &metaData)
+	pool := memory.NewGoAllocator()
+	b := array.NewRecordBuilder(pool, schema)
+	defer b.Release()
+
+	valid := []bool{true}
+	b.Field(0).(*array.StringBuilder).AppendValues([]string{"{}"}, valid)
+	b.Field(1).(*array.Int64Builder).AppendValues([]int64{0}, valid)
+
+	rec := b.NewRecord()
+	return rec
+}
+
 type mockCastorConf struct {
 	Analysis config.Castor `toml:"castor"`
 }
@@ -140,7 +164,7 @@ func MockCastorService(port int) (*Service, *observer.ObservedLogs, error) {
 	srv := NewService(conf.Analysis)
 	observedZapCore, observedLogs := observer.New(zap.DebugLevel)
 	observedLogger := zap.New(observedZapCore)
-	srv.Logger.SetZapLogger(observedLogger)
+	srv.Logger = srv.Logger.SetZapLogger(observedLogger)
 	if err := srv.Open(); err != nil {
 		return nil, nil, err
 	}

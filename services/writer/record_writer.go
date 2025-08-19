@@ -24,7 +24,10 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
+	meta2 "github.com/openGemini/openGemini/lib/metaclient"
+	"github.com/openGemini/openGemini/lib/msgservice"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/spdy"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
@@ -33,7 +36,37 @@ import (
 )
 
 type Storage interface {
-	WriteBlobs(db, rp string, pt uint32, shard uint64, blobs *shelf.BlobGroup) error
+	WriteBlobs(db, rp string, pt uint32, shard uint64, blobs *shelf.BlobGroup, nodeID uint64, timeout time.Duration) error
+}
+
+type RecordStore struct {
+	metaClient meta2.MetaClient
+}
+
+func NewRecordStore(mc meta2.MetaClient) Storage {
+	return &RecordStore{
+		metaClient: mc,
+	}
+}
+
+func (s *RecordStore) WriteBlobs(db, rp string, pt uint32, shard uint64, blobGroup *shelf.BlobGroup, nodeID uint64, timeout time.Duration) error {
+
+	writeBlobsReq := msgservice.NewWriteBlobsRequest(db, rp, pt, shard, blobGroup)
+
+	r := msgservice.NewRequester(0, nil, s.metaClient)
+	r.SetToInsert()
+	r.SetTimeout(timeout)
+	err := r.InitWithNodeID(nodeID)
+	if err != nil {
+		return err
+	}
+	cb := &msgservice.WriteBlobsCallback{}
+
+	err = r.Request(spdy.WriteBlobsRequest, writeBlobsReq, cb)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 type RecordWriter struct {
@@ -127,6 +160,11 @@ func (w *RecordWriter) MapRecord(ctx *WriteContext, mst string, rec *record.Reco
 
 	mapper := ctx.mapper
 	indexKey := ctx.indexKey
+	err := ctx.meta.ResetMeasurementInfos(mst)
+	if err != nil {
+		ctx.err.AddDropRowError(err)
+		return
+	}
 
 	for i := range rec.RowNums() {
 		//check point is between rp duration
@@ -141,7 +179,22 @@ func (w *RecordWriter) MapRecord(ctx *WriteContext, mst string, rec *record.Reco
 		}
 
 		indexKey = record.UnmarshalIndexKeys(mst, tags, i, indexKey[:0])
-		sh := ctx.meta.GetShard(indexKey, times[i])
+		si, sg, aliveShards := ctx.meta.GetShardKeyAndGroupInfo(i > 0, times[i])
+		if len(aliveShards) == 0 {
+			ctx.err.AddDropRowError(errno.NewError(errno.WritePointMap2Shard))
+			continue
+		}
+
+		shardKey := indexKey
+		if si != nil && len(si.ShardKey) > 0 {
+			shardKey, err = record.UnmarshalShardKeys(tags, si.ShardKey, i, shardKey)
+			if err != nil {
+				ctx.err.AddDropRowError(err)
+				continue
+			}
+		}
+
+		sh := sg.ShardFor(meta.HashID(shardKey), aliveShards)
 		if sh == nil {
 			ctx.err.AddDropRowError(errno.NewError(errno.WritePointMap2Shard))
 			continue
@@ -255,8 +308,12 @@ func (w *RecordWriter) writeBlobsToShard(db, rp string, shard *meta.ShardInfo, g
 	}
 
 	var write = func() error {
+		ptView, err := w.mc.DBPtView(db)
+		if err != nil {
+			return err
+		}
 		for _, ptId := range shard.Owners {
-			err := w.store.WriteBlobs(db, rp, ptId, shard.ID, group)
+			err = w.store.WriteBlobs(db, rp, ptId, shard.ID, group, ptView[ptId].Owner.NodeID, w.timeout)
 			if err != nil {
 				return err
 			}

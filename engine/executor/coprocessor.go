@@ -14,6 +14,8 @@
 
 package executor
 
+import "github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+
 type IteratorParams struct {
 	sameInterval bool
 	sameTag      bool
@@ -24,6 +26,7 @@ type IteratorParams struct {
 	err          error
 	Table        ReflectionTable
 	winIdx       [][2]int
+	colMapping   map[influxql.Expr]influxql.VarRef
 }
 
 func (i *IteratorParams) GetErr() error {

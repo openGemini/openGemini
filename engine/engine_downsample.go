@@ -20,17 +20,17 @@ import (
 	"go.uber.org/zap"
 )
 
-func (e *Engine) GetShardDownSampleLevel(db string, ptId uint32, shardID uint64) int {
+func (e *EngineImpl) GetShardDownSampleLevel(db string, ptId uint32, shardID uint64) int {
 	return e.getShardDownSampleLevel(db, ptId, shardID)
 }
 
-func (e *Engine) resetDownSampleFlag() {
+func (e *EngineImpl) resetDownSampleFlag() {
 	for _, policy := range e.DownSamplePolicies {
 		policy.Alive = false
 	}
 }
 
-func (e *Engine) removeDeadDownSamplePolicy() {
+func (e *EngineImpl) removeDeadDownSamplePolicy() {
 	for name, policy := range e.DownSamplePolicies {
 		if !policy.Alive {
 			delete(e.DownSamplePolicies, name)
@@ -38,7 +38,7 @@ func (e *Engine) removeDeadDownSamplePolicy() {
 	}
 }
 
-func (e *Engine) GetShardDownSamplePolicyInfos(meta interface {
+func (e *EngineImpl) GetShardDownSamplePolicyInfos(meta interface {
 	UpdateShardDownSampleInfo(Ident *meta2.ShardIdentifier) error
 }) ([]*meta2.ShardDownSamplePolicyInfo, error) {
 	policies := make([]*meta2.ShardDownSamplePolicyInfo, 0)
@@ -87,11 +87,11 @@ func (e *Engine) GetShardDownSamplePolicyInfos(meta interface {
 	return policies, nil
 }
 
-func (e *Engine) GetDownSamplePolicy(key string) *meta2.StoreDownSamplePolicy {
+func (e *EngineImpl) GetDownSamplePolicy(key string) *meta2.StoreDownSamplePolicy {
 	return e.DownSamplePolicies[key]
 }
 
-func (e *Engine) StartDownSampleTask(sdsp *meta2.ShardDownSamplePolicyInfo, schema []hybridqp.Catalog, log *zap.Logger,
+func (e *EngineImpl) StartDownSampleTask(sdsp *meta2.ShardDownSamplePolicyInfo, schema []hybridqp.Catalog, log *zap.Logger,
 	meta interface {
 		UpdateShardDownSampleInfo(Ident *meta2.ShardIdentifier) error
 	}) error {
@@ -119,7 +119,7 @@ func (e *Engine) StartDownSampleTask(sdsp *meta2.ShardDownSamplePolicyInfo, sche
 	return nil
 }
 
-func (e *Engine) UpdateDownSampleInfo(policies *meta2.DownSamplePoliciesInfoWithDbRp) {
+func (e *EngineImpl) UpdateDownSampleInfo(policies *meta2.DownSamplePoliciesInfoWithDbRp) {
 	e.resetDownSampleFlag()
 	defer func() {
 		e.removeDeadDownSamplePolicy()
@@ -129,7 +129,7 @@ func (e *Engine) UpdateDownSampleInfo(policies *meta2.DownSamplePoliciesInfoWith
 	}
 }
 
-func (e *Engine) UpdateShardDownSampleInfo(infos *meta2.ShardDownSampleUpdateInfos) {
+func (e *EngineImpl) UpdateShardDownSampleInfo(infos *meta2.ShardDownSampleUpdateInfos) {
 	info := infos.Infos
 	for i := range info {
 		shards := e.DBPartitions[info[i].Ident.OwnerDb][info[i].Ident.OwnerPt].shards
@@ -137,7 +137,7 @@ func (e *Engine) UpdateShardDownSampleInfo(infos *meta2.ShardDownSampleUpdateInf
 	}
 }
 
-func (e *Engine) UpdateStoreDownSamplePolicies(info *meta2.DownSamplePolicyInfo, ident string) {
+func (e *EngineImpl) UpdateStoreDownSamplePolicies(info *meta2.DownSamplePolicyInfo, ident string) {
 	policy, dbExist := e.DownSamplePolicies[ident]
 	if !dbExist || !policy.Info.Equal(info, true) {
 		e.DownSamplePolicies[ident] = &meta2.StoreDownSamplePolicy{

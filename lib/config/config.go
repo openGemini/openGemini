@@ -16,15 +16,18 @@ package config
 
 import (
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"net"
 	"os"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 	itoml "github.com/influxdata/influxdb/toml"
+	"github.com/openGemini/openGemini/lib/crypto"
 	"golang.org/x/text/encoding/unicode"
 	"golang.org/x/text/transform"
 )
@@ -73,7 +76,9 @@ const (
 	AppData    App = "data"
 	Unknown    App = "unKnown"
 
-	DefaultCpuAllocationRatio = 1
+	DefaultCpuAllocationRatio  = 1
+	DefaultMetaConnRetryTime   = 1 * time.Second
+	DefaultMetaConnRetryNumber = 120
 )
 
 var subscriptionEnable bool
@@ -125,11 +130,10 @@ func fromToml(c Config, input string) error {
 	return err
 }
 
-// Common represents the CommonConfiguration format for the influxd binary.
+// Common represents the CommonConfiguration format for the ts-store binary.
 type Common struct {
 	MetaJoin     []string `toml:"meta-join"`
 	CryptoConfig string   `toml:"crypto-config"`
-	CryptoType   string   `toml:"crypto-type"`
 	ClusterID    string   `toml:"cluster-id"`
 	CPUNum       int      `toml:"cpu-num"`
 
@@ -149,20 +153,28 @@ type Common struct {
 	NodeRole           string         `toml:"node-role"`
 	ProductType        string         `toml:"product-type"`
 	PprofBindAddress   string         `toml:"pprof-bind-address"`
+	StorePprofPort     string         `toml:"store-pprof-port"`
+	SqlPprofPort       string         `toml:"sql-pprof-port"`
+	MetaPprofPort      string         `toml:"meta-pprof-port"`
 
 	Bindjoin        []string `toml:"bind-join"`
 	GlobalDictFiles []string `toml:"global-dict-files"`
+
+	MetaConnRetryTime   itoml.Duration `toml:"meta-conn-retry-time"`
+	MetaConnRetryNumber int            `toml:"meta-conn-retry-number"`
 }
 
 // NewCommon builds a new CommonConfiguration with default values.
 func NewCommon() *Common {
 	return &Common{
-		MetaJoin:           DefaultMetaJoin,
-		ReportEnable:       true,
-		OptHashAlgo:        DefaultHashAlgo,
-		CpuAllocationRatio: DefaultCpuAllocationRatio,
-		HaPolicy:           DefaultHaPolicy,
-		PreAggEnabled:      true,
+		MetaJoin:            DefaultMetaJoin,
+		ReportEnable:        true,
+		OptHashAlgo:         DefaultHashAlgo,
+		CpuAllocationRatio:  DefaultCpuAllocationRatio,
+		HaPolicy:            DefaultHaPolicy,
+		PreAggEnabled:       true,
+		MetaConnRetryNumber: DefaultMetaConnRetryNumber,
+		MetaConnRetryTime:   itoml.Duration(DefaultMetaConnRetryTime),
 	}
 }
 
@@ -340,4 +352,47 @@ func LimitRange[T Comparable](v *T, minV, maxV, def T) {
 	if *v < minV || *v > maxV {
 		*v = def
 	}
+}
+
+func BuildTLSConfig(pk, pem, clientPem string, tlsConf *tls.Config) error {
+	if pk == "" {
+		pk = pem
+	}
+	cert, err := tls.X509KeyPair([]byte(crypto.DecryptFromFile(pem)),
+		[]byte(crypto.DecryptFromFile(pk)))
+
+	if err != nil {
+		return err
+	}
+
+	tlsConf.Certificates = []tls.Certificate{cert}
+
+	// If not configured, mutual TLS authentication will not be enabled.
+	if clientPem != "" {
+		clientCertPool := x509.NewCertPool()
+		clientCertData := []byte(crypto.DecryptFromFile(clientPem))
+		ok := clientCertPool.AppendCertsFromPEM(clientCertData)
+		if !ok {
+			return fmt.Errorf("failed to load client certificate: %s", clientPem)
+		}
+		tlsConf.ClientAuth = tls.RequireAndVerifyClientCert
+		tlsConf.ClientCAs = clientCertPool
+	}
+
+	return nil
+}
+
+func GetCertLeaf(cert *tls.Certificate) time.Time {
+	leaf := cert.Leaf
+	var err error
+
+	if leaf == nil && len(cert.Certificate) > 0 {
+		leaf, err = x509.ParseCertificate(cert.Certificate[0])
+	}
+
+	if leaf == nil || err != nil {
+		return time.Now()
+	}
+
+	return leaf.NotAfter
 }

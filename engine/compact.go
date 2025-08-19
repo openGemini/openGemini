@@ -75,7 +75,9 @@ func (c *Compactor) RegisterShard(sh *shard) {
 	}
 	c.wg.Add(1)
 	c.mu.Lock()
-	c.sources[sh.ident.ShardID] = sh
+	if _, ok := c.sources[sh.ident.ShardID]; !ok {
+		c.sources[sh.ident.ShardID] = sh
+	}
 	c.mu.Unlock()
 }
 

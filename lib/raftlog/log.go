@@ -31,6 +31,7 @@ import (
 	"strings"
 
 	"github.com/cockroachdb/errors"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
 	"go.etcd.io/etcd/raft/v3/raftpb"
@@ -109,7 +110,11 @@ func openLogFile(dir string, fid int64) (*logFile, error) {
 	var err error
 
 	// Open the file in read-write mode and create it if it doesn't exist yet.
-	lf.entry, err = OpenFile(fpath, os.O_CREATE|os.O_RDWR, logFileOffset)
+	if config.EntryFileRWType == 1 {
+		lf.entry, err = OpenFile(fpath, os.O_CREATE|os.O_RDWR, logFileOffset)
+	} else {
+		lf.entry, err = OpenFileV2(fpath, os.O_CREATE|os.O_RDWR, logFileOffset)
+	}
 	if errors.Is(err, NewFile) {
 		logger.GetLogger().Info(fmt.Sprintf("New file: %d\n", fid))
 	} else if err != nil {
@@ -228,7 +233,9 @@ func (lf *logFile) getEntry(idx int) entry {
 		panic(fmt.Sprintf("idx: %d is greater than maxNumEntries: %d", idx, maxNumEntries))
 	}
 	offset := idx * entrySize
-	return entry(lf.entry.GetEntryData(offset, offset+entrySize))
+
+	e := entry(lf.entry.GetEntryData(idx, offset, offset+entrySize, false))
+	return e
 }
 
 // getRaftEntry gets the entry at the index idx, reads the data from the appropriate
@@ -246,7 +253,7 @@ func (lf *logFile) getRaftEntry(idx int) (raftpb.Entry, error) {
 			logger.GetLogger().Error("valid offset error", zap.Uint64("offset", offset), zap.Int("entrySize", lf.entry.Size()))
 			return re, errors.New("valid offset error")
 		}
-		data := lf.entry.ReadSlice(int64(offset))
+		data := lf.entry.ReadSlice(idx, int64(offset), false)
 		if len(data) > 0 {
 			// Copy the data over to allow the file to be deleted later.
 			re.Data = append(re.Data, data...)

@@ -55,6 +55,7 @@ func (r *WideIterator) Next(ie *IteratorEndpoint, p *IteratorParams) {
 		r.isErrHappend = true
 		return
 	}
+	r.ColumnMapping(inChunk, p.colMapping)
 
 	colDtype := inChunk.Columns()[0].DataType()
 	if r.dType == influxql.Unknown {
@@ -79,5 +80,26 @@ func (r *WideIterator) Next(ie *IteratorEndpoint, p *IteratorParams) {
 	err := r.fn(r.chunkCache, outChunk, r.params...)
 	if err != nil {
 		p.err = err
+	}
+}
+
+func (r *WideIterator) ColumnMapping(chunk Chunk, colMap map[influxql.Expr]influxql.VarRef) {
+	rowDataType := chunk.RowDataType()
+
+	newColMap := make(map[string]string, len(colMap))
+	for k, v := range colMap {
+		if colName, ok := k.(*influxql.VarRef); ok {
+			newColMap[v.Val] = colName.Val
+		}
+	}
+
+	for _, field := range rowDataType.Fields() {
+		f, ok := field.Expr.(*influxql.VarRef)
+		if !ok {
+			continue
+		}
+		if colName, ok := newColMap[f.Val]; ok {
+			f.Val = colName
+		}
 	}
 }

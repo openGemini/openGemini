@@ -16,9 +16,11 @@ package metaclient
 
 import (
 	"errors"
+	"os"
 	"testing"
 
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
+	"github.com/openGemini/openGemini/lib/backup"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/spdy/transport"
@@ -57,42 +59,101 @@ func TestClient_SendSysCtrlToMeta(t *testing.T) {
 	assert.EqualValues(t, resExpect, res)
 }
 
-func TestClient_SendBackupToMeta1(t *testing.T) {
-	defer func() {
-		connectedServer = 0
-	}()
-	c := &Client{
-		metaServers: []string{"127.0.0.1:8092", "127.0.0.2:8092", "127.0.0.3:8092"},
-		changed:     make(chan chan struct{}, 1),
-		logger:      logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop()),
-		closing:     make(chan struct{}),
+type mockRPCMessageSenderForBackup struct{}
+
+func (s *mockRPCMessageSenderForBackup) SendRPCMsg(currentServer int, msg *message.MetaMessage, callback transport.Callback) error {
+	if currentServer == 0 {
+		resp := message.NewMetaMessage(message.SendBackupToMetaResponseMessage, &message.SendBackupToMetaResponse{Result: []byte("{}")})
+		callback.Handle(resp)
+		return nil
 	}
-	c.SendRPCMessage = &mockRPCMessageSenderForOPS{}
-	params := map[string]string{"swithchon": "false"}
-	res, err := c.SendBackupToMeta("backup", params, "127.0.0.1")
-	assert.NoError(t, err)
-	var resExpect = map[string]string{
-		"127.0.0.1:8092": "failed",
-	}
-	assert.EqualValues(t, resExpect, res)
+	return errors.New("mock error")
 }
 
-func TestClient_SendBackupToMeta2(t *testing.T) {
+type mockRPCMessageSenderForBackup2 struct{}
+
+func (s *mockRPCMessageSenderForBackup2) SendRPCMsg(currentServer int, msg *message.MetaMessage, callback transport.Callback) error {
+	return errors.New("mock error")
+}
+
+func TestClient_SendBackupToMeta(t *testing.T) {
 	defer func() {
 		connectedServer = 0
 	}()
-	c := &Client{
-		metaServers: []string{"127.0.0.1:8092", "127.0.0.2:8092", "127.0.0.3:8092"},
-		changed:     make(chan chan struct{}, 1),
-		logger:      logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop()),
-		closing:     make(chan struct{}),
-	}
-	c.SendRPCMessage = &mockRPCMessageSenderForOPS{}
-	params := map[string]string{"swithchon": "false"}
-	res, err := c.SendBackupToMeta("backup", params, "127.0.0.2")
-	assert.NoError(t, err)
-	var resExpect = map[string]string{
-		"127.0.0.2:8092": "success",
-	}
-	assert.EqualValues(t, resExpect, res)
+	t.Run("1", func(t *testing.T) {
+		c := &Client{
+			metaServers: []string{"127.0.0.1:8092", "127.0.0.2:8092", "127.0.0.3:8092"},
+			changed:     make(chan chan struct{}, 1),
+			logger:      logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop()),
+			closing:     make(chan struct{}),
+		}
+		c.SendRPCMessage = &mockRPCMessageSenderForBackup{}
+		params := map[string]string{backup.BackupPath: "/backup"}
+		res, err := c.SendBackupToMeta("backup", params)
+		assert.NoError(t, err)
+		var resExpect = map[string]string{
+			"127.0.0.1:8092": "success",
+		}
+		assert.EqualValues(t, resExpect, res)
+		os.RemoveAll("/backup")
+	})
+	t.Run("2", func(t *testing.T) {
+		c := &Client{
+			metaServers: []string{"127.0.0.1:8092", "127.0.0.2:8092", "127.0.0.3:8092"},
+			changed:     make(chan chan struct{}, 1),
+			logger:      logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop()),
+			closing:     make(chan struct{}),
+		}
+		c.SendRPCMessage = &mockRPCMessageSenderForBackup{}
+		params := map[string]string{}
+		res, err := c.SendBackupToMeta("backup", params)
+		assert.NoError(t, err)
+		var resExpect = map[string]string{
+			"127.0.0.1:8092": "failed,missing the required parameter backupPath",
+		}
+		assert.EqualValues(t, resExpect, res)
+		os.RemoveAll("/backup")
+	})
+	t.Run("3", func(t *testing.T) {
+		c := &Client{
+			metaServers: []string{"127.0.0.1:8092", "127.0.0.2:8092", "127.0.0.3:8092"},
+			changed:     make(chan chan struct{}, 1),
+			logger:      logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop()),
+			closing:     make(chan struct{}),
+		}
+		c.SendRPCMessage = &mockRPCMessageSenderForBackup2{}
+		params := map[string]string{}
+		res, err := c.SendBackupToMeta("backup", params)
+		assert.NoError(t, err)
+		var resExpect = map[string]string{
+			"127.0.0.1:8092": "failed,mock error",
+		}
+		assert.EqualValues(t, resExpect, res)
+		os.RemoveAll("/backup")
+	})
+}
+
+func TestWriteBackupMetaData(t *testing.T) {
+	t.Run("1", func(t *testing.T) {
+		params := map[string]string{}
+		err := writeBackupMetaData(params, []byte{1, 2, 3})
+		if err == nil {
+			t.Fatal()
+		}
+		os.RemoveAll("/backup")
+	})
+	t.Run("2", func(t *testing.T) {
+		params := map[string]string{
+			backup.BackupPath: "/backup",
+		}
+		err := writeBackupMetaData(params, []byte{1, 2, 3})
+		if err != nil {
+			t.Fatal(err.Error())
+		}
+		err = writeBackupMetaData(params, []byte{1, 2, 3})
+		if err == nil {
+			t.Fatal(err.Error())
+		}
+		os.RemoveAll("/backup")
+	})
 }

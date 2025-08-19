@@ -342,6 +342,5 @@ func TestSrLoggerErr(t *testing.T) {
 	logger.GetSrLogger().Panicf("panicf")
 	logger.GetSrLogger().Warning("warn")
 	logger.GetSrLogger().Warningf("warnf")
-
 	logger.InitSrLogger(config.Logger{Level: 20})
 }

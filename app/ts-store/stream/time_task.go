@@ -351,8 +351,14 @@ func isMatchCond(row *influx.Row, varRef *influxql.VarRef, value influxql.Expr, 
 
 	switch v := value.(type) {
 	case *influxql.IntegerLiteral:
+		if field.Type != influx.Field_Type_Int && field.Type != influx.Field_Type_Float {
+			return false
+		}
 		return isNumberFieldMatchCond(field, float64(v.Val), op)
 	case *influxql.NumberLiteral:
+		if field.Type != influx.Field_Type_Int && field.Type != influx.Field_Type_Float {
+			return false
+		}
 		return isNumberFieldMatchCond(field, v.Val, op)
 	case *influxql.BooleanLiteral:
 		if field.Type != influx.Field_Type_Boolean {

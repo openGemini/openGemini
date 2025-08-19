@@ -23,6 +23,7 @@ const (
 	DefaultRaftMsgCacheSize  = 1000
 	DefaultFileWrapSize      = 128
 	DefaultWaitCommitTimeout = 20 * time.Second
+	DefaultEntryFileRWType   = 2
 )
 
 var RaftMsgTimeout = DefaultRaftMsgTimeout
@@ -32,6 +33,11 @@ var RaftMsgCacheSize = DefaultRaftMsgCacheSize
 var WaitCommitTimeout = DefaultWaitCommitTimeout
 
 var FileWrapSize = DefaultFileWrapSize
+var EntryFileRWType = DefaultEntryFileRWType
+
+func SetEntryFileRWType(typ int) {
+	EntryFileRWType = typ
+}
 
 func SetRaftMsgTimeout(timeout time.Duration) {
 	RaftMsgTimeout = timeout

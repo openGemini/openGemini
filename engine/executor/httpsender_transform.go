@@ -16,18 +16,26 @@ package executor
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"sort"
 	"sync"
 	"time"
 
+	"github.com/apache/arrow/go/v13/arrow"
+	"github.com/apache/arrow/go/v13/arrow/array"
+	"github.com/apache/arrow/go/v13/arrow/memory"
 	"github.com/influxdata/influxdb/models"
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"go.uber.org/zap"
 )
 
 const (
@@ -37,6 +45,12 @@ const (
 
 type AbortProcessor interface {
 	AbortSinkTransform()
+}
+
+type ChunkSender interface {
+	Write(Chunk, bool) bool
+	SetAbortProcessor(AbortProcessor)
+	Release()
 }
 
 type HttpChunkSender struct {
@@ -53,6 +67,13 @@ type HttpChunkSender struct {
 	offset    int
 	prevRow   *models.Row
 	trans     AbortProcessor
+}
+
+func NewChunkSender(opt *query.ProcessorOptions) ChunkSender {
+	if opt.IsArrowQuery {
+		return NewArrowChunkSender(opt)
+	}
+	return NewHttpChunkSender(opt)
 }
 
 func NewHttpChunkSender(opt *query.ProcessorOptions) *HttpChunkSender {
@@ -512,6 +533,10 @@ func (g *RowsGenerator) Generate(chunk Chunk, loc *time.Location) models.Rows {
 		row.Values = g.buildValues(end, start, times, loc, columns)
 		rows = append(rows, row)
 	}
+	if chunk.GetGraph() != nil {
+		graphRows := chunk.GetGraph().GraphToRows()
+		rows = append(rows, graphRows...)
+	}
 	return rows
 }
 
@@ -619,6 +644,363 @@ func SetTimeZero(schema *QuerySchema) bool {
 	return true
 }
 
+type RecordsGenerator struct {
+	schema        *arrow.Schema
+	pool          *memory.GoAllocator
+	recordBuilder *array.RecordBuilder
+	prevTags      map[string]string
+	chunkedSize   int
+	name          string
+	err           error
+}
+
+func NewRecordsGenerator(chunkedSize int) *RecordsGenerator {
+	pool := memory.NewGoAllocator()
+	return &RecordsGenerator{
+		pool:        pool,
+		chunkedSize: chunkedSize,
+	}
+}
+
+func (g *RecordsGenerator) Generate(chunk Chunk, lastChunk bool, records []*models.RecordContainer) []*models.RecordContainer {
+	if chunk == nil {
+		if !lastChunk || g.prevTags == nil {
+			return records
+		}
+		record := g.recordBuilder.NewRecord()
+		records = append(records, &models.RecordContainer{Name: g.name, Data: record, Tags: g.prevTags})
+		g.prevTags = nil
+		return records
+	}
+	chunkTags := chunk.Tags()
+	tagIndex := chunk.TagIndex()
+	times := chunk.Time()
+	columns := chunk.Columns()
+	name := chunk.Name()
+	var err error
+	if g.schema == nil {
+		err = g.buildSchema(chunk.RowDataType())
+		if err != nil {
+			g.err = err
+			return nil
+		}
+		g.name = name
+		g.recordBuilder = array.NewRecordBuilder(g.pool, g.schema)
+	}
+	tagIndexLen := len(tagIndex)
+	if tagIndexLen > 0 && g.prevTags != nil && !hybridqp.EqualMap(chunkTags[0].KeyValues(), g.prevTags) {
+		record := g.recordBuilder.NewRecord()
+		records = append(records, &models.RecordContainer{Name: name, Data: record, Tags: chunkTags[0].KeyValues()})
+	}
+	var start, end int
+	for index := 0; index < tagIndexLen; index++ {
+		start = tagIndex[index]
+		if start == tagIndex[tagIndexLen-1] {
+			end = len(times)
+		} else {
+			end = tagIndex[index+1]
+		}
+		err = g.buildRecords(g.recordBuilder, start, end, times, columns)
+		if err != nil {
+			g.err = err
+			return nil
+		}
+		// Next Chunk may have the same tags as the last record, so last record was left waiting for merge
+		if index == tagIndexLen-1 && !lastChunk && g.recordBuilder.Field(0).Len() < g.chunkedSize {
+			g.prevTags = chunkTags[index].KeyValues()
+			break
+		}
+		g.prevTags = nil
+		record := g.recordBuilder.NewRecord()
+		records = append(records, &models.RecordContainer{Name: name, Data: record, Tags: chunkTags[index].KeyValues()})
+	}
+	return records
+}
+
+func (g *RecordsGenerator) buildSchema(dataType hybridqp.RowDataType) error {
+	fields := make([]arrow.Field, 0, len(dataType.Fields())+1)
+	fields = append(fields, arrow.Field{Name: "time", Type: arrow.PrimitiveTypes.Int64})
+	for _, f := range dataType.Fields() {
+		varRef, ok := f.Expr.(*influxql.VarRef)
+		if !ok {
+			return fmt.Errorf("expected a VarRef for field %s", f.Name())
+		}
+		switch varRef.Type {
+		case influxql.Float:
+			fields = append(fields, arrow.Field{Name: f.Name(), Type: arrow.PrimitiveTypes.Float64})
+		case influxql.Integer, influxql.Time:
+			fields = append(fields, arrow.Field{Name: f.Name(), Type: arrow.PrimitiveTypes.Int64})
+		case influxql.String, influxql.Tag:
+			fields = append(fields, arrow.Field{Name: f.Name(), Type: arrow.BinaryTypes.String})
+		case influxql.Boolean:
+			fields = append(fields, arrow.Field{Name: f.Name(), Type: arrow.FixedWidthTypes.Boolean})
+		default:
+			return errors.New("type not supported")
+		}
+	}
+	g.schema = arrow.NewSchema(fields, &arrow.Metadata{})
+	return nil
+}
+
+func (g *RecordsGenerator) buildRecords(b *array.RecordBuilder, start int, end int, times []int64, columns []Column) error {
+	b.Reserve(end - start)
+	for i, col := range columns {
+		switch col.DataType() {
+		case influxql.Float:
+			g.appendArrowFloat64(b, col, i+1, start, end)
+		case influxql.Integer:
+			g.appendArrowInt64(b, col, i+1, start, end)
+		case influxql.String, influxql.Tag:
+			g.appendArrowString(b, col, i+1, start, end)
+		case influxql.Boolean:
+			g.appendArrowBoolean(b, col, i+1, start, end)
+		default:
+			return errors.New("type not supported")
+		}
+	}
+	// setup timestamp
+	b.Field(0).(*array.Int64Builder).AppendValues(times[start:end], nil)
+	return nil
+}
+
+func (g *RecordsGenerator) appendArrowFloat64(b *array.RecordBuilder, col Column, fieldIndex, start, end int) {
+	floatValues := col.FloatValues()
+	startValue, endValue := col.GetRangeValueIndexV2(start, end)
+	if endValue-startValue == end-start {
+		b.Field(fieldIndex).(*array.Float64Builder).AppendValues(floatValues[startValue:endValue], nil)
+		return
+	}
+
+	appendCnt := 0
+	for i := startValue; i < endValue; i++ {
+		val := floatValues[i]
+		timeIdx := col.GetTimeIndex(i)
+		gap := timeIdx - start - appendCnt
+		if gap > 0 {
+			b.Field(fieldIndex).(*array.Float64Builder).AppendNulls(gap)
+			appendCnt += gap
+		}
+		b.Field(fieldIndex).(*array.Float64Builder).Append(val)
+		appendCnt += 1
+	}
+
+	nRow := end - start
+	if appendCnt != nRow {
+		gap := nRow - appendCnt
+		b.Field(fieldIndex).(*array.Float64Builder).AppendNulls(gap)
+	}
+}
+
+func (g *RecordsGenerator) appendArrowInt64(b *array.RecordBuilder, col Column, fieldIndex int, start int, end int) {
+	integerValues := col.IntegerValues()
+	startValue, endValue := col.GetRangeValueIndexV2(start, end)
+	if endValue-startValue == end-start {
+		b.Field(fieldIndex).(*array.Int64Builder).AppendValues(integerValues[startValue:endValue], nil)
+		return
+	}
+
+	appendCnt := 0
+	for i := startValue; i < endValue; i++ {
+		val := integerValues[i]
+		timeIdx := col.GetTimeIndex(i)
+		gap := timeIdx - start - appendCnt
+		if gap > 0 {
+			b.Field(fieldIndex).(*array.Int64Builder).AppendNulls(gap)
+			appendCnt += gap
+		}
+		b.Field(fieldIndex).(*array.Int64Builder).Append(val)
+		appendCnt += 1
+	}
+
+	nRow := end - start
+	if appendCnt != nRow {
+		gap := nRow - appendCnt
+		b.Field(fieldIndex).(*array.Int64Builder).AppendNulls(gap)
+	}
+}
+
+func (g *RecordsGenerator) appendArrowString(b *array.RecordBuilder, col Column, fieldIndex int, start int, end int) {
+	stringBytes, offsets := col.GetStringBytes()
+	startValue, endValue := col.GetRangeValueIndexV2(start, end)
+	if endValue-startValue == end-start {
+		for i := startValue; i < endValue; i++ {
+			l := offsets[i]
+			if i == len(offsets)-1 {
+				b.Field(fieldIndex).(*array.StringBuilder).BinaryBuilder.Append(stringBytes[l:])
+			} else {
+				r := offsets[i+1]
+				b.Field(fieldIndex).(*array.StringBuilder).BinaryBuilder.Append(stringBytes[l:r])
+			}
+		}
+		return
+	}
+
+	appendCnt := 0
+	for i := startValue; i < endValue; i++ {
+		timeIdx := col.GetTimeIndex(i)
+		gap := timeIdx - start - appendCnt
+		if gap > 0 {
+			b.Field(fieldIndex).(*array.StringBuilder).AppendNulls(gap)
+			appendCnt += gap
+		}
+
+		if i == len(offsets)-1 {
+			off := offsets[i]
+			b.Field(fieldIndex).(*array.StringBuilder).BinaryBuilder.Append(stringBytes[off:])
+		} else {
+			s := offsets[i]
+			e := offsets[i+1]
+			b.Field(fieldIndex).(*array.StringBuilder).BinaryBuilder.Append(stringBytes[s:e])
+		}
+		appendCnt += 1
+	}
+
+	nRow := end - start
+	if appendCnt != nRow {
+		gap := nRow - appendCnt
+		b.Field(fieldIndex).(*array.StringBuilder).AppendNulls(gap)
+	}
+}
+
+func (g *RecordsGenerator) appendArrowBoolean(b *array.RecordBuilder, col Column, fieldIndex int, start int, end int) {
+	vals := col.BooleanValues()
+	startValue, endValue := col.GetRangeValueIndexV2(start, end)
+	if endValue-startValue == end-start {
+		b.Field(fieldIndex).(*array.BooleanBuilder).AppendValues(vals[startValue:endValue], nil)
+		return
+	}
+
+	appendCnt := 0
+	for i := startValue; i < endValue; i++ {
+		val := vals[i]
+		timeIdx := col.GetTimeIndex(i)
+		gap := timeIdx - start - appendCnt
+		if gap > 0 {
+			b.Field(fieldIndex).(*array.BooleanBuilder).AppendNulls(gap)
+			appendCnt += gap
+		}
+		b.Field(fieldIndex).(*array.BooleanBuilder).Append(val)
+		appendCnt += 1
+	}
+
+	nRow := end - start
+	if appendCnt != nRow {
+		gap := nRow - appendCnt
+		b.Field(fieldIndex).(*array.BooleanBuilder).AppendNulls(gap)
+	}
+}
+
+func (g *RecordsGenerator) Release() {
+	if g.recordBuilder != nil {
+		g.recordBuilder.Release()
+		g.recordBuilder = nil
+	}
+}
+
+type ArrowChunkSender struct {
+	buffRecords      []*models.RecordContainer
+	opt              *query.ProcessorOptions
+	recordsGenerator *RecordsGenerator
+	trans            AbortProcessor
+	Logger           *logger.Logger
+}
+
+func NewArrowChunkSender(opt *query.ProcessorOptions) *ArrowChunkSender {
+	a := &ArrowChunkSender{
+		opt:              opt,
+		recordsGenerator: NewRecordsGenerator(opt.ChunkedSize),
+		Logger:           logger.NewLogger(errno.ModuleQueryEngine),
+	}
+
+	if a.opt.Location == nil {
+		a.opt.Location = time.UTC
+	}
+	return a
+}
+
+func (w *ArrowChunkSender) Write(chunk Chunk, lastChunk bool) bool {
+	w.GenRecords(chunk, lastChunk)
+	if w.recordsGenerator.err != nil {
+		w.Logger.Error(w.recordsGenerator.err.Error(), zap.String("query", "HttpSenderTransform ArrowChunkSender"), zap.Uint64("query_id", w.opt.QueryId))
+		return false
+	}
+
+	chunkedSize := int64(w.opt.ChunkedSize)
+
+	var EmitPartialRecord = func() {
+		chunkedSlice := w.buffRecords[0].NewSlice(0, chunkedSize)
+		chunkedSlice.Partial = true
+		leftSeriesSlice := w.buffRecords[0].NewSlice(chunkedSize, w.buffRecords[0].NumRows())
+		w.buffRecords[0].Data.Release()
+		// return partial rows for this series
+		w.buffRecords = append([]*models.RecordContainer{leftSeriesSlice}, w.buffRecords[1:]...)
+		w.sendRecords([]*models.RecordContainer{chunkedSlice}, true)
+	}
+
+	if len(w.buffRecords) == 0 {
+		return false
+	}
+	if w.buffRecords[0].NumRows() > chunkedSize {
+		EmitPartialRecord()
+		return true
+	}
+	chunkedRecords := append([]*models.RecordContainer{}, w.buffRecords[0])
+	var partial bool
+	if len(w.buffRecords) == 1 && lastChunk {
+		w.buffRecords = nil
+	} else {
+		partial = true
+		w.buffRecords = w.buffRecords[1:]
+	}
+	w.sendRecords(chunkedRecords, partial)
+	return partial
+}
+
+func (w *ArrowChunkSender) GenRecords(chunk Chunk, lastChunk bool) {
+	if w.recordsGenerator.err != nil {
+		return
+	}
+	// temporary not support prom
+	if chunk != nil {
+		statistics.ExecutorStat.SinkRows.Push(int64(chunk.NumberOfRows()))
+	}
+	w.buffRecords = w.recordsGenerator.Generate(chunk, lastChunk, w.buffRecords)
+}
+
+func (w *ArrowChunkSender) SetAbortProcessor(trans AbortProcessor) {
+	w.trans = trans
+}
+
+func (w *ArrowChunkSender) Release() {
+	if w.recordsGenerator != nil {
+		w.recordsGenerator.Release()
+		w.recordsGenerator = nil
+	}
+	for _, record := range w.buffRecords {
+		if record.Data != nil {
+			record.Data.Release()
+		}
+	}
+	w.buffRecords = nil
+}
+
+func (w *ArrowChunkSender) sendRecords(records []*models.RecordContainer, partial bool) {
+	rc := query.RowsChan{
+		Records: records,
+		Partial: partial,
+	}
+
+	if w.opt.AbortChan == nil {
+		w.opt.RowsChan <- rc
+		return
+	}
+
+	select {
+	case w.opt.RowsChan <- rc:
+	case <-w.opt.AbortChan:
+	}
+}
+
 type HttpSenderTransformCreator struct {
 }
 
@@ -641,7 +1023,7 @@ type HttpSenderTransform struct {
 	input  *ChunkPort
 	schema *QuerySchema
 	Sender *http.ResponseWriter
-	Writer *HttpChunkSender
+	Writer ChunkSender
 
 	dag    *TransformDag
 	vertex *TransformVertex
@@ -650,7 +1032,7 @@ type HttpSenderTransform struct {
 func NewHttpSenderTransform(inRowDataType hybridqp.RowDataType, schema *QuerySchema) *HttpSenderTransform {
 	trans := &HttpSenderTransform{
 		input:  NewChunkPort(inRowDataType),
-		Writer: NewHttpChunkSender(schema.Options().(*query.ProcessorOptions)),
+		Writer: NewChunkSender(schema.Options().(*query.ProcessorOptions)),
 		schema: schema,
 	}
 
@@ -780,7 +1162,7 @@ type HttpSenderHintTransform struct {
 
 	schema    *QuerySchema
 	input     *ChunkPort
-	Writer    *HttpChunkSender
+	Writer    ChunkSender
 	init      bool
 	chunks    []Chunk
 	ridIdxMap map[int]struct{} // null column index
@@ -792,7 +1174,7 @@ type HttpSenderHintTransform struct {
 func NewHttpSenderHintTransform(inRowDataType hybridqp.RowDataType, schema *QuerySchema) *HttpSenderHintTransform {
 	trans := &HttpSenderHintTransform{
 		input:  NewChunkPort(inRowDataType),
-		Writer: NewHttpChunkSender(schema.Options().(*query.ProcessorOptions)),
+		Writer: NewChunkSender(schema.Options().(*query.ProcessorOptions)),
 		schema: schema,
 	}
 	if schema.Options().IsExcept() && schema.Options().GetLimit() > 0 {

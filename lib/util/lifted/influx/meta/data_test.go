@@ -17,8 +17,10 @@ package meta
 import (
 	"database/sql"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"os"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"sort"
@@ -222,11 +224,11 @@ func Test_Data_ReSharding(t *testing.T) {
 	}
 
 	shardgroups, err := data.ShardGroups("foo", "bar")
-	shards1 := []ShardInfo{{1, []uint32{0}, "", "", util.Hot, 1, 0, 0, false, false}}
+	shards1 := []ShardInfo{{1, []uint32{0}, "", "", util.Hot, 1, 0, 0, false, false, 0}}
 	sg1 := ShardGroupInfo{1, sg0.StartTime, sg0.EndTime,
 		sg0.DeletedAt, shards1, sg0.TruncatedAt, config.TSSTORE, 0}
-	shards2 := []ShardInfo{{2, []uint32{0}, "", "cpu,hostname=host_5", util.Hot, 3, 0, 0, false, false},
-		{3, []uint32{1}, "cpu,hostname=host_5", "", util.Hot, 4, 0, 0, false, false}}
+	shards2 := []ShardInfo{{2, []uint32{0}, "", "cpu,hostname=host_5", util.Hot, 3, 0, 0, false, false, 0},
+		{3, []uint32{1}, "cpu,hostname=host_5", "", util.Hot, 4, 0, 0, false, false, 0}}
 	sg2 := ShardGroupInfo{2, time.Unix(0, splitTime.UnixNano()+1).UTC(), sg0.EndTime,
 		sg0.DeletedAt, shards2, sg0.TruncatedAt, config.TSSTORE, 0}
 	expSgs := []ShardGroupInfo{sg1, sg2}
@@ -2532,7 +2534,7 @@ func TestData_Files(t *testing.T) {
 			err = sqlite.InsertFiles(tt.args.insertFiles, nil)
 			if err != nil {
 				if !(tt.wantErr && err.Error() == tt.errMsg) {
-					t.Errorf(err.Error())
+					t.Errorf("%s", err.Error())
 				}
 			}
 			err = sqlite.UpdateFiles(tt.args.updateFiles, nil)
@@ -3076,6 +3078,143 @@ func TestUpdatePtViewStatusForRep1(t *testing.T) {
 	data.updatePtViewStatus(3, Offline)
 }
 
+func TestRecoverMeta(t *testing.T) {
+	metaInfo := &Data{
+		TakeOverEnabled: true,
+		ClusterPtNum:    3,
+		DataNodes: DataNodeInfos{
+			DataNode{
+				NodeInfo: NodeInfo{ID: 4, Host: "n1"},
+			},
+			DataNode{
+				NodeInfo: NodeInfo{ID: 5, Host: "n2"},
+			},
+			DataNode{
+				NodeInfo: NodeInfo{ID: 6, Host: "n3"},
+			},
+		},
+		Databases: map[string]*DatabaseInfo{
+			"db0": &DatabaseInfo{
+				Name:     "db0",
+				ReplicaN: 3,
+			},
+		},
+		ReplicaGroups: map[string][]ReplicaGroup{
+			"db0": []ReplicaGroup{
+				{
+					ID:         0,
+					MasterPtID: 0,
+					Peers:      []Peer{Peer{ID: 1}, Peer{ID: 2}},
+					Status:     Health,
+				},
+			},
+		},
+		PtView: map[string]DBPtInfos{
+			"db0": {
+				{
+					PtId:   0,
+					Owner:  PtOwner{NodeID: 4},
+					Status: Online,
+					RGID:   0,
+				},
+				{
+					PtId:   1,
+					Owner:  PtOwner{NodeID: 5},
+					Status: Online,
+					RGID:   0,
+				},
+				{
+					PtId:   2,
+					Owner:  PtOwner{NodeID: 6},
+					Status: Online,
+					RGID:   0,
+				},
+			},
+		},
+	}
+
+	data := &Data{
+		TakeOverEnabled: true,
+		ClusterPtNum:    3,
+		DataNodes: DataNodeInfos{
+			DataNode{
+				NodeInfo: NodeInfo{ID: 7, Host: "n1"},
+			},
+			DataNode{
+				NodeInfo: NodeInfo{ID: 8, Host: "n2"},
+			},
+			DataNode{
+				NodeInfo: NodeInfo{ID: 9, Host: "n3"},
+			},
+		},
+		Databases:     map[string]*DatabaseInfo{},
+		ReplicaGroups: map[string][]ReplicaGroup{},
+		PtView:        map[string]DBPtInfos{},
+	}
+
+	expect := &Data{
+		TakeOverEnabled: true,
+		ClusterPtNum:    3,
+		DataNodes: DataNodeInfos{
+			DataNode{
+				NodeInfo: NodeInfo{ID: 7, Host: "n1"},
+			},
+			DataNode{
+				NodeInfo: NodeInfo{ID: 8, Host: "n2"},
+			},
+			DataNode{
+				NodeInfo: NodeInfo{ID: 9, Host: "n3"},
+			},
+		},
+		Databases: map[string]*DatabaseInfo{
+			"db0": &DatabaseInfo{
+				Name:     "db0",
+				ReplicaN: 3,
+			},
+		},
+		ReplicaGroups: map[string][]ReplicaGroup{
+			"db0": []ReplicaGroup{
+				{
+					ID:         0,
+					MasterPtID: 0,
+					Peers:      []Peer{Peer{ID: 1}, Peer{ID: 2}},
+					Status:     Health,
+				},
+			},
+		},
+		PtView: map[string]DBPtInfos{
+			"db0": {
+				{
+					PtId:   0,
+					Owner:  PtOwner{NodeID: 7},
+					Status: Online,
+					RGID:   0,
+				},
+				{
+					PtId:   1,
+					Owner:  PtOwner{NodeID: 8},
+					Status: Online,
+					RGID:   0,
+				},
+				{
+					PtId:   2,
+					Owner:  PtOwner{NodeID: 9},
+					Status: Online,
+					RGID:   0,
+				},
+			},
+		},
+	}
+	nodeMap, _ := GenNodeMap(data, metaInfo)
+
+	data.RecoverDataBase("db0", metaInfo, nodeMap)
+	require.Equal(t, len(expect.ReplicaGroups), len(metaInfo.ReplicaGroups))
+	require.Equal(t, len(expect.Databases), len(metaInfo.Databases))
+	for i, pt := range expect.PtView["db0"] {
+		require.Equal(t, pt.Owner.NodeID, metaInfo.PtView["db0"][i].Owner.NodeID)
+	}
+}
+
 func TestData_indexGroupExpand(t *testing.T) {
 	data := initData()
 	duration := 24 * time.Hour
@@ -3113,4 +3252,526 @@ func TestData_indexGroupExpand(t *testing.T) {
 	ig = data.createIndexGroupIfNeeded(rpi, now.Add(2*duration), config.TSSTORE, ptNum)
 	require.Equal(t, 4, len(rpi.IndexGroups))
 	require.Equal(t, &rpi.IndexGroups[3], ig)
+}
+
+func TestRemoveDuplicates(t *testing.T) {
+	t.Run("Integer slice deduplication", func(t *testing.T) {
+		tests := []struct {
+			input    []int
+			expected []int
+		}{
+			{[]int{1, 2, 2, 3, 3, 3}, []int{1, 2, 3}},
+			{[]int{1, 1, 1, 1}, []int{1}},
+			{[]int{}, []int{}},
+			{nil, nil},
+			{[]int{1, 2, 3}, []int{1, 2, 3}},
+			{[]int{5, 4, 3, 2, 1, 1}, []int{5, 4, 3, 2, 1}},
+		}
+
+		for i, tt := range tests {
+			t.Run(fmt.Sprintf("Case-%d", i+1), func(t *testing.T) {
+				result := RemoveDuplicates(tt.input)
+				if !reflect.DeepEqual(result, tt.expected) {
+					require.NoError(t, nil)
+				}
+			})
+		}
+	})
+
+	t.Run("String slicing and deduplication", func(t *testing.T) {
+		tests := []struct {
+			input    []string
+			expected []string
+		}{
+			{[]string{"a", "b", "a", "c"}, []string{"a", "b", "c"}},
+			{[]string{"hello", "world", "world"}, []string{"hello", "world"}},
+			{[]string{"go", "go", "Go"}, []string{"go", "Go"}}, // 区分大小写
+			{[]string{""}, []string{""}},
+			{[]string{"", "", "a", "", "b"}, []string{"", "a", "b"}},
+		}
+
+		for i, tt := range tests {
+			t.Run(fmt.Sprintf("Case-%d", i+1), func(t *testing.T) {
+				result := RemoveDuplicates(tt.input)
+				if !reflect.DeepEqual(result, tt.expected) {
+					require.NoError(t, nil)
+				}
+			})
+		}
+	})
+
+	t.Run("Floating-point number slice deduplication", func(t *testing.T) {
+		tests := []struct {
+			input    []float64
+			expected []float64
+		}{
+			{[]float64{1.1, 1.1, 2.2}, []float64{1.1, 2.2}},
+			{[]float64{0.1 + 0.2, 0.3}, []float64{0.30000000000000004, 0.3}},
+		}
+
+		for i, tt := range tests {
+			t.Run(fmt.Sprintf("Case-%d", i+1), func(t *testing.T) {
+				result := RemoveDuplicates(tt.input)
+				if !reflect.DeepEqual(result, tt.expected) {
+					require.NoError(t, nil)
+				}
+			})
+		}
+	})
+	t.Run("Custom structure deduplication", func(t *testing.T) {
+		type person struct {
+			name string
+			age  int
+		}
+
+		// 创建测试数据
+		p1 := person{"Alice", 30}
+		p2 := person{"Bob", 25}
+		p3 := person{"Alice", 30}
+		p4 := person{"Alice", 40}
+
+		tests := []struct {
+			input    []person
+			expected []person
+		}{
+			{[]person{p1, p2, p3}, []person{p1, p2}},
+			{[]person{p1, p2, p4}, []person{p1, p2, p4}},
+		}
+
+		for i, tt := range tests {
+			t.Run(fmt.Sprintf("Case-%d", i+1), func(t *testing.T) {
+				result := RemoveDuplicates(tt.input)
+				if !reflect.DeepEqual(result, tt.expected) {
+					require.NoError(t, nil)
+				}
+			})
+		}
+	})
+
+}
+
+func TestBuildDirTree(t *testing.T) {
+
+	tempDir := t.TempDir()
+
+	setupTestDir := func() string {
+		root := filepath.Join(tempDir, t.Name())
+		require.NoError(t, os.MkdirAll(root, 0755))
+
+		dirs := []string{
+			filepath.Join(root, "child1"),
+			filepath.Join(root, "child2"),
+			filepath.Join(root, "child1", "grandchild1"),
+		}
+
+		for _, dir := range dirs {
+			require.NoError(t, os.MkdirAll(dir, 0755))
+		}
+
+		files := []string{
+			filepath.Join(root, "file1.txt"),
+			filepath.Join(root, "child1", "file2.txt"),
+		}
+
+		for _, file := range files {
+			require.NoError(t, ioutil.WriteFile(file, []byte("test"), 0644))
+		}
+
+		return root
+	}
+
+	type args struct {
+		rootPath string
+	}
+	tests := []struct {
+		name    string
+		args    args
+		want    *DirNode
+		wantErr assert2.ErrorAssertionFunc
+	}{
+		{
+			name: "Normal directory structure",
+			args: args{rootPath: setupTestDir()},
+			want: &DirNode{
+				Name: t.Name(),
+				Path: func() string {
+					d, _ := filepath.Abs(filepath.Join(tempDir, t.Name()))
+					return d
+				}(),
+				Children: []*DirNode{
+					{
+						Name: "child1",
+						Path: func() string {
+							d, _ := filepath.Abs(filepath.Join(tempDir, t.Name(), "child1"))
+							return d
+						}(),
+						Children: []*DirNode{
+							{
+								Name: "grandchild1",
+								Path: func() string {
+									d, _ := filepath.Abs(filepath.Join(tempDir, t.Name(), "child1", "grandchild1"))
+									return d
+								}(),
+							},
+						},
+					},
+					{
+						Name: "child2",
+						Path: func() string {
+							d, _ := filepath.Abs(filepath.Join(tempDir, t.Name(), "child2"))
+							return d
+						}(),
+					},
+				},
+			},
+			wantErr: assert2.NoError,
+		},
+		{
+			name: "Complex nested structure",
+			args: args{rootPath: func() string {
+				root := filepath.Join(tempDir, t.Name()+"-nested")
+				dirs := []string{
+					filepath.Join(root, "a"),
+					filepath.Join(root, "a", "b"),
+					filepath.Join(root, "a", "b", "c"),
+					filepath.Join(root, "a", "d"),
+					filepath.Join(root, "e"),
+				}
+
+				for _, dir := range dirs {
+					require.NoError(t, os.MkdirAll(dir, 0755))
+				}
+				return root
+			}()},
+			want: &DirNode{
+				Name: t.Name() + "-nested",
+				Path: func() string {
+					d, _ := filepath.Abs(filepath.Join(tempDir, t.Name()+"-nested"))
+					return d
+				}(),
+				Children: []*DirNode{
+					{
+						Name: "a",
+						Path: func() string {
+							d, _ := filepath.Abs(filepath.Join(tempDir, t.Name()+"-nested", "a"))
+							return d
+						}(),
+						Children: []*DirNode{
+							{
+								Name: "b",
+								Path: func() string {
+									d, _ := filepath.Abs(filepath.Join(tempDir, t.Name()+"-nested", "a", "b"))
+									return d
+								}(),
+								Children: []*DirNode{
+									{
+										Name: "c",
+										Path: func() string {
+											d, _ := filepath.Abs(filepath.Join(tempDir, t.Name()+"-nested", "a", "b", "c"))
+											return d
+										}(),
+									},
+								},
+							},
+							{
+								Name: "d",
+								Path: func() string {
+									d, _ := filepath.Abs(filepath.Join(tempDir, t.Name()+"-nested", "a", "d"))
+									return d
+								}(),
+							},
+						},
+					},
+					{
+						Name: "e",
+						Path: func() string {
+							d, _ := filepath.Abs(filepath.Join(tempDir, t.Name()+"-nested", "e"))
+							return d
+						}(),
+					},
+				},
+			},
+			wantErr: assert2.NoError,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := BuildDirTree(tt.args.rootPath)
+			assert2.NoError(t, err)
+			assert2.Equalf(t, tt.want, got, "BuildDirTree(%v)", tt.args.rootPath)
+		})
+	}
+}
+
+func TestSplitByMultiple(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected []string
+	}{
+		{
+			name:     "Empty string",
+			input:    "",
+			expected: []string{},
+		},
+		{
+			name:     "Underscore separators only",
+			input:    "one_two_three",
+			expected: []string{"one", "two", "three"},
+		},
+		{
+			name:     "Hyphen separators only",
+			input:    "hello-world-go",
+			expected: []string{"hello", "world", "go"},
+		},
+		{
+			name:     "Mixed separators",
+			input:    "user_id-name-age",
+			expected: []string{"user", "id", "name", "age"},
+		},
+		{
+			name:     "Consecutive separators",
+			input:    "file__name--with---multiple---separators",
+			expected: []string{"file", "name", "with", "multiple", "separators"},
+		},
+		{
+			name:     "Leading and trailing separators",
+			input:    "_leading-hyphen_underscore-",
+			expected: []string{"leading", "hyphen", "underscore"},
+		},
+		{
+			name:     "Contains other characters",
+			input:    "split@me!if?you=can",
+			expected: []string{"split@me!if?you=can"},
+		},
+		{
+			name:     "With spaces",
+			input:    "first_name last-name",
+			expected: []string{"first", "name last", "name"}, // Note space handling
+		},
+		{
+			name:     "Special Unicode characters",
+			input:    "text_in_different_language",
+			expected: []string{"text", "in", "different", "language"},
+		},
+		{
+			name:     "Numbers with separators",
+			input:    "user-123_id-456",
+			expected: []string{"user", "123", "id", "456"},
+		},
+		{
+			name:     "Only separators",
+			input:    "---___-_-_",
+			expected: []string{},
+		},
+		{
+			name:     "Single separator",
+			input:    "_",
+			expected: []string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := SplitByMultiple(tt.input)
+
+			require.Equal(t, tt.expected, result)
+
+		})
+	}
+}
+
+func TestDeduplicateShardGroups(t *testing.T) {
+	baseTime := time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC)
+	type args struct {
+		groups []ShardGroupInfo
+	}
+	tests := []struct {
+		name string
+		args args
+		want []ShardGroupInfo
+	}{
+		{
+			name: "Empty slice",
+			args: args{groups: []ShardGroupInfo{}},
+			want: []ShardGroupInfo{},
+		},
+		{
+			name: "Single group",
+			args: args{groups: []ShardGroupInfo{
+				{ID: 1, StartTime: baseTime, EndTime: baseTime.Add(24 * time.Hour)},
+			}},
+			want: []ShardGroupInfo{
+				{ID: 1, StartTime: baseTime, EndTime: baseTime.Add(24 * time.Hour)},
+			},
+		},
+		{
+			name: "No duplicates",
+			args: args{groups: []ShardGroupInfo{
+				{ID: 1, StartTime: baseTime, EndTime: baseTime.Add(24 * time.Hour)},
+				{ID: 2, StartTime: baseTime.Add(24 * time.Hour), EndTime: baseTime.Add(48 * time.Hour)},
+				{ID: 3, StartTime: baseTime.Add(48 * time.Hour), EndTime: baseTime.Add(72 * time.Hour)},
+			}},
+			want: []ShardGroupInfo{
+				{ID: 1, StartTime: baseTime, EndTime: baseTime.Add(24 * time.Hour)},
+				{ID: 2, StartTime: baseTime.Add(24 * time.Hour), EndTime: baseTime.Add(48 * time.Hour)},
+				{ID: 3, StartTime: baseTime.Add(48 * time.Hour), EndTime: baseTime.Add(72 * time.Hour)},
+			},
+		},
+		{
+			name: "Duplicate IDs - simple",
+			args: args{groups: []ShardGroupInfo{
+				{ID: 1, StartTime: baseTime, EndTime: baseTime.Add(24 * time.Hour), Version: 1},
+				{ID: 2, StartTime: baseTime.Add(24 * time.Hour), EndTime: baseTime.Add(48 * time.Hour)},
+				{ID: 1, StartTime: baseTime, EndTime: baseTime.Add(24 * time.Hour), Version: 2}, // Duplicate ID
+			}},
+			want: []ShardGroupInfo{
+				{ID: 1, StartTime: baseTime, EndTime: baseTime.Add(24 * time.Hour), Version: 1},
+				{ID: 2, StartTime: baseTime.Add(24 * time.Hour), EndTime: baseTime.Add(48 * time.Hour)},
+			},
+		},
+		{
+			name: "Duplicate IDs - different fields",
+			args: args{groups: []ShardGroupInfo{
+				{ID: 1, StartTime: baseTime, EndTime: baseTime.Add(24 * time.Hour), Version: 1},
+				{ID: 1, StartTime: baseTime.Add(24 * time.Hour), EndTime: baseTime.Add(48 * time.Hour), Version: 2}, // Different times
+				{ID: 1, StartTime: baseTime, EndTime: baseTime.Add(24 * time.Hour), Version: 3},                     // Same times as first
+			}},
+			want: []ShardGroupInfo{
+				{ID: 1, StartTime: baseTime, EndTime: baseTime.Add(24 * time.Hour), Version: 1},
+			},
+		},
+		{
+			name: "Multiple duplicates",
+			args: args{groups: []ShardGroupInfo{
+				{ID: 1, StartTime: baseTime, EndTime: baseTime.Add(24 * time.Hour)},
+				{ID: 2, StartTime: baseTime.Add(24 * time.Hour), EndTime: baseTime.Add(48 * time.Hour)},
+				{ID: 1, StartTime: baseTime, EndTime: baseTime.Add(24 * time.Hour)}, // Duplicate of first
+				{ID: 3, StartTime: baseTime.Add(48 * time.Hour), EndTime: baseTime.Add(72 * time.Hour)},
+				{ID: 2, StartTime: baseTime.Add(24 * time.Hour), EndTime: baseTime.Add(48 * time.Hour)}, // Duplicate of second
+				{ID: 4, StartTime: baseTime.Add(72 * time.Hour), EndTime: baseTime.Add(96 * time.Hour)},
+			}},
+			want: []ShardGroupInfo{
+				{ID: 1, StartTime: baseTime, EndTime: baseTime.Add(24 * time.Hour)},
+				{ID: 2, StartTime: baseTime.Add(24 * time.Hour), EndTime: baseTime.Add(48 * time.Hour)},
+				{ID: 3, StartTime: baseTime.Add(48 * time.Hour), EndTime: baseTime.Add(72 * time.Hour)},
+				{ID: 4, StartTime: baseTime.Add(72 * time.Hour), EndTime: baseTime.Add(96 * time.Hour)},
+			},
+		},
+		{
+			name: "With deleted items",
+			args: args{groups: []ShardGroupInfo{
+				{ID: 1, StartTime: baseTime, EndTime: baseTime.Add(24 * time.Hour), DeletedAt: time.Time{}},
+				{ID: 2, StartTime: baseTime.Add(24 * time.Hour), EndTime: baseTime.Add(48 * time.Hour), DeletedAt: baseTime.Add(36 * time.Hour)},
+				{ID: 1, StartTime: baseTime, EndTime: baseTime.Add(24 * time.Hour), DeletedAt: baseTime.Add(12 * time.Hour)}, // Duplicate ID
+			}},
+			want: []ShardGroupInfo{
+				{ID: 1, StartTime: baseTime, EndTime: baseTime.Add(24 * time.Hour), DeletedAt: time.Time{}},
+				{ID: 2, StartTime: baseTime.Add(24 * time.Hour), EndTime: baseTime.Add(48 * time.Hour), DeletedAt: baseTime.Add(36 * time.Hour)},
+			},
+		},
+		{
+			name: "With shards information",
+			args: args{groups: []ShardGroupInfo{
+				{ID: 1, StartTime: baseTime, EndTime: baseTime.Add(24 * time.Hour), Shards: []ShardInfo{{ID: 101}}},
+				{ID: 2, StartTime: baseTime.Add(24 * time.Hour), EndTime: baseTime.Add(48 * time.Hour), Shards: []ShardInfo{{ID: 102}}},
+				{ID: 1, StartTime: baseTime, EndTime: baseTime.Add(24 * time.Hour), Shards: []ShardInfo{{ID: 103}}}, // Duplicate ID
+			}},
+			want: []ShardGroupInfo{
+				{ID: 1, StartTime: baseTime, EndTime: baseTime.Add(24 * time.Hour), Shards: []ShardInfo{{ID: 101}}},
+				{ID: 2, StartTime: baseTime.Add(24 * time.Hour), EndTime: baseTime.Add(48 * time.Hour), Shards: []ShardInfo{{ID: 102}}},
+			},
+		},
+		{
+			name: "TruncatedAt field comparison",
+			args: args{groups: []ShardGroupInfo{
+				{ID: 1, StartTime: baseTime, EndTime: baseTime.Add(24 * time.Hour), TruncatedAt: time.Time{}},
+				{ID: 1, StartTime: baseTime, EndTime: baseTime.Add(24 * time.Hour), TruncatedAt: baseTime.Add(12 * time.Hour)},
+			}},
+			want: []ShardGroupInfo{
+				{ID: 1, StartTime: baseTime, EndTime: baseTime.Add(24 * time.Hour), TruncatedAt: time.Time{}},
+			},
+		},
+		{
+			name: "Mixed scenarios",
+			args: args{groups: []ShardGroupInfo{
+				{ID: 1, StartTime: baseTime, EndTime: baseTime.Add(24 * time.Hour), Version: 1},
+				{ID: 2, StartTime: baseTime.Add(24 * time.Hour), EndTime: baseTime.Add(48 * time.Hour), Version: 1},
+				{ID: 1, StartTime: baseTime, EndTime: baseTime.Add(24 * time.Hour), Version: 2}, // Duplicate ID
+				{ID: 3, StartTime: baseTime.Add(48 * time.Hour), EndTime: baseTime.Add(72 * time.Hour), Version: 1},
+				{ID: 2, StartTime: baseTime.Add(24 * time.Hour), EndTime: baseTime.Add(48 * time.Hour), Version: 3}, // Duplicate ID
+				{ID: 4, StartTime: baseTime.Add(72 * time.Hour), EndTime: baseTime.Add(96 * time.Hour), Version: 1},
+			}},
+			want: []ShardGroupInfo{
+				{ID: 1, StartTime: baseTime, EndTime: baseTime.Add(24 * time.Hour), Version: 1},
+				{ID: 2, StartTime: baseTime.Add(24 * time.Hour), EndTime: baseTime.Add(48 * time.Hour), Version: 1},
+				{ID: 3, StartTime: baseTime.Add(48 * time.Hour), EndTime: baseTime.Add(72 * time.Hour), Version: 1},
+				{ID: 4, StartTime: baseTime.Add(72 * time.Hour), EndTime: baseTime.Add(96 * time.Hour), Version: 1},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert2.Equalf(t, tt.want, DeduplicateShardGroups(tt.args.groups), "DeduplicateShardGroups(%v)", tt.args.groups)
+		})
+	}
+}
+
+func TestReplaceMergeShards(t *testing.T) {
+	DataLogger = logger.New(os.Stderr)
+	data := &Data{
+		Databases: map[string]*DatabaseInfo{
+			"db0": &DatabaseInfo{
+				RetentionPolicies: map[string]*RetentionPolicyInfo{
+					"rp0": &RetentionPolicyInfo{
+						ShardGroups: []ShardGroupInfo{
+							ShardGroupInfo{
+								ID: 1,
+								Shards: []ShardInfo{
+									ShardInfo{
+										Owners: []uint32{1},
+										ID:     1,
+									},
+									ShardInfo{
+										Owners: []uint32{2},
+										ID:     2,
+									},
+								},
+							},
+							ShardGroupInfo{
+								ID: 2,
+								Shards: []ShardInfo{
+									ShardInfo{
+										Owners: []uint32{1},
+										ID:     3,
+									},
+									ShardInfo{
+										Owners: []uint32{2},
+										ID:     4,
+									},
+								},
+							},
+							ShardGroupInfo{
+								ID: 3,
+								Shards: []ShardInfo{
+									ShardInfo{
+										Owners: []uint32{1},
+										ID:     5,
+									},
+									ShardInfo{
+										Owners: []uint32{2},
+										ID:     6,
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	data.ReplaceMergeShards("db0", "rp0", 1, []uint64{1, 3, 5})
+	data.ReplaceMergeShards("db0", "rp0", 2, []uint64{2, 4, 6})
+	assert2.Equal(t, len(data.Databases["db0"].RetentionPolicies["rp0"].ShardGroups), 1)
 }

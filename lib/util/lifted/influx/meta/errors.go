@@ -101,6 +101,10 @@ var (
 	// policy that has a duration lower than the allowed minimum.
 	ErrRetentionPolicyDurationTooLow = fmt.Errorf("retention policy duration must be at least %s", MinRetentionPolicyDuration)
 
+	// ErrRetentionPolicyIndexColdDurationTooLow is returned when updating a retention
+	// policy that has index cold duration lower than the allowed minimum.
+	ErrRetentionPolicyIndexColdDurationTooLow = fmt.Errorf("retention policy index cold duration must be at least %s", MinRetentionPolicyIndexColdDuration)
+
 	// ErrRetentionPolicyConflict is returned when creating a retention policy conflicts
 	// with an existing policy.
 	ErrRetentionPolicyConflict = errors.New("retention policy conflicts with an existing policy")
@@ -123,6 +127,10 @@ var (
 	// ErrIncompatibleShardGroupDurations is returned when creating or updating a
 	// retention policy that has a warm duration not equal n * shard duration
 	ErrIncompatibleShardGroupDurations = errors.New("retention policy hot duration/warm duration/index duration should be equal n * shard duration and n>=1")
+	ErrShardMergeDurations             = errors.New("retention policy shardMerge duration must be a multiple of shardGroup duration")
+	// ErrIncompatibleIndexGroupDurations is returned when creating or updating a
+	// retention policy that has index cold duration not equal n * index duration
+	ErrIncompatibleIndexGroupDurations = errors.New("retention policy: index cold duration should be equals to m * index duration and n * shard duration, where m/n >= 1")
 )
 
 var (

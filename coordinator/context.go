@@ -210,7 +210,7 @@ func (s *injestionCtx) initStreamVar(w *PointsWriter) (err error) {
 			return
 		}
 
-		(*streamMSTs)[i], err = (*streamWHs)[i].createMeasurement((*dstSis)[i].DesMst.Database, (*dstSis)[i].DesMst.RetentionPolicy, (*dstSis)[i].DesMst.Name)
+		(*streamMSTs)[i], err = (*streamWHs)[i].createMeasurement((*dstSis)[i].DesMst.Database, (*dstSis)[i].DesMst.RetentionPolicy, (*dstSis)[i].DesMst.Name, false)
 		if err != nil {
 			return
 		}

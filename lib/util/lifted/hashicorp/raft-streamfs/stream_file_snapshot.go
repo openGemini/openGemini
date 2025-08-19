@@ -32,9 +32,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hashicorp/go-msgpack/v2/codec"
 	"github.com/hashicorp/raft"
 	"github.com/openGemini/openGemini/lib/fileops"
-	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/go-msgpack/codec"
 )
 
 const (

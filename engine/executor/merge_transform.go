@@ -187,7 +187,6 @@ func NewBaseMergeTransform(inRowDataTypes []hybridqp.RowDataType, outRowDataType
 		output := NewChunkPort(rowDataType)
 		trans.Outputs = append(trans.Outputs, output)
 	}
-
 	trans.count, trans.heapLength = 0, int32(len(inRowDataTypes))
 	trans.initReflectionTable(children, schema, outRowDataTypes[0])
 	trans.InitHeapItems(len(inRowDataTypes), outRowDataTypes[0], schema)
@@ -399,7 +398,7 @@ func (trans *MergeTransform) Merge(ctx context.Context, errs *errno.Errs) {
 					trans.WaitMerge <- signal
 				}()
 			}
-			if trans.NewChunk.Len() >= trans.HeapItems.GetOption().ChunkSize {
+			if trans.NewChunk.Len() >= trans.HeapItems.GetOption().ChunkSize || trans.NewChunk.GetGraph() != nil {
 				trans.SendChunk()
 			}
 		}
@@ -447,24 +446,24 @@ func (trans *MergeTransform) AddTagAndIndexes(tag ChunkTags, iLen int, i int, fl
 		c.SetName(trans.GetMstName())
 	}
 	if len(c.Tags()) == 0 {
-		c.AddTagAndIndex(tag, 0)
-		c.AddIntervalIndex(0)
+		c.AppendTagsAndIndex(tag, 0)
+		c.AppendIntervalIndex(0)
 		return
 	}
 	if !bytes.Equal(tag.Subset(opt.Dimensions), c.Tags()[len(c.Tags())-1].Subset(opt.Dimensions)) {
-		c.AddTagAndIndex(tag, iLen)
-		c.AddIntervalIndex(iLen)
+		c.AppendTagsAndIndex(tag, iLen)
+		c.AppendIntervalIndex(iLen)
 		return
 	}
 	if !opt.Interval.IsZero() {
-		if trans.AddIntervalIndex(chunk, i, opt, flag) {
-			c.AddIntervalIndex(iLen)
+		if trans.AppendIntervalIndex(chunk, i, opt, flag) {
+			c.AppendIntervalIndex(iLen)
 		}
 		return
 	}
 }
 
-func (trans *MergeTransform) AddIntervalIndex(chunk Chunk, i int, opt *query.ProcessorOptions, flag bool) bool {
+func (trans *MergeTransform) AppendIntervalIndex(chunk Chunk, i int, opt *query.ProcessorOptions, flag bool) bool {
 	var timeStart, timeEnd int64
 	//If flag is true, the last line of newchunk is used to calculate timeStart and timeEnd.
 	//If flag is false, the last inserted time is used to calculate timeStart and timeEnd.

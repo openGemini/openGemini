@@ -17,6 +17,7 @@ package mlf
 import (
 	"encoding/binary"
 	"math"
+	"slices"
 
 	"github.com/openGemini/openGemini/lib/util"
 )
@@ -24,6 +25,7 @@ import (
 type Decompressor struct {
 	bm     BitMap
 	values []float64
+	swap   []float64
 }
 
 func (d *Decompressor) Decode(data []byte) []float64 {
@@ -46,8 +48,16 @@ func (d *Decompressor) Decode(data []byte) []float64 {
 	d.init(size)
 
 	var uncompressed []byte
+	var bmBytes []byte
 	data, uncompressed = d.decodeUncompressedPart(data)
-	data = d.bm.Unmarshal(data, size)
+
+	if data[0] == bitMapEmpty {
+		data = data[1:]
+	} else {
+		bmSize := d.bm.getSize(size) + 1
+		bmBytes = data[:bmSize]
+		data = data[bmSize:]
+	}
 
 	var multiplicand float64 = 0
 	var bitSize int
@@ -60,12 +70,19 @@ func (d *Decompressor) Decode(data []byte) []float64 {
 		data = data[10:]
 	}
 
-	if d.bm.Empty() {
-		d.decodeFast(data, bitSize, pow10[precisionSize], multiplicand, publicPrefixSize)
-	} else {
-		d.decode(data, uncompressed, bitSize, pow10[precisionSize], multiplicand, publicPrefixSize)
+	if len(bmBytes) == 0 && bitSize < maxFactorBits {
+		// no zero, no uncompressed, no negative
+		decodeFuncTable[bitSize](d.values, data, pow10[precisionSize], multiplicand, publicPrefixSize)
+		return d.values
 	}
 
+	if len(bmBytes) > 0 && bitSize > 0 && bitSize < maxFactorBits {
+		d.decodeMix(data, uncompressed, bmBytes[1:], bitSize, pow10[precisionSize], multiplicand, publicPrefixSize)
+		return d.values
+	}
+
+	d.bm.Unmarshal(bmBytes, size)
+	d.decode(data, uncompressed, bitSize, pow10[precisionSize], multiplicand, publicPrefixSize)
 	return d.values
 }
 
@@ -114,34 +131,47 @@ func (d *Decompressor) decodeUncompressedPart(data []byte) ([]byte, []byte) {
 	return data[n*8:], data[:n*8]
 }
 
-// no zero, no uncompressed, no negative
-func (d *Decompressor) decodeFast(data []byte, itemSize int, precision float64, multiplicand float64, publicPrefixSize int) {
-	var f float64
-	var base uint64 = ((1<<publicPrefixSize - 1) << (mantissaBits - publicPrefixSize)) | (middleNumber << mantissaBits)
-	left := mantissaBits - itemSize - publicPrefixSize
+func (d *Decompressor) decodeMix(data []byte, uncompressed []byte, bm []byte, itemSize int, precision float64, multiplicand float64, publicPrefixSize int) {
+	valid := len(data) * 8 / itemSize
+	d.swap = slices.Grow(d.swap[:0], valid)
+	swap := d.swap[:valid]
+	decodeFuncTable[itemSize](swap, data, precision, multiplicand, publicPrefixSize)
 
-	var swap, coefficient uint64
-	var swapSize = 0
 	values := d.values
+	j := 0
+	n := len(values) - len(values)%4
 
-	for i := range values {
-		if swapSize >= itemSize {
-			coefficient = swap >> (64 - itemSize)
-			swap <<= itemSize
-			swapSize -= itemSize
-		} else {
-			coefficient = swap >> (64 - itemSize)
-			swap = binary.BigEndian.Uint64(data)
-			data = data[8:]
-
-			n := itemSize - swapSize
-			swapSize = 64 - n
-			coefficient |= swap >> swapSize
-			swap <<= n
+	var decode = func(flag uint8, i int) {
+		switch flag {
+		case FlagZero:
+			values[i] = 0
+		case FlagSkip:
+			values[i] = math.Float64frombits(binary.BigEndian.Uint64(uncompressed))
+			uncompressed = uncompressed[8:]
+		case FlagNegative:
+			values[i] = -swap[j]
+			j++
+		default:
+			values[i] = swap[j]
+			j++
 		}
+	}
 
-		f = math.Float64frombits(base|(coefficient<<left)) - 1
-		values[i] = math.Floor(multiplicand*f*precision) / precision
+	for i := range n / 4 {
+		decode(bm[i]>>6, i*4)
+		decode((bm[i]>>4)&3, i*4+1)
+		decode((bm[i]>>2)&3, i*4+2)
+		decode(bm[i]&3, i*4+3)
+	}
+
+	if n == len(values) {
+		return
+	}
+
+	flag := bm[n/4]
+	for i := n; i < len(values); i++ {
+		decode(flag>>6, i)
+		flag <<= 2
 	}
 }
 

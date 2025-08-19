@@ -17,7 +17,7 @@ package coordinator
 import (
 	"errors"
 
-	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 )
 
 const (
@@ -31,7 +31,7 @@ const (
 // when a database has not been provided.
 var ErrDatabaseNameRequired = errors.New("database name required")
 
-type TagValuesSlice []netstorage.TableTagSets
+type TagValuesSlice []influxql.TableTagSets
 
 func (a TagValuesSlice) Len() int           { return len(a) }
 func (a TagValuesSlice) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }

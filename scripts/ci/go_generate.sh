@@ -18,28 +18,66 @@ sed -i "s#github.com/gogo/protobuf/proto#github.com/openGemini/openGemini/lib/ut
 sed -i "s#github.com/gogo/protobuf/proto#github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto#g" lib/util/lifted/influx/meta/proto/meta.pb.go
 sed -i "s#github.com/gogo/protobuf/proto#github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto#g" lib/util/lifted/protobuf/proto/test_proto/test.pb.go
 
-protoc --gogo_out=lib/netstorage/data/ lib/netstorage/data/data.proto
+protoc --gogo_out=lib/msgservice/data/ lib/msgservice/data/data.proto
 
-sed -i "7d" lib/netstorage/data/data.pb.go
-sed -i "8d" lib/netstorage/data/data.pb.go
-sed -i "8G"  lib/netstorage/data/data.pb.go
+sed -i "7d" lib/msgservice/data/data.pb.go
+sed -i "8d" lib/msgservice/data/data.pb.go
+sed -i "8G"  lib/msgservice/data/data.pb.go
 
-sed -i "9a\    proto \"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto\""  lib/netstorage/data/data.pb.go
-sed -i "10a\    proto1 \"github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto\""  lib/netstorage/data/data.pb.go
+sed -i "9a\    proto \"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto\""  lib/msgservice/data/data.pb.go
+sed -i "10a\    proto1 \"github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto\""  lib/msgservice/data/data.pb.go
+
+checkGrammarDepth() {
+  processed=$1
+  prefix=$2
+  # If grammar has depthCheck function, it should be used for each depth assignment.
+  if egrep "^func depthCheck\(" $processed 2>&1 >/dev/null; then
+    perl -ne "
+      BEGIN { \$e = 0 }
+      \$line++; (\$file,\$line) = (\$1, \$2-1) if m!^//line (.*):(\\d+)\$!;
+      if (m!^\\tswitch ${prefix}nt {! .. m!^\\tgoto ${prefix}stack /* stack new state and value */!) {
+        \$e = print \"missing depthCheck at \$file:\$line\\n\" if /\\.depth\\s*=\\s*(?=\\w)(?!depthCheck\\()/;
+        \$e = print \"missing depthCheck at \$file:\$line\\n\" if /\\sdepth:\\s*(?=\\w)(?!depthCheck\\()/;
+        \$chk = \$app = 0 if (m!^\\t\\t\\{\$!);
+        \$app = 1 if (m!\\sappend\s*\\(!);
+        \$chk = 1 if (m!\\sdepthCheck\s*\\(!);
+        \$e = print \"missing depthCheck at \$file:\$line\\n\" if \$app && !\$chk && /^\\t\\t\\}\$/;
+      }
+      END { exit \$e }
+    " $processed
+  fi
+}
+genGrammar() {
+  input=$1
+  prefix=$2
+  output=$3
+
+  cd $(dirname $input)
+  goyacc -o $output -p $prefix $(basename $input)
+  # Adjust parser settings
+  sed -i "s/^\(\s*\?\)${prefix}ErrorVerbose = .*/\1${prefix}ErrorVerbose = true\n\1${prefix}MaxStackSize = 65536/g" $output
+  # Inject stack overflow protection
+  sed -i "s/^\(\s*\?\)n\(${prefix}\)s := make(\[\]\2SymType, len(\2S)\*2)/\1if len(\2S) >= \2MaxStackSize {\n\1\t\2lex.Error(\"stack overflow\")\n\1\tgoto ret1\n\1}\n\0/" $output
+  grep 'Error("stack overflow")' $output || (echo "ERROR: patching produced parser generator failed."; exit 1)
+  # Inject exit-on any error shortcut
+  sed -i "s/^${prefix}stack:/\0\n\tif ${prefix}lex.HasError() {\n\t\tgoto ret1\n\t\}/" $output
+  sed -i "s/^type ${prefix}Lexer interface {/\0\n\tHasError() bool/" $output
+  # Validate there is no conflicts in a grammar
+  grep "0 shift/reduce, 0 reduce/reduce conflicts reported" y.output || (echo "ERROR: "; grep "conflicts reported" y.output; exit 1)
+  rm -f y.output
+  ! ( exhaustruct -test=false ./ 2>&1 | perl -ne 'print "$1 $2\n" if /^(.*is missing field).*(depth)/' | egrep --color "is missing.*depth" ) || (echo "ERORR: missed depth field computations"; exit 1 )
+  checkGrammarDepth $output $prefix
+  cd -
+}
 
 # for goyacc
 for i in `find . -name "*.y"`
 do
-  cd `dirname $i`
-  if [[ `dirname $i` == *"ts-cli"* ]]; then
-    goyacc -o parser.go -p QL `basename $i`
-    sed -i 's/QLErrorVerbose = false/QLErrorVerbose = true/g' parser.go
+  if [[ $(dirname $i) == *"ts-cli"* ]]; then
+    genGrammar $i QL parser.go
   else
-    goyacc `basename $i`
-    sed -i 's/yyErrorVerbose = false/yyErrorVerbose = true/g' y.go
+    genGrammar $i yy y.go
   fi
-  rm -f y.output
-  cd -
 done
 
 GIT_STATUS=$(git status | grep "Changes not staged for commit") || echo ""
@@ -54,3 +92,5 @@ else
   git diff | tee
   exit 1
 fi
+
+

@@ -49,7 +49,7 @@ func TestInstantVectorCursorSinkPlan(t *testing.T) {
 	promCursor := engine.NewInstantVectorCursor(srcCursor, schema, AggPool, util.TimeRange{})
 	promCursor.SinkPlan(series)
 	assert.True(t, len(promCursor.GetSchema()) == 2)
-	schema.Visit(&influxql.Call{Name: "count", Args: []influxql.Expr{&influxql.VarRef{Val: "cpu", Type: influxql.Integer}}})
+	schema.RecordExpr(&influxql.Call{Name: "count", Args: []influxql.Expr{&influxql.VarRef{Val: "cpu", Type: influxql.Integer}}})
 	agg := executor.NewLogicalAggregate(series, schema)
 	promCursor.SinkPlan(agg)
 	assert.True(t, len(promCursor.GetSchema()) == 2)
@@ -428,6 +428,42 @@ func Test_IsSameStep(t *testing.T) {
 				nextT:       10,
 			},
 			want: true,
+		},
+		{
+			name: "2",
+			args: args{
+				startSample: 90,
+				endSample:   100,
+				step:        10,
+				duration:    7,
+				currT:       85,
+				nextT:       86,
+			},
+			want: true,
+		},
+		{
+			name: "3",
+			args: args{
+				startSample: 90,
+				endSample:   100,
+				step:        10,
+				duration:    7,
+				currT:       85,
+				nextT:       91,
+			},
+			want: false,
+		},
+		{
+			name: "4",
+			args: args{
+				startSample: 90,
+				endSample:   100,
+				step:        10,
+				duration:    7,
+				currT:       85,
+				nextT:       95,
+			},
+			want: false,
 		},
 	}
 	for _, tt := range tests {

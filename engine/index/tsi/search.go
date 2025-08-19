@@ -114,6 +114,18 @@ func (is *indexSearch) getTSIDBySeriesKey(indexkey []byte) (uint64, error) {
 	return 0, io.EOF
 }
 
+func (is *indexSearch) getAllTSID() (*uint64set.Set, error) {
+	tsidSet := &uint64set.Set{}
+	ts := &is.ts
+	kb := &is.kb
+	ts.Seek(kb.B)
+	for ts.NextItem() {
+		tsidSet.Add(encoding.UnmarshalUint64(ts.Item))
+	}
+
+	return tsidSet, ts.Error()
+}
+
 func (is *indexSearch) getPidByPkey(key []byte) (uint64, error) {
 	ts := &is.ts
 	kb := &is.kb
@@ -647,6 +659,98 @@ func isAllFieldExpr(expr influxql.Expr) bool {
 	}
 }
 
+func chooseINPriority(expr influxql.Expr) (bool, bool) {
+	n, ok := expr.(*influxql.BinaryExpr)
+	if !ok {
+		return false, false
+	}
+
+	checkINExpr := func(e influxql.Expr) (bool, int) {
+		be, ok := e.(*influxql.BinaryExpr)
+		if !ok || (be.Op != influxql.IN && be.Op != influxql.NOTIN) {
+			return false, 0
+		}
+		key, okL := be.LHS.(*influxql.VarRef)
+		set, okR := be.RHS.(*influxql.SetLiteral)
+		if !okL || !okR || key.Type != influxql.Tag {
+			return false, 0
+		}
+		size := len(set.Vals)
+		if size > PruneWithSetTagValSize {
+			return true, size
+		}
+		return false, size
+	}
+
+	lhsHasIN, lhsSize := checkINExpr(n.LHS)
+	rhsHasIN, rhsSize := checkINExpr(n.RHS)
+
+	switch {
+	case !lhsHasIN && !rhsHasIN:
+		return false, false
+	case lhsHasIN && !rhsHasIN:
+		return true, false
+	case !lhsHasIN && rhsHasIN:
+		return false, true
+	default:
+		if lhsSize < rhsSize {
+			return true, false
+		}
+		return false, true
+	}
+}
+
+func (is *indexSearch) seriesByINExprIterator(
+	name []byte,
+	expr *influxql.BinaryExpr,
+	tsids **uint64set.Set,
+	singleSeries bool,
+	lhsPriorityExecute, rhsPriorityExecute bool,
+) (index.SeriesIDIterator, error) {
+	executeSide := func(side influxql.Expr) (index.SeriesIDIterator, *influxql.SetLiteral, *influxql.VarRef, error) {
+		itr, err := is.seriesByExprIterator(name, side, tsids, singleSeries)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+
+		be, ok := side.(*influxql.BinaryExpr)
+		if !ok {
+			return nil, nil, nil, fmt.Errorf("side is not *influxql.BinaryExpr, got %T", side)
+		}
+		key, okL := be.LHS.(*influxql.VarRef)
+		set, okR := be.RHS.(*influxql.SetLiteral)
+		if !okL || !okR {
+			return nil, nil, nil, errors.New("fail to find lhs: VarRef, rhs: SetLiteral, from binary expr")
+		}
+		return itr, set, key, nil
+	}
+
+	var (
+		itr    index.SeriesIDIterator
+		set    *influxql.SetLiteral
+		tagKey *influxql.VarRef
+		err    error
+	)
+
+	switch {
+	case lhsPriorityExecute:
+		itr, set, tagKey, err = executeSide(expr.LHS)
+		if err != nil {
+			return nil, err
+		}
+	case rhsPriorityExecute:
+		itr, set, tagKey, err = executeSide(expr.RHS)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if err = is.doPruneWithSet(itr.Ids(), set.Vals, tagKey.Val, expr.Op == influxql.IN); err != nil {
+		return nil, err
+	}
+	return itr, nil
+}
+
 func (is *indexSearch) seriesByExprIterator(name []byte, expr influxql.Expr, tsids **uint64set.Set, singleSeries bool) (index.SeriesIDIterator, error) {
 	if expr == nil {
 		return is.newSeriesIDSetIterator(name, tsids)
@@ -656,6 +760,12 @@ func (is *indexSearch) seriesByExprIterator(name []byte, expr influxql.Expr, tsi
 	case *influxql.BinaryExpr:
 		switch expr.Op {
 		case influxql.AND, influxql.OR:
+			if expr.Op == influxql.AND {
+				lhsPriorityExecute, rhsPriorityExecute := chooseINPriority(expr)
+				if !singleSeries && (lhsPriorityExecute || rhsPriorityExecute) {
+					return is.seriesByINExprIterator(name, expr, tsids, singleSeries, lhsPriorityExecute, rhsPriorityExecute)
+				}
+			}
 			// Fast path for all and expr.
 			if !singleSeries && is.isAllAndExpr(expr) {
 				iter, err := is.seriesByAllAndExprIterator(name, expr, tsids, singleSeries)
@@ -948,6 +1058,8 @@ func (is *indexSearch) seriesByBinaryExpr(name []byte, n *influxql.BinaryExpr, t
 		}
 	case *influxql.VarRef:
 		return is.seriesByBinaryExprVarRef(name, []byte(key.Val), []byte(value.Val), n.Op == influxql.EQ)
+	case *influxql.SetLiteral:
+		return is.seriesByBinaryExprSetLiteral(name, []byte(key.Val), value.Vals, n.Op == influxql.IN)
 	default:
 		return is.searchAllTSIDsByName(name, n, tsids)
 	}
@@ -979,6 +1091,37 @@ func (is *indexSearch) seriesByBinaryExpr(name []byte, n *influxql.BinaryExpr, t
 
 	is.idx.cache.putToTagFilterCache(kb.B, ids.AppendTo(us.A[:0]))
 	return index.NewSeriesIDSetIterator(index.NewSeriesIDSetWithSet(ids)), nil
+}
+
+// todo: vals parallel processing
+func (is *indexSearch) seriesByBinaryExprSetLiteral(name, key []byte, vals map[interface{}]bool, equal bool) (index.SeriesIDSetIterator, error) {
+	var result *uint64set.Set
+	tf := new(tagFilter)
+	for val := range vals {
+		if err := tf.Init(name, key, []byte(val.(string)), false, false); err != nil {
+			return nil, err
+		}
+		set, _, err := is.searchTSIDsByTagFilterAndDateRange(tf)
+		if err != nil {
+			return nil, err
+		}
+		if result != nil {
+			set.Union(result)
+		}
+		result = set
+	}
+
+	if !equal {
+		tsids, err := is.getTSIDsByMeasurementName(name)
+		if err != nil {
+			return nil, err
+		}
+		if result != nil {
+			tsids.Subtract(result)
+		}
+		result = tsids
+	}
+	return index.NewSeriesIDSetIterator(index.NewSeriesIDSetWithSet(result)), nil
 }
 
 func (is *indexSearch) seriesByBinaryExprVarRef(name, key, val []byte, equal bool) (index.SeriesIDSetIterator, error) {
@@ -1155,36 +1298,82 @@ func (is *indexSearch) getTSIDsByMeasurementName(name []byte) (*uint64set.Set, e
 	return &tsids, nil
 }
 
+// searchTSIDsByTagFilter retrieves TSIDs matching the given tag filter.
+// It uses fast path for OR suffixes and slow path for other cases.
 func (is *indexSearch) searchTSIDsByTagFilter(tf *tagFilter) (*uint64set.Set, error) {
 	if tf.isNegative {
 		logger.GetLogger().Panic("BUG: isNegative must be false")
 	}
 
-	tsids := &uint64set.Set{}
+	// Fast path: handle OR suffixes which can be resolved with direct lookups
 	if len(tf.orSuffixes) > 0 {
-		// Fast path for orSuffixes - seek for rows for each value from orSuffixes.
-		err := is.updateTSIDsByOrSuffixesOfTagFilter(tf, tsids)
-		if err != nil {
-			return nil, fmt.Errorf("error when searching for tsids for tagFilter in fast path: %w; tagFilter=%s", err, tf)
-		}
-		return tsids, nil
+		return is.updateTSIDsByOrSuffixes(tf)
 	}
 
-	// Slow path - scan for all the rows with the given prefix.
-	// Pass nil filter to getTSIDsForTagFilterSlow, since it works faster on production workloads
-	// than non-nil filter with many entries.
-	err := is.getTSIDsForTagFilterSlow(tf, nil, func(u uint64) bool {
-		if is.deleted != nil && is.deleted.Has(u) {
-			return true
-		}
+	// Slow path: scan all rows with the prefix and check matches
+	return is.scanTSIDsForTagFilter(tf)
+}
 
-		tsids.Add(u)
-		return true
-	})
-	if err != nil {
-		return nil, fmt.Errorf("error when searching for tsids for tagFilter in slow path: %w; tagFilter=%s", err, tf)
+// updateTSIDsByOrSuffixes processes each OR suffix to collect matching TSIDs
+func (is *indexSearch) updateTSIDsByOrSuffixes(tf *tagFilter) (*uint64set.Set, error) {
+	kb := kbPool.Get()
+	defer kbPool.Put(kb)
+
+	tsids := &uint64set.Set{}
+	for _, suffix := range tf.orSuffixes {
+		// Build prefix for current suffix
+		kb.B = append(kb.B[:0], tf.prefix...)
+		kb.B = append(kb.B, suffix...)
+		kb.B = append(kb.B, tagSeparatorChar)
+
+		if err := is.collectTSIDsForSuffix(kb.B, tsids); err != nil {
+			return tsids, err
+		}
 	}
 	return tsids, nil
+}
+
+// collectTSIDsForSuffix retrieves all TSIDs matching the specific suffix prefix
+func (is *indexSearch) collectTSIDsForSuffix(prefix []byte, tsids *uint64set.Set) error {
+	ts := &is.ts
+	mp := &is.mp
+	mp.Reset()
+
+	ts.Seek(prefix)
+	for ts.NextItem() {
+		item := ts.Item
+		if !bytes.HasPrefix(item, prefix) {
+			return nil
+		}
+
+		// Parse and add TSIDs from current item
+		if err := mp.InitOnlyTail(item, item[len(prefix):]); err != nil {
+			return err
+		}
+		mp.ParseTSIDs()
+		tsids.AddMulti(mp.TSIDs)
+	}
+
+	if err := ts.Error(); err != nil {
+		return fmt.Errorf("search error for prefix %q: %w", prefix, err)
+	}
+	return nil
+}
+
+// scanTSIDsForTagFilter performs a slow scan for TSIDs matching the tag filter
+// when OR suffixes aren't available
+func (is *indexSearch) scanTSIDsForTagFilter(tf *tagFilter) (*uint64set.Set, error) {
+	tsids := &uint64set.Set{}
+	// Use nil filter for faster scanning in production scenarios
+	err := is.getTSIDsForTagFilterSlow(tf, nil, func(tsid uint64) bool {
+		// Skip deleted TSIDs
+		if is.deleted != nil && is.deleted.Has(tsid) {
+			return true
+		}
+		tsids.Add(tsid)
+		return true
+	})
+	return tsids, err
 }
 
 func (is *indexSearch) measurementSeriesByExprIterator(name []byte, expr influxql.Expr, singleSeries bool, tsid uint64, isPromAndAbsentQuery bool) (index.SeriesIDIterator, error) {
@@ -1225,155 +1414,138 @@ func (is *indexSearch) searchTSIDs(name []byte, expr influxql.Expr, tr TimeRange
 		return nil, err
 	}
 
-	deleted := is.idx.getDeletedTSIDs()
+	deleted := is.idx.GetDeletedTSIDs()
 	tsids.Subtract(deleted)
 
 	return tsids.AppendTo(nil), nil
 }
 
 func (is *indexSearch) getTSIDsForTagFilterSlow(tf *tagFilter, filter *uint64set.Set, hook indexSearchHook) error {
+	// Precondition check: this method only handles tag filters without OR suffixes
 	if len(tf.orSuffixes) > 0 {
-		logger.GetLogger().Panic("BUG: the getTSIDsForTagFilterSlow must be called only for empty tf.orSuffixes", zap.Strings("orSuffixes", tf.orSuffixes))
+		logger.GetLogger().Panic("BUG: getTSIDsForTagFilterSlow must be called only for empty tf.orSuffixes",
+			zap.Strings("orSuffixes", tf.orSuffixes))
 	}
 
-	// Scan all the rows with tf.prefix and call f on every tf match.
+	// Initialize scanning components
 	ts := &is.ts
 	kb := &is.kb
 	mp := &is.mp
 	mp.Reset()
+
+	// Cache to avoid re-evaluating the same suffix match
 	var prevMatchingSuffix []byte
 	var prevMatch bool
 	prefix := tf.prefix
+
+	// Start scanning from the tag filter prefix
 	ts.Seek(prefix)
+
 	for ts.NextItem() {
 		item := ts.Item
+
+		// Exit early if we've moved past the target prefix range
 		if !bytes.HasPrefix(item, prefix) {
 			return nil
 		}
+
+		// Parse tag suffix and TSID section from current item
 		tail := item[len(prefix):]
-		n := bytes.IndexByte(tail, tagSeparatorChar)
-		if n < 0 {
+		sepIndex := bytes.IndexByte(tail, tagSeparatorChar)
+		if sepIndex < 0 {
 			return fmt.Errorf("invalid tag->tsids line %q: cannot find tagSeparatorChar=%d", item, tagSeparatorChar)
 		}
-		suffix := tail[:n+1]
-		tail = tail[n+1:]
-		if err := mp.InitOnlyTail(item, tail); err != nil {
+		suffix := tail[:sepIndex+1]
+		tsidTail := tail[sepIndex+1:]
+
+		// Initialize parser with TSID data and parse values
+		if err := mp.InitOnlyTail(item, tsidTail); err != nil {
 			return err
 		}
 		mp.ParseTSIDs()
+
+		// Fast path: handle empty tag values with no regex
 		if tf.isEmptyValue && !tf.isRegexp {
-			// Fast path: tag value is empty
-			// no regex
-			for _, tsid := range mp.TSIDs {
-				if filter != nil && !filter.Has(tsid) {
-					continue
-				}
-				if !hook(tsid) {
-					return nil
-				}
+			if err := is.processMatchingTSIDs(mp.TSIDs, filter, hook); err != nil {
+				return err
 			}
 			continue
 		}
 
-		if prevMatch && string(suffix) == string(prevMatchingSuffix) {
-			// Fast path: the same tag value found.
-			// There is no need in checking it again with potentially
-			// slow tf.matchSuffix, which may call regexp.
-			for _, tsid := range mp.TSIDs {
-				if filter != nil && !filter.Has(tsid) {
-					continue
-				}
-				if !hook(tsid) {
-					return nil
-				}
+		// Fast path: reuse previous match result for identical suffix
+		if prevMatch && bytes.Equal(suffix, prevMatchingSuffix) {
+			if err := is.processMatchingTSIDs(mp.TSIDs, filter, hook); err != nil {
+				return err
 			}
 			continue
 		}
+
+		// Optimization: skip if no TSIDs in current row match the filter
 		if filter != nil && !mp.HasCommonTSIDs(filter) {
-			// Faster path: there is no need in calling tf.matchSuffix,
-			// since the current row has no matching tsids.
 			continue
 		}
 
-		// Slow path: need tf.matchSuffix call.
-		ok, err := tf.matchSuffix(suffix)
+		// Slow path: perform suffix matching (may include regex evaluation)
+		matches, err := tf.matchSuffix(suffix)
 		if err != nil {
-			return fmt.Errorf("error when matching %s against suffix %q: %w", tf, suffix, err)
+			return fmt.Errorf("error matching %s against suffix %q: %w", tf, suffix, err)
 		}
-		if !ok {
+
+		if !matches {
 			prevMatch = false
+			// Continue to next item if current row has partial TSIDs; otherwise jump to next tag value
 			if mp.TSIDsLen() < mergeindex.MaxTSIDsPerRow/2 {
-				// If the current row contains non-full tsids list,
-				// then it is likely the next row contains the next tag value.
-				// So skip seeking for the next tag value, since it will be slower than just ts.NextItem call.
 				continue
 			}
-			// Optimization: skip all the tsids for the given tag value
-			kb.B = append(kb.B[:0], item[:len(item)-len(tail)]...)
-			// The last char in kb.B must be tagSeparatorChar. Just increment it
-			// in order to jump to the next tag value.
-			if len(kb.B) == 0 || kb.B[len(kb.B)-1] != tagSeparatorChar || tagSeparatorChar >= 0xff {
-				return fmt.Errorf("data corruption: the last char in k=%X must be %X", kb.B, tagSeparatorChar)
+
+			// Optimize by seeking past all remaining entries for current tag value
+			if err := is.seekToNextTagValue(kb, item, tsidTail, ts); err != nil {
+				return err
 			}
-			kb.B[len(kb.B)-1]++
-			ts.Seek(kb.B)
 			continue
 		}
+
+		// Cache successful match and process TSIDs
 		prevMatch = true
 		prevMatchingSuffix = append(prevMatchingSuffix[:0], suffix...)
-		for _, tsid := range mp.TSIDs {
-			if filter != nil && !filter.Has(tsid) {
-				continue
-			}
-			if !hook(tsid) {
-				return nil
-			}
-		}
-	}
-	if err := ts.Error(); err != nil {
-		return fmt.Errorf("error when searching for tag filter prefix %q: %w", prefix, err)
-	}
-	return nil
-}
-
-func (is *indexSearch) updateTSIDsByOrSuffixesOfTagFilter(tf *tagFilter, tsids *uint64set.Set) error {
-	if tf.isNegative {
-		logger.GetLogger().Panic("BUG: isNegative must be false")
-	}
-	kb := kbPool.Get()
-	defer kbPool.Put(kb)
-	for _, orSuffix := range tf.orSuffixes {
-		kb.B = append(kb.B[:0], tf.prefix...)
-		kb.B = append(kb.B, orSuffix...)
-		kb.B = append(kb.B, tagSeparatorChar)
-		err := is.updateTSIDsByOrSuffix(kb.B, tsids)
-		if err != nil {
+		if err := is.processMatchingTSIDs(mp.TSIDs, filter, hook); err != nil {
 			return err
 		}
 	}
+
+	// Check for scanner errors after loop completion
+	if err := ts.Error(); err != nil {
+		return fmt.Errorf("error searching tag filter prefix %q: %w", prefix, err)
+	}
 	return nil
 }
 
-func (is *indexSearch) updateTSIDsByOrSuffix(prefix []byte, tsids *uint64set.Set) error {
-	ts := &is.ts
-	mp := &is.mp
-	mp.Reset()
-	ts.Seek(prefix)
-	for ts.NextItem() {
-		item := ts.Item
-		if !bytes.HasPrefix(item, prefix) {
+// Helper method to process TSIDs against filter and hook
+func (is *indexSearch) processMatchingTSIDs(tsids []uint64, filter *uint64set.Set, hook indexSearchHook) error {
+	for _, tsid := range tsids {
+		if filter != nil && !filter.Has(tsid) {
+			continue
+		}
+		if !hook(tsid) {
 			return nil
 		}
-		if err := mp.InitOnlyTail(item, item[len(prefix):]); err != nil {
-			return err
-		}
+	}
+	return nil
+}
 
-		mp.ParseTSIDs()
-		tsids.AddMulti(mp.TSIDs)
+// Helper method to seek to next tag value by incrementing the separator
+func (is *indexSearch) seekToNextTagValue(kb *bytesutil.ByteBuffer, item []byte, tsidTail []byte, ts *mergeset.TableSearch) error {
+	// Prepare buffer with current tag value prefix
+	kb.B = append(kb.B[:0], item[:len(item)-len(tsidTail)]...)
+
+	// Validate tag separator position and value
+	if len(kb.B) == 0 || kb.B[len(kb.B)-1] != tagSeparatorChar || tagSeparatorChar >= 0xff {
+		return fmt.Errorf("data corruption: last char in %X must be %X", kb.B, tagSeparatorChar)
 	}
-	if err := ts.Error(); err != nil {
-		return fmt.Errorf("error when searching for tag filter prefix %q: %w", prefix, err)
-	}
+
+	// Increment separator to jump to next tag value
+	kb.B[len(kb.B)-1]++
+	ts.Seek(kb.B)
 	return nil
 }
 
@@ -1448,6 +1620,7 @@ func (is *indexSearch) updateTSIDsForPrefix(prefix []byte, tsids *uint64set.Set,
 	if err := ts.Error(); err != nil {
 		return fmt.Errorf("error when searching for all tsids by prefix %q: %w", prefix, err)
 	}
+	tsids.Subtract(is.deleted)
 	return nil
 }
 
@@ -1519,7 +1692,7 @@ func (is *indexSearch) searchTagValuesBySingleKey(name, tagKey []byte, eligibleT
 	kb := &is.kb
 	mp := &is.mp
 	mp.Reset()
-	deletedTSIDs := is.idx.getDeletedTSIDs()
+	deletedTSIDs := is.idx.GetDeletedTSIDs()
 	tagValueMap := make(map[string]struct{})
 
 	compositeKey := kbPool.Get()

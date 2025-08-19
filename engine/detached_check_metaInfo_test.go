@@ -55,30 +55,15 @@ func TestCheckDetachedFiles(t *testing.T) {
 	// step2: write data
 	st := time.Now().Truncate(time.Second)
 	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
-	primaryKey := []string{"time"}
-	sortKey := []string{"time"}
-	list := make([]*influxql.IndexList, 1)
-	bfColumn := []string{"field1_string"}
-	iList := influxql.IndexList{IList: bfColumn}
-	list[0] = &iList
-	mstsInfo := make(map[string]*meta.MeasurementInfo)
-	mstsInfo[defaultMeasurementName] = &meta.MeasurementInfo{
-		Name:       defaultMeasurementName,
-		EngineType: config.COLUMNSTORE,
-		ColStoreInfo: &meta.ColStoreInfo{
-			SortKey:        sortKey,
-			PrimaryKey:     primaryKey,
-			CompactionType: config.BLOCK,
-		},
-		IndexRelation: influxql.IndexRelation{IndexNames: []string{"bloomfilter"},
-			Oids:      []uint32{uint32(index.BloomFilter)},
-			IndexList: list},
-	}
 
-	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
-	sh.SetClient(&MockMetaClient{
-		mstInfo: []*meta.MeasurementInfo{mstsInfo[defaultMeasurementName]},
-	})
+	mstInfo := pkTimeMstInfo()
+	mstInfo.ColStoreInfo.CompactionType = config.BLOCK
+	mstInfo.IndexRelation = defaultBFIndexRelation()
+
+	defer clearMstInfo()
+	_, ok := initColumnStoreMstInfo(mstInfo)
+	require.True(t, ok)
+
 	err = sh.WriteRows(rows, nil)
 	msInfo, err := sh.activeTbl.GetMsInfo(defaultMeasurementName)
 	if err != nil {
@@ -92,7 +77,7 @@ func TestCheckDetachedFiles(t *testing.T) {
 
 	require.Equal(t, 4*100, int(sh.rowCount))
 	detachedInfo := NewDetachedMetaInfo()
-	err = detachedInfo.checkAndTruncateDetachedFiles(sh.filesPath, defaultMeasurementName, bfColumn, false)
+	err = detachedInfo.checkAndTruncateDetachedFiles(sh.filesPath, defaultMeasurementName, mstInfo.IndexRelation.IndexNames, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,29 +104,14 @@ func TestTestCheckDetachedFilesV2(t *testing.T) {
 	// step2: write data
 	st := time.Now().Truncate(time.Second)
 	rows, _, _ := GenDataRecord([]string{defaultMeasurementName}, 4, 100, time.Second, st, true, true, false, 1)
-	primaryKey := []string{"time"}
-	sortKey := []string{"time"}
-	list := make([]*influxql.IndexList, 1)
-	bfColumn := []string{"field1_string"}
-	iList := influxql.IndexList{IList: bfColumn}
-	list[0] = &iList
-	mstsInfo := make(map[string]*meta.MeasurementInfo)
-	mstsInfo[defaultMeasurementName] = &meta.MeasurementInfo{
-		Name:       defaultMeasurementName,
-		EngineType: config.COLUMNSTORE,
-		ColStoreInfo: &meta.ColStoreInfo{
-			SortKey:    sortKey,
-			PrimaryKey: primaryKey,
-		},
-		IndexRelation: influxql.IndexRelation{IndexNames: []string{"bloomfilter"},
-			Oids:      []uint32{uint32(index.BloomFilter)},
-			IndexList: list},
-	}
 
-	sh.SetMstInfo(mstsInfo[defaultMeasurementName])
-	sh.SetClient(&MockMetaClient{
-		mstInfo: []*meta.MeasurementInfo{mstsInfo[defaultMeasurementName]},
-	})
+	mstInfo := pkTimeMstInfo()
+	mstInfo.IndexRelation = defaultBFIndexRelation()
+
+	defer clearMstInfo()
+	_, ok := initColumnStoreMstInfo(mstInfo)
+	require.True(t, ok)
+
 	err = sh.WriteRows(rows, nil)
 	msInfo, err := sh.activeTbl.GetMsInfo(defaultMeasurementName)
 	if err != nil {
@@ -154,7 +124,7 @@ func TestTestCheckDetachedFilesV2(t *testing.T) {
 		mutable.SetWriteChunk(msInfo, rec)
 		sh.commitSnapshot(sh.activeTbl)
 		detachedInfo := NewDetachedMetaInfo()
-		err = detachedInfo.checkAndTruncateDetachedFiles(sh.filesPath, defaultMeasurementName, bfColumn, false)
+		err = detachedInfo.checkAndTruncateDetachedFiles(sh.filesPath, defaultMeasurementName, mstInfo.IndexRelation.IndexNames, false)
 		if err != nil {
 			t.Fatal(err)
 		}

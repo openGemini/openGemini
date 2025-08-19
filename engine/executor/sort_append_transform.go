@@ -155,6 +155,9 @@ func (t *SortAppendTransf) updateWithBreakPoint(trans *MergeTransform) {
 
 func CompareSortedAppendBreakPoint(item Item, in int, tag ChunkTags, b *SortedBreakPoint, opt query.ProcessorOptions) bool {
 	c := item.ChunkBuf
+	if c.GetGraph() != nil {
+		return true
+	}
 	t := c.Time()[in]
 	if opt.Ascending {
 		x, y := tag.Subset(opt.Dimensions), b.Tag.Subset(opt.Dimensions)
@@ -196,7 +199,15 @@ func (h *AppendHeapItems) Swap(i, j int) { h.Items[i], h.Items[j] = h.Items[j], 
 func (h *AppendHeapItems) Less(i, j int) bool {
 	x := h.Items[i]
 	y := h.Items[j]
-
+	if x.ChunkBuf.GetGraph() != nil && y.ChunkBuf.GetGraph() != nil {
+		return x.ChunkBuf.Name() < y.ChunkBuf.Name()
+	}
+	if x.ChunkBuf.GetGraph() != nil {
+		return true
+	}
+	if y.ChunkBuf.GetGraph() != nil {
+		return false
+	}
 	xt := x.ChunkBuf.Time()[x.Index]
 	yt := y.ChunkBuf.Time()[y.Index]
 	if h.opt.Ascending {
@@ -265,6 +276,8 @@ func AppendColumnsIteratorHelper(rowDataType hybridqp.RowDataType) CoProcessor {
 			tranCoProcessor.AppendRoutine(NewRoutineImpl(NewInt64AppendIterator(), i, i))
 		case influxql.Float:
 			tranCoProcessor.AppendRoutine(NewRoutineImpl(NewFloat64AppendIterator(), i, i))
+		case influxql.FloatTuple:
+			tranCoProcessor.AppendRoutine(NewRoutineImpl(NewFloatTupleMergeIterator(), i, i))
 		case influxql.String, influxql.Tag:
 			tranCoProcessor.AppendRoutine(NewRoutineImpl(NewStringAppendIterator(), i, i))
 		}

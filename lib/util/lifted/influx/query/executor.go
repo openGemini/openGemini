@@ -49,6 +49,9 @@ var (
 	// ErrAlreadyKilled is returned when attempting to kill a query that has already been killed.
 	ErrAlreadyKilled = errors.New("already killed")
 
+	// ErrInternalError is returned when panic was caught during query execution
+	ErrInternalError = errors.New("internal error")
+
 	handlerStat = statistics.NewHandler()
 )
 
@@ -159,7 +162,8 @@ func (a openAuthorizer) AuthorizeQuery(_ string, _ *influxql.Query) error { retu
 
 type RowsChan struct {
 	Rows    models.Rows // models.Rows of data
-	Partial bool        // is partial of rows
+	Records []*models.RecordContainer
+	Partial bool // is partial of rows
 }
 
 // ExecutionOptions contains the options for executing a query.
@@ -218,6 +222,9 @@ type ExecutionOptions struct {
 
 	// IterID indicates the number of iteration in incremental query, starting from 0.
 	IterID int32
+
+	// IsArrowQuery indicates whether the query uses arrow flight protocol
+	IsArrowQuery bool
 }
 
 func NewExecutionOptions(db, rp string, nodeID uint64, chunkSize, innerChunkSize int, chunked, readOnly, quiet, parallelQuery bool) *ExecutionOptions {
@@ -482,8 +489,19 @@ LOOP:
 		wg.Add(1)
 		go func(stmt influxql.Statement, seq int) {
 			defer func() {
-				wg.Done()
+				if r := recover(); r != nil {
+					stack := debug.Stack()
+					var errInfo zap.Field
+					if err, ok := r.(error); ok {
+						errInfo = zap.Error(err)
+					} else {
+						errInfo = zap.Any("error", r)
+					}
+					e.Logger.Error("Panic in query processing", errInfo, zap.String("stack", string(stack)))
 
+					results <- &Result{StatementID: seq, Err: ErrInternalError}
+				}
+				wg.Done()
 				batchQueryConcurrenceLimiter.Release()
 			}()
 
@@ -600,9 +618,25 @@ func init() {
 	}
 }
 
+// Converts query to string form using String() method; in case of panic during
+// conversion, log convertion panic and return safe string.
+func (e *Executor) safeQueryString(query *influxql.Query) (result string) {
+	defer func() {
+		if err := recover(); err != nil {
+			result = "<QUERY-REPRESENTATION-ERROR>"
+			e.Logger.Error(fmt.Sprintf("%s [error:%s] %s", result, err, debug.Stack()))
+		}
+	}()
+	return query.String()
+}
+
 func (e *Executor) recover(query *influxql.Query, results chan *Result) {
 	if err := recover(); err != nil {
-		e.Logger.Error(fmt.Sprintf("%s [error:%s] %s", query.String(), err, debug.Stack()))
+		// In case of query execution, log the error and return meaningful result.
+		// Internal code err may lead to query handling representation error, in this
+		// case use "<QUERY-REPRESENTATION-ERROR>" as a query placeholder.
+		querystr := e.safeQueryString(query)
+		e.Logger.Error(fmt.Sprintf("%s [error:%s] %s", querystr, err, debug.Stack()))
 
 		internalErr, ok := err.(*errno.Error)
 		if ok && errno.Equal(internalErr, errno.DtypeNotSupport) {
@@ -613,7 +647,7 @@ func (e *Executor) recover(query *influxql.Query, results chan *Result) {
 		} else {
 			results <- &Result{
 				StatementID: -1,
-				Err:         fmt.Errorf("%s [error:%s]", query.String(), err),
+				Err:         fmt.Errorf("%s [error:%s]", querystr, err),
 			}
 		}
 

@@ -16,16 +16,19 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable"
+	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/lib/binaryfilterfunc"
 	"github.com/openGemini/openGemini/lib/bitmap"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/fragment"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
@@ -236,6 +239,7 @@ func (r *ColumnStoreReader) initReadCursor(queryCtx context.Context) (err error)
 	ctx := immutable.NewChunkMetaContext(nil)
 	defer ctx.Release()
 
+	var segmentRanges fragment.FragmentRanges
 	for _, shardFrags := range r.frags {
 		for _, fileFrags := range shardFrags.FileMarks {
 			file := fileFrags.GetFile()
@@ -244,7 +248,7 @@ func (r *ColumnStoreReader) initReadCursor(queryCtx context.Context) (err error)
 			if ok {
 				loc.SetChunkMeta(chunkMeta)
 			} else {
-				ok, err = loc.Contains(0, tr, ctx)
+				ok, err = loc.Contains(colstore.SeriesID, tr, ctx)
 				if err != nil {
 					return
 				}
@@ -253,7 +257,14 @@ func (r *ColumnStoreReader) initReadCursor(queryCtx context.Context) (err error)
 				}
 				immutable.PutChunkMeta(file.Path(), loc.GetChunkMeta())
 			}
-			loc.SetFragmentRanges(fileFrags.GetFragmentRanges())
+			pkMark := file.GetPkInfo().GetMark()
+			allSegmentRanges := pkMark.GetSegmentsFromFragmentRange()
+			fragmentRanges := fileFrags.GetFragmentRanges()
+			segmentRanges, err = getSegmentRanges(fragmentRanges, allSegmentRanges)
+			if err != nil {
+				return
+			}
+			loc.SetFragmentRanges(segmentRanges)
 			locs = append(locs, loc)
 		}
 	}
@@ -264,6 +275,21 @@ func (r *ColumnStoreReader) initReadCursor(queryCtx context.Context) (err error)
 		r.readCursor.AddLocation(locs[i])
 	}
 	return
+}
+
+func getSegmentRanges(fragmentRanges, allSegmentRanges fragment.FragmentRanges) (fragment.FragmentRanges, error) {
+	fragmentCount := len(allSegmentRanges)
+	var segmentRanges fragment.FragmentRanges
+	for _, fragmentRange := range fragmentRanges {
+		fragmentEnd := fragmentRange.End
+		fragmentStart := fragmentRange.Start
+		if fragmentEnd > uint32(fragmentCount) {
+			return nil, errors.New("can`t get segment ranges when init the read cursor")
+		}
+		segmentRange := &fragment.FragmentRange{Start: allSegmentRanges[fragmentStart].Start, End: allSegmentRanges[fragmentEnd-1].End}
+		segmentRanges = append(segmentRanges, segmentRange)
+	}
+	return segmentRanges, nil
 }
 
 func (r *ColumnStoreReader) initSchemaAndPool() (err error) {
@@ -319,7 +345,7 @@ func (r *ColumnStoreReader) initSchemaAndPool() (err error) {
 	recordNum := ColumnStoreReaderRecordNum
 	chunkNum := ColumnStoreReaderChunkNum
 	// init the data record pool
-	if r.schema.HasTopNDDCM() {
+	if _, ok := r.schema.HasTopN(); ok {
 		recordNum = ColumnStoreReaderNoCopyRecordNum
 		chunkNum = ColumnStoreReaderNoCopyChunkNum
 	}

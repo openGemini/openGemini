@@ -53,7 +53,7 @@ func getConn(addr string) (net.Conn, error) {
 }
 
 // return response channel with buffer size
-func NewRespChan(size int) (*respChan, *errno.Error) {
+func NewRespChan(size int) (*respChan, error) {
 	if size < 0 {
 		return nil, errno.NewError(errno.ShortBufferSize, 0, size)
 	} else if size > maxRespBufSize {

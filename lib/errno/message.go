@@ -47,17 +47,19 @@ var unknownMessage = newNoticeMessage("unknown error", ModuleUnknown)
 // Can set module when recording logs
 var messageMap = map[Errno]*Message{
 	// common error codes
-	InternalError:      newWarnMessage("%v", ModuleUnknown),
-	InvalidDataType:    newWarnMessage("invalid data type, exp: %s, got: %s", ModuleUnknown),
-	RecoverPanic:       newFatalMessage("runtime panic: %v", ModuleUnknown),
-	UnknownMessageType: newFatalMessage("unknown message type: %v", ModuleUnknown),
-	InvalidBufferSize:  newWarnMessage("invalid buffer size, excepted %d; actual %d", ModuleUnknown),
-	ShortBufferSize:    newWarnMessage("invalid buffer size, expected greater than %d; actual %d", ModuleUnknown),
-	ShortWrite:         newWarnMessage("short write. succeeded in writing %d bytes, but expected %d bytes", ModuleUnknown),
-	ShortRead:          newWarnMessage("short read. succeeded in reading %d bytes, but expected %d bytes", ModuleUnknown),
-	InvalidMeasurement: newWarnMessage("invalid measurement name: %s", ModuleUnknown),
-	TooSmallData:       newFatalMessage("too small data for %s. expected %d bytes, only %d bytes", ModuleUnknown),
-	TooSmallOrOverflow: newFatalMessage("buf too small or overflow for %s", ModuleUnknown),
+	InternalError:         newWarnMessage("%v", ModuleUnknown),
+	InvalidDataType:       newWarnMessage("invalid data type, exp: %s, got: %s", ModuleUnknown),
+	RecoverPanic:          newFatalMessage("runtime panic: %v", ModuleUnknown),
+	UnknownMessageType:    newFatalMessage("unknown message type: %v", ModuleUnknown),
+	InvalidBufferSize:     newWarnMessage("invalid buffer size, excepted %d; actual %d", ModuleUnknown),
+	ShortBufferSize:       newWarnMessage("invalid buffer size, expected greater than %d; actual %d", ModuleUnknown),
+	ShortWrite:            newWarnMessage("short write. succeeded in writing %d bytes, but expected %d bytes", ModuleUnknown),
+	ShortRead:             newWarnMessage("short read. succeeded in reading %d bytes, but expected %d bytes", ModuleUnknown),
+	InvalidMeasurement:    newWarnMessage("invalid measurement name: %s", ModuleUnknown),
+	InvalidMeasurementTTL: newWarnMessage("invalid measurement ttl: %s, mst ttl cannot be greater than rp duration: %s", ModuleUnknown),
+	TooSmallData:          newFatalMessage("too small data for %s. expected %d byte(s), only %d byte(s)", ModuleUnknown),
+	TooSmallOrOverflow:    newFatalMessage("buf too small or overflow for %s", ModuleUnknown),
+	NoMstInDb:             newWarnMessage("there is no measurement in database %s policy %s", ModuleUnknown),
 
 	// write error codes
 	WriteNoShardGroup:               newWarnMessage("nil shard group", ModuleWrite),
@@ -79,6 +81,7 @@ var messageMap = map[Errno]*Message{
 	ErrorTagArrayFormat:            newWarnMessage("error tag array format", ModuleWrite),
 	WriteErrorArray:                newWarnMessage("error tag array", ModuleWrite),
 	TooManyTagKeys:                 newWarnMessage("too many tag keys", ModuleWrite),
+	TooManyFieldKeys:               newWarnMessage("too many field keys", ModuleWrite),
 	SeriesLimited:                  newWarnMessage("too many series in database %s. upper limit: %d; current: %d", ModuleWrite),
 	RecordWriterFatalErr:           newFatalMessage("record writer raise fatal error", ModuleWrite),
 	ArrowRecordTimeFieldErr:        newFatalMessage("the time field of arrow record should the last column", ModuleWrite),
@@ -96,6 +99,9 @@ var messageMap = map[Errno]*Message{
 	WritePointPrimaryKeyErr:        newFatalMessage("checkSchema: write point is not match the number of primary key. mst: %s,  expect:%d but:%d", ModuleWrite),
 	KeyWordConflictErr:             newFatalMessage("column name conflict with key word. mst: %s,  conflict column name :%s", ModuleWrite),
 	MeasurementNameTooLong:         newWarnMessage("measurement name is :%s. upper limit: %d; current: %d", ModuleWrite),
+	TagNameTooLong:                 newWarnMessage("tag name is:%s. upper limit: %d; current: %d", ModuleWrite),
+	TagValueTooLong:                newWarnMessage("tag value for tag named: %s. upper limit: %d; current: %d", ModuleWrite),
+	FieldNameTooLong:               newWarnMessage("field name is:%s. upper limit: %d; current: %d", ModuleWrite),
 	RepConfigWriteNoRepDB:          newWarnMessage("RepConfigWriteNoRepDB", ModuleWrite),
 	CleanSchemaCheckErr:            newWarnMessage("Schema check err", ModuleWrite),
 	UsedProposeId:                  newWarnMessage("UsedProposeId, identity: %s, proposeId: %d", ModuleWrite),
@@ -152,7 +158,7 @@ var messageMap = map[Errno]*Message{
 	BadListen:             newNoticeMessage("bad practice to listen on %s", ModuleNetwork),
 	FailedConvertToCodec:  newWarnMessage("failed to convert to Codec, give type: %s", ModuleNetwork),
 	OpenSessionTimeout:    newWarnMessage("failed to open session: timeout", ModuleNetwork),
-	SessionSelectTimeout:  newWarnMessage("select timeout in %s seconds", ModuleNetwork),
+	SessionSelectTimeout:  newWarnMessage("select timeout in %s seconds, remote addr: %s; local addr: %s", ModuleNetwork),
 	RemoteError:           newWarnMessage("remote error: %v", ModuleNetwork),
 	DataACKTimeout:        newWarnMessage("wait data ack signal timeout", ModuleNetwork),
 	InvalidTLSConfig:      newWarnMessage("tsl configuration is not enabled or invalid", ModuleNetwork),
@@ -181,6 +187,8 @@ var messageMap = map[Errno]*Message{
 	ErrQueryNotFound:             newWarnMessage("no such query id: %d", ModuleQueryEngine),
 	ErrQueryKilled:               newWarnMessage("query(%d) killed", ModuleQueryEngine),
 	ErrSameTagSet:                newFatalMessage("vector cannot contain metrics with the same labelset", ModuleQueryEngine),
+	SortMergeJoinFail:            newFatalMessage("Failed to execute sort merge join. join type: %s, join error: %v", ModuleQueryEngine),
+	HashMergeJoinFail:            newFatalMessage("Failed to execute hash merge join. join type: %s, join error: %v", ModuleQueryEngine),
 
 	// store engine error codes
 	CreateIndexFailPointRowType:     newFatalMessage("create index failed due to rows are not belong to type PointRow", ModuleIndex),
@@ -216,6 +224,7 @@ var messageMap = map[Errno]*Message{
 	ShardIsMoving:                   newFatalMessage("shard is moving, shardID %d", ModuleStorageEngine),
 	ShardMovingStopped:              newFatalMessage("shard moving is disabled, shardID %d", ModuleStorageEngine),
 	AlreadyHotFile:                  newNoticeMessage("already a hot file", ModuleStorageEngine),
+	ForbidIndexWrite:                newNoticeMessage("forbid index write, indexId:%d, indexTier:%d", ModuleStorageEngine),
 
 	// wal error codes
 	ReadWalFileFailed:         newWarnMessage("read wal file failed", ModuleWal),
@@ -238,6 +247,7 @@ var messageMap = map[Errno]*Message{
 	ShardBucketLacks:               newWarnMessage("get shard resources out of time: bucket lacks of resources", ModuleQueryEngine),
 	SeriesBucketLacks:              newWarnMessage("get series resources out of time: bucket lacks of resources", ModuleQueryEngine),
 	QueryAborted:                   newWarnMessage("query has been aborted", ModuleQueryEngine),
+	FilterAllPoints:                newWarnMessage("filter all points after rewriteCondition", ModuleQueryEngine),
 	SortTransformRunningErr:        newWarnMessage("SortTransform run error", ModuleQueryEngine),
 	HashMergeTransformRunningErr:   newWarnMessage("HashMergeTransform run error", ModuleQueryEngine),
 	HashAggTransformRunningErr:     newWarnMessage("HashAggTransform work error", ModuleQueryEngine),
@@ -252,7 +262,11 @@ var messageMap = map[Errno]*Message{
 	ErrIncAggIterID:                newFatalMessage("the iterID is not equal to the expected. actual: %d, expected: %d", ModuleQueryEngine),
 	ErrInputTimeExceedTimeRange:    newFatalMessage("input time exceeds the query time range. start=%d, end=%d, time=%d", ModuleQueryEngine),
 	FailedPutNodeMaxIterNum:        newFatalMessage("failed to put the max iter num for the inc query, queryID=%s. [Node]", ModuleQueryEngine),
-	ApplyFuncErr:                   newWarnMessage("applyFuncErr, func=%s, err=%s", ModuleQueryEngine),
+	IndexClearingWhileReading:      newWarnMessage("Index Clearing while reading, indexId:%d, startTier:%d, endTier:%d", ModuleQueryEngine),
+	ShardClearingWhileReading:      newWarnMessage("Shard Clearing while reading, shardId:%d, startTier:%d, endTier:%d", ModuleQueryEngine),
+	MisMatchShardAndIndex:          newWarnMessage("misMatched shardId:%d and indexId:%d, shardEndTier:%d, indexEndTier:%d", ModuleQueryEngine),
+	NoNodeTraits:                   newWarnMessage("there is no node traits for query push down", ModuleQueryEngine),
+	FieldIsLiteral:                 newWarnMessage("field must contain at least one variable", ModuleQueryEngine),
 
 	// query interface error codes
 	ReverseValueIllegal:     newWarnMessage("reverse value is illegal", ModuleQueryInterface),
@@ -417,6 +431,7 @@ var messageMap = map[Errno]*Message{
 	TaskQueueFull:            newNoticeMessage("task queue full", ModuleCastor),
 	ExceedRetryChance:        newNoticeMessage("exceed retry chance", ModuleCastor),
 	InvalidHaPolicy:          newNoticeMessage("HaPolicy should in (write-available-first, shared-storage, replication)", ModuleCastor),
+	ColumnsNotAligned:        newNoticeMessage("columns not aligned", ModuleCastor),
 	UnknownErr:               newNoticeMessage("unknown error", ModuleCastor),
 
 	// promql2influxql
@@ -448,4 +463,9 @@ var messageMap = map[Errno]*Message{
 	InvalidPromMstName:     newFatalMessage("invalid metric store for prom: %s", ModuleQueryEngine),
 	ChunkReaderCursor:      newNoticeMessage("chunkReader read error", ModuleQueryEngine),
 	PromReceiverErr:        newFatalMessage("prom receiver error", ModuleQueryEngine),
+
+	// consume service
+	MissTopic:      newWarnMessage("missing topic", ModuleConsume),
+	InvalidTopic:   newWarnMessage("invalid topic: %s", ModuleConsume),
+	MissPartitions: newWarnMessage("missing partitions", ModuleConsume),
 }

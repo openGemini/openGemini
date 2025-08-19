@@ -19,6 +19,7 @@ import (
 	"reflect"
 	"sort"
 	"testing"
+	"time"
 
 	"github.com/apache/arrow/go/v13/arrow"
 	"github.com/apache/arrow/go/v13/arrow/array"
@@ -123,6 +124,13 @@ func matchContent(c executor.Chunk, recs []arrow.Record) bool {
 				}
 				vals = append(vals.([]int64), tmp...)
 				recVals[name] = vals
+			case arrow.STRING:
+				tmp := rCol.(*array.String).ValueBytes()
+				if !exist {
+					vals = make([]byte, 0)
+				}
+				vals = append(vals.([]byte), tmp...)
+				recVals[name] = vals
 			default:
 				panic("type not support")
 			}
@@ -157,6 +165,22 @@ func matchContent(c executor.Chunk, recs []arrow.Record) bool {
 			for j, cVal := range cCol.IntegerValues() {
 				actualIdx := cCol.GetTimeIndex(j)
 				rVals := tmp.([]int64)
+				if rVals[actualIdx] != cVal {
+					return false
+				}
+			}
+		case influxql.String:
+			bytes := cCol.StringValue(0)
+			if cCol.NilCount() == 0 {
+				res := fmt.Sprintf("{\"%s\": \"%s\"}", name, tmp)
+				if res != bytes {
+					continue
+				}
+				return false
+			}
+			for j, cVal := range cCol.StringValuesV2([]string{}) {
+				actualIdx := cCol.GetTimeIndex(j)
+				rVals := tmp.([]string)
 				if rVals[actualIdx] != cVal {
 					return false
 				}
@@ -436,11 +460,42 @@ func Test_arrowRecordToChunk(t *testing.T) {
 	}
 	cb := executor.NewChunkBuilder(row)
 	chunk := cb.NewChunk("castor")
-	if err = executor.CopyArrowRecordToChunk(rec, chunk, nil); err != nil {
+	if err := executor.CopyArrowRecordToChunk(rec, chunk, nil); err != nil {
 		t.Fatal("convert pure numeric record fail")
 	}
 	if !matchContent(chunk, []arrow.Record{rec}) {
 		t.Fatal("content not match")
+	}
+}
+
+func Test_castorADArrowRecordToChunk(t *testing.T) {
+	rec := castor.BuildStringRecord()
+	baseSchema := rec.Schema()
+	row, err := buildChunkSchema(baseSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cb := executor.NewChunkBuilder(row)
+	chunk := cb.NewChunk("castor_ad")
+	if err := executor.CopyCastorADArrowRecordToChunk(rec, chunk, nil); err != nil {
+		t.Fatal("convert pure numeric record fail")
+	}
+	if !matchContent(chunk, []arrow.Record{rec}) {
+		t.Fatal("content not match")
+	}
+}
+
+func Test_castorADArrowRecordToChunk_Error(t *testing.T) {
+	rec := castor.BuildNumericRecord()
+	baseSchema := rec.Schema()
+	row, err := buildChunkSchema(baseSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cb := executor.NewChunkBuilder(row)
+	chunk := cb.NewChunk("castor_ad")
+	if err := executor.CopyCastorADArrowRecordToChunk(rec, chunk, nil); err == nil {
+		t.Fatal("expect CopyCastorADArrowRecordToChunk return error")
 	}
 }
 
@@ -459,6 +514,38 @@ func Test_ChunkToArrowRecord_Float(t *testing.T) {
 	if err := matchMultiContent(chunks, recs); err != nil {
 		t.Fatal("content not match")
 	}
+}
+
+func Test_ChunkToArrowRecord_UDF_Detect(t *testing.T) {
+	chunks := buildIntegerChunk()
+	args := []influxql.Expr{
+		&influxql.StringLiteral{Val: "algo"},
+		&influxql.StringLiteral{Val: "xx.conf"},
+		&influxql.StringLiteral{Val: "_udf_detect"},
+		&influxql.StringLiteral{Val: "{}"},
+	}
+	recs, err := executor.ChunkToArrowRecords(chunks, "123", args)
+	if err != nil {
+		t.Fatal("convert pure numeric chunk fail")
+	}
+	if err := matchMultiContent(chunks, recs); err != nil {
+		t.Fatal("content not match")
+	}
+}
+
+func Test_ChunkToArrowRecord_UDF_Detect_Error(t *testing.T) {
+	chunks := buildIntegerChunk()
+	args := []influxql.Expr{
+		&influxql.StringLiteral{Val: "algo"},
+		&influxql.StringLiteral{Val: "xx.conf"},
+		&influxql.StringLiteral{Val: "_udf_detect"},
+		&influxql.TimeLiteral{Val: time.Now()},
+	}
+	_, err := executor.ChunkToArrowRecords(chunks, "123", args)
+	if err == nil {
+		t.Fatal("expect ChunkToArrowRecords return error")
+	}
+
 }
 
 func Test_ChunkToArrowRecord_Int(t *testing.T) {
@@ -498,7 +585,7 @@ func Test_chunkToArrowRecords_InvalidArgsType(t *testing.T) {
 		&influxql.IntegerLiteral{Val: 0},
 	}
 	_, err := executor.ChunkToArrowRecords(chunks, "123", args)
-	if err == nil || !errno.Equal(err, errno.TypeAssertFail) {
+	if err == nil {
 		t.Fatal("args should be string type, but no expected error return")
 	}
 }
@@ -513,14 +600,16 @@ func buildChunkSchema(schema *arrow.Schema) (*hybridqp.RowDataTypeImpl, *errno.E
 	varRefs := make([]influxql.VarRef, len(schema.Fields())-1) // minus 1 for timestamp
 	idx := 0
 	for _, f := range schema.Fields() {
-		if f.Name == string(castor.DataTime) {
+		if f.Name == string(castor.DataTime) || f.Name == string(castor.DataTimeStamp) {
 			continue
 		}
-		switch f.Type {
-		case arrow.PrimitiveTypes.Float64:
+		switch f.Type.(type) {
+		case *arrow.Float64Type:
 			varRefs[idx] = influxql.VarRef{Val: f.Name, Type: influxql.Float}
-		case arrow.PrimitiveTypes.Int64:
+		case *arrow.Int64Type:
 			varRefs[idx] = influxql.VarRef{Val: f.Name, Type: influxql.Integer}
+		case *arrow.StringType:
+			varRefs[idx] = influxql.VarRef{Val: f.Name, Type: influxql.String}
 		default:
 			return nil, errno.NewError(errno.DtypeNotSupport)
 		}

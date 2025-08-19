@@ -224,25 +224,25 @@ func TestFilterRecInMemTable(t *testing.T) {
 	s.schema = executor.NewQuerySchema(nil, nil, &query.ProcessorOptions{Ascending: true}, nil)
 	s.mergeRecIters = make(map[uint64][]*SeriesIter, 1)
 	s.mergeRecIters[sInfo.sid] = nil
-	s.tagSetInfo = &tsi.TagSetInfo{Filters: []influxql.Expr{&influxql.VarRef{Val: "a"}}}
+	s.tagSetInfo = &tsi.TagSetInfo{TagSetInfoItems: []tsi.TagSetInfoItem{{Filter: &influxql.VarRef{Val: "a"}}}}
 	s.ridIdx = map[int]struct{}{}
 	s.recPool = record.NewCircularRecordPool(record.NewRecordPool(record.UnknownPool), 4, schema, false)
 	s.FilesInfoPool = NewSeriesInfoPool(fileInfoNum)
-	re, _ := s.FilterRecInMemTable(rec, s.tagSetInfo.Filters[0], sInfo, nil)
+	re, _ := s.FilterRecInMemTable(rec, s.tagSetInfo.GetFilters(0), sInfo, nil)
 	for i := range re.Times() {
 		if re.Times()[i] != rec.Times()[i] {
 			t.Fatal()
 		}
 	}
 	s.schema = executor.NewQuerySchema(nil, nil, &query.ProcessorOptions{Ascending: false}, nil)
-	r, _ := s.FilterRecInMemTable(rec, s.tagSetInfo.Filters[0], sInfo, nil)
+	r, _ := s.FilterRecInMemTable(rec, s.tagSetInfo.GetFilters(0), sInfo, nil)
 	for i := range rec.Times() {
 		if rec.Times()[i] != r.Times()[i] {
 			t.Fatal()
 		}
 	}
 	s.isCutSchema = true
-	r2, _ := s.FilterRecInMemTable(rec, s.tagSetInfo.Filters[0], sInfo, nil)
+	r2, _ := s.FilterRecInMemTable(rec, s.tagSetInfo.GetFilters(0), sInfo, nil)
 	for i := range rec.Times() {
 		if rec.Times()[i] != r2.Times()[i] {
 			t.Fatal()
@@ -254,14 +254,14 @@ func TestFilterRecInMemTable(t *testing.T) {
 		[]int{1, 0, 1, 0, 0, 1, 0}, []string{"test1", "", "world1", "", "", "hello1", ""},
 		[]int{0, 1, 1, 0, 1, 0, 0}, []bool{false, false, true, false, true, false, false},
 		[]int64{157, 156, 155, 137, 113, 112, 111})
-	s.FilterRecInMemTable(rec2, s.tagSetInfo.Filters[0], sInfo, nil)
+	s.FilterRecInMemTable(rec2, s.tagSetInfo.GetFilters(0), sInfo, nil)
 	rec3 := genRowRec(schema,
 		[]int{1, 1, 1, 1, 0, 1, 0}, []int64{17, 16, 15, 14, 0, 13, 12},
 		[]int{0, 1, 1, 0, 1, 0, 0}, []float64{0, 5.3, 4.3, 0, 3.3, 0, 2.3},
 		[]int{1, 0, 1, 0, 0, 1, 0}, []string{"test1", "", "world1", "", "", "hello1", ""},
 		[]int{0, 1, 1, 0, 1, 0, 0}, []bool{false, false, true, false, true, false, false},
 		[]int64{157, 156, 155, 137, 113, 112, 99})
-	s.FilterRecInMemTable(rec3, s.tagSetInfo.Filters[0], sInfo, nil)
+	s.FilterRecInMemTable(rec3, s.tagSetInfo.GetFilters(0), sInfo, nil)
 }
 
 func TestInitOutOfOrderItersByRecordASC(t *testing.T) {
@@ -293,11 +293,11 @@ func TestInitOutOfOrderItersByRecordASC(t *testing.T) {
 	s.mergeRecIters = make(map[uint64][]*SeriesIter, 1)
 	s.mergeRecIters[sInfo.sid] = make([]*SeriesIter, 0)
 	s.mergeRecIters[sInfo.sid] = append(s.mergeRecIters[sInfo.sid], &SeriesIter{iter: &recordIter{record: rec, rowCnt: 1}})
-	s.tagSetInfo = &tsi.TagSetInfo{Filters: []influxql.Expr{&influxql.VarRef{Val: "a"}}}
+	s.tagSetInfo = &tsi.TagSetInfo{TagSetInfoItems: []tsi.TagSetInfoItem{{Filter: &influxql.VarRef{Val: "a"}}}}
 	s.ridIdx = map[int]struct{}{}
 	s.recPool = record.NewCircularRecordPool(record.NewRecordPool(record.UnknownPool), 4, schema, false)
 	s.FilesInfoPool = NewSeriesInfoPool(fileInfoNum)
-	re, _ := s.FilterRecInMemTable(rec, s.tagSetInfo.Filters[0], sInfo, nil)
+	re, _ := s.FilterRecInMemTable(rec, s.tagSetInfo.GetFilters(0), sInfo, nil)
 	for i := range re.Times() {
 		if re.Times()[i] != rec.Times()[i] {
 			t.Fatal()
@@ -342,11 +342,11 @@ func TestInitOutOfOrderItersByRecordDSC(t *testing.T) {
 	s.mergeRecIters = make(map[uint64][]*SeriesIter, 1)
 	s.mergeRecIters[sInfo.sid] = make([]*SeriesIter, 0)
 	s.mergeRecIters[sInfo.sid] = append(s.mergeRecIters[sInfo.sid], &SeriesIter{iter: &recordIter{record: rec, rowCnt: 1}})
-	s.tagSetInfo = &tsi.TagSetInfo{Filters: []influxql.Expr{&influxql.VarRef{Val: "a"}}}
+	s.tagSetInfo = &tsi.TagSetInfo{TagSetInfoItems: []tsi.TagSetInfoItem{{Filter: &influxql.VarRef{Val: "a"}}}}
 	s.ridIdx = map[int]struct{}{}
 	s.recPool = record.NewCircularRecordPool(record.NewRecordPool(record.UnknownPool), 4, schema, false)
 	s.FilesInfoPool = NewSeriesInfoPool(fileInfoNum)
-	re, _ := s.FilterRecInMemTable(rec, s.tagSetInfo.Filters[0], sInfo, nil)
+	re, _ := s.FilterRecInMemTable(rec, s.tagSetInfo.GetFilters(0), sInfo, nil)
 	for i := range re.Times() {
 		if re.Times()[i] != rec.Times()[i] {
 			t.Fatal()

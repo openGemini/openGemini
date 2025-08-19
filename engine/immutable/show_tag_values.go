@@ -34,6 +34,7 @@ type IndexMergeSet interface {
 	GetSeries(sid uint64, buf []byte, condition influxql.Expr, callback func(key *influx.SeriesKey)) error
 	GetSeriesBytes(sid uint64, buf []byte, condition influxql.Expr, callback func(key *influx.SeriesBytes)) error
 	SearchSeriesKeys(series [][]byte, name []byte, condition influxql.Expr) ([][]byte, error)
+	HasDeletedTSID(tsid uint64) bool
 }
 
 type EngineShard interface {

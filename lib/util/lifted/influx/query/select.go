@@ -69,9 +69,10 @@ type SelectOptions struct {
 
 	HintType hybridqp.HintType
 
-	IncQuery bool
-	QueryID  string
-	IterID   int32
+	IncQuery     bool
+	QueryID      string
+	IterID       int32
+	IsArrowQuery bool
 }
 
 type LogicalPlanCreator interface {
@@ -84,12 +85,16 @@ type LogicalPlanCreator interface {
 	GetSources(sources influxql.Sources) influxql.Sources
 	GetETraits(ctx context.Context, sources influxql.Sources, schema hybridqp.Catalog) ([]hybridqp.Trait, error)
 	GetSeriesKey() []byte
+	GetTagKeys(stmt *influxql.ShowTagValuesStatement) (map[string]map[string]struct{}, error)
+	GetTagVals(nodeID uint64, stmt *influxql.ShowTagValuesStatement, pts []uint32, tagKeys map[string]map[string]struct{}, exact bool) (influxql.TablesTagSets, error)
+	QueryNodePtsMap(database string) (map[uint64][]uint32, error)
+	CheckDatabaseExists(name string) error
 }
 
 // ShardMapper retrieves and maps shards into an IteratorCreator that can later be
 // used for executing queries.
 type ShardMapper interface {
-	MapShards(sources influxql.Sources, t influxql.TimeRange, opt SelectOptions, condition influxql.Expr) (ShardGroup, error)
+	MapShards(stmt *influxql.SelectStatement, t influxql.TimeRange, opt SelectOptions, condition influxql.Expr) (ShardGroup, error)
 	Close() error
 }
 
@@ -116,6 +121,7 @@ type PreparedStatement interface {
 	ChangeCreator(hybridqp.ExecutorBuilderCreator)
 	ChangeOptimizer(hybridqp.ExecutorBuilderOptimizer)
 	Statement() *influxql.SelectStatement
+	ProcessorOptions() *ProcessorOptions
 
 	// Explain outputs the explain plan for this statement.
 	Explain() (string, error)
@@ -129,7 +135,7 @@ type PreparedStatement interface {
 // Prepare will compile the statement with the default compile options and
 // then prepare the query.
 func Prepare(stmt *influxql.SelectStatement, shardMapper ShardMapper, opt SelectOptions) (PreparedStatement, error) {
-	c, err := Compile(stmt, CompileOptions{})
+	c, _, err := Compile(stmt, CompileOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -274,6 +280,8 @@ type ProcessorOptions struct {
 	// eval time, and subquery offsets in the AST tree.
 	QueryOffset time.Duration
 
+	CompareOffset time.Duration
+
 	// promQuery use
 	Without bool
 
@@ -287,12 +295,61 @@ type ProcessorOptions struct {
 
 	RemoveMetric bool
 
+	NoPushDownDim bool
+
 	// query context
 	ctx context.Context
+
+	InConditons []*influxql.InCondition
+
+	IsSameDims bool
+
+	// Condition to filter by value.
+	ValueCondition influxql.Expr
+
+	IsArrowQuery bool
+}
+
+// todo: base on graph query model
+func NewGraphProcessorOptions(outerOpt *ProcessorOptions) ProcessorOptions {
+	return *outerOpt.Clone()
 }
 
 // NewProcessorOptionsStmt creates the iterator options from stmt.
 func NewProcessorOptionsStmt(stmt *influxql.SelectStatement, sopt SelectOptions) (opt ProcessorOptions, err error) {
+	opt, err = NewProcessorOptionsStmtBase(stmt)
+	if err != nil {
+		return opt, err
+	}
+	opt.MaxSeriesN = sopt.MaxSeriesN
+	opt.Authorizer = sopt.Authorizer
+	opt.ChunkedSize = sopt.ChunkedSize
+	opt.Chunked = sopt.Chunked
+	opt.ChunkSize = sopt.ChunkSize
+	opt.MaxParallel = sopt.MaxQueryParallel
+	opt.AbortChan = sopt.AbortChan
+	opt.RowsChan = sopt.RowsChan
+	opt.IsArrowQuery = sopt.IsArrowQuery
+	return opt, nil
+}
+
+func NewProcessorOptionsWithopt(stmt *influxql.SelectStatement, outerOpt *ProcessorOptions) (opt ProcessorOptions, err error) {
+	opt, err = NewProcessorOptionsStmtBase(stmt)
+	if err != nil {
+		return opt, err
+	}
+	opt.MaxSeriesN = outerOpt.MaxSeriesN
+	opt.Authorizer = outerOpt.Authorizer
+	opt.ChunkedSize = outerOpt.ChunkedSize
+	opt.Chunked = outerOpt.Chunked
+	opt.ChunkSize = outerOpt.ChunkSize
+	opt.MaxParallel = outerOpt.MaxParallel
+	opt.AbortChan = outerOpt.AbortChan
+	opt.RowsChan = outerOpt.RowsChan
+	return opt, nil
+}
+
+func NewProcessorOptionsStmtBase(stmt *influxql.SelectStatement) (opt ProcessorOptions, err error) {
 	// valuer := &influxql.NowValuer{Location: stmt.Location}
 	// make sure call influxql.ConditionExpr before to remove time condition
 	// condition, timeRange, err := influxql.ConditionExpr(stmt.Condition, valuer)
@@ -354,17 +411,6 @@ func NewProcessorOptionsStmt(stmt *influxql.SelectStatement, sopt SelectOptions)
 	opt.Fill, opt.FillValue = stmt.Fill, stmt.FillValue
 	opt.Limit, opt.Offset = stmt.Limit, stmt.Offset
 	opt.SLimit, opt.SOffset = stmt.SLimit, stmt.SOffset
-	opt.MaxSeriesN = sopt.MaxSeriesN
-	opt.Authorizer = sopt.Authorizer
-
-	opt.ChunkedSize = sopt.ChunkedSize
-	opt.Chunked = sopt.Chunked
-
-	opt.ChunkSize = sopt.ChunkSize
-
-	opt.MaxParallel = sopt.MaxQueryParallel
-	opt.AbortChan = sopt.AbortChan
-	opt.RowsChan = sopt.RowsChan
 	opt.GroupByAllDims = stmt.GroupByAllDims
 	opt.HasFieldWildcard = stmt.HasWildcardField
 	opt.StmtId = stmt.StmtId
@@ -372,6 +418,7 @@ func NewProcessorOptionsStmt(stmt *influxql.SelectStatement, sopt SelectOptions)
 	opt.Range = stmt.Range
 	opt.LookBackDelta = stmt.LookBackDelta
 	opt.QueryOffset = stmt.QueryOffset
+	opt.CompareOffset = stmt.CompareOffset
 	opt.PromQuery = stmt.IsPromQuery
 	opt.PromRemoteRead = stmt.IsPromRemoteRead
 	opt.Without = stmt.Without
@@ -389,6 +436,7 @@ func NewProcessorOptionsStmt(stmt *influxql.SelectStatement, sopt SelectOptions)
 		opt.Without = true
 		opt.GroupByAllDims = false
 	}
+	opt.InConditons = stmt.InConditons
 	return opt, nil
 }
 
@@ -877,8 +925,40 @@ func (opt *ProcessorOptions) SetSources(sources influxql.Sources) {
 	opt.Sources = sources
 }
 
+func (opt *ProcessorOptions) GetSources() influxql.Sources {
+	return opt.Sources
+}
+
 func (opt *ProcessorOptions) IsPromAbsentCall() bool {
 	return opt.IsPromQuery() && strings.Contains(opt.Query, "absent_prom")
+}
+
+func (opt *ProcessorOptions) GetInConditions() []*influxql.InCondition {
+	return opt.InConditons
+}
+
+func (opt *ProcessorOptions) SetCondition(c influxql.Expr) {
+	opt.Condition = c
+}
+
+func (opt *ProcessorOptions) GetQueryID() uint64 {
+	return opt.QueryId
+}
+
+func (opt *ProcessorOptions) SetSameDims(isSameDims bool) {
+	opt.IsSameDims = isSameDims
+}
+
+func (opt *ProcessorOptions) CanQueryPushDown() bool {
+	return opt.HintType == hybridqp.QueryPushDown
+}
+
+func (opt *ProcessorOptions) GetValueCondition() influxql.Expr {
+	return opt.ValueCondition
+}
+
+func (opt *ProcessorOptions) SetValueCondition(vc influxql.Expr) {
+	opt.ValueCondition = vc
 }
 
 func validateTypes(stmt *influxql.SelectStatement) error {

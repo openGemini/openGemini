@@ -173,8 +173,8 @@ func BuildChunk() executor.Chunk {
 	chunk := b.NewChunk("mst")
 
 	chunk.AppendTimes([]int64{11, 12, 13, 14, 15})
-	chunk.AddTagAndIndex(*ParseChunkTags("host=A"), 0)
-	chunk.AddIntervalIndex(0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("host=A"), 0)
+	chunk.AppendIntervalIndex(0)
 
 	chunk.Column(0).AppendIntegerValues([]int64{1, 2, 3, 4, 5})
 	chunk.Column(0).AppendColumnTimes([]int64{1, 2, 3, 4, 5})
@@ -653,4 +653,32 @@ func TestNewChunkTagsWithoutDims(t *testing.T) {
 	assert.Equal(t, v[0], "tv1")
 	assert.Equal(t, k[1], "tk3")
 	assert.Equal(t, v[1], "tv3")
+}
+
+func BuildGraphChunk(name string) executor.Chunk {
+	rowDataType := buildRowDataType()
+	b := executor.NewChunkBuilder(rowDataType)
+	chunk := b.NewChunk(name)
+	chunk.SetGraph(executor.NewGraph())
+	return chunk
+}
+
+func TestAppendHeapItemsWithGraphChunk(t *testing.T) {
+	heap := &executor.AppendHeapItems{}
+	heap.Items = append(heap.Items, &executor.Item{
+		ChunkBuf: BuildSQLChunk1(),
+	})
+	heap.Items = append(heap.Items, &executor.Item{
+		ChunkBuf: BuildGraphChunk("g2"),
+	})
+
+	sort.Sort(heap)
+	assert.NotEqual(t, nil, heap.Items[0].ChunkBuf.GetGraph())
+	sort.Sort(heap)
+	assert.NotEqual(t, nil, heap.Items[0].ChunkBuf.GetGraph())
+	heap.Items = append(heap.Items, &executor.Item{
+		ChunkBuf: BuildGraphChunk("g1"),
+	})
+	sort.Sort(heap)
+	assert.Equal(t, "g1", heap.Items[0].ChunkBuf.Name())
 }

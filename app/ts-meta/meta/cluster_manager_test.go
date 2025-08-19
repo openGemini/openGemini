@@ -17,16 +17,17 @@ package meta
 import (
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/influxdata/influxdb/toml"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 var testIp = "127.0.0.3"
@@ -893,94 +894,49 @@ func TestProcessedFailedForRep(t *testing.T) {
 	assert.EqualError(t, c.processFailedDbPtForRep(dbPt, nil, false), "dataNode(id=%!d(MISSING),host=%!s(MISSING)) not found")
 }
 
-func TestClusterManager_SendFailedEvent(t *testing.T) {
-	cm := CreateClusterManager()
-	d := &meta.DataNode{NodeInfo: meta.NodeInfo{Host: ""}}
-	got := cm.sendFailedEvent(d)
-	assert.NotEqual(t, got, nil, "net.SplitHostPort error")
+func TestClusterManager_PingNode(t *testing.T) {
+	dir := strings.ReplaceAll(t.TempDir(), "\\", "/")
+	mms, err := BuildMockMetaService(dir, testIp)
+	require.NoError(t, err)
 
-	d.Host = "mock-domain:8635"
-	got = cm.sendFailedEvent(d)
-	assert.NotEqual(t, got, nil, "net.Lookup error")
+	c := CreateClusterManager()
 
-	d.Host = "localhost:8635"
-	got = cm.sendFailedEvent(d)
-	assert.Equal(t, got, nil, "valid Host and send success")
+	data := &meta.Data{
+		DataNodes: []meta.DataNode{
+			{
+				NodeInfo: meta.NodeInfo{
+					ID:      10,
+					TCPHost: "127.0.0.1:10001",
+				},
+			},
+		},
+	}
+
+	mms.GetStore().SetData(data)
+	c.store = mms.GetStore()
+
+	c.pingFailedNode = false
+	require.False(t, c.PingNode(10))
+	c.pingFailedNode = true
+
+	require.False(t, c.PingNode(10))
+	require.False(t, c.PingNode(11))
 }
 
-func TestClusterManager_IsHeartbeatTimeout(t *testing.T) {
-	cm := CreateClusterManager()
-	cm.heartbeatConfig = config.NewHeartbeatConfig()
-	cm.heartbeatConfig.Enabled = true
-
-	got := cm.isHeartbeatTimeout(4)
-	assert.True(t, got, "return true if node id not found")
-
-	cm.joins[4] = time.Now()
-	got = cm.isHeartbeatTimeout(4)
-	assert.False(t, got, "return false if node id existed and no timeout")
-
-	cm.joins[4] = time.Now().Add(-time.Minute)
-	got = cm.isHeartbeatTimeout(4)
-	assert.True(t, got, "return true if node id existed and timeout")
-}
-func TestClusterManager_SendHeartbeat(t *testing.T) {
-	mms, err := NewMockMetaService(t.TempDir(), testIp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer mms.Close()
-
-	cm := CreateClusterManager()
-	cm.heartbeatConfig = config.NewHeartbeatConfig()
-	cm.heartbeatConfig.PingTimeout = toml.Duration(time.Millisecond)
-
-	mockNetStore := NewMockNetStorage()
-	globalService.store.NetStore = mockNetStore
-
-	d := &meta.DataNode{NodeInfo: meta.NodeInfo{ID: 4, Host: "localhost:8900"}}
-	got := cm.sendHeartbeat(d)
-	assert.Equal(t, got, nil, "send success")
-
-	mockNetStore.PingFn = func(nodeId uint64, address string, timeout time.Duration) error {
-		time.Sleep(2 * time.Millisecond)
-		return nil
-	}
-	got = cm.sendHeartbeat(d)
-	assert.NotEqual(t, got, nil, "send failed because of ping timeout")
+type mockHandler struct {
+	baseHandler
 }
 
-func TestClusterManager_UpdateStoreHeartbeat(t *testing.T) {
-	dir := t.TempDir()
-	mms, err := NewMockMetaService(dir, testIp)
-	if err != nil {
-		t.Fatal(err)
+func (mh *mockHandler) handle(e *memberEvent) error {
+	return errno.NewError(errno.MetaIsNotLeader)
+}
+
+func TestClusterManagerProcessEventFail(t *testing.T) {
+	c := &ClusterManager{}
+	c.handlerMap = map[serf.EventType]memberEventHandler{
+		serf.EventMemberJoin: &mockHandler{baseHandler{c}},
 	}
-	defer mms.Close()
-
-	if err = globalService.store.ApplyCmd(GenerateCreateDataNodeCmd("127.0.0.1:8400", "127.0.0.1:8401")); err != nil {
-		t.Fatal(err)
-	}
-
-	e := *generateMemberEvent(serf.EventMemberJoin, "2", 1, serf.StatusAlive)
-	eventCh := mms.service.clusterManager.GetEventCh()
-	eventCh <- e
-	time.Sleep(1 * time.Second)
-	mms.service.clusterManager.WaitEventDone()
-
-	mockHeartbeatConfig := config.NewHeartbeatConfig()
-	mockHeartbeatConfig.PingTimeout = toml.Duration(time.Millisecond)
-
-	cm := NewClusterManager(globalService.store, WithHeartbeatConfig(mockHeartbeatConfig))
-	last := time.Now().Add(-time.Minute)
-	cm.joins[2] = last
-	cm.updateStoreHeartbeat()
-	got := cm.joins[2]
-	assert.Equal(t, got, last, "last unchanged because ping failed")
-
-	mockNetStore := NewMockNetStorage()
-	globalService.store.NetStore = mockNetStore
-	cm.updateStoreHeartbeat()
-	got = cm.joins[2]
-	assert.Greater(t, got, last, "last update because of ping success")
+	e1 := generateMemberEvent(serf.EventMemberJoin, "1", 1, serf.StatusAlive)
+	c.eventWg.Add(1)
+	c.processEvent(*e1, "")
 }

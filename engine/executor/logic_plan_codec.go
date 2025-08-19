@@ -70,6 +70,17 @@ func unmarshalNodes(plansBuf [][]byte, schema hybridqp.Catalog) ([]hybridqp.Quer
 		if err := proto.Unmarshal(buf, pb); err != nil {
 			return nil, err
 		}
+		if schema.Options().CanQueryPushDown() {
+			opt := &query.ProcessorOptions{}
+			err := opt.UnmarshalBinary(pb.GetOpt())
+			if err != nil {
+				return nil, err
+			}
+			schema, err = query.DecodeQuerySchema(pb.GetSchema(), opt)
+			if err != nil {
+				return nil, err
+			}
+		}
 
 		node, err := UnmarshalBinaryNode(pb, schema)
 		if err != nil {
@@ -160,8 +171,8 @@ func (p *LogicalFilter) LogicPlanType() internal.LogicPlanType {
 	return internal.LogicPlanType_LogicalFilter
 }
 
-func (p *LogicalDedupe) LogicPlanType() internal.LogicPlanType {
-	return internal.LogicPlanType_LogicalDedupe
+func (p *LogicalDistinct) LogicPlanType() internal.LogicPlanType {
+	return internal.LogicPlanType_LogicalDistinct
 }
 
 func (p *LogicalInterval) LogicPlanType() internal.LogicPlanType {
@@ -232,8 +243,16 @@ func (p *LogicalSortAppend) LogicPlanType() internal.LogicPlanType {
 	return internal.LogicPlanType_LogicalSortAppend
 }
 
+func (p *LogicalTableFunction) LogicPlanType() internal.LogicPlanType {
+	return internal.LogicPlanType_LogicalTableFunction
+}
+
 func (p *LogicalJoin) LogicPlanType() internal.LogicPlanType {
 	return internal.LogicPlanType_LogicalJoin
+}
+
+func (p *LogicalCTE) LogicPlanType() internal.LogicPlanType {
+	return internal.LogicPlanType_LogicalCTE
 }
 
 func (p *LogicalSubQuery) LogicPlanType() internal.LogicPlanType {
@@ -292,6 +311,14 @@ func (p *LogicalPromSubquery) LogicPlanType() internal.LogicPlanType {
 	return internal.LogicPlanType_LogicalPromSubquery
 }
 
+func (p *LogicalIn) LogicPlanType() internal.LogicPlanType {
+	return internal.LogicPlanType_LogicalIn
+}
+
+func (p *LogicalGraph) LogicPlanType() internal.LogicPlanType {
+	return internal.LogicPlanType_LogicalGraph
+}
+
 func (p *LogicalHashAgg) String() string {
 	return "LogicalHashAgg"
 }
@@ -332,8 +359,8 @@ func (p *LogicalFilter) String() string {
 	return "LogicalFilter"
 }
 
-func (p *LogicalDedupe) String() string {
-	return "LogicalDedupe"
+func (p *LogicalDistinct) String() string {
+	return "LogicalDistinct"
 }
 
 func (p *LogicalInterval) String() string {
@@ -404,6 +431,10 @@ func (p *LogicalSortAppend) String() string {
 	return "LogicalSortAppend"
 }
 
+func (p *LogicalTableFunction) String() string {
+	return "LogicalTableFunction"
+}
+
 func (p *LogicalJoin) String() string {
 	return "LogicalJoin"
 }
@@ -463,22 +494,56 @@ func (p *LogicalPromSort) String() string {
 	return "LogicalPromSort"
 }
 
+func (p *LogicalIn) String() string {
+	return "LogicalIn"
+}
+
+func (p *LogicalCTE) String() string {
+	return "LogicalCTEPlan"
+}
+
+func (p *LogicalGraph) String() string {
+	return "LogicalGraph"
+}
+
 func MarshalBinary(q hybridqp.QueryNode) ([]byte, error) {
+	var opt []byte
+	var err error
+	extMarshal := func(pb *internal.QueryNode) {
+		if len(opt) == 0 {
+			return
+		}
+		pb.Opt = opt
+		pb.Schema = &internal.QuerySchema{
+			ColumnNames: q.Schema().GetColumnNames(),
+			QueryFields: q.Schema().GetQueryFields().String(),
+		}
+	}
+	if q.Schema().Options().CanQueryPushDown() {
+		opt, err = q.Schema().Options().(*query.ProcessorOptions).MarshalBinary()
+		if err != nil {
+			return nil, err
+		}
+	}
 	switch p := q.(type) {
 	case *HeuVertex:
 		return nil, nil
 	case *LogicalExchange:
 		return Marshal(p, func(pb *internal.QueryNode) {
 			pb.Exchange = uint32(p.eType)<<8 | uint32(p.eRole)
+			extMarshal(pb)
 		}, p.inputs...)
 	case *LogicalLimit:
 		return Marshal(p, func(pb *internal.QueryNode) {
 			pb.Limit = int64(p.LimitPara.Limit)
 			pb.Offset = int64(p.LimitPara.Offset)
 			pb.LimitType = int64(p.LimitPara.LimitType)
+			extMarshal(pb)
 		}, p.inputs...)
 	case *LogicalIndexScan:
-		return Marshal(p, nil, p.inputs...)
+		return Marshal(p, func(pb *internal.QueryNode) {
+			extMarshal(pb)
+		}, p.inputs...)
 	case *LogicalAggregate:
 		aggType := internal.AggType_Normal
 		if p.isCountDistinct {
@@ -488,45 +553,98 @@ func MarshalBinary(q hybridqp.QueryNode) ([]byte, error) {
 		}
 		return Marshal(p, func(pb *internal.QueryNode) {
 			pb.AggType = aggType
+			extMarshal(pb)
 		}, p.inputs...)
 	case *LogicalMerge:
-		return Marshal(p, nil, p.inputs...)
+		return Marshal(p, func(pb *internal.QueryNode) {
+			extMarshal(pb)
+		}, p.inputs...)
 	case *LogicalSortMerge:
-		return Marshal(p, nil, p.inputs...)
+		return Marshal(p, func(pb *internal.QueryNode) {
+			extMarshal(pb)
+		}, p.inputs...)
 	case *LogicalFilter:
-		return Marshal(p, nil, p.inputs...)
-	case *LogicalDedupe:
-		return Marshal(p, nil, p.inputs...)
+		return Marshal(p, func(pb *internal.QueryNode) {
+			extMarshal(pb)
+		}, p.inputs...)
+	case *LogicalDistinct:
+		return Marshal(p, func(pb *internal.QueryNode) {
+			extMarshal(pb)
+		}, p.inputs...)
 	case *LogicalInterval:
-		return Marshal(p, nil, p.inputs...)
+		return Marshal(p, func(pb *internal.QueryNode) {
+			extMarshal(pb)
+		}, p.inputs...)
 	case *LogicalSeries:
-		return Marshal(p, nil, p.inputs...)
+		return Marshal(p, func(pb *internal.QueryNode) {
+			extMarshal(pb)
+		}, p.inputs...)
 	case *LogicalReader:
-		return Marshal(p, nil, p.inputs...)
+		return Marshal(p, func(pb *internal.QueryNode) {
+			extMarshal(pb)
+		}, p.inputs...)
 	case *LogicalTagSubset:
-		return Marshal(p, nil, p.inputs...)
+		return Marshal(p, func(pb *internal.QueryNode) {
+			extMarshal(pb)
+		}, p.inputs...)
 	case *LogicalFill:
-		return Marshal(p, nil, p.inputs...)
+		return Marshal(p, func(pb *internal.QueryNode) {
+			extMarshal(pb)
+		}, p.inputs...)
 	case *LogicalAlign:
-		return Marshal(p, nil, p.inputs...)
+		return Marshal(p, func(pb *internal.QueryNode) {
+			extMarshal(pb)
+		}, p.inputs...)
 	case *LogicalMst:
-		return Marshal(p, nil, p.inputs...)
+		return Marshal(p, func(pb *internal.QueryNode) {
+			extMarshal(pb)
+		}, p.inputs...)
 	case *LogicalProject:
-		return Marshal(p, nil, p.inputs...)
+		return Marshal(p, func(pb *internal.QueryNode) {
+			extMarshal(pb)
+		}, p.inputs...)
 	case *LogicalSlidingWindow:
-		return Marshal(p, nil, p.inputs...)
+		return Marshal(p, func(pb *internal.QueryNode) {
+			extMarshal(pb)
+		}, p.inputs...)
 	case *LogicalHashMerge:
 		return Marshal(p, func(pb *internal.QueryNode) {
 			pb.Exchange = uint32(p.eType)<<8 | uint32(p.eRole)
+			extMarshal(pb)
 		}, p.inputs...)
 	case *LogicalSparseIndexScan:
-		return Marshal(p, nil, p.inputs...)
+		return Marshal(p, func(pb *internal.QueryNode) {
+			extMarshal(pb)
+		}, p.inputs...)
 	case *LogicalColumnStoreReader:
-		return Marshal(p, nil, p.inputs...)
+		return Marshal(p, func(pb *internal.QueryNode) {
+			extMarshal(pb)
+		}, p.inputs...)
 	case *LogicalHashAgg:
 		return Marshal(p, func(pb *internal.QueryNode) {
 			pb.Exchange = uint32(p.eType)<<8 | uint32(p.eRole)
+			extMarshal(pb)
 		}, p.inputs...)
+	case *LogicalOrderBy:
+		return Marshal(p, func(pb *internal.QueryNode) {
+			extMarshal(pb)
+		}, p.inputs...)
+	case *LogicalGroupBy:
+		return Marshal(p, func(pb *internal.QueryNode) {
+			extMarshal(pb)
+		}, p.inputs...)
+	case *LogicalSubQuery:
+		return Marshal(p, func(pb *internal.QueryNode) {
+			extMarshal(pb)
+			if len(p.Schema().Sources()) > 0 {
+				pb.Source = query.EncodeSource(p.Schema().Sources())
+			}
+		}, p.inputs...)
+	case *LogicalJoin:
+		return Marshal(p, func(pb *internal.QueryNode) {
+			extMarshal(pb)
+			pb.JoinCase = query.EncodeJoinCases(p.Schema().GetJoinCases())
+		}, p.left, p.right)
 	default:
 		return nil, fmt.Errorf("unsupoorted type %t", p)
 	}
@@ -586,9 +704,9 @@ func UnmarshalBinaryNode(pb *internal.QueryNode, schema hybridqp.Catalog) (hybri
 		if len(nodes) == 1 {
 			return NewLogicalFilter(nodes[0], schema), nil
 		}
-	case internal.LogicPlanType_LogicalDedupe:
+	case internal.LogicPlanType_LogicalDistinct:
 		if len(nodes) == 1 {
-			return NewLogicalDedupe(nodes[0], schema), nil
+			return NewLogicalDistinct(nodes[0], schema), nil
 		}
 	case internal.LogicPlanType_LogicalInterval:
 		if len(nodes) == 1 {
@@ -653,6 +771,37 @@ func UnmarshalBinaryNode(pb *internal.QueryNode, schema hybridqp.Catalog) (hybri
 				node.ToProducer()
 			}
 			return node, nil
+		}
+	case internal.LogicPlanType_LogicalOrderBy:
+		if len(nodes) == 1 {
+			return NewLogicalOrderBy(nodes[0], schema), nil
+		}
+	case internal.LogicPlanType_LogicalGroupBy:
+		if len(nodes) == 1 {
+			return NewLogicalGroupBy(nodes[0], schema), nil
+		}
+	case internal.LogicPlanType_LogicalSubQuery:
+		if len(nodes) == 1 {
+			if len(pb.GetSource()) > 0 {
+				sources, err := query.DecodeSource(pb.GetSource())
+				if err != nil {
+					return nil, err
+				}
+				schema.SetSources(sources)
+			}
+			return NewLogicalSubQuery(nodes[0], schema), nil
+		}
+	case internal.LogicPlanType_LogicalJoin:
+		joinCase, err := query.DecodeJoinCases(pb.GetJoinCase())
+		if err != nil {
+			return nil, err
+		}
+		if len(joinCase) == 0 {
+			return nil, fmt.Errorf("no join case")
+		}
+		schema.SetJoinCases(joinCase)
+		if len(nodes) == 2 {
+			return NewLogicalJoin(nodes[0], nodes[1], nil, joinCase[0].JoinType, schema), nil
 		}
 	default:
 		return nil, fmt.Errorf("unsupoorted type %v", pb.Name)

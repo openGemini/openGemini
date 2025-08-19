@@ -23,6 +23,7 @@ import (
 
 const (
 	DefaultHSRunInterval      = 1 * time.Minute
+	DefaultIHSRunInterval     = 1 * time.Hour
 	DefaultMaxProcessHSNumber = 1
 )
 
@@ -31,8 +32,14 @@ type HierarchicalConfig struct {
 	// If false, close hierarchical storage service
 	Enabled bool `toml:"enabled"`
 
+	// If false, close index hierarchical storage service
+	IndexEnabled bool `toml:"index-enabled"`
+
 	// Interval time for checking hierarchical storage.
 	RunInterval toml.Duration `toml:"run-interval"`
+
+	// Interval time for checking index hierarchical storage.
+	IndexRunInterval toml.Duration `toml:"index-run-interval"`
 
 	// Max process number for shard moving
 	MaxProcessN int `toml:"max-process-hs-number"`
@@ -44,8 +51,10 @@ func NewHierarchicalConfig() HierarchicalConfig {
 	return HierarchicalConfig{
 		Enabled:              false,
 		RunInterval:          toml.Duration(DefaultHSRunInterval),
+		IndexRunInterval:     toml.Duration(DefaultIHSRunInterval),
 		MaxProcessN:          DefaultMaxProcessHSNumber,
 		EnableWriteColdShard: false,
+		IndexEnabled:         false,
 	}
 }
 

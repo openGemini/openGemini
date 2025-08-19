@@ -31,6 +31,7 @@ const (
 	FullBackupLog = "full_backup_log.json"
 	IncBackupLog  = "inc_backup_log.json"
 	MetaBackupLog = "meta_backup_log.json"
+	MetaInfo      = "meta_info.json"
 	BackupLogPath = "/backup_log"
 	ResultLog     = "result"
 
@@ -39,6 +40,8 @@ const (
 	IsNode           = "isNode"
 	BackupPath       = "backupPath"
 	OnlyBackupMaster = "onlyBackupMaster"
+	DataBases        = "dbs"
+	MetaData         = "metaData"
 )
 
 func FileCopy(src, dst string) error {
@@ -167,12 +170,12 @@ func FolderMove(src, dst string) error {
 
 func WriteBackupLogFile(content []byte, path string, logName string) error {
 	path = filepath.Join(path, BackupLogPath)
-	if err := fileops.MkdirAll(path, 0750); err != nil {
+	if err := fileops.MkdirAll(path, 0700); err != nil {
 		return err
 	}
 	fName := filepath.Join(path, logName)
 
-	err := os.WriteFile(fName, content, 0640)
+	err := os.WriteFile(fName, content, 0600)
 	if err != nil {
 		return err
 	}

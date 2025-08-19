@@ -2,6 +2,7 @@ package httpd
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"math"
 	"net/http"
@@ -12,13 +13,13 @@ import (
 	"time"
 
 	prompb2 "github.com/VictoriaMetrics/VictoriaMetrics/lib/prompb"
+	"github.com/agiledragon/gomonkey/v2"
 	"github.com/gorilla/mux"
 	config2 "github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
-	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/syscontrol"
@@ -43,10 +44,10 @@ func TestDebugCtrl(t *testing.T) {
 }
 
 type mockMetaClient struct {
-	metaclient.MetaClient
+	metaclient.Client
 }
 
-func (mockMetaClient) DataNodes() ([]meta.DataNode, error) {
+func (*mockMetaClient) DataNodes() ([]meta.DataNode, error) {
 	return []meta.DataNode{
 		{
 			NodeInfo: meta.NodeInfo{
@@ -63,18 +64,8 @@ func (mockMetaClient) DataNodes() ([]meta.DataNode, error) {
 	}, nil
 }
 
-func (mockMetaClient) DataBase(name string) (*meta.DatabaseInfo, error) {
+func (*mockMetaClient) Database(name string) (*meta.DatabaseInfo, error) {
 	return meta.NewDatabase(name), nil
-}
-
-type mockStorage struct {
-	netstorage.Storage
-}
-
-func (mockStorage) SendQueryRequestOnNode(nodID uint64, req netstorage.SysCtrlRequest) (map[string]string, error) {
-	return map[string]string{
-		"db: db0, rp: autogen, pt: 1": `[{"Opened":true,"ReadOnly":false,"ShardId":1}]`,
-	}, nil
 }
 
 func TestHandler_ServeDebugQuery(t *testing.T) {
@@ -103,7 +94,13 @@ func TestHandler_ServeDebugQuery(t *testing.T) {
 
 	t.Run("query shards success", func(t *testing.T) {
 		syscontrol.SysCtrl.MetaClient = &mockMetaClient{}
-		syscontrol.SysCtrl.NetStore = &mockStorage{}
+		patches := gomonkey.ApplyMethod(syscontrol.SysCtrl, "SendQueryRequestOnNode", func(_ *syscontrol.SysControl) (map[string]string, error) {
+			return map[string]string{
+				"db: db0, rp: autogen, pt: 1": `[{"Opened":true,"ReadOnly":false,"ShardId":1}]`,
+			}, nil
+		})
+
+		defer patches.Reset()
 
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "/debug/query?mod=shards&db=mydb&rp=myrp", nil)
@@ -116,12 +113,16 @@ func TestHandler_Disabled_Prom_Write_Read(t *testing.T) {
 	h := Handler{
 		Logger: logger.NewLogger(errno.ModuleHTTP),
 	}
+	syscontrol.SysCtrl.MetaClient = &mockMetaClient{}
+	patches := gomonkey.ApplyMethod(syscontrol.SysCtrl, "SendQueryRequestOnNode", func(_ *syscontrol.SysControl) (map[string]string, error) {
+		return map[string]string{
+			"db: db0, rp: autogen, pt: 1": `[{"Opened":true,"ReadOnly":false,"ShardId":1}]`,
+		}, nil
+	})
 
+	defer patches.Reset()
 	var user meta.User
 	t.Run("disable prom read", func(t *testing.T) {
-		syscontrol.SysCtrl.MetaClient = &mockMetaClient{}
-		syscontrol.SysCtrl.NetStore = &mockStorage{}
-
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPost, "/debug/ctrl?mod=disableread&switchon=true", nil)
 		defer func() {
@@ -138,9 +139,6 @@ func TestHandler_Disabled_Prom_Write_Read(t *testing.T) {
 	})
 
 	t.Run("disable prom write", func(t *testing.T) {
-		syscontrol.SysCtrl.MetaClient = &mockMetaClient{}
-		syscontrol.SysCtrl.NetStore = &mockStorage{}
-
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPost, "/debug/ctrl?mod=disablewrite&switchon=true", nil)
 		h.serveDebug(w, req)
@@ -161,10 +159,16 @@ func TestHandler_Disabled_Prom_Query(t *testing.T) {
 		Logger: logger.NewLogger(errno.ModuleHTTP),
 		Config: &config.Config{},
 	}
+	patches := gomonkey.ApplyMethod(syscontrol.SysCtrl, "SendQueryRequestOnNode", func(_ *syscontrol.SysControl) (map[string]string, error) {
+		return map[string]string{
+			"db: db0, rp: autogen, pt: 1": `[{"Opened":true,"ReadOnly":false,"ShardId":1}]`,
+		}, nil
+	})
+
+	defer patches.Reset()
 	var user meta.User
 	t.Run("disable prom read", func(t *testing.T) {
 		syscontrol.SysCtrl.MetaClient = &mockMetaClient{}
-		syscontrol.SysCtrl.NetStore = &mockStorage{}
 
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPost, "/debug/ctrl?mod=disableread&switchon=true", nil)
@@ -277,11 +281,17 @@ func TestHandler_Disabled_Write_Read(t *testing.T) {
 	h := Handler{
 		Logger: logger.NewLogger(errno.ModuleHTTP),
 	}
+	patches := gomonkey.ApplyMethod(syscontrol.SysCtrl, "SendQueryRequestOnNode", func(_ *syscontrol.SysControl) (map[string]string, error) {
+		return map[string]string{
+			"db: db0, rp: autogen, pt: 1": `[{"Opened":true,"ReadOnly":false,"ShardId":1}]`,
+		}, nil
+	})
+
+	defer patches.Reset()
 
 	var user meta.User
 	t.Run("disable read", func(t *testing.T) {
 		syscontrol.SysCtrl.MetaClient = &mockMetaClient{}
-		syscontrol.SysCtrl.NetStore = &mockStorage{}
 
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPost, "/debug/ctrl?mod=disableread&switchon=true", nil)
@@ -299,7 +309,6 @@ func TestHandler_Disabled_Write_Read(t *testing.T) {
 
 	t.Run("disable write", func(t *testing.T) {
 		syscontrol.SysCtrl.MetaClient = &mockMetaClient{}
-		syscontrol.SysCtrl.NetStore = &mockStorage{}
 
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPost, "/debug/ctrl?mod=disablewrite&switchon=true", nil)
@@ -311,7 +320,7 @@ func TestHandler_Disabled_Write_Read(t *testing.T) {
 
 		w = httptest.NewRecorder()
 		req = httptest.NewRequest(http.MethodPost, "/api/v1/write", nil)
-		h.serveWrite(w, req, user)
+		h.serveWrite("db", "rp", w, req, user)
 		assert.Equal(t, http.StatusForbidden, w.Code)
 	})
 }
@@ -320,11 +329,16 @@ func TestHandler_Flux_Disabled_Read(t *testing.T) {
 	h := Handler{
 		Logger: logger.NewLogger(errno.ModuleHTTP),
 	}
+	patches := gomonkey.ApplyMethod(syscontrol.SysCtrl, "SendQueryRequestOnNode", func(_ *syscontrol.SysControl) (map[string]string, error) {
+		return map[string]string{
+			"db: db0, rp: autogen, pt: 1": `[{"Opened":true,"ReadOnly":false,"ShardId":1}]`,
+		}, nil
+	})
 
+	defer patches.Reset()
 	var user meta.User
 	t.Run("flux disable read", func(t *testing.T) {
 		syscontrol.SysCtrl.MetaClient = &mockMetaClient{}
-		syscontrol.SysCtrl.NetStore = &mockStorage{}
 
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPost, "/debug/ctrl?mod=disableread&switchon=true", nil)
@@ -345,10 +359,15 @@ func TestHandler_Invalid_Disabled_Write_Read(t *testing.T) {
 	h := Handler{
 		Logger: logger.NewLogger(errno.ModuleHTTP),
 	}
+	patches := gomonkey.ApplyMethod(syscontrol.SysCtrl, "SendQueryRequestOnNode", func(_ *syscontrol.SysControl) (map[string]string, error) {
+		return map[string]string{
+			"db: db0, rp: autogen, pt: 1": `[{"Opened":true,"ReadOnly":false,"ShardId":1}]`,
+		}, nil
+	})
 
+	defer patches.Reset()
 	t.Run("disable read", func(t *testing.T) {
 		syscontrol.SysCtrl.MetaClient = &mockMetaClient{}
-		syscontrol.SysCtrl.NetStore = &mockStorage{}
 
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPost, "/debug/ctrl?mod=disableread&switchond=true", nil)
@@ -358,7 +377,6 @@ func TestHandler_Invalid_Disabled_Write_Read(t *testing.T) {
 
 	t.Run("disable write", func(t *testing.T) {
 		syscontrol.SysCtrl.MetaClient = &mockMetaClient{}
-		syscontrol.SysCtrl.NetStore = &mockStorage{}
 
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPost, "/debug/ctrl?mod=disablewrite&switchone=true", nil)
@@ -371,9 +389,15 @@ func TestHandler_SysCtrl(t *testing.T) {
 	h := Handler{
 		Logger: logger.NewLogger(errno.ModuleHTTP),
 	}
+	patches := gomonkey.ApplyMethod(syscontrol.SysCtrl, "SendQueryRequestOnNode", func(_ *syscontrol.SysControl) (map[string]string, error) {
+		return map[string]string{
+			"db: db0, rp: autogen, pt: 1": `[{"Opened":true,"ReadOnly":false,"ShardId":1}]`,
+		}, nil
+	})
+
+	defer patches.Reset()
 	t.Run("ChunkReaderParallel", func(t *testing.T) {
 		syscontrol.SysCtrl.MetaClient = &mockMetaClient{}
-		syscontrol.SysCtrl.NetStore = &mockStorage{}
 
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPost, "/debug/ctrl?mod=chunk_reader_parallel&lmit=4", nil)
@@ -388,7 +412,6 @@ func TestHandler_SysCtrl(t *testing.T) {
 
 	t.Run("PrintLogicalPlan", func(t *testing.T) {
 		syscontrol.SysCtrl.MetaClient = &mockMetaClient{}
-		syscontrol.SysCtrl.NetStore = &mockStorage{}
 
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPost, "/debug/ctrl?mod=print_logical_plan&enabled=0", nil)
@@ -408,7 +431,6 @@ func TestHandler_SysCtrl(t *testing.T) {
 
 	t.Run("BinaryTreeMerge", func(t *testing.T) {
 		syscontrol.SysCtrl.MetaClient = &mockMetaClient{}
-		syscontrol.SysCtrl.NetStore = &mockStorage{}
 
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPost, "/debug/ctrl?mod=binary_tree_merge&enabled=0", nil)
@@ -428,7 +450,6 @@ func TestHandler_SysCtrl(t *testing.T) {
 
 	t.Run("sliding_window_push_up", func(t *testing.T) {
 		syscontrol.SysCtrl.MetaClient = &mockMetaClient{}
-		syscontrol.SysCtrl.NetStore = &mockStorage{}
 
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPost, "/debug/ctrl?mod=sliding_window_push_up&enabled=1", nil)
@@ -463,9 +484,149 @@ func TestHandler_ServeWrite_ReadOnly(t *testing.T) {
 
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/write", nil)
-		h.serveWrite(w, req, user)
+		h.serveWrite("db", "rp", w, req, user)
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 	})
+}
+
+func TestHandler_ServeWrite_TooBig(t *testing.T) {
+	h := Handler{
+		Logger:     logger.NewLogger(errno.ModuleHTTP),
+		MetaClient: &mockMetaClient{},
+		Config:     &config.Config{MaxBodySize: 25e6},
+	}
+
+	var user meta.User
+
+	t.Run("too_fit_write_body", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		body := bytes.NewBuffer(bytes.Repeat([]byte(" "), 25e6))
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/write", body)
+		h.serveWrite("db", "rp", w, req, user)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+
+	t.Run("too_big_write_body", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		body := bytes.NewBuffer(bytes.Repeat([]byte(" "), 25e6+1))
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/write", body)
+		h.serveWrite("db", "rp", w, req, user)
+		assert.Equal(t, http.StatusRequestEntityTooLarge, w.Code)
+	})
+}
+
+func TestHandler_ServeQuery_TooBig(t *testing.T) {
+	h := Handler{
+		Logger:     logger.NewLogger(errno.ModuleHTTP),
+		MetaClient: &mockMetaClient{},
+		Config:     &config.Config{MaxBodySize: 25e6},
+	}
+
+	var user meta.User
+
+	t.Run("too_fit_query_body", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		body := bytes.NewBuffer(bytes.Repeat([]byte(" "), 25e6))
+		req := httptest.NewRequest(http.MethodPost, "/query", body)
+		h.serveQuery(w, req, user)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+	t.Run("too_big_query_body", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		body := bytes.NewBuffer(bytes.Repeat([]byte(" "), 25e6+1))
+		req := httptest.NewRequest(http.MethodPost, "/query", body)
+		h.serveQuery(w, req, user)
+		assert.Equal(t, http.StatusRequestEntityTooLarge, w.Code)
+	})
+}
+
+func TestV2DatabaseRetentionPolicyMapper(t *testing.T) {
+	tests := map[string]struct {
+		input     string
+		db        string
+		rp        string
+		shoulderr bool
+	}{
+		"Properly Encoded": {
+			input:     "database/retention",
+			db:        "database",
+			rp:        "retention",
+			shoulderr: false,
+		},
+		"Empty Database": {
+			input:     "/retention",
+			db:        "",
+			rp:        "",
+			shoulderr: true,
+		},
+		"Empty Retention Policy": {
+			input:     "database/",
+			db:        "database",
+			rp:        "",
+			shoulderr: false,
+		},
+		"No Slash, Empty Retention Policy": {
+			input:     "database",
+			db:        "database",
+			rp:        "",
+			shoulderr: false,
+		},
+		"Empty String": {
+			input:     "",
+			db:        "",
+			rp:        "",
+			shoulderr: true,
+		},
+		"Space Before DB": {
+			input:     "     database/retention",
+			db:        "     database",
+			rp:        "retention",
+			shoulderr: false,
+		},
+		"Space After DB": {
+			input:     "database     /retention",
+			db:        "database     ",
+			rp:        "retention",
+			shoulderr: false,
+		},
+		"Space Before RP": {
+			input:     "database/     retention",
+			db:        "database",
+			rp:        "     retention",
+			shoulderr: false,
+		},
+		"Space After RP": {
+			input:     "database/retention     ",
+			db:        "database",
+			rp:        "retention     ",
+			shoulderr: false,
+		},
+	}
+
+	t.Parallel()
+	for name, test := range tests {
+		test := test
+		t.Run(name, func(t *testing.T) {
+			db, rp, err := bucket2dbrp(test.input)
+			switch goterr, shoulderr := err != nil, test.shoulderr; {
+			case goterr != shoulderr:
+				switch shoulderr {
+				case true:
+					t.Fatalf("bucket2dbrp(%q) did not return an error; expected to return an error", test.input)
+				default:
+					t.Fatalf("bucket2dbrp(%q) return an error %v; expected to return a nil error", test.input, err)
+				}
+			}
+
+			if got, expected := db, test.db; got != expected {
+				t.Fatalf("bucket2dbrp(%q) returned a database of %q; epected %q", test.input, got, expected)
+			}
+
+			if got, expected := rp, test.rp; got != expected {
+				t.Fatalf("bucket2dbrp(%q) returned a retention policy of %q; epected %q", test.input, got, expected)
+			}
+		})
+	}
 }
 
 func TestTransYaccSyntaxErr(t *testing.T) {
@@ -560,7 +721,7 @@ func TestTimeSeries2Rows(t *testing.T) {
 				tss: []prompb2.TimeSeries{
 					{
 						Labels: []prompb2.Label{
-							{Name: []byte("label1"), Value: []byte("value1")},
+							{Name: "label1", Value: "value1"},
 						},
 						Samples: []prompb2.Sample{
 							{Value: 1.0, Timestamp: 1000},
@@ -596,7 +757,7 @@ func TestTimeSeries2Rows(t *testing.T) {
 				tss: []prompb2.TimeSeries{
 					{
 						Labels: []prompb2.Label{
-							{Name: []byte("label1"), Value: []byte("value1")},
+							{Name: "label1", Value: "value1"},
 						},
 						Samples: []prompb2.Sample{
 							{Value: math.Inf(1), Timestamp: 1000},
@@ -674,8 +835,8 @@ func TestParseJson(t *testing.T) {
 func newTimeSeries(num int) []prompb2.TimeSeries {
 	ts := prompb2.TimeSeries{
 		Labels: []prompb2.Label{
-			{Name: []byte("__name__"), Value: []byte("test_metric")},
-			{Name: []byte("label1"), Value: []byte("value1")},
+			{Name: "__name__", Value: "test_metric"},
+			{Name: "label1", Value: "value1"},
 		},
 		Samples: []prompb2.Sample{
 			{Value: 1.0, Timestamp: 1000},
@@ -697,7 +858,8 @@ func newTimeSeries(num int) []prompb2.TimeSeries {
 func Benchmark_TimeSeries2Rows(t *testing.B) {
 	num := 100000
 	tss := newTimeSeries(num)
-	rs := pool.GetRows(num)
+	rs := pool.GetRows(num * 2)
+	*rs = (*rs)[:num*2]
 	defer pool.PutRows(rs)
 	t.N = 10
 	t.ReportAllocs()
@@ -705,12 +867,10 @@ func Benchmark_TimeSeries2Rows(t *testing.B) {
 	var err error
 	for i := 0; i < t.N; i++ {
 		t.StartTimer()
-		for j := 0; j < 1000000; j++ {
+		for j := 0; j < num; j++ {
 			*rs, err = timeSeries2Rows(EmptyPromMst, *rs, tss, make(map[int]bool))
 			if err != nil {
-				if err != nil {
-					t.Fatal("timeSeries2Rows fail")
-				}
+				t.Fatal("timeSeries2Rows fail")
 			}
 			t.StopTimer()
 		}

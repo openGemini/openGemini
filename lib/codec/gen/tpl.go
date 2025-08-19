@@ -106,7 +106,7 @@ func (o *{{.StructName}}) Unmarshal(buf []byte) error {
 			if len(subBuf) == 0 {
 				continue
 			}
-
+	
 			o.{{.FieldName}}[i] = {{.NewSubStruct}}{}
 			if err := o.{{.FieldName}}[i].Unmarshal(subBuf); err != nil {
 				return err

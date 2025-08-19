@@ -191,6 +191,7 @@ type MockStore interface {
 	SendSegregateNodeCmds(nodeIDs []uint64, address []string) (int, error)
 	TransferLeadership(database string, nodeId uint64, oldMasterPtId, newMasterPtId uint32) error
 	Ping(nodeID uint64, address string, timeout time.Duration) error
+	SendClearEvents(nodeId uint64, data transport.Codec) error
 }
 
 type MockNetStorage struct {
@@ -241,6 +242,10 @@ func (s *MockNetStorage) TransferLeadership(database string, nodeId uint64, oldM
 }
 
 func (s *MockNetStorage) Ping(nodeID uint64, address string, timeout time.Duration) error {
+	return nil
+}
+
+func (s *MockNetStorage) SendClearEvents(uint64, transport.Codec) error {
 	return nil
 }
 
@@ -495,7 +500,7 @@ func shardInfoMsgHandler(cmd *proto2.Command, mms *meta.MockMetaService) error {
 	}
 	res := resp.(*message.GetShardInfoResponse)
 	if res.Err != "" {
-		return fmt.Errorf(res.Err)
+		return fmt.Errorf("%s", res.Err)
 	}
 	return nil
 }
@@ -2651,4 +2656,78 @@ func Test_GetIndexDurationInfo(t *testing.T) {
 	cmd = meta.GenerateShardDurationCmd(0, nil, 1)
 	_, err = mms.GetStore().GetIndexDurationInfo(cmd)
 	assert.Equal(t, err.Error(), "%!s(<nil>) is not a E_IndexDurationCommand_Command")
+}
+
+func TestStore_meteRecover(t *testing.T) {
+
+	dir := t.TempDir()
+	mms, err := meta.BuildMockMetaService(dir, "127.0.0.1")
+	mms.GetConfig().DataDir = "/tmp/openGemini/data"
+	mms.GetConfig().MetaRecover = true
+	mms.GetConfig().Version = 1
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	data := &meta2.Data{
+		TakeOverEnabled: true,
+		PtNumPerNode:    2,
+		DataNodes: []meta2.DataNode{
+			{
+				NodeInfo: meta2.NodeInfo{ID: 1, Status: serf.StatusAlive},
+			},
+			{
+				NodeInfo: meta2.NodeInfo{ID: 2, Status: serf.StatusAlive},
+			},
+			{
+				NodeInfo: meta2.NodeInfo{ID: 3, Status: serf.StatusAlive},
+			},
+		},
+		PtView: map[string]meta2.DBPtInfos{
+			"db0": {
+				{
+					PtId:   1,
+					Owner:  meta2.PtOwner{NodeID: 1},
+					Status: meta2.Online,
+				},
+				{
+					PtId:   2,
+					Owner:  meta2.PtOwner{NodeID: 1},
+					Status: meta2.Online,
+				},
+			},
+			"db1": {
+				{
+					PtId:   1,
+					Owner:  meta2.PtOwner{NodeID: 1},
+					Status: meta2.Online,
+				},
+				{
+					PtId:   2,
+					Owner:  meta2.PtOwner{NodeID: 1},
+					Status: meta2.Online,
+				},
+			},
+		},
+		ReplicaGroups: map[string][]meta2.ReplicaGroup{
+			"db0": {
+				{
+					ID:         0,
+					MasterPtID: 1,
+					Peers: []meta2.Peer{
+						{
+							ID:     2,
+							PtRole: meta2.Slave,
+						},
+					},
+					Status: meta2.UnFull,
+					Term:   0,
+				},
+			},
+		},
+	}
+	mms.GetStore().SetData(data)
+	mms.GetStore().MeteRecover()
+	assert.NoError(t, err)
+
 }

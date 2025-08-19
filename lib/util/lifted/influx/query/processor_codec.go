@@ -100,10 +100,13 @@ func encodeProcessorOptions(opt *ProcessorOptions) *internal.ProcessorOptions {
 
 	// Convert and encode sources to measurements.
 	if opt.Sources != nil {
-		sources := make([]*internal.Measurement, len(opt.Sources))
-		for i, source := range opt.Sources {
-			mm := source.(*influxql.Measurement)
-			sources[i] = encodeMeasurement(mm)
+		sources := make([]*internal.Measurement, 0, len(opt.Sources))
+		for _, source := range opt.Sources {
+			mm, ok := source.(*influxql.Measurement)
+			if !ok {
+				continue
+			}
+			sources = append(sources, encodeMeasurement(mm))
 		}
 		pb.Sources = sources
 	}
@@ -116,6 +119,11 @@ func encodeProcessorOptions(opt *ProcessorOptions) *internal.ProcessorOptions {
 	// Set condition, if set.
 	if opt.Condition != nil {
 		pb.Condition = opt.Condition.String()
+	}
+
+	// Set value condition, if set.
+	if opt.ValueCondition != nil {
+		pb.ValueCondition = opt.ValueCondition.String()
 	}
 
 	// set the sort fields
@@ -207,6 +215,15 @@ func decodeProcessorOptions(pb *internal.ProcessorOptions) (*ProcessorOptions, e
 			return nil, err
 		}
 		opt.Condition = expr
+	}
+
+	// Set value condition, if set.
+	if pb.ValueCondition != "" {
+		expr, err := influxql.ParseExpr(pb.GetValueCondition())
+		if err != nil {
+			return nil, err
+		}
+		opt.ValueCondition = expr
 	}
 
 	if pb.SortFields != "" {
@@ -436,6 +453,29 @@ func encodeUnnests(iUnnests influxql.Unnests) []*internal.Unnest {
 	return unnests
 }
 
+func EncodeJoinCases(joins []*influxql.Join) []*internal.JoinCase {
+	dstJoins := make([]*internal.JoinCase, 0, len(joins))
+	for _, join := range joins {
+		dstJoin := &internal.JoinCase{
+			LSrc:      join.LSrc.String(),
+			RSrc:      join.RSrc.String(),
+			Condition: join.Condition.String(),
+			JoinType:  int32(join.JoinType),
+		}
+		dstJoins = append(dstJoins, dstJoin)
+	}
+	return dstJoins
+}
+
+func EncodeSource(sources []influxql.Source) []string {
+	dstSrcs := make([]string, 0, len(sources))
+	for _, src := range sources {
+		dstSrc := src.String()
+		dstSrcs = append(dstSrcs, dstSrc)
+	}
+	return dstSrcs
+}
+
 func EncodeQuerySchema(schema hybridqp.Catalog) *internal.QuerySchema {
 	if schema == nil {
 		return nil
@@ -471,6 +511,44 @@ func decodeUnnests(iUnnests []*internal.Unnest) ([]*influxql.Unnest, error) {
 		unnests[i] = unnest
 	}
 	return unnests, nil
+}
+
+func DecodeJoinCases(joins []*internal.JoinCase) ([]*influxql.Join, error) {
+	dstJoins := make([]*influxql.Join, 0, len(joins))
+	for _, join := range joins {
+		LSrc, err := influxql.ParseSource(join.GetLSrc())
+		if err != nil {
+			return nil, err
+		}
+		RSrc, err := influxql.ParseSource(join.GetRSrc())
+		if err != nil {
+			return nil, err
+		}
+		Condition, err := influxql.ParseExpr(join.GetCondition())
+		if err != nil {
+			return nil, err
+		}
+		dstJoin := &influxql.Join{
+			LSrc:      LSrc,
+			RSrc:      RSrc,
+			Condition: Condition,
+			JoinType:  influxql.JoinType(join.GetJoinType()),
+		}
+		dstJoins = append(dstJoins, dstJoin)
+	}
+	return dstJoins, nil
+}
+
+func DecodeSource(sources []string) ([]influxql.Source, error) {
+	dstSrcs := make([]influxql.Source, 0, len(sources))
+	for _, src := range sources {
+		dstSrc, err := influxql.ParseSource(src)
+		if err != nil {
+			return nil, err
+		}
+		dstSrcs = append(dstSrcs, dstSrc)
+	}
+	return dstSrcs, nil
 }
 
 func DecodeQuerySchema(pb *internal.QuerySchema, opt hybridqp.Options) (hybridqp.Catalog, error) {

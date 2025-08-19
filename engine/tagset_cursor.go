@@ -102,7 +102,7 @@ func NewTagSetCursorForTest(schema *executor.QuerySchema, seriesN int) *tagSetCu
 }
 
 type tagSetCursorPara struct {
-	tagSet                           *tsi.TagSetInfo
+	tagSet                           tsi.TagSetEx
 	ops                              []*comm.CallOption
 	cursorSpan                       *tracing.Span
 	plan                             hybridqp.QueryNode
@@ -118,7 +118,7 @@ type tagSetCursor struct {
 	keyCursors   comm.KeyCursors
 	init         bool
 	recordSchema record.Schemas
-	tagSet       *tsi.TagSetInfo
+	tagSet       tsi.TagSet
 
 	RecordResult    *record.Record
 	recordPool      *record.CircularRecordPool

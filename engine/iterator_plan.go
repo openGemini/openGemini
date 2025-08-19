@@ -135,7 +135,7 @@ func (s *shard) ScanWithInvertedIndex(span *tracing.Span, ctx context.Context, s
 	// the query context can be used for index
 	start := time.Now()
 	schema.Options().SetCtx(ctx)
-	result, seriesNum, err := s.Scan(span, schema, resourceallocator.DefaultSeriesAllocateFunc)
+	result, seriesNum, _, err := s.Scan(span, schema, resourceallocator.DefaultSeriesAllocateFunc)
 	defer func() {
 		_ = resourceallocator.FreeRes(resourceallocator.SeriesParallelismRes, seriesNum, seriesNum)
 	}()
@@ -514,9 +514,9 @@ func validColumnType(dataType influxql.DataType) bool {
 func (r *ChunkReader) appendTagsByPreAgg(chunk executor.Chunk) {
 	tags := executor.NewChunkTags(*r.tags, r.dimTag)
 	if len(chunk.Tags()) == 0 {
-		chunk.AddTagAndIndex(*tags, 0)
+		chunk.AppendTagsAndIndex(*tags, 0)
 	} else if !bytes.Equal(tags.Subset(r.schema.Options().(*query.ProcessorOptions).Dimensions), chunk.Tags()[len(chunk.Tags())-1].Subset(r.schema.Options().(*query.ProcessorOptions).Dimensions)) {
-		chunk.AddTagAndIndex(*tags, chunk.Len())
+		chunk.AppendTagsAndIndex(*tags, chunk.Len())
 	}
 }
 
@@ -524,7 +524,7 @@ func (r *ChunkReader) appendTags(rec *record.Record, chunk executor.Chunk) {
 	subsets, tagIndex := rec.GetTagIndexAndKey()
 	for i, subset := range subsets {
 		tags := executor.NewChunkTagsV2(*subset)
-		chunk.AddTagAndIndex(*tags, tagIndex[i])
+		chunk.AppendTagsAndIndex(*tags, tagIndex[i])
 	}
 }
 

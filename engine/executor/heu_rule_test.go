@@ -1604,3 +1604,237 @@ func TestAgg2SubQueryQueryCountDistinct(t *testing.T) {
 	rule.OnMatch(ruleCall)
 	assert.False(t, project.Schema().HasCall())
 }
+
+func TestAggPushdownRuleWithIncondition(t *testing.T) {
+	fields := influxql.Fields{
+		&influxql.Field{
+			Expr: &influxql.Call{
+				Name: "sliding_window",
+				Args: []influxql.Expr{
+					&influxql.Call{
+						Name: "sum",
+						Args: []influxql.Expr{
+							&influxql.VarRef{
+								Val:  "age",
+								Type: influxql.Integer,
+							},
+						},
+					},
+					&influxql.IntegerLiteral{
+						Val: 3,
+					},
+				},
+			},
+		},
+	}
+	columnsName := []string{"value"}
+	opt := query.ProcessorOptions{}
+	opt.Interval.Duration = 1000
+	sysconfig.OnSlidingWindowPushUp = 1
+	schema := executor.NewQuerySchema(fields, columnsName, &opt, nil)
+	schema.SetIsInSubquerySchema(true)
+	planBuilder := executor.NewLogicalPlanBuilderImpl(schema)
+
+	var plan hybridqp.QueryNode
+	var err error
+	if plan, err = planBuilder.CreateSeriesPlan(); err != nil {
+		t.Error(err.Error())
+	}
+	if plan, err = planBuilder.CreateMeasurementPlan(plan); err != nil {
+		t.Error(err.Error())
+	}
+	if plan, err = planBuilder.CreateScanPlan(plan); err != nil {
+		t.Error(err.Error())
+	}
+	if plan, err = planBuilder.CreateShardPlan(plan); err != nil {
+		t.Error(err.Error())
+	}
+	if plan, err = planBuilder.CreateNodePlan(plan, nil); err != nil {
+		t.Error(err.Error())
+	}
+	planBuilder.Push(plan)
+	planBuilder.Aggregate()
+	planBuilder.Project()
+
+	if plan, err = planBuilder.Build(); err != nil {
+		t.Error(err.Error())
+	}
+
+	pb := NewHeuProgramBuilder()
+	pb.AddRuleCatagory(executor.RULE_SUBQUERY)
+	pb.AddRuleCatagory(executor.RULE_PUSHDOWN_AGG)
+
+	planner := executor.NewHeuPlannerImpl(pb.Build())
+	planner.AddRule(executor.NewAggPushDownToSubQueryRule(""))
+	planner.AddRule(executor.NewAggPushdownToExchangeRule(""))
+	planner.AddRule(executor.NewAggPushdownToReaderRule(""))
+	planner.AddRule(executor.NewAggPushdownToSeriesRule(""))
+	planner.SetRoot(plan)
+	best := planner.FindBestExp()
+	if best == nil {
+		t.Error("no best plan found")
+	}
+
+	var countNodes func(hybridqp.QueryNode) int
+	countNodes = func(node hybridqp.QueryNode) int {
+		if node == nil {
+			return 0
+		}
+		nodeNum := 1
+		for _, child := range node.Children() {
+			nodeNum += countNodes(child)
+		}
+		return nodeNum
+	}
+	nodeNums := countNodes(best)
+	assert.Equal(t, 10, nodeNums)
+}
+
+type CountDistinctVisitor struct {
+	distinctNum int
+}
+
+func (v *CountDistinctVisitor) Visit(node hybridqp.QueryNode) hybridqp.QueryNodeVisitor {
+	if _, ok := node.(*executor.LogicalDistinct); ok {
+		v.distinctNum++
+	}
+	return v
+}
+
+func testDistinctPushDownToExchangeRuleBase(t *testing.T, schema hybridqp.Catalog) *CountDistinctVisitor {
+	planBuilder := executor.NewLogicalPlanBuilderImpl(schema)
+
+	var plan hybridqp.QueryNode
+	var err error
+	if plan, err = planBuilder.CreateSeriesPlan(); err != nil {
+		t.Error(err.Error())
+	}
+	if plan, err = planBuilder.CreateMeasurementPlan(plan); err != nil {
+		t.Error(err.Error())
+	}
+	if plan, err = planBuilder.CreateScanPlan(plan); err != nil {
+		t.Error(err.Error())
+	}
+	if plan, err = planBuilder.CreateShardPlan(plan); err != nil {
+		t.Error(err.Error())
+	}
+	if plan, err = planBuilder.CreateNodePlan(plan, nil); err != nil {
+		t.Error(err.Error())
+	}
+	planBuilder.Push(plan)
+	planBuilder.Project()
+	planBuilder.SubQuery()
+	planBuilder.Distinct()
+
+	if plan, err = planBuilder.Build(); err != nil {
+		t.Error(err.Error())
+	}
+
+	pb := NewHeuProgramBuilder()
+	pb.AddRuleCatagory(executor.RULE_PUSHDOWN_DISTINCT)
+	planner := executor.NewHeuPlannerImpl(pb.Build())
+	planner.AddRule(executor.NewDistinctPushDownToExchangeRule(""))
+	planner.SetRoot(plan)
+	best := planner.FindBestExp()
+	if best == nil {
+		t.Error("no best plan found")
+	}
+	visitor := &CountDistinctVisitor{}
+	hybridqp.WalkQueryNodeInPreOrder(visitor, best)
+	return visitor
+}
+
+func TestDistinctPushDownToExchangeRule(t *testing.T) {
+	rule := executor.NewDistinctPushDownToExchangeRule("DistinctPushDownToExchangeRule")
+
+	// Test Catagory method
+	if rule.Catagory() != executor.RULE_PUSHDOWN_DISTINCT {
+		t.Errorf("Expected Catagory to return %v, but got %v", executor.RULE_PUSHDOWN_DISTINCT, rule.Catagory())
+	}
+
+	// Test ToString method
+	if rule.ToString() != "DistinctPushDownToExchangeRule" {
+		t.Errorf("Expected ToString to return %v, but got %v", "DistinctPushDownToExchangeRule", rule.ToString())
+	}
+
+	// Test Equals method
+	otherRule := executor.NewDistinctPushDownToExchangeRule("DistinctPushDownToExchangeRule")
+	if !rule.Equals(otherRule) {
+		t.Errorf("Expected Equals to return true, but got false")
+	}
+
+	// case1: Push distinct down to shardExchange
+	fields := influxql.Fields{
+		&influxql.Field{
+			Expr: &influxql.VarRef{
+				Val:  "value",
+				Type: influxql.Integer,
+			},
+		},
+	}
+	columnsName := []string{"value"}
+	opt := query.ProcessorOptions{}
+	schema := executor.NewQuerySchema(fields, columnsName, &opt, nil)
+	visitor := testDistinctPushDownToExchangeRuleBase(t, schema)
+	assert.Equal(t, 2, visitor.distinctNum)
+
+	// case2: Distinct cannot be pushed down to shardExchange because of aggregation.
+	fields = influxql.Fields{
+		&influxql.Field{
+			Expr: &influxql.Call{
+				Name: "sum",
+				Args: []influxql.Expr{
+					&influxql.VarRef{
+						Val:  "age",
+						Type: influxql.Integer,
+					},
+				},
+			},
+		},
+	}
+	schema = executor.NewQuerySchema(fields, columnsName, &opt, nil)
+	visitor = testDistinctPushDownToExchangeRuleBase(t, schema)
+	assert.Equal(t, 1, visitor.distinctNum)
+
+	// case3: Distinct cannot be pushed down to shardExchange because of in subquery.
+	fields = influxql.Fields{
+		&influxql.Field{
+			Expr: &influxql.VarRef{
+				Val:  "value",
+				Type: influxql.Integer,
+			},
+		},
+	}
+	schema = executor.NewQuerySchema(fields, columnsName, &opt, nil)
+	schema.SetIsInSubquerySchema(true)
+	visitor = testDistinctPushDownToExchangeRuleBase(t, schema)
+	assert.Equal(t, 1, visitor.distinctNum)
+
+	// case4: Distinct cannot be pushed down to shardExchange because of dimension.
+	fields = influxql.Fields{
+		&influxql.Field{
+			Expr: &influxql.VarRef{
+				Val:  "value",
+				Type: influxql.Integer,
+			},
+		},
+	}
+	opt.Dimensions = []string{"region"}
+	schema = executor.NewQuerySchema(fields, columnsName, &opt, nil)
+	visitor = testDistinctPushDownToExchangeRuleBase(t, schema)
+	assert.Equal(t, 1, visitor.distinctNum)
+
+	// case5: Distinct cannot be pushed down to shardExchange because of limit.
+	fields = influxql.Fields{
+		&influxql.Field{
+			Expr: &influxql.VarRef{
+				Val:  "value",
+				Type: influxql.Integer,
+			},
+		},
+	}
+	opt.Limit = 1
+	schema = executor.NewQuerySchema(fields, columnsName, &opt, nil)
+	visitor = testDistinctPushDownToExchangeRuleBase(t, schema)
+	assert.Equal(t, 1, visitor.distinctNum)
+}

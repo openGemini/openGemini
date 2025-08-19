@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
-	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/raftconn"
 	"github.com/openGemini/openGemini/lib/raftlog"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
@@ -32,7 +31,7 @@ import (
 )
 
 type MockStorageService struct {
-	netstorage.StorageService
+	StorageService
 }
 
 func (s *MockStorageService) Write(db, rp, mst string, ptId uint32, shardID uint64, writeData func() error) error {
@@ -144,11 +143,15 @@ func TestReadReplayForReplication(t *testing.T) {
 	}
 	replayC <- commit
 	close(replayC)
-	readReplayForReplication(replayC, client, storage)
+	readReplayForReplication(replayC, client, storage, "db0", 1)
 	replayC = make(chan *raftconn.Commit, 1)
 	close(replayC)
-	readReplayForReplication(replayC, client, storage)
-
+	readReplayForReplication(replayC, client, storage, "db0", 1)
+	replayC = make(chan *raftconn.Commit, 1)
+	commit.Data = [][]byte{[]byte{'a', 'b', 'c'}}
+	replayC <- commit
+	close(replayC)
+	readReplayForReplication(replayC, client, storage, "db0", 1)
 }
 
 func mockMarshaledPoint() []byte {

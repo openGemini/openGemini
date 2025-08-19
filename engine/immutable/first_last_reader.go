@@ -252,7 +252,7 @@ func (r *FirstLastReader) next() bool {
 }
 
 func (r *FirstLastReader) readColVal(seg *Segment, buf *[]byte, hook func(buf []byte) error, ioPriority int) error {
-	offset, size := seg.offsetSize()
+	offset, size := seg.OffsetSize()
 	data, cachePage, err := r.cr.ReadDataBlock(offset, size, buf, ioPriority)
 	defer r.cr.UnrefCachePage(cachePage)
 	if err != nil {

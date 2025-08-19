@@ -34,6 +34,27 @@ func normalisedIndexDuration(igd, sgd time.Duration) time.Duration {
 	return (mul + 1) * sgd
 }
 
+type ReplicaClearInfo struct {
+	NoClearIndexId uint64
+	ClearPeers     []uint64
+}
+
+func (rci *ReplicaClearInfo) marshal() *proto2.ReplicaClearInfo {
+	if rci == nil {
+		return nil
+	}
+	pb := &proto2.ReplicaClearInfo{
+		NoClearIndexId: proto.Uint64(rci.NoClearIndexId),
+	}
+	pb.ClearPeers = append(pb.ClearPeers, rci.ClearPeers...)
+	return pb
+}
+
+func (rci *ReplicaClearInfo) unmarshal(pb *proto2.ReplicaClearInfo) {
+	rci.NoClearIndexId = pb.GetNoClearIndexId()
+	rci.ClearPeers = append(rci.ClearPeers, pb.GetClearPeers()...)
+}
+
 type IndexGroupInfo struct {
 	ID         uint64
 	StartTime  time.Time
@@ -41,6 +62,26 @@ type IndexGroupInfo struct {
 	Indexes    []IndexInfo
 	DeletedAt  time.Time
 	EngineType config.EngineType
+	ClearInfo  *ReplicaClearInfo
+}
+
+// Choose the first toCold index as the NoClear index.
+func (igi *IndexGroupInfo) UpdateReplicaClearInfo(toColdIndexId uint64) {
+	if igi.ClearInfo == nil {
+		igi.ClearInfo = &ReplicaClearInfo{
+			NoClearIndexId: toColdIndexId,
+		}
+		return
+	}
+	if len(igi.ClearInfo.ClearPeers) >= len(igi.Indexes)-1 {
+		return
+	}
+	for _, clearIndexId := range igi.ClearInfo.ClearPeers {
+		if clearIndexId == toColdIndexId {
+			return
+		}
+	}
+	igi.ClearInfo.ClearPeers = append(igi.ClearInfo.ClearPeers, toColdIndexId)
 }
 
 func (igi *IndexGroupInfo) walkIndexes(fn func(ii *IndexInfo)) {
@@ -90,6 +131,7 @@ func (igi *IndexGroupInfo) marshal() *proto2.IndexGroupInfo {
 		EndTime:    proto.Int64(MarshalTime(igi.EndTime)),
 		DeletedAt:  proto.Int64(MarshalTime(igi.DeletedAt)),
 		EngineType: proto.Uint32(uint32(igi.EngineType)),
+		ClearInfo:  igi.ClearInfo.marshal(),
 	}
 
 	pb.Indexes = make([]*proto2.IndexInfo, len(igi.Indexes))
@@ -121,6 +163,11 @@ func (igi *IndexGroupInfo) unmarshal(pb *proto2.IndexGroupInfo) {
 			igi.Indexes[i].unmarshal(x)
 		}
 	}
+	if pb.GetClearInfo() != nil {
+		igi.ClearInfo = &ReplicaClearInfo{}
+		igi.ClearInfo.unmarshal(pb.GetClearInfo())
+	}
+
 }
 
 type IndexGroupInfos []IndexGroupInfo
@@ -143,6 +190,7 @@ func (igs IndexGroupInfos) Less(i, j int) bool {
 
 type IndexInfo struct {
 	ID         uint64
+	Tier       uint64   // warm->cold->cleared/noclear
 	Owners     []uint32 // pt group for replications.
 	MarkDelete bool
 }
@@ -163,6 +211,7 @@ func (ii IndexInfo) marshal() *proto2.IndexInfo {
 	pb := &proto2.IndexInfo{
 		ID:         proto.Uint64(ii.ID),
 		MarkDelete: proto.Bool(ii.MarkDelete),
+		Tier:       proto.Uint64(ii.Tier),
 	}
 	pb.OwnerIDs = make([]uint32, len(ii.Owners))
 	for i := range ii.Owners {
@@ -186,6 +235,7 @@ func (ii *IndexInfo) UnmarshalBinary(buf []byte) error {
 func (ii *IndexInfo) unmarshal(pb *proto2.IndexInfo) {
 	ii.ID = pb.GetID()
 	ii.MarkDelete = pb.GetMarkDelete()
+	ii.Tier = pb.GetTier()
 
 	ii.Owners = make([]uint32, len(pb.GetOwnerIDs()))
 	for i, x := range pb.GetOwnerIDs() {

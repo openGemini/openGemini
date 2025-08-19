@@ -16,6 +16,9 @@ package engine
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -23,7 +26,7 @@ import (
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/memory"
 	"github.com/openGemini/openGemini/lib/metaclient"
-	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/msgservice"
 	"github.com/openGemini/openGemini/lib/sysconfig"
 	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/services/stream"
@@ -60,7 +63,7 @@ var (
 	memUsageLimitSize int32 = 100
 )
 
-func getReqParam(req *netstorage.SysCtrlRequest) (int64, bool, error) {
+func getReqParam(req *msgservice.SysCtrlRequest) (int64, bool, error) {
 	en, err := syscontrol.GetBoolValue(req.Param(), "switchon")
 	if err != nil {
 		log.Error("get switch from param fail", zap.Error(err))
@@ -74,7 +77,7 @@ func getReqParam(req *netstorage.SysCtrlRequest) (int64, bool, error) {
 	return shardId, en, nil
 }
 
-func (e *Engine) processReq(req *netstorage.SysCtrlRequest) (map[string]string, error) {
+func (e *EngineImpl) processReq(req *msgservice.SysCtrlRequest) (map[string]string, error) {
 	if req.Mod() == queryShardStatus {
 		return e.getShardStatus(req.Param())
 	}
@@ -191,7 +194,7 @@ func (e *Engine) processReq(req *netstorage.SysCtrlRequest) (map[string]string, 
 		return nil, nil
 	case syscontrol.Backup:
 		e.mu.Lock()
-		if e.backup != nil {
+		if e.backup != nil && e.backup.Status == InProgress {
 			err := fmt.Errorf("node is backing up")
 			log.Error("run backup error", zap.Error(err))
 			e.mu.Unlock()
@@ -199,7 +202,8 @@ func (e *Engine) processReq(req *netstorage.SysCtrlRequest) (map[string]string, 
 		}
 		e.backup = &Backup{}
 		e.mu.Unlock()
-		return nil, e.processBackup(req)
+		go e.processBackup(req)
+		return nil, nil
 
 	case syscontrol.AbortBackup:
 		if e.backup == nil {
@@ -207,6 +211,13 @@ func (e *Engine) processReq(req *netstorage.SysCtrlRequest) (map[string]string, 
 		}
 		e.backup.IsAborted = true
 		return nil, nil
+	case syscontrol.BackupStatus:
+		res := map[string]string{"status": string(NotBackedUp)}
+		if e.backup != nil {
+			res["status"] = string(e.backup.Status)
+		}
+
+		return res, nil
 	case syscontrol.WriteStreamPointsEnable:
 		switchOn, err := syscontrol.GetBoolValue(req.Param(), "switchon")
 		if err != nil {
@@ -219,19 +230,22 @@ func (e *Engine) processReq(req *netstorage.SysCtrlRequest) (map[string]string, 
 	}
 }
 
-func (e *Engine) processBackup(req *netstorage.SysCtrlRequest) error {
+func (e *EngineImpl) processBackup(req *msgservice.SysCtrlRequest) {
 	params := req.Param()
 	backupPath := params[backup.BackupPath]
-	defer func() {
-		e.backup = nil
-	}()
 	if backupPath == "" {
-		err := fmt.Errorf("invalid parameter %s", backupPath)
-		return err
+		log.Error("backup: invalid parameter", zap.String("backupPath", backupPath))
 	}
+	if _, err := os.Stat(filepath.Join(backupPath, backup.DataBackupDir)); err == nil {
+		return
+	}
+	DB := make([]string, 0)
 	isRemote := params[backup.IsRemote] == "true"
 	isInc := params[backup.IsInc] == "true"
 	onlyBackupMater := params[backup.OnlyBackupMaster] == "true"
+	if params[backup.DataBases] != "" {
+		DB = strings.Split(params[backup.DataBases], ",")
+	}
 
 	e.backup = &Backup{
 		IsInc:           isInc,
@@ -239,16 +253,16 @@ func (e *Engine) processBackup(req *netstorage.SysCtrlRequest) error {
 		BackupPath:      backupPath,
 		OnlyBackupMater: onlyBackupMater,
 		Engine:          e,
+		Status:          InProgress,
+		DataBases:       DB,
 	}
 
 	if err := e.backup.RunBackupData(); err != nil {
 		log.Error("run backup error", zap.Error(err))
-		return err
 	}
-	return nil
 }
 
-func handleFailpoint(req *netstorage.SysCtrlRequest) error {
+func handleFailpoint(req *msgservice.SysCtrlRequest) error {
 	switchon, err := syscontrol.GetBoolValue(req.Param(), "switchon")
 	if err != nil {
 		log.Error("get switchon from param fail", zap.Error(err))

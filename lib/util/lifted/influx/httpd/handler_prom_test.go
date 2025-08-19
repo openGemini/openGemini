@@ -303,7 +303,7 @@ func TestHandlerPromRead(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/read", bytes.NewReader(compressed))
 		h.servePromRead(w, req, user)
 		assert.Equal(t, http.StatusBadRequest, w.Code)
-		assert.Equal(t, `{"error":"the query time range exceeds the limit (start: 2024-10-21 09:41:50 +0000 UTC, end 2024-12-21 09:41:50 +0000 UTC, query_len: 1464h0m0s, limit: 720h0m0s)"}`, w.Body.String())
+		assert.Equal(t, `{"error":"the query time range exceeds the limit (start: 2024-10-21 17:41:50 +0800 CST, end 2024-12-21 17:41:50 +0800 CST, query_len: 1464h0m0s, limit: 720h0m0s)"}`, w.Body.String())
 	})
 
 	t.Run("input empty", func(t *testing.T) {

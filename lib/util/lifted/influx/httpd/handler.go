@@ -1,6 +1,7 @@
 package httpd
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -31,7 +32,7 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/memory"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
-	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/msgservice"
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher"
@@ -171,10 +172,6 @@ type Handler struct {
 		AuthorizeWrite(username, database string) error
 	}
 
-	ExtSysCtrl interface {
-		SendSysCtrlOnNode(nodID uint64, req netstorage.SysCtrlRequest) (map[string]string, error)
-	}
-
 	QueryExecutor *query.Executor
 
 	Monitor interface {
@@ -221,301 +218,368 @@ func NewHandler(c config.Config) *Handler {
 
 	// Disable the write log if they have been suppressed.
 	writeLogEnabled := c.LogEnabled
+
 	if c.SuppressWriteLog {
 		writeLogEnabled = false
 	}
+	h.AddInfluxDBAPIRoutes(writeLogEnabled)
+	h.AddPrometheusAPIRoutes()
+	h.AddSysAPIRoutes()
+	h.AddFluxAPIRoute(c.FluxEnabled)
 
-	h.AddRoutes([]Route{
-		Route{
-			"query-options", // Satisfy CORS checks.
-			"OPTIONS", "/query", false, true, h.serveOptions,
-		},
-		Route{
-			"query", // Query serving route.
-			"GET", "/query", true, true, h.serveQuery,
-		},
-		Route{
-			"query", // Query serving route.
-			"POST", "/query", true, true, h.serveQuery,
-		},
-		Route{
-			"write-options", // Satisfy CORS checks.
-			"OPTIONS", "/write", false, true, h.serveOptions,
-		},
-		Route{
-			"write", // Data-ingest route.
-			"POST", "/write", true, writeLogEnabled, h.serveWrite,
-		},
-		Route{ // Ping
-			"ping",
-			"GET", "/ping", false, true, h.servePing,
-		},
-		Route{ // Ping
-			"ping-head",
-			"HEAD", "/ping", false, true, h.servePing,
-		},
-		Route{ // Ping w/ status
-			"status",
-			"GET", "/status", false, true, h.serveStatus,
-		},
-		Route{ // Ping w/ status
-			"status-head",
-			"HEAD", "/status", false, true, h.serveStatus,
-		},
-		Route{
-			"prometheus-metrics",
-			"GET", "/metrics", false, true, h.serveMetrics,
-		},
-		Route{
-			"failpoint",
-			"POST", "/failpoint", false, true, h.failPoint,
-		},
-		Route{
-			"prometheus-write", // Prometheus remote write
-			"POST", "/api/v1/write", false, true, h.servePromWrite,
-		},
-		Route{
-			"prometheus-read", // Prometheus remote read
-			"POST", "/api/v1/read", true, true, h.servePromRead,
-		},
-		Route{
-			"prometheus-read", // Prometheus remote read
-			"GET", "/api/v1/read", true, true, h.servePromRead,
-		},
-		Route{
-			"prometheus-instant-query", // Prometheus instant query
-			"GET", "/api/v1/query", true, true, h.servePromQuery,
-		},
-		Route{
-			"prometheus-instant-query", // Prometheus instant query
-			"POST", "/api/v1/query", true, true, h.servePromQuery,
-		},
-		Route{
-			"prometheus-range-query", // Prometheus range query
-			"GET", "/api/v1/query_range", true, true, h.servePromQueryRange,
-		},
-		Route{
-			"prometheus-range-query", // Prometheus range query
-			"POST", "/api/v1/query_range", true, true, h.servePromQueryRange,
-		},
-		Route{
-			"prometheus-labels-query", // Prometheus labels query
-			"GET", "/api/v1/labels", true, true, h.servePromQueryLabels,
-		},
-		Route{
-			"prometheus-labels-query", // Prometheus labels query
-			"POST", "/api/v1/labels", true, true, h.servePromQueryLabels,
-		},
-		Route{
-			"prometheus-label-values-query", // Prometheus label-values query
-			"GET", "/api/v1/label/{name}/values", true, true, h.servePromQueryLabelValues,
-		},
-		Route{
-			"prometheus-label-values-query", // Prometheus label-values query
-			"POST", "/api/v1/label/{name}/values", true, true, h.servePromQueryLabelValues,
-		},
-		Route{
-			"prometheus-series-query", // Prometheus series query
-			"GET", "/api/v1/series", true, true, h.servePromQuerySeries,
-		},
-		Route{
-			"prometheus-series-query", // Prometheus series query
-			"POST", "/api/v1/series", true, true, h.servePromQuerySeries,
-		},
-		Route{
-			"prometheus-metadata-query", // Prometheus metadata query
-			"GET", "/api/v1/metadata", true, true, h.servePromQueryMetaData,
-		},
-		Route{
-			"prometheus-create-tsdb", // Prometheus create tsdb
-			"POST", "/api/v1/tsdb/{tsdb}", false, true, h.servePromCreateTSDB,
-		},
-		Route{
-			"prometheus-write-metric-store", // Prometheus remote write
-			"POST", "/prometheus/{metric_store}/api/v1/write", false, true, h.servePromWriteWithMetricStore,
-		},
-		Route{
-			"prometheus-read-metric-store", // Prometheus remote read
-			"POST", "/prometheus/{metric_store}/api/v1/read", true, true, h.servePromReadWithMetricStore,
-		},
-		Route{
-			"prometheus-read-metric-store", // Prometheus remote read
-			"GET", "/prometheus/{metric_store}/api/v1/read", true, true, h.servePromReadWithMetricStore,
-		},
-		Route{
-			"prometheus-instant-query-metric-store", // Prometheus instant query
-			"GET", "/prometheus/{metric_store}/api/v1/query", true, true, h.servePromQueryWithMetricStore,
-		},
-		Route{
-			"prometheus-instant-query-metric-store", // Prometheus instant query
-			"POST", "/prometheus/{metric_store}/api/v1/query", true, true, h.servePromQueryWithMetricStore,
-		},
-		Route{
-			"prometheus-range-query-metric-store", // Prometheus range query
-			"GET", "/prometheus/{metric_store}/api/v1/query_range", true, true, h.servePromQueryRangeWithMetricStore,
-		},
-		Route{
-			"prometheus-range-query-metric-store", // Prometheus range query
-			"POST", "/prometheus/{metric_store}/api/v1/query_range", true, true, h.servePromQueryRangeWithMetricStore,
-		},
-		Route{
-			"prometheus-labels-query-metric-store", // Prometheus labels query
-			"GET", "/prometheus/{metric_store}/api/v1/labels", true, true, h.servePromQueryLabelsWithMetricStore,
-		},
-		Route{
-			"prometheus-labels-query-metric-store", // Prometheus labels query
-			"POST", "/prometheus/{metric_store}/api/v1/labels", true, true, h.servePromQueryLabelsWithMetricStore,
-		},
-		Route{
-			"prometheus-label-values-query-metric-store", // Prometheus label-values query
-			"GET", "/prometheus/{metric_store}/api/v1/label/{name}/values", true, true, h.servePromQueryLabelValuesWithMetricStore,
-		},
-		Route{
-			"prometheus-label-values-query-metric-store", // Prometheus label-values query
-			"POST", "/prometheus/{metric_store}/api/v1/label/{name}/values", true, true, h.servePromQueryLabelValuesWithMetricStore,
-		},
-		Route{
-			"prometheus-series-query-metric-store", // Prometheus series query
-			"GET", "/prometheus/{metric_store}/api/v1/series", true, true, h.servePromQuerySeriesWithMetricStore,
-		},
-		Route{
-			"prometheus-series-query-metric-store", // Prometheus series query
-			"POST", "/prometheus/{metric_store}/api/v1/series", true, true, h.servePromQuerySeriesWithMetricStore,
-		},
-		Route{
-			"prometheus-metadata-query-metric-store", // Prometheus metadata query
-			"GET", "/prometheus/{metric_store}/api/v1/metadata", true, true, h.servePromQueryMetaDataWithMetricStore,
-		},
-		Route{ // sysCtrl
-			"sysCtrl",
-			"POST", "/debug/ctrl", false, true, h.serveSysCtrl,
-		},
-	}...)
 	if config2.IsLogKeeper() {
-		h.AddRoutes([]Route{
-			// repository related operations
-			Route{
-				"create-repository",
-				"POST", "/api/v1/repository/{repository}", false, true, h.serveCreateRepository,
-			},
-			Route{
-				"delete-repository",
-				"DELETE", "/api/v1/repository/{repository}", false, true, h.serveDeleteRepository,
-			},
-			Route{
-				"list-repository",
-				"GET", "/api/v1/repository", false, true, h.serveListRepository,
-			},
-			Route{
-				"show-repository",
-				"GET", "/api/v1/repository/{repository}", false, true, h.serveShowRepository,
-			},
-			Route{
-				"update-repository",
-				"PUT", "/api/v1/repository/{repository}", false, true, h.serveUpdateRepository,
-			},
-			// logstream related operations
-			Route{
-				"create-logStream",
-				"POST", "/api/v1/logstream/{repository}/{logStream}", false, true, h.serveCreateLogstream,
-			},
-			Route{
-				"delete-logStream",
-				"DELETE", "/api/v1/logstream/{repository}/{logStream}", false, true, h.serveDeleteLogstream,
-			},
-			Route{
-				"list-logStream",
-				"GET", "/api/v1/logstream/{repository}", false, true, h.serveListLogstream,
-			},
-			Route{
-				"show-logStream",
-				"GET", "/api/v1/logstream/{repository}/{logStream}", false, true, h.serveShowLogstream,
-			},
-			Route{
-				"update-logStream",
-				"PUT", "/api/v1/logstream/{repository}/{logStream}", false, true, h.serveUpdateLogstream,
-			},
-			Route{
-				"write-log", // Data-ingest route.
-				"POST", "/repo/{repository}/logstreams/{logStream}/records", false, true, h.serveRecord,
-			},
-			Route{
-				"upload", // Data-upload route.
-				"POST", "/repo/{repository}/logstreams/{logStream}/upload", false, true, h.serveUpload,
-			},
-			Route{
-				"log-list", // Query for Log.
-				"GET", "/repo/{repository}/logstreams/{logStream}/logs", true, true, h.serveQueryLog,
-			},
-			Route{
-				"log-by-cursor", // Query for Log by cursor.
-				"GET", "/repo/{repository}/logstreams/{logStream}/logbycursor", true, true, h.serveQueryLogByCursor,
-			},
-			Route{
-				"log-consume", // Query for Log.
-				"GET", "/repo/{repository}/logstreams/{logStream}/consume/logs", true, true, h.serveConsumeLogs,
-			},
-			Route{
-				"log-consume-cursor-time", // Query for Log.
-				"GET", "/repo/{repository}/logstreams/{logStream}/consume/cursor-time", true, true, h.serveConsumeCursorTime,
-			},
-			Route{
-				"log-consume-cursors", // Query for Log.
-				"GET", "/repo/{repository}/logstreams/{logStream}/consume/cursors", true, true, h.serveGetConsumeCursors,
-			},
-			Route{
-				"log-context", // Query for Log.
-				"GET", "/repo/{repository}/logstreams/{logStream}/context", true, true, h.serveContextQueryLog,
-			},
-			Route{
-				"log-agg", // Query for Log.
-				"GET", "/repo/{repository}/logstreams/{logStream}/histogram", true, true, h.serveAggLogQuery,
-			},
-			Route{
-				"log-agg", // Query for Log.
-				"GET", "/repo/{repository}/logstreams/{logStream}/analytics", true, true, h.serveAnalytics,
-			},
-			Route{
-				"log-cursor", // Get Cursor for Log.
-				"GET", "/repo/{repository}/logstreams/{logStream}/cursor", true, true, h.serveGetCursor,
-			},
-			Route{
-				"log-pull-cursor", // Pull data for Log.
-				"GET", "/repo/{repository}/logstreams/{logStream}/cursor/{cursor}", true, true, h.servePullLog,
-			},
-			Route{
-				"recall-data",
-				"POST", "/repo/{repository}/logstreams/{logStream}/recalldata", false, true, h.serveRecallData,
-			},
-			Route{
-				"create-stream-task",
-				"POST", "/repo/{repository}/logstreams/{logStream}/stream-task", false, true, h.serveCreateStreamTask,
-			},
-			Route{
-				"delete-stream-task",
-				"DELETE", "/repo/{repository}/logstreams/{logStream}/stream-task/{taskId}", false, true, h.serveDeleteStreamTask,
-			},
-		}...)
-
+		h.AddLogstreamAPIRoutes()
 	}
+
+	if c.ResultCache.Enabled {
+		h.ResultCache = NewResultCache(h.Logger, c.ResultCache)
+	}
+
+	return h
+}
+
+func (h *Handler) AddFluxAPIRoute(FluxEnabled bool) {
 	fluxRoute := Route{
 		"flux-read",
 		"POST", "/api/v2/query", true, true, nil,
 	}
-
-	if !c.FluxEnabled {
+	if !FluxEnabled {
 		fluxRoute.HandlerFunc = func(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Flux query service disabled. Verify flux-enabled=true in the [http] section of the InfluxDB config.", http.StatusForbidden)
 		}
 	} else {
 		fluxRoute.HandlerFunc = h.serveFluxQuery
 	}
-	if c.ResultCache.Enabled {
-		h.ResultCache = NewResultCache(h.Logger, c.ResultCache)
-	}
 	h.AddRoutes(fluxRoute)
+}
 
-	return h
+func (h *Handler) AddInfluxDBAPIRoutes(writeLogEnabled bool) {
+	h.AddRoutes([]Route{
+		{
+			"query-options", // Satisfy CORS checks.
+			"OPTIONS", "/query", false, true, h.serveOptions,
+		},
+		{
+			"query", // Query serving route.
+			"GET", "/query", true, true, h.serveQuery,
+		},
+		{
+			"query", // Query serving route.
+			"POST", "/query", true, true, h.serveQuery,
+		},
+		{
+			"write-options", // Satisfy CORS checks.
+			"OPTIONS", "/write", false, true, h.serveOptions,
+		},
+		{
+			"write", // Data-ingest route.
+			"POST", "/write", true, writeLogEnabled, h.serveWriteV1,
+		},
+		{
+			"write", // Data-ingest route.
+			"POST", "/api/v2/write", true, writeLogEnabled, h.serveWriteV2,
+		},
+		{ // Ping
+			"ping",
+			"GET", "/ping", false, true, h.servePing,
+		},
+		{ // batch-fence-match
+			"batch-fence-match",
+			"GET", "/fence/match_batch", false, true, h.batchFenceMatch,
+		},
+		{ // fence-delete
+			"fence-delete",
+			"POST", "/fence/delete_fence", false, true, h.fenceDelete,
+		},
+		{ // Ping
+			"ping-head",
+			"HEAD", "/ping", false, true, h.servePing,
+		},
+		{ // Ping w/ status
+			"status",
+			"GET", "/status", false, true, h.serveStatus,
+		},
+		{ // Ping w/ status
+			"status-head",
+			"HEAD", "/status", false, true, h.serveStatus,
+		},
+		{
+			"failpoint",
+			"POST", "/failpoint", false, true, h.failPoint,
+		},
+		{
+			"otlp-traces-write", // open-telemetry OTLP traces remote write
+			"POST", "/api/v1/otlp/traces", false, true, h.serveOtlpTracesWrite,
+		},
+		{
+			"otlp-metrics-write", // open-telemetry OTLP metrics remote write
+			"POST", "/api/v1/otlp/metrics", false, true, h.serveOtlpMetricsWrite,
+		},
+		{
+			"otlp-logs-write", // open-telemetry OTLP logs remote write
+			"POST", "/api/v1/otlp/logs", false, true, h.serveOtlpLogsWrite,
+		},
+	}...)
+}
+
+func (h *Handler) AddPrometheusAPIRoutes() {
+	h.AddRoutes([]Route{
+		{
+			"prometheus-metrics",
+			"GET", "/metrics", false, true, h.serveMetrics,
+		},
+		{
+			"prometheus-write", // Prometheus remote write
+			"POST", "/api/v1/write", false, true, h.servePromWrite,
+		},
+		{
+			"prometheus-read", // Prometheus remote read
+			"POST", "/api/v1/read", true, true, h.servePromRead,
+		},
+		{
+			"prometheus-read", // Prometheus remote read
+			"GET", "/api/v1/read", true, true, h.servePromRead,
+		},
+		{
+			"prometheus-instant-query", // Prometheus instant query
+			"GET", "/api/v1/query", true, true, h.servePromQuery,
+		},
+		{
+			"prometheus-instant-query", // Prometheus instant query
+			"POST", "/api/v1/query", true, true, h.servePromQuery,
+		},
+		{
+			"prometheus-range-query", // Prometheus range query
+			"GET", "/api/v1/query_range", true, true, h.servePromQueryRange,
+		},
+		{
+			"prometheus-range-query", // Prometheus range query
+			"POST", "/api/v1/query_range", true, true, h.servePromQueryRange,
+		},
+		{
+			"prometheus-labels-query", // Prometheus labels query
+			"GET", "/api/v1/labels", true, true, h.servePromQueryLabels,
+		},
+		{
+			"prometheus-labels-query", // Prometheus labels query
+			"POST", "/api/v1/labels", true, true, h.servePromQueryLabels,
+		},
+		{
+			"prometheus-label-values-query", // Prometheus label-values query
+			"GET", "/api/v1/label/{name}/values", true, true, h.servePromQueryLabelValues,
+		},
+		{
+			"prometheus-label-values-query", // Prometheus label-values query
+			"POST", "/api/v1/label/{name}/values", true, true, h.servePromQueryLabelValues,
+		},
+		{
+			"prometheus-series-query", // Prometheus series query
+			"GET", "/api/v1/series", true, true, h.servePromQuerySeries,
+		},
+		{
+			"prometheus-series-query", // Prometheus series query
+			"POST", "/api/v1/series", true, true, h.servePromQuerySeries,
+		},
+		{
+			"prometheus-metadata-query", // Prometheus metadata query
+			"GET", "/api/v1/metadata", true, true, h.servePromQueryMetaData,
+		},
+		{
+			"prometheus-metadata-query", // Prometheus metadata query
+			"POST", "/api/v1/metadata", true, true, h.servePromQueryMetaData,
+		},
+		{
+			"prometheus-create-tsdb", // Prometheus create tsdb
+			"POST", "/api/v1/tsdb/{tsdb}", false, true, h.servePromCreateTSDB,
+		},
+		{
+			"prometheus-write-metric-store", // Prometheus remote write
+			"POST", "/prometheus/{metric_store}/api/v1/write", false, true, h.servePromWriteWithMetricStore,
+		},
+		{
+			"prometheus-read-metric-store", // Prometheus remote read
+			"POST", "/prometheus/{metric_store}/api/v1/read", true, true, h.servePromReadWithMetricStore,
+		},
+		{
+			"prometheus-read-metric-store", // Prometheus remote read
+			"GET", "/prometheus/{metric_store}/api/v1/read", true, true, h.servePromReadWithMetricStore,
+		},
+		{
+			"prometheus-instant-query-metric-store", // Prometheus instant query
+			"GET", "/prometheus/{metric_store}/api/v1/query", true, true, h.servePromQueryWithMetricStore,
+		},
+		{
+			"prometheus-instant-query-metric-store", // Prometheus instant query
+			"POST", "/prometheus/{metric_store}/api/v1/query", true, true, h.servePromQueryWithMetricStore,
+		},
+		{
+			"prometheus-range-query-metric-store", // Prometheus range query
+			"GET", "/prometheus/{metric_store}/api/v1/query_range", true, true, h.servePromQueryRangeWithMetricStore,
+		},
+		{
+			"prometheus-range-query-metric-store", // Prometheus range query
+			"POST", "/prometheus/{metric_store}/api/v1/query_range", true, true, h.servePromQueryRangeWithMetricStore,
+		},
+		{
+			"prometheus-labels-query-metric-store", // Prometheus labels query
+			"GET", "/prometheus/{metric_store}/api/v1/labels", true, true, h.servePromQueryLabelsWithMetricStore,
+		},
+		{
+			"prometheus-labels-query-metric-store", // Prometheus labels query
+			"POST", "/prometheus/{metric_store}/api/v1/labels", true, true, h.servePromQueryLabelsWithMetricStore,
+		},
+		{
+			"prometheus-label-values-query-metric-store", // Prometheus label-values query
+			"GET", "/prometheus/{metric_store}/api/v1/label/{name}/values", true, true, h.servePromQueryLabelValuesWithMetricStore,
+		},
+		{
+			"prometheus-label-values-query-metric-store", // Prometheus label-values query
+			"POST", "/prometheus/{metric_store}/api/v1/label/{name}/values", true, true, h.servePromQueryLabelValuesWithMetricStore,
+		},
+		{
+			"prometheus-series-query-metric-store", // Prometheus series query
+			"GET", "/prometheus/{metric_store}/api/v1/series", true, true, h.servePromQuerySeriesWithMetricStore,
+		},
+		{
+			"prometheus-series-query-metric-store", // Prometheus series query
+			"POST", "/prometheus/{metric_store}/api/v1/series", true, true, h.servePromQuerySeriesWithMetricStore,
+		},
+		{
+			"prometheus-metadata-query-metric-store", // Prometheus metadata query
+			"GET", "/prometheus/{metric_store}/api/v1/metadata", true, true, h.servePromQueryMetaDataWithMetricStore,
+		},
+		{
+			"prometheus-metadata-query-metric-store", // Prometheus metadata query
+			"POST", "/prometheus/{metric_store}/api/v1/metadata", true, true, h.servePromQueryMetaDataWithMetricStore,
+		},
+	}...)
+}
+
+func (h *Handler) AddSysAPIRoutes() {
+	h.AddRoutes([]Route{
+		{ // sysCtrl
+			"sysCtrl",
+			"POST", "/debug/ctrl", false, true, h.serveSysCtrl,
+		},
+		{ // backup
+			"backup",
+			"POST", "/backup/run", false, true, h.serveBackupRun,
+		},
+		{ // backup
+			"backup-abort",
+			"POST", "/backup/abort", false, true, h.serveBackupAbort,
+		},
+		{ // backup
+			"backup-status",
+			"POST", "/backup/status", false, true, h.serveBackupStatus,
+		},
+	}...)
+}
+func (h *Handler) AddLogstreamAPIRoutes() {
+	h.AddRoutes([]Route{
+		// repository related operations
+		{
+			"create-repository",
+			"POST", "/api/v1/repository/{repository}", false, true, h.serveCreateRepository,
+		},
+		{
+			"delete-repository",
+			"DELETE", "/api/v1/repository/{repository}", false, true, h.serveDeleteRepository,
+		},
+		{
+			"list-repository",
+			"GET", "/api/v1/repository", false, true, h.serveListRepository,
+		},
+		{
+			"show-repository",
+			"GET", "/api/v1/repository/{repository}", false, true, h.serveShowRepository,
+		},
+		{
+			"update-repository",
+			"PUT", "/api/v1/repository/{repository}", false, true, h.serveUpdateRepository,
+		},
+		// logstream related operations
+		{
+			"create-logStream",
+			"POST", "/api/v1/logstream/{repository}/{logStream}", false, true, h.serveCreateLogstream,
+		},
+		{
+			"delete-logStream",
+			"DELETE", "/api/v1/logstream/{repository}/{logStream}", false, true, h.serveDeleteLogstream,
+		},
+		{
+			"list-logStream",
+			"GET", "/api/v1/logstream/{repository}", false, true, h.serveListLogstream,
+		},
+		{
+			"show-logStream",
+			"GET", "/api/v1/logstream/{repository}/{logStream}", false, true, h.serveShowLogstream,
+		},
+		{
+			"update-logStream",
+			"PUT", "/api/v1/logstream/{repository}/{logStream}", false, true, h.serveUpdateLogstream,
+		},
+		{
+			"write-log", // Data-ingest route.
+			"POST", "/repo/{repository}/logstreams/{logStream}/records", false, true, h.serveRecord,
+		},
+		{
+			"upload", // Data-upload route.
+			"POST", "/repo/{repository}/logstreams/{logStream}/upload", false, true, h.serveUpload,
+		},
+		{
+			"log-list", // Query for Log.
+			"GET", "/repo/{repository}/logstreams/{logStream}/logs", true, true, h.serveQueryLog,
+		},
+		{
+			"log-by-cursor", // Query for Log by cursor.
+			"GET", "/repo/{repository}/logstreams/{logStream}/logbycursor", true, true, h.serveQueryLogByCursor,
+		},
+		{
+			"log-consume", // Query for Log.
+			"GET", "/repo/{repository}/logstreams/{logStream}/consume/logs", true, true, h.serveConsumeLogs,
+		},
+		{
+			"log-consume-cursor-time", // Query for Log.
+			"GET", "/repo/{repository}/logstreams/{logStream}/consume/cursor-time", true, true, h.serveConsumeCursorTime,
+		},
+		{
+			"log-consume-cursors", // Query for Log.
+			"GET", "/repo/{repository}/logstreams/{logStream}/consume/cursors", true, true, h.serveGetConsumeCursors,
+		},
+		{
+			"log-context", // Query for Log.
+			"GET", "/repo/{repository}/logstreams/{logStream}/context", true, true, h.serveContextQueryLog,
+		},
+		{
+			"log-agg", // Query for Log.
+			"GET", "/repo/{repository}/logstreams/{logStream}/histogram", true, true, h.serveAggLogQuery,
+		},
+		{
+			"log-agg", // Query for Log.
+			"GET", "/repo/{repository}/logstreams/{logStream}/analytics", true, true, h.serveAnalytics,
+		},
+		{
+			"log-cursor", // Get Cursor for Log.
+			"GET", "/repo/{repository}/logstreams/{logStream}/cursor", true, true, h.serveGetCursor,
+		},
+		{
+			"log-pull-cursor", // Pull data for Log.
+			"GET", "/repo/{repository}/logstreams/{logStream}/cursor/{cursor}", true, true, h.servePullLog,
+		},
+		{
+			"recall-data",
+			"POST", "/repo/{repository}/logstreams/{logStream}/recalldata", false, true, h.serveRecallData,
+		},
+		{
+			"create-stream-task",
+			"POST", "/repo/{repository}/logstreams/{logStream}/stream-task", false, true, h.serveCreateStreamTask,
+		},
+		{
+			"delete-stream-task",
+			"DELETE", "/repo/{repository}/logstreams/{logStream}/stream-task/{taskId}", false, true, h.serveDeleteStreamTask,
+		},
+	}...)
 }
 
 func (h *Handler) Open() {
@@ -571,7 +635,7 @@ func (h *Handler) AddRoutes(routes ...Route) {
 		if r.Method == http.MethodPost {
 			switch r.Pattern {
 			case "/write", "/api/v1/prom/write", "/repo/{repository}/logstreams/{logStream}/records",
-				"/api/streams/{repository}/{logStream}/upload":
+				"/api/streams/{repository}/{logStream}/upload", "/api/v1/otlp/traces", "/api/v1/otlp/metrics", "/api/v1/otlp/logs":
 				handler = h.writeThrottler.Handler(handler)
 			case "/query", "/api/v1/prom/query":
 				handler = h.queryThrottler.Handler(handler)
@@ -600,7 +664,7 @@ func (h *Handler) AddRoutes(routes ...Route) {
 		if h.Config.LogEnabled && r.LoggingEnabled {
 			handler = h.logging(handler, r.Name)
 		}
-		//handler = h.recovery(handler, r.Name) // make sure recovery is always last
+		handler = h.recovery(handler, r.Name) // make sure recovery is always last
 
 		h.mux.HandleFunc(r.Pattern, handler.ServeHTTP).Methods(r.Method)
 	}
@@ -667,6 +731,84 @@ func (h *Handler) serveSysCtrl(w http.ResponseWriter, r *http.Request, user meta
 	h.serveDebug(w, r)
 }
 
+func (h *Handler) checkAuth(w http.ResponseWriter, r *http.Request, user meta2.User) bool {
+	if h.Config.AuthEnabled {
+		if user == nil {
+			// no users in system
+			h.httpError(w, "error authorizing query: create admin user first or disable authentication", http.StatusForbidden)
+			h.Logger.Error("error authorizing query: create admin user first or disable authentication")
+			return false
+		}
+		if !user.AuthorizeUnrestricted() {
+			h.httpError(w, "error authorizing, requires admin privilege only", http.StatusForbidden)
+			h.Logger.Error("exec error! authorizing query", zap.Any("r", r), zap.String("userID", user.ID()))
+			return false
+		}
+		h.Logger.Info("execute backup by admin user", zap.String("userID", user.ID()))
+	}
+	return true
+}
+
+func (h *Handler) serveBackupRun(w http.ResponseWriter, r *http.Request, user meta2.User) {
+	// Check authorization.
+	if ok := h.checkAuth(w, r, user); !ok {
+		return
+	}
+
+	h.serveBackup(w, r, syscontrol.Backup)
+}
+
+func (h *Handler) serveBackupAbort(w http.ResponseWriter, r *http.Request, user meta2.User) {
+	// Check authorization.
+	if ok := h.checkAuth(w, r, user); !ok {
+		return
+	}
+
+	h.serveBackup(w, r, syscontrol.AbortBackup)
+}
+
+func (h *Handler) serveBackupStatus(w http.ResponseWriter, r *http.Request, user meta2.User) {
+	// Check authorization.
+	if ok := h.checkAuth(w, r, user); !ok {
+		return
+	}
+
+	h.serveBackup(w, r, syscontrol.BackupStatus)
+}
+
+func (h *Handler) serveBackup(w http.ResponseWriter, r *http.Request, mod string) {
+	q := r.URL.Query()
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	var req msgservice.SysCtrlRequest
+
+	mp := make(map[string]string, len(q))
+	for k, v := range q {
+		if len(v) < 1 {
+			continue
+		}
+		mp[k] = v[0]
+	}
+	req.SetParam(mp)
+	req.SetMod(mod)
+
+	nw := bufio.NewWriter(w)
+	nw.WriteString("{\n\t")
+
+	var err error
+	if mod == syscontrol.Backup {
+		err = syscontrol.ProcessBackup(req, nw, config.CombineDomain(h.SQLConfig.HTTP.Domain, h.Config.BindAddress))
+	} else {
+		err = syscontrol.ProcessRequest(req, nw)
+	}
+
+	if err != nil {
+		h.httpError(w, "backup execute error: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	nw.WriteString("\n}\n")
+	util.MustRun(nw.Flush)
+}
+
 func (h *Handler) getQueryFromRequest(r *http.Request, param *QueryParam, user meta2.User) string {
 	var qp string
 	if param == nil {
@@ -719,7 +861,7 @@ func (h *Handler) parseQueryParams(r *http.Request) (map[string]interface{}, err
 	decoder.UseNumber()
 	if err := decoder.Decode(&params); err != nil {
 		h.Logger.Error("query error! parsing query parameters", zap.Error(err), zap.String("db", r.FormValue("db")), zap.Any("r", r))
-		return nil, fmt.Errorf("error parsing query parameters: " + err.Error())
+		return nil, fmt.Errorf("error parsing query parameters: %s", err.Error())
 	}
 
 	// Convert json.Number into int64 and float64 values
@@ -734,7 +876,7 @@ func (h *Handler) parseQueryParams(r *http.Request) (map[string]interface{}, err
 
 			if err != nil {
 				h.Logger.Error("query error! parsing json value", zap.Error(err), zap.String("db", r.FormValue("db")), zap.Any("r", r))
-				return nil, fmt.Errorf("error parsing json value: " + err.Error())
+				return nil, fmt.Errorf("error parsing json value: %s", err.Error())
 			}
 		}
 	}
@@ -777,7 +919,7 @@ func (h *Handler) parseChunkSize(r *http.Request) (bool, int, int, error) {
 			if chunkSize > MaxChunkSize {
 				msg := fmt.Sprintf("request chunk_size:%v larger than max chunk_size(%v)", n, MaxChunkSize)
 				h.Logger.Error(msg, zap.String("db", r.FormValue("db")), zap.Any("r", r))
-				return false, 0, 0, fmt.Errorf(msg)
+				return false, 0, 0, fmt.Errorf("%s", msg)
 			}
 		}
 	}
@@ -814,7 +956,7 @@ func (h *Handler) getSqlQuery(r *http.Request, qr io.Reader) (*influxql.Query, e
 	q, err := YyParser.GetQuery()
 	if err != nil {
 		h.Logger.Error("query error! parsing query value:", zap.Error(err), zap.String("db", r.FormValue("db")), zap.Any("r", r))
-		return nil, fmt.Errorf("error parsing query: " + err.Error()), http.StatusBadRequest
+		return nil, fmt.Errorf("error parsing query: %s", err.Error()), http.StatusBadRequest
 	}
 
 	return q, nil, http.StatusOK
@@ -1036,6 +1178,20 @@ func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.
 		return
 	}
 
+	// Wrap r.Body in maxBytesReader before first call to r.FormValue to avoid parsing too much of the input.
+	if h.Config.MaxBodySize > 0 {
+		r.Body = truncateReader(r.Body, int64(h.Config.MaxBodySize))
+	}
+	if r.ContentLength > 0 {
+		if h.Config.MaxBodySize > 0 && r.ContentLength > int64(h.Config.MaxBodySize) {
+			h.httpError(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
+			err := errno.NewError(errno.HttpRequestEntityTooLarge)
+			h.Logger.Error("serveQuery", zap.Int64("ContentLength", r.ContentLength), zap.Error(err))
+			handlerStat.Write400ErrRequests.Incr()
+			return
+		}
+	}
+
 	// Retrieve the node id the query should be executed on.
 	nodeID, _ := strconv.ParseUint(r.FormValue("node_id"), 10, 64)
 
@@ -1087,6 +1243,7 @@ func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.
 		qDuration = statistics.NewSqlSlowQueryStatistics(db)
 		defer func() {
 			d := time.Now().Sub(start)
+			statQueryInfo(q, d, db)
 			if d.Nanoseconds() > time.Second.Nanoseconds()*10 {
 				qDuration.AddDuration("TotalDuration", d.Nanoseconds())
 				statistics.AppendSqlQueryDuration(qDuration)
@@ -1279,8 +1436,56 @@ func (h *Handler) logRowsIfNecessary(rows []influx.Row, ReqBuf []byte) {
 	}
 }
 
+// bucket2drbp extracts a bucket and retention policy from a properly formatted
+// string.
+//
+// The 2.x compatible endpoints encode the databse and retention policy names
+// in the database URL query value.  It is encoded using a forward slash like
+// "database/retentionpolicy" and we should be able to simply split that string
+// on the forward slash.
+func bucket2dbrp(bucket string) (string, string, error) {
+	// test for a slash in our bucket name.
+	switch idx := strings.IndexByte(bucket, '/'); idx {
+	case -1:
+		// if there is no slash, we're mapping bucket to the databse.
+		switch db := bucket; db {
+		case "":
+			// if our "database" is an empty string, this is an error.
+			return "", "", fmt.Errorf(`bucket name %q is missing a slash; not in "database/retention-policy" format`, bucket)
+		default:
+			return db, "", nil
+		}
+	default:
+		// there is a slash
+		switch db, rp := bucket[:idx], bucket[idx+1:]; {
+		case db == "":
+			// empty database is unrecoverable
+			return "", "", fmt.Errorf(`bucket name %q is in db/rp form but has an empty database`, bucket)
+		default:
+			return db, rp, nil
+		}
+	}
+}
+
+// serveWriteV2 maps v2 write parameters to a v1 style handler.  the concepts
+// of an "org" and "bucket" are mapped to v1 "database" and "retention
+// policies".
+func (h *Handler) serveWriteV2(w http.ResponseWriter, r *http.Request, user meta2.User) {
+	db, rp, err := bucket2dbrp(r.URL.Query().Get("bucket"))
+	if err != nil {
+		h.httpError(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	h.serveWrite(db, rp, w, r, user)
+}
+
+// serveWriteV1 handles v1 style writes.
+func (h *Handler) serveWriteV1(w http.ResponseWriter, r *http.Request, user meta2.User) {
+	h.serveWrite(r.URL.Query().Get("db"), r.URL.Query().Get("rp"), w, r, user)
+}
+
 // serveWrite receives incoming series data in line protocol format and writes it to the database.
-func (h *Handler) serveWrite(w http.ResponseWriter, r *http.Request, user meta2.User) {
+func (h *Handler) serveWrite(database string, rp string, w http.ResponseWriter, r *http.Request, user meta2.User) {
 	handlerStat.WriteRequests.Incr()
 	handlerStat.ActiveWriteRequests.Incr()
 	handlerStat.WriteRequestBytesIn.Add(r.ContentLength)
@@ -1303,7 +1508,6 @@ func (h *Handler) serveWrite(w http.ResponseWriter, r *http.Request, user meta2.
 	}
 
 	urlValues := r.URL.Query()
-	database := urlValues.Get("db")
 	if database == "" {
 		err := errno.NewError(errno.HttpDatabaseNotFound)
 		h.Logger.Error("serveWrite", zap.Error(err))
@@ -1391,7 +1595,6 @@ func (h *Handler) serveWrite(w http.ResponseWriter, r *http.Request, user meta2.
 	var numPtsParse, numPtsInsert int
 
 	readBlockSize := int(h.Config.ReadBlockSize)
-	rp := urlValues.Get("rp")
 	for ctx.Read(readBlockSize) {
 		numPtsParse++
 		uw := influx.GetUnmarshalWork()
@@ -1460,7 +1663,7 @@ func (h *Handler) serveWrite(w http.ResponseWriter, r *http.Request, user meta2.
 			h.Logger.Error("write authorization error:WritePointsWithContext", zap.Error(err), zap.String("db", database))
 			handlerStat.Write400ErrRequests.Incr()
 			return
-		} else if werr, ok := err.(netstorage.PartialWriteError); ok {
+		} else if werr, ok := err.(msgservice.PartialWriteError); ok {
 			handlerStat.PointsWrittenOK.Add(int64(numPtsInsert - werr.Dropped))
 			handlerStat.PointsWrittenDropped.Add(int64(werr.Dropped))
 			h.httpError(w, werr.Error(), http.StatusBadRequest)
@@ -1523,7 +1726,7 @@ func (h *Handler) failPoint(w http.ResponseWriter, r *http.Request) {
 		} else {
 			h.Logger.Info("enable failpoint success", zap.String("point", point), zap.String("term", term))
 		}
-		var req netstorage.SysCtrlRequest
+		var req msgservice.SysCtrlRequest
 		req.SetMod(syscontrol.Failpoint)
 		req.SetParam(map[string]string{
 			"point":    point,
@@ -1531,11 +1734,11 @@ func (h *Handler) failPoint(w http.ResponseWriter, r *http.Request) {
 			"term":     term,
 		})
 
-		var sb strings.Builder
-		sb.WriteString("{\n\t")
-		err = syscontrol.ProcessRequest(req, &sb)
-		sb.WriteString("\n}\n")
-		w.Write([]byte(sb.String()))
+		nw := bufio.NewWriter(w)
+		nw.WriteString("{\n\t")
+		err = syscontrol.ProcessRequest(req, nw)
+		nw.WriteString("\n}\n")
+		nw.Flush()
 	} else if flag == "disable" {
 		err = failpoint.Disable(point)
 		if err != nil {
@@ -1543,17 +1746,17 @@ func (h *Handler) failPoint(w http.ResponseWriter, r *http.Request) {
 		} else {
 			h.Logger.Info("disable failpoint success", zap.String("point", point))
 		}
-		var req netstorage.SysCtrlRequest
+		var req msgservice.SysCtrlRequest
 		req.SetMod(syscontrol.Failpoint)
 		req.SetParam(map[string]string{
 			"point":    point,
 			"switchon": "false",
 		})
-		var sb strings.Builder
-		sb.WriteString("{\n\t")
-		err = syscontrol.ProcessRequest(req, &sb)
-		sb.WriteString("\n}\n")
-		w.Write([]byte(sb.String()))
+		nw := bufio.NewWriter(w)
+		nw.WriteString("{\n\t")
+		err = syscontrol.ProcessRequest(req, nw)
+		nw.WriteString("\n}\n")
+		nw.Flush()
 	} else {
 		h.Logger.Error("invalid failpoint args", zap.String("flag", flag))
 		err = fmt.Errorf("invalid failpoint args: flag: %s. Optional for enable or disable", flag)
@@ -1942,7 +2145,7 @@ func (h *Handler) recovery(inner http.Handler, name string) http.Handler {
 			if err := recover(); err != nil {
 				logLine := buildLogLine(l, r, start)
 				logLine = fmt.Sprintf("%s [panic:%s] %s", logLine, err, debug.Stack())
-				h.Logger.Info(logLine)
+				h.Logger.Error(logLine)
 				http.Error(w, http.StatusText(http.StatusInternalServerError), 500)
 				handlerStat.RecoveredPanics.Incr()
 
@@ -2257,4 +2460,32 @@ func ErrorResponse(msg string, errCode string) []byte {
 
 	by, _ := json2.Marshal(res)
 	return by
+}
+
+func statQueryInfo(q *influxql.Query, d time.Duration, db string) {
+	queryStat := statistics.NewQueryInfoStatistics()
+	for _, statement := range q.Statements {
+		s, ok := statement.(*influxql.SelectStatement)
+		if !ok {
+			continue
+		}
+		if b, ok := s.Condition.(*influxql.BinaryExpr); ok {
+			ConditionFuzz(b)
+		}
+	}
+	queryStat.AddQueryInfo(q.String(), d.Nanoseconds(), db)
+}
+
+func ConditionFuzz(b *influxql.BinaryExpr) {
+	switch lhs := b.LHS.(type) {
+	case *influxql.BinaryExpr:
+		ConditionFuzz(lhs)
+		if rhs, ok := b.RHS.(*influxql.BinaryExpr); ok {
+			ConditionFuzz(rhs)
+		}
+	case *influxql.VarRef:
+		b.RHS = &influxql.StringLiteral{Val: "?"}
+	default:
+		return
+	}
 }

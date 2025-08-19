@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openGemini/openGemini/engine"
 	"github.com/openGemini/openGemini/lib/record"
 	streamLib "github.com/openGemini/openGemini/lib/stream"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
@@ -225,7 +226,7 @@ type MockMetaclient struct {
 }
 
 func (m MockMetaclient) GetNodePT(database string) []uint32 {
-	//TODO implement me
+
 	//panic("implement me")
 	return []uint32{0}
 }
@@ -507,6 +508,39 @@ func Test_RegisterTimeTask(t *testing.T) {
 	stream.Close()
 }
 
+func Test_RegisterCondTask(t *testing.T) {
+	m := &MockStorage{}
+	l := &MockLogger{t}
+	metaClient := &MockMetaclient{getInfoFail: true}
+	conf := stream2.NewConfig()
+	stream, err := NewStream(m, l, metaClient, conf, "/tmp", "", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go stream.Run()
+	fieldCalls := []*streamLib.FieldCall{}
+	call, err := streamLib.NewFieldCall(influx.Field_Type_Float, influx.Field_Type_Float, "bps", "bps", "sum", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fieldCalls = append(fieldCalls, call)
+	fields := []string{"a"}
+	cond := "a = 1"
+	streamInfos := buildStreamInfoCond(fields, cond)
+	now := time.Now()
+	t.Log("now", now)
+	stream.RegisterTask(streamInfos["tt"], fieldCalls)
+	window := time.Second * 3
+	//Truncate time
+	next := now.Truncate(window).Add(window)
+	after := time.NewTicker(next.Sub(now))
+	select {
+	case <-after.C:
+		after.Reset(window)
+	}
+	stream.Close()
+}
+
 func Test_MaxDelay(t *testing.T) {
 	m := &MockStorage{}
 	l := &MockLogger{t}
@@ -619,6 +653,40 @@ func buildStreamInfoGroup(window, maxDelay time.Duration, calls []string, groupN
 		Dims:     groupKeys,
 		Calls:    mFieldCalls,
 		Delay:    maxDelay,
+	}
+	return streamInfos
+}
+
+func buildStreamInfoCond(fields []string, cond string) map[string]*meta.StreamInfo {
+	src := meta.StreamMeasurementInfo{
+		Name:            "flow",
+		Database:        "test",
+		RetentionPolicy: "auto",
+	}
+	des := meta.StreamMeasurementInfo{
+		Name:            "flow1",
+		Database:        "test",
+		RetentionPolicy: "auto",
+	}
+	var mFieldCalls []*meta.StreamCall
+	for _, f := range fields {
+		mFieldCalls = append(mFieldCalls, &meta.StreamCall{
+			Field: f,
+			Alias: f,
+			Call:  "",
+		})
+	}
+	streamInfos := map[string]*meta.StreamInfo{}
+	streamInfos["tt"] = &meta.StreamInfo{
+		Name:     "tt",
+		ID:       1,
+		SrcMst:   &src,
+		DesMst:   &des,
+		Interval: 0,
+		Dims:     nil,
+		Calls:    mFieldCalls,
+		Delay:    0,
+		Cond:     cond,
 	}
 	return streamInfos
 }
@@ -776,7 +844,7 @@ func TestStreamHandler(t *testing.T) {
 	pt, shardID := 0, 0
 	fileNames := []string{fmt.Sprintf("xxx/wal/%s/%d/%s/%d_0_0_0/xxx.wal", db, pt, rp, shardID)}
 
-	err = s.StreamHandler(dataBlock3.GetRows(), fileNames)
+	err = s.StreamHandler(dataBlock3.GetRows(), true, fileNames)
 	if err != nil {
 		t.Fatal(err.Error())
 	}
@@ -789,12 +857,12 @@ func TestStreamHandlerError(t *testing.T) {
 		},
 	}
 	t.Run("1", func(t *testing.T) {
-		err := s.StreamHandler(influx.Rows{}, []string{"xxx"})
-		require.NoError(t, err)
+		err := s.StreamHandler(influx.Rows{}, true, []string{"xxx"})
+		require.NotEmpty(t, err)
 	})
 
 	t.Run("2", func(t *testing.T) {
-		err := s.StreamHandler(influx.Rows{influx.Row{}}, []string{"xxx"})
+		err := s.StreamHandler(influx.Rows{influx.Row{}}, true, []string{"xxx"})
 		require.NotEmpty(t, err)
 	})
 }
@@ -804,7 +872,7 @@ func TestParseFileName(t *testing.T) {
 		expDB, expRP := "db", "rp"
 		expPT, expSID := uint32(0), uint64(0)
 		fileName := fmt.Sprintf("xxx/wal/%s/%d/%s/%d_0_0_0/xxx.wal", expDB, expPT, expRP, expSID)
-		db, rp, pt, shardID, err := ParseFileName(fileName, "xxx")
+		db, rp, pt, shardID, err := engine.ParseWalFilePath(fileName, "xxx")
 		if err != nil {
 			t.Fatal(err.Error())
 		}
@@ -816,7 +884,7 @@ func TestParseFileName(t *testing.T) {
 
 	t.Run("parse should be failed", func(t *testing.T) {
 		fileName := "xxx/wal/db/0/rp/0/xxx.wal"
-		_, _, _, _, err := ParseFileName(fileName, "xxx")
+		_, _, _, _, err := engine.ParseWalFilePath(fileName, "xxx")
 		if err == nil {
 			t.Fatal(err.Error())
 		}
@@ -824,8 +892,16 @@ func TestParseFileName(t *testing.T) {
 
 	t.Run("parse should be failed2", func(t *testing.T) {
 		fileName := "xxx/wal/db/s/rp/0_0_0_0/xxx.wal"
-		_, _, _, _, err := ParseFileName(fileName, "xxx")
+		_, _, _, _, err := engine.ParseWalFilePath(fileName, "xxx")
 		if err == nil {
+			t.Fatal(err.Error())
+		}
+	})
+
+	t.Run("parse should be failed3", func(t *testing.T) {
+		fileName := "/tsdb/4f61773affa84782a7d257a787164fc7in13/wal/Stream_DFR_01/5/autogen/2766_1745474400000000000_1745478000000000000_2766/stream/1745474837564859350_1745474837609794660.wal"
+		_, _, _, _, err := engine.ParseWalFilePath(fileName, "/tsdb/4f61773affa84782a7d257a787164fc7in13/")
+		if err != nil {
 			t.Fatal(err.Error())
 		}
 	})

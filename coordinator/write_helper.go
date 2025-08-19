@@ -15,6 +15,7 @@
 package coordinator
 
 import (
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -25,6 +26,7 @@ import (
 	"github.com/apache/arrow/go/v13/arrow/array"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
@@ -35,11 +37,13 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/pingcap/failpoint"
+	"go.uber.org/zap"
 )
 
 const NotInShardDuration = -1
 
 var tagLimit = 0
+var fieldLimit = 0
 
 func SetTagLimit(limit int) {
 	if limit > 0 {
@@ -47,8 +51,99 @@ func SetTagLimit(limit int) {
 	}
 }
 
+func SetFieldLimit(limit int) {
+	if limit > 0 {
+		fieldLimit = limit
+	}
+}
+
 func GetTagLimit() int {
 	return tagLimit
+}
+
+func GetFieldLimit() int {
+	return fieldLimit
+}
+
+var AsyncSchemaEndtimeUpdateEn bool
+var SchemaEndtimeUpdateManager *AsyncSchemaEndtimeUpdateManager
+
+const defaultSchemaEndtimeUpdateSize = 1024
+
+type AsyncSchemaEndtimeUpdateManager struct {
+	cmds       chan *proto2.UpdateSchemaCommand
+	MetaClient PWMetaClient
+	closing    chan struct{}
+	size       int
+	once       sync.Once
+}
+
+func NewAsyncSchemaEndtimeUpdateManager(size int) *AsyncSchemaEndtimeUpdateManager {
+	if size <= 0 {
+		size = defaultSchemaEndtimeUpdateSize
+	}
+
+	return &AsyncSchemaEndtimeUpdateManager{
+		cmds:    make(chan *proto2.UpdateSchemaCommand, size),
+		closing: make(chan struct{}),
+		size:    size,
+	}
+}
+
+func (m *AsyncSchemaEndtimeUpdateManager) start(i int) {
+	logger.GetLogger().Info("AsyncSchemaEndtimeUpdateManager start", zap.Int("seq", i), zap.Int("size", m.size))
+	for {
+		select {
+		case cmd, ok := <-m.cmds:
+			if ok {
+				if err := m.MetaClient.UpdateSchemaByCmd(cmd); err != nil {
+					logger.GetLogger().Error("async update schema endtime fail", zap.Int("seq", i), zap.String("db", *cmd.Database),
+						zap.String("rp", *cmd.RpName), zap.String("mst", *cmd.Measurement), zap.Error(err))
+				}
+			} else {
+				logger.GetLogger().Info("AsyncSchemaEndtimeUpdateManager closed", zap.Int("seq", i))
+				return
+			}
+		case <-m.closing:
+			m.once.Do(func() {
+				close(m.cmds)
+			})
+			logger.GetLogger().Info("AsyncSchemaEndtimeUpdateManager closed", zap.Int("seq", i))
+			return
+		}
+
+	}
+}
+
+func (m *AsyncSchemaEndtimeUpdateManager) Stop() {
+	close(m.closing)
+}
+
+func (m *AsyncSchemaEndtimeUpdateManager) Put(database string, retentionPolicy string, mst string, fieldToUpdateEndTime []*proto2.FieldSchema) {
+	cmd := &proto2.UpdateSchemaCommand{
+		Database:      proto.String(database),
+		RpName:        proto.String(retentionPolicy),
+		Measurement:   proto.String(mst),
+		FieldToCreate: fieldToUpdateEndTime,
+	}
+	m.cmds <- cmd
+}
+
+func InitAsyncSchemaEndtimeUpdateEn(en bool, size int, concurrency int) {
+	AsyncSchemaEndtimeUpdateEn = en
+	if concurrency <= 0 {
+		concurrency = 1
+	}
+	if concurrency > runtime.NumCPU() {
+		concurrency = runtime.NumCPU()
+	}
+	logger.GetLogger().Info("InitAsyncSchemaEndtimeUpdateEn", zap.Int("concurrency", concurrency), zap.Bool("en", en), zap.Int("size", size))
+	if en {
+		SchemaEndtimeUpdateManager = NewAsyncSchemaEndtimeUpdateManager(size)
+		for i := 0; i < concurrency; i++ {
+			go SchemaEndtimeUpdateManager.start(i)
+		}
+	}
 }
 
 type writeHelper struct {
@@ -71,7 +166,10 @@ func newWriteHelper(pw *PointsWriter) *writeHelper {
 
 // The table names of the same batch of data may be the same.
 // Caches table information in the previous row to accelerate table information query.
-func (wh *writeHelper) createMeasurement(database, retentionPolicy, name string) (*meta2.MeasurementInfo, error) {
+func (wh *writeHelper) createMeasurement(database, retentionPolicy, name string, skipPreCheck bool) (*meta2.MeasurementInfo, error) {
+	if skipPreCheck {
+		return createMeasurementBase(database, retentionPolicy, name, wh.pw.MetaClient, config.TSSTORE)
+	}
 	return createMeasurement(database, retentionPolicy, name, wh.pw.MetaClient, &wh.preMst, &wh.sameSchema, config.TSSTORE)
 }
 
@@ -88,8 +186,8 @@ func (wh *writeHelper) GetSgEndTime(database, rp string, ts int64, engineType co
 }
 
 func (wh *writeHelper) updateCleanSchemaTagsCheck(r *influx.Row, dropTagIndex *[]int, pkCount *int, originName string,
-	sgEndTime int64, fieldToCreatePool []*proto2.FieldSchema, cleanSchema *meta2.CleanSchema, mst *meta2.MeasurementInfo,
-	err *error) ([]*proto2.FieldSchema, bool, error) {
+	sgEndTime int64, fieldToCreatePool []*proto2.FieldSchema, fieldToUpdateEndTime []*proto2.FieldSchema,
+	cleanSchema *meta2.CleanSchema, mst *meta2.MeasurementInfo, err *error) ([]*proto2.FieldSchema, []*proto2.FieldSchema, bool, error) {
 	for i, tag := range r.Tags {
 		if tag.Key == "time" {
 			*dropTagIndex = append(*dropTagIndex, i)
@@ -97,7 +195,7 @@ func (wh *writeHelper) updateCleanSchemaTagsCheck(r *influx.Row, dropTagIndex *[
 			continue
 		}
 		if err := r.CheckDuplicateTag(i); err != nil {
-			return fieldToCreatePool, true, err
+			return fieldToUpdateEndTime, fieldToCreatePool, true, err
 		}
 		if schemaVal, ok := (*cleanSchema)[tag.Key]; !ok {
 			fieldToCreatePool = appendField(fieldToCreatePool, tag.Key, influx.Field_Type_Tag)
@@ -105,12 +203,17 @@ func (wh *writeHelper) updateCleanSchemaTagsCheck(r *influx.Row, dropTagIndex *[
 		} else {
 			endTime := meta2.TimeReserveHigh32(sgEndTime)
 			if schemaVal.EndTime < endTime {
-				fieldToCreatePool = appendField(fieldToCreatePool, tag.Key, influx.Field_Type_Tag)
-				setLastFieldEndTime(endTime, fieldToCreatePool)
+				if AsyncSchemaEndtimeUpdateEn {
+					fieldToUpdateEndTime = appendField(fieldToUpdateEndTime, tag.Key, influx.Field_Type_Tag)
+					setLastFieldEndTime(endTime, fieldToUpdateEndTime)
+				} else {
+					fieldToCreatePool = appendField(fieldToCreatePool, tag.Key, influx.Field_Type_Tag)
+					setLastFieldEndTime(endTime, fieldToCreatePool)
+				}
 			}
 			if mst.EngineType == config.COLUMNSTORE {
 				if schemaVal.Typ != influx.Field_Type_Tag {
-					return fieldToCreatePool, true, errno.NewError(errno.WritePointHasInvalidTag, tag.Key)
+					return fieldToUpdateEndTime, fieldToCreatePool, true, errno.NewError(errno.WritePointHasInvalidTag, tag.Key)
 				}
 				m := wh.mstPrimaryKeyRowMap[r.Name]
 				if _, exist := m[tag.Key]; exist {
@@ -119,12 +222,12 @@ func (wh *writeHelper) updateCleanSchemaTagsCheck(r *influx.Row, dropTagIndex *[
 			}
 		}
 	}
-	return fieldToCreatePool, false, nil
+	return fieldToUpdateEndTime, fieldToCreatePool, false, nil
 }
 
 func (wh *writeHelper) updateCleanSchemaFieldsCheck(r *influx.Row, dropFieldIndex *[]int, pkCount *int, originName string,
-	sgEndTime int64, fieldToCreatePool []*proto2.FieldSchema, cleanSchema *meta2.CleanSchema, mst *meta2.MeasurementInfo,
-	err *error) ([]*proto2.FieldSchema, bool, error) {
+	sgEndTime int64, fieldToCreatePool []*proto2.FieldSchema, fieldToUpdateEndTime []*proto2.FieldSchema, cleanSchema *meta2.CleanSchema, mst *meta2.MeasurementInfo,
+	err *error) ([]*proto2.FieldSchema, []*proto2.FieldSchema, bool, error) {
 	for i, field := range r.Fields {
 		schemaVal, ok := (*cleanSchema)[field.Key]
 		if ok {
@@ -135,7 +238,7 @@ func (wh *writeHelper) updateCleanSchemaFieldsCheck(r *influx.Row, dropFieldInde
 					}
 				})
 				if mst.EngineType == config.COLUMNSTORE && schemaVal.Typ == influx.Field_Type_Tag {
-					return fieldToCreatePool, true, errno.NewError(errno.WritePointHasInvalidField, field.Key)
+					return fieldToUpdateEndTime, fieldToCreatePool, true, errno.NewError(errno.WritePointHasInvalidField, field.Key)
 				}
 				*err = errno.NewError(errno.FieldTypeConflict, field.Key, originName, influx.FieldTypeString(field.Type),
 					influx.FieldTypeString(int32(schemaVal.Typ))).SetModule(errno.ModuleWrite)
@@ -149,6 +252,10 @@ func (wh *writeHelper) updateCleanSchemaFieldsCheck(r *influx.Row, dropFieldInde
 			}
 			endTime := meta2.TimeReserveHigh32(sgEndTime)
 			if schemaVal.EndTime < endTime {
+				if AsyncSchemaEndtimeUpdateEn {
+					fieldToUpdateEndTime = appendField(fieldToUpdateEndTime, field.Key, field.Type)
+					setLastFieldEndTime(endTime, fieldToUpdateEndTime)
+				}
 				fieldToCreatePool = appendField(fieldToCreatePool, field.Key, field.Type)
 				setLastFieldEndTime(endTime, fieldToCreatePool)
 			}
@@ -157,21 +264,23 @@ func (wh *writeHelper) updateCleanSchemaFieldsCheck(r *influx.Row, dropFieldInde
 		fieldToCreatePool = appendField(fieldToCreatePool, field.Key, field.Type)
 		setLastFieldEndTime(meta2.TimeReserveHigh32(sgEndTime), fieldToCreatePool)
 	}
-	return fieldToCreatePool, false, nil
+	return fieldToUpdateEndTime, fieldToCreatePool, false, nil
 }
 
 // only use for SchemaCleanEn = true
 func (wh *writeHelper) updateCleanSchemaCheck(database, rp string, r *influx.Row, mst *meta2.MeasurementInfo,
-	originName string, fieldToCreatePool []*proto2.FieldSchema, sgEndTime int64) ([]*proto2.FieldSchema, bool, error) {
+	originName string, fieldToCreatePool []*proto2.FieldSchema, sgEndTime int64,
+	fieldToUpdateEndTime []*proto2.FieldSchema) ([]*proto2.FieldSchema, []*proto2.FieldSchema, bool, error) {
 	schemaMap := mst.Schema
 	var dropTagIndex []int
 	var err error
 	var subErr error
 	var pkCount int
 	var flag bool
-	fieldToCreatePool, flag, subErr = wh.updateCleanSchemaTagsCheck(r, &dropTagIndex, &pkCount, originName, sgEndTime, fieldToCreatePool, schemaMap, mst, &err)
+	fieldToUpdateEndTime, fieldToCreatePool, flag, subErr = wh.updateCleanSchemaTagsCheck(r, &dropTagIndex, &pkCount,
+		originName, sgEndTime, fieldToCreatePool, fieldToUpdateEndTime, schemaMap, mst, &err)
 	if flag {
-		return fieldToCreatePool, flag, subErr
+		return fieldToUpdateEndTime, fieldToCreatePool, flag, subErr
 	}
 
 	if len(dropTagIndex) > 0 {
@@ -179,27 +288,33 @@ func (wh *writeHelper) updateCleanSchemaCheck(database, rp string, r *influx.Row
 	}
 
 	if tl := GetTagLimit(); tl > 0 && len(fieldToCreatePool) > 0 && mst.TagKeysTotal() > tl {
-		return fieldToCreatePool, true, errno.NewError(errno.TooManyTagKeys)
+		return fieldToUpdateEndTime, fieldToCreatePool, true, errno.NewError(errno.TooManyTagKeys)
+	}
+
+	if tl := GetFieldLimit(); tl > 0 && len(fieldToCreatePool) > 0 && mst.FieldKeysTotal() > tl {
+		return fieldToUpdateEndTime, fieldToCreatePool, true, errno.NewError(errno.TooManyFieldKeys)
 	}
 
 	// check field type is conflict or not
 	var dropFieldIndex []int
-	fieldToCreatePool, flag, subErr = wh.updateCleanSchemaFieldsCheck(r, &dropFieldIndex, &pkCount, originName, sgEndTime, fieldToCreatePool, schemaMap, mst, &err)
+	fieldToUpdateEndTime, fieldToCreatePool, flag, subErr = wh.updateCleanSchemaFieldsCheck(r, &dropFieldIndex, &pkCount,
+		originName, sgEndTime, fieldToCreatePool, fieldToUpdateEndTime, schemaMap, mst, &err)
 	if flag {
-		return fieldToCreatePool, flag, subErr
+		return fieldToUpdateEndTime, fieldToCreatePool, flag, subErr
 	}
 
 	if mst.EngineType == config.COLUMNSTORE && pkCount != wh.pkLength {
-		return fieldToCreatePool, true, errno.NewError(errno.WritePointPrimaryKeyErr, originName, len(mst.ColStoreInfo.PrimaryKey), pkCount)
+		return fieldToUpdateEndTime, fieldToCreatePool, true, errno.NewError(errno.WritePointPrimaryKeyErr, originName,
+			len(mst.ColStoreInfo.PrimaryKey), pkCount)
 	}
 
 	if len(dropFieldIndex) > 0 {
 		dropFieldByIndex(r, dropFieldIndex)
 		if len(r.Fields) == 0 {
-			return fieldToCreatePool, true, err
+			return fieldToUpdateEndTime, fieldToCreatePool, true, err
 		}
 	}
-	return fieldToCreatePool, false, err
+	return fieldToUpdateEndTime, fieldToCreatePool, false, err
 }
 
 func (wh *writeHelper) updateSchemaCheck(database, rp string, r *influx.Row, mst *meta2.MeasurementInfo,
@@ -242,6 +357,10 @@ func (wh *writeHelper) updateSchemaCheck(database, rp string, r *influx.Row, mst
 
 	if tl := GetTagLimit(); tl > 0 && len(fieldToCreatePool) > 0 && mst.TagKeysTotal() > tl {
 		return fieldToCreatePool, true, errno.NewError(errno.TooManyTagKeys)
+	}
+
+	if tl := GetFieldLimit(); tl > 0 && len(fieldToCreatePool) > 0 && mst.FieldKeysTotal() > tl {
+		return fieldToCreatePool, true, errno.NewError(errno.TooManyFieldKeys)
 	}
 
 	// check field type is conflict or not
@@ -287,20 +406,24 @@ func (wh *writeHelper) updateSchemaCheck(database, rp string, r *influx.Row, mst
 }
 
 func (wh *writeHelper) updateSchemaCheckBase(database, rp string, r *influx.Row, mst *meta2.MeasurementInfo,
-	originName string, fieldToCreatePool []*proto2.FieldSchema) ([]*proto2.FieldSchema, bool, error) {
+	originName string, fieldToCreatePool []*proto2.FieldSchema, fieldToUpdateEndTime []*proto2.FieldSchema) ([]*proto2.FieldSchema,
+	[]*proto2.FieldSchema, bool, error) {
 	if meta2.SchemaCleanEn {
 		// GetSgEndTime will Rlock metadata. Pay attention when the schemalock is Rlocked to avoid deadlock.
 		sgEndTime, err := wh.GetSgEndTime(database, rp, r.Timestamp, mst.EngineType)
 		if err != nil {
-			return fieldToCreatePool, true, err
+			return fieldToUpdateEndTime, fieldToCreatePool, true, err
 		}
 		mst.SchemaLock.RLock()
 		defer mst.SchemaLock.RUnlock()
-		return wh.updateCleanSchemaCheck(database, rp, r, mst, originName, fieldToCreatePool, sgEndTime)
+		return wh.updateCleanSchemaCheck(database, rp, r, mst, originName, fieldToCreatePool, sgEndTime, fieldToUpdateEndTime)
 	}
 	mst.SchemaLock.RLock()
 	defer mst.SchemaLock.RUnlock()
-	return wh.updateSchemaCheck(database, rp, r, mst, originName, fieldToCreatePool)
+	var isDropRow bool
+	var err error
+	fieldToCreatePool, isDropRow, err = wh.updateSchemaCheck(database, rp, r, mst, originName, fieldToCreatePool)
+	return fieldToUpdateEndTime, fieldToCreatePool, isDropRow, err
 }
 
 func (wh *writeHelper) updateSchemaIfNeeded(database, rp string, r *influx.Row, mst *meta2.MeasurementInfo,
@@ -308,7 +431,9 @@ func (wh *writeHelper) updateSchemaIfNeeded(database, rp string, r *influx.Row, 
 	// update schema if needed
 	var err error
 	var isDropRow bool
-	if fieldToCreatePool, isDropRow, err = wh.updateSchemaCheckBase(database, rp, r, mst, originName, fieldToCreatePool); err != nil {
+	var fieldToUpdateEndTime []*proto2.FieldSchema
+	if fieldToUpdateEndTime, fieldToCreatePool, isDropRow, err = wh.updateSchemaCheckBase(database, rp, r, mst, originName,
+		fieldToCreatePool, fieldToUpdateEndTime); err != nil {
 		if isDropRow {
 			return fieldToCreatePool, isDropRow, err
 		}
@@ -321,6 +446,11 @@ func (wh *writeHelper) updateSchemaIfNeeded(database, rp string, r *influx.Row, 
 		}
 		statistics.NewHandler().WriteUpdateSchemaDuration.AddSinceNano(start)
 		wh.sameSchema = false
+	}
+	if len(fieldToUpdateEndTime) > 0 {
+		start := time.Now()
+		SchemaEndtimeUpdateManager.Put(database, rp, originName, fieldToUpdateEndTime)
+		statistics.NewHandler().WriteUpdateSchemaEndTimeDuration.Add(time.Since(start).Nanoseconds())
 	}
 	return fieldToCreatePool, false, err
 }
@@ -687,15 +817,25 @@ func createMeasurement(database, retentionPolicy, name string, client ComMetaCli
 		statistics.NewHandler().WriteCreateMstDuration.AddSinceNano(start)
 	}()
 
-	mst, err := client.Measurement(database, retentionPolicy, name)
-	if err == meta2.ErrMeasurementNotFound {
-		ski := &meta2.ShardKeyInfo{ShardKey: nil, Type: influxql.HASH}
-		mst, err = client.CreateMeasurement(database, retentionPolicy, name, ski, 0, nil, engineType, nil, nil, nil)
-	}
+	mst, err := createMeasurementBase(database, retentionPolicy, name, client, engineType)
 
 	if err == nil {
 		*preMst = mst
 		*sameSchema = true
+	}
+	return mst, err
+}
+
+func createMeasurementBase(database, retentionPolicy, name string, client ComMetaClient, engineType config.EngineType) (*meta2.MeasurementInfo, error) {
+	start := time.Now()
+	defer func() {
+		statistics.NewHandler().WriteCreateMstDuration.AddSinceNano(start)
+	}()
+
+	mst, err := client.Measurement(database, retentionPolicy, name)
+	if err == meta2.ErrMeasurementNotFound {
+		ski := &meta2.ShardKeyInfo{ShardKey: nil, Type: influxql.HASH}
+		mst, err = client.CreateMeasurement(database, retentionPolicy, name, ski, 0, nil, engineType, nil, nil, nil)
 	}
 	return mst, err
 }

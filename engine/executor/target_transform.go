@@ -254,7 +254,7 @@ func (trans *TargetTransform) writeTarget(chunk Chunk) error {
 	table := trans.pool.Get()
 	defer trans.pool.Put(table)
 
-	iter := chunk.CreatePointRowIterator(trans.mst.Name, trans.valuer)
+	iter := NewChunkIteratorFromValuer(chunk, trans.mst.Name, trans.valuer)
 
 	for iter.HasMore() {
 		row, tuple := table.Allocate()

@@ -21,7 +21,7 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
-	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/msgservice"
 	"github.com/openGemini/openGemini/lib/spdy/transport"
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
@@ -101,7 +101,7 @@ func TestHandleSpecialCtlData(t *testing.T) {
 
 	netStore := NewMockNetStorage()
 	netStore.MigratePtFn = func(nodeID uint64, data transport.Codec, cb transport.Callback) error {
-		mcb := cb.(*netstorage.MigratePtCallback)
+		mcb := cb.(*msgservice.MigratePtCallback)
 		mcb.CallFn(nil)
 		return nil
 	}
@@ -245,7 +245,7 @@ func TestHandleSpecialCtlDataNoHa(t *testing.T) {
 
 	netStore := NewMockNetStorage()
 	netStore.MigratePtFn = func(nodeID uint64, data transport.Codec, cb transport.Callback) error {
-		mcb := cb.(*netstorage.MigratePtCallback)
+		mcb := cb.(*msgservice.MigratePtCallback)
 		mcb.CallFn(nil)
 		return nil
 	}
@@ -442,7 +442,7 @@ func TestHandleSpecialCtlDataWaitNodeTakeOverDoneFail(t *testing.T) {
 	}
 	netStore := NewMockNetStorage()
 	netStore.MigratePtFn = func(nodeID uint64, data transport.Codec, cb transport.Callback) error {
-		mcb := cb.(*netstorage.MigratePtCallback)
+		mcb := cb.(*msgservice.MigratePtCallback)
 		mcb.CallFn(nil)
 		return nil
 	}

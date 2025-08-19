@@ -38,6 +38,7 @@ const (
 	Fill HashAggType = iota
 	Normal
 	SubQuery
+	TopN
 )
 
 const HashAggTransformBufCap = 8192
@@ -293,8 +294,8 @@ var _ = RegistryTransformCreator(&LogicalHashAgg{}, &HashAggTransformCreator{})
 
 func NewHashAggTransform(
 	inRowDataType, outRowDataType []hybridqp.RowDataType, exprOpt []hybridqp.ExprOptions, s *QuerySchema, t HashAggType) (Processor, error) {
-	if s.HasTopNDDCM() {
-		return NewTopNTransform(inRowDataType, outRowDataType, exprOpt, s, t)
+	if name, ok := s.HasTopN(); ok {
+		return NewTopNTransform(inRowDataType, outRowDataType, exprOpt, s, t, name)
 	}
 	if len(inRowDataType) == 0 || len(outRowDataType) != 1 {
 		return nil, fmt.Errorf("NewHashAggTransform raise error: input or output numbers error")
@@ -716,7 +717,7 @@ func (trans *HashAggTransform) computeBatchLocsByChunkTags() {
 	// for hashAgg without dims we just compute single groupby time batchs
 	trans.batchEndLocs = trans.batchMPool.AllocBatchEndLocs()
 	preLoc := 0
-	if (trans.opt.Dimensions == nil || len(trans.opt.Dimensions) == 0) && trans.opt.HasInterval() {
+	if (len(trans.opt.Dimensions) == 0) && trans.opt.HasInterval() {
 		for rowId := 1; rowId < trans.bufChunk.Len(); rowId++ {
 			if trans.bufIntervalKeys[rowId] != trans.bufIntervalKeys[preLoc] {
 				trans.batchEndLocs = append(trans.batchEndLocs, rowId)
@@ -1227,13 +1228,15 @@ func ExpandColumnOffsets(col Column, stringBytes []byte, offsets []uint32) ([]by
 	j := 0
 	for i := 0; i < rowsNum; i++ {
 		if col.IsNilV2(i) {
-			newOffsets[i] = offsets[j]
+			if j < len(offsets) {
+				newOffsets[i] = offsets[j]
+			} else {
+				newOffsets[i] = uint32(len(stringBytes))
+			}
 			continue
 		}
 		newOffsets[i] = offsets[j]
-		if j < len(offsets)-1 {
-			j++
-		}
+		j++
 	}
 
 	return stringBytes, newOffsets

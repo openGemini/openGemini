@@ -16,7 +16,6 @@ package executor
 
 import (
 	"fmt"
-	"reflect"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/openGemini/openGemini/lib/codec"
@@ -326,6 +325,39 @@ type RemoteQuery struct {
 	Opt      query.ProcessorOptions
 	Analyze  bool
 	Node     []byte
+	MstInfos []*MultiMstInfo
+}
+
+type MultiMstInfo struct {
+	ShardIds []uint64
+	Opt      query.ProcessorOptions
+}
+
+func (c *RemoteQuery) Clone() *RemoteQuery {
+	r := &RemoteQuery{}
+	r.Database = c.Database
+	r.PtID = c.PtID
+	r.NodeID = c.NodeID
+	r.PtQuerys = c.PtQuerys
+	r.Analyze = c.Analyze
+	r.Node = c.Node
+	return r
+}
+
+func (c *RemoteQuery) BuildMstTraits() []*MultiMstReqs {
+	if len(c.MstInfos) == 0 {
+		return nil
+	}
+	res := make([]*MultiMstReqs, len(c.MstInfos))
+	for i := range c.MstInfos {
+		mmr := &MultiMstReqs{}
+		rq := c.Clone()
+		rq.ShardIDs = c.MstInfos[i].ShardIds
+		rq.Opt = c.MstInfos[i].Opt
+		mmr.reqs = append(mmr.reqs, rq)
+		res[i] = mmr
+	}
+	return res
 }
 
 func (c *RemoteQuery) Marshal(buf []byte) ([]byte, error) {
@@ -333,8 +365,7 @@ func (c *RemoteQuery) Marshal(buf []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	msg, err := proto.Marshal(&proto2.RemoteQuery{
+	rq := &proto2.RemoteQuery{
 		Database:  c.Database,
 		PtID:      c.PtID,
 		ShardIDs:  c.ShardIDs,
@@ -343,12 +374,35 @@ func (c *RemoteQuery) Marshal(buf []byte) ([]byte, error) {
 		Analyze:   c.Analyze,
 		QueryNode: c.Node,
 		PtQuerys:  MarshalPtQuerys(c.PtQuerys),
-	})
+	}
 
+	if err = c.MarshalMstInfos(rq); err != nil {
+		return nil, err
+	}
+
+	msg, err := proto.Marshal(rq)
 	ret := make([]byte, len(buf)+len(msg))
 	copy(ret, buf)
 	copy(ret[len(buf):], msg)
 	return ret, err
+}
+
+func (c *RemoteQuery) MarshalMstInfos(rq *proto2.RemoteQuery) error {
+	if len(c.MstInfos) == 0 {
+		return nil
+	}
+	var err error
+	mstInfos := make([]*proto2.MultiMstInfo, len(c.MstInfos))
+	for i := range mstInfos {
+		mstInfos[i] = &proto2.MultiMstInfo{}
+		mstInfos[i].ShardIDs = c.MstInfos[i].ShardIds
+		mstInfos[i].Opt, err = c.MstInfos[i].Opt.MarshalBinary()
+		if err != nil {
+			return err
+		}
+	}
+	rq.MultiMstInfos = mstInfos
+	return nil
 }
 
 func (c *RemoteQuery) Unmarshal(buf []byte) error {
@@ -362,11 +416,26 @@ func (c *RemoteQuery) Unmarshal(buf []byte) error {
 	c.ShardIDs = pb.GetShardIDs()
 	c.NodeID = pb.GetNodeID()
 	c.Analyze = pb.GetAnalyze()
-	c.NodeID = pb.GetNodeID()
 	c.Node = pb.QueryNode
 	c.PtQuerys = UnmarshalPtQuerys(pb.GetPtQuerys())
 	if err := c.Opt.UnmarshalBinary(pb.GetOpt()); err != nil {
 		return err
+	}
+	return c.UnmarshalMstInfos(&pb)
+}
+
+func (c *RemoteQuery) UnmarshalMstInfos(pb *proto2.RemoteQuery) error {
+	if len(pb.GetMultiMstInfos()) == 0 {
+		return nil
+	}
+	mstInfos := pb.GetMultiMstInfos()
+	c.MstInfos = make([]*MultiMstInfo, len(mstInfos))
+	for i := range c.MstInfos {
+		c.MstInfos[i] = &MultiMstInfo{}
+		c.MstInfos[i].ShardIds = mstInfos[i].GetShardIDs()
+		if err := c.MstInfos[i].Opt.UnmarshalBinary(mstInfos[i].GetOpt()); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -393,8 +462,4 @@ func (c *RemoteQuery) Len() int {
 	} else {
 		return len(c.PtQuerys)
 	}
-}
-
-func NewInvalidTypeError(exp string, data interface{}) error {
-	return errno.NewError(errno.InvalidDataType, exp, reflect.TypeOf(data).String())
 }

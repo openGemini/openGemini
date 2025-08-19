@@ -277,6 +277,14 @@ func TestUnCachedPlanType(t *testing.T) {
 	}
 }
 
+func TestGetCTEPlanType(t *testing.T) {
+	sql := "with t1 as (select * from mst) select f1 from t1"
+	stmt := buildCTEStmt(t, sql)
+	stmt.Query.AllDependencyCTEs = stmt.CTEs
+	planType := executor.NormalGetPlanType(NewMultiSourceSchema(), stmt.Query)
+	assert.True(t, planType == executor.UNKNOWN)
+}
+
 func TestCachedPlanType(t *testing.T) {
 	schema := []hybridqp.Catalog{NewFullSeriesHintSchema()}
 	stmt := []*influxql.SelectStatement{nil}
@@ -371,4 +379,20 @@ func TestErrorTemplatePlan(t *testing.T) {
 	_, err := executor.NewSqlPlanTypePool(executor.PlanType(len(executor.TemplateSql) - 1))
 	assert.ErrorContains(t, err, "syntax error")
 	executor.TemplateSql = executor.TemplateSql[:len(executor.TemplateSql)-1]
+}
+
+func TestGetTagKeys(t *testing.T) {
+	init := executor.NewPlanTypeInitShardGroup()
+	var tagstmt *influxql.ShowTagValuesStatement
+	nodeID := uint64(2)
+	pts := make([]uint32, 1, 2)
+	tagkey := map[string]map[string]struct{}{}
+	_, err := init.GetTagKeys(tagstmt)
+	assert.Equal(t, err, nil)
+	_, err = init.GetTagVals(nodeID, tagstmt, pts, tagkey, true)
+	assert.Equal(t, err, nil)
+	err = init.CheckDatabaseExists("db0")
+	assert.Equal(t, err, nil)
+	_, err = init.QueryNodePtsMap("db0")
+	assert.Equal(t, err, nil)
 }

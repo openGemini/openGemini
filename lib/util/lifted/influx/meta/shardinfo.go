@@ -41,6 +41,30 @@ type ShardGroupInfo struct {
 	Version     uint32
 }
 
+func (sgi *ShardGroupInfo) GetMergedShardCount() int {
+	count := 0
+	for _, shard := range sgi.Shards {
+		if shard.MergedNum > 0 {
+			count++
+		}
+	}
+	return count
+}
+
+func (sgi *ShardGroupInfo) ShardMergedNumInc(shardId uint64) {
+	for i, shard := range sgi.Shards {
+		if shard.ID == shardId {
+			sgi.Shards[i].MergedNum += 1
+		}
+	}
+}
+
+func (sgi *ShardGroupInfo) ClearShardsMergedNum() {
+	for i := range sgi.Shards {
+		sgi.Shards[i].MergedNum = 0
+	}
+}
+
 func (sgi *ShardGroupInfo) canDelete() bool {
 	for i := range sgi.Shards {
 		if !sgi.Shards[i].MarkDelete {
@@ -440,6 +464,7 @@ type ShardInfo struct {
 	DownSampleLevel int64
 	ReadOnly        bool
 	MarkDelete      bool
+	MergedNum       int32
 }
 
 func (si ShardInfo) Contain(shardKey string) bool {
@@ -484,6 +509,7 @@ func (si ShardInfo) marshal() *proto2.ShardInfo {
 		DownSampleID:    proto.Uint64(si.DownSampleID),
 		ReadOnly:        proto.Bool(si.ReadOnly),
 		MarkDelete:      proto.Bool(si.MarkDelete),
+		MergedNum:       proto.Int32(si.MergedNum),
 	}
 	pb.OwnerIDs = make([]uint32, len(si.Owners))
 	copy(pb.OwnerIDs, si.Owners)
@@ -512,6 +538,7 @@ func (si *ShardInfo) unmarshal(pb *proto2.ShardInfo) {
 	si.DownSampleID = pb.GetDownSampleID()
 	si.ReadOnly = pb.GetReadOnly()
 	si.MarkDelete = pb.GetMarkDelete()
+	si.MergedNum = pb.GetMergedNum()
 
 	si.Owners = make([]uint32, len(pb.GetOwnerIDs()))
 	for i, x := range pb.GetOwnerIDs() {
@@ -588,4 +615,27 @@ type ExpiredIndexInfos struct {
 	Policy       string
 	IndexGroupID uint64
 	IndexIDs     []uint64
+}
+
+type MergeShards struct {
+	DbName        string
+	PtId          uint32
+	RpName        string
+	ShardIds      []uint64
+	ShardEndTimes []int64
+	EngineType    []config.EngineType
+}
+
+func (ms MergeShards) Len() int {
+	return len(ms.ShardIds)
+}
+
+func (ms MergeShards) Less(i, j int) bool {
+	return ms.ShardEndTimes[i] < ms.ShardEndTimes[j]
+}
+
+func (ms MergeShards) Swap(i, j int) {
+	ms.ShardIds[i], ms.ShardIds[j] = ms.ShardIds[j], ms.ShardIds[i]
+	ms.ShardEndTimes[i], ms.ShardEndTimes[j] = ms.ShardEndTimes[j], ms.ShardEndTimes[i]
+	ms.EngineType[i], ms.EngineType[j] = ms.EngineType[j], ms.EngineType[i]
 }

@@ -33,7 +33,7 @@ type GroupByTransform struct {
 	builder      *ChunkBuilder
 	ops          []hybridqp.ExprOptions
 	opt          *query.ProcessorOptions
-	transparents []func(dst Column, src Column)
+	transparents []func(dst Column, src Column, srcChunk Chunk, dstChunk Chunk)
 	mapTransToIn []int
 
 	workTracing *tracing.Span
@@ -68,7 +68,7 @@ func (c *GroupByTransformCreator) Create(plan LogicalPlan, opt *query.ProcessorO
 var _ = RegistryTransformCreator(&LogicalGroupBy{}, &GroupByTransformCreator{})
 
 func (trans *GroupByTransform) initTransformMapping() error {
-	trans.transparents = make([]func(dst Column, src Column), len(trans.ops))
+	trans.transparents = make([]func(dst Column, src Column, srcChunk Chunk, dstChunk Chunk), len(trans.ops))
 	trans.mapTransToIn = make([]int, len(trans.ops))
 
 	for i, op := range trans.ops {
@@ -96,6 +96,8 @@ func (trans *GroupByTransform) initTransParent(vr *influxql.VarRef, i int) {
 		trans.transparents[i] = TransparentForwardBooleanColumn
 	case influxql.String, influxql.Tag:
 		trans.transparents[i] = TransparentForwardStringColumn
+	case influxql.Graph:
+		trans.transparents[i] = TransparentForwardGraphColumn
 	}
 }
 
@@ -158,9 +160,9 @@ func (trans *GroupByTransform) transform(chunk Chunk) Chunk {
 	for i, f := range trans.transparents {
 		dst := oChunk.Column(i)
 		src := chunk.Column(trans.mapTransToIn[i])
-		f(dst, src)
+		f(dst, src, chunk, oChunk)
 	}
-
+	oChunk.SetGraph(chunk.GetGraph())
 	return oChunk
 }
 

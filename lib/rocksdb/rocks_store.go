@@ -33,9 +33,9 @@ import (
 	"math"
 	"unsafe"
 
+	"github.com/hashicorp/go-msgpack/v2/codec"
 	"github.com/hashicorp/raft"
 	"github.com/openGemini/openGemini/lib/cpu"
-	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/go-msgpack/codec"
 	"go.uber.org/zap"
 )
 

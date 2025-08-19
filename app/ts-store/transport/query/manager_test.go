@@ -20,7 +20,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/msgservice"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -37,7 +37,7 @@ func TestManager_Abort(t *testing.T) {
 	assert.Equal(t, false, qm.Aborted(seq))
 
 	qm.SetAbortedExpire(time.Second * 2)
-	qm.Abort(seq)
+	qm.Abort(seq, "")
 
 	assert.Equal(t, true, qm.Aborted(seq))
 
@@ -70,10 +70,10 @@ func TestManager_Query(t *testing.T) {
 
 type mockQuery struct {
 	id   int
-	info *netstorage.QueryExeInfo
+	info *msgservice.QueryExeInfo
 }
 
-func (m *mockQuery) Abort() {
+func (m *mockQuery) Abort(source string) {
 
 }
 
@@ -81,19 +81,19 @@ func (m *mockQuery) Crash() {
 
 }
 
-func (m *mockQuery) GetQueryExeInfo() *netstorage.QueryExeInfo {
+func (m *mockQuery) GetQueryExeInfo() *msgservice.QueryExeInfo {
 	return m.info
 }
 
 func generateMockQueries(clientID uint64, n int) []mockQuery {
 	res := make([]mockQuery, mockQueriesNum)
 	for i := 0; i < n; i++ {
-		q := mockQuery{id: i, info: &netstorage.QueryExeInfo{
+		q := mockQuery{id: i, info: &msgservice.QueryExeInfo{
 			QueryID:   clientID + uint64(i),
 			Stmt:      fmt.Sprintf("select * from mst%d\n", i),
 			Database:  fmt.Sprintf("db%d", i),
 			BeginTime: int64(i * 10000000),
-			RunState:  netstorage.Killed,
+			RunState:  msgservice.Killed,
 		}}
 		res[i] = q
 	}
@@ -103,7 +103,7 @@ func generateMockQueries(clientID uint64, n int) []mockQuery {
 func TestManager_GetAll(t *testing.T) {
 	// generate mock infos for one client
 	queries := generateMockQueries(clientIDs[0], mockQueriesNum)
-	except := make([]*netstorage.QueryExeInfo, 0)
+	except := make([]*msgservice.QueryExeInfo, 0)
 
 	for i := range queries {
 		NewManager(clientIDs[0]).Add(uint64(i), &queries[i])
@@ -158,6 +158,6 @@ func TestManager_NoMarkCrash(t *testing.T) {
 	qm.NoMarkCrash(10)
 	assert.Equal(t, qm.Aborted(10), false)
 
-	qm.NoMarkAbort(10)
+	qm.NoMarkAbort(10, "")
 	assert.Equal(t, qm.Aborted(10), false)
 }

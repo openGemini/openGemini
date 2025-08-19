@@ -32,8 +32,20 @@ func newService() *Service {
 	return NewService(c)
 }
 
+func newIndexToColdService() *Service {
+	var c config.HierarchicalConfig
+	c.MaxProcessN = 1
+	return NewIndexToColdService(c)
+}
+
 func TestService_Open(t *testing.T) {
 	s := newService()
+	err := s.Open()
+	assert.Nil(t, err)
+}
+
+func TestIndexToColdService_Open(t *testing.T) {
+	s := newIndexToColdService()
 	err := s.Open()
 	assert.Nil(t, err)
 }
@@ -83,8 +95,54 @@ func TestService_FetchNewColdShards(t *testing.T) {
 	assert.Equal(t, len(coldShards), 2)
 }
 
+func TestService_FetchNewColdIndexes(t *testing.T) {
+	c := &MockMetaClient{}
+	e := &MockTEngine{}
+	e.FetchIndexesNeedChangeStoreFn = func() (indexesToCold []*meta.IndexIdentifier) {
+		indexDescriptor := []*meta.IndexDescriptor{
+			{
+				IndexID:      1,
+				IndexGroupID: 1,
+			}, {
+				IndexID:      2,
+				IndexGroupID: 1,
+			},
+		}
+		indexesToCold = []*meta.IndexIdentifier{
+			{
+				Index:   indexDescriptor[0],
+				OwnerDb: "testdb",
+			}, {
+				Index:   indexDescriptor[1],
+				OwnerDb: "testdb",
+			},
+		}
+		return indexesToCold
+	}
+
+	s := NewIndexToColdService(config.NewHierarchicalConfig())
+	s.MetaClient = c
+
+	ptView := meta.DBPtInfos{{Owner: meta.PtOwner{NodeID: 2}, PtId: 3}}
+	c.DBPtViewFn = func(database string) (meta.DBPtInfos, error) {
+		if database == "_mydb" {
+			return nil, errors.New("test error")
+		}
+		return ptView, nil
+	}
+	coldIndexes := e.FetchIndexesNeedChangeStoreFn()
+	assert.Equal(t, len(coldIndexes), 2)
+}
+
 func testService(c metaClient, e *MockTEngine) *Service {
 	s := newService()
+	s.MetaClient = c
+	s.Engine = e
+	return s
+}
+
+func testIndexToColdService(c metaClient, e *MockTEngine) *Service {
+	s := newIndexToColdService()
 	s.MetaClient = c
 	s.Engine = e
 	return s
@@ -169,6 +227,92 @@ func TestService_RunShardHierarchicalStorage(t *testing.T) {
 	})
 }
 
+func TestService_RunIndexHierarchicalStorage(t *testing.T) {
+	syscontrol.SetIndexHierarchicalStorageEnabled(true)
+	c := &MockMetaClient{}
+	called := 0
+	c.UpdateIndexInfoTierFn = func(shardID uint64, tier uint64, dbName, rpName string) error {
+		called += 1
+		return nil
+	}
+	e := &MockTEngine{}
+	e.FetchIndexesNeedChangeStoreFn = func() (indexesToCold []*meta.IndexIdentifier) {
+		indexDescriptor := []*meta.IndexDescriptor{
+			{
+				IndexID:      1,
+				IndexGroupID: 1,
+			}, {
+				IndexID:      2,
+				IndexGroupID: 1,
+			},
+		}
+		indexesToCold = []*meta.IndexIdentifier{
+			{
+				Index:   indexDescriptor[0],
+				OwnerDb: "testdb",
+			}, {
+				Index:   indexDescriptor[1],
+				OwnerDb: "testdb1",
+			},
+		}
+		return indexesToCold
+	}
+
+	e.IndexHierarchicalStorageFn = func(db string, ptId uint32, shardID uint64) bool {
+		if db == "testdb1" {
+			return false
+		}
+		return true
+	}
+
+	t.Run("all success", func(t *testing.T) {
+		s := testIndexToColdService(c, e)
+		s.handleIndex()
+		assert.Equal(t, 3, called)
+	})
+
+	t.Run("close success", func(t *testing.T) {
+		called := 0
+		c.UpdateIndexInfoTierFn = func(indexID uint64, tier uint64, dbName, rpName string) error {
+			called += 1
+			time.Sleep(20 * time.Millisecond)
+			return nil
+		}
+		s := testIndexToColdService(c, e)
+		go s.handleIndex()
+		time.Sleep(10 * time.Millisecond)
+		s.Close()
+		time.Sleep(60 * time.Millisecond)
+		assert.Equal(t, 2, called)
+		assert.Nil(t, s.Close())
+	})
+
+	t.Run("UpdateIndexInfoTier return error", func(t *testing.T) {
+		called := 0
+		c.UpdateIndexInfoTierFn = func(indexID uint64, tier uint64, dbName, rpName string) error {
+			called += 1
+			return errors.New("test error")
+		}
+		s := testIndexToColdService(c, e)
+		s.handleIndex()
+		assert.Equal(t, 1, called)
+	})
+
+	t.Run("UpdateIndexInfoTier moving return nil", func(t *testing.T) {
+		called := 0
+		c.UpdateIndexInfoTierFn = func(indexID uint64, tier uint64, dbName, rpName string) error {
+			called += 1
+			if tier == util.Moving {
+				return nil
+			}
+			return errors.New("test error")
+		}
+		s := testIndexToColdService(c, e)
+		s.handleIndex()
+		assert.Equal(t, 3, called)
+	})
+}
+
 func TestService_Run(t *testing.T) {
 	t.Run("hierarchical storage disable", func(t *testing.T) {
 		syscontrol.SetHierarchicalStorageEnabled(false)
@@ -179,10 +323,30 @@ func TestService_Run(t *testing.T) {
 	})
 }
 
+func TestIndexToColdService_Run(t *testing.T) {
+	t.Run("hierarchical index storage disable", func(t *testing.T) {
+		syscontrol.SetIndexHierarchicalStorageEnabled(false)
+		s := testIndexToColdService(&MockMetaClient{}, &MockTEngine{})
+		assert.Nil(t, s.Open())
+		time.Sleep(11 * time.Millisecond)
+		assert.Nil(t, s.Close())
+	})
+}
+
 type MockTEngine struct {
-	HierarchicalStorageFn        func(db string, ptId uint32, shardID uint64) bool
-	FetchShardsNeedChangeStoreFn func() (shardsToWarm, shardsToCold []*meta.ShardIdentifier)
-	ChangeShardTierToWarmFn      func(db string, ptId uint32, shardID uint64) error
+	HierarchicalStorageFn         func(db string, ptId uint32, shardID uint64) bool
+	IndexHierarchicalStorageFn    func(db string, ptId uint32, shardID uint64) bool
+	FetchShardsNeedChangeStoreFn  func() (shardsToWarm, shardsToCold []*meta.ShardIdentifier)
+	ChangeShardTierToWarmFn       func(db string, ptId uint32, shardID uint64) error
+	FetchIndexesNeedChangeStoreFn func() (indexesToCold []*meta.IndexIdentifier)
+}
+
+func (s *MockTEngine) FetchIndexesNeedChangeStore() (indexesToCold []*meta.IndexIdentifier) {
+	return s.FetchIndexesNeedChangeStoreFn()
+}
+
+func (s *MockTEngine) IndexHierarchicalStorage(db string, ptId uint32, shardID uint64) bool {
+	return s.IndexHierarchicalStorageFn(db, ptId, shardID)
 }
 
 func (s *MockTEngine) HierarchicalStorage(db string, ptId uint32, shardID uint64) bool {
@@ -202,6 +366,11 @@ type MockMetaClient struct {
 	DatabaseFn            func(name string) (*meta.DatabaseInfo, error)
 	DBPtViewFn            func(database string) (meta.DBPtInfos, error)
 	UpdateShardInfoTierFn func(shardID uint64, tier uint64, dbName, rpName string) error
+	UpdateIndexInfoTierFn func(shardID uint64, tier uint64, dbName, rpName string) error
+}
+
+func (c *MockMetaClient) UpdateIndexInfoTier(indexId uint64, tier uint64, dbName, rpName string) error {
+	return c.UpdateIndexInfoTierFn(indexId, tier, dbName, rpName)
 }
 
 func NewMockMetaClient() *MockMetaClient {
@@ -223,4 +392,8 @@ func (c *MockMetaClient) DBPtView(database string) (meta.DBPtInfos, error) {
 
 func (c *MockMetaClient) UpdateShardInfoTier(shardID uint64, tier uint64, dbName, rpName string) error {
 	return c.UpdateShardInfoTierFn(shardID, tier, dbName, rpName)
+}
+
+func (m *MockMetaClient) GetMergeShardsList() []meta.MergeShards {
+	return nil
 }

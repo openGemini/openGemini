@@ -22,9 +22,79 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/engine/executor"
+	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/stretchr/testify/assert"
 )
+
+func TestChunkPromStepInvariant(t *testing.T) {
+	rowDataType := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "val0", Type: influxql.Float},
+	)
+	b := executor.NewChunkBuilder(rowDataType)
+	chunk := b.NewChunk("mst")
+	chunk.AppendTimes([]int64{1, 1, 1})
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=" + "tv1"), 0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=" + "tv2"), 1)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=" + "tv3"), 2)
+	chunk.Column(0).AppendFloatValues([]float64{1, 2, 3})
+	chunk.Column(0).AppendManyNotNil(3)
+	dstChunk := b.NewChunk("mst")
+
+	// 1.preGroup same of skiplastgroup
+	preGroup1 := "\x02\x00\x04\x00\b\x00tk1\x00tv1\x00"
+	dstChunk = executor.PromStepInvariant(chunk, dstChunk, executor.SkipLastGroup, []byte(preGroup1), nil, 1, 1, 3)
+	assert.Equal(t, dstChunk.Len(), 4)
+
+	// 2.1 preGroup same of onlylastGroup
+	preGroup3 := "\x02\x00\x04\x00\b\x00tk1\x00tv3\x00"
+	c := executor.PromStepInvariant(chunk, nil, executor.OnlyLastGroup, []byte(preGroup3), nil, 1, 1, 2)
+	assert.Equal(t, c.Len(), 3)
+	// 2.2 nextGroup same of onlylastGroup
+	c = executor.PromStepInvariant(chunk, nil, executor.OnlyLastGroup, nil, []byte(preGroup3), 1, 1, 2)
+	assert.Equal(t, c.Len(), 3)
+
+	// 3. time err of onlylastGroup
+	chunk.SetTime([]int64{1, 1, 2})
+	c = executor.PromStepInvariant(chunk, nil, executor.OnlyLastGroup, nil, nil, 1, 1, 3)
+	assert.Equal(t, c.Len(), 3)
+
+	// 4.time err of skiplastGroup
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=" + "tv4"), 3)
+	chunk.SetTime([]int64{1, 1, 2, 1})
+	chunk.Column(0).AppendFloatValue(4)
+	chunk.Column(0).AppendNotNil()
+	dstChunk.Reset()
+	dstChunk = executor.PromStepInvariant(chunk, dstChunk, executor.SkipLastGroup, nil, nil, 1, 1, 3)
+	assert.Equal(t, dstChunk.Len(), 6)
+
+	// 5. onlyLastGroup normal
+	chunk.SetTime([]int64{1, 1, 1, 1})
+	chunk = executor.PromStepInvariant(chunk, nil, executor.OnlyLastGroup, nil, nil, 1, 1, 3)
+	assert.Equal(t, chunk.Len(), 6)
+
+	// 6.onlylastGroup multipoint of a group
+	chunk.Reset()
+	chunk.AppendTimes([]int64{1, 1, 1})
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=" + "tv1"), 0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=" + "tv2"), 1)
+	chunk.Column(0).AppendFloatValues([]float64{1, 2, 3})
+	chunk.Column(0).AppendManyNotNil(3)
+	c = executor.PromStepInvariant(chunk, nil, executor.OnlyLastGroup, nil, nil, 1, 1, 3)
+	assert.Equal(t, c.Len(), 3)
+
+	// 7. skiplastGroup mulitpoint of a group
+	chunk.Reset()
+	chunk.AppendTimes([]int64{1, 1, 1})
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=" + "tv1"), 0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=" + "tv2"), 2)
+	chunk.Column(0).AppendFloatValues([]float64{1, 2, 3})
+	chunk.Column(0).AppendManyNotNil(3)
+	dstChunk.Reset()
+	dstChunk = executor.PromStepInvariant(chunk, dstChunk, executor.SkipLastGroup, nil, nil, 1, 1, 3)
+	assert.Equal(t, dstChunk.Len(), 3)
+}
 
 func TestNewPromRangeVectorTransformErr(t *testing.T) {
 	call := &influxql.PromSubCall{
@@ -68,10 +138,10 @@ func BuildPromSubqueryInChunk1() executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("m1")
 	chunk.AppendTimes([]int64{times[0], times[1]})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 0)
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=2"), 1)
-	chunk.AddIntervalIndex(0)
-	chunk.AddIntervalIndex(1)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=2"), 1)
+	chunk.AppendIntervalIndex(0)
+	chunk.AppendIntervalIndex(1)
 	chunk.Column(0).AppendFloatValues([]float64{1.1, 2.2})
 	chunk.Column(0).AppendManyNotNil(2)
 	return chunk
@@ -82,10 +152,10 @@ func BuildPromSubqueryInChunk2() executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("m1")
 	chunk.AppendTimes([]int64{times[0], times[1], times[0], times[1]})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 0)
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=2"), 2)
-	chunk.AddIntervalIndex(0)
-	chunk.AddIntervalIndex(2)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=2"), 2)
+	chunk.AppendIntervalIndex(0)
+	chunk.AppendIntervalIndex(2)
 	chunk.Column(0).AppendFloatValues([]float64{1.1, 2.2, 3.3, 4.4})
 	chunk.Column(0).AppendManyNotNil(4)
 	return chunk
@@ -96,10 +166,10 @@ func BuildPromSubqueryInChunk3() executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("m1")
 	chunk.AppendTimes([]int64{times[5], times[6], times[5], times[6]})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 0)
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=2"), 2)
-	chunk.AddIntervalIndex(0)
-	chunk.AddIntervalIndex(2)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=2"), 2)
+	chunk.AppendIntervalIndex(0)
+	chunk.AppendIntervalIndex(2)
 	chunk.Column(0).AppendFloatValues([]float64{1.1, 2.2, 3.3, 4.4})
 	chunk.Column(0).AppendManyNotNil(4)
 	return chunk
@@ -110,10 +180,10 @@ func BuildPromSubqueryInChunk4() executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("m1")
 	chunk.AppendTimes([]int64{times[0], times[0], times[1], times[2]})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 0)
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=2"), 1)
-	chunk.AddIntervalIndex(0)
-	chunk.AddIntervalIndex(1)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=2"), 1)
+	chunk.AppendIntervalIndex(0)
+	chunk.AppendIntervalIndex(1)
 	chunk.Column(0).AppendFloatValues([]float64{1.1, 2.2, 3.3, 4.4})
 	chunk.Column(0).AppendManyNotNil(4)
 	return chunk
@@ -124,10 +194,10 @@ func BuildPromSubqueryInChunk5() executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("m1")
 	chunk.AppendTimes([]int64{times[0], times[1], times[2], times[3]})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 0)
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 1)
-	chunk.AddIntervalIndex(0)
-	chunk.AddIntervalIndex(2)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 1)
+	chunk.AppendIntervalIndex(0)
+	chunk.AppendIntervalIndex(2)
 	chunk.Column(0).AppendFloatValues([]float64{1.1, 2.2, 3.3, 4.4})
 	chunk.Column(0).AppendManyNotNil(4)
 	return chunk
@@ -138,10 +208,10 @@ func BuildPromSubqueryInChunk6() executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("m1")
 	chunk.AppendTimes([]int64{times[0], times[1], times[5], times[6]})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 0)
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 3)
-	chunk.AddIntervalIndex(0)
-	chunk.AddIntervalIndex(3)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 3)
+	chunk.AppendIntervalIndex(0)
+	chunk.AppendIntervalIndex(3)
 	chunk.Column(0).AppendFloatValues([]float64{1.1, 2.2, 3.3, 4.4})
 	chunk.Column(0).AppendManyNotNil(4)
 	return chunk
@@ -152,8 +222,8 @@ func BuildPromSubqueryInChunk7() executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("m1")
 	chunk.AppendTimes([]int64{times[0], times[1]})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 0)
-	chunk.AddIntervalIndex(0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 0)
+	chunk.AppendIntervalIndex(0)
 	chunk.Column(0).AppendFloatValues([]float64{1.1, 2.2})
 	chunk.Column(0).AppendManyNotNil(2)
 	return chunk
@@ -164,8 +234,8 @@ func BuildPromSubqueryInChunk8() executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("m1")
 	chunk.AppendTimes([]int64{times[0], times[1]})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=2"), 0)
-	chunk.AddIntervalIndex(0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=2"), 0)
+	chunk.AppendIntervalIndex(0)
 	chunk.Column(0).AppendFloatValues([]float64{3.3, 4.4})
 	chunk.Column(0).AppendManyNotNil(2)
 	return chunk
@@ -176,10 +246,10 @@ func BuildPromSubqueryInChunk9() executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("m1")
 	chunk.AppendTimes([]int64{times[0], times[1], times[3], times[4]})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 0)
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 3)
-	chunk.AddIntervalIndex(0)
-	chunk.AddIntervalIndex(3)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 3)
+	chunk.AppendIntervalIndex(0)
+	chunk.AppendIntervalIndex(3)
 	chunk.Column(0).AppendFloatValues([]float64{1.1, 2.2, 3.3, 4.4})
 	chunk.Column(0).AppendManyNotNil(4)
 	return chunk
@@ -189,10 +259,10 @@ func BuildPromSubqueryInChunk10() executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("m1")
 	chunk.AppendTimes([]int64{times[0], times[1], times[3], times[4]})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 0)
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 3)
-	chunk.AddIntervalIndex(0)
-	chunk.AddIntervalIndex(3)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 3)
+	chunk.AppendIntervalIndex(0)
+	chunk.AppendIntervalIndex(3)
 	chunk.Column(0).AppendFloatValues([]float64{1.1, math.NaN(), 3.3, 4.4})
 	chunk.Column(0).AppendManyNotNil(3)
 	return chunk
@@ -203,10 +273,10 @@ func BuildPromSubqueryInChunk11() executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("m1")
 	chunk.AppendTimes([]int64{times[0], times[1], times[3], times[4]})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 0)
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 3)
-	chunk.AddIntervalIndex(0)
-	chunk.AddIntervalIndex(3)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 3)
+	chunk.AppendIntervalIndex(0)
+	chunk.AppendIntervalIndex(3)
 	chunk.Column(0).AppendFloatValues([]float64{4.4, 3.3, 2.2, 1.1})
 	chunk.Column(0).AppendManyNotNil(4)
 	return chunk
@@ -217,8 +287,8 @@ func BuildPromSubqueryInChunk12() executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("m1")
 	chunk.AppendTimes([]int64{1})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 0)
-	chunk.AddIntervalIndex(0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 0)
+	chunk.AppendIntervalIndex(0)
 	chunk.Column(0).AppendFloatValues([]float64{1})
 	chunk.Column(0).AppendManyNotNil(1)
 	return chunk
@@ -229,10 +299,10 @@ func BuildPromSubqueryResult1() []executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("")
 	chunk.AppendTimes([]int64{times[2], times[2]})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 0)
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=2"), 1)
-	chunk.AddIntervalIndex(0)
-	chunk.AddIntervalIndex(1)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=2"), 1)
+	chunk.AppendIntervalIndex(0)
+	chunk.AppendIntervalIndex(1)
 	AppendFloatValues(chunk, 0, []float64{1100, 1100.0000000000005}, []bool{true, true})
 	return []executor.Chunk{chunk}
 }
@@ -242,8 +312,8 @@ func BuildPromSubqueryResult2() []executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("")
 	chunk.AppendTimes([]int64{times[2]})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=2"), 0)
-	chunk.AddIntervalIndex(0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=2"), 0)
+	chunk.AppendIntervalIndex(0)
 	AppendFloatValues(chunk, 0, []float64{1100.0000000000005}, []bool{true})
 	return []executor.Chunk{chunk}
 }
@@ -253,8 +323,8 @@ func BuildPromSubqueryResult3() []executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("")
 	chunk.AppendTimes([]int64{times[2], times[4]})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 0)
-	chunk.AddIntervalIndex(0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 0)
+	chunk.AppendIntervalIndex(0)
 	AppendFloatValues(chunk, 0, []float64{1099.9999999999998, 1100}, []bool{true, true})
 	return []executor.Chunk{chunk}
 }
@@ -264,8 +334,8 @@ func BuildPromSubqueryResult_Irate3() []executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("")
 	chunk.AppendTimes([]int64{times[2], times[4]})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 0)
-	chunk.AddIntervalIndex(0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 0)
+	chunk.AppendIntervalIndex(0)
 	AppendFloatValues(chunk, 0, []float64{1099.9999999999995, 1100.0000000000005}, []bool{true, true})
 	return []executor.Chunk{chunk}
 }
@@ -275,8 +345,8 @@ func BuildPromSubqueryResult4() []executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("")
 	chunk.AppendTimes([]int64{times[2]})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 0)
-	chunk.AddIntervalIndex(0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 0)
+	chunk.AppendIntervalIndex(0)
 	AppendFloatValues(chunk, 0, []float64{1100}, []bool{true})
 	return []executor.Chunk{chunk}
 }
@@ -285,10 +355,10 @@ func BuildPromSubqueryResult5() []executor.Chunk {
 	rowDataType := buildPromBinOpOutputRowDataType()
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("")
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 0)
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=2"), 2)
-	chunk.AddIntervalIndex(0)
-	chunk.AddIntervalIndex(2)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=2"), 2)
+	chunk.AppendIntervalIndex(0)
+	chunk.AppendIntervalIndex(2)
 	chunk.AppendTimes([]int64{times[2], times[4], times[2], times[4]})
 	AppendFloatValues(chunk, 0, []float64{1.1, 2.2, 3.3, 4.4}, []bool{true, true, true, true})
 	return []executor.Chunk{chunk}
@@ -298,10 +368,10 @@ func BuildPromSubqueryResult6() []executor.Chunk {
 	rowDataType := buildPromBinOpOutputRowDataType()
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("")
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 0)
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=2"), 2)
-	chunk.AddIntervalIndex(0)
-	chunk.AddIntervalIndex(2)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=2"), 2)
+	chunk.AppendIntervalIndex(0)
+	chunk.AppendIntervalIndex(2)
 	chunk.AppendTimes([]int64{times[2], times[4], times[2], times[4]})
 	AppendFloatValues(chunk, 0, []float64{2.2, 2.2, 4.4, 4.4}, []bool{true, true, true, true})
 	return []executor.Chunk{chunk}
@@ -311,10 +381,10 @@ func BuildPromSubqueryResult7() []executor.Chunk {
 	rowDataType := buildPromBinOpOutputRowDataType()
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("")
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 0)
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=2"), 2)
-	chunk.AddIntervalIndex(0)
-	chunk.AddIntervalIndex(2)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=2"), 2)
+	chunk.AppendIntervalIndex(0)
+	chunk.AppendIntervalIndex(2)
 	chunk.AppendTimes([]int64{times[2], times[4], times[2], times[4]})
 	AppendFloatValues(chunk, 0, []float64{3.3000000000000003, 2.2, 7.7, 4.4}, []bool{true, true, true, true})
 	return []executor.Chunk{chunk}
@@ -324,10 +394,10 @@ func BuildPromSubqueryResult8() []executor.Chunk {
 	rowDataType := buildPromBinOpOutputRowDataType()
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("")
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 0)
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=2"), 2)
-	chunk.AddIntervalIndex(0)
-	chunk.AddIntervalIndex(2)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=2"), 2)
+	chunk.AppendIntervalIndex(0)
+	chunk.AppendIntervalIndex(2)
 	chunk.AppendTimes([]int64{times[2], times[4], times[2], times[4]})
 	AppendFloatValues(chunk, 0, []float64{1.6500000000000001, 2.2, 3.85, 4.4}, []bool{true, true, true, true})
 	return []executor.Chunk{chunk}
@@ -337,10 +407,10 @@ func BuildPromSubqueryResult9() []executor.Chunk {
 	rowDataType := buildPromBinOpOutputRowDataType()
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("")
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 0)
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=2"), 2)
-	chunk.AddIntervalIndex(0)
-	chunk.AddIntervalIndex(2)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=2"), 2)
+	chunk.AppendIntervalIndex(0)
+	chunk.AppendIntervalIndex(2)
 	chunk.AppendTimes([]int64{times[2], times[4], times[2], times[4]})
 	AppendFloatValues(chunk, 0, []float64{2, 1, 2, 1}, []bool{true, true, true, true})
 	return []executor.Chunk{chunk}
@@ -350,8 +420,8 @@ func BuildPromSubqueryResult_Last1() []executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("")
 	chunk.AppendTimes([]int64{times[2], times[4]})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 0)
-	chunk.AddIntervalIndex(0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 0)
+	chunk.AppendIntervalIndex(0)
 	AppendFloatValues(chunk, 0, []float64{2.2, 4.4}, []bool{true, true})
 	return []executor.Chunk{chunk}
 }
@@ -361,8 +431,8 @@ func BuildPromSubqueryResult_Last2() []executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("")
 	chunk.AppendTimes([]int64{times[8], times[10]})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 0)
-	chunk.AddIntervalIndex(0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 0)
+	chunk.AppendIntervalIndex(0)
 	AppendFloatValues(chunk, 0, []float64{}, []bool{false, false})
 	return []executor.Chunk{chunk}
 }
@@ -372,8 +442,8 @@ func BuildPromSubqueryResult_Last3() []executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("")
 	chunk.AppendTimes([]int64{times[2], times[4]})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 0)
-	chunk.AddIntervalIndex(0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 0)
+	chunk.AppendIntervalIndex(0)
 	AppendFloatValues(chunk, 0, []float64{2.2, 4.4}, []bool{true, true})
 	return []executor.Chunk{chunk}
 }
@@ -383,10 +453,10 @@ func BuildPromSubqueryResult_Last4() []executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("")
 	chunk.AppendTimes([]int64{times[0], times[0]})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 0)
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=2"), 1)
-	chunk.AddIntervalIndex(0)
-	chunk.AddIntervalIndex(1)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=2"), 1)
+	chunk.AppendIntervalIndex(0)
+	chunk.AppendIntervalIndex(1)
 	AppendFloatValues(chunk, 0, []float64{1.1, 3.3}, []bool{true, true})
 	return []executor.Chunk{chunk}
 }
@@ -396,8 +466,8 @@ func BuildPromSubqueryResult_Last5() []executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("")
 	chunk.AppendTimes([]int64{times[6]})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 0)
-	chunk.AddIntervalIndex(0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 0)
+	chunk.AppendIntervalIndex(0)
 	AppendFloatValues(chunk, 0, []float64{4.4}, []bool{true})
 	return []executor.Chunk{chunk}
 }
@@ -407,8 +477,8 @@ func BuildPromSubqueryResult_Quantile1() []executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("")
 	chunk.AppendTimes([]int64{times[8], times[10]})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 0)
-	chunk.AddIntervalIndex(0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 0)
+	chunk.AppendIntervalIndex(0)
 	AppendFloatValues(chunk, 0, []float64{}, []bool{false, false})
 	return []executor.Chunk{chunk}
 }
@@ -418,8 +488,8 @@ func BuildPromSubqueryResult_Quantile2() []executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("")
 	chunk.AppendTimes([]int64{times[4]})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=2"), 0)
-	chunk.AddIntervalIndex(0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=2"), 0)
+	chunk.AppendIntervalIndex(0)
 	AppendFloatValues(chunk, 0, []float64{4.4}, []bool{true})
 	return []executor.Chunk{chunk}
 }
@@ -429,8 +499,8 @@ func BuildPromSubqueryResult_Quantile3() []executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("")
 	chunk.AppendTimes([]int64{times[4]})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=2"), 0)
-	chunk.AddIntervalIndex(0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=2"), 0)
+	chunk.AppendIntervalIndex(0)
 	AppendFloatValues(chunk, 0, []float64{math.Inf(-1)}, []bool{true})
 	return []executor.Chunk{chunk}
 }
@@ -440,8 +510,8 @@ func BuildPromSubqueryResult_Quantile4() []executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("")
 	chunk.AppendTimes([]int64{times[4]})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=2"), 0)
-	chunk.AddIntervalIndex(0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=2"), 0)
+	chunk.AppendIntervalIndex(0)
 	AppendFloatValues(chunk, 0, []float64{math.Inf(1)}, []bool{true})
 	return []executor.Chunk{chunk}
 }
@@ -451,8 +521,8 @@ func BuildPromSubqueryResult_Quantile5() []executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("")
 	chunk.AppendTimes([]int64{times[4], times[6]})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 0)
-	chunk.AddIntervalIndex(0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 0)
+	chunk.AppendIntervalIndex(0)
 	AppendFloatValues(chunk, 0, []float64{4.4, 4.4}, []bool{true, true})
 	return []executor.Chunk{chunk}
 }
@@ -462,8 +532,8 @@ func BuildPromSubqueryResult_Quantile6() []executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("")
 	chunk.AppendTimes([]int64{times[4], times[6]})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 0)
-	chunk.AddIntervalIndex(0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 0)
+	chunk.AppendIntervalIndex(0)
 	AppendFloatValues(chunk, 0, []float64{2.926, 4.4}, []bool{true, true})
 	return []executor.Chunk{chunk}
 }
@@ -473,10 +543,10 @@ func BuildPromSubqueryResult_Quantile7() []executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("")
 	chunk.AppendTimes([]int64{times[1], times[1]})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 0)
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=2"), 1)
-	chunk.AddIntervalIndex(0)
-	chunk.AddIntervalIndex(1)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=2"), 1)
+	chunk.AppendIntervalIndex(0)
+	chunk.AppendIntervalIndex(1)
 	AppendFloatValues(chunk, 0, []float64{1.6500000000000001, 3.85}, []bool{true, true})
 	return []executor.Chunk{chunk}
 }
@@ -486,8 +556,8 @@ func BuildPromSubqueryResult_Changes1() []executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("")
 	chunk.AppendTimes([]int64{times[1], times[1]})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 0)
-	chunk.AddIntervalIndex(0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 0)
+	chunk.AppendIntervalIndex(0)
 
 	AppendFloatValues(chunk, 0, []float64{}, []bool{false})
 	return []executor.Chunk{chunk}
@@ -498,8 +568,8 @@ func BuildPromSubqueryResult_Changes2() []executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("")
 	chunk.AppendTimes([]int64{times[3], times[6]})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 0)
-	chunk.AddIntervalIndex(0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 0)
+	chunk.AppendIntervalIndex(0)
 
 	AppendFloatValues(chunk, 0, []float64{2, 1}, []bool{true, true})
 	return []executor.Chunk{chunk}
@@ -510,8 +580,8 @@ func BuildPromSubqueryResult_Changes3() []executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("")
 	chunk.AppendTimes([]int64{times[3], times[6]})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 0)
-	chunk.AddIntervalIndex(0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 0)
+	chunk.AppendIntervalIndex(0)
 
 	AppendFloatValues(chunk, 0, []float64{0, 0}, []bool{true, true})
 	return []executor.Chunk{chunk}
@@ -522,8 +592,8 @@ func BuildPromSubqueryResult_Changes4() []executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("")
 	chunk.AppendTimes([]int64{times[3]})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=2"), 0)
-	chunk.AddIntervalIndex(0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=2"), 0)
+	chunk.AppendIntervalIndex(0)
 
 	AppendFloatValues(chunk, 0, []float64{0}, []bool{true})
 	return []executor.Chunk{chunk}
@@ -534,8 +604,8 @@ func BuildPromSubqueryResult_Resets1() []executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("")
 	chunk.AppendTimes([]int64{times[3], times[6]})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 0)
-	chunk.AddIntervalIndex(0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 0)
+	chunk.AppendIntervalIndex(0)
 
 	AppendFloatValues(chunk, 0, []float64{0, 0}, []bool{true, true})
 	return []executor.Chunk{chunk}
@@ -546,8 +616,8 @@ func BuildPromSubqueryResult_Resets2() []executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("")
 	chunk.AppendTimes([]int64{times[3], times[6]})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 0)
-	chunk.AddIntervalIndex(0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 0)
+	chunk.AppendIntervalIndex(0)
 
 	AppendFloatValues(chunk, 0, []float64{2, 1}, []bool{true, true})
 	return []executor.Chunk{chunk}
@@ -558,8 +628,8 @@ func BuildPromSubqueryResult_HoltWinters1() []executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("")
 	chunk.AppendTimes([]int64{times[3], times[6]})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 0)
-	chunk.AddIntervalIndex(0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 0)
+	chunk.AppendIntervalIndex(0)
 
 	AppendFloatValues(chunk, 0, []float64{3.3, 4.4}, []bool{true, true})
 	return []executor.Chunk{chunk}
@@ -570,8 +640,8 @@ func BuildPromSubqueryResult_LowStepInvariantFix() []executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("")
 	chunk.AppendTimes([]int64{1000000})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 0)
-	chunk.AddIntervalIndex(0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 0)
+	chunk.AppendIntervalIndex(0)
 
 	AppendFloatValues(chunk, 0, []float64{3}, []bool{true})
 	return []executor.Chunk{chunk}
@@ -586,7 +656,8 @@ func PromRangeVectorTransformTestBase(t *testing.T, chunks []executor.Chunk, cal
 		panic("err")
 	}
 	checkResult := func(chunk executor.Chunk) error {
-		PromResultCompareMultiCol(chunk, rChunk, t)
+		err := PromResultCompareMultiCol(chunk, rChunk)
+		assert.Equal(t, err, nil)
 		return nil
 	}
 	sink := NewSinkFromFunction(outRowDataType, checkResult)
@@ -862,11 +933,11 @@ func BuildPromSubQueryInChunk(time []int64, tags []string, indices []int, floatV
 	chunk := b.NewChunk("m1")
 	chunk.AppendTimes(time)
 	for i, tag := range tags {
-		chunk.AddTagAndIndex(*ParseChunkTags(tag), indices[i])
+		chunk.AppendTagsAndIndex(*ParseChunkTags(tag), indices[i])
 	}
 
 	for _, index := range indices {
-		chunk.AddIntervalIndex(index)
+		chunk.AppendIntervalIndex(index)
 	}
 	chunk.Column(0).AppendFloatValues(floatValues)
 	chunk.Column(0).AppendManyNotNil(len(floatValues))
@@ -879,11 +950,11 @@ func BuildPromSubQueryResult(time []int64, tags []string, indices []int, floatVa
 	chunk := b.NewChunk("")
 	chunk.AppendTimes(time)
 	for i, tag := range tags {
-		chunk.AddTagAndIndex(*ParseChunkTags(tag), indices[i])
+		chunk.AppendTagsAndIndex(*ParseChunkTags(tag), indices[i])
 	}
 
 	for _, index := range indices {
-		chunk.AddIntervalIndex(index)
+		chunk.AppendIntervalIndex(index)
 	}
 	AppendFloatValues(chunk, 0, floatValues, boolValues)
 	return []executor.Chunk{chunk}

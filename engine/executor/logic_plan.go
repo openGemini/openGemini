@@ -44,7 +44,7 @@ var (
 	_ LogicalPlan = &LogicalFilterBlank{}
 	_ LogicalPlan = &LogicalMerge{}
 	_ LogicalPlan = &LogicalSortMerge{}
-	_ LogicalPlan = &LogicalDedupe{}
+	_ LogicalPlan = &LogicalDistinct{}
 	_ LogicalPlan = &LogicalInterval{}
 	_ LogicalPlan = &LogicalReader{}
 	_ LogicalPlan = &LogicalTagSubset{}
@@ -61,6 +61,7 @@ var (
 	_ LogicalPlan = &LogicalColumnStoreReader{}
 	_ LogicalPlan = &LogicalJoin{}
 	_ LogicalPlan = &LogicalBinOp{}
+	_ LogicalPlan = &LogicalIn{}
 )
 
 type AggLevel uint8
@@ -534,16 +535,12 @@ func (p *LogicalIncHashAgg) Digest() string {
 	p.digestBuff.WriteString(")")
 	p.digestBuff.WriteString("(")
 
-	firstCall := true
-	for _, order := range p.callsOrder {
+	for i, order := range p.callsOrder {
 		call := p.calls[order]
-		if firstCall {
-			call.WriteString(&p.digestBuff)
-			firstCall = false
-			continue
+		if i > 0 {
+			p.digestBuff.WriteString(",")
 		}
-		p.digestBuff.WriteString(",")
-		call.WriteString(&p.digestBuff)
+		call.RenderBytes(&p.digestBuff, nil)
 	}
 	p.digestBuff.WriteString(")")
 	return p.digestBuff.String()
@@ -611,58 +608,50 @@ func (p *LogicalAggregate) New(inputs []hybridqp.QueryNode, schema hybridqp.Cata
 	return agg
 }
 
-func (p *LogicalAggregate) inferAggLevel() AggLevel {
-	_, ok := p.Children()[0].(*HeuVertex)
-	if !ok {
-		exchange, ok := p.Children()[0].(*LogicalExchange)
-		if ok {
-			if exchange.eType == NODE_EXCHANGE || exchange.eType == SINGLE_SHARD_EXCHANGE {
+func (p *LogicalAggregate) InferAggLevel() AggLevel {
+	if len(p.Children()) != 1 {
+		return UnknownLevel
+	}
+	child := p.Children()[0]
+	getNodeLevel := func(queryNode hybridqp.QueryNode) AggLevel {
+		switch node := queryNode.(type) {
+		case *LogicalSortAppend:
+			return SinkLevel
+		case *LogicalExchange:
+			if node.eType == NODE_EXCHANGE || node.eType == SINGLE_SHARD_EXCHANGE {
 				return SinkLevel
 			}
 			return MiddleLevel
-		}
-		_, ok = p.Children()[0].(*LogicalReader)
-		if ok {
+		default:
 			return SourceLevel
 		}
-		return SourceLevel
 	}
-	exchange, ok := p.Children()[0].(*HeuVertex).node.(*LogicalExchange)
-	if ok {
-		if exchange.eType == NODE_EXCHANGE || exchange.eType == SINGLE_SHARD_EXCHANGE {
-			return SinkLevel
-		}
-		return MiddleLevel
+	if vertex, ok := child.(*HeuVertex); ok {
+		return getNodeLevel(vertex.node)
 	}
-	_, ok = p.Children()[0].(*HeuVertex).node.(*LogicalReader)
-	if ok {
-		return SourceLevel
-	}
-	return SourceLevel
+	return getNodeLevel(child)
 }
 
-func (p *LogicalAggregate) inferPromCallLevel() AggLevel {
-	_, ok := p.Children()[0].(*HeuVertex)
-	if !ok {
-		_, ok = p.Children()[0].(*LogicalSeries)
-		if ok {
+func (p *LogicalAggregate) InferPromAggLevel() AggLevel {
+	if len(p.Children()) != 1 {
+		return UnknownLevel
+	}
+	child := p.Children()[0]
+	switch vertex := child.(type) {
+	case *HeuVertex:
+		switch vertex.node.(type) {
+		case *LogicalSeries:
 			return SourceLevel
+		default:
+			return SinkLevel
 		}
-		_, ok = p.Children()[0].(*LogicalAggregate)
-		if ok {
-			return MiddleLevel
-		}
-		return SinkLevel
-	}
-	_, ok = p.Children()[0].(*HeuVertex).node.(*LogicalExchange)
-	if ok {
-		return SinkLevel
-	}
-	_, ok = p.Children()[0].(*HeuVertex).node.(*LogicalSeries)
-	if ok {
+	case *LogicalSeries:
 		return SourceLevel
+	case *LogicalAggregate:
+		return MiddleLevel
+	default:
+		return SinkLevel
 	}
-	return SinkLevel
 }
 
 func (p *LogicalAggregate) getOGSketchOp(k string, level AggLevel, cc map[string]*hybridqp.OGSketchCompositeOperator) *influxql.Call {
@@ -725,12 +714,12 @@ func (p *LogicalAggregate) init() {
 	var level AggLevel
 	var cc map[string]*hybridqp.OGSketchCompositeOperator
 	if p.isPercentileOGSketch {
-		level = p.inferAggLevel()
+		level = p.InferAggLevel()
 		cc = p.schema.CompositeCall()
 	}
 	var pc map[string]*hybridqp.PromNestedCall
 	if p.isPromNestedCall {
-		level = p.inferPromCallLevel()
+		level = p.InferPromAggLevel()
 		pc = p.schema.PromNestedCall()
 	}
 	refs := p.inputs[0].RowDataType().MakeRefs()
@@ -812,6 +801,12 @@ func (p *LogicalAggregate) CountToSum() {
 		if call.Name == "count" || call.Name == "count_prom" {
 			call.Name = "sum"
 			p.digest = false
+		}
+		if call.Name == nagtName {
+			if expr, ok := call.Args[3].(*influxql.StringLiteral); ok && expr.Val == "count" {
+				expr.Val = "sum"
+				p.digest = false
+			}
 		}
 	}
 }
@@ -1356,111 +1351,49 @@ func (p *LogicalSortAppend) Digest() string {
 	return string(p.digestName)
 }
 
-type LogicalJoin struct {
-	LogicalPlanMulti
-}
-
-func NewLogicalJoin(inputs []hybridqp.QueryNode, schema hybridqp.Catalog) *LogicalJoin {
-	join := &LogicalJoin{
-		LogicalPlanMulti: LogicalPlanMulti{LogicalPlanBase{
-			id:     hybridqp.GenerateNodeId(),
-			schema: schema,
-			rt:     nil,
-			ops:    nil,
-			inputs: inputs,
-		}},
-	}
-	join.init()
-	return join
-}
-
-// impl me
-func (p *LogicalJoin) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
-	return nil
-}
-
-func (p *LogicalJoin) DeriveOperations() {
-	p.init()
-}
-
-func (p *LogicalJoin) init() {
-	if !ValidateFieldsFromPlans(p.inputs) {
-		panic("validate all input of join failed")
-	}
-	input := p.inputs[0]
-	p.InitRef(input)
-}
-
-func (p *LogicalJoin) Clone() hybridqp.QueryNode {
-	clone := &LogicalJoin{}
-	*clone = *p
-	clone.id = hybridqp.GenerateNodeId()
-	return clone
-}
-
-func (p *LogicalJoin) Explain(writer LogicalPlanWriter) {
-	p.ExplainIterms(writer)
-	writer.Explain(p)
-}
-
-func (p *LogicalJoin) Type() string {
-	return GetType(p)
-}
-
-func (p *LogicalJoin) Digest() string {
-	if p.digest {
-		return string(p.digestName)
-	}
-	p.digest = true
-	p.digestName = p.digestName[:0]
-	p.digestName = encoding.MarshalUint32(p.digestName, uint32(p.LogicPlanType()))
-	p.digestName = encoding.MarshalUint64(p.digestName, p.inputs[0].ID())
-	return string(p.digestName)
-}
-
-type LogicalDedupe struct {
+type LogicalDistinct struct {
 	LogicalPlanSingle
 }
 
-// NewLogicalDedupe unused
-func NewLogicalDedupe(input hybridqp.QueryNode, schema hybridqp.Catalog) *LogicalDedupe {
-	dedupe := &LogicalDedupe{
+func NewLogicalDistinct(input hybridqp.QueryNode, schema hybridqp.Catalog) *LogicalDistinct {
+	distinct := &LogicalDistinct{
 		LogicalPlanSingle: *NewLogicalPlanSingle(input, schema),
 	}
 
-	dedupe.init()
+	distinct.init()
 
-	return dedupe
+	return distinct
 }
 
 // impl me
-func (p *LogicalDedupe) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+func (p *LogicalDistinct) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
 	return nil
 }
 
-func (p *LogicalDedupe) init() {
+func (p *LogicalDistinct) init() {
 	p.InitRef(p.inputs[0])
+	hybridqp.WalkQueryNodeInPreOrder(&hybridqp.SetDistinctVisitor{}, p)
 }
 
-func (p *LogicalDedupe) DeriveOperations() {}
+func (p *LogicalDistinct) DeriveOperations() {}
 
-func (p *LogicalDedupe) Clone() hybridqp.QueryNode {
-	clone := &LogicalDedupe{}
+func (p *LogicalDistinct) Clone() hybridqp.QueryNode {
+	clone := &LogicalDistinct{}
 	*clone = *p
 	clone.id = hybridqp.GenerateNodeId()
 	return clone
 }
 
-func (p *LogicalDedupe) Explain(writer LogicalPlanWriter) {
+func (p *LogicalDistinct) Explain(writer LogicalPlanWriter) {
 	p.ExplainIterms(writer)
 	writer.Explain(p)
 }
 
-func (p *LogicalDedupe) Type() string {
+func (p *LogicalDistinct) Type() string {
 	return GetType(p)
 }
 
-func (p *LogicalDedupe) Digest() string {
+func (p *LogicalDistinct) Digest() string {
 	if p.digest {
 		return string(p.digestName)
 	}
@@ -1926,8 +1859,59 @@ func (p *LogicalSubQuery) DeriveOperations() {
 	p.init()
 }
 
+func LengthOfPrefixForField(name string, aliases []string) int {
+	for _, alias := range aliases {
+		if alias == "" {
+			continue
+		}
+		if strings.HasPrefix(name, alias+".") {
+			return len(alias)
+		}
+	}
+	return 0
+}
+
 func (p *LogicalSubQuery) init() {
-	p.initForSink()
+	var mstAlias []string
+	var haveAlias bool
+	var havePrefix bool
+	if len(p.Schema().Sources()) > 0 {
+		alias := p.Schema().Sources()[0].GetName()
+		if alias != "" {
+			mstAlias = strings.Split(alias, ",")
+		}
+		haveAlias = len(mstAlias) > 0
+		if haveAlias {
+			projectFields := p.LogicalPlanSingle.inputs[0].Schema().GetColumnNames()
+			havePrefix = len(projectFields) > 0 && LengthOfPrefixForField(projectFields[0], mstAlias) > 0
+		}
+	}
+
+	schema := p.schema
+	tableExprs := make([]*influxql.VarRef, 0, len(schema.Refs()))
+
+	for _, ref := range schema.Refs() {
+		if haveAlias && LengthOfPrefixForField(ref.Val, mstAlias) == 0 {
+			continue
+		}
+		tableExprs = append(tableExprs, ref)
+	}
+	sort.Sort(influxql.VarRefPointers(tableExprs))
+
+	refs := make([]influxql.VarRef, len(tableExprs))
+	p.ops = make([]hybridqp.ExprOptions, len(tableExprs))
+
+	for i, expr := range tableExprs {
+		clone := influxql.CloneVarRef(expr)
+		derivedRef := schema.DerivedRef(tableExprs[i])
+		if haveAlias && !havePrefix && LengthOfPrefixForField(clone.Val, mstAlias) > 0 {
+			clone.Val = clone.Val[LengthOfPrefixForField(clone.Val, mstAlias)+1:]
+		}
+		p.ops[i] = hybridqp.ExprOptions{Expr: clone, Ref: derivedRef}
+		refs[i] = derivedRef
+	}
+
+	p.rt = hybridqp.NewRowDataTypeImpl(refs...)
 }
 
 func (p *LogicalSubQuery) Clone() hybridqp.QueryNode {
@@ -2519,7 +2503,7 @@ type LogicalPlanBuilder interface {
 	Limit(parameters LimitTransformParameters) LogicalPlanBuilder
 	Filter() LogicalPlanBuilder
 	Merge() LogicalPlanBuilder
-	Dedupe() LogicalPlanBuilder
+	Distinct() LogicalPlanBuilder
 	Interval() LogicalPlanBuilder
 	IndexScan() LogicalPlanBuilder
 	FilterBlank() LogicalPlanBuilder
@@ -2540,6 +2524,7 @@ type LogicalPlanBuilder interface {
 	CreateNodePlan(hybridqp.QueryNode, []hybridqp.Trait) (hybridqp.QueryNode, error)
 	CreateLimit(hybridqp.QueryNode) (hybridqp.QueryNode, error)
 	CreateAggregate(hybridqp.QueryNode) (hybridqp.QueryNode, error)
+	CreateDistinct(hybridqp.QueryNode) (hybridqp.QueryNode, error)
 }
 
 type ExprRewriteRule interface {
@@ -2594,6 +2579,13 @@ func (b *LogicalPlanBuilderImpl) Push(node hybridqp.QueryNode) LogicalPlanBuilde
 func (b *LogicalPlanBuilderImpl) Aggregate() LogicalPlanBuilder {
 	last := b.stack.Pop()
 	plan := NewLogicalAggregate(last, b.schema)
+	b.stack.Push(plan)
+	return b
+}
+
+func (b *LogicalPlanBuilderImpl) Align() LogicalPlanBuilder {
+	last := b.stack.Pop()
+	plan := NewLogicalAlign(last, b.schema)
 	b.stack.Push(plan)
 	return b
 }
@@ -2729,9 +2721,9 @@ func (b *LogicalPlanBuilderImpl) Merge() LogicalPlanBuilder {
 	return b
 }
 
-func (b *LogicalPlanBuilderImpl) Dedupe() LogicalPlanBuilder {
+func (b *LogicalPlanBuilderImpl) Distinct() LogicalPlanBuilder {
 	last := b.stack.Pop()
-	plan := NewLogicalDedupe(last, b.schema)
+	plan := NewLogicalDistinct(last, b.schema)
 	b.stack.Push(plan)
 	return b
 }
@@ -3059,6 +3051,20 @@ func (b *LogicalPlanBuilderImpl) CreateLimit(input hybridqp.QueryNode) (hybridqp
 		limitType := b.schema.LimitType()
 		limit, offset := b.schema.LimitAndOffset()
 		b.Limit(LimitTransformParameters{Limit: limit + offset, Offset: 0, LimitType: limitType})
+	}
+
+	return b.Build()
+}
+
+func (b *LogicalPlanBuilderImpl) CreateDistinct(input hybridqp.QueryNode) (hybridqp.QueryNode, error) {
+	if input == nil {
+		return nil, nil
+	}
+
+	b.Push(input)
+
+	if b.schema.HasDistinct() {
+		b.Distinct()
 	}
 
 	return b.Build()
@@ -3616,8 +3622,7 @@ func (p *LogicalFullJoin) DeriveOperations() {
 }
 
 func (p *LogicalFullJoin) init() {
-	p.InitRef(p.right)
-	p.InitRef(p.left)
+	p.initBothRef(p.left, p.right)
 }
 
 func (p *LogicalFullJoin) Clone() hybridqp.QueryNode {
@@ -3668,6 +3673,255 @@ func (p *LogicalFullJoin) Digest() string {
 	p.digestName = encoding.MarshalUint32(p.digestName, uint32(p.LogicPlanType()))
 	p.digestName = encoding.MarshalUint64(p.digestName, p.left.ID())
 	p.digestName = encoding.MarshalUint64(p.digestName, p.right.ID())
+	return string(p.digestName)
+}
+
+type LogicalJoin struct {
+	left      hybridqp.QueryNode
+	right     hybridqp.QueryNode
+	condition influxql.Expr
+	joinType  influxql.JoinType
+	LogicalPlanBase
+}
+
+func NewLogicalJoin(left hybridqp.QueryNode, right hybridqp.QueryNode, condition influxql.Expr, joinType influxql.JoinType, schema hybridqp.Catalog) *LogicalJoin {
+	join := &LogicalJoin{
+		left:      left,
+		right:     right,
+		condition: condition,
+		joinType:  joinType,
+		LogicalPlanBase: LogicalPlanBase{
+			id:     hybridqp.GenerateNodeId(),
+			schema: schema,
+			rt:     nil,
+			ops:    nil,
+		},
+	}
+	join.init()
+	return join
+}
+
+// impl me
+func (p *LogicalJoin) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	return nil
+}
+
+func (p *LogicalJoin) DeriveOperations() {
+	p.init()
+}
+
+func (p *LogicalJoin) init() {
+	p.initBothRef(p.left, p.right)
+}
+
+func (p *LogicalJoin) Clone() hybridqp.QueryNode {
+	clone := &LogicalJoin{}
+	*clone = *p
+	clone.id = hybridqp.GenerateNodeId()
+	return clone
+}
+
+func (p *LogicalJoin) Children() []hybridqp.QueryNode {
+	return []hybridqp.QueryNode{p.left, p.right}
+}
+
+func (p *LogicalJoin) ReplaceChildren(children []hybridqp.QueryNode) {
+	if len(children) != 2 {
+		panic("children count in LogicalJoin is not 2")
+	}
+	p.left = children[0]
+	p.right = children[1]
+}
+
+func (p *LogicalJoin) ReplaceChild(ordinal int, child hybridqp.QueryNode) {
+	if ordinal > 1 {
+		panic(fmt.Sprintf("index %d out of range %d", ordinal, 1))
+	}
+	if ordinal == 0 {
+		p.left = child
+	} else {
+		p.right = child
+	}
+}
+
+func (p *LogicalJoin) Explain(writer LogicalPlanWriter) {
+	p.ExplainIterms(writer)
+	writer.Explain(p)
+}
+
+func (p *LogicalJoin) Type() string {
+	return GetType(p)
+}
+
+func (p *LogicalJoin) Digest() string {
+	if p.digest {
+		return string(p.digestName)
+	}
+	p.digest = true
+	p.digestName = p.digestName[:0]
+	p.digestName = encoding.MarshalUint32(p.digestName, uint32(p.joinType))
+	p.digestName = encoding.MarshalUint32(p.digestName, uint32(p.LogicPlanType()))
+	p.digestName = encoding.MarshalUint64(p.digestName, p.left.ID())
+	p.digestName = encoding.MarshalUint64(p.digestName, p.right.ID())
+	return string(p.digestName)
+}
+
+type LogicalCTE struct {
+	LogicalPlanBase
+	cte     *influxql.CTE
+	ctePlan hybridqp.QueryNode
+}
+
+func NewLogicalCTE(cte *influxql.CTE, schema hybridqp.Catalog, ctePlan hybridqp.QueryNode) *LogicalCTE {
+	logicalCTE := &LogicalCTE{
+		LogicalPlanBase: LogicalPlanBase{
+			id:     hybridqp.GenerateNodeId(),
+			schema: schema,
+			rt:     nil,
+			ops:    nil,
+		},
+		cte:     cte,
+		ctePlan: ctePlan,
+	}
+	logicalCTE.init()
+	return logicalCTE
+}
+
+// impl me
+func (p *LogicalCTE) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	return nil
+}
+
+func (p *LogicalCTE) GetCTEPlan() hybridqp.QueryNode {
+	return p.ctePlan
+}
+
+func (p *LogicalCTE) DeriveOperations() {
+	p.init()
+}
+
+func (p *LogicalCTE) init() {
+	schema := p.Schema()
+	tableExprs := make([]*influxql.VarRef, 0, len(schema.Refs()))
+	p.ops = make([]hybridqp.ExprOptions, len(schema.Refs()))
+	refs := make([]influxql.VarRef, len(p.ops))
+
+	for _, ref := range schema.Refs() {
+		tableExprs = append(tableExprs, ref)
+	}
+	sort.Sort(influxql.VarRefPointers(tableExprs))
+
+	// operator input：Expr, operator output：Ref
+	for i, expr := range tableExprs {
+		clone := influxql.CloneVarRef(expr)
+		derivedRef := schema.DerivedRef(clone)
+		refs[i] = derivedRef
+		p.ops[i] = hybridqp.ExprOptions{Expr: clone, Ref: derivedRef}
+	}
+	p.rt = hybridqp.NewRowDataTypeImpl(refs...)
+}
+
+func (p *LogicalCTE) Clone() hybridqp.QueryNode {
+	clone := &LogicalCTE{}
+	*clone = *p
+	clone.id = hybridqp.GenerateNodeId()
+	return clone
+}
+
+func (p *LogicalCTE) ReplaceChildren(children []hybridqp.QueryNode) {
+	p.ctePlan = children[0]
+}
+
+func (p *LogicalCTE) ReplaceChild(ordinal int, child hybridqp.QueryNode) {
+	if ordinal >= 1 {
+		panic(fmt.Sprintf("index %d out of range %d", ordinal, 1))
+	}
+	p.ctePlan = child
+}
+
+func (p *LogicalCTE) Explain(writer LogicalPlanWriter) {
+	p.ExplainIterms(writer)
+	writer.Explain(p)
+}
+
+func (p *LogicalCTE) Type() string {
+	return GetType(p)
+}
+
+func (p *LogicalCTE) Digest() string {
+	if p.digest {
+		return string(p.digestName)
+	}
+	p.digest = true
+	p.digestName = p.digestName[:0]
+	p.digestName = encoding.MarshalUint32(p.digestName, uint32(p.LogicPlanType()))
+	p.digestName = encoding.MarshalUint64(p.digestName, p.ID())
+
+	return string(p.digestName)
+}
+
+type LogicalTableFunction struct {
+	LogicalPlanMulti
+	TableFunctionName string
+	param             string
+}
+
+func NewLogicalTableFunction(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, tableFunctionName string, tableFunctionParam string) *LogicalTableFunction {
+	logicalTableFunction := &LogicalTableFunction{
+		LogicalPlanMulti: LogicalPlanMulti{LogicalPlanBase{
+			id:     hybridqp.GenerateNodeId(),
+			schema: schema,
+			rt:     nil,
+			ops:    nil,
+			inputs: inputs,
+		}},
+		TableFunctionName: tableFunctionName,
+		param:             tableFunctionParam,
+	}
+
+	logicalTableFunction.init()
+
+	return logicalTableFunction
+}
+
+func (p *LogicalTableFunction) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	return nil
+}
+
+func (p *LogicalTableFunction) DeriveOperations() {
+	p.init()
+}
+
+func (p *LogicalTableFunction) init() {
+	for _, input := range p.inputs {
+		p.InitRef(input)
+	}
+}
+
+func (p *LogicalTableFunction) Clone() hybridqp.QueryNode {
+	clone := &LogicalTableFunction{}
+	*clone = *p
+	clone.id = hybridqp.GenerateNodeId()
+	return clone
+}
+
+func (p *LogicalTableFunction) Explain(writer LogicalPlanWriter) {
+	p.ExplainIterms(writer)
+	writer.Explain(p)
+}
+
+func (p *LogicalTableFunction) Type() string {
+	return GetType(p)
+}
+
+func (p *LogicalTableFunction) Digest() string {
+	if p.digest {
+		return string(p.digestName)
+	}
+	p.digest = true
+	p.digestName = p.digestName[:0]
+	p.digestName = encoding.MarshalUint32(p.digestName, uint32(p.LogicPlanType()))
+	p.digestName = encoding.MarshalUint64(p.digestName, p.inputs[0].ID())
 	return string(p.digestName)
 }
 
@@ -3777,7 +4031,7 @@ func NewLogicalHashAgg(input hybridqp.QueryNode, schema hybridqp.Catalog, eType 
 	sort.Strings(agg.callsOrder)
 
 	agg.init()
-	agg.setHashAggType()
+	agg.setHashAggType(schema)
 	return agg
 }
 
@@ -3792,7 +4046,22 @@ func (p *LogicalHashAgg) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalo
 	return agg
 }
 
-func (p *LogicalHashAgg) setHashAggType() {
+func (p *LogicalHashAgg) ExplainIterms(writer LogicalPlanWriter) {
+	writer.Item(strconv.Itoa(int(p.eType)), strconv.Itoa(int(p.hashAggType)))
+	for _, op := range p.ops {
+		writer.Item(op.Ref.String(), op.Expr.String())
+	}
+}
+
+func (p *LogicalHashAgg) setHashAggType(schema hybridqp.Catalog) {
+	if name, ok := schema.HasTopN(); ok && name == nagtName {
+		if p.eType == NODE_EXCHANGE || p.eType == SUBQUERY_EXCHANGE {
+			p.hashAggType = TopN
+		} else {
+			p.hashAggType = Normal
+		}
+		return
+	}
 	if p.eType == NODE_EXCHANGE {
 		p.hashAggType = Fill
 	} else if p.eType == SUBQUERY_EXCHANGE {
@@ -3901,16 +4170,12 @@ func (p *LogicalHashAgg) Digest() string {
 	p.digestBuff.WriteString(")")
 	p.digestBuff.WriteString("(")
 
-	firstCall := true
-	for _, order := range p.callsOrder {
+	for i, order := range p.callsOrder {
 		call := p.calls[order]
-		if firstCall {
-			call.WriteString(&p.digestBuff)
-			firstCall = false
-			continue
+		if i > 0 {
+			p.digestBuff.WriteString(",")
 		}
-		p.digestBuff.WriteString(",")
-		call.WriteString(&p.digestBuff)
+		call.RenderBytes(&p.digestBuff, nil)
 	}
 	p.digestBuff.WriteString(")")
 	return p.digestBuff.String()
@@ -3935,6 +4200,11 @@ func (p *LogicalHashAgg) CountToSum() {
 		if call.Name == "count" {
 			call.Name = "sum"
 			p.digest = false
+		} else if call.Name == nagtName {
+			if expr, ok := call.Args[3].(*influxql.StringLiteral); ok && expr.Val == "count" {
+				expr.Val = "sum"
+				p.digest = false
+			}
 		}
 	}
 }
@@ -4498,5 +4768,172 @@ func (p *LogicalPromSubquery) Digest() string {
 	p.digestName = p.digestName[:0]
 	p.digestName = encoding.MarshalUint32(p.digestName, uint32(p.LogicPlanType()))
 	p.digestName = encoding.MarshalUint64(p.digestName, p.input.ID())
+	return string(p.digestName)
+}
+
+type LogicalIn struct {
+	LogicalPlanBase
+	innerPlan   hybridqp.QueryNode
+	outerStmt   *influxql.SelectStatement
+	outerSchema hybridqp.Catalog
+	outerQc     query.LogicalPlanCreator
+	outerField  influxql.Expr
+	showTagVal  *influxql.ShowTagValuesStatement
+}
+
+func NewLogicalIn(innerPlan hybridqp.QueryNode, outerStmt *influxql.SelectStatement, outerSchema hybridqp.Catalog,
+	outerField influxql.Expr, outQc query.LogicalPlanCreator, showTagVal *influxql.ShowTagValuesStatement) *LogicalIn {
+	op := &LogicalIn{
+		innerPlan:   innerPlan,
+		outerStmt:   outerStmt,
+		outerSchema: outerSchema,
+		outerField:  outerField,
+		outerQc:     outQc,
+		showTagVal:  showTagVal,
+		LogicalPlanBase: LogicalPlanBase{
+			id:     hybridqp.GenerateNodeId(),
+			schema: outerSchema,
+			rt:     nil,
+			ops:    nil,
+		},
+	}
+	op.init()
+	return op
+}
+
+// impl me
+func (p *LogicalIn) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	return nil
+}
+
+func (p *LogicalIn) DeriveOperations() {
+	p.init()
+}
+
+func (p *LogicalIn) init() {
+	p.rt = hybridqp.NewRowDataTypeImpl(p.schema.FieldsRef()...)
+
+	p.ops = make([]hybridqp.ExprOptions, 0, len(p.schema.Fields()))
+
+	for i, f := range p.schema.Fields() {
+		p.ops = append(p.ops, hybridqp.ExprOptions{Expr: influxql.CloneExpr(f.Expr), Ref: p.schema.FieldsRef()[i]})
+	}
+}
+
+func (p *LogicalIn) Clone() hybridqp.QueryNode {
+	clone := &LogicalIn{}
+	*clone = *p
+	clone.id = hybridqp.GenerateNodeId()
+	return clone
+}
+
+func (p *LogicalIn) Children() []hybridqp.QueryNode {
+	if p.innerPlan == nil {
+		return nil
+	}
+	return []hybridqp.QueryNode{p.innerPlan}
+}
+
+func (p *LogicalIn) ReplaceChildren(children []hybridqp.QueryNode) {
+	p.innerPlan = children[0]
+}
+
+func (p *LogicalIn) ReplaceChild(ordinal int, child hybridqp.QueryNode) {
+	if ordinal >= 1 {
+		panic(fmt.Sprintf("index %d out of range %d", ordinal, 1))
+	}
+	p.innerPlan = child
+}
+
+func (p *LogicalIn) Explain(writer LogicalPlanWriter) {
+	p.ExplainIterms(writer)
+	writer.Explain(p)
+}
+
+func (p *LogicalIn) Type() string {
+	return GetType(p)
+}
+
+func (p *LogicalIn) Digest() string {
+	if p.digest {
+		return string(p.digestName)
+	}
+	p.digest = true
+	p.digestName = p.digestName[:0]
+	p.digestName = encoding.MarshalUint32(p.digestName, uint32(p.LogicPlanType()))
+	p.digestName = encoding.MarshalUint64(p.digestName, p.ID())
+	return string(p.digestName)
+}
+
+type LogicalGraph struct {
+	LogicalPlanBase
+	stmt *influxql.GraphStatement
+	qc   query.LogicalPlanCreator
+}
+
+func NewLogicalGraph(input hybridqp.QueryNode, stmt *influxql.GraphStatement, schema hybridqp.Catalog, qc query.LogicalPlanCreator) *LogicalGraph {
+	op := &LogicalGraph{
+		stmt: stmt,
+		qc:   qc,
+		LogicalPlanBase: LogicalPlanBase{
+			id:     hybridqp.GenerateNodeId(),
+			schema: schema,
+		},
+	}
+	if input != nil {
+		op.inputs = append(op.inputs, input)
+	}
+	op.init()
+	return op
+}
+
+// impl me
+func (p *LogicalGraph) New(inputs []hybridqp.QueryNode, schema hybridqp.Catalog, eTrait []hybridqp.Trait) hybridqp.QueryNode {
+	return nil
+}
+
+func (p *LogicalGraph) DeriveOperations() {
+	p.init()
+}
+
+func (p *LogicalGraph) init() {
+	//p.initForSink()
+}
+
+func (p *LogicalGraph) Clone() hybridqp.QueryNode {
+	clone := &LogicalGraph{}
+	*clone = *p
+	clone.id = hybridqp.GenerateNodeId()
+	return clone
+}
+
+func (p *LogicalGraph) Children() []hybridqp.QueryNode {
+	return p.inputs
+}
+
+func (p *LogicalGraph) ReplaceChildren(children []hybridqp.QueryNode) {
+	p.inputs = children
+}
+
+func (p *LogicalGraph) ReplaceChild(ordinal int, child hybridqp.QueryNode) {
+}
+
+func (p *LogicalGraph) Explain(writer LogicalPlanWriter) {
+	p.ExplainIterms(writer)
+	writer.Explain(p)
+}
+
+func (p *LogicalGraph) Type() string {
+	return GetType(p)
+}
+
+func (p *LogicalGraph) Digest() string {
+	if p.digest {
+		return string(p.digestName)
+	}
+	p.digest = true
+	p.digestName = p.digestName[:0]
+	p.digestName = encoding.MarshalUint32(p.digestName, uint32(p.LogicPlanType()))
+	p.digestName = encoding.MarshalUint64(p.digestName, p.ID())
 	return string(p.digestName)
 }

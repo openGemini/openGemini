@@ -48,6 +48,7 @@ type Options interface {
 	GetMeasurements() []*influxql.Measurement
 	HaveOnlyCSStore() bool
 	GetDimensions() []string
+	SetSameDims(bool)
 	SetFill(influxql.FillOption)
 	IsTimeSorted() bool
 	IsUnifyPlan() bool
@@ -86,4 +87,11 @@ type Options interface {
 	GetCtx() context.Context
 	SetName(name string)
 	SetSources(sources influxql.Sources)
+	GetSources() influxql.Sources
+	GetInConditions() []*influxql.InCondition
+	SetCondition(influxql.Expr)
+	GetQueryID() uint64
+	CanQueryPushDown() bool
+	GetValueCondition() influxql.Expr
+	SetValueCondition(vc influxql.Expr)
 }

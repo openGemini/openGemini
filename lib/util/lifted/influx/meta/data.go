@@ -71,6 +71,12 @@ const (
 	// MinRetentionPolicyWarmDuration represents the minimum warm duration for a policy.
 	MinRetentionPolicyWarmDuration = time.Hour
 
+	// MinRetentionPolicyIndexColdDuration represents the minimum index cold duration for a policy.
+	MinRetentionPolicyIndexColdDuration = time.Hour
+
+	// DefaultRetentionPolicyIndexColdDuration is the default value of RetentionPolicyInfo.IndexColdDuration.
+	DefaultRetentionPolicyIndexColdDuration = time.Duration(0)
+
 	// QueryIDSpan is the default id range span.
 	QueryIDSpan = 100000000 // 100 million
 )
@@ -388,6 +394,8 @@ func init() {
 		proto2.Command_UpdateReplicationCommand:         {},
 		proto2.Command_UpdateMeasurementCommand:         {},
 		proto2.Command_UpdateMetaNodeStatusCommand:      {},
+		proto2.Command_ReplaceMergeShardsCommand:        {},
+		proto2.Command_RecoverMetaData:                  {},
 	}
 }
 
@@ -560,6 +568,14 @@ func (data *Data) WalkMigrateEvents(fn func(eventId string, info *MigrateEventIn
 	}
 }
 
+func (data *Data) WalkPtView(fn func(db string, pt *PtInfo)) {
+	for dbName, pts := range data.PtView {
+		for i := range pts {
+			fn(dbName, &pts[i])
+		}
+	}
+}
+
 func (data *Data) IndexDurationInfos(dbPtIds map[string][]uint32) *IndexDurationResponse {
 	r := &IndexDurationResponse{DataIndex: data.Index}
 	data.WalkDatabases(func(db *DatabaseInfo) {
@@ -582,6 +598,8 @@ func (data *Data) IndexDurationInfos(dbPtIds map[string][]uint32) *IndexDuration
 							durationInfo.Ident.EndTime = ig.EndTime
 							durationInfo.DurationInfo = DurationDescriptor{}
 							durationInfo.DurationInfo.Duration = rp.Duration
+							durationInfo.DurationInfo.MergeDuration = rp.ShardMergeDuration
+							durationInfo.DurationInfo.TierDuration = rp.IndexColdDuration
 							r.Durations = append(r.Durations, durationInfo)
 							return
 						}
@@ -619,6 +637,7 @@ func (data *Data) DurationInfos(dbPtIds map[string][]uint32) *ShardDurationRespo
 							durationInfo.Ident.EndTime = sg.EndTime
 							durationInfo.DurationInfo = DurationDescriptor{}
 							durationInfo.DurationInfo.Duration = rp.Duration
+							durationInfo.DurationInfo.MergeDuration = rp.ShardMergeDuration
 							durationInfo.DurationInfo.Tier = sh.Tier
 							durationInfo.DurationInfo.TierDuration = rp.TierDuration(sh.Tier)
 							r.Durations = append(r.Durations, durationInfo)
@@ -2193,6 +2212,7 @@ func (data *Data) GetDbPtOwner(database string, ptId uint32) (uint64, error) {
 	return data.PtView[database][ptId].Owner.NodeID, nil
 }
 
+// cannot update shardMergeDuration
 // UpdateRetentionPolicy updates an existing retention policy.
 func (data *Data) UpdateRetentionPolicy(database, name string, rpu *RetentionPolicyUpdate, makeDefault bool) error {
 	// Find database.
@@ -2221,6 +2241,7 @@ func (data *Data) UpdateRetentionPolicy(database, name string, rpu *RetentionPol
 		IndexGroupDuration: *LoadDurationOrDefault(rpu.IndexGroupDuration, &rpi.IndexGroupDuration),
 		HotDuration:        *LoadDurationOrDefault(rpu.HotDuration, &rpi.HotDuration),
 		WarmDuration:       *LoadDurationOrDefault(rpu.WarmDuration, &rpi.WarmDuration),
+		IndexColdDuration:  *LoadDurationOrDefault(rpu.IndexColdDuration, &rpi.IndexColdDuration),
 	}
 	err = checkRpi.CheckSpecValid()
 	if err != nil {
@@ -2372,8 +2393,8 @@ func (data *Data) mapShardsToMst(database string, rpi *RetentionPolicyInfo, sgi 
 
 // This method could be improved later.
 func mapShards(mstName string, shards []ShardInfo, numOfShards int32) []int {
-	rand.Seed(int64(HashID([]byte(mstName))))
-	randomSlice := rand.Perm(int(len(shards)))
+	sour := rand.NewSource(int64(HashID([]byte(mstName))))
+	randomSlice := rand.New(sour).Perm(len(shards))
 	shardsIdx := randomSlice[:numOfShards]
 	sort.Ints(shardsIdx)
 	return shardsIdx
@@ -2456,7 +2477,7 @@ func (data *Data) CreateShardGroup(database, policy string, timestamp time.Time,
 	}
 
 	if msti == nil {
-		return fmt.Errorf("there is no measurement in database %s policy %s", database, policy)
+		return errno.NewError(errno.NoMstInDb, database, policy)
 	}
 
 	//check index group contain this shard group
@@ -3329,7 +3350,10 @@ func (data *Data) UpdateIndexInfoTier(indexID uint64, indexTier uint64, dbName, 
 	for i := range rpi.IndexGroups {
 		for j := range rpi.IndexGroups[i].Indexes {
 			if rpi.IndexGroups[i].Indexes[j].ID == indexID {
-				// todo: rpi.IndexGroups[i].Indexes[j].Tier = indexTier
+				rpi.IndexGroups[i].Indexes[j].Tier = indexTier
+				if indexTier == util.Cold {
+					rpi.IndexGroups[i].UpdateReplicaClearInfo(indexID)
+				} // todo: && config.replicaModeColdSelectorEn
 				return nil
 			}
 		}
@@ -3438,6 +3462,75 @@ func (data *Data) nextHealth(db string, rgId uint32, dbPtView DBPtInfos) {
 
 }
 
+func (data *Data) RecoverDataBase(db string, metaData *Data, nodeMap map[uint64]uint64) error {
+	// PtView
+	dbPT, ok := metaData.PtView[db]
+	if !ok {
+		return fmt.Errorf("dbPT not found,database: %s", db)
+	}
+	for i := range dbPT {
+		pt := &dbPT[i]
+		nodeID := pt.Owner.NodeID
+		pt.Owner.NodeID = nodeMap[nodeID]
+	}
+	data.PtView[db] = dbPT
+
+	// ReplicaGroups
+	if metaData.ReplicaGroups != nil {
+		rpGroups, ok := metaData.ReplicaGroups[db]
+		if ok {
+			data.ReplicaGroups[db] = rpGroups
+		}
+	}
+
+	// Databases
+	database, ok := metaData.Databases[db]
+	if !ok {
+		return fmt.Errorf("database not found,database: %s", db)
+	}
+	for _, rp := range database.RetentionPolicies {
+		for _, mst := range rp.Measurements {
+			mst.originName = influx.GetOriginMstName(mst.Name)
+		}
+	}
+
+	data.Databases[db] = database
+
+	return nil
+}
+
+func (data *Data) RecoverData(metaData *Data, nodeMap map[uint64]uint64) error {
+	// PtView
+	for db := range metaData.PtView {
+		dbPT, ok := metaData.PtView[db]
+		if !ok {
+			return fmt.Errorf("dbPT not found,database: %s", db)
+		}
+		for i := range dbPT {
+			pt := &dbPT[i]
+			nodeID := pt.Owner.NodeID
+			pt.Owner.NodeID = nodeMap[nodeID]
+		}
+		data.PtView[db] = dbPT
+	}
+
+	// ReplicaGroups
+	data.ReplicaGroups = metaData.ReplicaGroups
+
+	// Databases
+	for _, db := range metaData.Databases {
+		for _, rp := range db.RetentionPolicies {
+			for _, mst := range rp.Measurements {
+				mst.originName = influx.GetOriginMstName(mst.Name)
+			}
+		}
+	}
+
+	data.Databases = metaData.Databases
+
+	return nil
+}
+
 type DbPtInfo struct {
 	Db          string
 	Pti         *PtInfo
@@ -3517,6 +3610,7 @@ func (data *Data) GetShardDurationsByDbPt(db string, pt uint32) map[uint64]*Shar
 				durationInfo.Ident.EngineType = uint32(sg.EngineType)
 				durationInfo.DurationInfo = DurationDescriptor{}
 				durationInfo.DurationInfo.Duration = rp.Duration
+				durationInfo.DurationInfo.MergeDuration = rp.ShardMergeDuration
 				durationInfo.DurationInfo.Tier = sh.Tier
 				durationInfo.DurationInfo.TierDuration = rp.TierDuration(sh.Tier)
 				r[sh.ID] = durationInfo
@@ -3555,6 +3649,7 @@ func (data *Data) GetShardDurationsByDbPtForRetention(db string, pt uint32) map[
 				durationInfo.Ident.EngineType = uint32(sg.EngineType)
 				durationInfo.DurationInfo = DurationDescriptor{}
 				durationInfo.DurationInfo.Duration = rp.Duration
+				durationInfo.DurationInfo.MergeDuration = rp.ShardMergeDuration
 				durationInfo.DurationInfo.Tier = sh.Tier
 				durationInfo.DurationInfo.TierDuration = rp.TierDuration(sh.Tier)
 				r[sh.ID] = durationInfo
@@ -4005,6 +4100,22 @@ func (data *Data) GetPtInfosByNodeId(id uint64) []*DbPtInfo {
 	return resPtInfos
 }
 
+func (data *Data) GetPtInfosByDbnameV2(name string) []*DbPtInfo {
+	resPtInfos := make([]*DbPtInfo, 0, data.GetClusterPtNum())
+	if data.Database(name) == nil {
+		return resPtInfos
+	}
+
+	dbInfo := data.GetDBBriefInfo(name)
+	for i := range data.PtView[name] {
+		shards := data.GetShardDurationsByDbPt(name, data.PtView[name][i].PtId)
+		pt := data.PtView[name][i]
+		resPtInfos = append(resPtInfos, &DbPtInfo{Db: name, Pti: &pt, Shards: shards, DBBriefInfo: dbInfo})
+
+	}
+	return resPtInfos
+}
+
 func (data *Data) GetNodeIdsByNodeLst(nodeLst []string) ([]uint64, []string, error) {
 	nodeids := make([]uint64, 0, len(nodeLst))
 	address := make([]string, 0, len(nodeLst))
@@ -4214,6 +4325,67 @@ func (data *Data) DBRGN() int {
 	return rgn
 }
 
+func (data *Data) mergeShardGroup(startLoc, endLoc int, rpInfo *RetentionPolicyInfo) {
+	newEndTime := rpInfo.ShardGroups[endLoc].EndTime
+	newLen := len(rpInfo.ShardGroups) - (endLoc - startLoc)
+	for loc := endLoc + 1; loc < len(rpInfo.ShardGroups); loc++ {
+		DataLogger.Info("mergeShardGroup", zap.Uint64("sgId", rpInfo.ShardGroups[loc-(endLoc-startLoc)].ID),
+			zap.Time("startTime", rpInfo.ShardGroups[loc-(endLoc-startLoc)].StartTime),
+			zap.Time("endTime", rpInfo.ShardGroups[loc-(endLoc-startLoc)].EndTime))
+		rpInfo.ShardGroups[loc-(endLoc-startLoc)] = rpInfo.ShardGroups[loc]
+	}
+	rpInfo.ShardGroups = rpInfo.ShardGroups[:newLen]
+	rpInfo.ShardGroups[startLoc].EndTime = newEndTime
+	rpInfo.ShardGroups[startLoc].ClearShardsMergedNum()
+	// todo: shard.min/max rewrite
+}
+
+func (data *Data) ReplaceMergeShards(db, rp string, ptId uint32, shardIds []uint64) error {
+	DataLogger.Info("ReplaceMergeShards", zap.String("db", db), zap.String("rp", rp), zap.Uint32("ptId", ptId), zap.Any("shardIds", shardIds))
+	dbInfo, ok := data.Databases[db]
+	if !ok {
+		return errno.NewError(errno.DatabaseNotFound, db)
+	}
+	rpInfo, ok := dbInfo.RetentionPolicies[rp]
+	if !ok {
+		return errno.NewError(errno.RpNotFound, rp)
+	}
+
+	shardIdToGroup := make(map[uint64]int)
+	for i, sg := range rpInfo.ShardGroups {
+		for _, shard := range sg.Shards {
+			if shard.Owners[0] == ptId {
+				shardIdToGroup[shard.ID] = i
+			}
+		}
+	}
+
+	var mergeShardOwnerGroups []int
+	for _, mergeShardId := range shardIds {
+		if group, ok := shardIdToGroup[mergeShardId]; ok {
+			mergeShardOwnerGroups = append(mergeShardOwnerGroups, group)
+			if len(mergeShardOwnerGroups) > 1 && mergeShardOwnerGroups[len(mergeShardOwnerGroups)-1] <= mergeShardOwnerGroups[len(mergeShardOwnerGroups)-2] {
+				return fmt.Errorf("merge sg.time of these mergeShards are not Incremental")
+			}
+			rpInfo.ShardGroups[group].ShardMergedNumInc(mergeShardId)
+		}
+	}
+	if len(mergeShardOwnerGroups) == 1 {
+		// has replaced from other ts-store or mergeShardsId has a new inside shard
+		DataLogger.Error("ReplaceMergeShards len(mergeShardOwnerGroups) = 1")
+		return nil
+	}
+
+	for _, mergeShardGroup := range mergeShardOwnerGroups {
+		if rpInfo.ShardGroups[mergeShardGroup].GetMergedShardCount() < len(rpInfo.ShardGroups[mergeShardGroup].Shards) {
+			return nil
+		}
+	}
+	DataLogger.Info("mergeShardGroups", zap.String("db", db), zap.String("rp", rp), zap.Any("mergeSgLocs", mergeShardOwnerGroups))
+	data.mergeShardGroup(mergeShardOwnerGroups[0], mergeShardOwnerGroups[len(mergeShardOwnerGroups)-1], rpInfo)
+	return nil
+}
+
 // MarshalTime converts t to nanoseconds since epoch. A zero time returns 0.
 func MarshalTime(t time.Time) int64 {
 	if t.IsZero() {
@@ -4276,4 +4448,22 @@ func LoadDurationOrDefault(duration *time.Duration, existDuration *time.Duration
 
 func inShardGroup(group *ShardGroupInfo, shardID uint64) bool {
 	return shardID >= group.Shards[0].ID && shardID <= group.Shards[len(group.Shards)-1].ID
+}
+
+func GenNodeMap(data, metaInfo *Data) (map[uint64]uint64, error) {
+	if len(data.DataNodes) != len(metaInfo.DataNodes) {
+		DataLogger.Error("cluster data nodes number not equal", zap.Int("now", len(data.DataNodes)), zap.Int("backup", len(metaInfo.DataNodes)))
+		return nil, errors.New("data nodes number not equal")
+	}
+	nodeMap := make(map[uint64]uint64)
+	for _, n1 := range metaInfo.DataNodes {
+		for _, n2 := range data.DataNodes {
+			if n1.Host != n2.Host {
+				continue
+			}
+			nodeMap[n1.ID] = n2.ID
+		}
+	}
+
+	return nodeMap, nil
 }

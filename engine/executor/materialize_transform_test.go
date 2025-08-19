@@ -159,8 +159,8 @@ func buildMaterializeChunk() executor.Chunk {
 
 	chunk := b.NewChunk("materialize chunk")
 	chunk.AppendTimes([]int64{1, 2, 3, 4, 5})
-	chunk.AddTagAndIndex(*ParseChunkTags("host=A"), 0)
-	chunk.AddIntervalIndex(0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("host=A"), 0)
+	chunk.AppendIntervalIndex(0)
 
 	chunk.Column(0).AppendIntegerValues([]int64{1, 2, 3})
 	chunk.Column(0).AppendNilsV2(true, true, true, false, false)
@@ -715,8 +715,8 @@ func buildSrcChunk() executor.Chunk {
 	b := executor.NewChunkBuilder(rp)
 	chunk := b.NewChunk("up")
 	chunk.AppendTimes([]int64{1, 2, 3})
-	chunk.AddTagAndIndex(*ParseChunkTags("host=A"), 0)
-	chunk.AddIntervalIndex(0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("host=A"), 0)
+	chunk.AppendIntervalIndex(0)
 	chunk.Column(0).AppendFloatValues([]float64{1, 2, 3})
 	chunk.Column(0).AppendManyNotNil(3)
 	return chunk
@@ -765,8 +765,8 @@ func buildSrcChunk_Special_value() executor.Chunk {
 	b := executor.NewChunkBuilder(rp)
 	chunk := b.NewChunk("up")
 	chunk.AppendTimes([]int64{1, 2, 3})
-	chunk.AddTagAndIndex(*ParseChunkTags("host=A"), 0)
-	chunk.AddIntervalIndex(0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("host=A"), 0)
+	chunk.AppendIntervalIndex(0)
 	chunk.Column(0).AppendFloatValues([]float64{math.NaN(), math.Inf(0), math.Inf(-1)})
 	chunk.Column(0).AppendManyNotNil(3)
 	return chunk
@@ -800,6 +800,46 @@ func TestMaterializeTransform_Special_value(t *testing.T) {
 			}
 			assert.Equal(t, output[i], expect[i])
 		}
+		return nil
+	})
+	executor.Connect(source.Output, trans.GetInputs()[0])
+	executor.Connect(trans.GetOutputs()[0], sink.Input)
+	var processors executor.Processors
+	processors = append(processors, source)
+	processors = append(processors, trans)
+	processors = append(processors, sink)
+	dag := executor.NewDAG(processors)
+	if dag.CyclicGraph() == true {
+		t.Error("dag has circle")
+	}
+	executor := executor.NewPipelineExecutor(processors)
+	executor.Execute(context.Background())
+	executor.Release()
+}
+
+func TestMaterializeTransform_CompareOffset(t *testing.T) {
+	chunk := buildSrcChunk_Special_value()
+	ops := []hybridqp.ExprOptions{
+		{
+			Expr: &influxql.BinaryExpr{
+				Op: influxql.MUL,
+				LHS: &influxql.BinaryExpr{
+					Op:  influxql.ADD,
+					LHS: &influxql.VarRef{Val: "value", Type: influxql.Float},
+					RHS: &influxql.NumberLiteral{Val: 2},
+				},
+				RHS: &influxql.NumberLiteral{Val: 10},
+			},
+		},
+	}
+	opt := query.ProcessorOptions{Dimensions: []string{"host"}, CompareOffset: 1}
+	expectTime := []int64{2, 3, 4}
+	schema := executor.NewQuerySchema(nil, nil, &opt, nil)
+	trans := executor.NewMaterializeTransform(buildSrcRowDataType1(), buildSrcRowDataType1(), ops, &opt, nil, schema)
+	source := NewSourceFromSingleChunk(buildSrcRowDataType1(), []executor.Chunk{chunk})
+	sink := NewSinkFromFunction(buildSrcRowDataType1(), func(chunk executor.Chunk) error {
+		outputTime := chunk.Time()
+		assert.Equal(t, expectTime, outputTime)
 		return nil
 	})
 	executor.Connect(source.Output, trans.GetInputs()[0])
@@ -891,8 +931,8 @@ func buildBenchmarkMaterializeChunk() executor.Chunk {
 	chunk := b.NewChunk("materialize chunk")
 	for i := 0; i < 500; i++ {
 		chunk.AppendTimes([]int64{5*int64(i) + 1, 5*int64(i) + 2, 5*int64(i) + 3, 5*int64(i) + 4, 5*int64(i) + 5})
-		chunk.AddTagAndIndex(*ParseChunkTags("host=A"), 0)
-		chunk.AddIntervalIndex(0)
+		chunk.AppendTagsAndIndex(*ParseChunkTags("host=A"), 0)
+		chunk.AppendIntervalIndex(0)
 
 		chunk.Column(0).AppendIntegerValues([]int64{1, 2, 3})
 		chunk.Column(0).AppendNilsV2(true, true, true, false, false)

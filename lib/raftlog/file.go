@@ -38,6 +38,7 @@ const unit64Size = 8 // the byte size of unit64
 var NewFile = errors.New("Create a new file")
 
 var cache *FileWrapCache = NewCache() // cache files not Updated of limit size
+// todo: don't read from fileStart when getContent() of noCache file which only supports append updates
 
 var fileWrapPool *pool.UnionPool[FileWrap]
 
@@ -48,12 +49,12 @@ func init() {
 type FileWrapper interface {
 	Name() string
 	Size() int
-	GetEntryData(start, end int) []byte
+	GetEntryData(slotIdx int, start, end int, isMeta bool) []byte
 	Write(dat []byte) (int, error)
-	WriteAt(offset int64, dat []byte) (int, error)
-	WriteSlice(offset int64, dat []byte) error
-	ReadSlice(offset int64) []byte
-	SliceSize(offset int) int
+	WriteAt(slotIdx int, offset int64, dat []byte, isMeta bool) (int, error)
+	WriteSlice(slotIdx int, endSlotIdx int, offset int64, dat []byte, isMeta bool, clearSlots bool) error
+	ReadSlice(slotIdx int, offset int64, isMeta bool) []byte
+	SliceSize(slotIdx int, offset int) int
 	Truncate(size int64) error
 	TrySync() error
 	Delete() error
@@ -216,12 +217,13 @@ func (fw *FileWrap) Size() int {
 	content, err := fw.getContent()
 	if err != nil {
 		logger.GetLogger().Error("fw.Size() get content error ", zap.String("fw name", fw.Name()), zap.Error(err))
+		return 0
 	}
 	return len(content)
 }
 
 // GetEntryData returns entry data
-func (fw *FileWrap) GetEntryData(start, end int) []byte {
+func (fw *FileWrap) GetEntryData(slotIdx int, start, end int, isMeta bool) []byte {
 	content, err := fw.getContent()
 	if err != nil {
 		logger.GetLogger().Error("GetEntryData get content error ", zap.String("fw name", fw.Name()), zap.Error(err))
@@ -247,7 +249,7 @@ func (fw *FileWrap) Write(dat []byte) (int, error) {
 	return n, err
 }
 
-func (fw *FileWrap) WriteAt(offset int64, dat []byte) (int, error) {
+func (fw *FileWrap) WriteAt(slotIdx int, offset int64, dat []byte, isMeta bool) (int, error) {
 	fw.mu.Lock()
 	defer fw.mu.Unlock()
 	_, err := fw.fd.Seek(offset, 0)
@@ -268,7 +270,7 @@ func (fw *FileWrap) WriteAt(offset int64, dat []byte) (int, error) {
 	return n, errors.Wrapf(err, "seek unreachable file:%s", fw.Name())
 }
 
-func (fw *FileWrap) WriteSlice(offset int64, dat []byte) error {
+func (fw *FileWrap) WriteSlice(slotIdx int, endSlotIdx int, offset int64, dat []byte, isMeta bool, clearSlots bool) error {
 	fw.mu.Lock()
 	defer fw.mu.Unlock()
 	_, err := fw.fd.Seek(offset, 0)
@@ -301,7 +303,7 @@ func (fw *FileWrap) WriteSlice(offset int64, dat []byte) error {
 	return errors.Wrapf(err, "seek unreachable file:%s", fw.Name())
 }
 
-func (fw *FileWrap) ReadSlice(offset int64) []byte {
+func (fw *FileWrap) ReadSlice(slotIdx int, offset int64, isMeta bool) []byte {
 	content, err := fw.getContent()
 	if err != nil {
 		logger.GetLogger().Error("ReadSlice get content error ", zap.String("fw name", fw.Name()), zap.Error(err))
@@ -317,10 +319,15 @@ func (fw *FileWrap) ReadSlice(offset int64) []byte {
 	return content[start:next]
 }
 
-func (fw *FileWrap) SliceSize(offset int) int {
+func (fw *FileWrap) SliceSize(slotIdx int, offset int) int {
 	content, err := fw.getContent()
 	if err != nil {
 		logger.GetLogger().Error("SliceSize get content error ", zap.String("fw name", fw.Name()), zap.Error(err))
+		return 0
+	}
+	if len(content) <= offset {
+		logger.GetLogger().Error("SliceSize get content len(content) <= offset ", zap.String("fw name", fw.Name()),
+			zap.Int("len(content)", len(content)), zap.Int("offset", offset))
 		return 0
 	}
 	sz := encoding.UnmarshalUint32(content[offset:])

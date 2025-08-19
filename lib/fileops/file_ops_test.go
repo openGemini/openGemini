@@ -17,6 +17,7 @@ package fileops
 import (
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -416,22 +417,22 @@ func TestDecodeObsPath(t *testing.T) {
 	obsPath = "xxxxxxxx"
 	_, _, _, _, _, err = decodeObsPath(obsPath)
 	assert.NotNil(t, err)
-	obsPath = "obs://"
+	obsPath = "obs:/"
 	_, _, _, _, _, err = decodeObsPath(obsPath)
 	assert.NotNil(t, err)
-	obsPath = "obs://mock_endpoint"
+	obsPath = "obs:/mock_endpoint"
 	_, _, _, _, _, err = decodeObsPath(obsPath)
 	assert.NotNil(t, err)
-	obsPath = "obs://mock_endpoint/mock_ak"
+	obsPath = "obs:/mock_endpoint/mock_ak"
 	_, _, _, _, _, err = decodeObsPath(obsPath)
 	assert.NotNil(t, err)
-	obsPath = "obs://mock_endpoint/mock_ak/mock_sk"
+	obsPath = "obs:/mock_endpoint/mock_ak/mock_sk"
 	_, _, _, _, _, err = decodeObsPath(obsPath)
 	assert.NotNil(t, err)
-	obsPath = "obs://mock_endpoint/mock_ak/mock_sk/mock_bucket"
+	obsPath = "obs:/mock_endpoint/mock_ak/mock_sk/mock_bucket"
 	_, _, _, _, _, err = decodeObsPath(obsPath)
 	assert.NotNil(t, err)
-	obsPath = "obs://mock_endpoint/mock_ak//mock_bucket/a/b/c"
+	obsPath = "obs:/mock_endpoint/mock_ak//mock_bucket/a/b/c"
 	endpoint, ak, sk, bucket, basePath, err = decodeObsPath(obsPath)
 	assert.Equal(t, "mock_endpoint", endpoint)
 	assert.Equal(t, "mock_ak", ak)
@@ -502,15 +503,15 @@ func TestGetRemoteDataPath(t *testing.T) {
 
 	obs.SetPrefixDataPath("/tmp/openGemini/data")
 	targetPath = GetRemoteDataPath(obsOpt, rootDir)
-	assert.Equal(t, "obs://mock_endpoint/mock_ak/mock_sk/mock_BucketName/mock_basePath/GetRemoteDataPath", targetPath)
+	assert.Equal(t, "obs:/mock_endpoint/mock_ak/mock_sk/mock_BucketName/mock_basePath/GetRemoteDataPath", targetPath)
 
 	obs.SetPrefixDataPath("/tmp/openGemini/data/")
 	targetPath = GetRemoteDataPath(obsOpt, rootDir)
-	assert.Equal(t, "obs://mock_endpoint/mock_ak/mock_sk/mock_BucketName/mock_basePath/GetRemoteDataPath", targetPath)
+	assert.Equal(t, "obs:/mock_endpoint/mock_ak/mock_sk/mock_BucketName/mock_basePath/GetRemoteDataPath", targetPath)
 
-	rootDir = "obs://mock_endpoint/mock_ak/mock_sk/mock_BucketName/mock_basePath/GetRemoteDataPath"
+	rootDir = "obs:/mock_endpoint/mock_ak/mock_sk/mock_BucketName/mock_basePath/GetRemoteDataPath"
 	targetPath = GetRemoteDataPath(obsOpt, rootDir)
-	assert.Equal(t, "obs://mock_endpoint/mock_ak/mock_sk/mock_BucketName/mock_basePath/GetRemoteDataPath", targetPath)
+	assert.Equal(t, "obs:/mock_endpoint/mock_ak/mock_sk/mock_BucketName/mock_basePath/GetRemoteDataPath", targetPath)
 }
 
 func TestRemoveLocal(t *testing.T) {
@@ -567,9 +568,53 @@ func TestGetRemotePrefixPath(t *testing.T) {
 	assert.Equal(t, "", res)
 
 	res = GetRemotePrefixPath(obsOpt)
-	assert.Equal(t, "obs://mock_endpoint/mock_ak/mock_sk/mock_BucketName", res)
+	assert.Equal(t, "obs:/mock_endpoint/mock_ak/mock_sk/mock_BucketName", res)
 
 }
+
+func TestGetSubDirInfosForObsReadDirs(t *testing.T) {
+	fi1 := &obsFileInfo{
+		name: "prefix/test",
+	}
+	fi2 := &obsFileInfo{
+		name: "prefix/test/subTest",
+	}
+	var subDirFiles []fs.FileInfo
+	var expectResFiles []fs.FileInfo
+	subDirFiles = append(subDirFiles, fi1)
+	subDirFiles = append(subDirFiles, fi2)
+	expectResFiles = append(expectResFiles, fi1)
+	resFiles := GetSubDirFiles(subDirFiles, "prefix")
+	assert.Equal(t, expectResFiles, resFiles)
+
+	var expectResNames []string
+	expectResNames = append(expectResNames, "test")
+	resNames := GetSubDirNamesForObsReadDirs(subDirFiles, "prefix")
+	assert.Equal(t, expectResNames, resNames)
+
+	str1 := "obs://test/"
+	str2 := "/subTest"
+	expectStr := Join(str1, str2)
+	assert.Equal(t, expectStr, "obs://test/subTest")
+
+	expectStr = Clean(str1)
+	assert.Equal(t, expectStr, "obs://test/")
+}
+
+//func TestFileOps(t *testing.T) {
+//	obs.SetPrefixDataPath("/tmp/openGemini/data")
+//	dbObsOptions := &obs.ObsOptions{
+//		Enabled:    true,
+//		BucketName: "gemini-test01",
+//		Endpoint:   "ep",
+//		Ak:         "ak",
+//		Sk:         "sk",
+//		BasePath:   "",
+//	}
+//	var vfsInstance vfs
+//	actual := (*vfs).GetOBSTmpIndexFileName(&vfsInstance, "/tmp/openGemini/data", dbObsOptions)
+//	assert.Equal(t, actual, "obs://ep/ak/sk/gemini-test01/test/openGemini/txTest")
+//}
 
 type mockDecipher struct {
 }
@@ -613,4 +658,26 @@ func TestDecryptObsSk(t *testing.T) {
 
 	_, err := crypto.Encrypt("invalid")
 	assert.NotNil(t, err)
+}
+
+func TestFindDir(t *testing.T) {
+	rootDir := t.TempDir()
+	defer RemoveAll(rootDir)
+	dirName := filepath.Join(rootDir, "dir1")
+	Mkdir(dirName, 0744)
+	dirs, err := ReadDir(rootDir)
+	assert.Equal(t, err, nil)
+	dir := FindDir(dirs, "dir1")
+	assert.NotEqual(t, dir, nil)
+}
+
+func TestOsRemoveAllWithOutDir(t *testing.T) {
+	rootDir := t.TempDir()
+	defer RemoveAll(rootDir)
+	dirName := filepath.Join(rootDir, "dir1")
+	Mkdir(dirName, 0744)
+	RemoveAllWithOutDir(rootDir)
+	dirs, err := ReadDir(rootDir)
+	assert.NoError(t, err)
+	assert.Equal(t, len(dirs), 1)
 }

@@ -18,6 +18,7 @@ import (
 	"fmt"
 
 	"github.com/openGemini/openGemini/lib/index"
+	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
 )
 
@@ -39,6 +40,7 @@ const (
 	DefaultTCLocation          int8   = -1
 	crcSize                    uint32 = 4
 	pKMetaItemSize             int    = util.Uint64SizeBytes*2 + util.Uint32SizeBytes*2
+	SeriesID                   uint64 = 1
 )
 
 const (
@@ -77,4 +79,8 @@ func AppendSecondaryIndexSuffix(dataPath string, fieldName string, indexType ind
 	}
 	indexPath := dataPath + "." + fieldName + indexFileSuffix
 	return indexPath
+}
+
+func OnlySortByTime(sk record.Schemas) bool {
+	return len(sk) == 0 || (sk.Len() == 1 && sk[0].Name == record.TimeField)
 }

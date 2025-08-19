@@ -76,6 +76,9 @@ func TestCommand_InitConfig(t *testing.T) {
 
 [spdy]
   conn-pool-size = 16
+
+[topo]
+  topo-manager-url = "https://127.0.0.1:60892/v1/topology"
 `
 	err := os.WriteFile(dir+"/gemini.conf", []byte(txt), 0600)
 	if !assert.NoError(t, err) {
@@ -108,6 +111,9 @@ func TestCommand_LoadDict(t *testing.T) {
   memory-size = "16G"
   cpu-num = 10
   global-dict-files = ["%s"]
+
+[topo]
+  topo-manager-url = "https://127.0.0.1:60892/v1/topology"
 `
 
 	dictFile := strings.ReplaceAll(filepath.Join(dir, "normal.dict"), "\\", "/")
@@ -127,4 +133,26 @@ func TestCommand_LoadDict(t *testing.T) {
 
 	id := dict.DefaultDict().GetID("hostname")
 	require.True(t, id > 0)
+}
+
+func TestServiceGroup(t *testing.T) {
+	group := &app.ServiceGroup{}
+
+	var s *MockService
+	group.Add(s)
+
+	require.NoError(t, group.Open())
+	group.Add(&MockService{})
+	require.Error(t, group.Open())
+}
+
+type MockService struct {
+}
+
+func (s *MockService) Open() error {
+	return fmt.Errorf("some error")
+}
+
+func (s *MockService) Close() error {
+	return nil
 }

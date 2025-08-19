@@ -20,6 +20,7 @@ import (
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/bufferpool"
+	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/spdy"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/tracing"
@@ -170,7 +171,7 @@ func (t *RPCReaderTransform) chunkResponse(data interface{}) error {
 
 	chunk, ok := data.(Chunk)
 	if !ok {
-		return NewInvalidTypeError("executor.Chunk", data)
+		return errno.NewInvalidTypeError("executor.Chunk", data)
 	}
 	chunk.SetRowDataType(t.Output.RowDataType)
 

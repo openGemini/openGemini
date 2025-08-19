@@ -239,6 +239,53 @@ func NewContinuousQueryService() (*Service, *ContinuousQuery) {
 	return s, cq
 }
 
+func NewContinuousQueryServiceWithoutGroupBy() (*Service, *ContinuousQuery) {
+	cqi := &meta.ContinuousQueryInfo{
+		Name:  "cq1",
+		Query: `CREATE CONTINUOUS QUERY "cq1" ON "db1" RESAMPLE EVERY 10m FOR 30m BEGIN SELECT count(value) INTO "count_value" FROM "test" END`,
+	}
+	dbi := &meta.DatabaseInfo{
+		Name:                   "db1",
+		DefaultRetentionPolicy: "default",
+		ContinuousQueries: map[string]*meta.ContinuousQueryInfo{
+			"cq1": cqi,
+		},
+	}
+	cq := NewContinuousQuery(dbi.DefaultRetentionPolicy, cqi.Query)
+	s := NewTestService()
+	s.MetaClient = &MockMetaClient{
+		DatabasesFn: func() map[string]*meta.DatabaseInfo {
+			return map[string]*meta.DatabaseInfo{"db1": dbi}
+		},
+	}
+	return s, cq
+}
+
+func NewContinuousQueryServiceWithoutGroupByANDnoFor() (*Service, *ContinuousQuery) {
+	cqi := &meta.ContinuousQueryInfo{
+		Name:  "cq1",
+		Query: `CREATE CONTINUOUS QUERY "cq1" ON "db1" RESAMPLE EVERY 10m BEGIN SELECT count(value) INTO "count_value" FROM "test" END`,
+	}
+	dbi := &meta.DatabaseInfo{
+		Name:                   "db1",
+		DefaultRetentionPolicy: "default",
+		ContinuousQueries: map[string]*meta.ContinuousQueryInfo{
+			"cq1": cqi,
+		},
+	}
+	cq := NewContinuousQuery(dbi.DefaultRetentionPolicy, cqi.Query)
+	if cq == nil {
+		return nil, nil
+	}
+	s := NewTestService()
+	s.MetaClient = &MockMetaClient{
+		DatabasesFn: func() map[string]*meta.DatabaseInfo {
+			return map[string]*meta.DatabaseInfo{"db1": dbi}
+		},
+	}
+	return s, cq
+}
+
 func TestService_ExecuteContinuousQuery_Error(t *testing.T) {
 	s, cq := NewContinuousQueryService()
 	s.QueryExecutor = &mockQueryExecutor{
@@ -250,6 +297,12 @@ func TestService_ExecuteContinuousQuery_Error(t *testing.T) {
 	ok, err := s.ExecuteContinuousQuery(cq, now)
 	assert.False(t, ok)
 	assert.EqualError(t, err, "mock error")
+}
+
+func TestService_ExecuteContinuousQuery_Error3(t *testing.T) {
+	s, cq := NewContinuousQueryServiceWithoutGroupByANDnoFor()
+	assert.Nil(t, s)
+	assert.Nil(t, cq)
 }
 
 // mockRegister is a mock task manager
@@ -274,6 +327,19 @@ func TestService_ExecuteContinuousQuery_Successfully(t *testing.T) {
 	assert.True(t, ok)
 	assert.NoError(t, err)
 	assert.Equal(t, s.lastRuns[strings.ToLower(cq.name)], now.Truncate(time.Hour))
+}
+
+func TestService_ExecuteContinuousQuery_Successfully2(t *testing.T) {
+	s, cq := NewContinuousQueryServiceWithoutGroupBy()
+	s.QueryExecutor = &mockQueryExecutor{
+		ExecuteQueryFn: func(results chan *query.Result) {
+			results <- &query.Result{}
+		},
+	}
+	now := time.Now()
+	ok, err := s.ExecuteContinuousQuery(cq, now)
+	assert.True(t, ok)
+	assert.NoError(t, err)
 }
 
 func TestService_ExecuteContinuousQuery_Cooling(t *testing.T) {

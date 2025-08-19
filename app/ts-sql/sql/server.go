@@ -50,6 +50,7 @@ import (
 	"github.com/openGemini/openGemini/services/arrowflight"
 	"github.com/openGemini/openGemini/services/castor"
 	"github.com/openGemini/openGemini/services/continuousquery"
+	"github.com/openGemini/openGemini/services/fence"
 	"github.com/openGemini/openGemini/services/runtimecfg"
 	"github.com/openGemini/openGemini/services/sherlock"
 	"github.com/openGemini/openGemini/services/writer"
@@ -122,6 +123,7 @@ func NewServer(conf config.Config, info app.ServerInfo, logger *Logger.Logger) (
 	// Update the TLS values on each of the configs to be the parsed one if
 	// not already specified (set the default).
 	updateTLSConfig(&c.HTTP.TLS, tlsConfig)
+	config.SetShelfMode(c.ShelfMode)
 
 	metaMaxConcurrentWriteLimit := 64
 	if c.HTTP.MaxConcurrentWriteLimit != 0 && c.HTTP.MaxEnqueuedWriteLimit != 0 {
@@ -136,7 +138,11 @@ func NewServer(conf config.Config, info app.ServerInfo, logger *Logger.Logger) (
 	s.MetaClient.SetHashAlgo(c.Common.OptHashAlgo)
 
 	if s.config.Common.PprofEnabled {
-		go util.OpenPprofServer(s.config.Common.PprofBindAddress, util.SqlPprofPort)
+		port := s.config.Common.SqlPprofPort
+		if port == "" {
+			port = util.SqlPprofPort
+		}
+		go util.OpenPprofServer(s.config.Common.PprofBindAddress, port)
 	}
 
 	err = s.MetaClient.SetTier(c.Coordinator.ShardTier)
@@ -148,6 +154,7 @@ func NewServer(conf config.Config, info app.ServerInfo, logger *Logger.Logger) (
 
 	s.initWriter()
 	coordinator.SetTagLimit(c.Coordinator.TagLimit)
+	coordinator.SetFieldLimit(c.Coordinator.FieldLimit)
 
 	if s.config.Subscriber.Enabled {
 		s.SubscriberManager = coordinator.NewSubscriberManager(s.config.Subscriber, s.MetaClient, s.httpService.Handler.Logger)
@@ -155,13 +162,11 @@ func NewServer(conf config.Config, info app.ServerInfo, logger *Logger.Logger) (
 	config.SetSubscriptionEnable(s.config.Subscriber.Enabled)
 
 	syscontrol.SysCtrl.MetaClient = s.MetaClient
-	syscontrol.SysCtrl.NetStore = store
 	// set query schema limit
 	syscontrol.SetQuerySchemaLimit(c.SelectSpec.QuerySchemaLimit)
 	syscontrol.SetParallelQueryInBatch(c.HTTP.ParallelQueryInBatch)
 
 	s.initQueryExecutor(c)
-	s.httpService.Handler.ExtSysCtrl = s.TSDBStore
 
 	s.initStatisticsPusher()
 	s.httpService.Handler.StatisticsPusher = s.statisticsPusher
@@ -197,6 +202,7 @@ func NewServer(conf config.Config, info app.ServerInfo, logger *Logger.Logger) (
 	}
 
 	s.initRecordWriterService()
+	util.SetTopoManagerUrl(c.Topo.TopoManagerUrl)
 	return s, nil
 }
 
@@ -208,6 +214,8 @@ func newServer(info app.ServerInfo, logger *Logger.Logger, c *config.TSSql, meta
 		cqService = continuousquery.NewService(hostname, time.Duration(c.ContinuousQuery.RunInterval), c.ContinuousQuery.MaxProcessCQNumber)
 		cqService.WithLogger(logger)
 	}
+
+	executor.InitNagtPool(c.Data.NagtPoolCap)
 
 	s := &Server{
 		info:          info,
@@ -224,6 +232,8 @@ func newServer(info app.ServerInfo, logger *Logger.Logger, c *config.TSSql, meta
 		s.MetaClient.EnableUseSnapshotV2(c.Meta.RetentionAutoCreate, c.Meta.ExpandShardsEnable)
 	}
 	meta2.InitSchemaCleanEn(c.Meta.SchemaCleanEn)
+	coordinator.InitAsyncSchemaEndtimeUpdateEn(c.Meta.AsyncSchemaEndtimeUpdateEn, c.Meta.AsyncSchemaEndtimeUpdateCache,
+		c.Meta.AsyncSchemaEndtimeUpdateConcurrency)
 	return s
 }
 
@@ -240,6 +250,8 @@ func (s *Server) initWriter() {
 
 	s.RPCRecordWriter = writer.NewRecordWriter(s.MetaClient, time.Duration(conf.WriteTimeout))
 	s.RPCRecordWriter.WithLogger(s.Logger)
+	recStore := writer.NewRecordStore(s.MetaClient)
+	s.RPCRecordWriter.SetStorage(recStore)
 	go s.RPCRecordWriter.ApplyTimeRangeLimit(conf.TimeRangeLimit)
 }
 
@@ -265,7 +277,8 @@ func (s *Server) initRecordWriterService() {
 }
 
 func (s *Server) initArrowFlightService(c *config.TSSql) error {
-	if role := s.info.App; !(role == config.AppSingle || role == config.AppData) {
+	role := s.info.App
+	if !(role == config.AppSingle || role == config.AppData || role == config.AppSql) {
 		return errno.NewError(errno.ArrowFlightGetRoleErr)
 	}
 	var err error
@@ -274,8 +287,13 @@ func (s *Server) initArrowFlightService(c *config.TSSql) error {
 		return err
 	}
 	s.arrowFlightService.StatisticsPusher = s.statisticsPusher
-	s.RecordWriter = coordinator.NewRecordWriter(time.Duration(c.Coordinator.ShardWriterTimeout), int(c.Meta.PtNumPerNode), c.HTTP.FlightChFactor)
-	s.RecordWriter.StorageEngine = services.GetStorageEngine()
+	if role == config.AppSingle || role == config.AppData {
+		s.RecordWriter = coordinator.NewRecordWriter(time.Duration(c.Coordinator.ShardWriterTimeout), int(c.Meta.PtNumPerNode), c.HTTP.FlightChFactor)
+		s.RecordWriter.StorageEngine = services.GetStorageEngine()
+	}
+	if role == config.AppSql || role == config.AppSingle {
+		s.arrowFlightService.SetHandler(s.httpService.Handler)
+	}
 	return nil
 }
 
@@ -329,8 +347,10 @@ func (s *Server) Open() error {
 	if err := s.initMetaClientFn(); err != nil {
 		return err
 	}
-
 	s.PointsWriter.MetaClient = s.MetaClient
+	if coordinator.SchemaEndtimeUpdateManager != nil {
+		coordinator.SchemaEndtimeUpdateManager.MetaClient = s.MetaClient
+	}
 	s.httpService.Handler.MetaClient = s.MetaClient
 	s.httpService.Handler.SQLConfig = s.config
 	s.httpService.Handler.RecordWriter = s.RecordWriter
@@ -367,16 +387,19 @@ func (s *Server) Open() error {
 		return err
 	}
 	if s.sherlockService != nil {
-		s.sherlockService.Open()
+		util.MustRun(s.sherlockService.Open)
 	}
 
 	if s.config.HTTP.FlightEnabled {
-		if role := s.info.App; !(role == config.AppSingle || role == config.AppData) {
+		role := s.info.App
+		if !(role == config.AppSingle || role == config.AppData || role == config.AppSql) {
 			return errno.NewError(errno.ArrowFlightGetRoleErr)
 		}
-		s.RecordWriter.MetaClient = s.MetaClient
-		if err := s.RecordWriter.Open(); err != nil {
-			return err
+		if role == config.AppData || role == config.AppSingle {
+			s.RecordWriter.MetaClient = s.MetaClient
+			if err := s.RecordWriter.Open(); err != nil {
+				return err
+			}
 		}
 
 		s.arrowFlightService.MetaClient = s.MetaClient
@@ -400,6 +423,17 @@ func (s *Server) Open() error {
 	sysconfig.SetUpperMemPct(int64(s.config.Data.InterruptSqlMemPct))
 	if s.writerService != nil {
 		if err := s.writerService.Open(); err != nil {
+			return err
+		}
+	}
+
+	if config.GetStoreConfig().Fence.FenceEnable {
+		err := fence.ManagerIns().Open()
+		if err != nil {
+			return err
+		}
+		err = fence.ReloadFence()
+		if err != nil {
 			return err
 		}
 	}
@@ -485,6 +519,17 @@ func (s *Server) Close() error {
 	if s.runtimeCfgService != nil {
 		util.MustClose(s.runtimeCfgService)
 	}
+
+	if coordinator.SchemaEndtimeUpdateManager != nil {
+		coordinator.SchemaEndtimeUpdateManager.Stop()
+	}
+
+	if fence.ManagerIns().Fd != nil {
+		err := fence.ManagerIns().Close()
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -497,8 +542,10 @@ func (s *Server) initializeMetaClient() error {
 	} else {
 		GossipAddr := fmt.Sprintf("%s:%s", s.config.Gossip.BindAddr, strconv.Itoa(s.config.Gossip.SqlBindPort))
 		sqlNodeInfo := meta.SqlNodeInfo{
-			HttpAddr:   s.config.HTTP.BindAddr(),
-			GossipAddr: GossipAddr,
+			HttpAddr:    s.config.HTTP.BindAddr(),
+			GossipAddr:  GossipAddr,
+			RetryTime:   time.Duration(s.config.Common.MetaConnRetryTime),
+			RetryNumber: s.config.Common.MetaConnRetryNumber,
 		}
 		nid, clock, _, err := s.MetaClient.InitMetaClient(s.metaJoinPeers, s.metaUseTLS, nil, &sqlNodeInfo, "", meta.SQL)
 		if err != nil {
@@ -539,7 +586,6 @@ func (s *Server) initStatisticsPusher() {
 	stat.InitSpdyStatistics(globalTags)
 	transport.InitStatistics(transport.AppSql)
 	stat.InitSlowQueryStatistics(globalTags)
-	stat.InitRuntimeStatistics(globalTags, int(time.Duration(s.config.Monitor.StoreInterval).Seconds()))
 	stat.NewMetaStatistics().Init(globalTags)
 	stat.InitExecutorStatistics(globalTags)
 	stat.NewErrnoStat().Init(globalTags)
@@ -549,7 +595,7 @@ func (s *Server) initStatisticsPusher() {
 	s.statisticsPusher.Register(
 		stat.CollectSpdyStatistics,
 		stat.CollectSqlSlowQueryStatistics,
-		stat.CollectRuntimeStatistics,
+		stat.CollectQueryInfoStatistics,
 		stat.CollectExecutorStatistics,
 		stat.NewErrnoStat().Collect,
 		stat.NewLogKeeperStatistics().Collect,
@@ -559,7 +605,6 @@ func (s *Server) initStatisticsPusher() {
 	s.statisticsPusher.RegisterOps(stat.NewCollector().CollectOps)
 	s.statisticsPusher.RegisterOps(stat.CollectOpsSpdyStatistics)
 	s.statisticsPusher.RegisterOps(stat.CollectOpsSqlSlowQueryStatistics)
-	s.statisticsPusher.RegisterOps(stat.CollectOpsRuntimeStatistics)
 	s.statisticsPusher.RegisterOps(stat.CollectExecutorStatisticsOps)
 	s.statisticsPusher.RegisterOps(stat.NewErrnoStat().CollectOps)
 

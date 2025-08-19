@@ -26,6 +26,7 @@ import (
 	"github.com/openGemini/openGemini/app/ts-store/storage"
 	"github.com/openGemini/openGemini/app/ts-store/stream"
 	"github.com/openGemini/openGemini/app/ts-store/transport"
+	"github.com/openGemini/openGemini/engine"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/mutable"
 	"github.com/openGemini/openGemini/engine/shelf"
@@ -37,7 +38,6 @@ import (
 	Logger "github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/metaclient"
-	"github.com/openGemini/openGemini/lib/netstorage"
 	spdyTransport "github.com/openGemini/openGemini/lib/spdy/transport"
 	"github.com/openGemini/openGemini/lib/statisticsPusher"
 	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
@@ -47,13 +47,15 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/fs"
 	"github.com/openGemini/openGemini/services"
+	"github.com/openGemini/openGemini/services/consume"
 	"github.com/openGemini/openGemini/services/sherlock"
 	stream2 "github.com/openGemini/openGemini/services/stream"
 	"go.uber.org/zap"
 )
 
 type Server struct {
-	info app.ServerInfo
+	group app.ServiceGroup
+	info  app.ServerInfo
 
 	err chan error
 
@@ -73,10 +75,9 @@ type Server struct {
 	Logger       *Logger.Logger
 	serfInstance *serf.Serf
 	metaClient   metaclient.MetaClient
-	StoreService *Service
+	OpsService   *Service // provide a kernel metric collection channel for cloud service versions
 
-	sherlockService *sherlock.Service
-	iodetector      *iodetector.IODetector
+	iodetector *iodetector.IODetector
 }
 
 // NewServer returns a new instance of Server built from a config.
@@ -88,7 +89,8 @@ func NewServer(c config.Config, info app.ServerInfo, logger *Logger.Logger) (app
 
 	conf := c.(*config.TSStore)
 	conf.Data.Corrector(cpu.GetCpuNum(), conf.Common.MemorySize)
-	if err := conf.Data.ValidateEngine(netstorage.RegisteredEngines()); err != nil {
+	conf.ShelfMode.Corrector(cpu.GetCpuNum())
+	if err := conf.Data.ValidateEngine(engine.RegisteredEngines()); err != nil {
 		return nil, err
 	}
 
@@ -102,6 +104,7 @@ func NewServer(c config.Config, info app.ServerInfo, logger *Logger.Logger) (app
 	immutable.SetChunkMetaCompressMode(conf.Data.ChunkMetaCompressMode)
 	config.SetStoreConfig(conf.Data)
 	config.SetIndexConfig(conf.Index)
+	config.SetShelfMode(conf.ShelfMode)
 	compress.Init()
 	mutable.Init(cpu.GetCpuNum())
 	shelf.Open()
@@ -115,6 +118,7 @@ func NewServer(c config.Config, info app.ServerInfo, logger *Logger.Logger) (app
 	syscontrol.SetQueryEnabledWhenExceedSeries(conf.SelectSpec.EnableWhenExceed)
 	syscontrol.SetIndexReadCachePersistent(conf.Data.IndexReadCachePersistent)
 	syscontrol.SetHierarchicalStorageEnabled(conf.HierarchicalStore.Enabled)
+	syscontrol.SetIndexHierarchicalStorageEnabled(conf.HierarchicalStore.IndexEnabled)
 	syscontrol.SetWriteColdShardEnabled(conf.HierarchicalStore.EnableWriteColdShard)
 
 	s.storageDataPath = conf.Data.DataDir
@@ -136,16 +140,16 @@ func NewServer(c config.Config, info app.ServerInfo, logger *Logger.Logger) (app
 	runtime.SetMutexProfileFraction(1)
 
 	if s.config.Common.PprofEnabled {
-		go util.OpenPprofServer(s.config.Common.PprofBindAddress, util.StorePprofPort)
+		port := s.config.Common.StorePprofPort
+		if port == "" {
+			port = util.StorePprofPort
+		}
+		go util.OpenPprofServer(s.config.Common.PprofBindAddress, port)
 	}
 
 	node := metaclient.NewNode(s.metaPath)
 	s.node = node
 
-	s.StoreService = NewService(&conf.Data)
-
-	s.sherlockService = sherlock.NewService(conf.Sherlock)
-	s.sherlockService.WithLogger(s.Logger)
 	logstore.InitializeVlmCache()
 	logstore.StartHotDataDetector()
 	immutable.NewHotFileManager().Run()
@@ -161,11 +165,14 @@ func (s *Server) GetStore() *storage.Storage {
 	return s.storage
 }
 
+func (s *Server) GetStream() stream.Engine {
+	return s.stream
+}
+
 // Open opens the meta and data store and all services.
 func (s *Server) Open() error {
 	// Mark start-up in log.
 	app.LogStarting("TSStore", &s.info)
-
 	s.transServer = transport.NewServer(s.ingestAddr, s.selectAddr)
 	if err := s.transServer.Open(); err != nil {
 		return err
@@ -176,9 +183,11 @@ func (s *Server) Open() error {
 
 	startTime := time.Now()
 	storageNodeInfo := metaclient.StorageNodeInfo{
-		InsertAddr: s.config.Data.InsertAddr(),
-		SelectAddr: s.config.Data.SelectAddr(),
-		Az:         s.config.Data.AvailabilityZone,
+		InsertAddr:  s.config.Data.InsertAddr(),
+		SelectAddr:  s.config.Data.SelectAddr(),
+		Az:          s.config.Data.AvailabilityZone,
+		RetryTime:   time.Duration(s.config.Common.MetaConnRetryTime),
+		RetryNumber: s.config.Common.MetaConnRetryNumber,
 	}
 	_ = metaclient.NewClient(s.metaPath, false, 20)
 	commHttpHandler := httpserver.NewHandler(s.config.HTTPD.AuthEnabled, "")
@@ -233,28 +242,38 @@ func (s *Server) Open() error {
 	if s.config.Gossip.Enabled {
 		conf := s.config.Gossip.BuildSerf(s.config.Logging, config.AppStore, strconv.Itoa(int(nid)), nil)
 		s.serfInstance, err = app.CreateSerfInstance(conf, s.node.Clock, s.config.Gossip.Members, nil)
+		if err != nil {
+			return err
+		}
 	}
 	s.initStatisticsPusher()
 
-	if s.StoreService != nil {
-		// Open store service.
-		if err := s.StoreService.Open(); err != nil {
-			return fmt.Errorf("open meta service: %s", err)
-		}
-		s.StoreService.handler.SetstatisticsPusher(s.statisticsPusher)
-		s.StoreService.handler.metaClient = s.metaClient
+	err = s.openService()
+	if err != nil {
+		return err
 	}
 
 	s.transServer.Run(s.storage, s.stream)
-
-	if s.sherlockService != nil {
-		s.sherlockService.Open()
-	}
 	s.iodetector = iodetector.OpenIODetection(s.config.IODetector)
 	if role := s.info.App; s.config.HTTPD.FlightEnabled && (role == config.AppSingle || role == config.AppData) {
 		services.SetStorageEngine(s.stream)
 	}
 	return err
+}
+
+func (s *Server) openService() error {
+	s.OpsService = NewService(&s.config.Data)
+	s.OpsService.Init(s.metaClient, s.statisticsPusher)
+
+	if s.config.Sherlock.SherlockEnable {
+		sherlockService := sherlock.NewService(s.config.Sherlock)
+		sherlockService.WithLogger(s.Logger)
+		s.group.Add(sherlockService)
+	}
+	if s.config.Data.Consume.ConsumeEnable {
+		s.group.Add(consume.NewService(s.metaClient, s.storage.GetEngine()))
+	}
+	return s.group.Open()
 }
 
 // Close shuts down the meta and data stores and all services.
@@ -274,14 +293,7 @@ func (s *Server) Close() error {
 	s.storage.MustClose()
 	log.Info("successfully closed the storage", zap.Float64("in seconds", time.Since(startTime).Seconds()))
 
-	if s.StoreService != nil {
-		if err := s.StoreService.Close(); err != nil {
-			return err
-		}
-	}
-	if s.sherlockService != nil {
-		s.sherlockService.Stop()
-	}
+	s.group.MustClose()
 
 	if s.iodetector != nil {
 		s.iodetector.Close()
@@ -312,7 +324,7 @@ func (s *Server) initStatisticsPusher() {
 	s.statisticsPusher.Register(
 		stat.CollectPerfStatistics,
 		stat.CollectStoreSlowQueryStatistics,
-		stat.CollectRuntimeStatistics,
+		stat.CollectAbortQueryStatistics,
 		stat.CollectIOStatistics,
 		stat.NewMergeStatistics().Collect,
 		stat.NewCompactStatistics().Collect,
@@ -333,7 +345,6 @@ func (s *Server) initStatisticsPusher() {
 
 	s.statisticsPusher.RegisterOps(stat.CollectOpsPerfStatistics)
 	s.statisticsPusher.RegisterOps(stat.CollectOpsStoreSlowQueryStatistics)
-	s.statisticsPusher.RegisterOps(stat.CollectOpsRuntimeStatistics)
 	s.statisticsPusher.RegisterOps(stat.CollectOpsIOStatistics)
 	s.statisticsPusher.RegisterOps(stat.NewMergeStatistics().CollectOps)
 	s.statisticsPusher.RegisterOps(stat.NewCompactStatistics().CollectOps)
@@ -353,7 +364,6 @@ func (s *Server) initStatistics() {
 
 	stat.InitPerfStatistics(globalTags)
 	stat.InitStoreSlowQueryStatistics(globalTags)
-	stat.InitRuntimeStatistics(globalTags, int(time.Duration(s.config.Monitor.StoreInterval).Seconds()))
 	stat.InitIOStatistics(globalTags)
 	stat.NewMergeStatistics().Init(globalTags)
 	stat.NewCompactStatistics().Init(globalTags)

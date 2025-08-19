@@ -40,7 +40,7 @@ overrides:
   '1234': &id001
     max_label_name_length: 1022
     reject_old_samples: true
-    reject_old_samples_max_age: "7d"
+    reject_old_samples_max_age: "7d" 
     creation_grace_period: "5m"
   '1235': *id001
   '1236': *id001
@@ -68,45 +68,7 @@ func TestLoadRuntimeConfigShouldLoadEmptyFile(t *testing.T) {
 `)
 	actual, err := loadRuntimeConfig(yamlFile)
 	require.NoError(t, err)
-	require.Equal(t, &runtimeConfig{}, actual)
-}
-
-func TestLoadRuntimeConfigShouldReturnErrorOnMultipleDocumentsInTheConfig(t *testing.T) {
-	cases := []string{
-		`
----
----
-`, `
----
-overrides:
-  '1234':
-    max_label_name_length: 123
----
-overrides:
-  '1234':
-    max_label_name_length: 123
-`, `
----
-# This is an empty YAML.
----
-overrides:
-  '1234':
-    max_label_name_length: 123
-`, `
----
-overrides:
-  '1234':
-    max_label_name_length: 123
----
-# This is an empty YAML.
-`,
-	}
-
-	for _, tc := range cases {
-		actual, err := loadRuntimeConfig(strings.NewReader(tc))
-		require.Equal(t, errMultipleDocuments, err)
-		require.Nil(t, actual)
-	}
+	require.Equal(t, &runtimeConfig{TenantLimits: make(map[string]*config.Limits)}, actual)
 }
 
 func TestRuntimeCfgServiceLoadLimitCfg(t *testing.T) {
@@ -115,7 +77,7 @@ overrides:
   '1234': &id001
     max_label_name_length: 1022
     reject_old_samples: true
-    reject_old_samples_max_age: "7d"
+    reject_old_samples_max_age: "7d" 
     creation_grace_period: "5m"
 `
 
@@ -155,19 +117,35 @@ overrides:
   '1234':
     max_label_name_length: 1022
     reject_old_samples: true
-    reject_old_samples_max_age: "7d"
+    reject_old_samples_max_age: "7d" 
     creation_grace_period: "5m"
 `)
 	runtimeCfg, err := loadRuntimeConfig(yamlFile)
 	require.NoError(t, err)
 	srv.setConfig(runtimeCfg)
 
+	var compare = func(exp string, got string) bool {
+		expLines := strings.Split(exp, "\n")
+		gotLines := strings.Split(got, "\n")
+
+		if len(expLines) != len(gotLines) {
+			return false
+		}
+
+		for i := range expLines {
+			if strings.TrimSpace(expLines[i]) != strings.TrimSpace(gotLines[i]) {
+				return false
+			}
+		}
+		return true
+	}
+
 	t.Run("get current runtime config", func(t *testing.T) {
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "/runtime_config", nil)
 		handle(w, req)
 
-		expect := `overrides:
+		expect := `overrides: &overrides
     "1234":
         prom_limit_enabled: false
         max_label_name_length: 1022
@@ -182,7 +160,7 @@ overrides:
         max_query_length: 0s
 `
 		require.Equal(t, http.StatusOK, w.Code)
-		require.Equal(t, expect, w.Body.String())
+		require.True(t, compare(expect, w.Body.String()), expect)
 	})
 
 	t.Run("get diff runtime config", func(t *testing.T) {
@@ -199,6 +177,6 @@ overrides:
 `
 
 		require.Equal(t, http.StatusOK, w.Code)
-		require.Equal(t, expect, w.Body.String())
+		require.True(t, compare(expect, w.Body.String()), expect)
 	})
 }

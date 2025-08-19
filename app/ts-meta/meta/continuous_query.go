@@ -84,6 +84,13 @@ func (s *Store) getContinuousQueryLease(host string) ([]string, error) {
 }
 
 func (s *Store) handlerSql2MetaHeartbeat(host string) error {
+	if err := s.handlerSql2MetaHeartbeatBase(host); err != nil {
+		return err
+	}
+	return s.notifyCQLeaseChanged()
+}
+
+func (s *Store) handlerSql2MetaHeartbeatBase(host string) error {
 	if !s.IsLeader() {
 		return raft.ErrNotLeader
 	}
@@ -109,8 +116,7 @@ func (s *Store) handlerSql2MetaHeartbeat(host string) error {
 	sort.Strings(s.sqlHosts)
 
 	s.scheduleCQsWithoutLock(sqlJoin)
-
-	return s.notifyCQLeaseChanged()
+	return nil
 }
 
 func (s *Store) notifyCQLeaseChanged() error {
@@ -185,6 +191,15 @@ func (s *Store) checkSQLNodesHeartbeat() {
 // handlerSQLNodeOffline removes sql host when one ts-sql is down.
 // delete sqlHost from cqLease and sqlHosts and heartbeatInfoList
 func (s *Store) handlerSQLNodeOffline(sqlHost string, hbi *list.Element) {
+	s.handlerSQLNodeOfflineBase(sqlHost, hbi)
+	// notify all alive sql nodes that CQ may be changeds
+	err := s.notifyCQLeaseChanged()
+	if err != nil {
+		s.Logger.Warn("notify cq lease command failed", zap.String("sql host", sqlHost), zap.Error(err))
+	}
+}
+
+func (s *Store) handlerSQLNodeOfflineBase(sqlHost string, hbi *list.Element) {
 	s.cqLock.Lock()
 	defer s.cqLock.Unlock()
 
@@ -201,12 +216,6 @@ func (s *Store) handlerSQLNodeOffline(sqlHost string, hbi *list.Element) {
 	s.heartbeatInfoList.Remove(hbi)
 
 	s.scheduleCQsWithoutLock(sqlOffline)
-
-	// notify all alive sql nodes that CQ may be changed
-	err := s.notifyCQLeaseChanged()
-	if err != nil {
-		s.Logger.Warn("notify cq lease command failed", zap.String("sql host", sqlHost), zap.Error(err))
-	}
 }
 
 // handleCQCreated sorts s.cqNames and inserts the new cq to the s.cqNames slice.

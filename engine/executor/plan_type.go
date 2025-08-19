@@ -172,11 +172,17 @@ func NilGetPlanType(schema hybridqp.Catalog, stmt *influxql.SelectStatement) Pla
 }
 
 func NormalGetPlanType(schema hybridqp.Catalog, stmt *influxql.SelectStatement) PlanType {
+
+	// if cte query, then return unknown
+	if stmt != nil && len(stmt.AllDependencyCTEs) > 0 {
+		return UNKNOWN
+	}
+
 	// Avoid promql function call
 	hasPromCall := len(schema.GetPromCalls()) > 0
 	isPromQuery := schema.Options().IsPromQuery()
 	hasPromSortField := (len(schema.Options().GetSortFields()) > 0)
-	if hasPromCall || (isPromQuery && hasPromSortField) {
+	if hasPromCall || (isPromQuery && hasPromSortField) || schema.HasInCondition() {
 		return UNKNOWN
 	}
 

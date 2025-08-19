@@ -24,9 +24,7 @@ import (
 
 	"github.com/hashicorp/raft"
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
-	"github.com/openGemini/openGemini/lib/backup"
 	"github.com/openGemini/openGemini/lib/errno"
-	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/spdy/transport"
 	"github.com/openGemini/openGemini/lib/syscontrol"
@@ -262,7 +260,11 @@ func createDatabase(cmd *proto2.Command) error {
 	if err != nil {
 		return err
 	}
+	return assignDbpt(dbPts)
+}
 
+func assignDbpt(dbPts []*meta.DbPtInfo) error {
+	var err error
 	once := sync.Once{}
 	wg := sync.WaitGroup{}
 	wg.Add(len(dbPts))
@@ -455,8 +457,16 @@ func (h *VerifyDataNodeStatus) Process() (transport.Codec, error) {
 	rsp := &message.VerifyDataNodeStatusResponse{}
 	err := h.store.verifyDataNodeStatus(h.req.NodeID)
 	if err != nil {
-		rsp.Err = err.Error()
-		return rsp, nil
+		return DoHandleRsp(rsp, err)
+	}
+	return rsp, nil
+}
+func DoHandleRsp(rsp *message.VerifyDataNodeStatusResponse, err error) (transport.Codec, error) {
+	rsp.Err = err.Error()
+	switch stdErr := err.(type) {
+	case *errno.Error:
+		rsp.ErrCode = stdErr.Errno()
+	default:
 	}
 	return rsp, nil
 }
@@ -468,8 +478,23 @@ func (h *SendSysCtrlToMeta) Process() (transport.Codec, error) {
 	switch h.req.Mod {
 	case syscontrol.Failpoint:
 		err = handleFailpoint(h)
+	}
+
+	if err != nil {
+		rsp.Err = err.Error()
+	}
+	return rsp, nil
+}
+
+func (h *SendBackupToMeta) Process() (transport.Codec, error) {
+	rsp := &message.SendBackupToMetaResponse{}
+
+	var err error
+	switch h.req.Mod {
 	case syscontrol.Backup:
-		err = handleBackup(h)
+		rsp.Result, err = h.store.GetMarshalData([]string{})
+	default:
+		return rsp, fmt.Errorf("SendBackupToMeta: param mod not support, mod: %s", h.req.Mod)
 	}
 
 	if err != nil {
@@ -509,29 +534,6 @@ func handleFailpoint(h *SendSysCtrlToMeta) error {
 		err = failpoint.Enable(point, term)
 	}
 	return err
-}
-
-func handleBackup(h *SendSysCtrlToMeta) error {
-	backupPath := h.req.Param[backup.BackupPath]
-	if backupPath == "" {
-		err := fmt.Errorf("missing the required parameter backupPath")
-		return err
-	}
-	isRemote := h.req.Param[backup.IsRemote] == "true"
-	isNode := h.req.Param[backup.IsNode] == "true"
-
-	b := &Backup{
-		IsRemote:   isRemote,
-		IsNode:     isNode,
-		BackupPath: backupPath,
-	}
-	if err := b.RunBackupMeta(); err != nil {
-		logger.GetLogger().Error("run backup error", zap.Error(err))
-
-		fmt.Sprintln(err)
-		return err
-	}
-	return nil
 }
 
 func (h *ShowCluster) Process() (transport.Codec, error) {

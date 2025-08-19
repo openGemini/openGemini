@@ -21,6 +21,7 @@ import (
 
 	"github.com/openGemini/openGemini/lib/request"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const defaultSecureValue = "*****"
@@ -414,4 +415,35 @@ func TestObsFs_Size0(t *testing.T) {
 	tmpSize, err := o.Size()
 	assert.Nil(t, err)
 	assert.Equal(t, tmpSize, fileSize)
+}
+
+func TestRemoveAllWithOutDir(t *testing.T) {
+	dirname := EncodeObsPath("endpoint", "bucketName", "test_obs_fs_mkdir/a/b/c/", "ak", "sk")
+	client := newMockObsClient()
+	obsConf := &obsConf{
+		ak:       "ak",
+		sk:       "sk",
+		endpoint: "endpoint",
+		bucket:   "bucketName",
+	}
+	PutObsClient(obsConf, client)
+	o := &obsFs{}
+	err := o.RemoveAllWithOutDir(dirname)
+	require.NoError(t, err)
+	client.dummy = map[string][]byte{
+		"test":   []byte("test"),
+		"test1/": []byte("test"),
+	}
+	PutObsClient(obsConf, client)
+	err = o.RemoveAllWithOutDir(dirname)
+	require.NoError(t, err)
+
+	err = o.RemoveAllWithOutDir("obs://test")
+	require.Error(t, err)
+
+	client = newMockObsClient()
+	client.mockErr = true
+	PutObsClient(obsConf, client)
+	err = o.RemoveAllWithOutDir(dirname)
+	require.Error(t, err)
 }

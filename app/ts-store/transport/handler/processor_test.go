@@ -18,8 +18,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/agiledragon/gomonkey/v2"
 	"github.com/openGemini/openGemini/engine/executor"
+	"github.com/openGemini/openGemini/lib/codec"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/msgservice"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -48,4 +51,46 @@ func TestCrashProcessor_Handle(t *testing.T) {
 	data1.NoMarkCrash = true
 	err = p1.Handle(w, data1)
 	assert.Equal(t, err, nil)
+}
+
+func TestDDLProcessor_Handle1(t *testing.T) {
+	w := &MockNewResponser{}
+	var data interface{} = &executor.Crash{}
+	p := NewDDLProcessor(nil)
+	err := p.Handle(w, data)
+	assert.EqualError(t, err, "invalid data type, exp: *msgservice.DDLMessage, got: *executor.Crash")
+}
+
+func TestDDLProcessor_Handle2(t *testing.T) {
+	w := &MockNewResponser{}
+	data := msgservice.NewDDLMessage(99, nil)
+	p := NewDDLProcessor(nil)
+	err := p.Handle(w, data)
+	assert.EqualError(t, err, "unsupported message type: 99")
+}
+
+func TestDDLProcessor_Handle3(t *testing.T) {
+	w := &MockNewResponser{}
+	data := msgservice.NewDDLMessage(1, nil)
+	p := NewDDLProcessor(nil)
+	patches := gomonkey.NewPatches()
+	defer patches.Reset()
+	patches.ApplyMethod((*SeriesKeys)(nil), "SetMessage", func(_ *SeriesKeys) error {
+		return nil
+	})
+	patches.ApplyMethod((*SeriesKeys)(nil), "SetStore", func(_ *SeriesKeys) {
+	})
+	patches.ApplyMethod((*SeriesKeys)(nil), "Process", func(_ *SeriesKeys) (codec.BinaryCodec, error) {
+		return nil, nil
+	})
+	err := p.Handle(w, data)
+	assert.NoError(t, err)
+}
+
+func TestSysProcessor_Handle(t *testing.T) {
+	w := &MockNewResponser{}
+	data := msgservice.NewDDLMessage(1, nil)
+	p := NewSysProcessor(nil)
+	err := p.Handle(w, data)
+	assert.EqualError(t, err, "invalid data type, exp: *msgservice.SysCtrlRequest, got: *msgservice.DDLMessage")
 }

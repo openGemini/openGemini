@@ -28,7 +28,7 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/logger"
-	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/msgservice"
 	"github.com/openGemini/openGemini/lib/spdy"
 	"github.com/openGemini/openGemini/lib/spdy/rpc"
 	"go.uber.org/zap"
@@ -68,9 +68,9 @@ func NewDDLProcessor(store *storage.Storage) *DDLProcessor {
 }
 
 func (p *DDLProcessor) Handle(w spdy.Responser, data interface{}) error {
-	msg, ok := data.(*netstorage.DDLMessage)
+	msg, ok := data.(*msgservice.DDLMessage)
 	if !ok {
-		return executor.NewInvalidTypeError("*netstorage.DDLMessage", data)
+		return errno.NewInvalidTypeError("*msgservice.DDLMessage", data)
 	}
 
 	h := NewHandler(msg.Typ)
@@ -88,12 +88,12 @@ func (p *DDLProcessor) Handle(w spdy.Responser, data interface{}) error {
 		return err
 	}
 
-	rspTyp, ok := netstorage.MessageResponseTyp[msg.Typ]
+	rspTyp, ok := msgservice.MessageResponseTyp[msg.Typ]
 	if !ok {
 		return fmt.Errorf("no response message type: %d", msg.Typ)
 	}
 
-	rsp := netstorage.NewDDLMessage(rspTyp, rspMsg)
+	rsp := msgservice.NewDDLMessage(rspTyp, rspMsg)
 	return w.Response(rsp, true)
 }
 
@@ -108,9 +108,9 @@ func NewSysProcessor(store *storage.Storage) *SysProcessor {
 }
 
 func (p *SysProcessor) Handle(w spdy.Responser, data interface{}) error {
-	msg, ok := data.(*netstorage.SysCtrlRequest)
+	msg, ok := data.(*msgservice.SysCtrlRequest)
 	if !ok {
-		return executor.NewInvalidTypeError("*netstorage.SysCtrlRequest", data)
+		return errno.NewInvalidTypeError("*msgservice.SysCtrlRequest", data)
 	}
 
 	h := &SysCtrlCmd{req: msg, w: w}
@@ -136,7 +136,7 @@ func (p *SelectProcessor) Handle(w spdy.Responser, data interface{}) (err error)
 	}()
 	msg, ok := data.(*rpc.Message)
 	if !ok {
-		return executor.NewInvalidTypeError("*executor.RPCMessage", data)
+		return errno.NewInvalidTypeError("*executor.RPCMessage", data)
 	}
 
 	req, ok := msg.Data().(*executor.RemoteQuery)
@@ -144,7 +144,7 @@ func (p *SelectProcessor) Handle(w spdy.Responser, data interface{}) (err error)
 		logger.GetLogger().Error("invalid message type",
 			zap.String("exp", "*executor.RemoteQuery"),
 			zap.String("got", reflect.TypeOf(msg.Data()).String()))
-		return executor.NewInvalidTypeError("*executor.RemoteQuery", msg.Data())
+		return errno.NewInvalidTypeError("*executor.RemoteQuery", msg.Data())
 	}
 
 	qm := query.NewManager(msg.ClientID())
@@ -231,7 +231,7 @@ func NewAbortProcessor() *AbortProcessor {
 func (p *AbortProcessor) Handle(w spdy.Responser, data interface{}) error {
 	msg, ok := data.(*executor.Abort)
 	if !ok {
-		return executor.NewInvalidTypeError("*executor.Abort", data)
+		return errno.NewInvalidTypeError("*executor.Abort", data)
 	}
 
 	logger.GetLogger().Info("AbortProcessor.Handle",
@@ -239,9 +239,9 @@ func (p *AbortProcessor) Handle(w spdy.Responser, data interface{}) error {
 		zap.Uint64("clientID", msg.ClientID), zap.Bool("noMarkCrash", msg.NoMarkCrash))
 
 	if msg.NoMarkCrash {
-		query.NewManager(msg.ClientID).NoMarkAbort(msg.QueryID)
+		query.NewManager(msg.ClientID).NoMarkAbort(msg.QueryID, "")
 	} else {
-		query.NewManager(msg.ClientID).Abort(msg.QueryID)
+		query.NewManager(msg.ClientID).Abort(msg.QueryID, "")
 	}
 
 	err := w.Response(executor.NewFinishMessage(0), true)
@@ -261,7 +261,7 @@ func NewCrashProcessor() *CrashProcessor {
 func (p *CrashProcessor) Handle(w spdy.Responser, data interface{}) error {
 	msg, ok := data.(*executor.Crash)
 	if !ok {
-		return executor.NewInvalidTypeError("*executor.Crash", data)
+		return errno.NewInvalidTypeError("*executor.Crash", data)
 	}
 
 	logger.GetLogger().Info("CrashProcessor.Handle",

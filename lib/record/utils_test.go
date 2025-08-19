@@ -16,6 +16,7 @@ package record_test
 
 import (
 	"fmt"
+	"sort"
 	"testing"
 
 	"github.com/openGemini/openGemini/lib/record"
@@ -257,4 +258,26 @@ func TestDropColByIndex(t *testing.T) {
 
 	record.DropColByIndex(rec, []int{1})
 	require.Equal(t, "boolean", rec.Schema[1].Name)
+}
+
+func TestPadTimeColIfNeeded(t *testing.T) {
+	sc := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_String, Name: "string"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+
+	var check = func(rec *record.Record) {
+		sort.Sort(rec)
+		record.PadTimeColIfNeeded(rec)
+		require.Equal(t, 3, rec.Len())
+		require.Equal(t, record.TimeField, rec.Schema[rec.Len()-1].Name)
+	}
+
+	rec := &record.Record{}
+	rec.ResetWithSchema(sc)
+	check(rec)
+
+	rec.ResetWithSchema(sc[:2])
+	check(rec)
 }

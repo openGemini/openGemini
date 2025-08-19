@@ -435,42 +435,12 @@ func Test_SlimChunk(t *testing.T) {
 	chunk.CheckChunk()
 }
 
-func TestTargetTable(t *testing.T) {
-	rowCap := 1
-	tupleCap := 1
-	table := executor.NewTargetTable(rowCap, tupleCap)
-	table.Reset()
-
-	checkAndAllocate := func(expect bool) {
-		_, _, ok := table.CheckAndAllocate()
-		assert.Equal(t, ok, expect)
-
-		if ok {
-			table.Commit()
-		}
-	}
-
-	onlyAllocate := func() {
-		row, tuple := table.Allocate()
-		assert.NotEqual(t, row, nil)
-		assert.NotEqual(t, tuple, nil)
-		table.Commit()
-	}
-
-	checkAndAllocate(true)
-	checkAndAllocate(false)
-	onlyAllocate()
-	onlyAllocate()
-	checkAndAllocate(true)
-	checkAndAllocate(false)
-}
-
 func BuildCopyByRowDataTypeSrcChunk(rt hybridqp.RowDataType) executor.Chunk {
 	b := executor.NewChunkBuilder(rt)
 	chunk := b.NewChunk("mst")
 	chunk.AppendTimes([]int64{1, 2, 3})
-	chunk.AddTagAndIndex(*ParseChunkTags("tag1=" + "tag1val"), 0)
-	chunk.AddIntervalIndex(0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tag1=" + "tag1val"), 0)
+	chunk.AppendIntervalIndex(0)
 	chunk.Column(0).AppendFloatValues([]float64{1, 2, 3})
 	chunk.Column(0).AppendColumnTimes([]int64{1, 2, 3})
 	chunk.Column(0).AppendManyNotNil(3)
@@ -510,8 +480,8 @@ func BuildCopyByRowDataTypeDstChunk(rt hybridqp.RowDataType) executor.Chunk {
 	b := executor.NewChunkBuilder(rt)
 	chunk := b.NewChunk("mst")
 	chunk.AppendTimes([]int64{1, 2, 3})
-	chunk.AddTagAndIndex(*ParseChunkTags("tag1=" + "tag1val"), 0)
-	chunk.AddIntervalIndex(0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tag1=" + "tag1val"), 0)
+	chunk.AppendIntervalIndex(0)
 	chunk.Column(1).AppendFloatValues([]float64{1, 2, 3})
 	chunk.Column(1).AppendColumnTimes([]int64{1, 2, 3})
 	chunk.Column(1).AppendManyNotNil(3)
@@ -609,72 +579,4 @@ func TestDecodeTagsWithoutTag(t *testing.T) {
 			t.Fatal("not expect,exp le ", expLe, "current le", le)
 		}
 	})
-}
-
-func TestChunkPromStepInvariant(t *testing.T) {
-	rowDataType := hybridqp.NewRowDataTypeImpl(
-		influxql.VarRef{Val: "val0", Type: influxql.Float},
-	)
-	b := executor.NewChunkBuilder(rowDataType)
-	chunk := b.NewChunk("mst")
-	chunk.AppendTimes([]int64{1, 1, 1})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=" + "tv1"), 0)
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=" + "tv2"), 1)
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=" + "tv3"), 2)
-	chunk.Column(0).AppendFloatValues([]float64{1, 2, 3})
-	chunk.Column(0).AppendManyNotNil(3)
-	dstChunk := b.NewChunk("mst")
-
-	// 1.preGroup same of skiplastgroup
-	preGroup1 := "\x02\x00\x04\x00\b\x00tk1\x00tv1\x00"
-	dstChunk = chunk.PromStepInvariant(executor.SkipLastGroup, []byte(preGroup1), nil, 1, 1, 3, dstChunk)
-	assert.Equal(t, dstChunk.Len(), 4)
-
-	// 2.1 preGroup same of onlylastGroup
-	preGroup3 := "\x02\x00\x04\x00\b\x00tk1\x00tv3\x00"
-	c := chunk.PromStepInvariant(executor.OnlyLastGroup, []byte(preGroup3), nil, 1, 1, 2, nil)
-	assert.Equal(t, c.Len(), 3)
-	// 2.2 nextGroup same of onlylastGroup
-	c = chunk.PromStepInvariant(executor.OnlyLastGroup, nil, []byte(preGroup3), 1, 1, 2, nil)
-	assert.Equal(t, c.Len(), 3)
-
-	// 3. time err of onlylastGroup
-	chunk.SetTime([]int64{1, 1, 2})
-	c = chunk.PromStepInvariant(executor.OnlyLastGroup, nil, nil, 1, 1, 3, nil)
-	assert.Equal(t, c.Len(), 3)
-
-	// 4.time err of skiplastGroup
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=" + "tv4"), 3)
-	chunk.SetTime([]int64{1, 1, 2, 1})
-	chunk.Column(0).AppendFloatValue(4)
-	chunk.Column(0).AppendNotNil()
-	dstChunk.Reset()
-	dstChunk = chunk.PromStepInvariant(executor.SkipLastGroup, nil, nil, 1, 1, 3, dstChunk)
-	assert.Equal(t, dstChunk.Len(), 6)
-
-	// 5. onlyLastGroup normal
-	chunk.SetTime([]int64{1, 1, 1, 1})
-	chunk = chunk.PromStepInvariant(executor.OnlyLastGroup, nil, nil, 1, 1, 3, nil)
-	assert.Equal(t, chunk.Len(), 6)
-
-	// 6.onlylastGroup multipoint of a group
-	chunk.Reset()
-	chunk.AppendTimes([]int64{1, 1, 1})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=" + "tv1"), 0)
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=" + "tv2"), 1)
-	chunk.Column(0).AppendFloatValues([]float64{1, 2, 3})
-	chunk.Column(0).AppendManyNotNil(3)
-	c = chunk.PromStepInvariant(executor.OnlyLastGroup, nil, nil, 1, 1, 3, nil)
-	assert.Equal(t, c.Len(), 3)
-
-	// 7. skiplastGroup mulitpoint of a group
-	chunk.Reset()
-	chunk.AppendTimes([]int64{1, 1, 1})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=" + "tv1"), 0)
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=" + "tv2"), 2)
-	chunk.Column(0).AppendFloatValues([]float64{1, 2, 3})
-	chunk.Column(0).AppendManyNotNil(3)
-	dstChunk.Reset()
-	dstChunk = chunk.PromStepInvariant(executor.SkipLastGroup, nil, nil, 1, 1, 3, dstChunk)
-	assert.Equal(t, dstChunk.Len(), 3)
 }

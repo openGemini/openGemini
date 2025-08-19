@@ -18,6 +18,7 @@ import (
 	"encoding/binary"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
+	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/sysinfo"
 	"github.com/openGemini/openGemini/lib/util"
 )
@@ -349,6 +350,13 @@ func (c *BinaryDecoder) Uvarint() (uint64, bool) {
 	}
 	c.offset += n
 	return u, true
+}
+
+func (c *BinaryDecoder) CheckSize(key string, minSize int) error {
+	if c.RemainSize() < minSize {
+		return errno.NewError(errno.TooSmallData, key, minSize, c.RemainSize())
+	}
+	return nil
 }
 
 func DecodeInt64WithScale(b []byte) ([]byte, int64, bool) {

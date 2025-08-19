@@ -1,0 +1,176 @@
+// Copyright 2025 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package mlf
+
+import (
+	"encoding/binary"
+	"math"
+)
+
+type decodeFunc func(dst []float64, data []byte, precision, multiplicand float64, publicPrefixSize int)
+
+var decodeFuncTable [maxFactorBits]decodeFunc
+
+func init() {
+    {{- range .NeatItemSizes }}
+    decodeFuncTable[{{.ItemSize}}] = decodeItemSize{{.ItemSize}}
+    {{- end}}
+    {{- range .NormalItemSizes }}
+    {{- range $n := .ItemSize }}
+    decodeFuncTable[{{$n}}] = decodeItemSize{{$n}}
+    {{- end}}
+    {{- end}}
+    {{- range $n := .ItemSize33To49 }}
+    decodeFuncTable[{{$n}}] = decodeItemSize{{$n}}
+    {{- end}}
+}
+
+{{range .NeatItemSizes}}
+func decodeItemSize{{.ItemSize}}(dst []float64, data []byte, precision float64, multiplicand float64, publicPrefixSize int) {
+	const itemSize = {{.ItemSize}}
+	var base uint64 = ((1<<publicPrefixSize - 1) << (mantissaBits - publicPrefixSize)) | (middleNumber << mantissaBits)
+	left := mantissaBits - itemSize - publicPrefixSize
+
+	var decode = func(c uint64) float64 {
+		f := math.Float64frombits(base|(c<<left)) - 1
+		return math.Floor(multiplicand*f*precision) / precision
+	}
+
+    size := len(dst)
+	n := size - size%(64/itemSize)
+	var swap uint64
+	i := 0
+
+	for i < n {
+		swap = binary.BigEndian.Uint64(data)
+		data = data[8:]
+
+        {{range .Items}}
+        dst[i] = decode(swap >> (64 - itemSize))
+        swap <<= itemSize
+        i++
+        {{- end}}
+        dst[i] = decode(swap >> (64 - itemSize))
+        i++
+	}
+
+	if n == size {
+		return
+	}
+
+	swap = binary.BigEndian.Uint64(data)
+	for j := i; j < size; j++ {
+		dst[j] = decode(swap >> (64 - itemSize))
+		swap <<= itemSize
+	}
+}
+{{end}}
+
+{{- range $item := .NormalItemSizes }}
+{{- range $n := .ItemSize }}
+func decodeItemSize{{$n}}(dst []float64, data []byte, precision float64, multiplicand float64, publicPrefixSize int) {
+	const itemSize = {{$n}}
+	var f float64
+	var base uint64 = ((1<<publicPrefixSize - 1) << (mantissaBits - publicPrefixSize)) | (middleNumber << mantissaBits)
+	left := mantissaBits - itemSize - publicPrefixSize
+
+	var decode = func(c uint64) float64 {
+		f = math.Float64frombits(base|(c<<left)) - 1
+		return math.Floor(multiplicand*f*precision) / precision
+	}
+
+	i := 0
+	n := len(dst)
+	var swap, coefficient uint64
+	var swapSize = 0
+
+	for i < n {
+		coefficient = swap >> (64 - itemSize)
+		swap = binary.BigEndian.Uint64(data)
+		data = data[8:]
+
+		k := itemSize - swapSize
+		swapSize = 64 - k
+		coefficient |= swap >> swapSize
+		dst[i] = decode(coefficient)
+		swap <<= k
+		i++
+
+		if (n-i) < 64/itemSize {
+			break
+		}
+
+        {{range $item.Items}}
+        dst[i] = decode(swap >> (64 - itemSize))
+		swap <<= itemSize
+		swapSize -= itemSize
+		i++
+
+        {{end}}
+
+		if i < n && swapSize >= itemSize {
+			dst[i] = decode(swap >> (64 - itemSize))
+			swap <<= itemSize
+			swapSize -= itemSize
+			i++
+		}
+	}
+
+	for j := i; j < n; j++ {
+		dst[j] = decode(swap >> (64 - itemSize))
+		swap <<= itemSize
+	}
+}
+{{end -}}
+{{end -}}
+
+{{- range $n := .ItemSize33To49 }}
+func decodeItemSize{{$n}}(dst []float64, data []byte, precision float64, multiplicand float64, publicPrefixSize int) {
+	const itemSize = {{$n}}
+	var f float64
+	var base uint64 = ((1<<publicPrefixSize - 1) << (mantissaBits - publicPrefixSize)) | (middleNumber << mantissaBits)
+	left := mantissaBits - itemSize - publicPrefixSize
+
+	var decode = func(c uint64) float64 {
+		f = math.Float64frombits(base|(c<<left)) - 1
+		return math.Floor(multiplicand*f*precision) / precision
+	}
+
+	i := 0
+	n := len(dst)
+	var swap, coefficient uint64
+	var swapSize = 0
+
+	for i < n {
+		coefficient = swap >> (64 - itemSize)
+		swap = binary.BigEndian.Uint64(data)
+		data = data[8:]
+
+		k := itemSize - swapSize
+		swapSize = 64 - k
+		coefficient |= swap >> swapSize
+		dst[i] = decode(coefficient)
+		swap <<= k
+		i++
+
+		if i < n && swapSize >= itemSize {
+			dst[i] = decode(swap >> (64 - itemSize))
+			swap <<= itemSize
+			swapSize -= itemSize
+			i++
+		}
+	}
+}
+{{end -}}

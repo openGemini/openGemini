@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 
-	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/go-msgpack/codec"
+	"github.com/hashicorp/go-msgpack/v2/codec"
 )
 
 // Decode reverses the encode operation on a byte slice input
