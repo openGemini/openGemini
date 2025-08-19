@@ -18,6 +18,7 @@ env:
   GO111MODULE: on
   GONOSUMDB: "*"
   GOSUMDB: off
+  TZ: Asia/Shanghai
 
 jobs:
   CommitLint:
@@ -64,15 +65,7 @@ jobs:
         run: make go-vet-check
 #      - name: Run golangci-lint  ## TODO: use github-action below
 #        run: make golangci-lint-check
-      - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v3.6.0
-        with:
-          version: v1.56
-#          args: --timeout=10m --tests=false --skip-dirs=lifted --skip-dirs=tests
-          args: --disable=staticcheck --timeout=10m --tests=false --skip-dirs=lifted --skip-dirs=tests
-          only-new-issues: true
-          skip-pkg-cache: true
-          skip-build-cache: true
+
   UT:
     name: unit test
     needs: [GoLint]

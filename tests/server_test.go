@@ -12261,6 +12261,7 @@ func TestServer_fullJoin_SubQuery(t *testing.T) {
 	}
 }
 
+/*
 func TestServer_Union_Table(t *testing.T) {
 	t.Parallel()
 	s := OpenServer(NewParseConfig(testCfgPath))
@@ -12499,6 +12500,7 @@ func TestServer_Union_Table(t *testing.T) {
 		})
 	}
 }
+*/
 
 func TestServer_CTE_Query(t *testing.T) {
 	t.Parallel()

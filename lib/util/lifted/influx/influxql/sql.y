@@ -680,7 +680,7 @@ SIMPLE_SELECT_STATEMENT:
         }
     }
 
-    
+
 UNION_TYPE:
     {
         $$ = UnionDistinct

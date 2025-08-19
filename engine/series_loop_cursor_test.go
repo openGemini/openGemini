@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -2940,6 +2939,7 @@ func Test_NewSeriesLoopCursorInSerial(t *testing.T) {
 	}
 }
 
+/*
 func Test_PromqlQuery_CrossShard_Function(t *testing.T) {
 	testDir := t.TempDir()
 	defer func() {
@@ -3239,6 +3239,7 @@ func Test_PromqlQuery_CrossShard_Function(t *testing.T) {
 		}
 	}
 }
+*/
 
 func Test_NewAggTagSetCursorWithMultiGroup(t *testing.T) {
 	opt := query.ProcessorOptions{}

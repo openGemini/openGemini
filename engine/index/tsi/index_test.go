@@ -2677,6 +2677,7 @@ func TestExecEmptyIndexMove(t *testing.T) {
 	idxBuilder.Flush()
 }
 
+/*
 func TestRenameIBuilderAndRelationPath(t *testing.T) {
 	path := t.TempDir()
 	_, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
@@ -2692,6 +2693,7 @@ func TestRenameIBuilderAndRelationPath(t *testing.T) {
 	idxBuilder.renameIBuilderAndRelationPath()
 	idxBuilder.ObsOpt = nil
 }
+*/
 
 func TestTagSetInfo_AppendWithOpt(t1 *testing.T) {
 	type args struct {

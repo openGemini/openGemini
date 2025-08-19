@@ -38,7 +38,7 @@ func TestGraph(t *testing.T) {
 		"metadata": {
       		"region": "cn-north-1",
       		"timestamp": "1724360595038",
-			"topokeys": [ 
+			"topokeys": [
 				"source0",
 				"source1"
     		]
@@ -49,7 +49,7 @@ func TestGraph(t *testing.T) {
 				  "uid": "vm_a6a7f584",
 				  "metadata": {
 					"kind": "Node",
-					"region": "cn-north-1", 
+					"region": "cn-north-1",
 					"tags": { "1": "1" }
 				  }
 				},
@@ -57,7 +57,7 @@ func TestGraph(t *testing.T) {
 				  "uid": "vm_a23fewfq1",
 				  "metadata": {
 					"kind": "Node",
-					"region": "cn-north-1", 
+					"region": "cn-north-1",
 					"tags": { "1": "1" }
 				  }
 				},
@@ -65,7 +65,7 @@ func TestGraph(t *testing.T) {
 				  "uid": "pod_e253075e",
 				  "metadata": {
 					"kind": "Pod",
-					"region": "cn-north-1", 
+					"region": "cn-north-1",
 					"tags": { "1": "1" }
 				  }
 				},
@@ -73,7 +73,7 @@ func TestGraph(t *testing.T) {
 				  "uid": "pod_9a254377",
 				  "metadata": {
 					"kind": "Pod",
-					"region": "cn-north-1", 
+					"region": "cn-north-1",
 					"tags": { "1": "1" }
 				  }
 				},
@@ -81,7 +81,7 @@ func TestGraph(t *testing.T) {
 				  "uid": "pod_3h87d980",
 				  "metadata": {
 					"kind": "Pod",
-					"region": "cn-north-1", 
+					"region": "cn-north-1",
 					"tags": { "1": "1" }
 				  }
 				}
@@ -349,7 +349,7 @@ func TestGraphBranch(t *testing.T) {
 				  "uid": "pod_e253075e",
 				  "metadata": {
 					"kind": "Pod",
-					"region": "cn-north-", 
+					"region": "cn-north-",
 					"tags": { "1": "1" }
 				  }
 				}
@@ -388,7 +388,7 @@ func TestGraphBranch(t *testing.T) {
 				  "uid": "pod_e253075e",
 				  "metadata": {
 					"kind": "Pod",
-					"region": "cn-north-", 
+					"region": "cn-north-",
 					"tags": { "1": "1" }
 				  }
 				}

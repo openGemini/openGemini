@@ -24,7 +24,7 @@ This server provides AI assistants with a secure and structured way to explore a
 
 ## Installation
 ```bash
-pip install . 
+pip install .
 ```
 
 ## Configuration

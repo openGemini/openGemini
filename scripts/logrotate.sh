@@ -39,4 +39,3 @@ function rotateExtraLog() {
 }
 
 rotateExtraLog ${extra_log_path}
-

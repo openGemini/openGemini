@@ -80,4 +80,3 @@ class FindAbnormalUDF(DetectUDF):
                 pa.array([], type=field.type) for field in output_schema
             ]
             return pa.RecordBatch.from_arrays(empty_arrays, schema=output_schema)
-

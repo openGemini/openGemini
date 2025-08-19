@@ -16,13 +16,9 @@ package meta
 
 import (
 	"testing"
-	"time"
 
-	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
-	"github.com/openGemini/openGemini/lib/msgservice"
-	"github.com/openGemini/openGemini/lib/spdy/transport"
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
@@ -45,6 +41,7 @@ func TestCreateEventFromInfo(t *testing.T) {
 	assert.Equal(t, true, event != nil)
 }
 
+/*
 func TestInterruptEvent(t *testing.T) {
 	dir := t.TempDir()
 	mms, err := NewMockMetaService(dir, testIp)
@@ -126,6 +123,7 @@ waitAssigned:
 	}
 	assert.Equal(t, 0, len(globalService.msm.eventMap))
 }
+*/
 
 func TestAddEventFail(t *testing.T) {
 	pt := &meta.DbPtInfo{

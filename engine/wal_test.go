@@ -256,13 +256,13 @@ func Test_NewWal_restoreLogs(t *testing.T) {
 		},
 		logReplay: LogReplays{{}},
 	}
-	_ = os.WriteFile(filepath.Join(tmpDir, "1.wal"), []byte{1}, 0600)
+	_ = os.WriteFile(filepath.Join(tmpDir, "1.wal"), []byte{1}, 0775)
 	time.Sleep(10 * time.Millisecond)
-	_ = os.WriteFile(filepath.Join(tmpDir, "2.wal"), []byte{3}, 0600)
+	_ = os.WriteFile(filepath.Join(tmpDir, "2.wal"), []byte{3}, 0775)
 	time.Sleep(10 * time.Millisecond)
-	_ = os.WriteFile(filepath.Join(tmpDir, "3.wal"), []byte{2}, 0600)
+	_ = os.WriteFile(filepath.Join(tmpDir, "3.wal"), []byte{2}, 0775)
 	time.Sleep(10 * time.Millisecond)
-	_ = os.WriteFile(filepath.Join(tmpDir, "4.wal"), []byte{4}, 0600)
+	_ = os.WriteFile(filepath.Join(tmpDir, "4.wal"), []byte{4}, 0775)
 	time.Sleep(100 * time.Millisecond)
 	wal.restoreLogs()
 
@@ -287,9 +287,9 @@ func Test_NewWal_restoreLogs_error(t *testing.T) {
 	}
 	require.Panics(t, func() { wal.restoreLog(&LogWriter{logPath: ""}, &LogReplay{}) })
 
-	_ = os.WriteFile(filepath.Join(tmpDir, "error1.wal"), []byte{1}, 0600)
+	_ = os.WriteFile(filepath.Join(tmpDir, "error1.wal"), []byte{1}, 0775)
 	time.Sleep(10 * time.Millisecond)
-	_ = os.WriteFile(filepath.Join(tmpDir, "error2.wal"), []byte{4}, 0600)
+	_ = os.WriteFile(filepath.Join(tmpDir, "error2.wal"), []byte{4}, 0775)
 	time.Sleep(100 * time.Millisecond)
 	wal.restoreLogs()
 
@@ -467,7 +467,7 @@ func TestStreamWalManager(t *testing.T) {
 		walFiles := newWalFiles(maxTime, &lock, dir)
 		for i := 0; i < 2; i++ {
 			file := path.Join(dir, fmt.Sprintf("/wal/%d.wal", 100+i))
-			require.NoError(t, os.WriteFile(file, make([]byte, 1024), 0600))
+			require.NoError(t, os.WriteFile(file, make([]byte, 1024), 0775))
 			walFiles.Add(file)
 		}
 
@@ -487,7 +487,7 @@ func TestStreamWalManager_Load(t *testing.T) {
 	defer streamWalConf(dir)()
 	replayDir := path.Join(dir, fmt.Sprintf("/wal/db/2/rp/001_0_0_0"))
 	streamDir := path.Join(replayDir, StreamWalDir)
-	os.MkdirAll(streamDir, 0600)
+	os.MkdirAll(streamDir, 0775)
 
 	swm := NewStreamWalManager()
 	swm.InitStreamHandler(func(rows influx.Rows, isLast bool, fileNames []string) error { return nil })
@@ -497,7 +497,7 @@ func TestStreamWalManager_Load(t *testing.T) {
 	buf := make([]byte, 1024)
 	var createFile = func(name string) {
 		file := path.Join(streamDir, fmt.Sprintf("/%s.wal", name))
-		require.NoError(t, os.WriteFile(file, buf, 0600))
+		require.NoError(t, os.WriteFile(file, buf, 0775))
 	}
 
 	createFile(fmt.Sprintf("%d_%d", maxTime, now))
@@ -519,7 +519,7 @@ func TestStreamWalManager_Reply(t *testing.T) {
 	defer streamWalConf(dir)()
 	replayDir := path.Join(dir, fmt.Sprintf("/wal/db/2/rp/001_0_0_0"))
 	streamDir := path.Join(replayDir, StreamWalDir)
-	os.MkdirAll(streamDir, 0600)
+	os.MkdirAll(streamDir, 0775)
 	var other influx.Row
 	swm := NewStreamWalManager()
 	swm.InitStreamHandler(func(rows influx.Rows, isLast bool, fileNames []string) error {
@@ -534,7 +534,7 @@ func TestStreamWalManager_Reply(t *testing.T) {
 	maxTime := now - now%1e9
 
 	file := path.Join(streamDir, fmt.Sprintf("/%d_%d.wal", maxTime, now))
-	require.NoError(t, os.WriteFile(file, walBinary, 0600))
+	require.NoError(t, os.WriteFile(file, walBinary, 0775))
 
 	lock := ""
 	require.NoError(t, swm.Load(replayDir, &lock))

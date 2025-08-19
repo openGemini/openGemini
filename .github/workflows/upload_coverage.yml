@@ -8,6 +8,7 @@ env:
   GO111MODULE: on
   GONOSUMDB: "*"
   GOSUMDB: off
+  TZ: Asia/Shanghai
 
 jobs:
   UT:

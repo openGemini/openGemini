@@ -40,7 +40,7 @@ overrides:
   '1234': &id001
     max_label_name_length: 1022
     reject_old_samples: true
-    reject_old_samples_max_age: "7d" 
+    reject_old_samples_max_age: "7d"
     creation_grace_period: "5m"
   '1235': *id001
   '1236': *id001
@@ -77,7 +77,7 @@ overrides:
   '1234': &id001
     max_label_name_length: 1022
     reject_old_samples: true
-    reject_old_samples_max_age: "7d" 
+    reject_old_samples_max_age: "7d"
     creation_grace_period: "5m"
 `
 
@@ -117,7 +117,7 @@ overrides:
   '1234':
     max_label_name_length: 1022
     reject_old_samples: true
-    reject_old_samples_max_age: "7d" 
+    reject_old_samples_max_age: "7d"
     creation_grace_period: "5m"
 `)
 	runtimeCfg, err := loadRuntimeConfig(yamlFile)
