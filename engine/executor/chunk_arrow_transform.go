@@ -15,17 +15,27 @@
 package executor
 
 import (
+	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/apache/arrow/go/v13/arrow"
 	"github.com/apache/arrow/go/v13/arrow/array"
 	"github.com/apache/arrow/go/v13/arrow/memory"
 	"github.com/influxdata/influxdb/uuid"
-	"github.com/openGemini/openGemini/engine/op"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/openGemini/openGemini/services/castor"
+)
+
+type castorArgIdx int
+
+const (
+	field castorArgIdx = iota
+	Algo
+	Conf
+	AlgoType
 )
 
 type fieldInfo struct {
@@ -67,8 +77,15 @@ func GetFieldInfo(chunks []Chunk) (map[string]map[string]*fieldInfo, *errno.Erro
 	return ret, nil
 }
 
+type CastorParams struct {
+	algo          string
+	cfg           string
+	typeOfProcess string
+	algoParamsVal string
+}
+
 // ChunkToArrowRecords must release record after use
-func ChunkToArrowRecords(chunks []Chunk, taskId string, args []influxql.Expr) ([]arrow.Record, *errno.Error) {
+func ChunkToArrowRecords(chunks []Chunk, taskId string, args []influxql.Expr) ([]arrow.Record, error) {
 	seriesFieldInfo, err := GetFieldInfo(chunks)
 	if err != nil {
 		return nil, err
@@ -77,14 +94,40 @@ func ChunkToArrowRecords(chunks []Chunk, taskId string, args []influxql.Expr) ([
 	var builderWithInterval []*array.RecordBuilder
 	builderWithoutInterval := make(map[string]*array.RecordBuilder, len(chunks))
 
+	// type assert already done in compile stage, minus 1 because field not in args
+	algo, ok := args[Algo-1].(*influxql.StringLiteral)
+	if !ok {
+		return nil, fmt.Errorf("castor algorithm params type assert failed,expect %s", influxql.String)
+	}
+	cfg, ok := args[Conf-1].(*influxql.StringLiteral)
+	if !ok {
+		return nil, fmt.Errorf("castor config params type assert failed,expect %s", influxql.String)
+	}
+	typeOfProcess, ok := args[AlgoType-1].(*influxql.StringLiteral)
+	if !ok {
+		return nil, fmt.Errorf("castor AlgoType params type assert failed,expect %s", influxql.String)
+	}
+	castorParams := &CastorParams{
+		algo:          algo.Val,
+		cfg:           cfg.Val,
+		typeOfProcess: typeOfProcess.Val,
+	}
+	if typeOfProcess.Val == "_udf_detect" && len(args) == 4 {
+		algoParams, ok := args[3].(*influxql.StringLiteral)
+		if !ok {
+			return nil, errno.NewError(errno.TypeAssertFail, influxql.String)
+		}
+		castorParams.algoParamsVal = algoParams.Val
+	}
+
 	for _, c := range chunks {
 		if c.IntervalLen() <= 1 || c.IntervalLen() == c.TagLen() {
-			if err = copyChunkToRecordWithoutInterval(c, builderWithoutInterval, seriesFieldInfo, taskId, args); err != nil {
+			if err = copyChunkToRecordWithoutInterval(c, builderWithoutInterval, seriesFieldInfo, taskId, castorParams); err != nil {
 				break
 			}
 		} else {
 			var tmp []*array.RecordBuilder
-			tmp, err = chunkToArrowRecordsWithInterval(c, seriesFieldInfo, taskId, args)
+			tmp, err = chunkToArrowRecordsWithInterval(c, seriesFieldInfo, taskId, castorParams)
 			builderWithInterval = append(builderWithInterval, tmp...)
 			if err != nil {
 				break
@@ -121,19 +164,11 @@ func copyChunkToRecordWithoutInterval(
 	builderSet map[string]*array.RecordBuilder,
 	seriesFieldInfo map[string]map[string]*fieldInfo,
 	taskId string,
-	args []influxql.Expr) *errno.Error {
-
-	// type assert already done in compile stage, minus 1 because field not in args
-	algo, aOk := args[op.Algo-1].(*influxql.StringLiteral)
-	cfg, cOk := args[op.Conf-1].(*influxql.StringLiteral)
-	typeOfProcess, hOk := args[op.AlgoType-1].(*influxql.StringLiteral)
-	if !aOk || !cOk || !hOk {
-		return errno.NewError(errno.TypeAssertFail, influxql.String)
-	}
-
+	castorParams *CastorParams) *errno.Error {
 	times := c.Time()
 	tagIdx := c.TagIndex()
 	tags := c.Tags()
+	metric := c.RowDataType().Field(0).Name()
 	for i := 0; i < len(tagIdx); i++ {
 		seriesStart := tagIdx[i]
 		var seriesEnd int
@@ -154,7 +189,7 @@ func copyChunkToRecordWithoutInterval(
 			if err != nil {
 				return err
 			}
-			metaData := buildRecordMetaData(tags[i], algo.Val, cfg.Val, typeOfProcess.Val, taskId)
+			metaData := buildRecordMetaData(tags[i], castorParams, metric, taskId)
 			schema := arrow.NewSchema(aFields, &metaData)
 			pool := memory.NewGoAllocator()
 			b = array.NewRecordBuilder(pool, schema)
@@ -179,22 +214,14 @@ func chunkToArrowRecordsWithInterval(
 	c Chunk,
 	seriesFieldInfo map[string]map[string]*fieldInfo,
 	taskId string,
-	args []influxql.Expr) ([]*array.RecordBuilder, *errno.Error) {
-
-	// type assert already done in compile stage, minus 1 because field not in args
-	algo, aOk := args[op.Algo-1].(*influxql.StringLiteral)
-	cfg, cOk := args[op.Conf-1].(*influxql.StringLiteral)
-	typeOfProcess, hOk := args[op.AlgoType-1].(*influxql.StringLiteral)
-	if !aOk || !cOk || !hOk {
-		return nil, errno.NewError(errno.TypeAssertFail, influxql.String)
-	}
-
+	castorParams *CastorParams) ([]*array.RecordBuilder, *errno.Error) {
 	var ret []*array.RecordBuilder
 	times := c.Time()
 	tagIdx := c.TagIndex()
 	tags := c.Tags()
 	intervalIdx := c.IntervalIndex()
 	lastIntervalIdx := 0
+	metric := c.RowDataType().Field(0).Name()
 	for i := 0; i < len(tagIdx); i++ {
 		seriesStart := tagIdx[i]
 		var seriesEnd int
@@ -212,7 +239,7 @@ func chunkToArrowRecordsWithInterval(
 		if err != nil {
 			return ret, err
 		}
-		metaData := buildRecordMetaData(tags[i], algo.Val, cfg.Val, typeOfProcess.Val, taskId)
+		metaData := buildRecordMetaData(tags[i], castorParams, metric, taskId)
 		schema := arrow.NewSchema(aFields, &metaData)
 
 		for ; lastIntervalIdx < c.IntervalLen(); lastIntervalIdx++ {
@@ -244,18 +271,24 @@ func chunkToArrowRecordsWithInterval(
 	return ret, nil
 }
 
-func buildRecordMetaData(c ChunkTags, algo, cfg, typeOfProcess, taskId string) arrow.Metadata {
+func buildRecordMetaData(c ChunkTags, castorParams *CastorParams, metric, taskId string) arrow.Metadata {
 	metaKeys := make([]string, 0, c.Size()+8)
 	metaVals := make([]string, 0, c.Size()+8)
 	keys, vals := c.GetChunkTagAndValues()
 	metaKeys = append(metaKeys, keys...)
 	metaVals = append(metaVals, vals...)
 	metaKeys = append(metaKeys, string(castor.Algorithm))
-	metaVals = append(metaVals, algo)
+	metaVals = append(metaVals, castorParams.algo)
 	metaKeys = append(metaKeys, string(castor.ConfigFile))
-	metaVals = append(metaVals, cfg)
+	metaVals = append(metaVals, castorParams.cfg)
 	metaKeys = append(metaKeys, string(castor.ProcessType))
-	metaVals = append(metaVals, typeOfProcess)
+	metaVals = append(metaVals, castorParams.typeOfProcess)
+	if castorParams.algoParamsVal != "" {
+		metaKeys = append(metaKeys, string(castor.AlgoParams))
+		metaVals = append(metaVals, castorParams.algoParamsVal)
+		metaKeys = append(metaKeys, string(castor.Metric))
+		metaVals = append(metaVals, metric)
+	}
 
 	// mark data with uuid and msgType which will be used to get corresponsive return
 	metaKeys = append(metaKeys, string(castor.DataId))
@@ -386,12 +419,85 @@ func appendArrowInt64(b *array.RecordBuilder, col Column, fieldIndex, seriesStar
 	}
 }
 
-func CopyArrowRecordToChunk(r arrow.Record, c Chunk, fields map[string]struct{}) *errno.Error {
+func CopyCastorADArrowRecordToChunk(r arrow.Record, c Chunk, fields map[string]struct{}) error {
+	metaData := r.Schema().Metadata()
+	errInfoIdx := metaData.FindKey(string(castor.ErrInfo))
+	if errInfoIdx != -1 {
+		return errno.NewThirdParty(fmt.Errorf("%s", metaData.Values()[errInfoIdx]), errno.ModuleCastor)
+	}
+
+	// add interval
+	c.AppendIntervalIndex(c.Len())
+
+	// add chunk tags
+	cts := buildChunkTagsWithFilter(metaData)
+	c.AppendTagsAndIndex(*cts, c.Len())
+
+	// add timestamp
+	rTime, err := getTimestamp(r)
+	if err != nil {
+		return err
+	}
+	c.AppendTimes(rTime.Int64Values())
+
+	if err := MergeRecordColToChunk(r, c); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func MergeRecordColToChunk(r arrow.Record, c Chunk) error {
+	schema := r.Schema()
+
+	idx := 0
+	if c.Column(idx).DataType() != influxql.String {
+		return errno.NewError(errno.DtypeNotMatch, influxql.String, c.Column(idx).DataType())
+	}
+
+	var strBuilder strings.Builder
+	rowNumber := int(r.NumRows())
+	for i := 0; i < rowNumber; i++ {
+		strBuilder.Reset()
+		strBuilder.WriteByte('{')
+		for j, rCol := range r.Columns() {
+			f := schema.Field(j)
+			if f.Name == string(castor.DataTime) {
+				continue
+			}
+
+			if j != 0 {
+				strBuilder.WriteByte(',')
+			}
+
+			key, err := json.Marshal(f.Name)
+			if err != nil {
+				return err
+			}
+			value, err := json.Marshal(rCol.ValueStr(i))
+			if err != nil {
+				return err
+			}
+			strBuilder.Write(key)
+			strBuilder.WriteByte(':')
+			strBuilder.Write(value)
+
+		}
+		strBuilder.WriteByte('}')
+
+		c.Column(idx).AppendStringValue(strBuilder.String())
+	}
+	c.Column(idx).AppendManyNotNil(int(r.NumRows()))
+
+	return nil
+}
+
+func CopyArrowRecordToChunk(r arrow.Record, c Chunk, fields map[string]struct{}) error {
 	// check errInfo, if exist, just return it
 	metaData := r.Schema().Metadata()
 	errInfoIdx := metaData.FindKey(string(castor.ErrInfo))
 	if errInfoIdx != -1 {
-		return errno.NewThirdParty(fmt.Errorf(metaData.Values()[errInfoIdx]), errno.ModuleCastor)
+		return errno.NewThirdParty(fmt.Errorf("%s", metaData.Values()[errInfoIdx]), errno.ModuleCastor)
 	}
 
 	// check number of anomaly
@@ -494,7 +600,10 @@ func buildChunkTagsWithFilter(metaData arrow.Metadata) *ChunkTags {
 func getTimestamp(r arrow.Record) (*array.Int64, *errno.Error) {
 	timeFieldIdx := r.Schema().FieldIndices(string(castor.DataTime))
 	if len(timeFieldIdx) != 1 {
-		return nil, errno.NewError(errno.TimestampNotFound)
+		timeFieldIdx = r.Schema().FieldIndices(string(castor.DataTimeStamp))
+		if len(timeFieldIdx) != 1 {
+			return nil, errno.NewError(errno.TimestampNotFound)
+		}
 	}
 	rTime, ok := r.Column(timeFieldIdx[0]).(*array.Int64)
 	if !ok {

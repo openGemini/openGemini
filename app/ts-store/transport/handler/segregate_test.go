@@ -19,8 +19,8 @@ import (
 
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
-	"github.com/openGemini/openGemini/lib/netstorage"
-	netdata "github.com/openGemini/openGemini/lib/netstorage/data"
+	"github.com/openGemini/openGemini/lib/msgservice"
+	netdata "github.com/openGemini/openGemini/lib/msgservice/data"
 	"github.com/stretchr/testify/require"
 )
 
@@ -30,9 +30,9 @@ func Test_SegregateProcessor_Success(t *testing.T) {
 		log:   logger.NewLogger(errno.ModuleHA),
 	}
 	resp := &MockNewResponser{}
-	var req *netstorage.SegregateNodeRequest
+	var req *msgservice.SegregateNodeRequest
 	var nodeid uint64 = 2
-	req = &netstorage.SegregateNodeRequest{
+	req = &msgservice.SegregateNodeRequest{
 		SegregateNodeRequest: netdata.SegregateNodeRequest{
 			NodeId: &nodeid,
 		},

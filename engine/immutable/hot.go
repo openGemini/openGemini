@@ -26,6 +26,7 @@ import (
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/fileops"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/memory"
 	"github.com/openGemini/openGemini/lib/pool"
 	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
@@ -34,6 +35,20 @@ import (
 )
 
 var hotFileWriterPool *pool.UnionPool[HotFileWriter]
+
+type HotFile interface {
+	InMemSize() int64
+	MinMaxTime() (int64, int64, error)
+	FreeMemory()
+}
+
+type HotFiles struct {
+	files []HotFile
+}
+
+func (fs *HotFiles) Append(f HotFile) {
+	fs.files = append(fs.files, f)
+}
 
 type HotFileWriter struct {
 	fileops.FileWriter
@@ -135,7 +150,7 @@ var hotFileManager *HotFileManager
 
 func init() {
 	hotFileManager = &HotFileManager{
-		files: make(map[int64]*TSSPFiles),
+		files: make(map[int64]*HotFiles),
 	}
 }
 
@@ -149,8 +164,8 @@ type HotFileManager struct {
 	mu     sync.RWMutex
 	conf   *config.HotMode
 
-	files       map[int64]*TSSPFiles // key is the time window
-	timeWindows []int64              // reverse order
+	files       map[int64]*HotFiles // key is the time window
+	timeWindows []int64             // reverse order
 
 	maxMemorySize   int64
 	totalMemorySize int64
@@ -184,6 +199,8 @@ func (m *HotFileManager) Stop() {
 
 func (m *HotFileManager) SetMaxMemorySize(size int64) {
 	m.maxMemorySize = size
+	logger.GetLogger().Info("set max memory size for hot file manager",
+		zap.Int64("max memory size (MB)", m.maxMemorySize/config.MB))
 }
 
 func (m *HotFileManager) AddAll(files []TSSPFile) {
@@ -192,7 +209,7 @@ func (m *HotFileManager) AddAll(files []TSSPFile) {
 	}
 }
 
-func (m *HotFileManager) Add(f TSSPFile) {
+func (m *HotFileManager) Add(f HotFile) {
 	memSize := f.InMemSize()
 	if memSize == 0 {
 		return
@@ -211,7 +228,7 @@ func (m *HotFileManager) Add(f TSSPFile) {
 
 	files, ok := m.files[window]
 	if !ok {
-		files = &TSSPFiles{}
+		files = &HotFiles{}
 		m.timeWindows = append(m.timeWindows, window)
 		sort.Slice(m.timeWindows, func(i, j int) bool {
 			return m.timeWindows[i] > m.timeWindows[j]
@@ -221,7 +238,7 @@ func (m *HotFileManager) Add(f TSSPFile) {
 	files.Append(f)
 }
 
-func (m *HotFileManager) calculateTimeWindow(f TSSPFile) (int64, error) {
+func (m *HotFileManager) calculateTimeWindow(f HotFile) (int64, error) {
 	minT, maxT, err := f.MinMaxTime()
 	if err != nil {
 		return 0, err
@@ -290,7 +307,7 @@ func (m *HotFileManager) AllocLoadMemory(size int64) bool {
 }
 
 func (m *HotFileManager) freeOldestWindow() {
-	var files *TSSPFiles
+	var files *HotFiles
 	var ok bool
 	func() {
 		m.mu.Lock()
@@ -311,7 +328,7 @@ func (m *HotFileManager) freeOldestWindow() {
 		return
 	}
 
-	for _, f := range files.Files() {
+	for _, f := range files.files {
 		f.FreeMemory()
 	}
 }
@@ -327,7 +344,7 @@ func (m *HotFileManager) getOldestWindow() int64 {
 	return m.timeWindows[size-1]
 }
 
-func (m *HotFileManager) InHotDuration(f TSSPFile) bool {
+func (m *HotFileManager) InHotDuration(f HotFile) bool {
 	minT, maxT, err := f.MinMaxTime()
 	if err != nil {
 		return false
@@ -353,6 +370,15 @@ func (m *HotFileManager) inHotDuration(minT, maxT int64) bool {
 func FilesMergedTire(files []TSSPFile) uint64 {
 	tire := util.Warm
 	maxSize := int64(config.GetStoreConfig().HotMode.MaxFileSize)
+	var totalFileSize int64
+	for _, f := range files {
+		totalFileSize += f.FileSize()
+	}
+
+	if config.HotModeEnabled() && totalFileSize/2 >= maxSize {
+		return util.Warm
+	}
+
 	for _, f := range files {
 		if f.FileSize() >= maxSize {
 			return util.Warm

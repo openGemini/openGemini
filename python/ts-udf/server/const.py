@@ -20,6 +20,7 @@ INFO = "info"
 DATA = "data"
 DATA_VALUE = "data"
 FIELD_IDS = "field_ids"
+DISC = '0'
 
 ALGORITHM = b"_algo"
 CONFIG_FILE = b"_cfg"
@@ -54,3 +55,7 @@ DEFAULT_OUTPUT_INFO = [
 ]
 
 SEC_TO_NS = 1e9
+
+CUSTOM_UDF_DETECT = "_udf_detect"
+ALGORITHM_PARAMS = b"_algoParams"
+METRIC = b"_metric"

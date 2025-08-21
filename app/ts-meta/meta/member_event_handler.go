@@ -249,6 +249,13 @@ func failHandlerForRep(fh *failedHandler, id uint64, event *serf.MemberEvent, me
 	if member.Tags["role"] == "sql" {
 		return fh.handleSqlEvent(member, event, id, from)
 	}
+	if fh.cm.PingNode(id) {
+		logger.GetLogger().Info("ping node success, skip fail handler",
+			zap.String("name", member.Name),
+			zap.String("addr", member.Addr.String()),
+			zap.String("event", event.String()))
+		return nil
+	}
 	err := fh.handleStoreEvent(member, event, id, from)
 	if err != nil {
 		logger.GetLogger().Error("handle event failed", zap.String("name", member.Name), zap.String("event", event.String()),
@@ -276,25 +283,32 @@ func failHandlerForRep(fh *failedHandler, id uint64, event *serf.MemberEvent, me
 }
 
 func failHandlerForWAF(fh *failedHandler, id uint64, event *serf.MemberEvent, member *serf.Member, from eventFrom) error {
-	if !fh.cm.isHeartbeatTimeout(id) {
-		return nil
-	}
-
 	if member.Tags["role"] == "sql" {
 		return fh.handleSqlEvent(member, event, id, from)
+	}
+
+	if fh.cm.PingNode(id) {
+		logger.GetLogger().Info("ping node success, skip fail handler",
+			zap.String("name", member.Name),
+			zap.String("addr", member.Addr.String()),
+			zap.String("event", event.String()))
+		return nil
 	}
 
 	return handleStoreEvent(fh, id, event, member, from)
 }
 
 func failHandlerForSS(fh *failedHandler, id uint64, event *serf.MemberEvent, member *serf.Member, from eventFrom) error {
-
-	if !fh.cm.isHeartbeatTimeout(id) {
-		return nil
-	}
-
 	if member.Tags["role"] == "sql" {
 		return fh.handleSqlEvent(member, event, id, from)
+	}
+
+	if fh.cm.PingNode(id) {
+		logger.GetLogger().Info("ping node success, skip fail handler",
+			zap.String("name", member.Name),
+			zap.String("addr", member.Addr.String()),
+			zap.String("event", event.String()))
+		return nil
 	}
 
 	err := handleStoreEvent(fh, id, event, member, from)

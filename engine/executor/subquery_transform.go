@@ -32,7 +32,7 @@ type SubQueryTransform struct {
 	ops            []hybridqp.ExprOptions
 	opt            *query.ProcessorOptions
 	chunkPool      *CircularChunkPool
-	transparents   []func(dst Column, src Column)
+	transparents   []func(dst Column, src Column, srcChunk Chunk, dstChunk Chunk)
 	mapTransToIn   []int
 	mapTransToName []string
 
@@ -68,7 +68,7 @@ func (c *SubQueryTransformCreator) Create(plan LogicalPlan, opt *query.Processor
 var _ = RegistryTransformCreator(&LogicalSubQuery{}, &SubQueryTransformCreator{})
 
 func (trans *SubQueryTransform) initTransformMapping() error {
-	trans.transparents = make([]func(dst Column, src Column), len(trans.ops))
+	trans.transparents = make([]func(dst Column, src Column, srcChunk Chunk, dstChunk Chunk), len(trans.ops))
 	trans.mapTransToIn = make([]int, len(trans.ops))
 	trans.mapTransToName = make([]string, len(trans.ops))
 
@@ -85,6 +85,8 @@ func (trans *SubQueryTransform) initTransformMapping() error {
 				trans.transparents[i] = TransparentForwardBooleanColumn
 			case influxql.String, influxql.Tag:
 				trans.transparents[i] = TransparentForwardStringColumn
+			case influxql.Graph:
+				trans.transparents[i] = TransparentForwardGraphColumn
 			}
 		} else {
 			return errors.New("only varref in subquery transform")
@@ -185,9 +187,9 @@ func (trans *SubQueryTransform) transform(chunk Chunk) Chunk {
 		} else {
 			src = chunk.Column(trans.mapTransToIn[i])
 		}
-		f(dst, src)
+		f(dst, src, chunk, oChunk)
 	}
-
+	oChunk.SetGraph(chunk.GetGraph())
 	return oChunk
 }
 

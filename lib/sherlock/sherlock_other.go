@@ -17,6 +17,42 @@
 
 package sherlock
 
+import (
+	"os"
+	"runtime"
+	"time"
+
+	"github.com/shirou/gopsutil/v3/process"
+)
+
 func (s *Sherlock) getMemoryLimit() (uint64, error) {
 	return s.getVMMemoryLimit()
+}
+
+// getUsage returns these values:
+// 1. cpu percent, not division cpu cores yet,
+// 2. RSS mem in bytes,
+// 3. goroutine num
+func getUsage() (float64, uint64, int, error) {
+	p, err := process.NewProcess(int32(os.Getpid()))
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	cpuPercent, err := p.Percent(time.Second)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+
+	mem, err := p.MemoryInfo()
+	if err != nil {
+		return 0, 0, 0, err
+	}
+
+	rss := mem.RSS
+	gNum := runtime.NumGoroutine()
+	return cpuPercent, rss, gNum, nil
+}
+
+func isContainer() bool {
+	return false
 }

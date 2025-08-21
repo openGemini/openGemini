@@ -65,7 +65,7 @@ type fileLoopCursor struct {
 	span         *tracing.Span
 	schema       *executor.QuerySchema
 	recordSchema record.Schemas
-	tagSetInfo   *tsi.TagSetInfo
+	tagSetInfo   tsi.TagSetEx
 
 	fileInfo                *comm.FileInfo
 	shardP                  *shard
@@ -101,7 +101,7 @@ func NewSeriesInfoPool(num int64) *filesInfoPool {
 }
 
 func NewFileLoopCursor(ctx *idKeyCursorContext, span *tracing.Span, schema *executor.QuerySchema,
-	tagSet *tsi.TagSetInfo, start, step int, s *shard) *fileLoopCursor {
+	tagSet tsi.TagSetEx, start, step int, s *shard) *fileLoopCursor {
 	tagSet.Ref()
 	sc := &fileLoopCursor{
 		ctx:           ctx,
@@ -231,7 +231,7 @@ func (s *fileLoopCursor) ReadAggDataOnlyInMemTable() (*record.Record, *comm.File
 		}
 		idx := s.mergeRecIters[sid][i].index
 		ptTags := s.tagSetInfo.GetTagsWithQuerySchema(idx, s.schema)
-		seriesKey := &seriesInfo{sid: sid, tags: *ptTags, key: s.tagSetInfo.SeriesKeys[idx]}
+		seriesKey := &seriesInfo{sid: sid, tags: *ptTags, key: s.tagSetInfo.GetSeriesKeys(idx)}
 		if s.preAgg {
 			r := s.mergeRecIters[sid][i].iter.record
 			nextIndex()
@@ -242,7 +242,7 @@ func (s *fileLoopCursor) ReadAggDataOnlyInMemTable() (*record.Record, *comm.File
 			if s.recordSchema == nil {
 				s.recordSchema = re.Schema
 			}
-			rec, info := s.FilterRecInMemTable(re, s.tagSetInfo.Filters[idx], seriesKey, s.tagSetInfo.GetRowFilter(idx))
+			rec, info := s.FilterRecInMemTable(re, s.tagSetInfo.GetFilters(idx), seriesKey, s.tagSetInfo.GetRowFilter(idx))
 			if rec == nil {
 				continue
 			}

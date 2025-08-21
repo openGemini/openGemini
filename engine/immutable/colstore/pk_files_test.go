@@ -16,45 +16,7 @@ package colstore
 
 import (
 	"testing"
-
-	"github.com/stretchr/testify/require"
 )
-
-func TestPKInfosV0(t *testing.T) {
-	pkFiles := NewPKFiles()
-	pkFiles.SetPKInfo("test", nil, nil, DefaultTCLocation)
-	pkInfo := PKInfo{
-		tcLocation: DefaultTCLocation,
-		rec:        nil,
-		mark:       nil,
-	}
-	ret, ok := pkFiles.GetPKInfo("test")
-	require.EqualValues(t, ret.tcLocation, DefaultTCLocation)
-	require.EqualValues(t, ok, true)
-	require.EqualValues(t, *ret, pkInfo)
-	pkInfos := pkFiles.GetPKInfos()
-	require.EqualValues(t, pkInfos["test"], ret)
-	pkFiles.DelPKInfo("test")
-	require.EqualValues(t, PKInfos(PKInfos{}), pkFiles.pkInfos)
-}
-
-func TestPKInfosV1(t *testing.T) {
-	pkFiles := NewPKFiles()
-	pkFiles.SetPKInfo("test", nil, nil, 3)
-	pkInfo := PKInfo{
-		tcLocation: 3,
-		rec:        nil,
-		mark:       nil,
-	}
-	ret, ok := pkFiles.GetPKInfo("test")
-	require.EqualValues(t, ret.tcLocation, 3)
-	require.EqualValues(t, ok, true)
-	require.EqualValues(t, *ret, pkInfo)
-	pkInfos := pkFiles.GetPKInfos()
-	require.EqualValues(t, pkInfos["test"], ret)
-	pkFiles.DelPKInfo("test")
-	require.EqualValues(t, PKInfos(PKInfos{}), pkFiles.pkInfos)
-}
 
 func TestPkMetaBlockMarshal(t *testing.T) {
 	meta := make([]byte, 0)

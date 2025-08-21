@@ -21,7 +21,7 @@ import (
 
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
-	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/msgservice"
 	"github.com/openGemini/openGemini/lib/spdy/transport"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
@@ -165,7 +165,7 @@ func (m *MigrateStateMachine) handleRetryEvents(handleEvents []MigrateEvent) []M
 
 func (m *MigrateStateMachine) sendMigrateCommand(e MigrateEvent) (NextAction, error) {
 	pti := e.getPtInfo()
-	ptReq := netstorage.NewPtRequest()
+	ptReq := msgservice.NewPtRequest()
 	ptReq.Pt = pti.Marshal()
 	ptReq.MigrateType = proto.Int(e.getCurrState()) // use currState to determine the action
 	// todo you should send operation id to store to make sure store response should not delete other events
@@ -173,7 +173,7 @@ func (m *MigrateStateMachine) sendMigrateCommand(e MigrateEvent) (NextAction, er
 	ptReq.AliveConnId = proto.Uint64(e.getAliveConnId())
 
 	// todo if you want async handle response do not set callback
-	cb := &netstorage.MigratePtCallback{}
+	cb := &msgservice.MigratePtCallback{}
 	cb.SetCallbackFn(func(err error) {
 		m.handleMigrateCommandResponse(err, e)
 	})

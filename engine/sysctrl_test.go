@@ -21,7 +21,7 @@ import (
 
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
-	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/msgservice"
 	"github.com/openGemini/openGemini/lib/syscontrol"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/stretchr/testify/require"
@@ -30,10 +30,10 @@ import (
 
 func TestEngine_processReq_error_point(t *testing.T) {
 	log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
-	e := Engine{
+	e := EngineImpl{
 		log: log,
 	}
-	req := &netstorage.SysCtrlRequest{}
+	req := &msgservice.SysCtrlRequest{}
 	req.SetMod(Failpoint)
 	req.SetParam(map[string]string{
 		"point":    "failpoint-name",
@@ -46,10 +46,10 @@ func TestEngine_processReq_error_point(t *testing.T) {
 
 func TestEngine_processReq_snapshot(t *testing.T) {
 	log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
-	e := Engine{
+	e := EngineImpl{
 		log: log,
 	}
-	req := &netstorage.SysCtrlRequest{}
+	req := &msgservice.SysCtrlRequest{}
 	req.SetMod(snapshot)
 	req.SetParam(map[string]string{
 		"duration": "5s",
@@ -66,47 +66,41 @@ func TestEngine_processReq_snapshot(t *testing.T) {
 }
 
 func TestEngine_processReq_backup(t *testing.T) {
-	t.Run("1", func(t *testing.T) {
-		log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
-		e := Engine{
-			log: log,
-		}
-		req := &netstorage.SysCtrlRequest{}
-		req.SetMod(syscontrol.Backup)
-		_, err := e.processReq(req)
-		if err == nil {
-			t.Fatal()
-		}
-	})
-
-	t.Run("2", func(t *testing.T) {
-		time.Sleep(2 * time.Second)
-		log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
-		e := Engine{
-			log: log,
-		}
-		req := &netstorage.SysCtrlRequest{}
-		req.SetMod(syscontrol.Backup)
-		_, err := e.processReq(req)
-		if err == nil {
-			t.Fatal()
-		}
-		req.SetParam(map[string]string{
-			"backupPath": "/tmp/openGemini/backup_dir",
-		})
-		_, err = e.processReq(req)
-		require.NoError(t, err)
-	})
-
+	log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
+	e := EngineImpl{
+		log: log,
+	}
+	req := &msgservice.SysCtrlRequest{}
+	req.SetMod(syscontrol.Backup)
+	_, err := e.processReq(req)
+	if err != nil {
+		t.Fatal()
+	}
+	time.Sleep(3 * time.Second)
+	_, err = e.processReq(req)
+	require.NoError(t, err)
 }
 
 func TestEngine_processReq_backup_abort(t *testing.T) {
 	log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
-	e := Engine{
+	e := EngineImpl{
 		log: log,
 	}
-	req := &netstorage.SysCtrlRequest{}
+	req := &msgservice.SysCtrlRequest{}
 	req.SetMod(syscontrol.AbortBackup)
+	_, err := e.processReq(req)
+	if err != nil {
+		t.Fatal()
+	}
+}
+
+func TestEngine_processReq_backup_status(t *testing.T) {
+	log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
+	e := EngineImpl{
+		log: log,
+	}
+	req := &msgservice.SysCtrlRequest{}
+	req.SetMod(syscontrol.BackupStatus)
 	_, err := e.processReq(req)
 	if err != nil {
 		t.Fatal()
@@ -115,10 +109,10 @@ func TestEngine_processReq_backup_abort(t *testing.T) {
 
 func TestEngine_processReq_compaction(t *testing.T) {
 	log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
-	e := Engine{
+	e := EngineImpl{
 		log: log,
 	}
-	req := &netstorage.SysCtrlRequest{}
+	req := &msgservice.SysCtrlRequest{}
 	req.SetMod(compactionEn)
 	req.SetParam(map[string]string{
 		"switchon":  "true",
@@ -152,10 +146,10 @@ func TestEngine_processReq_compaction(t *testing.T) {
 
 func TestEngine_processReq_merge(t *testing.T) {
 	log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
-	e := Engine{
+	e := EngineImpl{
 		log: log,
 	}
-	req := &netstorage.SysCtrlRequest{}
+	req := &msgservice.SysCtrlRequest{}
 	req.SetMod(compmerge)
 	req.SetParam(map[string]string{
 		"switchon":  "true",
@@ -189,10 +183,10 @@ func TestEngine_processReq_merge(t *testing.T) {
 
 func TestEngine_downSample_order(t *testing.T) {
 	log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
-	e := Engine{
+	e := EngineImpl{
 		log: log,
 	}
-	req := &netstorage.SysCtrlRequest{}
+	req := &msgservice.SysCtrlRequest{}
 	req.SetMod(downSampleInOrder)
 	req.SetParam(map[string]string{
 		"order": "true",
@@ -208,10 +202,10 @@ func TestEngine_downSample_order(t *testing.T) {
 
 func TestEngine_processReq_debugMode(t *testing.T) {
 	log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
-	e := Engine{
+	e := EngineImpl{
 		log: log,
 	}
-	req := &netstorage.SysCtrlRequest{}
+	req := &msgservice.SysCtrlRequest{}
 	req.SetMod(verifyNode)
 	req.SetParam(map[string]string{
 		"switchon": "true",
@@ -226,10 +220,10 @@ func TestEngine_processReq_debugMode(t *testing.T) {
 
 func TestEngine_memUsageLimit(t *testing.T) {
 	log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
-	e := Engine{
+	e := EngineImpl{
 		log: log,
 	}
-	req := &netstorage.SysCtrlRequest{}
+	req := &msgservice.SysCtrlRequest{}
 	req.SetMod(memUsageLimit)
 	req.SetParam(map[string]string{
 		"limit": "90",
@@ -254,7 +248,7 @@ func TestEngine_memUsageLimit(t *testing.T) {
 
 func TestEngine_getShardStatus(t *testing.T) {
 	log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
-	e := Engine{
+	e := EngineImpl{
 		log: log,
 		DBPartitions: map[string]map[uint32]*DBPTInfo{
 			"db0": {
@@ -271,7 +265,7 @@ func TestEngine_getShardStatus(t *testing.T) {
 			},
 		},
 	}
-	req := &netstorage.SysCtrlRequest{}
+	req := &msgservice.SysCtrlRequest{}
 	req.SetMod(queryShardStatus)
 	req.SetParam(map[string]string{
 		"db":    "db0",
@@ -288,10 +282,10 @@ func TestEngine_getShardStatus(t *testing.T) {
 
 func TestEngine_backgroundReadLimiter(t *testing.T) {
 	log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
-	e := Engine{
+	e := EngineImpl{
 		log: log,
 	}
-	req := &netstorage.SysCtrlRequest{}
+	req := &msgservice.SysCtrlRequest{}
 	req.SetMod(BackgroundReadLimiter)
 	req.SetParam(map[string]string{
 		"limit": "100k",
@@ -330,10 +324,10 @@ func TestEngine_backgroundReadLimiter(t *testing.T) {
 
 func TestNodeInterruptQuery(t *testing.T) {
 	log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
-	e := Engine{
+	e := EngineImpl{
 		log: log,
 	}
-	req := &netstorage.SysCtrlRequest{}
+	req := &msgservice.SysCtrlRequest{}
 	req.SetMod(syscontrol.NodeInterruptQuery)
 	req.SetParam(map[string]string{
 		"switchon": "true",
@@ -351,10 +345,10 @@ func TestNodeInterruptQuery(t *testing.T) {
 
 func TestUpperMemUsePct(t *testing.T) {
 	log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
-	e := Engine{
+	e := EngineImpl{
 		log: log,
 	}
-	req := &netstorage.SysCtrlRequest{}
+	req := &msgservice.SysCtrlRequest{}
 	req.SetMod(syscontrol.UpperMemUsePct)
 	req.SetParam(map[string]string{
 		"limit": "99",
@@ -372,10 +366,10 @@ func TestUpperMemUsePct(t *testing.T) {
 
 func TestWriteStreamPointsEnable(t *testing.T) {
 	log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
-	e := Engine{
+	e := EngineImpl{
 		log: log,
 	}
-	req := &netstorage.SysCtrlRequest{}
+	req := &msgservice.SysCtrlRequest{}
 	req.SetMod(syscontrol.WriteStreamPointsEnable)
 	req.SetParam(map[string]string{
 		"switch": "true",

@@ -49,3 +49,87 @@ func TestTruncateFunc(t *testing.T) {
 	}
 	assert.Equal(t, expects, outputs)
 }
+
+func TestCastInt64Func(t *testing.T) {
+	urlValuer := query.MathValuer{}
+
+	inputName := "cast_int64"
+	// Correct test cases
+	inputArgs := make([]interface{}, 4)
+	inputArgs[0] = 15.15
+	inputArgs[1] = int64(12)
+	inputArgs[2] = true
+	inputArgs[3] = "12"
+	expects := make([]interface{}, 4)
+	expects[0] = int64(15)
+	expects[1] = int64(12)
+	expects[2] = int64(1)
+	expects[3] = int64(12)
+	outputs := make([]interface{}, 0, len(expects))
+	for _, arg := range inputArgs {
+		if out, ok := urlValuer.Call(inputName, []interface{}{arg}); ok {
+			outputs = append(outputs, out)
+		}
+	}
+	assert.Equal(t, expects, outputs)
+
+	// Wrong test case
+	out, ok := urlValuer.Call(inputName, []interface{}{"12.3"})
+	assert.Equal(t, false, ok)
+	assert.Equal(t, nil, out)
+
+	inputName = "cast_float64"
+	// Correct test cases
+	expects[0] = float64(15.15)
+	expects[1] = float64(12)
+	expects[2] = float64(1)
+	expects[3] = float64(12)
+	outputs = outputs[:0]
+	for _, arg := range inputArgs {
+		if out, ok := urlValuer.Call(inputName, []interface{}{arg}); ok {
+			outputs = append(outputs, out)
+		}
+	}
+	assert.Equal(t, expects, outputs)
+
+	// Wrong test case
+	out, ok = urlValuer.Call(inputName, []interface{}{"ddd"})
+	assert.Equal(t, false, ok)
+	assert.Equal(t, nil, out)
+
+	inputName = "cast_string"
+	// Correct test cases
+	expects[0] = "15.15"
+	expects[1] = "12"
+	expects[2] = "true"
+	expects[3] = "12"
+	outputs = outputs[:0]
+	for _, arg := range inputArgs {
+		if out, ok := urlValuer.Call(inputName, []interface{}{arg}); ok {
+			outputs = append(outputs, out)
+		}
+	}
+	assert.Equal(t, expects, outputs)
+
+	// Wrong test case
+	out, ok = urlValuer.Call(inputName, []interface{}{12})
+	assert.Equal(t, false, ok)
+	assert.Equal(t, nil, out)
+
+	inputName = "cast_bool"
+	// Correct test cases
+	inputArgs[1] = int64(0)
+	inputArgs[2] = true
+	inputArgs[3] = "0"
+	expects[0] = true
+	expects[1] = false
+	expects[2] = true
+	expects[3] = false
+	outputs = outputs[:0]
+	for _, arg := range inputArgs {
+		if out, ok := urlValuer.Call(inputName, []interface{}{arg}); ok {
+			outputs = append(outputs, out)
+		}
+	}
+	assert.Equal(t, expects, outputs)
+}

@@ -16,6 +16,7 @@
 package ski
 
 import (
+	"fmt"
 	"sync"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
@@ -37,19 +38,21 @@ func marshalShardKey(dst, name, shardKey []byte) []byte {
 }
 
 func unmarshalShardKey(dst, src []byte) ([]byte, []byte, error) {
-	src, l, err := encoding.UnmarshalVarUint64(src)
-	if err != nil {
-		return nil, nil, err
+	l, nSize := encoding.UnmarshalVarUint64(src)
+	if nSize <= 0 {
+		return nil, nil, fmt.Errorf("unmarshal ShardKey Fail")
 	}
+	src = src[nSize:]
 	dst = append(dst, src[:l]...)
 	return dst, src[l:], nil
 }
 
 func unmarshalMeasurement(dst, src []byte) ([]byte, []byte, error) {
-	src, l, err := encoding.UnmarshalVarUint64(src)
-	if err != nil {
-		return nil, nil, err
+	l, nSize := encoding.UnmarshalVarUint64(src)
+	if nSize <= 0 {
+		return nil, nil, fmt.Errorf("unmarshal Measurement Fail")
 	}
+	src = src[nSize:]
 	return dst[:l], src, nil
 }
 

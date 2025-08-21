@@ -15,12 +15,14 @@
 package listener
 
 import (
+	"crypto/tls"
 	"fmt"
 	"net"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 )
 
@@ -111,4 +113,18 @@ func checkInWhiteList(whiteList []string, remoteAddr string) bool {
 		}
 	}
 	return false
+}
+
+func OpenHttpsListen(pk, pem, clientPem, addr string, cfg *tls.Config) (net.Listener, error) {
+	err := config.BuildTLSConfig(pk, pem, clientPem, cfg)
+
+	if err != nil {
+		return nil, err
+	}
+
+	if len(cfg.Certificates) > 0 {
+		statistics.RuntimeIns().SetHttpsCertExpireAt(config.GetCertLeaf(&cfg.Certificates[0]))
+	}
+
+	return tls.Listen("tcp", addr, cfg)
 }

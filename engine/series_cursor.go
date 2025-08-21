@@ -54,7 +54,7 @@ type seriesCursor struct {
 	sInfo       *seriesInfo
 	filter      influxql.Expr
 	querySchema *executor.QuerySchema
-	tagSetRef   *tsi.TagSetInfo
+	tagSetRef   tsi.TagSet
 	span        *tracing.Span
 	ctx         *idKeyCursorContext
 	recordPool  *record.CircularRecordPool
@@ -70,11 +70,12 @@ type seriesCursor struct {
 	colAux         *record.ColAux
 }
 
-func (s *seriesCursor) ReInit(tagSetInfo *tsi.TagSetInfo, idx int) (bool, error) {
+func (s *seriesCursor) ReInit(tagSetInfo tsi.TagSetEx, idx int) (bool, error) {
 	s.tagSetRef = tagSetInfo
-	sid := s.tagSetRef.IDs[idx]
-	filter := s.tagSetRef.Filters[idx]
-	ptTags := &(s.tagSetRef.TagsVec[idx])
+	tagSetItem := tagSetInfo.GetTagSetItem(idx)
+	sid := tagSetItem.ID
+	filter := tagSetItem.Filter
+	ptTags := &(tagSetItem.TagsVec)
 	rowFilters := s.tagSetRef.GetRowFilter(idx)
 
 	memTableRecord := getMemTableRecord(s.ctx, s.span, s.ctx.querySchema, sid, filter, rowFilters, ptTags)
@@ -91,7 +92,7 @@ func (s *seriesCursor) ReInit(tagSetInfo *tsi.TagSetInfo, idx int) (bool, error)
 	s.sInfo.tags = *ptTags
 	s.sInfo.sid = sid
 	s.filter = filter
-	s.sInfo.key = s.tagSetRef.SeriesKeys[idx]
+	s.sInfo.key = tagSetItem.SeriesKey
 	s.memRecIter.init(memTableRecord)
 	return true, nil
 }

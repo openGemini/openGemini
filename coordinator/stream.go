@@ -15,7 +15,6 @@
 package coordinator
 
 import (
-	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -173,7 +172,7 @@ func (s *streamCtx) initVar(w *PointsWriter, si *meta2.StreamInfo) (err error) {
 	}
 
 	if s.ms == nil {
-		s.ms, err = s.writeHelper.createMeasurement(si.DesMst.Database, si.DesMst.RetentionPolicy, si.DesMst.Name)
+		s.ms, err = s.writeHelper.createMeasurement(si.DesMst.Database, si.DesMst.RetentionPolicy, si.DesMst.Name, false)
 		if err != nil {
 			return err
 		}
@@ -278,11 +277,10 @@ func (s *Stream) mapRowsToShard(
 		var groupValue []string
 		if len(k) != 0 {
 			groupValue = strings.Split(k, config.StreamGroupValueStrSeparator)
-			if len(groupValue) != dimLen {
-				errStr := fmt.Sprintf("group value is mssing for stream task %s, groupValue %v, tagDimKeys %v, fieldIndexKeys %v groupLen %v dimLen %v",
-					si.Name, groupValue, task.tagDimKeys, task.fieldIndexKeys, len(groupValue), dimLen)
-				return errors.New(errStr)
-			}
+		}
+		if len(groupValue) != dimLen {
+			s.logger.Error("group value is mssing for stream task", zap.String("task", si.Name), zap.Strings("groupValue", groupValue), zap.Strings("tagDimKeys", task.tagDimKeys), zap.Strings("fieldIndexKeys", task.fieldIndexKeys), zap.Int("groupLen", len(groupValue)), zap.Int("dimLen", dimLen))
+			continue
 		}
 		for t, v := range tv {
 			size++
@@ -321,6 +319,9 @@ func (s *Stream) mapRowsToShard(
 				r.Tags = r.Tags[:dimLen]
 				if r.ColumnToIndex == nil {
 					r.ColumnToIndex = make(map[string]int)
+				}
+				if len(r.Tags) != len(task.tagDimKeys) {
+					continue
 				}
 				index := 0
 				for i := range task.tagDimKeys {

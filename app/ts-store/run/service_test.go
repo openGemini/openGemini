@@ -18,7 +18,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openGemini/openGemini/app/ts-store/transport"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/stretchr/testify/require"
 )
 
 var addr2 = "127.0.0.2:8503"
@@ -40,20 +44,28 @@ func TestHttpService(t *testing.T) {
 	time.Sleep(1 * time.Second)
 }
 
-// TODO
-func TestHttpsService(t *testing.T) {
+func TestOpenService(t *testing.T) {
 	opsConfig := &config.OpsMonitor{
 		HttpAddress:      addr2,
 		HttpsEnabled:     true,
 		HttpsCertificate: "",
 	}
-	config := &config.Store{
-		OpsMonitor: opsConfig,
-	}
 
-	service := NewService(config)
-	service.Open()
-	defer service.Close()
+	s := &Server{}
+	s.config = &config.TSStore{
+		Data: config.Store{
+			OpsMonitor: opsConfig,
+		},
+		Sherlock: config.NewSherlockConfig(),
+	}
+	s.OpsService.Init(nil, nil)
+	s.config.Sherlock.SherlockEnable = true
+	s.Logger = logger.NewLogger(errno.ModuleUnknown)
+	s.storage = mockStorage()
+	s.transServer = transport.NewServer("127.0.0.11:10002", "127.0.0.11:10003")
+	require.NoError(t, s.transServer.Open())
+	require.NoError(t, s.openService())
 
 	time.Sleep(1 * time.Second)
+	s.group.MustClose()
 }

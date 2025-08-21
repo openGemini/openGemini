@@ -19,6 +19,7 @@ import (
 	"errors"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
+	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/stringinterner"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
@@ -219,4 +220,35 @@ func DropColByIndex(rec *Record, dropIndex []int) {
 	size := len(schemas)
 	rec.Schema = schemas[:size:size]
 	rec.ColVals = cols[:size:size]
+}
+
+func AppendShardKey(key string, col *ColVal, rowIndex int, dst []byte) []byte {
+	val, _ := col.StringValue(rowIndex)
+	dst = append(dst, ',')
+	dst = append(dst, key...)
+	dst = append(dst, '=')
+	dst = append(dst, val...)
+	return dst
+}
+
+func UnmarshalShardKeys(tags *Record, ShardKey []string, rowIndex int, dst []byte) ([]byte, error) {
+	dst = dst[:0]
+	i, j := 0, 0
+	for i < len(ShardKey) && j < tags.Len() {
+		if ShardKey[i] < tags.Schema[j].Name {
+			return nil, errno.NewError(errno.WritePointShouldHaveAllShardKey)
+		}
+		if ShardKey[i] == tags.Schema[j].Name {
+			key := tags.Schema[j].Name
+			colVal := &tags.ColVals[j]
+			dst = AppendShardKey(key, colVal, rowIndex, dst)
+			i++
+		}
+		j++
+	}
+	if i < len(ShardKey) {
+		return nil, errno.NewError(errno.WritePointShouldHaveAllShardKey)
+	}
+	// Remove the comma at the beginning of the encoded tag.
+	return dst[1:], nil
 }

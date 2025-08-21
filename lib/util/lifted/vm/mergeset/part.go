@@ -2,7 +2,6 @@ package mergeset
 
 import (
 	"fmt"
-	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -43,6 +42,8 @@ func getMaxCachedIndexBlocksPerPart() int {
 var (
 	maxCachedIndexBlocksPerPart     int
 	maxCachedIndexBlocksPerPartOnce sync.Once
+
+	openFilePartFn = openFilePart
 )
 
 func getMaxCachedInmemoryBlocksPerPart() int {
@@ -79,29 +80,28 @@ type part struct {
 }
 
 func openFilePart(path string) (*part, error) {
-	path = filepath.Clean(path)
-
+	path = fileops.Clean(path)
 	var ph partHeader
 	if err := ph.ParseFromPath(path); err != nil {
 		return nil, fmt.Errorf("cannot parse path to part: %w", err)
 	}
 
-	metaindexPath := filepath.Join(path, "metaindex.bin")
+	metaindexPath := fileops.Join(path, "metaindex.bin")
 	metaindexFile, err := filestream.Open(metaindexPath, true)
 	if err != nil {
 		return nil, fmt.Errorf("cannot open %q: %w", metaindexPath, err)
 	}
 	metaindexSize := fs.MustFileSize(metaindexPath)
 
-	indexPath := filepath.Join(path, "index.bin")
+	indexPath := fileops.Join(path, "index.bin")
 	indexFile := fs.MustOpenReaderAt(indexPath)
 	indexSize := fs.MustFileSize(indexPath)
 
-	itemsPath := filepath.Join(path, "items.bin")
+	itemsPath := fileops.Join(path, "items.bin")
 	itemsFile := fs.MustOpenReaderAt(itemsPath)
 	itemsSize := fs.MustFileSize(itemsPath)
 
-	lensPath := filepath.Join(path, "lens.bin")
+	lensPath := fileops.Join(path, "lens.bin")
 	lensFile := fs.MustOpenReaderAt(lensPath)
 	lensSize := fs.MustFileSize(lensPath)
 
@@ -118,8 +118,9 @@ func newPart(ph *partHeader, path string, size uint64, metaindexReader filestrea
 	}
 
 	metaindexReader.MustClose()
-	path = fileops.NormalizeDirPath(path)
-
+	if fileops.GetFsType(path) != fileops.Obs {
+		path = fileops.NormalizeDirPath(path)
+	}
 	var p part
 	p.path = path
 	p.size = size

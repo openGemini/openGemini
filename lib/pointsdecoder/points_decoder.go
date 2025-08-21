@@ -25,6 +25,7 @@ import (
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/msgservice"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util"
@@ -52,7 +53,7 @@ var decoderWorkPool sync.Pool
 
 type DecoderWork struct {
 	reqBuf           []byte
-	streamVars       []*netstorage.StreamVar
+	streamVars       []*msgservice.StreamVar
 	rows             []influx.Row
 	tagpools         []influx.Tag
 	fieldpools       []influx.Field
@@ -75,7 +76,7 @@ func (ww *DecoderWork) SetReqBuf(buff []byte) {
 	ww.reqBuf = buff
 }
 
-func (ww *DecoderWork) SetStreamVars(vars []*netstorage.StreamVar) {
+func (ww *DecoderWork) SetStreamVars(vars []*msgservice.StreamVar) {
 	ww.streamVars = vars
 }
 

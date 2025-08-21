@@ -124,7 +124,7 @@ func NewService(interval time.Duration) *Service {
 	return s
 }
 
-func (s *Service) handleSharedStorage(logger *zap.Logger) bool {
+func (s *Service) HandleSharedStorage(logger *zap.Logger) bool {
 	t := time.Now().UTC()
 	var retryNeeded bool
 	markDelSgInfos, deletedSgInfos := s.MetaClient.GetExpiredShards()
@@ -236,7 +236,7 @@ func (s *Service) DeleteShardOrIndex(db string, ptId uint32, id uint64, delType 
 }
 
 // ShardGroup Retention Policy check and IndexGroup Retention Policy check.
-func (s *Service) handleLocalStorage(logger *zap.Logger, nilShardMap *map[uint64]*meta.ShardDurationInfo, nilIndexMap *map[uint64]*meta.IndexDurationInfo) bool {
+func (s *Service) HandleLocalStorage(logger *zap.Logger, nilShardMap *map[uint64]*meta.ShardDurationInfo, nilIndexMap *map[uint64]*meta.IndexDurationInfo) bool {
 	var retryNeeded bool
 	expiredShards := s.Engine.ExpiredShards(nilShardMap)
 	for i := range expiredShards {
@@ -326,7 +326,7 @@ func (s *Service) updateShardDurationInfo(nilShardMap *map[uint64]*meta.ShardDur
 	return nil
 }
 
-func (s *Service) updateIndexDurationInfo(nilIndexMap *map[uint64]*meta.IndexDurationInfo) error {
+func (s *Service) UpdateIndexDurationInfo(nilIndexMap *map[uint64]*meta.IndexDurationInfo) error {
 	res, err := s.MetaClient.GetIndexDurationInfo(s.index)
 	if err != nil {
 		return err
@@ -349,7 +349,7 @@ func (s *Service) updateIndexDurationInfo(nilIndexMap *map[uint64]*meta.IndexDur
 
 func (s *Service) updateDurationInfo(nilShardMap *map[uint64]*meta.ShardDurationInfo, nilIndexMap *map[uint64]*meta.IndexDurationInfo) error {
 	err1 := s.updateShardDurationInfo(nilShardMap)
-	err2 := s.updateIndexDurationInfo(nilIndexMap)
+	err2 := s.UpdateIndexDurationInfo(nilIndexMap)
 	if err1 != nil {
 		return err1
 	}
@@ -371,9 +371,9 @@ func (s *Service) handle() {
 	// have to do it manually.
 	var retryNeeded bool
 	if config.IsLogKeeper() {
-		retryNeeded = s.handleSharedStorage(logger)
+		retryNeeded = s.HandleSharedStorage(logger)
 	} else {
-		retryNeeded = s.handleLocalStorage(logger, &nilShardMap, &nilIndexMap)
+		retryNeeded = s.HandleLocalStorage(logger, &nilShardMap, &nilIndexMap)
 	}
 
 	if retryNeeded {

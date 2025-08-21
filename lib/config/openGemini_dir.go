@@ -11,23 +11,34 @@ import (
 	"path/filepath"
 )
 
-// openGeminiDir retrieves the openGemini directory.
+// openGeminiDir returns the default directory for openGemini data and metadata storage.
+// The directory is determined in the following priority order:
+// 1. Current user's home directory (from user.Current())
+// 2. HOME environment variable
+// 3. Current working directory (as a fallback)
+// The final path is the selected directory with ".openGemini" appended.
 func openGeminiDir() string {
-	var dir string
-	// By default, store meta and data files in current users home directory
-	u, err := user.Current()
-	if err == nil {
-		dir = u.HomeDir
-	} else if home := os.Getenv("HOME"); home != "" {
-		dir = home
-	} else {
-		wd, err := os.Getwd()
-		if err != nil {
-			panic(err)
-		}
-		dir = wd
-	}
-	homeDir := filepath.Join(dir, ".openGemini")
+	baseDir := getBaseDirectory()
+	return filepath.Join(baseDir, ".openGemini")
+}
 
-	return homeDir
+// getBaseDirectory determines the base directory to use for openGemini storage
+// by checking user home, environment variables, and working directory in order.
+func getBaseDirectory() string {
+	// Try to get current user's home directory first
+	if u, err := user.Current(); err == nil && u.HomeDir != "" {
+		return u.HomeDir
+	}
+
+	// Fallback to HOME environment variable if user lookup failed
+	if home := os.Getenv("HOME"); home != "" {
+		return home
+	}
+
+	// Final fallback: use current working directory
+	wd, err := os.Getwd()
+	if err != nil {
+		panic(err) // Unable to determine any valid directory
+	}
+	return wd
 }

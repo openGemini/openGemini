@@ -36,7 +36,8 @@ import (
 type GroupLocs struct {
 	Locs               []*Loc
 	Loc                int
-	tagKeys, tagValues []string
+	tagKeys, tagValues [][]string
+	preMaxLoc          int
 }
 
 func newLocs() *GroupLocs {
@@ -52,21 +53,35 @@ func (ls *GroupLocs) add(chunkLen int) {
 }
 
 func (ls *GroupLocs) reset() {
+	if ls.preMaxLoc < ls.Loc {
+		ls.preMaxLoc = ls.Loc
+	}
 	ls.Loc = 0
 	for _, loc := range ls.Locs {
+		if loc.preMaxRowLoc < loc.RowLoc {
+			loc.preMaxRowLoc = loc.RowLoc
+		}
 		loc.RowLoc = loc.startRowLoc
 	}
 }
 
+func (ls *GroupLocs) moveToMaxloc() {
+	ls.Loc = ls.preMaxLoc
+	for _, loc := range ls.Locs {
+		loc.RowLoc = loc.preMaxRowLoc
+	}
+}
+
 type Loc struct {
-	ChunkLoc    int
-	GroupLoc    int
-	RowLoc      int
-	startRowLoc int
+	ChunkLoc     int
+	GroupLoc     int
+	RowLoc       int
+	startRowLoc  int
+	preMaxRowLoc int
 }
 
 func newLoc(chunkLoc int, groupLoc int, startRow int) *Loc {
-	return &Loc{ChunkLoc: chunkLoc, GroupLoc: groupLoc, RowLoc: startRow, startRowLoc: startRow}
+	return &Loc{ChunkLoc: chunkLoc, GroupLoc: groupLoc, RowLoc: startRow, startRowLoc: startRow, preMaxRowLoc: startRow}
 }
 
 func (l *Loc) add() {
@@ -114,9 +129,11 @@ type BinOpTransform struct {
 	reserveLoc        []int
 	delLoc            []int
 
-	computeResultTags func(pTagKeys, pTagValues, sTagKeys, sTagValues []string) ([]string, []string, string)
-	BinOpHelper       func(ctx context.Context, errs *errno.Errs)
-	skipFlag          bool
+	computeMatchResultFn func(primaryGroups *GroupLocs, secondaryChunk Chunk, secondaryGroupLoc int) error
+	computeResultTags    func(pTagKeys, pTagValues, sTagKeys, sTagValues []string) ([]string, []string, string)
+	BinOpHelper          func(ctx context.Context, errs *errno.Errs)
+	skipFlag             bool
+	addResultSingle      func(secondaryChunk Chunk) error
 
 	computeValue func(lVal, rVal float64) (float64, bool)
 }
@@ -211,12 +228,17 @@ func (trans *BinOpTransform) initMatchType(para *influxql.BinOp, lExpr, rExpr in
 	}
 	if trans.OpType == parser.LAND {
 		trans.BinOpHelper = trans.BinOpHelperConditionSingle
+		trans.computeMatchResultFn = trans.computeMatchResultLand
+		trans.addResultSingle = trans.AddResultLand
 		trans.skipFlag = false
 	} else if trans.OpType == parser.LUNLESS {
 		trans.BinOpHelper = trans.BinOpHelperConditionSingle
+		trans.computeMatchResultFn = trans.computeMatchResultLunless
+		trans.addResultSingle = trans.AddResultLunless
 		trans.skipFlag = true
 	} else if trans.OpType == parser.LOR {
 		trans.BinOpHelper = trans.BinOpHelperConditionBoth
+		trans.computeMatchResultFn = trans.computeMatchResultLor
 		trans.skipFlag = true
 	} else {
 		trans.BinOpHelper = trans.BinOpHelperOperator
@@ -441,7 +463,11 @@ func (trans *BinOpTransform) addPrimaryMatchTags(tags ChunkTags, loc, startRow i
 		newLocs := newLocs()
 		newLocs.Locs = append(newLocs.Locs, newLoc(trans.primaryChunkNum, loc, startRow))
 		if trans.matchType != influxql.OneToOne {
-			newLocs.tagKeys, newLocs.tagValues = tagKeys, tagValues
+			newLocs.tagKeys = append(newLocs.tagKeys, tagKeys)
+			newLocs.tagValues = append(newLocs.tagValues, tagValues)
+		} else {
+			newLocs.tagKeys = append(newLocs.tagKeys, nil)
+			newLocs.tagValues = append(newLocs.tagValues, nil)
 		}
 		trans.primaryMap[matchTags] = newLocs
 	}
@@ -453,17 +479,35 @@ func (trans *BinOpTransform) addPrimaryMatchTagsSimple(tags ChunkTags, loc, star
 	trans.primaryMap[matchTags] = nil
 }
 
-func (trans *BinOpTransform) addPrimaryMap(c Chunk) error {
-	trans.primaryChunks = append(trans.primaryChunks, c.Clone())
-	tags := trans.primaryChunks[len(trans.primaryChunks)-1].Tags()
-	for i := range tags {
-		startRow := trans.primaryChunks[len(trans.primaryChunks)-1].TagIndex()[i]
-		if err := trans.addPrimaryMatchTags(tags[i], i, startRow); err != nil {
-			return err
-		}
-		trans.preTags = string(tags[i].subset)
+func (trans *BinOpTransform) addPrimaryMatchTagsLor(tags ChunkTags, loc, startRow int) error {
+	matchTags, tagKeys, tagValues := trans.computeMatchTags(tags)
+	var ok bool
+	var primaryGroups *GroupLocs
+	if primaryGroups, ok = trans.primaryMap[matchTags]; ok {
+		primaryGroups.Locs = append(primaryGroups.Locs, newLoc(trans.primaryChunkNum, loc, startRow))
+		primaryGroups.tagKeys = append(primaryGroups.tagKeys, tagKeys)
+		primaryGroups.tagValues = append(primaryGroups.tagValues, tagValues)
+	} else {
+		newLocs := newLocs()
+		newLocs.Locs = append(newLocs.Locs, newLoc(trans.primaryChunkNum, loc, startRow))
+		newLocs.tagKeys = append(newLocs.tagKeys, tagKeys)
+		newLocs.tagValues = append(newLocs.tagValues, tagValues)
+		trans.primaryMap[matchTags] = newLocs
 	}
-	trans.primaryChunkNum++
+	return nil
+}
+
+func (trans *BinOpTransform) addPrimaryMatchTagsSingle(tags ChunkTags, loc, startRow int) error {
+	matchTags, _, _ := trans.computeMatchTags(tags)
+	var ok bool
+	var primaryGroups *GroupLocs
+	if primaryGroups, ok = trans.primaryMap[matchTags]; ok {
+		primaryGroups.Locs = append(primaryGroups.Locs, newLoc(trans.primaryChunkNum, loc, startRow))
+	} else {
+		newLocs := newLocs()
+		newLocs.Locs = append(newLocs.Locs, newLoc(trans.primaryChunkNum, loc, startRow))
+		trans.primaryMap[matchTags] = newLocs
+	}
 	return nil
 }
 
@@ -481,6 +525,20 @@ func (trans *BinOpTransform) addPrimaryMapAndResultSimple(c Chunk) {
 		trans.addPrimaryMatchTagsSimple(c.Tags()[i], i, startRow)
 		trans.computeMatchResultSimple(c, i, &c.Tags()[i])
 	}
+}
+
+func (trans *BinOpTransform) addPrimaryMapBase(c Chunk, addPrimaryMatchTagsFn func(tags ChunkTags, loc int, startRow int) error) error {
+	trans.primaryChunks = append(trans.primaryChunks, c.Clone())
+	tags := trans.primaryChunks[len(trans.primaryChunks)-1].Tags()
+	for i := range tags {
+		startRow := trans.primaryChunks[len(trans.primaryChunks)-1].TagIndex()[i]
+		if err := addPrimaryMatchTagsFn(tags[i], i, startRow); err != nil {
+			return err
+		}
+		trans.preTags = string(tags[i].subset)
+	}
+	trans.primaryChunkNum++
+	return nil
 }
 
 func (trans *BinOpTransform) AddResult(secondaryChunk Chunk) error {
@@ -507,6 +565,93 @@ func (trans *BinOpTransform) AddResult(secondaryChunk Chunk) error {
 	return nil
 }
 
+func (trans *BinOpTransform) AddResultBase(secondaryChunk Chunk, noMatchFn func(Chunk, int, *ChunkTags), addPrePrimaryGroupFn func(*GroupLocs)) error {
+	var ok bool
+	var prePrimaryGroups *GroupLocs
+	var primaryGroups *GroupLocs
+	tags := secondaryChunk.Tags()
+	for i := range tags {
+		matchTags, _, _ := trans.computeMatchTags(tags[i])
+		if primaryGroups, ok = trans.primaryMap[matchTags]; !ok {
+			if addPrePrimaryGroupFn != nil && !trans.On && len(trans.MatchKeys) == 0 {
+				addPrePrimaryGroupFn(prePrimaryGroups)
+			}
+			if noMatchFn != nil {
+				noMatchFn(secondaryChunk, i, &tags[i])
+			}
+			continue
+		}
+		if trans.notSameGroup(tags[i]) {
+			if addPrePrimaryGroupFn != nil && !trans.On && len(trans.MatchKeys) == 0 {
+				addPrePrimaryGroupFn(prePrimaryGroups)
+			}
+			primaryGroups.reset()
+		}
+		if err := trans.computeMatchResultFn(primaryGroups, secondaryChunk, i); err != nil {
+			return err
+		}
+		trans.preTags = string(tags[i].subset)
+		prePrimaryGroups = primaryGroups
+	}
+	return nil
+}
+
+func (trans *BinOpTransform) AddResultLand(secondaryChunk Chunk) error {
+	return trans.AddResultBase(secondaryChunk, nil, nil)
+}
+
+func (trans *BinOpTransform) AddResultLunless(secondaryChunk Chunk) error {
+	return trans.AddResultBase(secondaryChunk, trans.computeMatchResultSimple, nil)
+}
+
+func (trans *BinOpTransform) AddResultLor(secondaryChunk Chunk) error {
+	if err := trans.AddResultBase(secondaryChunk, trans.computeMatchResultSimple, trans.AddPrePrimaryGroup); err != nil {
+		return err
+	}
+	for _, primaryGroups := range trans.primaryMap {
+		primaryGroups.reset()
+		primaryGroups.moveToMaxloc()
+		trans.addPrimaryGroupLastResult(primaryGroups)
+	}
+	return nil
+}
+
+func (trans *BinOpTransform) AddPrePrimaryGroup(prePrimaryGroups *GroupLocs) {
+	if prePrimaryGroups == nil {
+		return
+	}
+	prePrimaryGroups.reset()
+	prePrimaryGroups.moveToMaxloc()
+	trans.addPrimaryGroupLastResult(prePrimaryGroups)
+}
+
+func (trans *BinOpTransform) addPrimaryGroupLastResult(primaryGroups *GroupLocs) {
+	if primaryGroups == nil || primaryGroups.Loc >= len(primaryGroups.Locs) {
+		return
+	}
+	var start, end int
+	var pLoc *Loc
+	var pChunk Chunk
+	for primaryGroups.Loc < len(primaryGroups.Locs) {
+		pLoc = primaryGroups.Locs[primaryGroups.Loc]
+		pChunk = trans.primaryChunks[pLoc.ChunkLoc]
+		start = pLoc.RowLoc
+		_, end = trans.getTagRange(pLoc.GroupLoc, pChunk)
+		if start < end {
+			if len(trans.outputChunk.Tags()) == 0 ||
+				!bytes.Equal(pChunk.Tags()[pLoc.GroupLoc].subset, trans.outputChunk.Tags()[len(trans.outputChunk.Tags())-1].subset) {
+				trans.outputChunk.AppendTagsAndIndex(*NewChunkTagsDeepCopy(pChunk.Tags()[pLoc.GroupLoc].subset, pChunk.Tags()[pLoc.GroupLoc].offsets), trans.outputChunk.Len())
+			}
+		}
+		for start < end {
+			trans.addOutputVal(pChunk.Time()[start], pChunk.Columns()[0].FloatValues()[start])
+			start++
+		}
+		pLoc.RowLoc = end
+		primaryGroups.Loc++
+	}
+}
+
 // 1.no compute resultTags; 2.no computeMatchResult by both side input; 3.no resultMap dup err check
 func (trans *BinOpTransform) AddResultSimple(secondaryChunk Chunk) {
 	var ok bool
@@ -520,24 +665,36 @@ func (trans *BinOpTransform) AddResultSimple(secondaryChunk Chunk) {
 	}
 }
 
+func (trans *BinOpTransform) getTagRange(tagLoc int, chunk Chunk) (start int, end int) {
+	start = chunk.TagIndex()[tagLoc]
+	if tagLoc == chunk.TagLen()-1 {
+		end = chunk.Len()
+	} else {
+		end = chunk.TagIndex()[tagLoc+1]
+	}
+	return start, end
+}
+
+func (trans *BinOpTransform) tryAddOutputTags(preOutSize int, tagKeys, tagValues []string) {
+	if trans.outputChunk.Len() > preOutSize {
+		trans.addOutPutTags(preOutSize, tagKeys, tagValues)
+	}
+}
+
 func (trans *BinOpTransform) computeMatchResult(primaryGroups *GroupLocs, secondaryChunk Chunk, secondaryGroupLoc int) error {
-	var start, end int
 	var rVal float64
 	var keep bool
 	var pTime, sTime int64
+	var pChunk Chunk
+	var pLoc *Loc
 	preOutSize := trans.outputChunk.Len()
-	start = secondaryChunk.TagIndex()[secondaryGroupLoc]
-	if secondaryGroupLoc == secondaryChunk.TagLen()-1 {
-		end = secondaryChunk.Len()
-	} else {
-		end = secondaryChunk.TagIndex()[secondaryGroupLoc+1]
-	}
+	start, end := trans.getTagRange(secondaryGroupLoc, secondaryChunk)
 	for start < end {
 		if primaryGroups.Loc >= len(primaryGroups.Locs) {
 			break
 		}
-		pLoc := primaryGroups.Locs[primaryGroups.Loc]
-		pChunk := trans.primaryChunks[pLoc.ChunkLoc]
+		pLoc = primaryGroups.Locs[primaryGroups.Loc]
+		pChunk = trans.primaryChunks[pLoc.ChunkLoc]
 		pTime = pChunk.Time()[pLoc.RowLoc]
 		sTime = secondaryChunk.Time()[start]
 		if pTime < sTime {
@@ -547,12 +704,10 @@ func (trans *BinOpTransform) computeMatchResult(primaryGroups *GroupLocs, second
 			start++
 			continue
 		}
-		pVal := pChunk.Columns()[0].FloatValues()[pLoc.RowLoc]
-		sVal := secondaryChunk.Columns()[0].FloatValues()[start]
 		if trans.matchType == influxql.OneToMany {
-			rVal, keep = trans.computeValue(pVal, sVal)
+			rVal, keep = trans.computeValue(pChunk.Columns()[0].FloatValues()[pLoc.RowLoc], secondaryChunk.Columns()[0].FloatValues()[start])
 		} else {
-			rVal, keep = trans.computeValue(sVal, pVal)
+			rVal, keep = trans.computeValue(secondaryChunk.Columns()[0].FloatValues()[start], pChunk.Columns()[0].FloatValues()[pLoc.RowLoc])
 		}
 		if trans.ReturnBool {
 			if keep {
@@ -569,39 +724,148 @@ func (trans *BinOpTransform) computeMatchResult(primaryGroups *GroupLocs, second
 		primaryGroups.add(pChunk.Len())
 		start++
 	}
-	if trans.outputChunk.Len() > preOutSize {
-		trans.addOutPutTags(preOutSize)
+	trans.tryAddOutputTags(preOutSize, trans.resultTagKeys, trans.resultTagValues)
+	trans.SendChunk()
+	return nil
+}
+
+func (trans *BinOpTransform) computeMatchResultLor(primaryGroups *GroupLocs, secondaryChunk Chunk, secondaryGroupLoc int) error {
+	var pTime, sTime int64
+	var tagKeys, tagValues []string
+	var pLoc *Loc
+	var pChunk Chunk
+	preOutSize := 0
+	start, end := trans.getTagRange(secondaryGroupLoc, secondaryChunk)
+	for start < end {
+		if primaryGroups.Loc >= len(primaryGroups.Locs) {
+			tagKeys, tagValues = secondaryChunk.Tags()[secondaryGroupLoc].GetChunkTagAndValues()
+			trans.addOutputVal(secondaryChunk.Time()[start], secondaryChunk.Columns()[0].FloatValues()[start])
+			start++
+			trans.tryAddOutputTags(preOutSize, tagKeys, tagValues)
+			continue
+		}
+		preOutSize = trans.outputChunk.Len()
+		pLoc = primaryGroups.Locs[primaryGroups.Loc]
+		pChunk = trans.primaryChunks[pLoc.ChunkLoc]
+		pTime = pChunk.Time()[pLoc.RowLoc]
+		sTime = secondaryChunk.Time()[start]
+		if pTime < sTime {
+			tagKeys, tagValues = primaryGroups.tagKeys[primaryGroups.Loc], primaryGroups.tagValues[primaryGroups.Loc]
+			if pLoc.RowLoc >= pLoc.preMaxRowLoc {
+				trans.addOutputVal(pTime, pChunk.Columns()[0].FloatValues()[pLoc.RowLoc])
+			}
+			groupLen := 0
+			if pLoc.GroupLoc == len(pChunk.TagIndex())-1 {
+				groupLen = pChunk.Len()
+			} else {
+				groupLen = pChunk.TagIndex()[pLoc.GroupLoc+1]
+			}
+			primaryGroups.add(groupLen)
+		} else if sTime < pTime {
+			tagKeys, tagValues = secondaryChunk.Tags()[secondaryGroupLoc].GetChunkTagAndValues()
+			trans.addOutputVal(sTime, secondaryChunk.Columns()[0].FloatValues()[start])
+			start++
+		} else {
+			tagKeys, tagValues = primaryGroups.tagKeys[primaryGroups.Loc], primaryGroups.tagValues[primaryGroups.Loc]
+			if pLoc.RowLoc >= pLoc.preMaxRowLoc {
+				trans.addOutputVal(pTime, pChunk.Columns()[0].FloatValues()[pLoc.RowLoc])
+			}
+			groupLen := 0
+			if pLoc.GroupLoc == len(pChunk.TagIndex())-1 {
+				groupLen = pChunk.Len()
+			} else {
+				groupLen = pChunk.TagIndex()[pLoc.GroupLoc+1]
+			}
+			primaryGroups.add(groupLen)
+			start++
+		}
+		trans.tryAddOutputTags(preOutSize, tagKeys, tagValues)
 	}
+	trans.SendChunk()
+	return nil
+}
+
+func (trans *BinOpTransform) computeMatchResultLand(primaryGroups *GroupLocs, secondaryChunk Chunk, secondaryGroupLoc int) error {
+	var pTime, sTime int64
+	var pLoc *Loc
+	var pChunk Chunk
+	start, end := trans.getTagRange(secondaryGroupLoc, secondaryChunk)
+	tagKeys, tagValues := secondaryChunk.Tags()[secondaryGroupLoc].GetChunkTagAndValues()
+	preOutSize := trans.outputChunk.Len()
+	for start < end {
+		if primaryGroups.Loc >= len(primaryGroups.Locs) {
+			break
+		}
+		pLoc = primaryGroups.Locs[primaryGroups.Loc]
+		pChunk = trans.primaryChunks[pLoc.ChunkLoc]
+		pTime = pChunk.Time()[pLoc.RowLoc]
+		sTime = secondaryChunk.Time()[start]
+		if pTime < sTime {
+			primaryGroups.add(pChunk.Len())
+		} else if sTime < pTime {
+			start++
+		} else {
+			trans.addOutputVal(sTime, secondaryChunk.Columns()[0].FloatValues()[start])
+			primaryGroups.add(pChunk.Len())
+			start++
+		}
+	}
+	trans.tryAddOutputTags(preOutSize, tagKeys, tagValues)
+	trans.SendChunk()
+	return nil
+}
+
+func (trans *BinOpTransform) computeMatchResultLunless(primaryGroups *GroupLocs, secondaryChunk Chunk, secondaryGroupLoc int) error {
+	var pTime, sTime int64
+	var pLoc *Loc
+	var pChunk Chunk
+	start, end := trans.getTagRange(secondaryGroupLoc, secondaryChunk)
+	tagKeys, tagValues := secondaryChunk.Tags()[secondaryGroupLoc].GetChunkTagAndValues()
+	preOutSize := trans.outputChunk.Len()
+	for start < end {
+		if primaryGroups.Loc >= len(primaryGroups.Locs) {
+			trans.addOutputVal(secondaryChunk.Time()[start], secondaryChunk.Columns()[0].FloatValues()[start])
+			start++
+			trans.tryAddOutputTags(preOutSize, tagKeys, tagValues)
+			continue
+		}
+		pLoc = primaryGroups.Locs[primaryGroups.Loc]
+		pChunk = trans.primaryChunks[pLoc.ChunkLoc]
+		pTime = pChunk.Time()[pLoc.RowLoc]
+		sTime = secondaryChunk.Time()[start]
+		if pTime < sTime {
+			primaryGroups.add(pChunk.Len())
+		} else if sTime < pTime {
+			trans.addOutputVal(sTime, secondaryChunk.Columns()[0].FloatValues()[start])
+			start++
+		} else {
+			primaryGroups.add(pChunk.Len())
+			start++
+		}
+	}
+	trans.tryAddOutputTags(preOutSize, tagKeys, tagValues)
 	trans.SendChunk()
 	return nil
 }
 
 func (trans *BinOpTransform) computeMatchResultSimple(secondaryChunk Chunk, secondaryGroupLoc int, tags *ChunkTags) {
 	trans.addOutPutTagsSimple(tags)
-	var start, end int
-	start = secondaryChunk.TagIndex()[secondaryGroupLoc]
-	if secondaryGroupLoc == secondaryChunk.TagLen()-1 {
-		end = secondaryChunk.Len()
-	} else {
-		end = secondaryChunk.TagIndex()[secondaryGroupLoc+1]
-	}
+	start, end := trans.getTagRange(secondaryGroupLoc, secondaryChunk)
 	trans.addOutputVals(secondaryChunk.Time()[start:end], secondaryChunk.Columns()[0].FloatValues()[start:end])
 	trans.SendChunk()
 }
 
-func (trans *BinOpTransform) addOutPutTags(preOutSize int) {
-	tagSet := NewChunkTagsByTagKVs(trans.resultTagKeys, trans.resultTagValues)
+func (trans *BinOpTransform) addOutPutTags(preOutSize int, tagKeys, tagValues []string) {
+	tagSet := NewChunkTagsByTagKVs(tagKeys, tagValues)
 	if len(trans.outputChunk.Tags()) > 0 && bytes.Equal(trans.outputChunk.Tags()[len(trans.outputChunk.Tags())-1].subset, tagSet.subset) {
 		return
 	}
-	trans.outputChunk.AddTagAndIndex(*tagSet, preOutSize)
-	trans.outputChunk.AddIntervalIndex(preOutSize)
+	trans.outputChunk.AppendTagsAndIndex(*tagSet, preOutSize)
 }
 
 func (trans *BinOpTransform) addOutPutTagsSimple(tags *ChunkTags) {
 	tagSet := NewChunkTagsDeepCopy(tags.subset, tags.offsets)
-	trans.outputChunk.AddTagAndIndex(*tagSet, trans.outputChunk.Len())
-	trans.outputChunk.AddIntervalIndex(trans.outputChunk.Len())
+	trans.outputChunk.AppendTagsAndIndex(*tagSet, trans.outputChunk.Len())
 }
 
 func BinOpADD(lVal, rVal float64) (float64, bool) {
@@ -677,11 +941,11 @@ func (trans *BinOpTransform) addResulMap(sMatchTags string, sTagKeys []string, s
 		} else {
 			trans.resultMap[sMatchTags] = nil
 		}
-		trans.resultTagKeys, trans.resultTagValues, _ = trans.ComputeResultTags(pLocs.tagKeys, pLocs.tagValues, sTagKeys, sTagValues)
+		trans.resultTagKeys, trans.resultTagValues, _ = trans.ComputeResultTags(pLocs.tagKeys[0], pLocs.tagValues[0], sTagKeys, sTagValues)
 		return nil
 	} else {
 		var resultTags string
-		trans.resultTagKeys, trans.resultTagValues, resultTags = trans.ComputeResultTags(pLocs.tagKeys, pLocs.tagValues, sTagKeys, sTagValues)
+		trans.resultTagKeys, trans.resultTagValues, resultTags = trans.ComputeResultTags(pLocs.tagKeys[0], pLocs.tagValues[0], sTagKeys, sTagValues)
 		if _, ok := trans.resultMap[resultTags]; ok {
 			if trans.notSameGroup(tags) {
 				return fmt.Errorf("one-to-many/many-to-one duplicate resultkeys:%s", resultTags)
@@ -830,7 +1094,7 @@ func (trans *BinOpTransform) BinOpHelperOperator(ctx context.Context, errs *errn
 		if trans.bufChunks[trans.primaryLoc] == nil {
 			break
 		}
-		err = trans.addPrimaryMap(trans.bufChunks[trans.primaryLoc])
+		err = trans.addPrimaryMapBase(trans.bufChunks[trans.primaryLoc], trans.addPrimaryMatchTags)
 		if err != nil {
 			errs.Dispatch(err)
 			return
@@ -909,7 +1173,7 @@ func (trans *BinOpTransform) BinOpHelperConditionSingleExpr(ctx context.Context,
 }
 
 func (trans *BinOpTransform) computeMatchResultSimpleExpr() {
-	trans.outputChunk.AddTagAndIndex(ChunkTags{}, trans.outputChunk.Len())
+	trans.outputChunk.AppendTagsAndIndex(ChunkTags{}, trans.outputChunk.Len())
 	trans.addOutputVal(trans.opt.StartTime, trans.oneSideValue)
 	trans.SendChunk()
 }
@@ -942,14 +1206,18 @@ func (trans *BinOpTransform) BinOpHelperConditionSingle(ctx context.Context, err
 			trans.nextChunks[0] <- signal
 		}
 	}
-
+	var err error
 	// 1. build PrimaryMapSimple by right
 	for {
 		<-trans.inputSignals[1]
 		if trans.bufChunks[1] == nil {
 			break
 		}
-		trans.addPrimaryMapSimple(trans.bufChunks[1])
+		err = trans.addPrimaryMapBase(trans.bufChunks[1], trans.addPrimaryMatchTagsSingle)
+		if err != nil {
+			errs.Dispatch(err)
+			return
+		}
 		trans.nextChunks[1] <- signal
 	}
 
@@ -959,7 +1227,11 @@ func (trans *BinOpTransform) BinOpHelperConditionSingle(ctx context.Context, err
 		if trans.bufChunks[0] == nil {
 			break
 		}
-		trans.AddResultSimple(trans.bufChunks[0])
+		err = trans.addResultSingle(trans.bufChunks[0])
+		if err != nil {
+			errs.Dispatch(err)
+			return
+		}
 		trans.nextChunks[0] <- signal
 	}
 	if trans.outputChunk.Len() > 0 {
@@ -993,27 +1265,70 @@ func (trans *BinOpTransform) BinOpHelperConditionBoth(ctx context.Context, errs 
 		}
 	}
 
+	<-trans.inputSignals[0]
+	<-trans.inputSignals[1]
+
+	if trans.bufChunks[0] == nil && trans.bufChunks[1] == nil {
+		return
+	} else if trans.bufChunks[0] == nil && trans.bufChunks[1] != nil {
+		trans.copyToOutputChunk(1)
+		return
+	} else if trans.bufChunks[0] != nil && trans.bufChunks[1] == nil {
+		trans.copyToOutputChunk(0)
+		return
+	}
+	var err error
 	// 1. build PrimaryMapSimple and add result by left
 	for {
+		if trans.opt.IsPromInstantQuery() {
+			trans.addPrimaryMapAndResultSimple(trans.bufChunks[0])
+		} else {
+			err = trans.addPrimaryMapBase(trans.bufChunks[0], trans.addPrimaryMatchTagsLor)
+			if err != nil {
+				errs.Dispatch(err)
+				return
+			}
+		}
+		trans.nextChunks[0] <- signal
 		<-trans.inputSignals[0]
 		if trans.bufChunks[0] == nil {
 			break
 		}
-		trans.addPrimaryMapAndResultSimple(trans.bufChunks[0])
-		trans.nextChunks[0] <- signal
 	}
+	trans.preTags = ""
 
 	// 2. add result by right
 	for {
+		if trans.opt.IsPromInstantQuery() {
+			trans.AddResultSimple(trans.bufChunks[1])
+		} else {
+			err = trans.AddResultLor(trans.bufChunks[1])
+			if err != nil {
+				errs.Dispatch(err)
+				return
+			}
+		}
+		trans.nextChunks[1] <- signal
 		<-trans.inputSignals[1]
 		if trans.bufChunks[1] == nil {
 			break
 		}
-		trans.AddResultSimple(trans.bufChunks[1])
-		trans.nextChunks[1] <- signal
 	}
 	if trans.outputChunk.Len() > 0 {
 		trans.output.State <- trans.outputChunk
+	}
+}
+
+func (trans *BinOpTransform) copyToOutputChunk(index int) {
+	for {
+		trans.bufChunks[index].CopyTo(trans.outputChunk)
+		trans.output.State <- trans.outputChunk
+		trans.outputChunk = trans.chunkPool.GetChunk()
+		trans.nextChunks[index] <- signal
+		<-trans.inputSignals[index]
+		if trans.bufChunks[index] == nil {
+			return
+		}
 	}
 }
 

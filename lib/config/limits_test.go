@@ -20,9 +20,9 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/goccy/go-yaml"
 	"github.com/prometheus/common/model"
 	"github.com/stretchr/testify/require"
-	"gopkg.in/yaml.v3"
 )
 
 func TestLimitsLoadingFromYaml(t *testing.T) {

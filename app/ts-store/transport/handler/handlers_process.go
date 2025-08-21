@@ -20,14 +20,19 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/app/ts-store/transport/query"
+	"github.com/openGemini/openGemini/engine"
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/lib/codec"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
-	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/metaclient"
+	"github.com/openGemini/openGemini/lib/msgservice"
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 	"go.uber.org/zap"
 )
@@ -91,7 +96,7 @@ func (h *SeriesKeys) processRough() (codec.BinaryCodec, error) {
 // processExact used to search series keys from the chunk meta and index,
 // the query time range can match the chunk meta time range.
 func (h *SeriesKeys) processExact() (codec.BinaryCodec, error) {
-	var plan netstorage.DDLBasePlans
+	var plan engine.DDLBasePlans
 
 	h.rsp.Err = processDDL(h.req.Condition, func(expr influxql.Expr, tr influxql.TimeRange) error {
 		engine := h.store.GetEngine()
@@ -182,7 +187,7 @@ func (h *ShowTagValues) processRough() (codec.BinaryCodec, error) {
 // processExact used to search tag values from the chunk meta and index,
 // the query time range can match the chunk meta time range.
 func (h *ShowTagValues) processExact() (codec.BinaryCodec, error) {
-	var plan netstorage.DDLBasePlans
+	var plan engine.DDLBasePlans
 	h.rsp.Err = processDDL(h.req.Condition, func(expr influxql.Expr, tr influxql.TimeRange) error {
 		engine := h.store.GetEngine()
 
@@ -206,7 +211,7 @@ func (h *ShowTagValues) processExact() (codec.BinaryCodec, error) {
 			Max: tr.Max.UnixNano(),
 		}, int(h.req.GetLimit()))
 
-		tablesTagSets, ok := tagValues.(netstorage.TablesTagSets)
+		tablesTagSets, ok := tagValues.(influxql.TablesTagSets)
 		if !ok {
 			return fmt.Errorf("invalid TablesTagSets")
 		}
@@ -229,14 +234,14 @@ func (h *ShowTagValuesCardinality) Process() (codec.BinaryCodec, error) {
 }
 
 func (h *ShowQueries) Process() (codec.BinaryCodec, error) {
-	var queries []*netstorage.QueryExeInfo
+	var queries []*msgservice.QueryExeInfo
 
 	// get all query exe info from all query managers
 	getAllQueries := func(manager *query.Manager) {
 		queries = append(queries, manager.GetAll()...)
 	}
 	query.VisitManagers(getAllQueries)
-	rsp := &netstorage.ShowQueriesResponse{}
+	rsp := &msgservice.ShowQueriesResponse{}
 	rsp.QueryExeInfos = queries
 
 	return rsp, nil
@@ -254,7 +259,7 @@ func (h *KillQuery) Process() (codec.BinaryCodec, error) {
 		}
 		isExist = true
 		manager.Kill(qid)
-		manager.Abort(qid)
+		manager.Abort(qid, statistics.User)
 		abortSuccess = true
 	}
 	query.VisitManagers(killQueryByIDFn)
@@ -276,7 +281,7 @@ func processDDL(cond *string, processor func(expr influxql.Expr, timeRange influ
 	if cond != nil {
 		expr, tr, err = parseTagKeyCondition(*cond)
 		if err != nil {
-			return netstorage.MarshalError(err)
+			return msgservice.MarshalError(err)
 		}
 	}
 
@@ -288,7 +293,7 @@ func processDDL(cond *string, processor func(expr influxql.Expr, timeRange influ
 	}
 
 	err = processor(expr, tr)
-	return netstorage.MarshalError(err)
+	return msgservice.MarshalError(err)
 }
 
 func createDir(dataPath, db string, pt uint32, rp string) error {
@@ -319,4 +324,84 @@ func (h *RaftMessages) Process() (codec.BinaryCodec, error) {
 		h.rsp.ErrMsg = proto.String(err.Error())
 	}
 	return h.rsp, nil
+}
+
+func (h *DropSeries) Process() (codec.BinaryCodec, error) {
+	logger.GetLogger().Info("start deleting series", zap.Any("condition", h.req.Condition), zap.String("measurement", h.req.Measurements[0]))
+	cond := h.req.Condition
+	var expr influxql.Expr
+	var tr influxql.TimeRange
+	var err error
+
+	if cond != nil {
+		expr, tr, err = parseTagKeyCondition(*cond)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if tr.Min.IsZero() {
+		tr.Min = time.Unix(0, influxql.MinTime).UTC()
+	}
+	if tr.Max.IsZero() {
+		tr.Max = time.Unix(0, influxql.MaxTime).UTC()
+	}
+	t := tsi.TimeRange{}
+	t.Min = tr.MinTimeNano()
+	t.Max = tr.MaxTimeNano()
+
+	database := h.store.GetEngine().GetDatabase(h.req.GetDb())
+	mstName := []byte(h.req.Measurements[0])
+	metaClient := h.store.GetMetaClient()
+	for _, dbptInfo := range database {
+		for _, shard := range dbptInfo.Shards() {
+			err = h.store.GetEngine().OpenShardLazy(shard)
+			if err != nil {
+				return h.rsp, err
+			}
+			index := shard.GetIndexBuilder().GetPrimaryIndex()
+			idsResult, e := index.SearchSeriesByTableAndCond(mstName, expr, t)
+			if e != nil {
+				return h.rsp, err
+			}
+
+			err = storeTsids(idsResult, dbptInfo, metaClient, shard)
+			if err != nil {
+				return h.rsp, err
+			}
+		}
+	}
+
+	return h.rsp, err
+}
+
+func storeTsids(idsResult []uint64, dbptInfo *engine.DBPTInfo, client metaclient.MetaClient, shard engine.Shard) error {
+	if len(idsResult) <= 0 {
+		return nil
+	}
+	rp := shard.GetRPName()
+	logger.GetLogger().Info("store the tsids to be deleted", zap.Int("count", len(idsResult)))
+	if dbptInfo.GetDelIndexBuilderByRp(rp) == nil {
+		timeRangeInfo := &meta.ShardTimeRangeInfo{
+			ShardDuration: &meta.ShardDurationInfo{
+				DurationInfo: meta.DurationDescriptor{Duration: time.Second}},
+			OwnerIndex: meta.IndexDescriptor{IndexID: engine.DelIndexBuilderId},
+		}
+
+		engineType := shard.GetEngineType()
+		if _, _, _, _, err := dbptInfo.NewMergeSetIndex(rp, timeRangeInfo, client, engineType); err == nil {
+			if err = engine.SetDelMergeSetForEachMergeSet(dbptInfo, rp); err != nil {
+				return err
+			}
+		}
+	}
+	delIndex := dbptInfo.GetDelIndexBuilderByRp(rp).GetPrimaryIndex()
+
+	err := errors.New("delIndex must be *tsi.MergeSetIndex")
+	if idx, ok := delIndex.(*tsi.MergeSetIndex); ok {
+		if err = idx.Open(); err == nil {
+			err = idx.WriteDeleteTsids(idsResult)
+		}
+	}
+	return err
 }

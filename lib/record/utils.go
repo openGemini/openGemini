@@ -280,3 +280,30 @@ func FillZeroUint32(dst []uint32, size int) []uint32 {
 	}
 	return append(dst[:0], zeroUint32[:size]...)
 }
+
+func PadTimeColIfNeeded(rec *Record) {
+	if rec.Schema[rec.Len()-1].Name != TimeField {
+		rec.Schema = append(rec.Schema, Field{
+			Type: influx.Field_Type_Int,
+			Name: TimeField,
+		})
+	}
+}
+
+func FetchColVals(rec *Record, schema Schemas) []*ColVal {
+	mp := make(map[string]int, rec.Len())
+	for i := range rec.Schema {
+		mp[rec.Schema[i].Name] = i
+	}
+
+	cols := make([]*ColVal, schema.Len())
+
+	for i := range schema {
+		j, ok := mp[schema[i].Name]
+		if ok {
+			cols[i] = &rec.ColVals[j]
+		}
+	}
+
+	return cols
+}

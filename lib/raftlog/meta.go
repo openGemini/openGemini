@@ -26,6 +26,7 @@ import (
 	"path/filepath"
 
 	"github.com/cockroachdb/errors"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"go.etcd.io/etcd/raft/v3"
@@ -107,7 +108,11 @@ func (m *metaFile) lazyOpen() error {
 	var err error
 	fname := filepath.Join(m.dir, metaName)
 	// Open the file in read-write mode and creates it if it doesn't exist.
-	m.meta, err = OpenFile(fname, os.O_RDWR|os.O_CREATE, metaFileSize)
+	if config.EntryFileRWType == 1 {
+		m.meta, err = OpenFile(fname, os.O_RDWR|os.O_CREATE, metaFileSize)
+	} else {
+		m.meta, err = OpenFileV2(fname, os.O_RDWR|os.O_CREATE, metaFileSize)
+	}
 	if errors.Is(err, NewFile) {
 		err = nil
 	}
@@ -118,7 +123,7 @@ func (m *metaFile) bufAt(info MetaInfo) []byte {
 	var data []byte
 	if m.meta != nil {
 		pos := getOffset(info)
-		data = m.meta.GetEntryData(pos, pos+8)
+		data = m.meta.GetEntryData(0, pos, pos+8, true)
 	}
 	return data
 }
@@ -134,7 +139,7 @@ func (m *metaFile) SetUint(info MetaInfo, id uint64) {
 
 	binary.BigEndian.PutUint64(m.bufAt(info), id)
 	offset := getOffset(info)
-	_, err := m.meta.WriteAt(int64(offset), m.bufAt(info))
+	_, err := m.meta.WriteAt(0, int64(offset), m.bufAt(info), true)
 	if err != nil {
 		panic(fmt.Sprintf("unable to write meta file: %s, err: %+v", filepath.Join(m.dir, m.meta.Name()), err))
 	}
@@ -151,7 +156,7 @@ func (m *metaFile) StoreHardState(hs *raftpb.HardState) error {
 	if len(buf) >= snapshotIndex-hardStateOffset {
 		return fmt.Errorf("invalid HardState")
 	}
-	if err = m.meta.WriteSlice(hardStateOffset, buf); err != nil {
+	if err = m.meta.WriteSlice(0, 0, hardStateOffset, buf, true, false); err != nil {
 		return err
 	}
 	return nil
@@ -159,7 +164,7 @@ func (m *metaFile) StoreHardState(hs *raftpb.HardState) error {
 
 func (m *metaFile) HardState() (raftpb.HardState, error) {
 	m.meta.Name()
-	val := m.meta.ReadSlice(hardStateOffset)
+	val := m.meta.ReadSlice(0, hardStateOffset, true)
 	var hs raftpb.HardState
 
 	if len(val) == 0 {
@@ -186,7 +191,7 @@ func (m *metaFile) StoreSnapshot(snap *raftpb.Snapshot) error {
 		return errors.Wrapf(err, "cannot marshal snapshot")
 	}
 
-	if err = m.meta.WriteSlice(snapshotOffset, buf); err != nil {
+	if err = m.meta.WriteSlice(0, 0, snapshotOffset, buf, true, false); err != nil {
 		return err
 	}
 	return nil
@@ -203,7 +208,7 @@ func IsValidSnapshot(snapshot raftpb.Snapshot) bool {
 }
 
 func (m *metaFile) snapshot() (raftpb.Snapshot, error) {
-	val := m.meta.ReadSlice(snapshotOffset)
+	val := m.meta.ReadSlice(0, snapshotOffset, true)
 
 	var snap raftpb.Snapshot
 	if len(val) == 0 {

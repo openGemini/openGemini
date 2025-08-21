@@ -145,20 +145,20 @@ func (bh *BlockHeader) Marshal(dst []byte) []byte {
 
 func (bh *BlockHeader) Unmarshal(src []byte) ([]byte, error) {
 	// Unmarshal FirstItem
-	tail, fi, err := encoding.UnmarshalBytes(src)
-	if err != nil {
-		return tail, fmt.Errorf("cannot unmarshal FirstItem: %w", err)
+	fi, nSize := encoding.UnmarshalBytes(src)
+	if nSize <= 0 {
+		return src, fmt.Errorf("cannot unmarshal FirstItem")
 	}
 	bh.FirstItem = append(bh.FirstItem[:0], fi...)
-	src = tail
+	src = src[nSize:]
 
 	// Unmarshal LastItem
-	tail, la, err := encoding.UnmarshalBytes(src)
-	if err != nil {
-		return tail, fmt.Errorf("cannot unmarshal LastItem: %w", err)
+	fi, nSize = encoding.UnmarshalBytes(src)
+	if nSize <= 0 {
+		return src, fmt.Errorf("cannot unmarshal LastItem")
 	}
-	bh.LastItem = append(bh.LastItem[:0], la...)
-	src = tail
+	bh.LastItem = append(bh.LastItem[:0], fi...)
+	src = src[nSize:]
 
 	// Unmarshal marshalType
 	if len(src) == 0 {
@@ -553,7 +553,7 @@ func getRowRange(rowsPerSegment []int, segId int) RowRange {
 	if segId+segmentCntInPart < segmentCnt {
 		rowRange.endRow = rowsPerSegment[segId+segmentCntInPart-1]
 	} else {
-		rowRange.endRow = rowsPerSegment[segmentCnt-1] + 1
+		rowRange.endRow = rowsPerSegment[segmentCnt-1]
 	}
 	return rowRange
 }

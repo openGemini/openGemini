@@ -75,7 +75,7 @@ func TestBuildWithStringType(t *testing.T) {
 	sparseindex.InitIndexFragmentFixedSize = true
 	pkRec, pkMark, err := indexWriter.Build(srcRec1, pkSchema, fixRowsPerSegment, colstore.DefaultTCLocation, FragmentSize)
 	if err != nil {
-		t.Fatalf(err.Error())
+		t.Fatalf("%s", err.Error())
 	}
 	assert.Equal(t, buildPKRecord(), pkRec)
 	assert.Equal(t, buildIndexFragmentWithFixedSize(), pkMark)
@@ -83,7 +83,7 @@ func TestBuildWithStringType(t *testing.T) {
 	sparseindex.InitIndexFragmentFixedSize = false
 	pkRec, pkMark, err = indexWriter.Build(srcRec1, pkSchema, fixRowsPerSegment, colstore.DefaultTCLocation, 0)
 	if err != nil {
-		t.Fatalf(err.Error())
+		t.Fatalf("%s", err.Error())
 	}
 	assert.Equal(t, buildPKRecord(), pkRec)
 	assert.Equal(t, buildIndexFragmentWithVariable(), pkMark)
@@ -144,7 +144,7 @@ func TestBuildAllDataType(t *testing.T) {
 	sparseindex.InitIndexFragmentFixedSize = true
 	pkRec, pkMark, err := indexWriter.Build(srcRec1, pkSchema, fixRowsPerSegment, colstore.DefaultTCLocation, FragmentSize)
 	if err != nil {
-		t.Fatalf(err.Error())
+		t.Fatalf("%s", err.Error())
 	}
 	assert.Equal(t, buildPKRecordAllFinal(), pkRec)
 	assert.Equal(t, buildIndexFragmentAllWtiFixedSize(), pkMark)
@@ -152,7 +152,7 @@ func TestBuildAllDataType(t *testing.T) {
 	sparseindex.InitIndexFragmentFixedSize = false
 	pkRec, pkMark, err = indexWriter.Build(srcRec1, pkSchema, fixRowsPerSegment, colstore.DefaultTCLocation, 0)
 	if err != nil {
-		t.Fatalf(err.Error())
+		t.Fatalf("%s", err.Error())
 	}
 	assert.Equal(t, buildPKRecordAllFinal(), pkRec)
 	assert.Equal(t, buildIndexFragmentAllWithVariable(), pkMark)

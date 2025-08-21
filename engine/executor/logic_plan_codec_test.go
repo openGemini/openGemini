@@ -131,9 +131,9 @@ func buildDag() hybridqp.QueryNode {
 
 	limit := executor.NewLogicalLimit(sortMerge, schema, executor.LimitTransformParameters{})
 
-	dedupe := executor.NewLogicalDedupe(limit, schema)
+	distinct := executor.NewLogicalDistinct(limit, schema)
 
-	interval := executor.NewLogicalInterval(dedupe, schema)
+	interval := executor.NewLogicalInterval(distinct, schema)
 
 	fill := executor.NewLogicalFill(interval, schema)
 
@@ -173,9 +173,9 @@ func TestLogicalPlanCodec(t *testing.T) {
 
 	limit := executor.NewLogicalLimit(sortMerge, schema, executor.LimitTransformParameters{})
 
-	dedupe := executor.NewLogicalDedupe(limit, schema)
+	distinct := executor.NewLogicalDistinct(limit, schema)
 
-	interval := executor.NewLogicalInterval(dedupe, schema)
+	interval := executor.NewLogicalInterval(distinct, schema)
 
 	fill := executor.NewLogicalFill(interval, schema)
 

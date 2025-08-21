@@ -23,6 +23,8 @@ import (
 	"github.com/openGemini/openGemini/lib/crypto"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/metaclient"
+	"github.com/openGemini/openGemini/lib/statisticsPusher"
 	"go.uber.org/zap"
 )
 
@@ -57,6 +59,14 @@ func NewService(c *config.Store) *Service {
 		service.tlsConfig = new(tls.Config)
 	}
 	return service
+}
+
+func (s *Service) Init(mc metaclient.MetaClient, pusher *statisticsPusher.StatisticsPusher) {
+	if s == nil {
+		return
+	}
+	s.handler.metaClient = mc
+	s.handler.SetstatisticsPusher(pusher)
 }
 
 // Open starts the meta service

@@ -84,7 +84,7 @@ func TestFileWrap_OpenFile(t *testing.T) {
 func TestGetEntryData(t *testing.T) {
 	fw := FileWrap{data: []byte("Hello, World!"), current: true}
 
-	if result := fw.GetEntryData(0, 5); string(result) != "Hello" {
+	if result := fw.GetEntryData(0, 0, 5, false); string(result) != "Hello" {
 		t.Errorf("Expected 'Hello', got %s", result)
 	}
 
@@ -94,7 +94,7 @@ func TestGetEntryData(t *testing.T) {
 	require.NoError(t, err)
 	fw.fd = file
 	fw.current = false
-	if result := fw.GetEntryData(0, 5); result != nil {
+	if result := fw.GetEntryData(0, 0, 5, false); result != nil {
 		t.Errorf("Expected nil result")
 	}
 }
@@ -110,7 +110,7 @@ func TestFileWrap_Write_WriteAt(t *testing.T) {
 		defer fw.Close()
 		fw.data = []byte("writeahead")
 
-		n, err := fw.WriteAt(0, []byte("hello"))
+		n, err := fw.WriteAt(0, 0, []byte("hello"), false)
 		require.NoError(t, err)
 		require.Equal(t, 5, n)
 		require.Equal(t, []byte("hello"), fw.data[:5])
@@ -129,7 +129,7 @@ func TestFileWrap_Write_WriteAt(t *testing.T) {
 		require.Equal(t, []byte("helloaheadworld"), buff)
 		require.Equal(t, []byte("helloaheadworld"), fw.data)
 
-		n, err = fw.WriteAt(5, []byte("faker"))
+		n, err = fw.WriteAt(0, 5, []byte("faker"), false)
 		require.NoError(t, err)
 		require.Equal(t, 5, n)
 		buff = make([]byte, 15)
@@ -142,7 +142,7 @@ func TestFileWrap_Write_WriteAt(t *testing.T) {
 	t.Run("WriteAt_SeekError", func(t *testing.T) {
 		fw := &FileWrap{fd: &badSeeker{}, data: make([]byte, 10)}
 
-		_, err := fw.WriteAt(0, []byte("hello"))
+		_, err := fw.WriteAt(0, 0, []byte("hello"), false)
 		require.EqualError(t, err, "seek unreachable file:test file: mock seek error")
 	})
 
@@ -154,7 +154,7 @@ func TestFileWrap_Write_WriteAt(t *testing.T) {
 
 	t.Run("WriteAt_badWriter", func(t *testing.T) {
 		fw := &FileWrap{fd: &badWriter{}, data: make([]byte, 10)}
-		_, err := fw.WriteAt(0, []byte("hello"))
+		_, err := fw.WriteAt(0, 0, []byte("hello"), false)
 		require.EqualError(t, err, "write failed for file:test file: mock write error")
 	})
 }
@@ -173,7 +173,7 @@ func TestFileWrap_WriteSlice_ReadSlice(t *testing.T) {
 		ef := &FileWrap{fd: &badSeeker{}}
 		ef.data = make([]byte, 10)
 
-		err := ef.WriteSlice(0, []byte("hello"))
+		err := ef.WriteSlice(0, 0, 0, []byte("hello"), false, false)
 		require.EqualError(t, err, "seek unreachable file:test file: mock seek error")
 	})
 
@@ -181,7 +181,7 @@ func TestFileWrap_WriteSlice_ReadSlice(t *testing.T) {
 		ef := &FileWrap{fd: &badWriter{}}
 		ef.data = make([]byte, 10)
 
-		err := ef.WriteSlice(0, []byte("hello"))
+		err := ef.WriteSlice(0, 0, 0, []byte("hello"), false, false)
 		require.EqualError(t, err, "write failed for file:test file: mock write error")
 	})
 
@@ -191,7 +191,7 @@ func TestFileWrap_WriteSlice_ReadSlice(t *testing.T) {
 
 		fw := &FileWrap{fd: file, data: make([]byte, 0), current: true}
 		defer fw.Close()
-		err = fw.WriteSlice(0, []byte("hello"))
+		err = fw.WriteSlice(0, 0, 0, []byte("hello"), false, false)
 		require.NoError(t, err)
 		var buff = make([]byte, 9)
 		n, err := file.ReadAt(buff, 0)
@@ -200,13 +200,14 @@ func TestFileWrap_WriteSlice_ReadSlice(t *testing.T) {
 		require.Contains(t, string(buff), "hello")
 		require.Equal(t, []byte{0, 0, 0, 5, 104, 101, 108, 108, 111}, fw.data[:9]) // size+"hello"
 
-		data := fw.ReadSlice(0)
+		data := fw.ReadSlice(0, 0, false)
 		require.Contains(t, string(buff), "hello")
 		require.Equal(t, []byte{104, 101, 108, 108, 111}, data) // "hello"
 		require.Equal(t, data, fw.data[4:9])                    // "hello"
 
-		size := fw.SliceSize(0)
+		size := fw.SliceSize(0, 0)
 		require.Equal(t, 9, size) // 4 + len("hello")
+		assert.Equal(t, 0, fw.SliceSize(0, 1024))
 	})
 }
 
@@ -218,7 +219,7 @@ func TestTruncate(t *testing.T) {
 
 		fw := &FileWrap{fd: file, data: make([]byte, 0)}
 		defer fw.Close()
-		err = fw.WriteSlice(0, []byte("Hello, world! GoodBye!!!"))
+		err = fw.WriteSlice(0, 0, 0, []byte("Hello, world! GoodBye!!!"), false, false)
 		require.NoError(t, err)
 
 		err = fw.Truncate(5)
@@ -254,6 +255,7 @@ func (badCloser) Seek(offset int64, whence int) (int64, error) {
 func (badCloser) Size() (int64, error) {
 	return 0, fmt.Errorf("size error")
 }
+
 func TestFileWrap_Delete(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Run("Delete a file successfully", func(t *testing.T) {
@@ -282,6 +284,6 @@ func TestFileWrap_GetContentErr(t *testing.T) {
 	fw := &FileWrap{fd: &badCloser{}}
 	fw.setCurrent()
 	assert.Equal(t, 0, fw.Size())
-	assert.NotEqual(t, nil, fw.ReadSlice(0))
-	assert.Equal(t, 0, fw.SliceSize(0))
+	assert.NotEqual(t, nil, fw.ReadSlice(0, 0, false))
+	assert.Equal(t, 0, fw.SliceSize(0, 0))
 }

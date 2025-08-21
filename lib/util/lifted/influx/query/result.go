@@ -97,6 +97,7 @@ type Result struct {
 	// to combine statement results if they're being buffered in memory.
 	StatementID int
 	Series      models.Rows
+	Records     []*models.RecordContainer
 	Messages    []*Message
 	Partial     bool
 	Err         error

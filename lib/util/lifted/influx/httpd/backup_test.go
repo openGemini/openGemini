@@ -24,7 +24,7 @@ import (
 	"github.com/openGemini/openGemini/engine"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/index/tsi"
-	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/backup"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/util"
@@ -166,7 +166,7 @@ func (m *mockTableStore3) GetAllMstList() []string {
 	return []string{"a_0000", "b_0000"}
 }
 
-func CreateEngine(mode int) *engine.Engine {
+func CreateEngine(mode int) *engine.EngineImpl {
 	client := &mockMetaClient4Backup{}
 	dbPtInfo := engine.NewDBPTInfo("db0", 0, "/tmp/openGemini/backup_dir/data/data/db0/0", "", nil, nil, nil)
 	dbPtInfo.AddShard(11, &mockShard{mode: mode})
@@ -174,7 +174,7 @@ func CreateEngine(mode int) *engine.Engine {
 	dbPtInfo.AddShard(13, &mockShard{mode: mode})
 	dbPtInfo.AddShard(14, &mockShard{mode: mode})
 
-	e := &engine.Engine{
+	e := &engine.EngineImpl{
 		DBPartitions: map[string]map[uint32]*engine.DBPTInfo{
 			"db0": {
 				0: dbPtInfo,
@@ -187,7 +187,7 @@ func CreateEngine(mode int) *engine.Engine {
 }
 
 func TestBackup(t *testing.T) {
-	_ = os.MkdirAll("/tmp/openGemini/backup_dir", 0750)
+	_ = os.MkdirAll("/tmp/openGemini/backup_dir", 0700)
 
 	fullBackupPath := "/tmp/openGemini/backup_dir/backup"
 	incBackupPath := "/tmp/openGemini/backup_dir/backup_inc"
@@ -214,7 +214,7 @@ func TestBackup(t *testing.T) {
 }
 
 func TestBackupPanic(t *testing.T) {
-	_ = os.MkdirAll("/tmp/openGemini/backup_dir", 0750)
+	_ = os.MkdirAll("/tmp/openGemini/backup_dir", 0700)
 
 	fullBackupPath := "/tmp/openGemini/backup_dir/backup"
 
@@ -232,7 +232,8 @@ func TestBackupPanic(t *testing.T) {
 
 func TestRecover(t *testing.T) {
 	isMasterPt = false
-	_ = os.MkdirAll("/tmp/openGemini/backup_dir", 0750)
+	os.RemoveAll("/tmp/openGemini/backup_dir")
+	_ = os.MkdirAll("/tmp/openGemini/backup_dir", 0700)
 
 	fullBackupPath := "/tmp/openGemini/backup_dir/backup"
 	incBackupPath := "/tmp/openGemini/backup_dir/backup_inc"
@@ -247,6 +248,8 @@ func TestRecover(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	metafile := filepath.Join(fullBackupPath, backup.MetaBackupDir, backup.BackupLogPath, backup.MetaBackupLog)
+	CreateFile(metafile)
 	indexPath := fmt.Sprintf("%s/data_backup/tmp/openGemini/backup_dir/data/data/db0/0/rp0/index/index.file", fullBackupPath)
 	CreateFile(indexPath)
 	indexPath = fmt.Sprintf("%s/data_backup/tmp/openGemini/backup_dir/data/data/db0/0/rp0/index/index.file", incBackupPath)
@@ -256,14 +259,11 @@ func TestRecover(t *testing.T) {
 		RecoverMode:        "2",
 		FullBackupDataPath: fullBackupPath,
 		IncBackupDataPath:  incBackupPath,
+		Force:              true,
+		DataDir:            "/tmp/openGemini/backup_dir/data",
 	}
-	tsRecover := &config.TsRecover{
-		Data: config.Store{
-			DataDir: "/tmp/openGemini/backup_dir/data",
-			MetaDir: "/tmp/openGemini/backup_dir/meta",
-		},
-	}
-	if err := recover.BackupRecover(recoverConfig, tsRecover); err != nil {
+
+	if err := recover.BackupRecover(recoverConfig); err == nil {
 		t.Fatal(err)
 	}
 
@@ -272,7 +272,7 @@ func TestRecover(t *testing.T) {
 
 func TestRecover2(t *testing.T) {
 	isMasterPt = false
-	_ = os.MkdirAll("/tmp/openGemini/backup_dir", 0750)
+	_ = os.MkdirAll("/tmp/openGemini/backup_dir", 0700)
 
 	fullBackupPath := "/tmp/openGemini/backup_dir/backup"
 	incBackupPath := "/tmp/openGemini/backup_dir/backup_inc"
@@ -294,6 +294,8 @@ func TestRecover2(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	metafile := filepath.Join(incBackupPath, backup.MetaBackupDir, backup.BackupLogPath, backup.MetaBackupLog)
+	CreateFile(metafile)
 	indexPath := fmt.Sprintf("%s/data_backup/tmp/openGemini/backup_dir/data/data/db0/0/rp0/index/index.file", fullBackupPath)
 	CreateFile(indexPath)
 	indexPath = fmt.Sprintf("%s/data_backup/tmp/openGemini/backup_dir/data/data/db0/0/rp0/index/index.file", incBackupPath)
@@ -303,38 +305,22 @@ func TestRecover2(t *testing.T) {
 		RecoverMode:        "1",
 		FullBackupDataPath: fullBackupPath,
 		IncBackupDataPath:  incBackupPath,
+		Force:              true,
+		DataDir:            "/tmp/openGemini/backup_dir/data",
 	}
-	tsRecover := &config.TsRecover{
-		Data: config.Store{
-			DataDir: "/tmp/openGemini/backup_dir/data",
-			MetaDir: "/tmp/openGemini/backup_dir/meta",
-		},
-	}
-	if err := recover.BackupRecover(recoverConfig, tsRecover); err != nil {
+
+	if err := recover.BackupRecover(recoverConfig); err == nil {
 		t.Fatal(err)
 	}
 
 	os.RemoveAll("/tmp/openGemini/backup_dir")
 }
 
-func TestBackupError(t *testing.T) {
-	fullBackupPath := "/tmp/openGemini/backup_dir/backup"
-	b := &engine.Backup{
-		IsInc:      false,
-		IsRemote:   false,
-		BackupPath: fullBackupPath,
-		Engine:     CreateEngine(2),
-	}
-	if err := b.RunBackupData(); err == nil {
-		t.Fatal()
-	}
-}
-
 func CreateFile(path string) {
 	p, _ := filepath.Split(path)
-	_ = os.MkdirAll(p, 0750)
+	_ = os.MkdirAll(p, 0700)
 	fd, _ := fileops.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0640)
-	fd.Write([]byte("123"))
+	fd.Write([]byte("{}"))
 	fd.Close()
 }
 

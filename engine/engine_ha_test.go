@@ -526,7 +526,7 @@ func TestRollbackPreOffloadDoShardMove(t *testing.T) {
 	}
 }
 
-func checkShard(t *testing.T, e *Engine, shNum int, shardId uint64, hasIndex bool, db string, ptId uint32, able bool) {
+func checkShard(t *testing.T, e *EngineImpl, shNum int, shardId uint64, hasIndex bool, db string, ptId uint32, able bool) {
 	hasDBPT := shNum != 0
 	if _, ok := e.DBPartitions[db]; ok != hasDBPT {
 		t.Error("should have this db", zap.String("dbName", db))
@@ -568,7 +568,7 @@ func getDurationInfo(shId uint64) map[uint64]*meta.ShardDurationInfo {
 	return durationInfos
 }
 
-func getEngineBeforeTest(t *testing.T, dir string) *Engine {
+func getEngineBeforeTest(t *testing.T, dir string) *EngineImpl {
 	eng, err := initEngine(dir)
 	log = eng.log
 	if err != nil {
@@ -582,4 +582,26 @@ func getEngineBeforeTest(t *testing.T, dir string) *Engine {
 	}
 	eng.ForceFlush()
 	return eng
+}
+
+func TestPrepareLoadPtsObs(t *testing.T) {
+	dir := t.TempDir()
+	defer fileops.RemoveAll(dir)
+	eng := getEngineBeforeTest(t, dir)
+	eng.metaClient = &mockMetaObs{}
+	checkShard(t, eng, 1, defaultShardId, true, defaultDb, defaultPtId, true)
+
+	err := eng.Offload(0, defaultDb, defaultPtId)
+	if err != nil {
+		t.Error("PrepareOffLoadPts failed, and err isn't dbPt close", zap.Error(err))
+	}
+	checkShard(t, eng, 0, defaultShardId, false, defaultDb, defaultPtId, false)
+
+	durationInfos := getDurationInfo(defaultShardId)
+	dbBriefInfo := &meta.DatabaseBriefInfo{
+		Name:           defaultDb,
+		EnableTagArray: false,
+	}
+	err = eng.PreAssign(0, defaultDb, defaultPtId, durationInfos, dbBriefInfo, mockMetaClient())
+	require.Error(t, err)
 }

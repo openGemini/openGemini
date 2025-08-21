@@ -432,6 +432,45 @@ type MockShardGroup struct {
 	needNodeExchange bool
 }
 
+func (mock *MockShardGroup) GetTagKeys(stmt *influxql.ShowTagValuesStatement) (map[string]map[string]struct{}, error) {
+	if stmt.TagKeyExpr == nil {
+		return nil, fmt.Errorf("tag error")
+	}
+	return map[string]map[string]struct{}{
+		"mst2": {"host02": struct{}{}},
+	}, nil
+}
+
+func (mock *MockShardGroup) GetTagVals(nodeID uint64, stmt *influxql.ShowTagValuesStatement, pts []uint32, tagKeys map[string]map[string]struct{}, exact bool) (influxql.TablesTagSets, error) {
+	var tablesTagSets influxql.TablesTagSets
+	tablesTagSets = append(tablesTagSets, influxql.TableTagSets{
+		Name: "mst2",
+		Values: influxql.TagSets{
+			{Key: "host02", Value: "server02"},
+			{Key: "host02", Value: "server03"},
+			{Key: "host02", Value: "server10"},
+			{Key: "host02", Value: "server01"},
+		},
+	})
+	return tablesTagSets, nil
+}
+
+func (mock *MockShardGroup) QueryNodePtsMap(database string) (map[uint64][]uint32, error) {
+	if database == "" {
+		return nil, fmt.Errorf("nodeid err")
+	}
+	nodePtMap := make(map[uint64][]uint32)
+	nodePtMap[2] = []uint32{0}
+	return nodePtMap, nil
+}
+
+func (mock *MockShardGroup) CheckDatabaseExists(name string) error {
+	if name == "nodb" {
+		return fmt.Errorf("DatabaseNotFound")
+	}
+	return nil
+}
+
 func (mock *MockShardGroup) FieldDimensions(
 	m *influxql.Measurement) (map[string]influxql.DataType, map[string]struct{}, *influxql.Schema, error) {
 	panic("FieldDimensions is not implements yet")
@@ -683,13 +722,13 @@ func (mock *MockShardMapper) SetNeedNodeExchange(enable bool) {
 }
 
 func (mock *MockShardMapper) MapShards(
-	sources influxql.Sources,
+	stmt *influxql.SelectStatement,
 	t influxql.TimeRange,
 	opt qry.SelectOptions,
 	condition influxql.Expr) (qry.ShardGroup, error) {
 	shardGroup := NewMockShardGroup()
 	shardGroup.SetNeedNodeExchange(mock.needNodeExchange)
-	for _, s := range sources {
+	for _, s := range stmt.Sources {
 		switch s := s.(type) {
 		case *influxql.Measurement:
 			if table, err := mock.catalog.Table(s.Database, s.RetentionPolicy, s.Name); err != nil {
@@ -699,7 +738,7 @@ func (mock *MockShardMapper) MapShards(
 				continue
 			}
 		case *influxql.SubQuery:
-			return mock.MapShards(s.Statement.Sources, t, opt, condition)
+			return mock.MapShards(s.Statement, t, opt, condition)
 		default:
 			panic("unsupport source")
 		}

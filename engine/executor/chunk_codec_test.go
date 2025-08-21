@@ -147,11 +147,11 @@ func makeChunk() executor.Chunk {
 
 	for i := 0; i < 10; i++ {
 		tags := ParseChunkTags(fmt.Sprintf("id=A01,tid=%02d,name=sandy,school=xxx", i))
-		chunk.AddTagAndIndex(*tags, i)
+		chunk.AppendTagsAndIndex(*tags, i)
 	}
 
-	chunk.AddIntervalIndex(1)
-	chunk.AddIntervalIndex(2)
+	chunk.AppendIntervalIndex(1)
+	chunk.AppendIntervalIndex(2)
 
 	c0 := chunk.Column(0)
 	c1 := chunk.Column(1)

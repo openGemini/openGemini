@@ -291,24 +291,13 @@ func (idx *fieldIndex) Search(primaryIndex PrimaryIndex, span *tracing.Span, nam
 		}
 	}
 
-	var dimPos map[string]int
-	dims := make([]string, len(opt.Dimensions))
-	if groupByField {
-		dimPos = make(map[string]int, len(opt.Dimensions))
-		for i, dim := range opt.Dimensions {
-			dimPos[dim] = i
-			dims[i] = dim
-		}
-		sort.Strings(dims)
-	}
-
 	var err error
 	var hasFieldIndexFilter bool
 	for _, group := range groupSeries {
-		tagSet := new(TagSetInfo)
-		for i, sid := range group.IDs {
+		var tagSet TagSetEx = new(TagSetInfo)
+		for i, tagSetElem := range group.TagSetItems() {
 			var fieldValues [][]byte
-			fieldValues, group.Filters[i], err = idx.getAllFields(fieldKey, group.Filters[i], sid, &hasFieldIndexFilter)
+			fieldValues, tagSetElem.Filter, err = idx.getAllFields(fieldKey, tagSetElem.Filter, tagSetElem.ID, &hasFieldIndexFilter)
 			if err != nil {
 				return nil, err
 			}
@@ -318,8 +307,8 @@ func (idx *fieldIndex) Search(primaryIndex PrimaryIndex, span *tracing.Span, nam
 			}
 
 			if !groupByField && len(fieldValues) == 0 {
-				tagSet.key = append(tagSet.key, group.key...)
-				tagSet.Append(sid, group.SeriesKeys[i], group.Filters[i], group.TagsVec[i], nil)
+				tagSet.AppendKey(group.GetKey()...)
+				tagSet.Append(tagSetElem.ID, tagSetElem.SeriesKey, tagSetElem.Filter, tagSetElem.TagsVec, nil)
 			}
 
 			// Generate TagSet for each field value.
@@ -328,14 +317,14 @@ func (idx *fieldIndex) Search(primaryIndex PrimaryIndex, span *tracing.Span, nam
 					tagSet = new(TagSetInfo)
 					sortedTagsSets = append(sortedTagsSets, tagSet)
 				}
-				tagSet, err = idx.genTagSet(tagSet, sid, fieldKey, string(fieldValue), group, i, groupByField, dims, dimPos)
+				tagSet, err = idx.genTagSet(tagSet, tagSetElem.ID, fieldKey, string(fieldValue), group, i, groupByField, opt.Dimensions)
 				if err != nil {
 					return nil, err
 				}
 			}
 		}
 
-		if len(tagSet.IDs) == 0 && !hasFieldIndexFilter {
+		if tagSet.Len() == 0 && !hasFieldIndexFilter {
 			sortedTagsSets = append(sortedTagsSets, group)
 		} else {
 			if !groupByField {
@@ -368,34 +357,35 @@ func (idx *fieldIndex) getAllFields(fieldKey string, filter influxql.Expr, sid u
 	return fieldValues, filter, nil
 }
 
-func (idx *fieldIndex) addPidToTagSet(tagSet *TagSetInfo, fieldValue []byte, sid uint64) (bool, error) {
+func (idx *fieldIndex) addToTagSet(tagSet TagSetEx, fieldKey string, fieldValue []byte, index int, sid uint64, group TagSetEx) (*TagSetInfoItem, bool, error) {
 	key := encoding.MarshalUint64(nil, sid)
 	key = append(key, fieldValue...)
 	pid, err := idx.getPidByPkey(key)
 	if err != nil {
-		return false, err
+		return nil, false, err
 	}
 	if pid == 0 {
-		return false, nil
+		return nil, false, nil
 	}
-	tagSet.IDs = append(tagSet.IDs, pid)
 
-	return true, nil
-}
+	groupItem := group.GetTagSetItem(index)
 
-func (idx *fieldIndex) addSeriesToTagSet(tagSet *TagSetInfo, fieldKey string, fieldValue, oldSeriesKey []byte) error {
 	var seriesKey []byte
-	seriesKey = append(seriesKey, oldSeriesKey...)
+	seriesKey = append(seriesKey, groupItem.SeriesKey...)
 	seriesKey = append(seriesKey, influx.StringSplit...)
 	seriesKey = append(seriesKey, fmt.Sprintf("%s"+influx.StringSplit, fieldKey)...)
 	seriesKey = append(seriesKey, fieldValue...)
-	tagSet.SeriesKeys = append(tagSet.SeriesKeys, seriesKey)
 
-	return nil
+	var tagVec influx.PointTags
+	tagVec = append(tagVec, groupItem.TagsVec...)
+
+	tagSet.Append(pid, seriesKey, groupItem.Filter, tagVec, nil)
+
+	return tagSet.GetTagSetItem(tagSet.Len() - 1), true, nil
 }
 
-func (idx *fieldIndex) genTagSet(tagSet *TagSetInfo, sid uint64, fieldKey, fieldValue string, group *TagSetInfo, index int, groupByField bool, dims []string, dimPos map[string]int) (*TagSetInfo, error) {
-	ok, err := idx.addPidToTagSet(tagSet, []byte(fieldValue), sid)
+func (idx *fieldIndex) genTagSet(tagSet TagSetEx, sid uint64, fieldKey, fieldValue string, group TagSetEx, index int, groupByField bool, dims []string) (TagSetEx, error) {
+	tagSetItem, ok, err := idx.addToTagSet(tagSet, fieldKey, []byte(fieldValue), index, sid, group)
 	if err != nil {
 		return nil, err
 	}
@@ -403,24 +393,15 @@ func (idx *fieldIndex) genTagSet(tagSet *TagSetInfo, sid uint64, fieldKey, field
 		return tagSet, nil
 	}
 
-	if err = idx.addSeriesToTagSet(tagSet, fieldKey, []byte(fieldValue), group.SeriesKeys[index]); err != nil {
-		return nil, err
-	}
-	tagSet.Filters = append(tagSet.Filters, group.Filters[index])
-	var tagVec influx.PointTags
-	tagVec = append(tagVec, group.TagsVec[index]...)
-	tagSet.TagsVec = append(tagSet.TagsVec, tagVec)
-
 	if groupByField {
-		tagSet.TagsVec[0] = append(tagSet.TagsVec[0], influx.Tag{
+		tagSetItem.TagsVec = append(tagSetItem.TagsVec, influx.Tag{
 			Key:   fieldKey,
 			Value: fieldValue,
 		})
-		sort.Sort(&tagSet.TagsVec[0])
-
-		tagSet.key = MakeGroupTagsKey(dims, tagSet.TagsVec[0], tagSet.key[:0], dimPos)
+		sort.Sort(&tagSetItem.TagsVec)
+		tagSet.SetKey(MakeGroupTagsKey(dims, tagSetItem.TagsVec, tagSet.GetKey()[:0]))
 	} else {
-		tagSet.key = group.key
+		tagSet.SetKey(group.GetKey())
 	}
 
 	return tagSet, nil

@@ -25,6 +25,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/openGemini/openGemini/lib/backup"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/httpserver"
@@ -42,6 +43,7 @@ import (
 type IStore interface {
 	index() uint64
 	userSnapshot(version uint32) error
+	MeteRecover()
 	otherMetaServersHTTP() []string
 	showDebugInfo(witch string) ([]byte, error)
 	GetData() *meta.Data //get the Data in the store
@@ -55,6 +57,7 @@ type IStore interface {
 	leadershipTransfer() error
 	SpecialCtlData(cmd string) error
 	ModifyRepDBMasterPt(db string, rgId uint32, newMasterPtId uint32) error
+	RecoverMetaData(databases []string, metaData []byte, node map[uint64]uint64) error
 }
 
 var httpScheme = map[bool]string{
@@ -122,6 +125,8 @@ func (h *httpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/userSnapshot":
 			h.WrapHandler(h.userSnapshot).ServeHTTP(w, r)
+		case "/metaRecover":
+			h.WrapHandler(h.metaRecover).ServeHTTP(w, r)
 		case "/analysisCache":
 			h.WrapHandler(h.serveAnalysisHeart).ServeHTTP(w, r)
 		case "/takeover":
@@ -141,6 +146,8 @@ func (h *httpHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.WrapHandler(h.specialCtlData).ServeHTTP(w, r)
 		case "/modifyRepDBMasterPt":
 			h.WrapHandler(h.modifyRepDBMasterPt).ServeHTTP(w, r)
+		case "/recoverMeta":
+			h.WrapHandler(h.recoverMeta).ServeHTTP(w, r)
 		}
 	default:
 		http.Error(w, "", http.StatusBadRequest)
@@ -313,7 +320,9 @@ func (h *httpHandler) userSnapshot(w http.ResponseWriter, r *http.Request) {
 		h.logger.Error("user snapshot fail to write result", zap.Error(err))
 	}
 }
-
+func (h *httpHandler) metaRecover(w http.ResponseWriter, r *http.Request) {
+	h.store.MeteRecover()
+}
 func (h *httpHandler) serveExpvar(w http.ResponseWriter, r *http.Request) {
 	httpd.SetStatsResponse(h.statisticsPusher, w, r)
 }
@@ -557,4 +566,58 @@ func (h *httpHandler) modifyRepDBMasterPt(w http.ResponseWriter, r *http.Request
 	err = h.store.ModifyRepDBMasterPt(db, uint32(rgId), uint32(newMasterPtId))
 	h.handleResponse(w, err)
 	h.logger.Info("modifyRepDBMasterPt", zap.String("db", db), zap.Uint64("rgId", rgId), zap.Uint64("newMasterPtId", newMasterPtId), zap.Error(err))
+}
+
+func (h *httpHandler) recoverMeta(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	h.logger.Info("recoverMeta query", zap.String("q", fmt.Sprintln(q)))
+	databases := make([]string, 0)
+	dbs := q.Get(backup.DataBases)
+	if dbs != "" {
+		databases = strings.Split(dbs, ",")
+	}
+	m := q.Get(backup.MetaData)
+	metaData := &meta.Data{}
+	err := json.Unmarshal([]byte(m), metaData)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("unmarshal meta data error,metaData: %s", m), http.StatusBadRequest)
+		return
+	}
+
+	data := h.store.GetData()
+	nodeMap, err := meta.GenNodeMap(data, metaData)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	defer func() {
+		err = h.store.userSnapshot(0)
+		if err != nil {
+			h.logger.Error("run userSnapshot error", zap.Error(err))
+		}
+	}()
+	err = h.store.RecoverMetaData(databases, []byte(m), nodeMap)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("recover meta error: %s", err.Error()), http.StatusBadRequest)
+		return
+	}
+
+	if len(databases) != 0 {
+		for _, d := range databases {
+			dbPts := globalService.store.getDbPtsByDbnameV2(d)
+			if err := assignDbpt(dbPts); err != nil {
+				http.Error(w, fmt.Sprintf("recover meta error: %s", err.Error()), http.StatusBadRequest)
+				return
+			}
+		}
+	} else {
+		for d := range data.Databases {
+			dbPts := globalService.store.getDbPtsByDbnameV2(d)
+			if err := assignDbpt(dbPts); err != nil {
+				http.Error(w, fmt.Sprintf("recover meta error: %s", err.Error()), http.StatusBadRequest)
+				return
+			}
+		}
+	}
 }

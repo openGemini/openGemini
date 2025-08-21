@@ -23,7 +23,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openGemini/openGemini/engine/index/sparseindex"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/obs"
@@ -82,14 +81,6 @@ func TestMmsLoadIndexFiles(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestIsDetachedIdxFile(t *testing.T) {
-	fileName := sparseindex.GetFullTextDetachFilePath("", "")
-	ans := isDetachedIdxFile(fileName)
-	if !ans {
-		t.Fatal("fileName is detached idx file")
-	}
-}
-
 func TestRemoteDirIsOrder(t *testing.T) {
 	type test struct {
 		path     string
@@ -128,7 +119,7 @@ func TestLoadRemote(t *testing.T) {
 	obsOpt := &obs.ObsOptions{
 		Enabled: true,
 	}
-	loader.LoadRemote(dir, "cpu", obsOpt)
+	loader.LoadRemote(dir, "cpu", obsOpt, false)
 }
 
 func TestLoadDirs(t *testing.T) {
@@ -149,7 +140,7 @@ func TestLoadDirs(t *testing.T) {
 		t.Fatal(err)
 	}
 	nameDirs, _ := fileops.ReadDir(path.Join(dir, "mst"))
-	loader.loadDirs(nameDirs, "mst", "")
+	loader.loadDirs(nameDirs, "mst", "", false)
 
 	err = os.MkdirAll(path.Join(dir, "cpu"), 0700)
 	err = os.WriteFile(path.Join(dir, "cpu", "load_dirs.xxx"), []byte{1}, 0600)
@@ -157,7 +148,7 @@ func TestLoadDirs(t *testing.T) {
 		t.Fatal(err)
 	}
 	nameDirs, _ = fileops.ReadDir(path.Join(dir, "cpu"))
-	loader.loadDirs(nameDirs, "cpu", "")
+	loader.loadDirs(nameDirs, "cpu", "", false)
 }
 
 func TestMmsLoader_verifySeq(t *testing.T) {

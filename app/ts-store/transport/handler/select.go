@@ -26,7 +26,7 @@ import (
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
-	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/msgservice"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
 	"github.com/openGemini/openGemini/lib/spdy"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
@@ -77,11 +77,15 @@ func (s *Select) logger() *logger.Logger {
 		zap.Uint64("query_id", s.req.Opt.QueryId))
 }
 
-func (s *Select) Abort() {
+func (s *Select) Abort(source string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.aborted = true
+	if source != "" {
+		abortStat := statistics.NewAbortedQueryStatistics(s.req.Opt.Query, source)
+		statistics.AppendAbortedQueryStat(abortStat)
+	}
 	if s.abortHook != nil {
 		s.abortHook()
 		s.abortHook = nil
@@ -239,6 +243,9 @@ func (s *Select) process(w spdy.Responser, node hybridqp.QueryNode, req *executo
 	start = time.Now()
 	executorBuilder := s.NewExecutorBuilder(w, req, ctx, int(parallelism))
 	executorBuilder.Analyze(s.rootSpan)
+	if mstTraits := req.BuildMstTraits(); mstTraits != nil {
+		executorBuilder.SetInfosAndTraits(ctx, mstTraits, s.store, w)
+	}
 	p, err := executorBuilder.Build(node)
 	if err != nil {
 		return err
@@ -315,8 +322,8 @@ func (s *Select) finishDuration(qd *statistics.StoreSlowQueryStatistics, start t
 }
 
 // GetQueryExeInfo return the unchanging information in a query
-func (s *Select) GetQueryExeInfo() *netstorage.QueryExeInfo {
-	info := &netstorage.QueryExeInfo{
+func (s *Select) GetQueryExeInfo() *msgservice.QueryExeInfo {
+	info := &msgservice.QueryExeInfo{
 		QueryID:  s.req.Opt.QueryId,
 		PtID:     s.req.PtID,
 		Stmt:     s.req.Opt.Query,

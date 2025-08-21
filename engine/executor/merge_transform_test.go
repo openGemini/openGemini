@@ -35,8 +35,8 @@ func BuildChunk1() executor.Chunk {
 	chunk := b.NewChunk("mst")
 
 	chunk.AppendTimes([]int64{11, 12, 13, 14, 15})
-	chunk.AddTagAndIndex(*ParseChunkTags("host=A"), 0)
-	chunk.AddIntervalIndex(0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("host=A"), 0)
+	chunk.AppendIntervalIndex(0)
 
 	chunk.Column(0).AppendIntegerValues([]int64{1, 2, 3, 4, 5})
 	chunk.Column(0).AppendColumnTimes([]int64{1, 2, 3, 4, 5})
@@ -62,10 +62,10 @@ func BuildChunk2() executor.Chunk {
 	chunk := b.NewChunk("mst")
 
 	chunk.AppendTimes([]int64{21, 22, 23, 24, 25})
-	chunk.AddTagAndIndex(*ParseChunkTags("host=A"), 0)
-	chunk.AddTagAndIndex(*ParseChunkTags("host=C"), 3)
-	chunk.AddIntervalIndex(0)
-	chunk.AddIntervalIndex(3)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("host=A"), 0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("host=C"), 3)
+	chunk.AppendIntervalIndex(0)
+	chunk.AppendIntervalIndex(3)
 
 	chunk.Column(0).AppendIntegerValues([]int64{2, 5, 8, 12})
 	chunk.Column(0).AppendColumnTimes([]int64{1, 2, 3, 5})
@@ -90,10 +90,10 @@ func BuildChunk3() executor.Chunk {
 	chunk := b.NewChunk("mst")
 
 	chunk.AppendTimes([]int64{31, 32, 33, 34, 35})
-	chunk.AddTagAndIndex(*ParseChunkTags("host=A"), 0)
-	chunk.AddTagAndIndex(*ParseChunkTags("host=B"), 2)
-	chunk.AddIntervalIndex(0)
-	chunk.AddIntervalIndex(2)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("host=A"), 0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("host=B"), 2)
+	chunk.AppendIntervalIndex(0)
+	chunk.AppendIntervalIndex(2)
 
 	chunk.Column(0).AppendIntegerValues([]int64{19, 21, 31, 33})
 	chunk.Column(0).AppendColumnTimes([]int64{2, 3, 4, 5})
@@ -117,8 +117,8 @@ func BuildChunk4() executor.Chunk {
 	chunk := b.NewChunk("mst")
 
 	chunk.AppendTimes([]int64{41, 42})
-	chunk.AddTagAndIndex(*ParseChunkTags("host=B"), 0)
-	chunk.AddIntervalIndex(0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("host=B"), 0)
+	chunk.AppendIntervalIndex(0)
 
 	chunk.Column(0).AppendIntegerValues([]int64{7, 8})
 	chunk.Column(0).AppendColumnTimes([]int64{1, 2})
@@ -142,10 +142,10 @@ func BuildChunk5() executor.Chunk {
 	chunk := b.NewChunk("mst")
 
 	chunk.AppendTimes([]int64{41, 42, 55, 56, 66})
-	chunk.AddTagAndIndex(*ParseChunkTags("host=B"), 0)
-	chunk.AddIntervalIndex(0)
-	chunk.AddIntervalIndex(2)
-	chunk.AddIntervalIndex(4)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("host=B"), 0)
+	chunk.AppendIntervalIndex(0)
+	chunk.AppendIntervalIndex(2)
+	chunk.AppendIntervalIndex(4)
 
 	chunk.Column(0).AppendIntegerValues([]int64{19, 21, 31, 33})
 	chunk.Column(0).AppendColumnTimes([]int64{2, 3, 4, 5})
@@ -173,11 +173,11 @@ func BuildSortedChunk1() executor.Chunk {
 	chunk := b.NewChunk("mst")
 
 	chunk.AppendTimes([]int64{6, 12, 23, 24, 35})
-	chunk.AddTagAndIndex(*ParseChunkTags("host=A"), 0)
-	chunk.AddIntervalIndex(0)
-	chunk.AddIntervalIndex(1)
-	chunk.AddIntervalIndex(2)
-	chunk.AddIntervalIndex(4)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("host=A"), 0)
+	chunk.AppendIntervalIndex(0)
+	chunk.AppendIntervalIndex(1)
+	chunk.AppendIntervalIndex(2)
+	chunk.AppendIntervalIndex(4)
 
 	chunk.Column(0).AppendIntegerValues([]int64{1, 2, 3, 4, 5})
 	chunk.Column(0).AppendColumnTimes([]int64{1, 2, 3, 4, 5})
@@ -203,10 +203,10 @@ func BuildSortedChunk2() executor.Chunk {
 	chunk := b.NewChunk("mst")
 
 	chunk.AppendTimes([]int64{21, 22, 23, 1, 2})
-	chunk.AddTagAndIndex(*ParseChunkTags("host=A"), 0)
-	chunk.AddTagAndIndex(*ParseChunkTags("host=C"), 3)
-	chunk.AddIntervalIndex(0)
-	chunk.AddIntervalIndex(3)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("host=A"), 0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("host=C"), 3)
+	chunk.AppendIntervalIndex(0)
+	chunk.AppendIntervalIndex(3)
 
 	chunk.Column(0).AppendIntegerValues([]int64{2, 5, 8, 12})
 	chunk.Column(0).AppendNilsV2(true, true, true, false, true)
@@ -230,11 +230,11 @@ func BuildSortedChunk3() executor.Chunk {
 	chunk := b.NewChunk("mst")
 
 	chunk.AppendTimes([]int64{5, 11, 33, 34, 35})
-	chunk.AddTagAndIndex(*ParseChunkTags("host=A"), 0)
-	chunk.AddTagAndIndex(*ParseChunkTags("host=B"), 2)
-	chunk.AddIntervalIndex(0)
-	chunk.AddIntervalIndex(1)
-	chunk.AddIntervalIndex(2)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("host=A"), 0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("host=B"), 2)
+	chunk.AppendIntervalIndex(0)
+	chunk.AppendIntervalIndex(1)
+	chunk.AppendIntervalIndex(2)
 
 	chunk.Column(0).AppendIntegerValues([]int64{19, 21, 31, 33})
 	chunk.Column(0).AppendColumnTimes([]int64{2, 3, 4, 5})
@@ -259,8 +259,8 @@ func BuildSortedChunk4() executor.Chunk {
 	chunk := b.NewChunk("mst")
 
 	chunk.AppendTimes([]int64{41, 42})
-	chunk.AddTagAndIndex(*ParseChunkTags("host=B"), 0)
-	chunk.AddIntervalIndex(0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("host=B"), 0)
+	chunk.AppendIntervalIndex(0)
 
 	chunk.Column(0).AppendIntegerValues([]int64{7, 8})
 	chunk.Column(0).AppendManyNotNil(2)
@@ -287,8 +287,8 @@ func BuildSortedChunk5() executor.Chunk {
 	chunk := b.NewChunk("mst")
 
 	chunk.AppendTimes([]int64{12, 12, 12, 12, 12})
-	chunk.AddTagAndIndex(*ParseChunkTags("host=A"), 0)
-	chunk.AddIntervalIndex(0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("host=A"), 0)
+	chunk.AppendIntervalIndex(0)
 
 	chunk.Column(0).AppendIntegerValues([]int64{1, 2, 2, 2, 2})
 	chunk.Column(0).AppendColumnTimes([]int64{1, 2, 3, 4, 5})
@@ -320,8 +320,8 @@ func BuildSortedChunk6() executor.Chunk {
 	chunk := b.NewChunk("mst")
 
 	chunk.AppendTimes([]int64{12, 12, 12, 12, 12})
-	chunk.AddTagAndIndex(*ParseChunkTags("host=A"), 0)
-	chunk.AddIntervalIndex(0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("host=A"), 0)
+	chunk.AppendIntervalIndex(0)
 
 	chunk.Column(0).AppendIntegerValues([]int64{2, 2, 2, 2})
 	chunk.Column(0).AppendColumnTimes([]int64{2, 3, 4, 5})
@@ -348,10 +348,10 @@ func BuildTimeOrderChunk() executor.Chunk {
 	chunk := b.NewChunk("mst")
 
 	chunk.AppendTimes([]int64{21, 22, 23, 1, 2})
-	chunk.AddTagAndIndex(*ParseChunkTags("host=A"), 0)
-	chunk.AddTagAndIndex(*ParseChunkTags("host=C"), 3)
-	chunk.AddIntervalIndex(0)
-	chunk.AddIntervalIndex(3)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("host=A"), 0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("host=C"), 3)
+	chunk.AppendIntervalIndex(0)
+	chunk.AppendIntervalIndex(3)
 
 	chunk.Column(0).AppendIntegerValues([]int64{2, 5, 8, 12})
 	chunk.Column(0).AppendNilsV2(true, true, true, false, true)
@@ -373,10 +373,10 @@ func BuildTimeOrderChunk1() executor.Chunk {
 	chunk := b.NewChunk("mst")
 
 	chunk.AppendTimes([]int64{21, 22, 23, 1, 2})
-	chunk.AddTagAndIndex(*ParseChunkTags("host=A"), 0)
-	chunk.AddTagAndIndex(*ParseChunkTags("host=B"), 3)
-	chunk.AddIntervalIndex(0)
-	chunk.AddIntervalIndex(3)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("host=A"), 0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("host=B"), 3)
+	chunk.AppendIntervalIndex(0)
+	chunk.AppendIntervalIndex(3)
 
 	chunk.Column(0).AppendIntegerValues([]int64{2, 5, 8, 12})
 	chunk.Column(0).AppendNilsV2(true, true, true, false, true)
@@ -398,10 +398,10 @@ func BuildTimeOrderChunk2() executor.Chunk {
 	chunk := b.NewChunk("mst")
 
 	chunk.AppendTimes([]int64{11, 12, 13, 41, 42})
-	chunk.AddTagAndIndex(*ParseChunkTags("host=B"), 0)
-	chunk.AddTagAndIndex(*ParseChunkTags("host=C"), 3)
-	chunk.AddIntervalIndex(0)
-	chunk.AddIntervalIndex(3)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("host=B"), 0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("host=C"), 3)
+	chunk.AppendIntervalIndex(0)
+	chunk.AppendIntervalIndex(3)
 
 	chunk.Column(0).AppendIntegerValues([]int64{2, 5, 8, 12})
 	chunk.Column(0).AppendNilsV2(true, true, true, false, true)
@@ -441,10 +441,10 @@ func BuildBenchmarkChunk1() executor.Chunk {
 	chunk := b.NewChunk("mst")
 
 	chunk.AppendTimes(time1)
-	chunk.AddTagAndIndex(*ParseChunkTags("host=A"), 0)
-	chunk.AddTagAndIndex(*ParseChunkTags("host=B"), 500)
-	chunk.AddIntervalIndex(0)
-	chunk.AddIntervalIndex(500)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("host=A"), 0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("host=B"), 500)
+	chunk.AppendIntervalIndex(0)
+	chunk.AppendIntervalIndex(500)
 
 	chunk.Column(0).AppendFloatValues(v1)
 	chunk.Column(0).AppendManyNotNil(999) // TODO my crash
@@ -470,10 +470,10 @@ func BuildBenchmarkChunk2() executor.Chunk {
 	chunk := b.NewChunk("mst")
 
 	chunk.AppendTimes(time1)
-	chunk.AddTagAndIndex(*ParseChunkTags("host=A"), 0)
-	chunk.AddTagAndIndex(*ParseChunkTags("host=C"), 500)
-	chunk.AddIntervalIndex(0)
-	chunk.AddIntervalIndex(500)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("host=A"), 0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("host=C"), 500)
+	chunk.AppendIntervalIndex(0)
+	chunk.AppendIntervalIndex(500)
 
 	chunk.Column(0).AppendFloatValues(v1)
 	chunk.Column(0).AppendManyNotNil(999) // todo: may crash

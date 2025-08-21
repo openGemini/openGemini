@@ -30,7 +30,6 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/savsgio/dictpool"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func init() {
@@ -363,8 +362,8 @@ func TestSearchSeriesWithOpts_TagArray(t *testing.T) {
 		}
 		keys := make([]string, 0)
 		for _, group := range groups {
-			for _, key := range group.SeriesKeys {
-				keys = append(keys, string(key))
+			for i := range group.Len() {
+				keys = append(keys, string(group.GetSeriesKeys(i)))
 			}
 		}
 		sort.Strings(keys)
@@ -466,8 +465,8 @@ func TestSearchSeriesWithOpts_NoTagArray(t *testing.T) {
 		}
 		keys := make([]string, 0)
 		for _, group := range groups {
-			for _, key := range group.SeriesKeys {
-				keys = append(keys, string(key))
+			for i := range group.Len() {
+				keys = append(keys, string(group.GetSeriesKeys(i)))
 			}
 		}
 		sort.Strings(keys)
@@ -557,7 +556,7 @@ func TestSearchSeriesWithTagArrayFail(t *testing.T) {
 
 	src := []byte{1, 2}
 	var isExpectSeries []bool
-	_, _, _, err := mergeIndex.searchSeriesWithTagArray(1, nil, nil, src, isExpectSeries, nil, false)
+	_, _, _, _, err := mergeIndex.searchSeriesWithTagArray(1, nil, nil, src, isExpectSeries, nil, false)
 	if err == nil {
 		t.Fatal("expect searchSeriesWithTagArray fail, but success")
 	}
@@ -565,7 +564,7 @@ func TestSearchSeriesWithTagArrayFail(t *testing.T) {
 	condition := MustParseExpr(`tk1='value11'`)
 	src = []byte{0, 0, 0, 0, 0, 2, 0, 49, 0, 0, 0, 49, 0, 8, 99, 112, 117, 95, 48, 48, 48, 48, 0, 3, 0, 3, 116, 107, 49, 0, 6, 118, 97, 108, 117, 101, 49, 0, 3, 116, 107, 50, 0, 6, 118, 97, 108, 117, 101, 50, 0, 3, 116, 107, 51, 0, 6,
 		0, 49, 0, 0, 0, 49, 0, 8, 99, 112, 117, 95, 48, 48, 48, 48, 0, 3, 0, 3, 116, 107, 49, 0, 6, 118, 97, 108, 117, 101, 49, 0, 3, 116, 107, 50, 0, 6, 118, 97, 108, 117, 101, 50, 0, 3, 116, 107, 51, 0, 6}
-	_, _, _, err = mergeIndex.searchSeriesWithTagArray(1, nil, nil, src, isExpectSeries, condition, false)
+	_, _, _, _, err = mergeIndex.searchSeriesWithTagArray(1, nil, nil, src, isExpectSeries, condition, false)
 	if err == nil {
 		t.Fatal("expect searchSeriesWithTagArray fail, but success")
 	}
@@ -600,7 +599,7 @@ func TestSeriesByExprIterator_TagArray(t *testing.T) {
 		var combineSeriesKey []byte
 		var isExpectSeries []bool
 		for _, id := range ids {
-			seriesKeys, _, isExpectSeries, err := index.searchSeriesWithTagArray(id, seriesKeys, nil, combineSeriesKey, isExpectSeries, opt.Condition, false)
+			seriesKeys, _, isExpectSeries, _, err := index.searchSeriesWithTagArray(id, seriesKeys, nil, combineSeriesKey, isExpectSeries, opt.Condition, false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1076,15 +1075,13 @@ func TestSearchSeriesWithOrOpts(t *testing.T) {
 		keys := make([]string, 0)
 		filterCount := 0
 		for _, group := range groups {
-			for _, key := range group.SeriesKeys {
-				keys = append(keys, string(key))
-			}
-
-			for _, filter := range group.Filters {
-				if filter != nil {
+			for i := range group.Len() {
+				keys = append(keys, string(group.GetSeriesKeys(i)))
+				if group.GetFilters(i) != nil {
 					filterCount++
 				}
 			}
+
 		}
 		assert.Equal(t, filterCount, len(filtersIndex))
 
@@ -1319,7 +1316,7 @@ func searchSeriesWithTagArray1(idx *MergeSetIndex, series [][]byte, name []byte,
 	var isExpectSeries []bool
 	var index int
 	for i := range tsids {
-		combineKeys, _, isExpectSeries, err := idx.searchSeriesWithTagArray(tsids[i], combineKeys, nil, combineSeriesKey, isExpectSeries, condition, false)
+		combineKeys, _, isExpectSeries, _, err := idx.searchSeriesWithTagArray(tsids[i], combineKeys, nil, combineSeriesKey, isExpectSeries, condition, false)
 		if err != nil {
 			return nil, err
 		}
@@ -1365,7 +1362,7 @@ func searchSeriesWithTagArray2(idx *MergeSetIndex, series [][]byte, name []byte,
 	var combineKeys [][]byte
 	var isExpectSeries []bool
 	for i := range tsids {
-		combineKeys, _, isExpectSeries, err := idx.searchSeriesWithTagArray(tsids[i], combineKeys, nil, combineSeriesKey, isExpectSeries, condition, false)
+		combineKeys, _, isExpectSeries, _, err := idx.searchSeriesWithTagArray(tsids[i], combineKeys, nil, combineSeriesKey, isExpectSeries, condition, false)
 		if err != nil {
 			return nil, err
 		}
@@ -1425,7 +1422,7 @@ func TestSearchSeries_With_TagArray_By_MultiTagAnd(t *testing.T) {
 		var combineSeriesKey []byte
 		var isExpectSeries []bool
 		for _, id := range ids {
-			seriesKeys, _, isExpectSeries, err := index.searchSeriesWithTagArray(id, seriesKeys, nil, combineSeriesKey, isExpectSeries, opt.Condition, false)
+			seriesKeys, _, isExpectSeries, _, err := index.searchSeriesWithTagArray(id, seriesKeys, nil, combineSeriesKey, isExpectSeries, opt.Condition, false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1467,94 +1464,6 @@ func TestSearchSeries_With_TagArray_By_MultiTagAnd(t *testing.T) {
 	maxIndexMetrics = preMaxIndexMetrics
 }
 
-func BenchmarkAnalyzeTagSets(b *testing.B) {
-	var buildTags = func() []influx.Tag {
-		return []influx.Tag{
-			{Key: "foo0", Value: "aaa", IsArray: false},
-			{Key: "cmpt", Value: "[126165,126395,126088,126156,126411,179380,126396,179381,125837,125526,224108,125528,126202,126203,125529,126094,126104,179379,125517,126420,325357]", IsArray: true},
-			{Key: "component", Value: "[autorecovery-had,cps-haagent,upg-client,cascaded-nova-compute,wrap-server,platform-pkgs,network-client,om-commons,neutron-dvr-compute-agent,neutron-dhcp-agent,pecado-local-controller,neutron-openvswitch-agent,ceilometer-agent-hardware,ceilometer-agent-compute,neutron-metadata-agent,cps-monitor,cps-client,platform-commons,Block-Service,openstack-omm-agent,Server-VM]", IsArray: true},
-			{Key: "service", Value: "[ECS,IaaSDeploy,IaaSUpgrade,ECS,IaaSDeploy,IaaSDeploy,IaaSDeploy,IaaSDeploy,VPC,VPC,VPC,VPC,IaaSCommonServiceComponents,IaaSCommonServiceComponents,VPC,IaaSDeploy,IaaSDeploy,IaaSDeploy,EVS,IaaSDeploy,Server]", IsArray: true},
-			{Key: "foo3", Value: "aaa", IsArray: false},
-		}
-	}
-
-	b.Run("new", func(b *testing.B) {
-		dstTagSets := &tagSets{}
-		tags := buildTags()
-
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			dstTagSets.reset()
-			_ = AnalyzeTagSets(dstTagSets, tags)
-		}
-	})
-
-	b.Run("old", func(b *testing.B) {
-		dstTagSets := &tagSets{}
-		tags := buildTags()
-
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			dstTagSets.reset()
-			_ = analyzeTagSetsOld(dstTagSets, tags)
-		}
-	})
-}
-
-func TestAnalyzeTagSets(t *testing.T) {
-	var buildTags = func() []influx.Tag {
-		return []influx.Tag{
-			{Key: "foo0", Value: "aaa", IsArray: false},
-			{Key: "cmpt", Value: "[126165,126395,126088,126156,126411,179380,126396,179381,125837,125526,224108,125528,126202,126203,125529,126094,126104,179379,125517,126420,325357]", IsArray: true},
-			{Key: "component", Value: "[autorecovery-had,cps-haagent,upg-client,cascaded-nova-compute,wrap-server,platform-pkgs,network-client,om-commons,neutron-dvr-compute-agent,neutron-dhcp-agent,pecado-local-controller,neutron-openvswitch-agent,ceilometer-agent-hardware,ceilometer-agent-compute,neutron-metadata-agent,cps-monitor,cps-client,platform-commons,Block-Service,openstack-omm-agent,Server-VM]", IsArray: true},
-			{Key: "service", Value: "[ECS,IaaSDeploy,IaaSUpgrade,ECS,IaaSDeploy,IaaSDeploy,IaaSDeploy,IaaSDeploy,VPC,VPC,VPC,VPC,IaaSCommonServiceComponents,IaaSCommonServiceComponents,VPC,IaaSDeploy,IaaSDeploy,IaaSDeploy,EVS,IaaSDeploy,Server]", IsArray: true},
-			{Key: "foo3", Value: "aaa", IsArray: false},
-		}
-	}
-
-	dstTagSets1 := &tagSets{}
-	dstTagSets2 := &tagSets{}
-
-	require.NoError(t, AnalyzeTagSets(dstTagSets1, buildTags()))
-	require.NoError(t, analyzeTagSetsOld(dstTagSets2, buildTags()))
-
-	require.Equal(t, dstTagSets1, dstTagSets2)
-}
-
-func analyzeTagSetsOld(dstTagSets *tagSets, tags []influx.Tag) error {
-	var arrayLen int
-	for i := range tags {
-		if tags[i].IsArray {
-			tagCount := strings.Count(tags[i].Value, ",") + 1
-			if arrayLen == 0 {
-				arrayLen = tagCount
-			}
-
-			if arrayLen != tagCount {
-				return errno.NewError(errno.ErrorTagArrayFormat)
-			}
-		}
-	}
-
-	dstTagSets.resize(arrayLen, len(tags))
-
-	for cIndex := range tags {
-		if tags[cIndex].IsArray {
-			values := strings.Split(tags[cIndex].Value[1:len(tags[cIndex].Value)-1], ",")
-			for rIndex := range values {
-				dstTagSets.tagsArray[rIndex][cIndex].Key = tags[cIndex].Key
-				dstTagSets.tagsArray[rIndex][cIndex].Value = values[rIndex]
-			}
-		} else {
-			for rIndex := 0; rIndex < arrayLen; rIndex++ {
-				dstTagSets.tagsArray[rIndex][cIndex].Key = tags[cIndex].Key
-				dstTagSets.tagsArray[rIndex][cIndex].Value = tags[cIndex].Value
-			}
-		}
-	}
-	return nil
-}
-
 func TestSearchSeriesWithPromOpt(t *testing.T) {
 	path := t.TempDir()
 	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
@@ -1574,10 +1483,9 @@ func TestSearchSeriesWithPromOpt(t *testing.T) {
 		keys := make([]string, 0)
 		filterCount := 0
 		for _, group := range groups {
-			keys = append(keys, string(group.key))
-
-			for _, filter := range group.Filters {
-				if filter != nil {
+			keys = append(keys, string(group.GetKey()))
+			for i := range group.Len() {
+				if group.GetFilters(i) != nil {
 					filterCount++
 				}
 			}

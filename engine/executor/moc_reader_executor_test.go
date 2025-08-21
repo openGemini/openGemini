@@ -179,7 +179,7 @@ func (trans *MocReaderTransform) InitChunk(dataMap DataMapStruct) {
 		chunk := trans.Builder.NewChunk(name)
 		chunk.AppendTimes(sources[i].Time())
 		for j := range sources[i].Tags() {
-			chunk.AddTagAndIndex(sources[i].Tags()[j], sources[i].TagIndex()[j])
+			chunk.AppendTagsAndIndex(sources[i].Tags()[j], sources[i].TagIndex()[j])
 		}
 		for k, v := range dataMap.dataMap {
 			chunk.SetColumn(sources[i].Column(v), k)
@@ -225,7 +225,7 @@ func BuildSQLChunk1() executor.Chunk {
 	chunk := b.NewChunk("cpu")
 
 	chunk.AppendTimes([]int64{1, 2, 13, 14, 21})
-	chunk.AddTagAndIndex(*ParseChunkTags("host=A"), 0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("host=A"), 0)
 
 	chunk.Column(0).AppendIntegerValues([]int64{1, 2, 3, 4, 5})
 	chunk.Column(0).AppendManyNotNil(5)
@@ -247,8 +247,8 @@ func BuildSQLChunk2() executor.Chunk {
 	chunk := b.NewChunk("cpu")
 
 	chunk.AppendTimes([]int64{22, 32, 33, 24, 25})
-	chunk.AddTagAndIndex(*ParseChunkTags("host=A"), 0)
-	chunk.AddTagAndIndex(*ParseChunkTags("host=B"), 3)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("host=A"), 0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("host=B"), 3)
 
 	chunk.Column(0).AppendIntegerValues([]int64{2, 5, 8, 12})
 	chunk.Column(0).AppendNilsV2(true, true, true, false, true)
@@ -270,8 +270,8 @@ func BuildSQLChunk3() executor.Chunk {
 	chunk := b.NewChunk("cpu")
 
 	chunk.AppendTimes([]int64{26, 32, 33, 34, 35})
-	chunk.AddTagAndIndex(*ParseChunkTags("host=B"), 0)
-	chunk.AddTagAndIndex(*ParseChunkTags("host=C"), 2)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("host=B"), 0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("host=C"), 2)
 
 	chunk.Column(0).AppendIntegerValues([]int64{19, 21, 31, 33})
 	chunk.Column(0).AppendNilsV2(false, true, true, true, true)
@@ -293,7 +293,7 @@ func BuildSQLChunk4() executor.Chunk {
 	chunk := b.NewChunk("cpu")
 
 	chunk.AppendTimes([]int64{41, 42})
-	chunk.AddTagAndIndex(*ParseChunkTags("host=C"), 0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("host=C"), 0)
 
 	chunk.Column(0).AppendIntegerValues([]int64{7, 8})
 	chunk.Column(0).AppendManyNotNil(2)
@@ -315,7 +315,7 @@ func BuildSQLChunk5() executor.Chunk {
 	chunk := b.NewChunk("mst1")
 
 	chunk.AppendTimes([]int64{1, 2, 13, 14, 21})
-	chunk.AddTagAndIndex(*ParseChunkTags("host=A"), 0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("host=A"), 0)
 
 	chunk.Column(0).AppendFloatValues([]float64{1.1, 1.2, 1.3, 1.4})
 	chunk.Column(0).AppendManyNotNil(4)
@@ -338,7 +338,7 @@ func BuildSQLChunk6() executor.Chunk {
 	chunk := b.NewChunk("mst2")
 
 	chunk.AppendTimes([]int64{1, 2, 13, 14, 21})
-	chunk.AddTagAndIndex(*ParseChunkTags("host=A"), 0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("host=A"), 0)
 
 	chunk.Column(0).AppendIntegerValues([]int64{1, 2, 3, 4, 5})
 	chunk.Column(0).AppendManyNotNil(5)
@@ -357,7 +357,7 @@ func BuildSQLChunk7() executor.Chunk {
 	chunk := b.NewChunk("mst3")
 
 	chunk.AppendTimes([]int64{1, 2, 13, 14, 21})
-	chunk.AddTagAndIndex(*ParseChunkTags("host=A"), 0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("host=A"), 0)
 
 	chunk.Column(0).AppendIntegerValues([]int64{1, 2, 3, 4, 5})
 	chunk.Column(0).AppendManyNotNil(5)
@@ -385,7 +385,7 @@ func buildAnotherRowDataType2() hybridqp.RowDataType {
 }
 
 func IntervalIndexGenerator(c executor.Chunk, opt *query.ProcessorOptions) {
-	c.AddIntervalIndex(0)
+	c.AppendIntervalIndex(0)
 	if opt.Interval.IsZero() {
 		c.AppendIntervalIndexes(c.TagIndex()[1:])
 		return
@@ -395,11 +395,11 @@ func IntervalIndexGenerator(c executor.Chunk, opt *query.ProcessorOptions) {
 	duration := opt.Interval.Duration
 	for i := 1; i < len(time); i++ {
 		if len(tagIndex) > 0 && i == tagIndex[0] {
-			c.AddIntervalIndex(tagIndex[0])
+			c.AppendIntervalIndex(tagIndex[0])
 			tagIndex = tagIndex[1:]
 			continue
 		} else if time[i]/int64(duration) != time[i-1]/int64(duration) {
-			c.AddIntervalIndex(i)
+			c.AppendIntervalIndex(i)
 		}
 	}
 	return

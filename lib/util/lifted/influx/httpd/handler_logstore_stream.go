@@ -189,7 +189,7 @@ func (h *Handler) getPureSqlQuery(qr io.Reader) (*influxql.Query, error) {
 	q, err := YyParser.GetQuery()
 	if err != nil {
 		h.Logger.Error("query error! parsing query value:", zap.Error(err))
-		return nil, fmt.Errorf("error parsing query: " + err.Error())
+		return nil, fmt.Errorf("error parsing query: %s", err.Error())
 	}
 
 	return q, nil

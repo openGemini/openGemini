@@ -29,6 +29,78 @@ import (
 	"go.uber.org/zap"
 )
 
+type PromStepInvariantType int
+
+const (
+	SkipLastGroup PromStepInvariantType = iota
+	OnlyLastGroup
+)
+
+func PromStepInvariant(src, dst Chunk, typ PromStepInvariantType, preGroup []byte, nextGroup []byte, step, startT, endT int64) Chunk {
+	if typ == SkipLastGroup {
+		return PromStepInvariantSkipLastGroup(src, dst, preGroup, step, startT, endT)
+	}
+	return PromStepInvariantOnlyLastGroup(src, preGroup, nextGroup, step, startT, endT)
+}
+
+func copyTags(src, dst Chunk, tagLoc int) Chunk {
+	tags := ChunkTags{subset: make([]byte, 0, len(src.Tags()[tagLoc].subset)), offsets: make([]uint16, 0, len(src.Tags()[tagLoc].offsets))}
+	tags.subset = append(tags.subset, src.Tags()[tagLoc].subset...)
+	tags.offsets = append(tags.offsets, src.Tags()[tagLoc].offsets...)
+	dst.AppendTagsAndIndex(tags, dst.NumberOfRows())
+	return dst
+}
+
+func copyGroup(src, dst Chunk, tagLoc, start, end int) Chunk {
+	dst = copyTags(src, dst, tagLoc)
+	for ; start < end; start++ {
+		dst.Column(0).AppendFloatValue(src.Column(0).FloatValue(start))
+		dst.Column(0).AppendNotNil()
+		dst.AppendTime(src.TimeByIndex(start))
+	}
+	return dst
+}
+
+func PromStepInvariantSkipLastGroup(src, dst Chunk, preGroup []byte, step, startT, endT int64) Chunk {
+	for i := 0; i < src.TagLen()-1; i++ {
+		val := src.Column(0).FloatValue(src.TagIndex()[i])
+		time := src.TimeByIndex(src.TagIndex()[i])
+		start := src.TagIndex()[i]
+		end := src.TagIndex()[i+1]
+		if bytes.Equal(preGroup, src.Tags()[i].subset) || end-start != 1 || time != startT {
+			dst = copyGroup(src, dst, i, src.TagIndex()[i], src.TagIndex()[i+1])
+		} else {
+			dst = copyTags(src, dst, i)
+			preStartT := startT
+			for startT += step; startT <= endT; startT += step {
+				dst.Column(0).AppendFloatValue(val)
+				dst.Column(0).AppendNotNil()
+				dst.AppendTime(time)
+			}
+			startT = preStartT
+		}
+		preGroup = src.Tags()[i].subset
+	}
+	dst = copyGroup(src, dst, src.TagLen()-1, src.TagIndex()[src.TagLen()-1], src.NumberOfRows())
+	return dst
+}
+
+func PromStepInvariantOnlyLastGroup(src Chunk, preGroup []byte, nextGroup []byte, step, startT, endT int64) Chunk {
+	if bytes.Equal(src.Tags()[src.TagLen()-1].subset, preGroup) || bytes.Equal(src.Tags()[src.TagLen()-1].subset, nextGroup) {
+		return src
+	}
+	if src.NumberOfRows()-1 != src.TagIndex()[src.TagLen()-1] || src.TimeByIndex(src.NumberOfRows()-1) != startT {
+		return src
+	}
+	val := src.Column(0).FloatValue(src.NumberOfRows() - 1)
+	for startT += step; startT <= endT; startT += step {
+		src.AppendTime(startT)
+		src.Column(0).AppendFloatValue(val)
+		src.Column(0).AppendNotNil()
+	}
+	return src
+}
+
 type BufEle struct {
 	times  []int64
 	values []float64
@@ -252,7 +324,7 @@ func (trans *PromRangeVectorTransform) addGroupTags(tmpLoc int) {
 	if trans.newChunk.Len() > trans.preLen {
 		if !bytes.Equal(trans.newTags, trans.bufChunk.Tags()[tmpLoc].subset) {
 			chunkTags := NewChunkTagsV2(trans.bufChunk.Tags()[tmpLoc].subset)
-			trans.newChunk.AddTagAndIndex(*chunkTags, trans.preLen)
+			trans.newChunk.AppendTagsAndIndex(*chunkTags, trans.preLen)
 			trans.preLen = trans.newChunk.Len()
 			trans.newTags = trans.bufChunk.Tags()[tmpLoc].subset
 		}
@@ -282,7 +354,7 @@ func (trans *PromRangeVectorTransform) WorkHelper(ctx context.Context, errs *err
 	// 2. compute bufChunk each group
 	for {
 		if trans.call.LowerStepInvariant {
-			trans.bufChunk = trans.bufChunk.PromStepInvariant(SkipLastGroup, trans.preTags, nil, trans.call.SubStep, trans.call.SubStartT, trans.call.SubEndT, trans.stepInvariantChunkPool.GetChunk())
+			trans.bufChunk = PromStepInvariant(trans.bufChunk, trans.stepInvariantChunkPool.GetChunk(), SkipLastGroup, trans.preTags, nil, trans.call.SubStep, trans.call.SubStartT, trans.call.SubEndT)
 		}
 		// 2.1 compute groups except last one of a chunk
 		for i := 0; i < len(trans.bufChunk.TagIndex())-1; i++ {
@@ -298,7 +370,7 @@ func (trans *PromRangeVectorTransform) WorkHelper(ctx context.Context, errs *err
 		c, ok = <-trans.inputChunk
 		if !ok {
 			if trans.call.LowerStepInvariant {
-				trans.bufChunk = trans.bufChunk.PromStepInvariant(OnlyLastGroup, trans.preTags, nil, trans.call.SubStep, trans.call.SubStartT, trans.call.SubEndT, nil)
+				trans.bufChunk = PromStepInvariant(trans.bufChunk, nil, OnlyLastGroup, trans.preTags, nil, trans.call.SubStep, trans.call.SubStartT, trans.call.SubEndT)
 			}
 			// 2.2.1 nextChunk is nil, this is last group compute
 			trans.updatePreGroup(len(trans.bufChunk.TagIndex()) - 1)
@@ -309,7 +381,7 @@ func (trans *PromRangeVectorTransform) WorkHelper(ctx context.Context, errs *err
 			if trans.newChunk.Len() > 0 {
 				if trans.newChunk.Tags() == nil {
 					chunkTags := NewChunkTagsV2(trans.bufChunk.Tags()[len(trans.bufChunk.TagIndex())-1].subset)
-					trans.newChunk.AddTagAndIndex(*chunkTags, trans.preLen)
+					trans.newChunk.AppendTagsAndIndex(*chunkTags, trans.preLen)
 				}
 				trans.output.State <- trans.newChunk
 			}
@@ -320,7 +392,7 @@ func (trans *PromRangeVectorTransform) WorkHelper(ctx context.Context, errs *err
 			trans.updateNextGroup(len(trans.bufChunk.TagIndex())-1, c.Tags()[0].subset)
 
 			if trans.call.LowerStepInvariant {
-				trans.bufChunk = trans.bufChunk.PromStepInvariant(OnlyLastGroup, trans.preTags, c.Tags()[0].subset, trans.call.SubStep, trans.call.SubStartT, trans.call.SubEndT, nil)
+				trans.bufChunk = PromStepInvariant(trans.bufChunk, nil, OnlyLastGroup, trans.preTags, c.Tags()[0].subset, trans.call.SubStep, trans.call.SubStartT, trans.call.SubEndT)
 			}
 
 			startIdx, endIdx := trans.GetGroupRange(len(trans.bufChunk.TagIndex())-1, trans.bufChunk)

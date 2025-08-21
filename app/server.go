@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 	"go.uber.org/zap"
 )
@@ -56,4 +57,36 @@ func CreateSerfInstance(conf *serf.Config, clock uint64, members []string, preNo
 	}
 
 	return serfInstance, err
+}
+
+type Service interface {
+	Open() error
+	Close() error
+}
+
+type ServiceGroup struct {
+	services []Service
+}
+
+func (m *ServiceGroup) Add(s Service) {
+	if s == nil || util.IsObjectNil(s) {
+		return
+	}
+	m.services = append(m.services, s)
+}
+
+func (m *ServiceGroup) Open() error {
+	for _, s := range m.services {
+		err := s.Open()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *ServiceGroup) MustClose() {
+	for _, s := range m.services {
+		util.MustClose(s)
+	}
 }

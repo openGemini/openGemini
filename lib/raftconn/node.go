@@ -30,7 +30,6 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
-	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/raftlog"
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 	"go.etcd.io/etcd/raft/v3"
@@ -88,7 +87,7 @@ type RaftNode struct {
 	Store     *raftlog.RaftDiskStorage
 	RaftPeers []raft.Peer
 
-	ISend netstorage.SendRaftMessageToStorage
+	ISend SendRaftMessageToStorage
 
 	MetaClient metaclient.MetaClient
 
@@ -151,7 +150,7 @@ func StartNode(store *raftlog.RaftDiskStorage, nodeId uint64, database string, i
 
 		SnapShotter:    snapShotter,
 		MetaClient:     client,
-		ISend:          netstorage.NewNetStorage(client),
+		ISend:          NewRaftConnStore(client),
 		DataCommittedC: make(map[uint64]chan error),
 		Messages:       make(chan *raftpb.Message, config.RaftMsgCacheSize),
 	}
@@ -201,7 +200,7 @@ func (n *RaftNode) RemoveCommittedDataC(dw *raftlog.DataWrapper) {
 func (n *RaftNode) RetCommittedDataC(dw *raftlog.DataWrapper, committedErr error) {
 	defer func() {
 		if e := recover(); e != nil {
-			logger.GetLogger().Error("runtime panic", zap.String("RetCommittedDataC raise stack: ", string(debug.Stack())),
+			logger.GetLogger().Error("runtime panic", zap.String("RetCommittedDataC raise stack:", string(debug.Stack())),
 				zap.Error(errno.NewError(errno.RecoverPanic, e)),
 				zap.String("db", n.database),
 				zap.Uint32("ptId", n.ptId))
@@ -648,7 +647,7 @@ func (n *RaftNode) snapshotAfterFlush() {
 
 func (n *RaftNode) snapShot() error {
 	index := n.SnapShotter.CommittedIndex
-	n.logger.Info(fmt.Sprintf("CreateSnapshot i=%d,cs=%+v", index, n.ConfState()), zap.String("db", n.database), zap.Uint32("pt", n.ptId))
+	n.logger.Info(fmt.Sprintf("CreateSnapshot i=%d, cs=%+v", index, n.ConfState()), zap.String("db", n.database), zap.Uint32("pt", n.ptId))
 	for {
 		// We should never let CreateSnapshot have an error.
 		err := n.Store.CreateSnapshot(index, n.ConfState(), []byte("snapshot"))
@@ -725,7 +724,7 @@ func (n *RaftNode) CheckAllRgMembers() (bool, []uint32) {
 	if len(activePtSlice) == len(peers) {
 		return true, activePtSlice
 	}
-	logger.GetLogger().Info("rg member is not all active,active pt slice is ", zap.Uint32s("activePtSlice", activePtSlice))
+	logger.GetLogger().Info("rg member is not all active,active pt slice is ", zap.Uint32s("activePtSlice", activePtSlice), zap.String("db", n.database), zap.Uint32("pt", n.ptId))
 	return false, activePtSlice
 }
 
@@ -837,7 +836,7 @@ func (n *RaftNode) genProposeData(index uint64, minMatch uint64) []byte {
 			minIndex = index
 		}
 	}
-	logger.GetLogger().Info("genProposeData marshal index is", zap.Uint64("minIndex", minIndex))
+	logger.GetLogger().Info("genProposeData marshal index is", zap.Uint64("minIndex", minIndex), zap.String("db", n.database), zap.Uint32("pt", n.ptId))
 	// propose clean entry log
 	var dst []byte
 	dst = encoding.MarshalUint64(dst, minIndex)
@@ -859,7 +858,8 @@ func (n *RaftNode) comparePeerFileIdWithLeaderFileId(memberFilId int, filId int)
 func (n *RaftNode) forceDeleteEntryLogBySize(index uint64) error {
 	size := n.Store.EntrySize()
 	if uint64(size) > uint64(config.GetStoreConfig().ClearEntryLogTolerateSize) {
-		logger.GetLogger().Info("clear entry log by size, ", zap.Int("size", size), zap.Uint64("current index is ", index))
+		logger.GetLogger().Info("clear entry log by size, ", zap.Int("size", size), zap.Uint64("current index is ", index),
+			zap.String("db", n.database), zap.Uint32("pt", n.ptId))
 		err := n.Store.DeleteBefore(index)
 		if err != nil {
 			return err

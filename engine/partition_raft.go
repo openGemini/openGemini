@@ -17,11 +17,12 @@ package engine
 import (
 	"errors"
 	"fmt"
+	"runtime/debug"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
+	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
-	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/pointsdecoder"
 	"github.com/openGemini/openGemini/lib/raftconn"
 	"github.com/openGemini/openGemini/lib/raftlog"
@@ -42,10 +43,18 @@ type raftNodeRequest interface {
 	Stop()
 }
 
-func readReplayForReplication(ReplayC <-chan *raftconn.Commit, client metaclient.MetaClient, storage netstorage.StorageService) {
+func readReplayForReplication(ReplayC <-chan *raftconn.Commit, client metaclient.MetaClient, storage StorageService, db string, ptId uint32) {
 	if len(ReplayC) == 0 {
 		return
 	}
+	defer func() {
+		if e := recover(); e != nil {
+			log.Error("runtime panic", zap.String("readReplayForReplication raise stack:", string(debug.Stack())),
+				zap.Error(errno.NewError(errno.RecoverPanic, e)),
+				zap.String("db", db),
+				zap.Uint32("ptId", ptId))
+		}
+	}()
 	for commit := range ReplayC {
 		if commit == nil {
 			continue
@@ -65,7 +74,7 @@ func readReplayForReplication(ReplayC <-chan *raftconn.Commit, client metaclient
 	}
 }
 
-func readCommitFromRaft(node *raftconn.RaftNode, client metaclient.MetaClient, storage netstorage.StorageService) {
+func readCommitFromRaft(node *raftconn.RaftNode, client metaclient.MetaClient, storage StorageService) {
 	commitC := node.GetCommitC()
 	for commit := range commitC {
 		if commit == nil {
@@ -87,7 +96,7 @@ func retCommittedDataC(node *raftconn.RaftNode, dw *raftlog.DataWrapper, committ
 	}
 }
 
-func dealCommitData(node *raftconn.RaftNode, client metaclient.MetaClient, storage netstorage.StorageService, data []byte, database string, ptId uint32) {
+func dealCommitData(node *raftconn.RaftNode, client metaclient.MetaClient, storage StorageService, data []byte, database string, ptId uint32) {
 	dataWrapper, err := raftlog.Unmarshal(data)
 	defer retCommittedDataC(node, dataWrapper, err)
 	if err != nil {
@@ -112,7 +121,7 @@ func dealCommitData(node *raftconn.RaftNode, client metaclient.MetaClient, stora
 }
 
 func dealNormalData(dataWrapper *raftlog.DataWrapper, database string, ptId uint32, client metaclient.MetaClient,
-	storage netstorage.StorageService, node *raftconn.RaftNode) error {
+	storage StorageService, node *raftconn.RaftNode) error {
 	tail := dataWrapper.GetData()
 	ww := pointsdecoder.GetDecoderWork()
 	ww.SetReqBuf(tail)

@@ -55,6 +55,7 @@ const (
 	SeriesLoopPool
 	LogStoreRecord
 	LogStoreFailRecord
+	FilterCursorPool
 	UnknownPool
 )
 
@@ -137,6 +138,11 @@ func NewRecordPool(recordType RecordType) *RecordPool {
 		get = statistics.NewRecordStatistics().AddLogstoreGet
 		reuse = statistics.NewRecordStatistics().AddLogstoreReUse
 		abort = statistics.NewRecordStatistics().AddLogstoreAbort
+	case FilterCursorPool:
+		inUse = statistics.NewRecordStatistics().AddFilterCursorPoolInUse
+		get = statistics.NewRecordStatistics().AddFilterCursorPoolGet
+		reuse = statistics.NewRecordStatistics().AddFilterCursorPoolReUse
+		abort = statistics.NewRecordStatistics().AddFilterCursorPoolAbort
 	}
 
 	return &RecordPool{

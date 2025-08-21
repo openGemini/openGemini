@@ -30,7 +30,6 @@ import (
 	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/index"
-	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
@@ -39,7 +38,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
-var DefaultEngineOption netstorage.EngineOptions
+var DefaultEngineOption engine.EngineOptions
 var defaultString = "abcdefghijklmnopqrstuvwxyz"
 
 const defaultDb = "db0"
@@ -51,7 +50,7 @@ const defaultChunkSize = 1000
 const defaultMeasurementName = "cpu"
 
 func init() {
-	DefaultEngineOption = netstorage.NewEngineOptions()
+	DefaultEngineOption = engine.NewEngineOptions()
 	DefaultEngineOption.WriteColdDuration = time.Second * 5000
 	DefaultEngineOption.ShardMutableSizeLimit = 30 * 1024 * 1024
 	DefaultEngineOption.NodeMutableSizeLimit = 1e9
@@ -410,7 +409,7 @@ func BenchmarkTestIndex(b *testing.B) {
 	time.Sleep(time.Second * 5)
 	b.StartTimer()
 	for i := 0; i < b.N; i++ {
-		_, _, err = sh.Scan(nil, querySchema, resourceallocator.DefaultSeriesAllocateFunc)
+		_, _, _, err = sh.Scan(nil, querySchema, resourceallocator.DefaultSeriesAllocateFunc)
 		if err != nil {
 			b.Fatal(err)
 		}

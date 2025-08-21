@@ -82,6 +82,16 @@ const (
 	ReliabilityLevelHigh   = 3
 )
 
+var shelfMode = defaultShelfMode()
+
+func SetShelfMode(conf ShelfMode) {
+	shelfMode = conf
+}
+
+func GetShelfMode() *ShelfMode {
+	return &shelfMode
+}
+
 type ShelfMode struct {
 	Enabled bool `toml:"enabled"`
 
@@ -107,9 +117,14 @@ type ShelfMode struct {
 	// max number of concurrent WAL files to be converted to SSP files.
 	// default value is the same as Concurrent
 	TSSPConvertConcurrent int `toml:"tssp-convert-concurrent"`
+
+	// Compress the series key in memory to save memory and reduce the risk of OOM
+	// When the memory used by the series key exceeds this value, compression is enabled.
+	// 0 means never compress
+	SeriesKeyCompressThreshold toml.Size `toml:"series-key-compress-threshold"`
 }
 
-func defaultBridgeMode() ShelfMode {
+func defaultShelfMode() ShelfMode {
 	return ShelfMode{
 		Enabled:          false,
 		MaxWalFileSize:   defaultMaxWalFileSize,
@@ -128,5 +143,5 @@ func (t *ShelfMode) Corrector(cpuNum int) {
 }
 
 func ShelfModeEnabled() bool {
-	return GetStoreConfig().ShelfMode.Enabled
+	return GetShelfMode().Enabled
 }

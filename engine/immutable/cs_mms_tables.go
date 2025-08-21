@@ -20,7 +20,6 @@ import (
 	"container/heap"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"sync"
@@ -36,15 +35,12 @@ import (
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
-	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"go.uber.org/zap"
 )
 
 type csImmTableImpl struct {
-	mu       sync.RWMutex
-	pkSchema map[string][]record.Field
-	mstsInfo map[string]*meta.MeasurementInfo
-
+	db, rp string
+	mu     sync.RWMutex
 	// update while open storage
 	accumulateMetaIndex map[string]*AccumulateMetaIndex // mst -> accumulateMetaIndex, record metaIndex for detached store
 }
@@ -67,10 +63,10 @@ func (a *AccumulateMetaIndex) SetAccumulateMetaIndex(pkDataOffset uint32, blockI
 	a.offset = offset
 }
 
-func NewCsImmTableImpl() *csImmTableImpl {
+func NewCsImmTableImpl(db, rp string) *csImmTableImpl {
 	csImmTable := &csImmTableImpl{
-		pkSchema:            make(map[string][]record.Field),
-		mstsInfo:            make(map[string]*meta.MeasurementInfo),
+		db:                  db,
+		rp:                  rp,
 		accumulateMetaIndex: make(map[string]*AccumulateMetaIndex),
 	}
 	return csImmTable
@@ -81,7 +77,7 @@ func (c *csImmTableImpl) GetEngineType() config.EngineType {
 }
 
 func (c *csImmTableImpl) GetCompactionType(name string) config.CompactionType {
-	mstInfo, ok := c.mstsInfo[name]
+	mstInfo, ok := c.GetMstInfo(name)
 	if !ok || mstInfo.ColStoreInfo == nil {
 		return config.COMPACTIONTYPEEND
 	}
@@ -164,48 +160,21 @@ func (c *csImmTableImpl) getFiles(m *MmsTables, isOrder bool) map[string]*TSSPFi
 }
 
 func (c *csImmTableImpl) GetMstInfo(name string) (*meta.MeasurementInfo, bool) {
-	c.mu.RLock()
-	mstInfo, isExist := c.mstsInfo[name]
-	c.mu.RUnlock()
-	return mstInfo, isExist
+	mst, ok := colstore.MstManagerIns().Get(c.db, c.rp, name)
+	if ok {
+		return mst.MeasurementInfo(), true
+	}
+	return nil, false
 }
 
 func (c *csImmTableImpl) GetPkSchema(name string) (*[]record.Field, bool) {
-	c.mu.RLock()
-	pkSchema, isExist := c.pkSchema[name]
-	c.mu.RUnlock()
-	return &pkSchema, isExist
-}
-
-func (c *csImmTableImpl) SetMstInfo(name string, mstInfo *meta.MeasurementInfo) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.mstsInfo[name] = mstInfo
-
-	pk := mstInfo.ColStoreInfo.PrimaryKey
-	c.pkSchema[name] = make([]record.Field, 0, len(pk)+1)
-	if mstInfo.ColStoreInfo.TimeClusterDuration > 0 {
-		c.pkSchema[name] = append(c.pkSchema[name], record.Field{
-			Type: influx.Field_Type_Int,
-			Name: record.TimeClusterCol,
-		})
+	mst, ok := colstore.MstManagerIns().Get(c.db, c.rp, name)
+	if ok {
+		pk := mst.PrimaryKey()
+		return &pk, true
 	}
-	mstInfo.SchemaLock.RLock()
-	defer mstInfo.SchemaLock.RUnlock()
-	for _, key := range pk {
-		if key == record.TimeField {
-			c.pkSchema[name] = append(c.pkSchema[name], record.Field{
-				Type: influx.Field_Type_Int,
-				Name: key,
-			})
-		} else {
-			v, _ := mstInfo.Schema.GetTyp(key)
-			c.pkSchema[name] = append(c.pkSchema[name], record.Field{
-				Type: record.ToPrimitiveType(v),
-				Name: key,
-			})
-		}
-	}
+
+	return nil, false
 }
 
 func (c *csImmTableImpl) getTSSPFiles(m *MmsTables, mstName string, isOrder bool) (*TSSPFiles, bool) {
@@ -239,7 +208,6 @@ func (c *csImmTableImpl) NewFileIterators(m *MmsTables, group *CompactGroup) (Fi
 	var fi FilesInfo
 	fi.compIts = make(FileIterators, 0, len(group.group))
 	fi.oldFiles = make([]TSSPFile, 0, len(group.group))
-	fi.oldIndexFiles = make([]string, 0, len(group.group))
 	for _, fn := range group.group {
 		if m.isClosed() || m.isCompMergeStopped() {
 			fi.compIts.Close()
@@ -255,12 +223,6 @@ func (c *csImmTableImpl) NewFileIterators(m *MmsTables, group *CompactGroup) (Fi
 			return fi, fmt.Errorf("table %v, %v, %v not find", group.name, fn, true)
 		}
 		fi.oldFiles = append(fi.oldFiles, f)
-		indexFile := c.getIndexFileByTssp(m, group.name, fn)
-		if indexFile == "" {
-			fi.compIts.Close()
-			return fi, fmt.Errorf("table %v, %v corresponding index file not find", group.name, fn)
-		}
-		fi.oldIndexFiles = append(fi.oldIndexFiles, indexFile)
 
 		itr := NewFileIterator(f, CLog)
 		if itr.NextChunkMeta() {
@@ -276,19 +238,6 @@ func (c *csImmTableImpl) NewFileIterators(m *MmsTables, group *CompactGroup) (Fi
 	}
 	fi.updateFinalFilesInfo(group)
 	return fi, nil
-}
-
-func (c *csImmTableImpl) getIndexFileByTssp(m *MmsTables, mstName string, tsspFileName string) string {
-	pkFileName := tsspFileName[:len(tsspFileName)-len(tsspFileSuffix)] + colstore.IndexFileSuffix
-	files, ok := m.getPKFiles(mstName)
-	if !ok || files == nil {
-		return ""
-	}
-	f, exist := files.GetPKInfo(pkFileName)
-	if !exist || f == nil {
-		return ""
-	}
-	return pkFileName
 }
 
 func (c *csImmTableImpl) getAccumulateMetaIndex(name string) *AccumulateMetaIndex {
@@ -398,11 +347,6 @@ func (c *csImmTableImpl) compactToLevel(m *MmsTables, group FilesInfo, full, isN
 		return compactErr
 	}
 
-	if err = c.replaceIndexFiles(m, group.name, group.oldIndexFiles); err != nil {
-		lcLog.Error("replace index file error", zap.Error(err))
-		return err
-	}
-
 	if err = c.ReplaceFiles(m, group.name, group.oldFiles, newFiles, true, mstInfo.IndexRelation.GetBloomFilterColumns()); err != nil {
 		lcLog.Error("replace compacted file error", zap.Error(err))
 		return err
@@ -416,41 +360,6 @@ func (c *csImmTableImpl) compactToLevel(m *MmsTables, group FilesInfo, full, isN
 		compactStatItem.CompactedFileCount = int64(len(newFiles))
 		compactStatItem.OriginalFileSize = int64(oldFilesSize)
 		compactStatItem.CompactedFileSize = SumFilesSize(newFiles)
-	}
-	return nil
-}
-
-func (c *csImmTableImpl) replaceIndexFiles(m *MmsTables, name string, oldIndexFiles []string) error {
-	if len(oldIndexFiles) == 0 {
-		return nil
-	}
-	var err error
-	defer func() {
-		if e := recover(); e != nil {
-			err = errno.NewError(errno.RecoverPanic, e)
-			log.Error("replace index file fail", zap.Error(err))
-		}
-	}()
-
-	mmsTables := m.PKFiles
-	m.mu.RLock()
-	indexFiles, ok := mmsTables[name]
-	m.mu.RUnlock()
-	if !ok || indexFiles == nil {
-		return errors.New("get index files from mmsTables error")
-	}
-
-	for _, f := range oldIndexFiles {
-		if m.isClosed() || m.isCompMergeStopped() {
-			return ErrCompStopped
-		}
-		lock := fileops.FileLockOption("")
-		err = fileops.Remove(f, lock)
-		if err != nil && !os.IsNotExist(err) {
-			err = errRemoveFail(f, err)
-			log.Error("remove index file fail ", zap.String("file name", f), zap.Error(err))
-			return err
-		}
 	}
 	return nil
 }

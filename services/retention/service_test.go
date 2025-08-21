@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package retention
+package retention_test
 
 import (
 	"fmt"
@@ -26,8 +26,8 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/metaclient"
-	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
+	"github.com/openGemini/openGemini/services/retention"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -127,7 +127,7 @@ func (mc *MockMetaClient) GetExpiredIndexes() []meta.ExpiredIndexInfos {
 
 func TestTTL(t *testing.T) {
 	path := t.TempDir()
-	eng, err := engine.NewEngine(path, path, netstorage.NewEngineOptions(), &metaclient.LoadCtx{LoadCh: make(chan *metaclient.DBPTCtx, 100)})
+	eng, err := engine.NewEngine(path, path, engine.NewEngineOptions(), &metaclient.LoadCtx{LoadCh: make(chan *metaclient.DBPTCtx, 100)})
 	defer eng.Close()
 	if err != nil {
 		t.Fatal(err)
@@ -156,7 +156,7 @@ func TestTTL(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s := NewService(time.Second)
+	s := retention.NewService(time.Second)
 	s.Engine = eng
 	mockClient := &MockMetaClient{}
 	mockClient.PruneGroupsCommandFn = func(shardGroup bool, id uint64) error {
@@ -223,6 +223,9 @@ func TestTTLForShardStorage(t *testing.T) {
 	mockClient.GetShardDurationInfoFn = func(index uint64) (*meta.ShardDurationResponse, error) {
 		return &meta.ShardDurationResponse{}, nil
 	}
+	mockClient.GetIndexDurationInfoFn = func(index uint64) (*meta.IndexDurationResponse, error) {
+		return &meta.IndexDurationResponse{}, nil
+	}
 	mockClient.DelayDeleteShardGroupFn = func(database, policy string, id uint64, deletedAt time.Time, deleteType int32) error {
 		if database == "db0" {
 			return fmt.Errorf("inject a error for ut")
@@ -252,17 +255,19 @@ func TestTTLForShardStorage(t *testing.T) {
 		}
 	}
 	config.SetProductType("logkeeper")
-	s := NewService(time.Second)
+	s := retention.NewService(150 * time.Millisecond)
 	s.MetaClient = mockClient
+	s.Open()
+	time.Sleep(200 * time.Millisecond)
 	logger, _ := log.NewOperation(s.Logger.GetZapLogger(), "retention policy deletion check", "retention_delete_check")
-	retryNeeded := s.handleSharedStorage(logger)
+	retryNeeded := s.HandleSharedStorage(logger)
 	if !retryNeeded {
 		t.Fatal("retention operation injected a failed operation, but it was not retried")
 	}
 }
 
 type MockEngineForDelTimeout struct {
-	netstorage.Engine
+	engine.Engine
 }
 
 func (e *MockEngineForDelTimeout) DeleteShard(db string, ptId uint32, shardID uint64) error {
@@ -277,51 +282,51 @@ func (e *MockEngineForDelTimeout) DeleteIndex(db string, ptId uint32, indexID ui
 }
 
 func TestShardDeleteTimeout(t *testing.T) {
-	SetShardDeletionDelay(50 * time.Millisecond)
-	s := NewService(time.Second)
+	retention.SetShardDeletionDelay(50 * time.Millisecond)
+	s := retention.NewService(time.Second)
 	s.Engine = &MockEngineForDelTimeout{}
 
-	err := s.DeleteShardOrIndex("db", 0, 0, ShardDelete)
+	err := s.DeleteShardOrIndex("db", 0, 0, retention.ShardDelete)
 	if err == nil {
 		t.Error("get error info failed")
 	}
 	time.Sleep(50 * time.Millisecond)
-	err = s.DeleteShardOrIndex("db", 0, 0, ShardDelete)
+	err = s.DeleteShardOrIndex("db", 0, 0, retention.ShardDelete)
 	if !strings.Contains(err.Error(), "still in pending state") {
 		t.Errorf("shard need to be still in pending state, err:%+v", err)
 	}
 
 	time.Sleep(200 * time.Millisecond)
-	err = s.DeleteShardOrIndex("db", 0, 0, ShardDelete)
+	err = s.DeleteShardOrIndex("db", 0, 0, retention.ShardDelete)
 	if strings.Contains(err.Error(), "still in pending state") {
 		t.Errorf("shard should not be in a pending state, err:%+v", err)
 	}
 }
 
 func TestIndexDeleteTimeout(t *testing.T) {
-	SetShardDeletionDelay(50 * time.Millisecond)
-	s := NewService(time.Second)
+	retention.SetShardDeletionDelay(50 * time.Millisecond)
+	s := retention.NewService(time.Second)
 	s.Engine = &MockEngineForDelTimeout{}
 
-	err := s.DeleteShardOrIndex("db", 0, 0, IndexDelete)
+	err := s.DeleteShardOrIndex("db", 0, 0, retention.IndexDelete)
 	if err == nil {
 		t.Error("get error info failed")
 	}
 	time.Sleep(50 * time.Millisecond)
-	err = s.DeleteShardOrIndex("db", 0, 0, IndexDelete)
+	err = s.DeleteShardOrIndex("db", 0, 0, retention.IndexDelete)
 	if !strings.Contains(err.Error(), "still in pending state") {
 		t.Errorf("index need to be still in pending state, err:%+v", err)
 	}
 
 	time.Sleep(200 * time.Millisecond)
-	err = s.DeleteShardOrIndex("db", 0, 0, IndexDelete)
+	err = s.DeleteShardOrIndex("db", 0, 0, retention.IndexDelete)
 	if strings.Contains(err.Error(), "still in pending state") {
 		t.Errorf("index should not be in a pending state, err:%+v", err)
 	}
 }
 
 type MockEngineForDel struct {
-	netstorage.Engine
+	engine.Engine
 }
 
 func (e *MockEngineForDel) DeleteShard(db string, ptId uint32, shardID uint64) error {
@@ -329,11 +334,11 @@ func (e *MockEngineForDel) DeleteShard(db string, ptId uint32, shardID uint64) e
 }
 
 func TestShardDelete(t *testing.T) {
-	SetShardDeletionDelay(50 * time.Millisecond)
-	s := NewService(time.Second)
+	retention.SetShardDeletionDelay(50 * time.Millisecond)
+	s := retention.NewService(time.Second)
 	s.Engine = &MockEngineForDel{}
 
-	err := s.DeleteShardOrIndex("db", 0, 0, ShardDelete)
+	err := s.DeleteShardOrIndex("db", 0, 0, retention.ShardDelete)
 	if err == nil || !strings.Contains(err.Error(), "delete shard failed") {
 		t.Errorf("get error info failed, err:%+v", err)
 	}
@@ -370,14 +375,14 @@ func TestUpdateDurationInfo(t *testing.T) {
 		return nil
 	}
 
-	s := NewService(time.Second)
+	s := retention.NewService(time.Second)
 	s.MetaClient = mockClient
 	s.Engine = mockEngine
 
 	nilShardMap := make(map[uint64]*meta.ShardDurationInfo)
 	nilIndexMap := make(map[uint64]*meta.IndexDurationInfo)
 	logger, _ := log.NewOperation(s.Logger.GetZapLogger(), "retention policy deletion check", "retention_delete_check")
-	retryNeeded := s.handleLocalStorage(logger, &nilShardMap, &nilIndexMap)
+	retryNeeded := s.HandleLocalStorage(logger, &nilShardMap, &nilIndexMap)
 	if !retryNeeded {
 		t.Fatal("retention operation injected a failed operation, but it was not retried")
 	}
@@ -396,12 +401,12 @@ func TestUpdateIndexDurationInfo(t *testing.T) {
 		return nil
 	}
 
-	s := NewService(time.Second)
+	s := retention.NewService(time.Second)
 	s.MetaClient = mockClient
 	s.Engine = mockEngine
 
 	nilIndexMap := make(map[uint64]*meta.IndexDurationInfo)
-	err := s.updateIndexDurationInfo(&nilIndexMap)
+	err := s.UpdateIndexDurationInfo(&nilIndexMap)
 	assert.Equal(t, err.Error(), "err1")
 
 	mockClient.GetIndexDurationInfoFn = func(index uint64) (*meta.IndexDurationResponse, error) {
@@ -413,6 +418,6 @@ func TestUpdateIndexDurationInfo(t *testing.T) {
 		}
 		return fmt.Errorf("err2")
 	}
-	err = s.updateIndexDurationInfo(&nilIndexMap)
+	err = s.UpdateIndexDurationInfo(&nilIndexMap)
 	assert.Equal(t, err.Error(), "err2")
 }

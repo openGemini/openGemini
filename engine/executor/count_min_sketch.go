@@ -22,6 +22,14 @@ type TCountMinSketch struct {
 	Table [][]TCounter
 }
 
+func (cms *TCountMinSketch) Reset() {
+	for i := range cms.Table {
+		for j := range cms.Table[i] {
+			cms.Table[i][j] = 0
+		}
+	}
+}
+
 func NewTCountMinSketch(depth int, widthLog2 int) TCountMinSketch {
 	re := TCountMinSketch{
 		Depth: depth,
@@ -50,11 +58,4 @@ func (cms *TCountMinSketch) Add(indices []int, value TCounter) {
 	for i := 0; i < cms.Depth; i++ {
 		cms.Table[i][indices[i]] += value
 	}
-}
-
-func min(a, b TCounter) TCounter {
-	if a < b {
-		return a
-	}
-	return b
 }

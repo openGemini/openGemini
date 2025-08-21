@@ -15,6 +15,7 @@
 package arrowflight
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	json2 "encoding/json"
@@ -35,6 +36,7 @@ import (
 	"github.com/openGemini/openGemini/lib/statisticsPusher"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/httpd"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/httpd/config"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"go.uber.org/zap"
@@ -68,7 +70,7 @@ type FlightMetaClient interface {
 // Constraint 4: the protocol must ensure that the time field is in the last column.
 type Service struct {
 	server           flight.Server
-	writer           *writeServer
+	service          *flightServer
 	authHandler      *authServer
 	Config           *config.Config
 	Logger           *logger.Logger
@@ -82,10 +84,20 @@ type Service struct {
 	}
 }
 
+// GetAuthHandler only use in test
+func (s *Service) GetAuthHandler() *authServer {
+	return s.authHandler
+}
+
+func (s *Service) SetHandler(handler *httpd.Handler) {
+	s.service.queryHandler = handler
+}
+
 func NewService(c config.Config) (*Service, error) {
 	sLogger := logger.NewLogger(errno.ModuleHTTP)
-	writer := NewWriteServer(sLogger)
+	flightService := NewFlightServer(sLogger, &c)
 	authHandler := NewAuthServer(c.FlightAuthEnabled)
+	flightService.authServer = authHandler
 	var maxRecvMsgSize int
 	if c.MaxBodySize <= 0 {
 		maxRecvMsgSize = config.DefaultMaxBodySize
@@ -94,8 +106,9 @@ func NewService(c config.Config) (*Service, error) {
 	}
 
 	server := flight.NewServerWithMiddleware(nil, grpc.MaxRecvMsgSize(maxRecvMsgSize))
-	writer.SetAuthHandler(authHandler)
-	server.RegisterFlightService(writer)
+	flightService.SetAuthHandler(authHandler)
+	server.RegisterFlightService(flightService)
+
 	if err := server.Init(c.FlightAddress); err != nil {
 		sLogger.Error("arrow flight service start failed", zap.Error(err))
 		return nil, err
@@ -103,7 +116,7 @@ func NewService(c config.Config) (*Service, error) {
 	sLogger.Info("arrow flight service start successfully")
 	return &Service{
 		server:      server,
-		writer:      writer,
+		service:     flightService,
 		authHandler: authHandler,
 		err:         make(chan error),
 		Logger:      sLogger,
@@ -119,7 +132,7 @@ func (s *Service) Open() error {
 		}
 	}()
 	s.authHandler.SetMetaClient(s.MetaClient)
-	s.writer.SetWriter(s.RecordWriter)
+	s.service.SetWriter(s.RecordWriter)
 	return nil
 }
 
@@ -130,7 +143,7 @@ func (s *Service) GetServer() flight.Server {
 func (s *Service) Close() error {
 	s.server.Shutdown()
 	s.authHandler.Close()
-	s.writer.Close()
+	s.service.Close()
 	return nil
 }
 
@@ -140,6 +153,7 @@ func (s *Service) Err() <-chan error {
 
 type AuthInfo struct {
 	UserName string `json:"username"`
+	Password string `json:"password"`
 	DataBase string `json:"db"`
 }
 
@@ -200,10 +214,10 @@ func (a *authServer) Authenticate(c flight.AuthConn) error {
 	if err != nil {
 		return err
 	}
-	username, database := authInfo.UserName, authInfo.DataBase
-	u, err := a.client.User(username)
-	if err != nil || u == nil || !u.AuthorizeDatabase(influxql.WritePrivilege, database) {
-		return status.Error(codes.PermissionDenied, fmt.Sprintf("%s not authorized to write to %s", username, database))
+	username, password := authInfo.UserName, authInfo.Password
+	u, err := a.client.Authenticate(username, password)
+	if err != nil || u == nil {
+		return status.Error(codes.Unauthenticated, "authentication failed")
 	}
 
 	// send auth token back
@@ -238,7 +252,7 @@ func (a *authServer) IsValid(authHashID string) (interface{}, error) {
 		a.mu.Unlock()
 		return "", status.Error(codes.PermissionDenied, "auth token time out")
 	}
-	return WriteAuthSuccess, nil
+	return token.Username, nil
 }
 
 func (a *authServer) Close() {
@@ -252,27 +266,32 @@ type MetaData struct {
 	Measurement     string `json:"mst"`
 }
 
-type writeServer struct {
+type flightServer struct {
 	RecordWriter
-	mem    memory.Allocator
-	logger *logger.Logger
+	authServer   *authServer
+	queryHandler *httpd.Handler
+	mem          memory.Allocator
+	logger       *logger.Logger
 	flight.BaseFlightServer
 }
 
-func NewWriteServer(logger *logger.Logger) *writeServer {
-	writer := &writeServer{
+func NewFlightServer(logger *logger.Logger, c *config.Config) *flightServer {
+	service := &flightServer{
 		mem:              memory.NewGoAllocator(),
 		logger:           logger,
 		BaseFlightServer: flight.BaseFlightServer{},
 	}
-	return writer
+	return service
 }
 
-func (w *writeServer) SetWriter(writer RecordWriter) {
-	w.RecordWriter = writer
+func (s *flightServer) SetWriter(writer RecordWriter) {
+	s.RecordWriter = writer
 }
 
-func (w *writeServer) DoPut(server flight.FlightService_DoPutServer) error {
+func (s *flightServer) DoPut(server flight.FlightService_DoPutServer) error {
+	if s.RecordWriter == nil {
+		return status.Error(codes.FailedPrecondition, "service unavailable")
+	}
 	metaData := &MetaData{}
 	wr, err := flight.NewRecordReader(server, ipc.WithAllocator(memory.NewGoAllocator()))
 	if err != nil {
@@ -290,16 +309,26 @@ func (w *writeServer) DoPut(server flight.FlightService_DoPutServer) error {
 
 	err = json2.Unmarshal(util.Str2bytes(wr.LatestFlightDescriptor().Path[0]), metaData)
 	if err != nil {
-		w.logger.Error("arrow flight DoPut get metadata err", zap.Error(err))
+		s.logger.Error("arrow flight DoPut get metadata err", zap.Error(err))
 		return err
 	}
 
-	w.logger.Info("arrow flight DoPut starting", zap.String("db", metaData.DataBase), zap.String("rp", metaData.RetentionPolicy), zap.String("mst", metaData.Measurement))
+	if s.AuthEnabled() {
+		username, user, err := s.getUserFromContext(server.Context())
+		if err != nil {
+			return err
+		}
+		if user == nil || !user.AuthorizeDatabase(influxql.WritePrivilege, metaData.DataBase) {
+			return status.Error(codes.PermissionDenied, fmt.Sprintf("%s not authorized to write to %s", username, metaData.DataBase))
+		}
+	}
+
+	s.logger.Info("arrow flight DoPut starting", zap.String("DB", metaData.DataBase), zap.String("rp", metaData.RetentionPolicy), zap.String("mst", metaData.Measurement))
 	for wr.Next() {
 		r := wr.Record()
 		r.Retain() // Memory reserved. The value of reference counting is increased by 1.
 
-		err = w.RecordWriter.RetryWriteRecord(metaData.DataBase, metaData.RetentionPolicy, metaData.Measurement, r)
+		err = s.RecordWriter.RetryWriteRecord(metaData.DataBase, metaData.RetentionPolicy, metaData.Measurement, r)
 		if err != nil {
 			return err
 		}
@@ -311,6 +340,46 @@ func (w *writeServer) DoPut(server flight.FlightService_DoPutServer) error {
 	return nil
 }
 
-func (w *writeServer) Close() {
-	w.mem.Free(nil)
+func (s *flightServer) Close() {
+	s.mem.Free(nil)
+}
+
+func (s *flightServer) DoGet(ticket *flight.Ticket, server flight.FlightService_DoGetServer) error {
+	if s.queryHandler == nil {
+		return status.Error(codes.FailedPrecondition, "service unavailable")
+	}
+	_, user, err := s.getUserFromContext(server.Context())
+	if err != nil {
+		return err
+	}
+
+	err = s.queryHandler.HandleQuery(ticket.GetTicket(), user, server)
+	if err != nil {
+		return status.Error(codes.InvalidArgument, err.Error())
+	}
+	return nil
+}
+
+func (s *flightServer) AuthEnabled() bool {
+	if s.authServer == nil {
+		return false
+	}
+	return s.authServer.authEnabled
+}
+
+func (s *flightServer) getUserFromContext(context context.Context) (string, meta.User, error) {
+	if !s.AuthEnabled() {
+		return "", nil, nil
+	}
+	authFromContext := flight.AuthFromContext(context)
+	username, ok := authFromContext.(string)
+	if !ok {
+		s.logger.Error("arrow flight DoGet get auth FromContext err")
+		return "", nil, status.Error(codes.Unauthenticated, "authentication failed")
+	}
+	user, err := s.authServer.client.User(username)
+	if err != nil || user == nil {
+		return username, nil, status.Error(codes.PermissionDenied, fmt.Sprintf("%s not authorized", username))
+	}
+	return username, user, nil
 }

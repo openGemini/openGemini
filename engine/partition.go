@@ -15,8 +15,13 @@
 package engine
 
 import (
+	"errors"
+	"fmt"
+	"io/fs"
+	"math"
 	"os"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -37,7 +42,6 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/metaclient"
-	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/raftconn"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
@@ -50,7 +54,10 @@ import (
 )
 
 const (
-	pathSeparator = "_"
+	pathSeparator     = "_"
+	DelIndexBuilderId = math.MaxUint64
+	// DefaultDirPerm Default directory permissions (user can read, write, and execute; group can read and execute; others have no permissions)
+	DefaultDirPerm = 0750
 )
 
 var (
@@ -71,7 +78,7 @@ type DBPTInfo struct {
 	mu       sync.RWMutex
 	database string
 	id       uint32
-	opt      netstorage.EngineOptions
+	opt      EngineOptions
 
 	logger     *logger.Logger
 	exeCount   int64
@@ -89,6 +96,7 @@ type DBPTInfo struct {
 	shards              map[uint64]Shard
 	pendingIndexDeletes map[uint64]struct{}
 	indexBuilder        map[uint64]*tsi.IndexBuilder // [indexId, IndexBuilderer]
+	delIndexBuilderMap  map[string]*tsi.IndexBuilder // [rpName, IndexBuilderer(for deleted tsids) ]
 	pendingShardTiering map[uint64]struct{}
 	closed              *interruptsignal.InterruptSignal
 	newestRpShard       map[string]uint64
@@ -101,7 +109,7 @@ type DBPTInfo struct {
 	enableTagArray      bool
 	fileInfos           chan []immutable.FileInfoExtend
 	doingOff            bool
-	doingShardMoveN     int
+	doingShardMoveN     int32
 	dbObsOptions        *obs.ObsOptions
 }
 
@@ -118,6 +126,7 @@ func NewDBPTInfo(db string, id uint32, dataPath, walPath string, ctx *metaclient
 		walPath:             walPath,
 		indexBuilder:        make(map[uint64]*tsi.IndexBuilder),
 		newestRpShard:       make(map[string]uint64),
+		delIndexBuilderMap:  make(map[string]*tsi.IndexBuilder),
 		pendingShardDeletes: make(map[uint64]struct{}),
 		pendingIndexDeletes: make(map[uint64]struct{}),
 		pendingShardTiering: make(map[uint64]struct{}),
@@ -136,11 +145,19 @@ func (dbPT *DBPTInfo) AddShard(id uint64, sh Shard) {
 }
 
 func (dbPT *DBPTInfo) doingShardMoveNInc() {
-	dbPT.doingShardMoveN++
+	atomic.AddInt32(&dbPT.doingShardMoveN, 1)
 }
 
 func (dbPT *DBPTInfo) doingShardMoveNDec() {
-	dbPT.doingShardMoveN--
+	atomic.AddInt32(&dbPT.doingShardMoveN, -1)
+}
+
+func (dbPT *DBPTInfo) doingIndexMoveNInc() {
+	atomic.AddInt32(&dbPT.doingShardMoveN, 1)
+}
+
+func (dbPT *DBPTInfo) doingIndexMoveNDec() {
+	atomic.AddInt32(&dbPT.doingShardMoveN, -1)
 }
 
 func (dbPT *DBPTInfo) enableReportShardLoad() {
@@ -155,6 +172,10 @@ func (dbPT *DBPTInfo) enableReportShardLoad() {
 	}
 	dbPT.wg.Add(1)
 	go dbPT.reportLoad()
+}
+
+func (dbPT *DBPTInfo) SetDoingOff(df bool) {
+	dbPT.doingOff = df
 }
 
 func (dbPT *DBPTInfo) reportLoad() {
@@ -286,6 +307,54 @@ func (dbPT *DBPTInfo) unref() {
 	dbPT.ch = nil
 }
 
+func (dbPT *DBPTInfo) Shards() map[uint64]Shard {
+	return dbPT.shards
+}
+
+// SetShards only used for mock test
+func (dbPT *DBPTInfo) SetShards(shards map[uint64]Shard) {
+	dbPT.shards = shards
+}
+
+// SetDelIndexBuilder only used for mock test
+func (dbPT *DBPTInfo) SetDelIndexBuilder(delIndexBuilder map[string]*tsi.IndexBuilder) {
+	dbPT.delIndexBuilderMap = delIndexBuilder
+}
+
+// SetNode only used for mock test
+func (dbPT *DBPTInfo) SetNode(node raftNodeRequest) {
+	dbPT.node = node
+}
+
+// SetDatabase only used for mock test
+func (dbPT *DBPTInfo) SetDatabase(name string) {
+	dbPT.database = name
+}
+
+// SetLockPath only used for mock test
+func (dbPT *DBPTInfo) SetLockPath(lockPath *string) {
+	dbPT.lockPath = lockPath
+}
+
+// SetPath only used for mock test
+func (dbPT *DBPTInfo) SetPath(path string) {
+	dbPT.path = path
+}
+
+// SetWalPath only used for mock test
+func (dbPT *DBPTInfo) SetWalPath(walPath string) {
+	dbPT.walPath = walPath
+}
+
+// SetIndexBuilder only used for mock test
+func (dbPT *DBPTInfo) SetIndexBuilder(indexBuilder map[uint64]*tsi.IndexBuilder) {
+	dbPT.indexBuilder = indexBuilder
+}
+
+func (dbPT *DBPTInfo) GetDelIndexBuilderByRp(rp string) *tsi.IndexBuilder {
+	return dbPT.delIndexBuilderMap[rp]
+}
+
 func parseIndexDir(indexDirName string) (uint64, *meta.TimeRangeInfo, error) {
 	indexDirName = strings.TrimRight(indexDirName, "/")
 	indexDir := strings.Split(indexDirName, pathSeparator)
@@ -315,7 +384,7 @@ func parseIndexDir(indexDirName string) (uint64, *meta.TimeRangeInfo, error) {
 
 func (dbPT *DBPTInfo) loadShards(opId uint64, rp string, durationInfos map[uint64]*meta.ShardDurationInfo, loadStat int, client metaclient.MetaClient, engineType config.EngineType) error {
 	if loadStat != immutable.PRELOAD {
-		err := dbPT.OpenIndexes(opId, rp, engineType)
+		err := dbPT.OpenIndexes(opId, rp, engineType, client)
 		if err != nil {
 			return err
 		}
@@ -323,29 +392,49 @@ func (dbPT *DBPTInfo) loadShards(opId uint64, rp string, durationInfos map[uint6
 	return dbPT.OpenShards(opId, rp, durationInfos, loadStat, client)
 }
 
-func (dbPT *DBPTInfo) OpenIndexes(opId uint64, rp string, engineType config.EngineType) error {
-	indexPath := path.Join(dbPT.path, rp, config.IndexFileDirectory)
-	indexDirs, err := fileops.ReadDir(indexPath)
+func (dbPT *DBPTInfo) OpenIndexes(opId uint64, rp string, engineType config.EngineType, client metaclient.MetaClient) error {
+	indexBasePath := path.Join(dbPT.path, rp, config.IndexFileDirectory)
+	remoteIndexDirNames, remoteIndexPath, remoteErr := dbPT.getRemoteIndexPaths(indexBasePath, client, rp)
+	if remoteErr != nil {
+		dbPT.logger.Error("load remote index error.", zap.Error(remoteErr))
+	}
+	localIndexDirs, err := fileops.ReadDir(indexBasePath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
 		return err
 	}
+	// ignore index that has been transferred to cold
+	for i := len(localIndexDirs) - 1; i >= 0; i-- {
+		currentDir := localIndexDirs[i]
+		for _, remoteIndexDir := range remoteIndexDirNames {
+			if currentDir.Name() == remoteIndexDir {
+				localIndexDirs = append(localIndexDirs[:i], localIndexDirs[i+1:]...)
+				break
+			}
+		}
+	}
 
-	resC := make(chan *res, len(indexDirs))
+	resC := make(chan *res, len(localIndexDirs)+len(remoteIndexDirNames))
 	n := 0
 
-	for indexIdx := range indexDirs {
-		if !indexDirs[indexIdx].IsDir() {
-			dbPT.logger.Warn("skip load index because it's not a dir", zap.String("dir", indexDirs[indexIdx].Name()))
+	for _, remoteIndexDirName := range remoteIndexDirNames {
+		n++
+		openShardsLimit <- struct{}{}
+		go dbPT.openIndex(opId, remoteIndexPath, remoteIndexDirName, rp, engineType, resC, util.Cold, client)
+	}
+
+	for indexIdx := range localIndexDirs {
+		if !localIndexDirs[indexIdx].IsDir() {
+			dbPT.logger.Warn("skip load index because it's not a dir", zap.String("dir", localIndexDirs[indexIdx].Name()))
 			continue
 		}
 		n++
 
 		openShardsLimit <- struct{}{}
-		indexDirName := indexDirs[indexIdx].Name()
-		go dbPT.openIndex(opId, indexPath, indexDirName, rp, engineType, resC)
+		indexDirName := localIndexDirs[indexIdx].Name()
+		go dbPT.openIndex(opId, indexBasePath, indexDirName, rp, engineType, resC, util.Hot, client)
 	}
 
 	for i := 0; i < n; i++ {
@@ -358,11 +447,171 @@ func (dbPT *DBPTInfo) OpenIndexes(opId uint64, rp string, engineType config.Engi
 			continue
 		}
 		dbPT.mu.Lock()
-		dbPT.indexBuilder[res.i.GetIndexID()] = res.i
+		if res.i.GetIndexID() == DelIndexBuilderId {
+			dbPT.delIndexBuilderMap[rp] = res.i
+		} else {
+			dbPT.indexBuilder[res.i.GetIndexID()] = res.i
+		}
 		dbPT.mu.Unlock()
 	}
 	close(resC)
+
+	if err != nil {
+		return err
+	}
+
+	if config.IsLogKeeper() {
+		return nil
+	}
+
+	timeRangeInfo := &meta.ShardTimeRangeInfo{
+		ShardDuration: &meta.ShardDurationInfo{
+			DurationInfo: meta.DurationDescriptor{Duration: time.Second}},
+		OwnerIndex: meta.IndexDescriptor{IndexID: DelIndexBuilderId},
+	}
+	dbPT.mu.Lock()
+	defer dbPT.mu.Unlock()
+	if _, _, _, _, err = dbPT.NewMergeSetIndex(rp, timeRangeInfo, client, engineType); err == nil {
+		err = SetDelMergeSetForEachMergeSet(dbPT, rp)
+	}
+
 	return err
+}
+
+func SetDelMergeSetForEachMergeSet(dbPT *DBPTInfo, rp string) error {
+	err := errors.New("delMergeSet must be *tsi.MergeSetIndex")
+	if delMergeSet, ok := dbPT.GetDelIndexBuilderByRp(rp).GetPrimaryIndex().(*tsi.MergeSetIndex); ok {
+		if err = delMergeSet.LoadDeletedTSIDs(); err != nil {
+			return err
+		}
+		for _, v := range dbPT.indexBuilder {
+			if curMerge, ok := v.GetPrimaryIndex().(*tsi.MergeSetIndex); ok {
+				if curMerge.RpName() == rp {
+					curMerge.SetDeleteMergeSet(delMergeSet)
+				}
+			} else {
+				return errors.New("curMerge must be *tsi.MergeSetIndex")
+			}
+		}
+	}
+	return err
+}
+
+func (dbPT *DBPTInfo) NewMergeSetIndex(rp string, timeRangeInfo *meta.ShardTimeRangeInfo, client metaclient.MetaClient, engineType config.EngineType) (uint64, string, fileops.FileLockOption, *tsi.IndexBuilder, error) {
+	var err error
+	rpPath := path.Join(dbPT.path, rp)
+
+	indexID := timeRangeInfo.OwnerIndex.IndexID
+	lock := fileops.FileLockOption(*dbPT.lockPath)
+	indexBuilder, ok := dbPT.indexBuilder[indexID]
+	if !ok && !config.IsLogKeeper() {
+		indexPath := strconv.FormatUint(indexID, 10) + pathSeparator + strconv.Itoa(int(meta.MarshalTime(timeRangeInfo.OwnerIndex.TimeRange.StartTime))) +
+			pathSeparator + strconv.Itoa(int(meta.MarshalTime(timeRangeInfo.OwnerIndex.TimeRange.EndTime)))
+		iPath := path.Join(rpPath, config.IndexFileDirectory, indexPath)
+		ObsOptions, _ := client.DatabaseOption(dbPT.database)
+		if ObsOptions != nil && ObsOptions.Enabled {
+			iPath = fileops.GetRemoteDataPath(ObsOptions, iPath)
+		}
+
+		if err := fileops.MkdirAll(iPath, DefaultDirPerm, lock); err != nil {
+			return indexID, rpPath, lock, indexBuilder, err
+		}
+
+		indexIdent := &meta.IndexIdentifier{OwnerDb: dbPT.database, OwnerPt: dbPT.id, Policy: rp}
+		indexIdent.Index = &meta.IndexDescriptor{IndexID: indexID,
+			IndexGroupID: timeRangeInfo.OwnerIndex.IndexGroupID, TimeRange: timeRangeInfo.OwnerIndex.TimeRange}
+
+		opts := new(tsi.Options).
+			Ident(indexIdent).
+			Path(iPath).
+			IndexType(index.MergeSet).
+			EngineType(engineType).
+			StartTime(timeRangeInfo.OwnerIndex.TimeRange.StartTime).
+			EndTime(timeRangeInfo.OwnerIndex.TimeRange.EndTime).
+			Duration(timeRangeInfo.ShardDuration.DurationInfo.Duration).
+			CacheDuration(timeRangeInfo.OwnerIndex.TimeRange.EndTime.Sub(timeRangeInfo.OwnerIndex.TimeRange.StartTime)).
+			LogicalClock(dbPT.logicClock).
+			SequenceId(&dbPT.sequenceID).
+			Lock(dbPT.lockPath).
+			MergeDuration(timeRangeInfo.ShardDuration.DurationInfo.MergeDuration).
+			ObsOpt(dbPT.dbObsOptions)
+
+		// init indexBuilder and default indexRelation
+		indexBuilder = tsi.NewIndexBuilder(opts)
+		if dbPT.dbObsOptions == nil {
+			dbPT.dbObsOptions, _ = client.DatabaseOption(dbPT.database)
+		}
+		indexBuilder.ObsOpt = dbPT.dbObsOptions
+		indexBuilder.EnableTagArray = dbPT.enableTagArray
+		primaryIndex, _ := tsi.NewIndex(opts)
+		primaryIndex.SetIndexBuilder(indexBuilder)
+		indexRelation, _ := tsi.NewIndexRelation(opts, primaryIndex, indexBuilder)
+		if indexBuilder.GetIndexID() == DelIndexBuilderId {
+			dbPT.delIndexBuilderMap[rp] = indexBuilder
+			dbPT.delIndexBuilderMap[rp].Relations[uint32(index.MergeSet)] = indexRelation
+		} else {
+			dbPT.indexBuilder[indexID] = indexBuilder
+			dbPT.indexBuilder[indexID].Relations[uint32(index.MergeSet)] = indexRelation
+		}
+		err = indexBuilder.Open()
+	}
+
+	return indexID, rpPath, lock, indexBuilder, err
+}
+
+func (dbPT *DBPTInfo) getRemoteIndexPaths(indexPath string, client metaclient.MetaClient, rp string) ([]string, string, error) {
+	if dbPT.dbObsOptions == nil {
+		return nil, "", nil
+	}
+	noPrefixPath := indexPath[len(obs.GetPrefixDataPath()):]
+	obsBasePath := filepath.Join(dbPT.dbObsOptions.BasePath, noPrefixPath)
+	completeObsPath := fmt.Sprintf("%s%s/%s/%s/%s/%s", fileops.ObsPrefix, dbPT.dbObsOptions.Endpoint, dbPT.dbObsOptions.Ak, dbPT.dbObsOptions.Sk, dbPT.dbObsOptions.BucketName, obsBasePath)
+
+	indexDirs, err := fileops.ReadDir(completeObsPath)
+	if err != nil {
+		return nil, "", err
+	}
+
+	var subDirs []fs.FileInfo
+	for _, indexDir := range indexDirs {
+		if indexDir.IsDir() {
+			subDirs = append(subDirs, indexDir)
+		}
+	}
+	subPaths := fileops.GetSubDirNamesForObsReadDirs(subDirs, obsBasePath)
+	res := changeSubPathToColdOne(subPaths, dbPT, client, rp)
+	return res, completeObsPath, nil
+}
+
+func changeSubPathToColdOne(subPaths []string, dbPT *DBPTInfo, client metaclient.MetaClient, rp string) []string {
+	var res []string
+	for _, subPath := range subPaths {
+		indexID, _, err := parseIndexDir(subPath)
+		if err != nil {
+			res = append(res, subPath)
+			continue
+		}
+		cleared, err := dbPT.isIndexCleared(indexID, client, rp)
+		if err != nil {
+			res = append(res, subPath)
+			continue
+		}
+		if cleared {
+			noClearIndexId, err := client.GetNoClearIndexId(indexID, dbPT.database, rp)
+			if err != nil {
+				res = append(res, subPath)
+				continue
+			}
+			splits := strings.Split(subPath, pathSeparator)
+			if len(splits) < 3 {
+				continue
+			}
+			res = append(res, strconv.FormatUint(noClearIndexId, 10)+pathSeparator+splits[1]+pathSeparator+splits[2])
+		} else {
+			res = append(res, subPath)
+		}
+	}
+	return res
 }
 
 func containOtherIndexes(dirName string) bool {
@@ -370,6 +619,22 @@ func containOtherIndexes(dirName string) bool {
 		return false
 	}
 	return true
+}
+
+func (dbPT *DBPTInfo) isIndexCleared(indexID uint64, client metaclient.MetaClient, rp string) (bool, error) {
+	database, err := client.Database(dbPT.database)
+	if err != nil {
+		return false, err
+	}
+	groups := database.RetentionPolicies[rp].IndexGroups
+	for _, group := range groups {
+		for _, indexInfo := range group.Indexes {
+			if indexInfo.ID == indexID && indexInfo.Tier == util.Cleared {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 func parseShardDir(shardDirName string) (uint64, uint64, *meta.TimeRangeInfo, error) {
@@ -431,8 +696,15 @@ func (dbPT *DBPTInfo) OpenShards(opId uint64, rp string, durationInfos map[uint6
 
 	resC := make(chan *res, len(shardDirs)-1)
 	n := 0
+	dirDepth := immutable.DirDepth(shardDirs[0].Name())
 	for shIdx := range shardDirs {
 		if strings.TrimSuffix(shardDirs[shIdx].Name(), "/") == config.IndexFileDirectory {
+			continue
+		}
+		if dirDepth != 1 && immutable.DirDepth(shardDirs[shIdx].Name()) != dirDepth+1 {
+			continue
+		}
+		if filepath.Base(filepath.Clean(shardDirs[shIdx].Name())) == config.IndexFileDirectory {
 			continue
 		}
 		n++
@@ -445,7 +717,7 @@ func (dbPT *DBPTInfo) OpenShards(opId uint64, rp string, durationInfos map[uint6
 	return err
 }
 
-func (dbPT *DBPTInfo) openIndex(opId uint64, indexPath, indexDirName, rp string, engineType config.EngineType, resC chan<- *res) {
+func (dbPT *DBPTInfo) openIndex(opId uint64, indexPath, indexDirName, rp string, engineType config.EngineType, resC chan<- *res, tier uint64, client metaclient.MetaClient) {
 	defer func() {
 		openShardsLimit.Release()
 	}()
@@ -453,26 +725,42 @@ func (dbPT *DBPTInfo) openIndex(opId uint64, indexPath, indexDirName, rp string,
 		resC <- &res{}
 		return
 	}
+	indexDirName = filepath.Base(filepath.Clean(indexDirName))
 	indexID, tr, err := parseIndexDir(indexDirName)
 	if err != nil {
 		dbPT.logger.Error("parse index dir failed", zap.Error(err))
 		resC <- &res{}
 		return
 	}
-	ipath := path.Join(indexPath, indexDirName)
+	ipath := fileops.Join(indexPath, indexDirName)
 	// FIXME reload index
 
 	// todo:is it necessary to mkdir again??
 	lock := fileops.FileLockOption(*dbPT.lockPath)
-	if err := fileops.MkdirAll(ipath, 0750, lock); err != nil {
+	if err := fileops.MkdirAll(ipath, DefaultDirPerm, lock); err != nil {
 		resC <- &res{err: err}
 		return
 	}
-
+	var allIndexDirNames []string
 	allIndexDirs, err := fileops.ReadDir(ipath)
 	if err != nil {
 		resC <- &res{err: err}
 		return
+	}
+
+	if tier == util.Cold || tier == util.Cleared {
+		var remoteObsIndexDirs []fs.FileInfo
+		for _, remoteObsIndexDir := range allIndexDirs {
+			if remoteObsIndexDir.IsDir() {
+				remoteObsIndexDirs = append(remoteObsIndexDirs, remoteObsIndexDir)
+			}
+		}
+		obsPrefixPath := fmt.Sprintf("%s%s/%s/%s/%s", fileops.ObsPrefix, dbPT.dbObsOptions.Endpoint, dbPT.dbObsOptions.Ak, dbPT.dbObsOptions.Sk, dbPT.dbObsOptions.BucketName)
+		allIndexDirNames = fileops.GetSubDirNamesForObsReadDirs(remoteObsIndexDirs, ipath[len(obsPrefixPath):])
+	} else {
+		for i := range allIndexDirs {
+			allIndexDirNames = append(allIndexDirNames, allIndexDirs[i].Name())
+		}
 	}
 
 	indexIdent := &meta.IndexIdentifier{OwnerDb: dbPT.database, OwnerPt: dbPT.id, Policy: rp}
@@ -487,7 +775,8 @@ func (dbPT *DBPTInfo) openIndex(opId uint64, indexPath, indexDirName, rp string,
 		EndTime(tr.EndTime).
 		LogicalClock(dbPT.logicClock).
 		SequenceId(&dbPT.sequenceID).
-		Lock(dbPT.lockPath)
+		Lock(dbPT.lockPath).
+		ObsOpt(dbPT.dbObsOptions)
 
 	dbPT.mu.Lock()
 	// init indexBuilder and default indexRelation
@@ -508,11 +797,14 @@ func (dbPT *DBPTInfo) openIndex(opId uint64, indexPath, indexDirName, rp string,
 		return
 	}
 	indexBuilder.Relations[uint32(index.MergeSet)] = indexRelation
+	indexBuilder.Tier = tier
+	indexBuilder.IndexColdDuration = dbPT.getIndexColdDuration(rp, client)
+	indexBuilder.ObsOpt = dbPT.dbObsOptions
 
 	// init other indexRelations if exist
-	for idx := range allIndexDirs {
-		if containOtherIndexes(strings.TrimSuffix(allIndexDirs[idx].Name(), "/")) {
-			idxType, _ := index.GetIndexTypeByName(allIndexDirs[idx].Name())
+	for idx := range allIndexDirNames {
+		if containOtherIndexes(strings.TrimSuffix(allIndexDirNames[idx], "/")) {
+			idxType, _ := index.GetIndexTypeByName(allIndexDirNames[idx])
 			opts := new(tsi.Options).
 				Ident(indexIdent).
 				Path(ipath).
@@ -533,11 +825,25 @@ func (dbPT *DBPTInfo) openIndex(opId uint64, indexPath, indexDirName, rp string,
 	resC <- &res{i: indexBuilder}
 }
 
+func (dbPT *DBPTInfo) getIndexColdDuration(rp string, client metaclient.MetaClient) time.Duration {
+	dbs := client.Databases()
+	db, dbExists := dbs[dbPT.database]
+	if !dbExists {
+		return 0
+	}
+	dbrp, dbrpExists := db.RetentionPolicies[rp]
+	if !dbrpExists {
+		return 0
+	}
+	return dbrp.IndexColdDuration
+}
+
 func (dbPT *DBPTInfo) openShard(opId uint64, thermalShards map[uint64]struct{}, shardDirName, rp string, durationInfos map[uint64]*meta.ShardDurationInfo,
 	resC chan *res, loadStat int, client metaclient.MetaClient) {
 	defer func() {
 		openShardsLimit.Release()
 	}()
+	shardDirName = filepath.Base(filepath.Clean(shardDirName))
 	shardId, indexID, tr, err := parseShardDir(shardDirName)
 	if err != nil {
 		dbPT.logger.Error("skip load shard invalid shard directory", zap.String("shardDir", shardDirName))
@@ -578,7 +884,6 @@ func (dbPT *DBPTInfo) preloadProcess(opId uint64, thermalShards map[uint64]struc
 
 	sh := NewShard(shardPath, shardWalPath, dbPT.lockPath, &durationInfos[shardId].Ident, &durationInfos[shardId].DurationInfo, tr, dbPT.opt, engineType, dbPT.fileInfos)
 	sh.opId = opId
-	sh.SetClient(client)
 
 	start := time.Now()
 	statistics.ShardTaskInit(sh.opId, sh.GetIdent().OwnerDb, sh.GetIdent().OwnerPt, sh.GetRPName(), sh.GetID())
@@ -602,7 +907,7 @@ func (dbPT *DBPTInfo) preloadProcess(opId uint64, thermalShards map[uint64]struc
 
 func (dbPT *DBPTInfo) loadProcess(opId uint64, thermalShards map[uint64]struct{}, shardPath, shardWalPath string, indexID, shardId uint64,
 	durationInfos map[uint64]*meta.ShardDurationInfo, tr *meta.TimeRangeInfo, client metaclient.MetaClient) (*shard, error) {
-	i, err := dbPT.getShardIndex(indexID, durationInfos[shardId].DurationInfo.Duration)
+	i, err := dbPT.getShardIndex(indexID, durationInfos[shardId].DurationInfo.Duration, durationInfos[shardId].DurationInfo.MergeDuration)
 	if err != nil {
 		logger.GetLogger().Warn("failed to get shard index", zap.Error(err))
 		return nil, nil
@@ -614,7 +919,6 @@ func (dbPT *DBPTInfo) loadProcess(opId uint64, thermalShards map[uint64]struct{}
 		engineType := config.EngineType(durationInfos[shardId].Ident.EngineType)
 		sh = NewShard(shardPath, shardWalPath, dbPT.lockPath, &durationInfos[shardId].Ident, &durationInfos[shardId].DurationInfo, tr, dbPT.opt, engineType, dbPT.fileInfos)
 		sh.opId = opId
-		sh.SetClient(client)
 	}
 	if sh.indexBuilder != nil && sh.downSampleEnabled() {
 		return sh, nil
@@ -650,7 +954,9 @@ func (dbPT *DBPTInfo) loadProcess(opId uint64, thermalShards map[uint64]struct{}
 					return nil, err
 				}
 			}
-			sh.SetMstInfo(mstInfo)
+			ident := colstore.NewMeasurementIdent(sh.ident.OwnerDb, sh.ident.Policy)
+			ident.SetSafeName(mstInfo.Name)
+			colstore.MstManagerIns().Add(ident, mstInfo)
 		}
 		sh.pkIndexReader = sparseindex.NewPKIndexReader(util.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
 		sh.skIndexReader = sparseindex.NewSKIndexReader(util.RowsNumPerFragment, colstore.CoarseIndexFragment, colstore.MinRowsForSeek)
@@ -708,7 +1014,7 @@ func setAccumulateMetaIndex(d *DetachedMetaInfo, mstInfo *meta.MeasurementInfo, 
 	sh.immTables.SetAccumulateMetaIndex(mstInfo.Name, aMetaIndex)
 }
 
-func (dbPT *DBPTInfo) getShardIndex(indexID uint64, duration time.Duration) (*tsi.IndexBuilder, error) {
+func (dbPT *DBPTInfo) getShardIndex(indexID uint64, duration time.Duration, mergeDuration time.Duration) (*tsi.IndexBuilder, error) {
 	if config.IsLogKeeper() {
 		return nil, nil
 	}
@@ -719,6 +1025,7 @@ func (dbPT *DBPTInfo) getShardIndex(indexID uint64, duration time.Duration) (*ts
 		return nil, errno.NewError(errno.IndexNotFound, dbPT.database, dbPT.id, indexID)
 	}
 	indexBuilder.SetDuration(duration)
+	indexBuilder.SetMergeDuration(mergeDuration)
 	return indexBuilder, nil
 }
 
@@ -750,7 +1057,7 @@ func (dbPT *DBPTInfo) ptReceiveShard(resC chan *res, n int, rp string) error {
 	return err
 }
 
-func (dbPT *DBPTInfo) SetOption(opt netstorage.EngineOptions) {
+func (dbPT *DBPTInfo) SetOption(opt EngineOptions) {
 	dbPT.opt = opt
 }
 
@@ -762,66 +1069,28 @@ func (dbPT *DBPTInfo) SetParams(preload bool, lockPath *string, enableTagArray b
 }
 
 func (dbPT *DBPTInfo) NewShard(rp string, shardID uint64, timeRangeInfo *meta.ShardTimeRangeInfo, client metaclient.MetaClient, mstInfo *meta.MeasurementInfo) (Shard, error) {
-	var err error
-	rpPath := path.Join(dbPT.path, rp)
+
 	walPath := path.Join(dbPT.walPath, rp)
 
-	indexID := timeRangeInfo.OwnerIndex.IndexID
-	lock := fileops.FileLockOption(*dbPT.lockPath)
-	indexBuilder, ok := dbPT.indexBuilder[indexID]
-	if !ok && !config.IsLogKeeper() {
-		indexPath := strconv.Itoa(int(indexID)) + pathSeparator + strconv.Itoa(int(meta.MarshalTime(timeRangeInfo.OwnerIndex.TimeRange.StartTime))) +
-			pathSeparator + strconv.Itoa(int(meta.MarshalTime(timeRangeInfo.OwnerIndex.TimeRange.EndTime)))
-		iPath := path.Join(rpPath, config.IndexFileDirectory, indexPath)
-
-		if err := fileops.MkdirAll(iPath, 0750, lock); err != nil {
-			return nil, err
-		}
-
-		indexIdent := &meta.IndexIdentifier{OwnerDb: dbPT.database, OwnerPt: dbPT.id, Policy: rp}
-		indexIdent.Index = &meta.IndexDescriptor{IndexID: indexID,
-			IndexGroupID: timeRangeInfo.OwnerIndex.IndexGroupID, TimeRange: timeRangeInfo.OwnerIndex.TimeRange}
-
-		opts := new(tsi.Options).
-			Ident(indexIdent).
-			Path(iPath).
-			IndexType(index.MergeSet).
-			EngineType(mstInfo.EngineType).
-			StartTime(timeRangeInfo.OwnerIndex.TimeRange.StartTime).
-			EndTime(timeRangeInfo.OwnerIndex.TimeRange.EndTime).
-			Duration(timeRangeInfo.ShardDuration.DurationInfo.Duration).
-			CacheDuration(timeRangeInfo.OwnerIndex.TimeRange.EndTime.Sub(timeRangeInfo.OwnerIndex.TimeRange.StartTime)).
-			LogicalClock(dbPT.logicClock).
-			SequenceId(&dbPT.sequenceID).
-			Lock(dbPT.lockPath)
-
-		// init indexBuilder and default indexRelation
-		indexBuilder = tsi.NewIndexBuilder(opts)
-		indexBuilder.EnableTagArray = dbPT.enableTagArray
-		dbPT.indexBuilder[indexID] = indexBuilder
-		primaryIndex, _ := tsi.NewIndex(opts)
-		primaryIndex.SetIndexBuilder(indexBuilder)
-		indexRelation, _ := tsi.NewIndexRelation(opts, primaryIndex, indexBuilder)
-		dbPT.indexBuilder[indexID].Relations[uint32(index.MergeSet)] = indexRelation
-		err = indexBuilder.Open()
-		if err != nil {
-			return nil, err
-		}
+	indexID, rpPath, lock, indexBuilder, err := dbPT.NewMergeSetIndex(rp, timeRangeInfo, client, mstInfo.EngineType)
+	if err != nil {
+		return nil, err
 	}
-
 	id := strconv.Itoa(int(shardID))
 	shardPath := id + pathSeparator + strconv.Itoa(int(meta.MarshalTime(timeRangeInfo.TimeRange.StartTime))) +
 		pathSeparator + strconv.Itoa(int(meta.MarshalTime(timeRangeInfo.TimeRange.EndTime))) +
 		pathSeparator + strconv.Itoa(int(indexID))
 	dataPath := path.Join(rpPath, shardPath)
 	walPath = path.Join(walPath, shardPath)
-	if err = fileops.MkdirAll(dataPath, 0750, lock); err != nil {
+	if mstInfo.ObsOptions != nil && mstInfo.ObsOptions.Enabled {
+		dataPath = fileops.GetRemoteDataPath(mstInfo.ObsOptions, dataPath)
+	}
+	if err = fileops.MkdirAll(dataPath, DefaultDirPerm, lock); err != nil {
 		return nil, err
 	}
 	shardIdent := &meta.ShardIdentifier{ShardID: shardID, Policy: rp, OwnerDb: dbPT.database, OwnerPt: dbPT.id}
 	sh := NewShard(dataPath, walPath, dbPT.lockPath, shardIdent, &timeRangeInfo.ShardDuration.DurationInfo, &timeRangeInfo.TimeRange, dbPT.opt, mstInfo.EngineType, dbPT.fileInfos)
-	sh.SetClient(client)
-
+	sh.obsOpt = mstInfo.ObsOptions
 	sh.SetIndexBuilder(indexBuilder)
 
 	err = sh.NewShardKeyIdx(timeRangeInfo.ShardType, dataPath, dbPT.lockPath)
@@ -866,6 +1135,15 @@ func (dbPT *DBPTInfo) ShardNoLock(id uint64) Shard {
 	return sh
 }
 
+func (dbPT *DBPTInfo) IndexNoLock(id uint64) *tsi.IndexBuilder {
+	ib, ok := dbPT.indexBuilder[id]
+	if !ok {
+		return nil
+	}
+
+	return ib
+}
+
 func (dbPT *DBPTInfo) closeDBPt() error {
 	dbPT.mu.Lock()
 
@@ -893,6 +1171,13 @@ func (dbPT *DBPTInfo) closeDBPt() error {
 		if err := iBuild.Close(); err != nil {
 			dbPT.mu.Unlock()
 			dbPT.logger.Error("close index fail", zap.Uint64("id", id), zap.Error(err))
+			return err
+		}
+	}
+	for rp, iBuild := range dbPT.delIndexBuilderMap {
+		if err := iBuild.Close(); err != nil {
+			dbPT.mu.Unlock()
+			dbPT.logger.Error("close index fail", zap.String("rp", rp), zap.Error(err))
 			return err
 		}
 	}
@@ -1027,4 +1312,21 @@ func (dbPT *DBPTInfo) walkShards(tr *influxql.TimeRange, callback func(sh Shard)
 
 		callback(sh)
 	}
+}
+
+func (dbpt *DBPTInfo) HasCoverShard(srcShardTimeRange *meta.ShardTimeRangeInfo, rp string, shardId uint64) bool {
+	for _, sh := range dbpt.shards {
+		if sh.GetDuration().MergeDuration > 0 && sh.GetRPName() == rp {
+			if sh.GetStartTime().UnixNano() <= srcShardTimeRange.TimeRange.StartTime.UnixNano() &&
+				sh.GetEndTime().UnixNano() >= srcShardTimeRange.TimeRange.EndTime.UnixNano() {
+				log.Info("HasCoverShard", zap.String("db", dbpt.database), zap.String("rp", rp), zap.Uint32("ptId", dbpt.id),
+					zap.Uint64("srcShardId", shardId), zap.Time("srcStartTime", srcShardTimeRange.TimeRange.StartTime),
+					zap.Time("srcEndTime", srcShardTimeRange.TimeRange.EndTime), zap.Uint64("dstShardId", sh.GetID()),
+					zap.Time("dstStartTime", sh.GetStartTime()),
+					zap.Time("dstEndTime", sh.GetEndTime()))
+				return true
+			}
+		}
+	}
+	return false
 }

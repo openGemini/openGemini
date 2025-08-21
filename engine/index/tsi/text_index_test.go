@@ -16,7 +16,6 @@ package tsi
 
 import (
 	"fmt"
-	"os"
 	"testing"
 
 	"github.com/openGemini/openGemini/engine/index/clv"
@@ -26,9 +25,6 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
-var TEXT_PATH string = "/tmp/textindex"
-var CLV_PATH string = TEXT_PATH + "/clv"
-var LOCK_PATH string = CLV_PATH + "/clv.lock"
 var MST_NAME string = "logmst"
 
 func buildRow(seriesId uint64, timestamp int64, textFiledValue string) influx.Row {
@@ -104,18 +100,18 @@ func insertClvFullTextIndex(opts *Options) (*TextIndex, error) {
 }
 
 func TestTextIndexInsert(t *testing.T) {
-	os.RemoveAll(TEXT_PATH)
-	defer func() {
-		_ = os.RemoveAll(TEXT_PATH)
-	}()
+	path := t.TempDir()
+	clv_path := path + "/clv"
+	lock_path := clv_path + "/clv.lock"
 	opts := Options{
-		path: CLV_PATH,
-		lock: &LOCK_PATH,
+		path: clv_path,
+		lock: &lock_path,
 	}
-	_, err := insertClvFullTextIndex(&opts)
+	textIndex, err := insertClvFullTextIndex(&opts)
 	if err != nil {
 		t.Fatalf("insert fulltext index Failed, err:%v", err)
 	}
+	textIndex.Close()
 }
 
 func getSearchExpr() influxql.Expr {
@@ -154,13 +150,10 @@ func getSearchExpr() influxql.Expr {
 
 func getTagsetForTextSearchTest() *TagSetInfo {
 	tagSet := &TagSetInfo{
-		ref:        0,
-		key:        make([]byte, 0),
-		IDs:        make([]uint64, 0),
-		Filters:    make([]influxql.Expr, 0),
-		RowFilters: clv.NewRowFilters(),
-		SeriesKeys: make([][]byte, 0),
-		TagsVec:    make([]influx.PointTags, 0),
+		ref:             0,
+		key:             make([]byte, 0),
+		TagSetInfoItems: []TagSetInfoItem{},
+		RowFilters:      clv.NewRowFilters(),
 	}
 
 	tagSet.Append(101, []byte("clientip"), getSearchExpr(), nil, nil)
@@ -174,13 +167,12 @@ func getTagsetForTextSearchTest() *TagSetInfo {
 }
 
 func TestTextIndexSearch(t *testing.T) {
-	os.RemoveAll(TEXT_PATH)
-	defer func() {
-		_ = os.RemoveAll(TEXT_PATH)
-	}()
+	path := t.TempDir()
+	clv_path := path + "/clv"
+	lock_path := clv_path + "/clv.lock"
 	opts := Options{
-		path: CLV_PATH,
-		lock: &LOCK_PATH,
+		path: clv_path,
+		lock: &lock_path,
 	}
 	textIndex, err := insertClvFullTextIndex(&opts)
 	if err != nil {
@@ -201,4 +193,11 @@ func TestTextIndexSearch(t *testing.T) {
 		t.Fatalf("TextScan Failed, err:%v", err0)
 	}
 	fmt.Printf("result: %+v", group)
+
+	group2, _, err2 := TextScan(textIndex, nil, nil, []byte(MST_NAME), opt, nil, GroupSeries{})
+	if err2 != nil {
+		t.Fatalf("TextScan Failed, err:%v", err0)
+	}
+	fmt.Printf("result: %+v", group2)
+
 }

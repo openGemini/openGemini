@@ -537,6 +537,818 @@ func TestStreamAggregateTransformMedian(t *testing.T) {
 	)
 }
 
+func buildAnomalyDetectInChunk() []executor.Chunk {
+
+	inChunks := make([]executor.Chunk, 0, 2)
+	rowDataType := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "value1", Type: influxql.Integer},
+		influxql.VarRef{Val: "value2", Type: influxql.Float},
+	)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	inCk1 := b.NewChunk("mst")
+
+	inCk1.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
+	}, []int{0, 3})
+	inCk1.AppendIntervalIndexes([]int{0, 3})
+	inCk1.AppendTimes([]int64{1, 2, 3, 4, 5})
+
+	inCk1.Column(0).AppendIntegerValues([]int64{1, 3, 4, 5})
+	inCk1.Column(0).AppendNilsV2(false, true, true, true, true)
+
+	inCk1.Column(1).AppendFloatValues([]float64{1.0, 1.8, 3.2, 5.6})
+	inCk1.Column(1).AppendNilsV2(true, true, false, true, true)
+
+	// second chunk
+	inCk2 := b.NewChunk("mst")
+
+	inCk2.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=bbb"), *ParseChunkTags("name=ccc"),
+	}, []int{0, 2})
+	inCk2.AppendIntervalIndexes([]int{0, 2})
+	inCk2.AppendTimes([]int64{6, 7, 8, 9, 10})
+
+	inCk2.Column(0).AppendIntegerValues([]int64{6, 8, 8, 10})
+	inCk2.Column(0).AppendNilsV2(true, false, true, true, true)
+
+	inCk2.Column(1).AppendFloatValues([]float64{6.4, 10.0, 11.6, 12.5})
+	inCk2.Column(1).AppendNilsV2(true, false, true, true, true)
+
+	inChunks = append(inChunks, inCk1, inCk2)
+
+	return inChunks
+}
+
+func buildAnomalyDetectInChunk2() []executor.Chunk {
+	inChunks := make([]executor.Chunk, 0, 2)
+	rowDataType := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "value1", Type: influxql.Integer},
+		influxql.VarRef{Val: "value2", Type: influxql.Float},
+	)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	inCk1 := b.NewChunk("mst")
+
+	inCk1.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
+	}, []int{0, 3})
+	inCk1.AppendIntervalIndexes([]int{0, 3})
+	inCk1.AppendTimes([]int64{1, 2, 3, 1, 2})
+
+	inCk1.Column(0).AppendIntegerValues([]int64{1, 2, 3, 4, 5})
+	inCk1.Column(0).AppendManyNotNil(5)
+
+	// second chunk
+	inCk2 := b.NewChunk("mst")
+
+	inCk2.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=bbb"), *ParseChunkTags("name=ccc"),
+	}, []int{0, 2})
+	inCk2.AppendIntervalIndexes([]int{0, 2})
+	inCk2.AppendTimes([]int64{3, 4, 1, 2, 3})
+
+	inCk2.Column(0).AppendIntegerValues([]int64{6, 7, 8, 9, 10})
+	inCk1.Column(0).AppendManyNotNil(5)
+
+	inChunks = append(inChunks, inCk1, inCk2)
+
+	return inChunks
+}
+
+func buildAnomalyDetectInChunk3() []executor.Chunk {
+	inChunks := make([]executor.Chunk, 0, 2)
+	rowDataType := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "value1", Type: influxql.Integer},
+		influxql.VarRef{Val: "value2", Type: influxql.Float},
+	)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	inCk1 := b.NewChunk("mst")
+
+	inCk1.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
+	}, []int{0, 3})
+	inCk1.AppendIntervalIndexes([]int{0, 3})
+	inCk1.AppendTimes([]int64{1, 2, 3, 1, 2})
+
+	inCk1.Column(0).AppendIntegerValues([]int64{1, 1, 1, 1, 1})
+	inCk1.Column(0).AppendManyNotNil(5)
+
+	// second chunk
+	inCk2 := b.NewChunk("mst")
+
+	inCk2.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=bbb"), *ParseChunkTags("name=ccc"),
+	}, []int{0, 2})
+	inCk2.AppendIntervalIndexes([]int{0, 2})
+	inCk2.AppendTimes([]int64{3, 4, 1, 2, 3})
+
+	inCk2.Column(0).AppendIntegerValues([]int64{1, 1, 1, 1, 1})
+	inCk1.Column(0).AppendManyNotNil(5)
+
+	inChunks = append(inChunks, inCk1, inCk2)
+
+	return inChunks
+}
+
+func buildAnomalyDetectInChunk4() []executor.Chunk {
+	inChunks := make([]executor.Chunk, 0, 2)
+	rowDataType := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "value1", Type: influxql.Integer},
+		influxql.VarRef{Val: "value2", Type: influxql.Float},
+	)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	inCk1 := b.NewChunk("mst")
+
+	inCk1.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
+	}, []int{0, 3})
+	inCk1.AppendIntervalIndexes([]int{0, 3})
+	inCk1.AppendTimes([]int64{1, 2, 3, 1, 2})
+
+	inCk1.Column(0).AppendIntegerValues([]int64{0, 10, 100, 0, 10})
+	inCk1.Column(0).AppendManyNotNil(5)
+
+	// second chunk
+	inCk2 := b.NewChunk("mst")
+
+	inCk2.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=bbb"), *ParseChunkTags("name=ccc"),
+	}, []int{0, 2})
+	inCk2.AppendIntervalIndexes([]int{0, 2})
+	inCk2.AppendTimes([]int64{3, 4, 1, 2, 3})
+
+	inCk2.Column(0).AppendIntegerValues([]int64{100, 1000, 0, 10, 100})
+	inCk1.Column(0).AppendManyNotNil(5)
+
+	inChunks = append(inChunks, inCk1, inCk2)
+
+	return inChunks
+}
+
+func buildAnomalyDetectInChunk5() []executor.Chunk {
+	inChunks := make([]executor.Chunk, 0, 2)
+	rowDataType := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "value1", Type: influxql.Integer},
+		influxql.VarRef{Val: "value2", Type: influxql.Float},
+	)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	inCk1 := b.NewChunk("mst")
+
+	inCk1.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
+	}, []int{0, 3})
+	inCk1.AppendIntervalIndexes([]int{0, 3})
+	inCk1.AppendTimes([]int64{1, 2, 3, 1, 2})
+
+	inCk1.Column(0).AppendIntegerValues([]int64{0, 10, 5, 0, 10})
+	inCk1.Column(0).AppendManyNotNil(5)
+
+	// second chunk
+	inCk2 := b.NewChunk("mst")
+
+	inCk2.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=bbb"), *ParseChunkTags("name=ccc"),
+	}, []int{0, 2})
+	inCk2.AppendIntervalIndexes([]int{0, 2})
+	inCk2.AppendTimes([]int64{3, 4, 1, 2, 3})
+
+	inCk2.Column(0).AppendIntegerValues([]int64{5, 15, 0, 5, 10})
+	inCk1.Column(0).AppendManyNotNil(5)
+
+	inChunks = append(inChunks, inCk1, inCk2)
+
+	return inChunks
+}
+
+func buildAnomalyDetectInChunk6() []executor.Chunk {
+	inChunks := make([]executor.Chunk, 0, 2)
+	rowDataType := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "value1", Type: influxql.Integer},
+		influxql.VarRef{Val: "value2", Type: influxql.Float},
+	)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	inCk1 := b.NewChunk("mst")
+
+	inCk1.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"),
+	}, []int{0})
+	inCk1.AppendIntervalIndexes([]int{0})
+	inCk1.AppendTimes([]int64{1, 2, 3, 4, 5})
+
+	inCk1.Column(0).AppendIntegerValues([]int64{1, 2, 3, 4, 5})
+	inCk1.Column(0).AppendManyNotNil(5)
+
+	// second chunk
+	inCk2 := b.NewChunk("mst")
+
+	inCk2.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"),
+	}, []int{0})
+	inCk2.AppendIntervalIndexes([]int{0})
+	inCk2.AppendTimes([]int64{6, 7, 8, 9, 10})
+
+	inCk2.Column(0).AppendIntegerValues([]int64{6, 7, 8, 9, 10})
+	inCk1.Column(0).AppendManyNotNil(5)
+
+	inChunks = append(inChunks, inCk1, inCk2)
+
+	return inChunks
+}
+
+func buildAnomalyDetectInChunk7() []executor.Chunk {
+	inChunks := make([]executor.Chunk, 0, 2)
+	rowDataType := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "value1", Type: influxql.Integer},
+		influxql.VarRef{Val: "value2", Type: influxql.Float},
+	)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	inCk1 := b.NewChunk("mst")
+
+	inCk1.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"),
+	}, []int{0})
+	inCk1.AppendIntervalIndexes([]int{0})
+	inCk1.AppendTimes([]int64{1, 2, 3, 4, 5})
+
+	inCk1.Column(0).AppendIntegerValues([]int64{0, 0, 0, 0, 0})
+	inCk1.Column(0).AppendManyNotNil(5)
+
+	// second chunk
+	inCk2 := b.NewChunk("mst")
+
+	inCk2.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"),
+	}, []int{0})
+	inCk2.AppendIntervalIndexes([]int{0})
+	inCk2.AppendTimes([]int64{6, 7, 8, 9, 10})
+
+	inCk2.Column(0).AppendIntegerValues([]int64{0, 0, 0, 0, 0})
+	inCk1.Column(0).AppendManyNotNil(5)
+
+	inChunks = append(inChunks, inCk1, inCk2)
+
+	return inChunks
+}
+
+func buildAnomalyDetectInChunk8() []executor.Chunk {
+	inChunks := make([]executor.Chunk, 0, 2)
+	rowDataType := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "value1", Type: influxql.Integer},
+		influxql.VarRef{Val: "value2", Type: influxql.Float},
+	)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	inCk1 := b.NewChunk("mst")
+
+	inCk1.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"),
+	}, []int{0})
+	inCk1.AppendIntervalIndexes([]int{0})
+	inCk1.AppendTimes([]int64{1, 2, 3, 4, 5})
+
+	inCk1.Column(0).AppendIntegerValues([]int64{0, 0, 0, 0, 0})
+	inCk1.Column(0).AppendManyNotNil(5)
+
+	// second chunk
+	inCk2 := b.NewChunk("mst")
+
+	inCk2.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"),
+	}, []int{0})
+	inCk2.AppendIntervalIndexes([]int{0})
+	inCk2.AppendTimes([]int64{6, 7, 8, 9, 10})
+
+	inCk2.Column(0).AppendIntegerValues([]int64{0, 0, 0, 100, 0})
+	inCk1.Column(0).AppendManyNotNil(5)
+
+	inChunks = append(inChunks, inCk1, inCk2)
+
+	return inChunks
+}
+
+func buildAnomalyDetectInChunk9() []executor.Chunk {
+	inChunks := make([]executor.Chunk, 0, 2)
+	rowDataType := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "value1", Type: influxql.Integer},
+		influxql.VarRef{Val: "value2", Type: influxql.Float},
+	)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	inCk1 := b.NewChunk("mst")
+
+	inCk1.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"),
+	}, []int{0})
+	inCk1.AppendIntervalIndexes([]int{0})
+	inCk1.AppendTimes([]int64{1, 2, 3, 4, 5})
+
+	inCk1.Column(0).AppendIntegerValues([]int64{0, 0, 0, 0, 0})
+	inCk1.Column(0).AppendManyNotNil(5)
+
+	// second chunk
+	inCk2 := b.NewChunk("mst")
+
+	inCk2.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"),
+	}, []int{0})
+	inCk2.AppendIntervalIndexes([]int{0})
+	inCk2.AppendTimes([]int64{6, 7, 8, 9, 10})
+
+	inCk2.Column(0).AppendIntegerValues([]int64{0, 100, 100, 100, 0})
+	inCk1.Column(0).AppendManyNotNil(5)
+
+	inChunks = append(inChunks, inCk1, inCk2)
+
+	return inChunks
+}
+
+func buildDstChunkAnomalyDetect() []executor.Chunk {
+	rowDataType := buildDstRowDataTypeAnomalyDetect()
+	dstChunks := make([]executor.Chunk, 0, 1)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	chunk := b.NewChunk("mst")
+
+	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
+		*ParseChunkTags("name=ccc")}, []int{0, 1, 2})
+	chunk.AppendIntervalIndexes([]int{0, 1, 2})
+	chunk.AppendTimes([]int64{1, 6, 8})
+
+	chunk.Column(0).AppendFloatValues([]float64{2, 0.5, 0.25})
+	chunk.Column(0).AppendManyNotNil(3)
+	chunk.Column(1).AppendFloatValues([]float64{0.8, 1, 0.25})
+	chunk.Column(1).AppendManyNotNil(3)
+
+	dstChunks = append(dstChunks, chunk)
+
+	return dstChunks
+}
+
+func buildDstChunkAnomalyDetect2() []executor.Chunk {
+	rowDataType := buildDstRowDataTypeAnomalyDetect2()
+	dstChunks := make([]executor.Chunk, 0, 1)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	chunk := b.NewChunk("mst")
+
+	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
+		*ParseChunkTags("name=ccc")}, []int{0, 1, 2})
+	chunk.AppendIntervalIndexes([]int{0, 1, 2})
+	chunk.AppendTimes([]int64{1, 1, 1})
+
+	chunk.Column(0).AppendFloatValues([]float64{2, 0.4444444444444444, 0.25})
+	chunk.Column(0).AppendManyNotNil(3)
+
+	dstChunks = append(dstChunks, chunk)
+
+	return dstChunks
+}
+
+func buildDstChunkAnomalyDetect3() []executor.Chunk {
+	rowDataType := buildDstRowDataTypeAnomalyDetect2()
+	dstChunks := make([]executor.Chunk, 0, 1)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	chunk := b.NewChunk("mst")
+
+	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
+		*ParseChunkTags("name=ccc")}, []int{0, 1, 2})
+	chunk.AppendIntervalIndexes([]int{0, 1, 2})
+	chunk.AppendTimes([]int64{1, 1, 1})
+
+	chunk.Column(0).AppendFloatValues([]float64{0, 0, 0})
+	chunk.Column(0).AppendManyNotNil(3)
+
+	dstChunks = append(dstChunks, chunk)
+
+	return dstChunks
+}
+
+func buildDstChunkAnomalyDetect4() []executor.Chunk {
+	rowDataType := buildDstRowDataTypeAnomalyDetect2()
+	dstChunks := make([]executor.Chunk, 0, 1)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	chunk := b.NewChunk("mst")
+
+	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
+		*ParseChunkTags("name=ccc")}, []int{0, 1, 2})
+	chunk.AppendIntervalIndexes([]int{0, 1, 2})
+	chunk.AppendTimes([]int64{1, 1, 1})
+
+	chunk.Column(0).AppendFloatValues([]float64{100, 140.71957930579526, 100})
+	chunk.Column(0).AppendManyNotNil(3)
+
+	dstChunks = append(dstChunks, chunk)
+
+	return dstChunks
+}
+
+func buildDstChunkAnomalyDetect5() []executor.Chunk {
+	rowDataType := buildDstRowDataTypeAnomalyDetect2()
+	dstChunks := make([]executor.Chunk, 0, 1)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	chunk := b.NewChunk("mst")
+
+	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
+		*ParseChunkTags("name=ccc")}, []int{0, 1, 2})
+	chunk.AppendIntervalIndexes([]int{0, 1, 2})
+	chunk.AppendTimes([]int64{1, 1, 1})
+
+	chunk.Column(0).AppendFloatValues([]float64{5, 1, 10})
+	chunk.Column(0).AppendManyNotNil(3)
+
+	dstChunks = append(dstChunks, chunk)
+
+	return dstChunks
+}
+
+func buildDstChunkAnomalyDetect6() []executor.Chunk {
+	rowDataType := buildDstRowDataTypeAnomalyDetect2()
+	dstChunks := make([]executor.Chunk, 0, 1)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	chunk := b.NewChunk("mst")
+
+	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa")}, []int{0})
+	chunk.AppendIntervalIndexes([]int{0})
+	chunk.AppendTimes([]int64{1})
+
+	chunk.Column(0).AppendFloatValues([]float64{1.6666666666666667})
+	chunk.Column(0).AppendManyNotNil(1)
+
+	dstChunks = append(dstChunks, chunk)
+
+	return dstChunks
+}
+
+func buildDstChunkAnomalyDetect7() []executor.Chunk {
+	rowDataType := buildDstRowDataTypeAnomalyDetect2()
+	dstChunks := make([]executor.Chunk, 0, 1)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	chunk := b.NewChunk("mst")
+
+	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa")}, []int{0})
+	chunk.AppendIntervalIndexes([]int{0})
+	chunk.AppendTimes([]int64{1})
+
+	chunk.Column(0).AppendFloatValues([]float64{0})
+	chunk.Column(0).AppendManyNotNil(1)
+
+	dstChunks = append(dstChunks, chunk)
+
+	return dstChunks
+}
+
+func buildDstChunkAnomalyDetect8() []executor.Chunk {
+	rowDataType := buildDstRowDataTypeAnomalyDetect2()
+	dstChunks := make([]executor.Chunk, 0, 1)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	chunk := b.NewChunk("mst")
+
+	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa")}, []int{0})
+	chunk.AppendIntervalIndexes([]int{0})
+	chunk.AppendTimes([]int64{1})
+
+	chunk.Column(0).AppendFloatValues([]float64{44.721359549995796})
+	chunk.Column(0).AppendManyNotNil(1)
+
+	dstChunks = append(dstChunks, chunk)
+
+	return dstChunks
+}
+
+func buildDstChunkAnomalyDetect9() []executor.Chunk {
+	rowDataType := buildDstRowDataTypeAnomalyDetect2()
+	dstChunks := make([]executor.Chunk, 0, 1)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	chunk := b.NewChunk("mst")
+
+	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa")}, []int{0})
+	chunk.AppendIntervalIndexes([]int{0})
+	chunk.AppendTimes([]int64{1})
+
+	chunk.Column(0).AppendFloatValues([]float64{77.45966692414834})
+	chunk.Column(0).AppendManyNotNil(1)
+
+	dstChunks = append(dstChunks, chunk)
+
+	return dstChunks
+}
+
+func buildDstRowDataTypeAnomalyDetect() hybridqp.RowDataType {
+	rowDataType := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "ad_rmse_ext(\"value1\")", Type: influxql.Float},
+		influxql.VarRef{Val: "ad_rmse_ext(\"value2\")", Type: influxql.Float},
+	)
+
+	return rowDataType
+}
+
+func buildDstRowDataTypeAnomalyDetect2() hybridqp.RowDataType {
+	rowDataType := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "ad_rmse_ext(\"value1\")", Type: influxql.Float},
+		influxql.VarRef{Val: "ad_rmse_ext(\"value2\")", Type: influxql.Float},
+	)
+
+	return rowDataType
+}
+
+func TestStreamAggregateTransformAnomalyDetect(t *testing.T) {
+	t.Run("1", func(t *testing.T) {
+		inChunks := buildAnomalyDetectInChunk()
+		dstChunks := buildDstChunkAnomalyDetect()
+
+		exprOpt := []hybridqp.ExprOptions{
+			{
+				Expr: &influxql.Call{Name: "ad_rmse_ext", Args: []influxql.Expr{hybridqp.MustParseExpr("value1")}},
+				Ref:  influxql.VarRef{Val: `ad_rmse_ext("value1")`, Type: influxql.Float},
+			},
+			{
+				Expr: &influxql.Call{Name: "ad_rmse_ext", Args: []influxql.Expr{hybridqp.MustParseExpr("value2")}},
+				Ref:  influxql.VarRef{Val: `ad_rmse_ext("value2")`, Type: influxql.Float},
+			},
+		}
+
+		opt := query.ProcessorOptions{
+			Exprs:      []influxql.Expr{hybridqp.MustParseExpr(`ad_rmse_ext("value1")`), hybridqp.MustParseExpr(`median("value2")`)},
+			Dimensions: []string{"name"},
+			Interval:   hybridqp.Interval{Duration: 4 * time.Nanosecond},
+			Ordered:    true,
+			Ascending:  true,
+			ChunkSize:  10,
+		}
+
+		testStreamAggregateTransformBase(
+			t,
+			inChunks, dstChunks,
+			buildSourceRowDataType(), buildDstRowDataTypeAnomalyDetect(),
+			exprOpt, &opt, false,
+		)
+	})
+
+	t.Run("2", func(t *testing.T) {
+		inChunks := buildAnomalyDetectInChunk2()
+		dstChunks := buildDstChunkAnomalyDetect2()
+
+		exprOpt := []hybridqp.ExprOptions{
+			{
+				Expr: &influxql.Call{Name: "ad_rmse_ext", Args: []influxql.Expr{hybridqp.MustParseExpr("value1")}},
+				Ref:  influxql.VarRef{Val: `ad_rmse_ext("value1")`, Type: influxql.Float},
+			},
+		}
+
+		opt := query.ProcessorOptions{
+			Exprs:      []influxql.Expr{hybridqp.MustParseExpr(`ad_rmse_ext("value1")`), hybridqp.MustParseExpr(`median("value2")`)},
+			Dimensions: []string{"name"},
+			Interval:   hybridqp.Interval{Duration: 4 * time.Nanosecond},
+			Ordered:    true,
+			Ascending:  true,
+			ChunkSize:  10,
+		}
+
+		testStreamAggregateTransformBase(
+			t,
+			inChunks, dstChunks,
+			buildSourceRowDataType(), buildDstRowDataTypeAnomalyDetect(),
+			exprOpt, &opt, false,
+		)
+	})
+
+	t.Run("3", func(t *testing.T) {
+		inChunks := buildAnomalyDetectInChunk3()
+		dstChunks := buildDstChunkAnomalyDetect3()
+
+		exprOpt := []hybridqp.ExprOptions{
+			{
+				Expr: &influxql.Call{Name: "ad_rmse_ext", Args: []influxql.Expr{hybridqp.MustParseExpr("value1")}},
+				Ref:  influxql.VarRef{Val: `ad_rmse_ext("value1")`, Type: influxql.Float},
+			},
+		}
+
+		opt := query.ProcessorOptions{
+			Exprs:      []influxql.Expr{hybridqp.MustParseExpr(`ad_rmse_ext("value1")`), hybridqp.MustParseExpr(`median("value2")`)},
+			Dimensions: []string{"name"},
+			Interval:   hybridqp.Interval{Duration: 4 * time.Nanosecond},
+			Ordered:    true,
+			Ascending:  true,
+			ChunkSize:  10,
+		}
+
+		testStreamAggregateTransformBase(
+			t,
+			inChunks, dstChunks,
+			buildSourceRowDataType(), buildDstRowDataTypeAnomalyDetect(),
+			exprOpt, &opt, false,
+		)
+	})
+
+	t.Run("4", func(t *testing.T) {
+		inChunks := buildAnomalyDetectInChunk4()
+		dstChunks := buildDstChunkAnomalyDetect4()
+
+		exprOpt := []hybridqp.ExprOptions{
+			{
+				Expr: &influxql.Call{Name: "ad_rmse_ext", Args: []influxql.Expr{hybridqp.MustParseExpr("value1")}},
+				Ref:  influxql.VarRef{Val: `ad_rmse_ext("value1")`, Type: influxql.Float},
+			},
+		}
+
+		opt := query.ProcessorOptions{
+			Exprs:      []influxql.Expr{hybridqp.MustParseExpr(`ad_rmse_ext("value1")`), hybridqp.MustParseExpr(`median("value2")`)},
+			Dimensions: []string{"name"},
+			Interval:   hybridqp.Interval{Duration: 4 * time.Nanosecond},
+			Ordered:    true,
+			Ascending:  true,
+			ChunkSize:  10,
+		}
+
+		testStreamAggregateTransformBase(
+			t,
+			inChunks, dstChunks,
+			buildSourceRowDataType(), buildDstRowDataTypeAnomalyDetect(),
+			exprOpt, &opt, false,
+		)
+	})
+
+	t.Run("5", func(t *testing.T) {
+		inChunks := buildAnomalyDetectInChunk5()
+		dstChunks := buildDstChunkAnomalyDetect5()
+
+		exprOpt := []hybridqp.ExprOptions{
+			{
+				Expr: &influxql.Call{Name: "ad_rmse_ext", Args: []influxql.Expr{hybridqp.MustParseExpr("value1")}},
+				Ref:  influxql.VarRef{Val: `ad_rmse_ext("value1")`, Type: influxql.Float},
+			},
+		}
+
+		opt := query.ProcessorOptions{
+			Exprs:      []influxql.Expr{hybridqp.MustParseExpr(`ad_rmse_ext("value1")`), hybridqp.MustParseExpr(`median("value2")`)},
+			Dimensions: []string{"name"},
+			Interval:   hybridqp.Interval{Duration: 4 * time.Nanosecond},
+			Ordered:    true,
+			Ascending:  true,
+			ChunkSize:  10,
+		}
+
+		testStreamAggregateTransformBase(
+			t,
+			inChunks, dstChunks,
+			buildSourceRowDataType(), buildDstRowDataTypeAnomalyDetect(),
+			exprOpt, &opt, false,
+		)
+	})
+
+	t.Run("6", func(t *testing.T) {
+		inChunks := buildAnomalyDetectInChunk6()
+		dstChunks := buildDstChunkAnomalyDetect6()
+
+		exprOpt := []hybridqp.ExprOptions{
+			{
+				Expr: &influxql.Call{Name: "ad_rmse_ext", Args: []influxql.Expr{hybridqp.MustParseExpr("value1")}},
+				Ref:  influxql.VarRef{Val: `ad_rmse_ext("value1")`, Type: influxql.Float},
+			},
+		}
+
+		opt := query.ProcessorOptions{
+			Exprs:      []influxql.Expr{hybridqp.MustParseExpr(`ad_rmse_ext("value1")`), hybridqp.MustParseExpr(`median("value2")`)},
+			Dimensions: []string{"name"},
+			Interval:   hybridqp.Interval{Duration: 4 * time.Nanosecond},
+			Ordered:    true,
+			Ascending:  true,
+			ChunkSize:  10,
+		}
+
+		testStreamAggregateTransformBase(
+			t,
+			inChunks, dstChunks,
+			buildSourceRowDataType(), buildDstRowDataTypeAnomalyDetect(),
+			exprOpt, &opt, false,
+		)
+	})
+
+	t.Run("7", func(t *testing.T) {
+		inChunks := buildAnomalyDetectInChunk7()
+		dstChunks := buildDstChunkAnomalyDetect7()
+
+		exprOpt := []hybridqp.ExprOptions{
+			{
+				Expr: &influxql.Call{Name: "ad_rmse_ext", Args: []influxql.Expr{hybridqp.MustParseExpr("value1")}},
+				Ref:  influxql.VarRef{Val: `ad_rmse_ext("value1")`, Type: influxql.Float},
+			},
+		}
+
+		opt := query.ProcessorOptions{
+			Exprs:      []influxql.Expr{hybridqp.MustParseExpr(`ad_rmse_ext("value1")`), hybridqp.MustParseExpr(`median("value2")`)},
+			Dimensions: []string{"name"},
+			Interval:   hybridqp.Interval{Duration: 4 * time.Nanosecond},
+			Ordered:    true,
+			Ascending:  true,
+			ChunkSize:  10,
+		}
+
+		testStreamAggregateTransformBase(
+			t,
+			inChunks, dstChunks,
+			buildSourceRowDataType(), buildDstRowDataTypeAnomalyDetect(),
+			exprOpt, &opt, false,
+		)
+	})
+
+	t.Run("8", func(t *testing.T) {
+		inChunks := buildAnomalyDetectInChunk8()
+		dstChunks := buildDstChunkAnomalyDetect8()
+
+		exprOpt := []hybridqp.ExprOptions{
+			{
+				Expr: &influxql.Call{Name: "ad_rmse_ext", Args: []influxql.Expr{hybridqp.MustParseExpr("value1")}},
+				Ref:  influxql.VarRef{Val: `ad_rmse_ext("value1")`, Type: influxql.Float},
+			},
+		}
+
+		opt := query.ProcessorOptions{
+			Exprs:      []influxql.Expr{hybridqp.MustParseExpr(`ad_rmse_ext("value1")`), hybridqp.MustParseExpr(`median("value2")`)},
+			Dimensions: []string{"name"},
+			Interval:   hybridqp.Interval{Duration: 4 * time.Nanosecond},
+			Ordered:    true,
+			Ascending:  true,
+			ChunkSize:  10,
+		}
+
+		testStreamAggregateTransformBase(
+			t,
+			inChunks, dstChunks,
+			buildSourceRowDataType(), buildDstRowDataTypeAnomalyDetect(),
+			exprOpt, &opt, false,
+		)
+	})
+
+	t.Run("9", func(t *testing.T) {
+		inChunks := buildAnomalyDetectInChunk9()
+		dstChunks := buildDstChunkAnomalyDetect9()
+
+		exprOpt := []hybridqp.ExprOptions{
+			{
+				Expr: &influxql.Call{Name: "ad_rmse_ext", Args: []influxql.Expr{hybridqp.MustParseExpr("value1")}},
+				Ref:  influxql.VarRef{Val: `ad_rmse_ext("value1")`, Type: influxql.Float},
+			},
+		}
+
+		opt := query.ProcessorOptions{
+			Exprs:      []influxql.Expr{hybridqp.MustParseExpr(`ad_rmse_ext("value1")`), hybridqp.MustParseExpr(`median("value2")`)},
+			Dimensions: []string{"name"},
+			Interval:   hybridqp.Interval{Duration: 4 * time.Nanosecond},
+			Ordered:    true,
+			Ascending:  true,
+			ChunkSize:  10,
+		}
+
+		testStreamAggregateTransformBase(
+			t,
+			inChunks, dstChunks,
+			buildSourceRowDataType(), buildDstRowDataTypeAnomalyDetect(),
+			exprOpt, &opt, false,
+		)
+	})
+}
+
 func buildSourceRowDataType() hybridqp.RowDataType {
 	rowDataType := hybridqp.NewRowDataTypeImpl(
 		influxql.VarRef{Val: "value1", Type: influxql.Integer},
@@ -2148,7 +2960,7 @@ func TestStreamAggregateTransform_Multi_Count_Integer_Min_Float(t *testing.T) {
 	source := NewSourceFromMultiChunk(buildSourceRowDataType(), []executor.Chunk{sourceChunk1, sourceChunk2})
 	trans1, _ := executor.NewStreamAggregateTransform(
 		[]hybridqp.RowDataType{buildSourceRowDataType()}, []hybridqp.RowDataType{buildTargetRowDataType()},
-		exprOpt, &opt, false)
+		exprOpt, &opt, &executor.QuerySchema{}, false)
 	sink := NewNilSink(buildTargetRowDataType())
 
 	err := executor.Connect(source.Output, trans1.Inputs[0])
@@ -2350,7 +3162,7 @@ func TestStreamAggregateTransform_Multi_Count_String_Min_Bool(t *testing.T) {
 	source := NewSourceFromMultiChunk(buildSourceRowDataTypeStringBool(), []executor.Chunk{sourceChunk1, sourceChunk2})
 	trans1, _ := executor.NewStreamAggregateTransform(
 		[]hybridqp.RowDataType{buildSourceRowDataTypeStringBool()}, []hybridqp.RowDataType{buildTargetRowDataTypeCountStringBool()},
-		exprOpt, &opt, false)
+		exprOpt, &opt, &executor.QuerySchema{}, false)
 	sink := NewNilSink(buildTargetRowDataTypeCountStringBool())
 
 	err := executor.Connect(source.Output, trans1.Inputs[0])
@@ -2485,7 +3297,7 @@ func TestStreamAggregateTransform_Multi_First_String(t *testing.T) {
 	source := NewSourceFromMultiChunk(buildSourceRowDataTypeFirst(influxql.String), []executor.Chunk{sourceChunk1, sourceChunk2})
 	trans1, _ := executor.NewStreamAggregateTransform(
 		[]hybridqp.RowDataType{buildSourceRowDataTypeFirst(influxql.String)}, []hybridqp.RowDataType{buildTargetRowDataTypeFirst(influxql.String)},
-		exprOpt, &opt, false)
+		exprOpt, &opt, &executor.QuerySchema{}, false)
 	sink := NewNilSink(buildTargetRowDataTypeFirst(influxql.String))
 
 	err := executor.Connect(source.Output, trans1.Inputs[0])
@@ -2637,7 +3449,7 @@ func TestStreamAggregateTransform_Multi_First_Boolean(t *testing.T) {
 	source := NewSourceFromMultiChunk(buildSourceRowDataTypeFirst(influxql.Boolean), []executor.Chunk{sourceChunk1, sourceChunk2})
 	trans1, _ := executor.NewStreamAggregateTransform(
 		[]hybridqp.RowDataType{buildSourceRowDataTypeFirst(influxql.Boolean)}, []hybridqp.RowDataType{buildTargetRowDataTypeFirst(influxql.Boolean)},
-		exprOpt, &opt, false)
+		exprOpt, &opt, &executor.QuerySchema{}, false)
 	sink := NewNilSink(buildTargetRowDataTypeFirst(influxql.Boolean))
 
 	err := executor.Connect(source.Output, trans1.Inputs[0])
@@ -2877,7 +3689,7 @@ func TestStreamAggregateTransformPercentile(t *testing.T) {
 	source := NewSourceFromMultiChunk(buildSourceRowDataType(), []executor.Chunk{sourceChunk1, sourceChunk2})
 	trans1, _ := executor.NewStreamAggregateTransform(
 		[]hybridqp.RowDataType{buildSourceRowDataType()}, []hybridqp.RowDataType{buildTargetRowDataTypePercentile()},
-		exprOpt, &opt, false)
+		exprOpt, &opt, &executor.QuerySchema{}, false)
 	sink := NewNilSink(buildTargetRowDataTypePercentile())
 
 	err := executor.Connect(source.Output, trans1.Inputs[0])
@@ -3005,7 +3817,7 @@ func TestStreamAggregateTransformTop(t *testing.T) {
 	source := NewSourceFromMultiChunk(buildSourceRowDataTypeTop(), []executor.Chunk{sourceChunk1, sourceChunk2})
 	trans1, _ := executor.NewStreamAggregateTransform([]hybridqp.RowDataType{
 		buildSourceRowDataTypeTop()}, []hybridqp.RowDataType{buildTargetRowDataTypeTop()},
-		exprOpt, &opt, false)
+		exprOpt, &opt, &executor.QuerySchema{}, false)
 	sink := NewNilSink(buildTargetRowDataTypeTop())
 
 	err := executor.Connect(source.Output, trans1.Inputs[0])
@@ -3077,7 +3889,7 @@ func TestStreamAggregateTransformTopInteger(t *testing.T) {
 	source := NewSourceFromMultiChunk(buildSourceRowDataTypeTop(), []executor.Chunk{sourceChunk1, sourceChunk2})
 	trans1, _ := executor.NewStreamAggregateTransform([]hybridqp.RowDataType{
 		buildSourceRowDataTypeTop()}, []hybridqp.RowDataType{buildTargetRowDataTypeTopInteger()},
-		exprOpt, &opt, false)
+		exprOpt, &opt, &executor.QuerySchema{}, false)
 	sink := NewNilSink(buildTargetRowDataTypeTopInteger())
 
 	err := executor.Connect(source.Output, trans1.Inputs[0])
@@ -3150,7 +3962,7 @@ func TestStreamAggregateTransformBottomInteger(t *testing.T) {
 	trans1, _ := executor.NewStreamAggregateTransform(
 		[]hybridqp.RowDataType{buildSourceRowDataTypeBottom()},
 		[]hybridqp.RowDataType{buildTargetRowDataTypeBottomInteger()},
-		exprOpt, &opt, false)
+		exprOpt, &opt, &executor.QuerySchema{}, false)
 	sink := NewNilSink(buildTargetRowDataTypeBottomInteger())
 
 	err := executor.Connect(source.Output, trans1.Inputs[0])
@@ -3223,7 +4035,7 @@ func TestStreamAggregateTransformBottom(t *testing.T) {
 	trans1, _ := executor.NewStreamAggregateTransform(
 		[]hybridqp.RowDataType{buildSourceRowDataTypeBottom()},
 		[]hybridqp.RowDataType{buildTargetRowDataTypeBottom()},
-		exprOpt, &opt, false)
+		exprOpt, &opt, &executor.QuerySchema{}, false)
 	sink := NewNilSink(buildTargetRowDataTypeBottom())
 
 	err := executor.Connect(source.Output, trans1.Inputs[0])
@@ -3291,7 +4103,7 @@ func TestStreamAggregateTransformDistinct(t *testing.T) {
 	trans1, _ := executor.NewStreamAggregateTransform(
 		[]hybridqp.RowDataType{buildSourceRowDataTypeDistinct()},
 		[]hybridqp.RowDataType{buildTargetRowDataTypeDistinct()},
-		exprOpt, &opt, false)
+		exprOpt, &opt, &executor.QuerySchema{}, false)
 	sink := NewNilSink(buildTargetRowDataTypeDistinct())
 
 	err := executor.Connect(source.Output, trans1.Inputs[0])
@@ -3363,7 +4175,7 @@ func TestStreamAggregateTransform_Multi_Min_Integer_Max_Float(t *testing.T) {
 	trans1, _ := executor.NewStreamAggregateTransform(
 		[]hybridqp.RowDataType{buildSourceRowDataType()},
 		[]hybridqp.RowDataType{buildTargetRowDataTypeMinMax()},
-		exprOpt, &opt, false)
+		exprOpt, &opt, &executor.QuerySchema{}, false)
 	sink := NewNilSink(buildTargetRowDataTypeMinMax())
 
 	err := executor.Connect(source.Output, trans1.Inputs[0])
@@ -3435,7 +4247,7 @@ func TestStreamAggregateTransformAux(t *testing.T) {
 	trans1, _ := executor.NewStreamAggregateTransform(
 		[]hybridqp.RowDataType{buildSourceRowDataType()},
 		[]hybridqp.RowDataType{buildTargetRowDataTypeAux()},
-		exprOpt, &opt, false)
+		exprOpt, &opt, &executor.QuerySchema{}, false)
 	sink := NewNilSink(buildTargetRowDataTypeAux())
 
 	err := executor.Connect(source.Output, trans1.Inputs[0])
@@ -3489,7 +4301,7 @@ func testStreamAggregateTransformBase(
 		[]hybridqp.RowDataType{inRowDataType},
 		[]hybridqp.RowDataType{outRowDataType},
 		exprOpt,
-		opt, isSubQuery)
+		opt, &executor.QuerySchema{}, isSubQuery)
 	sink := NewNilSink(outRowDataType)
 	err := executor.Connect(source.Output, trans.Inputs[0])
 	if err != nil {
@@ -4459,7 +5271,7 @@ func testStreamAggregateTransformProm(
 		[]hybridqp.RowDataType{inRowDataType},
 		[]hybridqp.RowDataType{outRowDataType},
 		exprOpt,
-		opt, isSubQuery)
+		opt, &executor.QuerySchema{}, isSubQuery)
 	sink := NewNilSink(outRowDataType)
 	err := executor.Connect(source.Output, trans.Inputs[0])
 	if err != nil {
@@ -6453,7 +7265,7 @@ func TestAggregateTransform_ChunkCount_ChunkSize_SeriesCount_IntervalCount_1000_
 		[]hybridqp.RowDataType{buildBenchRowDataType()},
 		[]hybridqp.RowDataType{buildBenchTargetRowDataType()},
 		exprOpt,
-		&opt, false)
+		&opt, &executor.QuerySchema{}, false)
 	sink := NewNilSink(buildBenchTargetRowDataType())
 	err := executor.Connect(source.Output, trans1.Inputs[0])
 	if err != nil {
@@ -6502,7 +7314,7 @@ func TestAggregateTransform_ChunkCount_ChunkSize_SeriesCount_IntervalCount_1000_
 		[]hybridqp.RowDataType{buildBenchRowDataType()},
 		[]hybridqp.RowDataType{buildBenchTargetRowDataType()},
 		exprOpt,
-		&opt, false)
+		&opt, &executor.QuerySchema{}, false)
 	sink := NewNilSink(buildBenchTargetRowDataType())
 	err := executor.Connect(source.Output, trans1.Inputs[0])
 	if err != nil {
@@ -6538,7 +7350,7 @@ func benchmarkStreamAggregateTransform(b *testing.B, chunkCount, ChunkSize, tagP
 			[]hybridqp.RowDataType{srcRowDataType},
 			[]hybridqp.RowDataType{dstRowDataType},
 			exprOpt,
-			opt, false)
+			opt, &executor.QuerySchema{}, false)
 		sink := NewNilSink(dstRowDataType)
 		err := executor.Connect(source.Output, trans1.Inputs[0])
 		if err != nil {
@@ -7241,8 +8053,7 @@ func TestStreamAggregateTransformOGSketchPercentile(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildSrcRowDataTypeOGSketchPercentile(), buildDstRowDataTypeOGSketchPercentile(),
-		exprOpt, &opt,
-		false)
+		exprOpt, &opt, false)
 }
 
 func buildDSTRowDataTypePercentileApprox() hybridqp.RowDataType {
@@ -7375,7 +8186,7 @@ func TestStreamAggregateTransformPercentileCornerCase(t *testing.T) {
 		[]hybridqp.RowDataType{inRowDataType},
 		[]hybridqp.RowDataType{outRowDataType},
 		exprOpt,
-		&opt, false)
+		&opt, &executor.QuerySchema{}, false)
 	assert.EqualError(t, err, fmt.Sprintf("invalid percentile, the value range must be 0 to 100"))
 }
 
@@ -7405,7 +8216,7 @@ func TestStreamAggregateTransformPercentileApproxCornerCase(t *testing.T) {
 		[]hybridqp.RowDataType{inRowDataType},
 		[]hybridqp.RowDataType{outRowDataType},
 		exprOpt,
-		&opt, false)
+		&opt, &executor.QuerySchema{}, false)
 	assert.EqualError(t, err, fmt.Sprintf("invalid percentile, the value range must be 0 to 100"))
 }
 
@@ -7498,8 +8309,7 @@ func TestAggTransformIntegralSingle(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildSrcRowDataTypeSingle(), buildDstRowDataTypeIntegralSingle(),
-		exprOpt, &opt,
-		false)
+		exprOpt, &opt, false)
 }
 
 func buildSrcRowDataTypeSingleInt() hybridqp.RowDataType {
@@ -7567,8 +8377,7 @@ func TestAggTransformIntegralSingleInt(t *testing.T) {
 		t,
 		inChunks, dstChunks,
 		buildSrcRowDataTypeSingleInt(), buildDstRowDataTypeIntegralSingle(),
-		exprOpt, &opt,
-		false)
+		exprOpt, &opt, false)
 }
 
 func buildSourceRowDataTypeTopIntegerUnorderInput() hybridqp.RowDataType {
@@ -7678,7 +8487,7 @@ func TestStreamAggregateTransformTopIntegerUnorderInput(t *testing.T) {
 	source := NewSourceFromMultiChunk(buildSourceRowDataTypeTopIntegerUnorderInput(), []executor.Chunk{sourceChunk1, sourceChunk2})
 	trans1, _ := executor.NewStreamAggregateTransform([]hybridqp.RowDataType{
 		buildSourceRowDataTypeTopIntegerUnorderInput()}, []hybridqp.RowDataType{buildTargetRowDataTypeTopIntegerUnorderInput()},
-		exprOpt, &opt, false)
+		exprOpt, &opt, &executor.QuerySchema{}, false)
 	sink := NewNilSink(buildTargetRowDataTypeTopIntegerUnorderInput())
 
 	err := executor.Connect(source.Output, trans1.Inputs[0])
@@ -7826,7 +8635,7 @@ func TestStreamAggregateTransformTopFloatUnorderInput(t *testing.T) {
 	source := NewSourceFromMultiChunk(buildSourceRowDataTypeTopFloatUnorderInput(), []executor.Chunk{sourceChunk1, sourceChunk2})
 	trans1, _ := executor.NewStreamAggregateTransform([]hybridqp.RowDataType{
 		buildSourceRowDataTypeTopFloatUnorderInput()}, []hybridqp.RowDataType{buildTargetRowDataTypeTopFloatUnorderInput()},
-		exprOpt, &opt, false)
+		exprOpt, &opt, &executor.QuerySchema{}, false)
 	sink := NewNilSink(buildTargetRowDataTypeTopFloatUnorderInput())
 
 	err := executor.Connect(source.Output, trans1.Inputs[0])
@@ -7960,4 +8769,992 @@ func TestStreamAggregateTransformMaxProm(t *testing.T) {
 		},
 		false,
 	)
+}
+
+func buildTrendDetectInChunk() []executor.Chunk {
+
+	inChunks := make([]executor.Chunk, 0, 2)
+	rowDataType := buildSourceRowDataType()
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	inCk1 := b.NewChunk("mst")
+
+	inCk1.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
+	}, []int{0, 3})
+	inCk1.AppendIntervalIndexes([]int{0, 3})
+	inCk1.AppendTimes([]int64{1, 2, 3, 4, 5})
+
+	inCk1.Column(0).AppendIntegerValues([]int64{1, 2, 3, 4})
+	inCk1.Column(0).AppendNilsV2(false, true, true, true, true)
+
+	inCk1.Column(1).AppendFloatValues([]float64{1.0, 3.0, 5.0, 7.0})
+	inCk1.Column(1).AppendNilsV2(false, true, true, true, true)
+
+	// second chunk
+	inCk2 := b.NewChunk("mst")
+
+	inCk2.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=bbb"), *ParseChunkTags("name=ccc"),
+	}, []int{0, 2})
+	inCk2.AppendIntervalIndexes([]int{0, 2})
+	inCk2.AppendTimes([]int64{6, 7, 8, 9, 10})
+
+	inCk2.Column(0).AppendIntegerValues([]int64{5, 6, 7, 8})
+	inCk2.Column(0).AppendNilsV2(true, false, true, true, true)
+
+	inCk2.Column(1).AppendFloatValues([]float64{9.0, 11.0, 13.0, 15.0})
+	inCk2.Column(1).AppendNilsV2(true, false, true, true, true)
+
+	inChunks = append(inChunks, inCk1, inCk2)
+
+	return inChunks
+}
+
+func buildTrendDetectInChunk2() []executor.Chunk {
+	inChunks := make([]executor.Chunk, 0, 2)
+	rowDataType := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "value1", Type: influxql.Integer},
+		influxql.VarRef{Val: "value2", Type: influxql.Float},
+	)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	inCk1 := b.NewChunk("mst")
+
+	inCk1.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
+	}, []int{0, 3})
+	inCk1.AppendIntervalIndexes([]int{0, 3})
+	inCk1.AppendTimes([]int64{1, 2, 3, 1, 2})
+
+	inCk1.Column(0).AppendIntegerValues([]int64{1, 2, 3, 4, 5})
+	inCk1.Column(0).AppendManyNotNil(5)
+
+	// second chunk
+	inCk2 := b.NewChunk("mst")
+
+	inCk2.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=bbb"), *ParseChunkTags("name=ccc"),
+	}, []int{0, 2})
+	inCk2.AppendIntervalIndexes([]int{0, 2})
+	inCk2.AppendTimes([]int64{3, 4, 1, 2, 3})
+
+	inCk2.Column(0).AppendIntegerValues([]int64{6, 7, 8, 9, 10})
+	inCk1.Column(0).AppendManyNotNil(5)
+
+	inChunks = append(inChunks, inCk1, inCk2)
+
+	return inChunks
+}
+
+func buildTrendDetectInChunk3() []executor.Chunk {
+	inChunks := make([]executor.Chunk, 0, 2)
+	rowDataType := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "value1", Type: influxql.Integer},
+		influxql.VarRef{Val: "value2", Type: influxql.Float},
+	)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	inCk1 := b.NewChunk("mst")
+
+	inCk1.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
+	}, []int{0, 3})
+	inCk1.AppendIntervalIndexes([]int{0, 3})
+	inCk1.AppendTimes([]int64{1, 2, 3, 1, 2})
+
+	inCk1.Column(0).AppendIntegerValues([]int64{1, 1, 1, 1, 1})
+	inCk1.Column(0).AppendManyNotNil(5)
+
+	// second chunk
+	inCk2 := b.NewChunk("mst")
+
+	inCk2.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=bbb"), *ParseChunkTags("name=ccc"),
+	}, []int{0, 2})
+	inCk2.AppendIntervalIndexes([]int{0, 2})
+	inCk2.AppendTimes([]int64{3, 4, 1, 2, 3})
+
+	inCk2.Column(0).AppendIntegerValues([]int64{1, 1, 1, 1, 1})
+	inCk1.Column(0).AppendManyNotNil(5)
+
+	inChunks = append(inChunks, inCk1, inCk2)
+
+	return inChunks
+}
+
+func buildTrendDetectInChunk4() []executor.Chunk {
+	inChunks := make([]executor.Chunk, 0, 2)
+	rowDataType := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "value1", Type: influxql.Integer},
+		influxql.VarRef{Val: "value2", Type: influxql.Float},
+	)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	inCk1 := b.NewChunk("mst")
+
+	inCk1.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
+	}, []int{0, 3})
+	inCk1.AppendIntervalIndexes([]int{0, 3})
+	inCk1.AppendTimes([]int64{1, 2, 3, 1, 2})
+
+	inCk1.Column(0).AppendIntegerValues([]int64{0, 10, 100, 0, 10})
+	inCk1.Column(0).AppendManyNotNil(5)
+
+	// second chunk
+	inCk2 := b.NewChunk("mst")
+
+	inCk2.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=bbb"), *ParseChunkTags("name=ccc"),
+	}, []int{0, 2})
+	inCk2.AppendIntervalIndexes([]int{0, 2})
+	inCk2.AppendTimes([]int64{3, 4, 1, 2, 3})
+
+	inCk2.Column(0).AppendIntegerValues([]int64{100, 1000, 0, 10, 100})
+	inCk1.Column(0).AppendManyNotNil(5)
+
+	inChunks = append(inChunks, inCk1, inCk2)
+
+	return inChunks
+}
+
+func buildTrendDetectInChunk5() []executor.Chunk {
+	inChunks := make([]executor.Chunk, 0, 2)
+	rowDataType := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "value1", Type: influxql.Integer},
+		influxql.VarRef{Val: "value2", Type: influxql.Float},
+	)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	inCk1 := b.NewChunk("mst")
+
+	inCk1.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
+	}, []int{0, 3})
+	inCk1.AppendIntervalIndexes([]int{0, 3})
+	inCk1.AppendTimes([]int64{1, 2, 3, 1, 2})
+
+	inCk1.Column(0).AppendIntegerValues([]int64{0, 10, 5, 0, 10})
+	inCk1.Column(0).AppendManyNotNil(5)
+
+	// second chunk
+	inCk2 := b.NewChunk("mst")
+
+	inCk2.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=bbb"), *ParseChunkTags("name=ccc"),
+	}, []int{0, 2})
+	inCk2.AppendIntervalIndexes([]int{0, 2})
+	inCk2.AppendTimes([]int64{3, 4, 1, 2, 3})
+
+	inCk2.Column(0).AppendIntegerValues([]int64{5, 15, 0, 5, 10})
+	inCk1.Column(0).AppendManyNotNil(5)
+
+	inChunks = append(inChunks, inCk1, inCk2)
+
+	return inChunks
+}
+
+func buildTrendDetectInChunk6() []executor.Chunk {
+	inChunks := make([]executor.Chunk, 0, 2)
+	rowDataType := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "value1", Type: influxql.Integer},
+		influxql.VarRef{Val: "value2", Type: influxql.Float},
+	)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	inCk1 := b.NewChunk("mst")
+
+	inCk1.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"),
+	}, []int{0})
+	inCk1.AppendIntervalIndexes([]int{0})
+	inCk1.AppendTimes([]int64{1, 2, 3, 4, 5})
+
+	inCk1.Column(0).AppendIntegerValues([]int64{1, 2, 3, 4, 5})
+	inCk1.Column(0).AppendManyNotNil(5)
+
+	// second chunk
+	inCk2 := b.NewChunk("mst")
+
+	inCk2.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"),
+	}, []int{0})
+	inCk2.AppendIntervalIndexes([]int{0})
+	inCk2.AppendTimes([]int64{6, 7, 8, 9, 10})
+
+	inCk2.Column(0).AppendIntegerValues([]int64{6, 7, 8, 9, 10})
+	inCk1.Column(0).AppendManyNotNil(5)
+
+	inChunks = append(inChunks, inCk1, inCk2)
+
+	return inChunks
+}
+
+func buildTrendDetectInChunk7() []executor.Chunk {
+	inChunks := make([]executor.Chunk, 0, 2)
+	rowDataType := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "value1", Type: influxql.Integer},
+		influxql.VarRef{Val: "value2", Type: influxql.Float},
+	)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	inCk1 := b.NewChunk("mst")
+
+	inCk1.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"),
+	}, []int{0})
+	inCk1.AppendIntervalIndexes([]int{0})
+	inCk1.AppendTimes([]int64{1, 2, 3, 4, 5})
+
+	inCk1.Column(0).AppendIntegerValues([]int64{0, 0, 0, 0, 0})
+	inCk1.Column(0).AppendManyNotNil(5)
+
+	// second chunk
+	inCk2 := b.NewChunk("mst")
+
+	inCk2.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"),
+	}, []int{0})
+	inCk2.AppendIntervalIndexes([]int{0})
+	inCk2.AppendTimes([]int64{6, 7, 8, 9, 10})
+
+	inCk2.Column(0).AppendIntegerValues([]int64{0, 0, 0, 0, 0})
+	inCk1.Column(0).AppendManyNotNil(5)
+
+	inChunks = append(inChunks, inCk1, inCk2)
+
+	return inChunks
+}
+
+func buildTrendDetectInChunk8() []executor.Chunk {
+	inChunks := make([]executor.Chunk, 0, 2)
+	rowDataType := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "value1", Type: influxql.Integer},
+		influxql.VarRef{Val: "value2", Type: influxql.Float},
+	)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	inCk1 := b.NewChunk("mst")
+
+	inCk1.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"),
+	}, []int{0})
+	inCk1.AppendIntervalIndexes([]int{0})
+	inCk1.AppendTimes([]int64{1, 2, 3, 4, 5})
+
+	inCk1.Column(0).AppendIntegerValues([]int64{0, 0, 0, 0, 0})
+	inCk1.Column(0).AppendManyNotNil(5)
+
+	// second chunk
+	inCk2 := b.NewChunk("mst")
+
+	inCk2.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"),
+	}, []int{0})
+	inCk2.AppendIntervalIndexes([]int{0})
+	inCk2.AppendTimes([]int64{6, 7, 8, 9, 10})
+
+	inCk2.Column(0).AppendIntegerValues([]int64{0, 0, 0, 100, 0})
+	inCk1.Column(0).AppendManyNotNil(5)
+
+	inChunks = append(inChunks, inCk1, inCk2)
+
+	return inChunks
+}
+
+func buildTrendDetectInChunk9() []executor.Chunk {
+	inChunks := make([]executor.Chunk, 0, 2)
+	rowDataType := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "value1", Type: influxql.Integer},
+		influxql.VarRef{Val: "value2", Type: influxql.Float},
+	)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	inCk1 := b.NewChunk("mst")
+
+	inCk1.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"),
+	}, []int{0})
+	inCk1.AppendIntervalIndexes([]int{0})
+	inCk1.AppendTimes([]int64{1, 2, 3, 4, 5})
+
+	inCk1.Column(0).AppendIntegerValues([]int64{0, 0, 0, 0, 0})
+	inCk1.Column(0).AppendManyNotNil(5)
+
+	// second chunk
+	inCk2 := b.NewChunk("mst")
+
+	inCk2.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"),
+	}, []int{0})
+	inCk2.AppendIntervalIndexes([]int{0})
+	inCk2.AppendTimes([]int64{6, 7, 8, 9, 10})
+
+	inCk2.Column(0).AppendIntegerValues([]int64{0, 100, 100, 100, 0})
+	inCk1.Column(0).AppendManyNotNil(5)
+
+	inChunks = append(inChunks, inCk1, inCk2)
+
+	return inChunks
+}
+
+func buildDstRowDataTypeTrendDetect() hybridqp.RowDataType {
+	rowDataType := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "regr_slope(\"value1\")", Type: influxql.Float},
+		influxql.VarRef{Val: "regr_slope(\"value2\")", Type: influxql.Float},
+	)
+
+	return rowDataType
+}
+
+func buildDstChunkTrendDetect() []executor.Chunk {
+	rowDataType := buildDstRowDataTypeMedian()
+	dstChunks := make([]executor.Chunk, 0, 1)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	chunk := b.NewChunk("mst")
+
+	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
+		*ParseChunkTags("name=ccc")}, []int{0, 1, 2})
+	chunk.AppendIntervalIndexes([]int{0, 1, 2})
+	chunk.AppendTimes([]int64{1, 6, 8})
+
+	chunk.Column(0).AppendFloatValues([]float64{1.0, 1.0, 1.0})
+	chunk.Column(0).AppendManyNotNil(3)
+	chunk.Column(1).AppendFloatValues([]float64{2.0, 2.0, 2.0})
+	chunk.Column(1).AppendManyNotNil(3)
+
+	dstChunks = append(dstChunks, chunk)
+
+	return dstChunks
+}
+
+func buildDstChunkTrendDetect2() []executor.Chunk {
+	rowDataType := buildDstRowDataTypeAnomalyDetect2()
+	dstChunks := make([]executor.Chunk, 0, 1)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	chunk := b.NewChunk("mst")
+
+	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
+		*ParseChunkTags("name=ccc")}, []int{0, 1, 2})
+	chunk.AppendIntervalIndexes([]int{0, 1, 2})
+	chunk.AppendTimes([]int64{1, 1, 1})
+
+	chunk.Column(0).AppendFloatValues([]float64{1, 1, 1})
+	chunk.Column(0).AppendManyNotNil(3)
+
+	dstChunks = append(dstChunks, chunk)
+
+	return dstChunks
+}
+
+func buildDstChunkTrendDetect3() []executor.Chunk {
+	rowDataType := buildDstRowDataTypeAnomalyDetect2()
+	dstChunks := make([]executor.Chunk, 0, 1)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	chunk := b.NewChunk("mst")
+
+	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
+		*ParseChunkTags("name=ccc")}, []int{0, 1, 2})
+	chunk.AppendIntervalIndexes([]int{0, 1, 2})
+	chunk.AppendTimes([]int64{1, 1, 1})
+
+	chunk.Column(0).AppendFloatValues([]float64{0, 0, 0})
+	chunk.Column(0).AppendManyNotNil(3)
+
+	dstChunks = append(dstChunks, chunk)
+
+	return dstChunks
+}
+
+func buildDstChunkTrendDetect4() []executor.Chunk {
+	rowDataType := buildDstRowDataTypeAnomalyDetect2()
+	dstChunks := make([]executor.Chunk, 0, 1)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	chunk := b.NewChunk("mst")
+
+	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
+		*ParseChunkTags("name=ccc")}, []int{0, 1, 2})
+	chunk.AppendIntervalIndexes([]int{0, 1, 2})
+	chunk.AppendTimes([]int64{1, 1, 1})
+
+	chunk.Column(0).AppendFloatValues([]float64{50, 309, 50})
+	chunk.Column(0).AppendManyNotNil(3)
+
+	dstChunks = append(dstChunks, chunk)
+
+	return dstChunks
+}
+
+func buildDstChunkTrendDetect5() []executor.Chunk {
+	rowDataType := buildDstRowDataTypeAnomalyDetect2()
+	dstChunks := make([]executor.Chunk, 0, 1)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	chunk := b.NewChunk("mst")
+
+	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa"), *ParseChunkTags("name=bbb"),
+		*ParseChunkTags("name=ccc")}, []int{0, 1, 2})
+	chunk.AppendIntervalIndexes([]int{0, 1, 2})
+	chunk.AppendTimes([]int64{1, 1, 1})
+
+	chunk.Column(0).AppendFloatValues([]float64{2.5, 4, 5})
+	chunk.Column(0).AppendManyNotNil(3)
+
+	dstChunks = append(dstChunks, chunk)
+
+	return dstChunks
+}
+
+func buildDstChunkTrendDetect6() []executor.Chunk {
+	rowDataType := buildDstRowDataTypeAnomalyDetect2()
+	dstChunks := make([]executor.Chunk, 0, 1)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	chunk := b.NewChunk("mst")
+
+	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa")}, []int{0})
+	chunk.AppendIntervalIndexes([]int{0})
+	chunk.AppendTimes([]int64{1})
+
+	chunk.Column(0).AppendFloatValues([]float64{1})
+	chunk.Column(0).AppendManyNotNil(1)
+
+	dstChunks = append(dstChunks, chunk)
+
+	return dstChunks
+}
+func buildDstChunkTrendDetect7() []executor.Chunk {
+	rowDataType := buildDstRowDataTypeAnomalyDetect2()
+	dstChunks := make([]executor.Chunk, 0, 1)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	chunk := b.NewChunk("mst")
+
+	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa")}, []int{0})
+	chunk.AppendIntervalIndexes([]int{0})
+	chunk.AppendTimes([]int64{1})
+
+	chunk.Column(0).AppendFloatValues([]float64{0})
+	chunk.Column(0).AppendManyNotNil(1)
+
+	dstChunks = append(dstChunks, chunk)
+
+	return dstChunks
+}
+func buildDstChunkTrendDetect8() []executor.Chunk {
+	rowDataType := buildDstRowDataTypeAnomalyDetect2()
+	dstChunks := make([]executor.Chunk, 0, 1)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	chunk := b.NewChunk("mst")
+
+	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa")}, []int{0})
+	chunk.AppendIntervalIndexes([]int{0})
+	chunk.AppendTimes([]int64{1})
+
+	chunk.Column(0).AppendFloatValues([]float64{4.242424242424242})
+	chunk.Column(0).AppendManyNotNil(1)
+
+	dstChunks = append(dstChunks, chunk)
+
+	return dstChunks
+}
+func buildDstChunkTrendDetect9() []executor.Chunk {
+	rowDataType := buildDstRowDataTypeAnomalyDetect2()
+	dstChunks := make([]executor.Chunk, 0, 1)
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	chunk := b.NewChunk("mst")
+
+	chunk.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("name=aaa")}, []int{0})
+	chunk.AppendIntervalIndexes([]int{0})
+	chunk.AppendTimes([]int64{1})
+
+	chunk.Column(0).AppendFloatValues([]float64{9.090909090909092})
+	chunk.Column(0).AppendManyNotNil(1)
+
+	dstChunks = append(dstChunks, chunk)
+
+	return dstChunks
+}
+
+func TestStreamAggregateTransformTrendDetect(t *testing.T) {
+	t.Run("1", func(t *testing.T) {
+		inChunks := buildTrendDetectInChunk()
+		dstChunks := buildDstChunkTrendDetect()
+
+		exprOpt := []hybridqp.ExprOptions{
+			{
+				Expr: &influxql.Call{Name: "regr_slope", Args: []influxql.Expr{hybridqp.MustParseExpr("value1")}},
+				Ref:  influxql.VarRef{Val: `regr_slope("value1")`, Type: influxql.Float},
+			},
+			{
+				Expr: &influxql.Call{Name: "regr_slope", Args: []influxql.Expr{hybridqp.MustParseExpr("value2")}},
+				Ref:  influxql.VarRef{Val: `regr_slope("value2")`, Type: influxql.Float},
+			},
+		}
+
+		opt := query.ProcessorOptions{
+			Exprs:      []influxql.Expr{hybridqp.MustParseExpr(`regr_slope("value1")`), hybridqp.MustParseExpr(`regr_slope("value2")`)},
+			Dimensions: []string{"name"},
+			Interval:   hybridqp.Interval{Duration: 4 * time.Nanosecond},
+			Ordered:    true,
+			Ascending:  true,
+			ChunkSize:  10,
+		}
+
+		testStreamAggregateTransformBase(
+			t,
+			inChunks, dstChunks,
+			buildSourceRowDataType(), buildDstRowDataTypeTrendDetect(),
+			exprOpt, &opt, false,
+		)
+	})
+
+	t.Run("2", func(t *testing.T) {
+		inChunks := buildTrendDetectInChunk2()
+		dstChunks := buildDstChunkTrendDetect2()
+
+		exprOpt := []hybridqp.ExprOptions{
+			{
+				Expr: &influxql.Call{Name: "regr_slope", Args: []influxql.Expr{hybridqp.MustParseExpr("value1")}},
+				Ref:  influxql.VarRef{Val: `regr_slope("value1")`, Type: influxql.Float},
+			},
+		}
+
+		opt := query.ProcessorOptions{
+			Exprs:      []influxql.Expr{hybridqp.MustParseExpr(`regr_slope("value1")`), hybridqp.MustParseExpr(`regr_slope("value2")`)},
+			Dimensions: []string{"name"},
+			Interval:   hybridqp.Interval{Duration: 4 * time.Nanosecond},
+			Ordered:    true,
+			Ascending:  true,
+			ChunkSize:  10,
+		}
+
+		testStreamAggregateTransformBase(
+			t,
+			inChunks, dstChunks,
+			buildSourceRowDataType(), buildDstRowDataTypeTrendDetect(),
+			exprOpt, &opt, false,
+		)
+	})
+
+	t.Run("3", func(t *testing.T) {
+		inChunks := buildTrendDetectInChunk3()
+		dstChunks := buildDstChunkTrendDetect3()
+
+		exprOpt := []hybridqp.ExprOptions{
+			{
+				Expr: &influxql.Call{Name: "regr_slope", Args: []influxql.Expr{hybridqp.MustParseExpr("value1")}},
+				Ref:  influxql.VarRef{Val: `regr_slope("value1")`, Type: influxql.Float},
+			},
+		}
+
+		opt := query.ProcessorOptions{
+			Exprs:      []influxql.Expr{hybridqp.MustParseExpr(`regr_slope("value1")`), hybridqp.MustParseExpr(`regr_slope("value2")`)},
+			Dimensions: []string{"name"},
+			Interval:   hybridqp.Interval{Duration: 4 * time.Nanosecond},
+			Ordered:    true,
+			Ascending:  true,
+			ChunkSize:  10,
+		}
+
+		testStreamAggregateTransformBase(
+			t,
+			inChunks, dstChunks,
+			buildSourceRowDataType(), buildDstRowDataTypeTrendDetect(),
+			exprOpt, &opt, false,
+		)
+	})
+
+	t.Run("4", func(t *testing.T) {
+		inChunks := buildTrendDetectInChunk4()
+		dstChunks := buildDstChunkTrendDetect4()
+
+		exprOpt := []hybridqp.ExprOptions{
+			{
+				Expr: &influxql.Call{Name: "regr_slope", Args: []influxql.Expr{hybridqp.MustParseExpr("value1")}},
+				Ref:  influxql.VarRef{Val: `regr_slope("value1")`, Type: influxql.Float},
+			},
+		}
+
+		opt := query.ProcessorOptions{
+			Exprs:      []influxql.Expr{hybridqp.MustParseExpr(`regr_slope("value1")`), hybridqp.MustParseExpr(`regr_slope("value2")`)},
+			Dimensions: []string{"name"},
+			Interval:   hybridqp.Interval{Duration: 4 * time.Nanosecond},
+			Ordered:    true,
+			Ascending:  true,
+			ChunkSize:  10,
+		}
+
+		testStreamAggregateTransformBase(
+			t,
+			inChunks, dstChunks,
+			buildSourceRowDataType(), buildDstRowDataTypeTrendDetect(),
+			exprOpt, &opt, false,
+		)
+	})
+
+	t.Run("5", func(t *testing.T) {
+		inChunks := buildTrendDetectInChunk5()
+		dstChunks := buildDstChunkTrendDetect5()
+
+		exprOpt := []hybridqp.ExprOptions{
+			{
+				Expr: &influxql.Call{Name: "regr_slope", Args: []influxql.Expr{hybridqp.MustParseExpr("value1")}},
+				Ref:  influxql.VarRef{Val: `regr_slope("value1")`, Type: influxql.Float},
+			},
+		}
+
+		opt := query.ProcessorOptions{
+			Exprs:      []influxql.Expr{hybridqp.MustParseExpr(`regr_slope("value1")`), hybridqp.MustParseExpr(`regr_slope("value2")`)},
+			Dimensions: []string{"name"},
+			Interval:   hybridqp.Interval{Duration: 4 * time.Nanosecond},
+			Ordered:    true,
+			Ascending:  true,
+			ChunkSize:  10,
+		}
+
+		testStreamAggregateTransformBase(
+			t,
+			inChunks, dstChunks,
+			buildSourceRowDataType(), buildDstRowDataTypeTrendDetect(),
+			exprOpt, &opt, false,
+		)
+	})
+
+	t.Run("6", func(t *testing.T) {
+		inChunks := buildTrendDetectInChunk6()
+		dstChunks := buildDstChunkTrendDetect6()
+
+		exprOpt := []hybridqp.ExprOptions{
+			{
+				Expr: &influxql.Call{Name: "regr_slope", Args: []influxql.Expr{hybridqp.MustParseExpr("value1")}},
+				Ref:  influxql.VarRef{Val: `regr_slope("value1")`, Type: influxql.Float},
+			},
+		}
+
+		opt := query.ProcessorOptions{
+			Exprs:      []influxql.Expr{hybridqp.MustParseExpr(`regr_slope("value1")`), hybridqp.MustParseExpr(`regr_slope("value2")`)},
+			Dimensions: []string{"name"},
+			Interval:   hybridqp.Interval{Duration: 4 * time.Nanosecond},
+			Ordered:    true,
+			Ascending:  true,
+			ChunkSize:  10,
+		}
+
+		testStreamAggregateTransformBase(
+			t,
+			inChunks, dstChunks,
+			buildSourceRowDataType(), buildDstRowDataTypeTrendDetect(),
+			exprOpt, &opt, false,
+		)
+	})
+
+	t.Run("7", func(t *testing.T) {
+		inChunks := buildTrendDetectInChunk7()
+		dstChunks := buildDstChunkTrendDetect7()
+
+		exprOpt := []hybridqp.ExprOptions{
+			{
+				Expr: &influxql.Call{Name: "regr_slope", Args: []influxql.Expr{hybridqp.MustParseExpr("value1")}},
+				Ref:  influxql.VarRef{Val: `regr_slope("value1")`, Type: influxql.Float},
+			},
+		}
+
+		opt := query.ProcessorOptions{
+			Exprs:      []influxql.Expr{hybridqp.MustParseExpr(`regr_slope("value1")`), hybridqp.MustParseExpr(`regr_slope("value2")`)},
+			Dimensions: []string{"name"},
+			Interval:   hybridqp.Interval{Duration: 4 * time.Nanosecond},
+			Ordered:    true,
+			Ascending:  true,
+			ChunkSize:  10,
+		}
+
+		testStreamAggregateTransformBase(
+			t,
+			inChunks, dstChunks,
+			buildSourceRowDataType(), buildDstRowDataTypeTrendDetect(),
+			exprOpt, &opt, false,
+		)
+	})
+
+	t.Run("8", func(t *testing.T) {
+		inChunks := buildTrendDetectInChunk8()
+		dstChunks := buildDstChunkTrendDetect8()
+
+		exprOpt := []hybridqp.ExprOptions{
+			{
+				Expr: &influxql.Call{Name: "regr_slope", Args: []influxql.Expr{hybridqp.MustParseExpr("value1")}},
+				Ref:  influxql.VarRef{Val: `regr_slope("value1")`, Type: influxql.Float},
+			},
+		}
+
+		opt := query.ProcessorOptions{
+			Exprs:      []influxql.Expr{hybridqp.MustParseExpr(`regr_slope("value1")`), hybridqp.MustParseExpr(`regr_slope("value2")`)},
+			Dimensions: []string{"name"},
+			Interval:   hybridqp.Interval{Duration: 4 * time.Nanosecond},
+			Ordered:    true,
+			Ascending:  true,
+			ChunkSize:  10,
+		}
+
+		testStreamAggregateTransformBase(
+			t,
+			inChunks, dstChunks,
+			buildSourceRowDataType(), buildDstRowDataTypeTrendDetect(),
+			exprOpt, &opt, false,
+		)
+	})
+
+	t.Run("9", func(t *testing.T) {
+		inChunks := buildTrendDetectInChunk9()
+		dstChunks := buildDstChunkTrendDetect9()
+
+		exprOpt := []hybridqp.ExprOptions{
+			{
+				Expr: &influxql.Call{Name: "regr_slope", Args: []influxql.Expr{hybridqp.MustParseExpr("value1")}},
+				Ref:  influxql.VarRef{Val: `regr_slope("value1")`, Type: influxql.Float},
+			},
+		}
+
+		opt := query.ProcessorOptions{
+			Exprs:      []influxql.Expr{hybridqp.MustParseExpr(`regr_slope("value1")`), hybridqp.MustParseExpr(`regr_slope("value2")`)},
+			Dimensions: []string{"name"},
+			Interval:   hybridqp.Interval{Duration: 4 * time.Nanosecond},
+			Ordered:    true,
+			Ascending:  true,
+			ChunkSize:  10,
+		}
+
+		testStreamAggregateTransformBase(
+			t,
+			inChunks, dstChunks,
+			buildSourceRowDataType(), buildDstRowDataTypeTrendDetect(),
+			exprOpt, &opt, false,
+		)
+	})
+}
+
+type MockSchema struct {
+	mapping map[influxql.Expr]influxql.VarRef
+}
+
+func (s *MockSchema) Mapping() map[influxql.Expr]influxql.VarRef {
+	return s.mapping
+}
+
+func buildRCAInChunk() []executor.Chunk {
+	inChunks := make([]executor.Chunk, 0, 2)
+	rowDataType := buildSourceRowDataTypeRCA()
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	inCk1 := b.NewChunk("alarm_table")
+
+	inCk1.AppendTagsAndIndexes([]executor.ChunkTags{
+		*ParseChunkTags("entity_id=ELB,name=name1,entity_name=b1,region_id=c1,az=az1,service=d1,microservice=ms1,id=al-xxx-01,record_id=id1,status=status1,alarm_level=2,alarm_rule_id=al-xxx-01,alarm_name=TC_CES_FunctionBaseline_Alarm_008,alarm_type=ALL_INSTANCE,resource_provider=rp1"),
+		*ParseChunkTags("entity_id=Nginx-ingress1,name=name1,entity_name=b1,region_id=c1,az=az1,service=d1,microservice=ms1,id=al-xxx-01,record_id=id1,status=status1,alarm_level=2,alarm_rule_id=al-xxx-01,alarm_name=TC_CES_FunctionBaseline_Alarm_008,alarm_type=ALL_INSTANCE,resource_provider=rp1"),
+	}, []int{0, 5})
+	inCk1.AppendIntervalIndexes([]int{0, 5})
+	inCk1.AppendTimes([]int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10})
+
+	inCk1.Column(0).AppendIntegerValues([]int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10})
+	inCk1.Column(0).AppendManyNotNil(10)
+	inCk1.Column(1).AppendStringValues([]string{"id1", "id2", "id3", "id4", "id5", "id6", "id7", "id8", "id9", "id10"})
+	inCk1.Column(1).AppendManyNotNil(10)
+	inCk1.Column(2).AppendStringValues([]string{"id1", "id2", "id3", "id4", "id5", "id6", "id7", "id8", "id9", "id10"})
+	inCk1.Column(2).AppendManyNotNil(10)
+	inCk1.Column(3).AppendStringValues([]string{"id1", "id2", "id3", "id4", "id5", "id6", "id7", "id8", "id9", "id10"})
+	inCk1.Column(3).AppendManyNotNil(10)
+	inCk1.Column(4).AppendStringValues([]string{"id1", "id2", "id3", "id4", "id5", "id6", "id7", "id8", "id9", "id10"})
+	inCk1.Column(4).AppendManyNotNil(10)
+	inCk1.Column(5).AppendStringValues([]string{"ELB", "ELB", "ELB", "ELB", "ELB", "Nginx-ingress1", "Nginx-ingress1", "Nginx-ingress1", "Nginx-ingress1", "Nginx-ingress1"})
+	inCk1.Column(5).AppendManyNotNil(10)
+	inCk1.Column(6).AppendStringValues([]string{"alarm", "alarm", "alarm", "alarm", "alarm", "alarm", "alarm", "alarm", "alarm", "alarm"})
+	inCk1.Column(6).AppendManyNotNil(10)
+	inCk1.Column(7).AppendStringValues([]string{`{"alarm_type":"ALL_INSTANCE","start_time":1}`, `{"alarm_type":"ALL_INSTANCE","start_time":1}`, `{"alarm_type":"ALL_INSTANCE","start_time":1}`, `{"alarm_type":"ALL_INSTANCE","start_time":1}`, `{"alarm_type":"ALL_INSTANCE","start_time":1}`, `{"alarm_type":"ALL_INSTANCE","start_time":1}`, `{"alarm_type":"ALL_INSTANCE","start_time":1}`, `{"alarm_type":"ALL_INSTANCE","start_time":1}`, `{"alarm_type":"ALL_INSTANCE","start_time":1}`, `{"alarm_type":"ALL_INSTANCE","start_time":1}`})
+	inCk1.Column(7).AppendManyNotNil(10)
+
+	graph := &executor.Graph{
+		Nodes: make(map[string]executor.GraphNode),
+		Edges: make(map[string]executor.GraphEdge),
+	}
+	graph.CreateGraph(mockGetTimeGraph())
+	inCk1.SetGraph(graph)
+
+	//// second chunk
+	//inCk2 := b.NewChunk("mst")
+	//
+	//inCk2.AppendTagsAndIndexes([]executor.ChunkTags{
+	//	*ParseChunkTags("name=bbb"), *ParseChunkTags("name=ccc"),
+	//}, []int{0, 2})
+	//inCk2.AppendIntervalIndexes([]int{0, 2})
+	//inCk2.AppendTimes([]int64{6, 7, 8, 9, 10})
+	//
+	//inCk2.Column(0).AppendIntegerValues([]int64{5, 6, 7, 8})
+	//inCk2.Column(0).AppendNilsV2(true, false, true, true, true)
+	//
+	//inCk2.Column(1).AppendFloatValues([]float64{9.0, 11.0, 13.0, 15.0})
+	//inCk2.Column(1).AppendNilsV2(true, false, true, true, true)
+	//
+	inChunks = append(inChunks, inCk1)
+
+	return inChunks
+}
+
+func buildSourceRowDataTypeRCA() hybridqp.RowDataType {
+	rowDataType := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "value1", Type: influxql.Integer},
+		influxql.VarRef{Val: "id", Type: influxql.String},
+		influxql.VarRef{Val: "name", Type: influxql.String},
+		influxql.VarRef{Val: "level", Type: influxql.String},
+		influxql.VarRef{Val: "rule_id", Type: influxql.String},
+		influxql.VarRef{Val: "entity_id", Type: influxql.String},
+		influxql.VarRef{Val: "type", Type: influxql.String},
+		influxql.VarRef{Val: "annotations", Type: influxql.String},
+	)
+
+	return rowDataType
+}
+
+func buildDstRowDataTypeRCA() hybridqp.RowDataType {
+	rowDataType := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: `rca("value1",'{"task": {"metadata":{"core_entity_id": "ELB"}}}')`, Type: influxql.Float},
+		influxql.VarRef{Val: "id", Type: influxql.String},
+		influxql.VarRef{Val: "name", Type: influxql.String},
+		influxql.VarRef{Val: "level", Type: influxql.String},
+		influxql.VarRef{Val: "rule_id", Type: influxql.String},
+		influxql.VarRef{Val: "entity_id", Type: influxql.String},
+		influxql.VarRef{Val: "type", Type: influxql.String},
+		influxql.VarRef{Val: "annotations", Type: influxql.String},
+	)
+
+	return rowDataType
+}
+func TestStreamAggregateTransformRCA(t *testing.T) {
+	t.Run("1", func(t *testing.T) {
+		inChunks := buildRCAInChunk()
+		dstChunks := buildDstChunkTrendDetect()
+
+		exprOpt := []hybridqp.ExprOptions{
+			{
+				Expr: &influxql.Call{Name: "rca", Args: []influxql.Expr{hybridqp.MustParseExpr("value1"), hybridqp.MustParseExpr(`'{"task": {"metadata":{"core_entity_id": "ELB"}}}'`)}},
+				Ref:  influxql.VarRef{Val: `rca("value1",'{"task": {"metadata":{"core_entity_id": "ELB"}}}')`, Type: influxql.Float},
+			},
+		}
+
+		opt := query.ProcessorOptions{
+			Exprs:      []influxql.Expr{hybridqp.MustParseExpr(`rca("value1")`)},
+			Dimensions: []string{"name"},
+			Interval:   hybridqp.Interval{Duration: 4 * time.Nanosecond},
+			Ordered:    true,
+			Ascending:  true,
+			ChunkSize:  10,
+		}
+		schema := &MockSchema{
+			mapping: map[influxql.Expr]influxql.VarRef{
+				&influxql.VarRef{Val: "value1", Type: influxql.String}:      {Val: "rca(\"value1\",'{\"task\": {\"metadata\":{\"core_entity_id\": \"ELB\"}}}')", Type: influxql.String},
+				&influxql.VarRef{Val: "id", Type: influxql.String}:          {Val: "id", Type: influxql.String},
+				&influxql.VarRef{Val: "name", Type: influxql.String}:        {Val: "name", Type: influxql.String},
+				&influxql.VarRef{Val: "level", Type: influxql.String}:       {Val: "level", Type: influxql.String},
+				&influxql.VarRef{Val: "rule_id", Type: influxql.String}:     {Val: "rule_id", Type: influxql.String},
+				&influxql.VarRef{Val: "entity_id", Type: influxql.String}:   {Val: "entity_id", Type: influxql.String},
+				&influxql.VarRef{Val: "type", Type: influxql.String}:        {Val: "type", Type: influxql.String},
+				&influxql.VarRef{Val: "annotations", Type: influxql.String}: {Val: `annotations`},
+			},
+		}
+
+		testStreamAggregateTransformGraph(
+			t,
+			inChunks, dstChunks,
+			buildSourceRowDataTypeRCA(), buildDstRowDataTypeRCA(),
+			exprOpt, &opt, schema, false,
+		)
+	})
+}
+
+func testStreamAggregateTransformGraph(
+	t *testing.T,
+	inChunks []executor.Chunk, dstChunks []executor.Chunk,
+	inRowDataType, outRowDataType hybridqp.RowDataType,
+	exprOpt []hybridqp.ExprOptions, opt *query.ProcessorOptions,
+	schema *MockSchema,
+	isSubQuery bool,
+) {
+	if schema == nil {
+		schema = &MockSchema{}
+	}
+	// generate each executor node node to build a dag.
+	source := NewSourceFromMultiChunk(inRowDataType, inChunks)
+	trans, err := executor.NewStreamAggregateTransform(
+		[]hybridqp.RowDataType{inRowDataType},
+		[]hybridqp.RowDataType{outRowDataType},
+		exprOpt,
+		opt, schema, isSubQuery)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink := NewNilSink(outRowDataType)
+	err = executor.Connect(source.Output, trans.Inputs[0])
+	if err != nil {
+		t.Fatalf("connect error")
+	}
+	err = executor.Connect(trans.Outputs[0], sink.Input)
+	if err != nil {
+		t.Fatalf("connect error")
+	}
+	var processors executor.Processors
+	processors = append(processors, source)
+	processors = append(processors, trans)
+	processors = append(processors, sink)
+
+	// build the pipeline executor from the dag
+	executors := executor.NewPipelineExecutor(processors)
+	err = executors.Execute(context.Background())
+	if err != nil {
+		t.Fatalf("connect error")
+	}
+	executors.Release()
+
+	// check the result
+	outChunks := sink.Chunks
+	if len(dstChunks) != len(outChunks) {
+		t.Fatalf("the chunk number is not the same as the target: %d != %d\n", len(dstChunks), len(outChunks))
+	}
+	if outChunks[0].GetGraph() == nil {
+		t.Fatal("outChunk graph should not be nil")
+	}
 }

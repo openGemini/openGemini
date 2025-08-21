@@ -129,9 +129,6 @@ func (cmd *Command) InitConfig(conf config.Config, path string) error {
 		if err := config.SetHaPolicy(common.HaPolicy); err != nil {
 			return err
 		}
-		if common.CryptoType == "pem" {
-			crypto.InitPassKeyDecipher()
-		}
 		crypto.Initialize(common.CryptoConfig)
 		config.SetProductType(common.ProductType)
 		config.SetCommon(*common)
@@ -159,7 +156,7 @@ func Run(args []string, commands ...*Command) {
 		return
 	}
 
-	stat.SetVersion(commands[0].Info.StatVersion())
+	stat.RuntimeIns().SetVersion(commands[0].Info.StatVersion())
 	name, args := cmd.ParseCommandName(args)
 
 	// Extract name from args.

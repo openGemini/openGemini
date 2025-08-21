@@ -122,7 +122,12 @@ func (idx *TextIndex) Open() error {
 	mstDirs, err := fileops.ReadDir(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return fileops.MkdirAll(path, 0750)
+			mkdirerr := fileops.MkdirAll(path, 0750)
+			if mkdirerr != nil {
+				return mkdirerr
+			}
+			idx.isOpen = true
+			return nil
 		}
 		return err
 	}
@@ -318,12 +323,11 @@ func exprDeepEqual(expr0, expr1 influxql.Expr) bool {
 }
 
 // The Filter for each ID of the srcSet is the same.
-func (idx *TextIndex) SearchTextIndex(name []byte, srcSet *TagSetInfo) (*TagSetInfo, error) {
-	if len(srcSet.IDs) == 0 || srcSet.Filters[0] == nil {
+func (idx *TextIndex) SearchTextIndex(name []byte, srcSet TagSetEx, ids []uint64) (TagSetEx, error) {
+	if srcSet.Len() == 0 || srcSet.GetFilters(0) == nil {
 		return srcSet, nil
 	}
-
-	invert, err := idx.SearchTextIndexByExpr(string(name), srcSet.IDs, srcSet.Filters[0])
+	invert, err := idx.SearchTextIndexByExpr(string(name), ids, srcSet.GetFilters(0))
 	if err != nil {
 		if err == ErrTextExpr {
 			return srcSet, nil
@@ -333,13 +337,13 @@ func (idx *TextIndex) SearchTextIndex(name []byte, srcSet *TagSetInfo) (*TagSetI
 
 	tagSet := new(TagSetInfo)
 	tagSet.RowFilters = clv.NewRowFilters()
-	for i, sid := range srcSet.IDs {
+	for _, srcTagSetElem := range srcSet.TagSetItems() {
 		filter := invert.GetFilter()
-		rowFilter := invert.GetRowFilterBySid(sid)
+		rowFilter := invert.GetRowFilterBySid(srcTagSetElem.ID)
 		if filter == nil && rowFilter == nil {
 			continue
 		}
-		tagSet.Append(sid, srcSet.SeriesKeys[i], filter, srcSet.TagsVec[i], rowFilter)
+		tagSet.Append(srcTagSetElem.ID, srcTagSetElem.SeriesKey, filter, srcTagSetElem.TagsVec, rowFilter)
 	}
 
 	return tagSet, nil
@@ -360,24 +364,32 @@ func (idx *TextIndex) Search(primaryIndex PrimaryIndex, span *tracing.Span, name
 	}
 
 	var preFilter influxql.Expr
+	var ids []uint64
 	sortedTagsSets := make(GroupSeries, 0, len(groupSeries))
+	if len(groupSeries) == 0 {
+		return sortedTagsSets, nil
+	}
+	ids = make([]uint64, 0, groupSeries[0].Len())
 	for _, group := range groupSeries {
 		tagSet := new(TagSetInfo)
-		for i := range group.IDs {
-			if i != 0 && !exprDeepEqual(group.Filters[i], preFilter) {
-				tmpTagSet, err := idx.SearchTextIndex(name, tagSet)
+		ids = ids[:0]
+		for i, tagSetItem := range group.TagSetItems() {
+			if i != 0 && !exprDeepEqual(tagSetItem.Filter, preFilter) {
+				tmpTagSet, err := idx.SearchTextIndex(name, tagSet, ids)
 				if err != nil {
 					return nil, err
 				}
 				sortedTagsSets = append(sortedTagsSets, tmpTagSet)
 				tagSet = new(TagSetInfo)
+				ids = ids[:0]
 			}
-			tagSet.Append(group.IDs[i], group.SeriesKeys[i], group.Filters[i], group.TagsVec[i], nil)
-			preFilter = group.Filters[i]
+			ids = append(ids, tagSetItem.ID)
+			tagSet.Append(tagSetItem.ID, tagSetItem.SeriesKey, tagSetItem.Filter, tagSetItem.TagsVec, nil)
+			preFilter = tagSetItem.Filter
 		}
 		// the last one
-		if len(tagSet.IDs) > 0 {
-			tmpTagSet, err := idx.SearchTextIndex(name, tagSet)
+		if len(tagSet.TagSetInfoItems) > 0 {
+			tmpTagSet, err := idx.SearchTextIndex(name, tagSet, ids)
 			if err != nil {
 				return nil, err
 			}

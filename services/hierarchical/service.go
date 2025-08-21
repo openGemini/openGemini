@@ -21,6 +21,7 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
@@ -30,12 +31,15 @@ import (
 
 type metaClient interface {
 	UpdateShardInfoTier(shardID uint64, tier uint64, dbName, rpName string) error
+	UpdateIndexInfoTier(indexId uint64, tier uint64, dbName, rpName string) error
 }
 
 type engine interface {
 	FetchShardsNeedChangeStore() (shardsToWarm, shardsToCold []*meta.ShardIdentifier)
+	FetchIndexesNeedChangeStore() (indexesToCold []*meta.IndexIdentifier)
 	ChangeShardTierToWarm(db string, ptId uint32, shardID uint64) error
 	HierarchicalStorage(db string, ptId uint32, shardID uint64) bool
+	IndexHierarchicalStorage(db string, ptId uint32, shardID uint64) bool
 }
 
 type WaitGroup struct {
@@ -102,6 +106,17 @@ func NewService(c config.HierarchicalConfig) *Service {
 	return s
 }
 
+func NewIndexToColdService(c config.HierarchicalConfig) *Service {
+	s := &Service{
+		Logger:      logger.NewLogger(errno.ModuleIndexHierarchical),
+		Config:      &c,
+		HsWaitGroup: NewWaitGroup(c.MaxProcessN),
+		closing:     make(chan struct{}),
+	}
+	s.base.Init("hierarchical index", time.Duration(c.IndexRunInterval), s.handleIndex)
+	return s
+}
+
 func (s *Service) Open() error {
 	s.Logger.Info("service open", zap.Duration("RunInterval", time.Duration(s.Config.RunInterval)),
 		zap.Int("MaxProcessN", s.Config.MaxProcessN))
@@ -143,7 +158,16 @@ func (s *Service) handle() {
 	}
 }
 
+func (s *Service) handleIndex() {
+	if syscontrol.IsHierarchicalIndexStorageEnabled() {
+		indexesToCold := s.Engine.FetchIndexesNeedChangeStore()
+		s.runIndexHierarchicalStorage(indexesToCold)
+		s.HsWaitGroup.Wait()
+	}
+}
+
 func (s *Service) runShardHierarchicalStorage(shardsToCold []*meta.ShardIdentifier) {
+	toObsCold := statistics.GetToObsCold()
 	for _, shard := range shardsToCold {
 		s.HsWaitGroup.Add(1)
 		select {
@@ -153,12 +177,14 @@ func (s *Service) runShardHierarchicalStorage(shardsToCold []*meta.ShardIdentifi
 			return
 		default:
 		}
+		toObsCold.AddShardToColdSum()
 		go func(s *Service, shard *meta.ShardIdentifier) {
 			defer func() {
 				s.HsWaitGroup.Done()
 			}()
 
 			// update tier status to moving
+			s.Logger.Info("UpdateShardInfoTier to moving", zap.Uint64("shardId", shard.ShardID), zap.String("db", shard.OwnerDb))
 			if err := s.MetaClient.UpdateShardInfoTier(shard.ShardID, util.Moving, shard.OwnerDb, shard.Policy); err != nil {
 				s.Logger.Error("update shard info tier err",
 					zap.Int64("shard id", int64(shard.ShardID)),
@@ -167,14 +193,49 @@ func (s *Service) runShardHierarchicalStorage(shardsToCold []*meta.ShardIdentifi
 			}
 
 			if ok := s.Engine.HierarchicalStorage(shard.OwnerDb, shard.OwnerPt, shard.ShardID); !ok {
+				toObsCold.AddShardToColdFailSum()
 				return
 			}
 
+			s.Logger.Info("UpdateShardInfoTier to cold", zap.Uint64("shardId", shard.ShardID), zap.String("db", shard.OwnerDb))
 			if err := s.MetaClient.UpdateShardInfoTier(shard.ShardID, util.Cold, shard.OwnerDb, shard.Policy); err != nil {
 				s.Logger.Error("update shard info tier err",
 					zap.Int64("shard id", int64(shard.ShardID)),
 					zap.Uint64("tier", util.Cold), zap.Error(err))
+				toObsCold.AddShardToColdFailSum()
 			}
+			toObsCold.AddShardToColdSuccessSum()
 		}(s, shard)
+	}
+}
+
+func (s *Service) runIndexHierarchicalStorage(indexToCold []*meta.IndexIdentifier) {
+	toObsCold := statistics.GetToObsCold()
+	for _, indexBuilder := range indexToCold {
+		select {
+		case <-s.closing:
+			s.closing = nil
+			return
+		default:
+		}
+		toObsCold.IndexToColdSum.Incr()
+		// update tier status to moving
+		if err := s.MetaClient.UpdateIndexInfoTier(indexBuilder.Index.IndexID, util.Moving, indexBuilder.OwnerDb, indexBuilder.Policy); err != nil {
+			s.Logger.Error("update index info tier err",
+				zap.Int64("index id", int64(indexBuilder.Index.IndexID)),
+				zap.Int64("tier", int64(util.Moving)), zap.Error(err))
+			return
+		}
+		if ok := s.Engine.IndexHierarchicalStorage(indexBuilder.OwnerDb, indexBuilder.OwnerPt, indexBuilder.Index.IndexID); !ok {
+			toObsCold.AddIndexToColdFailSum()
+			return
+		}
+		if err := s.MetaClient.UpdateIndexInfoTier(indexBuilder.Index.IndexID, util.Cold, indexBuilder.OwnerDb, indexBuilder.Policy); err != nil {
+			toObsCold.AddIndexToColdFailSum()
+			s.Logger.Error("update index info tier err",
+				zap.Int64("index id", int64(indexBuilder.Index.IndexID)),
+				zap.Uint64("tier", util.Cold), zap.Error(err))
+		}
+		toObsCold.AddIndexToColdSuccessSum()
 	}
 }

@@ -452,7 +452,7 @@ func TestJsonFunctionJsonExtract(t *testing.T) {
 
 	expects := make([]interface{}, 4)
 	expects[0] = "1626314920"
-	expects[1] = `"int"`
+	expects[1] = "int"
 	expects[2] = `{"nest_field":12}`
 	expects[3] = `2`
 	outputs := make([]interface{}, 0, len(expects))
@@ -523,13 +523,13 @@ func TestJsonExtract(t *testing.T) {
 	jsonStr = `{"field1":["nest1", "nest2"], "field2":"word"}`
 	jsonPath = "$.field1[1]"
 	res, err = query.JsonExtract(jsonStr, jsonPath)
-	assert.Equal(t, res, `"nest2"`)
+	assert.Equal(t, res, "nest2")
 	assert.Equal(t, err, nil)
 
 	jsonStr = `[{"json1":"value1"}, {"json2":"value1"}]`
 	jsonPath = "$.0.json1"
 	res, err = query.JsonExtract(jsonStr, jsonPath)
-	assert.Equal(t, res, `"value1"`)
+	assert.Equal(t, res, "value1")
 	assert.Equal(t, err, nil)
 
 	jsonStr = `[{"json1":{"nest1":[12,15]}}, {"json2":"value1"}]`
@@ -555,6 +555,48 @@ func TestJsonExtract(t *testing.T) {
 	res, err = query.JsonExtract(jsonStr, jsonPath)
 	assert.Equal(t, res, "")
 	assert.Equal(t, err, errno.NewError(errno.JsonPathIllegal))
+}
+
+func TestJsonFunctionJsonObject(t *testing.T) {
+	urlValuer := query.StringValuer{}
+	inputName := "json_object"
+
+	rows := make([][]interface{}, 2)
+	cols := make([]interface{}, 10)
+	cols[0] = "strVal"
+	cols[1] = "val1"
+	cols[2] = "intVal"
+	cols[3] = 1
+	cols[4] = "floatVal"
+	cols[5] = 1.1
+	cols[6] = "boolVal"
+	cols[7] = true
+	cols[8] = "time"
+	cols[9] = 1629129602000000000
+	rows[0] = cols
+	cols = make([]interface{}, 10)
+	cols[0] = "strVal"
+	cols[1] = "val2"
+	cols[2] = "intVal"
+	cols[3] = 2
+	cols[4] = "floatVal"
+	cols[5] = 2.2
+	cols[6] = "boolVal"
+	cols[7] = false
+	cols[8] = "time"
+	cols[9] = 1629129608000000000
+	rows[1] = cols
+
+	expects := make([]interface{}, 2)
+	expects[0] = `{"strVal":"val1","intVal":1,"floatVal":1.1,"boolVal":true,"time":1629129602000000000}`
+	expects[1] = `{"strVal":"val2","intVal":2,"floatVal":2.2,"boolVal":false,"time":1629129608000000000}`
+	outputs := make([]interface{}, 0, len(expects))
+	for _, arg := range rows {
+		if out, ok := urlValuer.Call(inputName, arg); ok {
+			outputs = append(outputs, out)
+		}
+	}
+	assert.Equal(t, expects, outputs)
 }
 
 func TestSplitPath(t *testing.T) {

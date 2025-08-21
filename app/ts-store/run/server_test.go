@@ -64,7 +64,7 @@ func mockStorage() *storage.Storage {
 		Meta:    config.NewMeta(),
 	}
 	config.Common.PprofEnabled = true
-
+	config.HierarchicalStore.IndexEnabled = true
 	storage, err := storage.OpenStorage(storageDataPath, node, nil, config)
 	if err != nil {
 		return nil
@@ -84,10 +84,10 @@ func mockHTTPServer(server *Server, authEnabled bool, addr string, t *testing.T)
 	conf.OpsMonitor = opsConfig
 	conf.OpsMonitor.AuthEnabled = authEnabled
 	h := NewHttpHandler(conf)
-	server.StoreService.handler = h
+	server.OpsService.handler = h
 	h.SetstatisticsPusher(pusher)
 
-	server.StoreService.handler.metaClient = mockMetaClient()
+	server.OpsService.handler.metaClient = mockMetaClient()
 
 	err = http.Serve(ln, h)
 	if err != nil && !strings.Contains(err.Error(), "closed") {
@@ -110,11 +110,11 @@ func mockServer() *Server {
 	server.config.Monitor.HttpEndPoint = "127.0.0.1:8502"
 	server.config.Monitor.StoreDatabase = "_internal"
 	server.config.Monitor.StoreEnabled = true
-	server.config.Monitor.Pushers = "http"
+	server.config.Monitor.Pushers = ""
 	server.config.Monitor.StoreInterval = toml.Duration(1 * time.Second)
 	server.config.Data.OpsMonitor.HttpAddress = addr1
 	server.storage = mockStorage()
-	server.StoreService = NewService(&server.config.Data)
+	server.OpsService = NewService(&server.config.Data)
 
 	server.initStatisticsPusher()
 	server.statisticsPusher.RegisterOps(stat.CollectOpsPerfStatistics)
@@ -130,7 +130,7 @@ func Test_NewServer_Statistics_Single(t *testing.T) {
 	server.config = config.NewTSStore(false)
 	server.config.Data.OpsMonitor.HttpAddress = addr1
 	server.storage = mockStorage()
-	server.StoreService = NewService(&server.config.Data)
+	server.OpsService = NewService(&server.config.Data)
 	server.initStatisticsPusher()
 }
 
@@ -140,7 +140,7 @@ func Test_NewServer_Statistics_Data(t *testing.T) {
 	server.config = config.NewTSStore(true)
 	server.config.Data.OpsMonitor.HttpAddress = addr1
 	server.storage = mockStorage()
-	server.StoreService = NewService(&server.config.Data)
+	server.OpsService = NewService(&server.config.Data)
 	server.initStatisticsPusher()
 }
 
@@ -226,8 +226,8 @@ func TestNilService(t *testing.T) {
 	server.Logger = logger.NewLogger(errno.ModuleStorageEngine)
 	server.config = config.NewTSStore(true)
 	server.storage = mockStorage()
-	server.StoreService = NewService(&server.config.Data)
-	if server.StoreService != nil {
+	server.OpsService = NewService(&server.config.Data)
+	if server.OpsService != nil {
 		t.Fatal("new service fail")
 	}
 }
@@ -241,6 +241,18 @@ func TestNewServer(t *testing.T) {
 
 	NewServer(conf, app.ServerInfo{}, logger.NewLogger(errno.ModuleUnknown))
 	require.Equal(t, 20, config.GetIndexConfig().MemoryAllowedPercent)
+}
+
+func TestNewServerErr(t *testing.T) {
+	conf := config.NewTSStore(true)
+	conf.Data.Engine = "xx1"
+	conf.Common.MetaJoin = []string{"127.0.0.1", "127.0.0.2", "127.0.0.3"}
+
+	conf.Index.MemoryAllowedPercent = 20
+	conf.Common.PprofEnabled = true
+
+	_, err := NewServer(conf, app.ServerInfo{}, logger.NewLogger(errno.ModuleUnknown))
+	require.EqualError(t, err, "unrecognized engine xx1", "err msg not expected")
 }
 
 func TestNewServerErrRole(t *testing.T) {
@@ -257,7 +269,7 @@ type MockMetaClient struct {
 }
 
 func (client *MockMetaClient) ThermalShards(db string, start, end time.Duration) map[uint64]struct{} {
-	//TODO implement me
+
 	panic("implement me")
 }
 
@@ -359,9 +371,6 @@ func (client *MockMetaClient) SetAdminPrivilege(username string, admin bool) err
 }
 func (client *MockMetaClient) SetPrivilege(username, database string, p originql.Privilege) error {
 	return nil
-}
-func (client *MockMetaClient) ShardsByTimeRange(sources influxql.Sources, tmin, tmax time.Time) (a []meta2.ShardInfo, err error) {
-	return nil, nil
 }
 func (client *MockMetaClient) ShardGroupsByTimeRange(database, policy string, min, max time.Time) (a []meta2.ShardGroupInfo, err error) {
 	return nil, nil

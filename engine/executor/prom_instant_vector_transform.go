@@ -207,7 +207,7 @@ func (trans *PromInstantVectorTransform) WorkHelper(ctx context.Context, errs *e
 			if trans.newChunk.Len() > 0 {
 				if trans.newChunk.Tags() == nil {
 					chunkTags := NewChunkTagsV2(trans.bufChunk.Tags()[len(trans.bufChunk.TagIndex())-1].subset)
-					trans.newChunk.AddTagAndIndex(*chunkTags, trans.preLen)
+					trans.newChunk.AppendTagsAndIndex(*chunkTags, trans.preLen)
 				}
 				trans.output.State <- trans.newChunk
 			}
@@ -307,7 +307,7 @@ func (trans *PromInstantVectorTransform) addGroupTags(tmpLoc int) {
 	if trans.newChunk.Len() > trans.preLen {
 		if !bytes.Equal(trans.newTags, trans.bufChunk.Tags()[tmpLoc].subset) {
 			chunkTags := NewChunkTagsV2(trans.bufChunk.Tags()[tmpLoc].subset)
-			trans.newChunk.AddTagAndIndex(*chunkTags, trans.preLen)
+			trans.newChunk.AppendTagsAndIndex(*chunkTags, trans.preLen)
 			trans.preLen = trans.newChunk.Len()
 			trans.newTags = trans.bufChunk.Tags()[tmpLoc].subset
 		}

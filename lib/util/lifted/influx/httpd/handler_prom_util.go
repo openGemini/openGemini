@@ -26,6 +26,7 @@ import (
 	"unsafe"
 
 	prompb2 "github.com/VictoriaMetrics/VictoriaMetrics/lib/prompb"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/promutil"
 	"github.com/gorilla/mux"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
@@ -387,7 +388,7 @@ func timeSeries2RowsV2(mst string, dst []influx.Row, tss []prompb2.TimeSeries, i
 				dst[i].Fields[0].NumValue = s.Value
 			} else {
 				dst[i].Fields = []influx.Field{
-					influx.Field{
+					{
 						Type:     influx.Field_Type_Float,
 						Key:      promql2influxql.DefaultFieldKey,
 						NumValue: s.Value,
@@ -401,11 +402,16 @@ func timeSeries2RowsV2(mst string, dst []influx.Row, tss []prompb2.TimeSeries, i
 }
 
 func unmarshalPromTagsV2(dst influx.PointTags, ts prompb2.TimeSeries) influx.PointTags {
+	x := promutil.GetLabels()
+	labelsOrig := x.Labels
+	x.Labels = ts.Labels
+	x.Sort()
+	x.Labels = labelsOrig
+	promutil.PutLabels(x)
 	for i, label := range ts.Labels {
-		dst[i].Key = *(*string)(unsafe.Pointer(&label.Name))
-		dst[i].Value = *(*string)(unsafe.Pointer(&label.Value))
+		dst[i].Key = label.Name
+		dst[i].Value = label.Value
 	}
-	sort.Sort(&dst)
 	return dst
 }
 

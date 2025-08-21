@@ -23,6 +23,7 @@ import (
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/interruptsignal"
 	"github.com/openGemini/openGemini/lib/util"
+	"github.com/stretchr/testify/require"
 )
 
 func TestGetMetaIndexAndBlockId(t *testing.T) {
@@ -30,14 +31,13 @@ func TestGetMetaIndexAndBlockId(t *testing.T) {
 	_ = fileops.RemoveAll(testCompDir)
 	sig := interruptsignal.NewInterruptSignal()
 	defer func() {
+		clearMstInfo()
 		sig.Close()
 		_ = fileops.RemoveAll(testCompDir)
 	}()
 	mstName := "mst"
-	err := writeData(testCompDir, mstName)
-	if err != nil {
-		t.Errorf(err.Error())
-	}
+	err := writeData(testCompDir, mstName, 500)
+	require.NoError(t, err)
 
 	p := path.Join(testCompDir, mstName)
 	_, _, err = GetMetaIndexAndBlockId("", nil, 1, util.TimeRange{Min: math.MinInt64, Max: math.MinInt64})
@@ -46,9 +46,7 @@ func TestGetMetaIndexAndBlockId(t *testing.T) {
 	}
 
 	_, _, err = GetMetaIndexAndBlockId(p, nil, 1, util.TimeRange{Min: math.MinInt64, Max: math.MinInt64})
-	if err != nil {
-		t.Errorf("get wrong meta")
-	}
+	require.NoError(t, err)
 
 	_, _, err = GetPKItems("", nil, []int64{0})
 	if err == nil {
@@ -56,7 +54,5 @@ func TestGetMetaIndexAndBlockId(t *testing.T) {
 	}
 
 	_, _, err = GetPKItems(p, nil, []int64{0})
-	if err != nil {
-		t.Errorf("get wrong primay")
-	}
+	require.NoError(t, err)
 }

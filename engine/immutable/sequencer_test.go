@@ -360,3 +360,25 @@ func maxInt64(a, b int64) int64 {
 	}
 	return b
 }
+
+func BenchmarkBch(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		buildMap(b)
+	}
+}
+
+func buildMap(b *testing.B) {
+	n := uint64(10000000)
+	mm := immutable.NewMmsIdTime(&immutable.SeriesCounter{})
+
+	xx := uint64(time.Now().Unix())
+	yy := uint64(byte(xx)) | uint64(byte(xx>>8))<<8 | uint64(byte(xx>>16))<<16 | uint64(byte(xx>>24))<<24 | uint64(byte(xx>>32))<<32
+	b.Log(xx)
+
+	for i := uint64(0); i < n; i++ {
+		yy++
+		mm.CreateIdInfo(yy)
+	}
+	b.Log(mm.Size())
+}

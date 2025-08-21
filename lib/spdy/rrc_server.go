@@ -22,6 +22,7 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"go.uber.org/zap"
 )
 
@@ -113,6 +114,11 @@ func (s *RRCServer) openListener() error {
 		if err != nil {
 			return err
 		}
+
+		if len(tlsCfg.Certificates) > 0 {
+			statistics.RuntimeIns().SetSpdyCertExpireAt(config.GetCertLeaf(&tlsCfg.Certificates[0]))
+		}
+
 		s.listener, err = tls.Listen(s.network, s.address, tlsCfg)
 		return err
 	}

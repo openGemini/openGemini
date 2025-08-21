@@ -302,10 +302,10 @@ func BuildHashAggInChunkProm() executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("m1")
 	chunk.AppendTimes([]int64{1, 2, 3, 4})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 0)
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=2"), 1)
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 2)
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=2"), 3)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=2"), 1)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 2)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=2"), 3)
 	chunk.AppendIntervalIndexes([]int{0, 1, 2, 3})
 	for _, col := range chunk.Columns() {
 		switch col.DataType() {
@@ -407,8 +407,8 @@ func BuildHashAggResultProm() []executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk1 := b.NewChunk("m1")
 	chunk1.AppendTimes([]int64{1, 2})
-	chunk1.AddTagAndIndex(*ParseChunkTags("tk1=1"), 0)
-	chunk1.AddTagAndIndex(*ParseChunkTags("tk1=2"), 1)
+	chunk1.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 0)
+	chunk1.AppendTagsAndIndex(*ParseChunkTags("tk1=2"), 1)
 	AppendFloatValues(chunk1, 0, []float64{2, 2}, []bool{true, true})
 
 	AppendFloatValues(chunk1, 1, []float64{1.1, 2.2}, []bool{true, true})
@@ -1538,11 +1538,11 @@ func BuildHashAggInChunk1() executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("m1")
 	chunk.AppendTimes([]int64{1, 2, 3, 4})
-	chunk.AddTagAndIndex(*ParseChunkTags("tag1=" + "tag1val1"), 0)
-	chunk.AddTagAndIndex(*ParseChunkTags("tag1=" + "tag1val2"), 1)
-	chunk.AddTagAndIndex(*ParseChunkTags("tag1=" + "tag1val1"), 2)
-	chunk.AddTagAndIndex(*ParseChunkTags("tag1=" + "tag1val2"), 3)
-	chunk.AddIntervalIndex(0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tag1=" + "tag1val1"), 0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tag1=" + "tag1val2"), 1)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tag1=" + "tag1val1"), 2)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tag1=" + "tag1val2"), 3)
+	chunk.AppendIntervalIndex(0)
 	chunk.Column(0).AppendFloatValues([]float64{1.1, 2.2, 3.3, 4.4})
 	chunk.Column(0).AppendColumnTimes([]int64{1, 2, 3, 4})
 	chunk.Column(0).AppendManyNotNil(4)
@@ -1563,9 +1563,9 @@ func BuildHashAggInChunk2() executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("m1")
 	chunk.AppendTimes([]int64{1, 2, 3, 4})
-	chunk.AddTagAndIndex(*ParseChunkTags("tag1=" + "tag1val3"), 0)
-	chunk.AddTagAndIndex(*ParseChunkTags("tag1=" + "tag1val4"), 2)
-	chunk.AddIntervalIndex(0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tag1=" + "tag1val3"), 0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tag1=" + "tag1val4"), 2)
+	chunk.AppendIntervalIndex(0)
 	chunk.Column(0).AppendFloatValues([]float64{1.1, 2.2, 3.3, 4.4})
 	chunk.Column(0).AppendColumnTimes([]int64{1, 2, 3, 4})
 	chunk.Column(0).AppendManyNotNil(4)
@@ -1596,9 +1596,9 @@ func BuildHashAggInChunk3() executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("m1")
 	chunk.AppendTimes([]int64{1, 2, 3, 4})
-	chunk.AddTagAndIndex(*ParseChunkTags("tag1=" + "tag1val3"), 0)
-	chunk.AddTagAndIndex(*ParseChunkTags("tag1=" + "tag1val4"), 2)
-	chunk.AddIntervalIndex(0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tag1=" + "tag1val3"), 0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tag1=" + "tag1val4"), 2)
+	chunk.AppendIntervalIndex(0)
 	chunk.Column(0).AppendFloatValues([]float64{1.1, 2.2, 3.3, 4.4})
 	chunk.Column(0).AppendColumnTimes([]int64{1, 2, 3, 4})
 	chunk.Column(0).AppendManyNotNil(4)
@@ -2141,7 +2141,8 @@ func TestHashAggTransformProm(t *testing.T) {
 	}
 
 	checkResult := func(chunk executor.Chunk) error {
-		PromResultCompareMultiCol(chunk, expResult[0], t)
+		err := PromResultCompareMultiCol(chunk, expResult[0])
+		assert.Equal(t, err, nil)
 		return nil
 	}
 	sink := NewSinkFromFunction(outRowDataType, checkResult)
@@ -2488,7 +2489,7 @@ func benchmarkStreamAggregateTransform1(b *testing.B, chunkCount, ChunkSize, tag
 			[]hybridqp.RowDataType{srcRowDataType},
 			[]hybridqp.RowDataType{dstRowDataType},
 			exprOpt,
-			&opt, false)
+			&opt, &executor.QuerySchema{}, false)
 		sink := NewNilSink(dstRowDataType)
 		err := executor.Connect(source.Output, trans1.Inputs[0])
 		if err != nil {

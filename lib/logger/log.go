@@ -153,7 +153,6 @@ var srLogger raft.Logger
 func InitSrLogger(conf config.Logger) {
 	level = conf.Level
 	zapLogger := getLogger(conf, config.DefaultStoreRaftLoggerName)
-
 	fmt.Printf("%s init sr logger, conf: %+v\n", time.Now().String(), conf)
 	srLogger = &SugarLogger{zapLogger.Sugar()}
 }
@@ -177,6 +176,7 @@ func (sl *SugarLogger) Warningf(format string, v ...interface{}) {
 func (sl *SugarLogger) Panic(args ...interface{}) {
 	sl.Error(args...)
 }
+
 func (sl *SugarLogger) Panicf(template string, args ...interface{}) {
 	sl.Errorf(template, args...)
 }

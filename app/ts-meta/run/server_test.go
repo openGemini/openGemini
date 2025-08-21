@@ -84,7 +84,6 @@ func Test_NewServer_Open_Close(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, server.(*Server).MetaService)
 	require.NotNil(t, server.(*Server).sherlockService)
-
 	err = server.Open()
 	require.NoError(t, err)
 

@@ -62,89 +62,89 @@ func TestValidateLabels(t *testing.T) {
 		{
 			"invalid metric name",
 			[]prompb2.Label{
-				{Name: []byte(model.MetricNameLabel), Value: []byte(" ")},
+				{Name: model.MetricNameLabel, Value: " "},
 			},
 			newInvalidMetricNameError(" "),
 		},
 		{
 			"invalid metric value",
 			[]prompb2.Label{
-				{Name: []byte(model.MetricNameLabel), Value: []byte("valid")},
-				{Name: []byte("foo "), Value: []byte("bar")},
+				{Name: model.MetricNameLabel, Value: "valid"},
+				{Name: "foo ", Value: "bar"},
 			},
 			newInvalidLabelError([]prompb2.Label{
-				{Name: []byte(model.MetricNameLabel), Value: []byte("valid")},
-				{Name: []byte("foo "), Value: []byte("bar")},
-			}, []byte("foo ")),
+				{Name: model.MetricNameLabel, Value: "valid"},
+				{Name: "foo ", Value: "bar"},
+			}, "foo "),
 		},
 		{
 			"valid labels",
 			[]prompb2.Label{
-				{Name: []byte(model.MetricNameLabel), Value: []byte("valid")},
-				{Name: []byte("foo"), Value: []byte("bar")},
+				{Name: model.MetricNameLabel, Value: "valid"},
+				{Name: "foo", Value: "bar"},
 			},
 			nil,
 		},
 		{
 			"long label name",
 			[]prompb2.Label{
-				{Name: []byte(model.MetricNameLabel), Value: []byte("badLabelName")},
-				{Name: []byte("this_is_a_really_really_long_name_that_should_cause_an_error"), Value: []byte("test_value_please_ignore")},
+				{Name: model.MetricNameLabel, Value: "badLabelName"},
+				{Name: "this_is_a_really_really_long_name_that_should_cause_an_error", Value: "test_value_please_ignore"},
 			},
 			newLabelNameTooLongError([]prompb2.Label{
-				{Name: []byte(model.MetricNameLabel), Value: []byte("badLabelName")},
-				{Name: []byte("this_is_a_really_really_long_name_that_should_cause_an_error"), Value: []byte("test_value_please_ignore")},
-			}, []byte("this_is_a_really_really_long_name_that_should_cause_an_error")),
+				{Name: model.MetricNameLabel, Value: "badLabelName"},
+				{Name: "this_is_a_really_really_long_name_that_should_cause_an_error", Value: "test_value_please_ignore"},
+			}, "this_is_a_really_really_long_name_that_should_cause_an_error"),
 		},
 		{
 			"long label value",
 			[]prompb2.Label{
-				{Name: []byte(model.MetricNameLabel), Value: []byte("badLabelValue")},
-				{Name: []byte("much_shorter_name"), Value: []byte("test_value_please_ignore_no_really_nothing_to_see_here")},
+				{Name: model.MetricNameLabel, Value: "badLabelValue"},
+				{Name: "much_shorter_name", Value: "test_value_please_ignore_no_really_nothing_to_see_here"},
 			},
 			newLabelValueTooLongError([]prompb2.Label{
-				{Name: []byte(model.MetricNameLabel), Value: []byte("badLabelValue")},
-				{Name: []byte("much_shorter_name"), Value: []byte("test_value_please_ignore_no_really_nothing_to_see_here")},
-			}, []byte("test_value_please_ignore_no_really_nothing_to_see_here")),
+				{Name: model.MetricNameLabel, Value: "badLabelValue"},
+				{Name: "much_shorter_name", Value: "test_value_please_ignore_no_really_nothing_to_see_here"},
+			}, "test_value_please_ignore_no_really_nothing_to_see_here"),
 		},
 		{
 			"too many labels",
 			[]prompb2.Label{
-				{Name: []byte(model.MetricNameLabel), Value: []byte("foo")},
-				{Name: []byte("bar"), Value: []byte("bar")},
-				{Name: []byte("blip"), Value: []byte("blop")},
-				{Name: []byte("cccc"), Value: []byte("ccccc")},
+				{Name: model.MetricNameLabel, Value: "foo"},
+				{Name: "bar", Value: "bar"},
+				{Name: "blip", Value: "blop"},
+				{Name: "cccc", Value: "ccccc"},
 			},
 			newTooManyLabelsError([]prompb2.Label{
-				{Name: []byte(model.MetricNameLabel), Value: []byte("foo")},
-				{Name: []byte("bar"), Value: []byte("bar")},
-				{Name: []byte("blip"), Value: []byte("blop")},
-				{Name: []byte("cccc"), Value: []byte("ccccc")},
+				{Name: model.MetricNameLabel, Value: "foo"},
+				{Name: "bar", Value: "bar"},
+				{Name: "blip", Value: "blop"},
+				{Name: "cccc", Value: "ccccc"},
 			}, 3),
 		},
 		{
 			"unordered labels",
 			[]prompb2.Label{
-				{Name: []byte(model.MetricNameLabel), Value: []byte("m")},
-				{Name: []byte("b"), Value: []byte("b")},
-				{Name: []byte("a"), Value: []byte("a")},
+				{Name: model.MetricNameLabel, Value: "m"},
+				{Name: "b", Value: "b"},
+				{Name: "a", Value: "a"},
 			},
 			newLabelsNotSortedError([]prompb2.Label{
-				{Name: []byte(model.MetricNameLabel), Value: []byte("m")},
-				{Name: []byte("b"), Value: []byte("b")},
-				{Name: []byte("a"), Value: []byte("a")},
-			}, []byte("a")),
+				{Name: model.MetricNameLabel, Value: "m"},
+				{Name: "b", Value: "b"},
+				{Name: "a", Value: "a"},
+			}, "a"),
 		},
 		{
 			"duplicate labels",
 			[]prompb2.Label{
-				{Name: []byte(model.MetricNameLabel), Value: []byte("a")},
-				{Name: []byte(model.MetricNameLabel), Value: []byte("b")},
+				{Name: model.MetricNameLabel, Value: "a"},
+				{Name: model.MetricNameLabel, Value: "b"},
 			},
 			newDuplicatedLabelError([]prompb2.Label{
-				{Name: []byte(model.MetricNameLabel), Value: []byte("a")},
-				{Name: []byte(model.MetricNameLabel), Value: []byte("b")},
-			}, []byte(model.MetricNameLabel)),
+				{Name: model.MetricNameLabel, Value: "a"},
+				{Name: model.MetricNameLabel, Value: "b"},
+			}, model.MetricNameLabel),
 		},
 	} {
 		t.Run(c.desc, func(t *testing.T) {
@@ -213,8 +213,8 @@ func TestValidateSeries(t *testing.T) {
 			"validation pass",
 			prompb2.TimeSeries{
 				Labels: []prompb2.Label{
-					{Name: []byte(model.MetricNameLabel), Value: []byte("testmetric")},
-					{Name: []byte("foo"), Value: []byte("bar")},
+					{Name: model.MetricNameLabel, Value: "testmetric"},
+					{Name: "foo", Value: "bar"},
 				},
 				Samples: []prompb2.Sample{
 					{Value: 1, Timestamp: int64(now)},
@@ -226,8 +226,8 @@ func TestValidateSeries(t *testing.T) {
 			"validation fails for no sample",
 			prompb2.TimeSeries{
 				Labels: []prompb2.Label{
-					{Name: []byte(model.MetricNameLabel), Value: []byte("testmetric")},
-					{Name: []byte("foo"), Value: []byte("bar")},
+					{Name: model.MetricNameLabel, Value: "testmetric"},
+					{Name: "foo", Value: "bar"},
 				},
 				Samples: []prompb2.Sample{},
 			},
@@ -237,8 +237,8 @@ func TestValidateSeries(t *testing.T) {
 			"validation fails for very old samples",
 			prompb2.TimeSeries{
 				Labels: []prompb2.Label{
-					{Name: []byte(model.MetricNameLabel), Value: []byte("testmetric")},
-					{Name: []byte("foo"), Value: []byte("bar")},
+					{Name: model.MetricNameLabel, Value: "testmetric"},
+					{Name: "foo", Value: "bar"},
 				},
 				Samples: []prompb2.Sample{
 					{Value: 2, Timestamp: int64(past)},
@@ -250,8 +250,8 @@ func TestValidateSeries(t *testing.T) {
 			"validation fails for samples from the future",
 			prompb2.TimeSeries{
 				Labels: []prompb2.Label{
-					{Name: []byte(model.MetricNameLabel), Value: []byte("testmetric")},
-					{Name: []byte("foo"), Value: []byte("bar")},
+					{Name: model.MetricNameLabel, Value: "testmetric"},
+					{Name: "foo", Value: "bar"},
 				},
 				Samples: []prompb2.Sample{
 					{Value: 4, Timestamp: int64(future)},
@@ -263,10 +263,10 @@ func TestValidateSeries(t *testing.T) {
 			"maximum labels names per series",
 			prompb2.TimeSeries{
 				Labels: []prompb2.Label{
-					{Name: []byte(model.MetricNameLabel), Value: []byte("testmetric")},
-					{Name: []byte("foo"), Value: []byte("bar")},
-					{Name: []byte("foo2"), Value: []byte("bar2")},
-					{Name: []byte("foo3"), Value: []byte("bar3")},
+					{Name: model.MetricNameLabel, Value: "testmetric"},
+					{Name: "foo", Value: "bar"},
+					{Name: "foo2", Value: "bar2"},
+					{Name: "foo3", Value: "bar3"},
 				},
 				Samples: []prompb2.Sample{
 					{Value: 2, Timestamp: int64(now)},
@@ -278,7 +278,7 @@ func TestValidateSeries(t *testing.T) {
 			"too long label value",
 			prompb2.TimeSeries{
 				Labels: []prompb2.Label{
-					{Name: []byte(model.MetricNameLabel), Value: []byte("testmetricasdaaaaaaaaaaaaaaaaaaaaaaaaaa")},
+					{Name: model.MetricNameLabel, Value: "testmetricasdaaaaaaaaaaaaaaaaaaaaaaaaaa"},
 				},
 				Samples: []prompb2.Sample{
 					{Value: 2, Timestamp: int64(now)},
@@ -309,7 +309,7 @@ func TestValidateQueryTimeRange(t *testing.T) {
 	// invalid time range
 	exceedEnd := time.Unix(12, 0) // 11s
 	err = ValidateQueryTimeRange("", start, exceedEnd)
-	require.Equal(t, "the query time range exceeds the limit (start: 1970-01-01 00:00:01 +0000 UTC, end 1970-01-01 00:00:12 +0000 UTC, query_len: 11s, limit: 10s)", err.Error())
+	require.Equal(t, "the query time range exceeds the limit (start: 1970-01-01 08:00:01 +0800 CST, end 1970-01-01 08:00:12 +0800 CST, query_len: 11s, limit: 10s)", err.Error())
 
 	// no time range limits
 	limits.defaultLimits.MaxQueryLength = 0
@@ -321,8 +321,8 @@ func TestValidateNoLimits(t *testing.T) {
 	limits = nil
 	ts := prompb2.TimeSeries{
 		Labels: []prompb2.Label{
-			{Name: []byte(model.MetricNameLabel), Value: []byte("testmetric")},
-			{Name: []byte("foo"), Value: []byte("bar")},
+			{Name: model.MetricNameLabel, Value: "testmetric"},
+			{Name: "foo", Value: "bar"},
 		},
 		Samples: []prompb2.Sample{
 			{Value: 1, Timestamp: int64(model.Now())},

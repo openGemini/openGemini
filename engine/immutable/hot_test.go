@@ -22,6 +22,7 @@ import (
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/stretchr/testify/require"
 )
 
@@ -117,4 +118,29 @@ func TestBuildHotFile_FreeWindow(t *testing.T) {
 	immutable.NewHotFileManager().SetMaxMemorySize(100000)
 	require.NoError(t, f1.LoadIntoMemory())
 	require.NotEmpty(t, f1.LoadIntoMemory())
+}
+
+func TestFilesMergedTire_OverloadMaxMemorySize(t *testing.T) {
+	defer beforeHotTest(t)()
+
+	var begin = time.Now().UnixNano()
+
+	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
+	defer mh.store.Close()
+	rg := newRecordGenerator(begin, defaultInterval, true)
+
+	mh.addRecord(100, rg.generate(getDefaultSchemas(), 10))
+	require.NoError(t, mh.saveToOrder())
+
+	mh.addRecord(101, rg.generate(getDefaultSchemas(), 10))
+	require.NoError(t, mh.saveToOrder())
+
+	files, ok := mh.store.GetTSSPFiles("mst", true)
+	require.True(t, ok)
+	require.True(t, files.Len() > 1)
+
+	immutable.NewHotFileManager().SetMaxMemorySize(10)
+
+	tire := immutable.FilesMergedTire(files.Files())
+	require.True(t, tire == util.Warm)
 }

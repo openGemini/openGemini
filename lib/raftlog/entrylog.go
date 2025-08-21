@@ -135,7 +135,8 @@ func (l *entryLog) AddEntries(entries []raftpb.Entry) error {
 			// The existing entry was found in the current file. We only have to zero out
 			// from the entries after the one in which the entry was found.
 			if l.nextEntryIdx > lastIdx {
-				_ = l.current.entry.WriteSlice(int64(entrySize*lastIdx), make([]byte, entrySize*l.nextEntryIdx-entrySize*lastIdx))
+				logger.GetLogger().Info("clearCurrentFile slots", zap.Int("startSlot", lastIdx), zap.Int("endSlot", l.nextEntryIdx))
+				_ = l.current.entry.WriteSlice(lastIdx, l.nextEntryIdx, int64(entrySize*lastIdx), make([]byte, entrySize*l.nextEntryIdx-entrySize*lastIdx), false, true)
 			}
 		} else {
 			// The existing entry was found in one of the previous file.
@@ -157,7 +158,9 @@ func (l *entryLog) AddEntries(entries []raftpb.Entry) error {
 					logger.GetLogger().Error(fmt.Sprintf("deleting file: %s. error: %+v\n", ef.entry.Name(), err))
 				}
 			}
-			_ = l.current.entry.WriteSlice(int64(entrySize*lastIdx), make([]byte, logFileOffset-entrySize*lastIdx))
+			logger.GetLogger().Info("clearFirstFile slots", zap.Int("startSlot", lastIdx), zap.Int("endSlot", maxNumEntries),
+				zap.Int("fileLoc", firstIdx), zap.Int("fileNum", len(l.files)))
+			_ = l.current.entry.WriteSlice(lastIdx, maxNumEntries, int64(entrySize*lastIdx), make([]byte, logFileOffset-entrySize*lastIdx), false, true)
 			l.current.entry.setCurrent()
 			l.files = l.files[:firstIdx]
 			l.filesSync.Unlock()
@@ -174,7 +177,7 @@ func (l *entryLog) AddEntries(entries []raftpb.Entry) error {
 		// calculate the next offset.
 		e := l.current.getEntry(prev)
 		offset = int(e.Offset())
-		offset += l.current.entry.SliceSize(offset)
+		offset += l.current.entry.SliceSize(prev, offset)
 	} else {
 		// At the start of the file so use entryFileOffset.
 		offset = logFileOffset
@@ -190,7 +193,7 @@ func (l *entryLog) AddEntries(entries []raftpb.Entry) error {
 		}
 
 		// Allocate slice for the data and copy bytes.
-		err := l.current.entry.WriteSlice(int64(offset), re.Data)
+		err := l.current.entry.WriteSlice(l.nextEntryIdx, 0, int64(offset), re.Data, false, false)
 		if err != nil {
 			return err
 		}
@@ -200,7 +203,7 @@ func (l *entryLog) AddEntries(entries []raftpb.Entry) error {
 		// Write the entry at the given slot.
 		buf := l.current.getEntry(l.nextEntryIdx)
 		marshalEntry(buf, re.Term, re.Index, uint64(re.Type), uint64(offset))
-		if _, err = l.current.entry.WriteAt(int64(l.nextEntryIdx*entrySize), buf); err != nil {
+		if _, err = l.current.entry.WriteAt(l.nextEntryIdx, int64(l.nextEntryIdx*entrySize), buf, false); err != nil {
 			return err
 		}
 
@@ -236,7 +239,7 @@ func (l *entryLog) slotGe(raftIndex uint64) (int, int) {
 		if entry == nil {
 			hasNilFile = true
 		}
-		return entry != nil && l.files[i].firstIndex() >= raftIndex
+		return entry != nil && entry.Index() >= raftIndex
 	})
 	if hasNilFile {
 		return -1, -1

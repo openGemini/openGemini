@@ -84,6 +84,8 @@ func TestMergeSelf_Stop(t *testing.T) {
 	require.NoError(t, mh.saveToOrder())
 
 	schema := getDefaultSchemas()
+	// test he case where the dictionary order of the col name is greater than time col
+	schema = append(schema, record.Field{Type: influx.Field_Type_String, Name: "zCol"})
 	for i := 0; i < 8; i++ {
 		rg.setBegin(begin + 1)
 		mh.addRecord(100, rg.generate(schema, 10))

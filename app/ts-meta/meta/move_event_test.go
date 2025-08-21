@@ -20,7 +20,7 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/openGemini/openGemini/lib/errno"
-	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/msgservice"
 	"github.com/openGemini/openGemini/lib/spdy/transport"
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
@@ -102,7 +102,7 @@ func TestMoveEventTransition(t *testing.T) {
 		return errno.NewError(errno.NoNodeAvailable)
 	}
 	sucFunc := func(nodeID uint64, data transport.Codec, cb transport.Callback) error {
-		cb.Handle(&netstorage.PtResponse{})
+		cb.Handle(&msgservice.PtResponse{})
 		return nil
 	}
 	netStore.MigratePtFn = failFunc
@@ -120,7 +120,7 @@ func TestMoveEventTransition(t *testing.T) {
 	//globalService.store.NetStore = NewMockNetStorageFail()
 	// MovePreAssign--need change store-->MoveRollbackPreOffload
 	failFunc = func(nodeID uint64, data transport.Codec, cb transport.Callback) error {
-		res := &netstorage.PtResponse{}
+		res := &msgservice.PtResponse{}
 		err := errno.NewError(errno.NeedChangeStore)
 		var dst []byte
 		dst = encoding.MarshalUint16(dst, uint16(err.Errno()))

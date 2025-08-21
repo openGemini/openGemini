@@ -42,7 +42,8 @@ type Shelf struct {
 	ScheduleDurSum   *ItemInt64 // microseconds
 
 	IndexCreateCount  *ItemInt64
-	IndexCreateDurSum *ItemInt64 // microseconds
+	IndexCreateDurSum *ItemInt64    // microseconds
+	IndexLatency      *ItemGaugeMax // microseconds
 
 	// statistics the number of disk operations and latency
 	DiskFlushCount  *ItemInt64

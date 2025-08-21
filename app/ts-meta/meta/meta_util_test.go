@@ -30,7 +30,7 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	logger2 "github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
-	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/msgservice"
 	"github.com/openGemini/openGemini/lib/spdy/transport"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
@@ -275,6 +275,8 @@ func (h *MockHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/join":
 			h.WrapHandler("update", h.serveJoin).ServeHTTP(w, r)
+		case "/metaRecover":
+			h.WrapHandler("metaRecover", h.serveJoin).ServeHTTP(w, r)
 		}
 	default:
 		http.Error(w, "", http.StatusBadRequest)
@@ -569,6 +571,7 @@ type MockNetStorage struct {
 	DeleteMeasurementFn     func(node *meta2.DataNode, db string, rp, name string, shardIds []uint64) error
 	MigratePtFn             func(nodeID uint64, data transport.Codec, cb transport.Callback) error
 	PingFn                  func(nodeId uint64, address string, timeout time.Duration) error
+	SendClearEventsFn       func(nodeId uint64, data transport.Codec) error
 }
 
 func (s *MockNetStorage) GetShardSplitPoints(node *meta2.DataNode, database string, pt uint32,
@@ -607,6 +610,10 @@ func (s *MockNetStorage) TransferLeadership(database string, nodeId uint64, oldM
 	return nil
 }
 
+func (s *MockNetStorage) SendClearEvents(nodeId uint64, data transport.Codec) error {
+	return nil
+}
+
 func NewMockNetStorage() *MockNetStorage {
 	netStore := &MockNetStorage{}
 	netStore.DeleteDatabaseFn = func(node *meta2.DataNode, database string, ptId uint32) error {
@@ -622,7 +629,10 @@ func NewMockNetStorage() *MockNetStorage {
 		return nil, nil
 	}
 	netStore.MigratePtFn = func(nodeID uint64, data transport.Codec, cb transport.Callback) error {
-		cb.Handle(&netstorage.PtResponse{})
+		cb.Handle(&msgservice.PtResponse{})
+		return nil
+	}
+	netStore.SendClearEventsFn = func(nodeID uint64, data transport.Codec) error {
 		return nil
 	}
 	netStore.PingFn = func(nodeId uint64, address string, timeout time.Duration) error {

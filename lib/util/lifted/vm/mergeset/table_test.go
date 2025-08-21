@@ -3,14 +3,18 @@ package mergeset
 import (
 	"bytes"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
 	"github.com/openGemini/openGemini/lib/fileops"
+	"github.com/openGemini/openGemini/lib/util"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/fs"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -362,4 +366,209 @@ func TestRenameOldFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	assert.Equal(t, true, exist)
+}
+
+func TestAddNewPWAndRemoveOldPW(t *testing.T) {
+	var lock sync.Mutex
+	tb := &Table{
+		parts: []*partWrapper{
+			{
+				p: &part{
+					path:      "1",
+					ibCache:   newInmemoryBlockCache(),
+					idxbCache: newIndexBlockCache(),
+				},
+				refCount: 2,
+			},
+			{
+				p: &part{
+					path:      "",
+					ibCache:   newInmemoryBlockCache(),
+					idxbCache: newIndexBlockCache(),
+				},
+				refCount: 2,
+			},
+		},
+		partsLock: lock,
+	}
+	ps := &partSearch{
+		p: &part{
+			path: "1",
+		},
+	}
+	newPW := &partWrapper{}
+	err := tb.addNewPWAndRemoveOldPW(ps, newPW)
+	assert.Nil(t, err)
+}
+
+func TestNewPartReplaceOldPart(t *testing.T) {
+	tmpPartPath := "TestNewPartReplaceOldPart_TmpPartPath"
+	mergeSetInnerPartDir := "TestNewPartReplaceOldPart_MergeSetInnerPartDir"
+	newPartPath := "TestNewPartReplaceOldPart_NewPartPath"
+
+	tb := &Table{}
+	lock := fileops.FileLockOption("")
+
+	_ = os.Mkdir(tmpPartPath, 0750)
+	f, _ := fileops.Open(filepath.Join(tmpPartPath, "1"))
+	err := tb.newPartReplaceOldPart(tmpPartPath, "", mergeSetInnerPartDir, lock)
+	assert.Nil(t, err)
+	_ = f.Close()
+
+	err = tb.newPartReplaceOldPart(tmpPartPath, newPartPath, mergeSetInnerPartDir, lock)
+	assert.Error(t, err)
+
+	_ = fileops.RemoveAll(tmpPartPath)
+	err = tb.newPartReplaceOldPart(tmpPartPath, newPartPath, mergeSetInnerPartDir, lock)
+	assert.Error(t, err)
+
+	_ = fileops.RemoveAll(newPartPath)
+}
+
+func TestDeleteMstsInTmpPart(t *testing.T) {
+	originalFn := openFilePartFn
+	defer func() { openFilePartFn = originalFn }()
+
+	tmpPartPath := "TestDeleteMstsInTmpPart_TmpPartPath"
+	tb := &Table{
+		lock: &tmpPartPath,
+	}
+
+	openFilePartFn = func(path string) (*part, error) {
+		return nil, fmt.Errorf("")
+	}
+	parseItemFun := func([]byte) (res *util.Item, err error) {
+		return &util.Item{}, fmt.Errorf("")
+	}
+	_, _, err := tb.deleteMstsInTmpPart(tmpPartPath, "", []string{}, 1, parseItemFun)
+	assert.Error(t, err)
+
+	p := &part{
+		ph: partHeader{
+			itemsCount:  2,
+			blocksCount: 2,
+			firstItem:   []byte(""),
+		},
+		idxbCache: newIndexBlockCache(),
+		ibCache:   newInmemoryBlockCache(),
+		size:      math.MaxInt,
+	}
+	openFilePartFn = func(path string) (*part, error) {
+		return p, nil
+	}
+	_, _, err = tb.deleteMstsInTmpPart(tmpPartPath, "", []string{}, 1, parseItemFun)
+	assert.Error(t, err)
+
+	p.path = tmpPartPath
+	_, _, err = tb.deleteMstsInTmpPart(tmpPartPath, "", []string{}, 1, parseItemFun)
+	assert.Error(t, err)
+	err = fileops.RemoveAll(tmpPartPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDeleteMstsInIndex(t *testing.T) {
+	originalFn := openFilePartFn
+	defer func() { openFilePartFn = originalFn }()
+
+	wd, _ := os.Getwd()
+	parent1 := filepath.Dir(wd)
+	parent2 := filepath.Dir(parent1)
+	parent3 := filepath.Dir(parent2)
+	parent4 := filepath.Dir(parent3)
+	parent5 := filepath.Dir(parent4)
+	mockIndex := filepath.Join(parent5, "tests", "testdata", "MockIndex")
+	tmpIndex := "TestDeleteMstsInIndex_TmpIndex"
+	partDirName := "41_1_1847A3A45055EEF0"
+	tb := &Table{
+		lock: &tmpIndex,
+		path: tmpIndex,
+	}
+
+	fs.CopyDirectory(mockIndex, tmpIndex, &tmpIndex)
+	fs.CopyDirectory(filepath.Join(mockIndex, partDirName), filepath.Join(tmpIndex, partDirName), &tmpIndex)
+	fs.CopyDirectory(filepath.Join(mockIndex, "tmp"), filepath.Join(tmpIndex, "tmp"), &tmpIndex)
+	fs.CopyDirectory(filepath.Join(mockIndex, "txn"), filepath.Join(tmpIndex, "txn"), &tmpIndex)
+	p, err := openFilePart(filepath.Join(tmpIndex, partDirName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	openFilePartFn = func(path string) (*part, error) {
+		return p, nil
+	}
+
+	parseItemFun := func(item []byte) (res *util.Item, err error) {
+		if strings.Contains(string(item), "index_name1") {
+			return &util.Item{Name: "index_name1"}, nil
+		}
+		return &util.Item{Name: ""}, nil
+	}
+	err = tb.DeleteMstsInIndex(partDirName, []string{}, 1, parseItemFun)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assert.Nil(t, err)
+
+	err = tb.DeleteMstsInIndex(partDirName, []string{"index_name1"}, 1, parseItemFun)
+	assert.Nil(t, err)
+
+	p.MustClose()
+	err = fileops.RemoveAll(tmpIndex)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCheckForDeletion(t *testing.T) {
+	originalFn := openFilePartFn
+	defer func() { openFilePartFn = originalFn }()
+
+	wd, _ := os.Getwd()
+	parent1 := filepath.Dir(wd)
+	parent2 := filepath.Dir(parent1)
+	parent3 := filepath.Dir(parent2)
+	parent4 := filepath.Dir(parent3)
+	parent5 := filepath.Dir(parent4)
+	mockIndex := filepath.Join(parent5, "tests", "testdata", "MockIndex")
+	tmpIndex := "TestCheckForDeletion_TmpIndex"
+	partDirName := "41_1_1847A3A45055EEF0"
+	tb := &Table{
+		lock: &tmpIndex,
+		path: tmpIndex,
+	}
+
+	fs.CopyDirectory(mockIndex, tmpIndex, &tmpIndex)
+	fs.CopyDirectory(filepath.Join(mockIndex, partDirName), filepath.Join(tmpIndex, partDirName), &tmpIndex)
+	fs.CopyDirectory(filepath.Join(mockIndex, "tmp"), filepath.Join(tmpIndex, "tmp"), &tmpIndex)
+	fs.CopyDirectory(filepath.Join(mockIndex, "txn"), filepath.Join(tmpIndex, "txn"), &tmpIndex)
+	p, err := openFilePart(filepath.Join(tmpIndex, partDirName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	openFilePartFn = func(path string) (*part, error) {
+		return p, nil
+	}
+
+	parseItemFun := func(item []byte) (res *util.Item, err error) {
+		if strings.Contains(string(item), "index_name1") {
+			return &util.Item{Name: "index_name1"}, nil
+		}
+		return &util.Item{Name: ""}, nil
+	}
+
+	err = tb.DeleteMstsInIndex(partDirName, []string{}, math.MaxInt, parseItemFun)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assert.Nil(t, err)
+
+	err = tb.DeleteMstsInIndex(partDirName, []string{"index_name1"}, math.MaxInt, parseItemFun)
+	assert.Nil(t, err)
+
+	p.MustClose()
+	err = fileops.RemoveAll(tmpIndex)
+	if err != nil {
+		t.Fatal(err)
+	}
 }

@@ -43,12 +43,12 @@ import (
 
 const (
 	POW      = "pow"
-	POW_OP   = 57501
+	POW_OP   = 57342
 	ATAN2    = "ATAN2"
-	ATAN2_OP = 57502
+	ATAN2_OP = 57343
 )
 
-// DataType represents the primitive data types available in InfluxQL.
+// DataType represents the primitive data typ available in InfluxQL.
 type DataType int
 
 const (
@@ -75,6 +75,7 @@ const (
 	// FloatTuple means the data type is a float tuple.
 	FloatTuple      DataType = 10
 	DefaultFieldKey string   = "value"
+	Graph           DataType = 11
 )
 
 const (
@@ -114,6 +115,17 @@ var (
 	ErrNeedBatchMap           = errors.New("try batch map later")
 	ErrUnsupportBatchMap      = errors.New("remote node unsupport batch map type")
 	ErrDeclareEmptyCollection = errors.New("declare empty collection")
+	ErrNotMst                 = errors.New("expect measurement type")
+	ErrNotMstForCTE           = errors.New("expect measurement type of CTE")
+	ErrNoMstName              = errors.New("expect measurement name when converting the measurement type to the subquery type in the join scenario")
+	ErrEmptyFields            = errors.New("empty fields when converting the measurement type to the subquery type in the join scenario")
+	ErrUnionSourceCheck       = errors.New("only support union or subquery")
+	ErrUnionLeftSource        = errors.New("union left need select statement")
+	ErrUnionRightSource       = errors.New("union right need select statement")
+	ErrUnionColumnsCount      = errors.New("union/union all can only apply to expressions with the same number of result columns")
+	ErrUnionTypeByIndex       = errors.New("columns in the same index position must have the same data type when using union/union all")
+	ErrUnionTypeByName        = errors.New("columns with same name must have the same data type when using union by name/union all by name")
+	ErrSourceOfCTE            = errors.New("err type of src: only CTE or SubQuery is needed")
 )
 
 // InspectDataType returns the data type of a given value.
@@ -248,6 +260,8 @@ func (d DataType) String() string {
 		return "tag"
 	case AnyField:
 		return "field"
+	case Graph:
+		return "graph"
 	}
 	return "unknown"
 }
@@ -269,67 +283,175 @@ func (s *Schema) AddMinMaxTime(minT, maxT int64) {
 	}
 }
 
+type Position struct {
+	Begin int
+	End   int
+}
+
+type BufPositionsMap map[Node]Position
+
+// Structure to represent single large expression string representation with ability
+// to get sub-expressions string representations as string slices of one single string.
+// Effective to mitigate multiple allocations and re-rendering of the same bits.
+// NOTE: should not be used on expression that is being mutated during the process.
+type NestedNodeStringRepresentation struct {
+	QueryString   string
+	ExprPositions BufPositionsMap
+}
+
+func NewNestedNodeStringRepresentation(n Node) *NestedNodeStringRepresentation {
+	nsr := &NestedNodeStringRepresentation{ExprPositions: BufPositionsMap{}}
+	nsr.QueryString = n.RenderBytes(&bytes.Buffer{}, nsr.ExprPositions).String()
+	return nsr
+}
+
+func (nsr *NestedNodeStringRepresentation) NodeString(n Node) string {
+	pos, ok := nsr.ExprPositions[n]
+	if !ok { // Fallback to avoid panics in case of code bug
+		return n.String()
+	}
+	return nsr.QueryString[pos.Begin:pos.End]
+}
+
 // Node represents a node in the InfluxDB abstract syntax tree.
 type Node interface {
 	// node is unexported to ensure implementations of Node
 	// can only originate in this package.
 	node()
+	// Recursively renders text representation of node and all its descendants
+	// in a given buffer and if map is given, writes slice coordinates into map.
+	RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer
+	// Renders text representation of the node as string using RenderBytes.
 	String() string
 }
 
-func (*Query) node()     {}
+type nodeDepthTester interface {
+	// Test-only method to compute depth. Could be used to validate that
+	// depth is correctly computed by parsing methods and to initialize
+	// nodes for reflect.DeepEqual later comparison in other tests.
+	UpdateDepthForTests() int
+}
+
+// Workaround for nil-nil interfaces
+func CallUpdateDepthForTests(n nodeDepthTester) int {
+	if n == nil {
+		return 0
+	}
+	return n.UpdateDepthForTests()
+}
+
+type nodeGuard interface {
+	// Any AST Node tracks its depth for complexity enforcement.
+	// To make sure lists don't have Depth method, we wrap them and
+	// stack guards only run at nodeGuard instances, unwrapping for Node.
+	Depth() int
+}
+
+func (*Query) node() {}
+
 func (Statements) node() {}
 
-func (*AlterRetentionPolicyStatement) node()       {}
-func (*CreateContinuousQueryStatement) node()      {}
-func (*CreateDatabaseStatement) node()             {}
-func (*CreateMeasurementStatement) node()          {}
-func (*AlterShardKeyStatement) node()              {}
-func (*CreateRetentionPolicyStatement) node()      {}
-func (*CreateSubscriptionStatement) node()         {}
-func (*CreateUserStatement) node()                 {}
-func (*Distinct) node()                            {}
-func (*DeleteSeriesStatement) node()               {}
-func (*DeleteStatement) node()                     {}
-func (*DropContinuousQueryStatement) node()        {}
-func (*DropDatabaseStatement) node()               {}
-func (*DropMeasurementStatement) node()            {}
-func (*DropRetentionPolicyStatement) node()        {}
-func (*DropSeriesStatement) node()                 {}
-func (*DropShardStatement) node()                  {}
-func (*DropSubscriptionStatement) node()           {}
-func (*DropUserStatement) node()                   {}
-func (*ExplainStatement) node()                    {}
-func (*GrantStatement) node()                      {}
-func (*GrantAdminStatement) node()                 {}
-func (*KillQueryStatement) node()                  {}
-func (*RevokeStatement) node()                     {}
-func (*RevokeAdminStatement) node()                {}
-func (*SelectStatement) node()                     {}
-func (*SetPasswordUserStatement) node()            {}
-func (*ShowContinuousQueriesStatement) node()      {}
-func (*ShowGrantsForUserStatement) node()          {}
-func (*ShowDatabasesStatement) node()              {}
-func (*ShowFieldKeyCardinalityStatement) node()    {}
-func (*ShowFieldKeysStatement) node()              {}
-func (*ShowRetentionPoliciesStatement) node()      {}
+func (*AlterRetentionPolicyStatement) node() {}
+
+func (*CreateContinuousQueryStatement) node() {}
+
+func (*CreateDatabaseStatement) node() {}
+
+func (*CreateMeasurementStatement) node() {}
+
+func (*AlterShardKeyStatement) node() {}
+
+func (*CreateRetentionPolicyStatement) node() {}
+
+func (*CreateSubscriptionStatement) node() {}
+
+func (*CreateUserStatement) node() {}
+
+func (*Distinct) node() {}
+
+func (*DeleteSeriesStatement) node() {}
+
+func (*DeleteStatement) node() {}
+
+func (*DropContinuousQueryStatement) node() {}
+
+func (*DropDatabaseStatement) node() {}
+
+func (*DropMeasurementStatement) node() {}
+
+func (*DropRetentionPolicyStatement) node() {}
+
+func (*DropSeriesStatement) node() {}
+
+func (*DropShardStatement) node() {}
+
+func (*DropSubscriptionStatement) node() {}
+
+func (*DropUserStatement) node() {}
+
+func (*ExplainStatement) node() {}
+
+func (*GrantStatement) node() {}
+
+func (*GrantAdminStatement) node() {}
+
+func (*KillQueryStatement) node() {}
+
+func (*RevokeStatement) node() {}
+
+func (*RevokeAdminStatement) node() {}
+
+func (*SelectStatement) node() {}
+
+func (*SetPasswordUserStatement) node() {}
+
+func (*ShowContinuousQueriesStatement) node() {}
+
+func (*ShowGrantsForUserStatement) node() {}
+
+func (*ShowDatabasesStatement) node() {}
+
+func (*ShowFieldKeyCardinalityStatement) node() {}
+
+func (*ShowFieldKeysStatement) node() {}
+
+func (*ShowRetentionPoliciesStatement) node() {}
+
 func (*ShowMeasurementCardinalityStatement) node() {}
-func (*ShowMeasurementsStatement) node()           {}
-func (*ShowMeasurementsDetailStatement) node()     {}
-func (*ShowQueriesStatement) node()                {}
-func (*ShowSeriesStatement) node()                 {}
-func (*ShowSeriesCardinalityStatement) node()      {}
-func (*ShowShardGroupsStatement) node()            {}
-func (*ShowShardsStatement) node()                 {}
-func (*ShowStatsStatement) node()                  {}
-func (*ShowSubscriptionsStatement) node()          {}
-func (*ShowDiagnosticsStatement) node()            {}
-func (*ShowTagKeyCardinalityStatement) node()      {}
-func (*ShowTagKeysStatement) node()                {}
-func (*ShowTagValuesCardinalityStatement) node()   {}
-func (*ShowTagValuesStatement) node()              {}
-func (*ShowUsersStatement) node()                  {}
-func (*WithSelectStatement) node()                 {}
+
+func (*ShowMeasurementsStatement) node() {}
+
+func (*ShowMeasurementsDetailStatement) node() {}
+
+func (*ShowQueriesStatement) node() {}
+
+func (*ShowSeriesStatement) node() {}
+
+func (*ShowSeriesCardinalityStatement) node() {}
+
+func (*ShowShardGroupsStatement) node() {}
+
+func (*ShowShardsStatement) node() {}
+
+func (*ShowStatsStatement) node() {}
+
+func (*ShowSubscriptionsStatement) node() {}
+
+func (*ShowDiagnosticsStatement) node() {}
+
+func (*ShowTagKeyCardinalityStatement) node() {}
+
+func (*ShowTagKeysStatement) node() {}
+
+func (*ShowTagValuesCardinalityStatement) node() {}
+
+func (*ShowTagValuesStatement) node() {}
+
+func (*ShowUsersStatement) node() {}
+
+func (*WithSelectStatement) node() {}
+
+func (*GraphStatement) node() {}
 
 func (*BinaryExpr) node()                  {}
 func (*BooleanLiteral) node()              {}
@@ -349,35 +471,76 @@ func (*NumberLiteral) node()               {}
 func (*ParenExpr) node()                   {}
 func (*RegexLiteral) node()                {}
 func (*ListLiteral) node()                 {}
+func (*SetLiteral) node()                  {}
 func (*SortField) node()                   {}
 func (SortFields) node()                   {}
 func (Sources) node()                      {}
 func (*StringLiteral) node()               {}
 func (*SubQuery) node()                    {}
 func (*Join) node()                        {}
+func (*Union) node()                       {}
 func (*Target) node()                      {}
 func (*TimeLiteral) node()                 {}
 func (*VarRef) node()                      {}
 func (*Wildcard) node()                    {}
 func (*PrepareSnapshotStatement) node()    {}
 func (*EndPrepareSnapshotStatement) node() {}
-func (*GetRuntimeInfoStatement) node()     {}
-func (*Hint) node()                        {}
-func (Hints) node()                        {}
-func (*MatchExpr) node()                   {}
-func (*InCondition) node()                 {}
-func (*Unnest) node()                      {}
-func (*BinOp) node()                       {}
-func (*CTE) node()                         {}
-func (CTES) node()                         {}
+
+func (*GetRuntimeInfoStatement) node() {}
+
+func (*Hint) node() {}
+
+func (Hints) node() {}
+
+func (*MatchExpr) node() {}
+
+func (*InCondition) node() {}
+
+func (*Unnest) node() {}
+
+func (*BinOp) node() {}
+
+func (*CTE) node() {}
+
+func (CTES) node() {}
+
+func (*TableFunction) node() {}
 
 // Query represents a collection of ordered statements.
 type Query struct {
 	Statements Statements
+	depth      int
+}
+
+func (q *Query) Depth() int {
+	if q != nil {
+		return q.depth
+	}
+	return 0
+}
+
+func (q *Query) UpdateDepthForTests() int {
+	if q != nil {
+		q.depth = 1 + q.Statements.UpdateDepthForTests()
+		return q.depth
+	} else {
+		return 0
+	}
 }
 
 // String returns a string representation of the query.
-func (q *Query) String() string { return q.Statements.String() }
+func (q *Query) String() string { return q.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (q *Query) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	_ = q.Statements.RenderBytes(buf, posmap)
+
+	if posmap != nil {
+		posmap[q] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
+}
 
 func (q *Query) StringAndLocs() (string, [][2]int) { return q.Statements.StringAndLocs() }
 
@@ -400,13 +563,34 @@ func (q *Query) SetPromRemoteRead(isPromRemoteRead bool) {
 // Statements represents a list of statements.
 type Statements []Statement
 
-// String returns a string representation of the statements.
-func (a Statements) String() string {
-	var str []string
-	for _, stmt := range a {
-		str = append(str, stmt.String())
+func (a Statements) UpdateDepthForTests() int {
+	if a != nil {
+		depth := 0
+		for i, s := range a {
+			depth = max(depth, 1+i+CallUpdateDepthForTests(s))
+		}
+		return depth
 	}
-	return strings.Join(str, ";\n")
+	return 0
+}
+
+// String returns a string representation of the statements.
+func (a Statements) String() string { return a.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (a Statements) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	for i, stmt := range a {
+		if i > 0 {
+			_, _ = buf.WriteString(";\n")
+		}
+		_ = stmt.RenderBytes(buf, posmap)
+	}
+
+	if posmap != nil {
+		posmap[a] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 func (a Statements) StringAndLocs() (string, [][2]int) {
@@ -427,6 +611,8 @@ func (a Statements) StringAndLocs() (string, [][2]int) {
 // Statement represents a single command in InfluxQL.
 type Statement interface {
 	Node
+	nodeGuard
+	nodeDepthTester
 	// stmt is unexported to ensure implementations of Statement
 	// can only originate in this package.
 	stmt()
@@ -461,62 +647,117 @@ type ExecutionPrivilege struct {
 // ExecutionPrivileges is a list of privileges required to execute a statement.
 type ExecutionPrivileges []ExecutionPrivilege
 
-func (*AlterRetentionPolicyStatement) stmt()       {}
-func (*CreateContinuousQueryStatement) stmt()      {}
-func (*CreateDatabaseStatement) stmt()             {}
-func (*CreateMeasurementStatement) stmt()          {}
-func (*AlterShardKeyStatement) stmt()              {}
-func (*CreateRetentionPolicyStatement) stmt()      {}
-func (*CreateSubscriptionStatement) stmt()         {}
-func (*CreateUserStatement) stmt()                 {}
-func (*DeleteSeriesStatement) stmt()               {}
-func (*DeleteStatement) stmt()                     {}
-func (*DropContinuousQueryStatement) stmt()        {}
-func (*DropDatabaseStatement) stmt()               {}
-func (*DropMeasurementStatement) stmt()            {}
-func (*DropRetentionPolicyStatement) stmt()        {}
-func (*DropSeriesStatement) stmt()                 {}
-func (*DropSubscriptionStatement) stmt()           {}
-func (*DropUserStatement) stmt()                   {}
-func (*ExplainStatement) stmt()                    {}
-func (*GrantStatement) stmt()                      {}
-func (*GrantAdminStatement) stmt()                 {}
-func (*KillQueryStatement) stmt()                  {}
-func (*ShowContinuousQueriesStatement) stmt()      {}
-func (*ShowGrantsForUserStatement) stmt()          {}
-func (*ShowDatabasesStatement) stmt()              {}
-func (*ShowFieldKeyCardinalityStatement) stmt()    {}
-func (*ShowFieldKeysStatement) stmt()              {}
+func (*AlterRetentionPolicyStatement) stmt() {}
+
+func (*CreateContinuousQueryStatement) stmt() {}
+
+func (*CreateDatabaseStatement) stmt() {}
+
+func (*CreateMeasurementStatement) stmt() {}
+
+func (*AlterShardKeyStatement) stmt() {}
+
+func (*CreateRetentionPolicyStatement) stmt() {}
+
+func (*CreateSubscriptionStatement) stmt() {}
+
+func (*CreateUserStatement) stmt() {}
+
+func (*DeleteSeriesStatement) stmt() {}
+
+func (*DeleteStatement) stmt() {}
+
+func (*DropContinuousQueryStatement) stmt() {}
+
+func (*DropDatabaseStatement) stmt() {}
+
+func (*DropMeasurementStatement) stmt() {}
+
+func (*DropRetentionPolicyStatement) stmt() {}
+
+func (*DropSeriesStatement) stmt() {}
+
+func (*DropSubscriptionStatement) stmt() {}
+
+func (*DropUserStatement) stmt() {}
+
+func (*ExplainStatement) stmt() {}
+
+func (*GrantStatement) stmt() {}
+
+func (*GrantAdminStatement) stmt() {}
+
+func (*KillQueryStatement) stmt() {}
+
+func (*ShowContinuousQueriesStatement) stmt() {}
+
+func (*ShowGrantsForUserStatement) stmt() {}
+
+func (*ShowDatabasesStatement) stmt() {}
+
+func (*ShowFieldKeyCardinalityStatement) stmt() {}
+
+func (*ShowFieldKeysStatement) stmt() {}
+
 func (*ShowMeasurementCardinalityStatement) stmt() {}
-func (*ShowMeasurementsStatement) stmt()           {}
-func (*ShowMeasurementsDetailStatement) stmt()     {}
-func (*ShowQueriesStatement) stmt()                {}
-func (*ShowRetentionPoliciesStatement) stmt()      {}
-func (*ShowSeriesStatement) stmt()                 {}
-func (*ShowSeriesCardinalityStatement) stmt()      {}
-func (*ShowShardGroupsStatement) stmt()            {}
-func (*ShowShardsStatement) stmt()                 {}
-func (*ShowStatsStatement) stmt()                  {}
-func (*DropShardStatement) stmt()                  {}
-func (*ShowSubscriptionsStatement) stmt()          {}
-func (*ShowDiagnosticsStatement) stmt()            {}
-func (*ShowTagKeyCardinalityStatement) stmt()      {}
-func (*ShowTagKeysStatement) stmt()                {}
-func (*ShowTagValuesCardinalityStatement) stmt()   {}
-func (*ShowTagValuesStatement) stmt()              {}
-func (*ShowUsersStatement) stmt()                  {}
-func (*RevokeStatement) stmt()                     {}
-func (*RevokeAdminStatement) stmt()                {}
-func (*SelectStatement) stmt()                     {}
-func (*SetPasswordUserStatement) stmt()            {}
-func (*PrepareSnapshotStatement) stmt()            {}
-func (*EndPrepareSnapshotStatement) stmt()         {}
-func (*GetRuntimeInfoStatement) stmt()             {}
-func (*WithSelectStatement) stmt()                 {}
+
+func (*ShowMeasurementsStatement) stmt() {}
+
+func (*ShowMeasurementsDetailStatement) stmt() {}
+
+func (*ShowQueriesStatement) stmt() {}
+
+func (*ShowRetentionPoliciesStatement) stmt() {}
+
+func (*ShowSeriesStatement) stmt() {}
+
+func (*ShowSeriesCardinalityStatement) stmt() {}
+
+func (*ShowShardGroupsStatement) stmt() {}
+
+func (*ShowShardsStatement) stmt() {}
+
+func (*ShowStatsStatement) stmt() {}
+
+func (*DropShardStatement) stmt() {}
+
+func (*ShowSubscriptionsStatement) stmt() {}
+
+func (*ShowDiagnosticsStatement) stmt() {}
+
+func (*ShowTagKeyCardinalityStatement) stmt() {}
+
+func (*ShowTagKeysStatement) stmt() {}
+
+func (*ShowTagValuesCardinalityStatement) stmt() {}
+
+func (*ShowTagValuesStatement) stmt() {}
+
+func (*ShowUsersStatement) stmt() {}
+
+func (*RevokeStatement) stmt() {}
+
+func (*RevokeAdminStatement) stmt() {}
+
+func (*SelectStatement) stmt() {}
+
+func (*SetPasswordUserStatement) stmt() {}
+
+func (*PrepareSnapshotStatement) stmt() {}
+
+func (*EndPrepareSnapshotStatement) stmt() {}
+
+func (*GetRuntimeInfoStatement) stmt() {}
+
+func (*WithSelectStatement) stmt() {}
+
+func (*GraphStatement) stmt() {}
 
 // Expr represents an expression that can be evaluated to a value.
 type Expr interface {
 	Node
+	nodeGuard
+	nodeDepthTester
 	// expr is unexported to ensure implementations of Expr
 	// can only originate in this package.
 	expr()
@@ -537,6 +778,7 @@ func (*NumberLiteral) expr()        {}
 func (*ParenExpr) expr()            {}
 func (*RegexLiteral) expr()         {}
 func (*ListLiteral) expr()          {}
+func (*SetLiteral) expr()           {}
 func (*StringLiteral) expr()        {}
 func (*TimeLiteral) expr()          {}
 func (*VarRef) expr()               {}
@@ -551,21 +793,28 @@ type Literal interface {
 	literal()
 }
 
-func (*BooleanLiteral) literal()  {}
-func (*BoundParameter) literal()  {}
+func (*BooleanLiteral) literal() {}
+
+func (*BoundParameter) literal() {}
+
 func (*DurationLiteral) literal() {}
-func (*IntegerLiteral) literal()  {}
+
+func (*IntegerLiteral) literal() {}
+
 func (*UnsignedLiteral) literal() {}
 func (*NilLiteral) literal()      {}
 func (*NumberLiteral) literal()   {}
 func (*RegexLiteral) literal()    {}
 func (*ListLiteral) literal()     {}
+func (*SetLiteral) literal()      {}
 func (*StringLiteral) literal()   {}
 func (*TimeLiteral) literal()     {}
 
 // Source represents a source of data for a statement.
 type Source interface {
 	Node
+	nodeGuard
+	nodeDepthTester
 	// source is unexported to ensure implementations of Source
 	// can only originate in this package.
 	source()
@@ -573,27 +822,49 @@ type Source interface {
 }
 
 func (*Measurement) source() {}
-func (*SubQuery) source()    {}
-func (*Join) source()        {}
-func (*Unnest) source()      {}
-func (*BinOp) source()       {}
+
+func (*SubQuery) source() {}
+
+func (*Join) source() {}
+
+func (*Union) source() {}
+
+func (*Unnest) source() {}
+
+func (*BinOp) source() {}
+
+func (*CTE) source() {}
+
+func (*TableFunction) source() {}
 
 // Sources represents a list of sources.
 type Sources []Source
 
-// String returns a string representation of a Sources array.
-func (a Sources) String() string {
-	var buf bytes.Buffer
+func (s Sources) UpdateDepthForTests() int {
+	depth := 0
+	for i, n := range s {
+		depth = max(depth, 1+i+CallUpdateDepthForTests(n))
+	}
+	return depth
+}
 
-	ubound := len(a) - 1
+// String returns a string representation of a Sources array.
+func (a Sources) String() string { return a.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (a Sources) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	for i, src := range a {
-		_, _ = buf.WriteString(src.String())
-		if i < ubound {
+		if i > 0 {
 			_, _ = buf.WriteString(", ")
 		}
+		_ = src.RenderBytes(buf, posmap)
 	}
 
-	return buf.String()
+	if posmap != nil {
+		posmap[a] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // Measurements returns all measurements including ones embedded in subqueries.
@@ -605,6 +876,12 @@ func (a Sources) Measurements() []*Measurement {
 			mms = append(mms, src)
 		case *SubQuery:
 			mms = append(mms, src.Statement.Sources.Measurements()...)
+		case *CTE:
+			// todo: graph only support tsstore
+			if src.GraphQuery != nil {
+				return []*Measurement{&Measurement{EngineType: config.TSSTORE}}
+			}
+			mms = append(mms, src.Query.Sources.Measurements()...)
 		}
 	}
 	return mms
@@ -653,6 +930,14 @@ func (a Sources) IsSubQuery() bool {
 		return false
 	}
 	_, ok := a[0].(*SubQuery)
+	return ok
+}
+
+func (a Sources) IsCTE() bool {
+	if len(a) != 1 {
+		return false
+	}
+	_, ok := a[0].(*CTE)
 	return ok
 }
 
@@ -709,6 +994,15 @@ func (a Sources) RequiredPrivileges() (ExecutionPrivileges, error) {
 				return nil, err
 			}
 			ep = append(ep, privs...)
+		case *Union:
+			var sources Sources
+			sources = append(sources, source.LSrc)
+			sources = append(sources, source.RSrc)
+			privs, err := sources.RequiredPrivileges()
+			if err != nil {
+				return nil, err
+			}
+			ep = append(ep, privs...)
 		default:
 			return nil, fmt.Errorf("invalid source: %s", source)
 		}
@@ -721,7 +1015,7 @@ func (a Sources) HasSubQuery() bool {
 		switch src.(type) {
 		case *SubQuery:
 			return true
-		case *Join:
+		case *Join, *Union:
 			return true
 		case *BinOp:
 			return true
@@ -729,6 +1023,16 @@ func (a Sources) HasSubQuery() bool {
 	}
 	return false
 }
+
+// Temporary node to build sources list preserving depth.
+// Does not intended to be included into the resulting AST,
+// thus does not implement node()
+type sourcesList struct {
+	sources Sources
+	depth   int
+}
+
+func (s sourcesList) Depth() int { return s.depth }
 
 // IsSystemName returns true if name is an data system name.
 func IsSystemName(name string) bool {
@@ -755,9 +1059,21 @@ type SortField struct {
 	Ascending bool
 }
 
+func (field *SortField) Depth() int { return 1 }
+
+func (field *SortField) UpdateDepthForTests() int {
+	if field != nil {
+		return 1
+	}
+	return 0
+}
+
 // String returns a string representation of a sort field.
-func (field *SortField) String() string {
-	var buf bytes.Buffer
+func (field *SortField) String() string { return field.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (field *SortField) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	if field.Name != "" {
 		_, _ = buf.WriteString(field.Name)
 		_, _ = buf.WriteString(" ")
@@ -767,19 +1083,43 @@ func (field *SortField) String() string {
 	} else {
 		_, _ = buf.WriteString("DESC")
 	}
-	return buf.String()
+
+	if posmap != nil {
+		posmap[field] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // SortFields represents an ordered list of ORDER BY fields.
 type SortFields []*SortField
 
-// String returns a string representation of sort fields.
-func (a SortFields) String() string {
-	fields := make([]string, 0, len(a))
-	for _, field := range a {
-		fields = append(fields, field.String())
+// Since SortField has constant complexity, this depth is O(1) thus safe without wrapper
+func (a SortFields) Depth() int { return 1 + len(a) }
+
+func (a SortFields) UpdateDepthForTests() int {
+	if a != nil {
+		return 1 + len(a)
 	}
-	return strings.Join(fields, ", ")
+	return 0
+}
+
+// String returns a string representation of sort fields.
+func (a SortFields) String() string { return a.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (a SortFields) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	for i, field := range a {
+		if i > 0 {
+			_, _ = buf.WriteString(", ")
+		}
+		_ = field.RenderBytes(buf, posmap)
+	}
+
+	if posmap != nil {
+		posmap[a] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 type DatabasePolicy struct {
@@ -810,22 +1150,48 @@ type CreateDatabaseStatement struct {
 	// RetentionPolicyShardGroupDuration indicates shard group duration for the new database.
 	RetentionPolicyShardGroupDuration time.Duration
 
+	RetentionPolicyShardMergeDuration time.Duration
+
 	ReplicaNum uint32
 
 	RetentionPolicyHotDuration time.Duration
 
 	RetentionPolicyWarmDuration time.Duration
 
+	RetentionPolicyIndexColdDuration time.Duration
+
 	RetentionPolicyIndexGroupDuration time.Duration
 
 	ShardKey []string
 
 	DatabaseAttr DatabasePolicy
+
+	ObsOptions *obs.ObsOptions
+}
+
+// Create Database only has complexity in ShardKey list, so no extra tracking necessary.
+func (s *CreateDatabaseStatement) Depth() int {
+	if s != nil {
+		return 1 + len(s.ShardKey)
+	}
+	return 0
+}
+
+func (s *CreateDatabaseStatement) UpdateDepthForTests() int {
+	if s != nil {
+		return 1 + len(s.ShardKey)
+	}
+	return 0
 }
 
 // String returns a string representation of the create database statement.
 func (s *CreateDatabaseStatement) String() string {
-	var buf bytes.Buffer
+	return s.RenderBytes(&bytes.Buffer{}, nil).String()
+}
+
+func (s *CreateDatabaseStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	_, _ = buf.WriteString("CREATE DATABASE ")
 	_, _ = buf.WriteString(QuoteIdent(s.Name))
 	if s.RetentionPolicyCreate {
@@ -842,13 +1208,20 @@ func (s *CreateDatabaseStatement) String() string {
 			_, _ = buf.WriteString(" SHARD DURATION ")
 			_, _ = buf.WriteString(s.RetentionPolicyShardGroupDuration.String())
 		}
+		if s.RetentionPolicyShardMergeDuration > 0 {
+			_, _ = buf.WriteString(" SHARDMERGE DURATION ")
+			_, _ = buf.WriteString(s.RetentionPolicyShardMergeDuration.String())
+		}
 		if s.RetentionPolicyName != "" {
 			_, _ = buf.WriteString(" NAME ")
 			_, _ = buf.WriteString(QuoteIdent(s.RetentionPolicyName))
 		}
 	}
 
-	return buf.String()
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // RequiredPrivileges returns the privilege required to execute a CreateDatabaseStatement.
@@ -874,6 +1247,21 @@ type CreateMeasurementStatement struct {
 	IndexOption         []*IndexOption
 	TimeClusterDuration time.Duration
 	CompactType         string
+	TTL                 time.Duration
+}
+
+func (s *CreateMeasurementStatement) Depth() int {
+	if s != nil {
+		return 1 + max(len(s.ShardKey), len(s.PrimaryKey), len(s.SortKey), len(s.Property), len(s.Tags), len(s.Fields), len(s.IndexType), len(s.IndexList), len(s.IndexOption))
+	}
+	return 0
+}
+
+func (s *CreateMeasurementStatement) UpdateDepthForTests() int {
+	if s != nil {
+		return 1 + max(len(s.ShardKey), len(s.PrimaryKey), len(s.SortKey), len(s.Property), len(s.Tags), len(s.Fields), len(s.IndexType), len(s.IndexList), len(s.IndexOption))
+	}
+	return 0
 }
 
 type CreateMeasurementStatementOption struct {
@@ -888,6 +1276,7 @@ type CreateMeasurementStatementOption struct {
 	Property            [][]string
 	TimeClusterDuration time.Duration
 	CompactType         string
+	TTL                 time.Duration
 }
 
 type IndexOption struct {
@@ -920,7 +1309,12 @@ func (ios *IndexOptions) Clone() *IndexOptions {
 }
 
 func (s *CreateMeasurementStatement) String() string {
-	var buf bytes.Buffer
+	return s.RenderBytes(&bytes.Buffer{}, nil).String()
+}
+
+func (s *CreateMeasurementStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	_, _ = buf.WriteString("CREATE MEASUREMENT ")
 	if s.Database != "" {
 		_, _ = buf.WriteString(QuoteIdent(s.Database))
@@ -955,7 +1349,10 @@ func (s *CreateMeasurementStatement) String() string {
 
 	}
 
-	return buf.String()
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 func (s *CreateMeasurementStatement) RequiredPrivileges() (ExecutionPrivileges, error) {
@@ -970,8 +1367,25 @@ type AlterShardKeyStatement struct {
 	Type            string
 }
 
-func (s *AlterShardKeyStatement) String() string {
-	var buf bytes.Buffer
+func (s *AlterShardKeyStatement) Depth() int {
+	if s != nil {
+		return 1 + len(s.ShardKey)
+	}
+	return 0
+}
+
+func (s *AlterShardKeyStatement) UpdateDepthForTests() int {
+	if s != nil {
+		return 1 + len(s.ShardKey)
+	}
+	return 0
+}
+
+func (s *AlterShardKeyStatement) String() string { return s.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (s *AlterShardKeyStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	_, _ = buf.WriteString("ALTER MEASUREMENT ")
 	if s.Database != "" {
 		_, _ = buf.WriteString(QuoteIdent(s.Database))
@@ -992,7 +1406,10 @@ func (s *AlterShardKeyStatement) String() string {
 	_, _ = buf.WriteString(" SHARDKEY ")
 	_, _ = buf.WriteString(shardKey)
 
-	return buf.String()
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 func (s *AlterShardKeyStatement) RequiredPrivileges() (ExecutionPrivileges, error) {
@@ -1005,12 +1422,28 @@ type DropDatabaseStatement struct {
 	Name string
 }
 
+func (s *DropDatabaseStatement) Depth() int { return 1 }
+
+func (s *DropDatabaseStatement) UpdateDepthForTests() int {
+	if s != nil {
+		return 1
+	}
+	return 0
+}
+
 // String returns a string representation of the drop database statement.
-func (s *DropDatabaseStatement) String() string {
-	var buf bytes.Buffer
+func (s *DropDatabaseStatement) String() string { return s.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (s *DropDatabaseStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	_, _ = buf.WriteString("DROP DATABASE ")
 	_, _ = buf.WriteString(QuoteIdent(s.Name))
-	return buf.String()
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // RequiredPrivileges returns the privilege required to execute a DropDatabaseStatement.
@@ -1027,14 +1460,32 @@ type DropRetentionPolicyStatement struct {
 	Database string
 }
 
+func (s *DropRetentionPolicyStatement) Depth() int { return 1 }
+
+func (s *DropRetentionPolicyStatement) UpdateDepthForTests() int {
+	if s != nil {
+		return 1
+	}
+	return 0
+}
+
 // String returns a string representation of the drop retention policy statement.
 func (s *DropRetentionPolicyStatement) String() string {
-	var buf bytes.Buffer
+	return s.RenderBytes(&bytes.Buffer{}, nil).String()
+}
+
+func (s *DropRetentionPolicyStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	_, _ = buf.WriteString("DROP RETENTION POLICY ")
 	_, _ = buf.WriteString(QuoteIdent(s.Name))
 	_, _ = buf.WriteString(" ON ")
 	_, _ = buf.WriteString(QuoteIdent(s.Database))
-	return buf.String()
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // RequiredPrivileges returns the privilege required to execute a DropRetentionPolicyStatement.
@@ -1062,9 +1513,21 @@ type CreateUserStatement struct {
 	Rwuser bool
 }
 
+func (s *CreateUserStatement) Depth() int { return 1 }
+
+func (s *CreateUserStatement) UpdateDepthForTests() int {
+	if s != nil {
+		return 1
+	}
+	return 0
+}
+
 // String returns a string representation of the create user statement.
-func (s *CreateUserStatement) String() string {
-	var buf bytes.Buffer
+func (s *CreateUserStatement) String() string { return s.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (s *CreateUserStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	_, _ = buf.WriteString("CREATE USER ")
 	_, _ = buf.WriteString(QuoteIdent(s.Name))
 	_, _ = buf.WriteString(" WITH PASSWORD ")
@@ -1072,7 +1535,11 @@ func (s *CreateUserStatement) String() string {
 	if s.Admin {
 		_, _ = buf.WriteString(" WITH ALL PRIVILEGES")
 	}
-	return buf.String()
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // RequiredPrivileges returns the privilege(s) required to execute a CreateUserStatement.
@@ -1086,12 +1553,28 @@ type DropUserStatement struct {
 	Name string
 }
 
+func (s *DropUserStatement) Depth() int { return 1 }
+
+func (s *DropUserStatement) UpdateDepthForTests() int {
+	if s != nil {
+		return 1
+	}
+	return 0
+}
+
 // String returns a string representation of the drop user statement.
-func (s *DropUserStatement) String() string {
-	var buf bytes.Buffer
+func (s *DropUserStatement) String() string { return s.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (s *DropUserStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	_, _ = buf.WriteString("DROP USER ")
 	_, _ = buf.WriteString(QuoteIdent(s.Name))
-	return buf.String()
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // RequiredPrivileges returns the privilege(s) required to execute a DropUserStatement.
@@ -1143,16 +1626,32 @@ type GrantStatement struct {
 	User string
 }
 
+func (s *GrantStatement) Depth() int { return 1 }
+
+func (s *GrantStatement) UpdateDepthForTests() int {
+	if s != nil {
+		return 1
+	}
+	return 0
+}
+
 // String returns a string representation of the grant statement.
-func (s *GrantStatement) String() string {
-	var buf bytes.Buffer
+func (s *GrantStatement) String() string { return s.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (s *GrantStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	_, _ = buf.WriteString("GRANT ")
 	_, _ = buf.WriteString(s.Privilege.String())
 	_, _ = buf.WriteString(" ON ")
 	_, _ = buf.WriteString(QuoteIdent(s.On))
 	_, _ = buf.WriteString(" TO ")
 	_, _ = buf.WriteString(QuoteIdent(s.User))
-	return buf.String()
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // RequiredPrivileges returns the privilege required to execute a GrantStatement.
@@ -1171,12 +1670,28 @@ type GrantAdminStatement struct {
 	User string
 }
 
+func (s *GrantAdminStatement) Depth() int { return 1 }
+
+func (s *GrantAdminStatement) UpdateDepthForTests() int {
+	if s != nil {
+		return 1
+	}
+	return 0
+}
+
 // String returns a string representation of the grant admin statement.
-func (s *GrantAdminStatement) String() string {
-	var buf bytes.Buffer
+func (s *GrantAdminStatement) String() string { return s.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (s *GrantAdminStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	_, _ = buf.WriteString("GRANT ALL PRIVILEGES TO ")
 	_, _ = buf.WriteString(QuoteIdent(s.User))
-	return buf.String()
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // RequiredPrivileges returns the privilege required to execute a GrantAdminStatement.
@@ -1193,16 +1708,32 @@ type KillQueryStatement struct {
 	Host string
 }
 
+func (s *KillQueryStatement) Depth() int { return 1 }
+
+func (s *KillQueryStatement) UpdateDepthForTests() int {
+	if s != nil {
+		return 1
+	}
+	return 0
+}
+
 // String returns a string representation of the kill query statement.
-func (s *KillQueryStatement) String() string {
-	var buf bytes.Buffer
+func (s *KillQueryStatement) String() string { return s.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (s *KillQueryStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	_, _ = buf.WriteString("KILL QUERY ")
 	_, _ = buf.WriteString(strconv.FormatUint(s.QueryID, 10))
 	if s.Host != "" {
 		_, _ = buf.WriteString(" ON ")
 		_, _ = buf.WriteString(QuoteIdent(s.Host))
 	}
-	return buf.String()
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // RequiredPrivileges returns the privilege required to execute a KillQueryStatement.
@@ -1219,14 +1750,32 @@ type SetPasswordUserStatement struct {
 	Name string
 }
 
+func (s *SetPasswordUserStatement) Depth() int { return 1 }
+
+func (s *SetPasswordUserStatement) UpdateDepthForTests() int {
+	if s != nil {
+		return 1
+	}
+	return 0
+}
+
 // String returns a string representation of the set password statement.
 func (s *SetPasswordUserStatement) String() string {
-	var buf bytes.Buffer
+	return s.RenderBytes(&bytes.Buffer{}, nil).String()
+}
+
+func (s *SetPasswordUserStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	_, _ = buf.WriteString("SET PASSWORD FOR ")
 	_, _ = buf.WriteString(QuoteIdent(s.Name))
 	_, _ = buf.WriteString(" = ")
 	_, _ = buf.WriteString("[REDACTED]")
-	return buf.String()
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // RequiredPrivileges returns the privilege required to execute a SetPasswordUserStatement.
@@ -1246,16 +1795,32 @@ type RevokeStatement struct {
 	User string
 }
 
+func (s *RevokeStatement) Depth() int { return 1 }
+
+func (s *RevokeStatement) UpdateDepthForTests() int {
+	if s != nil {
+		return 1
+	}
+	return 0
+}
+
 // String returns a string representation of the revoke statement.
-func (s *RevokeStatement) String() string {
-	var buf bytes.Buffer
+func (s *RevokeStatement) String() string { return s.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (s *RevokeStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	_, _ = buf.WriteString("REVOKE ")
 	_, _ = buf.WriteString(s.Privilege.String())
 	_, _ = buf.WriteString(" ON ")
 	_, _ = buf.WriteString(QuoteIdent(s.On))
 	_, _ = buf.WriteString(" FROM ")
 	_, _ = buf.WriteString(QuoteIdent(s.User))
-	return buf.String()
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // RequiredPrivileges returns the privilege required to execute a RevokeStatement.
@@ -1274,12 +1839,28 @@ type RevokeAdminStatement struct {
 	User string
 }
 
+func (s *RevokeAdminStatement) Depth() int { return 1 }
+
+func (s *RevokeAdminStatement) UpdateDepthForTests() int {
+	if s != nil {
+		return 1
+	}
+	return 0
+}
+
 // String returns a string representation of the revoke admin statement.
-func (s *RevokeAdminStatement) String() string {
-	var buf bytes.Buffer
+func (s *RevokeAdminStatement) String() string { return s.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (s *RevokeAdminStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	_, _ = buf.WriteString("REVOKE ALL PRIVILEGES FROM ")
 	_, _ = buf.WriteString(QuoteIdent(s.User))
-	return buf.String()
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // RequiredPrivileges returns the privilege required to execute a RevokeAdminStatement.
@@ -1313,13 +1894,33 @@ type CreateRetentionPolicyStatement struct {
 	// Warm Duration
 	WarmDuration time.Duration
 
+	// Index Cold Duration
+	IndexColdDuration time.Duration
+
 	// Index Duration
 	IndexGroupDuration time.Duration
+
+	// ShardMerge Duration
+	ShardMergeDuration time.Duration
+}
+
+func (s *CreateRetentionPolicyStatement) Depth() int { return 1 }
+
+func (s *CreateRetentionPolicyStatement) UpdateDepthForTests() int {
+	if s != nil {
+		return 1
+	}
+	return 0
 }
 
 // String returns a string representation of the create retention policy.
 func (s *CreateRetentionPolicyStatement) String() string {
-	var buf bytes.Buffer
+	return s.RenderBytes(&bytes.Buffer{}, nil).String()
+}
+
+func (s *CreateRetentionPolicyStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	_, _ = buf.WriteString("CREATE RETENTION POLICY ")
 	_, _ = buf.WriteString(QuoteIdent(s.Name))
 	_, _ = buf.WriteString(" ON ")
@@ -1333,6 +1934,11 @@ func (s *CreateRetentionPolicyStatement) String() string {
 		_, _ = buf.WriteString(FormatDuration(s.ShardGroupDuration))
 	}
 
+	if s.ShardMergeDuration > 0 {
+		_, _ = buf.WriteString(" SHARDMERGE DURATION ")
+		_, _ = buf.WriteString(FormatDuration(s.ShardMergeDuration))
+	}
+
 	if s.HotDuration > 0 {
 		_, _ = buf.WriteString(" HOT DURATION ")
 		_, _ = buf.WriteString(FormatDuration(s.HotDuration))
@@ -1343,6 +1949,11 @@ func (s *CreateRetentionPolicyStatement) String() string {
 		_, _ = buf.WriteString(FormatDuration(s.WarmDuration))
 	}
 
+	if s.IndexColdDuration > 0 {
+		_, _ = buf.WriteString(" INDEXCOLD DURATION ")
+		_, _ = buf.WriteString(FormatDuration(s.IndexColdDuration))
+	}
+
 	if s.IndexGroupDuration > 0 {
 		_, _ = buf.WriteString(" INDEX DURATION ")
 		_, _ = buf.WriteString(FormatDuration(s.IndexGroupDuration))
@@ -1350,7 +1961,11 @@ func (s *CreateRetentionPolicyStatement) String() string {
 	if s.Default {
 		_, _ = buf.WriteString(" DEFAULT")
 	}
-	return buf.String()
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // RequiredPrivileges returns the privilege required to execute a CreateRetentionPolicyStatement.
@@ -1389,13 +2004,30 @@ type AlterRetentionPolicyStatement struct {
 	// Warm Duration
 	WarmDuration *time.Duration
 
+	// Index Cold Duration
+	IndexColdDuration *time.Duration
+
 	// Index Duration
 	IndexGroupDuration *time.Duration
 }
 
+func (s *AlterRetentionPolicyStatement) Depth() int { return 1 }
+
+func (s *AlterRetentionPolicyStatement) UpdateDepthForTests() int {
+	if s != nil {
+		return 1
+	}
+	return 0
+}
+
 // String returns a string representation of the alter retention policy statement.
 func (s *AlterRetentionPolicyStatement) String() string {
-	var buf bytes.Buffer
+	return s.RenderBytes(&bytes.Buffer{}, nil).String()
+}
+
+func (s *AlterRetentionPolicyStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	_, _ = buf.WriteString("ALTER RETENTION POLICY ")
 	_, _ = buf.WriteString(QuoteIdent(s.Name))
 	_, _ = buf.WriteString(" ON ")
@@ -1426,6 +2058,11 @@ func (s *AlterRetentionPolicyStatement) String() string {
 		_, _ = buf.WriteString(FormatDuration(*s.WarmDuration))
 	}
 
+	if s.IndexColdDuration != nil {
+		_, _ = buf.WriteString(" INDEXCOLD DURATION ")
+		_, _ = buf.WriteString(FormatDuration(*s.IndexColdDuration))
+	}
+
 	if s.IndexGroupDuration != nil {
 		_, _ = buf.WriteString(" INDEX DURATION ")
 		_, _ = buf.WriteString(FormatDuration(*s.IndexGroupDuration))
@@ -1435,7 +2072,10 @@ func (s *AlterRetentionPolicyStatement) String() string {
 		_, _ = buf.WriteString(" DEFAULT")
 	}
 
-	return buf.String()
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // RequiredPrivileges returns the privilege required to execute an AlterRetentionPolicyStatement.
@@ -1541,6 +2181,8 @@ type SelectStatement struct {
 
 	JoinSource []*Join
 
+	UnionSource []*Union
+
 	UnnestSource []*Unnest
 
 	Scroll Scroll
@@ -1570,6 +2212,10 @@ type SelectStatement struct {
 	// eval time, and subquery offsets in the AST tree.
 	QueryOffset time.Duration
 
+	CompareOffset time.Duration
+
+	IsCompareCall bool
+
 	BinOpSource []*BinOp
 
 	IsPromQuery bool
@@ -1587,6 +2233,39 @@ type SelectStatement struct {
 	// RemoveMetric indicates whether to remove the metric label during the materialize transformation
 	// in the query execution of PromQL
 	RemoveMetric bool
+
+	InConditons []*InCondition
+
+	// Direct CTE that current selectStatement rely on
+	DirectDependencyCTEs CTES
+	// All CTE that current selectStatement rely on
+	AllDependencyCTEs CTES
+
+	depth int
+}
+
+func (s *SelectStatement) Depth() int {
+	if s != nil {
+		return s.depth
+	}
+	return 0
+}
+
+func (s *SelectStatement) UpdateDepthForTests() int {
+	if s != nil {
+		s.depth = 1 + max(
+			CallUpdateDepthForTests(s.Fields),
+			CallUpdateDepthForTests(s.Target),
+			CallUpdateDepthForTests(s.Sources),
+			CallUpdateDepthForTests(s.Dimensions),
+			CallUpdateDepthForTests(s.ExceptDimensions),
+			CallUpdateDepthForTests(s.Condition),
+			CallUpdateDepthForTests(s.SortFields),
+		)
+		return s.depth
+	} else {
+		return 0
+	}
 }
 
 func (s *SelectStatement) SetStmtId(id int) {
@@ -1666,14 +2345,16 @@ func (s *SelectStatement) Clone() *SelectStatement {
 				RetentionPolicy: s.Target.Measurement.RetentionPolicy,
 				Name:            s.Target.Measurement.Name,
 				Regex:           CloneRegexLiteral(s.Target.Measurement.Regex),
+				MstType:         s.Target.Measurement.MstType,
 			},
+			depth: s.Target.depth,
 		}
 	}
 	for _, f := range s.Fields {
-		clone.Fields = append(clone.Fields, &Field{Expr: CloneExpr(f.Expr), Alias: f.Alias})
+		clone.Fields = append(clone.Fields, &Field{Expr: CloneExpr(f.Expr), Alias: f.Alias, depth: f.depth})
 	}
 	for _, d := range s.Dimensions {
-		clone.Dimensions = append(clone.Dimensions, &Dimension{Expr: CloneExpr(d.Expr)})
+		clone.Dimensions = append(clone.Dimensions, &Dimension{Expr: CloneExpr(d.Expr), depth: d.depth})
 	}
 	for _, f := range s.SortFields {
 		clone.SortFields = append(clone.SortFields, &SortField{Name: f.Name, Ascending: f.Ascending})
@@ -1702,29 +2383,47 @@ func cloneSource(s Source) Source {
 	case *Measurement:
 		return s.Clone()
 	case *SubQuery:
-		return &SubQuery{Statement: s.Statement.Clone(), Alias: s.Alias}
+		return &SubQuery{Statement: s.Statement.Clone(), Alias: s.Alias, depth: s.depth}
 	case *Join:
-		c := &Join{}
-		c.LSrc = cloneSource(s.LSrc)
-		c.RSrc = cloneSource(s.RSrc)
-		c.Condition = CloneExpr(s.Condition)
-		return c
+		return &Join{
+			LSrc:      cloneSource(s.LSrc),
+			RSrc:      cloneSource(s.RSrc),
+			Condition: CloneExpr(s.Condition),
+			JoinType:  s.JoinType,
+			depth:     s.depth,
+		}
+	case *Union:
+		return &Union{
+			LSrc:      cloneSource(s.LSrc),
+			RSrc:      cloneSource(s.RSrc),
+			UnionType: s.UnionType,
+			depth:     s.depth,
+		}
 	case *Unnest:
 		return s.Clone()
 	case *BinOp:
-		c := &BinOp{}
-		c.LSrc = cloneSource(s.LSrc)
-		c.RSrc = cloneSource(s.RSrc)
-		c.LExpr = CloneExpr(s.LExpr)
-		c.RExpr = CloneExpr(s.RExpr)
-		c.OpType = s.OpType
-		c.On = s.On
-		c.MatchKeys = s.MatchKeys
-		c.MatchCard = s.MatchCard
-		c.IncludeKeys = s.IncludeKeys
-		c.ReturnBool = s.ReturnBool
-		c.NilMst = s.NilMst
-		return c
+		return &BinOp{
+			LSrc:        cloneSource(s.LSrc),
+			RSrc:        cloneSource(s.RSrc),
+			LExpr:       CloneExpr(s.LExpr),
+			RExpr:       CloneExpr(s.RExpr),
+			OpType:      s.OpType,
+			On:          s.On,
+			MatchKeys:   s.MatchKeys,
+			MatchCard:   s.MatchCard,
+			IncludeKeys: s.IncludeKeys,
+			ReturnBool:  s.ReturnBool,
+			NilMst:      s.NilMst,
+			depth:       s.depth,
+		}
+	case *CTE:
+		cte := &CTE{Alias: s.Alias, TimeRange: s.TimeRange, Csming: s.Csming, GraphQuery: s.GraphQuery, depth: s.depth}
+		if s.Query != nil {
+			cte.Query = s.Query.Clone()
+		}
+		return cte
+	case *TableFunction:
+		return &TableFunction{FunctionName: s.FunctionName, TableFunctionSource: s.GetTableFunctionSource(), Params: s.GetParams(), depth: s.depth}
 	default:
 		panic("unreachable")
 	}
@@ -1740,25 +2439,53 @@ type FieldMapper interface {
 func RewriteMstNameSpace(fields Fields, source Source, hasJoin bool, alias string) error {
 	s, ok := source.(*Measurement)
 	if !ok {
-		return errors.New("expect measurement type")
+		return ErrNotMst
 	}
+	RewriteNameSpace(fields, s.Alias, s.Name, hasJoin, alias)
+	return nil
+}
+
+func RewriteCTENameSpace(fields Fields, source Source, hasJoin bool, alias string) error {
+	s, ok := source.(*CTE)
+	if !ok {
+		return ErrNotMstForCTE
+	}
+	RewriteNameSpace(fields, s.Alias, s.GetName(), hasJoin, alias)
+	return nil
+}
+
+func RewriteNameSpace(fields Fields, sAlias string, sName string, hasJoin bool, alias string) {
 	for i := range fields {
-		fields[i].Expr.RewriteNameSpace(s.Alias, s.Name)
-		if f, ok := fields[i].Expr.(*VarRef); ok && len(fields[i].Alias) == 0 {
-			if len(f.Alias) > 0 {
-				fields[i].Alias = f.Alias
-			} else if hasJoin && alias != "" {
+		fields[i].Expr.RewriteNameSpace(sAlias, sName)
+		f, ok := fields[i].Expr.(*VarRef)
+		if !ok || len(fields[i].Alias) > 0 {
+			continue
+		}
+		if len(f.Alias) > 0 {
+			fields[i].Alias = f.Alias
+		} else if hasJoin && alias != "" {
+			if strings.HasPrefix(f.Val, alias+".") {
+				fields[i].Alias = f.Val
+			} else {
 				fields[i].Alias = alias + "." + f.Val
 			}
 		}
 	}
+}
+
+func RewriteTableFunctionNameSpace(fields Fields, source Source, hasJoin bool, alias string) error {
+	s, ok := source.(*TableFunction)
+	if !ok {
+		return errors.New("expect TableFunctionParam type")
+	}
+	RewriteNameSpace(fields, "", s.GetName(), hasJoin, alias)
 	return nil
 }
 
 func RewriteSubQueryNameSpace(source Source, hasJoin bool) error {
 	s, ok := source.(*SubQuery)
 	if !ok {
-		return errors.New("expect measurement type")
+		return ErrNotMst
 	}
 	for i := range s.Statement.Sources {
 		switch src := s.Statement.Sources[i].(type) {
@@ -1770,16 +2497,23 @@ func RewriteSubQueryNameSpace(source Source, hasJoin bool) error {
 			if e := RewriteSubQueryNameSpace(src, hasJoin); e != nil {
 				return e
 			}
+		case *CTE:
+			if e := RewriteCTENameSpace(s.Statement.Fields, src, hasJoin, s.GetName()); e != nil {
+				return e
+			}
 		}
 	}
 	return nil
 }
 
-func (s *SelectStatement) RewriteJoinCase(src Source, m FieldMapper, batchEn bool, fields Fields, hasJoin bool) (Source, error) {
+func (s *SelectStatement) RewriteJoinCase(src Source, m FieldMapper, batchEn bool, fields Fields, hasJoin bool, joinType JoinType) (Source, error) {
 	switch src := src.(type) {
 	case *SubQuery:
 		if e := RewriteSubQueryNameSpace(src, hasJoin); e != nil {
 			return nil, e
+		}
+		if joinType != FullJoin && joinType != UnknownJoin && len(src.Statement.Dimensions) == 0 {
+			src.Statement.Dimensions = s.Dimensions
 		}
 		stmt, err := src.Statement.RewriteFields(m, batchEn, hasJoin)
 		src.Statement = stmt
@@ -1801,6 +2535,185 @@ func (s *SelectStatement) RewriteJoinCase(src Source, m FieldMapper, batchEn boo
 		return nil, nil
 	}
 	return nil, nil
+}
+
+func RewriteJoinMeasurement(m *Measurement, outerStatement *SelectStatement, joinKeys []string) (*SubQuery, error) {
+	alias := m.Name
+	if m.Alias != "" {
+		alias = m.Alias
+	}
+	if alias == "" {
+		return nil, ErrNoMstName
+	}
+	allFields := outerStatement.Fields
+	if len(allFields) == 0 {
+		return nil, ErrEmptyFields
+	}
+
+	statement := outerStatement.Clone()
+	subFields := make([]*Field, 0, len(allFields))
+	hasWildcard := false
+	exprFieldNames := make(map[string]bool)
+	for _, field := range allFields {
+		switch expr := field.Expr.(type) {
+		case *Wildcard:
+			subFields = []*Field{&Field{Expr: &Wildcard{Type: 0}, Alias: "", depth: 2}}
+			hasWildcard = true
+			break
+		default:
+			GetExprFieldNames(expr, exprFieldNames)
+		}
+	}
+	hasDimWildCard := false
+	exprDimNames := make(map[string]bool)
+	for _, dim := range outerStatement.Dimensions {
+		switch expr := dim.Expr.(type) {
+		case *Wildcard:
+			hasDimWildCard = true
+			break
+		default:
+			GetExprFieldNames(expr, exprDimNames)
+		}
+	}
+	delete(exprDimNames, "time")
+
+	if !hasWildcard {
+		for fieldName := range exprFieldNames {
+			if strings.HasPrefix(fieldName, alias+".") {
+				subFields = append(subFields, &Field{Expr: &VarRef{Val: fieldName[len(alias)+1:], Type: 0, Alias: ""}, Alias: "", depth: 2})
+			}
+		}
+		for _, key := range joinKeys {
+			if !hasDimWildCard && !exprFieldNames[key] && !exprDimNames[key] && !exprDimNames[key[len(alias)+1:]] {
+				subFields = append(subFields, &Field{Expr: &VarRef{Val: key[len(alias)+1:], Type: 0, Alias: ""}, Alias: "", depth: 2, Auxiliary: true})
+			}
+		}
+	}
+	statement.Fields = subFields
+	m.Alias = ""
+	statement.Sources = []Source{m}
+	statement.JoinSource = nil
+	if statement.depth < 3 {
+		statement.depth = 3
+	}
+	return &SubQuery{
+		Statement: statement,
+		Alias:     alias,
+		depth:     1 + statement.depth,
+	}, nil
+}
+
+func GetExprFieldNames(exp Expr, seen map[string]bool) {
+	switch expr := exp.(type) {
+	case *VarRef:
+		if !seen[expr.Val] {
+			seen[expr.Val] = true
+		}
+	case *Call:
+		for _, expr := range expr.Args {
+			GetExprFieldNames(expr, seen)
+		}
+	case *BinaryExpr:
+		GetExprFieldNames(expr.LHS, seen)
+		GetExprFieldNames(expr.RHS, seen)
+	case *ParenExpr:
+		GetExprFieldNames(expr.Expr, seen)
+	default:
+	}
+}
+
+func (s *SelectStatement) RewriteUnionCase(src Source, m FieldMapper, batchEn bool) (Source, error) {
+	switch src := src.(type) {
+	case *SubQuery:
+		if e := RewriteSubQueryNameSpace(src, false); e != nil {
+			return nil, e
+		}
+		stmt, err := src.Statement.RewriteFields(m, batchEn, false)
+		if err != nil && err != ErrDeclareEmptyCollection {
+			return nil, err
+		}
+		if dims := stmt.Dimensions; len(dims) > 0 {
+			for _, dim := range dims {
+				fieldFromDim := &Field{
+					Expr:  CloneExpr(dim.Expr),
+					Alias: "",
+					depth: dim.depth,
+				}
+				if feidRef, ok := fieldFromDim.Expr.(*VarRef); ok {
+					feidRef.Type = Tag
+				}
+				stmt.Fields = append(stmt.Fields, fieldFromDim)
+			}
+		}
+		stmt.Dimensions = nil
+		src.Statement = stmt
+		if e := RewriteSubQueryNameSpace(src, false); e != nil {
+			return nil, e
+		}
+		if err == nil {
+			src.Statement = stmt
+			return src, nil
+		}
+		return nil, nil
+	case *Union:
+		_, lErr := s.RewriteUnionCase(src.LSrc, m, batchEn)
+		if lErr != nil {
+			return nil, lErr
+		}
+		_, rErr := s.RewriteUnionCase(src.RSrc, m, batchEn)
+		if rErr != nil {
+			return nil, rErr
+		}
+		return nil, nil
+	default:
+		return nil, ErrUnionSourceCheck
+	}
+	return nil, nil
+}
+
+func CheckUnionAllFields(unionType UnionType, lSource Source, rSource Source, m FieldMapper) error {
+	var lStatement, rStatement *SelectStatement
+	if lSubQuery, ok := lSource.(*SubQuery); ok {
+		lStatement = lSubQuery.Statement
+	} else {
+		return ErrUnionLeftSource
+	}
+	if rSubQuery, ok := rSource.(*SubQuery); ok {
+		rStatement = rSubQuery.Statement
+	} else {
+		return ErrUnionRightSource
+	}
+	lFields := lStatement.Fields
+	rFields := rStatement.Fields
+	if unionType == UnionDistinct || unionType == UnionAll {
+		if len(lFields) != len(rFields) {
+			return ErrUnionColumnsCount
+		}
+		for i, f := range rFields {
+			lFieldType := EvalType(lFields[i].Expr, lStatement.Sources, m)
+			rFieldType := EvalType(f.Expr, rStatement.Sources, m)
+			if lFieldType != rFieldType {
+				return ErrUnionTypeByIndex
+			}
+			f.Alias = lFields[i].Name()
+		}
+
+	} else {
+		for _, rField := range rFields {
+			rName := rField.Name()
+			for _, lField := range lFields {
+				if lField.Name() == rName {
+					lFieldType := EvalType(lField.Expr, lStatement.Sources, m)
+					rFieldType := EvalType(rField.Expr, rStatement.Sources, m)
+					if lFieldType != rFieldType {
+						return ErrUnionTypeByName
+					}
+					break
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // for the pipe-systax parser of logkeeper
@@ -2085,9 +2998,14 @@ func (s *SelectStatement) RewriteFieldsForSelectAllTags(m FieldMapper) error {
 	}
 	sort.Strings(tagSlice)
 	for _, tagKey := range tagSlice {
-		s.Fields = append(s.Fields, &Field{Expr: &VarRef{Val: tagKey, Type: Tag}})
+		s.Fields = append(s.Fields, &Field{Expr: &VarRef{Val: tagKey, Type: Tag}, depth: 2})
 	}
 	return nil
+}
+
+// todo: graphStatement col schema
+func (s *GraphStatement) RewriteFields() (*GraphStatement, error) {
+	return s, nil
 }
 
 // RewriteFields returns the re-written form of the select statement. Any wildcard query
@@ -2100,7 +3018,26 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin boo
 
 	// Iterate through the sources and rewrite any subqueries first.
 	sources := make(Sources, 0, len(other.Sources))
-	for _, src := range other.Sources {
+
+	if len(other.DirectDependencyCTEs) > 0 {
+		for _, cte := range other.DirectDependencyCTEs {
+			if cte.Query != nil {
+				stmt, err := cte.Query.RewriteFields(cte.FMapper, batchEn, false)
+				if err == nil {
+					cte.Query = stmt
+					sources = append(sources, cte)
+				}
+			} else if cte.GraphQuery != nil {
+				graphStmt, err := cte.GraphQuery.RewriteFields()
+				if err == nil {
+					cte.GraphQuery = graphStmt
+					sources = append(sources, cte)
+				}
+			}
+		}
+	}
+
+	for i, src := range other.Sources {
 		switch src := src.(type) {
 		case *SubQuery:
 			stmt, err := src.Statement.RewriteFields(m, batchEn, hasJoin)
@@ -2114,36 +3051,105 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin boo
 				return nil, err
 			}
 		case *Join:
-			lSources, lErr := s.RewriteJoinCase(src.LSrc, m, batchEn, other.Fields, true)
+			joinKeyMap := make(map[string]string)
+			if err := GetJoinKeyByCondition(other.JoinSource[i].Condition, joinKeyMap); err != nil {
+				return nil, err
+			}
+			var auxFields []*Field
+			if lSrc, ok := src.LSrc.(*Measurement); ok {
+				lKeys := getJoinKeyByName(joinKeyMap, lSrc.GetName())
+				subQuerySrc, err := RewriteJoinMeasurement(lSrc, other, lKeys)
+				if err != nil {
+					return nil, err
+				}
+				src.LSrc = subQuerySrc
+				other.JoinSource[i].LSrc = subQuerySrc
+				sources = SetCTEForCTESubQuery(lSrc, subQuerySrc, other, sources)
+				auxFields = append(auxFields, getAuxiliaryField(subQuerySrc.Statement.Fields)...)
+			}
+			if rSrc, ok := src.RSrc.(*Measurement); ok {
+				rKeys := getJoinKeyByName(joinKeyMap, rSrc.GetName())
+				subQuerySrc, err := RewriteJoinMeasurement(rSrc, other, rKeys)
+				if err != nil {
+					return nil, err
+				}
+				src.RSrc = subQuerySrc
+				other.JoinSource[i].RSrc = subQuerySrc
+				sources = SetCTEForCTESubQuery(rSrc, subQuerySrc, other, sources)
+				auxFields = append(auxFields, getAuxiliaryField(subQuerySrc.Statement.Fields)...)
+			}
+			lSources, lErr := s.RewriteJoinCase(src.LSrc, m, batchEn, other.Fields, true, src.JoinType)
 			if lErr != nil {
 				return nil, lErr
 			}
-			sources = append(sources, lSources)
-			rSources, rErr := s.RewriteJoinCase(src.RSrc, m, batchEn, other.Fields, true)
+			if lSources != nil {
+				sources = append(sources, lSources)
+			}
+			rSources, rErr := s.RewriteJoinCase(src.RSrc, m, batchEn, other.Fields, true, src.JoinType)
 			if rErr != nil {
 				return nil, rErr
 			}
-			sources = append(sources, rSources)
+			if rSources != nil {
+				sources = append(sources, rSources)
+			}
+			if len(auxFields) > 0 {
+				var err error
+				other, err = rewriteAuxiliaryStmt(other, sources, auxFields, m, batchEn, hasJoin)
+				if err != nil {
+					return nil, err
+				}
+				sources = other.Sources
+			}
+		case *Union:
+			lSource, lErr := s.RewriteUnionCase(src.LSrc, m, batchEn)
+			if lErr != nil {
+				return nil, lErr
+			}
+			if lSource != nil {
+				sources = append(sources, lSource)
+			}
+			rSource, rErr := s.RewriteUnionCase(src.RSrc, m, batchEn)
+			if rErr != nil {
+				return nil, rErr
+			}
+			if rSource != nil {
+				if checkErr := CheckUnionAllFields(src.UnionType, lSource, rSource, m); checkErr != nil {
+					return nil, checkErr
+				}
+				sources = append(sources, rSource)
+			}
 		case *BinOp:
 			if src.NilMst != LNilMst {
-				lSources, lErr := s.RewriteJoinCase(src.LSrc, m, batchEn, other.Fields, false)
+				lSources, lErr := s.RewriteJoinCase(src.LSrc, m, batchEn, other.Fields, false, UnknownJoin)
 				if lErr != nil {
 					return nil, lErr
 				}
 				sources = append(sources, lSources)
 			}
 			if src.NilMst != RNilMst {
-				rSources, rErr := s.RewriteJoinCase(src.RSrc, m, batchEn, other.Fields, false)
+				rSources, rErr := s.RewriteJoinCase(src.RSrc, m, batchEn, other.Fields, false, UnknownJoin)
 				if rErr != nil {
 					return nil, rErr
 				}
 				sources = append(sources, rSources)
 			}
-		default:
-			if e := RewriteMstNameSpace(other.Fields, src, hasJoin, src.GetName()); e != nil {
-				return nil, e
+		case *TableFunction:
+			for _, childSource := range src.GetTableFunctionSource() {
+				if !containCte(sources, childSource) {
+					sources = append(sources, childSource)
+				}
 			}
-			sources = append(sources, src)
+		default:
+			s, ok := src.(*Measurement)
+			if !ok {
+				return nil, ErrNotMst
+			}
+			if s.MstType != TEMPORARY {
+				if e := RewriteMstNameSpace(other.Fields, src, hasJoin, src.GetName()); e != nil {
+					return nil, e
+				}
+				sources = append(sources, src)
+			}
 		}
 	}
 	if len(sources) == 0 {
@@ -2153,13 +3159,13 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin boo
 		return nil, errno.NewError(errno.NoFieldSelected, "source")
 	}
 
-	if in, ok := s.Condition.(*InCondition); ok {
+	if len(s.InConditons) > 0 {
+		in := s.InConditons[0]
 		stmt, err := in.Stmt.RewriteFields(m, batchEn, hasJoin)
-		if err != nil && err != ErrDeclareEmptyCollection {
+		if err != nil {
 			return nil, err
 		}
 		in.Stmt = stmt
-		other.Condition = in
 	}
 
 	if s.ReturnErr {
@@ -2168,7 +3174,18 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin boo
 		}
 	}
 
-	other.Sources = sources
+	tableFunction := false
+	for _, src := range other.Sources {
+		switch src := src.(type) {
+		case *TableFunction:
+			src.SetTableFunctionSource(sources)
+			tableFunction = true
+		}
+	}
+
+	if !tableFunction {
+		other.Sources = sources
+	}
 
 	allVarRef := make(map[string]Expr, len(other.Fields))
 	fieldVarRef := make(map[string]Expr, len(other.Fields))
@@ -2222,7 +3239,7 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin boo
 		allVarRef[ref.Val] = ref
 	}
 
-	// Rewrite all variable references in the fields with their types if one
+	// Rewrite all variable references in the fields with their typ if one
 	// hasn't been specified.
 	rewrite := func(n Node) {
 		ref, ok := n.(*VarRef)
@@ -2240,7 +3257,7 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin boo
 		ref.Type = typ
 	}
 
-	// Rewrite all variable references in the fields with their types if one
+	// Rewrite all variable references in the fields with their typ if one
 	// hasn't been specified.
 	mapType := func(n Node) {
 		ref, ok := n.(*VarRef)
@@ -2389,7 +3406,7 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin boo
 	dimensions := stringSetSlice(dimensionSet)
 
 	// Rewrite all wildcard query fields
-	if hasFieldWildcard {
+	if hasFieldWildcard && !tableFunction {
 		// Allocate a slice assuming there is exactly one wildcard for efficiency.
 		rwFields := make(Fields, 0, len(other.Fields)+len(fields)-1)
 		for _, f := range other.Fields {
@@ -2401,12 +3418,12 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin boo
 					} else if expr.Type == TAG && ref.Type != Tag {
 						continue
 					}
-					rwFields = append(rwFields, &Field{Expr: &VarRef{Val: ref.Val, Type: ref.Type}})
+					rwFields = append(rwFields, &Field{Expr: &VarRef{Val: ref.Val, Type: ref.Type}, depth: 2})
 				}
 			case *RegexLiteral:
 				for _, ref := range fields {
 					if expr.Val.MatchString(ref.Val) {
-						rwFields = append(rwFields, &Field{Expr: &VarRef{Val: ref.Val, Type: ref.Type}})
+						rwFields = append(rwFields, &Field{Expr: &VarRef{Val: ref.Val, Type: ref.Type}, depth: 2})
 					}
 				}
 			case *Call:
@@ -2444,14 +3461,14 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin boo
 					continue
 				}
 
-				// All types that can expand wildcards support float, integer, and unsigned.
+				// All typ that can expand wildcards support float, integer, and unsigned.
 				supportedTypes := map[DataType]struct{}{
 					Float:    {},
 					Integer:  {},
 					Unsigned: {},
 				}
 
-				// Add additional types for certain functions.
+				// Add additional typ for certain functions.
 				switch call.Name {
 				case "count", "first", "last", "distinct", "elapsed", "mode", "sample", "absent":
 					supportedTypes[String] = struct{}{}
@@ -2485,6 +3502,7 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin boo
 					rwFields = append(rwFields, &Field{
 						Expr:  CloneExpr(template),
 						Alias: fmt.Sprintf("%s_%s", f.Name(), ref.Val),
+						depth: 1 + template.depth,
 					})
 				}
 			case *BinaryExpr:
@@ -2527,12 +3545,12 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin boo
 					continue
 				}
 				for _, name := range dimensions {
-					rwDimensions = append(rwDimensions, &Dimension{Expr: &VarRef{Val: name}})
+					rwDimensions = append(rwDimensions, &Dimension{Expr: &VarRef{Val: name}, depth: 2})
 				}
 			case *RegexLiteral:
 				for _, name := range dimensions {
 					if expr.Val.MatchString(name) {
-						rwDimensions = append(rwDimensions, &Dimension{Expr: &VarRef{Val: name}})
+						rwDimensions = append(rwDimensions, &Dimension{Expr: &VarRef{Val: name}, depth: 2})
 					}
 				}
 			default:
@@ -2545,13 +3563,53 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin boo
 	return other, nil
 }
 
-func (s *SelectStatement) RewriteRegexConditionsDFS() {
-	s.RewriteRegexConditions()
-	for _, s := range s.Sources {
-		if subquery, ok := s.(*SubQuery); ok {
-			subquery.Statement.RewriteRegexConditions()
+func containCte(sources []Source, source Source) bool {
+	for _, cte := range sources {
+		if source.GetName() == cte.GetName() {
+			return true
 		}
 	}
+	return false
+}
+
+func SetCTEForCTESubQuery(mst *Measurement, subQuerySrc *SubQuery, other *SelectStatement, sources Sources) Sources {
+	if mst.MstType == TEMPORARY {
+		subQuerySrc.Statement.DirectDependencyCTEs = make(CTES, 0, 1)
+		for _, e := range other.DirectDependencyCTEs {
+			if e.Alias == mst.Name {
+				subQuerySrc.Statement.DirectDependencyCTEs = append(subQuerySrc.Statement.DirectDependencyCTEs, e.Clone())
+				break
+			}
+		}
+		newSources := make(Sources, 0, len(sources))
+		for _, e := range sources {
+			if e.GetName() != mst.Name {
+				newSources = append(newSources, e)
+			}
+		}
+		sources = newSources
+	} else {
+		subQuerySrc.Statement.DirectDependencyCTEs = nil
+	}
+	return sources
+}
+
+func (s *SelectStatement) RewriteRegexConditionsDFS(otherWrite func(e Expr)) {
+	s.RewriteRegexConditions(otherWrite)
+	for _, s := range s.Sources {
+		if subquery, ok := s.(*SubQuery); ok {
+			subquery.Statement.RewriteRegexConditions(otherWrite)
+		}
+	}
+}
+
+func (s *SelectStatement) GetInConditions() {
+	s.Condition = RewriteExpr(s.Condition, func(e Expr) Expr {
+		if in, ok := e.(*InCondition); ok {
+			s.InConditons = append(s.InConditons, in)
+		}
+		return e
+	})
 }
 
 // RewriteRegexConditions rewrites regex conditions to make better use of the
@@ -2565,8 +3623,12 @@ func (s *SelectStatement) RewriteRegexConditionsDFS() {
 // Note: if the regex contains groups, character classes, repetition or
 // similar, it's likely it won't be rewritten. In order to support rewriting
 // regexes with these characters would be a lot more work.
-func (s *SelectStatement) RewriteRegexConditions() {
+func (s *SelectStatement) RewriteRegexConditions(otherRewrite func(e Expr)) {
 	s.Condition = RewriteExpr(s.Condition, func(e Expr) Expr {
+		if otherRewrite != nil {
+			otherRewrite(e)
+		}
+
 		be, ok := e.(*BinaryExpr)
 		if !ok || (be.Op != EQREGEX && be.Op != NEQREGEX) {
 			// This expression is not a binary condition or doesn't have a
@@ -2601,22 +3663,25 @@ func (s *SelectStatement) RewriteRegexConditions() {
 			be.RHS = &StringLiteral{Val: vals[0]}
 		default:
 			expr := &BinaryExpr{
-				Op:  be.Op,
-				LHS: be.LHS,
-				RHS: &StringLiteral{Val: vals[0]},
+				Op:    be.Op,
+				LHS:   be.LHS,
+				RHS:   &StringLiteral{Val: vals[0]},
+				depth: 1 + be.LHS.Depth(),
 			}
 			for i := 1; i < len(vals); i++ {
 				expr = &BinaryExpr{
 					Op:  concatOp,
 					LHS: expr,
 					RHS: &BinaryExpr{
-						Op:  be.Op,
-						LHS: be.LHS,
-						RHS: &StringLiteral{Val: vals[i]},
+						Op:    be.Op,
+						LHS:   be.LHS,
+						RHS:   &StringLiteral{Val: vals[i]},
+						depth: 1 + be.LHS.Depth(),
 					},
+					depth: 1 + expr.depth, // the RHS has the same depth as the first constructed expr, but then expr grows
 				}
 			}
-			return &ParenExpr{Expr: expr}
+			return &ParenExpr{Expr: expr, depth: 1 + expr.depth}
 		}
 		return be
 	})
@@ -2758,15 +3823,19 @@ func RewriteTopBottomStatement(node Node) Node {
 		if call, ok := s.Fields[i].Expr.(*Call); ok && (call.Name == "top" || call.Name == "bottom") && len(call.Args) > 2 {
 			// rewrite the max/min fields for subquery
 			var auxFields []*Field
-			nst := &SelectStatement{Condition: s.Condition, OmitTime: true}
+			nst := &SelectStatement{Condition: s.Condition, OmitTime: true, depth: s.depth}
 			nst.Sources = append(nst.Sources, s.Sources...)
 			for _, tagArg := range call.Args[1 : len(call.Args)-1] {
-				nst.Dimensions = append(nst.Dimensions, &Dimension{Expr: tagArg})
-				auxFields = append(auxFields, &Field{Expr: tagArg})
+				nst.Dimensions = append(nst.Dimensions, &Dimension{Expr: tagArg, depth: 1 + tagArg.Depth()})
+				auxFields = append(auxFields, &Field{Expr: tagArg, depth: 1 + tagArg.Depth()})
 			}
 			callField := &Field{
-				Expr:  &Call{Args: []Expr{call.Args[0]}},
+				Expr: &Call{
+					Args:  []Expr{call.Args[0]},
+					depth: 2 + call.Args[0].Depth(),
+				},
 				Alias: call.Args[0].(*VarRef).Val,
+				depth: 3 + call.Args[0].Depth(),
 			}
 			if call.Name == "top" {
 				callField.Expr.(*Call).Name = "max"
@@ -2779,7 +3848,7 @@ func RewriteTopBottomStatement(node Node) Node {
 			nst.Fields = append(nst.Fields, s.Fields[i+1:]...)
 
 			s.Sources = s.Sources[:0]
-			s.Sources = append(s.Sources, &SubQuery{Statement: nst})
+			s.Sources = append(s.Sources, &SubQuery{Statement: nst, depth: 1 + nst.depth})
 
 			// rewrite the top/bottom fields
 			var newArgs []Expr
@@ -2862,6 +3931,322 @@ func RewritePercentileOGSketchStatement(node Node) Node {
 	return s
 }
 
+func (s *SelectStatement) RewriteCompare(timeRange *TimeRange) error {
+	for i := 0; i < len(s.Fields); i++ {
+		if call, ok := s.Fields[i].Expr.(*Call); ok && (call.Name == "compare") && len(call.Args) >= 2 {
+			groupTime := GetGroupTime(s.Dimensions)
+			stmt := s.Clone()
+			stmt.IsCompareCall = true
+			stmt.IsRawQuery = true
+			stmt.Sources = make(Sources, 0, len(call.Args))
+			stmt.Fields = make(Fields, 0, 2*len(call.Args))
+			stmt.Fill = NoFill
+			err := s.BuildCompareStatement(timeRange, call, stmt, groupTime)
+			if err != nil {
+				return err
+			}
+			*s = *stmt
+		}
+	}
+	return nil
+}
+
+func GetGroupTime(dimensions Dimensions) time.Duration {
+	var groupTime time.Duration
+	for _, dim := range dimensions {
+		if timeDim, ok := dim.Expr.(*Call); ok && timeDim.Name == "time" {
+			if dur, ok := timeDim.Args[0].(*DurationLiteral); ok {
+				groupTime = dur.Val
+			}
+		}
+	}
+	return groupTime
+}
+
+func (s *SelectStatement) BuildCompareStatement(timeRange *TimeRange, call *Call, stmt *SelectStatement, groupTime time.Duration) error {
+	if len(s.Sources) != 1 {
+		return fmt.Errorf("%s func expect 1 subquery", call.Name)
+	}
+	var subQuery *SubQuery
+	switch source := s.Sources[0].(type) {
+	case *SubQuery:
+		subQuery = source
+	case *Measurement:
+		subQuery = &SubQuery{
+			Statement: &SelectStatement{
+				Fields:  []*Field{{Expr: call.Args[0], Alias: call.Args[0].String(), depth: 1 + call.Args[0].Depth()}},
+				Sources: s.Sources,
+				depth:   2 + call.Args[0].Depth(),
+			},
+			depth: 3 + call.Args[0].Depth(),
+		}
+
+	default:
+		return fmt.Errorf("%s func expect 1 subquery", call.Name)
+
+	}
+
+	compareFieldIndex := -1
+	for i, f := range subQuery.Statement.Fields {
+		if f.Name() == call.Args[0].String() {
+			compareFieldIndex = i
+			break
+		}
+	}
+	if compareFieldIndex == -1 {
+		return fmt.Errorf("%s func values not found", call.Name)
+	}
+
+	var maxOffset int64
+	for i := 0; i < len(call.Args); i++ {
+		arg, ok := call.Args[i].(*IntegerLiteral)
+		if !ok {
+			arg = &IntegerLiteral{
+				Val: 0,
+			}
+		}
+		if arg.Val > maxOffset {
+			maxOffset = arg.Val
+		}
+		sq := subQuery.Statement.Clone()
+		sq.IsRawQuery = true
+		sq.OmitTime = true
+		sq.Fields[compareFieldIndex].Alias += strconv.Itoa(i + 1)
+		sq.Dimensions = cloneDimensions(s)
+		sq.Fill = NoFill
+		compareOffset := arg.Val * 1e9
+		buildCompareTimeDimension(sq, timeRange, compareOffset, groupTime)
+		cond := buildCompareCondition(timeRange, compareOffset)
+		valuer := NowValuer{Now: time.Now(), Location: sq.Location}
+		// ignore time condition in subquery
+		originCond, _, err := ConditionExpr(sq.Condition, &valuer)
+		if err != nil {
+			return err
+		}
+		expr, ok := originCond.(*BinaryExpr)
+		if ok {
+			cond = &BinaryExpr{
+				Op:    AND,
+				LHS:   expr,
+				RHS:   cond,
+				depth: 1 + max(expr.Depth(), cond.Depth()),
+			}
+		}
+		sq.Condition = cond
+		sq.CompareOffset = time.Duration(compareOffset)
+		sq.depth = max(1+cond.depth, sq.depth)
+		stmt.Sources = append(stmt.Sources, &SubQuery{Statement: sq, depth: 1 + sq.depth})
+		stmt.depth = max(stmt.depth, 1+sq.depth)
+	}
+
+	// build fields
+	n := call.Args[0].String()
+	buildCompareFields(s.Fields, n, stmt)
+
+	buildCompareTimeDimension(stmt, timeRange, 0, groupTime)
+	// reset timeRange
+	timeRange.Min = time.Unix(0, timeRange.MinTimeNano()-maxOffset*1e9)
+	return nil
+}
+
+func cloneDimensions(s *SelectStatement) Dimensions {
+	cloneDimension := make(Dimensions, 0, len(s.Dimensions))
+	for _, d := range s.Dimensions {
+		cloneDimension = append(cloneDimension, &Dimension{Expr: CloneExpr(d.Expr), depth: 1 + d.Expr.Depth()})
+	}
+	return cloneDimension
+}
+
+func buildCompareTimeDimension(sq *SelectStatement, timeRange *TimeRange, compareOffset int64, groupTime time.Duration) {
+	var groupOffset int64
+	if groupTime > 0 {
+		groupOffset = (timeRange.MinTimeNano() - compareOffset) % int64(groupTime)
+	}
+	if groupOffset == 0 {
+		return
+	}
+	for _, dim := range sq.Dimensions {
+		if timeDim, ok := dim.Expr.(*Call); ok && timeDim.Name == "time" {
+			if _, ok := timeDim.Args[0].(*DurationLiteral); ok {
+				timeDim.Args = append(timeDim.Args, &DurationLiteral{Val: time.Duration(groupOffset)})
+			}
+		}
+	}
+}
+
+func buildCompareCondition(timeRange *TimeRange, compareOffset int64) *BinaryExpr {
+	return &BinaryExpr{
+		Op: AND,
+		LHS: &BinaryExpr{
+			Op: GTE,
+			LHS: &VarRef{
+				Val: "time",
+			},
+			RHS: &IntegerLiteral{
+				Val: timeRange.MinTimeNano() - compareOffset,
+			},
+			depth: 2,
+		},
+		RHS: &BinaryExpr{
+			Op: LTE,
+			LHS: &VarRef{
+				Val: "time",
+			},
+			RHS: &IntegerLiteral{
+				Val: timeRange.MaxTimeNano() - compareOffset,
+			},
+			depth: 2,
+		},
+		depth: 3,
+	}
+}
+
+func buildCompareFields(fields []*Field, n string, stmt *SelectStatement) {
+	for _, f := range fields {
+		compareFunc, ok := f.Expr.(*Call)
+		if !(ok && compareFunc.Name == "compare" && len(compareFunc.Args) >= 2) {
+			stmt.Fields = append(stmt.Fields, &Field{Expr: CloneExpr(f.Expr), Alias: f.Alias, depth: 1 + f.Expr.Depth()})
+			continue
+		}
+		argLen := len(compareFunc.Args)
+		compareFields := make([]*Field, 0, 2*argLen)
+		for i := 0; i < argLen; i++ {
+			compareFields = append(compareFields, &Field{Expr: &VarRef{Val: n + strconv.Itoa(i+1)}, depth: 2})
+		}
+		stmt.Fields = append(stmt.Fields, compareFields...)
+		for i := 1; i < argLen; i++ {
+			stmt.Fields = append(stmt.Fields, &Field{
+				Expr: &BinaryExpr{
+					Op: DIV,
+					LHS: &VarRef{
+						Val: compareFields[0].Name(),
+					},
+					RHS: &VarRef{
+						Val: compareFields[i].Name(),
+					},
+					depth: 2,
+				},
+				Alias: fmt.Sprintf("%s/%s", compareFields[0].Name(), compareFields[i].Name()),
+				depth: 3,
+			})
+		}
+	}
+}
+
+type JoinKeyPair struct {
+	key     string
+	sortKey string
+}
+
+func (s *SelectStatement) RewriteJoinDims(joinKeys []*JoinKeyPair) {
+	if len(joinKeys) > 0 {
+		rewriteDims(s, joinKeys)
+	}
+	for _, source := range s.Sources {
+		switch source := source.(type) {
+		case *SubQuery:
+			source.Statement.RewriteJoinDims(joinKeys)
+		case *Join:
+			lsrc, ok := source.LSrc.(*SubQuery)
+			if !ok {
+				return
+			}
+			rsrc, ok := source.RSrc.(*SubQuery)
+			if !ok {
+				return
+			}
+			lJoinKeys := make([]*JoinKeyPair, 0)
+			rJoinKeys := make([]*JoinKeyPair, 0)
+			appendJoinKeys(source.Condition, lsrc.Alias, rsrc.Alias, &lJoinKeys, &rJoinKeys)
+			sort.SliceStable(lJoinKeys, func(i, j int) bool {
+				return lJoinKeys[i].sortKey < rJoinKeys[j].sortKey
+			})
+			sort.SliceStable(rJoinKeys, func(i, j int) bool {
+				return rJoinKeys[i].sortKey < rJoinKeys[j].sortKey
+			})
+			commonJoinKeys := make([]*JoinKeyPair, 0, len(lJoinKeys)+len(rJoinKeys))
+			keyMap := make(map[string]struct{})
+			for _, k := range lJoinKeys {
+				commonJoinKeys = append(commonJoinKeys, k)
+				keyMap[k.key] = struct{}{}
+			}
+			for _, k := range rJoinKeys {
+				if _, ok := keyMap[k.key]; ok {
+					continue
+				}
+				commonJoinKeys = append(commonJoinKeys, k)
+				keyMap[k.key] = struct{}{}
+			}
+
+			rewriteDims(s, commonJoinKeys)
+			lsrc.Statement.RewriteJoinDims(lJoinKeys)
+			rsrc.Statement.RewriteJoinDims(rJoinKeys)
+		}
+	}
+}
+
+func appendJoinKeys(cond Expr, lAlias, rAlias string, lJoinKeys, rJoinKeys *[]*JoinKeyPair) {
+	switch expr := cond.(type) {
+	case *ParenExpr:
+		appendJoinKeys(expr.Expr, lAlias, rAlias, lJoinKeys, rJoinKeys)
+	case *BinaryExpr:
+		if expr.Op == EQ {
+			appendKeys(expr, lAlias, rAlias, lJoinKeys, rJoinKeys)
+			return
+		}
+		appendJoinKeys(expr.LHS, lAlias, rAlias, lJoinKeys, rJoinKeys)
+		appendJoinKeys(expr.RHS, lAlias, rAlias, lJoinKeys, rJoinKeys)
+	}
+}
+
+func appendKeys(expr *BinaryExpr, lAlias, rAlias string, lJoinKeys, rJoinKeys *[]*JoinKeyPair) {
+	lv, ok := expr.LHS.(*VarRef)
+	if !ok {
+		return
+	}
+	rv, ok := expr.RHS.(*VarRef)
+	if !ok {
+		return
+	}
+
+	if strings.HasPrefix(lv.Val, lAlias+".") && strings.HasPrefix(rv.Val, rAlias+".") {
+		n1 := lv.Val[len(lAlias)+1:]
+		*lJoinKeys = append(*lJoinKeys, &JoinKeyPair{key: n1, sortKey: n1})
+
+		n2 := rv.Val[len(rAlias)+1:]
+		*rJoinKeys = append(*rJoinKeys, &JoinKeyPair{key: n2, sortKey: n1})
+		return
+	}
+
+	if strings.HasPrefix(rv.Val, lAlias+".") && strings.HasPrefix(lv.Val, rAlias+".") {
+		n1 := rv.Val[len(lAlias)+1:]
+		*lJoinKeys = append(*lJoinKeys, &JoinKeyPair{key: n1, sortKey: n1})
+
+		n2 := lv.Val[len(rAlias)+1:]
+		*rJoinKeys = append(*rJoinKeys, &JoinKeyPair{key: n2, sortKey: n1})
+		return
+	}
+}
+
+func rewriteDims(stmt *SelectStatement, joinKeys []*JoinKeyPair) {
+	newDims := make(Dimensions, 0, len(stmt.Dimensions))
+	dimensions := stmt.Dimensions
+
+	for _, n := range joinKeys {
+		for i, dim := range dimensions {
+			if v, ok := dim.Expr.(*VarRef); ok {
+				if n.key != v.Val {
+					continue
+				}
+				newDims = append(newDims, dimensions[i])
+				dimensions = append(dimensions[:i], dimensions[i+1:]...)
+				break
+			}
+		}
+	}
+	stmt.Dimensions = append(newDims, dimensions...)
+}
+
 // RewritePercentileOGSketch converts a query with percentile_ogsketch that has a subquery to the percentile_approx
 func (s *SelectStatement) RewritePercentileOGSketch() {
 	RewriteOpsNestFunc(s, RewritePercentileOGSketchStatement)
@@ -2914,7 +4299,7 @@ func (s *SelectStatement) ColumnNames() []string {
 				for _, arg := range f.Args[1:] {
 					ref, ok := arg.(*VarRef)
 					if ok {
-						columnFields = append(columnFields, &Field{Expr: ref})
+						columnFields = append(columnFields, &Field{Expr: ref, depth: 2})
 					}
 				}
 			}
@@ -2976,13 +4361,13 @@ func (s *SelectStatement) ColumnNames() []string {
 // and the index is of the function call rather than the variable reference.
 // If no expression is found, -1 is returned for the index and the expression
 // will be nil.
-func (s *SelectStatement) FieldExprByName(name string) (int, Expr) {
+func (s *SelectStatement) FieldExprByName(name string, mstAlias string) (int, Expr) {
 	for i, f := range s.Fields {
-		if f.Name() == name {
+		if f.Name() == name || IsSameField(mstAlias, f.Name(), name) {
 			return i, f.Expr
 		} else if call, ok := f.Expr.(*Call); ok && (call.Name == "top" || call.Name == "bottom") && len(call.Args) > 2 {
 			for _, arg := range call.Args[1 : len(call.Args)-1] {
-				if arg, ok := arg.(*VarRef); ok && arg.Val == name {
+				if arg, ok := arg.(*VarRef); ok && (arg.Val == name || IsSameField(mstAlias, arg.Val, name)) {
 					return i, arg
 				}
 			}
@@ -3010,42 +4395,45 @@ func (s *SelectStatement) Reduce(valuer Valuer) *SelectStatement {
 }
 
 // String returns a string representation of the select statement.
-func (s *SelectStatement) String() string {
-	var buf bytes.Buffer
+func (s *SelectStatement) String() string { return s.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (s *SelectStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	_, _ = buf.WriteString("SELECT ")
 
 	if len(s.Hints) > 0 {
 		_, _ = buf.WriteString("/*+ ")
-		for _, hit := range s.Hints {
-			_, _ = buf.WriteString(hit.String())
+		for _, hint := range s.Hints {
+			_ = hint.RenderBytes(buf, posmap)
 			_, _ = buf.WriteString(" ")
 		}
 		_, _ = buf.WriteString("*/")
 	}
 
-	_, _ = buf.WriteString(s.Fields.String())
+	_ = s.Fields.RenderBytes(buf, posmap)
 
 	if s.Target != nil {
 		_, _ = buf.WriteString(" ")
-		_, _ = buf.WriteString(s.Target.String())
+		_ = s.Target.RenderBytes(buf, posmap)
 	}
 	if len(s.Sources) > 0 {
 		_, _ = buf.WriteString(" FROM ")
-		_, _ = buf.WriteString(s.Sources.String())
+		_ = s.Sources.RenderBytes(buf, posmap)
 	}
 	if s.Condition != nil {
 		_, _ = buf.WriteString(" WHERE ")
-		_, _ = buf.WriteString(s.Condition.String())
+		_ = s.Condition.RenderBytes(buf, posmap)
 	}
 	if len(s.Dimensions) > 0 {
 		_, _ = buf.WriteString(" GROUP BY ")
-		_, _ = buf.WriteString(s.Dimensions.String())
+		_ = s.Dimensions.RenderBytes(buf, posmap)
 	}
 	switch s.Fill {
 	case NoFill:
 		_, _ = buf.WriteString(" fill(none)")
 	case NumberFill:
-		_, _ = buf.WriteString(fmt.Sprintf(" fill(%v)", s.FillValue))
+		_, _ = fmt.Fprintf(buf, " fill(%v)", s.FillValue)
 	case LinearFill:
 		_, _ = buf.WriteString(" fill(linear)")
 	case PreviousFill:
@@ -3053,31 +4441,35 @@ func (s *SelectStatement) String() string {
 	}
 	if len(s.SortFields) > 0 {
 		_, _ = buf.WriteString(" ORDER BY ")
-		_, _ = buf.WriteString(s.SortFields.String())
+		_ = s.SortFields.RenderBytes(buf, posmap)
 	}
 	if s.Limit > 0 {
-		_, _ = fmt.Fprintf(&buf, " LIMIT %d", s.Limit)
+		_, _ = fmt.Fprintf(buf, " LIMIT %d", s.Limit)
 	}
 	if s.Offset > 0 {
 		_, _ = buf.WriteString(" OFFSET ")
 		_, _ = buf.WriteString(strconv.Itoa(s.Offset))
 	}
 	if s.SLimit > 0 {
-		_, _ = fmt.Fprintf(&buf, " SLIMIT %d", s.SLimit)
+		_, _ = fmt.Fprintf(buf, " SLIMIT %d", s.SLimit)
 	}
 	if s.SOffset > 0 {
-		_, _ = fmt.Fprintf(&buf, " SOFFSET %d", s.SOffset)
+		_, _ = fmt.Fprintf(buf, " SOFFSET %d", s.SOffset)
 	}
 	if s.Location != nil {
-		_, _ = fmt.Fprintf(&buf, ` TZ('%s')`, s.Location)
+		_, _ = fmt.Fprintf(buf, ` TZ('%s')`, s.Location)
 	}
 	if len(s.PromSubCalls) > 0 {
 		_, _ = buf.WriteString(" SUBCALL ")
 		for _, subCall := range s.PromSubCalls {
-			_, _ = buf.WriteString(subCall.String())
+			_ = subCall.RenderBytes(buf, posmap)
 		}
 	}
-	return buf.String()
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // RequiredPrivileges returns the privilege required to execute the SelectStatement.
@@ -3342,40 +4734,85 @@ func ExprNames(expr Expr) []VarRef {
 type Target struct {
 	// Measurement to write into.
 	Measurement *Measurement
+	depth       int
+}
+
+func (t *Target) Depth() int {
+	if t != nil {
+		return t.depth
+	}
+	return 0
+}
+
+func (t *Target) UpdateDepthForTests() int {
+	if t != nil {
+		t.depth = 1 + CallUpdateDepthForTests(t.Measurement)
+		return t.depth
+	}
+	return 0
 }
 
 // String returns a string representation of the Target.
-func (t *Target) String() string {
+func (t *Target) String() string { return t.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (t *Target) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	if t == nil {
-		return ""
+		return buf
 	}
 
-	var buf bytes.Buffer
 	_, _ = buf.WriteString("INTO ")
-	_, _ = buf.WriteString(t.Measurement.String())
+	_ = t.Measurement.RenderBytes(buf, posmap)
 	if t.Measurement.Name == "" {
 		_, _ = buf.WriteString(":MEASUREMENT")
 	}
 
-	return buf.String()
+	if posmap != nil {
+		posmap[t] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // ExplainStatement represents a command for explaining a select statement.
 type ExplainStatement struct {
 	Statement *SelectStatement
+	Analyze   bool
+	depth     int
+}
 
-	Analyze bool
+func (e *ExplainStatement) Depth() int {
+	if e != nil {
+		return e.depth
+	}
+	return 0
+}
+
+func (e *ExplainStatement) UpdateDepthForTests() int {
+	if e != nil {
+		CallUpdateDepthForTests(e.Statement)
+		e.depth = 1 + maxDepth(e.Statement)
+		return e.depth
+	}
+	return 0
 }
 
 // String returns a string representation of the explain statement.
-func (e *ExplainStatement) String() string {
-	var buf bytes.Buffer
-	buf.WriteString("EXPLAIN ")
+func (e *ExplainStatement) String() string { return e.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (e *ExplainStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	_, _ = buf.WriteString("EXPLAIN ")
 	if e.Analyze {
-		buf.WriteString("ANALYZE ")
+		_, _ = buf.WriteString("ANALYZE ")
 	}
-	buf.WriteString(e.Statement.String())
-	return buf.String()
+	_ = e.Statement.RenderBytes(buf, posmap)
+
+	if posmap != nil {
+		posmap[e] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // RequiredPrivileges returns the privilege required to execute a ExplainStatement.
@@ -3390,18 +4827,45 @@ type DeleteStatement struct {
 
 	// An expression evaluated on data point.
 	Condition Expr
+
+	depth int
+}
+
+func (s *DeleteStatement) Depth() int {
+	if s != nil {
+		return s.depth
+	}
+	return 0
+}
+
+func (s *DeleteStatement) UpdateDepthForTests() int {
+	if s != nil {
+		s.depth = 1 + max(
+			CallUpdateDepthForTests(s.Source),
+			CallUpdateDepthForTests(s.Condition),
+		)
+		return s.depth
+	}
+	return 0
 }
 
 // String returns a string representation of the delete statement.
-func (s *DeleteStatement) String() string {
-	var buf bytes.Buffer
+func (s *DeleteStatement) String() string { return s.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (s *DeleteStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	_, _ = buf.WriteString("DELETE FROM ")
-	_, _ = buf.WriteString(s.Source.String())
+	_ = s.Source.RenderBytes(buf, posmap)
 	if s.Condition != nil {
 		_, _ = buf.WriteString(" WHERE ")
-		_, _ = buf.WriteString(s.Condition.String())
+		_ = s.Condition.RenderBytes(buf, posmap)
 	}
-	return buf.String()
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // RequiredPrivileges returns the privilege required to execute a DeleteStatement.
@@ -3441,17 +4905,41 @@ type ShowSeriesStatement struct {
 
 	// Expressions used for optimize querys
 	Hints Hints
+
+	depth int
+}
+
+func (s *ShowSeriesStatement) Depth() int {
+	if s != nil {
+		return s.depth
+	}
+	return 0
+}
+
+func (s *ShowSeriesStatement) UpdateDepthForTests() int {
+	if s != nil {
+		s.depth = 1 + max(
+			CallUpdateDepthForTests(s.Sources),
+			CallUpdateDepthForTests(s.Condition),
+			CallUpdateDepthForTests(s.SortFields),
+		)
+		return s.depth
+	}
+	return 0
 }
 
 // String returns a string representation of the list series statement.
-func (s *ShowSeriesStatement) String() string {
-	var buf bytes.Buffer
+func (s *ShowSeriesStatement) String() string { return s.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (s *ShowSeriesStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	_, _ = buf.WriteString("SHOW ")
 
 	if len(s.Hints) > 0 {
 		_, _ = buf.WriteString("/*+ ")
-		for _, hit := range s.Hints {
-			_, _ = buf.WriteString(hit.String())
+		for _, hint := range s.Hints {
+			_ = hint.RenderBytes(buf, posmap)
 			_, _ = buf.WriteString(" ")
 		}
 		_, _ = buf.WriteString("*/ ")
@@ -3465,16 +4953,16 @@ func (s *ShowSeriesStatement) String() string {
 	}
 	if s.Sources != nil {
 		_, _ = buf.WriteString(" FROM ")
-		_, _ = buf.WriteString(s.Sources.String())
+		_ = s.Sources.RenderBytes(buf, posmap)
 	}
 
 	if s.Condition != nil {
 		_, _ = buf.WriteString(" WHERE ")
-		_, _ = buf.WriteString(s.Condition.String())
+		_ = s.Condition.RenderBytes(buf, posmap)
 	}
 	if len(s.SortFields) > 0 {
 		_, _ = buf.WriteString(" ORDER BY ")
-		_, _ = buf.WriteString(s.SortFields.String())
+		_ = s.SortFields.RenderBytes(buf, posmap)
 	}
 	if s.Limit > 0 {
 		_, _ = buf.WriteString(" LIMIT ")
@@ -3484,7 +4972,11 @@ func (s *ShowSeriesStatement) String() string {
 		_, _ = buf.WriteString(" OFFSET ")
 		_, _ = buf.WriteString(strconv.Itoa(s.Offset))
 	}
-	return buf.String()
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // RequiredPrivileges returns the privilege required to execute a ShowSeriesStatement.
@@ -3504,23 +4996,49 @@ type DropSeriesStatement struct {
 
 	// An expression evaluated on data point (optional)
 	Condition Expr
+
+	depth int
+}
+
+func (s *DropSeriesStatement) Depth() int {
+	if s != nil {
+		return s.depth
+	}
+	return 0
+}
+
+func (s *DropSeriesStatement) UpdateDepthForTests() int {
+	if s != nil {
+		s.depth = 1 + max(
+			CallUpdateDepthForTests(s.Sources),
+			CallUpdateDepthForTests(s.Condition),
+		)
+		return s.depth
+	}
+	return 0
 }
 
 // String returns a string representation of the drop series statement.
-func (s *DropSeriesStatement) String() string {
-	var buf bytes.Buffer
-	buf.WriteString("DROP SERIES")
+func (s *DropSeriesStatement) String() string { return s.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (s *DropSeriesStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	_, _ = buf.WriteString("DROP SERIES")
 
 	if s.Sources != nil {
-		buf.WriteString(" FROM ")
-		buf.WriteString(s.Sources.String())
+		_, _ = buf.WriteString(" FROM ")
+		_ = s.Sources.RenderBytes(buf, posmap)
 	}
 	if s.Condition != nil {
-		buf.WriteString(" WHERE ")
-		buf.WriteString(s.Condition.String())
+		_, _ = buf.WriteString(" WHERE ")
+		_ = s.Condition.RenderBytes(buf, posmap)
 	}
 
-	return buf.String()
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // RequiredPrivileges returns the privilege required to execute a DropSeriesStatement.
@@ -3535,23 +5053,49 @@ type DeleteSeriesStatement struct {
 
 	// An expression evaluated on data point (optional)
 	Condition Expr
+
+	depth int
+}
+
+func (s *DeleteSeriesStatement) Depth() int {
+	if s != nil {
+		return s.depth
+	}
+	return 0
+}
+
+func (s *DeleteSeriesStatement) UpdateDepthForTests() int {
+	if s != nil {
+		s.depth = 1 + max(
+			CallUpdateDepthForTests(s.Sources),
+			CallUpdateDepthForTests(s.Condition),
+		)
+		return s.depth
+	}
+	return 0
 }
 
 // String returns a string representation of the delete series statement.
-func (s *DeleteSeriesStatement) String() string {
-	var buf bytes.Buffer
-	buf.WriteString("DELETE")
+func (s *DeleteSeriesStatement) String() string { return s.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (s *DeleteSeriesStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	_, _ = buf.WriteString("DELETE")
 
 	if s.Sources != nil {
-		buf.WriteString(" FROM ")
-		buf.WriteString(s.Sources.String())
+		_, _ = buf.WriteString(" FROM ")
+		_ = s.Sources.RenderBytes(buf, posmap)
 	}
 	if s.Condition != nil {
-		buf.WriteString(" WHERE ")
-		buf.WriteString(s.Condition.String())
+		_, _ = buf.WriteString(" WHERE ")
+		_ = s.Condition.RenderBytes(buf, posmap)
 	}
 
-	return buf.String()
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // RequiredPrivileges returns the privilege required to execute a DeleteSeriesStatement.
@@ -3566,12 +5110,28 @@ type DropShardStatement struct {
 	ID uint64
 }
 
+func (s *DropShardStatement) Depth() int { return 1 }
+
+func (s *DropShardStatement) UpdateDepthForTests() int {
+	if s != nil {
+		return 1
+	}
+	return 0
+}
+
 // String returns a string representation of the drop series statement.
-func (s *DropShardStatement) String() string {
-	var buf bytes.Buffer
-	buf.WriteString("DROP SHARD ")
-	buf.WriteString(strconv.FormatUint(s.ID, 10))
-	return buf.String()
+func (s *DropShardStatement) String() string { return s.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (s *DropShardStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	_, _ = buf.WriteString("DROP SHARD ")
+	_, _ = buf.WriteString(strconv.FormatUint(s.ID, 10))
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // RequiredPrivileges returns the privilege required to execute a
@@ -3599,11 +5159,37 @@ type ShowSeriesCardinalityStatement struct {
 	Dimensions Dimensions
 
 	Limit, Offset int
+
+	depth int
+}
+
+func (s *ShowSeriesCardinalityStatement) Depth() int {
+	if s != nil {
+		return s.depth
+	}
+	return 0
+}
+
+func (s *ShowSeriesCardinalityStatement) UpdateDepthForTests() int {
+	if s != nil {
+		s.depth = 1 + max(
+			CallUpdateDepthForTests(s.Sources),
+			CallUpdateDepthForTests(s.Condition),
+			CallUpdateDepthForTests(s.Dimensions),
+		)
+		return s.depth
+	}
+	return 0
 }
 
 // String returns a string representation of the show continuous queries statement.
 func (s *ShowSeriesCardinalityStatement) String() string {
-	var buf bytes.Buffer
+	return s.RenderBytes(&bytes.Buffer{}, nil).String()
+}
+
+func (s *ShowSeriesCardinalityStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	_, _ = buf.WriteString("SHOW SERIES")
 
 	if s.Exact {
@@ -3618,24 +5204,28 @@ func (s *ShowSeriesCardinalityStatement) String() string {
 
 	if s.Sources != nil {
 		_, _ = buf.WriteString(" FROM ")
-		_, _ = buf.WriteString(s.Sources.String())
+		_ = s.Sources.RenderBytes(buf, posmap)
 	}
 	if s.Condition != nil {
 		_, _ = buf.WriteString(" WHERE ")
-		_, _ = buf.WriteString(s.Condition.String())
+		_ = s.Condition.RenderBytes(buf, posmap)
 	}
 	if len(s.Dimensions) > 0 {
 		_, _ = buf.WriteString(" GROUP BY ")
-		_, _ = buf.WriteString(s.Dimensions.String())
+		_ = s.Dimensions.RenderBytes(buf, posmap)
 	}
 	if s.Limit > 0 {
-		_, _ = fmt.Fprintf(&buf, " LIMIT %d", s.Limit)
+		_, _ = fmt.Fprintf(buf, " LIMIT %d", s.Limit)
 	}
 	if s.Offset > 0 {
 		_, _ = buf.WriteString(" OFFSET ")
 		_, _ = buf.WriteString(strconv.Itoa(s.Offset))
 	}
-	return buf.String()
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // RequiredPrivileges returns the privilege required to execute a ShowSeriesCardinalityStatement.
@@ -3654,8 +5244,30 @@ func (s *ShowSeriesCardinalityStatement) DefaultDatabase() string {
 // ShowContinuousQueriesStatement represents a command for listing continuous queries.
 type ShowContinuousQueriesStatement struct{}
 
+func (s *ShowContinuousQueriesStatement) Depth() int { return 1 }
+
+func (s *ShowContinuousQueriesStatement) UpdateDepthForTests() int {
+	if s != nil {
+		return 1
+	}
+	return 0
+}
+
 // String returns a string representation of the show continuous queries statement.
-func (s *ShowContinuousQueriesStatement) String() string { return "SHOW CONTINUOUS QUERIES" }
+func (s *ShowContinuousQueriesStatement) String() string {
+	return s.RenderBytes(&bytes.Buffer{}, nil).String()
+}
+
+func (s *ShowContinuousQueriesStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	_, _ = buf.WriteString("SHOW CONTINUOUS QUERIES")
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
+}
 
 // RequiredPrivileges returns the privilege required to execute a ShowContinuousQueriesStatement.
 func (s *ShowContinuousQueriesStatement) RequiredPrivileges() (ExecutionPrivileges, error) {
@@ -3668,13 +5280,30 @@ type ShowGrantsForUserStatement struct {
 	Name string
 }
 
+func (s *ShowGrantsForUserStatement) Depth() int { return 1 }
+
+func (s *ShowGrantsForUserStatement) UpdateDepthForTests() int {
+	if s != nil {
+		return 1
+	}
+	return 0
+}
+
 // String returns a string representation of the show grants for user.
 func (s *ShowGrantsForUserStatement) String() string {
-	var buf bytes.Buffer
+	return s.RenderBytes(&bytes.Buffer{}, nil).String()
+}
+
+func (s *ShowGrantsForUserStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	_, _ = buf.WriteString("SHOW GRANTS FOR ")
 	_, _ = buf.WriteString(QuoteIdent(s.Name))
 
-	return buf.String()
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // RequiredPrivileges returns the privilege required to execute a ShowGrantsForUserStatement
@@ -3688,8 +5317,28 @@ type ShowDatabasesStatement struct {
 	ShowDetail bool
 }
 
+func (s *ShowDatabasesStatement) Depth() int { return 1 }
+
+func (s *ShowDatabasesStatement) UpdateDepthForTests() int {
+	if s != nil {
+		return 1
+	}
+	return 0
+}
+
 // String returns a string representation of the show databases command.
-func (s *ShowDatabasesStatement) String() string { return "SHOW DATABASES" }
+func (s *ShowDatabasesStatement) String() string { return s.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (s *ShowDatabasesStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	buf.WriteString("SHOW DATABASES")
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
+}
 
 // RequiredPrivileges returns the privilege required to execute a ShowDatabasesStatement.
 func (s *ShowDatabasesStatement) RequiredPrivileges() (ExecutionPrivileges, error) {
@@ -3715,24 +5364,51 @@ type CreateContinuousQueryStatement struct {
 
 	// Maximum duration to resample previous queries.
 	ResampleFor time.Duration
+
+	depth int
+}
+
+func (s *CreateContinuousQueryStatement) Depth() int {
+	if s != nil {
+		return s.depth
+	}
+	return 0
+}
+
+func (s *CreateContinuousQueryStatement) UpdateDepthForTests() int {
+	if s != nil {
+		s.depth = 1 + CallUpdateDepthForTests(s.Source)
+	}
+	return 0
 }
 
 // String returns a string representation of the statement.
 func (s *CreateContinuousQueryStatement) String() string {
-	var buf bytes.Buffer
-	fmt.Fprintf(&buf, "CREATE CONTINUOUS QUERY %s ON %s ", QuoteIdent(s.Name), QuoteIdent(s.Database))
+	return s.RenderBytes(&bytes.Buffer{}, nil).String()
+}
+
+func (s *CreateContinuousQueryStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	fmt.Fprintf(buf, "CREATE CONTINUOUS QUERY %s ON %s ", QuoteIdent(s.Name), QuoteIdent(s.Database))
 
 	if s.ResampleEvery > 0 || s.ResampleFor > 0 {
 		buf.WriteString("RESAMPLE ")
 		if s.ResampleEvery > 0 {
-			fmt.Fprintf(&buf, "EVERY %s ", FormatDuration(s.ResampleEvery))
+			fmt.Fprintf(buf, "EVERY %s ", FormatDuration(s.ResampleEvery))
 		}
 		if s.ResampleFor > 0 {
-			fmt.Fprintf(&buf, "FOR %s ", FormatDuration(s.ResampleFor))
+			fmt.Fprintf(buf, "FOR %s ", FormatDuration(s.ResampleFor))
 		}
 	}
-	fmt.Fprintf(&buf, "BEGIN %s END", s.Source.String())
-	return buf.String()
+	_, _ = buf.WriteString("BEGIN ")
+	_ = s.Source.RenderBytes(buf, posmap)
+	_, _ = buf.WriteString(" END")
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // DefaultDatabase returns the default database from the statement.
@@ -3785,9 +5461,29 @@ type DropContinuousQueryStatement struct {
 	Database string
 }
 
+func (s *DropContinuousQueryStatement) Depth() int { return 1 }
+
+func (s *DropContinuousQueryStatement) UpdateDepthForTests() int {
+	if s != nil {
+		return 1
+	}
+	return 0
+}
+
 // String returns a string representation of the statement.
 func (s *DropContinuousQueryStatement) String() string {
-	return fmt.Sprintf("DROP CONTINUOUS QUERY %s ON %s", QuoteIdent(s.Name), QuoteIdent(s.Database))
+	return s.RenderBytes(&bytes.Buffer{}, nil).String()
+}
+
+func (s *DropContinuousQueryStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	fmt.Fprintf(buf, "DROP CONTINUOUS QUERY %s ON %s", QuoteIdent(s.Name), QuoteIdent(s.Database))
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // RequiredPrivileges returns the privilege(s) required to execute a DropContinuousQueryStatement
@@ -3808,11 +5504,36 @@ type ShowMeasurementCardinalityStatement struct {
 	Condition     Expr
 	Dimensions    Dimensions
 	Limit, Offset int
+	depth         int
+}
+
+func (s *ShowMeasurementCardinalityStatement) Depth() int {
+	if s != nil {
+		return s.depth
+	}
+	return 0
+}
+
+func (s *ShowMeasurementCardinalityStatement) UpdateDepthForTests() int {
+	if s != nil {
+		s.depth = 1 + max(
+			CallUpdateDepthForTests(s.Sources),
+			CallUpdateDepthForTests(s.Condition),
+			CallUpdateDepthForTests(s.Dimensions),
+		)
+		return s.depth
+	}
+	return 0
 }
 
 // String returns a string representation of the statement.
 func (s *ShowMeasurementCardinalityStatement) String() string {
-	var buf bytes.Buffer
+	return s.RenderBytes(&bytes.Buffer{}, nil).String()
+}
+
+func (s *ShowMeasurementCardinalityStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	_, _ = buf.WriteString("SHOW MEASUREMENT")
 
 	if s.Exact {
@@ -3827,24 +5548,28 @@ func (s *ShowMeasurementCardinalityStatement) String() string {
 
 	if s.Sources != nil {
 		_, _ = buf.WriteString(" FROM ")
-		_, _ = buf.WriteString(s.Sources.String())
+		_ = s.Sources.RenderBytes(buf, posmap)
 	}
 	if s.Condition != nil {
 		_, _ = buf.WriteString(" WHERE ")
-		_, _ = buf.WriteString(s.Condition.String())
+		_ = s.Condition.RenderBytes(buf, posmap)
 	}
 	if len(s.Dimensions) > 0 {
 		_, _ = buf.WriteString(" GROUP BY ")
-		_, _ = buf.WriteString(s.Dimensions.String())
+		_ = s.Dimensions.RenderBytes(buf, posmap)
 	}
 	if s.Limit > 0 {
-		_, _ = fmt.Fprintf(&buf, " LIMIT %d", s.Limit)
+		_, _ = fmt.Fprintf(buf, " LIMIT %d", s.Limit)
 	}
 	if s.Offset > 0 {
 		_, _ = buf.WriteString(" OFFSET ")
 		_, _ = buf.WriteString(strconv.Itoa(s.Offset))
 	}
-	return buf.String()
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // RequiredPrivileges returns the privilege required to execute a ShowMeasurementCardinalityStatement.
@@ -3880,11 +5605,37 @@ type ShowMeasurementsStatement struct {
 
 	// Returns rows starting at an offset from the first row.
 	Offset int
+
+	depth int
+}
+
+func (s *ShowMeasurementsStatement) Depth() int {
+	if s != nil {
+		return s.depth
+	}
+	return 0
+}
+
+func (s *ShowMeasurementsStatement) UpdateDepthForTests() int {
+	if s != nil {
+		s.depth = 1 + max(
+			CallUpdateDepthForTests(s.Source),
+			CallUpdateDepthForTests(s.Condition),
+			CallUpdateDepthForTests(s.SortFields),
+		)
+		return s.depth
+	}
+	return 0
 }
 
 // String returns a string representation of the statement.
 func (s *ShowMeasurementsStatement) String() string {
-	var buf bytes.Buffer
+	return s.RenderBytes(&bytes.Buffer{}, nil).String()
+}
+
+func (s *ShowMeasurementsStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	_, _ = buf.WriteString("SHOW MEASUREMENTS")
 
 	if s.Database != "" {
@@ -3898,15 +5649,15 @@ func (s *ShowMeasurementsStatement) String() string {
 		} else {
 			_, _ = buf.WriteString("= ")
 		}
-		_, _ = buf.WriteString(s.Source.String())
+		_ = s.Source.RenderBytes(buf, posmap)
 	}
 	if s.Condition != nil {
 		_, _ = buf.WriteString(" WHERE ")
-		_, _ = buf.WriteString(s.Condition.String())
+		_ = s.Condition.RenderBytes(buf, posmap)
 	}
 	if len(s.SortFields) > 0 {
 		_, _ = buf.WriteString(" ORDER BY ")
-		_, _ = buf.WriteString(s.SortFields.String())
+		_ = s.SortFields.RenderBytes(buf, posmap)
 	}
 	if s.Limit > 0 {
 		_, _ = buf.WriteString(" LIMIT ")
@@ -3916,7 +5667,11 @@ func (s *ShowMeasurementsStatement) String() string {
 		_, _ = buf.WriteString(" OFFSET ")
 		_, _ = buf.WriteString(strconv.Itoa(s.Offset))
 	}
-	return buf.String()
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // RequiredPrivileges returns the privilege(s) required to execute a ShowMeasurementsStatement.
@@ -3937,11 +5692,33 @@ type ShowMeasurementsDetailStatement struct {
 
 	// Measurement name or regex.
 	Source Source
+
+	depth int
+}
+
+func (s *ShowMeasurementsDetailStatement) Depth() int {
+	if s != nil {
+		return s.depth
+	}
+	return 0
+}
+
+func (s *ShowMeasurementsDetailStatement) UpdateDepthForTests() int {
+	if s != nil {
+		s.depth = 1 + CallUpdateDepthForTests(s.Source)
+		return s.depth
+	}
+	return 0
 }
 
 // String returns a string representation of the statement.
 func (s *ShowMeasurementsDetailStatement) String() string {
-	var buf bytes.Buffer
+	return s.RenderBytes(&bytes.Buffer{}, nil).String()
+}
+
+func (s *ShowMeasurementsDetailStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	_, _ = buf.WriteString("SHOW MEASUREMENTS DETAIL")
 
 	if s.Database != "" {
@@ -3955,9 +5732,13 @@ func (s *ShowMeasurementsDetailStatement) String() string {
 		} else {
 			_, _ = buf.WriteString("= ")
 		}
-		_, _ = buf.WriteString(s.Source.String())
+		_ = s.Source.RenderBytes(buf, posmap)
 	}
-	return buf.String()
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // RequiredPrivileges returns the privilege(s) required to execute a ShowMeasurementsDetailStatement.
@@ -3978,16 +5759,34 @@ type DropMeasurementStatement struct {
 	RpName string
 }
 
+func (s *DropMeasurementStatement) Depth() int { return 1 }
+
+func (s *DropMeasurementStatement) UpdateDepthForTests() int {
+	if s != nil {
+		return 1
+	}
+	return 0
+}
+
 // String returns a string representation of the drop measurement statement.
 func (s *DropMeasurementStatement) String() string {
-	var buf bytes.Buffer
+	return s.RenderBytes(&bytes.Buffer{}, nil).String()
+}
+
+func (s *DropMeasurementStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	_, _ = buf.WriteString("DROP MEASUREMENT ")
 	if s.RpName != "" {
 		_, _ = buf.WriteString(QuoteIdent(s.RpName))
 		_, _ = buf.WriteString(".")
 	}
 	_, _ = buf.WriteString(QuoteIdent(s.Name))
-	return buf.String()
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // RequiredPrivileges returns the privilege(s) required to execute a DropMeasurementStatement
@@ -3998,9 +5797,27 @@ func (s *DropMeasurementStatement) RequiredPrivileges() (ExecutionPrivileges, er
 // ShowQueriesStatement represents a command for listing all running queries.
 type ShowQueriesStatement struct{}
 
+func (s *ShowQueriesStatement) Depth() int { return 1 }
+
+func (s *ShowQueriesStatement) UpdateDepthForTests() int {
+	if s != nil {
+		return 1
+	}
+	return 0
+}
+
 // String returns a string representation of the show queries statement.
-func (s *ShowQueriesStatement) String() string {
-	return "SHOW QUERIES"
+func (s *ShowQueriesStatement) String() string { return s.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (s *ShowQueriesStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	_, _ = buf.WriteString("SHOW QUERIES")
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // RequiredPrivileges returns the privilege required to execute a ShowQueriesStatement.
@@ -4014,15 +5831,33 @@ type ShowRetentionPoliciesStatement struct {
 	Database string
 }
 
+func (s *ShowRetentionPoliciesStatement) Depth() int { return 1 }
+
+func (s *ShowRetentionPoliciesStatement) UpdateDepthForTests() int {
+	if s != nil {
+		return 1
+	}
+	return 0
+}
+
 // String returns a string representation of a ShowRetentionPoliciesStatement.
 func (s *ShowRetentionPoliciesStatement) String() string {
-	var buf bytes.Buffer
+	return s.RenderBytes(&bytes.Buffer{}, nil).String()
+}
+
+func (s *ShowRetentionPoliciesStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	_, _ = buf.WriteString("SHOW RETENTION POLICIES")
 	if s.Database != "" {
 		_, _ = buf.WriteString(" ON ")
 		_, _ = buf.WriteString(QuoteIdent(s.Database))
 	}
-	return buf.String()
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // RequiredPrivileges returns the privilege(s) required to execute a ShowRetentionPoliciesStatement
@@ -4040,15 +5875,31 @@ type ShowStatsStatement struct {
 	Module string
 }
 
+func (s *ShowStatsStatement) Depth() int { return 1 }
+
+func (s *ShowStatsStatement) UpdateDepthForTests() int {
+	if s != nil {
+		return 1
+	}
+	return 0
+}
+
 // String returns a string representation of a ShowStatsStatement.
-func (s *ShowStatsStatement) String() string {
-	var buf bytes.Buffer
+func (s *ShowStatsStatement) String() string { return s.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (s *ShowStatsStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	_, _ = buf.WriteString("SHOW STATS")
 	if s.Module != "" {
 		_, _ = buf.WriteString(" FOR ")
 		_, _ = buf.WriteString(QuoteString(s.Module))
 	}
-	return buf.String()
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // RequiredPrivileges returns the privilege(s) required to execute a ShowStatsStatement
@@ -4059,8 +5910,30 @@ func (s *ShowStatsStatement) RequiredPrivileges() (ExecutionPrivileges, error) {
 // ShowShardGroupsStatement represents a command for displaying shard groups in the cluster.
 type ShowShardGroupsStatement struct{}
 
+func (s *ShowShardGroupsStatement) Depth() int { return 1 }
+
+func (s *ShowShardGroupsStatement) UpdateDepthForTests() int {
+	if s != nil {
+		return 1
+	}
+	return 0
+}
+
 // String returns a string representation of the SHOW SHARD GROUPS command.
-func (s *ShowShardGroupsStatement) String() string { return "SHOW SHARD GROUPS" }
+func (s *ShowShardGroupsStatement) String() string {
+	return s.RenderBytes(&bytes.Buffer{}, nil).String()
+}
+
+func (s *ShowShardGroupsStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	buf.WriteString("SHOW SHARD GROUPS")
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
+}
 
 // RequiredPrivileges returns the privileges required to execute the statement.
 func (s *ShowShardGroupsStatement) RequiredPrivileges() (ExecutionPrivileges, error) {
@@ -4072,8 +5945,35 @@ type ShowShardsStatement struct {
 	mstInfo *Measurement
 }
 
+func (s *ShowShardsStatement) Depth() int {
+	if s.mstInfo != nil {
+		return 2
+	} else {
+		return 1
+	}
+}
+
+func (s *ShowShardsStatement) UpdateDepthForTests() int {
+	if s != nil {
+		return 1 + CallUpdateDepthForTests(s.mstInfo)
+	}
+	return 0
+}
+
 // String returns a string representation.
-func (s *ShowShardsStatement) String() string { return "SHOW SHARDS" }
+func (s *ShowShardsStatement) String() string { return s.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (s *ShowShardsStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	buf.WriteString("SHOW SHARDS")
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
+
+}
 
 // RequiredPrivileges returns the privileges required to execute the statement.
 func (s *ShowShardsStatement) RequiredPrivileges() (ExecutionPrivileges, error) {
@@ -4111,15 +6011,33 @@ type ShowDiagnosticsStatement struct {
 	Module string
 }
 
+func (s *ShowDiagnosticsStatement) Depth() int { return 1 }
+
+func (s *ShowDiagnosticsStatement) UpdateDepthForTests() int {
+	if s != nil {
+		return 1
+	}
+	return 0
+}
+
 // String returns a string representation of the ShowDiagnosticsStatement.
 func (s *ShowDiagnosticsStatement) String() string {
-	var buf bytes.Buffer
+	return s.RenderBytes(&bytes.Buffer{}, nil).String()
+}
+
+func (s *ShowDiagnosticsStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	_, _ = buf.WriteString("SHOW DIAGNOSTICS")
 	if s.Module != "" {
 		_, _ = buf.WriteString(" FOR ")
 		_, _ = buf.WriteString(QuoteString(s.Module))
 	}
-	return buf.String()
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // RequiredPrivileges returns the privilege required to execute a ShowDiagnosticsStatement
@@ -4136,9 +6054,28 @@ type CreateSubscriptionStatement struct {
 	Mode            string
 }
 
+func (s *CreateSubscriptionStatement) Depth() int {
+	if s != nil {
+		return 1 + len(s.Destinations)
+	}
+	return 0
+}
+
+func (s *CreateSubscriptionStatement) UpdateDepthForTests() int {
+	if s != nil {
+		return 1 + len(s.Destinations)
+	}
+	return 0
+}
+
 // String returns a string representation of the CreateSubscriptionStatement.
 func (s *CreateSubscriptionStatement) String() string {
-	var buf bytes.Buffer
+	return s.RenderBytes(&bytes.Buffer{}, nil).String()
+}
+
+func (s *CreateSubscriptionStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	_, _ = buf.WriteString("CREATE SUBSCRIPTION ")
 	_, _ = buf.WriteString(QuoteIdent(s.Name))
 	_, _ = buf.WriteString(" ON ")
@@ -4155,7 +6092,10 @@ func (s *CreateSubscriptionStatement) String() string {
 		_, _ = buf.WriteString(QuoteString(dest))
 	}
 
-	return buf.String()
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // RequiredPrivileges returns the privilege required to execute a CreateSubscriptionStatement.
@@ -4175,16 +6115,37 @@ type DropSubscriptionStatement struct {
 	RetentionPolicy string
 }
 
+func (s *DropSubscriptionStatement) Depth() int { return 1 }
+
+func (s *DropSubscriptionStatement) UpdateDepthForTests() int {
+	if s != nil {
+		return 1
+	}
+	return 0
+}
+
 // String returns a string representation of the DropSubscriptionStatement.
 func (s *DropSubscriptionStatement) String() string {
+	return s.RenderBytes(&bytes.Buffer{}, nil).String()
+}
+
+func (s *DropSubscriptionStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	if s.Name == "" {
-		if s.Database == "" {
-			return "DROP ALL SUBSCRIPTIONS"
-		} else {
-			return fmt.Sprintf(`DROP ALL SUBSCRIPTIONS ON %s`, QuoteIdent(s.Database))
+		_, _ = buf.WriteString("DROP ALL SUBSCRIPTIONS")
+		if s.Database != "" {
+			_, _ = buf.WriteString(" ON ")
+			_, _ = buf.WriteString(QuoteIdent(s.Database))
 		}
+	} else {
+		_, _ = fmt.Fprintf(buf, `DROP SUBSCRIPTION %s ON %s.%s`, QuoteIdent(s.Name), QuoteIdent(s.Database), QuoteIdent(s.RetentionPolicy))
 	}
-	return fmt.Sprintf(`DROP SUBSCRIPTION %s ON %s.%s`, QuoteIdent(s.Name), QuoteIdent(s.Database), QuoteIdent(s.RetentionPolicy))
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // RequiredPrivileges returns the privilege required to execute a DropSubscriptionStatement
@@ -4201,9 +6162,29 @@ func (s *DropSubscriptionStatement) DefaultDatabase() string {
 type ShowSubscriptionsStatement struct {
 }
 
+func (s *ShowSubscriptionsStatement) Depth() int { return 1 }
+
+func (s *ShowSubscriptionsStatement) UpdateDepthForTests() int {
+	if s != nil {
+		return 1
+	}
+	return 0
+}
+
 // String returns a string representation of the ShowSubscriptionsStatement.
 func (s *ShowSubscriptionsStatement) String() string {
-	return "SHOW SUBSCRIPTIONS"
+	return s.RenderBytes(&bytes.Buffer{}, nil).String()
+}
+
+func (s *ShowSubscriptionsStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	buf.WriteString("SHOW SUBSCRIPTIONS")
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // RequiredPrivileges returns the privilege required to execute a ShowSubscriptionsStatement.
@@ -4237,11 +6218,35 @@ type ShowTagKeysStatement struct {
 
 	// Returns series starting at an offset from the first one.
 	SOffset int
+
+	depth int
+}
+
+func (s *ShowTagKeysStatement) Depth() int {
+	if s != nil {
+		return s.depth
+	}
+	return 0
+}
+
+func (s *ShowTagKeysStatement) UpdateDepthForTests() int {
+	if s != nil {
+		s.depth = 1 + max(
+			CallUpdateDepthForTests(s.Sources),
+			CallUpdateDepthForTests(s.Condition),
+			CallUpdateDepthForTests(s.SortFields),
+		)
+		return s.depth
+	}
+	return 0
 }
 
 // String returns a string representation of the statement.
-func (s *ShowTagKeysStatement) String() string {
-	var buf bytes.Buffer
+func (s *ShowTagKeysStatement) String() string { return s.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (s *ShowTagKeysStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	_, _ = buf.WriteString("SHOW TAG KEYS")
 
 	if s.Database != "" {
@@ -4250,15 +6255,15 @@ func (s *ShowTagKeysStatement) String() string {
 	}
 	if s.Sources != nil {
 		_, _ = buf.WriteString(" FROM ")
-		_, _ = buf.WriteString(s.Sources.String())
+		_ = s.Sources.RenderBytes(buf, posmap)
 	}
 	if s.Condition != nil {
 		_, _ = buf.WriteString(" WHERE ")
-		_, _ = buf.WriteString(s.Condition.String())
+		_ = s.Condition.RenderBytes(buf, posmap)
 	}
 	if len(s.SortFields) > 0 {
 		_, _ = buf.WriteString(" ORDER BY ")
-		_, _ = buf.WriteString(s.SortFields.String())
+		_ = s.SortFields.RenderBytes(buf, posmap)
 	}
 	if s.Limit > 0 {
 		_, _ = buf.WriteString(" LIMIT ")
@@ -4276,7 +6281,11 @@ func (s *ShowTagKeysStatement) String() string {
 		_, _ = buf.WriteString(" SOFFSET ")
 		_, _ = buf.WriteString(strconv.Itoa(s.SOffset))
 	}
-	return buf.String()
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // RequiredPrivileges returns the privilege(s) required to execute a ShowTagKeysStatement.
@@ -4297,11 +6306,36 @@ type ShowTagKeyCardinalityStatement struct {
 	Condition     Expr
 	Dimensions    Dimensions
 	Limit, Offset int
+	depth         int
+}
+
+func (s *ShowTagKeyCardinalityStatement) Depth() int {
+	if s != nil {
+		return s.depth
+	}
+	return 0
+}
+
+func (s *ShowTagKeyCardinalityStatement) UpdateDepthForTests() int {
+	if s != nil {
+		s.depth = 1 + max(
+			CallUpdateDepthForTests(s.Sources),
+			CallUpdateDepthForTests(s.Condition),
+			CallUpdateDepthForTests(s.Dimensions),
+		)
+		return s.depth
+	}
+	return 0
 }
 
 // String returns a string representation of the statement.
 func (s *ShowTagKeyCardinalityStatement) String() string {
-	var buf bytes.Buffer
+	return s.RenderBytes(&bytes.Buffer{}, nil).String()
+}
+
+func (s *ShowTagKeyCardinalityStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	_, _ = buf.WriteString("SHOW TAG KEY ")
 	if s.Exact {
 		_, _ = buf.WriteString("EXACT ")
@@ -4314,24 +6348,28 @@ func (s *ShowTagKeyCardinalityStatement) String() string {
 	}
 	if s.Sources != nil {
 		_, _ = buf.WriteString(" FROM ")
-		_, _ = buf.WriteString(s.Sources.String())
+		_ = s.Sources.RenderBytes(buf, posmap)
 	}
 	if s.Condition != nil {
 		_, _ = buf.WriteString(" WHERE ")
-		_, _ = buf.WriteString(s.Condition.String())
+		_ = s.Condition.RenderBytes(buf, posmap)
 	}
 	if len(s.Dimensions) > 0 {
 		_, _ = buf.WriteString(" GROUP BY ")
-		_, _ = buf.WriteString(s.Dimensions.String())
+		_ = s.Dimensions.RenderBytes(buf, posmap)
 	}
 	if s.Limit > 0 {
-		_, _ = fmt.Fprintf(&buf, " LIMIT %d", s.Limit)
+		_, _ = fmt.Fprintf(buf, " LIMIT %d", s.Limit)
 	}
 	if s.Offset > 0 {
 		_, _ = buf.WriteString(" OFFSET ")
 		_, _ = buf.WriteString(strconv.Itoa(s.Offset))
 	}
-	return buf.String()
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // RequiredPrivileges returns the privilege required to execute a ShowTagKeyCardinalityStatement.
@@ -4377,17 +6415,43 @@ type ShowTagValuesStatement struct {
 
 	// Expressions used for optimize querys
 	Hints Hints
+
+	depth int
+}
+
+func (s *ShowTagValuesStatement) Depth() int {
+	if s != nil {
+		return s.depth
+	}
+	return 0
+}
+
+func (s *ShowTagValuesStatement) UpdateDepthForTests() int {
+	if s != nil {
+		s.depth = 1 + max(
+			CallUpdateDepthForTests(s.Sources),
+			CallUpdateDepthForTests(s.TagKeyExpr),
+			CallUpdateDepthForTests(s.TagKeyCondition),
+			CallUpdateDepthForTests(s.Condition),
+			CallUpdateDepthForTests(s.SortFields),
+		)
+		return s.depth
+	}
+	return 0
 }
 
 // String returns a string representation of the statement.
-func (s *ShowTagValuesStatement) String() string {
-	var buf bytes.Buffer
+func (s *ShowTagValuesStatement) String() string { return s.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (s *ShowTagValuesStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	_, _ = buf.WriteString("SHOW ")
 
 	if len(s.Hints) > 0 {
 		_, _ = buf.WriteString("/*+ ")
-		for _, hit := range s.Hints {
-			_, _ = buf.WriteString(hit.String())
+		for _, hint := range s.Hints {
+			_ = hint.RenderBytes(buf, posmap)
 			_, _ = buf.WriteString(" ")
 		}
 		_, _ = buf.WriteString("*/ ")
@@ -4401,7 +6465,7 @@ func (s *ShowTagValuesStatement) String() string {
 	}
 	if s.Sources != nil {
 		_, _ = buf.WriteString(" FROM ")
-		_, _ = buf.WriteString(s.Sources.String())
+		_ = s.Sources.RenderBytes(buf, posmap)
 	}
 	_, _ = buf.WriteString(" WITH KEY ")
 	_, _ = buf.WriteString(s.Op.String())
@@ -4409,15 +6473,15 @@ func (s *ShowTagValuesStatement) String() string {
 	if lit, ok := s.TagKeyExpr.(*StringLiteral); ok {
 		_, _ = buf.WriteString(QuoteIdent(lit.Val))
 	} else {
-		_, _ = buf.WriteString(s.TagKeyExpr.String())
+		_ = s.TagKeyExpr.RenderBytes(buf, posmap)
 	}
 	if s.Condition != nil {
 		_, _ = buf.WriteString(" WHERE ")
-		_, _ = buf.WriteString(s.Condition.String())
+		_ = s.Condition.RenderBytes(buf, posmap)
 	}
 	if len(s.SortFields) > 0 {
 		_, _ = buf.WriteString(" ORDER BY ")
-		_, _ = buf.WriteString(s.SortFields.String())
+		_ = s.SortFields.RenderBytes(buf, posmap)
 	}
 	if s.Limit > 0 {
 		_, _ = buf.WriteString(" LIMIT ")
@@ -4427,7 +6491,11 @@ func (s *ShowTagValuesStatement) String() string {
 		_, _ = buf.WriteString(" OFFSET ")
 		_, _ = buf.WriteString(strconv.Itoa(s.Offset))
 	}
-	return buf.String()
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // RequiredPrivileges returns the privilege(s) required to execute a ShowTagValuesStatement.
@@ -4452,11 +6520,38 @@ type ShowTagValuesCardinalityStatement struct {
 	Limit, Offset int
 
 	TagKeyCondition Expr
+	depth           int
+}
+
+func (s *ShowTagValuesCardinalityStatement) Depth() int {
+	if s != nil {
+		return s.depth
+	}
+	return 0
+}
+
+func (s *ShowTagValuesCardinalityStatement) UpdateDepthForTests() int {
+	if s != nil {
+		s.depth = 1 + max(
+			CallUpdateDepthForTests(s.Sources),
+			CallUpdateDepthForTests(s.TagKeyExpr),
+			CallUpdateDepthForTests(s.Condition),
+			CallUpdateDepthForTests(s.Dimensions),
+			CallUpdateDepthForTests(s.TagKeyCondition),
+		)
+		return s.depth
+	}
+	return 0
 }
 
 // String returns a string representation of the statement.
 func (s *ShowTagValuesCardinalityStatement) String() string {
-	var buf bytes.Buffer
+	return s.RenderBytes(&bytes.Buffer{}, nil).String()
+}
+
+func (s *ShowTagValuesCardinalityStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	_, _ = buf.WriteString("SHOW TAG VALUES ")
 	if s.Exact {
 		_, _ = buf.WriteString("EXACT ")
@@ -4469,7 +6564,7 @@ func (s *ShowTagValuesCardinalityStatement) String() string {
 	}
 	if s.Sources != nil {
 		_, _ = buf.WriteString(" FROM ")
-		_, _ = buf.WriteString(s.Sources.String())
+		_ = s.Sources.RenderBytes(buf, posmap)
 	}
 	_, _ = buf.WriteString(" WITH KEY ")
 	_, _ = buf.WriteString(s.Op.String())
@@ -4477,24 +6572,28 @@ func (s *ShowTagValuesCardinalityStatement) String() string {
 	if lit, ok := s.TagKeyExpr.(*StringLiteral); ok {
 		_, _ = buf.WriteString(QuoteIdent(lit.Val))
 	} else {
-		_, _ = buf.WriteString(s.TagKeyExpr.String())
+		_ = s.TagKeyExpr.RenderBytes(buf, posmap)
 	}
 	if s.Condition != nil {
 		_, _ = buf.WriteString(" WHERE ")
-		_, _ = buf.WriteString(s.Condition.String())
+		_ = s.Condition.RenderBytes(buf, posmap)
 	}
 	if len(s.Dimensions) > 0 {
 		_, _ = buf.WriteString(" GROUP BY ")
-		_, _ = buf.WriteString(s.Dimensions.String())
+		_ = s.Dimensions.RenderBytes(buf, posmap)
 	}
 	if s.Limit > 0 {
-		_, _ = fmt.Fprintf(&buf, " LIMIT %d", s.Limit)
+		_, _ = fmt.Fprintf(buf, " LIMIT %d", s.Limit)
 	}
 	if s.Offset > 0 {
 		_, _ = buf.WriteString(" OFFSET ")
 		_, _ = buf.WriteString(strconv.Itoa(s.Offset))
 	}
-	return buf.String()
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // RequiredPrivileges returns the privilege required to execute a ShowTagValuesCardinalityStatement.
@@ -4520,9 +6619,27 @@ func (s *ShowTagValuesCardinalityStatement) DefaultDatabase() string {
 // ShowUsersStatement represents a command for listing users.
 type ShowUsersStatement struct{}
 
+func (s *ShowUsersStatement) Depth() int { return 1 }
+
+func (s *ShowUsersStatement) UpdateDepthForTests() int {
+	if s != nil {
+		return 1
+	}
+	return 0
+}
+
 // String returns a string representation of the ShowUsersStatement.
-func (s *ShowUsersStatement) String() string {
-	return "SHOW USERS"
+func (s *ShowUsersStatement) String() string { return s.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (s *ShowUsersStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	_, _ = buf.WriteString("SHOW USERS")
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // RequiredPrivileges returns the privilege(s) required to execute a ShowUsersStatement
@@ -4538,11 +6655,31 @@ type ShowFieldKeyCardinalityStatement struct {
 	Condition     Expr
 	Dimensions    Dimensions
 	Limit, Offset int
+	depth         int
+}
+
+func (s *ShowFieldKeyCardinalityStatement) Depth() int { return 1 }
+
+func (s *ShowFieldKeyCardinalityStatement) UpdateDepthForTests() int {
+	if s != nil {
+		s.depth = 1 + max(
+			CallUpdateDepthForTests(s.Sources),
+			CallUpdateDepthForTests(s.Condition),
+			CallUpdateDepthForTests(s.Dimensions),
+		)
+		return s.depth
+	}
+	return 0
 }
 
 // String returns a string representation of the statement.
 func (s *ShowFieldKeyCardinalityStatement) String() string {
-	var buf bytes.Buffer
+	return s.RenderBytes(&bytes.Buffer{}, nil).String()
+}
+
+func (s *ShowFieldKeyCardinalityStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	_, _ = buf.WriteString("SHOW FIELD KEY ")
 
 	if s.Exact {
@@ -4556,24 +6693,28 @@ func (s *ShowFieldKeyCardinalityStatement) String() string {
 	}
 	if s.Sources != nil {
 		_, _ = buf.WriteString(" FROM ")
-		_, _ = buf.WriteString(s.Sources.String())
+		_ = s.Sources.RenderBytes(buf, posmap)
 	}
 	if s.Condition != nil {
 		_, _ = buf.WriteString(" WHERE ")
-		_, _ = buf.WriteString(s.Condition.String())
+		_ = s.Condition.RenderBytes(buf, posmap)
 	}
 	if len(s.Dimensions) > 0 {
 		_, _ = buf.WriteString(" GROUP BY ")
-		_, _ = buf.WriteString(s.Dimensions.String())
+		_ = s.Dimensions.RenderBytes(buf, posmap)
 	}
 	if s.Limit > 0 {
-		_, _ = fmt.Fprintf(&buf, " LIMIT %d", s.Limit)
+		_, _ = fmt.Fprintf(buf, " LIMIT %d", s.Limit)
 	}
 	if s.Offset > 0 {
 		_, _ = buf.WriteString(" OFFSET ")
 		_, _ = buf.WriteString(strconv.Itoa(s.Offset))
 	}
-	return buf.String()
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // RequiredPrivileges returns the privilege required to execute a ShowFieldKeyCardinalityStatement.
@@ -4604,11 +6745,34 @@ type ShowFieldKeysStatement struct {
 
 	// Returns rows starting at an offset from the first row.
 	Offset int
+
+	depth int
+}
+
+func (s *ShowFieldKeysStatement) Depth() int {
+	if s != nil {
+		return s.depth
+	}
+	return 0
+}
+
+func (s *ShowFieldKeysStatement) UpdateDepthForTests() int {
+	if s != nil {
+		s.depth = 1 + max(
+			CallUpdateDepthForTests(s.Sources),
+			CallUpdateDepthForTests(s.SortFields),
+		)
+		return s.depth
+	}
+	return 0
 }
 
 // String returns a string representation of the statement.
-func (s *ShowFieldKeysStatement) String() string {
-	var buf bytes.Buffer
+func (s *ShowFieldKeysStatement) String() string { return s.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (s *ShowFieldKeysStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	_, _ = buf.WriteString("SHOW FIELD KEYS")
 
 	if s.Database != "" {
@@ -4617,11 +6781,11 @@ func (s *ShowFieldKeysStatement) String() string {
 	}
 	if s.Sources != nil {
 		_, _ = buf.WriteString(" FROM ")
-		_, _ = buf.WriteString(s.Sources.String())
+		_ = s.Sources.RenderBytes(buf, posmap)
 	}
 	if len(s.SortFields) > 0 {
 		_, _ = buf.WriteString(" ORDER BY ")
-		_, _ = buf.WriteString(s.SortFields.String())
+		_ = s.SortFields.RenderBytes(buf, posmap)
 	}
 	if s.Limit > 0 {
 		_, _ = buf.WriteString(" LIMIT ")
@@ -4631,7 +6795,11 @@ func (s *ShowFieldKeysStatement) String() string {
 		_, _ = buf.WriteString(" OFFSET ")
 		_, _ = buf.WriteString(strconv.Itoa(s.Offset))
 	}
-	return buf.String()
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // RequiredPrivileges returns the privilege(s) required to execute a ShowFieldKeysStatement.
@@ -4646,6 +6814,17 @@ func (s *ShowFieldKeysStatement) DefaultDatabase() string {
 
 // Fields represents a list of fields.
 type Fields []*Field
+
+func (a Fields) UpdateDepthForTests() int {
+	if a != nil {
+		depth := 0
+		for i, f := range a {
+			depth = max(depth, 1+i+CallUpdateDepthForTests(f))
+		}
+		return depth
+	}
+	return 0
+}
 
 // AliasNames returns a list of calculated field names in
 // order of alias, function name, then field.
@@ -4676,18 +6855,52 @@ func (a Fields) Names() []string {
 }
 
 // String returns a string representation of the fields.
-func (a Fields) String() string {
-	var str []string
-	for _, f := range a {
-		str = append(str, f.String())
+func (a Fields) String() string { return a.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (a Fields) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	for i, f := range a {
+		if i > 0 {
+			_, _ = buf.WriteString(", ")
+		}
+		_ = f.RenderBytes(buf, posmap)
 	}
-	return strings.Join(str, ", ")
+
+	if posmap != nil {
+		posmap[a] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
+
+type fieldsList struct {
+	fields Fields
+	depth  int
+}
+
+func (a fieldsList) Depth() int { return a.depth }
 
 // Field represents an expression retrieved from a select statement.
 type Field struct {
-	Expr  Expr
-	Alias string
+	Expr      Expr
+	Alias     string
+	Auxiliary bool // auxiliary fields not in the select clause
+	depth     int
+}
+
+func (f *Field) Depth() int {
+	if f != nil {
+		return f.depth
+	}
+	return 0
+}
+
+func (f *Field) UpdateDepthForTests() int {
+	if f != nil {
+		f.depth = 1 + CallUpdateDepthForTests(f.Expr)
+		return f.depth
+	}
+	return 0
 }
 
 // Name returns the name of the field. Returns alias, if set.
@@ -4705,7 +6918,7 @@ func (f *Field) Name() string {
 	case *BinaryExpr:
 		return BinaryExprName(expr)
 	case *ParenExpr:
-		f := Field{Expr: expr.Expr}
+		f := Field{Expr: expr.Expr, depth: 1 + expr.Expr.Depth()}
 		return f.Name()
 	case *VarRef:
 		return expr.Val
@@ -4716,13 +6929,22 @@ func (f *Field) Name() string {
 }
 
 // String returns a string representation of the field.
-func (f *Field) String() string {
-	str := f.Expr.String()
+func (f *Field) String() string { return f.RenderBytes(&bytes.Buffer{}, nil).String() }
 
-	if f.Alias == "" {
-		return str
+func (f *Field) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	_ = f.Expr.RenderBytes(buf, posmap)
+
+	if f.Alias != "" {
+		buf.WriteString(" AS ")
+		buf.WriteString(QuoteIdent(f.Alias))
 	}
-	return fmt.Sprintf("%s AS %s", str, QuoteIdent(f.Alias))
+
+	if posmap != nil {
+		posmap[f] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // Len implements sort.Interface.
@@ -4737,13 +6959,34 @@ func (a Fields) Swap(i, j int) { a[i], a[j] = a[j], a[i] }
 // Dimensions represents a list of dimensions.
 type Dimensions []*Dimension
 
-// String returns a string representation of the dimensions.
-func (a Dimensions) String() string {
-	var str []string
-	for _, d := range a {
-		str = append(str, d.String())
+func (a Dimensions) UpdateDepthForTests() int {
+	if a != nil {
+		depth := 0
+		for i, d := range a {
+			depth = max(depth, 1+i+CallUpdateDepthForTests(d))
+		}
+		return depth
 	}
-	return strings.Join(str, ", ")
+	return 0
+}
+
+// String returns a string representation of the dimensions.
+func (a Dimensions) String() string { return a.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (a Dimensions) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	for i, d := range a {
+		if i > 0 {
+			_, _ = buf.WriteString(", ")
+		}
+		_ = d.RenderBytes(buf, posmap)
+	}
+
+	if posmap != nil {
+		posmap[a] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // Normalize returns the interval and tag dimensions separately.
@@ -4765,41 +7008,106 @@ func (a Dimensions) Normalize() (time.Duration, []string) {
 	return dur, tags
 }
 
+type dimensionsList struct {
+	dims  Dimensions
+	depth int
+}
+
+func (a dimensionsList) Depth() int { return a.depth }
+
 // Dimension represents an expression that a select statement is grouped by.
 type Dimension struct {
-	Expr Expr
+	Expr  Expr
+	depth int
+}
+
+func (d *Dimension) Depth() int {
+	if d != nil {
+		return d.depth
+	}
+	return 0
+}
+
+func (d *Dimension) UpdateDepthForTests() int {
+	if d != nil {
+		d.depth = 1 + CallUpdateDepthForTests(d.Expr)
+		return d.depth
+	}
+	return 0
 }
 
 // String returns a string representation of the dimension.
-func (d *Dimension) String() string { return d.Expr.String() }
+func (d *Dimension) String() string { return d.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (d *Dimension) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	_ = d.Expr.RenderBytes(buf, posmap)
+
+	if posmap != nil {
+		posmap[d] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
+}
 
 type Hint struct {
 	Expr Expr
 }
 
 // String returns a string representation of the dimension.
-func (d *Hint) String() string { return d.Expr.(*StringLiteral).Val }
+func (d *Hint) String() string { return d.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (d *Hint) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	_, _ = buf.WriteString(d.Expr.(*StringLiteral).Val)
+
+	if posmap != nil {
+		posmap[d] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
+}
 
 type Hints []*Hint
 
-func (a Hints) String() string {
-	var str []string
-	for _, h := range a {
-		str = append(str, h.String())
+func (a Hints) String() string { return a.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (a Hints) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	for i, h := range a {
+		if i > 0 {
+			buf.WriteString(", ")
+		}
+		_ = h.RenderBytes(buf, posmap)
 	}
-	return strings.Join(str, ", ")
+
+	if posmap != nil {
+		posmap[a] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // Measurements represents a list of measurements.
 type Measurements []*Measurement
 
 // String returns a string representation of the measurements.
-func (a Measurements) String() string {
-	var str []string
-	for _, m := range a {
-		str = append(str, m.String())
+func (a Measurements) String() string { return a.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (a Measurements) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	for i, m := range a {
+		if i > 0 {
+			_, _ = buf.WriteString(", ")
+		}
+		_ = m.RenderBytes(buf, posmap)
 	}
-	return strings.Join(str, ", ")
+
+	if posmap != nil {
+		posmap[a] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 type IndexList struct {
@@ -4933,6 +7241,11 @@ func (ir *IndexRelation) IsSkipIndex(idx int) bool {
 	return false
 }
 
+const (
+	TEMPORARY string = "temporary"
+	GENERAL   string = "general"
+)
+
 // Measurement represents a single measurement used as a datasource.
 type Measurement struct {
 	Database        string
@@ -4951,6 +7264,21 @@ type Measurement struct {
 	IndexRelation *IndexRelation
 	ObsOptions    *obs.ObsOptions
 	EngineType    config.EngineType
+	// "general" means a regular measurement, "temporary" means a temporary measurement
+	MstType string
+}
+
+func (m *Measurement) Depth() int { return 1 }
+
+func (m *Measurement) UpdateDepthForTests() int {
+	if m != nil {
+		return 1
+	}
+	return 0
+}
+
+func (m *Measurement) IsTemporary() bool {
+	return m.MstType == TEMPORARY
 }
 
 // Clone returns a deep clone of the Measurement.
@@ -4983,6 +7311,7 @@ func (m *Measurement) Clone() *Measurement {
 		ObsOptions:        obsOpts,
 		EngineType:        m.EngineType,
 		IsTimeSorted:      m.IsTimeSorted,
+		MstType:           m.MstType,
 	}
 }
 
@@ -5005,8 +7334,11 @@ func (m *Measurement) IsCSStore() bool {
 }
 
 // String returns a string representation of the measurement.
-func (m *Measurement) String() string {
-	var buf bytes.Buffer
+func (m *Measurement) String() string { return m.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (m *Measurement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	if m.Database != "" {
 		_, _ = buf.WriteString(QuoteIdent(m.Database))
 		_, _ = buf.WriteString(".")
@@ -5025,10 +7357,13 @@ func (m *Measurement) String() string {
 	} else if m.SystemIterator != "" {
 		_, _ = buf.WriteString(QuoteIdent(m.SystemIterator))
 	} else if m.Regex != nil {
-		_, _ = buf.WriteString(m.Regex.String())
+		_ = m.Regex.RenderBytes(buf, posmap)
 	}
 
-	return buf.String()
+	if posmap != nil {
+		posmap[m] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 func (m *Measurement) GetName() string {
@@ -5042,28 +7377,173 @@ func (m *Measurement) GetName() string {
 type SubQuery struct {
 	Statement *SelectStatement
 	Alias     string
+	depth     int
+}
+
+func (s *SubQuery) Depth() int {
+	if s != nil {
+		return s.depth
+	}
+	return 0
+}
+
+func (s *SubQuery) UpdateDepthForTests() int {
+	if s != nil {
+		s.depth = 1 + CallUpdateDepthForTests(s.Statement)
+		return s.depth
+	}
+	return 0
 }
 
 // String returns a string representation of the subquery.
-func (s *SubQuery) String() string {
-	return fmt.Sprintf("(%s)", s.Statement.String())
+func (s *SubQuery) String() string { return s.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (s *SubQuery) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	_, _ = buf.WriteString("(")
+	_ = s.Statement.RenderBytes(buf, posmap)
+	_, _ = buf.WriteString(")")
+
+	if len(s.Alias) != 0 {
+		_, _ = buf.WriteString(" as ")
+		_, _ = buf.WriteString(s.Alias)
+	}
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 func (s *SubQuery) GetName() string {
 	return s.Alias
 }
 
+type JoinType int8
+
+const (
+	InnerJoin JoinType = iota
+	LeftOuterJoin
+	RightOuterJoin
+	OuterJoin
+	FullJoin
+	UnknownJoin
+)
+
+var JoinTypeMap = map[JoinType]string{
+	InnerJoin:      "inner join",
+	LeftOuterJoin:  "left outer join",
+	RightOuterJoin: "right outer join",
+	OuterJoin:      "outer join",
+	FullJoin:       "full join",
+}
+
 type Join struct {
 	LSrc      Source
 	RSrc      Source
 	Condition Expr
+	JoinType  JoinType
+	depth     int
 }
 
-func (j *Join) String() string {
-	return fmt.Sprintf("%s full join %s on %s", "1", "2", j.Condition.String())
+func (j *Join) Depth() int {
+	if j != nil {
+		return j.depth
+	}
+	return 0
+}
+
+func (j *Join) UpdateDepthForTests() int {
+	if j != nil {
+		j.depth = 1 + max(
+			CallUpdateDepthForTests(j.LSrc),
+			CallUpdateDepthForTests(j.RSrc),
+			CallUpdateDepthForTests(j.Condition),
+		)
+		return j.depth
+	}
+	return 0
+}
+
+func (j *Join) String() string { return j.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (j *Join) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	_ = j.LSrc.RenderBytes(buf, posmap)
+	_, _ = fmt.Fprintf(buf, " %s ", JoinTypeMap[j.JoinType])
+	_ = j.RSrc.RenderBytes(buf, posmap)
+	_, _ = buf.WriteString(" on ")
+	_ = j.Condition.RenderBytes(buf, posmap)
+
+	if posmap != nil {
+		posmap[j] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 func (j *Join) GetName() string {
+	return ""
+}
+
+type UnionType int8
+
+const (
+	UnionDistinct UnionType = iota
+	UnionAll
+	UnionDistinctByName
+	UnionAllByName
+)
+
+var UnionTypeMap = map[UnionType]string{
+	UnionDistinct:       "union",
+	UnionAll:            "union all",
+	UnionDistinctByName: "union by name",
+	UnionAllByName:      "union all by name",
+}
+
+type Union struct {
+	LSrc      Source
+	RSrc      Source
+	UnionType UnionType
+	depth     int
+}
+
+func (u *Union) Depth() int {
+	if u != nil {
+		return u.depth
+	}
+	return 0
+}
+
+func (u *Union) UpdateDepthForTests() int {
+	if u != nil {
+		u.depth = 1 + max(
+			CallUpdateDepthForTests(u.LSrc),
+			CallUpdateDepthForTests(u.RSrc),
+		)
+		return u.depth
+	}
+	return 0
+}
+
+func (u *Union) String() string { return u.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (u *Union) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	_ = u.LSrc.RenderBytes(buf, posmap)
+	_, _ = fmt.Fprintf(buf, " %s ", UnionTypeMap[u.UnionType])
+	_ = u.RSrc.RenderBytes(buf, posmap)
+
+	if posmap != nil {
+		posmap[u] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
+}
+
+func (j *Union) GetName() string {
 	return ""
 }
 
@@ -5095,24 +7575,67 @@ type BinOp struct {
 	IncludeKeys []string // group_left/group_right(IncludeKeys)
 	ReturnBool  bool
 	NilMst      NilMstState
+	depth       int
 }
 
-func (b *BinOp) String() string {
-	var matchKeys []byte
-	for _, matchKey := range b.MatchKeys {
-		matchKeys = append(matchKeys, []byte(matchKey)...)
+func (b *BinOp) Depth() int {
+	if b != nil {
+		return b.depth
 	}
-	var includeKeys []byte
-	for _, includeKey := range b.IncludeKeys {
-		includeKeys = append(includeKeys, []byte(includeKey)...)
+	return 0
+}
+
+func (b *BinOp) UpdateDepthForTests() int {
+	if b != nil {
+		b.depth = 1 + max(
+			CallUpdateDepthForTests(b.LSrc),
+			CallUpdateDepthForTests(b.RSrc),
+			CallUpdateDepthForTests(b.LExpr),
+			CallUpdateDepthForTests(b.RExpr),
+			len(b.MatchKeys),
+			len(b.IncludeKeys),
+		)
+		return b.depth
 	}
+	return 0
+}
+
+func (b *BinOp) String() string { return b.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (b *BinOp) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	if b.LSrc == nil {
-		return fmt.Sprintf("%s binary op %s %t %t(%s) %d(%s)", b.LExpr.String(), b.RSrc.String(), b.ReturnBool, b.On, string(matchKeys), b.MatchCard, includeKeys)
+		_ = b.LExpr.RenderBytes(buf, posmap)
+	} else {
+		_ = b.LSrc.RenderBytes(buf, posmap)
 	}
+
+	_, _ = buf.WriteString(" binary op ")
+
 	if b.RSrc == nil {
-		return fmt.Sprintf("%s binary op %s %t %t(%s) %d(%s)", b.LSrc.String(), b.RExpr.String(), b.ReturnBool, b.On, string(matchKeys), b.MatchCard, includeKeys)
+		_ = b.RExpr.RenderBytes(buf, posmap)
+	} else {
+		_ = b.RSrc.RenderBytes(buf, posmap)
 	}
-	return fmt.Sprintf("%s binary op %s %t %t(%s) %d(%s)", b.LSrc.String(), b.RSrc.String(), b.ReturnBool, b.On, string(matchKeys), b.MatchCard, includeKeys)
+
+	_, _ = fmt.Fprintf(buf, " %t %t(", b.ReturnBool, b.On)
+
+	for _, matchKey := range b.MatchKeys {
+		_, _ = buf.WriteString(matchKey)
+	}
+	_, _ = fmt.Fprintf(buf, ") %d(", b.MatchCard)
+
+	for _, includeKey := range b.IncludeKeys {
+		_, _ = buf.WriteString(includeKey)
+	}
+
+	_, _ = buf.WriteString(")")
+
+	if posmap != nil {
+		posmap[b] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 func (b *BinOp) GetName() string {
@@ -5136,17 +7659,64 @@ type PromSubCall struct {
 	SubStep            int64
 }
 
-func (j *PromSubCall) String() string {
-	return fmt.Sprintf("%s(%d, %d, %d, %d, %d, %t, %d, %d, %d) ", j.Name, j.Interval, j.StartTime, j.EndTime, j.Range, j.Offset, j.LowerStepInvariant, j.SubStartT, j.SubEndT, j.SubStep)
+func (j *PromSubCall) node() {}
+
+func (j *PromSubCall) String() string { return j.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (j *PromSubCall) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	fmt.Fprintf(buf, "%s(%d, %d, %d, %d, %d, %t, %d, %d, %d) ", j.Name, j.Interval, j.StartTime, j.EndTime, j.Range, j.Offset, j.LowerStepInvariant, j.SubStartT, j.SubEndT, j.SubStep)
+
+	if posmap != nil {
+		posmap[j] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 type InCondition struct {
-	Stmt   *SelectStatement
-	Column Expr
+	Stmt      *SelectStatement
+	Column    Expr
+	TimeRange TimeRange   // use for Prepare MapShard for InCondition.stmt
+	Csming    interface{} // same as shardMapping, use for mapShard of InCondition stmt
+	TimeCond  *BinaryExpr
+	FMapper   FieldMapper
+	depth     int
+	NotEqual  bool
 }
 
-func (j *InCondition) String() string {
-	return fmt.Sprintf("in condition,select statement: %s, column name: %s", j.Stmt.String(), j.Column.String())
+func (j *InCondition) Depth() int {
+	if j != nil {
+		return j.depth
+	}
+	return 0
+}
+
+func (j *InCondition) UpdateDepthForTests() int {
+	if j != nil {
+		j.depth = 1 + max(
+			CallUpdateDepthForTests(j.Stmt),
+			CallUpdateDepthForTests(j.TimeCond),
+		)
+		return j.depth
+	}
+	return 0
+}
+
+func (j *InCondition) String() string { return j.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (j *InCondition) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	_, _ = buf.WriteString("in condition,select statement: ")
+	_ = j.Stmt.RenderBytes(buf, posmap)
+	_, _ = buf.WriteString(", column name: ")
+	_ = j.Column.RenderBytes(buf, posmap)
+
+	if posmap != nil {
+		posmap[j] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 func (j *InCondition) GetName() string {
@@ -5155,11 +7725,27 @@ func (j *InCondition) GetName() string {
 
 func (j *InCondition) RewriteNameSpace(alias, mst string) {}
 
+func DefaultGraphVarRef() *VarRef {
+	return &VarRef{
+		Val:  "graph",
+		Type: Graph,
+	}
+}
+
 // VarRef represents a reference to a variable.
 type VarRef struct {
 	Val   string
 	Type  DataType
 	Alias string
+}
+
+func (r *VarRef) Depth() int { return 1 }
+
+func (r *VarRef) UpdateDepthForTests() int {
+	if r != nil {
+		return 1
+	}
+	return 0
 }
 
 func (r *VarRef) SetDataType(t DataType) {
@@ -5180,16 +7766,24 @@ func (r *VarRef) RewriteNameSpace(alias, mst string) {
 }
 
 // String returns a string representation of the variable reference.
-func (r *VarRef) String() string {
-	buf := bytes.NewBufferString(QuoteIdent(r.Val))
+func (r *VarRef) String() string { return r.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (r *VarRef) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	buf.WriteString(QuoteIdent(r.Val))
 	if r.Type != Unknown {
 		buf.WriteString("::")
 		buf.WriteString(r.Type.String())
 	}
-	return buf.String()
+
+	if posmap != nil {
+		posmap[r] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
-// VarRefs represents a slice of VarRef types.
+// VarRefs represents a slice of VarRef typ.
 type VarRefPointers []*VarRef
 
 // Len implements sort.Interface.
@@ -5215,7 +7809,7 @@ func (a VarRefPointers) Strings() []string {
 	return s
 }
 
-// VarRefs represents a slice of VarRef types.
+// VarRefs represents a slice of VarRef typ.
 type VarRefs []VarRef
 
 // Len implements sort.Interface.
@@ -5243,8 +7837,28 @@ func (a VarRefs) Strings() []string {
 
 // Call represents a function call.
 type Call struct {
-	Name string
-	Args []Expr
+	Name  string
+	Args  []Expr
+	depth int
+}
+
+func (c *Call) Depth() int {
+	if c != nil {
+		return c.depth
+	}
+	return 0
+}
+
+func (c *Call) UpdateDepthForTests() int {
+	if c != nil {
+		argdepth := 0
+		for i, a := range c.Args {
+			argdepth = max(argdepth, 1+i+CallUpdateDepthForTests(a))
+		}
+		c.depth = 1 + argdepth
+		return c.depth
+	}
+	return 0
 }
 
 func (c *Call) RewriteNameSpace(alias, mst string) {
@@ -5254,35 +7868,26 @@ func (c *Call) RewriteNameSpace(alias, mst string) {
 }
 
 // String returns a string representation of the call.
-func (c *Call) String() string {
-	// Join arguments.
-	var str []string
-	for _, arg := range c.Args {
-		str = append(str, arg.String())
-	}
+func (c *Call) String() string { return c.RenderBytes(&bytes.Buffer{}, nil).String() }
 
-	// Write function name and args.
-	return fmt.Sprintf("%s(%s)", c.Name, strings.Join(str, ", "))
-}
+func (c *Call) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
 
-func (c *Call) WriteString(b *bytes.Buffer) {
 	// format fmt.Sprintf("%s(%s)", c.Name, strings.Join(str, ", "))
-	b.WriteString(c.Name)
-	b.WriteString("(")
-
-	firstCall := true
-	for _, arg := range c.Args {
-		if firstCall {
-			b.WriteString(arg.String())
-			firstCall = false
-			continue
+	_, _ = buf.WriteString(c.Name)
+	_, _ = buf.WriteString("(")
+	for i, arg := range c.Args {
+		if i > 0 {
+			_, _ = buf.WriteString(", ")
 		}
-		b.WriteString(",")
-		b.WriteString(arg.String())
+		_ = arg.RenderBytes(buf, posmap)
 	}
-	b.WriteString(")")
-	// Write function name and args.
-	return
+	_, _ = buf.WriteString(")")
+
+	if posmap != nil {
+		posmap[c] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // Distinct represents a DISTINCT expression.
@@ -5291,11 +7896,30 @@ type Distinct struct {
 	Val string
 }
 
+func (d *Distinct) Depth() int { return 1 }
+
+func (d *Distinct) UpdateDepthForTests() int {
+	if d != nil {
+		return 1
+	}
+	return 0
+}
+
 func (d *Distinct) RewriteNameSpace(alias, mst string) {}
 
 // String returns a string representation of the expression.
-func (d *Distinct) String() string {
-	return fmt.Sprintf("DISTINCT %s", d.Val)
+func (d *Distinct) String() string { return d.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (d *Distinct) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	_, _ = buf.WriteString("DISTINCT ")
+	_, _ = buf.WriteString(d.Val)
+
+	if posmap != nil {
+		posmap[d] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // NewCall returns a new call expression from this expressions.
@@ -5305,6 +7929,7 @@ func (d *Distinct) NewCall() *Call {
 		Args: []Expr{
 			&VarRef{Val: d.Val},
 		},
+		depth: 3,
 	}
 }
 
@@ -5313,14 +7938,31 @@ type NumberLiteral struct {
 	Val float64
 }
 
+func (l *NumberLiteral) Depth() int { return 1 }
+
+func (l *NumberLiteral) UpdateDepthForTests() int {
+	if l != nil {
+		return 1
+	}
+	return 0
+}
+
 func (l *NumberLiteral) RewriteNameSpace(alias, mst string) {}
 
 // String returns a string representation of the literal.
-func (l *NumberLiteral) String() string {
+func (l *NumberLiteral) String() string { return l.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (l *NumberLiteral) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
 	if l.Val > math.MaxInt {
-		return strconv.FormatFloat(l.Val, 'f', 1, 64)
+		_, _ = buf.WriteString(strconv.FormatFloat(l.Val, 'f', 1, 64))
+	} else {
+		_, _ = buf.WriteString(strconv.FormatFloat(l.Val, 'f', -1, 64))
 	}
-	return strconv.FormatFloat(l.Val, 'f', -1, 64)
+	if posmap != nil {
+		posmap[l] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // IntegerLiteral represents an integer literal.
@@ -5328,10 +7970,30 @@ type IntegerLiteral struct {
 	Val int64
 }
 
+func (l *IntegerLiteral) Depth() int { return 1 }
+
+func (l *IntegerLiteral) UpdateDepthForTests() int {
+	if l != nil {
+		return 1
+	}
+	return 0
+}
+
 func (l *IntegerLiteral) RewriteNameSpace(alias, mst string) {}
 
 // String returns a string representation of the literal.
-func (l *IntegerLiteral) String() string { return fmt.Sprintf("%d", l.Val) }
+func (l *IntegerLiteral) String() string { return l.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (l *IntegerLiteral) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	_, _ = fmt.Fprintf(buf, "%d", l.Val)
+
+	if posmap != nil {
+		posmap[l] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
+}
 
 // UnsignedLiteral represents an unsigned literal. The parser will only use an unsigned literal if the parsed
 // integer is greater than math.MaxInt64.
@@ -5339,24 +8001,63 @@ type UnsignedLiteral struct {
 	Val uint64
 }
 
+func (l *UnsignedLiteral) Depth() int { return 1 }
+
+func (l *UnsignedLiteral) UpdateDepthForTests() int {
+	if l != nil {
+		return 1
+	}
+	return 0
+}
+
 func (l *UnsignedLiteral) RewriteNameSpace(alias, mst string) {}
 
 // String returns a string representation of the literal.
-func (l *UnsignedLiteral) String() string { return strconv.FormatUint(l.Val, 10) }
+func (l *UnsignedLiteral) String() string { return l.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (l *UnsignedLiteral) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	_, _ = buf.WriteString(strconv.FormatUint(l.Val, 10))
+
+	if posmap != nil {
+		posmap[l] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
+}
 
 // BooleanLiteral represents a boolean literal.
 type BooleanLiteral struct {
 	Val bool
 }
 
+func (l *BooleanLiteral) Depth() int { return 1 }
+
+func (l *BooleanLiteral) UpdateDepthForTests() int {
+	if l != nil {
+		return 1
+	}
+	return 0
+}
+
 func (l *BooleanLiteral) RewriteNameSpace(alias, mst string) {}
 
 // String returns a string representation of the literal.
-func (l *BooleanLiteral) String() string {
+func (l *BooleanLiteral) String() string { return l.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (l *BooleanLiteral) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	if l.Val {
-		return "true"
+		_, _ = buf.WriteString("true")
+	} else {
+		_, _ = buf.WriteString("false")
 	}
-	return "false"
+
+	if posmap != nil {
+		posmap[l] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // isTrueLiteral returns true if the expression is a literal "true" value.
@@ -5380,11 +8081,28 @@ type ListLiteral struct {
 	Vals []string
 }
 
+func (s *ListLiteral) Depth() int {
+	if s != nil {
+		return 1 + len(s.Vals)
+	}
+	return 0
+}
+
+func (s *ListLiteral) UpdateDepthForTests() int {
+	if s != nil {
+		return 1 + len(s.Vals)
+	}
+	return 0
+}
+
 func (s *ListLiteral) RewriteNameSpace(alias, mst string) {}
 
 // String returns a string representation of the literal.
-func (s *ListLiteral) String() string {
-	var buf bytes.Buffer
+func (s *ListLiteral) String() string { return s.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (s *ListLiteral) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	_, _ = buf.WriteString("(")
 	for idx, tagKey := range s.Vals {
 		if idx != 0 {
@@ -5393,7 +8111,64 @@ func (s *ListLiteral) String() string {
 		_, _ = buf.WriteString(QuoteIdent(tagKey))
 	}
 	_, _ = buf.WriteString(")")
-	return buf.String()
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
+}
+
+// SetLiteral represents a list of tag value literals.
+type SetLiteral struct {
+	Vals map[interface{}]bool
+}
+
+func (s *SetLiteral) Depth() int {
+	if s != nil {
+		return 1
+	}
+	return 0
+}
+
+func (s *SetLiteral) UpdateDepthForTests() int {
+	if s != nil {
+		return 1
+	}
+	return 0
+}
+
+func (s *SetLiteral) RewriteNameSpace(alias, mst string) {}
+
+// String returns a string representation of the literal.
+func (s *SetLiteral) String() string { return s.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (s *SetLiteral) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	_, _ = buf.WriteString("(")
+	isFirst := true
+	for tagValue, _ := range s.Vals {
+		if !isFirst {
+			_, _ = buf.WriteString(",")
+		}
+		switch v := tagValue.(type) {
+		case float64:
+			if v > math.MaxInt {
+				_, _ = buf.WriteString(strconv.FormatFloat(v, 'f', 1, 64))
+			} else {
+				_, _ = buf.WriteString(strconv.FormatFloat(v, 'f', -1, 64))
+			}
+		default:
+			_, _ = buf.WriteString(QuoteString(fmt.Sprintf("%v", tagValue)))
+		}
+		isFirst = false
+	}
+	_, _ = buf.WriteString(")")
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // StringLiteral represents a string literal.
@@ -5401,10 +8176,30 @@ type StringLiteral struct {
 	Val string
 }
 
+func (l *StringLiteral) Depth() int { return 1 }
+
+func (l *StringLiteral) UpdateDepthForTests() int {
+	if l != nil {
+		return 1
+	}
+	return 0
+}
+
 func (l *StringLiteral) RewriteNameSpace(alias, mst string) {}
 
 // String returns a string representation of the literal.
-func (l *StringLiteral) String() string { return QuoteString(l.Val) }
+func (l *StringLiteral) String() string { return l.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (l *StringLiteral) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	buf.WriteString(QuoteString(l.Val))
+
+	if posmap != nil {
+		posmap[l] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
+}
 
 // IsTimeLiteral returns if this string can be interpreted as a time literal.
 func (l *StringLiteral) IsTimeLiteral() bool {
@@ -5442,11 +8237,31 @@ type TimeLiteral struct {
 	Val time.Time
 }
 
+func (l *TimeLiteral) Depth() int { return 1 }
+
+func (l *TimeLiteral) UpdateDepthForTests() int {
+	if l != nil {
+		return 1
+	}
+	return 0
+}
+
 func (l *TimeLiteral) RewriteNameSpace(alias, mst string) {}
 
 // String returns a string representation of the literal.
-func (l *TimeLiteral) String() string {
-	return `'` + l.Val.UTC().Format(time.RFC3339Nano) + `'`
+func (l *TimeLiteral) String() string { return l.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (l *TimeLiteral) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	_, _ = buf.WriteString(`'`)
+	_, _ = buf.WriteString(l.Val.UTC().Format(time.RFC3339Nano))
+	_, _ = buf.WriteString(`'`)
+
+	if posmap != nil {
+		posmap[l] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // DurationLiteral represents a duration literal.
@@ -5454,19 +8269,59 @@ type DurationLiteral struct {
 	Val time.Duration
 }
 
+func (l *DurationLiteral) Depth() int { return 1 }
+
+func (l *DurationLiteral) UpdateDepthForTests() int {
+	if l != nil {
+		return 1
+	}
+	return 0
+}
+
 func (l *DurationLiteral) RewriteNameSpace(alias, mst string) {}
 
 // String returns a string representation of the literal.
-func (l *DurationLiteral) String() string { return FormatDuration(l.Val) }
+func (l *DurationLiteral) String() string { return l.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (l *DurationLiteral) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	_, _ = buf.WriteString(FormatDuration(l.Val))
+
+	if posmap != nil {
+		posmap[l] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
+}
 
 // NilLiteral represents a nil literal.
 // This is not available to the query language itself. It's only used internally.
 type NilLiteral struct{}
 
+func (l *NilLiteral) Depth() int { return 1 }
+
+func (l *NilLiteral) UpdateDepthForTests() int {
+	if l != nil {
+		return 1
+	}
+	return 0
+}
+
 func (l *NilLiteral) RewriteNameSpace(alias, mst string) {}
 
 // String returns a string representation of the literal.
-func (l *NilLiteral) String() string { return `nil` }
+func (l *NilLiteral) String() string { return l.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (l *NilLiteral) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	buf.WriteString(`nil`)
+
+	if posmap != nil {
+		posmap[l] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
+}
 
 // BoundParameter represents a bound parameter literal.
 // This is not available to the query language itself, but can be used when
@@ -5475,11 +8330,30 @@ type BoundParameter struct {
 	Name string
 }
 
+func (bp *BoundParameter) Depth() int { return 1 }
+
+func (bp *BoundParameter) UpdateDepthForTests() int {
+	if bp != nil {
+		return 1
+	}
+	return 0
+}
+
 func (bp *BoundParameter) RewriteNameSpace(alias, mst string) {}
 
 // String returns a string representation of the bound parameter.
-func (bp *BoundParameter) String() string {
-	return fmt.Sprintf("$%s", QuoteIdent(bp.Name))
+func (bp *BoundParameter) String() string { return bp.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (bp *BoundParameter) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	_, _ = buf.WriteString("$")
+	_, _ = buf.WriteString(QuoteIdent(bp.Name))
+
+	if posmap != nil {
+		posmap[bp] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // BinaryExpr represents an operation between two expressions.
@@ -5489,11 +8363,41 @@ type BinaryExpr struct {
 	RHS Expr
 	// If a comparison operator, return 0/1 rather than filtering.
 	ReturnBool bool
+	depth      int
+}
+
+func (e *BinaryExpr) Depth() int {
+	if e != nil {
+		return e.depth
+	}
+	return 0
+}
+
+func (e *BinaryExpr) UpdateDepthForTests() int {
+	if e != nil {
+		e.depth = 1 + max(
+			CallUpdateDepthForTests(e.LHS),
+			CallUpdateDepthForTests(e.RHS),
+		)
+		return e.depth
+	}
+	return 0
 }
 
 // String returns a string representation of the binary expression.
-func (e *BinaryExpr) String() string {
-	return fmt.Sprintf("%s %s %s", e.LHS.String(), e.Op.String(), e.RHS.String())
+func (e *BinaryExpr) String() string { return e.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (e *BinaryExpr) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	_ = e.LHS.RenderBytes(buf, posmap)
+	_, _ = fmt.Fprintf(buf, " %s ", e.Op.String())
+	_ = e.RHS.RenderBytes(buf, posmap)
+
+	if posmap != nil {
+		posmap[e] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 func (e *BinaryExpr) RewriteNameSpace(alias, mst string) {
@@ -5530,14 +8434,26 @@ type MatchExpr struct {
 	Op    int
 }
 
-func (m *MatchExpr) String() string {
+func (m *MatchExpr) String() string { return m.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (m *MatchExpr) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	switch m.Op {
 	case MATCH:
-		return m.Field.String() + "match" + m.Value.String()
+		_ = m.Field.RenderBytes(buf, posmap)
+		_, _ = buf.WriteString("match")
+		_ = m.Value.RenderBytes(buf, posmap)
 	case MATCHPHRASE:
-		return m.Field.String() + "match_phrase" + m.Value.String()
+		_ = m.Field.RenderBytes(buf, posmap)
+		_, _ = buf.WriteString("match_phrase")
+		_ = m.Value.RenderBytes(buf, posmap)
 	}
-	return ""
+
+	if posmap != nil {
+		posmap[m] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 func (m *MatchExpr) RewriteNameSpace(alias, mst string) {
@@ -5545,7 +8461,23 @@ func (m *MatchExpr) RewriteNameSpace(alias, mst string) {
 
 // ParenExpr represents a parenthesized expression.
 type ParenExpr struct {
-	Expr Expr
+	Expr  Expr
+	depth int
+}
+
+func (e *ParenExpr) Depth() int {
+	if e != nil {
+		return e.depth
+	}
+	return 0
+}
+
+func (e *ParenExpr) UpdateDepthForTests() int {
+	if e != nil {
+		e.depth = 1 + CallUpdateDepthForTests(e.Expr)
+		return e.depth
+	}
+	return 0
 }
 
 func (e *ParenExpr) RewriteNameSpace(alias, mst string) {
@@ -5553,21 +8485,51 @@ func (e *ParenExpr) RewriteNameSpace(alias, mst string) {
 }
 
 // String returns a string representation of the parenthesized expression.
-func (e *ParenExpr) String() string { return fmt.Sprintf("(%s)", e.Expr.String()) }
+func (e *ParenExpr) String() string { return e.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (e *ParenExpr) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	_, _ = buf.WriteString("(")
+	_ = e.Expr.RenderBytes(buf, posmap)
+	_, _ = buf.WriteString(")")
+
+	if posmap != nil {
+		posmap[e] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
+}
 
 // RegexLiteral represents a regular expression.
 type RegexLiteral struct {
 	Val *regexp.Regexp
 }
 
+func (r *RegexLiteral) Depth() int { return 1 }
+
+func (r *RegexLiteral) UpdateDepthForTests() int {
+	if r != nil {
+		return 1
+	}
+	return 0
+}
+
 func (r *RegexLiteral) RewriteNameSpace(alias, mst string) {}
 
 // String returns a string representation of the literal.
-func (r *RegexLiteral) String() string {
+func (r *RegexLiteral) String() string { return r.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (r *RegexLiteral) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	if r.Val != nil {
-		return fmt.Sprintf("/%s/", strings.Replace(r.Val.String(), `/`, `\/`, -1))
+		fmt.Fprintf(buf, "/%s/", strings.Replace(r.Val.String(), `/`, `\/`, -1))
 	}
-	return ""
+
+	if posmap != nil {
+		posmap[r] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 // CloneRegexLiteral returns a clone of the RegexLiteral.
@@ -5589,18 +8551,43 @@ type Wildcard struct {
 	Type Token
 }
 
+func (w *Wildcard) Depth() int { return 1 }
+
+func (w *Wildcard) UpdateDepthForTests() int {
+	if w != nil {
+		return 1
+	}
+	return 0
+}
+
 func (e *Wildcard) RewriteNameSpace(alias, mst string) {}
 
 // String returns a string representation of the wildcard.
-func (e *Wildcard) String() string {
+func (e *Wildcard) String() string { return e.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (e *Wildcard) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	buf.WriteString("*")
 	switch e.Type {
 	case FIELD:
-		return "*::field"
+		buf.WriteString("::field")
 	case TAG:
-		return "*::tag"
-	default:
-		return "*"
+		buf.WriteString("::tag")
 	}
+
+	if posmap != nil {
+		posmap[e] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
+}
+
+func CloneArrExpr(exprarr []Expr) []Expr {
+	arr := make([]Expr, len(exprarr))
+	for i, expr := range exprarr {
+		arr[i] = CloneExpr(expr)
+	}
+	return arr
 }
 
 // CloneExpr returns a deep copy of the expression.
@@ -5610,15 +8597,11 @@ func CloneExpr(expr Expr) Expr {
 	}
 	switch expr := expr.(type) {
 	case *BinaryExpr:
-		return &BinaryExpr{Op: expr.Op, LHS: CloneExpr(expr.LHS), RHS: CloneExpr(expr.RHS), ReturnBool: expr.ReturnBool}
+		return &BinaryExpr{Op: expr.Op, LHS: CloneExpr(expr.LHS), RHS: CloneExpr(expr.RHS), ReturnBool: expr.ReturnBool, depth: expr.depth}
 	case *BooleanLiteral:
 		return &BooleanLiteral{Val: expr.Val}
 	case *Call:
-		args := make([]Expr, len(expr.Args))
-		for i, arg := range expr.Args {
-			args[i] = CloneExpr(arg)
-		}
-		return &Call{Name: expr.Name, Args: args}
+		return &Call{Name: expr.Name, Args: CloneArrExpr(expr.Args), depth: expr.depth}
 	case *Distinct:
 		return &Distinct{Val: expr.Val}
 	case *DurationLiteral:
@@ -5630,7 +8613,7 @@ func CloneExpr(expr Expr) Expr {
 	case *NumberLiteral:
 		return &NumberLiteral{Val: expr.Val}
 	case *ParenExpr:
-		return &ParenExpr{Expr: CloneExpr(expr.Expr)}
+		return &ParenExpr{Expr: CloneExpr(expr.Expr), depth: expr.depth}
 	case *RegexLiteral:
 		return &RegexLiteral{Val: expr.Val}
 	case *StringLiteral:
@@ -5642,7 +8625,20 @@ func CloneExpr(expr Expr) Expr {
 	case *Wildcard:
 		return &Wildcard{Type: expr.Type}
 	case *InCondition:
-		return &InCondition{Stmt: expr.Stmt.Clone(), Column: CloneExpr(expr.Column)}
+		return expr // fix rewrite field type err of in.stmt
+	case *CaseWhenExpr:
+		return &CaseWhenExpr{
+			Conditions: CloneArrExpr(expr.Conditions),
+			Assigners:  CloneArrExpr(expr.Assigners),
+			Args:       CloneArrExpr(expr.Args),
+			depth:      expr.depth,
+		}
+	case *SetLiteral:
+		valsCopy := make(map[interface{}]bool, len(expr.Vals))
+		for k, v := range expr.Vals {
+			valsCopy[k] = v
+		}
+		return &SetLiteral{Vals: valsCopy}
 	}
 	panic("unreachable")
 }
@@ -5820,6 +8816,10 @@ func Walk(v Visitor, node Node) {
 		Walk(v, n.RSrc)
 		Walk(v, n.Condition)
 
+	case *Union:
+		Walk(v, n.LSrc)
+		Walk(v, n.RSrc)
+
 	case *SubQuery:
 		Walk(v, n.Statement)
 
@@ -5835,6 +8835,33 @@ func Walk(v Visitor, node Node) {
 	case *BinOp:
 		Walk(v, n.LSrc)
 		Walk(v, n.RSrc)
+	case *InCondition:
+		Walk(v, n.Column)
+
+	case *WithSelectStatement:
+		for _, s := range n.CTEs {
+			Walk(v, s)
+		}
+		Walk(v, n.Query)
+
+	case *CTE:
+		if n.Query != nil {
+			Walk(v, n.Query)
+		}
+		if n.GraphQuery != nil {
+			Walk(v, n.GraphQuery)
+		}
+
+	case *CaseWhenExpr:
+		for _, cond := range n.Conditions {
+			Walk(v, cond)
+		}
+		for _, expr := range n.Assigners {
+			Walk(v, expr)
+		}
+		for _, expr := range n.Args {
+			Walk(v, expr)
+		}
 	}
 }
 
@@ -6020,6 +9047,8 @@ func (v *ValuerEval) Eval(expr Expr) interface{} {
 	case *VarRef:
 		val, _ := v.Valuer.Value(expr.Val)
 		return val
+	case *SetLiteral:
+		return expr.Vals
 	default:
 		return nil
 	}
@@ -6059,7 +9088,7 @@ func (v *ValuerEval) evalBinaryExpr(expr *BinaryExpr) interface{} {
 		}
 	}
 
-	// Evaluate if both sides are simple types.
+	// Evaluate if both sides are simple typ.
 	switch lhs := lhs.(type) {
 	case bool:
 		rhs, ok := rhs.(bool)
@@ -6080,6 +9109,7 @@ func (v *ValuerEval) evalBinaryExpr(expr *BinaryExpr) interface{} {
 			return ok && (lhs != rhs)
 		}
 	case float64:
+		rhsm := rhs
 		// Try the rhs as a float64, int64, or uint64
 		rhsf, ok := rhs.(float64)
 		if !ok {
@@ -6135,6 +9165,20 @@ func (v *ValuerEval) evalBinaryExpr(expr *BinaryExpr) interface{} {
 				return nil
 			}
 			return math.Atan2(lhs, rhs)
+		case IN:
+			rhs, ok := rhsm.(map[interface{}]bool)
+			if !ok {
+				return false
+			}
+			_, ok = rhs[lhs]
+			return ok
+		case NOTIN:
+			rhs, ok := rhsm.(map[interface{}]bool)
+			if !ok {
+				return false
+			}
+			_, ok = rhs[lhs]
+			return !ok
 		}
 	case int64:
 		// Try as a float64 to see if a float cast is required.
@@ -6255,6 +9299,16 @@ func (v *ValuerEval) evalBinaryExpr(expr *BinaryExpr) interface{} {
 			case BITWISE_XOR:
 				return uint64(lhs) ^ rhs
 			}
+		case map[interface{}]bool:
+			lhs := float64(lhs)
+			switch expr.Op {
+			case IN:
+				_, ok := rhs[lhs]
+				return ok
+			case NOTIN:
+				_, ok := rhs[lhs]
+				return !ok
+			}
 		}
 	case uint64:
 		// Try as a float64 to see if a float cast is required.
@@ -6371,6 +9425,16 @@ func (v *ValuerEval) evalBinaryExpr(expr *BinaryExpr) interface{} {
 			case BITWISE_XOR:
 				return lhs ^ rhs
 			}
+		case map[interface{}]bool:
+			lhs := float64(lhs)
+			switch expr.Op {
+			case IN:
+				_, ok := rhs[lhs]
+				return ok
+			case NOTIN:
+				_, ok := rhs[lhs]
+				return !ok
+			}
 		}
 	case string:
 		switch expr.Op {
@@ -6398,10 +9462,24 @@ func (v *ValuerEval) evalBinaryExpr(expr *BinaryExpr) interface{} {
 				return false
 			}
 			return !rhs.MatchString(lhs)
+		case IN:
+			rhs, ok := rhs.(map[interface{}]bool)
+			if !ok {
+				return false
+			}
+			_, ok = rhs[lhs]
+			return ok
+		case NOTIN:
+			rhs, ok := rhs.(map[interface{}]bool)
+			if !ok {
+				return false
+			}
+			_, ok = rhs[lhs]
+			return !ok
 		}
 	}
 
-	// The types were not comparable. If our operation was an equality operation,
+	// The typ were not comparable. If our operation was an equality operation,
 	// return false instead of true.
 	switch expr.Op {
 	case EQ, NEQ, LT, LTE, GT, GTE:
@@ -6433,6 +9511,7 @@ type CallTypeMapper interface {
 type nilTypeMapper struct{}
 
 func (nilTypeMapper) MapType(*Measurement, string) DataType { return Unknown }
+
 func (nilTypeMapper) MapTypeBatch(*Measurement, map[string]*FieldNameSpace, *Schema) error {
 	return nil
 }
@@ -6486,7 +9565,7 @@ type TypeValuerEval struct {
 }
 
 // EvalType returns the type for an expression. If the expression cannot
-// be evaluated for some reason, like incompatible types, it is returned
+// be evaluated for some reason, like incompatible typ, it is returned
 // as a TypeError in the error. If the error is non-fatal so we can continue
 // even though an error happened, true will be returned.
 // This function assumes that the expression has already been reduced.
@@ -6576,7 +9655,7 @@ func (v *TypeValuerEval) EvalTypeBatch(exprs map[string]Expr, schema *Schema, ba
 			}
 		case *SubQuery:
 			for k, _ := range fields {
-				_, e := src.Statement.FieldExprByName(k)
+				_, e := src.Statement.FieldExprByName(k, src.Alias)
 				if e != nil {
 					valuer := TypeValuerEval{
 						TypeMapper: v.TypeMapper,
@@ -6638,9 +9717,19 @@ func (v *TypeValuerEval) evalVarRefExprType(expr *VarRef, batchEn bool) (DataTyp
 	}
 
 	var typ DataType
+	var e error
 	if v.TypeMapper != nil {
 		for _, src := range v.Sources {
 			switch src := src.(type) {
+			case *CTE:
+				if src.GraphQuery != nil {
+					typ = Graph
+					continue
+				}
+				typ, e = v.evalDataTypeForCTEAndSubquery(expr, batchEn, src, typ)
+				if e != nil {
+					return Unknown, e
+				}
 			case *Measurement:
 				if batchEn {
 					return Unknown, ErrNeedBatchMap
@@ -6649,30 +9738,55 @@ func (v *TypeValuerEval) evalVarRefExprType(expr *VarRef, batchEn bool) (DataTyp
 					typ = t
 				}
 			case *SubQuery:
-				_, e := src.Statement.FieldExprByName(expr.Val)
+				typ, e = v.evalDataTypeForCTEAndSubquery(expr, batchEn, src, typ)
 				if e != nil {
-					valuer := TypeValuerEval{
-						TypeMapper: v.TypeMapper,
-						Sources:    src.Statement.Sources,
-					}
-					if t, err := valuer.EvalType(e, batchEn); err != nil {
-						return Unknown, err
-					} else if typ.LessThan(t) {
-						typ = t
-					}
-				}
-
-				if typ == Unknown {
-					for _, d := range src.Statement.Dimensions {
-						if d, ok := d.Expr.(*VarRef); ok && expr.Val == d.Val {
-							typ = Tag
-						}
-					}
+					return Unknown, e
 				}
 			}
 		}
 	}
 	return typ, nil
+}
+
+func (v *TypeValuerEval) evalDataTypeForCTEAndSubquery(expr *VarRef, batchEn bool, src Source, typ DataType) (DataType, error) {
+	var statement *SelectStatement
+	var alias string
+	switch src := src.(type) {
+	case *CTE:
+		statement = src.Query
+		alias = src.Alias
+	case *SubQuery:
+		statement = src.Statement
+		alias = src.Alias
+	default:
+		return Unknown, ErrSourceOfCTE
+	}
+	_, e := statement.FieldExprByName(expr.Val, alias)
+	if e != nil {
+		valuer := TypeValuerEval{
+			TypeMapper: v.TypeMapper,
+			Sources:    statement.Sources,
+		}
+		if t, err := valuer.EvalType(e, batchEn); err != nil {
+			return Unknown, err
+		} else if typ.LessThan(t) {
+			typ = t
+		}
+	}
+
+	if typ == Unknown {
+		for _, d := range statement.Dimensions {
+			if d, ok := d.Expr.(*VarRef); ok && (expr.Val == d.Val || IsSameField(alias, d.Val, expr.Val)) {
+				typ = Tag
+				break
+			}
+		}
+	}
+	return typ, nil
+}
+
+func IsSameField(sourceAlias, inField, outField string) bool {
+	return len(sourceAlias) > 0 && (sourceAlias+"."+inField) == outField
 }
 
 func (v *TypeValuerEval) evalCallExprType(expr *Call, batchCall bool) (DataType, error) {
@@ -6681,7 +9795,7 @@ func (v *TypeValuerEval) evalCallExprType(expr *Call, batchCall bool) (DataType,
 		return Unknown, nil
 	}
 
-	// Evaluate all of the data types for the arguments.
+	// Evaluate all of the data typ for the arguments.
 	args := make([]DataType, len(expr.Args))
 	for i, arg := range expr.Args {
 		typ, err := v.EvalType(arg, batchCall)
@@ -6691,7 +9805,7 @@ func (v *TypeValuerEval) evalCallExprType(expr *Call, batchCall bool) (DataType,
 		args[i] = typ
 	}
 
-	// Pass in the data types for the call so it can be type checked and
+	// Pass in the data typ for the call so it can be type checked and
 	// the resulting type can be returned.
 	return typmap.CallType(expr.Name, args)
 }
@@ -6746,9 +9860,10 @@ func (v *TypeValuerEval) evalBinaryExprType(expr *BinaryExpr, batchCall bool) (D
 	// expression with the zero values and inspect the resulting value back into
 	// a data type to determine the output.
 	e := BinaryExpr{
-		LHS: &VarRef{Val: "lhs"},
-		RHS: &VarRef{Val: "rhs"},
-		Op:  expr.Op,
+		LHS:   &VarRef{Val: "lhs"},
+		RHS:   &VarRef{Val: "rhs"},
+		Op:    expr.Op,
+		depth: 3,
 	}
 	result := Eval(&e, map[string]interface{}{
 		"lhs": lhs.Zero(),
@@ -6757,10 +9872,10 @@ func (v *TypeValuerEval) evalBinaryExprType(expr *BinaryExpr, batchCall bool) (D
 
 	typ := InspectDataType(result)
 	if typ == Unknown {
-		// If the type is unknown, then the two types were not compatible.
+		// If the type is unknown, then the two typ were not compatible.
 		return Unknown, &TypeError{
 			Expr:    expr,
-			Message: fmt.Sprintf("incompatible types: %s and %s", lhs, rhs),
+			Message: fmt.Sprintf("incompatible typ: %s and %s", lhs, rhs),
 		}
 	}
 	// If the operator is DIV, the result should be float.
@@ -6773,7 +9888,7 @@ func (v *TypeValuerEval) evalBinaryExprType(expr *BinaryExpr, batchCall bool) (D
 	return typ, nil
 }
 
-// TypeError is an error when two types are incompatible.
+// TypeError is an error when two typ are incompatible.
 type TypeError struct {
 	// Expr contains the expression that generated the type error.
 	Expr Expr
@@ -6819,6 +9934,30 @@ func FieldDimensions(sources Sources, m FieldMapper, schema *Schema) (fields map
 	schema.MinTime, schema.MaxTime = math.MaxInt64, math.MinInt64
 	for _, src := range sources {
 		switch src := src.(type) {
+		case *CTE:
+			if src.Query == nil {
+				continue
+			}
+			for _, f := range src.Query.Fields {
+				k := f.Name()
+				typ := EvalType(f.Expr, src.Query.Sources, m)
+
+				if fields[k].LessThan(typ) {
+					fields[k] = typ
+				}
+			}
+
+			for _, d := range src.Query.Dimensions {
+				if expr, ok := d.Expr.(*VarRef); ok {
+					dimensions[expr.Val] = struct{}{}
+				}
+			}
+		case *TableFunction:
+			fields, dimensions, err := FieldDimensions(Sources(src.TableFunctionSource), m, schema)
+			if err != nil {
+				return nil, nil, err
+			}
+			return fields, dimensions, nil
 		case *Measurement:
 			f, d, sc, err := m.FieldDimensions(src)
 			if err != nil {
@@ -6889,7 +10028,7 @@ func reduce(expr Expr, valuer Valuer) Expr {
 	case *NilLiteral:
 		return expr
 	default:
-		return CloneExpr(expr)
+		return expr
 	}
 }
 
@@ -6908,7 +10047,17 @@ func reduceBinaryExpr(expr *BinaryExpr, valuer Valuer) Expr {
 
 	// Do not evaluate if one side is nil.
 	if lhs == nil || rhs == nil {
-		return &BinaryExpr{LHS: lhs, RHS: rhs, Op: expr.Op, ReturnBool: expr.ReturnBool}
+		if lhs == expr.LHS && rhs == expr.RHS {
+			return expr
+		}
+		depth := 0
+		if lhs != nil && lhs.Depth() > depth {
+			depth = lhs.Depth()
+		}
+		if rhs != nil && rhs.Depth() > depth {
+			depth = rhs.Depth()
+		}
+		return &BinaryExpr{LHS: lhs, RHS: rhs, Op: expr.Op, ReturnBool: expr.ReturnBool, depth: 1 + depth}
 	}
 
 	// If we have a logical operator (AND, OR) and one side is a boolean literal
@@ -6931,30 +10080,34 @@ func reduceBinaryExpr(expr *BinaryExpr, valuer Valuer) Expr {
 		}
 	}
 
-	// Evaluate if both sides are simple types.
+	// Evaluate if both sides are simple typ.
 	switch lhs := lhs.(type) {
 	case *BooleanLiteral:
-		return reduceBinaryExprBooleanLHS(op, lhs, rhs)
+		return reduceBinaryExprBooleanLHS(expr, op, lhs, rhs)
 	case *DurationLiteral:
-		return reduceBinaryExprDurationLHS(op, lhs, rhs, loc)
+		return reduceBinaryExprDurationLHS(expr, op, lhs, rhs, loc)
 	case *IntegerLiteral:
-		return reduceBinaryExprIntegerLHS(op, lhs, rhs, loc)
+		return reduceBinaryExprIntegerLHS(expr, op, lhs, rhs, loc)
 	case *UnsignedLiteral:
-		return reduceBinaryExprUnsignedLHS(op, lhs, rhs)
+		return reduceBinaryExprUnsignedLHS(expr, op, lhs, rhs)
 	case *NilLiteral:
-		return reduceBinaryExprNilLHS(op, lhs, rhs)
+		return reduceBinaryExprNilLHS(expr, op, lhs, rhs)
 	case *NumberLiteral:
 		return wrapReduceBinaryExprNumberLHS(expr, op, lhs, rhs)
 	case *StringLiteral:
-		return reduceBinaryExprStringLHS(op, lhs, rhs, loc)
+		return reduceBinaryExprStringLHS(expr, op, lhs, rhs, loc)
 	case *TimeLiteral:
-		return reduceBinaryExprTimeLHS(op, lhs, rhs, loc)
+		return reduceBinaryExprTimeLHS(expr, op, lhs, rhs, loc)
 	default:
-		return &BinaryExpr{Op: op, LHS: lhs, RHS: rhs, ReturnBool: expr.ReturnBool}
+		// If we didn't change anything, return as is
+		if lhs == expr.LHS && rhs == expr.RHS {
+			return expr
+		}
+		return &BinaryExpr{Op: op, LHS: lhs, RHS: rhs, ReturnBool: expr.ReturnBool, depth: 1 + max(lhs.Depth(), rhs.Depth())}
 	}
 }
 
-func reduceBinaryExprBooleanLHS(op Token, lhs *BooleanLiteral, rhs Expr) Expr {
+func reduceBinaryExprBooleanLHS(expr *BinaryExpr, op Token, lhs *BooleanLiteral, rhs Expr) Expr {
 	switch rhs := rhs.(type) {
 	case *BooleanLiteral:
 		switch op {
@@ -6976,10 +10129,13 @@ func reduceBinaryExprBooleanLHS(op Token, lhs *BooleanLiteral, rhs Expr) Expr {
 	case *NilLiteral:
 		return &BooleanLiteral{Val: false}
 	}
-	return &BinaryExpr{Op: op, LHS: lhs, RHS: rhs}
+	if lhs == expr.LHS && rhs == expr.RHS {
+		return expr
+	}
+	return &BinaryExpr{Op: op, LHS: lhs, RHS: rhs, depth: 1 + rhs.Depth()}
 }
 
-func reduceBinaryExprDurationLHS(op Token, lhs *DurationLiteral, rhs Expr, loc *time.Location) Expr {
+func reduceBinaryExprDurationLHS(expr *BinaryExpr, op Token, lhs *DurationLiteral, rhs Expr, loc *time.Location) Expr {
 	switch rhs := rhs.(type) {
 	case *DurationLiteral:
 		switch op {
@@ -7030,7 +10186,7 @@ func reduceBinaryExprDurationLHS(op Token, lhs *DurationLiteral, rhs Expr, loc *
 		if err != nil {
 			break
 		}
-		expr := reduceBinaryExprDurationLHS(op, lhs, t, loc)
+		expr := reduceBinaryExprDurationLHS(expr, op, lhs, t, loc)
 
 		// If the returned expression is still a binary expr, that means
 		// we couldn't reduce it so this wasn't used in a time literal context.
@@ -7040,10 +10196,13 @@ func reduceBinaryExprDurationLHS(op Token, lhs *DurationLiteral, rhs Expr, loc *
 	case *NilLiteral:
 		return &BooleanLiteral{Val: false}
 	}
-	return &BinaryExpr{Op: op, LHS: lhs, RHS: rhs}
+	if lhs == expr.LHS && rhs == expr.RHS {
+		return expr
+	}
+	return &BinaryExpr{Op: op, LHS: lhs, RHS: rhs, depth: 1 + rhs.Depth()}
 }
 
-func reduceBinaryExprIntegerLHS(op Token, lhs *IntegerLiteral, rhs Expr, loc *time.Location) Expr {
+func reduceBinaryExprIntegerLHS(expr *BinaryExpr, op Token, lhs *IntegerLiteral, rhs Expr, loc *time.Location) Expr {
 	switch rhs := rhs.(type) {
 	case *NumberLiteral:
 		return reduceBinaryExprNumberLHS(op, &NumberLiteral{Val: float64(lhs.Val)}, rhs)
@@ -7096,7 +10255,7 @@ func reduceBinaryExprIntegerLHS(op Token, lhs *IntegerLiteral, rhs Expr, loc *ti
 				return &BooleanLiteral{Val: false}
 			}
 		}
-		return reduceBinaryExprUnsignedLHS(op, &UnsignedLiteral{Val: uint64(lhs.Val)}, rhs)
+		return reduceBinaryExprUnsignedLHS(expr, op, &UnsignedLiteral{Val: uint64(lhs.Val)}, rhs)
 	case *DurationLiteral:
 		// Treat the integer as a timestamp.
 		switch op {
@@ -7107,7 +10266,7 @@ func reduceBinaryExprIntegerLHS(op Token, lhs *IntegerLiteral, rhs Expr, loc *ti
 		}
 	case *TimeLiteral:
 		d := &DurationLiteral{Val: time.Duration(lhs.Val)}
-		expr := reduceBinaryExprDurationLHS(op, d, rhs, loc)
+		expr := reduceBinaryExprDurationLHS(expr, op, d, rhs, loc)
 		if _, ok := expr.(*BinaryExpr); !ok {
 			return expr
 		}
@@ -7117,17 +10276,20 @@ func reduceBinaryExprIntegerLHS(op Token, lhs *IntegerLiteral, rhs Expr, loc *ti
 			break
 		}
 		d := &DurationLiteral{Val: time.Duration(lhs.Val)}
-		expr := reduceBinaryExprDurationLHS(op, d, t, loc)
+		expr := reduceBinaryExprDurationLHS(expr, op, d, t, loc)
 		if _, ok := expr.(*BinaryExpr); !ok {
 			return expr
 		}
 	case *NilLiteral:
 		return &BooleanLiteral{Val: false}
 	}
-	return &BinaryExpr{Op: op, LHS: lhs, RHS: rhs}
+	if lhs == expr.LHS && rhs == expr.RHS {
+		return expr
+	}
+	return &BinaryExpr{Op: op, LHS: lhs, RHS: rhs, depth: 1 + rhs.Depth()}
 }
 
-func reduceBinaryExprUnsignedLHS(op Token, lhs *UnsignedLiteral, rhs Expr) Expr {
+func reduceBinaryExprUnsignedLHS(expr *BinaryExpr, op Token, lhs *UnsignedLiteral, rhs Expr) Expr {
 	switch rhs := rhs.(type) {
 	case *NumberLiteral:
 		return reduceBinaryExprNumberLHS(op, &NumberLiteral{Val: float64(lhs.Val)}, rhs)
@@ -7143,7 +10305,7 @@ func reduceBinaryExprUnsignedLHS(op Token, lhs *UnsignedLiteral, rhs Expr) Expr 
 				return &BooleanLiteral{Val: true}
 			}
 		}
-		return reduceBinaryExprUnsignedLHS(op, lhs, &UnsignedLiteral{Val: uint64(rhs.Val)})
+		return reduceBinaryExprUnsignedLHS(expr, op, lhs, &UnsignedLiteral{Val: uint64(rhs.Val)})
 	case *UnsignedLiteral:
 		switch op {
 		case ADD:
@@ -7176,15 +10338,21 @@ func reduceBinaryExprUnsignedLHS(op Token, lhs *UnsignedLiteral, rhs Expr) Expr 
 			return &BooleanLiteral{Val: lhs.Val <= rhs.Val}
 		}
 	}
-	return &BinaryExpr{Op: op, LHS: lhs, RHS: rhs}
+	if lhs == expr.LHS && rhs == expr.RHS {
+		return expr
+	}
+	return &BinaryExpr{Op: op, LHS: lhs, RHS: rhs, depth: 1 + rhs.Depth()}
 }
 
-func reduceBinaryExprNilLHS(op Token, lhs *NilLiteral, rhs Expr) Expr {
+func reduceBinaryExprNilLHS(expr *BinaryExpr, op Token, lhs *NilLiteral, rhs Expr) Expr {
 	switch op {
 	case EQ, NEQ:
 		return &BooleanLiteral{Val: false}
 	}
-	return &BinaryExpr{Op: op, LHS: lhs, RHS: rhs}
+	if lhs == expr.LHS && rhs == expr.RHS {
+		return expr
+	}
+	return &BinaryExpr{Op: op, LHS: lhs, RHS: rhs, depth: 1 + rhs.Depth()}
 }
 
 func wrapReduceBinaryExprNumberLHS(expr *BinaryExpr, op Token, lhs *NumberLiteral, rhs Expr) Expr {
@@ -7269,15 +10437,15 @@ func reduceBinaryExprNumberLHS(op Token, lhs *NumberLiteral, rhs Expr) Expr {
 	case *NilLiteral:
 		return &BooleanLiteral{Val: false}
 	}
-	return &BinaryExpr{Op: op, LHS: lhs, RHS: rhs}
+	return &BinaryExpr{Op: op, LHS: lhs, RHS: rhs, depth: 1 + rhs.Depth()}
 }
 
-func reduceBinaryExprStringLHS(op Token, lhs *StringLiteral, rhs Expr, loc *time.Location) Expr {
+func reduceBinaryExprStringLHS(expr *BinaryExpr, op Token, lhs *StringLiteral, rhs Expr, loc *time.Location) Expr {
 	switch rhs := rhs.(type) {
 	case *StringLiteral:
 		switch op {
 		case EQ:
-			var expr Expr = &BooleanLiteral{Val: lhs.Val == rhs.Val}
+			var bexpr Expr = &BooleanLiteral{Val: lhs.Val == rhs.Val}
 			// This might be a comparison between time literals.
 			// If it is, parse the time literals and then compare since it
 			// could be a different result if they use different formats
@@ -7285,22 +10453,22 @@ func reduceBinaryExprStringLHS(op Token, lhs *StringLiteral, rhs Expr, loc *time
 			if lhs.IsTimeLiteral() && rhs.IsTimeLiteral() {
 				tlhs, err := lhs.ToTimeLiteral(loc)
 				if err != nil {
-					return expr
+					return bexpr
 				}
 
 				trhs, err := rhs.ToTimeLiteral(loc)
 				if err != nil {
-					return expr
+					return bexpr
 				}
 
-				t := reduceBinaryExprTimeLHS(op, tlhs, trhs, loc)
+				t := reduceBinaryExprTimeLHS(expr, op, tlhs, trhs, loc)
 				if _, ok := t.(*BinaryExpr); !ok {
-					expr = t
+					bexpr = t
 				}
 			}
-			return expr
+			return bexpr
 		case NEQ:
-			var expr Expr = &BooleanLiteral{Val: lhs.Val != rhs.Val}
+			var bexpr Expr = &BooleanLiteral{Val: lhs.Val != rhs.Val}
 			// This might be a comparison between time literals.
 			// If it is, parse the time literals and then compare since it
 			// could be a different result if they use different formats
@@ -7308,20 +10476,20 @@ func reduceBinaryExprStringLHS(op Token, lhs *StringLiteral, rhs Expr, loc *time
 			if lhs.IsTimeLiteral() && rhs.IsTimeLiteral() {
 				tlhs, err := lhs.ToTimeLiteral(loc)
 				if err != nil {
-					return expr
+					return bexpr
 				}
 
 				trhs, err := rhs.ToTimeLiteral(loc)
 				if err != nil {
-					return expr
+					return bexpr
 				}
 
-				t := reduceBinaryExprTimeLHS(op, tlhs, trhs, loc)
+				t := reduceBinaryExprTimeLHS(expr, op, tlhs, trhs, loc)
 				if _, ok := t.(*BinaryExpr); !ok {
-					expr = t
+					bexpr = t
 				}
 			}
-			return expr
+			return bexpr
 		case ADD:
 			return &StringLiteral{Val: lhs.Val + rhs.Val}
 		default:
@@ -7330,7 +10498,7 @@ func reduceBinaryExprStringLHS(op Token, lhs *StringLiteral, rhs Expr, loc *time
 			if err != nil {
 				break
 			}
-			expr := reduceBinaryExprTimeLHS(op, t, rhs, loc)
+			expr := reduceBinaryExprTimeLHS(expr, op, t, rhs, loc)
 
 			// If the returned expression is still a binary expr, that means
 			// we couldn't reduce it so this wasn't used in a time literal context.
@@ -7344,7 +10512,7 @@ func reduceBinaryExprStringLHS(op Token, lhs *StringLiteral, rhs Expr, loc *time
 		if err != nil {
 			break
 		}
-		expr := reduceBinaryExprTimeLHS(op, t, rhs, loc)
+		expr := reduceBinaryExprTimeLHS(expr, op, t, rhs, loc)
 
 		// If the returned expression is still a binary expr, that means
 		// we couldn't reduce it so this wasn't used in a time literal context.
@@ -7357,7 +10525,7 @@ func reduceBinaryExprStringLHS(op Token, lhs *StringLiteral, rhs Expr, loc *time
 		if err != nil {
 			break
 		}
-		expr := reduceBinaryExprTimeLHS(op, t, rhs, loc)
+		expr := reduceBinaryExprTimeLHS(expr, op, t, rhs, loc)
 
 		// If the returned expression is still a binary expr, that means
 		// we couldn't reduce it so this wasn't used in a time literal context.
@@ -7370,7 +10538,7 @@ func reduceBinaryExprStringLHS(op Token, lhs *StringLiteral, rhs Expr, loc *time
 		if err != nil {
 			break
 		}
-		expr := reduceBinaryExprTimeLHS(op, t, rhs, loc)
+		expr := reduceBinaryExprTimeLHS(expr, op, t, rhs, loc)
 
 		// If the returned expression is still a binary expr, that means
 		// we couldn't reduce it so this wasn't used in a time literal context.
@@ -7383,10 +10551,13 @@ func reduceBinaryExprStringLHS(op Token, lhs *StringLiteral, rhs Expr, loc *time
 			return &BooleanLiteral{Val: false}
 		}
 	}
-	return &BinaryExpr{Op: op, LHS: lhs, RHS: rhs}
+	if lhs == expr.LHS && rhs == expr.RHS {
+		return expr
+	}
+	return &BinaryExpr{Op: op, LHS: lhs, RHS: rhs, depth: 1 + rhs.Depth()}
 }
 
-func reduceBinaryExprTimeLHS(op Token, lhs *TimeLiteral, rhs Expr, loc *time.Location) Expr {
+func reduceBinaryExprTimeLHS(expr *BinaryExpr, op Token, lhs *TimeLiteral, rhs Expr, loc *time.Location) Expr {
 	switch rhs := rhs.(type) {
 	case *DurationLiteral:
 		switch op {
@@ -7397,7 +10568,7 @@ func reduceBinaryExprTimeLHS(op Token, lhs *TimeLiteral, rhs Expr, loc *time.Loc
 		}
 	case *IntegerLiteral:
 		d := &DurationLiteral{Val: time.Duration(rhs.Val)}
-		expr := reduceBinaryExprTimeLHS(op, lhs, d, loc)
+		expr := reduceBinaryExprTimeLHS(expr, op, lhs, d, loc)
 		if _, ok := expr.(*BinaryExpr); !ok {
 			return expr
 		}
@@ -7423,7 +10594,7 @@ func reduceBinaryExprTimeLHS(op Token, lhs *TimeLiteral, rhs Expr, loc *time.Loc
 		if err != nil {
 			break
 		}
-		expr := reduceBinaryExprTimeLHS(op, lhs, t, loc)
+		expr := reduceBinaryExprTimeLHS(expr, op, lhs, t, loc)
 
 		// If the returned expression is still a binary expr, that means
 		// we couldn't reduce it so this wasn't used in a time literal context.
@@ -7433,17 +10604,26 @@ func reduceBinaryExprTimeLHS(op Token, lhs *TimeLiteral, rhs Expr, loc *time.Loc
 	case *NilLiteral:
 		return &BooleanLiteral{Val: false}
 	}
-	return &BinaryExpr{Op: op, LHS: lhs, RHS: rhs}
+	if lhs == expr.LHS && rhs == expr.RHS {
+		return expr
+	}
+	return &BinaryExpr{Op: op, LHS: lhs, RHS: rhs, depth: 1 + rhs.Depth()}
 }
 
 func reduceCall(expr *Call, valuer Valuer) Expr {
 	// Otherwise reduce arguments.
 	var args []Expr
 	literalsOnly := true
+	changed := false
+	depth := 0
 	if len(expr.Args) > 0 {
 		args = make([]Expr, len(expr.Args))
 		for i, arg := range expr.Args {
 			args[i] = reduce(arg, valuer)
+			if args[i] != arg {
+				changed = true
+			}
+			depth = max(depth, args[i].Depth())
 			if !isLiteral(args[i]) {
 				literalsOnly = false
 			}
@@ -7463,13 +10643,19 @@ func reduceCall(expr *Call, valuer Valuer) Expr {
 			}
 		}
 	}
-	return &Call{Name: expr.Name, Args: args}
+	if changed {
+		return &Call{Name: expr.Name, Args: args, depth: 1 + depth}
+	}
+	return expr
 }
 
 func reduceParenExpr(expr *ParenExpr, valuer Valuer) Expr {
 	subexpr := reduce(expr.Expr, valuer)
 	if subexpr, ok := subexpr.(*BinaryExpr); ok {
-		return &ParenExpr{Expr: subexpr}
+		if subexpr == expr.Expr {
+			return expr
+		}
+		return &ParenExpr{Expr: subexpr, depth: 1 + subexpr.Depth()}
 	}
 	return subexpr
 }
@@ -7477,14 +10663,14 @@ func reduceParenExpr(expr *ParenExpr, valuer Valuer) Expr {
 func reduceVarRef(expr *VarRef, valuer Valuer) Expr {
 	// Ignore if there is no valuer.
 	if valuer == nil {
-		return &VarRef{Val: expr.Val, Type: expr.Type}
+		return expr
 	}
 
 	// Retrieve the value of the ref.
 	// Ignore if the value doesn't exist.
 	v, ok := valuer.Value(expr.Val)
 	if !ok {
-		return &VarRef{Val: expr.Val, Type: expr.Type}
+		return expr
 	}
 
 	// Return the value as a literal.
@@ -7542,6 +10728,7 @@ type ZoneValuer interface {
 }
 
 var _ CallValuer = (*NowValuer)(nil)
+
 var _ ZoneValuer = (*NowValuer)(nil)
 
 // NowValuer returns only the value for "now()".
@@ -7591,6 +10778,7 @@ func SliceValuer(valuers []Valuer) Valuer {
 type multiValuer []Valuer
 
 var _ CallValuer = multiValuer(nil)
+
 var _ ZoneValuer = multiValuer(nil)
 
 func (a multiValuer) SetValuer(v Valuer, index int) {
@@ -7700,6 +10888,7 @@ func (t TimeRange) IsZero() bool {
 
 // Used by TimeRange methods.
 var minTime = time.Unix(0, MinTime)
+
 var maxTime = time.Unix(0, MaxTime)
 
 // MinTime returns the minimum time of the TimeRange.
@@ -7743,11 +10932,15 @@ func (t TimeRange) MaxTimeNano() int64 {
 // This throws an error when we encounter a time condition that is combined with OR
 // to prevent returning unexpected results that we do not support.
 func ConditionExpr(cond Expr, valuer Valuer) (Expr, TimeRange, error) {
-	expr, tr, err := conditionExpr(cond, valuer)
+	// Pre-reduce expression to replace "now" and fold any constants.
+	expr1 := Reduce(cond, valuer)
 
-	// Remove top level parentheses
-	if e, ok := expr.(*ParenExpr); ok {
-		expr = e.Expr
+	// Extract time range from conditions if it possible
+	expr, tr, err := conditionExpr(expr1, valuer)
+
+	// Try to reduce the expression if we changed it
+	if expr != nil && expr != expr1 {
+		expr = Reduce(expr, valuer)
 	}
 
 	if e, ok := expr.(*BooleanLiteral); ok && e.Val {
@@ -7786,11 +10979,15 @@ func conditionExpr(cond Expr, valuer Valuer) (Expr, TimeRange, error) {
 			} else if lhsExpr == nil {
 				return rhsExpr, timeRange, nil
 			}
-			return reduce(&BinaryExpr{
-				Op:  cond.Op,
-				LHS: lhsExpr,
-				RHS: rhsExpr,
-			}, nil), timeRange, nil
+			if lhsExpr == cond.LHS && rhsExpr == cond.RHS {
+				return cond, timeRange, nil
+			}
+			return &BinaryExpr{
+				Op:    cond.Op,
+				LHS:   lhsExpr,
+				RHS:   rhsExpr,
+				depth: 1 + max(lhsExpr.Depth(), rhsExpr.Depth()),
+			}, timeRange, nil
 		}
 
 		// If either the left or the right side is "time", we are looking at
@@ -7814,7 +11011,7 @@ func conditionExpr(cond Expr, valuer Valuer) (Expr, TimeRange, error) {
 			timeRange, err := getTimeRange(op, cond.LHS, valuer)
 			return nil, timeRange, err
 		}
-		return reduce(cond, valuer), TimeRange{}, nil
+		return cond, TimeRange{}, nil
 	case *ParenExpr:
 		expr, timeRange, err := conditionExpr(cond.Expr, valuer)
 		if err != nil {
@@ -7822,11 +11019,14 @@ func conditionExpr(cond Expr, valuer Valuer) (Expr, TimeRange, error) {
 		} else if expr == nil {
 			return nil, timeRange, nil
 		}
-		return reduce(&ParenExpr{Expr: expr}, nil), timeRange, nil
+		if expr == cond.Expr {
+			return cond, timeRange, nil
+		}
+		return &ParenExpr{Expr: expr, depth: 1 + expr.Depth()}, timeRange, nil
 	case *BooleanLiteral:
 		return cond, TimeRange{}, nil
 	case *InCondition:
-		return reduce(cond, nil), TimeRange{}, nil
+		return cond, TimeRange{}, nil
 	default:
 		return nil, TimeRange{}, fmt.Errorf("invalid condition expression: %s", cond)
 	}
@@ -7850,9 +11050,6 @@ func getTimeRange(op Token, rhs Expr, valuer Valuer) (TimeRange, error) {
 			rhs = t
 		}
 	}
-
-	// Evaluate the RHS to replace "now()" with the current time.
-	rhs = Reduce(rhs, valuer)
 
 	var value time.Time
 	switch lit := rhs.(type) {
@@ -7896,8 +11093,30 @@ func getTimeRange(op Token, rhs Expr, valuer Valuer) (TimeRange, error) {
 // PrepareSnapshotStatement represents a command for preparing preparing.
 type PrepareSnapshotStatement struct{}
 
+func (s *PrepareSnapshotStatement) Depth() int { return 1 }
+
+func (s *PrepareSnapshotStatement) UpdateDepthForTests() int {
+	if s != nil {
+		return 1
+	}
+	return 0
+}
+
 // String returns a string representation of the prepare preparing command.
-func (s *PrepareSnapshotStatement) String() string { return "Prepare Snapshot" }
+func (s *PrepareSnapshotStatement) String() string {
+	return s.RenderBytes(&bytes.Buffer{}, nil).String()
+}
+
+func (s *PrepareSnapshotStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	buf.WriteString("Prepare Snapshot")
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
+}
 
 // RequiredPrivileges returns the privilege required to execute a PrepareSnapshotStatement.
 func (s *PrepareSnapshotStatement) RequiredPrivileges() (ExecutionPrivileges, error) {
@@ -7910,8 +11129,30 @@ func (s *PrepareSnapshotStatement) RequiredPrivileges() (ExecutionPrivileges, er
 // EndPrepareSnapshotStatement represents a command for preparing preparing.
 type EndPrepareSnapshotStatement struct{}
 
+func (s *EndPrepareSnapshotStatement) Depth() int { return 1 }
+
+func (s *EndPrepareSnapshotStatement) UpdateDepthForTests() int {
+	if s != nil {
+		return 1
+	}
+	return 0
+}
+
 // String returns a string representation of the end prepare preparing command.
-func (s *EndPrepareSnapshotStatement) String() string { return "End Snapshot" }
+func (s *EndPrepareSnapshotStatement) String() string {
+	return s.RenderBytes(&bytes.Buffer{}, nil).String()
+}
+
+func (s *EndPrepareSnapshotStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	buf.WriteString("End Snapshot")
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
+}
 
 // RequiredPrivileges returns the privilege required to execute a EndPrepareSnapshotStatement.
 func (s *EndPrepareSnapshotStatement) RequiredPrivileges() (ExecutionPrivileges, error) {
@@ -7924,8 +11165,30 @@ func (s *EndPrepareSnapshotStatement) RequiredPrivileges() (ExecutionPrivileges,
 // GetRuntimeInfoStatement represents a command for get runtimeinfo.
 type GetRuntimeInfoStatement struct{}
 
+func (s *GetRuntimeInfoStatement) Depth() int { return 1 }
+
+func (s *GetRuntimeInfoStatement) UpdateDepthForTests() int {
+	if s != nil {
+		return 1
+	}
+	return 0
+}
+
 // String returns a string representation of the get runtimeinfo command.
-func (s *GetRuntimeInfoStatement) String() string { return "Get RuntimeInfo" }
+func (s *GetRuntimeInfoStatement) String() string {
+	return s.RenderBytes(&bytes.Buffer{}, nil).String()
+}
+
+func (s *GetRuntimeInfoStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	buf.WriteString("Get RuntimeInfo")
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
+}
 
 // RequiredPrivileges returns the privilege required to execute a GetRuntimeInfoStatement.
 func (s *GetRuntimeInfoStatement) RequiredPrivileges() (ExecutionPrivileges, error) {
@@ -7939,19 +11202,61 @@ type CaseWhenExpr struct {
 	Conditions []Expr
 	Assigners  []Expr
 	Args       []Expr
+	depth      int
+}
+
+func (p *CaseWhenExpr) Depth() int {
+	if p != nil {
+		return p.depth
+	}
+	return 0
+}
+
+func (p *CaseWhenExpr) UpdateDepthForTests() int {
+	if p != nil {
+		subdepth := 0
+		for i, s := range p.Conditions {
+			subdepth = max(subdepth, 1+i+CallUpdateDepthForTests(s))
+		}
+		for i, s := range p.Assigners {
+			subdepth = max(subdepth, 1+i+CallUpdateDepthForTests(s))
+		}
+		for i, s := range p.Args {
+			subdepth = max(subdepth, 1+i+CallUpdateDepthForTests(s))
+		}
+		p.depth = 1 + subdepth
+		return p.depth
+	}
+	return 0
 }
 
 func (p *CaseWhenExpr) RewriteNameSpace(alias, mst string) {}
 
 func (p *CaseWhenExpr) node() {}
+
 func (p *CaseWhenExpr) expr() {}
-func (p *CaseWhenExpr) String() string {
-	var s string
+
+func (p *CaseWhenExpr) String() string { return p.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (p *CaseWhenExpr) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	_, _ = buf.WriteString("CASE")
+
 	for i := range p.Conditions {
-		s += "Condition:" + p.Conditions[i].String() + "Assigner:" + p.Assigners[i].String()
+		_, _ = buf.WriteString(" WHEN ")
+		_ = p.Conditions[i].RenderBytes(buf, posmap)
+		_, _ = buf.WriteString(" THEN ")
+		_ = p.Assigners[i].RenderBytes(buf, posmap)
 	}
-	s += "Else Condition:" + p.Assigners[len(p.Conditions)].String()
-	return fmt.Sprintf(s)
+	_, _ = buf.WriteString(" ELSE ")
+	_ = p.Assigners[len(p.Conditions)].RenderBytes(buf, posmap)
+	_, _ = buf.WriteString(" END")
+
+	if posmap != nil {
+		posmap[p] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 type CreateDownSampleStatement struct {
@@ -7962,6 +11267,27 @@ type CreateDownSampleStatement struct {
 	TimeInterval   []time.Duration
 	WaterMark      []time.Duration
 	Ops            Fields
+	depth          int
+}
+
+func (d *CreateDownSampleStatement) Depth() int {
+	if d != nil {
+		return d.depth
+	}
+	return 0
+}
+
+func (d *CreateDownSampleStatement) UpdateDepthForTests() int {
+	if d != nil {
+		d.depth = 1 + max(
+			len(d.SampleInterval),
+			len(d.TimeInterval),
+			len(d.WaterMark),
+			d.Ops.UpdateDepthForTests(),
+		)
+		return d.depth
+	}
+	return 0
 }
 
 func (d *CreateDownSampleStatement) stmt() {}
@@ -7984,7 +11310,12 @@ func Times2String(times []time.Duration) string {
 }
 
 func (d *CreateDownSampleStatement) String() string {
-	var buf bytes.Buffer
+	return d.RenderBytes(&bytes.Buffer{}, nil).String()
+}
+
+func (d *CreateDownSampleStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	_, _ = buf.WriteString("CREATE DOWNSAMPLE")
 
 	if d.DbName != "" {
@@ -8002,44 +11333,61 @@ func (d *CreateDownSampleStatement) String() string {
 	if len(d.Ops) != 0 {
 		_, _ = buf.WriteString("(")
 		for i, op := range d.Ops {
-			c := op.Expr.(*Call)
-			_, _ = buf.WriteString(QuoteIdent(fmt.Sprintf("%s", c.String())))
-			if i != len(d.Ops)-1 {
+			if i > 0 {
 				_, _ = buf.WriteString(",")
 			}
+			c, ok := op.Expr.(*Call)
+			if !ok {
+				_, _ = buf.WriteString("<ERROR>")
+			} else {
+				_ = c.RenderBytes(buf, posmap)
+			}
 		}
+		_, _ = buf.WriteString(")")
 	}
 
 	if d.Duration != 0 {
-		_, _ = buf.WriteString("WITH TTL")
+		_, _ = buf.WriteString(" WITH TTL ")
 		_, _ = buf.WriteString(QuoteIdent(d.Duration.String()))
 	}
 
 	if len(d.SampleInterval) != 0 {
-		_, _ = buf.WriteString("SAMPLEINTERVAL")
+		_, _ = buf.WriteString(" SAMPLEINTERVAL ")
 		s := Times2String(d.SampleInterval)
 		_, _ = buf.WriteString(QuoteIdent(s))
 	}
 
 	if len(d.TimeInterval) != 0 {
-		_, _ = buf.WriteString("TIMEINTERVAL")
+		_, _ = buf.WriteString(" TIMEINTERVAL ")
 		s := Times2String(d.TimeInterval)
 		_, _ = buf.WriteString(QuoteIdent(s))
 	}
 
 	if len(d.WaterMark) != 0 {
-		_, _ = buf.WriteString("WATERMARK")
+		_, _ = buf.WriteString(" WATERMARK ")
 		s := Times2String(d.WaterMark)
 		_, _ = buf.WriteString(QuoteIdent(s))
 	}
 
-	return buf.String()
+	if posmap != nil {
+		posmap[d] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 type DropDownSampleStatement struct {
 	DbName  string
 	RpName  string
 	DropAll bool
+}
+
+func (d *DropDownSampleStatement) Depth() int { return 1 }
+
+func (d *DropDownSampleStatement) UpdateDepthForTests() int {
+	if d != nil {
+		return 1
+	}
+	return 0
 }
 
 func (d *DropDownSampleStatement) stmt() {}
@@ -8051,7 +11399,12 @@ func (d *DropDownSampleStatement) RequiredPrivileges() (ExecutionPrivileges, err
 func (d *DropDownSampleStatement) node() {}
 
 func (d *DropDownSampleStatement) String() string {
-	var buf bytes.Buffer
+	return d.RenderBytes(&bytes.Buffer{}, nil).String()
+}
+
+func (d *DropDownSampleStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	_, _ = buf.WriteString("DROP DOWNSAMPLE")
 
 	if d.DbName != "" {
@@ -8065,11 +11418,24 @@ func (d *DropDownSampleStatement) String() string {
 		}
 		_, _ = buf.WriteString(QuoteIdent(d.RpName))
 	}
-	return buf.String()
+
+	if posmap != nil {
+		posmap[d] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 type ShowDownSampleStatement struct {
 	DbName string
+}
+
+func (d *ShowDownSampleStatement) Depth() int { return 1 }
+
+func (d *ShowDownSampleStatement) UpdateDepthForTests() int {
+	if d != nil {
+		return 1
+	}
+	return 0
 }
 
 func (d *ShowDownSampleStatement) stmt() {}
@@ -8081,7 +11447,12 @@ func (d *ShowDownSampleStatement) RequiredPrivileges() (ExecutionPrivileges, err
 func (d *ShowDownSampleStatement) node() {}
 
 func (d *ShowDownSampleStatement) String() string {
-	var buf bytes.Buffer
+	return d.RenderBytes(&bytes.Buffer{}, nil).String()
+}
+
+func (d *ShowDownSampleStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	_, _ = buf.WriteString("Show DownSampling")
 
 	if d.DbName != "" {
@@ -8089,7 +11460,10 @@ func (d *ShowDownSampleStatement) String() string {
 		_, _ = buf.WriteString(QuoteIdent(d.DbName))
 	}
 
-	return buf.String()
+	if posmap != nil {
+		posmap[d] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 type CreateStreamStatement struct {
@@ -8097,6 +11471,25 @@ type CreateStreamStatement struct {
 	Target *Target
 	Query  Statement
 	Delay  time.Duration
+	depth  int
+}
+
+func (c *CreateStreamStatement) Depth() int {
+	if c != nil {
+		return c.depth
+	}
+	return 0
+}
+
+func (c *CreateStreamStatement) UpdateDepthForTests() int {
+	if c != nil {
+		c.depth = 1 + max(
+			CallUpdateDepthForTests(c.Target),
+			CallUpdateDepthForTests(c.Query),
+		)
+		return c.depth
+	}
+	return 0
 }
 
 func (c *CreateStreamStatement) stmt() {}
@@ -8107,17 +11500,24 @@ func (c *CreateStreamStatement) RequiredPrivileges() (ExecutionPrivileges, error
 	return ExecutionPrivileges{{Admin: true, Name: "", Rwuser: true, Privilege: AllPrivileges}}, nil
 }
 
-func (c *CreateStreamStatement) String() string {
-	var buf bytes.Buffer
-	_, _ = buf.WriteString("CREATE STREAM")
+func (c *CreateStreamStatement) String() string { return c.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (c *CreateStreamStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	_, _ = buf.WriteString("CREATE STREAM ")
 	_, _ = buf.WriteString(QuoteIdent(c.Name))
-	_, _ = buf.WriteString("INTO")
-	_, _ = buf.WriteString(QuoteIdent(c.Target.String()))
-	_, _ = buf.WriteString(QuoteIdent(c.Query.String()))
-	_, _ = buf.WriteString("OFFSET")
+	_, _ = buf.WriteString(" INTO ")
+	_ = c.Target.RenderBytes(buf, posmap)
+	_, _ = buf.WriteString(" ")
+	_ = c.Query.RenderBytes(buf, posmap)
+	_, _ = buf.WriteString(" OFFSET ")
 	_, _ = buf.WriteString(QuoteIdent(c.Delay.String()))
 
-	return buf.String()
+	if posmap != nil {
+		posmap[c] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 func (c *CreateStreamStatement) CheckSource(sources Sources) (*Measurement, error) {
@@ -8204,6 +11604,15 @@ type ShowStreamsStatement struct {
 	Database string
 }
 
+func (s *ShowStreamsStatement) Depth() int { return 1 }
+
+func (s *ShowStreamsStatement) UpdateDepthForTests() int {
+	if s != nil {
+		return 1
+	}
+	return 0
+}
+
 func (s *ShowStreamsStatement) stmt() {}
 
 func (s *ShowStreamsStatement) node() {}
@@ -8212,18 +11621,34 @@ func (s *ShowStreamsStatement) RequiredPrivileges() (ExecutionPrivileges, error)
 	return ExecutionPrivileges{{Admin: true, Name: "", Rwuser: true, Privilege: AllPrivileges}}, nil
 }
 
-func (s *ShowStreamsStatement) String() string {
-	var buf bytes.Buffer
+func (s *ShowStreamsStatement) String() string { return s.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (s *ShowStreamsStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	_, _ = buf.WriteString("SHOW STREAMS")
 	if len(s.Database) > 0 {
+		_, _ = buf.WriteString(" ")
 		_, _ = buf.WriteString(QuoteIdent(s.Database))
 	}
 
-	return buf.String()
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 type DropStreamsStatement struct {
 	Name string
+}
+
+func (s *DropStreamsStatement) Depth() int { return 1 }
+
+func (s *DropStreamsStatement) UpdateDepthForTests() int {
+	if s != nil {
+		return 1
+	}
+	return 0
 }
 
 func (s *DropStreamsStatement) stmt() {}
@@ -8234,12 +11659,18 @@ func (s *DropStreamsStatement) RequiredPrivileges() (ExecutionPrivileges, error)
 	return ExecutionPrivileges{{Admin: true, Name: "", Rwuser: true, Privilege: AllPrivileges}}, nil
 }
 
-func (s *DropStreamsStatement) String() string {
-	var buf bytes.Buffer
+func (s *DropStreamsStatement) String() string { return s.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (s *DropStreamsStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	_, _ = buf.WriteString("DROP STREAMS ")
 	_, _ = buf.WriteString(QuoteIdent(s.Name))
 
-	return buf.String()
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 type ShowMeasurementKeysStatement struct {
@@ -8247,6 +11678,15 @@ type ShowMeasurementKeysStatement struct {
 	Database    string
 	Rp          string
 	Measurement string
+}
+
+func (s *ShowMeasurementKeysStatement) Depth() int { return 1 }
+
+func (s *ShowMeasurementKeysStatement) UpdateDepthForTests() int {
+	if s != nil {
+		return 1
+	}
+	return 0
 }
 
 func (s *ShowMeasurementKeysStatement) stmt() {}
@@ -8258,11 +11698,19 @@ func (s *ShowMeasurementKeysStatement) RequiredPrivileges() (ExecutionPrivileges
 }
 
 func (s *ShowMeasurementKeysStatement) String() string {
-	var buf bytes.Buffer
+	return s.RenderBytes(&bytes.Buffer{}, nil).String()
+}
+
+func (s *ShowMeasurementKeysStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	_, _ = buf.WriteString("Show Measurement ")
 	_, _ = buf.WriteString(QuoteIdent(s.Name))
 
-	return buf.String()
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 type ShowConfigsStatement struct {
@@ -8275,14 +11723,33 @@ type ConfigKey struct {
 	Regex *RegexLiteral
 }
 
+func (ck *ConfigKey) node() {}
+
 // String returns a string representation of the measurement.
-func (ck *ConfigKey) String() string {
+func (ck *ConfigKey) String() string { return ck.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (ck *ConfigKey) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	if ck.Name != "" {
-		return QuoteIdent(ck.Name)
+		_, _ = buf.WriteString(QuoteIdent(ck.Name))
 	} else if ck.Regex != nil {
-		return ck.Regex.String()
+		_ = ck.Regex.RenderBytes(buf, posmap)
 	}
-	return ""
+
+	if posmap != nil {
+		posmap[ck] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
+}
+
+func (s *ShowConfigsStatement) Depth() int { return 1 }
+
+func (s *ShowConfigsStatement) UpdateDepthForTests() int {
+	if s != nil {
+		return 1
+	}
+	return 0
 }
 
 func (s *ShowConfigsStatement) stmt() {}
@@ -8293,25 +11760,47 @@ func (s *ShowConfigsStatement) RequiredPrivileges() (ExecutionPrivileges, error)
 	return ExecutionPrivileges{{Admin: true, Name: "", Rwuser: true, Privilege: AllPrivileges}}, nil
 }
 
-func (s *ShowConfigsStatement) String() string {
-	var buf bytes.Buffer
+func (s *ShowConfigsStatement) String() string { return s.RenderBytes(&bytes.Buffer{}, nil).String() }
 
-	if s.Scope == "" && s.Key == nil {
-		return `SHOW CONFIGS`
-	} else if s.Scope == "" {
-		_, _ = buf.WriteString(fmt.Sprintf(`SHOW CONFIGS WHERE scope = %s`, s.Scope))
-	} else if s.Key == nil {
-		_, _ = buf.WriteString(fmt.Sprintf(`SHOW CONFIGS WHERE name = %s`, s.Key.String()))
-	} else {
-		_, _ = buf.WriteString(fmt.Sprintf(`SHOW CONFIGS WHERE scope = %s AND name = %s`, s.Scope, s.Key.String()))
+func (s *ShowConfigsStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	_, _ = buf.WriteString(`SHOW CONFIGS`)
+
+	joinword := ` WHERE `
+
+	if s.Scope != "" {
+		_, _ = buf.WriteString(joinword)
+		_, _ = buf.WriteString(`scope = `)
+		_, _ = buf.WriteString(s.Scope)
+		joinword = ` AND `
 	}
-	return buf.String()
+	if s.Key != nil {
+		_, _ = buf.WriteString(joinword)
+		_, _ = buf.WriteString(`name = `)
+		_ = s.Key.RenderBytes(buf, posmap)
+		joinword = ` AND `
+	}
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 type SetConfigStatement struct {
 	Component string
 	Key       string
 	Value     interface{}
+}
+
+func (s *SetConfigStatement) Depth() int { return 1 }
+
+func (s *SetConfigStatement) UpdateDepthForTests() int {
+	if s != nil {
+		return 1
+	}
+	return 0
 }
 
 func (s *SetConfigStatement) stmt() {}
@@ -8322,21 +11811,35 @@ func (s *SetConfigStatement) RequiredPrivileges() (ExecutionPrivileges, error) {
 	return ExecutionPrivileges{{Admin: true, Name: "", Rwuser: true, Privilege: AllPrivileges}}, nil
 }
 
-func (s *SetConfigStatement) String() string {
-	var buf bytes.Buffer
+func (s *SetConfigStatement) String() string { return s.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (s *SetConfigStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
 
 	if _, ok := s.Value.(string); ok {
-		_, _ = buf.WriteString(fmt.Sprintf(`SET CONFIG %s "%s" = "%s"`, s.Component, s.Key, s.Value))
+		_, _ = fmt.Fprintf(buf, `SET CONFIG %s "%s" = "%s"`, s.Component, s.Key, s.Value)
 	} else {
-		_, _ = buf.WriteString(fmt.Sprintf(`SET CONFIG %s "%s" = %v`, s.Component, s.Key, s.Value))
-
+		_, _ = fmt.Fprintf(buf, `SET CONFIG %s "%s" = %v`, s.Component, s.Key, s.Value)
 	}
-	return buf.String()
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 type ShowClusterStatement struct {
 	NodeType string
 	NodeID   int64
+}
+
+func (s *ShowClusterStatement) Depth() int { return 1 }
+
+func (s *ShowClusterStatement) UpdateDepthForTests() int {
+	if s != nil {
+		return 1
+	}
+	return 0
 }
 
 func (s *ShowClusterStatement) RewriteNameSpace(alias, mst string) {}
@@ -8349,57 +11852,108 @@ func (s *ShowClusterStatement) RequiredPrivileges() (ExecutionPrivileges, error)
 	return ExecutionPrivileges{{Admin: true, Name: "", Rwuser: true, Privilege: AllPrivileges}}, nil
 }
 
-func (s *ShowClusterStatement) String() string {
-	var buf bytes.Buffer
-	_, _ = buf.WriteString(fmt.Sprintf(`SHOW CLUSTER`))
+func (s *ShowClusterStatement) String() string { return s.RenderBytes(&bytes.Buffer{}, nil).String() }
 
-	if s.NodeType != "" && s.NodeID == 0 {
-		_, _ = buf.WriteString(fmt.Sprintf(` WHERE nodeType = %s`, s.NodeType))
-	} else if s.NodeID != 0 && s.NodeType == "" {
-		_, _ = buf.WriteString(fmt.Sprintf(` WHERE nodeID = %s`, strconv.FormatInt(s.NodeID, 10)))
-	} else if s.NodeID != 0 && s.NodeType != "" {
-		_, _ = buf.WriteString(fmt.Sprintf(` WHERE nodeType = %s AND nodeID = %s`, s.NodeType, strconv.FormatInt(s.NodeID, 10)))
+func (s *ShowClusterStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	_, _ = buf.WriteString(`SHOW CLUSTER`)
+
+	joinword := ` WHERE `
+
+	if s.NodeType != "" {
+		_, _ = buf.WriteString(joinword)
+		_, _ = buf.WriteString(`nodeType = `)
+		_, _ = buf.WriteString(s.NodeType)
+		joinword = ` AND `
 	}
-	return buf.String()
+	if s.NodeID != 0 {
+		_, _ = buf.WriteString(joinword)
+		_, _ = buf.WriteString(`nodeID = `)
+		_, _ = buf.WriteString(strconv.FormatInt(s.NodeID, 10))
+		joinword = ` AND `
+	}
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 type Unnests []*Unnest
 
-func (us Unnests) String() string {
-	var str []string
-	for _, u := range us {
-		str = append(str, u.String())
+func (us Unnests) node() {}
+
+func (us Unnests) String() string { return us.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (us Unnests) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	for i, u := range us {
+		if i > 0 {
+			_, _ = buf.WriteString(", ")
+		}
+		_ = u.RenderBytes(buf, posmap)
 	}
-	return strings.Join(str, ", ")
+
+	if posmap != nil {
+		posmap[us] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 type Unnest struct {
 	Expr    Expr
 	Aliases []string
 	DstType []DataType
+	depth   int
+}
+
+func (u *Unnest) Depth() int {
+	if u != nil {
+		return u.depth
+	}
+	return 0
+}
+
+func (u *Unnest) UpdateDepthForTests() int {
+	if u != nil {
+		u.depth = 1 + max(
+			CallUpdateDepthForTests(u.Expr),
+			len(u.DstType),
+		)
+		return u.depth
+	}
+	return 0
 }
 
 // output example: UNNEST(Expr) AS(key1, value1)
-func (u *Unnest) String() string {
-	var buf bytes.Buffer
+func (u *Unnest) String() string { return u.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (u *Unnest) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	if u.Expr != nil {
-		buf.WriteString("UNNEST(")
-		buf.WriteString(u.Expr.String())
-		buf.WriteString(") ")
+		_, _ = buf.WriteString("UNNEST(")
+		_ = u.Expr.RenderBytes(buf, posmap)
+		_, _ = buf.WriteString(")")
 	}
 
 	if len(u.Aliases) != 0 {
-		buf.WriteString("AS(")
+		buf.WriteString(" AS(")
 		for i, t := range u.Aliases {
-			buf.WriteString(t)
-			if i+1 != len(u.Aliases) {
+			if i > 0 {
 				buf.WriteString(", ")
 			}
+			buf.WriteString(t)
 		}
 		buf.WriteString(")")
 	}
 
-	return buf.String()
+	if posmap != nil {
+		posmap[u] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 func (u *Unnest) Clone() *Unnest {
@@ -8408,7 +11962,8 @@ func (u *Unnest) Clone() *Unnest {
 		return nil
 	}
 	clone := &Unnest{
-		Expr: expr,
+		Expr:  expr,
+		depth: 1 + expr.Depth(),
 	}
 	clone.Aliases = make([]string, 0, len(u.Aliases))
 	clone.Aliases = append(clone.Aliases, u.Aliases...)
@@ -8434,23 +11989,52 @@ func (u *Unnest) GetName() string {
 type LogPipeStatement struct {
 	Cond   Expr
 	Unnest *Unnest
+	depth  int
+}
+
+func (s *LogPipeStatement) Depth() int {
+	if s != nil {
+		return s.depth
+	}
+	return 0
+}
+
+func (s *LogPipeStatement) UpdateDepthForTests() int {
+	if s != nil {
+		s.depth = 1 + max(
+			CallUpdateDepthForTests(s.Cond),
+			CallUpdateDepthForTests(s.Unnest),
+		)
+		return s.depth
+	}
+	return 0
 }
 
 func (s *LogPipeStatement) stmt() {}
+
 func (s *LogPipeStatement) node() {}
+
 func (s *LogPipeStatement) RequiredPrivileges() (ExecutionPrivileges, error) {
 	return ExecutionPrivileges{{Admin: true, Name: "", Rwuser: true, Privilege: AllPrivileges}}, nil
 }
-func (s *LogPipeStatement) String() string {
-	var buf bytes.Buffer
+
+func (s *LogPipeStatement) String() string { return s.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (s *LogPipeStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
 	if s.Cond != nil {
-		_, _ = buf.WriteString(s.Cond.String())
+		_ = s.Cond.RenderBytes(buf, posmap)
 	}
 	if s.Unnest != nil {
-		buf.WriteString("|")
-		_, _ = buf.WriteString(s.Unnest.String())
+		_, _ = buf.WriteString("|")
+		_ = s.Unnest.RenderBytes(buf, posmap)
 	}
-	return buf.String()
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 type Scroll struct {
@@ -8482,30 +12066,377 @@ func IsExactStatisticQueryForDDL(stmt Statement) bool {
 }
 
 type WithSelectStatement struct {
-	CTEs  CTES
-	Query *SelectStatement
+	CTEs                  CTES
+	Query                 *SelectStatement
+	DependenciesCTEsAlias []string
+	depth                 int
 }
 
 type CTE struct {
-	Query *SelectStatement
-	Alias string
+	Query                *SelectStatement
+	GraphQuery           *GraphStatement
+	Alias                string
+	TimeRange            TimeRange   // use for Prepare MapShard for withCondition.stmt
+	Csming               interface{} // same as shardMapping, use for mapShard of with Condition stmt
+	DependenciesCTEAlias []string
+	ReqId                string
+	FMapper              FieldMapper
+	depth                int
+}
+
+func (c *CTE) Depth() int {
+	if c != nil {
+		return c.depth
+	}
+	return 0
+}
+
+func (c *CTE) UpdateDepthForTests() int {
+	if c != nil {
+		c.depth = 1 + max(
+			CallUpdateDepthForTests(c.Query),
+			CallUpdateDepthForTests(c.GraphQuery),
+		)
+		return c.depth
+	}
+	return 0
+}
+
+func (c *CTE) String() string { return c.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (c *CTE) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	_, _ = buf.WriteString("(")
+	if c.GraphQuery != nil {
+		_ = c.GraphQuery.RenderBytes(buf, posmap)
+	} else {
+		_ = c.Query.RenderBytes(buf, posmap)
+	}
+	_, _ = buf.WriteString(")")
+
+	if posmap != nil {
+		posmap[c] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
+}
+
+func (c *CTE) Clone() *CTE {
+	clone := &CTE{
+		Alias:     c.Alias,
+		TimeRange: c.TimeRange,
+		Csming:    c.Csming,
+		ReqId:     c.ReqId,
+		depth:     c.depth,
+	}
+	if c.Query != nil {
+		clone.Query = c.Query.Clone()
+	}
+	if c.GraphQuery != nil {
+		clone.GraphQuery = c.GraphQuery.Clone()
+	}
+	return clone
+}
+
+func (c *CTE) GetName() string {
+	return c.Alias
 }
 
 type CTES []*CTE
 
-func (s *WithSelectStatement) String() string {
-	var buf bytes.Buffer
-	buf.WriteString("With")
+func (cs CTES) UpdateDepthForTests() int {
+	if cs != nil {
+		depth := 0
+		for i, c := range cs {
+			depth = max(depth, 1+i+CallUpdateDepthForTests(c))
+		}
+		return 1 + depth
+	}
+	return 0
+}
+
+type ctesList struct {
+	ctes  CTES
+	depth int
+}
+
+func (c ctesList) Depth() int { return c.depth }
+
+func (s *WithSelectStatement) Depth() int {
+	if s != nil {
+		return s.depth
+	}
+	return 0
+}
+
+func (s *WithSelectStatement) UpdateDepthForTests() int {
+	if s != nil {
+		s.depth = 1 + max(
+			CallUpdateDepthForTests(s.CTEs),
+			CallUpdateDepthForTests(s.Query),
+		)
+		return s.depth
+	}
+	return 0
+}
+
+func (s *WithSelectStatement) String() string { return s.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (s *WithSelectStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	_, _ = buf.WriteString("With ")
 	for _, cte := range s.CTEs {
 		_, _ = buf.WriteString(cte.Alias)
 		_, _ = buf.WriteString(" AS (")
-		_, _ = buf.WriteString(cte.Query.String())
+		if cte.Query != nil {
+			_ = cte.Query.RenderBytes(buf, posmap)
+		} else if cte.GraphQuery != nil {
+			_ = cte.GraphQuery.RenderBytes(buf, posmap)
+		}
 		_, _ = buf.WriteString(" ),")
 	}
-	buf.WriteString(s.Query.String())
-	return buf.String()
+	_ = s.Query.RenderBytes(buf, posmap)
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }
 
 func (s *WithSelectStatement) RequiredPrivileges() (ExecutionPrivileges, error) {
 	return ExecutionPrivileges{{Admin: true, Name: "", Rwuser: true, Privilege: AllPrivileges}}, nil
+}
+
+type TagSet struct {
+	Key, Value string
+}
+
+type TagSets []TagSet
+
+func (a TagSets) Len() int { return len(a) }
+
+func (a TagSets) Swap(i, j int) { a[i], a[j] = a[j], a[i] }
+
+func (a TagSets) Less(i, j int) bool {
+	ki, kj := a[i].Key, a[j].Key
+	if ki == kj {
+		return a[i].Value < a[j].Value
+	}
+	return ki < kj
+}
+
+type TableTagSets struct {
+	Name   string
+	Values TagSets
+}
+
+type TablesTagSets []TableTagSets
+
+func (a TablesTagSets) Len() int { return len(a) }
+
+func (a TablesTagSets) Swap(i, j int) { a[i], a[j] = a[j], a[i] }
+
+func (a TablesTagSets) Less(i, j int) bool { return a[i].Name < a[j].Name }
+
+func (stmt *ShowTagValuesStatement) RewriteShowTagValStmt(in *InCondition) (*ShowTagValuesStatement, error) {
+	if len(in.Stmt.Fields) == 0 || len(in.Stmt.Sources) == 0 {
+		return nil, errors.New("convert show tag value statements fail")
+	}
+	ref, ok := in.Stmt.Fields[0].Expr.(*VarRef)
+	if !ok {
+		return nil, errors.New("type assertion fail")
+	}
+	s := ref.Val
+	measurement, ok := in.Stmt.Sources[0].(*Measurement)
+	if !ok {
+		return nil, errors.New("type assertion fail")
+	}
+	d := measurement.Database
+	stmt = &ShowTagValuesStatement{
+		Database: d,
+		Sources:  in.Stmt.Sources,
+		Op:       EQ,
+		TagKeyExpr: &ListLiteral{
+			Vals: []string{s},
+		},
+		TagKeyCondition: nil,
+		depth:           3, // sources are Measurements only
+	}
+	if in.TimeCond != nil {
+		stmt.Condition = in.TimeCond
+		stmt.depth = max(stmt.depth, 1+stmt.Condition.Depth())
+		stringLiteral := &StringLiteral{
+			Val: "exact_statistic_query",
+		}
+		hint := &Hint{
+			Expr: stringLiteral,
+		}
+		stmt.Hints = Hints{hint}
+	} else {
+		stmt.Condition = nil
+	}
+	return stmt, nil
+}
+
+type GraphStatement struct {
+	NodeCondition       Expr
+	EdgeCondition       Expr
+	AdditionalCondition Expr
+	HopNum              int
+	StartNodeId         string
+	depth               int
+}
+
+func (s *GraphStatement) Depth() int {
+	if s != nil {
+		return s.depth
+	}
+	return 0
+}
+
+func (s *GraphStatement) UpdateDepthForTests() int {
+	if s != nil {
+		s.depth = 1 + max(
+			CallUpdateDepthForTests(s.NodeCondition),
+			CallUpdateDepthForTests(s.EdgeCondition),
+		)
+		return s.depth
+	}
+	return 0
+}
+
+func (s *GraphStatement) String() string { return s.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (s *GraphStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+	if s.NodeCondition == nil && s.EdgeCondition != nil {
+		_, _ = fmt.Fprintf(buf, "%d %s ", s.HopNum, s.StartNodeId)
+		_ = s.EdgeCondition.RenderBytes(buf, posmap)
+	} else if s.EdgeCondition == nil && s.NodeCondition != nil {
+		_, _ = fmt.Fprintf(buf, "%d %s ", s.HopNum, s.StartNodeId)
+		_ = s.NodeCondition.RenderBytes(buf, posmap)
+	} else if s.NodeCondition == nil && s.EdgeCondition == nil {
+		_, _ = fmt.Fprintf(buf, "%d %s", s.HopNum, s.StartNodeId)
+	} else {
+		_, _ = fmt.Fprintf(buf, "%d %s ", s.HopNum, s.StartNodeId)
+		_ = s.NodeCondition.RenderBytes(buf, posmap)
+		_, _ = buf.WriteString(" ")
+		_ = s.EdgeCondition.RenderBytes(buf, posmap)
+	}
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
+}
+
+func (s *GraphStatement) RequiredPrivileges() (ExecutionPrivileges, error) {
+	return ExecutionPrivileges{{Admin: true, Name: "", Rwuser: true, Privilege: AllPrivileges}}, nil
+}
+
+// Clone returns a deep copy of the statement.
+func (s *GraphStatement) Clone() *GraphStatement {
+	clone := *s
+	return &clone
+}
+
+type CypherCondition struct {
+	PathName            string
+	NodeCondition       Expr
+	EdgeCondition       Expr
+	AdditionalCondition Expr
+}
+
+type TableFunctionField struct {
+	typ     int
+	content string
+	source  Source
+	depth   int
+}
+
+func (s *TableFunctionField) Depth() int {
+	if s != nil {
+		return s.depth
+	}
+	return 0
+}
+
+func (s *TableFunctionField) GetType() int {
+	return s.typ
+}
+
+func (s *TableFunctionField) GetContent() string {
+	return s.content
+}
+
+func (s *TableFunctionField) GetSource() Source {
+	return s.source
+}
+
+type TableFunction struct {
+	FunctionName        string
+	TableFunctionFields TableFunctionFields
+	TableFunctionSource TableFunctionSource
+	Params              string
+
+	depth int
+}
+
+func (t *TableFunction) Depth() int {
+	return t.depth
+}
+
+type TableFunctionFields []*TableFunctionField
+
+type TableFunctionSource []Source
+
+func (t *TableFunction) GetName() string {
+	return t.FunctionName
+}
+
+func (t *TableFunction) GetTableFunctionFields() TableFunctionFields {
+	return t.TableFunctionFields
+}
+
+func (t *TableFunction) GetTableFunctionSource() TableFunctionSource {
+	return t.TableFunctionSource
+}
+
+func (t *TableFunction) SetTableFunctionSource(sources []Source) {
+	t.TableFunctionSource = sources
+}
+
+func (t *TableFunction) GetParams() string {
+	return t.Params
+}
+
+func (t *TableFunction) String() string {
+	return fmt.Sprintf("(%s)", t.GetName())
+}
+
+func (t *TableFunction) UpdateDepthForTests() int {
+	return 0
+}
+
+func (s *TableFunction) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	_, _ = buf.WriteString("tablefunctionname:(")
+	_, _ = buf.WriteString(s.FunctionName)
+	_, _ = buf.WriteString(")")
+
+	_, _ = buf.WriteString(" TableFunctionSource:(")
+	for _, tableFunctionSource := range s.TableFunctionSource {
+		_, _ = buf.WriteString(tableFunctionSource.GetName())
+	}
+	_, _ = buf.WriteString(")")
+
+	_, _ = buf.WriteString(" param:(")
+	_, _ = buf.WriteString(s.Params)
+	_, _ = buf.WriteString(")")
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
 }

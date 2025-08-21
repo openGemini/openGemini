@@ -99,45 +99,34 @@ tagArray:
 	{Key: "tk3", Value: "tv33", IsArray: 0},]]
 */
 func AnalyzeTagSets(dstTagSets *tagSets, tags []influx.Tag) error {
-	var arrayLen = 0
-	for cIndex := range tags {
-		tag := &tags[cIndex]
-		if !tag.IsArray {
-			continue
-		}
+	var arrayLen int
+	for i := range tags {
+		if tags[i].IsArray {
+			tagCount := strings.Count(tags[i].Value, ",") + 1
+			if arrayLen == 0 {
+				arrayLen = tagCount
+			}
 
-		if arrayLen == 0 {
-			arrayLen = strings.Count(tag.Value, ",") + 1
-			dstTagSets.resize(arrayLen, len(tags))
-		}
-
-		values := tag.Value[1 : len(tag.Value)-1] // remove the front and back brackets
-		offset := 0
-		rIndex := 0
-		for i := range values {
-			if rIndex >= arrayLen {
+			if arrayLen != tagCount {
 				return errno.NewError(errno.ErrorTagArrayFormat)
 			}
-
-			if values[i] == ',' {
-				dstTagSets.tagsArray[rIndex][cIndex].Key = tag.Key
-				dstTagSets.tagsArray[rIndex][cIndex].Value = values[offset:i]
-				offset = i + 1
-				rIndex++
-			}
 		}
-		dstTagSets.tagsArray[rIndex][cIndex].Key = tag.Key
-		dstTagSets.tagsArray[rIndex][cIndex].Value = values[offset:]
 	}
+
+	dstTagSets.resize(arrayLen, len(tags))
 
 	for cIndex := range tags {
 		if tags[cIndex].IsArray {
-			continue
-		}
-
-		for rIndex := 0; rIndex < arrayLen; rIndex++ {
-			dstTagSets.tagsArray[rIndex][cIndex].Key = tags[cIndex].Key
-			dstTagSets.tagsArray[rIndex][cIndex].Value = tags[cIndex].Value
+			values := strings.Split(tags[cIndex].Value[1:len(tags[cIndex].Value)-1], ",")
+			for rIndex := range values {
+				dstTagSets.tagsArray[rIndex][cIndex].Key = tags[cIndex].Key
+				dstTagSets.tagsArray[rIndex][cIndex].Value = values[rIndex]
+			}
+		} else {
+			for rIndex := 0; rIndex < arrayLen; rIndex++ {
+				dstTagSets.tagsArray[rIndex][cIndex].Key = tags[cIndex].Key
+				dstTagSets.tagsArray[rIndex][cIndex].Value = tags[cIndex].Value
+			}
 		}
 	}
 	return nil
@@ -481,6 +470,10 @@ func matchTagFilter(tagsBuf *influx.PointTags, n *influxql.BinaryExpr) (bool, er
 		if ok := tf.Contains(tagsBuf, key.Val, value.Val, n.Op == influxql.NEQ, false); ok {
 			return true, nil
 		}
+	case *influxql.SetLiteral:
+		if ok := tf.ContainsAny(tagsBuf, key.Val, value.Vals, n.Op == influxql.IN, false); ok {
+			return true, nil
+		}
 	default:
 		return false, nil
 	}
@@ -520,25 +513,25 @@ func resizeExpectSeries(expectSeries []bool, keyCount int) []bool {
 }
 
 func (idx *MergeSetIndex) searchSeriesWithTagArray(tsid uint64, seriesKeys [][]byte, exprs []*influxql.BinaryExpr, combineKey []byte,
-	isExpectSeries []bool, condition influxql.Expr, handleConditionForce bool) ([][]byte, []*influxql.BinaryExpr, []bool, error) {
+	isExpectSeries []bool, condition influxql.Expr, handleConditionForce bool) ([][]byte, []*influxql.BinaryExpr, []bool, []byte, error) {
 	combineKey = combineKey[:0]
 	combineKey, err := idx.searchSeriesKey(combineKey, tsid)
 	if err != nil {
 		idx.logger.Error("searchSeriesKey fail", zap.Error(err))
-		return nil, nil, nil, err
+		return nil, nil, nil, combineKey, err
 	}
 
 	seriesKeys, _, err = unmarshalCombineIndexKeys(seriesKeys, combineKey)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, combineKey, err
 	}
 
 	_, isExpectSeries, exprs, err = analyzeSeriesWithCondition(seriesKeys, exprs, condition, isExpectSeries, handleConditionForce)
 	if err != nil {
 		logger.GetLogger().Error("analyzeSeriesWithCondition fail", zap.Error(err))
-		return nil, nil, nil, err
+		return nil, nil, nil, combineKey, err
 	}
-	return seriesKeys, exprs, isExpectSeries, nil
+	return seriesKeys, exprs, isExpectSeries, combineKey, nil
 }
 
 func (is *indexSearch) subTSIDSWithTagArray(mstTSIDS, filterTSIDS *uint64set.Set) (*uint64set.Set, error) {

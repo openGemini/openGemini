@@ -16,6 +16,7 @@ import (
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/cgroup"
+	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/fasttime"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/memory"
@@ -26,6 +27,7 @@ import (
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/fs"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/uint64set"
 )
 
 // These are global counters for cache requests and misses for parts
@@ -73,9 +75,29 @@ const (
 	falsePositiveRate              = 0.01
 )
 
+const (
+	nsPrefixKeyToTSID = iota
+	nsPrefixTSIDToKey
+	nsPrefixTagToTSIDs
+)
+
+const (
+	kvSeparatorChar = 2
+	// MarshaledUint64Len The length of the byte array after marshaling a uint64 type number
+	MarshaledUint64Len = 8
+	// separatorMarshaledUint64Len The size of the byte array formed by prefixing a delimiter to a uint64's marshaled
+	separatorMarshaledUint64Len = 9
+)
+
 var (
 	BfBufPool = bufferpool.NewByteBufferPool(128*1024*1024, cpu.GetCpuNum(), bufferpool.MaxLocalCacheLen)
 )
+
+type DeletionScanResult struct {
+	NeedDelete bool
+	TmpItems   [][]byte
+	StartItem  []byte
+}
 
 // maxItemsPerCachedPart is the maximum items per created part by the merge,
 // which must be cached in the OS page cache.
@@ -133,6 +155,10 @@ type Table struct {
 
 	stopCh chan struct{}
 
+	mergeStopCh chan struct{}
+
+	flushStopCh chan struct{}
+
 	// Use syncwg instead of sync, since Add/Wait may be called from concurrent goroutines.
 	partMergersWG syncwg.WaitGroup
 
@@ -144,6 +170,8 @@ type Table struct {
 	rawItemsPendingFlushesWG syncwg.WaitGroup
 
 	lock *string
+
+	pathLock sync.Mutex
 }
 
 type rawItemsShards struct {
@@ -166,9 +194,8 @@ func (riss *rawItemsShards) init() {
 
 func (riss *rawItemsShards) addItems(tb *Table, items [][]byte) error {
 	n := atomic.AddUint32(&riss.shardIdx, 1)
-	shards := riss.shards
-	idx := n % uint32(len(shards))
-	shard := &shards[idx]
+	idx := n % uint32(rawItemsShardsPerTable)
+	shard := &riss.shards[idx]
 	return shard.addItems(tb, items)
 }
 
@@ -243,6 +270,8 @@ type partWrapper struct {
 
 	isInMerge bool
 
+	isDeleteTsids bool
+
 	lock *string
 
 	removeWG *sync.WaitGroup
@@ -284,7 +313,7 @@ func (pw *partWrapper) decRef() {
 //
 // The table is created if it doesn't exist yet.
 func OpenTable(path string, flushCallback func(), prepareBlock PrepareBlockCallback, lock *string) (*Table, error) {
-	path = filepath.Clean(path)
+	path = fileops.Clean(path)
 	logger.Infof("opening table %q...", path)
 	startTime := time.Now()
 
@@ -306,12 +335,13 @@ func OpenTable(path string, flushCallback func(), prepareBlock PrepareBlockCallb
 		parts:         pws,
 		mergeIdx:      uint64(time.Now().UnixNano()),
 		stopCh:        make(chan struct{}),
+		mergeStopCh:   make(chan struct{}),
+		flushStopCh:   make(chan struct{}),
 		lock:          lock,
 	}
 	tb.rawItems.init()
 	tb.startPartMergers()
 	tb.startRawItemsFlusher()
-
 	var m TableMetrics
 	tb.UpdateMetrics(&m)
 	logger.Infof("table %q has been opened in %.3f seconds; partsCount: %d; blocksCount: %d, itemsCount: %d; sizeBytes: %d",
@@ -598,7 +628,18 @@ func (tb *Table) MustClose() {
 
 // Path returns the path to tb on the filesystem.
 func (tb *Table) Path() string {
+	tb.pathLock.Lock()
+	defer tb.pathLock.Unlock()
 	return tb.path
+}
+
+func (tb *Table) ResetPath(newPath string) {
+	if tb == nil {
+		return
+	}
+	tb.pathLock.Lock()
+	defer tb.pathLock.Unlock()
+	tb.path = newPath
 }
 
 // TableMetrics contains essential metrics for the Table.
@@ -705,6 +746,18 @@ func (tb *Table) startRawItemsFlusher() {
 	}()
 }
 
+func (tb *Table) StopMergeAndFlusher() {
+	if tb == nil {
+		return
+	}
+	tb.flushStopCh <- struct{}{}
+	var i = 0
+	for i < mergeWorkersCount {
+		tb.mergeStopCh <- struct{}{}
+		i++
+	}
+}
+
 func (tb *Table) rawItemsFlusher() {
 	ticker := time.NewTicker(rawItemsFlushInterval)
 	defer ticker.Stop()
@@ -714,6 +767,8 @@ func (tb *Table) rawItemsFlusher() {
 			return
 		case <-ticker.C:
 			tb.flushRawItems(false)
+		case <-tb.flushStopCh:
+			return
 		}
 	}
 }
@@ -722,7 +777,7 @@ const convertToV1280FileName = "converted-to-v1.28.0"
 
 func (tb *Table) convertToV1280() {
 	// Convert tag->metricID rows into tag->metricIDs rows when upgrading to v1.28.0+.
-	flagFilePath := filepath.Join(tb.path, convertToV1280FileName)
+	flagFilePath := fileops.Join(tb.path, convertToV1280FileName)
 	if fs.IsPathExist(flagFilePath) {
 		// The conversion has been already performed.
 		return
@@ -1006,6 +1061,7 @@ func (tb *Table) startPartMergers() {
 }
 
 func (tb *Table) mergeExistingParts(isFinal bool) error {
+	// If windows，MustGetFreeSpace return Math.Uint64, need check that have disk space to merge
 	n := fs.MustGetFreeSpace(tb.path)
 	// Divide free space by the max number of concurrent merges.
 	maxOutBytes := n / uint64(mergeWorkersCount)
@@ -1064,6 +1120,8 @@ func (tb *Table) partMerger() error {
 			return nil
 		case <-t.C:
 			t.Reset(sleepTime)
+		case <-tb.mergeStopCh:
+			return nil
 		}
 	}
 }
@@ -1267,6 +1325,17 @@ func (tb *Table) nextMergeIdx() uint64 {
 	return atomic.AddUint64(&tb.mergeIdx, 1)
 }
 
+func (tb *Table) UpdatePartsObsPath(obsPreix string) {
+	if tb == nil {
+		return
+	}
+	for _, part := range tb.parts {
+		partName := part.p.path
+		partName = strings.TrimPrefix(partName, "/tmp/openGemini/data")
+		tb.parts[0].p.path = obsPreix + partName
+	}
+}
+
 var mergeWorkersCount = cgroup.AvailableCPUs()
 
 func openParts(path string, lock *string) ([]*partWrapper, error) {
@@ -1282,19 +1351,24 @@ func openParts(path string, lock *string) ([]*partWrapper, error) {
 		return nil, fmt.Errorf("cannot run transactions: %w", err)
 	}
 
-	txnDir := filepath.Join(path, "txn")
+	txnDir := fileops.Join(path, "txn")
 	fs.MustRemoveAll(txnDir, lock)
-	if err := fs.MkdirAllFailIfExist(txnDir, lock); err != nil {
-		return nil, fmt.Errorf("cannot create %q: %w", txnDir, err)
+	if fileops.GetFsType(txnDir) != fileops.Obs {
+		if err := fs.MkdirAllFailIfExist(txnDir, lock); err != nil {
+			return nil, fmt.Errorf("cannot create %q: %w", txnDir, err)
+		}
 	}
-
-	tmpDir := filepath.Join(path, "tmp")
+	tmpDir := fileops.Join(path, "tmp")
 	fs.MustRemoveAll(tmpDir, lock)
-	if err := fs.MkdirAllFailIfExist(tmpDir, lock); err != nil {
-		return nil, fmt.Errorf("cannot create %q: %w", tmpDir, err)
-	}
+	if fileops.GetFsType(tmpDir) != fileops.Obs {
+		if err := fs.MkdirAllFailIfExist(tmpDir, lock); err != nil {
+			return nil, fmt.Errorf("cannot create %q: %w", tmpDir, err)
+		}
 
-	path = fileops.NormalizeDirPath(path)
+	}
+	if fileops.GetFsType(path) != fileops.Obs {
+		path = fileops.NormalizeDirPath(path)
+	}
 	fs.MustSyncPath(path)
 
 	// Open parts.
@@ -1303,35 +1377,71 @@ func openParts(path string, lock *string) ([]*partWrapper, error) {
 		return nil, fmt.Errorf("cannot read directory: %w", err)
 	}
 	var pws []*partWrapper
-	for _, fi := range fis {
-		if !fs.IsDirOrSymlink(fi) {
-			// Skip non-directories.
-			continue
+	if fileops.GetFsType(path) == fileops.Obs {
+		for i, fi := range fis {
+			if i == 0 {
+				continue
+			}
+			if !fs.IsDirOrSymlink(fi) {
+				// Skip non-directories.
+				continue
+			}
+			fn := fi.Name()
+			fn = strings.TrimSuffix(fn, "/")
+			if strings.HasSuffix(fn, "tmp") || strings.HasSuffix(fn, "txn") {
+				continue
+			}
+			sepPos := strings.LastIndex(fn, "/")
+			if fs.IsEmptyDir(fileops.Join(path, fn[sepPos+1:])) {
+				// Remove empty directory, which can be left after unclean shutdown on NFS.
+				// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/1142
+				fs.MustRemoveAll(fn, lock)
+				continue
+			}
+
+			p, err := openFilePart(fileops.Join(path, fn[sepPos+1:]))
+			if err != nil {
+				mustCloseParts(pws)
+				return nil, fmt.Errorf("cannot open part %q: %w", fn, err)
+			}
+			pw := &partWrapper{
+				p:        p,
+				refCount: 1,
+				lock:     lock,
+			}
+			pws = append(pws, pw)
 		}
-		fn := fi.Name()
-		fn = strings.TrimSuffix(fn, "/")
-		if isSpecialDir(fn) {
-			// Skip special dirs.
-			continue
+	} else {
+		for _, fi := range fis {
+			if !fs.IsDirOrSymlink(fi) {
+				// Skip non-directories.
+				continue
+			}
+			fn := fi.Name()
+			fn = strings.TrimSuffix(fn, "/")
+			if isSpecialDir(fn) {
+				// Skip special dirs.
+				continue
+			}
+			partPath := filepath.Join(path, fn)
+			if fs.IsEmptyDir(partPath) {
+				// Remove empty directory, which can be left after unclean shutdown on NFS.
+				// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/1142
+				fs.MustRemoveAll(partPath, lock)
+				continue
+			}
+			p, err := openFilePart(partPath)
+			if err != nil {
+				mustCloseParts(pws)
+				return nil, fmt.Errorf("cannot open part %q: %w", partPath, err)
+			}
+			pw := &partWrapper{
+				p:        p,
+				refCount: 1,
+				lock:     lock,
+			}
+			pws = append(pws, pw)
 		}
-		partPath := filepath.Join(path, fn)
-		if fs.IsEmptyDir(partPath) {
-			// Remove empty directory, which can be left after unclean shutdown on NFS.
-			// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/1142
-			fs.MustRemoveAll(partPath, lock)
-			continue
-		}
-		p, err := openFilePart(partPath)
-		if err != nil {
-			mustCloseParts(pws)
-			return nil, fmt.Errorf("cannot open part %q: %w", partPath, err)
-		}
-		pw := &partWrapper{
-			p:        p,
-			refCount: 1,
-			lock:     lock,
-		}
-		pws = append(pws, pw)
 	}
 
 	return pws, nil
@@ -1434,22 +1544,34 @@ func runTransactions(txnLock *sync.RWMutex, path string, lockPath *string) error
 	if err != nil {
 		return fmt.Errorf("cannot read directory %q: %w", txnDir, err)
 	}
+	var allTxnSubDirNames []string
+	if fileops.GetFsType(txnDir) == fileops.Obs {
+		if len(fis) > 0 {
+			allTxnSubDirNames = fileops.GetSubDirNamesForObsReadDirs(fis, fis[0].Name())
+			fis = fileops.GetSubDirFiles(fis, fis[0].Name())
+		}
+	} else {
+		for _, fi := range fis {
+			allTxnSubDirNames = append(allTxnSubDirNames, fi.Name())
+		}
+	}
 
 	// Sort transaction files by id, since transactions must be ordered.
 	sort.Slice(fis, func(i, j int) bool {
 		return fis[i].Name() < fis[j].Name()
 	})
 
-	for _, fi := range fis {
-		fn := fi.Name()
-		if fs.IsTemporaryFileName(fn) {
+	for _, txnSubDirName := range allTxnSubDirNames {
+		if fs.IsTemporaryFileName(txnSubDirName) {
 			// Skip temporary files, which could be left after unclean shutdown.
 			continue
 		}
-		txnPath := filepath.Join(txnDir, fn)
-		txnPath = fileops.NormalizeDirPath(txnPath)
-		if err := runTransaction(txnLock, path, txnPath, lockPath, nil); err != nil {
-			return fmt.Errorf("cannot run transaction from %q: %w", txnPath, err)
+		txnDir = fileops.Join(txnDir, txnSubDirName)
+		if fileops.GetFsType(txnDir) != fileops.Obs {
+			txnDir = fileops.NormalizeDirPath(txnDir)
+		}
+		if err := runTransaction(txnLock, path, txnDir, lockPath, nil); err != nil {
+			return fmt.Errorf("cannot run transaction from %q: %w", txnDir, err)
 		}
 	}
 	return nil
@@ -1613,7 +1735,7 @@ func appendPartsToMerge(dst, src []*partWrapper, maxPartsToMerge int, maxOutByte
 	maxInPartBytes := uint64(float64(maxOutBytes) / minMergeMultiplier)
 	tmp := make([]*partWrapper, 0, len(src))
 	for _, pw := range src {
-		if pw.p.size > maxInPartBytes {
+		if pw.isDeleteTsids || pw.p.size > maxInPartBytes {
 			continue
 		}
 		tmp = append(tmp, pw)
@@ -1693,4 +1815,438 @@ func isSpecialDir(name string) bool {
 	// Snapshots and cache dirs aren't used anymore.
 	// Keep them here for backwards compatibility.
 	return name == "tmp" || name == "txn" || name == "snapshots" || name == "cache" || name == BloomFilterDirName
+}
+
+func (tb *Table) DeleteMstsInIndex(partDirName string, msts []string, onlyUseDiskThreshold uint64, parseItem func([]byte) (res *util.Item, err error)) error {
+	tmpPartPath := filepath.Join(tb.path, "tmp", partDirName)
+	mergeSetInnerPartDir := filepath.Join(tb.path, partDirName)
+	ps, ph, err := tb.deleteMstsInTmpPart(tmpPartPath, mergeSetInnerPartDir, msts, onlyUseDiskThreshold, parseItem)
+	if err != nil || (ps == nil && ph == nil && err == nil) {
+		return err
+	}
+
+	lock := fileops.FileLockOption(tmpPartPath)
+	if ph.itemsCount == ps.p.ph.itemsCount {
+		if err = fileops.RemoveAll(tmpPartPath, lock); err != nil {
+			return fmt.Errorf("remove tmp part fail. tmp part path: %q, err: %w", tmpPartPath, err)
+		}
+		return nil
+	}
+
+	var newPartPath = ""
+	if ph.itemsCount != 0 {
+		partDirNames := strings.SplitN(partDirName, "_", 2)
+		if len(partDirNames) != 2 {
+			return fmt.Errorf("split part dir name [%s] fail. please check dir name format: x_xxxx_xxxx", partDirName)
+		}
+		newPartDirName := fmt.Sprintf("%d_%s", ph.itemsCount, partDirNames[1])
+		newPartPath = filepath.Join(tb.path, newPartDirName)
+	}
+	if err = tb.newPartReplaceOldPart(tmpPartPath, newPartPath, mergeSetInnerPartDir, lock); err != nil {
+		return err
+	}
+
+	var newPW *partWrapper = nil
+	if ph.itemsCount != 0 {
+		newP, err := openFilePartFn(newPartPath)
+		if err != nil {
+			return fmt.Errorf("cannot open new part %q: %w", newPartPath, err)
+		}
+		newPW = &partWrapper{
+			p:        newP,
+			refCount: 1,
+			lock:     tb.lock,
+		}
+	}
+	if err = tb.addNewPWAndRemoveOldPW(ps, newPW); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (tb *Table) addNewPWAndRemoveOldPW(ps *partSearch, newPW *partWrapper) error {
+	var pws []*partWrapper
+	tb.partsLock.Lock()
+	for _, pw := range tb.parts {
+		if pw.p.path == ps.p.path {
+			pws = append(pws, pw)
+		}
+	}
+	tb.partsLock.Unlock()
+
+	// Atomically remove old parts and add new part.
+	m := make(map[*partWrapper]bool, len(pws))
+	for _, pw := range pws {
+		m[pw] = true
+	}
+	if len(m) != len(pws) {
+		logger.Panicf("BUG: %d duplicate parts found in the delete of %d parts", len(pws)-len(m), len(pws))
+	}
+	removedParts := 0
+	tb.partsLock.Lock()
+	tb.parts, removedParts = removeParts(tb.parts, m)
+
+	if newPW != nil {
+		tb.parts = append(tb.parts, newPW)
+	}
+
+	tb.partsLock.Unlock()
+	if removedParts != len(m) {
+		logger.Panicf("BUG: unexpected number of parts removed; got %d; want %d", removedParts, len(m))
+	}
+
+	// Remove partition references from old parts.
+	for _, pw := range pws {
+		pw.decRef()
+	}
+	return nil
+}
+
+func (tb *Table) newPartReplaceOldPart(tmpPartPath, newPartPath, mergeSetInnerPartDir string, lock fileops.FileLockOption) (err error) {
+	if newPartPath == "" {
+		if err = fileops.RemoveAll(tmpPartPath, lock); err != nil {
+			return fmt.Errorf("remove tmp part fail. tmp part path: %q, err: %w",
+				tmpPartPath, err)
+		}
+	} else {
+		if err = fileops.RenameFile(tmpPartPath, newPartPath, lock); err != nil {
+			return fmt.Errorf("move tmp part files to new part files fail. tmp path: %q, new path: %q, err: %w",
+				tmpPartPath, newPartPath, err)
+		}
+	}
+
+	if err = fileops.RemoveAll(mergeSetInnerPartDir, lock); err != nil {
+		return fmt.Errorf("remove old part fail. old part path: %q, err: %w",
+			mergeSetInnerPartDir, err)
+	}
+	return nil
+}
+
+func (tb *Table) deleteMstsInTmpPart(tmpPartPath, mergeSetInnerPartDir string, msts []string, onlyUseDiskThreshold uint64, parseItem func([]byte) (res *util.Item, err error)) (*partSearch, *partHeader, error) {
+	p, err := openFilePartFn(mergeSetInnerPartDir)
+	if err != nil {
+		return nil, nil, fmt.Errorf("cannot open file part. part dir: %q, err: %w", mergeSetInnerPartDir, err)
+	}
+
+	deletionScanResult := &DeletionScanResult{
+		StartItem: p.ph.firstItem,
+	}
+	if p.size < onlyUseDiskThreshold {
+		checkForDeletion(deletionScanResult, p, msts, parseItem)
+		if !deletionScanResult.NeedDelete {
+			return nil, nil, nil
+		}
+	}
+
+	var ps partSearch
+	ps.Init(p)
+	bsw := getBlockStreamWriter()
+	compressLevel := getCompressLevelForPartItems(ps.p.ph.itemsCount, ps.p.ph.blocksCount)
+	if err = bsw.InitFromFilePart(tmpPartPath, true, compressLevel, tb.lock); err != nil {
+		return nil, nil, fmt.Errorf("cannot create destination part %q: %w", tmpPartPath, err)
+	}
+
+	bsm := bsmPool.Get().(*blockStreamMerger)
+	bsm.reset()
+	bsr := getBlockStreamReader()
+	if err = bsr.InitFromFilePart(p.path); err != nil {
+		bsw.MustClose()
+		return nil, nil, fmt.Errorf("cannot open source part for merging: %w", err)
+	}
+	bsrs := make([]*blockStreamReader, 0, 1)
+	bsrs = append(bsrs, bsr)
+	if err = bsm.Init(bsrs, tb.prepareBlock); err != nil {
+		return nil, nil, fmt.Errorf("block stream mergers init fail: %w", err)
+	}
+
+	var ph partHeader
+	var ItemsMerged uint64
+	if p.size < onlyUseDiskThreshold {
+		for _, item := range deletionScanResult.TmpItems {
+			if !bsm.ib.Add(item) {
+				bsm.flushIB(bsw, &ph, &ItemsMerged)
+				bsm.ib.Add(ps.Item)
+			}
+		}
+		bsm.flushIB(bsw, &ph, &ItemsMerged)
+		deletionScanResult.TmpItems = [][]byte{}
+	}
+
+	ps.Seek(deletionScanResult.StartItem)
+	for {
+		if !ps.NextItem() {
+			break
+		}
+		if itemContainsMst(ps.Item, msts, parseItem) {
+			continue
+		}
+		if !bsm.ib.Add(ps.Item) {
+			bsm.flushIB(bsw, &ph, &ItemsMerged)
+			bsm.ib.Add(ps.Item)
+		}
+	}
+	bsm.flushIB(bsw, &ph, &ItemsMerged)
+	bsr.MustClose()
+	bsw.MustClose()
+	putBlockStreamWriter(bsw)
+	if err = ph.WriteMetadata(tmpPartPath, tb.lock); err != nil {
+		fs.MustRemoveAll(tmpPartPath, tb.lock)
+		return nil, nil, fmt.Errorf("cannot write metadata to destination part %q: %w", tmpPartPath, err)
+	}
+
+	return &ps, &ph, nil
+}
+
+func checkForDeletion(deletionScanResult *DeletionScanResult, p *part, msts []string, parseItem func([]byte) (res *util.Item, err error)) {
+	deletionScanResult.TmpItems = make([][]byte, 0, p.ph.itemsCount)
+	var ps partSearch
+	ps.Init(p)
+	ps.Seek(p.ph.firstItem)
+	for {
+		if !ps.NextItem() {
+			break
+		}
+		if itemContainsMst(ps.Item, msts, parseItem) {
+			deletionScanResult.StartItem = ps.Item
+			deletionScanResult.NeedDelete = true
+			break
+		}
+		deletionScanResult.TmpItems = append(deletionScanResult.TmpItems, ps.Item)
+	}
+}
+
+func itemContainsMst(item []byte, msts []string, parseItem func([]byte) (res *util.Item, err error)) bool {
+	for _, mst := range msts {
+		itemInfo, err := parseItem(item)
+		if err != nil {
+			logger.Errorf("parse item err: %s", err)
+			return false
+		}
+		if mst == itemInfo.Name {
+			return true
+		}
+	}
+	return false
+}
+
+func (tb *Table) SetLabelForDeletePart() {
+	tb.partsLock.Lock()
+	for i := 0; i < len(tb.parts); i++ {
+		if tb.parts[i].isInMerge || tb.parts[i].isDeleteTsids {
+			continue
+		}
+		tb.parts[i].isDeleteTsids = true
+	}
+	tb.partsLock.Unlock()
+}
+
+func (tb *Table) RemoveDeletedPart() {
+	tb.partsLock.Lock()
+	// Atomically remove old parts and add new part.
+	m := make(map[*partWrapper]bool)
+	pws := make([]*partWrapper, 0)
+	for i := 0; i < len(tb.parts); i++ {
+		if tb.parts[i].isDeleteTsids {
+			m[tb.parts[i]] = true
+			pws = append(pws, tb.parts[i])
+		}
+	}
+	removedParts := 0
+	tb.parts, removedParts = removeParts(tb.parts, m)
+	tb.partsLock.Unlock()
+	if removedParts != len(m) {
+		logger.Panicf("BUG: unexpected number of parts removed; got %d; want %d", removedParts, len(m))
+	}
+
+	// Remove partition references from old parts.
+	var removeWG sync.WaitGroup
+	for _, pw := range pws {
+		pw.removeWG = &removeWG
+		removeWG.Add(1)
+		pw.decRef()
+	}
+	removeWG.Wait()
+}
+
+func (tb *Table) RemoveItemsByDelTsidsFromParts(delTsids *uint64set.Set) error {
+	tb.partsLock.Lock()
+	temp := tb.parts
+	pws := make([]*partWrapper, 0)
+	for i := 0; i < len(temp); i++ {
+		if temp[i].isInMerge || temp[i].isDeleteTsids {
+			continue
+		}
+		temp[i].isDeleteTsids = true
+		pws = append(pws, temp[i])
+	}
+	tb.partsLock.Unlock()
+
+	for _, pw := range pws {
+		err := tb.filterByDelTsidAndGenNewPart(pw, delTsids)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (tb *Table) filterByDelTsidAndGenNewPart(pw *partWrapper, delTsids *uint64set.Set) error {
+	_, partDirName := filepath.Split(pw.p.path)
+	tmpPartPath := filepath.Join(tb.path, "tmp", partDirName)
+	lock := fileops.FileLockOption(tmpPartPath)
+
+	ps, ph, err := tb.genTempPart(pw, delTsids, tmpPartPath)
+	if err != nil {
+		return err
+	}
+
+	if ph.itemsCount == ps.p.ph.itemsCount {
+		tb.partsLock.Lock()
+		pw.isDeleteTsids = false
+		tb.partsLock.Unlock()
+		if err = fileops.RemoveAll(tmpPartPath, lock); err != nil {
+			return fmt.Errorf("remove tmp part fail. tmp part path: %q, err: %w", tmpPartPath, err)
+		}
+		return nil
+	}
+
+	var dstPartPath = ""
+	if ph.itemsCount != 0 {
+		partDirNames := strings.SplitN(partDirName, "_", 2)
+		if len(partDirNames) != 2 {
+			return fmt.Errorf("split part dir name [%s] fail. please check dir name format: x_xxxx_xxxx", partDirName)
+		}
+		newPartDirName := fmt.Sprintf("%d_%s", ph.itemsCount, partDirNames[1])
+		dstPartPath = filepath.Join(tb.path, newPartDirName)
+	}
+
+	// Open the merged part.
+	var newPW *partWrapper = nil
+	if ph.itemsCount != 0 {
+		if err = fileops.RenameFile(tmpPartPath, dstPartPath, lock); err != nil {
+			tb.partsLock.Lock()
+			defer tb.partsLock.Unlock()
+			pw.isDeleteTsids = false
+			if e := fileops.RemoveAll(tmpPartPath, lock); e != nil {
+				return fmt.Errorf("move tmp part files and remove tmp part fail. tmp part path: %q, err: %w", tmpPartPath, e)
+			}
+			return fmt.Errorf("move tmp part files to new part files fail. tmp path: %q, new path: %q, err: %w",
+				tmpPartPath, dstPartPath, err)
+		}
+		newP, err := openFilePartFn(dstPartPath)
+		if err != nil {
+			return fmt.Errorf("cannot open new part %q: %w", dstPartPath, err)
+		}
+		newPW = &partWrapper{
+			p:        newP,
+			refCount: 1,
+			lock:     tb.lock,
+		}
+	}
+
+	// Atomically remove old parts and add new part.
+	m := make(map[*partWrapper]bool, 1)
+	m[pw] = true
+
+	removedParts := 0
+	tb.partsLock.Lock()
+	tb.parts, removedParts = removeParts(tb.parts, m)
+	if newPW != nil {
+		tb.parts = append(tb.parts, newPW)
+	}
+	tb.partsLock.Unlock()
+	if removedParts != 1 {
+		logger.Panicf("BUG: unexpected number of parts removed; got %d; want %d", removedParts, 1)
+	}
+
+	var removeWG sync.WaitGroup
+	if pw.mp == nil {
+		pw.removeWG = &removeWG
+	}
+	removeWG.Add(1)
+
+	pw.decRef()
+
+	return nil
+
+}
+
+func (tb *Table) genTempPart(pw *partWrapper, delTsids *uint64set.Set, tmpPartPath string) (partSearch, partHeader, error) {
+	var ps partSearch
+	ps.Init(pw.p)
+	key := ps.p.ph.firstItem
+	ps.Seek(key)
+
+	bsw := getBlockStreamWriter()
+	defer putBlockStreamWriter(bsw)
+	compressLevel := getCompressLevelForPartItems(ps.p.ph.itemsCount, ps.p.ph.blocksCount)
+	if err := bsw.InitFromFilePart(tmpPartPath, true, compressLevel, tb.lock); err != nil {
+		bsw.MustClose()
+		return ps, partHeader{}, err
+	}
+	bsm := bsmPool.Get().(*blockStreamMerger)
+	defer bsmPool.Put(bsm)
+	bsm.reset()
+	bsr := getBlockStreamReader()
+	defer putBlockStreamReader(bsr)
+	if err := bsr.InitFromFilePart(pw.p.path); err != nil {
+		return ps, partHeader{}, err
+	}
+	bsrs := make([]*blockStreamReader, 0, 1)
+	bsrs = append(bsrs, bsr)
+
+	err := bsm.Init(bsrs, tb.prepareBlock)
+	if err != nil {
+		return partSearch{}, partHeader{}, err
+	}
+
+	var ph partHeader
+	var itemsMerged uint64
+
+	for {
+		if !ps.NextItem() {
+			break
+		}
+
+		if isDeleted(delTsids, ps.Item) {
+			continue
+		}
+
+		if !bsm.ib.Add(ps.Item) {
+			// The bsm.ib is full. Flush it to bsw and continue.
+			bsm.flushIB(bsw, &ph, &itemsMerged)
+			continue
+		}
+	}
+
+	bsm.flushIB(bsw, &ph, &itemsMerged)
+	bsw.MustClose()
+
+	if err = ph.WriteMetadata(tmpPartPath, tb.lock); err != nil {
+		fs.MustRemoveAll(tmpPartPath, tb.lock)
+		return partSearch{}, partHeader{}, err
+	}
+	return ps, ph, nil
+}
+
+func isDeleted(delTsids *uint64set.Set, item []byte) bool {
+	itemLen := len(item)
+	if itemLen < separatorMarshaledUint64Len {
+		return false
+	}
+	var tsidBytes []byte
+	if item[0] == nsPrefixKeyToTSID && item[itemLen-separatorMarshaledUint64Len] == kvSeparatorChar {
+		tsidBytes = item[itemLen-MarshaledUint64Len:]
+	} else if item[0] == nsPrefixTSIDToKey {
+		tsidBytes = item[1 : MarshaledUint64Len+1]
+	} else if item[0] == nsPrefixTagToTSIDs {
+		tsidBytes = item[itemLen-MarshaledUint64Len:]
+	} else {
+		return false
+	}
+
+	tsid := encoding.UnmarshalUint64(tsidBytes)
+	return delTsids.Has(tsid)
 }

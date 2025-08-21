@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"sync/atomic"
 
@@ -390,4 +391,8 @@ func GetDir(engineType config.EngineType, path string) string {
 		filePath = filepath.Join(path, ColumnStoreDirName)
 	}
 	return filePath
+}
+
+func GetUnorderDir(mstPath string) string {
+	return path.Join(mstPath, unorderedDir)
 }

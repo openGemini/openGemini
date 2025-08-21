@@ -149,7 +149,7 @@ func TestRangeVectorCursorSinkPlan(t *testing.T) {
 	series := executor.NewLogicalSeries(schema)
 	srcCursor := newReaderKeyCursor(nil)
 	srcCursor.schema = []record.Field{{Name: "cpu", Type: influx.Field_Type_Float}, {Name: "time", Type: influx.Field_Type_Int}}
-	schema.Visit(&influxql.Call{Name: "rate_prom", Args: []influxql.Expr{&influxql.VarRef{Val: "cpu", Type: influxql.Float}}})
+	schema.RecordExpr(&influxql.Call{Name: "rate_prom", Args: []influxql.Expr{&influxql.VarRef{Val: "cpu", Type: influxql.Float}}})
 	tr := util.TimeRange{Min: opt.StartTime, Max: opt.EndTime}
 	promCursor := engine.NewRangeVectorCursor(srcCursor, schema, AggPool, tr)
 	assert.Equal(t, promCursor.Name(), "range_vector_cursor")

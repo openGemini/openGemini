@@ -17,7 +17,6 @@ package runtimecfg
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -25,12 +24,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/goccy/go-yaml"
 	_ "github.com/openGemini/openGemini/engine"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/services"
 	"go.uber.org/zap"
-	"gopkg.in/yaml.v3"
 )
 
 var (
@@ -41,16 +40,15 @@ var (
 // Reloading is done by runtimecfg.Service, which also keeps the currently loaded config.
 // These values are then pushed to the components that are interested in them.
 type runtimeConfig struct {
-	TenantLimits map[string]*config.Limits `toml:"overrides" yaml:"overrides"`
+	TenantLimits map[string]*config.Limits `yaml:"overrides,anchor"`
 }
 
 func loadRuntimeConfig(r io.Reader) (*runtimeConfig, error) {
-	var overrides = &runtimeConfig{}
-
+	cfg := &runtimeConfig{TenantLimits: make(map[string]*config.Limits)}
 	decoder := yaml.NewDecoder(r)
 
 	// Decode the first document. An empty document (EOF) is OK.
-	if err := decoder.Decode(&overrides); err != nil && !errors.Is(err, io.EOF) {
+	if err := decoder.Decode(cfg); err != nil && !errors.Is(err, io.EOF) {
 		return nil, err
 	}
 
@@ -59,7 +57,7 @@ func loadRuntimeConfig(r io.Reader) (*runtimeConfig, error) {
 		return nil, errMultipleDocuments
 	}
 
-	return overrides, nil
+	return cfg, nil
 }
 
 // include Shard retention polices and Index retention polices
@@ -190,7 +188,7 @@ func YAMLMarshalUnmarshal(in interface{}) (map[string]interface{}, error) {
 	}
 
 	object := make(map[string]interface{})
-	if err := yaml.Unmarshal(yamlBytes, object); err != nil {
+	if err := yaml.Unmarshal(yamlBytes, &object); err != nil {
 		return nil, err
 	}
 
@@ -210,35 +208,6 @@ func diffConfig(defaultConfig, actualConfig map[string]interface{}) (map[string]
 		}
 
 		switch v := value.(type) {
-		case int:
-			defaultV, ok := defaultValue.(int)
-			if !ok || defaultV != v {
-				output[key] = v
-			}
-		case string:
-			defaultV, ok := defaultValue.(string)
-			if !ok || defaultV != v {
-				output[key] = v
-			}
-		case bool:
-			defaultV, ok := defaultValue.(bool)
-			if !ok || defaultV != v {
-				output[key] = v
-			}
-		case []interface{}:
-			defaultV, ok := defaultValue.([]interface{})
-			if !ok || !reflect.DeepEqual(defaultV, v) {
-				output[key] = v
-			}
-		case float64:
-			defaultV, ok := defaultValue.(float64)
-			if !ok || !reflect.DeepEqual(defaultV, v) {
-				output[key] = v
-			}
-		case nil:
-			if defaultValue != nil {
-				output[key] = v
-			}
 		case map[string]interface{}:
 			defaultV, ok := defaultValue.(map[string]interface{})
 			if !ok {
@@ -252,7 +221,9 @@ func diffConfig(defaultConfig, actualConfig map[string]interface{}) (map[string]
 				output[key] = diff
 			}
 		default:
-			return nil, fmt.Errorf("unsupported type %T", v)
+			if !reflect.DeepEqual(defaultValue, value) {
+				output[key] = value
+			}
 		}
 	}
 

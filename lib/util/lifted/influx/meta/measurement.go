@@ -146,7 +146,7 @@ func InitSchemaCleanEn(schemaCleanEn bool) {
 
 type SchemaVal struct {
 	Typ     int8
-	EndTime int32 // hign 32 bit of sg.EndTime
+	EndTime int32 // high 32 bit of sg.EndTime
 }
 
 type CleanSchema map[string]SchemaVal // <name, {type, endtime}>
@@ -251,6 +251,13 @@ type MeasurementInfo struct {
 	tagKeysTotal    int
 	ID              uint64
 	SchemaLock      sync.RWMutex //ts-meta not use
+}
+
+type MeasurementTTLTnfo struct {
+	Name        string
+	OriginName  string
+	MarkDeleted bool
+	TTL         int64
 }
 
 func NewMeasurementInfo(nameWithVer string, name string, engineType config.EngineType, id uint64) *MeasurementInfo {
@@ -383,8 +390,8 @@ func (msti *MeasurementInfo) unmarshal(pb *proto2.MeasurementInfo) {
 
 	UnmarshalCleanSchema(msti, pb, config.IsLogKeeper())
 
+	msti.ShardIdexes = make(map[uint64][]int, len(pb.GetShardIdxes()))
 	if pb.GetShardIdxes() != nil {
-		msti.ShardIdexes = make(map[uint64][]int, len(pb.GetShardIdxes()))
 		for sgi, shardIdxes := range pb.GetShardIdxes() {
 			msti.ShardIdexes[sgi] = make([]int, len(shardIdxes.GetIdx()))
 			for i, v := range shardIdxes.GetIdx() {
@@ -512,7 +519,7 @@ func (msti *MeasurementInfo) FilterTagKeys(cond influxql.Expr, tr influxql.TimeR
 				"_tagKey": k,
 				"_name":   msti.OriginName(),
 			}
-			if (cond == nil || influxql.EvalBool(cond, valMap)) && tr.Min <= TimeUndoHigh32(t) {
+			if (cond == nil || influxql.EvalBool(cond, valMap)) && (t == 0 || (t != 0 && tr.Min <= TimeUndoHigh32(t))) {
 				ret[msti.Name][k] = struct{}{}
 			}
 		}
@@ -522,6 +529,10 @@ func (msti *MeasurementInfo) FilterTagKeys(cond influxql.Expr, tr influxql.TimeR
 
 func (msti *MeasurementInfo) TagKeysTotal() int {
 	return msti.tagKeysTotal
+}
+
+func (msti *MeasurementInfo) FieldKeysTotal() int {
+	return msti.Schema.Len() - msti.tagKeysTotal
 }
 
 type MeasurementsInfo struct {

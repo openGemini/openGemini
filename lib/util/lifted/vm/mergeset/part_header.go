@@ -81,10 +81,10 @@ func (ph *partHeader) CopyFrom(src *partHeader) {
 
 func (ph *partHeader) ParseFromPath(partPath string) error {
 	ph.Reset()
-
-	partPath = filepath.Clean(partPath)
+	fileops.Clean(partPath)
 
 	// Extract encoded part name.
+	partPath = strings.TrimSuffix(partPath, "/")
 	n := strings.LastIndexByte(partPath, filepath.Separator)
 	if n < 0 {
 		return fmt.Errorf("cannot find encoded part name in the path %q", partPath)
@@ -123,7 +123,7 @@ func (ph *partHeader) ParseFromPath(partPath string) error {
 	}
 
 	// Read other ph fields from metadata.
-	metadataPath := filepath.Join(partPath, "metadata.json")
+	metadataPath := fileops.Join(partPath, "metadata.json")
 	metadata, err := fileops.ReadFile(metadataPath)
 	if err != nil {
 		return fmt.Errorf("cannot read %q: %w", metadataPath, err)

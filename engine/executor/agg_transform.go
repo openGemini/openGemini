@@ -51,6 +51,7 @@ type StreamAggregateTransform struct {
 	Inputs               ChunkPorts
 	Outputs              ChunkPorts
 	opt                  *query.ProcessorOptions
+	schema               Schema
 	aggLogger            *logger.Logger
 	postProcess          func(Chunk)
 	span                 *tracing.Span
@@ -62,8 +63,12 @@ type StreamAggregateTransform struct {
 	hadData bool
 }
 
+type Schema interface {
+	Mapping() map[influxql.Expr]influxql.VarRef
+}
+
 func NewStreamAggregateTransform(
-	inRowDataType, outRowDataType []hybridqp.RowDataType, exprOpt []hybridqp.ExprOptions, opt *query.ProcessorOptions, isSubQuery bool,
+	inRowDataType, outRowDataType []hybridqp.RowDataType, exprOpt []hybridqp.ExprOptions, opt *query.ProcessorOptions, schema Schema, isSubQuery bool,
 ) (*StreamAggregateTransform, error) {
 	if len(inRowDataType) != 1 || len(outRowDataType) != 1 {
 		panic("NewStreamAggregateTransform raise error: the Inputs and Outputs should be 1")
@@ -74,6 +79,7 @@ func NewStreamAggregateTransform(
 	trans := &StreamAggregateTransform{
 		closedSignal:   &closedSignal,
 		opt:            opt,
+		schema:         schema,
 		bufChunkNum:    AggBufChunkNum,
 		Inputs:         make(ChunkPorts, 0, len(inRowDataType)),
 		Outputs:        make(ChunkPorts, 0, len(outRowDataType)),
@@ -151,7 +157,7 @@ func (c *StreamAggregateTransformCreator) Create(plan LogicalPlan, opt *query.Pr
 			isSubQuery = false
 		}
 	}
-	p, err := NewStreamAggregateTransform([]hybridqp.RowDataType{plan.Children()[0].RowDataType()}, []hybridqp.RowDataType{plan.RowDataType()}, plan.RowExprOptions(), opt, isSubQuery)
+	p, err := NewStreamAggregateTransform([]hybridqp.RowDataType{plan.Children()[0].RowDataType()}, []hybridqp.RowDataType{plan.RowDataType()}, plan.RowExprOptions(), opt, plan.Schema(), isSubQuery)
 	if err != nil {
 		return nil, err
 	}
@@ -319,6 +325,7 @@ func (trans *StreamAggregateTransform) preProcess(c Chunk) {
 	trans.iteratorParam.sameInterval = trans.sameInterval
 	trans.iteratorParam.sameTag = trans.isSameTag(c)
 	trans.iteratorParam.lastChunk = trans.nextChunk == nil
+	trans.iteratorParam.colMapping = trans.schema.Mapping()
 }
 
 func (trans *StreamAggregateTransform) postProcessSingleTimeUnique(_ Chunk) {

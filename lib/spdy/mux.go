@@ -58,6 +58,8 @@ const (
 	CrashRequest
 	RaftMsgRequest
 	PingRequest
+	WriteBlobsRequest
+	SendClearEvent
 	Unknown
 )
 

@@ -39,30 +39,3 @@ type TableTagKeys []TagKeys
 func (a TableTagKeys) Len() int           { return len(a) }
 func (a TableTagKeys) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 func (a TableTagKeys) Less(i, j int) bool { return a[i].Name < a[j].Name }
-
-type TagSet struct {
-	Key, Value string
-}
-
-type TagSets []TagSet
-
-func (a TagSets) Len() int      { return len(a) }
-func (a TagSets) Swap(i, j int) { a[i], a[j] = a[j], a[i] }
-func (a TagSets) Less(i, j int) bool {
-	ki, kj := a[i].Key, a[j].Key
-	if ki == kj {
-		return a[i].Value < a[j].Value
-	}
-	return ki < kj
-}
-
-type TableTagSets struct {
-	Name   string
-	Values TagSets
-}
-
-type TablesTagSets []TableTagSets
-
-func (a TablesTagSets) Len() int           { return len(a) }
-func (a TablesTagSets) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
-func (a TablesTagSets) Less(i, j int) bool { return a[i].Name < a[j].Name }

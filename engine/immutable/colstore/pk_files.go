@@ -17,7 +17,6 @@ package colstore
 import (
 	"fmt"
 	"hash/crc32"
-	"sync"
 
 	"github.com/openGemini/openGemini/lib/fragment"
 	"github.com/openGemini/openGemini/lib/numberenc"
@@ -36,6 +35,14 @@ type PKInfo struct {
 	mark       fragment.IndexFragment
 }
 
+func NewPKInfo(rec *record.Record, mark fragment.IndexFragment, tcLocation int8) *PKInfo {
+	return &PKInfo{
+		tcLocation: tcLocation,
+		rec:        rec,
+		mark:       mark,
+	}
+}
+
 func (p *PKInfo) GetTCLocation() int8 {
 	return p.tcLocation
 }
@@ -46,49 +53,6 @@ func (p *PKInfo) GetRec() *record.Record {
 
 func (p *PKInfo) GetMark() fragment.IndexFragment {
 	return p.mark
-}
-
-type PKInfos map[string]*PKInfo
-
-type PKFiles struct {
-	mutex   sync.RWMutex
-	pkInfos PKInfos
-}
-
-func NewPKFiles() *PKFiles {
-	return &PKFiles{
-		pkInfos: make(map[string]*PKInfo),
-	}
-}
-
-func (f *PKFiles) SetPKInfo(file string, rec *record.Record, mark fragment.IndexFragment, tcLocation int8) {
-	f.mutex.Lock()
-	f.pkInfos[file] = &PKInfo{
-		tcLocation: tcLocation,
-		rec:        rec,
-		mark:       mark,
-	}
-	f.mutex.Unlock()
-}
-
-func (f *PKFiles) GetPKInfo(file string) (*PKInfo, bool) {
-	f.mutex.RLock()
-	ret, ok := f.pkInfos[file]
-	f.mutex.RUnlock()
-	return ret, ok
-}
-
-func (f *PKFiles) DelPKInfo(file string) {
-	f.mutex.Lock()
-	delete(f.pkInfos, file)
-	f.mutex.Unlock()
-}
-
-func (f *PKFiles) GetPKInfos() PKInfos {
-	f.mutex.RLock()
-	ret := f.pkInfos
-	f.mutex.RUnlock()
-	return ret
 }
 
 type PkMetaBlock struct {

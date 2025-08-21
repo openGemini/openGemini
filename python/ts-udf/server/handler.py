@@ -30,10 +30,14 @@ from .data_interface import DataInterface, MetadataProcessor
 from .detect import DetectorUDF
 from .fit_detect import FitDetectorUDF
 from .fit import FitUDF
+from .udf_detect import UdfDetect
+
+
+UdfDetect.register_detect_udfs()
 
 
 class CastorHandler(Handler, DataInterface):
-    def __init__(self, data_dir, model_config_dir, version, meta_data):
+    def __init__(self, data_dir, model_config_dir, version, meta_data, metric_queue):
         """Constructor"""
 
         DataInterface.__init__(self)
@@ -54,6 +58,8 @@ class CastorHandler(Handler, DataInterface):
         self._meta = meta_data
 
         self.all_params = {}
+
+        self.metric_queue = metric_queue
 
     def info(self):
         pass
@@ -147,14 +153,17 @@ class CastorHandler(Handler, DataInterface):
                 ).encode()
                 return [self._create_arrow_with_metadata(metadata)]
 
-            # transform from pyarrow.RecordBatch to pd.DataFrame
-            tags = metadata_processor.get_other_metadata()
-            task_id = metadata.get(con.TASK_ID)
-            df = self.arrow_to_pandas(data_req, tags, task_id, self._meta)
+            if metadata_processor.is_custom_udf():
+                df = data_req.to_pandas()
+            else:
+                # transform from pyarrow.RecordBatch to pd.DataFrame
+                tags = metadata_processor.get_other_metadata()
+                task_id = metadata.get(con.TASK_ID)
+                df = self.arrow_to_pandas(data_req, tags, task_id, self._meta)
 
-            # clear relative cache when the query mode if discontinuously
-            if metadata_processor.get_value(con.QUERY_MODE) == str(0):
-                self.clear_cache_by_keys(list(df.columns))
+                # clear relative cache when the query mode if discontinuously
+                if metadata_processor.get_value(con.QUERY_MODE) == con.DISC:
+                    self.clear_cache_by_keys(list(df.columns))
             # process the data
             req = {con.DATA: df, con.INFO: metadata_processor}
             process_type = metadata_processor.get_value(con.PROCESS_TYPE)
@@ -203,6 +212,10 @@ class CastorHandler(Handler, DataInterface):
             self.all_params,
         )
         return self.process_handler.data(data_req, cache, hook)
+
+    def _udf_detect(self, data_req: dict, cache, hook) -> List[pa.RecordBatch]:
+        self.process_handler = UdfDetect(self.metric_queue)
+        return self.process_handler.detect(data_req)
 
     @staticmethod
     def clear_cache_by_keys(keys):

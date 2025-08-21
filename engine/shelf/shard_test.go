@@ -48,7 +48,7 @@ func TestAsyncCreateIndex(t *testing.T) {
 	shard.Stop()
 }
 
-func TestAsyncCovertTSSP(t *testing.T) {
+func TestCovertTSSP(t *testing.T) {
 	defer initConfig(2)()
 	dir := t.TempDir()
 	shelf.Open()
@@ -62,19 +62,11 @@ func TestAsyncCovertTSSP(t *testing.T) {
 	err := writeRecordToShard(shard, rec, 10, nil)
 	require.NoError(t, err)
 
-	shard.AsyncConvertToTSSP()
+	shard.ConvertToTSSP()
 	shard.ForceFlush()
 
-	for range 10 {
-		shard.AsyncConvertToTSSP()
-	}
-
-	for range 100 {
-		if len(store.files) > 0 {
-			break
-		}
-		time.Sleep(time.Second / 100)
-	}
+	shard.ConvertToTSSP()
+	shard.ConvertToTSSP()
 	require.True(t, len(store.files) > 0)
 }
 
@@ -82,7 +74,7 @@ func TestFreeShard(t *testing.T) {
 	defer initConfig(2)()
 	dir := t.TempDir()
 	config.GetStoreConfig().Wal.WalSyncInterval = toml.Duration(config.DefaultWALSyncInterval)
-	config.GetStoreConfig().ShelfMode.MaxWalDuration = toml.Duration(time.Second / 2)
+	config.GetShelfMode().MaxWalDuration = toml.Duration(time.Second / 2)
 
 	shard, _, store := newShard(10, dir)
 	defer shard.Stop()
@@ -113,8 +105,9 @@ func TestWriteRecordFailed(t *testing.T) {
 	shard, _, _ := newShard(10, dir)
 	defer shard.Stop()
 
+	row := buildRow(1, "foo", 1)
 	rec := buildRecord(10, 1)
-	err := writeRecordToShard(shard, rec, 10, nil)
+	err := writeRecordToShard(shard, rec, 10, row.IndexKey)
 	require.NoError(t, err)
 
 	tr := &util.TimeRange{Min: 0, Max: math.MaxInt64}
@@ -133,13 +126,26 @@ func TestWriteRecordFailed(t *testing.T) {
 
 	p1.Reset()
 
-	config.GetStoreConfig().ShelfMode.MaxWalFileSize = 1
+	config.GetShelfMode().MaxWalFileSize = 1
 	defer func() {
-		config.GetStoreConfig().ShelfMode.MaxWalFileSize = config.MB * 128
+		config.GetShelfMode().MaxWalFileSize = config.MB * 128
 	}()
-	err = writeRecordToShard(shard, rec, 10, nil)
+	err = writeRecordToShard(shard, rec, 10, row.IndexKey)
 	require.NoError(t, err)
 
 	wal = shard.GetWalReaders(nil, "foo", tr)
 	require.Equal(t, 2, len(wal))
+}
+
+func TestIndexCreatorManager(t *testing.T) {
+	idx1 := &EmptyIndex{}
+	idx2 := &EmptyIndex{}
+	idx3 := idx2
+	icm := shelf.NewIndexCreatorManager()
+	c1 := icm.Alloc(idx1)
+	c2 := icm.Alloc(idx2)
+	c3 := icm.Alloc(idx3)
+
+	require.Equal(t, c2, c3)
+	require.NotEqual(t, c1, c2)
 }

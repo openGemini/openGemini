@@ -26,6 +26,7 @@ import (
 	retention2 "github.com/influxdata/influxdb/services/retention"
 	"github.com/openGemini/openGemini/app"
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
+	"github.com/openGemini/openGemini/engine"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable"
@@ -36,6 +37,7 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
+	"github.com/openGemini/openGemini/lib/msgservice"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/raftlog"
 	"github.com/openGemini/openGemini/lib/record"
@@ -52,6 +54,9 @@ import (
 	"github.com/openGemini/openGemini/services/downsample"
 	"github.com/openGemini/openGemini/services/hierarchical"
 	"github.com/openGemini/openGemini/services/retention"
+	"github.com/openGemini/openGemini/services/retention/mst"
+	"github.com/openGemini/openGemini/services/series"
+	"github.com/openGemini/openGemini/services/shardMerge"
 	"go.etcd.io/etcd/raft/v3/raftpb"
 	"go.uber.org/zap"
 )
@@ -66,15 +71,15 @@ type StoreEngine interface {
 	RowCount(db string, ptId uint32, shardIDS []uint64, schema hybridqp.Catalog) (int64, error)
 	RefEngineDbPt(string, uint32) error
 	UnrefEngineDbPt(string, uint32)
-	ExecuteDelete(*netstorage.DeleteRequest) error
+	ExecuteDelete(*msgservice.DeleteRequest) error
 	GetShardSplitPoints(string, uint32, uint64, []int64) ([]string, error)
 	SeriesCardinality(string, []uint32, []string, influxql.Expr, influxql.TimeRange) ([]meta.MeasurementCardinalityInfo, error)
 	SeriesExactCardinality(string, []uint32, []string, influxql.Expr, influxql.TimeRange) (map[string]uint64, error)
 	TagKeys(string, []uint32, []string, influxql.Expr, influxql.TimeRange) ([]string, error)
 	SeriesKeys(string, []uint32, []string, influxql.Expr, influxql.TimeRange) ([]string, error)
-	TagValues(string, []uint32, map[string][][]byte, influxql.Expr, influxql.TimeRange) (netstorage.TablesTagSets, error)
+	TagValues(string, []uint32, map[string][][]byte, influxql.Expr, influxql.TimeRange) (influxql.TablesTagSets, error)
 	TagValuesCardinality(string, []uint32, map[string][][]byte, influxql.Expr, influxql.TimeRange) (map[string]uint64, error)
-	SendSysCtrlOnNode(*netstorage.SysCtrlRequest) (map[string]string, error)
+	SendSysCtrlOnNode(*msgservice.SysCtrlRequest) (map[string]string, error)
 	GetShardDownSampleLevel(db string, ptId uint32, shardID uint64) int
 	PreOffload(uint64, *meta.DbPtInfo) error
 	RollbackPreOffload(uint64, *meta.DbPtInfo) error
@@ -84,6 +89,7 @@ type StoreEngine interface {
 	GetConnId() uint64
 	CheckPtsRemovedDone() error
 	TransferLeadership(string, uint64, uint32, uint32) error
+	ClearRepCold(req *msgservice.SendClearEventsRequest) error
 }
 
 type SlaveStorage interface {
@@ -94,6 +100,7 @@ type MetaClient interface {
 	GetShardRangeInfo(db string, rp string, shardID uint64) (*meta.ShardTimeRangeInfo, error)
 	RetryMeasurement(dbName string, rpName string, mstName string) (*meta.MeasurementInfo, error)
 	GetReplicaInfo(db string, pt uint32) *message.ReplicaInfo
+	ShardOwner(shardID uint64) (database, policy string, sgi *meta.ShardGroupInfo)
 }
 
 type Storage struct {
@@ -103,7 +110,7 @@ type Storage struct {
 	metaClient *metaclient.Client
 	node       *metaclient.Node
 
-	engine       netstorage.Engine
+	engine       engine.Engine
 	slaveStorage SlaveStorage
 
 	stop chan struct{}
@@ -121,6 +128,10 @@ func (s *Storage) SetMetaClient(c *metaclient.Client) {
 	s.metaClient = c
 }
 
+func (s *Storage) GetMetaClient() metaclient.MetaClient {
+	return s.metaClient
+}
+
 func (s *Storage) GetPath() string {
 	return s.path
 }
@@ -136,6 +147,36 @@ func (s *Storage) appendRetentionPolicyService(c retention2.Config) {
 	s.Services = append(s.Services, srv)
 }
 
+func (s *Storage) appendRetentionMstPolicyService(c retention2.Config) {
+	if !c.Enabled {
+		return
+	}
+
+	if c.DeleteMstIndexOnlyUstDiskThreshold <= 0 || c.DeleteMstShardHandleInterval <= 0 {
+		return
+	}
+
+	delMstInShardSrv := mst.NewDeleteMstInShardService(time.Duration(c.DeleteMstShardHandleInterval))
+	delMstInShardSrv.Engine = s.engine
+	delMstInShardSrv.MetaClient = s.metaClient
+
+	delMstInIndexSrv := mst.NewDeleteMstInIndexService(time.Duration(c.DeleteMstIndexHandleInterval), c.DeleteMstIndexOnlyUstDiskThreshold)
+	delMstInIndexSrv.Engine = s.engine
+	delMstInIndexSrv.MetaClient = s.metaClient
+	s.Services = append(s.Services, delMstInShardSrv, delMstInIndexSrv)
+}
+
+func (s *Storage) appendDropSeriesService(c retention2.Config) {
+	if !c.Enabled {
+		return
+	}
+
+	dropSeriesSrv := series.NewDropSeriesService()
+	dropSeriesSrv.Engine = s.engine
+	dropSeriesSrv.MetaClient = s.metaClient
+	s.Services = append(s.Services, dropSeriesSrv)
+}
+
 func (s *Storage) appendHierarchicalService(c config.HierarchicalConfig) {
 	if !c.Enabled {
 		return
@@ -145,6 +186,17 @@ func (s *Storage) appendHierarchicalService(c config.HierarchicalConfig) {
 	srv.Engine = s.engine
 	srv.MetaClient = s.metaClient
 	s.Services = append(s.Services, srv)
+}
+
+func (s *Storage) appendIndexHierarchicalService(c config.HierarchicalConfig) {
+	if !c.IndexEnabled {
+		return
+	}
+
+	indexToColdSrv := hierarchical.NewIndexToColdService(c)
+	indexToColdSrv.Engine = s.engine
+	indexToColdSrv.MetaClient = s.metaClient
+	s.Services = append(s.Services, indexToColdSrv)
 }
 
 func (s *Storage) appendDownSamplePolicyService(c retention2.Config) {
@@ -172,20 +224,31 @@ func (s *Storage) appendProactiveMgrService(c config.Store) {
 	s.Services = append(s.Services, srv)
 }
 
+func (s *Storage) appendShardMergeService(c config.ShardMergeConfig) {
+	if !c.Enabled {
+		return
+	}
+
+	srv := shardMerge.NewService(c)
+	srv.Engine = s.engine
+	srv.MetaClient = s.metaClient
+	s.Services = append(s.Services, srv)
+}
+
 func OpenStorage(path string, node *metaclient.Node, cli *metaclient.Client, conf *config.TSStore) (*Storage, error) {
 	path, err := filepath.Abs(path)
 	if err != nil {
 		return nil, fmt.Errorf("cannot determine absolute path for %q: %w", path, err)
 	}
 
-	newEngineFn := netstorage.GetNewEngineFunction(conf.Data.Engine)
+	newEngineFn := engine.GetNewEngineFunction(conf.Data.Engine)
 	if newEngineFn == nil {
 		return nil, fmt.Errorf("unknown tsm engine:%v", conf.Data.Engine)
 	}
 
 	loadCtx := metaclient.LoadCtx{}
 	loadCtx.LoadCh = make(chan *metaclient.DBPTCtx)
-	opt := netstorage.NewEngineOptions()
+	opt := engine.NewEngineOptions()
 
 	// for memTable
 	opt.WriteColdDuration = time.Duration(conf.Data.MemTable.WriteColdDuration)
@@ -238,6 +301,8 @@ func OpenStorage(path string, node *metaclient.Node, cli *metaclient.Client, con
 	opt.MaxRowsPerSegment = conf.Data.MaxRowsPerSegment
 	opt.ShardMoveLayoutSwitchEnabled = conf.Data.ShardMoveLayoutSwitchEnabled
 
+	executor.InitNagtPool(conf.Data.NagtPoolCap)
+
 	// init clv config
 	clv.InitConfig(conf.ClvConfig)
 	// init chunkReader resource allocator.
@@ -288,10 +353,14 @@ func OpenStorage(path string, node *metaclient.Node, cli *metaclient.Client, con
 	// Append services.
 	config.SetSFSConfig(conf.Data.DataDir)
 	s.appendRetentionPolicyService(conf.Retention)
+	s.appendRetentionMstPolicyService(conf.Retention)
+	s.appendDropSeriesService(conf.Retention)
 	s.appendDownSamplePolicyService(conf.DownSample)
 	s.appendHierarchicalService(conf.HierarchicalStore)
+	s.appendIndexHierarchicalService(conf.HierarchicalStore)
 	s.appendAnalysisService(conf.Analysis)
 	s.appendProactiveMgrService(conf.Data)
+	s.appendShardMergeService(conf.ShardMerge)
 
 	sysconfig.SetInterruptQuery(conf.Data.InterruptQuery)
 	sysconfig.SetUpperMemPct(int64(conf.Data.InterruptSqlMemPct))
@@ -390,7 +459,7 @@ func (s *Storage) WriteRows(db, rp string, ptId uint32, shardID uint64, rows []i
 	return writeHandler[config.GetHaPolicy()](s, db, rp, ptId, shardID, rows, binaryRows)
 }
 
-func (s *Storage) WriteBlobs(db, rp string, pt uint32, shard uint64, blobs *shelf.BlobGroup) error {
+func (s *Storage) WriteBlobs(db, rp string, pt uint32, shard uint64, blobs *shelf.BlobGroup, _ uint64, _ time.Duration) error {
 	defer func(start time.Time) {
 		d := time.Since(start).Nanoseconds()
 		atomic.AddInt64(&statistics.PerfStat.WriteStorageDurationNs, d)
@@ -510,13 +579,13 @@ func (s *Storage) MustClose() {
 	close(s.stop)
 }
 
-func (s *Storage) ExecuteDelete(req *netstorage.DeleteRequest) error {
+func (s *Storage) ExecuteDelete(req *msgservice.DeleteRequest) error {
 	switch req.Type {
-	case netstorage.DatabaseDelete:
+	case msgservice.DatabaseDelete:
 		return s.engine.DeleteDatabase(req.Database, req.PtId)
-	case netstorage.RetentionPolicyDelete:
+	case msgservice.RetentionPolicyDelete:
 		return s.engine.DropRetentionPolicy(req.Database, req.Rp, req.PtId)
-	case netstorage.MeasurementDelete:
+	case msgservice.MeasurementDelete:
 		// imply delete measurement
 		return s.engine.DropMeasurement(req.Database, req.Rp, req.Measurement, req.ShardIds)
 	}
@@ -558,7 +627,7 @@ func (s *Storage) RowCount(db string, ptId uint32, shardIDS []uint64, schema hyb
 	return rowCount, err
 }
 
-func (s *Storage) TagValues(db string, ptIDs []uint32, tagKeys map[string][][]byte, condition influxql.Expr, tr influxql.TimeRange) (netstorage.TablesTagSets, error) {
+func (s *Storage) TagValues(db string, ptIDs []uint32, tagKeys map[string][][]byte, condition influxql.Expr, tr influxql.TimeRange) (influxql.TablesTagSets, error) {
 
 	return s.engine.TagValues(db, ptIDs, tagKeys, condition, tr)
 }
@@ -584,7 +653,7 @@ func (s *Storage) SeriesCardinality(db string, ptIDs []uint32, measurements []st
 	return s.engine.SeriesCardinality(db, ptIDs, ms, condition, tr)
 }
 
-func (s *Storage) SendSysCtrlOnNode(req *netstorage.SysCtrlRequest) (map[string]string, error) {
+func (s *Storage) SendSysCtrlOnNode(req *msgservice.SysCtrlRequest) (map[string]string, error) {
 	return s.engine.SysCtrl(req)
 }
 
@@ -594,7 +663,7 @@ func (s *Storage) SeriesExactCardinality(db string, ptIDs []uint32, measurements
 	return s.engine.SeriesExactCardinality(db, ptIDs, ms, condition, tr)
 }
 
-func (s *Storage) GetEngine() netstorage.Engine {
+func (s *Storage) GetEngine() engine.Engine {
 	return s.engine
 }
 
@@ -634,7 +703,7 @@ func (s *Storage) GetNodeId() uint64 {
 	return s.node.ID
 }
 
-func (s *Storage) SetEngine(engine netstorage.Engine) {
+func (s *Storage) SetEngine(engine engine.Engine) {
 	s.engine = engine
 }
 
@@ -668,4 +737,8 @@ func (s *Storage) SendRaftMessage(database string, opId uint64, msg raftpb.Messa
 
 func (s *Storage) TransferLeadership(database string, nodeId uint64, oldMasterPtId, newMasterPtId uint32) error {
 	return s.engine.TransferLeadership(database, nodeId, oldMasterPtId, newMasterPtId)
+}
+
+func (s *Storage) ClearRepCold(req *msgservice.SendClearEventsRequest) error {
+	return s.engine.ClearRepCold(req)
 }

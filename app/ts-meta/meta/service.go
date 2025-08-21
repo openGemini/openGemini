@@ -15,6 +15,7 @@
 package meta
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
 	"net"
@@ -23,8 +24,8 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/lib/config"
-	"github.com/openGemini/openGemini/lib/crypto"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/listener"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/statisticsPusher"
@@ -69,6 +70,8 @@ type Service struct {
 	handler          *httpHandler
 
 	gossipConfig *config.Gossip
+
+	selector *ReplicaModeColdSelector
 }
 
 // NewService returns a new instance of Service.
@@ -105,7 +108,8 @@ func (s *Service) startMetaServer() error {
 		return fmt.Errorf("metaRPCServer start failed: addr=%s, err=%s", s.config.RPCBindAddress, err)
 	}
 
-	s.clusterManager = NewClusterManager(s.store, WithHeartbeatConfig(s.config.Heartbeat))
+	s.clusterManager = NewClusterManager(s.store)
+	s.clusterManager.SetPingFailedNode(s.config.PingFailedNode)
 	s.balanceManager = NewBalanceManager(s.config.BalanceAlgo)
 	s.masterPtBalanceManager = NewMasterPtBalanceManager()
 	s.msm = NewMigrateStateMachine()
@@ -186,7 +190,11 @@ func (s *Service) Open() error {
 	if err != nil {
 		return err
 	}
-
+	if s.config.ReplicaColdSelectEnable {
+		selector := NewReplicaModeColdSelector(s.store, context.Background())
+		s.selector = selector
+		selector.handle(s.config.ReplicaColdSelectInterval)
+	}
 	return nil
 }
 
@@ -225,6 +233,9 @@ func (s *Service) Close() error {
 
 	if s.httpServer != nil && err == nil {
 		err = s.httpServer.close()
+	}
+	if s.selector != nil {
+		s.selector.Close()
 	}
 
 	return err
@@ -287,16 +298,8 @@ func (s *httpServer) open(handler *httpHandler) error {
 }
 
 func (s *httpServer) httpsListener() (net.Listener, error) {
-	cert, err := tls.X509KeyPair([]byte(crypto.DecryptFromFile(s.conf.HTTPSCertificate)),
-		[]byte(crypto.DecryptFromFile(s.conf.HTTPSPrivateKey)))
-	if err != nil {
-		return nil, err
-	}
-
-	cfg := s.tls.Clone()
-	cfg.Certificates = []tls.Certificate{cert}
-
-	ln, err := tls.Listen("tcp", s.conf.HTTPBindAddress, cfg)
+	ln, err := listener.OpenHttpsListen(s.conf.HTTPSPrivateKey, s.conf.HTTPSCertificate,
+		s.conf.HTTPSClientCertificate, s.conf.HTTPBindAddress, s.tls.Clone())
 	if err != nil {
 		return nil, err
 	}

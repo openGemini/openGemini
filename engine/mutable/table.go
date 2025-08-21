@@ -30,7 +30,6 @@ import (
 	"github.com/openGemini/openGemini/engine/index/ski"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/logstore"
-	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/stringinterner"
@@ -40,10 +39,19 @@ import (
 	"github.com/savsgio/dictpool"
 )
 
+type SeriesRowCountFunc func(msName string, sid uint64, rowCounts int64)
+
 type WriteRowsCtx struct {
-	AddRowCountsBySid func(msName string, sid uint64, rowCounts int64)
-	MstsInfo          *sync.Map
-	MsRowCount        *sync.Map
+	AddRowCountsBySid SeriesRowCountFunc
+	MsRowCount        *util.SyncMap[string, *int64]
+}
+
+func (ctx *WriteRowsCtx) SetSeriesRowCountFunc(fn SeriesRowCountFunc) {
+	ctx.AddRowCountsBySid = fn
+}
+
+func (ctx *WriteRowsCtx) SetMsRowCount(v *util.SyncMap[string, *int64]) {
+	ctx.MsRowCount = v
 }
 
 func GetMsInfo(name string, mstsInfo *sync.Map) (*meta.MeasurementInfo, bool) {
@@ -87,6 +95,10 @@ type WriteChunkForColumnStore struct {
 	WriteRec   WriteRec
 	sortKeys   []record.PrimaryKey
 	sameSchema bool
+}
+
+func NewWriteChunkForColumnStore() *WriteChunkForColumnStore {
+	return &WriteChunkForColumnStore{}
 }
 
 func (chunk *WriteChunkForColumnStore) SortRecord(tcDuration time.Duration) {
@@ -206,7 +218,7 @@ func (msi *MsInfo) CreateWriteChunkForColumnStore(sortKeys []string) {
 		msi.mu.Unlock()
 		return
 	}
-	msi.writeChunk = &WriteChunkForColumnStore{}
+	msi.writeChunk = NewWriteChunkForColumnStore()
 	msi.writeChunk.WriteRec.initForReuse(msi.Schema)
 	msi.writeChunk.sortKeys = GetSortKeys(msi.Schema, sortKeys)
 	msi.mu.Unlock()
@@ -253,10 +265,8 @@ func GetSortKeys(schema []record.Field, primaryKeys []string) []record.PrimaryKe
 type MTable interface {
 	initMsInfo(msInfo *MsInfo, row *influx.Row, rec *record.Record, name string) *MsInfo
 	FlushChunks(table *MemTable, dataPath, msName, db, rp string, lock *string, tbStore immutable.TablesStore, msRowCount int64, fileInfos chan []immutable.FileInfoExtend)
-	SetClient(client metaclient.MetaClient)
-	GetClient() metaclient.MetaClient
 	WriteRows(table *MemTable, rowsD *dictpool.Dict, wc WriteRowsCtx) error
-	WriteCols(table *MemTable, rec *record.Record, mstsInfo *sync.Map, mst string) error
+	WriteCols(table *MemTable, rec *record.Record, mst string) error
 	SetFlushManagerInfo(manager map[string]FlushManager, accumulateMetaIndex *sync.Map)
 	Reset(table *MemTable)
 }
@@ -368,8 +378,7 @@ func (t *MemTable) initMTable(engineType config.EngineType) {
 	case config.TSSTORE:
 		t.MTable = NewTsMemTableImpl()
 	case config.COLUMNSTORE:
-		t.MTable = &csMemTableImpl{
-			primaryKey:          make(map[string]record.Schemas),
+		t.MTable = &CSMemTableImpl{
 			flushManager:        make(map[string]FlushManager),
 			accumulateMetaIndex: &sync.Map{},
 		}
@@ -398,6 +407,13 @@ func (t *MemTable) SetReleaseHook(hook MemTableReleaseHook) {
 
 func (t *MemTable) SetIdx(idx *ski.ShardKeyIndex) {
 	t.idx = idx
+}
+
+func (t *MemTable) SetDbRp(db, rp string) {
+	tb, ok := t.MTable.(*CSMemTableImpl)
+	if ok {
+		tb.SetDbRp(db, rp)
+	}
 }
 
 func (t *MemTable) Ref() {
@@ -690,9 +706,9 @@ func (t *MemTable) values(msName string, id uint64, tr util.TimeRange, schema re
 	return rec
 }
 
-func UpdateMstRowCount(msRowCount *sync.Map, mstName string, rowCount int64) {
+func UpdateMstRowCount(msRowCount *util.SyncMap[string, *int64], mstName string, rowCount int64) {
 	if count, ok := msRowCount.Load(mstName); ok {
-		atomic.AddInt64(count.(*int64), rowCount)
+		atomic.AddInt64(count, rowCount)
 	} else {
 		msRowCount.Store(mstName, &rowCount)
 	}

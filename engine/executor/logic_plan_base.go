@@ -82,6 +82,26 @@ func (p *LogicalPlanBase) InitRef(input hybridqp.QueryNode) {
 	}
 }
 
+func (p *LogicalPlanBase) initBothRef(left, right hybridqp.QueryNode) {
+	numCols := left.RowDataType().NumColumn() + right.RowDataType().NumColumn()
+	p.rt = nil
+	p.ops = make([]hybridqp.ExprOptions, 0, numCols)
+	refs := make([]influxql.VarRef, 0, numCols)
+	rRefs := right.RowDataType().MakeRefs()
+	for _, ref := range rRefs {
+		clone := ref
+		p.ops = append(p.ops, hybridqp.ExprOptions{Expr: &clone, Ref: ref})
+		refs = append(refs, ref)
+	}
+	lRefs := left.RowDataType().MakeRefs()
+	for _, ref := range lRefs {
+		clone := ref
+		p.ops = append(p.ops, hybridqp.ExprOptions{Expr: &clone, Ref: ref})
+		refs = append(refs, ref)
+	}
+	p.rt = hybridqp.NewRowDataTypeImpl(refs...)
+}
+
 func (p *LogicalPlanBase) Trait() hybridqp.Trait {
 	return p.trait
 }

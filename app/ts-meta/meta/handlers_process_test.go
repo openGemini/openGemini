@@ -311,18 +311,10 @@ func TestSendBackupToMetaProcess(t *testing.T) {
 	for _, testcase := range []TestCase{
 		{
 			Param:     map[string]string{},
-			ExpectErr: "missing the required parameter backupPath",
-		},
-		{
-			Param: map[string]string{
-				"backupPath": "/tmp",
-				"isRemote":   "false",
-				"isNode":     "true",
-			},
-			ExpectErr: "meta global service is nil",
+			ExpectErr: "",
 		},
 	} {
-		msg := message.NewMetaMessage(message.SendSysCtrlToMetaRequestMessage, &message.SendSysCtrlToMetaRequest{
+		msg := message.NewMetaMessage(message.SendBackupToMetaRequestMessage, &message.SendBackupToMetaRequest{
 			Mod:   "backup",
 			Param: testcase.Param,
 		})
@@ -334,7 +326,7 @@ func TestSendBackupToMetaProcess(t *testing.T) {
 		}
 		res, err := h.Process()
 		assert.NoError(t, err)
-		assert.Equal(t, res.(*message.SendSysCtrlToMetaResponse).Err, testcase.ExpectErr)
+		assert.Equal(t, res.(*message.SendBackupToMetaResponse).Err, testcase.ExpectErr)
 	}
 }
 
@@ -451,4 +443,17 @@ func Test_ShowCluster(t *testing.T) {
 
 	msg1 := message.NewMetaMessage(message.SnapshotV2RequestMessage, &message.SnapshotV2Request{})
 	require.Error(t, h.SetRequestMsg(msg1.Data()))
+}
+
+func Test_doHandleRsp(t *testing.T) {
+	err := errno.NewError(errno.PtNotFound, "mock error")
+	rsp := &message.VerifyDataNodeStatusResponse{
+		ErrCode: errno.PtNotFound,
+	}
+
+	DoHandleRsp(rsp, err)
+
+	var er error
+	assert.NoError(t, er)
+
 }

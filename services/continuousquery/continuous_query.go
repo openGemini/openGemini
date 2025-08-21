@@ -64,17 +64,31 @@ func NewContinuousQuery(rp string, query string) *ContinuousQuery {
 		return nil
 	}
 
+	var resampleFor time.Duration
+	var resampleEvery time.Duration
 	// get the group by interval
 	interval, err := q.Source.GroupByInterval()
 	if err != nil {
 		logger.GetLogger().Warn("continuous query statement get group by interval error", zap.Error(err))
 		return nil
 	}
-	resampleFor := interval
-	// check interval and ResampleFor/ResampleEvery
-	if q.ResampleFor != 0 && q.ResampleEvery != 0 && q.ResampleEvery > interval {
-		interval = q.ResampleEvery
+	if interval == 0 {
+		if q.ResampleFor == 0 || q.ResampleEvery == 0 {
+			logger.GetLogger().Error("must have RESAMPLE EVERY <interval> or RESAMPLE FOR <interval>")
+			return nil
+		}
+		resampleEvery = q.ResampleEvery
 		resampleFor = q.ResampleFor
+	} else {
+		resampleFor = interval
+		resampleEvery = interval
+
+		if q.ResampleEvery != 0 {
+			resampleEvery = q.ResampleEvery
+		}
+		if q.ResampleFor != 0 {
+			resampleFor = q.ResampleFor
+		}
 	}
 
 	// get the group by offset
@@ -89,7 +103,7 @@ func NewContinuousQuery(rp string, query string) *ContinuousQuery {
 		query:    query,
 		database: q.Database,
 
-		resampleEvery: interval,
+		resampleEvery: resampleEvery,
 		resampleFor:   resampleFor,
 		groupByOffset: groupByOffset,
 
@@ -97,10 +111,10 @@ func NewContinuousQuery(rp string, query string) *ContinuousQuery {
 	}
 
 	// setting reportInterval
-	if interval <= DefaultReportTime {
+	if resampleEvery <= DefaultReportTime {
 		cq.reportInterval = DefaultReportTime
 	} else {
-		cq.reportInterval = interval
+		cq.reportInterval = resampleEvery
 	}
 	if cq.getIntoRP() == "" {
 		cq.setIntoRP(rp)
@@ -126,7 +140,11 @@ func (cq *ContinuousQuery) shouldRunContinuousQuery(now time.Time) (bool, time.T
 		}
 		return false, cq.lastRun
 	}
-	// if the query has never run, run now.
+	logger.GetLogger().Info("first time run cq after startup", zap.String("name", cq.name), zap.Time("lastRun", cq.lastRun), zap.Time("now", now))
+	// if lastRun is non-zero, use it as next run time. if it is too long ago, it will lead to the current cq not promptly executed
+	if !cq.lastRun.IsZero() && cq.lastRun.Before(now) && cq.lastRun.Add(time.Hour).After(now) {
+		return true, cq.lastRun
+	}
 	return true, now
 }
 
@@ -138,6 +156,7 @@ func getContinuousQueries(dst []*ContinuousQuery, dbs map[string]*meta.DatabaseI
 			}
 			cq := NewContinuousQuery(dbi.DefaultRetentionPolicy, cqi.Query)
 			if cq != nil {
+				cq.lastRun = cqi.LastRunTime
 				dst = append(dst, cq)
 			}
 		}

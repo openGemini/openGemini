@@ -16,7 +16,7 @@ package meta
 
 import (
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
-	"github.com/openGemini/openGemini/engine/executor"
+	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/spdy/transport"
 )
 
@@ -41,7 +41,7 @@ type {{.}} struct {
 func (h *{{.}}) SetRequestMsg(data transport.Codec) error {
 	msg, ok := data.(*message.{{.}}Request)
 	if !ok {
-		return executor.NewInvalidTypeError("*message.{{.}}Request", data)
+		return errno.NewInvalidTypeError("*message.{{.}}Request", data)
 	}
 	h.req = msg
 	return nil

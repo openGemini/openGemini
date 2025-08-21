@@ -24,7 +24,7 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
-	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/msgservice"
 	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
@@ -72,6 +72,14 @@ func NewWriteContext(mc MetaClient, db, rp string) (*WriteContext, func()) {
 	}
 }
 
+func (w WriteContext) Err() *WriteError {
+	return w.err
+}
+
+func (w WriteContext) Meta() *MetaManager {
+	return w.meta
+}
+
 type RecordMapper struct {
 	alc *pool.Allocator[uint64, shelf.BlobGroup]
 }
@@ -95,7 +103,7 @@ func (m *RecordMapper) Reset() {
 func (m *RecordMapper) MapRecord(id uint64, mst string, indexKey []byte, fields *record.Record, rowIdx int) {
 	group, ok := m.alc.MapAlloc(id)
 	if !ok {
-		group.Init(shelf.NewRunner().Size())
+		group.Init(config.GetShelfMode().Concurrent)
 	}
 	group.GroupingRow(mst, indexKey, fields, rowIdx)
 }
@@ -134,7 +142,7 @@ func (e *WriteError) AddDropRowError(err error) {
 
 func (e *WriteError) Error() error {
 	if e.partialErr != nil {
-		return netstorage.PartialWriteError{Reason: e.partialErr, Dropped: e.dropped}
+		return msgservice.PartialWriteError{Reason: e.partialErr, Dropped: e.dropped}
 	}
 
 	return nil
@@ -143,6 +151,10 @@ func (e *WriteError) Error() error {
 func (e *WriteError) Clean() {
 	e.partialErr = nil
 	e.dropped = 0
+}
+
+func (e *WriteError) PartialErr() error {
+	return e.partialErr
 }
 
 type MetaManager struct {
@@ -154,6 +166,9 @@ type MetaManager struct {
 	shards      map[uint64]*meta.ShardInfo
 	shardGroups []*meta.ShardGroupInfo
 	sg          *meta.ShardGroupInfo
+	di          *meta.DatabaseInfo
+	mi          *meta.MeasurementInfo
+	si          *meta.ShardKeyInfo
 	aliveShards []int
 	schema      []*proto.FieldSchema
 }
@@ -178,12 +193,17 @@ func (m *MetaManager) Reset() {
 	m.schema = m.schema[:0]
 }
 
+func (m *MetaManager) Shards() map[uint64]*meta.ShardInfo {
+	return m.shards
+}
+
 func (m *MetaManager) CheckDBRP() error {
 	// check db and rp validation
 	dbInfo, err := m.mc.Database(m.db)
 	if err != nil {
 		return err
 	}
+	m.di = dbInfo
 
 	if m.rp == "" {
 		m.rp = dbInfo.DefaultRetentionPolicy
@@ -221,19 +241,14 @@ func (m *MetaManager) CreateShardGroupIfNeeded(times []int64) error {
 	return nil
 }
 
-func (m *MetaManager) GetShardGroup(ts int64) (*meta.ShardGroupInfo, []int) {
-	m.resetActiveShardGroup(ts)
-	return m.sg, m.aliveShards
-}
-
-func (m *MetaManager) resetActiveShardGroup(ts int64) {
+func (m *MetaManager) resetActiveShardGroup(ts int64) bool {
 	if m.sg != nil && len(m.shardGroups) == 1 {
-		return
+		return true
 	}
 
 	tm := time.Unix(0, ts)
 	if m.sg != nil && m.sg.Contains(tm) {
-		return
+		return true
 	}
 
 	for i := range m.shardGroups {
@@ -243,15 +258,7 @@ func (m *MetaManager) resetActiveShardGroup(ts int64) {
 			break
 		}
 	}
-}
-
-func (m *MetaManager) GetShard(key []byte, ts int64) *meta.ShardInfo {
-	sg, aliveShards := m.GetShardGroup(ts)
-	if len(aliveShards) == 0 {
-		return nil
-	}
-
-	return sg.ShardFor(meta.HashID(key), aliveShards)
+	return false
 }
 
 func (m *MetaManager) UpdateSchemaIfNeeded(rec *record.Record, mst *meta.MeasurementInfo, originName string) error {
@@ -310,4 +317,42 @@ func (m *MetaManager) CreateMeasurement(name string, engineType config.EngineTyp
 	}
 
 	return mst, err
+}
+
+func (m *MetaManager) GetShardKeyAndGroupInfo(sameMst bool, ts int64) (*meta.ShardKeyInfo, *meta.ShardGroupInfo, []int) {
+	sameSg := m.resetActiveShardGroup(ts)
+
+	// The si can be reused when both the same shardGroup and the same mst
+	if sameSg && sameMst {
+		return m.si, m.sg, m.aliveShards
+	}
+
+	// the priority of database-level settings is higher than that of table-level settings.
+	if len(m.di.ShardKey.ShardKey) > 0 {
+		m.si = &m.di.ShardKey
+	} else if len(m.mi.ShardKeys) > 0 {
+		m.si = m.mi.GetShardKey(m.sg.ID)
+	}
+	return m.si, m.sg, m.aliveShards
+}
+
+func (m *MetaManager) ResetMeasurementInfos(mst string) error {
+	originName := influx.GetOriginMstName(mst)
+	mi, err := m.mc.Measurement(m.db, m.rp, originName)
+	if err != nil {
+		return errno.NewError(errno.ErrMeasurementNotFound)
+	}
+	m.mi = mi
+	// si need to be reset.The si of the previous table and the current table may differ
+	m.si = nil
+	return nil
+}
+
+func (m *MetaManager) ResetDatabaseInfo() error {
+	dbInfo, err := m.mc.Database(m.db)
+	if err != nil {
+		return err
+	}
+	m.di = dbInfo
+	return nil
 }

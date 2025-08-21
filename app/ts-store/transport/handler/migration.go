@@ -16,10 +16,9 @@ package handler
 
 import (
 	"github.com/openGemini/openGemini/app/ts-store/storage"
-	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
-	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/msgservice"
 	"github.com/openGemini/openGemini/lib/spdy"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"go.uber.org/zap"
@@ -38,9 +37,9 @@ func NewPtProcessor(store *storage.Storage) *MigrationProcessor {
 }
 
 func (mp *MigrationProcessor) Handle(w spdy.Responser, data interface{}) error {
-	req, ok := data.(*netstorage.PtRequest)
+	req, ok := data.(*msgservice.PtRequest)
 	if !ok {
-		return executor.NewInvalidTypeError("*netstorage.PtRequest", data)
+		return errno.NewInvalidTypeError("*msgservice.PtRequest", data)
 	}
 	ptInfo := &meta2.DbPtInfo{}
 	ptInfo.Unmarshal(req.GetPt())
@@ -56,7 +55,7 @@ func (mp *MigrationProcessor) Handle(w spdy.Responser, data interface{}) error {
 		zap.String("db", ptInfo.Db), zap.Uint32("pt", ptInfo.Pti.PtId), zap.Uint64("ver", ptInfo.Pti.Ver),
 		zap.Uint64("connId", connId), zap.Uint64("aliveConnId", aliveConnId))
 	var err error
-	rsp := netstorage.NewPtResponse()
+	rsp := msgservice.NewPtResponse()
 	switch meta2.MoveState(req.GetMigrateType()) {
 	case meta2.MovePreOffload:
 		err = mp.store.PreOffload(req.GetOpId(), ptInfo)
@@ -79,6 +78,6 @@ func (mp *MigrationProcessor) Handle(w spdy.Responser, data interface{}) error {
 		err = errno.NewError(errno.ErrMigrationRequestPt)
 	}
 
-	rsp.Err = netstorage.MarshalError(err)
+	rsp.Err = msgservice.MarshalError(err)
 	return w.Response(rsp, true)
 }

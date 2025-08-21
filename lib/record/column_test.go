@@ -463,3 +463,31 @@ func TestColVal_PadEmptyColVal(t *testing.T) {
 		})
 	}
 }
+
+func TestAppendPKColumns(t *testing.T) {
+	schema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Float, Name: "float"},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
+		record.Field{Type: influx.Field_Type_String, Name: "string"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	pkRec := genRowRec(schema,
+		[]int{1}, []int64{1},
+		[]int{1}, []float64{1.1},
+		[]int{1}, []string{"test1"},
+		[]int{1}, []bool{true},
+		[]int64{1})
+
+	dstCols := make([]record.ColVal, 4)
+	for i, pkCol := range pkRec.ColVals {
+		if i > 3 {
+			break
+		}
+		err := record.AppendPKColumns(&pkCol, &dstCols[i], 0, 1, schema[i].Type)
+		if err != nil {
+			t.Fatalf("AppendPKColumns failed: %v", err)
+		}
+		assert.Equal(t, pkRec.ColVals[i], dstCols[i], "the value of column %d should be equal", i)
+	}
+}

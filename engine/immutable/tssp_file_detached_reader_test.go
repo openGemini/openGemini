@@ -16,6 +16,7 @@ limitations under the License.
 package immutable
 
 import (
+	"errors"
 	"fmt"
 	"path"
 	"reflect"
@@ -25,61 +26,39 @@ import (
 	"github.com/openGemini/openGemini/engine/index/sparseindex"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/fileops"
-	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/interruptsignal"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
-	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	query2 "github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func writeData(testCompDir, mstName string) error {
+func writeData(testCompDir, mstName string, recRows int) error {
 	var idMinMax, tmMinMax MinMax
 	var startValue = 999999.0
 	conf := NewColumnStoreConfig()
 	conf.maxRowsPerSegment = 20
 	conf.FragmentsNumPerFlush = 3
 	tier := uint64(util.Hot)
-	recRows := 1000
 	lockPath := ""
 
 	store := NewTableStore(testCompDir, &lockPath, &tier, true, conf)
 	defer store.Close()
+	store.SetDbRp("db0", "rp0")
 	store.SetImmTableType(config.COLUMNSTORE)
 	store.CompactionEnable()
 	primaryKey := []string{"time"}
 	sortKey := []string{"time"}
 	sort := []string{"time"}
-	schema := make(meta.CleanSchema)
-	for i := range primaryKey {
-		for j := range schemaForColumnStore {
-			if primaryKey[i] == schemaForColumnStore[j].Name {
-				schema[primaryKey[i]] = meta.SchemaVal{Typ: int8(schemaForColumnStore[j].Type)}
-			}
-		}
-	}
-	list := make([]*influxql.IndexList, 1)
-	bfColumn := []string{"primaryKey_string1", "primaryKey_string2"}
-	iList := influxql.IndexList{IList: bfColumn}
-	list[0] = &iList
-	mstinfo := meta.MeasurementInfo{
-		Name:       mstName,
-		EngineType: config.COLUMNSTORE,
-		ColStoreInfo: &meta.ColStoreInfo{
-			PrimaryKey:     primaryKey,
-			SortKey:        sortKey,
-			CompactionType: config.BLOCK,
-		},
-		Schema: &schema,
-		IndexRelation: influxql.IndexRelation{IndexNames: []string{"bloomfilter"},
-			Oids:      []uint32{uint32(index.BloomFilter)},
-			IndexList: list},
+
+	mi, pkSchema, ok := initColumnStoreMstInfoWithDefaultIndex(defaultColumnStoreMstInfo(primaryKey, sortKey, 0))
+	if !ok {
+		return errors.New("failed to set mst info")
 	}
 
-	store.ImmTable.SetMstInfo(mstName, &mstinfo)
 	sortKeyMap := genSortedKeyMap(sort)
 	write := func(ids uint64, data map[uint64]*record.Record, msb *MsBuilder, merge *record.Record,
 		sortKeyMap map[string]int, primaryKey, sortKey []string, needMerge bool, pkSchema record.Schemas, indexRelation *influxql.IndexRelation) (*record.Record, error) {
@@ -92,7 +71,7 @@ func writeData(testCompDir, mstName string) error {
 			dataFilePath := msb.FileName.String()
 			indexFilePath := path.Join(msb.Path, msb.msName, colstore.AppendPKIndexSuffix(dataFilePath))
 			fixRowsPerSegment := GenFixRowsPerSegment(rec, conf.maxRowsPerSegment)
-			if err = msb.writePrimaryIndex(rec, pkSchema, indexFilePath, *msb.lock, colstore.DefaultTCLocation, fixRowsPerSegment, util.DefaultMaxRowsPerSegment4ColStore); err != nil {
+			if err = msb.WritePrimaryIndex(rec, pkSchema, indexFilePath, *msb.lock, colstore.DefaultTCLocation, fixRowsPerSegment, util.DefaultMaxRowsPerSegment4ColStore); err != nil {
 				return nil, err
 			}
 		}
@@ -182,15 +161,6 @@ func writeData(testCompDir, mstName string) error {
 	oldRec.ReserveColumnRows(recRows * filesN)
 
 	recs := make([]*record.Record, 0, filesN)
-	pk := store.ImmTable.(*csImmTableImpl).mstsInfo[mstName].ColStoreInfo.PrimaryKey
-	pkSchema := make([]record.Field, len(pk))
-	for i := range pk {
-		v, _ := store.ImmTable.(*csImmTableImpl).mstsInfo[mstName].Schema.GetTyp(pk[i])
-		pkSchema[i] = record.Field{
-			Type: int(v),
-			Name: pk[i],
-		}
-	}
 	needMerge := false
 	var err error
 	for i := 0; i < filesN; i++ {
@@ -198,8 +168,8 @@ func writeData(testCompDir, mstName string) error {
 		fileName := NewTSSPFileName(store.NextSequence(), 0, 0, 0, true, &lockPath)
 		msb := NewMsBuilder(store.path, mstName, &lockPath, conf, 1, fileName, store.Tier(), nil, 2, config.TSSTORE, nil, 0)
 		msb.NewPKIndexWriter()
-		msb.NewIndexWriterBuilder(data[ids].Schema, mstinfo.IndexRelation)
-		oldRec, err = write(ids, data, msb, oldRec, sortKeyMap, primaryKey, sortKey, needMerge, pkSchema, &mstinfo.IndexRelation)
+		msb.NewIndexWriterBuilder(data[ids].Schema, mi.IndexRelation)
+		oldRec, err = write(ids, data, msb, oldRec, sortKeyMap, primaryKey, sortKey, needMerge, pkSchema, &mi.IndexRelation)
 		if err != nil {
 			return err
 		}
@@ -208,20 +178,14 @@ func writeData(testCompDir, mstName string) error {
 			return err
 		}
 		fn := msb.Files[len(msb.Files)-1].Path()
-		if err := RenameIndexFiles(fn, bfColumn); err != nil {
+		if err := RenameIndexFiles(fn, defaultBfColumn()); err != nil {
 			return err
 		}
 		store.AddTSSPFiles(msb.Name(), false, msb.Files...)
 		for _, v := range data {
 			recs = append(recs, v)
 		}
-		if msb.GetPKInfoNum() != 0 {
-			for i, file := range msb.Files {
-				dataFilePath := file.Path()
-				indexFilePath := colstore.AppendPKIndexSuffix(RemoveTsspSuffix(dataFilePath))
-				store.AddPKFile(msb.Name(), indexFilePath, msb.GetPKRecord(i), msb.GetPKMark(i), colstore.DefaultTCLocation)
-			}
-		}
+		setPKInfo(msb)
 	}
 
 	tmMinMax.max = uint64(tm.UnixNano() - timeInterval.Nanoseconds())
@@ -262,14 +226,14 @@ func TestDetachedTSSPReader(t *testing.T) {
 	_ = fileops.RemoveAll(testCompDir)
 	sig := interruptsignal.NewInterruptSignal()
 	defer func() {
+		clearMstInfo()
 		sig.Close()
 		_ = fileops.RemoveAll(testCompDir)
 	}()
 	mstName := "mst"
-	err := writeData(testCompDir, mstName)
-	if err != nil {
-		t.Errorf(err.Error())
-	}
+
+	err := writeData(testCompDir, mstName, 1000)
+	require.NoError(t, err)
 
 	p := path.Join(testCompDir, mstName)
 	reader, _ := NewDetachedMetaIndexReader(p, nil)
@@ -288,7 +252,7 @@ func TestDetachedTSSPReader(t *testing.T) {
 		}
 		totalRow += data.RowNums()
 	}
-	assert.Equal(t, 180, totalRow)
+	require.Equal(t, 180, totalRow)
 	treader.ResetBy(metaIndex, [][]int{[]int{0, 1, 2, 200}, []int{0, 2, 4, 30, 50, 200}}, decs)
 	totalRow = 0
 	for {
@@ -364,14 +328,14 @@ func TestSeqFilterReader(t *testing.T) {
 	_ = fileops.RemoveAll(testCompDir)
 	sig := interruptsignal.NewInterruptSignal()
 	defer func() {
+		clearMstInfo()
 		sig.Close()
 		_ = fileops.RemoveAll(testCompDir)
 	}()
+
 	mstName := "mst"
-	err := writeData(testCompDir, mstName)
-	if err != nil {
-		t.Errorf(err.Error())
-	}
+	err := writeData(testCompDir, mstName, 400)
+	require.NoError(t, err)
 
 	p := path.Join(testCompDir, mstName)
 	reader, _ := NewDetachedMetaIndexReader(p, nil)
@@ -428,14 +392,13 @@ func TestSeqFilterShardIdReader(t *testing.T) {
 	_ = fileops.RemoveAll(testCompDir)
 	sig := interruptsignal.NewInterruptSignal()
 	defer func() {
+		clearMstInfo()
 		sig.Close()
 		_ = fileops.RemoveAll(testCompDir)
 	}()
 	mstName := "mst"
-	err := writeData(testCompDir, mstName)
-	if err != nil {
-		t.Errorf(err.Error())
-	}
+	err := writeData(testCompDir, mstName, 500)
+	require.NoError(t, err)
 
 	p := path.Join(testCompDir, mstName)
 	reader, _ := NewDetachedMetaIndexReader(p, nil)
@@ -544,14 +507,13 @@ func TestSeqFilterReaderWhenUpdataBy(t *testing.T) {
 	_ = fileops.RemoveAll(testCompDir)
 	sig := interruptsignal.NewInterruptSignal()
 	defer func() {
+		clearMstInfo()
 		sig.Close()
 		_ = fileops.RemoveAll(testCompDir)
 	}()
 	mstName := "mst"
-	err := writeData(testCompDir, mstName)
-	if err != nil {
-		t.Errorf(err.Error())
-	}
+	err := writeData(testCompDir, mstName, 400)
+	require.NoError(t, err)
 
 	p := path.Join(testCompDir, mstName)
 	reader, _ := NewDetachedMetaIndexReader(p, nil)

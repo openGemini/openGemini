@@ -16,10 +16,13 @@ package immutable
 
 import (
 	"container/heap"
+	"errors"
+	"strings"
 	"sync/atomic"
 
 	Log "github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util"
 )
 
 type ChunkIterator struct {
@@ -27,6 +30,7 @@ type ChunkIterator struct {
 	ctx    *ReadContext
 	id     uint64
 	fields record.Schemas
+	schema record.Schemas
 	merge  *record.Record
 	log    *Log.Logger
 }
@@ -43,6 +47,32 @@ type ChunkIterators struct {
 	maxN          int
 
 	log *Log.Logger
+}
+
+func NewChunkIterators(files []TSSPFile, dropping int64, signal chan struct{}, lg *Log.Logger, schema record.Schemas) *ChunkIterators {
+	itrs := &ChunkIterators{
+		dropping:      &dropping,
+		closed:        signal,
+		stopCompMerge: signal,
+		itrs:          make([]*ChunkIterator, 0, len(files)),
+		merged:        &record.Record{},
+	}
+	itrs.WithLog(lg)
+
+	for _, f := range files {
+		fi := NewFileIterator(f, lg)
+		itr := NewChunkIterator(fi)
+		itr.WithLog(lg)
+		itr.WithSchema(schema)
+		ok := itr.Next()
+		if !ok || itr.err != nil {
+			itr.Close()
+			continue
+		}
+		itrs.itrs = append(itrs.itrs, itr)
+	}
+	heap.Init(itrs)
+	return itrs
 }
 
 func (c *ChunkIterators) WithLog(log *Log.Logger) {
@@ -169,6 +199,10 @@ func (c *ChunkIterator) WithLog(log *Log.Logger) {
 	c.log = log
 }
 
+func (c *ChunkIterator) WithSchema(schema record.Schemas) {
+	c.schema = schema
+}
+
 func (c *ChunkIterator) Close() {
 	c.FileIterator.Close()
 	freeRecord(c.merge)
@@ -194,16 +228,20 @@ func (c *ChunkIterator) Next() bool {
 		return false
 	}
 
-	if cap(c.fields) < int(c.curtChunkMeta.columnCount) {
-		delta := int(c.curtChunkMeta.columnCount) - cap(c.fields)
-		c.fields = c.fields[:cap(c.fields)]
-		c.fields = append(c.fields, make([]record.Field, delta)...)
-	}
-	c.fields = c.fields[:c.curtChunkMeta.columnCount]
-	for i := range c.curtChunkMeta.colMeta {
-		cm := c.curtChunkMeta.colMeta[i]
-		c.fields[i].Name = cm.Name()
-		c.fields[i].Type = int(cm.ty)
+	if c.schema != nil {
+		c.fields = c.schema
+	} else {
+		if cap(c.fields) < int(c.curtChunkMeta.columnCount) {
+			delta := int(c.curtChunkMeta.columnCount) - cap(c.fields)
+			c.fields = c.fields[:cap(c.fields)]
+			c.fields = append(c.fields, make([]record.Field, delta)...)
+		}
+		c.fields = c.fields[:c.curtChunkMeta.columnCount]
+		for i := range c.curtChunkMeta.colMeta {
+			cm := c.curtChunkMeta.colMeta[i]
+			c.fields[i].Name = cm.Name()
+			c.fields[i].Type = int(cm.ty)
+		}
 	}
 
 	if c.err = c.readRecord(); c.err != nil {
@@ -236,6 +274,11 @@ func (c *ChunkIterator) readRecord() error {
 		return err
 	}
 
+	// padding the schema that is specified but missing in the file
+	if c.schema != nil {
+		c.merge.TryPadColumn()
+	}
+
 	record.CheckRecord(c.merge)
 	c.curtChunkMeta = nil
 	c.chunkUsed++
@@ -257,9 +300,9 @@ func decodeRecord(ctx *ReadContext, chunkData []byte, cm *ChunkMeta, dst *record
 	schema := dst.Schema
 	swap := &ctx.col
 
-	for i := 0; i < schema.Len(); i++ {
+	appendFunc := func(i, j int) error {
 		ref := &schema[i]
-		colMeta := &cm.colMeta[i]
+		colMeta := &cm.colMeta[j]
 		col := dst.Column(i)
 
 		for n := range colMeta.entries {
@@ -270,14 +313,31 @@ func decodeRecord(ctx *ReadContext, chunkData []byte, cm *ChunkMeta, dst *record
 			} else {
 				err = decodeColumnData(ref, buf, swap, ctx, false)
 			}
-
 			if err != nil {
 				return err
 			}
 
 			col.AppendColVal(swap, ref.Type, 0, swap.Len)
 		}
+		return nil
 	}
 
-	return nil
+	schemaLen := len(schema)
+	colMetaLen := len(cm.colMeta)
+	if schemaLen == 0 || colMetaLen == 0 {
+		return errors.New("col nums is zero, which is invalid for decoding records")
+	}
+
+	// append field col
+	err = util.FindIntersectionIndex(schema[:len(schema)-1], cm.colMeta[:len(cm.colMeta)-1],
+		func(field record.Field, meta ColumnMeta) int {
+			return strings.Compare(field.Name, meta.name)
+		}, appendFunc)
+	if err != nil {
+		return err
+	}
+
+	// append time col
+	err = appendFunc(len(schema)-1, len(cm.colMeta)-1)
+	return err
 }

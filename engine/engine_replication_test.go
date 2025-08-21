@@ -63,7 +63,7 @@ func (m *mockMetaClient4Replica) DataNode(nodeId uint64) (*meta.DataNode, error)
 
 func TestStartRaftNode(t *testing.T) {
 	client := &mockMetaClient4Replica{}
-	e := &Engine{
+	e := &EngineImpl{
 		log:        logger.NewLogger(errno.ModuleUnknown),
 		metaClient: client,
 		DBPartitions: map[string]map[uint32]*DBPTInfo{
@@ -100,14 +100,14 @@ func TestStartRaftNode(t *testing.T) {
 }
 
 func TestSendRaftMessage_ErrorGetPartition(t *testing.T) {
-	e := &Engine{}
+	e := &EngineImpl{}
 	err := e.SendRaftMessage("testDB", 1, raftpb.Message{})
 	assert1.Error(t, err)
 	assert1.Equal(t, "get partition testDB:1 error: database not found: testDB", err.Error())
 }
 
 func TestSendRaftMessage_PartitionNodeIsNil(t *testing.T) {
-	e := &Engine{
+	e := &EngineImpl{
 		DBPartitions: map[string]map[uint32]*DBPTInfo{
 			"testDB": {
 				1: &DBPTInfo{},
@@ -121,12 +121,12 @@ func TestSendRaftMessage_PartitionNodeIsNil(t *testing.T) {
 type mockNode struct{}
 
 func (n mockNode) GetProposeC() chan []byte {
-	//TODO implement me
+
 	panic("implement me")
 }
 
 func (n mockNode) GetCommitC() <-chan *raftconn.Commit {
-	//TODO implement me
+
 	panic("implement me")
 }
 
@@ -157,7 +157,7 @@ func (n mockNode) RetCommittedDataC(dw *raftlog.DataWrapper, err error) {
 }
 
 func TestSendRaftMessage_Success(t *testing.T) {
-	e := &Engine{
+	e := &EngineImpl{
 		log: logger.NewLogger(errno.ModuleUnknown),
 		DBPartitions: map[string]map[uint32]*DBPTInfo{
 			"testDB": {
@@ -172,7 +172,7 @@ func TestSendRaftMessage_Success(t *testing.T) {
 }
 
 func TestCheckRepGroupStatus(t *testing.T) {
-	e := &Engine{
+	e := &EngineImpl{
 		log: logger.NewLogger(errno.ModuleUnknown),
 		DBPartitions: map[string]map[uint32]*DBPTInfo{
 			"testDB": {

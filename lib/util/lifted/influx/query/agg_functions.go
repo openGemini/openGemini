@@ -18,18 +18,26 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/services/castor"
+)
+
+const (
+	CASTOR    = "castor"
+	CASTOR_AD = "castor_ad"
 )
 
 var (
-	_ = RegistryAggregateFunction("mean", &MeanFunc{
+	_ = RegisterAggregateFunction("mean", &MeanFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_NORMAL},
 		BaseAgg: BaseAgg{
 			canPushDown: true,
 			optimizeAgg: true,
 		},
 	})
-	_ = RegistryAggregateFunction("count", &CountFunc{
+	_ = RegisterAggregateFunction("count", &CountFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_NORMAL},
 		BaseAgg: BaseAgg{
 			canPushDown:       true,
@@ -37,7 +45,7 @@ var (
 			optimizeAgg:       true,
 		},
 	})
-	_ = RegistryAggregateFunction("last", &LastFunc{
+	_ = RegisterAggregateFunction("last", &LastFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_NORMAL},
 		BaseAgg: BaseAgg{
 			canPushDown:       true,
@@ -45,7 +53,7 @@ var (
 			optimizeAgg:       true,
 		},
 	})
-	_ = RegistryAggregateFunction("first", &FirstFunc{
+	_ = RegisterAggregateFunction("first", &FirstFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_NORMAL},
 		BaseAgg: BaseAgg{
 			canPushDown:       true,
@@ -53,7 +61,7 @@ var (
 			optimizeAgg:       true,
 		},
 	})
-	_ = RegistryAggregateFunction("min", &MinFunc{
+	_ = RegisterAggregateFunction("min", &MinFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_NORMAL},
 		BaseAgg: BaseAgg{
 			canPushDown:       true,
@@ -61,7 +69,7 @@ var (
 			optimizeAgg:       true,
 		},
 	})
-	_ = RegistryAggregateFunction("max", &MaxFunc{
+	_ = RegisterAggregateFunction("max", &MaxFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_NORMAL},
 		BaseAgg: BaseAgg{
 			canPushDown:       true,
@@ -69,7 +77,7 @@ var (
 			optimizeAgg:       true,
 		},
 	})
-	_ = RegistryAggregateFunction("sum", &SumFunc{
+	_ = RegisterAggregateFunction("sum", &SumFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_NORMAL},
 		BaseAgg: BaseAgg{
 			canPushDown:       true,
@@ -77,230 +85,236 @@ var (
 			optimizeAgg:       true,
 		},
 	})
-	_ = RegistryAggregateFunction("percentile", &PercentileFunc{
+	_ = RegisterAggregateFunction("percentile", &PercentileFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
 		BaseAgg: BaseAgg{
 			mergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("percentile_ogsketch", &PercentileOGSketchFunc{
+	_ = RegisterAggregateFunction("percentile_ogsketch", &PercentileOGSketchFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_SPECIAL},
 		BaseAgg: BaseAgg{
 			canPushDown: true,
 		},
 	})
-	_ = RegistryAggregateFunction("percentile_approx", &PercentileApproxFunc{
+	_ = RegisterAggregateFunction("percentile_approx", &PercentileApproxFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_SPECIAL},
 		BaseAgg: BaseAgg{
 			mergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("histogram", &HistogramFunc{
+	_ = RegisterAggregateFunction("histogram", &HistogramFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_SPECIAL},
 		BaseAgg:  BaseAgg{},
 	})
-	_ = RegistryAggregateFunction("sample", &SampleFunc{
+	_ = RegisterAggregateFunction("sample", &SampleFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_SPECIAL},
 		BaseAgg: BaseAgg{
 			mergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("distinct", &DistinctFunc{
+	_ = RegisterAggregateFunction("distinct", &DistinctFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_SPECIAL},
 		BaseAgg: BaseAgg{
 			canPushDown:       true,
 			canPushDownSeries: true,
 		},
 	})
-	_ = RegistryAggregateFunction("top", &TopFunc{
+	_ = RegisterAggregateFunction("top", &TopFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_HEAP},
 		BaseAgg: BaseAgg{
 			canPushDown:       true,
 			canPushDownSeries: true,
 		},
 	})
-	_ = RegistryAggregateFunction("bottom", &BottomFunc{
+	_ = RegisterAggregateFunction("bottom", &BottomFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_HEAP},
 		BaseAgg: BaseAgg{
 			canPushDown:       true,
 			canPushDownSeries: true,
 		},
 	})
-	_ = RegistryAggregateFunction("derivative", &DerivativeFunc{
+	_ = RegisterAggregateFunction("derivative", &DerivativeFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_TRANS},
 		BaseAgg: BaseAgg{
 			sortedMergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("non_negative_derivative", &NonNegativeDerivativeFunc{
+	_ = RegisterAggregateFunction("non_negative_derivative", &NonNegativeDerivativeFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_TRANS},
 		BaseAgg: BaseAgg{
 			sortedMergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("difference", &DifferenceFunc{
+	_ = RegisterAggregateFunction("difference", &DifferenceFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_TRANS},
 		BaseAgg: BaseAgg{
 			sortedMergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("non_negative_difference", &NonNegativeDifferenceFunc{
+	_ = RegisterAggregateFunction("non_negative_difference", &NonNegativeDifferenceFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_TRANS},
 		BaseAgg: BaseAgg{
 			sortedMergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("cumulative_sum", &CumulativeSumFunc{
+	_ = RegisterAggregateFunction("cumulative_sum", &CumulativeSumFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_TRANS},
 		BaseAgg: BaseAgg{
 			sortedMergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("moving_average", &MovingAverageFunc{
+	_ = RegisterAggregateFunction("moving_average", &MovingAverageFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_TRANS},
 		BaseAgg: BaseAgg{
 			sortedMergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("elapsed", &ElapsedFunc{
+	_ = RegisterAggregateFunction("elapsed", &ElapsedFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_TRANS},
 		BaseAgg: BaseAgg{
 			sortedMergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("integral", &IntegralFunc{
+	_ = RegisterAggregateFunction("integral", &IntegralFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_TRANS},
 		BaseAgg: BaseAgg{
 			sortedMergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("mode", &ModeFunc{
+	_ = RegisterAggregateFunction("mode", &ModeFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
 		BaseAgg: BaseAgg{
 			mergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("stddev", &StddevFunc{
+	_ = RegisterAggregateFunction("stddev", &StddevFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
 		BaseAgg: BaseAgg{
 			mergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("spread", &SpreadFunc{
+	_ = RegisterAggregateFunction("spread", &SpreadFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_SPECIAL},
 		BaseAgg: BaseAgg{
 			canPushDown: true,
 		},
 	})
-	_ = RegistryAggregateFunction("rate", &RateFunc{
+	_ = RegisterAggregateFunction("rate", &RateFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_SPECIAL},
 		BaseAgg: BaseAgg{
 			mergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("irate", &IRateFunc{
+	_ = RegisterAggregateFunction("irate", &IRateFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_SPECIAL},
 		BaseAgg: BaseAgg{
 			mergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("absent", &AbsentFunc{
+	_ = RegisterAggregateFunction("absent", &AbsentFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_NORMAL},
 		BaseAgg: BaseAgg{
 			mergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("median", &MedianFunc{
+	_ = RegisterAggregateFunction("median", &MedianFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
 		BaseAgg: BaseAgg{
 			mergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("sliding_window", &SlidingWindowFunc{
+	_ = RegisterAggregateFunction("sliding_window", &SlidingWindowFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
 		BaseAgg: BaseAgg{
 			canPushDown: true,
 		},
 	})
-	_ = RegistryAggregateFunction("sum_over_time", &SumFunc{
+	_ = RegisterAggregateFunction("sum_over_time", &SumFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
 		BaseAgg: BaseAgg{
 			mergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("avg_over_time", &MeanFunc{
+	_ = RegisterAggregateFunction("avg_over_time", &MeanFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
 		BaseAgg: BaseAgg{
 			mergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("max_over_time", &MaxFunc{
+	_ = RegisterAggregateFunction("max_over_time", &MaxFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
 		BaseAgg: BaseAgg{
 			mergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("min_over_time", &MinFunc{
+	_ = RegisterAggregateFunction("min_over_time", &MinFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
 		BaseAgg: BaseAgg{
 			mergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("count_over_time", &CountPromFunc{
+	_ = RegisterAggregateFunction("count_over_time", &CountPromFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
 		BaseAgg: BaseAgg{
 			mergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("stddev_over_time", &StddevFunc{
+	_ = RegisterAggregateFunction("stddev_over_time", &StddevFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
 		BaseAgg: BaseAgg{
 			mergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("present_over_time_prom", &PresentFunc{
+	_ = RegisterAggregateFunction("present_over_time_prom", &PresentFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
 		BaseAgg: BaseAgg{
 			mergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("quantile_over_time", &PercentileFunc{
+	_ = RegisterAggregateFunction("quantile_over_time", &PercentileFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
 		BaseAgg: BaseAgg{
 			mergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("rate_prom", &RateFunc{
+	_ = RegisterAggregateFunction("rate_prom", &RateFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_SPECIAL},
 		BaseAgg: BaseAgg{
 			mergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("irate_prom", &IRateFunc{
+	_ = RegisterAggregateFunction("ad_rmse_ext", &ADRmseExtFunc{
+		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
+		BaseAgg: BaseAgg{
+			sortedMergeCall: true,
+		},
+	})
+	_ = RegisterAggregateFunction("irate_prom", &IRateFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_SPECIAL},
 		BaseAgg: BaseAgg{
 			mergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("increase", &IncreaseFunc{
+	_ = RegisterAggregateFunction("increase", &IncreaseFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
 		BaseAgg: BaseAgg{
 			mergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("deriv", &DerivFunc{
+	_ = RegisterAggregateFunction("deriv", &DerivFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
 		BaseAgg: BaseAgg{
 			mergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("predict_linear", &PredictLinearFunc{
+	_ = RegisterAggregateFunction("predict_linear", &PredictLinearFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
 		BaseAgg: BaseAgg{
 			mergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("min_prom", &MinPromFunc{
+	_ = RegisterAggregateFunction("min_prom", &MinPromFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_NORMAL},
 		BaseAgg: BaseAgg{
 			canPushDown:       true,
@@ -308,7 +322,7 @@ var (
 			optimizeAgg:       true,
 		},
 	})
-	_ = RegistryAggregateFunction("max_prom", &MaxPromFunc{
+	_ = RegisterAggregateFunction("max_prom", &MaxPromFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_NORMAL},
 		BaseAgg: BaseAgg{
 			canPushDown:       true,
@@ -316,7 +330,7 @@ var (
 			optimizeAgg:       true,
 		},
 	})
-	_ = RegistryAggregateFunction("count_prom", &FloatCountPromFunc{
+	_ = RegisterAggregateFunction("count_prom", &FloatCountPromFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_NORMAL},
 		BaseAgg: BaseAgg{
 			canPushDown:       true,
@@ -324,125 +338,156 @@ var (
 			optimizeAgg:       true,
 		},
 	})
-	_ = RegistryAggregateFunction("histogram_quantile", &HistogramQuantileFunc{
+	_ = RegisterAggregateFunction("histogram_quantile", &HistogramQuantileFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_SPECIAL},
 		BaseAgg: BaseAgg{
 			mergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("count_values_prom", &CountValuesFunc{
+	_ = RegisterAggregateFunction("count_values_prom", &CountValuesFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_SPECIAL},
 		BaseAgg: BaseAgg{
 			// TODO support push down
 			mergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("delta_prom", &PromDeltaFunc{
+	_ = RegisterAggregateFunction("delta_prom", &PromDeltaFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_SPECIAL},
 		BaseAgg: BaseAgg{
 			mergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("idelta_prom", &PromIDeltaFunc{
+	_ = RegisterAggregateFunction("idelta_prom", &PromIDeltaFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_SPECIAL},
 		BaseAgg: BaseAgg{
 			mergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("stdvar_prom", &OneParamCompileFunc{
+	_ = RegisterAggregateFunction("stdvar_prom", &OneParamCompileFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
 		BaseAgg: BaseAgg{
 			mergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("stddev_prom", &OneParamCompileFunc{
+	_ = RegisterAggregateFunction("stddev_prom", &OneParamCompileFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
 		BaseAgg: BaseAgg{
 			mergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("group_prom", &PromGroupFunc{
+	_ = RegisterAggregateFunction("group_prom", &PromGroupFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_NORMAL},
 		BaseAgg: BaseAgg{
 			mergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("scalar_prom", &PromScalarFunc{
+	_ = RegisterAggregateFunction("scalar_prom", &PromScalarFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_NORMAL},
 		BaseAgg: BaseAgg{
 			mergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("quantile_prom", &PercentileFunc{
+	_ = RegisterAggregateFunction("quantile_prom", &PercentileFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
 		BaseAgg: BaseAgg{
 			mergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("stdvar_over_time_prom", &OneParamCompileFunc{
+	_ = RegisterAggregateFunction("stdvar_over_time_prom", &OneParamCompileFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
 		BaseAgg: BaseAgg{
 			mergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("stddev_over_time_prom", &OneParamCompileFunc{
+	_ = RegisterAggregateFunction("stddev_over_time_prom", &OneParamCompileFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
 		BaseAgg: BaseAgg{
 			mergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("holt_winters_prom", &HoltWintersFunc{
+	_ = RegisterAggregateFunction("holt_winters_prom", &HoltWintersFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
 		BaseAgg: BaseAgg{
 			mergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("changes_prom", &PromIDeltaFunc{
+	_ = RegisterAggregateFunction("changes_prom", &PromIDeltaFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
 		BaseAgg: BaseAgg{
 			mergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("quantile_over_time_prom", &PercentileFunc{
+	_ = RegisterAggregateFunction("quantile_over_time_prom", &PercentileFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
 		BaseAgg: BaseAgg{
 			mergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("last_over_time_prom", &OneParamCompileFunc{
+	_ = RegisterAggregateFunction("last_over_time_prom", &OneParamCompileFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
 		BaseAgg: BaseAgg{
 			mergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("resets_prom", &OneParamCompileFunc{
+	_ = RegisterAggregateFunction("resets_prom", &OneParamCompileFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
 		BaseAgg: BaseAgg{
 			mergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("absent_over_time_prom", &OneParamCompileFunc{
+	_ = RegisterAggregateFunction("absent_over_time_prom", &OneParamCompileFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_NORMAL},
 		BaseAgg: BaseAgg{
 			mergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("absent_prom", &OneParamCompileFunc{
+	_ = RegisterAggregateFunction("absent_prom", &OneParamCompileFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_NORMAL},
 		BaseAgg: BaseAgg{
 			mergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("mad_over_time_prom", &OneParamCompileFunc{
+	_ = RegisterAggregateFunction("mad_over_time_prom", &OneParamCompileFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
 		BaseAgg: BaseAgg{
 			mergeCall: true,
 		},
 	})
-	_ = RegistryAggregateFunction("topn_ddcm", &TopNDDCMFunc{
+	_ = RegisterAggregateFunction("topn_ddcm", &TopNDDCMFunc{
 		BaseInfo: BaseInfo{FuncType: AGG_NORMAL},
 		BaseAgg: BaseAgg{
 			canPushDown: false,
+		},
+	})
+	_ = RegisterAggregateFunction("regr_slope", &RegrSlopeFunc{
+		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
+		BaseAgg: BaseAgg{
+			sortedMergeCall: true,
+		},
+	})
+	_ = RegisterAggregateFunction("topn_nagt2", &TopNDDCMFunc{
+		BaseInfo: BaseInfo{FuncType: AGG_NORMAL},
+		BaseAgg: BaseAgg{
+			canPushDown: true,
+		},
+	})
+	_ = RegisterAggregateFunction(CASTOR, &CastorFunc{
+		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
+		BaseAgg: BaseAgg{
+			mergeCall: true,
+		},
+	})
+	_ = RegisterAggregateFunction(CASTOR_AD, &CastorADFunc{
+		BaseInfo: BaseInfo{FuncType: AGG_SLICE},
+		BaseAgg: BaseAgg{
+			mergeCall: true,
+		},
+	})
+	_ = RegisterAggregateFunction("rca", &RCAFunc{
+		BaseInfo: BaseInfo{FuncType: AGG_NORMAL},
+		BaseAgg: BaseAgg{
+			canPushDown: false,
+			mergeCall:   true,
 		},
 	})
 )
@@ -633,6 +678,115 @@ func (f *PercentileFunc) CompileFunc(expr *influxql.Call, c *compiledField) erro
 
 func (f *PercentileFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
 	return args[0], nil
+}
+
+var heidmallAlgoTypeSet = map[string]struct{}{
+	string(config.Fit):       struct{}{},
+	string(config.Detect):    struct{}{},
+	string(config.Predict):   struct{}{},
+	string(config.FitDetect): struct{}{},
+}
+
+func convertToInternalTagVal(s string) string {
+	return fmt.Sprintf("_%s", s)
+}
+
+func checkAlgoType(algo string) bool {
+	_, ok := heidmallAlgoTypeSet[algo]
+	return ok
+}
+
+type CastorFunc struct {
+	BaseInfo
+	BaseAgg
+}
+
+func (f *CastorFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 4, Max: 4},
+		&TypeCheckRule{Name: name, Index: 1, Asserts: []func(interface{}) bool{AssertStringLiteral}},
+		&TypeCheckRule{Name: name, Index: 2, Asserts: []func(interface{}) bool{AssertStringLiteral}},
+		&TypeCheckRule{Name: name, Index: 3, Asserts: []func(interface{}) bool{AssertStringLiteral}},
+	}
+}
+
+func (cf *CastorFunc) CompileFunc(call *influxql.Call, f *compiledField) error {
+	srv := castor.GetService()
+	if srv == nil {
+		return errno.NewError(errno.ServiceNotEnable)
+	}
+	if !srv.IsAlive() {
+		return errno.NewError(errno.ServiceNotAlive)
+	}
+
+	c := srv.Config
+	args := call.Args
+	algo, ok := args[1].(*influxql.StringLiteral)
+	if !ok {
+		return errors.New("invalid algorithm argument type,expect: string")
+	}
+	conf, ok := args[2].(*influxql.StringLiteral)
+	if !ok {
+		return errors.New("invalid config argument type,expect: string")
+	}
+	aType, ok := args[3].(*influxql.StringLiteral)
+	if !ok {
+		return errors.New("invalid algoType argument type,expect: string")
+	}
+
+	if !checkAlgoType(aType.Val) {
+		return errno.NewError(errno.AlgoTypeNotFound)
+	}
+
+	if err := c.CheckAlgoAndConfExistence(algo.Val, conf.Val, aType.Val); err != nil {
+		return err
+	}
+	aType.Val = convertToInternalTagVal(aType.Val)
+
+	return nil
+}
+
+func (f *CastorFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
+	return influxql.Float, nil
+}
+
+type CastorADFunc struct {
+	BaseInfo
+	BaseAgg
+}
+
+func (f *CastorADFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 5, Max: 5},
+		&TypeCheckRule{Name: name, Index: 1, Asserts: []func(interface{}) bool{AssertStringLiteral}},
+		&TypeCheckRule{Name: name, Index: 2, Asserts: []func(interface{}) bool{AssertStringLiteral}},
+		&TypeCheckRule{Name: name, Index: 3, Asserts: []func(interface{}) bool{AssertStringLiteral}},
+		&TypeCheckRule{Name: name, Index: 4, Asserts: []func(interface{}) bool{AssertStringLiteral}},
+	}
+}
+
+func (cf *CastorADFunc) CompileFunc(call *influxql.Call, f *compiledField) error {
+	srv := castor.GetService()
+	if srv == nil {
+		return errno.NewError(errno.ServiceNotEnable)
+	}
+	if !srv.IsAlive() {
+		return errno.NewError(errno.ServiceNotAlive)
+	}
+
+	args := call.Args
+	aType, ok := args[3].(*influxql.StringLiteral)
+	if !ok {
+		return errors.New("check 4th param type error,it should be string")
+	}
+
+	aType.Val = convertToInternalTagVal(aType.Val)
+
+	return nil
+}
+
+func (f *CastorADFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
+	return influxql.String, nil
 }
 
 type PercentileOGSketchFunc struct {
@@ -1287,6 +1441,28 @@ func (f *RateFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql
 	return influxql.Float, nil
 }
 
+type ADRmseExtFunc struct {
+	BaseInfo
+	BaseAgg
+}
+
+func (f *ADRmseExtFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 1, Max: 1},
+	}
+}
+
+func (f *ADRmseExtFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
+	args, name := expr.Args, expr.Name
+	c.global.OnlySelectors = false
+	// args would be verified based on GetRules before CompileFunc.
+	return c.compileSymbol(name, args[0])
+}
+
+func (f *ADRmseExtFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
+	return influxql.Float, nil
+}
+
 type IRateFunc struct {
 	BaseInfo
 	BaseAgg
@@ -1645,10 +1821,10 @@ type TopNDDCMFunc struct {
 	BaseAgg
 }
 
-// topn_ddcm(field, countLowerBound, topNumber), countLowerBound use defaultNumber by set to zero
+// topn_ddcm/topn_nagt2(field, countLowerBound, topNumber), countLowerBound use defaultNumber by set to zero
 func (f *TopNDDCMFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
 	args := expr.Args
-	name := "topN_ddcm"
+	name := expr.Name
 	if exp, got := 4, len(args); got != exp {
 		return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", name, exp, got)
 	}
@@ -1693,6 +1869,49 @@ func (f *TopNDDCMFunc) CallTypeFunc(name string, args []influxql.DataType) (infl
 	} else if args[len(args)-1] == influxql.Float && (args[0] == influxql.Integer || args[0] == influxql.Float) {
 		return args[0], nil
 	} else {
-		return influxql.Integer, fmt.Errorf("topn_ddcm call type func err")
+		return influxql.Integer, fmt.Errorf("topn_ddcm/topn_nagt2 call type func err")
 	}
+}
+
+type RegrSlopeFunc struct {
+	BaseInfo
+	BaseAgg
+}
+
+func (f *RegrSlopeFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 1, Max: 1},
+	}
+}
+
+func (f *RegrSlopeFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
+	args, name := expr.Args, expr.Name
+	c.global.OnlySelectors = false
+	// Must be a variable reference, wildcard, or regexp.
+	return c.compileSymbol(name, args[0])
+}
+
+func (f *RegrSlopeFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
+	return influxql.Float, nil
+}
+
+type RCAFunc struct {
+	BaseInfo
+	BaseAgg
+}
+
+func (f *RCAFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 2, Max: 2},
+	}
+}
+
+func (f *RCAFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
+	args, name := expr.Args, expr.Name
+	// Must be a variable reference, wildcard, or regexp.
+	return c.compileSymbol(name, args[0])
+}
+
+func (f *RCAFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
+	return influxql.String, nil
 }

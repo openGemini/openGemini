@@ -212,7 +212,7 @@ func testFs() (*obsFs, *mockObsClient) {
 
 func TestMockObsFs_ParseObsConf(t *testing.T) {
 	fs, _ := testFs()
-	conf, path, err := fs.parseObsConf("obs://mock_endpoint/mock_ak/mock_sk/mock_bucket/mock_dir/mock_obj")
+	conf, path, err := fs.parseObsConf("obs:/mock_endpoint/mock_ak/mock_sk/mock_bucket/mock_dir/mock_obj")
 	assert.Nil(t, err)
 	assert.Equal(t, "mock_dir/mock_obj", path)
 	assert.Equal(t, "mock_endpoint", conf.endpoint)

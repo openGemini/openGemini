@@ -693,7 +693,7 @@ func (builder *ExecutorBuilder) SetMultiMstInfosForLocalStore(t []*IndexScanExtr
 	builder.multiMstInfosForLocalStore = t
 }
 
-func (builder *ExecutorBuilder) SetInfosAndTraits(mstsReqs []*MultiMstReqs, ctx context.Context) {
+func (builder *ExecutorBuilder) SetInfosAndTraits(ctx context.Context, mstsReqs []*MultiMstReqs, store hybridqp.StoreEngine, w spdy.Responser) {
 	if len(mstsReqs) == 0 {
 		return
 	}
@@ -705,6 +705,9 @@ func (builder *ExecutorBuilder) SetInfosAndTraits(mstsReqs []*MultiMstReqs, ctx 
 			shards:             make([]uint64, 0),
 			shardIndex:         0,
 			readerIndex:        0,
+		}
+		if w != nil {
+			singleMstTraits.w = w
 		}
 		for _, r := range mstReqs.reqs {
 			for _, sid := range r.ShardIDs {
@@ -727,6 +730,9 @@ func (builder *ExecutorBuilder) SetInfosAndTraits(mstsReqs []*MultiMstReqs, ctx 
 					Store: localStorageForQuery,
 					Req:   r,
 					ctx:   ctx,
+				}
+				if store != nil {
+					info.Store = store
 				}
 				multiMstInfos = append(multiMstInfos, info)
 				if crossShard {
@@ -824,6 +830,9 @@ func (builder *ExecutorBuilder) addNodeProducer(exchange Exchange) (*TransformVe
 	}
 	childNode := exchange.Children()[0]
 	child, err := builder.addNodeToDag(childNode)
+	if err != nil {
+		return nil, err
+	}
 
 	var w spdy.Responser
 	if builder.traits != nil {
@@ -1423,6 +1432,9 @@ func (builder *ExecutorBuilder) IsMultiMstPlanNode(node hybridqp.QueryNode) bool
 	if _, ok := node.(*LogicalFullJoin); ok {
 		return true
 	}
+	if _, ok := node.(*LogicalJoin); ok {
+		return true
+	}
 	if _, ok := node.(*LogicalSortAppend); ok {
 		return true
 	}
@@ -1534,6 +1546,8 @@ func (builder *ExecutorBuilder) addNodeToDag(node hybridqp.QueryNode) (*Transfor
 		return builder.addDefaultNode(n.Clone())
 	case *LogicalColumnStoreReader:
 		return builder.addColStoreReader(n.Clone().(*LogicalColumnStoreReader))
+	case *LogicalTableFunction:
+		return builder.addDefaultNode(n.Clone().(*LogicalTableFunction))
 	default:
 		return builder.addDefaultNode(n.Clone())
 	}

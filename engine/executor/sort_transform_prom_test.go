@@ -61,7 +61,7 @@ func buildSortChunk(labels []string, values []float64) executor.Chunk {
 	chunk := b.NewChunk("chunk")
 	for i, tags := range labels {
 		chunk.AppendTime(0)
-		chunk.AddTagAndIndex(*ParseChunkTags(tags), i)
+		chunk.AppendTagsAndIndex(*ParseChunkTags(tags), i)
 	}
 	chunk.Column(0).AppendFloatValues(values)
 	chunk.Column(0).AppendManyNotNil(len(values))

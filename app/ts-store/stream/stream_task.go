@@ -44,7 +44,7 @@ type BaseTask struct {
 	des         *meta2.StreamMeasurementInfo
 	info        *meta2.MeasurementInfo
 	fieldCalls  []*streamLib.FieldCall
-	condition   *influxql.BinaryExpr
+	condition   influxql.Expr
 	isSelectAll bool
 
 	// chan for process

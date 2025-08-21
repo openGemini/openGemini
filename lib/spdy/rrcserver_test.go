@@ -111,7 +111,7 @@ func (rsp *EchoResponser) Callback(response interface{}) error {
 	echo, ok := response.([]byte)
 	if !ok || !bytes.Equal(rsp.expect, echo) {
 		err := fmt.Errorf("echo is not same as expect, echo(%v), expect(%v)", echo, rsp.expect)
-		rsp.t.Errorf(err.Error())
+		rsp.t.Errorf("%s", err.Error())
 		return err
 	}
 	return nil
@@ -569,18 +569,18 @@ func TestParallelRequest(t *testing.T) {
 						if !spool.Available() {
 							return
 						}
-						t.Errorf(err.Error())
+						t.Errorf("%s", err.Error())
 						return
 					}
 					defer spool.Put(session)
 					requester := NewEchoRequester(session, session.GenerateNextSequence(), t, data)
 					responser := requester.WarpResponser()
 					if err := requester.Request([]byte(data)); err != nil {
-						t.Errorf(err.Error())
+						t.Errorf("%s", err.Error())
 						return
 					}
 					if err := responser.Apply(); err != nil {
-						t.Errorf(err.Error())
+						t.Errorf("%s", err.Error())
 						return
 					}
 				}()
@@ -614,23 +614,23 @@ func TestFaultPartialRequest(t *testing.T) {
 						if !spool.Available() {
 							return
 						}
-						t.Errorf(err.Error())
+						t.Errorf("%s", err.Error())
 						return
 					}
 					defer spool.Put(session)
 					requester := NewFaultPartialRequester(session, session.GenerateNextSequence(), t, data)
 					responser := requester.WarpResponser()
 					if err := requester.Request([]byte(data)); err != nil {
-						t.Errorf(err.Error())
+						t.Errorf("%s", err.Error())
 						return
 					}
 					if err := responser.Apply(); err != nil {
-						t.Errorf(err.Error())
+						t.Errorf("%s", err.Error())
 						return
 					}
 					if responser.(*FaultPartialResponser).CallbackNum() != 1 {
 						err := fmt.Errorf("expect 1 callback, but %d", responser.(*FaultPartialResponser).CallbackNum())
-						t.Errorf(err.Error())
+						t.Errorf("%s", err.Error())
 						return
 					}
 				}()
@@ -662,23 +662,23 @@ func TestPartialRequest(t *testing.T) {
 						if !spool.Available() {
 							return
 						}
-						t.Errorf(err.Error())
+						t.Errorf("%s", err.Error())
 						return
 					}
 					defer spool.Put(session)
 					requester := NewPartialRequester(session, session.GenerateNextSequence(), t, data)
 					responser := requester.WarpResponser()
 					if err := requester.Request([]byte(data)); err != nil {
-						t.Errorf(err.Error())
+						t.Errorf("%s", err.Error())
 						return
 					}
 					if err := responser.Apply(); err != nil {
-						t.Errorf(err.Error())
+						t.Errorf("%s", err.Error())
 						return
 					}
 					if responser.(*PartialResponser).CallbackNum() != 11 {
 						err := fmt.Errorf("expect 11 callback, but %d", responser.(*PartialResponser).CallbackNum())
-						t.Errorf(err.Error())
+						t.Errorf("%s", err.Error())
 						return
 					}
 				}()
@@ -707,23 +707,23 @@ func TestCompressRequest(t *testing.T) {
 		if !spool.Available() {
 			return
 		}
-		t.Errorf(err.Error())
+		t.Errorf("%s", err.Error())
 		return
 	}
 
 	requester := NewPartialRequester(session, session.GenerateNextSequence(), t, data)
 	responser := requester.WarpResponser()
 	if err := requester.Request(data); err != nil {
-		t.Errorf(err.Error())
+		t.Errorf("%s", err.Error())
 		return
 	}
 	if err := responser.Apply(); err != nil {
-		t.Errorf(err.Error())
+		t.Errorf("%s", err.Error())
 		return
 	}
 	if responser.(*PartialResponser).CallbackNum() != 11 {
 		err := fmt.Errorf("expect 11 callback, but %d", responser.(*PartialResponser).CallbackNum())
-		t.Errorf(err.Error())
+		t.Errorf("%s", err.Error())
 		return
 	}
 
@@ -744,7 +744,7 @@ func TestSendDataACKRequest(t *testing.T) {
 		if !spool.Available() {
 			return
 		}
-		t.Errorf(err.Error())
+		t.Errorf("%s", err.Error())
 		return
 	}
 	data := []byte{1}

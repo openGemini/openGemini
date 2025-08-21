@@ -47,7 +47,7 @@ func Test_Time_ConsumeData(t *testing.T) {
 		Database:        "test",
 		RetentionPolicy: "auto",
 	}
-	interval := 5 * time.Second
+	interval := 2 * time.Second
 	start := time.Now().Truncate(interval).Add(-interval)
 	fieldCalls := []*streamLib.FieldCall{}
 	calls := []string{"sum", "min", "max", "count"}
@@ -64,9 +64,12 @@ func Test_Time_ConsumeData(t *testing.T) {
 		start: start, end: start.Add(interval), fieldCalls: fieldCalls}}
 	task.run()
 	// wait run
-	fieldRows := buildRows(1000)
+	rowsLen := 10
+	batchLen := 10
+	allRows := batchLen * rowsLen
+	fieldRows := buildRows(rowsLen)
 	now := time.Now()
-	for i := 0; i < 10000; i++ {
+	for i := 0; i < batchLen; i++ {
 		cache := task.windowCachePool.Get()
 		cache.ptId = 0
 		cache.shardId = 0
@@ -76,13 +79,13 @@ func Test_Time_ConsumeData(t *testing.T) {
 	}
 	task.Drain()
 	t.Log("cost", time.Now().Sub(now))
-	if task.stats.WindowIn != 10000000 {
+	if task.stats.WindowIn != int64(allRows) {
 		t.Fatal("unexpect in", task.stats.WindowIn)
 	}
 	if task.stats.WindowSkip != 0 {
 		t.Fatal("unexpect skip", task.stats.WindowSkip)
 	}
-	if task.stats.WindowProcess != 10000000 {
+	if task.stats.WindowProcess != int64(allRows) {
 		t.Fatal("unexpect process", task.stats.WindowProcess)
 	}
 	time.Sleep(interval)
@@ -155,9 +158,12 @@ func Test_Time_ConsumeRecDataNil(t *testing.T) {
 		start: start, end: start.Add(interval), fieldCalls: fieldCalls}}
 	task.run()
 	// wait run
-	fieldRec := buildTestRecordNil(1000)
+	rowsLen := 12
+	batchLen := 10
+	allRows := batchLen * rowsLen
+	fieldRec := buildTestRecordNil(rowsLen)
 	now := time.Now()
-	for i := 0; i < 10000; i++ {
+	for i := 0; i < batchLen; i++ {
 		cache := &CacheRecord{}
 		cache.ptId = 0
 		cache.shardID = 0
@@ -168,7 +174,8 @@ func Test_Time_ConsumeRecDataNil(t *testing.T) {
 		cache.Retain()
 		task.Put(cache)
 	}
-	fieldRec1 := buildTestRecordNil(12)
+	rowsLen1 := 12
+	fieldRec1 := buildTestRecordNil(rowsLen1)
 	for i := 0; i < 1; i++ {
 		cache := &CacheRecord{}
 		cache.ptId = 0
@@ -184,13 +191,13 @@ func Test_Time_ConsumeRecDataNil(t *testing.T) {
 
 	task.Drain()
 	t.Log("cost", time.Now().Sub(now))
-	if task.stats.WindowIn != 10000012 {
+	if task.stats.WindowIn != int64(allRows+rowsLen1) {
 		t.Fatal("unexpect in", task.stats.WindowIn)
 	}
 	if task.stats.WindowSkip != 0 {
 		t.Fatal("unexpect skip", task.stats.WindowSkip)
 	}
-	if task.stats.WindowProcess != 10000012 {
+	if task.stats.WindowProcess != int64(allRows+rowsLen1) {
 		t.Fatal("unexpect process", task.stats.WindowProcess)
 	}
 	time.Sleep(interval)
@@ -229,7 +236,7 @@ func Test_Time_ConsumeRecData(t *testing.T) {
 		Database:        "test",
 		RetentionPolicy: "test",
 	}
-	interval := 5 * time.Second
+	interval := 2 * time.Second
 	start := time.Now().Truncate(interval).Add(-interval)
 	fieldCalls := []*streamLib.FieldCall{}
 	calls := []string{"sum", "min", "max", "count"}
@@ -253,9 +260,12 @@ func Test_Time_ConsumeRecData(t *testing.T) {
 		start: start, end: start.Add(interval), fieldCalls: fieldCalls}}
 	task.run()
 	// wait run
-	fieldRows := buildTestRecord(1000)
+	rowsLen := 12
+	batchLen := 10
+	allRows := batchLen * rowsLen
+	fieldRows := buildTestRecord(rowsLen)
 	now := time.Now()
-	for i := 0; i < 10000; i++ {
+	for i := 0; i < batchLen; i++ {
 		cache := &CacheRecord{}
 		cache.ptId = 0
 		cache.shardID = 0
@@ -268,13 +278,13 @@ func Test_Time_ConsumeRecData(t *testing.T) {
 	}
 	task.Drain()
 	t.Log("cost", time.Now().Sub(now))
-	if task.stats.WindowIn != 10000000 {
+	if task.stats.WindowIn != int64(allRows) {
 		t.Fatal("unexpect in", task.stats.WindowIn)
 	}
 	if task.stats.WindowSkip != 0 {
 		t.Fatal("unexpect skip", task.stats.WindowSkip)
 	}
-	if task.stats.WindowProcess != 10000000 {
+	if task.stats.WindowProcess != int64(allRows) {
 		t.Fatal("unexpect process", task.stats.WindowProcess)
 	}
 	time.Sleep(interval)
@@ -372,6 +382,17 @@ func TestTimeTask_filterRowsByExprTestTimeTask_filterRowsByExpr(t *testing.T) {
 				Type:     influx.Field_Type_Float,
 			})
 		}
+		var boolNum float64
+		if j%2 == 0 {
+			boolNum = 0
+		} else {
+			boolNum = 1
+		}
+		r.Fields = append(r.Fields, influx.Field{
+			Key:      "fieldb",
+			NumValue: boolNum,
+			Type:     influx.Field_Type_Boolean,
+		})
 		sort.Stable(&r.Fields)
 		rs = append(rs, *r)
 	}
@@ -442,6 +463,22 @@ func TestTimeTask_filterRowsByExprTestTimeTask_filterRowsByExpr(t *testing.T) {
 		},
 		{
 			cond: "fieldk_2323::float",
+			want: []int{},
+		},
+		{
+			cond: "fieldk_566 > 1564.0 or fieldb = 1",
+			want: []int{999},
+		},
+		{
+			cond: "fieldk_566 > 1564.0 and fieldb = 1",
+			want: []int{},
+		},
+		{
+			cond: "fieldk_566 > 1564.0 and fieldb = true",
+			want: []int{999},
+		},
+		{
+			cond: "fieldk_566 > 1564.0 and fieldb = false",
 			want: []int{},
 		},
 	} {
@@ -566,6 +603,8 @@ func TestTimeTask_IsMatchCond(t *testing.T) {
 		{"field_bool::boolean != false", true},
 		{"field_bool::boolean = false", false},
 		{"field_bool::boolean != true", false},
+		{"field_bool::boolean = 1", false},
+		{"field_bool::boolean = 1.0", false},
 
 		{"field_string::string = 'test_value'", true},
 		{"field_string::string != 'test_value2'", true},

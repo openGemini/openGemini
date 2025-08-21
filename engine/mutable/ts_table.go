@@ -26,7 +26,6 @@ import (
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/logger"
-	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/record"
 	Statistics "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/stringinterner"
@@ -41,19 +40,10 @@ type RecordIterator interface {
 }
 
 type tsMemTableImpl struct {
-	client metaclient.MetaClient
 }
 
 func NewTsMemTableImpl() *tsMemTableImpl {
 	return &tsMemTableImpl{}
-}
-
-func (t *tsMemTableImpl) SetClient(client metaclient.MetaClient) {
-	t.client = client
-}
-
-func (t *tsMemTableImpl) GetClient() metaclient.MetaClient {
-	return t.client
 }
 
 func (t *tsMemTableImpl) WriteRecordForFlush(rec *record.Record, msb *immutable.MsBuilder, tbStore immutable.TablesStore, id uint64) *immutable.MsBuilder {
@@ -390,7 +380,7 @@ func (t *tsMemTableImpl) appendFields(msInfo *MsInfo, chunk *WriteChunk, time in
 	return record.AppendFieldsToRecord(writeRec.rec, fields, time, sameSchema)
 }
 
-func (t *tsMemTableImpl) WriteCols(table *MemTable, rec *record.Record, mstsInfo *sync.Map, mst string) error {
+func (t *tsMemTableImpl) WriteCols(table *MemTable, rec *record.Record, mst string) error {
 	return nil
 }
 

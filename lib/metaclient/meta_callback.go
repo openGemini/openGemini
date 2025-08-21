@@ -93,6 +93,9 @@ func (c *CreateNodeCallback) Handle(data interface{}) error {
 	if !ok {
 		return errors.New("data is not a CreateNodeResponse")
 	}
+	if msg.Err != "" {
+		return errors.New(msg.Err)
+	}
 	if err = c.NodeStartInfo.UnMarshalBinary(msg.Data); err != nil {
 		return err
 	}
@@ -113,6 +116,9 @@ func (c *CreateSqlNodeCallback) Handle(data interface{}) error {
 	msg, ok := metaMsg.Data().(*message.CreateSqlNodeResponse)
 	if !ok {
 		return errors.New("data is not a CreateSqlNodeResponse")
+	}
+	if msg.Err != "" {
+		return errors.New(msg.Err)
 	}
 	if err = c.NodeStartInfo.UnMarshalBinary(msg.Data); err != nil {
 		return err
@@ -443,7 +449,7 @@ func (c *VerifyDataNodeStatusCallback) Handle(data interface{}) error {
 		return fmt.Errorf("data is not a VerifyDataNodeStatusResponse, got type %T", metaMsg.Data())
 	}
 	if msg.Err != "" {
-		return fmt.Errorf("get verify datanode status callback error: %s", msg.Err)
+		return errno.NewError(msg.ErrCode, msg.Err)
 	}
 	return nil
 }
@@ -464,6 +470,28 @@ func (c *SendSysCtrlToMetaCallback) Handle(data interface{}) error {
 	if msg.Err != "" {
 		return fmt.Errorf("send sys ctrl to meta callback error: %s", msg.Err)
 	}
+	return nil
+}
+
+type SendBackupCallback struct {
+	BaseCallback
+
+	Data []byte
+}
+
+func (c *SendBackupCallback) Handle(data interface{}) error {
+	metaMsg, err := c.Trans2MetaMsg(data)
+	if err != nil {
+		return err
+	}
+	msg, ok := metaMsg.Data().(*message.SendBackupToMetaResponse)
+	if !ok {
+		return fmt.Errorf("data is not a SendSysCtrlToMetaCallback, got type %T", metaMsg.Data())
+	}
+	if msg.Err != "" {
+		return fmt.Errorf("send sys ctrl to meta callback error: %s", msg.Err)
+	}
+	c.Data = msg.Result
 	return nil
 }
 

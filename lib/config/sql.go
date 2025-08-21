@@ -90,10 +90,12 @@ type TSSql struct {
 
 	ContinuousQuery ContinuousQueryConfig `toml:"continuous_queries"`
 	Data            Store                 `toml:"data"`
+	ShelfMode       ShelfMode             `toml:"shelf-mode"`
 
 	Limits        Limits            `toml:"limits"`
 	RuntimeConfig RuntimeConfig     `toml:"runtime-config"`
 	RecordWrite   RecordWriteConfig `toml:"record-write"`
+	Topo          Topo              `toml:"topo"`
 }
 
 // NewTSSql returns an instance of Config with reasonable defaults.
@@ -115,6 +117,7 @@ func NewTSSql(enableGossip bool) *TSSql {
 	c.Limits = NewLimits()
 	c.RuntimeConfig = NewRuntimeConfig()
 	c.RecordWrite = NewRecordWriteConfig()
+	c.Topo = NewTopo()
 	return c
 }
 
@@ -159,6 +162,7 @@ func (c *TSSql) Corrector(cpuNum, cpuAllocRatio int) {
 		}
 		c.ContinuousQuery.MaxProcessCQNumber = maxProcessCQNumber
 	}
+	c.ShelfMode.Corrector(cpuNum)
 }
 
 // Validate returns an error if the config is invalid.
@@ -177,6 +181,7 @@ func (c *TSSql) Validate() error {
 		c.ContinuousQuery,
 		c.RuntimeConfig,
 		c.RecordWrite,
+		c.Topo,
 	}
 
 	for _, item := range items {
@@ -256,7 +261,8 @@ type Coordinator struct {
 	TimeRangeLimit           []toml.Duration `toml:"time-range-limit"`
 
 	// Maximum number of tag keys in a measurement
-	TagLimit int `toml:"tag-limit"`
+	TagLimit   int `toml:"tag-limit"`
+	FieldLimit int `toml:"field-limit"`
 
 	QueryLimitFlag          bool `toml:"query-limit-flag"`
 	QueryTimeCompareEnabled bool `toml:"query-time-compare-enabled"`
@@ -319,6 +325,7 @@ func (c *Coordinator) ShowConfigs() map[string]interface{} {
 		"coordinator.rp-limit":                    c.RetentionPolicyLimit,
 		"coordinator.time-range-limit":            c.TimeRangeLimit,
 		"coordinator.tag-limit":                   c.TagLimit,
+		"coordinator.field-limit":                 c.FieldLimit,
 		"coordinator.hard-write":                  c.HardWrite,
 	}
 }

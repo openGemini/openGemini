@@ -16,6 +16,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"io"
 	"path"
 	"path/filepath"
@@ -27,23 +28,25 @@ import (
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable"
+	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/fileops"
-	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/record"
 	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics/opsStat"
 	"github.com/openGemini/openGemini/lib/strings"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"go.uber.org/zap"
 )
 
 var DeleteDatabaseTimeout = time.Second * 15
 
-func (e *Engine) DeleteDatabase(db string, ptId uint32) (err error) {
+func (e *EngineImpl) DeleteDatabase(db string, ptId uint32) (err error) {
 	traceId := tsi.GenerateUUID()
 	begin := time.Now()
 	e.log.Info("drop database begin", zap.String("db", db),
@@ -124,10 +127,12 @@ func (e *Engine) DeleteDatabase(db string, ptId uint32) (err error) {
 	e.mu.Lock()
 	e.dropDBPTInfo(db, ptId)
 	e.mu.Unlock()
+
+	colstore.MstManagerIns().DelAll(db, "")
 	return nil
 }
 
-func (e *Engine) DropRetentionPolicy(db string, rp string, ptId uint32) error {
+func (e *EngineImpl) DropRetentionPolicy(db string, rp string, ptId uint32) error {
 	rpName := db + "." + rp
 	if err := e.startDrop(rpName, e.droppingRP); err != nil {
 		return err
@@ -177,10 +182,11 @@ func (e *Engine) DropRetentionPolicy(db string, rp string, ptId uint32) error {
 		return err
 	}
 
+	colstore.MstManagerIns().DelAll(db, rp)
 	return deleteDirFunc()
 }
 
-func (e *Engine) DropMeasurement(db string, rp string, name string, shardIds []uint64) error {
+func (e *EngineImpl) DropMeasurement(db string, rp string, name string, shardIds []uint64) error {
 	e.log.Info("start delete measurement...", zap.String("db", db), zap.String("name", name))
 	start := time.Now()
 	atomic.AddInt64(&stat.EngineStat.DropMstCount, 1)
@@ -211,8 +217,14 @@ func (e *Engine) DropMeasurement(db string, rp string, name string, shardIds []u
 		e.mu.RUnlock()
 		return err
 	}
+
+	ident := colstore.NewMeasurementIdent(db, rp)
+	ident.SetName(name)
+
 	e.mu.RUnlock()
 	defer e.unrefDBPTs(db, ptIds)
+
+	colstore.MstManagerIns().Del(ident)
 
 	for ptID, pt := range pts {
 		pt.mu.RLock()
@@ -236,11 +248,36 @@ func (e *Engine) DropMeasurement(db string, rp string, name string, shardIds []u
 	return nil
 }
 
-func (e *Engine) DropSeries(database string, sources []influxql.Source, ptId []uint32, condition influxql.Expr) (int, error) {
-	panic("implement me")
+func (e *EngineImpl) DropSeries() error {
+	e.log.Info("start drop series task")
+	var errs []error
+	// drop items in index
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for db, dbptInfoMap := range e.DBPartitions {
+		for pt, dbptInfo := range dbptInfoMap {
+			ibMap := dbptInfo.indexBuilder
+			for indexId, ib := range ibMap {
+				if DelIndexBuilderId == indexId {
+					continue
+				}
+				err := ib.DropSeries()
+				if err != nil {
+					e.log.Error("drop series failed", zap.Uint32("pt", pt), zap.String("db", db), zap.Uint64("indexId", indexId))
+					errs = append(errs, err)
+				}
+			}
+		}
+	}
+	if len(errs) > 0 {
+		err := errors.Join(errs...)
+		return err
+	}
+	e.log.Info("end drop series task")
+	return nil
 }
 
-func (e *Engine) TagKeys(db string, ptIDs []uint32, measurements [][]byte, condition influxql.Expr, tr influxql.TimeRange) ([]string, error) {
+func (e *EngineImpl) TagKeys(db string, ptIDs []uint32, measurements [][]byte, condition influxql.Expr, tr influxql.TimeRange) ([]string, error) {
 	keysMap, err := e.searchIndex(db, ptIDs, measurements, condition, tr, e.handleTagKeys)
 	if err != nil {
 		return nil, err
@@ -263,7 +300,7 @@ func (e *Engine) TagKeys(db string, ptIDs []uint32, measurements [][]byte, condi
 	return result, nil
 }
 
-func (e *Engine) SeriesKeys(db string, ptIDs []uint32, measurements [][]byte, condition influxql.Expr, tr influxql.TimeRange) ([]string, error) {
+func (e *EngineImpl) SeriesKeys(db string, ptIDs []uint32, measurements [][]byte, condition influxql.Expr, tr influxql.TimeRange) ([]string, error) {
 	keysMap, err := e.searchIndex(db, ptIDs, measurements, condition, tr, e.handleSeries)
 	if err != nil {
 		return nil, err
@@ -285,7 +322,7 @@ func (e *Engine) SeriesKeys(db string, ptIDs []uint32, measurements [][]byte, co
 	return result, nil
 }
 
-func (e *Engine) SeriesCardinality(db string, ptIDs []uint32, namesWithVer [][]byte, condition influxql.Expr, tr influxql.TimeRange) ([]meta2.MeasurementCardinalityInfo, error) {
+func (e *EngineImpl) SeriesCardinality(db string, ptIDs []uint32, namesWithVer [][]byte, condition influxql.Expr, tr influxql.TimeRange) ([]meta2.MeasurementCardinalityInfo, error) {
 	e.mu.RLock()
 	var err error
 	if ptIDs, err = e.checkAndAddRefPTSNoLock(db, ptIDs); err != nil {
@@ -321,7 +358,7 @@ func (e *Engine) SeriesCardinality(db string, ptIDs []uint32, namesWithVer [][]b
 	return measurementCardinalityInfos, nil
 }
 
-func (e *Engine) TagValuesCardinality(db string, ptIDs []uint32, tagKeys map[string][][]byte, condition influxql.Expr, tr influxql.TimeRange) (map[string]uint64, error) {
+func (e *EngineImpl) TagValuesCardinality(db string, ptIDs []uint32, tagKeys map[string][][]byte, condition influxql.Expr, tr influxql.TimeRange) (map[string]uint64, error) {
 	e.mu.RLock()
 	var err error
 	if ptIDs, err = e.checkAndAddRefPTSNoLock(db, ptIDs); err != nil {
@@ -377,7 +414,7 @@ func (e *Engine) TagValuesCardinality(db string, ptIDs []uint32, tagKeys map[str
 	return result, nil
 }
 
-func (e *Engine) TagValues(db string, ptIDs []uint32, tagKeys map[string][][]byte, condition influxql.Expr, tr influxql.TimeRange) (netstorage.TablesTagSets, error) {
+func (e *EngineImpl) TagValues(db string, ptIDs []uint32, tagKeys map[string][][]byte, condition influxql.Expr, tr influxql.TimeRange) (influxql.TablesTagSets, error) {
 	e.mu.RLock()
 	var err error
 	if ptIDs, err = e.checkAndAddRefPTSNoLock(db, ptIDs); err != nil {
@@ -391,7 +428,7 @@ func (e *Engine) TagValues(db string, ptIDs []uint32, tagKeys map[string][][]byt
 		return nil, nil
 	}
 
-	tagValuess := make(netstorage.TablesTagSets, 0)
+	tagValuess := make(influxql.TablesTagSets, 0)
 	results := make(map[string][][]string, len(tagKeys))
 	for _, ptID := range ptIDs {
 		pt, ok := pts[ptID]
@@ -423,13 +460,13 @@ func (e *Engine) TagValues(db string, ptIDs []uint32, tagKeys map[string][][]byt
 
 	// transform to tagvalues
 	for name, tvs := range results {
-		tv := netstorage.TableTagSets{
+		tv := influxql.TableTagSets{
 			Name:   influx.GetOriginMstName(name),
-			Values: make(netstorage.TagSets, 0, len(tvs[0])),
+			Values: make(influxql.TagSets, 0, len(tvs[0])),
 		}
 		for i, tk := range tagKeys[name] {
 			for _, v := range tvs[i] {
-				tv.Values = append(tv.Values, netstorage.TagSet{Key: util.Bytes2str(tk), Value: v})
+				tv.Values = append(tv.Values, influxql.TagSet{Key: util.Bytes2str(tk), Value: v})
 			}
 		}
 		tagValuess = append(tagValuess, tv)
@@ -447,7 +484,7 @@ func appendValuesToMap(results map[string][][]string, name string, values [][]st
 	}
 }
 
-func (e *Engine) StatisticsOps() []opsStat.OpsStatistic {
+func (e *EngineImpl) StatisticsOps() []opsStat.OpsStatistic {
 	databases := e.Databases()
 	statistics := make([]opsStat.OpsStatistic, 0, len(databases))
 	for _, database := range databases {
@@ -488,7 +525,7 @@ func (e *Engine) StatisticsOps() []opsStat.OpsStatistic {
 	return statistics
 }
 
-func (e *Engine) Databases() []string {
+func (e *EngineImpl) Databases() []string {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	databases := make([]string, 0, len(e.DBPartitions))
@@ -499,7 +536,7 @@ func (e *Engine) Databases() []string {
 	return databases
 }
 
-func (e *Engine) getDBPtIds(dbName string) []uint32 {
+func (e *EngineImpl) getDBPtIds(dbName string) []uint32 {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	ids := make([]uint32, 0, len(e.DBPartitions[dbName]))
@@ -509,7 +546,7 @@ func (e *Engine) getDBPtIds(dbName string) []uint32 {
 	return ids
 }
 
-func (e *Engine) getAllMst(dbName string) [][]byte {
+func (e *EngineImpl) getAllMst(dbName string) [][]byte {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	if e.metaClient == nil {
@@ -523,7 +560,7 @@ func (e *Engine) getAllMst(dbName string) [][]byte {
 	return mstNames
 }
 
-func (e *Engine) getFileSizeStats(statistics []opsStat.OpsStatistic) []opsStat.OpsStatistic {
+func (e *EngineImpl) getFileSizeStats(statistics []opsStat.OpsStatistic) []opsStat.OpsStatistic {
 	dbPath := e.getAllDBPaths()
 	for dbName, paths := range dbPath {
 		var allFileSize int64
@@ -550,7 +587,7 @@ func (e *Engine) getFileSizeStats(statistics []opsStat.OpsStatistic) []opsStat.O
 	return statistics
 }
 
-func (e *Engine) getAllDBPaths() map[string][]string {
+func (e *EngineImpl) getAllDBPaths() map[string][]string {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	if e.metaClient == nil {
@@ -567,8 +604,8 @@ func (e *Engine) getAllDBPaths() map[string][]string {
 	return dpPath
 }
 
-func (e *Engine) CreateDDLBasePlans(planType hybridqp.DDLType, db string, ptIDs []uint32, tr *influxql.TimeRange) netstorage.DDLBasePlans {
-	plan := &DDLBasePlans{planType: planType}
+func (e *EngineImpl) CreateDDLBasePlans(planType hybridqp.DDLType, db string, ptIDs []uint32, tr *influxql.TimeRange) DDLBasePlans {
+	plan := &DDLBasePlansImpl{planType: planType}
 
 	for i := range ptIDs {
 		dbPT := e.getDBPTInfo(db, ptIDs[i])
@@ -587,18 +624,51 @@ func (e *Engine) CreateDDLBasePlans(planType hybridqp.DDLType, db string, ptIDs 
 	return plan
 }
 
-type DDLBasePlans struct {
+func (e *EngineImpl) CreateConsumeIterator(db, mst string, opt *query.ProcessorOptions) []record.Iterator {
+	ret := &ConsumeIterator{}
+	tr := &influxql.TimeRange{Min: time.Unix(0, opt.StartTime), Max: time.Unix(0, opt.EndTime)}
+
+	e.walkDBPt(db, func(pt *DBPTInfo) {
+		pt.walkShards(tr, func(sh Shard) {
+			itr := sh.CreateConsumeIterator(mst, opt)
+			if itr == nil {
+				return
+			}
+
+			ret.itrs = append(ret.itrs, itr)
+			ret.tms = append(ret.tms, sh.GetStartTime().UnixNano())
+		})
+	})
+
+	sort.Sort(ret)
+	return ret.itrs
+}
+
+func (e *EngineImpl) walkDBPt(db string, fn func(pt *DBPTInfo)) {
+	ptIDs := e.getDBPtIds(db)
+	for i := range ptIDs {
+		dbPT := e.getDBPTInfo(db, ptIDs[i])
+		if dbPT == nil {
+			e.log.Info("CreateDDLBasePlans DBPT not found", zap.String("db", db), zap.Uint32("ptID", ptIDs[i]))
+			continue
+		}
+
+		fn(dbPT)
+	}
+}
+
+type DDLBasePlansImpl struct {
 	planType hybridqp.DDLType
 	plans    []immutable.DDLBasePlan
 }
 
-func (p *DDLBasePlans) AddPlan(plan interface{}) {
+func (p *DDLBasePlansImpl) AddPlan(plan interface{}) {
 	p.plans = append(p.plans, plan.(immutable.DDLBasePlan))
 }
 
-func (p *DDLBasePlans) Stop() {}
+func (p *DDLBasePlansImpl) Stop() {}
 
-func (p *DDLBasePlans) Execute(tagKeys map[string][][]byte, condition influxql.Expr, tr util.TimeRange, limit int) (interface{}, error) {
+func (p *DDLBasePlansImpl) Execute(tagKeys map[string][][]byte, condition influxql.Expr, tr util.TimeRange, limit int) (interface{}, error) {
 	dst := make(map[string]immutable.DDLRespData)
 
 	var err error
@@ -614,14 +684,14 @@ func (p *DDLBasePlans) Execute(tagKeys map[string][][]byte, condition influxql.E
 
 	// show tag values
 	if p.planType == hybridqp.ShowTagValues {
-		tableTagSets := make(netstorage.TablesTagSets, 0)
+		tableTagSets := make(influxql.TablesTagSets, 0)
 		for mst, tagSet := range dst {
-			tv := netstorage.TableTagSets{
+			tv := influxql.TableTagSets{
 				Name:   influx.GetOriginMstName(mst),
-				Values: make(netstorage.TagSets, 0),
+				Values: make(influxql.TagSets, 0),
 			}
 			tagSet.ForEach(func(tagKey, tagValue string) {
-				tv.Values = append(tv.Values, netstorage.TagSet{Key: tagKey, Value: tagValue})
+				tv.Values = append(tv.Values, influxql.TagSet{Key: tagKey, Value: tagValue})
 			})
 			tableTagSets = append(tableTagSets, tv)
 		}
@@ -641,4 +711,22 @@ func (p *DDLBasePlans) Execute(tagKeys map[string][][]byte, condition influxql.E
 	}
 	sort.Strings(result)
 	return result, nil
+}
+
+type ConsumeIterator struct {
+	itrs []record.Iterator
+	tms  []int64
+}
+
+func (ci *ConsumeIterator) Len() int {
+	return len(ci.itrs)
+}
+
+func (ci *ConsumeIterator) Less(i, j int) bool {
+	return ci.tms[i] < ci.tms[j]
+}
+
+func (ci *ConsumeIterator) Swap(i, j int) {
+	ci.itrs[i], ci.itrs[j] = ci.itrs[j], ci.itrs[i]
+	ci.tms[i], ci.tms[j] = ci.tms[j], ci.tms[i]
 }

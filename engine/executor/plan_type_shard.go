@@ -41,7 +41,7 @@ func NewPlanTypeInitShardMapper() *PlanTypeInitShardMapper {
 	return &PlanTypeInitShardMapper{}
 }
 
-func (pts *PlanTypeInitShardMapper) MapShards(sources influxql.Sources, t influxql.TimeRange, opt query.SelectOptions, condition influxql.Expr) (query.ShardGroup, error) {
+func (pts *PlanTypeInitShardMapper) MapShards(stmt *influxql.SelectStatement, t influxql.TimeRange, opt query.SelectOptions, condition influxql.Expr) (query.ShardGroup, error) {
 	shardGroup := NewPlanTypeInitShardGroup()
 	return shardGroup, nil
 }
@@ -82,6 +82,22 @@ func NewPlanTypeInitShardGroup() *PlanTypeInitShard {
 }
 
 func (pts *PlanTypeInitShard) GetSeriesKey() []byte {
+	return nil
+}
+
+func (pts *PlanTypeInitShard) GetTagKeys(stmt *influxql.ShowTagValuesStatement) (map[string]map[string]struct{}, error) {
+	return nil, nil
+}
+
+func (pts *PlanTypeInitShard) GetTagVals(nodeID uint64, stmt *influxql.ShowTagValuesStatement, pts2 []uint32, tagKeys map[string]map[string]struct{}, exact bool) (influxql.TablesTagSets, error) {
+	return nil, nil
+}
+
+func (pts *PlanTypeInitShard) QueryNodePtsMap(database string) (map[uint64][]uint32, error) {
+	return nil, nil
+}
+
+func (pts *PlanTypeInitShard) CheckDatabaseExists(name string) error {
 	return nil
 }
 

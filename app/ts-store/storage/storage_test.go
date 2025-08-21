@@ -27,6 +27,7 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
+	"github.com/openGemini/openGemini/lib/msgservice"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
@@ -36,6 +37,31 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestAppendRetentionMstPolicyService(t *testing.T) {
+	s := Storage{}
+	c := retention2.NewConfig()
+	s.appendRetentionMstPolicyService(c)
+	if len(s.Services) != 2 {
+		t.Errorf("services append fail")
+	}
+}
+
+func TestAppendDropSeriesService(t *testing.T) {
+	s := Storage{}
+	c := retention2.NewConfig()
+	s.appendDropSeriesService(c)
+	if len(s.Services) != 1 {
+		t.Errorf("services append fail")
+	}
+
+	c2 := retention2.NewConfig()
+	c2.Enabled = false
+	s.appendDropSeriesService(c2)
+	if len(s.Services) != 1 {
+		t.Errorf("backend service disabled fail")
+	}
+}
 
 func TestAppendDownSamplePolicyService(t *testing.T) {
 	s := Storage{}
@@ -96,10 +122,14 @@ func TestReportLoad(t *testing.T) {
 }
 
 type MockEngine struct {
-	netstorage.Engine
+	engine.Engine
 }
 
 func (e *MockEngine) WriteRec(_, _ string, _ uint32, _ uint64, _ *record.Record, _ []byte) error {
+	return nil
+}
+
+func (e *MockEngine) ClearRepCold(req *msgservice.SendClearEventsRequest) error {
 	return nil
 }
 
@@ -128,6 +158,10 @@ func (mc *MockMetaClient) GetReplicaInfo(_ string, _ uint32) *message.ReplicaInf
 	return mc.replicaInfo
 }
 
+func (mc *MockMetaClient) ShardOwner(shardID uint64) (database, policy string, sgi *meta.ShardGroupInfo) {
+	return "db", "rp", &meta.ShardGroupInfo{}
+}
+
 func TestStorage_Write(t *testing.T) {
 	dir := t.TempDir()
 	st := &Storage{
@@ -151,7 +185,7 @@ func TestStorage_Write(t *testing.T) {
 		},
 	}
 
-	newEngineFn := netstorage.GetNewEngineFunction(config.DefaultEngine)
+	newEngineFn := engine.GetNewEngineFunction(config.DefaultEngine)
 	loadCtx := metaclient.LoadCtx{}
 	loadCtx.LoadCh = make(chan *metaclient.DBPTCtx, 100)
 	eng, err := newEngineFn(dir, dir, engineOption, &loadCtx)
@@ -223,10 +257,10 @@ func mockRows(num int) influx.Rows {
 	return rows
 }
 
-var engineOption netstorage.EngineOptions
+var engineOption engine.EngineOptions
 
 func init() {
-	engineOption = netstorage.NewEngineOptions()
+	engineOption = engine.NewEngineOptions()
 	engineOption.ShardMutableSizeLimit = 30 * 1024 * 1024
 	engineOption.NodeMutableSizeLimit = 1e9
 	engineOption.MaxWriteHangTime = time.Second
@@ -266,7 +300,7 @@ func TestStorage_WriteToSlave(t *testing.T) {
 	st.MetaClient = mockClient
 	st.metaClient = &metaclient.Client{}
 	st.metaClient.SetCacheData(&mockData)
-	newEngineFn := netstorage.GetNewEngineFunction(config.DefaultEngine)
+	newEngineFn := engine.GetNewEngineFunction(config.DefaultEngine)
 
 	loadCtx := metaclient.LoadCtx{}
 	loadCtx.LoadCh = make(chan *metaclient.DBPTCtx, 100)
@@ -313,7 +347,7 @@ func TestStorage_WriteToSlave(t *testing.T) {
 
 func Test_StorageCheckPtsRemovedDone(t *testing.T) {
 	st1 := &Storage{
-		engine: &engine.Engine{},
+		engine: &engine.EngineImpl{},
 	}
 	if st1.CheckPtsRemovedDone() != nil {
 		t.Fatal("Test_StorageCheckPtsRemovedDone nil DBPartitions error")
@@ -323,7 +357,7 @@ func Test_StorageCheckPtsRemovedDone(t *testing.T) {
 	dbpts := make(map[string]map[uint32]*engine.DBPTInfo, 0)
 	dbpts["db0"] = pts
 	st2 := &Storage{
-		engine: &engine.Engine{
+		engine: &engine.EngineImpl{
 			DBPartitions: dbpts,
 		},
 	}
@@ -369,7 +403,7 @@ func TestStorage_RepConfigWrite(t *testing.T) {
 	st.MetaClient = mockClient
 	st.metaClient = &metaclient.Client{}
 	st.metaClient.SetCacheData(&mockData)
-	newEngineFn := netstorage.GetNewEngineFunction(config.DefaultEngine)
+	newEngineFn := engine.GetNewEngineFunction(config.DefaultEngine)
 
 	loadCtx := metaclient.LoadCtx{}
 	loadCtx.LoadCh = make(chan *metaclient.DBPTCtx, 100)
@@ -430,7 +464,7 @@ func TestWriteBlobs(t *testing.T) {
 	dir := t.TempDir()
 	loadCtx := metaclient.LoadCtx{}
 	loadCtx.LoadCh = make(chan *metaclient.DBPTCtx, 100)
-	newEngineFn := netstorage.GetNewEngineFunction(config.DefaultEngine)
+	newEngineFn := engine.GetNewEngineFunction(config.DefaultEngine)
 	eng, err := newEngineFn(dir, dir, engineOption, &loadCtx)
 	require.NoError(t, err)
 	eng.SetMetaClient(st.metaClient)
@@ -438,6 +472,21 @@ func TestWriteBlobs(t *testing.T) {
 	defer st.MustClose()
 
 	bg, _ := shelf.NewBlobGroup(1)
-	err = st.WriteBlobs("db", "rp", 1, 1, bg)
+	err = st.WriteBlobs("db", "rp", 1, 1, bg, 0, 0)
 	require.Error(t, err)
+}
+
+func Test_StorageAppendShardMergeService(t *testing.T) {
+	st1 := &Storage{
+		engine: &engine.EngineImpl{},
+	}
+	st1.appendShardMergeService(config.ShardMergeConfig{Enabled: true})
+}
+
+func TestClearRepCold(t *testing.T) {
+	s := Storage{
+		engine: &MockEngine{},
+	}
+	err := s.ClearRepCold(nil)
+	require.NoError(t, err)
 }

@@ -58,7 +58,7 @@ type fileCursor struct {
 	minT, maxT         int64
 	schema             record.Schemas
 	file               immutable.TSSPFile
-	tagSet             *tsi.TagSetInfo
+	tagSet             tsi.TagSetEx
 	loc                *immutable.Location
 	querySchema        *executor.QuerySchema
 	span               *tracing.Span
@@ -103,8 +103,8 @@ var (
 */
 
 func newFileCursor(ctx *idKeyCursorContext, span *tracing.Span, schema *executor.QuerySchema,
-	tagSet *tsi.TagSetInfo, start, step int, file immutable.TSSPFile, memRecIters map[uint64][]*SeriesIter) (*fileCursor, error) {
-	if len(tagSet.IDs) == 0 {
+	tagSet tsi.TagSetEx, start, step int, file immutable.TSSPFile, memRecIters map[uint64][]*SeriesIter) (*fileCursor, error) {
+	if tagSet.Len() == 0 {
 		return nil, nil
 	}
 	loc := immutable.NewLocation(file, ctx.decs)
@@ -179,7 +179,7 @@ func (f *fileCursor) SetLastFile() {
 
 func (f *fileCursor) nextIndex(current int) {
 	next := current + f.step
-	if next < len(f.tagSet.IDs) && f.tagSet.IDs[next] != f.tagSet.IDs[current] {
+	if next < f.tagSet.Len() && f.tagSet.GetSid(next, 0) != f.tagSet.GetSid(current, 0) {
 		f.start = next
 		f.index = 0
 	} else {
@@ -197,13 +197,14 @@ func (f *fileCursor) readPreAggData() (*DataBlockInfo, error) {
 	for {
 		idx := f.index
 		i := f.start + idx*f.step
-		if i >= len(f.tagSet.IDs) {
+		if i >= f.tagSet.Len() {
 			return nil, nil
 		}
 		f.nextIndex(i)
-		sid := f.tagSet.IDs[i]
+		tagSetItem := f.tagSet.GetTagSetItem(i)
+		sid := tagSetItem.ID
 		ptTags := f.tagSet.GetTagsWithQuerySchema(i, f.querySchema)
-		sInfo := &seriesInfo{sid: sid, tags: *ptTags, key: f.tagSet.SeriesKeys[i]}
+		sInfo := &seriesInfo{sid: sid, tags: *ptTags, key: tagSetItem.SeriesKey}
 		f.loc.ResetMeta()
 
 		contains, err := f.loc.Contains(sid, f.ctx.tr, f.metaContext)
@@ -219,7 +220,7 @@ func (f *fileCursor) readPreAggData() (*DataBlockInfo, error) {
 			continue
 		}
 
-		filter := f.tagSet.Filters[i]
+		filter := tagSetItem.Filter
 		rowFilter := f.tagSet.GetRowFilter(i)
 		filterOpts := immutable.NewFilterOpts(filter, &f.ctx.filterOption, ptTags, rowFilter)
 		orderRec := f.recordPool.Get()
@@ -280,12 +281,13 @@ func (f *fileCursor) readData() (*DataBlockInfo, error) {
 	for {
 		idx := f.index
 		i := f.start + idx*f.step
-		if i >= len(f.tagSet.IDs) {
+		if i >= f.tagSet.Len() {
 			return nil, nil
 		}
-		sid := f.tagSet.IDs[i]
+		tagSetItem := f.tagSet.GetTagSetItem(i)
+		sid := tagSetItem.ID
 		ptTags := f.tagSet.GetTagsWithQuerySchema(i, f.querySchema)
-		sInfo := &seriesInfo{sid: sid, tags: *ptTags, key: f.tagSet.SeriesKeys[i]}
+		sInfo := &seriesInfo{sid: sid, tags: *ptTags, key: tagSetItem.SeriesKey}
 		if f.seriesIter.iter.hasRemainData() {
 			orderRec := mergeData(f.memIter, f.seriesIter.iter, f.querySchema.Options().ChunkSizeNum(), f.ascending)
 			orderRec = orderRec.KickNilRow(f.validRowRecordPool.Get(), f.colAux)
@@ -318,7 +320,7 @@ func (f *fileCursor) readData() (*DataBlockInfo, error) {
 				f.memIter.init(f.getSeriesNotInFile(sid, idx))
 			}
 		}
-		filter := f.tagSet.Filters[i]
+		filter := tagSetItem.Filter
 		rowFilter := f.tagSet.GetRowFilter(i)
 		filterOpts := immutable.NewFilterOpts(filter, &f.ctx.filterOption, ptTags, rowFilter)
 		orderRec := f.recordPool.Get()
@@ -407,7 +409,7 @@ func (f *fileCursor) reset() {
 }
 
 func (f *fileCursor) reInit(ctx *idKeyCursorContext, span *tracing.Span, schema *executor.QuerySchema,
-	tagSet *tsi.TagSetInfo, start, step int, file immutable.TSSPFile, memRecIters map[uint64][]*SeriesIter) error {
+	tagSet tsi.TagSetEx, start, step int, file immutable.TSSPFile, memRecIters map[uint64][]*SeriesIter) error {
 	f.tagSet = tagSet
 	f.file = file
 	f.ctx = ctx

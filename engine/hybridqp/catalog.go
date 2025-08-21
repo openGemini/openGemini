@@ -39,6 +39,10 @@ func init() {
 	RegistryPromNestOp("count_prom", &CountPromOp{})
 }
 
+type TraitType int8
+
+const NodeTrait TraitType = iota
+
 type RowDataType interface {
 	Aux() []int
 	Equal(RowDataType) bool
@@ -254,6 +258,7 @@ type Catalog interface {
 	HasHoltWintersCall() bool
 	IsMultiMeasurements() bool
 	HasGroupBy() bool
+	SetSources(sources influxql.Sources)
 	Sources() influxql.Sources
 	HasSubQuery() bool
 	HasOptimizeAgg() bool
@@ -261,6 +266,7 @@ type Catalog interface {
 	GetSourcesNames() []string
 	GetFieldType(i int) (int64, error)
 	GetJoinCaseCount() int
+	SetJoinCases(joinCase []*influxql.Join)
 	GetJoinCases() []*influxql.Join
 	IsHoltWinters(val string) bool
 	GetSortFields() influxql.SortFields
@@ -269,7 +275,13 @@ type Catalog interface {
 	HasUnnests() bool
 	GetTimeRangeByTC() util.TimeRange
 	GetPromCalls() []*influxql.PromSubCall
-	HasTopNDDCM() bool
+	HasTopN() (string, bool)
+	IsCompareCall() bool
+	HasInCondition() bool
+	ClearInConditions()
+	IsInSubquerySchema() bool
+	SetDistinct(bool)
+	HasDistinct() bool
 }
 
 type CatalogCreator interface {

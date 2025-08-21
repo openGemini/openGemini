@@ -16,6 +16,7 @@ package coordinator
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"sort"
 	"strings"
@@ -25,10 +26,14 @@ import (
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
 	"github.com/influxdata/influxdb/models"
 	"github.com/influxdata/influxdb/toml"
+	"github.com/openGemini/openGemini/app/ts-store/stream"
+	"github.com/openGemini/openGemini/app/ts-store/transport"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/msgservice"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/pointsdecoder"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/stringinterner"
 	strings2 "github.com/openGemini/openGemini/lib/strings"
@@ -37,6 +42,7 @@ import (
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/services/fence"
 	"go.uber.org/zap"
 )
 
@@ -80,6 +86,7 @@ type PWMetaClient interface {
 	DBRepGroups(database string) []meta2.ReplicaGroup
 	GetReplicaN(database string) (int, error)
 	GetSgEndTime(database string, rp string, timestamp time.Time, engineType config.EngineType) (int64, error)
+	UpdateSchemaByCmd(cmd *proto2.UpdateSchemaCommand) error
 }
 
 // PointsWriter handles writes across multiple local and remote data nodes.
@@ -223,10 +230,18 @@ func fixFields(fields influx.Fields) (influx.Fields, error) {
 	return fields, nil
 }
 
+func (w *PointsWriter) GetLogger() *logger.Logger {
+	return w.logger
+}
+
 // RetryWritePointRows make sure sql client got the latest metadata.
 func (w *PointsWriter) RetryWritePointRows(database, retentionPolicy string, rows []influx.Row) error {
 	var err error
 	start := time.Now()
+
+	if config.GetStoreConfig().Fence.FenceEnable {
+		fence.RewriteRows(rows)
+	}
 
 	for {
 		err = w.writePointRows(database, retentionPolicy, rows)
@@ -307,12 +322,12 @@ func (w *PointsWriter) writePointRows(database, retentionPolicy string, rows []i
 
 	if err != nil {
 		if errno.Equal(err, errno.ErrorTagArrayFormat, errno.WriteErrorArray, errno.SeriesLimited) {
-			return netstorage.PartialWriteError{Reason: err, Dropped: dropped}
+			return msgservice.PartialWriteError{Reason: err, Dropped: dropped}
 		}
 		return err
 	}
 	if partialErr != nil {
-		return netstorage.PartialWriteError{Reason: partialErr, Dropped: dropped}
+		return msgservice.PartialWriteError{Reason: partialErr, Dropped: dropped}
 	}
 	return partialErr
 }
@@ -375,6 +390,7 @@ func (w *PointsWriter) routeAndMapOriginRows(
 	var sh *meta2.ShardInfo
 	var r *influx.Row
 	var originName string
+	var skipPreCheck bool
 
 	// Check whether all stream tasks are filter-only.
 	// If yes, skip the 'buildColumnToIndex' procedure.
@@ -388,7 +404,7 @@ func (w *PointsWriter) routeAndMapOriginRows(
 	}
 
 	wh := ctx.getWriteHelper(w)
-	for i := range rows {
+	for i := 0; i < len(rows); i++ {
 		r = &rows[i]
 
 		// the filter-only stream destination measurement cannot be written
@@ -428,7 +444,8 @@ func (w *PointsWriter) routeAndMapOriginRows(
 
 		originName = r.Name
 		wh.sameMeasurement(originName)
-		ctx.ms, err = wh.createMeasurement(database, retentionPolicy, r.Name)
+		ctx.ms, err = wh.createMeasurement(database, retentionPolicy, r.Name, skipPreCheck)
+		skipPreCheck = false
 		if err != nil {
 			if errno.Equal(err, errno.InvalidMeasurement) {
 				w.logger.Error("invalid measurement", zap.Error(err))
@@ -479,6 +496,11 @@ func (w *PointsWriter) routeAndMapOriginRows(
 
 		err, sh, pErr = w.updateShardGroupAndShardKey(database, retentionPolicy, r, ctx, false, nil, 0, false)
 		if err != nil {
+			if errno.Equal(err, errno.NoMstInDb) && meta2.SchemaCleanEn {
+				skipPreCheck = true
+				i--
+				continue
+			}
 			return nil, dropped, err
 		}
 		if pErr != nil {
@@ -582,7 +604,7 @@ func (w *PointsWriter) routeAndCalculateStreamRows(ctx *injestionCtx) (err error
 
 		var mi *meta2.MeasurementInfo
 		ctx.writeHelper.sameMeasurement(mst)
-		mi, err = ctx.writeHelper.createMeasurement((*dstSis)[dstSisIdxes[0]].SrcMst.Database, (*dstSis)[dstSisIdxes[0]].SrcMst.RetentionPolicy, mst)
+		mi, err = ctx.writeHelper.createMeasurement((*dstSis)[dstSisIdxes[0]].SrcMst.Database, (*dstSis)[dstSisIdxes[0]].SrcMst.RetentionPolicy, mst, false)
 		if err != nil {
 			return
 		}
@@ -870,10 +892,6 @@ RETRY:
 	return err
 }
 
-func (w *PointsWriter) SetStore(store Storage) {
-	w.TSDBStore = NewLocalStore(store)
-}
-
 func (w *PointsWriter) inTimeRange(ts int64) bool {
 	if w.timeRange == nil {
 		return true
@@ -940,38 +958,68 @@ func selectIndexList(columnToIndex map[string]int, indexList []string) ([]uint16
 	return index, true
 }
 
-type Storage interface {
-	WriteRows(db, rp string, ptId uint32, shardID uint64, rows []influx.Row, binaryRows []byte) error
-}
-
 type LocalStore struct {
-	store Storage
+	store  transport.Storage
+	stream stream.Engine
+	logger *logger.Logger
 }
 
-func NewLocalStore(store Storage) *LocalStore {
+func NewLocalStore(store transport.Storage, stream stream.Engine, logger *logger.Logger) *LocalStore {
 	return &LocalStore{
-		store: store,
+		store:  store,
+		stream: stream,
+		logger: logger,
 	}
 }
 
-func (s *LocalStore) WriteRows(ctx *netstorage.WriteContext, _ uint64, _ uint32, database, rp string, _ time.Duration) error {
-	buf := ctx.Buf
-	for _, ptId := range ctx.Shard.Owners {
-		rows := ctx.Rows
-
-		buf, _ = influx.FastMarshalMultiRows(buf[:0], rows) // for wal
-		pos := len(buf)
-
-		for i := range rows {
-			buf = rows[i].UnmarshalIndexKeys(buf)
-		}
-		ctx.Buf = buf
-
-		err := s.store.WriteRows(database, rp, ptId, ctx.Shard.ID, rows, buf[:pos])
-		if err != nil {
-			return err
-		}
+func (s *LocalStore) WriteRows(ctx *netstorage.WriteContext, nodeID uint64, pt uint32, database, rp string, timeout time.Duration) error {
+	rows := ctx.Rows
+	if len(rows) == 0 {
+		return nil
 	}
 
-	return nil
+	cli := s.store.GetMetaClient()
+	// Determine the location of this shard and whether it still exists
+	db, rpName, sgi := cli.ShardOwner(ctx.Shard.ID)
+	if sgi == nil {
+		return fmt.Errorf("shard group not found, shardID: %d", ctx.Shard.ID)
+	}
+
+	if db != database || rpName != rp {
+		return fmt.Errorf("exp db: %v, rp: %v, but got: %v, %v", database, rp, db, rpName)
+	}
+	//
+	pBuf, err := netstorage.MarshalRows(ctx, db, rp, pt)
+	if err != nil {
+		return err
+	}
+
+	if len(ctx.StreamShards) > 0 {
+		streamVars := make([]*msgservice.StreamVar, len(rows))
+		for i := range rows {
+			streamVars[i] = &msgservice.StreamVar{}
+			streamVars[i].Only = rows[i].StreamOnly
+			streamVars[i].Id = rows[i].StreamId
+		}
+
+		ww := pointsdecoder.GetDecoderWork()
+		ww.SetReqBuf(pBuf)
+		ww.SetStreamVars(streamVars)
+		ww.Ref()
+
+		err, _ = transport.WriteStreamPoints(ww, s.logger, s.store, s.stream)
+		return err
+	}
+	buf := ctx.Buf
+	buf, _ = influx.FastMarshalMultiRows(buf[:0], rows)
+	pos := len(buf)
+	for i := range rows {
+		buf = rows[i].UnmarshalIndexKeys(buf)
+
+	}
+	ctx.Buf = buf
+
+	err = s.store.WriteRows(database, rp, pt, ctx.Shard.ID, rows, buf[:pos])
+
+	return err
 }

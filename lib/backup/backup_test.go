@@ -120,7 +120,7 @@ func TestReadBackupLogFile(t *testing.T) {
 
 func CreateFile(path string) {
 	p, _ := filepath.Split(path)
-	_ = os.MkdirAll(p, 0750)
+	_ = os.MkdirAll(p, 0700)
 	fd, _ := fileops.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0640)
 	fd.Write([]byte("123"))
 	fd.Close()

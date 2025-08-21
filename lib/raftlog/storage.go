@@ -86,7 +86,11 @@ func Init(dir string, SyncInterval time.Duration) (*RaftDiskStorage, error) {
 	}
 	if !raft.IsEmptySnap(snap) {
 		if snap.Metadata.Index+1 != first {
-			return nil, errors.Newf("snap index: %d + 1 should be equal to first: %d\n", snap.Metadata.Index, first)
+			last, err := rds.LastIndex()
+			if err != nil {
+				return nil, err
+			}
+			return nil, errors.Newf("snap index: %d + 1 should be equal to first: %d last: %d\n", snap.Metadata.Index, first, last)
 		}
 	}
 
@@ -94,8 +98,9 @@ func Init(dir string, SyncInterval time.Duration) (*RaftDiskStorage, error) {
 	// inserted. So insert delete entries for those ranges starting from 0 to (first-1).
 	err = rds.entryLog.deleteBefore(first - 1)
 	if err != nil {
-		rds.logger.Error("init deleteBefore err", zap.Error(err), zap.String("dir", dir), zap.Uint64("first", first))
+		rds.logger.Error("Init deleteBefore err", zap.Error(err), zap.String("dir", dir), zap.Uint64("first", first))
 	}
+
 	last := rds.entryLog.lastIndex()
 	rds.logger.Info("Init Raft Storage with snap", zap.Uint64("index", snap.Metadata.Index), zap.Uint64("first", first),
 		zap.Uint64("last", last), zap.Duration("syncInterval", rds.SyncInterval))

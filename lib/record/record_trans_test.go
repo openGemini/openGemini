@@ -18,19 +18,14 @@ import (
 	"fmt"
 	"math/rand"
 	"sort"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/apache/arrow/go/v13/arrow"
 	"github.com/apache/arrow/go/v13/arrow/array"
 	"github.com/apache/arrow/go/v13/arrow/memory"
-	"github.com/openGemini/openGemini/engine/mutable"
-	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/record"
-	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
-	"github.com/savsgio/dictpool"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -296,7 +291,7 @@ func BenchmarkArrowRecordToNativeRecordWithoutNull(t *testing.B) {
 			rec := record.NewRecord(s, false)
 			err := record.ArrowRecordToNativeRecord(arrowRecs[j], rec)
 			if err != nil {
-				t.Fatalf(err.Error())
+				t.Fatalf("%s", err.Error())
 			}
 		}
 		t.StopTimer()
@@ -315,64 +310,9 @@ func BenchmarkArrowRecordToNativeRecordWithNull(t *testing.B) {
 			rec := record.NewRecord(s, false)
 			err := record.ArrowRecordToNativeRecord(arrowRecs[j], rec)
 			if err != nil {
-				t.Fatalf(err.Error())
+				t.Fatalf("%s", err.Error())
 			}
 		}
-		t.StopTimer()
-	}
-}
-
-func BenchmarkWriteRowsToColumnStore(t *testing.B) {
-	rowsD := &dictpool.Dict{}
-	mstName := "mst"
-	recs, s := MockFlowScopeNativeRecords(1, 10000, 8, 22, false)
-	rows := NativeRecordToInfluxRows(recs, mstName)
-	rowsD.Set(mstName, &rows)
-	mstSchema := make(meta.CleanSchema)
-	for i := 0; i < len(s); i++ {
-		mstSchema[s[i].Name] = meta.SchemaVal{Typ: int8(s[i].Type)}
-	}
-	mstsInfo := &sync.Map{}
-	mInfo := &meta.MeasurementInfo{Name: mstName, Schema: &mstSchema}
-	mstsInfo.Store(mstName, mInfo)
-	var writeCtx = mutable.WriteRowsCtx{MstsInfo: mstsInfo}
-	t.SetParallelism(1)
-	t.ReportAllocs()
-	t.ResetTimer()
-	for i := 0; i < t.N; i++ {
-		t.StartTimer()
-		memTable := mutable.NewMemTable(config.COLUMNSTORE)
-		if err := memTable.MTable.WriteRows(memTable, rowsD, writeCtx); err != nil {
-			t.Fatalf(err.Error())
-		}
-		memTable.UnRef()
-		t.StopTimer()
-	}
-}
-
-func BenchmarkWriteRecsToColumnStore(t *testing.B) {
-	recsD := &dictpool.Dict{}
-	mstName := "mst"
-	recs, s := MockFlowScopeNativeRecords(1, 10000, 8, 22, false)
-	recsD.Set(mstName, &recs)
-	mstSchema := make(meta.CleanSchema)
-	for i := 0; i < len(s); i++ {
-		mstSchema[s[i].Name] = meta.SchemaVal{Typ: int8(s[i].Type)}
-	}
-	mstsInfo := &sync.Map{}
-	mInfo := &meta.MeasurementInfo{Name: mstName, Schema: &mstSchema}
-	mstsInfo.Store(mstName, mInfo)
-	var writeCtx = mutable.WriteRowsCtx{MstsInfo: mstsInfo}
-	t.SetParallelism(1)
-	t.ReportAllocs()
-	t.ResetTimer()
-	for i := 0; i < t.N; i++ {
-		t.StartTimer()
-		memTable := mutable.NewMemTable(config.COLUMNSTORE)
-		if err := memTable.MTable.WriteRows(memTable, recsD, writeCtx); err != nil {
-			t.Fatalf(err.Error())
-		}
-		memTable.UnRef()
 		t.StopTimer()
 	}
 }

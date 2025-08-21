@@ -118,6 +118,10 @@ func (s *MockRPCStore) afterIndex(index uint64) <-chan struct{} {
 	return a
 }
 
+func (s *MockRPCStore) GetMarshalData(parts []string) ([]byte, error) {
+	return []byte{}, nil
+}
+
 func (s *MockRPCStore) getSnapshot(role metaclient.Role) []byte {
 	return []byte{255, 128}
 }
@@ -247,6 +251,10 @@ func TestCreateNode(t *testing.T) {
 		t.Errorf("send msg error: %s", err)
 	}
 	ast.Equal(t, uint64(1), callback.NodeStartInfo.NodeId)
+
+	rspData := message.NewMetaMessage(message.CreateNodeRequestMessage, &message.CreateNodeResponse{Err: "err"})
+	err = callback.Handle(rspData)
+	ast.Equal(t, err.Error(), "err")
 }
 
 func TestCreateSqlNode(t *testing.T) {
@@ -275,6 +283,9 @@ func TestSqlNodeCallbackErr(t *testing.T) {
 	if err == nil {
 		t.Errorf("TestSqlNodeCallbackErr fail: %s", err)
 	}
+	msg := message.NewMetaMessage(message.CreateSqlNodeRequestMessage, &message.CreateSqlNodeResponse{Err: "err"})
+	err = callback.Handle(msg)
+	ast.Equal(t, err.Error(), "err")
 }
 
 func Test_Snapshot(t *testing.T) {

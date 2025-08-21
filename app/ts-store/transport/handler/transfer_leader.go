@@ -16,10 +16,9 @@ package handler
 
 import (
 	"github.com/openGemini/openGemini/app/ts-store/storage"
-	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
-	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/msgservice"
 	"github.com/openGemini/openGemini/lib/spdy"
 	"go.uber.org/zap"
 )
@@ -37,18 +36,18 @@ func NewTransferLeadershipProcessor(store *storage.Storage) *TransferLeadershipP
 }
 
 func (mp *TransferLeadershipProcessor) Handle(w spdy.Responser, data interface{}) error {
-	req, ok := data.(*netstorage.TransferLeadershipRequest)
+	req, ok := data.(*msgservice.TransferLeadershipRequest)
 	if !ok {
-		return executor.NewInvalidTypeError("*netstorage.TransferLeadershipRequest", data)
+		return errno.NewInvalidTypeError("*msgservice.TransferLeadershipRequest", data)
 	}
 	mp.log.Info("Start TransferLeadership", zap.Uint64("nodeId", *req.NodeId), zap.Uint32("oldPt", *req.PtId),
 		zap.Uint32("newPt", *req.NewMasterPtId), zap.String("db", *req.Database))
-	rsp := netstorage.NewTransferLeadershipResponse()
+	rsp := msgservice.NewTransferLeadershipResponse()
 	err := mp.store.TransferLeadership(*req.Database, *req.NodeId, *req.PtId, *req.NewMasterPtId)
 	if err != nil {
 		mp.log.Info("TransferLeadership fail", zap.Uint64("nodeId", *req.NodeId), zap.Uint32("oldPt", *req.PtId),
 			zap.Uint32("newPt", *req.NewMasterPtId), zap.String("db", *req.Database))
-		rsp.Err = netstorage.MarshalError(err)
+		rsp.Err = msgservice.MarshalError(err)
 	}
 	mp.log.Info("End TransferLeadership", zap.Uint64("nodeId", *req.NodeId), zap.Uint32("oldPt", *req.PtId),
 		zap.Uint32("newPt", *req.NewMasterPtId), zap.String("db", *req.Database))

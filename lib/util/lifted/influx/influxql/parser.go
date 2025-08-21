@@ -39,6 +39,8 @@ const (
 	FilterNullColumn = "filter_null_column"
 
 	ExactStatisticQuery = "exact_statistic_query"
+
+	QueryPushDown = "query_push_down"
 )
 
 var SupportHit = map[string]bool{
@@ -46,6 +48,7 @@ var SupportHit = map[string]bool{
 	FullSeriesQuery:     true,
 	FilterNullColumn:    true,
 	ExactStatisticQuery: true,
+	QueryPushDown:       true,
 }
 
 // Parser represents an InfluxQL parser.
@@ -111,6 +114,13 @@ func ParseExpr(s string) (Expr, error) {
 	return p.ParseExpr()
 }
 
+// ParseSource parses an source string and returns its AST representation.
+func ParseSource(s string) (Source, error) {
+	p := NewParser(strings.NewReader(s))
+	defer p.Release()
+	return p.parseSource(true)
+}
+
 // ParseSortFields parses an sort fields string and returns its AST representation.
 func ParseSortFields(s string) (SortFields, error) {
 	p := NewParser(strings.NewReader(s))
@@ -130,11 +140,12 @@ func MustParseExpr(s string) Expr {
 // ParseQuery parses an InfluxQL string and returns a Query AST object.
 func (p *Parser) ParseQuery() (*Query, error) {
 	var statements Statements
+	depth := 0
 	semi := true
 
 	for {
 		if tok, pos, lit := p.ScanIgnoreWhitespace(); tok == EOF {
-			return &Query{Statements: statements}, nil
+			return &Query{Statements: statements, depth: 1 + depth}, nil
 		} else if tok == SEMICOLON {
 			semi = true
 		} else {
@@ -147,6 +158,7 @@ func (p *Parser) ParseQuery() (*Query, error) {
 				return nil, err
 			}
 			statements = append(statements, s)
+			depth = max(depth, len(statements)+s.Depth())
 			semi = false
 		}
 	}
@@ -333,6 +345,11 @@ Loop:
 			if err != nil {
 				return nil, err
 			}
+		case INDEXCOLD:
+			stmt.IndexColdDuration, err = p.parseRelatedDuration()
+			if err != nil {
+				return nil, err
+			}
 		case INDEX:
 			stmt.IndexGroupDuration, err = p.parseRelatedDuration()
 			if err != nil {
@@ -443,6 +460,12 @@ Loop:
 				return nil, err
 			}
 			stmt.WarmDuration = &d
+		case INDEXCOLD:
+			d, err := p.parseRelatedDuration()
+			if err != nil {
+				return nil, err
+			}
+			stmt.IndexColdDuration = &d
 		case INDEX:
 			d, err := p.parseRelatedDuration()
 			if err != nil {
@@ -835,8 +858,9 @@ func (p *Parser) haveHints() bool {
 // parseSelectStatement parses a select string and returns a Statement AST object.
 // This function assumes the SELECT token has already been consumed.
 func (p *Parser) parseSelectStatement(tr targetRequirement) (*SelectStatement, error) {
-	stmt := &SelectStatement{}
+	stmt := &SelectStatement{depth: 1}
 	var err error
+	depth := 0
 	// Parse hints "/* hint text */"
 	if p.haveHints() {
 		if stmt.Hints, err = p.parseHints(); err != nil {
@@ -845,32 +869,41 @@ func (p *Parser) parseSelectStatement(tr targetRequirement) (*SelectStatement, e
 	}
 
 	// Parse fields: "FIELD+".
-	if stmt.Fields, err = p.parseFields(); err != nil {
+	if stmt.Fields, depth, err = p.parseFields(); err != nil {
 		return nil, err
 	}
+	stmt.depth = max(stmt.depth, 1+depth)
 
 	// Parse target: "INTO"
 	if stmt.Target, err = p.parseTarget(tr); err != nil {
 		return nil, err
+	}
+	if stmt.Target != nil {
+		stmt.depth = max(stmt.depth, 1+stmt.Target.depth)
 	}
 
 	// Parse source: "FROM".
 	if tok, pos, lit := p.ScanIgnoreWhitespace(); tok != FROM {
 		return nil, newParseError(tokstr(tok, lit), []string{"FROM"}, pos)
 	}
-	if stmt.Sources, err = p.parseSources(true); err != nil {
+	if stmt.Sources, depth, err = p.parseSources(true); err != nil {
 		return nil, err
 	}
+	stmt.depth = max(stmt.depth, 1+depth)
 
 	// Parse condition: "WHERE EXPR".
 	if stmt.Condition, err = p.parseCondition(); err != nil {
 		return nil, err
 	}
+	if stmt.Condition != nil {
+		stmt.depth = max(stmt.depth, 1+stmt.Condition.Depth())
+	}
 
 	// Parse dimensions: "GROUP BY DIMENSION+".
-	if stmt.Dimensions, err = p.parseDimensions(); err != nil {
+	if stmt.Dimensions, depth, err = p.parseDimensions(); err != nil {
 		return nil, err
 	}
+	stmt.depth = max(stmt.depth, 1+depth)
 
 	// Parse fill options: "fill(<option>)"
 	if stmt.Fill, stmt.FillValue, err = p.parseFill(); err != nil {
@@ -881,6 +914,7 @@ func (p *Parser) parseSelectStatement(tr targetRequirement) (*SelectStatement, e
 	if stmt.SortFields, err = p.parseOrderBy(); err != nil {
 		return nil, err
 	}
+	stmt.depth = max(stmt.depth, 1+len(stmt.SortFields))
 
 	// Parse limit: "LIMIT <n>".
 	if stmt.Limit, err = p.ParseOptionalTokenAndInt(LIMIT); err != nil {
@@ -954,7 +988,7 @@ func (p *Parser) parseTarget(tr targetRequirement) (*Target, error) {
 		}
 	}
 
-	t := &Target{Measurement: &Measurement{IsTarget: true}}
+	t := &Target{Measurement: &Measurement{IsTarget: true}, depth: 2}
 
 	switch len(idents) {
 	case 1:
@@ -974,16 +1008,18 @@ func (p *Parser) parseTarget(tr targetRequirement) (*Target, error) {
 // parseDeleteStatement parses a string and returns a delete statement.
 // This function assumes the DELETE token has already been consumed.
 func (p *Parser) parseDeleteStatement() (Statement, error) {
-	stmt := &DeleteSeriesStatement{}
+	stmt := &DeleteSeriesStatement{depth: 1}
 	var err error
+	depth := 0
 
 	tok, pos, lit := p.ScanIgnoreWhitespace()
 
 	if tok == FROM {
 		// Parse source.
-		if stmt.Sources, err = p.parseSources(false); err != nil {
+		if stmt.Sources, depth, err = p.parseSources(false); err != nil {
 			return nil, err
 		}
+		stmt.depth = max(stmt.depth, 1+depth)
 
 		var err error
 		WalkFunc(stmt.Sources, func(n Node) {
@@ -1011,6 +1047,9 @@ func (p *Parser) parseDeleteStatement() (Statement, error) {
 	if stmt.Condition, err = p.parseCondition(); err != nil {
 		return nil, err
 	}
+	if stmt.Condition != nil {
+		stmt.depth = max(stmt.depth, 1+stmt.Condition.Depth())
+	}
 
 	// If they didn't provide a FROM or a WHERE, this query is invalid
 	if stmt.Condition == nil && stmt.Sources == nil {
@@ -1037,8 +1076,9 @@ func (p *Parser) parseShowSeriesStatement() (Statement, error) {
 
 	// Handle SHOW SERIES statments.
 
-	stmt := &ShowSeriesStatement{}
+	stmt := &ShowSeriesStatement{depth: 1}
 	var err error
+	depth := 0
 
 	// Parse optional ON clause.
 	if tok, _, _ := p.ScanIgnoreWhitespace(); tok == ON {
@@ -1053,9 +1093,10 @@ func (p *Parser) parseShowSeriesStatement() (Statement, error) {
 
 	// Parse optional FROM.
 	if tok, _, _ := p.ScanIgnoreWhitespace(); tok == FROM {
-		if stmt.Sources, err = p.parseSources(false); err != nil {
+		if stmt.Sources, depth, err = p.parseSources(false); err != nil {
 			return nil, err
 		}
+		stmt.depth = max(stmt.depth, 1+depth)
 	} else {
 		p.Unscan()
 	}
@@ -1063,6 +1104,9 @@ func (p *Parser) parseShowSeriesStatement() (Statement, error) {
 	// Parse condition: "WHERE EXPR".
 	if stmt.Condition, err = p.parseCondition(); err != nil {
 		return nil, err
+	}
+	if stmt.Condition != nil {
+		stmt.depth = max(stmt.depth, 1+stmt.Condition.Depth())
 	}
 
 	// Parse sort: "ORDER BY FIELD+".
@@ -1087,7 +1131,8 @@ func (p *Parser) parseShowSeriesStatement() (Statement, error) {
 // "SHOW SERIES CARDINALITY" tokens have already been consumed.
 func (p *Parser) parseShowSeriesCardinalityStatement(exact bool) (Statement, error) {
 	var err error
-	stmt := &ShowSeriesCardinalityStatement{Exact: exact}
+	stmt := &ShowSeriesCardinalityStatement{Exact: exact, depth: 1}
+	depth := 0
 
 	// Parse optional ON clause.
 	if tok, _, _ := p.ScanIgnoreWhitespace(); tok == ON {
@@ -1100,9 +1145,10 @@ func (p *Parser) parseShowSeriesCardinalityStatement(exact bool) (Statement, err
 
 	// Parse optional FROM.
 	if tok, _, _ := p.ScanIgnoreWhitespace(); tok == FROM {
-		if stmt.Sources, err = p.parseSources(false); err != nil {
+		if stmt.Sources, depth, err = p.parseSources(false); err != nil {
 			return nil, err
 		}
+		stmt.depth = max(stmt.depth, 1+depth)
 	} else {
 		p.Unscan()
 	}
@@ -1111,11 +1157,15 @@ func (p *Parser) parseShowSeriesCardinalityStatement(exact bool) (Statement, err
 	if stmt.Condition, err = p.parseCondition(); err != nil {
 		return nil, err
 	}
+	if stmt.Condition != nil {
+		stmt.depth = max(stmt.depth, 1+stmt.Condition.Depth())
+	}
 
 	// Parse dimensions: "GROUP BY DIMENSION+".
-	if stmt.Dimensions, err = p.parseDimensions(); err != nil {
+	if stmt.Dimensions, depth, err = p.parseDimensions(); err != nil {
 		return nil, err
 	}
+	stmt.depth = max(stmt.depth, 1+depth)
 
 	// Parse limit & offset: "LIMIT <n>", "OFFSET <n>".
 	if stmt.Limit, err = p.ParseOptionalTokenAndInt(LIMIT); err != nil {
@@ -1129,7 +1179,7 @@ func (p *Parser) parseShowSeriesCardinalityStatement(exact bool) (Statement, err
 
 // This function assumes the "SHOW MEASUREMENT" tokens have already been consumed.
 func (p *Parser) parseShowMeasurementCardinalityStatement(exact bool) (Statement, error) {
-	stmt := &ShowMeasurementCardinalityStatement{Exact: exact}
+	stmt := &ShowMeasurementCardinalityStatement{Exact: exact, depth: 1}
 
 	if stmt.Exact {
 		// Parse remaining CARDINALITY token
@@ -1140,6 +1190,7 @@ func (p *Parser) parseShowMeasurementCardinalityStatement(exact bool) (Statement
 
 	// Parse optional ON clause.
 	var err error
+	depth := 0
 	if tok, _, _ := p.ScanIgnoreWhitespace(); tok == ON {
 		if stmt.Database, err = p.ParseIdent(); err != nil {
 			return nil, err
@@ -1150,9 +1201,10 @@ func (p *Parser) parseShowMeasurementCardinalityStatement(exact bool) (Statement
 
 	// Parse optional FROM.
 	if tok, _, _ := p.ScanIgnoreWhitespace(); tok == FROM {
-		if stmt.Sources, err = p.parseSources(false); err != nil {
+		if stmt.Sources, depth, err = p.parseSources(false); err != nil {
 			return nil, err
 		}
+		stmt.depth = max(stmt.depth, 1+depth)
 	} else {
 		p.Unscan()
 	}
@@ -1161,11 +1213,15 @@ func (p *Parser) parseShowMeasurementCardinalityStatement(exact bool) (Statement
 	if stmt.Condition, err = p.parseCondition(); err != nil {
 		return nil, err
 	}
+	if stmt.Condition != nil {
+		stmt.depth = max(stmt.depth, 1+stmt.Condition.Depth())
+	}
 
 	// Parse dimensions: "GROUP BY DIMENSION+".
-	if stmt.Dimensions, err = p.parseDimensions(); err != nil {
+	if stmt.Dimensions, depth, err = p.parseDimensions(); err != nil {
 		return nil, err
 	}
+	stmt.depth = max(stmt.depth, 1+depth)
 
 	// Parse limit & offset: "LIMIT <n>", "OFFSET <n>".
 	if stmt.Limit, err = p.ParseOptionalTokenAndInt(LIMIT); err != nil {
@@ -1180,7 +1236,7 @@ func (p *Parser) parseShowMeasurementCardinalityStatement(exact bool) (Statement
 // parseShowMeasurementsStatement parses a string and returns a Statement.
 // This function assumes the "SHOW MEASUREMENTS" tokens have already been consumed.
 func (p *Parser) parseShowMeasurementsStatement() (*ShowMeasurementsStatement, error) {
-	stmt := &ShowMeasurementsStatement{}
+	stmt := &ShowMeasurementsStatement{depth: 1}
 	var err error
 
 	// Parse optional ON clause.
@@ -1220,6 +1276,9 @@ func (p *Parser) parseShowMeasurementsStatement() (*ShowMeasurementsStatement, e
 	// Parse condition: "WHERE EXPR".
 	if stmt.Condition, err = p.parseCondition(); err != nil {
 		return nil, err
+	}
+	if stmt.Condition != nil {
+		stmt.depth = max(stmt.depth, 1+stmt.Condition.Depth())
 	}
 
 	// Parse sort: "ORDER BY FIELD+".
@@ -1270,6 +1329,7 @@ func (p *Parser) parseShowRetentionPoliciesStatement() (*ShowRetentionPoliciesSt
 func (p *Parser) parseShowTagKeyCardinalityStatement() (Statement, error) {
 	var err error
 	var exactCardinality bool
+	depth := 0
 	requiredTokens := []string{"EXACT", "CARDINALITY"}
 	if tok, _, _ := p.ScanIgnoreWhitespace(); tok == EXACT {
 		exactCardinality = true
@@ -1278,7 +1338,7 @@ func (p *Parser) parseShowTagKeyCardinalityStatement() (Statement, error) {
 		p.Unscan()
 	}
 
-	stmt := &ShowTagKeyCardinalityStatement{Exact: exactCardinality}
+	stmt := &ShowTagKeyCardinalityStatement{Exact: exactCardinality, depth: 1}
 
 	// Parse remaining CARDINALITY token
 	if tok, pos, lit := p.ScanIgnoreWhitespace(); tok != CARDINALITY {
@@ -1296,9 +1356,10 @@ func (p *Parser) parseShowTagKeyCardinalityStatement() (Statement, error) {
 
 	// Parse optional FROM.
 	if tok, _, _ := p.ScanIgnoreWhitespace(); tok == FROM {
-		if stmt.Sources, err = p.parseSources(false); err != nil {
+		if stmt.Sources, depth, err = p.parseSources(false); err != nil {
 			return nil, err
 		}
+		stmt.depth = max(stmt.depth, 1+depth)
 	} else {
 		p.Unscan()
 	}
@@ -1307,11 +1368,15 @@ func (p *Parser) parseShowTagKeyCardinalityStatement() (Statement, error) {
 	if stmt.Condition, err = p.parseCondition(); err != nil {
 		return nil, err
 	}
+	if stmt.Condition != nil {
+		stmt.depth = max(stmt.depth, 1+stmt.Condition.Depth())
+	}
 
 	// Parse dimensions: "GROUP BY DIMENSION+".
-	if stmt.Dimensions, err = p.parseDimensions(); err != nil {
+	if stmt.Dimensions, depth, err = p.parseDimensions(); err != nil {
 		return nil, err
 	}
+	stmt.depth = max(stmt.depth, 1+depth)
 
 	// Parse limit & offset: "LIMIT <n>", "OFFSET <n>".
 	if stmt.Limit, err = p.ParseOptionalTokenAndInt(LIMIT); err != nil {
@@ -1326,8 +1391,9 @@ func (p *Parser) parseShowTagKeyCardinalityStatement() (Statement, error) {
 // parseShowTagKeysStatement parses a string and returns a Statement.
 // This function assumes the "SHOW TAG KEYS" tokens have already been consumed.
 func (p *Parser) parseShowTagKeysStatement() (*ShowTagKeysStatement, error) {
-	stmt := &ShowTagKeysStatement{}
+	stmt := &ShowTagKeysStatement{depth: 1}
 	var err error
+	depth := 0
 
 	// Parse optional ON clause.
 	if tok, _, _ := p.ScanIgnoreWhitespace(); tok == ON {
@@ -1342,9 +1408,10 @@ func (p *Parser) parseShowTagKeysStatement() (*ShowTagKeysStatement, error) {
 
 	// Parse optional source.
 	if tok, _, _ := p.ScanIgnoreWhitespace(); tok == FROM {
-		if stmt.Sources, err = p.parseSources(false); err != nil {
+		if stmt.Sources, depth, err = p.parseSources(false); err != nil {
 			return nil, err
 		}
+		stmt.depth = max(stmt.depth, 1+depth)
 	} else {
 		p.Unscan()
 	}
@@ -1352,6 +1419,9 @@ func (p *Parser) parseShowTagKeysStatement() (*ShowTagKeysStatement, error) {
 	// Parse condition: "WHERE EXPR".
 	if stmt.Condition, err = p.parseCondition(); err != nil {
 		return nil, err
+	}
+	if stmt.Condition != nil {
+		stmt.depth = max(stmt.depth, 1+stmt.Condition.Depth())
 	}
 
 	// Parse sort: "ORDER BY FIELD+".
@@ -1385,8 +1455,9 @@ func (p *Parser) parseShowTagKeysStatement() (*ShowTagKeysStatement, error) {
 // parseShowTagValuesStatement parses a string and returns a Statement.
 // This function assumes the "SHOW TAG VALUES" tokens have already been consumed.
 func (p *Parser) parseShowTagValuesStatement() (Statement, error) {
-	stmt := &ShowTagValuesStatement{}
+	stmt := &ShowTagValuesStatement{depth: 1}
 	var err error
+	depth := 0
 
 	if tok, _, _ := p.ScanIgnoreWhitespace(); tok == EXACT {
 		return p.parseShowTagValuesCardinalityStatement(true)
@@ -1408,9 +1479,10 @@ func (p *Parser) parseShowTagValuesStatement() (Statement, error) {
 
 	// Parse optional source.
 	if tok, _, _ := p.ScanIgnoreWhitespace(); tok == FROM {
-		if stmt.Sources, err = p.parseSources(false); err != nil {
+		if stmt.Sources, depth, err = p.parseSources(false); err != nil {
 			return nil, err
 		}
+		stmt.depth = max(stmt.depth, 1+depth)
 	} else {
 		p.Unscan()
 	}
@@ -1423,6 +1495,9 @@ func (p *Parser) parseShowTagValuesStatement() (Statement, error) {
 	// Parse condition: "WHERE EXPR".
 	if stmt.Condition, err = p.parseCondition(); err != nil {
 		return nil, err
+	}
+	if stmt.Condition != nil {
+		stmt.depth = max(stmt.depth, 1+stmt.Condition.Depth())
 	}
 
 	// Parse sort: "ORDER BY FIELD+".
@@ -1446,7 +1521,8 @@ func (p *Parser) parseShowTagValuesStatement() (Statement, error) {
 // This function assumes the "SHOW TAG VALUES" tokens have already been consumed.
 func (p *Parser) parseShowTagValuesCardinalityStatement(exact bool) (Statement, error) {
 	var err error
-	stmt := &ShowTagValuesCardinalityStatement{Exact: exact}
+	stmt := &ShowTagValuesCardinalityStatement{Exact: exact, depth: 1}
+	depth := 0
 
 	if stmt.Exact {
 		// Parse remaining CARDINALITY token
@@ -1466,9 +1542,10 @@ func (p *Parser) parseShowTagValuesCardinalityStatement(exact bool) (Statement, 
 
 	// Parse optional FROM.
 	if tok, _, _ := p.ScanIgnoreWhitespace(); tok == FROM {
-		if stmt.Sources, err = p.parseSources(false); err != nil {
+		if stmt.Sources, depth, err = p.parseSources(false); err != nil {
 			return nil, err
 		}
+		stmt.depth = max(stmt.depth, 1+depth)
 	} else {
 		p.Unscan()
 	}
@@ -1482,11 +1559,15 @@ func (p *Parser) parseShowTagValuesCardinalityStatement(exact bool) (Statement, 
 	if stmt.Condition, err = p.parseCondition(); err != nil {
 		return nil, err
 	}
+	if stmt.Condition != nil {
+		stmt.depth = max(stmt.depth, 1+stmt.Condition.Depth())
+	}
 
 	// Parse dimensions: "GROUP BY DIMENSION+".
-	if stmt.Dimensions, err = p.parseDimensions(); err != nil {
+	if stmt.Dimensions, depth, err = p.parseDimensions(); err != nil {
 		return nil, err
 	}
+	stmt.depth = max(stmt.depth, 1+depth)
 
 	// Parse limit & offset: "LIMIT <n>", "OFFSET <n>".
 	if stmt.Limit, err = p.ParseOptionalTokenAndInt(LIMIT); err != nil {
@@ -1571,6 +1652,7 @@ func (p *Parser) parseShowSubscriptionsStatement() (*ShowSubscriptionsStatement,
 func (p *Parser) parseShowFieldKeyCardinalityStatement() (Statement, error) {
 	var err error
 	var exactCardinality bool
+	depth := 0
 	requiredTokens := []string{"EXACT", "CARDINALITY"}
 	if tok, _, _ := p.ScanIgnoreWhitespace(); tok == EXACT {
 		exactCardinality = true
@@ -1579,7 +1661,7 @@ func (p *Parser) parseShowFieldKeyCardinalityStatement() (Statement, error) {
 		p.Unscan()
 	}
 
-	stmt := &ShowFieldKeyCardinalityStatement{Exact: exactCardinality}
+	stmt := &ShowFieldKeyCardinalityStatement{Exact: exactCardinality, depth: 1}
 
 	// Parse remaining CARDINALITY token
 	if tok, pos, lit := p.ScanIgnoreWhitespace(); tok != CARDINALITY {
@@ -1597,9 +1679,10 @@ func (p *Parser) parseShowFieldKeyCardinalityStatement() (Statement, error) {
 
 	// Parse optional FROM.
 	if tok, _, _ := p.ScanIgnoreWhitespace(); tok == FROM {
-		if stmt.Sources, err = p.parseSources(false); err != nil {
+		if stmt.Sources, depth, err = p.parseSources(false); err != nil {
 			return nil, err
 		}
+		stmt.depth = max(stmt.depth, 1+depth)
 	} else {
 		p.Unscan()
 	}
@@ -1608,11 +1691,15 @@ func (p *Parser) parseShowFieldKeyCardinalityStatement() (Statement, error) {
 	if stmt.Condition, err = p.parseCondition(); err != nil {
 		return nil, err
 	}
+	if stmt.Condition != nil {
+		stmt.depth = max(stmt.depth, 1+stmt.Condition.Depth())
+	}
 
 	// Parse dimensions: "GROUP BY DIMENSION+".
-	if stmt.Dimensions, err = p.parseDimensions(); err != nil {
+	if stmt.Dimensions, depth, err = p.parseDimensions(); err != nil {
 		return nil, err
 	}
+	stmt.depth = max(stmt.depth, 1+depth)
 
 	// Parse limit & offset: "LIMIT <n>", "OFFSET <n>".
 	if stmt.Limit, err = p.ParseOptionalTokenAndInt(LIMIT); err != nil {
@@ -1627,8 +1714,9 @@ func (p *Parser) parseShowFieldKeyCardinalityStatement() (Statement, error) {
 // parseShowFieldKeysStatement parses a string and returns a Statement.
 // This function assumes the "SHOW FIELD KEYS" tokens have already been consumed.
 func (p *Parser) parseShowFieldKeysStatement() (*ShowFieldKeysStatement, error) {
-	stmt := &ShowFieldKeysStatement{}
+	stmt := &ShowFieldKeysStatement{depth: 1}
 	var err error
+	depth := 0
 
 	// Parse optional ON clause.
 	if tok, _, _ := p.ScanIgnoreWhitespace(); tok == ON {
@@ -1643,9 +1731,10 @@ func (p *Parser) parseShowFieldKeysStatement() (*ShowFieldKeysStatement, error) 
 
 	// Parse optional source.
 	if tok, _, _ := p.ScanIgnoreWhitespace(); tok == FROM {
-		if stmt.Sources, err = p.parseSources(false); err != nil {
+		if stmt.Sources, depth, err = p.parseSources(false); err != nil {
 			return nil, err
 		}
+		stmt.depth = max(stmt.depth, 1+depth)
 	} else {
 		p.Unscan()
 	}
@@ -1686,16 +1775,18 @@ func (p *Parser) parseDropMeasurementStatement() (*DropMeasurementStatement, err
 // parseDropSeriesStatement parses a string and returns a DropSeriesStatement.
 // This function assumes the "DROP SERIES" tokens have already been consumed.
 func (p *Parser) parseDropSeriesStatement() (*DropSeriesStatement, error) {
-	stmt := &DropSeriesStatement{}
+	stmt := &DropSeriesStatement{depth: 1}
 	var err error
+	depth := 0
 
 	tok, pos, lit := p.ScanIgnoreWhitespace()
 
 	if tok == FROM {
 		// Parse source.
-		if stmt.Sources, err = p.parseSources(false); err != nil {
+		if stmt.Sources, depth, err = p.parseSources(false); err != nil {
 			return nil, err
 		}
+		stmt.depth = max(stmt.depth, 1+depth)
 
 		var err error
 		WalkFunc(stmt.Sources, func(n Node) {
@@ -1721,6 +1812,9 @@ func (p *Parser) parseDropSeriesStatement() (*DropSeriesStatement, error) {
 	// Parse condition: "WHERE EXPR".
 	if stmt.Condition, err = p.parseCondition(); err != nil {
 		return nil, err
+	}
+	if stmt.Condition != nil {
+		stmt.depth = max(stmt.depth, 1+stmt.Condition.Depth())
 	}
 
 	// If they didn't provide a FROM or a WHERE, this query is invalid
@@ -1775,7 +1869,7 @@ func (p *Parser) parseShowDatabasesStatement() (*ShowDatabasesStatement, error) 
 // parseCreateContinuousQueriesStatement parses a string and returns a CreateContinuousQueryStatement.
 // This function assumes the "CREATE CONTINUOUS" tokens have already been consumed.
 func (p *Parser) parseCreateContinuousQueryStatement() (*CreateContinuousQueryStatement, error) {
-	stmt := &CreateContinuousQueryStatement{}
+	stmt := &CreateContinuousQueryStatement{depth: 1}
 
 	// Read the id of the query to create.
 	ident, err := p.ParseIdent()
@@ -1815,6 +1909,7 @@ func (p *Parser) parseCreateContinuousQueryStatement() (*CreateContinuousQuerySt
 		return nil, err
 	}
 	stmt.Source = source
+	stmt.depth = max(stmt.depth, 1+stmt.Source.Depth())
 
 	// validate that the statement has a non-zero group by interval if it is aggregated
 	if !source.IsRawQuery {
@@ -1895,6 +1990,11 @@ func (p *Parser) parseCreateDatabaseStatement() (*CreateDatabaseStatement, error
 				}
 			case WARM:
 				stmt.RetentionPolicyWarmDuration, err = p.parseRelatedDuration()
+				if err != nil {
+					return nil, err
+				}
+			case INDEXCOLD:
+				stmt.RetentionPolicyIndexColdDuration, err = p.parseRelatedDuration()
 				if err != nil {
 					return nil, err
 				}
@@ -2177,7 +2277,7 @@ func (p *Parser) parseDropUserStatement() (*DropUserStatement, error) {
 // parseExplainStatement parses a string and return an ExplainStatement.
 // This function assumes the EXPLAIN token has already been consumed.
 func (p *Parser) parseExplainStatement() (*ExplainStatement, error) {
-	stmt := &ExplainStatement{}
+	stmt := &ExplainStatement{depth: 1}
 
 	if tok, _, _ := p.ScanIgnoreWhitespace(); tok == ANALYZE {
 		stmt.Analyze = true
@@ -2194,6 +2294,7 @@ func (p *Parser) parseExplainStatement() (*ExplainStatement, error) {
 		return nil, err
 	}
 	stmt.Statement = s
+	stmt.depth = max(stmt.depth, 1+s.Depth())
 	return stmt, nil
 }
 
@@ -2265,17 +2366,19 @@ func (p *Parser) parseDropContinuousQueryStatement() (*DropContinuousQueryStatem
 }
 
 // parseFields parses a list of one or more fields.
-func (p *Parser) parseFields() (Fields, error) {
+func (p *Parser) parseFields() (Fields, int, error) {
 	var fields Fields
+	depth := 0
 
 	for {
 		// Parse the field.
 		f, err := p.parseField()
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 
 		// Add new field.
+		depth = max(depth, len(fields)+f.depth)
 		fields = append(fields, f)
 
 		// If there's not a comma next then stop parsing fields.
@@ -2284,12 +2387,12 @@ func (p *Parser) parseFields() (Fields, error) {
 			break
 		}
 	}
-	return fields, nil
+	return fields, 1 + depth, nil
 }
 
 // parseField parses a single field.
 func (p *Parser) parseField() (*Field, error) {
-	f := &Field{}
+	f := &Field{depth: 1}
 
 	// Attempt to parse a regex.
 	re, err := p.parseRegex()
@@ -2297,6 +2400,7 @@ func (p *Parser) parseField() (*Field, error) {
 		return nil, err
 	} else if re != nil {
 		f.Expr = re
+		f.depth = max(f.depth, 1+re.Depth())
 	} else {
 		_, pos, _ := p.ScanIgnoreWhitespace()
 		p.Unscan()
@@ -2311,6 +2415,7 @@ func (p *Parser) parseField() (*Field, error) {
 			return nil, fmt.Errorf("invalid operator %s in SELECT clause at line %d, char %d; operator is intended for WHERE clause", c.badToken, pos.Line+1, pos.Char+1)
 		}
 		f.Expr = expr
+		f.depth = max(f.depth, 1+expr.Depth())
 	}
 
 	// Parse the alias if the current and next tokens are "WS AS".
@@ -2365,15 +2470,17 @@ func (p *Parser) parseAlias() (string, error) {
 }
 
 // parseSources parses a comma delimited list of sources.
-func (p *Parser) parseSources(subqueries bool) (Sources, error) {
+func (p *Parser) parseSources(subqueries bool) (Sources, int, error) {
 	var sources Sources
+	depth := 1
 
 	for {
 		s, err := p.parseSource(subqueries)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		sources = append(sources, s)
+		depth = max(depth, len(sources)+s.Depth())
 
 		if tok, _, _ := p.ScanIgnoreWhitespace(); tok != COMMA {
 			p.Unscan()
@@ -2381,7 +2488,7 @@ func (p *Parser) parseSources(subqueries bool) (Sources, error) {
 		}
 	}
 
-	return sources, nil
+	return sources, depth, nil
 }
 
 // peekRune returns the next rune that would be read by the scanner.
@@ -2423,7 +2530,18 @@ func (p *Parser) parseSource(subqueries bool) (Source, error) {
 			if err := p.parseTokens([]Token{RPAREN}); err != nil {
 				return nil, err
 			}
-			return &SubQuery{Statement: stmt}, nil
+			var lit string
+			tok, _, lit = p.ScanIgnoreWhitespace()
+			if tok == AS {
+				if tok, _, lit = p.ScanIgnoreWhitespace(); len(lit) > 0 {
+					return &SubQuery{Statement: stmt, depth: 1 + stmt.Depth()}, nil
+				} else {
+					p.Unscan()
+				}
+			} else {
+				p.Unscan()
+			}
+			return &SubQuery{Statement: stmt, depth: 1 + stmt.Depth()}, nil
 		} else {
 			p.Unscan()
 		}
@@ -2485,28 +2603,30 @@ func (p *Parser) parseCondition() (Expr, error) {
 }
 
 // parseDimensions parses the "GROUP BY" clause of the query, if it exists.
-func (p *Parser) parseDimensions() (Dimensions, error) {
+func (p *Parser) parseDimensions() (Dimensions, int, error) {
 	// If the next token is not GROUP then exit.
 	if tok, _, _ := p.ScanIgnoreWhitespace(); tok != GROUP {
 		p.Unscan()
-		return nil, nil
+		return nil, 0, nil
 	}
 
 	// Now the next token should be "BY".
 	if tok, pos, lit := p.ScanIgnoreWhitespace(); tok != BY {
-		return nil, newParseError(tokstr(tok, lit), []string{"BY"}, pos)
+		return nil, 0, newParseError(tokstr(tok, lit), []string{"BY"}, pos)
 	}
 
 	var dimensions Dimensions
+	depth := 0
 	for {
 		// Parse the dimension.
 		d, err := p.parseDimension()
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 
 		// Add new dimension.
 		dimensions = append(dimensions, d)
+		depth = max(depth, len(dimensions)+d.depth)
 
 		// If there's not a comma next then stop parsing dimensions.
 		if tok, _, _ := p.Scan(); tok != COMMA {
@@ -2514,7 +2634,7 @@ func (p *Parser) parseDimensions() (Dimensions, error) {
 			break
 		}
 	}
-	return dimensions, nil
+	return dimensions, depth, nil
 }
 
 // parseDimension parses a single dimension.
@@ -2523,7 +2643,7 @@ func (p *Parser) parseDimension() (*Dimension, error) {
 	if err != nil {
 		return nil, err
 	} else if re != nil {
-		return &Dimension{Expr: re}, nil
+		return &Dimension{Expr: re, depth: 2}, nil
 	}
 
 	// Parse the expression first.
@@ -2535,7 +2655,7 @@ func (p *Parser) parseDimension() (*Dimension, error) {
 	// Consume all trailing whitespace.
 	p.consumeWhitespace()
 
-	return &Dimension{Expr: expr}, nil
+	return &Dimension{Expr: expr, depth: 1 + expr.Depth()}, nil
 }
 
 // parseFill parses the fill call and its options.
@@ -2775,7 +2895,7 @@ func (p *Parser) ParseVarRef() (*VarRef, error) {
 func (p *Parser) ParseExpr() (Expr, error) {
 	var err error
 	// Dummy root node.
-	root := &BinaryExpr{}
+	root := &BinaryExpr{depth: 0}
 
 	// Parse a non-binary expression type to start.
 	// This variable will always be the root of the expression tree.
@@ -2783,6 +2903,7 @@ func (p *Parser) ParseExpr() (Expr, error) {
 	if err != nil {
 		return nil, err
 	}
+	root.depth = max(root.depth, 1+root.RHS.Depth())
 
 	// Loop over operations and unary exprs and build a tree based on precendence.
 	for {
@@ -2805,6 +2926,15 @@ func (p *Parser) ParseExpr() (Expr, error) {
 				tok, pos, lit := p.ScanIgnoreWhitespace()
 				return nil, newParseError(tokstr(tok, lit), []string{"regex"}, pos)
 			}
+		} else if IsInOp(op) {
+			if rhs, err = p.parseSet(); err != nil {
+				return nil, err
+			}
+			// parseRegex can return an empty type, but we need it to be present
+			if rhs.(*SetLiteral) == nil {
+				tok, pos, lit := p.ScanIgnoreWhitespace()
+				return nil, newParseError(tokstr(tok, lit), []string{"set"}, pos)
+			}
 		} else {
 			if rhs, err = p.parseUnaryExpr(); err != nil {
 				return nil, err
@@ -2815,13 +2945,26 @@ func (p *Parser) ParseExpr() (Expr, error) {
 		// descending the RHS of the expression tree until we reach the last
 		// BinaryExpr or a BinaryExpr whose RHS has an operator with
 		// precedence >= the operator being added.
+		stack := []**BinaryExpr{}
 		for node := root; ; {
 			r, ok := node.RHS.(*BinaryExpr)
 			if !ok || r.Op.Precedence() >= op.Precedence() {
 				// Add the new expression here and break.
-				node.RHS = &BinaryExpr{LHS: node.RHS, RHS: rhs, Op: op}
+				node.RHS = &BinaryExpr{
+					LHS:   node.RHS,
+					RHS:   rhs,
+					Op:    op,
+					depth: 1 + max(node.RHS.Depth(), rhs.Depth()),
+				}
+				node.depth = max(node.depth, 1+node.RHS.Depth())
+				// Update depth of node chain
+				// TODO: change to slices.Backwards on go-1.23
+				for i := len(stack) - 1; i >= 0; i-- {
+					(*stack[i]).depth = 1 + max((*stack[i]).LHS.Depth(), (*stack[i]).RHS.Depth())
+				}
 				break
 			}
+			stack = append(stack, &node)
 			node = r
 		}
 	}
@@ -2841,7 +2984,7 @@ func (p *Parser) parseUnaryExpr() (Expr, error) {
 			return nil, newParseError(tokstr(tok, lit), []string{")"}, pos)
 		}
 
-		return &ParenExpr{Expr: expr}, nil
+		return &ParenExpr{Expr: expr, depth: 1 + expr.Depth()}, nil
 	}
 	p.Unscan()
 
@@ -2988,9 +3131,10 @@ func (p *Parser) parseUnaryExpr() (Expr, error) {
 			case *VarRef, *Call, *ParenExpr:
 				// Multiply the variable.
 				return &BinaryExpr{
-					Op:  MUL,
-					LHS: &IntegerLiteral{Val: int64(mul)},
-					RHS: lit,
+					Op:    MUL,
+					LHS:   &IntegerLiteral{Val: int64(mul)},
+					RHS:   lit,
+					depth: 1 + lit.Depth(),
 				}, nil
 			default:
 				panic(fmt.Sprintf("unexpected literal: %T", lit))
@@ -3037,6 +3181,31 @@ func (p *Parser) parseRegex() (*RegexLiteral, error) {
 	return &RegexLiteral{Val: re}, nil
 }
 
+// parseSet parses a set.
+func (p *Parser) parseSet() (*SetLiteral, error) {
+	tok, pos, lit := p.ScanIgnoreWhitespace()
+	if tok != LPAREN {
+		return nil, newParseError(tokstr(tok, lit), []string{"("}, pos)
+	}
+	vals := make(map[interface{}]bool)
+	for {
+		tok, pos, lit = p.ScanIgnoreWhitespace()
+		if len(lit) != 0 {
+			switch tok {
+			case INTEGER, NUMBER:
+				val, _ := strconv.ParseFloat(lit, 64)
+				vals[val] = true
+			default:
+				vals[lit] = true
+			}
+		}
+		if tok == RPAREN {
+			break
+		}
+	}
+	return &SetLiteral{Vals: vals}, nil
+}
+
 // parseCall parses a function call.
 // This function assumes the function name and LPAREN have been consumed.
 func (p *Parser) parseCall(name string) (*Call, error) {
@@ -3044,15 +3213,17 @@ func (p *Parser) parseCall(name string) (*Call, error) {
 
 	// Parse first function argument if one exists.
 	var args []Expr
+	depth := 1
 	re, err := p.parseRegex()
 	if err != nil {
 		return nil, err
 	} else if re != nil {
 		args = append(args, re)
+		depth = max(depth, len(args)+1)
 	} else {
 		// If there's a right paren then just return immediately.
 		if tok, _, _ := p.Scan(); tok == RPAREN {
-			return &Call{Name: name}, nil
+			return &Call{Name: name, depth: 1}, nil
 		}
 		p.Unscan()
 
@@ -3061,6 +3232,7 @@ func (p *Parser) parseCall(name string) (*Call, error) {
 			return nil, err
 		}
 		args = append(args, arg)
+		depth = max(depth, len(args)+arg.Depth())
 	}
 
 	// Parse additional function arguments if there is a comma.
@@ -3076,6 +3248,7 @@ func (p *Parser) parseCall(name string) (*Call, error) {
 			return nil, err
 		} else if re != nil {
 			args = append(args, re)
+			depth = max(depth, len(args)+1)
 			continue
 		}
 
@@ -3085,6 +3258,7 @@ func (p *Parser) parseCall(name string) (*Call, error) {
 			return nil, err
 		}
 		args = append(args, arg)
+		depth = max(depth, len(args)+arg.Depth())
 	}
 
 	// There should be a right parentheses at the end.
@@ -3092,7 +3266,7 @@ func (p *Parser) parseCall(name string) (*Call, error) {
 		return nil, newParseError(tokstr(tok, lit), []string{")"}, pos)
 	}
 
-	return &Call{Name: name, Args: args}, nil
+	return &Call{Name: name, Args: args, depth: 1 + depth}, nil
 }
 
 // parseResample parses a RESAMPLE [EVERY <duration>] [FOR <duration>].

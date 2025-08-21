@@ -31,6 +31,13 @@ import (
 	"go.uber.org/zap"
 )
 
+type topnAlgo interface {
+	AddKeyCount(key TKey, value TCounter)
+	GetFrequentKeys(countLowerBound TCounter) ([]TKey, []TCounter)
+	GetTotalCount() TCounter
+	Name() string
+}
+
 type TopNTransform struct {
 	BaseProcessor
 	inputs            []*ChunkPort
@@ -45,16 +52,18 @@ type TopNTransform struct {
 	opt               *query.ProcessorOptions
 	closedSignal      int32
 	topNlogger        *logger.Logger
-	ddcm              TDdcm
 	topN              int
 	topNFrequency     float64
 	countLowerBound   TCounter
 	outputChunk       Chunk
 	batchEndLocs      []int
 	batchMPool        *BatchMPool
+	algo              topnAlgo
 	aggFn             func(c Chunk, start, end int) TCounter
 	appendValue       func(value TCounter, oChunk Chunk)
 	inputDims         bool
+	t                 HashAggType
+	name              string
 
 	span                *tracing.Span
 	computeSpan         *tracing.Span
@@ -108,32 +117,20 @@ func (trans *TopNTransform) mapGroupKeys() {
 		key := trans.bufGroupKeys[i]
 		value := trans.aggFn(trans.bufChunk, batchStartLoc, trans.batchEndLocs[i])
 		tk := TKey{Data: key}
-		trans.ddcm.AddKeyCount(tk, TCounter(value))
+		trans.algo.AddKeyCount(tk, TCounter(value))
 		batchStartLoc = trans.batchEndLocs[i]
 	}
 }
 
-type TopNTransformCreator struct {
-}
-
-func (c *TopNTransformCreator) Create(plan LogicalPlan, opt query.ProcessorOptions) (Processor, error) {
-	p, err := NewTopNTransform([]hybridqp.RowDataType{plan.Children()[0].RowDataType()}, []hybridqp.RowDataType{plan.RowDataType()},
-		plan.RowExprOptions(), plan.Schema().(*QuerySchema), plan.(*LogicalHashAgg).hashAggType)
-	if err != nil {
-		return nil, err
-	}
-	return p, nil
-}
-
 func NewTopNTransform(
-	inRowDataType, outRowDataType []hybridqp.RowDataType, exprOpt []hybridqp.ExprOptions, s *QuerySchema, t HashAggType) (Processor, error) {
+	inRowDataType, outRowDataType []hybridqp.RowDataType, exprOpt []hybridqp.ExprOptions, s *QuerySchema, t HashAggType, name string) (Processor, error) {
 	if len(inRowDataType) == 0 || len(outRowDataType) != 1 {
 		return nil, fmt.Errorf("NewTopNTransform raise error: input or output numbers error")
 	}
 	if s.opt.HasInterval() {
 		return nil, fmt.Errorf("NewTopNTransform has interval")
 	}
-	if t == Normal {
+	if name == "topn_ddcm" && t == Normal {
 		trans, err := NewHashMergeStreamTypeTransform(inRowDataType, outRowDataType, s)
 		return trans, err
 	}
@@ -149,9 +146,17 @@ func NewTopNTransform(
 		outputChunkPool: NewCircularChunkPool(CircularChunkNum+4, NewChunkBuilder(outRowDataType[0])),
 		topNlogger:      logger.NewLogger(errno.ModuleQueryEngine),
 		topN:            int(exprOpt[0].Expr.(*influxql.Call).Args[2].(*influxql.IntegerLiteral).Val),
-		topNFrequency:   exprOpt[0].Expr.(*influxql.Call).Args[1].(*influxql.NumberLiteral).Val,
 		batchMPool:      NewBatchMPool(HashAggTransformBufCap),
 		aggFn:           count,
+		t:               t,
+		name:            name,
+	}
+	if expr, ok := exprOpt[0].Expr.(*influxql.Call).Args[1].(*influxql.NumberLiteral); ok {
+		trans.topNFrequency = expr.Val
+	} else if expr, ok := exprOpt[0].Expr.(*influxql.Call).Args[1].(*influxql.IntegerLiteral); ok {
+		trans.topNFrequency = float64(expr.Val)
+	} else {
+		return nil, fmt.Errorf("topNFrequency typ err")
 	}
 	if err := trans.InitFuncs(inRowDataType[0], exprOpt[0].Expr.(*influxql.Call).Args[3].(*influxql.StringLiteral).Val, exprOpt[0]); err != nil {
 		return nil, err
@@ -163,7 +168,16 @@ func NewTopNTransform(
 		input := NewChunkPort(schema)
 		trans.inputs = append(trans.inputs, input)
 	}
-	trans.ddcm = CreateDdcmWithWdm(DefaultSigma, DefaultDelta, DefaultEps, DefaultPhi, 12)
+	if name == "topn_ddcm" {
+		trans.algo = CreateDdcmWithWdm(DefaultSigma, DefaultDelta, DefaultEps, DefaultPhi, 12)
+	} else if name == nagtName {
+		nagt := NagtPool.Get()
+		nagt.Ready(seed)
+		trans.algo = nagt
+	} else {
+		return nil, fmt.Errorf("topn algo name err")
+	}
+
 	trans.outputChunk = trans.outputChunkPool.GetChunk()
 	return trans, nil
 }
@@ -391,6 +405,12 @@ func (trans *TopNTransform) nilGroupKeys() bool {
 func (trans *TopNTransform) topNHelper(ctx context.Context, errs *errno.Errs) {
 	defer func() {
 		close(trans.inputChunk)
+		if trans.algo != nil {
+			if nagt, ok := trans.algo.(*TTopnCM05Optimized); ok {
+				nagt.Reset()
+				NagtPool.Put(nagt)
+			}
+		}
 		if e := recover(); e != nil {
 			err := errno.NewError(errno.RecoverPanic, e)
 			trans.topNlogger.Error(err.Error(), zap.String("query", "TopNTransform"),
@@ -501,28 +521,40 @@ func (trans *TopNTransform) putBufsToPools() {
 func (trans *TopNTransform) generateOutPut() {
 	tracing.StartPP(trans.generateOutPutSpan)
 	defer tracing.EndPP(trans.generateOutPutSpan)
-	trans.countLowerBound = TCounter(trans.topNFrequency * float64(trans.ddcm.GetTotalCount()))
+	if trans.name == "topn_nagt2" && trans.t != TopN {
+		trans.countLowerBound = 1
+	} else {
+		trans.countLowerBound = TCounter(trans.topNFrequency * float64(trans.algo.GetTotalCount()))
+	}
 	if trans.countLowerBound == 0 {
 		trans.countLowerBound = 1
 	}
-	trans.topNlogger.Info("TopNTransform GetFrequentKey", zap.Int64("countLowerBound", int64(trans.countLowerBound)), zap.Int64("totalCount", int64(trans.ddcm.GetTotalCount())))
-	keys, values := trans.ddcm.GetFrequentKeys(trans.countLowerBound)
-	trans.topNlogger.Info("TopNTransform GetFrequentKey", zap.Int("len(keys)", len(keys)))
+	totalCount := trans.algo.GetTotalCount()
+	trans.topNlogger.Info("TopNTransform GetFrequentKey args", zap.Int64("countLowerBound", int64(trans.countLowerBound)),
+		zap.String("algo", trans.algo.Name()), zap.Int64("totalCount", int64(totalCount)))
+	keys, values := trans.algo.GetFrequentKeys(trans.countLowerBound)
+
 	if trans.bufChunk == nil {
 		return
 	}
 	trans.outputChunk.SetName(trans.bufChunk.Name())
 	result := &FrequentResult{keys: keys, values: values}
-	if trans.topN > 0 {
-		sort.Sort(result)
-		result.reSize(trans.topN)
+	if trans.name == nagtName && trans.t != TopN {
+		trans.topN = len(keys)
+	} else {
+		if trans.topN > 0 {
+			sort.Sort(result)
+			result.reSize(trans.topN)
+		}
 	}
+	trans.topNlogger.Info("TopNTransform GetFrequentKey result", zap.String("algo", trans.algo.Name()), zap.Int("len(keys)", len(keys)),
+		zap.Int("topn", trans.topN))
 	for i := 0; i < trans.topN && i < len(keys); i++ {
 		ct, err := trans.decodeGroupKeys(keys[i].Data)
 		if err != nil {
 			panic(err)
 		}
-		trans.outputChunk.AddTagAndIndex(*ct, trans.outputChunk.TagLen())
+		trans.outputChunk.AppendTagsAndIndex(*ct, trans.outputChunk.TagLen())
 		trans.appendValue(values[i], trans.outputChunk)
 		trans.outputChunk.AppendTime(0)
 		trans.outputChunk.Column(0).AppendNotNil()

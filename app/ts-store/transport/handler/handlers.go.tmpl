@@ -15,15 +15,15 @@
 package handler
 
 import (
-	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/lib/codec"
-	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/msgservice"
+	"github.com/openGemini/openGemini/lib/errno"
 )
 
 func NewHandler(typ uint8) RPCHandler {
 	switch typ {
 	{{- range .}}
-    case netstorage.{{.}}RequestMessage:
+    case msgservice.{{.}}RequestMessage:
         return &{{.}}{}
     {{- end}}
     default:
@@ -35,15 +35,15 @@ func NewHandler(typ uint8) RPCHandler {
 type {{.}} struct {
 	BaseHandler
 
-	req *netstorage.{{.}}Request
-	rsp *netstorage.{{.}}Response
+	req *msgservice.{{.}}Request
+	rsp *msgservice.{{.}}Response
 }
 
 func (h *{{.}}) SetMessage(msg codec.BinaryCodec) error {
-	h.rsp = &netstorage.{{.}}Response{}
-    req, ok := msg.(*netstorage.{{.}}Request)
+	h.rsp = &msgservice.{{.}}Response{}
+    req, ok := msg.(*msgservice.{{.}}Request)
     if !ok {
-        return executor.NewInvalidTypeError("*netstorage.{{.}}Request", msg)
+        return errno.NewInvalidTypeError("*msgservice.{{.}}Request", msg)
     }
     h.req = req
     return nil

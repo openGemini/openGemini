@@ -95,3 +95,11 @@ func (visitor *FlattenQueryNodeVisitor) Visit(node QueryNode) QueryNodeVisitor {
 func (visitor *FlattenQueryNodeVisitor) Nodes() []QueryNode {
 	return visitor.nodes
 }
+
+type SetDistinctVisitor struct {
+}
+
+func (v *SetDistinctVisitor) Visit(node QueryNode) QueryNodeVisitor {
+	node.Schema().SetDistinct(true)
+	return v
+}

@@ -79,6 +79,14 @@ func (n *TSSPFileName) SetLevel(l uint16) {
 	n.level = l
 }
 
+func (n *TSSPFileName) SetLock(l *string) {
+	n.lock = l
+}
+
+func (n *TSSPFileName) AddSeq(seq uint64) {
+	n.seq += seq
+}
+
 func (n *TSSPFileName) path(dir string) string {
 	if !n.order {
 		dir = path.Join(dir, unorderedDir)

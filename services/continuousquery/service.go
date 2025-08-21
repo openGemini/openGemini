@@ -123,7 +123,6 @@ func (s *Service) sendHeartbeat2Meta() {
 			if err := s.MetaClient.SendSql2MetaHeartbeat(s.hostname); err != nil {
 				s.logger.Warn("sql node send heartbeat to meta node failed", zap.Error(err))
 			}
-			ticker.Reset(time.Second)
 		}
 	}
 }
@@ -193,7 +192,6 @@ func (s *Service) handle() {
 
 	if s.checkCQIsChanged() {
 		// get the newly cq lease
-		s.logger.Info("continuous query lease changed")
 		s.ContinuousQueries = s.getContinuousQueries()
 	}
 
@@ -208,11 +206,13 @@ func (s *Service) handle() {
 	// set up a goroutine pool to execute CQs.
 	for _, cq := range s.ContinuousQueries {
 		wg.Add(1)
+		tokens <- struct{}{}
 		go func(cq *ContinuousQuery) {
 			defer wg.Done()
-			tokens <- struct{}{}
 			ok, err := s.ExecuteContinuousQuery(cq, now)
-			s.logger.Debug("try to execute continuous query", zap.String("query", cq.source.String()), zap.Bool("ok", ok), zap.Error(err))
+			if err != nil {
+				s.logger.Error("execute cq error", zap.String("name", cq.name), zap.Bool("ok", ok), zap.Error(err), zap.Time("lastRun", cq.lastRun), zap.Time("now", now))
+			}
 			<-tokens
 		}(cq)
 	}
@@ -229,7 +229,9 @@ func (s *Service) ExecuteContinuousQuery(cq *ContinuousQuery, now time.Time) (bo
 	}
 
 	s.lastRunsLock.RLock()
-	cq.lastRun, cq.hasRun = s.lastRuns[cq.name]
+	if _, cq.hasRun = s.lastRuns[cq.name]; cq.hasRun {
+		cq.lastRun = s.lastRuns[cq.name]
+	}
 	s.lastRunsLock.RUnlock()
 
 	// Check if the CQ should be run.
@@ -240,8 +242,9 @@ func (s *Service) ExecuteContinuousQuery(cq *ContinuousQuery, now time.Time) (bo
 
 	// Calculate and set the time range for the query.
 	// startTime should be earlier than current time.
-	startTime := nextRun.Add(-cq.resampleEvery - cq.groupByOffset).Truncate(cq.resampleEvery).Add(cq.groupByOffset)
-	endTime := startTime.Add(cq.resampleEvery - cq.groupByOffset).Truncate(cq.resampleEvery).Add(cq.groupByOffset)
+	startTime := nextRun.Add(-cq.resampleFor - cq.groupByOffset).Truncate(cq.resampleFor).Add(cq.groupByOffset)
+	endTime := startTime.Add(cq.resampleFor - cq.groupByOffset).Truncate(cq.resampleFor).Add(cq.groupByOffset)
+
 	if err := cq.source.SetTimeRange(startTime, endTime); err != nil {
 		return false, fmt.Errorf("unable to set time range: %s", err)
 	}
@@ -253,7 +256,7 @@ func (s *Service) ExecuteContinuousQuery(cq *ContinuousQuery, now time.Time) (bo
 	}
 
 	// update cq.lastRun and s.lastRuns
-	cq.lastRun = now.Truncate(cq.resampleEvery)
+	cq.lastRun = endTime.Truncate(cq.resampleEvery)
 	s.lastRunsLock.Lock()
 	s.lastRuns[cq.name] = cq.lastRun
 	s.lastRunsLock.Unlock()

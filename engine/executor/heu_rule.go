@@ -20,6 +20,7 @@ import (
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/sysconfig"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"go.uber.org/zap"
 )
 
 var (
@@ -309,7 +310,11 @@ func (r *AggPushdownToExchangeRule) OnMatch(call *OptRuleCall) {
 		return
 	}
 
-	if !exchange.Schema().CanCallsPushdown() {
+	if !exchange.Schema().CanCallsPushdown() && !exchange.Schema().HasCastorCall() {
+		return
+	}
+
+	if exchange.Schema().IsInSubquerySchema() {
 		return
 	}
 
@@ -394,6 +399,10 @@ func (r *AggPushdownToReaderRule) OnMatch(call *OptRuleCall) {
 	}
 
 	if !reader.Schema().HasCall() {
+		return
+	}
+
+	if reader.Schema().IsInSubquerySchema() {
 		return
 	}
 
@@ -561,6 +570,10 @@ func (r *AggPushdownToSeriesRule) OnMatch(call *OptRuleCall) {
 	}
 
 	if !series.Schema().HasCall() {
+		return
+	}
+
+	if series.Schema().IsInSubquerySchema() {
 		return
 	}
 
@@ -874,6 +887,11 @@ func (r *AggPushDownToSubQueryRule) canPush(agg *LogicalAggregate, project *Logi
 		return false
 	}
 
+	// inSubquery does not yet support pushing down agg transform
+	if project.Schema().IsInSubquerySchema() {
+		return false
+	}
+
 	if !agg.Schema().HasCall() || project.Schema().HasCall() {
 		return false
 	}
@@ -1135,6 +1153,10 @@ func (r *AggToProjectInSubQueryRule) OnMatch(call *OptRuleCall) {
 	}
 
 	if node.Schema().Options().IsRangeVectorSelector() {
+		return
+	}
+
+	if node.Schema().Options().CanQueryPushDown() {
 		return
 	}
 
@@ -1595,4 +1617,92 @@ func (r *IncHashAggRule) OnMatch(call *OptRuleCall) {
 	clone.ForwardCallArgs()
 	clone.CountToSum()
 	call.TransformTo(clone)
+}
+
+type DistinctPushDownToExchangeRule struct {
+	OptRuleBase
+}
+
+func NewDistinctPushDownToExchangeRule(description string) *DistinctPushDownToExchangeRule {
+	mr := &DistinctPushDownToExchangeRule{}
+	if description == "" {
+		description = GetType(mr)
+	}
+
+	builder := NewOptRuleOperandBuilderBase()
+	builder.AnyInput((&LogicalExchange{}).Type())
+
+	mr.Initialize(mr, builder.Operand(), description)
+	return mr
+}
+
+func (r *DistinctPushDownToExchangeRule) Catagory() OptRuleCatagory {
+	return RULE_PUSHDOWN_DISTINCT
+}
+
+func (r *DistinctPushDownToExchangeRule) ToString() string {
+	return GetTypeName(r)
+}
+
+func (r *DistinctPushDownToExchangeRule) Equals(rhs OptRule) bool {
+	rr, ok := rhs.(*DistinctPushDownToExchangeRule)
+
+	if !ok {
+		return false
+	}
+
+	if r == rr {
+		return true
+	}
+
+	if r.Catagory() == rr.Catagory() && r.OptRuleBase.Equals(&(rr.OptRuleBase)) {
+		return true
+	}
+
+	return false
+}
+
+func (r *DistinctPushDownToExchangeRule) OnMatch(call *OptRuleCall) {
+	exchange, ok := call.Node(0).(*LogicalExchange)
+	if !ok {
+		logger.GetLogger().Warn("DistinctPushDownToExchangeRule OnMatch failed, OptRuleCall Node 0 isn't *LogicalExchange")
+		return
+	}
+
+	if !exchange.schema.HasDistinct() {
+		return
+	}
+
+	if exchange.Schema().HasCall() {
+		return
+	}
+
+	if exchange.Schema().IsInSubquerySchema() {
+		return
+	}
+
+	if len(exchange.Schema().Options().GetDimensions()) > 0 {
+		return
+	}
+
+	if exchange.Schema().HasLimit() {
+		return
+	}
+
+	if exchange.EType() != SHARD_EXCHANGE {
+		return
+	}
+
+	if vertex, ok := call.planner.Vertex(exchange); ok {
+		builder := NewLogicalPlanBuilderImpl(exchange.Schema())
+		node, err := builder.CreateDistinct(vertex)
+		if err != nil {
+			logger.GetLogger().Error("CreateDistinct failed", zap.Error(err))
+			return
+		}
+		if _, ok := call.planner.Vertex(node); ok {
+			return
+		}
+		call.TransformTo(node)
+	}
 }

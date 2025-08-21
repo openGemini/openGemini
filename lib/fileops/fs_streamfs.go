@@ -917,6 +917,11 @@ func (sc *StreamClient) RemoveAllV2(path string, lockFilePath string) error {
 	return nil
 }
 
+// not used
+func (o *StreamClient) RemoveAllWithOutDir(path string, lockFilePath string) error {
+	return nil
+}
+
 func (sc *StreamClient) StreamReachTheEnd(file *StreamFile) (bool, error) {
 	size, err := sc.getFileSize(file.Name())
 	if err != nil {
@@ -1347,6 +1352,15 @@ func (fs *streamVfs) RemoveAll(path string, opts ...FSOption) error {
 	return fs.sc.RemoveAllV2(path, lock)
 }
 
+func (fs *streamVfs) RemoveAllWithOutDir(path string, opts ...FSOption) error {
+	var lock string
+	if err := lockOpt(&lock, opts...); err != nil {
+		return err
+	}
+	logger.GetLogger().Info("remove path", zap.String("path", path))
+	return fs.sc.RemoveAllWithOutDir(path, lock)
+}
+
 func (fs *streamVfs) Mkdir(path string, perm os.FileMode, opts ...FSOption) error {
 	parentDir := p.Dir(path)
 	if err := fs.sc.FileExists(parentDir); err != nil {
@@ -1476,6 +1490,10 @@ func (fs *streamVfs) GetAllFilesSizeInPath(path string) (int64, int64, int64, er
 
 func (fs *streamVfs) GetOBSTmpFileName(path string, obsOption *obs.ObsOptions) string {
 	return path + obs.ObsFileTmpSuffix
+}
+
+func (fs *streamVfs) GetOBSTmpIndexFileName(path string, obsOption *obs.ObsOptions) string {
+	return path
 }
 
 func (fs *streamVfs) DecodeRemotePathToLocal(path string) (string, error) {

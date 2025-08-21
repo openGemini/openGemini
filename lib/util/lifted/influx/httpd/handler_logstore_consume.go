@@ -128,7 +128,7 @@ func (h *Handler) getConsumeInfo(w http.ResponseWriter, r *http.Request, user me
 	}
 	var filterOpt *immutable.FilterOptions
 	if consumeInfo.Cond != nil {
-		mapShard, err := h.QueryExecutor.StatementExecutor.(*coordinator.StatementExecutor).ShardMapper.MapShards(sqlQuery.Statements[0].(*influxql.SelectStatement).Sources, influxql.TimeRange{}, query.SelectOptions{}, consumeInfo.Cond)
+		mapShard, err := h.QueryExecutor.StatementExecutor.(*coordinator.StatementExecutor).ShardMapper.MapShards(sqlQuery.Statements[0].(*influxql.SelectStatement), influxql.TimeRange{}, query.SelectOptions{}, consumeInfo.Cond)
 		if err != nil {
 			h.getErrConsumeResponse(consumeInfo, t, w, err)
 			return nil, nil, err

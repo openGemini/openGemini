@@ -22,15 +22,15 @@ import (
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/metaclient"
-	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/raftconn"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"go.uber.org/zap"
 )
 
-func (e *Engine) PreOffload(opId uint64, db string, ptId uint32) error {
+func (e *EngineImpl) PreOffload(opId uint64, db string, ptId uint32) error {
 	if !e.trySetDbPtMigrating(db, ptId) {
 		return errno.NewError(errno.PtIsAlreadyMigrating)
 	}
@@ -63,7 +63,7 @@ func (e *Engine) PreOffload(opId uint64, db string, ptId uint32) error {
 	return nil
 }
 
-func (e *Engine) RollbackPreOffload(opId uint64, db string, ptId uint32) error {
+func (e *EngineImpl) RollbackPreOffload(opId uint64, db string, ptId uint32) error {
 	if !e.trySetDbPtMigrating(db, ptId) {
 		return errno.NewError(errno.PtIsAlreadyMigrating)
 	}
@@ -91,7 +91,7 @@ func (e *Engine) RollbackPreOffload(opId uint64, db string, ptId uint32) error {
 	return nil
 }
 
-func (e *Engine) PreAssign(opId uint64, db string, ptId uint32, durationInfos map[uint64]*meta2.ShardDurationInfo, dbBriefInfo *meta2.DatabaseBriefInfo, client metaclient.MetaClient) error {
+func (e *EngineImpl) PreAssign(opId uint64, db string, ptId uint32, durationInfos map[uint64]*meta2.ShardDurationInfo, dbBriefInfo *meta2.DatabaseBriefInfo, client metaclient.MetaClient) error {
 	if !e.trySetDbPtMigrating(db, ptId) {
 		return errno.NewError(errno.PtIsAlreadyMigrating)
 	}
@@ -109,6 +109,9 @@ func (e *Engine) PreAssign(opId uint64, db string, ptId uint32, durationInfos ma
 	walPath := path.Join(e.walPath, config.WalDirectory, db, strconv.Itoa(int(ptId)))
 
 	options, _ := e.metaClient.DatabaseOption(db)
+	if options != nil && options.Enabled {
+		ptPath = fileops.GetRemoteDataPath(options, ptPath)
+	}
 
 	lockPath := ""
 	dbPt := NewDBPTInfo(db, ptId, ptPath, walPath, e.loadCtx, e.fileInfos, options)
@@ -131,7 +134,7 @@ func (e *Engine) PreAssign(opId uint64, db string, ptId uint32, durationInfos ma
 	return nil
 }
 
-func (e *Engine) Offload(opId uint64, db string, ptId uint32) error {
+func (e *EngineImpl) Offload(opId uint64, db string, ptId uint32) error {
 	if !e.trySetDbPtMigrating(db, ptId) {
 		return errno.NewError(errno.PtIsAlreadyMigrating)
 	}
@@ -154,7 +157,7 @@ func (e *Engine) Offload(opId uint64, db string, ptId uint32) error {
 	return nil
 }
 
-func (e *Engine) Assign(opId uint64, nodeId uint64, db string, ptId uint32, ver uint64, durationInfos map[uint64]*meta2.ShardDurationInfo, dbBriefInfo *meta2.DatabaseBriefInfo, client metaclient.MetaClient, storage netstorage.StorageService) error {
+func (e *EngineImpl) Assign(opId uint64, nodeId uint64, db string, ptId uint32, ver uint64, durationInfos map[uint64]*meta2.ShardDurationInfo, dbBriefInfo *meta2.DatabaseBriefInfo, client metaclient.MetaClient, storage StorageService) error {
 	e.log.Info("[ASSIGN]engine start assign", zap.Uint64("opId", opId), zap.String("db", db), zap.Uint32("pt", ptId))
 	if !e.trySetDbPtMigrating(db, ptId) {
 		e.log.Error("[ASSIGN]engine start assign failed", zap.Uint64("opId", opId), zap.String("db", db), zap.Uint32("pt", ptId))
@@ -173,6 +176,9 @@ func (e *Engine) Assign(opId uint64, nodeId uint64, db string, ptId uint32, ver 
 	ptPath := path.Join(e.dataPath, config.DataDirectory, db, strconv.Itoa(int(ptId)))
 	walPath := path.Join(e.walPath, config.WalDirectory, db, strconv.Itoa(int(ptId)))
 	options, _ := e.metaClient.DatabaseOption(db)
+	if options != nil && options.Enabled {
+		ptPath = fileops.GetRemoteDataPath(options, ptPath)
+	}
 	lockPath := path.Join(ptPath, "LOCK")
 	dbPt, err := e.getPartition(db, ptId, false)
 	if err != nil {
@@ -240,7 +246,7 @@ func (e *Engine) Assign(opId uint64, nodeId uint64, db string, ptId uint32, ver 
 	e.mu.Unlock()
 	e.log.Info("[ASSIGN]start replay for replication", zap.String("db", db), zap.Uint32("pt", ptId), zap.Int("replicasN", dbBriefInfo.Replicas))
 	// replay is complete before 'assign' operation is complete.
-	readReplayForReplication(dbPt.ReplayC, client, storage)
+	readReplayForReplication(dbPt.ReplayC, client, storage, db, ptId)
 	e.log.Info("[ASSIGN]finish replay for replication", zap.String("db", db), zap.Uint32("pt", ptId), zap.Int("replicasN", dbBriefInfo.Replicas))
 	dbPt.enableReportShardLoad()
 	dbPt.preload = false
@@ -249,15 +255,15 @@ func (e *Engine) Assign(opId uint64, nodeId uint64, db string, ptId uint32, ver 
 	return nil
 }
 
-func (e *Engine) RegisterOnPTOffload(id uint64, f func(ptID uint32)) {
+func (e *EngineImpl) RegisterOnPTOffload(id uint64, f func(ptID uint32)) {
 	e.onPTOffload[id] = f
 }
 
-func (e *Engine) UninstallOnPTOffload(id uint64) {
+func (e *EngineImpl) UninstallOnPTOffload(id uint64) {
 	delete(e.onPTOffload, id)
 }
 
-func (e *Engine) offloadDbPT(pt *DBPTInfo) error {
+func (e *EngineImpl) offloadDbPT(pt *DBPTInfo) error {
 	var err error
 	done := make(chan bool, 1)
 	if offloaded := pt.markOffload(done); !offloaded {
@@ -292,7 +298,7 @@ func (e *Engine) offloadDbPT(pt *DBPTInfo) error {
 	return nil
 }
 
-func (e *Engine) loadDbPtShards(opId uint64, dbPt *DBPTInfo, durations map[uint64]*meta2.ShardDurationInfo, loadStat int, client metaclient.MetaClient) error {
+func (e *EngineImpl) loadDbPtShards(opId uint64, dbPt *DBPTInfo, durations map[uint64]*meta2.ShardDurationInfo, loadStat int, client metaclient.MetaClient) error {
 	start := time.Now()
 	errChan := make(chan error)
 	n := 0
@@ -326,7 +332,7 @@ func (e *Engine) loadDbPtShards(opId uint64, dbPt *DBPTInfo, durations map[uint6
 	return nil
 }
 
-func (e *Engine) trySetDbPtMigrating(database string, ptId uint32) bool {
+func (e *EngineImpl) trySetDbPtMigrating(database string, ptId uint32) bool {
 	e.mgtLock.Lock()
 	defer e.mgtLock.Unlock()
 	db, dbExist := e.migratingDbPT[database]
@@ -343,7 +349,7 @@ func (e *Engine) trySetDbPtMigrating(database string, ptId uint32) bool {
 	return false
 }
 
-func (e *Engine) clearDbPtMigrating(db string, ptId uint32) {
+func (e *EngineImpl) clearDbPtMigrating(db string, ptId uint32) {
 	e.mgtLock.Lock()
 	defer e.mgtLock.Unlock()
 	if _, dbExist := e.migratingDbPT[db]; !dbExist {
@@ -352,11 +358,11 @@ func (e *Engine) clearDbPtMigrating(db string, ptId uint32) {
 	delete(e.migratingDbPT[db], ptId)
 	e.log.Info("[ASSIGN]clearDbPtMigrating", zap.String("db", db), zap.Uint32("pt", ptId))
 }
-func (e *Engine) CheckPtsRemovedDone() bool {
+func (e *EngineImpl) CheckPtsRemovedDone() bool {
 	return len(e.DBPartitions) == 0
 }
 
-func (e *Engine) TransferLeadership(database string, nodeId uint64, oldMasterPtId, newMasterPtId uint32) error {
+func (e *EngineImpl) TransferLeadership(database string, nodeId uint64, oldMasterPtId, newMasterPtId uint32) error {
 	dbpt, err := e.getPartition(database, oldMasterPtId, false)
 	if err != nil {
 		return err

@@ -493,7 +493,7 @@ func (c *ConditionImpl) convertToRPNElem(rpnExpr *rpn.RPNExpr, opt hybridqp.Opti
 			case influxql.OR:
 				c.isSimpleExpr = false
 				c.rpn = append(c.rpn, &RPNElement{op: rpn.OR})
-			case influxql.EQ, influxql.LT, influxql.LTE, influxql.GT, influxql.GTE, influxql.NEQ, influxql.MATCHPHRASE, influxql.IPINRANGE:
+			case influxql.EQ, influxql.LT, influxql.LTE, influxql.GT, influxql.GTE, influxql.NEQ, influxql.MATCHPHRASE, influxql.MATCH, influxql.LIKE, influxql.IPINRANGE:
 			default:
 				return errno.NewError(errno.ErrRPNOp, v)
 			}

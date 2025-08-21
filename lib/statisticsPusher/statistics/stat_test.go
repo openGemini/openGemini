@@ -16,6 +16,7 @@ package statistics_test
 
 import (
 	"testing"
+	"time"
 
 	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/stretchr/testify/require"
@@ -73,6 +74,23 @@ func TestHandler(t *testing.T) {
 	assertCollectOps(t, obj.MeasurementName(), map[string]interface{}{
 		"queryStmtCount":      int64(14),
 		"queryErrorStmtCount": int64(10),
+	})
+}
+
+func TestRuntime(t *testing.T) {
+	now := time.Now()
+	obj := stat.RuntimeIns()
+	obj.SetVersion("1.0.0")
+	obj.SetSpdyCertExpireAt(now)
+
+	assertCollect(t, "runtime", `Version="1.0.0"`, `HttpsCertExpireAt=""`)
+
+	for range 5 {
+		stat.NewCollector().CollectOps()
+	}
+	assertCollectOps(t, "runtime", map[string]interface{}{
+		"Version":          "1.0.0",
+		"SpdyCertExpireAt": now.Format(time.DateTime),
 	})
 }
 

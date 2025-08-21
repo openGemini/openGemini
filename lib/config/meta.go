@@ -27,29 +27,30 @@ import (
 )
 
 const (
-	DefaultDir                  = "meta"
-	DefaultLoggingEnabled       = true
-	DefaultRaftFileName         = "raft"
-	DefaultGossipFileName       = "gossip"
-	DefaultHTTPBindAddress      = "127.0.0.1:8091"
-	DefaultRPCBindAddress       = "127.0.0.1:8092"
-	DefaultRaftBindAddress      = "127.0.0.1:8088"
-	DefaultCommitTimeout        = 50 * time.Millisecond
-	DefaultLeaderLeaseTimeout   = 500 * time.Millisecond
-	DefaultElectionTimeout      = 1000 * time.Millisecond
-	DefaultHeartbeatTimeout     = 1000 * time.Millisecond
-	DefaultLeaseDuration        = 60 * time.Second
-	DefaultConcurrentWriteLimit = 10
-	DefaultVersion              = 0
-	DefaultSplitRowThreshold    = 10000
-	DefaultImbalanceFactor      = 0.3
-	DefaultHostname             = "localhost"
-	DefaultSuspicionMult        = 4
-	DefaultProbInterval         = toml.Duration(400 * time.Millisecond)
-	DefaultPtNumPerNode         = 1
-	DefaultHashAlgo             = "ver03"
-	DefaultHaPolicy             = "write-available-first"
-	DefaultBalanceAlgoVer       = "v1.1"
+	DefaultDir                       = "meta"
+	DefaultLoggingEnabled            = true
+	DefaultRaftFileName              = "raft"
+	DefaultGossipFileName            = "gossip"
+	DefaultHTTPBindAddress           = "127.0.0.1:8091"
+	DefaultRPCBindAddress            = "127.0.0.1:8092"
+	DefaultRaftBindAddress           = "127.0.0.1:8088"
+	DefaultCommitTimeout             = 50 * time.Millisecond
+	DefaultLeaderLeaseTimeout        = 500 * time.Millisecond
+	DefaultElectionTimeout           = 1000 * time.Millisecond
+	DefaultHeartbeatTimeout          = 1000 * time.Millisecond
+	DefaultLeaseDuration             = 60 * time.Second
+	DefaultReplicaColdSelectInterval = 5 * time.Minute
+	DefaultConcurrentWriteLimit      = 10
+	DefaultVersion                   = 0
+	DefaultSplitRowThreshold         = 10000
+	DefaultImbalanceFactor           = 0.3
+	DefaultHostname                  = "localhost"
+	DefaultSuspicionMult             = 4
+	DefaultProbInterval              = toml.Duration(400 * time.Millisecond)
+	DefaultPtNumPerNode              = 1
+	DefaultHashAlgo                  = "ver03"
+	DefaultHaPolicy                  = "write-available-first"
+	DefaultBalanceAlgoVer            = "v1.1"
 
 	// Default number of shards for each measurement in a shard group.
 	DefaultNumOfShards = 3
@@ -152,6 +153,8 @@ type Meta struct {
 	BatchApplyCh        bool `toml:"batch-enabled"`
 	TakeOverEnable      bool `toml:"takeover-enable"`
 	ExpandShardsEnable  bool `toml:"expand-shards-enable"`
+	PingFailedNode      bool `toml:"ping-failed-node"`
+	RepairPT            bool `toml:"repair-pt"`
 
 	DataDir                 string
 	WalDir                  string
@@ -163,6 +166,7 @@ type Meta struct {
 	AuthEnabled             bool    `toml:"auth-enabled"`
 	HTTPSCertificate        string  `toml:"https-certificate"`
 	HTTPSPrivateKey         string  `toml:"https-private-key"`
+	HTTPSClientCertificate  string  `toml:"https-client-certificate"`
 	MaxConcurrentWriteLimit int     `toml:"-"`
 	Version                 int     `toml:"meta-version"`
 	Hostname                string  `toml:"hostname"`
@@ -182,50 +186,60 @@ type Meta struct {
 	BalanceAlgo  string `toml:"balance-algorithm-version"`
 
 	// Number of shards for each measurement in a shard group
-	NumOfShards    int32 `toml:"num-of-shards"`
-	UseIncSyncData bool  `toml:"inc-sync-data"`
-	SQLiteEnabled  bool  `toml:"sqlite-enabled"`
-	RepDisPolicy   uint8 `toml:"rep-dis-policy"`
-	SchemaCleanEn  bool  `toml:"schema-clean-enable"`
+	NumOfShards                         int32 `toml:"num-of-shards"`
+	UseIncSyncData                      bool  `toml:"inc-sync-data"`
+	SQLiteEnabled                       bool  `toml:"sqlite-enabled"`
+	RepDisPolicy                        uint8 `toml:"rep-dis-policy"`
+	SchemaCleanEn                       bool  `toml:"schema-clean-enable"`
+	AsyncSchemaEndtimeUpdateEn          bool  `toml:"async-schema-endtime-update-enable"`
+	AsyncSchemaEndtimeUpdateCache       int   `toml:"async-schema-endtime-update-cache"`
+	AsyncSchemaEndtimeUpdateConcurrency int   `toml:"async-schema-endtime-update-concurrency"`
 
 	MetaEventHandleEn bool `toml:"meta-event-handle-enable"`
 	BindPeers         []string
 
-	Heartbeat *HeartbeatConfig `toml:"heartbeat"`
+	ReplicaColdSelectEnable   bool          `toml:"replica_cold_select_enable"`
+	ReplicaColdSelectInterval toml.Duration `toml:"replica_cold_select_interval"`
+	MetaRecover               bool          `toml:"meta_recover_enable"`
 }
 
 // NewMeta builds a new configuration with default values.
 func NewMeta() *Meta {
 	return &Meta{
-		Dir:                     filepath.Join(openGeminiDir(), DefaultDir),
-		HTTPBindAddress:         DefaultHTTPBindAddress,
-		RPCBindAddress:          DefaultRPCBindAddress,
-		BindAddress:             DefaultRaftBindAddress,
-		RetentionAutoCreate:     true,
-		ElectionTimeout:         toml.Duration(DefaultElectionTimeout),
-		HeartbeatTimeout:        toml.Duration(DefaultHeartbeatTimeout),
-		LeaderLeaseTimeout:      toml.Duration(DefaultLeaderLeaseTimeout),
-		CommitTimeout:           toml.Duration(DefaultCommitTimeout),
-		LeaseDuration:           toml.Duration(DefaultLeaseDuration),
-		LoggingEnabled:          DefaultLoggingEnabled,
-		JoinPeers:               []string{},
-		MaxConcurrentWriteLimit: DefaultConcurrentWriteLimit,
-		Version:                 DefaultVersion,
-		SplitRowThreshold:       DefaultSplitRowThreshold,
-		ImbalanceFactor:         DefaultImbalanceFactor,
-		BatchApplyCh:            true,
-		TakeOverEnable:          false,
-		ExpandShardsEnable:      false,
-		RemoteHostname:          DefaultHostname,
-		ClusterTracing:          true,
-		PtNumPerNode:            DefaultPtNumPerNode,
-		BalanceAlgo:             DefaultBalanceAlgoVer,
-		NumOfShards:             DefaultNumOfShards,
-		SQLiteEnabled:           DefalutSQLiteEnabled,
-		UseIncSyncData:          true,
-		SchemaCleanEn:           true,
-		BindPeers:               []string{},
-		Heartbeat:               NewHeartbeatConfig(),
+		Dir:                        filepath.Join(openGeminiDir(), DefaultDir),
+		HTTPBindAddress:            DefaultHTTPBindAddress,
+		RPCBindAddress:             DefaultRPCBindAddress,
+		BindAddress:                DefaultRaftBindAddress,
+		RetentionAutoCreate:        true,
+		ElectionTimeout:            toml.Duration(DefaultElectionTimeout),
+		HeartbeatTimeout:           toml.Duration(DefaultHeartbeatTimeout),
+		LeaderLeaseTimeout:         toml.Duration(DefaultLeaderLeaseTimeout),
+		CommitTimeout:              toml.Duration(DefaultCommitTimeout),
+		LeaseDuration:              toml.Duration(DefaultLeaseDuration),
+		LoggingEnabled:             DefaultLoggingEnabled,
+		JoinPeers:                  []string{},
+		MaxConcurrentWriteLimit:    DefaultConcurrentWriteLimit,
+		Version:                    DefaultVersion,
+		SplitRowThreshold:          DefaultSplitRowThreshold,
+		ImbalanceFactor:            DefaultImbalanceFactor,
+		BatchApplyCh:               true,
+		TakeOverEnable:             false,
+		ExpandShardsEnable:         false,
+		RemoteHostname:             DefaultHostname,
+		ClusterTracing:             true,
+		PtNumPerNode:               DefaultPtNumPerNode,
+		BalanceAlgo:                DefaultBalanceAlgoVer,
+		NumOfShards:                DefaultNumOfShards,
+		SQLiteEnabled:              DefalutSQLiteEnabled,
+		UseIncSyncData:             true,
+		SchemaCleanEn:              true,
+		AsyncSchemaEndtimeUpdateEn: false,
+		BindPeers:                  []string{},
+		PingFailedNode:             false,
+		RepairPT:                   false,
+		ReplicaColdSelectInterval:  toml.Duration(DefaultReplicaColdSelectInterval),
+		ReplicaColdSelectEnable:    false,
+		MetaRecover:                false,
 	}
 }
 
@@ -254,10 +268,6 @@ func (c *Meta) Validate() error {
 	}
 	iv := intValidator{0, MaxNumOfShards}
 	if err := iv.Validate(ivItems); err != nil {
-		return err
-	}
-
-	if err := c.Heartbeat.Validate(); err != nil {
 		return err
 	}
 

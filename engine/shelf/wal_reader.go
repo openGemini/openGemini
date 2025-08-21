@@ -17,18 +17,22 @@ package shelf
 import (
 	"fmt"
 	"io"
+	"slices"
 	"sort"
+	"strings"
 
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util"
 )
 
 type WalCtx struct {
-	buf    pool.Buffer
-	header WalBlockHeader
-	rec    record.Record
+	buf     pool.Buffer
+	header  WalBlockHeader
+	rec     record.Record
+	offsets []int64
 }
 
 func (ctx *WalCtx) MemSize() int {
@@ -54,40 +58,72 @@ func NewWalCtx() (*WalCtx, func()) {
 	}
 }
 
-func (wal *Wal) LoadIntoMemory() {
-	wal.file.LoadIntoMemory()
-}
+func (wal *Wal) ReadRecord(ctx *WalCtx, sid uint64, dst *record.Record, keepSchema bool) error {
+	ctx.offsets = wal.seriesOffsets.Get(sid, ctx.offsets[:0])
 
-func (wal *Wal) ReadRecord(ctx *WalCtx, sid uint64, dst *record.Record) error {
-	ofs := wal.seriesOffsets.Get(sid)
-
-	if len(ofs) == 0 {
+	if len(ctx.offsets) == 0 {
 		return nil
 	}
 
-	return wal.readRecord(ctx, ofs, dst)
-}
+	if keepSchema {
+		return wal.readRecordWithSchema(ctx, ctx.offsets, dst)
+	}
 
-func (wal *Wal) readRecord(ctx *WalCtx, offsets []int64, dst *record.Record) error {
-	rec := &ctx.rec
-	for i, offset := range offsets {
-		buf, err := wal.ReadBlock(ctx, offset)
-		if err != nil {
-			return err
-		}
-
-		rec.ResetDeep()
-		err = wal.codec.Decode(rec, buf)
-		if err != nil {
-			return err
-		}
-
-		if i == 0 {
+	dst.Reset()
+	return wal.readRecord(ctx, ctx.offsets, func(rec *record.Record) error {
+		if dst.Len() == 0 {
 			dst.Schema = append(dst.Schema[:0], rec.Schema...)
 			dst.ReserveColVal(rec.Len())
 			dst.AppendRec(rec, 0, rec.RowNums())
 		} else {
 			dst.Merge(rec)
+		}
+		return nil
+	})
+}
+
+func (wal *Wal) readRecordWithSchema(ctx *WalCtx, offsets []int64, dst *record.Record) error {
+	return wal.readRecord(ctx, offsets, func(rec *record.Record) error {
+		times := rec.Times()
+		if len(times) == 0 {
+			return nil
+		}
+
+		err := util.FindIntersectionIndex(rec.Schema[:rec.Len()-1], dst.Schema[:dst.Len()-1],
+			func(f1 record.Field, f2 record.Field) int {
+				return strings.Compare(f1.Name, f2.Name)
+			},
+			func(i, j int) error {
+				if rec.Schema[i].Type == dst.Schema[j].Type {
+					dst.ColVals[j].AppendColVal(&rec.ColVals[i], rec.Schema[i].Type, 0, len(times))
+				}
+				return nil
+			})
+
+		dst.AppendTime(times...)
+		dst.TryPadColumn()
+		return err
+	})
+}
+
+func (wal *Wal) readRecord(ctx *WalCtx, offsets []int64, callback func(rec *record.Record) error) error {
+	decoder := &WalRecordDecoder{}
+	rec := &ctx.rec
+	for _, offset := range offsets {
+		buf, err := wal.ReadBlock(ctx, offset)
+		if err != nil {
+			return err
+		}
+
+		rec.Reset()
+		err = decoder.Decode(rec, buf)
+		if err != nil {
+			return err
+		}
+
+		err = callback(rec)
+		if err != nil {
+			return err
 		}
 	}
 	return nil
@@ -113,13 +149,16 @@ func (wal *Wal) ReadBlock(ctx *WalCtx, ofs int64) ([]byte, error) {
 		return nil, fmt.Errorf("too big block size: %d > %d", header.size, maxWalBlockSize)
 	}
 
-	buf.B = bufferpool.Resize(buf.B, int(header.size))
-	buf.B, err = wal.readAt(buf.B[:header.size], ofs+int64(walBlockHeaderSize))
+	size := int(header.size)
+	ofs += int64(walBlockHeaderSize) + int64(header.mstLen) // skip header and measurement name
+
+	buf.B = slices.Grow(buf.B[:0], size)[:size]
+	buf.B, err = wal.readAt(buf.B, ofs)
 	if err != nil {
 		return nil, err
 	}
 
-	switch header.flag {
+	switch header.compressFlag {
 	case walCompressLz4:
 		buf.Swap, err = LZ4DecompressBlock(buf.B, buf.Swap)
 		return buf.Swap, err
@@ -151,13 +190,22 @@ type WalRecordIterator struct {
 	ctx  WalCtx
 }
 
-func (itr *WalRecordIterator) Init(wal *Wal) {
-	wal.LoadIntoMemory()
-	itr.wal = wal
-	itr.sids = wal.GetAllSid(itr.sids[:0])
+func NewWalRecordIterator(wal *Wal) *WalRecordIterator {
+	return &WalRecordIterator{
+		wal: wal,
+	}
+}
 
-	// reverse order
-	sort.Slice(itr.sids, func(i, j int) bool { return itr.sids[i] > itr.sids[j] })
+func (itr *WalRecordIterator) WalMeasurements(fn func(mst string)) {
+	itr.wal.seriesMap.Walk(func(mst string, series map[uint64]struct{}) {
+		itr.sids = itr.sids[:0]
+		for id := range series {
+			itr.sids = append(itr.sids, id)
+		}
+		sort.Slice(itr.sids, func(i, j int) bool { return itr.sids[i] > itr.sids[j] })
+
+		fn(mst)
+	})
 }
 
 func (itr *WalRecordIterator) Next(dst *record.Record) (uint64, error) {
@@ -168,34 +216,6 @@ func (itr *WalRecordIterator) Next(dst *record.Record) (uint64, error) {
 	sid := itr.sids[idx]
 	itr.sids = itr.sids[:idx]
 
-	err := itr.wal.ReadRecord(&itr.ctx, sid, dst)
+	err := itr.wal.ReadRecord(&itr.ctx, sid, dst, false)
 	return sid, err
-}
-
-type MemWalReader struct {
-	data []byte
-	size int64
-}
-
-func (r *MemWalReader) Load(reader io.ReaderAt, size int) error {
-	if cap(r.data) < size {
-		r.data = make([]byte, size)
-	}
-
-	n, err := reader.ReadAt(r.data[:size], 0)
-	if n != size {
-		return errno.NewError(errno.ShortRead, n, size)
-	}
-	r.size = int64(size)
-	return err
-}
-
-func (r *MemWalReader) ReadAt(dst []byte, ofs int64) (int, error) {
-	n := len(dst)
-	end := ofs + int64(n)
-	if end > r.size {
-		return 0, io.ErrUnexpectedEOF
-	}
-	copy(dst, r.data[ofs:end])
-	return n, nil
 }

@@ -27,6 +27,7 @@ const (
 	ExactStatisticQuery
 	FullSeriesQuery
 	SpecificSeriesQuery
+	QueryPushDown
 )
 
 var (
@@ -43,6 +44,11 @@ func VerifyHintStmt(stmt *influxql.SelectStatement, opt Options) error {
 	}
 	if IsExactStatisticQuery(stmt) {
 		opt.SetHintType(ExactStatisticQuery)
+		return nil
+	}
+	if IsQueryPushDown(stmt) {
+		opt.SetHintType(QueryPushDown)
+		return nil
 	}
 	return nil
 }
@@ -138,6 +144,31 @@ func IsSpecificSeriesQuery(stmt *influxql.SelectStatement) bool {
 			return IsSpecificSeriesQuery(s.Statement)
 		default:
 			continue
+		}
+	}
+	return false
+}
+
+// IsQueryPushDown Hint
+func IsQueryPushDown(stmt *influxql.SelectStatement) bool {
+	if len(stmt.Hints) > 0 && stmt.Hints[0].String() == influxql.QueryPushDown {
+		return true
+	}
+	for _, s := range stmt.Sources {
+		switch s := s.(type) {
+		case *influxql.Measurement:
+			var isQueryPushDown bool
+			for _, hint := range stmt.Hints {
+				h := hint.String()
+				if h == influxql.QueryPushDown {
+					isQueryPushDown = true
+					break
+				}
+			}
+			return isQueryPushDown
+		case *influxql.SubQuery:
+			return IsQueryPushDown(s.Statement)
+		default:
 		}
 	}
 	return false

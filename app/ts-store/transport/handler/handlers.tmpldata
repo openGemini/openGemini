@@ -10,5 +10,6 @@
     "ShowQueries",
     "KillQuery",
     "ShowTagKeys",
-    "RaftMessages"
+    "RaftMessages",
+    "DropSeries"
 ]

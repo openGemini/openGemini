@@ -16,12 +16,14 @@ package shelf
 
 import (
 	"encoding/binary"
+	"slices"
 
 	"github.com/openGemini/openGemini/lib/codec"
 	"github.com/openGemini/openGemini/lib/compress/dict"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/stringinterner"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"go.uber.org/zap"
@@ -33,79 +35,87 @@ const (
 )
 
 type WalRecordDecoder struct {
+	dec codec.BinaryDecoder
 }
 
 func NewWalRecordDecoder() *WalRecordDecoder {
 	return &WalRecordDecoder{}
 }
 
+func (c *WalRecordDecoder) Reset(buf []byte) {
+	c.dec.Reset(buf)
+}
+
 func (c *WalRecordDecoder) Decode(rec *record.Record, buf []byte) error {
 	var err error
-	dec := codec.NewBinaryDecoder(buf)
+	c.Reset(buf)
 
-	header := dec.Uint32()
-	fieldLen := (header << 8) >> 8
+	header := c.dec.Uint32()
+	fieldLen := int((header << 8) >> 8)
 	mode := header >> 24
 
-	rec.ReserveSchemaAndColVal(int(fieldLen))
+	rec.Schema = slices.Grow(rec.Schema[:0], fieldLen)[:fieldLen]
+	rec.ColVals = slices.Grow(rec.ColVals[:0], fieldLen)[:fieldLen]
 
 	if mode == RecordEncodeModeOneRow {
 		for i := range rec.Schema {
 			schema := &rec.Schema[i]
-			c.DecodeColumnSchema(dec, schema)
-			c.DecodeColValOneRowMode(dec, schema.Type, &rec.ColVals[i])
+			c.DecodeColumnSchema(schema)
+			c.DecodeColValOneRowMode(schema.Type, &rec.ColVals[i])
 		}
 		return nil
 	}
 
 	for i := range rec.Schema {
 		schema := &rec.Schema[i]
-		c.DecodeColumnSchema(dec, schema)
-		err = c.DecodeColVal(dec, schema.Type, &rec.ColVals[i])
+		c.DecodeColumnSchema(schema)
+		err = c.DecodeColVal(schema.Type, &rec.ColVals[i])
 		if err != nil {
 			return err
 		}
 	}
 
-	if dec.RemainSize() > 0 {
-		logger.GetLogger().Error("[BUG] error may occur in decoding the record",
+	if c.dec.RemainSize() > 0 {
+		logger.GetLogger().Warn("[BUG] error may occur in decoding the record",
 			zap.Int("src binary size", len(buf)),
-			zap.Int("remain size", dec.RemainSize()),
+			zap.Int("remain size", c.dec.RemainSize()),
 			zap.Uint8s("src", buf))
 	}
 	return nil
 }
 
-func (c *WalRecordDecoder) DecodeColumnSchema(dec *codec.BinaryDecoder, dst *record.Field) {
-	id := dec.Uint32()
+func (c *WalRecordDecoder) DecodeColumnSchema(dst *record.Field) {
+	id := c.dec.Uint32()
 	if id>>31 == 1 {
 		// dictionary encoding is not used
-		dst.Name = string(dec.BytesNoCopyN(int(id & 0xFFFF)))
+		dst.Name = stringinterner.InternSafe(util.Bytes2str(c.dec.BytesNoCopyN(int(id & 0xFFFF))))
 	} else {
 		dst.Name = dict.DefaultDict().GetValue(int(id))
 	}
 
-	dst.Type = int(dec.Uint8())
+	dst.Type = int(c.dec.Uint8())
 }
 
-func (c *WalRecordDecoder) DecodeColValOneRowMode(dec *codec.BinaryDecoder, typ int, col *record.ColVal) {
+func (c *WalRecordDecoder) DecodeColValOneRowMode(typ int, col *record.ColVal) {
 	col.Len = 1
 	col.NilCount = 0
 	col.BitMapOffset = 0
 	col.Bitmap = append(col.Bitmap[:0], 1)
+	col.Offset = col.Offset[:0]
 
 	if typ == influx.Field_Type_String {
-		col.Offset = append(col.Offset[:0], 0)
-		col.Val = append(col.Val[:0], dec.BytesNoCopy()...)
+		col.Offset = append(col.Offset, 0)
+		col.Val = c.dec.BytesNoCopy()
 		return
 	}
 
-	col.Val = append(col.Val[:0], dec.BytesNoCopyN(record.GetTypeSize(typ))...)
+	col.Val = c.dec.BytesNoCopyN(record.GetTypeSize(typ))
 }
 
-func (c *WalRecordDecoder) DecodeColVal(dec *codec.BinaryDecoder, typ int, col *record.ColVal) error {
+func (c *WalRecordDecoder) DecodeColVal(typ int, col *record.ColVal) error {
 	var ok bool
 	var u uint64
+	dec := &c.dec
 
 	u, ok = dec.Uvarint()
 	if !ok {
@@ -119,6 +129,7 @@ func (c *WalRecordDecoder) DecodeColVal(dec *codec.BinaryDecoder, typ int, col *
 	}
 	col.NilCount = int(u)
 
+	col.BitMapOffset = 0
 	if col.NilCount > 0 {
 		col.Bitmap = dec.BytesNoCopyN(util.DivisionCeil(col.Len, util.Uint64SizeBytes))
 	} else {
@@ -144,6 +155,7 @@ func (c *WalRecordDecoder) DecodeColVal(dec *codec.BinaryDecoder, typ int, col *
 			return errno.NewError(errno.TooSmallData, "ColVal.Val", size, dec.RemainSize())
 		}
 		col.Val = dec.BytesNoCopyN(size)
+		col.Offset = col.Offset[:0]
 	}
 
 	return nil

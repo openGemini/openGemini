@@ -31,9 +31,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/docker/go-units"
 	"github.com/golang/snappy"
 	"github.com/openGemini/openGemini/lib/bufferpool"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
@@ -79,6 +79,8 @@ type walRowsObjects struct {
 	fields influx.Fields       // the unmarshal fields
 	opts   influx.IndexOptions // the unmarshal IndexOptions
 	keys   []byte              // the unmarshal IndexKeys
+
+	isLastRows bool
 }
 
 func getWalRowsObjects() *walRowsObjects {
@@ -131,8 +133,8 @@ type WAL struct {
 }
 
 func NewWAL(path string, lockPath *string, shardID uint64, walSyncInterval time.Duration, walEnabled, replayParallel bool, partitionNum int, walReplayBatchSize int) *WAL {
-	if walReplayBatchSize < 256*units.KiB {
-		walReplayBatchSize = 256 * units.KiB // at least 256 KiB
+	if walReplayBatchSize < 256*config.KB {
+		walReplayBatchSize = 256 * config.KB // at least 256 KiB
 	}
 
 	wal := &WAL{
@@ -306,7 +308,7 @@ func (l *WAL) replayPhysicRecord(fr *bufio.Reader, walFileName string, recordCom
 	var recordHeader [WalRecordHeadSize]byte
 	n, err := io.ReadFull(fr, recordHeader[:])
 	if err != nil {
-		l.log.Error(errno.NewError(errno.ReadWalFileFailed).Error(), zap.Error(err))
+		l.log.Error(errno.NewError(errno.ReadWalFileFailed).Error(), zap.String("walFileName", walFileName), zap.Error(err))
 		return recordCompBuff, io.EOF
 	}
 	if n != WalRecordHeadSize {
@@ -385,11 +387,11 @@ func (l *WAL) unmarshalRows(binary []byte, ctx *walRowsObjects) (*walRowsObjects
 	return ctx, err
 }
 
-func (l *WAL) replayWalFile(ctx context.Context, walFileName string, callBack func(pc *walRecord) error) error {
+func (l *WAL) replayWalFile(ctx context.Context, walFileName string, lastFile bool, callBack func(pc *walRecord) error) error {
 	failpoint.Inject("mock-replay-wal-error", func(val failpoint.Value) {
 		msg := val.(string)
 		if strings.Contains(walFileName, msg) {
-			failpoint.Return(fmt.Errorf(msg))
+			failpoint.Return(fmt.Errorf("%s", msg))
 		}
 	})
 	lock := fileops.FileLockOption("")
@@ -428,6 +430,18 @@ func (l *WAL) replayWalFile(ctx context.Context, walFileName string, callBack fu
 		recordCompBuff, err = l.replayPhysicRecord(fr, walFileName, recordCompBuff, callBack)
 		if err != nil {
 			if err == io.EOF {
+				if lastFile {
+					rowObjs := getWalRowsObjects()
+					rowObjs.isLastRows = lastFile
+					wr := &walRecord{
+						rowsObjs: rowObjs,
+					}
+					if err := callBack(wr); err != nil {
+						l.log.Error("callBack error", zap.Error(err), zap.String("wal", walFileName))
+						return err
+					}
+
+				}
 				return nil
 			}
 			return err
@@ -436,14 +450,18 @@ func (l *WAL) replayWalFile(ctx context.Context, walFileName string, callBack fu
 }
 
 func (l *WAL) replayOnePartition(ctx context.Context, idx int, callBack func(pc *walRecord) error) error {
-	for _, fileName := range l.logReplay[idx].fileNames {
+	for i, fileName := range l.logReplay[idx].fileNames {
 		select {
 		case <-ctx.Done():
 			l.log.Info("cancel replay wal", zap.String("filename", fileName))
 			return nil
 		default:
 		}
-		err := l.replayWalFile(ctx, fileName, callBack)
+		var lastFile bool
+		if idx == len(l.logReplay)-1 && i == len(l.logReplay[idx].fileNames)-1 {
+			lastFile = true
+		}
+		err := l.replayWalFile(ctx, fileName, lastFile, callBack)
 		if err != nil {
 			return err
 		}
@@ -468,7 +486,7 @@ func consumeRecordSerial(ctx context.Context, mu *sync.Mutex, ptChs []chan *walR
 				return
 			case pc = <-ptChs[i]:
 			}
-			if len(pc.binary) == 0 && (pc.rowsObjs == nil || len(pc.rowsObjs.rows) == 0) {
+			if len(pc.binary) == 0 && (pc.rowsObjs == nil || (len(pc.rowsObjs.rows) == 0 && !pc.rowsObjs.isLastRows)) {
 				ptFinishNum++
 				ptFinish[i] = true
 				if ptFinishNum == len(ptChs) {

@@ -226,15 +226,25 @@ func getCurrStep(startSample, endSample, step, t int64) int64 {
 }
 
 func IsSameStep(startSample, endSample, step, duration, currT, nextT int64) bool {
-	currT = hybridqp.ClampInt64(currT, startSample, endSample)
-	nextT = hybridqp.ClampInt64(nextT, startSample, endSample)
-	n1, r1 := (currT-startSample)/step, (currT-startSample)%step
-	n2, r2 := (nextT-startSample)/step, (nextT-startSample)%step
+	// constraint: nextT > currT
+	if currT < startSample && nextT > startSample {
+		return false
+	}
+	n1 := (currT - startSample) / step
+	n2 := (nextT - startSample) / step
 	if n1 != n2 {
 		return false
 	}
 	delta := step - duration
-	return r1 >= delta && r2 >= delta
+	var r1, r2 int64
+	if (currT-startSample) <= 0 && (nextT-startSample) <= 0 {
+		r1, r2 = (startSample-currT)%step, (startSample-nextT)%step
+		return r1 <= duration && r2 <= duration
+	} else {
+		r1, r2 = (currT-startSample)%step, (nextT-startSample)%step
+		return r1 >= delta && r2 >= delta
+	}
+
 }
 
 func newPromSampleProcessor(inSchema, outSchema record.Schemas, exprOpt []hybridqp.ExprOptions) (CoProcessor, error) {
@@ -388,7 +398,7 @@ func (r *floatSampler) Aggregate(p *ReducerEndpoint, param *ReducerParams) {
 				outRecord.AppendTime(ts + r.offset)
 			}
 		} else {
-			if r.prevBuf.isNil || r.prevBuf.time < ts-param.lookBackDelta || model.IsStaleNaN(r.prevBuf.value) {
+			if r.prevBuf.isNil || r.prevBuf.time < ts-param.lookBackDelta || r.prevBuf.time > ts || model.IsStaleNaN(r.prevBuf.value) {
 				continue
 			}
 			r.fv(outRecord.Column(outOrdinal), r.prevBuf.value)

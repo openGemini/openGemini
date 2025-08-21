@@ -27,7 +27,7 @@ import (
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/cache"
 	"github.com/openGemini/openGemini/lib/index"
-	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/msgservice"
 	"github.com/openGemini/openGemini/lib/spdy"
 	"github.com/openGemini/openGemini/lib/spdy/rpc"
 	"github.com/openGemini/openGemini/lib/spdy/transport"
@@ -151,7 +151,7 @@ type RPCServer struct {
 	seq uint64
 }
 
-func (c *RPCServer) GetQueryExeInfo() *netstorage.QueryExeInfo {
+func (c *RPCServer) GetQueryExeInfo() *msgservice.QueryExeInfo {
 	return nil
 }
 
@@ -183,7 +183,7 @@ func (c *RPCServer) Handle(w spdy.Responser, data interface{}) error {
 	return nil
 }
 
-func (c *RPCServer) Abort() {
+func (c *RPCServer) Abort(source string) {
 	fmt.Println("aborted")
 }
 
@@ -201,7 +201,7 @@ func (c *RPCAbort) Handle(_ spdy.Responser, data interface{}) error {
 	}
 	fmt.Printf("RPCAbort Handle: %+v \n", msg)
 
-	query2.NewManager(clientID).Abort(msg.QueryID)
+	query2.NewManager(clientID).Abort(msg.QueryID, "")
 	return nil
 }
 
@@ -438,4 +438,32 @@ func TestCrashUnmarshal(t *testing.T) {
 	c.Unmarshal(b)
 	b = b[:len(b)-1]
 	c.Unmarshal(b)
+}
+
+func makeMultiMstInfosForRq(rq *executor.RemoteQuery) {
+	rq.MstInfos = []*executor.MultiMstInfo{{ShardIds: rq.ShardIDs, Opt: rq.Opt}}
+}
+
+func TestRemoteQueryWithMultiMstInfo(t *testing.T) {
+	msg := makeRemoteQueryMsg(1)
+	makeMultiMstInfosForRq(msg)
+	assert.Equal(t, len(msg.BuildMstTraits()), 1)
+	msg.ShardIDs = []uint64{1, 2, 3, 4}
+	msg.PtQuerys = make([]executor.PtQuery, 0)
+
+	buf, err := msg.Marshal(nil)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+
+	other := &executor.RemoteQuery{}
+	err = other.Unmarshal(buf)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+
+	if !reflect.DeepEqual(msg, other) {
+		fmt.Printf("%+v \n%+v \n", msg, other)
+		t.Fatalf("failed to marshal or Unmarshal RemoteQuery")
+	}
 }

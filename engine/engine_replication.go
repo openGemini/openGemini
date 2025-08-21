@@ -23,7 +23,6 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/metaclient"
-	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/raftconn"
 	"github.com/openGemini/openGemini/lib/raftlog"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
@@ -33,7 +32,7 @@ import (
 )
 
 //lint:ignore U1000 use for replication feature
-func (e *Engine) startRaftNode(opId uint64, nodeId uint64, dbPt *DBPTInfo, client metaclient.MetaClient, storage netstorage.StorageService) error {
+func (e *EngineImpl) startRaftNode(opId uint64, nodeId uint64, dbPt *DBPTInfo, client metaclient.MetaClient, storage StorageService) error {
 	database := dbPt.database
 	ptId := dbPt.id
 	e.log.Info("[ASSIGN]start raft node check rep group status ", zap.String("db", database), zap.Uint32("pt", ptId))
@@ -108,7 +107,7 @@ func (e *Engine) startRaftNode(opId uint64, nodeId uint64, dbPt *DBPTInfo, clien
 	return nil
 }
 
-func (e *Engine) checkRepGroupStatus(opId uint64, database string, ptId uint32) error {
+func (e *EngineImpl) checkRepGroupStatus(opId uint64, database string, ptId uint32) error {
 	var retryNum = 5
 	for {
 		retryNum--
@@ -139,7 +138,7 @@ func (e *Engine) checkRepGroupStatus(opId uint64, database string, ptId uint32) 
 	return nil
 }
 
-func (e *Engine) SendRaftMessage(database string, ptId uint64, msgs raftpb.Message) error {
+func (e *EngineImpl) SendRaftMessage(database string, ptId uint64, msgs raftpb.Message) error {
 	dbPt, err := e.getPartition(database, uint32(ptId), false)
 	if err != nil {
 		if errno.Equal(err, errno.DBPTClosed) {
@@ -154,7 +153,7 @@ func (e *Engine) SendRaftMessage(database string, ptId uint64, msgs raftpb.Messa
 	return nil
 }
 
-func (e *Engine) getRaftGroupId(dataBase string, ptId uint32) (uint32, error) {
+func (e *EngineImpl) getRaftGroupId(dataBase string, ptId uint32) (uint32, error) {
 	ptViews, err := e.metaClient.DBPtView(dataBase)
 	if err != nil {
 		return 0, err

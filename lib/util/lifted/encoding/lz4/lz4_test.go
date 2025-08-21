@@ -21,21 +21,42 @@ import (
 	"testing"
 )
 
-func TestCompressDefaultDecompressSafe(t *testing.T) {
-	data := make([]byte, 4096)
+func BenchmarkLz4(b *testing.B) {
+	size := 4096
+	data := make([]byte, size)
 	rand.Read(data)
+	compressed := make([]byte, CompressBlockBound(size))
+	decompressed := make([]byte, size)
+	for i := 0; i < b.N; i++ {
+		compressAndDecompress(data, decompressed, compressed, b)
+	}
+}
 
-	compressed := make([]byte, CompressBlockBound(4096))
-	size, err := CompressBlock(data, compressed)
+type logger interface {
+	Fatalf(format string, args ...any)
+}
+
+func compressAndDecompress(src, dst, buf []byte, t logger) {
+	size, err := CompressBlock(src, buf)
 	if err != nil {
 		t.Fatalf("Compression failed: %v", err)
 	}
 
-	decompressed := make([]byte, 4096)
-	if _, err := DecompressSafe(compressed[:size], decompressed); err != nil {
+	if _, err := DecompressSafe(buf[:size], dst); err != nil {
 		t.Fatalf("Decompression failed: %v", err)
 	}
+}
 
+func TestCompressDefaultDecompressSafe(t *testing.T) {
+	size := 4096
+	data := make([]byte, size)
+	_, err := rand.Read(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compressed := make([]byte, CompressBlockBound(size))
+	decompressed := make([]byte, size)
+	compressAndDecompress(data, decompressed, compressed, t)
 	for i := 0; i < len(decompressed); i++ {
 		if data[i] != decompressed[i] {
 			t.Fatalf("unexpect")

@@ -32,6 +32,7 @@ import (
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/metaclient"
+	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
@@ -46,8 +47,8 @@ var (
 )
 
 var (
-	_ TagSet = &TagSetMergeInfo{}
-	_ TagSet = &TagSetInfo{}
+	_ TagSet   = &TagSetMergeInfo{}
+	_ TagSetEx = &TagSetInfo{}
 )
 
 type TagSet interface {
@@ -64,6 +65,19 @@ type TagSet interface {
 	GetKey() []byte
 	GetTagsVec(int) *influx.PointTags
 	GetRowFilter(int) *[]clv.RowFilter
+}
+
+type TagSetEx interface {
+	TagSet
+	Cut(idx int)
+	GetTagSetItem(int) *TagSetInfoItem
+	SetKey([]byte)
+	AppendKey(...byte)
+	Append(uint64, []byte, influxql.Expr, influx.PointTags, []clv.RowFilter)
+	AppendWithOpt(uint64, []byte, influxql.Expr, influx.PointTags, []clv.RowFilter, *query.ProcessorOptions)
+	GetTagsWithQuerySchema(i int, schema *executor.QuerySchema) *influx.PointTags
+	Sort(schema *executor.QuerySchema)
+	TagSetItems() []TagSetInfoItem
 }
 
 type TagSetMergeInfo struct {
@@ -198,16 +212,18 @@ func (p *tagSetMergeInfoPool) get(size int) (set *TagSetMergeInfo) {
 	}
 }
 
-func TransTagSet2Merged(t1 *TagSetInfo, shardId uint64, shardNum int) *TagSetMergeInfo {
+func TransTagSet2Merged(t1 TagSetEx, shardId uint64, shardNum int) *TagSetMergeInfo {
 	t := tagSetPool.get(t1.Len())
-	t.Filters = append(t.Filters, t1.Filters...)
-	t.SeriesKeys = append(t.SeriesKeys, t1.SeriesKeys...)
-	t.TagsVec = append(t.TagsVec, t1.TagsVec...)
-	t.key = append(t.key, t1.key...)
-	for i := range t1.IDs {
-		t.IDs = append(t.IDs, append(make([]uint64, 0, shardNum), t1.IDs[i]))
-		t.ShardIds = append(t.ShardIds, append(make([]uint64, 0, shardNum), shardId))
+	shardIdSlices := make([]uint64, t1.Len()*shardNum)
+	idSlices := make([]uint64, t1.Len()*shardNum)
+	for i, item := range t1.TagSetItems() {
+		t.Filters = append(t.Filters, item.Filter)
+		t.SeriesKeys = append(t.SeriesKeys, item.SeriesKey)
+		t.TagsVec = append(t.TagsVec, item.TagsVec)
+		t.IDs = append(t.IDs, append(idSlices[i*shardNum:i*shardNum:(i+1)*shardNum], item.ID))
+		t.ShardIds = append(t.ShardIds, append(shardIdSlices[i*shardNum:i*shardNum:(i+1)*shardNum], shardId))
 	}
+	t.key = append(t.key, t1.GetKey()...)
 	return t
 }
 
@@ -223,7 +239,7 @@ func ExtendMergeTagSetInfos(ts []*TagSetMergeInfo, shardId uint64) []*TagSetMerg
 	return ts
 }
 
-func SortMergeTagSetInfos(t1 []*TagSetMergeInfo, t2 []*TagSetInfo, shardId uint64, shardNum int) []*TagSetMergeInfo {
+func SortMergeTagSetInfos(t1 []*TagSetMergeInfo, t2 []TagSetEx, shardId uint64, shardNum int) []*TagSetMergeInfo {
 	if len(t1) == 0 {
 		res := make([]*TagSetMergeInfo, len(t2))
 		for i := range t2 {
@@ -238,7 +254,7 @@ func SortMergeTagSetInfos(t1 []*TagSetMergeInfo, t2 []*TagSetInfo, shardId uint6
 	res := make([]*TagSetMergeInfo, 0, util.Max(len(t1), len(t2)))
 	i, j := 0, 0
 	for i < len(t1) && j < len(t2) {
-		cmp := bytes.Compare(t1[i].key, t2[j].key)
+		cmp := bytes.Compare(t1[i].key, t2[j].GetKey())
 		if cmp == 0 {
 			t2[j].Ref()
 			sort.Sort(t2[j])
@@ -267,16 +283,17 @@ func SortMergeTagSetInfos(t1 []*TagSetMergeInfo, t2 []*TagSetInfo, shardId uint6
 	return res
 }
 
-func sortMergeTagSetInfo(t1 *TagSetMergeInfo, t2 *TagSetInfo, shardId uint64, shardNum int) *TagSetMergeInfo {
-	res := tagSetPool.get(util.Max(len(t1.IDs), len(t2.IDs)))
+func sortMergeTagSetInfo(t1 *TagSetMergeInfo, t2 TagSetEx, shardId uint64, shardNum int) *TagSetMergeInfo {
+	res := tagSetPool.get(util.Max(len(t1.IDs), t2.Len()))
 	res.key = append(res.key, t1.key...)
 	i, j := 0, 0
-	for i < len(t1.IDs) && j < len(t2.IDs) {
-		cmp := bytes.Compare(t1.SeriesKeys[i], t2.SeriesKeys[j])
+	for i < len(t1.IDs) && j < t2.Len() {
+		t2Item := t2.GetTagSetItem(j)
+		cmp := bytes.Compare(t1.SeriesKeys[i], t2Item.SeriesKey)
 		if cmp == 0 {
 			res.SeriesKeys = append(res.SeriesKeys, t1.SeriesKeys[i])
 			res.TagsVec = append(res.TagsVec, t1.TagsVec[i])
-			res.IDs = append(res.IDs, append(t1.IDs[i], t2.IDs[j]))
+			res.IDs = append(res.IDs, append(t1.IDs[i], t2Item.ID))
 			res.ShardIds = append(res.ShardIds, append(t1.ShardIds[i], shardId))
 			res.Filters = append(res.Filters, t1.Filters[i])
 			i++
@@ -289,11 +306,11 @@ func sortMergeTagSetInfo(t1 *TagSetMergeInfo, t2 *TagSetInfo, shardId uint64, sh
 			res.Filters = append(res.Filters, t1.Filters[i])
 			i++
 		} else {
-			res.SeriesKeys = append(res.SeriesKeys, t2.SeriesKeys[j])
-			res.TagsVec = append(res.TagsVec, t2.TagsVec[j])
-			res.IDs = append(res.IDs, append(make([]uint64, 0, shardNum), t2.IDs[j]))
+			res.SeriesKeys = append(res.SeriesKeys, t2Item.SeriesKey)
+			res.TagsVec = append(res.TagsVec, t2Item.TagsVec)
+			res.IDs = append(res.IDs, append(make([]uint64, 0, shardNum), t2Item.ID))
 			res.ShardIds = append(res.ShardIds, append(make([]uint64, 0, shardNum), shardId))
-			res.Filters = append(res.Filters, t2.Filters[j])
+			res.Filters = append(res.Filters, t2Item.Filter)
 			j++
 		}
 	}
@@ -303,58 +320,73 @@ func sortMergeTagSetInfo(t1 *TagSetMergeInfo, t2 *TagSetInfo, shardId uint64, sh
 	res.ShardIds = append(res.ShardIds, t1.ShardIds[i:]...)
 	res.Filters = append(res.Filters, t1.Filters[i:]...)
 
-	for ; j < len(t2.IDs); j++ {
-		res.SeriesKeys = append(res.SeriesKeys, t2.SeriesKeys[j])
-		res.TagsVec = append(res.TagsVec, t2.TagsVec[j])
-		res.IDs = append(res.IDs, append(make([]uint64, 0, shardNum), t2.IDs[j]))
+	for ; j < t2.Len(); j++ {
+		t2Item := t2.GetTagSetItem(j)
+		res.SeriesKeys = append(res.SeriesKeys, t2Item.SeriesKey)
+		res.TagsVec = append(res.TagsVec, t2Item.TagsVec)
+		res.IDs = append(res.IDs, append(make([]uint64, 0, shardNum), t2Item.ID))
 		res.ShardIds = append(res.ShardIds, append(make([]uint64, 0, shardNum), shardId))
-		res.Filters = append(res.Filters, t2.Filters[j])
+		res.Filters = append(res.Filters, t2Item.Filter)
 	}
 	return res
+}
+
+type TagSetInfoItem struct {
+	ID        uint64
+	Filter    influxql.Expr
+	SeriesKey []byte           // encoded series key
+	TagsVec   influx.PointTags // tags of series
 }
 
 type TagSetInfo struct {
 	ref int64
 
-	IDs        []uint64
-	Filters    []influxql.Expr
-	SeriesKeys [][]byte           // encoded series key
-	TagsVec    []influx.PointTags // tags of all series
-	key        []byte             // group by tag sets key
-	RowFilters *clv.RowFilters    // only uesed in full-text index for row filtering
+	TagSetInfoItems []TagSetInfoItem
+	key             []byte          // group by tag sets key
+	RowFilters      *clv.RowFilters // only uesed in full-text index for row filtering
+}
+
+func (t *TagSetInfo) SetKey(key []byte) {
+	t.key = key
+}
+
+func (t *TagSetInfo) TagSetItems() []TagSetInfoItem {
+	return t.TagSetInfoItems
+}
+
+func (t *TagSetInfo) GetTagSetItem(idx int) *TagSetInfoItem {
+	return &t.TagSetInfoItems[idx]
+}
+
+func (t *TagSetInfo) AppendKey(key ...byte) {
+	t.key = append(t.key, key...)
 }
 
 func (t *TagSetInfo) String() string {
-	n := len(t.IDs)
+	n := len(t.TagSetInfoItems)
 	var builder strings.Builder
 	for i := 0; i < n; i++ {
-		builder.WriteString(fmt.Sprintf("%d -> %s\n", t.IDs[i], t.SeriesKeys[i]))
+		builder.WriteString(fmt.Sprintf("%d -> %s\n", t.TagSetInfoItems[i].ID, t.TagSetInfoItems[i].SeriesKey))
 	}
 	return builder.String()
 }
 
-func (t *TagSetInfo) Len() int { return len(t.IDs) }
+func (t *TagSetInfo) Len() int { return len(t.TagSetInfoItems) }
 func (t *TagSetInfo) Less(i, j int) bool {
-	return bytes.Compare(t.SeriesKeys[i], t.SeriesKeys[j]) < 0
+	return bytes.Compare(t.TagSetInfoItems[i].SeriesKey, t.TagSetInfoItems[j].SeriesKey) < 0
 }
 func (t *TagSetInfo) Swap(i, j int) {
-	t.SeriesKeys[i], t.SeriesKeys[j] = t.SeriesKeys[j], t.SeriesKeys[i]
-	t.IDs[i], t.IDs[j] = t.IDs[j], t.IDs[i]
-	t.TagsVec[i], t.TagsVec[j] = t.TagsVec[j], t.TagsVec[i]
-	t.Filters[i], t.Filters[j] = t.Filters[j], t.Filters[i]
+	t.TagSetInfoItems[i], t.TagSetInfoItems[j] = t.TagSetInfoItems[j], t.TagSetInfoItems[i]
 	if t.RowFilters != nil {
 		t.RowFilters.Swap(i, j)
 	}
 }
 
 func (t *TagSetInfo) Cut(idx int) {
-	if idx >= len(t.IDs) {
+	if idx >= len(t.TagSetInfoItems) {
 		return
 	}
-	t.SeriesKeys = t.SeriesKeys[:idx]
-	t.IDs = t.IDs[:idx]
-	t.TagsVec = t.TagsVec[:idx]
-	t.Filters = t.Filters[:idx]
+	t.TagSetInfoItems = t.TagSetInfoItems[:idx]
 }
 
 func NewTagSetInfo() *TagSetInfo {
@@ -368,10 +400,7 @@ func NewSingleTagSetInfo() *TagSetInfo {
 func (t *TagSetInfo) reset() {
 	t.ref = 0
 	t.key = t.key[:0]
-	t.IDs = t.IDs[:0]
-	t.Filters = t.Filters[:0]
-	t.TagsVec = t.TagsVec[:0]
-	t.SeriesKeys = t.SeriesKeys[:0]
+	t.TagSetInfoItems = t.TagSetInfoItems[:0]
 	if t.RowFilters != nil {
 		t.RowFilters.Reset()
 	}
@@ -379,27 +408,24 @@ func (t *TagSetInfo) reset() {
 
 func (t *TagSetInfo) AppendWithOpt(id uint64, seriesKey []byte, filter influxql.Expr, tags influx.PointTags,
 	rowFilter []clv.RowFilter, opt *query.ProcessorOptions) {
-	t.IDs = append(t.IDs, id)
-	t.Filters = append(t.Filters, filter)
+	item := TagSetInfoItem{ID: id, Filter: filter}
 	if opt.SimpleTagset {
-		t.SeriesKeys = append(t.SeriesKeys, nil)
-		if len(t.TagsVec) == 0 {
-			t.TagsVec = append(t.TagsVec, tags)
+		if len(t.TagSetInfoItems) == 0 {
+			item.TagsVec = tags
 		}
 	} else {
-		t.TagsVec = append(t.TagsVec, tags)
-		t.SeriesKeys = append(t.SeriesKeys, seriesKey)
+		item.TagsVec = tags
+		item.SeriesKey = seriesKey
 	}
+	t.TagSetInfoItems = append(t.TagSetInfoItems, item)
 	if t.RowFilters != nil {
 		t.RowFilters.Append(rowFilter)
 	}
 }
 
 func (t *TagSetInfo) Append(id uint64, seriesKey []byte, filter influxql.Expr, tags influx.PointTags, rowFilter []clv.RowFilter) {
-	t.IDs = append(t.IDs, id)
-	t.Filters = append(t.Filters, filter)
-	t.TagsVec = append(t.TagsVec, tags)
-	t.SeriesKeys = append(t.SeriesKeys, seriesKey)
+	item := TagSetInfoItem{ID: id, Filter: filter, TagsVec: tags, SeriesKey: seriesKey}
+	t.TagSetInfoItems = append(t.TagSetInfoItems, item)
 	if t.RowFilters != nil {
 		t.RowFilters.Append(rowFilter)
 	}
@@ -407,9 +433,9 @@ func (t *TagSetInfo) Append(id uint64, seriesKey []byte, filter influxql.Expr, t
 
 func (t *TagSetInfo) GetTagsWithQuerySchema(i int, s *executor.QuerySchema) *influx.PointTags {
 	if s.Options().GetSimpleTagset() {
-		return &t.TagsVec[0]
+		return &t.TagSetInfoItems[0].TagsVec
 	}
-	return &t.TagsVec[i]
+	return &t.TagSetInfoItems[i].TagsVec
 }
 
 func (t *TagSetInfo) Ref() {
@@ -434,7 +460,7 @@ func (t *TagSetInfo) Sort(schema *executor.QuerySchema) {
 }
 
 func (t *TagSetInfo) GetSid(sidIdx, _ int) uint64 {
-	return t.IDs[sidIdx]
+	return t.TagSetInfoItems[sidIdx].ID
 }
 
 func (t *TagSetInfo) GetShardId(_, _ int) uint64 {
@@ -446,11 +472,11 @@ func (t *TagSetInfo) GetShardNum(_ int) int {
 }
 
 func (t *TagSetInfo) GetSeriesKeys(sidIdx int) []byte {
-	return t.SeriesKeys[sidIdx]
+	return t.TagSetInfoItems[sidIdx].SeriesKey
 }
 
 func (t *TagSetInfo) GetFilters(sidIdx int) influxql.Expr {
-	return t.Filters[sidIdx]
+	return t.TagSetInfoItems[sidIdx].Filter
 }
 
 func (t *TagSetInfo) GetKey() []byte {
@@ -458,7 +484,7 @@ func (t *TagSetInfo) GetKey() []byte {
 }
 
 func (t *TagSetInfo) GetTagsVec(sidIdx int) *influx.PointTags {
-	return &t.TagsVec[sidIdx]
+	return &t.TagSetInfoItems[sidIdx].TagsVec
 }
 
 func (t *TagSetInfo) GetRowFilter(idx int) *[]clv.RowFilter {
@@ -507,17 +533,14 @@ func (p *tagSetInfoPool) GetBySize(size int) (set *TagSetInfo) {
 		return
 	default:
 		return &TagSetInfo{
-			ref:        0,
-			IDs:        make([]uint64, 0, size),
-			Filters:    make([]influxql.Expr, 0, size),
-			SeriesKeys: make([][]byte, 0, size),
-			TagsVec:    make([]influx.PointTags, 0, size),
+			ref:             0,
+			TagSetInfoItems: make([]TagSetInfoItem, 0, size),
 		}
 	}
 }
 
 type SortGroupSeries struct {
-	groupSeries []*TagSetInfo
+	groupSeries []TagSetEx
 	ascending   bool
 }
 
@@ -527,26 +550,26 @@ func (s SortGroupSeries) Len() int {
 
 func (s SortGroupSeries) Less(i, j int) bool {
 	if s.ascending {
-		return bytes.Compare(s.groupSeries[i].key, s.groupSeries[j].key) < 0
+		return bytes.Compare(s.groupSeries[i].GetKey(), s.groupSeries[j].GetKey()) < 0
 	}
-	return bytes.Compare(s.groupSeries[i].key, s.groupSeries[j].key) > 0
+	return bytes.Compare(s.groupSeries[i].GetKey(), s.groupSeries[j].GetKey()) > 0
 }
 
 func (s SortGroupSeries) Swap(i, j int) {
 	s.groupSeries[i], s.groupSeries[j] = s.groupSeries[j], s.groupSeries[i]
 }
 
-func NewSortGroupSeries(groupSeries []*TagSetInfo, ascending bool) *SortGroupSeries {
+func NewSortGroupSeries(groupSeries []TagSetEx, ascending bool) *SortGroupSeries {
 	return &SortGroupSeries{
 		groupSeries: groupSeries,
 		ascending:   ascending,
 	}
 }
 
-type GroupSeries []*TagSetInfo
+type GroupSeries []TagSetEx
 
 func (gs GroupSeries) Len() int           { return len(gs) }
-func (gs GroupSeries) Less(i, j int) bool { return bytes.Compare(gs[i].key, gs[j].key) < 0 }
+func (gs GroupSeries) Less(i, j int) bool { return bytes.Compare(gs[i].GetKey(), gs[j].GetKey()) < 0 }
 func (gs GroupSeries) Swap(i, j int) {
 	gs[i], gs[j] = gs[j], gs[i]
 }
@@ -555,13 +578,7 @@ func (gs GroupSeries) Reverse() {
 	for index := range gs {
 		tt := gs[index]
 		for i, j := 0, tt.Len()-1; i < j; i, j = i+1, j-1 {
-			tt.IDs[i], tt.IDs[j] = tt.IDs[j], tt.IDs[i]
-			tt.Filters[i], tt.Filters[j] = tt.Filters[j], tt.Filters[i]
-			tt.SeriesKeys[i], tt.SeriesKeys[j] = tt.SeriesKeys[j], tt.SeriesKeys[i]
-			tt.TagsVec[i], tt.TagsVec[j] = tt.TagsVec[j], tt.TagsVec[i]
-			if tt.RowFilters != nil {
-				tt.RowFilters.Swap(i, j)
-			}
+			tt.Swap(i, j)
 		}
 	}
 }
@@ -580,8 +597,10 @@ type Index interface {
 	SearchSeriesWithOpts(span *tracing.Span, name []byte, opt *query.ProcessorOptions, callBack func(num int64) error, _ interface{}) (GroupSeries, int64, error)
 	SeriesCardinality(name []byte, condition influxql.Expr, tr TimeRange) (uint64, error)
 	SearchSeriesKeys(series [][]byte, name []byte, condition influxql.Expr) ([][]byte, error)
+	SearchSeriesByTableAndCond(name []byte, expr influxql.Expr, tr TimeRange) ([]uint64, error)
 	SearchTagValues(name []byte, tagKeys [][]byte, condition influxql.Expr) ([][]string, error)
 	SearchTagValuesCardinality(name, tagKey []byte) (uint64, error)
+	GetSeries(sid uint64, buf []byte, condition influxql.Expr, callback func(key *influx.SeriesKey)) error
 
 	// search
 	GetPrimaryKeys(name []byte, opt *query.ProcessorOptions) ([]uint64, error)
@@ -591,6 +610,7 @@ type Index interface {
 	SetIndexBuilder(builder *IndexBuilder)
 
 	DeleteTSIDs(name []byte, condition influxql.Expr, tr TimeRange) error
+	LoadDeletedTSIDs() error
 
 	Path() string
 
@@ -612,6 +632,13 @@ type Options struct {
 	cacheDuration time.Duration
 	logicalClock  uint64
 	sequenceID    *uint64
+	mergeDuration time.Duration
+	obsOpt        *obs.ObsOptions
+}
+
+func (opts *Options) ObsOpt(obsOpt *obs.ObsOptions) *Options {
+	opts.obsOpt = obsOpt
+	return opts
 }
 
 func (opts *Options) OpId(opId uint64) *Options {
@@ -671,6 +698,11 @@ func (opts *Options) Duration(duration time.Duration) *Options {
 
 func (opts *Options) CacheDuration(cacheDuration time.Duration) *Options {
 	opts.cacheDuration = cacheDuration
+	return opts
+}
+
+func (opts *Options) MergeDuration(duration time.Duration) *Options {
+	opts.mergeDuration = duration
 	return opts
 }
 

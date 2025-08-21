@@ -18,6 +18,7 @@ package immutable
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -27,12 +28,14 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/engine/immutable/colstore"
-	"github.com/openGemini/openGemini/engine/index/sparseindex"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/fragment"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/obs"
+	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util"
 	"go.uber.org/zap"
 )
 
@@ -48,6 +51,7 @@ type fileLoader struct {
 
 	total             int
 	maxRowsPerSegment int
+	pkFiles           map[string]struct{}
 }
 
 func newFileLoader(mst *MmsTables, ctx *fileLoadContext) *fileLoader {
@@ -56,6 +60,7 @@ func newFileLoader(mst *MmsTables, ctx *fileLoadContext) *fileLoader {
 		fileName: TSSPFileName{},
 		ctx:      ctx,
 		lg:       logger.GetLogger(),
+		pkFiles:  make(map[string]struct{}),
 	}
 }
 
@@ -64,17 +69,40 @@ func (fl *fileLoader) Wait() {
 }
 
 func (fl *fileLoader) Load(dir, mst string, isOrder bool) {
-	nameDirs, err := fileops.ReadDir(dir)
+	fullDirs, err := fileops.ReadDir(dir)
 	if err != nil {
 		fl.lg.Error("read measurement dir fail", zap.String("path", dir), zap.Error(err))
 		fl.ctx.setError(err)
 		return
 	}
+	if len(fullDirs) == 0 {
+		return
+	}
+	dirDepth := DirDepth(fullDirs[0].Name())
+	var nameDirs []fs.FileInfo
+	for _, dir := range fullDirs {
+		if dirDepth != 1 && DirDepth(dir.Name()) != dirDepth+1 {
+			continue
+		}
+		if filepath.Base(filepath.Clean(dir.Name())) == config.IndexFileDirectory {
+			continue
+		}
+		nameDirs = append(nameDirs, dir)
+	}
+
+	// load primary key files
+	for i := range nameDirs {
+		item := nameDirs[i]
+		if !item.IsDir() && filepath.Ext(item.Name()) == colstore.IndexFileSuffix {
+			fl.pkFiles[filepath.Join(dir, item.Name())] = struct{}{}
+		}
+	}
 
 	for i := range nameDirs {
 		item := nameDirs[i]
+		itemName := filepath.Base(filepath.Clean(item.Name()))
 		if item.IsDir() {
-			if !isOrder || item.Name() != unorderedDir {
+			if !isOrder || itemName != unorderedDir {
 				// Skip invalid directories
 				continue
 			}
@@ -83,23 +111,18 @@ func (fl *fileLoader) Load(dir, mst string, isOrder bool) {
 			continue
 		}
 
-		switch filepath.Ext(item.Name()) {
-		case colstore.IndexFileSuffix:
-			if isDetachedIdxFile(item.Name()) {
-				continue
-			}
-			fl.loadPKIndexFile(filepath.Join(dir, item.Name()), mst)
+		switch filepath.Ext(itemName) {
 		case tsspFileSuffix:
-			fl.loadTsspFile(filepath.Join(dir, item.Name()), mst, isOrder, false)
+			fl.loadTsspFile(filepath.Join(dir, itemName), mst, isOrder, false)
 		default:
-			fl.removeTmpFile(filepath.Join(dir, item.Name())) // skip invalid file, remove if it is a temp file
+			fl.removeTmpFile(filepath.Join(dir, itemName)) // skip invalid file, remove if it is a temp file
 		}
 
 		fl.total++
 	}
 }
 
-func (fl *fileLoader) LoadRemote(dir, mst string, obsOpt *obs.ObsOptions) {
+func (fl *fileLoader) LoadRemote(dir, mst string, obsOpt *obs.ObsOptions, reload bool) {
 	if obsOpt == nil {
 		return
 	}
@@ -111,15 +134,15 @@ func (fl *fileLoader) LoadRemote(dir, mst string, obsOpt *obs.ObsOptions) {
 		fl.ctx.setError(err)
 		return
 	}
-	fl.loadDirs(nameDirs, mst, remotePrefixPath)
+	fl.loadDirs(nameDirs, mst, remotePrefixPath, reload)
 }
 
-func (fl *fileLoader) loadDirs(nameDirs []os.FileInfo, mst, remotePrefixPath string) {
+func (fl *fileLoader) loadDirs(nameDirs []os.FileInfo, mst, remotePrefixPath string, reload bool) {
 	for i := range nameDirs {
 		item := nameDirs[i]
 		switch filepath.Ext(item.Name()) {
 		case obs.ObsFileSuffix:
-			fl.loadTsspFile(fmt.Sprintf("%s/%s", remotePrefixPath, item.Name()), mst, remoteDirIsOrder(item.Name()), false)
+			fl.loadTsspFile(fmt.Sprintf("%s/%s", remotePrefixPath, item.Name()), mst, remoteDirIsOrder(item.Name()), reload)
 		default:
 			fl.removeTmpFile(fmt.Sprintf("%s/%s", remotePrefixPath, item.Name())) // skip invalid file, remove if it is a temp file
 		}
@@ -200,37 +223,9 @@ func remoteDirIsOrder(path string) bool {
 	return !strings.HasSuffix(tmpPath, unorderedDir)
 }
 
-func isDetachedIdxFile(fileName string) bool {
-	if fileName == MetaIndexFile || fileName == PrimaryKeyFile || isBloomFilterFile(fileName) {
-		return true
-	}
-	return false
-}
-
-func isBloomFilterFile(file string) bool {
-	return strings.HasPrefix(file, sparseindex.BloomFilterFilePrefix)
-}
-
 func (fl *fileLoader) removeTmpFile(file string) {
 	if IsTempleFile(file) {
 		fl.removeFile(file)
-		return
-	}
-}
-
-func (fl *fileLoader) loadPKIndexFile(file, mst string) {
-	select {
-	case fileLoadLimiter <- struct{}{}:
-		fl.wg.Add(1)
-		go func() {
-			defer func() {
-				fileLoadLimiter.Release()
-				fl.wg.Done()
-			}()
-
-			fl.openPKIndexFile(file, mst)
-		}()
-	case <-fl.mst.closed:
 		return
 	}
 }
@@ -301,26 +296,41 @@ func (fl *fileLoader) removeFile(file string) {
 	fl.lg.Info("remove file", zap.String("path", file), zap.Error(err))
 }
 
-func (fl *fileLoader) openPKIndexFile(file, mst string) {
+func (fl *fileLoader) openPKIndexFile(file string) *colstore.PKInfo {
+	file = BuildPKFilePathFromTSSP(file)
+	_, ok := fl.pkFiles[file]
+	if !ok {
+		// not column store or primary index file not exists
+		return nil
+	}
+
 	f, err := colstore.NewPrimaryKeyReader(file, fl.mst.lock)
 	if err != nil || f == nil {
 		fl.lg.Error("open index file failed", zap.Error(err), zap.String("file", file))
 		fl.ctx.setError(err)
-		return
+		return nil
 	}
 
-	func() {
-		fl.mu.Lock()
-		defer fl.mu.Unlock()
-		defer f.Close()
-		rec, tcLocation, err := f.ReadData()
-		mark := fragment.NewIndexFragmentFixedSize(uint32(rec.RowNums()-1), uint64(fl.maxRowsPerSegment))
-		if err != nil {
-			fl.lg.Error("read index file failed", zap.Error(err), zap.String("file", file))
-			fl.ctx.setError(err)
-		}
-		fl.mst.addPKFile(mst, file, rec, mark, tcLocation)
-	}()
+	defer util.MustClose(f)
+
+	rec, tcLocation, err := f.ReadData()
+	if err != nil {
+		fl.lg.Error("read index file failed", zap.Error(err), zap.String("file", file))
+		fl.ctx.setError(err)
+		return nil
+	}
+
+	var mark fragment.IndexFragment
+	if rec.LastSchema().Name == record.FragmentField {
+		// fragment stored in the last column of the primary key Record
+		fragments := rec.ColVals[rec.Len()-1]
+		mark = fragment.NewIndexFragmentVariable(util.Bytes2Uint64Slice(util.Int64Slice2byte(fragments.IntegerValues())))
+	} else {
+		// compatibility with older versions
+		mark = fragment.NewIndexFragmentFixedSize(uint32(rec.RowNums()-1), uint64(fl.maxRowsPerSegment))
+	}
+
+	return colstore.NewPKInfo(rec, mark, tcLocation)
 }
 
 func (fl *fileLoader) openTSSPFile(file, mst string, isOrder bool) {
@@ -343,6 +353,8 @@ func (fl *fileLoader) openTSSPFile(file, mst string, isOrder bool) {
 		return
 	}
 
+	pkInfo := fl.openPKIndexFile(file)
+	f.SetPkInfo(pkInfo)
 	fl.addTSSPFile(file, mst, isOrder, f)
 }
 

@@ -87,6 +87,7 @@ type OrderByTransform struct {
 	currChunk       chan Chunk
 	resultChunk     Chunk
 	dimensions      []string
+	isSameDims      bool
 	transferHelper  func()
 	CoProcessor     CoProcessor
 	heapItems       *heapOrderByItems
@@ -104,7 +105,8 @@ func NewOrderByTransform(inRowDataType hybridqp.RowDataType, outRowDataType hybr
 		currTagIndex: []int{},
 		heapItems: &heapOrderByItems{items: []*heapOrderByItem{},
 			opt: opt},
-		currChunk: make(chan Chunk),
+		currChunk:  make(chan Chunk),
+		isSameDims: opt.IsSameDims,
 	}
 	if opt.Interval.IsZero() {
 		trans.transferHelper = trans.transferFast
@@ -237,12 +239,20 @@ func (trans *OrderByTransform) transferFast() {
 		if !ok {
 			return
 		}
-		trans.GetTagAndIndexes(chunk)
-		trans.resultChunk = chunk
-		trans.resultChunk.ResetTagsAndIndexes(trans.currTags, trans.currTagIndex)
-		trans.resultChunk.ResetIntervalIndex(trans.currTagIndex...)
-		trans.currTags = trans.currTags[:0]
-		trans.currTagIndex = trans.currTagIndex[:0]
+		if trans.isSameDims {
+			// if the inner and outer dims of the subquery are the same,
+			// just reset intervalIndex based on tagIndex.
+			trans.resultChunk = chunk
+			trans.resultChunk.ResetIntervalIndex(chunk.TagIndex()...)
+		} else {
+			trans.GetTagAndIndexes(chunk)
+			trans.resultChunk = chunk
+			trans.resultChunk.ResetTagsAndIndexes(trans.currTags, trans.currTagIndex)
+			trans.resultChunk.ResetIntervalIndex(trans.currTagIndex...)
+			trans.currTags = trans.currTags[:0]
+			trans.currTagIndex = trans.currTagIndex[:0]
+		}
+		trans.resultChunk.SetGraph(chunk.GetGraph())
 		trans.SendChunk()
 	}
 }

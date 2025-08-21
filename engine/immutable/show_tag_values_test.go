@@ -20,6 +20,7 @@ import (
 	"io"
 	"testing"
 
+	"github.com/openGemini/openGemini/engine/clearevent"
 	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
@@ -61,6 +62,9 @@ func TestTagValuesIteratorHandler_NextChunkMeta(t *testing.T) {
 				func(series [][]byte, name []byte, condition influxql.Expr) ([][]byte, error) {
 					return [][]byte{}, nil
 				},
+				func(tsid uint64) bool {
+					return false
+				},
 			},
 			Expr: &influxql.VarRef{},
 			TimeRange: &util.TimeRange{
@@ -82,6 +86,9 @@ func TestTagValuesIteratorHandler_NextChunkMeta(t *testing.T) {
 				func(series [][]byte, name []byte, condition influxql.Expr) ([][]byte, error) {
 					return [][]byte{}, nil
 				},
+				func(tsid uint64) bool {
+					return false
+				},
 			},
 			Expr: &influxql.VarRef{},
 			TimeRange: &util.TimeRange{
@@ -102,6 +109,9 @@ func TestTagValuesIteratorHandler_NextChunkMeta(t *testing.T) {
 				},
 				func(series [][]byte, name []byte, condition influxql.Expr) ([][]byte, error) {
 					return [][]byte{}, nil
+				},
+				func(tsid uint64) bool {
+					return false
 				},
 			},
 			Expr: &influxql.VarRef{},
@@ -375,6 +385,14 @@ type MockIndexMergeSet struct {
 	GetSeriesFn        func(sid uint64, buf []byte, condition influxql.Expr, callback func(key *influx.SeriesKey)) error
 	GetSeriesBytesFn   func(sid uint64, buf []byte, condition influxql.Expr, callback func(key *influx.SeriesBytes)) error
 	SearchSeriesKeysFn func(series [][]byte, name []byte, condition influxql.Expr) ([][]byte, error)
+	HasDeletedTSIDFn   func(tsid uint64) bool
+}
+
+func (idx *MockIndexMergeSet) HasDeletedTSID(tsid uint64) bool {
+	if tsid == 1 {
+		return true
+	}
+	return false
 }
 
 func (idx *MockIndexMergeSet) GetSeries(sid uint64, buf []byte, condition influxql.Expr, callback func(key *influx.SeriesKey)) error {
@@ -477,7 +495,7 @@ type MockTableStore struct {
 func (s *MockTableStore) SetOpId(shardId uint64, opId uint64) {
 	s.SetOpIdFn(shardId, opId)
 }
-func (s *MockTableStore) Open() (int64, error) {
+func (s *MockTableStore) Open(clearevent.NoClearShardAndIndexSupplier) (int64, error) {
 	return s.OpenFn()
 }
 func (s *MockTableStore) Close() error {

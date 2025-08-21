@@ -129,6 +129,9 @@ var (
 	_ = RegistryMaterializeFunction("json_extract_scalar", &jsonExtractScalarFunc{
 		BaseInfo: BaseInfo{FuncType: STRING},
 	})
+	_ = RegistryMaterializeFunction("json_object", &jsonObjectFunc{
+		BaseInfo: BaseInfo{FuncType: STRING},
+	})
 )
 
 // IP
@@ -1344,8 +1347,13 @@ func JsonExtract(jsonStr, jsonPath string) (string, error) {
 
 func GetJsonValue(value interface{}, pathParts []string) (string, error) {
 	if len(pathParts) == 0 {
-		b, err := json.MarshalToString(value)
-		return b, err
+		s, ok := value.(string)
+		if !ok {
+			b, err := json.MarshalToString(value)
+			return b, err
+		}
+
+		return s, nil
 	}
 
 	v, ok := value.(map[string]interface{})
@@ -1423,6 +1431,53 @@ func (u *jsonExtractScalarFunc) CallFunc(name string, args []interface{}) (inter
 	}
 
 	return nil, false
+}
+
+type jsonObjectFunc struct {
+	BaseInfo
+}
+
+func (u *jsonObjectFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{}
+}
+
+func (u *jsonObjectFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
+	if len(expr.Args) == 0 || len(expr.Args)%2 != 0 {
+		return fmt.Errorf("invalid number of arguments for %s", expr.Name)
+	}
+	for i := 0; i < len(expr.Args); i += 2 {
+		if _, ok := expr.Args[i].(*influxql.StringLiteral); !ok {
+			return fmt.Errorf("json key must be string in %s(): %s", expr.Name, expr.Args[i])
+		}
+	}
+	return compileAllStringArgs(expr, c)
+}
+
+func (u *jsonObjectFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
+	return influxql.String, nil
+}
+
+func (u *jsonObjectFunc) CallFunc(name string, args []interface{}) (interface{}, bool) {
+	var strBuilder strings.Builder
+	strBuilder.WriteByte('{')
+	for i := 0; i < len(args); i += 2 {
+		jsonKey, err := json.Marshal(args[i])
+		if err != nil {
+			return nil, false
+		}
+		jsonVal, err := json.Marshal(args[i+1])
+		if err != nil {
+			return nil, false
+		}
+		strBuilder.Write(jsonKey)
+		strBuilder.WriteByte(':')
+		strBuilder.Write(jsonVal)
+		if i != len(args)-2 {
+			strBuilder.WriteByte(',')
+		}
+	}
+	strBuilder.WriteByte('}')
+	return strBuilder.String(), true
 }
 
 // IP

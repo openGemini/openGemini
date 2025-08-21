@@ -10,13 +10,22 @@ import (
 
 // Config represents the configuration for the retention service.
 type Config struct {
-	Enabled       bool          `toml:"enabled"`
-	CheckInterval toml.Duration `toml:"check-interval"`
+	Enabled                            bool          `toml:"enabled"`
+	CheckInterval                      toml.Duration `toml:"check-interval"`
+	DeleteMstShardHandleInterval       toml.Duration `toml:"delete-mst-shard-handle-interval"`
+	DeleteMstIndexHandleInterval       toml.Duration `toml:"delete-mst-index-handle-interval"`
+	DeleteMstIndexOnlyUstDiskThreshold uint64        `toml:"delete-mst-index-only-use-disk-threshold"`
 }
 
 // NewConfig returns an instance of Config with defaults.
 func NewConfig() Config {
-	return Config{Enabled: true, CheckInterval: toml.Duration(30 * time.Minute)}
+	return Config{
+		Enabled:                            true,
+		CheckInterval:                      toml.Duration(30 * time.Minute),
+		DeleteMstShardHandleInterval:       toml.Duration(30 * time.Minute),
+		DeleteMstIndexHandleInterval:       toml.Duration(1140 * time.Minute),
+		DeleteMstIndexOnlyUstDiskThreshold: 30 * 1024 * 1024,
+	}
 }
 
 // Validate returns an error if the Config is invalid.

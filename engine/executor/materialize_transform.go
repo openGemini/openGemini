@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"time"
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/op"
@@ -114,48 +115,56 @@ func ResetTimeForProm(srcCk, dstCk Chunk, ts int64) {
 	dstCk.SetTime(dstTimeCol)
 }
 
-func TransparentForwardIntegerColumn(dst Column, src Column) {
+func TransparentForwardIntegerColumn(dst Column, src Column, srcChunk Chunk, dstChunk Chunk) {
 	dst.AppendIntegerValues(src.IntegerValues())
 	AdjustNils(dst, src, 0, src.Length())
 }
 
-func TransparentForwardFloatColumn(dst Column, src Column) {
+func TransparentForwardFloatColumn(dst Column, src Column, srcChunk Chunk, dstChunk Chunk) {
 	dst.AppendFloatValues(src.FloatValues())
 	AdjustNils(dst, src, 0, src.Length())
 }
 
-func TransparentForwardBooleanColumn(dst Column, src Column) {
+func TransparentForwardBooleanColumn(dst Column, src Column, srcChunk Chunk, dstChunk Chunk) {
 	dst.AppendBooleanValues(src.BooleanValues())
 	AdjustNils(dst, src, 0, src.Length())
 }
 
-func TransparentForwardStringColumn(dst Column, src Column) {
+func TransparentForwardStringColumn(dst Column, src Column, srcChunk Chunk, dstChunk Chunk) {
 	dst.CloneStringValues(src.GetStringBytes())
 	AdjustNils(dst, src, 0, src.Length())
 }
 
-func TransparentForwardInteger(dst Column, src Chunk, index []int) {
-	srcCol := src.Column(index[0])
-	TransparentForwardIntegerColumn(dst, srcCol)
+func TransparentForwardGraphColumn(dst Column, src Column, srcChunk Chunk, dstChunk Chunk) {
+	dstChunk.SetGraph(srcChunk.GetGraph())
 }
 
-func TransparentForwardFloat(dst Column, src Chunk, index []int) {
+func TransparentForwardInteger(dst Column, src Chunk, index []int, dstChunk Chunk) {
 	srcCol := src.Column(index[0])
-	TransparentForwardFloatColumn(dst, srcCol)
+	TransparentForwardIntegerColumn(dst, srcCol, src, dstChunk)
 }
 
-func TransparentForwardBoolean(dst Column, src Chunk, index []int) {
+func TransparentForwardFloat(dst Column, src Chunk, index []int, dstChunk Chunk) {
 	srcCol := src.Column(index[0])
-	TransparentForwardBooleanColumn(dst, srcCol)
+	TransparentForwardFloatColumn(dst, srcCol, src, dstChunk)
 }
 
-func TransparentForwardString(dst Column, src Chunk, index []int) {
+func TransparentForwardBoolean(dst Column, src Chunk, index []int, dstChunk Chunk) {
 	srcCol := src.Column(index[0])
-	TransparentForwardStringColumn(dst, srcCol)
+	TransparentForwardBooleanColumn(dst, srcCol, src, dstChunk)
 }
 
-func TransMath(c *influxql.Call) (func(dst Column, src Chunk, index []int), error) {
-	var f func(dst Column, src Chunk, index []int)
+func TransparentForwardString(dst Column, src Chunk, index []int, dstChunk Chunk) {
+	srcCol := src.Column(index[0])
+	TransparentForwardStringColumn(dst, srcCol, src, dstChunk)
+}
+
+func TransparentForwardGraph(dst Column, src Chunk, index []int, dstChunk Chunk) {
+	dstChunk.SetGraph(src.GetGraph())
+}
+
+func TransMath(c *influxql.Call) (func(dst Column, src Chunk, index []int, dstChunk Chunk), error) {
+	var f func(dst Column, src Chunk, index []int, dstChunk Chunk)
 	switch c.Name {
 	case "row_max":
 		base, ok := c.Args[0].(*influxql.VarRef)
@@ -176,7 +185,7 @@ func TransMath(c *influxql.Call) (func(dst Column, src Chunk, index []int), erro
 	return f, nil
 }
 
-func rowMaxInteger(dst Column, src Chunk, index []int) {
+func rowMaxInteger(dst Column, src Chunk, index []int, dstChunk Chunk) {
 	for i := 0; i < src.Len(); i++ {
 		var val int64
 		isNil := true
@@ -200,7 +209,7 @@ func rowMaxInteger(dst Column, src Chunk, index []int) {
 	}
 }
 
-func rowMaxFloat(dst Column, src Chunk, index []int) {
+func rowMaxFloat(dst Column, src Chunk, index []int, dstChunk Chunk) {
 	for i := 0; i < src.Len(); i++ {
 		var val float64
 		isNil := true
@@ -224,7 +233,7 @@ func rowMaxFloat(dst Column, src Chunk, index []int) {
 	}
 }
 
-func rowMaxBoolean(dst Column, src Chunk, index []int) {
+func rowMaxBoolean(dst Column, src Chunk, index []int, dstChunk Chunk) {
 	for i := 0; i < src.Len(); i++ {
 		var val bool
 		isNil := true
@@ -248,7 +257,7 @@ func rowMaxBoolean(dst Column, src Chunk, index []int) {
 	}
 }
 
-func getMaxRowFunc(dataType influxql.DataType) func(dst Column, src Chunk, index []int) {
+func getMaxRowFunc(dataType influxql.DataType) func(dst Column, src Chunk, index []int, dstChunk Chunk) {
 	switch dataType {
 	case influxql.Integer:
 		return rowMaxInteger
@@ -388,7 +397,7 @@ type MaterializeTransform struct {
 	ResetTime       bool
 	isPromQuery     bool
 	HasBinaryExpr   bool
-	transparents    []func(dst Column, src Chunk, index []int)
+	transparents    []func(dst Column, src Chunk, index []int, dstChunk Chunk)
 
 	ColumnMap [][]int
 
@@ -398,8 +407,8 @@ type MaterializeTransform struct {
 	labelCall         *influxql.Call
 }
 
-func (trans *MaterializeTransform) createTransparents(ops []hybridqp.ExprOptions) []func(dst Column, src Chunk, index []int) {
-	transparents := make([]func(dst Column, src Chunk, index []int), len(ops))
+func (trans *MaterializeTransform) createTransparents(ops []hybridqp.ExprOptions) []func(dst Column, src Chunk, index []int, dstChunk Chunk) {
+	transparents := make([]func(dst Column, src Chunk, index []int, dstChunk Chunk), len(ops))
 
 	for i, opt := range ops {
 		switch vr := opt.Expr.(type) {
@@ -566,7 +575,7 @@ func ContainsSameTagset(chunk Chunk) bool {
 	return false
 }
 
-func (trans *MaterializeTransform) processVarRef(vr *influxql.VarRef, transparents []func(dst Column, src Chunk, index []int), i int) {
+func (trans *MaterializeTransform) processVarRef(vr *influxql.VarRef, transparents []func(dst Column, src Chunk, index []int, dstChunk Chunk), i int) {
 	switch vr.Type {
 	case influxql.Integer:
 		transparents[i] = TransparentForwardInteger
@@ -576,10 +585,12 @@ func (trans *MaterializeTransform) processVarRef(vr *influxql.VarRef, transparen
 		transparents[i] = TransparentForwardBoolean
 	case influxql.String, influxql.Tag:
 		transparents[i] = TransparentForwardString
+	case influxql.Graph:
+		transparents[i] = TransparentForwardGraph
 	}
 }
 
-func (trans *MaterializeTransform) processCall(vr *influxql.Call, transparents []func(dst Column, src Chunk, index []int), i int) {
+func (trans *MaterializeTransform) processCall(vr *influxql.Call, transparents []func(dst Column, src Chunk, index []int, dstChunk Chunk), i int) {
 	if labelFunc := query.GetLabelFunction(vr.Name); labelFunc != nil {
 		trans.labelCall = vr
 	}
@@ -1375,6 +1386,13 @@ func initByType(expr influxql.Expr, chunkValuer *ChunkValuer, columnMap map[stri
 	}
 }
 
+func ResetTimeForCompare(oChunk Chunk, offset time.Duration) {
+	oTime := oChunk.Time()
+	for i := range len(oTime) {
+		oTime[i] += offset.Nanoseconds()
+	}
+}
+
 func (trans *MaterializeTransform) materialize(chunk Chunk) Chunk {
 	oChunk := trans.resultChunkPool.GetChunk()
 	oChunk.SetName(chunk.Name())
@@ -1387,6 +1405,9 @@ func (trans *MaterializeTransform) materialize(chunk Chunk) Chunk {
 		} else {
 			ResetTime(chunk, oChunk, trans.opt.StartTime)
 		}
+	}
+	if trans.opt.CompareOffset != 0 {
+		ResetTimeForCompare(oChunk, trans.opt.CompareOffset)
 	}
 	if trans.labelCall != nil {
 		trans.processLabelCall(chunk, oChunk)
@@ -1401,7 +1422,7 @@ func (trans *MaterializeTransform) materialize(chunk Chunk) Chunk {
 	for i, f := range trans.transparents {
 		dst := oChunk.Column(i)
 		if f != nil {
-			f(dst, chunk, trans.ColumnMap[i])
+			f(dst, chunk, trans.ColumnMap[i], oChunk)
 		} else {
 			trans.chunkValuer.AtChunkRow(chunk, 0)
 			isFast := initByType(trans.ops[i].Expr, trans.chunkValuer, columnMap)
@@ -1428,7 +1449,9 @@ func (trans *MaterializeTransform) materialize(chunk Chunk) Chunk {
 			}
 		}
 	}
-
+	if oChunk.GetGraph() == nil {
+		oChunk.SetGraph(chunk.GetGraph())
+	}
 	return oChunk
 }
 

@@ -106,3 +106,7 @@ func (p *YyParser) Lex(lval *yySymType) int {
 func (p *YyParser) Error(err string) {
 	p.error = YyParserError(err)
 }
+
+func (p *YyParser) HasError() bool {
+	return len(p.error) > 0
+}

@@ -692,7 +692,7 @@ func (trans *HoltWintersTransform) getMaxHwsEndTime() int64 {
 func (trans *HoltWintersTransform) appendSeries(ichunkEle *holtWintersChunk, oStartTime *int64, oEndTime int64, ochunk Chunk) {
 	ichunk := ichunkEle.chunk
 	for tagsLoc := &ichunkEle.tagsLoc; *tagsLoc <= ichunkEle.endTagsLoc; (*tagsLoc)++ {
-		ochunk.AddTagAndIndex(ichunk.Tags()[*tagsLoc], ochunk.Len())
+		ochunk.AppendTagsAndIndex(ichunk.Tags()[*tagsLoc], ochunk.Len())
 		start := ichunk.TagIndex()[*tagsLoc]
 		end := 0
 		if *tagsLoc == ichunk.TagLen()-1 {
@@ -737,7 +737,7 @@ func (trans *HoltWintersTransform) appendLastForecated(ochunk Chunk) Chunk {
 				if ochunk.Len() >= trans.opt.ChunkSize {
 					newOchunk := trans.chunkBuilder.NewChunk(ochunk.Name())
 					if ochunk.TagLen() > 0 {
-						newOchunk.AddTagAndIndex(ochunk.Tags()[ochunk.TagLen()-1], newOchunk.Len())
+						newOchunk.AppendTagsAndIndex(ochunk.Tags()[ochunk.TagLen()-1], newOchunk.Len())
 					}
 					trans.outputChunks = append(trans.outputChunks, newOchunk)
 					ochunk = newOchunk

@@ -28,6 +28,7 @@ import (
 const (
 	TimeField              = "time"
 	SeqIDField             = "__seq_id___"
+	FragmentField          = "__fragment__"
 	RecMaxLenForRuse       = 512
 	RecMaxRowNumForRuse    = 2024
 	BigRecMaxRowNumForRuse = 32 * 1024
@@ -289,6 +290,10 @@ func (rec *Record) CopyColVals() []ColVal {
 
 func (rec *Record) TimeColumn() *ColVal {
 	return &rec.ColVals[len(rec.Schema)-1]
+}
+
+func (rec *Record) LastSchema() Field {
+	return rec.Schema[len(rec.Schema)-1]
 }
 
 func (rec *Record) Schemas() []Field {

@@ -48,6 +48,7 @@ message ProcessorOptions {
     int64       QueryOffset = 43;
     bool        Without = 44;
     bool        PromRemoteRead = 45;
+    string      ValueCondition = 46;
 }
 
 message Measurement {
@@ -122,6 +123,13 @@ message Unnest {
     repeated int32 DstType = 3;
 }
 
+message JoinCase {
+    string LSrc = 1;
+    string RSrc = 2;
+    string Condition = 3;
+    int32  JoinType = 4;
+}
+
 message QuerySchema {
     string          QueryFields = 2;
     repeated string ColumnNames = 3;
@@ -167,6 +175,10 @@ message QueryNode {
     int64           Offset    = 9;
     int64           limitType = 10;
     AggType  AggType = 11;
+    bytes	Opt  = 12;
+    QuerySchema Schema   = 13;
+    repeated JoinCase JoinCase = 14;
+    repeated string Source = 15;
 }
 
 message RemoteQuery {
@@ -178,6 +190,12 @@ message RemoteQuery {
     bool analyze    = 6;
     bytes QueryNode = 7;
     repeated PtQuery PtQuerys = 8;
+    repeated MultiMstInfo MultiMstInfos = 9;
+}
+
+message MultiMstInfo {
+    repeated uint64 ShardIDs = 1;
+    bytes  Opt = 2;
 }
 
 enum AggType {
@@ -206,7 +224,7 @@ enum LogicPlanType
 	LogicalMerge = 4;
 	LogicalSortMerge = 5;
 	LogicalFilter = 6;
-	LogicalDedupe = 7;
+	LogicalDistinct = 7;
 	LogicalInterval = 8;
 	LogicalSeries = 9;
 	LogicalReader = 10;
@@ -240,4 +258,8 @@ enum LogicPlanType
     LogicalBinOp = 38;
     LogicalPromSubquery = 39;
     LogicalPromSort = 40;
+    LogicalIn = 41;
+    LogicalCTE = 42;
+    LogicalGraph = 43;
+    LogicalTableFunction = 44;
 }

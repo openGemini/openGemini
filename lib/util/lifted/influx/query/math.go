@@ -650,7 +650,7 @@ func (f *castInt64Func) CallFunc(name string, args []interface{}) (interface{}, 
 			return int64(0), true
 		}
 	case string:
-		result, err := strconv.Atoi(arg0)
+		result, err := strconv.ParseInt(arg0, 10, 64)
 		if err != nil {
 			return nil, false
 		}

@@ -32,16 +32,28 @@ import (
 	"go.uber.org/zap"
 )
 
+type BackupStatus string
+
+const (
+	Success     BackupStatus = "backup success"
+	Failed      BackupStatus = "backup field"
+	InProgress  BackupStatus = "backup in progress"
+	NotBackedUp BackupStatus = "not backed up"
+)
+
 type Backup struct {
-	Name            string
-	time            int64
+	Name          string
+	time          int64
+	BackupLogInfo *backup.BackupLogInfo
+	Engine        *EngineImpl
+	IsAborted     bool
+	Status        BackupStatus
+
 	IsInc           bool
 	IsRemote        bool
 	OnlyBackupMater bool
 	BackupPath      string
-	BackupLogInfo   *backup.BackupLogInfo
-	Engine          *Engine
-	IsAborted       bool
+	DataBases       []string
 }
 
 func (s *Backup) RunBackupData() error {
@@ -50,7 +62,7 @@ func (s *Backup) RunBackupData() error {
 	ch := make(chan struct{})
 	var wg sync.WaitGroup
 
-	res := "backup success"
+	result := &backup.BackupResult{Result: "backup success", Time: s.time, DataBases: make(map[string]struct{})}
 	wg.Add(1)
 	go execTicker(ch, s.BackupPath, &wg)
 	defer func() {
@@ -59,19 +71,55 @@ func (s *Backup) RunBackupData() error {
 		if r := recover(); r != nil {
 			err := errno.NewError(errno.RecoverPanic, r)
 			log.Error(err.Error())
-			_ = backup.WriteBackupLogFile([]byte(err.Error()), s.BackupPath, backup.ResultLog)
+			result.Result = err.Error()
+			s.Status = Failed
 		} else {
-			_ = backup.WriteBackupLogFile([]byte(res), s.BackupPath, backup.ResultLog)
+			s.Status = Success
+		}
+		b, err := json.Marshal(result)
+		if err != nil {
+			log.Error(err.Error())
+		}
+		if err = backup.WriteBackupLogFile(b, s.BackupPath, backup.ResultLog); err != nil {
+			log.Error(err.Error())
 		}
 	}()
 
-	for dbName, pts := range dbPtIds {
-		for _, ptId := range pts {
-			err := s.BackupPt(dbName, ptId)
-			if err != nil {
-				res = fmt.Sprintf("backup failed, error: %s", err.Error())
+	if len(s.DataBases) == 0 {
+		for dbName, pts := range dbPtIds {
+			if err := s.TraversePts(dbName, pts); err != nil {
+				result.Result = fmt.Sprintf("backup failed, error: %s", err.Error())
 				return err
 			}
+		}
+	} else {
+		dbMap := make(map[string]struct{})
+		for _, dbName := range s.DataBases {
+			pts, ok := dbPtIds[dbName]
+			if !ok {
+				continue
+			}
+			if _, ok := dbMap[dbName]; ok {
+				continue
+			}
+			dbMap[dbName] = struct{}{}
+			if err := s.TraversePts(dbName, pts); err != nil {
+				result.Result = fmt.Sprintf("backup failed, error: %s", err.Error())
+				return err
+			}
+		}
+		result.DataBases = dbMap
+	}
+
+	return nil
+}
+
+func (s *Backup) TraversePts(dbName string, pts []uint32) error {
+	for _, ptId := range pts {
+		err := s.BackupPt(dbName, ptId)
+		if err != nil {
+			s.Status = Failed
+			return err
 		}
 	}
 	return nil

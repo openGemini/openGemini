@@ -991,3 +991,16 @@ func (tf *tagFilter) Contains(tagsBuf *influx.PointTags, matchKey, matchValue st
 
 	return false
 }
+
+func (tf *tagFilter) ContainsAny(tagsBuf *influx.PointTags, matchKey string, matchValues map[interface{}]bool, isNegative, isRegexp bool) bool {
+	for _, tag := range *tagsBuf {
+		if tag.Key == matchKey {
+			_, ok := matchValues[tag.Value]
+			if isNegative {
+				return ok
+			}
+			return !ok
+		}
+	}
+	return false
+}

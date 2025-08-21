@@ -20,7 +20,6 @@ package textindex
 import "C"
 import (
 	"fmt"
-	"reflect"
 	"unsafe"
 )
 
@@ -33,11 +32,8 @@ type InvertMemElement struct {
 }
 
 func (b *FullTextIndexBuilder) AddDocument(val []byte, offset []uint32, startRow int, endRow int) (*InvertMemElement, error) {
-	valHeader := (*reflect.SliceHeader)(unsafe.Pointer(&val))
-	valBuf := (*C.char)(unsafe.Pointer(valHeader.Data))
-
-	offsetHeader := (*reflect.SliceHeader)(unsafe.Pointer(&offset))
-	offsetBuf := (*C.uint32_t)(unsafe.Pointer(offsetHeader.Data))
+	valBuf := (*C.char)(unsafe.Pointer(unsafe.SliceData(val)))
+	offsetBuf := (*C.uint32_t)(unsafe.Pointer(unsafe.SliceData(offset)))
 
 	memElement := C.AddDocument(b.builder, valBuf, C.uint32_t(len(val)), offsetBuf, C.uint32_t(len(offset)), C.uint32_t(startRow), C.uint32_t(endRow))
 	if memElement == nil {
@@ -56,15 +52,11 @@ func (b *FullTextIndexBuilder) AddDocument(val []byte, offset []uint32, startRow
 // res[7]: data total size = data size + data offs size
 // res[8]: items count
 func RetrievePostingList(memElement *InvertMemElement, data *BlockData, bh *BlockHeader) bool {
-	keysHeader := (*reflect.SliceHeader)(unsafe.Pointer(&data.Keys))
-	keysBuf := (*C.char)(unsafe.Pointer(keysHeader.Data))
-
-	datasHeader := (*reflect.SliceHeader)(unsafe.Pointer(&data.Data))
-	datasBuf := (*C.char)(unsafe.Pointer(datasHeader.Data))
+	keysBuf := (*C.char)(unsafe.Pointer(unsafe.SliceData(data.Keys)))
+	datasBuf := (*C.char)(unsafe.Pointer(unsafe.SliceData(data.Data)))
 
 	res := make([]uint32, 9)
-	resHeader := (*reflect.SliceHeader)(unsafe.Pointer(&res))
-	resBuf := (*C.uint32_t)(unsafe.Pointer(resHeader.Data))
+	resBuf := (*C.uint32_t)(unsafe.Pointer(unsafe.SliceData(res)))
 
 	//(MemElement memElement, )
 	readEnd := C.NextData(memElement.memElement, keysBuf, C.uint32_t(cap(data.Keys)), datasBuf, C.uint32_t(cap(data.Data)), resBuf)
@@ -77,16 +69,15 @@ func RetrievePostingList(memElement *InvertMemElement, data *BlockData, bh *Bloc
 	if int(bh.PostUnpackSize) > cap(data.Data) || int(bh.KeysUnpackSize) > cap(data.Keys) {
 		panic(fmt.Errorf("the return length greater than the cap:[%d,%d][%d,%d]", bh.PostUnpackSize, cap(data.Data), bh.KeysUnpackSize, cap(data.Keys)))
 	}
-	keysHeader.Len = int(bh.KeysUnpackSize)
-	datasHeader.Len = int(bh.PostUnpackSize)
+	data.Keys = data.Keys[:bh.KeysUnpackSize]
+	data.Data = data.Data[:bh.PostUnpackSize]
 	bh.FirstItem = data.Keys[res[0]:res[1]]
 	bh.LastItem = data.Keys[res[2]:res[3]]
 	return bool(readEnd)
 }
 
 func NewFullTextIndexBuilder(splitChars string, hasChin bool) *FullTextIndexBuilder {
-	splitHeader := (*reflect.StringHeader)(unsafe.Pointer(&splitChars))
-	splitStr := (*C.char)(unsafe.Pointer(splitHeader.Data))
+	splitStr := (*C.char)(unsafe.Pointer(unsafe.SliceData([]byte(splitChars))))
 
 	builder := C.NewTextIndexBuilder(splitStr, C.uint32_t(len(splitChars)), C._Bool(hasChin))
 	return &FullTextIndexBuilder{builder: builder}
@@ -109,8 +100,7 @@ func GetMemElement(groupSize uint32) *InvertMemElement {
 }
 
 func AddPostingToMem(memElement *InvertMemElement, key []byte, rowId uint32) bool {
-	keyHeader := (*reflect.SliceHeader)(unsafe.Pointer(&key))
-	keyBuf := (*C.char)(unsafe.Pointer(keyHeader.Data))
+	keyBuf := (*C.char)(unsafe.Pointer(unsafe.SliceData(key)))
 
 	isSuccess := C.AddPostingToMem(memElement.memElement, keyBuf, C.uint32_t(len(key)), C.uint32_t(rowId))
 	return bool(isSuccess)

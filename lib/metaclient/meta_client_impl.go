@@ -15,21 +15,17 @@
 package metaclient
 
 import (
-	"bytes"
-	crand "crypto/rand"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"math"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path"
+	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -54,7 +50,6 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"go.uber.org/zap"
-	"golang.org/x/crypto/pbkdf2"
 	"golang.org/x/text/encoding/unicode"
 	"golang.org/x/text/transform"
 )
@@ -76,19 +71,9 @@ type Client struct {
 	cacheData   *meta2.Data
 
 	// Authentication cache.
-	authCache map[string]authUser
-
+	auth        *Auth
 	weakPwdPath string
-
-	ShardTier uint64
-
-	// auth fail lock user
-	arChan       chan *authRcd
-	muAuthData   sync.RWMutex
-	authFailRcds map[string]authFailCache
-	authSuccRcds map[string]time.Time
-	// select hash ver
-	optAlgoVer int
+	ShardTier   uint64
 
 	replicaInfoManager *ReplicaInfoManager
 
@@ -158,23 +143,8 @@ var applyFunc = map[proto2.Command_Type]func(c *Client, op *proto2.Command) erro
 	proto2.Command_UpdateReplicationCommand:         applyUpdateReplication,
 	proto2.Command_UpdateMeasurementCommand:         applyUpdateMeasurement,
 	proto2.Command_UpdateMetaNodeStatusCommand:      applyUpdateMetaNodeStatus,
-}
-
-type authRcd struct {
-	user      string
-	result    bool // auth result(succ or fail)
-	occurTime time.Time
-}
-
-type authFailCache struct {
-	user         string
-	occurTimeLst []time.Time // auth time list
-}
-
-type authUser struct {
-	bhash string
-	salt  []byte
-	hash  []byte
+	proto2.Command_ReplaceMergeShardsCommand:        applyReplaceMergeShardsCommand,
+	proto2.Command_RecoverMetaData:                  applyRecoverMetaData,
 }
 
 // NewClient returns a new *Client.
@@ -183,15 +153,12 @@ func NewClient(weakPwdPath string, retentionAutoCreate bool, maxConcurrentWriteL
 		cacheData:          &meta2.Data{},
 		closing:            make(chan struct{}),
 		changed:            make(chan chan struct{}, maxConcurrentWriteLimit),
-		authCache:          make(map[string]authUser),
 		weakPwdPath:        weakPwdPath,
 		logger:             logger.NewLogger(errno.ModuleMetaClient).With(zap.String("service", "metaclient")),
-		arChan:             make(chan *authRcd, authFailCacheLimit),
-		authFailRcds:       make(map[string]authFailCache),
-		authSuccRcds:       make(map[string]time.Time),
 		replicaInfoManager: NewReplicaInfoManager(),
 		SendRPCMessage:     &RPCMessageSender{},
 	}
+	cli.auth = NewAuth(cli.logger)
 	cliOnce.Do(func() {
 		DefaultMetaClient = cli
 	})
@@ -221,11 +188,14 @@ func cvtDataForAlgoVer(ver string) int {
 }
 
 func (c *Client) SetHashAlgo(optHashAlgo string) {
-	c.optAlgoVer = cvtDataForAlgoVer(optHashAlgo)
+	c.auth.optAlgoVer = cvtDataForAlgoVer(optHashAlgo)
 }
 
 // Open a connection to a meta service cluster.
 func (c *Client) Open() error {
+	if c.auth == nil {
+		c.auth = NewAuth(c.logger)
+	}
 	if c.UseSnapshotV2 {
 		meta2.DataLogger = logger.GetLogger().With(zap.String("service", "data"))
 		err := c.retryUntilSnapshotV2(SQL, 0)
@@ -241,7 +211,6 @@ func (c *Client) Open() error {
 		go c.pollForUpdates(SQL)
 	}
 
-	go c.updateAuthCacheData()
 	return nil
 }
 
@@ -260,7 +229,7 @@ func (c *Client) OpenAtStore() error {
 		c.cacheData = c.retryUntilSnapshot(STORE, 0)
 		go c.pollForUpdates(STORE)
 	}
-	go c.verifyDataNodeStatus()
+	go c.verifyDataNodeStatus(time.Second * 10)
 	return nil
 }
 
@@ -331,7 +300,7 @@ func (c *Client) Ping(checkAllMetaServers bool) error {
 	if err != nil {
 		return err
 	}
-	return fmt.Errorf(string(callback.Leader))
+	return errors.New(string(callback.Leader))
 }
 
 // ClusterID returns the ID of the cluster it's connected to.
@@ -412,7 +381,9 @@ func (c *Client) GetAllMst(dbName string) []string {
 }
 
 // CreateDataNode will create a new data node in the metastore
-func (c *Client) CreateDataNode(writeHost, queryHost, role, az string) (uint64, uint64, uint64, error) {
+func (c *Client) CreateDataNode(storageNodeInfo *StorageNodeInfo, role string) (uint64, uint64, uint64, error) {
+	writeHost, queryHost, az, retryTime, retryNumber := storageNodeInfo.InsertAddr, storageNodeInfo.SelectAddr, storageNodeInfo.Az, storageNodeInfo.RetryTime, storageNodeInfo.RetryNumber
+	var retryCount int
 	currentServer := connectedServer
 	for {
 		// exit if we're closed
@@ -421,6 +392,9 @@ func (c *Client) CreateDataNode(writeHost, queryHost, role, az string) (uint64, 
 			return 0, 0, 0, meta2.ErrClientClosed
 		default:
 			// we're still open, continue on
+		}
+		if retryCount >= retryNumber {
+			return 0, 0, 0, errors.New("data: retry number exceeds the limit")
 		}
 		c.mu.RLock()
 		if currentServer >= len(c.metaServers) {
@@ -436,13 +410,16 @@ func (c *Client) CreateDataNode(writeHost, queryHost, role, az string) (uint64, 
 		}
 
 		c.logger.Warn("get node failed", zap.Error(err), zap.String("writeHost", writeHost), zap.String("queryHost", queryHost))
-		time.Sleep(errSleep)
+		time.Sleep(retryTime)
 
 		currentServer++
+		retryCount++
 	}
 }
 
-func (c *Client) CreateSqlNode(httpHost string, gossipHost string) (uint64, uint64, uint64, error) {
+func (c *Client) CreateSqlNode(sqlNodeInfo *SqlNodeInfo) (uint64, uint64, uint64, error) {
+	httpHost, gossipHost, retryTime, retryNumber := sqlNodeInfo.HttpAddr, sqlNodeInfo.GossipAddr, sqlNodeInfo.RetryTime, sqlNodeInfo.RetryNumber
+	var retryCount int
 	currentServer := connectedServer
 	for {
 		// exit if we're closed
@@ -451,6 +428,9 @@ func (c *Client) CreateSqlNode(httpHost string, gossipHost string) (uint64, uint
 			return 0, 0, 0, meta2.ErrClientClosed
 		default:
 			// we're still open, continue on
+		}
+		if retryCount >= retryNumber {
+			return 0, 0, 0, errors.New("sql: retry number exceeds the limit")
 		}
 		c.mu.RLock()
 		if currentServer >= len(c.metaServers) {
@@ -466,9 +446,10 @@ func (c *Client) CreateSqlNode(httpHost string, gossipHost string) (uint64, uint
 		}
 
 		c.logger.Warn("get sql node failed", zap.Error(err))
-		time.Sleep(errSleep)
+		time.Sleep(retryTime)
 
 		currentServer++
+		retryCount++
 	}
 }
 
@@ -611,11 +592,13 @@ func (c *Client) GetMeasurements(m *influxql.Measurement) ([]*meta2.MeasurementI
 			measurements = append(measurements, msti)
 		}
 	} else {
-		msti, err := rpi.GetMeasurement(m.Name)
-		if err != nil {
-			return nil, err
+		if m.MstType != influxql.TEMPORARY {
+			msti, err := rpi.GetMeasurement(m.Name)
+			if err != nil {
+				return nil, err
+			}
+			measurements = append(measurements, msti)
 		}
-		measurements = append(measurements, msti)
 	}
 	return measurements, nil
 }
@@ -911,6 +894,10 @@ func (c *Client) UpdateSchema(database string, retentionPolicy string, mst strin
 		FieldToCreate: fieldToCreate,
 	}
 
+	return c.UpdateSchemaByCmd(cmd)
+}
+
+func (c *Client) UpdateSchemaByCmd(cmd *proto2.UpdateSchemaCommand) error {
 	err := c.retryUntilExec(proto2.Command_UpdateSchemaCommand, proto2.E_UpdateSchemaCommand_Command, cmd)
 	if err != nil {
 		return err
@@ -984,6 +971,13 @@ func (c *Client) CreateMeasurement(database, retentionPolicy, mst string, shardK
 	}
 
 	if options != nil {
+		rpi, err := c.RetentionPolicy(database, retentionPolicy)
+		if err != nil {
+			return nil, err
+		}
+		if time.Duration(options.Ttl) > rpi.Duration {
+			return nil, errno.NewError(errno.InvalidMeasurementTTL, time.Duration(options.Ttl).String(), rpi.Duration.String())
+		}
 		cmd.Options = options.Marshal()
 	}
 
@@ -1485,6 +1479,7 @@ func (c *Client) UpdateRetentionPolicy(database, name string, rpu *meta2.Retenti
 		HotDuration:        meta2.GetInt64Duration(rpu.HotDuration),
 		WarmDuration:       meta2.GetInt64Duration(rpu.WarmDuration),
 		IndexGroupDuration: meta2.GetInt64Duration(rpu.IndexGroupDuration),
+		IndexColdDuration:  meta2.GetInt64Duration(rpu.IndexColdDuration),
 	}
 
 	return c.retryUntilExec(proto2.Command_UpdateRetentionPolicyCommand, proto2.E_UpdateRetentionPolicyCommand_Command, cmd)
@@ -1522,221 +1517,6 @@ func (c *Client) User(name string) (meta2.User, error) {
 	return nil, meta2.ErrUserNotFound
 }
 
-// Encrypt the plaintext by different hash version with giving salt
-func (c *Client) encryptWithSalt(salt []byte, plaintext string) []byte {
-	switch c.optAlgoVer {
-	case algoVer01:
-		return c.hashWithSalt(salt, plaintext)
-	case algoVer02:
-		return c.pbkdf2WithSalt(salt, plaintext, algoVer02)
-	case algoVer03:
-		return c.pbkdf2WithSalt(salt, plaintext, algoVer03)
-	default:
-		return nil
-	}
-}
-
-// Encrypt the plaintext by different hash version
-func (c *Client) saltedEncryptByVer(plaintext string) (salt, hash []byte, err error) {
-	switch c.optAlgoVer {
-	case algoVer01:
-		return c.saltedHash(plaintext)
-	case algoVer02:
-		return c.saltedPbkdf2(plaintext, algoVer02)
-	case algoVer03:
-		return c.saltedPbkdf2(plaintext, algoVer03)
-	default:
-		return nil, nil, meta2.ErrUnsupportedVer
-	}
-}
-
-// hashWithSalt returns a salted hash of password using salt.
-func (c *Client) hashWithSalt(salt []byte, password string) []byte {
-	hasher := sha256.New()
-	_, err := hasher.Write(salt)
-	if err != nil {
-		return nil
-	}
-	_, err = hasher.Write([]byte(password))
-	if err != nil {
-		return nil
-	}
-	return hasher.Sum(nil)
-}
-
-// saltedHash returns a salt and salted hash of password.
-func (c *Client) saltedHash(password string) (salt, hash []byte, err error) {
-	salt = make([]byte, SaltBytes)
-	if _, err := io.ReadFull(crand.Reader, salt); err != nil {
-		return nil, nil, err
-	}
-
-	return salt, c.hashWithSalt(salt, password), nil
-}
-
-func (c *Client) genHashPwdVal(password string) (string, error) {
-	switch c.optAlgoVer {
-	case algoVer01:
-		return c.genSHA256PwdVal(password)
-	default:
-		return c.genPbkdf2PwdVal(password)
-	}
-}
-
-// generates the salted hash value of the password (using SHA256).
-func (c *Client) genSHA256PwdVal(password string) (string, error) {
-	// 1.generate a salt and hash of the password for the cache
-	salt, hashed, err := c.saltedHash(password)
-	if err != nil {
-		c.logger.Error("saltedHash fail", zap.Error(err))
-		return "", err
-	}
-
-	// 2.assemble, verFlag + salt + hashedVal
-	rstVal := hashAlgoVerOne
-	rstVal += fmt.Sprintf("%02X", salt)   // convert to  hex string
-	rstVal += fmt.Sprintf("%02X", hashed) // convert to hex string
-	return rstVal, nil
-}
-
-// pbkdf2WithSalt returns an encryption of password using salt.
-func (c *Client) pbkdf2WithSalt(salt []byte, password string, algoVer int) []byte {
-	pbkdf2Iter := pbkdf2Iter4096
-	if algoVer == algoVer03 {
-		pbkdf2Iter = pbkdf2Iter1000
-	}
-	dk := pbkdf2.Key([]byte(password), salt, pbkdf2Iter, pbkdf2KeyLen, sha256.New)
-	return dk
-}
-
-// saltedPbkdf2 returns a salt and used pbkdf2 of password.
-func (c *Client) saltedPbkdf2(password string, algoVer int) (salt, hash []byte, err error) {
-	salt = make([]byte, SaltBytes)
-	if _, err := io.ReadFull(crand.Reader, salt); err != nil {
-		return nil, nil, err
-	}
-
-	return salt, c.pbkdf2WithSalt(salt, password, algoVer), nil
-}
-
-// generates the salted hash value of the password (using PBKDF2)
-func (c *Client) genPbkdf2PwdVal(password string) (string, error) {
-	// 1.generate a salt and hash of the password for the cache
-	salt, hashed, err := c.saltedPbkdf2(password, c.optAlgoVer)
-	if err != nil {
-		c.logger.Error("saltedHash fail", zap.Error(err))
-		return "", err
-	}
-
-	// 2.assemble (verFlag + salt + hashedVal(PBKDF2))
-	var rstVal string
-	switch c.optAlgoVer {
-	case algoVer02:
-		rstVal = hashAlgoVerTwo
-	case algoVer03:
-		rstVal = hashAlgoVerThree
-	default:
-		rstVal = hashAlgoVerTwo
-	}
-	rstVal += fmt.Sprintf("%02X", salt)   // convert to  hex string
-	rstVal += fmt.Sprintf("%02X", hashed) // convert to hex string
-	return rstVal, nil
-}
-
-// for hash ver One
-func (c *Client) compareHashAndPwdVerOne(hashed, plaintext string) error {
-	if len(hashed) < len(hashAlgoVerOne)+SaltBytes*2 {
-		return meta2.ErrHashedLength
-	}
-	verFlagLen := len(hashAlgoVerOne)
-	saltStr := hashed[verFlagLen : verFlagLen+SaltBytes*2]
-	hashStr := hashed[verFlagLen+SaltBytes*2:]
-
-	salt, err := func(s string) ([]byte, error) {
-		rstSlice := make([]byte, len(s)/2)
-		for i := 0; i+1 < len(s); {
-			uVal, err := strconv.ParseUint(s[i:i+2], 16, 8) //16 base, 8 bitSize
-			if err != nil {
-				c.logger.Error("hash pwd VerOne convert str to uint fail", zap.Error(err))
-				return nil, err
-			}
-			rstSlice[i/2] = byte(uVal & 0xFF)
-			i += 2
-		}
-		return rstSlice, nil
-	}(saltStr)
-
-	if err != nil {
-		return err
-	}
-
-	// gen hasded strVal from given plain pwd
-	newHashStr := fmt.Sprintf("%02X", c.hashWithSalt(salt, plaintext))
-
-	if hashStr != newHashStr {
-		return meta2.ErrMismatchedHashAndPwd
-	}
-	return nil
-}
-
-// for hash ver Two
-func (c *Client) compareHashAndPwdVerTwo(hashed, plaintext string, algoVer int) error {
-	if len(hashed) < len(hashAlgoVerTwo)+SaltBytes*2 {
-		return meta2.ErrHashedLength
-	}
-	verFlagLen := len(hashAlgoVerTwo)
-	saltStr := hashed[verFlagLen : verFlagLen+SaltBytes*2]
-	hashStr := hashed[verFlagLen+SaltBytes*2:]
-
-	salt, err := func(s string) ([]byte, error) {
-		rstSlice := make([]byte, len(s)/2)
-		for i := 0; i+1 < len(s); {
-			uVal, err := strconv.ParseUint(s[i:i+2], 16, 8) //16 base, 8 bitSize
-			if err != nil {
-				c.logger.Error("hash pwd VerTwo convert str to uint fail", zap.Error(err))
-				return nil, err
-			}
-			rstSlice[i/2] = byte(uVal & 0xFF)
-			i += 2
-		}
-		return rstSlice, nil
-	}(saltStr)
-
-	if err != nil {
-		return err
-	}
-
-	// gen pbkdf2 hashed strVal from given plain pwd
-	dk := c.pbkdf2WithSalt(salt, plaintext, algoVer)
-	newHashStr := fmt.Sprintf("%02X", dk)
-
-	if hashStr != newHashStr {
-		return meta2.ErrMismatchedHashAndPwd
-	}
-	return nil
-}
-
-// compares a hashed password with its possible
-// plaintext equivalent. Returns nil on success, or an error on failure.
-func (c *Client) CompareHashAndPlainPwd(hashed, plaintext string) error {
-	if len(hashed) < len(hashAlgoVerOne) {
-		return meta2.ErrHashedLength
-	}
-
-	hashVer := hashed[:len(hashAlgoVerOne)]
-	switch hashVer {
-	case hashAlgoVerOne:
-		return c.compareHashAndPwdVerOne(hashed, plaintext)
-	case hashAlgoVerTwo:
-		return c.compareHashAndPwdVerTwo(hashed, plaintext, algoVer02)
-	case hashAlgoVerThree:
-		return c.compareHashAndPwdVerTwo(hashed, plaintext, algoVer03)
-
-	default:
-		return meta2.ErrMismatchedHashAndPwd
-	}
-}
-
 // CreateUser adds a user with the given name and password and admin status.
 func (c *Client) CreateUser(name, password string, admin, rwuser bool) (meta2.User, error) {
 	// verify name length
@@ -1752,7 +1532,7 @@ func (c *Client) CreateUser(name, password string, admin, rwuser bool) (meta2.Us
 
 	// See if the user already exists.
 	if u := data.GetUser(name); u != nil {
-		if err := c.CompareHashAndPlainPwd(u.Hash, password); err != nil || u.Admin != admin {
+		if err := c.auth.CompareHashAndPlainPwd(u.Hash, password); err != nil || u.Admin != admin {
 			return nil, meta2.ErrUserExists
 		}
 		return u, nil
@@ -1764,7 +1544,7 @@ func (c *Client) CreateUser(name, password string, admin, rwuser bool) (meta2.Us
 	}
 
 	// Hash the password before serializing it.
-	hash, err := c.genHashPwdVal(password)
+	hash, err := c.auth.genHashPwdVal(password)
 	if err != nil {
 		return nil, err
 	}
@@ -1790,7 +1570,7 @@ func (c *Client) UpdateUser(name, password string) error {
 	}
 
 	// Hash the password before serializing it.
-	hash, err := c.genHashPwdVal(password)
+	hash, err := c.auth.genHashPwdVal(password)
 	if err != nil {
 		return err
 	}
@@ -1798,7 +1578,7 @@ func (c *Client) UpdateUser(name, password string) error {
 	if u := c.cacheData.GetUser(name); u == nil {
 		return meta2.ErrUserNotFound
 	} else {
-		if err = c.CompareHashAndPlainPwd(u.Hash, password); err == nil {
+		if err = c.auth.CompareHashAndPlainPwd(u.Hash, password); err == nil {
 			return meta2.ErrPwdUsed
 		}
 	}
@@ -1969,189 +1749,12 @@ func (c *Client) AdminUserExists() bool {
 	return c.cacheData.AdminUserExist()
 }
 
-func (c *Client) updateAuthCacheData() {
-	ticker := time.NewTicker(1 * time.Hour)
-	defer ticker.Stop()
-	lockTicker := time.NewTicker(500 * time.Millisecond)
-	defer lockTicker.Stop()
-
-	for {
-		select {
-		case rcd := <-c.arChan:
-			c.dealOnceAuthRecord(rcd)
-		case <-lockTicker.C:
-			c.updateUserLockData()
-		case <-ticker.C:
-			c.clearInvalidAuthData()
-		case <-c.closing:
-			return
-		}
-	}
-}
-
-func (c *Client) updateUserLockData() {
-	c.muAuthData.Lock()
-	defer c.muAuthData.Unlock()
-
-	// clear expired locks (unlock users)
-	var unlockLst []string
-	for k, v := range c.authFailRcds {
-		if len(v.occurTimeLst) >= maxLoginLimit {
-			if time.Since(v.occurTimeLst[maxLoginLimit-1]).Seconds() >= lockUserTime {
-				unlockLst = append(unlockLst, k)
-			}
-		}
-	}
-
-	for _, u := range unlockLst {
-		c.logger.Info("unlock user", zap.String("user", u))
-		delete(c.authFailRcds, u)
-	}
-}
-
-func (c *Client) dealOncAuthSuccRcd(r *authRcd) {
-	if !r.result {
-		return
-	}
-
-	// discard invalid authSuccRcd
-	if v, ok := c.authSuccRcds[r.user]; ok {
-		if v.After(r.occurTime) {
-			return
-		}
-	}
-	// record the latest successful authentication
-	c.authSuccRcds[r.user] = r.occurTime
-
-	// refresh authFailRcds, clear invalid auth fail rcd.
-	if v, ok := c.authFailRcds[r.user]; ok {
-		var tmp []time.Time
-		existInvalidRcd := false
-		for _, tv := range v.occurTimeLst {
-			if r.occurTime.After(tv) {
-				existInvalidRcd = true
-				continue
-			}
-			tmp = append(tmp, tv)
-		}
-		if !existInvalidRcd {
-			return
-		}
-		if len(tmp) == 0 {
-			delete(c.authFailRcds, r.user)
-			return
-		}
-		v.occurTimeLst = tmp
-		c.authFailRcds[r.user] = v
-	}
-}
-
-func (c *Client) dealOncAuthFailRcd(r *authRcd) {
-	if r.result {
-		return
-	}
-
-	// discard invalid authFailRcd
-	if v, ok := c.authSuccRcds[r.user]; ok {
-		if v.After(r.occurTime) {
-			return
-		}
-	}
-
-	// refresh auth_Fail_Cache data
-	if v, ok := c.authFailRcds[r.user]; ok {
-		v.occurTimeLst = append(v.occurTimeLst, r.occurTime)
-		sort.Slice(v.occurTimeLst, func(i, j int) bool {
-			return v.occurTimeLst[j].After(v.occurTimeLst[i])
-		})
-		if len(v.occurTimeLst) > maxLoginLimit {
-			v.occurTimeLst = v.occurTimeLst[0:maxLoginLimit]
-		}
-		c.authFailRcds[r.user] = v
-	} else {
-		c.authFailRcds[r.user] = authFailCache{
-			user: r.user, occurTimeLst: []time.Time{r.occurTime}}
-	}
-	c.logger.Info(r.user, zap.Any("auth fail count", len(c.authFailRcds[r.user].occurTimeLst)))
-}
-
-func (c *Client) dealOnceAuthRecord(r *authRcd) {
-	const maxDealLimit = 20
-	realNum := len(c.arChan)
-	if realNum > maxDealLimit-1 {
-		realNum = maxDealLimit - 1
-	}
-
-	rcdLst := []*authRcd{r}
-	for i := 1; i < realNum; i++ {
-		select {
-		case rcd := <-c.arChan:
-			rcdLst = append(rcdLst, rcd)
-		default:
-			//lint:ignore SA4011 ineffective break statement. Did you mean to break out of the outer loop?
-			break
-		}
-	}
-
-	c.muAuthData.Lock()
-	defer c.muAuthData.Unlock()
-	for _, rcd := range rcdLst {
-		c.dealOncAuthSuccRcd(rcd)
-		c.dealOncAuthFailRcd(rcd)
-	}
-}
-
-func (c *Client) clearInvalidAuthData() {
-	c.muAuthData.Lock()
-	defer c.muAuthData.Unlock()
-
-	// clear invalid auth rcd
-	var userLst []string
-	for k, v := range c.authFailRcds {
-		if time.Since(v.occurTimeLst[len(v.occurTimeLst)-1]).Seconds() >= maxLoginValidTime {
-			c.logger.Info("delete invalid authFailrcd", zap.String("user", k), zap.Any("time data", v.occurTimeLst))
-			userLst = append(userLst, k)
-		}
-	}
-	for _, u := range userLst {
-		delete(c.authFailRcds, u)
-	}
-
-	userLst = []string{}
-	for k, v := range c.authSuccRcds {
-		if time.Since(v).Seconds() >= maxLoginValidTime {
-			c.logger.Info("delete invalid asc rcd", zap.String("user", k), zap.Any("time", v))
-			userLst = append(userLst, k)
-		}
-	}
-	for _, u := range userLst {
-		delete(c.authSuccRcds, u)
-	}
-}
-
-func (c *Client) isLockedUser(u string) bool {
-	c.muAuthData.RLock()
-	defer c.muAuthData.RUnlock()
-	if v, ok := c.authFailRcds[u]; ok {
-		if len(v.occurTimeLst) >= maxLoginLimit {
-			c.logger.Info("The user has been locked.", zap.String("user", u))
-			return true
-		}
-	}
-	return false
-}
-
 // Authenticate returns a UserInfo if the username and password match an existing entry.
 func (c *Client) Authenticate(username, password string) (u meta2.User, e error) {
 	//verify user lock or not
-	if c.isLockedUser(username) {
+	if c.auth.IsLockedUser(username) {
 		return nil, meta2.ErrUserLocked
 	}
-	//record auth, refresh cache
-	defer func() {
-		rst := e == nil
-		c.arChan <- &authRcd{user: username, result: rst, occurTime: time.Now()}
-	}()
 
 	// Find user.
 	c.mu.RLock()
@@ -2161,33 +1764,8 @@ func (c *Client) Authenticate(username, password string) (u meta2.User, e error)
 		return nil, meta2.ErrUserNotFound
 	}
 
-	// Check the local auth cache first.
-	c.mu.RLock()
-	au, ok := c.authCache[username]
-	c.mu.RUnlock()
-	if ok {
-		// verify the password using the cached salt and hash
-		if bytes.Equal(c.encryptWithSalt(au.salt, password), au.hash) {
-			return userInfo, nil
-		}
-
-		// fall through to requiring a full bcrypt hash for invalid passwords
-	}
-
-	// Compare password with user hash.
-	if err := c.CompareHashAndPlainPwd(userInfo.Hash, password); err != nil {
-		return nil, meta2.ErrAuthenticate
-	}
-
-	// generate a salt and hash of the password for the cache
-	salt, hashed, err := c.saltedEncryptByVer(password)
-	if err != nil {
-		return nil, err
-	}
-	c.mu.Lock()
-	c.authCache[username] = authUser{salt: salt, hash: hashed, bhash: userInfo.Hash}
-	c.mu.Unlock()
-	return userInfo, nil
+	err := c.auth.Authenticate(userInfo, password)
+	return userInfo, err
 }
 
 // UserCount returns the number of users stored.
@@ -2213,7 +1791,7 @@ func (c *Client) ShardIDs() []uint64 {
 		}
 	}
 	c.mu.RUnlock()
-	sort.Sort(uint64Slice(a))
+	slices.Sort(a)
 	return a
 }
 
@@ -2238,29 +1816,6 @@ func (c *Client) ShardGroupsByTimeRange(database, policy string, min, max time.T
 		groups = append(groups, g)
 	}
 	return groups, nil
-}
-
-// ShardsByTimeRange returns a slice of shards that may contain data in the time range.
-func (c *Client) ShardsByTimeRange(sources influxql.Sources, tmin, tmax time.Time) (a []meta2.ShardInfo, err error) {
-	m := make(map[*meta2.ShardInfo]struct{})
-	for _, mm := range sources.Measurements() {
-		groups, err := c.ShardGroupsByTimeRange(mm.Database, mm.RetentionPolicy, tmin, tmax)
-		if err != nil {
-			return nil, err
-		}
-		for _, g := range groups {
-			for i := range g.Shards {
-				m[&g.Shards[i]] = struct{}{}
-			}
-		}
-	}
-
-	a = make([]meta2.ShardInfo, 0, len(m))
-	for sh := range m {
-		a = append(a, *sh)
-	}
-
-	return a, nil
 }
 
 // DropShard deletes a shard by ID.
@@ -2869,7 +2424,7 @@ func (c *Client) pollForUpdates(role Role) {
 		idx := c.cacheData.Index
 		if idx < data.Index {
 			c.cacheData = data
-			c.updateAuthCache()
+			c.auth.UpdateAuthCache(data.Users)
 			c.replicaInfoManager.Update(data, c.nodeID, role)
 			for len(c.changed) > 0 {
 				notifyC := <-c.changed
@@ -2893,7 +2448,7 @@ func (c *Client) pollForUpdatesV2(role Role) {
 		// update the data and notify of the change
 		c.mu.Lock()
 		if preIndex < c.cacheData.Index {
-			c.updateAuthCache()
+			c.auth.UpdateAuthCache(c.cacheData.Users)
 			c.replicaInfoManager.Update(c.cacheData, c.nodeID, role)
 			for len(c.changed) > 0 {
 				notifyC := <-c.changed
@@ -3013,21 +2568,6 @@ func (c *Client) Peers() []string {
 
 	// Return the unique set of peer addresses
 	return []string(peers.Unique())
-}
-
-func (c *Client) updateAuthCache() {
-	// copy cached user info for still-present users
-	newCache := make(map[string]authUser, len(c.authCache))
-
-	for _, userInfo := range c.cacheData.Users {
-		if cached, ok := c.authCache[userInfo.Name]; ok {
-			if cached.bhash == userInfo.Hash {
-				newCache[userInfo.Name] = cached
-			}
-		}
-	}
-
-	c.authCache = newCache
 }
 
 var connectedServer int
@@ -3200,7 +2740,9 @@ func applyCreateDatabase(c *Client, cmd *proto2.Command) error {
 			ShardGroupDuration: time.Duration(rpi.GetShardGroupDuration()),
 			HotDuration:        time.Duration(rpi.GetHotDuration()),
 			WarmDuration:       time.Duration(rpi.GetWarmDuration()),
-			IndexGroupDuration: time.Duration(rpi.GetIndexGroupDuration())}
+			IndexColdDuration:  time.Duration(rpi.GetIndexColdDuration()),
+			IndexGroupDuration: time.Duration(rpi.GetIndexGroupDuration()),
+			ShardMergeDuration: time.Duration(rpi.GetShardMergeDuration())}
 	} else if c.RetentionAutoCreate {
 		// Create a retention policy.
 		rp = meta2.NewRetentionPolicyInfo(autoCreateRetentionPolicyName)
@@ -3243,6 +2785,13 @@ func applyDropDatabase(c *Client, cmd *proto2.Command) error {
 func applyCreateRetentionPolicy(c *Client, cmd *proto2.Command) error {
 	if err := meta2.ApplyCreateRetentionPolicy(c.cacheData, cmd); err != nil {
 		return errno.NewError(errno.ApplyFuncErr, "applyCreateRetentionPolicy", err.Error())
+	}
+	return nil
+}
+
+func applyRecoverMetaData(c *Client, cmd *proto2.Command) error {
+	if err := meta2.ApplyRecoverMetaData(c.cacheData, cmd); err != nil {
+		return errno.NewError(errno.ApplyFuncErr, "applyRecoverMetaData", err.Error())
 	}
 	return nil
 }
@@ -3530,6 +3079,10 @@ func applyUpdateMeasurement(c *Client, cmd *proto2.Command) error {
 	return meta2.ApplyUpdateMeasurement(c.cacheData, cmd)
 }
 
+func applyReplaceMergeShardsCommand(c *Client, cmd *proto2.Command) error {
+	return meta2.ApplyReplaceMergeShards(c.cacheData, cmd)
+}
+
 func (c *Client) RetryDownSampleInfo() ([]byte, error) {
 	startTime := time.Now()
 	currentServer := connectedServer
@@ -3713,10 +3266,9 @@ func (c *Client) InitMetaClient(joinPeers []string, tlsEn bool, storageNodeInfo 
 	var clock uint64
 	var connId uint64
 	if storageNodeInfo != nil {
-		nid, clock, connId, err = c.CreateDataNode(storageNodeInfo.InsertAddr, storageNodeInfo.SelectAddr, role, storageNodeInfo.Az)
-	}
-	if t == SQL && storageNodeInfo == nil && sqlNodeInfo != nil && c.UseSnapshotV2 {
-		nid, clock, connId, err = c.CreateSqlNode(sqlNodeInfo.HttpAddr, sqlNodeInfo.GossipAddr)
+		nid, clock, connId, err = c.CreateDataNode(storageNodeInfo, role)
+	} else if t == SQL && sqlNodeInfo != nil && c.UseSnapshotV2 {
+		nid, clock, connId, err = c.CreateSqlNode(sqlNodeInfo)
 	}
 	config.SetNodeId(nid)
 	return nid, clock, connId, err
@@ -4144,28 +3696,42 @@ if always recover lease in assign dbpt no matter db pt is already on this node
 flush may write older data to disk, compaction may choose file which has already deleted
 stop flush and compaction , then clear memtable may solve this problem, but need replay new logs
 */
-func (c *Client) verifyDataNodeStatus() {
+func (c *Client) verifyDataNodeStatus(t time.Duration) {
+	if !VerifyNodeEn {
+		return
+	}
 	tries := 0
-	for {
-		select {
-		case <-c.closing:
-			return
-		default:
-			time.Sleep(10 * time.Second)
-			if !VerifyNodeEn {
-				continue
-			}
-			if err := c.retryVerifyDataNodeStatus(); err != nil {
-				tries++
-				c.logger.Error("Verify retry", zap.Int("tries", tries), zap.Error(err))
-				if tries >= 3 {
-					c.Suicide(err)
-				}
-				continue
-			}
+	triesPt := 0
+	begin := time.Now()
+
+	var check = func() {
+		err := c.retryVerifyDataNodeStatus()
+		if err == nil {
 			tries = 0
+			triesPt = 0
+			return
+		}
+		if errno.Equal(err, errno.PtNotFound) {
+			if triesPt == 0 {
+				begin = time.Now()
+			}
+			triesPt++
+			checkTime := config.GetStoreConfig().RetryPtCheckTime
+
+			if time.Since(begin) >= (time.Duration(checkTime) * time.Minute) {
+				c.logger.Error("Verify retry for pt", zap.String("duration", time.Since(begin).String()), zap.Error(err))
+				c.Suicide(err)
+			}
+			return
+		}
+		tries++
+		c.logger.Error("Verify retry for node", zap.Int("tries", tries), zap.Error(err))
+		if tries >= 3 {
+			c.Suicide(err)
 		}
 	}
+	check()
+	util.TickerRun(t, c.closing, check, func() {})
 }
 
 func (c *Client) retryVerifyDataNodeStatus() error {
@@ -4384,4 +3950,230 @@ func (c *Client) IsMasterPt(ptId uint32, database string) bool {
 		}
 	}
 	return false
+}
+
+func (c *Client) ReplaceMergeShards(mergeShards meta2.MergeShards) error {
+	cmd := &proto2.ReplaceMergeShardsCommand{
+		Db:   proto.String(mergeShards.DbName),
+		PtId: proto.Uint32(mergeShards.PtId),
+		Rp:   proto.String(mergeShards.RpName),
+	}
+	cmd.ShardId = append(cmd.ShardId, mergeShards.ShardIds...)
+
+	if err := c.retryUntilExec(proto2.Command_ReplaceMergeShardsCommand, proto2.E_ReplaceMergeShardsCommand_Command, cmd); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *Client) GetTimeRange(db, rp string, sShardId, eShardId uint64) (*meta2.ShardTimeRangeInfo, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	dbInfo, err := c.cacheData.GetDatabase(db)
+	if err != nil {
+		return nil, err
+	}
+	rpInfo, err := dbInfo.GetRetentionPolicy(rp)
+	if err != nil {
+		return nil, err
+	}
+	sShardTimeRangeInfo := rpInfo.ShardTimeRangeInfo(sShardId)
+	if sShardTimeRangeInfo == nil {
+		return nil, errno.NewError(errno.ShardMetaNotFound, sShardId)
+	}
+	eShardTimeRangeInfo := rpInfo.ShardTimeRangeInfo(eShardId)
+	if eShardTimeRangeInfo == nil {
+		return sShardTimeRangeInfo, nil
+	}
+	sShardTimeRangeInfo.TimeRange.EndTime = eShardTimeRangeInfo.TimeRange.EndTime
+	return sShardTimeRangeInfo, nil
+}
+
+func (c *Client) GetNoClearShardId(shardId uint64, db string, shardGroupId uint64, policy string) (uint64, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	info, ok := c.cacheData.Databases[db]
+	if !ok {
+		return 0, errno.NewError(errno.DatabaseNotFound)
+	}
+
+	policyInfo, ok := info.RetentionPolicies[policy]
+	if !ok {
+		return 0, errno.NewError(errno.PtNotFound)
+	}
+
+	indexId, shardGroupInfo, err := getIndexId(shardId, policyInfo, shardGroupId)
+	if err != nil {
+		return 0, err
+	}
+
+	indexGroup, err := getIndexGroup(policyInfo, indexId)
+	if err != nil {
+		return 0, err
+	}
+
+	infos := indexGroup.ClearInfo
+	if infos == nil {
+		return 0, errors.New("clear info is nil")
+	}
+
+	noClearIndexId, err := getNoClearIndexId(infos, indexId)
+	if err != nil {
+		return 0, err
+	}
+	for i := range shardGroupInfo.Shards {
+		if shardGroupInfo.Shards[i].IndexID == noClearIndexId {
+			return shardGroupInfo.Shards[i].ID, nil
+		}
+	}
+	return 0, errno.NewError(errno.DataIsOlder)
+}
+
+func (c *Client) GetNoClearIndexId(indexId uint64, db string, policy string) (uint64, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	info, ok := c.cacheData.Databases[db]
+	if !ok {
+		return 0, errno.NewError(errno.DatabaseNotFound)
+	}
+
+	policyInfo, ok := info.RetentionPolicies[policy]
+	if !ok {
+		return 0, errno.NewError(errno.PtNotFound)
+	}
+
+	indexGroup, err := getIndexGroup(policyInfo, indexId)
+	if err != nil {
+		return 0, err
+	}
+
+	infos := indexGroup.ClearInfo
+	if infos == nil {
+		return 0, errors.New("clear info is nil")
+	}
+
+	return getNoClearIndexId(infos, indexId)
+}
+
+func getNoClearIndexId(info *meta2.ReplicaClearInfo, indexId uint64) (uint64, error) {
+	for j := range info.ClearPeers {
+		if info.ClearPeers[j] == indexId {
+			return info.NoClearIndexId, nil
+		}
+	}
+	return 0, errors.New("NoClearIndexId not found")
+}
+
+func getIndexGroup(policyInfo *meta2.RetentionPolicyInfo, indexId uint64) (meta2.IndexGroupInfo, error) {
+	for i := range policyInfo.IndexGroups {
+		for j := range policyInfo.IndexGroups[i].Indexes {
+			if policyInfo.IndexGroups[i].Indexes[j].ID == indexId {
+				return policyInfo.IndexGroups[i], nil
+			}
+		}
+	}
+	return meta2.IndexGroupInfo{}, errors.New("index groups not found")
+}
+
+func getIndexId(shardId uint64, policyInfo *meta2.RetentionPolicyInfo, shardGroupId uint64) (uint64, meta2.ShardGroupInfo, error) {
+	for i := range policyInfo.ShardGroups {
+		if policyInfo.ShardGroups[i].ID == shardGroupId {
+			shardInfo := policyInfo.ShardGroups[i].Shard(shardId)
+			if shardInfo != nil {
+				return shardInfo.IndexID, policyInfo.ShardGroups[i], nil
+			}
+		}
+	}
+	return 0, meta2.ShardGroupInfo{}, errors.New("index id not found")
+}
+
+func (c *Client) GetAllMstTTLInfo() map[string]map[string][]*meta2.MeasurementTTLTnfo {
+	measurementTTLInfos := make(map[string]map[string][]*meta2.MeasurementTTLTnfo)
+	dataBases := c.Databases()
+	for dbName, db := range dataBases {
+		if db == nil || db.MarkDeleted || db.RetentionPolicies == nil {
+			continue
+		}
+		for rpName, rp := range db.RetentionPolicies {
+			if rp == nil || rp.MarkDeleted || rp.Measurements == nil {
+				continue
+			}
+			for _, mst := range rp.Measurements {
+				if mst == nil || mst.MarkDeleted {
+					continue
+				}
+				if measurementTTLInfos[dbName] == nil {
+					measurementTTLInfos[dbName] = make(map[string][]*meta2.MeasurementTTLTnfo)
+				}
+				mstTTLInfo := &meta2.MeasurementTTLTnfo{
+					Name:        mst.Name,
+					OriginName:  mst.OriginName(),
+					MarkDeleted: mst.MarkDeleted,
+				}
+				if mst.Options != nil {
+					mstTTLInfo.TTL = mst.Options.Ttl
+				}
+				measurementTTLInfos[dbName][rpName] = append(measurementTTLInfos[dbName][rpName], mstTTLInfo)
+			}
+		}
+	}
+	return measurementTTLInfos
+}
+
+func (c *Client) GetMergeShardsList() []meta2.MergeShards {
+	now := time.Now().UTC()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	mergeShardss := make([]meta2.MergeShards, 0)
+	mergeShardGroup := make(map[uint32]map[int64][]meta2.ShardIdentifier) // <ptId, <mergeEndTime, [shard, shard...]>>
+	for db := range c.cacheData.Databases {
+		for rp, rpInfo := range c.cacheData.Databases[db].RetentionPolicies {
+			// 1.get mergeShardGroup of each db.rp based on mergeDuration and shardGroupDuration
+			mergeDuration := rpInfo.ShardMergeDuration
+			if mergeDuration == 0 {
+				continue
+			}
+			for _, sg := range c.cacheData.Databases[db].RetentionPolicies[rp].ShardGroups {
+				mergeEndTime := sg.StartTime.Truncate(mergeDuration).UnixNano() + mergeDuration.Nanoseconds()
+				for _, shard := range sg.Shards {
+					_, ok := mergeShardGroup[shard.Owners[0]]
+					if !ok {
+						mergeShardGroup[shard.Owners[0]] = make(map[int64][]meta2.ShardIdentifier)
+						mergeShardGroup[shard.Owners[0]][mergeEndTime] = make([]meta2.ShardIdentifier, 0)
+					}
+					if mergeEndTime+(sg.EndTime.UnixNano()-sg.StartTime.UnixNano()) < now.UnixNano() {
+						mergeShardGroup[shard.Owners[0]][mergeEndTime] = append(mergeShardGroup[shard.Owners[0]][mergeEndTime],
+							meta2.ShardIdentifier{ShardID: shard.ID, StartTime: sg.StartTime, EndTime: sg.EndTime, EngineType: uint32(sg.EngineType)})
+					}
+				}
+			}
+
+			// 2.add mergeShardGroup to mergeShardsList and return
+			for ptId, mergeShards := range mergeShardGroup {
+				for endTime, shards := range mergeShards {
+					if len(shards) == 0 {
+						continue
+					}
+					shardIds := make([]uint64, 0, len(shards))
+					shardEndTimes := make([]int64, 0, len(shards))
+					engineTypes := make([]config.EngineType, len(shards))
+					for _, shard := range shards {
+						shardIds = append(shardIds, shard.ShardID)
+						shardEndTimes = append(shardEndTimes, shard.EndTime.UnixNano())
+						engineTypes = append(engineTypes, config.EngineType(shard.EngineType))
+					}
+					mergeShardss = append(mergeShardss, meta2.MergeShards{
+						DbName:        db,
+						PtId:          ptId,
+						RpName:        rp,
+						ShardIds:      shardIds,
+						ShardEndTimes: shardEndTimes,
+						EngineType:    engineTypes,
+					})
+					mergeShards[endTime] = mergeShards[endTime][:0]
+				}
+			}
+		}
+	}
+	return mergeShardss
 }

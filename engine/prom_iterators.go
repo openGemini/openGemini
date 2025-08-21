@@ -55,8 +55,11 @@ func CreateCursor(ctx context.Context, schema *executor.QuerySchema, span *traci
 		shardStartTime, shardEndTime := s.startTime.UnixNano(), s.endTime.UnixNano()
 		hasTimeFilter := (startTime >= shardStartTime && startTime <= shardEndTime) || (endTime >= shardStartTime && endTime <= shardEndTime)
 		s.mu.RLock()
-		immutableReader, mutableReader := s.cloneReaders(schema.Options().OptionsName(), hasTimeFilter, tr)
+		immutableReader, mutableReader, _, err := s.cloneReaders(schema.Options().OptionsName(), hasTimeFilter, tr)
 		s.mu.RUnlock()
+		if err != nil {
+			return nil, err
+		}
 		qCtx.immTableReaders[s.GetID()], qCtx.memTableReader[s.GetID()] = immutableReader, mutableReader
 		immTables[i], memTables[i] = immutableReader, mutableReader
 		OrderFileCount += len(immutableReader.Orders)
@@ -309,6 +312,13 @@ func CreateTagSetInParallel(work func(int, int, bool, *sync.WaitGroup, tsi.TagSe
 func newAggTagSetCursorWithMultiGroup(ctx *idKeyCursorContext, span *tracing.Span, schema *executor.QuerySchema, tagSets []tsi.TagSet, group, groupIdx int) (comm.KeyCursor, error) {
 	scanCursor := newSeriesLoopCursorInSerial(ctx, span, schema, tagSets, group, groupIdx, true)
 	sampleCursor := NewInstantVectorCursor(scanCursor, schema, ctx.aggPool, ctx.interTr)
+	if schema.Options().IsPromQuery() && schema.Options().GetValueCondition() != nil {
+		filterCursor, err := NewFilterCursor(schema, tagSets, sampleCursor, ctx.schema, ctx.filterOption)
+		if err != nil {
+			return nil, err
+		}
+		return NewAggTagSetCursor(schema, ctx, filterCursor, true), nil
+	}
 	return NewAggTagSetCursor(schema, ctx, sampleCursor, true), nil
 }
 

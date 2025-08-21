@@ -18,8 +18,6 @@ package engine
 
 import (
 	"errors"
-	"math"
-	"sort"
 	"sync/atomic"
 	"time"
 
@@ -27,127 +25,77 @@ import (
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/lib/errno"
-	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
-	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/pingcap/failpoint"
-	"go.uber.org/zap"
 )
 
 type tsstoreImpl struct {
-}
-
-func (storage *tsstoreImpl) WriteRows(s *shard, mw *mstWriteCtx) error {
-	mmPoints := mw.getMstMap()
-	mw.initWriteRowsCtx(s.addRowCountsBySid, nil)
-	s.immTables.LoadSequencer()
-	return s.activeTbl.MTable.WriteRows(s.activeTbl, mmPoints, mw.writeRowsCtx)
-}
-
-func (storage *tsstoreImpl) WriteRowsToTable(s *shard, rows influx.Rows, mw *mstWriteCtx, binaryRows []byte) error {
-	// alloc token
-	// Token is released during the snapshot process, the number of tokens needs to be recorded before data is written.
-	start := time.Now()
-	curSize := calculateMemSize(rows)
-	err := nodeMutableLimit.allocResource(curSize, mw.timer)
-	atomic.AddInt64(&statistics.PerfStat.WriteGetTokenDurationNs, time.Since(start).Nanoseconds())
-	if err != nil {
-		s.log.Info("Alloc resource failed, need retry", zap.Int64("current mem size", curSize))
-		return err
-	}
-
-	// write index
-	indexErr := storage.WriteIndex(s, &rows, mw)
-	if indexErr != nil && !errno.Equal(indexErr, errno.SeriesLimited) {
-		nodeMutableLimit.freeResource(curSize)
-		return indexErr
-	}
-
-	// write data to mem table and write wal
-	err = s.writeRows(mw, binaryRows, curSize)
-	if err != nil {
-		return err
-	}
-
-	return indexErr
 }
 
 func (storage *tsstoreImpl) WriteCols(s *shard, cols *record.Record, mst string, binaryCols []byte) error {
 	return errors.New("not implement yet")
 }
 
-func (storage *tsstoreImpl) WriteIndex(s *shard, rowsPointer *influx.Rows, mw *mstWriteCtx) error {
-	rows := *rowsPointer
+func (storage *tsstoreImpl) WriteIndex(idx *tsi.IndexBuilder, mw *mstWriteCtx) func() error {
+	err := storage.writeIndex(idx, mw)
+	return func() error {
+		return err
+	}
+}
+
+func (storage *tsstoreImpl) writeIndex(idx *tsi.IndexBuilder, mw *mstWriteCtx) error {
 	mmPoints := mw.getMstMap()
 	var err error
-
-	start := time.Now()
-	if !sort.IsSorted(&rows) {
-		sort.Stable(&rows)
-	}
-	atomic.AddInt64(&statistics.PerfStat.WriteSortIndexDurationNs, time.Since(start).Nanoseconds())
-
 	var writeIndexRequired bool
-	start = time.Now()
-	tm := int64(math.MinInt64)
-	primaryIndex := s.indexBuilder.GetPrimaryIndex()
-	idx, _ := primaryIndex.(*tsi.MergeSetIndex)
-	for i := 0; i < len(rows); i++ {
-		if s.closed.Closed() {
-			return errno.NewError(errno.ErrShardClosed, s.ident.ShardID)
-		}
-		//skip StreamOnly data
-		if rows[i].StreamOnly {
-			continue
-		}
+	start := time.Now()
 
-		ri := cloneRowToDict(mmPoints, mw, &rows[i], len(rows))
-		if ri.Timestamp > tm {
-			tm = ri.Timestamp
+	mergeSet, ok := idx.GetPrimaryIndex().(*tsi.MergeSetIndex)
+	if !ok {
+		return errno.NewInvalidTypeError("*tsi.MergeSetIndex", idx.GetPrimaryIndex())
+	}
+
+	for _, mp := range mmPoints.D {
+		rows, ok := mp.Value.(*[]influx.Row)
+		if !ok {
+			return errors.New("can't map mmPoints")
 		}
 
-		if idx.EnabledTagArray() && ri.HasTagArray() {
-			writeIndexRequired = true
-		}
+		for i := range *rows {
+			ri := &(*rows)[i]
 
-		if !writeIndexRequired {
-			ri.SeriesId, err = idx.GetSeriesIdBySeriesKey(rows[i].IndexKey)
-			if err != nil {
-				return err
-			}
-			// PrimaryId is equal to SeriesId by default.
-			ri.PrimaryId = ri.SeriesId
-
-			if ri.SeriesId == 0 {
+			if mergeSet.EnabledTagArray() && ri.HasTagArray() {
 				writeIndexRequired = true
 			}
-		}
-		atomic.AddInt64(&statistics.PerfStat.WriteFieldsCount, int64(rows[i].Fields.Len()))
-	}
 
-	s.setMaxTime(tm)
-	mw.maxTime = tm
+			if !writeIndexRequired {
+				ri.SeriesId, err = mergeSet.GetSeriesIdBySeriesKey(ri.IndexKey)
+				if err != nil {
+					return err
+				}
+				// PrimaryId is equal to SeriesId by default.
+				ri.PrimaryId = ri.SeriesId
+
+				if ri.SeriesId == 0 {
+					writeIndexRequired = true
+				}
+			}
+		}
+	}
 
 	failpoint.Inject("SlowDownCreateIndex", nil)
 	if writeIndexRequired {
-		if err = s.indexBuilder.CreateIndexIfNotExists(mmPoints, true); err != nil {
+		if err = idx.CreateIndexIfNotExists(mmPoints, true); err != nil {
 			return err
 		}
 	} else {
-		if err = s.indexBuilder.CreateSecondaryIndexIfNotExist(mmPoints); err != nil {
+		if err = idx.CreateSecondaryIndexIfNotExist(mmPoints); err != nil {
 			return err
 		}
 	}
 	atomic.AddInt64(&statistics.PerfStat.WriteIndexDurationNs, time.Since(start).Nanoseconds())
 	return nil
-}
-
-func (storage *tsstoreImpl) SetClient(client metaclient.MetaClient) {}
-
-func (storage *tsstoreImpl) SetMstInfo(s *shard, name string, mstInfo *meta.MeasurementInfo) {
-
 }
 
 func (storage *tsstoreImpl) SetAccumulateMetaIndex(name string, detachedMetaInfo *immutable.AccumulateMetaIndex) {

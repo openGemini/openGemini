@@ -15,11 +15,29 @@
 package influxql
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 	"time"
 )
+
+var symbols = map[string]string{
+	"BITWISE_OR": "'|'",
+	"LPAREN":     "'('",
+	"RPAREN":     "')'",
+	"LSQUARE":    "'['",
+	"RSQUARE":    "']'",
+	"COMMA":      "','",
+	"COLON":      "':'",
+	"EQ":         "'='",
+	"LT":         "'<'",
+	"LTE":        "'<='",
+	"GT":         "'>'",
+	"GTE":        "'>='",
+	"LBRACKET":   "'{'",
+	"RBRACKET":   "'}'",
+}
 
 type YyParser struct {
 	Query   Query
@@ -47,6 +65,13 @@ func (p *YyParser) SetScanner(s *Scanner) {
 }
 func (p *YyParser) GetQuery() (*Query, error) {
 	if len(p.error) > 0 {
+		err := p.error.Error()
+		if strings.Contains(err, "syntax error") {
+			for k, v := range symbols {
+				err = strings.ReplaceAll(err, k, v)
+			}
+			return &p.Query, errors.New(err)
+		}
 		return &p.Query, p.error
 	}
 	return &p.Query, nil
@@ -156,6 +181,9 @@ func (p *YyParser) Lex(lval *yySymType) int {
 func (p *YyParser) Error(err string) {
 	p.error = YyParserError(err)
 }
+func (p *YyParser) HasError() bool {
+	return len(p.error) > 0
+}
 
 type GroupByCondition struct {
 	Dimensions   Dimensions
@@ -166,7 +194,9 @@ type Durations struct {
 	ShardGroupDuration time.Duration
 	HotDuration        time.Duration
 	WarmDuration       time.Duration
+	IndexColdDuration  time.Duration
 	IndexGroupDuration time.Duration
+	ShardMergeDuration time.Duration
 
 	PolicyDuration *time.Duration
 	Replication    *int

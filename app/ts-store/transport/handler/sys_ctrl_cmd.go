@@ -16,7 +16,7 @@ package handler
 
 import (
 	"github.com/openGemini/openGemini/lib/logger"
-	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/msgservice"
 	"github.com/openGemini/openGemini/lib/spdy"
 	"go.uber.org/zap"
 )
@@ -24,12 +24,12 @@ import (
 type SysCtrlCmd struct {
 	BaseHandler
 
-	req *netstorage.SysCtrlRequest
+	req *msgservice.SysCtrlRequest
 	w   spdy.Responser
 }
 
 func (h *SysCtrlCmd) Process() error {
-	rsp := &netstorage.SysCtrlResponse{}
+	rsp := &msgservice.SysCtrlResponse{}
 
 	logger.GetLogger().Info("SysCtrlRequestMessage", zap.String("cmd", h.req.Mod()))
 	result, err := h.store.SendSysCtrlOnNode(h.req)

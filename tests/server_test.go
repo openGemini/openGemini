@@ -24,6 +24,7 @@ import (
 
 // Global server used by benchmarks
 var benchServer Server
+
 var benchCfgPath string
 
 // Global server used by test stub
@@ -38,23 +39,23 @@ type TestType struct {
 
 var testType TestType
 
-func killInfluxDB3(t *testing.T) error {
+func killTsstore3(t *testing.T) error {
 	command := `ps -ef |grep -w config/openGemini-3.conf | grep ts-store | grep -v grep | cut -c 9-15 | xargs kill -9`
 	cmd := exec.Command("/bin/bash", "-c", command)
 
 	output, err := cmd.Output()
 	if err != nil {
-		fmt.Printf("kill ts-store 3 error :%s failed with error:%s\n", command, err.Error())
-		t.Errorf("InitTestEnv kill ts-store 3 error command: %s - err: %s\n", command, err.Error())
+		fmt.Printf("kill openGemini ts-store 3 error :%s failed with error:%s\n", command, err.Error())
+		t.Errorf("InitTestEnv kill openGemini ts-store 3 error command: %s - err: %s\n", command, err.Error())
 		return err
 	} else {
-		fmt.Printf("kill ts-store 3 suc:%s finished with output:\n%s\n", command, string(output))
+		fmt.Printf("kill openGemini ts-store 3 suc:%s finished with output:\n%s\n", command, string(output))
 		return nil
 	}
 }
 
-func startInfluxDB3(t *testing.T) {
-	_ = os.MkdirAll("/tmp/openGemini/logs/3", 600)
+func startTsstore3(t *testing.T) {
+	_ = os.MkdirAll("/tmp/openGemini/logs/3", 0700)
 	confFile := "config/openGemini-3.conf "
 	logFile := "/tmp/openGemini/logs/3/store_extra3.log"
 
@@ -63,27 +64,27 @@ func startInfluxDB3(t *testing.T) {
 
 	output, err := cmd.Output()
 	if err != nil {
-		fmt.Printf("start ts-store 3 error:%s failed with error:%s\n", command, err.Error())
-		t.Fatalf("start ts-store 3 error command: %s - err: %s\n", command, err.Error())
+		fmt.Printf("start openGemini ts-store 3 error:%s failed with error:%s\n", command, err.Error())
+		t.Fatalf("start openGemini ts-store 3 error command: %s - err: %s\n", command, err.Error())
 	} else {
 		time.Sleep(2 * time.Second)
-		fmt.Printf("start influxdb3 suc:%s finished with output:\n%s\n", command, string(output))
+		fmt.Printf("start openGemini ts-store 3 suc:%s finished with output:\n%s\n", command, string(output))
 	}
 }
 
 func InitTestEnv(t *testing.T, bodyType string, body io.Reader) error {
 	if testType.HA {
-		if err := killInfluxDB3(t); err != nil {
-			fmt.Printf("kill influxdb3 error:%s", err.Error())
+		if err := killTsstore3(t); err != nil {
+			fmt.Printf("kill openGemini ts-store 3 error:%s", err.Error())
 			return err
 		}
 		time.Sleep(40 * time.Second)
 		return nil
 	} else if testType.ReStart {
-		if err := killInfluxDB3(t); err != nil {
+		if err := killTsstore3(t); err != nil {
 			return err
 		}
-		startInfluxDB3(t)
+		startTsstore3(t)
 	} else if testType.MovePT {
 		b := "http://127.0.0.1:8091" + bodyType
 		fmt.Printf(" movePT %s \n", b)
@@ -97,11 +98,11 @@ func InitTestEnv(t *testing.T, bodyType string, body io.Reader) error {
 			time.Sleep(20 * time.Second)
 		}
 	} else if testType.ReStore {
-		if err := killInfluxDB3(t); err != nil {
+		if err := killTsstore3(t); err != nil {
 			return err
 		}
 		time.Sleep(45 * time.Second)
-		startInfluxDB3(t)
+		startTsstore3(t)
 	}
 
 	return nil
@@ -109,8 +110,8 @@ func InitTestEnv(t *testing.T, bodyType string, body io.Reader) error {
 
 func InitHaTestEnv(t *testing.T) {
 	if testType.HA {
-		if err := killInfluxDB3(t); err != nil {
-			fmt.Printf("kill ts-store 3 error: %s\n", err.Error())
+		if err := killTsstore3(t); err != nil {
+			fmt.Printf("kill openGemini ts-store 3 error: %s\n", err.Error())
 			t.Fatal(err.Error())
 		}
 	}
@@ -118,7 +119,7 @@ func InitHaTestEnv(t *testing.T) {
 
 func ReleasTestEnv(t *testing.T, bodyType string, body io.Reader) error {
 	if testType.HA {
-		startInfluxDB3(t)
+		startTsstore3(t)
 	} else if testType.ReStart {
 		return nil
 	} else if testType.MovePT {
@@ -143,7 +144,7 @@ func ReleasTestEnv(t *testing.T, bodyType string, body io.Reader) error {
 
 func ReleaseHaTestEnv(t *testing.T) {
 	if testType.HA {
-		startInfluxDB3(t)
+		startTsstore3(t)
 	}
 }
 
@@ -190,7 +191,7 @@ func TestMain(m *testing.M) {
 	os.Exit(r)
 }
 
-// Ensure that HTTP responses include the InfluxDB version.
+// Ensure that HTTP responses include the openGemini version.
 func TestServer_HTTPResponseVersion(t *testing.T) {
 	if RemoteEnabled() {
 		t.Skip("Skipping.  Cannot change version of remote server")
@@ -1598,7 +1599,7 @@ func TestServer_Query_Tags(t *testing.T) {
 		fmt.Sprintf("cpu3 value=200 %d", mustParseTime(time.RFC3339Nano, "2012-02-28T01:03:38.703820946Z").UnixNano()),
 
 		fmt.Sprintf("status_code,url=http://www.example.com value=404 %d", mustParseTime(time.RFC3339Nano, "2015-07-22T08:13:54.929026672Z").UnixNano()),
-		fmt.Sprintf("status_code,url=https://influxdb.com value=418 %d", mustParseTime(time.RFC3339Nano, "2015-07-22T09:52:24.914395083Z").UnixNano()),
+		fmt.Sprintf("status_code,url=https://openGemini.org value=418 %d", mustParseTime(time.RFC3339Nano, "2015-07-22T09:52:24.914395083Z").UnixNano()),
 	}
 
 	test := NewTest("db0", "rp0")
@@ -1728,13 +1729,13 @@ func TestServer_Query_Tags(t *testing.T) {
 		},
 		{
 			name:    "single field (regex tag match with escaping)",
-			command: `SELECT value FROM db0.rp0.status_code WHERE url !~ /https\:\/\/influxdb\.com/`,
+			command: `SELECT value FROM db0.rp0.status_code WHERE url !~ /https\:\/\/openGemini\.org/`,
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"status_code","columns":["time","value"],"values":[["2015-07-22T08:13:54.929026672Z",404]]}]}]}`,
 			skip:    true,
 		},
 		{
 			name:    "single field (regex tag match with escaping)",
-			command: `SELECT value FROM db0.rp0.status_code WHERE url =~ /https\:\/\/influxdb\.com/`,
+			command: `SELECT value FROM db0.rp0.status_code WHERE url =~ /https\:\/\/openGemini\.org/`,
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"status_code","columns":["time","value"],"values":[["2015-07-22T09:52:24.914395083Z",418]]}]}]}`,
 			skip:    true,
 		},
@@ -3335,6 +3336,31 @@ func TestServer_Query_Aggregate_For_String_Functions(t *testing.T) {
 			command: `SELECT position(age, 'add') FROM db0.rp0.mst`,
 			exp:     `{"results":[{"statement_id":0,"error":"invalid argument type for the first argument in position(): float"}]}`,
 		},
+		{
+			name:    "SELECT json_object('address', address, 'country', country, 'age', age, 'height', height)",
+			command: `SELECT json_object('address', address, 'country', country, 'age', age, 'height', height) FROM db0.rp0.mst`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","json_object"],"values":[["2021-08-16T16:00:00Z","{\"address\":\"shenzhen\",\"country\":\"china\",\"age\":12.3,\"height\":70}"],["2021-08-16T16:00:01Z","{\"address\":\"shanghai\",\"country\":\"american\",\"age\":20.5,\"height\":80}"],["2021-08-16T16:00:02Z","{\"address\":\"beijin\",\"country\":\"germany\",\"age\":3.4,\"height\":90}"],["2021-08-16T16:00:03Z","{\"address\":\"guangzhou\",\"country\":\"japan\",\"age\":30,\"height\":121}"],["2021-08-16T16:00:04Z","{\"address\":\"chengdu\",\"country\":\"canada\",\"age\":35,\"height\":138}"],["2021-08-16T16:00:05Z","{\"address\":\"wuhan\",\"country\":\"china\",\"age\":48.8,\"height\":149}"],["2021-08-16T16:00:06Z","{\"address\":null,\"country\":\"american\",\"age\":52.7,\"height\":153}"],["2021-08-16T16:00:07Z","{\"address\":\"anhui\",\"country\":\"germany\",\"age\":28.3,\"height\":null}"],["2021-08-16T16:00:08Z","{\"address\":\"xian\",\"country\":\"japan\",\"age\":null,\"height\":179}"],["2021-08-16T16:00:09Z","{\"address\":\"hangzhou\",\"country\":\"canada\",\"age\":60.8,\"height\":180}"],["2021-08-16T16:00:10Z","{\"address\":\"nanjin\",\"country\":null,\"age\":102,\"height\":191}"],["2021-08-16T16:00:11Z","{\"address\":\"zhengzhou\",\"country\":\"china\",\"age\":123,\"height\":203}"]]}]}]}`,
+		},
+		{
+			name:    "SELECT json_object('address', address, 'country', country, 'age', age, 'height', height)",
+			command: `SELECT json_object(address, 'address', 'country', country, 'age', age, 'height', height) FROM db0.rp0.mst`,
+			exp:     `{"results":[{"statement_id":0,"error":"json key must be string in json_object(): address"}]}`,
+		},
+		{
+			name:    "SELECT json_object fail when wrong number of parameters",
+			command: `SELECT json_object( address, 'address', 'country', country, 'age', age, 'height') FROM db0.rp0.mst`,
+			exp:     `{"results":[{"statement_id":0,"error":"invalid number of arguments for json_object"}]}`,
+		},
+		{
+			name:    "SELECT json_object fail when not using str as key",
+			command: `SELECT json_object( 11, address, 'country', country, 'age', age) FROM db0.rp0.mst`,
+			exp:     `{"results":[{"statement_id":0,"error":"json key must be string in json_object(): 11"}]}`,
+		},
+		{
+			name:    "SELECT json_object fail when no parameters",
+			command: `SELECT json_object() FROM db0.rp0.mst`,
+			exp:     `{"results":[{"statement_id":0,"error":"invalid number of arguments for json_object"}]}`,
+		},
 	}...)
 
 	for i, query := range test.queries {
@@ -3682,6 +3708,12 @@ func TestServer_Query_Null_Aggregate(t *testing.T) {
 			command: `SELECT /*+ specific_series */  * FROM db0.rp0.mst WHERE country='china' and age=12.3 and "name"='azhu'`,
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","address","age","alive","country","height","name"],"values":[["2021-08-16T16:00:00Z","shenzhen",12.3,true,"china",70,"azhu"]]}]}]}`,
 		},
+		{
+			name:    "SELECT regr_slope(*)",
+			params:  url.Values{"inner_chunk_size": []string{"1"}},
+			command: `SELECT regr_slope(*) FROM db0.rp0.mst`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","regr_slope_age","regr_slope_height"],"values":[["1970-01-01T00:00:00Z",9.690909090909093,13.727272727272727]]}]}]}`,
+		},
 	}...)
 
 	for i, query := range test.queries {
@@ -3693,6 +3725,86 @@ func TestServer_Query_Null_Aggregate(t *testing.T) {
 			}
 			if query.skip {
 				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}
+
+func TestServer_Query_Detect_Aggregate(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		`mst,agent=A,ns=m1 metric_v=10,metric_v1=15.0 1740963600000000000`,
+		`mst,agent=A,ns=m1 metric_v=10,metric_v1=15.0 1740963660000000000`,
+		`mst,agent=A,ns=m1 metric_v=40,metric_v1=25 1740963720000000000`,
+		`mst,agent=A,ns=m1 metric_v=40,metric_v1=25 1740963780000000000`,
+		`mst,agent=A,ns=m2 metric_v=20,metric_v1=10 1740963840000000000`,
+		`mst,agent=A,ns=m2 metric_v=20,metric_v1=15.5 1740963900000000000`,
+		`mst,agent=A,ns=m2 metric_v=30,metric_v1=16.5 1740963960000000000`,
+		`mst,agent=A,ns=m2 metric_v=50,metric_v1=22.2 1740964020000000000`,
+		`mst,agent=A,ns=m2 metric_v=50,metric_v1=28.9 1740964080000000000`,
+		`mst,agent=B,ns=m1 metric_v=25,metric_v1=5 1740964140000000000`,
+		`mst,agent=B,ns=m1 metric_v=35,metric_v1=11.6 1740964200000000000`,
+		`mst,agent=B,ns=m1 metric_v=45,metric_v1=12.8 1740964260000000000`,
+		`mst,agent=B,ns=m1 metric_v=55,metric_v1=24.3 1740964320000000000`,
+		`mst,agent=B,ns=m1 metric_v=65,metric_v1=25.6 1740964380000000000`,
+		`mst,agent=B,ns=m1 metric_v=75,metric_v1=30.8 1740964440000000000`,
+		`mst,agent=B,ns=m2 metric_v=10 1740964500000000000`,
+		`mst,agent=B,ns=m2 metric_v2="a" 1740964560000000000`,
+		`mst,agent=B,ns=m2 metric_v=30 1740964620000000000`,
+		`mst,agent=B,ns=m2 metric_v2="b" 1740964680000000000`,
+	}
+
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		{
+			name:    "ad_rmse_ext string",
+			command: `SELECT ad_rmse_ext(metric_v2) FROM db0.rp0.mst`,
+			exp:     `{"results":[{"statement_id":0,"error":"unsupported (ad_rmse_ext) iterator type: (string)"}]}`,
+		},
+		{
+			name:    "ad_rmse_ext null",
+			command: `SELECT ad_rmse_ext(metric_v3) FROM db0.rp0.mst`,
+			exp:     `{"results":[{"statement_id":0}]}`,
+		},
+		{
+			name:    "ad_rmse_ext with null row",
+			command: `SELECT ad_rmse_ext(metric_v) FROM db0.rp0.mst where agent='B' and ns='m2'`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","ad_rmse_ext"],"values":[["2025-03-03T01:15:00Z",2]]}]}]}`,
+		},
+		{
+			name:    "ad_rmse_ext int",
+			command: `SELECT ad_rmse_ext(metric_v) FROM db0.rp0.mst group by agent,ns`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","tags":{"agent":"A","ns":"m1"},"columns":["time","ad_rmse_ext"],"values":[["2025-03-03T01:00:00Z",3]]},{"name":"mst","tags":{"agent":"A","ns":"m2"},"columns":["time","ad_rmse_ext"],"values":[["2025-03-03T01:04:00Z",1.5]]},{"name":"mst","tags":{"agent":"B","ns":"m1"},"columns":["time","ad_rmse_ext"],"values":[["2025-03-03T01:09:00Z",0.8571428571428571]]},{"name":"mst","tags":{"agent":"B","ns":"m2"},"columns":["time","ad_rmse_ext"],"values":[["2025-03-03T01:15:00Z",2]]}]}]}`,
+		},
+		{
+			name:    "ad_rmse_ext float",
+			command: `SELECT ad_rmse_ext(metric_v1) FROM db0.rp0.mst group by agent,ns`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","tags":{"agent":"A","ns":"m1"},"columns":["time","ad_rmse_ext"],"values":[["2025-03-03T01:00:00Z",0.6666666666666666]]},{"name":"mst","tags":{"agent":"A","ns":"m2"},"columns":["time","ad_rmse_ext"],"values":[["2025-03-03T01:04:00Z",1.0050239046049472]]},{"name":"mst","tags":{"agent":"B","ns":"m1"},"columns":["time","ad_rmse_ext"],"values":[["2025-03-03T01:09:00Z",1.760009355294258]]}]}]}`,
+		},
+	}...)
+
+	for i, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if i == 0 {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
 			}
 			if err := query.Execute(s); err != nil {
 				t.Error(query.Error(err))
@@ -4056,354 +4168,6 @@ func TestServer_top_bottom_nul_column(t *testing.T) {
 	}
 }
 
-func TestServer_Query_ColumnStore(t *testing.T) {
-	t.Parallel()
-	s := OpenServer(NewParseConfig(testCfgPath))
-	defer s.Close()
-
-	// set infinite retention policy as we are inserting data in the past and don't want retention policy enforcement to make this test racy
-	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := s.CreateMeasurement("CREATE MEASUREMENT db0.rp0.cpu (region tag,  az tag, v1 int64,  v2 float64,  v3 bool, v4 string) WITH  ENGINETYPE = columnstore  SHARDKEY az,region PRIMARYKEY az,region,time"); err != nil {
-		t.Fatal(err)
-	}
-
-	test := NewTest("db0", "rp0")
-
-	writes := []string{}
-	for i := 0; i < 10; i++ {
-		for j := 0; j < 2048; j++ {
-			data := fmt.Sprintf(`cpu,region=region_%d,az=az_%d v1=%di,v2=%f,v3=%t,v4="%s" %d`,
-				i, i, i*2048+j, generateFloat(i*2048+j), generateBool(i*2048+j), generateString(i*2048+j), time.Unix(int64(i*2048+j), int64(0)).UTC().UnixNano())
-			writes = append(writes, data)
-		}
-	}
-	test.writes = Writes{
-		&Write{data: strings.Join(writes, "\n")},
-	}
-
-	test.addQueries([]*Query{
-		// 1. multi-column *
-		{
-			name:    "count(time)",
-			params:  url.Values{"inner_chunk_size": []string{"2"}},
-			command: `select count(time) from db0.rp0.cpu`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","count"],"values":[["1970-01-01T00:00:00Z",20480]]}]}]}`,
-			skip:    true,
-		},
-		{
-			name:    "exact count(time)",
-			params:  url.Values{"inner_chunk_size": []string{"2"}},
-			command: `select /*+ Exact_Statistic_Query */ count(time) from db0.rp0.cpu`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","count"],"values":[["1970-01-01T00:00:00Z",20480]]}]}]}`,
-		},
-		{
-			name:    "count(*)",
-			params:  url.Values{"inner_chunk_size": []string{"2"}},
-			command: `select count(*) from db0.rp0.cpu`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","count_v1","count_v2","count_v3","count_v4"],"values":[["1970-01-01T00:00:00Z",20480,20480,20480,20480]]}]}]}`,
-		},
-		{
-			name:    "mean(*)",
-			params:  url.Values{"inner_chunk_size": []string{"2"}},
-			command: `select mean(*) from db0.rp0.cpu`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","mean_v1","mean_v2"],"values":[["1970-01-01T00:00:00Z",10239.5,10239.5]]}]}]}`,
-		},
-		{
-			name:    "sum(*)",
-			params:  url.Values{"inner_chunk_size": []string{"2"}},
-			command: `select sum(*) from db0.rp0.cpu`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","sum_v1","sum_v2"],"values":[["1970-01-01T00:00:00Z",209704960,209704960]]}]}]}`,
-		},
-		{
-			name:    "min(v1),min(v2)",
-			params:  url.Values{"inner_chunk_size": []string{"2"}},
-			command: `select min(v1),min(v2) from db0.rp0.cpu`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","min","min_1"],"values":[["1970-01-01T00:00:00Z",0,0]]}]}]}`,
-		},
-		{
-			name:    "max(v1),max(v2)",
-			params:  url.Values{"inner_chunk_size": []string{"2"}},
-			command: `select max(v1),max(v2) from db0.rp0.cpu`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","max","max_1"],"values":[["1970-01-01T00:00:00Z",20479,20479]]}]}]}`,
-		},
-		{
-			name:    "first(*)",
-			params:  url.Values{"inner_chunk_size": []string{"2"}},
-			command: `select first(*) from db0.rp0.cpu`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","first_v1","first_v2","first_v3","first_v4"],"values":[["1970-01-01T00:00:00Z",0,0,true,"abc0"]]}]}]}`,
-		},
-		{
-			name:    "last(*)",
-			params:  url.Values{"inner_chunk_size": []string{"2"}},
-			command: `select last(*) from db0.rp0.cpu`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","last_v1","last_v2","last_v3","last_v4"],"values":[["1970-01-01T00:00:00Z",20479,20479,false,"abc20479"]]}]}]}`,
-		},
-		{
-			name:    "percentile(*, 50)",
-			params:  url.Values{"inner_chunk_size": []string{"2"}},
-			command: `select percentile(*, 50) from db0.rp0.cpu`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","percentile_v1","percentile_v2"],"values":[["1970-01-01T00:00:00Z",10239,10239]]}]}]}`,
-		},
-
-		// 2. multi-column
-		{
-			name:    "count(time) group by time",
-			params:  url.Values{"inner_chunk_size": []string{"1"}},
-			command: `select count(time) from db0.rp0.cpu where time >= '1970-01-01T00:00:00Z' AND time <= '1970-01-01T05:41:19Z' group by time(1h) fill(0) order by time asc`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","count"],"values":[["1970-01-01T00:00:00Z",3600],["1970-01-01T01:00:00Z",3600],["1970-01-01T02:00:00Z",3600],["1970-01-01T03:00:00Z",3600],["1970-01-01T04:00:00Z",3600],["1970-01-01T05:00:00Z",2480]]}]}]}`,
-		},
-		{
-			name:    "count(time) group by *",
-			params:  url.Values{"inner_chunk_size": []string{"1"}},
-			command: `select count(time) from db0.rp0.cpu where time >= '1970-01-01T00:00:00Z' AND time <= '1970-01-01T05:41:19Z' group by * order by az asc, region asc`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","tags":{"az":"az_0","region":"region_0"},"columns":["time","count"],"values":[["1970-01-01T00:00:00Z",2048]]},{"name":"cpu","tags":{"az":"az_1","region":"region_1"},"columns":["time","count"],"values":[["1970-01-01T00:00:00Z",2048]]},{"name":"cpu","tags":{"az":"az_2","region":"region_2"},"columns":["time","count"],"values":[["1970-01-01T00:00:00Z",2048]]},{"name":"cpu","tags":{"az":"az_3","region":"region_3"},"columns":["time","count"],"values":[["1970-01-01T00:00:00Z",2048]]},{"name":"cpu","tags":{"az":"az_4","region":"region_4"},"columns":["time","count"],"values":[["1970-01-01T00:00:00Z",2048]]},{"name":"cpu","tags":{"az":"az_5","region":"region_5"},"columns":["time","count"],"values":[["1970-01-01T00:00:00Z",2048]]},{"name":"cpu","tags":{"az":"az_6","region":"region_6"},"columns":["time","count"],"values":[["1970-01-01T00:00:00Z",2048]]},{"name":"cpu","tags":{"az":"az_7","region":"region_7"},"columns":["time","count"],"values":[["1970-01-01T00:00:00Z",2048]]},{"name":"cpu","tags":{"az":"az_8","region":"region_8"},"columns":["time","count"],"values":[["1970-01-01T00:00:00Z",2048]]},{"name":"cpu","tags":{"az":"az_9","region":"region_9"},"columns":["time","count"],"values":[["1970-01-01T00:00:00Z",2048]]}]}]}`,
-		},
-		{
-			name:    "count(time) group by time, *",
-			params:  url.Values{"inner_chunk_size": []string{"1"}},
-			command: `select count(time) from db0.rp0.cpu where time >= '1970-01-01T00:00:00Z' AND time <= '1970-01-01T05:41:19Z' group by time(1h),* fill(0) order by az asc, region asc, time asc`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","tags":{"az":"az_0","region":"region_0"},"columns":["time","count"],"values":[["1970-01-01T00:00:00Z",2048],["1970-01-01T01:00:00Z",0],["1970-01-01T02:00:00Z",0],["1970-01-01T03:00:00Z",0],["1970-01-01T04:00:00Z",0],["1970-01-01T05:00:00Z",0]]},{"name":"cpu","tags":{"az":"az_1","region":"region_1"},"columns":["time","count"],"values":[["1970-01-01T00:00:00Z",1552],["1970-01-01T01:00:00Z",496],["1970-01-01T02:00:00Z",0],["1970-01-01T03:00:00Z",0],["1970-01-01T04:00:00Z",0],["1970-01-01T05:00:00Z",0]]},{"name":"cpu","tags":{"az":"az_2","region":"region_2"},"columns":["time","count"],"values":[["1970-01-01T00:00:00Z",0],["1970-01-01T01:00:00Z",2048],["1970-01-01T02:00:00Z",0],["1970-01-01T03:00:00Z",0],["1970-01-01T04:00:00Z",0],["1970-01-01T05:00:00Z",0]]},{"name":"cpu","tags":{"az":"az_3","region":"region_3"},"columns":["time","count"],"values":[["1970-01-01T00:00:00Z",0],["1970-01-01T01:00:00Z",1056],["1970-01-01T02:00:00Z",992],["1970-01-01T03:00:00Z",0],["1970-01-01T04:00:00Z",0],["1970-01-01T05:00:00Z",0]]},{"name":"cpu","tags":{"az":"az_4","region":"region_4"},"columns":["time","count"],"values":[["1970-01-01T00:00:00Z",0],["1970-01-01T01:00:00Z",0],["1970-01-01T02:00:00Z",2048],["1970-01-01T03:00:00Z",0],["1970-01-01T04:00:00Z",0],["1970-01-01T05:00:00Z",0]]},{"name":"cpu","tags":{"az":"az_5","region":"region_5"},"columns":["time","count"],"values":[["1970-01-01T00:00:00Z",0],["1970-01-01T01:00:00Z",0],["1970-01-01T02:00:00Z",560],["1970-01-01T03:00:00Z",1488],["1970-01-01T04:00:00Z",0],["1970-01-01T05:00:00Z",0]]},{"name":"cpu","tags":{"az":"az_6","region":"region_6"},"columns":["time","count"],"values":[["1970-01-01T00:00:00Z",0],["1970-01-01T01:00:00Z",0],["1970-01-01T02:00:00Z",0],["1970-01-01T03:00:00Z",2048],["1970-01-01T04:00:00Z",0],["1970-01-01T05:00:00Z",0]]},{"name":"cpu","tags":{"az":"az_7","region":"region_7"},"columns":["time","count"],"values":[["1970-01-01T00:00:00Z",0],["1970-01-01T01:00:00Z",0],["1970-01-01T02:00:00Z",0],["1970-01-01T03:00:00Z",64],["1970-01-01T04:00:00Z",1984],["1970-01-01T05:00:00Z",0]]},{"name":"cpu","tags":{"az":"az_8","region":"region_8"},"columns":["time","count"],"values":[["1970-01-01T00:00:00Z",0],["1970-01-01T01:00:00Z",0],["1970-01-01T02:00:00Z",0],["1970-01-01T03:00:00Z",0],["1970-01-01T04:00:00Z",1616],["1970-01-01T05:00:00Z",432]]},{"name":"cpu","tags":{"az":"az_9","region":"region_9"},"columns":["time","count"],"values":[["1970-01-01T00:00:00Z",0],["1970-01-01T01:00:00Z",0],["1970-01-01T02:00:00Z",0],["1970-01-01T03:00:00Z",0],["1970-01-01T04:00:00Z",0],["1970-01-01T05:00:00Z",2048]]}]}]}`,
-		},
-		{
-			name:    "count(*) group by time",
-			params:  url.Values{"inner_chunk_size": []string{"1"}},
-			command: `select count(*) from db0.rp0.cpu where time >= '1970-01-01T00:00:00Z' AND time <= '1970-01-01T05:41:19Z' group by time(1h) fill(0) order by time`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","count_v1","count_v2","count_v3","count_v4"],"values":[["1970-01-01T00:00:00Z",3600,3600,3600,3600],["1970-01-01T01:00:00Z",3600,3600,3600,3600],["1970-01-01T02:00:00Z",3600,3600,3600,3600],["1970-01-01T03:00:00Z",3600,3600,3600,3600],["1970-01-01T04:00:00Z",3600,3600,3600,3600],["1970-01-01T05:00:00Z",2480,2480,2480,2480]]}]}]}`,
-		},
-		{
-			name:    "count(*) group by *",
-			params:  url.Values{"inner_chunk_size": []string{"1"}},
-			command: `select count(*) from db0.rp0.cpu where time >= '1970-01-01T00:00:00Z' AND time <= '1970-01-01T05:41:19Z' group by * order by az asc, region asc`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","tags":{"az":"az_0","region":"region_0"},"columns":["time","count_v1","count_v2","count_v3","count_v4"],"values":[["1970-01-01T00:00:00Z",2048,2048,2048,2048]]},{"name":"cpu","tags":{"az":"az_1","region":"region_1"},"columns":["time","count_v1","count_v2","count_v3","count_v4"],"values":[["1970-01-01T00:00:00Z",2048,2048,2048,2048]]},{"name":"cpu","tags":{"az":"az_2","region":"region_2"},"columns":["time","count_v1","count_v2","count_v3","count_v4"],"values":[["1970-01-01T00:00:00Z",2048,2048,2048,2048]]},{"name":"cpu","tags":{"az":"az_3","region":"region_3"},"columns":["time","count_v1","count_v2","count_v3","count_v4"],"values":[["1970-01-01T00:00:00Z",2048,2048,2048,2048]]},{"name":"cpu","tags":{"az":"az_4","region":"region_4"},"columns":["time","count_v1","count_v2","count_v3","count_v4"],"values":[["1970-01-01T00:00:00Z",2048,2048,2048,2048]]},{"name":"cpu","tags":{"az":"az_5","region":"region_5"},"columns":["time","count_v1","count_v2","count_v3","count_v4"],"values":[["1970-01-01T00:00:00Z",2048,2048,2048,2048]]},{"name":"cpu","tags":{"az":"az_6","region":"region_6"},"columns":["time","count_v1","count_v2","count_v3","count_v4"],"values":[["1970-01-01T00:00:00Z",2048,2048,2048,2048]]},{"name":"cpu","tags":{"az":"az_7","region":"region_7"},"columns":["time","count_v1","count_v2","count_v3","count_v4"],"values":[["1970-01-01T00:00:00Z",2048,2048,2048,2048]]},{"name":"cpu","tags":{"az":"az_8","region":"region_8"},"columns":["time","count_v1","count_v2","count_v3","count_v4"],"values":[["1970-01-01T00:00:00Z",2048,2048,2048,2048]]},{"name":"cpu","tags":{"az":"az_9","region":"region_9"},"columns":["time","count_v1","count_v2","count_v3","count_v4"],"values":[["1970-01-01T00:00:00Z",2048,2048,2048,2048]]}]}]}`,
-		},
-		{
-			name:    "count(*) group by time, *",
-			params:  url.Values{"inner_chunk_size": []string{"1"}},
-			command: `select count(*) from db0.rp0.cpu where time >= '1970-01-01T00:00:00Z' AND time <= '1970-01-01T05:41:19Z' group by time(1h),* fill(0) order by az asc, region asc, time asc`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","tags":{"az":"az_0","region":"region_0"},"columns":["time","count_v1","count_v2","count_v3","count_v4"],"values":[["1970-01-01T00:00:00Z",2048,2048,2048,2048],["1970-01-01T01:00:00Z",0,0,0,0],["1970-01-01T02:00:00Z",0,0,0,0],["1970-01-01T03:00:00Z",0,0,0,0],["1970-01-01T04:00:00Z",0,0,0,0],["1970-01-01T05:00:00Z",0,0,0,0]]},{"name":"cpu","tags":{"az":"az_1","region":"region_1"},"columns":["time","count_v1","count_v2","count_v3","count_v4"],"values":[["1970-01-01T00:00:00Z",1552,1552,1552,1552],["1970-01-01T01:00:00Z",496,496,496,496],["1970-01-01T02:00:00Z",0,0,0,0],["1970-01-01T03:00:00Z",0,0,0,0],["1970-01-01T04:00:00Z",0,0,0,0],["1970-01-01T05:00:00Z",0,0,0,0]]},{"name":"cpu","tags":{"az":"az_2","region":"region_2"},"columns":["time","count_v1","count_v2","count_v3","count_v4"],"values":[["1970-01-01T00:00:00Z",0,0,0,0],["1970-01-01T01:00:00Z",2048,2048,2048,2048],["1970-01-01T02:00:00Z",0,0,0,0],["1970-01-01T03:00:00Z",0,0,0,0],["1970-01-01T04:00:00Z",0,0,0,0],["1970-01-01T05:00:00Z",0,0,0,0]]},{"name":"cpu","tags":{"az":"az_3","region":"region_3"},"columns":["time","count_v1","count_v2","count_v3","count_v4"],"values":[["1970-01-01T00:00:00Z",0,0,0,0],["1970-01-01T01:00:00Z",1056,1056,1056,1056],["1970-01-01T02:00:00Z",992,992,992,992],["1970-01-01T03:00:00Z",0,0,0,0],["1970-01-01T04:00:00Z",0,0,0,0],["1970-01-01T05:00:00Z",0,0,0,0]]},{"name":"cpu","tags":{"az":"az_4","region":"region_4"},"columns":["time","count_v1","count_v2","count_v3","count_v4"],"values":[["1970-01-01T00:00:00Z",0,0,0,0],["1970-01-01T01:00:00Z",0,0,0,0],["1970-01-01T02:00:00Z",2048,2048,2048,2048],["1970-01-01T03:00:00Z",0,0,0,0],["1970-01-01T04:00:00Z",0,0,0,0],["1970-01-01T05:00:00Z",0,0,0,0]]},{"name":"cpu","tags":{"az":"az_5","region":"region_5"},"columns":["time","count_v1","count_v2","count_v3","count_v4"],"values":[["1970-01-01T00:00:00Z",0,0,0,0],["1970-01-01T01:00:00Z",0,0,0,0],["1970-01-01T02:00:00Z",560,560,560,560],["1970-01-01T03:00:00Z",1488,1488,1488,1488],["1970-01-01T04:00:00Z",0,0,0,0],["1970-01-01T05:00:00Z",0,0,0,0]]},{"name":"cpu","tags":{"az":"az_6","region":"region_6"},"columns":["time","count_v1","count_v2","count_v3","count_v4"],"values":[["1970-01-01T00:00:00Z",0,0,0,0],["1970-01-01T01:00:00Z",0,0,0,0],["1970-01-01T02:00:00Z",0,0,0,0],["1970-01-01T03:00:00Z",2048,2048,2048,2048],["1970-01-01T04:00:00Z",0,0,0,0],["1970-01-01T05:00:00Z",0,0,0,0]]},{"name":"cpu","tags":{"az":"az_7","region":"region_7"},"columns":["time","count_v1","count_v2","count_v3","count_v4"],"values":[["1970-01-01T00:00:00Z",0,0,0,0],["1970-01-01T01:00:00Z",0,0,0,0],["1970-01-01T02:00:00Z",0,0,0,0],["1970-01-01T03:00:00Z",64,64,64,64],["1970-01-01T04:00:00Z",1984,1984,1984,1984],["1970-01-01T05:00:00Z",0,0,0,0]]},{"name":"cpu","tags":{"az":"az_8","region":"region_8"},"columns":["time","count_v1","count_v2","count_v3","count_v4"],"values":[["1970-01-01T00:00:00Z",0,0,0,0],["1970-01-01T01:00:00Z",0,0,0,0],["1970-01-01T02:00:00Z",0,0,0,0],["1970-01-01T03:00:00Z",0,0,0,0],["1970-01-01T04:00:00Z",1616,1616,1616,1616],["1970-01-01T05:00:00Z",432,432,432,432]]},{"name":"cpu","tags":{"az":"az_9","region":"region_9"},"columns":["time","count_v1","count_v2","count_v3","count_v4"],"values":[["1970-01-01T00:00:00Z",0,0,0,0],["1970-01-01T01:00:00Z",0,0,0,0],["1970-01-01T02:00:00Z",0,0,0,0],["1970-01-01T03:00:00Z",0,0,0,0],["1970-01-01T04:00:00Z",0,0,0,0],["1970-01-01T05:00:00Z",2048,2048,2048,2048]]}]}]}`,
-		},
-
-		{
-			name:    "mean(*) group by time",
-			params:  url.Values{"inner_chunk_size": []string{"1"}},
-			command: `select mean(*) from db0.rp0.cpu where time >= '1970-01-01T00:00:00Z' AND time <= '1970-01-01T05:41:19Z' group by time(1h) order by time`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","mean_v1","mean_v2"],"values":[["1970-01-01T00:00:00Z",1799.5,1799.5],["1970-01-01T01:00:00Z",5399.5,5399.5],["1970-01-01T02:00:00Z",8999.5,8999.5],["1970-01-01T03:00:00Z",12599.5,12599.5],["1970-01-01T04:00:00Z",16199.5,16199.5],["1970-01-01T05:00:00Z",19239.5,19239.5]]}]}]}`,
-		},
-		{
-			name:    "mean(*) group by *",
-			params:  url.Values{"inner_chunk_size": []string{"1"}},
-			command: `select mean(*) from db0.rp0.cpu where time >= '1970-01-01T00:00:00Z' AND time <= '1970-01-01T05:41:19Z' group by * order by az asc, region asc`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","tags":{"az":"az_0","region":"region_0"},"columns":["time","mean_v1","mean_v2"],"values":[["1970-01-01T00:00:00Z",1023.5,1023.5]]},{"name":"cpu","tags":{"az":"az_1","region":"region_1"},"columns":["time","mean_v1","mean_v2"],"values":[["1970-01-01T00:00:00Z",3071.5,3071.5]]},{"name":"cpu","tags":{"az":"az_2","region":"region_2"},"columns":["time","mean_v1","mean_v2"],"values":[["1970-01-01T00:00:00Z",5119.5,5119.5]]},{"name":"cpu","tags":{"az":"az_3","region":"region_3"},"columns":["time","mean_v1","mean_v2"],"values":[["1970-01-01T00:00:00Z",7167.5,7167.5]]},{"name":"cpu","tags":{"az":"az_4","region":"region_4"},"columns":["time","mean_v1","mean_v2"],"values":[["1970-01-01T00:00:00Z",9215.5,9215.5]]},{"name":"cpu","tags":{"az":"az_5","region":"region_5"},"columns":["time","mean_v1","mean_v2"],"values":[["1970-01-01T00:00:00Z",11263.5,11263.5]]},{"name":"cpu","tags":{"az":"az_6","region":"region_6"},"columns":["time","mean_v1","mean_v2"],"values":[["1970-01-01T00:00:00Z",13311.5,13311.5]]},{"name":"cpu","tags":{"az":"az_7","region":"region_7"},"columns":["time","mean_v1","mean_v2"],"values":[["1970-01-01T00:00:00Z",15359.5,15359.5]]},{"name":"cpu","tags":{"az":"az_8","region":"region_8"},"columns":["time","mean_v1","mean_v2"],"values":[["1970-01-01T00:00:00Z",17407.5,17407.5]]},{"name":"cpu","tags":{"az":"az_9","region":"region_9"},"columns":["time","mean_v1","mean_v2"],"values":[["1970-01-01T00:00:00Z",19455.5,19455.5]]}]}]}`,
-		},
-		{
-			name:    "mean(*) group by time, *",
-			params:  url.Values{"inner_chunk_size": []string{"1"}},
-			command: `select mean(*) from db0.rp0.cpu where time >= '1970-01-01T00:00:00Z' AND time <= '1970-01-01T05:41:19Z' group by time(1h),* order by az asc, region asc, time asc`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","tags":{"az":"az_0","region":"region_0"},"columns":["time","mean_v1","mean_v2"],"values":[["1970-01-01T00:00:00Z",1023.5,1023.5],["1970-01-01T01:00:00Z",null,null],["1970-01-01T02:00:00Z",null,null],["1970-01-01T03:00:00Z",null,null],["1970-01-01T04:00:00Z",null,null],["1970-01-01T05:00:00Z",null,null]]},{"name":"cpu","tags":{"az":"az_1","region":"region_1"},"columns":["time","mean_v1","mean_v2"],"values":[["1970-01-01T00:00:00Z",2823.5,2823.5],["1970-01-01T01:00:00Z",3847.5,3847.5],["1970-01-01T02:00:00Z",null,null],["1970-01-01T03:00:00Z",null,null],["1970-01-01T04:00:00Z",null,null],["1970-01-01T05:00:00Z",null,null]]},{"name":"cpu","tags":{"az":"az_2","region":"region_2"},"columns":["time","mean_v1","mean_v2"],"values":[["1970-01-01T00:00:00Z",null,null],["1970-01-01T01:00:00Z",5119.5,5119.5],["1970-01-01T02:00:00Z",null,null],["1970-01-01T03:00:00Z",null,null],["1970-01-01T04:00:00Z",null,null],["1970-01-01T05:00:00Z",null,null]]},{"name":"cpu","tags":{"az":"az_3","region":"region_3"},"columns":["time","mean_v1","mean_v2"],"values":[["1970-01-01T00:00:00Z",null,null],["1970-01-01T01:00:00Z",6671.5,6671.5],["1970-01-01T02:00:00Z",7695.5,7695.5],["1970-01-01T03:00:00Z",null,null],["1970-01-01T04:00:00Z",null,null],["1970-01-01T05:00:00Z",null,null]]},{"name":"cpu","tags":{"az":"az_4","region":"region_4"},"columns":["time","mean_v1","mean_v2"],"values":[["1970-01-01T00:00:00Z",null,null],["1970-01-01T01:00:00Z",null,null],["1970-01-01T02:00:00Z",9215.5,9215.5],["1970-01-01T03:00:00Z",null,null],["1970-01-01T04:00:00Z",null,null],["1970-01-01T05:00:00Z",null,null]]},{"name":"cpu","tags":{"az":"az_5","region":"region_5"},"columns":["time","mean_v1","mean_v2"],"values":[["1970-01-01T00:00:00Z",null,null],["1970-01-01T01:00:00Z",null,null],["1970-01-01T02:00:00Z",10519.5,10519.5],["1970-01-01T03:00:00Z",11543.5,11543.5],["1970-01-01T04:00:00Z",null,null],["1970-01-01T05:00:00Z",null,null]]},{"name":"cpu","tags":{"az":"az_6","region":"region_6"},"columns":["time","mean_v1","mean_v2"],"values":[["1970-01-01T00:00:00Z",null,null],["1970-01-01T01:00:00Z",null,null],["1970-01-01T02:00:00Z",null,null],["1970-01-01T03:00:00Z",13311.5,13311.5],["1970-01-01T04:00:00Z",null,null],["1970-01-01T05:00:00Z",null,null]]},{"name":"cpu","tags":{"az":"az_7","region":"region_7"},"columns":["time","mean_v1","mean_v2"],"values":[["1970-01-01T00:00:00Z",null,null],["1970-01-01T01:00:00Z",null,null],["1970-01-01T02:00:00Z",null,null],["1970-01-01T03:00:00Z",14367.5,14367.5],["1970-01-01T04:00:00Z",15391.5,15391.5],["1970-01-01T05:00:00Z",null,null]]},{"name":"cpu","tags":{"az":"az_8","region":"region_8"},"columns":["time","mean_v1","mean_v2"],"values":[["1970-01-01T00:00:00Z",null,null],["1970-01-01T01:00:00Z",null,null],["1970-01-01T02:00:00Z",null,null],["1970-01-01T03:00:00Z",null,null],["1970-01-01T04:00:00Z",17191.5,17191.5],["1970-01-01T05:00:00Z",18215.5,18215.5]]},{"name":"cpu","tags":{"az":"az_9","region":"region_9"},"columns":["time","mean_v1","mean_v2"],"values":[["1970-01-01T00:00:00Z",null,null],["1970-01-01T01:00:00Z",null,null],["1970-01-01T02:00:00Z",null,null],["1970-01-01T03:00:00Z",null,null],["1970-01-01T04:00:00Z",null,null],["1970-01-01T05:00:00Z",19455.5,19455.5]]}]}]}`,
-		},
-
-		{
-			name:    "sum(*) group by time",
-			params:  url.Values{"inner_chunk_size": []string{"1"}},
-			command: `select sum(*) from db0.rp0.cpu where time >= '1970-01-01T00:00:00Z' AND time <= '1970-01-01T05:41:19Z' group by time(1h) order by time`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","sum_v1","sum_v2"],"values":[["1970-01-01T00:00:00Z",6478200,6478200],["1970-01-01T01:00:00Z",19438200,19438200],["1970-01-01T02:00:00Z",32398200,32398200],["1970-01-01T03:00:00Z",45358200,45358200],["1970-01-01T04:00:00Z",58318200,58318200],["1970-01-01T05:00:00Z",47713960,47713960]]}]}]}`,
-		},
-		{
-			name:    "sum(*) group by *",
-			params:  url.Values{"inner_chunk_size": []string{"1"}},
-			command: `select sum(*) from db0.rp0.cpu where time >= '1970-01-01T00:00:00Z' AND time <= '1970-01-01T05:41:19Z' group by * order by az asc, region asc`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","tags":{"az":"az_0","region":"region_0"},"columns":["time","sum_v1","sum_v2"],"values":[["1970-01-01T00:00:00Z",2096128,2096128]]},{"name":"cpu","tags":{"az":"az_1","region":"region_1"},"columns":["time","sum_v1","sum_v2"],"values":[["1970-01-01T00:00:00Z",6290432,6290432]]},{"name":"cpu","tags":{"az":"az_2","region":"region_2"},"columns":["time","sum_v1","sum_v2"],"values":[["1970-01-01T00:00:00Z",10484736,10484736]]},{"name":"cpu","tags":{"az":"az_3","region":"region_3"},"columns":["time","sum_v1","sum_v2"],"values":[["1970-01-01T00:00:00Z",14679040,14679040]]},{"name":"cpu","tags":{"az":"az_4","region":"region_4"},"columns":["time","sum_v1","sum_v2"],"values":[["1970-01-01T00:00:00Z",18873344,18873344]]},{"name":"cpu","tags":{"az":"az_5","region":"region_5"},"columns":["time","sum_v1","sum_v2"],"values":[["1970-01-01T00:00:00Z",23067648,23067648]]},{"name":"cpu","tags":{"az":"az_6","region":"region_6"},"columns":["time","sum_v1","sum_v2"],"values":[["1970-01-01T00:00:00Z",27261952,27261952]]},{"name":"cpu","tags":{"az":"az_7","region":"region_7"},"columns":["time","sum_v1","sum_v2"],"values":[["1970-01-01T00:00:00Z",31456256,31456256]]},{"name":"cpu","tags":{"az":"az_8","region":"region_8"},"columns":["time","sum_v1","sum_v2"],"values":[["1970-01-01T00:00:00Z",35650560,35650560]]},{"name":"cpu","tags":{"az":"az_9","region":"region_9"},"columns":["time","sum_v1","sum_v2"],"values":[["1970-01-01T00:00:00Z",39844864,39844864]]}]}]}`,
-		},
-		{
-			name:    "sum(*) group by time, *",
-			params:  url.Values{"inner_chunk_size": []string{"1"}},
-			command: `select sum(*) from db0.rp0.cpu where time >= '1970-01-01T00:00:00Z' AND time <= '1970-01-01T05:41:19Z' group by time(1h),* order by az asc, region asc, time asc`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","tags":{"az":"az_0","region":"region_0"},"columns":["time","sum_v1","sum_v2"],"values":[["1970-01-01T00:00:00Z",2096128,2096128],["1970-01-01T01:00:00Z",null,null],["1970-01-01T02:00:00Z",null,null],["1970-01-01T03:00:00Z",null,null],["1970-01-01T04:00:00Z",null,null],["1970-01-01T05:00:00Z",null,null]]},{"name":"cpu","tags":{"az":"az_1","region":"region_1"},"columns":["time","sum_v1","sum_v2"],"values":[["1970-01-01T00:00:00Z",4382072,4382072],["1970-01-01T01:00:00Z",1908360,1908360],["1970-01-01T02:00:00Z",null,null],["1970-01-01T03:00:00Z",null,null],["1970-01-01T04:00:00Z",null,null],["1970-01-01T05:00:00Z",null,null]]},{"name":"cpu","tags":{"az":"az_2","region":"region_2"},"columns":["time","sum_v1","sum_v2"],"values":[["1970-01-01T00:00:00Z",null,null],["1970-01-01T01:00:00Z",10484736,10484736],["1970-01-01T02:00:00Z",null,null],["1970-01-01T03:00:00Z",null,null],["1970-01-01T04:00:00Z",null,null],["1970-01-01T05:00:00Z",null,null]]},{"name":"cpu","tags":{"az":"az_3","region":"region_3"},"columns":["time","sum_v1","sum_v2"],"values":[["1970-01-01T00:00:00Z",null,null],["1970-01-01T01:00:00Z",7045104,7045104],["1970-01-01T02:00:00Z",7633936,7633936],["1970-01-01T03:00:00Z",null,null],["1970-01-01T04:00:00Z",null,null],["1970-01-01T05:00:00Z",null,null]]},{"name":"cpu","tags":{"az":"az_4","region":"region_4"},"columns":["time","sum_v1","sum_v2"],"values":[["1970-01-01T00:00:00Z",null,null],["1970-01-01T01:00:00Z",null,null],["1970-01-01T02:00:00Z",18873344,18873344],["1970-01-01T03:00:00Z",null,null],["1970-01-01T04:00:00Z",null,null],["1970-01-01T05:00:00Z",null,null]]},{"name":"cpu","tags":{"az":"az_5","region":"region_5"},"columns":["time","sum_v1","sum_v2"],"values":[["1970-01-01T00:00:00Z",null,null],["1970-01-01T01:00:00Z",null,null],["1970-01-01T02:00:00Z",5890920,5890920],["1970-01-01T03:00:00Z",17176728,17176728],["1970-01-01T04:00:00Z",null,null],["1970-01-01T05:00:00Z",null,null]]},{"name":"cpu","tags":{"az":"az_6","region":"region_6"},"columns":["time","sum_v1","sum_v2"],"values":[["1970-01-01T00:00:00Z",null,null],["1970-01-01T01:00:00Z",null,null],["1970-01-01T02:00:00Z",null,null],["1970-01-01T03:00:00Z",27261952,27261952],["1970-01-01T04:00:00Z",null,null],["1970-01-01T05:00:00Z",null,null]]},{"name":"cpu","tags":{"az":"az_7","region":"region_7"},"columns":["time","sum_v1","sum_v2"],"values":[["1970-01-01T00:00:00Z",null,null],["1970-01-01T01:00:00Z",null,null],["1970-01-01T02:00:00Z",null,null],["1970-01-01T03:00:00Z",919520,919520],["1970-01-01T04:00:00Z",30536736,30536736],["1970-01-01T05:00:00Z",null,null]]},{"name":"cpu","tags":{"az":"az_8","region":"region_8"},"columns":["time","sum_v1","sum_v2"],"values":[["1970-01-01T00:00:00Z",null,null],["1970-01-01T01:00:00Z",null,null],["1970-01-01T02:00:00Z",null,null],["1970-01-01T03:00:00Z",null,null],["1970-01-01T04:00:00Z",27781464,27781464],["1970-01-01T05:00:00Z",7869096,7869096]]},{"name":"cpu","tags":{"az":"az_9","region":"region_9"},"columns":["time","sum_v1","sum_v2"],"values":[["1970-01-01T00:00:00Z",null,null],["1970-01-01T01:00:00Z",null,null],["1970-01-01T02:00:00Z",null,null],["1970-01-01T03:00:00Z",null,null],["1970-01-01T04:00:00Z",null,null],["1970-01-01T05:00:00Z",39844864,39844864]]}]}]}`,
-		},
-
-		{
-			name:    "min(v1),min(v2) group by time",
-			params:  url.Values{"inner_chunk_size": []string{"1"}},
-			command: `select min(v1),min(v2) from db0.rp0.cpu where time >= '1970-01-01T00:00:00Z' AND time <= '1970-01-01T05:41:19Z' group by time(1h) order by time asc`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","min","min_1"],"values":[["1970-01-01T00:00:00Z",0,0],["1970-01-01T01:00:00Z",3600,3600],["1970-01-01T02:00:00Z",7200,7200],["1970-01-01T03:00:00Z",10800,10800],["1970-01-01T04:00:00Z",14400,14400],["1970-01-01T05:00:00Z",18000,18000]]}]}]}`,
-		},
-		{
-			name:    "min(v1),min(v2) group by *",
-			params:  url.Values{"inner_chunk_size": []string{"1"}},
-			command: `select min(v1),min(v2) from db0.rp0.cpu where time >= '1970-01-01T00:00:00Z' AND time <= '1970-01-01T05:41:19Z' group by * order by az asc, region asc`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","tags":{"az":"az_0","region":"region_0"},"columns":["time","min","min_1"],"values":[["1970-01-01T00:00:00Z",0,0]]},{"name":"cpu","tags":{"az":"az_1","region":"region_1"},"columns":["time","min","min_1"],"values":[["1970-01-01T00:00:00Z",2048,2048]]},{"name":"cpu","tags":{"az":"az_2","region":"region_2"},"columns":["time","min","min_1"],"values":[["1970-01-01T00:00:00Z",4096,4096]]},{"name":"cpu","tags":{"az":"az_3","region":"region_3"},"columns":["time","min","min_1"],"values":[["1970-01-01T00:00:00Z",6144,6144]]},{"name":"cpu","tags":{"az":"az_4","region":"region_4"},"columns":["time","min","min_1"],"values":[["1970-01-01T00:00:00Z",8192,8192]]},{"name":"cpu","tags":{"az":"az_5","region":"region_5"},"columns":["time","min","min_1"],"values":[["1970-01-01T00:00:00Z",10240,10240]]},{"name":"cpu","tags":{"az":"az_6","region":"region_6"},"columns":["time","min","min_1"],"values":[["1970-01-01T00:00:00Z",12288,12288]]},{"name":"cpu","tags":{"az":"az_7","region":"region_7"},"columns":["time","min","min_1"],"values":[["1970-01-01T00:00:00Z",14336,14336]]},{"name":"cpu","tags":{"az":"az_8","region":"region_8"},"columns":["time","min","min_1"],"values":[["1970-01-01T00:00:00Z",16384,16384]]},{"name":"cpu","tags":{"az":"az_9","region":"region_9"},"columns":["time","min","min_1"],"values":[["1970-01-01T00:00:00Z",18432,18432]]}]}]}`,
-		},
-		{
-			name:    "min(v1),min(v2) group by time, *",
-			params:  url.Values{"inner_chunk_size": []string{"1"}},
-			command: `select min(v1),min(v2) from db0.rp0.cpu where time >= '1970-01-01T00:00:00Z' AND time <= '1970-01-01T05:41:19Z' group by time(1h),* order by az asc, region asc, time asc`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","tags":{"az":"az_0","region":"region_0"},"columns":["time","min","min_1"],"values":[["1970-01-01T00:00:00Z",0,0],["1970-01-01T01:00:00Z",null,null],["1970-01-01T02:00:00Z",null,null],["1970-01-01T03:00:00Z",null,null],["1970-01-01T04:00:00Z",null,null],["1970-01-01T05:00:00Z",null,null]]},{"name":"cpu","tags":{"az":"az_1","region":"region_1"},"columns":["time","min","min_1"],"values":[["1970-01-01T00:00:00Z",2048,2048],["1970-01-01T01:00:00Z",3600,3600],["1970-01-01T02:00:00Z",null,null],["1970-01-01T03:00:00Z",null,null],["1970-01-01T04:00:00Z",null,null],["1970-01-01T05:00:00Z",null,null]]},{"name":"cpu","tags":{"az":"az_2","region":"region_2"},"columns":["time","min","min_1"],"values":[["1970-01-01T00:00:00Z",null,null],["1970-01-01T01:00:00Z",4096,4096],["1970-01-01T02:00:00Z",null,null],["1970-01-01T03:00:00Z",null,null],["1970-01-01T04:00:00Z",null,null],["1970-01-01T05:00:00Z",null,null]]},{"name":"cpu","tags":{"az":"az_3","region":"region_3"},"columns":["time","min","min_1"],"values":[["1970-01-01T00:00:00Z",null,null],["1970-01-01T01:00:00Z",6144,6144],["1970-01-01T02:00:00Z",7200,7200],["1970-01-01T03:00:00Z",null,null],["1970-01-01T04:00:00Z",null,null],["1970-01-01T05:00:00Z",null,null]]},{"name":"cpu","tags":{"az":"az_4","region":"region_4"},"columns":["time","min","min_1"],"values":[["1970-01-01T00:00:00Z",null,null],["1970-01-01T01:00:00Z",null,null],["1970-01-01T02:00:00Z",8192,8192],["1970-01-01T03:00:00Z",null,null],["1970-01-01T04:00:00Z",null,null],["1970-01-01T05:00:00Z",null,null]]},{"name":"cpu","tags":{"az":"az_5","region":"region_5"},"columns":["time","min","min_1"],"values":[["1970-01-01T00:00:00Z",null,null],["1970-01-01T01:00:00Z",null,null],["1970-01-01T02:00:00Z",10240,10240],["1970-01-01T03:00:00Z",10800,10800],["1970-01-01T04:00:00Z",null,null],["1970-01-01T05:00:00Z",null,null]]},{"name":"cpu","tags":{"az":"az_6","region":"region_6"},"columns":["time","min","min_1"],"values":[["1970-01-01T00:00:00Z",null,null],["1970-01-01T01:00:00Z",null,null],["1970-01-01T02:00:00Z",null,null],["1970-01-01T03:00:00Z",12288,12288],["1970-01-01T04:00:00Z",null,null],["1970-01-01T05:00:00Z",null,null]]},{"name":"cpu","tags":{"az":"az_7","region":"region_7"},"columns":["time","min","min_1"],"values":[["1970-01-01T00:00:00Z",null,null],["1970-01-01T01:00:00Z",null,null],["1970-01-01T02:00:00Z",null,null],["1970-01-01T03:00:00Z",14336,14336],["1970-01-01T04:00:00Z",14400,14400],["1970-01-01T05:00:00Z",null,null]]},{"name":"cpu","tags":{"az":"az_8","region":"region_8"},"columns":["time","min","min_1"],"values":[["1970-01-01T00:00:00Z",null,null],["1970-01-01T01:00:00Z",null,null],["1970-01-01T02:00:00Z",null,null],["1970-01-01T03:00:00Z",null,null],["1970-01-01T04:00:00Z",16384,16384],["1970-01-01T05:00:00Z",18000,18000]]},{"name":"cpu","tags":{"az":"az_9","region":"region_9"},"columns":["time","min","min_1"],"values":[["1970-01-01T00:00:00Z",null,null],["1970-01-01T01:00:00Z",null,null],["1970-01-01T02:00:00Z",null,null],["1970-01-01T03:00:00Z",null,null],["1970-01-01T04:00:00Z",null,null],["1970-01-01T05:00:00Z",18432,18432]]}]}]}`,
-		},
-
-		{
-			name:    "max(v1),max(v2) group by time",
-			params:  url.Values{"inner_chunk_size": []string{"1"}},
-			command: `select max(v1),max(v2) from db0.rp0.cpu where time >= '1970-01-01T00:00:00Z' AND time <= '1970-01-01T05:41:19Z' group by time(1h) order by time asc`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","max","max_1"],"values":[["1970-01-01T00:00:00Z",3599,3599],["1970-01-01T01:00:00Z",7199,7199],["1970-01-01T02:00:00Z",10799,10799],["1970-01-01T03:00:00Z",14399,14399],["1970-01-01T04:00:00Z",17999,17999],["1970-01-01T05:00:00Z",20479,20479]]}]}]}`,
-		},
-		{
-			name:    "max(v1),max(v2) group by *",
-			params:  url.Values{"inner_chunk_size": []string{"1"}},
-			command: `select max(v1),max(v2) from db0.rp0.cpu where time >= '1970-01-01T00:00:00Z' AND time <= '1970-01-01T05:41:19Z' group by * order by az asc, region asc`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","tags":{"az":"az_0","region":"region_0"},"columns":["time","max","max_1"],"values":[["1970-01-01T00:00:00Z",2047,2047]]},{"name":"cpu","tags":{"az":"az_1","region":"region_1"},"columns":["time","max","max_1"],"values":[["1970-01-01T00:00:00Z",4095,4095]]},{"name":"cpu","tags":{"az":"az_2","region":"region_2"},"columns":["time","max","max_1"],"values":[["1970-01-01T00:00:00Z",6143,6143]]},{"name":"cpu","tags":{"az":"az_3","region":"region_3"},"columns":["time","max","max_1"],"values":[["1970-01-01T00:00:00Z",8191,8191]]},{"name":"cpu","tags":{"az":"az_4","region":"region_4"},"columns":["time","max","max_1"],"values":[["1970-01-01T00:00:00Z",10239,10239]]},{"name":"cpu","tags":{"az":"az_5","region":"region_5"},"columns":["time","max","max_1"],"values":[["1970-01-01T00:00:00Z",12287,12287]]},{"name":"cpu","tags":{"az":"az_6","region":"region_6"},"columns":["time","max","max_1"],"values":[["1970-01-01T00:00:00Z",14335,14335]]},{"name":"cpu","tags":{"az":"az_7","region":"region_7"},"columns":["time","max","max_1"],"values":[["1970-01-01T00:00:00Z",16383,16383]]},{"name":"cpu","tags":{"az":"az_8","region":"region_8"},"columns":["time","max","max_1"],"values":[["1970-01-01T00:00:00Z",18431,18431]]},{"name":"cpu","tags":{"az":"az_9","region":"region_9"},"columns":["time","max","max_1"],"values":[["1970-01-01T00:00:00Z",20479,20479]]}]}]}`,
-		},
-		{
-			name:    "max(v1),max(v2) group by time, *",
-			params:  url.Values{"inner_chunk_size": []string{"1"}},
-			command: `select max(v1),max(v2) from db0.rp0.cpu where time >= '1970-01-01T00:00:00Z' AND time <= '1970-01-01T05:41:19Z' group by time(1h),* order by az asc, region asc, time asc`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","tags":{"az":"az_0","region":"region_0"},"columns":["time","max","max_1"],"values":[["1970-01-01T00:00:00Z",2047,2047],["1970-01-01T01:00:00Z",null,null],["1970-01-01T02:00:00Z",null,null],["1970-01-01T03:00:00Z",null,null],["1970-01-01T04:00:00Z",null,null],["1970-01-01T05:00:00Z",null,null]]},{"name":"cpu","tags":{"az":"az_1","region":"region_1"},"columns":["time","max","max_1"],"values":[["1970-01-01T00:00:00Z",3599,3599],["1970-01-01T01:00:00Z",4095,4095],["1970-01-01T02:00:00Z",null,null],["1970-01-01T03:00:00Z",null,null],["1970-01-01T04:00:00Z",null,null],["1970-01-01T05:00:00Z",null,null]]},{"name":"cpu","tags":{"az":"az_2","region":"region_2"},"columns":["time","max","max_1"],"values":[["1970-01-01T00:00:00Z",null,null],["1970-01-01T01:00:00Z",6143,6143],["1970-01-01T02:00:00Z",null,null],["1970-01-01T03:00:00Z",null,null],["1970-01-01T04:00:00Z",null,null],["1970-01-01T05:00:00Z",null,null]]},{"name":"cpu","tags":{"az":"az_3","region":"region_3"},"columns":["time","max","max_1"],"values":[["1970-01-01T00:00:00Z",null,null],["1970-01-01T01:00:00Z",7199,7199],["1970-01-01T02:00:00Z",8191,8191],["1970-01-01T03:00:00Z",null,null],["1970-01-01T04:00:00Z",null,null],["1970-01-01T05:00:00Z",null,null]]},{"name":"cpu","tags":{"az":"az_4","region":"region_4"},"columns":["time","max","max_1"],"values":[["1970-01-01T00:00:00Z",null,null],["1970-01-01T01:00:00Z",null,null],["1970-01-01T02:00:00Z",10239,10239],["1970-01-01T03:00:00Z",null,null],["1970-01-01T04:00:00Z",null,null],["1970-01-01T05:00:00Z",null,null]]},{"name":"cpu","tags":{"az":"az_5","region":"region_5"},"columns":["time","max","max_1"],"values":[["1970-01-01T00:00:00Z",null,null],["1970-01-01T01:00:00Z",null,null],["1970-01-01T02:00:00Z",10799,10799],["1970-01-01T03:00:00Z",12287,12287],["1970-01-01T04:00:00Z",null,null],["1970-01-01T05:00:00Z",null,null]]},{"name":"cpu","tags":{"az":"az_6","region":"region_6"},"columns":["time","max","max_1"],"values":[["1970-01-01T00:00:00Z",null,null],["1970-01-01T01:00:00Z",null,null],["1970-01-01T02:00:00Z",null,null],["1970-01-01T03:00:00Z",14335,14335],["1970-01-01T04:00:00Z",null,null],["1970-01-01T05:00:00Z",null,null]]},{"name":"cpu","tags":{"az":"az_7","region":"region_7"},"columns":["time","max","max_1"],"values":[["1970-01-01T00:00:00Z",null,null],["1970-01-01T01:00:00Z",null,null],["1970-01-01T02:00:00Z",null,null],["1970-01-01T03:00:00Z",14399,14399],["1970-01-01T04:00:00Z",16383,16383],["1970-01-01T05:00:00Z",null,null]]},{"name":"cpu","tags":{"az":"az_8","region":"region_8"},"columns":["time","max","max_1"],"values":[["1970-01-01T00:00:00Z",null,null],["1970-01-01T01:00:00Z",null,null],["1970-01-01T02:00:00Z",null,null],["1970-01-01T03:00:00Z",null,null],["1970-01-01T04:00:00Z",17999,17999],["1970-01-01T05:00:00Z",18431,18431]]},{"name":"cpu","tags":{"az":"az_9","region":"region_9"},"columns":["time","max","max_1"],"values":[["1970-01-01T00:00:00Z",null,null],["1970-01-01T01:00:00Z",null,null],["1970-01-01T02:00:00Z",null,null],["1970-01-01T03:00:00Z",null,null],["1970-01-01T04:00:00Z",null,null],["1970-01-01T05:00:00Z",20479,20479]]}]}]}`,
-		},
-		{
-			name:    "first(*) group by time",
-			params:  url.Values{"inner_chunk_size": []string{"1"}},
-			command: `select first(*) from db0.rp0.cpu where time >= '1970-01-01T00:00:00Z' AND time <= '1970-01-01T05:41:19Z' group by time(1h) order by time asc`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","first_v1","first_v2","first_v3","first_v4"],"values":[["1970-01-01T00:00:00Z",0,0,true,"abc0"],["1970-01-01T01:00:00Z",3600,3600,true,"abc3600"],["1970-01-01T02:00:00Z",7200,7200,true,"abc7200"],["1970-01-01T03:00:00Z",10800,10800,true,"abc10800"],["1970-01-01T04:00:00Z",14400,14400,true,"abc14400"],["1970-01-01T05:00:00Z",18000,18000,true,"abc18000"]]}]}]}`,
-			skip:    true,
-		},
-		{
-			name:    "first(*) group by *",
-			params:  url.Values{"inner_chunk_size": []string{"1"}},
-			command: `select first(*) from db0.rp0.cpu where time >= '1970-01-01T00:00:00Z' AND time <= '1970-01-01T05:41:19Z' group by * order by az asc, region asc`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","tags":{"az":"az_0","region":"region_0"},"columns":["time","first_v1","first_v2","first_v3","first_v4"],"values":[["1970-01-01T00:00:00Z",0,0,true,"abc0"]]},{"name":"cpu","tags":{"az":"az_1","region":"region_1"},"columns":["time","first_v1","first_v2","first_v3","first_v4"],"values":[["1970-01-01T00:00:00Z",2048,2048,true,"abc2048"]]},{"name":"cpu","tags":{"az":"az_2","region":"region_2"},"columns":["time","first_v1","first_v2","first_v3","first_v4"],"values":[["1970-01-01T00:00:00Z",4096,4096,true,"abc4096"]]},{"name":"cpu","tags":{"az":"az_3","region":"region_3"},"columns":["time","first_v1","first_v2","first_v3","first_v4"],"values":[["1970-01-01T00:00:00Z",6144,6144,true,"abc6144"]]},{"name":"cpu","tags":{"az":"az_4","region":"region_4"},"columns":["time","first_v1","first_v2","first_v3","first_v4"],"values":[["1970-01-01T00:00:00Z",8192,8192,true,"abc8192"]]},{"name":"cpu","tags":{"az":"az_5","region":"region_5"},"columns":["time","first_v1","first_v2","first_v3","first_v4"],"values":[["1970-01-01T00:00:00Z",10240,10240,true,"abc10240"]]},{"name":"cpu","tags":{"az":"az_6","region":"region_6"},"columns":["time","first_v1","first_v2","first_v3","first_v4"],"values":[["1970-01-01T00:00:00Z",12288,12288,true,"abc12288"]]},{"name":"cpu","tags":{"az":"az_7","region":"region_7"},"columns":["time","first_v1","first_v2","first_v3","first_v4"],"values":[["1970-01-01T00:00:00Z",14336,14336,true,"abc14336"]]},{"name":"cpu","tags":{"az":"az_8","region":"region_8"},"columns":["time","first_v1","first_v2","first_v3","first_v4"],"values":[["1970-01-01T00:00:00Z",16384,16384,true,"abc16384"]]},{"name":"cpu","tags":{"az":"az_9","region":"region_9"},"columns":["time","first_v1","first_v2","first_v3","first_v4"],"values":[["1970-01-01T00:00:00Z",18432,18432,true,"abc18432"]]}]}]}`,
-		},
-		{
-			name:    "first(*) group by time, *",
-			params:  url.Values{"inner_chunk_size": []string{"1"}},
-			command: `select first(*) from db0.rp0.cpu where time >= '1970-01-01T00:00:00Z' AND time <= '1970-01-01T05:41:19Z' group by time(1h),* order by az asc, region asc, time asc`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","tags":{"az":"az_0","region":"region_0"},"columns":["time","first_v1","first_v2","first_v3","first_v4"],"values":[["1970-01-01T00:00:00Z",0,0,true,"abc0"],["1970-01-01T01:00:00Z",null,null,null,null],["1970-01-01T02:00:00Z",null,null,null,null],["1970-01-01T03:00:00Z",null,null,null,null],["1970-01-01T04:00:00Z",null,null,null,null],["1970-01-01T05:00:00Z",null,null,null,null]]},{"name":"cpu","tags":{"az":"az_1","region":"region_1"},"columns":["time","first_v1","first_v2","first_v3","first_v4"],"values":[["1970-01-01T00:00:00Z",2048,2048,true,"abc2048"],["1970-01-01T01:00:00Z",3600,3600,true,"abc3600"],["1970-01-01T02:00:00Z",null,null,null,null],["1970-01-01T03:00:00Z",null,null,null,null],["1970-01-01T04:00:00Z",null,null,null,null],["1970-01-01T05:00:00Z",null,null,null,null]]},{"name":"cpu","tags":{"az":"az_2","region":"region_2"},"columns":["time","first_v1","first_v2","first_v3","first_v4"],"values":[["1970-01-01T00:00:00Z",null,null,null,null],["1970-01-01T01:00:00Z",4096,4096,true,"abc4096"],["1970-01-01T02:00:00Z",null,null,null,null],["1970-01-01T03:00:00Z",null,null,null,null],["1970-01-01T04:00:00Z",null,null,null,null],["1970-01-01T05:00:00Z",null,null,null,null]]},{"name":"cpu","tags":{"az":"az_3","region":"region_3"},"columns":["time","first_v1","first_v2","first_v3","first_v4"],"values":[["1970-01-01T00:00:00Z",null,null,null,null],["1970-01-01T01:00:00Z",6144,6144,true,"abc6144"],["1970-01-01T02:00:00Z",7200,7200,true,"abc7200"],["1970-01-01T03:00:00Z",null,null,null,null],["1970-01-01T04:00:00Z",null,null,null,null],["1970-01-01T05:00:00Z",null,null,null,null]]},{"name":"cpu","tags":{"az":"az_4","region":"region_4"},"columns":["time","first_v1","first_v2","first_v3","first_v4"],"values":[["1970-01-01T00:00:00Z",null,null,null,null],["1970-01-01T01:00:00Z",null,null,null,null],["1970-01-01T02:00:00Z",8192,8192,true,"abc8192"],["1970-01-01T03:00:00Z",null,null,null,null],["1970-01-01T04:00:00Z",null,null,null,null],["1970-01-01T05:00:00Z",null,null,null,null]]},{"name":"cpu","tags":{"az":"az_5","region":"region_5"},"columns":["time","first_v1","first_v2","first_v3","first_v4"],"values":[["1970-01-01T00:00:00Z",null,null,null,null],["1970-01-01T01:00:00Z",null,null,null,null],["1970-01-01T02:00:00Z",10240,10240,true,"abc10240"],["1970-01-01T03:00:00Z",10800,10800,true,"abc10800"],["1970-01-01T04:00:00Z",null,null,null,null],["1970-01-01T05:00:00Z",null,null,null,null]]},{"name":"cpu","tags":{"az":"az_6","region":"region_6"},"columns":["time","first_v1","first_v2","first_v3","first_v4"],"values":[["1970-01-01T00:00:00Z",null,null,null,null],["1970-01-01T01:00:00Z",null,null,null,null],["1970-01-01T02:00:00Z",null,null,null,null],["1970-01-01T03:00:00Z",12288,12288,true,"abc12288"],["1970-01-01T04:00:00Z",null,null,null,null],["1970-01-01T05:00:00Z",null,null,null,null]]},{"name":"cpu","tags":{"az":"az_7","region":"region_7"},"columns":["time","first_v1","first_v2","first_v3","first_v4"],"values":[["1970-01-01T00:00:00Z",null,null,null,null],["1970-01-01T01:00:00Z",null,null,null,null],["1970-01-01T02:00:00Z",null,null,null,null],["1970-01-01T03:00:00Z",14336,14336,true,"abc14336"],["1970-01-01T04:00:00Z",14400,14400,true,"abc14400"],["1970-01-01T05:00:00Z",null,null,null,null]]},{"name":"cpu","tags":{"az":"az_8","region":"region_8"},"columns":["time","first_v1","first_v2","first_v3","first_v4"],"values":[["1970-01-01T00:00:00Z",null,null,null,null],["1970-01-01T01:00:00Z",null,null,null,null],["1970-01-01T02:00:00Z",null,null,null,null],["1970-01-01T03:00:00Z",null,null,null,null],["1970-01-01T04:00:00Z",16384,16384,true,"abc16384"],["1970-01-01T05:00:00Z",18000,18000,true,"abc18000"]]},{"name":"cpu","tags":{"az":"az_9","region":"region_9"},"columns":["time","first_v1","first_v2","first_v3","first_v4"],"values":[["1970-01-01T00:00:00Z",null,null,null,null],["1970-01-01T01:00:00Z",null,null,null,null],["1970-01-01T02:00:00Z",null,null,null,null],["1970-01-01T03:00:00Z",null,null,null,null],["1970-01-01T04:00:00Z",null,null,null,null],["1970-01-01T05:00:00Z",18432,18432,true,"abc18432"]]}]}]}`,
-		},
-
-		{
-			name:    "last(*) group by time",
-			params:  url.Values{"inner_chunk_size": []string{"1"}},
-			command: `select last(*) from db0.rp0.cpu where time >= '1970-01-01T00:00:00Z' AND time <= '1970-01-01T05:41:19Z' group by time(1h) order by time asc`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","last_v1","last_v2","last_v3","last_v4"],"values":[["1970-01-01T00:00:00Z",3599,3599,false,"abc3599"],["1970-01-01T01:00:00Z",7199,7199,false,"abc7199"],["1970-01-01T02:00:00Z",10799,10799,false,"abc10799"],["1970-01-01T03:00:00Z",14399,14399,false,"abc14399"],["1970-01-01T04:00:00Z",17999,17999,false,"abc17999"],["1970-01-01T05:00:00Z",20479,20479,false,"abc20479"]]}]}]}`,
-			skip:    true,
-		},
-		{
-			name:    "last(*) group by *",
-			params:  url.Values{"inner_chunk_size": []string{"1"}},
-			command: `select last(*) from db0.rp0.cpu where time >= '1970-01-01T00:00:00Z' AND time <= '1970-01-01T05:41:19Z' group by * order by az asc, region asc`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","tags":{"az":"az_0","region":"region_0"},"columns":["time","last_v1","last_v2","last_v3","last_v4"],"values":[["1970-01-01T00:00:00Z",2047,2047,false,"abc2047"]]},{"name":"cpu","tags":{"az":"az_1","region":"region_1"},"columns":["time","last_v1","last_v2","last_v3","last_v4"],"values":[["1970-01-01T00:00:00Z",4095,4095,false,"abc4095"]]},{"name":"cpu","tags":{"az":"az_2","region":"region_2"},"columns":["time","last_v1","last_v2","last_v3","last_v4"],"values":[["1970-01-01T00:00:00Z",6143,6143,false,"abc6143"]]},{"name":"cpu","tags":{"az":"az_3","region":"region_3"},"columns":["time","last_v1","last_v2","last_v3","last_v4"],"values":[["1970-01-01T00:00:00Z",8191,8191,false,"abc8191"]]},{"name":"cpu","tags":{"az":"az_4","region":"region_4"},"columns":["time","last_v1","last_v2","last_v3","last_v4"],"values":[["1970-01-01T00:00:00Z",10239,10239,false,"abc10239"]]},{"name":"cpu","tags":{"az":"az_5","region":"region_5"},"columns":["time","last_v1","last_v2","last_v3","last_v4"],"values":[["1970-01-01T00:00:00Z",12287,12287,false,"abc12287"]]},{"name":"cpu","tags":{"az":"az_6","region":"region_6"},"columns":["time","last_v1","last_v2","last_v3","last_v4"],"values":[["1970-01-01T00:00:00Z",14335,14335,false,"abc14335"]]},{"name":"cpu","tags":{"az":"az_7","region":"region_7"},"columns":["time","last_v1","last_v2","last_v3","last_v4"],"values":[["1970-01-01T00:00:00Z",16383,16383,false,"abc16383"]]},{"name":"cpu","tags":{"az":"az_8","region":"region_8"},"columns":["time","last_v1","last_v2","last_v3","last_v4"],"values":[["1970-01-01T00:00:00Z",18431,18431,false,"abc18431"]]},{"name":"cpu","tags":{"az":"az_9","region":"region_9"},"columns":["time","last_v1","last_v2","last_v3","last_v4"],"values":[["1970-01-01T00:00:00Z",20479,20479,false,"abc20479"]]}]}]}`,
-		},
-		{
-			name:    "last(*) group by time, *",
-			params:  url.Values{"inner_chunk_size": []string{"1"}},
-			command: `select last(*) from db0.rp0.cpu where time >= '1970-01-01T00:00:00Z' AND time <= '1970-01-01T05:41:19Z' group by time(1h),* order by az asc, region asc, time asc`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","tags":{"az":"az_0","region":"region_0"},"columns":["time","last_v1","last_v2","last_v3","last_v4"],"values":[["1970-01-01T00:00:00Z",2047,2047,false,"abc2047"],["1970-01-01T01:00:00Z",null,null,null,null],["1970-01-01T02:00:00Z",null,null,null,null],["1970-01-01T03:00:00Z",null,null,null,null],["1970-01-01T04:00:00Z",null,null,null,null],["1970-01-01T05:00:00Z",null,null,null,null]]},{"name":"cpu","tags":{"az":"az_1","region":"region_1"},"columns":["time","last_v1","last_v2","last_v3","last_v4"],"values":[["1970-01-01T00:00:00Z",3599,3599,false,"abc3599"],["1970-01-01T01:00:00Z",4095,4095,false,"abc4095"],["1970-01-01T02:00:00Z",null,null,null,null],["1970-01-01T03:00:00Z",null,null,null,null],["1970-01-01T04:00:00Z",null,null,null,null],["1970-01-01T05:00:00Z",null,null,null,null]]},{"name":"cpu","tags":{"az":"az_2","region":"region_2"},"columns":["time","last_v1","last_v2","last_v3","last_v4"],"values":[["1970-01-01T00:00:00Z",null,null,null,null],["1970-01-01T01:00:00Z",6143,6143,false,"abc6143"],["1970-01-01T02:00:00Z",null,null,null,null],["1970-01-01T03:00:00Z",null,null,null,null],["1970-01-01T04:00:00Z",null,null,null,null],["1970-01-01T05:00:00Z",null,null,null,null]]},{"name":"cpu","tags":{"az":"az_3","region":"region_3"},"columns":["time","last_v1","last_v2","last_v3","last_v4"],"values":[["1970-01-01T00:00:00Z",null,null,null,null],["1970-01-01T01:00:00Z",7199,7199,false,"abc7199"],["1970-01-01T02:00:00Z",8191,8191,false,"abc8191"],["1970-01-01T03:00:00Z",null,null,null,null],["1970-01-01T04:00:00Z",null,null,null,null],["1970-01-01T05:00:00Z",null,null,null,null]]},{"name":"cpu","tags":{"az":"az_4","region":"region_4"},"columns":["time","last_v1","last_v2","last_v3","last_v4"],"values":[["1970-01-01T00:00:00Z",null,null,null,null],["1970-01-01T01:00:00Z",null,null,null,null],["1970-01-01T02:00:00Z",10239,10239,false,"abc10239"],["1970-01-01T03:00:00Z",null,null,null,null],["1970-01-01T04:00:00Z",null,null,null,null],["1970-01-01T05:00:00Z",null,null,null,null]]},{"name":"cpu","tags":{"az":"az_5","region":"region_5"},"columns":["time","last_v1","last_v2","last_v3","last_v4"],"values":[["1970-01-01T00:00:00Z",null,null,null,null],["1970-01-01T01:00:00Z",null,null,null,null],["1970-01-01T02:00:00Z",10799,10799,false,"abc10799"],["1970-01-01T03:00:00Z",12287,12287,false,"abc12287"],["1970-01-01T04:00:00Z",null,null,null,null],["1970-01-01T05:00:00Z",null,null,null,null]]},{"name":"cpu","tags":{"az":"az_6","region":"region_6"},"columns":["time","last_v1","last_v2","last_v3","last_v4"],"values":[["1970-01-01T00:00:00Z",null,null,null,null],["1970-01-01T01:00:00Z",null,null,null,null],["1970-01-01T02:00:00Z",null,null,null,null],["1970-01-01T03:00:00Z",14335,14335,false,"abc14335"],["1970-01-01T04:00:00Z",null,null,null,null],["1970-01-01T05:00:00Z",null,null,null,null]]},{"name":"cpu","tags":{"az":"az_7","region":"region_7"},"columns":["time","last_v1","last_v2","last_v3","last_v4"],"values":[["1970-01-01T00:00:00Z",null,null,null,null],["1970-01-01T01:00:00Z",null,null,null,null],["1970-01-01T02:00:00Z",null,null,null,null],["1970-01-01T03:00:00Z",14399,14399,false,"abc14399"],["1970-01-01T04:00:00Z",16383,16383,false,"abc16383"],["1970-01-01T05:00:00Z",null,null,null,null]]},{"name":"cpu","tags":{"az":"az_8","region":"region_8"},"columns":["time","last_v1","last_v2","last_v3","last_v4"],"values":[["1970-01-01T00:00:00Z",null,null,null,null],["1970-01-01T01:00:00Z",null,null,null,null],["1970-01-01T02:00:00Z",null,null,null,null],["1970-01-01T03:00:00Z",null,null,null,null],["1970-01-01T04:00:00Z",17999,17999,false,"abc17999"],["1970-01-01T05:00:00Z",18431,18431,false,"abc18431"]]},{"name":"cpu","tags":{"az":"az_9","region":"region_9"},"columns":["time","last_v1","last_v2","last_v3","last_v4"],"values":[["1970-01-01T00:00:00Z",null,null,null,null],["1970-01-01T01:00:00Z",null,null,null,null],["1970-01-01T02:00:00Z",null,null,null,null],["1970-01-01T03:00:00Z",null,null,null,null],["1970-01-01T04:00:00Z",null,null,null,null],["1970-01-01T05:00:00Z",20479,20479,false,"abc20479"]]}]}]}`,
-		},
-
-		// sub-query
-		{
-			name:    "percentile from (select sum(v1) group by time,*) group by az",
-			params:  url.Values{"inner_chunk_size": []string{"1"}},
-			command: `select PERCENTILE(v1, 95) as p95 from (select sum(v1) as v1 from db0.rp0.cpu where time >= '1970-01-01T00:00:00Z' AND time <= '1970-01-01T05:41:19Z'  group by time(1h),region,az order by az,time) group by az`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","tags":{"az":"az_0"},"columns":["time","p95"],"values":[["1970-01-01T00:00:00Z",2096128]]},{"name":"cpu","tags":{"az":"az_1"},"columns":["time","p95"],"values":[["1970-01-01T00:00:00Z",4382072]]},{"name":"cpu","tags":{"az":"az_2"},"columns":["time","p95"],"values":[["1970-01-01T01:00:00Z",10484736]]},{"name":"cpu","tags":{"az":"az_3"},"columns":["time","p95"],"values":[["1970-01-01T01:00:00Z",7633936]]},{"name":"cpu","tags":{"az":"az_4"},"columns":["time","p95"],"values":[["1970-01-01T02:00:00Z",18873344]]},{"name":"cpu","tags":{"az":"az_5"},"columns":["time","p95"],"values":[["1970-01-01T02:00:00Z",17176728]]},{"name":"cpu","tags":{"az":"az_6"},"columns":["time","p95"],"values":[["1970-01-01T03:00:00Z",27261952]]},{"name":"cpu","tags":{"az":"az_7"},"columns":["time","p95"],"values":[["1970-01-01T03:00:00Z",30536736]]},{"name":"cpu","tags":{"az":"az_8"},"columns":["time","p95"],"values":[["1970-01-01T04:00:00Z",27781464]]},{"name":"cpu","tags":{"az":"az_9"},"columns":["time","p95"],"values":[["1970-01-01T05:00:00Z",39844864]]}]}]}`,
-		},
-		{
-			name:    "sum(v1),mean(v2) from (select v1 from (select v1,v2)),(select v2 from (select v1, v2))",
-			params:  url.Values{"inner_chunk_size": []string{"1"}},
-			command: `select sum(v1), mean(v2) from (select v1 from (select v1, v2 from db0.rp0.cpu where time >= '1970-01-01T00:00:00Z' AND time <= '1970-01-01T05:41:19Z') where time >= '1970-01-01T00:00:00Z' AND time <= '1970-01-01T05:41:19Z' ),(select v2 from (select v1, v2 from db0.rp0.cpu where time >= '1970-01-01T00:00:00Z' AND time <= '1970-01-01T05:41:19Z' ) where time >= '1970-01-01T00:00:00Z' AND time <= '1970-01-01T05:41:19Z')`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","sum","mean"],"values":[["1970-01-01T00:00:00Z",209704960,10239.5]]}]}]}`,
-		},
-		{
-			name:    "select top from (select percentile (select sum group by time,region,az) group by region,az) group by region",
-			params:  url.Values{"inner_chunk_size": []string{"1"}},
-			command: `select region,az,top(p95,3) as p95 from (select PERCENTILE(v1, 95) as p95 from (select sum(v1)as v1 from db0.rp0.cpu where time >= '1970-01-01T00:00:00Z' AND time <= '1970-01-01T05:41:19Z' group by time(1h),region,az order by region,az,time) where time >= '1970-01-01T00:00:00Z' AND time <= '1970-01-01T05:41:19Z' group by region,az) where time >= '1970-01-01T00:00:00Z' AND time <= '1970-01-01T05:41:19Z' group by region`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","tags":{"region":"region_0"},"columns":["time","region","az","p95"],"values":[["1970-01-01T00:00:00Z","region_0","az_0",2096128]]},{"name":"cpu","tags":{"region":"region_1"},"columns":["time","region","az","p95"],"values":[["1970-01-01T00:00:00Z","region_1","az_1",4382072]]},{"name":"cpu","tags":{"region":"region_2"},"columns":["time","region","az","p95"],"values":[["1970-01-01T01:00:00Z","region_2","az_2",10484736]]},{"name":"cpu","tags":{"region":"region_3"},"columns":["time","region","az","p95"],"values":[["1970-01-01T01:00:00Z","region_3","az_3",7633936]]},{"name":"cpu","tags":{"region":"region_4"},"columns":["time","region","az","p95"],"values":[["1970-01-01T02:00:00Z","region_4","az_4",18873344]]},{"name":"cpu","tags":{"region":"region_5"},"columns":["time","region","az","p95"],"values":[["1970-01-01T02:00:00Z","region_5","az_5",17176728]]},{"name":"cpu","tags":{"region":"region_6"},"columns":["time","region","az","p95"],"values":[["1970-01-01T03:00:00Z","region_6","az_6",27261952]]},{"name":"cpu","tags":{"region":"region_7"},"columns":["time","region","az","p95"],"values":[["1970-01-01T03:00:00Z","region_7","az_7",30536736]]},{"name":"cpu","tags":{"region":"region_8"},"columns":["time","region","az","p95"],"values":[["1970-01-01T04:00:00Z","region_8","az_8",27781464]]},{"name":"cpu","tags":{"region":"region_9"},"columns":["time","region","az","p95"],"values":[["1970-01-01T05:00:00Z","region_9","az_9",39844864]]}]}]}`,
-		},
-		// show tag value & * & mean(v1)
-		{
-			name:    "show tag values key = region",
-			params:  url.Values{"inner_chunk_size": []string{"1"}, "db": []string{"db0"}},
-			command: `show tag values with key = "region" order by value asc`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["key","value"],"values":[["region","region_0"],["region","region_1"],["region","region_2"],["region","region_3"],["region","region_4"],["region","region_5"],["region","region_6"],["region","region_7"],["region","region_8"],["region","region_9"]]}]}]}`,
-		},
-		{
-			name:    "show tag values key = az",
-			params:  url.Values{"inner_chunk_size": []string{"1"}, "db": []string{"db0"}},
-			command: `show tag values with key = "az" order by value asc`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["key","value"],"values":[["az","az_0"],["az","az_1"],["az","az_2"],["az","az_3"],["az","az_4"],["az","az_5"],["az","az_6"],["az","az_7"],["az","az_8"],["az","az_9"]]}]}]}`,
-		},
-		{
-			name:    "count(time)",
-			params:  url.Values{"inner_chunk_size": []string{"1"}},
-			command: `select count(time) from db0.rp0.cpu`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","count"],"values":[["1970-01-01T00:00:00Z",20480]]}]}]}`,
-		},
-		{
-			name:    "select(*) az=az_7,region=region_7 limit 3",
-			params:  url.Values{"inner_chunk_size": []string{"1"}},
-			command: `select * from db0.rp0.cpu where time >= 6148000000000 and time < 16383000000000 and az = 'az_7' and region = 'region_7' limit 3`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","az","region","v1","v2","v3","v4"],"values":[["1970-01-01T03:58:56Z","az_7","region_7",14336,14336,true,"abc14336"],["1970-01-01T03:58:57Z","az_7","region_7",14337,14337,false,"abc14337"],["1970-01-01T03:58:58Z","az_7","region_7",14338,14338,true,"abc14338"]]}]}]}`,
-		},
-		{
-			name:    "v1,v2,v3 az=az_7 limit 3",
-			params:  url.Values{"inner_chunk_size": []string{"1"}},
-			command: `select v1,v2,v3 from db0.rp0.cpu where time >= 6148000000000 and time < 16383000000000 and az = 'az_7' limit 3`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","v1","v2","v3"],"values":[["1970-01-01T03:58:56Z",14336,14336,true],["1970-01-01T03:58:57Z",14337,14337,false],["1970-01-01T03:58:58Z",14338,14338,true]]}]}]}`,
-		},
-		{
-			name:    "mean(v1) group by time(5m)",
-			params:  url.Values{"inner_chunk_size": []string{"1"}},
-			command: `select mean(v1) as avg_v1 from db0.rp0.cpu where time >= 6148000000000 and time < 16383000000000 and az = 'az_6' group by time(5m) fill(none) order by time desc`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","avg_v1"],"values":[["1970-01-01T03:55:00Z",14217.5],["1970-01-01T03:50:00Z",13949.5],["1970-01-01T03:45:00Z",13649.5],["1970-01-01T03:40:00Z",13349.5],["1970-01-01T03:35:00Z",13049.5],["1970-01-01T03:30:00Z",12749.5],["1970-01-01T03:25:00Z",12449.5],["1970-01-01T03:20:00Z",12293.5]]}]}]}`,
-		},
-		{
-			name:    "mean(v1) group by time(5m),az",
-			params:  url.Values{"inner_chunk_size": []string{"1"}},
-			command: `select mean(v1) as avg_v1 from db0.rp0.cpu where time >= 0 and time < '1970-01-01T00:30:00Z' group by time(5m),az `,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","tags":{"az":"az_0"},"columns":["time","avg_v1"],"values":[["1970-01-01T00:00:00Z",149.5],["1970-01-01T00:05:00Z",449.5],["1970-01-01T00:10:00Z",749.5],["1970-01-01T00:15:00Z",1049.5],["1970-01-01T00:20:00Z",1349.5],["1970-01-01T00:25:00Z",1649.5]]}]}]}`,
-		},
-		{
-			name:    "mean(v1),min(v1),max(v1) group by time(5m)",
-			params:  url.Values{"inner_chunk_size": []string{"1"}},
-			command: `select mean(v1) as avg_v1, min(v1) as min_v1, max(v1) as max_v1 from db0.rp0.cpu where time >= 6148000000000 and time < 16383000000000 and az = 'az_6' group by time(5m) fill(none) order by time desc`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","avg_v1","min_v1","max_v1"],"values":[["1970-01-01T03:55:00Z",14217.5,14100,14335],["1970-01-01T03:50:00Z",13949.5,13800,14099],["1970-01-01T03:45:00Z",13649.5,13500,13799],["1970-01-01T03:40:00Z",13349.5,13200,13499],["1970-01-01T03:35:00Z",13049.5,12900,13199],["1970-01-01T03:30:00Z",12749.5,12600,12899],["1970-01-01T03:25:00Z",12449.5,12300,12599],["1970-01-01T03:20:00Z",12293.5,12288,12299]]}]}]}`,
-		},
-		{
-			name:    "mean(v1),min(v1),max(v1) group by time(5m),az",
-			params:  url.Values{"inner_chunk_size": []string{"1"}},
-			command: `select mean(v1) as avg_v1, min(v1) as min_v1, max(v1) as max_v1 from db0.rp0.cpu where time >= 0 and time < '1970-01-01T00:30:00Z' group by time(5m),az`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","tags":{"az":"az_0"},"columns":["time","avg_v1","min_v1","max_v1"],"values":[["1970-01-01T00:00:00Z",149.5,0,299],["1970-01-01T00:05:00Z",449.5,300,599],["1970-01-01T00:10:00Z",749.5,600,899],["1970-01-01T00:15:00Z",1049.5,900,1199],["1970-01-01T00:20:00Z",1349.5,1200,1499],["1970-01-01T00:25:00Z",1649.5,1500,1799]]}]}]}`,
-		},
-		{
-			name:    "mean(v1),count(az) group by time(5m),az",
-			params:  url.Values{"inner_chunk_size": []string{"1"}},
-			command: `select mean(v1) as avg_v1, count(az) as count_az from db0.rp0.cpu where time >= 0 and time < '1970-01-01T00:30:00Z' and az = 'az_0' group by time(5m),az`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","tags":{"az":"az_0"},"columns":["time","avg_v1","count_az"],"values":[["1970-01-01T00:00:00Z",149.5,300],["1970-01-01T00:05:00Z",449.5,300],["1970-01-01T00:10:00Z",749.5,300],["1970-01-01T00:15:00Z",1049.5,300],["1970-01-01T00:20:00Z",1349.5,300],["1970-01-01T00:25:00Z",1649.5,300]]}]}]}`,
-		},
-	}...)
-
-	for i, query := range test.queries {
-		t.Run(query.name, func(t *testing.T) {
-			if i == 0 {
-				if err := test.init(s); err != nil {
-					t.Fatalf("test init failed: %s", err)
-				}
-				time.Sleep(5 * time.Second)
-			}
-			if query.skip {
-				t.Skipf("SKIP:: %s", query.name)
-			}
-
-			if err := query.Execute(s); err != nil {
-				t.Error(query.Error(err))
-			} else if !query.success() {
-				t.Error(query.failureMessage())
-			}
-		})
-	}
-}
-
 func TestServer_Query_TimeCluster(t *testing.T) {
 	t.Parallel()
 	s := OpenServer(NewParseConfig(testCfgPath))
@@ -4696,6 +4460,12 @@ func TestServer_Query_Complex_Aggregate(t *testing.T) {
 			params:  url.Values{"inner_chunk_size": []string{"2"}},
 			command: `select stddev(*) from db0.rp0.cpu`,
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","stddev_v1","stddev_v2"],"values":[["1970-01-01T00:00:00Z",5912.211092307175,5912.211092307175]]}]}]}`,
+		},
+		{
+			name:    "regr_slope(*)",
+			params:  url.Values{"inner_chunk_size": []string{"2"}},
+			command: `select regr_slope(*) from db0.rp0.cpu`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","regr_slope_v1","regr_slope_v2"],"values":[["1970-01-01T00:00:00Z",1,1]]}]}]}`,
 		},
 
 		// 2. multi-column
@@ -4993,6 +4763,24 @@ func TestServer_Query_Complex_Aggregate(t *testing.T) {
 			params:  url.Values{"inner_chunk_size": []string{"1"}},
 			command: `select stddev(*) from db0.rp0.cpu where time >= '1970-01-01T00:00:00Z' AND time <= '1970-01-01T05:41:19Z' group by time(1h),*`,
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","tags":{"az":"az_0","region":"region_0"},"columns":["time","stddev_v1","stddev_v2"],"values":[["1970-01-01T00:00:00Z",591.3509956024425,591.3509956024425],["1970-01-01T01:00:00Z",null,null],["1970-01-01T02:00:00Z",null,null],["1970-01-01T03:00:00Z",null,null],["1970-01-01T04:00:00Z",null,null],["1970-01-01T05:00:00Z",null,null]]},{"name":"cpu","tags":{"az":"az_1","region":"region_1"},"columns":["time","stddev_v1","stddev_v2"],"values":[["1970-01-01T00:00:00Z",448.16812321568193,448.16812321568193],["1970-01-01T01:00:00Z",143.32713164877984,143.32713164877984],["1970-01-01T02:00:00Z",null,null],["1970-01-01T03:00:00Z",null,null],["1970-01-01T04:00:00Z",null,null],["1970-01-01T05:00:00Z",null,null]]},{"name":"cpu","tags":{"az":"az_2","region":"region_2"},"columns":["time","stddev_v1","stddev_v2"],"values":[["1970-01-01T00:00:00Z",null,null],["1970-01-01T01:00:00Z",591.3509956024425,591.3509956024425],["1970-01-01T02:00:00Z",null,null],["1970-01-01T03:00:00Z",null,null],["1970-01-01T04:00:00Z",null,null],["1970-01-01T05:00:00Z",null,null]]},{"name":"cpu","tags":{"az":"az_3","region":"region_3"},"columns":["time","stddev_v1","stddev_v2"],"values":[["1970-01-01T00:00:00Z",null,null],["1970-01-01T01:00:00Z",304.98524554475995,304.98524554475995],["1970-01-01T02:00:00Z",286.5100347282796,286.5100347282796],["1970-01-01T03:00:00Z",null,null],["1970-01-01T04:00:00Z",null,null],["1970-01-01T05:00:00Z",null,null]]},{"name":"cpu","tags":{"az":"az_4","region":"region_4"},"columns":["time","stddev_v1","stddev_v2"],"values":[["1970-01-01T00:00:00Z",null,null],["1970-01-01T01:00:00Z",null,null],["1970-01-01T02:00:00Z",591.3509956024425,591.3509956024425],["1970-01-01T03:00:00Z",null,null],["1970-01-01T04:00:00Z",null,null],["1970-01-01T05:00:00Z",null,null]]},{"name":"cpu","tags":{"az":"az_5","region":"region_5"},"columns":["time","stddev_v1","stddev_v2"],"values":[["1970-01-01T00:00:00Z",null,null],["1970-01-01T01:00:00Z",null,null],["1970-01-01T02:00:00Z",161.80234856144702,161.80234856144702],["1970-01-01T03:00:00Z",429.69291360226663,429.69291360226663],["1970-01-01T04:00:00Z",null,null],["1970-01-01T05:00:00Z",null,null]]},{"name":"cpu","tags":{"az":"az_6","region":"region_6"},"columns":["time","stddev_v1","stddev_v2"],"values":[["1970-01-01T00:00:00Z",null,null],["1970-01-01T01:00:00Z",null,null],["1970-01-01T02:00:00Z",null,null],["1970-01-01T03:00:00Z",591.3509956024425,591.3509956024425],["1970-01-01T04:00:00Z",null,null],["1970-01-01T05:00:00Z",null,null]]},{"name":"cpu","tags":{"az":"az_7","region":"region_7"},"columns":["time","stddev_v1","stddev_v2"],"values":[["1970-01-01T00:00:00Z",null,null],["1970-01-01T01:00:00Z",null,null],["1970-01-01T02:00:00Z",null,null],["1970-01-01T03:00:00Z",18.618986725025255,18.618986725025255],["1970-01-01T04:00:00Z",572.8757864202909,572.8757864202909],["1970-01-01T05:00:00Z",null,null]]},{"name":"cpu","tags":{"az":"az_8","region":"region_8"},"columns":["time","stddev_v1","stddev_v2"],"values":[["1970-01-01T00:00:00Z",null,null],["1970-01-01T01:00:00Z",null,null],["1970-01-01T02:00:00Z",null,null],["1970-01-01T03:00:00Z",null,null],["1970-01-01T04:00:00Z",466.64333274997085,466.64333274997085],["1970-01-01T05:00:00Z",124.85191228018863,124.85191228018863]]},{"name":"cpu","tags":{"az":"az_9","region":"region_9"},"columns":["time","stddev_v1","stddev_v2"],"values":[["1970-01-01T00:00:00Z",null,null],["1970-01-01T01:00:00Z",null,null],["1970-01-01T02:00:00Z",null,null],["1970-01-01T03:00:00Z",null,null],["1970-01-01T04:00:00Z",null,null],["1970-01-01T05:00:00Z",591.3509956024425,591.3509956024425]]}]}]}`,
+		},
+		{
+			name:    "regr_slope(*) group by time",
+			params:  url.Values{"inner_chunk_size": []string{"1"}},
+			command: `select regr_slope(*) from db0.rp0.cpu where time >= '1970-01-01T00:00:00Z' AND time <= '1970-01-01T05:41:19Z' group by time(1h)`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","regr_slope_v1","regr_slope_v2"],"values":[["1970-01-01T00:00:00Z",1,1],["1970-01-01T01:00:00Z",1,1],["1970-01-01T02:00:00Z",1,1],["1970-01-01T03:00:00Z",1,1],["1970-01-01T04:00:00Z",1,1],["1970-01-01T05:00:00Z",1,1]]}]}]}`,
+		},
+		{
+			name:    "regr_slope(*) group by *",
+			params:  url.Values{"inner_chunk_size": []string{"1"}},
+			command: `select regr_slope(*) from db0.rp0.cpu where time >= '1970-01-01T00:00:00Z' AND time <= '1970-01-01T05:41:19Z' group by *`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","tags":{"az":"az_0","region":"region_0"},"columns":["time","regr_slope_v1","regr_slope_v2"],"values":[["1970-01-01T00:00:00Z",1,1]]},{"name":"cpu","tags":{"az":"az_1","region":"region_1"},"columns":["time","regr_slope_v1","regr_slope_v2"],"values":[["1970-01-01T00:00:00Z",1,1]]},{"name":"cpu","tags":{"az":"az_2","region":"region_2"},"columns":["time","regr_slope_v1","regr_slope_v2"],"values":[["1970-01-01T00:00:00Z",1,1]]},{"name":"cpu","tags":{"az":"az_3","region":"region_3"},"columns":["time","regr_slope_v1","regr_slope_v2"],"values":[["1970-01-01T00:00:00Z",1,1]]},{"name":"cpu","tags":{"az":"az_4","region":"region_4"},"columns":["time","regr_slope_v1","regr_slope_v2"],"values":[["1970-01-01T00:00:00Z",1,1]]},{"name":"cpu","tags":{"az":"az_5","region":"region_5"},"columns":["time","regr_slope_v1","regr_slope_v2"],"values":[["1970-01-01T00:00:00Z",1,1]]},{"name":"cpu","tags":{"az":"az_6","region":"region_6"},"columns":["time","regr_slope_v1","regr_slope_v2"],"values":[["1970-01-01T00:00:00Z",1,1]]},{"name":"cpu","tags":{"az":"az_7","region":"region_7"},"columns":["time","regr_slope_v1","regr_slope_v2"],"values":[["1970-01-01T00:00:00Z",1,1]]},{"name":"cpu","tags":{"az":"az_8","region":"region_8"},"columns":["time","regr_slope_v1","regr_slope_v2"],"values":[["1970-01-01T00:00:00Z",1,1]]},{"name":"cpu","tags":{"az":"az_9","region":"region_9"},"columns":["time","regr_slope_v1","regr_slope_v2"],"values":[["1970-01-01T00:00:00Z",1,1]]}]}]}`,
+		},
+		{
+			name:    "regr_slope(*) group by time, *",
+			params:  url.Values{"inner_chunk_size": []string{"1"}},
+			command: `select regr_slope(*) from db0.rp0.cpu where time >= '1970-01-01T00:00:00Z' AND time <= '1970-01-01T05:41:19Z' group by time(1h),*`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","tags":{"az":"az_0","region":"region_0"},"columns":["time","regr_slope_v1","regr_slope_v2"],"values":[["1970-01-01T00:00:00Z",1,1],["1970-01-01T01:00:00Z",null,null],["1970-01-01T02:00:00Z",null,null],["1970-01-01T03:00:00Z",null,null],["1970-01-01T04:00:00Z",null,null],["1970-01-01T05:00:00Z",null,null]]},{"name":"cpu","tags":{"az":"az_1","region":"region_1"},"columns":["time","regr_slope_v1","regr_slope_v2"],"values":[["1970-01-01T00:00:00Z",1,1],["1970-01-01T01:00:00Z",1,1],["1970-01-01T02:00:00Z",null,null],["1970-01-01T03:00:00Z",null,null],["1970-01-01T04:00:00Z",null,null],["1970-01-01T05:00:00Z",null,null]]},{"name":"cpu","tags":{"az":"az_2","region":"region_2"},"columns":["time","regr_slope_v1","regr_slope_v2"],"values":[["1970-01-01T00:00:00Z",null,null],["1970-01-01T01:00:00Z",1,1],["1970-01-01T02:00:00Z",null,null],["1970-01-01T03:00:00Z",null,null],["1970-01-01T04:00:00Z",null,null],["1970-01-01T05:00:00Z",null,null]]},{"name":"cpu","tags":{"az":"az_3","region":"region_3"},"columns":["time","regr_slope_v1","regr_slope_v2"],"values":[["1970-01-01T00:00:00Z",null,null],["1970-01-01T01:00:00Z",1,1],["1970-01-01T02:00:00Z",1,1],["1970-01-01T03:00:00Z",null,null],["1970-01-01T04:00:00Z",null,null],["1970-01-01T05:00:00Z",null,null]]},{"name":"cpu","tags":{"az":"az_4","region":"region_4"},"columns":["time","regr_slope_v1","regr_slope_v2"],"values":[["1970-01-01T00:00:00Z",null,null],["1970-01-01T01:00:00Z",null,null],["1970-01-01T02:00:00Z",1,1],["1970-01-01T03:00:00Z",null,null],["1970-01-01T04:00:00Z",null,null],["1970-01-01T05:00:00Z",null,null]]},{"name":"cpu","tags":{"az":"az_5","region":"region_5"},"columns":["time","regr_slope_v1","regr_slope_v2"],"values":[["1970-01-01T00:00:00Z",null,null],["1970-01-01T01:00:00Z",null,null],["1970-01-01T02:00:00Z",1,1],["1970-01-01T03:00:00Z",1,1],["1970-01-01T04:00:00Z",null,null],["1970-01-01T05:00:00Z",null,null]]},{"name":"cpu","tags":{"az":"az_6","region":"region_6"},"columns":["time","regr_slope_v1","regr_slope_v2"],"values":[["1970-01-01T00:00:00Z",null,null],["1970-01-01T01:00:00Z",null,null],["1970-01-01T02:00:00Z",null,null],["1970-01-01T03:00:00Z",1,1],["1970-01-01T04:00:00Z",null,null],["1970-01-01T05:00:00Z",null,null]]},{"name":"cpu","tags":{"az":"az_7","region":"region_7"},"columns":["time","regr_slope_v1","regr_slope_v2"],"values":[["1970-01-01T00:00:00Z",null,null],["1970-01-01T01:00:00Z",null,null],["1970-01-01T02:00:00Z",null,null],["1970-01-01T03:00:00Z",1,1],["1970-01-01T04:00:00Z",1,1],["1970-01-01T05:00:00Z",null,null]]},{"name":"cpu","tags":{"az":"az_8","region":"region_8"},"columns":["time","regr_slope_v1","regr_slope_v2"],"values":[["1970-01-01T00:00:00Z",null,null],["1970-01-01T01:00:00Z",null,null],["1970-01-01T02:00:00Z",null,null],["1970-01-01T03:00:00Z",null,null],["1970-01-01T04:00:00Z",1,1],["1970-01-01T05:00:00Z",1,1]]},{"name":"cpu","tags":{"az":"az_9","region":"region_9"},"columns":["time","regr_slope_v1","regr_slope_v2"],"values":[["1970-01-01T00:00:00Z",null,null],["1970-01-01T01:00:00Z",null,null],["1970-01-01T02:00:00Z",null,null],["1970-01-01T03:00:00Z",null,null],["1970-01-01T04:00:00Z",null,null],["1970-01-01T05:00:00Z",1,1]]}]}]}`,
 		},
 		// 3. single column + aux + group by
 		// TODO: The order of tag aux of TSDB2.0 is different TSDB1.0.
@@ -5442,6 +5230,7 @@ func TestServer_Query_Null_Group(t *testing.T) {
 		})
 	}
 }
+
 func TestServer_Query_AggregateSelectors(t *testing.T) {
 	t.Parallel()
 	s := OpenServer(NewParseConfig(testCfgPath))
@@ -9543,6 +9332,76 @@ func TestServer_Query_ShowTagKeysWithCondition(t *testing.T) {
 	ReleaseHaTestEnv(t)
 }
 
+func TestServer_DropSeries(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewConfig())
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	unixNano := mustParseTime(time.RFC3339Nano, "2009-11-10T23:00:00Z").UnixNano()
+	writes := []string{
+		fmt.Sprintf(`cpu,host=server03 field1=100 %d`, unixNano),
+		fmt.Sprintf(`cpu,host=server01,region=uswest field1=200,field2=300,field3=400 %d`, unixNano),
+		fmt.Sprintf(`cpu,host=server01,region=useast field1=200,field2=300,field3=400 %d`, unixNano),
+		fmt.Sprintf(`cpu,host=server02,region=useast field1=200,field2=300,field3=400 %d`, unixNano),
+		fmt.Sprintf(`cpu,host=server02,region=uswest value=100 %d`, unixNano),
+		fmt.Sprintf(`cpu,host=server02,region=useast value=100 %d`, unixNano),
+	}
+
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		{
+			name:    `before drop execute select * from cpu`,
+			command: `select * from cpu`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","field1","field2","field3","host","region","value"],"values":[["2009-11-10T23:00:00Z",null,null,null,"server02","uswest",100],["2009-11-10T23:00:00Z",100,null,null,"server03",null,null],["2009-11-10T23:00:00Z",200,300,400,"server01","useast",null],["2009-11-10T23:00:00Z",200,300,400,"server01","uswest",null],["2009-11-10T23:00:00Z",200,300,400,"server02","useast",100]]}]}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+		},
+		{
+			name:    `drop series from cpu where host='server02'`,
+			command: `drop series from cpu where host='server02'`,
+			exp:     `{"results":[{"statement_id":0}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+		},
+		{
+			name:    `after drop execute select * from cpu`,
+			command: `select * from cpu`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","field1","field2","field3","host","region","value"],"values":[["2009-11-10T23:00:00Z",100,null,null,"server03",null,null],["2009-11-10T23:00:00Z",200,300,400,"server01","useast",null],["2009-11-10T23:00:00Z",200,300,400,"server01","uswest",null]]}]}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+		},
+		{
+			name:    `after drop execute select * from cpu where host='server02'`,
+			command: `select * from cpu where host='server02'`,
+			exp:     `{"results":[{"statement_id":0}]}`,
+			params:  url.Values{"db": []string{"db0"}},
+		},
+	}...)
+
+	for i, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if i == 0 {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
+			}
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}
+
 func TestServer_Query_ShowTagKeys(t *testing.T) {
 	t.Parallel()
 	s := OpenServer(NewConfig())
@@ -11755,6 +11614,7 @@ func TestServer_HintLimit(t *testing.T) {
 		})
 	}
 }
+
 func TestServer_FullJoin(t *testing.T) {
 	t.Parallel()
 	s := OpenServer(NewParseConfig(testCfgPath))
@@ -11792,6 +11652,951 @@ func TestServer_FullJoin(t *testing.T) {
 		})
 	}
 }
+
+func TestServer_Join_Table(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		`table1,tk=a value=1,value1=11 1629129600000000000`,
+		`table1,tk=b value=2,value1=22 1629129600000000000`,
+		`table1,tk=c value=4,value1=44 1629129600000000000`,
+		`table2,tk=b value=10 1629129600000000000`,
+		`table2,tk=c value=20 1629129600000000000`,
+		`table2,tk=c value=40 1629129600000000000`,
+		`table2,tk=d value=50 1629129600000000000`,
+		`table3,tk=a value=1 1629129600000000000`,
+		`table3,tk=b value=2 1629129600000000000`,
+		`table3,tk=b value=3 1629129610000000000`,
+		`table4,tk=b value=4 1629129600000000000`,
+		`table4,tk=b value=5 1629129610000000000`,
+		`table4,tk=c value=6 1629129600000000000`,
+	}
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		{
+			name:    "select field innerjoin",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select table1.value,table2.value from table1 inner join table2 on table1.tk=table2.tk group by tk",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table2","tags":{"tk":"b"},"columns":["time","table1.value","table2.value"],"values":[["2021-08-16T16:00:00Z",2,10]]},{"name":"table1,table2","tags":{"tk":"c"},"columns":["time","table1.value","table2.value"],"values":[["2021-08-16T16:00:00Z",4,40]]}]}]}`,
+		},
+		{
+			name:    "select * innerjoin",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table1 inner join table2 on table1.tk=table2.tk group by tk",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table2","tags":{"tk":"b"},"columns":["time","table1.value","table1.value1","table2.value"],"values":[["2021-08-16T16:00:00Z",2,22,10]]},{"name":"table1,table2","tags":{"tk":"c"},"columns":["time","table1.value","table1.value1","table2.value"],"values":[["2021-08-16T16:00:00Z",4,44,40]]}]}]}`,
+		},
+		{
+			name:    "select field innerjoin as ",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select t1.value1,t2.value from table1 as t1 inner join table2 as t2 on t1.tk=t2.tk group by tk",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"t1,t2","tags":{"tk":"b"},"columns":["time","t1.value1","t2.value"],"values":[["2021-08-16T16:00:00Z",22,10]]},{"name":"t1,t2","tags":{"tk":"c"},"columns":["time","t1.value1","t2.value"],"values":[["2021-08-16T16:00:00Z",44,40]]}]}]}`,
+		},
+		{
+			name:    "select * innerjoin as",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table1 as t1 inner join table2 as t2 on t1.tk=t2.tk group by tk",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"t1,t2","tags":{"tk":"b"},"columns":["time","t1.value","t1.value1","t2.value"],"values":[["2021-08-16T16:00:00Z",2,22,10]]},{"name":"t1,t2","tags":{"tk":"c"},"columns":["time","t1.value","t1.value1","t2.value"],"values":[["2021-08-16T16:00:00Z",4,44,40]]}]}]}`,
+		},
+		{
+			name:    "select field leftjoin",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select  table1.value,table2.value from table1 left outer join table2 on table1.tk=table2.tk group by tk",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table2","tags":{"tk":"a"},"columns":["time","table1.value","table2.value"],"values":[["2021-08-16T16:00:00Z",1,null]]},{"name":"table1,table2","tags":{"tk":"b"},"columns":["time","table1.value","table2.value"],"values":[["2021-08-16T16:00:00Z",2,10]]},{"name":"table1,table2","tags":{"tk":"c"},"columns":["time","table1.value","table2.value"],"values":[["2021-08-16T16:00:00Z",4,40]]}]}]}`,
+		},
+		{
+			name:    "select * leftjoin",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table1 left outer join table2 on table1.tk=table2.tk group by tk",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table2","tags":{"tk":"a"},"columns":["time","table1.value","table1.value1","table2.value"],"values":[["2021-08-16T16:00:00Z",1,11,null]]},{"name":"table1,table2","tags":{"tk":"b"},"columns":["time","table1.value","table1.value1","table2.value"],"values":[["2021-08-16T16:00:00Z",2,22,10]]},{"name":"table1,table2","tags":{"tk":"c"},"columns":["time","table1.value","table1.value1","table2.value"],"values":[["2021-08-16T16:00:00Z",4,44,40]]}]}]}`,
+		},
+		{
+			name:    "select field leftjoin as",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select t1.value1,t2.value from table1 as t1 left outer join table2 as t2 on t1.tk=t2.tk group by tk",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"t1,t2","tags":{"tk":"a"},"columns":["time","t1.value1","t2.value"],"values":[["2021-08-16T16:00:00Z",11,null]]},{"name":"t1,t2","tags":{"tk":"b"},"columns":["time","t1.value1","t2.value"],"values":[["2021-08-16T16:00:00Z",22,10]]},{"name":"t1,t2","tags":{"tk":"c"},"columns":["time","t1.value1","t2.value"],"values":[["2021-08-16T16:00:00Z",44,40]]}]}]}`,
+		},
+		{
+			name:    "select *  leftjoin as",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table1 as t1 left outer join table2 as t2 on t1.tk=t2.tk group by tk",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"t1,t2","tags":{"tk":"a"},"columns":["time","t1.value","t1.value1","t2.value"],"values":[["2021-08-16T16:00:00Z",1,11,null]]},{"name":"t1,t2","tags":{"tk":"b"},"columns":["time","t1.value","t1.value1","t2.value"],"values":[["2021-08-16T16:00:00Z",2,22,10]]},{"name":"t1,t2","tags":{"tk":"c"},"columns":["time","t1.value","t1.value1","t2.value"],"values":[["2021-08-16T16:00:00Z",4,44,40]]}]}]}`,
+		},
+		{
+			name:    "select field rightjoin",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select table1.value,table2.value from table1 right outer join table2 on table1.tk=table2.tk group by tk",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table2","tags":{"tk":"b"},"columns":["time","table1.value","table2.value"],"values":[["2021-08-16T16:00:00Z",2,10]]},{"name":"table1,table2","tags":{"tk":"c"},"columns":["time","table1.value","table2.value"],"values":[["2021-08-16T16:00:00Z",4,40]]},{"name":"table1,table2","tags":{"tk":"d"},"columns":["time","table1.value","table2.value"],"values":[["2021-08-16T16:00:00Z",null,50]]}]}]}`,
+		},
+		{
+			name:    "select * rightjoin",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table1 right outer join table2 on table1.tk=table2.tk group by tk",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table2","tags":{"tk":"b"},"columns":["time","table1.value","table1.value1","table2.value"],"values":[["2021-08-16T16:00:00Z",2,22,10]]},{"name":"table1,table2","tags":{"tk":"c"},"columns":["time","table1.value","table1.value1","table2.value"],"values":[["2021-08-16T16:00:00Z",4,44,40]]},{"name":"table1,table2","tags":{"tk":"d"},"columns":["time","table1.value","table1.value1","table2.value"],"values":[["2021-08-16T16:00:00Z",null,null,50]]}]}]}`,
+		},
+		{
+			name:    "select field rightjoin as",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select t1.value1,t2.value from table1 as t1 right outer join table2 as t2 on t1.tk=t2.tk group by tk",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"t1,t2","tags":{"tk":"b"},"columns":["time","t1.value1","t2.value"],"values":[["2021-08-16T16:00:00Z",22,10]]},{"name":"t1,t2","tags":{"tk":"c"},"columns":["time","t1.value1","t2.value"],"values":[["2021-08-16T16:00:00Z",44,40]]},{"name":"t1,t2","tags":{"tk":"d"},"columns":["time","t1.value1","t2.value"],"values":[["2021-08-16T16:00:00Z",null,50]]}]}]}`,
+		},
+		{
+			name:    "select *  rightjoin as",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table1 as t1 right outer join table2 as t2 on t1.tk=t2.tk group by tk",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"t1,t2","tags":{"tk":"b"},"columns":["time","t1.value","t1.value1","t2.value"],"values":[["2021-08-16T16:00:00Z",2,22,10]]},{"name":"t1,t2","tags":{"tk":"c"},"columns":["time","t1.value","t1.value1","t2.value"],"values":[["2021-08-16T16:00:00Z",4,44,40]]},{"name":"t1,t2","tags":{"tk":"d"},"columns":["time","t1.value","t1.value1","t2.value"],"values":[["2021-08-16T16:00:00Z",null,null,50]]}]}]}`,
+		},
+		{
+			name:    "select field outerjoin",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select table1.value,table2.value from table1 outer join table2 on table1.tk=table2.tk group by tk",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table2","tags":{"tk":"a"},"columns":["time","table1.value","table2.value"],"values":[["2021-08-16T16:00:00Z",1,null]]},{"name":"table1,table2","tags":{"tk":"b"},"columns":["time","table1.value","table2.value"],"values":[["2021-08-16T16:00:00Z",2,10]]},{"name":"table1,table2","tags":{"tk":"c"},"columns":["time","table1.value","table2.value"],"values":[["2021-08-16T16:00:00Z",4,40]]},{"name":"table1,table2","tags":{"tk":"d"},"columns":["time","table1.value","table2.value"],"values":[["2021-08-16T16:00:00Z",null,50]]}]}]}`,
+		},
+		{
+			name:    "select * outerjoin",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table1 outer join table2 on table1.tk=table2.tk group by tk",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table2","tags":{"tk":"a"},"columns":["time","table1.value","table1.value1","table2.value"],"values":[["2021-08-16T16:00:00Z",1,11,null]]},{"name":"table1,table2","tags":{"tk":"b"},"columns":["time","table1.value","table1.value1","table2.value"],"values":[["2021-08-16T16:00:00Z",2,22,10]]},{"name":"table1,table2","tags":{"tk":"c"},"columns":["time","table1.value","table1.value1","table2.value"],"values":[["2021-08-16T16:00:00Z",4,44,40]]},{"name":"table1,table2","tags":{"tk":"d"},"columns":["time","table1.value","table1.value1","table2.value"],"values":[["2021-08-16T16:00:00Z",null,null,50]]}]}]}`,
+		},
+		{
+			name:    "select field outerjoin as",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select t1.value1,t2.value from table1 as t1 outer join table2 as t2 on t1.tk=t2.tk group by tk",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"t1,t2","tags":{"tk":"a"},"columns":["time","t1.value1","t2.value"],"values":[["2021-08-16T16:00:00Z",11,null]]},{"name":"t1,t2","tags":{"tk":"b"},"columns":["time","t1.value1","t2.value"],"values":[["2021-08-16T16:00:00Z",22,10]]},{"name":"t1,t2","tags":{"tk":"c"},"columns":["time","t1.value1","t2.value"],"values":[["2021-08-16T16:00:00Z",44,40]]},{"name":"t1,t2","tags":{"tk":"d"},"columns":["time","t1.value1","t2.value"],"values":[["2021-08-16T16:00:00Z",null,50]]}]}]}`,
+		},
+		{
+			name:    "select *  outerjoin as",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table1 as t1 outer join table2 as t2 on t1.tk=t2.tk group by tk",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"t1,t2","tags":{"tk":"a"},"columns":["time","t1.value","t1.value1","t2.value"],"values":[["2021-08-16T16:00:00Z",1,11,null]]},{"name":"t1,t2","tags":{"tk":"b"},"columns":["time","t1.value","t1.value1","t2.value"],"values":[["2021-08-16T16:00:00Z",2,22,10]]},{"name":"t1,t2","tags":{"tk":"c"},"columns":["time","t1.value","t1.value1","t2.value"],"values":[["2021-08-16T16:00:00Z",4,44,40]]},{"name":"t1,t2","tags":{"tk":"d"},"columns":["time","t1.value","t1.value1","t2.value"],"values":[["2021-08-16T16:00:00Z",null,null,50]]}]}]}`,
+		},
+		{
+			name:    "select field fulljoin",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select table1.value,table2.value from table1 full join table2 on table1.tk=table2.tk group by tk",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table2","tags":{"tk":"a"},"columns":["time","table1.value","table2.value"],"values":[["2021-08-16T16:00:00Z",1,0]]},{"name":"table1,table2","tags":{"tk":"b"},"columns":["time","table1.value","table2.value"],"values":[["2021-08-16T16:00:00Z",2,10]]},{"name":"table1,table2","tags":{"tk":"c"},"columns":["time","table1.value","table2.value"],"values":[["2021-08-16T16:00:00Z",4,40]]},{"name":"table1,table2","tags":{"tk":"d"},"columns":["time","table1.value","table2.value"],"values":[["2021-08-16T16:00:00Z",0,50]]}]}]}`,
+		},
+		{
+			name:    "select * fulljoin",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table1 full join table2 on table1.tk=table2.tk group by tk",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table2","tags":{"tk":"a"},"columns":["time","table1.value","table1.value1","table2.value"],"values":[["2021-08-16T16:00:00Z",1,11,0]]},{"name":"table1,table2","tags":{"tk":"b"},"columns":["time","table1.value","table1.value1","table2.value"],"values":[["2021-08-16T16:00:00Z",2,22,10]]},{"name":"table1,table2","tags":{"tk":"c"},"columns":["time","table1.value","table1.value1","table2.value"],"values":[["2021-08-16T16:00:00Z",4,44,40]]},{"name":"table1,table2","tags":{"tk":"d"},"columns":["time","table1.value","table1.value1","table2.value"],"values":[["2021-08-16T16:00:00Z",0,0,50]]}]}]}`,
+		},
+		{
+			name:    "select field fulljoin as",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select t1.value1,t2.value from table1 as t1 full join table2 as t2 on t1.tk=t2.tk group by tk",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"t1,t2","tags":{"tk":"a"},"columns":["time","t1.value1","t2.value"],"values":[["2021-08-16T16:00:00Z",11,0]]},{"name":"t1,t2","tags":{"tk":"b"},"columns":["time","t1.value1","t2.value"],"values":[["2021-08-16T16:00:00Z",22,10]]},{"name":"t1,t2","tags":{"tk":"c"},"columns":["time","t1.value1","t2.value"],"values":[["2021-08-16T16:00:00Z",44,40]]},{"name":"t1,t2","tags":{"tk":"d"},"columns":["time","t1.value1","t2.value"],"values":[["2021-08-16T16:00:00Z",0,50]]}]}]}`,
+		},
+		{
+			name:    "select *  fulljoin as",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table1 as t1 full join table2 as t2 on t1.tk=t2.tk group by tk",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"t1,t2","tags":{"tk":"a"},"columns":["time","t1.value","t1.value1","t2.value"],"values":[["2021-08-16T16:00:00Z",1,11,0]]},{"name":"t1,t2","tags":{"tk":"b"},"columns":["time","t1.value","t1.value1","t2.value"],"values":[["2021-08-16T16:00:00Z",2,22,10]]},{"name":"t1,t2","tags":{"tk":"c"},"columns":["time","t1.value","t1.value1","t2.value"],"values":[["2021-08-16T16:00:00Z",4,44,40]]},{"name":"t1,t2","tags":{"tk":"d"},"columns":["time","t1.value","t1.value1","t2.value"],"values":[["2021-08-16T16:00:00Z",0,0,50]]}]}]}`,
+		},
+		{
+			name:    "join field not in select clause: inner join",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select table1.value,table2.value from table1 inner join table2 on table1.tk=table2.tk",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table2","columns":["time","table1.value","table2.value"],"values":[["2021-08-16T16:00:00Z",2,10],["2021-08-16T16:00:00Z",4,40]]}]}]}`,
+		},
+		{
+			name:    "join field not in select clause: left join",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select table1.value,table2.value from table1 left join table2 on table1.tk=table2.tk",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table2","columns":["time","table1.value","table2.value"],"values":[["2021-08-16T16:00:00Z",1,null],["2021-08-16T16:00:00Z",2,10],["2021-08-16T16:00:00Z",4,40]]}]}]}`,
+		},
+		{
+			name:    "join field not in select clause: right join",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select table1.value,table2.value from table1 right join table2 on table1.tk=table2.tk",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table2","columns":["time","table1.value","table2.value"],"values":[["2021-08-16T16:00:00Z",2,10],["2021-08-16T16:00:00Z",4,40],["2021-08-16T16:00:00Z",null,50]]}]}]}`,
+		},
+		{
+			name:    "join field not in select clause: outer join",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select table1.value,table2.value from table1 outer join table2 on table1.tk=table2.tk",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table2","columns":["time","table1.value","table2.value"],"values":[["2021-08-16T16:00:00Z",1,null],["2021-08-16T16:00:00Z",2,10],["2021-08-16T16:00:00Z",4,40],["2021-08-16T16:00:00Z",null,50]]}]}]}`,
+		},
+		{
+			name:    "select innerjoin match time",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table3 inner join table4 on table3.tk=table4.tk and table3.time=table4.time group by tk",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table3,table4","tags":{"tk":"b"},"columns":["time","table3.value","table4.value"],"values":[["2021-08-16T16:00:00Z",2,4],["2021-08-16T16:00:10Z",3,5]]}]}]}`,
+		},
+		{
+			name:    "select innerjoin not match time",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table3 inner join table4 on table3.tk=table4.tk group by tk",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table3,table4","tags":{"tk":"b"},"columns":["time","table3.value","table4.value"],"values":[["2021-08-16T16:00:00Z",2,4],["2021-08-16T16:00:00Z",2,5],["2021-08-16T16:00:10Z",3,4],["2021-08-16T16:00:10Z",3,5]]}]}]}`,
+		},
+		{
+			name:    "select leftjoin match time",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table3 left join table4 on table3.tk=table4.tk and table3.time=table4.time group by tk",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table3,table4","tags":{"tk":"a"},"columns":["time","table3.value","table4.value"],"values":[["2021-08-16T16:00:00Z",1,null]]},{"name":"table3,table4","tags":{"tk":"b"},"columns":["time","table3.value","table4.value"],"values":[["2021-08-16T16:00:00Z",2,4],["2021-08-16T16:00:10Z",3,5]]}]}]}`,
+		},
+		{
+			name:    "select leftjoin not match time",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table3 left join table4 on table3.tk=table4.tk group by tk",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table3,table4","tags":{"tk":"a"},"columns":["time","table3.value","table4.value"],"values":[["2021-08-16T16:00:00Z",1,null]]},{"name":"table3,table4","tags":{"tk":"b"},"columns":["time","table3.value","table4.value"],"values":[["2021-08-16T16:00:00Z",2,4],["2021-08-16T16:00:00Z",2,5],["2021-08-16T16:00:10Z",3,4],["2021-08-16T16:00:10Z",3,5]]}]}]}`,
+		},
+		{
+			name:    "select rightjoin match time",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table3 right join table4 on table3.tk=table4.tk and table3.time=table4.time group by tk",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table3,table4","tags":{"tk":"b"},"columns":["time","table3.value","table4.value"],"values":[["2021-08-16T16:00:00Z",2,4],["2021-08-16T16:00:10Z",3,5]]},{"name":"table3,table4","tags":{"tk":"c"},"columns":["time","table3.value","table4.value"],"values":[["2021-08-16T16:00:00Z",null,6]]}]}]}`,
+		},
+		{
+			name:    "select rightjoin not match time",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table3 right join table4 on table3.tk=table4.tk group by tk",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table3,table4","tags":{"tk":"b"},"columns":["time","table3.value","table4.value"],"values":[["2021-08-16T16:00:00Z",2,4],["2021-08-16T16:00:10Z",2,5],["2021-08-16T16:00:00Z",3,4],["2021-08-16T16:00:10Z",3,5]]},{"name":"table3,table4","tags":{"tk":"c"},"columns":["time","table3.value","table4.value"],"values":[["2021-08-16T16:00:00Z",null,6]]}]}]}`,
+		},
+		{
+			name:    "select outerjoin match time",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table3 outer join table4 on table3.tk=table4.tk and table3.time=table4.time group by tk",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table3,table4","tags":{"tk":"a"},"columns":["time","table3.value","table4.value"],"values":[["2021-08-16T16:00:00Z",1,null]]},{"name":"table3,table4","tags":{"tk":"b"},"columns":["time","table3.value","table4.value"],"values":[["2021-08-16T16:00:00Z",2,4],["2021-08-16T16:00:10Z",3,5]]},{"name":"table3,table4","tags":{"tk":"c"},"columns":["time","table3.value","table4.value"],"values":[["2021-08-16T16:00:00Z",null,6]]}]}]}`,
+		},
+		{
+			name:    "select outerjoin not match time",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table3 outer join table4 on table3.tk=table4.tk group by tk",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table3,table4","tags":{"tk":"a"},"columns":["time","table3.value","table4.value"],"values":[["2021-08-16T16:00:00Z",1,null]]},{"name":"table3,table4","tags":{"tk":"b"},"columns":["time","table3.value","table4.value"],"values":[["2021-08-16T16:00:00Z",2,4],["2021-08-16T16:00:00Z",2,5],["2021-08-16T16:00:10Z",3,4],["2021-08-16T16:00:10Z",3,5]]},{"name":"table3,table4","tags":{"tk":"c"},"columns":["time","table3.value","table4.value"],"values":[["2021-08-16T16:00:00Z",null,6]]}]}]}`,
+		},
+	}...)
+
+	for i, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if i == 0 {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
+			}
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}
+
+func TestServer_HashJoin_Table(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		`server_metrics,device_id=001,region=CN cpu=78,mem=3.2 1715068800000000000`,
+		`server_metrics,device_id=001,region=CN cpu=44,mem=5.1 1715068801000000000`,
+		`server_metrics,device_id=002,region=US cpu=92,mem=4.1 1715068801000000000`,
+		`server_metrics,device_id=003,region=EU cpu=65,mem=2.8 1715068802000000000`,
+		`server_metrics,device_id=004,region=CN cpu=85,mem=3.9 1715068803000000000`,
+		`network_metrics,device_id=001,location=DC1 latency=12,throughput=950 1715068800000000000`,
+		`network_metrics,device_id=002,location=DC2 latency=25,throughput=820 1715068801000000000`,
+		`network_metrics,device_id=002,location=DC2 latency=16,throughput=888 1715068801100000000`,
+		`network_metrics,device_id=005,location=DC3 latency=8,throughput=1100 1715068802000000000`,
+		`network_metrics,device_id=006,location=DC4 latency=18,throughput=780 1715068803000000000`,
+	}
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		{
+			name:    "hash inner join on time",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "SELECT * FROM server_metrics as t1 inner join network_metrics as t2 ON (t1.device_id = t2.device_id and t1.time=t2.time)",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"t1,t2","columns":["time","t1.cpu","t1.device_id","t1.mem","t1.region","t2.device_id","t2.latency","t2.location","t2.throughput"],"values":[["2024-05-07T08:00:00Z",78,"001",3.2,"CN","001",12,"DC1",950],["2024-05-07T08:00:01Z",92,"002",4.1,"US","002",25,"DC2",820]]}]}]}`,
+		},
+		{
+			name:    "hash inner join product",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "SELECT * FROM server_metrics as t1 inner join network_metrics as t2 ON (t1.device_id = t2.device_id)",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"t1,t2","columns":["time","t1.cpu","t1.device_id","t1.mem","t1.region","t2.device_id","t2.latency","t2.location","t2.throughput"],"values":[["2024-05-07T08:00:00Z",78,"001",3.2,"CN","001",12,"DC1",950],["2024-05-07T08:00:01Z",44,"001",5.1,"CN","001",12,"DC1",950],["2024-05-07T08:00:01Z",92,"002",4.1,"US","002",25,"DC2",820],["2024-05-07T08:00:01Z",92,"002",4.1,"US","002",16,"DC2",888]]}]}]}`,
+		},
+		{
+			name:    "hash left join on time",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "SELECT * FROM server_metrics as t1 left outer join network_metrics as t2 ON (t1.device_id = t2.device_id and t1.time=t2.time)",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"t1,t2","columns":["time","t1.cpu","t1.device_id","t1.mem","t1.region","t2.device_id","t2.latency","t2.location","t2.throughput"],"values":[["2024-05-07T08:00:00Z",78,"001",3.2,"CN","001",12,"DC1",950],["2024-05-07T08:00:01Z",44,"001",5.1,"CN",null,null,null,null],["2024-05-07T08:00:01Z",92,"002",4.1,"US","002",25,"DC2",820],["2024-05-07T08:00:02Z",65,"003",2.8,"EU",null,null,null,null],["2024-05-07T08:00:03Z",85,"004",3.9,"CN",null,null,null,null]]}]}]}`,
+		},
+		{
+			name:    "hash left join product",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "SELECT * FROM server_metrics as t1 left outer join network_metrics as t2 ON (t1.device_id = t2.device_id)",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"t1,t2","columns":["time","t1.cpu","t1.device_id","t1.mem","t1.region","t2.device_id","t2.latency","t2.location","t2.throughput"],"values":[["2024-05-07T08:00:00Z",78,"001",3.2,"CN","001",12,"DC1",950],["2024-05-07T08:00:01Z",44,"001",5.1,"CN","001",12,"DC1",950],["2024-05-07T08:00:01Z",92,"002",4.1,"US","002",25,"DC2",820],["2024-05-07T08:00:01Z",92,"002",4.1,"US","002",16,"DC2",888],["2024-05-07T08:00:02Z",65,"003",2.8,"EU",null,null,null,null],["2024-05-07T08:00:03Z",85,"004",3.9,"CN",null,null,null,null]]}]}]}`,
+		},
+		{
+			name:    "hash right join on time",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "SELECT * FROM server_metrics as t1 right outer join network_metrics as t2 ON (t1.device_id = t2.device_id and t1.time=t2.time)",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"t1,t2","columns":["time","t1.cpu","t1.device_id","t1.mem","t1.region","t2.device_id","t2.latency","t2.location","t2.throughput"],"values":[["2024-05-07T08:00:00Z",78,"001",3.2,"CN","001",12,"DC1",950],["2024-05-07T08:00:01Z",92,"002",4.1,"US","002",25,"DC2",820],["2024-05-07T08:00:01.1Z",null,null,null,null,"002",16,"DC2",888],["2024-05-07T08:00:02Z",null,null,null,null,"005",8,"DC3",1100],["2024-05-07T08:00:03Z",null,null,null,null,"006",18,"DC4",780]]}]}]}`,
+		},
+		{
+			name:    "hash right join product",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "SELECT * FROM server_metrics as t1 right outer join network_metrics as t2 ON (t1.device_id = t2.device_id)",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"t1,t2","columns":["time","t1.cpu","t1.device_id","t1.mem","t1.region","t2.device_id","t2.latency","t2.location","t2.throughput"],"values":[["2024-05-07T08:00:00Z",78,"001",3.2,"CN","001",12,"DC1",950],["2024-05-07T08:00:00Z",44,"001",5.1,"CN","001",12,"DC1",950],["2024-05-07T08:00:01Z",92,"002",4.1,"US","002",25,"DC2",820],["2024-05-07T08:00:01.1Z",92,"002",4.1,"US","002",16,"DC2",888],["2024-05-07T08:00:02Z",null,null,null,null,"005",8,"DC3",1100],["2024-05-07T08:00:03Z",null,null,null,null,"006",18,"DC4",780]]}]}]}`,
+		},
+		{
+			name:    "hash outer join on time",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "SELECT * FROM server_metrics as t1 outer join network_metrics as t2 ON (t1.device_id = t2.device_id and t1.time=t2.time)",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"t1,t2","columns":["time","t1.cpu","t1.device_id","t1.mem","t1.region","t2.device_id","t2.latency","t2.location","t2.throughput"],"values":[["2024-05-07T08:00:00Z",78,"001",3.2,"CN","001",12,"DC1",950],["2024-05-07T08:00:01Z",44,"001",5.1,"CN",null,null,null,null],["2024-05-07T08:00:01Z",92,"002",4.1,"US","002",25,"DC2",820],["2024-05-07T08:00:02Z",65,"003",2.8,"EU",null,null,null,null],["2024-05-07T08:00:03Z",85,"004",3.9,"CN",null,null,null,null],["2024-05-07T08:00:01.1Z",null,null,null,null,"002",16,"DC2",888],["2024-05-07T08:00:02Z",null,null,null,null,"005",8,"DC3",1100],["2024-05-07T08:00:03Z",null,null,null,null,"006",18,"DC4",780]]}]}]}`,
+		},
+		{
+			name:    "hash outer join product",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "SELECT * FROM server_metrics as t1 outer join network_metrics as t2 ON (t1.device_id = t2.device_id)",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"t1,t2","columns":["time","t1.cpu","t1.device_id","t1.mem","t1.region","t2.device_id","t2.latency","t2.location","t2.throughput"],"values":[["2024-05-07T08:00:00Z",78,"001",3.2,"CN","001",12,"DC1",950],["2024-05-07T08:00:01Z",44,"001",5.1,"CN","001",12,"DC1",950],["2024-05-07T08:00:01Z",92,"002",4.1,"US","002",25,"DC2",820],["2024-05-07T08:00:01Z",92,"002",4.1,"US","002",16,"DC2",888],["2024-05-07T08:00:02Z",65,"003",2.8,"EU",null,null,null,null],["2024-05-07T08:00:03Z",85,"004",3.9,"CN",null,null,null,null],["2024-05-07T08:00:02Z",null,null,null,null,"005",8,"DC3",1100],["2024-05-07T08:00:03Z",null,null,null,null,"006",18,"DC4",780]]}]}]}`,
+		},
+	}...)
+
+	for i, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if i == 0 {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
+			}
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}
+
+func TestServer_Cascading_Join_Table(t *testing.T) {
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		`table1,t1=a,t2=1 value=1,value1=11 1629129600000000000`,
+		`table1,t1=b,t2=2 value=2,value1=22 1629129600000000000`,
+		`table1,t1=c,t2=3 value=4,value1=44 1629129600000000000`,
+		`table2,t1=b,t2=4 value=10 1629129600000000000`,
+		`table2,t1=c,t2=5 value=20 1629129600000000000`,
+		`table2,t1=c,t2=6 value=40 1629129600000000000`,
+		`table2,t1=d,t2=7 value=50 1629129600000000000`,
+		`table3,t1=b,t2=8 value=31 1629129600000000000`,
+		`table3,t1=c,t2=9 value=32 1629129600000000000`,
+		`table3,t1=c,t2=10 value=33 1629129600000000000`,
+		`table3,t1=d,t2=11 value=34 1629129600000000000`,
+	}
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		{
+			name:    "innerjoin cascading innerjoin",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table1 inner join table2 on table1.t1=table2.t1 inner join table3 on table1.t1=table3.t1",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table2,table3","columns":["time","table1.t1","table1.t2","table1.value","table1.value1","table2.t1","table2.t2","table2.value","table3.t1","table3.t2","table3.value"],"values":[["2021-08-16T16:00:00Z","b","2",2,22,"b","4",10,"b","8",31],["2021-08-16T16:00:00Z","c","3",4,44,"c","5",20,"c","10",33],["2021-08-16T16:00:00Z","c","3",4,44,"c","5",20,"c","9",32],["2021-08-16T16:00:00Z","c","3",4,44,"c","6",40,"c","10",33],["2021-08-16T16:00:00Z","c","3",4,44,"c","6",40,"c","9",32]]}]}]}`,
+		},
+		{
+			name:    "innerjoin cascading innerjoin subquery",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from (select * from table1) as m1 inner join (select * from table2) as m2 on m1.t1=m2.t1 inner join table3 as m3 on m1.t1=m3.t1",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"m1,m2,m3","columns":["time","m1.t1","m1.t2","m1.value","m1.value1","m2.t1","m2.t2","m2.value","m3.t1","m3.t2","m3.value"],"values":[["2021-08-16T16:00:00Z","b","2",2,22,"b","4",10,"b","8",31],["2021-08-16T16:00:00Z","c","3",4,44,"c","5",20,"c","10",33],["2021-08-16T16:00:00Z","c","3",4,44,"c","5",20,"c","9",32],["2021-08-16T16:00:00Z","c","3",4,44,"c","6",40,"c","10",33],["2021-08-16T16:00:00Z","c","3",4,44,"c","6",40,"c","9",32]]}]}]}`,
+		},
+		{
+			name:    "innerjoin cascading leftjoin",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table1 inner join table2 on table1.t1=table2.t1 left join table3 on table1.t1=table3.t1",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table2,table3","columns":["time","table1.t1","table1.t2","table1.value","table1.value1","table2.t1","table2.t2","table2.value","table3.t1","table3.t2","table3.value"],"values":[["2021-08-16T16:00:00Z","b","2",2,22,"b","4",10,"b","8",31],["2021-08-16T16:00:00Z","c","3",4,44,"c","5",20,"c","10",33],["2021-08-16T16:00:00Z","c","3",4,44,"c","5",20,"c","9",32],["2021-08-16T16:00:00Z","c","3",4,44,"c","6",40,"c","10",33],["2021-08-16T16:00:00Z","c","3",4,44,"c","6",40,"c","9",32]]}]}]}`,
+		},
+		{
+			name:    "innerjoin cascading rightjoin",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table1 inner join table2 on table1.t1=table2.t1 right join table3 on table1.t1=table3.t1",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table2,table3","columns":["time","table1.t1","table1.t2","table1.value","table1.value1","table2.t1","table2.t2","table2.value","table3.t1","table3.t2","table3.value"],"values":[["2021-08-16T16:00:00Z","b","2",2,22,"b","4",10,"b","8",31],["2021-08-16T16:00:00Z","c","3",4,44,"c","5",20,"c","10",33],["2021-08-16T16:00:00Z","c","3",4,44,"c","6",40,"c","10",33],["2021-08-16T16:00:00Z","c","3",4,44,"c","5",20,"c","9",32],["2021-08-16T16:00:00Z","c","3",4,44,"c","6",40,"c","9",32],["2021-08-16T16:00:00Z",null,null,null,null,null,null,null,"d","11",34]]}]}]}`,
+		},
+		{
+			name:    "innerjoin cascading outerjoin",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table1 inner join table2 on table1.t1=table2.t1 outer join table3 on table1.t1=table3.t1",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table2,table3","columns":["time","table1.t1","table1.t2","table1.value","table1.value1","table2.t1","table2.t2","table2.value","table3.t1","table3.t2","table3.value"],"values":[["2021-08-16T16:00:00Z","b","2",2,22,"b","4",10,"b","8",31],["2021-08-16T16:00:00Z","c","3",4,44,"c","5",20,"c","10",33],["2021-08-16T16:00:00Z","c","3",4,44,"c","5",20,"c","9",32],["2021-08-16T16:00:00Z","c","3",4,44,"c","6",40,"c","10",33],["2021-08-16T16:00:00Z","c","3",4,44,"c","6",40,"c","9",32],["2021-08-16T16:00:00Z",null,null,null,null,null,null,null,"d","11",34]]}]}]}`,
+		},
+		{
+			name:    "leftjoin cascading innerjoin",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table1 left join table2 on table1.t1=table2.t1 inner join table3 on table1.t1=table3.t1",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table2,table3","columns":["time","table1.t1","table1.t2","table1.value","table1.value1","table2.t1","table2.t2","table2.value","table3.t1","table3.t2","table3.value"],"values":[["2021-08-16T16:00:00Z","b","2",2,22,"b","4",10,"b","8",31],["2021-08-16T16:00:00Z","c","3",4,44,"c","5",20,"c","10",33],["2021-08-16T16:00:00Z","c","3",4,44,"c","5",20,"c","9",32],["2021-08-16T16:00:00Z","c","3",4,44,"c","6",40,"c","10",33],["2021-08-16T16:00:00Z","c","3",4,44,"c","6",40,"c","9",32]]}]}]}`,
+		},
+		{
+			name:    "leftjoin cascading leftjoin",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table1 left join table2 on table1.t1=table2.t1 left join table3 on table1.t1=table3.t1",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table2,table3","columns":["time","table1.t1","table1.t2","table1.value","table1.value1","table2.t1","table2.t2","table2.value","table3.t1","table3.t2","table3.value"],"values":[["2021-08-16T16:00:00Z","a","1",1,11,null,null,null,null,null,null],["2021-08-16T16:00:00Z","b","2",2,22,"b","4",10,"b","8",31],["2021-08-16T16:00:00Z","c","3",4,44,"c","5",20,"c","10",33],["2021-08-16T16:00:00Z","c","3",4,44,"c","5",20,"c","9",32],["2021-08-16T16:00:00Z","c","3",4,44,"c","6",40,"c","10",33],["2021-08-16T16:00:00Z","c","3",4,44,"c","6",40,"c","9",32]]}]}]}`,
+		},
+		{
+			name:    "leftjoin cascading rightjoin",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table1 left join table2 on table1.t1=table2.t1 right join table3 on table1.t1=table3.t1",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table2,table3","columns":["time","table1.t1","table1.t2","table1.value","table1.value1","table2.t1","table2.t2","table2.value","table3.t1","table3.t2","table3.value"],"values":[["2021-08-16T16:00:00Z","b","2",2,22,"b","4",10,"b","8",31],["2021-08-16T16:00:00Z","c","3",4,44,"c","5",20,"c","10",33],["2021-08-16T16:00:00Z","c","3",4,44,"c","6",40,"c","10",33],["2021-08-16T16:00:00Z","c","3",4,44,"c","5",20,"c","9",32],["2021-08-16T16:00:00Z","c","3",4,44,"c","6",40,"c","9",32],["2021-08-16T16:00:00Z",null,null,null,null,null,null,null,"d","11",34]]}]}]}`,
+		},
+		{
+			name:    "leftjoin cascading outerjoin",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table1 left join table2 on table1.t1=table2.t1 outer join table3 on table1.t1=table3.t1",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table2,table3","columns":["time","table1.t1","table1.t2","table1.value","table1.value1","table2.t1","table2.t2","table2.value","table3.t1","table3.t2","table3.value"],"values":[["2021-08-16T16:00:00Z","a","1",1,11,null,null,null,null,null,null],["2021-08-16T16:00:00Z","b","2",2,22,"b","4",10,"b","8",31],["2021-08-16T16:00:00Z","c","3",4,44,"c","5",20,"c","10",33],["2021-08-16T16:00:00Z","c","3",4,44,"c","5",20,"c","9",32],["2021-08-16T16:00:00Z","c","3",4,44,"c","6",40,"c","10",33],["2021-08-16T16:00:00Z","c","3",4,44,"c","6",40,"c","9",32],["2021-08-16T16:00:00Z",null,null,null,null,null,null,null,"d","11",34]]}]}]}`,
+		},
+		{
+			name:    "rightjoin cascading innerjoin",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table1 right join table2 on table1.t1=table2.t1 inner join table3 on table1.t1=table3.t1",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table2,table3","columns":["time","table1.t1","table1.t2","table1.value","table1.value1","table2.t1","table2.t2","table2.value","table3.t1","table3.t2","table3.value"],"values":[["2021-08-16T16:00:00Z","b","2",2,22,"b","4",10,"b","8",31],["2021-08-16T16:00:00Z","c","3",4,44,"c","5",20,"c","10",33],["2021-08-16T16:00:00Z","c","3",4,44,"c","5",20,"c","9",32],["2021-08-16T16:00:00Z","c","3",4,44,"c","6",40,"c","10",33],["2021-08-16T16:00:00Z","c","3",4,44,"c","6",40,"c","9",32]]}]}]}`,
+		},
+		{
+			name:    "rightjoin cascading leftjoin",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table1 right join table2 on table1.t1=table2.t1 left join table3 on table1.t1=table3.t1",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table2,table3","columns":["time","table1.t1","table1.t2","table1.value","table1.value1","table2.t1","table2.t2","table2.value","table3.t1","table3.t2","table3.value"],"values":[["2021-08-16T16:00:00Z","b","2",2,22,"b","4",10,"b","8",31],["2021-08-16T16:00:00Z","c","3",4,44,"c","5",20,"c","10",33],["2021-08-16T16:00:00Z","c","3",4,44,"c","5",20,"c","9",32],["2021-08-16T16:00:00Z","c","3",4,44,"c","6",40,"c","10",33],["2021-08-16T16:00:00Z","c","3",4,44,"c","6",40,"c","9",32],["2021-08-16T16:00:00Z",null,null,null,null,"d","7",50,null,null,null]]}]}]}`,
+		},
+		{
+			name:    "rightjoin cascading rightjoin",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table1 right join table2 on table1.t1=table2.t1 right join table3 on table1.t1=table3.t1",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table2,table3","columns":["time","table1.t1","table1.t2","table1.value","table1.value1","table2.t1","table2.t2","table2.value","table3.t1","table3.t2","table3.value"],"values":[["2021-08-16T16:00:00Z","b","2",2,22,"b","4",10,"b","8",31],["2021-08-16T16:00:00Z","c","3",4,44,"c","5",20,"c","10",33],["2021-08-16T16:00:00Z","c","3",4,44,"c","6",40,"c","10",33],["2021-08-16T16:00:00Z","c","3",4,44,"c","5",20,"c","9",32],["2021-08-16T16:00:00Z","c","3",4,44,"c","6",40,"c","9",32],["2021-08-16T16:00:00Z",null,null,null,null,null,null,null,"d","11",34]]}]}]}`,
+		},
+		{
+			name:    "rightjoin cascading outerjoin",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table1 right join table2 on table1.t1=table2.t1 outer join table3 on table1.t1=table3.t1",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table2,table3","columns":["time","table1.t1","table1.t2","table1.value","table1.value1","table2.t1","table2.t2","table2.value","table3.t1","table3.t2","table3.value"],"values":[["2021-08-16T16:00:00Z","b","2",2,22,"b","4",10,"b","8",31],["2021-08-16T16:00:00Z","c","3",4,44,"c","5",20,"c","10",33],["2021-08-16T16:00:00Z","c","3",4,44,"c","5",20,"c","9",32],["2021-08-16T16:00:00Z","c","3",4,44,"c","6",40,"c","10",33],["2021-08-16T16:00:00Z","c","3",4,44,"c","6",40,"c","9",32],["2021-08-16T16:00:00Z",null,null,null,null,"d","7",50,null,null,null],["2021-08-16T16:00:00Z",null,null,null,null,null,null,null,"d","11",34]]}]}]}`,
+		},
+		{
+			name:    "outerjoin cascading innerjoin",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table1 outer join table2 on table1.t1=table2.t1 inner join table3 on table1.t1=table3.t1",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table2,table3","columns":["time","table1.t1","table1.t2","table1.value","table1.value1","table2.t1","table2.t2","table2.value","table3.t1","table3.t2","table3.value"],"values":[["2021-08-16T16:00:00Z","b","2",2,22,"b","4",10,"b","8",31],["2021-08-16T16:00:00Z","c","3",4,44,"c","5",20,"c","10",33],["2021-08-16T16:00:00Z","c","3",4,44,"c","5",20,"c","9",32],["2021-08-16T16:00:00Z","c","3",4,44,"c","6",40,"c","10",33],["2021-08-16T16:00:00Z","c","3",4,44,"c","6",40,"c","9",32]]}]}]}`,
+		},
+		{
+			name:    "outerjoin cascading leftjoin",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table1 outer join table2 on table1.t1=table2.t1 left join table3 on table1.t1=table3.t1",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table2,table3","columns":["time","table1.t1","table1.t2","table1.value","table1.value1","table2.t1","table2.t2","table2.value","table3.t1","table3.t2","table3.value"],"values":[["2021-08-16T16:00:00Z","a","1",1,11,null,null,null,null,null,null],["2021-08-16T16:00:00Z","b","2",2,22,"b","4",10,"b","8",31],["2021-08-16T16:00:00Z","c","3",4,44,"c","5",20,"c","10",33],["2021-08-16T16:00:00Z","c","3",4,44,"c","5",20,"c","9",32],["2021-08-16T16:00:00Z","c","3",4,44,"c","6",40,"c","10",33],["2021-08-16T16:00:00Z","c","3",4,44,"c","6",40,"c","9",32],["2021-08-16T16:00:00Z",null,null,null,null,"d","7",50,null,null,null]]}]}]}`,
+		},
+		{
+			name:    "outerjoin cascading rightjoin",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table1 outer join table2 on table1.t1=table2.t1 right join table3 on table1.t1=table3.t1",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table2,table3","columns":["time","table1.t1","table1.t2","table1.value","table1.value1","table2.t1","table2.t2","table2.value","table3.t1","table3.t2","table3.value"],"values":[["2021-08-16T16:00:00Z","b","2",2,22,"b","4",10,"b","8",31],["2021-08-16T16:00:00Z","c","3",4,44,"c","5",20,"c","10",33],["2021-08-16T16:00:00Z","c","3",4,44,"c","6",40,"c","10",33],["2021-08-16T16:00:00Z","c","3",4,44,"c","5",20,"c","9",32],["2021-08-16T16:00:00Z","c","3",4,44,"c","6",40,"c","9",32],["2021-08-16T16:00:00Z",null,null,null,null,null,null,null,"d","11",34]]}]}]}`,
+		},
+		{
+			name:    "outerjoin cascading outerjoin",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table1 outer join table2 on table1.t1=table2.t1 outer join table3 on table1.t1=table3.t1",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table2,table3","columns":["time","table1.t1","table1.t2","table1.value","table1.value1","table2.t1","table2.t2","table2.value","table3.t1","table3.t2","table3.value"],"values":[["2021-08-16T16:00:00Z","a","1",1,11,null,null,null,null,null,null],["2021-08-16T16:00:00Z","b","2",2,22,"b","4",10,"b","8",31],["2021-08-16T16:00:00Z","c","3",4,44,"c","5",20,"c","10",33],["2021-08-16T16:00:00Z","c","3",4,44,"c","5",20,"c","9",32],["2021-08-16T16:00:00Z","c","3",4,44,"c","6",40,"c","10",33],["2021-08-16T16:00:00Z","c","3",4,44,"c","6",40,"c","9",32],["2021-08-16T16:00:00Z",null,null,null,null,"d","7",50,null,null,null],["2021-08-16T16:00:00Z",null,null,null,null,null,null,null,"d","11",34]]}]}]}`,
+		},
+	}...)
+
+	for i, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if i == 0 {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
+			}
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}
+
+func TestServer_Join_Table_With_Empty_Tag(t *testing.T) {
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		`table1,t2=b value=1 1629129600000000000`,
+		`table1,t1=a value=2 1629129600000000000`,
+		`table1,t1=b,t2=c value=3 1629129600000000000`,
+		`table1,t1=c,t2=d value=4 1629129600000000000`,
+		`table2,t2=b value=5 1629129600000000000`,
+		`table2,t1=a,t2=c value=6 1629129600000000000`,
+		`table2,t1=b value=7 1629129600000000000`,
+		`table2,t1=d,t2=e value=8 1629129600000000000`,
+	}
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		{
+			name:    "inner join with empty tag",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from (select * from table1 group by t1,t2) as m1 join (Select * from table2 group by t1,t2) as m2 on m1.t1=m2.t1 group by t1,t2",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"m1,m2","tags":{"t1":"","t2":"b"},"columns":["time","m1.value","m2.value"],"values":[["2021-08-16T16:00:00Z",1,5]]},{"name":"m1,m2","tags":{"t1":"a","t2":""},"columns":["time","m1.value","m2.value"],"values":[["2021-08-16T16:00:00Z",2,6]]},{"name":"m1,m2","tags":{"t1":"b","t2":"c"},"columns":["time","m1.value","m2.value"],"values":[["2021-08-16T16:00:00Z",3,7]]}]}]}`,
+		},
+		{
+			name:    "left join with empty tag",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from (select * from table1 group by t1,t2) as m1 left join (Select * from table2 group by t1,t2) as m2 on m1.t1=m2.t1 group by t1,t2",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"m1,m2","tags":{"t1":"","t2":"b"},"columns":["time","m1.value","m2.value"],"values":[["2021-08-16T16:00:00Z",1,5]]},{"name":"m1,m2","tags":{"t1":"a","t2":""},"columns":["time","m1.value","m2.value"],"values":[["2021-08-16T16:00:00Z",2,6]]},{"name":"m1,m2","tags":{"t1":"b","t2":"c"},"columns":["time","m1.value","m2.value"],"values":[["2021-08-16T16:00:00Z",3,7]]},{"name":"m1,m2","tags":{"t1":"c","t2":"d"},"columns":["time","m1.value","m2.value"],"values":[["2021-08-16T16:00:00Z",4,null]]}]}]}`,
+		},
+		{
+			name:    "right join with empty tag",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from (select * from table1 group by t1,t2) as m1 right join (Select * from table2 group by t1,t2) as m2 on m1.t1=m2.t1 group by t1,t2",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"m1,m2","tags":{"t1":"","t2":"b"},"columns":["time","m1.value","m2.value"],"values":[["2021-08-16T16:00:00Z",1,5]]},{"name":"m1,m2","tags":{"t1":"a","t2":""},"columns":["time","m1.value","m2.value"],"values":[["2021-08-16T16:00:00Z",2,6]]},{"name":"m1,m2","tags":{"t1":"b","t2":"c"},"columns":["time","m1.value","m2.value"],"values":[["2021-08-16T16:00:00Z",3,7]]},{"name":"m1,m2","tags":{"t1":"d","t2":"e"},"columns":["time","m1.value","m2.value"],"values":[["2021-08-16T16:00:00Z",null,8]]}]}]}`,
+		},
+		{
+			name:    "outer join with empty tag",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from (select * from table1 group by t1,t2) as m1 outer join (Select * from table2 group by t1,t2) as m2 on m1.t1=m2.t1 group by t1,t2",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"m1,m2","tags":{"t1":"","t2":"b"},"columns":["time","m1.value","m2.value"],"values":[["2021-08-16T16:00:00Z",1,5]]},{"name":"m1,m2","tags":{"t1":"a","t2":""},"columns":["time","m1.value","m2.value"],"values":[["2021-08-16T16:00:00Z",2,6]]},{"name":"m1,m2","tags":{"t1":"b","t2":"c"},"columns":["time","m1.value","m2.value"],"values":[["2021-08-16T16:00:00Z",3,7]]},{"name":"m1,m2","tags":{"t1":"c","t2":"d"},"columns":["time","m1.value","m2.value"],"values":[["2021-08-16T16:00:00Z",4,null]]},{"name":"m1,m2","tags":{"t1":"d","t2":"e"},"columns":["time","m1.value","m2.value"],"values":[["2021-08-16T16:00:00Z",null,8]]}]}]}`,
+		},
+	}...)
+
+	for i, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if i == 0 {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
+			}
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}
+
+func TestServer_fullJoin_SubQuery(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		`flow_scope_post_agg_1,direction=in,bgpType=bgpType,businessType=businessType,campus=campus,exportType=exportType,isp=isp,region=region,service=service bps=1 1629129600000000000`,
+		`flow_scope_post_agg_1,direction=in,bgpType=bgpType,businessType=businessType,campus=campus,exportType=exportType,isp=isp,region=region,service=service bps=1 1629129600000000000`,
+		`flow_scope_post_agg_1,direction=in,bgpType=bgpType,businessType=businessType,campus=campus,exportType=exportType,isp=isp,region=region,service=service bps=1 1629129600000000000`,
+		`flow_scope_post_agg_1,direction=out,bgpType=bgpType,businessType=businessType,campus=campus,exportType=exportType,isp=isp,region=region,service=service bps=1 1629129600000000000`,
+		`flow_scope_post_agg_1,direction=out,bgpType=bgpType,businessType=businessType,campus=campus,exportType=exportType,isp=isp,region=region,service=service bps=1 1629129600000000000`,
+		`flow_scope_post_agg_1,direction=out,bgpType=bgpType,businessType=businessType,campus=campus,exportType=exportType,isp=isp,region=region,service=service bps=1 1629129600000000000`,
+	}
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		{
+			name:    "select field full join subquery",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select *  from (select * from flow_scope_post_agg_1 where direction = 'in'  limit 3) as m1 full join (select * from flow_scope_post_agg_1 where direction = 'out' limit 3) as m2 on (m1.bgpType=m2.bgpType and m1.businessType=m2.businessType and m1.campus=m2.campus and m1.exportType=m2.exportType and m1.isp=m2.isp and m1.region=m2.region and m1.service=m2.service) group by bgpType, businessType, campus, exportType, isp, region, service",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"m1,m2","tags":{"bgpType":"bgpType","businessType":"businessType","campus":"campus","exportType":"exportType","isp":"isp","region":"region","service":"service"},"columns":["time","m1.bgpType","m1.bps","m1.businessType","m1.campus","m1.direction","m1.exportType","m1.isp","m1.region","m1.service","m2.bgpType","m2.bps","m2.businessType","m2.campus","m2.direction","m2.exportType","m2.isp","m2.region","m2.service"],"values":[["2021-08-16T16:00:00Z","bgpType",1,"businessType","campus","in","exportType","isp","region","service","bgpType",1,"businessType","campus","out","exportType","isp","region","service"]]}]}]}`,
+		},
+	}...)
+
+	for i, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if i == 0 {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
+			}
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}
+
+/*
+func TestServer_Union_Table(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		`table1,t1=a,t2=h f1=1,f2=11 1629129600000000000`,
+		`table1,t1=b,t2=h f1=2,f2=12 1629129600000000000`,
+		`table2,t1=b,t2=i f1=3,f3=21 1629129600000000000`,
+		`table2,t1=c,t2=i f1=4,f3=22 1629129600000000000`,
+		`table3,t1=b,t2=j f1=3,f2="a",f3=31 1629129600000000000`,
+		`table3,t1=c,t2=k f1=4,f2="b",f3=32 1629129600000000000`,
+		`event_table,entity_id=vm1,name=m1 forwarded_id="forward1",forwarded_service="ELB1"  1629129600000000000`,
+		`event_table,entity_id=vm2,name=m2 forwarded_id="forward2",forwarded_service="ELB2"  1629129600000000000`,
+		`event_table,entity_id=vm3,name=m2 forwarded_id="forward3",forwarded_service="ELB3"  1629129600000000000`,
+		`event_table,entity_id=vm4,name=m3 forwarded_id="forward4",forwarded_service="ELB4"  1629129600000000000`,
+		`event_table,entity_id=vm5,name=m4 forwarded_id="forward5",forwarded_service="ELB5"  1629129600000000000`,
+		`alarm_table,entity_id=vm6,name=m2 matadata="{}",additional="add1" 1629129600000000000`,
+		`alarm_table,entity_id=vm7,name=m3 matadata="{}",additional="add2" 1629129600000000000`,
+		`alarm_table,entity_id=vm8,name=m5 matadata="{}",additional="add3" 1629129600000000000`,
+		`alarm_table,entity_id=vm9,name=m5 matadata="{}",additional="add2" 1629129600000000000`,
+		`alarm_table,entity_id=vm10,name=m6 matadata="{}",additional="add3" 1629129600000000000`,
+		`CPU,entity_id=vm11,name=m5 parent_entity_id="1dd",entity_type=1,forwarded_service="ELB1" 1629129600000000000`,
+		`CPU,entity_id=vm12,name=m7 parent_entity_id="2dd",entity_type=1,forwarded_service="ELB1" 1629129600000000000`,
+		`CPU,entity_id=vm13,name=m7 parent_entity_id="3dd",entity_type=1,forwarded_service="ELB1" 1629129600000000000`,
+		`CPU,entity_id=vm14,name=m8 parent_entity_id="4dd",entity_type=1,forwarded_service="ELB1" 1629129600000000000`,
+		`CPU,entity_id=vm15,name=m9 parent_entity_id="5dd",entity_type=1,forwarded_service="ELB1" 1629129600000000000`,
+	}
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		{
+			name:    "unionall same columns count",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table1 union all select * from table2",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table2","columns":["time","f1","f2","t1","t2"],"values":[["2021-08-16T16:00:00Z",1,11,"a","h"],["2021-08-16T16:00:00Z",2,12,"b","h"],["2021-08-16T16:00:00Z",3,21,"b","i"],["2021-08-16T16:00:00Z",4,22,"c","i"]]}]}]}`,
+		},
+		{
+			name:    "unionallbyname same columns count(not same name)",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table1 union all by name select * from table2",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table2","columns":["time","f1","f2","f3","t1","t2"],"values":[["2021-08-16T16:00:00Z",1,11,null,"a","h"],["2021-08-16T16:00:00Z",2,12,null,"b","h"],["2021-08-16T16:00:00Z",3,null,21,"b","i"],["2021-08-16T16:00:00Z",4,null,22,"c","i"]]}]}]}`,
+		},
+		{
+			name:    "unionall not same columns count",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table1 union all select * from table3",
+			exp:     `{"results":[{"statement_id":0,"error":"union/union all can only apply to expressions with the same number of result columns"}]}`,
+		},
+		{
+			name:    "unionallbyname not same columns count",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table2 union all by name select * from table3",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table2,table3","columns":["time","f1","f2","f3","t1","t2"],"values":[["2021-08-16T16:00:00Z",3,null,21,"b","i"],["2021-08-16T16:00:00Z",4,null,22,"c","i"],["2021-08-16T16:00:00Z",3,"a",31,"b","j"],["2021-08-16T16:00:00Z",4,"b",32,"c","k"]]}]}]}`,
+		},
+		{
+			name:    "unionall same index not same type",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select f1,f2 from table1 union all select f1,f2 from table3",
+			exp:     `{"results":[{"statement_id":0,"error":"columns in the same index position must have the same data type when using union/union all"}]}`,
+		},
+		{
+			name:    "unionallbyname same name not same type",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table1 union all by name select * from table3",
+			exp:     `{"results":[{"statement_id":0,"error":"columns with same name must have the same data type when using union by name/union all by name"}]}`,
+		},
+		{
+			name:    "unionall group by",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table1 group by t1 union all select * from table2 group by t2",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table2","columns":["time","f1","f2","t1","t2"],"values":[["2021-08-16T16:00:00Z",1,11,"a","h"],["2021-08-16T16:00:00Z",2,12,"b","h"],["2021-08-16T16:00:00Z",3,21,"i","b"],["2021-08-16T16:00:00Z",4,22,"i","c"]]}]}]}`,
+		},
+		{
+			name:    "unionallbyname group by",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table1 group by t1  union all by name select * from table2 group by t2",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table2","columns":["time","f1","f2","f3","t1","t2"],"values":[["2021-08-16T16:00:00Z",1,11,null,"a","h"],["2021-08-16T16:00:00Z",2,12,null,"b","h"],["2021-08-16T16:00:00Z",3,null,21,"b","i"],["2021-08-16T16:00:00Z",4,null,22,"c","i"]]}]}]}`,
+		},
+		{
+			name:    "unionall incondition",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select entity_id,forwarded_id from event_table union all select entity_id,additional from alarm_table where \"name\" in (select \"name\" from CPU)",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"alarm_table,event_table","columns":["time","entity_id","forwarded_id"],"values":[["2021-08-16T16:00:00Z","vm9","add2"],["2021-08-16T16:00:00Z","vm8","add3"],["2021-08-16T16:00:00Z","vm1","forward1"],["2021-08-16T16:00:00Z","vm2","forward2"],["2021-08-16T16:00:00Z","vm3","forward3"],["2021-08-16T16:00:00Z","vm4","forward4"],["2021-08-16T16:00:00Z","vm5","forward5"]]}]}]}`,
+		},
+		{
+			name:    "unionall cascade unionall",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select entity_id,forwarded_id from event_table union all select entity_id,additional from alarm_table union all select entity_id,forwarded_service from CPU",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"CPU,alarm_table,event_table","columns":["time","entity_id","forwarded_id"],"values":[["2021-08-16T16:00:00Z","vm11","ELB1"],["2021-08-16T16:00:00Z","vm12","ELB1"],["2021-08-16T16:00:00Z","vm13","ELB1"],["2021-08-16T16:00:00Z","vm14","ELB1"],["2021-08-16T16:00:00Z","vm15","ELB1"],["2021-08-16T16:00:00Z","vm6","add1"],["2021-08-16T16:00:00Z","vm7","add2"],["2021-08-16T16:00:00Z","vm9","add2"],["2021-08-16T16:00:00Z","vm10","add3"],["2021-08-16T16:00:00Z","vm8","add3"],["2021-08-16T16:00:00Z","vm1","forward1"],["2021-08-16T16:00:00Z","vm2","forward2"],["2021-08-16T16:00:00Z","vm3","forward3"],["2021-08-16T16:00:00Z","vm4","forward4"],["2021-08-16T16:00:00Z","vm5","forward5"]]}]}]}`,
+		},
+		{
+			name:    "unionallbyname cascade unionallbyname",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select entity_id,forwarded_id from event_table union all by name select entity_id,additional from alarm_table union all by name select entity_id,forwarded_service from CPU",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"CPU,alarm_table,event_table","columns":["time","additional","entity_id","forwarded_id","forwarded_service"],"values":[["2021-08-16T16:00:00Z",null,"vm11",null,"ELB1"],["2021-08-16T16:00:00Z",null,"vm12",null,"ELB1"],["2021-08-16T16:00:00Z",null,"vm13",null,"ELB1"],["2021-08-16T16:00:00Z",null,"vm14",null,"ELB1"],["2021-08-16T16:00:00Z",null,"vm15",null,"ELB1"],["2021-08-16T16:00:00Z","add1","vm6",null,null],["2021-08-16T16:00:00Z","add2","vm7",null,null],["2021-08-16T16:00:00Z","add2","vm9",null,null],["2021-08-16T16:00:00Z","add3","vm10",null,null],["2021-08-16T16:00:00Z","add3","vm8",null,null],["2021-08-16T16:00:00Z",null,"vm1","forward1",null],["2021-08-16T16:00:00Z",null,"vm2","forward2",null],["2021-08-16T16:00:00Z",null,"vm3","forward3",null],["2021-08-16T16:00:00Z",null,"vm4","forward4",null],["2021-08-16T16:00:00Z",null,"vm5","forward5",null]]}]}]}`,
+		},
+		{
+			name:    "unionall cascade unionallbyname",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select entity_id,forwarded_id from event_table union all select entity_id,additional from alarm_table union all by name select entity_id,forwarded_service from CPU",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"CPU,alarm_table,event_table","columns":["time","entity_id","forwarded_id","forwarded_service"],"values":[["2021-08-16T16:00:00Z","vm11",null,"ELB1"],["2021-08-16T16:00:00Z","vm12",null,"ELB1"],["2021-08-16T16:00:00Z","vm13",null,"ELB1"],["2021-08-16T16:00:00Z","vm14",null,"ELB1"],["2021-08-16T16:00:00Z","vm15",null,"ELB1"],["2021-08-16T16:00:00Z","vm6","add1",null],["2021-08-16T16:00:00Z","vm7","add2",null],["2021-08-16T16:00:00Z","vm9","add2",null],["2021-08-16T16:00:00Z","vm10","add3",null],["2021-08-16T16:00:00Z","vm8","add3",null],["2021-08-16T16:00:00Z","vm1","forward1",null],["2021-08-16T16:00:00Z","vm2","forward2",null],["2021-08-16T16:00:00Z","vm3","forward3",null],["2021-08-16T16:00:00Z","vm4","forward4",null],["2021-08-16T16:00:00Z","vm5","forward5",null]]}]}]}`,
+		},
+		{
+			name:    "unionallbyname cascade unionall",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select entity_id,forwarded_id from event_table union all by name select entity_id,additional from alarm_table union all select entity_id,forwarded_service from CPU",
+			exp:     `{"results":[{"statement_id":0,"error":"union/union all can only apply to expressions with the same number of result columns"}]}`,
+		},
+		{
+			name:    "unionallbyname cascade (unionall)",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select entity_id,forwarded_id from event_table union all by name (select entity_id,additional from alarm_table union all select entity_id,forwarded_service from CPU)",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"CPU,alarm_table,event_table","columns":["time","additional","entity_id","forwarded_id"],"values":[["2021-08-16T16:00:00Z","ELB1","vm11",null],["2021-08-16T16:00:00Z","ELB1","vm12",null],["2021-08-16T16:00:00Z","ELB1","vm13",null],["2021-08-16T16:00:00Z","ELB1","vm14",null],["2021-08-16T16:00:00Z","ELB1","vm15",null],["2021-08-16T16:00:00Z","add1","vm6",null],["2021-08-16T16:00:00Z","add2","vm7",null],["2021-08-16T16:00:00Z","add2","vm9",null],["2021-08-16T16:00:00Z","add3","vm10",null],["2021-08-16T16:00:00Z","add3","vm8",null],["2021-08-16T16:00:00Z",null,"vm1","forward1"],["2021-08-16T16:00:00Z",null,"vm2","forward2"],["2021-08-16T16:00:00Z",null,"vm3","forward3"],["2021-08-16T16:00:00Z",null,"vm4","forward4"],["2021-08-16T16:00:00Z",null,"vm5","forward5"]]}]}]}`,
+		},
+		{
+			name:    "union CTE",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "with u1 as (select entity_id as t1,forwarded_id as f1 from event_table union all select entity_id,additional from alarm_table) select t1,f1 from u1 union all select entity_id,forwarded_service from CPU",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"CPU,alarm_table,event_table","columns":["time","f1","t1"],"values":[["2021-08-16T16:00:00Z","ELB1","vm11"],["2021-08-16T16:00:00Z","ELB1","vm12"],["2021-08-16T16:00:00Z","ELB1","vm13"],["2021-08-16T16:00:00Z","ELB1","vm14"],["2021-08-16T16:00:00Z","ELB1","vm15"],["2021-08-16T16:00:00Z","add1","vm6"],["2021-08-16T16:00:00Z","add2","vm7"],["2021-08-16T16:00:00Z","add2","vm9"],["2021-08-16T16:00:00Z","add3","vm10"],["2021-08-16T16:00:00Z","add3","vm8"],["2021-08-16T16:00:00Z","forward1","vm1"],["2021-08-16T16:00:00Z","forward2","vm2"],["2021-08-16T16:00:00Z","forward3","vm3"],["2021-08-16T16:00:00Z","forward4","vm4"],["2021-08-16T16:00:00Z","forward5","vm5"]]}]}]}`,
+		},
+		{
+			name:    "union same columns count",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table1 union select * from table2",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table2","columns":["time","f1","f2","t1","t2"],"values":[["2021-08-16T16:00:00Z",1,11,"a","h"],["2021-08-16T16:00:00Z",2,12,"b","h"],["2021-08-16T16:00:00Z",3,21,"b","i"],["2021-08-16T16:00:00Z",4,22,"c","i"]]}]}]}`,
+		},
+		{
+			name:    "unionbyname same columns count(not same name)",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table1 union by name select * from table2",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table2","columns":["time","f1","f2","f3","t1","t2"],"values":[["2021-08-16T16:00:00Z",1,11,null,"a","h"],["2021-08-16T16:00:00Z",2,12,null,"b","h"],["2021-08-16T16:00:00Z",3,null,21,"b","i"],["2021-08-16T16:00:00Z",4,null,22,"c","i"]]}]}]}`,
+		},
+		{
+			name:    "union not same columns count",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table1 union select * from table3",
+			exp:     `{"results":[{"statement_id":0,"error":"union/union all can only apply to expressions with the same number of result columns"}]}`,
+		},
+		{
+			name:    "unionbyname not same columns count",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table2 union by name select * from table3",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table2,table3","columns":["time","f1","f2","f3","t1","t2"],"values":[["2021-08-16T16:00:00Z",3,null,21,"b","i"],["2021-08-16T16:00:00Z",4,null,22,"c","i"],["2021-08-16T16:00:00Z",3,"a",31,"b","j"],["2021-08-16T16:00:00Z",4,"b",32,"c","k"]]}]}]}`,
+		},
+		{
+			name:    "union same index not same type",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select f1,f2 from table1 union select f1,f2 from table3",
+			exp:     `{"results":[{"statement_id":0,"error":"columns in the same index position must have the same data type when using union/union all"}]}`,
+		},
+		{
+			name:    "unionbyname same name not same type",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table1 union by name select * from table3",
+			exp:     `{"results":[{"statement_id":0,"error":"columns with same name must have the same data type when using union by name/union all by name"}]}`,
+		},
+		{
+			name:    "union group by",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table1 group by t1 union select * from table2 group by t2",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table2","columns":["time","f1","f2","t1","t2"],"values":[["2021-08-16T16:00:00Z",1,11,"a","h"],["2021-08-16T16:00:00Z",2,12,"b","h"],["2021-08-16T16:00:00Z",3,21,"i","b"],["2021-08-16T16:00:00Z",4,22,"i","c"]]}]}]}`,
+		},
+		{
+			name:    "unionbyname group by",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table1 group by t1  union by name select * from table2 group by t2",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table2","columns":["time","f1","f2","f3","t1","t2"],"values":[["2021-08-16T16:00:00Z",1,11,null,"a","h"],["2021-08-16T16:00:00Z",2,12,null,"b","h"],["2021-08-16T16:00:00Z",3,null,21,"b","i"],["2021-08-16T16:00:00Z",4,null,22,"c","i"]]}]}]}`,
+		},
+		{
+			name:    "union incondition",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select entity_id,forwarded_id from event_table union select entity_id,additional from alarm_table where \"name\" in (select \"name\" from CPU)",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"alarm_table,event_table","columns":["time","entity_id","forwarded_id"],"values":[["2021-08-16T16:00:00Z","vm9","add2"],["2021-08-16T16:00:00Z","vm8","add3"],["2021-08-16T16:00:00Z","vm1","forward1"],["2021-08-16T16:00:00Z","vm2","forward2"],["2021-08-16T16:00:00Z","vm3","forward3"],["2021-08-16T16:00:00Z","vm4","forward4"],["2021-08-16T16:00:00Z","vm5","forward5"]]}]}]}`,
+		},
+		{
+			name:    "union cascade union",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select entity_id,forwarded_id from event_table union select entity_id,additional from alarm_table union select entity_id,forwarded_service from CPU",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"CPU,alarm_table,event_table","columns":["time","entity_id","forwarded_id"],"values":[["2021-08-16T16:00:00Z","vm11","ELB1"],["2021-08-16T16:00:00Z","vm12","ELB1"],["2021-08-16T16:00:00Z","vm13","ELB1"],["2021-08-16T16:00:00Z","vm14","ELB1"],["2021-08-16T16:00:00Z","vm15","ELB1"],["2021-08-16T16:00:00Z","vm6","add1"],["2021-08-16T16:00:00Z","vm7","add2"],["2021-08-16T16:00:00Z","vm9","add2"],["2021-08-16T16:00:00Z","vm10","add3"],["2021-08-16T16:00:00Z","vm8","add3"],["2021-08-16T16:00:00Z","vm1","forward1"],["2021-08-16T16:00:00Z","vm2","forward2"],["2021-08-16T16:00:00Z","vm3","forward3"],["2021-08-16T16:00:00Z","vm4","forward4"],["2021-08-16T16:00:00Z","vm5","forward5"]]}]}]}`,
+		},
+		{
+			name:    "unionbyname cascade unionbyname",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select entity_id,forwarded_id from event_table union by name select entity_id,additional from alarm_table union by name select entity_id,forwarded_service from CPU",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"CPU,alarm_table,event_table","columns":["time","additional","entity_id","forwarded_id","forwarded_service"],"values":[["2021-08-16T16:00:00Z",null,"vm11",null,"ELB1"],["2021-08-16T16:00:00Z",null,"vm12",null,"ELB1"],["2021-08-16T16:00:00Z",null,"vm13",null,"ELB1"],["2021-08-16T16:00:00Z",null,"vm14",null,"ELB1"],["2021-08-16T16:00:00Z",null,"vm15",null,"ELB1"],["2021-08-16T16:00:00Z","add1","vm6",null,null],["2021-08-16T16:00:00Z","add2","vm7",null,null],["2021-08-16T16:00:00Z","add2","vm9",null,null],["2021-08-16T16:00:00Z","add3","vm10",null,null],["2021-08-16T16:00:00Z","add3","vm8",null,null],["2021-08-16T16:00:00Z",null,"vm1","forward1",null],["2021-08-16T16:00:00Z",null,"vm2","forward2",null],["2021-08-16T16:00:00Z",null,"vm3","forward3",null],["2021-08-16T16:00:00Z",null,"vm4","forward4",null],["2021-08-16T16:00:00Z",null,"vm5","forward5",null]]}]}]}`,
+		},
+		{
+			name:    "union cascade unionbyname",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select entity_id,forwarded_id from event_table union select entity_id,additional from alarm_table union by name select entity_id,forwarded_service from CPU",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"CPU,alarm_table,event_table","columns":["time","entity_id","forwarded_id","forwarded_service"],"values":[["2021-08-16T16:00:00Z","vm11",null,"ELB1"],["2021-08-16T16:00:00Z","vm12",null,"ELB1"],["2021-08-16T16:00:00Z","vm13",null,"ELB1"],["2021-08-16T16:00:00Z","vm14",null,"ELB1"],["2021-08-16T16:00:00Z","vm15",null,"ELB1"],["2021-08-16T16:00:00Z","vm6","add1",null],["2021-08-16T16:00:00Z","vm7","add2",null],["2021-08-16T16:00:00Z","vm9","add2",null],["2021-08-16T16:00:00Z","vm10","add3",null],["2021-08-16T16:00:00Z","vm8","add3",null],["2021-08-16T16:00:00Z","vm1","forward1",null],["2021-08-16T16:00:00Z","vm2","forward2",null],["2021-08-16T16:00:00Z","vm3","forward3",null],["2021-08-16T16:00:00Z","vm4","forward4",null],["2021-08-16T16:00:00Z","vm5","forward5",null]]}]}]}`,
+		},
+		{
+			name:    "unionbyname cascade union",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select entity_id,forwarded_id from event_table union by name select entity_id,additional from alarm_table union select entity_id,forwarded_service from CPU",
+			exp:     `{"results":[{"statement_id":0,"error":"union/union all can only apply to expressions with the same number of result columns"}]}`,
+		},
+		{
+			name:    "unionbyname cascade (union)",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select entity_id,forwarded_id from event_table union by name (select entity_id,additional from alarm_table union select entity_id,forwarded_service from CPU)",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"CPU,alarm_table,event_table","columns":["time","additional","entity_id","forwarded_id"],"values":[["2021-08-16T16:00:00Z","ELB1","vm11",null],["2021-08-16T16:00:00Z","ELB1","vm12",null],["2021-08-16T16:00:00Z","ELB1","vm13",null],["2021-08-16T16:00:00Z","ELB1","vm14",null],["2021-08-16T16:00:00Z","ELB1","vm15",null],["2021-08-16T16:00:00Z","add1","vm6",null],["2021-08-16T16:00:00Z","add2","vm7",null],["2021-08-16T16:00:00Z","add2","vm9",null],["2021-08-16T16:00:00Z","add3","vm10",null],["2021-08-16T16:00:00Z","add3","vm8",null],["2021-08-16T16:00:00Z",null,"vm1","forward1"],["2021-08-16T16:00:00Z",null,"vm2","forward2"],["2021-08-16T16:00:00Z",null,"vm3","forward3"],["2021-08-16T16:00:00Z",null,"vm4","forward4"],["2021-08-16T16:00:00Z",null,"vm5","forward5"]]}]}]}`,
+		},
+		{
+			name:    "union CTE",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "with u1 as (select entity_id as t1,forwarded_id as f1 from event_table union select entity_id,additional from alarm_table) select t1,f1 from u1 union select entity_id,forwarded_service from CPU",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"CPU,alarm_table,event_table","columns":["time","f1","t1"],"values":[["2021-08-16T16:00:00Z","ELB1","vm11"],["2021-08-16T16:00:00Z","ELB1","vm12"],["2021-08-16T16:00:00Z","ELB1","vm13"],["2021-08-16T16:00:00Z","ELB1","vm14"],["2021-08-16T16:00:00Z","ELB1","vm15"],["2021-08-16T16:00:00Z","add1","vm6"],["2021-08-16T16:00:00Z","add2","vm7"],["2021-08-16T16:00:00Z","add2","vm9"],["2021-08-16T16:00:00Z","add3","vm10"],["2021-08-16T16:00:00Z","add3","vm8"],["2021-08-16T16:00:00Z","forward1","vm1"],["2021-08-16T16:00:00Z","forward2","vm2"],["2021-08-16T16:00:00Z","forward3","vm3"],["2021-08-16T16:00:00Z","forward4","vm4"],["2021-08-16T16:00:00Z","forward5","vm5"]]}]}]}`,
+		},
+	}...)
+
+	for i, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if i == 0 {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
+			}
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}
+*/
+
+func TestServer_CTE_Query(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db_cte", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		`mst,tag=t1 f1=4 1715068800000000000`,
+		`mst,tag=t3 f1=1 1715068800000000000`,
+		`mst,tag=t4 f1=3 1715068800000000000`,
+		`mst,tag=t2 f1=2 1715068800000000000`,
+		`tmst,tag=t1,tag001=t01 f1=1,ff1=1,ff2=2,ff3=3 1715068800000000000`,
+		`tmst,tag=t3,tag001=t03 f1=3,ff1=2,ff2=12,ff3=0 1715068800000000000`,
+		`tmst,tag=t4,tag001=t04 f1=2,ff1=4,ff2=3,ff3=0 1715068800000000000`,
+		`tmst,tag=t2,tag001=t02 f1=4,ff1=4,ff2=3,ff3=0 1715068800000000000`,
+	}
+
+	test := NewTest("db_cte", "rp0")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		{
+			name:    "simple query with cte",
+			params:  url.Values{"db": []string{"db_cte"}},
+			command: "with t1 as (select * from tmst limit 10) select * from (select ff2 from t1)",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"tmst","columns":["time","ff2"],"values":[["2024-05-07T08:00:00Z",2],["2024-05-07T08:00:00Z",3],["2024-05-07T08:00:00Z",12],["2024-05-07T08:00:00Z",3]]}]}]}`,
+		},
+		{
+			name:    "in query with cte",
+			params:  url.Values{"db": []string{"db_cte"}},
+			command: "with t1 as (select * from tmst limit 10) select * from (select ff2 from t1)",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"tmst","columns":["time","ff2"],"values":[["2024-05-07T08:00:00Z",2],["2024-05-07T08:00:00Z",3],["2024-05-07T08:00:00Z",12],["2024-05-07T08:00:00Z",3]]}]}]}`,
+		},
+		{
+			name:    "subquery with cte",
+			params:  url.Values{"db": []string{"db_cte"}},
+			command: "with t2 as (select * from mst where f1 in (select f1 from t1)), t1 as (select * from mst where f1 >3) select * from t2",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","f1","tag"],"values":[["2024-05-07T08:00:00Z",4,"t1"]]}]}]}`,
+		},
+		{
+			name:    "inner join with cte",
+			params:  url.Values{"db": []string{"db_cte"}},
+			command: `with cte1 as (select * from mst), cte2 as (select * from tmst) select * from cte1 INNER JOIN cte2 on cte1."tag"=cte2."tag" group by "tag"`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cte1,cte2","tags":{"tag":"t1"},"columns":["time","cte1.f1","cte2.f1","cte2.ff1","cte2.ff2","cte2.ff3","cte2.tag001"],"values":[["2024-05-07T08:00:00Z",4,1,1,2,3,"t01"]]},{"name":"cte1,cte2","tags":{"tag":"t2"},"columns":["time","cte1.f1","cte2.f1","cte2.ff1","cte2.ff2","cte2.ff3","cte2.tag001"],"values":[["2024-05-07T08:00:00Z",2,4,4,3,0,"t02"]]},{"name":"cte1,cte2","tags":{"tag":"t3"},"columns":["time","cte1.f1","cte2.f1","cte2.ff1","cte2.ff2","cte2.ff3","cte2.tag001"],"values":[["2024-05-07T08:00:00Z",1,3,2,12,0,"t03"]]},{"name":"cte1,cte2","tags":{"tag":"t4"},"columns":["time","cte1.f1","cte2.f1","cte2.ff1","cte2.ff2","cte2.ff3","cte2.tag001"],"values":[["2024-05-07T08:00:00Z",3,2,4,3,0,"t04"]]}]}]}`,
+		},
+		{
+			name:    "inner join with cte alias",
+			params:  url.Values{"db": []string{"db_cte"}},
+			command: `with cte1 as (select * from mst), cte2 as (select * from tmst) select * from cte1 as t1 INNER JOIN cte2 as t2 on t1."tag"=t2."tag" group by "tag"`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"t1,t2","tags":{"tag":"t1"},"columns":["time","t1.f1","t2.f1","t2.ff1","t2.ff2","t2.ff3","t2.tag001"],"values":[["2024-05-07T08:00:00Z",4,1,1,2,3,"t01"]]},{"name":"t1,t2","tags":{"tag":"t2"},"columns":["time","t1.f1","t2.f1","t2.ff1","t2.ff2","t2.ff3","t2.tag001"],"values":[["2024-05-07T08:00:00Z",2,4,4,3,0,"t02"]]},{"name":"t1,t2","tags":{"tag":"t3"},"columns":["time","t1.f1","t2.f1","t2.ff1","t2.ff2","t2.ff3","t2.tag001"],"values":[["2024-05-07T08:00:00Z",1,3,2,12,0,"t03"]]},{"name":"t1,t2","tags":{"tag":"t4"},"columns":["time","t1.f1","t2.f1","t2.ff1","t2.ff2","t2.ff3","t2.tag001"],"values":[["2024-05-07T08:00:00Z",3,2,4,3,0,"t04"]]}]}]}`,
+		},
+		{
+			name:    "inner join with cte and reality table",
+			params:  url.Values{"db": []string{"db_cte"}},
+			command: `with cte1 as (select * from mst) select * from cte1 as t1 INNER JOIN tmst as t2 on t1."tag"=t2."tag" group by "tag"`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"t1,t2","tags":{"tag":"t1"},"columns":["time","t1.f1","t2.f1","t2.ff1","t2.ff2","t2.ff3","t2.tag001"],"values":[["2024-05-07T08:00:00Z",4,1,1,2,3,"t01"]]},{"name":"t1,t2","tags":{"tag":"t2"},"columns":["time","t1.f1","t2.f1","t2.ff1","t2.ff2","t2.ff3","t2.tag001"],"values":[["2024-05-07T08:00:00Z",2,4,4,3,0,"t02"]]},{"name":"t1,t2","tags":{"tag":"t3"},"columns":["time","t1.f1","t2.f1","t2.ff1","t2.ff2","t2.ff3","t2.tag001"],"values":[["2024-05-07T08:00:00Z",1,3,2,12,0,"t03"]]},{"name":"t1,t2","tags":{"tag":"t4"},"columns":["time","t1.f1","t2.f1","t2.ff1","t2.ff2","t2.ff3","t2.tag001"],"values":[["2024-05-07T08:00:00Z",3,2,4,3,0,"t04"]]}]}]}`,
+		},
+		{
+			name:    "recursive call to itself of cte1",
+			params:  url.Values{"db": []string{"db_cte"}},
+			command: `with cte1 as (select * from cte1) select * from cte1`,
+			exp:     `{"results":[{"statement_id":0,"error":"Unsupported feature: recursive call to itself cte1"}]}`,
+		},
+		{
+			name:    "Indirect recursive call to itself of t2",
+			params:  url.Values{"db": []string{"db_cte"}},
+			command: `with t2 as (select * from mst where f1 in (select f1 from t2)) select * from t2`,
+			exp:     `{"results":[{"statement_id":0,"error":"Unsupported feature: recursive call to itself t2"}]}`,
+		},
+	}...)
+
+	for i, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if i == 0 {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
+			}
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}
+
 func TestServer_Write_Compatible(t *testing.T) {
 	t.Parallel()
 	s := OpenServer(NewParseConfig(testCfgPath))
@@ -12017,7 +12822,7 @@ func RegisteredIndexes() []string {
 	return a
 }
 
-func Test_killInfluxDB3(t *testing.T) {
+func Test_killopenGeminiTsstore3(t *testing.T) {
 	type args struct {
 		t *testing.T
 	}
@@ -12030,14 +12835,14 @@ func Test_killInfluxDB3(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if err := killInfluxDB3(tt.args.t); (err != nil) != tt.wantErr {
-				t.Errorf("killInfluxDB3() error = %v, wantErr %v", err, tt.wantErr)
+			if err := killTsstore3(tt.args.t); (err != nil) != tt.wantErr {
+				t.Errorf("killTsstore3() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
 	}
 }
 
-func Test_startInfluxDB3(t *testing.T) {
+func Test_startopenGeminiTsstore3(t *testing.T) {
 	type args struct {
 		t *testing.T
 	}
@@ -12049,7 +12854,7 @@ func Test_startInfluxDB3(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			startInfluxDB3(tt.args.t)
+			startTsstore3(tt.args.t)
 		})
 	}
 }
@@ -12757,6 +13562,54 @@ func TestServer_ParallelQuery(t *testing.T) {
 	}
 }
 
+func TestServer_SubQuery_ShardMapper(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	writes := []string{
+		fmt.Sprintf("cpu,t1=val1 value=1 %d", mustParseTime(time.RFC3339Nano, "2000-01-01T00:00:00Z").UnixNano()),
+		fmt.Sprintf("cpu,t2=val2 value=2 %d", mustParseTime(time.RFC3339Nano, "2000-01-01T00:01:00Z").UnixNano()),
+		fmt.Sprintf("cpu,t1=val2 value=3 %d", mustParseTime(time.RFC3339Nano, "2000-01-01T00:02:00Z").UnixNano()),
+	}
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		{
+			name:    "without subquery",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `SELECT sum(value) from cpu where time >= '2000-01-01T00:00:00Z'`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","sum"],"values":[["2000-01-01T00:00:00Z",6]]}]}]}`,
+		},
+		{
+			name:    "with subquery",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `SELECT sum(v1) from (select value as v1 from cpu where time >= '2000-01-01T00:00:00Z') `,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","sum"],"values":[["2000-01-01T00:00:00Z",6]]}]}]}`,
+		},
+	}...)
+
+	if err := test.init(s); err != nil {
+		t.Fatalf("test init failed: %s", err)
+	}
+
+	for _, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}
+
 func TestServer_TSSubQueryHasDifferentAscending(t *testing.T) {
 	t.Parallel()
 	s := OpenServer(NewConfig())
@@ -12922,101 +13775,6 @@ func TestServer_DropMeasurementPerRP(t *testing.T) {
 	}
 }
 
-func TestServer_Query_FunctionIf(t *testing.T) {
-	t.Parallel()
-	s := OpenServer(NewParseConfig(testCfgPath))
-	defer s.Close()
-	if err := s.CreateDatabaseAndRetentionPolicy("flowscope", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.CreateMeasurement("CREATE MEASUREMENT flowscope.rp0.traffic (area tag, country tag, province tag,  region string, pop string, level int64, bps int64, isisp bool, iseip bool, eqtype float64, percent float64) WITH  ENGINETYPE = columnstore  PRIMARYKEY country,area,time"); err != nil {
-		t.Fatal(err)
-	}
-	writes := []string{
-		fmt.Sprintf(`traffic,area=国内,country=中国,province=北京 region="华北",pop="五道口",level=1i,bps=111i,isisp=True,iseip=False,eqtype=1.1,percent=0.1 %d`, 1629129600000000000),
-		fmt.Sprintf(`traffic,area=国内,country=中国,province=上海 region="华东",pop="人民公园",level=2i,bps=222i,isisp=True,iseip=False,eqtype=2.2,percent=0.2 %d`, 1629129601000000000),
-		fmt.Sprintf(`traffic,area=国内,country=中国,province=广州 region="华南",pop="广州塔",level=3i,bps=333i,isisp=True,iseip=False,eqtype=3.3,percent=0.3 %d`, 1629129602000000000),
-		fmt.Sprintf(`traffic,area=海外,country=印度,province=孟买 region="海外",pop="恒河",level=4i,bps=444i,isisp=True,iseip=False,eqtype=4.4,percent=0.4 %d`, 1629129603000000000),
-		fmt.Sprintf(`traffic,area=海外,country=美国,province=好莱坞 region="海外",pop="A",level=5i,bps=555i,isisp=True,iseip=False,eqtype=5.5,percent=0.5 %d`, 1629129604000000000),
-		fmt.Sprintf(`traffic,area=海外,country=美国,province=拉斯维加斯 region="海外",pop="B",level=6i,bps=666i,isisp=True,iseip=False,eqtype=6.6,percent=0.6 %d`, 1629129605000000000),
-	}
-
-	test := NewTest("flowscope", "rp0")
-	test.writes = Writes{
-		&Write{data: strings.Join(writes, "\n")},
-	}
-
-	test.addQueries([]*Query{
-		{
-			name:    "THEN:Tag, ELSE:Tag",
-			params:  url.Values{"db": []string{"flowscope"}},
-			command: `SELECT if('"area"=\'国内\'', province, country) From traffic`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"traffic","columns":["time","if"],"values":[["2021-08-16T16:00:00Z","北京"],["2021-08-16T16:00:01Z","上海"],["2021-08-16T16:00:02Z","广州"],["2021-08-16T16:00:03Z","印度"],["2021-08-16T16:00:04Z","美国"],["2021-08-16T16:00:05Z","美国"]]}]}]}`,
-		},
-		{
-			name:    "THEN:Integer, ELSE:Integer",
-			params:  url.Values{"db": []string{"flowscope"}},
-			command: `SELECT if('"area"=\'国内\'', bps, level) From traffic`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"traffic","columns":["time","if"],"values":[["2021-08-16T16:00:00Z",111],["2021-08-16T16:00:01Z",222],["2021-08-16T16:00:02Z",333],["2021-08-16T16:00:03Z",4],["2021-08-16T16:00:04Z",5],["2021-08-16T16:00:05Z",6]]}]}]}`,
-		},
-		{
-			name:    "THEN:Boolean, ELSE:Boolean",
-			params:  url.Values{"db": []string{"flowscope"}},
-			command: `SELECT if('"area"=\'国内\'', iseip, isisp) From traffic`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"traffic","columns":["time","if"],"values":[["2021-08-16T16:00:00Z",false],["2021-08-16T16:00:01Z",false],["2021-08-16T16:00:02Z",false],["2021-08-16T16:00:03Z",true],["2021-08-16T16:00:04Z",true],["2021-08-16T16:00:05Z",true]]}]}]}`,
-		},
-		{
-			name:    "THEN:Float, ELSE:Float",
-			params:  url.Values{"db": []string{"flowscope"}},
-			command: `SELECT if('"area"=\'国内\'', percent, eqtype) From traffic`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"traffic","columns":["time","if"],"values":[["2021-08-16T16:00:00Z",0.1],["2021-08-16T16:00:01Z",0.2],["2021-08-16T16:00:02Z",0.3],["2021-08-16T16:00:03Z",4.4],["2021-08-16T16:00:04Z",5.5],["2021-08-16T16:00:05Z",6.6]]}]}]}`,
-		},
-		{
-			name:    "CONDITION: KEY>x",
-			params:  url.Values{"db": []string{"flowscope"}},
-			command: `SELECT if('"level">3', percent, eqtype) From traffic`,
-			exp:     `{"results":[{"statement_id":0,"series":[{"name":"traffic","columns":["time","if"],"values":[["2021-08-16T16:00:00Z",1.1],["2021-08-16T16:00:01Z",2.2],["2021-08-16T16:00:02Z",3.3],["2021-08-16T16:00:03Z",0.4],["2021-08-16T16:00:04Z",0.5],["2021-08-16T16:00:05Z",0.6]]}]}]}`,
-		},
-		{
-			name:    "Different type of THEN and Else",
-			params:  url.Values{"db": []string{"flowscope"}},
-			command: `SELECT if('\"area\"=\'国内\'', province, level) From traffic`,
-			exp:     `{"results":[{"statement_id":0,"error":"the 2nd and 3rd argument must be of same type in if()"}]}`,
-		},
-		{
-			name:    "Invalid number of arguments",
-			params:  url.Values{"db": []string{"flowscope"}},
-			command: "SELECT if('\"area\"=\"国内\"', bps) From traffic",
-			exp:     `{"results":[{"statement_id":0,"error":"invalid number of arguments for if, expected 3, got 2"}]}`,
-		},
-		{
-			name:    "Invalid operator",
-			params:  url.Values{"db": []string{"flowscope"}},
-			command: "SELECT if('\"area\"==\"国内\"', bps, level) From traffic",
-			exp:     `{"results":[{"statement_id":0,"error":"invalid condition, input like '\"key\" [operator] \\'string\\'' or '\"key\" [operator] digit'"}]}`,
-		},
-	}...)
-
-	for i, query := range test.queries {
-		t.Run(query.name, func(t *testing.T) {
-			if i == 0 {
-				if err := test.init(s); err != nil {
-					t.Fatalf("test init failed: %s", err)
-				}
-				time.Sleep(3 * time.Second)
-			}
-			if query.skip {
-				t.Skipf("SKIP:: %s", query.name)
-			}
-			if err := query.Execute(s); err != nil {
-				t.Error(query.Error(err))
-			} else if !query.success() {
-				t.Error(query.failureMessage())
-			}
-		})
-	}
-}
-
 func TestServer_Query_IP_For_String_Functions(t *testing.T) {
 	t.Parallel()
 	s := OpenServer(NewParseConfig(testCfgPath))
@@ -13068,6 +13826,562 @@ func TestServer_Query_IP_For_String_Functions(t *testing.T) {
 			name:    "three params test",
 			command: `SELECT ip_mask(ip, 12, 40) FROM db0.rp0.ip_test`,
 			exp:     `{"results":[{"statement_id":0,"series":[{"name":"ip_test","columns":["time","ip_mask"],"values":[["2025-03-04T03:27:30Z","101.32.0.0"],["2025-03-04T03:27:40Z","102.64.0.0"],["2025-03-04T03:27:50Z",null],["2025-03-04T03:28:00Z","ff02::"],["2025-03-04T03:28:10Z","fd12:3456:7800::"]]}]}]}`,
+		},
+	}...)
+
+	for i, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if i == 0 {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
+			}
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}
+
+func TestServer_Cast_For_String_Functions(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		`mst,t1=a f1=12i,f2=13,f3=0,f4="14",f5="15.3",f6=true,f7=false,f8="a",f9="0" 1`,
+	}
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		{
+			name:    "cast_int64",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `SELECT cast_int64(f1) as f1, cast_int64(f2) as f2, cast_int64(f3) as f3, cast_int64(f4) as f4, cast_int64(f5) as f5, cast_int64(f6) as f6, cast_int64(f7) as f7, cast_int64(f8) as f8, cast_int64(f9) as f9 from mst`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","f1","f2","f3","f4","f5","f6","f7","f8","f9"],"values":[["1970-01-01T00:00:00.000000001Z",12,13,0,14,null,1,0,null,0]]}]}]}`,
+		},
+		{
+			name:    "cast_float64",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `SELECT cast_float64(f1) as f1, cast_float64(f2) as f2, cast_float64(f3) as f3, cast_float64(f4) as f4, cast_float64(f5) as f5, cast_float64(f6) as f6, cast_float64(f7) as f7, cast_float64(f8) as f8, cast_float64(f9) as f9 from mst`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","f1","f2","f3","f4","f5","f6","f7","f8","f9"],"values":[["1970-01-01T00:00:00.000000001Z",12,13,0,14,15.3,1,0,null,0]]}]}]}`,
+		},
+		{
+			name:    "cast_bool",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `SELECT cast_bool(f1) as f1, cast_bool(f2) as f2, cast_bool(f3) as f3, cast_bool(f4) as f4, cast_bool(f5) as f5, cast_bool(f6) as f6, cast_bool(f7) as f7, cast_bool(f8) as f8, cast_bool(f9) as f9 from mst`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","f1","f2","f3","f4","f5","f6","f7","f8","f9"],"values":[["1970-01-01T00:00:00.000000001Z",true,true,false,true,true,true,false,true,false]]}]}]}`,
+		},
+		{
+			name:    "cast_string",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `SELECT cast_string(f1) as f1, cast_string(f2) as f2, cast_string(f3) as f3, cast_string(f4) as f4, cast_string(f5) as f5, cast_string(f6) as f6, cast_string(f7) as f7, cast_string(f8) as f8, cast_string(f9) as f9 from mst`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","f1","f2","f3","f4","f5","f6","f7","f8","f9"],"values":[["1970-01-01T00:00:00.000000001Z","12","13","0","14","15.3","true","false","a","0"]]}]}]}`,
+		},
+	}...)
+
+	for i, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if i == 0 {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
+			}
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}
+
+func TestServer_Query_Compare_Functions(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		`mst,country=china,name=azhu age=12.3,height=70i,address="shenzhen",alive=TRUE 1629129600000000000`,
+		`mst,country=american,name=alan age=20.5,height=80i,address="shanghai",alive=FALSE 1629129601000000000`,
+		`mst,country=germany,name=alang age=3.4,height=90i,address="beijin",alive=TRUE 1629129602000000000`,
+		`mst,country=japan,name=ahui age=30,height=121i,address="guangzhou",alive=FALSE 1629129603000000000`,
+		`mst,country=canada,name=aqiu age=35,height=138i,address="chengdu",alive=TRUE 1629129604000000000`,
+		`mst,country=china,name=agang age=48.8,height=149i,address="wuhan" 1629129605000000000`,
+		`mst,country=american,name=agan age=52.7,height=153i,alive=TRUE 1629129606000000000`,
+		`mst,country=germany,name=alin age=28.3,address="anhui",alive=FALSE 1629129607000000000`,
+		`mst,country=japan,name=ali height=179i,address="xian",alive=TRUE 1629129608000000000`,
+		`mst,country=canada age=60.8,height=180i,address="hangzhou",alive=FALSE 1629129609000000000`,
+		`mst,name=ahuang age=102,height=191i,address="nanjin",alive=TRUE 1629129610000000000`,
+		`mst,country=china,name=ayin age=123,height=203i,address="zhengzhou",alive=FALSE 1629129611000000000`,
+	}
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		{
+			name:    "select count age compare with 5s before",
+			command: `SELECT compare(PV, 5) FROM (SELECT COUNT(age) as PV FROM db0.rp0.mst) WHERE TIME  >= 1629129607000000000 AND TIME <= 1629129611000000000`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","PV1","PV2","PV1/PV2"],"values":[["2021-08-16T16:00:07Z",4,5,0.8]]}]}]}`,
+		},
+		{
+			name:    "select age with 5s before",
+			command: `SELECT compare(age, 5) FROM db0.rp0.mst WHERE TIME  >= 1629129607000000000 AND TIME <= 1629129611000000000`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","age1","age2","age1/age2"],"values":[["2021-08-16T16:00:07Z",28.3,3.4,8.323529411764707]]}]}]}`,
+		},
+		{
+			name:    "select count age group by country compare with 5s before",
+			command: `SELECT compare(PV, 5) FROM (SELECT COUNT(age) as PV FROM db0.rp0.mst GROUP BY country) WHERE TIME  >= 1629129607000000000 AND TIME <= 1629129611000000000 GROUP BY country`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","tags":{"country":""},"columns":["time","PV1","PV2","PV1/PV2"],"values":[["2021-08-16T16:00:07Z",1,null,null]]},{"name":"mst","tags":{"country":"american"},"columns":["time","PV1","PV2","PV1/PV2"],"values":[["2021-08-16T16:00:07Z",null,1,null]]},{"name":"mst","tags":{"country":"canada"},"columns":["time","PV1","PV2","PV1/PV2"],"values":[["2021-08-16T16:00:07Z",1,1,1]]},{"name":"mst","tags":{"country":"china"},"columns":["time","PV1","PV2","PV1/PV2"],"values":[["2021-08-16T16:00:07Z",1,1,1]]},{"name":"mst","tags":{"country":"germany"},"columns":["time","PV1","PV2","PV1/PV2"],"values":[["2021-08-16T16:00:07Z",1,1,1]]},{"name":"mst","tags":{"country":"japan"},"columns":["time","PV1","PV2","PV1/PV2"],"values":[["2021-08-16T16:00:07Z",null,1,null]]}]}]}`,
+		},
+		{
+			name:    "select count age group by country,name compare with 5s before",
+			command: `SELECT compare(PV, 5) FROM (SELECT COUNT(age) as PV FROM db0.rp0.mst GROUP BY country, "name") WHERE TIME  >= 1629129607000000000 AND TIME <= 1629129611000000000 GROUP BY country, "name"`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","tags":{"country":"","name":"ahuang"},"columns":["time","PV1","PV2","PV1/PV2"],"values":[["2021-08-16T16:00:07Z",1,null,null]]},{"name":"mst","tags":{"country":"american","name":"agan"},"columns":["time","PV1","PV2","PV1/PV2"],"values":[["2021-08-16T16:00:07Z",null,1,null]]},{"name":"mst","tags":{"country":"canada","name":""},"columns":["time","PV1","PV2","PV1/PV2"],"values":[["2021-08-16T16:00:07Z",1,null,null]]},{"name":"mst","tags":{"country":"canada","name":"aqiu"},"columns":["time","PV1","PV2","PV1/PV2"],"values":[["2021-08-16T16:00:07Z",null,1,null]]},{"name":"mst","tags":{"country":"china","name":"agang"},"columns":["time","PV1","PV2","PV1/PV2"],"values":[["2021-08-16T16:00:07Z",null,1,null]]},{"name":"mst","tags":{"country":"china","name":"ayin"},"columns":["time","PV1","PV2","PV1/PV2"],"values":[["2021-08-16T16:00:07Z",1,null,null]]},{"name":"mst","tags":{"country":"germany","name":"alang"},"columns":["time","PV1","PV2","PV1/PV2"],"values":[["2021-08-16T16:00:07Z",null,1,null]]},{"name":"mst","tags":{"country":"germany","name":"alin"},"columns":["time","PV1","PV2","PV1/PV2"],"values":[["2021-08-16T16:00:07Z",1,null,null]]},{"name":"mst","tags":{"country":"japan","name":"ahui"},"columns":["time","PV1","PV2","PV1/PV2"],"values":[["2021-08-16T16:00:07Z",null,1,null]]}]}]}`,
+		},
+		{
+			name:    "select count age compare with 2s, 4s, 6s before",
+			command: `SELECT compare(PV, 2, 4, 6) FROM (SELECT COUNT(age) as PV FROM db0.rp0.mst) WHERE TIME  >= 1629129610000000000 AND TIME <= 1629129611000000000`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","PV1","PV2","PV3","PV4","PV1/PV2","PV1/PV3","PV1/PV4"],"values":[["2021-08-16T16:00:10Z",2,1,2,2,2,1,1]]}]}]}`,
+		},
+		{
+			name:    "select count age group by time(2s) compare with 2s, 4s, 6s before",
+			command: `SELECT compare(PV, 2, 4, 6) FROM (SELECT COUNT(age) as PV FROM db0.rp0.mst GROUP BY time(2s)) WHERE TIME  >= 1629129610000000000 AND TIME <= 1629129611000000000 GROUP BY time(2s)`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","PV1","PV2","PV3","PV4","PV1/PV2","PV1/PV3","PV1/PV4"],"values":[["2021-08-16T16:00:10Z",2,1,2,2,2,1,1]]}]}]}`,
+		},
+		{
+			name:    "select count age group by time(2s) compare with 4s, 8s before",
+			command: `SELECT compare(PV, 4, 8) FROM (SELECT COUNT(age) as PV FROM db0.rp0.mst GROUP BY time(2s)) WHERE TIME  >= 1629129608000000000 AND TIME <= 1629129611000000000 GROUP BY time(2s)`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","PV1","PV2","PV3","PV1/PV2","PV1/PV3"],"values":[["2021-08-16T16:00:08Z",1,2,2,0.5,0.5],["2021-08-16T16:00:10Z",2,2,2,1,1]]}]}]}`,
+		},
+		{
+			name:    "select count age group by time(2s), country compare with 2s, 4s, 6s before",
+			command: `SELECT compare(PV, 2, 4, 6) FROM (SELECT COUNT(age) as PV FROM db0.rp0.mst GROUP BY country, time(2s)) WHERE TIME  >= 1629129610000000000 AND TIME <= 1629129611000000000 GROUP BY country, time(2s)`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","tags":{"country":""},"columns":["time","PV1","PV2","PV3","PV4","PV1/PV2","PV1/PV3","PV1/PV4"],"values":[["2021-08-16T16:00:10Z",1,null,null,null,null,null,null]]},{"name":"mst","tags":{"country":"american"},"columns":["time","PV1","PV2","PV3","PV4","PV1/PV2","PV1/PV3","PV1/PV4"],"values":[["2021-08-16T16:00:10Z",null,null,1,null,null,null,null]]},{"name":"mst","tags":{"country":"canada"},"columns":["time","PV1","PV2","PV3","PV4","PV1/PV2","PV1/PV3","PV1/PV4"],"values":[["2021-08-16T16:00:10Z",null,1,null,1,null,null,null]]},{"name":"mst","tags":{"country":"china"},"columns":["time","PV1","PV2","PV3","PV4","PV1/PV2","PV1/PV3","PV1/PV4"],"values":[["2021-08-16T16:00:10Z",1,null,null,1,null,null,1]]},{"name":"mst","tags":{"country":"germany"},"columns":["time","PV1","PV2","PV3","PV4","PV1/PV2","PV1/PV3","PV1/PV4"],"values":[["2021-08-16T16:00:10Z",null,null,1,null,null,null,null]]}]}]}`,
+		},
+		{
+			name:    "get error when compare only one parameter",
+			command: `SELECT compare(PV) FROM (SELECT COUNT(age) as PV FROM db0.rp0.mst GROUP BY country) WHERE TIME  >= 1629129610000000000 AND TIME <= 1629129611000000000 GROUP BY country`,
+			exp:     `{"results":[{"statement_id":0,"error":"invalid number of arguments for compare, expected more than one arguments, got 1"}]}`,
+		},
+		{
+			name:    "get error when compare only one parameter",
+			command: `SELECT compare(PV) FROM (SELECT COUNT(age) as PV FROM db0.rp0.mst GROUP BY country) WHERE TIME  >= 1629129610000000000 AND TIME <= 1629129611000000000 GROUP BY country`,
+			exp:     `{"results":[{"statement_id":0,"error":"invalid number of arguments for compare, expected more than one arguments, got 1"}]}`,
+		},
+		{
+			name:    "select count age group by time 2s compare with 2s before",
+			command: `SELECT compare(PV, 2) FROM (SELECT COUNT(age) as PV FROM db0.rp0.mst GROUP BY time(2s)) WHERE TIME  >= 1629129609000000000 AND TIME <= 1629129610000000000 GROUP BY time(2s)`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","PV1","PV2","PV1/PV2"],"values":[["2021-08-16T16:00:09Z",2,1,2]]}]}]}`,
+		},
+		{
+			name:    "select min age compare with 5s before",
+			command: `SELECT compare(PV, 5) FROM (SELECT MIN(age) as PV FROM db0.rp0.mst) WHERE TIME  >= 1629129607000000000 AND TIME <= 1629129611000000000`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","PV1","PV2","PV1/PV2"],"values":[["2021-08-16T16:00:07Z",28.3,3.4,8.323529411764707]]}]}]}`,
+		},
+	}...)
+
+	for i, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if i == 0 {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
+			}
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}
+
+func TestServer_Query_Multi_Table_Join(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		`table1,tk=a value=1 1629129600000000000`,
+		`table1,tk=b value=2 1629129600000000000`,
+		`table1,tk=c value=4 1629129600000000000`,
+		`table2,tk=b value=10 1629129600000000000`,
+		`table2,tk=c value=20 1629129600000000000`,
+		`table2,tk=c value=40 1629129600000000001`,
+		`table2,tk=d value=50 1629129600000000000`,
+		`table3,tk=b value=10 1629129600000000000`,
+		`table3,tk=c value=20 1629129600000000000`,
+		`table3,tk=c value=40 1629129600000000001`,
+		`table3,tk=d value=50 1629129600000000000`,
+	}
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		{
+			name:    "select m4, table3 from (table1 inner join table2) as m4 inner join table3",
+			command: `select m4.m1.value as value1, m4.m2.value as value2, m3.value as value3 from (select m1.value, m2.value from (select value from db0.rp0.table1 group by tk) as m1 inner join (select value from db0.rp0.table2 group by tk) as m2 on (m1.tk = m2.tk) group by tk) as m4 inner join (select value from db0.rp0.table3 group by tk) as m3 on (m3.tk = m4.tk) group by tk`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"m4,m3","tags":{"tk":"b"},"columns":["time","value1","value2","value3"],"values":[["2021-08-16T16:00:00Z",2,10,10]]},{"name":"m4,m3","tags":{"tk":"c"},"columns":["time","value1","value2","value3"],"values":[["2021-08-16T16:00:00Z",4,20,20],["2021-08-16T16:00:00Z",4,20,40],["2021-08-16T16:00:00Z",4,40,20],["2021-08-16T16:00:00Z",4,40,40]]}]}]}`,
+		},
+		{
+			name:    "select table1, m4 table1 inner join (table2 inner join table3) as m4",
+			command: `select m1.value as value1, m4.m2.value as value2, m4.m3.value as value3 from (select value from db0.rp0.table1 group by tk) as m1 inner join (select m2.value, m3.value from (select value from db0.rp0.table2 group by tk) as m2 inner join (select value from db0.rp0.table3 group by tk) as m3 on (m2.tk = m3.tk) group by tk) as m4  on(m1.tk = m4.tk) group by tk`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"m1,m4","tags":{"tk":"b"},"columns":["time","value1","value2","value3"],"values":[["2021-08-16T16:00:00Z",2,10,10]]},{"name":"m1,m4","tags":{"tk":"c"},"columns":["time","value1","value2","value3"],"values":[["2021-08-16T16:00:00Z",4,20,20],["2021-08-16T16:00:00Z",4,20,40],["2021-08-16T16:00:00Z",4,40,20],["2021-08-16T16:00:00Z",4,40,40]]}]}]}`,
+		},
+	}...)
+
+	for i, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if i == 0 {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
+			}
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}
+
+func TestServer_Push_Down_Rule_Incondition(t *testing.T) {
+	t.Parallel()
+	s := OpenDefaultServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	writes := []string{
+		`event_table,instance_id=vm1,instance_name=b1,region_id=c1,service=d1,level=P1 origion="b1",reason="no",uid="Service4" 1629129600000000000`,
+		`event_table,instance_id=vm2,instance_name=b2,region_id=c1,service=d1,level=P2 origion="b2",reason="ddd",uid="Service4" 1629129601000000000`,
+		`event_table,instance_id=ELB,instance_name=b3,region_id=c2,service=d2,level=P4 origion="b3",reason="bbb",uid="Service4" 1629129602000000000`,
+		`event_table,instance_id=Nginx-ingress1,instance_name=b4,region_id=c3,service=d3,level=P5 origion="b3",reason="xxx",uid="Service4" 1629129603000000000`,
+		`event_table,instance_id=Service1,instance_name=b5,region_id=c4,service=d4,level=P4 origion="b3",reason="okk",uid="Service4" 1629129604000000000`,
+		`event_table,instance_id=Service2,instance_name=b6,region_id=c4,service=d4,level=P3 origion="b2",reason="gemini",uid="Service4" 1629129604000000000`,
+		`event_table,instance_id=ELB,instance_name=b3,region_id=c2,service=d2,level=P4 origion="b3",reason="bbb",uid="Service4" 1629129605000000000`,
+		`alarm_table,instance_id=vm1,instance_name=b1,region_id=c1,service=d1,alarm_level=Major additional=1,alarm_description="dd",uid="Service4" 1629129600000000000`,
+		`alarm_table,instance_id=vm2,instance_name=b2,region_id=c1,service=d1,level=P2 additional=2,alarm_description="beijing",uid="Service4" 1629129601000000000`,
+		`alarm_table,instance_id=ELB,instance_name=b3,region_id=c2,service=d2,alarm_level=Warning additional=3,alarm_description="ffe3",uid="Service4" 1629129602000000000`,
+		`alarm_table,instance_id=Nginx-ingress1,instance_name=b4,region_id=c3,service=d3,alarm_level=Critical additional=4,alarm_description="fsd",uid="Service4" 1629129603000000000`,
+		`alarm_table,instance_id=Service1,instance_name=b5,region_id=c4,service=d4,alarm_level=Warning additional=5,alarm_description="zz",uid="Service4" 1629129604000000000`,
+		`alarm_table,instance_id=Service2,instance_name=b6,region_id=c4,service=d4,level=P3 additional=6,alarm_description="golang",uid="Service4" 1629129604000000000`,
+		`alarm_table,instance_id=ELB,instance_name=b3,region_id=c2,service=d2,alarm_level=Critical additional=7,alarm_description="ffe3",uid="Service4" 1629129605000000000`,
+	}
+
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		{
+			name:    "agg transform pushdown to in subquery need preemptive pruning",
+			command: `SELECT count(t2.additional) FROM (SELECT * FROM db0.rp0.alarm_table WHERE uid IN (SELECT uid FROM db0.rp0.event_table)) as t2 `,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"alarm_table","columns":["time","count"],"values":[["1970-01-01T00:00:00Z",7]]}]}]}`,
+		},
+		{
+			name:    "agg transform pushdown to multi-level in subquery need preemptive pruning",
+			command: `WITH t1 AS (GRAPH 3 'ELB') SELECT count(additional) FROM (SELECT * FROM (SELECT * FROM db0.rp0.alarm_table WHERE uid IN (SELECT uid FROM t1)))`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"alarm_table","columns":["time","count"],"values":[["1970-01-01T00:00:00Z",7]]}]}]}`,
+		},
+	}...)
+}
+
+func TestServer_Query_Constant_Column(t *testing.T) {
+	t.Parallel()
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		`table1,tk=a value=1 1629129600000000000`,
+		`table1,tk=b value=2 1629129600000000000`,
+		`table1,tk=c value=4 1629129600000000000`,
+		`table2,tk=b value=10 1629129600000000000`,
+		`table2,tk=c value=20 1629129600000000000`,
+		`table2,tk=c value=40 1629129600000000001`,
+		`table2,tk=d value=50 1629129600000000000`,
+		`table3,tk=b value=10 1629129600000000000`,
+		`table3,tk=c value=20 1629129600000000000`,
+		`table3,tk=c value=40 1629129600000000001`,
+		`table3,tk=d value=50 1629129600000000000`,
+	}
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		{
+			name:    "multi mst query normal with alias",
+			command: `select * from (select 'table1' as 'name', value from db0.rp0.table1), (select 'table2' as 'name', value from db0.rp0.table2), (select 'table3' as 'name', value from db0.rp0.table3)`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table2,table3","columns":["time","name","value"],"values":[["2021-08-16T16:00:00Z","table1",1],["2021-08-16T16:00:00Z","table1",2],["2021-08-16T16:00:00Z","table1",4],["2021-08-16T16:00:00Z","table2",10],["2021-08-16T16:00:00Z","table2",20],["2021-08-16T16:00:00Z","table2",50],["2021-08-16T16:00:00Z","table3",10],["2021-08-16T16:00:00Z","table3",20],["2021-08-16T16:00:00Z","table3",50],["2021-08-16T16:00:00.000000001Z","table2",40],["2021-08-16T16:00:00.000000001Z","table3",40]]}]}]}`,
+		},
+		{
+			name:    "query normal with alias",
+			command: `select 'table1' as 'name', value from db0.rp0.table1`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1","columns":["time","name","value"],"values":[["2021-08-16T16:00:00Z","table1",1],["2021-08-16T16:00:00Z","table1",2],["2021-08-16T16:00:00Z","table1",4]]}]}]}`,
+		},
+		{
+			name:    "raise err without alias",
+			command: `select 'table1', value from db0.rp0.table1`,
+			exp:     `{"results":[{"statement_id":0,"error":"field must contain at least one variable"}]}`,
+		},
+		{
+			name:    "no result is returned with alias",
+			command: `select 'table1' as 'name' from db0.rp0.table1`,
+			exp:     `{"results":[{"statement_id":0}]}`,
+		},
+		{
+			name:    "err is returned without alias",
+			command: `select 'table1' from db0.rp0.table1`,
+			exp:     `{"results":[{"statement_id":0,"error":"field must contain at least one variable"}]}`,
+		},
+	}...)
+
+	for i, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if i == 0 {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
+			}
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}
+
+func TestServer_Multi_Metric_Detection(t *testing.T) {
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		`CPU,ns=CPU,rgn=675,svc=CDN,pAgentSN=2dd,agentTP=1,agentSN=1dd cpu.total.usage=1,cpu.total.guest=1,cpu.total.user=1,cpu.total.iowait=1 1741243834649000000`,
+		`CPU,ns=CPU,rgn=675,svc=CDN,pAgentSN=2dd,agentTP=2,agentSN=2dd cpu.total.usage=2,cpu.total.guest=2,cpu.total.user=2,cpu.total.iowait=2 1741243834649000000`,
+		`CPU,ns=CPU,rgn=675,svc=CDN,pAgentSN=4dd,agentTP=1,agentSN=3dd cpu.total.usage=3,cpu.total.guest=3,cpu.total.user=3,cpu.total.iowait=3 1741243834649000000`,
+		`CPU,ns=CPU,rgn=675,svc=CDN,pAgentSN=4dd,agentTP=2,agentSN=4dd cpu.total.usage=4,cpu.total.guest=4,cpu.total.user=4,cpu.total.iowait=4 1741243834649000000`,
+
+		`SmartServer.serverkits_mem_monitor,ns=SmartServer.serverkits_mem_monitor,rgn=675,svc=CDN,pAgentSN=2dd,agentTP=1,agentSN=1dd serverkits_mem_monitor.cur_mem_ce_count=5,serverkits_mem_monitor.cur_mem_uce_count=5  1741243834649000000`,
+		`SmartServer.serverkits_mem_monitor,ns=SmartServer.serverkits_mem_monitor,rgn=675,svc=CDN,pAgentSN=2dd,agentTP=2,agentSN=2dd serverkits_mem_monitor.cur_mem_ce_count=6,serverkits_mem_monitor.cur_mem_uce_count=6  1741243834649000000`,
+		`SmartServer.serverkits_mem_monitor,ns=SmartServer.serverkits_mem_monitor,rgn=675,svc=CDN,pAgentSN=4dd,agentTP=1,agentSN=3dd serverkits_mem_monitor.cur_mem_ce_count=7,serverkits_mem_monitor.cur_mem_uce_count=7  1741243834649000000`,
+		`SmartServer.serverkits_mem_monitor,ns=SmartServer.serverkits_mem_monitor,rgn=675,svc=CDN,pAgentSN=4dd,agentTP=2,agentSN=4dd serverkits_mem_monitor.cur_mem_ce_count=8,serverkits_mem_monitor.cur_mem_uce_count=8  1741243834649000000`,
+	}
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		{
+			name:    "mem: anomaly detect: ad_rmse_ext, trend detect: regr_slope",
+			command: `SELECT ad_rmse_ext(ce_sum) AS ce_as, regr_slope(ce_sum) AS ce_ts, ad_rmse_ext(uce_sum) AS uce_as, regr_slope(uce_sum) AS uce_ts FROM (SELECT sum("serverkits_mem_monitor.cur_mem_ce_count") AS ce_sum, sum("serverkits_mem_monitor.cur_mem_uce_count") AS uce_sum FROM db0.rp0."SmartServer.serverkits_mem_monitor" WHERE rgn = '675' AND svc = 'CDN' AND agentTP = '2' GROUP BY time(1m), pAgentSN FILL(none)) GROUP BY pAgentSN`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"SmartServer.serverkits_mem_monitor","tags":{"pAgentSN":"2dd"},"columns":["time","ce_as","ce_ts","uce_as","uce_ts"],"values":[["1970-01-01T00:00:00Z",0,0,0,0]]},{"name":"SmartServer.serverkits_mem_monitor","tags":{"pAgentSN":"4dd"},"columns":["time","ce_as","ce_ts","uce_as","uce_ts"],"values":[["1970-01-01T00:00:00Z",0,0,0,0]]}]}]}`,
+		},
+		{
+			name:    "cpu: anomaly detect: ad_rmse_ext, trend detect: regr_slope",
+			command: `SELECT ad_rmse_ext(cpu.total.usage) AS cu_as, regr_slope(cpu.total.usage) AS cu_ts, ad_rmse_ext(cpu.total.guest) AS cg_as, regr_slope(cpu.total.guest) AS cg_ts, ad_rmse_ext(cpu.total.user) AS cr_as, regr_slope(cpu.total.user) AS cr_ts, ad_rmse_ext(cpu.total.iowait) AS ci_as, regr_slope(cpu.total.iowait) AS ci_ts FROM (SELECT sum(cpu.total.usage) AS cpu.total.usage, sum(cpu.total.guest) AS cpu.total.guest, sum(cpu.total.user) AS cpu.total.user, sum(cpu.total.iowait) AS cpu.total.iowait FROM db0.rp0.CPU WHERE rgn = '675' AND svc = 'CDN' AND agentTP = '1' GROUP BY time(1m), pAgentSN, agentSN, rgn, svc FILL(none)) GROUP BY pAgentSN, agentSN, rgn, svc`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"CPU","tags":{"agentSN":"1dd","pAgentSN":"2dd","rgn":"675","svc":"CDN"},"columns":["time","cu_as","cu_ts","cg_as","cg_ts","cr_as","cr_ts","ci_as","ci_ts"],"values":[["1970-01-01T00:00:00Z",0,0,0,0,0,0,0,0]]},{"name":"CPU","tags":{"agentSN":"3dd","pAgentSN":"4dd","rgn":"675","svc":"CDN"},"columns":["time","cu_as","cu_ts","cg_as","cg_ts","cr_as","cr_ts","ci_as","ci_ts"],"values":[["1970-01-01T00:00:00Z",0,0,0,0,0,0,0,0]]}]}]}`,
+		},
+		{
+			name:    "join query",
+			command: `SELECT t1.cu_as, t2.ce_as FROM (SELECT ad_rmse_ext(cpu.total.usage) AS cu_as, regr_slope(cpu.total.usage) AS cu_ts, ad_rmse_ext(cpu.total.guest) AS cg_as, regr_slope(cpu.total.guest) AS cg_ts, ad_rmse_ext(cpu.total.user) AS cr_as, regr_slope(cpu.total.user) AS cr_ts, ad_rmse_ext(cpu.total.iowait) AS ci_as, regr_slope(cpu.total.iowait) AS ci_ts FROM (SELECT sum(cpu.total.usage) AS cpu.total.usage, sum(cpu.total.guest) AS cpu.total.guest, sum(cpu.total.user) AS cpu.total.user, sum(cpu.total.iowait) AS cpu.total.iowait FROM db0.rp0.CPU WHERE rgn = '675' AND svc = 'CDN' AND agentTP = '1' GROUP BY time(1m), pAgentSN, agentSN, rgn, svc FILL(none)) GROUP BY pAgentSN, agentSN, rgn, svc) AS t1 INNER JOIN (SELECT ad_rmse_ext(ce_sum) AS ce_as, regr_slope(ce_sum) AS ce_ts, ad_rmse_ext(uce_sum) AS uce_as, regr_slope(uce_sum) AS uce_ts FROM (SELECT sum("serverkits_mem_monitor.cur_mem_ce_count") AS ce_sum, sum("serverkits_mem_monitor.cur_mem_uce_count") AS uce_sum FROM db0.rp0."SmartServer.serverkits_mem_monitor" WHERE rgn = '675' AND svc = 'CDN' AND agentTP = '2' GROUP BY time(1m), pAgentSN FILL(none)) GROUP BY pAgentSN) AS t2 ON (t1.pAgentSN = t2.pAgentSN) GROUP BY pAgentSN, agentSN, rgn, svc`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"t1,t2","tags":{"agentSN":"1dd","pAgentSN":"2dd","rgn":"675","svc":"CDN"},"columns":["time","t1.cu_as","t2.ce_as"],"values":[["1970-01-01T00:00:00Z",0,0]]},{"name":"t1,t2","tags":{"agentSN":"3dd","pAgentSN":"4dd","rgn":"675","svc":"CDN"},"columns":["time","t1.cu_as","t2.ce_as"],"values":[["1970-01-01T00:00:00Z",0,0]]}]}]}`,
+		},
+		{
+			name:    "multi metric detect",
+			command: `SELECT group_anomaly_score, group_trend_score, cu_as_weight_anomaly_score, cg_as_weight_anomaly_score, cr_as_weight_anomaly_score, ci_as_weight_anomaly_score, ce_as_weight_anomaly_score, use_as_weight_anomaly_score, cu_ts_trend_score, cg_ts_trend_score, cr_ts_trend_score, ci_ts_trend_score, ce_ts_trend_score, uce_ts_trend_score FROM (SELECT (2 * t1.cu_as + t1.cg_as + t1.cr_as + t1.ci_as + t2.ce_as + t2.uce_as) AS group_anomaly_score, (t1.cu_ts + t1.cg_ts + t1.cr_ts + t1.ci_ts + t2.ce_ts + t2.uce_ts) AS group_trend_score, 2 * t1.cu_as AS cu_as_weight_anomaly_score, 1 * t1.cg_as AS cg_as_weight_anomaly_score, 1 * t1.cr_as AS cr_as_weight_anomaly_score, 1 * t1.ci_ts AS ci_as_weight_anomaly_score, 1 * t2.ce_as AS ce_as_weight_anomaly_score, 1 * t2.uce_as AS use_as_weight_anomaly_score, 1 * t1.cu_ts AS cu_ts_trend_score, 1 * t1.cg_ts AS cg_ts_trend_score, 1 * t1.cr_ts AS cr_ts_trend_score, 1 * t1.ci_ts AS ci_ts_trend_score, 1 * t2.ce_ts AS ce_ts_trend_score, 1 * t2.uce_ts AS uce_ts_trend_score FROM (SELECT ad_rmse_ext(cpu.total.usage) AS cu_as, regr_slope(cpu.total.usage) AS cu_ts, ad_rmse_ext(cpu.total.guest) AS cg_as, regr_slope(cpu.total.guest) AS cg_ts, ad_rmse_ext(cpu.total.user) AS cr_as, regr_slope(cpu.total.user) AS cr_ts, ad_rmse_ext(cpu.total.iowait) AS ci_as, regr_slope(cpu.total.iowait) AS ci_ts FROM (SELECT sum(cpu.total.usage) AS cpu.total.usage, sum(cpu.total.guest) AS cpu.total.guest, sum(cpu.total.user) AS cpu.total.user, sum(cpu.total.iowait) AS cpu.total.iowait FROM db0.rp0.CPU WHERE rgn = '675' AND svc = 'CDN' AND agentTP = '1' GROUP BY time(1m), pAgentSN, agentSN, rgn, svc FILL(none)) GROUP BY pAgentSN, agentSN, rgn, svc) AS t1 INNER JOIN (SELECT ad_rmse_ext(ce_sum) AS ce_as, regr_slope(ce_sum) AS ce_ts, ad_rmse_ext(uce_sum) AS uce_as, regr_slope(uce_sum) AS uce_ts FROM (SELECT sum("serverkits_mem_monitor.cur_mem_ce_count") AS ce_sum, sum("serverkits_mem_monitor.cur_mem_uce_count") AS uce_sum FROM db0.rp0."SmartServer.serverkits_mem_monitor" WHERE rgn = '675' AND svc = 'CDN' AND agentTP = '2' GROUP BY time(1m), pAgentSN FILL(none)) GROUP BY pAgentSN) AS t2 ON (t1.pAgentSN = t2.pAgentSN) GROUP BY pAgentSN, agentSN, rgn, svc) WHERE group_anomaly_score >= 0 AND group_trend_score >= 0 GROUP BY pAgentSN, agentSN, rgn, svc`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"t1,t2","tags":{"agentSN":"1dd","pAgentSN":"2dd","rgn":"675","svc":"CDN"},"columns":["time","group_anomaly_score","group_trend_score","cu_as_weight_anomaly_score","cg_as_weight_anomaly_score","cr_as_weight_anomaly_score","ci_as_weight_anomaly_score","ce_as_weight_anomaly_score","use_as_weight_anomaly_score","cu_ts_trend_score","cg_ts_trend_score","cr_ts_trend_score","ci_ts_trend_score","ce_ts_trend_score","uce_ts_trend_score"],"values":[["1970-01-01T00:00:00Z",0,0,0,0,0,0,0,0,0,0,0,0,0,0]]},{"name":"t1,t2","tags":{"agentSN":"3dd","pAgentSN":"4dd","rgn":"675","svc":"CDN"},"columns":["time","group_anomaly_score","group_trend_score","cu_as_weight_anomaly_score","cg_as_weight_anomaly_score","cr_as_weight_anomaly_score","ci_as_weight_anomaly_score","ce_as_weight_anomaly_score","use_as_weight_anomaly_score","cu_ts_trend_score","cg_ts_trend_score","cr_ts_trend_score","ci_ts_trend_score","ce_ts_trend_score","uce_ts_trend_score"],"values":[["1970-01-01T00:00:00Z",0,0,0,0,0,0,0,0,0,0,0,0,0,0]]}]}]}`,
+		},
+	}...)
+
+	for i, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if i == 0 {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
+			}
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}
+
+func TestServer_Query_MultiMeasurementsInDifferentRp(t *testing.T) {
+	s := OpenServer(NewConfig())
+	defer s.Close()
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp1", 1, 0), false); err != nil {
+		t.Fatal(err)
+	}
+	writes := []string{
+		"cpu0,host=server01 usage=10",
+		"cpu0,host=server02 usage=20 1735660700000000000",
+	}
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{db: "db0", rp: "rp0", data: writes[0]},
+		&Write{db: "db0", rp: "rp1", data: writes[1]},
+	}
+	if err := test.init(s); err != nil {
+		t.Fatalf("test init failed: %s", err)
+	}
+	test.addQueries([]*Query{
+		&Query{
+			name:    "select * from rp0.cpu0,rp1.cpu0",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `select * from rp0.cpu0,rp1.cpu0 where time < '2024-12-31T15:58:21Z'`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu0","columns":["time","host","usage"],"values":[["2024-12-31T15:58:20Z","server02",20]]}]}]}`,
+		},
+	}...)
+	for _, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}
+
+func TestServer_Union_Distinct_Push_Down_Rule(t *testing.T) {
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		`table1,t1=a,t2=h f1=1,f2=11 1629129600000000000`,
+		`table1,t1=b,t2=h f1=2,f2=12 1629129600000000000`,
+		`table2,t1=b,t2=i f1=3,f3=21 1629129600000000000`,
+		`table2,t1=c,t2=i f1=4,f3=22 1629129600000000000`,
+		`table3,t1=b,t2=j f1=3,f2="a",f3=31 1629129600000000000`,
+		`table3,t1=c,t2=k f1=4,f2="b",f3=32 1629129600000000000`,
+		`event_table,entity_id=vm1,name=m1 forwarded_id="forward1",forwarded_service="ELB1"  1629129600000000000`,
+		`event_table,entity_id=vm2,name=m2 forwarded_id="forward2",forwarded_service="ELB2"  1629129600000000000`,
+		`event_table,entity_id=vm3,name=m2 forwarded_id="forward3",forwarded_service="ELB3"  1629129600000000000`,
+		`event_table,entity_id=vm4,name=m3 forwarded_id="forward4",forwarded_service="ELB4"  1629129600000000000`,
+		`event_table,entity_id=vm5,name=m4 forwarded_id="forward5",forwarded_service="ELB5"  1629129600000000000`,
+		`alarm_table,entity_id=vm6,name=m2 matadata="{}",additional="add1" 1629129600000000000`,
+		`alarm_table,entity_id=vm7,name=m3 matadata="{}",additional="add2" 1629129600000000000`,
+		`alarm_table,entity_id=vm8,name=m5 matadata="{}",additional="add3" 1629129600000000000`,
+		`alarm_table,entity_id=vm9,name=m5 matadata="{}",additional="add2" 1629129600000000000`,
+		`alarm_table,entity_id=vm10,name=m6 matadata="{}",additional="add3" 1629129600000000000`,
+		`CPU,entity_id=vm11,name=m5 parent_entity_id="1dd",entity_type=1,forwarded_service="ELB1" 1629129600000000000`,
+		`CPU,entity_id=vm12,name=m7 parent_entity_id="2dd",entity_type=1,forwarded_service="ELB1" 1629129600000000000`,
+		`CPU,entity_id=vm13,name=m7 parent_entity_id="3dd",entity_type=1,forwarded_service="ELB1" 1629129600000000000`,
+		`CPU,entity_id=vm14,name=m8 parent_entity_id="4dd",entity_type=1,forwarded_service="ELB1" 1629129600000000000`,
+		`CPU,entity_id=vm15,name=m9 parent_entity_id="5dd",entity_type=1,forwarded_service="ELB1" 1629129600000000000`,
+	}
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		{
+			name:    "union same columns count",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table1 union select * from table2",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table2","columns":["time","f1","f2","t1","t2"],"values":[["2021-08-16T16:00:00Z",1,11,"a","h"],["2021-08-16T16:00:00Z",2,12,"b","h"],["2021-08-16T16:00:00Z",3,21,"b","i"],["2021-08-16T16:00:00Z",4,22,"c","i"]]}]}]}`,
+		},
+		{
+			name:    "unionbyname same columns count(not same name)",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table1 union by name select * from table2",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table2","columns":["time","f1","f2","f3","t1","t2"],"values":[["2021-08-16T16:00:00Z",1,11,null,"a","h"],["2021-08-16T16:00:00Z",2,12,null,"b","h"],["2021-08-16T16:00:00Z",3,null,21,"b","i"],["2021-08-16T16:00:00Z",4,null,22,"c","i"]]}]}]}`,
+		},
+		{
+			name:    "union agg",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select count(f1) as v1, sum(f2) as v2  from table1 union select count(f1) as v1, sum(f3) as v2 from table3",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table3","columns":["time","v1","v2"],"values":[["1970-01-01T00:00:00Z",2,23],["1970-01-01T00:00:00Z",2,63]]}]}]}`,
+		},
+		{
+			name:    "unionbyname agg",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select count(f1) as v1, sum(f2) as v2  from table1 union by name select count(f1) as v1 from table3",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table3","columns":["time","v1","v2"],"values":[["1970-01-01T00:00:00Z",2,23],["1970-01-01T00:00:00Z",2,null]]}]}]}`,
+		},
+		{
+			name:    "union group by",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select * from table1 group by t1, t2 union select f1, f3 from table3 group by t1, t2",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table3","columns":["time","f1","f2","t1","t2"],"values":[["2021-08-16T16:00:00Z",1,11,"a","h"],["2021-08-16T16:00:00Z",2,12,"b","h"],["2021-08-16T16:00:00Z",3,31,"b","j"],["2021-08-16T16:00:00Z",4,32,"c","k"]]}]}]}`,
+		},
+		{
+			name:    "unionbyname group by",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select f1,f2 from table1 group by t1 union by name select f1 from table3 group by t2",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"table1,table3","columns":["time","f1","f2","t1","t2"],"values":[["2021-08-16T16:00:00Z",1,11,"a",null],["2021-08-16T16:00:00Z",2,12,"b",null],["2021-08-16T16:00:00Z",3,null,null,"j"],["2021-08-16T16:00:00Z",4,null,null,"k"]]}]}]}`,
+		},
+		{
+			name:    "union|unionallbyname limit",
+			params:  url.Values{"db": []string{"db0"}},
+			command: "select entity_id,forwarded_id from event_table union by name (select entity_id,additional from alarm_table union select entity_id,forwarded_service from CPU limit 1)",
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"CPU,alarm_table,event_table","columns":["time","additional","entity_id","forwarded_id"],"values":[["2021-08-16T16:00:00Z","ELB1","vm11",null],["2021-08-16T16:00:00Z","add1","vm6",null],["2021-08-16T16:00:00Z","add2","vm7",null],["2021-08-16T16:00:00Z","add2","vm9",null],["2021-08-16T16:00:00Z","add3","vm10",null],["2021-08-16T16:00:00Z","add3","vm8",null],["2021-08-16T16:00:00Z",null,"vm1","forward1"],["2021-08-16T16:00:00Z",null,"vm2","forward2"],["2021-08-16T16:00:00Z",null,"vm3","forward3"],["2021-08-16T16:00:00Z",null,"vm4","forward4"],["2021-08-16T16:00:00Z",null,"vm5","forward5"]]}]}]}`,
 		},
 	}...)
 

@@ -16,8 +16,8 @@ import (
 	"time"
 
 	"github.com/armon/go-metrics"
+	"github.com/hashicorp/go-msgpack/v2/codec"
 	"github.com/hashicorp/memberlist"
-	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/go-msgpack/codec"
 	coordinate2 "github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/coordinate"
 )
 

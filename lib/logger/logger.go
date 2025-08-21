@@ -27,6 +27,7 @@ import (
 )
 
 type SuppressLog struct {
+	Logger   *zap.Logger
 	Node     errno.Node
 	Module   errno.Module
 	Level    zapcore.Level
@@ -37,8 +38,9 @@ type SuppressLog struct {
 	Checked  uint64
 }
 
-func NewSuppressLog(n errno.Node, m errno.Module, level zapcore.Level, message string, fields []zap.Field, frame runtime.Frame) *SuppressLog {
+func NewSuppressLog(logger *zap.Logger, n errno.Node, m errno.Module, level zapcore.Level, message string, fields []zap.Field, frame runtime.Frame) *SuppressLog {
 	return &SuppressLog{
+		Logger:   logger,
 		Node:     n,
 		Module:   m,
 		Level:    level,
@@ -90,7 +92,7 @@ func (ls *LogSuppressor) Indulge() *SuppressLog {
 	return nil
 }
 
-func (ls *LogSuppressor) Suppress(n errno.Node, m errno.Module, level zapcore.Level, message string, fields []zap.Field) *SuppressLog {
+func (ls *LogSuppressor) Suppress(logger *zap.Logger, n errno.Node, m errno.Module, level zapcore.Level, message string, fields []zap.Field) *SuppressLog {
 	const skipOffset = 2
 
 	frame, ok := ls.getCallerFrame(ls.callerSkip + skipOffset)
@@ -112,7 +114,7 @@ func (ls *LogSuppressor) Suppress(n errno.Node, m errno.Module, level zapcore.Le
 		return nil
 	}
 
-	ls.suppressLog = NewSuppressLog(n, m, level, message, fields, frame)
+	ls.suppressLog = NewSuppressLog(logger, n, m, level, message, fields, frame)
 	return spillingLog
 }
 
@@ -239,13 +241,16 @@ func (l *SuppressLogger) Close() {
 	})
 }
 
-func (l *SuppressLogger) With(fields ...zap.Field) *SuppressLogger {
-	l.logger.With(fields...)
-	return l
+func (l *SuppressLogger) With(fields ...zap.Field) *zap.Logger {
+	return l.logger.With(fields...)
 }
 
 func (l *SuppressLogger) Error(n errno.Node, m errno.Module, msg string, fields ...zap.Field) {
-	log := l.logSuppressor.Suppress(n, m, zap.ErrorLevel, msg, fields)
+	l.ErrorWithZapLogger(nil, n, m, msg, fields...)
+}
+
+func (l *SuppressLogger) ErrorWithZapLogger(logger *zap.Logger, n errno.Node, m errno.Module, msg string, fields ...zap.Field) {
+	log := l.logSuppressor.Suppress(logger, n, m, zap.ErrorLevel, msg, fields)
 	if log == nil {
 		return
 	}
@@ -255,11 +260,15 @@ func (l *SuppressLogger) Error(n errno.Node, m errno.Module, msg string, fields 
 func (l *SuppressLogger) error(log *SuppressLog) {
 	fields := l.rewriteFields(log.Fields, log.Node, log.Module)
 	fields = l.addSuppressField(fields, log)
-	l.logger.Error(log.Message, fields...)
+	l.getLogger(log).Error(log.Message, fields...)
 }
 
 func (l *SuppressLogger) Info(msg string, fields ...zap.Field) {
-	log := l.logSuppressor.Suppress(errno.NodeServer, errno.ModuleUnknown, zap.InfoLevel, msg, fields)
+	l.InfoWithZapLogger(nil, msg, fields...)
+}
+
+func (l *SuppressLogger) InfoWithZapLogger(logger *zap.Logger, msg string, fields ...zap.Field) {
+	log := l.logSuppressor.Suppress(logger, errno.NodeServer, errno.ModuleUnknown, zap.InfoLevel, msg, fields)
 	if log == nil {
 		return
 	}
@@ -268,11 +277,15 @@ func (l *SuppressLogger) Info(msg string, fields ...zap.Field) {
 
 func (l *SuppressLogger) info(log *SuppressLog) {
 	fields := l.addSuppressField(log.Fields, log)
-	l.logger.Info(log.Message, fields...)
+	l.getLogger(log).Info(log.Message, fields...)
 }
 
 func (l *SuppressLogger) Warn(msg string, fields ...zap.Field) {
-	log := l.logSuppressor.Suppress(errno.NodeServer, errno.ModuleUnknown, zap.WarnLevel, msg, fields)
+	l.WarnWithZapLogger(nil, msg, fields...)
+}
+
+func (l *SuppressLogger) WarnWithZapLogger(logger *zap.Logger, msg string, fields ...zap.Field) {
+	log := l.logSuppressor.Suppress(logger, errno.NodeServer, errno.ModuleUnknown, zap.WarnLevel, msg, fields)
 	if log == nil {
 		return
 	}
@@ -281,11 +294,15 @@ func (l *SuppressLogger) Warn(msg string, fields ...zap.Field) {
 
 func (l *SuppressLogger) warn(log *SuppressLog) {
 	fields := l.addSuppressField(log.Fields, log)
-	l.logger.Warn(log.Message, fields...)
+	l.getLogger(log).Warn(log.Message, fields...)
 }
 
 func (l *SuppressLogger) Debug(msg string, fields ...zap.Field) {
-	log := l.logSuppressor.Suppress(errno.NodeServer, errno.ModuleUnknown, zap.DebugLevel, msg, fields)
+	l.DebugWithZapLogger(logger, msg, fields...)
+}
+
+func (l *SuppressLogger) DebugWithZapLogger(logger *zap.Logger, msg string, fields ...zap.Field) {
+	log := l.logSuppressor.Suppress(logger, errno.NodeServer, errno.ModuleUnknown, zap.DebugLevel, msg, fields)
 	if log == nil {
 		return
 	}
@@ -294,22 +311,30 @@ func (l *SuppressLogger) Debug(msg string, fields ...zap.Field) {
 
 func (l *SuppressLogger) debug(log *SuppressLog) {
 	fields := l.addSuppressField(log.Fields, log)
-	l.logger.Debug(log.Message, fields...)
+	l.getLogger(log).Debug(log.Message, fields...)
 }
 
 func (l *SuppressLogger) dpanic(log *SuppressLog) {
 	fields := l.addSuppressField(log.Fields, log)
-	l.logger.DPanic(log.Message, fields...)
+	l.getLogger(log).DPanic(log.Message, fields...)
 }
 
 func (l *SuppressLogger) panic(log *SuppressLog) {
 	fields := l.addSuppressField(log.Fields, log)
-	l.logger.Panic(log.Message, fields...)
+	l.getLogger(log).Panic(log.Message, fields...)
 }
 
 func (l *SuppressLogger) fatal(log *SuppressLog) {
 	fields := l.addSuppressField(log.Fields, log)
-	l.logger.Fatal(log.Message, fields...)
+	l.getLogger(log).Fatal(log.Message, fields...)
+}
+
+func (l *SuppressLogger) getLogger(log *SuppressLog) *zap.Logger {
+	logger := l.logger
+	if log.Logger != nil {
+		logger = log.Logger
+	}
+	return logger
 }
 
 func (l *SuppressLogger) GetZapLogger() *zap.Logger {
@@ -390,9 +415,10 @@ func GetSuppressLogger() *SuppressLogger {
 }
 
 type Logger struct {
-	logger *SuppressLogger
-	node   errno.Node
-	module errno.Module
+	zapLogger *zap.Logger
+	logger    *SuppressLogger
+	node      errno.Node
+	module    errno.Module
 }
 
 var loggerPool sync.Map
@@ -414,8 +440,8 @@ func NewLogger(module errno.Module) *Logger {
 }
 
 func (l *Logger) With(fields ...zap.Field) *Logger {
-	l.logger.With(fields...)
-	return l
+	zapLogger := l.logger.With(fields...)
+	return l.clone(zapLogger)
 }
 
 func (l *Logger) SetModule(m errno.Module) {
@@ -423,22 +449,22 @@ func (l *Logger) SetModule(m errno.Module) {
 }
 
 func (l *Logger) Error(msg string, fields ...zap.Field) {
-	l.logger.Error(l.node, l.module, msg, fields...)
+	l.logger.ErrorWithZapLogger(l.zapLogger, l.node, l.module, msg, fields...)
 }
 
 func (l *Logger) Info(msg string, fields ...zap.Field) {
-	l.logger.Info(msg, fields...)
+	l.logger.InfoWithZapLogger(l.zapLogger, msg, fields...)
 }
 
 func (l *Logger) Warn(msg string, fields ...zap.Field) {
-	l.logger.Warn(msg, fields...)
+	l.logger.WarnWithZapLogger(l.zapLogger, msg, fields...)
 }
 
 func (l *Logger) Debug(msg string, fields ...zap.Field) {
 	if level > zapcore.DebugLevel {
 		return
 	}
-	l.logger.Debug(msg, fields...)
+	l.logger.DebugWithZapLogger(l.zapLogger, msg, fields...)
 }
 
 func (l *Logger) GetZapLogger() *zap.Logger {
@@ -446,9 +472,7 @@ func (l *Logger) GetZapLogger() *zap.Logger {
 }
 
 func (l *Logger) SetZapLogger(lg *zap.Logger) *Logger {
-	tmp := l.logger.SetZapLogger(lg)
-	l.logger = tmp
-	return l
+	return l.clone(lg.WithOptions(zap.WithCaller(false)))
 }
 
 func (l *Logger) GetSuppressLogger() *SuppressLogger {
@@ -457,4 +481,13 @@ func (l *Logger) GetSuppressLogger() *SuppressLogger {
 
 func (l *Logger) IsDebugLevel() bool {
 	return level == zap.DebugLevel
+}
+
+func (l *Logger) clone(zapLogger *zap.Logger) *Logger {
+	return &Logger{
+		zapLogger: zapLogger,
+		logger:    l.logger,
+		node:      l.node,
+		module:    l.module,
+	}
 }

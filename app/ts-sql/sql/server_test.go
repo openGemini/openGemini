@@ -25,10 +25,12 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/validation"
+	"github.com/openGemini/openGemini/services/fence"
 	"github.com/openGemini/openGemini/services/runtimecfg"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -66,6 +68,31 @@ func Test_NewServer_Open_Close(t *testing.T) {
 	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
 
 	server, err := NewServer(conf, app.ServerInfo{}, log)
+	require.NoError(t, err)
+	require.NotNil(t, server.(*Server).sherlockService)
+
+	server.(*Server).initMetaClientFn = func() error {
+		return nil
+	}
+	err = server.Open()
+	require.NoError(t, err)
+
+	err = server.Close()
+	require.NoError(t, err)
+}
+
+func Test_NewServer_Open_Close_Flight(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	log := logger.NewLogger(errno.ModuleUnknown)
+
+	conf := config.NewTSSql(false)
+	conf.Common.MetaJoin = append(conf.Common.MetaJoin, []string{"127.0.0.1:9179"}...)
+	conf.Common.ReportEnable = false
+	conf.Sherlock.DumpPath = path.Join(tmpDir, "sherlock")
+	conf.HTTP.FlightEnabled = true
+
+	server, err := NewServer(conf, app.ServerInfo{App: config.AppSingle}, log)
 	require.NoError(t, err)
 	require.NotNil(t, server.(*Server).sherlockService)
 
@@ -344,9 +371,12 @@ func Test_NewServer_IncSyncData_Enabled(t *testing.T) {
 	server.(*Server).initMetaClientFn = func() error {
 		return nil
 	}
+	config.GetStoreConfig().Fence.FenceEnable = true
 	err = server.Open()
 	require.NoError(t, err)
 
+	file, err := fileops.Open(t.TempDir())
+	fence.ManagerIns().Fd = file
 	err = server.Close()
 	require.NoError(t, err)
 }
@@ -369,4 +399,14 @@ func TestRuntimeCfgDefaultEnabled(t *testing.T) {
 	limits := validation.InitOverrides(config.NewLimits(), s)
 	enable := limits.PromLimitEnabled("test")
 	require.Equal(t, false, enable)
+}
+
+func TestNewServer_FlightService(t *testing.T) {
+	conf := config.NewTSSql(false)
+	conf.HTTP.FlightEnabled = true
+	log := logger.NewLogger(errno.ModuleUnknown)
+
+	server, err := NewServer(conf, app.ServerInfo{App: config.AppSingle}, log)
+	require.NoError(t, err)
+	require.NotNil(t, server.(*Server).arrowFlightService)
 }

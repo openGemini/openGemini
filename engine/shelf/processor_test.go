@@ -33,7 +33,7 @@ import (
 )
 
 func initConfig(n int) func() {
-	conf := &config.GetStoreConfig().ShelfMode
+	conf := config.GetShelfMode()
 	conf.Enabled = true
 	conf.SeriesHashFactor = 2
 	conf.Concurrent = n
@@ -86,6 +86,7 @@ func TestReadRecord(t *testing.T) {
 	}
 	rec := shelf.ReadRecord(shardID, "foo_0", 10, tr, schema, true)
 	require.True(t, rec.RowNums() > 0)
+	require.True(t, rec.Len() == 2)
 
 	rec = shelf.ReadRecord(shardID, "mst_not_exists", 10, tr, schema, true)
 	require.True(t, rec == nil || rec.RowNums() == 0)
@@ -95,22 +96,26 @@ func TestReadRecord(t *testing.T) {
 	require.True(t, rec == nil || rec.RowNums() == 0)
 }
 
-func TestAllocTSSPConvertSource(t *testing.T) {
-	cpuNum := 16
-	defer initConfig(cpuNum)()
+func TestWalReader(t *testing.T) {
+	defer initConfig(2)()
 
-	var releases []func()
-	for i := range 10 {
-		ok, release := shelf.AllocTSSPConvertSource()
-		require.Equal(t, i < cpuNum/4, ok)
-		if ok {
-			releases = append(releases, release)
-		}
+	shardID := uint64(10)
+	runner := newRunner(shardID, t.TempDir())
+	defer runner.Close()
+
+	require.NoError(t, writeRows(runner, shardID))
+
+	tr := &util.TimeRange{Max: math.MaxInt64}
+	schema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Float, Name: "field_float"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
 	}
 
-	for _, release := range releases {
-		release()
-	}
+	reader := shelf.NewWalReader(shardID, "foo_0", tr)
+	reader.Exclude(&MockTSSP{sequence: 1})
+
+	rec := reader.Values("foo_0", shardID, *tr, schema, true)
+	require.True(t, rec.RowNums() > 0)
 }
 
 func TestBlobGroup(t *testing.T) {
@@ -123,6 +128,19 @@ func TestBlobGroup(t *testing.T) {
 		ok = true
 	})
 	require.True(t, ok)
+
+	group, _ := shelf.NewBlobGroup(0)
+	assertCodec(t, group, true, true)
+
+	group, _ = shelf.NewBlobGroup(0)
+	assertCodec(t, group, true, false)
+
+	group, _ = shelf.NewBlobGroup(1)
+	assertCodec(t, group, true, true)
+
+	group, _ = shelf.NewBlobGroup(1)
+	assertCodec(t, group, true, false)
+
 }
 
 func newNilRunner() *shelf.Runner {
@@ -138,7 +156,7 @@ func newRunner(shardID uint64, dir string) *shelf.Runner {
 		OwnerDb: "db0",
 		OwnerPt: 1,
 	}
-	shardInfo := shelf.NewShardInfo(ident, dir, &lock, &MockTbStore{}, &EmptyIndex{sidCache: 10, sidCreate: 100})
+	shardInfo := shelf.NewShardInfo(ident, dir, dir, &lock, &MockTbStore{}, &EmptyIndex{sidCache: 10, sidCreate: 100}, nil)
 
 	runner := shelf.NewRunner()
 	runner.RegisterShard(shardID, shardInfo)
@@ -156,7 +174,7 @@ func newShard(shardID uint64, dir string) (*shelf.Shard, *EmptyIndex, *MockTbSto
 	}
 	store := &MockTbStore{}
 	idx := &EmptyIndex{sidCache: 10, sidCreate: 100}
-	shardInfo := shelf.NewShardInfo(ident, dir, &lock, store, idx)
+	shardInfo := shelf.NewShardInfo(ident, dir, dir, &lock, store, idx, nil)
 
 	return shelf.NewShard(0, shardInfo, 1), idx, store
 }
@@ -164,7 +182,9 @@ func newShard(shardID uint64, dir string) (*shelf.Shard, *EmptyIndex, *MockTbSto
 func writeRows(runner *shelf.Runner, shardID uint64) error {
 	group := buildRowGroups()
 
-	return runner.ScheduleGroup(shardID, group)
+	err := runner.ScheduleGroup(shardID, group)
+	time.Sleep(time.Second / 5)
+	return err
 }
 
 func buildRowGroups() *shelf.BlobGroup {
@@ -311,8 +331,8 @@ func itrTSSPFile(f immutable.TSSPFile, hook func(sid uint64, rec *record.Record)
 		hook(sid, rec)
 	}
 }
-func TestIsUniqueSorted(t *testing.T) {
 
+func TestIsUniqueSorted(t *testing.T) {
 	var list []int
 	list = append(list, 1, 2, 3, 4)
 	sorted := shelf.IsUniqueSorted(list)
@@ -321,5 +341,14 @@ func TestIsUniqueSorted(t *testing.T) {
 	list = append(list, 3, 2, 1)
 	sorted = shelf.IsUniqueSorted(list)
 	require.Equal(t, false, sorted)
+}
 
+type MockTSSP struct {
+	sequence uint64
+
+	immutable.TSSPFile
+}
+
+func (s *MockTSSP) LevelAndSequence() (uint16, uint64) {
+	return 1, s.sequence
 }

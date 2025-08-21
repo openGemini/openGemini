@@ -19,20 +19,24 @@ package immutable
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	influxLogger "github.com/influxdata/influxdb/logger"
+	"github.com/openGemini/openGemini/engine/clearevent"
 	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
-	"github.com/openGemini/openGemini/lib/fragment"
 	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/obs"
@@ -41,20 +45,17 @@ import (
 	stats "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
-	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/savsgio/dictpool"
 	"go.uber.org/zap"
 )
 
 type TablesStore interface {
 	SetOpId(shardId uint64, opId uint64)
-	Open() (int64, error)
+	Open(supplier clearevent.NoClearShardAndIndexSupplier) (int64, error)
 	Close() error
 	AddTable(ms *MsBuilder, isOrder bool, tmp bool)
 	AddTSSPFiles(name string, isOrder bool, f ...TSSPFile)
 	AddBothTSSPFiles(flushed *bool, name string, orderFiles []TSSPFile, unorderFiles []TSSPFile)
-	AddPKFile(name, file string, rec *record.Record, mark fragment.IndexFragment, tcLocation int8)
-	GetPKFile(mstName string, file string) (pkInfo *colstore.PKInfo, ok bool)
 	FreeAllMemReader()
 	ReplaceFiles(name string, oldFiles, newFiles []TSSPFile, isOrder bool) error
 	GetBothFilesRef(measurement string, hasTimeFilter bool, tr util.TimeRange, flushed *bool) ([]TSSPFile, []TSSPFile, bool)
@@ -91,9 +92,7 @@ type TablesStore interface {
 	EnableCompAndMerge()
 	FreeSequencer() bool
 	SetImmTableType(engineType config.EngineType)
-	SetMstInfo(name string, mstInfo *meta.MeasurementInfo)
 	SetAccumulateMetaIndex(name string, aMetaIndex *AccumulateMetaIndex)
-	GetMstInfo(name string) (*meta.MeasurementInfo, bool)
 	SeriesTotal() uint64
 	SetLockPath(lock *string)
 	FullyCompacted() bool
@@ -102,6 +101,8 @@ type TablesStore interface {
 	GetShardID() uint64
 	SetIndexMergeSet(idx IndexMergeSet)
 	GetAllMstList() []string
+	ReplaceByNoClearShardId(supplier clearevent.NoClearShardAndIndexSupplier) (map[string][]TSSPFile, map[string][]TSSPFile, error)
+	ClearOldTsspFiles(map[string][]TSSPFile, map[string][]TSSPFile) error
 }
 
 type ImmTable interface {
@@ -118,8 +119,6 @@ type ImmTable interface {
 	AddTSSPFiles(m *MmsTables, name string, isOrder bool, files ...TSSPFile)
 	AddBothTSSPFiles(flushed *bool, m *MmsTables, name string, orderFiles []TSSPFile, unorderFiles []TSSPFile)
 	LevelPlan(m *MmsTables, level uint16) []*CompactGroup
-	SetMstInfo(name string, mstInfo *meta.MeasurementInfo)
-	GetMstInfo(name string) (*meta.MeasurementInfo, bool)
 	UpdateAccumulateMetaIndexInfo(name string, index *AccumulateMetaIndex)
 	FullyCompacted(m *MmsTables) bool
 }
@@ -130,15 +129,15 @@ type MmsTables struct {
 	path string
 	lock *string
 
+	db, rp  string
 	shardId uint64 // this is only to track MmsTables open duration
 	opId    uint64 // this is only to track MmsTables open duration
 
 	closed          chan struct{}
 	stopCompMerge   chan struct{}
-	Order           map[string]*TSSPFiles        // {"cpu_0001": *TSSPFiles}
-	OutOfOrder      map[string]*TSSPFiles        // {"cpu_0001": *TSSPFiles}
-	CSFiles         map[string]*TSSPFiles        // {"cpu_0001": *TSSPFiles} tsspFiles for columnStore
-	PKFiles         map[string]*colstore.PKFiles // {"cpu_0001": *PKFiles} PKFiles for columnStore
+	Order           map[string]*TSSPFiles // {"cpu_0001": *TSSPFiles}
+	OutOfOrder      map[string]*TSSPFiles // {"cpu_0001": *TSSPFiles}
+	CSFiles         map[string]*TSSPFiles // {"cpu_0001": *TSSPFiles} tsspFiles for columnStore
 	fileSeq         uint64
 	tier            *uint64
 	compactionEn    int32
@@ -172,7 +171,6 @@ func NewTableStore(dir string, lock *string, tier *uint64, compactRecovery bool,
 		Order:           make(map[string]*TSSPFiles, defaultCap),
 		OutOfOrder:      make(map[string]*TSSPFiles, defaultCap),
 		CSFiles:         make(map[string]*TSSPFiles, defaultCap),
-		PKFiles:         make(map[string]*colstore.PKFiles, defaultCap),
 		tier:            tier,
 		inCompact:       make(map[string]struct{}, defaultCap),
 		inMerge:         NewMeasurementInProcess(),
@@ -189,16 +187,21 @@ func NewTableStore(dir string, lock *string, tier *uint64, compactRecovery bool,
 	return store
 }
 
+func (m *MmsTables) Path() string {
+	return m.path
+}
+
+func (m *MmsTables) SetDbRp(db, rp string) {
+	m.db = db
+	m.rp = rp
+}
+
 func (m *MmsTables) SetImmTableType(engineType config.EngineType) {
 	if engineType == config.TSSTORE {
 		m.ImmTable = NewTsImmTable()
 	} else if engineType == config.COLUMNSTORE {
-		m.ImmTable = NewCsImmTableImpl()
+		m.ImmTable = NewCsImmTableImpl(m.db, m.rp)
 	}
-}
-
-func (m *MmsTables) SetMstInfo(name string, mstInfo *meta.MeasurementInfo) {
-	m.ImmTable.SetMstInfo(name, mstInfo)
 }
 
 func (m *MmsTables) SetObsOption(option *obs.ObsOptions) {
@@ -211,10 +214,6 @@ func (m *MmsTables) GetObsOption() *obs.ObsOptions {
 
 func (m *MmsTables) SetAccumulateMetaIndex(name string, aMetaIndex *AccumulateMetaIndex) {
 	m.ImmTable.UpdateAccumulateMetaIndexInfo(name, aMetaIndex)
-}
-
-func (m *MmsTables) GetMstInfo(name string) (*meta.MeasurementInfo, bool) {
-	return m.ImmTable.GetMstInfo(name)
 }
 
 func (m *MmsTables) Tier() uint64 {
@@ -301,7 +300,22 @@ func (m *MmsTables) SetIndexMergeSet(idx IndexMergeSet) {
 	m.indexMergeSet = idx
 }
 
-func (m *MmsTables) Open() (int64, error) {
+func DirDepth(path string) int {
+	path = strings.TrimRight(path, "/")
+	if path == "" {
+		return 0
+	}
+	parts := strings.Split(path, "/")
+	depth := 0
+	for _, p := range parts {
+		if p != "" {
+			depth++
+		}
+	}
+	return depth
+}
+
+func (m *MmsTables) Open(supplier clearevent.NoClearShardAndIndexSupplier) (int64, error) {
 	lg := m.logger.With(zap.String("path", m.path))
 	lg.Info("table store open start", zap.Uint64("id", m.shardId), zap.Uint64("opId", m.opId))
 	start := time.Now()
@@ -318,25 +332,32 @@ func (m *MmsTables) Open() (int64, error) {
 
 	stats.ShardStepDuration(m.shardId, m.opId, "RecoverCompactDuration", time.Since(start).Nanoseconds(), false)
 	tm := time.Now()
-	dirs, err := fileops.ReadDir(m.path)
+	fullDirs, err := fileops.ReadDir(m.path)
 	if err != nil {
 		lg.Error("read table store dir fail", zap.Error(err))
 		return 0, err
 	}
-
-	if len(dirs) == 0 {
+	if len(fullDirs) == 0 {
 		return 0, nil
+	}
+
+	dirDepth := DirDepth(fullDirs[0].Name())
+	var dirs []fs.FileInfo
+	for _, dir := range fullDirs {
+		if dirDepth != 1 && DirDepth(dir.Name()) != dirDepth+1 {
+			continue
+		}
+		if filepath.Base(filepath.Clean(dir.Name())) == config.IndexFileDirectory {
+			continue
+		}
+		dirs = append(dirs, dir)
 	}
 
 	m.sequencer.free()
 	ctx := NewFileLoadContext()
 	loader := newFileLoader(m, ctx)
 	loader.maxRowsPerSegment = m.Conf.maxRowsPerSegment
-	for i := range dirs {
-		mst := strings.TrimSuffix(dirs[i].Name(), "/") // measurement name with version
-		loader.Load(filepath.Join(m.path, mst), mst, true)
-		loader.LoadRemote(filepath.Join(m.path, mst), mst, m.obsOpt)
-	}
+	doLoad(supplier, dirs, loader, m, lg)
 	loader.Wait()
 	stats.ShardStepDuration(m.shardId, m.opId, "FileLoaderDuration", time.Since(tm).Nanoseconds(), false)
 	// this is a normal situation, don't need any following operations
@@ -365,6 +386,32 @@ func (m *MmsTables) Open() (int64, error) {
 		zap.Uint64("id", m.shardId), zap.Uint64("opId", m.opId))
 
 	return ctx.getMaxTime(), nil
+}
+
+func doLoad(supplier clearevent.NoClearShardAndIndexSupplier, dirs []fs.FileInfo, loader *fileLoader, m *MmsTables, lg *logger.Logger) {
+	for i := range dirs {
+		mst := filepath.Base(filepath.Clean(dirs[i].Name())) // measurement name with version
+		loader.Load(filepath.Join(m.path, mst), mst, true)
+		if supplier != nil && util.Cleared == *m.tier {
+			noClearShardId, err := supplier.GetNoClearShard()
+			if err != nil {
+				lg.Error("tier is cleared, but not found NoClearShardId", zap.Error(err))
+				continue
+			}
+			re := regexp.MustCompile(`(\d+)_\d+_\d+_\d+`)
+			matches := re.FindStringSubmatch(m.path)
+			if len(matches) < 2 {
+				continue
+			}
+
+			oldPart := matches[0]
+			newPart := strings.Replace(oldPart, matches[1], strconv.FormatUint(noClearShardId, 10), 1)
+			path := strings.Replace(m.path, oldPart, newPart, 1)
+			loader.LoadRemote(filepath.Join(path, mst), mst, m.obsOpt, false)
+		} else {
+			loader.LoadRemote(filepath.Join(m.path, mst), mst, m.obsOpt, false)
+		}
+	}
 }
 
 func (m *MmsTables) isClosed() bool {
@@ -483,76 +530,6 @@ func (m *MmsTables) IsOutOfOrderFilesExist() bool {
 	return len(m.OutOfOrder) != 0
 }
 
-func (m *MmsTables) addPKFile(mstName string, file string, rec *record.Record, mark fragment.IndexFragment, tcLocation int8) {
-	fs, ok := m.PKFiles[mstName]
-
-	if !ok {
-		fs = colstore.NewPKFiles()
-		m.PKFiles[mstName] = fs
-	}
-
-	fs.SetPKInfo(file, rec, mark, tcLocation)
-}
-
-func (m *MmsTables) AddPKFile(mstName string, file string, rec *record.Record, mark fragment.IndexFragment, tcLocation int8) {
-	m.mu.RLock()
-	tables := m.PKFiles
-	fs, ok := tables[mstName]
-	m.mu.RUnlock()
-
-	if !ok {
-		m.mu.Lock()
-		fs, ok = tables[mstName]
-		if !ok {
-			fs = colstore.NewPKFiles()
-			m.PKFiles[mstName] = fs
-		}
-		m.mu.Unlock()
-	}
-
-	fs.SetPKInfo(file, rec, mark, tcLocation)
-}
-
-func (m *MmsTables) GetPKFile(mstName string, file string) (pkInfo *colstore.PKInfo, ok bool) {
-	m.mu.RLock()
-	tables := m.PKFiles
-	fs, ok := tables[mstName]
-	m.mu.RUnlock()
-
-	if !ok {
-		return
-	}
-	pkInfo, ok = fs.GetPKInfo(file)
-	return
-}
-
-func (m *MmsTables) ReplacePKFile(mstName string, file string, rec *record.Record, mark fragment.IndexFragment, oldIndexFiles []string) error {
-	m.mu.RLock()
-	tables := m.PKFiles
-	fs, ok := tables[mstName]
-	m.mu.RUnlock()
-	if !ok {
-		return errors.New("mst is not exist in pkFiles when replace pkFiles")
-	}
-
-	m.mu.Lock()
-	for i := range oldIndexFiles {
-		fs.DelPKInfo(oldIndexFiles[i])
-	}
-	m.mu.Unlock()
-
-	fs.SetPKInfo(file, rec, mark, colstore.DefaultTCLocation)
-	return nil
-}
-
-func (m *MmsTables) getPKFiles(mstName string) (*colstore.PKFiles, bool) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	files, ok := m.PKFiles[mstName]
-	return files, ok
-}
-
 func (m *MmsTables) sortTSSPFiles() {
 	for _, item := range m.Order {
 		sort.Sort(item)
@@ -645,7 +622,6 @@ func (m *MmsTables) DropMeasurement(_ context.Context, name string) error {
 	csFiles, ok := m.CSFiles[name]
 	csWg = stopFiles(ok, csFiles)
 
-	pkFiles := m.PKFiles[name]
 	m.mu.RUnlock()
 
 	if orderWg != nil {
@@ -662,16 +638,11 @@ func (m *MmsTables) DropMeasurement(_ context.Context, name string) error {
 	if err != nil {
 		return err
 	}
-	err = m.deletePKFilesForDropMeasurement(pkFiles)
-	if err != nil {
-		return err
-	}
 
 	m.mu.Lock()
 	delete(m.Order, name)
 	delete(m.OutOfOrder, name)
 	delete(m.CSFiles, name)
-	delete(m.PKFiles, name)
 
 	m.sequencer.DelMmsIdTime(name)
 	m.mu.Unlock()
@@ -705,23 +676,6 @@ func (m *MmsTables) deleteFilesForDropMeasurement(order, unOrder, csFiles *TSSPF
 		log.Error("drop column store files fail", zap.String("name", name),
 			zap.String("path", mstPath), zap.Error(err))
 		return err
-	}
-	return err
-}
-
-func (m *MmsTables) deletePKFilesForDropMeasurement(pkFiles *colstore.PKFiles) error {
-	var err error
-	if pkFiles != nil {
-		for filename := range pkFiles.GetPKInfos() {
-			lock := fileops.FileLockOption("")
-			err := fileops.Remove(filename, lock)
-			if err != nil && !os.IsNotExist(err) {
-				err = errRemoveFail(filename, err)
-				log.Error("remove file fail ", zap.String("file name", filename), zap.Error(err))
-				return err
-			}
-			pkFiles.DelPKInfo(filename)
-		}
 	}
 	return err
 }
@@ -767,6 +721,129 @@ func (m *MmsTables) AddTable(mb *MsBuilder, isOrder bool, tmp bool) {
 	if f != nil {
 		m.AddTSSPFiles(mb.Name(), isOrder, f)
 	}
+}
+
+func (m *MmsTables) ReplaceByNoClearShardId(supplier clearevent.NoClearShardAndIndexSupplier) (map[string][]TSSPFile, map[string][]TSSPFile, error) {
+	if supplier == nil {
+		return nil, nil, errors.New("no clear shard id supplier is nil")
+	}
+	lg := m.logger.With(zap.String("path", m.path))
+	lg.Info("table store replace by no clear shard id start", zap.Uint64("id", m.shardId), zap.Uint64("opId", m.opId))
+	start := time.Now()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	dirs, err := fileops.ReadDir(m.path)
+	if err != nil {
+		lg.Error("read table store dir fail", zap.Error(err))
+		return nil, nil, err
+	}
+
+	if len(dirs) == 0 {
+		return nil, nil, nil
+	}
+
+	return m.replaceAndClear(supplier, dirs, start)
+}
+
+func (m *MmsTables) replaceAndClear(supplier clearevent.NoClearShardAndIndexSupplier, dirs []fs.FileInfo, start time.Time) (map[string][]TSSPFile, map[string][]TSSPFile, error) {
+	ctx := NewFileLoadContext()
+	loader := newFileLoader(m, ctx)
+	loader.maxRowsPerSegment = m.Conf.maxRowsPerSegment
+	oldOrders := make(map[string][]TSSPFile)
+	oldUnOrders := make(map[string][]TSSPFile)
+
+	m.doReplaceAndLoadRemote(supplier, dirs, oldOrders, oldUnOrders, loader)
+	loader.Wait()
+	// this is a normal situation, don't need any following operations
+	if loader.total == 0 {
+		return oldOrders, oldUnOrders, nil
+	}
+
+	errCnt, err := ctx.getError()
+	// if not all file open success, just log error and continue
+	if errCnt > 0 {
+		errInfo := errno.NewError(errno.NotAllTsspFileOpenSuccess, loader.total, errCnt)
+		m.logger.Error("", zap.Error(errInfo), zap.String("first error", err.Error()))
+		loader.ReloadFiles(5) // maximum retry of 5 times
+	}
+	m.fileSeq = ctx.getMaxSeq()
+	return oldOrders, oldUnOrders, err
+}
+
+func (m *MmsTables) ClearOldTsspFiles(oldOrders map[string][]TSSPFile, oldUnOrders map[string][]TSSPFile) error {
+	return m.doDelete(oldOrders, oldUnOrders)
+}
+
+func (m *MmsTables) doReplaceAndLoadRemote(supplier clearevent.NoClearShardAndIndexSupplier, dirs []fs.FileInfo, oldOrders map[string][]TSSPFile, oldUnOrders map[string][]TSSPFile, loader *fileLoader) {
+	for i := range dirs {
+		mst := strings.TrimSuffix(dirs[i].Name(), "/") // measurement name with version
+		if m.Order[mst] != nil {
+			oldOrders[mst] = m.Order[mst].files
+		}
+		if m.OutOfOrder[mst] != nil {
+			oldUnOrders[mst] = m.OutOfOrder[mst].files
+		}
+
+		noClearShardId, err := supplier.GetNoClearShard()
+		if err != nil {
+			m.logger.Error("tier is cleared, but not found NoClearShardId", zap.Error(err))
+			continue
+		}
+		re := regexp.MustCompile(`(\d+)_\d+_\d+_\d+`)
+		matches := re.FindStringSubmatch(m.path)
+		if len(matches) < 2 {
+			continue
+		}
+
+		oldPart := matches[0]
+		newPart := strings.Replace(oldPart, matches[1], strconv.FormatUint(noClearShardId, 10), 1)
+		path := strings.Replace(m.path, oldPart, newPart, 1)
+		loader.LoadRemote(filepath.Join(path, mst), mst, m.obsOpt, true)
+	}
+}
+
+func (m *MmsTables) doDelete(oldOrders map[string][]TSSPFile, oldUnOrders map[string][]TSSPFile) error {
+	var errs []error
+	for mst, files := range oldOrders {
+		if m.Order[mst] == nil {
+			continue
+		}
+		m.Order[mst].lock.Lock()
+		for _, f := range files {
+			m.Order[mst].deleteFile(f)
+			if err := m.deleteFiles(f); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		m.Order[mst].lock.Unlock()
+	}
+
+	for mst, files := range oldUnOrders {
+		if m.OutOfOrder[mst] == nil {
+			continue
+		}
+		m.OutOfOrder[mst].lock.Lock()
+		for _, f := range files {
+			m.OutOfOrder[mst].deleteFile(f)
+			if err := m.deleteFiles(f); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		m.OutOfOrder[mst].lock.Unlock()
+	}
+	m.sortTSSPFiles()
+	if len(errs) > 0 {
+		er := fmt.Errorf("error delete  tssp : %v", errs[0])
+		for i, err := range errs {
+			if i == 0 {
+				continue
+			}
+			er = errors.Join(er, err)
+		}
+		return er
+	}
+	return nil
 }
 
 func (m *MmsTables) ReplaceFiles(name string, oldFiles, newFiles []TSSPFile, isOrder bool) (err error) {
@@ -1193,6 +1270,10 @@ func (m *MmsTables) NewStreamWriteFile(mst string) *StreamWriteFile {
 
 func (m *MmsTables) SetLockPath(lock *string) {
 	m.lock = lock
+}
+
+func (m *MmsTables) GetLockPath() *string {
+	return m.lock
 }
 
 func (m *MmsTables) GetTableFileNum(name string, order bool) int {

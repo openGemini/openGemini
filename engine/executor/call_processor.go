@@ -51,16 +51,6 @@ func NewProcessors(inRowDataType, outRowDataType hybridqp.RowDataType, exprOpt [
 		switch expr := exprOpt[i].Expr.(type) {
 		case *influxql.Call:
 			if op.IsAggregateOp(expr) {
-				name := exprOpt[i].Expr.(*influxql.Call).Name
-				if strings.Contains(name, "castor") {
-					processor, err := NewWideProcessorImpl(inRowDataType, outRowDataType, exprOpt)
-					proRes.coProcessor = processor.(*WideCoProcessorImpl)
-					if err != nil {
-						return nil, errors.New("unsupported aggregation operator of call processor")
-					}
-					proRes.isUDAFCall = true
-					return proRes, nil
-				}
 				routine, err = createRoutineFromUDF(inRowDataType, outRowDataType, exprOpt[i], isSingleCall, nil)
 				if err != nil {
 					return proRes, err
@@ -72,6 +62,15 @@ func NewProcessors(inRowDataType, outRowDataType hybridqp.RowDataType, exprOpt [
 			// Operators implemented through registration
 			// TODO migrate all operators
 			if aggOp := GetAggOperator(name); aggOp != nil {
+				if strings.Contains(name, query.CASTOR) {
+					processor, err := NewWideProcessorImpl(inRowDataType, outRowDataType, exprOpt)
+					if err != nil {
+						return nil, fmt.Errorf("unsupported aggregation operator of call processor: %s", name)
+					}
+					proRes.coProcessor = processor
+					proRes.isUDAFCall = true
+					return proRes, nil
+				}
 				params := &AggCallFuncParams{
 					InRowDataType:  inRowDataType,
 					OutRowDataType: outRowDataType,
@@ -217,10 +216,6 @@ func NewProcessors(inRowDataType, outRowDataType hybridqp.RowDataType, exprOpt [
 	return proRes, nil
 }
 
-func castorRoutineFactory(_ ...interface{}) (interface{}, error) {
-	return nil, nil
-}
-
 func NewWideProcessorImpl(inRowDataType, outRowDataType hybridqp.RowDataType, exprOpts []hybridqp.ExprOptions) (CoProcessor, error) {
 	for _, exprOpt := range exprOpts {
 		inOrdinal := inRowDataType.FieldIndex(exprOpt.Expr.(*influxql.Call).Args[0].(*influxql.VarRef).Val)
@@ -233,8 +228,12 @@ func NewWideProcessorImpl(inRowDataType, outRowDataType hybridqp.RowDataType, ex
 	expr := exprOpts[0].Expr.(*influxql.Call)
 	args := expr.Args[1:]
 	switch expr.Name {
-	case "castor":
-		wideRoutine = NewWideRoutineImpl(NewWideIterator(CastorReduce, args))
+	case query.CASTOR:
+		wideRoutine = NewWideRoutineImpl(NewWideIterator(CastorReduce(CopyArrowRecordToChunk), args))
+	case query.CASTOR_AD:
+		wideRoutine = NewWideRoutineImpl(NewWideIterator(CastorReduce(CopyCastorADArrowRecordToChunk), args))
+	default:
+		return nil, fmt.Errorf("unsupported aggregation operator of call processor: %s", expr.Name)
 	}
 	wideProcessor := NewWideCoProcessorImpl(wideRoutine)
 	return wideProcessor, nil

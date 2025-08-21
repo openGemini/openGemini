@@ -126,7 +126,7 @@ func (e *ShowTagValuesExecutor) emitCardinality(tagValues TagValuesSlice) (model
 	return rows, nil
 }
 
-func (e *ShowTagValuesExecutor) applyLimit(offset, limit, orderBy int, values netstorage.TagSets) netstorage.TagSets {
+func (e *ShowTagValuesExecutor) applyLimit(offset, limit, orderBy int, values influxql.TagSets) influxql.TagSets {
 	size := len(values)
 	if offset >= size {
 		return nil
@@ -159,7 +159,7 @@ func (e *ShowTagValuesExecutor) applyLimit(offset, limit, orderBy int, values ne
 	return values[offset:limit]
 }
 
-func (e *ShowTagValuesExecutor) deduplicateBySort(orderBy int, values netstorage.TagSets) netstorage.TagSets {
+func (e *ShowTagValuesExecutor) deduplicateBySort(orderBy int, values influxql.TagSets) influxql.TagSets {
 	size := len(values)
 
 	switch orderBy {
@@ -191,8 +191,8 @@ func (e *ShowTagValuesExecutor) deduplicateBySort(orderBy int, values netstorage
 	return values[:cursor+1]
 }
 
-func (e *ShowTagValuesExecutor) deduplicateBySet(values netstorage.TagSets) netstorage.TagSets {
-	valuesSet := make(map[netstorage.TagSet]struct{}, len(values))
+func (e *ShowTagValuesExecutor) deduplicateBySet(values influxql.TagSets) influxql.TagSets {
+	valuesSet := make(map[influxql.TagSet]struct{}, len(values))
 	for _, tagSet := range values {
 		if _, ok := valuesSet[tagSet]; !ok {
 			valuesSet[tagSet] = struct{}{}
@@ -226,7 +226,7 @@ func (e *ShowTagValuesExecutor) mergeTagValuesSlice(s TagValuesSlice) TagValuesS
 			continue
 		}
 
-		ret = append(ret, netstorage.TableTagSets{
+		ret = append(ret, influxql.TableTagSets{
 			Name:   s[i].Name,
 			Values: s[i].Values,
 		})
@@ -241,7 +241,15 @@ func (e *ShowTagValuesExecutor) queryTagValues(q *influxql.ShowTagValuesStatemen
 	if err != nil {
 		return nil, err
 	}
-	if len(tagKeys) == 0 {
+
+	var ismatch bool
+	for _, t := range tagKeys {
+		if len(t) != 0 {
+			ismatch = true
+			break
+		}
+	}
+	if !ismatch {
 		e.logger.Info("no matching tag key found", zap.String("pos", "ShowTagValuesExecutor.queryTagValues"))
 		return nil, nil
 	}

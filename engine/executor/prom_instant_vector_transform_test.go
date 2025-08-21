@@ -22,6 +22,7 @@ import (
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/stretchr/testify/assert"
 )
 
 func BuildPromInstantInChunk1() executor.Chunk {
@@ -29,9 +30,9 @@ func BuildPromInstantInChunk1() executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("m1")
 	chunk.AppendTimes([]int64{times[0], times[1], times[2], times[3]})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 0)
-	chunk.AddIntervalIndex(0)
-	chunk.AddIntervalIndex(2)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 0)
+	chunk.AppendIntervalIndex(0)
+	chunk.AppendIntervalIndex(2)
 	chunk.Column(0).AppendFloatValues([]float64{1.1, 2.2, 3.3, 4.4})
 	chunk.Column(0).AppendManyNotNil(4)
 	return chunk
@@ -42,8 +43,8 @@ func BuildPromInstantResult1() executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("")
 	chunk.AppendTimes([]int64{times[2], times[4]})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 0)
-	chunk.AddIntervalIndex(0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 0)
+	chunk.AppendIntervalIndex(0)
 	AppendFloatValues(chunk, 0, []float64{3.3, 4.4}, []bool{true, true})
 	return chunk
 }
@@ -53,10 +54,10 @@ func BuildPromInstantInChunk2() executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("m1")
 	chunk.AppendTimes([]int64{times[0], times[1]})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 0)
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=2"), 1)
-	chunk.AddIntervalIndex(0)
-	chunk.AddIntervalIndex(1)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=2"), 1)
+	chunk.AppendIntervalIndex(0)
+	chunk.AppendIntervalIndex(1)
 	chunk.Column(0).AppendFloatValues([]float64{1.1, 2.2})
 	chunk.Column(0).AppendManyNotNil(2)
 	return chunk
@@ -67,10 +68,10 @@ func BuildPromInstantResult2() executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("")
 	chunk.AppendTimes([]int64{times[2], times[2]})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 0)
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=2"), 1)
-	chunk.AddIntervalIndex(0)
-	chunk.AddIntervalIndex(1)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=2"), 1)
+	chunk.AppendIntervalIndex(0)
+	chunk.AppendIntervalIndex(1)
 	AppendFloatValues(chunk, 0, []float64{1.1, 2.2}, []bool{true, true})
 	return chunk
 }
@@ -80,19 +81,19 @@ func BuildPromInstantInChunk3() []executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("m1")
 	chunk.AppendTimes([]int64{times[0], times[1], times[2], times[1]})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 0)
-	chunk.AddTagAndIndex(*ParseChunkTags("tk2=2"), 3)
-	chunk.AddIntervalIndex(0)
-	chunk.AddIntervalIndex(2)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk2=2"), 3)
+	chunk.AppendIntervalIndex(0)
+	chunk.AppendIntervalIndex(2)
 	chunk.Column(0).AppendFloatValues([]float64{1.1, 2.2, 3.3, 4.4})
 	chunk.Column(0).AppendManyNotNil(4)
 
 	chunk2 := b.NewChunk("m2")
 	chunk2.AppendTimes([]int64{times[2], times[3], times[1], times[2]})
-	chunk2.AddTagAndIndex(*ParseChunkTags("tk2=2"), 0)
-	chunk2.AddTagAndIndex(*ParseChunkTags("tk3=3"), 2)
-	chunk2.AddIntervalIndex(0)
-	chunk2.AddIntervalIndex(2)
+	chunk2.AppendTagsAndIndex(*ParseChunkTags("tk2=2"), 0)
+	chunk2.AppendTagsAndIndex(*ParseChunkTags("tk3=3"), 2)
+	chunk2.AppendIntervalIndex(0)
+	chunk2.AppendIntervalIndex(2)
 	chunk2.Column(0).AppendFloatValues([]float64{5.5, 6.6, 7.7, 8.8})
 	chunk2.Column(0).AppendManyNotNil(4)
 	return []executor.Chunk{chunk, chunk2}
@@ -103,11 +104,11 @@ func BuildPromInstantResult3() executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("")
 	chunk.AppendTimes([]int64{times[2], times[4], times[2], times[4], times[2], times[4]})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 0)
-	chunk.AddTagAndIndex(*ParseChunkTags("tk2=2"), 2)
-	chunk.AddTagAndIndex(*ParseChunkTags("tk3=3"), 4)
-	chunk.AddIntervalIndex(0)
-	chunk.AddIntervalIndex(1)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk2=2"), 2)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk3=3"), 4)
+	chunk.AppendIntervalIndex(0)
+	chunk.AppendIntervalIndex(1)
 	AppendFloatValues(chunk, 0, []float64{3.3, 3.3, 5.5, 6.6, 8.8, 8.8}, []bool{true, true, true, true, true, true})
 	return chunk
 }
@@ -117,18 +118,18 @@ func BuildPromInstantInChunk4() []executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("m1")
 	chunk.AppendTimes([]int64{times[0], times[1], times[2], times[1]})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 0)
-	chunk.AddTagAndIndex(*ParseChunkTags("tk2=2"), 3)
-	chunk.AddIntervalIndex(0)
-	chunk.AddIntervalIndex(2)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk2=2"), 3)
+	chunk.AppendIntervalIndex(0)
+	chunk.AppendIntervalIndex(2)
 	AppendFloatValues(chunk, 0, []float64{1.1, 2.2, 3.3, 4.4}, []bool{true, true, true, true})
 
 	chunk2 := b.NewChunk("m2")
 	chunk2.AppendTimes([]int64{times[3], times[1], times[2]})
-	chunk2.AddTagAndIndex(*ParseChunkTags("tk2=2"), 0)
-	chunk2.AddTagAndIndex(*ParseChunkTags("tk3=3"), 1)
-	chunk2.AddIntervalIndex(0)
-	chunk2.AddIntervalIndex(2)
+	chunk2.AppendTagsAndIndex(*ParseChunkTags("tk2=2"), 0)
+	chunk2.AppendTagsAndIndex(*ParseChunkTags("tk3=3"), 1)
+	chunk2.AppendIntervalIndex(0)
+	chunk2.AppendIntervalIndex(2)
 	AppendFloatValues(chunk2, 0, []float64{5.5, 6.6, 7.7, 8.8}, []bool{false, true, true, true})
 	return []executor.Chunk{chunk, chunk2}
 }
@@ -138,11 +139,11 @@ func BuildPromInstantResult4() executor.Chunk {
 	b := executor.NewChunkBuilder(rowDataType)
 	chunk := b.NewChunk("")
 	chunk.AppendTimes([]int64{times[2], times[4], times[2], times[4], times[2], times[4]})
-	chunk.AddTagAndIndex(*ParseChunkTags("tk1=1"), 0)
-	chunk.AddTagAndIndex(*ParseChunkTags("tk2=2"), 2)
-	chunk.AddTagAndIndex(*ParseChunkTags("tk3=3"), 4)
-	chunk.AddIntervalIndex(0)
-	chunk.AddIntervalIndex(1)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk1=1"), 0)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk2=2"), 2)
+	chunk.AppendTagsAndIndex(*ParseChunkTags("tk3=3"), 4)
+	chunk.AppendIntervalIndex(0)
+	chunk.AppendIntervalIndex(1)
 	AppendFloatValues(chunk, 0, []float64{3.3, 3.3, 4.4, 6.6, 8.8, 8.8}, []bool{true, true, true, true, true, true})
 	return chunk
 }
@@ -170,7 +171,8 @@ func PromInstantVectorTransformTestBase(t *testing.T, chunks []executor.Chunk, c
 		panic("err")
 	}
 	checkResult := func(chunk executor.Chunk) error {
-		PromResultCompareMultiCol(chunk, rChunk, t)
+		err := PromResultCompareMultiCol(chunk, rChunk)
+		assert.Equal(t, err, nil)
 		return nil
 	}
 	sink := NewSinkFromFunction(outRowDataType, checkResult)

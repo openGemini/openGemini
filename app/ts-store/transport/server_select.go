@@ -18,7 +18,7 @@ import (
 	"github.com/openGemini/openGemini/app/ts-store/storage"
 	"github.com/openGemini/openGemini/app/ts-store/transport/handler"
 	"github.com/openGemini/openGemini/engine/executor"
-	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/msgservice"
 	"github.com/openGemini/openGemini/lib/spdy"
 	"github.com/openGemini/openGemini/lib/spdy/rpc"
 	"github.com/openGemini/openGemini/lib/spdy/transport"
@@ -57,23 +57,26 @@ func (s *SelectServer) register(store *storage.Storage) {
 		handler.NewAbortProcessor(), &executor.Abort{}))
 
 	s.server.RegisterEHF(transport.NewEventHandlerFactory(spdy.DDLRequest,
-		handler.NewDDLProcessor(store), &netstorage.DDLMessage{}))
+		handler.NewDDLProcessor(store), &msgservice.DDLMessage{}))
 
 	s.server.RegisterEHF(transport.NewEventHandlerFactory(spdy.SysCtrlRequest,
-		handler.NewSysProcessor(store), &netstorage.SysCtrlRequest{}))
+		handler.NewSysProcessor(store), &msgservice.SysCtrlRequest{}))
 
 	s.server.RegisterEHF(transport.NewEventHandlerFactory(spdy.PtRequest,
-		handler.NewPtProcessor(store), &netstorage.PtRequest{}))
+		handler.NewPtProcessor(store), &msgservice.PtRequest{}))
 
 	s.server.RegisterEHF(transport.NewEventHandlerFactory(spdy.SegregateNodeRequest,
-		handler.NewSegregateNodeProcessor(store), &netstorage.SegregateNodeRequest{}))
+		handler.NewSegregateNodeProcessor(store), &msgservice.SegregateNodeRequest{}))
 
 	s.server.RegisterEHF(transport.NewEventHandlerFactory(spdy.TransferLeadershipRequest,
-		handler.NewTransferLeadershipProcessor(store), &netstorage.TransferLeadershipRequest{}))
+		handler.NewTransferLeadershipProcessor(store), &msgservice.TransferLeadershipRequest{}))
 
 	s.server.RegisterEHF(transport.NewEventHandlerFactory(spdy.CrashRequest,
 		handler.NewCrashProcessor(), &executor.Crash{}))
 
 	s.server.RegisterEHF(transport.NewEventHandlerFactory(spdy.PingRequest,
-		handler.NewPingProcessor(), &netstorage.PingRequest{}))
+		handler.NewPingProcessor(), &msgservice.PingRequest{}))
+
+	s.server.RegisterEHF(transport.NewEventHandlerFactory(spdy.SendClearEvent,
+		handler.NewClearRepColdEvent(store), &msgservice.SendClearEventsRequest{}))
 }

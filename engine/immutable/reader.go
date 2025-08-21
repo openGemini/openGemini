@@ -1111,7 +1111,7 @@ func readAuxData(cm *ChunkMeta, segment int, rowIndex int, dst *record.Record, c
 
 		colMeta := cm.colMeta[colIdx]
 		seg := colMeta.entries[segment]
-		offset, size := seg.offsetSize()
+		offset, size := seg.OffsetSize()
 		data, cachePage, err := cr.ReadDataBlock(offset, size, &buf, ioPriority)
 		if err != nil {
 			log.Error("read data segment fail", zap.Error(err))
@@ -1136,7 +1136,7 @@ func readAuxData(cm *ChunkMeta, segment int, rowIndex int, dst *record.Record, c
 
 func readTimeColumn(seg Segment, timeCol *record.ColVal, ctx *ReadContext, cr ColumnReader, copied bool, ioPriority int) error {
 	var buf []byte
-	offset, size := seg.offsetSize()
+	offset, size := seg.OffsetSize()
 	tmData, cachePage, err := cr.ReadDataBlock(offset, size, &buf, ioPriority)
 	defer cr.UnrefCachePage(cachePage)
 	if err != nil {
@@ -1177,7 +1177,7 @@ func readMinMaxFromData(cm *ChunkMeta, colIndex int, dst *record.Record, dstIdx 
 			log.Error("decode time data fail", zap.Error(err))
 		}
 
-		offset, size := colSeg.offsetSize()
+		offset, size := colSeg.OffsetSize()
 		data, cachePage, er := cr.ReadDataBlock(offset, size, &buf, ioPriority)
 		if er != nil {
 			log.Error("read time segment fail", zap.Error(er))
@@ -1324,7 +1324,7 @@ func readSumCountFromData(cm *ChunkMeta, colIndex int, dst *record.Record, callI
 			log.Error("decode time data fail", zap.Error(err))
 		}
 
-		offset, size := colSeg.offsetSize()
+		offset, size := colSeg.OffsetSize()
 		data, cachePage, err := cr.ReadDataBlock(offset, size, &buf, ioPriority)
 		if err != nil {
 			log.Error("read time segment fail", zap.Error(err))

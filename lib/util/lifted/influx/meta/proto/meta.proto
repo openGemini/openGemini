@@ -124,6 +124,8 @@ message RetentionPolicySpec {
 	optional int64  ShardGroupDuration = 3;
 	optional uint32 ReplicaN           = 4;
 	optional int64  WarmDuration       = 5;
+	optional int64  ShardMergeDuration = 6;
+	optional int64  IndexColdDuration   = 7;
 }
 
 message MeasurementInfo {
@@ -162,6 +164,8 @@ message RetentionPolicyInfo {
 	required int64 IndexGroupDuration = 11;
 	repeated IndexGroupInfo IndexGroups = 12;
 	optional DownSamplePolicyInfo DownSamplePolicyInfo = 13;
+	optional int64 ShardMergeDuration = 15;
+	optional int64 IndexColdDuration = 16;
 }
 
 message ContinuousQueryInfo {
@@ -192,6 +196,7 @@ message ShardInfo {
 	optional uint64 DownSampleID  = 8;
 	optional bool   ReadOnly     = 9;
 	optional bool   MarkDelete   = 10;
+	optional int32  MergedNum = 11;
 }
 
 message ShardKeyInfo {
@@ -388,6 +393,8 @@ message Command {
 		ShowClusterCommand                         = 103;
 		IndexDurationCommand                       = 104;
 		UpdateIndexInfoTierCommand                 = 105;
+		ReplaceMergeShardsCommand                  = 106;
+		RecoverMetaData                    = 107;
 	}
 
 	required Type type = 1;
@@ -451,6 +458,7 @@ message UpdateRetentionPolicyCommand {
 	optional int64 HotDuration = 9;
 	optional int64 WarmDuration = 10;
 	optional int64 IndexGroupDuration = 11;
+	optional int64 IndexColdDuration = 12;
 }
 
 message CreateShardGroupCommand {
@@ -703,6 +711,12 @@ message IndexInfo {
 	required uint64 ID = 1;
 	repeated uint32 OwnerIDs = 2;
 	optional bool   MarkDelete = 3;
+	optional uint64 Tier = 4;
+}
+
+message ReplicaClearInfo {
+	required uint64 NoClearIndexId = 1;
+	repeated uint64 ClearPeers = 2;
 }
 
 message IndexGroupInfo {
@@ -712,6 +726,7 @@ message IndexGroupInfo {
 	required int64 DeletedAt = 4;
 	repeated IndexInfo Indexes = 5;
 	optional uint32 EngineType = 6;
+	optional ReplicaClearInfo ClearInfo = 7;
 }
 
 message ShardStatus {
@@ -835,6 +850,7 @@ message DurationDescriptor {
     required uint64 TierType = 1;
     required int64 TierDuration = 2;
     required int64 Duration = 3;
+	optional int64 MergeDuration = 4;
 }
 
 message ShardIdentifier {
@@ -1321,20 +1337,39 @@ message ShowClusterInfo {
 }
 
 message IndexDurationCommand {
-    extend Command {
-        optional IndexDurationCommand command = 201;
-    }
-    required uint64 Index = 1;
-    repeated uint32 Pts = 2;
-    optional uint64 nodeId = 3;
+		extend Command {
+			optional IndexDurationCommand command = 201;
+		}
+		required uint64 Index = 1;
+		repeated uint32 Pts = 2;
+		optional uint64 nodeId = 3;
 }
 
 message UpdateIndexInfoTierCommand {
-    extend Command {
-        optional UpdateIndexInfoTierCommand command = 202;
-    }
-    required uint64 IndexID = 1;
-    required uint64 Tier    = 2;
-    required string DbName  = 3;
-    required string RpName  = 4;
+		extend Command {
+			optional UpdateIndexInfoTierCommand command = 202;
+		}
+		required uint64 IndexID = 1;
+		required uint64 Tier = 2;
+		required string DbName = 3;
+		required string RpName = 4;
+}
+
+message ReplaceMergeShardsCommand {
+	extend Command {
+		optional ReplaceMergeShardsCommand command = 203;
+	}
+    required string db = 1;
+    required uint32 ptId = 2;
+    required string rp = 3;
+    repeated uint64 shardId = 4;
+}
+
+message RecoverMetaDataCommand{
+	extend Command {
+		optional RecoverMetaDataCommand command = 204;
+	}
+	repeated string Databases = 1;
+	required bytes MetaData = 2;
+	map<uint64,uint64> NodeMap = 3;
 }

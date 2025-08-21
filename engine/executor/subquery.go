@@ -22,6 +22,7 @@ import (
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"go.uber.org/zap"
 )
 
 type SubQueryBuilder struct {
@@ -57,8 +58,9 @@ func (b *SubQueryBuilder) newSubOptions(ctx context.Context, opt *query.Processo
 			subOpt.EndTime = now.(time.Time).UnixNano()
 		}
 	}
+	subOpt.NoPushDownDim = opt.NoPushDownDim
 	// use dimPushDown: 1.noPromQuery 2.PromQuery agg by(xx) call(mst[range])
-	if !opt.PromQuery || subOpt.GroupByAllDims && subOpt.Range > 0 {
+	if (!opt.PromQuery && !opt.NoPushDownDim) || subOpt.GroupByAllDims && subOpt.Range > 0 {
 		pushDownDimension := GetInnerDimensions(opt.Dimensions, subOpt.Dimensions)
 		subOpt.Dimensions = pushDownDimension
 		for d := range opt.GroupBy {
@@ -116,9 +118,10 @@ func (b *SubQueryBuilder) Build(ctx context.Context, opt *query.ProcessorOptions
 	if err != nil {
 		return nil, err
 	}
-	schema := NewQuerySchemaWithJoinCase(b.stmt.Fields, b.stmt.Sources, b.stmt.ColumnNames(), &subOpt, b.stmt.JoinSource,
+	schema := NewQuerySchemaWithJoinCase(b.stmt.Fields, b.stmt.Sources, b.stmt.ColumnNames(), &subOpt, b.stmt.JoinSource, nil,
 		b.stmt.UnnestSource, b.stmt.SortFields)
 	schema.SetPromCalls(b.stmt.PromSubCalls)
+	FilterPushDown(opt, schema)
 	opt.LowerOpt = &subOpt
 	return buildQueryPlan(ctx, b.stmt, b.qc, schema)
 }
@@ -136,4 +139,59 @@ func GetInnerDimensions(outer, inner []string) []string {
 		}
 	}
 	return pushDownDimension
+}
+
+func FilterPushDown(opt *query.ProcessorOptions, schema *QuerySchema) {
+	if !opt.IsPromQuery() {
+		return
+	}
+
+	if len(schema.sources) != 1 {
+		return
+	}
+	_, sourceIsMeasurement := schema.sources[0].(*influxql.Measurement)
+	if !sourceIsMeasurement {
+		return
+	}
+
+	if len(schema.queryFields) != 1 {
+		return
+	}
+	_, filedIsVarRef := schema.queryFields[0].Expr.(*influxql.VarRef)
+	if !filedIsVarRef {
+		return
+	}
+
+	if opt.GetCondition() == nil {
+		return
+	}
+	mathValuer := query.MathValuer{}
+	cond, _, err := influxql.ConditionExpr(opt.Condition, &mathValuer)
+	if err != nil {
+		log.Error("mathValuer cond expr failed", zap.Error(err))
+		return
+	}
+	if ExprHasCall(cond) {
+		return
+	}
+	schema.Options().SetValueCondition(cond)
+	opt.SetCondition(nil)
+}
+
+func ExprHasCall(expr influxql.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch expr := expr.(type) {
+	case *influxql.BinaryExpr:
+		lhsRes := ExprHasCall(expr.LHS)
+		rhsRes := ExprHasCall(expr.RHS)
+		return lhsRes || rhsRes
+	case *influxql.ParenExpr:
+		return ExprHasCall(expr.Expr)
+	case *influxql.Call:
+		return true
+	default:
+		return false
+	}
 }

@@ -16,6 +16,7 @@ package mlf_test
 
 import (
 	"fmt"
+	"math"
 	"testing"
 	"time"
 
@@ -91,10 +92,27 @@ func codecValues(values [][]float64) {
 	}
 }
 
-func buildData() []float64 {
+func TestItemSizes(t *testing.T) {
+	for n := range 50 {
+		values := buildData(int64(n))
+		codecValues([][]float64{values})
+	}
+
+	for n := range 50 {
+		values := buildData(int64(n))
+		values[10] = 1.11111111222222
+		values[11] = 0
+		values[12] = -values[12]
+
+		codecValues([][]float64{values})
+	}
+}
+
+func buildData(n int64) []float64 {
+	n = int64(math.Pow(2, float64(n)))
 	var values []float64
 	for i := 0; i < 1000; i++ {
-		f := float64(rand.Int63()%10000) / 100
+		f := math.Floor((1.2+float64(rand.Int63()%n)/10)*10) / 10
 		values = append(values, f)
 	}
 
@@ -102,7 +120,7 @@ func buildData() []float64 {
 }
 
 func TestBenchmarkEncode(t *testing.T) {
-	values := buildData()
+	values := buildData(40)
 
 	const N = 100000
 	var buf = make([]byte, 9000)
@@ -120,9 +138,19 @@ func TestBenchmarkEncode(t *testing.T) {
 }
 
 func TestBenchmarkDecode(t *testing.T) {
-	values := buildData()
+	t.Skip()
+	for _, i := range []int64{4, 6, 8, 12, 16, 24, 32, 40} {
+		benchmarkDecode(i - 1)
+	}
+}
 
-	const N = 200000
+func benchmarkDecode(bitSize int64) {
+	values := buildData(bitSize)
+	values[10] = 1.11111111222222
+	values[11] = 0
+	values[12] = -values[12]
+
+	const N = 1000000
 	var buf []byte
 	enc := &mlf.Compressor{}
 	enc.Prepare(values)
@@ -136,5 +164,5 @@ func TestBenchmarkDecode(t *testing.T) {
 		dec.Decode(swap)
 	}
 	fmt.Println(len(buf), float64(len(buf))/80)
-	fmt.Println(time.Since(begin), time.Since(begin)/N)
+	fmt.Println(time.Since(begin), time.Since(begin)/N, 8000*N/float64(time.Since(begin).Microseconds()))
 }

@@ -161,6 +161,120 @@ func TestMockTSDBSystem(t *testing.T) {
 					[]int64{0, 0, 1, 1, 2, 2, 0, 0, 1, 1, 2, 2})
 			},
 		},
+		{
+			name: "Select Left Sum",
+			sql:  "SELECT t," + strings.Repeat("1+", 20000) + "v FROM db0.rp0.mst0",
+			ddl: func(c *Catalog) error {
+				db, err := c.CreateDatabase("db0", "rp0")
+				if err != nil {
+					return err
+				}
+				mst0 := NewTable("mst0")
+				dataTypes := make(map[string]influxql.DataType)
+				dataTypes["t"] = influxql.Tag
+				dataTypes["v"] = influxql.Integer
+				mst0.AddDataTypes(dataTypes)
+				db.AddTable(mst0)
+				return nil
+			},
+			dml: func(s *Storage) error {
+				rdt := hybridqp.NewRowDataTypeImpl(influxql.VarRef{Val: "t", Type: influxql.String},
+					influxql.VarRef{Val: "v", Type: influxql.Integer})
+				builder := executor.NewChunkBuilder(rdt)
+				chunk1 := builder.NewChunk("mst0")
+				chunk1.AppendTimes([]int64{1, 2, 3})
+				chunk1.Column(0).AppendStringValues([]string{"a", "a", "a"})
+				chunk1.Column(0).AppendManyNotNil(3)
+				chunk1.Column(1).AppendIntegerValues([]int64{0, 1, 2})
+				chunk1.Column(1).AppendManyNotNil(3)
+				pts1 := influx.PointTags{influx.Tag{Key: "t", Value: "a"}}
+				s.Write("db0.rp0.mst0", &pts1, chunk1)
+				return nil
+			},
+			validator: func(results []executor.Chunk) {
+				assert.Equal(t, len(results), 1)
+				assert.Equal(t, results[0].Name(), "mst0")
+				assert.Equal(t, results[0].Time(), []int64{1, 2, 3})
+				assert.Equal(t, results[0].Columns()[0].StringValuesV2(make([]string, 0)), []string{"a", "a", "a"})
+				assert.Equal(t, results[0].Columns()[1].IntegerValues(), []int64{20000, 20001, 20002})
+			},
+		},
+		{
+			name: "Select Right Sum",
+			sql:  "SELECT t,v" + strings.Repeat("+1", 20000) + " FROM db0.rp0.mst0",
+			ddl: func(c *Catalog) error {
+				db, err := c.CreateDatabase("db0", "rp0")
+				if err != nil {
+					return err
+				}
+				mst0 := NewTable("mst0")
+				dataTypes := make(map[string]influxql.DataType)
+				dataTypes["t"] = influxql.Tag
+				dataTypes["v"] = influxql.Integer
+				mst0.AddDataTypes(dataTypes)
+				db.AddTable(mst0)
+				return nil
+			},
+			dml: func(s *Storage) error {
+				rdt := hybridqp.NewRowDataTypeImpl(influxql.VarRef{Val: "t", Type: influxql.String},
+					influxql.VarRef{Val: "v", Type: influxql.Integer})
+				builder := executor.NewChunkBuilder(rdt)
+				chunk1 := builder.NewChunk("mst0")
+				chunk1.AppendTimes([]int64{1, 2, 3})
+				chunk1.Column(0).AppendStringValues([]string{"a", "a", "a"})
+				chunk1.Column(0).AppendManyNotNil(3)
+				chunk1.Column(1).AppendIntegerValues([]int64{0, 1, 2})
+				chunk1.Column(1).AppendManyNotNil(3)
+				pts1 := influx.PointTags{influx.Tag{Key: "t", Value: "a"}}
+				s.Write("db0.rp0.mst0", &pts1, chunk1)
+				return nil
+			},
+			validator: func(results []executor.Chunk) {
+				assert.Equal(t, len(results), 1)
+				assert.Equal(t, results[0].Name(), "mst0")
+				assert.Equal(t, results[0].Time(), []int64{1, 2, 3})
+				assert.Equal(t, results[0].Columns()[0].StringValuesV2(make([]string, 0)), []string{"a", "a", "a"})
+				assert.Equal(t, results[0].Columns()[1].IntegerValues(), []int64{20000, 20001, 20002})
+			},
+		},
+		{
+			name: "Select Nested Abs",
+			sql:  "SELECT t," + strings.Repeat("abs(", 20000) + "v" + strings.Repeat(")", 20000) + " FROM db0.rp0.mst0",
+			ddl: func(c *Catalog) error {
+				db, err := c.CreateDatabase("db0", "rp0")
+				if err != nil {
+					return err
+				}
+				mst0 := NewTable("mst0")
+				dataTypes := make(map[string]influxql.DataType)
+				dataTypes["t"] = influxql.Tag
+				dataTypes["v"] = influxql.Integer
+				mst0.AddDataTypes(dataTypes)
+				db.AddTable(mst0)
+				return nil
+			},
+			dml: func(s *Storage) error {
+				rdt := hybridqp.NewRowDataTypeImpl(influxql.VarRef{Val: "t", Type: influxql.String},
+					influxql.VarRef{Val: "v", Type: influxql.Integer})
+				builder := executor.NewChunkBuilder(rdt)
+				chunk1 := builder.NewChunk("mst0")
+				chunk1.AppendTimes([]int64{1, 2, 3})
+				chunk1.Column(0).AppendStringValues([]string{"a", "a", "a"})
+				chunk1.Column(0).AppendManyNotNil(3)
+				chunk1.Column(1).AppendIntegerValues([]int64{0, 1, 2})
+				chunk1.Column(1).AppendManyNotNil(3)
+				pts1 := influx.PointTags{influx.Tag{Key: "t", Value: "a"}}
+				s.Write("db0.rp0.mst0", &pts1, chunk1)
+				return nil
+			},
+			validator: func(results []executor.Chunk) {
+				assert.Equal(t, len(results), 1)
+				assert.Equal(t, results[0].Name(), "mst0")
+				assert.Equal(t, results[0].Time(), []int64{1, 2, 3})
+				assert.Equal(t, results[0].Columns()[0].StringValuesV2(make([]string, 0)), []string{"a", "a", "a"})
+				assert.Equal(t, results[0].Columns()[1].IntegerValues(), []int64{0, 1, 2})
+			},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tsdb := NewTSDBSystem()

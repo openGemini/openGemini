@@ -11,6 +11,7 @@ Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -225,7 +226,7 @@ func (uw *unmarshalWork) Unmarshal() {
 }
 
 func (uw *unmarshalWork) Cancel(reason string) {
-	uw.Callback(uw.Db, nil, fmt.Errorf(reason))
+	uw.Callback(uw.Db, nil, errors.New(reason))
 }
 
 // ScheduleUnmarshalWork schedules uw to run in the worker pool.

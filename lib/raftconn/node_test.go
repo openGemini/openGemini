@@ -528,9 +528,6 @@ func (client *MockMetaClient) SetAdminPrivilege(username string, admin bool) err
 func (client *MockMetaClient) SetPrivilege(username, database string, p originql.Privilege) error {
 	return nil
 }
-func (client *MockMetaClient) ShardsByTimeRange(sources influxql.Sources, tmin, tmax time.Time) (a []meta2.ShardInfo, err error) {
-	return nil, nil
-}
 func (client *MockMetaClient) ShardGroupsByTimeRange(database, policy string, min, max time.Time) (a []meta2.ShardGroupInfo, err error) {
 	return nil, nil
 }
@@ -715,7 +712,7 @@ func TestPublishEntries(t *testing.T) {
 	n.cancelFn = cancelFn
 	n.ctx = cctx
 	n.cancelFn()
-	if re := n.PublishEntries([]raftpb.Entry{{Index: 1, Data: []byte{'a'}}}); re != false {
+	if re := n.PublishEntries([]raftpb.Entry{raftpb.Entry{Index: 1, Data: []byte{'a'}}}); re != false {
 		t.Fatal("TestPublishEntries err")
 	}
 }
@@ -723,6 +720,6 @@ func TestPublishEntries(t *testing.T) {
 func TestEntriesToApply(t *testing.T) {
 	node := &RaftNode{}
 	node.WithLogger(logger.NewLogger(errno.ModuleUnknown))
-	entries := node.entriesToApply([]raftpb.Entry{{Index: 10}})
+	entries := node.entriesToApply([]raftpb.Entry{raftpb.Entry{Index: 10}})
 	assert.Equal(t, len(entries), 1)
 }

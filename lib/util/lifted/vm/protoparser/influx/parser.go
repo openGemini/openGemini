@@ -613,7 +613,7 @@ func (r *Row) unmarshalTags(src []byte, tagpool []Tag) ([]byte, []Tag, error) {
 	tagpool = tagpool[:start+tagN]
 
 	for i := 0; i < tagN; i++ {
-		if len(src) < 1 {
+		if len(src) < 2 {
 			return nil, tagpool, errors.New("too small bytes for row tag key len")
 		}
 		tl := int(encoding.UnmarshalUint16(src[:2])) //int(src[0])
@@ -626,8 +626,11 @@ func (r *Row) unmarshalTags(src []byte, tagpool []Tag) ([]byte, []Tag, error) {
 
 		tg.Key = bytesutil.ToUnsafeString(src[:tl])
 		src = src[tl:]
+		if len(src) < 2 {
+			return nil, tagpool, errors.New("too small bytes for row tag value len")
+		}
 		vl := int(encoding.UnmarshalUint16(src[:2])) //int(src[0])
-		if len(src) < vl {
+		if len(src) < vl+2 {
 			tagpool = tagpool[:len(tagpool)-1]
 			return nil, tagpool, errors.New("too small bytes for row tag value")
 		}
@@ -1287,7 +1290,13 @@ func (tag *Tag) unmarshal(s string, noEscapeChars, enableTagArray bool) error {
 		return errno.NewError(errno.WriteMissTagValue, s)
 	}
 	tag.Key = unescapeTagValue(s[:n], noEscapeChars)
+	if len(tag.Key) > util.MaxTagNameLength {
+		return errno.NewError(errno.TagNameTooLong, tag.Key, util.MaxTagNameLength, len(tag.Key))
+	}
 	tag.Value = unescapeTagValue(s[n+1:], noEscapeChars)
+	if len(tag.Value) > util.MaxTagValueLength {
+		return errno.NewError(errno.TagValueTooLong, tag.Key, util.MaxTagValueLength, len(tag.Value))
+	}
 	return nil
 }
 
@@ -1450,6 +1459,9 @@ func (f *Field) unmarshal(s string, noEscapeChars, hasQuotedFields bool) error {
 	f.Key = unescapeTagValue(s[:n], noEscapeChars)
 	if len(f.Key) == 0 {
 		return fmt.Errorf("field key cannot be empty")
+	}
+	if len(f.Key) > util.MaxFieldNameLength {
+		return errno.NewError(errno.FieldNameTooLong, f.Key, util.MaxFieldNameLength, len(f.Key))
 	}
 	if hasQuotedFields && nextUnescapedChar(s[n:], '"', noEscapeChars, false, false) >= 0 {
 		vstr, err := parseFieldStrValue(s[n+1:])
@@ -1864,11 +1876,15 @@ func UnsafeParse2Tags(src []byte, dst []Tag) ([]byte, []Tag) {
 	var item []byte
 
 	for i := 0; i < tagsN; i++ {
-		item, src = parseItem(src)
-		dst[i].Key = util.Bytes2str(item)
+		tag := &dst[i]
 
 		item, src = parseItem(src)
-		dst[i].Value = util.Bytes2str(item)
+		tag.Key = util.Bytes2str(item)
+
+		item, src = parseItem(src)
+		tag.Value = util.Bytes2str(item)
+
+		tag.IsArray = false
 	}
 
 	return msName, dst

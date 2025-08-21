@@ -1137,6 +1137,7 @@ func (req *VerifyDataNodeStatusRequest) Instance() transport.Codec {
 func (resp *VerifyDataNodeStatusResponse) Marshal(buf []byte) ([]byte, error) {
 	var err error
 	buf = codec.AppendString(buf, resp.Err)
+	buf = codec.AppendUint16(buf, uint16(resp.ErrCode))
 
 	return buf, err
 }
@@ -1148,6 +1149,7 @@ func (resp *VerifyDataNodeStatusResponse) Unmarshal(buf []byte) error {
 
 	dec := codec.NewBinaryDecoder(buf)
 	resp.Err = dec.String()
+	resp.ErrCode = errno.Errno(dec.Uint16())
 	return nil
 }
 
@@ -1208,6 +1210,59 @@ func (resp *SendSysCtrlToMetaResponse) Size() int {
 
 func (resp *SendSysCtrlToMetaResponse) Instance() transport.Codec {
 	return &SendSysCtrlToMetaResponse{}
+}
+
+func (req *SendBackupToMetaRequest) Marshal(buf []byte) ([]byte, error) {
+	buf = codec.AppendString(buf, req.Mod)
+	buf = codec.AppendMapStringString(buf, req.Param)
+	return buf, nil
+}
+
+func (req *SendBackupToMetaRequest) Unmarshal(buf []byte) error {
+	if len(buf) == 0 {
+		return nil
+	}
+	dec := codec.NewBinaryDecoder(buf)
+	req.Mod = dec.String()
+	req.Param = dec.MapStringString()
+	return nil
+}
+
+func (req *SendBackupToMetaRequest) Size() int {
+	size := codec.SizeOfString(req.Mod)
+	size += codec.SizeOfMapStringString(req.Param)
+	return size
+}
+
+func (req *SendBackupToMetaRequest) Instance() transport.Codec {
+	return &SendBackupToMetaRequest{}
+}
+
+func (resp *SendBackupToMetaResponse) Marshal(buf []byte) ([]byte, error) {
+	var err error
+	buf = codec.AppendBytes(buf, resp.Result)
+	buf = codec.AppendString(buf, resp.Err)
+
+	return buf, err
+}
+
+func (resp *SendBackupToMetaResponse) Unmarshal(buf []byte) error {
+	if len(buf) == 0 {
+		return nil
+	}
+
+	dec := codec.NewBinaryDecoder(buf)
+	resp.Result = dec.Bytes()
+	resp.Err = dec.String()
+	return nil
+}
+
+func (resp *SendBackupToMetaResponse) Size() int {
+	return codec.SizeOfString(resp.Err)
+}
+
+func (resp *SendBackupToMetaResponse) Instance() transport.Codec {
+	return &SendBackupToMetaResponse{}
 }
 
 func (o *ShowClusterRequest) Marshal(buf []byte) ([]byte, error) {

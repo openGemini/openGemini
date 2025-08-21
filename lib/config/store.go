@@ -56,6 +56,7 @@ const (
 	DataDirectory      = "data"
 	WalDirectory       = "wal"
 	MetaDirectory      = "meta"
+	FenceDirectory     = "fence"
 )
 
 var storeConfig = Store{
@@ -64,7 +65,8 @@ var storeConfig = Store{
 	Wal:         NewWalConfig(),
 	ReadCache:   NewReadCacheConfig(),
 	ParquetTask: NewParquetTaskConfig(),
-	ShelfMode:   defaultBridgeMode(),
+	Consume:     NewConsumeConfig(),
+	Fence:       NewFenceConfig(),
 }
 
 func SetStoreConfig(conf Store) {
@@ -75,7 +77,7 @@ func GetStoreConfig() *Store {
 	return &storeConfig
 }
 
-// TSStore represents the configuration format for the influxd binary.
+// TSStore represents the configuration format for the ts-store binary.
 type TSStore struct {
 	Common      *Common     `toml:"common"`
 	Data        Store       `toml:"data"`
@@ -84,6 +86,8 @@ type TSStore struct {
 	Logging     Logger      `toml:"logging"`
 	Gossip      *Gossip     `toml:"gossip"`
 	Spdy        Spdy        `toml:"spdy"`
+
+	ShelfMode ShelfMode `toml:"shelf-mode"`
 
 	HTTPD             httpdConf.Config   `toml:"http"`
 	Retention         retention.Config   `toml:"retention"`
@@ -106,6 +110,10 @@ type TSStore struct {
 
 	// logkeeper config
 	LogStore *LogStoreConfig `toml:"logstore"`
+
+	ShardMerge ShardMergeConfig `toml:"shardMerge_service"`
+
+	ObsMode Obs `toml:"Obs"`
 }
 
 // NewTSStore returns an instance of Config with reasonable defaults.
@@ -134,6 +142,9 @@ func NewTSStore(enableGossip bool) *TSStore {
 	c.Meta = NewMeta()
 	c.ClvConfig = NewClvConfig()
 	c.LogStore = NewLogStoreConfig()
+
+	c.ShardMerge = NewShardMergeConfig()
+	c.ObsMode = NewObs()
 	return c
 }
 
@@ -156,6 +167,7 @@ func (c *TSStore) Validate() error {
 		c.Analysis,
 		c.Sherlock,
 		c.IODetector,
+		c.ShardMerge,
 	}
 
 	for _, item := range items {
@@ -297,8 +309,12 @@ type Store struct {
 
 	ParquetTask *ParquetTaskConfig `toml:"parquet-task"`
 
-	HotMode   HotMode   `toml:"hot-mode"`
-	ShelfMode ShelfMode `toml:"shelf-mode"`
+	// configs for consume
+	Consume Consume `toml:"consume"`
+	Fence   Fence   `toml:"fence"`
+
+	HotMode     HotMode     `toml:"hot-mode"`
+	ColumnStore ColumnStore `toml:"column-store"`
 
 	RaftMsgTimeout    toml.Duration `toml:"raft-msg-time-out"`
 	ElectionTick      int           `toml:"election-tick"`
@@ -307,6 +323,10 @@ type Store struct {
 	FileWrapSize      int           `toml:"file-wrap-size"`
 	WaitCommitTimeout toml.Duration `toml:"wait-commit-time-out"`
 	EnablePerlRegrep  bool          `toml:"enable-perl-regrep"`
+	RetryPtCheckTime  int           `toml:"retry-pt-check-time"`
+	EntryFileRWType   int           `toml:"entry-file-rw-type"`
+
+	NagtPoolCap int `toml:"nagt-pool-cap"`
 }
 
 // NewStore returns the default configuration for tsdb.
@@ -341,6 +361,7 @@ func NewStore() Store {
 		ClearEntryLogTolerateTime:    toml.Duration(6 * time.Hour),
 		ClearEntryLogTolerateSize:    toml.Size(util.DefaultEntryLogSizeLimit),
 		ParquetTask:                  NewParquetTaskConfig(),
+		Consume:                      NewConsumeConfig(),
 		HotMode:                      defaultHotMode(),
 		RaftMsgTimeout:               toml.Duration(DefaultRaftMsgTimeout),
 		ElectionTick:                 DefaultElectionTick,
@@ -348,6 +369,10 @@ func NewStore() Store {
 		RaftMsgCacheSize:             DefaultRaftMsgCacheSize,
 		FileWrapSize:                 DefaultFileWrapSize,
 		WaitCommitTimeout:            toml.Duration(DefaultWaitCommitTimeout),
+		RetryPtCheckTime:             10,
+		ColumnStore:                  ColumnStore{MergesetEnabled: true},
+		Fence:                        NewFenceConfig(),
+		EntryFileRWType:              DefaultEntryFileRWType,
 	}
 }
 
@@ -368,6 +393,7 @@ func (c *Store) Corrector(cpuNum int, memorySize toml.Size) {
 	SetRaftMsgCacheSize(c.RaftMsgCacheSize)
 	SetFileWrapSize(c.FileWrapSize)
 	SetWaitCommitTimeout(time.Duration(c.WaitCommitTimeout))
+	SetEntryFileRWType(c.EntryFileRWType)
 
 	SetReadMetaCachePct(int(c.ReadCache.ReadMetaCacheEnPct))
 	if c.ReadCache.ReadMetaCacheEn != 0 {
@@ -387,7 +413,6 @@ func (c *Store) Corrector(cpuNum int, memorySize toml.Size) {
 
 	c.StringCompressAlgo = strings.ToLower(c.StringCompressAlgo)
 	c.CorrectorThroughput(cpuNum)
-	c.ShelfMode.Corrector(cpuNum)
 }
 
 func (c *Store) CorrectorThroughput(cpuNum int) {
@@ -525,6 +550,7 @@ func defaultMerge() Merge {
 
 type HotMode struct {
 	Enabled              bool          `toml:"enabled"`
+	ShelfOnly            bool          `toml:"shelf-only"`
 	MemoryAllowedPercent uint8         `toml:"memory-allowed-percent"`
 	Duration             toml.Duration `toml:"duration"`
 	TimeWindow           toml.Duration `toml:"time-window"`
@@ -571,5 +597,13 @@ func PreFullCompactLevel() uint16 {
 }
 
 func HotModeEnabled() bool {
+	return GetStoreConfig().HotMode.Enabled && !GetStoreConfig().HotMode.ShelfOnly
+}
+
+func ShelfHotModeEnabled() bool {
 	return GetStoreConfig().HotMode.Enabled
+}
+
+type ColumnStore struct {
+	MergesetEnabled bool `toml:"mergeset-enabled"`
 }

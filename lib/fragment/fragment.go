@@ -47,6 +47,10 @@ func (fr *FragmentRange) Less(other *FragmentRange) (bool, error) {
 	return fr.Start < other.Start && fr.End <= other.End, nil
 }
 
+func (fr *FragmentRange) NumberOfSegments() int {
+	return int(fr.End - fr.Start)
+}
+
 type FragmentRanges []*FragmentRange
 
 func (frs FragmentRanges) Empty() bool {
@@ -74,6 +78,7 @@ func (frs FragmentRanges) GetLastFragment() uint32 {
 
 type IndexFragment interface {
 	GetFragmentCount() uint32
+	GetSegmentsFromFragmentRange() FragmentRanges
 	GetRowsCountInRange(start int, end int) uint64
 	GetTotalRowsCount() uint64
 	PopFragment()
@@ -83,16 +88,28 @@ type IndexFragment interface {
 // IndexFragmentVariableImpl indicates that the size of fragment is variable and the last row of data is added to the index by default.
 type IndexFragmentVariableImpl struct {
 	accumulateRowCount []uint64
+	fragmentRanges     FragmentRanges
 }
 
 func NewIndexFragmentVariable(accumulateRowCount []uint64) IndexFragment {
 	f := &IndexFragmentVariableImpl{}
 	f.accumulateRowCount = append(f.accumulateRowCount, accumulateRowCount...)
+	var res FragmentRanges
+	for _, ranges := range f.accumulateRowCount {
+		high, low := util.SplitUint64(ranges)
+		fragmentRange := FragmentRange{Start: high, End: high + low}
+		res = append(res, &fragmentRange)
+	}
+	f.fragmentRanges = res
 	return f
 }
 
 func (f *IndexFragmentVariableImpl) GetFragmentCount() uint32 {
 	return uint32(len(f.accumulateRowCount))
+}
+
+func (f *IndexFragmentVariableImpl) GetSegmentsFromFragmentRange() FragmentRanges {
+	return f.fragmentRanges
 }
 
 func (f *IndexFragmentVariableImpl) GetRowsCountInRange(start int, end int) uint64 {
@@ -164,6 +181,10 @@ func NewIndexFragmentFixedSize(fragmentCount uint32, rowCountPerFragment uint64)
 
 func (f *IndexFragmentFixedSizeImpl) GetFragmentCount() uint32 {
 	return f.fragmentCount
+}
+
+func (f *IndexFragmentFixedSizeImpl) GetSegmentsFromFragmentRange() FragmentRanges {
+	return []*FragmentRange{{Start: 0, End: f.fragmentCount}}
 }
 
 func (f *IndexFragmentFixedSizeImpl) GetRowsCountInRange(start int, end int) uint64 {

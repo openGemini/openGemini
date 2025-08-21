@@ -20,8 +20,11 @@ import (
 	"sort"
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/rand"
 	"github.com/openGemini/openGemini/lib/util"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 )
 
@@ -3106,5 +3109,116 @@ func (r *IntegerTimeColIntegerIterator) Next(ie *IteratorEndpoint, p *IteratorPa
 		} else if !isNil {
 			r.processMiddleWindow(inChunk, outChunk, index, value)
 		}
+	}
+}
+
+type GraphFilterFn func(chunks []Chunk, subTopo *Graph, algoParams AlgoParam, colMap map[string]int) (*Graph, error)
+
+type GraphFilterIterator struct {
+	fn         GraphFilterFn
+	algoParams AlgoParam
+	graph      *Graph
+	bufChunks  []Chunk
+	colMap     map[string]int
+	ordinalMap map[int]int
+	outOrdinal int
+}
+
+func NewGraphFilterIterator(fn GraphFilterFn, outOrdinal int, params AlgoParam, ordinalMap map[int]int) *GraphFilterIterator {
+	return &GraphFilterIterator{
+		fn:         fn,
+		bufChunks:  make([]Chunk, 0),
+		algoParams: params,
+		ordinalMap: ordinalMap,
+		outOrdinal: outOrdinal,
+	}
+}
+
+func (r *GraphFilterIterator) Next(ie *IteratorEndpoint, p *IteratorParams) {
+	inChunk, outChunk := ie.InputPoint.Chunk, ie.OutputPoint.Chunk
+
+	if r.graph == nil && inChunk.GetGraph() != nil {
+		r.graph = inChunk.GetGraph().(*Graph)
+	}
+
+	if len(r.bufChunks) == 0 {
+		colMap := make(map[string]int)
+		for i := 1; i < inChunk.RowDataType().NumColumn(); i++ {
+			valName := inChunk.RowDataType().Field(i).Name()
+			for k, v := range p.colMapping {
+				if v.Val != valName {
+					continue
+				}
+				varRef, ok := k.(*influxql.VarRef)
+				if !ok {
+					continue
+				}
+				colMap[varRef.Val] = i
+			}
+		}
+		r.colMap = colMap
+	}
+	c := inChunk.Clone()
+	r.bufChunks = append(r.bufChunks, c)
+
+	if p.lastChunk {
+		if !checkColumnAligned(r.bufChunks) {
+			p.err = errno.NewError(errno.ColumnsNotAligned)
+			return
+		}
+		result, err := r.fn(r.bufChunks, r.graph, r.algoParams, r.colMap)
+		if err != nil {
+			logger.GetLogger().Error(err.Error())
+			p.err = err
+			return
+		}
+
+		outChunk.SetGraph(result)
+	}
+	r.appendChunkWithColumnsAligned(c, outChunk)
+}
+
+func (r *GraphFilterIterator) appendChunkWithColumnsAligned(in, out Chunk) {
+	for dstIdx := range out.Columns() {
+		srcIdx := r.ordinalMap[dstIdx]
+		out.Columns()[dstIdx] = in.Columns()[srcIdx]
+	}
+	out.SetTime(in.Time())
+	out.AppendTagsAndIndexes(in.Tags(), in.TagIndex())
+	out.AppendIntervalIndexes(in.IntervalIndex())
+}
+
+func checkColumnAligned(chunks []Chunk) bool {
+
+	for _, chunk := range chunks {
+		rowsNum := -1
+		for _, column := range chunk.Columns() {
+			newNum := getValsLen(column)
+			if rowsNum == -1 {
+				rowsNum = newNum
+				continue
+			}
+			if rowsNum != newNum {
+				return false
+			}
+		}
+	}
+
+	return true
+}
+
+func getValsLen(column Column) int {
+	switch column.DataType() {
+	case influxql.String, influxql.Tag:
+		_, offset := column.GetStringBytes()
+		return len(offset)
+	case influxql.Integer:
+		return len(column.IntegerValues())
+	case influxql.Float:
+		return len(column.FloatValues())
+	case influxql.Boolean:
+		return len(column.BooleanValues())
+	default:
+		return 0
 	}
 }

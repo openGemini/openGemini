@@ -14,10 +14,14 @@
 
 package executor
 
-import "bytes"
+import (
+	"bytes"
+	"math"
+)
 
 type TCounter float64
 
+const NoCounter TCounter = math.MaxInt64
 const EulerNumber float64 = 2.7182818284
 const beginNumber uint64 = 1
 
@@ -50,12 +54,8 @@ func (fr *FrequentResult) Less(i, j int) bool {
 }
 
 func (fr *FrequentResult) Swap(i, j int) {
-	tmpk := fr.keys[i]
-	fr.keys[i] = fr.keys[j]
-	fr.keys[j] = tmpk
-	tmpv := fr.values[i]
-	fr.values[i] = fr.values[j]
-	fr.values[j] = tmpv
+	fr.keys[i], fr.keys[j] = fr.keys[j], fr.keys[i]
+	fr.values[i], fr.values[j] = fr.values[j], fr.values[i]
 }
 
 type TKey struct {
@@ -64,6 +64,10 @@ type TKey struct {
 
 func (k *TKey) Less(o TKey) bool {
 	return bytes.Compare(k.Data, o.Data) < 0
+}
+
+func (k *TKey) Eq(o TKey) bool {
+	return bytes.Equal(k.Data, o.Data)
 }
 
 func (k *TKey) Copy() *TKey {
@@ -91,11 +95,19 @@ func (k *TKey) ChangeBit(i int) {
 	k.Data[i>>3] ^= (1 << (i & 7))
 }
 
-var DefaultPhi float64 = 3e-5
+func (k *TKey) GetByteSize() int {
+	return len(k.Data)
+}
+
+var DefaultPhi float64 = 3e-4
 var DefaultEps float64 = DefaultPhi / 10
 
-var DefaultSigma float64 = 1e-8
-var DefaultDelta float64 = 1e-8
+var DefaultSigma float64 = 1e-3
+var DefaultDelta float64 = 1e-3
+
+var seed uint64 = 12
+
+const nagtName string = "topn_nagt2"
 
 func init() {
 	DefaultEps = DefaultPhi / 10

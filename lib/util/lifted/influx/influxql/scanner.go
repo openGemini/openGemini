@@ -116,6 +116,15 @@ func (s *Scanner) Scan() (tok Token, pos Pos, lit string) {
 		s.r.unread()
 		return SUB, pos, ""
 	case '*':
+		ch1, _ := s.r.read()
+		if ch1 == '.' {
+			ch2, pos2 := s.r.read()
+			if ch2 == '.' {
+				return MULTIHOP, pos2, ""
+			}
+			s.r.unread()
+		}
+		s.r.unread()
 		return MUL, pos, ""
 	case '/':
 		var comm string
@@ -189,6 +198,14 @@ func (s *Scanner) Scan() (tok Token, pos Pos, lit string) {
 		}
 		s.r.unread()
 		return COLON, pos, ""
+	case '{':
+		return LBRACKET, pos, ""
+	case '}':
+		return RBRACKET, pos, ""
+	case '[':
+		return LSQUARE, pos, ""
+	case ']':
+		return RSQUARE, pos, ""
 	}
 
 	return ILLEGAL, pos, string(ch0)
@@ -721,4 +738,8 @@ func IsRegexOp(t Token) bool {
 }
 func IsDOT(ch rune) bool {
 	return ch == '.'
+}
+
+func IsInOp(t Token) bool {
+	return (t == IN || t == NOTIN)
 }

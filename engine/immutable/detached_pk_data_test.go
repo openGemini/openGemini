@@ -16,7 +16,6 @@ limitations under the License.
 package immutable
 
 import (
-	"fmt"
 	"path"
 	"strings"
 	"testing"
@@ -26,6 +25,7 @@ import (
 	"github.com/openGemini/openGemini/lib/interruptsignal"
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestReadPKData(t *testing.T) {
@@ -33,27 +33,25 @@ func TestReadPKData(t *testing.T) {
 	_ = fileops.RemoveAll(testCompDir)
 	sig := interruptsignal.NewInterruptSignal()
 	defer func() {
+		clearMstInfo()
 		sig.Close()
 		_ = fileops.RemoveAll(testCompDir)
 	}()
 	mstName := "mst"
-	err := writeData(testCompDir, mstName)
-	if err != nil {
-		t.Errorf(err.Error())
-	}
+	err := writeData(testCompDir, mstName, 1000)
+	require.NoError(t, err)
+
 	dataPath := path.Join(testCompDir, mstName)
 	var opt *obs.ObsOptions
 
 	pkRecNum := 2
 
 	pkInfo, err := ReadPKMetaInfoAll(dataPath, opt)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
+
 	pkMetaReader, err := NewDetachedPKMetaReader(dataPath, opt)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
+
 	defer pkMetaReader.Close()
 	pmOffsets, pmLengths := make([]int64, 0, pkRecNum), make([]int64, 0, pkRecNum)
 	for i := 0; i < pkRecNum; i++ {
@@ -61,9 +59,7 @@ func TestReadPKData(t *testing.T) {
 		pmOffsets, pmLengths = append(pmOffsets, offset), append(pmLengths, length)
 	}
 	pkMetas, err := pkMetaReader.Read(pmOffsets, pmLengths)
-	if err != nil {
-		t.Fatalf(fmt.Sprintf("read pk meta err: %s", err.Error()))
-	}
+	require.NoError(t, err)
 
 	pdOffset, pdLength := make([]int64, 0, len(pkMetas)), make([]int64, 0, len(pkMetas))
 	for i := range pkMetas {
@@ -71,9 +67,8 @@ func TestReadPKData(t *testing.T) {
 		pdLength = append(pdLength, int64(pkMetas[i].Length))
 	}
 	pkDatas, err := ReadPKDataAll(dataPath, opt, pdOffset, pdLength, pkMetas, pkInfo)
-	if err != nil {
-		t.Fatalf(fmt.Sprintf("read pk data err: %s", err.Error()))
-	}
+	require.NoError(t, err)
+
 	pkItems := make([]*colstore.DetachedPKInfo, 0, len(pkDatas))
 	for i := range pkDatas {
 		pkItems = append(pkItems, colstore.GetPKInfoByPKMetaData(pkMetas[i], pkDatas[i], pkInfo.TCLocation))

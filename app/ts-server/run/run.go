@@ -18,6 +18,7 @@ import (
 	"github.com/openGemini/openGemini/app"
 	ingestserver "github.com/openGemini/openGemini/app/ts-sql/sql"
 	store "github.com/openGemini/openGemini/app/ts-store/run"
+	"github.com/openGemini/openGemini/coordinator"
 	"github.com/openGemini/openGemini/engine/executor"
 )
 
@@ -30,7 +31,7 @@ func InitStorage(sqlServer app.Server, storeServer app.Server) {
 	if !ok {
 		return
 	}
-	sql.PointsWriter.SetStore(s.GetStore())
+	sql.PointsWriter.TSDBStore = coordinator.NewLocalStore(s.GetStore(), s.GetStream(), sql.PointsWriter.GetLogger())
 	sql.RPCRecordWriter.SetStorage(s.GetStore())
 	executor.SetLocalStorageForQuery(s.GetStore())
 	executor.InitLocalStoreTemplatePlan()

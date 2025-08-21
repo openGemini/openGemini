@@ -8,6 +8,7 @@ env:
   GO111MODULE: on
   GONOSUMDB: "*"
   GOSUMDB: off
+  TZ: Asia/Shanghai
 
 jobs:
   UT:
@@ -16,7 +17,7 @@ jobs:
       fail-fast: true
       matrix:
         os: ["ubuntu-latest"] # "macOS-latest"
-        go: ["1.22"]
+        go: ["1.24"]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:

@@ -208,6 +208,10 @@ func (m *MmsTables) compact(itrs *ChunkIterators, files []TSSPFile, level uint16
 			record.CheckTimes(rec.Times())
 		}
 
+		if m.indexMergeSet != nil && m.indexMergeSet.HasDeletedTSID(id) {
+			continue
+		}
+
 		tableBuilder, err = tableBuilder.WriteRecord(id, rec, func(fn TSSPFileName) (uint64, uint16, uint16, uint16) {
 			ext := fn.extent
 			ext++

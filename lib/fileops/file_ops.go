@@ -33,6 +33,21 @@ import (
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 )
 
+const (
+	HdfsPrefix = "hdfs://"
+
+	ObsPrefixTS        = "obs:/"
+	ObsPrefixLogKeeper = "obs://"
+)
+
+var ObsPrefix = ObsPrefixTS
+
+func init() {
+	if config.GetProductType() == config.LogKeeper {
+		ObsPrefix = ObsPrefixLogKeeper
+	}
+}
+
 var (
 	IO_PRIORITY_ULTRA_HIGH = 0
 	IO_PRIORITY_HIGH       = 1
@@ -115,6 +130,9 @@ type VFS interface {
 	// RemoveAll removes path and any children it contains.
 	// the optional opt is: FileLockOption
 	RemoveAll(path string, opt ...FSOption) error
+	// RemoveAllWithOutDir Delete the file and retain the file directory.
+	// the optional opt is: FileLockOption
+	RemoveAllWithOutDir(path string, opt ...FSOption) error
 	// Mkdir creates a directory named path, it's parents directory must exist.
 	// the optional opt is: FileLockOption
 	Mkdir(path string, perm os.FileMode, opt ...FSOption) error
@@ -166,6 +184,9 @@ type VFS interface {
 
 	// GetOBSTmpFileName return tmp file name on obs
 	GetOBSTmpFileName(path string, obsOption *obs.ObsOptions) string
+
+	// GetOBSTmpIndexFileName return tmp index file name on obs
+	GetOBSTmpIndexFileName(path string, obsOption *obs.ObsOptions) string
 
 	// DecodeRemotePathToLocal return remote key path
 	DecodeRemotePathToLocal(path string) (string, error)
@@ -233,6 +254,13 @@ func RemoveLocal(localName string, opt ...FSOption) error {
 func RemoveAll(path string, opt ...FSOption) error {
 	t := GetFsType(path)
 	return GetFs(t).RemoveAll(path, opt...)
+}
+
+// RemoveAllWithOutDir Delete the file and retain the file directory.
+// the optional opt is: FileLockOption
+func RemoveAllWithOutDir(path string, opt ...FSOption) error {
+	t := GetFsType(path)
+	return GetFs(t).RemoveAllWithOutDir(path, opt...)
 }
 
 // Mkdir creates a directory named path, it's parents directory must exist.
@@ -328,6 +356,11 @@ func CopyFileFromDFVToOBS(srcPath, dstPath string, opt ...FSOption) error {
 func GetOBSTmpFileName(srcPath string, obsOption *obs.ObsOptions, opt ...FSOption) string {
 	t := GetFsType(srcPath)
 	return GetFs(t).GetOBSTmpFileName(srcPath, obsOption)
+}
+
+func GetOBSTmpIndexFileName(srcPath string, obsOption *obs.ObsOptions, opt ...FSOption) string {
+	t := GetFsType(srcPath)
+	return GetFs(t).GetOBSTmpIndexFileName(srcPath, obsOption)
 }
 
 // CreateV2 create a new file in OBS when use streamfs
@@ -486,6 +519,40 @@ func GetRemotePrefixPath(obsOpt *obs.ObsOptions) string {
 	return dir
 }
 
+func GetSubDirNamesForObsReadDirs(fis []fs.FileInfo, prefixPath string) []string {
+	prefixPath = strings.TrimPrefix(prefixPath, "/")
+	prefixPath = strings.TrimRight(prefixPath, "/")
+	var res []string
+	for _, fi := range fis {
+		path := strings.TrimRight(fi.Name(), "/")
+		if path == prefixPath {
+			continue
+		}
+		path = path[len(prefixPath)+1:]
+		if !strings.Contains(path, "/") {
+			res = append(res, path)
+		}
+	}
+	return res
+}
+
+func GetSubDirFiles(fis []fs.FileInfo, prefixPath string) []fs.FileInfo {
+	prefixPath = strings.TrimPrefix(prefixPath, "/")
+	prefixPath = strings.TrimRight(prefixPath, "/")
+	var subDirFiles []fs.FileInfo
+	for _, fi := range fis {
+		path := strings.TrimRight(fi.Name(), "/")
+		if path == prefixPath {
+			continue
+		}
+		path = path[len(prefixPath)+1:]
+		if !strings.Contains(path, "/") {
+			subDirFiles = append(subDirFiles, fi)
+		}
+	}
+	return subDirFiles
+}
+
 type FsType uint32
 
 const (
@@ -493,9 +560,6 @@ const (
 	Local   FsType = 1
 	Obs     FsType = 2
 	Hdfs    FsType = 3
-
-	ObsPrefix  = "obs://"
-	HdfsPrefix = "hdfs://"
 )
 
 var once sync.Once
@@ -530,4 +594,37 @@ func GetFs(t FsType) VFS {
 		return nil
 	}
 	return localFS
+}
+
+func Join(path ...string) string {
+	if GetFsType(path[0]) == Obs {
+		var completePath = path[0]
+		for i := 1; i < len(path); i++ {
+			completePath = strings.TrimSuffix(completePath, "/")
+			path[i] = strings.TrimPrefix(path[i], "/")
+			completePath = completePath + "/" + path[i]
+		}
+		return completePath
+	}
+	return filepath.Join(path...)
+}
+
+func Clean(path string) string {
+	if GetFsType(path) == Obs {
+		return path
+	}
+	return filepath.Clean(path)
+}
+
+func FindDir(dirs []fs.FileInfo, dirName string) fs.FileInfo {
+	for i, dir := range dirs {
+		if dirName == dir.Name() {
+			return dirs[i]
+		}
+	}
+	return nil
+}
+
+func DirNotExists(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "no such file or directory")
 }
