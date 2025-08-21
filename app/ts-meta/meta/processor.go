@@ -19,7 +19,6 @@ import (
 	"sync"
 
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
-	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
@@ -58,6 +57,7 @@ type MetaStoreInterface interface {
 	getContinuousQueryLease(host string) ([]string, error)
 	verifyDataNodeStatus(nodeID uint64) error
 	ShowCluster(body []byte) ([]byte, error)
+	GetMarshalData(parts []string) ([]byte, error)
 }
 
 type RPCHandler interface {
@@ -124,7 +124,7 @@ func NewProcessor(conf *config.Meta, store MetaStoreInterface) *Processor {
 func (p *Processor) Handle(w spdy.Responser, data interface{}) error {
 	msg, ok := data.(*message.MetaMessage)
 	if !ok {
-		return executor.NewInvalidTypeError("message.MetaMessage", data)
+		return errno.NewInvalidTypeError("message.MetaMessage", data)
 	}
 	h := New(msg.Type())
 	h.InitHandler(p.store, p.config, p.closing)

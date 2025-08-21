@@ -44,7 +44,7 @@ const (
 var (
 	openGeminiCollector *OpenGeminiCollector
 	metricMsts          = []string{"httpd", "performance", "io", "executor", "runtime",
-		"spdy", "filestat_level", "errno", "compact", "merge", "hotMode", "resultCache"}
+		"spdy", "filestat_level", "errno", "compact", "merge", "hotMode", "resultCache", "toObsCold"}
 )
 
 func init() {
@@ -145,7 +145,7 @@ func getMetrics(h *Handler, r *http.Request, user meta.User, tableName string) (
 	// Check authorization.
 	err = h.checkAuthorization(user, q, db)
 	if err != nil {
-		return nil, fmt.Errorf("error authorizing query: " + err.Error())
+		return nil, fmt.Errorf("error authorizing query: %s", err.Error())
 	}
 	// Parse chunk size. Use default if not provided or unparsable.
 	chunked, chunkSize, innerChunkSize, err := h.parseChunkSize(r)

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	numenc "github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
+	"github.com/openGemini/openGemini/lib/msgservice"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/require"
@@ -187,13 +188,13 @@ func TestPointsDecoderWork_decodePoints(t *testing.T) {
 func TestDecodePoints(t *testing.T) {
 	ww := GetDecoderWork()
 	ww.reqBuf = mockMarshaledStreamPoint(true, true)
-	ww.streamVars = []*netstorage.StreamVar{{Only: false, Id: []uint64{0}}, {Only: true, Id: []uint64{1}}}
+	ww.streamVars = []*msgservice.StreamVar{{Only: false, Id: []uint64{0}}, {Only: true, Id: []uint64{1}}}
 	_, _, _, _, _, _, err := ww.DecodePoints()
 	if err != nil {
 		t.Fatal("DecodePoints failed")
 	}
 
-	ww.streamVars = []*netstorage.StreamVar{{Only: false, Id: []uint64{0}}}
+	ww.streamVars = []*msgservice.StreamVar{{Only: false, Id: []uint64{0}}}
 	_, _, _, _, _, _, err = ww.DecodePoints()
 	if err == nil {
 		t.Fatal("DecodePoints failed")

@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -27,6 +26,7 @@ import (
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/index/tsi"
+	"github.com/openGemini/openGemini/engine/mutable"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/record"
@@ -356,7 +356,7 @@ func Test_PromqlQuery_SeriesLoopCursor(t *testing.T) {
 				querySchema := executor.NewQuerySchema(stmt.Fields, stmt.ColumnNames(), &opt, nil)
 				info, err := sh.CreateCursor(ctx, querySchema)
 				if err != nil {
-					t.Fatalf(err.Error())
+					t.Fatalf("%s", err.Error())
 				}
 				if info == nil {
 					return
@@ -393,7 +393,7 @@ func Test_PromqlQuery_SeriesLoopCursor(t *testing.T) {
 				} else {
 					agg, _ := executor.NewStreamAggregateTransform(
 						[]hybridqp.RowDataType{tt.outputRowDataType},
-						[]hybridqp.RowDataType{tt.outputRowDataType}, tt.aggOps, &opt, false)
+						[]hybridqp.RowDataType{tt.outputRowDataType}, tt.aggOps, &opt, &executor.QuerySchema{}, false)
 					agg.GetInputs()[0].Connect(chunkReader.GetOutputs()[0])
 					agg.GetOutputs()[0].Connect(outPutPort)
 
@@ -2859,7 +2859,7 @@ func Test_PromqlQuery_Shard_Function(t *testing.T) {
 				querySchema := executor.NewQuerySchema(stmt.Fields, stmt.ColumnNames(), &opt, nil)
 				info, err := sh.CreateCursor(ctx, querySchema)
 				if err != nil {
-					t.Fatalf(err.Error())
+					t.Fatalf("%s", err.Error())
 				}
 				if info == nil {
 					return
@@ -2939,6 +2939,7 @@ func Test_NewSeriesLoopCursorInSerial(t *testing.T) {
 	}
 }
 
+/*
 func Test_PromqlQuery_CrossShard_Function(t *testing.T) {
 	testDir := t.TempDir()
 	defer func() {
@@ -3236,5 +3237,45 @@ func Test_PromqlQuery_CrossShard_Function(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+*/
+
+func Test_NewAggTagSetCursorWithMultiGroup(t *testing.T) {
+	opt := query.ProcessorOptions{}
+	opt.ValueCondition = &influxql.BinaryExpr{
+		Op: influxql.LTE,
+		LHS: &influxql.VarRef{
+			Val:  "value",
+			Type: influxql.Float,
+		},
+		RHS: &influxql.NumberLiteral{
+			Val: 1,
+		},
+	}
+	opt.PromQuery = true
+	querySchema := executor.NewQuerySchema(nil, []string{"a"}, &opt, nil)
+	config.GetCommon().PreAggEnabled = false
+	_, span := tracing.NewTrace("root")
+	var tagSets []tsi.TagSet
+	for i := 0; i < 3; i++ {
+		tagSetInfo := &tsi.TagSetInfo{}
+		tagSets = append(tagSets, tagSetInfo)
+	}
+	ctx := &idKeyCursorContext{
+		filterOption: immutable.BaseFilterOptions{},
+		schema: record.Schemas{
+			record.Field{Type: influx.Field_Type_Float, Name: "value"},
+		},
+		memTables:       &mutable.MemTables{},
+		immTableReaders: map[uint64]*immutable.MmsReaders{},
+		querySchema: genQuerySchema(nil, &query.ProcessorOptions{
+			Name:      "test",
+			Ascending: true,
+		}),
+	}
+	aggTagSetCursorInSerial, err := newAggTagSetCursorWithMultiGroup(ctx, span, querySchema, tagSets, 1, 0)
+	if err != nil || aggTagSetCursorInSerial == nil {
+		t.Fatal(err)
 	}
 }

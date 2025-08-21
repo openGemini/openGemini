@@ -20,14 +20,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 )
 
 func TestProcessorCodec(t *testing.T) {
-	cond, err := influxql.ParseExpr("a=b AND c=1")
+	cond, err := influxql.ParseExpr("a=b AND c=1 AND c IN (1)")
+	valCond, err := influxql.ParseExpr("d>1 AND e<2")
 	if err != nil {
 		t.Fatalf("%v", err)
 	}
@@ -46,33 +46,34 @@ func TestProcessorCodec(t *testing.T) {
 				Type: influxql.Integer,
 			},
 		},
-		FieldAux:    nil,
-		TagAux:      nil,
-		Sources:     nil,
-		Interval:    hybridqp.Interval{Duration: 5, Offset: 100},
-		Dimensions:  []string{"id", "tid"},
-		GroupBy:     map[string]struct{}{"id": {}, "tid": {}},
-		Location:    time.FixedZone("Asia/Shanghai", 0),
-		Fill:        1,
-		FillValue:   3.3,
-		Condition:   cond,
-		StartTime:   time.Now().Unix() - 3600*10,
-		EndTime:     time.Now().Unix(),
-		Ascending:   false,
-		Limit:       10,
-		Offset:      10,
-		SLimit:      10,
-		SOffset:     10,
-		StripName:   false,
-		Dedupe:      false,
-		Ordered:     false,
-		MaxSeriesN:  0,
-		InterruptCh: nil,
-		Authorizer:  nil,
-		Parallel:    false,
-		ChunkSize:   7,
-		MaxParallel: 0,
-		QueryId:     0,
+		FieldAux:       nil,
+		TagAux:         nil,
+		Sources:        nil,
+		Interval:       hybridqp.Interval{Duration: 5, Offset: 100},
+		Dimensions:     []string{"id", "tid"},
+		GroupBy:        map[string]struct{}{"id": {}, "tid": {}},
+		Location:       time.FixedZone("Asia/Shanghai", 0),
+		Fill:           1,
+		FillValue:      3.3,
+		Condition:      cond,
+		ValueCondition: valCond,
+		StartTime:      time.Now().Unix() - 3600*10,
+		EndTime:        time.Now().Unix(),
+		Ascending:      false,
+		Limit:          10,
+		Offset:         10,
+		SLimit:         10,
+		SOffset:        10,
+		StripName:      false,
+		Dedupe:         false,
+		Ordered:        false,
+		MaxSeriesN:     0,
+		InterruptCh:    nil,
+		Authorizer:     nil,
+		Parallel:       false,
+		ChunkSize:      7,
+		MaxParallel:    0,
+		QueryId:        0,
 
 		HintType: hybridqp.ExactStatisticQuery,
 	}
@@ -125,6 +126,10 @@ func TestProcessorCodec(t *testing.T) {
 		t.Fatalf("failed to marshal Condition. exp: %s; got: %s", opt.Condition, other.Condition)
 	}
 
+	if opt.ValueCondition.String() != other.ValueCondition.String() {
+		t.Fatalf("failed to marshal ValueCondition. exp: %s; got: %s", opt.ValueCondition, other.ValueCondition)
+	}
+
 	if opt.ChunkSize != other.ChunkSize {
 		t.Fatalf("failed to marshal ChunkSize. exp: %d; got: %d", opt.ChunkSize, other.ChunkSize)
 	}
@@ -133,12 +138,4 @@ func TestProcessorCodec(t *testing.T) {
 		t.Fatalf("failed to marshal HintType. exp: %d; got: %d", opt.HintType, other.HintType)
 	}
 
-}
-
-func compareSchema(s1, s2 *executor.QuerySchema) error {
-	fn := func() error {
-		return CompareFields(s1.Fields(), s2.Fields(), "QuerySchema")
-	}
-
-	return CompareNil(s1, s2, "QuerySchema", fn)
 }

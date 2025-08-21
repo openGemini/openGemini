@@ -15,6 +15,7 @@
 package transport
 
 import (
+	"errors"
 	"regexp"
 	"sort"
 	"strings"
@@ -22,12 +23,15 @@ import (
 	"time"
 
 	numenc "github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
+	"github.com/agiledragon/gomonkey/v2"
 	"github.com/openGemini/openGemini/app/ts-store/storage"
 	"github.com/openGemini/openGemini/app/ts-store/stream"
+	"github.com/openGemini/openGemini/engine/shelf"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
+	"github.com/openGemini/openGemini/lib/msgservice"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/pointsdecoder"
 	"github.com/openGemini/openGemini/lib/record"
@@ -126,7 +130,7 @@ func mockStorage() *storage.Storage {
 type MockStream struct{}
 
 func (m MockStream) WriteRec(db, rp, mst string, ptId uint32, shardID uint64, rec *record.Record, binaryRec []byte) error {
-	//TODO implement me
+
 	panic("implement me")
 }
 
@@ -211,28 +215,115 @@ func TestInsertProcessor(t *testing.T) {
 	stream := mockStream()
 	processor := NewInsertProcessor(store, stream)
 	w := &MockNewResponser{}
-	req1 := netstorage.NewWritePointsRequest([]byte{1, 2, 3, 4, 5, 6, 7})
+	req1 := msgservice.NewWritePointsRequest([]byte{1, 2, 3, 4, 5, 6, 7})
 	if err := processor.Handle(w, req1); err != nil {
 		t.Fatal("WritePointsRequest failed")
 	}
 
-	req2 := netstorage.NewWriteStreamPointsRequest(mockMarshaledStreamPoint(true, true),
-		[]*netstorage.StreamVar{{Only: false, Id: []uint64{1}}, {Only: false, Id: []uint64{2}}})
+	req2 := msgservice.NewWriteStreamPointsRequest(mockMarshaledStreamPoint(true, true),
+		[]*msgservice.StreamVar{{Only: false, Id: []uint64{1}}, {Only: false, Id: []uint64{2}}})
 	if err := processor.Handle(w, req2); err != nil {
 		t.Fatal("WritePointsRequest failed")
 	}
 
-	req3 := netstorage.NewWriteStreamPointsRequest(mockMarshaledStreamPoint(true, false),
-		[]*netstorage.StreamVar{{Only: false, Id: []uint64{1}}, {Only: false, Id: []uint64{2}}})
+	req3 := msgservice.NewWriteStreamPointsRequest(mockMarshaledStreamPoint(true, false),
+		[]*msgservice.StreamVar{{Only: false, Id: []uint64{1}}, {Only: false, Id: []uint64{2}}})
 	if err := processor.Handle(w, req3); err != nil {
 		t.Fatal("WritePointsRequest failed")
 	}
 
-	req4 := netstorage.NewWriteStreamPointsRequest(mockMarshaledStreamPoint(true, false),
-		[]*netstorage.StreamVar{{Only: false, Id: []uint64{1}}, {Only: false, Id: []uint64{2}}})
+	req4 := msgservice.NewWriteStreamPointsRequest(mockMarshaledStreamPoint(true, false),
+		[]*msgservice.StreamVar{{Only: false, Id: []uint64{1}}, {Only: false, Id: []uint64{2}}})
 	if err := processor.Handle(w, req4); err != nil {
 		t.Fatal("WritePointsRequest failed")
 	}
+
+	group, _ := shelf.NewBlobGroup(1)
+	req5 := msgservice.NewWriteBlobsRequest("db0", "rp0", 0, 0, group)
+	if err := processor.Handle(w, req5); err != nil {
+		t.Fatal("WriteBlobsRequest failed")
+	}
+}
+
+func TestInsertProcessorErr(t *testing.T) {
+	store := mockStorage()
+	defer store.MustClose()
+	stream := mockStream()
+	processor := NewInsertProcessor(store, stream)
+	w := &MockNewResponser{}
+	req := []uint64{1}
+	err := processor.Handle(w, req)
+	assert.EqualError(t, err, "invalid data type, exp: *msgservice.WritePointsRequest, got: []uint64")
+}
+
+func TestInsertProcessorErr2(t *testing.T) {
+	store := mockStorage()
+	defer store.MustClose()
+	stream := mockStream()
+	processor := NewInsertProcessor(store, stream)
+	w := &MockNewResponser{}
+	req := msgservice.NewWritePointsRequest([]byte{1, 2, 3, 4, 5, 6, 7})
+	patch := gomonkey.NewPatches()
+	defer patch.Reset()
+	patch.ApplyFunc(WritePointsForSSOrWAF, func() error {
+		return nil
+	})
+	err := processor.Handle(w, req)
+	assert.NoError(t, err)
+
+	patch.ApplyFunc(WritePointsForSSOrWAF, func() error {
+		return errors.New("error")
+	})
+	err = processor.Handle(w, req)
+	assert.NoError(t, err)
+}
+
+func TestInsertProcessorErr3(t *testing.T) {
+	store := mockStorage()
+	defer store.MustClose()
+	stream := mockStream()
+	processor := NewInsertProcessor(store, stream)
+	w := &MockNewResponser{}
+	group, _ := shelf.NewBlobGroup(1)
+	req := msgservice.NewWriteBlobsRequest("db0", "rp0", 0, 0, group)
+	patch := gomonkey.NewPatches()
+	defer patch.Reset()
+	patch.ApplyMethod((*storage.Storage)(nil), "WriteBlobs", func() error {
+		return nil
+	})
+	err := processor.Handle(w, req)
+	assert.NoError(t, err)
+	patch.ApplyMethod((*storage.Storage)(nil), "WriteBlobs", func() error {
+		return errors.New("error")
+	})
+	err = processor.Handle(w, req)
+	assert.NoError(t, err)
+}
+
+func TestInsertProcessorErr4(t *testing.T) {
+	store := mockStorage()
+	defer store.MustClose()
+	stream := mockStream()
+	processor := NewInsertProcessor(store, stream)
+	w := &MockNewResponser{}
+
+	req := msgservice.NewWriteStreamPointsRequest(mockMarshaledStreamPoint(true, true),
+		[]*msgservice.StreamVar{{Only: false, Id: []uint64{1}}, {Only: false, Id: []uint64{2}}})
+	err := processor.Handle(w, req)
+	assert.NoError(t, err)
+
+	patch := gomonkey.NewPatches()
+	defer patch.Reset()
+	patch.ApplyFunc(WriteStreamPoints, func() (error, bool) {
+		return nil, false
+	})
+	err = processor.Handle(w, req)
+	assert.NoError(t, err)
+	patch.ApplyFunc(WriteStreamPoints, func() (error, bool) {
+		return errors.New("error"), false
+	})
+	err = processor.Handle(w, req)
+	assert.NoError(t, err)
 }
 
 func mockMarshaledStreamPoint(haveStreamShardList bool, validStreamShardList bool) []byte {
@@ -299,23 +390,23 @@ func TestRaftMsgProcessor(t *testing.T) {
 	defer store.MustClose()
 	processor := NewRaftMsgProcessor(store)
 	w := &MockNewResponser{}
-	req := &netstorage.RaftMessagesRequest{}
+	req := &msgservice.RaftMessagesRequest{}
 	req.Database = "db0"
 	req.PtId = 1
 	req.RaftMessage = raftpb.Message{}
-	req1 := netstorage.NewRaftMsgMessage(netstorage.RaftMessagesRequestMessage, req)
+	req1 := msgservice.NewRaftMsgMessage(msgservice.RaftMessagesRequestMessage, req)
 	if err := processor.Handle(w, req1); err != nil {
 		t.Fatal("TestRaftMsgProcessor failed")
 	}
-	req2 := netstorage.NewDDLMessage(netstorage.SeriesKeysRequestMessage, nil)
+	req2 := msgservice.NewDDLMessage(msgservice.SeriesKeysRequestMessage, nil)
 	err := processor.Handle(w, req2)
-	assert.Equal(t, err.Error(), "invalid data type, exp: *netstorage.RaftMsgMessage, got: *netstorage.DDLMessage")
+	assert.Equal(t, err.Error(), "invalid data type, exp: *msgservice.RaftMsgMessage, got: *msgservice.DDLMessage")
 
-	req3 := netstorage.NewRaftMsgMessage(netstorage.UnknownMessage, req)
+	req3 := msgservice.NewRaftMsgMessage(msgservice.UnknownMessage, req)
 	err = processor.Handle(w, req3)
 	assert.Equal(t, err.Error(), "unsupported message type: 0")
 
-	req4 := netstorage.NewRaftMsgMessage(netstorage.SeriesKeysRequestMessage, req)
+	req4 := msgservice.NewRaftMsgMessage(msgservice.SeriesKeysRequestMessage, req)
 	err = processor.Handle(w, req4)
-	assert.Equal(t, err.Error(), "invalid data type, exp: *netstorage.SeriesKeysRequest, got: *netstorage.RaftMessagesRequest")
+	assert.Equal(t, err.Error(), "invalid data type, exp: *msgservice.SeriesKeysRequest, got: *msgservice.RaftMessagesRequest")
 }

@@ -18,22 +18,30 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/tracing"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/mergeset"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
+	"github.com/pingcap/failpoint"
 	"github.com/savsgio/dictpool"
 	"go.uber.org/zap"
 )
@@ -56,8 +64,24 @@ type IndexBuilder struct {
 	lock           *string
 	EnableTagArray bool
 
+	// wait group for running index move
+	moveWG   *sync.WaitGroup
+	moveStop chan struct{}
+	ObsOpt   *obs.ObsOptions
+
+	MoveIndexStartTime time.Time
+	Tier               uint64
+	IndexColdDuration  time.Duration
+
 	seriesLimiter func() error
+	mergeDuration time.Duration
 }
+
+const (
+	Mergeset = "mergeset"
+	Tmp      = "tmp"
+	Txn      = "txn"
+)
 
 func NewIndexBuilder(opt *Options) *IndexBuilder {
 	iBuilder := &IndexBuilder{
@@ -72,6 +96,8 @@ func NewIndexBuilder(opt *Options) *IndexBuilder {
 		sequenceID:    opt.sequenceID,
 		lock:          opt.lock,
 		Relations:     make([]*IndexRelation, index.IndexTypeAll),
+		mergeDuration: opt.mergeDuration,
+		ObsOpt:        opt.obsOpt,
 	}
 	return iBuilder
 }
@@ -145,6 +171,9 @@ func (iBuilder *IndexBuilder) Flush() {
 	if config.IsLogKeeper() {
 		return
 	}
+	if iBuilder.Tier >= util.Cold {
+		return
+	}
 	for i := range iBuilder.Relations {
 		if iBuilder.isRelationInited(uint32(i)) {
 			iBuilder.Relations[i].IndexFlush()
@@ -197,6 +226,10 @@ func (iBuilder *IndexBuilder) SetDuration(duration time.Duration) {
 	iBuilder.duration = duration
 }
 
+func (iBuilder *IndexBuilder) SetMergeDuration(duration time.Duration) {
+	iBuilder.mergeDuration = duration
+}
+
 func (iBuilder *IndexBuilder) GetDuration() time.Duration {
 	return iBuilder.duration
 }
@@ -220,6 +253,9 @@ func (iBuilder *IndexBuilder) Overlaps(tr influxql.TimeRange) bool {
 }
 
 func (iBuilder *IndexBuilder) CreateIndexIfNotExists(mmRows *dictpool.Dict, needSecondaryIndex bool) error {
+	if iBuilder.Tier >= util.Cold {
+		return errno.NewError(errno.ForbidIndexWrite, iBuilder.GetIndexID(), iBuilder.Tier)
+	}
 	primaryIndex := iBuilder.GetPrimaryIndex()
 	var wg sync.WaitGroup
 	// 1st, create primary index.
@@ -490,6 +526,294 @@ func (iBuilder *IndexBuilder) ClearCache() error {
 		if err := iBuilder.Relations[i].IndexCacheClear(); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func (iBuilder *IndexBuilder) ExecIndexMove() error {
+	logger.GetLogger().Info("[hierarchical storage ExecIndexMove] index info",
+		zap.Uint64("indexID", iBuilder.GetIndexID()), zap.Uint64("Tier", iBuilder.Tier))
+	iBuilder.mu.Lock()
+	iBuilder.Tier = util.Moving
+
+	if iBuilder.MoveIndexStartTime.IsZero() {
+		iBuilder.MoveIndexStartTime = time.Now()
+	}
+
+	if iBuilder.moveStop == nil {
+		iBuilder.moveStop = make(chan struct{})
+	}
+	wg := new(sync.WaitGroup)
+	wg.Add(1)
+	iBuilder.moveWG = wg
+	iBuilder.mu.Unlock()
+
+	defer wg.Done()
+	return iBuilder.doIndexMove()
+}
+
+func (iBuilder *IndexBuilder) getAllIndexFilesPath() ([]string, error) {
+	var filePaths []string
+	for _, relation := range iBuilder.Relations {
+		if relation == nil {
+			continue
+		}
+		indexAmRoutine := relation.indexAmRoutine
+		if indexAmRoutine.amKeyType == index.MergeSet {
+			mergeSetPath := filepath.Join(iBuilder.path, Mergeset)
+			mergeSetDirs, err := fileops.ReadDir(mergeSetPath)
+			if err != nil {
+				logger.GetLogger().Error("read mergeSet directory failed", zap.Error(err))
+				continue
+			}
+			for _, dir := range mergeSetDirs {
+				if dir.IsDir() {
+					if dir.Name() == Tmp || dir.Name() == Txn {
+						filePaths = append(filePaths, filepath.Join(mergeSetPath, dir.Name()))
+						continue
+					}
+					mergeSetInnerDir := filepath.Join(mergeSetPath, dir.Name())
+					innerDirs, err := fileops.ReadDir(mergeSetInnerDir)
+					if err != nil {
+						logger.GetLogger().Error("read mergeSet inner directory failed", zap.Error(err))
+						return nil, err
+					}
+					for j := range innerDirs {
+						filePaths = append(filePaths, filepath.Join(mergeSetInnerDir, innerDirs[j].Name()))
+					}
+				} else {
+					filePaths = append(filePaths, filepath.Join(mergeSetPath, dir.Name()))
+				}
+			}
+		}
+	}
+	return filePaths, nil
+}
+
+func (iBuilder *IndexBuilder) getAllIndexFilesColdPath(indexFilesPath []string) []string {
+	var coldTmpFilesPath []string
+	for i := range indexFilesPath {
+		coldTmpFilesPath = append(coldTmpFilesPath, fileops.GetOBSTmpIndexFileName(indexFilesPath[i], iBuilder.ObsOpt))
+	}
+	return coldTmpFilesPath
+}
+
+func (iBuilder *IndexBuilder) doIndexMove() error {
+	logger.GetLogger().Info("[hierarchical index storage] begin to move index", zap.Uint64("tier", iBuilder.Tier), zap.String("path", iBuilder.path))
+	if iBuilder.stopMove() {
+		logger.GetLogger().Info("[hierarchical index storage] received stop signal", zap.Uint64("index id", iBuilder.GetIndexID()))
+		return errno.NewError(errno.IndexIsMoving, iBuilder.GetIndexID())
+	}
+	iBuilder.stopIndexMergeAndFlush()
+
+	indexFiles, err := iBuilder.getAllIndexFilesPath()
+	if err != nil {
+		return err
+	}
+	coldIndexFilesPath := iBuilder.getAllIndexFilesColdPath(indexFiles)
+	if len(indexFiles) == 0 {
+		logger.GetLogger().Error("There is no index files to move")
+		return errors.New("no index files to move")
+	}
+	err = iBuilder.startFilesMove(indexFiles, coldIndexFilesPath)
+	if err != nil {
+		return err
+	}
+
+	// all file copy success, update tier status
+	iBuilder.Tier = util.Cold
+	return nil
+}
+
+func (iBuilder *IndexBuilder) stopIndexMergeAndFlush() {
+	for _, relation := range iBuilder.Relations {
+		if relation == nil {
+			continue
+		}
+		if relation.indexAmRoutine.amKeyType == index.MergeSet {
+			relation.indexAmRoutine.index.(*MergeSetIndex).tb.StopMergeAndFlusher()
+		}
+	}
+}
+
+func (iBuilder *IndexBuilder) stopMove() bool {
+	select {
+	case <-iBuilder.moveStop:
+		return true
+	default:
+		return false
+	}
+}
+
+func (iBuilder *IndexBuilder) startFilesMove(localIndexFiles []string, coldTmpIndexFilesPath []string) error {
+	var err error
+	lock := fileops.FileLockOption(*iBuilder.lock)
+	for i := range localIndexFiles {
+		if iBuilder.stopMove() {
+			return errno.NewError(errno.ShardMovingStopped)
+		}
+
+		logger.GetLogger().Info("[hierarchical index storage] start move", zap.Uint64("index id", iBuilder.GetIndexID()), zap.String("index file", localIndexFiles[i]))
+		if err = fileops.CopyFileFromDFVToOBS(localIndexFiles[i], coldTmpIndexFilesPath[i], lock); err != nil {
+			if !strings.HasSuffix(localIndexFiles[i], "/tmp") && !strings.HasSuffix(localIndexFiles[i], "/txn") {
+				iBuilder.copyFileRollBack(coldTmpIndexFilesPath[i])
+				logger.GetLogger().Error("copy index file to obs error", zap.Error(err))
+				return err
+			}
+		}
+		failpoint.Inject("copy-file-delay", nil)
+	}
+	indexPath := iBuilder.path
+	iBuilder.renameIBuilderAndRelationPath()
+	if err = fileops.RemoveAll(indexPath, lock); err != nil {
+		logger.GetLogger().Error("remove local file index files error", zap.Error(err))
+		return err
+	}
+	logger.GetLogger().Info("[hierarchical index storage] remove index file success")
+	return nil
+}
+func (iBuilder *IndexBuilder) renameIBuilderAndRelationPath() {
+	iBuilder.mu.Lock()
+	defer iBuilder.mu.Unlock()
+	if iBuilder.ObsOpt == nil {
+		return
+	}
+	newPath := iBuilder.path[len(obs.GetPrefixDataPath()):]
+	newPath = filepath.Join(iBuilder.ObsOpt.BasePath, newPath)
+
+	newPath = fmt.Sprintf("%s%s/%s/%s/%s/%s", fileops.ObsPrefix, iBuilder.ObsOpt.Endpoint, iBuilder.ObsOpt.Ak, iBuilder.ObsOpt.Sk, iBuilder.ObsOpt.BucketName, newPath)
+	iBuilder.path = newPath
+
+	for _, relation := range iBuilder.Relations {
+		if relation == nil {
+			continue
+		}
+		if relation.indexAmRoutine.amKeyType == index.MergeSet {
+			relation.indexAmRoutine.index.(*MergeSetIndex).path = newPath
+			tbPath := fmt.Sprintf("%s/%s", newPath, index.MergeSetIndex)
+			relation.indexAmRoutine.index.(*MergeSetIndex).tb.ResetPath(tbPath)
+			prefixPath := fmt.Sprintf("%s%s/%s/%s/%s/%s", fileops.ObsPrefix, iBuilder.ObsOpt.Endpoint, iBuilder.ObsOpt.Ak, iBuilder.ObsOpt.Sk, iBuilder.ObsOpt.BucketName, iBuilder.ObsOpt.BasePath)
+			relation.indexAmRoutine.index.(*MergeSetIndex).tb.UpdatePartsObsPath(prefixPath)
+		}
+	}
+}
+
+func (iBuilder *IndexBuilder) copyFileRollBack(fileName string) {
+	lock := fileops.FileLockOption(*iBuilder.lock)
+	if err := fileops.Remove(fileName, lock); err != nil {
+		logger.GetLogger().Error("[run hierarchical storage RollBack]: remove file err",
+			zap.String("file", fileName), zap.Error(err))
+	}
+}
+
+func (iBuilder *IndexBuilder) GetTier() (tier uint64) {
+	return iBuilder.Tier
+}
+
+func (iBuilder *IndexBuilder) IsTierExpired() bool {
+	now := time.Now().UTC()
+	if iBuilder.IndexColdDuration != 0 && iBuilder.endTime.Add(iBuilder.IndexColdDuration).Before(now) {
+		return true
+	}
+	return false
+}
+
+/*
+updateIndexPath: update local path to other node's obs remote path
+completePath: fmt.Sprintf("%s%s/%s/%s/%s/%s", fileops.ObsPrefix, iBuilder.obsOpt.Endpoint, iBuilder.obsOpt.Ak, iBuilder.obsOpt.Sk, iBuilder.obsOpt.BucketName, iBuilder.obsOpt.BasePath, indexPath)
+*/
+func (iBuilder *IndexBuilder) updateIndexPath(completePath string) {
+	iBuilder.mu.Lock()
+	defer iBuilder.mu.Unlock()
+
+	iBuilder.path = completePath
+
+	for _, relation := range iBuilder.Relations {
+		if relation == nil {
+			continue
+		}
+		if relation.indexAmRoutine.amKeyType == index.MergeSet {
+			relation.indexAmRoutine.index.(*MergeSetIndex).path = completePath
+			tbPath := fmt.Sprintf("%s/%s", completePath, index.MergeSetIndex)
+			relation.indexAmRoutine.index.(*MergeSetIndex).tb.ResetPath(tbPath)
+		}
+	}
+}
+
+func (iBuilder *IndexBuilder) ReplaceByNoClearIndexId(noClearIndex uint64) (string, *string, error) {
+	oldTier := iBuilder.Tier
+	iBuilder.Tier = util.Clearing
+	re := regexp.MustCompile(`(\d+)_\d+_\d+`)
+	matches := re.FindStringSubmatch(iBuilder.path)
+	if len(matches) < 2 {
+		iBuilder.Tier = oldTier
+		return "", iBuilder.lock, errors.New("find string submatch error")
+	}
+	oldPath := iBuilder.path
+
+	oldPart := matches[0]
+	newPart := strings.Replace(oldPart, matches[1], strconv.FormatUint(noClearIndex, 10), 1)
+	path := strings.Replace(iBuilder.path, oldPart, newPart, 1)
+	iBuilder.updateIndexPath(path)
+	iBuilder.Tier = util.Cleared
+	return oldPath, iBuilder.lock, nil
+}
+
+func (iBuilder *IndexBuilder) DropSeries() error {
+	iBuilder.mu.Lock()
+	defer iBuilder.mu.Unlock()
+	e := errors.New("idx is nil or not be *MergeSetIndex")
+	if idx, ok := iBuilder.GetPrimaryIndex().(*MergeSetIndex); ok {
+		deleteMergeSet := idx.DeleteMergeSet()
+		if deleteMergeSet == nil {
+			logger.GetLogger().Info("new db and didn't execute drop, no need to delete")
+			return nil
+		}
+		deleteMergeSet.tb.SetLabelForDeletePart()
+
+		delTsids := idx.GetDeletedTSIDs()
+		if delTsids == nil || delTsids.Len() <= 0 {
+			return nil
+		}
+
+		if e = idx.tb.RemoveItemsByDelTsidsFromParts(delTsids); e == nil {
+			deleteMergeSet.tb.RemoveDeletedPart()
+		}
+	}
+	return e
+}
+
+func (iBuilder *IndexBuilder) DeleteMsts(msts []string, onlyUseDiskThreshold uint64) error {
+	var errs []error
+	for _, relation := range iBuilder.Relations {
+		if relation == nil {
+			continue
+		}
+		indexAmRoutine := relation.indexAmRoutine
+		if indexAmRoutine.amKeyType == index.MergeSet {
+			mergeSetPath := filepath.Join(iBuilder.path, Mergeset)
+			mergeSetDirs, err := fileops.ReadDir(mergeSetPath)
+			if err != nil {
+				logger.GetLogger().Error("read mergeSet directory failed", zap.Error(err))
+				return err
+			}
+			for _, dir := range mergeSetDirs {
+				if dir.IsDir() {
+					if dir.Name() == Tmp || dir.Name() == Txn {
+						continue
+					}
+					iBuilder.mu.Lock()
+					if err = indexAmRoutine.index.(*MergeSetIndex).tb.DeleteMstsInIndex(dir.Name(), msts, onlyUseDiskThreshold, ParseItem); err != nil {
+						errs = append(errs, err)
+					}
+					iBuilder.mu.Unlock()
+				}
+			}
+		}
+	}
+	if len(errs) > 0 {
+		err := errors.Join(errs...)
+		return err
 	}
 	return nil
 }

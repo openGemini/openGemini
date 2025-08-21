@@ -263,7 +263,8 @@ type VerifyDataNodeStatusRequest struct {
 }
 
 type VerifyDataNodeStatusResponse struct {
-	Err string
+	Err     string
+	ErrCode errno.Errno
 }
 
 type SendSysCtrlToMetaRequest struct {
@@ -273,6 +274,16 @@ type SendSysCtrlToMetaRequest struct {
 
 type SendSysCtrlToMetaResponse struct {
 	Err string
+}
+
+type SendBackupToMetaRequest struct {
+	Mod   string
+	Param map[string]string
+}
+
+type SendBackupToMetaResponse struct {
+	Result []byte
+	Err    string
 }
 
 type ShowClusterRequest struct {

@@ -1,4 +1,4 @@
-// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+// Copyright 2025 Huawei Cloud Computing Technologies Co., Ltd.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,75 +19,109 @@ import (
 	"strings"
 
 	"github.com/influxdata/influxdb/pkg/tracing"
+	"github.com/influxdata/influxdb/pkg/tracing/fields"
+	"github.com/influxdata/influxdb/pkg/tracing/labels"
 	"github.com/xlab/treeprint"
 )
 
+// mergeVisitor merges sub-trace information into the main trace tree
 type mergeVisitor struct {
-	subs map[uint64]*Trace
+	subTraces map[uint64]*Trace // Stores sub-traces with SpanID as the key
 }
 
-func newMergeVisitor(subs map[uint64]*Trace) *mergeVisitor {
-	return &mergeVisitor{subs: subs}
+// newMergeVisitor creates a new instance of mergeVisitor
+func newMergeVisitor(subTraces map[uint64]*Trace) *mergeVisitor {
+	return &mergeVisitor{subTraces: subTraces}
 }
 
+// Visit implements the tracing.Visitor interface to merge sub-trace nodes
 func (v *mergeVisitor) Visit(n *tracing.TreeNode) tracing.Visitor {
-	pid := n.Raw.Context.SpanID
-	if t, ok := v.subs[pid]; ok {
-		n.Children = append(n.Children, t.Tree())
+	spanID := n.Raw.Context.SpanID
+	// Merge corresponding sub-trace into child nodes if exists
+	if subTrace, exists := v.subTraces[spanID]; exists {
+		n.Children = append(n.Children, subTrace.Tree())
 	}
 
-	for _, cn := range n.Children {
-		tracing.Walk(v, cn)
+	// Recursively process all child nodes
+	for _, childNode := range n.Children {
+		tracing.Walk(v, childNode)
 	}
 
 	return nil
 }
 
+// treeVisitor converts trace tree into a visual tree structure
 type treeVisitor struct {
-	root  treeprint.Tree
-	trees []treeprint.Tree
+	root  treeprint.Tree   // Root node of the visual tree
+	stack []treeprint.Tree // Stack for recursively building the tree structure
 }
 
+// newTreeVisitor creates a new instance of treeVisitor
 func newTreeVisitor() *treeVisitor {
-	t := treeprint.New()
-	return &treeVisitor{root: t, trees: []treeprint.Tree{t}}
+	root := treeprint.New()
+	return &treeVisitor{
+		root:  root,
+		stack: []treeprint.Tree{root},
+	}
 }
 
+// Visit implements the tracing.Visitor interface to build visual trace tree
 func (v *treeVisitor) Visit(n *tracing.TreeNode) tracing.Visitor {
-	name := n.Raw.Name
-	fs := n.Raw.Fields
+	// Process node name (including name prefix fields)
+	nodeName := n.Raw.Name
+	fields := n.Raw.Fields
+	nodeName = v.enrichNodeName(nodeName, &fields)
 
-	i := 0
-	for i < len(fs) {
-		if strings.HasPrefix(fs[i].Key(), nameValuePrefix) {
-			name += fmt.Sprintf(":%v", fs[i].Value())
-			fs = append(fs[:i], fs[i+1:]...)
+	// Create current node and push to stack
+	currentNode := v.stack[len(v.stack)-1].AddBranch(nodeName)
+	v.stack = append(v.stack, currentNode)
+
+	// Add label information
+	v.addLabels(currentNode, n.Raw.Labels)
+
+	// Add field information
+	v.addFields(currentNode, fields)
+
+	// Recursively process child nodes
+	for _, childNode := range n.Children {
+		tracing.Walk(v, childNode)
+	}
+
+	// Pop the stack to return to parent node
+	v.stack = v.stack[:len(v.stack)-1]
+
+	return nil
+}
+
+// enrichNodeName extracts name prefix information from fields to enrich node name
+func (v *treeVisitor) enrichNodeName(baseName string, fields *fields.Fields) string {
+	for i := 0; i < len(*fields); {
+		if strings.HasPrefix((*fields)[i].Key(), nameValuePrefix) {
+			baseName += fmt.Sprintf(":%v", (*fields)[i].Value())
+			// Remove processed field
+			*fields = append((*fields)[:i], (*fields)[i+1:]...)
 			continue
 		}
-
 		i++
 	}
+	return baseName
+}
 
-	t := v.trees[len(v.trees)-1].AddBranch(name)
-	v.trees = append(v.trees, t)
-
-	if labels := n.Raw.Labels; len(labels) > 0 {
-		l := t.AddBranch("labels")
-		for _, ll := range n.Raw.Labels {
-			l.AddNode(ll.Key + ": " + ll.Value)
-		}
+// addLabels adds label information to current node
+func (v *treeVisitor) addLabels(node treeprint.Tree, labels []labels.Label) {
+	if len(labels) == 0 {
+		return
 	}
 
-	for _, k := range fs {
-		t.AddNode(k.String())
+	labelNode := node.AddBranch("labels")
+	for _, label := range labels {
+		labelNode.AddNode(fmt.Sprintf("%s: %s", label.Key, label.Value))
 	}
+}
 
-	for _, cn := range n.Children {
-		tracing.Walk(v, cn)
+// addFields adds field information to current node
+func (v *treeVisitor) addFields(node treeprint.Tree, fields []fields.Field) {
+	for _, field := range fields {
+		node.AddNode(field.String())
 	}
-
-	v.trees[len(v.trees)-1] = nil
-	v.trees = v.trees[:len(v.trees)-1]
-
-	return nil
 }

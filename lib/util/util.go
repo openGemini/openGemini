@@ -15,6 +15,7 @@
 package util
 
 import (
+	"errors"
 	"io"
 	"reflect"
 	"time"
@@ -31,10 +32,25 @@ const (
 	Warm      = 2
 	Cold      = 3
 	Moving    = 4
-	TierEnd   = 5
+	Cleared   = 5
+	NoClear   = 6
+	Clearing  = 7
+	TierEnd   = 8
 	True      = "true"
 	False     = "false"
 )
+
+type Item struct {
+	Name      string
+	Key       string
+	TagValue  string
+	SeriesKey string
+	Tsid      uint64
+}
+
+func ClearingWhileReading(startTier, endTier uint64) bool {
+	return startTier == Clearing || endTier == Clearing || (endTier == Cleared && endTier != startTier)
+}
 
 func IsHot(tier uint64) bool {
 	return tier == Hot
@@ -67,15 +83,18 @@ const (
 	DefaultFileSizeLimit              = 8 * 1024 * 1024 * 1024
 
 	DefaultEntryLogSizeLimit = 20 * 1024 * 1024 * 1024
+
+	MaxMeasurementLengthWithVersion = 255
+	// eg, version is:_0000
+	MeasurementVersionLength = 5
+	// the measurement name length should consider MeasurementVersionLength
+	MaxMeasurementLength = MaxMeasurementLengthWithVersion - MeasurementVersionLength
+
+	MaxTagNameLength   = 255
+	MaxTagValueLength  = 64 * 1024
+	MaxFieldNameLength = 255
+	// No explicit field value length
 )
-
-const MaxMeasurementLengthWithVersion = 255
-
-// eg, version is:_0000
-const MeasurementVersionLength = 5
-
-// the measurement name length should consider MeasurementVersionLength
-const MaxMeasurementLength = MaxMeasurementLengthWithVersion - MeasurementVersionLength
 
 type BasicType interface {
 	int64 | float64 | bool | string
@@ -214,132 +233,136 @@ func Bytes2Uint16Slice(b []byte) []uint16 {
 	if len(b) == 0 {
 		return nil
 	}
-	return unsafe.Slice((*uint16)(unsafe.Pointer(&b[0])), len(b)/Uint16SizeBytes)
+	return unsafe.Slice((*uint16)(unsafe.Pointer(&b[0])), cap(b)/Uint16SizeBytes)[:len(b)/Uint16SizeBytes]
 }
 
 func Uint16Slice2byte(b []uint16) []byte {
 	if len(b) == 0 {
 		return nil
 	}
-	return unsafe.Slice((*byte)(unsafe.Pointer(&b[0])), len(b)*Uint16SizeBytes)
+	return unsafe.Slice((*byte)(unsafe.Pointer(&b[0])), cap(b)*Uint16SizeBytes)[:len(b)*Uint16SizeBytes]
 }
 
 func Bytes2Uint32Slice(b []byte) []uint32 {
 	if len(b) == 0 {
 		return nil
 	}
-	return unsafe.Slice((*uint32)(unsafe.Pointer(&b[0])), len(b)/Uint32SizeBytes)
+	return unsafe.Slice((*uint32)(unsafe.Pointer(&b[0])), cap(b)/Uint32SizeBytes)[:len(b)/Uint32SizeBytes]
 }
 
 func Uint32Slice2byte(b []uint32) []byte {
 	if len(b) == 0 {
 		return nil
 	}
-	return unsafe.Slice((*byte)(unsafe.Pointer(&b[0])), len(b)*Uint32SizeBytes)
+	return unsafe.Slice((*byte)(unsafe.Pointer(&b[0])), cap(b)*Uint32SizeBytes)[:len(b)*Uint32SizeBytes]
 }
 
 func Bytes2Uint64Slice(b []byte) []uint64 {
 	if len(b) == 0 {
 		return nil
 	}
-	return unsafe.Slice((*uint64)(unsafe.Pointer(&b[0])), len(b)/Uint64SizeBytes)
+	return unsafe.Slice((*uint64)(unsafe.Pointer(&b[0])), cap(b)/Uint64SizeBytes)[:len(b)/Uint64SizeBytes]
 }
 
 func Uint64Slice2byte(b []uint64) []byte {
 	if len(b) == 0 {
 		return nil
 	}
-	return unsafe.Slice((*byte)(unsafe.Pointer(&b[0])), len(b)*Uint64SizeBytes)
+	return unsafe.Slice((*byte)(unsafe.Pointer(&b[0])), cap(b)*Uint64SizeBytes)[:len(b)*Uint64SizeBytes]
 }
 
 func Bytes2BooleanSlice(b []byte) []bool {
 	if len(b) == 0 {
 		return nil
 	}
-	return unsafe.Slice((*bool)(unsafe.Pointer(&b[0])), len(b)/BooleanSizeBytes)
+	return unsafe.Slice((*bool)(unsafe.Pointer(&b[0])), cap(b)/BooleanSizeBytes)[:len(b)/BooleanSizeBytes]
 }
 
 func BooleanSlice2byte(b []bool) []byte {
 	if len(b) == 0 {
 		return nil
 	}
-	return unsafe.Slice((*byte)(unsafe.Pointer(&b[0])), len(b)*BooleanSizeBytes)
+	return unsafe.Slice((*byte)(unsafe.Pointer(&b[0])), cap(b)*BooleanSizeBytes)[:len(b)*BooleanSizeBytes]
 }
 func Bytes2Int64Slice(b []byte) []int64 {
 	if len(b) == 0 {
 		return nil
 	}
-	return unsafe.Slice((*int64)(unsafe.Pointer(&b[0])), len(b)/Int64SizeBytes)
+	return unsafe.Slice((*int64)(unsafe.Pointer(&b[0])), cap(b)/Int64SizeBytes)[:len(b)/Int64SizeBytes]
 }
 
 func Int64Slice2byte(b []int64) []byte {
 	if len(b) == 0 {
 		return nil
 	}
-	return unsafe.Slice((*byte)(unsafe.Pointer(&b[0])), len(b)*Int64SizeBytes)
+	return unsafe.Slice((*byte)(unsafe.Pointer(&b[0])), cap(b)*Int64SizeBytes)[:len(b)*Int64SizeBytes]
 }
 
 func Bytes2Int32Slice(b []byte) []int32 {
 	if len(b) == 0 {
 		return nil
 	}
-	return unsafe.Slice((*int32)(unsafe.Pointer(&b[0])), len(b)/Int32SizeBytes)
+	return unsafe.Slice((*int32)(unsafe.Pointer(&b[0])), cap(b)/Int32SizeBytes)[:len(b)/Int32SizeBytes]
 }
 
 func Int32Slice2byte(b []int32) []byte {
 	if len(b) == 0 {
 		return nil
 	}
-	return unsafe.Slice((*byte)(unsafe.Pointer(&b[0])), len(b)*Int32SizeBytes)
+	return unsafe.Slice((*byte)(unsafe.Pointer(&b[0])), cap(b)*Int32SizeBytes)[:len(b)*Int32SizeBytes]
 }
 
 func Bytes2Int16Slice(b []byte) []int16 {
 	if len(b) == 0 {
 		return nil
 	}
-	return unsafe.Slice((*int16)(unsafe.Pointer(&b[0])), len(b)/Int16SizeBytes)
+	return unsafe.Slice((*int16)(unsafe.Pointer(&b[0])), cap(b)/Int16SizeBytes)[:len(b)/Int16SizeBytes]
 }
 
 func Int16Slice2byte(b []int16) []byte {
 	if len(b) == 0 {
 		return nil
 	}
-	return unsafe.Slice((*byte)(unsafe.Pointer(&b[0])), len(b)*Int16SizeBytes)
+	return unsafe.Slice((*byte)(unsafe.Pointer(&b[0])), cap(b)*Int16SizeBytes)[:len(b)*Int16SizeBytes]
 }
 
 func Bytes2Int8Slice(b []byte) []int8 {
 	if len(b) == 0 {
 		return nil
 	}
-	return unsafe.Slice((*int8)(unsafe.Pointer(&b[0])), len(b)/Int8SizeBytes)
+	return unsafe.Slice((*int8)(unsafe.Pointer(&b[0])), cap(b)/Int8SizeBytes)[:len(b)/Int8SizeBytes]
 }
 
 func Bytes2Float32Slice(b []byte) []float32 {
 	if len(b) == 0 {
 		return nil
 	}
-	return unsafe.Slice((*float32)(unsafe.Pointer(&b[0])), len(b)/Float32SizeBytes)
+	return unsafe.Slice((*float32)(unsafe.Pointer(&b[0])), cap(b)/Float32SizeBytes)[:len(b)/Float32SizeBytes]
 }
 
 func Float32Slice2byte(b []float32) []byte {
 	if len(b) == 0 {
 		return nil
 	}
-	return unsafe.Slice((*byte)(unsafe.Pointer(&b[0])), len(b)*Float32SizeBytes)
+	return unsafe.Slice((*byte)(unsafe.Pointer(&b[0])), cap(b)*Float32SizeBytes)[:len(b)*Float32SizeBytes]
 }
 
 func Bytes2Float64Slice(b []byte) []float64 {
-	if len(b) == 0 {
+	if cap(b) == 0 {
 		return nil
 	}
-	return unsafe.Slice((*float64)(unsafe.Pointer(&b[0])), len(b)/Float64SizeBytes)
+	size := len(b)
+	if size == 0 {
+		b = b[:1]
+	}
+	return unsafe.Slice((*float64)(unsafe.Pointer(&b[0])), cap(b)/Float64SizeBytes)[:size/Float64SizeBytes]
 }
 
 func Float64Slice2byte(b []float64) []byte {
 	if len(b) == 0 {
 		return nil
 	}
-	return unsafe.Slice((*byte)(unsafe.Pointer(&b[0])), len(b)*Float64SizeBytes)
+	return unsafe.Slice((*byte)(unsafe.Pointer(&b[0])), cap(b)*Float64SizeBytes)[:len(b)*Float64SizeBytes]
 }
 
 type TimeRange struct {
@@ -352,6 +375,10 @@ func (t TimeRange) Overlaps(min, max int64) bool {
 
 func (t TimeRange) Contains(min, max int64) bool {
 	return t.Min <= min && t.Max >= max
+}
+
+func Bytes2Value[T any](b []byte, v *T) {
+	*v = *(*T)(unsafe.Pointer(&b[0]))
 }
 
 func Str2bytes(s string) []byte {
@@ -370,6 +397,14 @@ func Bool2str(b bool) string {
 		return True
 	} else {
 		return False
+	}
+}
+
+func Bool2Byte(b bool) byte {
+	if b {
+		return 1
+	} else {
+		return 0
 	}
 }
 
@@ -525,4 +560,40 @@ func UnionSortedSliceInt(slice1, slice2 []int) []int {
 		j++
 	}
 	return union
+}
+
+// FindIntersectionIndex finds the intersection indices of two sorted slices based on a custom comparison function.
+func FindIntersectionIndex[T1, T2 any](slice1 []T1, slice2 []T2,
+	compareFunc func(T1, T2) int, callbackFunc func(i, j int) error) error {
+	if compareFunc == nil || callbackFunc == nil {
+		return errors.New("compareFunc or callbackFunc cannot be nil")
+	}
+
+	i, j := 0, 0
+	s1Len := len(slice1)
+	s2Len := len(slice2)
+	for i < s1Len && j < s2Len {
+		switch compareFunc(slice1[i], slice2[j]) {
+		case 0:
+			err := callbackFunc(i, j)
+			if err != nil {
+				return err
+			}
+			i++
+			j++
+		case -1:
+			i++
+		case 1:
+			j++
+		default:
+			return errors.New("invalid compareFunc result")
+		}
+	}
+	return nil
+}
+
+func SplitUint64(original uint64) (high, low uint32) {
+	low = uint32(original & 0xFFFFFFFF)
+	high = uint32(original >> 32)
+	return
 }

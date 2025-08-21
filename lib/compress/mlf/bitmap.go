@@ -72,10 +72,10 @@ func (c *BitMap) Marshal(dst []byte) []byte {
 	return dst
 }
 
-func (c *BitMap) Unmarshal(data []byte, size int) []byte {
+func (c *BitMap) Unmarshal(data []byte, size int) {
 	c.flag = data[0]
 	if c.flag == bitMapEmpty {
-		return data[1:]
+		return
 	}
 
 	n := c.getSize(size) + 1
@@ -87,8 +87,6 @@ func (c *BitMap) Unmarshal(data []byte, size int) []byte {
 			(data[i]>>2)&3,
 			data[i]&3)
 	}
-
-	return data[n:]
 }
 
 func (c *BitMap) getSize(size int) int {

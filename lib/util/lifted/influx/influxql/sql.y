@@ -26,11 +26,12 @@ import (
 )
 
 const DefaultQueryTimeout = time.Duration(0)
+// Some large number, that should be enough for real-life queries,
+// but prevents exploiting any lurking odd behaviour in codebase.
+const MaxAstDepth = 50000
 
-func setParseTree(yylex interface{}, stmts Statements) {
-    for _,stmt :=range stmts{
-        yylex.(*YyParser).Query.Statements = append(yylex.(*YyParser).Query.Statements, stmt)
-    }
+func setParseTree(yylex interface{}, query Query) {
+    yylex.(*YyParser).Query = query
 }
 
 func deal_Fill (fill interface{})  (FillOption , interface{},bool) {
@@ -57,6 +58,35 @@ func deal_Fill (fill interface{})  (FillOption , interface{},bool) {
 	}
 }
 
+// Function that returns maximum depth of list of nodes, that may be nil.
+func maxDepth(nodes ...nodeGuard) int {
+    depth := 0
+    for _, n := range nodes {
+        if n != nil {
+            depth = max(depth, n.Depth())
+        }
+    }
+    return depth
+}
+
+// Depth-check validator: inspect and either return or raise error.
+//
+// To be used during construction as either of:
+//    Obj{... depth: depthCheck(yylex, 1+1+...)}
+//    $$.depth = depthCheck(yylex, ...)
+// or as validator for lists construction as either of
+//    depthCheck(yylex, len($$))
+//    depthCheck(yylex, $$.Depth())
+//
+// NOTE: While top-level only check (at ALL_QUERIES) is sufficient
+// to catch deep trees, check should be done everywhere to protect
+// from intermediate large subtree construction!
+func depthCheck(yylex interface{}, depth int) int {
+    if depth > MaxAstDepth {
+        yylex.(*YyParser).Error("AST complexity overflow")
+    }
+    return depth
+}
 
 %}
 
@@ -66,14 +96,16 @@ func deal_Fill (fill interface{})  (FillOption , interface{},bool) {
     str                 string
     query               Query
     field               *Field
-    fields              Fields
-    sources             Sources
+    fields              fieldsList
+    sources             sourcesList
     source              Source
+    joinType            JoinType
+    unionType           UnionType
     sortfs              SortFields
     sortf               *SortField
     ment                *Measurement
     subQuery            *SubQuery
-    dimens              Dimensions
+    dimens              dimensionsList
     dimen               *Dimension
     int                 int
     int64               int64
@@ -100,24 +132,29 @@ func deal_Fill (fill interface{})  (FillOption , interface{},bool) {
     databasePolicy      DatabasePolicy
     cmOption            *CreateMeasurementStatementOption
     cte                 *CTE
-    ctes                CTES
+    ctes                ctesList
+    cypherCondition     *CypherCondition
+    tableFunctionField  *TableFunctionField
+    tableFunctionFields *TableFunctionFields
+    tableFunction       *TableFunction
+
 }
 
-%token <str>    FROM MEASUREMENT INTO ON SELECT WHERE AS GROUP BY ORDER LIMIT OFFSET SLIMIT SOFFSET SHOW CREATE FULL PRIVILEGES OUTER JOIN
-                TO IN NOT EXISTS REVOKE FILL DELETE WITH ENGINETYPE COLUMNSTORE TSSTORE ALL ANY PASSWORD NAME REPLICANUM ALTER USER USERS
-                DATABASES DATABASE MEASUREMENTS RETENTION POLICIES POLICY DURATION DEFAULT SHARD INDEX GRANT HOT WARM TYPE SET FOR GRANTS
+%token <str>    FROM MEASUREMENT INTO ON SELECT WHERE AS GROUP BY ORDER LIMIT OFFSET SLIMIT SOFFSET SHOW CREATE FULL PRIVILEGES OUTER JOIN UNION
+                TO IN NOT NOTIN EXISTS REVOKE FILL DELETE WITH ENGINETYPE COLUMNSTORE TSSTORE ALL ANY PASSWORD NAME REPLICANUM ALTER USER USERS
+                DATABASES DATABASE MEASUREMENTS RETENTION POLICIES POLICY DURATION DEFAULT SHARD INDEX GRANT HOT WARM INDEXCOLD TYPE SET FOR GRANTS
                 REPLICATION SERIES DROP CASE WHEN THEN ELSE BEGIN END TRUE FALSE TAG ATTRIBUTE FIELD KEYS VALUES KEY EXPLAIN ANALYZE EXACT CARDINALITY SHARDKEY
-                PRIMARYKEY SORTKEY PROPERTY COMPACT
+                PRIMARYKEY SORTKEY PROPERTY COMPACT SHARDMERGE
                 CONTINUOUS DIAGNOSTICS QUERIES QUERIE SHARDS STATS SUBSCRIPTIONS SUBSCRIPTION GROUPS INDEXTYPE INDEXLIST SEGMENT KILL
                 EVERY RESAMPLE
                 DOWNSAMPLE DOWNSAMPLES SAMPLEINTERVAL TIMEINTERVAL STREAM DELAY STREAMS
                 QUERY PARTITION
                 TOKEN TOKENIZERS MATCH LIKE MATCHPHRASE CONFIG CONFIGS CLUSTER IPINRANGE
                 REPLICAS DETAIL DESTINATIONS
-                SCHEMA INDEXES AUTO EXCEPT
+                SCHEMA INDEXES AUTO EXCEPT INNER LEFT RIGHT GRAPH NODE EDGE TTL RETURN
 %token <bool>   DESC ASC
-%token <str>    COMMA SEMICOLON LPAREN RPAREN REGEX
-%token <int>    EQ NEQ LT LTE GT GTE DOT DOUBLECOLON NEQREGEX EQREGEX
+%token <str>    COMMA SEMICOLON LPAREN RPAREN REGEX LBRACKET RBRACKET LSQUARE RSQUARE COLON
+%token <int>    EQ NEQ LT LTE GT GTE DOT DOUBLECOLON NEQREGEX EQREGEX MULTIHOP
 %token <str>    IDENT
 %token <int64>  INTEGER
 %token <tdur>   DURATIONVAL
@@ -129,10 +166,12 @@ func deal_Fill (fill interface{})  (FillOption , interface{},bool) {
 %left  <int>  AND OR
 %left  <int>  ADD SUB BITWISE_OR BITWISE_XOR
 %left  <int>  MUL DIV MOD BITWISE_AND
+%left  UNION
 %right UMINUS
 
 %type <stmt>                        STATEMENT SHOW_DATABASES_STATEMENT CREATE_DATABASE_STATEMENT WITH_CLAUSES CREATE_USER_STATEMENT
-                                    SELECT_STATEMENT SHOW_MEASUREMENTS_STATEMENT SHOW_MEASUREMENTS_DETAIL_STATEMENT SHOW_RETENTION_POLICIES_STATEMENT
+                                    SELECT_STATEMENT  SELECT_NO_PARENS SELECT_WITH_PARENS BASE_SELECT_STATEMENT SIMPLE_SELECT_STATEMENT
+                                    SHOW_MEASUREMENTS_STATEMENT SHOW_MEASUREMENTS_DETAIL_STATEMENT SHOW_RETENTION_POLICIES_STATEMENT
                                     CREATE_RENTRENTION_POLICY_STATEMENT RP_DURATION_OPTIONS SHOW_SERIES_STATEMENT
                                     SHOW_USERS_STATEMENT DROP_SERIES_STATEMENT DROP_DATABASE_STATEMENT DELETE_SERIES_STATEMENT
                                     ALTER_RENTRENTION_POLICY_STATEMENT
@@ -146,15 +185,16 @@ func deal_Fill (fill interface{})  (FillOption , interface{},bool) {
                                     CREATE_DOWNSAMPLE_STATEMENT DOWNSAMPLE_INTERVALS DROP_DOWNSAMPLE_STATEMENT SHOW_DOWNSAMPLE_STATEMENT
                                     CREATE_STREAM_STATEMENT SHOW_STREAM_STATEMENT DROP_STREAM_STATEMENT COLUMN_LISTS SHOW_MEASUREMENT_KEYS_STATEMENT
                                     SHOW_QUERIES_STATEMENT KILL_QUERY_STATEMENT SHOW_CONFIGS_STATEMENT SET_CONFIG_STATEMENT SHOW_CLUSTER_STATEMENT
-                                    CREATE_SUBSCRIPTION_STATEMENT SHOW_SUBSCRIPTION_STATEMENT DROP_SUBSCRIPTION_STATEMENT WITH_SELECT_STATEMENT
-%type <fields>                      COLUMN_CLAUSES IDENTS
-%type <field>                       COLUMN_CLAUSE
-%type <stmts>                       ALL_QUERIES ALL_QUERY
-%type <sources>                     FROM_CLAUSE TABLE_NAMES SUBQUERY_CLAUSE INTO_CLAUSE
-%type <source>                      JOIN_CLAUSE
+                                    CREATE_SUBSCRIPTION_STATEMENT SHOW_SUBSCRIPTION_STATEMENT DROP_SUBSCRIPTION_STATEMENT GRAPH_STATEMENT
+%type <fields>                      COLUMN_CLAUSES DOWNSAMPLE_CALLS
+%type <field>                       COLUMN_CLAUSE DOWNSAMPLE_CALL
+%type <query>                       ALL_QUERIES ALL_QUERY
+%type <sources>                     FROM_CLAUSE FROM_LIST FROM_SOURCE SUBQUERY_CLAUSE INTO_CLAUSE JOIN_CLAUSE
+%type <joinType>                    JOIN_TYPE
+%type <unionType>                   UNION_TYPE
 %type <ment>                        TABLE_OPTION  TABLE_NAME_WITH_OPTION TABLE_CASE MEASUREMENT_WITH
-%type <expr>                        WHERE_CLAUSE OR_CONDITION AND_CONDITION CONDITION OPERATION_EQUAL COLUMN_VAREF COLUMN CONDITION_COLUMN TAG_KEYS
-                                    CASE_WHEN_CASE CASE_WHEN_CASES
+%type <expr>                        WHERE_CLAUSE OR_CONDITION AND_CONDITION CONDITION OPERATION_EQUAL COLUMN_VAREF COLUMN COLUMN_CALL CONDITION_COLUMN TAG_KEYS
+                                    CASE_WHEN_CASE CASE_WHEN_CASES ADDITIONAL_CONDITION
 %type <int>                         CONDITION_OPERATOR
 %type <dataType>                    COLUMN_VAREF_TYPE
 %type <sortfs>                      SORTFIELDS ORDER_CLAUSES
@@ -168,8 +208,9 @@ func deal_Fill (fill interface{})  (FillOption , interface{},bool) {
 %type <strSlice>                    SHARDKEYLIST CMOPTION_SHARDKEY INDEX_LIST PRIMARYKEY_LIST SORTKEY_LIST ALL_DESTINATION CMOPTION_PRIMARYKEY CMOPTION_SORTKEY
 %type <strSlices>                   MEASUREMENT_PROPERTYS MEASUREMENT_PROPERTY MEASUREMENT_PROPERTYS_LIST CMOPTION_PROPERTIES
 %type <location>                    TIME_ZONE
-%type <indexType>                   INDEX_TYPE INDEX_TYPES CMOPTION_INDEXTYPE_TS CMOPTION_INDEXTYPE_CS
+%type <indexType>                   INDEX_TYPE INDEX_TYPES INDEX_TYPE_LIST CMOPTION_INDEXTYPE_TS CMOPTION_INDEXTYPE_CS
 %type <cqsp>                        SAMPLE_POLICY
+%type <tdur>                        TTL_CLAUSE_OPT DELAY_CLAUSE_OPT
 %type <tdurs>                       DURATIONVALS
 %type <cqsp>                        SAMPLE_POLICY
 %type <int64>                       INTEGERPARA CMOPTION_SHARDNUM
@@ -182,31 +223,41 @@ func deal_Fill (fill interface{})  (FillOption , interface{},bool) {
 %type <str>                         CMOPTION_ENGINETYPE_TS CMOPTION_ENGINETYPE_CS
 %type <ctes>                        CTE_CLAUSES
 %type <cte>                         CTE_CLAUSE
+%type <cypherCondition>             CYPHER_CONDITION
+%type <tableFunctionField>          TABLE_FUNCTION_PARAM
+%type <tableFunction>               TABLE_FUNCTION_PARAMS TABLE_FUNCTION
 
 %%
 
 ALL_QUERIES:
-        ALL_QUERY
-        {
-            setParseTree(yylex, $1)
-        }
+    ALL_QUERY
+    {
+        $$ = $1
+        setParseTree(yylex, $$)
+    }
 
 ALL_QUERY:
     STATEMENT
     {
-        $$ = []Statement{$1}
+        $$ = Query{
+            Statements: []Statement{$1},
+            depth: depthCheck(yylex, 2 + $1.Depth()),
+        }
     }
     |ALL_QUERY SEMICOLON
     {
-        if len($1) >= 1{
+        if len($1.Statements) >= 1{
             $$ = $1
         }else{
             yylex.Error("excrescent semicolo")
         }
     }
-    |ALL_QUERY SEMICOLON  STATEMENT
+    |ALL_QUERY SEMICOLON STATEMENT
     {
-        $$ = append($1,$3)
+        q := $1
+        q.Statements = append(q.Statements, $3)
+        q.depth = depthCheck(yylex, max(q.depth, len(q.Statements) + $3.Depth()))
+        $$ = q
     }
 
 
@@ -432,26 +483,67 @@ STATEMENT:
     {
     	$$ = $1
     }
-    |WITH_SELECT_STATEMENT
+
+SELECT_STATEMENT:
+    SELECT_NO_PARENS		%prec UMINUS
+    {
+        $$ = $1
+    }
+	|SELECT_WITH_PARENS		%prec UMINUS
     {
         $$ = $1
     }
 
-SELECT_STATEMENT:
+SELECT_WITH_PARENS:
+    LPAREN SELECT_NO_PARENS RPAREN
+    {
+        $$ = $2
+    }
+    |LPAREN SELECT_WITH_PARENS RPAREN
+    {
+        $$ = $2
+    }
+
+SELECT_NO_PARENS:
+    SIMPLE_SELECT_STATEMENT
+    {
+        $$ = $1
+    }
+    |WITH CTE_CLAUSES BASE_SELECT_STATEMENT
+    {
+        $$ = &WithSelectStatement{
+            CTEs: $2.ctes,
+            Query: $3.(*SelectStatement),
+            depth: depthCheck(yylex, 1 + maxDepth($2, $3)),
+        }
+    }
+
+BASE_SELECT_STATEMENT:
+    SIMPLE_SELECT_STATEMENT
+    {
+        $$ = $1
+    }
+    |SELECT_WITH_PARENS
+    {
+        $$ = $1
+    }
+
+SIMPLE_SELECT_STATEMENT:
     SELECT COLUMN_CLAUSES INTO_CLAUSE FROM_CLAUSE WHERE_CLAUSE GROUP_BY_CLAUSE EXCEPT_CLAUSE FILL_CLAUSE ORDER_CLAUSES OPTION_CLAUSES TIME_ZONE
     {
-        stmt := &SelectStatement{}
-        stmt.Fields = $2
-        stmt.Sources = $4
-        stmt.Dimensions = $6
-        stmt.ExceptDimensions = $7
-        stmt.Condition = $5
-        stmt.SortFields = $9
-        stmt.Limit = $10[0]
-        stmt.Offset = $10[1]
-        stmt.SLimit = $10[2]
-        stmt.SOffset = $10[3]
-
+        stmt := &SelectStatement{
+            Fields: $2.fields,
+            Sources: $4.sources,
+            Dimensions: $6.dims,
+            ExceptDimensions: $7.dims,
+            Condition: $5,
+            SortFields: $9,
+            Limit: $10[0],
+            Offset: $10[1],
+            SLimit: $10[2],
+            SOffset: $10[3],
+            depth: depthCheck(yylex, 1 + maxDepth($2, $4, $5, $6, $7, $9)),
+        }
         tempfill,tempfillvalue,fillflag := deal_Fill($8)
         if fillflag==false{
             yylex.Error("Invalid characters in fill")
@@ -465,34 +557,38 @@ SELECT_STATEMENT:
 		}
 	})
         stmt.Location = $11
-        if len($3) > 1{
+        if len($3.sources) > 1{
             yylex.Error("into clause only support one measurement")
-        }else if len($3) == 1{
-            mst,ok := $3[0].(*Measurement)
+        }else if len($3.sources) == 1{
+            mst,ok := $3.sources[0].(*Measurement)
             if !ok{
                  yylex.Error("into clause only support measurement clause")
             }
             mst.IsTarget = true
             stmt.Target = &Target{
             	Measurement: mst,
+                depth: depthCheck(yylex, 2),
             }
+            stmt.depth = depthCheck(yylex, max(stmt.depth, 1 + stmt.Target.depth))
         }
         $$ = stmt
     }
     |SELECT HINT COLUMN_CLAUSES INTO_CLAUSE FROM_CLAUSE WHERE_CLAUSE GROUP_BY_CLAUSE EXCEPT_CLAUSE FILL_CLAUSE ORDER_CLAUSES OPTION_CLAUSES TIME_ZONE
     {
-        stmt := &SelectStatement{}
-        stmt.Hints = $2
-        stmt.Fields = $3
-        stmt.Sources = $5
-        stmt.Dimensions = $7
-        stmt.ExceptDimensions = $8
-        stmt.Condition = $6
-        stmt.SortFields = $10
-        stmt.Limit = $11[0]
-        stmt.Offset = $11[1]
-        stmt.SLimit = $11[2]
-        stmt.SOffset = $11[3]
+        stmt := &SelectStatement{
+            Hints: $2,
+            Fields: $3.fields,
+            Sources: $5.sources,
+            Dimensions: $7.dims,
+            ExceptDimensions: $8.dims,
+            Condition: $6,
+            SortFields: $10,
+            Limit: $11[0],
+            Offset: $11[1],
+            SLimit: $11[2],
+            SOffset: $11[3],
+            depth: depthCheck(yylex, 1 + maxDepth($3, $5, $6, $7, $8, $10)),
+        }
 
         tempfill,tempfillvalue,fillflag := deal_Fill($9)
         if fillflag==false{
@@ -507,32 +603,36 @@ SELECT_STATEMENT:
 		}
 	})
         stmt.Location = $12
-        if len($4) > 1{
+        if len($4.sources) > 1{
             yylex.Error("into clause only support one measurement")
-        }else if len($4) == 1{
-            mst,ok := $4[0].(*Measurement)
+        }else if len($4.sources) == 1{
+            mst,ok := $4.sources[0].(*Measurement)
             if !ok{
                  yylex.Error("into clause only support measurement clause")
             }
             mst.IsTarget = true
             stmt.Target = &Target{
             	Measurement: mst,
+                depth: depthCheck(yylex, 2),
             }
+            stmt.depth = depthCheck(yylex, max(stmt.depth, 1 + stmt.Target.depth))
         }
         $$ = stmt
     }
     |SELECT COLUMN_CLAUSES WHERE_CLAUSE GROUP_BY_CLAUSE EXCEPT_CLAUSE FILL_CLAUSE ORDER_CLAUSES OPTION_CLAUSES TIME_ZONE
     {
-        stmt := &SelectStatement{}
-        stmt.Fields = $2
-        stmt.Dimensions = $4
-        stmt.ExceptDimensions = $5
-        stmt.Condition = $3
-        stmt.SortFields = $7
-        stmt.Limit = $8[0]
-        stmt.Offset = $8[1]
-        stmt.SLimit = $8[2]
-        stmt.SOffset = $8[3]
+        stmt := &SelectStatement{
+            Fields: $2.fields,
+            Dimensions: $4.dims,
+            ExceptDimensions: $5.dims,
+            Condition: $3,
+            SortFields: $7,
+            Limit: $8[0],
+            Offset: $8[1],
+            SLimit: $8[2],
+            SOffset: $8[3],
+            depth: depthCheck(yylex, 1 + maxDepth($2, $3, $4, $5, $7)),
+        }
 
         tempfill,tempfillvalue,fillflag := deal_Fill($6)
         if fillflag==false{
@@ -549,42 +649,204 @@ SELECT_STATEMENT:
         stmt.Location = $9
         $$ = stmt
     }
+    |GRAPH_STATEMENT
+    {
+        $$ = $1
+    }
+    |BASE_SELECT_STATEMENT UNION UNION_TYPE BASE_SELECT_STATEMENT
+    {
+        stmt1,ok := $1.(*SelectStatement)
+        if !ok{
+            yylex.Error("Expected SelectStatement on left of UNION")
+        }
+        subquery1 := &SubQuery{Statement: stmt1, Alias: "", depth: depthCheck(yylex, 1+stmt1.Depth())}
+        stmt2,ok := $4.(*SelectStatement)
+        if !ok{
+            yylex.Error("Expected SelectStatement on right of UNION")
+        }
+        subquery2 := &SubQuery{Statement: stmt2, Alias: "", depth: depthCheck(yylex, 1+stmt2.Depth())}
 
+        union := &Union{
+          LSrc: subquery1,
+          UnionType: $3,
+          RSrc: subquery2,
+          depth: depthCheck(yylex, max(subquery1.Depth(), subquery2.Depth())),
+        }
+        $$ = &SelectStatement{
+            Fields: []*Field{{Expr: &Wildcard{Type:Token(MUL)}, depth: depthCheck(yylex, 2)}},
+            Sources: []Source{union},
+            IsRawQuery: true,
+            depth: depthCheck(yylex, 1 + union.Depth()),
+        }
+    }
+
+
+UNION_TYPE:
+    {
+        $$ = UnionDistinct
+    }
+    |ALL
+    {
+        $$ = UnionAll
+    }
+    |BY NAME
+    {
+        $$ = UnionDistinctByName
+    }
+    |ALL BY NAME
+    {
+        $$ = UnionAllByName
+    }
+
+GRAPH_STATEMENT:
+    GRAPH INTEGER STRING NODE CONDITION EDGE CONDITION
+    {
+        $$ = &GraphStatement{HopNum:int($2), StartNodeId:$3, NodeCondition:$5, EdgeCondition:$7, depth: depthCheck(yylex, 1+maxDepth($5, $7))}
+    }
+    |GRAPH INTEGER STRING NODE CONDITION
+    {
+        $$ = &GraphStatement{HopNum:int($2), StartNodeId:$3, NodeCondition:$5, depth: depthCheck(yylex, 1+maxDepth($5))}
+    }
+    |GRAPH INTEGER STRING EDGE CONDITION
+    {
+        $$ = &GraphStatement{HopNum:int($2), StartNodeId:$3, EdgeCondition:$5, depth: depthCheck(yylex, 1+maxDepth($5))}
+    }
+    |GRAPH INTEGER STRING
+    {
+        $$ = &GraphStatement{HopNum:int($2), StartNodeId:$3, depth: depthCheck(yylex, 1)}
+    }
+    |GRAPH
+    {
+        $$ = &GraphStatement{depth: depthCheck(yylex, 1)}
+    }
+    |MATCH IDENT EQ LPAREN IDENT LBRACKET IDENT COLON STRING RBRACKET RPAREN SUB LSQUARE IDENT MULTIHOP INTEGER RSQUARE SUB LPAREN RPAREN CYPHER_CONDITION RETURN IDENT
+    {
+        stmt := &GraphStatement{depth: depthCheck(yylex, 1)}
+        stmt.HopNum = int($16)
+        if !strings.EqualFold($7, "uid")  {
+            yylex.Error("cypher multi-hop-filter stmt node.uid ident err")
+        }
+        stmt.StartNodeId = $9
+        if $21 != nil {
+            c := $21
+            if $2 != c.PathName && c.PathName != ""  {
+                yylex.Error("cypher multi-hop-filter stmt PathName err1")
+            }
+            stmt.NodeCondition = c.NodeCondition
+            stmt.EdgeCondition = c.EdgeCondition
+            stmt.AdditionalCondition = c.AdditionalCondition
+            stmt.depth = depthCheck(yylex, max(stmt.depth, 1 + maxDepth(stmt.NodeCondition, stmt.EdgeCondition, stmt.AdditionalCondition)))
+        }
+        if $2 != $23 {
+            yylex.Error("cypher multi-hop-filter stmt PathName err2")
+        }
+        $$ = stmt
+    }
+
+CYPHER_CONDITION:
+    WHERE CONDITION
+    {
+        cc := &CypherCondition{}
+        cc.AdditionalCondition = $2
+        $$ = cc
+    }
+    |WHERE ALL LPAREN IDENT IN IDENT LPAREN IDENT RPAREN WHERE CONDITION RPAREN ADDITIONAL_CONDITION
+    {
+        cc := &CypherCondition{}
+        cc.PathName = $8
+        if strings.EqualFold($6, "nodes") {
+            cc.NodeCondition = $11
+        } else if strings.EqualFold($6, "edges") {
+            cc.EdgeCondition = $11
+        } else  {
+            yylex.Error("CYPHER_CONDITION nodes/edges func err")
+        }
+        if $13 != nil {
+           cc.AdditionalCondition = $13
+        }
+        $$ = cc
+    }
+    |WHERE ALL LPAREN IDENT IN IDENT LPAREN IDENT RPAREN WHERE CONDITION RPAREN AND ALL LPAREN IDENT IN IDENT LPAREN IDENT RPAREN WHERE CONDITION RPAREN ADDITIONAL_CONDITION
+    {
+        if $8 != $20 {
+            yylex.Error("CYPHER_CONDITION PathName err")
+        }
+        if $6 == $18 {
+            yylex.Error("CYPHER_CONDITION funcName same err")
+        }
+        cc := &CypherCondition{}
+        cc.PathName = $8
+        if strings.EqualFold($6, "nodes") {
+            cc.NodeCondition = $11
+        } else if strings.EqualFold($6, "edges") {
+            cc.EdgeCondition = $11
+        } else  {
+            yylex.Error("CYPHER_CONDITION nodes/edges func err1")
+        }
+
+        if strings.EqualFold($18, "nodes") {
+            cc.NodeCondition = $23
+        } else if strings.EqualFold($18, "edges") {
+            cc.EdgeCondition = $23
+        } else  {
+            yylex.Error("CYPHER_CONDITION nodes/edges func err2")
+        }
+        if $25 != nil {
+           cc.AdditionalCondition = $25
+        }
+        $$ = cc
+    }
+    |
+    {
+        $$ = nil
+    }
+
+ADDITIONAL_CONDITION:
+    {
+        $$ = nil
+    }
+    |AND CONDITION
+    {
+        $$ = $2
+    }
 
 COLUMN_CLAUSES:
     COLUMN_CLAUSE
     {
-        $$ = []*Field{$1}
+        $$ = fieldsList{fields:[]*Field{$1}, depth: depthCheck(yylex, 1 + $1.Depth())}
     }
-    |COLUMN_CLAUSE COMMA COLUMN_CLAUSES
+    |COLUMN_CLAUSES COMMA COLUMN_CLAUSE
     {
-        $$ = append([]*Field{$1},$3...)
+        fl := $1
+        fl.fields = append(fl.fields, $3)
+        fl.depth = depthCheck(yylex, max(fl.depth, len(fl.fields) + $3.Depth()))
+        $$ = fl
     }
 
 COLUMN_CLAUSE:
     MUL
     {
-        $$ = &Field{Expr:&Wildcard{Type:Token($1)}}
+        $$ = &Field{Expr:&Wildcard{Type:Token($1)}, depth: depthCheck(yylex, 2)}
     }
     |MUL DOUBLECOLON TAG
     {
-    	$$ = &Field{Expr:&Wildcard{Type:TAG}}
+    	$$ = &Field{Expr:&Wildcard{Type:TAG}, depth: depthCheck(yylex, 2)}
     }
     |MUL DOUBLECOLON FIELD
     {
-    	$$ = &Field{Expr:&Wildcard{Type:FIELD}}
+    	$$ = &Field{Expr:&Wildcard{Type:FIELD}, depth: depthCheck(yylex, 2)}
     }
     |COLUMN
     {
-        $$ = &Field{Expr: $1}
+        $$ = &Field{Expr: $1, depth: depthCheck(yylex, 1 + $1.Depth())}
     }
     |COLUMN AS IDENT
     {
-        $$ = &Field{Expr: $1, Alias:$3}
+        $$ = &Field{Expr: $1, Alias:$3, depth: depthCheck(yylex, 1 + $1.Depth())}
     }
     |COLUMN AS STRING
     {
-        $$ = &Field{Expr: $1, Alias:$3}
+        $$ = &Field{Expr: $1, Alias:$3, depth: depthCheck(yylex, 1 + $1.Depth())}
     }
 
 CASE_WHEN_CASES:
@@ -592,105 +854,65 @@ CASE_WHEN_CASES:
     {
     	$$ = $1
     }
-    |CASE_WHEN_CASE CASE_WHEN_CASES
+    |CASE_WHEN_CASES CASE_WHEN_CASE
     {
-    	c := $1.(*CaseWhenExpr)
-    	c.Conditions = append(c.Conditions, $2.(*CaseWhenExpr).Conditions...)
-    	c.Assigners = append(c.Assigners, $2.(*CaseWhenExpr).Assigners...)
+        newcase := $2.(*CaseWhenExpr)
+        c := $1.(*CaseWhenExpr)
+        c.depth = depthCheck(yylex, max(c.depth, len(c.Conditions) + newcase.depth))
+        c.Conditions = append(c.Conditions, newcase.Conditions...)
+        c.Assigners = append(c.Assigners, newcase.Assigners...)
         $$ = c
     }
 
 CASE_WHEN_CASE:
     WHEN CONDITION THEN COLUMN
     {
-    	c := &CaseWhenExpr{}
+    	c := &CaseWhenExpr{depth: depthCheck(yylex, 2 + maxDepth($2, $4))}
     	c.Conditions = []Expr{$2}
     	c.Assigners = []Expr{$4}
     	$$ = c
     }
 
-IDENTS:
-   IDENT
-   {
-       $$ = []*Field{&Field{Expr:&VarRef{Val:$1}}}
-   }
-   |IDENT COMMA IDENTS
-   {
-       $$ = append([]*Field{&Field{Expr:&VarRef{Val:$1}}},$3...)
-   }
-
 COLUMN:
     COLUMN MUL COLUMN
     {
-        $$ = &BinaryExpr{Op:Token(MUL), LHS:$1, RHS:$3}
+        $$ = &BinaryExpr{Op:Token(MUL), LHS:$1, RHS:$3, depth: depthCheck(yylex, 1 + max($1.Depth(), $3.Depth()))}
     }
     |COLUMN DIV COLUMN
     {
-        $$ = &BinaryExpr{Op:Token(DIV), LHS:$1, RHS:$3}
+        $$ = &BinaryExpr{Op:Token(DIV), LHS:$1, RHS:$3, depth: depthCheck(yylex, 1 + max($1.Depth(), $3.Depth()))}
     }
     |COLUMN ADD COLUMN
     {
-        $$ = &BinaryExpr{Op:Token(ADD), LHS:$1, RHS:$3}
+        $$ = &BinaryExpr{Op:Token(ADD), LHS:$1, RHS:$3, depth: depthCheck(yylex, 1 + max($1.Depth(), $3.Depth()))}
     }
     |COLUMN SUB COLUMN
     {
-        $$ = &BinaryExpr{Op:Token(SUB), LHS:$1, RHS:$3}
+        $$ = &BinaryExpr{Op:Token(SUB), LHS:$1, RHS:$3, depth: depthCheck(yylex, 1 + max($1.Depth(), $3.Depth()))}
     }
     |COLUMN BITWISE_XOR COLUMN
     {
-        $$ = &BinaryExpr{Op:Token(BITWISE_XOR), LHS:$1, RHS:$3}
+        $$ = &BinaryExpr{Op:Token(BITWISE_XOR), LHS:$1, RHS:$3, depth: depthCheck(yylex, 1 + max($1.Depth(), $3.Depth()))}
     }
     |COLUMN MOD COLUMN
     {
-        $$ = &BinaryExpr{Op:Token(MOD), LHS:$1, RHS:$3}
+        $$ = &BinaryExpr{Op:Token(MOD), LHS:$1, RHS:$3, depth: depthCheck(yylex, 1 + max($1.Depth(), $3.Depth()))}
     }
     |COLUMN BITWISE_AND COLUMN
     {
-        $$ = &BinaryExpr{Op:Token(BITWISE_AND), LHS:$1, RHS:$3}
+        $$ = &BinaryExpr{Op:Token(BITWISE_AND), LHS:$1, RHS:$3, depth: depthCheck(yylex, 1 + max($1.Depth(), $3.Depth()))}
     }
     |COLUMN BITWISE_OR COLUMN
     {
-        $$ = &BinaryExpr{Op:Token(BITWISE_OR), LHS:$1, RHS:$3}
+        $$ = &BinaryExpr{Op:Token(BITWISE_OR), LHS:$1, RHS:$3, depth: depthCheck(yylex, 1 + max($1.Depth(), $3.Depth()))}
     }
     |LPAREN COLUMN RPAREN
     {
-        $$ = &ParenExpr{Expr: $2}
+        $$ = &ParenExpr{Expr: $2, depth: depthCheck(yylex, 1 + $2.Depth())}
     }
-    |IDENT LPAREN COLUMN_CLAUSES RPAREN
+    |COLUMN_CALL
     {
-        if strings.ToLower($1) == "cast" {
-            if len($3)!=1 {
-                 yylex.Error("The cast format is incorrect.")
-            } else {
-                name := "Unknown"
-                if strings.ToLower($3[0].Alias) == "bool" {
-                    name = "cast_bool"
-                }
-                if strings.ToLower($3[0].Alias) == "float" {
-                    name = "cast_float64"
-                }
-                if strings.ToLower($3[0].Alias) == "int" {
-                    name = "cast_int64"
-                }
-                if strings.ToLower($3[0].Alias) == "string" {
-                    name = "cast_string"
-                }
-                cols := &Call{Name: strings.ToLower(name), Args: []Expr{}}
-                cols.Args = append(cols.Args, $3[0].Expr)
-                $$ = cols
-            }
-        } else {
-            cols := &Call{Name: strings.ToLower($1), Args: []Expr{}}
-            for i := range $3 {
-                cols.Args = append(cols.Args, $3[i].Expr)
-            }
-            $$ = cols
-        }
-    }
-    |IDENT LPAREN RPAREN
-    {
-        cols := &Call{Name: strings.ToLower($1)}
-        $$ = cols
+        $$ = $1
     }
     |SUB COLUMN %prec UMINUS
     {
@@ -702,7 +924,7 @@ COLUMN:
             s.Val = -1*s.Val
             $$ = $2
         default:
-        	$$ = &BinaryExpr{Op:Token(MUL), LHS:&IntegerLiteral{Val:-1}, RHS:$2}
+        	$$ = &BinaryExpr{Op:Token(MUL), LHS:&IntegerLiteral{Val:-1}, RHS:$2, depth: depthCheck(yylex, 1 + $2.Depth())}
         }
 
     }
@@ -718,109 +940,253 @@ COLUMN:
     {
     	c := $2.(*CaseWhenExpr)
     	c.Assigners = append(c.Assigners, $4)
+    	c.depth = depthCheck(yylex, max(c.depth, 1+len(c.Assigners)+$4.Depth()))
     	$$ = c
     }
-    |CASE IDENT CASE_WHEN_CASES ELSE IDENT END
+// Not implemented case, remove for now.
+//    |CASE IDENT CASE_WHEN_CASES ELSE IDENT END
+//    {
+//    	$$ = &VarRef{}
+//    }
+
+COLUMN_CALL:
+    IDENT LPAREN COLUMN_CLAUSES RPAREN
     {
-    	$$ = &VarRef{}
+        if strings.ToLower($1) == "cast" {
+            if len($3.fields)!=1 {
+                 yylex.Error("The cast format is incorrect.")
+            } else {
+                name := "Unknown"
+                if strings.ToLower($3.fields[0].Alias) == "bool" {
+                    name = "cast_bool"
+                }
+                if strings.ToLower($3.fields[0].Alias) == "float" {
+                    name = "cast_float64"
+                }
+                if strings.ToLower($3.fields[0].Alias) == "int" {
+                    name = "cast_int64"
+                }
+                if strings.ToLower($3.fields[0].Alias) == "string" {
+                    name = "cast_string"
+                }
+                cols := &Call{Name: strings.ToLower(name), Args: []Expr{$3.fields[0].Expr}, depth: depthCheck(yylex, 2 + $3.fields[0].Depth())}
+                $$ = cols
+            }
+        } else {
+            cols := &Call{Name: strings.ToLower($1), Args: []Expr{}, depth: depthCheck(yylex, 1)}
+            for i,fld := range $3.fields {
+                cols.Args = append(cols.Args, fld.Expr)
+                cols.depth = depthCheck(yylex, max(cols.depth, 2 + i + fld.Expr.Depth()))
+            }
+            $$ = cols
+        }
+    }
+    |IDENT LPAREN RPAREN
+    {
+        cols := &Call{Name: strings.ToLower($1), depth: depthCheck(yylex, 1)}
+        $$ = cols
     }
 
 INTO_CLAUSE:
-    INTO TABLE_NAMES
+    INTO TABLE_NAME_WITH_OPTION
     {
-    	$$ = $2
+        $$ = sourcesList{
+            sources: []Source{$2},
+            depth: depthCheck(yylex, 1 + $2.Depth()),
+        }
     }
     |
     {
-    	$$ = nil
+    	$$ = sourcesList{sources: nil, depth: depthCheck(yylex, 0)}
     }
 
 FROM_CLAUSE:
-    FROM TABLE_NAMES
+    FROM FROM_LIST
     {
         $$ = $2
     }
 
-TABLE_NAMES:
+FROM_LIST:
+    FROM_SOURCE
+    {
+        $$ = $1
+    }
+    |
+    FROM_LIST COMMA FROM_SOURCE
+    {
+        sl := $1;
+        sl.depth = depthCheck(yylex, max(sl.depth, len(sl.sources) + $3.depth))
+        sl.sources = append(sl.sources, $3.sources...)
+        $$ = sl
+    }
+
+FROM_SOURCE:
+
     TABLE_NAME_WITH_OPTION
     {
-        $$ = []Source{$1}
+        $$ = sourcesList{sources:[]Source{$1}, depth:depthCheck(yylex, 1+$1.Depth())}
     }
-    |TABLE_NAME_WITH_OPTION COMMA TABLE_NAMES
+    | TABLE_NAME_WITH_OPTION AS IDENT
     {
-        $$ = append([]Source{$1},$3...)
+        $1.Alias = $3
+        $$ = sourcesList{sources:[]Source{$1}, depth:depthCheck(yylex, 1+$1.Depth())}
     }
     |SUBQUERY_CLAUSE
     {
-    	$$ = $1
-
-    }
-    |SUBQUERY_CLAUSE COMMA TABLE_NAMES
-    {
-        $$ =  append($1,$3...)
-    }
-    |TABLE_NAME_WITH_OPTION AS IDENT
-    {
-    	$1.Alias = $3
-        $$ = []Source{$1}
-    }
-    |TABLE_NAME_WITH_OPTION AS IDENT COMMA TABLE_NAMES
-    {
-    	$1.Alias = $3
-        $$ = append([]Source{$1},$5...)
+        $$ = $1
     }
     |JOIN_CLAUSE
     {
-        $$ = []Source{$1}
+        $$ = $1
+    }
+    |TABLE_FUNCTION
+         {
+             $$ = sourcesList{sources:[]Source{$1}, depth:depthCheck(yylex, 1+$1.Depth())}
+         }
+
+TABLE_FUNCTION:
+     IDENT LPAREN TABLE_FUNCTION_PARAMS RPAREN
+     {
+         tableFunction := $3
+         tableFunction.FunctionName = $1
+         $$ = tableFunction
+     }
+
+TABLE_FUNCTION_PARAMS:
+     TABLE_FUNCTION_PARAM
+     {
+         if($1.GetType() == 0){
+             $$ = &TableFunction{TableFunctionSource: []Source{$1.GetSource()}, depth: depthCheck(yylex, 1 + $1.Depth())}
+         }else{
+             $$ = &TableFunction{Params: $1.GetContent(), depth: depthCheck(yylex, 1 + $1.Depth())}
+         }
+     }
+     |
+     TABLE_FUNCTION_PARAMS COMMA TABLE_FUNCTION_PARAM
+     {
+         tableFunction := $1
+         tableFunctionField := $3
+         if(tableFunctionField.GetType() == 0){
+             tableFunction.TableFunctionSource = append(tableFunction.TableFunctionSource, tableFunctionField.GetSource())
+         }else{
+             tableFunction.Params = tableFunctionField.GetContent()
+         }
+         tableFunction.depth = depthCheck(yylex, max(tableFunction.depth, len(tableFunction.TableFunctionFields) + $3.Depth()))
+         $$ = tableFunction
+     }
+
+TABLE_FUNCTION_PARAM:
+     STRING
+     {
+         tableFunctionField := &TableFunctionField{
+             typ : 1,
+             content : $1,
+             depth : depthCheck(yylex, 1),
+         }
+         $$ = tableFunctionField
+     }
+     |
+     IDENT
+     {
+         tableFunctionField := &TableFunctionField{
+             typ : 0,
+             source : &Measurement{Name:$1},
+             depth : depthCheck(yylex, 1),
+         }
+         $$ = tableFunctionField
+     }
+
+JOIN_TYPE:
+    FULL JOIN
+    {
+        $$ = FullJoin
+    }
+    | INNER JOIN
+    {
+        $$ = InnerJoin
+    }
+    | JOIN
+    {
+        $$ = InnerJoin
+    }
+    | LEFT OUTER JOIN
+    {
+        $$ = LeftOuterJoin
+    }
+    | LEFT JOIN
+    {
+        $$ = LeftOuterJoin
+    }
+    | RIGHT OUTER JOIN
+    {
+        $$ = RightOuterJoin
+    }
+    | RIGHT JOIN
+    {
+        $$ = RightOuterJoin
+    }
+    | OUTER JOIN
+    {
+        $$ = OuterJoin
     }
 
+
 JOIN_CLAUSE:
-    SUBQUERY_CLAUSE FULL JOIN TABLE_NAMES ON CONDITION
+    FROM_SOURCE JOIN_TYPE FROM_SOURCE ON CONDITION
     {
-        join := &Join{}
-        if len($1) != 1 || len($4) != 1{
-            yylex.Error("only support one query for join")
+        if len($1.sources) != 1 || len($3.sources) != 1 {
+            yylex.Error("expected 1 source")
         }
-        join.LSrc = $1[0]
-        join.RSrc = $4[0]
-        join.Condition = $6
-        $$ = join
+        join := &Join{
+            JoinType: $2,
+            Condition: $5,
+            depth: depthCheck(yylex, 1 + $5.Depth()),
+        }
+        if joinLeft,ok := $1.sources[0].(*Join); ok{
+             joinStatement := &SelectStatement{
+                 Fields: []*Field{{Expr: &Wildcard{Type:Token(MUL)}, depth: depthCheck(yylex, 2)}},
+                 Sources: []Source{joinLeft},
+                 IsRawQuery: true,
+                 depth: depthCheck (yylex, 2 + joinLeft.Depth ()),
+             }
+             alias := joinLeft.LSrc.GetName() + "," + joinLeft.RSrc.GetName()
+             join.LSrc = &SubQuery{Statement: joinStatement, Alias: alias, depth: depthCheck(yylex, 1+joinStatement.Depth())}
+        } else {
+             join.LSrc =$1.sources[0]
+        }
+        if joinRight, ok := $3.sources[0].(*Join); ok {
+            joinStatement := &SelectStatement {
+                Fields: []*Field{{Expr: &Wildcard{Type:Token(MUL)}, depth: depthCheck(yylex, 2)}},
+                Sources: []Source{joinRight},
+                IsRawQuery: true,
+                depth: depthCheck(yylex, 2 + joinRight.Depth()),
+            }
+            join.RSrc = &SubQuery{Statement: joinStatement, Alias: "", depth: depthCheck(yylex, 1+joinStatement.Depth())}
+        } else {
+            join.RSrc =$3.sources[0]
+        }
+        join.depth = depthCheck(yylex, max(join.depth, 1 + maxDepth(join.LSrc, join.RSrc)))
+        $$ = sourcesList{sources:[]Source{join}, depth: depthCheck(yylex, 1 + join.depth)}
     }
 
 SUBQUERY_CLAUSE:
-    LPAREN ALL_QUERY RPAREN
+    SELECT_WITH_PARENS AS IDENT
     {
-        all_subquerys:=  []Source{}
-        for _,temp_stmt := range $2 {
-            stmt,ok:= temp_stmt.(*SelectStatement)
-            if !ok{
-                yylex.Error("expexted SelectStatement")
-            }
-            build_SubQuery := &SubQuery{Statement: stmt}
-            all_subquerys =append(all_subquerys,build_SubQuery)
-        }
-        $$ = all_subquerys
-    }
-    |LPAREN ALL_QUERY RPAREN AS IDENT
-    {
-        if len($2) != 1{
-            yylex.Error("expexted SelectStatement length")
-        }
-        all_subquerys:=  []Source{}
-        stmt,ok:= $2[0].(*SelectStatement)
+        stmt,ok := $1.(*SelectStatement)
         if !ok{
             yylex.Error("expexted SelectStatement")
         }
-        build_SubQuery := &SubQuery{
-            Statement: stmt,
-            Alias: $5,
-        }
-        all_subquerys =append(all_subquerys,build_SubQuery)
-        $$ = all_subquerys
+        subquery := &SubQuery{Statement: stmt, Alias: $3, depth: depthCheck(yylex, 1+stmt.Depth())}
+        $$ = sourcesList{sources:[]Source{subquery}, depth: depthCheck(yylex, 1 + subquery.depth)}
     }
-    |LPAREN SUBQUERY_CLAUSE RPAREN
+    |SELECT_WITH_PARENS
     {
-        $$ = $2
+        stmt,ok := $1.(*SelectStatement)
+        if !ok{
+            yylex.Error("expexted SelectStatement")
+        }
+        subquery := &SubQuery{Statement: stmt, depth: depthCheck(yylex, 1+stmt.Depth())}
+        $$ = sourcesList{sources:[]Source{subquery}, depth: depthCheck(yylex, 1 + subquery.depth)}
     }
 
 TABLE_NAME_WITH_OPTION:
@@ -886,7 +1252,7 @@ GROUP_BY_CLAUSE:
     }
     |
     {
-        $$ = nil
+        $$ = dimensionsList{dims: nil, depth: depthCheck(yylex, 0)}
     }
 
 EXCEPT_CLAUSE:
@@ -896,17 +1262,20 @@ EXCEPT_CLAUSE:
     }
     |
     {
-        $$ = nil
+        $$ = dimensionsList{dims: nil, depth: depthCheck(yylex, 0)}
     }
 
 DIMENSION_NAMES:
     DIMENSION_NAME
     {
-        $$ = []*Dimension{$1}
+        $$ = dimensionsList{dims: []*Dimension{$1}, depth: depthCheck(yylex, 1 + $1.Depth())}
     }
-    |DIMENSION_NAME COMMA DIMENSION_NAMES
+    |DIMENSION_NAMES COMMA DIMENSION_NAME
     {
-        $$ = append([]*Dimension{$1}, $3...)
+        dl := $1
+        dl.dims = append(dl.dims, $3)
+        dl.depth = depthCheck(yylex, max(dl.depth, len(dl.dims) + $3.Depth()))
+        $$ = dl
     }
 
 STRING_TYPE:
@@ -922,11 +1291,11 @@ STRING_TYPE:
 DIMENSION_NAME:
     STRING_TYPE
     {
-        $$ = &Dimension{Expr:&VarRef{Val:$1}}
+        $$ = &Dimension{Expr:&VarRef{Val:$1}, depth: depthCheck(yylex, 2)}
     }
     |STRING_TYPE DOUBLECOLON TAG
     {
-        $$ = &Dimension{Expr:&VarRef{Val:$1}}
+        $$ = &Dimension{Expr:&VarRef{Val:$1}, depth: depthCheck(yylex, 2)}
     }
     |IDENT LPAREN DURATIONVAL RPAREN
     {
@@ -934,7 +1303,7 @@ DIMENSION_NAME:
     	    yylex.Error("Invalid group by combination for no-time tag and time duration")
     	}
 
-    	$$ = &Dimension{Expr:&Call{Name:"time", Args:[]Expr{&DurationLiteral{Val: $3}}}}
+    	$$ = &Dimension{Expr:&Call{Name:"time", Args:[]Expr{&DurationLiteral{Val: $3}}, depth: depthCheck(yylex, 3)}, depth: depthCheck(yylex, 4)}
     }
     |IDENT LPAREN DURATIONVAL COMMA DURATIONVAL RPAREN
     {
@@ -942,7 +1311,7 @@ DIMENSION_NAME:
                     yylex.Error("Invalid group by combination for no-time tag and time duration")
                 }
 
-        $$ = &Dimension{Expr:&Call{Name:"time", Args:[]Expr{&DurationLiteral{Val: $3},&DurationLiteral{Val: $5}}}}
+        $$ = &Dimension{Expr:&Call{Name:"time", Args:[]Expr{&DurationLiteral{Val: $3},&DurationLiteral{Val: $5}}, depth: depthCheck(yylex, 4)}, depth: depthCheck(yylex, 5)}
     }
     |IDENT LPAREN DURATIONVAL COMMA SUB DURATIONVAL RPAREN
     {
@@ -950,15 +1319,15 @@ DIMENSION_NAME:
                     yylex.Error("Invalid group by combination for no-time tag and time duration")
                 }
 
-        $$ = &Dimension{Expr:&Call{Name:"time", Args:[]Expr{&DurationLiteral{Val: $3},&DurationLiteral{Val: time.Duration(-$6)}}}}
+        $$ = &Dimension{Expr:&Call{Name:"time", Args:[]Expr{&DurationLiteral{Val: $3},&DurationLiteral{Val: time.Duration(-$6)}}, depth: depthCheck(yylex, 4)}, depth: depthCheck(yylex, 5)}
     }
     |MUL
     {
-        $$ = &Dimension{Expr:&Wildcard{Type:Token($1)}}
+        $$ = &Dimension{Expr:&Wildcard{Type:Token($1)}, depth: depthCheck(yylex, 2)}
     }
     |MUL DOUBLECOLON TAG
     {
-        $$ = &Dimension{Expr:&Wildcard{Type:Token($1)}}
+        $$ = &Dimension{Expr:&Wildcard{Type:Token($1)}, depth: depthCheck(yylex, 2)}
     }
     |REGULAR_EXPRESSION
      {
@@ -966,7 +1335,7 @@ DIMENSION_NAME:
         if err != nil {
             yylex.Error("Invalid regexprs")
         }
-        $$ = &Dimension{Expr: &RegexLiteral{Val: re}}
+        $$ = &Dimension{Expr: &RegexLiteral{Val: re}, depth: depthCheck(yylex, 2)}
      }
 
 
@@ -1039,7 +1408,7 @@ AND_CONDITION:
     }
     |CONDITION AND CONDITION
     {
-         $$ = &BinaryExpr{Op:Token($2),LHS:$1,RHS:$3}
+         $$ = &BinaryExpr{Op:Token($2),LHS:$1,RHS:$3, depth: depthCheck(yylex, 1+max($1.Depth(), $3.Depth()))}
     }
 
 OR_CONDITION:
@@ -1049,7 +1418,7 @@ OR_CONDITION:
     }
     |CONDITION OR CONDITION
     {
-        $$ = &BinaryExpr{Op:Token($2),LHS:$1,RHS:$3}
+        $$ = &BinaryExpr{Op:Token($2),LHS:$1,RHS:$3, depth: depthCheck(yylex, 1+max($1.Depth(), $3.Depth()))}
     }
 
 CONDITION:
@@ -1059,41 +1428,64 @@ CONDITION:
     }
     |LPAREN CONDITION RPAREN
     {
-    	$$ = &ParenExpr{Expr:$2}
+    	$$ = &ParenExpr{Expr:$2, depth: depthCheck(yylex, 1+$2.Depth())}
     }
     |IDENT IN LPAREN COLUMN_CLAUSES RPAREN
     {
         ident := &VarRef{Val:$1}
-    	var expr,e Expr
-    	for i := range $4{
-    	    expr = &BinaryExpr{LHS:ident, Op:Token(EQ), RHS:$4[i].Expr}
-    	    if e == nil{
-    	        e = expr
-    	    }else{
-    	        e = &BinaryExpr{LHS:e, Op:Token(OR), RHS:expr}
-    	    }
-    	}
-    	$$ = e
+        vals := make(map[interface{}]bool)
+        for _, fld := range $4.fields {
+            switch fld.Expr.(type) {
+            case *StringLiteral:
+                vals[fld.Expr.(*StringLiteral).Val] = true
+            case *NumberLiteral:
+                vals[float64(fld.Expr.(*NumberLiteral).Val)] = true
+            case *IntegerLiteral:
+                vals[float64(fld.Expr.(*IntegerLiteral).Val)] = true
+            }
+        }
+        $$ = &BinaryExpr{LHS:ident, Op:Token(IN), RHS:&SetLiteral{Vals: vals}, depth: depthCheck(yylex, 2)}
+    }
+    |IDENT NOT IN LPAREN COLUMN_CLAUSES RPAREN
+    {
+        ident := &VarRef{Val:$1}
+        vals := make(map[interface{}]bool)
+        for _, fld := range $5.fields {
+            switch fld.Expr.(type) {
+            case *StringLiteral:
+                vals[fld.Expr.(*StringLiteral).Val] = true
+            case *NumberLiteral:
+                vals[float64(fld.Expr.(*NumberLiteral).Val)] = true
+            case *IntegerLiteral:
+                vals[float64(fld.Expr.(*IntegerLiteral).Val)] = true
+            }
+        }
+        $$ = &BinaryExpr{LHS:ident, Op:Token(NOTIN), RHS:&SetLiteral{Vals: vals}, depth: depthCheck(yylex, 2)}
     }
     |IDENT IN LPAREN SELECT_STATEMENT RPAREN
     {
-    	$$ = &InCondition{Stmt:$4.(*SelectStatement), Column: &VarRef{Val: $1}}
-    }
-    |EXISTS LPAREN SELECT_STATEMENT RPAREN
-    {
-    	$$ = &BinaryExpr{}
+        if _, ok := $4.(*SelectStatement); !ok {
+            yylex.Error("IN requires SELECT statement")
+        } else {
+            $$ = &InCondition{
+                Stmt: $4.(*SelectStatement),
+                Column: &VarRef{Val: $1},
+                depth: depthCheck(yylex, 1+$4.Depth()),
+            }
+        }
     }
     |IDENT NOT IN LPAREN SELECT_STATEMENT RPAREN
     {
-    	$$ = &BinaryExpr{}
-    }
-    |IDENT NOT IN LPAREN IDENTS RPAREN
-    {
-    	$$ = &BinaryExpr{}
-    }
-    |NOT EXISTS LPAREN SELECT_STATEMENT RPAREN
-    {
-    	$$ = &BinaryExpr{}
+        if _, ok := $5.(*SelectStatement); !ok {
+            yylex.Error("IN requires SELECT statement")
+        } else {
+            $$ = &InCondition{
+                Stmt: $5.(*SelectStatement),
+                Column: &VarRef{Val: $1},
+                depth: depthCheck(yylex, 1+$5.Depth()),
+                NotEqual: true,
+            }
+        }
     }
     |MATCH LPAREN STRING_TYPE COMMA STRING_TYPE RPAREN
     {
@@ -1101,6 +1493,7 @@ CONDITION:
     		LHS:  &VarRef{Val: $3},
     		RHS:  &StringLiteral{Val: $5},
     		Op: MATCH,
+    		depth: depthCheck(yylex, 2),
     	}
     }
     |MATCHPHRASE LPAREN STRING_TYPE COMMA STRING_TYPE RPAREN
@@ -1109,6 +1502,7 @@ CONDITION:
     		LHS:  &VarRef{Val: $3},
     		RHS:  &StringLiteral{Val: $5},
     		Op: MATCHPHRASE,
+    		depth: depthCheck(yylex, 2),
     	}
     }
     |IPINRANGE LPAREN STRING_TYPE COMMA STRING_TYPE RPAREN
@@ -1117,6 +1511,7 @@ CONDITION:
             LHS:  &VarRef{Val: $3},
             RHS:  &StringLiteral{Val: $5},
             Op: IPINRANGE,
+            depth: depthCheck(yylex, 2),
         }
     }
 
@@ -1130,7 +1525,7 @@ OPERATION_EQUAL:
     			yylex.Error("expected regular expression")
     		}
     	}
-        $$ = &BinaryExpr{Op:Token($2),LHS:$1,RHS:$3}
+        $$ = &BinaryExpr{Op:Token($2),LHS:$1,RHS:$3,depth:depthCheck(yylex, 1+maxDepth($1,$3))}
     }
 
 CONDITION_COLUMN:
@@ -1140,7 +1535,7 @@ CONDITION_COLUMN:
     }
     |LPAREN CONDITION RPAREN
     {
-    	$$ = &ParenExpr{Expr:$2}
+    	$$ = &ParenExpr{Expr:$2,depth:depthCheck(yylex, 1+$2.Depth())}
     }
 
 CONDITION_OPERATOR:
@@ -1279,9 +1674,10 @@ SORTFIELDS:
     {
         $$ = []*SortField{$1}
     }
-    |SORTFIELD COMMA SORTFIELDS
+    |SORTFIELDS COMMA SORTFIELD
     {
-        $$ = append([]*SortField{$1}, $3...)
+        $$ = append($1, $3)
+        depthCheck(yylex, len($$))
     }
 
 SORTFIELD:
@@ -1302,6 +1698,7 @@ OPTION_CLAUSES:
     LIMIT_OFFSET_OPTION SLIMIT_SOFFSET_OPTION
     {
     	$$ = append($1, $2...)
+        depthCheck(yylex, len($$))
     }
 
 INTEGERPARA:
@@ -1443,6 +1840,12 @@ WITH_CLAUSES:
            stmt.RetentionPolicyShardGroupDuration = $2.ShardGroupDuration
         }
 
+        if $2.ShardMergeDuration==-1||$2.ShardMergeDuration==0{
+           stmt.RetentionPolicyShardMergeDuration = time.Duration(DefaultQueryTimeout)
+        }else{
+           stmt.RetentionPolicyShardMergeDuration = $2.ShardMergeDuration
+        }
+
         if $2.HotDuration==-1||$2.HotDuration==0{
            stmt.RetentionPolicyHotDuration = time.Duration(DefaultQueryTimeout)
         }else{
@@ -1453,6 +1856,12 @@ WITH_CLAUSES:
            stmt.RetentionPolicyWarmDuration = time.Duration(DefaultQueryTimeout)
         }else{
            stmt.RetentionPolicyWarmDuration = $2.WarmDuration
+        }
+
+        if $2.IndexColdDuration==-1||$2.IndexColdDuration==0{
+           stmt.RetentionPolicyIndexColdDuration = time.Duration(DefaultQueryTimeout)
+        }else{
+           stmt.RetentionPolicyIndexColdDuration = $2.IndexColdDuration
         }
 
         if $2.IndexGroupDuration==-1||$2.IndexGroupDuration==0{
@@ -1480,6 +1889,14 @@ CREAT_DATABASE_POLICYS:
             yylex.Error("Repeat Shard Group Duration")
         }
 
+        if $1.ShardMergeDuration<0  || $2.ShardMergeDuration<0{
+            if $2.ShardMergeDuration>=0 {
+                $1.ShardMergeDuration = $2.ShardMergeDuration
+            }
+        }else{
+            yylex.Error("Repeat Shard Merge Duration")
+        }
+
         if len($1.ShardKey) != 0 && len($2.ShardKey) != 0 {
             yylex.Error("Repeat ShardKey")
         } else if len($2.ShardKey) != 0 {
@@ -1500,6 +1917,14 @@ CREAT_DATABASE_POLICYS:
             }
         }else{
             yylex.Error("Repeat Warm Duration")
+        }
+
+        if $1.IndexColdDuration<0 || $2.IndexColdDuration<0{
+            if $2.IndexColdDuration>=0 {
+                $1.IndexColdDuration = $2.IndexColdDuration
+            }
+        }else{
+            yylex.Error("Repeat Index Cold Duration")
         }
 
         if $1.IndexGroupDuration<0 || $2.IndexGroupDuration<0{
@@ -1552,31 +1977,31 @@ CREAT_DATABASE_POLICY:
     |DURATION DURATIONVAL
     {
         duration := $2
-        $$ = &Durations{ShardGroupDuration: -1,HotDuration: -1,WarmDuration: -1,IndexGroupDuration: -1,PolicyDuration: &duration}
+        $$ = &Durations{ShardGroupDuration: -1,HotDuration: -1,WarmDuration: -1,IndexGroupDuration: -1,IndexColdDuration: -1,PolicyDuration: &duration, ShardMergeDuration: -1}
     }
     |REPLICATION INTEGER
     {
         replicaN := int($2)
-        $$ = &Durations{ShardGroupDuration: -1,HotDuration: -1,WarmDuration: -1,IndexGroupDuration: -1,Replication: &replicaN}
+        $$ = &Durations{ShardGroupDuration: -1,HotDuration: -1,WarmDuration: -1,IndexGroupDuration: -1,IndexColdDuration: -1,Replication: &replicaN, ShardMergeDuration: -1}
     }
     |NAME IDENT
     {
-        $$ = &Durations{ShardGroupDuration: -1,HotDuration: -1,WarmDuration: -1,IndexGroupDuration: -1,PolicyName: $2}
+        $$ = &Durations{ShardGroupDuration: -1,HotDuration: -1,WarmDuration: -1,IndexGroupDuration: -1,IndexColdDuration: -1,PolicyName: $2, ShardMergeDuration: -1}
     }
     |REPLICANUM INTEGER
     {
-        $$ = &Durations{ShardGroupDuration: -1,HotDuration: -1,WarmDuration: -1,IndexGroupDuration: -1,ReplicaNum: uint32($2)}
+        $$ = &Durations{ShardGroupDuration: -1,HotDuration: -1,WarmDuration: -1,IndexGroupDuration: -1,IndexColdDuration: -1,ReplicaNum: uint32($2), ShardMergeDuration: -1}
     }
     |DEFAULT
     {
-        $$ = &Durations{ShardGroupDuration: -1,HotDuration: -1,WarmDuration: -1,IndexGroupDuration: -1,rpdefault: true}
+        $$ = &Durations{ShardGroupDuration: -1,HotDuration: -1,WarmDuration: -1,IndexGroupDuration: -1,IndexColdDuration: -1,rpdefault: true, ShardMergeDuration: -1}
     }
     |SHARDKEY SHARDKEYLIST
     {
         if len($2) == 0 {
             yylex.Error("ShardKey should not be nil")
         }
-        $$ = &Durations{ShardKey:$2,ShardGroupDuration: -1,HotDuration: -1,WarmDuration: -1,IndexGroupDuration: -1,rpdefault: false}
+        $$ = &Durations{ShardKey:$2,ShardGroupDuration: -1,HotDuration: -1,WarmDuration: -1,IndexGroupDuration: -1,IndexColdDuration: -1,rpdefault: false, ShardMergeDuration: -1}
     }
 
 
@@ -1584,39 +2009,43 @@ CREAT_DATABASE_POLICY:
 SHOW_MEASUREMENTS_STATEMENT:
     SHOW MEASUREMENTS ON_DATABASE WITH MEASUREMENT MEASUREMENT_WITH WHERE_CLAUSE ORDER_CLAUSES OPTION_CLAUSES
     {
-        sms := &ShowMeasurementsStatement{}
-        sms.Database = $3
-        sms.Source = $6
-        sms.Condition = $7
-        sms.SortFields = $8
-        sms.Limit = $9[0]
-        sms.Offset = $9[1]
-        $$ = sms
+        $$ = &ShowMeasurementsStatement{
+            Database: $3,
+            Source: $6,
+            Condition: $7,
+            SortFields: $8,
+            Limit: $9[0],
+            Offset: $9[1],
+            depth: depthCheck(yylex, 1 + maxDepth($6, $7, $8)),
+        }
     }
     |SHOW MEASUREMENTS ON_DATABASE WHERE_CLAUSE ORDER_CLAUSES OPTION_CLAUSES
-     {
-         sms := &ShowMeasurementsStatement{}
-         sms.Database = $3
-         sms.Condition = $4
-         sms.SortFields = $5
-         sms.Limit = $6[0]
-         sms.Offset = $6[1]
-         $$ = sms
-     }
+    {
+        $$ = &ShowMeasurementsStatement{
+            Database: $3,
+            Condition: $4,
+            SortFields: $5,
+            Limit: $6[0],
+            Offset: $6[1],
+            depth: depthCheck(yylex, 1 + maxDepth($4, $5)),
+        }
+    }
 
 SHOW_MEASUREMENTS_DETAIL_STATEMENT:
     SHOW MEASUREMENTS DETAIL ON_DATABASE WITH MEASUREMENT MEASUREMENT_WITH
     {
-        sms := &ShowMeasurementsDetailStatement{}
-        sms.Database = $4
-        sms.Source = $7
-        $$ = sms
+        $$ = &ShowMeasurementsDetailStatement{
+            Database: $4,
+            Source: $7,
+            depth: depthCheck(yylex, 1 + maxDepth($7)),
+        }
     }
     |SHOW MEASUREMENTS DETAIL ON_DATABASE
     {
-        sms := &ShowMeasurementsDetailStatement{}
-        sms.Database = $4
-        $$ = sms
+        $$ = &ShowMeasurementsDetailStatement{
+            Database: $4,
+            depth: depthCheck(yylex, 1),
+        }
     }
 
 MEASUREMENT_WITH:
@@ -1729,10 +2158,22 @@ RP_DURATION_OPTIONS:
            stmt.WarmDuration = $5.WarmDuration
         }
 
+        if $5.IndexColdDuration==-1||$5.IndexColdDuration==0{
+           stmt.IndexColdDuration = time.Duration(DefaultQueryTimeout)
+        }else{
+           stmt.IndexColdDuration = $5.IndexColdDuration
+        }
+
         if $5.IndexGroupDuration==-1||$5.IndexGroupDuration==0{
            stmt.IndexGroupDuration = time.Duration(DefaultQueryTimeout)
         }else{
            stmt.IndexGroupDuration = $5.IndexGroupDuration
+        }
+
+        if $5.ShardMergeDuration==-1||$5.ShardMergeDuration==0{
+           stmt.ShardMergeDuration = time.Duration(DefaultQueryTimeout)
+        }else{
+           stmt.ShardMergeDuration = $5.ShardMergeDuration
         }
 
     	$$ = stmt
@@ -1777,12 +2218,28 @@ SHARD_HOT_WARM_INDEX_DURATIONS:
             yylex.Error("Repeat Warm Duration")
         }
 
+        if $1.IndexColdDuration<0  || $2.IndexColdDuration<0{
+            if $2.IndexColdDuration>=0 {
+                $1.IndexColdDuration = $2.IndexColdDuration
+            }
+        }else{
+             yylex.Error("Repeat Index Cold Duration")
+        }
+
         if $1.IndexGroupDuration<0  || $2.IndexGroupDuration<0{
             if $2.IndexGroupDuration>=0 {
                 $1.IndexGroupDuration = $2.IndexGroupDuration
             }
         }else{
             yylex.Error("Repeat Index Group Duration")
+        }
+
+        if $1.ShardMergeDuration<0  || $2.ShardMergeDuration<0{
+            if $2.ShardMergeDuration>=0 {
+                $1.ShardMergeDuration = $2.ShardMergeDuration
+            }
+        }else{
+            yylex.Error("Repeat ShardMerge Duration")
         }
         $$ = $1
     }
@@ -1791,19 +2248,27 @@ SHARD_HOT_WARM_INDEX_DURATIONS:
 SHARD_HOT_WARM_INDEX_DURATION:
     SHARD DURATION DURATIONVAL
     {
-        $$ = &Durations{ShardGroupDuration: $3,HotDuration: -1,WarmDuration: -1,IndexGroupDuration: -1}
+        $$ = &Durations{ShardGroupDuration: $3,HotDuration: -1,WarmDuration: -1,IndexGroupDuration: -1, IndexColdDuration: -1, ShardMergeDuration: -1}
     }
     |HOT DURATION DURATIONVAL
     {
-        $$ = &Durations{ShardGroupDuration: -1,HotDuration: $3,WarmDuration: -1,IndexGroupDuration: -1}
+        $$ = &Durations{ShardGroupDuration: -1,HotDuration: $3,WarmDuration: -1,IndexGroupDuration: -1, IndexColdDuration: -1, ShardMergeDuration: -1}
     }
     |WARM DURATION DURATIONVAL
     {
-        $$ = &Durations{ShardGroupDuration: -1,HotDuration: -1,WarmDuration: $3,IndexGroupDuration: -1}
+        $$ = &Durations{ShardGroupDuration: -1,HotDuration: -1,WarmDuration: $3,IndexGroupDuration: -1, IndexColdDuration: -1, ShardMergeDuration: -1}
     }
     |INDEX DURATION DURATIONVAL
     {
-        $$ = &Durations{ShardGroupDuration: -1,HotDuration: -1,WarmDuration: -1,IndexGroupDuration: $3}
+        $$ = &Durations{ShardGroupDuration: -1,HotDuration: -1,WarmDuration: -1,IndexGroupDuration: $3, IndexColdDuration: -1, ShardMergeDuration: -1}
+    }
+    |INDEXCOLD DURATION DURATIONVAL
+    {
+        $$ = &Durations{ShardGroupDuration: -1,HotDuration: -1,WarmDuration: -1,IndexGroupDuration: -1, IndexColdDuration: $3, ShardMergeDuration: -1}
+    }
+    |SHARDMERGE DURATION DURATIONVAL
+    {
+        $$ = &Durations{ShardGroupDuration: -1,HotDuration: -1,WarmDuration: -1,IndexGroupDuration: -1, IndexColdDuration: -1, ShardMergeDuration: $3}
     }
 
 
@@ -1811,47 +2276,51 @@ SHARD_HOT_WARM_INDEX_DURATION:
 SHOW_SERIES_STATEMENT:
     SHOW SERIES ON_DATABASE FROM_CLAUSE WHERE_CLAUSE ORDER_CLAUSES LIMIT_OFFSET_OPTION
     {
-    	stmt := &ShowSeriesStatement{}
-    	stmt.Database = $3
-    	stmt.Sources = $4
-    	stmt.Condition = $5
-    	stmt.SortFields = $6
-    	stmt.Limit = $7[0]
-    	stmt.Offset = $7[1]
-    	$$ = stmt
+    	$$ = &ShowSeriesStatement{
+    	    Database: $3,
+    	    Sources: $4.sources,
+    	    Condition: $5,
+    	    SortFields: $6,
+    	    Limit: $7[0],
+    	    Offset: $7[1],
+            depth: depthCheck(yylex, 1 + maxDepth($4, $5, $6)),
+    	}
     }
     |SHOW SERIES ON_DATABASE WHERE_CLAUSE ORDER_CLAUSES LIMIT_OFFSET_OPTION
     {
-    	stmt := &ShowSeriesStatement{}
-    	stmt.Database = $3
-    	stmt.Condition = $4
-    	stmt.SortFields = $5
-    	stmt.Limit = $6[0]
-    	stmt.Offset = $6[1]
-    	$$ = stmt
+    	$$ = &ShowSeriesStatement{
+    	    Database: $3,
+    	    Condition: $4,
+    	    SortFields: $5,
+    	    Limit: $6[0],
+    	    Offset: $6[1],
+            depth: depthCheck(yylex, 1 + maxDepth($4, $5)),
+    	}
     }
     |SHOW HINT SERIES ON_DATABASE FROM_CLAUSE WHERE_CLAUSE ORDER_CLAUSES LIMIT_OFFSET_OPTION
     {
-        stmt := &ShowSeriesStatement{}
-        stmt.Hints = $2
-        stmt.Database = $4
-        stmt.Sources = $5
-        stmt.Condition = $6
-        stmt.SortFields = $7
-        stmt.Limit = $8[0]
-        stmt.Offset = $8[1]
-        $$ = stmt
+        $$ = &ShowSeriesStatement{
+            Hints: $2,
+            Database: $4,
+            Sources: $5.sources,
+            Condition: $6,
+            SortFields: $7,
+            Limit: $8[0],
+            Offset: $8[1],
+            depth: depthCheck(yylex, 1 + maxDepth($5, $6, $7)),
+        }
     }
     |SHOW HINT SERIES ON_DATABASE WHERE_CLAUSE ORDER_CLAUSES LIMIT_OFFSET_OPTION
     {
-        stmt := &ShowSeriesStatement{}
-        stmt.Hints = $2
-        stmt.Database = $4
-        stmt.Condition = $5
-        stmt.SortFields = $6
-        stmt.Limit = $7[0]
-        stmt.Offset = $7[1]
-        $$ = stmt
+        $$ = &ShowSeriesStatement{
+            Hints: $2,
+            Database: $4,
+            Condition: $5,
+            SortFields: $6,
+            Limit: $7[0],
+            Offset: $7[1],
+            depth: depthCheck(yylex, 1 + maxDepth($5, $6)),
+        }
     }
 
 SHOW_USERS_STATEMENT:
@@ -1863,39 +2332,41 @@ SHOW_USERS_STATEMENT:
 DROP_DATABASE_STATEMENT:
     DROP DATABASE IDENT
     {
-    	stmt := &DropDatabaseStatement{}
-    	stmt.Name = $3
-    	$$ = stmt
+    	$$ = &DropDatabaseStatement{Name: $3}
     }
 
 DROP_SERIES_STATEMENT:
     DROP SERIES FROM_CLAUSE WHERE_CLAUSE
     {
-    	stmt := &DropSeriesStatement{}
-    	stmt.Sources = $3
-    	stmt.Condition = $4
-    	$$ = stmt
+    	$$ = &DropSeriesStatement{
+    	    Sources: $3.sources,
+    	    Condition: $4,
+            depth: depthCheck(yylex, 1 + maxDepth($3, $4)),
+        }
     }
     |DROP SERIES WHERE_CLAUSE
     {
-        stmt := &DropSeriesStatement{}
-        stmt.Condition = $3
-        $$ = stmt
+        $$ = &DropSeriesStatement{
+            Condition: $3,
+            depth: depthCheck(yylex, 1 + maxDepth($3)),
+        }
     }
 
 DELETE_SERIES_STATEMENT:
     DELETE FROM_CLAUSE WHERE_CLAUSE
     {
-    	stmt := &DeleteSeriesStatement{}
-    	stmt.Sources = $2
-    	stmt.Condition = $3
-    	$$ = stmt
+    	$$ = &DeleteSeriesStatement{
+    	    Sources: $2.sources,
+    	    Condition: $3,
+            depth: depthCheck(yylex, 1 + maxDepth($2, $3)),
+        }
     }
     |DELETE WHERE_CLAUSE
     {
-        stmt := &DeleteSeriesStatement{}
-        stmt.Condition = $2
-        $$ = stmt
+        $$ = &DeleteSeriesStatement{
+            Condition: $2,
+            depth: depthCheck(yylex, 1 + maxDepth($2)),
+        }
     }
 
 
@@ -1922,6 +2393,11 @@ ALTER_RENTRENTION_POLICY_STATEMENT:
            stmt.WarmDuration = nil
         }else{
            stmt.WarmDuration = &$7.WarmDuration
+        }
+        if $7.IndexColdDuration==-1{
+           stmt.IndexColdDuration = nil
+        }else{
+           stmt.IndexColdDuration = &$7.IndexColdDuration
         }
         if $7.IndexGroupDuration==-1{
            stmt.IndexGroupDuration = nil
@@ -2041,29 +2517,31 @@ DROP_USER_STATEMENT:
 SHOW_TAG_KEYS_STATEMENT:
   SHOW TAG KEYS ON_DATABASE FROM_CLAUSE WHERE_CLAUSE ORDER_CLAUSES OPTION_CLAUSES
   {
-      stmt := &ShowTagKeysStatement{}
-      stmt.Database = $4
-      stmt.Sources = $5
-      stmt.Condition = $6
-      stmt.SortFields = $7
-      stmt.Limit = $8[0]
-      stmt.Offset = $8[1]
-      stmt.SLimit = $8[2]
-      stmt.SOffset = $8[3]
-      $$ = stmt
+      $$ = &ShowTagKeysStatement{
+          Database: $4,
+          Sources: $5.sources,
+          Condition: $6,
+          SortFields: $7,
+          Limit: $8[0],
+          Offset: $8[1],
+          SLimit: $8[2],
+          SOffset: $8[3],
+          depth: depthCheck(yylex, 1 + maxDepth($5, $6, $7)),
+      }
 
   }
   |SHOW TAG KEYS ON_DATABASE WHERE_CLAUSE ORDER_CLAUSES OPTION_CLAUSES
   {
-      stmt := &ShowTagKeysStatement{}
-      stmt.Database = $4
-      stmt.Condition = $5
-      stmt.SortFields = $6
-      stmt.Limit = $7[0]
-      stmt.Offset = $7[1]
-      stmt.SLimit = $7[2]
-      stmt.SOffset = $7[3]
-      $$ = stmt
+      $$ = &ShowTagKeysStatement{
+          Database: $4,
+          Condition: $5,
+          SortFields: $6,
+          Limit: $7[0],
+          Offset: $7[1],
+          SLimit: $7[2],
+          SOffset: $7[3],
+          depth: depthCheck(yylex, 1 + maxDepth($5, $6)),
+      }
   }
 
 MEASUREMENT_INFO:
@@ -2158,22 +2636,24 @@ ON_DATABASE:
 SHOW_FIELD_KEYS_STATEMENT:
   SHOW FIELD KEYS ON_DATABASE FROM_CLAUSE ORDER_CLAUSES LIMIT_OFFSET_OPTION
   {
-      stmt := &ShowFieldKeysStatement{}
-      stmt.Database = $4
-      stmt.Sources = $5
-      stmt.SortFields = $6
-      stmt.Limit = $7[0]
-      stmt.Offset = $7[1]
-      $$ = stmt
+      $$ = &ShowFieldKeysStatement{
+          Database: $4,
+          Sources: $5.sources,
+          SortFields: $6,
+          Limit: $7[0],
+          Offset: $7[1],
+          depth: depthCheck(yylex, 1 + maxDepth($5, $6)),
+      }
   }
   |SHOW FIELD KEYS ON_DATABASE ORDER_CLAUSES LIMIT_OFFSET_OPTION
    {
-       stmt := &ShowFieldKeysStatement{}
-       stmt.Database = $4
-       stmt.SortFields = $5
-       stmt.Limit = $6[0]
-       stmt.Offset = $6[1]
-       $$ = stmt
+       $$ = &ShowFieldKeysStatement{
+           Database: $4,
+           SortFields: $5,
+           Limit: $6[0],
+           Offset: $6[1],
+           depth: depthCheck(yylex, 1 + maxDepth($5)),
+       }
    }
 
 
@@ -2183,13 +2663,13 @@ SHOW_TAG_VALUES_STATEMENT:
        stmt := $8.(*ShowTagValuesStatement)
        stmt.TagKeyCondition = nil
        stmt.Database = $4
-       stmt.Sources = $5
+       stmt.Sources = $5.sources
        stmt.Condition = $9
        stmt.SortFields = $10
        stmt.Limit = $11[0]
        stmt.Offset = $11[1]
+       stmt.depth = depthCheck(yylex, max(stmt.depth, 1 + maxDepth($5, $9, $10)))
        $$ = stmt
-
    }
    |SHOW TAG VALUES ON_DATABASE WITH KEY TAG_VALUES_WITH WHERE_CLAUSE ORDER_CLAUSES LIMIT_OFFSET_OPTION
    {
@@ -2200,6 +2680,7 @@ SHOW_TAG_VALUES_STATEMENT:
        stmt.SortFields = $9
        stmt.Limit = $10[0]
        stmt.Offset = $10[1]
+       stmt.depth = depthCheck(yylex, max(stmt.depth, 1 + maxDepth($8, $9)))
        $$ = stmt
    }
   |SHOW HINT TAG VALUES ON_DATABASE FROM_CLAUSE WITH KEY TAG_VALUES_WITH WHERE_CLAUSE ORDER_CLAUSES LIMIT_OFFSET_OPTION
@@ -2208,11 +2689,12 @@ SHOW_TAG_VALUES_STATEMENT:
        stmt.Hints = $2
        stmt.TagKeyCondition = nil
        stmt.Database = $5
-       stmt.Sources = $6
+       stmt.Sources = $6.sources
        stmt.Condition = $10
        stmt.SortFields = $11
        stmt.Limit = $12[0]
        stmt.Offset = $12[1]
+       stmt.depth = depthCheck(yylex, max(stmt.depth, 1 + maxDepth($6, $10, $11)))
        $$ = stmt
   }
   |SHOW HINT TAG VALUES ON_DATABASE WITH KEY TAG_VALUES_WITH WHERE_CLAUSE ORDER_CLAUSES LIMIT_OFFSET_OPTION
@@ -2225,34 +2707,38 @@ SHOW_TAG_VALUES_STATEMENT:
        stmt.SortFields = $10
        stmt.Limit = $11[0]
        stmt.Offset = $11[1]
+       stmt.depth = depthCheck(yylex, max(stmt.depth, 1 + maxDepth($9, $10)))
        $$ = stmt
   }
 
 TAG_VALUES_WITH:
   EQ TAG_KEYS
   {
-      stmt := &ShowTagValuesStatement{}
-      stmt.Op = EQ
-      stmt.TagKeyExpr = $2.(*ListLiteral)
-      $$ = stmt
+      $$ = &ShowTagValuesStatement{
+          Op: EQ,
+          TagKeyExpr: $2.(*ListLiteral),
+          depth: depthCheck(yylex, 1 + $2.Depth()),
+      }
   }
   |NEQ TAG_KEYS
   {
-      stmt := &ShowTagValuesStatement{}
-      stmt.Op = NEQ
-      stmt.TagKeyExpr = $2.(*ListLiteral)
-      $$ = stmt
+      $$ = &ShowTagValuesStatement{
+          Op: NEQ,
+          TagKeyExpr: $2.(*ListLiteral),
+          depth: depthCheck(yylex, 1 + $2.Depth()),
+      }
   }
   |IN LPAREN TAG_KEYS RPAREN
   {
-      stmt := &ShowTagValuesStatement{}
-      stmt.Op = IN
-      stmt.TagKeyExpr = $3.(*ListLiteral)
-      $$ = stmt
+      $$ = &ShowTagValuesStatement{
+          Op: IN,
+          TagKeyExpr: $3.(*ListLiteral),
+          depth: depthCheck(yylex, 1 + $3.Depth()),
+      }
   }
   |EQREGEX REGULAR_EXPRESSION
   {
-       stmt := &ShowTagValuesStatement{}
+       stmt := &ShowTagValuesStatement{depth: depthCheck(yylex, 2)}
        stmt.Op = EQREGEX
        re, err := regexp.Compile($2)
        	if err != nil {
@@ -2263,7 +2749,7 @@ TAG_VALUES_WITH:
   }
   |NEQREGEX REGULAR_EXPRESSION
   {
-       stmt := &ShowTagValuesStatement{}
+       stmt := &ShowTagValuesStatement{depth: depthCheck(yylex, 2)}
        stmt.Op = NEQREGEX
        re, err := regexp.Compile($2)
        	if err != nil {
@@ -2284,6 +2770,7 @@ TAG_KEYS:
   {
       $3.(*ListLiteral).Vals = append($3.(*ListLiteral).Vals, $1)
       $$ = $3
+      depthCheck(yylex, $$.Depth())
   }
 
 TAG_KEY:
@@ -2297,66 +2784,72 @@ TAG_KEY:
 EXPLAIN_STATEMENT:
     EXPLAIN ANALYZE SELECT_STATEMENT
     {
-        stmt := &ExplainStatement{}
-        stmt.Statement = $3.(*SelectStatement)
-        stmt.Analyze = true
-        $$ = stmt
+        $$ = &ExplainStatement{
+            Statement: $3.(*SelectStatement),
+            Analyze: true,
+            depth: depthCheck(yylex, 1 + $3.Depth()),
+        }
     }
     |EXPLAIN SELECT_STATEMENT
     {
-        stmt := &ExplainStatement{}
-        stmt.Statement = $2.(*SelectStatement)
-        stmt.Analyze = false
-        $$ = stmt
+        $$ = &ExplainStatement{
+            Statement: $2.(*SelectStatement),
+            Analyze: false,
+            depth: depthCheck(yylex, 1 + $2.Depth()),
+        }
     }
 
 
 SHOW_TAG_KEY_CARDINALITY_STATEMENT:
     SHOW TAG KEY EXACT CARDINALITY ON_DATABASE FROM_CLAUSE WHERE_CLAUSE GROUP_BY_CLAUSE LIMIT_OFFSET_OPTION
     {
-        stmt := &ShowTagKeyCardinalityStatement{}
-        stmt.Database = $6
-        stmt.Exact = true
-        stmt.Sources = $7
-        stmt.Condition = $8
-        stmt.Dimensions = $9
-        stmt.Limit = $10[0]
-        stmt.Offset = $10[1]
-        $$ = stmt
+        $$ = &ShowTagKeyCardinalityStatement{
+            Database: $6,
+            Exact: true,
+            Sources: $7.sources,
+            Condition: $8,
+            Dimensions: $9.dims,
+            Limit: $10[0],
+            Offset: $10[1],
+            depth: depthCheck(yylex, 1 + maxDepth($7, $8, $9)),
+        }
     }
     |SHOW TAG KEY EXACT CARDINALITY ON_DATABASE WHERE_CLAUSE GROUP_BY_CLAUSE LIMIT_OFFSET_OPTION
     {
-        stmt := &ShowTagKeyCardinalityStatement{}
-        stmt.Database = $6
-        stmt.Exact = true
-        stmt.Condition = $7
-        stmt.Dimensions = $8
-        stmt.Limit = $9[0]
-        stmt.Offset = $9[1]
-        $$ = stmt
+        $$ = &ShowTagKeyCardinalityStatement{
+            Database: $6,
+            Exact: true,
+            Condition: $7,
+            Dimensions: $8.dims,
+            Limit: $9[0],
+            Offset: $9[1],
+            depth: depthCheck(yylex, 1 + maxDepth($7, $8)),
+        }
     }
     |SHOW TAG KEY CARDINALITY ON_DATABASE FROM_CLAUSE WHERE_CLAUSE GROUP_BY_CLAUSE LIMIT_OFFSET_OPTION
     {
-         stmt := &ShowTagKeyCardinalityStatement{}
-         stmt.Database = $5
-         stmt.Exact = false
-         stmt.Sources = $6
-         stmt.Condition = $7
-         stmt.Dimensions = $8
-         stmt.Limit = $9[0]
-         stmt.Offset = $9[1]
-         $$ = stmt
+         $$ = &ShowTagKeyCardinalityStatement{
+             Database: $5,
+             Exact: false,
+             Sources: $6.sources,
+             Condition: $7,
+             Dimensions: $8.dims,
+             Limit: $9[0],
+             Offset: $9[1],
+             depth: depthCheck(yylex, 1 + maxDepth($6, $7, $8)),
+         }
     }
     |SHOW TAG KEY CARDINALITY ON_DATABASE WHERE_CLAUSE GROUP_BY_CLAUSE LIMIT_OFFSET_OPTION
     {
-         stmt := &ShowTagKeyCardinalityStatement{}
-         stmt.Database = $5
-         stmt.Exact = true
-         stmt.Condition = $6
-         stmt.Dimensions = $7
-         stmt.Limit = $8[0]
-         stmt.Offset = $8[1]
-         $$ = stmt
+         $$ = &ShowTagKeyCardinalityStatement{
+             Database: $5,
+             Exact: true,
+             Condition: $6,
+             Dimensions: $7.dims,
+             Limit: $8[0],
+             Offset: $8[1],
+             depth: depthCheck(yylex, 1 + maxDepth($6, $7)),
+         }
     }
 
 
@@ -2365,116 +2858,123 @@ SHOW_TAG_KEY_CARDINALITY_STATEMENT:
 SHOW_TAG_VALUES_CARDINALITY_STATEMENT:
     SHOW TAG VALUES EXACT CARDINALITY ON_DATABASE FROM_CLAUSE WITH KEY TAG_VALUES_WITH WHERE_CLAUSE GROUP_BY_CLAUSE LIMIT_OFFSET_OPTION
     {
-        stmt := &ShowTagValuesCardinalityStatement{}
-        stmt.Database = $6
-        stmt.Exact = true
-        stmt.Sources = $7
         stmt_temp := $10.(*ShowTagValuesStatement)
-        stmt.Op = stmt_temp.Op
-        stmt.TagKeyExpr = stmt_temp.TagKeyExpr
-        stmt.Condition = $11
-        stmt.Dimensions = $12
-        stmt.Limit = $13[0]
-        stmt.Offset = $13[1]
-        stmt.TagKeyCondition = nil
-        $$ = stmt
+        $$ = &ShowTagValuesCardinalityStatement{
+            Database: $6,
+            Exact: true,
+            Sources: $7.sources,
+            Op: stmt_temp.Op,
+            TagKeyExpr: stmt_temp.TagKeyExpr,
+            Condition: $11,
+            Dimensions: $12.dims,
+            Limit: $13[0],
+            Offset: $13[1],
+            TagKeyCondition: nil,
+            depth: depthCheck(yylex, 1 + max(1 + stmt_temp.TagKeyExpr.Depth(), maxDepth($7, $11, $12))),
+        }
 
     }
     |SHOW TAG VALUES EXACT CARDINALITY ON_DATABASE WITH KEY TAG_VALUES_WITH WHERE_CLAUSE GROUP_BY_CLAUSE LIMIT_OFFSET_OPTION
     {
-         stmt := &ShowTagValuesCardinalityStatement{}
-         stmt.Database = $6
-         stmt.Exact = true
-         stmt_temp := $9.(*ShowTagValuesStatement)
-         stmt.Op = stmt_temp.Op
-         stmt.TagKeyExpr = stmt_temp.TagKeyExpr
-         stmt.Condition = $10
-         stmt.Dimensions = $11
-         stmt.Limit = $12[0]
-         stmt.Offset = $12[1]
-         stmt.TagKeyCondition = nil
-         $$ = stmt
+        stmt_temp := $9.(*ShowTagValuesStatement)
+        $$ = &ShowTagValuesCardinalityStatement{
+            Database: $6,
+            Exact: true,
+            Op: stmt_temp.Op,
+            TagKeyExpr: stmt_temp.TagKeyExpr,
+            Condition: $10,
+            Dimensions: $11.dims,
+            Limit: $12[0],
+            Offset: $12[1],
+            TagKeyCondition: nil,
+            depth: depthCheck(yylex, 1 + max(1 + stmt_temp.TagKeyExpr.Depth(), maxDepth($10, $11))),
+        }
     }
     |SHOW TAG VALUES CARDINALITY ON_DATABASE FROM_CLAUSE WITH KEY TAG_VALUES_WITH WHERE_CLAUSE GROUP_BY_CLAUSE LIMIT_OFFSET_OPTION
     {
-        stmt := &ShowTagValuesCardinalityStatement{}
-        stmt.Database = $5
-        stmt.Exact = false
-        stmt.Sources = $6
         stmt_temp := $9.(*ShowTagValuesStatement)
-        stmt.Op = stmt_temp.Op
-        stmt.TagKeyExpr = stmt_temp.TagKeyExpr
-        stmt.Condition = $10
-        stmt.Dimensions = $11
-        stmt.Limit = $12[0]
-        stmt.Offset = $12[1]
-        stmt.TagKeyCondition = nil
-        $$ = stmt
-
+        $$ = &ShowTagValuesCardinalityStatement{
+            Database: $5,
+            Exact: false,
+            Sources: $6.sources,
+            Op: stmt_temp.Op,
+            TagKeyExpr: stmt_temp.TagKeyExpr,
+            Condition: $10,
+            Dimensions: $11.dims,
+            Limit: $12[0],
+            Offset: $12[1],
+            TagKeyCondition: nil,
+            depth: depthCheck(yylex, 1 + max(1 + stmt_temp.TagKeyExpr.Depth(), maxDepth($6, $10, $11))),
+        }
     }
     |SHOW TAG VALUES CARDINALITY ON_DATABASE WITH KEY TAG_VALUES_WITH WHERE_CLAUSE GROUP_BY_CLAUSE LIMIT_OFFSET_OPTION
     {
-         stmt := &ShowTagValuesCardinalityStatement{}
-         stmt.Database = $5
-         stmt.Exact = true
-         stmt_temp := $8.(*ShowTagValuesStatement)
-         stmt.Op = stmt_temp.Op
-         stmt.TagKeyExpr = stmt_temp.TagKeyExpr
-         stmt.Condition = $9
-         stmt.Dimensions = $10
-         stmt.Limit = $11[0]
-         stmt.Offset = $11[1]
-         stmt.TagKeyCondition = nil
-         $$ = stmt
+        stmt_temp := $8.(*ShowTagValuesStatement)
+        $$ = &ShowTagValuesCardinalityStatement{
+            Database: $5,
+            Exact: true,
+            Op: stmt_temp.Op,
+            TagKeyExpr: stmt_temp.TagKeyExpr,
+            Condition: $9,
+            Dimensions: $10.dims,
+            Limit: $11[0],
+            Offset: $11[1],
+            TagKeyCondition: nil,
+            depth: depthCheck(yylex, 1 + max(1 + stmt_temp.TagKeyExpr.Depth(), maxDepth($9, $10))),
+        }
     }
 
 
 SHOW_FIELD_KEY_CARDINALITY_STATEMENT:
     SHOW FIELD KEY EXACT CARDINALITY ON_DATABASE FROM_CLAUSE WHERE_CLAUSE GROUP_BY_CLAUSE LIMIT_OFFSET_OPTION
     {
-        stmt := &ShowFieldKeyCardinalityStatement{}
-        stmt.Database = $6
-        stmt.Exact = true
-        stmt.Sources = $7
-        stmt.Condition = $8
-        stmt.Dimensions = $9
-        stmt.Limit = $10[0]
-        stmt.Offset = $10[1]
-        $$ = stmt
+        $$ = &ShowFieldKeyCardinalityStatement{
+            Database: $6,
+            Exact: true,
+            Sources: $7.sources,
+            Condition: $8,
+            Dimensions: $9.dims,
+            Limit: $10[0],
+            Offset: $10[1],
+            depth: depthCheck(yylex, 1 + maxDepth($7, $8, $9)),
+        }
     }
     |SHOW FIELD KEY EXACT CARDINALITY ON_DATABASE WHERE_CLAUSE GROUP_BY_CLAUSE LIMIT_OFFSET_OPTION
     {
-        stmt := &ShowFieldKeyCardinalityStatement{}
-        stmt.Database = $6
-        stmt.Exact = true
-        stmt.Condition = $7
-        stmt.Dimensions = $8
-        stmt.Limit = $9[0]
-        stmt.Offset = $9[1]
-        $$ = stmt
+        $$ = &ShowFieldKeyCardinalityStatement{
+            Database: $6,
+            Exact: true,
+            Condition: $7,
+            Dimensions: $8.dims,
+            Limit: $9[0],
+            Offset: $9[1],
+            depth: depthCheck(yylex, 1 + maxDepth($7, $8)),
+        }
     }
     |SHOW FIELD KEY CARDINALITY ON_DATABASE FROM_CLAUSE WHERE_CLAUSE GROUP_BY_CLAUSE LIMIT_OFFSET_OPTION
     {
-         stmt := &ShowFieldKeyCardinalityStatement{}
-         stmt.Database = $5
-         stmt.Exact = false
-         stmt.Sources = $6
-         stmt.Condition = $7
-         stmt.Dimensions = $8
-         stmt.Limit = $9[0]
-         stmt.Offset = $9[1]
-         $$ = stmt
+        $$ = &ShowFieldKeyCardinalityStatement{
+            Database: $5,
+            Exact: false,
+            Sources: $6.sources,
+            Condition: $7,
+            Dimensions: $8.dims,
+            Limit: $9[0],
+            Offset: $9[1],
+            depth: depthCheck(yylex, 1 + maxDepth($6, $7, $8)),
+        }
     }
     |SHOW FIELD KEY CARDINALITY ON_DATABASE WHERE_CLAUSE GROUP_BY_CLAUSE LIMIT_OFFSET_OPTION
     {
-         stmt := &ShowFieldKeyCardinalityStatement{}
-         stmt.Database = $5
-         stmt.Exact = true
-         stmt.Condition = $6
-         stmt.Dimensions = $7
-         stmt.Limit = $8[0]
-         stmt.Offset = $8[1]
-         $$ = stmt
+        $$ = &ShowFieldKeyCardinalityStatement{
+            Database: $5,
+            Exact: true,
+            Condition: $6,
+            Dimensions: $7.dims,
+            Limit: $8[0],
+            Offset: $8[1],
+            depth: depthCheck(yylex, 1 + maxDepth($6, $7)),
+        }
     }
 
 
@@ -2499,8 +2999,9 @@ CREATE_MEASUREMENT_STATEMENT:
         stmt.NumOfShards = $5.NumOfShards
         stmt.Type = $5.Type
         stmt.EngineType = $5.EngineType
-
+        stmt.TTL = $5.TTL
         $$ = stmt
+        depthCheck(yylex, $$.Depth())
     }
     |CREATE MEASUREMENT TABLE_CASE COLUMN_LISTS CMOPTIONS_CS
     {
@@ -2590,6 +3091,7 @@ CREATE_MEASUREMENT_STATEMENT:
         stmt.Property = $5.Property
         stmt.CompactType = $5.CompactType
         $$ = stmt
+        depthCheck(yylex, $$.Depth())
     }
 
 CMOPTIONS_TS:
@@ -2599,7 +3101,7 @@ CMOPTIONS_TS:
         option.EngineType = "tsstore"
         $$ = option
     }
-    | WITH CMOPTION_ENGINETYPE_TS CMOPTION_INDEXTYPE_TS CMOPTION_SHARDKEY CMOPTION_SHARDNUM TYPE_CLAUSE
+    | WITH CMOPTION_ENGINETYPE_TS CMOPTION_INDEXTYPE_TS CMOPTION_SHARDKEY CMOPTION_SHARDNUM TYPE_CLAUSE TTL_CLAUSE_OPT
     {
         option := &CreateMeasurementStatementOption{}
         if $3 != nil {
@@ -2612,6 +3114,7 @@ CMOPTIONS_TS:
         option.NumOfShards = $5
         option.Type = $6
         option.EngineType = $2
+        option.TTL = $7
         $$ = option
     }
 
@@ -2718,6 +3221,7 @@ CMOPTION_INDEXTYPE_CS:
             indextype.types = append(indextype.types, $6.types...)
             indextype.lists = append(indextype.lists, $6.lists...)
             $$ = indextype
+            depthCheck(yylex, max(len($$.types), len($$.lists)))
         }
     }
 
@@ -2730,6 +3234,15 @@ CMOPTION_SHARDKEY:
         shardKey := $2
         sort.Strings(shardKey)
         $$ = shardKey
+    }
+
+TTL_CLAUSE_OPT:
+    {
+        $$ = time.Duration(0)
+    }
+    | TTL DURATIONVAL
+    {
+        $$ = $2
     }
 
 CMOPTION_SHARDNUM:
@@ -2841,6 +3354,7 @@ FIELD_OPTIONS:
     {
         fields := []*fieldList{$1}
         $$ = append(fields, $2...)
+        depthCheck(yylex, len($$))
     }
     |
     FIELD_OPTION
@@ -2887,6 +3401,31 @@ FIELD_COLUMN:
         }
     }
 
+INDEX_TYPES:
+    {
+        $$ = nil
+    }
+    |
+    INDEX_TYPE_LIST
+    {
+        $$ = $1
+    }
+
+INDEX_TYPE_LIST:
+    INDEX_TYPE
+    {
+        $$ = $1
+    }
+    |
+    INDEX_TYPE_LIST INDEX_TYPE
+    {
+        indextype := $1
+        indextype.types = append(indextype.types,$2.types...)
+        indextype.lists = append(indextype.lists,$2.lists...)
+        $$ = indextype
+        depthCheck(yylex, max(len($$.types), len($$.lists)))
+    }
+
 INDEX_TYPE:
     IDENT INDEXLIST INDEX_LIST
     {
@@ -2904,30 +3443,16 @@ INDEX_TYPE:
         }
     }
 
-INDEX_TYPES:
-    INDEX_TYPE INDEX_TYPES
-    {
-        indextype := $1
-        if $2 != nil{
-            indextype.types = append(indextype.types,$2.types...)
-            indextype.lists = append(indextype.lists,$2.lists...)
-        }
-        $$ = indextype
-    }
-    |
-    {
-        $$ = nil
-    }
-
 INDEX_LIST:
     IDENT
     {
         $$ = []string{$1}
     }
-    |IDENT COMMA INDEX_LIST
+    |INDEX_LIST COMMA IDENT
     {
 
-        $$ = append([]string{$1}, $3...)
+        $$ = append($1, $3)
+        depthCheck(yylex, len($$))
     }
 
 TYPE_CLAUSE:
@@ -2957,15 +3482,25 @@ SORTKEY_LIST:
         $$ = $2
     }
 
+MEASUREMENT_PROPERTYS_LIST:
+    PROPERTY MEASUREMENT_PROPERTYS
+    {
+        $$ = $2
+    }
+    |
+    PROPERTY
+    {
+        $$ = nil
+    }
+
 MEASUREMENT_PROPERTYS:
-    MEASUREMENT_PROPERTY COMMA MEASUREMENT_PROPERTYS
+    MEASUREMENT_PROPERTYS COMMA MEASUREMENT_PROPERTY
     {
         m := $1
-        if $3 != nil{
-            m[0] = append(m[0], $3[0]...)
-            m[1] = append(m[1], $3[1]...)
-        }
+        m[0] = append(m[0], $3[0]...)
+        m[1] = append(m[1], $3[1]...)
         $$ = m
+        depthCheck(yylex, max(len(m[0]), len(m[1])))
     }
     |
     MEASUREMENT_PROPERTY
@@ -2973,24 +3508,15 @@ MEASUREMENT_PROPERTYS:
         $$ = $1
     }
 
-MEASUREMENT_PROPERTYS_LIST:
-    PROPERTY MEASUREMENT_PROPERTYS
-    {
-        $$ = $2
-    }
-
 MEASUREMENT_PROPERTY:
     STRING_TYPE EQ STRING_TYPE
     {
         $$ = [][]string{{$1},{$3}}
     }
-    |STRING_TYPE EQ INTEGER
+    |
+    STRING_TYPE EQ INTEGER
     {
         $$ = [][]string{{$1},{fmt.Sprintf("%d",$3)}}
-    }
-    |
-    {
-        $$ = nil
     }
 
 SHARDKEYLIST:
@@ -3001,6 +3527,7 @@ SHARDKEYLIST:
     |SHARDKEYLIST COMMA SHARD_KEY
     {
         $$ = append($1,$3)
+        depthCheck(yylex, len($$))
     }
 SHARD_KEY:
     IDENT
@@ -3038,98 +3565,106 @@ SHOW_GRANTS_FOR_USER_STATEMENT:
 SHOW_MEASUREMENT_CARDINALITY_STATEMENT:
     SHOW MEASUREMENT EXACT CARDINALITY ON_DATABASE FROM_CLAUSE WHERE_CLAUSE GROUP_BY_CLAUSE LIMIT_OFFSET_OPTION
     {
-        stmt := &ShowMeasurementCardinalityStatement{}
-        stmt.Database = $5
-        stmt.Exact = true
-        stmt.Sources = $6
-        stmt.Condition = $7
-        stmt.Dimensions = $8
-        stmt.Limit = $9[0]
-        stmt.Offset = $9[1]
-        $$ = stmt
+        $$ = &ShowMeasurementCardinalityStatement{
+            Database: $5,
+            Exact: true,
+            Sources: $6.sources,
+            Condition: $7,
+            Dimensions: $8.dims,
+            Limit: $9[0],
+            Offset: $9[1],
+            depth: depthCheck(yylex, 1 + maxDepth($6, $7, $8)),
+        }
     }
     |SHOW MEASUREMENT EXACT CARDINALITY ON_DATABASE WHERE_CLAUSE GROUP_BY_CLAUSE LIMIT_OFFSET_OPTION
     {
-        stmt := &ShowMeasurementCardinalityStatement{}
-        stmt.Database = $5
-        stmt.Exact = true
-        stmt.Condition = $6
-        stmt.Dimensions = $7
-        stmt.Limit = $8[0]
-        stmt.Offset = $8[1]
-        $$ = stmt
+        $$ = &ShowMeasurementCardinalityStatement{
+            Database: $5,
+            Exact: true,
+            Condition: $6,
+            Dimensions: $7.dims,
+            Limit: $8[0],
+            Offset: $8[1],
+            depth: depthCheck(yylex, 1 + maxDepth($6, $7)),
+        }
     }
     |SHOW MEASUREMENT CARDINALITY ON_DATABASE FROM_CLAUSE WHERE_CLAUSE GROUP_BY_CLAUSE LIMIT_OFFSET_OPTION
     {
-        stmt := &ShowMeasurementCardinalityStatement{}
-        stmt.Database = $4
-        stmt.Exact = false
-        stmt.Sources = $5
-        stmt.Condition = $6
-        stmt.Dimensions = $7
-        stmt.Limit = $8[0]
-        stmt.Offset = $8[1]
-        $$ = stmt
+        $$ = &ShowMeasurementCardinalityStatement{
+            Database: $4,
+            Exact: false,
+            Sources: $5.sources,
+            Condition: $6,
+            Dimensions: $7.dims,
+            Limit: $8[0],
+            Offset: $8[1],
+            depth: depthCheck(yylex, 1 + maxDepth($5, $6, $7)),
+        }
     }
     |SHOW MEASUREMENT CARDINALITY ON_DATABASE WHERE_CLAUSE GROUP_BY_CLAUSE LIMIT_OFFSET_OPTION
     {
-        stmt := &ShowMeasurementCardinalityStatement{}
-        stmt.Database = $4
-        stmt.Exact = false
-        stmt.Condition = $5
-        stmt.Dimensions = $6
-        stmt.Limit = $7[0]
-        stmt.Offset = $7[1]
-        $$ = stmt
+        $$ = &ShowMeasurementCardinalityStatement{
+            Database: $4,
+            Exact: false,
+            Condition: $5,
+            Dimensions: $6.dims,
+            Limit: $7[0],
+            Offset: $7[1],
+            depth: depthCheck(yylex, 1 + maxDepth($5, $6)),
+        }
     }
 
 
 SHOW_SERIES_CARDINALITY_STATEMENT:
     SHOW SERIES EXACT CARDINALITY ON_DATABASE FROM_CLAUSE WHERE_CLAUSE GROUP_BY_CLAUSE LIMIT_OFFSET_OPTION
     {
-         stmt := &ShowSeriesCardinalityStatement{}
-         stmt.Database = $5
-         stmt.Exact = true
-         stmt.Sources = $6
-         stmt.Condition = $7
-         stmt.Dimensions = $8
-         stmt.Limit = $9[0]
-         stmt.Offset = $9[1]
-         $$ = stmt
+        $$ = &ShowSeriesCardinalityStatement{
+            Database: $5,
+            Exact: true,
+            Sources: $6.sources,
+            Condition: $7,
+            Dimensions: $8.dims,
+            Limit: $9[0],
+            Offset: $9[1],
+            depth: depthCheck(yylex, 1 + maxDepth($6, $7, $8)),
+        }
     }
     |SHOW SERIES EXACT CARDINALITY ON_DATABASE WHERE_CLAUSE GROUP_BY_CLAUSE LIMIT_OFFSET_OPTION
     {
-        stmt := &ShowSeriesCardinalityStatement{}
-        stmt.Database = $5
-        stmt.Exact = true
-        stmt.Condition = $6
-        stmt.Dimensions = $7
-        stmt.Limit = $8[0]
-        stmt.Offset = $8[1]
-        $$ = stmt
+        $$ = &ShowSeriesCardinalityStatement{
+            Database: $5,
+            Exact: true,
+            Condition: $6,
+            Dimensions: $7.dims,
+            Limit: $8[0],
+            Offset: $8[1],
+            depth: depthCheck(yylex, 1 + maxDepth($6, $7)),
+        }
     }
     |SHOW SERIES CARDINALITY ON_DATABASE FROM_CLAUSE WHERE_CLAUSE GROUP_BY_CLAUSE LIMIT_OFFSET_OPTION
     {
-        stmt := &ShowSeriesCardinalityStatement{}
-        stmt.Database = $4
-        stmt.Exact = false
-        stmt.Sources = $5
-        stmt.Condition = $6
-        stmt.Dimensions = $7
-        stmt.Limit = $8[0]
-        stmt.Offset = $8[1]
-        $$ = stmt
+        $$ = &ShowSeriesCardinalityStatement{
+            Database: $4,
+            Exact: false,
+            Sources: $5.sources,
+            Condition: $6,
+            Dimensions: $7.dims,
+            Limit: $8[0],
+            Offset: $8[1],
+            depth: depthCheck(yylex, 1 + maxDepth($5, $6, $7)),
+        }
     }
     |SHOW SERIES CARDINALITY ON_DATABASE WHERE_CLAUSE GROUP_BY_CLAUSE LIMIT_OFFSET_OPTION
     {
-        stmt := &ShowSeriesCardinalityStatement{}
-        stmt.Database = $4
-        stmt.Exact = false
-        stmt.Condition = $5
-        stmt.Dimensions = $6
-        stmt.Limit = $7[0]
-        stmt.Offset = $7[1]
-        $$ = stmt
+        $$ = &ShowSeriesCardinalityStatement{
+            Database: $4,
+            Exact: false,
+            Condition: $5,
+            Dimensions: $6.dims,
+            Limit: $7[0],
+            Offset: $7[1],
+            depth: depthCheck(yylex, 1 + maxDepth($5, $6)),
+        }
     }
 
 
@@ -3202,6 +3737,7 @@ CREATE_CONTINUOUS_QUERY_STATEMENT:
     	    Name: $4,
     	    Database: $6,
     	    Source: $9.(*SelectStatement),
+            depth: depthCheck(yylex, 1 + $9.Depth()),
     	}
     	if $7 != nil{
     	    stmt.ResampleEvery = $7.ResampleEvery
@@ -3250,27 +3786,50 @@ DROP_CONTINUOUS_QUERY_STATEMENT:
     	}
     }
 CREATE_DOWNSAMPLE_STATEMENT:
-    CREATE DOWNSAMPLE ON IDENT LPAREN COLUMN_CLAUSES RPAREN WITH DOWNSAMPLE_INTERVALS
+    CREATE DOWNSAMPLE ON IDENT LPAREN DOWNSAMPLE_CALLS RPAREN WITH DOWNSAMPLE_INTERVALS
     {
     	stmt := $9.(*CreateDownSampleStatement)
     	stmt.RpName = $4
-    	stmt.Ops = $6
+    	stmt.Ops = $6.fields
+        stmt.depth = depthCheck(yylex, max(stmt.depth, 1 + $6.Depth()))
     	$$ = stmt
     }
-    |CREATE DOWNSAMPLE ON IDENT DOT IDENT LPAREN COLUMN_CLAUSES RPAREN WITH DOWNSAMPLE_INTERVALS
+    |CREATE DOWNSAMPLE ON IDENT DOT IDENT LPAREN DOWNSAMPLE_CALLS RPAREN WITH DOWNSAMPLE_INTERVALS
     {
     	stmt := $11.(*CreateDownSampleStatement)
     	stmt.RpName = $6
     	stmt.DbName = $4
-    	stmt.Ops = $8
+    	stmt.Ops = $8.fields
+        stmt.depth = depthCheck(yylex, max(stmt.depth, 1 + $8.Depth()))
     	$$ = stmt
     }
-    |CREATE DOWNSAMPLE LPAREN COLUMN_CLAUSES RPAREN WITH DOWNSAMPLE_INTERVALS
+    |CREATE DOWNSAMPLE LPAREN DOWNSAMPLE_CALLS RPAREN WITH DOWNSAMPLE_INTERVALS
     {
     	stmt := $7.(*CreateDownSampleStatement)
-    	stmt.Ops = $4
+    	stmt.Ops = $4.fields
+        stmt.depth = depthCheck(yylex, max(stmt.depth, 1 + $4.Depth()))
     	$$ = stmt
     }
+
+DOWNSAMPLE_CALLS:
+    DOWNSAMPLE_CALL
+    {
+        $$ = fieldsList{fields:[]*Field{$1}, depth: depthCheck(yylex, 1 + $1.Depth())}
+    }
+    | DOWNSAMPLE_CALLS COMMA DOWNSAMPLE_CALL
+    {
+        fl := $1
+        fl.fields = append(fl.fields, $3)
+        fl.depth = depthCheck(yylex, max(fl.depth, len(fl.fields) + $3.Depth()))
+        $$ = fl
+    }
+
+DOWNSAMPLE_CALL:
+    COLUMN_CALL
+    {
+        $$ = &Field{Expr: $1, depth: depthCheck(yylex, 1+$1.Depth())}
+    }
+
 
 DROP_DOWNSAMPLE_STATEMENT:
     DROP DOWNSAMPLE ON IDENT
@@ -3316,9 +3875,10 @@ DOWNSAMPLE_INTERVALS:
     DURATION DURATIONVAL SAMPLEINTERVAL LPAREN DURATIONVALS RPAREN TIMEINTERVAL LPAREN DURATIONVALS RPAREN
     {
 	$$ = &CreateDownSampleStatement{
-	    Duration : $2,
+	    Duration: $2,
 	    SampleInterval: $5,
 	    TimeInterval: $9,
+            depth: depthCheck(yylex, 1 + max(len($5), len($9))),
 	}
     }
 
@@ -3327,55 +3887,36 @@ DURATIONVALS:
     {
     	$$ = []time.Duration{$1}
     }
-    |DURATIONVAL COMMA DURATIONVALS
+    |DURATIONVALS COMMA DURATIONVAL
     {
-    	$$ = append([]time.Duration{$1},$3...)
+    	$$ = append($1, $3)
+        depthCheck(yylex, len($$))
     }
-
 
 CREATE_STREAM_STATEMENT:
-    CREATE STREAM STRING_TYPE INTO_CLAUSE ON SELECT_STATEMENT DELAY DURATIONVAL
+    CREATE STREAM STRING_TYPE INTO TABLE_NAME_WITH_OPTION ON SELECT_STATEMENT DELAY_CLAUSE_OPT
     {
-    	stmt := &CreateStreamStatement{
-    	    Name: $3,
-    	    Query: $6,
-    	    Delay: $8,
-    	}
-        if len($4) > 1{
-            yylex.Error("into clause only support one target")
-        }
-        if len($4) == 1{
-            mst,ok := $4[0].(*Measurement)
-            if !ok{
-                 yylex.Error("into clause only support measurement clause")
-            }
-            mst.IsTarget = true
-            stmt.Target = &Target{
-            	Measurement: mst,
-            }
+        $5.IsTarget = true
+        stmt := &CreateStreamStatement{
+            Name: $3,
+            Target: &Target{
+                Measurement: $5,
+                depth: depthCheck(yylex, 2),
+            },
+            Query: $7,
+            Delay: $8,
+            depth: depthCheck(yylex, 1 + max(3, $7.Depth())),
         }
         $$ = stmt
     }
-    |CREATE STREAM STRING_TYPE INTO_CLAUSE ON SELECT_STATEMENT
+
+DELAY_CLAUSE_OPT:
     {
-    	stmt := &CreateStreamStatement{
-    	    Name: $3,
-    	    Query: $6,
-    	}
-        if len($4) > 1{
-            yylex.Error("into clause only support one target")
-        }
-        if len($4) == 1{
-            mst,ok := $4[0].(*Measurement)
-            if !ok{
-                 yylex.Error("into clause only support measurement clause")
-            }
-            mst.IsTarget = true
-            stmt.Target = &Target{
-            	Measurement: mst,
-            }
-        }
-        $$ = stmt
+        $$ = time.Duration(0)
+    }
+    | DELAY DURATIONVAL
+    {
+        $$ = $2
     }
 
 SHOW_STREAM_STATEMENT:
@@ -3409,9 +3950,10 @@ ALL_DESTINATION:
     {
         $$ = []string{$1}
     }
-    |STRING_TYPE COMMA ALL_DESTINATION
+    |ALL_DESTINATION COMMA STRING_TYPE
     {
-        $$ = append([]string{$1}, $3...)
+        $$ = append($1, $3)
+        depthCheck(yylex, len($$))
     }
 
 SUBSCRIPTION_TYPE:
@@ -3566,32 +4108,36 @@ SHOW_CLUSTER_STATEMENT:
 	 $$ = stmt
       }
 
-WITH_SELECT_STATEMENT:
-    WITH CTE_CLAUSES SELECT_STATEMENT
-    {
-        $$ = &WithSelectStatement{
-            CTEs: $2,
-            Query: $3.(*SelectStatement),
-        }
-    }
-
 CTE_CLAUSES:
     CTE_CLAUSE
     {
-        $$ = []*CTE{$1}
+        $$ = ctesList{ctes: []*CTE{$1}, depth: depthCheck(yylex, 2 + $1.Depth())}
     }
-    |CTE_CLAUSE COMMA CTE_CLAUSES
+    |CTE_CLAUSES COMMA CTE_CLAUSE
     {
-        $$ = append([]*CTE{$1},$3...)
+        cl := $1
+        cl.ctes = append(cl.ctes, $3)
+        cl.depth = depthCheck(yylex, max(cl.depth, len(cl.ctes) + 1 + $3.Depth()))
+        $$ = cl
     }
 
 CTE_CLAUSE:
-    STRING_TYPE AS LPAREN SELECT_STATEMENT RPAREN
+    STRING_TYPE AS SELECT_WITH_PARENS
     {
-        $$ = &CTE{
+        cte := &CTE{
             Alias: $1,
-            Query: $4.(*SelectStatement),
+            depth: depthCheck(yylex, 1),
         }
+        if selectStatement, ok := $3.(*SelectStatement); ok {
+            cte.Query = selectStatement
+            cte.depth = depthCheck(yylex, max(cte.depth, 1 + cte.Query.Depth()))
+        } else if graphStatement, ok := $3.(*GraphStatement); ok {
+            cte.GraphQuery = graphStatement
+            cte.depth = depthCheck(yylex, max(cte.depth, 1 + cte.GraphQuery.Depth()))
+        } else {
+            yylex.Error("Invalid stmt clause in cte.query")
+        }
+        $$ = cte
     }
 
 %%

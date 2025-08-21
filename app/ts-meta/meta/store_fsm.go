@@ -173,6 +173,8 @@ var applyFunc = map[proto2.Command_Type]func(fsm *storeFSM, cmd *proto2.Command)
 	proto2.Command_InsertFilesCommand:               applyInsertFilesCommand,
 	proto2.Command_UpdateMetaNodeStatusCommand:      applyUpdateMetaNodeStatus,
 	proto2.Command_UpdateIndexInfoTierCommand:       applyUpdateIndexInfoTier,
+	proto2.Command_ReplaceMergeShardsCommand:        applyReplaceMergeShards,
+	proto2.Command_RecoverMetaData:                  applyRecoverMetaData,
 }
 
 func applyCreateDatabase(fsm *storeFSM, cmd *proto2.Command) interface{} {
@@ -427,6 +429,14 @@ func applyInsertFilesCommand(fsm *storeFSM, cmd *proto2.Command) interface{} {
 	return fsm.applyInsertFilesCommand(cmd)
 }
 
+func applyReplaceMergeShards(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyReplaceMergeShards(cmd)
+}
+
+func applyRecoverMetaData(fsm *storeFSM, cmd *proto2.Command) interface{} {
+	return fsm.applyRecoverMetaData(cmd)
+}
+
 func (fsm *storeFSM) executeCmd(cmd proto2.Command) interface{} {
 	if handler, ok := applyFunc[cmd.GetType()]; ok {
 		return handler(fsm, &cmd)
@@ -481,13 +491,16 @@ func (fsm *storeFSM) applyCreateDatabaseCommand(cmd *proto2.Command) interface{}
 			ShardGroupDuration: time.Duration(rpi.GetShardGroupDuration()),
 			HotDuration:        time.Duration(rpi.GetHotDuration()),
 			WarmDuration:       time.Duration(rpi.GetWarmDuration()),
-			IndexGroupDuration: time.Duration(rpi.GetIndexGroupDuration())}
+			IndexColdDuration:  time.Duration(rpi.GetIndexColdDuration()),
+			IndexGroupDuration: time.Duration(rpi.GetIndexGroupDuration()),
+			ShardMergeDuration: time.Duration(rpi.GetShardMergeDuration())}
 	} else if s.config.RetentionAutoCreate {
 		// Create a retention policy.
 		rp = meta2.NewRetentionPolicyInfo(autoCreateRetentionPolicyName)
 		rp.ReplicaN = int(repN)
 		rp.Duration = autoCreateRetentionPolicyPeriod
 		rp.WarmDuration = autoCreateRetentionPolicyWarmPeriod
+		rp.IndexColdDuration = autoCreateRetentionPolicyIndexColdPeriod
 		if fsm.UseIncSyncData {
 			pbRN := uint32(rp.ReplicaN)
 			v.RetentionPolicy = &proto2.RetentionPolicyInfo{
@@ -497,7 +510,9 @@ func (fsm *storeFSM) applyCreateDatabaseCommand(cmd *proto2.Command) interface{}
 				ShardGroupDuration: (*int64)(&rp.ShardGroupDuration),
 				HotDuration:        (*int64)(&rp.HotDuration),
 				WarmDuration:       (*int64)(&rp.WarmDuration),
+				IndexColdDuration:  (*int64)(&rp.IndexColdDuration),
 				IndexGroupDuration: (*int64)(&rp.IndexGroupDuration),
+				ShardMergeDuration: (*int64)(&rp.ShardMergeDuration),
 			}
 		}
 	}
@@ -888,4 +903,12 @@ func (fsm *storeFSM) applyInsertFilesCommand(cmd *proto2.Command) interface{} {
 	}
 
 	return fsm.data.SQLite.InsertFiles(fileInfos, nil)
+}
+
+func (fsm *storeFSM) applyReplaceMergeShards(cmd *proto2.Command) interface{} {
+	return meta2.ApplyReplaceMergeShards(fsm.data, cmd)
+}
+
+func (fsm *storeFSM) applyRecoverMetaData(cmd *proto2.Command) interface{} {
+	return meta2.ApplyRecoverMetaData(fsm.data, cmd)
 }

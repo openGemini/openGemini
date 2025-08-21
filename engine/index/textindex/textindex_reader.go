@@ -567,7 +567,14 @@ type Container interface {
 type GroupContainers []Container
 
 func (cntrs GroupContainers) TransToPostingContainer(header *PartHeader) *PostingContainer {
-	segRangeLen := len(header.SegmentRange)
+	segRangeLen := 1
+	for i := 1; i < len(header.SegmentRange); i++ {
+		if header.SegmentRange[i] <= header.SegmentRange[i-1] {
+			break
+		} else {
+			segRangeLen = i + 1
+		}
+	}
 	postingCntr := NewPostingContainer(segRangeLen)
 	k := 0
 	for i := 0; i < len(cntrs); i++ {
@@ -961,7 +968,7 @@ func (r *TextIndexFilterReader) IsExist(segId uint32, queryStr string) (bool, er
 	// filter by cache
 	postingContainer, ok := partContainer.containers[queryStr]
 	if ok {
-		return len(postingContainer.SegCntrs[segOff].RowIds) != 0, nil
+		return segOff < len(postingContainer.SegCntrs) && len(postingContainer.SegCntrs[segOff].RowIds) != 0, nil
 	}
 	// tokinzer and read posting list from disk
 	queryStrs := r.tokenizer.Split(queryStr)

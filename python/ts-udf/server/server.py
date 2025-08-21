@@ -31,6 +31,7 @@ from castor.utils.logger import logger, set_log_filename
 from castor.utils import logger as llogger
 from castor.utils.periodic import SymbolUpdateThread
 from castor.utils.const import CLEAR_CACHE_INTERVAL, CLEAR_MODEL_INTERVAL
+from openGemini_udf.telemetry import init_telemetry
 
 
 def parse_argv(argv):
@@ -115,6 +116,10 @@ def run(handler):
     num_workers = int(config["System"]["num_workers"])
     bucket_size = int(config["System"]["bucket_size"])
     data_lifetime = int(config["System"]["data_lifetime"])
+    monitor_addr = config["Monitor"]["monitor_addr"]
+    monitor_database = config["Monitor"]["monitor_database"]
+    monitor_https_enabled = config["Monitor"]["monitor_http_enabled"] == "true"
+    sampling_interval = int(config["Monitor"]["sampling_interval"])
 
     if not os.path.exists(data_dir):
         os.makedirs(data_dir)
@@ -125,6 +130,8 @@ def run(handler):
     # init logger
     set_log_filename(filename=config["System"]["logger_file"])
     llogger.basic_config(level=config["System"]["logger_level"])
+    # init OpenTelemetry
+    init_telemetry(monitor_addr, monitor_database, monitor_https_enabled, sampling_interval)
 
     thread_cache = SymbolUpdateThread(
         key="del_cache", sleep_interval=CLEAR_CACHE_INTERVAL

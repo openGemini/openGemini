@@ -104,5 +104,6 @@ type PrimaryIndex interface {
 	GetPrimaryKeys(name []byte, opt *query.ProcessorOptions) ([]uint64, error)
 	GetDeletePrimaryKeys(name []byte, condition influxql.Expr, tr TimeRange) ([]uint64, error)
 	SearchSeriesWithOpts(span *tracing.Span, name []byte, opt *query.ProcessorOptions, callBack func(num int64) error, _ interface{}) (GroupSeries, int64, error)
+	SearchSeriesByTableAndCond(name []byte, expr influxql.Expr, tr TimeRange) ([]uint64, error)
 	Path() string
 }

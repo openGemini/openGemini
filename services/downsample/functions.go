@@ -20,11 +20,12 @@ import (
 
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
-	"github.com/openGemini/openGemini/lib/util/lifted/influx/httpd"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 )
+
+const DefaultInnerChunkSize = 1024
 
 func downSampleQuerySchemaGen(sinfo *meta.ShardDownSamplePolicyInfo, infos *meta.RpMeasurementsFieldsInfo, policy *meta.DownSamplePolicyInfo) [][]hybridqp.Catalog {
 	downSampleLevel := sinfo.DownSamplePolicyLevel
@@ -135,7 +136,7 @@ func genDefaultOpt(mstName string) *query.ProcessorOptions {
 		Name:           mstName,
 		GroupByAllDims: true,
 		Ascending:      true,
-		ChunkSize:      httpd.DefaultInnerChunkSize,
+		ChunkSize:      DefaultInnerChunkSize,
 		StartTime:      math.MinInt64,
 		EndTime:        math.MaxInt64,
 		HintType:       hybridqp.ExactStatisticQuery,

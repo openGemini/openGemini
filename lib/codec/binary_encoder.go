@@ -207,6 +207,14 @@ func AppendStringSlice(b []byte, a []string) []byte {
 	return b
 }
 
+func AppendStringSliceUsingAppendString(b []byte, a []string) []byte {
+	b = AppendUint32(b, uint32(len(a)))
+	for _, s := range a {
+		b = AppendString(b, s)
+	}
+	return b
+}
+
 func AppendBytes(b []byte, buf []byte) []byte {
 	b = AppendUint32(b, uint32(len(buf)))
 	b = append(b, buf...)
@@ -237,4 +245,12 @@ func AppendInt64WithScale(b []byte, v int64) []byte {
 	b = append(b, uint8(idx))
 	b = binary.AppendUvarint(b, uint64(v/scales[idx]))
 	return b
+}
+
+func AppendUint32SliceBigEndian(dst []byte, s []uint32) []byte {
+	dst = AppendUint32(dst, uint32(len(s)))
+	for i := range s {
+		dst = AppendUint32(dst, s[i])
+	}
+	return dst
 }

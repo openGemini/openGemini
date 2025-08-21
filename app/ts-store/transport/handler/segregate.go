@@ -16,10 +16,9 @@ package handler
 
 import (
 	"github.com/openGemini/openGemini/app/ts-store/storage"
-	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
-	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/msgservice"
 	"github.com/openGemini/openGemini/lib/spdy"
 	"go.uber.org/zap"
 )
@@ -37,17 +36,17 @@ func NewSegregateNodeProcessor(store *storage.Storage) *SegregateProcessor {
 }
 
 func (mp *SegregateProcessor) Handle(w spdy.Responser, data interface{}) error {
-	req, ok := data.(*netstorage.SegregateNodeRequest)
+	req, ok := data.(*msgservice.SegregateNodeRequest)
 	if !ok {
-		return executor.NewInvalidTypeError("*netstorage.SegregateNodeRequest", data)
+		return errno.NewInvalidTypeError("*msgservice.SegregateNodeRequest", data)
 	}
 	connId := mp.store.GetConnId()
 	mp.log.Info("Start CheckPtsRemovedDone", zap.Uint64("connId", connId), zap.Uint64("nodeid", *req.NodeId))
-	rsp := netstorage.NewSegregateNodeResponse()
+	rsp := msgservice.NewSegregateNodeResponse()
 	err := mp.store.CheckPtsRemovedDone()
 	if err != nil {
 		mp.log.Info("CheckPtsRemovedDone fail", zap.Uint64("connId", connId), zap.Uint64("nodeid", *req.NodeId))
-		rsp.Err = netstorage.MarshalError(err)
+		rsp.Err = msgservice.MarshalError(err)
 	}
 	mp.log.Info("CheckPtsRemovedDone succuss", zap.Uint64("connId", connId), zap.Uint64("nodeid", *req.NodeId))
 	return w.Response(rsp, true)

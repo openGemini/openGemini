@@ -97,7 +97,7 @@ func Decrypt(s string) string {
 	out, err := defaultDecipher.Decrypt(s)
 	if err != nil {
 		out = ""
-		logger.Error("decrypt failed", zap.Error(err), zap.String("input", s))
+		logger.Error("decrypt failed", zap.Error(err))
 	}
 	return out
 }

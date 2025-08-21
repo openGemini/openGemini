@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"sync"
 	"text/tabwriter"
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
@@ -28,158 +27,68 @@ import (
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
-	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
 //go:generate tmpl -data=@./tmpldata column.gen.go.tmpl
-
-type PromStepInvariantType int
-
-const (
-	SkipLastGroup PromStepInvariantType = iota
-	OnlyLastGroup
-)
 
 func init() {
 	initColumnTypeFunc()
 }
 
-var GetColValsFn map[influxql.DataType]func(col Column, bmStart, bmEnd int, ckLen int, dst []interface{}) []interface{}
+var (
+	_ Chunk = (*ChunkImpl)(nil)
+)
 
-func initFloatColumnFunc(col Column, bmStart, bmEnd int, ckLen int, dst []interface{}) []interface{} {
-	// fast path
-	if col.NilCount() == 0 {
-		values := col.FloatValues()[bmStart:bmEnd]
-		for _, v := range values {
-			dst = append(dst, v)
-		}
-		return dst
-	}
-
-	// slow path
-	for j := bmStart; j < bmEnd; j++ {
-		if col.IsNilV2(j) {
-			dst = append(dst, nil)
-		} else {
-			dst = append(dst, col.FloatValue(col.GetValueIndexV2(j)))
-		}
-	}
-	return dst
-}
-
-func initIntegerColumnFunc(col Column, bmStart, bmEnd int, ckLen int, dst []interface{}) []interface{} {
-	// fast path
-	if col.NilCount() == 0 {
-		values := col.IntegerValues()[bmStart:bmEnd]
-		for _, v := range values {
-			dst = append(dst, v)
-		}
-		return dst
-	}
-
-	// slow path
-	for j := bmStart; j < bmEnd; j++ {
-		if col.IsNilV2(j) {
-			dst = append(dst, nil)
-		} else {
-			dst = append(dst, col.IntegerValue(col.GetValueIndexV2(j)))
-		}
-	}
-	return dst
-}
-
-func initBooleanColumnFunc(col Column, bmStart, bmEnd int, ckLen int, dst []interface{}) []interface{} {
-	// fast path
-	if col.NilCount() == 0 {
-		values := col.BooleanValues()[bmStart:bmEnd]
-		for _, v := range values {
-			dst = append(dst, v)
-		}
-		return dst
-	}
-
-	// slow path
-	for j := bmStart; j < bmEnd; j++ {
-		if col.IsNilV2(j) {
-			dst = append(dst, nil)
-		} else {
-			dst = append(dst, col.BooleanValue(col.GetValueIndexV2(j)))
-		}
-	}
-	return dst
-}
-
-func initStringColumnFunc(col Column, bmStart, bmEnd int, ckLen int, dst []interface{}) []interface{} {
-	// fast path
-	if col.NilCount() == 0 {
-		for i := bmStart; i < bmEnd; i++ {
-			oriStr := col.StringValue(i)
-			newStr := make([]byte, len(oriStr))
-			copy(newStr, oriStr)
-			dst = append(dst, util.Bytes2str(newStr))
-		}
-		return dst
-	}
-
-	// slow path
-	for j := bmStart; j < bmEnd; j++ {
-		if col.IsNilV2(j) {
-			dst = append(dst, nil)
-		} else {
-			oriStr := col.StringValue(col.GetValueIndexV2(j))
-			newStr := make([]byte, len(oriStr))
-			copy(newStr, oriStr)
-			dst = append(dst, util.Bytes2str(newStr))
-		}
-	}
-	return dst
-}
-
-func initTagColumnFunc(col Column, bmStart, bmEnd int, ckLen int, dst []interface{}) []interface{} {
-	return initStringColumnFunc(col, bmStart, bmEnd, ckLen, dst)
-}
-
-func initColumnTypeFunc() {
-	GetColValsFn = make(map[influxql.DataType]func(col Column, bmStart, bmEnd int, ckLen int, dst []interface{}) []interface{}, 5)
-
-	GetColValsFn[influxql.Float] = initFloatColumnFunc
-
-	GetColValsFn[influxql.Integer] = initIntegerColumnFunc
-
-	GetColValsFn[influxql.Boolean] = initBooleanColumnFunc
-
-	GetColValsFn[influxql.String] = initStringColumnFunc
-
-	GetColValsFn[influxql.Tag] = initTagColumnFunc
-}
-
-type PointRowIterator interface {
-	GetNext(row *influx.Row, tuple *TargetTuple)
-	HasMore() bool
-}
-
+// Chunk consists of seven functionally distinct components, each responsible for
+// managing metadata, tags, time, basic operations and serialization and Graph management.
 type Chunk interface {
+	ChunkMeta
+	ChunkTag
+	ChunkTime
+	ChunkColumn
+	ChunkOperator
+	ChunkSerialization
+	ChunkGraph
+}
+
+// ChunkMeta is data types and name interface.
+type ChunkMeta interface {
 	RowDataType() hybridqp.RowDataType
 	SetRowDataType(hybridqp.RowDataType)
+	CopyByRowDataType(c Chunk, fromRt hybridqp.RowDataType, dstRt hybridqp.RowDataType) error
 	Name() string
 	SetName(string)
+}
+
+// TagsManager is label-related interface.
+type ChunkTag interface {
 	Tags() []ChunkTags
 	TagIndex() []int
 	TagLen() int
 	AppendTagsAndIndex(ChunkTags, int)
 	AppendTagsAndIndexes([]ChunkTags, []int)
+	ResetTagsAndIndexes(tags []ChunkTags, tagIndex []int)
+}
+
+// ChunkTime is a time window-related interface.
+type ChunkTime interface {
 	InitTimeWindow(minTime, maxTime, intervalTime int64, hasInterval, ascending bool, tag ChunkTags)
 	Time() []int64
 	TruncateTime(int)
 	SetTime(time []int64)
 	ResetTime(int, int64)
-	AppendTime(int64)
+	AppendTime(...int64)
 	AppendTimes([]int64)
 	TimeByIndex(int) int64
 	IntervalIndex() []int
 	AppendIntervalIndexes([]int)
 	AppendIntervalIndex(int)
 	ResetIntervalIndex(...int)
+	IntervalLen() int
+}
+
+// ChunkColumn is an interface related to columns and dimensions.
+type ChunkColumn interface {
 	Columns() []Column
 	Column(int) Column
 	Dims() []Column
@@ -188,35 +97,37 @@ type Chunk interface {
 	SetColumn(Column, int)
 	AddColumn(...Column)
 	Dim(int) Column
-	SetDim(Column, int)
 	AddDim(...Column)
+}
+
+// ChunkOperator is an interface related to data operations.
+type ChunkOperator interface {
 	IsNil() bool
 	NumberOfRows() int
 	NumberOfCols() int
-	Release()
 	Len() int
 	Reset()
 	SlimChunk(ridIdx []int) Chunk
-	IntervalLen() int
-	AddTagAndIndex(tag ChunkTags, i int)
-	ResetTagsAndIndexes(tags []ChunkTags, tagIndex []int)
-	AddIntervalIndex(i int)
 	Clone() Chunk
 	CopyTo(Chunk)
-	// CheckChunk TODO: CheckChunk used to check the chunk's structure
 	CheckChunk()
 	GetRecord() *record.Record
+	Append(ck Chunk, start, end int)
 	String() string
+}
 
+// ChunkSerialization is an interface related to serialization and deserialization.
+type ChunkSerialization interface {
 	Marshal([]byte) ([]byte, error)
 	Unmarshal([]byte) error
 	Instance() transport.Codec
 	Size() int
+}
 
-	CreatePointRowIterator(string, *FieldsValuer) PointRowIterator
-
-	CopyByRowDataType(c Chunk, fromRt hybridqp.RowDataType, dstRt hybridqp.RowDataType) error
-	PromStepInvariant(typ PromStepInvariantType, preGroup []byte, nextGroup []byte, step, startT, endT int64, dst Chunk) Chunk
+// ChunkGraph is a graph-related interface.
+type ChunkGraph interface {
+	GetGraph() IGraph
+	SetGraph(g IGraph)
 }
 
 type ChunkWriter interface {
@@ -225,6 +136,49 @@ type ChunkWriter interface {
 }
 
 // ChunkImpl DO NOT ADD ADDITIONAL FIELDS TO THIS STRUCT.
+// Memory layout of ChunkImpl:
+//
+// +------------------------------------------------+
+// | rowDataType: Data type of the row            |
+// | - Description: Stores the data type of the row |
+// | - Usage: Determines the type and structure of the data |
+// +------------------------------------------------+
+// | name: Measurement name                       |
+// | - Description: Stores the name of the measurement |
+// | - Usage: Identifies the measurement to which the data belongs |
+// +------------------------------------------------+
+// | tags: List of tag data                       |
+// | - Description: Stores a list of tag data     |
+// | - Usage: Manages tag information of the data  |
+// +------------------------------------------------+
+// | tagIndex: List of tag indices                |
+// | - Description: Stores index information for tags |
+// | - Usage:Quick access and locate tag data        |
+// +------------------------------------------------+
+// | time: List of timestamps                     |
+// | - Description: Stores a list of timestamp data |
+// | - Usage: Records and manages the time information of the data |
+// +------------------------------------------------+
+// | intervalIndex: List of interval indices      |
+// | - Description: Stores a list of interval index data |
+// | - Usage: Manages the time interval indices of the data |
+// +------------------------------------------------+
+// | columns: List of column data                 |
+// | - Description: Stores a list of column data  |
+// | - Usage: Manages the column information of the data |
+// +------------------------------------------------+
+// | dims: List of dimension columns              |
+// | - Description: Stores a list of dimension column data |
+// | - Usage: Manages the dimension information of the data |
+// +------------------------------------------------+
+// | Record: Record data                          |
+// | - Description: Stores record data            |
+// | - Usage: Manages the record information of the data |
+// +------------------------------------------------+
+// | graph: Graph data                            |
+// | - Description: Stores graph data             |
+// | - Usage: Manages the graph structure information of the data |
+// +------------------------------------------------+
 type ChunkImpl struct {
 	rowDataType   hybridqp.RowDataType
 	name          string
@@ -235,6 +189,7 @@ type ChunkImpl struct {
 	columns       []Column
 	dims          []Column
 	*record.Record
+	graph IGraph
 }
 
 // NewChunkImpl FIXME: memory pool
@@ -244,6 +199,14 @@ func NewChunkImpl(rowDataType hybridqp.RowDataType, name string) *ChunkImpl {
 		name:        name,
 	}
 	return cb
+}
+
+func (c *ChunkImpl) GetGraph() IGraph {
+	return c.graph
+}
+
+func (c *ChunkImpl) SetGraph(g IGraph) {
+	c.graph = g
 }
 
 func (c *ChunkImpl) NewDims(size int) {
@@ -266,10 +229,6 @@ func (c *ChunkImpl) Dims() []Column {
 
 func (c *ChunkImpl) Dim(i int) Column {
 	return c.dims[i]
-}
-
-func (c *ChunkImpl) SetDim(col Column, i int) {
-	c.dims[i] = col
 }
 
 func (c *ChunkImpl) AddDim(cols ...Column) {
@@ -336,10 +295,11 @@ func (c *ChunkImpl) ResetTime(idx int, time int64) {
 	c.time[idx] = time
 }
 
-func (c *ChunkImpl) AppendTime(t int64) {
-	c.time = append(c.time, t)
+func (c *ChunkImpl) AppendTime(t ...int64) {
+	c.time = append(c.time, t...)
 }
 
+// Note: This method will be deprecated; it is recommended to use AppendTime instead.
 func (c *ChunkImpl) AppendTimes(ts []int64) {
 	c.time = append(c.time, ts...)
 }
@@ -362,18 +322,18 @@ func (c *ChunkImpl) AppendIntervalIndex(intervalIndex int) {
 
 func (c *ChunkImpl) InitTimeWindow(minTime, maxTime, intervalTime int64, hasInterval, ascending bool, tag ChunkTags) {
 	if !hasInterval {
-		c.AppendIntervalFullRows(0, intervalTime, 1, tag)
+		c.appendIntervalFullRows(0, intervalTime, 1, tag)
 		return
 	}
 	num := (maxTime - minTime) / intervalTime
 	if ascending {
-		c.AppendIntervalFullRows(minTime, intervalTime, int(num), tag)
+		c.appendIntervalFullRows(minTime, intervalTime, int(num), tag)
 	} else {
-		c.AppendIntervalFullRows(maxTime-intervalTime, -intervalTime, int(num), tag)
+		c.appendIntervalFullRows(maxTime-intervalTime, -intervalTime, int(num), tag)
 	}
 }
 
-func (c *ChunkImpl) AppendIntervalFullRows(start, step int64, num int, tag ChunkTags) {
+func (c *ChunkImpl) appendIntervalFullRows(start, step int64, num int, tag ChunkTags) {
 	// append time and interval index
 	endLoc := len(c.time)
 	for i := 0; i < num; i++ {
@@ -441,10 +401,6 @@ func (c *ChunkImpl) NumberOfCols() int {
 	return len(c.columns)
 }
 
-func (c *ChunkImpl) Release() {
-
-}
-
 func (c *ChunkImpl) Len() int {
 	return len(c.time)
 }
@@ -461,6 +417,7 @@ func (c *ChunkImpl) Reset() {
 	for i := range c.dims {
 		c.Dim(i).Reset()
 	}
+	c.graph = nil
 }
 
 // SlimChunk filter the ridIdx columns to slim chunk
@@ -480,20 +437,12 @@ func (c *ChunkImpl) IntervalLen() int {
 	return len(c.intervalIndex)
 }
 
-func (c *ChunkImpl) AddTagAndIndex(tag ChunkTags, i int) {
-	c.tags = append(c.tags, tag)
-	c.tagIndex = append(c.tagIndex, i)
-}
-
-func (c *ChunkImpl) AddIntervalIndex(i int) {
-	c.intervalIndex = append(c.intervalIndex, i)
-}
-
 func (c *ChunkImpl) GetRecord() *record.Record {
 	return c.Record
 }
 
 func (c *ChunkImpl) copy(dst Chunk) Chunk {
+	dst.SetGraph(c.graph)
 	dst.AppendTagsAndIndexes(c.Tags(), c.TagIndex())
 	dst.AppendIntervalIndexes(c.IntervalIndex())
 	dst.AppendTimes(c.Time())
@@ -543,6 +492,32 @@ func (c *ChunkImpl) Clone() Chunk {
 func (c *ChunkImpl) CopyTo(dstChunk Chunk) {
 	dstChunk.SetName(c.Name())
 	c.copy(dstChunk)
+}
+
+// Append used to append one chunk with the same number of columns and the same data type to other one
+// based on the specified row interval.
+func (c *ChunkImpl) Append(ck Chunk, start, end int) {
+	c.time = append(c.time, ck.Time()[start:end]...)
+	for i := range c.columns {
+		vStart, vEnd := ck.Column(i).GetRangeValueIndexV2(start, end)
+		switch c.columns[i].DataType() {
+		case influxql.String, influxql.Tag:
+			c.columns[i].AppendStringBytes(ck.Column(i).StringValuesWithOffset(vStart, vEnd, nil))
+		case influxql.Float:
+			c.columns[i].AppendFloatValues(ck.Column(i).FloatValues()[vStart:vEnd])
+		case influxql.Integer:
+			c.columns[i].AppendIntegerValues(ck.Column(i).IntegerValues()[vStart:vEnd])
+		case influxql.Boolean:
+			c.columns[i].AppendBooleanValues(ck.Column(i).BooleanValues()[vStart:vEnd])
+		}
+		for j := start; j < end; j++ {
+			if ck.Column(i).IsNilV2(j) {
+				c.columns[i].AppendNil()
+			} else {
+				c.columns[i].AppendNotNil()
+			}
+		}
+	}
 }
 
 func (c *ChunkImpl) CopyByRowDataType(dst Chunk, fromRt hybridqp.RowDataType, dstRt hybridqp.RowDataType) error {
@@ -611,11 +586,11 @@ func (c *ChunkImpl) CheckChunk() {
 		}
 	}
 	for _, col := range c.columns {
-		col.CheckColumn(c.Len())
+		col.CheckColumn(c.NumberOfRows())
 	}
 
 	for _, col := range c.dims {
-		col.CheckColumn(c.Len())
+		col.CheckColumn(c.NumberOfRows())
 	}
 }
 
@@ -665,416 +640,6 @@ func (c *ChunkImpl) String() string {
 		return "raises error to flush"
 	}
 	return buffer.String()
-}
-
-func (c *ChunkImpl) CreatePointRowIterator(name string, valuer *FieldsValuer) PointRowIterator {
-	return NewChunkIteratorFromValuer(c, name, valuer)
-}
-
-func (c *ChunkImpl) CopyTags(dst Chunk, tagLoc int) Chunk {
-	tags := ChunkTags{subset: make([]byte, 0, len(c.tags[tagLoc].subset)), offsets: make([]uint16, 0, len(c.tags[tagLoc].offsets))}
-	tags.subset = append(tags.subset, c.tags[tagLoc].subset...)
-	tags.offsets = append(tags.offsets, c.tags[tagLoc].offsets...)
-	dst.AddTagAndIndex(tags, dst.Len())
-	return dst
-}
-
-func (c *ChunkImpl) CopyGroup(dst Chunk, tagLoc, start, end int) Chunk {
-	dst = c.CopyTags(dst, tagLoc)
-	for ; start < end; start++ {
-		dst.Column(0).AppendFloatValue(c.columns[0].FloatValue(start))
-		dst.Column(0).AppendNotNil()
-		dst.AppendTime(c.time[start])
-	}
-	return dst
-}
-
-func (c *ChunkImpl) PromStepInvariantSkipLastGroup(preGroup []byte, step, startT, endT int64, dst Chunk) Chunk {
-	for i := 0; i < c.TagLen()-1; i++ {
-		val := c.columns[0].FloatValue(c.tagIndex[i])
-		time := c.time[c.tagIndex[i]]
-		start := c.tagIndex[i]
-		end := c.tagIndex[i+1]
-		if bytes.Equal(preGroup, c.tags[i].subset) || end-start != 1 || time != startT {
-			dst = c.CopyGroup(dst, i, c.tagIndex[i], c.tagIndex[i+1])
-		} else {
-			dst = c.CopyTags(dst, i)
-			preStartT := startT
-			for startT += step; startT <= endT; startT += step {
-				dst.Column(0).AppendFloatValue(val)
-				dst.Column(0).AppendNotNil()
-				dst.AppendTime(time)
-			}
-			startT = preStartT
-		}
-		preGroup = c.tags[i].subset
-	}
-	dst = c.CopyGroup(dst, c.TagLen()-1, c.tagIndex[c.TagLen()-1], c.Len())
-	return dst
-}
-
-func (c *ChunkImpl) PromStepInvariantOnlyLastGroup(preGroup []byte, nextGroup []byte, step, startT, endT int64) Chunk {
-	if bytes.Equal(c.tags[c.TagLen()-1].subset, preGroup) || bytes.Equal(c.tags[c.TagLen()-1].subset, nextGroup) {
-		return c
-	}
-	if c.Len()-1 != c.tagIndex[c.TagLen()-1] || c.time[c.Len()-1] != startT {
-		return c
-	}
-	val := c.columns[0].FloatValue(c.Len() - 1)
-	for startT += step; startT <= endT; startT += step {
-		c.time = append(c.time, startT)
-		c.columns[0].AppendFloatValue(val)
-		c.Column(0).AppendNotNil()
-	}
-	return c
-}
-
-func (c *ChunkImpl) PromStepInvariant(typ PromStepInvariantType, preGroup []byte, nextGroup []byte, step, startT, endT int64, dst Chunk) Chunk {
-	if typ == SkipLastGroup {
-		return c.PromStepInvariantSkipLastGroup(preGroup, step, startT, endT, dst)
-	}
-	return c.PromStepInvariantOnlyLastGroup(preGroup, nextGroup, step, startT, endT)
-}
-
-type IntegerFieldValuer struct {
-	key string
-	typ int32
-}
-
-func (valuer *IntegerFieldValuer) At(col Column, pos int, field *influx.Field) bool {
-	if col.IsNilV2(pos) {
-		return false
-	}
-
-	valueIndex := col.GetValueIndexV2(pos)
-
-	field.Key = valuer.key
-	field.Type = valuer.typ
-	field.NumValue = float64(col.IntegerValue(valueIndex))
-	return true
-}
-
-type FieldValuer interface {
-	At(Column, int, *influx.Field) bool
-}
-
-type FloatFieldValuer struct {
-	key string
-	typ int32
-}
-
-func (valuer *FloatFieldValuer) At(col Column, pos int, field *influx.Field) bool {
-	if col.IsNilV2(pos) {
-		return false
-	}
-
-	valueIndex := col.GetValueIndexV2(pos)
-
-	field.Key = valuer.key
-	field.Type = valuer.typ
-	field.NumValue = col.FloatValue(valueIndex)
-	return true
-}
-
-type StringFieldValuer struct {
-	key string
-	typ int32
-}
-
-func (valuer *StringFieldValuer) At(col Column, pos int, field *influx.Field) bool {
-	if col.IsNilV2(pos) {
-		return false
-	}
-
-	valueIndex := col.GetValueIndexV2(pos)
-
-	field.Key = valuer.key
-	field.Type = valuer.typ
-	field.StrValue = col.StringValue(valueIndex)
-	return true
-}
-
-type BooleanFieldValuer struct {
-	key string
-	typ int32
-}
-
-func (valuer *BooleanFieldValuer) At(col Column, pos int, field *influx.Field) bool {
-	if col.IsNilV2(pos) {
-		return false
-	}
-
-	valueIndex := col.GetValueIndexV2(pos)
-
-	field.Key = valuer.key
-	field.Type = valuer.typ
-	field.StrValue = strconv.FormatBool(col.BooleanValue(valueIndex))
-	return true
-}
-
-func NewFieldValuer(ref *influxql.VarRef) (FieldValuer, error) {
-	switch ref.Type {
-	case influxql.Integer:
-		valuer := &IntegerFieldValuer{}
-		valuer.key = ref.Val
-		valuer.typ = influx.Field_Type_Int
-		return valuer, nil
-	case influxql.Float:
-		valuer := &FloatFieldValuer{}
-		valuer.key = ref.Val
-		valuer.typ = influx.Field_Type_Float
-		return valuer, nil
-	case influxql.Tag:
-		fallthrough
-	case influxql.String:
-		valuer := &StringFieldValuer{}
-		valuer.key = ref.Val
-		valuer.typ = influx.Field_Type_String
-		return valuer, nil
-	case influxql.Boolean:
-		valuer := &BooleanFieldValuer{}
-		valuer.key = ref.Val
-		valuer.typ = influx.Field_Type_Boolean
-		return valuer, nil
-	default:
-		return nil, fmt.Errorf("create field valuer on an unsupport type (%v)", ref.Type)
-	}
-}
-
-type FieldsValuer struct {
-	fvs []FieldValuer
-}
-
-func NewFieldsValuer(rdt hybridqp.RowDataType) (*FieldsValuer, error) {
-	valuer := &FieldsValuer{
-		fvs: make([]FieldValuer, rdt.NumColumn()),
-	}
-
-	for i, f := range rdt.Fields() {
-		fv, err := NewFieldValuer(f.Expr.(*influxql.VarRef))
-		if err != nil {
-			return nil, err
-		}
-		valuer.fvs[i] = fv
-	}
-	return valuer, nil
-}
-
-func (valuer *FieldsValuer) At(chunk Chunk, pos int, tuple *TargetTuple) {
-	for i, fv := range valuer.fvs {
-		hasValue := fv.At(chunk.Column(i), pos, tuple.Allocate())
-		if hasValue {
-			tuple.Commit()
-		}
-	}
-}
-
-type TargetTuple struct {
-	fields []influx.Field
-	len    int
-	cap    int
-}
-
-func NewTargetTuple(cap int) *TargetTuple {
-	return &TargetTuple{
-		fields: make([]influx.Field, cap),
-		len:    0,
-		cap:    cap,
-	}
-}
-
-func (t *TargetTuple) Reset() {
-	for _, field := range t.fields {
-		field.Reset()
-	}
-	t.len = 0
-}
-
-func (t *TargetTuple) CheckAndAllocate() (*influx.Field, bool) {
-	if t.len >= t.cap {
-		return nil, false
-	}
-	return &t.fields[t.len], true
-}
-
-func (t *TargetTuple) Allocate() *influx.Field {
-	return &t.fields[t.len]
-}
-
-func (t *TargetTuple) Commit() {
-	t.len++
-}
-
-func (t *TargetTuple) Active() []influx.Field {
-	return t.fields[0:t.len]
-}
-
-func (t *TargetTuple) Len() int {
-	return t.len
-}
-
-// BatchRows is not thread safe. It can not be used in multi-threading model.
-type TargetTable struct {
-	rows     []influx.Row
-	tuples   []*TargetTuple
-	len      int
-	cap      int
-	tupleCap int
-}
-
-func NewTargetTable(rowCap int, tupleCap int) *TargetTable {
-	tt := &TargetTable{
-		rows:     make([]influx.Row, rowCap),
-		tuples:   make([]*TargetTuple, rowCap),
-		len:      0,
-		cap:      rowCap,
-		tupleCap: tupleCap,
-	}
-
-	tt.initTuples(tt.tuples)
-
-	return tt
-}
-
-func (tt *TargetTable) initTuples(tuples []*TargetTuple) {
-	for i := range tuples {
-		tuples[i] = NewTargetTuple(tt.tupleCap)
-	}
-}
-
-func (tt *TargetTable) Reset() {
-	for i := range tt.rows {
-		tt.rows[i].Reset()
-	}
-
-	for _, tuple := range tt.tuples {
-		tuple.Reset()
-	}
-
-	tt.len = 0
-}
-
-func (tt *TargetTable) CheckAndAllocate() (*influx.Row, *TargetTuple, bool) {
-	if tt.len >= tt.cap {
-		return nil, nil, false
-	}
-	return &tt.rows[tt.len], tt.tuples[tt.len], true
-}
-
-func (tt *TargetTable) Allocate() (*influx.Row, *TargetTuple) {
-	if tt.len >= tt.cap {
-		tt.cap = tt.cap * 2
-
-		rows := make([]influx.Row, tt.cap)
-		copy(rows, tt.rows)
-		tt.rows = rows
-
-		tuples := make([]*TargetTuple, tt.cap)
-		tt.initTuples(tuples[tt.len:])
-		copy(tuples, tt.tuples)
-		tt.tuples = tuples
-	}
-
-	tt.rows[tt.len].Reset()
-	tt.tuples[tt.len].Reset()
-	return &tt.rows[tt.len], tt.tuples[tt.len]
-}
-
-func (tt *TargetTable) Commit() {
-	tt.len++
-}
-
-func (tt *TargetTable) Active() []influx.Row {
-	for i := 0; i < tt.len; i++ {
-		tt.rows[i].Fields = tt.tuples[i].Active()
-	}
-	return tt.rows[0:tt.len]
-}
-
-type TargetTablePool struct {
-	sp       sync.Pool
-	rowCap   int
-	tupleCap int
-}
-
-func NewTargetTablePool(rowCap int, tupleCap int) *TargetTablePool {
-	p := &TargetTablePool{
-		sp: sync.Pool{
-			New: func() interface{} {
-				brs := NewTargetTable(rowCap, tupleCap)
-				return brs
-			},
-		},
-		rowCap:   rowCap,
-		tupleCap: tupleCap,
-	}
-
-	return p
-}
-
-func (p *TargetTablePool) Get() *TargetTable {
-	table, ok := p.sp.Get().(*TargetTable)
-	if !ok {
-		panic(fmt.Sprintf("%v is not a TargetTable type", table))
-	}
-	table.Reset()
-	return table
-}
-
-func (p *TargetTablePool) Put(table *TargetTable) {
-	p.sp.Put(table)
-}
-
-type ChunkIterator struct {
-	chunk       *ChunkImpl
-	name        string
-	currTags    influx.PointTags
-	currTagsPos int
-	nextPos     int
-	currPos     int
-	valuer      *FieldsValuer
-}
-
-func NewChunkIteratorFromValuer(chunk *ChunkImpl, name string, valuer *FieldsValuer) *ChunkIterator {
-	iter := &ChunkIterator{
-		chunk:       chunk,
-		name:        name,
-		currTags:    nil,
-		currTagsPos: -1,
-		currPos:     0,
-		valuer:      valuer,
-	}
-
-	if iter.currTagsPos+1 < len(iter.chunk.tags) {
-		iter.nextPos = iter.chunk.tagIndex[iter.currTagsPos+1]
-	}
-
-	return iter
-}
-
-func (iter *ChunkIterator) advance() {
-	iter.currTagsPos++
-	iter.currTags = iter.chunk.tags[iter.currTagsPos].PointTags()
-	if iter.currTagsPos+1 < len(iter.chunk.tags) {
-		iter.nextPos = iter.chunk.tagIndex[iter.currTagsPos+1]
-	}
-}
-
-func (iter *ChunkIterator) GetNext(row *influx.Row, tuple *TargetTuple) {
-	if iter.currPos == iter.nextPos {
-		iter.advance()
-	}
-
-	row.Name = iter.name
-	row.Tags = iter.currTags
-	iter.valuer.At(iter.chunk, iter.currPos, tuple)
-	row.Timestamp = iter.chunk.time[iter.currPos]
-
-	iter.currPos++
-}
-
-func (iter *ChunkIterator) HasMore() bool {
-	return iter.currPos < iter.chunk.Len()
 }
 
 func IntervalIndexGen(ck Chunk, opt *query.ProcessorOptions) {
@@ -1203,6 +768,107 @@ func UnionColumns(cols ...Column) []uint16 {
 	return blankRowIdx
 }
 
-var (
-	_ Chunk = (*ChunkImpl)(nil)
-)
+var GetColValsFn map[influxql.DataType]func(col Column, bmStart, bmEnd int, ckLen int, dst []interface{}) []interface{}
+
+func initColumnTypeFunc() {
+	GetColValsFn = make(map[influxql.DataType]func(col Column, bmStart, bmEnd int, ckLen int, dst []interface{}) []interface{}, 5)
+
+	GetColValsFn[influxql.Float] = initFloatColumnFunc
+
+	GetColValsFn[influxql.Integer] = initIntegerColumnFunc
+
+	GetColValsFn[influxql.Boolean] = initBooleanColumnFunc
+
+	GetColValsFn[influxql.String] = initStringColumnFunc
+
+	GetColValsFn[influxql.Tag] = initStringColumnFunc
+}
+
+func initFloatColumnFunc(col Column, bmStart, bmEnd int, ckLen int, dst []interface{}) []interface{} {
+	// fast path
+	if col.NilCount() == 0 {
+		values := col.FloatValues()[bmStart:bmEnd]
+		for _, v := range values {
+			dst = append(dst, v)
+		}
+		return dst
+	}
+
+	// slow path
+	for j := bmStart; j < bmEnd; j++ {
+		if col.IsNilV2(j) {
+			dst = append(dst, nil)
+		} else {
+			dst = append(dst, col.FloatValue(col.GetValueIndexV2(j)))
+		}
+	}
+	return dst
+}
+
+func initIntegerColumnFunc(col Column, bmStart, bmEnd int, ckLen int, dst []interface{}) []interface{} {
+	// fast path
+	if col.NilCount() == 0 {
+		values := col.IntegerValues()[bmStart:bmEnd]
+		for _, v := range values {
+			dst = append(dst, v)
+		}
+		return dst
+	}
+
+	// slow path
+	for j := bmStart; j < bmEnd; j++ {
+		if col.IsNilV2(j) {
+			dst = append(dst, nil)
+		} else {
+			dst = append(dst, col.IntegerValue(col.GetValueIndexV2(j)))
+		}
+	}
+	return dst
+}
+
+func initBooleanColumnFunc(col Column, bmStart, bmEnd int, ckLen int, dst []interface{}) []interface{} {
+	// fast path
+	if col.NilCount() == 0 {
+		values := col.BooleanValues()[bmStart:bmEnd]
+		for _, v := range values {
+			dst = append(dst, v)
+		}
+		return dst
+	}
+
+	// slow path
+	for j := bmStart; j < bmEnd; j++ {
+		if col.IsNilV2(j) {
+			dst = append(dst, nil)
+		} else {
+			dst = append(dst, col.BooleanValue(col.GetValueIndexV2(j)))
+		}
+	}
+	return dst
+}
+
+func initStringColumnFunc(col Column, bmStart, bmEnd int, ckLen int, dst []interface{}) []interface{} {
+	// fast path
+	if col.NilCount() == 0 {
+		for i := bmStart; i < bmEnd; i++ {
+			oriStr := col.StringValue(i)
+			newStr := make([]byte, len(oriStr))
+			copy(newStr, oriStr)
+			dst = append(dst, util.Bytes2str(newStr))
+		}
+		return dst
+	}
+
+	// slow path
+	for j := bmStart; j < bmEnd; j++ {
+		if col.IsNilV2(j) {
+			dst = append(dst, nil)
+		} else {
+			oriStr := col.StringValue(col.GetValueIndexV2(j))
+			newStr := make([]byte, len(oriStr))
+			copy(newStr, oriStr)
+			dst = append(dst, util.Bytes2str(newStr))
+		}
+	}
+	return dst
+}

@@ -15,140 +15,78 @@
 package statistics
 
 import (
-	"bufio"
-	"io"
-	"os"
-	"path"
 	"runtime"
-	"strconv"
-	"strings"
-
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/fasttime"
-	"github.com/openGemini/openGemini/lib/logger"
-	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics/opsStat"
-	"github.com/openGemini/openGemini/lib/util"
+	"time"
 )
-
-var version string
-var RuntimeTagMap map[string]string
-var RuntimeStatisticsName = "runtime"
-var CpuStatFile = "/sys/fs/cgroup/cpu,cpuacct/cpuacct.stat"
-var CpuInterval = 10
-var formerUserUsage = 0
-var formerSysUsage = 0
-var newUserUsage = 0
-var newSysUsage = 0
-var lastCollectTime uint64 = 0
 
 const (
-	RuntimeCollectInterval = 60 // second
+	RuntimeCollectInterval = 6 // 6*10*time.Second
 )
 
-func SetVersion(v string) {
-	version = v
+var rt = &Runtime{}
+
+func init() {
+	NewCollector().Register(rt)
 }
 
-func InitRuntimeStatistics(tags map[string]string, interval int) {
-	RuntimeTagMap = tags
-	if interval != 0 {
-		CpuInterval = interval
-	}
+func RuntimeIns() *Runtime {
+	rt.enabled = true
+	return rt
 }
 
-func CollectRuntimeStatistics(buffer []byte) ([]byte, error) {
-	ts := fasttime.UnixTimestamp()
-	if ts < (lastCollectTime + RuntimeCollectInterval) {
-		return buffer, nil
-	}
-
-	lastCollectTime = ts
-	valueMap := genRuntimeValueMap()
-
-	buffer = AddPointToBuffer(RuntimeStatisticsName, RuntimeTagMap, valueMap, buffer)
-	return buffer, nil
+type Runtime struct {
+	BaseCollector
+	Sys               *ItemInt64
+	Alloc             *ItemInt64
+	HeapAlloc         *ItemInt64
+	HeapSys           *ItemInt64
+	HeapInUse         *ItemInt64
+	HeapIdle          *ItemInt64
+	HeapObjects       *ItemInt64
+	HeapReleased      *ItemInt64
+	TotalAlloc        *ItemInt64
+	Lookups           *ItemInt64
+	Mallocs           *ItemInt64
+	Frees             *ItemInt64
+	PauseTotalNs      *ItemInt64
+	NumGC             *ItemInt64
+	NumGoroutine      *ItemInt64
+	Version           *ItemString
+	SpdyCertExpireAt  *ItemString
+	HttpsCertExpireAt *ItemString
 }
 
-func genRuntimeValueMap() map[string]interface{} {
-	var rt runtime.MemStats
-	runtime.ReadMemStats(&rt)
-	user_usage, _ := GetCpuUsage()
-	valueMap := map[string]interface{}{
-		"Sys":          int64(rt.Sys),
-		"Alloc":        int64(rt.Alloc),
-		"HeapAlloc":    int64(rt.HeapAlloc),
-		"HeapSys":      int64(rt.HeapSys),
-		"HeapInUse":    int64(rt.HeapInuse),
-		"HeapIdle":     int64(rt.HeapIdle),
-		"HeapObjects":  int64(rt.HeapObjects),
-		"HeapReleased": int64(rt.HeapReleased),
-		"TotalAlloc":   int64(rt.TotalAlloc),
-		"Lookups":      int64(rt.Lookups),
-		"Mallocs":      int64(rt.Mallocs),
-		"Frees":        int64(rt.Frees),
-		"PauseTotalNs": int64(rt.PauseTotalNs),
-		"NumGC":        int64(rt.NumGC),
-		"NumGoroutine": int64(runtime.NumGoroutine()),
-		"CpuUsage":     user_usage,
-		"Version":      version,
-	}
-
-	return valueMap
+func (r *Runtime) BeforeCollect() {
+	var stats runtime.MemStats
+	runtime.ReadMemStats(&stats)
+	r.Alloc.Store(int64(stats.Alloc))
+	r.HeapAlloc.Store(int64(stats.HeapAlloc))
+	r.HeapSys.Store(int64(stats.HeapSys))
+	r.HeapInUse.Store(int64(stats.HeapInuse))
+	r.HeapIdle.Store(int64(stats.HeapIdle))
+	r.HeapObjects.Store(int64(stats.HeapObjects))
+	r.HeapReleased.Store(int64(stats.HeapReleased))
+	r.TotalAlloc.Store(int64(stats.TotalAlloc))
+	r.Lookups.Store(int64(stats.Lookups))
+	r.Mallocs.Store(int64(stats.Mallocs))
+	r.Frees.Store(int64(stats.Frees))
+	r.PauseTotalNs.Store(int64(stats.PauseTotalNs))
+	r.NumGC.Store(int64(stats.NumGC))
+	r.NumGoroutine.Store(int64(runtime.NumGoroutine()))
 }
 
-func CollectOpsRuntimeStatistics() []opsStat.OpsStatistic {
-	valueMap := genRuntimeValueMap()
-	return []opsStat.OpsStatistic{{
-		Name:   RuntimeStatisticsName,
-		Tags:   RuntimeTagMap,
-		Values: valueMap,
-	},
-	}
+func (r *Runtime) Interval() int {
+	return RuntimeCollectInterval
 }
 
-func GetCpuUsage() (int64, int64) {
-	if fileExists(CpuStatFile) {
-		f, err := os.OpenFile(path.Clean(CpuStatFile), os.O_RDONLY, 0600)
-		if err != nil {
-			logger.GetLogger().Error(err.Error())
-			return 0, 0
-		}
-		defer util.MustClose(f)
-
-		formerUserUsage = newUserUsage
-		formerSysUsage = newSysUsage
-		br := bufio.NewReader(f)
-		for {
-			line, _, c := br.ReadLine()
-			if c == io.EOF {
-				break
-			}
-
-			strs := strings.Split(string(line), " ")
-			if len(strs) != 2 {
-				continue
-			}
-			if strs[0] == "user" {
-				newUserUsage, _ = strconv.Atoi(strs[1])
-			}
-			if strs[0] == "system" {
-				newSysUsage, _ = strconv.Atoi(strs[1])
-			}
-		}
-		user_usage := int64((newUserUsage - formerUserUsage) / CpuInterval)
-		sys_usage := int64((newSysUsage - formerSysUsage) / CpuInterval)
-		if user_usage > 100000 {
-			return 0, 0
-		}
-		return user_usage, sys_usage
-	}
-
-	return 0, 0
+func (r *Runtime) SetVersion(v string) {
+	r.Version.Store(v)
 }
 
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	if err != nil {
-		return os.IsExist(err)
-	}
-	return true
+func (r *Runtime) SetHttpsCertExpireAt(expire time.Time) {
+	r.HttpsCertExpireAt.Store(expire.Format(time.DateTime))
+}
+
+func (r *Runtime) SetSpdyCertExpireAt(expire time.Time) {
+	r.SpdyCertExpireAt.Store(expire.Format(time.DateTime))
 }

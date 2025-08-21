@@ -85,6 +85,51 @@ func AbsoluteDiffFunc[T util.NumberOnly](prev, curr T) T {
 	return -res
 }
 
+func ADRMseExtReduce[T util.NumberOnly](si *SliceItem[T]) (int, int64, float64, bool) {
+	length := len(si.value)
+	if length == 0 {
+		return -1, 0, 0, true
+	}
+	if length == 1 {
+		return -1, si.time[0], 0, false
+	}
+
+	mid := length / 2
+	predicted := si.value[:mid]
+	actual := si.value[mid:]
+	if length%2 == 1 {
+		actual = si.value[mid+1:]
+	}
+	rmseOfSlice := RmseCol(predicted, actual)
+	predictedAver := averageCol(predicted)
+	actualAver := averageCol(actual)
+
+	subtrahend := max(1.0, min(predictedAver, actualAver))
+
+	return -1, si.time[0], rmseOfSlice / subtrahend, false
+}
+
+func RmseCol[T util.NumberOnly](actual, predicted []T) float64 {
+	n := len(actual)
+
+	squaredErrorSum := 0.0
+	for i := 0; i < n; i++ {
+		diff := float64(actual[i] - predicted[i])
+		squaredErrorSum += diff * diff
+	}
+
+	return math.Sqrt(squaredErrorSum / float64(n))
+}
+
+func averageCol[T util.NumberOnly](numbers []T) float64 {
+	n := len(numbers)
+	var sum T
+	for _, num := range numbers {
+		sum += num
+	}
+	return float64(sum) / float64(n)
+}
+
 func NewMedianReduce[T util.NumberOnly](si *SliceItem[T]) (int, int64, float64, bool) {
 	length := len(si.value)
 	if length == 0 {
@@ -101,6 +146,30 @@ func NewMedianReduce[T util.NumberOnly](si *SliceItem[T]) (int, int64, float64, 
 		return -1, si.time[length/2-1], float64(lowvalue) + float64(highvalue-lowvalue)/2, false
 	}
 	return -1, si.time[length/2], float64(si.value[length/2]), false
+}
+
+func RegrSlopeReduce[T util.NumberOnly](si *SliceItem[T]) (int, int64, float64, bool) {
+	length := len(si.value)
+	if length == 0 {
+		return -1, 0, 0, true
+	}
+	n := float64(length)
+	// linear regression: least squares method
+	var sumX, sumY, sumXY, sumX2 float64
+	for i, yVal := range si.value {
+		x := float64(i)
+		y := float64(yVal)
+		sumX += x
+		sumY += y
+		sumXY += x * y
+		sumX2 += x * x
+	}
+	denominator := n*sumX2 - sumX*sumX
+	if denominator == 0 {
+		return -1, si.time[0], 0, false
+	}
+	slope := (n*sumXY - sumX*sumY) / denominator
+	return -1, si.time[0], slope, false
 }
 
 func NewModeReduce[T util.ExceptBool](si *SliceItem[T]) (int, int64, float64, bool) {

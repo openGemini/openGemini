@@ -388,12 +388,13 @@ func (h *SortedHeapItems) GetOption() *query.ProcessorOptions {
 func (h *SortedHeapItems) GetBreakPoint() BaseBreakPoint {
 	b := &SortedBreakPoint{
 		Tag:               h.Items[0].ChunkBuf.Tags()[h.Items[0].TagIndex],
-		Time:              h.Items[0].ChunkBuf.Time()[h.Items[0].Index],
 		chunk:             h.Items[0].ChunkBuf,
 		ValuePosition:     h.Items[0].Index,
 		AuxCompareHelpers: h.AuxCompareHelpers,
 	}
-
+	if h.Items[0].ChunkBuf.Time() != nil {
+		b.Time = h.Items[0].ChunkBuf.Time()[h.Items[0].Index]
+	}
 	return b
 }
 

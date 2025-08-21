@@ -12,7 +12,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/openGemini/openGemini/lib/crypto"
 	httpdListener "github.com/openGemini/openGemini/lib/listener"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/httpd/config"
@@ -22,14 +21,15 @@ import (
 
 // Service manages the listener and handler for an HTTP endpoint.
 type Service struct {
-	Ln        []net.Listener
-	addr      string
-	https     bool
-	cert      string
-	key       string
-	limit     int
-	tlsConfig *tls.Config
-	err       chan error
+	Ln         []net.Listener
+	addr       string
+	https      bool
+	cert       string
+	key        string
+	clientCert string
+	limit      int
+	tlsConfig  *tls.Config
+	err        chan error
 
 	unixSocket         bool
 	unixSocketPerm     uint32
@@ -50,6 +50,7 @@ func NewService(c config.Config) *Service {
 		https:          c.HTTPSEnabled,
 		cert:           c.HTTPSCertificate,
 		key:            c.HTTPSPrivateKey,
+		clientCert:     c.HTTPSClientCertificate,
 		limit:          c.MaxConnectionLimit,
 		tlsConfig:      c.TLS,
 		err:            make(chan error),
@@ -75,20 +76,12 @@ func NewService(c config.Config) *Service {
 func (s *Service) Openlistener(addr string) error {
 	// Open listener.
 	if s.https {
-		cert, err := tls.X509KeyPair([]byte(crypto.DecryptFromFile(s.cert)), []byte(crypto.DecryptFromFile(s.key)))
+		ln, err := httpdListener.OpenHttpsListen(s.key, s.cert, s.clientCert, addr, s.tlsConfig.Clone())
 		if err != nil {
 			return err
 		}
 
-		tlsConfig := s.tlsConfig.Clone()
-		tlsConfig.Certificates = []tls.Certificate{cert}
-
-		listener, err := tls.Listen("tcp", addr, tlsConfig)
-		if err != nil {
-			return err
-		}
-
-		s.Ln = append(s.Ln, listener)
+		s.Ln = append(s.Ln, ln)
 	} else {
 		listener, err := net.Listen("tcp", addr)
 		if err != nil {

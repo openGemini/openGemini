@@ -27,6 +27,7 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
@@ -548,6 +549,14 @@ func TestDeleteTSIDs_Relation(t *testing.T) {
 	path := t.TempDir()
 	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
 	defer idxBuilder.Close()
+	mergeSet := idx.(*MergeSetIndex)
+	path1 := t.TempDir()
+	idx1, idxBuilder1 := getTestIndexAndBuilder(path1, config.TSSTORE)
+	defer idxBuilder1.Close()
+	delMergeSet := idx1.(*MergeSetIndex)
+	mergeSet.SetDeleteMergeSet(delMergeSet)
+	mergeSet.DeleteMergeSet().LoadDeletedTSIDs()
+
 	CreateIndexByBuild(idxBuilder, idx)
 
 	f := func(name []byte, opts influxql.Expr, tr TimeRange, expectedSeriesKeys []string) {
@@ -721,6 +730,13 @@ func TestSearchTagValuesCardinality_Relation(t *testing.T) {
 	path := t.TempDir()
 	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
 	defer idxBuilder.Close()
+	mergeSet := idx.(*MergeSetIndex)
+	path1 := t.TempDir()
+	idx1, idxBuilder1 := getTestIndexAndBuilder(path1, config.TSSTORE)
+	defer idxBuilder1.Close()
+	delMergeSet := idx1.(*MergeSetIndex)
+	mergeSet.SetDeleteMergeSet(delMergeSet)
+	mergeSet.DeleteMergeSet().LoadDeletedTSIDs()
 	CreateIndexByBuild(idxBuilder, idx)
 
 	f := func(name, tagKey []byte, expectCardinality uint64) {
@@ -833,15 +849,15 @@ func TestFieldIndexSearch(t *testing.T) {
 	if !assert.Equal(t, 1, len(tagSets)) {
 		t.Fatal()
 	}
-	if !assert.Equal(t, 5, len(tagSets[0].SeriesKeys)) {
+	if !assert.Equal(t, 5, tagSets[0].Len()) {
 		t.Fatal()
 	}
 
 	sort.Strings(SeriesKeys)
 	sort.Sort(tagSets[0])
 	for i, key := range SeriesKeys {
-		if !assert.True(t, strings.Contains(string(tagSets[0].SeriesKeys[i]), key)) {
-			t.Fatal(string(tagSets[0].SeriesKeys[i]), key)
+		if !assert.True(t, strings.Contains(string(tagSets[0].GetSeriesKeys(i)), key)) {
+			t.Fatal(string(tagSets[0].GetSeriesKeys(i)), key)
 		}
 	}
 
@@ -860,7 +876,7 @@ func TestFieldIndexSearch(t *testing.T) {
 	if !assert.Equal(t, 1, len(tagSets)) {
 		t.Fatal()
 	}
-	if !assert.True(t, strings.Contains(string(tagSets[0].SeriesKeys[0]), "field_str0\x00value-1")) {
+	if !assert.True(t, strings.Contains(string(tagSets[0].GetSeriesKeys(0)), "field_str0\x00value-1")) {
 		t.Fatal()
 	}
 
@@ -880,7 +896,7 @@ func TestFieldIndexSearch(t *testing.T) {
 		t.Fatal()
 	}
 	for i, tagSet := range tagSets {
-		if !assert.True(t, strings.Contains(string(tagSet.key), fmt.Sprintf("field_str0\x00value-%d", i))) {
+		if !assert.True(t, strings.Contains(string(tagSet.GetKey()), fmt.Sprintf("field_str0\x00value-%d", i))) {
 			t.Fatal()
 		}
 	}
@@ -921,7 +937,7 @@ func TestPartialFieldIndexSearch(t *testing.T) {
 	if !assert.Equal(t, 1, len(tagSets)) {
 		t.Fatal()
 	}
-	if !assert.Equal(t, 5, len(tagSets[0].SeriesKeys)) {
+	if !assert.Equal(t, 5, tagSets[0].Len()) {
 		t.Fatal()
 	}
 }
@@ -1266,15 +1282,15 @@ func TestCreateFieldIndex(t *testing.T) {
 	if !assert.Equal(t, 1, len(tagSets)) {
 		t.Fatal()
 	}
-	if !assert.Equal(t, 5, len(tagSets[0].SeriesKeys)) {
+	if !assert.Equal(t, 5, tagSets[0].Len()) {
 		t.Fatal()
 	}
 
 	sort.Strings(SeriesKeys)
 	sort.Sort(tagSets[0])
 	for i, key := range SeriesKeys {
-		if !assert.True(t, strings.Contains(string(tagSets[0].SeriesKeys[i]), key)) {
-			t.Fatal(string(tagSets[0].SeriesKeys[i]), key)
+		if !assert.True(t, strings.Contains(string(tagSets[0].GetSeriesKeys(i)), key)) {
+			t.Fatal(string(tagSets[0].GetSeriesKeys(i)), key)
 		}
 	}
 
@@ -1293,7 +1309,7 @@ func TestCreateFieldIndex(t *testing.T) {
 	if !assert.Equal(t, 1, len(tagSets)) {
 		t.Fatal()
 	}
-	if !assert.True(t, strings.Contains(string(tagSets[0].SeriesKeys[0]), "field_str0\x00value-1")) {
+	if !assert.True(t, strings.Contains(string(tagSets[0].GetSeriesKeys(0)), "field_str0\x00value-1")) {
 		t.Fatal()
 	}
 
@@ -1313,7 +1329,7 @@ func TestCreateFieldIndex(t *testing.T) {
 		t.Fatal()
 	}
 	for i, tagSet := range tagSets {
-		if !assert.True(t, strings.Contains(string(tagSet.key), fmt.Sprintf("field_str0\x00value-%d", i))) {
+		if !assert.True(t, strings.Contains(string(tagSet.GetKey()), fmt.Sprintf("field_str0\x00value-%d", i))) {
 			t.Fatal()
 		}
 	}
@@ -1437,4 +1453,13 @@ func TestTextIndexCacheClear(t *testing.T) {
 	}
 
 	TextCacheClear(tIndex)
+}
+
+func TestWriteIndexErr(t *testing.T) {
+	path := t.TempDir()
+	_, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
+	defer idxBuilder.Close()
+	idxBuilder.Tier = util.Cold
+	err := idxBuilder.CreateIndexIfNotExists(nil, true)
+	assert.Equal(t, err.Error(), "forbid index write, indexId:2, indexTier:3")
 }

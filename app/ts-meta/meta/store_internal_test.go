@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agiledragon/gomonkey/v2"
 	"github.com/hashicorp/raft"
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
 	"github.com/openGemini/openGemini/lib/config"
@@ -941,4 +942,81 @@ func Test_executeUpdateIndexTierCmd(t *testing.T) {
 	cmd.Type = &errType
 	re := fsm.executeCmd(*cmd)
 	assert2.NotEqual(t, re, nil)
+}
+
+func Test_executeReplaceMergeShardsCmd(t *testing.T) {
+	s := &Store{Logger: logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop()), data: &meta2.Data{Databases: make(map[string]*meta2.DatabaseInfo)}}
+	fsm := (*storeFSM)(s)
+	typ := proto2.Command_ReplaceMergeShardsCommand
+	cmd := &proto2.Command{Type: &typ}
+	value := &proto2.ReplaceMergeShardsCommand{}
+	err := proto.SetExtension(cmd, proto2.E_ReplaceMergeShardsCommand_Command, value)
+	require.NoError(t, err)
+	re := fsm.executeCmd(*cmd)
+	assert2.NotEqual(t, re, nil)
+}
+
+func TestRepairPT(t *testing.T) {
+	store := &Store{
+		config: config.NewMeta(),
+		Logger: logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop()),
+		cacheData: &meta2.Data{
+			Databases: map[string]*meta2.DatabaseInfo{
+				"db0": {Name: "db0", Options: &obs.ObsOptions{}},
+			},
+			PtView: map[string]meta2.DBPtInfos{
+				"db0": []meta2.PtInfo{
+					{
+						Owner:  meta2.PtOwner{NodeID: 10},
+						PtId:   10,
+						Status: meta2.Offline,
+					},
+				},
+			},
+			DataNodes: []meta2.DataNode{
+				{
+					NodeInfo: meta2.NodeInfo{ID: 10, Status: serf.StatusAlive},
+				},
+			},
+		},
+	}
+	pt := &store.cacheData.PtView["db0"][0]
+	node := &store.cacheData.DataNodes[0]
+	store.config.RepairPT = true
+	store.config.PingFailedNode = true
+	defer func() {
+		store.config.RepairPT = false
+		store.config.PingFailedNode = false
+	}()
+
+	p := gomonkey.ApplyFunc(startAssignHandler, func(e *AssignEvent) (NextAction, error) {
+		pt.Status = meta2.Online
+		return 0, nil
+	})
+	defer p.Reset()
+
+	var assertPtStatus = func(exp meta2.PtStatus) {
+		store.RepairPT(time.Millisecond)
+		require.Equal(t, exp, pt.Status)
+	}
+
+	assertPtStatus(meta2.Online)
+	assertPtStatus(meta2.Online)
+
+	pt.Status = meta2.Offline
+	pt.Owner.NodeID = 100 // node not exists
+	assertPtStatus(meta2.Offline)
+
+	node.Status = serf.StatusFailed // node not alive
+	pt.Owner.NodeID = 10
+	assertPtStatus(meta2.Offline)
+
+	clear(store.cacheData.Databases) // db not exists
+	node.Status = serf.StatusAlive
+	assertPtStatus(meta2.Offline)
+
+	assertPtStatus(meta2.Offline)
+
+	store.config.RepairPT = false
+	assertPtStatus(meta2.Offline)
 }

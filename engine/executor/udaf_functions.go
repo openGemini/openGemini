@@ -17,69 +17,78 @@ package executor
 import (
 	"time"
 
+	"github.com/apache/arrow/go/v13/arrow"
 	"github.com/influxdata/influxdb/uuid"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/services/castor"
 )
 
-func CastorReduce(in []Chunk, out Chunk, args ...interface{}) error {
-	if len(in) == 0 {
-		return errno.NewError(errno.EmptyData)
-	}
-	srv := castor.GetService()
-	if srv == nil {
-		return errno.NewError(errno.ServiceNotEnable)
-	}
-	if !srv.IsAlive() {
-		return errno.NewError(errno.ServiceNotAlive)
-	}
+type recordToChunkFunc func(r arrow.Record, c Chunk, fields map[string]struct{}) error
 
-	inputs, ok := args[0].([]influxql.Expr)
-	if !ok {
-		return errno.NewError(errno.TypeAssertFail, influxql.AnyField)
-	}
-	taskId := uuid.TimeUUID().String()
-	recs, err := ChunkToArrowRecords(in, taskId, inputs)
-	if err != nil {
-		return err
-	}
+func CastorReduce(fn recordToChunkFunc) WideReduce {
+	return func(in []Chunk, out Chunk, args ...interface{}) error {
+		if len(in) == 0 {
+			return errno.NewError(errno.EmptyData)
+		}
+		srv := castor.GetService()
+		if srv == nil {
+			return errno.NewError(errno.ServiceNotEnable)
+		}
+		if !srv.IsAlive() {
+			return errno.NewError(errno.ServiceNotAlive)
+		}
 
-	// send data
-	respChan, err := castor.NewRespChan(len(recs))
-	if err != nil {
-		return err
-	}
-	respCnt := 0
-	srv.RegisterResultChan(taskId, respChan)
-	defer func() {
-		srv.DeregisterResultChan(taskId)
-		respChan.Close()
-	}()
-	for _, r := range recs {
-		srv.HandleData(r)
-		defer r.Release()
-	}
+		inputs, ok := args[0].([]influxql.Expr)
+		if !ok {
+			return errno.NewError(errno.TypeAssertFail, influxql.AnyField)
+		}
+		taskId := uuid.TimeUUID().String()
+		recs, err := ChunkToArrowRecords(in, taskId, inputs)
+		if err != nil {
+			return err
+		}
 
-	// wait response
-	out.SetName(in[0].Name())
-	ticker := time.NewTicker(srv.Config.GetWaitTimeout())
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ticker.C:
-			return errno.NewError(errno.ResponseIncomplete, len(recs), respCnt)
-		case resp := <-respChan.C:
-			respCnt++
-			defer resp.Release()
-			if err := CopyArrowRecordToChunk(resp, out, castor.DesiredFieldKeySet); err != nil {
+		// send data
+		respChan, err := castor.NewRespChan(len(recs))
+		if err != nil {
+			return err
+		}
+		respCnt := 0
+		srv.RegisterResultChan(taskId, respChan)
+		defer func() {
+			for _, r := range recs {
+				r.Release()
+			}
+			srv.DeregisterResultChan(taskId)
+			respChan.Close()
+		}()
+		for _, r := range recs {
+			srv.HandleData(r)
+		}
+
+		// wait response
+		out.SetName(in[0].Name())
+		ticker := time.NewTicker(srv.Config.GetWaitTimeout())
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				return errno.NewError(errno.ResponseIncomplete, len(recs), respCnt)
+			case resp := <-respChan.C:
+				respCnt++
+				defer resp.Release()
+				if err := fn(resp, out, castor.DesiredFieldKeySet); err != nil {
+					logger.GetLogger().Error(err.Error())
+					return err
+				}
+				if respCnt == len(recs) {
+					return nil
+				}
+			case err := <-respChan.ErrCh:
 				return err
 			}
-			if respCnt == len(recs) {
-				return nil
-			}
-		case err := <-respChan.ErrCh:
-			return err
 		}
 	}
 }

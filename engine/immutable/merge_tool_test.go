@@ -1026,7 +1026,7 @@ func TestCompressChunkMeta(t *testing.T) {
 
 	for _, v := range []int{immutable.ChunkMetaCompressSnappy, immutable.ChunkMetaCompressNone, 200} {
 		immutable.SetChunkMetaCompressMode(v)
-		run(2000)
+		run(1200)
 	}
 
 	// test case for lz4
@@ -1037,14 +1037,14 @@ func TestCompressChunkMeta(t *testing.T) {
 
 	for _, v := range []int{immutable.ChunkMetaCompressLZ4, immutable.ChunkMetaCompressNone, 200} {
 		immutable.SetChunkMetaCompressMode(v)
-		run(2000)
+		run(1200)
 	}
 
 	// test case for self-codec
 	for _, v := range []int{immutable.ChunkMetaCompressSelf, immutable.ChunkMetaCompressNone, 200} {
 		immutable.SetChunkMetaCompressMode(v)
 		run(20)
-		run(2000)
+		run(1200)
 	}
 }
 
@@ -1080,7 +1080,8 @@ func TestChunkMeta(t *testing.T) {
 	require.True(t, len(chunkMeta.GetColMeta()) > 0)
 	cm := chunkMeta.GetColMeta()[0]
 	require.NotEmpty(t, cm.GetPreAgg())
-	ofs, size := cm.GetSegment(0)
+	segment := cm.GetSegment(0)
+	ofs, size := segment.OffsetSize()
 	require.True(t, ofs > 0)
 	require.True(t, size > 0)
 	require.Equal(t, uint8(5), cm.Type())

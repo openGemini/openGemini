@@ -150,3 +150,73 @@ func matchSeriesKeyTagFilter(tags influx.PointTags, tf *tagFilter, tagArray bool
 	}
 	return match
 }
+
+func (is *indexSearch) doPruneWithSet(
+	set *uint64set.Set,
+	vals map[interface{}]bool,
+	tagKey string,
+	isNegative bool,
+) error {
+	ctx := pruneContextPool.Get()
+	defer pruneContextPool.Put(ctx)
+
+	ctx.Ids = make([]uint64, 0, set.Len())
+	set.ForEach(func(part []uint64) bool {
+		ctx.Ids = append(ctx.Ids, part...)
+		return true
+	})
+
+	var err error
+	var match bool
+	for _, sid := range ctx.Ids {
+		ctx.SeriesKey, err = is.idx.searchSeriesKey(ctx.SeriesKey[:0], sid)
+		if err != nil {
+			return err
+		}
+		ctx.tags = ctx.tags[:0]
+		match, err = matchSeriesKeyWithSet(ctx, vals, tagKey)
+		if err != nil {
+			return err
+		}
+		if match == isNegative {
+			set.Del(sid)
+		}
+	}
+	return nil
+}
+
+func matchSeriesKeyWithSet(ctx *PruneContext, vals map[interface{}]bool, tagKey string) (bool, error) {
+	var err error
+	ctx.SeriesKeys, _, err = unmarshalCombineIndexKeys(ctx.SeriesKeys, ctx.SeriesKey)
+	if err != nil {
+		return false, err
+	}
+	if len(ctx.SeriesKeys) > 1 {
+		for i := range ctx.SeriesKeys {
+			var tmpTags influx.PointTags
+			_, err = influx.IndexKeyToTags(ctx.SeriesKeys[i], true, &tmpTags)
+			if err != nil {
+				return false, err
+			}
+			ctx.tags = append(ctx.tags, tmpTags...)
+		}
+	} else {
+		var tags = &ctx.tags
+		tags, err = influx.IndexKeyToTags(ctx.SeriesKey, false, tags)
+		if err != nil {
+			return false, err
+		}
+		ctx.tags = *tags
+	}
+	return matchSeriesKeyWithSetTag(ctx.tags, vals, tagKey), nil
+}
+
+func matchSeriesKeyWithSetTag(tags influx.PointTags, vals map[interface{}]bool, tagKey string) bool {
+	for _, tag := range tags {
+		if tag.Key == tagKey {
+			_, ok := vals[tag.Value]
+			return ok
+		}
+	}
+	return false
+}

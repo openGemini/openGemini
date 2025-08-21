@@ -22,6 +22,7 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/pointsdecoder"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	servicesstream "github.com/openGemini/openGemini/services/stream"
@@ -135,7 +136,12 @@ func (s *Server) MustClose() {
 
 }
 
-func WriteStreamPoints(ww *pointsdecoder.DecoderWork, log *logger.Logger, store *storage.Storage, streamEngine stream.Engine) (error, bool) {
+type Storage interface {
+	WriteRows(db, rp string, ptId uint32, shardID uint64, rows []influx.Row, binaryRows []byte) error
+	GetMetaClient() metaclient.MetaClient
+}
+
+func WriteStreamPoints(ww *pointsdecoder.DecoderWork, log *logger.Logger, store Storage, streamEngine stream.Engine) (error, bool) {
 	var inUse bool
 	db, rp, ptId, shard, streamShardIdList, binaryRows, err := ww.DecodePoints()
 	if err != nil {
@@ -177,10 +183,35 @@ func WriteStreamPoints(ww *pointsdecoder.DecoderWork, log *logger.Logger, store 
 		}
 	}
 
+	rows := filterStreamRows(ww)
+	if len(rows) == 0 {
+		return err, inUse
+	}
+	ww.SetRows(rows)
 	if err = store.WriteRows(db, rp, ptId, shard, ww.GetRows(), binaryRows); err != nil {
 		log.Error("write rows failed", zap.String("db", db),
 			zap.String("rp", rp), zap.Uint32("ptId", ptId), zap.Uint64("shardId", shard), zap.Error(err))
 	}
 
 	return err, inUse
+}
+
+func filterStreamRows(ww *pointsdecoder.DecoderWork) []influx.Row {
+	var needFilter bool
+	originRows := ww.GetRows()
+	for _, row := range originRows {
+		if row.StreamOnly {
+			needFilter = true
+		}
+	}
+	if !needFilter {
+		return originRows
+	}
+	rows := make([]influx.Row, 0)
+	for _, row := range originRows {
+		if !row.StreamOnly {
+			rows = append(rows, row)
+		}
+	}
+	return rows
 }

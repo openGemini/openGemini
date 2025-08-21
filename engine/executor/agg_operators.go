@@ -17,13 +17,17 @@ limitations under the License.
 package executor
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 )
 
 func init() {
+	RegistryAggOp("ad_rmse_ext", &ADRmseExtOp{})
 	RegistryAggOp("min", &MinOp{})
 	RegistryAggOp("max", &MaxOp{})
 	RegistryAggOp("percentile_approx", &PercentileApproxOp{})
@@ -38,6 +42,34 @@ func init() {
 	RegistryAggOp("scalar_prom", &PromScalarOp{})
 	RegistryAggOp("quantile_prom", &PromQuantileOp{})
 	RegistryAggOp("absent_prom", &PromAbsentOp{})
+	RegistryAggOp("regr_slope", &RegrSlopeOp{})
+	RegistryAggOp(query.CASTOR, &CastorOp{})
+	RegistryAggOp(query.CASTOR_AD, &CastorADOp{})
+	RegistryAggOp("rca", &RCAOp{})
+}
+
+type ADRmseExtOp struct{}
+
+func (c *ADRmseExtOp) CreateRoutine(params *AggCallFuncParams) (Routine, error) {
+	inRowDataType, outRowDataType, opt, isSingleCall := params.InRowDataType, params.OutRowDataType, params.ExprOpt, params.IsSingleCall
+	inOrdinal := inRowDataType.FieldIndex(opt.Expr.(*influxql.Call).Args[0].(*influxql.VarRef).Val)
+	outOrdinal := outRowDataType.FieldIndex(opt.Ref.Val)
+	if inOrdinal < 0 || outOrdinal < 0 {
+		return nil, errno.NewError(errno.SchemaNotAligned, "ad_rmse_ext", "input and output schemas are not aligned")
+	}
+	dataType := inRowDataType.Field(inOrdinal).Expr.(*influxql.VarRef).Type
+	switch dataType {
+	case influxql.Float:
+		return NewRoutineImpl(NewFloatColFloatSliceIterator(ADRMseExtReduce[float64],
+			isSingleCall, inOrdinal, outOrdinal, nil, outRowDataType),
+			inOrdinal, outOrdinal), nil
+	case influxql.Integer:
+		return NewRoutineImpl(NewIntegerColIntegerSliceIterator(ADRMseExtReduce[int64],
+			isSingleCall, inOrdinal, outOrdinal, nil, outRowDataType),
+			inOrdinal, outOrdinal), nil
+	default:
+		return nil, errno.NewError(errno.UnsupportedDataType, "ad_rmse_ext", dataType.String())
+	}
 }
 
 type MinOp struct{}
@@ -116,6 +148,18 @@ func (c *PercentileApproxOp) CreateRoutine(params *AggCallFuncParams) (Routine, 
 	}
 	percentile /= 100
 	return NewPercentileApproxRoutineImpl(inRowDataType, outRowDataType, exprOpt, isSingleCall, opt, name, clusterNum, percentile)
+}
+
+type CastorOp struct{}
+
+func (c *CastorOp) CreateRoutine(params *AggCallFuncParams) (Routine, error) {
+	return nil, nil
+}
+
+type CastorADOp struct{}
+
+func (c *CastorADOp) CreateRoutine(params *AggCallFuncParams) (Routine, error) {
+	return nil, nil
 }
 
 type BasePromOp struct {
@@ -330,4 +374,68 @@ func (c *PromAbsentOp) CreateRoutine(params *AggCallFuncParams) (Routine, error)
 		return NewRoutineImpl(NewAbsentIterator(inOrdinal, outOrdinal, opt), inOrdinal, outOrdinal), nil
 	}
 	return nil, errno.NewError(errno.UnsupportedDataType, "absent_prom", dataType.String())
+}
+
+type RegrSlopeOp struct{}
+
+func (c *RegrSlopeOp) CreateRoutine(params *AggCallFuncParams) (Routine, error) {
+	inRowDataType, outRowDataType, opt, isSingleCall := params.InRowDataType, params.OutRowDataType, params.ExprOpt, params.IsSingleCall
+
+	inOrdinal := inRowDataType.FieldIndex(opt.Expr.(*influxql.Call).Args[0].(*influxql.VarRef).Val)
+	outOrdinal := outRowDataType.FieldIndex(opt.Ref.Val)
+	if inOrdinal < 0 || outOrdinal < 0 {
+		return nil, errno.NewError(errno.SchemaNotAligned, "regr_slope", "input and output schemas are not aligned")
+	}
+	dataType := inRowDataType.Field(inOrdinal).Expr.(*influxql.VarRef).Type
+	switch dataType {
+	case influxql.Float:
+		return NewRoutineImpl(NewFloatColFloatSliceIterator(RegrSlopeReduce[float64],
+			isSingleCall, inOrdinal, outOrdinal, nil, outRowDataType),
+			inOrdinal, outOrdinal), nil
+	case influxql.Integer:
+		return NewRoutineImpl(NewIntegerColIntegerSliceIterator(RegrSlopeReduce[int64],
+			isSingleCall, inOrdinal, outOrdinal, nil, outRowDataType),
+			inOrdinal, outOrdinal), nil
+	default:
+		return nil, errno.NewError(errno.UnsupportedDataType, "regr_slope", dataType.String())
+	}
+}
+
+type RCAOp struct{}
+
+func (c *RCAOp) CreateRoutine(params *AggCallFuncParams) (Routine, error) {
+	inRowDataType, outRowDataType, exprOpt, opt := params.InRowDataType, params.OutRowDataType, params.ExprOpt, params.ExprOpt
+
+	inOrdinal := inRowDataType.FieldIndex(opt.Expr.(*influxql.Call).Args[0].(*influxql.VarRef).Val)
+	outOrdinal := outRowDataType.FieldIndex(opt.Ref.Val)
+	if outOrdinal < 0 {
+		return nil, errno.NewError(errno.SchemaNotAligned, "rca", " output schemas are not aligned")
+	}
+
+	ordinalMap := make(map[int]int, inRowDataType.Fields().Len())
+	ordinalMap[outOrdinal] = inOrdinal
+	for i, field := range inRowDataType.Fields() {
+		if i == inOrdinal {
+			continue
+		}
+		fieldName := field.Name()
+		out := outRowDataType.FieldIndex(fieldName)
+		if out < 0 {
+			return nil, errno.NewError(errno.SchemaNotAligned, fieldName, " output schemas are not aligned")
+		}
+		ordinalMap[out] = i
+	}
+
+	p, ok := exprOpt.Expr.(*influxql.Call).Args[1].(*influxql.StringLiteral)
+	if !ok {
+		return nil, errors.New("the type of input args of rca function is unsupported")
+	}
+
+	var algoParams AlgoParam
+	err := json.Unmarshal([]byte(p.Val), &algoParams)
+	if err != nil {
+		return nil, err
+	}
+
+	return NewRoutineImpl(NewGraphFilterIterator(FaultDemarcation, outOrdinal, algoParams, ordinalMap), inOrdinal, outOrdinal), nil
 }

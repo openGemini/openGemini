@@ -39,11 +39,13 @@ const (
 	// ThirdPartyError errors returned by third-party packages
 	ThirdPartyError = 9008
 
-	ShortWrite         = 9009
-	ShortRead          = 9010
-	InvalidMeasurement = 9011
-	TooSmallData       = 9012
-	TooSmallOrOverflow = 9013
+	ShortWrite            = 9009
+	ShortRead             = 9010
+	InvalidMeasurement    = 9011
+	TooSmallData          = 9012
+	TooSmallOrOverflow    = 9013
+	NoMstInDb             = 9014
+	InvalidMeasurementTTL = 9015
 )
 
 // network module error codes
@@ -109,6 +111,12 @@ const (
 	ChunkReaderCursor            = 1127
 	ApplyFuncErr                 = 1128
 	QueryAborted                 = 1129
+	FilterAllPoints              = 1130
+	IndexClearingWhileReading    = 1131
+	ShardClearingWhileReading    = 1132
+	MisMatchShardAndIndex        = 1133
+	NoNodeTraits                 = 1134
+	FieldIsLiteral               = 1135
 )
 
 // promql2influxql
@@ -204,6 +212,8 @@ const (
 	ShardIsMoving                   = 2136
 	ShardMovingStopped              = 2137
 	AlreadyHotFile                  = 2138
+	IndexIsMoving                   = 2139
+	ForbidIndexWrite                = 2140
 )
 
 // merge out of order
@@ -235,6 +245,8 @@ const (
 	ErrInputTimeExceedTimeRange    = 3018
 	FailedPutNodeMaxIterNum        = 3019
 	ErrSameTagSet                  = 3020
+	SortMergeJoinFail              = 3021
+	HashMergeJoinFail              = 3022
 )
 
 // meta
@@ -353,6 +365,10 @@ const (
 	UsedProposeId                  = 5039
 	WriteToRaftTimeoutAfterPropose = 5040
 	WriteDstStreamMstNotAllowed    = 5041
+	TagNameTooLong                 = 5042
+	TagValueTooLong                = 5043
+	FieldNameTooLong               = 5044
+	TooManyFieldKeys               = 5045
 )
 
 // write interface
@@ -452,4 +468,12 @@ const (
 	ExceedRetryChance        = 8035
 	UnknownErr               = 8036
 	InvalidHaPolicy          = 8037
+	ColumnsNotAligned        = 8038
+)
+
+// consume service
+const (
+	MissTopic      = 8400
+	InvalidTopic   = 8401
+	MissPartitions = 8402
 )

@@ -113,7 +113,7 @@ func doRun(args ...string) error {
 	case "version":
 		fmt.Println(app.FullVersion(TsMonitor))
 	default:
-		return fmt.Errorf(monitorUsage)
+		return fmt.Errorf("%s", monitorUsage)
 	}
 	return nil
 }

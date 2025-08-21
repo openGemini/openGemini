@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 
@@ -108,6 +109,15 @@ func (p *preparedStatement) Statement() *influxql.SelectStatement {
 	return p.stmt
 }
 
+func (p *preparedStatement) ProcessorOptions() *query.ProcessorOptions {
+	opt, ok := p.opt.(*query.ProcessorOptions)
+	if !ok {
+		return nil
+	}
+
+	return opt
+}
+
 func (p *preparedStatement) buildPlanByCache(ctx context.Context, schema *QuerySchema, plan []hybridqp.QueryNode, mstsReqs *[]*MultiMstReqs) (hybridqp.QueryNode, error) {
 	p.stmt.Sources = p.qc.GetSources(p.stmt.Sources)
 	eTraits, err := p.qc.GetETraits(ctx, p.stmt.Sources, schema)
@@ -177,13 +187,17 @@ func (p *preparedStatement) BuildLogicalPlan(ctx context.Context) (hybridqp.Quer
 	if !ok {
 		return nil, mstsReqs, errors.New("preparedStatement Select p.opt isn't *query.ProcessorOptions type")
 	}
+
 	opt.EnableBinaryTreeMerge = sysconfig.GetEnableBinaryTreeMerge()
 
 	rewriteVarfName(p.stmt.Fields)
 
-	schema := NewQuerySchemaWithJoinCase(p.stmt.Fields, p.stmt.Sources, p.stmt.ColumnNames(), opt, p.stmt.JoinSource,
+	schema := NewQuerySchemaWithJoinCase(p.stmt.Fields, p.stmt.Sources, p.stmt.ColumnNames(), opt, p.stmt.JoinSource, p.stmt.UnionSource,
 		p.stmt.UnnestSource, p.stmt.SortFields)
 	schema.SetPromCalls(p.stmt.PromSubCalls)
+	if p.stmt.IsCompareCall {
+		schema.SetCompareCall()
+	}
 
 	HaveOnlyCSStore := schema.Sources().HaveOnlyCSStore()
 	planType := GetPlanType(schema, p.stmt)
@@ -256,7 +270,7 @@ func (p *preparedStatement) Select(ctx context.Context) (hybridqp.Executor, erro
 	}
 	// ts-server + tsEngine remove node_exchange
 	if localStorageForQuery != nil && req != nil {
-		executorBuilder.(*ExecutorBuilder).SetInfosAndTraits(req.([]*MultiMstReqs), ctx)
+		executorBuilder.(*ExecutorBuilder).SetInfosAndTraits(ctx, req.([]*MultiMstReqs), nil, nil)
 	}
 	return executorBuilder.Build(best)
 }
@@ -306,7 +320,7 @@ func buildSortAppendQueryPlan(ctx context.Context, qc query.LogicalPlanCreator, 
 		optSource := influxql.Sources{source}
 		childOpt := schema.opt.(*query.ProcessorOptions).Clone()
 		childOpt.UpdateSources(optSource)
-		s := NewQuerySchemaWithJoinCase(stmt.Fields, influxql.Sources{stmt.Sources[i]}, stmt.ColumnNames(), childOpt, stmt.JoinSource,
+		s := NewQuerySchemaWithJoinCase(stmt.Fields, influxql.Sources{stmt.Sources[i]}, stmt.ColumnNames(), childOpt, stmt.JoinSource, nil,
 			stmt.UnnestSource, stmt.SortFields)
 		child, err := BuildSources(ctx, qc, influxql.Sources{stmt.Sources[i]}, s, false)
 		if err != nil {
@@ -324,48 +338,90 @@ func buildSortAppendQueryPlan(ctx context.Context, qc query.LogicalPlanCreator, 
 	return NewLogicalSortAppend(joinNodes, schema), nil
 }
 
-func BuildInConditionPlan(ctx context.Context, qc query.LogicalPlanCreator, stmt *influxql.SelectStatement, schema *QuerySchema) (hybridqp.QueryNode, hybridqp.Catalog, error) {
-	c, _ := schema.Options().GetCondition().(*influxql.InCondition)
-	joinNodes := make([]hybridqp.QueryNode, 0, len(stmt.Sources))
-	opt, _ := schema.Options().(*query.ProcessorOptions)
-	sopt := query.SelectOptions{
-		MaxSeriesN:       opt.MaxSeriesN,
-		Authorizer:       opt.Authorizer,
-		ChunkedSize:      opt.ChunkedSize,
-		Chunked:          opt.Chunked,
-		ChunkSize:        opt.ChunkSize,
-		MaxQueryParallel: opt.MaxParallel,
-		AbortChan:        opt.AbortChan,
-		RowsChan:         opt.RowsChan,
+func BuildInConditionPlan(ctx context.Context, outerQc query.LogicalPlanCreator, outerStmt *influxql.SelectStatement, outerSchema *QuerySchema,
+	builder *LogicalPlanBuilderImpl) (hybridqp.QueryNode, error) {
+	in := outerSchema.InConditons[0]
+	inQc, ok := in.Csming.(query.LogicalPlanCreator)
+	if !ok {
+		return nil, fmt.Errorf("inConditon csming err")
 	}
-	c.Stmt.Sources = qc.GetSources(c.Stmt.Sources)
-	stmt.Sources = qc.GetSources(stmt.Sources)
-	rightOpt, _ := query.NewProcessorOptionsStmt(c.Stmt, sopt)
-	sRight := NewQuerySchemaWithJoinCase(c.Stmt.Fields, c.Stmt.Sources, c.Stmt.ColumnNames(), &rightOpt, c.Stmt.JoinSource,
-		c.Stmt.UnnestSource, c.Stmt.SortFields)
-	right, err := BuildSources(ctx, qc, c.Stmt.Sources, sRight, false)
+	outerOpt, ok := outerSchema.Options().(*query.ProcessorOptions)
+	if !ok {
+		return nil, fmt.Errorf("inConditon outerOpt err")
+	}
+
+	// 1. build inOpt
+	inOpt, err := query.NewProcessorOptionsWithopt(in.Stmt, outerOpt)
 	if err != nil {
-		return nil, nil, err
+		return nil, fmt.Errorf("NewProcessorOptions of inContition.stmt err")
 	}
-	if right != nil {
-		joinNodes = append(joinNodes, right)
+	if inOpt.StartTime < in.TimeRange.MinTimeNano() {
+		inOpt.StartTime = in.TimeRange.MinTimeNano()
 	}
-	leftOpt := opt.Clone()
-	sLeft := NewQuerySchemaWithJoinCase(stmt.Fields, stmt.Sources, stmt.ColumnNames(), leftOpt, stmt.JoinSource,
-		stmt.UnnestSource, stmt.SortFields)
-	left, err := BuildSources(ctx, qc, stmt.Sources, sLeft, false)
-	if err != nil {
-		return nil, nil, err
+	if inOpt.EndTime > in.TimeRange.MaxTimeNano() {
+		inOpt.EndTime = in.TimeRange.MaxTimeNano()
 	}
-	if left != nil {
-		joinNodes = append(joinNodes, left)
+	if !inOpt.Interval.IsZero() && inOpt.EndTime == influxql.MaxTime {
+		if now := ctx.Value(NowKey); now != nil {
+			inOpt.EndTime = now.(time.Time).UnixNano()
+		}
 	}
-	joinSchema := NewQuerySchemaWithJoinCase(append(c.Stmt.Fields, stmt.Fields...), c.Stmt.Sources, append(c.Stmt.ColumnNames(), stmt.ColumnNames()...), opt,
-		c.Stmt.JoinSource, c.Stmt.UnnestSource, c.Stmt.SortFields)
-	return NewLogicalJoin(joinNodes, joinSchema), joinSchema, nil
+	// notUse dimPushDown of inCondition clause
+	inOpt.StmtId = outerOpt.StmtId
+
+	// 2. build inSchema
+	inSchema := NewQuerySchemaWithJoinCase(in.Stmt.Fields, in.Stmt.Sources, in.Stmt.ColumnNames(), &inOpt, in.Stmt.JoinSource, nil,
+		in.Stmt.UnnestSource, in.Stmt.SortFields)
+
+	// isInSubquerySchema used to judge if agg transform should be pushed down
+	if inSchema != nil {
+		inSchema.SetIsInSubquerySchema(true)
+	}
+
+	// 3.build innerPlan
+	var valType influxql.DataType
+	if len(in.Stmt.Fields) == 0 {
+		return nil, errors.New("fields is empty")
+	}
+	field := in.Stmt.Fields[0]
+	if ref, ok := field.Expr.(*influxql.VarRef); !ok {
+		return nil, errors.New("type assertion failed")
+	} else {
+		valType = ref.Type
+	}
+
+	var innerPlan hybridqp.QueryNode
+	if valType != influxql.Tag {
+		innerPlan, err = buildQueryPlan(ctx, in.Stmt, inQc, inSchema)
+		if err != nil {
+			return nil, fmt.Errorf("buildQueryPlan of inContition.stmt err")
+		}
+	}
+
+	var newStmt *influxql.ShowTagValuesStatement
+	if valType == influxql.Tag {
+		newShowTagVal := &influxql.ShowTagValuesStatement{}
+		stmt, err := newShowTagVal.RewriteShowTagValStmt(in)
+		if err != nil {
+			return nil, err
+		}
+		condState, err := query.RewriteStatement(stmt)
+		if err != nil {
+			return nil, err
+		}
+		newStmt, ok = condState.(*influxql.ShowTagValuesStatement)
+		if !ok {
+			return nil, errors.New("type assertion failed")
+		}
+	}
+
+	// 4. build logicalInOp
+	inOp := NewLogicalIn(innerPlan, outerStmt, outerSchema, in.Column, outerQc, newStmt)
+	builder.Push(inOp)
+	return builder.Build()
 }
 
-func BuildFullJoinQueryPlan(ctx context.Context, qc query.LogicalPlanCreator, stmt *influxql.SelectStatement, schema *QuerySchema) (hybridqp.QueryNode, error) {
+func BuildJoinQueryPlan(ctx context.Context, qc query.LogicalPlanCreator, stmt *influxql.SelectStatement, schema *QuerySchema) (hybridqp.QueryNode, error) {
 	joinCases := schema.GetJoinCases()
 	if len(joinCases) != 1 {
 		return nil, fmt.Errorf("only surrport two subquery join")
@@ -377,6 +433,9 @@ func BuildFullJoinQueryPlan(ctx context.Context, qc query.LogicalPlanCreator, st
 		source := influxql.CloneSource(stmt.Sources[i])
 		optSource := influxql.Sources{source}
 		childOpt := schema.opt.(*query.ProcessorOptions).Clone()
+		if joinCases[0].JoinType != influxql.FullJoin {
+			childOpt.NoPushDownDim = true
+		}
 		childOpt.UpdateSources(optSource)
 		s := NewQuerySchemaWithSources(stmt.Fields, influxql.Sources{stmt.Sources[i]}, stmt.ColumnNames(), childOpt, nil)
 		child, err := BuildSources(ctx, qc, influxql.Sources{stmt.Sources[i]}, s, false)
@@ -392,7 +451,10 @@ func BuildFullJoinQueryPlan(ctx context.Context, qc query.LogicalPlanCreator, st
 	if len(joinNodes) == 0 {
 		return nil, nil
 	}
-	return NewLogicalFullJoin(joinNodes[0], joinNodes[1], joinConditon, schema), nil
+	if joinCases[0].JoinType == influxql.FullJoin {
+		return NewLogicalFullJoin(joinNodes[0], joinNodes[1], joinConditon, schema), nil
+	}
+	return NewLogicalJoin(joinNodes[0], joinNodes[1], joinConditon, joinCases[0].JoinType, schema), nil
 }
 
 func BuildBinOpQueryPlan(ctx context.Context, qc query.LogicalPlanCreator, stmt *influxql.SelectStatement, schema *QuerySchema) (hybridqp.QueryNode, error) {
@@ -596,6 +658,7 @@ func buildNodes(builder *LogicalPlanBuilderImpl, schema hybridqp.Catalog, s *Que
 	hasSort := s.HasSort()
 	HaveOnlyCSStore := schema.Options().HaveOnlyCSStore()
 	isSubQuery := schema.Sources().IsSubQuery()
+	isCTE := schema.Sources().IsCTE()
 
 	if len(schema.Calls()) > 0 {
 		buildAggNode(builder, schema, hasSlidingWindow)
@@ -613,7 +676,14 @@ func buildNodes(builder *LogicalPlanBuilderImpl, schema hybridqp.Catalog, s *Que
 		builder.Interval()
 	}
 
-	builder.Project()
+	if schema.IsCompareCall() {
+		builder.Align()
+	}
+
+	_, ok := builder.stack.Peek().(*LogicalFilter)
+	if !ok || !isCTE {
+		builder.Project()
+	}
 
 	if len(s.PromSubCalls) > 0 {
 		for _, call := range s.PromSubCalls {
@@ -663,10 +733,10 @@ func buildQueryPlan(ctx context.Context, stmt *influxql.SelectStatement, qc quer
 	if !ok {
 		return nil, errors.New("buildQueryPlan schema type isn't *QuerySchema")
 	}
-	if _, ok = schema.Options().GetCondition().(*influxql.InCondition); ok {
-		sp, schema, err = BuildInConditionPlan(ctx, qc, stmt, s)
+	if schema.HasInCondition() {
+		return BuildInConditionPlan(ctx, qc, stmt, s, builder)
 	} else if schema.GetJoinCaseCount() > 0 && len(stmt.Sources) == 2 {
-		sp, err = BuildFullJoinQueryPlan(ctx, qc, stmt, s)
+		sp, err = BuildJoinQueryPlan(ctx, qc, stmt, s)
 	} else if len(stmt.BinOpSource) > 0 {
 		sp, err = BuildBinOpQueryPlan(ctx, qc, stmt, s)
 	} else if stmt.Sources = qc.GetSources(stmt.Sources); len(stmt.Sources) > 1 {
@@ -682,13 +752,77 @@ func buildQueryPlan(ctx context.Context, stmt *influxql.SelectStatement, qc quer
 	}
 	builder.Push(sp)
 
+	unionCases := s.GetUnionCases()
+	if len(unionCases) > 0 {
+		unionType := unionCases[0].UnionType
+		if unionType == influxql.UnionDistinct || unionType == influxql.UnionDistinctByName {
+			builder.Distinct()
+		}
+	}
+
 	buildNodes(builder, schema, s)
 
 	return builder.Build()
 }
 
+func BuildNodeExchange(ctx context.Context, builder LogicalPlanBuilder, queryPlan hybridqp.QueryNode) error {
+	nodeTraits, ok := ctx.Value(hybridqp.NodeTrait).(*[]hybridqp.Trait)
+	if !ok {
+		return errno.NewError(errno.NoNodeTraits)
+	}
+	project, ok := queryPlan.(*LogicalProject)
+	if ok {
+		queryPlan = project.Children()[0]
+	}
+	traits, err := TransNodeTraits(*nodeTraits)
+	if err != nil {
+		return err
+	}
+	queryPlan, err = builder.CreateNodePlan(queryPlan, traits)
+	if err != nil {
+		return err
+	}
+	builder.Push(queryPlan)
+	if ok {
+		builder.Project()
+	}
+	return nil
+}
+
+type NodeTraitKey struct {
+	Database string
+	PtID     uint32 // for tsstore
+	NodeID   uint64
+}
+
+func TransNodeTraits(nodeTraits []hybridqp.Trait) ([]hybridqp.Trait, error) {
+	res := make([]hybridqp.Trait, 0, len(nodeTraits))
+	nodeTraitsMap := make(map[NodeTraitKey]*RemoteQuery)
+	for _, trait := range nodeTraits {
+		rq, ok := trait.(*RemoteQuery)
+		if !ok {
+			return nil, fmt.Errorf("invalid node remote query")
+		}
+		key := NodeTraitKey{Database: rq.Database, PtID: rq.PtID, NodeID: rq.NodeID}
+		value, ok := nodeTraitsMap[key]
+		if !ok {
+			value = rq
+			value.MstInfos = []*MultiMstInfo{{ShardIds: rq.ShardIDs, Opt: rq.Opt}}
+		} else {
+			value.MstInfos = append(value.MstInfos, &MultiMstInfo{ShardIds: rq.ShardIDs, Opt: rq.Opt})
+		}
+		nodeTraitsMap[key] = value
+	}
+	for _, rqs := range nodeTraitsMap {
+		res = append(res, rqs)
+	}
+	return res, nil
+}
+
 func buildExtendedPlan(ctx context.Context, stmt *influxql.SelectStatement, qc query.LogicalPlanCreator, schema *QuerySchema) (hybridqp.QueryNode, error) {
 	builder := NewLogicalPlanBuilderImpl(schema)
+	nodeTraits := []hybridqp.Trait{}
+	ctx = context.WithValue(ctx, hybridqp.NodeTrait, &nodeTraits)
 	queryPlan, err := buildQueryPlan(ctx, stmt, qc, schema)
 	if err != nil {
 		return nil, err
@@ -696,7 +830,15 @@ func buildExtendedPlan(ctx context.Context, stmt *influxql.SelectStatement, qc q
 	if queryPlan == nil {
 		return nil, nil
 	}
-	builder.Push(queryPlan)
+
+	if queryPlan.Schema().Options().CanQueryPushDown() {
+		err = BuildNodeExchange(ctx, builder, queryPlan)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		builder.Push(queryPlan)
+	}
 
 	if stmt.Target != nil {
 		builder.Target(stmt.Target.Measurement)
@@ -742,16 +884,146 @@ func BuildSources(ctx context.Context, qc query.LogicalPlanCreator, sources infl
 		if schema.Options().GetCondition() != nil {
 			builder.Filter()
 		}
+		// check whether the inner and outer dims of a subquery are the same.
+		isSameDims := slices.Equal(subQueryPlan.Schema().Options().GetOptDimension(), schema.Options().GetOptDimension())
+		isSameDims = isSameDims && !subQueryPlan.Schema().Options().IsPromGroupAllOrWithout() && !schema.Options().IsPromGroupAllOrWithout()
+		schema.Options().SetSameDims(isSameDims)
 		builder.SubQuery()
 		if !schema.opt.IsPromQuery() || (!outerBinOp && schema.HasCall() && !schema.HasPromAbsentCall()) {
 			builder.GroupBy()
 			builder.OrderBy()
 		}
 		return builder.Build()
-
+	case *influxql.CTE:
+		return BuildCTELogicalPlan(ctx, schema, source)
+	case *influxql.TableFunction:
+		return buildTableFunctionQueryPlan(ctx, qc, source, schema)
 	default:
 		return nil, nil
 	}
+}
+
+func BuildCTELogicalPlan(ctx context.Context, outerSchema *QuerySchema, cte *influxql.CTE) (hybridqp.QueryNode, error) {
+	builder := NewLogicalPlanBuilderImpl(outerSchema)
+
+	// todo: more abundant qc of graph query
+	cteQc, ok := cte.Csming.(query.LogicalPlanCreator)
+	if cte.Csming != nil && !ok {
+		return nil, fmt.Errorf("cte csming err")
+	}
+	outerOpt, ok := outerSchema.Options().(*query.ProcessorOptions)
+	if !ok || outerOpt == nil {
+		return nil, fmt.Errorf("cte outerOpt err")
+	}
+
+	// 1. build cteOpt
+	var cteOpt query.ProcessorOptions
+	var err error
+	if cte.GraphQuery != nil {
+		// todo: more abundant opt of graph query, like parse graph query time_args...
+		cteOpt = query.NewGraphProcessorOptions(outerOpt)
+	} else {
+		cteOpt, err = query.NewProcessorOptionsWithopt(cte.Query, outerOpt)
+		if err != nil {
+			return nil, fmt.Errorf("new processor options of cte.stmt err")
+		}
+		if cteOpt.StartTime <= cte.TimeRange.MinTimeNano() {
+			cteOpt.StartTime = cte.TimeRange.MinTimeNano()
+		}
+		if cteOpt.EndTime >= cte.TimeRange.MaxTimeNano() {
+			cteOpt.EndTime = cte.TimeRange.MaxTimeNano()
+		}
+		if !cteOpt.Interval.IsZero() && cteOpt.EndTime == influxql.MaxTime {
+			if now := ctx.Value(NowKey); now != nil {
+				cteOpt.EndTime = now.(time.Time).UnixNano()
+			}
+		}
+	}
+
+	// notUse dimPushDown of cteCondition clause
+	cteOpt.StmtId = outerOpt.StmtId
+
+	// 2. build cteSchema and ctePlan
+	var cteSchema *QuerySchema
+	var ctePlan hybridqp.QueryNode
+	if cte.GraphQuery == nil {
+		cteSchema = NewQuerySchemaWithJoinCase(cte.Query.Fields, cte.Query.Sources, cte.Query.ColumnNames(), &cteOpt, cte.Query.JoinSource, nil,
+			cte.Query.UnnestSource, cte.Query.SortFields)
+		ctePlan, err = buildQueryPlan(ctx, cte.Query, cteQc, cteSchema)
+		if err != nil {
+			return nil, fmt.Errorf("buildQueryPlan of cteContition.stmt err")
+		}
+	} else {
+		// todo: more abundant schema of graph query
+		cteSchema = &QuerySchema{opt: &cteOpt}
+		ctePlan = NewLogicalGraph(nil, cte.GraphQuery, cteSchema, cteQc)
+	}
+
+	// 4. optimize ctePlan
+	optimizer := BuildHeuristicPlanner()
+	optimizer.SetRoot(ctePlan)
+	bestCTEPlan := optimizer.FindBestExp()
+	builder.Push(NewLogicalCTE(cte, outerSchema, bestCTEPlan))
+
+	if outerSchema.Options().GetCondition() != nil {
+		builder.Project()
+		builder.Filter()
+	}
+	return builder.Build()
+}
+
+func buildTableFunctionQueryPlan(ctx context.Context, qc query.LogicalPlanCreator, stmt *influxql.TableFunction, schema *QuerySchema) (hybridqp.QueryNode, error) {
+	tableFunctionSource := stmt.GetTableFunctionSource()
+	nodes := make([]hybridqp.QueryNode, 0, len(tableFunctionSource))
+	params := stmt.GetParams()
+
+	for i := range tableFunctionSource {
+		source := influxql.CloneSource(tableFunctionSource[i])
+		optSource := influxql.Sources{source}
+		childOpt := schema.opt.(*query.ProcessorOptions).Clone()
+		childOpt.UpdateSources(optSource)
+
+		switch source := source.(type) {
+		case *influxql.Measurement:
+			optSource = qc.GetSources(optSource)
+			childSource, err := BuildSources(ctx, qc, optSource, schema, false)
+			if err != nil {
+				return nil, err
+			}
+			nodes = append(nodes, childSource)
+		case *influxql.CTE:
+			cteStmt := source.Query
+			if cteStmt != nil {
+				schema := NewQuerySchemaWithJoinCase(cteStmt.Fields, optSource, cteStmt.ColumnNames(), childOpt, cteStmt.JoinSource, nil,
+					cteStmt.UnnestSource, cteStmt.SortFields)
+				childSource, err := BuildSources(ctx, qc, optSource, schema, false)
+				if err != nil {
+					return nil, err
+				}
+				if childSource != nil {
+					nodes = append(nodes, childSource)
+				}
+			} else {
+				schema := NewQuerySchema(nil, nil, childOpt, nil)
+				schema.SetSources(optSource)
+				childSource, err := BuildSources(ctx, qc, optSource, schema, false)
+				if err != nil {
+					return nil, err
+				}
+				if childSource != nil {
+					nodes = append(nodes, childSource)
+				}
+			}
+		default:
+			return nil, errno.NewError(errno.InternalError, "tablefunction param error")
+		}
+
+	}
+
+	if len(nodes) == 0 {
+		return nil, nil
+	}
+	return NewLogicalTableFunction(nodes, schema, stmt.GetName(), params), nil
 }
 
 var _ = query.RegistryStmtBuilderCreator(&PrepareStmtBuilderCreator{})
@@ -791,7 +1063,8 @@ func RebuildColumnStorePlan(plan hybridqp.QueryNode) []hybridqp.QueryNode {
 			} else if n.eType == PARTITION_EXCHANGE {
 				eType = PARTITION_EXCHANGE
 			}
-			if plan.Schema().HasCall() && (plan.Schema().CanAggPushDown() || eType == NODE_EXCHANGE || plan.Schema().HasTopNDDCM()) {
+			_, ok := plan.Schema().HasTopN()
+			if plan.Schema().HasCall() && (plan.Schema().CanAggPushDown() || eType == NODE_EXCHANGE || ok) {
 				node := NewLogicalHashAgg(p[0], plan.Schema(), eType, eTraits)
 				if node.schema.HasCall() {
 					n := findChildAggNode(plan)
@@ -860,6 +1133,10 @@ func RebuildAggNodes(plan hybridqp.QueryNode) {
 	RebuildAggNodes(plan.Children()[0])
 }
 
+func hasTopn(plan hybridqp.QueryNode) bool {
+	return strings.HasPrefix(plan.(*LogicalAggregate).callsOrder[0], "topn_ddcm") || strings.HasPrefix(plan.(*LogicalAggregate).callsOrder[0], nagtName)
+}
+
 func ReplaceSortAggWithHashAgg(plan hybridqp.QueryNode) []hybridqp.QueryNode {
 	if plan.Children() == nil || len(plan.Schema().Sources()) > 1 {
 		return []hybridqp.QueryNode{plan}
@@ -874,7 +1151,7 @@ func ReplaceSortAggWithHashAgg(plan hybridqp.QueryNode) []hybridqp.QueryNode {
 		switch plan.(type) {
 		case *LogicalAggregate:
 			eType := NODE_EXCHANGE
-			if len(plan.(*LogicalAggregate).callsOrder) == 1 && strings.HasPrefix(plan.(*LogicalAggregate).callsOrder[0], "topn_ddcm") {
+			if len(plan.(*LogicalAggregate).callsOrder) == 1 && hasTopn(plan) {
 				eType = SUBQUERY_EXCHANGE
 			}
 			node := NewLogicalHashAgg(p[0], plan.Schema(), eType, nil)

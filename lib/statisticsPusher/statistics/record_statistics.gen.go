@@ -353,3 +353,19 @@ func (s *RecordStatistics) AddLogstoreAbort(i int64) {
 func (s *RecordStatistics) AddLogstoreReUse(i int64) {
 	atomic.AddInt64(&s.itemLogstoreReUse, i)
 }
+
+func (s *RecordStatistics) AddFilterCursorPoolInUse(i int64) {
+	atomic.AddInt64(&s.itemLogstoreInUse, i)
+}
+
+func (s *RecordStatistics) AddFilterCursorPoolGet(i int64) {
+	atomic.AddInt64(&s.itemLogstoreGet, i)
+}
+
+func (s *RecordStatistics) AddFilterCursorPoolAbort(i int64) {
+	atomic.AddInt64(&s.itemLogstoreAbort, i)
+}
+
+func (s *RecordStatistics) AddFilterCursorPoolReUse(i int64) {
+	atomic.AddInt64(&s.itemLogstoreReUse, i)
+}

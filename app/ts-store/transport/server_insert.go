@@ -21,10 +21,9 @@ import (
 	"github.com/openGemini/openGemini/app/ts-store/storage"
 	"github.com/openGemini/openGemini/app/ts-store/stream"
 	"github.com/openGemini/openGemini/app/ts-store/transport/handler"
-	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
-	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/msgservice"
 	"github.com/openGemini/openGemini/lib/pointsdecoder"
 	"github.com/openGemini/openGemini/lib/spdy"
 	"github.com/openGemini/openGemini/lib/spdy/transport"
@@ -59,11 +58,13 @@ func (s *InsertServer) Close() {
 
 func (s *InsertServer) register(store *storage.Storage, stream stream.Engine) {
 	s.server.RegisterEHF(transport.NewEventHandlerFactory(spdy.WritePointsRequest,
-		NewInsertProcessor(store, stream), &netstorage.WritePointsRequest{}))
+		NewInsertProcessor(store, stream), &msgservice.WritePointsRequest{}))
 	s.server.RegisterEHF(transport.NewEventHandlerFactory(spdy.WriteStreamPointsRequest,
-		NewInsertProcessor(store, stream), &netstorage.WriteStreamPointsRequest{}))
+		NewInsertProcessor(store, stream), &msgservice.WriteStreamPointsRequest{}))
+	s.server.RegisterEHF(transport.NewEventHandlerFactory(spdy.WriteBlobsRequest,
+		NewInsertProcessor(store, stream), &msgservice.WriteBlobsRequest{}))
 	s.server.RegisterEHF(transport.NewEventHandlerFactory(spdy.RaftMsgRequest,
-		NewRaftMsgProcessor(store), &netstorage.RaftMsgMessage{}))
+		NewRaftMsgProcessor(store), &msgservice.RaftMsgMessage{}))
 }
 
 type InsertProcessor struct {
@@ -82,16 +83,18 @@ func (p *InsertProcessor) Handle(w spdy.Responser, data interface{}) error {
 	p.store.WriteLimit.Take()
 	defer p.store.WriteLimit.Release()
 	switch msg := data.(type) {
-	case *netstorage.WritePointsRequest:
+	case *msgservice.WritePointsRequest:
 		return p.processWritePointsRequest(w, msg)
-	case *netstorage.WriteStreamPointsRequest:
+	case *msgservice.WriteStreamPointsRequest:
 		return p.processWriteStreamPointsRequest(w, msg)
+	case *msgservice.WriteBlobsRequest:
+		return p.processWriteBlobsRequest(w, msg)
 	default:
-		return executor.NewInvalidTypeError("*netstorage.WritePointsRequest", data)
+		return errno.NewInvalidTypeError("*msgservice.WritePointsRequest", data)
 	}
 }
 
-func (p *InsertProcessor) processWritePointsRequest(w spdy.Responser, msg *netstorage.WritePointsRequest) error {
+func (p *InsertProcessor) processWritePointsRequest(w spdy.Responser, msg *msgservice.WritePointsRequest) error {
 	atomic.AddInt64(&statistics.PerfStat.WriteActiveRequests, 1)
 	defer atomic.AddInt64(&statistics.PerfStat.WriteActiveRequests, -1)
 	ww := pointsdecoder.GetDecoderWork()
@@ -99,19 +102,40 @@ func (p *InsertProcessor) processWritePointsRequest(w spdy.Responser, msg *netst
 	err := writeHandler[config.GetHaPolicy()](ww, ww.GetLogger(), p.store)
 	pointsdecoder.PutDecoderWork(ww)
 
-	var rsp *netstorage.WritePointsResponse
+	var rsp *msgservice.WritePointsResponse
 	switch stdErr := err.(type) {
 	case *errno.Error:
-		rsp = netstorage.NewWritePointsResponse(1, stdErr.Errno(), stdErr.Error())
+		rsp = msgservice.NewWritePointsResponse(1, stdErr.Errno(), stdErr.Error())
 	case error:
-		rsp = netstorage.NewWritePointsResponse(1, 0, err.Error())
+		rsp = msgservice.NewWritePointsResponse(1, 0, err.Error())
 	default:
-		rsp = netstorage.NewWritePointsResponse(0, 0, "")
+		rsp = msgservice.NewWritePointsResponse(0, 0, "")
 	}
 	return w.Response(rsp, true)
 }
 
-func (p *InsertProcessor) processWriteStreamPointsRequest(w spdy.Responser, msg *netstorage.WriteStreamPointsRequest) error {
+func (p *InsertProcessor) processWriteBlobsRequest(w spdy.Responser, msg *msgservice.WriteBlobsRequest) error {
+	atomic.AddInt64(&statistics.PerfStat.WriteActiveRequests, 1)
+	defer atomic.AddInt64(&statistics.PerfStat.WriteActiveRequests, -1)
+
+	err := p.store.WriteBlobs(msg.Db, msg.Rp, msg.Pt, msg.Shard, msg.Bg, 0, 0)
+	defer func() {
+		msg.Bg.Release()
+	}()
+
+	var rsp *msgservice.WriteBlobsResponse
+	switch stdErr := err.(type) {
+	case *errno.Error:
+		rsp = msgservice.NewWriteBlobsResponse(1, stdErr.Errno(), stdErr.Error())
+	case error:
+		rsp = msgservice.NewWriteBlobsResponse(1, 0, err.Error())
+	default:
+		rsp = msgservice.NewWriteBlobsResponse(0, 0, "")
+	}
+	return w.Response(rsp, true)
+}
+
+func (p *InsertProcessor) processWriteStreamPointsRequest(w spdy.Responser, msg *msgservice.WriteStreamPointsRequest) error {
 	atomic.AddInt64(&statistics.PerfStat.WriteActiveRequests, 1)
 	defer atomic.AddInt64(&statistics.PerfStat.WriteActiveRequests, -1)
 	ww := pointsdecoder.GetDecoderWork()
@@ -123,14 +147,14 @@ func (p *InsertProcessor) processWriteStreamPointsRequest(w spdy.Responser, msg 
 		pointsdecoder.PutDecoderWork(ww)
 	}
 
-	var rsp *netstorage.WriteStreamPointsResponse
+	var rsp *msgservice.WriteStreamPointsResponse
 	switch stdErr := err.(type) {
 	case *errno.Error:
-		rsp = netstorage.NewWriteStreamPointsResponse(1, stdErr.Errno(), stdErr.Error())
+		rsp = msgservice.NewWriteStreamPointsResponse(1, stdErr.Errno(), stdErr.Error())
 	case error:
-		rsp = netstorage.NewWriteStreamPointsResponse(1, 0, err.Error())
+		rsp = msgservice.NewWriteStreamPointsResponse(1, 0, err.Error())
 	default:
-		rsp = netstorage.NewWriteStreamPointsResponse(0, 0, "")
+		rsp = msgservice.NewWriteStreamPointsResponse(0, 0, "")
 	}
 	return w.Response(rsp, true)
 }
@@ -146,9 +170,9 @@ func NewRaftMsgProcessor(store *storage.Storage) *RaftMsgProcessor {
 }
 
 func (p *RaftMsgProcessor) Handle(w spdy.Responser, data interface{}) error {
-	msg, ok := data.(*netstorage.RaftMsgMessage)
+	msg, ok := data.(*msgservice.RaftMsgMessage)
 	if !ok {
-		return executor.NewInvalidTypeError("*netstorage.RaftMsgMessage", data)
+		return errno.NewInvalidTypeError("*msgservice.RaftMsgMessage", data)
 	}
 
 	h := handler.NewHandler(msg.Typ)
@@ -166,11 +190,11 @@ func (p *RaftMsgProcessor) Handle(w spdy.Responser, data interface{}) error {
 		return err
 	}
 
-	rspTyp, ok := netstorage.MessageResponseTyp[msg.Typ]
+	rspTyp, ok := msgservice.MessageResponseTyp[msg.Typ]
 	if !ok {
 		return fmt.Errorf("no response message type: %d", msg.Typ)
 	}
 
-	rsp := netstorage.NewRaftMsgMessage(rspTyp, rspMsg)
+	rsp := msgservice.NewRaftMsgMessage(rspTyp, rspMsg)
 	return w.Response(rsp, true)
 }

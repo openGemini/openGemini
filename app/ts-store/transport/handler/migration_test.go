@@ -19,8 +19,8 @@ import (
 
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
-	"github.com/openGemini/openGemini/lib/netstorage"
-	netdata "github.com/openGemini/openGemini/lib/netstorage/data"
+	"github.com/openGemini/openGemini/lib/msgservice"
+	netdata "github.com/openGemini/openGemini/lib/msgservice/data"
 	"github.com/openGemini/openGemini/lib/spdy"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
@@ -83,10 +83,10 @@ func Test_MigrationProcessor_Move(t *testing.T) {
 		log:   logger.NewLogger(errno.ModuleHA),
 	}
 	resp := &MockNewResponser{}
-	var req *netstorage.PtRequest
+	var req *msgservice.PtRequest
 	mv := []meta.MoveState{meta.MovePreOffload, meta.MoveRollbackPreOffload, meta.MovePreAssign, meta.MoveOffload, meta.MoveAssign}
 	for _, m := range mv {
-		req = &netstorage.PtRequest{
+		req = &msgservice.PtRequest{
 			PtRequest: netdata.PtRequest{
 				Pt: &proto2.DbPt{
 					Db: proto.String("DB"),
@@ -113,10 +113,10 @@ func Test_MigrationProcessor_Move_error1(t *testing.T) {
 		log:   logger.NewLogger(errno.ModuleHA),
 	}
 	resp := &MockNewResponser{}
-	req := &netstorage.Requester{}
+	req := &msgservice.Requester{}
 
 	err := h.Handle(resp, req)
-	require.Errorf(t, err, "invalid data type, exp: *netstorage.PtRequest, got: *netstorage.Requester")
+	require.Errorf(t, err, "invalid data type, exp: *msgservice.PtRequest, got: *msgservice.Requester")
 }
 
 func Test_MigrationProcessor_Move_error2(t *testing.T) {
@@ -125,7 +125,7 @@ func Test_MigrationProcessor_Move_error2(t *testing.T) {
 		log:   logger.NewLogger(errno.ModuleHA),
 	}
 	resp := &MockNewResponser{}
-	req := &netstorage.PtRequest{
+	req := &msgservice.PtRequest{
 		PtRequest: netdata.PtRequest{
 			Pt: &proto2.DbPt{
 				Db: proto.String(""),
@@ -151,7 +151,7 @@ func Test_MigrationProcessor_Move_error3(t *testing.T) {
 		log:   logger.NewLogger(errno.ModuleHA),
 	}
 	resp := &MockNewResponser{}
-	req := &netstorage.PtRequest{
+	req := &msgservice.PtRequest{
 		PtRequest: netdata.PtRequest{
 			Pt: &proto2.DbPt{
 				Db: proto.String("0"),

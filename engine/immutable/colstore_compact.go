@@ -44,6 +44,20 @@ import (
 	"go.uber.org/zap"
 )
 
+type ColStoreCompactor interface {
+	Compact(ident colstore.MeasurementIdent, files []TSSPFile) ([]TSSPFile, error)
+}
+
+var colStoreCompactorFactory func(tb *MmsTables, mst string) ColStoreCompactor
+
+func SetColStoreCompactorFactory(fn func(tb *MmsTables, mst string) ColStoreCompactor) {
+	colStoreCompactorFactory = fn
+}
+
+func NewColStoreCompactor(tb *MmsTables, mst string) ColStoreCompactor {
+	return colStoreCompactorFactory(tb, mst)
+}
+
 var fragmentIteratorsPool = NewFragmentIteratorsPool(cpu.GetCpuNum() / 2)
 var bfBuffPool = bufferpool.NewByteBufferPool(uint64(logstore.GetConstant(logstore.CurrentLogTokenizerVersion).MaxBlockStoreNBytes), 0, 8)
 
@@ -214,11 +228,7 @@ func (ir *IteratorByRow) Flush(tbStore *MmsTables, pkSchema record.Schemas, fina
 		tbStore.AddTSSPFiles(f.builder.msName, true, f.builder.Files...)
 		if f.builder.GetPKInfoNum() != 0 {
 			for i, file := range f.builder.Files {
-				dataFilePath := file.Path()
-				indexFilePath := colstore.AppendPKIndexSuffix(RemoveTsspSuffix(dataFilePath))
-				if err = tbStore.ReplacePKFile(f.builder.msName, indexFilePath, f.builder.GetPKRecord(i), f.builder.GetPKMark(i), f.oldIndexFiles); err != nil {
-					return err
-				}
+				file.SetPkInfo(colstore.NewPKInfo(f.builder.GetPKRecord(i), f.builder.GetPKMark(i), colstore.DefaultTCLocation))
 			}
 		}
 	}
@@ -603,11 +613,7 @@ func (ib *IteratorByBlock) Flush(pkSchema record.Schemas, readFinal bool, tbStor
 		tbStore.AddTSSPFiles(f.builder.msName, true, f.builder.Files...)
 		if f.builder.GetPKInfoNum() != 0 {
 			for i, file := range f.builder.Files {
-				dataFilePath := file.Path()
-				indexFilePath := colstore.AppendPKIndexSuffix(RemoveTsspSuffix(dataFilePath))
-				if err = tbStore.ReplacePKFile(f.builder.msName, indexFilePath, f.builder.GetPKRecord(i), f.builder.GetPKMark(i), f.oldIndexFiles); err != nil {
-					return err
-				}
+				file.SetPkInfo(colstore.NewPKInfo(f.builder.GetPKRecord(i), f.builder.GetPKMark(i), colstore.DefaultTCLocation))
 			}
 		}
 	}
@@ -692,7 +698,6 @@ type FragmentIterators struct {
 	name                string // measurement name with version
 	indexFilePath       string
 	inited              bool
-	oldIndexFiles       []string
 	SortKeyFileds       []record.Field
 	tcDuration          time.Duration // duration for time cluster
 	fields              record.Schemas
@@ -805,7 +810,6 @@ func (f *FragmentIterators) updateIterators(m *MmsTables, group FilesInfo, sortK
 	f.PkRec = append(f.PkRec, record.NewRecordBuilder(primaryKey))
 	f.pkRecPosition = 0
 	f.recordResultNum = 0
-	f.oldIndexFiles = group.oldIndexFiles
 	f.accumulateRowsIndex = make([]int, 0, f.builder.Conf.FragmentsNumPerFlush)
 
 	for idx, fi := range group.compIts {
@@ -970,6 +974,10 @@ func (f *FragmentIterators) writePrimaryIndex() error {
 }
 
 func (f *FragmentIterators) writeRecord(nextFile func(fn TSSPFileName) (seq uint64, lv uint16, merge uint16, ext uint16), final bool, pkSchema record.Schemas) (*MsBuilder, error) {
+	if f.RecordResult.RowNums() == 0 {
+		return f.builder, nil
+	}
+
 	rowsLimit := f.builder.Conf.maxRowsPerSegment * f.builder.Conf.maxSegmentLimit
 	var err error
 	if err = f.writeData(f.RecordResult, false, false, 0); err != nil {

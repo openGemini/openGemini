@@ -1838,7 +1838,7 @@ func Test_PreAggregation_FullData_SingleCall(t *testing.T) {
 
 				indexInfo, err := sh.CreateCursor(ctx, querySchema)
 				if err != nil {
-					t.Fatalf(err.Error())
+					t.Fatalf("%s", err.Error())
 				}
 				if indexInfo == nil {
 					return
@@ -1856,7 +1856,7 @@ func Test_PreAggregation_FullData_SingleCall(t *testing.T) {
 
 				agg, _ := executor.NewStreamAggregateTransform(
 					[]hybridqp.RowDataType{tt.outputRowDataType},
-					[]hybridqp.RowDataType{tt.outputRowDataType}, tt.aggOps, &opt, false)
+					[]hybridqp.RowDataType{tt.outputRowDataType}, tt.aggOps, &opt, &executor.QuerySchema{}, false)
 				agg.GetInputs()[0].Connect(chunkReader.GetOutputs()[0])
 				agg.GetOutputs()[0].Connect(outPutPort)
 
@@ -3345,7 +3345,7 @@ func Test_PreAggregation_MissingData_SingleCall(t *testing.T) {
 
 				indexInfo, err := sh.CreateCursor(ctx, querySchema)
 				if err != nil {
-					t.Fatalf(err.Error())
+					t.Fatalf("%s", err.Error())
 				}
 				if indexInfo == nil {
 					return
@@ -3363,7 +3363,7 @@ func Test_PreAggregation_MissingData_SingleCall(t *testing.T) {
 
 				agg, _ := executor.NewStreamAggregateTransform(
 					[]hybridqp.RowDataType{tt.outputRowDataType},
-					[]hybridqp.RowDataType{tt.outputRowDataType}, tt.aggOps, &opt, false)
+					[]hybridqp.RowDataType{tt.outputRowDataType}, tt.aggOps, &opt, &executor.QuerySchema{}, false)
 				agg.GetInputs()[0].Connect(chunkReader.GetOutputs()[0])
 				agg.GetOutputs()[0].Connect(outPutPort)
 
@@ -3535,7 +3535,7 @@ func Test_FieldFilter_NoPreAgg_SingleCall(t *testing.T) {
 
 				indexInfo, err := sh.CreateCursor(ctx, querySchema)
 				if err != nil {
-					t.Fatalf(err.Error())
+					t.Fatalf("%s", err.Error())
 				}
 				if indexInfo == nil {
 					return
@@ -5001,7 +5001,7 @@ func Run_MissingData_SingCall(t *testing.T, isFlush bool) {
 
 				indexInfo, err := sh.CreateCursor(ctx, querySchema)
 				if err != nil {
-					t.Fatalf(err.Error())
+					t.Fatalf("%s", err.Error())
 				}
 				if indexInfo == nil {
 					return
@@ -5019,7 +5019,7 @@ func Run_MissingData_SingCall(t *testing.T, isFlush bool) {
 
 				agg, _ := executor.NewStreamAggregateTransform(
 					[]hybridqp.RowDataType{tt.outputRowDataType},
-					[]hybridqp.RowDataType{tt.outputRowDataType}, tt.aggOps, &opt, false)
+					[]hybridqp.RowDataType{tt.outputRowDataType}, tt.aggOps, &opt, &executor.QuerySchema{}, false)
 				agg.GetInputs()[0].Connect(chunkReader.GetOutputs()[0])
 				agg.GetOutputs()[0].Connect(outPutPort)
 
@@ -6576,7 +6576,7 @@ func Test_PreAggregation_Memtable_After_Order_SingCall(t *testing.T) {
 
 				indexInfo, err := sh.CreateCursor(ctx, querySchema)
 				if err != nil {
-					t.Fatalf(err.Error())
+					t.Fatalf("%s", err.Error())
 				}
 				if indexInfo == nil {
 					return
@@ -6594,7 +6594,7 @@ func Test_PreAggregation_Memtable_After_Order_SingCall(t *testing.T) {
 
 				agg, _ := executor.NewStreamAggregateTransform(
 					[]hybridqp.RowDataType{tt.outputRowDataType},
-					[]hybridqp.RowDataType{tt.outputRowDataType}, tt.aggOps, &opt, false)
+					[]hybridqp.RowDataType{tt.outputRowDataType}, tt.aggOps, &opt, &executor.QuerySchema{}, false)
 				agg.GetInputs()[0].Connect(chunkReader.GetOutputs()[0])
 				agg.GetOutputs()[0].Connect(outPutPort)
 
@@ -8015,7 +8015,7 @@ func Test_PreAggregation_MemTableData_SingleCall(t *testing.T) {
 
 			indexInfo, err := sh.CreateCursor(ctx, querySchema)
 			if err != nil {
-				t.Fatalf(err.Error())
+				t.Fatalf("%s", err.Error())
 			}
 			if indexInfo == nil {
 				return
@@ -8033,7 +8033,7 @@ func Test_PreAggregation_MemTableData_SingleCall(t *testing.T) {
 
 			agg, _ := executor.NewStreamAggregateTransform(
 				[]hybridqp.RowDataType{tt.outputRowDataType},
-				[]hybridqp.RowDataType{tt.outputRowDataType}, tt.aggOps, &opt, false)
+				[]hybridqp.RowDataType{tt.outputRowDataType}, tt.aggOps, &opt, &executor.QuerySchema{}, false)
 			agg.GetInputs()[0].Connect(chunkReader.GetOutputs()[0])
 			agg.GetOutputs()[0].Connect(outPutPort)
 
@@ -8403,7 +8403,7 @@ func Test_PreAggregation_FullData_MultiCalls(t *testing.T) {
 
 				indexInfo, err := sh.CreateCursor(ctx, querySchema)
 				if err != nil {
-					t.Fatalf(err.Error())
+					t.Fatalf("%s", err.Error())
 				}
 				if indexInfo == nil {
 					return
@@ -8421,7 +8421,7 @@ func Test_PreAggregation_FullData_MultiCalls(t *testing.T) {
 
 				agg, _ := executor.NewStreamAggregateTransform(
 					[]hybridqp.RowDataType{tt.outputRowDataType},
-					[]hybridqp.RowDataType{tt.outputRowDataType}, tt.aggOps, &opt, false)
+					[]hybridqp.RowDataType{tt.outputRowDataType}, tt.aggOps, &opt, &executor.QuerySchema{}, false)
 				agg.GetInputs()[0].Connect(chunkReader.GetOutputs()[0])
 				agg.GetOutputs()[0].Connect(outPutPort)
 
@@ -8609,7 +8609,7 @@ func Test_PreAggregation_MissingData_MultiCalls(t *testing.T) {
 
 				indexInfo, err := sh.CreateCursor(ctx, querySchema)
 				if err != nil {
-					t.Fatalf(err.Error())
+					t.Fatalf("%s", err.Error())
 				}
 				if indexInfo == nil {
 					return
@@ -8627,7 +8627,7 @@ func Test_PreAggregation_MissingData_MultiCalls(t *testing.T) {
 
 				agg, _ := executor.NewStreamAggregateTransform(
 					[]hybridqp.RowDataType{tt.outputRowDataType},
-					[]hybridqp.RowDataType{tt.outputRowDataType}, tt.aggOps, &opt, false)
+					[]hybridqp.RowDataType{tt.outputRowDataType}, tt.aggOps, &opt, &executor.QuerySchema{}, false)
 				agg.GetInputs()[0].Connect(chunkReader.GetOutputs()[0])
 				agg.GetOutputs()[0].Connect(outPutPort)
 
@@ -8685,6 +8685,7 @@ func (sg *mockShardGroup) LogicalPlanCost(m *influxql.Measurement, opt query.Pro
 }
 
 func (sg *mockShardGroup) FieldDimensions(m *influxql.Measurement) (fields map[string]influxql.DataType, dimensions map[string]struct{}, schema *influxql.Schema, err error) {
+	schema = &influxql.Schema{MinTime: math.MaxInt64, MaxTime: math.MinInt64}
 	fields = make(map[string]influxql.DataType)
 	dimensions = make(map[string]struct{})
 
@@ -8919,7 +8920,7 @@ func TestReadLastFromPreAgg(t *testing.T) {
 
 				indexInfo, err := sh.CreateCursor(ctx, querySchema)
 				if err != nil {
-					t.Fatalf(err.Error())
+					t.Fatalf("%s", err.Error())
 				}
 				if indexInfo == nil {
 					return
@@ -8937,7 +8938,7 @@ func TestReadLastFromPreAgg(t *testing.T) {
 
 				agg, _ := executor.NewStreamAggregateTransform(
 					[]hybridqp.RowDataType{tt.outputRowDataType},
-					[]hybridqp.RowDataType{tt.outputRowDataType}, tt.aggOps, &opt, false)
+					[]hybridqp.RowDataType{tt.outputRowDataType}, tt.aggOps, &opt, &executor.QuerySchema{}, false)
 				agg.GetInputs()[0].Connect(chunkReader.GetOutputs()[0])
 				agg.GetOutputs()[0].Connect(outPutPort)
 
@@ -9253,4 +9254,75 @@ func TestChunkReaderFunc(t *testing.T) {
 	cancel()
 	r.Output = executor.NewChunkPort(hybridqp.NewRowDataTypeImpl(influxql.VarRef{Val: "value1", Type: influxql.Float}))
 	ast.NoError(t, r.Work(ctx))
+}
+
+func TestCreateCursorIndexShardTierErr(t *testing.T) {
+	testDir := t.TempDir()
+	executor.RegistryTransformCreator(&executor.LogicalTSSPScan{}, &TsspSequenceReader{})
+	msNames := []string{"cpu"}
+	startTime := mustParseTime(time.RFC3339Nano, "2021-01-01T01:00:00Z")
+	//pts, minT, maxT := GenDataRecord_FullFields(msNames, 5, 10000, time.Millisecond*10, startTime)
+	pts, _, _ := GenDataRecord(msNames, 5, 2000, time.Second, startTime, true, false, true)
+	fields := map[string]influxql.DataType{
+		"field2_int":    influxql.Integer,
+		"field3_bool":   influxql.Boolean,
+		"field4_float":  influxql.Float,
+		"field1_string": influxql.String,
+	}
+
+	// **** start write data to the shard.
+	sh, _ := createShard("db0", "rp0", 1, testDir, config.TSSTORE)
+	defer sh.Close()
+	defer sh.indexBuilder.Close()
+	if err := sh.WriteRows(pts, nil); err != nil {
+		t.Fatal(err)
+	}
+	sh.ForceFlush()
+	sh.waitSnapshot()
+	startTime2 := mustParseTime(time.RFC3339Nano, "2021-01-01T12:00:00Z")
+	pts2, _, _ := GenDataRecord(msNames, 5, 2000, time.Millisecond*10, startTime2, true, false, true)
+	if err := sh.WriteRows(pts2, nil); err != nil {
+		t.Fatal(err)
+	}
+	sh.ForceFlush()
+	sh.waitSnapshot()
+
+	shardGroup := &mockShardGroup{
+		sh:     sh,
+		Fields: fields,
+	}
+
+	// parse stmt and opt
+	stmt := MustParseSelectStatement(fmt.Sprintf(`SELECT last(field2_int),field4_float from cpu `))
+	stmt, _ = stmt.RewriteFields(shardGroup, true, false)
+	stmt.OmitTime = true
+	sopt := query.SelectOptions{ChunkSize: 1024, MaxQueryParallel: 0}
+	RemoveTimeCondition(stmt)
+	opt, _ := query.NewProcessorOptionsStmt(stmt, sopt)
+	source := influxql.Sources{&influxql.Measurement{Database: "db0", RetentionPolicy: "rp0", Name: msNames[0]}}
+	opt.Name = msNames[0]
+	opt.Sources = source
+	tr := util.TimeRange{Min: influxql.MinTime, Max: influxql.MaxTime}
+	opt.StartTime = tr.Min
+	opt.EndTime = tr.Max
+	querySchema := executor.NewQuerySchema(stmt.Fields, stmt.ColumnNames(), &opt, nil)
+	ctx := context.Background()
+	querySchema.Options().(*query.ProcessorOptions).Name = "cpu"
+
+	sh.indexBuilder.Tier = util.Clearing
+	_, err := sh.CreateCursor(ctx, querySchema)
+	ast.Equal(t, err.Error(), "Index Clearing while reading, indexId:1, startTier:7, endTier:7")
+
+	sh.indexBuilder.Tier = util.Cleared
+	sh.tier = util.Clearing
+	_, err = sh.CreateCursor(ctx, querySchema)
+	ast.Equal(t, err.Error(), "Shard Clearing while reading, shardId:1, startTier:7, endTier:7")
+
+	sh.tier = util.Cleared
+	_, err = sh.CreateCursor(ctx, querySchema)
+	ast.Equal(t, err, nil)
+
+	sh.tier = util.Cold
+	_, err = sh.CreateCursor(ctx, querySchema)
+	ast.Equal(t, err.Error(), "misMatched shardId:1 and indexId:1, shardEndTier:3, indexEndTier:5")
 }

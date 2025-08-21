@@ -24,6 +24,8 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/index"
+	"github.com/openGemini/openGemini/lib/obs"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/stretchr/testify/require"
 )
@@ -129,4 +131,79 @@ func TestOpenShard(t *testing.T) {
 	sh, err = dbPTInfo.loadProcess(0, nil, dir+"10_1635724800000000000_1636329600000000000_100",
 		"1", 100, 10, durationInfos, &meta.TimeRangeInfo{StartTime: time.Now(), EndTime: time.Now().Add(1 * time.Hour)}, client)
 	require.NoError(t, err)
+}
+
+func TestChangeSubPathToColdOne(t *testing.T) {
+	dbPTInfo := NewDBPTInfo(defaultDb, defaultPtId, "", "", nil, nil, nil)
+	dbPTInfo.dbObsOptions = &obs.ObsOptions{}
+	//dbPTInfo.database =
+	client := &MockMetaClient{
+		databases: map[string]*meta.DatabaseInfo{
+			defaultDb: &meta.DatabaseInfo{
+				RetentionPolicies: map[string]*meta.RetentionPolicyInfo{
+					"rp": &meta.RetentionPolicyInfo{
+						IndexGroups: []meta.IndexGroupInfo{
+							{
+								Indexes: []meta.IndexInfo{
+									{
+										ID:   uint64(1),
+										Tier: util.Cleared,
+									},
+									{
+										ID:   uint64(2),
+										Tier: util.Cleared,
+									},
+									{
+										ID:   uint64(3),
+										Tier: util.Cold,
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	subPaths := []string{"1_1744588800000000000_1745193600000000000"}
+	res := changeSubPathToColdOne(subPaths, dbPTInfo, client, "rp")
+	require.Equal(t, 1, len(res))
+	require.Equal(t, "3_1744588800000000000_1745193600000000000", res[0])
+
+	subPaths = []string{"1_test_1745193600000000000"}
+	res = changeSubPathToColdOne(subPaths, dbPTInfo, client, "rp")
+	require.Equal(t, "1_test_1745193600000000000", res[0])
+
+	subPaths = []string{"3_1744588800000000000_1745193600000000000"}
+	res = changeSubPathToColdOne(subPaths, dbPTInfo, client, "rp")
+	require.Equal(t, "3_1744588800000000000_1745193600000000000", res[0])
+
+	subPaths = []string{"2_1744588800000000000_1745193600000000000"}
+	res = changeSubPathToColdOne(subPaths, dbPTInfo, client, "rp")
+	require.Equal(t, "2_1744588800000000000_1745193600000000000", res[0])
+
+	dbPTInfo = NewDBPTInfo("test", defaultPtId, "", "", nil, nil, nil)
+	res = changeSubPathToColdOne(subPaths, dbPTInfo, client, "rp")
+	require.Equal(t, "2_1744588800000000000_1745193600000000000", res[0])
+}
+
+func TestHasCoverShard(t *testing.T) {
+	dbpt := &DBPTInfo{
+		shards: make(map[uint64]Shard),
+	}
+	dbpt.shards[1] = &shard{
+		durationInfo: &meta.DurationDescriptor{
+			MergeDuration: 1,
+		},
+		startTime: time.Unix(0, 1),
+		endTime:   time.Unix(0, 2),
+		ident: &meta.ShardIdentifier{
+			Policy: "rp0",
+		},
+	}
+	srcTimeRange := &meta.ShardTimeRangeInfo{
+		TimeRange: meta.TimeRangeInfo{StartTime: time.Unix(0, 1), EndTime: time.Unix(0, 2)},
+	}
+	re := dbpt.HasCoverShard(srcTimeRange, "rp0", 1)
+	require.Equal(t, re, true)
 }

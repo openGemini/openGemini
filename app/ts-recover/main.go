@@ -15,22 +15,15 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
 
-	"github.com/influxdata/influxdb/cmd"
-	"github.com/openGemini/openGemini/app"
 	"github.com/openGemini/openGemini/app/ts-recover/recover"
-	"github.com/openGemini/openGemini/lib/config"
 )
 
 const TsRecover = "ts-recover"
-
-var (
-	recoverUsage = fmt.Sprintf(app.MainUsage, TsRecover, TsRecover)
-	runUsage     = fmt.Sprintf(app.RunUsage, TsRecover, TsRecover)
-)
 
 func main() {
 	if err := doRun(os.Args[1:]...); err != nil {
@@ -40,48 +33,34 @@ func main() {
 }
 
 func doRun(args ...string) error {
-	name, args := cmd.ParseCommandName(args)
-	switch name {
-	case "", "run":
-		options, err := ParseFlags(func() {
-			fmt.Println(runUsage)
-		}, args...)
-		if err != nil {
-			return err
-		}
-
-		tsRecover := config.NewTsRecover()
-		if err := config.Parse(tsRecover, options.ConfigPath); err != nil {
-			return fmt.Errorf("parse config: %s", err)
-		}
-
-		if err := recover.BackupRecover(&options, tsRecover); err != nil {
-			return err
-		}
-
-		fmt.Println("recover success !")
-
-		return nil
-
-	case "version":
-		fmt.Println(app.FullVersion(TsRecover))
-	default:
-		return fmt.Errorf(recoverUsage)
+	options, err := ParseFlags(args...)
+	if err != nil {
+		return err
 	}
+	if err := recover.BackupRecover(&options); err != nil {
+		return err
+	}
+	fmt.Println("recover success !")
 
 	return nil
 }
 
-func ParseFlags(usage func(), args ...string) (recover.RecoverConfig, error) {
+func ParseFlags(args ...string) (recover.RecoverConfig, error) {
 	var options recover.RecoverConfig
-	fs := flag.NewFlagSet("", flag.ExitOnError)
-	fs.Usage = usage
-	fs.StringVar(&options.ConfigPath, "config", "1", "")
-	fs.StringVar(&options.RecoverMode, "recoverMode", "1", "")
-	fs.StringVar(&options.FullBackupDataPath, "fullBackupDataPath", "", "")
-	fs.StringVar(&options.IncBackupDataPath, "incBackupDataPath", "", "")
+	fs := flag.NewFlagSet(TsRecover, flag.ExitOnError)
+	fs.StringVar(&options.DataDir, "dataDir", "", "openGemini data dir")
+	fs.StringVar(&options.RecoverMode, "recoverMode", "1", "recover mode 1-full and inc recover 2- full recover")
+	fs.StringVar(&options.FullBackupDataPath, "fullBackupDataPath", "", "full backup file path")
+	fs.StringVar(&options.IncBackupDataPath, "incBackupDataPath", "", "inc backup file path")
+	fs.BoolVar(&options.SSL, "ssl", false, "use https for connecting to openGemini.")
+	fs.BoolVar(&options.InsecureTLS, "insecure-tls", false, "ignore ssl verification when connecting openGemini by https.")
+	fs.BoolVar(&options.Force, "force", false, "force recover data file")
+	fs.StringVar(&options.Host, "host", "127.0.0.1:8091", "meta node host")
 	if err := fs.Parse(args); err != nil {
 		return recover.RecoverConfig{}, err
+	}
+	if options.DataDir == "" {
+		return options, errors.New("missing required parameter: dataDir")
 	}
 	return options, nil
 }

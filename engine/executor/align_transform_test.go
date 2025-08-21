@@ -36,6 +36,21 @@ func buildAlignRowDataType() hybridqp.RowDataType {
 	return rowDataType
 }
 
+func buildAlignRowDataType2() hybridqp.RowDataType {
+	rowDataType := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "sum(\"id\")", Type: influxql.Integer},
+		influxql.VarRef{Val: "mean(\"value\")", Type: influxql.Float},
+		influxql.VarRef{Val: "min(\"id\")", Type: influxql.Integer},
+		influxql.VarRef{Val: "max(\"value\")", Type: influxql.Float},
+		influxql.VarRef{Val: "name", Type: influxql.String},
+		influxql.VarRef{Val: "alive", Type: influxql.Boolean},
+		influxql.VarRef{Val: "pv1", Type: influxql.String},
+		influxql.VarRef{Val: "pv2", Type: influxql.Float},
+		influxql.VarRef{Val: "pv3", Type: influxql.Boolean},
+	)
+	return rowDataType
+}
+
 func buildSourceAlignChunk1() executor.Chunk {
 	rowDataType := buildAlignRowDataType()
 
@@ -84,6 +99,114 @@ func buildSourceAlignChunk2() executor.Chunk {
 
 	chunk.Column(3).AppendFloatValues([]float64{4.3})
 	chunk.Column(3).AppendNilsV2(false, true)
+
+	return chunk
+}
+
+func buildSourceAlignChunk3() executor.Chunk {
+	rowDataType := buildAlignRowDataType()
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	chunk := b.NewChunk("mst")
+
+	chunk.AppendTagsAndIndexes([]executor.ChunkTags{*ParseChunkTags("host=CCC")}, []int{0})
+	chunk.AppendIntervalIndexes([]int{0})
+	chunk.AppendTimes([]int64{41, 42})
+
+	chunk.Column(0).AppendIntegerValues([]int64{})
+	chunk.Column(0).AppendNil()
+
+	chunk.Column(1).AppendFloatValues([]float64{4.25})
+	chunk.Column(1).AppendNotNil()
+
+	chunk.Column(2).AppendIntegerValues([]int64{7})
+	chunk.Column(2).AppendNotNil()
+
+	chunk.Column(3).AppendFloatValues([]float64{4.3})
+	chunk.Column(3).AppendNilsV2(false, true)
+
+	return chunk
+}
+
+func buildSourceAlignChunk4() executor.Chunk {
+	rowDataType := buildAlignRowDataType2()
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	chunk := b.NewChunk("mst")
+
+	chunk.AppendTagsAndIndexes([]executor.ChunkTags{*ParseChunkTags("host=CCC")}, []int{0})
+	chunk.AppendIntervalIndexes([]int{0, 1})
+	chunk.AppendTimes([]int64{41, 42})
+
+	chunk.Column(0).AppendIntegerValues([]int64{32})
+	chunk.Column(0).AppendNotNil()
+
+	chunk.Column(1).AppendFloatValues([]float64{4.25, 4.25})
+	chunk.Column(1).AppendManyNotNil(2)
+
+	chunk.Column(2).AppendIntegerValues([]int64{7, 7})
+	chunk.Column(2).AppendManyNotNil(2)
+
+	chunk.Column(3).AppendFloatValues([]float64{4.3})
+	chunk.Column(3).AppendNotNil()
+
+	chunk.Column(4).AppendStringValues([]string{"CCC", "AAA"})
+	chunk.Column(4).AppendManyNotNil(2)
+
+	chunk.Column(5).AppendBooleanValues([]bool{true, false})
+	chunk.Column(5).AppendManyNotNil(2)
+
+	chunk.Column(6).AppendStringValues([]string{})
+	chunk.Column(6).AppendManyNil(2)
+
+	chunk.Column(7).AppendFloatValues([]float64{})
+	chunk.Column(7).AppendManyNil(2)
+
+	chunk.Column(8).AppendBooleanValues([]bool{})
+	chunk.Column(8).AppendManyNil(2)
+
+	return chunk
+}
+
+func buildSourceAlignChunk5() executor.Chunk {
+	rowDataType := buildAlignRowDataType2()
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	chunk := b.NewChunk("mst")
+
+	chunk.AppendTagsAndIndexes([]executor.ChunkTags{*ParseChunkTags("host=CCC")}, []int{0})
+	chunk.AppendIntervalIndexes([]int{0})
+	chunk.AppendTimes([]int64{42})
+
+	chunk.Column(0).AppendIntegerValues([]int64{30})
+	chunk.Column(0).AppendNotNil()
+
+	chunk.Column(1).AppendFloatValues([]float64{})
+	chunk.Column(1).AppendNil()
+
+	chunk.Column(2).AppendIntegerValues([]int64{})
+	chunk.Column(2).AppendNil()
+
+	chunk.Column(3).AppendFloatValues([]float64{4.3})
+	chunk.Column(3).AppendNotNil()
+
+	chunk.Column(4).AppendStringValues([]string{})
+	chunk.Column(4).AppendNil()
+
+	chunk.Column(5).AppendBooleanValues([]bool{})
+	chunk.Column(5).AppendNil()
+
+	chunk.Column(6).AppendStringValues([]string{})
+	chunk.Column(6).AppendManyNil(1)
+
+	chunk.Column(7).AppendFloatValues([]float64{})
+	chunk.Column(7).AppendManyNil(1)
+
+	chunk.Column(8).AppendBooleanValues([]bool{})
+	chunk.Column(8).AppendManyNil(1)
 
 	return chunk
 }
@@ -139,13 +262,121 @@ func buildTargetAlignChunk2() executor.Chunk {
 	return chunk
 }
 
+func buildTargetAlignChunk3() executor.Chunk {
+	rowDataType := buildAlignRowDataType()
+
+	b := executor.NewChunkBuilder(rowDataType)
+	chunk := b.NewChunk("mst")
+
+	chunk.AppendTagsAndIndexes([]executor.ChunkTags{*ParseChunkTags("host=CCC")}, []int{0})
+	chunk.AppendIntervalIndex(0)
+	chunk.AppendTimes([]int64{41})
+
+	chunk.Column(0).AppendIntegerValues([]int64{})
+	chunk.Column(0).AppendNil()
+
+	chunk.Column(1).AppendFloatValues([]float64{4.25})
+	chunk.Column(1).AppendNotNil()
+
+	chunk.Column(2).AppendIntegerValues([]int64{7})
+	chunk.Column(2).AppendNotNil()
+
+	chunk.Column(3).AppendFloatValues([]float64{4.3})
+	chunk.Column(3).AppendNotNil()
+
+	return chunk
+}
+
+func buildTargetAlignChunk4() executor.Chunk {
+	rowDataType := buildAlignRowDataType2()
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	chunk := b.NewChunk("mst")
+
+	chunk.AppendTagsAndIndexes([]executor.ChunkTags{*ParseChunkTags("host=CCC")}, []int{0})
+	chunk.AppendIntervalIndexes([]int{0})
+	chunk.AppendTimes([]int64{41})
+
+	chunk.Column(0).AppendIntegerValues([]int64{32})
+	chunk.Column(0).AppendNotNil()
+
+	chunk.Column(1).AppendFloatValues([]float64{4.25})
+	chunk.Column(1).AppendNotNil()
+
+	chunk.Column(2).AppendIntegerValues([]int64{7})
+	chunk.Column(2).AppendNotNil()
+
+	chunk.Column(3).AppendFloatValues([]float64{4.3})
+	chunk.Column(3).AppendNotNil()
+
+	chunk.Column(4).AppendStringValues([]string{"CCC"})
+	chunk.Column(4).AppendNotNil()
+
+	chunk.Column(5).AppendBooleanValues([]bool{true})
+	chunk.Column(5).AppendNotNil()
+
+	chunk.Column(6).AppendStringValues([]string{})
+	chunk.Column(6).AppendManyNil(1)
+
+	chunk.Column(7).AppendFloatValues([]float64{})
+	chunk.Column(7).AppendManyNil(1)
+
+	chunk.Column(8).AppendBooleanValues([]bool{})
+	chunk.Column(8).AppendManyNil(1)
+
+	return chunk
+}
+
+func buildTargetAlignChunk5() executor.Chunk {
+	rowDataType := buildAlignRowDataType2()
+
+	b := executor.NewChunkBuilder(rowDataType)
+
+	chunk := b.NewChunk("mst")
+
+	chunk.AppendTagsAndIndexes([]executor.ChunkTags{*ParseChunkTags("host=CCC")}, []int{0})
+	chunk.AppendIntervalIndexes([]int{0})
+	chunk.AppendTimes([]int64{42})
+
+	chunk.Column(0).AppendIntegerValues([]int64{30})
+	chunk.Column(0).AppendNotNil()
+
+	chunk.Column(1).AppendFloatValues([]float64{4.25})
+	chunk.Column(1).AppendNotNil()
+
+	chunk.Column(2).AppendIntegerValues([]int64{7})
+	chunk.Column(2).AppendNotNil()
+
+	chunk.Column(3).AppendFloatValues([]float64{4.3})
+	chunk.Column(3).AppendNotNil()
+
+	chunk.Column(4).AppendStringValues([]string{"AAA"})
+	chunk.Column(4).AppendNotNil()
+
+	chunk.Column(5).AppendBooleanValues([]bool{false})
+	chunk.Column(5).AppendNotNil()
+
+	chunk.Column(6).AppendStringValues([]string{})
+	chunk.Column(6).AppendManyNil(1)
+
+	chunk.Column(7).AppendFloatValues([]float64{})
+	chunk.Column(7).AppendManyNil(1)
+
+	chunk.Column(8).AppendBooleanValues([]bool{})
+	chunk.Column(8).AppendManyNil(1)
+
+	return chunk
+}
+
 func TestAlignTransform(t *testing.T) {
-	sourceChunk1, sourceChunk2 := buildSourceAlignChunk1(), buildSourceAlignChunk2()
-	targetChunk1, targetChunk2 := buildTargetAlignChunk1(), buildTargetAlignChunk2()
+	sourceChunk1, sourceChunk2, sourceChunk3 := buildSourceAlignChunk1(), buildSourceAlignChunk2(), buildSourceAlignChunk3()
+	targetChunk1, targetChunk2, targetChunk3 := buildTargetAlignChunk1(), buildTargetAlignChunk2(), buildTargetAlignChunk3()
 
 	expectChunks := make([]executor.Chunk, 0, 2)
 	expectChunks = append(expectChunks, targetChunk1)
 	expectChunks = append(expectChunks, targetChunk2)
+	expectChunks = append(expectChunks, targetChunk3)
 
 	opt := query.ProcessorOptions{
 		Exprs: []influxql.Expr{
@@ -161,9 +392,68 @@ func TestAlignTransform(t *testing.T) {
 		ChunkSize:  5,
 	}
 
-	source := NewSourceFromMultiChunk(buildAlignRowDataType(), []executor.Chunk{sourceChunk1, sourceChunk2})
+	source := NewSourceFromMultiChunk(buildAlignRowDataType(), []executor.Chunk{sourceChunk1, sourceChunk2, sourceChunk3})
 	trans1 := executor.NewAlignTransform([]hybridqp.RowDataType{buildAlignRowDataType()}, []hybridqp.RowDataType{buildAlignRowDataType()}, &opt)
 	sink := NewNilSink(buildAlignRowDataType())
+
+	executor.Connect(source.Output, trans1.Inputs[0])
+	executor.Connect(trans1.Outputs[0], sink.Input)
+
+	var processors executor.Processors
+
+	processors = append(processors, source)
+	processors = append(processors, trans1)
+	processors = append(processors, sink)
+
+	executors := executor.NewPipelineExecutor(processors)
+	executors.Execute(context.Background())
+	executors.Release()
+
+	outputChunks := sink.Chunks
+	if len(expectChunks) != len(outputChunks) {
+		t.Fatalf("the chunk number is not the same as the expected: %d != %d\n", len(expectChunks), len(outputChunks))
+	}
+	for i := range outputChunks {
+		assert.Equal(t, outputChunks[i].Name(), expectChunks[i].Name())
+		assert.Equal(t, outputChunks[i].Tags(), expectChunks[i].Tags())
+		assert.Equal(t, outputChunks[i].Time(), expectChunks[i].Time())
+		assert.Equal(t, outputChunks[i].TagIndex(), expectChunks[i].TagIndex())
+		assert.Equal(t, outputChunks[i].IntervalIndex(), expectChunks[i].IntervalIndex())
+		for j := range outputChunks[i].Columns() {
+			assert.Equal(t, outputChunks[i].Column(j), expectChunks[i].Column(j))
+		}
+	}
+}
+
+func TestAlignTransform2(t *testing.T) {
+	sourceChunk1, sourceChunk2 := buildSourceAlignChunk4(), buildSourceAlignChunk5()
+	targetChunk1, targetChunk2 := buildTargetAlignChunk4(), buildTargetAlignChunk5()
+
+	expectChunks := make([]executor.Chunk, 0, 2)
+	expectChunks = append(expectChunks, targetChunk1.Clone(), targetChunk2.Clone())
+
+	opt := query.ProcessorOptions{
+		Exprs: []influxql.Expr{
+			hybridqp.MustParseExpr(`sum("id")`),
+			hybridqp.MustParseExpr(`mean("value")`),
+			hybridqp.MustParseExpr(`min("id")`),
+			hybridqp.MustParseExpr(`max("value")`),
+			hybridqp.MustParseExpr(`count("name")`),
+			hybridqp.MustParseExpr(`count(alive)`),
+			hybridqp.MustParseExpr(`pv1`),
+			hybridqp.MustParseExpr(`pv2`),
+			hybridqp.MustParseExpr(`pv3`),
+		},
+		Dimensions: []string{"host"},
+		Interval:   hybridqp.Interval{Duration: 10 * time.Nanosecond},
+		Ordered:    true,
+		Ascending:  true,
+		ChunkSize:  5,
+	}
+
+	source := NewSourceFromMultiChunk(buildAlignRowDataType2(), []executor.Chunk{sourceChunk1, sourceChunk2})
+	trans1 := executor.NewAlignTransform([]hybridqp.RowDataType{buildAlignRowDataType2()}, []hybridqp.RowDataType{buildAlignRowDataType2()}, &opt)
+	sink := NewNilSink(buildAlignRowDataType2())
 
 	executor.Connect(source.Output, trans1.Inputs[0])
 	executor.Connect(trans1.Outputs[0], sink.Input)

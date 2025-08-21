@@ -55,6 +55,9 @@ func TestSeriesKeyIteratorHandler_NextChunkMeta(t *testing.T) {
 				func(series [][]byte, name []byte, condition influxql.Expr) ([][]byte, error) {
 					return [][]byte{}, nil
 				},
+				func(tsid uint64) bool {
+					return false
+				},
 			},
 			Expr: &influxql.VarRef{},
 			TimeRange: &util.TimeRange{
@@ -76,6 +79,9 @@ func TestSeriesKeyIteratorHandler_NextChunkMeta(t *testing.T) {
 				func(series [][]byte, name []byte, condition influxql.Expr) ([][]byte, error) {
 					return [][]byte{}, nil
 				},
+				func(tsid uint64) bool {
+					return false
+				},
 			},
 			Expr: &influxql.VarRef{},
 			TimeRange: &util.TimeRange{
@@ -96,6 +102,9 @@ func TestSeriesKeyIteratorHandler_NextChunkMeta(t *testing.T) {
 				},
 				func(series [][]byte, name []byte, condition influxql.Expr) ([][]byte, error) {
 					return [][]byte{}, nil
+				},
+				func(tsid uint64) bool {
+					return false
 				},
 			},
 			Expr: &influxql.VarRef{},

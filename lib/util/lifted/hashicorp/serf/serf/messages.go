@@ -5,7 +5,7 @@ import (
 	"net"
 	"time"
 
-	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/go-msgpack/codec"
+	"github.com/hashicorp/go-msgpack/v2/codec"
 )
 
 // messageType are the types of gossip messages Serf will send along

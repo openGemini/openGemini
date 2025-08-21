@@ -26,7 +26,7 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/memory"
-	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/msgservice"
 	"github.com/openGemini/openGemini/lib/sysconfig"
 	"github.com/pingcap/failpoint"
 	"go.uber.org/zap"
@@ -137,7 +137,7 @@ func (pm *ProactiveManager) GetQueryList(cnt int) []uint64 {
 		if cnt <= 0 {
 			break
 		}
-		if qryLst[i].RunState != netstorage.Running {
+		if qryLst[i].RunState != msgservice.Running {
 			continue
 		}
 		ids = append(ids, qryLst[i].QueryID)

@@ -324,7 +324,7 @@ func (o *obsFile) StreamReadRangeRequests(retryTimes int32, c chan *request.Stre
 				}
 			} else {
 				body, _ := io.ReadAll(resp.Body)
-				logger.GetLogger().Error(fmt.Sprintf("obsClient.StreamReadMultiRange read body failed, resp body is illegal, body: " + string(body)))
+				logger.GetLogger().Error(fmt.Sprintf("obsClient.StreamReadMultiRange read body failed, resp body is illegal, body: %s", string(body)))
 				retryInfo.dealReadErr(err, c, rangeRequest.readMap)
 				return
 			}
@@ -633,6 +633,38 @@ func (o *obsFs) RemoveAll(path string, opt ...FSOption) error {
 	return nil
 }
 
+func (o *obsFs) RemoveAllWithOutDir(path string, opt ...FSOption) error {
+	conf, key, client, err := o.prepare(path)
+	if err != nil {
+		return err
+	}
+	listInput := &obs.ListObjectsInput{
+		Bucket: conf.bucket,
+	}
+	listInput.Prefix = o.NormalizeDirPath(key)
+	objs, err := client.ListObjects(listInput)
+	if err != nil {
+		return err
+	}
+	sort.Slice(objs.Contents, func(i, j int) bool {
+		return objs.Contents[i].Key > objs.Contents[j].Key
+	})
+	for _, obj := range objs.Contents {
+		if strings.HasSuffix(obj.Key, "/") {
+			continue
+		}
+		delInput := &obs.DeleteObjectInput{
+			Bucket: conf.bucket,
+			Key:    obj.Key,
+		}
+		_, err = client.DeleteObject(delInput)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (o *obsFs) Mkdir(path string, perm os.FileMode, opt ...FSOption) error {
 	return o.MkdirAll(path, perm, opt...)
 }
@@ -750,6 +782,10 @@ func (o *obsFs) IsObsFile(path string) (bool, error) {
 
 func (o *obsFs) GetOBSTmpFileName(path string, obsOption *OBS.ObsOptions) string {
 	return path + OBS.ObsFileSuffix + OBS.ObsFileTmpSuffix
+}
+
+func (o *obsFs) GetOBSTmpIndexFileName(path string, obsOption *OBS.ObsOptions) string {
+	panic("This method is used to adapt to the interface, and will not be invoked")
 }
 
 func (o *obsFs) Stat(path string) (os.FileInfo, error) {

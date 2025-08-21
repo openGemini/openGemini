@@ -35,8 +35,10 @@ type RetentionPolicyInfo struct {
 	ReplicaN           int
 	Duration           time.Duration
 	ShardGroupDuration time.Duration
+	ShardMergeDuration time.Duration
 	HotDuration        time.Duration
 	WarmDuration       time.Duration
+	IndexColdDuration  time.Duration
 	IndexGroupDuration time.Duration
 	IndexGroups        []IndexGroupInfo
 	Measurements       map[string]*MeasurementInfo // {"cpu_0001": *MeasurementInfo}
@@ -52,11 +54,12 @@ type RetentionPolicyInfo struct {
 // with default replication and duration.
 func NewRetentionPolicyInfo(name string) *RetentionPolicyInfo {
 	return &RetentionPolicyInfo{
-		Name:         name,
-		ReplicaN:     DefaultRetentionPolicyReplicaN,
-		Duration:     DefaultRetentionPolicyDuration,
-		WarmDuration: DefaultRetentionPolicyWarmDuration,
-		MarkDeleted:  false,
+		Name:              name,
+		ReplicaN:          DefaultRetentionPolicyReplicaN,
+		Duration:          DefaultRetentionPolicyDuration,
+		WarmDuration:      DefaultRetentionPolicyWarmDuration,
+		IndexColdDuration: DefaultRetentionPolicyIndexColdDuration,
+		MarkDeleted:       false,
 	}
 }
 
@@ -71,6 +74,7 @@ func (rpi *RetentionPolicyInfo) updateWithOtherRetentionPolicy(newRpi *Retention
 	rpi.ShardGroupDuration = newRpi.ShardGroupDuration
 	rpi.HotDuration = newRpi.HotDuration
 	rpi.WarmDuration = newRpi.WarmDuration
+	rpi.IndexColdDuration = newRpi.IndexColdDuration
 	rpi.IndexGroupDuration = newRpi.IndexGroupDuration
 	rpi.Duration = newRpi.Duration
 }
@@ -79,7 +83,8 @@ func (rpi *RetentionPolicyInfo) EqualsAnotherRp(other *RetentionPolicyInfo) bool
 	return rpi.ReplicaN == other.ReplicaN && rpi.Duration == other.Duration &&
 		rpi.ShardGroupDuration == other.ShardGroupDuration &&
 		rpi.IndexGroupDuration == other.IndexGroupDuration && rpi.HotDuration == other.HotDuration &&
-		rpi.WarmDuration == other.WarmDuration
+		rpi.WarmDuration == other.WarmDuration &&
+		rpi.IndexColdDuration == other.IndexColdDuration
 }
 
 func (rpi *RetentionPolicyInfo) CheckSpecValid() error {
@@ -89,6 +94,7 @@ func (rpi *RetentionPolicyInfo) CheckSpecValid() error {
 	// create database with auto rp create should set index duration in data
 	rpi.ShardGroupDuration = normalisedShardDuration(rpi.ShardGroupDuration, rpi.Duration)
 	rpi.IndexGroupDuration = normalisedIndexDuration(rpi.IndexGroupDuration, rpi.ShardGroupDuration)
+	rpi.ShardMergeDuration = normalisedShardMergeDuration(rpi.ShardMergeDuration, rpi.ShardGroupDuration)
 
 	// check other duration should be n*shard group duration
 	if rpi.HotDuration%rpi.ShardGroupDuration != 0 || rpi.WarmDuration%rpi.ShardGroupDuration != 0 {
@@ -110,6 +116,17 @@ func (rpi *RetentionPolicyInfo) CheckSpecValid() error {
 		return err
 	}
 
+	err = rpi.checkShardMergeDuration()
+	if err != nil {
+		return err
+	}
+
+	err = rpi.checkIndexColdDuration()
+	if err != nil {
+		return err
+	}
+	// check index cold duration should be n*index group duration
+
 	return nil
 }
 
@@ -124,6 +141,10 @@ func (rpi *RetentionPolicyInfo) checkGeqThanMinDuration() error {
 
 	if rpi.WarmDuration != 0 && rpi.WarmDuration < MinRetentionPolicyWarmDuration {
 		return ErrRetentionPolicyDurationTooLow
+	}
+
+	if rpi.IndexColdDuration != 0 && rpi.IndexColdDuration < MinRetentionPolicyIndexColdDuration {
+		return ErrRetentionPolicyIndexColdDurationTooLow
 	}
 	return nil
 }
@@ -160,6 +181,26 @@ func (rpi *RetentionPolicyInfo) checkLeqThanDuration() error {
 	return nil
 }
 
+func (rpi *RetentionPolicyInfo) checkShardMergeDuration() error {
+	if rpi.ShardMergeDuration != 0 && rpi.ShardGroupDuration != 0 && rpi.ShardMergeDuration%rpi.ShardGroupDuration != 0 {
+		return ErrShardMergeDurations
+	}
+	if rpi.ShardMergeDuration != 0 && rpi.IndexGroupDuration != 0 && rpi.ShardMergeDuration != rpi.IndexGroupDuration {
+		return ErrShardMergeDurations
+	}
+	return nil
+}
+
+func (rpi *RetentionPolicyInfo) checkIndexColdDuration() error {
+	if rpi.IndexColdDuration != 0 && rpi.IndexGroupDuration != 0 && rpi.IndexColdDuration%rpi.IndexGroupDuration != 0 {
+		return ErrIncompatibleIndexGroupDurations
+	}
+	if rpi.IndexColdDuration != 0 && rpi.ShardGroupDuration != 0 && rpi.IndexColdDuration%rpi.ShardGroupDuration != 0 {
+		return ErrIncompatibleIndexGroupDurations
+	}
+	return nil
+}
+
 // Apply applies a specification to the retention policy info.
 func (rpi *RetentionPolicyInfo) Apply(spec *RetentionPolicySpec) *RetentionPolicyInfo {
 	rp := &RetentionPolicyInfo{
@@ -167,7 +208,9 @@ func (rpi *RetentionPolicyInfo) Apply(spec *RetentionPolicySpec) *RetentionPolic
 		ReplicaN:           rpi.ReplicaN,
 		Duration:           rpi.Duration,
 		WarmDuration:       rpi.WarmDuration,
+		IndexColdDuration:  rpi.IndexColdDuration,
 		ShardGroupDuration: rpi.ShardGroupDuration,
+		ShardMergeDuration: rpi.ShardMergeDuration,
 	}
 	if spec.Name != "" {
 		rp.Name = spec.Name
@@ -184,9 +227,13 @@ func (rpi *RetentionPolicyInfo) Apply(spec *RetentionPolicySpec) *RetentionPolic
 	if spec.WarmDuration != nil {
 		rp.WarmDuration = *spec.WarmDuration
 	}
+	if spec.IndexColdDuration != nil {
+		rp.IndexColdDuration = *spec.IndexColdDuration
+	}
 
 	rp.ShardGroupDuration = normalisedShardDuration(spec.ShardGroupDuration, rp.Duration)
 	rp.IndexGroupDuration = normalisedIndexDuration(spec.IndexGroupDuration, rp.ShardGroupDuration)
+	rp.ShardMergeDuration = normalisedShardMergeDuration(spec.ShardMergeDuration, rp.ShardGroupDuration)
 	return rp
 }
 
@@ -217,8 +264,38 @@ func (rpi *RetentionPolicyInfo) TimeRangeInfo(shardID uint64) *ShardTimeRangeInf
 
 		timeRangeInfo.OwnerIndex = IndexDescriptor{IndexID: shard.IndexID}
 		timeRangeInfo.OwnerIndex.IndexGroupID, timeRangeInfo.OwnerIndex.TimeRange = rpi.getIndexGroupTimeRange(shard.IndexID)
-		timeRangeInfo.ShardDuration = &ShardDurationInfo{DurationInfo: DurationDescriptor{Duration: rpi.Duration,
+		timeRangeInfo.ShardDuration = &ShardDurationInfo{DurationInfo: DurationDescriptor{Duration: rpi.Duration, MergeDuration: rpi.ShardMergeDuration,
 			Tier: shard.Tier, TierDuration: rpi.TierDuration(shard.Tier)}}
+		timeRangeInfo.ShardType = rpi.shardingType()
+		return &timeRangeInfo
+	}
+	return nil
+}
+
+func (rpi *RetentionPolicyInfo) ShardTimeRangeInfo(shardID uint64) *ShardTimeRangeInfo {
+	for i := len(rpi.ShardGroups) - 1; i >= 0; i-- {
+		if rpi.ShardGroups[i].Shards[0].ID > shardID ||
+			rpi.ShardGroups[i].Shards[len(rpi.ShardGroups[i].Shards)-1].ID < shardID {
+			continue
+		}
+		timeRangeInfo := ShardTimeRangeInfo{}
+		timeRangeInfo.TimeRange = TimeRangeInfo{StartTime: rpi.ShardGroups[i].StartTime, EndTime: rpi.ShardGroups[i].EndTime}
+		shard := rpi.ShardGroups[i].Shard(shardID)
+		if shard == nil {
+			continue
+		}
+
+		timeRangeInfo.OwnerIndex = IndexDescriptor{IndexID: shard.IndexID}
+		timeRangeInfo.OwnerIndex.IndexGroupID, timeRangeInfo.OwnerIndex.TimeRange = rpi.getIndexGroupTimeRange(shard.IndexID)
+		timeRangeInfo.ShardDuration = &ShardDurationInfo{
+			DurationInfo: DurationDescriptor{Duration: rpi.Duration, MergeDuration: rpi.ShardMergeDuration, Tier: shard.Tier, TierDuration: rpi.TierDuration(shard.Tier)},
+			Ident: ShardIdentifier{
+				ShardID:      shard.ID,
+				ShardGroupID: rpi.ShardGroups[i].ID,
+				Policy:       rpi.Name,
+				EngineType:   uint32(rpi.ShardGroups[i].EngineType),
+			},
+		}
 		timeRangeInfo.ShardType = rpi.shardingType()
 		return &timeRangeInfo
 	}
@@ -316,7 +393,9 @@ func (rpi *RetentionPolicyInfo) Marshal() *proto2.RetentionPolicyInfo {
 		MarkDeleted:        proto.Bool(rpi.MarkDeleted),
 		HotDuration:        proto.Int64(int64(rpi.HotDuration)),
 		WarmDuration:       proto.Int64(int64(rpi.WarmDuration)),
+		IndexColdDuration:  proto.Int64(int64(rpi.IndexColdDuration)),
 		IndexGroupDuration: proto.Int64(int64(rpi.IndexGroupDuration)),
+		ShardMergeDuration: proto.Int64(int64(rpi.ShardMergeDuration)),
 	}
 
 	if len(rpi.Measurements) > 0 {
@@ -379,7 +458,9 @@ func (rpi *RetentionPolicyInfo) unmarshal(pb *proto2.RetentionPolicyInfo) {
 	rpi.MarkDeleted = pb.GetMarkDeleted()
 	rpi.HotDuration = time.Duration(pb.GetHotDuration())
 	rpi.WarmDuration = time.Duration(pb.GetWarmDuration())
+	rpi.IndexColdDuration = time.Duration(pb.GetIndexColdDuration())
 	rpi.IndexGroupDuration = time.Duration(pb.GetIndexGroupDuration())
+	rpi.ShardMergeDuration = time.Duration(pb.GetShardMergeDuration())
 
 	if len(pb.GetMeasurements()) > 0 {
 		rpi.Measurements = make(map[string]*MeasurementInfo, len(pb.GetMeasurements()))
@@ -535,6 +616,14 @@ func normalisedShardDuration(sgd, d time.Duration) time.Duration {
 	return sgd
 }
 
+func normalisedShardMergeDuration(smd, sgd time.Duration) time.Duration {
+	// If it is zero or less than sgd, it likely wasn't specified, so we default to the shardMerge duration
+	if smd == 0 || smd <= sgd {
+		return 0
+	}
+	return smd
+}
+
 func (rpi *RetentionPolicyInfo) GetMeasurement(name string) (*MeasurementInfo, error) {
 	msti := rpi.Measurement(name)
 	if msti == nil {
@@ -599,7 +688,9 @@ type RetentionPolicySpec struct {
 	ShardGroupDuration time.Duration
 	HotDuration        *time.Duration
 	WarmDuration       *time.Duration
+	IndexColdDuration  *time.Duration
 	IndexGroupDuration time.Duration
+	ShardMergeDuration time.Duration
 }
 
 // NewRetentionPolicyInfo creates a new retention policy info from the specification.
@@ -641,8 +732,14 @@ func (s *RetentionPolicySpec) marshal() *proto2.RetentionPolicySpec {
 	if s.WarmDuration != nil {
 		pb.WarmDuration = proto.Int64(int64(*s.WarmDuration))
 	}
+	if s.IndexColdDuration != nil {
+		pb.IndexColdDuration = proto.Int64(int64(*s.IndexColdDuration))
+	}
 	if s.ShardGroupDuration > 0 {
 		pb.ShardGroupDuration = proto.Int64(int64(s.ShardGroupDuration))
+	}
+	if s.ShardMergeDuration > 0 {
+		pb.ShardMergeDuration = proto.Int64(int64(s.ShardMergeDuration))
 	}
 	if s.ReplicaN != nil {
 		pb.ReplicaN = proto.Uint32(uint32(*s.ReplicaN))
@@ -662,9 +759,16 @@ func (s *RetentionPolicySpec) unmarshal(pb *proto2.RetentionPolicySpec) {
 	if pb.ShardGroupDuration != nil {
 		s.ShardGroupDuration = time.Duration(pb.GetShardGroupDuration())
 	}
+	if pb.ShardMergeDuration != nil {
+		s.ShardMergeDuration = time.Duration(pb.GetShardMergeDuration())
+	}
 	if pb.WarmDuration != nil {
 		duration := time.Duration(pb.GetWarmDuration())
 		s.WarmDuration = &duration
+	}
+	if pb.IndexColdDuration != nil {
+		duration := time.Duration(pb.GetIndexColdDuration())
+		s.IndexColdDuration = &duration
 	}
 	if pb.ReplicaN != nil {
 		replicaN := int(pb.GetReplicaN())
@@ -695,6 +799,7 @@ type RetentionPolicyUpdate struct {
 	ShardGroupDuration *time.Duration
 	HotDuration        *time.Duration
 	WarmDuration       *time.Duration
+	IndexColdDuration  *time.Duration
 	IndexGroupDuration *time.Duration
 }
 
@@ -712,3 +817,6 @@ func (rpu *RetentionPolicyUpdate) SetShardGroupDuration(v time.Duration) { rpu.S
 
 // SetWarmDuration sets the RetentionPolicyUpdate.WarmDuration.
 func (rpu *RetentionPolicyUpdate) SetWarmDuration(v time.Duration) { rpu.WarmDuration = &v }
+
+// SetIndexColdDuration sets the RetentionPolicyUpdate.IndexColdDuration.
+func (rpu *RetentionPolicyUpdate) SetIndexColdDuration(v time.Duration) { rpu.IndexColdDuration = &v }

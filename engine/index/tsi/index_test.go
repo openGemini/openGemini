@@ -17,6 +17,7 @@ package tsi
 import (
 	"bytes"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"math"
@@ -35,11 +36,14 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/index"
+	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/rand"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
 	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/lib/tracing"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/mergeset"
@@ -64,6 +68,87 @@ var (
 
 func init() {
 	_ = flag.Set("loggerLevel", "ERROR")
+}
+
+func BenchmarkIndex(b *testing.B) {
+	path := b.TempDir()
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
+	defer idxBuilder.Close()
+	rows := buildIndexRow()
+	for i := 0; i < 10000; i++ {
+		b.StopTimer()
+		updateIndexRow(rows, i)
+		b.StartTimer()
+		err := buildTestIndex(idx, rows)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+	idx.Close()
+}
+
+func buildIndexRow() *dictpool.Dict {
+	num := 100
+	tagNum := 5
+	rows := make([]influx.Row, 0, num)
+	for i := 0; i < num; i++ {
+		row := influx.Row{}
+		row.Name = "mn-1_0000"
+		row.Tags = make(influx.PointTags, tagNum)
+		for j := range row.Tags {
+			row.Tags[j].Key = "tag" + strconv.Itoa(j)
+			row.Tags[j].Value = "value" + strconv.Itoa(i)
+		}
+		sort.Sort(&row.Tags)
+		row.Timestamp = time.Now().UnixNano()
+		row.UnmarshalIndexKeys(nil)
+		row.ShardKey = row.IndexKey
+		rows = append(rows, row)
+	}
+
+	mmPoints := &dictpool.Dict{}
+	mmPoints.Set("mn-1_0000", &rows)
+	return mmPoints
+}
+
+func updateIndexRow(mmPoints *dictpool.Dict, c int) *dictpool.Dict {
+	v := mmPoints.Get("mn-1_0000")
+	rows := v.(*[]influx.Row)
+	key := "mn-" + strconv.Itoa(c) + "_0000"
+	for i := 0; i < len(*rows); i++ {
+		row := (*rows)[i]
+		row.Name = key
+		row.UnmarshalIndexKeys(nil)
+		row.ShardKey = row.IndexKey
+	}
+
+	newPoints := &dictpool.Dict{}
+	newPoints.Set(key, rows)
+	return newPoints
+}
+
+func buildTestIndex(idx Index, dict *dictpool.Dict) error {
+	err := idx.Open()
+	if err != nil {
+		return err
+	}
+
+	if err := idx.CreateIndexIfNotExists(dict); err != nil {
+		panic(err)
+	}
+
+	for mmIndex := range dict.D {
+		// test data, must be row
+		rows, _ := dict.D[mmIndex].Value.(*[]influx.Row)
+
+		for rowIdx := range *rows {
+			if (*rows)[rowIdx].SeriesId == 0 {
+				return errors.New("create index failed")
+			}
+		}
+	}
+
+	return nil
 }
 
 func TestSearchSeries(t *testing.T) {
@@ -232,8 +317,10 @@ func TestMergeSetIndexRepeatedClose(t *testing.T) {
 }
 
 func TestSeriesByExprIterator(t *testing.T) {
-	path := t.TempDir()
-	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
+	dataPath := "/tmp/TestSeriesByExprIterator"
+	fileops.MkdirAll(dataPath, 0750)
+	defer fileops.RemoveAll(dataPath)
+	idx, idxBuilder := getTestIndexAndBuilder(dataPath, config.TSSTORE)
 	defer idxBuilder.Close()
 	CreateIndexByPts(idx)
 
@@ -430,8 +517,8 @@ func TestSearchSeriesWithOpts(t *testing.T) {
 		}
 		keys := make([]string, 0)
 		for _, group := range groups {
-			for _, key := range group.SeriesKeys {
-				keys = append(keys, string(key))
+			for i := range group.Len() {
+				keys = append(keys, string(group.GetSeriesKeys(i)))
 			}
 		}
 		sort.Strings(keys)
@@ -532,8 +619,8 @@ func TestSearchSeriesWithExcept(t *testing.T) {
 
 		keys := make([]string, 0)
 		for _, group := range groups {
-			for _, key := range group.SeriesKeys {
-				keys = append(keys, string(key))
+			for i := range group.Len() {
+				keys = append(keys, string(group.GetSeriesKeys(i)))
 			}
 		}
 		sort.Strings(keys)
@@ -615,8 +702,8 @@ func TestSearchSeriesWithAllAndRegular(t *testing.T) {
 
 		keys := make([]string, 0)
 		for _, group := range groups {
-			for _, key := range group.SeriesKeys {
-				keys = append(keys, string(key))
+			for i := range group.Len() {
+				keys = append(keys, string(group.GetSeriesKeys(i)))
 			}
 		}
 		sort.Strings(keys)
@@ -709,8 +796,8 @@ func TestSearchSeriesWithLimit(t *testing.T) {
 
 		keys := make([]string, 0)
 		for _, group := range groups {
-			for _, key := range group.SeriesKeys {
-				keys = append(keys, string(key))
+			for i := range group.Len() {
+				keys = append(keys, string(group.GetSeriesKeys(i)))
 			}
 		}
 		sort.Strings(keys)
@@ -774,6 +861,15 @@ func TestSearchSeriesWithoutLimit(t *testing.T) {
 	run([]byte("mn-1"), opt, nil)
 }
 
+func TestSearchSeriesKeys1(t *testing.T) {
+	path := t.TempDir()
+	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
+	defer idxBuilder.Close()
+	CreateIndexByPts(idx)
+
+	_, err := idx.SearchSeriesByTableAndCond([]byte("mst"), nil, defaultTR)
+	assert.NoError(t, err)
+}
 func TestSearchSeriesKeys(t *testing.T) {
 	path := t.TempDir()
 	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
@@ -839,8 +935,8 @@ func TestSearchSeriesWithLimitFail(t *testing.T) {
 
 		keys := make([]string, 0)
 		for _, group := range groups {
-			for _, key := range group.SeriesKeys {
-				keys = append(keys, string(key))
+			for i := range group.Len() {
+				keys = append(keys, string(group.GetSeriesKeys(i)))
 			}
 		}
 		sort.Strings(keys)
@@ -886,8 +982,8 @@ func TestSearchSeriesWithPromRemoteRead(t *testing.T) {
 
 		keys := make([]string, 0)
 		for _, group := range groups {
-			for _, key := range group.SeriesKeys {
-				keys = append(keys, string(key))
+			for i := range group.Len() {
+				keys = append(keys, string(group.GetSeriesKeys(i)))
 			}
 		}
 		sort.Strings(keys)
@@ -965,6 +1061,13 @@ func TestDeleteTSIDs(t *testing.T) {
 	path := t.TempDir()
 	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
 	defer idxBuilder.Close()
+	mergeSet := idx.(*MergeSetIndex)
+	path1 := t.TempDir()
+	idx1, idxBuilder1 := getTestIndexAndBuilder(path1, config.TSSTORE)
+	defer idxBuilder1.Close()
+	delMergeSet := idx1.(*MergeSetIndex)
+	mergeSet.SetDeleteMergeSet(delMergeSet)
+	mergeSet.DeleteMergeSet().LoadDeletedTSIDs()
 	CreateIndexByPts(idx)
 
 	f := func(name []byte, opts influxql.Expr, tr TimeRange, expectedSeriesKeys []string) {
@@ -1298,6 +1401,14 @@ func TestSearchTagValuesCardinality(t *testing.T) {
 	path := t.TempDir()
 	idx, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
 	defer idxBuilder.Close()
+	mergeSet := idx.(*MergeSetIndex)
+	path1 := t.TempDir()
+	idx1, idxBuilder1 := getTestIndexAndBuilder(path1, config.TSSTORE)
+	defer idxBuilder1.Close()
+	CreateIndexByPts(idx1)
+	delMergeSet := idx1.(*MergeSetIndex)
+	mergeSet.SetDeleteMergeSet(delMergeSet)
+	mergeSet.DeleteMergeSet().LoadDeletedTSIDs()
 	CreateIndexByPts(idx)
 
 	f := func(name, tagKey []byte, expectCardinality uint64) {
@@ -2166,16 +2277,12 @@ func genTagSetMergeInfoWithDiffSid(key string) *TagSetMergeInfo {
 
 func genTagSetInfo(key string) *TagSetInfo {
 	tagSet := &TagSetInfo{key: []byte(key)}
-	tagSet.SeriesKeys = append(tagSet.SeriesKeys, []byte("A1"), []byte("A3"), []byte("A5"), []byte("A6"))
-	tagSet.IDs = append(tagSet.IDs, 1, 3, 5, 6)
-	tagSet.Filters = append(tagSet.Filters, &influxql.BinaryExpr{}, &influxql.BinaryExpr{},
-		&influxql.BinaryExpr{}, &influxql.BinaryExpr{})
-	tagSet.TagsVec = append(tagSet.TagsVec,
-		influx.PointTags{{Key: "A1", Value: "a1"}},
-		influx.PointTags{{Key: "A3", Value: "a3"}},
-		influx.PointTags{{Key: "A5", Value: "a5"}},
-		influx.PointTags{{Key: "A6", Value: "a6"}},
-	)
+	tagSet.TagSetInfoItems = []TagSetInfoItem{
+		{1, &influxql.BinaryExpr{}, []byte("A1"), influx.PointTags{{Key: "A1", Value: "a1"}}},
+		{3, &influxql.BinaryExpr{}, []byte("A3"), influx.PointTags{{Key: "A3", Value: "a3"}}},
+		{5, &influxql.BinaryExpr{}, []byte("A5"), influx.PointTags{{Key: "A5", Value: "a5"}}},
+		{6, &influxql.BinaryExpr{}, []byte("A6"), influx.PointTags{{Key: "A6", Value: "a6"}}},
+	}
 	return tagSet
 }
 
@@ -2213,7 +2320,7 @@ func TestSortMergeTagSetInfos(t *testing.T) {
 	t1 := []*TagSetMergeInfo{
 		genTagSetMergeInfo("A1"), genTagSetMergeInfo("A2"), genTagSetMergeInfo("A4"),
 	}
-	t2 := []*TagSetInfo{
+	t2 := []TagSetEx{
 		genTagSetInfo("A1"), genTagSetInfo("A3"), genTagSetInfo("A5"), genTagSetInfo("A6"),
 	}
 	t3 := SortMergeTagSetInfos(t1, t2, 1, 1)
@@ -2416,4 +2523,345 @@ func BenchmarkIndexByteVsContains(b *testing.B) {
 		}
 	})
 
+}
+
+type TagSetInfoOld struct {
+	ref int64
+
+	IDs        []uint64
+	Filters    []influxql.Expr
+	SeriesKeys [][]byte           // encoded series key
+	TagsVec    []influx.PointTags // tags of all series
+	key        []byte             // group by tag sets key
+	RowFilters *clv.RowFilters    // only uesed in full-text index for row filtering
+}
+
+func (t *TagSetInfoOld) Swap(i, j int) {
+	t.SeriesKeys[i], t.SeriesKeys[j] = t.SeriesKeys[j], t.SeriesKeys[i]
+	t.IDs[i], t.IDs[j] = t.IDs[j], t.IDs[i]
+	t.TagsVec[i], t.TagsVec[j] = t.TagsVec[j], t.TagsVec[i]
+	t.Filters[i], t.Filters[j] = t.Filters[j], t.Filters[i]
+	if t.RowFilters != nil {
+		t.RowFilters.Swap(i, j)
+	}
+}
+
+func genOldTagSetInfo(key string) *TagSetInfoOld {
+	tagSet := &TagSetInfoOld{key: []byte(key)}
+	tagSet.SeriesKeys = append(tagSet.SeriesKeys, []byte("A1"), []byte("A3"), []byte("A5"), []byte("A6"))
+	tagSet.IDs = append(tagSet.IDs, 1, 3, 5, 6)
+	tagSet.Filters = append(tagSet.Filters, &influxql.BinaryExpr{}, &influxql.BinaryExpr{},
+		&influxql.BinaryExpr{}, &influxql.BinaryExpr{})
+	tagSet.TagsVec = append(tagSet.TagsVec,
+		influx.PointTags{{Key: "A1", Value: "a1"}},
+		influx.PointTags{{Key: "A3", Value: "a3"}},
+		influx.PointTags{{Key: "A5", Value: "a5"}},
+		influx.PointTags{{Key: "A6", Value: "a6"}},
+	)
+	return tagSet
+}
+
+func BenchmarkSwap(b *testing.B) {
+	var tagSetInfoV2 TagSetEx = genTagSetInfo("A1")
+	tagSetInfoV1 := genOldTagSetInfo("A1")
+	b.Run("v1", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			tagSetInfoV1.Swap(2, 3)
+		}
+	})
+	b.Run("v2", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			tagSetInfoV2.Swap(2, 3)
+		}
+	})
+}
+
+func BenchmarkBatchGetTagSetInfo(b *testing.B) {
+	var tagSetInfoV2 TagSetEx = genTagSetInfo("A1")
+	tagSetInfoV1 := genOldTagSetInfo("A1")
+	b.Run("v1", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			id := tagSetInfoV1.IDs[2]
+			filter := tagSetInfoV1.Filters[2]
+			seriesKey := tagSetInfoV1.SeriesKeys[2]
+			tags := tagSetInfoV1.TagsVec[2]
+			func(id uint64, filter influxql.Expr, seriesKey []byte, tags influx.PointTags) {
+				// do nothing, just test data fetch
+			}(id, filter, seriesKey, tags)
+		}
+	})
+	b.Run("v2", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			item := tagSetInfoV2.GetTagSetItem(2)
+			id := item.ID
+			filter := item.Filter
+			seriesKey := item.SeriesKey
+			tags := item.TagsVec
+			func(id uint64, filter influxql.Expr, seriesKey []byte, tags influx.PointTags) {
+				// do nothing, just test data fetch
+			}(id, filter, seriesKey, tags)
+		}
+	})
+}
+
+func BenchmarkTagSetInfo_AppendWithOpt(b *testing.B) {
+	tagSetInfoV1 := &TagSetInfoOld{
+		ref:        0,
+		IDs:        make([]uint64, 0, 32),
+		Filters:    make([]influxql.Expr, 0, 32),
+		SeriesKeys: make([][]byte, 0, 32),
+		TagsVec:    make([]influx.PointTags, 0, 32),
+	}
+	var tagSetInfoV2 TagSetEx = &TagSetInfo{
+		ref:             0,
+		TagSetInfoItems: make([]TagSetInfoItem, 0, 32),
+	}
+	b.Run("v1", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			tagSetInfoV1.AppendWithOpt(2, []byte("a"), &influxql.BinaryExpr{}, influx.PointTags{{Key: "A1", Value: "a1"}}, nil, &query.ProcessorOptions{})
+		}
+	})
+	b.Run("v2", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			tagSetInfoV2.AppendWithOpt(2, []byte("a"), &influxql.BinaryExpr{}, influx.PointTags{{Key: "A1", Value: "a1"}}, nil, &query.ProcessorOptions{})
+		}
+	})
+}
+
+func (t *TagSetInfoOld) AppendWithOpt(id uint64, seriesKey []byte, filter influxql.Expr, tags influx.PointTags,
+	rowFilter []clv.RowFilter, opt *query.ProcessorOptions) {
+	t.IDs = append(t.IDs, id)
+	t.Filters = append(t.Filters, filter)
+	if opt.SimpleTagset {
+		t.SeriesKeys = append(t.SeriesKeys, nil)
+		if len(t.TagsVec) == 0 {
+			t.TagsVec = append(t.TagsVec, tags)
+		}
+	} else {
+		t.TagsVec = append(t.TagsVec, tags)
+		t.SeriesKeys = append(t.SeriesKeys, seriesKey)
+	}
+	if t.RowFilters != nil {
+		t.RowFilters.Append(rowFilter)
+	}
+}
+
+func TestExecIndexMove(t *testing.T) {
+	path := t.TempDir()
+	_, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
+	defer idxBuilder.Close()
+	ObsOptions := &obs.ObsOptions{
+		Enabled: true,
+	}
+	idxBuilder.ObsOpt = ObsOptions
+	idxBuilder.ExecIndexMove()
+	idxBuilder.Tier = util.Cold
+	idxBuilder.Flush()
+}
+
+func TestExecEmptyIndexMove(t *testing.T) {
+	path := t.TempDir()
+	_, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
+	relations := idxBuilder.Relations
+	defer func() {
+		idxBuilder.Relations = relations
+		_ = idxBuilder.Close()
+	}()
+	ObsOptions := &obs.ObsOptions{
+		Enabled: true,
+	}
+	idxBuilder.Relations = nil
+	idxBuilder.ObsOpt = ObsOptions
+	idxBuilder.ExecIndexMove()
+	idxBuilder.Tier = util.Cold
+	idxBuilder.Flush()
+}
+
+/*
+func TestRenameIBuilderAndRelationPath(t *testing.T) {
+	path := t.TempDir()
+	_, idxBuilder := getTestIndexAndBuilder(path, config.TSSTORE)
+	relations := idxBuilder.Relations
+	defer func() {
+		idxBuilder.Relations = relations
+		idxBuilder.Close()
+	}()
+	ObsOptions := &obs.ObsOptions{
+		Enabled: true,
+	}
+	idxBuilder.ObsOpt = ObsOptions
+	idxBuilder.renameIBuilderAndRelationPath()
+	idxBuilder.ObsOpt = nil
+}
+*/
+
+func TestTagSetInfo_AppendWithOpt(t1 *testing.T) {
+	type args struct {
+		id        uint64
+		seriesKey []byte
+		filter    influxql.Expr
+		tags      influx.PointTags
+		rowFilter []clv.RowFilter
+		opt       *query.ProcessorOptions
+	}
+	tests := []struct {
+		name string
+		args args
+	}{
+		{
+			name: "test_withSimpleTagSet",
+			args: args{
+				id:        1,
+				seriesKey: []byte("a"),
+				filter:    &influxql.BinaryExpr{},
+				tags: influx.PointTags{
+					influx.Tag{Key: "test", Value: "test"},
+				},
+				rowFilter: nil,
+				opt: &query.ProcessorOptions{
+					SimpleTagset: true,
+				},
+			},
+		},
+		{
+			name: "test_withoutSimpleTagSet",
+			args: args{
+				id:        2,
+				seriesKey: []byte("a"),
+				filter:    &influxql.BinaryExpr{},
+				tags: influx.PointTags{
+					influx.Tag{Key: "test", Value: "test"},
+				},
+				rowFilter: nil,
+				opt:       &query.ProcessorOptions{},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t1.Run(tt.name, func(t1 *testing.T) {
+			t := &TagSetInfo{}
+			t.AppendWithOpt(tt.args.id, tt.args.seriesKey, tt.args.filter, tt.args.tags, tt.args.rowFilter, tt.args.opt)
+			assert.Equal(t1, 1, t.Len())
+		})
+	}
+}
+
+func TestTagSetInfo_GetTagsWithQuerySchema(t1 *testing.T) {
+	type fields struct {
+		ref             int64
+		TagSetInfoItems []TagSetInfoItem
+		key             []byte
+		RowFilters      *clv.RowFilters
+	}
+	type args struct {
+		i int
+		s *executor.QuerySchema
+	}
+	tests := []struct {
+		name   string
+		fields fields
+		args   args
+		want   *influx.PointTags
+	}{
+		{
+			name: "test_withSimpleTagSet",
+			fields: fields{
+				ref:             0,
+				TagSetInfoItems: []TagSetInfoItem{{TagsVec: influx.PointTags{influx.Tag{Key: "test", Value: "test"}}}},
+			},
+			args: args{
+				i: 1,
+				s: executor.NewQuerySchema(nil, nil, &query.ProcessorOptions{SimpleTagset: true}, nil),
+			},
+			want: &influx.PointTags{
+				influx.Tag{Key: "test", Value: "test"},
+			},
+		},
+		{
+			name: "test_withoutSimpleTagSet",
+			fields: fields{
+				ref:             0,
+				TagSetInfoItems: []TagSetInfoItem{{TagsVec: influx.PointTags{influx.Tag{Key: "test", Value: "test"}}}},
+			},
+			args: args{
+				i: 0,
+				s: executor.NewQuerySchema(nil, nil, &query.ProcessorOptions{SimpleTagset: false}, nil),
+			},
+			want: &influx.PointTags{
+				influx.Tag{Key: "test", Value: "test"},
+			},
+		},
+		{
+			name: "test_withoutSimpleTagSet",
+			fields: fields{
+				ref: 0,
+				TagSetInfoItems: []TagSetInfoItem{
+					{TagsVec: influx.PointTags{
+						influx.Tag{Key: "test", Value: "test"},
+					}},
+					{TagsVec: influx.PointTags{
+						influx.Tag{Key: "test1", Value: "test1"},
+					}},
+				},
+			},
+			args: args{
+				i: 1,
+				s: executor.NewQuerySchema(nil, nil, &query.ProcessorOptions{SimpleTagset: false}, nil),
+			},
+			want: &influx.PointTags{
+				influx.Tag{Key: "test1", Value: "test1"},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t1.Run(tt.name, func(t1 *testing.T) {
+			t := &TagSetInfo{
+				ref:             tt.fields.ref,
+				TagSetInfoItems: tt.fields.TagSetInfoItems,
+				key:             tt.fields.key,
+				RowFilters:      tt.fields.RowFilters,
+			}
+			assert.Equalf(t1, tt.want, t.GetTagsWithQuerySchema(tt.args.i, tt.args.s), "GetTagsWithQuerySchema(%v, %v)", tt.args.i, tt.args.s)
+		})
+	}
+}
+
+func TestGroupSeries_Reverse(t *testing.T) {
+	tagSet1 := &TagSetInfo{
+		TagSetInfoItems: []TagSetInfoItem{
+			{ID: 1},
+			{ID: 2},
+		},
+	}
+	tagSet2 := &TagSetInfo{
+		TagSetInfoItems: []TagSetInfoItem{
+			{ID: 2},
+			{ID: 1},
+		},
+	}
+	tests := []struct {
+		name   string
+		gs     GroupSeries
+		expect uint64
+	}{
+		{name: "test1", gs: []TagSetEx{tagSet1}, expect: 2},
+		{name: "test2", gs: []TagSetEx{tagSet2}, expect: 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.gs.Reverse()
+			assert.Equal(t, tt.expect, tagSet1.GetTagSetItem(0).ID)
+		})
+	}
+}
+
+func TestReplaceByNoClearIndexId(t *testing.T) {
+	ib := &IndexBuilder{}
+	ib.SetPath("/tmp/openGemini/backup_dir/data/data/db0/0/rp0/index")
+	_, _, err := ib.ReplaceByNoClearIndexId(1)
+	assert.Error(t, err)
+
+	ib.SetPath("/tmp/openGemini/backup_dir/data/data/db0/0/rp0/index/5_1708905600000000000_1709510400000000000")
+	_, _, err = ib.ReplaceByNoClearIndexId(1)
+	assert.NoError(t, err)
 }

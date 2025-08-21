@@ -30,7 +30,7 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/metaclient"
-	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/msgservice"
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
 	"github.com/openGemini/openGemini/lib/spdy"
@@ -53,6 +53,10 @@ func NewMockStoreEngine(readerCount int) *MockStoreEngine {
 	}
 }
 
+func (s *MockStoreEngine) ClearRepCold(req *msgservice.SendClearEventsRequest) error {
+	return nil
+}
+
 func (s *MockStoreEngine) RefEngineDbPt(string, uint32) error {
 	return nil
 }
@@ -65,7 +69,7 @@ func (s *MockStoreEngine) UnrefEngineDbPt(string, uint32) {
 
 }
 
-func (s *MockStoreEngine) ExecuteDelete(*netstorage.DeleteRequest) error {
+func (s *MockStoreEngine) ExecuteDelete(*msgservice.DeleteRequest) error {
 	return nil
 }
 
@@ -89,7 +93,7 @@ func (s *MockStoreEngine) TagKeys(db string, ptIDs []uint32, measurements []stri
 	return nil, nil
 }
 
-func (s *MockStoreEngine) TagValues(db string, ptIDs []uint32, tagKeys map[string][][]byte, condition influxql.Expr, tr influxql.TimeRange) (netstorage.TablesTagSets, error) {
+func (s *MockStoreEngine) TagValues(db string, ptIDs []uint32, tagKeys map[string][][]byte, condition influxql.Expr, tr influxql.TimeRange) (influxql.TablesTagSets, error) {
 	return nil, nil
 }
 
@@ -97,7 +101,7 @@ func (s *MockStoreEngine) TagValuesCardinality(db string, ptIDs []uint32, tagKey
 	return nil, nil
 }
 
-func (s *MockStoreEngine) SendSysCtrlOnNode(req *netstorage.SysCtrlRequest) (map[string]string, error) {
+func (s *MockStoreEngine) SendSysCtrlOnNode(req *msgservice.SysCtrlRequest) (map[string]string, error) {
 	return nil, nil
 }
 
@@ -237,7 +241,7 @@ func TestCreateSerfInstance(t *testing.T) {
 	resp.err = nil
 	h = NewSelect(store, resp, req)
 	h.SetAbortHook(func() {})
-	h.Abort()
+	h.Abort("")
 	require.NoError(t, h.Process())
 
 	h = NewSelect(store, resp, req)
@@ -248,7 +252,7 @@ func TestCreateSerfInstance(t *testing.T) {
 
 	h = NewSelect(store, resp, req)
 	require.NotEmpty(t, h.execute(context.Background(), nil))
-	h.Abort()
+	h.Abort("")
 	require.NoError(t, h.execute(context.Background(), &executor.PipelineExecutor{}))
 
 	req.Node = []byte{1}
@@ -320,7 +324,7 @@ func TestSelectProcessor(t *testing.T) {
 	require.NoError(t, p.Handle(resp, msg2))
 	require.NoError(t, p.Handle(resp, msg3))
 
-	query.NewManager(100).Abort(resp.Sequence())
+	query.NewManager(100).Abort(resp.Sequence(), "")
 	require.NoError(t, p.Handle(resp, msg3))
 
 	cache.PutNodeIterNum("2", 0)

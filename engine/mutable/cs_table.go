@@ -16,7 +16,6 @@ package mutable
 
 import (
 	"errors"
-	"math"
 	"path/filepath"
 	"sort"
 	"sync"
@@ -30,7 +29,6 @@ import (
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/logstore"
-	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/record"
 	Statistics "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/stringinterner"
@@ -50,79 +48,6 @@ type FlushManager interface {
 		chunk *WriteChunkForColumnStore, writeMs *immutable.MsBuilder, tcLocation int8)
 	updateAccumulateMetaIndex(accumulateMetaIndex *immutable.AccumulateMetaIndex)
 	getAccumulateMetaIndex() *immutable.AccumulateMetaIndex
-}
-
-type writeAttached struct {
-	db string
-	rp string
-}
-
-func (w *writeAttached) SetDBInfo(db string, rp string) {
-	w.db = db
-	w.rp = rp
-}
-
-func (w *writeAttached) updateAccumulateMetaIndex(accumulateMetaIndex *immutable.AccumulateMetaIndex) {
-
-}
-
-func (w *writeAttached) getAccumulateMetaIndex() *immutable.AccumulateMetaIndex {
-	return nil
-}
-
-func (w *writeAttached) flushChunk(primaryKey record.Schemas, msName string, indexRelation *influxql.IndexRelation, tbStore immutable.TablesStore,
-	chunk *WriteChunkForColumnStore, writeMs *immutable.MsBuilder, tcLocation int8) {
-	writeRec := chunk.WriteRec.GetRecord()
-	writeMs = w.WriteRecordForFlush(writeRec, writeMs, tbStore, 0, true, math.MinInt64, primaryKey, indexRelation)
-	atomic.AddInt64(&Statistics.PerfStat.FlushRowsCount, int64(writeRec.RowNums()))
-
-	if writeMs != nil {
-		if err := immutable.WriteIntoFile(writeMs, true, writeMs.GetPKInfoNum() != 0, indexRelation); err != nil {
-			writeMs = nil
-			logger.GetLogger().Error("rename init file failed", zap.String("mstName", msName), zap.Error(err))
-			return
-		}
-
-		immutable.NewCSParquetManager().Convert(writeMs.Files, w.db, w.rp, msName)
-
-		tbStore.AddTSSPFiles(writeMs.Name(), false, writeMs.Files...)
-		if writeMs.GetPKInfoNum() != 0 {
-			for i, file := range writeMs.Files {
-				dataFilePath, err := fileops.GetLocalFileName(file.Path())
-				if err != nil {
-					writeMs = nil
-					logger.GetLogger().Error("get local file name failed", zap.String("mstName", msName), zap.Error(err))
-					return
-				}
-				indexFilePath := colstore.AppendPKIndexSuffix(immutable.RemoveTsspSuffix(dataFilePath))
-				tbStore.AddPKFile(writeMs.Name(), indexFilePath, writeMs.GetPKRecord(i), writeMs.GetPKMark(i), tcLocation)
-			}
-		}
-	}
-
-	err := writeMs.CloseIndexWriters()
-	if err != nil {
-		logger.GetLogger().Error("close indexWriters failed", zap.String("mstName", msName), zap.Error(err))
-		return
-	}
-}
-
-func (w *writeAttached) WriteRecordForFlush(rec *record.Record, msb *immutable.MsBuilder, tbStore immutable.TablesStore, id uint64, order bool,
-	lastFlushTime int64, schema record.Schemas, skipIndexRelation *influxql.IndexRelation) *immutable.MsBuilder {
-	var err error
-
-	if !order && lastFlushTime == math.MaxInt64 {
-		msb.StoreTimes()
-	}
-
-	msb, err = msb.WriteRecordByCol(id, rec, schema, skipIndexRelation, func(fn immutable.TSSPFileName) (seq uint64, lv uint16, merge uint16, ext uint16) {
-		return tbStore.NextSequence(), 0, 0, 0
-	})
-	if err != nil {
-		panic(err)
-	}
-
-	return msb
 }
 
 type writeDetached struct {
@@ -158,15 +83,29 @@ func (w *writeDetached) WriteDetached(rec *record.Record, msb *immutable.MsBuild
 	w.firstFlush = false
 }
 
-type csMemTableImpl struct {
+type CSMemTableImpl struct {
+	db, rp              string
 	mu                  sync.RWMutex
-	primaryKey          map[string]record.Schemas // mst -> primary key
-	flushManager        map[string]FlushManager   // mst -> flush detached or attached
-	client              metaclient.MetaClient
-	accumulateMetaIndex *sync.Map //mst -> immutable.AccumulateMetaIndex, record metaIndex for detached store
+	flushManager        map[string]FlushManager // mst -> flush detached or attached
+	accumulateMetaIndex *sync.Map               //mst -> immutable.AccumulateMetaIndex, record metaIndex for detached store
 }
 
-func (c *csMemTableImpl) initMsInfo(msInfo *MsInfo, row *influx.Row, rec *record.Record, name string) *MsInfo {
+func NewCSMemTableImpl(db, rp string) *CSMemTableImpl {
+	return &CSMemTableImpl{
+		db:                  db,
+		rp:                  rp,
+		mu:                  sync.RWMutex{},
+		flushManager:        make(map[string]FlushManager),
+		accumulateMetaIndex: &sync.Map{},
+	}
+}
+
+func (c *CSMemTableImpl) SetDbRp(db, rp string) {
+	c.db = db
+	c.rp = rp
+}
+
+func (c *CSMemTableImpl) initMsInfo(msInfo *MsInfo, row *influx.Row, rec *record.Record, name string) *MsInfo {
 	if rec != nil {
 		msInfo.Name = name
 		msInfo.Schema = make(record.Schemas, len(rec.Schema))
@@ -180,20 +119,12 @@ func (c *csMemTableImpl) initMsInfo(msInfo *MsInfo, row *influx.Row, rec *record
 	return msInfo
 }
 
-func (c *csMemTableImpl) SetClient(client metaclient.MetaClient) {
-	c.client = client
-}
-
-func (c *csMemTableImpl) GetClient() metaclient.MetaClient {
-	return c.client
-}
-
-func (c *csMemTableImpl) SetFlushManagerInfo(manager map[string]FlushManager, accumulateMetaIndex *sync.Map) {
+func (c *CSMemTableImpl) SetFlushManagerInfo(manager map[string]FlushManager, accumulateMetaIndex *sync.Map) {
 	c.flushManager = manager
 	c.accumulateMetaIndex = accumulateMetaIndex
 }
 
-func (c *csMemTableImpl) getAccumulateMetaIndex(name string) *immutable.AccumulateMetaIndex {
+func (c *CSMemTableImpl) getAccumulateMetaIndex(name string) *immutable.AccumulateMetaIndex {
 	aMetaIndex, ok := c.accumulateMetaIndex.Load(name)
 	if !ok {
 		return &immutable.AccumulateMetaIndex{}
@@ -201,11 +132,11 @@ func (c *csMemTableImpl) getAccumulateMetaIndex(name string) *immutable.Accumula
 	return aMetaIndex.(*immutable.AccumulateMetaIndex)
 }
 
-func (c *csMemTableImpl) updateAccumulateMetaIndexInfo(name string, index *immutable.AccumulateMetaIndex) {
+func (c *CSMemTableImpl) updateAccumulateMetaIndexInfo(name string, index *immutable.AccumulateMetaIndex) {
 	c.accumulateMetaIndex.Store(name, index)
 }
 
-func (c *csMemTableImpl) getFlushManager(detachedEnabled bool, writeMs *immutable.MsBuilder, recSchema record.Schemas, msName,
+func (c *CSMemTableImpl) getFlushManager(detachedEnabled bool, writeMs *immutable.MsBuilder, recSchema record.Schemas, msName,
 	lockPath string) FlushManager {
 	c.mu.RLock()
 	fManager, ok := c.flushManager[msName]
@@ -220,7 +151,7 @@ func (c *csMemTableImpl) getFlushManager(detachedEnabled bool, writeMs *immutabl
 				localBFCount:        localBFCount,
 			}
 		} else {
-			fManager = &writeAttached{}
+			fManager = &WriteAttached{}
 		}
 		c.mu.Lock()
 		c.flushManager[msName] = fManager
@@ -231,64 +162,73 @@ func (c *csMemTableImpl) getFlushManager(detachedEnabled bool, writeMs *immutabl
 	return fManager
 }
 
-func (c *csMemTableImpl) updateMstInfo(mst string, pk record.Schemas, duration time.Duration, indexRelation influxql.IndexRelation) {
-	c.mu.RLock()
-	_, okPrimary := c.primaryKey[mst]
-	c.mu.RUnlock()
-	if !okPrimary {
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		if _, ok := c.primaryKey[mst]; !ok {
-			c.primaryKey[mst] = pk
-		}
+func (c *CSMemTableImpl) FlushChunks(table *MemTable, dataPath, msName, db, rp string, lock *string, tbStore immutable.TablesStore, msRowCount int64, fileInfos chan []immutable.FileInfoExtend) {
+	mstIdent := colstore.NewMeasurementIdent(db, rp)
+	mstIdent.SetName(msName)
+
+	MergeSchema(table, msName)
+	JoinWriteRec(table, msName)
+
+	if immutable.GetDetachedFlushEnabled() || config.GetProductType() == config.LogKeeper {
+		c.FlushChunksDetached(table, dataPath, mstIdent, lock, tbStore, msRowCount, fileInfos)
+		return
 	}
-}
 
-func (c *csMemTableImpl) getMstInfo(mst string) record.Schemas {
-	c.mu.RLock()
-	primaryKey := c.primaryKey[mst]
-	c.mu.RUnlock()
-	return primaryKey
-}
-
-func (c *csMemTableImpl) FlushChunks(table *MemTable, dataPath, msName, db, rp string, lock *string, tbStore immutable.TablesStore, msRowCount int64, fileInfos chan []immutable.FileInfoExtend) {
 	msInfo, ok := table.msInfoMap[msName]
 	if !ok {
 		return
 	}
-	MergeSchema(table, msName)
-	JoinWriteRec(table, msName)
-	// add seq id col if needed
-	c.updateSeqIdCol(msRowCount-int64(msInfo.writeChunk.WriteRec.rec.RowNums()), msInfo.writeChunk.WriteRec.rec)
 
-	var indexRelation influxql.IndexRelation
-	var timeClusterDuration time.Duration
-	mInfo, err := c.client.Measurement(db, rp, influx.GetOriginMstName(msName))
-	if err != nil {
+	mst, ok := colstore.MstManagerIns().GetByIdent(mstIdent)
+	if !ok || mst == nil {
+		logger.GetLogger().Error("measurement is not exits", zap.String("mst", msName))
 		return
 	}
-	if mInfo != nil {
-		indexRelation = mInfo.IndexRelation
-		timeClusterDuration = mInfo.ColStoreInfo.TimeClusterDuration
-	}
 
-	primaryKey := c.getMstInfo(msName)
 	chunk := msInfo.writeChunk
-	chunk.SortRecord(timeClusterDuration)
-	timeSorted := chunk.TimeSorted()
 	rec := chunk.WriteRec.GetRecord()
 	if rec.RowNums() == 0 {
 		return
 	}
 
-	conf := immutable.GetColStoreConfig()
-	mstInfo, exist := tbStore.GetMstInfo(msName)
-	if !exist {
-		logger.GetLogger().Error("mstInfo is not exist", zap.String("msName", msName))
+	indexRelation := mst.IndexRelation()
+	at := NewWriteAttached(msName, mst.PrimaryKey(), mst.SortKey(), &indexRelation)
+	at.FlushRecord(tbStore, chunk.WriteRec.GetRecord())
+}
+
+func (c *CSMemTableImpl) FlushChunksDetached(table *MemTable, dataPath string, ident colstore.MeasurementIdent, lock *string, tbStore immutable.TablesStore, msRowCount int64, fileInfos chan []immutable.FileInfoExtend) {
+	msInfo, ok := table.msInfoMap[ident.Name]
+	if !ok {
 		return
 	}
 
-	writeMs := c.createMsBuilder(tbStore, lock, dataPath, msName, 1, rec.Len(), conf, config.COLUMNSTORE, mstInfo, logstore.IsFullTextIdx(&indexRelation))
+	rec := msInfo.writeChunk.WriteRec.GetRecord()
+	if rec.RowNums() == 0 {
+		return
+	}
+
+	// add seq id col if needed
+	c.updateSeqIdCol(msRowCount-int64(msInfo.writeChunk.WriteRec.rec.RowNums()), rec)
+
+	var indexRelation influxql.IndexRelation
+	var timeClusterDuration time.Duration
+
+	mst, ok := colstore.MstManagerIns().GetByIdent(ident)
+	if !ok || mst == nil {
+		logger.GetLogger().Error("measurement is not exits", zap.String("mst", ident.Name))
+		return
+	}
+
+	indexRelation = mst.IndexRelation()
+	timeClusterDuration = mst.ColStoreInfo().TimeClusterDuration
+
+	primaryKey := mst.PrimaryKey()
+	chunk := msInfo.writeChunk
+	chunk.SortRecord(timeClusterDuration)
+	timeSorted := chunk.TimeSorted()
+
+	conf := immutable.GetColStoreConfig()
+	writeMs := c.createMsBuilder(tbStore, lock, dataPath, ident.Name, 1, rec.Len(), conf, config.COLUMNSTORE, mst.MeasurementInfo(), logstore.IsFullTextIdx(&indexRelation))
 	if writeMs == nil {
 		return
 	}
@@ -301,17 +241,17 @@ func (c *csMemTableImpl) FlushChunks(table *MemTable, dataPath, msName, db, rp s
 	writeMs.NewPKIndexWriter()
 	writeMs.NewIndexWriterBuilder(rec.Schema, indexRelation)
 
-	fManager := c.getFlushManager(immutable.GetDetachedFlushEnabled(), writeMs, rec.Schema, msName, *lock)
-	fManager.SetDBInfo(db, rp)
-	fManager.flushChunk(primaryKey, msName, &indexRelation, tbStore, chunk, writeMs, tcLocation) // column store flush one chunk each time
+	fManager := c.getFlushManager(immutable.GetDetachedFlushEnabled(), writeMs, rec.Schema, ident.Name, *lock)
+	fManager.SetDBInfo(ident.DB, ident.RP)
+	fManager.flushChunk(primaryKey, ident.Name, &indexRelation, tbStore, chunk, writeMs, tcLocation) // column store flush one chunk each time
 	if fileInfos != nil {
 		fileInfos <- writeMs.FilesInfo
 	}
 	//after finishing flush update accumulate metaIndex info to csMemTableImpl
-	c.updateAccumulateMetaIndexInfo(msName, fManager.getAccumulateMetaIndex())
+	c.updateAccumulateMetaIndexInfo(ident.Name, fManager.getAccumulateMetaIndex())
 }
 
-func (c *csMemTableImpl) createMsBuilder(tbStore immutable.TablesStore, lockPath *string, dataPath string,
+func (c *CSMemTableImpl) createMsBuilder(tbStore immutable.TablesStore, lockPath *string, dataPath string,
 	msName string, totalChunks int, size int, conf *immutable.Config, engineType config.EngineType, mstInfo *meta.MeasurementInfo, fullTextIdx bool) *immutable.MsBuilder {
 	seq := tbStore.Sequencer()
 	defer seq.UnRef()
@@ -381,10 +321,13 @@ func MergeSchema(table *MemTable, msName string) {
 	table.msInfoMap[msName].Schema = schema
 }
 
-func (c *csMemTableImpl) WriteRows(table *MemTable, rowsD *dictpool.Dict, wc WriteRowsCtx) error {
+func (c *CSMemTableImpl) WriteRows(table *MemTable, rowsD *dictpool.Dict, ctx WriteRowsCtx) error {
 	var err error
 	var idx int
 	var writeChunk *WriteChunkForColumnStore
+
+	ident := colstore.NewMeasurementIdent(c.db, c.rp)
+
 	for _, mapp := range rowsD.D {
 		rows, ok := mapp.Value.(*[]influx.Row)
 		if !ok {
@@ -398,17 +341,14 @@ func (c *csMemTableImpl) WriteRows(table *MemTable, rowsD *dictpool.Dict, wc Wri
 		atomic.AddInt64(&Statistics.PerfStat.WriteGetMstInfoNs, time.Since(start).Nanoseconds())
 
 		start = time.Now()
-		mstInfo, ok := GetMsInfo(msName, wc.MstsInfo)
+		ident.SetName(msName)
+		mstInfo, ok := colstore.MstManagerIns().GetByIdent(ident)
 		if !ok {
-			logger.GetLogger().Info("mstInfo is nil", zap.String("mst name", msName))
+			logger.GetLogger().Warn("mstInfo is nil", zap.String("ident", ident.String()))
 			return errors.New("measurement info is not found")
 		}
 
-		err = c.UpdateMstInfo(msName, mstInfo)
-		if err != nil {
-			return err
-		}
-		createRowChunks(msInfo, mstInfo.ColStoreInfo.SortKey)
+		createRowChunks(msInfo, mstInfo.ColStoreInfo().SortKey)
 		msInfo.concurrencyChunks.writeRowChunksToken <- struct{}{}
 		// only writeRowChunksToken is available will getFreeWriteChunk
 		writeChunk, idx = getFreeWriteChunk(msInfo)
@@ -420,9 +360,9 @@ func (c *csMemTableImpl) WriteRows(table *MemTable, rowsD *dictpool.Dict, wc Wri
 		}
 
 		// update the row count for each mst
-		if wc.MsRowCount != nil {
+		if ctx.MsRowCount != nil {
 			c.mu.Lock()
-			UpdateMstRowCount(wc.MsRowCount, msName, int64(len(*rows)))
+			UpdateMstRowCount(ctx.MsRowCount, msName, int64(len(*rows)))
 			c.mu.Unlock()
 		}
 		atomic.AddInt64(&Statistics.PerfStat.WriteMstInfoNs, time.Since(start).Nanoseconds())
@@ -432,14 +372,14 @@ func (c *csMemTableImpl) WriteRows(table *MemTable, rowsD *dictpool.Dict, wc Wri
 	return err
 }
 
-func (c *csMemTableImpl) updateSeqIdCol(startSeqId int64, rec *record.Record) {
+func (c *CSMemTableImpl) updateSeqIdCol(startSeqId int64, rec *record.Record) {
 	if !config.IsLogKeeper() {
 		return
 	}
 	record.UpdateSeqIdCol(startSeqId, rec)
 }
 
-func (c *csMemTableImpl) appendFields(table *MemTable, chunk *WriteChunkForColumnStore, time int64, fields []influx.Field, tags []influx.Tag) (int64, error) {
+func (c *CSMemTableImpl) appendFields(table *MemTable, chunk *WriteChunkForColumnStore, time int64, fields []influx.Field, tags []influx.Tag) (int64, error) {
 	chunk.Mu.Lock()
 	defer chunk.Mu.Unlock()
 
@@ -463,7 +403,7 @@ func (c *csMemTableImpl) appendFields(table *MemTable, chunk *WriteChunkForColum
 	return c.appendTagsFieldsToRecord(table, chunk.WriteRec.rec, fields, tags, time, sameSchema)
 }
 
-func (c *csMemTableImpl) genRowFields(fields influx.Fields, tags []influx.Tag) influx.Fields {
+func (c *CSMemTableImpl) genRowFields(fields influx.Fields, tags []influx.Tag) influx.Fields {
 	tf := make([]influx.Field, len(tags))
 	for i := range tags {
 		tf[i].Key = tags[i].Key
@@ -474,7 +414,7 @@ func (c *csMemTableImpl) genRowFields(fields influx.Fields, tags []influx.Tag) i
 	return fields
 }
 
-func (c *csMemTableImpl) appendTagsFieldsToRecord(t *MemTable, rec *record.Record, fields []influx.Field, tags []influx.Tag, time int64, sameSchema bool) (int64, error) {
+func (c *CSMemTableImpl) appendTagsFieldsToRecord(t *MemTable, rec *record.Record, fields []influx.Field, tags []influx.Tag, time int64, sameSchema bool) (int64, error) {
 	// fast path
 	var size int64
 	var err error
@@ -519,43 +459,39 @@ func (c *csMemTableImpl) appendTagsFieldsToRecord(t *MemTable, rec *record.Recor
 	return c.appendToRecordWithSchemaLess(t, rec, fields, tags, time)
 }
 
-func (c *csMemTableImpl) appendToRecordWithSchemaLess(t *MemTable, rec *record.Record, fields influx.Fields, tags []influx.Tag, time int64) (int64, error) {
+func (c *CSMemTableImpl) appendToRecordWithSchemaLess(t *MemTable, rec *record.Record, fields influx.Fields, tags []influx.Tag, time int64) (int64, error) {
 	fields = c.genRowFields(fields, tags)
 	sort.Sort(&fields)
 	return record.AppendFieldsToRecordSlow(rec, fields, time)
 }
 
-func (c *csMemTableImpl) appendTagToCol(col *record.ColVal, tag *influx.Tag, size *int64) {
+func (c *CSMemTableImpl) appendTagToCol(col *record.ColVal, tag *influx.Tag, size *int64) {
 	col.AppendString(tag.Value)
 	*size += int64(len(tag.Value))
 }
 
-func (c *csMemTableImpl) WriteCols(table *MemTable, rec *record.Record, mstsInfo *sync.Map, mst string) error {
+func (c *CSMemTableImpl) WriteCols(table *MemTable, rec *record.Record, mst string) error {
 	start := time.Now()
 	mst = stringinterner.InternSafe(mst)
 	msInfo := table.CreateMsInfo(mst, nil, rec)
 	atomic.AddInt64(&Statistics.PerfStat.WriteGetMstInfoNs, time.Since(start).Nanoseconds())
 
-	mstInfo, ok := GetMsInfo(mst, mstsInfo)
+	mi, ok := colstore.MstManagerIns().Get(c.db, c.rp, mst)
 	if !ok {
 		logger.GetLogger().Info("mstInfo is nil", zap.String("mst name", mst))
 		return errors.New("measurement info is not found")
 	}
-	err := c.UpdateMstInfo(mst, mstInfo)
-	if err != nil {
-		return err
-	}
 
 	start = time.Now()
-	msInfo.CreateWriteChunkForColumnStore(mstInfo.ColStoreInfo.SortKey)
+	msInfo.CreateWriteChunkForColumnStore(mi.ColStoreInfo().SortKey)
 	msInfo.writeChunk.Mu.Lock()
 	defer msInfo.writeChunk.Mu.Unlock()
 	c.appendRec(msInfo, rec, &msInfo.writeChunk.WriteRec)
 	atomic.AddInt64(&Statistics.PerfStat.WriteMstInfoNs, time.Since(start).Nanoseconds())
-	return err
+	return nil
 }
 
-func (c *csMemTableImpl) appendRec(msInfo *MsInfo, rec *record.Record, writeRec *WriteRec) {
+func (c *CSMemTableImpl) appendRec(msInfo *MsInfo, rec *record.Record, writeRec *WriteRec) {
 	// update schema
 	sameSchema, idx := checkSchemaIsSameForCol(writeRec.rec.Schema, rec.Schema)
 	// if needed pad
@@ -604,33 +540,7 @@ func checkSchemaIsSameForCol(msSchema, fields record.Schemas) (bool, []int) {
 	return true, nil
 }
 
-func (c *csMemTableImpl) UpdateMstInfo(msName string, mstInfo *meta.MeasurementInfo) error {
-	c.mu.RLock()
-	_, okPrimary := c.primaryKey[msName]
-	c.mu.RUnlock()
-	if okPrimary {
-		return nil
-	}
-	mstInfo.SchemaLock.RLock()
-	var primaryKey record.Schemas
-	if !okPrimary {
-		primaryKey = make(record.Schemas, len(mstInfo.ColStoreInfo.PrimaryKey))
-		for i, pk := range mstInfo.ColStoreInfo.PrimaryKey {
-			if pk == record.TimeField {
-				primaryKey[i] = record.Field{Name: pk, Type: influx.Field_Type_Int}
-			} else {
-				v, _ := mstInfo.Schema.GetTyp(pk)
-				primaryKey[i] = record.Field{Name: pk, Type: record.ToPrimitiveType(v)}
-			}
-		}
-	}
-	mstInfo.SchemaLock.RUnlock()
-	c.updateMstInfo(msName, primaryKey, mstInfo.ColStoreInfo.TimeClusterDuration, mstInfo.IndexRelation)
-
-	return nil
-}
-
-func (c *csMemTableImpl) Reset(t *MemTable) {
+func (c *CSMemTableImpl) Reset(t *MemTable) {
 	for _, msInfo := range t.msInfoMap {
 		if msInfo.writeChunk != nil {
 			msInfo.writeChunk.WriteRec.rec.ReuseForWrite()
@@ -686,7 +596,7 @@ func getFreeWriteChunk(msi *MsInfo) (*WriteChunkForColumnStore, int) {
 		logger.GetLogger().Info("there is no free writeChunk")
 	}
 	if msi.concurrencyChunks.writeChunks[i] == nil {
-		msi.concurrencyChunks.writeChunks[i] = &WriteChunkForColumnStore{}
+		msi.concurrencyChunks.writeChunks[i] = NewWriteChunkForColumnStore()
 		msi.concurrencyChunks.writeChunks[i].WriteRec.initForReuse(msi.Schema)
 		msi.concurrencyChunks.writeChunks[i].sameSchema = true
 	}

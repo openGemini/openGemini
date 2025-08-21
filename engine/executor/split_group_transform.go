@@ -110,7 +110,7 @@ func (trans *SplitTransformTransform) Work(ctx context.Context) error {
 func (trans *SplitTransformTransform) split(chunk Chunk) {
 	var tagIndex int
 	for tagIndex < len(chunk.TagIndex()) {
-		trans.NewChunk.AddTagAndIndex(chunk.Tags()[tagIndex], 0)
+		trans.NewChunk.AppendTagsAndIndex(chunk.Tags()[tagIndex], 0)
 		var end int
 		if tagIndex == len(chunk.TagIndex())-1 {
 			end = chunk.Len()

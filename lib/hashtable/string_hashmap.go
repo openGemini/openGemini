@@ -15,6 +15,8 @@
 package hashtable
 
 import (
+	"bytes"
+
 	"github.com/cespare/xxhash/v2"
 )
 
@@ -68,11 +70,31 @@ func (m *StringHashMap) Set(key []byte) uint64 {
 			return m.size - 1
 		}
 		// key has been set, just return its id
-		if string(key) == string(m.peek(uint64(id))) {
+		if bytes.Equal(key, m.peek(uint64(id))) {
 			return uint64(id)
 		}
 		// linear probing
 		slot = (slot + 1) & m.mask
+	}
+}
+
+func (m *StringHashMap) Check(key []byte) (uint64, bool) {
+	hash := m.hashFunc(key)
+	slot := hash & m.mask
+	searchNum := uint64(0)
+	for {
+		id := m.id(slot)
+		// slot is empty, got it
+		if id == -1 || searchNum >= m.size {
+			return 0, false
+		}
+		// key has been set, just return its id
+		if bytes.Equal(key, m.peek(uint64(id))) {
+			return uint64(id), true
+		}
+		// linear probing
+		slot = (slot + 1) & m.mask
+		searchNum++
 	}
 }
 

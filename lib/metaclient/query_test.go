@@ -120,7 +120,7 @@ func MockMetaData() (*meta.Data, error) {
 func TestQueryTagKeys(t *testing.T) {
 	data, err := MockMetaData()
 	if err != nil {
-		t.Fatalf(err.Error())
+		t.Fatalf("%s", err.Error())
 	}
 	mc := &Client{cacheData: data}
 
@@ -152,7 +152,7 @@ func TestQueryTagKeys(t *testing.T) {
 
 	reg, err := regexp.Compile(".*node")
 	if err != nil {
-		t.Fatalf(err.Error())
+		t.Fatalf("%s", err.Error())
 	}
 	ret, _ = mc.QueryTagKeys("foo", ms, &influxql.BinaryExpr{
 		Op:  influxql.EQREGEX,

@@ -22,6 +22,7 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
@@ -378,4 +379,13 @@ func TestGetObsWriterInfo(t *testing.T) {
 
 	_ = w.GetFileWriter()
 	_ = w.Size()
+}
+
+func TestBuildPKFilePathFromTSSP(t *testing.T) {
+	dataPath := "/tmp/db0/0000-0000-0001.tssp"
+
+	require.Equal(t, colstore.AppendPKIndexSuffix("/tmp/db0/0000-0000-0001"), BuildPKFilePathFromTSSP(dataPath))
+	require.Equal(t, colstore.AppendPKIndexSuffix("/tmp/db0/0000-0000-0001"), BuildPKFilePathFromTSSP(dataPath+tmpFileSuffix))
+	require.Equal(t, "", BuildPKFilePathFromTSSP(""))
+	require.Equal(t, colstore.AppendPKIndexSuffix("/tmp/abc"), BuildPKFilePathFromTSSP("/tmp/abc"))
 }

@@ -35,6 +35,7 @@ type ReadContext struct {
 	tr              util.TimeRange
 	Ascending       bool
 	onlyFirstOrLast bool
+	hasPrimaryKey   bool
 	origData        []byte
 
 	readBuf []byte

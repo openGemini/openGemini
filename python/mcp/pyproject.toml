@@ -1,0 +1,26 @@
+[project]
+name = "mcp-openGemini"
+version = "0.0.1"
+description = "An MCP server for openGemini."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+dependencies = [
+    "mcp>=1.0.0",
+    "influxdb>=5.3.2",
+]
+
+[project.scripts]
+mcp-openGemini = "mcp_openGemini:server"
+
+[project.urls]
+Home = "https://github.com/openGemini/mcp-openGemini"
+
+[tool.hatch.build.targets.wheel]
+packages = ["mcp_openGemini"]
+
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

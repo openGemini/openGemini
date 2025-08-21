@@ -30,6 +30,7 @@ import (
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/index/tsi"
+	"github.com/openGemini/openGemini/engine/mutable"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
@@ -745,7 +746,7 @@ func TestDownSamplesExecutor(t *testing.T) {
 		},
 		Duration: 240 * time.Hour,
 	}
-	e := &Engine{
+	e := &EngineImpl{
 		DownSamplePolicies: map[string]*meta.StoreDownSamplePolicy{
 			"db.p1": {
 				Alive: true,
@@ -856,7 +857,7 @@ func Test_ShardDownSampleTaskNotExist(t *testing.T) {
 		},
 		Duration: 240 * time.Hour,
 	}
-	e := &Engine{
+	e := &EngineImpl{
 		DownSamplePolicies: map[string]*meta.StoreDownSamplePolicy{
 			"db0.rp0": {
 				Alive: true,
@@ -926,7 +927,7 @@ func Test_ShardDownSampleTask(t *testing.T) {
 		},
 		Duration: 240 * time.Hour,
 	}
-	e := &Engine{
+	e := &EngineImpl{
 		DownSamplePolicies: map[string]*meta.StoreDownSamplePolicy{
 			"db0.rp0": {
 				Alive: true,
@@ -1167,7 +1168,7 @@ func Test_ShardDownSampleQueryRewrite(t *testing.T) {
 					},
 					Duration: 240 * time.Hour,
 				}
-				e := &Engine{
+				e := &EngineImpl{
 					DownSamplePolicies: map[string]*meta.StoreDownSamplePolicy{
 						"db0.rp0": {
 							Alive: true,
@@ -1857,7 +1858,10 @@ func (m MocTsspFile) Name() string {
 }
 
 func (m MocTsspFile) FileName() immutable.TSSPFileName {
-	return immutable.TSSPFileName{}
+	name := immutable.TSSPFileName{}
+	lock := "lock"
+	name.SetLock(&lock)
+	return name
 }
 
 func (m MocTsspFile) LevelAndSequence() (uint16, uint64) {
@@ -1921,7 +1925,7 @@ func (m MocTsspFile) MetaIndex(id uint64, tr util.TimeRange) (int, *immutable.Me
 
 func (m MocTsspFile) ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, ctx *immutable.ChunkMetaContext, ioPriority int) (*immutable.ChunkMeta, error) {
 	if id == 0527 {
-		return immutable.NewChunkMeta(0527, 0, 10, 10), nil
+		return immutable.NewChunkMeta(0527, 0, 10, 0), nil
 	}
 	return nil, nil
 }
@@ -2563,5 +2567,75 @@ func genTagSetMergeInfo() *tsi.TagSetMergeInfo {
 		influx.PointTags{{Key: "A2", Value: "a2"}},
 		influx.PointTags{{Key: "A4", Value: "a4"}},
 	)
+	return tagSet
+}
+
+type MocTsspFile2 struct {
+	MocTsspFile
+	path string
+}
+
+func (m MocTsspFile2) ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, ctx *immutable.ChunkMetaContext, ioPriority int) (*immutable.ChunkMeta, error) {
+	if id == 0527 {
+		return immutable.NewChunkMeta(0527, 0, 10, 10), nil
+	}
+	return nil, nil
+}
+
+func TestSeriesCursor_ReInit(t *testing.T) {
+	c := &tsmMergeCursor{
+		ctx: &idKeyCursorContext{
+			immTableReaders: map[uint64]*immutable.MmsReaders{},
+			querySchema: genQuerySchema(nil, &query.ProcessorOptions{
+				Name:      "test",
+				Ascending: true,
+			}),
+			readers: &immutable.MmsReaders{
+				Orders: []immutable.TSSPFile{
+					&MocTsspFile2{
+						path: "tmp/mst1",
+					},
+				},
+			},
+
+			decs: immutable.NewReadContext(true),
+		},
+		locations:           &immutable.LocationCursor{},
+		outOfOrderLocations: &immutable.LocationCursor{},
+	}
+
+	ctx := &idKeyCursorContext{
+		memTables:       &mutable.MemTables{},
+		immTableReaders: map[uint64]*immutable.MmsReaders{},
+		querySchema: genQuerySchema(nil, &query.ProcessorOptions{
+			Name:      "test",
+			Ascending: true,
+		}),
+	}
+	s := &seriesCursor{
+		tsmCursor: c,
+		ctx:       ctx,
+		sInfo: &seriesInfo{
+			tags: influx.PointTags{{Key: "A5", Value: "a5"}},
+		},
+	}
+	result, err := s.ReInit(genTagSet(), 4)
+	assert1.True(t, result)
+	assert1.NoError(t, err)
+
+	result, err = s.ReInit(genTagSet(), 1)
+	assert1.False(t, result)
+	assert1.NoError(t, err)
+}
+
+func genTagSet() tsi.TagSetEx {
+	tagSet := &tsi.TagSetInfo{}
+	tagSet.TagSetInfoItems = []tsi.TagSetInfoItem{
+		{ID: 1, Filter: &influxql.BinaryExpr{}, SeriesKey: []byte("A1"), TagsVec: influx.PointTags{{Key: "A1", Value: "a1"}}},
+		{ID: 3, Filter: &influxql.BinaryExpr{}, SeriesKey: []byte("A3"), TagsVec: influx.PointTags{{Key: "A3", Value: "a3"}}},
+		{ID: 5, Filter: &influxql.BinaryExpr{}, SeriesKey: []byte("A5"), TagsVec: influx.PointTags{{Key: "A5", Value: "a5"}}},
+		{ID: 6, Filter: &influxql.BinaryExpr{}, SeriesKey: []byte("A6"), TagsVec: influx.PointTags{{Key: "A6", Value: "a6"}}},
+		{ID: 0527, Filter: &influxql.BinaryExpr{}, SeriesKey: []byte("A6"), TagsVec: influx.PointTags{{Key: "A6", Value: "a6"}}},
+	}
 	return tagSet
 }

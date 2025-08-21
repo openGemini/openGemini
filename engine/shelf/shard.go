@@ -15,23 +15,21 @@
 package shelf
 
 import (
-	"fmt"
 	"io/fs"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/fasttime"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/mutable"
-	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
-	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
-	"github.com/openGemini/openGemini/lib/stringinterner"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
@@ -44,10 +42,12 @@ const backgroundSyncDuration = time.Millisecond * 100
 type ShardInfo struct {
 	ident     *meta.ShardIdentifier
 	filePath  string
+	walPath   string
 	lock      *string
 	fileInfos chan []immutable.FileInfoExtend
 	tbStore   immutable.TablesStore
 	idx       Index
+	options   *obs.ObsOptions
 }
 
 type Shard struct {
@@ -58,7 +58,7 @@ type Shard struct {
 
 	walDir     string
 	info       *ShardInfo
-	idxCreator IndexCreator
+	idxCreator *IndexCreator
 
 	mu sync.RWMutex
 	wg sync.WaitGroup
@@ -67,44 +67,37 @@ type Shard struct {
 	// key of map is the path of the Wal file
 	waitSwitchWal map[string]*Wal
 
-	// List of active wal files for real-time data writing
-	// map key is measurement name
-	wal map[string]*Wal
+	wal *Wal
 
 	freeDuration       uint64
 	lastWriteTimestamp uint64
-	tsspConverting     bool
-
-	walSwap []*Wal
 }
 
-func NewShardInfo(ident *meta.ShardIdentifier, filePath string, lock *string,
-	tbStore immutable.TablesStore, index Index) *ShardInfo {
+func NewShardInfo(ident *meta.ShardIdentifier, filePath, walPath string, lock *string,
+	tbStore immutable.TablesStore, index Index, options *obs.ObsOptions) *ShardInfo {
 	return &ShardInfo{
 		ident:    ident,
 		filePath: filePath,
+		walPath:  walPath,
 		lock:     lock,
 		tbStore:  tbStore,
 		idx:      index,
+		options:  options,
 	}
 }
 
 func NewShard(workerID int, info *ShardInfo, freeDuration uint64) *Shard {
 	shard := &Shard{
-		idle:          true,
-		signal:        util.NewSignal(),
-		waitSwitchWal: make(map[string]*Wal),
-		wal:           make(map[string]*Wal),
-		info:          info,
-		freeDuration:  freeDuration,
+		idle:               true,
+		signal:             util.NewSignal(),
+		waitSwitchWal:      make(map[string]*Wal),
+		info:               info,
+		freeDuration:       freeDuration,
+		lastWriteTimestamp: fasttime.UnixTimestamp(),
 	}
-	shard.idxCreator.idx = info.idx
-	shard.walDir = filepath.Join(config.GetStoreConfig().WALDir,
-		config.WalDirectory,
-		info.ident.OwnerDb,
-		strconv.FormatUint(uint64(info.ident.OwnerPt), 10),
-		info.ident.Policy,
-		fmt.Sprintf("%d_%d", info.ident.ShardID, workerID))
+	shard.idxCreator = NewRunner().IndexCreatorManager().Alloc(info.idx)
+	shard.walDir = filepath.Join(info.walPath, strconv.FormatUint(uint64(workerID), 10))
+	shard.wal = NewWal(shard.walDir, info.lock, info.options)
 	return shard
 }
 
@@ -124,37 +117,37 @@ func (s *Shard) openBackgroundProcessor() {
 	stat.ActiveShardTotal.Incr()
 	s.idle = false
 	s.signal.ReOpen()
-	s.wg.Add(2)
-	go s.backgroundProcess()
+	s.wg.Add(3)
+	go s.backgroundCreateIndex()
+	go s.backgroundConvertToTSSP()
 	go s.backgroundWalProcess()
 }
 
-func (s *Shard) backgroundProcess() {
+func (s *Shard) backgroundConvertToTSSP() {
+	defer s.wg.Done()
+
+	util.TickerRun(time.Second, s.signal.C(), func() {
+		s.ConvertToTSSP()
+		s.Free()
+	}, func() {})
+}
+
+func (s *Shard) backgroundCreateIndex() {
 	defer s.wg.Done()
 
 	util.TickerRun(time.Second/2, s.signal.C(), func() {
-		s.AsyncConvertToTSSP()
-		s.AsyncCreateIndex()
-		s.Free()
+		if s.wal.NeedCreateIndex() {
+			s.idxCreator.Create(s.wal)
+		}
 	}, func() {})
 }
 
 func (s *Shard) backgroundWalProcess() {
 	defer s.wg.Done()
 
-	var wals []*Wal
 	util.TickerRun(backgroundSyncDuration, s.signal.C(), func() {
-		wals = s.getWalList(wals[:0], func(wal *Wal) bool {
-			return wal.Opened()
-		})
-
-		for i := range wals {
-			if wals[i].Expired() {
-				s.switchWalIfExists(wals[i])
-			}
-			wals[i].BackgroundSync()
-			wals[i] = nil
-		}
+		s.SwitchWalIfNeeded()
+		s.wal.BackgroundSync()
 	}, func() {})
 }
 
@@ -163,58 +156,47 @@ func (s *Shard) GetWalReaders(dst []*Wal, mst string, tr *util.TimeRange) []*Wal
 	defer s.mu.RUnlock()
 
 	for _, w := range s.waitSwitchWal {
-		if !w.Converted() && w.mst == mst && w.timeRange.Overlaps(tr.Min, tr.Max) {
+		if w.HasMeasurement(mst) && w.Overlaps(tr.Min, tr.Max) {
 			w.Ref()
 			dst = append(dst, w)
 		}
 	}
 
-	w, ok := s.wal[mst]
-	if ok && w.timeRange.Overlaps(tr.Min, tr.Max) {
-		w.Ref()
-		dst = append(dst, w)
+	if s.wal.HasMeasurement(mst) && s.wal.Overlaps(tr.Min, tr.Max) {
+		s.wal.Ref()
+		dst = append(dst, s.wal)
 	}
 	return dst
 }
 
-func (s *Shard) switchWalIfExists(wal *Wal) {
+func (s *Shard) SwitchWalIfNeeded() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	_, ok := s.wal[wal.mst]
-	if !ok {
+	if s.wal.SizeLimited() || s.wal.Expired() {
+		s.switchWal()
+	}
+}
+
+func (s *Shard) SwitchWal() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.switchWal()
+}
+
+func (s *Shard) switchWal() {
+	if !s.wal.opened {
 		return
 	}
-	s.switchWal(wal)
-}
 
-func (s *Shard) switchWal(wal *Wal) {
 	stat.WALFileCount.Incr()
-	stat.WALFileSizeSum.Add(wal.WrittenSize() / 1024)
+	stat.WALFileSizeSum.Add(s.wal.WrittenSize() / 1024)
 
-	delete(s.wal, wal.mst)
-	s.waitSwitchWal[wal.Name()] = wal
+	s.waitSwitchWal[s.wal.Name()] = s.wal
 	stat.WALWaitConvert.Incr()
-}
 
-func (s *Shard) CreateWal(mst string) *Wal {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	wal, ok := s.wal[mst]
-	if ok && wal.SizeLimited() {
-		ok = false
-		s.switchWal(wal)
-	}
-
-	if !ok {
-		mst = stringinterner.InternSafe(mst)
-		wal = NewWal(s.GetWalDir(), s.info.lock, mst)
-		s.wal[mst] = wal
-	}
-
-	wal.writing = true
-	return wal
+	s.wal = NewWal(s.GetWalDir(), s.info.lock, s.info.options)
 }
 
 func (s *Shard) GetWalDir() string {
@@ -224,39 +206,23 @@ func (s *Shard) GetWalDir() string {
 func (s *Shard) Stop() {
 	s.signal.CloseOnce(func() {
 		s.Wait()
-		for _, wal := range s.wal {
-			wal.MustClose()
-		}
+		s.switchWal()
 		for _, wal := range s.waitSwitchWal {
+			s.convertWalToTSSP(wal)
 			wal.MustClose()
+			wal.Clean()
 		}
+		NewRunner().IndexCreatorManager().Recycle(s.idxCreator)
+		s.idxCreator = nil
 	})
 }
 
 func (s *Shard) ForceFlush() {
-	items := s.getWalList(nil, func(wal *Wal) bool {
-		return wal.Opened()
-	})
-
-	for _, wal := range items {
-		s.switchWalIfExists(wal)
-	}
+	s.SwitchWal()
 }
 
 func (s *Shard) Wait() {
 	s.wg.Wait()
-}
-
-func (s *Shard) getWalList(dst []*Wal, filter func(*Wal) bool) []*Wal {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	for _, wal := range s.wal {
-		if filter(wal) {
-			dst = append(dst, wal)
-		}
-	}
-	return dst
 }
 
 func (s *Shard) getWaitSwitchWal() *Wal {
@@ -280,24 +246,20 @@ func (s *Shard) Write(wal *Wal, seriesKey, rec []byte) error {
 	return err
 }
 
-func (s *Shard) UpdateWal(wal *Wal, seriesKey []byte, tr *util.TimeRange) (*Wal, error) {
-	mst := util.Bytes2str(record.ReadMstFromSeriesKey(seriesKey))
-
-	if wal == nil {
-		wal = s.CreateWal(mst)
-	} else if wal.mst != mst {
-		wal.EndWrite()
-		if err := wal.Flush(); err != nil {
-			return wal, err
-		}
-		if err := wal.Sync(); err != nil {
-			return wal, err
-		}
-		wal = s.CreateWal(mst)
+func (s *Shard) UpdateWal(tr *util.TimeRange) *Wal {
+	if s.wal.SizeLimited() {
+		util.MustRun(s.wal.sync)
+		s.SwitchWal()
 	}
 
-	wal.UpdateTimeRange(tr)
-	return wal, nil
+	if !s.wal.writing {
+		s.mu.Lock()
+		s.wal.writing = true
+		s.mu.Unlock()
+	}
+
+	s.wal.UpdateTimeRange(tr)
+	return s.wal
 }
 
 func (s *Shard) writeRecord(wal *Wal, seriesKey []byte, rec []byte) error {
@@ -313,7 +275,7 @@ func (s *Shard) writeRecord(wal *Wal, seriesKey []byte, rec []byte) error {
 	err = wal.WriteRecord(sid, seriesKey, rec)
 	if err != nil {
 		logger.GetLogger().Error("write record failed", zap.Error(err))
-		s.switchWalIfExists(wal)
+		s.SwitchWal()
 	}
 	return err
 }
@@ -325,10 +287,10 @@ func (s *Shard) Free() {
 	}
 
 	s.mu.Lock()
-	inuse := len(s.waitSwitchWal) > 0 || len(s.wal) > 0
+	inuse := len(s.waitSwitchWal) > 0 || s.wal.WrittenSize() > 0
 	if !inuse {
 		clear(s.waitSwitchWal)
-		clear(s.wal)
+		s.wal = NewWal(s.GetWalDir(), s.info.lock, s.info.options)
 	}
 	s.mu.Unlock()
 
@@ -342,36 +304,19 @@ func (s *Shard) Free() {
 	s.signal.Close()
 }
 
-func (s *Shard) AsyncCreateIndex() {
-	s.walSwap = s.getWalList(s.walSwap[:0], func(wal *Wal) bool {
-		return wal.NeedCreateIndex()
-	})
-	for i, wal := range s.walSwap {
-		s.idxCreator.Create(wal)
-		s.walSwap[i] = nil
-	}
-}
-
-func (s *Shard) AsyncConvertToTSSP() {
-	if s.tsspConverting {
-		return
-	}
-
+func (s *Shard) ConvertToTSSP() {
 	wal := s.getWaitSwitchWal()
 	if wal == nil {
 		return
 	}
 
-	ok, release := AllocTSSPConvertSource()
-	if !ok {
+	if !tsspConvertLimited.TryTake() {
 		return
 	}
 
-	s.tsspConverting = true
-	go func() {
+	func() {
 		defer func() {
-			release()
-			s.tsspConverting = false
+			tsspConvertLimited.Release()
 		}()
 
 		stat.WALWaitConvert.Decr()
@@ -379,11 +324,21 @@ func (s *Shard) AsyncConvertToTSSP() {
 		s.convertWalToTSSP(wal)
 		stat.WALConverting.Decr()
 	}()
+
+	s.mu.Lock()
+	delete(s.waitSwitchWal, wal.Name())
+	s.mu.Unlock()
+
+	go func() {
+		// asynchronous waiting to avoid blocking the thread that converts WAL to TSSP
+		wal.Wait()
+		wal.MustClose()
+		wal.Clean()
+	}()
 }
 
 func (s *Shard) convertWalToTSSP(wal *Wal) {
 	defer statistics.MilliTimeUse(stat.TSSPConvertCount, stat.TSSPConvertDurSum)()
-	s.idxCreator.Create(wal)
 
 	util.MustRun(wal.sync)
 
@@ -391,80 +346,92 @@ func (s *Shard) convertWalToTSSP(wal *Wal) {
 		zap.String("file", wal.Name()),
 		zap.Int64("size", wal.WrittenSize()))
 
-	itr := &WalRecordIterator{}
-	itr.Init(wal)
+	err := wal.LoadFromDisk()
+	if err != nil {
+		logger.GetLogger().Error("failed to load wal file",
+			zap.String("file", wal.Name()), zap.Error(err))
+		return
+	}
 
-	tsMemTable := mutable.NewTsMemTableImpl()
-	orderFiles, unorderedFiles := tsMemTable.FlushRecords(s.info.tbStore, itr, wal.mst,
-		s.info.filePath, s.info.lock, s.info.fileInfos)
+	s.idxCreator.Create(wal)
 
-	s.mu.Lock()
-	s.info.tbStore.AddBothTSSPFiles(&wal.converted, wal.mst, orderFiles, unorderedFiles)
-	delete(s.waitSwitchWal, wal.Name())
-	s.mu.Unlock()
+	itr := NewWalRecordIterator(wal)
+	itr.WalMeasurements(func(mst string) {
+		tsMemTable := mutable.NewTsMemTableImpl()
+		orderFiles, unorderedFiles := tsMemTable.FlushRecords(s.info.tbStore, itr, mst,
+			s.info.filePath, s.info.lock, s.info.fileInfos)
 
-	// waiting for the query request to complete
-	wal.Wait()
-	wal.MustClose()
-	wal.Clean()
+		wal.AddTargetTSSPFiles(orderFiles...)
+		wal.AddTargetTSSPFiles(unorderedFiles...)
+		s.info.tbStore.AddBothTSSPFiles(nil, mst, orderFiles, unorderedFiles)
+	})
 }
 
 func (s *Shard) Load() {
-	walFiles := s.scanWalFiles()
-
-	s.tsspConverting = true
-	s.wg.Add(1)
-	go func() {
-		defer func() {
-			s.wg.Done()
-			s.tsspConverting = false
-		}()
-
-		for mst, files := range walFiles {
-			s.convertWalFiles(mst, files)
-		}
-	}()
-}
-
-func (s *Shard) scanWalFiles() map[string][]string {
 	walDir := s.GetWalDir()
-	var files = make(map[string][]string)
-	var mstList []string
 
 	readFiles(walDir, func(item fs.FileInfo) {
-		if item.IsDir() {
-			mstList = append(mstList, item.Name())
+		if item.IsDir() || !strings.HasSuffix(item.Name(), walFileSuffixes) {
+			return
 		}
+
+		s.loadWalFile(filepath.Join(walDir, item.Name()))
 	})
-
-	for _, mst := range mstList {
-		readFiles(filepath.Join(walDir, mst), func(item fs.FileInfo) {
-			if item.IsDir() || !strings.HasSuffix(item.Name(), walFileSuffixes) {
-				return
-			}
-
-			files[mst] = append(files[mst], filepath.Join(walDir, mst, item.Name()))
-		})
-	}
-	return files
 }
 
-func (s *Shard) convertWalFiles(mst string, files []string) {
+func (s *Shard) loadWalFile(file string) {
 	defer func() {
 		if err := recover(); err != nil {
-			logger.GetLogger().Error("load wal panic", zap.String("mst", mst),
-				zap.Strings("files", files), zap.Any("recover", err))
+			logger.GetLogger().Error("load wal panic",
+				zap.String("file", file), zap.Any("recover", err))
 		}
 	}()
 
-	for i := range files {
-		wal := NewWal(s.GetWalDir(), s.info.lock, mst)
-		err := wal.Load(files[i])
-		if err != nil {
-			logger.GetLogger().Error("failed to load wal file", zap.String("file", files[i]), zap.Error(err))
-			continue
+	wal := NewWal(s.GetWalDir(), s.info.lock, s.info.options)
+	wal.PreLoad(file)
+	stat.WALWaitConvert.Incr()
+	s.mu.Lock()
+	s.waitSwitchWal[wal.Name()] = wal
+	s.mu.Unlock()
+}
+
+type IndexCreatorManager struct {
+	mu       sync.Mutex
+	creators map[Index]*IndexCreator
+}
+
+func NewIndexCreatorManager() *IndexCreatorManager {
+	return &IndexCreatorManager{
+		creators: make(map[Index]*IndexCreator),
+	}
+}
+
+func (icm *IndexCreatorManager) Alloc(idx Index) *IndexCreator {
+	icm.mu.Lock()
+	defer icm.mu.Unlock()
+
+	creator, ok := icm.creators[idx]
+	if !ok {
+		creator = &IndexCreator{
+			idx:  idx,
+			tags: nil,
 		}
-		s.convertWalToTSSP(wal)
+		icm.creators[idx] = creator
+	}
+	creator.ref()
+	return creator
+}
+
+func (icm *IndexCreatorManager) Recycle(creator *IndexCreator) {
+	if creator.unref() > 0 {
+		return
+	}
+
+	icm.mu.Lock()
+	defer icm.mu.Unlock()
+
+	if creator.idle() {
+		delete(icm.creators, creator.idx)
 	}
 }
 
@@ -472,24 +439,47 @@ type IndexCreator struct {
 	mu   sync.Mutex
 	idx  Index
 	tags []influx.Tag
+	rv   atomic.Int64
+}
+
+func (c *IndexCreator) ref() {
+	c.rv.Add(1)
+}
+
+func (c *IndexCreator) unref() int64 {
+	return c.rv.Add(-1)
+}
+
+func (c *IndexCreator) idle() bool {
+	return c.rv.Load() == 0
 }
 
 func (c *IndexCreator) Create(wal *Wal) {
-	done := statistics.MicroTimeUse(stat.IndexCreateCount, stat.IndexCreateDurSum)
+	// Avoid conflicts during index creation
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if !wal.NeedCreateIndex() {
+		return
+	}
+
+	var maxLatency int64 = 0
+	var createCount int64 = 0
+	var begin = time.Now()
 	defer func() {
-		done()
+		stat.IndexCreateCount.Add(createCount)
+		stat.IndexCreateDurSum.AddSinceMicro(begin)
+		stat.IndexLatency.Store(uint64(maxLatency) / 1000)
 		if e := recover(); e != nil {
 			logger.GetLogger().Error("failed to create index", zap.Any("panic", e))
 		}
 	}()
-	c.mu.Lock()
-	defer c.mu.Unlock()
 
 	tags := c.tags[:0]
 	var mst []byte
 
 	for {
-		seriesKey, ofs := wal.PopSeriesKey()
+		seriesKey, ofs, ts := wal.PopSeriesKey()
 		if len(seriesKey) == 0 {
 			break
 		}
@@ -500,13 +490,20 @@ func (c *IndexCreator) Create(wal *Wal) {
 			logger.GetLogger().Error("failed to create index", zap.Error(err))
 			continue
 		}
+		wal.MapSeries(util.Bytes2str(mst), sid)
 		wal.AddSeriesOffsets(sid, ofs)
+		maxLatency = max(maxLatency, time.Now().UnixNano()-ts)
+		createCount++
 	}
 	c.tags = tags
 }
 
 func readFiles(dir string, handler func(item fs.FileInfo)) {
 	dirs, err := fileops.ReadDir(dir)
+	if fileops.DirNotExists(err) {
+		return
+	}
+
 	if err != nil {
 		logger.GetLogger().Error("failed to read dir", zap.String("dir", dir), zap.Error(err))
 		return

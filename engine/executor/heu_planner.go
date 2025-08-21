@@ -93,11 +93,13 @@ func (g *RuleInstruction) SkippingGroup(schema hybridqp.Catalog) bool {
 	case RULE_PUSHDOWN_AGG:
 		return !schema.HasCall()
 	case RULE_SPREAD_AGG:
-		return !schema.HasCall()
+		return !schema.Options().CanQueryPushDown() && !schema.HasCall()
 	case RULE_SUBQUERY:
 		return !schema.HasSubQuery()
 	case RULE_HEIMADLL_PUSHDOWN:
 		return !schema.HasCastorCall()
+	case RULE_PUSHDOWN_DISTINCT:
+		return !schema.HasDistinct()
 	}
 	return false
 }
@@ -950,6 +952,7 @@ func initSqlHeuInstruction() {
 		RULE_PUSHDOWN_AGG,
 		RULE_SPREAD_AGG,
 		RULE_HEIMADLL_PUSHDOWN,
+		RULE_PUSHDOWN_DISTINCT,
 	}
 	for _, r := range rules {
 		ri := NewRuleInstruction(r)
@@ -975,6 +978,7 @@ func initSqlHeuInstruction() {
 	AddRule(mapDescToRule, NewSlideWindowSpreadRule(""))
 	AddRule(mapDescToRule, NewIncAggRule(""))
 	AddRule(mapDescToRule, NewIncHashAggRule(""))
+	AddRule(mapDescToRule, NewDistinctPushDownToExchangeRule(""))
 
 	for _, rule := range mapDescToRule {
 		for i := range sqlHeuInstruction {

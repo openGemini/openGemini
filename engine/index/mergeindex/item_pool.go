@@ -20,15 +20,15 @@ type IndexItemsPool struct {
 	p sync.Pool
 }
 
-func (iip *IndexItemsPool) Get() *indexItems {
+func (iip *IndexItemsPool) Get() *IndexItems {
 	ii := iip.p.Get()
 	if ii == nil {
-		return &indexItems{}
+		return &IndexItems{}
 	}
-	return ii.(*indexItems)
+	return ii.(*IndexItems)
 }
 
-func (iip *IndexItemsPool) Put(ii *indexItems) {
+func (iip *IndexItemsPool) Put(ii *IndexItems) {
 	ii.reset()
 	iip.p.Put(ii)
 }

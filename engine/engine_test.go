@@ -38,10 +38,12 @@ import (
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
+	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/interruptsignal"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
-	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/msgservice"
+	msgservice_data "github.com/openGemini/openGemini/lib/msgservice/data"
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/raftconn"
 	"github.com/openGemini/openGemini/lib/raftlog"
@@ -52,7 +54,9 @@ import (
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
+	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/pingcap/failpoint"
 	assert2 "github.com/stretchr/testify/assert"
@@ -70,6 +74,26 @@ func (m *mockMetaClient4Drop) DatabaseOption(database string) (*obs.ObsOptions, 
 
 func (m *mockMetaClient4Drop) Databases() map[string]*meta.DatabaseInfo {
 	return nil
+}
+
+func (m *mockMetaClient4Drop) UpdateShardInfoTier(shardID uint64, tier uint64, dbName, rpName string) error {
+	return nil
+}
+
+func (m *mockMetaClient4Drop) UpdateIndexInfoTier(shardID uint64, tier uint64, dbName, rpName string) error {
+	return nil
+}
+
+type mockMetaClient4Error struct {
+	metaclient.MetaClient
+}
+
+func (m *mockMetaClient4Error) UpdateShardInfoTier(shardID uint64, tier uint64, dbName, rpName string) error {
+	return errors.New("mock error")
+}
+
+func (m *mockMetaClient4Error) UpdateIndexInfoTier(shardID uint64, tier uint64, dbName, rpName string) error {
+	return errors.New("mock error")
 }
 
 type mockMetaClient4Obs struct {
@@ -93,14 +117,14 @@ type shardMock struct {
 	expired bool
 }
 
-var DefaultEngineOption netstorage.EngineOptions
+var DefaultEngineOption EngineOptions
 var globalTime = influxql.TimeRange{
 	Min: time.Unix(0, influxql.MinTime).UTC(),
 	Max: time.Unix(0, influxql.MaxTime).UTC(),
 }
 
 func init() {
-	DefaultEngineOption = netstorage.NewEngineOptions()
+	DefaultEngineOption = NewEngineOptions()
 	DefaultEngineOption.WriteColdDuration = time.Second * 5000
 	DefaultEngineOption.ShardMutableSizeLimit = 30 * 1024 * 1024
 	DefaultEngineOption.NodeMutableSizeLimit = 1e9
@@ -203,16 +227,18 @@ func mustParseTime(layout, value string) time.Time {
 	return tm
 }
 
-func initEngine(dir string) (*Engine, error) {
+func initEngine(dir string) (*EngineImpl, error) {
 	dataPath := filepath.Join(dir, dPath)
-	eng := &Engine{
-		closed:        interruptsignal.NewInterruptSignal(),
-		dataPath:      dataPath + "/data",
-		DBPartitions:  make(map[string]map[uint32]*DBPTInfo, 64),
-		droppingDB:    make(map[string]string),
-		droppingRP:    make(map[string]string),
-		droppingMst:   make(map[string]string),
-		migratingDbPT: make(map[string]map[uint32]struct{}),
+	eng := &EngineImpl{
+		closed:               interruptsignal.NewInterruptSignal(),
+		dataPath:             dataPath + "/data",
+		DBPartitions:         make(map[string]map[uint32]*DBPTInfo, 64),
+		droppingDB:           make(map[string]string),
+		droppingRP:           make(map[string]string),
+		droppingMst:          make(map[string]string),
+		migratingDbPT:        make(map[string]map[uint32]struct{}),
+		clearRepColdShardMap: make(map[string]struct{}),
+		clearRepColdIndexMap: make(map[string]struct{}),
 	}
 	eng.log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
 	eng.engOpt.ShardMutableSizeLimit = 30 * 1024 * 1024
@@ -286,9 +312,18 @@ func getLoadCtx() *metaclient.LoadCtx {
 	return loadCtx
 }
 
-func initEngine1(dir string, engineType config.EngineType) (*Engine, error) {
+var obsOpts = &obs.ObsOptions{
+	Enabled:    true,
+	BucketName: "gemini-test01",
+	Endpoint:   "ep",
+	Ak:         "ak",
+	Sk:         "sk",
+	BasePath:   "test",
+}
+
+func initEngine1(dir string, engineType config.EngineType, obsOpts ...*obs.ObsOptions) (*EngineImpl, error) {
 	dataPath := filepath.Join(dir, dPath)
-	eng := &Engine{
+	eng := &EngineImpl{
 		closed:       interruptsignal.NewInterruptSignal(),
 		dataPath:     dataPath + "/data",
 		walPath:      dataPath + "/wal",
@@ -299,7 +334,7 @@ func initEngine1(dir string, engineType config.EngineType) (*Engine, error) {
 		fileInfos:    nil,
 	}
 	eng.log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
-
+	client := metaclient.NewClient("", false, 0)
 	loadCtx := getLoadCtx()
 	lockPath := filepath.Join(eng.dataPath, "LOCK")
 	dbPTInfo := NewDBPTInfo("db0", 0, eng.dataPath, eng.walPath, loadCtx, eng.fileInfos, nil)
@@ -313,9 +348,10 @@ func initEngine1(dir string, engineType config.EngineType) (*Engine, error) {
 		"659_946252800000000000_946857600000000000", "mergeset")
 	_ = fileops.MkdirAll(indexPath, 0755)
 
-	//indexPath := path.Join(dbPTInfo.path, "rp0", IndexFileDirectory, "1_1648544460000000000_1648548120000000000")
-
-	dbPTInfo.OpenIndexes(0, "rp0", config.TSSTORE)
+	if len(obsOpts) > 0 {
+		dbPTInfo.dbObsOptions = obsOpts[0]
+	}
+	dbPTInfo.OpenIndexes(0, "rp0", config.TSSTORE, client)
 
 	indexBuilder := dbPTInfo.indexBuilder[659]
 	shardIdent := &meta.ShardIdentifier{ShardID: 1, ShardGroupID: 1, Policy: "rp0", OwnerDb: "db0", OwnerPt: 0}
@@ -324,8 +360,7 @@ func initEngine1(dir string, engineType config.EngineType) (*Engine, error) {
 		EndTime: mustParseTime(time.RFC3339Nano, "2000-01-01T01:00:00Z")}
 	shard := NewShard(eng.dataPath, eng.walPath, &lockPath, shardIdent, shardDuration, tr, DefaultEngineOption, engineType, nil)
 	shard.indexBuilder = indexBuilder
-	//shard.wal.logger = eng.log
-	//shard.wal.traceLogger = eng.log
+
 	err := shard.OpenAndEnable(nil)
 	if err != nil {
 		_ = shard.Close()
@@ -335,9 +370,9 @@ func initEngine1(dir string, engineType config.EngineType) (*Engine, error) {
 	return eng, nil
 }
 
-func initEngineWithColdShard(dir string, engineType config.EngineType) (*Engine, error) {
+func initEngineWithColdShard(dir string, engineType config.EngineType) (*EngineImpl, error) {
 	dataPath := filepath.Join(dir, dPath)
-	eng := &Engine{
+	eng := &EngineImpl{
 		closed:       interruptsignal.NewInterruptSignal(),
 		dataPath:     dataPath + "/data",
 		walPath:      dataPath + "/wal",
@@ -363,8 +398,8 @@ func initEngineWithColdShard(dir string, engineType config.EngineType) (*Engine,
 	_ = fileops.MkdirAll(indexPath, 0755)
 
 	//indexPath := path.Join(dbPTInfo.path, "rp0", IndexFileDirectory, "1_1648544460000000000_1648548120000000000")
-
-	dbPTInfo.OpenIndexes(0, "rp0", config.TSSTORE)
+	client := metaclient.NewClient("", false, 0)
+	dbPTInfo.OpenIndexes(0, "rp0", config.TSSTORE, client)
 
 	indexBuilder := dbPTInfo.indexBuilder[659]
 	shardIdent := &meta.ShardIdentifier{ShardID: 1, ShardGroupID: 1, Policy: "rp0", OwnerDb: "db0", OwnerPt: 0}
@@ -384,9 +419,9 @@ func initEngineWithColdShard(dir string, engineType config.EngineType) (*Engine,
 	return eng, nil
 }
 
-func initEngineWithNoLockPath(dir string, engineType config.EngineType) (*Engine, error) {
+func initEngineWithNoLockPath(dir string, engineType config.EngineType) (*EngineImpl, error) {
 	dataPath := filepath.Join(dir, dPath)
-	eng := &Engine{
+	eng := &EngineImpl{
 		closed:       interruptsignal.NewInterruptSignal(),
 		dataPath:     dataPath + "/data",
 		walPath:      dataPath + "/wal",
@@ -412,8 +447,8 @@ func initEngineWithNoLockPath(dir string, engineType config.EngineType) (*Engine
 	_ = fileops.MkdirAll(indexPath, 0755)
 
 	//indexPath := path.Join(dbPTInfo.path, "rp0", IndexFileDirectory, "1_1648544460000000000_1648548120000000000")
-
-	dbPTInfo.OpenIndexes(0, "rp0", config.TSSTORE)
+	client := metaclient.NewClient("", false, 0)
+	dbPTInfo.OpenIndexes(0, "rp0", config.TSSTORE, client)
 
 	indexBuilder := dbPTInfo.indexBuilder[659]
 	shardIdent := &meta.ShardIdentifier{ShardID: 1, ShardGroupID: 1, Policy: "rp0", OwnerDb: "db0", OwnerPt: 0}
@@ -433,6 +468,46 @@ func initEngineWithNoLockPath(dir string, engineType config.EngineType) (*Engine
 	return eng, nil
 }
 
+func getTestIndexAndBuilder(path string, engineType config.EngineType) (tsi.Index, *tsi.IndexBuilder) {
+	ltime := uint64(time.Now().Unix())
+	lockPath := ""
+	indexIdent := &meta.IndexIdentifier{OwnerDb: "db0", OwnerPt: 1, Policy: "rp0"}
+	indexIdent.Index = &meta.IndexDescriptor{IndexID: 2,
+		IndexGroupID: 3, TimeRange: meta.TimeRangeInfo{}}
+	opts := new(tsi.Options).
+		Path(path).
+		Ident(indexIdent).
+		IndexType(index.MergeSet).
+		EngineType(engineType).
+		StartTime(time.Now()).
+		EndTime(time.Now().Add(time.Hour)).
+		Duration(time.Hour).
+		LogicalClock(1).
+		SequenceId(&ltime).
+		Lock(&lockPath)
+
+	indexBuilder := tsi.NewIndexBuilder(opts)
+
+	primaryIndex, err := tsi.NewIndex(opts)
+	if err != nil {
+		panic(err)
+	}
+	primaryIndex.SetIndexBuilder(indexBuilder)
+	indexRelation, err := tsi.NewIndexRelation(opts, primaryIndex, indexBuilder)
+	if err != nil {
+		panic(err)
+	}
+	indexBuilder.Relations[uint32(index.MergeSet)] = indexRelation
+
+	config.NewLogger("test")
+	err = indexBuilder.Open()
+	if err != nil {
+		panic(err)
+	}
+
+	return primaryIndex, indexBuilder
+}
+
 func Test_Engine_DropDatabase(t *testing.T) {
 	dir := t.TempDir()
 	eng, err := initEngine(dir)
@@ -445,6 +520,92 @@ func Test_Engine_DropDatabase(t *testing.T) {
 	err = eng.DeleteDatabase("db011", defaultPtId)
 	assert(err == nil, "error is not nil")
 	assert(len(eng.DBPartitions) > 0, "db pt should exist")
+
+	// really drop db
+	err = eng.DeleteDatabase("db0", defaultPtId)
+	assert(err == nil, "error is not nil")
+	assert(len(eng.DBPartitions) == 0, "db pt should not exist")
+}
+
+func initEngineForDropDatabaseWithDeleteMergeSet(dir string, allTsids []uint64, delTsids []uint64, t *testing.T) (*EngineImpl, error) {
+	dataPath := filepath.Join(dir, dPath)
+	eng := &EngineImpl{
+		closed:               interruptsignal.NewInterruptSignal(),
+		dataPath:             dataPath + "/data",
+		DBPartitions:         make(map[string]map[uint32]*DBPTInfo, 64),
+		droppingDB:           make(map[string]string),
+		droppingRP:           make(map[string]string),
+		droppingMst:          make(map[string]string),
+		migratingDbPT:        make(map[string]map[uint32]struct{}),
+		clearRepColdShardMap: make(map[string]struct{}),
+		clearRepColdIndexMap: make(map[string]struct{}),
+	}
+	eng.log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
+	eng.engOpt.ShardMutableSizeLimit = 30 * 1024 * 1024
+	eng.engOpt.NodeMutableSizeLimit = 1e9
+	eng.engOpt.MaxWriteHangTime = time.Second
+	client := metaclient.NewClient("", false, 0)
+	client.SetCacheData(&meta.Data{})
+	eng.SetMetaClient(client)
+
+	loadCtx := getLoadCtx()
+	eng.loadCtx = loadCtx
+	eng.CreateDBPT(defaultDb, defaultPtId, false)
+	eng.DBPartitions[defaultDb][defaultPtId].logger = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
+	shardTimeRange := getTimeRangeInfo()
+
+	// init instance
+	stat.StoreTaskInstance = stat.NewStoreTaskDuration(false)
+	msInfo := &meta.MeasurementInfo{
+		EngineType: config.TSSTORE,
+	}
+
+	if e := eng.CreateShard(defaultDb, defaultRp, defaultPtId, defaultShardId, shardTimeRange, msInfo); e != nil {
+		return eng, e
+	}
+
+	timeRangeInfo := &meta.ShardTimeRangeInfo{
+		ShardDuration: &meta.ShardDurationInfo{
+			DurationInfo: meta.DurationDescriptor{Duration: time.Second}},
+		OwnerIndex: meta.IndexDescriptor{IndexID: DelIndexBuilderId},
+	}
+
+	eng.DBPartitions[defaultDb][defaultPtId].delIndexBuilderMap = make(map[string]*tsi.IndexBuilder)
+	eng.DBPartitions[defaultDb][defaultPtId].NewMergeSetIndex(defaultRp, timeRangeInfo, client, msInfo.EngineType)
+	curIdx := eng.DBPartitions[defaultDb][defaultPtId].indexBuilder[uint64(1)].GetPrimaryIndex().(*tsi.MergeSetIndex)
+	delIdx := eng.DBPartitions[defaultDb][defaultPtId].GetDelIndexBuilderByRp(defaultRp).GetPrimaryIndex().(*tsi.MergeSetIndex)
+	curIdx.SetDeleteMergeSet(delIdx)
+	if e := curIdx.LoadDeletedTSIDs(); e != nil {
+		return eng, e
+	}
+	if e := curIdx.WriteDeleteTsids(allTsids); e != nil {
+		return eng, e
+	}
+	if e := curIdx.Close(); e != nil {
+		return eng, e
+	}
+	if e := curIdx.Open(); e != nil {
+		return eng, e
+	}
+	if e := delIdx.LoadDeletedTSIDs(); e != nil {
+		return eng, e
+	}
+	if e := delIdx.WriteDeleteTsids(delTsids); e != nil {
+		return eng, e
+	}
+
+	eng.metaClient = &mockMetaClient4Drop{}
+
+	return eng, nil
+}
+
+func Test_Engine_DropDatabaseDropDatabaseWithDeleteMergeSet(t *testing.T) {
+	dir := t.TempDir()
+	eng, err := initEngineForDropDatabaseWithDeleteMergeSet(dir, []uint64{123, 321}, []uint64{}, t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
 
 	// really drop db
 	err = eng.DeleteDatabase("db0", defaultPtId)
@@ -543,6 +704,31 @@ func TestEngine_DropRetentionPolicy_SkipLog(t *testing.T) {
 	close(res)
 }
 
+func TestEngine_DropRetentionPolicy_SkipLog1(t *testing.T) {
+	dir := t.TempDir()
+	defer config.SetProductType("")
+	eng, err := initEngineForDropDatabaseWithDeleteMergeSet(dir, []uint64{123, 321}, []uint64{}, t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+
+	res := make(chan error)
+	n := 0
+	n++
+	go func(db, rp string) {
+		res <- eng.DropRetentionPolicy(db, rp, defaultPtId)
+	}("db0", "rp0")
+
+	for i := 0; i < n; i++ {
+		err = <-res
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	close(res)
+}
+
 func TestEngine_DropRetentionPolicy(t *testing.T) {
 	dir := t.TempDir()
 	eng, err := initEngine(dir)
@@ -607,6 +793,22 @@ func TestEngine_DropRetentionPolicyErrorRP(t *testing.T) {
 	close(res)
 }
 
+func TestEngine_DeleteMstInIndex(t *testing.T) {
+	dir := t.TempDir()
+	eng, err := initEngine(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+
+	err = eng.DeleteMstInIndex(defaultDb, defaultPtId, 1, []string{defaultMeasurementName}, 1)
+	assert2.Nil(t, err)
+	err = eng.DeleteMstInIndex(defaultDb, 54312, 1, []string{defaultMeasurementName}, 1)
+	assert2.Error(t, err)
+	err = eng.DeleteMstInIndex(defaultDb, defaultPtId, 54312, []string{defaultMeasurementName}, 1)
+	assert2.Error(t, err)
+}
+
 func TestEngine_DeleteIndex(t *testing.T) {
 	dir := t.TempDir()
 	eng, err := initEngine(dir)
@@ -658,7 +860,7 @@ func assert(condition bool, msg string, v ...interface{}) {
 func TestEngine_OpenLimitShardError(t *testing.T) {
 	dir := t.TempDir()
 	dataPath := filepath.Join(dir, dPath)
-	eng := &Engine{
+	eng := &EngineImpl{
 		closed:       interruptsignal.NewInterruptSignal(),
 		dataPath:     dataPath + "/data",
 		walPath:      dataPath + "/wal",
@@ -762,7 +964,7 @@ func TestEngine_OpenLimitShardError(t *testing.T) {
 func TestCreateDBPT_ObsErr(t *testing.T) {
 	dir := t.TempDir()
 	dataPath := filepath.Join(dir, dPath)
-	eng := &Engine{
+	eng := &EngineImpl{
 		closed:       interruptsignal.NewInterruptSignal(),
 		dataPath:     dataPath + "/data",
 		walPath:      dataPath + "/wal",
@@ -1113,7 +1315,7 @@ func TestEngine_TagValuesDisorder(t *testing.T) {
 		nil,
 		util.TimeRange{Min: influxql.MinTime, Max: influxql.MaxTime},
 		0)
-	tableTagSets, _ := tagsets.(netstorage.TablesTagSets)
+	tableTagSets, _ := tagsets.(influxql.TablesTagSets)
 	fmt.Printf("%+v", tagsets)
 	require.Equal(t, err, nil)
 	require.Equal(t, 1, len(tableTagSets))
@@ -1142,7 +1344,7 @@ func TestEngine_TagValuesDisorder(t *testing.T) {
 		nil,
 		util.TimeRange{Min: influxql.MinTime, Max: influxql.MaxTime},
 		3)
-	tableTagSets, _ = tagsets.(netstorage.TablesTagSets)
+	tableTagSets, _ = tagsets.(influxql.TablesTagSets)
 	fmt.Printf("%+v", tagsets)
 	require.Equal(t, err, nil)
 	require.Equal(t, 1, len(tableTagSets))
@@ -1227,6 +1429,167 @@ func Test_Engine_DropMeasurement(t *testing.T) {
 	}
 }
 
+func initEngineForDropSeries(dir string, allTsids []uint64, delTsids []uint64, t *testing.T) (*EngineImpl, error) {
+	dataPath := filepath.Join(dir, dPath)
+	eng := &EngineImpl{
+		closed:               interruptsignal.NewInterruptSignal(),
+		dataPath:             dataPath + "/data",
+		DBPartitions:         make(map[string]map[uint32]*DBPTInfo, 64),
+		droppingDB:           make(map[string]string),
+		droppingRP:           make(map[string]string),
+		droppingMst:          make(map[string]string),
+		migratingDbPT:        make(map[string]map[uint32]struct{}),
+		clearRepColdShardMap: make(map[string]struct{}),
+		clearRepColdIndexMap: make(map[string]struct{}),
+	}
+	eng.log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
+	eng.engOpt.ShardMutableSizeLimit = 30 * 1024 * 1024
+	eng.engOpt.NodeMutableSizeLimit = 1e9
+	eng.engOpt.MaxWriteHangTime = time.Second
+	client := metaclient.NewClient("", false, 0)
+	client.SetCacheData(&meta.Data{})
+	eng.SetMetaClient(client)
+
+	loadCtx := getLoadCtx()
+	eng.loadCtx = loadCtx
+	eng.CreateDBPT(defaultDb, defaultPtId, false)
+	eng.DBPartitions[defaultDb][defaultPtId].logger = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
+	shardTimeRange := getTimeRangeInfo()
+
+	// init instance
+	stat.StoreTaskInstance = stat.NewStoreTaskDuration(false)
+	msInfo := &meta.MeasurementInfo{
+		EngineType: config.TSSTORE,
+	}
+
+	if e := eng.CreateShard(defaultDb, defaultRp, defaultPtId, defaultShardId, shardTimeRange, msInfo); e != nil {
+		return eng, e
+	}
+
+	timeRangeInfo := &meta.ShardTimeRangeInfo{
+		ShardDuration: &meta.ShardDurationInfo{
+			DurationInfo: meta.DurationDescriptor{Duration: time.Second}},
+		OwnerIndex: meta.IndexDescriptor{IndexID: DelIndexBuilderId},
+	}
+
+	eng.DBPartitions[defaultDb][defaultPtId].delIndexBuilderMap = make(map[string]*tsi.IndexBuilder)
+	eng.DBPartitions[defaultDb][defaultPtId].NewMergeSetIndex(defaultRp, timeRangeInfo, client, msInfo.EngineType)
+	curIdx := eng.DBPartitions[defaultDb][defaultPtId].indexBuilder[uint64(1)].GetPrimaryIndex().(*tsi.MergeSetIndex)
+	delIdx := eng.DBPartitions[defaultDb][defaultPtId].GetDelIndexBuilderByRp(defaultRp).GetPrimaryIndex().(*tsi.MergeSetIndex)
+	curIdx.SetDeleteMergeSet(delIdx)
+	if e := curIdx.LoadDeletedTSIDs(); e != nil {
+		return eng, e
+	}
+	if e := curIdx.WriteDeleteTsids(allTsids); e != nil {
+		return eng, e
+	}
+	if e := curIdx.Close(); e != nil {
+		return eng, e
+	}
+	if e := curIdx.Open(); e != nil {
+		return eng, e
+	}
+	if e := delIdx.LoadDeletedTSIDs(); e != nil {
+		return eng, e
+	}
+	if e := delIdx.WriteDeleteTsids(delTsids); e != nil {
+		return eng, e
+	}
+
+	eng.metaClient = &mockMetaClient4Drop{}
+
+	return eng, nil
+}
+
+func initEngineForDropSeriesWithNoDeleteMergeset(dir string, t *testing.T) (*EngineImpl, error) {
+	dataPath := filepath.Join(dir, dPath)
+	eng := &EngineImpl{
+		closed:               interruptsignal.NewInterruptSignal(),
+		dataPath:             dataPath + "/data",
+		DBPartitions:         make(map[string]map[uint32]*DBPTInfo, 64),
+		droppingDB:           make(map[string]string),
+		droppingRP:           make(map[string]string),
+		droppingMst:          make(map[string]string),
+		migratingDbPT:        make(map[string]map[uint32]struct{}),
+		clearRepColdShardMap: make(map[string]struct{}),
+		clearRepColdIndexMap: make(map[string]struct{}),
+	}
+	eng.log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
+	eng.engOpt.ShardMutableSizeLimit = 30 * 1024 * 1024
+	eng.engOpt.NodeMutableSizeLimit = 1e9
+	eng.engOpt.MaxWriteHangTime = time.Second
+	client := metaclient.NewClient("", false, 0)
+	client.SetCacheData(&meta.Data{})
+	eng.SetMetaClient(client)
+
+	loadCtx := getLoadCtx()
+	eng.loadCtx = loadCtx
+	eng.CreateDBPT(defaultDb, defaultPtId, false)
+	eng.DBPartitions[defaultDb][defaultPtId].logger = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
+	shardTimeRange := getTimeRangeInfo()
+
+	// init instance
+	stat.StoreTaskInstance = stat.NewStoreTaskDuration(false)
+	msInfo := &meta.MeasurementInfo{
+		EngineType: config.TSSTORE,
+	}
+
+	if e := eng.CreateShard(defaultDb, defaultRp, defaultPtId, defaultShardId, shardTimeRange, msInfo); e != nil {
+		return eng, e
+	}
+
+	eng.metaClient = &mockMetaClient4Drop{}
+
+	return eng, nil
+}
+
+func Test_Engine_DropSeries_NoDeletedItems(t *testing.T) {
+	dir := t.TempDir()
+	eng, err := initEngineForDropSeries(dir, []uint64{123, 321}, []uint64{}, t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+	err = eng.DropSeries()
+	require.NoError(t, err)
+}
+
+func Test_Engine_DropSeries_ContainDeletedItems(t *testing.T) {
+	dir := t.TempDir()
+	eng, err := initEngineForDropSeries(dir, []uint64{123, 321}, []uint64{123}, t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+
+	err = eng.DropSeries()
+	require.NoError(t, err)
+}
+
+func Test_Engine_DropSeries_ContainNoDeletedItem(t *testing.T) {
+	dir := t.TempDir()
+	eng, err := initEngineForDropSeries(dir, []uint64{123, 321}, []uint64{12}, t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+
+	err = eng.DropSeries()
+	require.NoError(t, err)
+}
+
+func Test_Engine_DropSeries_NoDeleteMergeset(t *testing.T) {
+	dir := t.TempDir()
+	eng, err := initEngineForDropSeriesWithNoDeleteMergeset(dir, t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+
+	err = eng.DropSeries()
+	require.NoError(t, err)
+}
+
 func TestEngine_UpdateShardDurationInfo(t *testing.T) {
 	dir := t.TempDir()
 	eng, err := initEngine(dir)
@@ -1273,7 +1636,7 @@ func TestGetShard(t *testing.T) {
 func TestEngine_OpenShardGetDBBriefInfoError(t *testing.T) {
 	dir := t.TempDir()
 	dataPath := filepath.Join(dir, dPath)
-	eng := &Engine{
+	eng := &EngineImpl{
 		closed:       interruptsignal.NewInterruptSignal(),
 		dataPath:     dataPath + "/data",
 		walPath:      dataPath + "/wal",
@@ -1537,7 +1900,7 @@ func (ms *mockShard) Intersect(tr *influxql.TimeRange) bool {
 }
 
 func Test_openShardLazy(t *testing.T) {
-	eng := &Engine{
+	eng := &EngineImpl{
 		log: logger.NewLogger(errno.ModuleUnknown),
 	}
 	sh1 := &mockShard{
@@ -1558,6 +1921,31 @@ func Test_openShardLazy(t *testing.T) {
 		},
 	}
 	err = eng.openShardLazy(sh2)
+	require.NoError(t, err)
+}
+
+func Test_OpenShardLazy(t *testing.T) {
+	eng := &EngineImpl{
+		log: logger.NewLogger(errno.ModuleUnknown),
+	}
+	sh1 := &mockShard{
+		shard: shard{
+			opened: true,
+		},
+	}
+	// case1: opened
+	err := eng.OpenShardLazy(sh1)
+	require.NoError(t, err)
+
+	// case2: false
+	sh2 := &mockShard{
+		shard: shard{
+			opened:   false,
+			dataPath: "test_path",
+			ident:    &meta.ShardIdentifier{OwnerPt: 1},
+		},
+	}
+	err = eng.OpenShardLazy(sh2)
 	require.NoError(t, err)
 }
 
@@ -1610,6 +1998,30 @@ func TestStoreHierarchicalStorage(t *testing.T) {
 	shard.DisableHierarchicalStorage()
 	syscontrol.SetWriteColdShardEnabled(false)
 	defer shard.SetEnableHierarchicalStorage()
+}
+
+func TestStoreIndexHierarchicalStorage(t *testing.T) {
+	dir := t.TempDir()
+	eng, err := initEngine1(dir, config.TSSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+	_, idxBuilder := getTestIndexAndBuilder(t.TempDir(), config.TSSTORE)
+	eng.DBPartitions["db0"][0].indexBuilder[0] = idxBuilder
+	eng.DBPartitions["db0"][0].indexBuilder[0].Tier = util.Warm
+	ObsOptions := &obs.ObsOptions{
+		Enabled: true,
+	}
+	eng.DBPartitions["db0"][0].indexBuilder[0].ObsOpt = ObsOptions
+	syscontrol.SetWriteColdShardEnabled(true)
+	ok := eng.IndexHierarchicalStorage("db0", 0, 0)
+	require.Equal(t, ok, false)
+	ok = eng.IndexHierarchicalStorage("db0", 0, 122333)
+	require.Equal(t, ok, false)
+	eng.DBPartitions["db0"][0].SetDoingOff(true)
+	ok = eng.IndexHierarchicalStorage("db0", 0, 0)
+	require.Equal(t, ok, false)
 }
 
 func TestStoreHierarchicalStorage_CanNotDoShardMove(t *testing.T) {
@@ -1744,6 +2156,26 @@ func TestStoreHierarchicalStorage_FetchShardsNeedChangeStore(t *testing.T) {
 	eng.FetchShardsNeedChangeStore()
 }
 
+func TestStoreIndexHierarchicalStorage_FetchIndexesNeedChangeStore(t *testing.T) {
+	dir := t.TempDir()
+	eng, err := initEngine1(dir, config.TSSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+
+	id := eng.getLatestShard(eng.DBPartitions["db0"][0].shards)
+	require.Equal(t, uint64(1), id)
+
+	ib := tsi.IndexBuilder{
+		Tier: util.Hot,
+	}
+	eng.DBPartitions["db0"][0].indexBuilder[0] = &ib
+	eng.DBPartitions["db0"][0].indexBuilder[0].Tier = util.Hot
+
+	eng.FetchIndexesNeedChangeStore()
+}
+
 func TestInstantVectorCursorFunc(t *testing.T) {
 	c := &InstantVectorCursor{}
 	assert2.Equal(t, c.Name(), "instant_vector_cursor")
@@ -1826,13 +2258,13 @@ func TestIteratorInit(t *testing.T) {
 	opt.SetPromQuery(true)
 	opt.Step = time.Second
 	schema := executor.NewQuerySchema(nil, nil, opt, nil)
-	schema.Visit(&influxql.Call{Name: "count", Args: []influxql.Expr{&influxql.VarRef{Val: "cpu", Type: influxql.Integer}}})
+	schema.RecordExpr(&influxql.Call{Name: "count", Args: []influxql.Expr{&influxql.VarRef{Val: "cpu", Type: influxql.Integer}}})
 	ctx := &idKeyCursorContext{memTables: &mutable.MemTables{}, readers: &immutable.MmsReaders{}, querySchema: schema}
 	tagSet := &tsi.TagSetInfo{
-		IDs:        []uint64{1, 2},
-		Filters:    []influxql.Expr{nil, nil},
-		TagsVec:    []influx.PointTags{nil, nil},
-		SeriesKeys: [][]byte{{'a'}, {'b'}},
+		TagSetInfoItems: []tsi.TagSetInfoItem{
+			{ID: 1, Filter: nil, SeriesKey: []byte{'a'}, TagsVec: nil},
+			{ID: 2, Filter: nil, SeriesKey: []byte{'b'}, TagsVec: nil},
+		},
 	}
 	start, step := 1, 1
 	notAggOnSeriesFunc := func(m map[string]*influxql.Call) bool {
@@ -1930,6 +2362,19 @@ func TestRegisterColdShard(t *testing.T) {
 	require.Equal(t, ok, false)
 }
 
+func TestEngineDeleteMstInShard(t *testing.T) {
+	dir := t.TempDir()
+	eng, err := initEngine(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+	sh := eng.DBPartitions[defaultDb][defaultPtId].shards[defaultShardId]
+	sh.SetObsOption(&obs.ObsOptions{})
+	err = eng.DeleteMstInShard(defaultDb, defaultPtId, defaultShardId, defaultMeasurementName)
+	assert2.Nil(t, err)
+}
+
 func TestEngineDeleteShard(t *testing.T) {
 	dir := t.TempDir()
 	eng, err := initEngine(dir)
@@ -2019,7 +2464,7 @@ func (p *MockImmutableShowTagValuesPlan) Execute(dst map[string]immutable.DDLRes
 }
 
 func TestShowTagValuesPlan_AddPlan(t *testing.T) {
-	plan := &DDLBasePlans{planType: hybridqp.ShowTagValues}
+	plan := &DDLBasePlansImpl{planType: hybridqp.ShowTagValues}
 	plan.AddPlan(&MockImmutableShowTagValuesPlan{})
 	plan.AddPlan(&MockImmutableShowTagValuesPlan{})
 	if len(plan.plans) != 2 {
@@ -2028,7 +2473,7 @@ func TestShowTagValuesPlan_AddPlan(t *testing.T) {
 }
 
 func TestShowTagValuesPlan_Execute(t *testing.T) {
-	plan := &DDLBasePlans{
+	plan := &DDLBasePlansImpl{
 		plans: []immutable.DDLBasePlan{
 			&MockImmutableShowTagValuesPlan{},
 		},
@@ -2038,11 +2483,11 @@ func TestShowTagValuesPlan_Execute(t *testing.T) {
 	if err != nil {
 		return
 	}
-	tagSets, _ := resp.(netstorage.TablesTagSets)
-	want := []netstorage.TableTagSets{
+	tagSets, _ := resp.(influxql.TablesTagSets)
+	want := []influxql.TableTagSets{
 		{
 			Name: "mst",
-			Values: netstorage.TagSets{
+			Values: influxql.TagSets{
 				{Key: "k1", Value: "v1"},
 				{Key: "k2", Value: "v2"},
 				{Key: "k3", Value: "v3"},
@@ -2067,7 +2512,7 @@ func TestShowTagValuesPlan_Execute(t *testing.T) {
 }
 
 func TestEngine_CreateShowTagValuesPlan(t *testing.T) {
-	mockEngine := &Engine{
+	mockEngine := &EngineImpl{
 		DBPartitions: map[string]map[uint32]*DBPTInfo{
 			"testdb": {
 				1: &DBPTInfo{
@@ -2082,7 +2527,7 @@ func TestEngine_CreateShowTagValuesPlan(t *testing.T) {
 		},
 	}
 	got := mockEngine.CreateDDLBasePlans(hybridqp.ShowTagValues, "testdb", []uint32{1}, &influxql.TimeRange{})
-	plan, ok := got.(*DDLBasePlans)
+	plan, ok := got.(*DDLBasePlansImpl)
 	if !ok {
 		t.Fatalf("CreateShowTagValuesPlan failed: %v", got)
 	}
@@ -2095,7 +2540,7 @@ func TestEngine_CreateShowTagValuesPlan(t *testing.T) {
 func TestWriteToRaft(t *testing.T) {
 	mockProposeC := make(chan []byte, 1)
 	defer close(mockProposeC)
-	mockEngine := &Engine{
+	mockEngine := &EngineImpl{
 		DBPartitions: map[string]map[uint32]*DBPTInfo{
 			"db": {
 				1: &DBPTInfo{
@@ -2130,7 +2575,7 @@ func TestWriteToRaft(t *testing.T) {
 
 func TestEngine_WriteToRaft(t *testing.T) {
 	proposeC := make(chan []byte)
-	mockEngine := &Engine{
+	mockEngine := &EngineImpl{
 		DBPartitions: map[string]map[uint32]*DBPTInfo{
 			"testdb": {
 				1: &DBPTInfo{
@@ -2160,7 +2605,7 @@ func TestEngine_WriteToRaft(t *testing.T) {
 
 func TestEngine_WriteToRaft_UsedProposeId_Err(t *testing.T) {
 	proposeC := make(chan []byte)
-	mockEngine := &Engine{
+	mockEngine := &EngineImpl{
 		DBPartitions: map[string]map[uint32]*DBPTInfo{
 			"testdb": {
 				1: &DBPTInfo{
@@ -2178,7 +2623,7 @@ func TestEngine_WriteToRaft_UsedProposeId_Err(t *testing.T) {
 
 func TestEngine_WriteToRaft_Committed_Err(t *testing.T) {
 	proposeC := make(chan []byte)
-	mockEngine := &Engine{
+	mockEngine := &EngineImpl{
 		DBPartitions: map[string]map[uint32]*DBPTInfo{
 			"testdb": {
 				1: &DBPTInfo{
@@ -2208,7 +2653,7 @@ func TestEngine_WriteToRaft_Committed_Err(t *testing.T) {
 }
 
 func Test_EngineTransferLeadership(t *testing.T) {
-	e1 := &Engine{}
+	e1 := &EngineImpl{}
 	if e1.TransferLeadership("db0", 1, 0, 0) == nil {
 		t.Fatal("Test_EngineTransferLeadership nil DBPartitions error")
 	}
@@ -2217,7 +2662,7 @@ func Test_EngineTransferLeadership(t *testing.T) {
 	pts[0] = &DBPTInfo{node: &mockNode{}}
 	dbpts := make(map[string]map[uint32]*DBPTInfo, 0)
 	dbpts["db0"] = pts
-	e2 := &Engine{DBPartitions: dbpts}
+	e2 := &EngineImpl{DBPartitions: dbpts}
 	if e2.TransferLeadership("db0", 1, 0, 0) != nil {
 		t.Fatal("Test_StorageTransferLeadership one DBPartitions error")
 	}
@@ -2225,7 +2670,7 @@ func Test_EngineTransferLeadership(t *testing.T) {
 
 func TestEngine_WriteToRaft_Panic(t *testing.T) {
 	proposeC := make(chan []byte)
-	mockEngine := &Engine{
+	mockEngine := &EngineImpl{
 		DBPartitions: map[string]map[uint32]*DBPTInfo{
 			"testdb": {
 				1: &DBPTInfo{
@@ -2284,6 +2729,21 @@ func TestEngine_CreateLogicalPlan(t *testing.T) {
 	assert2.Error(t, err, "not a measurement")
 }
 
+func TestExpiredShardsForMst(t *testing.T) {
+	dir := t.TempDir()
+	config.SetProductType(config.LogKeeperService)
+	eng, err := initEngine1(dir, config.TSSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+	mst := &meta.MeasurementTTLTnfo{
+		TTL: 1,
+	}
+	res := eng.ExpiredShardsForMst(defaultDb, defaultRp, mst)
+	require.Equal(t, len(res), 1)
+}
+
 func TestExpiredShards(t *testing.T) {
 	dir := t.TempDir()
 	config.SetProductType(config.LogKeeperService)
@@ -2329,6 +2789,39 @@ func getIndexDurationInfo(indexId uint64) *meta.IndexDurationInfo {
 	return indexDuration
 }
 
+func TestExpiredIndexesForMst(t *testing.T) {
+	options := &tsi.Options{}
+	options.EndTime(time.Time{})
+	options.Ident(&meta.IndexIdentifier{
+		Policy:  defaultRp,
+		OwnerDb: defaultDb,
+		OwnerPt: defaultPtId,
+		Index: &meta.IndexDescriptor{
+			TimeRange: meta.TimeRangeInfo{
+				StartTime: time.Time{},
+				EndTime:   time.Time{},
+			},
+		},
+	})
+	eng := &EngineImpl{
+		DBPartitions: map[string]map[uint32]*DBPTInfo{
+			defaultDb: {
+				defaultPtId: &DBPTInfo{
+					indexBuilder: map[uint64]*tsi.IndexBuilder{
+						1: tsi.NewIndexBuilder(options),
+					},
+					id: defaultPtId,
+				},
+			},
+		},
+	}
+	mst := &meta.MeasurementTTLTnfo{
+		TTL: 1,
+	}
+	res := eng.ExpiredIndexesForMst(defaultDb, defaultRp, mst)
+	require.Equal(t, len(res), 1)
+}
+
 func TestExpiredIndexes(t *testing.T) {
 	dir := t.TempDir()
 	eng, err := initEngine1(dir, config.TSSTORE)
@@ -2369,4 +2862,522 @@ func TestUpdateIndexDurationInfo(t *testing.T) {
 	indexDuration.Ident.OwnerPt = 1
 	err = eng.UpdateIndexDurationInfo(indexDuration, &nilIndexMap)
 	require.Equal(t, err.Error(), "pt not found")
+}
+
+func initShardMergeEngine1(dir string, engineType config.EngineType) (*EngineImpl, error) {
+	dataPath := filepath.Join(dir, dPath)
+	eng := &EngineImpl{
+		closed:       interruptsignal.NewInterruptSignal(),
+		dataPath:     dataPath + "/data",
+		walPath:      dataPath + "/wal",
+		DBPartitions: make(map[string]map[uint32]*DBPTInfo),
+		droppingDB:   make(map[string]string),
+		droppingRP:   make(map[string]string),
+		droppingMst:  make(map[string]string),
+		fileInfos:    nil,
+	}
+	eng.log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
+
+	loadCtx := getLoadCtx()
+	lockPath := filepath.Join(eng.dataPath, "LOCK")
+	dbPTInfo := NewDBPTInfo("db0", 0, eng.dataPath, eng.walPath, loadCtx, eng.fileInfos, nil)
+	dbPTInfo.lockPath = &lockPath
+	dbPTInfo.logger = eng.log
+	eng.addDBPTInfo(dbPTInfo)
+	reportLoadFrequency = time.Millisecond // 1ms
+	dbPTInfo.enableReportShardLoad()
+
+	indexPath := path.Join(dbPTInfo.path, "rp0", config.IndexFileDirectory,
+		"659_946252800000000000_946857600000000000", "mergeset")
+	_ = fileops.MkdirAll(indexPath, 0755)
+	client := metaclient.NewClient("", false, 0)
+	dbPTInfo.OpenIndexes(0, "rp0", config.TSSTORE, client)
+
+	indexBuilder := dbPTInfo.indexBuilder[659]
+	shardIdent1 := &meta.ShardIdentifier{ShardID: 1, ShardGroupID: 1, Policy: "rp0", OwnerDb: "db0", OwnerPt: 0}
+	shardDuration1 := &meta.DurationDescriptor{Tier: util.Warm, TierDuration: time.Hour, Duration: 24 * time.Hour, MergeDuration: 12 * time.Hour}
+	tr := &meta.TimeRangeInfo{StartTime: mustParseTime(time.RFC3339Nano, "2000-01-01T01:00:00Z"),
+		EndTime: mustParseTime(time.RFC3339Nano, "2000-01-01T02:00:00Z")}
+	shard1 := NewShard(eng.dataPath, eng.walPath, &lockPath, shardIdent1, shardDuration1, tr, DefaultEngineOption, engineType, nil)
+	shard1.indexBuilder = indexBuilder
+	shardIdent2 := &meta.ShardIdentifier{ShardID: 2, ShardGroupID: 1, Policy: "rp0", OwnerDb: "db0", OwnerPt: 0}
+	shardDuration2 := &meta.DurationDescriptor{Tier: util.Warm, TierDuration: time.Hour, Duration: 24 * time.Hour}
+	shard2 := NewShard(eng.dataPath, eng.walPath, &lockPath, shardIdent2, shardDuration2, tr, DefaultEngineOption, engineType, nil)
+	shardIdent3 := &meta.ShardIdentifier{ShardID: 3, ShardGroupID: 1, Policy: "rp0", OwnerDb: "db0", OwnerPt: 0}
+	shardDuration3 := &meta.DurationDescriptor{Tier: util.Warm, TierDuration: time.Hour, Duration: 24 * time.Hour, MergeDuration: 12 * time.Hour}
+	startTime := time.Now()
+	tr3 := &meta.TimeRangeInfo{StartTime: startTime, EndTime: startTime.Add(shardDuration3.Duration)}
+	shard3 := NewShard(eng.dataPath, eng.walPath, &lockPath, shardIdent3, shardDuration3, tr3, DefaultEngineOption, engineType, nil)
+	err := shard1.OpenAndEnable(nil)
+	if err != nil {
+		_ = shard1.Close()
+		return nil, err
+	}
+	err = shard2.OpenAndEnable(nil)
+	if err != nil {
+		_ = shard2.Close()
+		return nil, err
+	}
+	err = shard3.OpenAndEnable(nil)
+	if err != nil {
+		_ = shard3.Close()
+		return nil, err
+	}
+	dbPTInfo.shards[shard1.ident.ShardID] = shard1
+	dbPTInfo.shards[shard2.ident.ShardID] = shard2
+	dbPTInfo.shards[shard3.ident.ShardID] = shard3
+	return eng, nil
+}
+
+func TestStoreGetMergeShardsList(t *testing.T) {
+	dir := t.TempDir()
+	eng, err := initShardMergeEngine1(dir, config.TSSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng.Close()
+	mergeShardss := []meta2.MergeShards{
+		meta2.MergeShards{
+			DbName:        "db0",
+			PtId:          0,
+			RpName:        "rp0",
+			ShardIds:      []uint64{1},
+			ShardEndTimes: []int64{946692000000000000},
+		},
+	}
+	require.Equal(t, len(mergeShardss), 1)
+	for _, mergeShards := range mergeShardss {
+		err = eng.MergeShards(mergeShards)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func initShardMergeEngine2(dir string, engineType config.EngineType) (*EngineImpl, error) {
+	dataPath := filepath.Join(dir, dPath)
+	eng := &EngineImpl{
+		closed:       interruptsignal.NewInterruptSignal(),
+		dataPath:     dataPath + "/data",
+		walPath:      dataPath + "/wal",
+		DBPartitions: make(map[string]map[uint32]*DBPTInfo),
+		droppingDB:   make(map[string]string),
+		droppingRP:   make(map[string]string),
+		droppingMst:  make(map[string]string),
+		fileInfos:    nil,
+	}
+	eng.log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
+
+	loadCtx := getLoadCtx()
+	lockPath := filepath.Join(eng.dataPath, "LOCK")
+	dbPTInfo := NewDBPTInfo("db0", 0, eng.dataPath, eng.walPath, loadCtx, eng.fileInfos, nil)
+	dbPTInfo.lockPath = &lockPath
+	dbPTInfo.logger = eng.log
+	eng.addDBPTInfo(dbPTInfo)
+	reportLoadFrequency = time.Millisecond // 1ms
+	dbPTInfo.enableReportShardLoad()
+
+	indexPath := path.Join(dbPTInfo.path, "rp0", config.IndexFileDirectory, "527_946252800000000000_946857600000000000", "mergeset")
+	_ = fileops.MkdirAll(indexPath, 0755)
+	client := metaclient.NewClient("", false, 0)
+	dbPTInfo.OpenIndexes(0, "rp0", config.TSSTORE, client)
+
+	indexBuilder := dbPTInfo.indexBuilder[527]
+	shardIdent1 := &meta.ShardIdentifier{ShardID: 1, ShardGroupID: 1, Policy: "rp0", OwnerDb: "db0", OwnerPt: 0}
+	shardDuration1 := &meta.DurationDescriptor{Tier: util.Warm, TierDuration: time.Hour, Duration: time.Hour, MergeDuration: 24 * time.Hour}
+	tr1 := &meta.TimeRangeInfo{StartTime: mustParseTime(time.RFC3339Nano, "2000-01-01T01:00:00Z"),
+		EndTime: mustParseTime(time.RFC3339Nano, "2000-01-01T02:00:00Z")}
+	shardPath1 := path.Join(eng.dataPath, "1")
+	walPath1 := path.Join(eng.walPath, "1")
+	shard1 := NewShard(shardPath1, walPath1, &lockPath, shardIdent1, shardDuration1, tr1, DefaultEngineOption, engineType, nil)
+	shard1.indexBuilder = indexBuilder
+
+	shardIdent2 := &meta.ShardIdentifier{ShardID: 2, ShardGroupID: 2, Policy: "rp0", OwnerDb: "db0", OwnerPt: 0}
+	shardDuration2 := &meta.DurationDescriptor{Tier: util.Warm, TierDuration: time.Hour, Duration: time.Hour, MergeDuration: 24 * time.Hour}
+	tr2 := &meta.TimeRangeInfo{StartTime: mustParseTime(time.RFC3339Nano, "2000-01-01T02:00:00Z"),
+		EndTime: mustParseTime(time.RFC3339Nano, "2000-01-01T03:00:00Z")}
+	shardPath2 := path.Join(eng.dataPath, "2")
+	walPath2 := path.Join(eng.walPath, "2")
+	shard2 := NewShard(shardPath2, walPath2, &lockPath, shardIdent2, shardDuration2, tr2, DefaultEngineOption, engineType, nil)
+	shard2.indexBuilder = indexBuilder
+
+	err := shard1.OpenAndEnable(nil)
+	if err != nil {
+		_ = shard1.Close()
+		return nil, err
+	}
+	err = shard2.OpenAndEnable(nil)
+	if err != nil {
+		_ = shard2.Close()
+		return nil, err
+	}
+	dbPTInfo.shards[shard1.ident.ShardID] = shard1
+	dbPTInfo.shards[shard2.ident.ShardID] = shard2
+	return eng, nil
+}
+
+func TestStoreMergeShards(t *testing.T) {
+	dir := t.TempDir()
+	eng, err := initShardMergeEngine2(dir, config.TSSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	getTimeRangeFn := func(db, rp string, sShardId uint64, eShardId uint64) (*meta2.ShardTimeRangeInfo, error) {
+		return &meta2.ShardTimeRangeInfo{
+			TimeRange:     meta2.TimeRangeInfo{},
+			OwnerIndex:    meta2.IndexDescriptor{},
+			ShardDuration: &meta2.ShardDurationInfo{},
+			ShardType:     "",
+		}, nil
+	}
+	replaceMergeShardsFn := func(mergeShards meta2.MergeShards) error {
+		return nil
+	}
+	eng.metaClient = &MockMetaClient{
+		getTimeRange:       getTimeRangeFn,
+		replaceMergeShards: replaceMergeShardsFn,
+	}
+	defer eng.Close()
+	mergeShardss := []meta2.MergeShards{
+		meta2.MergeShards{
+			DbName:        "db0",
+			PtId:          0,
+			RpName:        "rp0",
+			ShardIds:      []uint64{1, 2},
+			ShardEndTimes: []int64{946692000000000000, 946695600000000000},
+			EngineType:    []config.EngineType{config.TSSTORE, config.TSSTORE},
+		},
+	}
+	if len(mergeShardss) != 1 {
+		t.Fatal(err)
+	}
+
+	for _, mergeShards := range mergeShardss {
+		err = eng.MergeShards(mergeShards)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	mergeShardss[0].ShardIds[0] = 3
+	err = eng.MergeShards(mergeShardss[0])
+	assert2.NotEqual(t, err, nil)
+
+	mergeShardss[0].PtId = 2
+	err = eng.MergeShards(mergeShardss[0])
+	assert2.Equal(t, err, nil)
+}
+
+func TestReplaceShards(t *testing.T) {
+	eng := &EngineImpl{
+		DBPartitions: make(map[string]map[uint32]*DBPTInfo),
+		log:          logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop()),
+	}
+	newShard := &shard{
+		ident:        &meta2.ShardIdentifier{ShardID: 1},
+		durationInfo: &meta.DurationDescriptor{},
+	}
+	shards := []Shard{&shard{
+		ident:        &meta2.ShardIdentifier{ShardID: 1},
+		cacheClosed:  1,
+		durationInfo: &meta.DurationDescriptor{},
+	}}
+	mergeShards := meta.MergeShards{
+		ShardIds: []uint64{1},
+	}
+	dbpt := &DBPTInfo{database: "db0", shards: make(map[uint64]Shard)}
+	err := eng.ReplaceShards(newShard, shards, "", dbpt, mergeShards)
+	assert2.NotEqual(t, err, nil)
+
+	eng.DBPartitions["db0"] = map[uint32]*DBPTInfo{}
+	eng.DBPartitions["db0"][0] = dbpt
+	err = eng.ReplaceShards(newShard, shards, "", dbpt, mergeShards)
+	assert2.Equal(t, err, nil)
+
+	shards1 := []Shard{&shard{
+		ident:          &meta2.ShardIdentifier{ShardID: 1},
+		stopDownSample: util.NewSignal(),
+		log:            eng.log,
+		immTables:      immutable.NewTableStore("", nil, nil, false, nil),
+		closed:         interruptsignal.NewInterruptSignal(),
+		wal:            &WAL{},
+		storage:        &tsstoreImpl{},
+		obsOpt:         &obs.ObsOptions{},
+		durationInfo:   &meta.DurationDescriptor{},
+	}}
+	lockPath := "lock"
+	dbpt.lockPath = &lockPath
+	eng.DBPartitions["db0"] = map[uint32]*DBPTInfo{}
+	eng.DBPartitions["db0"][0] = dbpt
+	nodeMutableLimit.initNodeMemBucket(time.Second*10, 100)
+	err = eng.ReplaceShards(newShard, shards1, "", dbpt, mergeShards)
+	assert2.Equal(t, err, nil)
+}
+
+func TestClearShardEvent(t *testing.T) {
+	dir := t.TempDir()
+	dataPath := filepath.Join(dir, dPath)
+	eng := &EngineImpl{
+		closed:               interruptsignal.NewInterruptSignal(),
+		dataPath:             dataPath + "/data",
+		DBPartitions:         make(map[string]map[uint32]*DBPTInfo, 64),
+		droppingDB:           make(map[string]string),
+		droppingRP:           make(map[string]string),
+		droppingMst:          make(map[string]string),
+		migratingDbPT:        make(map[string]map[uint32]struct{}),
+		clearRepColdShardMap: make(map[string]struct{}),
+		clearRepColdIndexMap: make(map[string]struct{}),
+	}
+	defer eng.Close()
+	eng.log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
+	eng.engOpt.ShardMutableSizeLimit = 30 * 1024 * 1024
+	eng.engOpt.NodeMutableSizeLimit = 1e9
+	eng.engOpt.MaxWriteHangTime = time.Second
+	client := metaclient.NewClient("", false, 0)
+	client.SetCacheData(&meta.Data{})
+	eng.SetMetaClient(client)
+
+	loadCtx := getLoadCtx()
+	eng.loadCtx = loadCtx
+	eng.CreateDBPT(defaultDb, defaultPtId, false)
+	eng.DBPartitions[defaultDb][defaultPtId].logger = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
+
+	shardTimeRange := getTimeRangeInfo()
+
+	// init instance
+	stat.StoreTaskInstance = stat.NewStoreTaskDuration(false)
+	msInfo := &meta.MeasurementInfo{
+		EngineType: config.TSSTORE,
+	}
+	err := eng.CreateShard(defaultDb, defaultRp, defaultPtId, defaultShardId, shardTimeRange, msInfo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng.metaClient = &mockMetaClient4Drop{}
+
+	err = eng.CreateShard(defaultDb, defaultRp, defaultPtId, 2, shardTimeRange, msInfo)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	shardPair := &msgservice_data.ShardPair{
+		NoClearShard: proto.Uint64(2),
+		ToClearShard: proto.Uint64(1),
+	}
+	err = eng.ClearShardRepCold(defaultDb, defaultRp, defaultPtId, shardPair)
+	require.NoError(t, err)
+	eng.metaClient = &mockMetaClient4Error{}
+	err = eng.ClearShardRepCold(defaultDb, defaultRp, defaultPtId, shardPair)
+	require.Error(t, err)
+}
+
+func TestClearIndexRepCold(t *testing.T) {
+	dir := t.TempDir()
+	dataPath := filepath.Join(dir, dPath)
+	eng := &EngineImpl{
+		closed:               interruptsignal.NewInterruptSignal(),
+		dataPath:             dataPath + "/data",
+		DBPartitions:         make(map[string]map[uint32]*DBPTInfo, 64),
+		droppingDB:           make(map[string]string),
+		droppingRP:           make(map[string]string),
+		droppingMst:          make(map[string]string),
+		migratingDbPT:        make(map[string]map[uint32]struct{}),
+		clearRepColdShardMap: make(map[string]struct{}),
+		clearRepColdIndexMap: make(map[string]struct{}),
+	}
+	defer eng.Close()
+	eng.log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
+	eng.engOpt.ShardMutableSizeLimit = 30 * 1024 * 1024
+	eng.engOpt.NodeMutableSizeLimit = 1e9
+	eng.engOpt.MaxWriteHangTime = time.Second
+	client := metaclient.NewClient("", false, 0)
+	client.SetCacheData(&meta.Data{})
+	eng.SetMetaClient(client)
+
+	loadCtx := getLoadCtx()
+	eng.loadCtx = loadCtx
+	eng.CreateDBPT(defaultDb, defaultPtId, false)
+	eng.DBPartitions[defaultDb][defaultPtId].logger = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
+
+	shardTimeRange := getTimeRangeInfo()
+
+	// init instance
+	stat.StoreTaskInstance = stat.NewStoreTaskDuration(false)
+	msInfo := &meta.MeasurementInfo{
+		EngineType: config.TSSTORE,
+	}
+	err := eng.CreateShard(defaultDb, defaultRp, defaultPtId, defaultShardId, shardTimeRange, msInfo)
+	if err != nil {
+		panic(err)
+	}
+	eng.metaClient = &mockMetaClient4Drop{}
+
+	err = eng.CreateShard(defaultDb, defaultRp, defaultPtId, 2, shardTimeRange, msInfo)
+	if err != nil {
+		panic(err)
+	}
+	indexPair := &msgservice_data.IndexPair{
+		NoClearIndex: proto.Uint64(10),
+		ToClearIndex: proto.Uint64(10),
+	}
+	err = eng.ClearIndexRepCold(defaultDb, defaultRp, defaultPtId, indexPair)
+	require.Error(t, err, "nil idx")
+
+	indexPair = &msgservice_data.IndexPair{
+		NoClearIndex: proto.Uint64(1),
+		ToClearIndex: proto.Uint64(1),
+	}
+	eng.metaClient = &mockMetaClient4Error{}
+	err = eng.ClearIndexRepCold(defaultDb, defaultRp, defaultPtId, indexPair)
+	require.Error(t, err)
+}
+
+func TestClearRepCold(t *testing.T) {
+	dir := t.TempDir()
+	dataPath := filepath.Join(dir, dPath)
+	eng := &EngineImpl{
+		closed:               interruptsignal.NewInterruptSignal(),
+		dataPath:             dataPath + "/data",
+		DBPartitions:         make(map[string]map[uint32]*DBPTInfo, 64),
+		droppingDB:           make(map[string]string),
+		droppingRP:           make(map[string]string),
+		droppingMst:          make(map[string]string),
+		migratingDbPT:        make(map[string]map[uint32]struct{}),
+		clearRepColdShardMap: make(map[string]struct{}),
+		clearRepColdIndexMap: make(map[string]struct{}),
+	}
+	defer eng.Close()
+	eng.log = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
+	eng.engOpt.ShardMutableSizeLimit = 30 * 1024 * 1024
+	eng.engOpt.NodeMutableSizeLimit = 1e9
+	eng.engOpt.MaxWriteHangTime = time.Second
+	client := metaclient.NewClient("", false, 0)
+	client.SetCacheData(&meta.Data{})
+	eng.SetMetaClient(client)
+
+	loadCtx := getLoadCtx()
+	eng.loadCtx = loadCtx
+	eng.CreateDBPT(defaultDb, defaultPtId, false)
+	eng.DBPartitions[defaultDb][defaultPtId].logger = logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop())
+
+	shardTimeRange := getTimeRangeInfo()
+
+	// init instance
+	stat.StoreTaskInstance = stat.NewStoreTaskDuration(false)
+	msInfo := &meta.MeasurementInfo{
+		EngineType: config.TSSTORE,
+	}
+	err := eng.CreateShard(defaultDb, defaultRp, defaultPtId, defaultShardId, shardTimeRange, msInfo)
+	if err != nil {
+		panic(err)
+	}
+	eng.metaClient = &mockMetaClient4Drop{}
+
+	err = eng.CreateShard(defaultDb, defaultRp, defaultPtId, 2, shardTimeRange, msInfo)
+	if err != nil {
+		panic(err)
+	}
+
+	var req *msgservice.SendClearEventsRequest
+	var nodeid uint64 = 2
+	var db string = "db0"
+	var pt uint32 = 1
+	var noClearIndex uint64 = 1
+	var ClearIndex uint64 = 2
+	var noClearShardId uint64 = 1
+	var clearShardId uint64 = 2
+	var pair *msgservice_data.Pair = &msgservice_data.Pair{
+		IndexInfo: &msgservice_data.IndexPair{
+			NoClearIndex: &noClearIndex,
+			ToClearIndex: &ClearIndex,
+		},
+		ShardInfo: []*msgservice_data.ShardPair{
+			&msgservice_data.ShardPair{
+				NoClearShard: &noClearShardId,
+				ToClearShard: &clearShardId,
+			},
+		},
+	}
+	req = &msgservice.SendClearEventsRequest{
+		ClearEventsRequest: msgservice_data.ClearEventsRequest{
+			NodeId:   &nodeid,
+			Database: &db,
+			PtId:     &pt,
+			Pair:     pair,
+		},
+	}
+	err = eng.ClearRepCold(req)
+	require.Error(t, err, "nil idx")
+}
+
+func TestStoreMergeShardsErr(t *testing.T) {
+	dir := t.TempDir()
+	eng, err := initShardMergeEngine2(dir, config.TSSTORE)
+	if err != nil {
+		t.Fatal(err)
+	}
+	getTimeRangeFn := func(db, rp string, sShardId uint64, eShardId uint64) (*meta2.ShardTimeRangeInfo, error) {
+		return &meta2.ShardTimeRangeInfo{
+			TimeRange:     meta2.TimeRangeInfo{},
+			OwnerIndex:    meta2.IndexDescriptor{},
+			ShardDuration: &meta2.ShardDurationInfo{},
+			ShardType:     "",
+		}, nil
+	}
+	replaceMergeShardsFn := func(mergeShards meta2.MergeShards) error {
+		return fmt.Errorf("replace err")
+	}
+	eng.metaClient = &MockMetaClient{
+		getTimeRange:       getTimeRangeFn,
+		replaceMergeShards: replaceMergeShardsFn,
+	}
+	defer eng.Close()
+	mergeShardss := []meta2.MergeShards{
+		meta2.MergeShards{
+			DbName:        "db0",
+			PtId:          0,
+			RpName:        "rp0",
+			ShardIds:      []uint64{1, 2},
+			ShardEndTimes: []int64{946692000000000000, 946695600000000000},
+			EngineType:    []config.EngineType{config.TSSTORE, config.TSSTORE},
+		},
+	}
+	if len(mergeShardss) != 1 {
+		t.Fatal(err)
+	}
+
+	for _, mergeShards := range mergeShardss {
+		err = eng.MergeShards(mergeShards)
+		assert2.Equal(t, err.Error(), "replace err")
+	}
+
+	replaceMergeShardsFn1 := func(mergeShards meta2.MergeShards) error {
+		return nil
+	}
+	getTimeRangeFn1 := func(db, rp string, sShardId uint64, eShardId uint64) (*meta2.ShardTimeRangeInfo, error) {
+		return nil, fmt.Errorf("getTimeRange err")
+	}
+	eng.metaClient = &MockMetaClient{
+		getTimeRange:       getTimeRangeFn1,
+		replaceMergeShards: replaceMergeShardsFn1,
+	}
+	for _, mergeShards := range mergeShardss {
+		err = eng.MergeShards(mergeShards)
+		assert2.Equal(t, err.Error(), "getTimeRange err")
+	}
+}
+
+type mockMetaObs struct {
+	metaclient.MetaClient
+}
+
+func (m *mockMetaObs) DatabaseOption(database string) (*obs.ObsOptions, error) {
+	opt := &obs.ObsOptions{
+		Enabled:    true,
+		BucketName: "OBS_Bucket",
+		Endpoint:   "obs.cn-north-7.ulanqab",
+		Ak:         "123dhged",
+		Sk:         "3rhgj567",
+		BasePath:   "test_1",
+	}
+	return opt, nil
 }

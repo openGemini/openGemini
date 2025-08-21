@@ -57,6 +57,33 @@ func TestGetShardInfoRequest_Marshal_Unmarshal(t *testing.T) {
 	assert.Equal(t, resp, myResp)
 }
 
+func TestSendBackupToMeta_Marshal_Unmarshal(t *testing.T) {
+	var buf []byte
+	var err error
+	req := message.SendBackupToMetaRequest{
+		Mod:   "123",
+		Param: make(map[string]string),
+	}
+	buf, _ = req.Marshal(nil)
+	newReqMessage := req.Instance()
+	err = newReqMessage.Unmarshal(nil)
+	assert.NoError(t, err)
+	err = newReqMessage.Unmarshal(buf)
+	assert.NoError(t, err)
+	assert.Equal(t, newReqMessage.Size(), req.Size())
+
+	res := message.SendBackupToMetaResponse{
+		Result: []byte{1, 2, 3},
+	}
+	buf, _ = res.Marshal(nil)
+	newResMessage := res.Instance()
+	err = newResMessage.Unmarshal(nil)
+	assert.NoError(t, err)
+	err = newResMessage.Unmarshal(buf)
+	assert.NoError(t, err)
+	assert.Equal(t, newResMessage.Size(), res.Size())
+}
+
 func TestUserInfoMessage(t *testing.T) {
 	var buf []byte
 	var err error

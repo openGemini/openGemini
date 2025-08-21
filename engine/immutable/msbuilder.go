@@ -428,7 +428,7 @@ func (b *MsBuilder) SetTimeSorted(timeSorted bool) {
 	b.timeSorted = timeSorted
 }
 
-func (b *MsBuilder) writePrimaryIndex(writeRec *record.Record, pkSchema record.Schemas, filepath, lockpath string, tcLocation int8, rowsPerSegment []int, fixRowsPerSegment int) error {
+func (b *MsBuilder) WritePrimaryIndex(writeRec *record.Record, pkSchema record.Schemas, filepath, lockpath string, tcLocation int8, rowsPerSegment []int, fixRowsPerSegment int) error {
 	// Generate the primary key record from the sorted chunk based on the primary key.
 	pkRec, pkMark, err := b.pkIndexWriter.Build(writeRec, pkSchema, rowsPerSegment, tcLocation, fixRowsPerSegment)
 	if err != nil {
@@ -1087,7 +1087,7 @@ func (b *MsBuilder) writeIndex(writeRecord *record.Record, schema record.Schemas
 	if len(schema) != 0 || b.tcLocation > colstore.DefaultTCLocation {
 		dataFilePath := b.FileName.String()
 		indexFilePath := path.Join(b.Path, b.msName, colstore.AppendPKIndexSuffix(dataFilePath)+tmpFileSuffix)
-		if err := b.writePrimaryIndex(writeRecord, schema, indexFilePath, *b.lock, b.tcLocation, rowsPerSegment, fixRowsPerSegment); err != nil {
+		if err := b.WritePrimaryIndex(writeRecord, schema, indexFilePath, *b.lock, b.tcLocation, rowsPerSegment, fixRowsPerSegment); err != nil {
 			logger.GetLogger().Error("write primary key file failed", zap.String("mstName", b.msName), zap.Error(err))
 			return err
 		}

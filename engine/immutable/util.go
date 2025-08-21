@@ -14,10 +14,29 @@
 
 package immutable
 
+import (
+	"path/filepath"
+
+	"github.com/openGemini/openGemini/engine/immutable/colstore"
+)
+
 func SumFilesSize(files []TSSPFile) int64 {
 	var size int64 = 0
 	for _, f := range files {
 		size += f.FileSize()
 	}
 	return size
+}
+
+func BuildPKFilePathFromTSSP(path string) string {
+	if len(path) == 0 {
+		return ""
+	}
+	ext := filepath.Ext(path)
+	if ext == tmpFileSuffix {
+		path = path[:len(path)-len(tmpFileSuffix)]
+		ext = filepath.Ext(path)
+	}
+
+	return colstore.AppendPKIndexSuffix(path[:len(path)-len(ext)])
 }

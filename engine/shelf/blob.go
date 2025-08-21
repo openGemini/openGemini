@@ -26,10 +26,12 @@ import (
 	"github.com/openGemini/openGemini/lib/codec"
 	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/spdy/transport"
 	"github.com/openGemini/openGemini/lib/util"
 )
 
 type Blob struct {
+	// used to collect statistics on the write delay
 	tm      time.Time
 	err     error
 	done    func()
@@ -39,6 +41,50 @@ type Blob struct {
 	// | 4-byte blob size | series key | record |
 	data []byte
 	tr   util.TimeRange
+}
+
+func (b *Blob) Marshal(buf []byte) ([]byte, error) {
+	var err error
+	buf = codec.AppendUint64(buf, b.hash)
+	buf = codec.AppendBytes(buf, b.data)
+
+	// Encode timeRange using int instead of timeRange's own marshal functions
+	buf = codec.AppendInt64(buf, b.tr.Max)
+	buf = codec.AppendInt64(buf, b.tr.Min)
+
+	return buf, err
+}
+
+func (b *Blob) Unmarshal(buf []byte) error {
+	if len(buf) == 0 {
+		return nil
+	}
+	var err error
+	dec := codec.NewBinaryDecoder(buf)
+	b.hash = dec.Uint64()
+	b.data = append(b.data[:0], dec.BytesNoCopy()...)
+
+	// Encode timeRange using int instead of timeRange's own unmarshal functions
+	b.tr.Max = dec.Int64()
+	b.tr.Min = dec.Int64()
+
+	return err
+}
+
+func (b *Blob) Size() int {
+	size := 0
+	size += codec.SizeOfUint64()
+	size += codec.SizeOfByteSlice(b.data)
+
+	// count timeRange size using int instead of timeRange's own size
+	size += codec.SizeOfInt64()
+	size += codec.SizeOfInt64()
+
+	return size
+}
+
+func (b *Blob) Instance() transport.Codec {
+	return &Blob{}
 }
 
 func (b *Blob) ResetTime() {
@@ -98,6 +144,10 @@ func (b *Blob) Error() error {
 	return b.err
 }
 
+func (b *Blob) Data() []byte {
+	return b.data
+}
+
 func (b *Blob) IsEmpty() bool {
 	return len(b.data) == 0
 }
@@ -136,14 +186,13 @@ type BlobGroup struct {
 	tm    time.Time
 	size  uint64
 	blobs []Blob
+	rec   *record.Record
 }
 
 func NewBlobGroup(size int) (*BlobGroup, func()) {
 	group := blobGroupPool.Get()
 	group.Init(size)
-	return group, func() {
-		blobGroupPool.PutWithMemSize(group, 0)
-	}
+	return group, group.Release
 }
 
 func (bg *BlobGroup) Init(size int) {
@@ -152,6 +201,13 @@ func (bg *BlobGroup) Init(size int) {
 	for i := range bg.blobs {
 		bg.blobs[i].Reset()
 	}
+}
+
+func (bg *BlobGroup) GetRecord() *record.Record {
+	if bg.rec == nil {
+		bg.rec = &record.Record{}
+	}
+	return bg.rec
 }
 
 func (bg *BlobGroup) Walk(fn func(blob *Blob)) {
@@ -185,4 +241,81 @@ func (bg *BlobGroup) Error() error {
 		}
 	}
 	return nil
+}
+
+func (bg *BlobGroup) GetBlobs() []Blob {
+	return bg.blobs
+}
+
+func (bg *BlobGroup) SetBlobs(blobs []Blob) {
+	bg.blobs = blobs
+}
+
+func (bg *BlobGroup) Release() {
+	blobGroupPool.PutWithMemSize(bg, bg.MemSize())
+}
+
+func (bg *BlobGroup) MemSize() int {
+	size := 0
+	for i := range bg.blobs {
+		size += cap(bg.blobs[i].data)
+	}
+	return size
+}
+
+func (bg *BlobGroup) Marshal(buf []byte) ([]byte, error) {
+	var err error
+
+	buf = codec.AppendUint32(buf, uint32(len(bg.blobs)))
+	for _, item := range bg.blobs {
+		buf = codec.AppendUint32(buf, uint32(item.Size()))
+		buf, err = item.Marshal(buf)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return buf, err
+}
+
+func (bg *BlobGroup) Unmarshal(buf []byte) error {
+	if len(buf) == 0 {
+		return nil
+	}
+	var err error
+	dec := codec.NewBinaryDecoder(buf)
+
+	blobsLen := int(dec.Uint32())
+	if blobsLen > 0 {
+		bg.blobs = slices.Grow(bg.blobs[:0], blobsLen)[:blobsLen]
+		for i := 0; i < blobsLen; i++ {
+			subBuf := dec.BytesNoCopy()
+			if len(subBuf) == 0 {
+				continue
+			}
+
+			bg.blobs[i].Reset()
+			if err := bg.blobs[i].Unmarshal(subBuf); err != nil {
+				return err
+			}
+		}
+	}
+
+	return err
+}
+
+func (bg *BlobGroup) Size() int {
+	size := 0
+
+	size += codec.MaxSliceSize
+	for _, item := range bg.blobs {
+		size += codec.SizeOfUint32()
+		size += item.Size()
+	}
+
+	return size
+}
+
+func (bg *BlobGroup) Instance() transport.Codec {
+	return &BlobGroup{}
 }

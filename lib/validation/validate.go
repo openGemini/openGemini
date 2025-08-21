@@ -15,11 +15,10 @@
 package validation
 
 import (
-	"bytes"
+	"strings"
 	"time"
 
 	prompb2 "github.com/VictoriaMetrics/VictoriaMetrics/lib/prompb"
-	"github.com/openGemini/openGemini/lib/util"
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/prompb"
 )
@@ -38,8 +37,8 @@ const (
 // The returned metric name string is a reference to the label value (no copy).
 func MetricNameFromLabels(labels []prompb2.Label) string {
 	for _, label := range labels {
-		if util.Bytes2str(label.Name) == model.MetricNameLabel {
-			return util.Bytes2str(label.Value)
+		if label.Name == model.MetricNameLabel {
+			return label.Value
 		}
 	}
 	return ""
@@ -88,7 +87,7 @@ func ValidateLabels(userID string, ls []prompb2.Label, unsafeMetricName string) 
 
 	maxLabelNameLength := limits.MaxLabelNameLength(userID)
 	maxLabelValueLength := limits.MaxLabelValueLength(userID)
-	lastLabelName := []byte{}
+	lastLabelName := ""
 	for _, l := range ls {
 		if !model.LabelName(l.Name).IsValid() {
 			return newInvalidLabelError(ls, l.Name)
@@ -96,7 +95,7 @@ func ValidateLabels(userID string, ls []prompb2.Label, unsafeMetricName string) 
 			return newLabelNameTooLongError(ls, l.Name)
 		} else if len(l.Value) > maxLabelValueLength {
 			return newLabelValueTooLongError(ls, l.Value)
-		} else if cmp := bytes.Compare(lastLabelName, l.Name); cmp >= 0 {
+		} else if cmp := strings.Compare(lastLabelName, l.Name); cmp >= 0 {
 			if cmp == 0 {
 				return newDuplicatedLabelError(ls, l.Name)
 			}

@@ -202,9 +202,11 @@ class MetadataProcessor:
         con.CONFIG_FILE,
         con.PROCESS_TYPE,
         con.QUERY_MODE,
+        con.ALGORITHM_PARAMS,
+        con.METRIC
     ]
-    not_necessary_for_stream = [con.OUTPUT_INFO, con.QUERY_MODE, con.PROCESS_TYPE]
-    not_necessary_for_batch = [con.OUTPUT_INFO, con.QUERY_MODE]
+    not_necessary_for_stream = [con.OUTPUT_INFO, con.QUERY_MODE, con.PROCESS_TYPE, con.ALGORITHM_PARAMS, con.METRIC]
+    not_necessary_for_batch = [con.OUTPUT_INFO, con.QUERY_MODE, con.ALGORITHM_PARAMS, con.METRIC]
 
     special_keys = output_key + not_output_key
 
@@ -235,10 +237,18 @@ class MetadataProcessor:
                 self._output_metadata[k] = v
 
     def _valid(self, keys: Set[bytes]):
+        process_type = self.get_value(con.PROCESS_TYPE)
+        if process_type is None:
+            raise KeyError(
+                "Parameter %s in metadata is missing" % con.PROCESS_TYPE
+            )
+        if process_type == con.CUSTOM_UDF_DETECT:
+            keys.difference_update({con.CONFIG_FILE})
+
         not_in_info = keys - set(self._info.keys())
         if len(not_in_info) > 0:
             raise KeyError(
-                "Information is miss in metadata, %s are necessary" % list(not_in_info)
+                "Parameter %s in metadata is missing" % list(not_in_info)
             )
 
     def process(self, mode: str = "batch"):
@@ -255,3 +265,7 @@ class MetadataProcessor:
     ) -> None:
         self._valid(necessary_keys)
         self._filter(with_other_info)
+
+    def is_custom_udf(self) -> bool:
+        process_type = self.get_value(con.PROCESS_TYPE)
+        return process_type == con.CUSTOM_UDF_DETECT

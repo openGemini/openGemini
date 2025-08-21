@@ -22,6 +22,7 @@ import (
 	"math"
 	"net"
 	"path"
+	"path/filepath"
 	"reflect"
 	"runtime/debug"
 	"slices"
@@ -57,9 +58,10 @@ import (
 
 // Retention policy settings.
 const (
-	autoCreateRetentionPolicyName       = "autogen"
-	autoCreateRetentionPolicyPeriod     = 0
-	autoCreateRetentionPolicyWarmPeriod = 0
+	autoCreateRetentionPolicyName            = "autogen"
+	autoCreateRetentionPolicyPeriod          = 0
+	autoCreateRetentionPolicyWarmPeriod      = 0
+	autoCreateRetentionPolicyIndexColdPeriod = 0
 
 	reportTimeSpan = 10 * time.Second
 
@@ -384,6 +386,7 @@ type Store struct {
 	config *config.Meta
 
 	data        *meta.Data
+	dataRecover *meta.DataRecover
 	dataChanged chan struct{}
 	path        string
 	opened      bool
@@ -408,7 +411,7 @@ type Store struct {
 		MigratePt(nodeID uint64, data transport.Codec, cb transport.Callback) error
 		SendSegregateNodeCmds(nodeIDs []uint64, address []string) (int, error)
 		TransferLeadership(database string, nodeId uint64, oldMasterPtId, newMasterPtId uint32) error
-		Ping(nodeID uint64, address string, timeout time.Duration) error
+		SendClearEvents(nodeId uint64, data transport.Codec) error
 	}
 
 	statMu       sync.RWMutex
@@ -494,6 +497,7 @@ func (s *Store) checkLeaderChanged() {
 				go s.checkDelete(DeleteDatabase)
 				go s.checkDelete(DeleteRp)
 				go s.checkDelete(DeleteMeasurement)
+				go s.RepairPT(time.Minute)
 				continue
 			}
 
@@ -1397,7 +1401,7 @@ func (s *Store) close() error {
 		errRaft = s.raft.Close()
 	}
 	if errSQLite != nil || errRaft != nil {
-		return fmt.Errorf(errSQLite.Error() + errRaft.Error())
+		return fmt.Errorf("%s", errSQLite.Error()+errRaft.Error())
 	}
 	return nil
 }
@@ -1476,7 +1480,7 @@ func (s *Store) getSnapshotV2(role mclient.Role, OldIndex uint64, nodeId uint64)
 		buf := dataOps.Marshal()
 		stat.NewMetaStatistics().AddGetFromOpsMapTotal(1)
 		stat.NewMetaStatistics().AddGetFromOpsMapLenTotal(int64(dataOps.Len()))
-		logger.GetLogger().Info("serveSnapshotV2Op ok", zap.Uint64("oldindex", OldIndex), zap.Uint64("newindex", s.index()), zap.Int("opNum", len(dataOps.GetOps())), zap.Int64("len", int64(len(buf))))
+		logger.GetLogger().Debug("serveSnapshotV2Op ok", zap.Uint64("oldindex", OldIndex), zap.Uint64("newindex", s.index()), zap.Int("opNum", len(dataOps.GetOps())), zap.Int64("len", int64(len(buf))))
 		return buf
 	} else if state == meta.AllClear {
 		dataPb := s.data.MarshalV2()
@@ -1485,7 +1489,7 @@ func (s *Store) getSnapshotV2(role mclient.Role, OldIndex uint64, nodeId uint64)
 		buf := dataOps.Marshal()
 		stat.NewMetaStatistics().AddGetFromDataMarshalTotal(1)
 		stat.NewMetaStatistics().AddGetFromDataMarshalLenTotal(int64(len(buf)))
-		logger.GetLogger().Info("serveSnapshotV2Data ok", zap.Uint64("oldindex", OldIndex), zap.Uint64("newindex", s.index()), zap.Int64("len", int64(len(buf))))
+		logger.GetLogger().Debug("serveSnapshotV2Data ok", zap.Uint64("oldindex", OldIndex), zap.Uint64("newindex", s.index()), zap.Int64("len", int64(len(buf))))
 		return buf
 	} else {
 		dataOps := meta.NewDataOps(nil, s.data.MaxCQChangeID, int(state), s.data.Index)
@@ -1493,7 +1497,7 @@ func (s *Store) getSnapshotV2(role mclient.Role, OldIndex uint64, nodeId uint64)
 		buf := dataOps.Marshal()
 		stat.NewMetaStatistics().AddGetFromOpsMapTotal(1)
 		stat.NewMetaStatistics().AddGetFromOpsMapLenTotal(int64(dataOps.Len()))
-		logger.GetLogger().Info("serveSnapshotV2CQ2 ok", zap.Uint64("oldindex", OldIndex), zap.Uint64("newindex", s.index()), zap.Int64("len", int64(len(buf))))
+		logger.GetLogger().Debug("serveSnapshotV2CQ2 ok", zap.Uint64("oldindex", OldIndex), zap.Uint64("newindex", s.index()), zap.Int64("len", int64(len(buf))))
 		return buf
 	}
 }
@@ -1718,6 +1722,17 @@ func (s *Store) userSnapshot(version uint32) error {
 		return fmt.Errorf("error version")
 	}
 	return s.raft.UserSnapshot()
+}
+func (s *Store) MeteRecover() {
+
+	// recover data
+	if s.config.MetaRecover {
+		s.dataRecover.RecoverMeta(filepath.Join(s.config.DataDir, "data"), s.data)
+	}
+	err := s.userSnapshot(0)
+	if err != nil {
+		logger.GetLogger().Error("meta recover err", zap.Error(err))
+	}
 }
 
 func (s *Store) reSharding(db string, rp string, sgId uint64, splitTime int64, shardBounds []string) error {
@@ -2377,6 +2392,13 @@ func (s *Store) getDbPtsByDbname(db string, enableTagArray bool, replicasN uint3
 	return ptInfos, err
 }
 
+func (s *Store) getDbPtsByDbnameV2(db string) []*meta.DbPtInfo {
+	s.mu.RLock()
+	ptInfos := s.data.GetPtInfosByDbnameV2(db)
+	s.mu.RUnlock()
+	return ptInfos
+}
+
 func TransMeasurementInfos2Bytes(dataTypes []int64, rpInfos *meta.RetentionPolicyInfo) ([]byte, error) {
 	d := &meta.RpMeasurementsFieldsInfo{
 		MeasurementInfos: make([]*meta.MeasurementFieldsInfo, 0),
@@ -2865,6 +2887,25 @@ func (s *Store) ModifyRepDBMasterPt(db string, rgId uint32, newMasterPtId uint32
 		return err
 	}
 	return globalService.store.updateReplication(db, rgId, newMasterId, newPeers)
+}
+
+func (s *Store) RecoverMetaData(databases []string, metaData []byte, nodeMap map[uint64]uint64) error {
+	return globalService.store.recoverMetaData(databases, metaData, nodeMap)
+}
+
+func (s *Store) recoverMetaData(databases []string, metaData []byte, nodeMap map[uint64]uint64) error {
+	val := &mproto.RecoverMetaDataCommand{
+		Databases: databases,
+		MetaData:  metaData,
+		NodeMap:   nodeMap,
+	}
+	t := mproto.Command_RecoverMetaData
+	cmd := &mproto.Command{Type: &t}
+	if err := proto.SetExtension(cmd, mproto.E_RecoverMetaDataCommand_Command, val); err != nil {
+		return err
+	}
+
+	return s.ApplyCmd(cmd)
 }
 
 func (s *Store) TransferLeadershipEnd(database string, rgId, oldMasterId, newMasterId uint32, err error) {

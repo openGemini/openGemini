@@ -467,7 +467,7 @@ func (t *Transpiler) transpilePromFunc(aggFn aggregateFn, inArgs []influxql.Node
 	case *influxql.SelectStatement:
 		field, _ := getSelectFieldIdx(statement)
 		switch field.Expr.(type) {
-		case *influxql.Call:
+		case *influxql.Call, *influxql.BinaryExpr:
 			selectStatement := &influxql.SelectStatement{
 				Sources: []influxql.Source{
 					&influxql.SubQuery{

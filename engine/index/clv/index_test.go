@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/stretchr/testify/assert"
 )
 
 type searchTestTag struct {
@@ -270,9 +271,7 @@ func TestIntersectForDifferentSid(t *testing.T) {
 			RHS: &influxql.BinaryExpr{Op: influxql.EQ, LHS: &influxql.VarRef{Val: "status"}, RHS: &influxql.IntegerLiteral{Val: 200}}},
 	}
 	invert := IntersectInvertIndexAndExpr(li, ri)
-	if !reflect.DeepEqual(ll, invert) {
-		t.Fatalf("get invert rowfilter, exp:%v get:%v", ll, invert)
-	}
+	assert.Equal(t, ll, invert)
 }
 
 func TestIntersectForNullInvert(t *testing.T) {
@@ -294,9 +293,7 @@ func TestIntersectForNullInvert(t *testing.T) {
 			RHS: &influxql.BinaryExpr{Op: influxql.EQ, LHS: &influxql.VarRef{Val: "status"}, RHS: &influxql.IntegerLiteral{Val: 200}}},
 	}
 	invert := IntersectInvertIndexAndExpr(li, ri)
-	if !reflect.DeepEqual(ll, invert) {
-		t.Fatalf("get invert rowfilter, exp:%v get:%v", ll, invert)
-	}
+	assert.Equal(t, ll, invert)
 }
 
 func TestIntersectForSingleNullInvert(t *testing.T) {
@@ -329,9 +326,7 @@ func TestIntersectForSingleNullInvert(t *testing.T) {
 			RHS: &influxql.BinaryExpr{Op: influxql.EQ, LHS: &influxql.VarRef{Val: "status"}, RHS: &influxql.IntegerLiteral{Val: 200}}},
 	}
 	invert := IntersectInvertIndexAndExpr(li, ri)
-	if !reflect.DeepEqual(ll, invert) {
-		t.Fatalf("get invert rowfilter, exp:%v get:%v", ll, invert)
-	}
+	assert.Equal(t, ll, invert)
 }
 
 func TestUnionForSameSid(t *testing.T) {
@@ -367,9 +362,7 @@ func TestUnionForSameSid(t *testing.T) {
 			RHS: &influxql.BinaryExpr{Op: influxql.EQ, LHS: &influxql.VarRef{Val: "status"}, RHS: &influxql.IntegerLiteral{Val: 200}}},
 	}
 	invert := UnionInvertIndexAndExpr(li, ri)
-	if !reflect.DeepEqual(ll, invert) {
-		t.Fatalf("get invert rowfilter, exp:%v get:%v", ll, invert)
-	}
+	assert.Equal(t, ll, invert)
 }
 
 func TestUnionForDifferentSid(t *testing.T) {
@@ -409,9 +402,7 @@ func TestUnionForDifferentSid(t *testing.T) {
 			RHS: &influxql.BinaryExpr{Op: influxql.EQ, LHS: &influxql.VarRef{Val: "status"}, RHS: &influxql.IntegerLiteral{Val: 200}}},
 	}
 	invert := UnionInvertIndexAndExpr(li, ri)
-	if !reflect.DeepEqual(ll, invert) {
-		t.Fatalf("get invert rowfilter, exp:%v get:%v", ll, invert)
-	}
+	assert.Equal(t, ll, invert)
 }
 
 func TestUnionForNullSid(t *testing.T) {
@@ -433,9 +424,7 @@ func TestUnionForNullSid(t *testing.T) {
 			RHS: &influxql.BinaryExpr{Op: influxql.EQ, LHS: &influxql.VarRef{Val: "status"}, RHS: &influxql.IntegerLiteral{Val: 200}}},
 	}
 	invert := UnionInvertIndexAndExpr(li, ri)
-	if !reflect.DeepEqual(ll, invert) {
-		t.Fatalf("get invert rowfilter, exp:%v get:%v", ll, invert)
-	}
+	assert.Equal(t, ll, invert)
 }
 
 func TestUnionForSingleSid(t *testing.T) {
@@ -467,7 +456,5 @@ func TestUnionForSingleSid(t *testing.T) {
 			RHS: &influxql.BinaryExpr{Op: influxql.EQ, LHS: &influxql.VarRef{Val: "status"}, RHS: &influxql.IntegerLiteral{Val: 200}}},
 	}
 	invert := UnionInvertIndexAndExpr(li, ri)
-	if !reflect.DeepEqual(ll, invert) {
-		t.Fatalf("get invert rowfilter, exp:%v get:%v", ll, invert)
-	}
+	assert.Equal(t, ll, invert)
 }

@@ -27,6 +27,7 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -477,7 +478,7 @@ func TestNewLogicalHashAgg(t *testing.T) {
 
 func TestLogicalPlanNilNew(t *testing.T) {
 	logicalNode := []hybridqp.QueryNode{&executor.LogicalSlidingWindow{}, &executor.LogicalFilter{}, &executor.LogicalSortAppend{},
-		&executor.LogicalDedupe{}, &executor.LogicalFilterBlank{}, &executor.LogicalAlign{}, &executor.LogicalMst{}, &executor.LogicalSubQuery{},
+		&executor.LogicalDistinct{}, &executor.LogicalFilterBlank{}, &executor.LogicalAlign{}, &executor.LogicalMst{}, &executor.LogicalSubQuery{},
 		&executor.LogicalTagSubset{}, &executor.LogicalGroupBy{}, &executor.LogicalOrderBy{}, &executor.LogicalHttpSenderHint{},
 		&executor.LogicalTarget{}, &executor.LogicalDummyShard{}, &executor.LogicalTSSPScan{}, &executor.LogicalWriteIntoStorage{},
 		&executor.LogicalSequenceAggregate{}, &executor.LogicalSplitGroup{}, &executor.LogicalFullJoin{}, &executor.LogicalHoltWinters{},
@@ -704,37 +705,6 @@ func TestColumnStoreForSql(t *testing.T) {
 	planBuilder.Reader(config.ENGINETYPEEND)
 }
 
-func TestNewLogicalJoin(t *testing.T) {
-	schema := createQuerySchema()
-	node := executor.NewLogicalSeries(schema)
-	leftSubQuery := executor.NewLogicalSubQuery(node, schema)
-	rightSubQuery := executor.NewLogicalSubQuery(node, schema)
-	join := executor.NewLogicalJoin([]hybridqp.QueryNode{leftSubQuery, rightSubQuery}, schema)
-	newJoin := join.Clone()
-	if newJoin.Type() != join.Type() {
-		t.Error("wrong result")
-	}
-	str := join.Digest()
-	assert.Equal(t, join.Digest(), str)
-	tStr := join.String()
-	tType := join.Type()
-	planWriter := executor.NewLogicalPlanWriterImpl(&strings.Builder{})
-	join.Explain(planWriter)
-	if join == nil {
-		t.Error("wrong result")
-	} else {
-		fmt.Println(tStr, str, tType)
-	}
-	join.DeriveOperations()
-	assert.Equal(t, join.New(nil, nil, nil), nil)
-	defer func() {
-		if err := recover(); err != nil {
-			assert.Equal(t, err.(string), "validate all input of join failed")
-		}
-	}()
-	_ = executor.NewLogicalJoin(nil, schema)
-}
-
 func TestBuildInConditionPlan(t *testing.T) {
 	sql := "select id from students where \"name\" in (select \"name\" from students where score > 90)"
 	sqlReader := strings.NewReader(sql)
@@ -751,29 +721,59 @@ func TestBuildInConditionPlan(t *testing.T) {
 	if !ok {
 		t.Fatal(fmt.Errorf("invalid SelectStatement"))
 	}
-	selectStmt1, selectStmt2 := selectStmt.Clone(), selectStmt.Clone()
+
 	schema := createQuerySchema()
+	inCondition, ok := selectStmt.Condition.(*influxql.InCondition)
+	if !ok {
+		t.Fatal(fmt.Errorf("invalid inCondition"))
+	}
+	schema.InConditons = append(schema.InConditons, inCondition)
 
 	creator := NewMockShardGroup()
 	table := NewTable("students")
 	table.AddDataTypes(map[string]influxql.DataType{"id": influxql.Integer, "name": influxql.String, "score": influxql.Float, "good": influxql.Boolean})
 	creator.AddShard(table)
-
+	builder := executor.NewLogicalPlanBuilderImpl(schema)
+	inCondition.Csming = creator
 	schema.Options().(*query.ProcessorOptions).Condition = selectStmt.Condition
-	_, _, err = executor.BuildInConditionPlan(context.Background(), creator, selectStmt, schema)
+	_, err = executor.BuildInConditionPlan(context.Background(), creator, selectStmt, schema, builder)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	createPlanErr = true
-	schema.Options().(*query.ProcessorOptions).Condition = selectStmt1.Condition
-	_, _, err = executor.BuildInConditionPlan(context.Background(), creator, selectStmt1, schema)
-	assert.Equal(t, strings.Contains(err.Error(), "CreateLogicalPlan failed"), true)
+	inCondition.Csming = nil
+	_, err = executor.BuildInConditionPlan(context.Background(), creator, selectStmt, schema, builder)
+	assert.NotEqual(t, err, nil)
 
+	inCondition.Csming = creator
+	opt, ok := schema.Options().(*query.ProcessorOptions)
+	if !ok {
+		t.Fatal("opt err")
+	}
+	schema.SetOpt(nil)
+	_, err = executor.BuildInConditionPlan(context.Background(), creator, selectStmt, schema, builder)
+	assert.NotEqual(t, err, nil)
+
+	inCondition.TimeRange = influxql.TimeRange{Min: time.Unix(0, 1000).UTC(), Max: time.Unix(0, 2000).UTC()}
+	opt.StartTime = 999
+	opt.EndTime = influxql.MaxTime
+	opt.Interval.Duration = 1
+	inCondition.Stmt.SetTimeInterval(1)
+	schema.SetOpt(opt)
+	_, err = executor.BuildInConditionPlan(context.Background(), creator, selectStmt, schema, builder)
+	assert.Equal(t, err, nil)
+
+	inCondition.TimeRange.Max = time.Unix(0, influxql.MaxTime).UTC()
+	ctx := context.Background()
+	ctx = context.WithValue(ctx, executor.NowKey, time.Now())
+	createPlanErr = true
 	inSubQuery = true
-	schema.Options().(*query.ProcessorOptions).Condition = selectStmt2.Condition
-	_, _, err = executor.BuildInConditionPlan(context.Background(), creator, selectStmt2, schema)
-	assert.Equal(t, strings.Contains(err.Error(), "CreateLogicalPlan failed"), true)
+	defer func() {
+		createPlanErr = false
+		inSubQuery = false
+	}()
+	_, err = executor.BuildInConditionPlan(ctx, creator, selectStmt, schema, builder)
+	assert.NotEqual(t, err, nil)
 }
 
 func TestLogicalIncAgg(t *testing.T) {
@@ -1078,12 +1078,12 @@ func Test_BuildFullJoinQueryPlant(t *testing.T) {
 	}
 	opt := query.ProcessorOptions{}
 
-	schema := executor.NewQuerySchemaWithJoinCase(fields, sources, clonames, &opt, joincases, unsets, nil)
+	schema := executor.NewQuerySchemaWithJoinCase(fields, sources, clonames, &opt, joincases, nil, unsets, nil)
 	creator := NewMockShardGroup()
 	table := NewTable("mst")
 	table.AddDataTypes(map[string]influxql.DataType{"f1": influxql.Float})
 	creator.AddShard(table)
-	_, err := executor.BuildFullJoinQueryPlan(context.Background(), creator, stmt, schema)
+	_, err := executor.BuildJoinQueryPlan(context.Background(), creator, stmt, schema)
 	if err != nil {
 		t.Fatal("TestBuildFullJoinQueryPlan error")
 	}
@@ -1182,6 +1182,129 @@ func TestBuildSubQuery_TimeRange(t *testing.T) {
 	assert.Equal(t, opt.GetEndTime(), int64(2))
 }
 
+func TestBuildSubQuery_FilterPushDown(t *testing.T) {
+	condition := &influxql.BinaryExpr{
+		Op: influxql.LTE,
+		LHS: &influxql.VarRef{
+			Val:  "value",
+			Type: influxql.Float,
+		},
+		RHS: &influxql.NumberLiteral{
+			Val: 1,
+		},
+	}
+	conditionWithCall := &influxql.BinaryExpr{
+		Op: influxql.LTE,
+		LHS: &influxql.VarRef{
+			Val:  "value",
+			Type: influxql.Float,
+		},
+		RHS: &influxql.Call{},
+	}
+	fields := []*influxql.Field{{Expr: &influxql.VarRef{Val: "value", Type: influxql.Float, Alias: "value"}, Alias: "value"}}
+	Sources := []influxql.Source{&influxql.SubQuery{Statement: &influxql.SelectStatement{
+		Fields:    fields,
+		Sources:   []influxql.Source{&influxql.Measurement{Name: "mst"}},
+		Condition: condition,
+	}}}
+	schema := createQuerySchema()
+	schema.Options().SetCondition(condition)
+	creator := NewMockShardGroup()
+	table := NewTable("mst")
+	table.AddDataTypes(map[string]influxql.DataType{"value": influxql.Float})
+	creator.AddShard(table)
+
+	//filter push down
+	schema.Options().(*query.ProcessorOptions).PromQuery = true
+	queryNode, err := executor.BuildSources(context.Background(), creator, Sources, schema, false)
+	assert.NotNil(t, queryNode)
+	assert.Nil(t, err)
+	valueCon := queryNode.Children()[0].Schema().Options().GetValueCondition()
+	assert.NotNil(t, valueCon)
+	assert.Nil(t, schema.Options().GetCondition())
+
+	//not PromQuery
+	schema.Options().(*query.ProcessorOptions).PromQuery = false
+	queryNode, err = executor.BuildSources(context.Background(), creator, Sources, schema, false)
+	assert.NotNil(t, queryNode)
+	assert.Nil(t, err)
+	valueCon = queryNode.Children()[0].Schema().Options().GetValueCondition()
+	assert.Nil(t, valueCon)
+
+	//Condition has call
+	schema.Options().(*query.ProcessorOptions).PromQuery = true
+	schema.Options().SetCondition(conditionWithCall)
+	queryNode, err = executor.BuildSources(context.Background(), creator, Sources, schema, false)
+	assert.NotNil(t, queryNode)
+	assert.Nil(t, err)
+	valueCon = queryNode.Children()[0].Schema().Options().GetValueCondition()
+	assert.Nil(t, valueCon)
+
+	//Condition is nil
+	schema.Options().SetCondition(nil)
+	queryNode, err = executor.BuildSources(context.Background(), creator, Sources, schema, false)
+	assert.NotNil(t, queryNode)
+	assert.Nil(t, err)
+	valueCon = queryNode.Children()[0].Schema().Options().GetValueCondition()
+	assert.Nil(t, valueCon)
+
+	//field type is not VarRef
+	fields = []*influxql.Field{{Expr: condition}}
+	Sources = []influxql.Source{&influxql.SubQuery{Statement: &influxql.SelectStatement{
+		Fields:    fields,
+		Sources:   []influxql.Source{&influxql.Measurement{Name: "mst"}},
+		Condition: condition,
+	}}}
+	queryNode, err = executor.BuildSources(context.Background(), creator, Sources, schema, false)
+	assert.NotNil(t, queryNode)
+	assert.Nil(t, err)
+	valueCon = queryNode.Children()[0].Schema().Options().GetValueCondition()
+	assert.Nil(t, valueCon)
+
+	//fields len is not one
+	fields = []*influxql.Field{{Expr: &influxql.VarRef{Val: "value", Type: influxql.Float, Alias: "value"}, Alias: "value"},
+		{Expr: &influxql.VarRef{Val: "value", Type: influxql.Float, Alias: "value"}, Alias: "value"}}
+	Sources = []influxql.Source{&influxql.SubQuery{Statement: &influxql.SelectStatement{
+		Fields:    fields,
+		Sources:   []influxql.Source{&influxql.Measurement{Name: "mst"}},
+		Condition: condition,
+	}}}
+	queryNode, err = executor.BuildSources(context.Background(), creator, Sources, schema, false)
+	assert.NotNil(t, queryNode)
+	assert.Nil(t, err)
+	valueCon = queryNode.Children()[0].Schema().Options().GetValueCondition()
+	assert.Nil(t, valueCon)
+
+	//source is not Measurement
+	fields = []*influxql.Field{{Expr: &influxql.VarRef{Val: "value", Type: influxql.Float, Alias: "value"}, Alias: "value"}}
+	Sources = []influxql.Source{&influxql.SubQuery{Statement: &influxql.SelectStatement{
+		Fields: fields,
+		Sources: []influxql.Source{&influxql.SubQuery{Statement: &influxql.SelectStatement{
+			Fields:    fields,
+			Sources:   []influxql.Source{&influxql.Measurement{Name: "mst"}},
+			Condition: condition,
+		}}},
+		Condition: condition,
+	}}}
+	queryNode, err = executor.BuildSources(context.Background(), creator, Sources, schema, false)
+	assert.NotNil(t, queryNode)
+	assert.Nil(t, err)
+	valueCon = queryNode.Children()[0].Schema().Options().GetValueCondition()
+	assert.Nil(t, valueCon)
+
+	//source measurement len is not one
+	Sources = []influxql.Source{&influxql.SubQuery{Statement: &influxql.SelectStatement{
+		Fields:    fields,
+		Sources:   []influxql.Source{&influxql.Measurement{Name: "mst"}, &influxql.Measurement{Name: "mst"}},
+		Condition: condition,
+	}}}
+	queryNode, err = executor.BuildSources(context.Background(), creator, Sources, schema, false)
+	assert.NotNil(t, queryNode)
+	assert.Nil(t, err)
+	valueCon = queryNode.Children()[0].Schema().Options().GetValueCondition()
+	assert.Nil(t, valueCon)
+}
+
 func TestBuildBinOpPlanOfOneSideExpr(t *testing.T) {
 	fields := []*influxql.Field{&influxql.Field{Expr: &influxql.VarRef{Val: "value", Type: influxql.Float, Alias: "value"}, Alias: "value"}}
 	stmt := &influxql.SelectStatement{
@@ -1233,4 +1356,426 @@ func TestNewLogicalAggForPromNestOp(t *testing.T) {
 	merge := executor.NewLogicalExchange(tagSetAgg, executor.SHARD_EXCHANGE, nil, schema)
 	shardAgg := executor.NewLogicalAggregate(merge, schema)
 	assert.Equal(t, len(shardAgg.Schema().Calls()), 1)
+}
+
+func TestAlign(t *testing.T) {
+	fields := influxql.Fields{
+		&influxql.Field{Expr: &influxql.VarRef{
+			Val:  "value",
+			Type: influxql.Float},
+		},
+	}
+	columnsName := []string{"columnstore"}
+	opt := query.ProcessorOptions{}
+	opt.GroupByAllDims = true
+	schema := executor.NewQuerySchema(fields, columnsName, &opt, nil)
+	planBuilder := executor.NewLogicalPlanBuilderImpl(schema)
+	planBuilder.Series()
+	planBuilder.Align()
+	node, err := planBuilder.Build()
+	if err != nil {
+		t.Fatal("wrong Align()")
+	}
+	_, ok := node.(*executor.LogicalAlign)
+	assert.Equal(t, true, ok)
+}
+
+func buildJoinPlan() (hybridqp.QueryNode, error) {
+	fields := []*influxql.Field{
+		{Expr: &influxql.VarRef{Val: "m1.f1", Type: influxql.Float, Alias: ""}, Alias: ""},
+		{Expr: &influxql.VarRef{Val: "m2.f1", Type: influxql.Float, Alias: ""}, Alias: ""},
+	}
+	field11 := []*influxql.Field{
+		{Expr: &influxql.VarRef{Val: "f1", Type: influxql.Float, Alias: ""}, Alias: "m1.f1"},
+	}
+
+	field21 := []*influxql.Field{
+		{Expr: &influxql.VarRef{Val: "f1", Type: influxql.Float, Alias: ""}, Alias: "m2.f1"},
+	}
+
+	field1 := []*influxql.Field{
+		{Expr: &influxql.VarRef{Val: "f1", Type: influxql.Unknown, Alias: ""}, Alias: ""},
+	}
+
+	mst1 := &influxql.Measurement{Database: "db0", Name: "mst1"}
+	mst2 := &influxql.Measurement{Database: "db0", Name: "mst2"}
+
+	sources := []influxql.Source{
+		&influxql.SubQuery{Statement: &influxql.SelectStatement{Fields: field11, Sources: []influxql.Source{mst1}}, Alias: "m1"},
+		&influxql.SubQuery{Statement: &influxql.SelectStatement{Fields: field21, Sources: []influxql.Source{mst2}}, Alias: "m2"},
+	}
+	joinCase := []*influxql.Join{
+		{
+			LSrc:      &influxql.SubQuery{Statement: &influxql.SelectStatement{Fields: field1, Sources: []influxql.Source{mst1}}, Alias: "m1"},
+			RSrc:      &influxql.SubQuery{Statement: &influxql.SelectStatement{Fields: field1, Sources: []influxql.Source{mst2}}, Alias: "m2"},
+			Condition: &influxql.BinaryExpr{Op: influxql.EQ, LHS: &influxql.VarRef{Val: "m1.tk", Type: influxql.Tag}, RHS: &influxql.VarRef{Val: "m2.tk", Type: influxql.Tag}},
+			JoinType:  influxql.InnerJoin,
+		},
+	}
+	unsets := []*influxql.Unnest{}
+	opt := query.ProcessorOptions{HintType: hybridqp.QueryPushDown}
+	colNames := []string{"tk1", "f1"}
+
+	stmt := &influxql.SelectStatement{
+		Fields:     fields,
+		Sources:    sources,
+		JoinSource: joinCase,
+	}
+
+	schema := executor.NewQuerySchemaWithJoinCase(fields, sources, colNames, &opt, joinCase, nil, unsets, nil)
+	creator := NewMockShardGroup()
+	table := NewTable("mst")
+	table.AddDataTypes(map[string]influxql.DataType{"f1": influxql.Float})
+	creator.AddShard(table)
+	joinNode, err := executor.BuildJoinQueryPlan(context.Background(), creator, stmt, schema)
+	return joinNode, err
+}
+
+func TestBuildJoinQueryPlan(t *testing.T) {
+	joinNode, err := buildJoinPlan()
+	if err != nil {
+		t.Fatalf("TestBuildJoinQueryPlan error: %v", err)
+	}
+	joinNode.DeriveOperations()
+	joinNode.ReplaceChildren(joinNode.Children())
+	joinNode.ReplaceChild(0, joinNode.Children()[0])
+	joinNode.ReplaceChild(1, joinNode.Children()[1])
+	joinNode.Clone()
+	joinNode.Digest()
+	joinNode.Digest()
+	assert.Equal(t, joinNode.New(nil, nil, nil), nil)
+	assert.Equal(t, len(joinNode.Children()), 2)
+	assert.Equal(t, joinNode.Type(), "*executor.LogicalJoin")
+	planWriter := executor.NewLogicalPlanWriterImpl(&strings.Builder{})
+	joinNode.(executor.LogicalPlan).Explain(planWriter)
+	assert.Contains(t, planWriter.String(), "LogicalJoin")
+	func() {
+		defer func() {
+			if err := recover(); err != nil {
+				if !strings.Contains(fmt.Sprintf("%s", err), "children count in LogicalJoin is not 2") {
+					t.Fatal("unexpect panic", "ReplaceChildren")
+				}
+			}
+		}()
+		joinNode.ReplaceChildren(nil)
+	}()
+	func() {
+		defer func() {
+			if err := recover(); err != nil {
+				if !strings.Contains(fmt.Sprintf("%s", err), "index 2 out of range 1") {
+					t.Fatal("unexpect panic", "ReplaceChild")
+				}
+			}
+		}()
+		joinNode.ReplaceChild(2, nil)
+	}()
+}
+
+func TestNewLogicalIn(t *testing.T) {
+	schema := createQuerySchema()
+	node := executor.NewLogicalSeries(schema)
+	op := executor.NewLogicalIn(node, nil, schema, nil, nil, nil)
+	assert.Equal(t, op.New(nil, nil, nil), nil)
+	op.DeriveOperations()
+	opClone := op.Clone()
+	if opClone.Type() != op.Type() {
+		t.Fatal("wrong type result")
+	}
+	if len(op.Children()) != 1 {
+		t.Fatal("wrong children len result")
+	}
+	op.ReplaceChildren([]hybridqp.QueryNode{node})
+	op.ReplaceChild(0, node)
+
+	planWriter := executor.NewLogicalPlanWriterImpl(&strings.Builder{})
+	op.Explain(planWriter)
+	if op.Digest() == "" {
+		t.Fatal("wrong Digest result")
+	}
+	op.Digest()
+}
+
+func TestBuildCTESource(t *testing.T) {
+	schema := createQuerySchema()
+	schema.Calls()["sum"] = nil
+	creator := NewMockShardGroup()
+	table := NewTable("mst")
+	table.AddDataTypes(map[string]influxql.DataType{"value": influxql.Float})
+	creator.AddShard(table)
+	expr := &influxql.StringLiteral{Val: "http"}
+	schema.Options().SetCondition(expr)
+	fields := []*influxql.Field{&influxql.Field{Expr: &influxql.VarRef{Val: "value", Type: influxql.Float, Alias: "value"}, Alias: "value"}}
+
+	cte := &influxql.CTE{Query: &influxql.SelectStatement{Fields: fields, Sources: []influxql.Source{&influxql.Measurement{Name: "mst"}}}}
+	cte.Csming = creator
+	Sources := []influxql.Source{cte}
+
+	plan, err := executor.BuildSources(context.Background(), creator, Sources, schema, false)
+	assert.Equal(t, err, nil)
+	ctePlan := plan.Children()[0].Children()[0].(*executor.LogicalCTE)
+	ctePlan.New(nil, schema, nil)
+	ctePlan.GetCTEPlan()
+	ctePlan.DeriveOperations()
+	clone := ctePlan.Clone()
+	clone.ReplaceChildren([]hybridqp.QueryNode{ctePlan.GetCTEPlan()})
+	clone.ReplaceChild(0, ctePlan.GetCTEPlan())
+
+	assertPanic(t, clone)
+	clone.Type()
+	assert.True(t, clone.Digest() == clone.Digest())
+
+	cte = &influxql.CTE{GraphQuery: &influxql.GraphStatement{}}
+	_, e := executor.BuildCTELogicalPlan(context.Background(), schema, cte)
+	assert.Equal(t, e, nil)
+
+	schema.SetOpt(nil)
+	plan, err = executor.BuildSources(context.Background(), creator, Sources, schema, false)
+
+	cte = &influxql.CTE{Query: &influxql.SelectStatement{Fields: fields, Sources: []influxql.Source{&influxql.Measurement{Name: "mst"}}}}
+	cte.Csming = "abc"
+	Sources = []influxql.Source{cte}
+	_, e = executor.BuildSources(context.Background(), creator, Sources, schema, false)
+	assert.Equal(t, e.Error(), "cte csming err")
+
+}
+
+func TestBuildTableFunctionSource(t *testing.T) {
+	schema := createQuerySchema()
+	schema.Calls()["sum"] = nil
+	creator := NewMockShardGroup()
+	table := NewTable("mst")
+	table.AddDataTypes(map[string]influxql.DataType{"value": influxql.Float})
+	creator.AddShard(table)
+	expr := &influxql.StringLiteral{Val: "http"}
+	schema.Options().SetCondition(expr)
+
+	fields := []*influxql.Field{
+		{Expr: &influxql.VarRef{Val: "m1.f1", Type: influxql.Float, Alias: ""}, Alias: ""},
+		{Expr: &influxql.VarRef{Val: "m2.f1", Type: influxql.Float, Alias: ""}, Alias: ""},
+	}
+
+	mst1 := &influxql.Measurement{Database: "db0", Name: "mst1"}
+	mst2 := &influxql.Measurement{Database: "db0", Name: "mst2"}
+	mst3 := &influxql.CTE{Query: &influxql.SelectStatement{Fields: fields, Sources: []influxql.Source{&influxql.Measurement{Name: "cte1"}}}}
+	mst3.Csming = creator
+	mst4 := &influxql.CTE{GraphQuery: &influxql.GraphStatement{}}
+
+	sources := []influxql.Source{
+		mst1, mst2, mst3, mst4,
+	}
+	tableFunction := &influxql.TableFunction{
+		FunctionName:        "test",
+		TableFunctionSource: sources,
+		Params:              "{}",
+	}
+	Sources := []influxql.Source{tableFunction}
+
+	_, err := executor.BuildSources(context.Background(), creator, Sources, schema, false)
+	assert.Equal(t, err, nil)
+
+}
+
+func assertPanic(t *testing.T, clone hybridqp.QueryNode) {
+	defer func() {
+		if r := recover(); r != nil {
+			assert.Equal(t, "index 1 out of range 1", r, "Panic message should match")
+		}
+	}()
+	clone.ReplaceChild(1, nil)
+}
+
+func TestBuildInTagConditionPlan(t *testing.T) {
+	convey.Convey("normal condition", t, func() {
+		sql := "select * from mst where \"host\" in (select \"host02\" from mst1 where time > now() - 5m)"
+		creator, selectStmt, schema, builder := PrepareForInnerPlan(sql, t)
+		_, err := executor.BuildInConditionPlan(context.Background(), creator, selectStmt, schema, builder)
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	convey.Convey("without time filter", t, func() {
+		sql := "select * from mst where \"host\" in (select \"host02\" from mst1)"
+		creator, selectStmt, schema, builder := PrepareForInnerPlan(sql, t)
+		_, err := executor.BuildInConditionPlan(context.Background(), creator, selectStmt, schema, builder)
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	convey.Convey("err condition", t, func() {
+		sql := "select * from mst where \"host\" in (select \"host02\" from mst1)"
+		creator, selectStmt, schema, builder := PrepareForInnerPlan(sql, t)
+		selectStmt.Condition.(*influxql.InCondition).Stmt.Fields[0].Expr = nil
+		_, err := executor.BuildInConditionPlan(context.Background(), creator, selectStmt, schema, builder)
+		assert.Equal(t, err.Error(), "type assertion failed")
+	})
+}
+
+func PrepareForInnerPlan(sql string, t *testing.T) (*MockShardGroup, *influxql.SelectStatement, *executor.QuerySchema, *executor.LogicalPlanBuilderImpl) {
+	sqlReader := strings.NewReader(sql)
+	parser := influxql.NewParser(sqlReader)
+	yaccParser := influxql.NewYyParser(parser.GetScanner(), make(map[string]interface{}))
+	yaccParser.ParseTokens()
+	q, err := yaccParser.GetQuery()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stmt := q.Statements[0]
+	selectStmt, ok := stmt.(*influxql.SelectStatement)
+	if !ok {
+		t.Fatal(fmt.Errorf("invalid SelectStatement"))
+	}
+
+	opt := query.ProcessorOptions{}
+	fields := influxql.Fields{
+		&influxql.Field{Expr: &influxql.VarRef{
+			Val:  "",
+			Type: influxql.Float},
+		},
+	}
+	condFields := &influxql.VarRef{
+		Val:  "host",
+		Type: influxql.Tag,
+	}
+	inCondFields := &influxql.VarRef{
+		Val:  "host02",
+		Type: influxql.Tag,
+	}
+	selectStmt.Condition.(*influxql.InCondition).Column = condFields
+	selectStmt.Condition.(*influxql.InCondition).Stmt.Fields[0].Expr = inCondFields
+	colNames := []string{"host", "region", "value", "f2"}
+	schema := executor.NewQuerySchema(fields, colNames, &opt, nil)
+	m := &influxql.Measurement{Name: "mst"}
+	schema.AddTable(m, schema.MakeRefs())
+
+	inCondition, ok := selectStmt.Condition.(*influxql.InCondition)
+	if !ok {
+		t.Fatal(fmt.Errorf("invalid inCondition"))
+	}
+	schema.InConditons = append(schema.InConditons, inCondition)
+
+	creator := NewMockShardGroup()
+	table := NewTable("mst")
+	table.AddDataTypes(map[string]influxql.DataType{"host": influxql.Tag, "region": influxql.Tag, "value": influxql.Float, "f2": influxql.Float})
+	creator.AddShard(table)
+	builder := executor.NewLogicalPlanBuilderImpl(schema)
+	inCondition.Csming = creator
+	if inCondition.Stmt.Condition != nil {
+		inCondition.TimeCond = inCondition.Stmt.Condition.(*influxql.BinaryExpr)
+	}
+	schema.Options().(*query.ProcessorOptions).Condition = selectStmt.Condition
+	return creator, selectStmt, schema, builder
+}
+
+func TestNewLogicalGraph(t *testing.T) {
+	schema := createQuerySchema()
+	graphStmt := &influxql.GraphStatement{}
+	op := executor.NewLogicalGraph(nil, graphStmt, schema, nil)
+	assert.Equal(t, op.New(nil, nil, nil), nil)
+	op.DeriveOperations()
+	opClone := op.Clone()
+	if opClone.Type() != op.Type() {
+		t.Fatal("wrong type result")
+	}
+	if len(op.Children()) != 0 {
+		t.Fatal("wrong children len result")
+	}
+	op.ReplaceChildren(nil)
+	op.ReplaceChild(0, nil)
+
+	planWriter := executor.NewLogicalPlanWriterImpl(&strings.Builder{})
+	op.Explain(planWriter)
+	if op.Digest() == "" {
+		t.Fatal("wrong Digest result")
+	}
+	op.Digest()
+	node := executor.NewLogicalSeries(schema)
+	executor.NewLogicalGraph(node, graphStmt, schema, nil)
+}
+
+func TestQueryPushDown(t *testing.T) {
+	joinNode, err := buildJoinPlan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	buf, err := executor.MarshalBinary(joinNode)
+	if err != nil {
+		t.Error("wrong result")
+	}
+	_, err = executor.UnmarshalBinary(buf, joinNode.Schema())
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestInferAggAndPromAggLevel(t *testing.T) {
+	opt := &query.ProcessorOptions{}
+	fields := influxql.Fields{
+		&influxql.Field{Expr: &influxql.Call{
+			Name: "percentile_ogsketch",
+			Args: []influxql.Expr{
+				&influxql.VarRef{
+					Val:  "value",
+					Type: influxql.Float,
+				},
+				&influxql.NumberLiteral{
+					Val: 90,
+				},
+			},
+		},
+		},
+	}
+	// source level
+	schema := executor.NewQuerySchema(fields, []string{"value"}, opt, nil)
+	series := executor.NewLogicalSeries(schema)
+	agg := executor.NewLogicalAggregate(series, schema)
+	assert.Equal(t, agg.InferAggLevel(), executor.SourceLevel)
+	assert.Equal(t, agg.InferPromAggLevel(), executor.SourceLevel)
+
+	// middle level
+	shardExchange := executor.NewLogicalExchange(agg, executor.SHARD_EXCHANGE, nil, schema)
+	shardAgg := executor.NewLogicalAggregate(shardExchange, schema)
+	assert.Equal(t, shardAgg.InferAggLevel(), executor.MiddleLevel)
+	assert.Equal(t, shardAgg.InferPromAggLevel(), executor.SinkLevel)
+
+	// sink level
+	nodeExchange := executor.NewLogicalExchange(agg, executor.NODE_EXCHANGE, nil, schema)
+	nodeAgg := executor.NewLogicalAggregate(nodeExchange, schema)
+	assert.Equal(t, nodeAgg.InferAggLevel(), executor.SinkLevel)
+	assert.Equal(t, nodeAgg.InferPromAggLevel(), executor.SinkLevel)
+
+	// sink level
+	unionNode := executor.NewLogicalSortAppend([]hybridqp.QueryNode{nodeAgg}, schema)
+	unionAgg := executor.NewLogicalAggregate(unionNode, schema)
+	assert.Equal(t, unionAgg.InferAggLevel(), executor.SinkLevel)
+	assert.Equal(t, unionAgg.InferPromAggLevel(), executor.SinkLevel)
+}
+
+func TestLogicalDistinct(t *testing.T) {
+	opt := &query.ProcessorOptions{}
+	fields := influxql.Fields{
+		&influxql.Field{
+			Expr: &influxql.VarRef{
+				Val:  "value",
+				Type: influxql.Float,
+			},
+		},
+	}
+	schema := executor.NewQuerySchema(fields, []string{"value"}, opt, nil)
+	series := executor.NewLogicalSeries(schema)
+	reader := executor.NewLogicalReader(series, schema)
+	distinct := executor.NewLogicalDistinct(reader, schema)
+	assert.Equal(t, nil, distinct.New(nil, nil, nil))
+	distinct.DeriveOperations()
+	distinct.Clone()
+	distinct.Digest()
+	planWriter := executor.NewLogicalPlanWriterImpl(&strings.Builder{})
+	distinct.Explain(planWriter)
+	planBuilder := executor.NewLogicalPlanBuilderImpl(schema)
+	node, _ := planBuilder.CreateDistinct(nil)
+	assert.Equal(t, node, nil)
+	assert.Equal(t, len(distinct.Children()), 1)
+	assert.Equal(t, distinct.Type(), "*executor.LogicalDistinct")
 }

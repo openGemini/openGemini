@@ -16,11 +16,15 @@ package executor_test
 
 import (
 	"context"
+	"fmt"
+	"reflect"
 	"strconv"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/apache/arrow/go/v13/arrow"
+	"github.com/apache/arrow/go/v13/arrow/array"
 	"github.com/influxdata/influxdb/models"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
@@ -132,7 +136,68 @@ func Test_HttpSenderTransform(t *testing.T) {
 				break
 			}
 			_ = data
-			//fmt.Println(data.Rows[0].Values[0])
+		case <-ctx.Done():
+			closed = true
+			break
+		}
+		if closed {
+			break
+		}
+	}
+	executors.Release()
+}
+
+func Test_HttpSenderTransform2(t *testing.T) {
+	opt := query.ProcessorOptions{
+		ChunkSize:    1024,
+		ChunkedSize:  10000,
+		RowsChan:     make(chan query.RowsChan),
+		IsArrowQuery: true,
+	}
+	opt1 := query.ProcessorOptions{
+		ChunkSize:    1024,
+		ChunkedSize:  10000,
+		RowsChan:     make(chan query.RowsChan),
+		IsArrowQuery: true,
+		AbortChan:    make(chan struct{}),
+	}
+	mockHttpSenderTransform(opt)
+	mockHttpSenderTransform(opt1)
+}
+
+func mockHttpSenderTransform(opt query.ProcessorOptions) {
+	// 4 fields, 2 tags
+	fields := mockFieldsAndTags()
+	refs := varRefsFromFields(fields)
+	inRowDataType := hybridqp.NewRowDataTypeImpl(refs...)
+	ctx := context.Background()
+
+	schema := executor.NewQuerySchema(fields, mockColumnNames(), &opt, nil)
+	schema.SetOpt(&opt)
+	mockInput := NewMockGenDataTransform(inRowDataType)
+	httpSender := executor.NewHttpSenderTransform(inRowDataType, schema)
+	httpSender.GetInputs()[0].Connect(mockInput.GetOutputs()[0])
+
+	var processors executor.Processors
+	processors = append(processors, mockInput)
+	processors = append(processors, httpSender)
+	executors := executor.NewPipelineExecutor(processors)
+
+	ec := make(chan error, 1)
+	go func() {
+		ec <- executors.Execute(context.Background())
+		close(ec)
+		close(opt.RowsChan)
+	}()
+	var closed bool
+	for {
+		select {
+		case data, ok := <-opt.RowsChan:
+			if !ok {
+				closed = true
+				break
+			}
+			_ = data
 		case <-ctx.Done():
 			closed = true
 			break
@@ -190,7 +255,7 @@ func BenchmarkHttpSenderTransform(b *testing.B) {
 		executors := executor.NewPipelineExecutor(processors)
 
 		b.StartTimer()
-		ec := make(chan error)
+		ec := make(chan error, 1)
 		go func() {
 			ec <- executors.Execute(context.Background())
 			close(ec)
@@ -205,7 +270,73 @@ func BenchmarkHttpSenderTransform(b *testing.B) {
 					break
 				}
 				_ = data
-				//fmt.Println(data.Rows[0].Values[0])
+			case <-ctx.Done():
+				closed = true
+				break
+			}
+			if closed {
+				break
+			}
+		}
+		executors.Release()
+	}
+}
+
+// go test -v -run none -bench BenchmarkHttpSenderTransform_WithArrowChunkSender -benchtime=10x -count=5
+/*
+data: 10000*1024 rows.
+commitId: 4d536f7e
+BenchmarkHttpSenderTransform_WithArrowChunkSender-20                  10         611233104 ns/op        1445222860 B/op   30341 allocs/op
+BenchmarkHttpSenderTransform_WithArrowChunkSender-20                  10         586747174 ns/op        1445222745 B/op   30340 allocs/op
+BenchmarkHttpSenderTransform_WithArrowChunkSender-20                  10         612655101 ns/op        1445222913 B/op   30341 allocs/op
+BenchmarkHttpSenderTransform_WithArrowChunkSender-20                  10         578907417 ns/op        1445222793 B/op   30340 allocs/op
+BenchmarkHttpSenderTransform_WithArrowChunkSender-20                  10         582063138 ns/op        1445222785 B/op   30340 allocs/op
+*/
+func BenchmarkHttpSenderTransform_WithArrowChunkSender(b *testing.B) {
+	// 4 fields, 2 tags
+	fields := mockFieldsAndTags()
+	refs := varRefsFromFields(fields)
+	inRowDataType := hybridqp.NewRowDataTypeImpl(refs...)
+	ctx := context.Background()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		outPutRowsChan := make(chan query.RowsChan)
+		opt := query.ProcessorOptions{
+			ChunkSize:    1024,
+			ChunkedSize:  10000,
+			RowsChan:     outPutRowsChan,
+			IsArrowQuery: true,
+		}
+		schema := executor.NewQuerySchema(fields, mockColumnNames(), &opt, nil)
+		schema.SetOpt(&opt)
+		mockInput := NewMockGenDataTransform(inRowDataType)
+		httpSender := executor.NewHttpSenderTransform(inRowDataType, schema)
+		httpSender.GetInputs()[0].Connect(mockInput.GetOutputs()[0])
+
+		var processors executor.Processors
+		processors = append(processors, mockInput)
+		processors = append(processors, httpSender)
+		executors := executor.NewPipelineExecutor(processors)
+
+		b.StartTimer()
+		ec := make(chan error, 1)
+		go func() {
+			ec <- executors.Execute(context.Background())
+			close(ec)
+			close(opt.RowsChan)
+		}()
+		var closed bool
+		for {
+			select {
+			case data, ok := <-opt.RowsChan:
+				if !ok {
+					closed = true
+					break
+				}
+				_ = data
 			case <-ctx.Done():
 				closed = true
 				break
@@ -439,6 +570,310 @@ func BenchmarkHttpChunkSender_GetRows(b *testing.B) {
 	}
 }
 
+func BenchmarkHttpChunkSender_GenRecords(b *testing.B) {
+	fields := mockFieldsAndTags()
+	refs := varRefsFromFields(fields)
+	inRowDataType := hybridqp.NewRowDataTypeImpl(refs...)
+	chunk := genChunk(inRowDataType)
+
+	g := executor.NewRecordsGenerator(0)
+	_ = g
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for i := 0; i < b.N; i++ {
+		// BenchmarkHttpChunkSender_GenRecords-20    	   12343	     96789 ns/op
+		//			162961 B/op	     835 allocs/op
+		var recordContainers []*models.RecordContainer
+		recordContainers = g.Generate(chunk, true, recordContainers)
+		recordContainers = recordContainers[0:]
+	}
+}
+
+func genTestChunk() executor.Chunk {
+	fields := mockFieldsAndTags()
+	refs := varRefsFromFields(fields)
+	inRowDataType := hybridqp.NewRowDataTypeImpl(refs...)
+	cb := executor.NewChunkBuilder(inRowDataType)
+	ck := cb.NewChunk("cpu")
+	ck.AppendIntervalIndex(0)
+	var row int
+	for n := 0; n < 19; n++ {
+		ck.AppendTagsAndIndex(*executor.NewChunkTags(nil, nil), row)
+		row += 100
+		if n == 9 {
+			row += 100
+		}
+		for j := 0; j < 2; j++ {
+			if j == 1 && n != 9 {
+				continue
+			}
+			for i := 0; i < 100; i++ {
+				ck.AppendTime(int64(i))
+
+				ck.Column(0).AppendFloatValue(float64(i))
+				ck.Column(0).AppendNotNil()
+
+				if i%2 == 0 {
+					ck.Column(1).AppendIntegerValue(int64(i))
+					ck.Column(1).AppendNotNil()
+				} else {
+					ck.Column(1).AppendNil()
+				}
+
+				if i%3 == 0 {
+					ck.Column(2).AppendNil()
+				} else {
+					ck.Column(2).AppendBooleanValue(i%2 == 0)
+					ck.Column(2).AppendNotNil()
+				}
+
+				ck.Column(3).AppendStringValue(strconv.FormatInt(int64(i), 10))
+				ck.Column(3).AppendNotNil()
+				ck.Column(4).AppendStringValue("tv1")
+				ck.Column(4).AppendNotNil()
+				ck.Column(5).AppendStringValue("tv2")
+				ck.Column(5).AppendNotNil()
+			}
+		}
+	}
+	return ck
+}
+
+func TestRecordsGenerator_Generate(t *testing.T) {
+	fields := mockFieldsAndTags()
+	refs := varRefsFromFields(fields)
+	inRowDataType := hybridqp.NewRowDataTypeImpl(refs...)
+	chunk := genChunk(inRowDataType)
+
+	g := executor.NewRecordsGenerator(1000)
+	recordContainers := g.Generate(chunk, false, nil)
+	recordContainers = g.Generate(chunk, true, recordContainers)
+	err := MatchContent(genTestChunk(), recordContainers)
+
+	g = executor.NewRecordsGenerator(1000)
+	recordContainers = g.Generate(chunk, true, nil)
+	err = MatchContent(chunk, recordContainers)
+	assert.NoError(t, err)
+
+	chunk = genChunk2(inRowDataType)
+	recordContainers = g.Generate(chunk, true, nil)
+	err = MatchContent(chunk, recordContainers)
+	assert.NoError(t, err)
+
+	iFields := mockIllegalFieldsAndTags()
+	iRefs := varRefsFromFields(iFields)
+	iInRowDataType := hybridqp.NewRowDataTypeImpl(iRefs...)
+	iChunk := genIllegalChunk(iInRowDataType)
+	recordContainers = g.Generate(iChunk, true, nil)
+	assert.Nil(t, recordContainers)
+	g.Release()
+
+	g = executor.NewRecordsGenerator(0)
+	recordContainers = g.Generate(iChunk, true, nil)
+	assert.Nil(t, recordContainers)
+	g.Release()
+
+	g = executor.NewRecordsGenerator(0)
+	recordContainers = g.Generate(&mockChunk{}, true, nil)
+	assert.Nil(t, recordContainers)
+	g.Release()
+}
+
+func TestArrowChunkSender_Write(t *testing.T) {
+	fields := mockFieldsAndTags()
+	refs := varRefsFromFields(fields)
+	inRowDataType := hybridqp.NewRowDataTypeImpl(refs...)
+	chunk := genChunk(inRowDataType)
+	sender := executor.NewArrowChunkSender(&query.ProcessorOptions{
+		ChunkedSize: 10000,
+	})
+	sender.GenRecords(chunk, false)
+	sender.Release()
+
+	resChan := make(chan query.RowsChan, 1000)
+	defer close(resChan)
+	go func() {
+		for {
+			select {
+			case _, ok := <-resChan:
+				if !ok {
+					return
+				}
+			}
+		}
+	}()
+	sender = executor.NewArrowChunkSender(&query.ProcessorOptions{
+		RowsChan: resChan,
+	})
+	sender.SetAbortProcessor(&MockAbortProcessor{})
+
+	actual := sender.Write(nil, false)
+	assert.False(t, actual)
+
+	actual = sender.Write(chunk, false)
+	assert.True(t, actual)
+	sender.Release()
+
+	sender = executor.NewArrowChunkSender(&query.ProcessorOptions{
+		RowsChan:    resChan,
+		ChunkedSize: 10000,
+	})
+	actual = sender.Write(chunk, false)
+	assert.True(t, actual)
+	sender.Release()
+
+	sender = executor.NewArrowChunkSender(&query.ProcessorOptions{
+		RowsChan:    resChan,
+		ChunkedSize: 10000,
+	})
+	iFields := mockIllegalFieldsAndTags()
+	iRefs := varRefsFromFields(iFields)
+	iInRowDataType := hybridqp.NewRowDataTypeImpl(iRefs...)
+	iChunk := genIllegalChunk(iInRowDataType)
+	actual = sender.Write(iChunk, true)
+	assert.False(t, actual)
+
+	sender.Write(chunk, true)
+	assert.False(t, actual)
+	sender.Release()
+}
+
+func genIllegalChunk(outRowDataType *hybridqp.RowDataTypeImpl) executor.Chunk {
+	cb := executor.NewChunkBuilder(outRowDataType)
+	ck := cb.NewChunk("cpu")
+	ck.AppendIntervalIndex(0)
+	ck.AppendTagsAndIndex(*executor.NewChunkTags(nil, nil), 0)
+	ck.AppendTime(int64(1))
+	ck.Column(0).AppendFloatValue(float64(1))
+	ck.Column(0).AppendNotNil()
+	return ck
+}
+
+type mockChunk struct {
+	executor.ChunkImpl
+}
+
+func (m *mockChunk) RowDataType() hybridqp.RowDataType {
+	return &mockRowDataType{}
+}
+
+type mockRowDataType struct {
+	hybridqp.RowDataTypeImpl
+}
+
+func (r *mockRowDataType) Fields() influxql.Fields {
+	return influxql.Fields{
+		&influxql.Field{Expr: &influxql.NilLiteral{}},
+	}
+}
+
+func mockIllegalFieldsAndTags() influxql.Fields {
+	fields := make(influxql.Fields, 0, 1)
+
+	fields = append(fields,
+		&influxql.Field{
+			Expr: &influxql.VarRef{
+				Val:  "u1_unknown",
+				Type: influxql.Unknown,
+			},
+			Alias: "",
+		},
+	)
+	return fields
+}
+
+func MatchContent(chunk executor.Chunk, recordsContainers []*models.RecordContainer) error {
+	refs := chunk.RowDataType().MakeRefs()
+	fields := chunk.RowDataType().Fields()
+	tagIdx := chunk.TagIndex()
+	tags := chunk.Tags()
+	if len(tagIdx) != len(recordsContainers) {
+		return fmt.Errorf("tag index length mismatch")
+	}
+	for i := range tagIdx {
+		recordContainer := recordsContainers[i]
+		record := recordContainer.Data
+		schema := record.Schema()
+		tag := tags[i]
+		if !hybridqp.EqualMap(tag.KeyValues(), recordContainer.Tags) {
+			return fmt.Errorf("tags mismatch, %v", tag.KeyValues())
+		}
+		start := tagIdx[i]
+		var end int
+		if i == len(tagIdx)-1 {
+			end = chunk.NumberOfRows()
+		} else {
+			end = tagIdx[i+1]
+		}
+		// check time align
+		cTimes := chunk.Time()[start:end]
+		rTimesArr, ok := record.Column(0).(*array.Int64)
+		if !ok {
+			return fmt.Errorf("time column mismatch")
+		}
+		rTimes := rTimesArr.Int64Values()
+		if !reflect.DeepEqual(cTimes, rTimes) {
+			return fmt.Errorf("time column mismatch")
+		}
+
+		for j, ref := range refs {
+			if fields[j].Name() != schema.Field(j+1).Name {
+				return fmt.Errorf("field name mismatch %s", fields[j].Name())
+			}
+			col := chunk.Column(j)
+			var rIdx int
+			for idx := start; idx < end; idx++ {
+				valueStr := record.Column(j + 1).ValueStr(rIdx)
+				colType := record.Column(j + 1).DataType()
+				rIdx++
+				if col.IsNilV2(idx) {
+					if valueStr != "(null)" {
+						return fmt.Errorf("value mismatch %s", fields[j].Name())
+					}
+					continue
+				}
+				switch ref.Type {
+				case influxql.Float:
+					if colType != arrow.PrimitiveTypes.Float64 {
+						return fmt.Errorf("value type mismatch %s", fields[j].Name())
+					}
+					val, err := strconv.ParseFloat(valueStr, 64)
+					if err != nil || val != col.FloatValue(col.GetValueIndexV2(idx)) {
+						return fmt.Errorf("value mismatch %s", fields[j].Name())
+					}
+				case influxql.Integer:
+					if colType != arrow.PrimitiveTypes.Int64 {
+						return fmt.Errorf("value type mismatch %s", fields[j].Name())
+					}
+					val, err := strconv.ParseInt(valueStr, 10, 64)
+					if err != nil || val != col.IntegerValue(col.GetValueIndexV2(idx)) {
+						return fmt.Errorf("value mismatch %s", fields[j].Name())
+					}
+				case influxql.String, influxql.Tag:
+					if colType != arrow.BinaryTypes.String {
+						return fmt.Errorf("value type mismatch %s", fields[j].Name())
+					}
+					if valueStr != col.StringValue(col.GetValueIndexV2(idx)) {
+						return fmt.Errorf("value mismatch %s", fields[j].Name())
+					}
+				case influxql.Boolean:
+					if colType != arrow.FixedWidthTypes.Boolean {
+						return fmt.Errorf("value type mismatch %s", fields[j].Name())
+					}
+					val, err := strconv.ParseBool(valueStr)
+					if err != nil || val != col.BooleanValue(col.GetValueIndexV2(idx)) {
+						return fmt.Errorf("value mismatch %s", fields[j].Name())
+					}
+				default:
+					return fmt.Errorf("type not support")
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func genChunk(outRowDataType hybridqp.RowDataType) executor.Chunk {
 	cb := executor.NewChunkBuilder(outRowDataType)
 	ck := cb.NewChunk("cpu")
@@ -467,6 +902,45 @@ func genChunk(outRowDataType hybridqp.RowDataType) executor.Chunk {
 
 			ck.Column(3).AppendStringValue(strconv.FormatInt(int64(i), 10))
 			ck.Column(3).AppendNotNil()
+			ck.Column(4).AppendStringValue("tv1")
+			ck.Column(4).AppendNotNil()
+			ck.Column(5).AppendStringValue("tv2")
+			ck.Column(5).AppendNotNil()
+		}
+	}
+
+	return ck
+}
+
+func genChunk2(outRowDataType hybridqp.RowDataType) executor.Chunk {
+	cb := executor.NewChunkBuilder(outRowDataType)
+	ck := cb.NewChunk("cpu")
+	ck.AppendIntervalIndex(0)
+	for n := 0; n < 10; n++ {
+		ck.AppendTagsAndIndex(*executor.NewChunkTags(nil, nil), n*100)
+		for i := 0; i < 100; i++ {
+			ck.AppendTime(int64(i))
+
+			ck.Column(1).AppendIntegerValue(int64(i))
+			ck.Column(1).AppendNotNil()
+
+			if i%2 == 0 {
+				ck.Column(0).AppendFloatValue(float64(i))
+				ck.Column(0).AppendNotNil()
+			} else {
+				ck.Column(0).AppendNil()
+			}
+
+			ck.Column(2).AppendBooleanValue(i%2 == 0)
+			ck.Column(2).AppendNotNil()
+
+			if i%3 == 0 {
+				ck.Column(3).AppendNil()
+			} else {
+				ck.Column(3).AppendStringValue(strconv.FormatInt(int64(i), 10))
+				ck.Column(3).AppendNotNil()
+			}
+
 			ck.Column(4).AppendStringValue("tv1")
 			ck.Column(4).AppendNotNil()
 			ck.Column(5).AppendStringValue("tv2")

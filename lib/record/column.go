@@ -618,3 +618,51 @@ func (cv *ColVal) RepairBitmap() {
 		}
 	}
 }
+
+func (cv *ColVal) AppendNull(isString bool) {
+	appendNull(cv)
+	if isString {
+		cv.Offset = append(cv.Offset, uint32(len(cv.Val)))
+	}
+}
+
+func (cv *ColVal) AppendValue(v []byte, isString bool) {
+	cv.Val = append(cv.Val, v...)
+	if isString {
+		cv.Offset = append(cv.Offset, uint32(len(cv.Val)-len(v)))
+	}
+	cv.setBitMap(cv.Len)
+	cv.Len++
+}
+
+func AppendPKColumns(pkCol *ColVal, dstCol *ColVal,
+	offset, count int, dataType int) error {
+	dstCol.Init()
+
+	switch dataType {
+	case influx.Field_Type_Int:
+		pkValues := pkCol.IntegerValues()
+		for i := 0; i < count; i++ {
+			dstCol.AppendInteger(pkValues[offset])
+		}
+	case influx.Field_Type_Float:
+		pkValues := pkCol.FloatValues()
+		for i := 0; i < count; i++ {
+			dstCol.AppendFloat(pkValues[offset])
+		}
+	case influx.Field_Type_String:
+		pkValues := pkCol.StringValues(nil)
+		for i := 0; i < count; i++ {
+			dstCol.AppendString(pkValues[offset])
+		}
+	case influx.Field_Type_Boolean:
+		pkValues := pkCol.BooleanValues()
+		for i := 0; i < count; i++ {
+			dstCol.AppendBoolean(pkValues[offset])
+		}
+	default:
+		return fmt.Errorf("unsupported primary key data type: %d", dataType)
+	}
+
+	return nil
+}

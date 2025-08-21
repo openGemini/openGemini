@@ -76,10 +76,16 @@ func (ms *Service) WithLogger(log *logger.Logger) {
 	ms.sl.Set(sl.WithLogger(log))
 }
 
-func (ms *Service) Open() {
+func (ms *Service) Open() error {
 	if ms.config.SherlockEnable {
 		ms.onceStart.Do(ms.sl.Start)
 	}
+	return nil
+}
+
+func (ms *Service) Close() error {
+	ms.Stop()
+	return nil
 }
 
 func (ms *Service) Stop() {

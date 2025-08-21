@@ -37,6 +37,7 @@ const (
 	AGG_TRANS   // Calculation depends on part data in the time window. eg: derivative
 	AGG_SPECIAL // Special categories,Need to implement custom iterator.
 	PROMTIME    // use for promTime funcs
+	COMPARE     // Year-over-year and month-over-month compare functions
 )
 
 type BaseFunc interface {
@@ -108,11 +109,17 @@ type AggregateFunc interface {
 	OptimizeAgg() bool
 }
 
+type CompareFunc interface {
+	BaseFunc
+	CompileFunc(expr *influxql.Call, c *compiledField) error
+}
+
 type FunctionFactory struct {
 	materialize map[string]MaterializeFunc
 	aggregate   map[string]AggregateFunc
 	label       map[string]LabelFunc
 	promTime    map[string]PromTimeFunc // use for prom
+	compare     map[string]CompareFunc
 }
 
 func NewFunctionFactory() *FunctionFactory {
@@ -121,7 +128,17 @@ func NewFunctionFactory() *FunctionFactory {
 		aggregate:   make(map[string]AggregateFunc),
 		label:       make(map[string]LabelFunc),
 		promTime:    make(map[string]PromTimeFunc),
+		compare:     make(map[string]CompareFunc),
 	}
+}
+
+func RegistryCompareFunction(name string, function CompareFunc) {
+	factory := GetFunctionFactoryInstance()
+	_, ok := factory.compare[name]
+	if ok {
+		return
+	}
+	factory.compare[name] = function
 }
 
 func RegistryPromTimeFunction(name string, function PromTimeFunc) {
@@ -165,7 +182,7 @@ func (r *FunctionFactory) FindMaterFunc(name string) (MaterializeFunc, bool) {
 	return function, ok
 }
 
-func RegistryAggregateFunction(name string, function AggregateFunc) bool {
+func RegisterAggregateFunction(name string, function AggregateFunc) bool {
 	factory := GetFunctionFactoryInstance()
 	_, ok := factory.FindAggFunc(name)
 
@@ -183,6 +200,11 @@ func (r *FunctionFactory) AddAggFunc(name string, function AggregateFunc) {
 
 func (r *FunctionFactory) FindAggFunc(name string) (AggregateFunc, bool) {
 	function, ok := r.aggregate[name]
+	return function, ok
+}
+
+func (r *FunctionFactory) FindCompareFunc(name string) (CompareFunc, bool) {
+	function, ok := r.compare[name]
 	return function, ok
 }
 

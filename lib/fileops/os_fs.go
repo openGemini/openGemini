@@ -19,6 +19,8 @@
 package fileops
 
 import (
+	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -191,6 +193,35 @@ func (vfs) RemoveAll(path string, _ ...FSOption) error {
 	return os.RemoveAll(path)
 }
 
+// not used
+func (vfs) RemoveAllWithOutDir(path string, _ ...FSOption) error {
+	dirs, err := ReadDir(path)
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, dir := range dirs {
+		if dir.IsDir() {
+			continue
+		}
+		err := os.Remove(filepath.Join(path, dir.Name()))
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if len(errs) > 0 {
+		er := fmt.Errorf("error remove with out dir  %v", errs[0])
+		for i, err := range errs {
+			if i == 0 {
+				continue
+			}
+			er = errors.Join(er, err)
+		}
+		return er
+	}
+	return nil
+}
+
 func (vfs) Mkdir(path string, perm os.FileMode, _ ...FSOption) error {
 	return os.Mkdir(path, perm)
 }
@@ -302,6 +333,16 @@ func (f vfs) GetOBSTmpFileName(path string, obsOption *obs.ObsOptions) string {
 		return path
 	}
 	return path + obs.ObsFileTmpSuffix
+}
+
+func (f vfs) GetOBSTmpIndexFileName(path string, obsOption *obs.ObsOptions) string {
+	if obsOption != nil {
+		path = path[len(obs.GetPrefixDataPath()):]
+		path = filepath.Join(obsOption.BasePath, path)
+		path = EncodeObsPath(obsOption.Endpoint, obsOption.BucketName, path, obsOption.Ak, DecryptObsSk(obsOption.Sk))
+		return path
+	}
+	return path
 }
 
 func (f vfs) DecodeRemotePathToLocal(path string) (string, error) {

@@ -19,11 +19,13 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/influxdata/influxdb/pkg/limiter"
+	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/record"
@@ -35,24 +37,16 @@ import (
 
 var walSeq = uint64(time.Now().UnixNano())
 var runner *Runner
-var conf = &config.GetStoreConfig().ShelfMode
+var conf = config.GetShelfMode()
 var stat *statistics.Shelf
 var tsspConvertLimited limiter.Fixed
-
-func AllocTSSPConvertSource() (bool, func()) {
-	if tsspConvertLimited.TryTake() {
-		return true, tsspConvertLimited.Release
-	}
-
-	return false, nil
-}
 
 func AllocWalSeq() uint64 {
 	return atomic.AddUint64(&walSeq, 1)
 }
 
 func Open() {
-	conf = &config.GetStoreConfig().ShelfMode
+	conf = config.GetShelfMode()
 	if !conf.Enabled {
 		return
 	}
@@ -73,8 +67,13 @@ type Index interface {
 }
 
 type Runner struct {
+	icm        *IndexCreatorManager
 	processors []*Processor
 	runner     *util.ConcurrentRunner[Blob]
+}
+
+func (r *Runner) IndexCreatorManager() *IndexCreatorManager {
+	return r.icm
 }
 
 func (r *Runner) Size() int {
@@ -90,6 +89,7 @@ func (r *Runner) ScheduleGroup(shardID uint64, group *BlobGroup) error {
 		}
 		group.wg.Add(1)
 		blob.done = group.wg.Done
+		blob.ResetTime()
 		runner.Schedule(shardID, blob)
 	}
 
@@ -178,6 +178,7 @@ func newRunner(size int) *Runner {
 	}
 
 	r.runner = util.NewConcurrentRunner[Blob](queues, processors)
+	r.icm = NewIndexCreatorManager()
 	return r
 }
 
@@ -281,6 +282,10 @@ func (p *Processor) process(blob *Blob) (err error) {
 	}
 
 	var wal *Wal
+	defer func() {
+		wal.EndWrite()
+	}()
+
 	itr := blob.Iterator()
 	for {
 		seriesKey, data, err := itr.Next()
@@ -291,11 +296,7 @@ func (p *Processor) process(blob *Blob) (err error) {
 			return err
 		}
 
-		wal, err = shard.UpdateWal(wal, seriesKey, blob.TimeRange())
-		if err != nil {
-			return err
-		}
-
+		wal = shard.UpdateWal(blob.TimeRange())
 		err = shard.Write(wal, seriesKey, data)
 		if err != nil {
 			return err
@@ -317,8 +318,17 @@ func ReadRecord(shardID uint64, mst string, sid uint64, tr *util.TimeRange,
 }
 
 type WalReader struct {
-	wals    []*Wal
-	release func()
+	wals     []*Wal
+	excludes []bool
+	release  func()
+}
+
+func (r *WalReader) Exclude(files ...immutable.TSSPFile) {
+	for i, wal := range r.wals {
+		if !r.excludes[i] && wal.TargetContain(files...) {
+			r.excludes[i] = true
+		}
+	}
 }
 
 func (r *WalReader) Ref() {
@@ -336,8 +346,9 @@ func (r *WalReader) UnRef() {
 func NewWalReader(shardID uint64, mst string, tr *util.TimeRange) *WalReader {
 	wals, release := NewRunner().GetWALs(shardID, mst, tr)
 	return &WalReader{
-		wals:    wals,
-		release: release,
+		wals:     wals,
+		excludes: make([]bool, len(wals)),
+		release:  release,
 	}
 }
 
@@ -346,18 +357,26 @@ func (r *WalReader) Values(_ string, sid uint64, tr util.TimeRange, schema recor
 		return nil
 	}
 
-	swap := &record.Record{}
-	rec := &record.Record{}
 	ctx, release := NewWalCtx()
 	defer release()
 
-	for _, wal := range r.wals {
-		if wal.Converted() {
+	swap := &record.Record{}
+	swap.ResetWithSchema(schema)
+	sort.Sort(swap)
+	record.PadTimeColIfNeeded(swap)
+
+	rec := &record.Record{
+		Schema:  swap.Schema,
+		ColVals: make([]record.ColVal, swap.Len()),
+	}
+
+	for i, wal := range r.wals {
+		if r.excludes[i] {
 			continue
 		}
 
-		swap.ResetDeep()
-		err := wal.ReadRecord(ctx, sid, swap)
+		swap.InitColVal(0, swap.Len())
+		err := wal.ReadRecord(ctx, sid, swap, true)
 		if err == io.EOF {
 			continue
 		}

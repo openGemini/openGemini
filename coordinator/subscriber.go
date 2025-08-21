@@ -65,7 +65,7 @@ func (c *HTTPClient) Send(db, rp string, lineProtocol []byte) error {
 		if err != nil {
 			return err
 		}
-		err = fmt.Errorf(string(body))
+		err = fmt.Errorf("%s", string(body))
 		return err
 	}
 	return nil

@@ -20,10 +20,11 @@ import (
 	"testing"
 
 	"github.com/openGemini/openGemini/app/ts-store/storage"
+	"github.com/openGemini/openGemini/engine"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/errno"
-	"github.com/openGemini/openGemini/lib/netstorage"
-	internal "github.com/openGemini/openGemini/lib/netstorage/data"
+	"github.com/openGemini/openGemini/lib/msgservice"
+	internal "github.com/openGemini/openGemini/lib/msgservice/data"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
@@ -37,21 +38,21 @@ func TestProcessDDL(t *testing.T) {
 		return errno.NewError(errno.PtNotFound)
 	})
 
-	err := netstorage.NormalizeError(errStr)
+	err := msgservice.NormalizeError(errStr)
 	assert.Equal(t, true, errno.Equal(err, errno.PtNotFound))
 
 	errStr = processDDL(&condition, func(expr influxql.Expr, tr influxql.TimeRange) error {
 		return fmt.Errorf("shard not found")
 	})
 
-	err = netstorage.NormalizeError(errStr)
+	err = msgservice.NormalizeError(errStr)
 	assert.Equal(t, true, err.Error() == "shard not found")
 
 	errStr = processDDL(&condition, func(expr influxql.Expr, tr influxql.TimeRange) error {
 		return nil
 	})
 
-	err = netstorage.NormalizeError(errStr)
+	err = msgservice.NormalizeError(errStr)
 	assert.Equal(t, true, err == nil)
 }
 
@@ -104,8 +105,8 @@ func TestProcessShowTagValues(t *testing.T) {
 		},
 	} {
 		t.Run(testcase.Name, func(t *testing.T) {
-			h := NewHandler(netstorage.ShowTagValuesRequestMessage)
-			if err := h.SetMessage(&netstorage.ShowTagValuesRequest{
+			h := NewHandler(msgservice.ShowTagValuesRequestMessage)
+			if err := h.SetMessage(&msgservice.ShowTagValuesRequest{
 				ShowTagValuesRequest: testcase.ShowTagValuesRequest,
 			}); err != nil {
 				t.Fatal(err)
@@ -115,15 +116,15 @@ func TestProcessShowTagValues(t *testing.T) {
 			s.SetEngine(&MockEngine{})
 			h.SetStore(s)
 			rsp, _ := h.Process()
-			response, ok := rsp.(*netstorage.ShowTagValuesResponse)
+			response, ok := rsp.(*msgservice.ShowTagValuesResponse)
 			if !ok {
 				t.Fatal("response type is invalid")
 			}
 
 			if testcase.Want == nil {
-				assert.Equal(t, nil, netstorage.NormalizeError(response.Err))
+				assert.Equal(t, nil, msgservice.NormalizeError(response.Err))
 			} else {
-				assert.Equal(t, testcase.Want.Errno(), netstorage.NormalizeError(response.Err).(*errno.Error).Errno())
+				assert.Equal(t, testcase.Want.Errno(), msgservice.NormalizeError(response.Err).(*errno.Error).Errno())
 			}
 
 			response.Err = nil
@@ -132,7 +133,7 @@ func TestProcessShowTagValues(t *testing.T) {
 }
 
 type MockEngine struct {
-	netstorage.Engine
+	engine.Engine
 }
 
 func (e *MockEngine) TagKeys(_ string, _ []uint32, _ [][]byte, _ influxql.Expr, _ influxql.TimeRange) ([]string, error) {
@@ -151,12 +152,12 @@ func (e *MockEngine) SendRaftMessage(database string, ptId uint64, msg raftpb.Me
 	return nil
 }
 
-func (e *MockEngine) CreateDDLBasePlans(planType hybridqp.DDLType, db string, ptIDs []uint32, tr *influxql.TimeRange) netstorage.DDLBasePlans {
+func (e *MockEngine) CreateDDLBasePlans(planType hybridqp.DDLType, db string, ptIDs []uint32, tr *influxql.TimeRange) engine.DDLBasePlans {
 	plan := &MockDDLPlans{
 		planType: planType,
 		ExecuteFn: func(mstKeys map[string][][]byte, condition influxql.Expr, tr util.TimeRange, limit int) (interface{}, error) {
 			if planType == hybridqp.ShowTagValues {
-				return netstorage.TablesTagSets{}, nil
+				return influxql.TablesTagSets{}, nil
 			}
 			return []string{}, nil
 		},
@@ -167,7 +168,6 @@ func (e *MockEngine) CreateDDLBasePlans(planType hybridqp.DDLType, db string, pt
 }
 
 func (e *MockEngine) DbPTRef(db string, ptId uint32) error {
-	fmt.Printf(db)
 	if db == "test_return_error" {
 		return errno.NewError(errno.DBPTClosed, "pt", 1)
 	}
@@ -199,8 +199,8 @@ func TestProcessGetShardSplitPoints(t *testing.T) {
 	db := path.Join(dataPath, "db0")
 	pt := uint32(1)
 
-	h := NewHandler(netstorage.GetShardSplitPointsRequestMessage)
-	if err := h.SetMessage(&netstorage.GetShardSplitPointsRequest{
+	h := NewHandler(msgservice.GetShardSplitPointsRequestMessage)
+	if err := h.SetMessage(&msgservice.GetShardSplitPointsRequest{
 		GetShardSplitPointsRequest: internal.GetShardSplitPointsRequest{
 			DB:   &db,
 			PtID: &pt,
@@ -214,7 +214,7 @@ func TestProcessGetShardSplitPoints(t *testing.T) {
 	h.SetStore(s)
 
 	rsp, _ := h.Process()
-	response, ok := rsp.(*netstorage.GetShardSplitPointsResponse)
+	response, ok := rsp.(*msgservice.GetShardSplitPointsResponse)
 	if !ok {
 		t.Fatal("response type is invalid")
 	}
@@ -227,8 +227,8 @@ func TestProcessSeriesKeys(t *testing.T) {
 	pts := []uint32{1}
 	ms := []string{"cpu"}
 
-	h := NewHandler(netstorage.SeriesKeysRequestMessage)
-	if err := h.SetMessage(&netstorage.SeriesKeysRequest{
+	h := NewHandler(msgservice.SeriesKeysRequestMessage)
+	if err := h.SetMessage(&msgservice.SeriesKeysRequest{
 		SeriesKeysRequest: internal.SeriesKeysRequest{
 			Db:           &db,
 			PtIDs:        pts,
@@ -243,7 +243,7 @@ func TestProcessSeriesKeys(t *testing.T) {
 	h.SetStore(s)
 
 	rsp, _ := h.Process()
-	response, ok := rsp.(*netstorage.SeriesKeysResponse)
+	response, ok := rsp.(*msgservice.SeriesKeysResponse)
 	if !ok {
 		t.Fatal("response type is invalid")
 	}
@@ -252,8 +252,8 @@ func TestProcessSeriesKeys(t *testing.T) {
 }
 
 func TestProcessRaftMessages(t *testing.T) {
-	h := NewHandler(netstorage.RaftMessagesRequestMessage)
-	if err := h.SetMessage(&netstorage.RaftMessagesRequest{
+	h := NewHandler(msgservice.RaftMessagesRequestMessage)
+	if err := h.SetMessage(&msgservice.RaftMessagesRequest{
 		Database:    "test",
 		PtId:        1,
 		RaftMessage: raftpb.Message{},
@@ -266,7 +266,7 @@ func TestProcessRaftMessages(t *testing.T) {
 	h.SetStore(s)
 
 	rsp, _ := h.Process()
-	response, ok := rsp.(*netstorage.RaftMessagesResponse)
+	response, ok := rsp.(*msgservice.RaftMessagesResponse)
 	if !ok {
 		t.Fatal("response type is invalid")
 	}
@@ -313,8 +313,8 @@ func TestProcessShowSeries(t *testing.T) {
 		},
 	} {
 		t.Run(testcase.Name, func(t *testing.T) {
-			h := NewHandler(netstorage.SeriesKeysRequestMessage)
-			if err := h.SetMessage(&netstorage.SeriesKeysRequest{
+			h := NewHandler(msgservice.SeriesKeysRequestMessage)
+			if err := h.SetMessage(&msgservice.SeriesKeysRequest{
 				SeriesKeysRequest: testcase.ShowSeriesRequest,
 			}); err != nil {
 				t.Fatal(err)
@@ -324,11 +324,11 @@ func TestProcessShowSeries(t *testing.T) {
 			s.SetEngine(&MockEngine{})
 			h.SetStore(s)
 			rsp, _ := h.Process()
-			response, ok := rsp.(*netstorage.SeriesKeysResponse)
+			response, ok := rsp.(*msgservice.SeriesKeysResponse)
 			if !ok {
 				t.Fatal("response type is invalid")
 			}
-			assert.Equal(t, nil, netstorage.NormalizeError(response.Err))
+			assert.Equal(t, nil, msgservice.NormalizeError(response.Err))
 			response.Err = nil
 		})
 	}

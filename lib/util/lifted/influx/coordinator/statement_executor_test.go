@@ -10,6 +10,7 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	Logger "github.com/openGemini/openGemini/lib/logger"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
+	"github.com/openGemini/openGemini/lib/msgservice"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
@@ -44,12 +45,27 @@ func (m *MockMetaClient) CreateContinuousQuery(database, name, query string) err
 	return nil
 }
 
+func (m *MockMetaClient) GetStreamInfos() map[string]*meta2.StreamInfo {
+	streams := make(map[string]*meta2.StreamInfo)
+	streams["test"] = &meta2.StreamInfo{
+		Name: "test_stream",
+		ID:   1,
+		DesMst: &meta2.StreamMeasurementInfo{
+			Database:        "db1",
+			RetentionPolicy: "rp1",
+			Name:            "stream_mst",
+		},
+		Cond: "field1::integer >= 1",
+	}
+	return streams
+}
+
 type MockShardMapper struct {
 	query.ShardMapper
 }
 
-func (csm *MockShardMapper) MapShards(source influxql.Sources, _ influxql.TimeRange, _ query.SelectOptions, _ influxql.Expr) (query.ShardGroup, error) {
-	mst := source[0].(*influxql.Measurement)
+func (csm *MockShardMapper) MapShards(stmt *influxql.SelectStatement, _ influxql.TimeRange, _ query.SelectOptions, _ influxql.Expr) (query.ShardGroup, error) {
+	mst := stmt.Sources[0].(*influxql.Measurement)
 	if mst.RetentionPolicy != "rp" {
 		return nil, errors.New("retention policy not found")
 	}
@@ -129,18 +145,18 @@ func TestExcuteStatementErr(t *testing.T) {
 
 }
 
-func generateMockExeInfos(idOffset, num int, killOne int, duration int64) []*netstorage.QueryExeInfo {
-	res := make([]*netstorage.QueryExeInfo, 0, num)
+func generateMockExeInfos(idOffset, num int, killOne int, duration int64) []*msgservice.QueryExeInfo {
+	res := make([]*msgservice.QueryExeInfo, 0, num)
 	for i := 0; i < num; i++ {
-		info := &netstorage.QueryExeInfo{
+		info := &msgservice.QueryExeInfo{
 			QueryID:   uint64(i + idOffset),
 			Stmt:      fmt.Sprintf("select * from mst%d", i),
 			Database:  fmt.Sprintf("db%d", i),
 			BeginTime: duration,
-			RunState:  netstorage.Running,
+			RunState:  msgservice.Running,
 		}
 		if i == killOne {
-			info.RunState = netstorage.Killed
+			info.RunState = msgservice.Killed
 		}
 		res = append(res, info)
 	}
@@ -188,7 +204,7 @@ type mockNS struct {
 	netstorage.NetStorage
 }
 
-func (s *mockNS) GetQueriesOnNode(nodeID uint64) ([]*netstorage.QueryExeInfo, error) {
+func (s *mockNS) GetQueriesOnNode(nodeID uint64) ([]*msgservice.QueryExeInfo, error) {
 	infos := generateMockExeInfos(idOffset, mockInfosNum, killOne, int64(minBeginTime))
 	return infos, nil
 }
@@ -305,10 +321,37 @@ func TestStatementExecutor_executeCreateContinuousQueryStatement(t *testing.T) {
 			ResampleEvery: 10 * time.Minute,
 			ResampleFor:   time.Hour,
 		})
-	assert.EqualError(t, err, "GROUP BY time duration must be greater than 0s")
+	assert.NoError(t, err)
+
+	// case: target measurement is stream measurement
+	selectStatement2 := func() *influxql.SelectStatement {
+		selectStatement := &influxql.SelectStatement{
+			Fields:  make(influxql.Fields, 0, 3),
+			Sources: make(influxql.Sources, 0, 3),
+		}
+		selectStatement.Target = &influxql.Target{Measurement: &influxql.Measurement{Database: "db1", RetentionPolicy: "rp1", Name: "stream_mst"}}
+		selectStatement.Fields = append(selectStatement.Fields,
+			&influxql.Field{
+				Expr:  &influxql.VarRef{Val: "field", Type: influxql.Integer},
+				Alias: "",
+			},
+		)
+		selectStatement.Sources = append(selectStatement.Sources,
+			&influxql.Measurement{Database: "db0", RetentionPolicy: "rp0", Name: "mst0"})
+		return selectStatement
+	}
+	err = e.executeCreateContinuousQueryStatement(
+		&influxql.CreateContinuousQueryStatement{
+			Name:          "cq0",
+			Database:      "db0",
+			Source:        selectStatement2(),
+			ResampleEvery: 10 * time.Minute,
+			ResampleFor:   time.Hour,
+		})
+	assert.EqualError(t, err, "target measurement cannot be stream measurement with condition")
 
 	// case: time filter condition clause
-	selectStatement2 := func() *influxql.SelectStatement {
+	selectStatement3 := func() *influxql.SelectStatement {
 		selectStatement := &influxql.SelectStatement{
 			Fields:  make(influxql.Fields, 0, 3),
 			Sources: make(influxql.Sources, 0, 3),
@@ -357,7 +400,7 @@ func TestStatementExecutor_executeCreateContinuousQueryStatement(t *testing.T) {
 	stmt := &influxql.CreateContinuousQueryStatement{
 		Name:          "cq0",
 		Database:      "db0",
-		Source:        selectStatement2(),
+		Source:        selectStatement3(),
 		ResampleEvery: 10 * time.Minute,
 		ResampleFor:   time.Hour,
 	}
@@ -396,4 +439,37 @@ func TestStatementExecutor_NormalizeStatement(t *testing.T) {
 		err = tc.validateFunc(tc.stmt)
 		assert.NoError(t, err)
 	}
+}
+
+func buildCTEStmt(t *testing.T, sql string) *influxql.WithSelectStatement {
+	sqlReader := strings.NewReader(sql)
+	parser := influxql.NewParser(sqlReader)
+	yaccParser := influxql.NewYyParser(parser.GetScanner(), make(map[string]interface{}))
+	yaccParser.ParseTokens()
+	q, err := yaccParser.GetQuery()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stmt := q.Statements[0]
+	selectStmt, ok := stmt.(*influxql.WithSelectStatement)
+	if !ok {
+		t.Fatal(fmt.Errorf("invalid WithSelectStatement"))
+	}
+	return selectStmt
+}
+
+func TestStatementExecutor_WithSelectStatement(t *testing.T) {
+	sql := "with t2 as (select * from t1 where f1 in (select f1 from t1)), t1 as (select * from mst where f1 >3) select * from t1,t2"
+	withStmt := buildCTEStmt(t, sql)
+	statementExecutor := newMockStatementExecutor()
+	ctx := &query.ExecutionContext{}
+	_ = statementExecutor.ExecuteStatement(withStmt, ctx, 0)
+	assert.True(t, withStmt.CTEs[0].Alias == "t1" && withStmt.CTEs[1].Query.DirectDependencyCTEs[0].Alias == "t1")
+
+	sql = "with t1 as (select * from mst where f1 in (select f1 from mst limit 10)) select f1 from t1"
+	withStmt = buildCTEStmt(t, sql)
+	_ = statementExecutor.ExecuteStatement(withStmt, ctx, 0)
+	assert.True(t, withStmt.DependenciesCTEsAlias[0] == "t1")
+
 }

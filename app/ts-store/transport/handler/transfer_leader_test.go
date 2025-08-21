@@ -19,8 +19,8 @@ import (
 
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
-	"github.com/openGemini/openGemini/lib/netstorage"
-	netdata "github.com/openGemini/openGemini/lib/netstorage/data"
+	"github.com/openGemini/openGemini/lib/msgservice"
+	netdata "github.com/openGemini/openGemini/lib/msgservice/data"
 	"github.com/stretchr/testify/require"
 )
 
@@ -30,12 +30,12 @@ func Test_TransferLeadershipProcessor_Success(t *testing.T) {
 		log:   logger.NewLogger(errno.ModuleHA),
 	}
 	resp := &MockNewResponser{}
-	var req *netstorage.TransferLeadershipRequest
+	var req *msgservice.TransferLeadershipRequest
 	var nodeid uint64 = 2
 	var db string = "db0"
 	var oldPt uint32 = 1
 	var newPt uint32 = 1
-	req = &netstorage.TransferLeadershipRequest{
+	req = &msgservice.TransferLeadershipRequest{
 		TransferLeadershipRequest: netdata.TransferLeadershipRequest{
 			NodeId:        &nodeid,
 			Database:      &db,
@@ -53,7 +53,7 @@ func Test_TransferLeadershipProcessor_Err(t *testing.T) {
 		log:   logger.NewLogger(errno.ModuleHA),
 	}
 	resp := &MockNewResponser{}
-	var req *netstorage.SysCtrlRequest
+	var req *msgservice.SysCtrlRequest
 	err := h.Handle(resp, req)
 	require.Error(t, err)
 }

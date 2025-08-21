@@ -152,3 +152,23 @@ func TestMatchSeriesKeyTagFilter_regexp(t *testing.T) {
 	tf.value = []byte("^$")
 	require.Equal(t, true, matchSeriesKeyTagFilter(tags, &tf, true))
 }
+
+func TestContainsAny(t *testing.T) {
+	tagsBuf := &influx.PointTags{
+		{
+			Key:   "1",
+			Value: "1",
+		},
+		{
+			Key:   "2",
+			Value: "2",
+		},
+	}
+	matchValues := map[interface{}]bool{
+		"1": true,
+	}
+	tf := &tagFilter{}
+	tf.ContainsAny(tagsBuf, "1", matchValues, true, true)
+	tf.ContainsAny(tagsBuf, "1", matchValues, false, true)
+	tf.ContainsAny(tagsBuf, "3", matchValues, false, true)
+}

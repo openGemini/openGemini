@@ -15,7 +15,9 @@
 package meta
 
 import (
+	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 
 	originql "github.com/influxdata/influxql"
@@ -40,7 +42,9 @@ func ApplyCreateRetentionPolicy(data *Data, cmd *proto2.Command) error {
 		ShardGroupDuration: time.Duration(pb.GetShardGroupDuration()),
 		HotDuration:        time.Duration(pb.GetHotDuration()),
 		WarmDuration:       time.Duration(pb.GetWarmDuration()),
+		IndexColdDuration:  time.Duration(pb.GetIndexColdDuration()),
 		IndexGroupDuration: time.Duration(pb.GetIndexGroupDuration()),
+		ShardMergeDuration: time.Duration(pb.GetShardMergeDuration()),
 	}
 
 	return data.CreateRetentionPolicy(v.GetDatabase(), rpi, v.GetDefaultRP())
@@ -77,6 +81,10 @@ func ApplyUpdateRetentionPolicy(data *Data, cmd *proto2.Command) error {
 	if v.WarmDuration != nil {
 		value := time.Duration(v.GetWarmDuration())
 		rpu.WarmDuration = &value
+	}
+	if v.IndexColdDuration != nil {
+		value := time.Duration(v.GetIndexColdDuration())
+		rpu.IndexColdDuration = &value
 	}
 	rpu.IndexGroupDuration = GetDuration(v.IndexGroupDuration)
 	rpu.ShardGroupDuration = GetDuration(v.ShardGroupDuration)
@@ -538,4 +546,46 @@ func ApplyUpdateMeasurement(data *Data, cmd *proto2.Command) error {
 		panic(fmt.Errorf("%s is not a UpdateMeasurementCommand", ext))
 	}
 	return data.UpdateMeasurement(v.GetDb(), v.GetRp(), v.GetMst(), v.GetOptions())
+}
+
+func ApplyReplaceMergeShards(data *Data, cmd *proto2.Command) error {
+	ext, _ := proto.GetExtension(cmd, proto2.E_ReplaceMergeShardsCommand_Command)
+	v, ok := ext.(*proto2.ReplaceMergeShardsCommand)
+	if !ok {
+		return fmt.Errorf("%s is not a ReplaceMergeShardsCommand", ext)
+	}
+	return data.ReplaceMergeShards(v.GetDb(), v.GetRp(), v.GetPtId(), v.ShardId)
+}
+
+func ApplyRecoverMetaData(data *Data, cmd *proto2.Command) error {
+	ext, _ := proto.GetExtension(cmd, proto2.E_RecoverMetaDataCommand_Command)
+	v, ok := ext.(*proto2.RecoverMetaDataCommand)
+	if !ok {
+		return fmt.Errorf("%s is not a RecoverMetaDataCommand", ext)
+	}
+
+	databases := v.GetDatabases()
+	m := v.GetMetaData()
+	nodeMap := v.GetNodeMap()
+
+	metaData := &Data{}
+	err := json.Unmarshal([]byte(m), metaData)
+	if err != nil {
+		return err
+	}
+
+	once := sync.Once{}
+	if len(databases) == 0 {
+		err = data.RecoverData(metaData, nodeMap)
+	} else {
+		for _, d := range databases {
+			iErr := data.RecoverDataBase(d, metaData, nodeMap)
+			if iErr != nil {
+				once.Do(func() {
+					err = iErr
+				})
+			}
+		}
+	}
+	return err
 }

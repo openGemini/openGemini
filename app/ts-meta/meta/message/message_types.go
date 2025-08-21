@@ -89,6 +89,9 @@ const (
 
 	ShowClusterRequestMessage
 	ShowClusterResponseMessage
+
+	SendBackupToMetaRequestMessage
+	SendBackupToMetaResponseMessage
 )
 
 var MetaMessageBinaryCodec = make(map[uint8]func() transport.Codec, 20)
@@ -139,6 +142,8 @@ func init() {
 	MetaMessageBinaryCodec[SendSysCtrlToMetaResponseMessage] = func() transport.Codec { return &SendSysCtrlToMetaResponse{} }
 	MetaMessageBinaryCodec[ShowClusterRequestMessage] = func() transport.Codec { return &ShowClusterRequest{} }
 	MetaMessageBinaryCodec[ShowClusterResponseMessage] = func() transport.Codec { return &ShowClusterResponse{} }
+	MetaMessageBinaryCodec[SendBackupToMetaRequestMessage] = func() transport.Codec { return &SendBackupToMetaRequest{} }
+	MetaMessageBinaryCodec[SendBackupToMetaResponseMessage] = func() transport.Codec { return &SendBackupToMetaResponse{} }
 
 	MetaMessageResponseTyp = map[uint8]uint8{
 		PingRequestMessage:                    PingResponseMessage,
@@ -162,5 +167,6 @@ func init() {
 		VerifyDataNodeStatusRequestMessage:    VerifyDataNodeStatusResponseMessage,
 		SendSysCtrlToMetaRequestMessage:       SendSysCtrlToMetaResponseMessage,
 		ShowClusterRequestMessage:             ShowClusterResponseMessage,
+		SendBackupToMetaRequestMessage:        SendBackupToMetaResponseMessage,
 	}
 }

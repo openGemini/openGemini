@@ -245,3 +245,24 @@ func Test_handleCQCreated(t *testing.T) {
 	s.handleCQCreated("cq4")
 	require.Equal(t, []string{"cq0", "cq1", "cq2", "cq3", "cq4"}, s.cqNames)
 }
+
+func Test_handlerSQLNodeOfflineErr(t *testing.T) {
+	s := &Store{
+		cacheData: &meta.Data{
+			Databases: map[string]*meta.DatabaseInfo{
+				"db0": {}, // No continuous queries
+			},
+		},
+		heartbeatInfoList: list.New(),
+		cqLease:           make(map[string]*cqLeaseInfo),
+		closing:           make(chan struct{}),
+		Logger:            logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop()),
+	}
+	host1 := "127.0.0.1:8086"
+	s.heartbeatInfoList.PushBack(&HeartbeatInfo{
+		Host:              host1,
+		LastHeartbeatTime: time.Now(),
+	})
+	hbi := s.heartbeatInfoList.Front()
+	s.handlerSQLNodeOffline(host1, hbi)
+}

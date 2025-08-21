@@ -32,6 +32,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestGetCursorBy(t *testing.T) {
@@ -39,14 +40,14 @@ func TestGetCursorBy(t *testing.T) {
 	_ = fileops.RemoveAll(testCompDir)
 	sig := interruptsignal.NewInterruptSignal()
 	defer func() {
+		clearMstInfo()
 		sig.Close()
 		_ = fileops.RemoveAll(testCompDir)
 	}()
 	mstName := "mst"
-	err := writeData(testCompDir, mstName)
-	if err != nil {
-		t.Errorf(err.Error())
-	}
+	err := writeData(testCompDir, mstName, 1000)
+	require.NoError(t, err)
+
 	p := path.Join(testCompDir, mstName)
 	path := sparseindex.NewOBSFilterPath("", p, nil)
 	metaIndex, metaIndexId, _ := GetCursorsBy(path, util.TimeRange{Min: 0, Max: 2}, true)
@@ -168,14 +169,14 @@ func TestFilterNilBy(t *testing.T) {
 	_ = fileops.RemoveAll(testCompDir)
 	sig := interruptsignal.NewInterruptSignal()
 	defer func() {
+		clearMstInfo()
 		sig.Close()
 		_ = fileops.RemoveAll(testCompDir)
 	}()
 	mstName := "mst"
-	err := writeData(testCompDir, mstName)
-	if err != nil {
-		t.Errorf(err.Error())
-	}
+	err := writeData(testCompDir, mstName, 500)
+	require.NoError(t, err)
+
 	p := path.Join(testCompDir, mstName)
 	consumeInfo := &consume.ConsumeInfo{
 		Tr: util.TimeRange{Min: 0, Max: 1635732519000000000},

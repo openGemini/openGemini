@@ -44,7 +44,7 @@ func (m *MmsIdTime) Get(id uint64) (int64, int64) {
 }
 
 func (m *MmsIdTime) getIdInfo(id uint64) (*idInfo, bool) {
-	high32 := uint32(id >> 32)
+	high32 := uint32(id >> 16)
 	low32 := uint32(id)
 	infos, ok := m.idTime[high32]
 	if !ok {
@@ -57,15 +57,26 @@ func (m *MmsIdTime) getIdInfo(id uint64) (*idInfo, bool) {
 	return info, true
 }
 
-func (m *MmsIdTime) insertIdInfo(id uint64, info *idInfo) {
-	high32 := uint32(id >> 32)
+func (m *MmsIdTime) Size() int {
+	return len(m.idTime)
+}
+
+func (m *MmsIdTime) CreateIdInfo(id uint64) (info *idInfo) {
+	high32 := uint32(id >> 16)
 	low32 := uint32(id)
 	infos, ok := m.idTime[high32]
 	if !ok {
 		infos = make(map[uint32]*idInfo, 32)
 		m.idTime[high32] = infos
 	}
+	info, ok = infos[low32]
+	if ok {
+		return info
+	}
+	info = &idInfo{lastFlushTime: math.MinInt64, rows: 0}
 	infos[low32] = info
+	m.sc.Incr()
+	return info
 }
 
 func (m *MmsIdTime) getIdCount() int64 {
@@ -96,7 +107,7 @@ func (m *MmsIdTime) addRowCounts(id uint64, rowCounts int64) {
 
 	if !ok {
 		m.mu.Lock()
-		info = m.createIdInfo(id)
+		info = m.CreateIdInfo(id)
 		m.mu.Unlock()
 	}
 
@@ -108,7 +119,7 @@ func (m *MmsIdTime) batchUpdateCheckTime(p *IdTimePairs, incrRows bool) {
 	defer m.mu.Unlock()
 
 	for i := range p.Ids {
-		info := m.createIdInfo(p.Ids[i])
+		info := m.CreateIdInfo(p.Ids[i])
 
 		if incrRows {
 			info.rows += p.Rows[i]
@@ -117,16 +128,6 @@ func (m *MmsIdTime) batchUpdateCheckTime(p *IdTimePairs, incrRows bool) {
 			info.lastFlushTime = p.Tms[i]
 		}
 	}
-}
-
-func (m *MmsIdTime) createIdInfo(id uint64) *idInfo {
-	info, ok := m.getIdInfo(id)
-	if !ok {
-		info = &idInfo{lastFlushTime: math.MinInt64, rows: 0}
-		m.insertIdInfo(id, info)
-		m.sc.Incr()
-	}
-	return info
 }
 
 func NewMmsIdTime(sc *SeriesCounter) *MmsIdTime {

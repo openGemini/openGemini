@@ -60,6 +60,7 @@ type Config struct {
 	HTTPSEnabled            bool              `toml:"https-enabled"`
 	HTTPSCertificate        string            `toml:"https-certificate"`
 	HTTPSPrivateKey         string            `toml:"https-private-key"`
+	HTTPSClientCertificate  string            `toml:"https-client-certificate"`
 	MaxRowLimit             int               `toml:"max-row-limit"`
 	MaxRowSizeLimit         int               `toml:"max-row-size-limit"`
 	MaxConnectionLimit      int               `toml:"max-connection-limit"`
@@ -125,6 +126,7 @@ func NewConfig() Config {
 		DebugPprofEnabled:       false,
 		HTTPSEnabled:            false,
 		HTTPSCertificate:        "/etc/ssl/influxdb.pem",
+		HTTPSClientCertificate:  "",
 		MaxRowLimit:             DefaultMaxRowNum,
 		MaxRowSizeLimit:         0,
 		Realm:                   DefaultRealm,
@@ -199,6 +201,7 @@ func (c *Config) ShowConfigs() map[string]interface{} {
 		"http.https-enabled":                       c.HTTPSEnabled,
 		"http.https-certificate":                   c.HTTPSCertificate,
 		"http.https-private-key":                   c.HTTPSPrivateKey,
+		"http.https-client-certificate":            c.HTTPSClientCertificate,
 		"http.max-row-limit":                       c.MaxRowLimit,
 		"http.max-connection-limit":                c.MaxConnectionLimit,
 		"http.shared-secret":                       c.SharedSecret,

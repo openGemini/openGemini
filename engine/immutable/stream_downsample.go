@@ -226,12 +226,33 @@ func (c *StreamWriteFile) InitFile(seq uint64) error {
 }
 
 func (c *StreamWriteFile) InitMergedFile(f TSSPFile) error {
+	return c.initFromTSSPFile(f, true, false)
+}
+
+func (c *StreamWriteFile) InitCompactFile(f TSSPFile) error {
+	return c.initFromTSSPFile(f, false, true)
+}
+
+func (c *StreamWriteFile) initFromTSSPFile(f TSSPFile, incMerged, incLevel bool) error {
 	c.file = f
 	c.fileName = f.FileName()
 	c.fileName.lock = c.lock
-	c.fileName.merge++
 
+	if incMerged {
+		c.fileName.merge++
+	}
+	if incLevel {
+		c.fileName.level++
+	}
+
+	return c.NewFile(false)
+}
+
+func (c *StreamWriteFile) InitFlushFile(seq uint64, order bool) error {
+	c.fileName = NewTSSPFileName(seq, 0, 0, 0, order, c.lock)
 	if err := c.NewFile(false); err != nil {
+		dir := filepath.Join(c.dir, c.name)
+		c.log.Error("create tssp file fail", zap.String("name", c.fileName.Path(dir, true)), zap.Error(err))
 		return err
 	}
 
@@ -244,6 +265,11 @@ func (c *StreamWriteFile) ChangeSid(sid uint64) {
 	}
 	dOff := c.writer.DataSize()
 	c.Init(sid, dOff, c.schema)
+}
+
+func (c *StreamWriteFile) ChangeSegment() {
+	c.colBuilder.BuildPreAgg()
+	c.colBuilder.colMeta = nil
 }
 
 func (c *StreamWriteFile) AppendColumn(ref *record.Field) error {

@@ -40,10 +40,10 @@ func (e *genericValidationError) Error() string {
 	return fmt.Sprintf(e.message, e.cause, formatLabelSet(e.series))
 }
 
-func newLabelNameTooLongError(series []prompb.Label, labelName []byte) ValidationError {
+func newLabelNameTooLongError(series []prompb.Label, labelName string) ValidationError {
 	return &genericValidationError{
 		message: "label name too long: %.200q metric %.200q",
-		cause:   string(labelName),
+		cause:   labelName,
 		series:  series,
 	}
 }
@@ -51,7 +51,7 @@ func newLabelNameTooLongError(series []prompb.Label, labelName []byte) Validatio
 // labelValueTooLongError is a customized ValidationError, in that the cause and the series are
 // are formatted in different order in Error.
 type labelValueTooLongError struct {
-	labelValue []byte
+	labelValue string
 	series     []prompb.Label
 }
 
@@ -59,33 +59,33 @@ func (e *labelValueTooLongError) Error() string {
 	return fmt.Sprintf("label value too long for metric: %.200q label value: %.200q", formatLabelSet(e.series), e.labelValue)
 }
 
-func newLabelValueTooLongError(series []prompb.Label, labelValue []byte) ValidationError {
+func newLabelValueTooLongError(series []prompb.Label, labelValue string) ValidationError {
 	return &labelValueTooLongError{
 		labelValue: labelValue,
 		series:     series,
 	}
 }
 
-func newInvalidLabelError(series []prompb.Label, labelName []byte) ValidationError {
+func newInvalidLabelError(series []prompb.Label, labelName string) ValidationError {
 	return &genericValidationError{
 		message: "sample invalid label: %.200q metric %.200q",
-		cause:   string(labelName),
+		cause:   labelName,
 		series:  series,
 	}
 }
 
-func newDuplicatedLabelError(series []prompb.Label, labelName []byte) ValidationError {
+func newDuplicatedLabelError(series []prompb.Label, labelName string) ValidationError {
 	return &genericValidationError{
 		message: "duplicate label name: %.200q metric %.200q",
-		cause:   string(labelName),
+		cause:   labelName,
 		series:  series,
 	}
 }
 
-func newLabelsNotSortedError(series []prompb.Label, labelName []byte) ValidationError {
+func newLabelsNotSortedError(series []prompb.Label, labelName string) ValidationError {
 	return &genericValidationError{
 		message: "labels not sorted: %.200q metric %.200q",
-		cause:   string(labelName),
+		cause:   labelName,
 		series:  series,
 	}
 }

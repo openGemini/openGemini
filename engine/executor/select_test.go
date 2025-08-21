@@ -17,6 +17,7 @@ package executor
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -192,7 +193,7 @@ func TestAggTransformCancel(t *testing.T) {
 		[]hybridqp.RowDataType{inRowDataType},
 		[]hybridqp.RowDataType{outRowDataType},
 		exprOpt,
-		opt, false)
+		opt, &QuerySchema{}, false)
 	ctx := context.Background()
 	ctx, cancel := context.WithCancel(ctx)
 	trans.errs.Init(1, trans.Close)
@@ -204,7 +205,7 @@ func TestAggTransformCancel(t *testing.T) {
 		[]hybridqp.RowDataType{inRowDataType},
 		[]hybridqp.RowDataType{outRowDataType},
 		exprOpt,
-		opt, false)
+		opt, &QuerySchema{}, false)
 	trans.Inputs[0].State = make(chan Chunk, 1)
 	trans.Inputs[0].State <- nil
 	trans.errs.Init(1, trans.Close)
@@ -248,4 +249,45 @@ func TestFillTransformCancel(t *testing.T) {
 	<-trans.inputChunk
 	close(trans.nextSignal)
 	assert.NoError(t, trans.errs.Err())
+}
+
+func TestBuildLogicalPlanWithCompare(t *testing.T) {
+	sqlReader := strings.NewReader(TemplateSql[NO_AGG_NO_GROUP])
+	parser := influxql.NewParser(sqlReader)
+	yaccParser := influxql.NewYyParser(parser.GetScanner(), make(map[string]interface{}))
+	yaccParser.ParseTokens()
+	yaccQuery, _ := yaccParser.GetQuery()
+	stmt := yaccQuery.Statements[0]
+
+	stmt, _ = query.RewriteStatement(stmt)
+	selectStmt := stmt.(*influxql.SelectStatement)
+	selectStmt.IsCompareCall = true
+
+	sOpts := query.SelectOptions{}
+	shardMapper := NewPlanTypeInitShardMapper()
+
+	p, _ := query.Prepare(selectStmt, shardMapper, sOpts)
+	node, _, _ := p.BuildLogicalPlan(context.Background())
+	assert.Equal(t, true, node.Schema().IsCompareCall())
+}
+
+func TestBuildNodeExchange(t *testing.T) {
+	nodeTraits := []hybridqp.Trait{}
+	rq1 := &RemoteQuery{Database: "db0", PtID: uint32(1), NodeID: uint64(1), ShardIDs: []uint64{1}}
+	nodeTraits = append(nodeTraits, rq1, rq1)
+	ctx := context.Background()
+	ctx = context.WithValue(ctx, hybridqp.NodeTrait, &nodeTraits)
+	fields := make(influxql.Fields, 0, 1)
+	fields = append(fields, &influxql.Field{
+		Expr: &influxql.VarRef{
+			Val:  "id",
+			Type: influxql.Integer,
+		},
+		Alias: "",
+	})
+	schema := NewQuerySchema(fields, []string{"id"}, &query.ProcessorOptions{}, nil)
+	reader := NewLogicalReader(nil, schema)
+	builder := NewLogicalPlanBuilderImpl(schema)
+	project := NewLogicalProject(reader, schema)
+	assert.NoError(t, BuildNodeExchange(ctx, builder, project))
 }

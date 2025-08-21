@@ -378,11 +378,11 @@ func (trans *LimitTransform) AppendPoint(chunk Chunk, in int) {
 		start, end := trans.Opt.Window(chunk.Time()[in])
 
 		if c.Len() == 0 {
-			c.AddIntervalIndex(c.Len())
+			c.AppendIntervalIndex(c.Len())
 		} else {
 			preStart, preEnd := trans.Opt.Window(c.Time()[c.Len()-1])
 			if start != preStart || end != preEnd {
-				c.AddIntervalIndex(c.Len())
+				c.AppendIntervalIndex(c.Len())
 			}
 		}
 	}
@@ -413,11 +413,11 @@ func (trans *LimitTransform) AppendPoints(chunk Chunk, in int) {
 		start, end := trans.Opt.Window(chunk.Time()[intervalIndex[in]])
 
 		if c.Len() == 0 {
-			c.AddIntervalIndex(c.Len())
+			c.AppendIntervalIndex(c.Len())
 		} else {
 			preStart, preEnd := trans.Opt.Window(c.Time()[c.Len()-1])
 			if start != preStart || end != preEnd {
-				c.AddIntervalIndex(c.Len())
+				c.AppendIntervalIndex(c.Len())
 			}
 		}
 	}

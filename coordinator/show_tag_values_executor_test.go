@@ -261,7 +261,7 @@ func TestApplyLimit(t *testing.T) {
 
 	for _, testcase := range []struct {
 		Name    string
-		Data    netstorage.TagSets
+		Data    influxql.TagSets
 		Offset  int
 		Limit   int
 		OrderBy int
@@ -298,8 +298,8 @@ func TestApplyLimit(t *testing.T) {
 	}
 }
 
-func applyLimitData() netstorage.TagSets {
-	return netstorage.TagSets{
+func applyLimitData() influxql.TagSets {
+	return influxql.TagSets{
 		{Key: "a", Value: "aaa"},
 		{Key: "b", Value: "bbb"},
 		{Key: "a", Value: "aaa111"},
@@ -345,6 +345,10 @@ type mockNS struct {
 	netstorage.NetStorage
 }
 
+func (m *mockNS) DropSeries(nodeID uint64, db string, ptId []uint32, measurements []string, condition influxql.Expr) error {
+	return nil
+}
+
 func (m *mockNS) ShowTagKeys(nodeID uint64, db string, ptId []uint32, measurements []string, condition influxql.Expr) ([]string, error) {
 	if nodeID == 1 {
 		arr := []string{
@@ -376,11 +380,11 @@ func (m *mockNS) ShowTagKeys(nodeID uint64, db string, ptId []uint32, measuremen
 	return arr, nil
 }
 
-func (m *mockNS) TagValues(nodeID uint64, db string, ptIDs []uint32, tagKeys map[string]map[string]struct{}, cond influxql.Expr, limit int, exact bool) (netstorage.TablesTagSets, error) {
+func (m *mockNS) TagValues(nodeID uint64, db string, ptIDs []uint32, tagKeys map[string]map[string]struct{}, cond influxql.Expr, limit int, exact bool) (influxql.TablesTagSets, error) {
 	if nodeID == 1 {
-		return append(netstorage.TablesTagSets{}, netstorage.TableTagSets{
+		return append(influxql.TablesTagSets{}, influxql.TableTagSets{
 			Name: "mst",
-			Values: netstorage.TagSets{
+			Values: influxql.TagSets{
 				{Key: "author", Value: "petter"},
 				{Key: "author", Value: "van"},
 				{Key: "author", Value: "san"},
@@ -389,9 +393,9 @@ func (m *mockNS) TagValues(nodeID uint64, db string, ptIDs []uint32, tagKeys map
 	}
 
 	if nodeID == 2 {
-		return append(netstorage.TablesTagSets{}, netstorage.TableTagSets{
+		return append(influxql.TablesTagSets{}, influxql.TableTagSets{
 			Name: "mst_2",
-			Values: netstorage.TagSets{
+			Values: influxql.TagSets{
 				{Key: "author", Value: "mao"},
 				{Key: "author", Value: "tai"},
 			},
@@ -399,15 +403,15 @@ func (m *mockNS) TagValues(nodeID uint64, db string, ptIDs []uint32, tagKeys map
 	}
 
 	if nodeID == 3 {
-		return append(netstorage.TablesTagSets{}, netstorage.TableTagSets{
+		return append(influxql.TablesTagSets{}, influxql.TableTagSets{
 			Name:   "mst_2",
-			Values: netstorage.TagSets{},
+			Values: influxql.TagSets{},
 		}), nil
 	}
 
-	return append(netstorage.TablesTagSets{}, netstorage.TableTagSets{
+	return append(influxql.TablesTagSets{}, influxql.TableTagSets{
 		Name: "mst",
-		Values: netstorage.TagSets{
+		Values: influxql.TagSets{
 			{Key: "author", Value: "mao"},
 			{Key: "author", Value: "tai"},
 			{Key: "author", Value: "san"},

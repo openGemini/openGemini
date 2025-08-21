@@ -17,6 +17,13 @@ func NewQueryExecutor() *query.Executor {
 	return query.NewExecutor(concurrence)
 }
 
+func TestQueryExecutor_Recover(t *testing.T) {
+	e := NewQueryExecutor()
+	e.StatementExecutor = newMockStatementExecutor()
+	results := e.ExecuteQuery(nil, query.ExecutionOptions{}, nil, nil)
+	fmt.Println(results)
+}
+
 func TestQueryExecutor_Serial(t *testing.T) {
 	q, err := influxql.ParseQuery(`SELECT count(value) FROM cpu;SELECT mean(value) FROM cpu`)
 	if err != nil {
@@ -80,7 +87,7 @@ func Test_TimerangePushDown(t *testing.T) {
 			t.Fatal(err)
 		}
 		statement := q.Statements[0].(*influxql.SelectStatement)
-		_, err = query.Compile(statement, query.CompileOptions{})
+		_, _, err = query.Compile(statement, query.CompileOptions{})
 		isOK := (err == nil)
 		if isOK != cases[i].isOK {
 			t.Fatalf("statement-%d timerange check failed. exepect: %+v == %+v, err:%+v", i, cases[i].isOK, isOK, err)

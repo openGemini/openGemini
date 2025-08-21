@@ -24,9 +24,10 @@ import (
 )
 
 type DurationDescriptor struct {
-	Tier         uint64
-	TierDuration time.Duration
-	Duration     time.Duration
+	Tier          uint64
+	TierDuration  time.Duration
+	Duration      time.Duration
+	MergeDuration time.Duration
 }
 
 type ShardDurationInfo struct {
@@ -274,6 +275,7 @@ func (d *DurationDescriptor) marshal() *proto2.DurationDescriptor {
 	pb.TierType = proto.Uint64(d.Tier)
 	pb.TierDuration = proto.Int64(int64(d.TierDuration))
 	pb.Duration = proto.Int64(int64(d.Duration))
+	pb.MergeDuration = proto.Int64(int64(d.MergeDuration))
 	return pb
 }
 
@@ -281,6 +283,7 @@ func (d *DurationDescriptor) unmarshal(duration *proto2.DurationDescriptor) {
 	d.Tier = duration.GetTierType()
 	d.TierDuration = time.Duration(duration.GetTierDuration())
 	d.Duration = time.Duration(duration.GetDuration())
+	d.MergeDuration = time.Duration(duration.GetMergeDuration())
 }
 
 func (i *ShardIdentifier) IsRangeMode() bool {

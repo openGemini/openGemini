@@ -15,6 +15,7 @@
 package syscontrol
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -24,9 +25,10 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
-	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/msgservice"
 	"github.com/openGemini/openGemini/lib/sysconfig"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
@@ -34,16 +36,54 @@ import (
 )
 
 var (
-	ErrNoSuchParam = fmt.Errorf("no parameter find")
+	ErrNoSuchParam = fmt.Errorf("no parameter found")
 )
 
 type SysControl struct {
 	MetaClient meta.MetaClient
-	NetStore   netstorage.Storage
 }
 
 func NewSysControl() *SysControl {
 	return &SysControl{}
+}
+
+func (s *SysControl) SendSysCtrlOnNode(nodeID uint64, req msgservice.SysCtrlRequest) (map[string]string, error) {
+	r := msgservice.NewRequester(0, nil, s.MetaClient)
+	err := r.InitWithNodeID(nodeID)
+	if err != nil {
+		return nil, err
+	}
+
+	v, err := r.SysCtrl(&req)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, ok := v.(*msgservice.SysCtrlResponse)
+	if !ok {
+		return nil, errno.NewInvalidTypeError("*msgservice.SysCtrlResponse", v)
+	}
+
+	return resp.Result(), nil
+}
+
+func (s *SysControl) SendQueryRequestOnNode(nodeID uint64, req msgservice.SysCtrlRequest) (map[string]string, error) {
+	r := msgservice.NewRequester(0, nil, s.MetaClient)
+	err := r.InitWithNodeID(nodeID)
+	if err != nil {
+		return nil, err
+	}
+
+	v, err := r.SysCtrl(&req)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, ok := v.(*msgservice.SysCtrlResponse)
+	if !ok {
+		return nil, errno.NewInvalidTypeError("*msgservice.SysCtrlResponse", v)
+	}
+	return resp.Result(), nil
 }
 
 var SysCtrl *SysControl
@@ -111,6 +151,7 @@ const (
 	ParallelQuery      = "parallelbatch"
 	Backup             = "backup"
 	AbortBackup        = "abort_backup"
+	BackupStatus       = "backup_status"
 
 	WriteStreamPointsEnable = "write_stream_points_enable"
 )
@@ -130,6 +171,8 @@ var (
 	Readonly = false
 
 	HierarchicalStorageEnabled int32 = 0
+
+	HierarchicalIndexStorageEnabled int32 = 0
 
 	WriteColdShardEnable int32 = 0
 
@@ -248,13 +291,27 @@ func IsHierarchicalStorageEnabled() bool {
 	return enabled == 1
 }
 
+func IsHierarchicalIndexStorageEnabled() bool {
+	enabled := atomic.LoadInt32(&HierarchicalIndexStorageEnabled)
+	return enabled == 1
+}
+
 func SetHierarchicalStorageEnabled(en bool) {
 	if en {
 		atomic.StoreInt32(&HierarchicalStorageEnabled, 1)
 	} else {
 		atomic.StoreInt32(&HierarchicalStorageEnabled, -1)
 	}
-	fmt.Println(time.Now().Format(time.RFC3339Nano), "HierarchicalStorageEnabled:", en)
+	logger.GetLogger().Info("set shard hierarchical storage", zap.String("timestamp", time.Now().Format(time.RFC3339Nano)), zap.Bool("HierarchicalStorageEnabled", en))
+}
+
+func SetIndexHierarchicalStorageEnabled(en bool) {
+	if en {
+		atomic.StoreInt32(&HierarchicalIndexStorageEnabled, 1)
+	} else {
+		atomic.StoreInt32(&HierarchicalIndexStorageEnabled, -1)
+	}
+	logger.GetLogger().Info("set index hierarchical storage", zap.String("timestamp", time.Now().Format(time.RFC3339Nano)), zap.Bool("HierarchicalIndexStorageEnabled", en))
 }
 
 func IsWriteColdShardEnabled() bool {
@@ -271,7 +328,7 @@ func SetWriteColdShardEnabled(en bool) {
 	fmt.Println(time.Now().Format(time.RFC3339Nano), "WriteColdShardEnable:", en)
 }
 
-var handlerOnQueryRequest = make(map[queryRequestMod]func(req netstorage.SysCtrlRequest) (string, error), 1)
+var handlerOnQueryRequest = make(map[queryRequestMod]func(req msgservice.SysCtrlRequest) (string, error), 1)
 
 type queryRequestMod string
 
@@ -279,7 +336,7 @@ const (
 	QueryShardStatus queryRequestMod = "queryShardStatus"
 )
 
-func handleQueryShardStatus(req netstorage.SysCtrlRequest) (string, error) {
+func handleQueryShardStatus(req msgservice.SysCtrlRequest) (string, error) {
 	dataNodes, err := SysCtrl.MetaClient.DataNodes()
 	if err != nil {
 		return "", err
@@ -292,7 +349,7 @@ func handleQueryShardStatus(req netstorage.SysCtrlRequest) (string, error) {
 		wg.Add(1)
 		go func(d meta2.DataNode) {
 			defer wg.Done()
-			nodeRes, err := SysCtrl.NetStore.SendQueryRequestOnNode(d.ID, req)
+			nodeRes, err := SysCtrl.SendQueryRequestOnNode(d.ID, req)
 			if err != nil {
 				return
 			}
@@ -325,13 +382,13 @@ func ProcessQueryRequest(mod queryRequestMod, param map[string]string) (string, 
 		return "", fmt.Errorf("not support query mod %s", mod)
 	}
 
-	var req netstorage.SysCtrlRequest
+	var req msgservice.SysCtrlRequest
 	req.SetParam(param)
 	req.SetMod(string(mod))
 	return handler(req)
 }
 
-func ProcessRequest(req netstorage.SysCtrlRequest, resp *strings.Builder) (err error) {
+func ProcessRequest(req msgservice.SysCtrlRequest, resp *bufio.Writer) (err error) {
 	switch req.Mod() {
 	case Failpoint:
 		// store SysCtrl cmd
@@ -349,12 +406,12 @@ func ProcessRequest(req netstorage.SysCtrlRequest, resp *strings.Builder) (err e
 		// meta SysCtrl cmd
 		metaRes, err := SysCtrl.MetaClient.SendSysCtrlToMeta(req.Mod(), req.Param())
 		if err != nil {
-			resp.WriteString(fmt.Sprintf("\n\t%v,", err))
+			WriteString(resp, fmt.Sprintf("\n\t%v,", err))
 		}
 		for n, s := range metaRes {
-			resp.WriteString(fmt.Sprintf("\n\t%v: %s,", n, s))
+			WriteString(resp, fmt.Sprintf("\n\t%v: %s,", n, s))
 		}
-	case DataFlush, compactionEn, compmerge, snapshot, DownSampleInOrder, verifyNode, memUsageLimit, BackgroundReadLimiter, AbortBackup:
+	case DataFlush, compactionEn, compmerge, snapshot, DownSampleInOrder, verifyNode, memUsageLimit, BackgroundReadLimiter:
 		// store SysCtrl cmd
 		dataNodes, err := SysCtrl.MetaClient.DataNodes()
 		if err != nil {
@@ -367,6 +424,18 @@ func ProcessRequest(req netstorage.SysCtrlRequest, resp *strings.Builder) (err e
 			go sendCmdToStoreAsync(req, resp, d.ID, d.Host, &lock, &wg)
 		}
 		wg.Wait()
+	case AbortBackup, BackupStatus:
+		dataNodes, err := SysCtrl.MetaClient.DataNodes()
+		if err != nil {
+			return err
+		}
+		var lock sync.Mutex
+		var wg sync.WaitGroup
+		for _, d := range dataNodes {
+			wg.Add(1)
+			go sendBackupCmdToStoreAsync(req, resp, d.ID, d.Host, &lock, &wg)
+		}
+		wg.Wait()
 	case NodeReadonly:
 		switchOn, err := GetBoolValue(req.Param(), "switchon")
 		if err != nil {
@@ -374,7 +443,7 @@ func ProcessRequest(req netstorage.SysCtrlRequest, resp *strings.Builder) (err e
 		}
 		UpdateNodeReadonly(switchOn)
 		res := "\n\tsuccess"
-		resp.WriteString(res)
+		WriteString(resp, res)
 	case ChunkReaderParallel:
 		// sql SysCtrl cmd
 		limit, err := GetIntValue(req.Param(), "limit")
@@ -386,7 +455,7 @@ func ProcessRequest(req netstorage.SysCtrlRequest, resp *strings.Builder) (err e
 		}
 		SetQueryParallel(limit)
 		res := "\n\tsuccess"
-		resp.WriteString(res)
+		WriteString(resp, res)
 	case BinaryTreeMerge:
 		enabled, err := GetIntValue(req.Param(), "enabled")
 		if err != nil {
@@ -397,7 +466,7 @@ func ProcessRequest(req netstorage.SysCtrlRequest, resp *strings.Builder) (err e
 		}
 		sysconfig.SetEnableBinaryTreeMerge(enabled)
 		res := "\n\tsuccess"
-		resp.WriteString(res)
+		WriteString(resp, res)
 	case PrintLogicalPlan:
 		enabled, err := GetIntValue(req.Param(), "enabled")
 		if err != nil {
@@ -408,7 +477,7 @@ func ProcessRequest(req netstorage.SysCtrlRequest, resp *strings.Builder) (err e
 		}
 		sysconfig.SetEnablePrintLogicalPlan(enabled)
 		res := "\n\tsuccess"
-		resp.WriteString(res)
+		WriteString(resp, res)
 	case SlidingWindowPushUp:
 		enabled, err := GetIntValue(req.Param(), "enabled")
 		if err != nil {
@@ -419,14 +488,14 @@ func ProcessRequest(req netstorage.SysCtrlRequest, resp *strings.Builder) (err e
 		}
 		sysconfig.SetEnableSlidingWindowPushUp(enabled)
 		res := "\n\tsuccess"
-		resp.WriteString(res)
+		WriteString(resp, res)
 	case LogRows:
 		err := handleLogRowsCmd(req)
 		if err != nil {
 			return err
 		}
 		res := "\n\tsuccess"
-		resp.WriteString(res)
+		WriteString(resp, res)
 	case ForceBroadcastQuery:
 		enabled, err := GetIntValue(req.Param(), "enabled")
 		if err != nil {
@@ -437,7 +506,7 @@ func ProcessRequest(req netstorage.SysCtrlRequest, resp *strings.Builder) (err e
 		}
 		sysconfig.SetEnableForceBroadcastQuery(enabled)
 		res := "\n\tsuccess"
-		resp.WriteString(res)
+		WriteString(resp, res)
 	case TimeFilterProtection:
 		enabled, err := GetBoolValue(req.Param(), "enabled")
 		if err != nil {
@@ -445,7 +514,7 @@ func ProcessRequest(req netstorage.SysCtrlRequest, resp *strings.Builder) (err e
 		}
 		SetTimeFilterProtection(enabled)
 		res := "\n\tsuccess"
-		resp.WriteString(res)
+		WriteString(resp, res)
 	case disableWrite:
 		en, err := GetBoolValue(req.Param(), "switchon")
 		if err != nil {
@@ -453,7 +522,7 @@ func ProcessRequest(req netstorage.SysCtrlRequest, resp *strings.Builder) (err e
 		}
 		SetDisableWrite(en)
 		res := "\n\tsuccess"
-		resp.WriteString(res)
+		WriteString(resp, res)
 	case disableRead:
 		en, err := GetBoolValue(req.Param(), "switchon")
 		if err != nil {
@@ -461,7 +530,7 @@ func ProcessRequest(req netstorage.SysCtrlRequest, resp *strings.Builder) (err e
 		}
 		SetDisableRead(en)
 		res := "\n\tsuccess"
-		resp.WriteString(res)
+		WriteString(resp, res)
 	case NodeInterruptQuery:
 		if err != nil {
 			return err
@@ -493,7 +562,7 @@ func ProcessRequest(req netstorage.SysCtrlRequest, resp *strings.Builder) (err e
 		}
 		SetParallelQueryInBatch(enabled)
 		res := "\n\tsuccess"
-		resp.WriteString(res)
+		WriteString(resp, res)
 	case WriteStreamPointsEnable:
 		_, err := GetBoolValue(req.Param(), "switchon")
 		if err != nil {
@@ -506,7 +575,7 @@ func ProcessRequest(req netstorage.SysCtrlRequest, resp *strings.Builder) (err e
 	return nil
 }
 
-func ProcessBackup(req netstorage.SysCtrlRequest, resp *strings.Builder, sqlHost string) (err error) {
+func ProcessBackup(req msgservice.SysCtrlRequest, resp *bufio.Writer, sqlHost string) (err error) {
 	var host string
 	s := strings.Split(sqlHost, ":")
 	if len(s) > 0 {
@@ -519,30 +588,33 @@ func ProcessBackup(req netstorage.SysCtrlRequest, resp *strings.Builder, sqlHost
 	if err != nil {
 		return err
 	}
+	var lock sync.Mutex
+	var wg sync.WaitGroup
 	for _, d := range dataNodes {
 		if !isNode || strings.Contains(d.Host, host) {
-			go sendBackupCmdToStoreAsync(req, d.ID, d.Host)
+			wg.Add(1)
+			go sendCmdToStoreAsync(req, resp, d.ID, d.Host, &lock, &wg)
 		}
 	}
+	wg.Wait()
 
 	var metaRes map[string]string
-	if isNode {
-		metaRes, err = SysCtrl.MetaClient.SendBackupToMeta(req.Mod(), req.Param(), host)
-	} else {
-		// meta SysCtrl cmd
-		metaRes, err = SysCtrl.MetaClient.SendSysCtrlToMeta(req.Mod(), req.Param())
+	backupMeta := params["backupMeta"] == "true"
+	if backupMeta {
+		metaRes, err = SysCtrl.MetaClient.SendBackupToMeta(req.Mod(), req.Param())
 	}
 	if err != nil {
-		resp.WriteString(fmt.Sprintf("\n\t%v,", err))
+		WriteString(resp, fmt.Sprintf("\n\t%v,", err))
+
 	}
 	for n, s := range metaRes {
-		resp.WriteString(fmt.Sprintf("\n\t%v: %s,", n, s))
+		WriteString(resp, fmt.Sprintf("\n\t%v: %s,", n, s))
 	}
 
 	return nil
 }
 
-func broadcastCmdToStore(req netstorage.SysCtrlRequest, resp *strings.Builder) error {
+func broadcastCmdToStore(req msgservice.SysCtrlRequest, resp *bufio.Writer) error {
 	// store SysCtrl cmd
 	if SysCtrl.MetaClient == nil {
 		return fmt.Errorf("broadcastCmdToStore fail: metaClient nil")
@@ -561,18 +633,22 @@ func broadcastCmdToStore(req netstorage.SysCtrlRequest, resp *strings.Builder) e
 	return nil
 }
 
-func sendCmdToStoreAsync(req netstorage.SysCtrlRequest, resp *strings.Builder, nid uint64, host string, lock *sync.Mutex, wg *sync.WaitGroup) {
+func sendCmdToStoreAsync(req msgservice.SysCtrlRequest, resp *bufio.Writer, nid uint64, host string, lock *sync.Mutex, wg *sync.WaitGroup) {
 	res := sendCmdToStore(req, nid, host)
 	lock.Lock()
-	resp.WriteString(res)
+	WriteString(resp, res)
 	lock.Unlock()
 	wg.Done()
 }
 
-func sendBackupCmdToStoreAsync(req netstorage.SysCtrlRequest, nid uint64, host string) {
-	_ = sendCmdToStore(req, nid, host)
+func sendBackupCmdToStoreAsync(req msgservice.SysCtrlRequest, resp *bufio.Writer, nid uint64, host string, lock *sync.Mutex, wg *sync.WaitGroup) {
+	res := sendBackupCmdToStore(req, nid, host)
+	lock.Lock()
+	WriteString(resp, res)
+	lock.Unlock()
+	wg.Done()
 }
-func handleLogRowsCmd(req netstorage.SysCtrlRequest) error {
+func handleLogRowsCmd(req msgservice.SysCtrlRequest) error {
 	switchon, err := GetBoolValue(req.Param(), "switchon")
 	if err != nil {
 		return err
@@ -590,13 +666,26 @@ func handleLogRowsCmd(req netstorage.SysCtrlRequest) error {
 	return SetLogRowsRuleSwitch(switchon, rules)
 }
 
-func sendCmdToStore(req netstorage.SysCtrlRequest, nid uint64, host string) string {
+func sendCmdToStore(req msgservice.SysCtrlRequest, nid uint64, host string) string {
 	var res string
-	_, err := SysCtrl.NetStore.SendSysCtrlOnNode(nid, req)
+	_, err := SysCtrl.SendSysCtrlOnNode(nid, req)
 	if err != nil {
 		res = fmt.Sprintf("\n\t%v: failed,%v,", host, err)
 	} else {
 		res = fmt.Sprintf("\n\t%v: success,", host)
+	}
+	return res
+}
+
+func sendBackupCmdToStore(req msgservice.SysCtrlRequest, nid uint64, host string) string {
+	var res string
+	result, err := SysCtrl.SendSysCtrlOnNode(nid, req)
+	if err != nil {
+		res = fmt.Sprintf("\n\t%v: failed,%v,", host, err)
+		return res
+	}
+	if r, err := json.Marshal(result); err == nil {
+		res = fmt.Sprintf("\n\t%v: %s", host, r)
 	}
 	return res
 }
@@ -664,4 +753,11 @@ func GetBytesValue(param map[string]string, key string) (int64, error) {
 	}
 
 	return size, nil
+}
+
+func WriteString(w *bufio.Writer, content string) {
+	_, err := w.WriteString(content)
+	if err != nil {
+		logger.GetLogger().Error("WriteString error", zap.Error(err))
+	}
 }

@@ -103,7 +103,7 @@ func (c *RPCClient) FinishAnalyze() {
 func (c *RPCClient) Handle(data interface{}) error {
 	msg, ok := data.(*rpc.Message)
 	if !ok {
-		return NewInvalidTypeError("*rpc.Message", data)
+		return errno.NewInvalidTypeError("*rpc.Message", data)
 	}
 
 	if c.isAborted() && msg.Type() != AnalyzeResponseMessage {
@@ -244,7 +244,7 @@ func (c *RPCClient) analyzeResponse(data interface{}) error {
 
 	msg, ok := data.(*AnalyzeResponse)
 	if !ok {
-		return NewInvalidTypeError("*executor.AnalyzeResponse", data)
+		return errno.NewInvalidTypeError("*executor.AnalyzeResponse", data)
 	}
 
 	c.trace.AddSub(msg.trace, c.span)
@@ -254,7 +254,7 @@ func (c *RPCClient) analyzeResponse(data interface{}) error {
 func (c *RPCClient) errorMessage(data interface{}) error {
 	msg, ok := data.(*Error)
 	if !ok {
-		return NewInvalidTypeError("*executor.Error", data)
+		return errno.NewInvalidTypeError("*executor.Error", data)
 	}
 
 	// ha or not ha, kill query qid will return error

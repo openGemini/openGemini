@@ -258,6 +258,10 @@ func (c *MockRWMetaClient) UpdateSchema(_ string, _ string, _ string, _ []*proto
 	return nil
 }
 
+func (c *MockRWMetaClient) UpdateSchemaByCmd(cmd *proto.UpdateSchemaCommand) error {
+	return nil
+}
+
 func (c *MockRWMetaClient) CreateMeasurement(_ string, _ string, _ string, _ *meta.ShardKeyInfo, _ int32, _ *influxql.IndexRelation, _ config.EngineType, _ *meta.ColStoreInfo,
 	_ []*proto.FieldSchema, _ *meta2.Options) (*meta.MeasurementInfo, error) {
 	return nil, c.CreateMeasurementErr

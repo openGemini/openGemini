@@ -29,3 +29,9 @@ type MetaBackupLogInfo struct {
 	MetaIds []string `json:"metaIds"`
 	IsNode  bool     `json:"isNode"`
 }
+
+type BackupResult struct {
+	Result    string              `json:"result"`
+	DataBases map[string]struct{} `json:"databases"`
+	Time      int64               `json:"time"`
+}

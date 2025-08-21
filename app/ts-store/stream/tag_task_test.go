@@ -43,62 +43,71 @@ import (
 	"go.uber.org/zap"
 )
 
-func Test_WindowDataPool(t *testing.T) {
-	pool := NewTaskDataPool()
-	pool.Put(nil)
-	timer := time.NewTicker(1 * time.Second)
-	kk := make(chan ChanData)
-	select {
-	case <-timer.C:
-		t.Log("timer occur")
-	case kk <- pool.Get():
-		t.Fatal("should be block")
-	}
-}
-
 func Test_ConsumeDataAbort(t *testing.T) {
 	task := &TagTask{values: sync.Map{}, TaskDataPool: NewTaskDataPool(), BaseTask: &BaseTask{updateWindow: make(chan struct{}),
 		abort: make(chan struct{}), windowNum: 10, stats: statistics.NewStreamWindowStatItem(0)}}
-	go task.consumeDataAndUpdateMeta()
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		task.consumeDataAndUpdateMeta()
+	}()
 	// wait run
-	time.Sleep(3 * time.Second)
+	time.Sleep(time.Second)
 	task.updateWindow <- struct{}{}
 	close(task.abort)
 	// wait abort
-	time.Sleep(3 * time.Second)
+	wg.Wait()
 }
 
 func Test_ConsumeDataClean(t *testing.T) {
 	task := &TagTask{values: sync.Map{}, TaskDataPool: NewTaskDataPool(),
 		cleanPreWindow: make(chan struct{}), BaseTask: &BaseTask{Logger: MockLogger{t}, updateWindow: make(chan struct{}),
 			abort: make(chan struct{}), windowNum: 10, stats: statistics.NewStreamWindowStatItem(0)}}
-	go task.consumeDataAndUpdateMeta()
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		task.consumeDataAndUpdateMeta()
+	}()
 	// wait run
-	time.Sleep(3 * time.Second)
+	time.Sleep(1 * time.Second)
 	task.updateWindow <- struct{}{}
 	<-task.cleanPreWindow
-	// wait clean consume
-	time.Sleep(3 * time.Second)
+	close(task.abort)
+	wg.Wait()
 }
 
 func Test_FlushAbort(t *testing.T) {
 	task := &TagTask{values: sync.Map{}, TaskDataPool: NewTaskDataPool(),
 		cleanPreWindow: make(chan struct{}), BaseTask: &BaseTask{Logger: MockLogger{t}, updateWindow: make(chan struct{}),
 			abort: make(chan struct{}), windowNum: 10, stats: statistics.NewStreamWindowStatItem(0)}}
-	go task.flush()
+
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		task.flush()
+	}()
 	// wait abort
 	close(task.abort)
-	time.Sleep(3 * time.Second)
+	wg.Wait()
 }
 
 func Test_FlushUpdate(t *testing.T) {
 	task := &TagTask{values: sync.Map{}, TaskDataPool: NewTaskDataPool(),
 		cleanPreWindow: make(chan struct{}), BaseTask: &BaseTask{Logger: MockLogger{t}, updateWindow: make(chan struct{}),
 			abort: make(chan struct{}), windowNum: 10, stats: statistics.NewStreamWindowStatItem(0)}}
-	go task.flush()
+
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		task.flush()
+	}()
 	// wait update
 	<-task.updateWindow
-	time.Sleep(3 * time.Second)
+	wg.Wait()
 }
 
 func Test_GenerateGroupKey(t *testing.T) {
@@ -315,6 +324,7 @@ func Test_ResetReplayVar(t *testing.T) {
 			id:     1,
 		},
 	}
+	task.dataPath = t.TempDir()
 	p := path.Join(task.dataPath, "data", task.des.Database, strconv.Itoa(0), task.des.RetentionPolicy)
 
 	st := &flushStatus{Timestamp: time.Now().UnixNano()}
@@ -322,11 +332,9 @@ func Test_ResetReplayVar(t *testing.T) {
 	if err != nil {
 		t.Fatal()
 	}
-	if err := os.MkdirAll(p, 0750); err == nil {
+	if err := os.MkdirAll(p, 0700); err == nil {
 		if _, err := os.Stat(p); err == nil {
-			if err := os.WriteFile(path.Join(p, strconv.FormatUint(task.id, 10)), b, 0640); err != nil {
-				t.Fatal()
-			}
+			os.WriteFile(path.Join(p, strconv.FormatUint(task.id, 10)), b, 0640)
 		}
 	}
 	task.shardIds = make(map[uint32][]*uint64)

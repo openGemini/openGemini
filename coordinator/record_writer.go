@@ -16,7 +16,6 @@ package coordinator
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -28,6 +27,7 @@ import (
 	"time"
 
 	"github.com/apache/arrow/go/v13/arrow"
+	"github.com/openGemini/openGemini/engine"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/config"
@@ -38,7 +38,6 @@ import (
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
-	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
@@ -488,7 +487,7 @@ func (w *RecordWriter) writeRecordToShard(shard *meta.ShardInfo, database, reten
 		bufferpool.PutPoints(pBuf)
 	}()
 
-	pBuf, err = MarshalWithMeasurements(pBuf[:0], measurement, rec)
+	pBuf, err = engine.MarshalWithMeasurements(pBuf[:0], measurement, rec)
 	if err != nil {
 		w.logger.Error(fmt.Sprintf("record marshal failed. db: %s, rp: %s, mst: %s", database, retentionPolicy, measurement), zap.Error(err))
 		return err
@@ -528,31 +527,6 @@ func (w *RecordWriter) writeShard(shard *meta.ShardInfo, database, retentionPoli
 		}
 	}
 	return false, nil
-}
-
-func MarshalWithMeasurements(buf []byte, mst string, rec *record.Record) ([]byte, error) {
-	name := util.Str2bytes(mst)
-	if len(name) == 0 {
-		return nil, errors.New("record must have a measurement name")
-	}
-	buf = append(buf, uint8(len(name)))
-	buf = append(buf, name...)
-
-	return rec.Marshal(buf), nil
-}
-
-func UnmarshalWithMeasurements(buf []byte, rec *record.Record) (string, error) {
-	if len(buf) < 1 {
-		return "", errors.New("too small bytes for record binary")
-	}
-
-	mLen := int(buf[0])
-	buf = buf[1:]
-
-	name := util.Bytes2str(buf[:mLen])
-	buf = buf[mLen:]
-	rec.Unmarshal(buf)
-	return name, nil
 }
 
 func IsKeepWritingErr(err error) bool {

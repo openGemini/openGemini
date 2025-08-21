@@ -32,13 +32,9 @@ import (
 )
 
 const (
-	// errSleep is the time to sleep after we've failed on every metaserver
-	// before making another pass
-
 	// SaltBytes is the number of bytes used for salts.
 	SaltBytes = 32
 
-	// pbkdf2 iter times
 	pbkdf2Iter4096 = 4096
 	pbkdf2Iter1000 = 1000
 
@@ -56,8 +52,7 @@ const (
 
 	RetentionDelayedTime = 24 * time.Hour // for logkeeper service
 
-	RPCReqTimeout       = 10 * time.Second
-	HttpSnapshotTimeout = 4 * time.Second
+	RPCReqTimeout = 10 * time.Second
 
 	//for lock user
 	maxLoginLimit      = 5    //Maximum number of login attempts
@@ -105,14 +100,18 @@ var DefaultMetaClient *Client
 var cliOnce sync.Once
 
 type StorageNodeInfo struct {
-	InsertAddr string
-	SelectAddr string
-	Az         string
+	InsertAddr  string
+	SelectAddr  string
+	Az          string
+	RetryTime   time.Duration
+	RetryNumber int
 }
 
 type SqlNodeInfo struct {
-	HttpAddr   string
-	GossipAddr string
+	HttpAddr    string
+	GossipAddr  string
+	RetryTime   time.Duration
+	RetryNumber int
 }
 
 type FieldKey struct {
@@ -182,10 +181,14 @@ type SubscriptionManager interface {
 
 type SystemManager interface {
 	SendSysCtrlToMeta(mod string, param map[string]string) (map[string]string, error)
-	SendBackupToMeta(mod string, param map[string]string, host string) (map[string]string, error)
+	SendBackupToMeta(mod string, param map[string]string) (map[string]string, error)
 	IsSQLiteEnabled() bool
 	InsertFiles([]meta2.FileInfo) error
 	IsMasterPt(uint32, string) bool
+	ReplaceMergeShards(mergeShards meta2.MergeShards) error
+	GetTimeRange(db, rp string, sShardId, eShardId uint64) (*meta2.ShardTimeRangeInfo, error)
+	GetNoClearShardId(id uint64, db string, groupID uint64, policy string) (uint64, error)
+	GetNoClearIndexId(id uint64, db string, policy string) (uint64, error)
 }
 
 type StreamManager interface {
@@ -217,7 +220,6 @@ type ShardManager interface {
 	DropShard(id uint64) error
 	UpdateShardInfoTier(shardID uint64, tier uint64, dbName, rpName string) error
 	UpdateShardDownSampleInfo(Ident *meta2.ShardIdentifier) error
-	ShardsByTimeRange(sources influxql.Sources, tmin, tmax time.Time) (a []meta2.ShardInfo, err error)
 	ShardGroupsByTimeRange(database, policy string, min, max time.Time) (a []meta2.ShardGroupInfo, err error)
 }
 
@@ -237,6 +239,7 @@ type MetadataManager interface {
 	Schema(database string, retentionPolicy string, mst string) (fields map[string]int32, dimensions map[string]struct{}, err error)
 	ShowShards(database string, rp string, mst string) models.Rows
 	ShowRetentionPolicies(database string) (models.Rows, error)
+	UpdateIndexInfoTier(indexID uint64, tier uint64, dbName, rpName string) error
 }
 
 type DatabaseManager interface {
@@ -251,7 +254,7 @@ type DatabaseManager interface {
 type NodeManager interface {
 	ShowCluster(nodeType string, ID uint64) (models.Rows, error)
 	ShowClusterWithCondition(nodeType string, ID uint64) (models.Rows, error)
-	CreateDataNode(writeHost, queryHost, role, az string) (uint64, uint64, uint64, error)
+	CreateDataNode(storageNodeInfo *StorageNodeInfo, role string) (uint64, uint64, uint64, error)
 	DeleteDataNode(id uint64) error
 	DataNode(id uint64) (*meta2.DataNode, error)
 	DataNodes() ([]meta2.DataNode, error)
@@ -341,6 +344,7 @@ func (s *RPCMessageSender) SendRPCMsg(currentServer int, msg *message.MetaMessag
 	refreshConnectedServer(currentServer)
 	return nil
 }
+
 func refreshConnectedServer(currentServer int) {
 	if currentServer != connectedServer {
 		connectedServer = currentServer
@@ -377,14 +381,6 @@ func (peers Peers) Contains(peer string) bool {
 	return false
 }
 
-type ErrRedirect struct {
-	Host string
-}
-
-func (e ErrRedirect) Error() string {
-	return fmt.Sprintf("redirect to %s", e.Host)
-}
-
 type errCommand struct {
 	msg string
 }
@@ -392,9 +388,3 @@ type errCommand struct {
 func (e errCommand) Error() string {
 	return e.msg
 }
-
-type uint64Slice []uint64
-
-func (a uint64Slice) Len() int           { return len(a) }
-func (a uint64Slice) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
-func (a uint64Slice) Less(i, j int) bool { return a[i] < a[j] }

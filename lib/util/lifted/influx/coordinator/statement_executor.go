@@ -32,15 +32,18 @@ import (
 	"time"
 
 	set "github.com/deckarep/golang-set/v2"
+	"github.com/google/uuid"
 	"github.com/influxdata/influxdb/models"
 	originql "github.com/influxdata/influxql"
 	"github.com/openGemini/openGemini/coordinator"
 	"github.com/openGemini/openGemini/engine/executor"
+	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/logger"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
+	"github.com/openGemini/openGemini/lib/msgservice"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/sysconfig"
@@ -125,11 +128,11 @@ func (q *combinedQueryExeInfo) updateBeginTime(newBegin int64) {
 	}
 }
 
-func (q *combinedQueryExeInfo) updateHosts(newHost string, newRunState netstorage.RunStateType) {
+func (q *combinedQueryExeInfo) updateHosts(newHost string, newRunState msgservice.RunStateType) {
 	switch newRunState {
-	case netstorage.Running:
+	case msgservice.Running:
 		q.runningHosts[newHost] = struct{}{}
-	case netstorage.Killed:
+	case msgservice.Killed:
 		q.killedHosts[newHost] = struct{}{}
 	default:
 		// current version never arriving
@@ -294,7 +297,6 @@ func (e *StatementExecutor) ExecuteStatement(stmt influxql.Statement, ctx *query
 		}
 		_, err = e.retryExecuteStatement(stmt, ctx, seq)
 	case *influxql.DropSeriesStatement:
-		return meta2.ErrUnsupportCommand
 		if ctx.ReadOnly {
 			messages = append(messages, query.ReadOnlyWarning(stmt.String()))
 		}
@@ -445,7 +447,9 @@ func (e *StatementExecutor) ExecuteStatement(stmt influxql.Statement, ctx *query
 	case *influxql.ShowClusterStatement:
 		rows, err = e.executeShowCluster(stmt)
 	case *influxql.WithSelectStatement:
-		err = e.executeWithSelectStatement(stmt)
+		err = e.executeWithSelectStatement(stmt, ctx, seq)
+	case *influxql.GraphStatement:
+		rows, err = e.executeGraphStatement(stmt, ctx)
 	default:
 		return query.ErrInvalidQuery
 	}
@@ -478,6 +482,8 @@ func (e *StatementExecutor) retryExecuteStatement(stmt influxql.Statement, ctx *
 			err = e.executeDropMeasurementStatement(stmt, ctx.Database)
 		case *influxql.DropRetentionPolicyStatement:
 			err = e.executeDropRetentionPolicyStatement(stmt)
+		case *influxql.DropSeriesStatement:
+			err = e.executeDropSeriesStatement(stmt, ctx.Database)
 		case *influxql.ShowTagKeysStatement:
 			err = e.executeShowTagKeys(stmt, ctx, seq)
 		case *influxql.ShowTagKeyCardinalityStatement:
@@ -590,7 +596,7 @@ func (e *StatementExecutor) executeAlterRetentionPolicyStatement(stmt *influxql.
 	if rpi == nil {
 		return errno.NewError(errno.RpNotFound)
 	}
-	if rpi.HasDownSamplePolicy() && stmt.Duration != nil && rpi.Duration != *stmt.Duration {
+	if (rpi.HasDownSamplePolicy() || rpi.ShardMergeDuration != 0) && stmt.Duration != nil && rpi.Duration != *stmt.Duration {
 		return errno.NewError(errno.DownSamplePolicyExists)
 	}
 	oneReplication := 1
@@ -601,6 +607,7 @@ func (e *StatementExecutor) executeAlterRetentionPolicyStatement(stmt *influxql.
 		HotDuration:        stmt.HotDuration,
 		WarmDuration:       stmt.WarmDuration,
 		IndexGroupDuration: stmt.IndexGroupDuration,
+		IndexColdDuration:  stmt.IndexColdDuration,
 	}
 
 	// Update the retention policy.
@@ -676,7 +683,7 @@ func (e *StatementExecutor) executeCreateMeasurementStatement(stmt *influxql.Cre
 	if stmt.EngineType != "" && !ok {
 		return errors.New("ENGINETYPE \"" + stmt.EngineType + "\" IS NOT SUPPORTED!")
 	}
-	_, err = e.MetaClient.CreateMeasurement(stmt.Database, stmt.RetentionPolicy, stmt.Name, ski, int32(stmt.NumOfShards), indexR, engineType, colStoreInfo, schemaInfo, nil)
+	_, err = e.MetaClient.CreateMeasurement(stmt.Database, stmt.RetentionPolicy, stmt.Name, ski, int32(stmt.NumOfShards), indexR, engineType, colStoreInfo, schemaInfo, &meta2.Options{Ttl: int64(stmt.TTL)})
 	return err
 }
 
@@ -702,8 +709,9 @@ func (e *StatementExecutor) executeCreateDatabaseStatement(stmt *influxql.Create
 		return errors.New("THE TOTAL NUMBER OF RPs EXCEEDS THE LIMIT")
 	}
 
+	ObsOption := stmt.ObsOptions
 	if !stmt.RetentionPolicyCreate {
-		_, err := e.MetaClient.CreateDatabase(stmt.Name, stmt.DatabaseAttr.EnableTagArray, stmt.DatabaseAttr.Replicas, nil)
+		_, err := e.MetaClient.CreateDatabase(stmt.Name, stmt.DatabaseAttr.EnableTagArray, stmt.DatabaseAttr.Replicas, ObsOption)
 		e.StmtExecLogger.Info("create database finish", zap.String("db", stmt.Name), zap.Error(err))
 		return err
 	}
@@ -725,8 +733,10 @@ func (e *StatementExecutor) executeCreateDatabaseStatement(stmt *influxql.Create
 		Duration:           stmt.RetentionPolicyDuration,
 		ReplicaN:           stmt.RetentionPolicyReplication,
 		ShardGroupDuration: stmt.RetentionPolicyShardGroupDuration,
+		ShardMergeDuration: stmt.RetentionPolicyShardMergeDuration,
 		HotDuration:        &stmt.RetentionPolicyHotDuration,
 		WarmDuration:       &stmt.RetentionPolicyWarmDuration,
+		IndexColdDuration:  &stmt.RetentionPolicyIndexColdDuration,
 		IndexGroupDuration: stmt.RetentionPolicyIndexGroupDuration,
 	}
 	ski := &meta2.ShardKeyInfo{ShardKey: stmt.ShardKey}
@@ -752,7 +762,9 @@ func (e *StatementExecutor) executeCreateRetentionPolicyStatement(stmt *influxql
 	e.StmtExecLogger.Info("RetentionPolicySpec", zap.String("name", stmt.Name),
 		zap.String("Duration", stmt.Duration.String()),
 		zap.String("WarmDuration", stmt.WarmDuration.String()),
-		zap.String("ShardGroupDuration", stmt.ShardGroupDuration.String()))
+		zap.String("IndexColdDuration", stmt.IndexColdDuration.String()),
+		zap.String("ShardGroupDuration", stmt.ShardGroupDuration.String()),
+		zap.String("ShardMergeDuration", stmt.ShardMergeDuration.String()))
 
 	spec := meta2.RetentionPolicySpec{
 		Name:               stmt.Name,
@@ -761,7 +773,9 @@ func (e *StatementExecutor) executeCreateRetentionPolicyStatement(stmt *influxql
 		ShardGroupDuration: stmt.ShardGroupDuration,
 		HotDuration:        &stmt.HotDuration,
 		WarmDuration:       &stmt.WarmDuration,
+		IndexColdDuration:  &stmt.IndexColdDuration,
 		IndexGroupDuration: stmt.IndexGroupDuration,
+		ShardMergeDuration: stmt.ShardMergeDuration,
 	}
 
 	// Create new retention policy.
@@ -769,7 +783,7 @@ func (e *StatementExecutor) executeCreateRetentionPolicyStatement(stmt *influxql
 	return err
 }
 
-func isValidContinuousQueryStatement(query string) error {
+func (e *StatementExecutor) isValidContinuousQueryStatement(query string) error {
 	p := influxql.NewParser(strings.NewReader(query))
 	defer p.Release()
 
@@ -791,12 +805,21 @@ func isValidContinuousQueryStatement(query string) error {
 		return errors.New("must be a SELECT INTO clause")
 	}
 
+	// check if target measurement is stream measurement with condition
+	target := q.Source.Target
+	streamInfos := e.MetaClient.GetStreamInfos()
+	for _, streamInfo := range streamInfos {
+		if streamInfo.DesMst.Database == target.Measurement.Database && streamInfo.DesMst.RetentionPolicy == target.Measurement.RetentionPolicy && streamInfo.DesMst.Name == target.Measurement.Name {
+			if streamInfo.Interval == 0 && len(streamInfo.Dims) == 0 && streamInfo.Cond != "" {
+				return fmt.Errorf("target measurement cannot be stream measurement with condition")
+			}
+		}
+	}
+
 	// check group by time
 	interval, err := q.Source.GroupByInterval()
 	if err != nil {
 		return err
-	} else if interval == 0 {
-		return fmt.Errorf("GROUP BY time duration must be greater than 0s")
 	}
 
 	// check interval and ResampleFor/ResampleEvery
@@ -821,7 +844,7 @@ func (e *StatementExecutor) executeCreateContinuousQueryStatement(stmt *influxql
 	stmt.Source.Condition = cond
 
 	cqQuery := stmt.String()
-	if err = isValidContinuousQueryStatement(cqQuery); err != nil {
+	if err = e.isValidContinuousQueryStatement(cqQuery); err != nil {
 		return err
 	}
 	return e.MetaClient.CreateContinuousQuery(stmt.Database, stmt.Name, cqQuery)
@@ -875,6 +898,11 @@ func (e *StatementExecutor) executeDropMeasurementStatement(stmt *influxql.DropM
 	}
 
 	return e.MetaClient.MarkMeasurementDelete(database, stmt.RpName, stmt.Name)
+}
+
+func (e *StatementExecutor) executeDropSeriesStatement(stmt *influxql.DropSeriesStatement, database string) error {
+	exec := coordinator.NewDropSeriesExecutor(e.StmtExecLogger, e.MetaClient, e.MetaExecutor, e.NetStorage)
+	return exec.Execute(stmt, database)
 }
 
 func (e *StatementExecutor) executeDropRetentionPolicyStatement(stmt *influxql.DropRetentionPolicyStatement) error {
@@ -1124,6 +1152,7 @@ func (e *StatementExecutor) executeSelectStatement(stmt *influxql.SelectStatemen
 			result := &query.Result{
 				Series:  rowsChan.Rows,
 				Partial: rowsChan.Partial,
+				Records: rowsChan.Records,
 			}
 
 			// Send results or exit if closing.
@@ -1216,6 +1245,7 @@ func (e *StatementExecutor) GetOptions(opt query.ExecutionOptions, rowsChan chan
 		QueryID:                 opt.QueryID,
 		IncQuery:                opt.IncQuery,
 		IterID:                  opt.IterID,
+		IsArrowQuery:            opt.IsArrowQuery,
 	}
 }
 
@@ -2102,7 +2132,7 @@ func (e *StatementExecutor) executeShowQueriesStatement() (models.Rows, error) {
 	}
 
 	resMap := make(map[uint64]*combinedQueryExeInfo)
-	infosOnAllStore := make([][]*netstorage.QueryExeInfo, len(nodes))
+	infosOnAllStore := make([][]*msgservice.QueryExeInfo, len(nodes))
 
 	// Concurrent access to all store nodes.
 	wg := sync.WaitGroup{}
@@ -2150,16 +2180,16 @@ func (e *StatementExecutor) executeShowQueriesStatement() (models.Rows, error) {
 	return models.Rows{&row}, nil
 }
 
-func (e *StatementExecutor) getQueryExeInfoOnNode(nodeID uint64) []*netstorage.QueryExeInfo {
+func (e *StatementExecutor) getQueryExeInfoOnNode(nodeID uint64) []*msgservice.QueryExeInfo {
 	exeInfos, err := e.NetStorage.GetQueriesOnNode(nodeID)
 	if err != nil {
-		return make([]*netstorage.QueryExeInfo, 0)
+		return make([]*msgservice.QueryExeInfo, 0)
 	}
 	return exeInfos
 }
 
 // combineQueryExeInfos combines queryExeInfo from different store nodes by QueryID.
-func combineQueryExeInfos(dstMap map[uint64]*combinedQueryExeInfo, exeInfosOnStore []*netstorage.QueryExeInfo, host string) {
+func combineQueryExeInfos(dstMap map[uint64]*combinedQueryExeInfo, exeInfosOnStore []*msgservice.QueryExeInfo, host string) {
 	for _, info := range exeInfosOnStore {
 		// If a query in dstMap, update its killed,host and duration
 		if cmbInfo, ok := dstMap[info.QueryID]; ok {
@@ -2377,7 +2407,27 @@ func (e *StatementExecutor) NormalizeStatement(stmt influxql.Statement, defaultD
 			if node.Database == "" {
 				node.Database = defaultDatabase
 			}
+		case *influxql.InCondition:
+			err = e.NormalizeStatement(node.Stmt, defaultDatabase, defaultRetentionPolicy)
+			if err != nil {
+				return
+			}
+		case *influxql.WithSelectStatement:
+			err = e.NormalizeStatement(node.Query, defaultDatabase, defaultRetentionPolicy)
+			if err != nil {
+				return
+			}
+			for _, cte := range node.CTEs {
+				if cte.Query != nil {
+					err = e.NormalizeStatement(cte.Query, defaultDatabase, defaultRetentionPolicy)
+				}
+			}
+		case *influxql.TableFunction:
+			for _, source := range node.GetTableFunctionSource() {
+				err = e.normalizeMeasurement(source.(*influxql.Measurement), defaultDatabase, defaultRetentionPolicy)
+			}
 		}
+
 	})
 	return
 }
@@ -2563,8 +2613,237 @@ func (e *StatementExecutor) executeShowClusterWithCondition(stmt *influxql.ShowC
 	return e.MetaClient.ShowClusterWithCondition(stmt.NodeType, ID)
 }
 
-func (e StatementExecutor) executeWithSelectStatement(stmt *influxql.WithSelectStatement) error {
+func checkCTE(mst *influxql.Measurement, ctes influxql.CTES) bool {
+	for _, cte := range ctes {
+		if strings.Compare(cte.Alias, mst.Name) == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func getReqId() string {
+	return strings.Replace(uuid.New().String(), "-", "", -1)
+}
+
+func SetTemporaryIfCTE(withStmt *influxql.WithSelectStatement) error {
+	ctes := withStmt.CTEs
+	length := len(ctes)
+	for _, cte := range ctes {
+		if cte.Query != nil {
+			allAliases := make([]string, 0, length)
+			cte.DependenciesCTEAlias, allAliases = setTemporaryForSelectment(cte.Query, ctes, allAliases)
+
+			if isRecursiveCTE(allAliases, cte.Alias) {
+				return errors.New("Unsupported feature: recursive call to itself " + cte.Alias)
+			}
+			setDirectDependencyCTEsForStmt(cte.DependenciesCTEAlias, ctes, cte.Query)
+		}
+	}
+	allAliases := make([]string, 0, length)
+	withStmt.DependenciesCTEsAlias, allAliases = setTemporaryForSelectment(withStmt.Query, ctes, allAliases)
+	setDirectDependencyCTEsForStmt(withStmt.DependenciesCTEsAlias, ctes, withStmt.Query)
 	return nil
+}
+
+func isRecursiveCTE(allAliases []string, CTEAlias string) bool {
+	for _, curAlias := range allAliases {
+		if CTEAlias == curAlias {
+			return true
+		}
+	}
+	return false
+}
+
+func setReqIdAndDimensionsForEachCTE(withStmt *influxql.WithSelectStatement, reqId string) {
+	ctes := withStmt.CTEs
+	for _, cte := range ctes {
+		cte.ReqId = reqId
+		if cte.Query != nil && len(cte.Query.Dimensions) == 0 {
+			cte.Query.Dimensions = withStmt.Query.Dimensions
+		}
+	}
+}
+
+func setDirectDependencyCTEsForStmt(aliases []string, ctes influxql.CTES, stmt *influxql.SelectStatement) {
+outer:
+	for _, alias := range aliases {
+		for _, cte := range ctes {
+			if cte.Alias == alias {
+				stmt.DirectDependencyCTEs = append(stmt.DirectDependencyCTEs, cte.Clone())
+			}
+			if len(aliases) == len(stmt.DirectDependencyCTEs) {
+				break outer
+			}
+		}
+	}
+}
+
+func setTemporaryForSelectment(stmt *influxql.SelectStatement, ctes influxql.CTES, allAliases []string) ([]string, []string) {
+	if stmt == nil {
+		return nil, nil
+	}
+	conditions := stmt.Condition
+	allAliases = checkForInCondition(conditions, allAliases, ctes)
+	aliases := make([]string, 0, len(ctes))
+	sources := stmt.Sources
+	for _, source := range sources {
+		switch childSource := source.(type) {
+		case *influxql.TableFunction:
+			for _, tableFunctionSource := range childSource.GetTableFunctionSource() {
+				aliases, allAliases = setTemporaryForSource(tableFunctionSource, ctes, aliases, allAliases)
+			}
+		default:
+			aliases, allAliases = setTemporaryForSource(childSource, ctes, aliases, allAliases)
+		}
+	}
+	return aliases, allAliases
+}
+
+func checkForInCondition(conditions influxql.Expr, allAliases []string, ctes influxql.CTES) []string {
+	switch condition := conditions.(type) {
+	case *influxql.BinaryExpr:
+		checkForInCondition(condition.LHS, allAliases, ctes)
+		checkForInCondition(condition.RHS, allAliases, ctes)
+	case *influxql.ParenExpr:
+		checkForInCondition(condition.Expr, allAliases, ctes)
+	case *influxql.InCondition:
+		var aliases []string
+		aliases, allAliases = setTemporaryForSelectment(condition.Stmt, ctes, allAliases)
+		setDirectDependencyCTEsForStmt(aliases, ctes, condition.Stmt)
+	default:
+	}
+	return allAliases
+}
+
+func setTemporaryForSource(source influxql.Source, ctes influxql.CTES, aliases []string, allAliases []string) ([]string, []string) {
+	switch src := source.(type) {
+	case *influxql.Measurement:
+		if checkCTE(src, ctes) {
+			src.MstType = influxql.TEMPORARY
+			aliases = append(aliases, src.Name)
+			allAliases = append(allAliases, src.Name)
+		}
+	case *influxql.Join:
+		aliases, allAliases = setTemporaryForSource(src.LSrc, ctes, aliases, allAliases)
+		aliases, allAliases = setTemporaryForSource(src.RSrc, ctes, aliases, allAliases)
+	case *influxql.Union:
+		aliases, allAliases = setTemporaryForSource(src.LSrc, ctes, aliases, allAliases)
+		aliases, allAliases = setTemporaryForSource(src.RSrc, ctes, aliases, allAliases)
+	case *influxql.SubQuery:
+		aliases, allAliases = setTemporaryForSelectment(src.Statement, ctes, allAliases)
+		setDirectDependencyCTEsForStmt(aliases, ctes, src.Statement)
+		aliases = make([]string, 0, len(ctes))
+	}
+	return aliases, allAliases
+}
+
+func sortCTEs(arrCTEs influxql.CTES) influxql.CTES {
+	var sortedCTEs influxql.CTES
+	var unSortedCTEs influxql.CTES
+	for _, e := range arrCTEs {
+		if len(e.DependenciesCTEAlias) == 0 {
+			sortedCTEs = append(sortedCTEs, e)
+		} else {
+			unSortedCTEs = append(unSortedCTEs, e)
+		}
+	}
+	return recursionSortCTEs(sortedCTEs, unSortedCTEs)
+}
+
+func recursionSortCTEs(sortedCTEs influxql.CTES, unSortedCTEs influxql.CTES) influxql.CTES {
+	var tempCTEs influxql.CTES
+	for _, cte := range unSortedCTEs {
+		if allDependenciesResolved(cte, sortedCTEs) {
+			sortedCTEs = append(sortedCTEs, cte)
+		} else {
+			tempCTEs = append(tempCTEs, cte)
+		}
+	}
+	if len(tempCTEs) > 0 {
+		return recursionSortCTEs(sortedCTEs, tempCTEs)
+	}
+	return sortedCTEs
+}
+
+func allDependenciesResolved(cte *influxql.CTE, sortedCTEs influxql.CTES) bool {
+	for _, dep := range cte.DependenciesCTEAlias {
+		found := false
+		for _, e := range sortedCTEs {
+			if e.Alias == dep {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+func (e StatementExecutor) executeWithSelectStatement(stmt *influxql.WithSelectStatement, ctx *query.ExecutionContext, seq int) error {
+	reqId := getReqId()
+	setReqIdAndDimensionsForEachCTE(stmt, reqId)
+	if err := SetTemporaryIfCTE(stmt); err != nil {
+		return err
+	}
+	stmt.CTEs = sortCTEs(stmt.CTEs)
+	selectStmt := stmt.Query
+	selectStmt.AllDependencyCTEs = stmt.CTEs
+
+	defer func() {
+		executor.CTEBuf.ClearDataStoreByKey(reqId, stmt.CTEs)
+	}()
+
+	begin := time.Now()
+	err := e.retryExecuteSelectStatement(selectStmt, ctx, seq)
+	dur := time.Since(begin)
+	if err == nil {
+		if dur.Nanoseconds() > time.Second.Nanoseconds() {
+			e.StmtExecLogger.GetZapLogger().Warn("slow query",
+				zap.String("stmt", selectStmt.String()),
+				zap.Float64("duration", dur.Seconds()))
+		}
+		return nil
+	}
+	handler := statistics.NewHandler()
+	if errno.Equal(err, errno.DatabaseNotFound, errno.ErrMeasurementNotFound) {
+		e.StmtExecLogger.Error("execute select statement 400 error", zap.Any("stmt", selectStmt.String()),
+			zap.Error(err), zap.Float64("duration", dur.Seconds()))
+		handler.Query400ErrorStmtCount.Incr()
+	} else {
+		e.StmtExecLogger.Error("execute select statement 500 error", zap.Any("stmt", selectStmt.String()),
+			zap.Error(err), zap.Float64("duration", dur.Seconds()))
+		handler.QueryErrorStmtCount.Incr()
+	}
+
+	return err
+}
+
+func (e StatementExecutor) executeGraphStatement(stmt *influxql.GraphStatement, ctx *query.ExecutionContext) (models.Rows, error) {
+	// skip planBuild case single graph query is simple
+	transform, err := executor.NewGraphTransform(stmt)
+	if err != nil {
+		return nil, err
+	}
+	output := executor.NewChunkPort(hybridqp.NewRowDataTypeImpl(*influxql.DefaultGraphVarRef()))
+	executor.Connect(transform.GetOutputs()[0], output)
+	err = transform.Work(ctx)
+	if err != nil {
+		return nil, err
+	}
+	rows := make([]*models.Row, 0)
+	chunk, ok := <-output.State
+	if !ok {
+		return rows, nil
+	}
+	graph := chunk.GetGraph()
+	if graph == nil {
+		return nil, fmt.Errorf("nil graph")
+	}
+	rows = graph.GraphToRows()
+	return rows, nil
 }
 
 type ByteStringSlice [][]byte
@@ -2586,11 +2865,13 @@ func (s ByteStringSlice) Less(i, j int) bool {
 
 type TagKeysSlice []netstorage.TagKeys
 
-func (a TagKeysSlice) Len() int           { return len(a) }
-func (a TagKeysSlice) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a TagKeysSlice) Len() int { return len(a) }
+
+func (a TagKeysSlice) Swap(i, j int) { a[i], a[j] = a[j], a[i] }
+
 func (a TagKeysSlice) Less(i, j int) bool { return a[i].Name < a[j].Name }
 
-func MergeMeasurementsNames(otherNodeNamesMap map[uint64]*netstorage.ExecuteStatementMessage) (error, [][]byte) {
+func MergeMeasurementsNames(otherNodeNamesMap map[uint64]*msgservice.ExecuteStatementMessage) (error, [][]byte) {
 	retString := make(map[string]bool, len(otherNodeNamesMap))
 	clusterNames := make([][]byte, 0, len(otherNodeNamesMap))
 	for _, msg := range otherNodeNamesMap {
@@ -2656,7 +2937,7 @@ func MergeTagKeys(otherNodeTagKeysMap *map[uint64][]netstorage.TagKeys) (error, 
 	return nil, clusterTagKeys
 }
 
-type KeyValues []netstorage.TagSet
+type KeyValues []influxql.TagSet
 
 func (a KeyValues) Len() int { return len(a) }
 
@@ -2672,11 +2953,11 @@ func (a KeyValues) Less(i, j int) bool {
 	return ki < kj
 }
 
-func MergeTagValues(otherNodeTagKeysMap *map[uint64][]netstorage.TableTagSets) (error, []netstorage.TableTagSets) {
-	uniqueMap := make(map[string]set.Set[netstorage.TagSet])
+func MergeTagValues(otherNodeTagKeysMap *map[uint64][]influxql.TableTagSets) (error, []influxql.TableTagSets) {
+	uniqueMap := make(map[string]set.Set[influxql.TagSet])
 	for _, nodeTagValues := range *otherNodeTagKeysMap {
 		for _, tagValues := range nodeTagValues {
-			s := set.NewSet[netstorage.TagSet]()
+			s := set.NewSet[influxql.TagSet]()
 			for _, v := range tagValues.Values {
 				s.Add(v)
 			}
@@ -2692,12 +2973,12 @@ func MergeTagValues(otherNodeTagKeysMap *map[uint64][]netstorage.TableTagSets) (
 	var clusterTagValues coordinator.TagValuesSlice
 	for k, v := range uniqueMap {
 		vSlice := v.ToSlice()
-		newSlice := make(netstorage.TagSets, len(vSlice))
+		newSlice := make(influxql.TagSets, len(vSlice))
 		for i, data := range vSlice {
 			newSlice[i] = data
 		}
 		sort.Stable(newSlice)
-		tk := netstorage.TableTagSets{Name: k, Values: newSlice}
+		tk := influxql.TableTagSets{Name: k, Values: newSlice}
 		clusterTagValues = append(clusterTagValues, tk)
 	}
 
@@ -2705,7 +2986,7 @@ func MergeTagValues(otherNodeTagKeysMap *map[uint64][]netstorage.TableTagSets) (
 	return nil, clusterTagValues
 }
 
-func GetStatementMessageType(OtherNodesMsg map[uint64]*netstorage.ExecuteStatementMessage) string {
+func GetStatementMessageType(OtherNodesMsg map[uint64]*msgservice.ExecuteStatementMessage) string {
 	for _, nodeMsg := range OtherNodesMsg {
 		return nodeMsg.StatementType
 	}
@@ -2713,12 +2994,12 @@ func GetStatementMessageType(OtherNodesMsg map[uint64]*netstorage.ExecuteStateme
 	return ""
 }
 
-func MergeAllNodeMessage(OtherNodesMsg map[uint64]*netstorage.ExecuteStatementMessage) (error, interface{}) {
+func MergeAllNodeMessage(OtherNodesMsg map[uint64]*msgservice.ExecuteStatementMessage) (error, interface{}) {
 	stmtType := GetStatementMessageType(OtherNodesMsg)
 	switch stmtType {
-	case netstorage.ShowMeasurementsStatement:
+	case msgservice.ShowMeasurementsStatement:
 		return MergeMeasurementsNames(OtherNodesMsg)
-	case netstorage.ShowTagKeysStatement:
+	case msgservice.ShowTagKeysStatement:
 		clusterTagKeysMap := make(map[uint64][]netstorage.TagKeys)
 		for i, nodeMsg := range OtherNodesMsg {
 			var tagKeys []netstorage.TagKeys
@@ -2729,10 +3010,10 @@ func MergeAllNodeMessage(OtherNodesMsg map[uint64]*netstorage.ExecuteStatementMe
 			clusterTagKeysMap[i] = tagKeys
 		}
 		return MergeTagKeys(&clusterTagKeysMap)
-	case netstorage.ShowTagValuesStatement:
-		clusterTagValuesMap := make(map[uint64][]netstorage.TableTagSets)
+	case msgservice.ShowTagValuesStatement:
+		clusterTagValuesMap := make(map[uint64][]influxql.TableTagSets)
 		for i, nodeMsg := range OtherNodesMsg {
-			var tagValues []netstorage.TableTagSets
+			var tagValues []influxql.TableTagSets
 			err := json.Unmarshal(nodeMsg.Result, &tagValues)
 			if err != nil {
 				return err, nil
@@ -2740,16 +3021,16 @@ func MergeAllNodeMessage(OtherNodesMsg map[uint64]*netstorage.ExecuteStatementMe
 			clusterTagValuesMap[i] = tagValues
 		}
 		return MergeTagValues(&clusterTagValuesMap)
-	case netstorage.ShowSeriesCardinalityStatement:
+	case msgservice.ShowSeriesCardinalityStatement:
 		return CalcCardinality(OtherNodesMsg)
-	case netstorage.ShowMeasurementCardinalityStatement:
+	case msgservice.ShowMeasurementCardinalityStatement:
 		return CalcCardinality(OtherNodesMsg)
 	default:
 		return fmt.Errorf("ExecuteStatement type[%s] not surpport", stmtType), nil
 	}
 }
 
-func CalcCardinality(OtherNodesMsg map[uint64]*netstorage.ExecuteStatementMessage) (error, int64) {
+func CalcCardinality(OtherNodesMsg map[uint64]*msgservice.ExecuteStatementMessage) (error, int64) {
 	var nl int64
 	var clusterCardinality int64
 	clusterCardinality = 0
@@ -2764,7 +3045,7 @@ func CalcCardinality(OtherNodesMsg map[uint64]*netstorage.ExecuteStatementMessag
 	return nil, clusterCardinality + nl
 }
 
-func MergeAllNodeFiltered(OtherNodesMsg map[uint64]*netstorage.ExecuteStatementMessage) (error, interface{}) {
+func MergeAllNodeFiltered(OtherNodesMsg map[uint64]*msgservice.ExecuteStatementMessage) (error, interface{}) {
 	// for reuse the message merge flow
 	other := OtherNodesMsg
 	for _, n := range other {
@@ -2773,9 +3054,9 @@ func MergeAllNodeFiltered(OtherNodesMsg map[uint64]*netstorage.ExecuteStatementM
 
 	stmtType := GetStatementMessageType(other)
 	switch stmtType {
-	case netstorage.ShowMeasurementsStatement:
+	case msgservice.ShowMeasurementsStatement:
 		return MergeMeasurementsNames(other)
-	case netstorage.ShowTagKeysStatement:
+	case msgservice.ShowTagKeysStatement:
 		clusterTagKeysMap := make(map[uint64][]netstorage.TagKeys)
 		for i, nodeMsg := range other {
 			var tagKeys []netstorage.TagKeys

@@ -25,7 +25,15 @@ import (
 )
 
 type CollectSupported interface {
-	Enabled() *bool
+	Enabled() bool
+
+	// Interval Set the sampling interval
+	// Default sampling interval is 10 seconds
+	// If the return value is greater than 1, the sampling interval is reset to N*10s
+	Interval() int
+
+	// BeforeCollect Hook function, called before metric collection
+	BeforeCollect()
 }
 
 type MeasurementSupported interface {
@@ -42,19 +50,39 @@ type BaseCollector struct {
 	enabled bool
 }
 
-func (bc *BaseCollector) Enabled() *bool {
-	return &bc.enabled
+func (bc *BaseCollector) Enabled() bool {
+	return bc.enabled
+}
+
+func (bc *BaseCollector) Interval() int {
+	return 0
+}
+
+func (bc *BaseCollector) BeforeCollect() {
+
 }
 
 type CollectorProxy struct {
-	mst     string
-	tags    map[string]string
-	items   []Item
-	enabled *bool
+	mst       string
+	tags      map[string]string
+	items     []Item
+	metric    CollectSupported
+	collected int
 }
 
 func (c *CollectorProxy) Enabled() bool {
-	return *c.enabled
+	if !c.metric.Enabled() {
+		return false
+	}
+
+	interval := c.metric.Interval()
+	if interval > 1 {
+		n := c.collected % interval
+		c.collected++
+		return n == 0
+	}
+
+	return true
 }
 
 func (c *CollectorProxy) SetMst(mst string) {
@@ -114,6 +142,56 @@ func (i *ItemInt64) AddSinceNano(begin time.Time) {
 	i.Add(time.Since(begin).Nanoseconds())
 }
 
+func (i *ItemInt64) AddSinceMicro(begin time.Time) {
+	i.Add(time.Since(begin).Microseconds())
+}
+
+func (i *ItemInt64) AddSinceMilli(begin time.Time) {
+	i.Add(time.Since(begin).Milliseconds())
+}
+
+type ItemGaugeMax struct {
+	ItemInt64
+	v  uint64
+	mu sync.Mutex
+}
+
+func (i *ItemGaugeMax) Store(v uint64) {
+	i.mu.Lock()
+	i.v = max(i.v, v)
+	i.mu.Unlock()
+}
+
+func (i *ItemGaugeMax) GetValue() any {
+	i.mu.Lock()
+	v := i.v
+	i.v = 0
+	i.mu.Unlock()
+
+	return int64(v)
+}
+
+type ItemString struct {
+	atomic.Value
+	name string
+}
+
+func (i *ItemString) SetName(name string) {
+	i.name = name
+}
+
+func (i *ItemString) GetName() string {
+	return i.name
+}
+
+func (i *ItemString) GetValue() any {
+	v, ok := i.Load().(string)
+	if ok {
+		return v
+	}
+	return ""
+}
+
 var collector = &Collector{values: make(map[string]interface{})}
 
 func NewCollector() *Collector {
@@ -139,7 +217,7 @@ func (c *Collector) SetGlobalTags(tags map[string]string) {
 // It should be called during program initialization, such as the init function
 func (c *Collector) Register(obj CollectSupported) {
 	proxy := &CollectorProxy{
-		enabled: obj.Enabled(),
+		metric: obj,
 	}
 	c.initStatObject(obj, proxy)
 	c.proxies = append(c.proxies, proxy)
@@ -152,6 +230,7 @@ func (c *Collector) CollectOps() []opsStat.OpsStatistic {
 	dst := make([]opsStat.OpsStatistic, len(c.proxies))
 	for i, proxy := range c.proxies {
 		if proxy.Enabled() {
+			proxy.metric.BeforeCollect()
 			c.collectOps(&dst[i], proxy)
 		}
 	}
@@ -173,6 +252,7 @@ func (c *Collector) Collect(dst []byte) ([]byte, error) {
 
 	for _, proxy := range c.proxies {
 		if proxy.Enabled() {
+			proxy.metric.BeforeCollect()
 			dst = c.collect(dst, proxy)
 		}
 	}
@@ -235,7 +315,7 @@ func MicroTimeUse(count, sum *ItemInt64) func() {
 	count.Incr()
 	begin := time.Now()
 	return func() {
-		sum.Add(time.Since(begin).Microseconds())
+		sum.AddSinceMicro(begin)
 	}
 }
 
@@ -243,6 +323,6 @@ func MilliTimeUse(count, sum *ItemInt64) func() {
 	count.Incr()
 	begin := time.Now()
 	return func() {
-		sum.Add(time.Since(begin).Milliseconds())
+		sum.AddSinceMilli(begin)
 	}
 }

@@ -19,6 +19,10 @@ package tsi
 import (
 	"testing"
 
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/mergeset"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/uint64set"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -83,4 +87,219 @@ func TestSortTagFilterWithCost(t *testing.T) {
 	assert.Equal(t, string(tfs[3].tf.key), "_extra_metric_type")
 	assert.Equal(t, string(tfs[4].tf.key), "_extra_metric_prefix")
 	assert.Equal(t, string(tfs[5].tf.key), "instance_id")
+}
+
+func TestHasINExpr(t *testing.T) {
+	expr := &influxql.StringLiteral{}
+	chooseINPriority(expr)
+	expr1 := &influxql.BinaryExpr{
+		LHS: &influxql.BinaryExpr{
+			Op: influxql.IN,
+			LHS: &influxql.VarRef{
+				Type: influxql.Tag,
+			},
+			RHS: &influxql.SetLiteral{Vals: map[interface{}]bool{
+				"1":  true,
+				"2":  true,
+				"3":  true,
+				"4":  true,
+				"5":  true,
+				"6":  true,
+				"7":  true,
+				"8":  true,
+				"9":  true,
+				"10": true,
+				"11": true,
+			}},
+		},
+		RHS: &influxql.BinaryExpr{
+			Op: influxql.IN,
+			LHS: &influxql.VarRef{
+				Type: influxql.Tag,
+			},
+			RHS: &influxql.SetLiteral{Vals: map[interface{}]bool{
+				"1":  true,
+				"2":  true,
+				"3":  true,
+				"4":  true,
+				"5":  true,
+				"6":  true,
+				"7":  true,
+				"8":  true,
+				"9":  true,
+				"10": true,
+				"11": true,
+			}},
+		},
+	}
+	chooseINPriority(expr1)
+	expr1.RHS = &influxql.BinaryExpr{
+		Op: influxql.IN,
+		LHS: &influxql.VarRef{
+			Type: influxql.Tag,
+		},
+		RHS: &influxql.SetLiteral{Vals: map[interface{}]bool{
+			"1": true,
+			"2": true,
+			"3": true,
+			"4": true,
+			"5": true,
+			"6": true,
+			"7": true,
+			"8": true,
+			"9": true,
+		}},
+	}
+	chooseINPriority(expr1)
+	expr1.RHS = &influxql.BinaryExpr{
+		Op: influxql.IN,
+		LHS: &influxql.VarRef{
+			Type: influxql.Tag,
+		},
+		RHS: &influxql.SetLiteral{Vals: map[interface{}]bool{
+			"1":  true,
+			"2":  true,
+			"3":  true,
+			"4":  true,
+			"5":  true,
+			"6":  true,
+			"7":  true,
+			"8":  true,
+			"9":  true,
+			"10": true,
+			"11": true,
+			"12": true,
+		}},
+	}
+	chooseINPriority(expr1)
+}
+
+func TestSeriesByINExprIterator(t *testing.T) {
+	is := &indexSearch{}
+	name := []byte("name")
+	expr := &influxql.BinaryExpr{
+		Op: influxql.AND,
+		LHS: &influxql.BinaryExpr{
+			Op: influxql.IN,
+			LHS: &influxql.VarRef{
+				Type: influxql.Tag,
+			},
+			RHS: &influxql.SetLiteral{Vals: map[interface{}]bool{
+				"1":  true,
+				"2":  true,
+				"3":  true,
+				"4":  true,
+				"5":  true,
+				"6":  true,
+				"7":  true,
+				"8":  true,
+				"9":  true,
+				"10": true,
+				"11": true,
+			}},
+		},
+		RHS: &influxql.BinaryExpr{
+			Op: influxql.IN,
+			LHS: &influxql.VarRef{
+				Type: influxql.Tag,
+			},
+			RHS: &influxql.SetLiteral{Vals: map[interface{}]bool{
+				"1":  true,
+				"2":  true,
+				"3":  true,
+				"4":  true,
+				"5":  true,
+				"6":  true,
+				"7":  true,
+				"8":  true,
+				"9":  true,
+				"10": true,
+				"11": true,
+			}},
+		},
+	}
+	tsids := &uint64set.Set{}
+	is.seriesByINExprIterator(name, expr, &tsids, true, true, true)
+	is.seriesByINExprIterator(name, expr, &tsids, true, false, true)
+}
+
+func TestSeriesByBinaryExprSetLiteral(t *testing.T) {
+	is := &indexSearch{}
+	name := []byte("name")
+	key := []byte("key")
+	vals := map[interface{}]bool{
+		"key": true,
+		"1":   true,
+	}
+	is.seriesByBinaryExprSetLiteral(name, key, vals, false)
+}
+
+func TestDoPruneWithSet(t *testing.T) {
+	mem := 1 * 1024 * 1024
+	path := t.TempDir()
+	is := &indexSearch{
+		idx: &MergeSetIndex{
+			cache: newIndexCache(mem/32, mem/32, mem/16, mem/128, path, false, false),
+			tb:    &mergeset.Table{},
+		},
+		ts: mergeset.TableSearch{},
+	}
+	set := &uint64set.Set{}
+	set.Add(1)
+	set.Add(2)
+	set.Add(3)
+	set.Add(4)
+	vals := map[interface{}]bool{
+		"1": true,
+		"2": true,
+		"3": true,
+		"4": true,
+	}
+	tagKey := "1"
+	is.doPruneWithSet(set, vals, tagKey, true)
+}
+
+func TestMatchSeriesKeyWithSet(t *testing.T) {
+	src := []byte{
+		0x00, 0x00, 0x00, 0x00,
+		0x00, 0x02,
+		0x00, 0x03, 'a', 'b', 'c',
+		0x00, 0x05, '1', '2', '3', '4', '5',
+	}
+	ctx := &PruneContext{
+		SeriesKey: src,
+	}
+	vals := map[interface{}]bool{
+		"12345": true,
+		"abc":   true,
+	}
+	matchSeriesKeyWithSet(ctx, vals, "abc")
+
+	src = []byte{
+		0x00, 0x00, 0x00, 0x01,
+		'a', 'b', 'c',
+	}
+	ctx.SeriesKey = src
+	matchSeriesKeyWithSet(ctx, vals, "abc")
+}
+
+func TestMatchSeriesKeyWithSetTag(t *testing.T) {
+	tags := influx.PointTags{
+		influx.Tag{
+			Key:   "1",
+			Value: "1",
+		},
+		influx.Tag{
+			Key:   "2",
+			Value: "2",
+		},
+	}
+	tagKey := "1"
+	vals := map[interface{}]bool{
+		"1": false,
+		"2": false,
+	}
+	matchSeriesKeyWithSetTag(tags, vals, tagKey)
+	vals = map[interface{}]bool{}
+	matchSeriesKeyWithSetTag(tags, vals, tagKey)
 }

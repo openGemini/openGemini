@@ -21,7 +21,7 @@ package meta
 
 import (
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
-	"github.com/openGemini/openGemini/engine/executor"
+	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/spdy/transport"
 )
 
@@ -69,6 +69,8 @@ func New(typ uint8) RPCHandler {
 		return &SendSysCtrlToMeta{}
 	case message.ShowClusterRequestMessage:
 		return &ShowCluster{}
+	case message.SendBackupToMetaRequestMessage:
+		return &SendBackupToMeta{}
 	default:
 		return nil
 	}
@@ -83,7 +85,7 @@ type Ping struct {
 func (h *Ping) SetRequestMsg(data transport.Codec) error {
 	msg, ok := data.(*message.PingRequest)
 	if !ok {
-		return executor.NewInvalidTypeError("*message.PingRequest", data)
+		return errno.NewInvalidTypeError("*message.PingRequest", data)
 	}
 	h.req = msg
 	return nil
@@ -102,7 +104,7 @@ type Peers struct {
 func (h *Peers) SetRequestMsg(data transport.Codec) error {
 	msg, ok := data.(*message.PeersRequest)
 	if !ok {
-		return executor.NewInvalidTypeError("*message.PeersRequest", data)
+		return errno.NewInvalidTypeError("*message.PeersRequest", data)
 	}
 	h.req = msg
 	return nil
@@ -121,7 +123,7 @@ type CreateNode struct {
 func (h *CreateNode) SetRequestMsg(data transport.Codec) error {
 	msg, ok := data.(*message.CreateNodeRequest)
 	if !ok {
-		return executor.NewInvalidTypeError("*message.CreateNodeRequest", data)
+		return errno.NewInvalidTypeError("*message.CreateNodeRequest", data)
 	}
 	h.req = msg
 	return nil
@@ -140,7 +142,7 @@ type CreateSqlNode struct {
 func (h *CreateSqlNode) SetRequestMsg(data transport.Codec) error {
 	msg, ok := data.(*message.CreateSqlNodeRequest)
 	if !ok {
-		return executor.NewInvalidTypeError("*message.CreateSqlNodeRequest", data)
+		return errno.NewInvalidTypeError("*message.CreateSqlNodeRequest", data)
 	}
 	h.req = msg
 	return nil
@@ -159,7 +161,7 @@ type Snapshot struct {
 func (h *Snapshot) SetRequestMsg(data transport.Codec) error {
 	msg, ok := data.(*message.SnapshotRequest)
 	if !ok {
-		return executor.NewInvalidTypeError("*message.SnapshotRequest", data)
+		return errno.NewInvalidTypeError("*message.SnapshotRequest", data)
 	}
 	h.req = msg
 	return nil
@@ -178,7 +180,7 @@ type SnapshotV2 struct {
 func (h *SnapshotV2) SetRequestMsg(data transport.Codec) error {
 	msg, ok := data.(*message.SnapshotV2Request)
 	if !ok {
-		return executor.NewInvalidTypeError("*message.SnapshotV2Request", data)
+		return errno.NewInvalidTypeError("*message.SnapshotV2Request", data)
 	}
 	h.req = msg
 	return nil
@@ -197,7 +199,7 @@ type Execute struct {
 func (h *Execute) SetRequestMsg(data transport.Codec) error {
 	msg, ok := data.(*message.ExecuteRequest)
 	if !ok {
-		return executor.NewInvalidTypeError("*message.ExecuteRequest", data)
+		return errno.NewInvalidTypeError("*message.ExecuteRequest", data)
 	}
 	h.req = msg
 	return nil
@@ -216,7 +218,7 @@ type Update struct {
 func (h *Update) SetRequestMsg(data transport.Codec) error {
 	msg, ok := data.(*message.UpdateRequest)
 	if !ok {
-		return executor.NewInvalidTypeError("*message.UpdateRequest", data)
+		return errno.NewInvalidTypeError("*message.UpdateRequest", data)
 	}
 	h.req = msg
 	return nil
@@ -235,7 +237,7 @@ type Report struct {
 func (h *Report) SetRequestMsg(data transport.Codec) error {
 	msg, ok := data.(*message.ReportRequest)
 	if !ok {
-		return executor.NewInvalidTypeError("*message.ReportRequest", data)
+		return errno.NewInvalidTypeError("*message.ReportRequest", data)
 	}
 	h.req = msg
 	return nil
@@ -254,7 +256,7 @@ type GetShardInfo struct {
 func (h *GetShardInfo) SetRequestMsg(data transport.Codec) error {
 	msg, ok := data.(*message.GetShardInfoRequest)
 	if !ok {
-		return executor.NewInvalidTypeError("*message.GetShardInfoRequest", data)
+		return errno.NewInvalidTypeError("*message.GetShardInfoRequest", data)
 	}
 	h.req = msg
 	return nil
@@ -273,7 +275,7 @@ type GetDownSampleInfo struct {
 func (h *GetDownSampleInfo) SetRequestMsg(data transport.Codec) error {
 	msg, ok := data.(*message.GetDownSampleInfoRequest)
 	if !ok {
-		return executor.NewInvalidTypeError("*message.GetDownSampleInfoRequest", data)
+		return errno.NewInvalidTypeError("*message.GetDownSampleInfoRequest", data)
 	}
 	h.req = msg
 	return nil
@@ -292,7 +294,7 @@ type GetRpMstInfos struct {
 func (h *GetRpMstInfos) SetRequestMsg(data transport.Codec) error {
 	msg, ok := data.(*message.GetRpMstInfosRequest)
 	if !ok {
-		return executor.NewInvalidTypeError("*message.GetRpMstInfosRequest", data)
+		return errno.NewInvalidTypeError("*message.GetRpMstInfosRequest", data)
 	}
 	h.req = msg
 	return nil
@@ -311,7 +313,7 @@ type GetStreamInfo struct {
 func (h *GetStreamInfo) SetRequestMsg(data transport.Codec) error {
 	msg, ok := data.(*message.GetStreamInfoRequest)
 	if !ok {
-		return executor.NewInvalidTypeError("*message.GetStreamInfoRequest", data)
+		return errno.NewInvalidTypeError("*message.GetStreamInfoRequest", data)
 	}
 	h.req = msg
 	return nil
@@ -330,7 +332,7 @@ type GetMeasurementInfo struct {
 func (h *GetMeasurementInfo) SetRequestMsg(data transport.Codec) error {
 	msg, ok := data.(*message.GetMeasurementInfoRequest)
 	if !ok {
-		return executor.NewInvalidTypeError("*message.GetMeasurementInfoRequest", data)
+		return errno.NewInvalidTypeError("*message.GetMeasurementInfoRequest", data)
 	}
 	h.req = msg
 	return nil
@@ -349,7 +351,7 @@ type GetMeasurementsInfo struct {
 func (h *GetMeasurementsInfo) SetRequestMsg(data transport.Codec) error {
 	msg, ok := data.(*message.GetMeasurementsInfoRequest)
 	if !ok {
-		return executor.NewInvalidTypeError("*message.GetMeasurementsInfoRequest", data)
+		return errno.NewInvalidTypeError("*message.GetMeasurementsInfoRequest", data)
 	}
 	h.req = msg
 	return nil
@@ -368,7 +370,7 @@ type RegisterQueryIDOffset struct {
 func (h *RegisterQueryIDOffset) SetRequestMsg(data transport.Codec) error {
 	msg, ok := data.(*message.RegisterQueryIDOffsetRequest)
 	if !ok {
-		return executor.NewInvalidTypeError("*message.RegisterQueryIDOffsetRequest", data)
+		return errno.NewInvalidTypeError("*message.RegisterQueryIDOffsetRequest", data)
 	}
 	h.req = msg
 	return nil
@@ -387,7 +389,7 @@ type Sql2MetaHeartbeat struct {
 func (h *Sql2MetaHeartbeat) SetRequestMsg(data transport.Codec) error {
 	msg, ok := data.(*message.Sql2MetaHeartbeatRequest)
 	if !ok {
-		return executor.NewInvalidTypeError("*message.Sql2MetaHeartbeatRequest", data)
+		return errno.NewInvalidTypeError("*message.Sql2MetaHeartbeatRequest", data)
 	}
 	h.req = msg
 	return nil
@@ -406,7 +408,7 @@ type GetContinuousQueryLease struct {
 func (h *GetContinuousQueryLease) SetRequestMsg(data transport.Codec) error {
 	msg, ok := data.(*message.GetContinuousQueryLeaseRequest)
 	if !ok {
-		return executor.NewInvalidTypeError("*message.GetContinuousQueryLeaseRequest", data)
+		return errno.NewInvalidTypeError("*message.GetContinuousQueryLeaseRequest", data)
 	}
 	h.req = msg
 	return nil
@@ -425,7 +427,7 @@ type VerifyDataNodeStatus struct {
 func (h *VerifyDataNodeStatus) SetRequestMsg(data transport.Codec) error {
 	msg, ok := data.(*message.VerifyDataNodeStatusRequest)
 	if !ok {
-		return executor.NewInvalidTypeError("*message.VerifyDataNodeStatusRequest", data)
+		return errno.NewInvalidTypeError("*message.VerifyDataNodeStatusRequest", data)
 	}
 	h.req = msg
 	return nil
@@ -444,7 +446,7 @@ type SendSysCtrlToMeta struct {
 func (h *SendSysCtrlToMeta) SetRequestMsg(data transport.Codec) error {
 	msg, ok := data.(*message.SendSysCtrlToMetaRequest)
 	if !ok {
-		return executor.NewInvalidTypeError("*message.SendSysCtrlToMetaRequest", data)
+		return errno.NewInvalidTypeError("*message.SendSysCtrlToMetaRequest", data)
 	}
 	h.req = msg
 	return nil
@@ -463,7 +465,7 @@ type ShowCluster struct {
 func (h *ShowCluster) SetRequestMsg(data transport.Codec) error {
 	msg, ok := data.(*message.ShowClusterRequest)
 	if !ok {
-		return executor.NewInvalidTypeError("*message.ShowClusterRequest", data)
+		return errno.NewInvalidTypeError("*message.ShowClusterRequest", data)
 	}
 	h.req = msg
 	return nil
@@ -471,4 +473,23 @@ func (h *ShowCluster) SetRequestMsg(data transport.Codec) error {
 
 func (h *ShowCluster) Instance() RPCHandler {
 	return &ShowCluster{}
+}
+
+type SendBackupToMeta struct {
+	BaseHandler
+
+	req *message.SendBackupToMetaRequest
+}
+
+func (h *SendBackupToMeta) SetRequestMsg(data transport.Codec) error {
+	msg, ok := data.(*message.SendBackupToMetaRequest)
+	if !ok {
+		return errno.NewInvalidTypeError("*message.SendBackupToMetaRequest", data)
+	}
+	h.req = msg
+	return nil
+}
+
+func (h *SendBackupToMeta) Instance() RPCHandler {
+	return &SendBackupToMeta{}
 }

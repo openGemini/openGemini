@@ -65,7 +65,7 @@ func MockNewExecutorBuilder() (hybridqp.PipelineExecutorBuilder, *executor.Query
 
 	traits := executor.NewStoreExchangeTraits(nil, mapShard2Reader)
 	schema := executor.NewQuerySchemaWithJoinCase(selectStmt.Fields, []influxql.Source{&influxql.Measurement{Database: "db0", Name: "mst"}}, selectStmt.ColumnNames(), createQuerySchema().Options(),
-		selectStmt.JoinSource, nil, selectStmt.SortFields)
+		selectStmt.JoinSource, nil, nil, selectStmt.SortFields)
 	schema.SetFill(influxql.NoFill)
 	var executorBuilder *executor.ExecutorBuilder = executor.NewMocStoreExecutorBuilder(traits, nil, nil, 0)
 	return executorBuilder, schema, traits
@@ -2136,6 +2136,10 @@ func TestIsMultiMstPlanNode(t *testing.T) {
 	node := &executor.LogicalBinOp{}
 	builder := &executor.ExecutorBuilder{}
 	assert.Equal(t, builder.IsMultiMstPlanNode(node), true)
+
+	node1 := &executor.LogicalJoin{}
+	builder = &executor.ExecutorBuilder{}
+	assert.Equal(t, builder.IsMultiMstPlanNode(node1), true)
 }
 
 func TestExecutorInitCtxErr(t *testing.T) {
@@ -2256,7 +2260,7 @@ func TestExecutorBuilder_SetInfosAndTraits(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			builder := &executor.ExecutorBuilder{}
-			builder.SetInfosAndTraits(tt.args.mstsReqs, tt.args.ctx)
+			builder.SetInfosAndTraits(tt.args.ctx, tt.args.mstsReqs, nil, nil)
 		})
 	}
 }

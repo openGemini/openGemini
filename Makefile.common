@@ -19,7 +19,7 @@ export GOARCH=$(shell go env GOARCH)
 export PATH := $(PATH):$(GOROOT)/bin:$(GOPATH)/bin
 
 GO          := GO111MODULE=on go
-GOTEST      := $(GO) test -gcflags "all=-N -l"
+GOTEST      := $(GO) test -count=1 -gcflags "all=-N -l"
 PYTHON      := python
 STATICCHECK := staticcheck
 
@@ -29,7 +29,7 @@ FAILPOINT_DISABLE := find $$PWD/ -type d | grep -vE "(\.git|\.github|\.tests)" |
 PACKAGE_LIST_OPEN_GEMINI_TESTS  := $(GO) list ./... | grep -vE "tests|lifted\/hashicorp"
 PACKAGES_OPEN_GEMINI_TESTS ?= $$($(PACKAGE_LIST_OPEN_GEMINI_TESTS))
 
-COPYRIGHT_EXCEPT  := "lifted|tests|lib/netstorage/data/data.pb.go|lib/statisticsPusher/statistics/handler_statistics.go|app/ts-meta/meta/snapshot.go|engine/index/tsi/tag_filters.go|engine/index/tsi/tag_filter_test.go|engine/index/mergeindex/item.go|lib/config/openGemini_dir.go"
+COPYRIGHT_EXCEPT  := "lifted|tests|lib/msgservice/data/data.pb.go|lib/statisticsPusher/statistics/handler_statistics.go|app/ts-meta/meta/snapshot.go|engine/index/tsi/tag_filters.go|engine/index/tsi/tag_filter_test.go|engine/index/mergeindex/item.go|lib/config/openGemini_dir.go"
 COPYRIGHT_GOFILE  := $$(find . -name '*.go' | grep -vE $(COPYRIGHT_EXCEPT))
 COPYRIGHT_HEADER  := "Copyright 20[0-9]{2} openGemini Authors|Copyright 20[0-9]{2} Huawei Cloud Computing Technologies Co., Ltd."
 
@@ -44,10 +44,10 @@ install-goimports-reviser:
 	@$(GO) install github.com/incu6us/goimports-reviser/v3@v3.8.2
 
 install-staticcheck:
-	@$(GO) install honnef.co/go/tools/cmd/staticcheck@v0.4.7
+	@$(GO) install honnef.co/go/tools/cmd/staticcheck@v0.6.0
 
 install-golangci-lint:
-	@$(GO) install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.56.0
+	@$(GO) install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.2
 
 install-failpoint:
 	@$(GO) install github.com/pingcap/failpoint/failpoint-ctl@v0.0.0-20220801062533-2eaa32854a6c
@@ -57,6 +57,9 @@ install-tmpl:
 
 install-goyacc:
 	@$(GO) install golang.org/x/tools/cmd/goyacc@v0.13.0
+
+install-exhaustruct:
+	@$(GO) install github.com/GaijinEntertainment/go-exhaustruct/v3/cmd/exhaustruct@v3.3.1
 
 install-protoc:
 	@VERSION=$$(protoc --version); if [ "$$VERSION" = "libprotoc 3.14.0" ]; then exit 0; fi; \

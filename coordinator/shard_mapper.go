@@ -24,7 +24,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cespare/xxhash/v2"
+	xxhash "github.com/cespare/xxhash/v2"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/config"
@@ -40,6 +40,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"go.uber.org/zap"
 )
 
@@ -57,14 +58,83 @@ type ClusterShardMapper struct {
 	NetStore netstorage.Storage
 }
 
-func (csm *ClusterShardMapper) MapShards(sources influxql.Sources, t influxql.TimeRange, opt query.SelectOptions, condition influxql.Expr) (query.ShardGroup, error) {
+func (csm *ClusterShardMapper) MapShards(stmt *influxql.SelectStatement, t influxql.TimeRange, opt query.SelectOptions, condition influxql.Expr) (query.ShardGroup, error) {
+	sources := stmt.Sources
 	tmin := time.Unix(0, t.MinTimeNano())
 	tmax := time.Unix(0, t.MaxTimeNano())
 	csming := NewClusterShardMapping(csm, tmin, tmax)
 	if err := csm.mapShards(csming, sources, tmin, tmax, condition, &opt); err != nil {
 		return nil, err
 	}
+
+	for _, e := range stmt.AllDependencyCTEs {
+		if e.Query != nil {
+			eTmin := time.Unix(0, e.TimeRange.MinTimeNano())
+			eTmax := time.Unix(0, e.TimeRange.MaxTimeNano())
+			eCsming := NewClusterShardMapping(csm, eTmin, eTmax)
+
+			shards, err := csm.MapShards(e.Query, t, opt, e.Query.Condition)
+
+			if err != nil {
+				return nil, err
+			}
+			mapper := query.FieldMapper{FieldMapper: shards}
+
+			if err := csm.mapShards(eCsming, e.Query.Sources, eTmin, eTmax, e.Query.Condition, &opt); err != nil {
+				return nil, err
+			}
+			e.Csming = eCsming
+			e.FMapper = mapper
+			setCsmingRecursively(stmt, eCsming, e.Alias, mapper)
+		}
+	}
+
+	if len(stmt.InConditons) > 0 {
+		in := stmt.InConditons[0]
+		inTmin := time.Unix(0, in.TimeRange.MinTimeNano())
+		inTmax := time.Unix(0, in.TimeRange.MaxTimeNano())
+		inCsming := NewClusterShardMapping(csm, inTmin, inTmax)
+		if err := csm.mapShards(inCsming, in.Stmt.Sources, inTmin, inTmax, in.Stmt.Condition, &opt); err != nil {
+			return nil, err
+		}
+		in.Csming = inCsming
+	}
 	return csming, nil
+}
+
+func setCsmingRecursively(stmt *influxql.SelectStatement, csming interface{}, alias string, mapper query.FieldMapper) {
+	for _, e := range stmt.DirectDependencyCTEs {
+		if alias == e.Alias {
+			e.Csming = csming
+			e.FMapper = mapper
+		}
+		if e.Query == nil {
+			continue
+		}
+		if len(e.Query.InConditons) > 0 {
+			e.Query.InConditons[0].Csming = csming
+			e.Query.InConditons[0].FMapper = mapper
+			setCsmingRecursively(e.Query.InConditons[0].Stmt, csming, alias, mapper)
+		}
+		setCsmingRecursively(e.Query, csming, alias, mapper)
+	}
+	setCsmingForSources(stmt.Sources, csming, alias, mapper)
+}
+
+func setCsmingForSources(sources influxql.Sources, csming interface{}, alias string, mapper query.FieldMapper) {
+	for _, source := range sources {
+		switch src := source.(type) {
+		case *influxql.SubQuery:
+			setCsmingRecursively(src.Statement, csming, alias, mapper)
+		case *influxql.Join:
+			setCsmingForSources(influxql.Sources{src.LSrc}, csming, alias, mapper)
+			setCsmingForSources(influxql.Sources{src.RSrc}, csming, alias, mapper)
+		case *influxql.Union:
+			setCsmingForSources(influxql.Sources{src.LSrc}, csming, alias, mapper)
+			setCsmingForSources(influxql.Sources{src.RSrc}, csming, alias, mapper)
+		default:
+		}
+	}
 }
 
 func (csm *ClusterShardMapper) Close() error {
@@ -72,24 +142,34 @@ func (csm *ClusterShardMapper) Close() error {
 }
 
 func (csm *ClusterShardMapper) mapMstShards(s *influxql.Measurement, csming *ClusterShardMapping, tmin, tmax time.Time, condition influxql.Expr, opt *query.SelectOptions) error {
-	source, shardKeyInfo, measurements, engineTypes, err := csm.getTargetShardMsg(s)
+	sources, shardKeyInfo, measurements, engineTypes, err := csm.getTargetShardMsg(s)
 	if err != nil {
 		return err
+	}
+	if len(measurements) == 0 && s.MstType != influxql.TEMPORARY {
+		return errno.NewError(errno.ErrMeasurementNotFound)
 	}
 
 	// Retrieve the list of shards for this database. This list of
 	// shards is always the same regardless of which measurement we are
 	// using.
-	if _, ok := csming.ShardMap[source]; !ok {
+	for _, source := range sources {
+		var shardInfosByPtID map[uint32][]executor.ShardInfo
+		if shardInfos := csming.ShardMap[source]; shardInfos != nil {
+			shardInfosByPtID = shardInfos
+		} else {
+			shardInfosByPtID = make(map[uint32][]executor.ShardInfo)
+		}
 		groups, err := csm.MetaClient.ShardGroupsByTimeRange(s.Database, s.RetentionPolicy, tmin, tmax)
 		if err != nil {
 			return err
 		}
 		if len(groups) == 0 {
-			csming.ShardMap[source] = nil
+			if len(shardInfosByPtID) == 0 {
+				csming.ShardMap[source] = nil
+			}
 			return nil
 		}
-		shardInfosByPtID := make(map[uint32][]executor.ShardInfo)
 		//firstSetTimeRange := true
 		for i, g := range groups {
 			// ShardGroupsByTimeRange would get all shards with different engine type in the TimeRange,
@@ -129,29 +209,41 @@ func (csm *ClusterShardMapper) updateShardInfosByPtID(s *influxql.Measurement, s
 		if s.EngineType == config.COLUMNSTORE {
 			shardPath = obs.GetShardPath(shs[shIdx].ID, shs[shIdx].IndexID, ptID, sg.StartTime, sg.EndTime, s.Database, s.RetentionPolicy)
 		}
-		(*shardInfosByPtID)[ptID] = append((*shardInfosByPtID)[ptID], executor.ShardInfo{ID: shs[shIdx].ID, Path: shardPath, Version: sg.Version})
+		uniqueAppend(shardInfosByPtID, ptID, shs[shIdx].ID, shardPath, sg.Version)
 	}
 }
 
-func (csm *ClusterShardMapper) getTargetShardMsg(s *influxql.Measurement) (Source, *meta2.ShardKeyInfo, []*meta2.MeasurementInfo, [config.ENGINETYPEEND]bool, error) {
-	source := Source{
-		Database:        s.Database,
-		RetentionPolicy: s.RetentionPolicy,
+func uniqueAppend(shardInfosByPtID *map[uint32][]executor.ShardInfo, ptID uint32, id uint64, shardPath string, version uint32) {
+	shardInfos := (*shardInfosByPtID)[ptID]
+	for _, shardInfo := range shardInfos {
+		if shardInfo.ID == id {
+			return
+		}
 	}
+	(*shardInfosByPtID)[ptID] = append(shardInfos, executor.ShardInfo{ID: id, Path: shardPath, Version: version})
+}
+
+func (csm *ClusterShardMapper) getTargetShardMsg(s *influxql.Measurement) ([]Source, *meta2.ShardKeyInfo, []*meta2.MeasurementInfo, [config.ENGINETYPEEND]bool, error) {
+	var sources []Source
 	var shardKeyInfo *meta2.ShardKeyInfo
 	var engineTypes [config.ENGINETYPEEND]bool
 	dbi, err := csm.MetaClient.Database(s.Database)
 	if err != nil {
-		return source, nil, nil, engineTypes, err
+		return sources, nil, nil, engineTypes, err
 	}
 	if len(dbi.ShardKey.ShardKey) > 0 {
 		shardKeyInfo = &dbi.ShardKey
 	}
 	measurements, err := csm.MetaClient.GetMeasurements(s)
 	if err != nil || len(measurements) == 0 {
-		return source, nil, nil, engineTypes, err
+		return sources, nil, nil, engineTypes, err
 	}
 	for _, m := range measurements {
+		sources = append(sources, Source{
+			Database:        s.Database,
+			RetentionPolicy: s.RetentionPolicy,
+			Measurement:     m.OriginName(),
+		})
 		if !engineTypes[m.EngineType] {
 			engineTypes[m.EngineType] = true
 			// Set engine type for measurement.
@@ -161,7 +253,7 @@ func (csm *ClusterShardMapper) getTargetShardMsg(s *influxql.Measurement) (Sourc
 			s.IsTimeSorted = m.IsTimeSorted()
 		}
 	}
-	return source, shardKeyInfo, measurements, engineTypes, nil
+	return sources, shardKeyInfo, measurements, engineTypes, nil
 }
 
 func (csm *ClusterShardMapper) mapShards(csming *ClusterShardMapping, sources influxql.Sources, tmin, tmax time.Time, condition influxql.Expr, opt *query.SelectOptions) error {
@@ -172,10 +264,38 @@ func (csm *ClusterShardMapper) mapShards(csming *ClusterShardMapping, sources in
 				return err
 			}
 		case *influxql.SubQuery:
-			if err := csm.mapShards(csming, s.Statement.Sources, tmin, tmax, condition, opt); err != nil {
+			subMin, subMax := tmin, tmax
+			valuer := influxql.NowValuer{Now: time.Now(), Location: s.Statement.Location}
+			_, t, err := influxql.ConditionExpr(s.Statement.Condition, &valuer)
+			if err == nil {
+				if t.MinTimeNano() != influxql.MinTime {
+					subMin = t.Min
+				}
+				if t.MaxTimeNano() != influxql.MaxTime {
+					subMax = t.Max
+				}
+			}
+			if err := csm.mapShards(csming, s.Statement.Sources, subMin, subMax, condition, opt); err != nil {
 				return err
 			}
+			if len(s.Statement.InConditons) > 0 {
+				in := s.Statement.InConditons[0]
+				inTmin := time.Unix(0, in.TimeRange.MinTimeNano())
+				inTmax := time.Unix(0, in.TimeRange.MaxTimeNano())
+				inCsming := NewClusterShardMapping(csm, inTmin, inTmax)
+				if err := csm.mapShards(inCsming, in.Stmt.Sources, inTmin, inTmax, in.Stmt.Condition, opt); err != nil {
+					return err
+				}
+				in.Csming = inCsming
+			}
 		case *influxql.Join:
+			if err := csm.mapShards(csming, influxql.Sources{s.LSrc}, tmin, tmax, condition, opt); err != nil {
+				return err
+			}
+			if err := csm.mapShards(csming, influxql.Sources{s.RSrc}, tmin, tmax, condition, opt); err != nil {
+				return err
+			}
+		case *influxql.Union:
 			if err := csm.mapShards(csming, influxql.Sources{s.LSrc}, tmin, tmax, condition, opt); err != nil {
 				return err
 			}
@@ -199,11 +319,17 @@ func (csm *ClusterShardMapper) mapShards(csming *ClusterShardMapping, sources in
 			} else if err != nil {
 				return err
 			}
-		}
-	}
-	if in, ok := condition.(*influxql.InCondition); ok {
-		if err := csm.mapShards(csming, in.Stmt.Sources, tmin, tmax, in.Stmt.Condition, opt); err != nil {
-			return err
+		case *influxql.TableFunction:
+			for _, childSource := range s.GetTableFunctionSource() {
+				switch childSourceType := childSource.(type) {
+				case *influxql.Measurement:
+					if err := csm.mapMstShards(childSourceType, csming, tmin, tmax, condition, opt); err != nil {
+						return err
+					}
+				default:
+					return errno.NewError(errno.InternalError, "TableFunctionParam childSourceType type error")
+				}
+			}
 		}
 	}
 	return nil
@@ -253,6 +379,24 @@ func NewClusterShardMapping(csm *ClusterShardMapper, tmin, tmax time.Time) *Clus
 
 func (csm *ClusterShardMapping) GetSeriesKey() []byte {
 	return csm.seriesKey
+}
+
+func (csm *ClusterShardMapping) GetTagKeys(stmt *influxql.ShowTagValuesStatement) (map[string]map[string]struct{}, error) {
+	tagKeys, err := csm.MetaClient.QueryTagKeys(stmt.Database, stmt.Sources.Measurements(), stmt.TagKeyCondition)
+	return tagKeys, err
+}
+
+func (csm *ClusterShardMapping) GetTagVals(nodeID uint64, stmt *influxql.ShowTagValuesStatement, pts []uint32, tagKeys map[string]map[string]struct{}, exact bool) (influxql.TablesTagSets, error) {
+	return csm.NetStore.TagValues(nodeID, stmt.Database, pts, tagKeys, stmt.Condition, stmt.Limit+stmt.Offset, exact)
+}
+
+func (csm *ClusterShardMapping) QueryNodePtsMap(database string) (map[uint64][]uint32, error) {
+	return csm.MetaClient.GetNodePtsMap(database)
+}
+
+func (csm *ClusterShardMapping) CheckDatabaseExists(name string) error {
+	_, err := csm.MetaClient.Database(name)
+	return err
 }
 
 func (csm *ClusterShardMapping) NodeNumbers() int {
@@ -307,15 +451,6 @@ func IsRetriedError(err error) (isSpecial bool) {
 }
 
 func (csm *ClusterShardMapping) FieldDimensions(m *influxql.Measurement) (fields map[string]influxql.DataType, dimensions map[string]struct{}, schema *influxql.Schema, err error) {
-	source := Source{
-		Database:        m.Database,
-		RetentionPolicy: m.RetentionPolicy,
-	}
-
-	shardIDsByNodeID := csm.ShardMap[source]
-	if shardIDsByNodeID == nil {
-		return nil, nil, nil, nil
-	}
 	fields = make(map[string]influxql.DataType)
 	dimensions = make(map[string]struct{})
 	schema = &influxql.Schema{MinTime: math.MaxInt64, MaxTime: math.MinInt64}
@@ -324,6 +459,15 @@ func (csm *ClusterShardMapping) FieldDimensions(m *influxql.Measurement) (fields
 		return nil, nil, nil, err
 	}
 	for i := range measurements {
+		source := Source{
+			Database:        m.Database,
+			RetentionPolicy: m.RetentionPolicy,
+			Measurement:     measurements[i].OriginName(),
+		}
+		shardIDsByNodeID := csm.ShardMap[source]
+		if shardIDsByNodeID == nil {
+			continue
+		}
 		var metaFields map[string]int32
 		var metaDimensions map[string]struct{}
 		metaFields, metaDimensions, err = csm.getSchema(m.Database, m.RetentionPolicy, measurements[i].OriginName())
@@ -383,7 +527,7 @@ func (csm *ClusterShardMapping) MapTypeBatch(m *influxql.Measurement, fields map
 		for k := range fields {
 			hasMstInfo := false
 			var preField string
-			if strings.HasPrefix(k, measurements[i].Name+".") {
+			if strings.HasPrefix(k, measurements[i].OriginName()+".") {
 				_, ftOk := metaFields[k]
 				_, dtOK := metaDimensions[k]
 				if ftOk || dtOK {
@@ -391,9 +535,8 @@ func (csm *ClusterShardMapping) MapTypeBatch(m *influxql.Measurement, fields map
 				} else {
 					hasMstInfo = true
 					preField = k
-					k = k[len(measurements[i].Name)+1:]
+					k = k[len(measurements[i].OriginName())+1:]
 				}
-
 			}
 			ft, ftOk := metaFields[k]
 			_, dtOK := metaDimensions[k]
@@ -480,6 +623,7 @@ func (csm *ClusterShardMapping) GetShardAndSourcesMap(sources influxql.Sources) 
 			source := Source{
 				Database:        src.Database,
 				RetentionPolicy: src.RetentionPolicy,
+				Measurement:     influx.GetOriginMstName(src.Name),
 			}
 			shardInfosByDBPT := csm.ShardMap[source]
 			if shardInfosByDBPT == nil {
@@ -618,7 +762,7 @@ func (csm *ClusterShardMapping) GetETraits(ctx context.Context, sources influxql
 
 func (csm *ClusterShardMapping) CreateLogicalPlan(ctx context.Context, sources influxql.Sources, schema hybridqp.Catalog) (hybridqp.QueryNode, error) {
 	eTraits, err := csm.GetETraits(ctx, sources, schema)
-	if eTraits == nil || err != nil {
+	if len(eTraits) == 0 || err != nil {
 		return nil, err
 	}
 	var plan hybridqp.QueryNode
@@ -672,12 +816,20 @@ func (csm *ClusterShardMapping) CreateLogicalPlan(ctx context.Context, sources i
 		return nil, pErr
 	}
 
+	if plan.Schema().Options().CanQueryPushDown() {
+		nodeTraits, ok := ctx.Value(hybridqp.NodeTrait).(*[]hybridqp.Trait)
+		if !ok {
+			return nil, errno.NewError(errno.NoNodeTraits)
+		}
+		*nodeTraits = append(*nodeTraits, eTraits...)
+		return plan, pErr
+	}
+
 	plan, pErr = builder.CreateNodePlan(plan, eTraits)
 	if pErr != nil {
 		return nil, pErr
 	}
-
-	return plan.(executor.LogicalPlan), pErr
+	return plan, pErr
 }
 
 func (csm *ClusterShardMapping) makeRemoteQuery(ctx context.Context, src influxql.Sources, opt query.ProcessorOptions,
@@ -725,7 +877,6 @@ func (csm *ClusterShardMapping) LogicalPlanCost(m *influxql.Measurement, opt que
 
 // Close clears out the list of mapped shards.
 func (csm *ClusterShardMapping) Close() error {
-	csm.ShardMap = nil
 	return nil
 }
 
@@ -747,6 +898,10 @@ func (csm *ClusterShardMapping) GetSources(sources influxql.Sources) influxql.So
 			}
 		case *influxql.SubQuery:
 			srcs = append(srcs, src)
+		case *influxql.CTE:
+			srcs = append(srcs, src)
+		case *influxql.TableFunction:
+			srcs = append(srcs, src)
 		default:
 			panic("unknown measurement.")
 		}
@@ -758,6 +913,7 @@ func (csm *ClusterShardMapping) GetSources(sources influxql.Sources) influxql.So
 type Source struct {
 	Database        string
 	RetentionPolicy string
+	Measurement     string
 }
 
 func shardMapperExprRewriter(ftOk, hasMstInfo bool, fields map[string]*influxql.FieldNameSpace, k, preField string, ft int32) {

@@ -37,7 +37,7 @@ func Test_WriteRead(t *testing.T) {
 	observedZapCore, observedLog := observer.New(zap.DebugLevel)
 	observedLogger := zap.New(observedZapCore)
 	l := logger.NewLogger(errno.ModuleCastor)
-	l.SetZapLogger(observedLogger)
+	l = l.SetZapLogger(observedLogger)
 
 	respChan := make(chan arrow.Record)
 	idleCliChan := make(chan *castorCli, 1)

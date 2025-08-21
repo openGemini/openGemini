@@ -15,14 +15,18 @@
 package immutable
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"sync"
 	"sync/atomic"
 
+	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/fileops"
+	"github.com/openGemini/openGemini/lib/fragment"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/record"
@@ -48,6 +52,11 @@ const (
 
 	defaultCap = 64
 )
+
+func RenameMergeFiles(srcName TSSPFileName, addSeq uint64) string {
+	srcName.AddSeq(addSeq)
+	return srcName.String() + tsspFileSuffix
+}
 
 func RemoveTsspSuffix(dataPath string) string {
 	return dataPath[:len(dataPath)-tsspFileSuffixLen]
@@ -138,6 +147,9 @@ type TSSPFile interface {
 	RenameOnObs(obsName string, tmp bool, opt *obs.ObsOptions) error
 
 	ChunkMetaCompressMode() uint8
+
+	SetPkInfo(pkInfo *colstore.PKInfo)
+	GetPkInfo() *colstore.PKInfo
 }
 
 type TSSPFiles struct {
@@ -273,6 +285,19 @@ func (f *TSSPFiles) Files() []TSSPFile {
 	return f.files
 }
 
+func (f *TSSPFiles) GetFilesAndUnref() []TSSPFile {
+	allFiles := make([]TSSPFile, 0)
+	if f == nil {
+		return allFiles
+	}
+	f.RLock()
+	defer f.RUnlock()
+	allFiles = append(allFiles, f.files...)
+	UnrefFilesReader(f.Files()...)
+	UnrefFiles(f.Files()...)
+	return allFiles
+}
+
 func (f *TSSPFiles) deleteFile(tbl TSSPFile) {
 	idx := f.fileIndex(tbl)
 	if idx < 0 || idx >= f.Len() {
@@ -347,7 +372,9 @@ type tsspFile struct {
 	flag uint32 // flag > 0 indicates that the files is need close.
 	lock *string
 
-	reader FileReader
+	pkInfo    *colstore.PKInfo
+	pkColumns map[string]int
+	reader    FileReader
 }
 
 func OpenTSSPFile(name string, lockPath *string, isOrder bool) (TSSPFile, error) {
@@ -356,6 +383,7 @@ func OpenTSSPFile(name string, lockPath *string, isOrder bool) (TSSPFile, error)
 		return nil, err
 	}
 	fileName.SetOrder(isOrder)
+	fileName.SetLock(lockPath)
 
 	fr, err := NewTSSPFileReader(name, lockPath)
 	if err != nil || fr == nil {
@@ -569,7 +597,75 @@ func (f *tsspFile) ReadAt(cm *ChunkMeta, segment int, dst *record.Record, decs *
 		return nil, err
 	}
 
-	return f.reader.ReadData(cm, segment, dst, decs, ioPriority)
+	if f.pkInfo != nil {
+		// Temporary code - the type checking code related to 'pkMark' will be removed if there`s only IndexFragmentVariableImpl
+		pkMark := f.pkInfo.GetMark()
+		if pkMark == nil {
+			return nil, errors.New("there`s no mark info in pkInfo")
+		}
+		if _, ok := pkMark.(*fragment.IndexFragmentVariableImpl); ok {
+			decs.hasPrimaryKey = true
+			// FilterColMeta should be deleted when there`s no primary key column in the tssp file
+			cm.FilterColMeta(f.pkColumns)
+		}
+
+	}
+
+	dst, err := f.reader.ReadData(cm, segment, dst, decs, ioPriority)
+	if err != nil {
+		return nil, err
+	}
+
+	if decs.hasPrimaryKey && dst != nil {
+		dst, err = f.AddPKInfos(segment, dst)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if dst != nil {
+		dst.TryPadColumn()
+	}
+	return dst, err
+}
+
+func (f *tsspFile) AddPKInfos(segment int, dst *record.Record) (*record.Record, error) {
+	pkMark := f.pkInfo.GetMark()
+	segmentRanges := pkMark.GetSegmentsFromFragmentRange()
+	segmentUint32 := uint32(segment)
+
+	fragIndex := sort.Search(len(segmentRanges), func(i int) bool {
+		seg := segmentRanges[i]
+		return seg.Start > segmentUint32
+	})
+
+	if fragIndex == 0 {
+		return nil, errors.New("can't find the index of primary key in pkInfo for the segment")
+	}
+	fragIndex--
+	if segmentRanges[fragIndex].End <= segmentUint32 {
+		return nil, errors.New("can't find the index of primary key in pkInfo for the segment")
+	}
+
+	schema := dst.Schema
+	rows := dst.RowNums()
+	pkRecord := f.pkInfo.GetRec()
+	if pkRecord == nil {
+		return nil, errors.New("there`s no record info in pkInfo")
+	}
+
+	for i := range schema[:len(schema)-1] {
+		ref := &schema[i]
+		dstCol := dst.Column(i)
+		if pkIndex, ok := f.pkColumns[ref.Name]; ok {
+			pkCol := pkRecord.Column(pkIndex)
+			err := record.AppendPKColumns(pkCol, dstCol, fragIndex, rows, ref.Type)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	return dst, nil
 }
 
 func (f *tsspFile) FileStat() *Trailer {
@@ -635,6 +731,20 @@ func (f *tsspFile) Rename(newName string) error {
 	if f.stopped() {
 		return errFileClosed
 	}
+
+	if f.pkInfo != nil {
+		lock := fileops.FileLockOption(*f.lock)
+		oldPKName := BuildPKFilePathFromTSSP(f.reader.FileName())
+		newPKName := BuildPKFilePathFromTSSP(newName)
+		if IsTempleFile(f.reader.FileName()) {
+			oldPKName += GetTmpFileSuffix()
+		}
+		err := fileops.RenameFile(oldPKName, newPKName, lock)
+		if err != nil {
+			return err
+		}
+	}
+
 	return f.reader.Rename(newName)
 }
 
@@ -654,8 +764,15 @@ func (f *tsspFile) Remove() error {
 
 		name := f.reader.FileName()
 		log.Debug("remove file", zap.String("file", name))
-		_ = f.reader.Close()
+
 		lock := fileops.FileLockOption(*f.lock)
+		if f.pkInfo != nil {
+			util.MustRun(func() error {
+				return fileops.Remove(BuildPKFilePathFromTSSP(name), lock)
+			})
+		}
+
+		util.MustClose(f.reader)
 		err := fileops.Remove(name, lock)
 		if err != nil && !os.IsNotExist(err) {
 			err = errRemoveFail(name, err)
@@ -812,6 +929,24 @@ func (f *tsspFile) RenameOnObs(oldName string, tmp bool, obsOpt *obs.ObsOptions)
 	return nil
 }
 
+func (f *tsspFile) SetPkInfo(pkInfo *colstore.PKInfo) {
+	if pkInfo == nil {
+		return
+	}
+	f.pkInfo = pkInfo
+	f.pkColumns = make(map[string]int)
+	pkRecord := pkInfo.GetRec()
+	for i, field := range pkRecord.Schema {
+		if field.Name != "time" {
+			f.pkColumns[field.Name] = i
+		}
+	}
+}
+
+func (f *tsspFile) GetPkInfo() *colstore.PKInfo {
+	return f.pkInfo
+}
+
 func (f *tsspFile) ChunkMetaCompressMode() uint8 {
 	return f.reader.ChunkMetaCompressMode()
 }
@@ -873,7 +1008,6 @@ type FilesInfo struct {
 	dropping          *int64
 	compIts           FileIterators
 	oldFiles          []TSSPFile
-	oldIndexFiles     []string
 	oldFids           []string
 	maxColumns        int
 	maxChunkRows      int

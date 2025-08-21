@@ -19,6 +19,7 @@ import (
 	"github.com/influxdata/influxdb/models"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/op"
+	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 )
 
@@ -119,18 +120,28 @@ func newCompiler(opt CompileOptions) *compiledStatement {
 	}
 }
 
-func Compile(stmt *influxql.SelectStatement, opt CompileOptions) (Statement, error) {
+func Compile(stmt *influxql.SelectStatement, opt CompileOptions) (Statement, *influxql.BinaryExpr, error) {
 	c := newCompiler(opt)
 	c.stmt = stmt
 	if err := c.preprocess(c.stmt); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := c.compile(c.stmt); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	c.stmt.TimeAlias = c.TimeFieldName
-	c.stmt.Condition = c.Condition
 
+	var conds *influxql.BinaryExpr
+	if inCondition, ok := c.stmt.Condition.(*influxql.BinaryExpr); ok {
+		conds = &influxql.BinaryExpr{
+			Op:         inCondition.Op,
+			LHS:        inCondition.LHS,
+			RHS:        inCondition.RHS,
+			ReturnBool: false,
+		}
+	}
+
+	c.stmt.Condition = c.Condition
 	// Convert TOP/BOTTOM into the TOP(max)/BOTTOM(min)
 	c.stmt.RewriteTopBottom()
 
@@ -140,23 +151,69 @@ func Compile(stmt *influxql.SelectStatement, opt CompileOptions) (Statement, err
 	// Remove "time" from fields list.
 	c.stmt.RewriteTimeFields()
 
-	// Rewrite any regex conditions that could make use of the index.
+	c.stmt.RewriteJoinDims(nil)
+
+	// Rewrite any regex conditions that could make use of the index, add otherWriteFn arg.
 	if !c.stmt.IsPromQuery {
-		c.stmt.RewriteRegexConditions()
+		addInConditionFn := func(e influxql.Expr) {
+			if in, ok := e.(*influxql.InCondition); ok {
+				c.stmt.InConditons = append(c.stmt.InConditons, in)
+			}
+		}
+		c.stmt.RewriteRegexConditions(addInConditionFn)
 	} else {
-		c.stmt.RewriteRegexConditionsDFS()
+		c.stmt.RewriteRegexConditionsDFS(nil)
 	}
+
 	// Convert PERCENTILE_OGSKETCH into the PERCENTILE_APPROX
 	c.stmt.RewritePercentileOGSketch()
 
-	if inCond, ok := c.stmt.Condition.(*influxql.InCondition); ok {
-		st, err := Compile(inCond.Stmt, CompileOptions{})
-		if err != nil {
-			return nil, err
-		}
-		inCond.Stmt = st.(*compiledStatement).stmt
+	if err := c.stmt.RewriteCompare(&c.TimeRange); err != nil {
+		return nil, nil, err
 	}
-	return c, nil
+	if len(c.stmt.InConditons) > 1 {
+		return nil, nil, fmt.Errorf("multi inConditions in where clause err")
+	}
+
+	err := compileCTE(c.stmt)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	for _, in := range c.stmt.InConditons {
+		in.Stmt.OmitTime = true
+		st, tcond, err := Compile(in.Stmt, CompileOptions{})
+		in.TimeCond = tcond
+		if err != nil {
+			return nil, nil, err
+		}
+		inC, ok := st.(*compiledStatement)
+		if !ok {
+			return nil, nil, err
+		}
+		in.Stmt = inC.stmt
+		in.TimeRange = inC.TimeRange
+	}
+	return c, conds, nil
+}
+
+func compileCTE(stmt *influxql.SelectStatement) error {
+	for _, cte := range stmt.DirectDependencyCTEs {
+		if cte.Query != nil {
+			cte.Query.OmitTime = true
+			st, _, err := Compile(cte.Query, CompileOptions{})
+			if err != nil {
+				return err
+			}
+			cteC, ok := st.(*compiledStatement)
+			if !ok {
+				return errors.New("st should be type of compiledStatement")
+			}
+			cte.Query = cteC.stmt
+			cte.TimeRange = cteC.TimeRange
+		}
+	}
+	return nil
 }
 
 var TimeFilterProtection bool
@@ -253,6 +310,23 @@ func (c *compiledStatement) compile(stmt *influxql.SelectStatement) error {
 					stmt.SubQueryHasDifferentAscending = rsrc.Statement.SubQueryHasDifferentAscending
 				}
 			}
+		case *influxql.Union:
+			if lsrc, ok := source.LSrc.(*influxql.SubQuery); ok {
+				lsrc.Statement.OmitTime = true
+				if err := c.subquery(lsrc.Statement); err != nil {
+					return err
+				}
+				stmt.SubQueryHasDifferentAscending = lsrc.Statement.SubQueryHasDifferentAscending
+			}
+			if rsrc, ok := source.RSrc.(*influxql.SubQuery); ok {
+				rsrc.Statement.OmitTime = true
+				if err := c.subquery(rsrc.Statement); err != nil {
+					return err
+				}
+				if !stmt.SubQueryHasDifferentAscending {
+					stmt.SubQueryHasDifferentAscending = rsrc.Statement.SubQueryHasDifferentAscending
+				}
+			}
 		case *influxql.BinOp:
 			if lsrc, ok := source.LSrc.(*influxql.SubQuery); ok {
 				lsrc.Statement.OmitTime = true
@@ -297,6 +371,9 @@ func (c *compiledStatement) compileFields(stmt *influxql.SelectStatement) error 
 		}
 		c.Fields = append(c.Fields, field)
 		if err := field.compileExpr(field.Field.Expr); err != nil {
+			if errno.Equal(err, errno.FieldIsLiteral) && field.Field.Alias != "" {
+				return nil
+			}
 			return err
 		}
 	}
@@ -403,7 +480,7 @@ func (c *compiledField) compileExpr(expr influxql.Expr) error {
 	case *influxql.ParenExpr:
 		return c.compileExpr(expr.Expr)
 	case influxql.Literal:
-		return errors.New("field must contain at least one variable")
+		return errno.NewError(errno.FieldIsLiteral)
 	}
 	return errors.New("unimplemented")
 }
@@ -769,6 +846,10 @@ func (c *compiledField) GetFunction(expr *influxql.Call, addToGlobalFunctionCall
 	if aggFunc := GetAggregateOperator(expr.Name); aggFunc != nil {
 		return aggFunc
 	}
+
+	if comparingFunc := GetCompareFunction(expr.Name); comparingFunc != nil {
+		return comparingFunc
+	}
 	return nil
 }
 
@@ -999,6 +1080,36 @@ func (c *compiledStatement) subquery(stmt *influxql.SelectStatement) error {
 	)
 	stmt.Condition = influxql.Reduce(stmt.Condition, valuer)
 
+	if !stmt.IsPromQuery {
+		addInConditionFn := func(e influxql.Expr) {
+			if in, ok := e.(*influxql.InCondition); ok {
+				stmt.InConditons = append(stmt.InConditons, in)
+			}
+		}
+		stmt.RewriteRegexConditions(addInConditionFn)
+	}
+
+	err := compileCTE(stmt)
+	if err != nil {
+		return err
+	}
+	if len(stmt.InConditons) > 1 {
+		return fmt.Errorf("multi inConditions in subquery where clause err")
+	}
+	for _, in := range stmt.InConditons {
+		in.Stmt.OmitTime = true
+		st, _, err := Compile(in.Stmt, CompileOptions{})
+		if err != nil {
+			return err
+		}
+		inC, ok := st.(*compiledStatement)
+		if !ok {
+			return err
+		}
+		in.Stmt = inC.stmt
+		in.TimeRange = inC.TimeRange
+	}
+
 	// If the ordering is different and the sort field was specified for the subquery,
 	// throw an error.
 	if len(stmt.SortFields) != 0 && subquery.Ascending != c.Ascending {
@@ -1029,18 +1140,43 @@ func (c *compiledStatement) subquery(stmt *influxql.SelectStatement) error {
 
 func (c *compiledStatement) RewriteJoinSource() {
 	sources := make([]*influxql.Join, 0, 8)
-	c.RewriteJoinSourceDFS(&sources, c.stmt.Sources)
+	for _, subSource := range c.stmt.Sources {
+		c.RewriteJoinSourceDFS(&sources, subSource)
+	}
 	c.stmt.JoinSource = sources
 }
 
-func (c *compiledStatement) RewriteJoinSourceDFS(joinSources *[]*influxql.Join, sources influxql.Sources) {
-	for i := range sources {
-		switch s := sources[i].(type) {
-		case *influxql.SubQuery:
-			c.RewriteJoinSourceDFS(&s.Statement.JoinSource, s.Statement.Sources)
-		case *influxql.Join:
-			*joinSources = append(*joinSources, influxql.CloneSource(s).(*influxql.Join))
+func (c *compiledStatement) RewriteJoinSourceDFS(joinSources *[]*influxql.Join, source influxql.Source) {
+	switch s := source.(type) {
+	case *influxql.SubQuery:
+		for _, subSource := range s.Statement.Sources {
+			c.RewriteJoinSourceDFS(&s.Statement.JoinSource, subSource)
 		}
+	case *influxql.Join:
+		*joinSources = append(*joinSources, influxql.CloneSource(s).(*influxql.Join))
+		c.RewriteJoinSourceDFS(nil, s.LSrc)
+		c.RewriteJoinSourceDFS(nil, s.RSrc)
+	}
+}
+func (c *compiledStatement) RewriteUnionSource() {
+	sources := make([]*influxql.Union, 0, 8)
+	for _, subSource := range c.stmt.Sources {
+		c.RewriteUnionSourceDFS(&sources, subSource)
+	}
+	c.stmt.UnionSource = sources
+}
+
+func (c *compiledStatement) RewriteUnionSourceDFS(unionSources *[]*influxql.Union, source influxql.Source) {
+	switch s := source.(type) {
+	case *influxql.SubQuery:
+		sources := make([]*influxql.Union, 0, 8)
+		for _, subSource := range s.Statement.Sources {
+			c.RewriteUnionSourceDFS(&sources, subSource)
+		}
+		s.Statement.UnionSource = sources
+	case *influxql.Union:
+		*unionSources = append(*unionSources, influxql.CloneSource(s).(*influxql.Union))
+	default:
 	}
 }
 
@@ -1131,7 +1267,7 @@ func (c *compiledStatement) Prepare(shardMapper ShardMapper, sopt SelectOptions)
 	}
 
 	// Create an iterator creator based on the shards in the cluster.
-	shards, err := shardMapper.MapShards(c.stmt.Sources, timeRange, sopt, c.stmt.Condition)
+	shards, err := shardMapper.MapShards(c.stmt, timeRange, sopt, c.stmt.Condition)
 	if err != nil {
 		return nil, err
 	}
@@ -1145,6 +1281,7 @@ func (c *compiledStatement) Prepare(shardMapper ShardMapper, sopt SelectOptions)
 	batchEn := true
 	mapper := FieldMapper{FieldMapper: shards}
 	c.RewriteJoinSource()
+	c.RewriteUnionSource()
 	c.RewriteBinOpSource()
 	stmt, err := c.stmt.RewriteFields(mapper, batchEn, false)
 	if err != nil {

@@ -145,6 +145,7 @@ func TestTSSql(t *testing.T) {
 	conf := config.NewTSSql(false)
 	conf.Spdy.ConnPoolSize = 10
 	conf.Common.CPUNum = 10
+	conf.Topo.TopoManagerUrl = "https://127.0.0.1:60892/v1/topology"
 
 	assert.NoError(t, conf.Validate())
 	assert.Equal(t, 10, conf.GetSpdy().ConnPoolSize)
@@ -361,4 +362,12 @@ func TestParquetTaskConfig(t *testing.T) {
 	conf.ReliabilityLogDir = ""
 	require.NotEmpty(t, conf.GetOutputDir())
 	require.NotEmpty(t, conf.GetReliabilityLogDir())
+}
+
+func Test_InvalidShardMergeConfig(t *testing.T) {
+	c := config.NewShardMergeConfig()
+	c.RunInterval = toml.Duration(-1)
+	if err := c.Validate(); err == nil {
+		t.Fatal(err)
+	}
 }

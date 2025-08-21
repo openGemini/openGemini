@@ -29,6 +29,7 @@ import (
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/spdy"
 	"github.com/openGemini/openGemini/lib/spdy/transport"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
@@ -41,6 +42,7 @@ import (
 )
 
 func init() {
+	VerifyNodeEn = false
 	RetryExecTimeout = 3 * time.Second
 	RetryReportTimeout = 1 * time.Second
 	HttpReqTimeout = 1 * time.Second
@@ -214,11 +216,11 @@ func TestClient_compareHashAndPwdVerOne(t *testing.T) {
 	metaPath := filepath.Join(t.TempDir(), "meta")
 	c := NewClient(metaPath, false, 20)
 	c.SetHashAlgo("ver01")
-	hashed, err := c.genHashPwdVal("AsdF_789")
+	hashed, err := c.auth.genHashPwdVal("AsdF_789")
 	if err != nil {
 		t.Error("gen pbkdf2 password failed", zap.Error(err))
 	}
-	err = c.CompareHashAndPlainPwd(hashed, "AsdF_789")
+	err = c.auth.CompareHashAndPlainPwd(hashed, "AsdF_789")
 	if err != nil {
 		t.Error("compare hash and plaintext failed", zap.Error(err))
 	}
@@ -228,11 +230,11 @@ func TestClient_compareHashAndPwdVerTwo(t *testing.T) {
 	metaPath := filepath.Join(t.TempDir(), "meta")
 	c := NewClient(metaPath, false, 20)
 	c.SetHashAlgo("ver02")
-	hashed, err := c.genHashPwdVal("AsdF_789")
+	hashed, err := c.auth.genHashPwdVal("AsdF_789")
 	if err != nil {
 		t.Error("gen pbkdf2 password failed", zap.Error(err))
 	}
-	err = c.CompareHashAndPlainPwd(hashed, "AsdF_789")
+	err = c.auth.CompareHashAndPlainPwd(hashed, "AsdF_789")
 	if err != nil {
 		t.Error("compare hash and plaintext failed", zap.Error(err))
 	}
@@ -242,57 +244,13 @@ func TestClient_compareHashAndPwdVerThree(t *testing.T) {
 	metaPath := filepath.Join(t.TempDir(), "meta")
 	c := NewClient(metaPath, false, 20)
 	c.SetHashAlgo("ver03")
-	hashed, err := c.genHashPwdVal("AsdF_789")
+	hashed, err := c.auth.genHashPwdVal("AsdF_789")
 	if err != nil {
 		t.Error("gen pbkdf2 password failed", zap.Error(err))
 	}
-	err = c.CompareHashAndPlainPwd(hashed, "AsdF_789")
+	err = c.auth.CompareHashAndPlainPwd(hashed, "AsdF_789")
 	if err != nil {
 		t.Error("compare hash and plaintext failed", zap.Error(err))
-	}
-}
-
-func TestClient_encryptWithSalt(t *testing.T) {
-	metaPath := filepath.Join(t.TempDir(), "meta")
-	c := NewClient(metaPath, false, 20)
-	c.SetHashAlgo("ver01")
-	hashed := c.encryptWithSalt([]byte("salt"), "AsdF_789")
-	if len(hashed) == 0 {
-		t.Error("encryptWithSalt for version 01 failed")
-	}
-
-	c.optAlgoVer = algoVer02
-	hashed = c.encryptWithSalt([]byte("salt"), "AsdF_789")
-	if len(hashed) == 0 {
-		t.Error("encryptWithSalt for version 02 failed")
-	}
-
-	c.optAlgoVer = algoVer03
-	hashed = c.encryptWithSalt([]byte("salt"), "AsdF_789")
-	if len(hashed) == 0 {
-		t.Error("encryptWithSalt for version 03 failed")
-	}
-}
-
-func TestClient_saltedEncryptByVer(t *testing.T) {
-	metaPath := filepath.Join(t.TempDir(), "meta")
-	c := NewClient(metaPath, false, 20)
-	c.SetHashAlgo("ver01")
-	_, _, err := c.saltedEncryptByVer("AsdF_789")
-	if err != nil {
-		t.Error("encrypt by version1 failed", zap.Error(err))
-	}
-
-	c.optAlgoVer = algoVer02
-	_, _, err = c.saltedEncryptByVer("AsdF_789")
-	if err != nil {
-		t.Error("encrypt by version2 failed", zap.Error(err))
-	}
-
-	c.optAlgoVer = algoVer03
-	_, _, err = c.saltedEncryptByVer("AsdF_789")
-	if err != nil {
-		t.Error("encrypt by version3 failed", zap.Error(err))
 	}
 }
 
@@ -488,6 +446,7 @@ func TestSqlNodes(t *testing.T) {
 
 func TestClient_UserCmd(t *testing.T) {
 	c := &Client{
+		auth: NewAuth(logger.NewLogger(errno.ModuleUnknown)),
 		cacheData: &meta2.Data{
 			Users: []meta2.UserInfo{
 				{
@@ -1013,6 +972,34 @@ func TestClient_GetMeasurements(t *testing.T) {
 	}
 }
 
+func TestClient_GetTemporaryMeasurements(t *testing.T) {
+	c := &Client{
+		cacheData: &meta2.Data{
+			Databases: map[string]*meta2.DatabaseInfo{"test": {
+				Name:     "test",
+				ShardKey: meta2.ShardKeyInfo{ShardKey: []string{"tag1", "tag2"}},
+				RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+					"rp0": {
+						Name:         "rp0",
+						Duration:     72 * time.Hour,
+						Measurements: map[string]*meta2.MeasurementInfo{"m1": {Name: "m1"}},
+						MstVersions: map[string]meta2.MeasurementVer{"m1": {
+							NameWithVersion: "m1",
+							Version:         0,
+						}},
+					},
+				}}},
+		},
+		metaServers:    []string{"127.0.0.1:8092"},
+		logger:         logger.NewLogger(errno.ModuleMetaClient).With(zap.String("service", "metaclient")),
+		SendRPCMessage: &RPCMessageSender{},
+	}
+	ms, _ := c.GetMeasurements(&influxql.Measurement{Database: "test", RetentionPolicy: "rp0", Name: "m1"})
+	assert.True(t, ms[0].Name == "m1")
+	ms, err := c.GetMeasurements(&influxql.Measurement{Database: "test", RetentionPolicy: "rp0", Name: "mst"})
+	assert.Equal(t, err.Error(), "measurement not found")
+}
+
 func TestClient_Stream_GetStreamInfos(t *testing.T) {
 	c := &Client{
 		cacheData: &meta2.Data{
@@ -1405,7 +1392,7 @@ func TestInitMetaClient(t *testing.T) {
 		t.Fatalf("fail")
 	}
 	joinPeers := []string{"127.0.0.1:8491", "127.0.0.2:8491"}
-	info := &StorageNodeInfo{"127.0.0.5:8081", "127.0.0.5:8082", ""}
+	info := &StorageNodeInfo{InsertAddr: "127.0.0.5:8081", SelectAddr: "127.0.0.5:8082", Az: "", RetryNumber: config.DefaultMetaConnRetryNumber, RetryTime: config.DefaultMetaConnRetryTime}
 	_, _, _, err = mc.InitMetaClient(joinPeers, true, info, nil, "", STORE)
 	if err != nil {
 		t.Fatalf("%v", err)
@@ -1444,7 +1431,7 @@ func TestInitMetaClientForSql(t *testing.T) {
 	}
 
 	joinPeers := []string{"127.0.0.1:8491", "127.0.0.2:8491"}
-	info := &SqlNodeInfo{"127.0.0.5:8086", "127.0.0.5:8086"}
+	info := &SqlNodeInfo{HttpAddr: "127.0.0.5:8086", GossipAddr: "127.0.0.5:8086", RetryTime: config.DefaultMetaConnRetryTime, RetryNumber: config.DefaultMetaConnRetryNumber}
 	server.NodeId = 234
 	if nid, clock, connId, err := mc.InitMetaClient(joinPeers, true, nil, info, "", SQL); err != nil {
 		t.Fatalf("%v %d %d %d", err, nid, clock, connId)
@@ -2350,6 +2337,22 @@ func MocTestCacheDataForExpired() (*meta2.Data, error) {
 	return data, nil
 }
 
+func TestGetAllMstTTLInfo(t *testing.T) {
+	// mock cache data
+	cacheData, err := MocTestCacheDataForExpired()
+	if err != nil {
+		t.Fatalf("mock cachedata failed, err:%+v", err)
+	}
+	c := &Client{
+		cacheData:      cacheData,
+		metaServers:    []string{"127.0.0.1:8092"},
+		logger:         logger.NewLogger(errno.ModuleMetaClient).With(zap.String("service", "metaclient")),
+		SendRPCMessage: &RPCMessageSender{},
+	}
+	allMstTTLInfo := c.GetAllMstTTLInfo()
+	assert.Equal(t, len(allMstTTLInfo), 1)
+}
+
 func TestCacheDataForExpired(t *testing.T) {
 	// mock cache data
 	cacheData, err := MocTestCacheDataForExpired()
@@ -2536,12 +2539,28 @@ func TestSnapshotV2_GetData(t *testing.T) {
 }
 
 func TestCreateSqlNode(t *testing.T) {
+	refreshConnectedServer(0)
+	transport.NewMetaNodeManager().Clear()
+	mc := Client{
+		logger:         logger.NewLogger(errno.ModuleUnknown),
+		SendRPCMessage: &RPCMessageSender{},
+		UseSnapshotV2:  true,
+		metaServers:    []string{"127.0.0.1:8491", "127.0.0.1:8492"},
+	}
+
+	sqlNodeInfo := &SqlNodeInfo{RetryNumber: config.DefaultMetaConnRetryNumber, RetryTime: 0}
+	nodeID, _, _, err := mc.CreateSqlNode(sqlNodeInfo)
+	if err == nil {
+		t.Fatal("create sql node should be failed")
+	}
+
+	refreshConnectedServer(0)
 	address := "127.0.0.1:8491"
 	nodeId := 1
 	transport.NewMetaNodeManager().Add(uint64(nodeId), address)
 
 	// Server
-	var err error
+	//var err error
 	rrcServer, err := startServer(address)
 	if err != nil {
 		t.Fatalf("%v", err)
@@ -2549,15 +2568,10 @@ func TestCreateSqlNode(t *testing.T) {
 	defer rrcServer.Stop()
 	time.Sleep(time.Second)
 
-	mc := Client{
-		logger:         logger.NewLogger(errno.ModuleUnknown),
-		SendRPCMessage: &RPCMessageSender{},
-		UseSnapshotV2:  true,
-		metaServers:    []string{"127.0.0.1:8491", "127.0.0.1:8492"},
-	}
 	connectedServer = nodeId
 	server.NodeId = 123
-	nodeID, _, _, err := mc.CreateSqlNode("127.0.0.1:8086", "127.0.0.1:8012")
+	sqlNodeInfo = &SqlNodeInfo{HttpAddr: "127.0.0.1:8086", GossipAddr: "127.0.0.1:8012", RetryNumber: config.DefaultMetaConnRetryNumber, RetryTime: time.Second}
+	nodeID, _, _, err = mc.CreateSqlNode(sqlNodeInfo)
 	require.NoError(t, err)
 	if nodeID != server.NodeId {
 		t.Fatalf("TestCreateSqlNode err")
@@ -2626,6 +2640,8 @@ var newPbFunc = map[proto2.Command_Type]func() (interface{}, *proto.ExtensionDes
 	proto2.Command_UpdateMeasurementCommand:         newUpdateMeasurementPb,
 	proto2.Command_UpdateMetaNodeStatusCommand:      newUpdateMetaNodeStatusPb,
 	proto2.Command_UpdateIndexInfoTierCommand:       newUpdateIndexInfoTierPb,
+	proto2.Command_ReplaceMergeShardsCommand:        newReplaceMergeShardsPb,
+	proto2.Command_RecoverMetaData:                  newRecoverMetaData,
 }
 
 func newCreateDatabasePb() (interface{}, *proto.ExtensionDesc) {
@@ -2818,6 +2834,14 @@ func newUpdateShardInfoTierPb() (interface{}, *proto.ExtensionDesc) {
 
 func newUpdateIndexInfoTierPb() (interface{}, *proto.ExtensionDesc) {
 	return &proto2.UpdateIndexInfoTierCommand{}, proto2.E_UpdateIndexInfoTierCommand_Command
+}
+
+func newReplaceMergeShardsPb() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.ReplaceMergeShardsCommand{}, proto2.E_ReplaceMergeShardsCommand_Command
+}
+
+func newRecoverMetaData() (interface{}, *proto.ExtensionDesc) {
+	return &proto2.RecoverMetaDataCommand{}, proto2.E_RecoverMetaDataCommand_Command
 }
 
 func newUpdateNodeStatusPb() (interface{}, *proto.ExtensionDesc) {
@@ -3562,16 +3586,712 @@ func TestClient_GetIndexDurationInfo(t *testing.T) {
 func TestClient_TagKeys(t *testing.T) {
 	var cacheData = new(meta2.Data)
 	cacheData.Databases = map[string]*meta2.DatabaseInfo{
-		"db0": {
-			RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
-				"rp1": {Measurements: map[string]*meta2.MeasurementInfo{"mst1": {Schema: &meta2.CleanSchema{}}}},
-				"rp2": {Measurements: map[string]*meta2.MeasurementInfo{"mst2": {Schema: &meta2.CleanSchema{}}}},
-			}},
+		"db0": {RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+			"rp1": {Measurements: map[string]*meta2.MeasurementInfo{"mst1": {Schema: &meta2.CleanSchema{}}}},
+			"rp2": {Measurements: map[string]*meta2.MeasurementInfo{"mst2": {Schema: &meta2.CleanSchema{}}}},
+		}},
 	}
-
 	var client = &Client{cacheData: cacheData}
 	keys := client.TagKeys("db0")
 	assert.Equal(t, 1, len(keys))
+}
+
+// index:shard 1:1
+func TestGetNoClearShardId(t *testing.T) {
+	data := &meta2.Data{
+		Databases: map[string]*meta2.DatabaseInfo{
+			"db0": &meta2.DatabaseInfo{
+				Name: "db0",
+				RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+					"autogen": &meta2.RetentionPolicyInfo{
+						Name: "autogen",
+						IndexGroups: []meta2.IndexGroupInfo{
+							meta2.IndexGroupInfo{
+								ID: 1,
+								Indexes: []meta2.IndexInfo{
+									meta2.IndexInfo{
+										ID:     1,
+										Owners: []uint32{0},
+										Tier:   util.Cold,
+									},
+									meta2.IndexInfo{
+										ID:     2,
+										Owners: []uint32{1},
+										Tier:   util.Cold,
+									},
+									meta2.IndexInfo{
+										ID:     3,
+										Owners: []uint32{2},
+										Tier:   util.Cold,
+									},
+								},
+								ClearInfo: &meta2.ReplicaClearInfo{
+									NoClearIndexId: 1,
+									ClearPeers:     []uint64{2, 3},
+								},
+							},
+						},
+						ShardGroups: []meta2.ShardGroupInfo{
+							{
+								ID: 1,
+								Shards: []meta2.ShardInfo{
+									meta2.ShardInfo{
+										ID:      1,
+										Owners:  []uint32{0},
+										Tier:    util.Cold,
+										IndexID: 1,
+									},
+									meta2.ShardInfo{
+										ID:      2,
+										Owners:  []uint32{1},
+										Tier:    util.Cold,
+										IndexID: 2,
+									},
+									meta2.ShardInfo{
+										ID:      3,
+										Owners:  []uint32{2},
+										Tier:    util.Cold,
+										IndexID: 3,
+									},
+								},
+								EngineType: config.TSSTORE,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	client := &Client{
+		cacheData:      data,
+		metaServers:    []string{"127.0.0.1"},
+		logger:         logger.NewLogger(errno.ModuleMetaClient).With(zap.String("service", "metaclient")),
+		SendRPCMessage: &RPCMessageSender{},
+	}
+	id, err := client.GetNoClearShardId(2, "db0", 1, "autogen")
+	require.Equal(t, uint64(1), id)
+	require.NoError(t, err)
+	id, err = client.GetNoClearShardId(3, "db0", 1, "autogen")
+	require.Equal(t, uint64(1), id)
+	require.NoError(t, err)
+}
+
+// index:shard 1:2
+func TestGetNoClearShardId2(t *testing.T) {
+	data := &meta2.Data{
+		Databases: map[string]*meta2.DatabaseInfo{
+			"db0": &meta2.DatabaseInfo{
+				Name: "db0",
+				RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+					"autogen": &meta2.RetentionPolicyInfo{
+						Name: "autogen",
+						IndexGroups: []meta2.IndexGroupInfo{
+							meta2.IndexGroupInfo{
+								ID: 1,
+								Indexes: []meta2.IndexInfo{
+									meta2.IndexInfo{
+										ID:     1,
+										Owners: []uint32{0},
+										Tier:   util.Cold,
+									},
+									meta2.IndexInfo{
+										ID:     2,
+										Owners: []uint32{1},
+										Tier:   util.Cold,
+									},
+									meta2.IndexInfo{
+										ID:     3,
+										Owners: []uint32{2},
+										Tier:   util.Cold,
+									},
+								},
+								ClearInfo: &meta2.ReplicaClearInfo{
+									NoClearIndexId: 1,
+									ClearPeers:     []uint64{2, 3},
+								},
+							},
+						},
+						ShardGroups: []meta2.ShardGroupInfo{
+							{
+								ID: 1,
+								Shards: []meta2.ShardInfo{
+									meta2.ShardInfo{
+										ID:      1,
+										Owners:  []uint32{0},
+										Tier:    util.Cold,
+										IndexID: 1,
+									},
+									meta2.ShardInfo{
+										ID:      2,
+										Owners:  []uint32{1},
+										Tier:    util.Cold,
+										IndexID: 2,
+									},
+									meta2.ShardInfo{
+										ID:      3,
+										Owners:  []uint32{2},
+										Tier:    util.Cold,
+										IndexID: 3,
+									},
+								},
+								EngineType: config.TSSTORE,
+							},
+							{
+								ID: 2,
+								Shards: []meta2.ShardInfo{
+									meta2.ShardInfo{
+										ID:      4,
+										Owners:  []uint32{0},
+										Tier:    util.Cold,
+										IndexID: 1,
+									},
+									meta2.ShardInfo{
+										ID:      5,
+										Owners:  []uint32{1},
+										Tier:    util.Cold,
+										IndexID: 2,
+									},
+									meta2.ShardInfo{
+										ID:      6,
+										Owners:  []uint32{2},
+										Tier:    util.Cold,
+										IndexID: 3,
+									},
+								},
+								EngineType: config.TSSTORE,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	client := &Client{
+		cacheData:      data,
+		metaServers:    []string{"127.0.0.1"},
+		logger:         logger.NewLogger(errno.ModuleMetaClient).With(zap.String("service", "metaclient")),
+		SendRPCMessage: &RPCMessageSender{},
+	}
+	id, err := client.GetNoClearShardId(2, "db0", 1, "autogen")
+	require.Equal(t, uint64(1), id)
+	require.NoError(t, err)
+	id, err = client.GetNoClearShardId(3, "db0", 1, "autogen")
+	require.Equal(t, uint64(1), id)
+	require.NoError(t, err)
+
+	id, err = client.GetNoClearShardId(5, "db0", 2, "autogen")
+	require.Equal(t, uint64(4), id)
+	require.NoError(t, err)
+	id, err = client.GetNoClearShardId(6, "db0", 2, "autogen")
+	require.Equal(t, uint64(4), id)
+	require.NoError(t, err)
+}
+
+// index:shard 1:1 other Scenarios
+func TestGetNoClearShardId3(t *testing.T) {
+	data := &meta2.Data{
+		Databases: map[string]*meta2.DatabaseInfo{
+			"db0": &meta2.DatabaseInfo{
+				Name: "db0",
+				RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+					"autogen": &meta2.RetentionPolicyInfo{
+						Name: "autogen",
+						IndexGroups: []meta2.IndexGroupInfo{
+							meta2.IndexGroupInfo{
+								ID: 1,
+								Indexes: []meta2.IndexInfo{
+									meta2.IndexInfo{
+										ID:     1,
+										Owners: []uint32{0},
+										Tier:   util.Cold,
+									},
+									meta2.IndexInfo{
+										ID:     2,
+										Owners: []uint32{1},
+										Tier:   util.Cold,
+									},
+									meta2.IndexInfo{
+										ID:     3,
+										Owners: []uint32{2},
+										Tier:   util.Cold,
+									},
+								},
+								ClearInfo: &meta2.ReplicaClearInfo{
+									NoClearIndexId: 1,
+									ClearPeers:     []uint64{2, 3},
+								},
+							},
+						},
+						ShardGroups: []meta2.ShardGroupInfo{
+							{
+								ID: 1,
+								Shards: []meta2.ShardInfo{
+									meta2.ShardInfo{
+										ID:      1,
+										Owners:  []uint32{0},
+										Tier:    util.Cold,
+										IndexID: 1,
+									},
+									meta2.ShardInfo{
+										ID:      2,
+										Owners:  []uint32{1},
+										Tier:    util.Cold,
+										IndexID: 2,
+									},
+									meta2.ShardInfo{
+										ID:      3,
+										Owners:  []uint32{2},
+										Tier:    util.Cold,
+										IndexID: 3,
+									},
+								},
+								EngineType: config.TSSTORE,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	client := &Client{
+		cacheData:      data,
+		metaServers:    []string{"127.0.0.1"},
+		logger:         logger.NewLogger(errno.ModuleMetaClient).With(zap.String("service", "metaclient")),
+		SendRPCMessage: &RPCMessageSender{},
+	}
+	_, err := client.GetNoClearShardId(2, "notExist", 1, "autogen")
+	require.Error(t, err)
+
+	_, err = client.GetNoClearShardId(2, "db0", 1, "notExist")
+	require.Error(t, err)
+
+	_, err = client.GetNoClearShardId(2, "db0", 2, "autogen")
+	require.Error(t, err)
+
+	data1 := &meta2.Data{
+		Databases: map[string]*meta2.DatabaseInfo{
+			"db0": &meta2.DatabaseInfo{
+				Name: "db0",
+				RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+					"autogen": &meta2.RetentionPolicyInfo{
+						Name: "autogen",
+						IndexGroups: []meta2.IndexGroupInfo{
+							meta2.IndexGroupInfo{
+								ID: 1,
+								Indexes: []meta2.IndexInfo{
+									meta2.IndexInfo{
+										ID:     1,
+										Owners: []uint32{0},
+										Tier:   util.Cold,
+									},
+									meta2.IndexInfo{
+										ID:     2,
+										Owners: []uint32{1},
+										Tier:   util.Cold,
+									},
+									meta2.IndexInfo{
+										ID:     3,
+										Owners: []uint32{2},
+										Tier:   util.Cold,
+									},
+								},
+								ClearInfo: &meta2.ReplicaClearInfo{
+									NoClearIndexId: 1,
+									ClearPeers:     []uint64{2, 3},
+								},
+							},
+						},
+						ShardGroups: []meta2.ShardGroupInfo{
+							{
+								ID: 1,
+								Shards: []meta2.ShardInfo{
+									meta2.ShardInfo{
+										ID:      1,
+										Owners:  []uint32{0},
+										Tier:    util.Cold,
+										IndexID: 1,
+									},
+									meta2.ShardInfo{
+										ID:      2,
+										Owners:  []uint32{1},
+										Tier:    util.Cold,
+										IndexID: 4,
+									},
+									meta2.ShardInfo{
+										ID:      3,
+										Owners:  []uint32{2},
+										Tier:    util.Cold,
+										IndexID: 3,
+									},
+								},
+								EngineType: config.TSSTORE,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	client.SetCacheData(data1)
+	_, err = client.GetNoClearShardId(2, "db0", 1, "autogen")
+	require.Error(t, err)
+
+	data2 := &meta2.Data{
+		Databases: map[string]*meta2.DatabaseInfo{
+			"db0": &meta2.DatabaseInfo{
+				Name: "db0",
+				RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+					"autogen": &meta2.RetentionPolicyInfo{
+						Name: "autogen",
+						IndexGroups: []meta2.IndexGroupInfo{
+							meta2.IndexGroupInfo{
+								ID: 1,
+								Indexes: []meta2.IndexInfo{
+									meta2.IndexInfo{
+										ID:     1,
+										Owners: []uint32{0},
+										Tier:   util.Cold,
+									},
+									meta2.IndexInfo{
+										ID:     2,
+										Owners: []uint32{1},
+										Tier:   util.Cold,
+									},
+									meta2.IndexInfo{
+										ID:     3,
+										Owners: []uint32{2},
+										Tier:   util.Cold,
+									},
+								},
+							},
+						},
+						ShardGroups: []meta2.ShardGroupInfo{
+							{
+								ID: 1,
+								Shards: []meta2.ShardInfo{
+									meta2.ShardInfo{
+										ID:      1,
+										Owners:  []uint32{0},
+										Tier:    util.Cold,
+										IndexID: 1,
+									},
+									meta2.ShardInfo{
+										ID:      2,
+										Owners:  []uint32{1},
+										Tier:    util.Cold,
+										IndexID: 2,
+									},
+									meta2.ShardInfo{
+										ID:      3,
+										Owners:  []uint32{2},
+										Tier:    util.Cold,
+										IndexID: 3,
+									},
+								},
+								EngineType: config.TSSTORE,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	client.SetCacheData(data2)
+	_, err = client.GetNoClearShardId(2, "db0", 1, "autogen")
+	require.Error(t, err)
+
+	data3 := &meta2.Data{
+		Databases: map[string]*meta2.DatabaseInfo{
+			"db0": &meta2.DatabaseInfo{
+				Name: "db0",
+				RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+					"autogen": &meta2.RetentionPolicyInfo{
+						Name: "autogen",
+						IndexGroups: []meta2.IndexGroupInfo{
+							meta2.IndexGroupInfo{
+								ID: 1,
+								Indexes: []meta2.IndexInfo{
+									meta2.IndexInfo{
+										ID:     1,
+										Owners: []uint32{0},
+										Tier:   util.Cold,
+									},
+									meta2.IndexInfo{
+										ID:     2,
+										Owners: []uint32{1},
+										Tier:   util.Cold,
+									},
+									meta2.IndexInfo{
+										ID:     3,
+										Owners: []uint32{2},
+										Tier:   util.Cold,
+									},
+								},
+								ClearInfo: &meta2.ReplicaClearInfo{
+									NoClearIndexId: 1,
+									ClearPeers:     []uint64{4, 5},
+								},
+							},
+						},
+						ShardGroups: []meta2.ShardGroupInfo{
+							{
+								ID: 1,
+								Shards: []meta2.ShardInfo{
+									meta2.ShardInfo{
+										ID:      1,
+										Owners:  []uint32{0},
+										Tier:    util.Cold,
+										IndexID: 1,
+									},
+									meta2.ShardInfo{
+										ID:      2,
+										Owners:  []uint32{1},
+										Tier:    util.Cold,
+										IndexID: 2,
+									},
+									meta2.ShardInfo{
+										ID:      3,
+										Owners:  []uint32{2},
+										Tier:    util.Cold,
+										IndexID: 3,
+									},
+								},
+								EngineType: config.TSSTORE,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	client.SetCacheData(data3)
+	_, err = client.GetNoClearShardId(2, "db0", 1, "autogen")
+	require.Error(t, err)
+}
+
+// index:shard 1:1 other Scenarios
+func TestGetNoIndex1(t *testing.T) {
+	data := &meta2.Data{
+		Databases: map[string]*meta2.DatabaseInfo{
+			"db0": &meta2.DatabaseInfo{
+				Name: "db0",
+				RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+					"autogen": &meta2.RetentionPolicyInfo{
+						Name: "autogen",
+						IndexGroups: []meta2.IndexGroupInfo{
+							meta2.IndexGroupInfo{
+								ID: 1,
+								Indexes: []meta2.IndexInfo{
+									meta2.IndexInfo{
+										ID:     1,
+										Owners: []uint32{0},
+										Tier:   util.Cold,
+									},
+									meta2.IndexInfo{
+										ID:     2,
+										Owners: []uint32{1},
+										Tier:   util.Cold,
+									},
+									meta2.IndexInfo{
+										ID:     3,
+										Owners: []uint32{2},
+										Tier:   util.Cold,
+									},
+								},
+								ClearInfo: &meta2.ReplicaClearInfo{
+									NoClearIndexId: 1,
+									ClearPeers:     []uint64{2, 3},
+								},
+							},
+						},
+						ShardGroups: []meta2.ShardGroupInfo{
+							{
+								ID: 1,
+								Shards: []meta2.ShardInfo{
+									meta2.ShardInfo{
+										ID:      1,
+										Owners:  []uint32{0},
+										Tier:    util.Cold,
+										IndexID: 1,
+									},
+									meta2.ShardInfo{
+										ID:      2,
+										Owners:  []uint32{1},
+										Tier:    util.Cold,
+										IndexID: 2,
+									},
+									meta2.ShardInfo{
+										ID:      3,
+										Owners:  []uint32{2},
+										Tier:    util.Cold,
+										IndexID: 3,
+									},
+								},
+								EngineType: config.TSSTORE,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	client := &Client{
+		cacheData:      data,
+		metaServers:    []string{"127.0.0.1"},
+		logger:         logger.NewLogger(errno.ModuleMetaClient).With(zap.String("service", "metaclient")),
+		SendRPCMessage: &RPCMessageSender{},
+	}
+	id, err := client.GetNoClearIndexId(2, "db0", "autogen")
+	require.Equal(t, uint64(1), id)
+	require.NoError(t, err)
+	id, err = client.GetNoClearIndexId(3, "db0", "autogen")
+	require.Equal(t, uint64(1), id)
+	require.NoError(t, err)
+
+	_, err = client.GetNoClearIndexId(2, "db1", "autogen")
+	require.Error(t, err)
+
+	_, err = client.GetNoClearIndexId(2, "db0", "test")
+	require.Error(t, err)
+
+	_, err = client.GetNoClearIndexId(4, "db0", "test")
+	require.Error(t, err)
+
+	data1 := &meta2.Data{
+		Databases: map[string]*meta2.DatabaseInfo{
+			"db0": &meta2.DatabaseInfo{
+				Name: "db0",
+				RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+					"autogen": &meta2.RetentionPolicyInfo{
+						Name: "autogen",
+						IndexGroups: []meta2.IndexGroupInfo{
+							meta2.IndexGroupInfo{
+								ID: 1,
+								Indexes: []meta2.IndexInfo{
+									meta2.IndexInfo{
+										ID:     1,
+										Owners: []uint32{0},
+										Tier:   util.Cold,
+									},
+									meta2.IndexInfo{
+										ID:     2,
+										Owners: []uint32{1},
+										Tier:   util.Cold,
+									},
+									meta2.IndexInfo{
+										ID:     3,
+										Owners: []uint32{2},
+										Tier:   util.Cold,
+									},
+								},
+							},
+						},
+						ShardGroups: []meta2.ShardGroupInfo{
+							{
+								ID: 1,
+								Shards: []meta2.ShardInfo{
+									meta2.ShardInfo{
+										ID:      1,
+										Owners:  []uint32{0},
+										Tier:    util.Cold,
+										IndexID: 1,
+									},
+									meta2.ShardInfo{
+										ID:      2,
+										Owners:  []uint32{1},
+										Tier:    util.Cold,
+										IndexID: 2,
+									},
+									meta2.ShardInfo{
+										ID:      3,
+										Owners:  []uint32{2},
+										Tier:    util.Cold,
+										IndexID: 3,
+									},
+								},
+								EngineType: config.TSSTORE,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	client.SetCacheData(data1)
+	_, err = client.GetNoClearIndexId(4, "db0", "autogen")
+	require.Error(t, err)
+
+	client.SetCacheData(data1)
+	_, err = client.GetNoClearIndexId(2, "db0", "autogen")
+	require.Error(t, err)
+
+	data2 := &meta2.Data{
+		Databases: map[string]*meta2.DatabaseInfo{
+			"db0": &meta2.DatabaseInfo{
+				Name: "db0",
+				RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+					"autogen": &meta2.RetentionPolicyInfo{
+						Name: "autogen",
+						IndexGroups: []meta2.IndexGroupInfo{
+							meta2.IndexGroupInfo{
+								ID: 1,
+								Indexes: []meta2.IndexInfo{
+									meta2.IndexInfo{
+										ID:     1,
+										Owners: []uint32{0},
+										Tier:   util.Cold,
+									},
+									meta2.IndexInfo{
+										ID:     2,
+										Owners: []uint32{1},
+										Tier:   util.Cold,
+									},
+									meta2.IndexInfo{
+										ID:     3,
+										Owners: []uint32{2},
+										Tier:   util.Cold,
+									},
+								},
+								ClearInfo: &meta2.ReplicaClearInfo{
+									NoClearIndexId: 1,
+									ClearPeers:     []uint64{4, 5},
+								},
+							},
+						},
+						ShardGroups: []meta2.ShardGroupInfo{
+							{
+								ID: 1,
+								Shards: []meta2.ShardInfo{
+									meta2.ShardInfo{
+										ID:      1,
+										Owners:  []uint32{0},
+										Tier:    util.Cold,
+										IndexID: 1,
+									},
+									meta2.ShardInfo{
+										ID:      2,
+										Owners:  []uint32{1},
+										Tier:    util.Cold,
+										IndexID: 2,
+									},
+									meta2.ShardInfo{
+										ID:      3,
+										Owners:  []uint32{2},
+										Tier:    util.Cold,
+										IndexID: 3,
+									},
+								},
+								EngineType: config.TSSTORE,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	client.SetCacheData(data2)
+	_, err = client.GetNoClearIndexId(2, "db0", "autogen")
+	require.Error(t, err)
 }
 
 func TestClient_UpdateIndexInfoTier(t *testing.T) {
@@ -3584,4 +4304,126 @@ func TestClient_UpdateIndexInfoTier(t *testing.T) {
 	}
 	err := client.UpdateIndexInfoTier(1, 1, "db1", "rp1")
 	assert.Equal(t, err.Error(), "execute command timeout")
+}
+
+func TestClient_GetTimeRange(t *testing.T) {
+	ts := time.Now()
+	sgInfo1 := meta2.ShardGroupInfo{
+		ID:        1,
+		StartTime: ts,
+		EndTime:   time.Now().Add(time.Duration(3600)),
+		DeletedAt: time.Time{},
+		Shards: []meta2.ShardInfo{
+			{ID: 1, Owners: []uint32{0}},
+			{ID: 2, Owners: []uint32{1}},
+		},
+		EngineType: config.TSSTORE,
+	}
+	c := &Client{
+		cacheData: &meta2.Data{
+			Databases: map[string]*meta2.DatabaseInfo{
+				"db0": {
+					Name:     "db0",
+					ReplicaN: 2,
+					ShardKey: meta2.ShardKeyInfo{ShardKey: []string{"tag1", "tag2"}},
+					RetentionPolicies: map[string]*meta2.RetentionPolicyInfo{
+						"rp0": {
+							Name:         "rp0",
+							Duration:     72 * time.Hour,
+							Measurements: map[string]*meta2.MeasurementInfo{"mst0": {Name: "mst0"}, "rp0": {Name: "rp0"}},
+							ShardGroups:  []meta2.ShardGroupInfo{sgInfo1},
+						},
+					},
+				},
+			},
+		},
+		metaServers: []string{"127.0.0.1"},
+		logger:      logger.NewLogger(errno.ModuleMetaClient),
+	}
+	_, err := c.GetTimeRange("db0", "rp0", 1, 1)
+	assert.Equal(t, err, nil)
+	_, err = c.GetTimeRange("db1", "rp0", 1, 1)
+	assert.Equal(t, err.Error(), "database not found: db1")
+	_, err = c.GetTimeRange("db0", "rp1", 1, 1)
+	assert.Equal(t, err.Error(), "retention policy not found: rp1")
+	_, err = c.GetTimeRange("db0", "rp0", 3, 3)
+	assert.Equal(t, err.Error(), "shard(id=3) meta not found")
+}
+
+func TestClient_ReplaceMergeShards(t *testing.T) {
+	c := &Client{
+		cacheData:      &meta2.Data{},
+		metaServers:    []string{"127.0.0.1"},
+		logger:         logger.NewLogger(errno.ModuleMetaClient),
+		SendRPCMessage: &RPCMessageSender{},
+	}
+
+	shards := meta2.MergeShards{DbName: "db1", RpName: "rp1", PtId: 1, ShardIds: []uint64{1}, ShardEndTimes: []int64{1}}
+	err := c.ReplaceMergeShards(shards)
+	require.EqualError(t, err, "execute command timeout")
+}
+
+func TestClient_GetMergeShardsList(t *testing.T) {
+	c := &Client{
+		cacheData: &meta2.Data{
+			Databases: make(map[string]*meta2.DatabaseInfo),
+		},
+		logger: logger.NewLogger(errno.ModuleMetaClient),
+	}
+	c.cacheData.Databases["db0"] = &meta2.DatabaseInfo{
+		RetentionPolicies: make(map[string]*meta2.RetentionPolicyInfo),
+	}
+	c.cacheData.Databases["db1"] = &meta2.DatabaseInfo{
+		RetentionPolicies: make(map[string]*meta2.RetentionPolicyInfo),
+	}
+	timeNow := time.Now()
+	shardGroups1 := []meta2.ShardGroupInfo{
+		{
+			Shards: []meta2.ShardInfo{
+				{
+					ID:     1,
+					Owners: []uint32{0},
+				},
+			},
+			StartTime: time.Unix(1, 0),
+			EndTime:   time.Unix(3, 0),
+		},
+		{
+			Shards: []meta2.ShardInfo{
+				{
+					ID:     2,
+					Owners: []uint32{0},
+				},
+			},
+			StartTime: time.Unix(3, 0),
+			EndTime:   time.Unix(5, 0),
+		},
+	}
+	shardGroups2 := []meta2.ShardGroupInfo{
+		{
+			Shards: []meta2.ShardInfo{
+				{
+					ID:     1,
+					Owners: []uint32{0},
+				},
+			},
+			StartTime: timeNow,
+			EndTime:   timeNow.Add(time.Second * 2),
+		},
+	}
+	c.cacheData.Databases["db0"].RetentionPolicies["rp0"] = &meta2.RetentionPolicyInfo{
+		ShardMergeDuration: 2,
+		ShardGroups:        shardGroups1,
+	}
+	c.cacheData.Databases["db0"].RetentionPolicies["rp1"] = &meta2.RetentionPolicyInfo{
+		ShardMergeDuration: 0,
+		ShardGroups:        shardGroups1,
+	}
+	c.cacheData.Databases["db1"].RetentionPolicies["rp0"] = &meta2.RetentionPolicyInfo{
+		ShardMergeDuration: 24 * time.Hour,
+		ShardGroups:        shardGroups2,
+	}
+
+	mergeShards := c.GetMergeShardsList()
+	assert.Equal(t, len(mergeShards), 2)
 }

@@ -35,6 +35,8 @@ const (
 	PostProcessType internalTagKey = "type"
 	ResultSeries    internalTagKey = "series"
 	OutputInfo      internalTagKey = "_outputInfo"
+	AlgoParams      internalTagKey = "_algoParams"
+	Metric          internalTagKey = "_metric"
 )
 
 var internalKeySet = map[string]struct{}{
@@ -57,8 +59,9 @@ var internalKeySet = map[string]struct{}{
 type resultFieldKey string // validate result from castor
 
 const (
-	AnomalyLevel resultFieldKey = "anomalyLevel"
-	DataTime     resultFieldKey = "time"
+	AnomalyLevel  resultFieldKey = "anomalyLevel"
+	DataTime      resultFieldKey = "time"
+	DataTimeStamp resultFieldKey = "timestamp"
 )
 
 var DesiredFieldKeySet = map[string]struct{}{
