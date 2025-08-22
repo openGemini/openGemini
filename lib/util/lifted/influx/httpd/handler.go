@@ -2268,6 +2268,13 @@ func (t *Throttler) Handler(h http.Handler) http.Handler {
 				memUsed := memory.GetMemMonitor().MemUsedPct()
 				memThre := float64(sysconfig.GetUpperMemPct())
 				if memUsed > memThre {
+					// Even if the memory usage exceeds the threshold
+					// the `show queries` and `kill query` statements will not be blocked.
+					uri := strings.ToLower(r.RequestURI)
+					if strings.Contains(uri, "show+queries") || strings.Contains(uri, "kill+query") {
+						h.ServeHTTP(w, r)
+						return
+					}
 					resMsg := "request throttled, query memory exceeds the threshold, query is canceled"
 					t.Logger.Warn(resMsg, zap.Float64("mem used", memUsed), zap.Float64("mem threshold", memThre))
 					http.Error(w, resMsg, http.StatusServiceUnavailable)
@@ -2303,15 +2310,22 @@ func (t *Throttler) Handler(h http.Handler) http.Handler {
 					if memUsed < memThre {
 						break
 					}
+					// Even if the memory usage exceeds the threshold
+					// the `show queries` and `kill query` statements will not be blocked.
+					uri := strings.ToLower(r.RequestURI)
+					if strings.Contains(uri, "show+queries") || strings.Contains(uri, "kill+query") {
+						break
+					}
 					resMsg := "request throttled, query memory exceeds the threshold, query is blocked"
 					t.Logger.Warn(resMsg, zap.Float64("mem used", memUsed), zap.Float64("mem threshold", memThre))
 					ticker := time.NewTicker(periodOfInspection)
 					defer ticker.Stop()
+				Loop:
 					for {
 						select {
 						case <-ticker.C:
 							if memory.GetMemMonitor().MemUsedPct() < float64(sysconfig.GetUpperMemPct()) {
-								break
+								break Loop
 							}
 						case <-timerCh:
 							t.Logger.Warn("request throttled, exceeds timeout", zap.Duration("d", timeout), zap.Int("current length", len(t.current)))
