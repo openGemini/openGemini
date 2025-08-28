@@ -512,6 +512,12 @@ func resizeExpectSeries(expectSeries []bool, keyCount int) []bool {
 	return expectSeries
 }
 
+func (idx *MergeSetIndex) SearchSeriesWithTagArray(tsid uint64, seriesKeys [][]byte, exprs []*influxql.BinaryExpr, combineKey []byte,
+	isExpectSeries []bool, condition influxql.Expr) ([][]byte, []*influxql.BinaryExpr, []bool, error) {
+	seriesKeysOut, exprsOut, isExpectSeriesOut, _, err := idx.searchSeriesWithTagArray(tsid, seriesKeys, exprs, combineKey, isExpectSeries, condition, false)
+	return seriesKeysOut, exprsOut, isExpectSeriesOut, err
+}
+
 func (idx *MergeSetIndex) searchSeriesWithTagArray(tsid uint64, seriesKeys [][]byte, exprs []*influxql.BinaryExpr, combineKey []byte,
 	isExpectSeries []bool, condition influxql.Expr, handleConditionForce bool) ([][]byte, []*influxql.BinaryExpr, []bool, []byte, error) {
 	combineKey = combineKey[:0]
