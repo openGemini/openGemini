@@ -1624,7 +1624,7 @@ func parseFieldNumValue(s string) (float64, int32, error) {
 		// Unsigned integer value
 		return 0, Field_Type_Unknown, fmt.Errorf("invalid number")
 	}
-	if ch == 'f' {
+	if ch == 'f' && len(s) > 1 {
 		// Unsigned integer value
 		ss := s[:len(s)-1]
 		n := fastfloat.ParseBestEffort(ss)
