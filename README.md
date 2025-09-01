@@ -86,7 +86,7 @@ This section mainly contains the following:
 
 ### Compiling environment information
 
-[GO](https://golang.org/dl/) version v1.20+
+[GO](https://golang.org/dl/) version v1.22+
 
 [Python](https://www.python.org/downloads/) version v3.7+
 
@@ -131,7 +131,7 @@ The compiled binary file is in the build directory
 
 ```
 > ls build
-ts-cli ts-meta ts-monitor ts-server  ts-sql  ts-store
+ts-meta ts-monitor ts-server  ts-sql  ts-store
 ```
 
 ### Configuration
@@ -152,7 +152,13 @@ Refer to cluster deployments in [User Guide](https://docs.opengemini.org/guide/q
 
 #### Using openGemini
 
-Use the client to connect to openGemini
+Install ts-cli
+
+```
+> go install github.com/openGemini/openGemini-cli/cmd/ts-cli@latest
+```
+
+Use the [openGemini-cli](https://github.com/openGemini/openGemini-cli) to connect to openGemini
 
 ```shell
 > ts-cli --host 127.0.0.1 --port 8086

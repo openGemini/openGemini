@@ -75,13 +75,15 @@ func NewServer(conf config.Config, cmd *cobra.Command, logger *logger.Logger) (a
 			time.Sleep(time.Second)
 		}
 	}()
-	http.HandleFunc("/metrics", serveMetrics)
-	go func() {
-		err := http.ListenAndServe(c.MonitorConfig.HttpEndpoint, nil)
-		if err != nil {
-			panic(err)
-		}
-	}()
+	if c.MonitorConfig.HttpEndpoint != "" {
+		http.HandleFunc("/metrics", serveMetrics)
+		go func() {
+			err := http.ListenAndServe(c.MonitorConfig.HttpEndpoint, nil)
+			if err != nil {
+				logger.Error("listenAndServer failed", zap.Error(err))
+			}
+		}()
+	}
 
 	// Prevent ts-monitor from preempting CPU resources.
 	// Set Two CPUs that can be executing.

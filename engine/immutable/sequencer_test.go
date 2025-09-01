@@ -345,6 +345,15 @@ func TestSeriesCounter(t *testing.T) {
 	require.Equal(t, uint64(0), sc.Get())
 }
 
+func TestGetMmsIdTime(t *testing.T) {
+	seq := immutable.NewSequencer()
+	seq.AddRowCounts("foo", 1, 1)
+	require.NotEmpty(t, seq.GetMmsIdTime("foo"))
+
+	seq.SetStat(false, true)
+	require.Empty(t, seq.GetMmsIdTime("foo"))
+}
+
 func maxInt64(a, b int64) int64 {
 	if a > b {
 		return a

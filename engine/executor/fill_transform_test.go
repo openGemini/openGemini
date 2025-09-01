@@ -1116,6 +1116,7 @@ func prepareOptFillIssue58() (*executor.QuerySchema, []hybridqp.ExprOptions) {
 }
 
 // ready for issues58
+// https://codehub-g.huawei.com/CTO_Technical_Innovation/Database/Gemini/github.com/openGemini/openGemini/issues/58
 func TestFillTransform_Null_Fill_Issue58(t *testing.T) {
 	sourceChunks := []executor.Chunk{buildSrcNullChunk()}
 	expectChunks := []executor.Chunk{buildTarNullFillChunk()}

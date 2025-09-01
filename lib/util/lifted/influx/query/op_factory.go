@@ -15,6 +15,9 @@
 package query
 
 import (
+	"fmt"
+	"strconv"
+
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 )
 
@@ -37,8 +40,10 @@ const (
 )
 
 type BaseFunc interface {
+	GetRules(name string) []CheckRule
 	CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error)
 	GetFuncType() FuncType
+	CompileFunc(expr *influxql.Call, c *compiledField) error
 }
 
 type BaseInfo struct {
@@ -47,6 +52,10 @@ type BaseInfo struct {
 
 func (b *BaseInfo) GetFuncType() FuncType {
 	return b.FuncType
+}
+
+func (b *BaseInfo) GetRules(name string) []CheckRule {
+	return []CheckRule{}
 }
 
 type BaseAgg struct {
@@ -79,23 +88,19 @@ func (b *BaseAgg) OptimizeAgg() bool {
 
 type LabelFunc interface {
 	BaseFunc
-	CompileFunc(expr *influxql.Call, c *compiledField) error
 }
 
 type PromTimeFunc interface {
 	BaseFunc
-	CompileFunc(expr *influxql.Call, c *compiledField) error
 }
 
 type MaterializeFunc interface {
 	BaseFunc
-	CompileFunc(expr *influxql.Call, c *compiledField) error
 	CallFunc(name string, args []interface{}) (interface{}, bool)
 }
 
 type AggregateFunc interface {
 	BaseFunc
-	CompileFunc(expr *influxql.Call, c *compiledField) error
 	CanPushDown() bool
 	SortedMergeCall() bool
 	MergeCall() bool
@@ -185,6 +190,18 @@ func (r *FunctionFactory) GetAggregateOp() map[string]AggregateFunc {
 	return r.aggregate
 }
 
+func (r *FunctionFactory) GetMaterializeOp() map[string]MaterializeFunc {
+	return r.materialize
+}
+
+func (r *FunctionFactory) GetLabelOp() map[string]LabelFunc {
+	return r.label
+}
+
+func (r *FunctionFactory) GetPromTimeOp() map[string]PromTimeFunc {
+	return r.promTime
+}
+
 func GetFunctionFactoryInstance() *FunctionFactory {
 	return instance
 }
@@ -195,4 +212,78 @@ func GetMaterializeFunction(name string, t FuncType) MaterializeFunc {
 		return materialize
 	}
 	return nil
+}
+
+type CheckRule interface {
+	Check(expr *influxql.Call) error
+}
+
+type ArgNumberCheckRule struct {
+	Name string
+	Max  int
+	Min  int
+}
+
+func (a *ArgNumberCheckRule) Check(expr *influxql.Call) error {
+	got := len(expr.Args)
+	if got < a.Min || got > a.Max {
+		if a.Min == a.Max {
+			return fmt.Errorf("invalid number of arguments for %s, expected %d, got %d", expr.Name, a.Min, got)
+		}
+		return fmt.Errorf("invalid number of arguments for %s, expected %d-%d, got %d", expr.Name, a.Min, a.Max, got)
+	}
+	return nil
+}
+
+type TypeCheckRule struct {
+	Name    string
+	Index   int
+	Asserts []func(interface{}) bool
+}
+
+func (t *TypeCheckRule) Check(expr *influxql.Call) error {
+	callLen := len(expr.Args)
+	if t.Index >= callLen {
+		return nil
+	}
+	for _, assert := range t.Asserts {
+		if assert(expr.Args[t.Index]) {
+			return nil
+		}
+	}
+	return fmt.Errorf("invalid argument type for the %s argument in %s(): %s", convToOrdinal(t.Index+1), expr.Name, expr.Args[t.Index])
+}
+
+func convToOrdinal(n int) string {
+	suffix := "th"
+	switch n % 10 {
+	case 1:
+		if n%100 != 11 {
+			suffix = "st"
+		}
+	case 2:
+		if n%100 != 12 {
+			suffix = "nd"
+		}
+	case 3:
+		if n%100 != 13 {
+			suffix = "rd"
+		}
+	}
+	return strconv.Itoa(n) + suffix
+}
+
+func AssertStringLiteral(arg interface{}) bool {
+	_, ok := arg.(*influxql.StringLiteral)
+	return ok
+}
+
+func AssertIntegerLiteral(arg interface{}) bool {
+	_, ok := arg.(*influxql.IntegerLiteral)
+	return ok
+}
+
+func AssertNumberLiteral(arg interface{}) bool {
+	_, ok := arg.(*influxql.NumberLiteral)
+	return ok
 }

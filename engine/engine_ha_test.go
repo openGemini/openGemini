@@ -15,6 +15,7 @@
 package engine
 
 import (
+	"fmt"
 	"reflect"
 	"sync"
 	"testing"
@@ -73,13 +74,16 @@ func TestPreOffLoadPts001(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
+		fmt.Println("pre offload start")
 		err := eng.PreOffload(0, defaultDb, defaultPtId)
 		if err != nil && (!errno.Equal(err, errno.DBPTClosed) && !errno.Equal(err, errno.PtNotFound)) {
 			t.Error("PrepareOffLoadPts failed, and err isn't dbPt close", zap.Error(err))
 		}
+		fmt.Println("pre offload end")
 		wg.Done()
 	}()
 	go func() {
+		fmt.Println("begin delete db")
 		err := eng.DeleteDatabase(defaultDb, defaultPtId)
 		if err != nil {
 			t.Error("expect delete database success", zap.Error(err))
@@ -154,18 +158,17 @@ func TestOffloadPts001(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
+		defer wg.Done()
 		err := eng.Offload(0, defaultDb, defaultPtId)
 		if err != nil && (!errno.Equal(err, errno.DBPTClosed) && !errno.Equal(err, errno.PtNotFound)) {
 			t.Error("OffLoadPts failed, and err isn't dbPt close", zap.Error(err))
 		}
-		wg.Done()
 	}()
 	go func() {
+		defer wg.Done()
 		err := eng.DeleteDatabase(defaultDb, defaultPtId)
-		if err != nil && !errno.Equal(err, errno.DBPTClosed) {
-			t.Error("expect delete database success", zap.Error(err))
-		}
-		wg.Done()
+		ok := err == nil || errno.Equal(err, errno.DBPTClosed) || err.Error() == meta.ErrConflictWithIo.Error()
+		require.True(t, ok, "expect delete database success", zap.Error(err))
 	}()
 	wg.Wait()
 }

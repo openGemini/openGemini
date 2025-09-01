@@ -388,7 +388,6 @@ type MaterializeTransform struct {
 	ResetTime       bool
 	isPromQuery     bool
 	HasBinaryExpr   bool
-	removeMetric    bool
 	transparents    []func(dst Column, src Chunk, index []int)
 
 	ColumnMap [][]int
@@ -493,7 +492,6 @@ func NewMaterializeTransform(inRowDataType hybridqp.RowDataType, outRowDataType 
 		trans.promQueryTime = trans.opt.EndTime + trans.opt.QueryOffset.Nanoseconds()
 	}
 	trans.ColumnMapInit()
-	trans.removeMetric = trans.opt.IsPromQuery() && trans.HasBinaryExpr
 	return trans
 }
 
@@ -1396,7 +1394,7 @@ func (trans *MaterializeTransform) materialize(chunk Chunk) Chunk {
 		oChunk.AppendTagsAndIndexes(chunk.Tags(), chunk.TagIndex())
 		oChunk.AppendIntervalIndexes(chunk.IntervalIndex())
 	}
-	if trans.opt.IsPromQuery() && trans.HasBinaryExpr {
+	if trans.opt.IsPromQuery() && (trans.HasBinaryExpr || trans.opt.IsRemoveMetric()) {
 		removeTableName(chunk, oChunk)
 	}
 	columnMap := make(map[string]*ColumnImpl)

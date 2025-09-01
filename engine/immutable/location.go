@@ -368,6 +368,10 @@ func (ctx *ChunkMetaContext) MemSize() int {
 	return ctx.buf.MemSize()
 }
 
+func (ctx *ChunkMetaContext) Instance() *ChunkMetaContext {
+	return ctx
+}
+
 func (ctx *ChunkMetaContext) Release() {
 	ctx.columns = ctx.columns[:0]
 	ctx.meta = nil

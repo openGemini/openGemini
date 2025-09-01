@@ -21,10 +21,10 @@ import (
 	"runtime/debug"
 	"sync"
 
-	"github.com/openGemini/openGemini/engine/executor/spdy"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/spdy"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
@@ -124,8 +124,8 @@ func (exec *PipelineExecutor) closeSinkTransform() {
 func (exec *PipelineExecutor) Crash() {
 	defer func() {
 		if e := recover(); e != nil {
-			log.Error("Crash revover",
-				zap.String("Pipelineexecutor Crash raise stack:", string(debug.Stack())),
+			log.Error("Crash recover",
+				zap.String("PipelineExecutor Crash raise stack:", string(debug.Stack())),
 				zap.Error(errno.NewError(errno.RecoverPanic, e)),
 				zap.Bool("aborted", exec.aborted),
 				zap.Bool("crashed", exec.crashed))
@@ -391,7 +391,7 @@ func (dag *TransformDag) SetVertexToInfo(vertex *TransformVertex, info *Transfor
 
 func (dag *TransformDag) AddVertex(vertex *TransformVertex) bool {
 	if _, ok := dag.mapVertexToInfo[vertex]; ok {
-		return false
+		return !ok
 	}
 
 	dag.mapVertexToInfo[vertex] = NewTransformVertexInfo()
@@ -402,7 +402,7 @@ func (dag *TransformDag) AddEdge(from *TransformVertex, to *TransformVertex) boo
 	edge := NewTransformEdge(from, to)
 
 	if _, ok := dag.edgeSet[edge]; ok {
-		return false
+		return !ok
 	}
 	dag.edgeSet[edge] = struct{}{}
 

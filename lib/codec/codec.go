@@ -17,7 +17,7 @@ package codec
 import (
 	"encoding/binary"
 
-	"github.com/openGemini/openGemini/engine/executor/spdy/transport"
+	"github.com/openGemini/openGemini/lib/spdy/transport"
 )
 
 type BinaryCodec interface {

@@ -20,6 +20,7 @@ import (
 
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/engine/shelf"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/raftlog"
 	"github.com/openGemini/openGemini/lib/record"
@@ -78,6 +79,7 @@ type Engine interface {
 	CreateShard(db, rp string, ptId uint32, shardID uint64, timeRangeInfo *meta.ShardTimeRangeInfo, mstInfo *meta.MeasurementInfo) error
 	WriteRows(db, rp string, ptId uint32, shardID uint64, points []influx.Row, binaryRows []byte, snp *raftlog.SnapShotter) error
 	WriteRec(db, mst string, ptId uint32, shardID uint64, rec *record.Record, binaryRec []byte) error
+	WriteBlobs(db string, ptId uint32, shardID uint64, group *shelf.BlobGroup) error
 	WriteToRaft(db, rp string, ptId uint32, tail []byte) error
 	CreateDBPT(db string, pt uint32, enableTagArray bool)
 
@@ -139,6 +141,9 @@ type Engine interface {
 	RaftMessage
 	CreateDDLBasePlans(planType hybridqp.DDLType, db string, ptIDs []uint32, tr *influxql.TimeRange) DDLBasePlans
 	SetMetaClient(m metaclient.MetaClient)
+
+	RegisterOnPTOffload(id uint64, f func(ptID uint32))
+	UninstallOnPTOffload(id uint64)
 }
 
 type RaftMessage interface {

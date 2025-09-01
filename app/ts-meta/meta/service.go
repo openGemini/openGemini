@@ -105,7 +105,7 @@ func (s *Service) startMetaServer() error {
 		return fmt.Errorf("metaRPCServer start failed: addr=%s, err=%s", s.config.RPCBindAddress, err)
 	}
 
-	s.clusterManager = NewClusterManager(s.store)
+	s.clusterManager = NewClusterManager(s.store, WithHeartbeatConfig(s.config.Heartbeat))
 	s.balanceManager = NewBalanceManager(s.config.BalanceAlgo)
 	s.masterPtBalanceManager = NewMasterPtBalanceManager()
 	s.msm = NewMigrateStateMachine()

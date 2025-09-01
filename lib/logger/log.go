@@ -16,7 +16,6 @@ package logger
 
 import (
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/openGemini/openGemini/lib/config"
@@ -58,7 +57,7 @@ func SetInitLoggerHandler(handler func(*zap.Logger)) {
 
 func InitLogger(conf config.Logger) {
 	level = conf.Level
-	logger = getLogger(conf)
+	logger = getLogger(conf, conf.GetApp())
 	if initHandler != nil {
 		initHandler(logger)
 	}
@@ -83,9 +82,9 @@ func CloseLogger() {
 	closeHooks()
 }
 
-func getLogger(conf config.Logger) *zap.Logger {
-	hookNormal := conf.NewLumberjackLogger(conf.GetApp())
-	hookError := conf.NewLumberjackLogger(makeErrFileName(conf.GetApp()))
+func getLogger(conf config.Logger, name string) *zap.Logger {
+	hookNormal := conf.NewLumberjackLogger(name)
+	hookError := conf.NewLumberjackLogger(makeErrFileName(name))
 	hooks = append(hooks, hookNormal, hookError)
 
 	encoder := newEncoder()
@@ -152,10 +151,32 @@ func newEncoder() zapcore.Encoder {
 var srLogger raft.Logger
 
 func InitSrLogger(conf config.Logger) {
-	ioW := conf.NewLumberjackLogger(config.DefaultStoreRaftLoggerName)
-	srLogger = &raft.DefaultLogger{Logger: log.New(ioW, "raft", log.LstdFlags)}
+	level = conf.Level
+	zapLogger := getLogger(conf, config.DefaultStoreRaftLoggerName)
+
+	fmt.Printf("%s init sr logger, conf: %+v\n", time.Now().String(), conf)
+	srLogger = &SugarLogger{zapLogger.Sugar()}
 }
 
 func GetSrLogger() raft.Logger {
 	return srLogger
+}
+
+type SugarLogger struct {
+	*zap.SugaredLogger
+}
+
+func (sl *SugarLogger) Warning(v ...interface{}) {
+	sl.Warn(v...)
+}
+
+func (sl *SugarLogger) Warningf(format string, v ...interface{}) {
+	sl.Warnf(format, v...)
+}
+
+func (sl *SugarLogger) Panic(args ...interface{}) {
+	sl.Error(args...)
+}
+func (sl *SugarLogger) Panicf(template string, args ...interface{}) {
+	sl.Errorf(template, args...)
 }

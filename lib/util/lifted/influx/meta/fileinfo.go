@@ -18,9 +18,9 @@ import (
 	"database/sql"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
 	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
+	_ "modernc.org/sqlite"
 )
 
 const INITSQL = `
@@ -96,7 +96,7 @@ type SQLiteWrapper struct {
 }
 
 func NewSQLiteWrapper(path string) (*SQLiteWrapper, error) {
-	database, err := sql.Open("sqlite3", path)
+	database, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, err
 	}

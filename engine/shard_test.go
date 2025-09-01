@@ -43,6 +43,7 @@ import (
 	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/engine/mutable"
+	"github.com/openGemini/openGemini/engine/shelf"
 	"github.com/openGemini/openGemini/lib/binaryfilterfunc"
 	"github.com/openGemini/openGemini/lib/bitmap"
 	"github.com/openGemini/openGemini/lib/bufferpool"
@@ -6023,7 +6024,7 @@ func TestGetValuesInMemTables(t *testing.T) {
 	begin := time.Now().UnixNano()
 
 	mst := "mst"
-	memtables := mutable.NewMemTables(1, true)
+	memtables := mutable.NewMemTables(true)
 
 	var getValue = func(sid uint64, asc bool) *record.Record {
 		return memtables.Values(mst, sid, util.TimeRange{Min: 0, Max: begin + 10}, record.Schemas{
@@ -7585,4 +7586,35 @@ func TestIsSameIndex(t *testing.T) {
 	s1.indexBuilder = tsi.NewIndexBuilder(opt)
 	s2.indexBuilder = tsi.NewIndexBuilder(opt)
 	assert2.True(t, s1.IsSameIndex(s2))
+}
+
+func TestWriteShelfMode(t *testing.T) {
+	conf := &config.GetStoreConfig().ShelfMode
+	conf.Enabled = true
+	defer func() {
+		conf.Enabled = false
+	}()
+	shelf.Open()
+
+	dir := t.TempDir()
+	sh, err := createShard(defaultDb, defaultRp, defaultPtId, dir, config.TSSTORE)
+	require.NoError(t, err)
+	defer func() {
+		shelf.NewRunner().Close()
+		_ = closeShard(sh)
+	}()
+
+	row := influx.Row{
+		Timestamp: time.Now().UnixNano(),
+		Name:      "mst_0000",
+		Tags: influx.PointTags{
+			influx.Tag{Key: "server", Value: "host1"},
+		},
+		Fields: influx.Fields{
+			{Key: "value", NumValue: 1},
+		},
+	}
+
+	err = sh.WriteRows([]influx.Row{row}, nil)
+	require.Error(t, err)
 }

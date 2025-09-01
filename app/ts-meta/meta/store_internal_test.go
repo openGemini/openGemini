@@ -825,7 +825,7 @@ func Test_applyInsertFiles(t *testing.T) {
 	resErr := applyInsertFilesCommand(fsm, cmd)
 	require.Nil(t, resErr)
 	resErr = applyInsertFilesCommand(fsm, cmd)
-	require.EqualError(t, resErr.(error), "UNIQUE constraint failed: files.mst_id, files.shard_id, files.sequence, files.level, files.extent, files.merge")
+	require.ErrorContains(t, resErr.(error), "UNIQUE constraint failed: files.mst_id, files.shard_id, files.sequence, files.level, files.extent, files.merge")
 }
 
 func Test_executeCmdErr(t *testing.T) {
@@ -927,4 +927,18 @@ func Test_DeleteDbForLogkeeper(t *testing.T) {
 	if err == nil {
 		t.Errorf("deleteDatabase failed, err:%+v", err)
 	}
+}
+
+func Test_executeUpdateIndexTierCmd(t *testing.T) {
+	s := &Store{Logger: logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop()), data: &meta2.Data{Databases: make(map[string]*meta2.DatabaseInfo)}}
+	fsm := (*storeFSM)(s)
+	typ := proto2.Command_UpdateIndexInfoTierCommand
+	cmd := &proto2.Command{Type: &typ}
+	value := &proto2.UpdateIndexInfoTierCommand{}
+	err := proto.SetExtension(cmd, proto2.E_UpdateIndexInfoTierCommand_Command, value)
+	require.NoError(t, err)
+	var errType proto2.Command_Type = proto2.Command_UpdateIndexInfoTierCommand
+	cmd.Type = &errType
+	re := fsm.executeCmd(*cmd)
+	assert2.NotEqual(t, re, nil)
 }

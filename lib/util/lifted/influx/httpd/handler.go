@@ -118,6 +118,14 @@ type SubscriberManager interface {
 	Send(db, rp string, lineProtocol []byte)
 }
 
+type PointsWriter interface {
+	RetryWritePointRows(db, rp string, points []influx.Row) error
+}
+
+type RecordWriter interface {
+	RetryWriteLogRecord(rec *record.BulkRecords) error
+}
+
 // Handler represents an HTTP handler for the InfluxDB server.
 type Handler struct {
 	mux       *mux.Router
@@ -172,13 +180,8 @@ type Handler struct {
 	Monitor interface {
 	}
 
-	PointsWriter interface {
-		RetryWritePointRows(database, retentionPolicy string, points []influx.Row) error
-	}
-
-	RecordWriter interface {
-		RetryWriteLogRecord(rec *record.BulkRecords) error
-	}
+	PointsWriter PointsWriter
+	RecordWriter RecordWriter
 
 	SubscriberManager
 
@@ -605,9 +608,9 @@ func (h *Handler) AddRoutes(routes ...Route) {
 
 // ServeHTTP responds to HTTP request to the handler.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	atomic.AddInt64(&statistics.HandlerStat.Requests, 1)
-	atomic.AddInt64(&statistics.HandlerStat.ActiveRequests, 1)
-	defer atomic.AddInt64(&statistics.HandlerStat.ActiveRequests, -1)
+	handlerStat.Requests.Incr()
+	handlerStat.ActiveRequests.Incr()
+	defer handlerStat.ActiveRequests.Decr()
 	start := time.Now()
 
 	// changed 2023-06-30, use GeminiDB replace influxdb
@@ -625,7 +628,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.mux.ServeHTTP(w, r)
 	}
 
-	atomic.AddInt64(&statistics.HandlerStat.RequestDuration, time.Since(start).Nanoseconds())
+	handlerStat.RequestDuration.AddSinceNano(start)
 }
 
 // writeHeader writes the provided status code in the response, and
@@ -633,9 +636,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) writeHeader(w http.ResponseWriter, code int) {
 	switch code / 100 {
 	case 4:
-		atomic.AddInt64(&statistics.HandlerStat.ClientErrors, 1)
+		handlerStat.ClientErrors.Incr()
 	case 5:
-		atomic.AddInt64(&statistics.HandlerStat.ServerErrors, 1)
+		handlerStat.ServerErrors.Incr()
 	}
 	w.WriteHeader(code)
 }
@@ -1013,12 +1016,12 @@ func (h *Handler) parsePipeAndSqlForQuery(r *http.Request, user meta2.User, info
 
 // serveQuery parses an incoming query and, if valid, executes the query
 func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.User) {
-	atomic.AddInt64(&statistics.HandlerStat.QueryRequests, 1)
-	atomic.AddInt64(&statistics.HandlerStat.ActiveQueryRequests, 1)
+	handlerStat.QueryRequests.Incr()
+	handlerStat.ActiveQueryRequests.Incr()
 	start := time.Now()
 	defer func() {
-		atomic.AddInt64(&statistics.HandlerStat.ActiveQueryRequests, -1)
-		atomic.AddInt64(&statistics.HandlerStat.QueryRequestDuration, time.Since(start).Nanoseconds())
+		handlerStat.ActiveQueryRequests.Decr()
+		handlerStat.QueryRequestDuration.AddSinceNano(start)
 	}()
 
 	// Retrieve the underlying ResponseWriter or initialize our own.
@@ -1192,7 +1195,7 @@ func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.
 			n, _ := rw.WriteResponse(Response{
 				Results: []*query.Result{r},
 			})
-			atomic.AddInt64(&statistics.HandlerStat.QueryRequestBytesTransmitted, int64(n))
+			handlerStat.QueryRequestBytesTransmitted.Add(int64(n))
 			w.(http.Flusher).Flush()
 			continue
 		}
@@ -1221,7 +1224,7 @@ func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.
 	// If it's not chunked we buffered everything in memory, so write it out
 	if !chunked {
 		n, _ := rw.WriteResponse(resp)
-		atomic.AddInt64(&statistics.HandlerStat.QueryRequestBytesTransmitted, int64(n))
+		handlerStat.QueryRequestBytesTransmitted.Add(int64(n))
 	}
 }
 
@@ -1278,13 +1281,13 @@ func (h *Handler) logRowsIfNecessary(rows []influx.Row, ReqBuf []byte) {
 
 // serveWrite receives incoming series data in line protocol format and writes it to the database.
 func (h *Handler) serveWrite(w http.ResponseWriter, r *http.Request, user meta2.User) {
-	atomic.AddInt64(&statistics.HandlerStat.WriteRequests, 1)
-	atomic.AddInt64(&statistics.HandlerStat.ActiveWriteRequests, 1)
-	atomic.AddInt64(&statistics.HandlerStat.WriteRequestBytesIn, r.ContentLength)
+	handlerStat.WriteRequests.Incr()
+	handlerStat.ActiveWriteRequests.Incr()
+	handlerStat.WriteRequestBytesIn.Add(r.ContentLength)
 	defer func(start time.Time) {
 		d := time.Since(start).Nanoseconds()
-		atomic.AddInt64(&statistics.HandlerStat.ActiveWriteRequests, -1)
-		atomic.AddInt64(&statistics.HandlerStat.WriteRequestDuration, d)
+		handlerStat.ActiveWriteRequests.Decr()
+		handlerStat.WriteRequestDuration.Add(d)
 	}(time.Now())
 
 	if syscontrol.DisableWrites {
@@ -1305,7 +1308,7 @@ func (h *Handler) serveWrite(w http.ResponseWriter, r *http.Request, user meta2.
 		err := errno.NewError(errno.HttpDatabaseNotFound)
 		h.Logger.Error("serveWrite", zap.Error(err))
 		h.httpError(w, "database is required", http.StatusBadRequest)
-		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		handlerStat.Write400ErrRequests.Incr()
 		return
 	}
 
@@ -1313,7 +1316,7 @@ func (h *Handler) serveWrite(w http.ResponseWriter, r *http.Request, user meta2.
 		err := errno.NewError(errno.HttpDatabaseNotFound)
 		h.Logger.Error("serveWrite", zap.Error(err), zap.String("db", database))
 		h.httpError(w, fmt.Sprintf("database not found: %q", database), http.StatusNotFound)
-		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		handlerStat.Write400ErrRequests.Incr()
 		return
 	}
 
@@ -1322,7 +1325,7 @@ func (h *Handler) serveWrite(w http.ResponseWriter, r *http.Request, user meta2.
 			h.httpError(w, fmt.Sprintf("user is required to write to database %q", database), http.StatusForbidden)
 			err := errno.NewError(errno.HttpForbidden)
 			h.Logger.Error("write error: user is required to write to database", zap.Error(err), zap.String("db", database))
-			atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+			handlerStat.Write400ErrRequests.Incr()
 			return
 		}
 
@@ -1330,7 +1333,7 @@ func (h *Handler) serveWrite(w http.ResponseWriter, r *http.Request, user meta2.
 			err := errno.NewError(errno.HttpForbidden)
 			h.httpError(w, fmt.Sprintf("%q user is not authorized to write to database %q", user.ID(), database), http.StatusForbidden)
 			h.Logger.Error("write error:user is not authorized to write to database", zap.Error(err), zap.String("db", database), zap.String("user", user.ID()))
-			atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+			handlerStat.Write400ErrRequests.Incr()
 			return
 		}
 	}
@@ -1347,7 +1350,7 @@ func (h *Handler) serveWrite(w http.ResponseWriter, r *http.Request, user meta2.
 			h.httpError(w, err.Error(), http.StatusBadRequest)
 			error := errno.NewError(errno.HttpBadRequest)
 			h.Logger.Error("write error:Handle gzip decoding of the body err", zap.Error(error), zap.String("db", database))
-			atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+			handlerStat.Write400ErrRequests.Incr()
 			return
 		}
 		defer compression.PutGzipReader(b)
@@ -1359,7 +1362,7 @@ func (h *Handler) serveWrite(w http.ResponseWriter, r *http.Request, user meta2.
 			h.httpError(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
 			err := errno.NewError(errno.HttpRequestEntityTooLarge)
 			h.Logger.Error("serveWrite", zap.Int64("ContentLength", r.ContentLength), zap.Error(err), zap.String("db", database))
-			atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+			handlerStat.Write400ErrRequests.Incr()
 			return
 		}
 	}
@@ -1414,7 +1417,7 @@ func (h *Handler) serveWrite(w http.ResponseWriter, r *http.Request, user meta2.
 					// uw.ReqBuf is the line protocol
 					h.SubscriberManager.Send(db, rp, uw.ReqBuf)
 				}
-				atomic.AddInt64(&statistics.HandlerStat.PointsWrittenOK, int64(len(rows)))
+				handlerStat.PointsWrittenOK.Add(int64(len(rows)))
 			}
 			ctx.Wg.Done()
 		}
@@ -1422,59 +1425,59 @@ func (h *Handler) serveWrite(w http.ResponseWriter, r *http.Request, user meta2.
 		uw.Db = database
 		uw.ReqBuf, ctx.ReqBuf = ctx.ReqBuf, uw.ReqBuf
 		uw.EnableTagArray = h.MetaClient.TagArrayEnabled(database)
-		atomic.AddInt64(&statistics.HandlerStat.WriteRequestBytesReceived, int64(len(uw.ReqBuf)))
+		handlerStat.WriteRequestBytesReceived.Add(int64(len(uw.ReqBuf)))
 
 		ctx.Wg.Add(1)
 		start := time.Now()
 		influx.ScheduleUnmarshalWork(uw)
-		atomic.AddInt64(&statistics.HandlerStat.WriteScheduleUnMarshalDns, time.Since(start).Nanoseconds())
+		handlerStat.WriteScheduleUnMarshalDns.AddSinceNano(start)
 		numPtsInsert++
 	}
 	ctx.Wg.Wait()
 	if err := ctx.Error(); err != nil {
 		h.Logger.Error("write error:read body ", zap.Error(err), zap.String("db", database))
 		h.httpError(w, err.Error(), http.StatusBadRequest)
-		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		handlerStat.Write400ErrRequests.Incr()
 		return
 	}
 	if err := ctx.UnmarshalErr; err != nil {
-		atomic.AddInt64(&statistics.HandlerStat.PointsWrittenFail, int64(numPtsInsert))
+		handlerStat.PointsWrittenFail.Add(int64(numPtsInsert))
 		h.Logger.Error("write client error, unmarshal points failed", zap.Error(err), zap.String("db", database))
 		h.httpError(w, err.Error(), http.StatusBadRequest)
-		atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+		handlerStat.Write400ErrRequests.Incr()
 		return
 	}
 	if err := ctx.CallbackErr; err != nil {
 		if influxdb.IsClientError(err) {
-			atomic.AddInt64(&statistics.HandlerStat.PointsWrittenFail, int64(numPtsInsert))
+			handlerStat.PointsWrittenFail.Add(int64(numPtsInsert))
 			h.Logger.Error("write client error:WritePointsWithContext", zap.Error(err), zap.String("db", database))
 			h.httpError(w, err.Error(), http.StatusBadRequest)
-			atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+			handlerStat.Write400ErrRequests.Incr()
 			return
 		} else if influxdb.IsAuthorizationError(err) {
-			atomic.AddInt64(&statistics.HandlerStat.PointsWrittenFail, int64(numPtsParse))
+			handlerStat.PointsWrittenFail.Add(int64(numPtsParse))
 			h.httpError(w, err.Error(), http.StatusForbidden)
 			h.Logger.Error("write authorization error:WritePointsWithContext", zap.Error(err), zap.String("db", database))
-			atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+			handlerStat.Write400ErrRequests.Incr()
 			return
 		} else if werr, ok := err.(netstorage.PartialWriteError); ok {
-			atomic.AddInt64(&statistics.HandlerStat.PointsWrittenOK, int64(numPtsInsert-werr.Dropped))
-			atomic.AddInt64(&statistics.HandlerStat.PointsWrittenDropped, int64(werr.Dropped))
+			handlerStat.PointsWrittenOK.Add(int64(numPtsInsert - werr.Dropped))
+			handlerStat.PointsWrittenDropped.Add(int64(werr.Dropped))
 			h.httpError(w, werr.Error(), http.StatusBadRequest)
 			h.Logger.Error("write Partial Write error:WritePointsWithContext", zap.Error(werr.Reason), zap.String("db", database))
-			atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+			handlerStat.Write400ErrRequests.Incr()
 			return
 		} else if errno.Equal(err, errno.MeasurementNameTooLong) {
-			atomic.AddInt64(&statistics.HandlerStat.PointsWrittenFail, int64(numPtsParse))
+			handlerStat.PointsWrittenFail.Add(int64(numPtsParse))
 			h.httpError(w, werr.Error(), http.StatusBadRequest)
 			h.Logger.Error("write error:WritePointsWithContext", zap.Error(werr.Reason), zap.String("db", database))
-			atomic.AddInt64(&statistics.HandlerStat.Write400ErrRequests, 1)
+			handlerStat.Write400ErrRequests.Incr()
 			return
 		} else if err != nil {
-			atomic.AddInt64(&statistics.HandlerStat.PointsWrittenFail, int64(numPtsInsert))
+			handlerStat.PointsWrittenFail.Add(int64(numPtsInsert))
 			h.httpError(w, err.Error(), http.StatusInternalServerError)
 			h.Logger.Error("write error:WritePointsWithContext", zap.Error(err), zap.String("db", database))
-			atomic.AddInt64(&statistics.HandlerStat.Write500ErrRequests, 1)
+			handlerStat.Write500ErrRequests.Incr()
 			return
 		}
 	}
@@ -1490,7 +1493,7 @@ func (h *Handler) serveOptions(w http.ResponseWriter, r *http.Request) {
 // servePing returns a simple response to let the client know the server is running.
 func (h *Handler) servePing(w http.ResponseWriter, r *http.Request) {
 	verbose := r.URL.Query().Get("verbose")
-	atomic.AddInt64(&statistics.HandlerStat.PingRequests, 1)
+	handlerStat.PingRequests.Incr()
 
 	if verbose != "" && verbose != "0" && verbose != "false" {
 		h.writeHeader(w, http.StatusOK)
@@ -1504,7 +1507,7 @@ func (h *Handler) servePing(w http.ResponseWriter, r *http.Request) {
 // serveStatus has been deprecated.
 func (h *Handler) serveStatus(w http.ResponseWriter, r *http.Request) {
 	h.Logger.Info("WARNING: /status has been deprecated.  Use /ping instead.")
-	atomic.AddInt64(&statistics.HandlerStat.StatusRequests, 1)
+	handlerStat.StatusRequests.Incr()
 	h.writeHeader(w, http.StatusNoContent)
 }
 
@@ -1717,7 +1720,7 @@ func authenticate(inner func(http.ResponseWriter, *http.Request, meta2.User), h 
 		if requireAuthentication && h.MetaClient.AdminUserExists() {
 			creds, err := ParseCredentials(r)
 			if err != nil {
-				atomic.AddInt64(&statistics.HandlerStat.AuthenticationFailures, 1)
+				handlerStat.AuthenticationFailures.Incr()
 				h.httpError(w, err.Error(), http.StatusUnauthorized)
 				return
 			}
@@ -1725,7 +1728,7 @@ func authenticate(inner func(http.ResponseWriter, *http.Request, meta2.User), h 
 			switch creds.Method {
 			case UserAuthentication:
 				if creds.Username == "" {
-					atomic.AddInt64(&statistics.HandlerStat.AuthenticationFailures, 1)
+					handlerStat.AuthenticationFailures.Incr()
 					errMsg := "username required"
 					err := errno.NewError(errno.HttpUnauthorized)
 					log := logger.NewLogger(errno.ModuleHTTP)
@@ -1736,7 +1739,7 @@ func authenticate(inner func(http.ResponseWriter, *http.Request, meta2.User), h 
 
 				user, err = h.MetaClient.Authenticate(creds.Username, creds.Password)
 				if err != nil {
-					atomic.AddInt64(&statistics.HandlerStat.AuthenticationFailures, 1)
+					handlerStat.AuthenticationFailures.Incr()
 					errMsg := "authorization failed"
 					if err == meta2.ErrUserLocked {
 						errMsg = err.Error()
@@ -1749,7 +1752,7 @@ func authenticate(inner func(http.ResponseWriter, *http.Request, meta2.User), h 
 				}
 			case BearerAuthentication:
 				if h.Config.SharedSecret == "" {
-					atomic.AddInt64(&statistics.HandlerStat.AuthenticationFailures, 1)
+					handlerStat.AuthenticationFailures.Incr()
 					h.httpError(w, ErrBearerAuthDisabled.Error(), http.StatusUnauthorized)
 					return
 				}
@@ -1941,7 +1944,7 @@ func (h *Handler) recovery(inner http.Handler, name string) http.Handler {
 				logLine = fmt.Sprintf("%s [panic:%s] %s", logLine, err, debug.Stack())
 				h.Logger.Info(logLine)
 				http.Error(w, http.StatusText(http.StatusInternalServerError), 500)
-				atomic.AddInt64(&statistics.HandlerStat.RecoveredPanics, 1) // Capture the panic in _internal stats.
+				handlerStat.RecoveredPanics.Incr()
 
 				if willCrash {
 					h.Logger.Info("\n\n=====\nAll goroutines now follow:")

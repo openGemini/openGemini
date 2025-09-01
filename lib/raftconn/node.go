@@ -253,6 +253,7 @@ func (n *RaftNode) InitAndStartNode() error {
 	} else {
 		n.node = raft.StartNode(n.Cfg, n.RaftPeers)
 	}
+
 	go n.proposals()
 	go n.serveChannels()
 	go n.snapshotAfterFlush()
@@ -367,6 +368,7 @@ func (n *RaftNode) serveChannels() {
 				n.Stop()
 				return
 			}
+
 			n.logger.Debug("publish entries successful", zap.Duration("time used", time.Since(start)))
 			start = time.Now()
 
@@ -673,7 +675,6 @@ func (n *RaftNode) replay(sp raftpb.Snapshot) error {
 	if fromIndex == 0 {
 		fromIndex = 1
 	}
-
 	first, last := n.Store.GetFirstLast()
 	n.logger.Info("raftNode replay range", zap.String("db", n.database), zap.Uint32("ptid", n.ptId), zap.Uint64("lo", fromIndex), zap.Uint64("hi", committedIndex+1),
 		zap.Uint64("first", first), zap.Uint64("last", last))

@@ -263,6 +263,7 @@ func (trans *SortTransform) Close() {
 		atomic.AddInt32(&trans.closedSignal, 1)
 		trans.output.Close()
 	})
+
 }
 
 func (trans *SortTransform) addChunk(c Chunk) bool {
@@ -366,6 +367,7 @@ func (trans *SortTransform) singleSortWorkerHelper(ctx context.Context, errs *er
 		}
 		// 1.getChunk from childs
 		if !trans.getChunkFromChild(i) {
+
 			// 3. sortLastPartition
 			trans.sort(i)
 			// 4. output sorted partitions

@@ -335,3 +335,13 @@ func TestSuppressLogger(t *testing.T) {
 	assert.Equal(t, expErrno, logs[0].Errno, "incorrect errno")
 	assert.Equal(t, "", logs[1].Errno, "incorrect errno, exp empty")
 }
+
+func TestSrLoggerErr(t *testing.T) {
+	logger.InitSrLogger(config.Logger{Level: zap.PanicLevel})
+	logger.GetSrLogger().Panic("panic")
+	logger.GetSrLogger().Panicf("panicf")
+	logger.GetSrLogger().Warning("warn")
+	logger.GetSrLogger().Warningf("warnf")
+
+	logger.InitSrLogger(config.Logger{Level: 20})
+}

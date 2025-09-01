@@ -30,7 +30,6 @@ import (
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/index/tsi"
-	"github.com/openGemini/openGemini/engine/mutable"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
@@ -1914,15 +1913,15 @@ func (m MocTsspFile) MetaIndexAt(idx int) (*immutable.MetaIndex, error) {
 }
 
 func (m MocTsspFile) MetaIndex(id uint64, tr util.TimeRange) (int, *immutable.MetaIndex, error) {
-	if id == SID {
+	if id == 0527 {
 		return 0, &immutable.MetaIndex{}, nil
 	}
 	return 0, nil, nil
 }
 
 func (m MocTsspFile) ChunkMeta(id uint64, offset int64, size, itemCount uint32, metaIdx int, ctx *immutable.ChunkMetaContext, ioPriority int) (*immutable.ChunkMeta, error) {
-	if id == SID {
-		return immutable.NewChunkMeta(SID, 0, 10, 10), nil
+	if id == 0527 {
+		return immutable.NewChunkMeta(0527, 0, 10, 10), nil
 	}
 	return nil, nil
 }
@@ -1964,7 +1963,7 @@ func (m MocTsspFile) ContainsByTime(tr util.TimeRange) (bool, error) {
 }
 
 func (m MocTsspFile) ContainsValue(id uint64, tr util.TimeRange) (bool, error) {
-	if id == SID {
+	if id == 0527 {
 		return true, nil
 	}
 	return false, m.err
@@ -2547,7 +2546,7 @@ func TestTsmMergeCursorWithLocation(t *testing.T) {
 	_, err = c.ReInitWithShard(1, 2, nil, nil, nil, true)
 	assert1.Error(t, err, "invalid")
 
-	ctx := &idKeyCursorContext{memTableReader: make(map[uint64]*mutable.MemTables)}
+	ctx := &idKeyCursorContext{memTableReader: make(map[uint64]MemDataReader)}
 	s := &seriesCursor{tsmCursor: c, ctx: ctx}
 	_, err = s.ReInitWithShard(genTagSetMergeInfo(), 0, 0, true)
 	assert1.Error(t, err, "invalid")

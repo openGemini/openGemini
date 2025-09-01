@@ -23,23 +23,18 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 	"unsafe"
 
 	"github.com/VictoriaMetrics/VictoriaMetrics/lib/fasttime"
 	"github.com/golang/snappy"
-	"github.com/openGemini/openGemini/lib/codec"
 	"github.com/openGemini/openGemini/lib/config"
-	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
-	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/encoding/lz4"
-	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"go.uber.org/zap"
 )
 
@@ -53,6 +48,8 @@ const (
 	walCompressNone   = 0
 	walCompressLz4    = 1
 	walCompressSnappy = 2
+
+	walBufferSize = 4 * config.MB
 )
 
 var walBlockHeaderSize = int(unsafe.Sizeof(WalBlockHeader{}))
@@ -82,15 +79,18 @@ type Wal struct {
 	seriesKeyOffsets *SeriesKeyOffsets
 
 	timeRange util.TimeRange
-	codec     *WalRecordCodec
+	codec     *WalRecordDecoder
 	ctx       *WalCtx
 
-	expireAt       uint64
-	lock           *string
-	dir            string
-	mst            string
-	opened         bool
-	backgroundSync bool
+	expireAt        uint64
+	lock            *string
+	dir             string
+	mst             string
+	opened          bool
+	backgroundSync  bool
+	backgroundFlush bool
+	converted       bool // successfully converted to TSSP file
+	writing         bool
 }
 
 func NewWal(dir string, lock *string, mst string) *Wal {
@@ -104,9 +104,10 @@ func NewWal(dir string, lock *string, mst string) *Wal {
 			Min: math.MaxInt64,
 			Max: math.MinInt64,
 		},
-		ctx:            &WalCtx{},
-		backgroundSync: config.GetStoreConfig().Wal.WalSyncInterval > 0,
-		expireAt:       fasttime.UnixTimestamp() + uint64(time.Duration(conf.MaxWalDuration)/time.Second),
+		ctx:             &WalCtx{},
+		backgroundSync:  conf.ReliabilityLevel < config.ReliabilityLevelHigh,
+		backgroundFlush: conf.ReliabilityLevel == config.ReliabilityLevelLow,
+		expireAt:        fasttime.UnixTimestamp() + uint64(time.Duration(conf.MaxWalDuration)/time.Second),
 	}
 
 	return wal
@@ -126,6 +127,10 @@ func (wal *Wal) NeedCreateIndex() bool {
 
 func (wal *Wal) Name() string {
 	return wal.file.Name()
+}
+
+func (wal *Wal) EndWrite() {
+	wal.writing = false
 }
 
 func (wal *Wal) open() error {
@@ -150,13 +155,13 @@ func (wal *Wal) open() error {
 		return err
 	}
 
-	wal.codec = NewWalRecordCodec()
+	wal.codec = NewWalRecordDecoder()
 	wal.opened = true
 	return nil
 }
 
 func (wal *Wal) Expired() bool {
-	return fasttime.UnixTimestamp() >= wal.expireAt
+	return !wal.writing && fasttime.UnixTimestamp() >= wal.expireAt
 }
 
 func (wal *Wal) BackgroundSync() {
@@ -172,7 +177,16 @@ func (wal *Wal) BackgroundSync() {
 	}
 }
 
-func (wal *Wal) WriteRecord(sid uint64, seriesKey []byte, rec *record.Record) error {
+func (wal *Wal) UpdateTimeRange(tr *util.TimeRange) {
+	if wal.timeRange.Min > tr.Min {
+		wal.timeRange.Min = tr.Min
+	}
+	if wal.timeRange.Max < tr.Max {
+		wal.timeRange.Max = tr.Max
+	}
+}
+
+func (wal *Wal) WriteRecord(sid uint64, seriesKey []byte, rec []byte) error {
 	err := wal.open()
 	if err != nil {
 		return err
@@ -184,16 +198,6 @@ func (wal *Wal) WriteRecord(sid uint64, seriesKey []byte, rec *record.Record) er
 		return err
 	}
 
-	tr := &wal.timeRange
-	for _, v := range rec.Times() {
-		if tr.Min > v {
-			tr.Min = v
-		}
-		if tr.Max < v {
-			tr.Max = v
-		}
-	}
-
 	if sid > 0 {
 		wal.AddSeriesOffsets(sid, ofs)
 		return nil
@@ -202,15 +206,11 @@ func (wal *Wal) WriteRecord(sid uint64, seriesKey []byte, rec *record.Record) er
 	return nil
 }
 
-func (wal *Wal) writeRecord(sid uint64, seriesKey []byte, rec *record.Record) error {
-	block := wal.encodeRecord(sid, rec)
+func (wal *Wal) writeRecord(sid uint64, seriesKey []byte, rec []byte) error {
+	block := wal.compress(sid, rec)
 
 	wal.mu.RLock()
 	defer wal.mu.RUnlock()
-
-	if err := wal.codec.FlushNewDict(wal.fileExt); err != nil {
-		return err
-	}
 
 	if sid == 0 {
 		// indexes need to be created asynchronously
@@ -224,16 +224,15 @@ func (wal *Wal) writeRecord(sid uint64, seriesKey []byte, rec *record.Record) er
 	return err
 }
 
-func (wal *Wal) encodeRecord(sid uint64, rec *record.Record) []byte {
+func (wal *Wal) compress(sid uint64, rec []byte) []byte {
 	buf := &wal.ctx.buf
 	header := &wal.ctx.header
 	var err error
 
 	switch conf.WalCompressMode {
 	case walCompressLz4:
-		buf.B = wal.codec.Encode(rec, buf.B[:0])
 		buf.Swap = slices.Grow(buf.Swap, walBlockHeaderSize)
-		buf.Swap, err = LZ4CompressBlock(buf.B, buf.Swap[:walBlockHeaderSize])
+		buf.Swap, err = LZ4CompressBlock(rec, buf.Swap[:walBlockHeaderSize])
 		if err != nil {
 			// fault-tolerant processing without compressing data
 			logger.GetLogger().Error("failed to lz4 compress block", zap.Error(err))
@@ -244,9 +243,8 @@ func (wal *Wal) encodeRecord(sid uint64, rec *record.Record) []byte {
 		header.Put(buf.Swap)
 		return buf.Swap
 	case walCompressSnappy:
-		buf.B = wal.codec.Encode(rec, buf.B[:0])
 		buf.Swap = slices.Grow(buf.Swap, walBlockHeaderSize)
-		buf.Swap = SnappyCompressBlock(buf.B, buf.Swap[:walBlockHeaderSize])
+		buf.Swap = SnappyCompressBlock(rec, buf.Swap[:walBlockHeaderSize])
 		header.Set(len(buf.Swap)-walBlockHeaderSize, walCompressSnappy, sid)
 		header.Put(buf.Swap)
 		return buf.Swap
@@ -254,18 +252,26 @@ func (wal *Wal) encodeRecord(sid uint64, rec *record.Record) []byte {
 		break
 	}
 
-	buf.B = append(buf.B[:0], zeroBlockHeader[:]...)
-	buf.B = wal.codec.Encode(rec, buf.B)
-	header.Set(len(buf.B)-walBlockHeaderSize, walCompressNone, sid)
-	header.Put(buf.B)
-	return buf.B
+	buf.Swap = append(buf.Swap[:0], zeroBlockHeader[:]...)
+	buf.Swap = append(buf.Swap, rec...)
+	header.Set(len(buf.Swap)-walBlockHeaderSize, walCompressNone, sid)
+	header.Put(buf.Swap)
+	return buf.Swap
 }
 
 func (wal *Wal) Opened() bool {
 	return wal.opened
 }
 
+func (wal *Wal) Converted() bool {
+	return wal.converted
+}
+
 func (wal *Wal) Flush() error {
+	if wal.backgroundFlush {
+		return nil
+	}
+
 	wal.mu.Lock()
 	defer wal.mu.Unlock()
 
@@ -332,7 +338,7 @@ func (wal *Wal) Load(name string) error {
 		return err
 	}
 
-	wal.codec = NewWalRecordCodec()
+	wal.codec = NewWalRecordDecoder()
 	wal.opened = true
 
 	seriesKeys := wal.loadExt()
@@ -367,6 +373,7 @@ func (wal *Wal) loadWal(seriesKeys [][]byte) {
 			wal.AddSeriesOffsets(header.sid, offset)
 		} else if len(seriesKeys) > n {
 			wal.addSeriesKeyOffset(seriesKeys[n], offset)
+			n++
 		}
 
 		offset += int64(walBlockHeaderSize) + int64(header.size)
@@ -385,8 +392,7 @@ func (wal *Wal) loadExt() [][]byte {
 	var buf []byte
 	var flag uint8
 	var seriesKeys [][]byte
-	dec := &codec.BinaryDecoder{}
-	reader := bufio.NewReaderSize(wal.fileExt.fd, fileops.DefaultBufferSize)
+	reader := bufio.NewReaderSize(wal.fileExt.fd, walBufferSize)
 
 	for {
 		flag, buf, err = readExtBlock(reader, header[:], buf)
@@ -399,15 +405,6 @@ func (wal *Wal) loadExt() [][]byte {
 		case flagSeriesKey:
 			seriesKeys = append(seriesKeys, buf)
 			buf = nil
-		case flagDictBlock:
-			dec.Reset(buf)
-			for {
-				if dec.RemainSize() == 0 {
-					break
-				}
-
-				wal.codec.AddValue(dec.String())
-			}
 		}
 	}
 	return seriesKeys
@@ -421,174 +418,13 @@ func (wal *Wal) addSeriesKeyOffset(seriesKey []byte, offset int64) {
 	wal.seriesKeyOffsets.Add(seriesKey, offset)
 }
 
-type WalRecordCodec struct {
-	dict        map[string]int
-	values      []string
-	valuesCount int
-
-	// new dictionary data
-	newDict []byte
-}
-
-func NewWalRecordCodec() *WalRecordCodec {
-	return &WalRecordCodec{
-		dict: make(map[string]int),
-	}
-}
-
-func (c *WalRecordCodec) FlushNewDict(w io.Writer) error {
-	size := len(c.newDict)
-	if size == 0 {
-		return nil
-	}
-
-	err := writeExtBlock(w, c.newDict, flagDictBlock)
-	if err != nil {
-		return err
-	}
-
-	c.newDict = c.newDict[:0]
-	return nil
-}
-
-func (c *WalRecordCodec) addToDict(s string) int {
-	idx, ok := c.dict[s]
-	if ok {
-		return idx
-	}
-
-	ss := strings.Clone(s)
-	idx = c.AddValue(ss)
-	c.dict[ss] = idx
-	c.newDict = codec.AppendString(c.newDict, ss)
-	return idx
-}
-
-func (c *WalRecordCodec) AddValue(s string) int {
-	c.values = append(c.values, s)
-	c.valuesCount++
-	return len(c.values) - 1
-}
-
-func (c *WalRecordCodec) getValue(idx int) string {
-	if idx >= c.valuesCount {
-		return ""
-	}
-	return c.values[idx]
-}
-
-func (c *WalRecordCodec) Encode(rec *record.Record, dst []byte) []byte {
-	dst = binary.AppendUvarint(dst, uint64(len(rec.Schema)))
-
-	// Schema
-	for i := range rec.Schema {
-		dst = codec.AppendUint16(dst, uint16(c.addToDict(rec.Schema[i].Name)))
-		dst = codec.AppendUint8(dst, uint8(rec.Schema[i].Type))
-	}
-
-	// ColVal
-	for i := range rec.ColVals {
-		dst = c.EncodeColVal(&rec.ColVals[i], dst)
-	}
-	return dst
-}
-
-func (c *WalRecordCodec) Decode(rec *record.Record, buf []byte) error {
-	var err error
-	dec := codec.NewBinaryDecoder(buf)
-
-	fieldLen, ok := dec.Uvarint()
-	if !ok {
-		return fmt.Errorf("invalid field length")
-	}
-	rec.ReserveSchemaAndColVal(int(fieldLen))
-
-	for i := range fieldLen {
-		if dec.RemainSize() < 3 {
-			return fmt.Errorf("invalid field length")
-		}
-		idx := dec.Uint16()
-		rec.Schema[i].Name = c.getValue(int(idx))
-		rec.Schema[i].Type = int(dec.Uint8())
-	}
-
-	for i := range fieldLen {
-		if err = c.DecodeColVal(dec, rec.Schema[i].Type, &rec.ColVals[i]); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (c *WalRecordCodec) EncodeColVal(cv *record.ColVal, dst []byte) []byte {
-	dst = binary.AppendUvarint(dst, uint64(cv.Len))
-	dst = binary.AppendUvarint(dst, uint64(cv.NilCount))
-
-	if cv.NilCount > 0 {
-		// bitmap does not need to be serialized if there is no null value
-		dst = codec.AppendBytes(dst, cv.Bitmap)
-	}
-
-	dst = codec.AppendBytes(dst, cv.Val)
-	if len(cv.Offset) > 0 {
-		// offset does not need to be serialized for non-string types
-		dst = codec.AppendUint32Slice(dst, cv.Offset)
-	}
-	return dst
-}
-
-func (c *WalRecordCodec) DecodeColVal(dec *codec.BinaryDecoder, typ int, dst *record.ColVal) error {
-	var ok bool
-	var u uint64
-
-	u, ok = dec.Uvarint()
-	if !ok {
-		return errno.NewError(errno.TooSmallOrOverflow, "ColVal.Len")
-	}
-	dst.Len = int(u)
-
-	u, ok = dec.Uvarint()
-	if !ok {
-		return errno.NewError(errno.TooSmallOrOverflow, "ColVal.NilCount")
-	}
-	dst.NilCount = int(u)
-
-	if dst.NilCount > 0 {
-		dst.Bitmap = dec.Bytes()
-	} else {
-		var fill uint8 = 0xFF
-		if dst.NilCount == dst.Len {
-			fill = 0
-		}
-		dst.FillBitmap(fill)
-	}
-
-	dst.Val = dec.BytesNoCopy()
-
-	if typ == influx.Field_Type_String {
-		if dec.RemainSize() < util.Uint32SizeBytes {
-			return errno.NewError(errno.TooSmallData, "ColVal.Offset", util.Uint32SizeBytes, dec.RemainSize())
-		}
-		size := int(dec.Uint32()) * util.Uint32SizeBytes
-
-		if dec.RemainSize() < size {
-			return errno.NewError(errno.TooSmallData, "ColVal.Offset", size, dec.RemainSize())
-		}
-
-		buf := dec.BytesNoCopyN(size)
-		ofs := util.Bytes2Uint32Slice(buf)
-		dst.Offset = ofs
-	}
-	return nil
-}
-
 type WalFile struct {
 	name string
 	lock *string
 
 	fd          fileops.File
 	reader      io.ReaderAt
-	writer      WriterFlusher
+	writer      *bufio.Writer
 	writtenSize int64
 	syncedSize  int64
 }
@@ -613,7 +449,7 @@ func (wf *WalFile) Open(flag int) error {
 
 	wf.fd = fd
 	wf.reader = fd
-	wf.writer = bufio.NewWriterSize(fd, fileops.DefaultWriterBufferSize)
+	wf.writer = bufio.NewWriterSize(fd, walBufferSize)
 	return nil
 }
 
@@ -646,6 +482,9 @@ func (wf *WalFile) Write(b []byte) (int, error) {
 }
 
 func (wf *WalFile) Flush() error {
+	if wf.writer.Size() == 0 {
+		return nil
+	}
 	defer statistics.MicroTimeUse(stat.DiskFlushCount, stat.DiskFlushDurSum)()
 
 	return wf.writer.Flush()

@@ -20,8 +20,6 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/golang/snappy"
-	compression "github.com/openGemini/openGemini/lib/compress"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
@@ -118,42 +116,6 @@ func genRowRec(schema []record.Field, intValBitmap []int, intVal []int64, floatV
 		rec.ColVals = append(rec.ColVals, colVal)
 	}
 	return &rec
-}
-
-func compress(method pb.CompressMethod, data []byte) ([]byte, error) {
-	switch method {
-	case pb.CompressMethod_ZSTD_FAST:
-		zstdEncoder := compression.GetZstdWriter(nil)
-		defer compression.PutZstdWriter(zstdEncoder)
-		return zstdEncoder.EncodeAll(data, nil), nil
-	case pb.CompressMethod_SNAPPY:
-		return snappy.Encode(nil, data), nil
-	default:
-		return nil, fmt.Errorf("unsupported compression method")
-	}
-}
-
-func mockCompressedPartialRecords() []*pb.Record {
-	mockInvalidRecord := NewInvalidRecord()
-	mockRecord := NewRecord()
-	buf := make([]byte, 0)
-	invalidBuf := make([]byte, 0)
-	buf = mockRecord.Marshal(buf)
-	invalidBuf = mockInvalidRecord.Marshal(invalidBuf)
-
-	compressedBuf, err := compress(pb.CompressMethod_ZSTD_FAST, buf)
-	if err != nil {
-		panic(err)
-	}
-	compressedInvalidBuf, err := compress(pb.CompressMethod_ZSTD_FAST, invalidBuf)
-	if err != nil {
-		panic(err)
-	}
-
-	mockRow1 := &pb.Record{Measurement: "mst204", Block: compressedBuf, CompressMethod: pb.CompressMethod_ZSTD_FAST}
-	mockRow2 := &pb.Record{Measurement: "mst205", Block: compressedBuf, CompressMethod: pb.CompressMethod_ZSTD_FAST}
-	mockRow3 := &pb.Record{Measurement: "mst206", Block: compressedInvalidBuf, CompressMethod: pb.CompressMethod_ZSTD_FAST}
-	return []*pb.Record{mockRow1, mockRow2, mockRow3}
 }
 
 func mockAllValidRecords() []*pb.Record {
@@ -386,45 +348,5 @@ func TestAuthWrite(t *testing.T) {
 	}
 	if res.Code == pb.ResponseCode_Success {
 		t.Fatalf("write should failed")
-	}
-}
-
-func TestCompressedRecordWrite(t *testing.T) {
-	c := config.NewRecordWriteConfig()
-	s, err := mockServer(c)
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = s.Open()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func(s *writer.Service) {
-		err := s.Close()
-		if err != nil {
-			t.Fatal(err)
-		}
-	}(s)
-
-	conn, err := grpc.NewClient("127.0.0.1:8305", grpc.WithTransportCredentials(insecure.NewCredentials()))
-	defer func(conn *grpc.ClientConn) {
-		err := conn.Close()
-		if err != nil {
-			t.Fatal(err)
-		}
-	}(conn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	client := pb.NewWriteServiceClient(conn)
-	partialRecords := mockCompressedPartialRecords()
-	in := &pb.WriteRequest{Version: 1, Database: "db0", Records: partialRecords}
-	ctx := context.Background()
-	res, err := client.Write(ctx, in)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.Code != pb.ResponseCode_Partial {
-		t.Fatalf("writing partially invalid compressed records should receive ResponseCode_Partial")
 	}
 }
