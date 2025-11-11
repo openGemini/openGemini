@@ -7,6 +7,7 @@
 ![language](https://img.shields.io/badge/语言-Go-blue.svg)
 ![codeCov](https://img.shields.io/codecov/c/gh/openGemini/openGemini)
 [![release](https://img.shields.io/github/v/tag/opengemini/opengemini?label=发布版本&color=blue)](https://github.com/opengemini/opengemini/releases)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/openGemini/openGemini)
 
 [English](README.md) | 简体中文
 
