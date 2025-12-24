@@ -92,6 +92,7 @@ type Config struct {
 	CPUThreshold            int               `toml:"cpu-threshold"`
 	MaxLineSize             int               `toml:"max-line-size"`
 	ResultCache             ResultCacheConfig `toml:"result-cache"`
+	QueryStatEnabled        bool              `toml:"query-stat-enabled"`
 }
 
 func CombineDomain(domain, addr string) string {

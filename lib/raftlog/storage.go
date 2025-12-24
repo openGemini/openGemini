@@ -32,7 +32,7 @@ import (
 )
 
 const (
-	raftEntriesDir    = "__raft_entries__"
+	RaftEntriesDir    = "__raft_entries__"
 	allEntriesMaxSize = 64 << 20
 )
 
@@ -53,7 +53,7 @@ type RaftDiskStorage struct {
 
 // Init initializes an instance of DiskStorage.
 func Init(dir string, SyncInterval time.Duration) (*RaftDiskStorage, error) {
-	dir = filepath.Join(dir, raftEntriesDir)
+	dir = filepath.Join(dir, RaftEntriesDir)
 	rds := &RaftDiskStorage{
 		dir:          dir,
 		logger:       logger.NewLogger(errno.ModuleStorageEngine),
@@ -174,6 +174,10 @@ func (rds *RaftDiskStorage) NumEntries() int {
 		count += len(ents)
 		start = ents[len(ents)-1].Index + 1
 	}
+}
+
+func (rds *RaftDiskStorage) GetDir() string {
+	return rds.dir
 }
 
 // Entries returns a slice of log entries in the range [lo,hi).

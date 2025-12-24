@@ -396,7 +396,7 @@ func (r *UnorderedReader) MatchMaxTime(maxTime int64) int64 {
 		return maxTime
 	}
 
-	return min(r.times[n], maxTime)
+	return min(r.times[n-1], maxTime)
 }
 
 // Read reads data based on the series ID, column, and time range

@@ -908,13 +908,20 @@ func (h *Handler) execQuery(w ResponseWriter, r *http.Request, user meta2.User, 
 	// and knows the query was accepted.
 
 	// pull all results from the channel
+	rowNum := 0
 	for result := range resultCh {
 		// Ignore nil results.
 		if result == nil {
 			continue
 		}
+		rowNum = h.getResultRowsCnt(result, rowNum)
 		if !h.updateStmtId2Result(result, stmtID2Result) {
 			continue
+		}
+		// Drop out of this loop and do not process further results when we hit the row limit.
+		if h.Config.MaxRowLimit > 0 && rowNum >= h.Config.MaxRowLimit {
+			result.Partial = false
+			break
 		}
 	}
 

@@ -323,7 +323,8 @@ func TestSendBackupToMetaProcess(t *testing.T) {
 			Param: testcase.Param,
 		})
 		h := New(msg.Type())
-		h.InitHandler(mockStore, nil, nil)
+		h.InitHandler(mockStore, &config.Meta{Dir: "/meta"}, nil)
+
 		var err error
 		if err = h.SetRequestMsg(msg.Data()); err != nil {
 			t.Fatal(err)

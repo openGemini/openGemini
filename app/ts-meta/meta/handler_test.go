@@ -106,7 +106,7 @@ func TestRecoverDatabase(t *testing.T) {
 		DataDir:            "/tmp/openGemini/backup_dir/data",
 	}
 
-	result := backup.BackupResult{Result: "success", DataBases: map[string]struct{}{"prom": {}}}
+	result := backup.BackupResult{Result: "success", Databases: map[string]struct{}{"prom": {}}}
 	b, _ := json.Marshal(result)
 	_ = backup.WriteBackupLogFile(b, fullBackupPath, backup.ResultLog)
 	_ = backup.WriteBackupLogFile(b, incBackupPath, backup.ResultLog)

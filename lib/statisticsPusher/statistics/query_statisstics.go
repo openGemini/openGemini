@@ -50,7 +50,7 @@ func (s *QueryInfoStatistics) AddQueryInfo(q string, d int64, db string) {
 		}
 		queryInfo.UpdateAvgDuration()
 	} else {
-		m[q] = &QueryInfo{QueryCount: 1, AvgDuration: d, MinDuration: d, MaxDuration: d, DB: db}
+		m[q] = &QueryInfo{QueryCount: 1, AvgDuration: d, MinDuration: d, MaxDuration: d, SumDuration: d, DB: db}
 	}
 }
 

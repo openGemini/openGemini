@@ -25,8 +25,11 @@ import (
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/engine/index/tsi"
+	"github.com/openGemini/openGemini/lib/backup"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/metaclient"
+	"github.com/openGemini/openGemini/lib/raftconn"
+	"github.com/openGemini/openGemini/lib/raftlog"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 )
@@ -242,6 +245,10 @@ func CreateEngine(mode int) *engine.EngineImpl {
 	dbPtInfo.AddShard(12, &mockShard{mode: mode})
 	dbPtInfo.AddShard(13, &mockShard{mode: mode})
 	dbPtInfo.AddShard(14, &mockShard{mode: mode})
+	raftStore, _ := raftlog.Init("/tmp/openGemini/backup_dir/data/wal/db0/0/__raft_entries__", 0)
+	dbPtInfo.SetNode(&raftconn.RaftNode{
+		Store: raftStore,
+	})
 
 	e := &engine.EngineImpl{
 		DBPartitions: map[string]map[uint32]*engine.DBPTInfo{
@@ -356,6 +363,7 @@ func TestRecover(t *testing.T) {
 		Force:              true,
 		DataDir:            "/tmp/openGemini/backup_dir/data",
 	}
+	_ = os.MkdirAll(filepath.Join(fullBackupPath, backup.WalBackupDir, "wal"), 0700)
 
 	if err := recoverConfig.BackupRecover(); err != nil {
 		t.Fatal(err)
@@ -400,6 +408,7 @@ func TestRecover2(t *testing.T) {
 		Force:              true,
 		DataDir:            "/tmp/openGemini/backup_dir/data",
 	}
+	_ = os.MkdirAll(filepath.Join(incBackupPath, backup.WalBackupDir, "wal"), 0700)
 
 	if err := r.BackupRecover(); err != nil {
 		t.Fatal(err)

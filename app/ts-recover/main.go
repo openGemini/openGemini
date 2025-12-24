@@ -15,7 +15,6 @@
 package main
 
 import (
-	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -28,7 +27,7 @@ const TsRecover = "ts-recover"
 
 func main() {
 	if err := doRun(os.Args[1:]...); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintln(os.Stderr, fmt.Errorf(" Error: %w", err))
 		os.Exit(1)
 	}
 }
@@ -52,7 +51,8 @@ func ParseFlags(args ...string) (recover.RecoverOptions, error) {
 	var configPath string
 	fs := flag.NewFlagSet(TsRecover, flag.ExitOnError)
 	fs.StringVar(&options.DataDir, "dataDir", "", "openGemini data dir")
-	fs.StringVar(&options.RecoverMode, "recoverMode", "1", "recover mode 1-full and inc recover 2- full recover")
+	fs.StringVar(&options.MetaDir, "metaDir", "", "openGemini meta dir")
+	fs.StringVar(&options.RecoverMode, "recoverMode", "1", "recover mode: 1-full and inc recover, 2- full recover, 3- recover meta 4- rewrite path")
 	fs.StringVar(&options.FullBackupDataPath, "fullBackupDataPath", "", "full backup file path")
 	fs.StringVar(&options.IncBackupDataPath, "incBackupDataPath", "", "inc backup file path")
 	fs.BoolVar(&options.SSL, "ssl", false, "use https for connecting to openGemini.")
@@ -60,7 +60,8 @@ func ParseFlags(args ...string) (recover.RecoverOptions, error) {
 	fs.BoolVar(&options.Force, "force", false, "force recover data file")
 	fs.StringVar(&options.Host, "host", "127.0.0.1:8091", "meta node host")
 	fs.StringVar(&configPath, "config", "", "config file path")
-	fs.BoolVar(&options.OnlyRecoverMeta, "onlyRecoverMeta", false, "only recover meta")
+	fs.Uint64Var(&options.SrcNode, "srcNode", 0, "srcNode ID")
+	fs.Uint64Var(&options.DstNode, "dstNode", 0, "dstNode ID")
 	if err := fs.Parse(args); err != nil {
 		return recover.RecoverOptions{}, err
 	}
@@ -77,8 +78,5 @@ func ParseFlags(args ...string) (recover.RecoverOptions, error) {
 		}
 	}
 
-	if options.DataDir == "" {
-		return options, errors.New("missing required parameter: dataDir")
-	}
 	return options, nil
 }

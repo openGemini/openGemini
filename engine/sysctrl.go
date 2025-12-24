@@ -17,8 +17,6 @@ package engine
 import (
 	"fmt"
 	log2 "log"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -310,9 +308,6 @@ func (e *EngineImpl) processBackup(req *msgservice.SysCtrlRequest) {
 	backupPath := params[backup.BackupPath]
 	if backupPath == "" {
 		log.Error("backup: invalid parameter", zap.String("backupPath", backupPath))
-	}
-	if _, err := os.Stat(filepath.Join(backupPath, backup.DataBackupDir)); err == nil {
-		return
 	}
 	DB := make([]string, 0)
 	isRemote := params[backup.IsRemote] == "true"

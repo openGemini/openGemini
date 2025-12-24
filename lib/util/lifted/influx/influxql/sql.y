@@ -196,7 +196,7 @@ func depthCheck(yylex interface{}, depth int) int {
                                     SHOW_LAST_INDEX_STATEMENT
 %type <fields>                      COLUMN_CLAUSES DOWNSAMPLE_CALLS
 %type <field>                       COLUMN_CLAUSE DOWNSAMPLE_CALL
-%type <query>                       ALL_QUERIES ALL_QUERY
+%type <query>                       ALL_QUERIES ALL_QUERY SELECT_STATEMENT_LIST
 %type <sources>                     FROM_CLAUSE FROM_LIST FROM_SOURCE SUBQUERY_CLAUSE INTO_CLAUSE JOIN_CLAUSE
 %type <joinType>                    JOIN_TYPE
 %type <unionType>                   UNION_TYPE
@@ -213,7 +213,7 @@ func depthCheck(yylex interface{}, depth int) int {
 %type <intSlice>                    OPTION_CLAUSES LIMIT_OFFSET_OPTION SLIMIT_SOFFSET_OPTION
 %type <inter>                       FILL_CLAUSE FILLCONTENT
 %type <durations>                   SHARD_HOT_WARM_INDEX_DURATIONS SHARD_HOT_WARM_INDEX_DURATION CREAT_DATABASE_POLICY  CREAT_DATABASE_POLICYS
-%type <str>                         REGULAR_EXPRESSION TAG_KEY ON_DATABASE TYPE_CLAUSE SHARD_KEY STRING_TYPE MEASUREMENT_INFO SUBSCRIPTION_TYPE COMPACTION_TYPE_CLAUSE
+%type <str>                         REGULAR_EXPRESSION TAG_KEY ON_DATABASE TYPE_CLAUSE SHARD_KEY STRING_TYPE MEASUREMENT_INFO SUBSCRIPTION_TYPE COMPACTION_TYPE_CLAUSE SEMICOLON_OPT
 %type <strSlice>                    SHARDKEYLIST CMOPTION_SHARDKEY INDEX_LIST PRIMARYKEY_LIST SORTKEY_LIST ALL_DESTINATION CMOPTION_PRIMARYKEY CMOPTION_SORTKEY
 %type <strSlices>                   MEASUREMENT_PROPERTYS MEASUREMENT_PROPERTY MEASUREMENT_PROPERTYS_LIST CMOPTION_PROPERTIES
 %type <location>                    TIME_ZONE
@@ -523,6 +523,35 @@ STATEMENT:
     | SHOW_LAST_INDEX_STATEMENT
     {
         $$ = $1
+    }
+
+SEMICOLON_OPT:
+    {
+        $$ = ""
+    }
+    | SEMICOLON
+    {
+        $$ = ""
+    }
+
+SELECT_STATEMENT_LIST:
+    SELECT_STATEMENT SEMICOLON SELECT_STATEMENT SEMICOLON_OPT
+    {
+        $$ = Query {
+            Statements: []Statement{$1, $3},
+            depth: depthCheck(yylex, 2 + $1.Depth() + $3.Depth()),
+        }
+    }
+    | SELECT_STATEMENT SEMICOLON SELECT_STATEMENT_LIST
+    {
+        q := $3
+        q.Statements = append(q.Statements, $1)
+        q.depth = depthCheck(yylex, max(q.depth, len(q.Statements) + $1.Depth()))
+        $$ = q
+    }
+    | LPAREN SELECT_STATEMENT_LIST RPAREN
+    {
+        $$ = $2
     }
 
 SELECT_STATEMENT:
@@ -1228,6 +1257,19 @@ SUBQUERY_CLAUSE:
         }
         subquery := &SubQuery{Statement: stmt, depth: depthCheck(yylex, 1+stmt.Depth())}
         $$ = sourcesList{sources:[]Source{subquery}, depth: depthCheck(yylex, 1 + subquery.depth)}
+    }
+    | LPAREN SELECT_STATEMENT_LIST RPAREN
+    {
+        subQueries := sourcesList{sources: []Source{}, depth: depthCheck(yylex, $2.depth)}
+        for _, tempStmt := range $2.Statements {
+            stmt, ok:= tempStmt.(*SelectStatement)
+            if !ok {
+                yylex.Error("subquery's source expected SelectStatement")
+            }
+            subQuery := &SubQuery{Statement: stmt, depth: depthCheck(yylex, 1 + stmt.Depth())}
+            subQueries.sources = append(subQueries.sources, subQuery)
+        }
+        $$ = subQueries
     }
 
 TABLE_NAME_WITH_OPTION:

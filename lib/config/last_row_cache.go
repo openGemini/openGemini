@@ -27,7 +27,7 @@ type LastRowCacheConfig struct {
 
 func NewLastRowCacheConfig() *LastRowCacheConfig {
 	return &LastRowCacheConfig{
-		CacheEnabled: true,
+		CacheEnabled: false,
 		NumCounters:  1 << 19, // number of keys to track frequency of, 10x than max cost
 		MaxCost:      1 << 16, // maximum cost of cache
 		BufferItems:  64,

@@ -591,6 +591,7 @@ func (h *httpHandler) backupMeta(w http.ResponseWriter, r *http.Request) {
 		IsNode:     isNode,
 		BackupPath: backupPath,
 		Databases:  dbs,
+		MetaDir:    h.config.Dir,
 	}
 	if err := b.RunBackupMeta(); err != nil {
 		logger.GetLogger().Error("run backup error", zap.Error(err))

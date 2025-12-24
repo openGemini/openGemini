@@ -28,16 +28,22 @@ type Backup struct {
 	time       int64
 	IsRemote   bool
 	IsNode     bool
+	BackupMeta bool
 	BackupPath string
 	Databases  []string
+	MetaDir    string
 }
 
 func (s *Backup) RunBackupMeta() error {
+	dstPath := filepath.Join(s.BackupPath, backup.MetaBackupDir)
+	if err := fileops.MkdirAll(dstPath, 0700); err != nil {
+		return err
+	}
 	s.time = time.Now().UnixNano()
 	if globalService == nil || globalService.store == nil {
 		return fmt.Errorf("meta global service is nil")
 	}
-	if !globalService.store.IsLeader() {
+	if !globalService.store.IsLeader() && !s.BackupMeta {
 		return nil
 	}
 
@@ -46,17 +52,19 @@ func (s *Backup) RunBackupMeta() error {
 	if err = globalService.store.raft.UserSnapshot(); err != nil {
 		return err
 	}
-	dstPath := filepath.Join(s.BackupPath, backup.MetaBackupDir)
 
+	err = s.BackupMetaInfo(dstPath)
+	if err != nil {
+		return err
+	}
 	if len(s.Databases) == 0 {
 		// if we need to backup all database,just back up all meta files
 		err = s.BackupMetaFile(dstPath)
-	} else {
-		// if backed up some databases, the meta info needs to be recorded, and the database can be restored through the meta info.
-		err = s.BackupMetaInfo(dstPath)
 	}
-
-	return err
+	if err != nil {
+		return err
+	}
+	return s.writeLogInfo()
 }
 
 func (s *Backup) BackupMetaFile(dstPath string) error {
@@ -78,4 +86,18 @@ func (s *Backup) BackupMetaInfo(dstPath string) error {
 	err = os.WriteFile(fName, info, 0640)
 
 	return err
+}
+
+func (s *Backup) writeLogInfo() error {
+	logInfo := &backup.BackupResult{
+		MetaDir: s.MetaDir,
+	}
+
+	dbMap := make(map[string]struct{})
+	for _, dbName := range s.Databases {
+		dbMap[dbName] = struct{}{}
+	}
+	logInfo.Databases = dbMap
+
+	return backup.WriteResultFile(logInfo, s.BackupPath, backup.ResultLog)
 }

@@ -155,11 +155,12 @@ func (e *EngineImpl) DropRetentionPolicy(db string, rp string, ptId uint32) erro
 		}
 		return nil
 	}
-	dbPt, err := e.getPartition(db, ptId, false)
+	dbPt, err := e.getPartition(db, ptId, true)
 	if err != nil {
 		atomic.AddInt64(&stat.EngineStat.DropRPErrs, 1)
 		return err
 	}
+	defer func() { dbPt.unref() }()
 
 	rpName := db + "." + rp
 	if err := e.startDropRP(rpName, dbPt); err != nil {

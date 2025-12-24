@@ -6484,6 +6484,69 @@ func TestServer_Query_SubqueryWithGroupBy(t *testing.T) {
 	}
 }
 
+func TestServer_Query_SubqueryWithSemicolo(t *testing.T) {
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		fmt.Sprintf(`mst,metric_name=cpu_usage,instance_id=5ec21 value=1i,unit=16i %d`, mustParseTime(time.RFC3339Nano, "2025-12-16T00:00:00Z").UnixNano()),
+		fmt.Sprintf(`mst,metric_name=cpu_usage,instance_id=5ec21 value=2i,unit=14i %d`, mustParseTime(time.RFC3339Nano, "2025-12-16T00:00:01Z").UnixNano()),
+		fmt.Sprintf(`mst,metric_name=cpu_usage,instance_id=5ec21 value=3i,unit=12i %d`, mustParseTime(time.RFC3339Nano, "2025-12-16T00:00:02Z").UnixNano()),
+		fmt.Sprintf(`mst,metric_name=cpu_usage,instance_id=5ec21 value=4i,unit=10i %d`, mustParseTime(time.RFC3339Nano, "2025-12-16T00:00:03Z").UnixNano()),
+		fmt.Sprintf(`mst,metric_name=cpu_usage,instance_id=5ec22 value=5i,unit=8i %d`, mustParseTime(time.RFC3339Nano, "2025-12-16T00:00:00Z").UnixNano()),
+		fmt.Sprintf(`mst,metric_name=cpu_usage,instance_id=5ec22 value=6i,unit=6i %d`, mustParseTime(time.RFC3339Nano, "2025-12-16T00:00:01Z").UnixNano()),
+		fmt.Sprintf(`mst,metric_name=cpu_usage,instance_id=5ec22 value=7i,unit=4i %d`, mustParseTime(time.RFC3339Nano, "2025-12-16T00:00:02Z").UnixNano()),
+		fmt.Sprintf(`mst,metric_name=cpu_usage,instance_id=5ec22 value=8i,unit=2i %d`, mustParseTime(time.RFC3339Nano, "2025-12-16T00:00:03Z").UnixNano()),
+	}
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	test.addQueries([]*Query{
+		{
+			name:    "select subquery with semicolo",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `select * from(select * from mst WHERE time = '2025-12-16T00:00:00Z';select * from mst WHERE time = '2025-12-16T00:00:03Z')`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","columns":["time","instance_id","metric_name","unit","value"],"values":[["2025-12-16T00:00:00Z","5ec21","cpu_usage",16,1],["2025-12-16T00:00:00Z","5ec22","cpu_usage",8,5],["2025-12-16T00:00:03Z","5ec21","cpu_usage",10,4],["2025-12-16T00:00:03Z","5ec22","cpu_usage",2,8]]}]}]}`,
+		},
+		{
+			name:    "select subquery with groupby_semicolo1",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `SELECT mean(value),mean(unit) FROM (SELECT mean(value) as value,mean(unit) as unit FROM mst WHERE instance_id='5ec21' GROUP BY time(2s), instance_id fill(none);SELECT mean(value) as value,mean(unit) as unit FROM mst WHERE instance_id='5ec22' GROUP BY time(2s), instance_id fill(none)) GROUP BY time(2s), metric_name fill(none)`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","tags":{"metric_name":"cpu_usage"},"columns":["time","mean","mean_1"],"values":[["2025-12-16T00:00:00Z",3.5,11],["2025-12-16T00:00:02Z",5.5,7]]}]}]}`,
+		},
+		{
+			name:    "select subquery with groupby_semicolo2",
+			params:  url.Values{"db": []string{"db0"}},
+			command: `SELECT mean(value),last(unit) as vallast FROM (SELECT min(value) as value,last(unit) as unit FROM mst WHERE instance_id='5ec21' GROUP BY time(2s), instance_id fill(none);SELECT min(value) as value,last(unit) as unit FROM mst WHERE instance_id='5ec22' GROUP BY time(2s), instance_id fill(none)) GROUP BY time(2s), metric_name fill(none)`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"mst","tags":{"metric_name":"cpu_usage"},"columns":["time","mean","vallast"],"values":[["2025-12-16T00:00:00Z",3,14],["2025-12-16T00:00:02Z",5,10]]}]}]}`,
+		},
+	}...)
+
+	for i, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if i == 0 {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
+			}
+			if query.skip {
+				t.Skipf("SKIP:: %s", query.name)
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}
+
 func TestServer_Query_SubqueryForLogicalOptimize(t *testing.T) {
 	t.Parallel()
 	s := OpenServer(NewParseConfig(testCfgPath))

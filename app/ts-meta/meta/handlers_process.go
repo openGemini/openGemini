@@ -510,8 +510,9 @@ func handleBackup(h *SendBackupToMeta) error {
 	if backupPath == "" {
 		return errors.New("missing the required parameter backupPath")
 	}
-	isRemote := h.req.Param[backup.IsRemote] == "true"
-	isNode := h.req.Param[backup.IsNode] == "true"
+	isRemote := strings.ToLower(h.req.Param[backup.IsRemote]) == "true"
+	isNode := strings.ToLower(h.req.Param[backup.IsNode]) == "true"
+	backupMeta := strings.ToLower(h.req.Param[backup.BackupMeta]) == "true"
 	var dbs []string
 	if _, ok := h.req.Param[backup.DataBases]; ok {
 		dbs = strings.Split(h.req.Param[backup.DataBases], ",")
@@ -521,7 +522,9 @@ func handleBackup(h *SendBackupToMeta) error {
 		IsRemote:   isRemote,
 		IsNode:     isNode,
 		BackupPath: backupPath,
+		BackupMeta: backupMeta,
 		Databases:  dbs,
+		MetaDir:    h.config.Dir,
 	}
 	if err := b.RunBackupMeta(); err != nil {
 		logger.GetLogger().Error("run backup error", zap.Error(err))

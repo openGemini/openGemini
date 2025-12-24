@@ -128,6 +128,9 @@ func init() {
 		"select * from db where a>0 tz('UTC')",                       //add time zone
 		"drop measurement m1",                                        //drop measurement
 		"select * from (select * from t1),(select * from t2)",
+		"select * from (select * from t1;select * from t2)",
+		"select * from ((select * from t1);(select * from t2))",
+		"select * from (select * from t1;select * from t2;)",
 		"alter measurement tb1",                 //alter measurement
 		"alter measurement m1 with shards AUTO", //alter measurement with default shards num
 		"alter measurement m1 with shards 2",    //alter measurement with shards num 2

@@ -63,7 +63,12 @@ func (s *Backup) RunBackupData() error {
 	ch := make(chan struct{})
 	var wg sync.WaitGroup
 
-	result := &backup.BackupResult{Result: "backup success", Time: s.time, DataBases: make(map[string]struct{})}
+	result := &backup.BackupResult{
+		Result: "backup success",
+		Time:   s.time, Databases: make(map[string]struct{}),
+		DataDir: s.Engine.dataPath,
+		WalDir:  s.Engine.walPath,
+	}
 	wg.Add(1)
 	go execTicker(ch, s.BackupPath, &wg)
 	defer func() {
@@ -77,11 +82,8 @@ func (s *Backup) RunBackupData() error {
 		} else {
 			s.Status = Success
 		}
-		b, err := json.Marshal(result)
-		if err != nil {
-			log.Error(err.Error())
-		}
-		if err = backup.WriteBackupLogFile(b, s.BackupPath, backup.ResultLog); err != nil {
+
+		if err := backup.WriteResultFile(result, s.BackupPath, backup.ResultLog); err != nil {
 			log.Error(err.Error())
 		}
 	}()
@@ -109,7 +111,7 @@ func (s *Backup) RunBackupData() error {
 				return err
 			}
 		}
-		result.DataBases = dbMap
+		result.Databases = dbMap
 	}
 
 	return nil
@@ -133,7 +135,11 @@ func (s *Backup) BackupPt(dbName string, ptId uint32) error {
 	if err != nil {
 		return err
 	}
-	defer p.unref()
+	p.mu.RLock()
+	defer func() {
+		p.unref()
+		p.mu.RUnlock()
+	}()
 
 	var peersPtIDMap map[uint32]*NodeInfo
 	if s.OnlyBackupMater && metaClient.DBRepGroups(dbName) != nil {
@@ -183,6 +189,20 @@ func (s *Backup) BackupPt(dbName string, ptId uint32) error {
 			return err
 		}
 	}
+
+	// backup wal
+	if p.node == nil {
+		return nil
+	}
+	walStorage := p.node.GetStorage().GetDir()
+	walDir, _ := filepath.Split(walStorage)
+	walBackupPath := filepath.Join(s.BackupPath, backup.WalBackupDir)
+	dstPath := filepath.Join(walBackupPath, walDir)
+	if err := backup.FolderCopy(walDir, dstPath); err != nil {
+		log.Error("backup wal file error", zap.Error(err))
+		return err
+	}
+
 	return nil
 }
 

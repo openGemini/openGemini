@@ -3,6 +3,7 @@ module github.com/openGemini/openGemini
 go 1.24
 
 require (
+	dario.cat/mergo v1.0.2
 	github.com/BurntSushi/toml v1.3.2
 	github.com/RoaringBitmap/roaring v1.9.4
 	github.com/VictoriaMetrics/VictoriaMetrics v1.102.1

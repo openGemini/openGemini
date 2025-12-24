@@ -25,6 +25,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/openGemini/openGemini/lib/backup"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
@@ -675,7 +676,10 @@ func ProcessBackup(req msgservice.SysCtrlRequest, resp *bufio.Writer, sqlHost []
 	}
 	wg.Wait()
 
-	backupMeta := params["backupMeta"] == "true"
+	backupMeta := params[backup.BackupMeta] == "true"
+	if params[backup.DataBases] == "" {
+		backupMeta = true
+	}
 	if !backupMeta {
 		return nil
 	}

@@ -1257,7 +1257,9 @@ func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.
 		qDuration = statistics.NewSqlSlowQueryStatistics(db)
 		defer func() {
 			d := time.Now().Sub(start)
-			statQueryInfo(q, d, db)
+			if h.SQLConfig.Monitor.StoreEnabled && h.Config.QueryStatEnabled {
+				statQueryInfo(q, d, db)
+			}
 			if d.Nanoseconds() > time.Second.Nanoseconds()*10 {
 				qDuration.AddDuration("TotalDuration", d.Nanoseconds())
 				statistics.AppendSqlQueryDuration(qDuration)
