@@ -109,6 +109,12 @@ type ShelfMode struct {
 	// number of background write threads. default value is CPUNum
 	Concurrent int `toml:"concurrent"`
 
+	// Limit the number of WAL files (waiting to be converted + being converted + being written)
+	// to prevent disk space from being fully occupied, which could cause node failure.
+	// It is not a strict constraint; the actual number may exceed this limit.
+	// Default value is concurrent*8
+	MaxNumOfWal int `toml:"max-num-of-wal"`
+
 	// by default, the table is grouped based on the hash value of the measurement name
 	// If this parameter is set to a value greater than 1,
 	// secondary grouping is performed based on the hash value of the series key
@@ -144,6 +150,7 @@ func (t *ShelfMode) Corrector(cpuNum int) {
 	ResetZero2Default(&t.Concurrent, 0, max(1, cpuNum/2))
 	ResetZero2Default(&t.TSSPConvertConcurrent, 0, max(1, cpuNum/8))
 	ResetZero2Default(&t.OneTSSPConvertConcurrent, 0, max(1, t.TSSPConvertConcurrent/4))
+	ResetZero2Default(&t.MaxNumOfWal, 0, max(1, t.Concurrent*8))
 	LimitRange(&t.ReliabilityLevel, ReliabilityLevelLow, ReliabilityLevelHigh, ReliabilityLevelMedium)
 }
 

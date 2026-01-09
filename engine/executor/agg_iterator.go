@@ -109,6 +109,11 @@ func (f *HeapItem[T]) append(input Chunk, start, end, ordinal int, values []T) {
 
 func (f *HeapItem[T]) appendForAuxFast(input Chunk, start, end, maxIndex int, values []T) {
 	// fast path
+	sortByTime := f.sortByTime
+	f.sortByTime = false
+	defer func() {
+		f.sortByTime = sortByTime
+	}()
 	for i := start; i < end; i++ {
 		p := NewPointItem(
 			input.TimeByIndex(i),
@@ -135,6 +140,11 @@ func (f *HeapItem[T]) appendForAuxFast(input Chunk, start, end, maxIndex int, va
 
 func (f *HeapItem[T]) appendForAuxSlow(input Chunk, start, end, ordinal, maxIndex int, values []T) {
 	// slow path
+	sortByTime := f.sortByTime
+	f.sortByTime = false
+	defer func() {
+		f.sortByTime = sortByTime
+	}()
 	for i := start; i < end; i++ {
 		if input.Column(ordinal).IsNilV2(i) {
 			continue

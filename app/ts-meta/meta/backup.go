@@ -22,6 +22,8 @@ import (
 
 	"github.com/openGemini/openGemini/lib/backup"
 	"github.com/openGemini/openGemini/lib/fileops"
+	"github.com/openGemini/openGemini/lib/logger"
+	"go.uber.org/zap"
 )
 
 type Backup struct {
@@ -36,6 +38,12 @@ type Backup struct {
 
 func (s *Backup) RunBackupMeta() error {
 	dstPath := filepath.Join(s.BackupPath, backup.MetaBackupDir)
+	defer func() {
+		err := s.writeLogInfo()
+		if err != nil {
+			logger.GetLogger().Error("writeLogInfo error", zap.Error(err))
+		}
+	}()
 	if err := fileops.MkdirAll(dstPath, 0700); err != nil {
 		return err
 	}
@@ -61,10 +69,7 @@ func (s *Backup) RunBackupMeta() error {
 		// if we need to backup all database,just back up all meta files
 		err = s.BackupMetaFile(dstPath)
 	}
-	if err != nil {
-		return err
-	}
-	return s.writeLogInfo()
+	return err
 }
 
 func (s *Backup) BackupMetaFile(dstPath string) error {

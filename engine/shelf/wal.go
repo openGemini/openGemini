@@ -169,6 +169,7 @@ func (wal *Wal) open() error {
 		return nil
 	}
 
+	IncrInuseWalCount()
 	begin := time.Now()
 	defer func() {
 		stat.WALFileOpenDurSum.AddSinceMicro(begin)
@@ -408,6 +409,8 @@ func (wal *Wal) Clean() {
 	if !wal.opened {
 		return
 	}
+
+	DecrInuseWalCount()
 	wal.MustClose()
 	lockOpt := fileops.FileLockOption(*wal.lock)
 	util.MustRun(func() error {

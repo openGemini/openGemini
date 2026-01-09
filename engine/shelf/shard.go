@@ -17,6 +17,7 @@ package shelf
 import (
 	"container/list"
 	"io/fs"
+	"math/rand/v2"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -40,7 +41,18 @@ import (
 )
 
 const DefaultShardFreeDuration = 600 // Second
-const backgroundSyncDuration = time.Millisecond * 100
+const minBackgroundSyncDuration = time.Millisecond * 120
+const maxBackgroundSyncDuration = time.Millisecond * 200
+
+var inuseWalCount atomic.Int64
+
+func IncrInuseWalCount() {
+	inuseWalCount.Add(1)
+}
+
+func DecrInuseWalCount() {
+	inuseWalCount.Add(-1)
+}
 
 type ShardInfo struct {
 	ident     *meta.ShardIdentifier
@@ -158,7 +170,10 @@ func (s *Shard) backgroundCreateIndex() {
 func (s *Shard) backgroundWalProcess() {
 	defer s.wg.Done()
 
-	util.TickerRun(backgroundSyncDuration, s.signal.C(), func() {
+	n := rand.Int64N(int64(maxBackgroundSyncDuration - minBackgroundSyncDuration))
+	dur := minBackgroundSyncDuration + time.Duration(n)
+
+	util.TickerRun(dur, s.signal.C(), func() {
 		s.SwitchWalIfNeeded()
 		s.wal.BackgroundSync()
 	}, func() {})

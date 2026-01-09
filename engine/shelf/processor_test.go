@@ -364,6 +364,25 @@ func TestIsUniqueSorted(t *testing.T) {
 	require.Equal(t, false, sorted)
 }
 
+func TestWriteLimited(t *testing.T) {
+	var assert = func(want bool) {
+		for range 100 {
+			shelf.IncrInuseWalCount()
+		}
+		shelf.UpdateWriteLimited()
+		require.Equal(t, want, shelf.IsWriteLimited())
+	}
+
+	conf := config.GetShelfMode()
+	conf.MaxNumOfWal = -1
+	initConfig(8)
+	assert(false)
+
+	conf.MaxNumOfWal = 10
+	initConfig(8)
+	assert(true)
+}
+
 type MockTSSP struct {
 	sequence uint64
 

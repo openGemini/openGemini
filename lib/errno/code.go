@@ -376,6 +376,7 @@ const (
 	TooManyFieldKeys               = 5045
 	ShardReadonly                  = 5055
 	MstOnBlacklist                 = 5056
+	ShelfWriteLimited              = 5057
 )
 
 // write interface

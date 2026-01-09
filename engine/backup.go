@@ -194,10 +194,18 @@ func (s *Backup) BackupPt(dbName string, ptId uint32) error {
 	if p.node == nil {
 		return nil
 	}
-	walStorage := p.node.GetStorage().GetDir()
+	storage := p.node.GetStorage()
+	entryLog := storage.GetRaftEntryLog()
+	walStorage := storage.GetDir()
 	walDir, _ := filepath.Split(walStorage)
 	walBackupPath := filepath.Join(s.BackupPath, backup.WalBackupDir)
 	dstPath := filepath.Join(walBackupPath, walDir)
+	storage.Lock()
+	entryLog.FileRLock()
+	defer func() {
+		storage.UnLock()
+		entryLog.FileRUnLock()
+	}()
 	if err := backup.FolderCopy(walDir, dstPath); err != nil {
 		log.Error("backup wal file error", zap.Error(err))
 		return err

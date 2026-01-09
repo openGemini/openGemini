@@ -215,6 +215,9 @@ func (r *RecoverOptions) recoverWal(dbs []string, isInc bool) error {
 		backupPath = r.IncBackupDataPath
 	}
 	p := filepath.Join(backupPath, backup.WalBackupDir, r.WalDir)
+	if _, err := fileops.Stat(p); err != nil {
+		return nil
+	}
 	var fds []fs.FileInfo
 	var err error
 

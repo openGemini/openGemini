@@ -27,6 +27,7 @@ import (
 	"github.com/influxdata/influxdb/pkg/limiter"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
@@ -41,6 +42,33 @@ var runner *Runner
 var conf = config.GetShelfMode()
 var stat *statistics.Shelf
 var tsspConvertLimited limiter.Fixed
+var writeLimited bool
+var updateWriteLimitedOnce sync.Once
+
+func UpdateWriteLimited() {
+	if conf.MaxNumOfWal <= 0 {
+		return
+	}
+	writeLimited = int(inuseWalCount.Load()) > conf.MaxNumOfWal
+}
+
+func IsWriteLimited() bool {
+	if !writeLimited {
+		return false
+	}
+
+	const maxRetryNum = 10
+	const retryInterval = 100 * time.Millisecond
+
+	for range maxRetryNum {
+		time.Sleep(retryInterval)
+		if !writeLimited {
+			return false
+		}
+	}
+
+	return true
+}
 
 func AllocWalSeq() uint64 {
 	return atomic.AddUint64(&walSeq, 1)
@@ -56,6 +84,12 @@ func Open() {
 	runner = newRunner(conf.Concurrent)
 	initWalCtxPool()
 	tsspConvertLimited = limiter.NewFixed(conf.TSSPConvertConcurrent)
+	go updateWriteLimitedOnce.Do(func() {
+		ticker := time.NewTicker(time.Second)
+		for range ticker.C {
+			UpdateWriteLimited()
+		}
+	})
 }
 
 func NewRunner() *Runner {
@@ -271,6 +305,10 @@ func (p *Processor) process(blob *Blob) (err error) {
 			err = fmt.Errorf("recover: %s", e)
 		}
 	}()
+
+	if IsWriteLimited() {
+		return errno.NewError(errno.ShelfWriteLimited)
+	}
 
 	stat.ScheduleDurSum.Add(blob.MicroSince())
 	defer statistics.MicroTimeUse(stat.WriteCount, stat.WriteDurSum)()

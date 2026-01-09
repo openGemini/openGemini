@@ -409,3 +409,15 @@ func (rds *RaftDiskStorage) EntrySize() int {
 	}
 	return ret
 }
+
+func (rds *RaftDiskStorage) Lock() {
+	rds.lock.Lock()
+}
+
+func (rds *RaftDiskStorage) UnLock() {
+	rds.lock.Unlock()
+}
+
+func (rds *RaftDiskStorage) GetRaftEntryLog() *entryLog {
+	return rds.entryLog
+}

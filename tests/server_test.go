@@ -14937,3 +14937,94 @@ func TestServer_NoField_With_TablePrefix(t *testing.T) {
 		})
 	}
 }
+
+func TestServer_TopBottom_BugFix(t *testing.T) {
+	s := OpenServer(NewParseConfig(testCfgPath))
+	defer s.Close()
+
+	if err := s.CreateDatabaseAndRetentionPolicy("db0", NewRetentionPolicySpec("rp0", 1, 0), true); err != nil {
+		t.Fatal(err)
+	}
+
+	writes := []string{
+		`cpu,hostname=host_4187 usage_user=30 1762012800000000000`,
+		`cpu,hostname=host_4187 usage_user=20 1762012900000000000`,
+		`cpu,hostname=host_4187 usage_user=10 1762013000000000000`,
+		`cpu,hostname=host_4188 usage_user=30 1762012800000000000`,
+		`cpu,hostname=host_4188 usage_user=20 1762012900000000000`,
+		`cpu,hostname=host_4188 usage_user=10 1762013000000000000`,
+		`cpu,hostname=host_4189 usage_user=30 1762012800000000000`,
+		`cpu,hostname=host_4189 usage_user=20 1762012900000000000`,
+		`cpu,hostname=host_4189 usage_user=10 1762013000000000000`,
+		`cpu,hostname=host_4187 usage_user=30 1762012800000000000`,
+		`cpu,hostname=host_4187 usage_user=20 1762012900000000000`,
+		`cpu,hostname=host_4187 usage_user=10 1762013000000000000`,
+		`cpu,hostname=host_4188 usage_user=30 1762012800000000000`,
+		`cpu,hostname=host_4188 usage_user=20 1762012900000000000`,
+		`cpu,hostname=host_4188 usage_user=10 1762013000000000000`,
+		`cpu,hostname=host_4189 usage_user=30 1762012800000000000`,
+		`cpu,hostname=host_4189 usage_user=20 1762012900000000000`,
+		`cpu,hostname=host_4189 usage_user=10 1762013000000000000`,
+	}
+
+	test := NewTest("db0", "rp0")
+	test.writes = Writes{
+		&Write{data: strings.Join(writes, "\n")},
+	}
+
+	// #BUG2025122557738
+	test.addQueries([]*Query{
+		{
+			name:    "select top, aux with double group by",
+			params:  url.Values{"inner_chunk_size": []string{"3"}},
+			command: `select top(value, 2), hostname from (select sum(usage_user) as value from db0.rp0.cpu where time >= 1762012800000000000 and time <= 1762013000000000000 group by time(10s),hostname fill(none))`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","top","hostname"],"values":[["2025-11-01T16:00:00Z",30,"host_4188"],["2025-11-01T16:00:00Z",30,"host_4187"]]}]}]}`,
+		},
+		{
+			name:    "select top, aux with group by tag",
+			params:  url.Values{"inner_chunk_size": []string{"3"}},
+			command: `select top(value, 2), hostname from (select sum(usage_user) as value from db0.rp0.cpu where time >= 1762012800000000000 and time <= 1762013000000000000 group by hostname fill(none))`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","top","hostname"],"values":[["2025-11-01T16:00:00Z",60,"host_4187"],["2025-11-01T16:00:00Z",60,"host_4188"]]}]}]}`,
+		},
+		{
+			name:    "select top, aux with group by time",
+			params:  url.Values{"inner_chunk_size": []string{"3"}},
+			command: `select top(value, 2), hostname from (select sum(usage_user) as value from db0.rp0.cpu where time >= 1762012800000000000 and time <= 1762013000000000000 group by time(10s) fill(none))`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","top","hostname"],"values":[["2025-11-01T16:00:00Z",90,null],["2025-11-01T16:01:40Z",60,null]]}]}]}`,
+		},
+
+		{
+			name:    "select bottom, aux with double group by",
+			params:  url.Values{"inner_chunk_size": []string{"3"}},
+			command: `select bottom(value, 2), hostname from (select sum(usage_user) as value from db0.rp0.cpu where time >= 1762012800000000000 and time <= 1762013000000000000 group by time(10s),hostname fill(none))`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","bottom","hostname"],"values":[["2025-11-01T16:03:20Z",10,"host_4188"],["2025-11-01T16:03:20Z",10,"host_4187"]]}]}]}`,
+		},
+		{
+			name:    "select bottom, aux with group by tag",
+			params:  url.Values{"inner_chunk_size": []string{"3"}},
+			command: `select bottom(value, 2), hostname from (select sum(usage_user) as value from db0.rp0.cpu where time >= 1762012800000000000 and time <= 1762013000000000000 group by hostname fill(none))`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","bottom","hostname"],"values":[["2025-11-01T16:00:00Z",60,"host_4187"],["2025-11-01T16:00:00Z",60,"host_4188"]]}]}]}`,
+		},
+		{
+			name:    "select bottom, aux with group by time",
+			params:  url.Values{"inner_chunk_size": []string{"3"}},
+			command: `select bottom(value, 2), hostname from (select sum(usage_user) as value from db0.rp0.cpu where time >= 1762012800000000000 and time <= 1762013000000000000 group by time(10s) fill(none))`,
+			exp:     `{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","bottom","hostname"],"values":[["2025-11-01T16:01:40Z",60,null],["2025-11-01T16:03:20Z",30,null]]}]}]}`,
+		},
+	}...)
+
+	for i, query := range test.queries {
+		t.Run(query.name, func(t *testing.T) {
+			if i == 0 {
+				if err := test.init(s); err != nil {
+					t.Fatalf("test init failed: %s", err)
+				}
+			}
+			if err := query.Execute(s); err != nil {
+				t.Error(query.Error(err))
+			} else if !query.success() {
+				t.Error(query.failureMessage())
+			}
+		})
+	}
+}

@@ -109,6 +109,7 @@ var messageMap = map[Errno]*Message{
 	WriteDstStreamMstNotAllowed:    newWarnMessage("the stream destination measurement cannot be written. measurement name is %s", ModuleWrite),
 	ShardReadonly:                  newWarnMessage("shard is readonly status. db=%s, rp=%s, shard_id=%d", ModuleWrite),
 	MstOnBlacklist:                 newWarnMessage("measurement on blacklist. mst=%s", ModuleWrite),
+	ShelfWriteLimited:              newWarnMessage("data write limited", ModuleWrite),
 
 	// write interface error codes
 	InvalidLogDataType:              newWarnMessage("invalid log data type value", ModuleWriteInterface),
