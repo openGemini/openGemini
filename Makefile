@@ -1,0 +1,83 @@
+# Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#  http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+include Makefile.common
+
+.PHONY: go-build style-check gotest integration-test buildsucc static-check start-subscriber stop-subscriber
+
+default: gotest
+
+all: go-build buildsucc
+
+go-build:
+	@$(PYTHON) build.py --clean
+
+buildsucc:
+	@echo Build openGemini successfully!
+
+license-check:
+	@echo "run license check"
+	@for file in $(COPYRIGHT_GOFILE); \
+		do \
+  			cat $$file | grep -qsE $(COPYRIGHT_HEADER) || { echo $$file "has no license header" >> license-check.log; }; \
+	 	done
+	@if [ -f license-check.log ]; \
+  	then \
+		cat  license-check.log; \
+		rm -f license-check.log; \
+		exit 1; \
+	else \
+		echo "license check ok"; \
+		exit 0; \
+	fi
+
+go-version-check:
+	bash ./scripts/ci/go_version_check.sh
+
+style-check: install-goimports-reviser
+	bash ./scripts/ci/style_check.sh
+
+go-vet-check:
+	bash ./scripts/ci/go_vet.sh
+
+static-check: install-staticcheck
+	bash ./scripts/ci/static_check.sh
+
+go-generate: install-tmpl install-goyacc install-exhaustruct install-protoc install-protoc-gen-gogo install-protoc-gen-go install-msgp
+	bash ./scripts/ci/go_generate.sh
+
+golangci-lint-check: install-golangci-lint
+	bash ./scripts/ci/golangci_lint_check.sh
+
+gotest:
+	@echo "running gotest begin."
+	@index=0; for s in $(PACKAGES_OPEN_GEMINI_TESTS); do index=$$(($$index+1)); if ! $(GOTEST) -tags "failpoint" -failfast -short -v -count 1 -p 1 -timeout 10m -coverprofile coverage_$$index.txt -coverpkg ./... $$s; then $(FAILPOINT_DISABLE); exit 1; fi; done
+	@$(FAILPOINT_DISABLE)
+
+build-check:
+	@$(PYTHON) build.py --clean --platform windows --arch amd64
+	@$(PYTHON) build.py --clean --platform darwin --arch amd64
+	@$(PYTHON) build.py --clean --platform darwin --arch arm64
+	@$(PYTHON) build.py --clean --platform linux --arch arm64
+	@$(PYTHON) build.py --clean --platform linux --arch amd64
+
+integration-test:
+	@echo "running integration test begin."
+	@URL=http://127.0.0.1:8086 $(GOTEST) -mod=mod -test.parallel 1 -timeout 10m ./tests -v GOCACHE=off -args "normal"
+
+start-subscriber:
+	sed -i '/\[subscriber\]/{n;s/.*/enabled = true/;}' config/openGemini.conf
+
+stop-subscriber:
+	sed -i '/\[subscriber\]/{n;s/.*/  # enabled = false/;}' config/openGemini.conf

@@ -1,0 +1,15 @@
+{
+    "Name":"Stream",
+    "Measurement":"stream",
+    "Items":[
+        "StreamIn",
+        "StreamInNum",
+        "StreamFilterIn",
+        "StreamFilterInNum",
+        "StreamFilterOut",
+        "StreamFilterOutNum",
+        "StreamReplayInNum"
+    ],
+    "EnablePush":"Y",
+    "PushDuration":"Y"
+}

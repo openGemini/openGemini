@@ -1,0 +1,572 @@
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package handler
+
+import (
+	"context"
+	"errors"
+	"math"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/agiledragon/gomonkey/v2"
+	"github.com/openGemini/openGemini/app/ts-store/storage"
+	"github.com/openGemini/openGemini/app/ts-store/transport/query"
+	"github.com/openGemini/openGemini/engine/executor"
+	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/engine/lastrowcache"
+	"github.com/openGemini/openGemini/lib/cache"
+	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/metaclient"
+	"github.com/openGemini/openGemini/lib/msgservice"
+	"github.com/openGemini/openGemini/lib/obs"
+	"github.com/openGemini/openGemini/lib/resourceallocator"
+	"github.com/openGemini/openGemini/lib/spdy"
+	"github.com/openGemini/openGemini/lib/spdy/rpc"
+	"github.com/openGemini/openGemini/lib/spdy/transport"
+	"github.com/openGemini/openGemini/lib/util"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
+	qry "github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
+	"github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/require"
+)
+
+type MockStoreEngine struct {
+	readerCount int
+}
+
+func NewMockStoreEngine(readerCount int) *MockStoreEngine {
+	return &MockStoreEngine{
+		readerCount: readerCount,
+	}
+}
+
+func (s *MockStoreEngine) ClearRepCold(req *msgservice.SendClearEventsRequest) error {
+	return nil
+}
+
+func (s *MockStoreEngine) RefEngineDbPt(string, uint32) error {
+	return nil
+}
+
+func (s *MockStoreEngine) GetShardDownSampleLevel(db string, ptId uint32, shardID uint64) int {
+	return 0
+}
+
+func (s *MockStoreEngine) UnrefEngineDbPt(string, uint32) {
+
+}
+
+func (s *MockStoreEngine) ExecuteDelete(*msgservice.DeleteRequest) error {
+	return nil
+}
+
+func (s *MockStoreEngine) GetShardSplitPoints(db string, pt uint32, shardID uint64, idxes []int64) ([]string, error) {
+	return nil, nil
+}
+
+func (s *MockStoreEngine) SeriesCardinality(db string, ptIDs []uint32, measurements []string, condition influxql.Expr, tr influxql.TimeRange) ([]meta.MeasurementCardinalityInfo, error) {
+	return nil, nil
+}
+
+func (s *MockStoreEngine) SeriesExactCardinality(db string, ptIDs []uint32, measurements []string, condition influxql.Expr, tr influxql.TimeRange) (map[string]uint64, error) {
+	return nil, nil
+}
+
+func (s *MockStoreEngine) SeriesKeys(db string, ptIDs []uint32, measurements []string, condition influxql.Expr, tr influxql.TimeRange) ([]string, error) {
+	return nil, nil
+}
+
+func (s *MockStoreEngine) TagKeys(db string, ptIDs []uint32, measurements []string, condition influxql.Expr, tr influxql.TimeRange) ([]string, error) {
+	return nil, nil
+}
+
+func (s *MockStoreEngine) TagValues(db string, ptIDs []uint32, tagKeys map[string][][]byte, condition influxql.Expr, tr influxql.TimeRange) (influxql.TablesTagSets, error) {
+	return nil, nil
+}
+
+func (s *MockStoreEngine) TagValuesCardinality(db string, ptIDs []uint32, tagKeys map[string][][]byte, condition influxql.Expr, tr influxql.TimeRange) (map[string]uint64, error) {
+	return nil, nil
+}
+
+func (s *MockStoreEngine) SendSysCtrlOnNode(req *msgservice.SysCtrlRequest) (map[string]string, error) {
+	return nil, nil
+}
+
+func (s *MockStoreEngine) PreOffload(uint64, *meta.DbPtInfo) error {
+	return nil
+}
+
+func (s *MockStoreEngine) RollbackPreOffload(uint64, *meta.DbPtInfo) error {
+	return nil
+}
+
+func (s *MockStoreEngine) PreAssign(uint64, *meta.DbPtInfo) error {
+	return nil
+}
+
+func (s *MockStoreEngine) Offload(uint64, *meta.DbPtInfo) error {
+	return nil
+}
+
+func (s *MockStoreEngine) Assign(uint64, *meta.DbPtInfo) error {
+	return nil
+}
+
+func (s *MockStoreEngine) GetConnId() uint64 {
+	return 0
+}
+
+func (s *MockStoreEngine) RowCount(_ string, _ uint32, _ []uint64, _ hybridqp.Catalog) (int64, error) {
+	return 0, nil
+}
+
+func (s *MockStoreEngine) CheckPtsRemovedDone() error {
+	return nil
+}
+
+func (s *MockStoreEngine) TransferLeadership(database string, nodeId uint64, oldMasterPtId, newMasterPtId uint32) error {
+	return nil
+}
+
+type DummySeriesTransform struct {
+	executor.BaseProcessor
+}
+
+func NewDummySeriesTransform() *DummySeriesTransform {
+	series := &DummySeriesTransform{}
+
+	return series
+}
+
+type DummySeriesTransformCreator struct {
+}
+
+func (creator *DummySeriesTransformCreator) Create(plan executor.LogicalPlan, opt *qry.ProcessorOptions) (executor.Processor, error) {
+	return NewDummySeriesTransform(), nil
+}
+
+func (dummy *DummySeriesTransform) Work(ctx context.Context) error {
+	return nil
+}
+
+func (dummy *DummySeriesTransform) Close() {
+
+}
+
+func (dummy *DummySeriesTransform) Release() error {
+	return nil
+}
+
+func (dummy *DummySeriesTransform) Name() string {
+	return "DummySeriesTransform"
+}
+
+func (dummy *DummySeriesTransform) GetOutputs() executor.Ports {
+	return nil
+}
+
+func (dummy *DummySeriesTransform) GetInputs() executor.Ports {
+	return nil
+}
+
+func (dummy *DummySeriesTransform) GetOutputNumber(port executor.Port) int {
+	return 0
+}
+
+func (dummy *DummySeriesTransform) GetInputNumber(port executor.Port) int {
+	return executor.INVALID_NUMBER
+}
+
+func (dummy *DummySeriesTransform) IsSink() bool {
+	return false
+}
+
+func (dummy *DummySeriesTransform) Explain() []executor.ValuePair {
+	return nil
+}
+
+func hookLogicPlan() {
+	executor.RegistryTransformCreator(&executor.LogicalSeries{}, &DummySeriesTransformCreator{})
+}
+
+func TestCreateSerfInstance(t *testing.T) {
+	const shardCount = 10
+	hookLogicPlan()
+
+	schema := executor.NewQuerySchema(nil, nil, &qry.ProcessorOptions{}, nil)
+	plan := executor.NewLogicalSeries(schema)
+	node, err := executor.MarshalQueryNode(plan)
+	require.NoError(t, err)
+
+	shardIDs := make([]uint64, shardCount)
+	for i := 0; i < shardCount; i++ {
+		shardIDs[i] = uint64(i)
+	}
+
+	req := &executor.RemoteQuery{
+		Database: "db0",
+		PtID:     2,
+		NodeID:   1,
+		ShardIDs: shardIDs,
+		Opt:      qry.ProcessorOptions{Sources: []influxql.Source{&influxql.Measurement{}}},
+		Node:     node,
+	}
+
+	store := mockStorage(t.TempDir())
+	resp := &EmptyResponser{}
+	resp.session = spdy.NewMultiplexedSession(spdy.DefaultConfiguration(), nil, 0)
+	h := NewSelect(store, resp, req)
+	h.SetContext(context.Background())
+	require.EqualError(t, h.Process(), "pt not found")
+
+	req.PtID = 1
+	req.Analyze = true
+	resp.err = errors.New("some error")
+	h = NewSelect(store, resp, req)
+	h.SetContext(context.Background())
+	require.NoError(t, h.Process())
+
+	resp.err = nil
+	h = NewSelect(store, resp, req)
+	h.SetAbortHook(func() {})
+	h.Abort("")
+	require.NoError(t, h.Process())
+
+	h = NewSelect(store, resp, req)
+	h.SetCrashHook(func() {})
+	h.Crash()
+	h.SetCrashHook(func() {})
+	require.NoError(t, h.Process())
+
+	h = NewSelect(store, resp, req)
+	require.NotEmpty(t, h.execute(context.Background(), nil))
+	h.Abort("")
+	require.NoError(t, h.execute(context.Background(), &executor.PipelineExecutor{}))
+
+	req.Node = []byte{1}
+	h = NewSelect(store, resp, req)
+	require.EqualError(t, h.Process(), errno.NewError(errno.ShortBufferSize, util.Uint64SizeBytes, 1).Error())
+}
+
+type EmptyResponser struct {
+	transport.Responser
+	session *spdy.MultiplexedSession
+
+	err error
+}
+
+func (r *EmptyResponser) Session() *spdy.MultiplexedSession {
+	return r.session
+}
+
+func (r *EmptyResponser) Response(response interface{}, full bool) error {
+
+	return r.err
+}
+
+func (r *EmptyResponser) Callback(data interface{}) error {
+
+	return nil
+}
+
+func (r *EmptyResponser) Encode(dst []byte, data interface{}) ([]byte, error) {
+	return nil, nil
+}
+
+func (r *EmptyResponser) Decode(data []byte) (interface{}, error) {
+	return nil, nil
+}
+
+func (r *EmptyResponser) Sequence() uint64 {
+	return 200
+}
+
+func TestSelectProcessor(t *testing.T) {
+	resp := &EmptyResponser{}
+	resp.session = spdy.NewMultiplexedSession(spdy.DefaultConfiguration(), nil, 0)
+
+	msg1 := rpc.NewMessage(executor.QueryMessage, &executor.RemoteQuery{ShardIDs: []uint64{1, 2, 3}})
+	msg1.SetClientID(100)
+
+	msg2 := rpc.NewMessage(executor.QueryMessage, &executor.RemoteQuery{ShardIDs: []uint64{1, 2}})
+	msg2.SetClientID(100)
+
+	msg3 := rpc.NewMessage(executor.QueryMessage, &executor.RemoteQuery{ShardIDs: []uint64{1}, Analyze: true})
+	msg3.SetClientID(100)
+
+	msg4 := rpc.NewMessage(executor.QueryMessage, &executor.RemoteQuery{Opt: qry.ProcessorOptions{IncQuery: true, LogQueryCurrId: "1", IterID: 0}})
+	msg4.SetClientID(100)
+
+	msg5 := rpc.NewMessage(executor.FinishMessage, &executor.IncQueryFinish{})
+	msg5.SetClientID(100)
+
+	e := resourceallocator.InitResAllocator(2, 0, 2, 0, resourceallocator.ShardsParallelismRes, time.Second, 0)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer func() {
+		_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.ChunkReaderRes, 0, 0)
+	}()
+	p := NewSelectProcessor(mockStorage(t.TempDir()))
+	require.NoError(t, p.Handle(resp, msg1))
+	require.NoError(t, p.Handle(resp, msg2))
+	require.NoError(t, p.Handle(resp, msg3))
+
+	query.NewManager(100).Abort(resp.Sequence(), "")
+	require.NoError(t, p.Handle(resp, msg3))
+
+	cache.PutNodeIterNum("2", 0)
+	require.NoError(t, p.Handle(resp, msg4))
+
+	cache.PutNodeIterNum("1", 0)
+	require.NoError(t, p.Handle(resp, msg4))
+	err := p.Handle(resp, msg5)
+	require.Equal(t, strings.Contains(err.Error(), "executor.RemoteQuery"), true)
+}
+
+func mockStorage(dir string) *storage.Storage {
+	node := metaclient.NewNode(dir + "/meta")
+	storeConfig := config.NewStore()
+	storeConfig.InitFields()
+	monitorConfig := config.Monitor{
+		Pushers:      "http",
+		StoreEnabled: true,
+	}
+	config.SetHaPolicy(config.SSPolicy)
+	config := &config.TSStore{
+		Data:    storeConfig,
+		Monitor: monitorConfig,
+		Common:  config.NewCommon(),
+		Meta:    config.NewMeta(),
+	}
+	data := &meta.Data{}
+	client := metaclient.NewClient("", false, 0)
+	client.SetCacheData(data)
+
+	storage, err := storage.OpenStorage(dir+"/data", node, client, config)
+	if err != nil {
+		return nil
+	}
+	storage.GetEngine().CreateDBPT("db0", 1, false)
+	return storage
+}
+
+func TestNewShardTraits(t *testing.T) {
+	resp := &EmptyResponser{}
+	resp.session = spdy.NewMultiplexedSession(spdy.DefaultConfiguration(), nil, 0)
+	msg := rpc.NewMessage(executor.QueryMessage, &executor.RemoteQuery{Database: "db0", PtID: 0, Node: []byte{10}, ShardIDs: []uint64{1, 2, 3}})
+	req, _ := msg.Data().(*executor.RemoteQuery)
+	store := mockStorage(t.TempDir())
+	p := NewSelectProcessor(store)
+	s := NewSelect(p.store, resp, req)
+	traits := s.NewShardTraits(s.req, s.w)
+	require.NotEmpty(t, traits)
+}
+
+func TestSelect_GetQueryExeInfo(t *testing.T) {
+	rq := executor.RemoteQuery{
+		Opt: qry.ProcessorOptions{
+			QueryId: 1,
+			Query:   "SELECT * FROM mst1",
+		},
+		Database: "db1",
+	}
+	s := NewSelect(nil, nil, &rq)
+	info := s.GetQueryExeInfo()
+	require.Equal(t, rq.Opt.QueryId, info.QueryID)
+	require.Equal(t, rq.Opt.Query, info.Stmt)
+	require.Equal(t, rq.Database, info.Database)
+}
+
+func TestSelectForCsstore(t *testing.T) {
+	resp := &EmptyResponser{}
+	resp.session = spdy.NewMultiplexedSession(spdy.DefaultConfiguration(), nil, 0)
+	ptQuerys := make([]executor.PtQuery, 0)
+	ptQuerys = append(ptQuerys, executor.PtQuery{PtID: 1, ShardInfos: []executor.ShardInfo{{ID: 1, Path: "/obs/db0/log1/seg0", Version: 4}}})
+	ptQuerys = append(ptQuerys, executor.PtQuery{PtID: 2, ShardInfos: []executor.ShardInfo{{ID: 2, Path: "/obs/db0/log1/seg1", Version: 4}}})
+	q := &executor.RemoteQuery{
+		Database: "db0",
+		PtID:     0,
+		Opt: qry.ProcessorOptions{
+			QueryId: 1,
+			Query:   "SELECT * FROM mst1",
+			Sources: influxql.Sources{
+				&influxql.Measurement{
+					ObsOptions: &obs.ObsOptions{},
+				},
+			},
+		},
+		Node:     []byte{1, 2, 3, 4, 5, 6, 7, 8},
+		PtQuerys: ptQuerys}
+
+	msg := rpc.NewMessage(executor.QueryMessage, q)
+	req, _ := msg.Data().(*executor.RemoteQuery)
+	store := mockStorage(t.TempDir())
+	p := NewSelectProcessor(store)
+	s := NewSelect(p.store, resp, req)
+
+	s.aborted = false
+	err := s.process(s.w, nil, s.req)
+	if err == nil {
+		t.Fatal()
+	}
+}
+
+func TestProcessLastRowCache(t *testing.T) {
+	convey.Convey("test last row cache normal", t, func() {
+		s := Select{}
+		w := &transport.Responser{}
+
+		fields := influxql.Fields{{Expr: &influxql.Call{Name: "last_row", Args: []influxql.Expr{&influxql.VarRef{Val: "test"}}}}}
+		fakeSchema := &executor.QuerySchema{}
+		p := gomonkey.ApplyMethod(fakeSchema, "GetQueryFields", func() influxql.Fields {
+			return fields
+		})
+		defer p.Reset()
+		planSingle := executor.NewLogicalPlanSingle(nil, fakeSchema)
+
+		node := &executor.LogicalExchange{LogicalPlanSingle: *planSingle}
+		remoteQuery := &executor.RemoteQuery{Opt: qry.ProcessorOptions{Sources: influxql.Sources{&influxql.Measurement{Database: "test", RetentionPolicy: "autogen"}}, SeriesKey: []byte("test,vin=65535")}}
+
+		p2 := gomonkey.ApplyFunc(lastrowcache.Get, func(_, _ string, _ []byte, _ []string) (int64, map[string]any, bool) {
+			return 0, map[string]any{"test": int64(1), "test2": "w", "test3": true, "test4": 2.22, "test6": false}, true
+		})
+		defer p2.Reset()
+		p3 := gomonkey.ApplyFunc(influx.MeasurementName, func(src []byte) ([]byte, []byte, error) {
+			return []byte("test"), []byte{}, nil
+		})
+		defer p3.Reset()
+
+		p4 := gomonkey.ApplyMethod(node, "RowDataType", func() hybridqp.RowDataType {
+			return hybridqp.NewRowDataTypeImpl(influxql.VarRef{Val: "test", Type: influxql.Integer}, influxql.VarRef{Val: "test2", Type: influxql.String},
+				influxql.VarRef{Val: "test3", Type: influxql.Boolean}, influxql.VarRef{Val: "test4", Type: influxql.Float},
+				influxql.VarRef{Val: "test4", Type: influxql.Float}, influxql.VarRef{Val: "test6", Type: influxql.Boolean})
+		})
+		defer p4.Reset()
+
+		p5 := gomonkey.ApplyFunc(influx.IndexKeyToTags, func(_ []byte, _ bool, _ *influx.PointTags) (*influx.PointTags, error) {
+			return nil, nil
+		})
+		defer p5.Reset()
+
+		p6 := gomonkey.ApplyMethod(w, "Response", func(*transport.Responser, interface{}, bool) error {
+			return nil
+		})
+		defer p6.Reset()
+
+		rnoutputs := []gomonkey.OutputCell{
+			{Values: gomonkey.Params{"test"}},
+			{Values: gomonkey.Params{"test2"}},
+			{Values: gomonkey.Params{"test3"}},
+			{Values: gomonkey.Params{"test4"}},
+			{Values: gomonkey.Params{"test5"}},
+			{Values: gomonkey.Params{"test6"}},
+		}
+		p7 := gomonkey.ApplyFuncSeq(executor.LastRowFieldKey, rnoutputs)
+		defer p7.Reset()
+
+		ok := s.processLastRowCache(w, node, remoteQuery)
+		convey.So(ok, convey.ShouldBeTrue)
+
+	})
+
+	convey.Convey("test last row cache wrong type", t, func() {
+		s := Select{}
+		w := &transport.Responser{}
+
+		fields := influxql.Fields{{Expr: &influxql.Call{Name: "last_row", Args: []influxql.Expr{&influxql.VarRef{Val: "test"}}}}}
+		fakeSchema := &executor.QuerySchema{}
+		p := gomonkey.ApplyMethod(fakeSchema, "GetQueryFields", func() influxql.Fields {
+			return fields
+		})
+		defer p.Reset()
+		planSingle := executor.NewLogicalPlanSingle(nil, fakeSchema)
+
+		node := &executor.LogicalExchange{LogicalPlanSingle: *planSingle}
+		remoteQuery := &executor.RemoteQuery{Opt: qry.ProcessorOptions{Sources: influxql.Sources{&influxql.Measurement{Database: "test", RetentionPolicy: "autogen"}}, SeriesKey: []byte("test,vin=65535")}}
+
+		p2 := gomonkey.ApplyFunc(lastrowcache.Get, func(_, _ string, _ []byte, _ []string) (int64, map[string]any, bool) {
+			return 0, map[string]any{"test": int64(1), "test2": "w", "test3": true, "test4": 2.22, "test6": time.Now()}, true
+		})
+		defer p2.Reset()
+		p3 := gomonkey.ApplyFunc(influx.MeasurementName, func(src []byte) ([]byte, []byte, error) {
+			return []byte("test"), []byte{}, nil
+		})
+		defer p3.Reset()
+
+		p4 := gomonkey.ApplyMethod(node, "RowDataType", func() hybridqp.RowDataType {
+			return hybridqp.NewRowDataTypeImpl(influxql.VarRef{Val: "test", Type: influxql.Integer}, influxql.VarRef{Val: "test2", Type: influxql.String},
+				influxql.VarRef{Val: "test3", Type: influxql.Boolean}, influxql.VarRef{Val: "test4", Type: influxql.Float},
+				influxql.VarRef{Val: "test4", Type: influxql.Float}, influxql.VarRef{Val: "test6", Type: influxql.Duration})
+		})
+		defer p4.Reset()
+
+		p5 := gomonkey.ApplyFunc(influx.IndexKeyToTags, func(_ []byte, _ bool, _ *influx.PointTags) (*influx.PointTags, error) {
+			return nil, nil
+		})
+		defer p5.Reset()
+
+		p6 := gomonkey.ApplyMethod(w, "Response", func(*transport.Responser, interface{}, bool) error {
+			return nil
+		})
+		defer p6.Reset()
+
+		rnoutputs := []gomonkey.OutputCell{
+			{Values: gomonkey.Params{"test"}},
+			{Values: gomonkey.Params{"test2"}},
+			{Values: gomonkey.Params{"test3"}},
+			{Values: gomonkey.Params{"test4"}},
+			{Values: gomonkey.Params{"test5"}},
+			{Values: gomonkey.Params{"test6"}},
+		}
+		p7 := gomonkey.ApplyFuncSeq(executor.LastRowFieldKey, rnoutputs)
+		defer p7.Reset()
+
+		ok := s.processLastRowCache(w, node, remoteQuery)
+		convey.So(ok, convey.ShouldBeFalse)
+
+	})
+}
+
+func TestProcessLastRowCacheAbnormal(t *testing.T) {
+	convey.Convey("processLastRowCache abnormal scenario", t, func() {
+		w := &transport.Responser{}
+		fakeSchema := &executor.QuerySchema{}
+		planSingle := executor.NewLogicalPlanSingle(nil, fakeSchema)
+
+		node := &executor.LogicalExchange{LogicalPlanSingle: *planSingle}
+		s := &Select{}
+		req := &executor.RemoteQuery{Opt: qry.ProcessorOptions{Sources: influxql.Sources{&influxql.SubQuery{}}}}
+
+		ans := s.processLastRowCache(w, node, req)
+		convey.So(ans, convey.ShouldBeFalse)
+	})
+}
+
+func TestAllCacheValuesAreNil(t *testing.T) {
+	convey.Convey("", t, func() {
+		allNisMap := make(map[string]any)
+		allNisMap["test1"] = nil
+		allNisMap["test2"] = 333
+		convey.So(checkAllValuesNil(allNisMap), convey.ShouldBeFalse)
+		allNisMap["test2"] = nil
+		convey.So(checkAllValuesNil(allNisMap), convey.ShouldBeTrue)
+	})
+}

@@ -1,0 +1,28 @@
+{
+    "Name":"StreamWindow",
+    "Measurement":"stream_window",
+    "EnablePush":"Y",
+    "PushDuration":"Y",
+    "PushItems":[
+    	"WindowIn",
+    	"WindowProcess",
+    	"WindowSkip",
+    	"WindowFlushCost",
+    	"WindowFlushMarshalCost",
+    	"WindowFlushWriteCost",
+    	"WindowUpdateCost",
+        "WindowOutMinTime",
+        "WindowOutMaxTime",
+        "WindowStartTime",
+        "WindowEndTime",
+        "WindowGroupKeyCount",
+        "ReplayIn",
+        "ReplayProcess",
+        "ReplaySkip",
+        "ReplayCacheIn",
+        "ConsumeCacheIn",
+    ],
+    "PushTags":[
+        "StreamID"
+    ]
+}

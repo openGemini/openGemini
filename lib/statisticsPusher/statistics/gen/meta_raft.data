@@ -1,0 +1,15 @@
+{
+    "Name":"MetaRaft",
+    "Measurement":"metaRaft",
+    "Items":[
+        "foo"
+    ],
+    "SetItems":[],
+    "EnablePush":"Y",
+    "PushItems":[
+        "Status"
+    ],
+    "PushTags":[
+        "NodeID"
+    ]
+}

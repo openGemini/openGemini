@@ -1,0 +1,115 @@
+// place your custom styles here
+html[data-theme='dark'] {
+  --foot-bg-color: #0d1117;
+  --foot-split-line: #ececec;
+  --foot-font-color: #b1b1b1;
+  --foot-title-color: #fff;
+}
+html[data-theme='light'] {
+  --foot-bg-color: #f2f2f2;
+  --foot-split-line: #ececec;
+  --foot-font-color: #474762;
+  --foot-title-color: #272841;
+}
+.footer-wrapper {
+  z-index: 99;
+  padding-inline-start: 2rem;
+}
+.footer{
+  width: 100%;
+}
+#custom-footer {
+  width: 100%;
+  z-index: 99;
+  position: relative;
+  padding: 1rem 0;
+
+}
+#custom-footer .content {
+  margin: 0 auto;
+  display: flex;
+  min-width: 530px;
+  width: 50%;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+@media (max-width: 650px) {
+  #custom-footer .content {
+    min-width: unset;
+    width: calc(100% - 4rem);
+    justify-content: center;
+  }
+}
+
+#custom-footer .content > div {
+  display: flex;
+  flex-direction: column;
+  min-width: 100px;
+  margin-bottom: 12px;
+}
+#custom-footer .media-link {
+  width: 8rem;
+  flex-wrap: nowrap;
+  // justify-content: center;
+  align-items: flex-start;
+}
+#custom-footer .links > a {
+  margin: 0.5rem;
+  font-size: 1.2rem;
+  display: inline-block;
+}
+#custom-footer .logo {
+  font-size: 1rem;
+  margin-bottom: 0.5rem;
+  display: flex;
+  height: 2rem;
+  line-height: 2rem;
+  align-items: center;
+  /* justify-content: center; */
+  color: var(--foot-font-color);
+}
+#custom-footer .logo > img {
+  height: 2rem;
+  object-fit: scale-down;
+}
+
+#custom-footer .link-text {
+  font-size: 1rem;
+  align-items: flex-start;
+}
+#custom-footer .link-text > a {
+  display: inline-block;
+  margin-bottom: 0.5rem;
+  color: var(--foot-font-color);
+  cursor: pointer;
+}
+#custom-footer .link-text .title {
+  color: var(--foot-title-color);
+  margin-bottom: 0.5rem;
+  font-weight: bold;
+}
+.iconfont {
+  color: var(--foot-font-color);
+}
+.motianlun{
+  height: 20px;
+  width: 20px;
+  background: url("/images/motianlun.png") center left;
+  background-size: 70px 20px;
+}
+.links{
+  display: flex;
+  align-items: baseline;
+}
+.qr-code{
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.wechat{
+  width: 80px;
+  object-fit: scale-down;
+  margin-bottom: 8px;
+}

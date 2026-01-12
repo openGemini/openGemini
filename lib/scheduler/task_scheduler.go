@@ -1,0 +1,255 @@
+// Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package scheduler
+
+import (
+	"sync"
+	"time"
+
+	"github.com/influxdata/influxdb/pkg/limiter"
+	"github.com/openGemini/openGemini/lib/util"
+)
+
+type TaskType int
+
+const (
+	CompactTask TaskType = iota
+	MergeTask
+)
+
+type ListenHook func(signal chan struct{}, onClose func())
+
+type TaskScheduler struct {
+	mu        sync.RWMutex
+	taskMutex map[string]struct{}
+	tasks     map[uint64]Task
+	limiter   limiter.Fixed
+
+	wg          sync.WaitGroup
+	closed      bool
+	closeSignal chan struct{}
+
+	signedCompactTask map[uint64]Task
+}
+
+func NewTaskScheduler(listen ListenHook, limiter limiter.Fixed) *TaskScheduler {
+	ts := &TaskScheduler{
+		taskMutex:         make(map[string]struct{}),
+		tasks:             make(map[uint64]Task),
+		closeSignal:       make(chan struct{}),
+		closed:            false,
+		limiter:           limiter,
+		signedCompactTask: make(map[uint64]Task),
+	}
+
+	go func() {
+		listen(ts.closeSignal, func() {
+			ts.CloseAll()
+		})
+	}()
+
+	return ts
+}
+
+func (ts *TaskScheduler) Wait() {
+	// This function is only called when the process is terminated or the shard expires.
+	// The long waiting time may be caused by some bugs.
+	// By setting a timeout, the waiting is forcibly terminated.
+	util.WaitTimeOut(ts.wg.Wait, ts.wg.Done, 10*time.Minute)
+}
+
+func (ts *TaskScheduler) CloseAll() {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if ts.closed {
+		return
+	}
+
+	ts.closed = true
+	close(ts.closeSignal)
+	for _, task := range ts.tasks {
+		task.Stop()
+	}
+}
+
+func (ts *TaskScheduler) addTask(task Task) bool {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+
+	if ts.closed {
+		return false
+	}
+
+	ts.tasks[task.UUID()] = task
+	return true
+}
+
+func (ts *TaskScheduler) delTask(task Task) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+
+	delete(ts.tasks, task.UUID())
+
+	delete(ts.signedCompactTask, task.UUID())
+}
+
+func (ts *TaskScheduler) addTaskMutex(key string) bool {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+
+	if _, ok := ts.taskMutex[key]; ok {
+		return false
+	}
+
+	if ts.closed {
+		return false
+	}
+	ts.wg.Add(1)
+	ts.taskMutex[key] = struct{}{}
+	return true
+}
+
+func (ts *TaskScheduler) delTaskMutex(key string) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	delete(ts.taskMutex, key)
+}
+
+func (ts *TaskScheduler) IsRunning(key string) bool {
+	ts.mu.RLock()
+	_, ok := ts.taskMutex[key]
+	ts.mu.RUnlock()
+	return ok
+}
+
+func (ts *TaskScheduler) ExecuteTaskGroup(tg *TaskGroup, signal chan struct{}) {
+	if !ts.addTaskMutex(tg.Key()) {
+		tg.Finish()
+		return
+	}
+
+	tg.OnFinish(func() {
+		ts.wg.Done()
+		ts.delTaskMutex(tg.Key())
+	})
+
+	for _, task := range tg.tasks {
+		ts.execute(task, signal)
+	}
+}
+
+func (ts *TaskScheduler) ExecuteBatch(tasks []Task, signal chan struct{}) {
+	for i := range tasks {
+		ts.Execute(tasks[i], signal, false)
+	}
+}
+
+func (ts *TaskScheduler) Execute(task Task, signal chan struct{}, async bool) {
+	if !ts.addTaskMutex(task.Key()) {
+		task.Finish()
+		return
+	}
+
+	task.OnFinish(func() {
+		ts.delTaskMutex(task.Key())
+		ts.delTask(task)
+		ts.wg.Done()
+	})
+
+	if async {
+		go ts.execute(task, signal)
+		return
+	}
+
+	ts.execute(task, signal)
+}
+
+func (ts *TaskScheduler) execute(task Task, signal chan struct{}) {
+	select {
+	case <-ts.closeSignal:
+		task.Finish()
+		return
+	case <-signal:
+		task.Finish()
+		return
+	case ts.limiter <- struct{}{}:
+		if !ts.addTask(task) {
+			ts.limiter.Release()
+			task.Finish()
+			return
+		}
+
+		go func() {
+			defer func() {
+				task.Finish()
+				ts.limiter.Release()
+			}()
+
+			if task.BeforeExecute() {
+				task.Execute()
+			}
+		}()
+	}
+}
+
+func (ts *TaskScheduler) RegisterCompactTask(t Task) {
+	if t.BeforeExecute() {
+		ts.signedCompactTask[t.UUID()] = t
+	}
+}
+
+func (ts *TaskScheduler) GetTask(typ TaskType) Task {
+	switch typ {
+	case CompactTask:
+		return ts.getTask(ts.signedCompactTask)
+	default:
+		return nil
+	}
+}
+
+func (ts *TaskScheduler) getTask(tasks map[uint64]Task) Task {
+	for _, t := range tasks {
+		if !ts.addTaskMutex(t.Key()) {
+			return nil
+		}
+		t.OnFinish(func() {
+			ts.delTaskMutex(t.Key())
+			ts.delTask(t)
+			ts.wg.Done()
+		})
+		return t
+	}
+	return nil
+}
+
+func (ts *TaskScheduler) GetTaskByID(typ TaskType, id uint64) Task {
+	switch typ {
+	case CompactTask:
+		return ts.getTaskByID(ts.signedCompactTask, id)
+	default:
+		return nil
+	}
+}
+
+func (ts *TaskScheduler) getTaskByID(tasks map[uint64]Task, id uint64) Task {
+	t, ok := tasks[id]
+	if !ok {
+		return nil
+	}
+	if _, ok := ts.taskMutex[t.Key()]; !ok {
+		return nil
+	}
+	return t
+}

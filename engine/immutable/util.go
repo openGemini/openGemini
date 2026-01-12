@@ -1,0 +1,68 @@
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package immutable
+
+import (
+	"path/filepath"
+
+	"github.com/openGemini/openGemini/engine/immutable/colstore"
+)
+
+const (
+	TSSPFileNameSize = len("00000000-0000-00000000")
+)
+
+func SumFilesSize(files []TSSPFile) int64 {
+	var size int64 = 0
+	for _, f := range files {
+		size += f.FileSize()
+	}
+	return size
+}
+
+func BuildPKFilePathFromTSSP(path string) string {
+	if len(path) == 0 {
+		return ""
+	}
+	ext := filepath.Ext(path)
+	if ext == tmpFileSuffix {
+		path = path[:len(path)-len(tmpFileSuffix)]
+		ext = filepath.Ext(path)
+	}
+
+	return colstore.AppendPKIndexSuffix(path[:len(path)-len(ext)])
+}
+
+func RenameIndexFilePathFromTSSP(old string, tsspFile string) string {
+	if len(old) == 0 || len(tsspFile) == 0 {
+		return old
+	}
+
+	oldDir := filepath.Dir(old)
+	oldBase := filepath.Base(old)
+	tsspBase := filepath.Base(tsspFile)
+
+	if len(tsspBase) < TSSPFileNameSize || len(oldBase) < TSSPFileNameSize {
+		return old
+	}
+
+	if IsTempleFile(oldBase) && !IsTempleFile(tsspBase) {
+		oldBase = RemoveTmpSuffix(oldBase)
+	} else if !IsTempleFile(oldBase) && IsTempleFile(tsspBase) {
+		oldBase += tmpFileSuffix
+	}
+
+	return filepath.Join(oldDir, tsspBase[:TSSPFileNameSize]+oldBase[TSSPFileNameSize:])
+}

@@ -1,0 +1,109 @@
+# Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#  http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+export GOROOT=$(shell go env GOROOT)
+export GOPATH=$(shell go env GOPATH)
+export GOOS=$(shell go env GOOS)
+export GOARCH=$(shell go env GOARCH)
+export PATH := $(PATH):$(GOROOT)/bin:$(GOPATH)/bin
+
+GO          := GO111MODULE=on go
+GOTEST      := $(GO) test -gcflags "all=-N -l"
+PYTHON      := python
+STATICCHECK := staticcheck
+
+FAILPOINT_ENABLE  := find $$PWD/ -type d | grep -vE "(\.git|\.github|\.tests)" | xargs failpoint-ctl enable
+FAILPOINT_DISABLE := find $$PWD/ -type d | grep -vE "(\.git|\.github|\.tests)" | xargs failpoint-ctl disable
+
+PACKAGE_LIST_OPEN_GEMINI_TESTS  := $(GO) list ./... | grep -vE "tests|lifted\/hashicorp"
+PACKAGES_OPEN_GEMINI_TESTS ?= $$($(PACKAGE_LIST_OPEN_GEMINI_TESTS))
+
+COPYRIGHT_EXCEPT  := "lifted|tests|lib/msgservice/data/data.pb.go|lib/statisticsPusher/statistics/handler_statistics.go|app/ts-meta/meta/snapshot.go|engine/index/tsi/tag_filters.go|engine/index/tsi/tag_filter_test.go|engine/index/mergeindex/item.go|lib/config/openGemini_dir.go"
+COPYRIGHT_GOFILE  := $$(find . -name '*.go' | grep -vE $(COPYRIGHT_EXCEPT))
+COPYRIGHT_HEADER  := "Copyright 20[0-9]{2} openGemini Authors|Copyright 20[0-9]{2} Huawei Cloud Computing Technologies Co., Ltd."
+
+STYLE_CHECK_EXCEPT :=  "lifted/hashicorp|lifted/protobuf"
+STYLE_CHECK_GOFILE  := $$(find . -name '*.go' | grep -vE $(STYLE_CHECK_EXCEPT))
+
+PROTOC_VERSION=32.0
+PROTOC_ZIP_LINUX=protoc-$(PROTOC_VERSION)-linux-x86_64.zip
+PROTOC_ZIP_MACOS=protoc-$(PROTOC_VERSION)-osx-x86_64.zip
+PROTOC_ZIP_WINDOWS=protoc-$(PROTOC_VERSION)-win64.zip
+
+install-goimports-reviser:
+	@$(GO) install github.com/incu6us/goimports-reviser/v3@v3.8.2
+
+install-staticcheck:
+	@$(GO) install honnef.co/go/tools/cmd/staticcheck@v0.6.0
+
+install-golangci-lint:
+	@$(GO) install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.2
+
+install-tmpl:
+	@$(GO) install github.com/benbjohnson/tmpl@v1.1.0
+
+install-goyacc:
+	@$(GO) install golang.org/x/tools/cmd/goyacc@v0.13.0
+
+install-exhaustruct:
+	@$(GO) install github.com/GaijinEntertainment/go-exhaustruct/v3/cmd/exhaustruct@v3.3.1
+
+install-protoc:
+	@VERSION=$$(protoc --version); if [ "$$VERSION" = "libprotoc $(PROTOC_VERSION)" ]; then exit 0; fi; \
+	VERSION32=$$(protoc_v32 --version); if [ "$$VERSION32" = "libprotoc $(PROTOC_VERSION)" ]; then exit 0; fi; \
+	if [ $$(uname -s) = "Linux" ];  then \
+  		make install-protoc-linux; \
+	elif [ $$(uname -s) = "Darwin" ];  then \
+	  	make install-protoc-darwin; \
+	else \
+	  echo "unknown arch"; \
+  	fi
+
+install-protoc-linux:
+	@curl -OL https://github.com/protocolbuffers/protobuf/releases/download/v$(PROTOC_VERSION)/$(PROTOC_ZIP_LINUX)
+	@sudo unzip -o $(PROTOC_ZIP_LINUX) -d /usr/local bin/protoc
+	@sudo unzip -o $(PROTOC_ZIP_LINUX) -d /usr/local 'include/*'
+	@sudo chmod +x /usr/local/bin/protoc
+	@sudo chmod 755 `sudo find /usr/local/include/google -type d`
+	@sudo chmod 644 `sudo find /usr/local/include/google -type f`
+	@rm -f $(PROTOC_ZIP_LINUX)
+
+install-protoc-darwin:
+	@curl -OL https://github.com/protocolbuffers/protobuf/releases/download/v$(PROTOC_VERSION)/$(PROTOC_ZIP_MACOS)
+	@sudo unzip -X -o $(PROTOC_ZIP_MACOS) -d /usr/local bin/protoc
+	@sudo unzip -o $(PROTOC_ZIP_MACOS) -d /usr/local 'include/*'
+	@sudo chmod +x /usr/local/bin/protoc
+	@sudo chmod 755 `sudo find /usr/local/include/google -type d`
+	@sudo chmod 644 `sudo find /usr/local/include/google -type f`
+	@rm -f $(PROTOC_ZIP_MACOS)
+
+install-protoc-windows:
+	@curl -OL https://github.com/protocolbuffers/protobuf/releases/download/v$(PROTOC_VERSION)/$(PROTOC_ZIP_WINDOWS)
+	@powershell.exe Expand-Archive -Path protoc-$(PROTOC_VERSION)-win64.zip -DestinationPath $(GOPATH)\protobuf  -Force
+	@del $(PROTOC_ZIP_WINDOWS)
+
+install-protoc-gen-gogo:
+	@$(GO) install github.com/gogo/protobuf/protoc-gen-gogo@latest
+
+install-protoc-gen-go:
+	@$(GO) install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.8
+
+install-msgp:
+	@$(GO) install github.com/tinylib/msgp@latest
+
+failpoint-enable:
+	@$(FAILPOINT_ENABLE)
+
+failpoint-disable:
+	@$(FAILPOINT_DISABLE)

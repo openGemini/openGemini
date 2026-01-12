@@ -1,0 +1,3057 @@
+// Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package record_test
+
+import (
+	"bytes"
+	"reflect"
+	"sort"
+	"testing"
+
+	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func genRowRec(schema []record.Field, intValBitmap []int, intVal []int64, floatValBitmap []int, floatVal []float64,
+	stringValBitmap []int, stringVal []string, booleanValBitmap []int, boolVal []bool, time []int64) *record.Record {
+	var rec record.Record
+
+	rec.Schema = append(rec.Schema, schema...)
+	for i, v := range rec.Schema {
+		var colVal record.ColVal
+		if v.Type == influx.Field_Type_Int {
+			if i == len(rec.Schema)-1 {
+				// time col
+				for index := range time {
+					colVal.AppendInteger(time[index])
+				}
+			} else {
+				for index := range time {
+					if intValBitmap[index] == 1 {
+						colVal.AppendInteger(intVal[index])
+					} else {
+						colVal.AppendIntegerNull()
+					}
+				}
+			}
+		} else if v.Type == influx.Field_Type_Boolean {
+			for index := range time {
+				if booleanValBitmap[index] == 1 {
+					colVal.AppendBoolean(boolVal[index])
+				} else {
+					colVal.AppendBooleanNull()
+				}
+			}
+		} else if v.Type == influx.Field_Type_Float {
+			for index := range time {
+				if floatValBitmap[index] == 1 {
+					colVal.AppendFloat(floatVal[index])
+				} else {
+					colVal.AppendFloatNull()
+				}
+			}
+		} else if v.Type == influx.Field_Type_String {
+			for index := range time {
+				if stringValBitmap[index] == 1 {
+					colVal.AppendString(stringVal[index])
+				} else {
+					colVal.AppendStringNull()
+				}
+			}
+		} else {
+			panic("error type")
+		}
+		rec.ColVals = append(rec.ColVals, colVal)
+	}
+	return &rec
+}
+
+func testColBitmapValid(val *record.ColVal, rowNum int) bool {
+	bitmapLen := len(val.Bitmap)
+	if rowNum > (bitmapLen-1)*8 && rowNum <= bitmapLen*8 {
+		return true
+	}
+	return false
+}
+
+func isRecEqual(firstRec, secondRec *record.Record) bool {
+	for i := range firstRec.Schema {
+		if firstRec.Schema[i].Name != secondRec.Schema[i].Name || firstRec.Schema[i].Type != secondRec.Schema[i].Type {
+			return false
+		}
+	}
+
+	for i := range firstRec.ColVals {
+		if firstRec.ColVals[i].Len != secondRec.ColVals[i].Len ||
+			firstRec.ColVals[i].NilCount != secondRec.ColVals[i].NilCount ||
+			!bytes.Equal(firstRec.ColVals[i].Val, secondRec.ColVals[i].Val) ||
+			(len(firstRec.ColVals[i].Offset)+len(secondRec.ColVals[i].Offset) > 0 &&
+				!reflect.DeepEqual(firstRec.ColVals[i].Offset, secondRec.ColVals[i].Offset)) {
+			return false
+		}
+
+		if !testColBitmapValid(&firstRec.ColVals[i], firstRec.ColVals[i].Len) {
+			return false
+		}
+		if !testColBitmapValid(&secondRec.ColVals[i], secondRec.ColVals[i].Len) {
+			return false
+		}
+
+		for j := 0; j < firstRec.ColVals[i].Len; j++ {
+			firstBitIndex := firstRec.ColVals[i].BitMapOffset + j
+			secBitIndex := secondRec.ColVals[i].BitMapOffset + j
+			firstBit, secBit := 0, 0
+			if firstRec.ColVals[i].Bitmap[firstBitIndex>>3]&record.BitMask[firstBitIndex&0x07] != 0 {
+				firstBit = 1
+			}
+			if secondRec.ColVals[i].Bitmap[secBitIndex>>3]&record.BitMask[secBitIndex&0x07] != 0 {
+				secBit = 1
+			}
+
+			if firstBit != secBit {
+				return false
+			}
+		}
+	}
+
+	return true
+}
+
+func testRecsEqual(mergeRec, expRec *record.Record) bool {
+	return isRecEqual(mergeRec, expRec)
+}
+
+var testSchema = record.Schemas{
+	record.Field{Type: influx.Field_Type_Int, Name: "int"},
+	record.Field{Type: influx.Field_Type_Float, Name: "float"},
+	record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
+	record.Field{Type: influx.Field_Type_String, Name: "string"},
+	record.Field{Type: influx.Field_Type_Int, Name: "time"},
+}
+
+// merge with oldRec.time[0] == newRec.time[0]
+func TestMergeRecordWithSameSchemaAndOneRowCase1(t *testing.T) {
+	oldRec := genRowRec(testSchema,
+		[]int{1}, []int64{200},
+		[]int{1}, []float64{2.3},
+		[]int{1}, []string{"hello"},
+		[]int{1}, []bool{false},
+		[]int64{1})
+	newRec := genRowRec(testSchema,
+		[]int{1}, []int64{100},
+		[]int{1}, []float64{1.3},
+		[]int{1}, []string{"world"},
+		[]int{1}, []bool{true},
+		[]int64{1})
+
+	sort.Sort(newRec)
+	sort.Sort(oldRec)
+	var mergeRec record.Record
+	mergeRec.MergeRecord(newRec, oldRec)
+	if !testRecsEqual(&mergeRec, newRec) {
+		t.Fatal("error result")
+	}
+}
+
+// merge with oldRec.time[0] == newRec.time[0]
+func TestMergeRecordWithSameSchemaAndOneRowCase1Descend(t *testing.T) {
+	oldRec := genRowRec(testSchema,
+		[]int{1}, []int64{200},
+		[]int{1}, []float64{2.3},
+		[]int{1}, []string{"hello"},
+		[]int{1}, []bool{false},
+		[]int64{1})
+	newRec := genRowRec(testSchema,
+		[]int{1}, []int64{100},
+		[]int{1}, []float64{1.3},
+		[]int{1}, []string{"world"},
+		[]int{1}, []bool{true},
+		[]int64{1})
+
+	sort.Sort(newRec)
+	sort.Sort(oldRec)
+
+	var mergeRec record.Record
+	mergeRec.MergeRecordDescend(newRec, oldRec)
+	if !testRecsEqual(&mergeRec, newRec) {
+		t.Fatal("error result")
+	}
+}
+
+// merge with oldRec.time[0] < newRec.time[0]
+func TestMergeRecordWithSameSchemaAndOneRowCase2(t *testing.T) {
+	oldRec := genRowRec(testSchema,
+		[]int{1}, []int64{200},
+		[]int{1}, []float64{2.3},
+		[]int{1}, []string{"hello"},
+		[]int{1}, []bool{false},
+		[]int64{1})
+	newRec := genRowRec(testSchema,
+		[]int{1}, []int64{100},
+		[]int{1}, []float64{1.3},
+		[]int{1}, []string{"world"},
+		[]int{1}, []bool{true},
+		[]int64{2})
+	expectRec := genRowRec(testSchema,
+		[]int{1, 1}, []int64{200, 100},
+		[]int{1, 1}, []float64{2.3, 1.3},
+		[]int{1, 1}, []string{"hello", "world"},
+		[]int{1, 1}, []bool{false, true},
+		[]int64{1, 2})
+	sort.Sort(newRec)
+	sort.Sort(oldRec)
+	sort.Sort(expectRec)
+
+	var mergeRec record.Record
+	mergeRec.MergeRecord(newRec, oldRec)
+	if !testRecsEqual(&mergeRec, expectRec) {
+		t.Fatal("error result")
+	}
+}
+
+// merge with oldRec.time[0] < newRec.time[0]
+func TestMergeRecordWithSameSchemaAndOneRowCase2Descend(t *testing.T) {
+	oldRec := genRowRec(testSchema,
+		[]int{1}, []int64{200},
+		[]int{1}, []float64{2.3},
+		[]int{1}, []string{"hello"},
+		[]int{1}, []bool{false},
+		[]int64{1})
+	newRec := genRowRec(testSchema,
+		[]int{1}, []int64{100},
+		[]int{1}, []float64{1.3},
+		[]int{1}, []string{"world"},
+		[]int{1}, []bool{true},
+		[]int64{2})
+	expectRec := genRowRec(testSchema,
+		[]int{1, 1}, []int64{100, 200},
+		[]int{1, 1}, []float64{1.3, 2.3},
+		[]int{1, 1}, []string{"world", "hello"},
+		[]int{1, 1}, []bool{true, false},
+		[]int64{2, 1})
+	sort.Sort(newRec)
+	sort.Sort(oldRec)
+	sort.Sort(expectRec)
+
+	var mergeRec record.Record
+	mergeRec.MergeRecordDescend(newRec, oldRec)
+	if !testRecsEqual(&mergeRec, expectRec) {
+		t.Fatal("error result")
+	}
+}
+
+// merge with oldRec.time[0] > newRec.time[0]
+func TestMergeRecordWithSameSchemaAndOneRowCase3(t *testing.T) {
+	oldRec := genRowRec(testSchema,
+		[]int{1}, []int64{200},
+		[]int{1}, []float64{2.3},
+		[]int{1}, []string{"hello"},
+		[]int{1}, []bool{false},
+		[]int64{3})
+	newRec := genRowRec(testSchema,
+		[]int{1}, []int64{100},
+		[]int{1}, []float64{1.3},
+		[]int{1}, []string{"world"},
+		[]int{1}, []bool{true},
+		[]int64{2})
+	expectRec := genRowRec(testSchema,
+		[]int{1, 1}, []int64{100, 200},
+		[]int{1, 1}, []float64{1.3, 2.3},
+		[]int{1, 1}, []string{"world", "hello"},
+		[]int{1, 1}, []bool{true, false},
+		[]int64{2, 3})
+	sort.Sort(newRec)
+	sort.Sort(oldRec)
+	sort.Sort(expectRec)
+
+	var mergeRec record.Record
+	mergeRec.MergeRecord(newRec, oldRec)
+	if !testRecsEqual(&mergeRec, expectRec) {
+		t.Fatal("error result")
+	}
+}
+
+// merge with oldRec.time[0] > newRec.time[0]
+func TestMergeRecordWithSameSchemaAndOneRowCase3Descend(t *testing.T) {
+	oldRec := genRowRec(testSchema,
+		[]int{1}, []int64{200},
+		[]int{1}, []float64{2.3},
+		[]int{1}, []string{"hello"},
+		[]int{1}, []bool{false},
+		[]int64{3})
+	newRec := genRowRec(testSchema,
+		[]int{1}, []int64{100},
+		[]int{1}, []float64{1.3},
+		[]int{1}, []string{"world"},
+		[]int{1}, []bool{true},
+		[]int64{2})
+	expectRec := genRowRec(testSchema,
+		[]int{1, 1}, []int64{200, 100},
+		[]int{1, 1}, []float64{2.3, 1.3},
+		[]int{1, 1}, []string{"hello", "world"},
+		[]int{1, 1}, []bool{false, true},
+		[]int64{3, 2})
+	sort.Sort(newRec)
+	sort.Sort(oldRec)
+	sort.Sort(expectRec)
+
+	var mergeRec record.Record
+	mergeRec.MergeRecordDescend(newRec, oldRec)
+	if !testRecsEqual(&mergeRec, expectRec) {
+		t.Fatal("error result")
+	}
+}
+
+// merge with oldRec.time[0] = newRec.time[0]
+func TestMergeRecordWithDifferentSchemaAndOneRowCase1(t *testing.T) {
+	oldSchema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	newSchema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Float, Name: "float"},
+		record.Field{Type: influx.Field_Type_String, Name: "string"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	oldRec := genRowRec(oldSchema,
+		[]int{1}, []int64{200},
+		[]int{0}, []float64{},
+		[]int{0}, []string{},
+		[]int{1}, []bool{false},
+		[]int64{1})
+	newRec := genRowRec(newSchema,
+		[]int{1}, []int64{100},
+		[]int{1}, []float64{1.3},
+		[]int{1}, []string{"test"},
+		[]int{0}, []bool{},
+		[]int64{1})
+	expectRec := genRowRec(testSchema,
+		[]int{1}, []int64{100},
+		[]int{1}, []float64{1.3},
+		[]int{1}, []string{"test"},
+		[]int{1}, []bool{false},
+		[]int64{1})
+
+	sort.Sort(oldRec)
+	sort.Sort(newRec)
+	sort.Sort(expectRec)
+
+	var mergeRec record.Record
+	mergeRec.MergeRecord(newRec, oldRec)
+	if !testRecsEqual(&mergeRec, expectRec) {
+		t.Fatal("error result")
+	}
+}
+
+// merge with oldRec.time[0] = newRec.time[0]
+func TestMergeRecordWithDifferentSchemaAndOneRowCase1Descend(t *testing.T) {
+	oldSchema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	newSchema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Float, Name: "float"},
+		record.Field{Type: influx.Field_Type_String, Name: "string"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+
+	oldRec := genRowRec(oldSchema,
+		[]int{1}, []int64{200},
+		[]int{0}, []float64{},
+		[]int{0}, []string{},
+		[]int{1}, []bool{false},
+		[]int64{1})
+	newRec := genRowRec(newSchema,
+		[]int{1}, []int64{100},
+		[]int{1}, []float64{1.3},
+		[]int{1}, []string{"test"},
+		[]int{0}, []bool{},
+		[]int64{1})
+	expectRec := genRowRec(testSchema,
+		[]int{1}, []int64{100},
+		[]int{1}, []float64{1.3},
+		[]int{1}, []string{"test"},
+		[]int{1}, []bool{false},
+		[]int64{1})
+
+	sort.Sort(oldRec)
+	sort.Sort(newRec)
+	sort.Sort(expectRec)
+
+	var mergeRec record.Record
+	mergeRec.MergeRecordDescend(newRec, oldRec)
+	if !testRecsEqual(&mergeRec, expectRec) {
+		t.Fatal("error result")
+	}
+}
+
+// merge with oldRec.time[0] < newRec.time[0]
+func TestMergeRecordWithDifferentSchemaAndOneRowCase2(t *testing.T) {
+	oldSchema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	newSchema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Float, Name: "float"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	expSchema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Float, Name: "float"},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+
+	oldRec := genRowRec(oldSchema,
+		[]int{1}, []int64{200},
+		[]int{0}, []float64{},
+		[]int{1}, []string{"test1"},
+		[]int{1}, []bool{false},
+		[]int64{1})
+	newRec := genRowRec(newSchema,
+		[]int{1}, []int64{100},
+		[]int{1}, []float64{1.3},
+		[]int{1}, []string{"test2"},
+		[]int{0}, []bool{},
+		[]int64{2})
+	expectRec := genRowRec(expSchema,
+		[]int{1, 1}, []int64{200, 100},
+		[]int{0, 1}, []float64{0, 1.3},
+		[]int{1, 1}, []string{"test1", "test2"},
+		[]int{1, 0}, []bool{false, false},
+		[]int64{1, 2})
+
+	sort.Sort(oldRec)
+	sort.Sort(newRec)
+	sort.Sort(expectRec)
+
+	var mergeRec record.Record
+	mergeRec.MergeRecord(newRec, oldRec)
+	if !testRecsEqual(&mergeRec, expectRec) {
+		t.Fatal("error result")
+	}
+}
+
+// merge with oldRec.time[0] < newRec.time[0]
+func TestMergeRecordWithDifferentSchemaAndOneRowCase2Descend(t *testing.T) {
+	oldSchema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	newSchema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Float, Name: "float"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	expSchema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Float, Name: "float"},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+
+	oldRec := genRowRec(oldSchema,
+		[]int{1}, []int64{200},
+		[]int{0}, []float64{},
+		[]int{1}, []string{"test1"},
+		[]int{1}, []bool{false},
+		[]int64{1})
+	newRec := genRowRec(newSchema,
+		[]int{1}, []int64{100},
+		[]int{1}, []float64{1.3},
+		[]int{1}, []string{"test2"},
+		[]int{0}, []bool{},
+		[]int64{2})
+	expectRec := genRowRec(expSchema,
+		[]int{1, 1}, []int64{100, 200},
+		[]int{1, 0}, []float64{1.3, 0},
+		[]int{1, 1}, []string{"test2", "test1"},
+		[]int{0, 1}, []bool{false, false},
+		[]int64{2, 1})
+
+	sort.Sort(oldRec)
+	sort.Sort(newRec)
+	sort.Sort(expectRec)
+
+	var mergeRec record.Record
+	mergeRec.MergeRecordDescend(newRec, oldRec)
+	if !testRecsEqual(&mergeRec, expectRec) {
+		t.Fatal("error result")
+	}
+}
+
+// merge with oldRec.time[0] > newRec.time[0]
+func TestMergeRecordWithDifferentSchemaAndOneRowCase3(t *testing.T) {
+	oldSchema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	newSchema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Float, Name: "float"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	expSchema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Float, Name: "float"},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+
+	oldRec := genRowRec(oldSchema,
+		[]int{1}, []int64{200},
+		[]int{0}, []float64{},
+		[]int{1}, []string{"test1"},
+		[]int{1}, []bool{false},
+		[]int64{1})
+	newRec := genRowRec(newSchema,
+		[]int{1}, []int64{100},
+		[]int{1}, []float64{1.3},
+		[]int{1}, []string{"test2"},
+		[]int{0}, []bool{},
+		[]int64{2})
+	expectRec := genRowRec(expSchema,
+		[]int{1, 1}, []int64{200, 100},
+		[]int{0, 1}, []float64{0, 1.3},
+		[]int{1, 1}, []string{"test1", "test2"},
+		[]int{1, 0}, []bool{false, false},
+		[]int64{1, 2})
+
+	sort.Sort(oldRec)
+	sort.Sort(newRec)
+	sort.Sort(expectRec)
+
+	var mergeRec record.Record
+	mergeRec.MergeRecord(newRec, oldRec)
+	if !testRecsEqual(&mergeRec, expectRec) {
+		t.Fatal("error result")
+	}
+}
+
+// merge with oldRec.time[0] > newRec.time[0]
+func TestMergeRecordWithDifferentSchemaAndOneRowCase3Descend(t *testing.T) {
+	oldSchema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	newSchema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Float, Name: "float"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	expSchema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Float, Name: "float"},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+
+	oldRec := genRowRec(oldSchema,
+		[]int{1}, []int64{200},
+		[]int{0}, []float64{},
+		[]int{1}, []string{"test1"},
+		[]int{1}, []bool{false},
+		[]int64{2})
+	newRec := genRowRec(newSchema,
+		[]int{1}, []int64{100},
+		[]int{1}, []float64{1.3},
+		[]int{1}, []string{"test2"},
+		[]int{0}, []bool{},
+		[]int64{1})
+	expectRec := genRowRec(expSchema,
+		[]int{1, 1}, []int64{200, 100},
+		[]int{0, 1}, []float64{0, 1.3},
+		[]int{1, 1}, []string{"test1", "test2"},
+		[]int{1, 0}, []bool{false, false},
+		[]int64{2, 1})
+
+	sort.Sort(oldRec)
+	sort.Sort(newRec)
+	sort.Sort(expectRec)
+
+	var mergeRec record.Record
+	mergeRec.MergeRecordDescend(newRec, oldRec)
+	if !testRecsEqual(&mergeRec, expectRec) {
+		t.Fatal("error result")
+	}
+}
+
+// merge with oldRec.time[max] < newRec.time[0]
+func TestMergeRecordWithSameSchemaAndMultiRowsCase1(t *testing.T) {
+	oldRec := genRowRec(testSchema,
+		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
+		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
+		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
+		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
+		[]int64{1, 2, 3, 4, 5, 6, 7})
+	newRec := genRowRec(testSchema,
+		[]int{1, 0, 1, 1, 1}, []int64{1000, 0, 1100, 1200, 1300},
+		[]int{1, 1, 0, 1, 0}, []float64{1001.3, 1002.4, 0, 1003.5, 0},
+		[]int{0, 1, 1, 1, 0}, []string{"", "helloNew", "worldNew", "testNew1", ""},
+		[]int{1, 1, 1, 1, 0}, []bool{true, true, false, true, false},
+		[]int64{18, 19, 20, 21, 22})
+	expectRec := genRowRec(testSchema,
+		[]int{1, 1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700, 1000, 0, 1100, 1200, 1300},
+		[]int{1, 0, 1, 0, 1, 1, 0, 1, 1, 0, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0, 1001.3, 1002.4, 0, 1003.5, 0},
+		[]int{0, 1, 0, 0, 1, 0, 1, 0, 1, 1, 1, 0}, []string{"", "hello", "", "", "world", "", "test", "", "helloNew", "worldNew", "testNew1", ""},
+		[]int{0, 0, 1, 0, 1, 1, 0, 1, 1, 1, 1, 0}, []bool{false, false, true, false, true, false, false, true, true, false, true, false},
+		[]int64{1, 2, 3, 4, 5, 6, 7, 18, 19, 20, 21, 22})
+	sort.Sort(newRec)
+	sort.Sort(oldRec)
+	sort.Sort(expectRec)
+
+	var mergeRec record.Record
+	mergeRec.MergeRecord(newRec, oldRec)
+	if !testRecsEqual(&mergeRec, expectRec) {
+		t.Fatal("error result")
+	}
+}
+
+// merge with oldRec.time[max] < newRec.time[0]
+func TestMergeRecordWithSameSchemaAndMultiRowsCase1Descend(t *testing.T) {
+	oldRec := genRowRec(testSchema,
+		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
+		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
+		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
+		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
+		[]int64{7, 6, 5, 4, 3, 2, 1})
+	newRec := genRowRec(testSchema,
+		[]int{1, 0, 1, 1, 1}, []int64{1000, 0, 1100, 1200, 1300},
+		[]int{1, 1, 0, 1, 0}, []float64{1001.3, 1002.4, 0, 1003.5, 0},
+		[]int{1, 1, 0, 1, 0}, []string{"", "helloNew", "worldNew", "testNew1", ""},
+		[]int{1, 1, 1, 1, 0}, []bool{true, true, false, true, false},
+		[]int64{22, 21, 20, 19, 18})
+	expectRec := genRowRec(testSchema,
+		[]int{1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1}, []int64{1000, 0, 1100, 1200, 1300, 200, 300, 0, 400, 500, 600, 700},
+		[]int{1, 1, 0, 1, 0, 1, 0, 1, 0, 1, 1, 0}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 2.3, 0, 3.3, 0, 4.3, 5.3, 0},
+		[]int{1, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 1}, []string{"", "helloNew", "worldNew", "testNew1", "", "", "hello", "", "", "world", "", "test"},
+		[]int{1, 1, 1, 1, 0, 0, 0, 1, 0, 1, 1, 0}, []bool{true, true, false, true, false, false, false, true, false, true, false, false},
+		[]int64{22, 21, 20, 19, 18, 7, 6, 5, 4, 3, 2, 1})
+	sort.Sort(newRec)
+	sort.Sort(oldRec)
+	sort.Sort(expectRec)
+
+	var mergeRec record.Record
+	mergeRec.MergeRecordDescend(newRec, oldRec)
+	if !testRecsEqual(&mergeRec, expectRec) {
+		t.Fatal("error result")
+	}
+}
+
+// merge with oldRec.time[0] > newRec.time[max]
+func TestMergeRecordWithSameSchemaAndMultiRowsCase2(t *testing.T) {
+	oldRec := genRowRec(testSchema,
+		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
+		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
+		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
+		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
+		[]int64{31, 32, 33, 34, 45, 46, 47})
+	newRec := genRowRec(testSchema,
+		[]int{1, 0, 1, 1, 1}, []int64{1000, 0, 1100, 1200, 1300},
+		[]int{1, 1, 0, 1, 0}, []float64{1001.3, 1002.4, 0, 1003.5, 0},
+		[]int{0, 1, 1, 1, 0}, []string{"", "helloNew", "worldNew", "testNew1", ""},
+		[]int{1, 1, 1, 1, 0}, []bool{true, true, false, true, false},
+		[]int64{18, 19, 20, 21, 22})
+	expectRec := genRowRec(testSchema,
+		[]int{1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1}, []int64{1000, 0, 1100, 1200, 1300, 200, 300, 0, 400, 500, 600, 700},
+		[]int{1, 1, 0, 1, 0, 1, 0, 1, 0, 1, 1, 0}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 2.3, 0, 3.3, 0, 4.3, 5.3, 0},
+		[]int{0, 1, 1, 1, 0, 0, 1, 0, 0, 1, 0, 1}, []string{"", "helloNew", "worldNew", "testNew1", "", "", "hello", "", "", "world", "", "test"},
+		[]int{1, 1, 1, 1, 0, 0, 0, 1, 0, 1, 1, 0}, []bool{true, true, false, true, false, false, false, true, false, true, false, false},
+		[]int64{18, 19, 20, 21, 22, 31, 32, 33, 34, 45, 46, 47})
+	sort.Sort(newRec)
+	sort.Sort(oldRec)
+	sort.Sort(expectRec)
+
+	var mergeRec record.Record
+	mergeRec.MergeRecord(newRec, oldRec)
+	if !testRecsEqual(&mergeRec, expectRec) {
+		t.Fatal("error result")
+	}
+}
+
+// merge with oldRec.time[0] > newRec.time[max]
+func TestMergeRecordWithSameSchemaAndMultiRowsCase2Descend(t *testing.T) {
+	oldRec := genRowRec(testSchema,
+		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
+		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
+		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
+		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
+		[]int64{47, 46, 45, 34, 33, 32, 31})
+	newRec := genRowRec(testSchema,
+		[]int{1, 0, 1, 1, 1}, []int64{1000, 0, 1100, 1200, 1300},
+		[]int{1, 1, 0, 1, 0}, []float64{1001.3, 1002.4, 0, 1003.5, 0},
+		[]int{0, 1, 1, 1, 0}, []string{"", "helloNew", "worldNew", "testNew1", ""},
+		[]int{1, 1, 1, 1, 0}, []bool{true, true, false, true, false},
+		[]int64{22, 21, 20, 19, 18})
+	expectRec := genRowRec(testSchema,
+		[]int{1, 1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700, 1000, 0, 1100, 1200, 1300},
+		[]int{1, 0, 1, 0, 1, 1, 0, 1, 1, 0, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0, 1001.3, 1002.4, 0, 1003.5, 0},
+		[]int{0, 1, 0, 0, 1, 0, 1, 0, 1, 1, 1, 0}, []string{"", "hello", "", "", "world", "", "test", "", "helloNew", "worldNew", "testNew1", ""},
+		[]int{0, 0, 1, 0, 1, 1, 0, 1, 1, 1, 1, 0}, []bool{false, false, true, false, true, false, false, true, true, false, true, false},
+		[]int64{47, 46, 45, 34, 33, 32, 31, 22, 21, 20, 19, 18})
+	sort.Sort(newRec)
+	sort.Sort(oldRec)
+	sort.Sort(expectRec)
+
+	var mergeRec record.Record
+	mergeRec.MergeRecordDescend(newRec, oldRec)
+	if !testRecsEqual(&mergeRec, expectRec) {
+		t.Fatal("error result")
+	}
+}
+
+// merge with all time of oldRec is equal to the time of newRec
+//
+//	old.time [31, 32, 33, 34, 45, 46, 47]
+//	new.time [31, 32, 33, 34, 45, 46, 47]
+func TestMergeRecordWithSameSchemaAndMultiRowsCase3(t *testing.T) {
+	oldRec := genRowRec(testSchema,
+		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
+		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
+		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
+		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
+		[]int64{31, 32, 33, 34, 45, 46, 47})
+	newRec := genRowRec(testSchema,
+		[]int{1, 0, 1, 1, 1, 1, 0}, []int64{1000, 0, 1100, 1200, 1300, 1400, 0},
+		[]int{1, 1, 0, 1, 0, 0, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6},
+		[]int{0, 1, 1, 1, 0, 1, 1}, []string{"", "helloNew", "worldNew", "testNew1", "", "testNew2", "testNew3"},
+		[]int{1, 1, 1, 1, 0, 1, 1}, []bool{true, true, false, true, false, false, true},
+		[]int64{31, 32, 33, 34, 45, 46, 47})
+	expRec := genRowRec(testSchema,
+		[]int{1, 1, 1, 1, 1, 1, 1}, []int64{1000, 300, 1100, 1200, 1300, 1400, 700},
+		[]int{1, 1, 1, 1, 1, 1, 1}, []float64{1001.3, 1002.4, 3.3, 1003.5, 4.3, 5.3, 2000.6},
+		[]int{0, 1, 1, 1, 1, 1, 1}, []string{"", "helloNew", "worldNew", "testNew1", "world", "testNew2", "testNew3"},
+		[]int{1, 1, 1, 1, 1, 1, 1}, []bool{true, true, false, true, true, false, true},
+		[]int64{31, 32, 33, 34, 45, 46, 47})
+
+	sort.Sort(newRec)
+	sort.Sort(oldRec)
+	sort.Sort(expRec)
+
+	var mergeRec record.Record
+	mergeRec.MergeRecord(newRec, oldRec)
+	if !testRecsEqual(&mergeRec, expRec) {
+		t.Fatal("error result")
+	}
+}
+
+// merge with all time of oldRec is equal to the time of newRec
+//
+//	old.time [31, 32, 33, 34, 45, 46, 47]
+//	new.time [31, 32, 33, 34, 45, 46, 47]
+func TestMergeRecordWithSameSchemaAndMultiRowsCase3Descend(t *testing.T) {
+	oldRec := genRowRec(testSchema,
+		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
+		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
+		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
+		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
+		[]int64{47, 46, 45, 34, 33, 32, 31})
+	newRec := genRowRec(testSchema,
+		[]int{1, 0, 1, 1, 1, 1, 0}, []int64{1000, 0, 1100, 1200, 1300, 1400, 0},
+		[]int{1, 1, 0, 1, 0, 0, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6},
+		[]int{0, 1, 1, 1, 0, 1, 1}, []string{"", "helloNew", "worldNew", "testNew1", "", "testNew2", "testNew3"},
+		[]int{1, 1, 1, 1, 0, 1, 1}, []bool{true, true, false, true, false, false, true},
+		[]int64{47, 46, 45, 34, 33, 32, 31})
+	expRec := genRowRec(testSchema,
+		[]int{1, 1, 1, 1, 1, 1, 1}, []int64{1000, 300, 1100, 1200, 1300, 1400, 700},
+		[]int{1, 1, 1, 1, 1, 1, 1}, []float64{1001.3, 1002.4, 3.3, 1003.5, 4.3, 5.3, 2000.6},
+		[]int{0, 1, 1, 1, 1, 1, 1}, []string{"", "helloNew", "worldNew", "testNew1", "world", "testNew2", "testNew3"},
+		[]int{1, 1, 1, 1, 1, 1, 1}, []bool{true, true, false, true, true, false, true},
+		[]int64{47, 46, 45, 34, 33, 32, 31})
+
+	sort.Sort(newRec)
+	sort.Sort(oldRec)
+	sort.Sort(expRec)
+
+	var mergeRec record.Record
+	mergeRec.MergeRecordDescend(newRec, oldRec)
+	if !testRecsEqual(&mergeRec, expRec) {
+		t.Fatal("error result")
+	}
+}
+
+// merge with time of oldRec and newRec like below
+//
+//	old.time [31, 32, 33, 34, 45, 46, 47]
+//	new.time     [32, 33, 34, 45, 46, 47, 48]
+func TestMergeRecordWithSameSchemaAndMultiRowsCase4(t *testing.T) {
+	oldRec := genRowRec(testSchema,
+		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
+		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
+		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
+		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
+		[]int64{31, 32, 33, 34, 45, 46, 47})
+	newRec := genRowRec(testSchema,
+		[]int{1, 0, 1, 1, 1, 1, 0}, []int64{1000, 0, 1100, 1200, 1300, 1400, 0},
+		[]int{1, 1, 0, 1, 0, 0, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6},
+		[]int{0, 1, 1, 1, 0, 1, 1}, []string{"", "helloNew", "worldNew", "testNew1", "", "testNew2", "testNew3"},
+		[]int{1, 1, 1, 1, 0, 1, 1}, []bool{true, true, false, true, false, false, true},
+		[]int64{32, 33, 34, 45, 46, 47, 48})
+	expectRec := genRowRec(testSchema,
+		[]int{1, 1, 0, 1, 1, 1, 1, 0}, []int64{200, 1000, 0, 1100, 1200, 1300, 1400, 0},
+		[]int{1, 1, 1, 0, 1, 1, 0, 1}, []float64{2.3, 1001.3, 1002.4, 0, 1003.5, 5.3, 0, 2000.6},
+		[]int{0, 1, 1, 1, 1, 0, 1, 1}, []string{"", "hello", "helloNew", "worldNew", "testNew1", "", "testNew2", "testNew3"},
+		[]int{0, 1, 1, 1, 1, 1, 1, 1}, []bool{true, true, true, false, true, false, false, true},
+		[]int64{31, 32, 33, 34, 45, 46, 47, 48})
+	sort.Sort(newRec)
+	sort.Sort(oldRec)
+	sort.Sort(expectRec)
+
+	var mergeRec record.Record
+	mergeRec.MergeRecord(newRec, oldRec)
+	if !testRecsEqual(&mergeRec, expectRec) {
+		t.Fatal("error result")
+	}
+}
+
+// merge with time of oldRec and newRec like below
+//
+//	old.time     [47, 46, 45, 34, 33, 32, 31]
+//	new.time [48, 47, 46, 45, 34, 33, 32]
+func TestMergeRecordWithSameSchemaAndMultiRowsCase4Descend(t *testing.T) {
+	oldRec := genRowRec(testSchema,
+		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
+		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
+		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
+		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
+		[]int64{47, 46, 45, 34, 33, 32, 31})
+	newRec := genRowRec(testSchema,
+		[]int{1, 0, 1, 1, 1, 1, 0}, []int64{1000, 0, 1100, 1200, 1300, 1400, 0},
+		[]int{1, 1, 0, 1, 0, 0, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6},
+		[]int{0, 1, 1, 1, 0, 1, 1}, []string{"", "helloNew", "worldNew", "testNew1", "", "testNew2", "testNew3"},
+		[]int{1, 1, 1, 1, 0, 1, 1}, []bool{true, true, false, true, false, false, true},
+		[]int64{48, 47, 46, 45, 34, 33, 32})
+	expectRec := genRowRec(testSchema,
+		[]int{1, 1, 1, 1, 1, 1, 1, 1}, []int64{1000, 200, 1100, 1200, 1300, 1400, 600, 700},
+		[]int{1, 1, 0, 1, 0, 1, 1, 0}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 4.3, 2000.6, 0},
+		[]int{0, 1, 1, 1, 0, 1, 1, 1}, []string{"", "helloNew", "worldNew", "testNew1", "", "testNew2", "testNew3", "test"},
+		[]int{1, 1, 1, 1, 0, 1, 1, 0}, []bool{true, true, false, true, false, false, true, false},
+		[]int64{48, 47, 46, 45, 34, 33, 32, 31})
+	sort.Sort(newRec)
+	sort.Sort(oldRec)
+	sort.Sort(expectRec)
+
+	var mergeRec record.Record
+	mergeRec.MergeRecordDescend(newRec, oldRec)
+	if !testRecsEqual(&mergeRec, expectRec) {
+		t.Fatal("error result")
+	}
+}
+
+// merge with time of oldRec and newRec like below
+//
+//	old.time [31, 32, 33, 34, 45, 46, 47]
+//	new.time     [32, 33, 34, 45, 46, 47, 48, 49]
+func TestMergeRecordWithSameSchemaAndMultiRowsCase5(t *testing.T) {
+	oldRec := genRowRec(testSchema,
+		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
+		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
+		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
+		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
+		[]int64{31, 32, 33, 34, 45, 46, 47})
+	newRec := genRowRec(testSchema,
+		[]int{1, 0, 1, 1, 1, 1, 0, 1}, []int64{1000, 0, 1100, 1200, 1300, 1400, 0, 2100},
+		[]int{1, 1, 0, 1, 0, 0, 1, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6, 3000.1},
+		[]int{0, 1, 1, 1, 0, 1, 1, 1}, []string{"", "helloNew", "worldNew", "testNew1", "", "testNew2", "testNew3", "testNew4"},
+		[]int{1, 1, 1, 1, 0, 1, 1, 0}, []bool{true, true, false, true, false, false, true, false},
+		[]int64{32, 33, 34, 45, 46, 47, 48, 49})
+	expectRec := genRowRec(testSchema,
+		[]int{1, 1, 0, 1, 1, 1, 1, 0, 1}, []int64{200, 1000, 0, 1100, 1200, 1300, 1400, 0, 2100},
+		[]int{1, 1, 1, 0, 1, 1, 0, 1, 1}, []float64{2.3, 1001.3, 1002.4, 0, 1003.5, 5.3, 0, 2000.6, 3000.1},
+		[]int{0, 1, 1, 1, 1, 0, 1, 1, 1}, []string{"", "hello", "helloNew", "worldNew", "testNew1", "", "testNew2", "testNew3", "testNew4"},
+		[]int{0, 1, 1, 1, 1, 1, 1, 1, 0}, []bool{true, true, true, false, true, false, false, true, false},
+		[]int64{31, 32, 33, 34, 45, 46, 47, 48, 49})
+	sort.Sort(newRec)
+	sort.Sort(oldRec)
+	sort.Sort(expectRec)
+
+	var mergeRec record.Record
+	mergeRec.MergeRecord(newRec, oldRec)
+	if !testRecsEqual(&mergeRec, expectRec) {
+		t.Fatal("error result")
+	}
+}
+
+// merge with time of oldRec and newRec like below
+//
+//	old.time         [47, 46, 45, 34, 33, 32, 31]
+//	new.time [49, 48, 47, 46, 45, 34, 33, 32]
+func TestMergeRecordWithSameSchemaAndMultiRowsCase5Descend(t *testing.T) {
+	oldRec := genRowRec(schema,
+		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
+		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
+		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
+		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
+		[]int64{47, 46, 45, 34, 33, 32, 31})
+	newRec := genRowRec(schema,
+		[]int{1, 0, 1, 1, 1, 1, 0, 1}, []int64{1000, 0, 1100, 1200, 1300, 1400, 0, 2100},
+		[]int{1, 1, 0, 1, 0, 0, 1, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6, 3000.1},
+		[]int{0, 1, 1, 1, 0, 1, 1, 1}, []string{"", "helloNew", "worldNew", "testNew1", "", "testNew2", "testNew3", "testNew4"},
+		[]int{1, 1, 1, 1, 0, 1, 1, 0}, []bool{true, true, false, true, false, false, true, false},
+		[]int64{49, 48, 47, 46, 45, 34, 33, 32})
+	expectRec := genRowRec(schema,
+		[]int{1, 0, 1, 1, 1, 1, 1, 1, 1}, []int64{1000, 0, 1100, 1200, 1300, 1400, 500, 2100, 700},
+		[]int{1, 1, 1, 1, 1, 0, 1, 1, 0}, []float64{1001.3, 1002.4, 2.3, 1003.5, 3.3, 0, 2000.6, 3000.1, 0},
+		[]int{0, 1, 1, 1, 0, 1, 1, 1, 1}, []string{"", "helloNew", "worldNew", "testNew1", "", "testNew2", "testNew3", "testNew4", "test"},
+		[]int{1, 1, 1, 1, 1, 1, 1, 1, 0}, []bool{true, true, false, true, true, false, true, false, false},
+		[]int64{49, 48, 47, 46, 45, 34, 33, 32, 31})
+	sort.Sort(newRec)
+	sort.Sort(oldRec)
+	sort.Sort(expectRec)
+
+	var mergeRec record.Record
+	mergeRec.MergeRecordDescend(newRec, oldRec)
+	if !testRecsEqual(&mergeRec, expectRec) {
+		t.Fatal("error result")
+	}
+}
+
+// merge with time of oldRec and newRec like below
+//
+//	old.time [31, 32, 33, 34, 45, 46, 47]
+//	new.time     [32, 33, 34, 45, 46,    48, 49, 50]
+func TestMergeRecordWithSameSchemaAndMultiRowsCase6(t *testing.T) {
+	oldRec := genRowRec(schema,
+		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
+		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
+		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
+		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
+		[]int64{31, 32, 33, 34, 45, 46, 47})
+	newRec := genRowRec(schema,
+		[]int{1, 0, 1, 1, 1, 1, 0, 1}, []int64{1000, 0, 1100, 1200, 1300, 1400, 0, 2100},
+		[]int{1, 1, 0, 1, 0, 0, 1, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6, 3000.1},
+		[]int{0, 1, 1, 1, 0, 1, 1, 1}, []string{"", "helloNew", "worldNew", "testNew1", "", "testNew2", "testNew3", "testNew4"},
+		[]int{1, 1, 1, 1, 0, 1, 1, 0}, []bool{true, true, false, true, false, false, true, false},
+		[]int64{32, 33, 34, 45, 46, 48, 49, 50})
+	expectRec := genRowRec(schema,
+		[]int{1, 1, 0, 1, 1, 1, 1, 1, 0, 1}, []int64{200, 1000, 0, 1100, 1200, 1300, 700, 1400, 0, 2100},
+		[]int{1, 1, 1, 0, 1, 1, 0, 0, 1, 1}, []float64{2.3, 1001.3, 1002.4, 0, 1003.5, 5.3, 0, 0, 2000.6, 3000.1},
+		[]int{0, 1, 1, 1, 1, 0, 1, 1, 1, 1}, []string{"", "hello", "helloNew", "worldNew", "testNew1", "", "test", "testNew2", "testNew3", "testNew4"},
+		[]int{0, 1, 1, 1, 1, 1, 0, 1, 1, 0}, []bool{false, true, true, false, true, false, false, false, true, false},
+		[]int64{31, 32, 33, 34, 45, 46, 47, 48, 49, 50})
+	sort.Sort(newRec)
+	sort.Sort(oldRec)
+	sort.Sort(expectRec)
+
+	var mergeRec record.Record
+	mergeRec.MergeRecord(newRec, oldRec)
+	if !testRecsEqual(&mergeRec, expectRec) {
+		t.Fatal("error result")
+	}
+}
+
+// merge with time of oldRec and newRec like below
+//
+//	old.time              [47, 46, 45, 34, 33, 32, 31]
+//	new.time [50, 49, 48,      46, 45, 34, 33, 32]
+func TestMergeRecordWithSameSchemaAndMultiRowsCase6Descend(t *testing.T) {
+	oldRec := genRowRec(schema,
+		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
+		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
+		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
+		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
+		[]int64{47, 46, 45, 34, 33, 32, 31})
+	newRec := genRowRec(schema,
+		[]int{1, 0, 1, 1, 1, 1, 0, 1}, []int64{1000, 0, 1100, 1200, 1300, 1400, 0, 2100},
+		[]int{1, 1, 0, 1, 0, 0, 1, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6, 3000.1},
+		[]int{0, 1, 1, 1, 0, 1, 1, 1}, []string{"", "helloNew", "worldNew", "testNew1", "", "testNew2", "testNew3", "testNew4"},
+		[]int{1, 1, 1, 1, 0, 1, 1, 0}, []bool{true, true, false, true, false, false, true, false},
+		[]int64{50, 49, 48, 46, 45, 34, 33, 32})
+	expectRec := genRowRec(schema,
+		[]int{1, 0, 1, 1, 1, 1, 1, 1, 1, 1}, []int64{1000, 0, 1100, 200, 1200, 1300, 1400, 500, 2100, 700},
+		[]int{1, 1, 0, 1, 1, 1, 0, 1, 1, 0}, []float64{1001.3, 1002.4, 0, 2.3, 1003.5, 3.3, 0, 2000.6, 3000.1, 0},
+		[]int{0, 1, 1, 0, 1, 0, 1, 1, 1, 1}, []string{"", "helloNew", "worldNew", "", "testNew1", "", "testNew2", "testNew3", "testNew4", "test"},
+		[]int{1, 1, 1, 0, 1, 1, 1, 1, 1, 0}, []bool{true, true, false, false, true, true, false, true, false, false},
+		[]int64{50, 49, 48, 47, 46, 45, 34, 33, 32, 31})
+	sort.Sort(newRec)
+	sort.Sort(oldRec)
+	sort.Sort(expectRec)
+
+	var mergeRec record.Record
+	mergeRec.MergeRecordDescend(newRec, oldRec)
+	if !testRecsEqual(&mergeRec, expectRec) {
+		t.Fatal("error result")
+	}
+}
+
+// merge with time of oldRec and newRec like below
+//
+//	old.time [30,    32, 33, 34, 45, 46, 47]
+//	new.time     [31,    33, 34, 45, 46,    48, 49, 50]
+func TestMergeRecordWithSameSchemaAndMultiRowsCase7(t *testing.T) {
+	oldRec := genRowRec(testSchema,
+		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
+		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
+		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
+		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
+		[]int64{30, 32, 33, 34, 45, 46, 47})
+	newRec := genRowRec(testSchema,
+		[]int{1, 0, 1, 1, 1, 1, 0, 1}, []int64{1000, 0, 1100, 1200, 1300, 1400, 0, 2100},
+		[]int{1, 1, 0, 1, 0, 0, 1, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6, 3000.1},
+		[]int{0, 1, 1, 1, 0, 1, 1, 1}, []string{"", "helloNew", "worldNew", "testNew1", "", "testNew2", "testNew3", "testNew4"},
+		[]int{1, 1, 1, 1, 0, 1, 1, 0}, []bool{true, true, false, true, false, false, true, false},
+		[]int64{31, 33, 34, 45, 46, 48, 49, 50})
+	expectRec := genRowRec(testSchema,
+		[]int{1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1}, []int64{200, 1000, 300, 0, 1100, 1200, 1300, 700, 1400, 0, 2100},
+		[]int{1, 1, 0, 1, 0, 1, 1, 0, 0, 1, 1}, []float64{2.3, 1001.3, 0, 1002.4, 0, 1003.5, 5.3, 0, 0, 2000.6, 3000.1},
+		[]int{0, 0, 1, 1, 1, 1, 0, 1, 1, 1, 1}, []string{"", "", "hello", "helloNew", "worldNew", "testNew1", "", "test", "testNew2", "testNew3", "testNew4"},
+		[]int{0, 1, 0, 1, 1, 1, 1, 0, 1, 1, 0}, []bool{false, true, false, true, false, true, false, false, false, true, false},
+		[]int64{30, 31, 32, 33, 34, 45, 46, 47, 48, 49, 50})
+	sort.Sort(newRec)
+	sort.Sort(oldRec)
+	sort.Sort(expectRec)
+
+	var mergeRec record.Record
+	mergeRec.MergeRecord(newRec, oldRec)
+	if !testRecsEqual(&mergeRec, expectRec) {
+		t.Fatal("error result")
+	}
+}
+
+// merge with time of oldRec and newRec like below
+//
+//	old.time             [47, 46, 45, 34, 33, 32,   30]
+//	new.time [50, 49, 48,     46, 45, 34, 33,    31]
+func TestMergeRecordWithSameSchemaAndMultiRowsCase7Descend(t *testing.T) {
+	oldRec := genRowRec(testSchema,
+		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
+		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
+		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
+		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
+		[]int64{47, 46, 45, 34, 33, 32, 30})
+	newRec := genRowRec(testSchema,
+		[]int{1, 0, 1, 1, 1, 1, 0, 1}, []int64{1000, 0, 1100, 1200, 1300, 1400, 0, 2100},
+		[]int{1, 1, 0, 1, 0, 0, 1, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6, 3000.1},
+		[]int{0, 1, 1, 1, 0, 1, 1, 1}, []string{"", "helloNew", "worldNew", "testNew1", "", "testNew2", "testNew3", "testNew4"},
+		[]int{1, 1, 1, 1, 0, 1, 1, 0}, []bool{true, true, false, true, false, false, true, false},
+		[]int64{50, 49, 48, 46, 45, 34, 33, 31})
+	expectRec := genRowRec(testSchema,
+		[]int{1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1}, []int64{1000, 0, 1100, 200, 1200, 1300, 1400, 500, 600, 2100, 700},
+		[]int{1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 0}, []float64{1001.3, 1002.4, 0, 2.3, 1003.5, 3.3, 0, 2000.6, 5.3, 3000.1, 0},
+		[]int{0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 1}, []string{"", "helloNew", "worldNew", "", "testNew1", "", "testNew2", "testNew3", "", "testNew4", "test"},
+		[]int{1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 0}, []bool{true, true, false, false, true, true, false, true, false, false, false},
+		[]int64{50, 49, 48, 47, 46, 45, 34, 33, 32, 31, 30})
+	sort.Sort(newRec)
+	sort.Sort(oldRec)
+	sort.Sort(expectRec)
+
+	var mergeRec record.Record
+	mergeRec.MergeRecordDescend(newRec, oldRec)
+	if !testRecsEqual(&mergeRec, expectRec) {
+		t.Fatal("error result")
+	}
+}
+
+// merge with time of oldRec and newRec like below
+//
+//	old.time [30,    32, 33, 34, 45, 46, 47]
+//	new.time     [31,    33, 34, 45, 46]
+func TestMergeRecordWithSameSchemaAndMultiRowsCase8(t *testing.T) {
+	oldRec := genRowRec(testSchema,
+		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
+		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
+		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
+		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
+		[]int64{30, 32, 33, 34, 45, 46, 47})
+	newRec := genRowRec(testSchema,
+		[]int{1, 0, 1, 1, 1}, []int64{1000, 0, 1100, 1200, 1300},
+		[]int{1, 1, 0, 1, 0}, []float64{1001.3, 1002.4, 0, 1003.5, 0},
+		[]int{0, 1, 1, 1, 0}, []string{"", "helloNew", "worldNew", "testNew1", ""},
+		[]int{1, 1, 1, 1, 0}, []bool{true, true, false, true, false},
+		[]int64{31, 33, 34, 45, 46})
+	expectRec := genRowRec(testSchema,
+		[]int{1, 1, 1, 0, 1, 1, 1, 1}, []int64{200, 1000, 300, 0, 1100, 1200, 1300, 700},
+		[]int{1, 1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 1001.3, 0, 1002.4, 0, 1003.5, 5.3, 0},
+		[]int{0, 0, 1, 1, 1, 1, 0, 1}, []string{"", "", "hello", "helloNew", "worldNew", "testNew1", "", "test"},
+		[]int{0, 1, 0, 1, 1, 1, 1, 0}, []bool{false, true, false, true, false, true, false, false},
+		[]int64{30, 31, 32, 33, 34, 45, 46, 47})
+	sort.Sort(newRec)
+	sort.Sort(oldRec)
+	sort.Sort(expectRec)
+
+	var mergeRec record.Record
+	mergeRec.MergeRecord(newRec, oldRec)
+	if !testRecsEqual(&mergeRec, expectRec) {
+		t.Fatal("error result")
+	}
+}
+
+// merge with time of oldRec and newRec like below
+//
+//	old.time [47, 46, 45, 34, 33, 32,   30]
+//	new.time     [46, 45, 34, 33,    31]
+func TestMergeRecordWithSameSchemaAndMultiRowsCase8Descend(t *testing.T) {
+	oldRec := genRowRec(testSchema,
+		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
+		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
+		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
+		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
+		[]int64{47, 46, 45, 34, 33, 32, 30})
+	newRec := genRowRec(testSchema,
+		[]int{1, 0, 1, 1, 1}, []int64{1000, 0, 1100, 1200, 1300},
+		[]int{1, 1, 0, 1, 0}, []float64{1001.3, 1002.4, 0, 1003.5, 0},
+		[]int{0, 1, 1, 1, 0}, []string{"", "helloNew", "worldNew", "testNew1", ""},
+		[]int{1, 1, 1, 1, 0}, []bool{true, true, false, true, false},
+		[]int64{46, 45, 34, 33, 31})
+	expectRec := genRowRec(testSchema,
+		[]int{1, 1, 0, 1, 1, 1, 1, 1}, []int64{200, 1000, 0, 1100, 1200, 600, 1300, 700},
+		[]int{1, 1, 1, 0, 1, 1, 0, 0}, []float64{2.3, 1001.3, 1002.4, 0, 1003.5, 5.3, 0, 0},
+		[]int{0, 1, 1, 1, 1, 0, 0, 1}, []string{"", "hello", "helloNew", "worldNew", "testNew1", "", "", "test"},
+		[]int{0, 1, 1, 1, 1, 1, 0, 0}, []bool{false, true, true, false, true, false, false, false},
+		[]int64{47, 46, 45, 34, 33, 32, 31, 30})
+	sort.Sort(newRec)
+	sort.Sort(oldRec)
+	sort.Sort(expectRec)
+
+	var mergeRec record.Record
+	mergeRec.MergeRecordDescend(newRec, oldRec)
+	if !testRecsEqual(&mergeRec, expectRec) {
+		t.Fatal("error result")
+	}
+}
+
+// merge with time of oldRec and newRec like below
+//
+//	old.time [30,    32, 33, 34, 45, 46,   48]
+//	new.time     [31,    33, 34, 45,    47]
+func TestMergeRecordWithSameSchemaAndMultiRowsCase9(t *testing.T) {
+	oldRec := genRowRec(testSchema,
+		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
+		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
+		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
+		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
+		[]int64{30, 32, 33, 34, 45, 46, 48})
+	newRec := genRowRec(testSchema,
+		[]int{1, 0, 1, 1, 1}, []int64{1000, 0, 1100, 1200, 1300},
+		[]int{1, 1, 0, 1, 0}, []float64{1001.3, 1002.4, 0, 1003.5, 0},
+		[]int{0, 1, 1, 1, 0}, []string{"", "helloNew", "worldNew", "testNew1", ""},
+		[]int{1, 1, 1, 1, 0}, []bool{true, true, false, true, false},
+		[]int64{31, 33, 34, 45, 47})
+	expectRec := genRowRec(testSchema,
+		[]int{1, 1, 1, 0, 1, 1, 1, 1, 1}, []int64{200, 1000, 300, 0, 1100, 1200, 600, 1300, 700},
+		[]int{1, 1, 0, 1, 0, 1, 1, 0, 0}, []float64{2.3, 1001.3, 0, 1002.4, 0, 1003.5, 5.3, 0, 0},
+		[]int{0, 0, 1, 1, 1, 1, 0, 0, 1}, []string{"", "", "hello", "helloNew", "worldNew", "testNew1", "", "", "test"},
+		[]int{0, 1, 0, 1, 1, 1, 1, 0, 0}, []bool{false, true, false, true, false, true, false, false, false},
+		[]int64{30, 31, 32, 33, 34, 45, 46, 47, 48})
+	sort.Sort(newRec)
+	sort.Sort(oldRec)
+	sort.Sort(expectRec)
+
+	var mergeRec record.Record
+	mergeRec.MergeRecord(newRec, oldRec)
+	if !testRecsEqual(&mergeRec, expectRec) {
+		t.Fatal("error result")
+	}
+}
+
+// merge with time of oldRec and newRec like below
+//
+//	old.time     [31,    33, 34, 45,    47]
+//	new.time [30,    32, 33, 34, 45, 46,   48]
+func TestMergeRecordWithSameSchemaAndMultiRowsCase10(t *testing.T) {
+	oldRec := genRowRec(testSchema,
+		[]int{1, 0, 1, 1, 1}, []int64{1000, 0, 1100, 1200, 1300},
+		[]int{1, 1, 0, 1, 0}, []float64{1001.3, 1002.4, 0, 1003.5, 0},
+		[]int{0, 1, 1, 1, 0}, []string{"", "helloNew", "worldNew", "testNew1", ""},
+		[]int{1, 1, 1, 1, 0}, []bool{true, true, false, true, false},
+		[]int64{31, 33, 34, 45, 47})
+	newRec := genRowRec(testSchema,
+		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
+		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
+		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
+		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
+		[]int64{30, 32, 33, 34, 45, 46, 48})
+	expectRec := genRowRec(testSchema,
+		[]int{1, 1, 1, 0, 1, 1, 1, 1, 1}, []int64{200, 1000, 300, 0, 400, 500, 600, 1300, 700},
+		[]int{1, 1, 0, 1, 0, 1, 1, 0, 0}, []float64{2.3, 1001.3, 0, 3.3, 0, 4.3, 5.3, 0, 0},
+		[]int{0, 0, 1, 1, 1, 1, 0, 0, 1}, []string{"", "", "hello", "helloNew", "worldNew", "world", "", "", "test"},
+		[]int{0, 1, 0, 1, 1, 1, 1, 0, 0}, []bool{false, true, false, true, false, true, false, false, false},
+		[]int64{30, 31, 32, 33, 34, 45, 46, 47, 48})
+	sort.Sort(newRec)
+	sort.Sort(oldRec)
+	sort.Sort(expectRec)
+
+	var mergeRec record.Record
+	mergeRec.MergeRecord(newRec, oldRec)
+	if !testRecsEqual(&mergeRec, expectRec) {
+		t.Fatal("error result")
+	}
+}
+
+// merge with time of oldRec and newRec like below
+//
+//	old.time 	  [31,    33, 34, 45, 46,    48, 49, 50]
+//	new.time [30,    32, 33, 34, 45, 46, 47]
+func TestMergeRecordWithSameSchemaAndMultiRowsCase11(t *testing.T) {
+	oldRec := genRowRec(testSchema,
+		[]int{1, 0, 1, 1, 1, 1, 0, 1}, []int64{1000, 0, 1100, 1200, 1300, 1400, 0, 2100},
+		[]int{1, 1, 0, 1, 0, 0, 1, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6, 3000.1},
+		[]int{0, 1, 1, 1, 0, 1, 1, 1}, []string{"", "helloNew", "worldNew", "testNew1", "", "testNew2", "testNew3", "testNew4"},
+		[]int{1, 1, 1, 1, 0, 1, 1, 0}, []bool{true, true, false, true, false, false, true, false},
+		[]int64{31, 33, 34, 45, 46, 48, 49, 50})
+	newRec := genRowRec(testSchema,
+		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
+		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
+		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
+		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
+		[]int64{30, 32, 33, 34, 45, 46, 47})
+	expectRec := genRowRec(testSchema,
+		[]int{1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1}, []int64{200, 1000, 300, 0, 400, 500, 600, 700, 1400, 0, 2100},
+		[]int{1, 1, 0, 1, 0, 1, 1, 0, 0, 1, 1}, []float64{2.3, 1001.3, 0, 3.3, 0, 4.3, 5.3, 0, 0, 2000.6, 3000.1},
+		[]int{0, 0, 1, 1, 1, 1, 0, 1, 1, 1, 1}, []string{"", "", "hello", "helloNew", "worldNew", "world", "", "test", "testNew2", "testNew3", "testNew4"},
+		[]int{0, 1, 0, 1, 1, 1, 1, 0, 1, 1, 0}, []bool{false, true, false, true, false, true, false, false, false, true, false},
+		[]int64{30, 31, 32, 33, 34, 45, 46, 47, 48, 49, 50})
+	sort.Sort(newRec)
+	sort.Sort(oldRec)
+	sort.Sort(expectRec)
+
+	var mergeRec record.Record
+	mergeRec.MergeRecord(newRec, oldRec)
+	if !testRecsEqual(&mergeRec, expectRec) {
+		t.Fatal("error result")
+	}
+}
+
+// merge with time of oldRec and newRec like below
+//
+//	old.time 	 [31,    33, 34, 45, 46,    48, 49, 50]
+//	new.time [30,    32, 33, 34, 45, 46, 47]
+func TestMergeRecordWithSameSchemaAndMultiRowsCase12(t *testing.T) {
+	oldRec := genRowRec(testSchema,
+		[]int{1, 0, 1, 1, 1, 1, 0, 1}, []int64{1000, 0, 1100, 1200, 1300, 1400, 0, 2100},
+		[]int{1, 1, 0, 1, 0, 0, 1, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6, 3000.1},
+		[]int{0, 1, 1, 1, 0, 1, 1, 1}, []string{"", "helloNew", "worldNew", "testNew1", "", "testNew2", "testNew3", "testNew4"},
+		[]int{1, 1, 1, 1, 0, 1, 1, 0}, []bool{true, true, false, true, false, false, true, false},
+		[]int64{31, 33, 34, 45, 46, 48, 49, 50})
+	newRec := genRowRec(testSchema,
+		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
+		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
+		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
+		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
+		[]int64{30, 32, 33, 34, 45, 46, 47})
+	expectRec := genRowRec(testSchema,
+		[]int{1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1}, []int64{200, 1000, 300, 0, 400, 500, 600, 700, 1400, 0, 2100},
+		[]int{1, 1, 0, 1, 0, 1, 1, 0, 0, 1, 1}, []float64{2.3, 1001.3, 0, 3.3, 0, 4.3, 5.3, 0, 0, 2000.6, 3000.1},
+		[]int{0, 0, 1, 1, 1, 1, 0, 1, 1, 1, 1}, []string{"", "", "hello", "helloNew", "worldNew", "world", "", "test", "testNew2", "testNew3", "testNew4"},
+		[]int{0, 1, 0, 1, 1, 1, 1, 0, 1, 1, 0}, []bool{false, true, false, true, false, true, false, false, false, true, false},
+		[]int64{30, 31, 32, 33, 34, 45, 46, 47, 48, 49, 50})
+	sort.Sort(newRec)
+	sort.Sort(oldRec)
+	sort.Sort(expectRec)
+
+	var mergeRec record.Record
+	mergeRec.MergeRecord(newRec, oldRec)
+	if !testRecsEqual(&mergeRec, expectRec) {
+		t.Fatal("error result")
+	}
+}
+
+// merge with time of oldRec and newRec like below
+//
+//	old.time     [32, 33, 34, 45, 46,    48, 49, 50]
+//	new.time [31, 32, 33, 34, 45, 46, 47]
+func TestMergeRecordWithSameSchemaAndMultiRowsCase13(t *testing.T) {
+	oldRec := genRowRec(testSchema,
+		[]int{1, 0, 1, 1, 1, 1, 0, 1}, []int64{1000, 0, 1100, 1200, 1300, 1400, 0, 2100},
+		[]int{1, 1, 0, 1, 0, 0, 1, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6, 3000.1},
+		[]int{0, 1, 1, 1, 0, 1, 1, 1}, []string{"", "helloNew", "worldNew", "testNew1", "", "testNew2", "testNew3", "testNew4"},
+		[]int{1, 1, 1, 1, 0, 1, 1, 0}, []bool{true, true, false, true, false, false, true, false},
+		[]int64{32, 33, 34, 45, 46, 48, 49, 50})
+	newRec := genRowRec(testSchema,
+		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
+		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
+		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
+		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
+		[]int64{31, 32, 33, 34, 45, 46, 47})
+	expectRec := genRowRec(testSchema,
+		[]int{1, 1, 0, 1, 1, 1, 1, 1, 0, 1}, []int64{200, 300, 0, 400, 500, 600, 700, 1400, 0, 2100},
+		[]int{1, 1, 1, 0, 1, 1, 0, 0, 1, 1}, []float64{2.3, 1001.3, 3.3, 0, 4.3, 5.3, 0, 0, 2000.6, 3000.1},
+		[]int{0, 1, 1, 1, 1, 0, 1, 1, 1, 1}, []string{"", "hello", "helloNew", "worldNew", "world", "", "test", "testNew2", "testNew3", "testNew4"},
+		[]int{0, 1, 1, 1, 1, 1, 0, 1, 1, 0}, []bool{false, true, true, false, true, false, false, false, true, false},
+		[]int64{31, 32, 33, 34, 45, 46, 47, 48, 49, 50})
+	sort.Sort(newRec)
+	sort.Sort(oldRec)
+	sort.Sort(expectRec)
+
+	var mergeRec record.Record
+	mergeRec.MergeRecord(newRec, oldRec)
+	if !testRecsEqual(&mergeRec, expectRec) {
+		t.Fatal("error result")
+	}
+}
+
+// merge with time of oldRec and newRec like below
+//
+//	old.time     [32, 33, 34, 45, 46, 47, 48, 49]
+//	new.time [31, 32, 33, 34, 45, 46, 47]
+func TestMergeRecordWithSameSchemaAndMultiRowsCase14(t *testing.T) {
+	oldRec := genRowRec(testSchema,
+		[]int{1, 0, 1, 1, 1, 1, 0, 1}, []int64{1000, 0, 1100, 1200, 1300, 1400, 0, 2100},
+		[]int{1, 1, 0, 1, 0, 0, 1, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6, 3000.1},
+		[]int{0, 1, 1, 1, 0, 1, 1, 1}, []string{"", "helloNew", "worldNew", "testNew1", "", "testNew2", "testNew3", "testNew4"},
+		[]int{1, 1, 1, 1, 0, 1, 1, 0}, []bool{true, true, false, true, false, false, true, false},
+		[]int64{32, 33, 34, 45, 46, 47, 48, 49})
+	newRec := genRowRec(testSchema,
+		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
+		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
+		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
+		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
+		[]int64{31, 32, 33, 34, 45, 46, 47})
+	expectRec := genRowRec(testSchema,
+		[]int{1, 1, 0, 1, 1, 1, 1, 0, 1}, []int64{200, 300, 0, 400, 500, 600, 700, 0, 2100},
+		[]int{1, 1, 1, 0, 1, 1, 0, 1, 1}, []float64{2.3, 1001.3, 3.3, 0, 4.3, 5.3, 0, 2000.6, 3000.1},
+		[]int{0, 1, 1, 1, 1, 0, 1, 1, 1}, []string{"", "hello", "helloNew", "worldNew", "world", "", "test", "testNew3", "testNew4"},
+		[]int{0, 1, 1, 1, 1, 1, 1, 1, 0}, []bool{false, true, true, false, true, false, false, true, false},
+		[]int64{31, 32, 33, 34, 45, 46, 47, 48, 49})
+	sort.Sort(newRec)
+	sort.Sort(oldRec)
+	sort.Sort(expectRec)
+
+	var mergeRec record.Record
+	mergeRec.MergeRecord(newRec, oldRec)
+	if !testRecsEqual(&mergeRec, expectRec) {
+		t.Fatal("error result")
+	}
+}
+
+// merge with time of oldRec and newRec like below
+//
+//	old.time     [32, 33, 34, 45, 46, 47, 48]
+//	new.time [31, 32, 33, 34, 45, 46, 47]
+func TestMergeRecordWithSameSchemaAndMultiRowsCase15(t *testing.T) {
+	oldRec := genRowRec(testSchema,
+		[]int{1, 0, 1, 1, 1, 1, 0}, []int64{1000, 0, 1100, 1200, 1300, 1400, 0},
+		[]int{1, 1, 0, 1, 0, 0, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6},
+		[]int{0, 1, 1, 1, 0, 1, 1}, []string{"", "helloNew", "worldNew", "testNew1", "", "testNew2", "testNew3"},
+		[]int{1, 1, 1, 1, 0, 1, 1}, []bool{true, true, false, true, false, false, true},
+		[]int64{32, 33, 34, 45, 46, 47, 48})
+	newRec := genRowRec(testSchema,
+		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
+		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
+		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
+		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
+		[]int64{31, 32, 33, 34, 45, 46, 47})
+	expectRec := genRowRec(testSchema,
+		[]int{1, 1, 0, 1, 1, 1, 1, 0}, []int64{200, 300, 0, 400, 500, 600, 700, 0},
+		[]int{1, 1, 1, 0, 1, 1, 0, 1}, []float64{2.3, 1001.3, 3.3, 0, 4.3, 5.3, 0, 2000.6},
+		[]int{0, 1, 1, 1, 1, 0, 1, 1}, []string{"", "hello", "helloNew", "worldNew", "world", "", "test", "testNew3"},
+		[]int{0, 1, 1, 1, 1, 1, 1, 1}, []bool{false, true, true, false, true, false, false, true},
+		[]int64{31, 32, 33, 34, 45, 46, 47, 48})
+	sort.Sort(newRec)
+	sort.Sort(oldRec)
+	sort.Sort(expectRec)
+
+	var mergeRec record.Record
+	mergeRec.MergeRecord(newRec, oldRec)
+	if !testRecsEqual(&mergeRec, expectRec) {
+		t.Fatal("error result")
+	}
+}
+
+func TestMergeRecordWithSameSchemaAndMultiRowsCase16(t *testing.T) {
+	oldRec := genRowRec(testSchema,
+		[]int{1, 1, 1, 1, 1, 1, 1}, []int64{1000, 0, 1100, 1200, 1300, 1400, 0},
+		[]int{1, 1, 1, 1, 1, 1, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6},
+		[]int{1, 1, 1, 1, 1, 1, 1}, []string{"a", "helloNew", "worldNew", "testNew1", "b", "testNew2", "testNew3"},
+		[]int{1, 1, 1, 1, 1, 1, 1}, []bool{true, true, false, true, false, false, true},
+		[]int64{1, 2, 3, 4, 5, 6, 7})
+	newRec := genRowRec(testSchema,
+		[]int{1, 1, 1, 1, 1, 1, 1, 1, 1}, []int64{1000, 0, 1100, 1200, 1300, 1400, 0, 1500, 1600},
+		[]int{1, 1, 1, 1, 1, 1, 1, 1, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6, 2000.7, 2000.8},
+		[]int{1, 1, 1, 1, 1, 1, 1, 1, 1}, []string{"a", "helloNew", "worldNew", "testNew1", "b", "testNew2", "testNew3", "testNew4", "testNew5"},
+		[]int{1, 1, 1, 1, 1, 1, 1, 1, 1}, []bool{true, true, false, true, false, false, true, true, true},
+		[]int64{8, 9, 10, 11, 12, 13, 14, 15, 16})
+	expectRec := genRowRec(testSchema,
+		[]int{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}, []int64{1000, 0, 1100, 1200, 1300, 1400, 0, 1000, 0, 1100, 1200, 1300, 1400, 0, 1500, 1600},
+		[]int{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6, 1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6, 2000.7, 2000.8},
+		[]int{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}, []string{"a", "helloNew", "worldNew", "testNew1", "b", "testNew2", "testNew3", "a", "helloNew", "worldNew", "testNew1", "b", "testNew2", "testNew3", "testNew4", "testNew5"},
+		[]int{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}, []bool{true, true, false, true, false, false, true, true, true, false, true, false, false, true, true, true},
+		[]int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16})
+	sort.Sort(newRec)
+	sort.Sort(oldRec)
+	sort.Sort(expectRec)
+
+	var mergeRec record.Record
+	mergeRec.MergeRecord(newRec, oldRec)
+	if !testRecsEqual(&mergeRec, expectRec) {
+		t.Fatal("error result")
+	}
+}
+
+// merge with oldRec.time[max] < newRec.time[0]
+func TestMergeRecordWithDifferentSchemaAndMultiRowsCase1(t *testing.T) {
+	newSchema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Float, Name: "float"},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
+		record.Field{Type: influx.Field_Type_String, Name: "string"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	oldRec := genRowRec(testSchema,
+		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
+		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
+		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
+		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
+		[]int64{1, 2, 3, 4, 5, 6, 7})
+	newRec := genRowRec(newSchema,
+		[]int{}, []int64{},
+		[]int{1, 1, 0, 1, 0}, []float64{1001.3, 1002.4, 0, 1003.5, 0},
+		[]int{0, 1, 1, 1, 0}, []string{"", "helloNew", "worldNew", "testNew1", ""},
+		[]int{1, 1, 1, 1, 0}, []bool{true, true, false, true, false},
+		[]int64{18, 19, 20, 21, 22})
+	expectRec := genRowRec(testSchema,
+		[]int{1, 1, 0, 1, 1, 1, 1, 0, 0, 0, 0, 0}, []int64{200, 300, 0, 400, 500, 600, 700, 0, 0, 0, 0, 0},
+		[]int{1, 0, 1, 0, 1, 1, 0, 1, 1, 0, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0, 1001.3, 1002.4, 0, 1003.5, 0},
+		[]int{0, 1, 0, 0, 1, 0, 1, 0, 1, 1, 1, 0}, []string{"", "hello", "", "", "world", "", "test", "", "helloNew", "worldNew", "testNew1", ""},
+		[]int{0, 0, 1, 0, 1, 1, 0, 1, 1, 1, 1, 0}, []bool{false, false, true, false, true, false, false, true, true, false, true, false},
+		[]int64{1, 2, 3, 4, 5, 6, 7, 18, 19, 20, 21, 22})
+	sort.Sort(newRec)
+	sort.Sort(oldRec)
+	sort.Sort(expectRec)
+
+	var mergeRec record.Record
+	mergeRec.MergeRecord(newRec, oldRec)
+	if !testRecsEqual(&mergeRec, expectRec) {
+		t.Fatal("error result")
+	}
+}
+
+// merge with oldRec.time[0] > newRec.time[max]
+func TestMergeRecordWithDifferentSchemaAndMultiRowsCase2(t *testing.T) {
+	newSchema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
+		record.Field{Type: influx.Field_Type_String, Name: "string"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	oldRec := genRowRec(testSchema,
+		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
+		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
+		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
+		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
+		[]int64{31, 32, 33, 34, 45, 46, 47})
+	newRec := genRowRec(newSchema,
+		[]int{1, 0, 1, 1, 1}, []int64{1000, 0, 1100, 1200, 1300},
+		[]int{}, []float64{},
+		[]int{0, 1, 1, 1, 0}, []string{"", "helloNew", "worldNew", "testNew1", ""},
+		[]int{1, 1, 1, 1, 0}, []bool{true, true, false, true, false},
+		[]int64{18, 19, 20, 21, 22})
+	expectRec := genRowRec(testSchema,
+		[]int{1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1}, []int64{1000, 0, 1100, 1200, 1300, 200, 300, 0, 400, 500, 600, 700},
+		[]int{0, 0, 0, 0, 0, 1, 0, 1, 0, 1, 1, 0}, []float64{0, 0, 0, 0, 0, 2.3, 0, 3.3, 0, 4.3, 5.3, 0},
+		[]int{0, 1, 1, 1, 0, 0, 1, 0, 0, 1, 0, 1}, []string{"", "helloNew", "worldNew", "testNew1", "", "", "hello", "", "", "world", "", "test"},
+		[]int{1, 1, 1, 1, 0, 0, 0, 1, 0, 1, 1, 0}, []bool{true, true, false, true, false, false, false, true, false, true, false, false},
+		[]int64{18, 19, 20, 21, 22, 31, 32, 33, 34, 45, 46, 47})
+	sort.Sort(newRec)
+	sort.Sort(oldRec)
+	sort.Sort(expectRec)
+
+	var mergeRec record.Record
+	mergeRec.MergeRecord(newRec, oldRec)
+	if !testRecsEqual(&mergeRec, expectRec) {
+		t.Fatal("error result")
+	}
+}
+
+// merge with oldRec.time[0] > newRec.time[max]
+func TestMergeRecordWithDifferentSchemaAndMultiRowsCase2Descend(t *testing.T) {
+	newSchema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
+		record.Field{Type: influx.Field_Type_String, Name: "string"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	oldRec := genRowRec(testSchema,
+		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
+		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
+		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
+		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
+		[]int64{47, 46, 45, 34, 33, 32, 31})
+	newRec := genRowRec(newSchema,
+		[]int{1, 0, 1, 1, 1}, []int64{1000, 0, 1100, 1200, 1300},
+		[]int{}, []float64{},
+		[]int{0, 1, 1, 1, 0}, []string{"", "helloNew", "worldNew", "testNew1", ""},
+		[]int{1, 1, 1, 1, 0}, []bool{true, true, false, true, false},
+		[]int64{22, 21, 20, 19, 18})
+	expectRec := genRowRec(testSchema,
+		[]int{1, 1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700, 1000, 0, 1100, 1200, 1300},
+		[]int{1, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0, 0, 0, 0, 0, 0},
+		[]int{0, 1, 0, 0, 1, 0, 1, 0, 1, 1, 1, 0}, []string{"", "hello", "", "", "world", "", "test", "", "helloNew", "worldNew", "testNew1", ""},
+		[]int{0, 0, 1, 0, 1, 1, 0, 1, 1, 1, 1, 0}, []bool{false, false, true, false, true, false, false, true, true, false, true, false},
+		[]int64{47, 46, 45, 34, 33, 32, 31, 22, 21, 20, 19, 18})
+	sort.Sort(newRec)
+	sort.Sort(oldRec)
+	sort.Sort(expectRec)
+
+	var mergeRec record.Record
+	mergeRec.MergeRecordDescend(newRec, oldRec)
+	if !testRecsEqual(&mergeRec, expectRec) {
+		t.Fatal("error result")
+	}
+}
+
+// merge with all time of oldRec is equal to the time of newRec
+//
+//	old.time [31, 32, 33, 34, 45, 46, 47]
+//	new.time [31, 32, 33, 34, 45, 46, 47]
+func TestMergeRecordWithDifferentSchemaAndMultiRowsCase3(t *testing.T) {
+	oldSchema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
+		record.Field{Type: influx.Field_Type_String, Name: "string"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	newSchema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Float, Name: "float"},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	oldRec := genRowRec(oldSchema,
+		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
+		[]int{}, []float64{},
+		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
+		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
+		[]int64{31, 32, 33, 34, 45, 46, 47})
+	newRec := genRowRec(newSchema,
+		[]int{1, 0, 1, 1, 1, 1, 0}, []int64{1000, 0, 1100, 1200, 1300, 1400, 0},
+		[]int{1, 1, 0, 1, 0, 0, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6},
+		[]int{}, []string{},
+		[]int{1, 1, 1, 1, 0, 1, 1}, []bool{true, true, false, true, false, false, true},
+		[]int64{31, 32, 33, 34, 45, 46, 47})
+	expectRec := genRowRec(testSchema,
+		[]int{1, 1, 1, 1, 1, 1, 1}, []int64{1000, 300, 1100, 1200, 1300, 1400, 700},
+		[]int{1, 1, 0, 1, 0, 0, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6},
+		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
+		[]int{1, 1, 1, 1, 1, 1, 1}, []bool{true, true, false, true, true, false, true},
+		[]int64{31, 32, 33, 34, 45, 46, 47})
+
+	sort.Sort(newRec)
+	sort.Sort(oldRec)
+	sort.Sort(expectRec)
+
+	var mergeRec record.Record
+	mergeRec.MergeRecord(newRec, oldRec)
+	if !testRecsEqual(&mergeRec, expectRec) {
+		t.Fatal("error result")
+	}
+}
+
+// merge with all time of oldRec is equal to the time of newRec
+//
+//	old.time [47, 46, 45, 34, 33, 32, 31]
+//	new.time [47, 46, 45, 34, 33, 32, 31]
+func TestMergeRecordWithDifferentSchemaAndMultiRowsCase3Descend(t *testing.T) {
+	oldSchema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
+		record.Field{Type: influx.Field_Type_String, Name: "string"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	newSchema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Float, Name: "float"},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	oldRec := genRowRec(oldSchema,
+		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
+		[]int{}, []float64{},
+		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
+		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
+		[]int64{47, 46, 45, 34, 33, 32, 31})
+	newRec := genRowRec(newSchema,
+		[]int{1, 0, 1, 1, 1, 1, 0}, []int64{1000, 0, 1100, 1200, 1300, 1400, 0},
+		[]int{1, 1, 0, 1, 0, 0, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6},
+		[]int{}, []string{},
+		[]int{1, 1, 1, 1, 0, 1, 1}, []bool{true, true, false, true, false, false, true},
+		[]int64{47, 46, 45, 34, 33, 32, 31})
+	expectRec := genRowRec(testSchema,
+		[]int{1, 1, 1, 1, 1, 1, 1}, []int64{1000, 300, 1100, 1200, 1300, 1400, 700},
+		[]int{1, 1, 0, 1, 0, 0, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6},
+		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
+		[]int{1, 1, 1, 1, 1, 1, 1}, []bool{true, true, false, true, true, false, true},
+		[]int64{47, 46, 45, 34, 33, 32, 31})
+
+	sort.Sort(newRec)
+	sort.Sort(oldRec)
+	sort.Sort(expectRec)
+
+	var mergeRec record.Record
+	mergeRec.MergeRecordDescend(newRec, oldRec)
+	if !testRecsEqual(&mergeRec, expectRec) {
+		t.Fatal("error result")
+	}
+}
+
+// merge with time of oldRec and newRec like below
+//
+//	old.time [31, 32, 33, 34, 45, 46, 47]
+//	new.time     [32, 33, 34, 45, 46, 47, 48]
+func TestMergeRecordWithDifferentSchemaAndMultiRowsCase4(t *testing.T) {
+	oldSchema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
+		record.Field{Type: influx.Field_Type_String, Name: "string"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	newSchema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Float, Name: "float"},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	oldRec := genRowRec(oldSchema,
+		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
+		[]int{}, []float64{},
+		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
+		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
+		[]int64{31, 32, 33, 34, 45, 46, 47})
+	newRec := genRowRec(newSchema,
+		[]int{1, 0, 1, 1, 1, 1, 0}, []int64{1000, 0, 1100, 1200, 1300, 1400, 0},
+		[]int{1, 1, 0, 1, 0, 0, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6},
+		[]int{}, []string{},
+		[]int{1, 1, 1, 1, 0, 1, 1}, []bool{true, true, false, true, false, false, true},
+		[]int64{32, 33, 34, 45, 46, 47, 48})
+	expectRec := genRowRec(testSchema,
+		[]int{1, 1, 0, 1, 1, 1, 1, 0}, []int64{200, 1000, 0, 1100, 1200, 1300, 1400, 0},
+		[]int{0, 1, 1, 0, 1, 0, 0, 1}, []float64{0, 1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6},
+		[]int{0, 1, 0, 0, 1, 0, 1, 0}, []string{"", "hello", "", "", "world", "", "test", ""},
+		[]int{0, 1, 1, 1, 1, 1, 1, 1}, []bool{true, true, true, false, true, false, false, true},
+		[]int64{31, 32, 33, 34, 45, 46, 47, 48})
+	sort.Sort(newRec)
+	sort.Sort(oldRec)
+	sort.Sort(expectRec)
+
+	var mergeRec record.Record
+	mergeRec.MergeRecord(newRec, oldRec)
+	if !testRecsEqual(&mergeRec, expectRec) {
+		t.Fatal("error result")
+	}
+}
+
+// merge with time of oldRec and newRec like below
+//
+//	old.time [31, 32, 33, 34, 45, 46, 47]
+//	new.time     [32, 33, 34, 45, 46, 47, 48, 49]
+func TestMergeRecordWithDifferentSchemaAndMultiRowsCase5(t *testing.T) {
+	oldSchema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_String, Name: "string"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	newSchema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Float, Name: "float"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	expectSchema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Float, Name: "float"},
+		record.Field{Type: influx.Field_Type_String, Name: "string"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	oldRec := genRowRec(oldSchema,
+		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
+		[]int{}, []float64{},
+		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
+		[]int{}, []bool{},
+		[]int64{31, 32, 33, 34, 45, 46, 47})
+	newRec := genRowRec(newSchema,
+		[]int{1, 0, 1, 1, 1, 1, 0, 1}, []int64{1000, 0, 1100, 1200, 1300, 1400, 0, 2100},
+		[]int{1, 1, 0, 1, 0, 0, 1, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6, 3000.1},
+		[]int{}, []string{},
+		[]int{}, []bool{},
+		[]int64{32, 33, 34, 45, 46, 47, 48, 49})
+	expectRec := genRowRec(expectSchema,
+		[]int{1, 1, 0, 1, 1, 1, 1, 0, 1}, []int64{200, 1000, 0, 1100, 1200, 1300, 1400, 0, 2100},
+		[]int{0, 1, 1, 0, 1, 0, 0, 1, 1}, []float64{0, 1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6, 3000.1},
+		[]int{0, 1, 0, 0, 1, 0, 1, 0, 0}, []string{"", "hello", "", "", "world", "", "test", "", ""},
+		[]int{0, 0, 0, 0, 0, 0, 0, 0, 0}, []bool{false, false, false, false, false, false, false, false, false},
+		[]int64{31, 32, 33, 34, 45, 46, 47, 48, 49})
+	sort.Sort(newRec)
+	sort.Sort(oldRec)
+	sort.Sort(expectRec)
+
+	var mergeRec record.Record
+	mergeRec.MergeRecord(newRec, oldRec)
+	if !testRecsEqual(&mergeRec, expectRec) {
+		t.Fatal("error result")
+	}
+}
+
+// merge with time of oldRec and newRec like below
+//
+//	old.time         [47, 46, 45, 34, 33, 32, 31]
+//	new.time [49, 48, 47, 46, 45, 34, 33, 32]
+func TestMergeRecordWithDifferentSchemaAndMultiRowsCase5Descend(t *testing.T) {
+	oldSchema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_String, Name: "string"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	newSchema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Float, Name: "float"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	expectSchema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Float, Name: "float"},
+		record.Field{Type: influx.Field_Type_String, Name: "string"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	oldRec := genRowRec(oldSchema,
+		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
+		[]int{}, []float64{},
+		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
+		[]int{}, []bool{},
+		[]int64{47, 46, 45, 34, 33, 32, 31})
+	newRec := genRowRec(newSchema,
+		[]int{1, 0, 1, 1, 1, 1, 0, 1}, []int64{1000, 0, 1100, 1200, 1300, 1400, 0, 2100},
+		[]int{1, 1, 0, 1, 0, 0, 1, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6, 3000.1},
+		[]int{}, []string{},
+		[]int{}, []bool{},
+		[]int64{49, 48, 47, 46, 45, 34, 33, 32})
+	expectRec := genRowRec(expectSchema,
+		[]int{1, 0, 1, 1, 1, 1, 1, 1, 1}, []int64{1000, 0, 1100, 1200, 1300, 1400, 500, 2100, 700},
+		[]int{1, 1, 0, 1, 0, 0, 1, 1, 0}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6, 3000.1, 0},
+		[]int{0, 0, 0, 1, 0, 0, 1, 0, 1}, []string{"", "", "", "hello", "", "", "world", "", "test"},
+		[]int{0, 0, 0, 0, 0, 0, 0, 0, 0}, []bool{false, false, false, false, false, false, false, false, false},
+		[]int64{49, 48, 47, 46, 45, 34, 33, 32, 31})
+	sort.Sort(newRec)
+	sort.Sort(oldRec)
+	sort.Sort(expectRec)
+
+	var mergeRec record.Record
+	mergeRec.MergeRecordDescend(newRec, oldRec)
+	if !testRecsEqual(&mergeRec, expectRec) {
+		t.Fatal("error result")
+	}
+}
+
+// limitRows = 1, newRows = 1, oldRows = 1, mergedRows = 2
+// merge with oldRec.time[0] < newRec.time[0]
+func TestMergeRecordLimitRowsCase1(t *testing.T) {
+	oldRec := genRowRec(testSchema,
+		[]int{1}, []int64{200},
+		[]int{1}, []float64{2.3},
+		[]int{1}, []string{"hello"},
+		[]int{1}, []bool{false},
+		[]int64{1})
+	newRec := genRowRec(testSchema,
+		[]int{1}, []int64{100},
+		[]int{1}, []float64{1.3},
+		[]int{1}, []string{"world"},
+		[]int{1}, []bool{true},
+		[]int64{2})
+	sort.Sort(newRec)
+	sort.Sort(oldRec)
+
+	var mergeRec record.Record
+	newPos, oldPos := mergeRec.MergeRecordLimitRows(newRec, oldRec, 0, 0, 1)
+	if !testRecsEqual(&mergeRec, oldRec) || newPos != 0 || oldPos != 1 {
+		t.Fatal("error result")
+	}
+}
+
+// limitRows = 1, newRows = 1, oldRows = 1, mergedRows = 2
+// merge with oldRec.time[0] < newRec.time[0]
+func TestMergeRecordLimitRowsCase1Descend(t *testing.T) {
+	oldRec := genRowRec(testSchema,
+		[]int{1}, []int64{200},
+		[]int{1}, []float64{2.3},
+		[]int{1}, []string{"hello"},
+		[]int{1}, []bool{false},
+		[]int64{1})
+	newRec := genRowRec(testSchema,
+		[]int{1}, []int64{100},
+		[]int{1}, []float64{1.3},
+		[]int{1}, []string{"world"},
+		[]int{1}, []bool{true},
+		[]int64{2})
+	sort.Sort(newRec)
+	sort.Sort(oldRec)
+
+	var mergeRec record.Record
+	newPos, oldPos := mergeRec.MergeRecordLimitRowsDescend(newRec, oldRec, 0, 0, 1)
+	if !testRecsEqual(&mergeRec, newRec) || newPos != 1 || oldPos != 0 {
+		t.Fatal("error result")
+	}
+}
+
+// limitRows = 1, newRows = 1, oldRows = 1, mergedRows = 2
+// merge with oldRec.time[0] > newRec.time[0]
+func TestMergeRecordLimitRowsCase2(t *testing.T) {
+	oldRec := genRowRec(testSchema,
+		[]int{1}, []int64{200},
+		[]int{1}, []float64{2.3},
+		[]int{1}, []string{"hello"},
+		[]int{1}, []bool{false},
+		[]int64{3})
+	newRec := genRowRec(testSchema,
+		[]int{1}, []int64{100},
+		[]int{1}, []float64{1.3},
+		[]int{1}, []string{"world"},
+		[]int{1}, []bool{true},
+		[]int64{2})
+	sort.Sort(newRec)
+	sort.Sort(oldRec)
+
+	var mergeRec record.Record
+	newPos, oldPos := mergeRec.MergeRecordLimitRows(newRec, oldRec, 0, 0, 1)
+	if !testRecsEqual(&mergeRec, newRec) || newPos != 1 || oldPos != 0 {
+		t.Fatal("error result")
+	}
+}
+
+// limitRows = 1, newRows = 1, oldRows = 1, mergedRows = 2
+// merge with oldRec.time[0] > newRec.time[0]
+func TestMergeRecordLimitRowsCase2Descend(t *testing.T) {
+	oldRec := genRowRec(testSchema,
+		[]int{1}, []int64{200},
+		[]int{1}, []float64{2.3},
+		[]int{1}, []string{"hello"},
+		[]int{1}, []bool{false},
+		[]int64{3})
+	newRec := genRowRec(testSchema,
+		[]int{1}, []int64{100},
+		[]int{1}, []float64{1.3},
+		[]int{1}, []string{"world"},
+		[]int{1}, []bool{true},
+		[]int64{2})
+	sort.Sort(newRec)
+	sort.Sort(oldRec)
+
+	var mergeRec record.Record
+	newPos, oldPos := mergeRec.MergeRecordLimitRowsDescend(newRec, oldRec, 0, 0, 1)
+	if !testRecsEqual(&mergeRec, oldRec) || newPos != 0 || oldPos != 1 {
+		t.Fatal("error result")
+	}
+}
+
+// limitRows = 1, newRows = 1, oldRows = 1, mergedRows = 1
+// merge with oldRec.time[0] = newRec.time[0]
+func TestMergeRecordLimitRowsCase3(t *testing.T) {
+	oldRec := genRowRec(testSchema,
+		[]int{1}, []int64{200},
+		[]int{1}, []float64{2.3},
+		[]int{1}, []string{"hello"},
+		[]int{1}, []bool{false},
+		[]int64{2})
+	newRec := genRowRec(testSchema,
+		[]int{1}, []int64{100},
+		[]int{1}, []float64{1.3},
+		[]int{1}, []string{"world"},
+		[]int{1}, []bool{true},
+		[]int64{2})
+	sort.Sort(newRec)
+	sort.Sort(oldRec)
+
+	var mergeRec record.Record
+	newPos, oldPos := mergeRec.MergeRecordLimitRows(newRec, oldRec, 0, 0, 1)
+	if !testRecsEqual(&mergeRec, newRec) || newPos != 1 || oldPos != 1 {
+		t.Fatal("error result")
+	}
+}
+
+// limitRows = 1, newRows = 1, oldRows = 1, mergedRows = 1
+// merge with oldRec.time[0] = newRec.time[0]
+func TestMergeRecordLimitRowsCase3Descend(t *testing.T) {
+	oldRec := genRowRec(testSchema,
+		[]int{1}, []int64{200},
+		[]int{1}, []float64{2.3},
+		[]int{1}, []string{"hello"},
+		[]int{1}, []bool{false},
+		[]int64{2})
+	newRec := genRowRec(testSchema,
+		[]int{1}, []int64{100},
+		[]int{1}, []float64{1.3},
+		[]int{1}, []string{"world"},
+		[]int{1}, []bool{true},
+		[]int64{2})
+	sort.Sort(newRec)
+	sort.Sort(oldRec)
+
+	var mergeRec record.Record
+	newPos, oldPos := mergeRec.MergeRecordLimitRowsDescend(newRec, oldRec, 0, 0, 1)
+	if !testRecsEqual(&mergeRec, newRec) || newPos != 1 || oldPos != 1 {
+		t.Fatal("error result")
+	}
+}
+
+// limitRows = 2, newRows = 5, oldRows = 7, mergedRows = 12
+// merge with oldRec.time[max] < newRec.time[0]
+func TestMergeRecordLimitRowsCase4(t *testing.T) {
+	oldRec := genRowRec(testSchema,
+		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
+		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
+		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
+		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
+		[]int64{1, 2, 3, 4, 5, 6, 7})
+	newRec := genRowRec(testSchema,
+		[]int{1, 0, 1, 1, 1}, []int64{1000, 0, 1100, 1200, 1300},
+		[]int{1, 1, 0, 1, 0}, []float64{1001.3, 1002.4, 0, 1003.5, 0},
+		[]int{0, 1, 1, 1, 0}, []string{"", "helloNew", "worldNew", "testNew1", ""},
+		[]int{1, 1, 1, 1, 0}, []bool{true, true, false, true, false},
+		[]int64{18, 19, 20, 21, 22})
+	expectRec1 := genRowRec(testSchema,
+		[]int{1, 1}, []int64{200, 300},
+		[]int{1, 0}, []float64{2.3, 0},
+		[]int{0, 1}, []string{"", "hello"},
+		[]int{0, 0}, []bool{false, false},
+		[]int64{1, 2})
+	expectRec2 := genRowRec(testSchema,
+		[]int{0, 1}, []int64{0, 400},
+		[]int{1, 0}, []float64{3.3, 0},
+		[]int{0, 0}, []string{"", ""},
+		[]int{1, 0}, []bool{true, false},
+		[]int64{3, 4})
+	expectRec3 := genRowRec(testSchema,
+		[]int{1, 1}, []int64{500, 600},
+		[]int{1, 1}, []float64{4.3, 5.3},
+		[]int{1, 0}, []string{"world", ""},
+		[]int{1, 1}, []bool{true, false},
+		[]int64{5, 6})
+	expectRec4 := genRowRec(testSchema,
+		[]int{1, 1}, []int64{700, 1000},
+		[]int{0, 1}, []float64{0, 1001.3},
+		[]int{1, 0}, []string{"test", ""},
+		[]int{0, 1}, []bool{false, true},
+		[]int64{7, 18})
+	sort.Sort(newRec)
+	sort.Sort(oldRec)
+	sort.Sort(expectRec1)
+	sort.Sort(expectRec2)
+	sort.Sort(expectRec3)
+	sort.Sort(expectRec4)
+
+	var mergeRec record.Record
+	newPos, oldPos := mergeRec.MergeRecordLimitRows(newRec, oldRec, 0, 0, 2)
+	if !testRecsEqual(&mergeRec, expectRec1) || newPos != 0 || oldPos != 2 {
+		t.Fatal("error result")
+	}
+
+	mergeRec.ResetDeep()
+	newPos, oldPos = mergeRec.MergeRecordLimitRows(newRec, oldRec, newPos, oldPos, 2)
+	if !testRecsEqual(&mergeRec, expectRec2) || newPos != 0 || oldPos != 4 {
+		t.Fatal("error result")
+	}
+
+	mergeRec.ResetDeep()
+	newPos, oldPos = mergeRec.MergeRecordLimitRows(newRec, oldRec, newPos, oldPos, 2)
+	if !testRecsEqual(&mergeRec, expectRec3) || newPos != 0 || oldPos != 6 {
+		t.Fatal("error result")
+	}
+
+	mergeRec.ResetDeep()
+	newPos, oldPos = mergeRec.MergeRecordLimitRows(newRec, oldRec, newPos, oldPos, 2)
+	if !testRecsEqual(&mergeRec, expectRec4) || newPos != 1 || oldPos != 7 {
+		t.Fatal("error result")
+	}
+}
+
+// limitRows = 2, newRows = 7, oldRows = 5, mergedRows = 12
+// merge with oldRec.time[0] > newRec.time[max]
+func TestMergeRecordLimitRowsCase5(t *testing.T) {
+	oldRec := genRowRec(testSchema,
+		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
+		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
+		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
+		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
+		[]int64{31, 32, 33, 34, 45, 46, 47})
+	newRec := genRowRec(testSchema,
+		[]int{1, 0, 1, 1, 1}, []int64{1000, 0, 1100, 1200, 1300},
+		[]int{1, 1, 0, 1, 0}, []float64{1001.3, 1002.4, 0, 1003.5, 0},
+		[]int{0, 1, 1, 1, 0}, []string{"", "helloNew", "worldNew", "testNew1", ""},
+		[]int{1, 1, 1, 1, 0}, []bool{true, true, false, true, false},
+		[]int64{18, 19, 20, 21, 22})
+	expectRec1 := genRowRec(testSchema,
+		[]int{1, 0}, []int64{1000, 0},
+		[]int{1, 1}, []float64{1001.3, 1002.4},
+		[]int{0, 1}, []string{"", "helloNew"},
+		[]int{1, 1}, []bool{true, true},
+		[]int64{18, 19})
+	expectRec2 := genRowRec(testSchema,
+		[]int{1, 1}, []int64{1100, 1200},
+		[]int{0, 1}, []float64{0, 1003.5},
+		[]int{1, 1}, []string{"worldNew", "testNew1"},
+		[]int{1, 1}, []bool{false, true},
+		[]int64{20, 21})
+	expectRec3 := genRowRec(testSchema,
+		[]int{1, 1}, []int64{1300, 200},
+		[]int{0, 1}, []float64{0, 2.3},
+		[]int{0, 0}, []string{"", ""},
+		[]int{0, 0}, []bool{false, false},
+		[]int64{22, 31})
+	sort.Sort(newRec)
+	sort.Sort(oldRec)
+	sort.Sort(expectRec1)
+	sort.Sort(expectRec2)
+	sort.Sort(expectRec3)
+
+	var mergeRec record.Record
+	newPos, oldPos := mergeRec.MergeRecordLimitRows(newRec, oldRec, 0, 0, 2)
+	if !testRecsEqual(&mergeRec, expectRec1) || newPos != 2 || oldPos != 0 {
+		t.Fatal("error result")
+	}
+
+	mergeRec.ResetDeep()
+	newPos, oldPos = mergeRec.MergeRecordLimitRows(newRec, oldRec, newPos, oldPos, 2)
+	if !testRecsEqual(&mergeRec, expectRec2) || newPos != 4 || oldPos != 0 {
+		t.Fatal("error result")
+	}
+
+	mergeRec.ResetDeep()
+	newPos, oldPos = mergeRec.MergeRecordLimitRows(newRec, oldRec, newPos, oldPos, 2)
+	if !testRecsEqual(&mergeRec, expectRec3) || newPos != 5 || oldPos != 1 {
+		t.Fatalf("error result, exp:%v, get:%v", expectRec3.String(), mergeRec.String())
+	}
+
+}
+
+// limitRows = 3, newRows = 7, oldRows = 7, mergedRows = 7
+// merge with all time of oldRec is equal to the time of newRec
+//
+//	old.time [31, 32, 33, 34, 45, 46, 47]
+//	new.time [31, 32, 33, 34, 45, 46, 47]
+func TestMergeRecordLimitRowsCase6(t *testing.T) {
+	oldRec := genRowRec(testSchema,
+		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
+		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
+		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
+		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
+		[]int64{31, 32, 33, 34, 45, 46, 47})
+	newRec := genRowRec(testSchema,
+		[]int{1, 0, 1, 1, 1, 1, 0}, []int64{1000, 0, 1100, 1200, 1300, 1400, 0},
+		[]int{1, 1, 0, 1, 0, 0, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6},
+		[]int{0, 1, 1, 1, 0, 1, 1}, []string{"", "helloNew", "worldNew", "testNew1", "", "testNew2", "testNew3"},
+		[]int{1, 1, 1, 1, 0, 1, 1}, []bool{true, true, false, true, false, false, true},
+		[]int64{31, 32, 33, 34, 45, 46, 47})
+	expectRec1 := genRowRec(testSchema,
+		[]int{1, 1, 1}, []int64{1000, 300, 1100},
+		[]int{1, 1, 1}, []float64{1001.3, 1002.4, 3.3},
+		[]int{0, 1, 1}, []string{"", "helloNew", "worldNew"},
+		[]int{1, 1, 1}, []bool{true, true, false},
+		[]int64{31, 32, 33})
+	expectRec2 := genRowRec(testSchema,
+		[]int{1, 1, 1}, []int64{1200, 1300, 1400},
+		[]int{1, 1, 1}, []float64{1003.5, 4.3, 5.3},
+		[]int{1, 1, 1}, []string{"testNew1", "world", "testNew2"},
+		[]int{1, 1, 1}, []bool{true, true, false},
+		[]int64{34, 45, 46})
+	expectRec3 := genRowRec(testSchema,
+		[]int{1}, []int64{700},
+		[]int{1}, []float64{2000.6},
+		[]int{1}, []string{"testNew3"},
+		[]int{1}, []bool{true},
+		[]int64{47})
+
+	sort.Sort(newRec)
+	sort.Sort(oldRec)
+	sort.Sort(expectRec1)
+	sort.Sort(expectRec2)
+	sort.Sort(expectRec3)
+
+	var mergeRec record.Record
+	newPos, oldPos := mergeRec.MergeRecordLimitRows(newRec, oldRec, 0, 0, 3)
+	if !testRecsEqual(&mergeRec, expectRec1) || newPos != 3 || oldPos != 3 {
+		t.Fatal("error result")
+	}
+
+	mergeRec.ResetDeep()
+	newPos, oldPos = mergeRec.MergeRecordLimitRows(newRec, oldRec, newPos, oldPos, 3)
+	if !testRecsEqual(&mergeRec, expectRec2) || newPos != 6 || oldPos != 6 {
+		t.Fatal("error result")
+	}
+
+	mergeRec.ResetDeep()
+	newPos, oldPos = mergeRec.MergeRecordLimitRows(newRec, oldRec, newPos, oldPos, 3)
+	if !testRecsEqual(&mergeRec, expectRec3) || newPos != 7 || oldPos != 7 {
+		t.Fatal("error result")
+	}
+}
+
+// limitRows = 1000, newRows = 7, oldRows = 7, mergedRows = 7
+// merge with all time of oldRec is equal to the time of newRec
+//
+//	old.time [31, 32, 33, 34, 45, 46, 47]
+//	new.time [31, 32, 33, 34, 45, 46, 47]
+func TestMergeRecordLimitRowsCase7(t *testing.T) {
+	oldRec := genRowRec(testSchema,
+		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
+		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
+		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
+		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
+		[]int64{31, 32, 33, 34, 45, 46, 47})
+	newRec := genRowRec(testSchema,
+		[]int{1, 0, 1, 1, 1, 1, 0}, []int64{1000, 0, 1100, 1200, 1300, 1400, 0},
+		[]int{1, 1, 0, 1, 0, 0, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6},
+		[]int{0, 1, 1, 1, 0, 1, 1}, []string{"", "helloNew", "worldNew", "testNew1", "", "testNew2", "testNew3"},
+		[]int{1, 1, 1, 1, 0, 1, 1}, []bool{true, true, false, true, false, false, true},
+		[]int64{31, 32, 33, 34, 45, 46, 47})
+	expectRec := genRowRec(testSchema,
+		[]int{1, 1, 1, 1, 1, 1, 1}, []int64{1000, 300, 1100, 1200, 1300, 1400, 700},
+		[]int{1, 1, 1, 1, 1, 1, 1}, []float64{1001.3, 1002.4, 3.3, 1003.5, 4.3, 5.3, 2000.6},
+		[]int{0, 1, 1, 1, 1, 1, 1}, []string{"", "helloNew", "worldNew", "testNew1", "world", "testNew2", "testNew3"},
+		[]int{1, 1, 1, 1, 1, 1, 1}, []bool{true, true, false, true, true, false, true},
+		[]int64{31, 32, 33, 34, 45, 46, 47})
+	expectRec1 := genRowRec(testSchema,
+		[]int{1, 1, 1, 1, 1, 1, 1}, []int64{200, 300, 1100, 1200, 1300, 1400, 700},
+		[]int{1, 1, 1, 1, 1, 1, 1}, []float64{2.3, 1002.4, 3.3, 1003.5, 4.3, 5.3, 2000.6},
+		[]int{0, 1, 1, 1, 1, 1, 1}, []string{"", "helloNew", "worldNew", "testNew1", "world", "testNew2", "testNew3"},
+		[]int{0, 1, 1, 1, 1, 1, 1}, []bool{false, true, false, true, true, false, true},
+		[]int64{31, 32, 33, 34, 45, 46, 47})
+	expectRec2 := genRowRec(testSchema,
+		[]int{1, 1, 1, 1, 1}, []int64{1100, 1200, 1300, 1400, 700},
+		[]int{0, 1, 1, 1, 1}, []float64{0, 1003.5, 4.3, 5.3, 2000.6},
+		[]int{1, 1, 1, 1, 1}, []string{"worldNew", "testNew1", "world", "testNew2", "testNew3"},
+		[]int{1, 1, 1, 1, 1}, []bool{false, true, true, false, true},
+		[]int64{33, 34, 45, 46, 47})
+	sort.Sort(newRec)
+	sort.Sort(oldRec)
+	sort.Sort(expectRec)
+	sort.Sort(expectRec1)
+	sort.Sort(expectRec2)
+
+	var mergeRec record.Record
+	newPos, oldPos := mergeRec.MergeRecordLimitRows(newRec, oldRec, 0, 0, 1000)
+	if !testRecsEqual(&mergeRec, expectRec) || newPos != 7 || oldPos != 7 {
+		t.Fatal("error result")
+	}
+
+	mergeRec.ResetDeep()
+	newPos, oldPos = mergeRec.MergeRecordLimitRows(newRec, oldRec, 1, 0, 1000)
+	if !testRecsEqual(&mergeRec, expectRec1) || newPos != 7 || oldPos != 7 {
+		t.Fatal("error result")
+	}
+
+	mergeRec.ResetDeep()
+	newPos, oldPos = mergeRec.MergeRecordLimitRows(newRec, oldRec, 2, 3, 1000)
+	if !testRecsEqual(&mergeRec, expectRec2) || newPos != 7 || oldPos != 7 {
+		t.Fatal("error result")
+	}
+
+}
+
+// fix the BUG of method MergeRecordByMaxTimeOfOldRec #BUG2023021301427
+//
+//	old.time [31, 32, 33, 34, 45, 46, 47] pos: 1->7
+//	new.time [48, 49, 50, 51, 52, 53, 54] pos: 0->0
+func TestMergeRecordByMaxTimeOfOldRecCase1(t *testing.T) {
+	oldRec := genRowRec(testSchema,
+		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
+		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
+		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
+		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
+		[]int64{31, 32, 33, 34, 45, 46, 47})
+	newRec := genRowRec(testSchema,
+		[]int{1, 0, 1, 1, 1, 1, 0}, []int64{1000, 0, 1100, 1200, 1300, 1400, 0},
+		[]int{1, 1, 0, 1, 0, 0, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6},
+		[]int{0, 1, 1, 1, 0, 1, 1}, []string{"", "helloNew", "worldNew", "testNew1", "", "testNew2", "testNew3"},
+		[]int{1, 1, 1, 1, 0, 1, 1}, []bool{true, true, false, true, false, false, true},
+		[]int64{48, 49, 50, 51, 52, 53, 54})
+	expectRec := genRowRec(testSchema,
+		[]int{1, 0, 1, 1, 1, 1}, []int64{300, 0, 400, 500, 600, 700},
+		[]int{0, 1, 0, 1, 1, 0}, []float64{0, 3.3, 0, 4.3, 5.3, 0},
+		[]int{1, 0, 0, 1, 0, 1}, []string{"hello", "", "", "world", "", "test"},
+		[]int{0, 1, 0, 1, 1, 0}, []bool{false, true, false, true, false, false},
+		[]int64{32, 33, 34, 45, 46, 47})
+	var mergeRec record.Record
+	newPos, oldPos := mergeRec.MergeRecordByMaxTimeOfOldRec(newRec, oldRec, 0, 1, 1000, true)
+	if !testRecsEqual(&mergeRec, expectRec) || newPos != 0 || oldPos != 7 {
+		t.Fatal("error result")
+	}
+}
+
+// old.time [47, 46, 45, 34, 33, 32, 31] pos: 1->7
+// new.time [30, 29, 28, 27, 26, 25, 24] pos: 0->0
+func TestMergeRecordByMaxTimeOfOldRecCase2(t *testing.T) {
+	oldRec := genRowRec(testSchema,
+		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
+		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
+		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
+		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
+		[]int64{47, 46, 45, 34, 33, 32, 31})
+	newRec := genRowRec(testSchema,
+		[]int{1, 0, 1, 1, 1, 1, 0}, []int64{1000, 0, 1100, 1200, 1300, 1400, 0},
+		[]int{1, 1, 0, 1, 0, 0, 1}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 0, 2000.6},
+		[]int{0, 1, 1, 1, 0, 1, 1}, []string{"", "helloNew", "worldNew", "testNew1", "", "testNew2", "testNew3"},
+		[]int{1, 1, 1, 1, 0, 1, 1}, []bool{true, true, false, true, false, false, true},
+		[]int64{30, 29, 28, 27, 26, 25, 24})
+	expectRec := genRowRec(testSchema,
+		[]int{1, 0, 1, 1, 1, 1}, []int64{300, 0, 400, 500, 600, 700},
+		[]int{0, 1, 0, 1, 1, 0}, []float64{0, 3.3, 0, 4.3, 5.3, 0},
+		[]int{1, 0, 0, 1, 0, 1}, []string{"hello", "", "", "world", "", "test"},
+		[]int{0, 1, 0, 1, 1, 0}, []bool{false, true, false, true, false, false},
+		[]int64{46, 45, 34, 33, 32, 31})
+	var mergeRec record.Record
+	newPos, oldPos := mergeRec.MergeRecordByMaxTimeOfOldRec(newRec, oldRec, 0, 1, 1000, false)
+	if !testRecsEqual(&mergeRec, expectRec) || newPos != 0 || oldPos != 7 {
+		t.Fatal("error result")
+	}
+}
+
+// rows = 7, slice [0, 7)
+func TestRecord_SliceFromRecordCase1(t *testing.T) {
+	rec := genRowRec(testSchema,
+		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
+		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
+		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
+		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
+		[]int64{31, 32, 33, 34, 45, 46, 47})
+
+	sort.Sort(rec)
+
+	var sliceRec record.Record
+	sliceRec.SliceFromRecord(rec, 0, rec.RowNums())
+	if !testRecsEqual(rec, &sliceRec) {
+		t.Fatal("error result")
+	}
+}
+
+// rows = 7, slice [0, 3) and slice [3, 7)
+func TestRecord_SliceFromRecordCase2(t *testing.T) {
+	rec := genRowRec(testSchema,
+		[]int{1, 1, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
+		[]int{1, 0, 1, 0, 1, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
+		[]int{0, 1, 0, 0, 1, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
+		[]int{0, 0, 1, 0, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
+		[]int64{31, 32, 33, 34, 45, 46, 47})
+	expectRec1 := genRowRec(testSchema,
+		[]int{1, 1, 0}, []int64{200, 300, 0},
+		[]int{1, 0, 1}, []float64{2.3, 0, 3.3},
+		[]int{0, 1, 0}, []string{"", "hello", ""},
+		[]int{0, 0, 1}, []bool{false, false, true},
+		[]int64{31, 32, 33})
+	expectRec2 := genRowRec(testSchema,
+		[]int{1, 1, 1, 1}, []int64{400, 500, 600, 700},
+		[]int{0, 1, 1, 0}, []float64{0, 4.3, 5.3, 0},
+		[]int{0, 1, 0, 1}, []string{"", "world", "", "test"},
+		[]int{0, 1, 1, 0}, []bool{false, true, false, false},
+		[]int64{34, 45, 46, 47})
+
+	sort.Sort(rec)
+	sort.Sort(expectRec1)
+	sort.Sort(expectRec2)
+
+	var sliceRec1 record.Record
+	sliceRec1.SliceFromRecord(rec, 0, 3)
+	if !testRecsEqual(&sliceRec1, expectRec1) {
+		t.Fatal("error result")
+	}
+
+	var sliceRec2 record.Record
+	sliceRec2.SliceFromRecord(&sliceRec2, 3, rec.RowNums())
+	if !testRecsEqual(&sliceRec2, expectRec2) {
+		t.Fatal("error result")
+	}
+}
+
+func TestRecordSort(t *testing.T) {
+	fs1 := []record.Field{
+		{Name: "field1", Type: influx.Field_Type_Int},
+		{Name: "field2", Type: influx.Field_Type_Int},
+		{Name: "field4", Type: influx.Field_Type_Int},
+		{Name: "time", Type: influx.Field_Type_Int},
+	}
+	fs2 := []record.Field{
+		{Name: "field0", Type: influx.Field_Type_Int},
+		{Name: "field1", Type: influx.Field_Type_Int},
+		{Name: "field3", Type: influx.Field_Type_Int},
+		{Name: "field4", Type: influx.Field_Type_Int},
+		{Name: "field5", Type: influx.Field_Type_Int},
+		{Name: "time", Type: influx.Field_Type_Int},
+	}
+	fs := record.Schemas{
+		{Name: "field0", Type: influx.Field_Type_Int},
+		{Name: "field1", Type: influx.Field_Type_Int},
+		{Name: "field2", Type: influx.Field_Type_Int},
+		{Name: "field3", Type: influx.Field_Type_Int},
+		{Name: "field4", Type: influx.Field_Type_Int},
+		{Name: "field5", Type: influx.Field_Type_Int},
+		{Name: "time", Type: influx.Field_Type_Int},
+	}
+
+	rec1 := record.NewRecordBuilder(fs1)
+	rec2 := record.NewRecordBuilder(fs2)
+	rec1.PadRecord(rec2)
+
+	if !reflect.DeepEqual(rec1.Schema, fs) {
+		t.Fatalf("pad record fail, exp:%#v, get:%#v", fs, rec1.Schema)
+	}
+}
+
+func TestPadCol(t *testing.T) {
+	col := record.ColVal{}
+	rowNum := 16
+	for i := 0; i < rowNum; i++ {
+		col.AppendInteger(int64(i))
+	}
+
+	for i := 0; i < rowNum/8; i++ {
+		if col.Bitmap[i] != 255 {
+			t.Fatalf("unexpect bitmap")
+		}
+	}
+
+	col.Init()
+	col.PadColVal(influx.Field_Type_Int, rowNum)
+
+	for i := 0; i < rowNum/8; i++ {
+		if col.Bitmap[i] != 0 {
+			t.Fatalf("unexpect bitmap")
+		}
+	}
+}
+
+func TestColVal_RowBitmap(t *testing.T) {
+	schema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	rec := genRowRec(schema,
+		[]int{1, 0, 1, 0, 1, 0, 1, 0, 1, 1, 0, 0}, []int64{1000, 0, 1100, 0, 1200, 0, 1300, 0, 1400, 1500, 0, 0},
+		nil, nil,
+		nil, nil,
+		nil, nil,
+		[]int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12})
+
+	// case 1
+	bitmap := make([]bool, 0)
+	bitmap = rec.ColVals[0].RowBitmap(bitmap)
+	assert.Equal(t, bitmap, []bool{true, false, true, false, true, false, true, false, true, true, false, false})
+
+	// case 2
+	rec.SliceFromRecord(rec, 2, 12)
+	bitmap = bitmap[:0]
+	bitmap = rec.ColVals[0].RowBitmap(bitmap)
+	assert.Equal(t, bitmap, []bool{true, false, true, false, true, false, true, true, false, false})
+}
+
+func TestKickNilRecord1(t *testing.T) {
+	rec := genRowRec(testSchema,
+		[]int{1, 0, 0, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
+		[]int{1, 0, 0, 0, 0, 1, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
+		[]int{0, 0, 0, 0, 0, 0, 1}, []string{"", "hello", "", "", "world", "", "test"},
+		[]int{0, 0, 1, 0, 0, 1, 0}, []bool{false, false, true, false, true, false, false},
+		[]int64{31, 32, 33, 34, 45, 46, 47})
+	expRec := genRowRec(testSchema,
+		[]int{1, 0, 1, 1, 1, 1}, []int64{200, 0, 400, 500, 600, 700},
+		[]int{1, 0, 0, 0, 1, 0}, []float64{2.3, 3.3, 0, 4.3, 5.3, 0},
+		[]int{0, 0, 0, 0, 0, 1}, []string{"", "", "", "world", "", "test"},
+		[]int{0, 1, 0, 0, 1, 0}, []bool{false, true, false, true, false, false},
+		[]int64{31, 33, 34, 45, 46, 47})
+	sort.Sort(rec)
+	sort.Sort(expRec)
+	newRec := rec.KickNilRow(nil, &record.ColAux{})
+
+	if !testRecsEqual(newRec, expRec) {
+		t.Fatal("error result")
+	}
+}
+
+func TestKickNilRecord2(t *testing.T) {
+	rec := genRowRec(testSchema,
+		[]int{1, 1, 1, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
+		[]int{1, 1, 1, 1, 1, 1, 1}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
+		[]int{1, 1, 1, 1, 1, 1, 1}, []string{"a", "hello", "b", "c", "world", "d", "test"},
+		[]int{1, 1, 1, 1, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
+		[]int64{31, 32, 33, 34, 45, 46, 47})
+	expRec := genRowRec(testSchema,
+		[]int{1, 1, 1, 1, 1, 1, 1}, []int64{200, 300, 0, 400, 500, 600, 700},
+		[]int{1, 1, 1, 1, 1, 1, 1}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
+		[]int{1, 1, 1, 1, 1, 1, 1}, []string{"a", "hello", "b", "c", "world", "d", "test"},
+		[]int{1, 1, 1, 1, 1, 1, 0}, []bool{false, false, true, false, true, false, false},
+		[]int64{31, 32, 33, 34, 45, 46, 47})
+	sort.Sort(rec)
+	sort.Sort(expRec)
+	newRec := rec.KickNilRow(nil, &record.ColAux{})
+
+	if !testRecsEqual(newRec, expRec) {
+		t.Fatal("error result")
+	}
+}
+
+func TestKickNilRecord3(t *testing.T) {
+	rec := genRowRec(testSchema,
+		[]int{1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 0, 0}, []int64{200, 300, 0, 400, 500, 600, 700, 200, 300, 0, 400, 500, 600, 700},
+		[]int{1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0, 2.3, 0, 3.3, 0, 4.3, 5.3, 0},
+		[]int{1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 0, 0}, []string{"a", "hello", "b", "c", "world", "d", "test", "a", "hello", "b", "c", "world", "d", "test"},
+		[]int{0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0, 0}, []bool{false, false, true, false, true, false, false, true, true, true, false, true, false, true},
+		[]int64{31, 32, 33, 34, 45, 46, 47, 61, 62, 63, 64, 65, 66, 67})
+	expRec := genRowRec(testSchema,
+		[]int{1, 0, 0, 1, 1, 1}, []int64{200, 400, 500, 300, 400, 500},
+		[]int{1, 1, 0, 1, 1, 0}, []float64{2.3, 0, 4.3, 0, 0, 4.3},
+		[]int{1, 0, 0, 1, 1, 1}, []string{"a", "c", "world", "hello", "c", "world"},
+		[]int{0, 0, 1, 1, 1, 1}, []bool{false, false, true, true, false, true},
+		[]int64{31, 34, 45, 62, 64, 65})
+	sort.Sort(rec)
+	sort.Sort(expRec)
+	newRec := rec.KickNilRow(nil, &record.ColAux{})
+
+	if !testRecsEqual(newRec, expRec) {
+		t.Fatal("error result")
+	}
+}
+
+func TestKickNilRecord4(t *testing.T) {
+	rec := genRowRec(testSchema,
+		[]int{0, 0, 0, 0, 0, 0, 0}, []int64{200, 300, 0, 400, 500, 600, 700},
+		[]int{0, 0, 0, 0, 0, 0, 0}, []float64{2.3, 0, 3.3, 0, 4.3, 5.3, 0},
+		[]int{0, 0, 0, 0, 0, 0, 0}, []string{"a", "hello", "b", "c", "world", "d", "test"},
+		[]int{0, 0, 0, 0, 0, 0, 0}, []bool{false, false, true, false, true, false, false},
+		[]int64{31, 32, 33, 34, 45, 46, 47})
+	sort.Sort(rec)
+	newRec := rec.KickNilRow(nil, &record.ColAux{})
+
+	if newRec.RowNums() != 0 {
+		t.Fatal("error result")
+	}
+}
+
+func TestSortRecord1(t *testing.T) {
+	rec := genRowRec(testSchema,
+		[]int{1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1}, []int64{1000, 0, 1100, 1200, 1300, 200, 300, 0, 400, 500, 600, 700},
+		[]int{1, 1, 0, 1, 0, 1, 0, 1, 0, 1, 1, 0}, []float64{1001.3, 1002.4, 0, 1003.5, 0, 2.3, 0, 3.3, 0, 4.3, 5.3, 0},
+		[]int{1, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 1}, []string{"", "helloNew", "worldNew", "testNew1", "", "", "hello", "", "", "world", "", "test"},
+		[]int{1, 1, 1, 1, 0, 0, 0, 1, 0, 1, 1, 0}, []bool{true, true, false, true, false, false, false, true, false, true, false, false},
+		[]int64{22, 21, 20, 19, 18, 7, 6, 5, 4, 3, 2, 1})
+	expRec := genRowRec(testSchema,
+		[]int{1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1}, []int64{700, 600, 500, 400, 0, 300, 200, 1300, 1200, 1100, 0, 1000},
+		[]int{0, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1, 1}, []float64{0, 5.3, 4.3, 0, 3.3, 0, 2.3, 0, 1003.5, 0, 1002.4, 1001.3},
+		[]int{1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 1, 1}, []string{"test", "", "world", "", "", "hello", "", "", "testNew1", "worldNew", "helloNew", ""},
+		[]int{0, 1, 1, 0, 1, 0, 0, 0, 1, 1, 1, 1}, []bool{false, false, true, false, true, false, false, false, true, false, true, true},
+		[]int64{1, 2, 3, 4, 5, 6, 7, 18, 19, 20, 21, 22})
+	sort.Sort(rec)
+	sort.Sort(expRec)
+
+	sh := record.NewSortHelper()
+	if !testRecsEqual(sh.Sort(rec), expRec) {
+		t.Fatal("error result")
+	}
+}
+
+func TestSortRecord2(t *testing.T) {
+	rec := genRowRec(testSchema,
+		[]int{1, 1, 0, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1}, []int64{1000, 12, 0, 1100, 1200, 1300, 200, 300, 0, 400, 500, 600, 700},
+		[]int{1, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1, 1, 0}, []float64{1001.3, 1.2, 1002.4, 0, 1003.5, 0, 2.3, 0, 3.3, 0, 4.3, 5.3, 0},
+		[]int{1, 1, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 1}, []string{"", "hi", "helloNew", "worldNew", "testNew1", "", "", "hello", "", "", "world", "", "test"},
+		[]int{1, 1, 1, 1, 1, 0, 0, 0, 1, 0, 1, 1, 0}, []bool{true, true, true, false, true, false, false, false, true, false, true, false, false},
+		[]int64{22, 4, 21, 20, 19, 18, 7, 6, 5, 4, 3, 2, 1})
+	expRec := genRowRec(testSchema,
+		[]int{1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1}, []int64{700, 600, 500, 400, 0, 300, 200, 1300, 1200, 1100, 0, 1000},
+		[]int{0, 1, 1, 1, 1, 0, 1, 0, 1, 0, 1, 1}, []float64{0, 5.3, 4.3, 1.2, 3.3, 0, 2.3, 0, 1003.5, 0, 1002.4, 1001.3},
+		[]int{1, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1}, []string{"test", "", "world", "hi", "", "hello", "", "", "testNew1", "worldNew", "helloNew", ""},
+		[]int{0, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1}, []bool{false, false, true, true, true, false, false, false, true, false, true, true},
+		[]int64{1, 2, 3, 4, 5, 6, 7, 18, 19, 20, 21, 22})
+	sort.Sort(rec)
+	sort.Sort(expRec)
+
+	sh := record.NewSortHelper()
+	if !testRecsEqual(sh.Sort(rec), expRec) {
+		t.Fatal("error result")
+	}
+}
+
+func TestSortRecord3(t *testing.T) {
+	rec := genRowRec(testSchema,
+		[]int{1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1}, []int64{700, 600, 500, 400, 0, 300, 200, 1300, 1200, 1100, 0, 1000},
+		[]int{0, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1, 1}, []float64{0, 5.3, 4.3, 0, 3.3, 0, 2.3, 0, 1003.5, 0, 1002.4, 1001.3},
+		[]int{1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 1, 1}, []string{"test", "", "world", "", "", "hello", "", "", "testNew1", "worldNew", "helloNew", ""},
+		[]int{0, 1, 1, 0, 1, 0, 0, 0, 1, 1, 1, 1}, []bool{false, false, true, false, true, false, false, false, true, false, true, true},
+		[]int64{1, 2, 3, 4, 5, 6, 7, 18, 19, 20, 21, 22})
+	sort.Sort(rec)
+
+	sh := record.NewSortHelper()
+	if !testRecsEqual(sh.Sort(rec), rec) {
+		t.Fatal("error result")
+	}
+}
+
+func TestSortRecord4(t *testing.T) {
+	rec := genRowRec(testSchema,
+		[]int{1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1, 1}, []int64{700, 2, 600, 500, 400, 0, 300, 200, 1300, 1200, 1100, 0, 1000, 2},
+		[]int{0, 1, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1, 1, 1}, []float64{0, 2.2, 5.3, 4.3, 0, 3.3, 0, 2.3, 0, 1003.5, 0, 1002.4, 1001.3, 2.2},
+		[]int{1, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 1, 1, 1}, []string{"test", "hi", "", "world", "", "", "hello", "", "", "testNew1", "worldNew", "helloNew", "", "hi"},
+		[]int{0, 1, 1, 1, 0, 1, 0, 0, 0, 1, 1, 1, 1, 1}, []bool{false, true, false, true, false, true, false, false, false, true, false, true, true, false},
+		[]int64{1, 1, 2, 3, 4, 5, 6, 7, 18, 19, 20, 21, 22, 22})
+	expRec := genRowRec(testSchema,
+		[]int{1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 0, 1}, []int64{2, 600, 500, 400, 0, 300, 200, 1300, 1200, 1100, 0, 2},
+		[]int{1, 1, 1, 0, 1, 0, 1, 0, 1, 0, 1, 1}, []float64{2.2, 5.3, 4.3, 0, 3.3, 0, 2.3, 0, 1003.5, 0, 1002.4, 2.2},
+		[]int{1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 1, 1}, []string{"hi", "", "world", "", "", "hello", "", "", "testNew1", "worldNew", "helloNew", "hi"},
+		[]int{1, 1, 1, 0, 1, 0, 0, 0, 1, 1, 1, 1}, []bool{true, false, true, false, true, false, false, false, true, false, true, false},
+		[]int64{1, 2, 3, 4, 5, 6, 7, 18, 19, 20, 21, 22})
+	sort.Sort(rec)
+	sort.Sort(expRec)
+
+	sh := record.NewSortHelper()
+	if !testRecsEqual(sh.Sort(rec), expRec) {
+		t.Fatal("error result")
+	}
+}
+
+func TestSortRecord5(t *testing.T) {
+	rec := genRowRec(testSchema,
+		[]int{1, 1, 1}, []int64{700, 2, 600},
+		[]int{1, 1, 1}, []float64{0, 2.2, 5.3},
+		[]int{1, 1, 1}, []string{"test", "hi", "world"},
+		[]int{1, 1, 1}, []bool{false, true, false},
+		[]int64{6, 6, 1})
+	expRec := genRowRec(testSchema,
+		[]int{1, 1}, []int64{600, 2},
+		[]int{1, 1}, []float64{5.3, 2.2},
+		[]int{1, 1}, []string{"world", "hi"},
+		[]int{1, 1}, []bool{false, true},
+		[]int64{1, 6})
+	sort.Sort(rec)
+	sort.Sort(expRec)
+
+	sh := record.NewSortHelper()
+	if !testRecsEqual(sh.Sort(rec), expRec) {
+		t.Fatal("error result")
+	}
+}
+
+func TestSortRecord6(t *testing.T) {
+	rec := genRowRec(testSchema,
+		[]int{1, 1, 1}, []int64{700, 2, 600},
+		[]int{1, 1, 1}, []float64{0, 2.2, 5.3},
+		[]int{1, 1, 1}, []string{"test", "hi", "world"},
+		[]int{1, 1, 1}, []bool{true, true, true},
+		[]int64{6, 1, 1})
+	expRec := genRowRec(testSchema,
+		[]int{1, 1}, []int64{600, 700},
+		[]int{1, 1}, []float64{5.3, 0},
+		[]int{1, 1}, []string{"world", "test"},
+		[]int{1, 1}, []bool{true, true},
+		[]int64{1, 6})
+	sort.Sort(rec)
+	sort.Sort(expRec)
+
+	sh := record.NewSortHelper()
+	if !testRecsEqual(sh.Sort(rec), expRec) {
+		t.Fatal("error result")
+	}
+}
+
+// BUG2022042701004 Fix the bug of method Record.SliceFromRecord
+func TestSliceFromRecord(t *testing.T) {
+	rec := genRowRec(testSchema,
+		[]int{0, 0, 0}, []int64{0, 0, 0},
+		[]int{1, 1, 1}, []float64{0, 2.2, 5.3},
+		[]int{1, 1, 1}, []string{"test", "hi", "world"},
+		[]int{1, 1, 1}, []bool{true, true, true},
+		[]int64{6, 1, 1})
+
+	other := record.Record{}
+	other.PadRecord(rec)
+	other.SliceFromRecord(rec, 0, 1)
+	assert.Equal(t, other.ColVals[0].Len, 1, "invalid ColVal.Len")
+	assert.Equal(t, other.ColVals[0].NilCount, 1, "invalid ColVal.NilCount")
+}
+
+func TestReCordCopyColVals(t *testing.T) {
+	rec := genRowRec(testSchema,
+		[]int{0, 0, 0}, []int64{0, 0, 0},
+		[]int{1, 1, 1}, []float64{0, 2.2, 5.3},
+		[]int{1, 1, 1}, []string{"test", "hi", "world"},
+		[]int{1, 1, 1}, []bool{true, true, true},
+		[]int64{6, 1, 1})
+	sort.Sort(rec)
+	colvals := rec.CopyColVals()
+	for index, colVal := range colvals {
+		assert.Equal(t, colVal.Len, rec.ColVals[index].Len, "invalid ColVal.Len")
+	}
+}
+
+func TestRecord_GetMinMaxTimeByAscending(t *testing.T) {
+	rec := genRowRec(testSchema,
+		[]int{0, 0, 0}, []int64{0, 0, 0},
+		[]int{1, 1, 1}, []float64{0, 2.2, 5.3},
+		[]int{1, 1, 1}, []string{"test", "hi", "world"},
+		[]int{1, 1, 1}, []bool{true, true, true},
+		[]int64{6, 1, 1})
+	min := rec.MinTime(true)
+	max := rec.MaxTime(true)
+	assert.Equal(t, min, int64(6), "invalid minTime")
+	assert.Equal(t, max, int64(1), "invalid maxTime")
+	min = rec.MinTime(false)
+	max = rec.MaxTime(false)
+	assert.Equal(t, min, int64(1), "invalid minTime")
+	assert.Equal(t, max, int64(6), "invalid maxTime")
+}
+
+func TestRecordPoolGetBySchema(t *testing.T) {
+	changeSchema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Float, Name: "float"},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	pool := record.NewCircularRecordPool(record.NewRecordPool(record.UnknownPool), 3, testSchema, false)
+	re := pool.GetBySchema(changeSchema)
+	assert.Equal(t, re.Schema, changeSchema, "invalid schema")
+}
+
+func TestRecordPoolPutIn(t *testing.T) {
+	pool := record.NewCircularRecordPool(record.NewRecordPool(record.UnknownPool), 4, testSchema, false)
+	pool.Get()
+	pool.Get()
+	pool.PutRecordInCircularPool()
+	assert.Equal(t, pool.GetIndex(), 1, "invalid pool index")
+}
+
+func TestRecMetaCopyTimes(t *testing.T) {
+	r := record.RecMeta{}
+	r.Times = make([][]int64, 2)
+	r.Times[0] = []int64{1, 2}
+	r.Times[1] = []int64{1, 2}
+	rc := r.Copy()
+	assert.Equal(t, rc.Times[0], r.Times[0])
+	assert.Equal(t, rc.Times[1], r.Times[1])
+}
+
+func TestSliceFromRecordWithRecMetaTimes(t *testing.T) {
+	rec := genRowRec(testSchema,
+		[]int{0, 0, 0}, []int64{0, 0, 0},
+		[]int{1, 1, 1}, []float64{0, 2.2, 5.3},
+		[]int{1, 1, 1}, []string{"test", "hi", "world"},
+		[]int{1, 1, 1}, []bool{true, true, true},
+		[]int64{6, 1, 1})
+	rec.RecMeta = &record.RecMeta{}
+	rec.RecMeta.Times = make([][]int64, len(schema))
+	rec.RecMeta.Times[1] = []int64{1, 2, 3}
+	rec.RecMeta.Times[2] = []int64{1, 2, 3}
+	rec.RecMeta.Times[3] = []int64{1, 2, 3}
+	r := record.NewRecord(schema, false)
+	r.SliceFromRecord(rec, 0, 1)
+	assert.Equal(t, r.RecMeta.Times[1], []int64{1})
+	assert.Equal(t, r.RecMeta.Times[2], []int64{1})
+	assert.Equal(t, r.RecMeta.Times[3], []int64{1})
+}
+
+func TestRecordResizeBySchema(t *testing.T) {
+	schema1 := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	schema2 := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Float, Name: "float"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+	pool := record.NewCircularRecordPool(record.NewRecordPool(record.UnknownPool), 1, schema1, true)
+	rec1 := pool.Get()
+	assert.Equal(t, rec1.Len(), 2)
+	rec2 := pool.GetBySchema(schema2)
+	rec2.ResizeBySchema(schema2, true)
+	assert.Equal(t, rec2.Len(), 3)
+}
+
+func TestRecUpdateFunc(t *testing.T) {
+	iRec := record.NewRecord(testSchema, true)
+	iRec.AppendIntervalEmptyRow(1, true, nil)
+	rec := record.NewRecord(testSchema, true)
+	rec.AppendIntervalEmptyRow(1, true, nil)
+	record.UpdateIntegerFirst(iRec, rec, 0, 0, 0, 0)
+	record.UpdateIntegerLast(iRec, rec, 0, 0, 0, 0)
+	record.UpdateFloatFirst(iRec, rec, 1, 1, 0, 0)
+	record.UpdateFloatLast(iRec, rec, 1, 1, 0, 0)
+	record.UpdateBooleanFirst(iRec, rec, 2, 2, 0, 0)
+	record.UpdateBooleanLast(iRec, rec, 2, 2, 0, 0)
+	record.UpdateStringFirst(iRec, rec, 3, 3, 0, 0)
+	record.UpdateStringLast(iRec, rec, 3, 3, 0, 0)
+}
+
+func BenchmarkRecord_Get(b *testing.B) {
+	p := record.NewRecordPool(record.UnknownPool)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		for j := 0; j < 100; j++ {
+			p.Get()
+		}
+	}
+}
+
+func TestFieldIndexs(t *testing.T) {
+	rec := genRowRec(testSchema,
+		[]int{0, 0, 0}, []int64{0, 0, 0},
+		[]int{1, 1, 1}, []float64{0, 2.2, 5.3},
+		[]int{1, 1, 1}, []string{"test", "hi", "world"},
+		[]int{1, 1, 1}, []bool{true, true, true},
+		[]int64{6, 1, 1})
+
+	sort.Sort(rec)
+	for i := range testSchema {
+		idx := rec.FieldIndexsFast(testSchema[i].Name)
+		if rec.Schema[idx] != testSchema[i] {
+			t.Fatal("error index, actual schema", rec.Schema[idx], "expect schema", testSchema[i])
+		}
+	}
+
+	idx := rec.FieldIndexsFast("not exist")
+	if idx != -1 {
+		t.Fatal("error index, actual index", idx)
+	}
+}
+
+func TestRecord_TryPadColumn2AlignBitmap(t *testing.T) {
+	type fields struct {
+		RecMeta *record.RecMeta
+		ColVals []record.ColVal
+		Schema  record.Schemas
+	}
+	tests := []struct {
+		name   string
+		fields fields
+	}{
+		{
+			name: "1",
+			fields: fields{
+				RecMeta: nil,
+				ColVals: []record.ColVal{
+					{},
+					{
+						Len:          8,
+						NilCount:     8,
+						BitMapOffset: 0,
+						Offset:       make([]uint32, 8),
+						Bitmap:       make([]byte, 1),
+					},
+					{
+						Len:          8,
+						NilCount:     0,
+						BitMapOffset: 1,
+						Offset:       nil,
+						Val:          make([]byte, 32),
+						Bitmap:       make([]byte, 2),
+					},
+				},
+				Schema: []record.Field{
+					{
+						Name: "a",
+						Type: influx.Field_Type_String,
+					},
+					{
+						Name: "b",
+						Type: influx.Field_Type_String,
+					},
+					{
+						Name: "time",
+						Type: influx.Field_Type_Int,
+					},
+				},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := &record.Record{
+				RecMeta: tt.fields.RecMeta,
+				ColVals: tt.fields.ColVals,
+				Schema:  tt.fields.Schema,
+			}
+			rec.TryPadColumn2AlignBitmap()
+			assert.Equal(t, rec.ColVals[0].Len, 8)
+			assert.Equal(t, rec.ColVals[0].NilCount, 8)
+			assert.Equal(t, rec.ColVals[0].BitMapOffset, 1)
+			assert.Equal(t, len(rec.ColVals[0].Bitmap), 2)
+			assert.Equal(t, rec.ColVals[1].Len, 8)
+			assert.Equal(t, rec.ColVals[1].NilCount, 8)
+			assert.Equal(t, rec.ColVals[1].BitMapOffset, 1)
+			assert.Equal(t, len(rec.ColVals[1].Bitmap), 2)
+		})
+	}
+}
+
+func TestGetRecordFromPool(t *testing.T) {
+	rec := record.GetRecordFromPool(record.LogStoreRecordPool, testSchema)
+	assert.NotEqual(t, rec, nil)
+	record.LogStoreRecordPool.Put(rec)
+	rec0 := record.GetRecordFromPool(record.LogStoreRecordPool, testSchema)
+	assert.NotEqual(t, rec0, nil)
+	record.LogStoreRecordPool.Put(rec0)
+}
+
+func TestPutBigRecord(t *testing.T) {
+	rec := record.GetRecordFromPool(record.LogStoreRecordPool, nil)
+	assert.Equal(t, 0, rec.Len())
+	record.LogStoreRecordPool.PutBigRecord(rec)
+	rec0 := record.GetRecordFromPool(record.LogStoreRecordPool, testSchema)
+	assert.NotEqual(t, rec0, nil)
+	record.LogStoreRecordPool.PutBigRecord(rec0)
+}
+
+func TestUpdateSeqIdCol(t *testing.T) {
+	rec := genRowRec(testSchema,
+		[]int{0, 0, 0}, []int64{0, 0, 0},
+		[]int{1, 1, 1}, []float64{0, 2.2, 5.3},
+		[]int{1, 1, 1}, []string{"test", "hi", "world"},
+		[]int{1, 1, 1}, []bool{true, true, true},
+		[]int64{6, 1, 1})
+	sort.Sort(rec)
+	// do nothing
+	record.UpdateSeqIdCol(0, rec)
+	// append seq id
+	err := record.AppendSeqIdSchema(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// update seqId
+	record.UpdateSeqIdCol(0, rec)
+	// expecting AppendSeqIdSchema fail
+	err = record.AppendSeqIdSchema(rec)
+	if err == nil {
+		t.Fatalf("expecting AppendSeqIdSchema fail, but not")
+	}
+}
+
+func TestRecord_IsFullAllCol(t *testing.T) {
+	type fields struct {
+		RecMeta *record.RecMeta
+		ColVals []record.ColVal
+		Schema  record.Schemas
+	}
+	type args struct {
+		colIdx map[int]struct{}
+	}
+	tests := []struct {
+		name   string
+		fields fields
+		args   args
+		want   map[int]struct{}
+		want1  bool
+	}{
+		{
+			name: "fullCol",
+			fields: fields{
+				ColVals: []record.ColVal{
+					{Len: 1, NilCount: 0},
+					{Len: 1, NilCount: 0},
+					{Len: 1, NilCount: 0},
+				},
+				Schema: []record.Field{
+					{Name: "val1", Type: influx.Field_Type_Float},
+					{Name: "val2", Type: influx.Field_Type_Float},
+					{Name: "time", Type: influx.Field_Type_Int}},
+			},
+			args: args{
+				colIdx: map[int]struct{}{0: {}},
+			},
+			want:  map[int]struct{}{0: {}, 1: {}, 2: {}},
+			want1: true,
+		},
+		{
+			name: "emptyCol",
+			fields: fields{
+				ColVals: []record.ColVal{
+					{Len: 1, NilCount: 0},
+					{Len: 1, NilCount: 1},
+					{Len: 1, NilCount: 0},
+				},
+				Schema: []record.Field{
+					{Name: "val1", Type: influx.Field_Type_Float},
+					{Name: "val2", Type: influx.Field_Type_Float},
+					{Name: "time", Type: influx.Field_Type_Int}},
+			},
+			args: args{
+				colIdx: map[int]struct{}{},
+			},
+			want:  map[int]struct{}{0: {}, 2: {}},
+			want1: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := &record.Record{
+				RecMeta: tt.fields.RecMeta,
+				ColVals: tt.fields.ColVals,
+				Schema:  tt.fields.Schema,
+			}
+			got, got1 := rec.IsFullAllCol(tt.args.colIdx)
+			assert.Equal(t, tt.want, got, "IsFullAllCol(%v)", tt.args.colIdx)
+			assert.Equal(t, tt.want1, got1, "IsFullAllCol(%v)", tt.args.colIdx)
+		})
+	}
+}
+
+type aggData struct {
+	countValues    []int64
+	intSumValues   []int64
+	intMaxValues   []int64
+	intMinValues   []int64
+	floatSumValues []float64
+	floatMaxValues []float64
+	floatMinValues []float64
+}
+
+// TestMergeRecords tests the MergeRecords method.
+func TestMergeRecords(t *testing.T) {
+
+	tests := []struct {
+		name         string
+		recordsData  []aggData
+		expectedData aggData
+		err          bool
+	}{
+		{
+			name:         "empty records",
+			recordsData:  []aggData{},
+			expectedData: aggData{},
+			err:          false,
+		},
+		{
+			name: "single record",
+			recordsData: []aggData{
+				{
+					[]int64{1},
+					[]int64{2},
+					[]int64{2},
+					[]int64{2},
+					[]float64{3.2},
+					[]float64{3.2},
+					[]float64{3.2},
+				},
+			},
+			expectedData: aggData{
+				[]int64{1},
+				[]int64{2},
+				[]int64{2},
+				[]int64{2},
+				[]float64{3.2},
+				[]float64{3.2},
+				[]float64{3.2}},
+			err: false,
+		},
+		{
+			name: "single record with many values",
+			recordsData: []aggData{
+				{
+					[]int64{1, 5},
+					[]int64{2, 10},
+					[]int64{2, 6},
+					[]int64{2, 1},
+					[]float64{3.2, 12.5},
+					[]float64{3.2, 8.8},
+					[]float64{3.2, 1.3},
+				},
+			},
+			expectedData: aggData{
+				[]int64{6},
+				[]int64{12},
+				[]int64{6},
+				[]int64{1},
+				[]float64{15.7},
+				[]float64{8.8},
+				[]float64{1.3}},
+			err: false,
+		},
+		{
+			name: "many records with many values",
+			recordsData: []aggData{
+				{
+					[]int64{4, 5},
+					[]int64{10, 10},
+					[]int64{5, 4},
+					[]int64{-1, 1},
+					[]float64{10.0, 12.0},
+					[]float64{5.0, 6.6},
+					[]float64{1.0, 2.0},
+				},
+				{
+					[]int64{2, 3, 5},
+					[]int64{2, 10, 20},
+					[]int64{1, 4, 10},
+					[]int64{1, 3, 2},
+					[]float64{10.0, 20.0, 30.0},
+					[]float64{4.0, 8.8, 12.0},
+					[]float64{1.0, 0.1, -3.0},
+				},
+			},
+			expectedData: aggData{
+				[]int64{19},
+				[]int64{52},
+				[]int64{10},
+				[]int64{-1},
+				[]float64{82.0},
+				[]float64{12.0},
+				[]float64{-3.0}},
+			err: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+
+			var records []*record.Record
+			for _, data := range tt.recordsData {
+				rec := genAggregationRecord(data)
+				records = append(records, rec)
+			}
+
+			result := record.MergeRecords(records)
+
+			expected := genAggregationRecord(tt.expectedData)
+
+			// For comparing records, use string representation comparison
+			// because direct comparison might fail due to internal differences
+			if expected == nil {
+				require.Nil(t, result, "Merge Records failed for case %s: expected nil", tt.name)
+			} else {
+				require.NotNil(t, result, "Merge Records failed for case %s: expected non-nil", tt.name)
+				require.Equal(t, expected.String(), result.String(), "Merge Records failed for case %s", tt.name)
+			}
+		})
+	}
+}
+
+// genAggregationRecord generates a record with aggregation columns
+var aggSchema = record.Schemas{
+	record.Field{Type: influx.Field_Type_Int, Name: "int_count"},
+	record.Field{Type: influx.Field_Type_Int, Name: "int_sum"},
+	record.Field{Type: influx.Field_Type_Int, Name: "int_max"},
+	record.Field{Type: influx.Field_Type_Int, Name: "int_min"},
+	record.Field{Type: influx.Field_Type_Float, Name: "float_sum"},
+	record.Field{Type: influx.Field_Type_Float, Name: "float_max"},
+	record.Field{Type: influx.Field_Type_Float, Name: "float_min"},
+}
+
+func genAggregationRecord(recordsData aggData) *record.Record {
+	if len(recordsData.countValues) == 0 {
+		return nil
+	}
+	rec := record.NewRecord(aggSchema, false)
+	rec.ColVals[0].AppendIntegers(recordsData.countValues...)
+	rec.ColVals[1].AppendIntegers(recordsData.intSumValues...)
+	rec.ColVals[2].AppendIntegers(recordsData.intMaxValues...)
+	rec.ColVals[3].AppendIntegers(recordsData.intMinValues...)
+	rec.ColVals[4].AppendFloats(recordsData.floatSumValues...)
+	rec.ColVals[5].AppendFloats(recordsData.floatMaxValues...)
+	rec.ColVals[6].AppendFloats(recordsData.floatMinValues...)
+
+	return rec
+}

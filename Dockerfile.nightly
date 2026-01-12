@@ -1,0 +1,34 @@
+FROM fedora:latest AS builder
+
+WORKDIR /build
+
+ENV GOPROXY=https://mirrors.huaweicloud.com/repository/goproxy/,https://goproxy.cn,https://proxy.golang.org,direct
+ENV CGO_ENABLED=1
+ENV GOBIN=/build/bin
+
+RUN dnf install golang gcc gcc-c++ -y --setopt=tsflags=nodocs && dnf clean all
+
+COPY . .
+
+RUN rm -rf go.sum && go mod tidy
+
+RUN go build -ldflags "-s -w" -o ./bin/ts-server ./app/ts-server/ &&\
+    go install github.com/openGemini/openGemini-cli/cmd/ts-cli@latest
+
+FROM fedora:latest
+
+WORKDIR /home/opengemini
+
+ENV PATH=$PATH:/home/opengemini/bin
+
+COPY --from=builder /build/bin/* /home/opengemini/bin/
+COPY --from=builder /build/config/openGemini.singlenode.conf /home/opengemini/config/opengemini.conf
+
+RUN dnf install -y --setopt=tsflags=nodocs net-tools curl bind-utils procps && dnf clean all &&\
+    sed -i 's/bind-address = "127.0.0.1:8086"/bind-address = "0.0.0.0:8086"/g' /home/opengemini/config/opengemini.conf &&\
+    sed -i 's/rpc-address = "127.0.0.1:8305"/rpc-address = "0.0.0.0:8305"/g' /home/opengemini/config/opengemini.conf
+
+EXPOSE 8086
+EXPOSE 8305
+
+ENTRYPOINT ["/home/opengemini/bin/ts-server", "-config", "/home/opengemini/config/opengemini.conf"]

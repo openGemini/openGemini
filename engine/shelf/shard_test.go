@@ -1,0 +1,197 @@
+// Copyright 2025 Huawei Cloud Computing Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package shelf_test
+
+import (
+	"errors"
+	"fmt"
+	"math"
+	"os"
+	"testing"
+	"time"
+
+	"github.com/agiledragon/gomonkey/v2"
+	"github.com/influxdata/influxdb/toml"
+	"github.com/openGemini/openGemini/engine/shelf"
+	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/fileops"
+	"github.com/openGemini/openGemini/lib/util"
+	"github.com/stretchr/testify/require"
+)
+
+func TestAsyncCreateIndex(t *testing.T) {
+	defer initConfig(2)()
+	dir := t.TempDir()
+	config.GetStoreConfig().Wal.WalSyncInterval = toml.Duration(config.DefaultWALSyncInterval)
+	shelf.Open()
+
+	shard, idx, _ := newShard(10, dir)
+	shard.Run()
+	shard.Run()
+
+	rec := buildRecord(10, 1)
+	idx.sidCache = 0
+
+	err := writeRecordToShard(shard, rec, 0, nil)
+	require.NoError(t, err)
+
+	time.Sleep(time.Second)
+	shard.Stop()
+}
+
+func TestCovertTSSP(t *testing.T) {
+	defer initConfig(8)()
+	dir := t.TempDir()
+
+	shard, _, store := newShard(10, dir)
+
+	shard.Run()
+	shard.Run()
+	shard.ConvertToTSSP()
+
+	for range 5 {
+		rec := buildRecord(10, 1)
+		err := writeRecordToShard(shard, rec, 10, nil)
+		require.NoError(t, err)
+
+		row := buildRow(1, "foo", 1)
+		err = writeRecordToShard(shard, rec, 10, row.IndexKey)
+		require.NoError(t, err)
+		shard.ForceFlush()
+	}
+
+	shard.ConvertToTSSP()
+	shard.ConvertToTSSP()
+	shard.Stop()
+	shard.Wait()
+	require.True(t, len(store.files) > 0)
+	require.NoError(t, store.Close())
+}
+
+func TestFreeShard(t *testing.T) {
+	defer initConfig(2)()
+	dir := t.TempDir()
+	config.GetStoreConfig().Wal.WalSyncInterval = toml.Duration(config.DefaultWALSyncInterval)
+	config.GetShelfMode().MaxWalDuration = toml.Duration(time.Second / 2)
+
+	shard, _, store := newShard(10, dir)
+	defer shard.Stop()
+	shard.Run()
+	shard.Run()
+
+	rec := buildRecord(10, 1)
+	err := writeRecordToShard(shard, rec, 10, nil)
+	require.NoError(t, err)
+
+	for range 1000 {
+		shard.Free()
+		if len(store.files) > 0 {
+			break
+		}
+		time.Sleep(time.Second / 10)
+	}
+
+	time.Sleep(time.Second)
+	shard.Free()
+	require.True(t, len(store.files) > 0)
+}
+
+func TestWriteRecordFailed(t *testing.T) {
+	defer initConfig(2)()
+	dir := t.TempDir()
+
+	shard, _, _ := newShard(10, dir)
+	defer shard.Stop()
+
+	row := buildRow(1, "foo", 1)
+	rec := buildRecord(10, 1)
+	err := writeRecordToShard(shard, rec, 10, row.IndexKey)
+	require.NoError(t, err)
+
+	tr := &util.TimeRange{Min: 0, Max: math.MaxInt64}
+
+	wal := shard.GetWalReaders(nil, "foo", tr)
+	unrefWal(wal)
+	require.True(t, len(wal) == 1)
+
+	mockErr := errors.New("some error")
+	p1 := gomonkey.ApplyMethod(wal[0], "WriteRecord", func() error {
+		return mockErr
+	})
+	defer p1.Reset()
+
+	err = writeRecordToShard(shard, rec, 10, nil)
+	require.EqualError(t, err, mockErr.Error())
+
+	p1.Reset()
+
+	config.GetShelfMode().MaxWalFileSize = 1
+	defer func() {
+		config.GetShelfMode().MaxWalFileSize = config.MB * 128
+	}()
+	err = writeRecordToShard(shard, rec, 10, row.IndexKey)
+	require.NoError(t, err)
+
+	wal = shard.GetWalReaders(nil, "foo", tr)
+	unrefWal(wal)
+	require.Equal(t, 1, len(wal))
+}
+
+func TestIndexCreatorManager(t *testing.T) {
+	idx1 := &EmptyIndex{}
+	idx2 := &EmptyIndex{}
+	idx3 := idx2
+	icm := shelf.NewIndexCreatorManager()
+	c1 := icm.Alloc(idx1)
+	c2 := icm.Alloc(idx2)
+	c3 := icm.Alloc(idx3)
+
+	require.Equal(t, c2, c3)
+	require.NotEqual(t, c1, c2)
+}
+
+func TestSwitchWAL(t *testing.T) {
+	defer initConfig(2)()
+	dir := t.TempDir()
+
+	shard, _, _ := newShard(10, dir)
+	defer shard.Stop()
+
+	wal := shard.CreateWal()
+	require.Empty(t, shard.SwitchWal(wal, false))
+
+	rec := buildRecord(10, 1)
+	err := writeRecordToShard(shard, rec, 10, nil)
+	require.NoError(t, err)
+
+	config.GetShelfMode().MaxWalFileSize = 1
+	defer func() {
+		config.GetShelfMode().MaxWalFileSize = config.MB * 128
+	}()
+
+	p1 := gomonkey.ApplyFunc(fileops.OpenFile, func(name string, flag int, perm os.FileMode, opt ...fileops.FSOption) (fileops.File, error) {
+		return nil, fmt.Errorf("some err")
+	})
+	defer p1.Reset()
+
+	shard.SwitchWalIfNeeded()
+	require.Empty(t, shard.SwitchWal(shard.CreateWal(), true))
+}
+
+func unrefWal(wals []*shelf.Wal) {
+	for _, wal := range wals {
+		wal.Unref()
+	}
+}
