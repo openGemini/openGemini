@@ -1,9 +1,5 @@
-# Make sure to check the documentation at https://goreleaser.com
-# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
-
 before:
   hooks:
-    # You may remove this if you don't use go modules.
     - go mod tidy
 
 builds:
@@ -12,86 +8,101 @@ builds:
     main: ./app/ts-meta
     goos:
       - linux
-      - darwin
-      - windows
     goarch:
       - amd64
       - arm64
-    ignore:
-      - goos: windows
-        goarch: arm64
     ldflags:
       - -s -w -X main.TsVersion={{.Tag}} -X main.TsBranch={{.Branch}} -X main.TsCommit={{.Commit}} -X main.TsBuildTime={{.Date}}
     env:
       - CGO_ENABLED=1
+    overrides:
+      - goos: linux
+        goarch: arm64
+        env:
+          - CC=aarch64-linux-gnu-gcc
+          - CXX=aarch64-linux-gnu-g++
+        ldflags:
+          - -s -w -extldflags=-static -X main.TsVersion={{.Tag}} -X main.TsBranch={{.Branch}} -X main.TsCommit={{.Commit}} -X main.TsBuildTime={{.Date}}
   - id: "ts-monitor"
     binary: usr/bin/ts-monitor
     main: ./app/ts-monitor
     goos:
       - linux
-      - darwin
-      - windows
     goarch:
       - amd64
       - arm64
-    ignore:
-      - goos: windows
-        goarch: arm64
     ldflags:
       - -s -w -X main.TsVersion={{.Tag}} -X main.TsBranch={{.Branch}} -X main.TsCommit={{.Commit}} -X main.TsBuildTime={{.Date}}
     env:
       - CGO_ENABLED=1
+    overrides:
+      - goos: linux
+        goarch: arm64
+        env:
+          - CC=aarch64-linux-gnu-gcc
+          - CXX=aarch64-linux-gnu-g++
+        ldflags:
+          - -s -w -extldflags=-static -X main.TsVersion={{.Tag}} -X main.TsBranch={{.Branch}} -X main.TsCommit={{.Commit}} -X main.TsBuildTime={{.Date}}
   - id: "ts-server"
     binary: usr/bin/ts-server
     main: ./app/ts-server
     goos:
       - linux
-      - darwin
-      - windows
     goarch:
       - amd64
       - arm64
-    ignore:
-      - goos: windows
-        goarch: arm64
     ldflags:
       - -s -w -X main.TsVersion={{.Tag}} -X main.TsBranch={{.Branch}} -X main.TsCommit={{.Commit}} -X main.TsBuildTime={{.Date}}
     env:
       - CGO_ENABLED=1
+    overrides:
+      - goos: linux
+        goarch: arm64
+        env:
+          - CC=aarch64-linux-gnu-gcc
+          - CXX=aarch64-linux-gnu-g++
+        ldflags:
+          - -s -w -extldflags=-static -X main.TsVersion={{.Tag}} -X main.TsBranch={{.Branch}} -X main.TsCommit={{.Commit}} -X main.TsBuildTime={{.Date}}
   - id: "ts-sql"
     binary: usr/bin/ts-sql
     main: ./app/ts-sql
     goos:
       - linux
-      - darwin
-      - windows
     goarch:
       - amd64
       - arm64
-    ignore:
-      - goos: windows
-        goarch: arm64
     ldflags:
       - -s -w -X main.TsVersion={{.Tag}} -X main.TsBranch={{.Branch}} -X main.TsCommit={{.Commit}} -X main.TsBuildTime={{.Date}}
     env:
       - CGO_ENABLED=1
+    overrides:
+      - goos: linux
+        goarch: arm64
+        env:
+          - CC=aarch64-linux-gnu-gcc
+          - CXX=aarch64-linux-gnu-g++
+        ldflags:
+          - -s -w -extldflags=-static -X main.TsVersion={{.Tag}} -X main.TsBranch={{.Branch}} -X main.TsCommit={{.Commit}} -X main.TsBuildTime={{.Date}}
   - id: "ts-store"
     binary: usr/bin/ts-store
     main: ./app/ts-store
     goos:
       - linux
-      - darwin
-      - windows
     goarch:
       - amd64
       - arm64
-    ignore:
-      - goos: windows
-        goarch: arm64
     ldflags:
       - -s -w -X main.TsVersion={{.Tag}} -X main.TsBranch={{.Branch}} -X main.TsCommit={{.Commit}} -X main.TsBuildTime={{.Date}}
     env:
       - CGO_ENABLED=1
+    overrides:
+      - goos: linux
+        goarch: arm64
+        env:
+          - CC=aarch64-linux-gnu-gcc
+          - CXX=aarch64-linux-gnu-g++
+        ldflags:
+          - -s -w -extldflags=-static -X main.TsVersion={{.Tag}} -X main.TsBranch={{.Branch}} -X main.TsCommit={{.Commit}} -X main.TsBuildTime={{.Date}}
 archives:
   - format: tar.gz
     # this name template makes the OS and Arch compatible with the results of uname.
@@ -140,3 +151,4 @@ release:
 # Feel free to remove those if you don't want/use them.
 # yaml-language-server: $schema=https://goreleaser.com/static/schema.json
 # vim: set ts=2 sw=2 tw=0 fo=cnqoj
+
