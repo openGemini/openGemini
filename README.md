@@ -90,6 +90,23 @@ This section mainly contains the following:
 - How to compile openGemini source code
 - How to run openGemini
 
+## Project Skills
+
+This repository ships reusable project skills under `.skill/skills/`.
+
+- The repository copy is the only source of truth.
+- Claude Code uses `.claude/skills`.
+- OpenCode uses `.opencode/skills`.
+- Codex uses links under `~/.codex/skills`.
+
+Run:
+
+```bash
+bash scripts/setup-skills.sh
+```
+
+Then read `.skill/README.md` and `.skill/platforms.md` for the available skills and platform-specific usage.
+
 ### Compiling environment information
 
 [GO](https://golang.org/dl/) version v1.22+

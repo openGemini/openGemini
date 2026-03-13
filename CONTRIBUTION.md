@@ -40,6 +40,14 @@ openGemini
 
 Please make sure to read and observe our [Code of Conduct](./CODE_OF_CONDUCT.md).
 
+## Project Skills
+
+The repository skill library lives under `.skill/skills/`. Edit those files directly when you add or maintain project skills.
+
+- Do not treat `~/.codex/skills`, `.claude/skills`, or `.opencode/skills` as editable sources.
+- Use `bash scripts/setup-skills.sh` to refresh platform links after cloning or after adding a new skill.
+- Read `.skill/platforms.md` for Claude Code, Codex, and OpenCode usage details.
+
 ## Submit Issue/Process issue task
 
 - **Submit an Issue**
