@@ -38,4 +38,4 @@ Run:
 bash scripts/setup-skills.sh
 ```
 
-Then read `.skill/platforms.md` for platform-specific behavior.
+Then read `.skill/platforms.md` for platform-specific behavior and `.skill/adding-skills.md` for maintenance rules.
