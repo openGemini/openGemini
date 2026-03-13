@@ -32,3 +32,5 @@ config/monitor-*
 dist/
 
 output/
+
+.worktrees/
