@@ -40,6 +40,15 @@ openGemini
 
 请务必阅读并遵守我们的[行为准则](./CODE_OF_CONDUCT.md)。
 
+## 2.1 项目 Skills
+
+项目级 skills 统一维护在 `.skill/skills/` 目录下，修改和新增时请直接编辑仓库内文件。
+
+- 不要把 `~/.codex/skills`、`.claude/skills` 或 `.opencode/skills` 当作可编辑来源
+- 克隆仓库后，或新增 skill 后，运行 `bash scripts/setup-skills.sh` 刷新平台链接
+- Claude Code、Codex、OpenCode 的使用方式见 `.skill/platforms.md`
+- 新增和维护 skill 的规则见 `.skill/adding-skills.md`
+
 ## 3. 提交Issue/处理issue任务
 
 - 提交Issue
