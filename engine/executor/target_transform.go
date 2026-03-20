@@ -98,7 +98,7 @@ func NewTargetTransform(inRowDataType hybridqp.RowDataType, outRowDataType hybri
 	trans.writeWorker = worker
 	trans.writeChan = make(chan Chunk, worker)
 	trans.signalChan = make(chan struct{}, worker)
-	trans.chunkPool = NewBlockChunkPool(2*worker, NewChunkBuilder(inRowDataType))
+	trans.chunkPool = NewBlockChunkPool(2*worker+1, NewChunkBuilder(inRowDataType))
 
 	return trans, nil
 }
@@ -196,17 +196,15 @@ func (trans *TargetTransform) produce(ctx context.Context, span *tracing.Span, e
 			}
 			tracing.StartPP(span)
 
-			tracing.SpanElapsed(trans.ppTargetCost, func() {
-				select {
-				case <-trans.signalChan:
-					trans.CloseWriteChan()
-					return
-				default:
-					newChunk := trans.chunkPool.Get()
-					chunk.CopyTo(newChunk)
-					trans.writeChan <- newChunk
-				}
-			})
+			select {
+			case <-trans.signalChan:
+				trans.CloseWriteChan()
+				return
+			default:
+				newChunk := trans.chunkPool.Get()
+				chunk.CopyTo(newChunk)
+				trans.writeChan <- newChunk
+			}
 			tracing.EndPP(span)
 		case <-ctx.Done():
 			return

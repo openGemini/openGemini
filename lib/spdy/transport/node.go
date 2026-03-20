@@ -18,7 +18,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/fasttime"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/fasttime"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/spdy"

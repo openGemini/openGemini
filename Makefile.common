@@ -19,7 +19,7 @@ export GOARCH=$(shell go env GOARCH)
 export PATH := $(PATH):$(GOROOT)/bin:$(GOPATH)/bin
 
 GO          := GO111MODULE=on go
-GOTEST      := $(GO) test -count=1 -gcflags "all=-N -l"
+GOTEST      := $(GO) test -gcflags "all=-N -l"
 PYTHON      := python
 STATICCHECK := staticcheck
 
@@ -36,9 +36,10 @@ COPYRIGHT_HEADER  := "Copyright 20[0-9]{2} openGemini Authors|Copyright 20[0-9]{
 STYLE_CHECK_EXCEPT :=  "lifted/hashicorp|lifted/protobuf"
 STYLE_CHECK_GOFILE  := $$(find . -name '*.go' | grep -vE $(STYLE_CHECK_EXCEPT))
 
-PROTOC_ZIP_LINUX=protoc-3.14.0-linux-x86_64.zip
-PROTOC_ZIP_MACOS=protoc-3.14.0-osx-x86_64.zip
-PROTOC_ZIP_WINDOWS=protoc-3.14.0-win64.zip
+PROTOC_VERSION=32.0
+PROTOC_ZIP_LINUX=protoc-$(PROTOC_VERSION)-linux-x86_64.zip
+PROTOC_ZIP_MACOS=protoc-$(PROTOC_VERSION)-osx-x86_64.zip
+PROTOC_ZIP_WINDOWS=protoc-$(PROTOC_VERSION)-win64.zip
 
 install-goimports-reviser:
 	@$(GO) install github.com/incu6us/goimports-reviser/v3@v3.8.2
@@ -48,9 +49,6 @@ install-staticcheck:
 
 install-golangci-lint:
 	@$(GO) install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.2
-
-install-failpoint:
-	@$(GO) install github.com/pingcap/failpoint/failpoint-ctl@v0.0.0-20220801062533-2eaa32854a6c
 
 install-tmpl:
 	@$(GO) install github.com/benbjohnson/tmpl@v1.1.0
@@ -62,7 +60,8 @@ install-exhaustruct:
 	@$(GO) install github.com/GaijinEntertainment/go-exhaustruct/v3/cmd/exhaustruct@v3.3.1
 
 install-protoc:
-	@VERSION=$$(protoc --version); if [ "$$VERSION" = "libprotoc 3.14.0" ]; then exit 0; fi; \
+	@VERSION=$$(protoc --version); if [ "$$VERSION" = "libprotoc $(PROTOC_VERSION)" ]; then exit 0; fi; \
+	VERSION32=$$(protoc_v32 --version); if [ "$$VERSION32" = "libprotoc $(PROTOC_VERSION)" ]; then exit 0; fi; \
 	if [ $$(uname -s) = "Linux" ];  then \
   		make install-protoc-linux; \
 	elif [ $$(uname -s) = "Darwin" ];  then \
@@ -72,7 +71,7 @@ install-protoc:
   	fi
 
 install-protoc-linux:
-	@curl -OL https://github.com/protocolbuffers/protobuf/releases/download/v3.14.0/$(PROTOC_ZIP_LINUX)
+	@curl -OL https://github.com/protocolbuffers/protobuf/releases/download/v$(PROTOC_VERSION)/$(PROTOC_ZIP_LINUX)
 	@sudo unzip -o $(PROTOC_ZIP_LINUX) -d /usr/local bin/protoc
 	@sudo unzip -o $(PROTOC_ZIP_LINUX) -d /usr/local 'include/*'
 	@sudo chmod +x /usr/local/bin/protoc
@@ -81,7 +80,7 @@ install-protoc-linux:
 	@rm -f $(PROTOC_ZIP_LINUX)
 
 install-protoc-darwin:
-	@curl -OL https://github.com/protocolbuffers/protobuf/releases/download/v3.14.0/$(PROTOC_ZIP_MACOS)
+	@curl -OL https://github.com/protocolbuffers/protobuf/releases/download/v$(PROTOC_VERSION)/$(PROTOC_ZIP_MACOS)
 	@sudo unzip -X -o $(PROTOC_ZIP_MACOS) -d /usr/local bin/protoc
 	@sudo unzip -o $(PROTOC_ZIP_MACOS) -d /usr/local 'include/*'
 	@sudo chmod +x /usr/local/bin/protoc
@@ -90,15 +89,15 @@ install-protoc-darwin:
 	@rm -f $(PROTOC_ZIP_MACOS)
 
 install-protoc-windows:
-	@curl -OL https://github.com/protocolbuffers/protobuf/releases/download/v3.14.0/$(PROTOC_ZIP_WINDOWS)
-	@powershell.exe Expand-Archive -Path protoc-3.14.0-win64.zip -DestinationPath $(GOPATH)\protobuf  -Force
+	@curl -OL https://github.com/protocolbuffers/protobuf/releases/download/v$(PROTOC_VERSION)/$(PROTOC_ZIP_WINDOWS)
+	@powershell.exe Expand-Archive -Path protoc-$(PROTOC_VERSION)-win64.zip -DestinationPath $(GOPATH)\protobuf  -Force
 	@del $(PROTOC_ZIP_WINDOWS)
 
 install-protoc-gen-gogo:
 	@$(GO) install github.com/gogo/protobuf/protoc-gen-gogo@latest
 
 install-protoc-gen-go:
-	@$(GO) install github.com/golang/protobuf/protoc-gen-go@latest
+	@$(GO) install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.8
 
 install-msgp:
 	@$(GO) install github.com/tinylib/msgp@latest

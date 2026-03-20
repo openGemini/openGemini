@@ -15,6 +15,9 @@
 package record_test
 
 import (
+	"encoding/binary"
+	"math"
+	"math/rand/v2"
 	"testing"
 
 	"github.com/openGemini/openGemini/lib/record"
@@ -490,4 +493,148 @@ func TestAppendPKColumns(t *testing.T) {
 		}
 		assert.Equal(t, pkRec.ColVals[i], dstCols[i], "the value of column %d should be equal", i)
 	}
+}
+
+func TestCopyLastRow(t *testing.T) {
+	schema := record.Schemas{
+		record.Field{Type: influx.Field_Type_Int, Name: "int"},
+		record.Field{Type: influx.Field_Type_Float, Name: "float"},
+		record.Field{Type: influx.Field_Type_Boolean, Name: "boolean"},
+		record.Field{Type: influx.Field_Type_String, Name: "string"},
+		record.Field{Type: influx.Field_Type_Int, Name: "time"},
+	}
+
+	rec := record.NewRecord(schema, false)
+	record.CopyLastRow(rec)
+	require.Equal(t, 0, rec.RowNums())
+
+	rec = genRowRec(schema,
+		[]int{1}, []int64{1},
+		[]int{1}, []float64{1.1},
+		[]int{1}, []string{"test1"},
+		[]int{1}, []bool{true},
+		[]int64{1})
+
+	var run = func(idx int, assertFn func(*record.ColVal)) {
+		record.CopyColValLastRow(&rec.ColVals[idx], schema[idx].Type)
+		assertFn(&rec.ColVals[idx])
+	}
+
+	var runAll = func() {
+		run(0, func(col *record.ColVal) {
+			require.Equal(t, []int64{1, 1}, col.IntegerValues())
+		})
+		run(1, func(col *record.ColVal) {
+			require.Equal(t, []float64{1.1, 1.1}, col.FloatValues())
+		})
+		run(2, func(col *record.ColVal) {
+			require.Equal(t, []bool{true, true}, col.BooleanValues())
+		})
+		run(3, func(col *record.ColVal) {
+			require.Equal(t, []string{"test1", "test1"}, col.StringValues(nil))
+		})
+	}
+
+	runAll()
+	rec.ColVals[0].AppendIntegerNull()
+	rec.ColVals[1].AppendFloatNull()
+	rec.ColVals[2].AppendBooleanNull()
+	rec.ColVals[3].AppendStringNull()
+	runAll()
+}
+
+func TestReadRowValue(t *testing.T) {
+	v := math.Float64bits(1.0)
+	s := string(binary.LittleEndian.AppendUint64(nil, v))
+	col := &record.ColVal{}
+	col.AppendString(s)
+	col.AppendStringNull()
+
+	var run = func(exp any, typ int) {
+		val := record.ReadRowValue(col, typ, 0)
+		require.Equal(t, exp, val)
+
+		val = record.ReadRowValue(col, typ, 1)
+		require.Equal(t, nil, val)
+	}
+
+	run(s, influx.Field_Type_String)
+	run(int64(v), influx.Field_Type_Int)
+	run(float64(1), influx.Field_Type_Float)
+	run(false, influx.Field_Type_Boolean)
+
+	// invalid type
+	val := record.ReadRowValue(col, 1000, 0)
+	require.Equal(t, nil, val)
+}
+
+func TestValidCount(t *testing.T) {
+	col := &record.ColVal{}
+	col.AppendIntegers(0, 1)
+	col.AppendIntegerNulls(2)
+	col.AppendIntegers(5, 6)
+	col.AppendIntegerNulls(2)
+	col.AppendIntegers(7, 8)
+	col.AppendBooleanNulls(4)
+	col.AppendIntegers(9)
+
+	val, _ := col.IntegerValue(14)
+	require.Equal(t, val, int64(9))
+	require.Equal(t, col.ValidCount(0, 15), 7)
+}
+
+func Benchmark_TestValidCount(t *testing.B) {
+	col := &record.ColVal{}
+	addInteger100 := func() {
+		for i := 0; i < 100; i++ {
+			col.AppendInteger(int64(i))
+		}
+	}
+	addInteger100()
+	col.AppendIntegerNulls(100)
+	addInteger100()
+	col.AppendIntegerNulls(100)
+	addInteger100()
+
+	for i := 0; i < t.N; i++ {
+		ans := col.ValidCount(0, 500)
+		require.Equal(t, 300, ans)
+	}
+}
+
+func Benchmark_TestMaxIntValue(b *testing.B) {
+	col := &record.ColVal{}
+	for i := 0; i < 1000; i++ {
+		col.AppendInteger(rand.Int64N(10000))
+	}
+
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		col.MinIntegerValue(col.IntegerValues(), 0, col.Len)
+	}
+}
+
+func TestMinMaxValue(t *testing.T) {
+	col := &record.ColVal{}
+	col.AppendIntegers(1, 2, 3, 4, 5, 6, 7, 8, 9)
+
+	val, idx := col.MinIntegerValue(col.IntegerValues(), 0, col.Len)
+	require.Equal(t, int64(1), val)
+	require.Equal(t, 0, idx)
+
+	val, idx = col.MaxIntegerValue(col.IntegerValues(), 0, col.Len)
+	require.Equal(t, int64(9), val)
+	require.Equal(t, 8, idx)
+
+	val, idx = col.MinIntegerValue(col.IntegerValues(), 2, 5)
+	require.Equal(t, int64(3), val)
+	require.Equal(t, 2, idx)
+
+	val, idx = col.MaxIntegerValue(col.IntegerValues(), 2, 5)
+	require.Equal(t, int64(5), val)
+	require.Equal(t, 4, idx)
+
+	val, idx = col.MaxIntegerValue(col.IntegerValues(), 5, 5)
+	require.Equal(t, int64(0), val)
+	require.Equal(t, -1, idx)
 }

@@ -517,7 +517,6 @@ func (o *obsFs) OpenFile(path string, flag int, perm os.FileMode, opt ...FSOptio
 		if err == nil {
 			break
 		}
-		logger.GetLogger().Error("get object meta data error ", zap.Error(err))
 		obsErr, ok := err.(obs.ObsError)
 		if ok && obsErr.StatusCode == 404 && flag&os.O_CREATE > 0 {
 			putObjectInput := &obs.PutObjectInput{
@@ -530,7 +529,9 @@ func (o *obsFs) OpenFile(path string, flag int, perm os.FileMode, opt ...FSOptio
 				return nil, err
 			}
 		}
-		logger.GetLogger().Error("retry open obs file failed ", zap.String("key", key), zap.Int("retry time", i), zap.Error(err))
+		if i > 0 {
+			logger.GetLogger().Error("retry open obs file failed ", zap.String("key", key), zap.Int("retry time", i), zap.Error(err))
+		}
 	}
 	if err != nil {
 		return nil, err
@@ -908,4 +909,12 @@ func (o *obsFs) DecodeRemotePathToLocal(path string) (string, error) {
 	}
 	key = key[strings.Index(key, "/"):]
 	return key[:len(key)-len(OBS.ObsFileSuffix)], nil
+}
+
+func (o *obsFs) UpdateObsAkSk(ak, sk string) error {
+	return nil
+}
+
+func (o *obsFs) StreamConfUpdate(propertyName, propertyValue string) error {
+	return nil
 }

@@ -47,3 +47,11 @@ func TestWriteBlobsCallback(t *testing.T) {
 	err4 := cb.Handle(cb4)
 	assert.Equal(t, "invalid data type, exp: *msgservice.WriteBlobsResponse, got: *msgservice.WritePointsResponse", err4.Error())
 }
+
+func TestTaskCallback(t *testing.T) {
+	cb := &GetTaskCallback{}
+
+	assert.Equal(t, cb.GetCodec(), &TaskMessage{})
+	err := cb.Handle([]byte{})
+	assert.Error(t, err)
+}

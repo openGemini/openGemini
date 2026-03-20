@@ -2,6 +2,7 @@ package mergeset
 
 import (
 	"flag"
+	"fmt"
 	"math/rand"
 	"reflect"
 	"sort"
@@ -9,7 +10,7 @@ import (
 	"testing"
 	"testing/quick"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
+	"github.com/openGemini/openGemini/lib/logger"
 )
 
 func init() {
@@ -72,7 +73,7 @@ func TestInmemoryBlockSort(t *testing.T) {
 		}
 
 		// Sort ib.
-		ib.sort()
+		sort.Sort(&ib)
 		sort.Strings(items)
 
 		// Verify items are sorted.
@@ -175,7 +176,7 @@ func getRandomBytes() []byte {
 	iv, ok := quick.Value(bytesType, rnd)
 	rndLock.Unlock()
 	if !ok {
-		logger.Panicf("error in quick.Value when generating random string")
+		logger.GetLogger().Panic(fmt.Sprintf("error in quick.Value when generating random string"))
 	}
 	return iv.Interface().([]byte)
 }

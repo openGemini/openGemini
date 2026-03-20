@@ -2232,6 +2232,31 @@ func TestCanOptimizeOneIndexCan(t *testing.T) {
 	assert.Equal(t, ok, false)
 }
 
+func TestCanOptimizeWithCastor(t *testing.T) {
+	// Initialize test data
+	schema, builder, traits := setupTestSchemaWithCastor()
+
+	// Create test query plan
+	input := executor.NewLogicalReader(nil, schema)
+	children := make([]*executor.TransformVertex, 1)
+	exchange := executor.NewLogicalExchange(input, executor.SHARD_EXCHANGE, []hybridqp.Trait{traits}, schema)
+	agg := executor.NewLogicalAggregate(exchange, schema)
+
+	_, ok := builder.(*executor.ExecutorBuilder).CanOptimizeExchange(agg, children)
+	assert.Equal(t, ok, false, "Expected CanOptimizeExchange to return false for queries with forecast calls")
+
+	builder.(*executor.ExecutorBuilder).SetMultiMstInfosForLocalStore([]*executor.IndexScanExtraInfo{})
+	_, ok = builder.(*executor.ExecutorBuilder).CanOptimizeExchange(agg, children)
+	assert.Equal(t, ok, false, "Expected CanOptimizeExchange to return false for queries with MultiMstInfosForLocalStore")
+}
+
+// setupTestSchemaWithCastor creates a test schema with a forecast call
+func setupTestSchemaWithCastor() (*executor.QuerySchema, hybridqp.PipelineExecutorBuilder, *executor.StoreExchangeTraits) {
+	builder, schema, traits := MockNewExecutorBuilder()
+	schema.Calls()["forecast"] = &influxql.Call{Name: "forecast"}
+	return schema, builder, traits
+}
+
 func TestExecutorBuilder_SetInfosAndTraits(t *testing.T) {
 	type args struct {
 		mstsReqs []*executor.MultiMstReqs
@@ -2263,4 +2288,19 @@ func TestExecutorBuilder_SetInfosAndTraits(t *testing.T) {
 			builder.SetInfosAndTraits(tt.args.ctx, tt.args.mstsReqs, nil, nil)
 		})
 	}
+}
+
+func TestIndexScanExtraInfo(t *testing.T) {
+	info := &executor.IndexScanExtraInfo{
+		Req: &executor.RemoteQuery{
+			Database: "db0",
+			PtID:     uint32(0),
+			ShardIDs: []uint64{1, 2, 3},
+		},
+		Dsc: true,
+	}
+	assert.Equal(t, info.Next().ID, uint64(3))
+	assert.Equal(t, info.Next().ID, uint64(2))
+	assert.Equal(t, info.Next().ID, uint64(1))
+	assert.Equal(t, info.Next(), (*executor.ShardInfo)(nil))
 }

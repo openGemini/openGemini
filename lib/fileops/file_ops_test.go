@@ -15,6 +15,7 @@
 package fileops
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/fs"
@@ -29,6 +30,7 @@ import (
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/request"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // _00001.wal
@@ -680,4 +682,176 @@ func TestOsRemoveAllWithOutDir(t *testing.T) {
 	dirs, err := ReadDir(rootDir)
 	assert.NoError(t, err)
 	assert.Equal(t, len(dirs), 1)
+}
+
+func TestSaveReliabilityLog(t *testing.T) {
+	baseName := "reliability.log"
+
+	tests := []struct {
+		name          string
+		data          interface{}
+		dir           func(t *testing.T) string
+		nameGenerator func() string
+		wantErr       bool
+		errContains   string
+	}{
+		{
+			name: "success with valid data and directory",
+			data: map[string]string{"key": "value"},
+			dir: func(t *testing.T) string {
+				return t.TempDir()
+			},
+			nameGenerator: func() string { return baseName },
+			wantErr:       false,
+		},
+		{
+			name: "error with unmarshalable data",
+			data: make(chan int),
+			dir: func(t *testing.T) string {
+				return t.TempDir()
+			},
+			nameGenerator: func() string { return baseName },
+			wantErr:       true,
+			errContains:   "marshal data to JSON",
+		},
+		{
+			name: "error when parent path is a file",
+			data: map[string]string{"key": "value"},
+			dir: func(t *testing.T) string {
+				tmpDir := t.TempDir()
+				fakeFile := filepath.Join(tmpDir, "not_a_dir")
+				require.NoError(t, os.WriteFile(fakeFile, []byte("dummy"), 0644))
+				badDir := filepath.Join(fakeFile, "subdir")
+				return badDir
+			},
+			nameGenerator: func() string { return baseName },
+			wantErr:       true,
+			errContains:   "create directory",
+		},
+		{
+			name: "error with empty filename",
+			data: map[string]string{"key": "value"},
+			dir: func(t *testing.T) string {
+				return t.TempDir()
+			},
+			nameGenerator: func() string { return "" },
+			wantErr:       true,
+			errContains:   "open file",
+		},
+		{
+			name: "success with multiple calls (unique names)",
+			data: "data1",
+			dir: func(t *testing.T) string {
+				return t.TempDir()
+			},
+			nameGenerator: func() string {
+				return fmt.Sprintf("run_%d.json", time.Now().UnixNano())
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := tt.dir(t)
+			filePath, err := SaveReliabilityLog(tt.data, dir, "", tt.nameGenerator)
+
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.errContains != "" {
+					require.Contains(t, err.Error(), tt.errContains)
+				}
+				return
+			}
+
+			require.NoError(t, err)
+			require.NotEmpty(t, filePath)
+
+			_, err = Stat(filePath)
+			require.NoError(t, err)
+
+			content, err := ReadFile(filePath)
+			require.NoError(t, err)
+
+			var decoded interface{}
+			require.NoError(t, json.Unmarshal(content, &decoded))
+
+			originalBytes, err := json.Marshal(tt.data)
+			require.NoError(t, err)
+			require.JSONEq(t, string(originalBytes), string(content))
+		})
+	}
+}
+
+// TestStruct is a sample struct used for testing JSON unmarshaling.
+type TestStruct struct {
+	Name string `json:"name"`
+	Age  int    `json:"age"`
+}
+
+func TestReadReliabilityLog(t *testing.T) {
+	tests := []struct {
+		name        string      // Name of the test case
+		jsonContent string      // JSON content to write to a temporary file (empty means no file is created)
+		dst         interface{} // The destination to unmarshal into (must be a pointer)
+		expectErr   bool        // Whether an error is expected
+		expectData  interface{} // Expected data after successful unmarshaling (only valid when expectErr is false)
+	}{
+		{
+			name:        "valid JSON file",
+			jsonContent: `{"name":"Alice","age":30}`,
+			dst:         &TestStruct{},
+			expectErr:   false,
+			expectData:  &TestStruct{Name: "Alice", Age: 30},
+		},
+		{
+			name:        "invalid JSON content",
+			jsonContent: `{"name":}`,
+			dst:         &TestStruct{},
+			expectErr:   true,
+		},
+		{
+			name:        "non-existent file",
+			jsonContent: "", // Do not create a file
+			dst:         &TestStruct{},
+			expectErr:   true,
+		},
+		{
+			name:        "dst is not a pointer",
+			jsonContent: `{"name":"Bob","age":25}`,
+			dst:         TestStruct{}, // Not a pointer
+			expectErr:   true,
+		},
+		{
+			name:        "empty file",
+			jsonContent: "",
+			dst:         &TestStruct{},
+			expectErr:   true, // json.Unmarshal will fail on empty input
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var tmpFile string
+			if tt.jsonContent != "" {
+				// Create a temporary file with the given JSON content
+				tmpFile = filepath.Join(t.TempDir(), "reliability.log")
+				err := os.WriteFile(tmpFile, []byte(tt.jsonContent), 0600)
+				require.NoError(t, err)
+			} else {
+				// Use a path to a non-existent file
+				tmpFile = filepath.Join(t.TempDir(), "nonexistent.log")
+			}
+
+			// Call the function under test
+			err := ReadReliabilityLog(tmpFile, tt.dst)
+
+			if tt.expectErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, tt.expectData, tt.dst)
+			}
+		})
+	}
 }

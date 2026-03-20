@@ -19,8 +19,8 @@ package raftlog
 import (
 	"fmt"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/openGemini/openGemini/lib/util"
+	"github.com/openGemini/openGemini/lib/util/lifted/encoding"
 )
 
 type DataType uint32

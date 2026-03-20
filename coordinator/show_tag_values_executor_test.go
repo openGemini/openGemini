@@ -423,7 +423,7 @@ type mockME struct {
 	MetaExecutor
 }
 
-func (m *mockME) EachDBNodes(database string, fn func(nodeID uint64, pts []uint32) error) error {
+func (m *mockME) EachDBNodes(database string, fn func(nodeID uint64, pts []uint32) error, getNodePtsFn func(string) (map[uint64][]uint32, error)) error {
 	n := 4
 	wg := sync.WaitGroup{}
 	wg.Add(n)

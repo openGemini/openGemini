@@ -102,7 +102,7 @@ func TestGetStringMatchPhraseConditionBitMap(t *testing.T) {
 	}
 	assert.Equal(t, 1023, emptyCount)
 
-	results = GetStringMatchPhraseConditionBitMapWithNull(params)
+	results = GetStringMatchPhraseConditionBitMapWithNull(params, influxql.MATCHPHRASE)
 	emptyCount = 0
 	for _, v := range results {
 		if v == 0 {
@@ -110,6 +110,35 @@ func TestGetStringMatchPhraseConditionBitMap(t *testing.T) {
 		}
 	}
 	assert.Equal(t, 1023, emptyCount)
+}
+
+func TestGetStringUnMatchPhraseConditionBitMap(t *testing.T) {
+	col, bitMap := prepareStringColValue(1, 8192)
+	params := &TypeFunParams{
+		col:     col,
+		compare: RandomString + "-4096",
+		bitMap:  col.Bitmap,
+		pos:     bitMap,
+		offset:  0,
+		opt:     &query.ProcessorOptions{},
+	}
+	results := GetStringUnMatchPhraseConditionBitMap(params)
+	emptyCount := 0
+	for _, v := range results {
+		if v == 0 {
+			emptyCount += 1
+		}
+	}
+	assert.Equal(t, 0, emptyCount)
+
+	results = GetStringMatchPhraseConditionBitMapWithNull(params, influxql.UNMATCHPHRASE)
+	emptyCount = 0
+	for _, v := range results {
+		if v == 0 {
+			emptyCount += 1
+		}
+	}
+	assert.Equal(t, 0, emptyCount)
 }
 
 func TestRotateRewriteTimeCompareVal(t *testing.T) {
@@ -738,5 +767,88 @@ func BenchmarkGetIntegerLTEConditionBitMapWithNull(b *testing.B) {
 	}
 	for i := 0; i < b.N; i++ {
 		GetIntegerLTEConditionBitMapWithNull(params)
+	}
+}
+
+func TestGetIntegerINConditionBitMap(t *testing.T) {
+	intCol := &record.ColVal{}
+	intCol.AppendIntegers(1, 2)
+	intCol.AppendIntegerNulls(2)
+	intCol.AppendIntegers(1, 2)
+	floatCol := &record.ColVal{}
+	floatCol.AppendFloats(1, 2)
+	floatCol.AppendFloatNulls(2)
+	floatCol.AppendFloats(1, 2)
+	emptyCol := &record.ColVal{}
+	emptyCol.AppendIntegerNulls(6)
+	type args struct {
+		params *TypeFunParams
+	}
+	tests := []struct {
+		name string
+		args args
+		want []byte
+	}{
+		{
+			name: "Basic case with all values in cmpData",
+			args: args{
+				params: &TypeFunParams{
+					compare:   map[interface{}]bool{1.0: true, 2.0: true},
+					col:       floatCol,
+					offset:    0,
+					pos:       []byte{255},
+					bitMap:    floatCol.Bitmap,
+					int2float: false,
+				},
+			},
+			want: []byte{0xf3},
+		},
+		{
+			name: "Some values not in cmpData",
+			args: args{
+				params: &TypeFunParams{
+					compare:   map[interface{}]bool{1.0: true},
+					col:       floatCol,
+					offset:    0,
+					pos:       []byte{255},
+					bitMap:    floatCol.Bitmap,
+					int2float: false,
+				},
+			},
+			want: []byte{0xd1},
+		},
+		{
+			name: "Test with int2float",
+			args: args{
+				params: &TypeFunParams{
+					compare:   map[interface{}]bool{1.0: true, 2.0: true},
+					col:       intCol,
+					offset:    0,
+					pos:       []byte{255},
+					bitMap:    intCol.Bitmap,
+					int2float: true,
+				},
+			},
+			want: []byte{0xf3},
+		},
+		{
+			name: "Test with nil values",
+			args: args{
+				params: &TypeFunParams{
+					compare:   map[interface{}]bool{1.0: true, 2.0: true},
+					col:       emptyCol,
+					offset:    0,
+					pos:       []byte{255},
+					bitMap:    emptyCol.Bitmap,
+					int2float: false,
+				},
+			},
+			want: []byte{0xc0},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equalf(t, tt.want, GetIntegerINConditionBitMap(tt.args.params), "GetIntegerINConditionBitMap(%v)", tt.args.params)
+		})
 	}
 }

@@ -257,14 +257,9 @@ func (c *RPCClient) errorMessage(data interface{}) error {
 		return errno.NewInvalidTypeError("*executor.Error", data)
 	}
 
-	// ha or not ha, kill query qid will return error
-	if msg.errCode == errno.ErrQueryKilled {
-		err := errno.NewError(errno.ErrQueryKilled)
-		err.SetMessage(msg.data)
-		return err
-	}
-
-	return errno.NewError(msg.errCode, msg.data)
+	err := errno.NewError(msg.errCode)
+	err.SetMessage(msg.data)
+	return err
 }
 
 func (c *RPCClient) emptyMessage(data interface{}) error {

@@ -18,13 +18,19 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agiledragon/gomonkey/v2"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/engine/immutable/colstore"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func createRowDataType() hybridqp.RowDataType {
@@ -305,6 +311,31 @@ func createCall(call string) influxql.Fields {
 }
 
 func TestHasRowCount(t *testing.T) {
+	fields := make(meta.CleanSchema)
+	fields["pk_field"] = meta.SchemaVal{Typ: influx.Field_Type_String}
+	fields["f2_int"] = meta.SchemaVal{Typ: influx.Field_Type_Int}
+	mi := &meta.MeasurementInfo{
+		Name:       "test_mst",
+		EngineType: config.COLUMNSTORE,
+		ColStoreInfo: &meta.ColStoreInfo{
+			PrimaryKey:          []string{"pk_field"},
+			SortKey:             []string{},
+			TimeClusterDuration: 0,
+		},
+		Schema: &fields,
+	}
+	ident := util.NewMeasurementIdent("db0", "rp0")
+	ident.SetName("mst")
+	colstore.MstManagerIns().Add(ident, mi)
+	defer colstore.MstManagerIns().Clear()
+	mockMst, _ := colstore.MstManagerIns().GetByIdent(ident)
+
+	patch := gomonkey.ApplyMethodFunc(colstore.MstManagerIns(), "Get",
+		func(db, rp, name string) (*colstore.Measurement, bool) {
+			return mockMst, true
+		})
+	defer patch.Reset()
+
 	opt := query.ProcessorOptions{HintType: hybridqp.ExactStatisticQuery}
 	schema := executor.NewQuerySchema(nil, nil, &opt, []*influxql.SortField{{Name: "a"}})
 	assert.Equal(t, schema.HasRowCount(), false)
@@ -322,6 +353,18 @@ func TestHasRowCount(t *testing.T) {
 	assert.Equal(t, schema.HasRowCount(), false)
 
 	opt = query.ProcessorOptions{HintType: hybridqp.DefaultNoHint, Dimensions: []string{"a", "b"}}
+	schema = executor.NewQuerySchema(createCall("count"), []string{"time"}, &opt, []*influxql.SortField{{Name: "a"}})
+	assert.Equal(t, schema.HasRowCount(), false)
+
+	colMst := &influxql.Measurement{
+		EngineType: config.COLUMNSTORE,
+	}
+	opt = query.ProcessorOptions{Sources: influxql.Sources{colMst}, HintType: hybridqp.DefaultNoHint, StartTime: influxql.MinTime, EndTime: influxql.MaxTime}
+	schema = executor.NewQuerySchema(createCall("count"), []string{"time"}, &opt, []*influxql.SortField{{Name: "a"}})
+	assert.Equal(t, schema.HasRowCount(), true)
+
+	opt = query.ProcessorOptions{HintType: hybridqp.DefaultNoHint}
+	opt.StartTime = 0
 	schema = executor.NewQuerySchema(createCall("count"), []string{"time"}, &opt, []*influxql.SortField{{Name: "a"}})
 	assert.Equal(t, schema.HasRowCount(), false)
 }
@@ -352,15 +395,38 @@ func TestMeanAsSubCall(t *testing.T) {
 
 func TestGetTimeRangeByTC(t *testing.T) {
 	indexR := influxql.NewIndexRelation()
+
+	// default interval is 1h
+	opt := query.ProcessorOptions{Sources: []influxql.Source{&influxql.Measurement{Name: "mst", IndexRelation: indexR}}, StartTime: influxql.MinTime, EndTime: 5001}
+	schema := executor.NewQuerySchema(nil, nil, &opt, nil)
+	assert.Equal(t, schema.GetTimeRangeByTC(), util.TimeRange{Min: influxql.MinTime, Max: 0})
+
+	opt = query.ProcessorOptions{Sources: []influxql.Source{&influxql.Measurement{Name: "mst", IndexRelation: indexR}}, StartTime: int64(colstore.DefaultTCDuration) - 1, EndTime: int64(colstore.DefaultTCDuration) + 1}
+	schema = executor.NewQuerySchema(nil, nil, &opt, nil)
+	assert.Equal(t, schema.GetTimeRangeByTC(), util.TimeRange{Min: 0, Max: int64(colstore.DefaultTCDuration)})
+
 	indexR.Oids = append(indexR.Oids, uint32(index.TimeCluster))
 	indexR.IndexOptions = append(indexR.IndexOptions, &influxql.IndexOptions{
 		Options: []*influxql.IndexOption{
 			{TimeClusterDuration: time.Duration(5000)},
 		},
 	})
-	opt := query.ProcessorOptions{Sources: []influxql.Source{&influxql.Measurement{Name: "mst", IndexRelation: indexR}}, StartTime: influxql.MinTime, EndTime: 5001}
-	schema := executor.NewQuerySchema(nil, nil, &opt, nil)
-	assert.Equal(t, schema.GetTimeRangeByTC(), util.TimeRange{Min: influxql.MinTime, Max: 5000})
+
+	// min interval is 10mins
+	opt = query.ProcessorOptions{Sources: []influxql.Source{&influxql.Measurement{Name: "mst", IndexRelation: indexR}}, StartTime: int64(colstore.MinTCDuration)*3 + 2, EndTime: int64(colstore.MinTCDuration)*8 - 1}
+	schema = executor.NewQuerySchema(nil, nil, &opt, nil)
+	assert.Equal(t, schema.GetTimeRangeByTC(), util.TimeRange{Min: int64(colstore.MinTCDuration) * 3, Max: int64(colstore.MinTCDuration) * 7})
+
+	// test cluster time: 15m20s
+	testInterval := int64(time.Minute*15 + time.Second*20)
+	indexR.IndexOptions[0] = &influxql.IndexOptions{
+		Options: []*influxql.IndexOption{
+			{TimeClusterDuration: time.Duration(testInterval)},
+		},
+	}
+	opt = query.ProcessorOptions{Sources: []influxql.Source{&influxql.Measurement{Name: "mst", IndexRelation: indexR}}, StartTime: testInterval * 18, EndTime: testInterval*180 + int64(time.Minute*15)}
+	schema = executor.NewQuerySchema(nil, nil, &opt, nil)
+	assert.Equal(t, schema.GetTimeRangeByTC(), util.TimeRange{Min: testInterval * 18, Max: testInterval * 180})
 }
 
 func TestCanSeqAggPushDown(t *testing.T) {
@@ -380,4 +446,587 @@ func TestIsPromAbsentCall(t *testing.T) {
 		},
 	}}, []string{"metric"}, &opt, nil)
 	assert.Equal(t, schema.IsPromAbsentCall(), true)
+}
+
+func TestIsColumnStoreCount(t *testing.T) {
+	countTimeCall := &influxql.Call{
+		Name: "count",
+		Args: []influxql.Expr{&influxql.VarRef{Val: "time"}},
+	}
+	countTimeExpr := &influxql.Field{
+		Expr: countTimeCall,
+	}
+	sumTimeCall := &influxql.Call{
+		Name: "sum",
+		Args: []influxql.Expr{&influxql.VarRef{Val: "time"}},
+	}
+	sumTimeExpr := &influxql.Field{
+		Expr: sumTimeCall,
+	}
+	fieldMatchCondition := &influxql.BinaryExpr{
+		Op:  influxql.MATCH,
+		LHS: &influxql.VarRef{Val: "field"},
+	}
+	fieldTextMatchCondition := &influxql.BinaryExpr{
+		Op:  influxql.MATCH,
+		LHS: &influxql.VarRef{Val: "field_text"},
+	}
+	andCondition := &influxql.BinaryExpr{
+		Op:  influxql.AND,
+		LHS: fieldMatchCondition,
+		RHS: fieldTextMatchCondition,
+	}
+
+	for _, test := range []struct {
+		name       string
+		engineType config.EngineType
+		fields     influxql.Fields
+		call       *influxql.Call
+		condition  influxql.Expr
+		dimensions []string
+		expected   bool
+	}{
+		{
+			name:       "select count(time) from ts",
+			engineType: config.TSSTORE,
+			fields:     influxql.Fields{countTimeExpr},
+			call:       countTimeCall,
+			condition:  nil,
+			dimensions: nil,
+			expected:   false,
+		},
+		{
+			name:       "select sum(time) from ts",
+			engineType: config.TSSTORE,
+			fields:     influxql.Fields{sumTimeExpr},
+			call: &influxql.Call{
+				Name: "sum",
+				Args: []influxql.Expr{&influxql.VarRef{Val: "time"}},
+			},
+			condition:  nil,
+			dimensions: nil,
+			expected:   false,
+		},
+		{
+			name:       "select count(time), sum(time) from ts",
+			engineType: config.TSSTORE,
+			fields:     influxql.Fields{countTimeExpr, sumTimeExpr},
+			call:       sumTimeCall,
+			condition:  nil,
+			dimensions: nil,
+			expected:   false,
+		},
+		{
+			name:       "select count(time) from cs",
+			engineType: config.COLUMNSTORE,
+			fields:     influxql.Fields{countTimeExpr},
+			call:       countTimeCall,
+			condition:  nil,
+			dimensions: nil,
+			expected:   false,
+		},
+		{
+			name:       "select count(time) from cs group by field",
+			engineType: config.COLUMNSTORE,
+			fields:     influxql.Fields{countTimeExpr},
+			call:       countTimeCall,
+			condition:  nil,
+			dimensions: []string{"field"},
+			expected:   false,
+		},
+		{
+			name:       "select count(time) from cs where match(field, 'xxx')",
+			engineType: config.COLUMNSTORE,
+			fields:     influxql.Fields{countTimeExpr},
+			call:       countTimeCall,
+			condition:  fieldMatchCondition,
+			dimensions: nil,
+			expected:   false,
+		},
+		{
+			name:       "select count(time) from cs where match(field_text, 'xxx')",
+			engineType: config.COLUMNSTORE,
+			fields:     influxql.Fields{countTimeExpr},
+			call:       countTimeCall,
+			condition:  fieldTextMatchCondition,
+			expected:   true,
+		},
+		{
+			name:       "select count(time) from cs where match(field, 'xxx') and match(field_text, 'xxx')",
+			engineType: config.COLUMNSTORE,
+			fields:     influxql.Fields{countTimeExpr},
+			call:       countTimeCall,
+			condition:  andCondition,
+			dimensions: nil,
+			expected:   false,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mst := &influxql.Measurement{
+				EngineType: test.engineType,
+				IndexRelation: &influxql.IndexRelation{
+					IndexNames: []string{"text"},
+					IndexList:  []*influxql.IndexList{{IList: []string{"field_text"}}},
+				},
+			}
+			opt := query.ProcessorOptions{
+				Condition:  test.condition,
+				Sources:    influxql.Sources{mst},
+				Dimensions: test.dimensions,
+			}
+			schema := executor.NewQuerySchema(test.fields, []string{"field", "field_text"}, &opt, nil)
+			schema.RecordExpr(test.call)
+			schema.SetSources(influxql.Sources{mst})
+
+			res := schema.IsColumnStoreCount()
+			if test.expected != res {
+				t.Errorf("`%s` failed, expect %v, but got %v", test.name, test.expected, res)
+			}
+		})
+	}
+}
+
+// TestSetResource tests the SetResource/GetResource method with various scenarios.
+func TestSetResource(t *testing.T) {
+	testCases := []struct {
+		name            string
+		initialResource map[string]map[string]string
+		resourceName    string
+		resource        map[string]string
+	}{
+		{
+			name:            "Test when resource is empty",
+			initialResource: make(map[string]map[string]string),
+			resourceName:    "test",
+			resource:        make(map[string]string),
+		},
+		{
+			name:            "Test when resource is non-empty",
+			initialResource: make(map[string]map[string]string),
+			resourceName:    "test",
+			resource:        map[string]string{"key": "value"},
+		},
+		{
+			name:            "Test when key already exists",
+			initialResource: map[string]map[string]string{"test": {"key": "value"}},
+			resourceName:    "test",
+			resource:        map[string]string{"newKey": "newValue"},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			qs := &executor.QuerySchema{}
+			qs.SetResource(tc.resourceName, tc.resource)
+
+			// Verify the resource was set correctly
+			assert.Equal(t, qs.GetResource(tc.resourceName), tc.resource)
+		})
+	}
+}
+
+func testIsLastBaseQuery(t *testing.T, fields influxql.Fields, f func(schema hybridqp.Catalog) bool) {
+	opt := query.ProcessorOptions{}
+	schema := executor.NewQuerySchema(nil, []string{"value"}, &opt, nil)
+	assert.Equal(t, f(schema), false)
+
+	schema.Options().(*query.ProcessorOptions).HintType = hybridqp.FullSeriesQuery
+	assert.Equal(t, f(schema), false)
+
+	opt = query.ProcessorOptions{
+		HintType: hybridqp.FullSeriesQuery,
+		Interval: hybridqp.Interval{Duration: time.Hour},
+	}
+	schema = executor.NewQuerySchema(fields, []string{"value"}, &opt, nil)
+	assert.Equal(t, f(schema), false)
+
+	schema.Options().(*query.ProcessorOptions).Interval = hybridqp.Interval{}
+	assert.Equal(t, f(schema), false)
+
+	schema.Options().(*query.ProcessorOptions).Condition = &influxql.BinaryExpr{
+		Op:  influxql.EQ,
+		LHS: &influxql.VarRef{Val: "value", Type: influxql.Float},
+		RHS: &influxql.NumberLiteral{},
+	}
+	assert.Equal(t, f(schema), false)
+
+	schema.Options().(*query.ProcessorOptions).Condition = nil
+	assert.Equal(t, f(schema), false)
+
+	schema.Options().(*query.ProcessorOptions).GroupByAllDims = true
+	assert.Equal(t, f(schema), true)
+}
+
+func TestIsLastRowQuery(t *testing.T) {
+	fields := influxql.Fields{
+		&influxql.Field{
+			Expr: &influxql.Call{
+				Name: "last_row",
+				Args: []influxql.Expr{
+					&influxql.VarRef{
+						Val:  "val1",
+						Type: influxql.Float,
+					},
+				},
+			},
+		},
+	}
+	f := func(catalog hybridqp.Catalog) bool {
+		return catalog.IsLastRowQuery()
+	}
+	testIsLastBaseQuery(t, fields, f)
+}
+
+func TestIsLastFieldQuery(t *testing.T) {
+	fields := influxql.Fields{
+		&influxql.Field{
+			Expr: &influxql.Call{
+				Name: "last",
+				Args: []influxql.Expr{
+					&influxql.VarRef{
+						Val:  "val1",
+						Type: influxql.Float,
+					},
+				},
+			},
+		},
+	}
+	f := func(catalog hybridqp.Catalog) bool {
+		return catalog.IsLastFieldQuery()
+	}
+	testIsLastBaseQuery(t, fields, f)
+}
+
+// TestIsOnlyCSPreAgg tests the IsOnlyCSPreAgg method which checks if a query meets the conditions for column store pre-aggregation.
+func TestIsOnlyCSPreAgg(t *testing.T) {
+	fields := make(meta.CleanSchema)
+	fields["pk_field"] = meta.SchemaVal{Typ: influx.Field_Type_String}
+	fields["f2_int"] = meta.SchemaVal{Typ: influx.Field_Type_Int}
+	mi := &meta.MeasurementInfo{
+		Name:       "test_mst",
+		EngineType: config.COLUMNSTORE,
+		ColStoreInfo: &meta.ColStoreInfo{
+			PrimaryKey:          []string{"pk_field"},
+			SortKey:             []string{},
+			TimeClusterDuration: 0,
+		},
+		Schema: &fields,
+	}
+	mi.ColStoreInfo.BuildProperty()
+	ident := util.NewMeasurementIdent("db0", "rp0")
+	ident.SetName("mst")
+	colstore.MstManagerIns().Add(ident, mi)
+	defer colstore.MstManagerIns().Clear()
+	mockMst, _ := colstore.MstManagerIns().GetByIdent(ident)
+
+	patch := gomonkey.ApplyMethodFunc(colstore.MstManagerIns(), "Get",
+		func(db, rp, name string) (*colstore.Measurement, bool) {
+			return mockMst, true
+		})
+	defer patch.Reset()
+
+	tests := []struct {
+		name        string
+		opt         *query.ProcessorOptions
+		expected    bool
+		fields      influxql.Fields
+		columnNames []string
+	}{
+		{
+			name: "ExactStatisticQuery",
+			opt: &query.ProcessorOptions{
+				HintType: hybridqp.ExactStatisticQuery,
+			},
+			expected: false,
+		},
+		{
+			name: "Invalid sources number",
+			opt: &query.ProcessorOptions{
+				Sources: []influxql.Source{
+					&influxql.Measurement{},
+					&influxql.Measurement{},
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "Invalid engine type (not column store)",
+			opt: &query.ProcessorOptions{
+				Sources: []influxql.Source{
+					&influxql.Measurement{EngineType: config.TSSTORE},
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "Invalid schema with dimensions",
+			opt: &query.ProcessorOptions{
+				Sources: []influxql.Source{
+					&influxql.Measurement{EngineType: config.COLUMNSTORE},
+				},
+				Dimensions: []string{"t1"},
+			},
+			expected: false,
+		},
+		{
+			name: "Invalid schema with interval",
+			opt: &query.ProcessorOptions{
+				Sources: []influxql.Source{
+					&influxql.Measurement{EngineType: config.COLUMNSTORE},
+				},
+				Interval: hybridqp.Interval{Duration: 1},
+			},
+			expected: false,
+		},
+		{
+			name: "Invalid schema with invalid call",
+			opt: &query.ProcessorOptions{
+				Sources: []influxql.Source{
+					&influxql.Measurement{EngineType: config.COLUMNSTORE},
+				},
+			},
+			fields: []*influxql.Field{
+				{
+					Expr: &influxql.Call{
+						Name: "first",
+						Args: []influxql.Expr{
+							&influxql.VarRef{
+								Val:  "f1",
+								Type: influxql.Integer,
+							},
+						},
+					},
+					Alias: "",
+				},
+			},
+			columnNames: []string{"f1"},
+			expected:    false,
+		},
+		{
+			name: "Valid schema with invalid call",
+			opt: &query.ProcessorOptions{
+				Sources: []influxql.Source{
+					&influxql.Measurement{EngineType: config.COLUMNSTORE},
+				},
+			},
+			fields: []*influxql.Field{
+				{
+					Expr: &influxql.Call{
+						Name: "min",
+						Args: []influxql.Expr{
+							&influxql.VarRef{
+								Val:  "f1",
+								Type: influxql.Integer,
+							},
+						},
+					},
+					Alias: "",
+				},
+				{
+					Expr: &influxql.Call{
+						Name: "max",
+						Args: []influxql.Expr{
+							&influxql.VarRef{
+								Val:  "f2",
+								Type: influxql.Integer,
+							},
+						},
+					},
+					Alias: "",
+				},
+			},
+			columnNames: []string{"f1", "f2"},
+			expected:    false,
+		},
+		{
+			name: "Invalid schema with invalid condition",
+			opt: &query.ProcessorOptions{
+				Sources: []influxql.Source{
+					&influxql.Measurement{EngineType: config.COLUMNSTORE},
+				},
+				Condition: &influxql.BinaryExpr{
+					LHS: &influxql.VarRef{Val: "A", Type: influxql.String},
+					RHS: &influxql.StringLiteral{Val: "a"},
+					Op:  influxql.EQ},
+			},
+			fields: []*influxql.Field{
+				{
+					Expr: &influxql.Call{
+						Name: "count",
+						Args: []influxql.Expr{
+							&influxql.VarRef{
+								Val:  "f1",
+								Type: influxql.String,
+							},
+						},
+					},
+					Alias: "",
+				},
+			},
+			columnNames: []string{"f1"},
+			expected:    false,
+		},
+		{
+			name: "Valid schema with invalid only pk condition",
+			opt: &query.ProcessorOptions{
+				Sources: []influxql.Source{
+					&influxql.Measurement{EngineType: config.COLUMNSTORE},
+				},
+				Condition: &influxql.BinaryExpr{
+					LHS: &influxql.VarRef{Val: "pk_field", Type: influxql.String},
+					RHS: &influxql.StringLiteral{Val: "a"},
+					Op:  influxql.EQ},
+				StartTime: influxql.MinTime, EndTime: influxql.MaxTime,
+			},
+			fields: []*influxql.Field{
+				{
+					Expr: &influxql.Call{
+						Name: "count",
+						Args: []influxql.Expr{
+							&influxql.VarRef{
+								Val:  "pk_field",
+								Type: influxql.String,
+							},
+						},
+					},
+					Alias: "",
+				},
+			},
+			columnNames: []string{"pk_field"},
+			expected:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create a minimal QuerySchema for testing
+			qs := executor.NewQuerySchema(tt.fields, tt.columnNames, tt.opt, nil)
+
+			result := qs.IsOnlyCSPreAgg()
+			require.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestCalculateQueryTagFromSymbol tests the CalculateQueryTagFromSymbol method.
+func TestCalculateQueryTagFromSymbol(t *testing.T) {
+	tests := []struct {
+		name         string
+		setup        func(*executor.QuerySchema) *executor.QuerySchema
+		symbol       string
+		expected     string
+		expectError  bool
+		errorMessage string
+	}{
+		{
+			name: "Valid symbol with aggregation function",
+			setup: func(qs *executor.QuerySchema) *executor.QuerySchema {
+				// Set up a mapping with a call expression
+				expr1 := &influxql.Call{Name: "sum", Args: []influxql.Expr{&influxql.VarRef{Val: "val1", Type: influxql.Float}}}
+				ref1 := &influxql.VarRef{Val: "val0", Type: influxql.Float}
+				expr2 := &influxql.VarRef{Val: "f1", Type: influxql.Float}
+				ref2 := &influxql.VarRef{Val: "val1", Type: influxql.Float}
+				qs.Mapping()[expr1] = *ref1
+				qs.Mapping()[expr2] = *ref2
+				return qs
+			},
+			symbol:       "val0",
+			expected:     "f1_sum",
+			expectError:  false,
+			errorMessage: "",
+		},
+		{
+			name: "Valid symbol with simple variable reference",
+			setup: func(qs *executor.QuerySchema) *executor.QuerySchema {
+				// Set up a mapping with a variable reference
+				expr := &influxql.VarRef{Val: "value", Type: influxql.Float}
+				ref := &influxql.VarRef{Val: "val0", Type: influxql.Float}
+				qs.Mapping()[expr] = *ref
+				return qs
+			},
+			symbol:       "val0",
+			expected:     "value",
+			expectError:  false,
+			errorMessage: "",
+		},
+		{
+			name: "Symbol not found in mapping",
+			setup: func(qs *executor.QuerySchema) *executor.QuerySchema {
+				// Set up an empty mapping
+				return qs
+			},
+			symbol:       "nonexistent",
+			expected:     "",
+			expectError:  true,
+			errorMessage: "symbol 'nonexistent' not found in query schema mapping",
+		},
+		{
+			name: "Call expression with wrong argument count",
+			setup: func(qs *executor.QuerySchema) *executor.QuerySchema {
+				// Set up a mapping with a call that has wrong number of arguments
+				expr := &influxql.Call{Name: "sum", Args: []influxql.Expr{
+					&influxql.VarRef{Val: "value", Type: influxql.Float},
+					&influxql.VarRef{Val: "value2", Type: influxql.Float},
+				}}
+				ref := &influxql.VarRef{Val: "val0", Type: influxql.Float}
+				qs.Mapping()[expr] = *ref
+				return qs
+			},
+			symbol:       "val0",
+			expected:     "",
+			expectError:  true,
+			errorMessage: "call expression for symbol 'val0' has 2 arguments, expected exactly 1",
+		},
+		{
+			name: "Call argument is not a variable reference",
+			setup: func(qs *executor.QuerySchema) *executor.QuerySchema {
+				// Set up a mapping with a call that has a non-VarRef argument
+				expr := &influxql.Call{Name: "sum", Args: []influxql.Expr{&influxql.StringLiteral{Val: "not_a_var"}}}
+				ref := &influxql.VarRef{Val: "val0", Type: influxql.Float}
+				qs.Mapping()[expr] = *ref
+				return qs
+			},
+			symbol:       "val0",
+			expected:     "",
+			expectError:  true,
+			errorMessage: "the argument of call expression for symbol 'val0' is not a variable reference, got *influxql.StringLiteral",
+		},
+		{
+			name: "Referenced symbol not found",
+			setup: func(qs *executor.QuerySchema) *executor.QuerySchema {
+				// Set up a mapping with a call that references a non-existent symbol
+				expr := &influxql.Call{Name: "sum", Args: []influxql.Expr{&influxql.VarRef{Val: "value", Type: influxql.Float}}}
+				ref := &influxql.VarRef{Val: "val0", Type: influxql.Float}
+				qs.Mapping()[expr] = *ref
+				qs.Symbols()["val0"] = *ref
+				// Intentionally don't add "value" to the symbol-to-expr mapping
+				return qs
+			},
+			symbol:       "val0",
+			expected:     "",
+			expectError:  true,
+			errorMessage: "referenced symbol 'value' not found in query schema mapping",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create a minimal QuerySchema for testing
+			opt := &query.ProcessorOptions{}
+			qs := executor.NewQuerySchema(nil, nil, opt, nil)
+
+			// Apply test-specific setup
+			qs = tt.setup(qs)
+
+			result, err := qs.CalculateQueryTagFromSymbol(tt.symbol)
+
+			if tt.expectError {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), tt.errorMessage)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, tt.expected, result)
+			}
+		})
+	}
 }

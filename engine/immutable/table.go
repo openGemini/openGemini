@@ -72,6 +72,10 @@ func WriteIntoFile(msb *MsBuilder, tmp bool, withPKIndex bool, ir *influxql.Inde
 		msb.FilesInfo = append(msb.FilesInfo, fileInfo)
 	}
 
+	if msb.indexWriterBuilder != nil {
+		msb.indexWriterBuilder.CloseSkipIndexWriters()
+	}
+
 	if !withPKIndex {
 		err = RenameTmpFiles(msb.Files)
 	} else {

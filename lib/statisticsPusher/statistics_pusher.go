@@ -98,7 +98,7 @@ func newHttpPusher(mc *config.Monitor, logger *logger.Logger) pusher.Pusher {
 	conf := pusher.HttpConfig{
 		EndPoint: mc.HttpEndPoint,
 		Database: mc.StoreDatabase,
-		RP:       config.MonitorRetentionPolicy,
+		RP:       mc.RetentionPolicy,
 		Duration: config.MonitorRetentionPolicyDuration,
 		RepN:     config.MonitorRetentionPolicyReplicaN,
 		Gzipped:  false,
@@ -120,6 +120,10 @@ func newFilePusher(mc *config.Monitor, logger *logger.Logger) pusher.Pusher {
 	}
 
 	return pusher.NewFile(&conf, mc.Compress, logger)
+}
+
+func (sp *StatisticsPusher) Pushers() int {
+	return len(sp.pushers)
 }
 
 func (sp *StatisticsPusher) push() {

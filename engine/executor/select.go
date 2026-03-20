@@ -57,7 +57,7 @@ func Select(ctx context.Context, stmt *influxql.SelectStatement, shardMapper que
 	}
 	qStat, ok := ctx.Value(query.QueryDurationKey).(*statistics.SQLSlowQueryStatistics)
 	if !ok {
-		return nil, errors.New("Select context value type illegal ")
+		return nil, errors.New("Select context value type is illegal")
 	}
 	if qStat != nil {
 		qStat.AddDuration("PrepareDuration", time.Since(start).Nanoseconds())
@@ -67,7 +67,35 @@ func Select(ctx context.Context, stmt *influxql.SelectStatement, shardMapper que
 	if s.Statement().SubQueryHasDifferentAscending && s.Statement().Sources.HaveOnlyTSStore() {
 		return nil, errors.New("subqueries must be ordered in the same direction as the query itself")
 	}
+	// fast return query schema for getFlightInfo query
+	if opt.IsGetFlightInfoQuery {
+		return DummyPipelineExecutorWithQuerySchema(s)
+	}
+
 	return s.Select(ctx)
+}
+
+// for arrow flight protocel getFlightInfo & getSchema query, the query schema is returned instead of real data, therefore
+// a dummy pipelineExecutor which will not be executed is created to carry just the query schema
+func DummyPipelineExecutorWithQuerySchema(s query.PreparedStatement) (hybridqp.Executor, error) {
+	if len(s.Statement().Fields) == 0 {
+		return nil, nil
+	}
+	pOpt := s.ProcessorOptions()
+	if pOpt == nil {
+		return nil, errors.New("preparedStatement Select p.opt isn't *query.ProcessorOptions type")
+	}
+
+	pOpt.EnableBinaryTreeMerge = sysconfig.GetEnableBinaryTreeMerge()
+
+	rewriteVarfName(s.Statement().Fields)
+
+	schema := NewQuerySchemaWithJoinCase(s.Statement().Fields, s.Statement().Sources, s.Statement().ColumnNames(), pOpt, s.Statement().JoinSource, s.Statement().UnionSource,
+		s.Statement().UnnestSource, s.Statement().SortFields)
+
+	return &PipelineExecutor{
+		root: NewTransformVertex(NewLogicalHttpSender(nil, schema), nil),
+	}, nil
 }
 
 func defaultQueryExecutorBuilderCreator() hybridqp.PipelineExecutorBuilder {
@@ -202,7 +230,7 @@ func (p *preparedStatement) BuildLogicalPlan(ctx context.Context) (hybridqp.Quer
 	HaveOnlyCSStore := schema.Sources().HaveOnlyCSStore()
 	planType := GetPlanType(schema, p.stmt)
 	if planType != UNKNOWN {
-		if p != nil && !HaveOnlyCSStore {
+		if !HaveOnlyCSStore && !schema.HasLLMFunc() {
 			var templatePlan []hybridqp.QueryNode
 			if localStorageForQuery != nil {
 				templatePlan = SqlPlanTemplate[planType].GetLocalStorePlan()
@@ -412,6 +440,24 @@ func BuildInConditionPlan(ctx context.Context, outerQc query.LogicalPlanCreator,
 		newStmt, ok = condState.(*influxql.ShowTagValuesStatement)
 		if !ok {
 			return nil, errors.New("type assertion failed")
+		}
+	}
+
+	ctxValue := ctx.Value(query.QueryDurationKey)
+	if ctxValue != nil {
+		qDuration, ok := ctxValue.(*statistics.SQLSlowQueryStatistics)
+		if ok && qDuration != nil {
+			outerSchema.Options().(*query.ProcessorOptions).Query = qDuration.GetQueryByStmtId(inSchema.Options().GetStmtId())
+			start := time.Now()
+			defer func() {
+				qDuration.AddDuration("LocalIteratorDuration", time.Since(start).Nanoseconds())
+			}()
+		}
+		opts, _ := outerSchema.Options().(*query.ProcessorOptions)
+		if c, ok := ctx.Value(query.QueryIDKey).([]uint64); ok {
+			opts.QueryId = c[inSchema.Options().GetStmtId()]
+		} else {
+			logger.GetLogger().Info("query.QueryIDKey can not receive:", zap.Any("QueryIDKey:", query.QueryIDKey))
 		}
 	}
 
@@ -639,7 +685,7 @@ func buildAggNode(builder *LogicalPlanBuilderImpl, schema hybridqp.Catalog, hasS
 func buildSortNode(builder *LogicalPlanBuilderImpl, schema hybridqp.Catalog, s *QuerySchema) {
 	isSubQuery := schema.Sources().IsSubQuery()
 	isPromQuery := schema.Options().IsPromQuery()
-	HaveOnlyCSStore := schema.Options().HaveOnlyCSStore()
+	HaveOnlyCSStore := schema.Sources().HaveOnlyCSStore()
 	if HaveOnlyCSStore || isSubQuery {
 		builder.Sort()
 	} else if isPromQuery {
@@ -655,8 +701,9 @@ func buildNodes(builder *LogicalPlanBuilderImpl, schema hybridqp.Catalog, s *Que
 	hasDistinct, hasSelector := hasDistinctSelectorCall(s)
 	hasSlidingWindow := schema.HasSlidingWindowCall()
 	hasHoltWinters := schema.HasHoltWintersCall()
+	hasLLMFunc := schema.HasLLMFunc()
 	hasSort := s.HasSort()
-	HaveOnlyCSStore := schema.Options().HaveOnlyCSStore()
+	HaveOnlyCSStore := schema.Sources().HaveOnlyCSStore()
 	isSubQuery := schema.Sources().IsSubQuery()
 	isCTE := schema.Sources().IsCTE()
 
@@ -678,6 +725,10 @@ func buildNodes(builder *LogicalPlanBuilderImpl, schema hybridqp.Catalog, s *Que
 
 	if schema.IsCompareCall() {
 		builder.Align()
+	}
+
+	if hasLLMFunc {
+		builder.LLMSemantic()
 	}
 
 	_, ok := builder.stack.Peek().(*LogicalFilter)
@@ -709,6 +760,10 @@ func buildNodes(builder *LogicalPlanBuilderImpl, schema hybridqp.Catalog, s *Que
 		buildSortNode(builder, schema, s)
 	}
 
+	if schema.IsSelectDistinct() {
+		builder.Distinct()
+	}
+
 	// Apply limit & offset.
 	if schema.HasLimit() {
 		if schema.Options().IsExcept() {
@@ -724,9 +779,36 @@ func buildNodes(builder *LogicalPlanBuilderImpl, schema hybridqp.Catalog, s *Que
 	}
 }
 
+func SetResource(qc query.LogicalPlanCreator, schema hybridqp.Catalog) error {
+	if !schema.HasLLMFunc() {
+		return nil
+	}
+	llmFunc := schema.LLMFunc()
+	for _, c := range llmFunc {
+		call, ok := c.Expr.(*influxql.Call)
+		if !ok || call == nil || len(call.Args) < 2 {
+			continue
+		}
+		// The second parameter of the LLM function must be the name of the LLM resource.
+		resource, ok := call.Args[1].(*influxql.StringLiteral)
+		if !ok || resource == nil || len(resource.Val) == 0 {
+			return fmt.Errorf("invalid resource(func=%s)", call.Name)
+		}
+		properties := qc.GetResource(resource.Val)
+		if len(properties) == 0 {
+			return fmt.Errorf("resource(name=%s) not found", resource.Val)
+		}
+		schema.SetResource(resource.Val, properties)
+	}
+	return nil
+}
+
 func buildQueryPlan(ctx context.Context, stmt *influxql.SelectStatement, qc query.LogicalPlanCreator, schema hybridqp.Catalog) (hybridqp.QueryNode, error) {
 	var sp hybridqp.QueryNode
 	var err error
+	if err = SetResource(qc, schema); err != nil {
+		return nil, err
+	}
 	builder := NewLogicalPlanBuilderImpl(schema)
 
 	s, ok := schema.(*QuerySchema)
@@ -739,8 +821,15 @@ func buildQueryPlan(ctx context.Context, stmt *influxql.SelectStatement, qc quer
 		sp, err = BuildJoinQueryPlan(ctx, qc, stmt, s)
 	} else if len(stmt.BinOpSource) > 0 {
 		sp, err = BuildBinOpQueryPlan(ctx, qc, stmt, s)
-	} else if stmt.Sources = qc.GetSources(stmt.Sources); len(stmt.Sources) > 1 {
-		sp, err = buildSortAppendQueryPlan(ctx, qc, stmt, s)
+	} else if qc != nil {
+		if stmt.Sources = qc.GetSources(stmt.Sources); len(stmt.Sources) > 1 {
+			if schema.Sources().HaveOnlyCSStore() {
+				return nil, errors.New("column store does not currently support the multi-measurement query")
+			}
+			sp, err = buildSortAppendQueryPlan(ctx, qc, stmt, s)
+		} else {
+			sp, err = BuildSources(ctx, qc, stmt.Sources, s, false)
+		}
 	} else {
 		sp, err = BuildSources(ctx, qc, stmt.Sources, s, false)
 	}
@@ -758,6 +847,10 @@ func buildQueryPlan(ctx context.Context, stmt *influxql.SelectStatement, qc quer
 		if unionType == influxql.UnionDistinct || unionType == influxql.UnionDistinctByName {
 			builder.Distinct()
 		}
+	}
+
+	if stmt.DistinctFields != nil {
+		s.SetSelectDistinct(true)
 	}
 
 	buildNodes(builder, schema, s)
@@ -1064,7 +1157,9 @@ func RebuildColumnStorePlan(plan hybridqp.QueryNode) []hybridqp.QueryNode {
 				eType = PARTITION_EXCHANGE
 			}
 			_, ok := plan.Schema().HasTopN()
-			if plan.Schema().HasCall() && (plan.Schema().CanAggPushDown() || eType == NODE_EXCHANGE || ok) {
+			if plan.Schema().IsColumnStoreCount() && n.eType == READER_EXCHANGE {
+				nodes = append(nodes, p...)
+			} else if plan.Schema().HasCall() && (plan.Schema().CanAggPushDown() || eType == NODE_EXCHANGE || ok) {
 				node := NewLogicalHashAgg(p[0], plan.Schema(), eType, eTraits)
 				if node.schema.HasCall() {
 					n := findChildAggNode(plan)

@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"time"
 
-	"github.com/armon/go-metrics"
+	"github.com/hashicorp/go-metrics"
 	"github.com/hashicorp/go-msgpack/v2/codec"
 	"github.com/hashicorp/memberlist"
 	coordinate2 "github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/coordinate"

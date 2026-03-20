@@ -60,6 +60,7 @@ const (
 	PingRequest
 	WriteBlobsRequest
 	SendClearEvent
+	TaskNodeRequest
 	Unknown
 )
 

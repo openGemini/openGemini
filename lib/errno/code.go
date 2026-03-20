@@ -117,6 +117,7 @@ const (
 	MisMatchShardAndIndex        = 1133
 	NoNodeTraits                 = 1134
 	FieldIsLiteral               = 1135
+	LastRowRetry                 = 1136
 )
 
 // promql2influxql
@@ -214,6 +215,8 @@ const (
 	AlreadyHotFile                  = 2138
 	IndexIsMoving                   = 2139
 	ForbidIndexWrite                = 2140
+	DBPTNotRaftNode                 = 2141
+	CompactTimeDisorder             = 2142
 )
 
 // merge out of order
@@ -309,6 +312,15 @@ const (
 	SqlNodeNotFound                    = 4056
 	PtIsDoingSomeShardMove             = 4057
 	MetaNodeNotFound                   = 4058
+	ResourceNotFound                   = 4059
+	ResourceExists                     = 4060
+	InValidResource                    = 4061
+	TaskExists                         = 4062
+	TaskNotFound                       = 4063
+	InvalidTaskProperties              = 4064
+	InvalidTaskType                    = 4065
+	MissingTaskType                    = 4066
+	TaskLimitExceeded                  = 4067
 )
 
 // meta-client process
@@ -369,6 +381,9 @@ const (
 	TagValueTooLong                = 5043
 	FieldNameTooLong               = 5044
 	TooManyFieldKeys               = 5045
+	ShardReadonly                  = 5055
+	MstOnBlacklist                 = 5056
+	ShelfWriteLimited              = 5057
 )
 
 // write interface
@@ -423,6 +438,7 @@ const (
 	ErrValueTypeFullTextIndex   = 6021
 	ErrSearchSeriesKey          = 6022
 	ErrUnsupportedConditionType = 6023
+	ErrRPNElemType              = 6024
 )
 
 const (
@@ -468,7 +484,8 @@ const (
 	ExceedRetryChance        = 8035
 	UnknownErr               = 8036
 	InvalidHaPolicy          = 8037
-	ColumnsNotAligned        = 8038
+	RequiredFieldInvalid     = 8038
+	InvalidOtlpDBName        = 8039
 )
 
 // consume service

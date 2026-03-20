@@ -31,20 +31,26 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/apache/arrow/go/v13/arrow"
 	set "github.com/deckarep/golang-set/v2"
 	"github.com/google/uuid"
 	"github.com/influxdata/influxdb/models"
 	originql "github.com/influxdata/influxql"
 	"github.com/openGemini/openGemini/coordinator"
+	"github.com/openGemini/openGemini/engine"
+	"github.com/openGemini/openGemini/engine/comm"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/crypto"
+	json2 "github.com/openGemini/openGemini/lib/encoding/json"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/logger"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/msgservice"
 	"github.com/openGemini/openGemini/lib/netstorage"
+	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/sysconfig"
 	"github.com/openGemini/openGemini/lib/syscontrol"
@@ -53,6 +59,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/smart_query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"go.uber.org/zap"
 )
@@ -103,6 +110,8 @@ type StatementExecutor struct {
 	// hostname for show configs statement
 	Hostname   string
 	SqlConfigs map[string]interface{}
+
+	log *logger.Logger
 }
 
 type combinedRunState uint8
@@ -203,6 +212,176 @@ func (e *StatementExecutor) Close() error {
 	return e.ShardMapper.Close()
 }
 
+func (e *StatementExecutor) ExecuteSmartStatement(stmt *smart_query.SmartSelectStatement, results chan *query.Result) error {
+	return e.executeSmartSelectStatement(stmt, results)
+}
+
+func (e *StatementExecutor) executeSmartSelectStatement(stmt *smart_query.SmartSelectStatement, results chan *query.Result) error {
+	// todo check: 1.stmt.Fields all in metadata.fields; 2.stmt.Condition all int metadata.tags
+	stmt.Source.NameVersion = influx.GetNameWithVersion(stmt.Source.Name, 0)
+	err := e.MetaClient.CheckAndWriteSmartStmtSchema(stmt)
+	if err != nil {
+		return nil
+	}
+	// startTime, endTime, err := stmt.ParseTime(nil)
+	if stmt.StartT.IsZero() {
+		stmt.StartT = time.Unix(0, influxql.MinTime)
+	}
+	if stmt.EndT.IsZero() {
+		stmt.EndT = time.Unix(0, influxql.MaxTime)
+	}
+	startTime, endTime := stmt.StartT, stmt.EndT
+	eTraits, err := e.MetaClient.GetSmartStmtETraits(stmt, startTime, endTime)
+	if len(eTraits) == 0 || err != nil {
+		return err
+	}
+	allRecs := make([]*record.ConsumeRecord, 0)
+	lock := new(sync.Mutex)
+	chErr := make(chan error, 1)
+
+	db := stmt.Source.Database
+	rp := stmt.Source.RetentionPolicy
+	mstName := stmt.Source.NameVersion
+
+	fields := make([]influxql.Expr, 0)
+	for _, f := range stmt.Fields {
+		fields = append(fields, &influxql.Call{
+			Name: f.Call,
+			Args: []influxql.Expr{
+				&influxql.VarRef{
+					Val:  f.Val,
+					Type: f.Typ,
+				},
+			},
+		})
+	}
+	isNonAgg := len(eTraits) == 1
+	st, et, interval := startTime.UnixNano(), endTime.UnixNano(), stmt.GroupByInterval.Nanoseconds()
+	for i := range eTraits {
+		go func() {
+			rq := eTraits[i]
+			res, err := e.NetStorage.ExecuteSmartQuery(rq.NodeID, db, rp, mstName, []uint32{rq.PtID}, stmt)
+			if err != nil || res.IsEmpty() {
+				chErr <- err
+				return
+			}
+			lock.Lock()
+			isNonAgg = isNonAgg && res.IsSingleSeries()
+			allRecs = append(allRecs, res.GetData()...)
+			lock.Unlock()
+			chErr <- nil
+		}()
+	}
+
+	for i := 0; i < len(eTraits); i++ {
+		if e := <-chErr; e != nil {
+			err = e
+		}
+	}
+	if err != nil {
+		logger.GetLogger().Error("ExecuteSmartQuery failed", zap.Error(err))
+		return err
+	}
+	// Query result is empty
+	if len(allRecs) == 0 {
+		results <- &query.Result{}
+		return nil
+	}
+	options := &query.ProcessorOptions{
+		StartTime: st,
+		EndTime:   et,
+		Interval:  hybridqp.Interval{Duration: time.Duration(interval)},
+		ChunkSize: 500000,
+		Limit:     stmt.Limit,
+		Offset:    stmt.Offset,
+	}
+
+	recs, err := AggRecs(allRecs, fields, options, isNonAgg)
+	if err != nil {
+		results <- &query.Result{}
+		return err
+	}
+
+	r2j := json2.NewRecord2ResultsJSON(stmt.Location, stmt.Epoch)
+	r2j.WriteRecords(mstName, recs)
+
+	result := &query.Result{
+		Series:     make([]*models.Row, 0),
+		JSONBuf:    r2j.Bytes(),
+		FreeHandle: r2j.Release,
+	}
+	results <- result
+	return nil
+}
+
+func AggRecs(recs []*record.ConsumeRecord, fields []influxql.Expr, opt *query.ProcessorOptions, isNonAgg bool) ([]*record.Record, error) {
+	var ops []*comm.CallOption
+	var schema record.Schemas
+	for _, fieldExpr := range fields {
+		switch field := fieldExpr.(type) {
+		case *influxql.Call:
+			varRef := field.Args[0].(*influxql.VarRef)
+			schema = append(schema, record.Field{Type: record.ToModelTypes(varRef.Type), Name: varRef.Val})
+			ops = append(ops, &comm.CallOption{
+				Call: field,
+				Ref:  varRef,
+			})
+		case *influxql.VarRef:
+			schema = append(schema, record.Field{Type: record.ToModelTypes(field.Type), Name: field.Val})
+		default:
+			return nil, fmt.Errorf("invalid field")
+		}
+	}
+	schema = append(schema, record.Field{Type: influx.Field_Type_Int, Name: record.TimeField})
+
+	var aggRecs []*record.Record
+	if isNonAgg {
+		for i := range recs {
+			aggRecs = append(aggRecs, recs[i].Rec)
+		}
+		return aggRecs, nil
+	}
+	srcIter := NewRecsIterator(recs, opt)
+	querySchema := executor.NewQuerySchemaWithOpt(opt)
+	queryCtx := engine.NewKeyCursorContext(querySchema)
+	aggIter := engine.NewAggTagSetCursor(querySchema, queryCtx, srcIter, false)
+	aggIter.InitOps(ops, schema)
+	for {
+		rec, _, err := aggIter.Next()
+		if err != nil {
+			return nil, err
+		}
+		if rec == nil {
+			break
+		}
+		aggRecs = append(aggRecs, rec)
+	}
+	return aggRecs, nil
+}
+
+type RecsIterator struct {
+	comm.KeyCursor
+	recs     []*record.ConsumeRecord
+	loc      int
+	fileInfo *comm.FileInfo
+}
+
+func NewRecsIterator(recs []*record.ConsumeRecord, opt hybridqp.Options) *RecsIterator {
+	return &RecsIterator{recs: recs, fileInfo: &comm.FileInfo{MinTime: opt.GetStartTime(), MaxTime: opt.GetEndTime()}}
+}
+
+func (r *RecsIterator) NextAggData() (*record.Record, *comm.FileInfo, error) {
+	if r.loc == len(r.recs) {
+		return nil, nil, nil
+	}
+	r.loc++
+	return r.recs[r.loc-1].Rec, r.fileInfo, nil
+}
+
+func (r *RecsIterator) Close() error {
+	return nil
+}
+
 // ExecuteStatement executes the given statement with the given execution context.
 func (e *StatementExecutor) ExecuteStatement(stmt influxql.Statement, ctx *query.ExecutionContext, seq int) error {
 	e.MaxQueryParallel = int(atomic.LoadInt32(&syscontrol.QueryParallel))
@@ -249,6 +428,11 @@ func (e *StatementExecutor) ExecuteStatement(stmt influxql.Statement, ctx *query
 			messages = append(messages, query.ReadOnlyWarning(stmt.String()))
 		}
 		err = e.executeAlterShardKeyStatement(stmt)
+	case *influxql.AlterShardsNumStatement:
+		if ctx.ReadOnly {
+			messages = append(messages, query.ReadOnlyWarning(stmt.String()))
+		}
+		err = e.executeAlterShardsNumStatement(stmt)
 	case *influxql.CreateDatabaseStatement:
 		if ctx.ReadOnly {
 			messages = append(messages, query.ReadOnlyWarning(stmt.String()))
@@ -409,13 +593,10 @@ func (e *StatementExecutor) ExecuteStatement(stmt influxql.Statement, ctx *query
 		err = e.executeKillQuery(stmt)
 	case *influxql.PrepareSnapshotStatement:
 		return meta2.ErrUnsupportCommand
-		err = e.executePrepareSnapshotStatement(stmt, ctx)
 	case *influxql.EndPrepareSnapshotStatement:
 		return meta2.ErrUnsupportCommand
-		err = e.executeEndPrepareSnapshotStatement(stmt, ctx)
 	case *influxql.GetRuntimeInfoStatement:
 		return meta2.ErrUnsupportCommand
-		rows, err = e.executeGetRuntimeInfoStatement(stmt, ctx)
 	case *influxql.CreateDownSampleStatement:
 		if ctx.ReadOnly {
 			messages = append(messages, query.ReadOnlyWarning(stmt.String()))
@@ -450,6 +631,29 @@ func (e *StatementExecutor) ExecuteStatement(stmt influxql.Statement, ctx *query
 		err = e.executeWithSelectStatement(stmt, ctx, seq)
 	case *influxql.GraphStatement:
 		rows, err = e.executeGraphStatement(stmt, ctx)
+	case *influxql.ShowLastIndexStatement:
+		_, err = e.retryExecuteStatement(stmt, ctx, seq)
+		return err
+	case *influxql.CreateResourceStmt:
+		err = e.ExecuteCreateResourceStmt(stmt)
+	case *influxql.ShowResourceStmt:
+		rows, err = e.ExecuteShowResourceStmt(stmt)
+	case *influxql.ShowResourcesStmt:
+		rows, err = e.ExecuteShowResourcesStmt(stmt)
+	case *influxql.AlterResourceStmt:
+		err = e.ExecuteAlterResourceStmt(stmt)
+	case *influxql.DropResourceStmt:
+		err = e.ExecuteDropResourceStmt(stmt)
+	case *influxql.CreateTaskStmt:
+		err = e.ExecuteCreateTaskStmt(stmt)
+	case *influxql.AlterTaskStmt:
+		err = e.ExecuteAlterTaskStmt(stmt)
+	case *influxql.ShowTaskStmt:
+		rows, err = e.ExecuteShowTaskStmt(stmt)
+	case *influxql.ShowTasksStmt:
+		rows, err = e.ExecuteShowTasksStmt(stmt)
+	case *influxql.DropTaskStmt:
+		err = e.ExecuteDropTaskStmt(stmt)
 	default:
 		return query.ErrInvalidQuery
 	}
@@ -512,6 +716,8 @@ func (e *StatementExecutor) retryExecuteStatement(stmt influxql.Statement, ctx *
 			} else {
 				rows, err = e.executeExplainStatement(stmt, ctx)
 			}
+		case *influxql.ShowLastIndexStatement:
+			err = e.executeShowLastIndex(stmt, ctx, seq)
 		}
 
 		if err == nil {
@@ -527,6 +733,44 @@ func (e *StatementExecutor) retryExecuteStatement(stmt influxql.Statement, ctx *
 	}
 	e.StmtExecLogger.Error("ExecuteStatement error ", zap.Error(err), zap.Any("stmt", stmt))
 	return rows, err
+}
+
+func (e *StatementExecutor) executeShowLastIndex(q *influxql.ShowLastIndexStatement, ctx *query.ExecutionContext, seq int) error {
+	lastIndexInfos := make([]meta2.DbPtLastIndexInfo, 0)
+	lock := new(sync.Mutex)
+	err := e.MetaExecutor.EachDBNodes(q.DbName, func(nodeID uint64, pts []uint32) error {
+		infos, err := e.NetStorage.ShowLastIndex(nodeID, q.DbName, pts)
+		lock.Lock()
+		defer lock.Unlock()
+		if err != nil {
+			lastIndexInfos = lastIndexInfos[:0] // if execute command failed reset res
+		} else {
+			for i := range infos {
+				infos[i].NodeId = nodeID
+			}
+			lastIndexInfos = append(lastIndexInfos, infos...)
+		}
+		return err
+	}, e.MetaExecutor.MetaClient.GetAllRepNodePtsMap)
+
+	if err != nil {
+		return err
+	}
+
+	row := &models.Row{
+		Columns: []string{"database", "ptId", "lastIndex", "nodeId"},
+		Values:  make([][]interface{}, len(lastIndexInfos)),
+	}
+	for i, info := range lastIndexInfos {
+		row.Values[i] = []interface{}{info.Database, info.PtId, info.LastIndex, info.NodeId}
+	}
+
+	if err := ctx.Send(&query.Result{
+		Series: []*models.Row{row},
+	}, seq, nil); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (e *StatementExecutor) executeCreateDownSamplingStmt(stmt *influxql.CreateDownSampleStatement) error {
@@ -618,7 +862,39 @@ func (e *StatementExecutor) getRetentionPolicyCount() int {
 	dbs := e.MetaClient.Databases()
 	var c int
 	for _, db := range dbs {
+		if db.Name == "_internal" {
+			continue
+		}
 		c += len(db.RetentionPolicies)
+	}
+	return c
+}
+
+func (e *StatementExecutor) validateDBAndRPNums(dbName string) error {
+	if dbName == "_internal" {
+		return nil
+	}
+	dbLimit := atomic.LoadInt32(&syscontrol.DatabaseNumLimit)
+	if dbLimit > 0 && e.getDatabaseCount() >= dbLimit {
+		e.StmtExecLogger.Error("exceeds the db limit", zap.String("db", dbName))
+		return errors.New(fmt.Sprintf("THE TOTAL NUMBER OF DBs EXCEEDS THE LIMIT %d", dbLimit))
+	}
+	rpLimit := e.getRpLimit()
+	if e.getRetentionPolicyCount() >= rpLimit {
+		e.StmtExecLogger.Error("exceeds the rp limit", zap.String("db", dbName))
+		return errors.New(fmt.Sprintf("THE TOTAL NUMBER OF RPs EXCEEDS THE LIMIT %d", rpLimit))
+	}
+	return nil
+}
+
+func (e *StatementExecutor) getDatabaseCount() int32 {
+	dbs := e.MetaClient.Databases()
+	var c int32
+	for _, db := range dbs {
+		if db.Name == "_internal" {
+			continue
+		}
+		c++
 	}
 	return c
 }
@@ -629,9 +905,7 @@ func (e *StatementExecutor) getRpLimit() int {
 
 func (e *StatementExecutor) getIndexRelation(stmt *influxql.CreateMeasurementStatement) (*influxql.IndexRelation, error) {
 	indexR := influxql.NewIndexRelation()
-	if len(stmt.IndexType) != len(stmt.IndexList) {
-		return nil, fmt.Errorf("the IndexType does not match the number of index fields")
-	}
+	meta2.RewriteIndexList(stmt)
 
 	for i, indexTypeName := range stmt.IndexType {
 		oid, err := index.GetIndexTypeByName(indexTypeName)
@@ -644,6 +918,7 @@ func (e *StatementExecutor) getIndexRelation(stmt *influxql.CreateMeasurementSta
 		indexR.Oids = append(indexR.Oids, uint32(oid))
 		indexR.IndexNames = append(indexR.IndexNames, indexTypeName)
 		indexR.IndexList = append(indexR.IndexList, &influxql.IndexList{IList: stmt.IndexList[i]})
+		indexR.IndexParam = append(indexR.IndexParam, &influxql.IndexParam{IList: stmt.IndexParams[i]})
 		if oid == index.TimeCluster {
 			indexR.IndexOptions = append(indexR.IndexOptions, &influxql.IndexOptions{
 				Options: []*influxql.IndexOption{
@@ -669,6 +944,10 @@ func (e *StatementExecutor) executeCreateMeasurementStatement(stmt *influxql.Cre
 	}
 
 	if err := meta2.ValidShardKey(stmt.ShardKey); err != nil {
+		return err
+	}
+
+	if err := meta2.ValidSecondaryIndex(stmt); err != nil {
 		return err
 	}
 	e.StmtExecLogger.Info("create measurement ", zap.String("name", stmt.Name))
@@ -703,13 +982,29 @@ func (e *StatementExecutor) executeCreateDatabaseStatement(stmt *influxql.Create
 	}
 
 	e.StmtExecLogger.Info("create database ", zap.String("db", stmt.Name))
-	rpLimit := e.getRpLimit()
-	if e.getRetentionPolicyCount() >= rpLimit {
-		e.StmtExecLogger.Error("exceeds the rp limit", zap.String("db", stmt.Name))
-		return errors.New("THE TOTAL NUMBER OF RPs EXCEEDS THE LIMIT")
+	if err := e.validateDBAndRPNums(stmt.Name); err != nil {
+		return err
 	}
 
 	ObsOption := stmt.ObsOptions
+
+	if ObsOption != nil {
+		encryptSk, skErr := crypto.Encrypt(ObsOption.Sk)
+		if skErr != nil {
+			e.log.Error("encryptSk exit err")
+			return skErr
+		} else {
+			ObsOption.Sk = encryptSk
+		}
+
+		encryptAk, akErr := crypto.Encrypt(ObsOption.Ak)
+		if akErr != nil {
+			return akErr
+		} else {
+			ObsOption.Ak = encryptAk
+		}
+	}
+
 	if !stmt.RetentionPolicyCreate {
 		_, err := e.MetaClient.CreateDatabase(stmt.Name, stmt.DatabaseAttr.EnableTagArray, stmt.DatabaseAttr.Replicas, ObsOption)
 		e.StmtExecLogger.Info("create database finish", zap.String("db", stmt.Name), zap.Error(err))
@@ -942,7 +1237,30 @@ func (e *StatementExecutor) executeExplainStatement(q *influxql.ExplainStatement
 }
 
 func (e *StatementExecutor) executeExplainAnalyzeStatement(q *influxql.ExplainStatement, ectx *query.ExecutionContext) (models.Rows, error) {
-	stmt := q.Statement
+	var stmt *influxql.SelectStatement
+	switch st := q.Statement.(type) {
+	case *influxql.WithSelectStatement:
+		reqId := getReqId()
+		setReqIdAndDimensionsForEachCTE(st, reqId)
+		if err := SetTemporaryIfCTE(st); err != nil {
+			return nil, err
+		}
+		st.CTEs = sortCTEs(st.CTEs)
+		selectStmt := st.Query
+		selectStmt.AllDependencyCTEs = st.CTEs
+
+		defer func() {
+			executor.CTEBuf.ClearDataStoreByKey(reqId, st.CTEs)
+		}()
+		stmt = st.Query
+	case *influxql.SelectStatement:
+		stmt = st
+	case *influxql.GraphStatement:
+		return e.graphExplainStatment(q, ectx, st)
+	default:
+		return nil, meta2.ErrUnsupportCommand
+	}
+
 	trace, span := tracing.NewTrace("SELECT")
 	stmt.OmitTime = true
 	ctx := tracing.NewContextWithTrace(ectx.Context, trace)
@@ -1009,6 +1327,33 @@ func (e *StatementExecutor) executeExplainAnalyzeStatement(q *influxql.ExplainSt
 		row.Values = append(row.Values, []interface{}{s})
 	}
 
+	return models.Rows{row}, nil
+}
+
+func (e *StatementExecutor) graphExplainStatment(q *influxql.ExplainStatement, ectx *query.ExecutionContext, st *influxql.GraphStatement) (models.Rows, error) {
+	trace, span := tracing.NewTrace("Graph")
+	ctx := tracing.NewContextWithTrace(ectx.Context, trace)
+	ctx = tracing.NewContextWithSpan(ctx, span)
+
+	transform, err := executor.NewGraphTransform(st)
+	if err != nil {
+		return nil, err
+	}
+	transform.Analyze(span)
+	span.AppendNameValue("statement", q.String())
+	span.Finish()
+	output := executor.NewChunkPort(hybridqp.NewRowDataTypeImpl(*influxql.DefaultGraphVarRef()))
+	executor.Connect(transform.GetOutputs()[0], output)
+	err = transform.Work(ctx)
+	if err != nil {
+		return nil, err
+	}
+	row := &models.Row{
+		Columns: []string{"EXPLAIN ANALYZE"},
+	}
+	for _, s := range strings.Split(trace.String(), "\n") {
+		row.Values = append(row.Values, []interface{}{s})
+	}
 	return models.Rows{row}, nil
 }
 
@@ -1093,6 +1438,9 @@ func (e *StatementExecutor) executeSelectStatement(stmt *influxql.SelectStatemen
 	proxy := newRowChanProxy()
 	// omit Time field for stmt
 	stmt.OmitTime = true
+	if ctx.ExecutionOptions.QueryType == query.QueryTypeSQL {
+		stmt.IsQueryTypeSQL = true
+	}
 	pipelineExecutor, err := e.retryCreatePipelineExecutor(ctx, stmt, ctx.ExecutionOptions, proxy.rc)
 	if err == influxql.ErrDeclareEmptyCollection {
 		// skip empty collection err and return empty result set
@@ -1107,6 +1455,14 @@ func (e *StatementExecutor) executeSelectStatement(stmt *influxql.SelectStatemen
 		proxy.close()
 		return ctx.Send(&query.Result{
 			Series: make([]*models.Row, 0),
+		}, seq, nil)
+	}
+	if ctx.ExecutionOptions.IsGetFlightInfoQuery {
+		proxy.close()
+		queryNode := pipelineExecutor.GetRoot().GetNode()
+		arrowSchema := buildSchema(queryNode.Schema().FieldsRef(), ctx.ExecutionOptions.QueryType)
+		return ctx.Send(&query.Result{
+			Schema: arrowSchema,
 		}, seq, nil)
 	}
 
@@ -1246,6 +1602,8 @@ func (e *StatementExecutor) GetOptions(opt query.ExecutionOptions, rowsChan chan
 		IncQuery:                opt.IncQuery,
 		IterID:                  opt.IterID,
 		IsArrowQuery:            opt.IsArrowQuery,
+		IsGetFlightInfoQuery:    opt.IsGetFlightInfoQuery,
+		QueryType:               opt.QueryType,
 	}
 }
 
@@ -1368,7 +1726,7 @@ func getIndex(mst *meta2.MeasurementInfo) *models.Row {
 	row := &models.Row{Columns: []string{"INDEXES"}}
 	res := make([][]interface{}, len(mst.IndexRelation.Oids))
 	for i, id := range mst.IndexRelation.Oids {
-		indexName, _ := index.GetIndexNameByType(index.IndexType(id))
+		indexName := index.GetIndexNameByType(index.IndexType(id))
 		var indexList string
 		for _, col := range mst.IndexRelation.IndexList[i].IList {
 			indexList += col + ","
@@ -1376,6 +1734,17 @@ func getIndex(mst *meta2.MeasurementInfo) *models.Row {
 		if len(indexList) > 0 {
 			indexList = indexList[:len(indexList)-1]
 		}
+
+		if len(mst.IndexRelation.IndexParam) > 0 && len(mst.IndexRelation.IndexParam[i].IList) > 0 {
+			indexList += ":"
+			for _, col := range mst.IndexRelation.IndexParam[i].IList {
+				indexList += fmt.Sprintf("%v,", col.String())
+			}
+			if len(indexList) > 0 {
+				indexList = indexList[:len(indexList)-1]
+			}
+		}
+
 		if id == uint32(index.TimeCluster) {
 			indexList = mst.ColStoreInfo.TimeClusterDuration.String()
 		}
@@ -1556,8 +1925,8 @@ func (e *StatementExecutor) executeShowMeasurementsDetailStatement(stmt *influxq
 	for key, m := range measurements {
 		originName := m.OriginName()
 		row := &models.Row{Name: originName, Columns: []string{"Detail"}}
-		// the values has 9 rows (retention policy, shardKeys, fieldKeys etc.) at most.
-		values := make([][]interface{}, 0, 9)
+		// the values has 10 rows (retention policy, shardKeys, fieldKeys etc.) at most.
+		values := make([][]interface{}, 0, 10)
 		// key: rpName.mstName
 		policyStr := "RETENTION POLICY: " + strings.Split(key, ".")[0]
 		values = append(values, []interface{}{policyStr})
@@ -1586,6 +1955,10 @@ func (e *StatementExecutor) executeShowMeasurementsDetailStatement(stmt *influxq
 			compactionTypeStr := config.CompactionType2Str(m.ColStoreInfo.CompactionType)
 			compactionTypeStr = "COMPACTION_TYPE: " + blank2Nil(compactionTypeStr)
 			values = append(values, []interface{}{compactionTypeStr})
+
+			propertyStr := m.ColStoreInfo.PropertyMapToString()
+			propertyStr = "PROPERTY: " + blank2Nil(propertyStr)
+			values = append(values, []interface{}{propertyStr})
 		}
 
 		tagKeysMap := make(map[string]map[string]struct{}, 1)
@@ -1943,7 +2316,7 @@ func (e *StatementExecutor) executeShowSeries(q *influxql.ShowSeriesStatement, c
 			series = append(series, arr...)
 		}
 		return err
-	})
+	}, e.MetaExecutor.MetaClient.GetNodePtsMap)
 	if err != nil {
 		e.StmtExecLogger.Error("failed to show series", zap.Error(err))
 		return err
@@ -2009,7 +2382,7 @@ func (e *StatementExecutor) showSeriesCardinality(stmt *influxql.ShowSeriesCardi
 		}
 
 		return err
-	})
+	}, e.MetaExecutor.MetaClient.GetNodePtsMap)
 	if err != nil {
 		e.StmtExecLogger.Error("failed to show series cardinality", zap.Error(err))
 		return nil, err
@@ -2018,14 +2391,16 @@ func (e *StatementExecutor) showSeriesCardinality(stmt *influxql.ShowSeriesCardi
 	e.StmtExecLogger.Info("store show series cardinality", zap.Duration("cost", time.Since(stime)))
 	ret.SortAndMerge()
 	rows := make([]*models.Row, 0, len(ret))
+	timezoneCache := make(map[string]*time.Location)
 	for i := range ret {
 		if ret[i].TimeRange.StartTime.IsZero() {
 			continue
 		}
+		timezone := e.getTimezoneByName(ret[i].Timezone, timezoneCache)
 		rows = append(rows, &models.Row{
 			Columns: []string{"startTime", "endTime", "count"},
-			Values: [][]interface{}{{ret[i].TimeRange.StartTime.UTC().Format(time.RFC3339),
-				ret[i].TimeRange.EndTime.UTC().Format(time.RFC3339),
+			Values: [][]interface{}{{ret[i].TimeRange.StartTime.In(timezone).Format(time.RFC3339),
+				ret[i].TimeRange.EndTime.In(timezone).Format(time.RFC3339),
 				ret[i].Cardinality}},
 		})
 	}
@@ -2053,24 +2428,26 @@ func (e *StatementExecutor) showSeriesCardinalityWithCondition(stmt *influxql.Sh
 			ret[mstCardinality[i].Name] = append(ret[mstCardinality[i].Name], mstCardinality[i].CardinalityInfos...)
 		}
 		return nil
-	})
+	}, e.MetaExecutor.MetaClient.GetNodePtsMap)
 	if err != nil {
 		e.StmtExecLogger.Error("fail to show series cardinality with condition", zap.Error(err))
 		return nil, err
 	}
 	e.StmtExecLogger.Info("store show series cardinality with condition", zap.Duration("cost", time.Since(stime)))
 	rows := make([]*models.Row, 0, len(ret))
+	timezoneCache := make(map[string]*time.Location)
 	for mst, cardinalityInfos := range ret {
 		cardinalityInfos.SortAndMerge()
 		for i := range cardinalityInfos {
 			if cardinalityInfos[i].TimeRange.StartTime.IsZero() {
 				continue
 			}
+			timezone := e.getTimezoneByName(cardinalityInfos[i].Timezone, timezoneCache)
 			rows = append(rows, &models.Row{
 				Name:    mst,
 				Columns: []string{"startTime", "endTime", "count"},
-				Values: [][]interface{}{{cardinalityInfos[i].TimeRange.StartTime.UTC().Format(time.RFC3339),
-					cardinalityInfos[i].TimeRange.EndTime.UTC().Format(time.RFC3339),
+				Values: [][]interface{}{{cardinalityInfos[i].TimeRange.StartTime.In(timezone).Format(time.RFC3339),
+					cardinalityInfos[i].TimeRange.EndTime.In(timezone).Format(time.RFC3339),
 					cardinalityInfos[i].Cardinality}},
 			})
 		}
@@ -2078,6 +2455,18 @@ func (e *StatementExecutor) showSeriesCardinalityWithCondition(stmt *influxql.Sh
 	e.StmtExecLogger.Info("total showSeries with condition cost", zap.Duration("duration", time.Since(stime)))
 
 	return rows, nil
+}
+
+func (e *StatementExecutor) getTimezoneByName(name string, cache map[string]*time.Location) *time.Location {
+	if cachedTimezone, ok := cache[name]; ok {
+		return cachedTimezone
+	}
+	timezone, err := time.LoadLocation(name)
+	if err != nil {
+		timezone = time.UTC
+	}
+	cache[name] = timezone
+	return timezone
 }
 
 func (e *StatementExecutor) showSeriesExactCardinality(stmt *influxql.ShowSeriesCardinalityStatement, names []string) ([]*models.Row, error) {
@@ -2100,7 +2489,7 @@ func (e *StatementExecutor) showSeriesExactCardinality(stmt *influxql.ShowSeries
 			ret[name] += n
 		}
 		return nil
-	})
+	}, e.MetaExecutor.MetaClient.GetNodePtsMap)
 	if err != nil {
 		e.StmtExecLogger.Error("failed to show series exact cardinality", zap.Error(err))
 		return nil, err
@@ -2426,8 +2815,15 @@ func (e *StatementExecutor) NormalizeStatement(stmt influxql.Statement, defaultD
 			for _, source := range node.GetTableFunctionSource() {
 				err = e.normalizeMeasurement(source.(*influxql.Measurement), defaultDatabase, defaultRetentionPolicy)
 			}
+		case *influxql.CreateTaskStmt:
+			fillTaskDefaultDBAndRP(node.Properties, e.MetaClient, defaultDatabase)
+		case *influxql.AlterTaskStmt:
+			fillTaskDefaultDBAndRP(node.Properties, e.MetaClient, defaultDatabase)
+		case *influxql.AlterShardsNumStatement:
+			if node.Database == "" {
+				node.Database = defaultDatabase
+			}
 		}
-
 	})
 	return
 }
@@ -2782,7 +3178,7 @@ func allDependenciesResolved(cte *influxql.CTE, sortedCTEs influxql.CTES) bool {
 	return true
 }
 
-func (e StatementExecutor) executeWithSelectStatement(stmt *influxql.WithSelectStatement, ctx *query.ExecutionContext, seq int) error {
+func (e *StatementExecutor) executeWithSelectStatement(stmt *influxql.WithSelectStatement, ctx *query.ExecutionContext, seq int) error {
 	reqId := getReqId()
 	setReqIdAndDimensionsForEachCTE(stmt, reqId)
 	if err := SetTemporaryIfCTE(stmt); err != nil {
@@ -2821,7 +3217,7 @@ func (e StatementExecutor) executeWithSelectStatement(stmt *influxql.WithSelectS
 	return err
 }
 
-func (e StatementExecutor) executeGraphStatement(stmt *influxql.GraphStatement, ctx *query.ExecutionContext) (models.Rows, error) {
+func (e *StatementExecutor) executeGraphStatement(stmt *influxql.GraphStatement, ctx *query.ExecutionContext) (models.Rows, error) {
 	// skip planBuild case single graph query is simple
 	transform, err := executor.NewGraphTransform(stmt)
 	if err != nil {
@@ -2844,6 +3240,10 @@ func (e StatementExecutor) executeGraphStatement(stmt *influxql.GraphStatement, 
 	}
 	rows = graph.GraphToRows()
 	return rows, nil
+}
+
+func (e *StatementExecutor) executeAlterShardsNumStatement(stmt *influxql.AlterShardsNumStatement) error {
+	return e.MetaClient.AlterShardsNum(stmt.Database, stmt.RetentionPolicy, stmt.Name, int32(stmt.NumOfShards))
 }
 
 type ByteStringSlice [][]byte
@@ -3165,4 +3565,39 @@ func getPerSeriesAndRowSize(s *models.Row) (int, int) {
 		}
 	}
 	return byteSizePerSeries, byteSizePerRow
+}
+
+func buildSchema(varRefs influxql.VarRefs, queryType string) *arrow.Schema {
+	fields := make([]arrow.Field, 0, len(varRefs)+1)
+	// Add time column only if QueryType is not "sql"
+	if queryType != query.QueryTypeSQL {
+		fields = append(fields, arrow.Field{Name: "time", Type: arrow.PrimitiveTypes.Int64})
+	}
+	for _, varRef := range varRefs {
+		switch varRef.Type {
+		case influxql.Float:
+			fields = append(fields, arrow.Field{Name: varRef.Val, Type: arrow.PrimitiveTypes.Float64})
+		case influxql.Integer:
+			fields = append(fields, arrow.Field{Name: varRef.Val, Type: arrow.PrimitiveTypes.Int64})
+		case influxql.String, influxql.Tag:
+			fields = append(fields, arrow.Field{Name: varRef.Val, Type: arrow.BinaryTypes.String})
+		case influxql.Boolean:
+			fields = append(fields, arrow.Field{Name: varRef.Val, Type: arrow.FixedWidthTypes.Boolean})
+		default:
+			return &arrow.Schema{}
+		}
+	}
+	return arrow.NewSchema(fields, &arrow.Metadata{})
+}
+
+func fillTaskDefaultDBAndRP(props map[string]string, metaClient meta.MetaClient, defaultDB string) {
+	if props[influxql.DBKey] == "" {
+		props[influxql.DBKey] = defaultDB
+	}
+	if props[influxql.RPKey] != "" {
+		return
+	}
+	if dbInfo, err := metaClient.Database(props[influxql.DBKey]); err == nil {
+		props[influxql.RPKey] = dbInfo.DefaultRetentionPolicy
+	}
 }

@@ -16,6 +16,7 @@ package colstore
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/record"
@@ -31,16 +32,17 @@ const (
 	CoarseIndexFragment        int    = 8
 	MinRowsForSeek             int    = 0
 	IndexFileSuffix            string = ".idx"
-	MinMaxIndexFileSuffix      string = ".mm"
-	SetIndexFileSuffix         string = ".set"
 	BloomFilterIndexFileSuffix string = ".bf"
 	TextIndexDataFileSuffix    string = ".pos" // posting list
 	TextIndexHeadFileSuffix    string = ".bh"  // block header
 	TextIndexPartFileSuffix    string = ".ph"  // part header
 	DefaultTCLocation          int8   = -1
+	TCLocationUsed             int8   = 1
 	crcSize                    uint32 = 4
 	pKMetaItemSize             int    = util.Uint64SizeBytes*2 + util.Uint32SizeBytes*2
 	SeriesID                   uint64 = 1
+	DefaultTCDuration                 = time.Hour
+	MinTCDuration                     = time.Minute * 10
 )
 
 const (
@@ -48,6 +50,7 @@ const (
 	TextIndexHead
 	TextIndexPart
 	TextIndexMax
+	DefaultFileType
 )
 
 func AppendPKIndexSuffix(dataPath string) string {
@@ -57,28 +60,26 @@ func AppendPKIndexSuffix(dataPath string) string {
 
 func AppendSecondaryIndexSuffix(dataPath string, fieldName string, indexType index.IndexType, fileType int) string {
 	var indexFileSuffix string
-	switch indexType {
-	case index.MinMax:
-		indexFileSuffix = MinMaxIndexFileSuffix
-	case index.Set:
-		indexFileSuffix = SetIndexFileSuffix
-	case index.BloomFilter, index.BloomFilterFullText, index.BloomFilterIp:
-		indexFileSuffix = BloomFilterIndexFileSuffix
-	case index.Text:
+	if indexType == index.Text {
 		if fileType == TextIndexData {
 			indexFileSuffix = TextIndexDataFileSuffix
 		} else if fileType == TextIndexHead {
 			indexFileSuffix = TextIndexHeadFileSuffix
 		} else if fileType == TextIndexPart {
 			indexFileSuffix = TextIndexPartFileSuffix
-		} else {
-			panic(fmt.Sprintf("unsupported index file type{%d} for text index", fileType))
 		}
-	default:
-		panic(fmt.Sprintf("unsupported the secondary index: %d", indexType))
+	} else {
+		indexFileSuffix = indexType.FileExtension()
 	}
-	indexPath := dataPath + "." + fieldName + indexFileSuffix
-	return indexPath
+
+	if indexFileSuffix == "" {
+		panic(fmt.Sprintf("[BUG] invalid index type(%v) or file type(%v)", indexType, fileType))
+	}
+
+	if len(fieldName) == 0 {
+		return dataPath + indexFileSuffix
+	}
+	return dataPath + "." + fieldName + indexFileSuffix
 }
 
 func OnlySortByTime(sk record.Schemas) bool {

@@ -17,6 +17,7 @@ package immutable
 import (
 	"github.com/openGemini/openGemini/lib/bitmap"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/tracing"
 )
 
 type LocationCursor struct {
@@ -225,5 +226,14 @@ func (l *LocationCursor) ReadData(filterOpts *FilterOptions, dst *record.Record,
 			filterRec.Reuse()
 		}
 		l.pos++
+	}
+}
+
+func (l *LocationCursor) SetSpan(span *tracing.Span) {
+	for _, loc := range l.lcs {
+		if loc == nil || loc.span == nil {
+			continue
+		}
+		loc.SetSpan(span)
 	}
 }

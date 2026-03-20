@@ -98,7 +98,7 @@ func TestRecoverDatabase(t *testing.T) {
 	fullBackupPath := "/tmp/openGemini/backup_dir/backup"
 	incBackupPath := "/tmp/openGemini/backup_dir/backup_inc"
 
-	recoverConfig := &recover2.RecoverConfig{
+	opt := &recover2.RecoverOptions{
 		RecoverMode:        "2",
 		FullBackupDataPath: fullBackupPath,
 		IncBackupDataPath:  incBackupPath,
@@ -106,13 +106,13 @@ func TestRecoverDatabase(t *testing.T) {
 		DataDir:            "/tmp/openGemini/backup_dir/data",
 	}
 
-	result := backup.BackupResult{Result: "success", DataBases: map[string]struct{}{"prom": {}}}
+	result := backup.BackupResult{Result: "success", Databases: map[string]struct{}{"prom": {}}}
 	b, _ := json.Marshal(result)
 	_ = backup.WriteBackupLogFile(b, fullBackupPath, backup.ResultLog)
 	_ = backup.WriteBackupLogFile(b, incBackupPath, backup.ResultLog)
 
 	t.Run("1", func(t *testing.T) {
-		err := recover2.BackupRecover(recoverConfig)
+		err := opt.BackupRecover()
 		if err == nil {
 			t.Fail()
 		}
@@ -192,7 +192,8 @@ type MockIStore struct {
 func (s *MockIStore) MeteRecover() {
 
 }
-func (s *MockIStore) leaderHTTP() string {
+
+func (s *MockIStore) LeaderHTTP() string {
 	return ""
 }
 
@@ -255,6 +256,15 @@ func (s *MockIStore) ModifyRepDBMasterPt(db string, rgId uint32, newMasterPtId u
 func (s *MockIStore) RecoverMetaData(databases []string, metaData []byte, node map[uint64]uint64) error {
 	return nil
 }
+func (s *MockIStore) GetConfig() *config.Meta {
+	return nil
+}
+
+func (s *MockIStore) RestoreData(metaHost string) error {
+	return nil
+}
+
+func (s *MockIStore) forceMetaData(*meta2.Data) error { return nil }
 
 func TestServeExpandGroups(t *testing.T) {
 	handler := newHttpHandler(&config.Meta{}, &MockIStore{})

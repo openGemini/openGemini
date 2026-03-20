@@ -18,10 +18,13 @@ import (
 	"fmt"
 	"hash/crc32"
 
+	"github.com/RoaringBitmap/roaring"
 	"github.com/openGemini/openGemini/lib/fragment"
 	"github.com/openGemini/openGemini/lib/numberenc"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 )
 
 const (
@@ -29,22 +32,50 @@ const (
 	CRCLen           = 4
 )
 
+type ClusterIndex interface {
+	Query(expr influxql.Expr) (*roaring.Bitmap, error)
+	GetRowCount(expr influxql.Expr) (uint64, error)
+}
+
 type PKInfo struct {
+	pkType     string
 	tcLocation int8
 	rec        *record.Record
 	mark       fragment.IndexFragment
+	ci         ClusterIndex
+	columns    map[string]int
 }
 
-func NewPKInfo(rec *record.Record, mark fragment.IndexFragment, tcLocation int8) *PKInfo {
-	return &PKInfo{
+func NewPKInfo(rec *record.Record, mark fragment.IndexFragment, pkType string, tcLocation int8) *PKInfo {
+	pki := &PKInfo{
+		pkType:     pkType,
 		tcLocation: tcLocation,
 		rec:        rec,
 		mark:       mark,
 	}
+	pki.BuildColumnMap()
+	return pki
+}
+
+func (p *PKInfo) IsClusterIndex() bool {
+	return p.pkType == meta.PrimaryKeyTypeCluster
+}
+
+func (p *PKInfo) SetPkType(typ string) {
+	p.pkType = typ
+}
+
+func (p *PKInfo) GetPkType() string {
+	return p.pkType
 }
 
 func (p *PKInfo) GetTCLocation() int8 {
 	return p.tcLocation
+}
+
+func (p *PKInfo) SetRec(rec *record.Record) {
+	p.rec = rec
+	p.BuildColumnMap()
 }
 
 func (p *PKInfo) GetRec() *record.Record {
@@ -53,6 +84,33 @@ func (p *PKInfo) GetRec() *record.Record {
 
 func (p *PKInfo) GetMark() fragment.IndexFragment {
 	return p.mark
+}
+
+func (p *PKInfo) SetClusterIndex(ci ClusterIndex) {
+	p.ci = ci
+}
+
+func (p *PKInfo) GetClusterIndex() ClusterIndex {
+	return p.ci
+}
+
+func (p *PKInfo) GetColumnMap() map[string]int {
+	return p.columns
+}
+
+func (p *PKInfo) BuildColumnMap() {
+	p.columns = make(map[string]int)
+	if p.rec == nil {
+		return
+	}
+
+	for i := range p.rec.Schema {
+		field := &p.rec.Schema[i]
+		if field.Name == record.TimeField || field.Name == record.FragmentField {
+			continue
+		}
+		p.columns[field.Name] = i
+	}
 }
 
 type PkMetaBlock struct {

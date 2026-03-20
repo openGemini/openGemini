@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/rand/v2"
 	"net"
 	"path"
 	"path/filepath"
@@ -44,16 +45,15 @@ import (
 	mclient "github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/netstorage"
 	"github.com/openGemini/openGemini/lib/obs"
-	"github.com/openGemini/openGemini/lib/rand"
 	"github.com/openGemini/openGemini/lib/spdy/transport"
 	sp "github.com/openGemini/openGemini/lib/statisticsPusher"
 	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	mproto "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
-	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
 )
 
 // Retention policy settings.
@@ -412,6 +412,7 @@ type Store struct {
 		SendSegregateNodeCmds(nodeIDs []uint64, address []string) (int, error)
 		TransferLeadership(database string, nodeId uint64, oldMasterPtId, newMasterPtId uint32) error
 		SendClearEvents(nodeId uint64, data transport.Codec) error
+		GetRPPTWriteStatus(node *meta.DataNode, db, rp string) (meta.PTMstWriteStatus, error)
 	}
 
 	statMu       sync.RWMutex
@@ -491,6 +492,7 @@ func (s *Store) checkLeaderChanged() {
 					globalService.balanceManager.Start()
 					globalService.clusterManager.Start()
 					globalService.masterPtBalanceManager.Start()
+					globalService.rpPtBalanceManager.Start()
 				}
 
 				s.deleteWg.Add(3)
@@ -508,6 +510,7 @@ func (s *Store) checkLeaderChanged() {
 				globalService.clusterManager.Stop()
 				globalService.balanceManager.Stop()
 				globalService.masterPtBalanceManager.Stop()
+				globalService.rpPtBalanceManager.Stop()
 				globalService.msm.Stop()
 			}
 			s.deleteWg.Wait()
@@ -892,11 +895,10 @@ func (s *Store) GetMarshalData(parts []string) ([]byte, error) {
 	return json.Marshal(newData)
 }
 
-// setData is used for ut test
 func (s *Store) SetData(data *meta.Data) {
-	s.mu.RLock()
+	s.mu.Lock()
 	s.data = data
-	s.mu.RUnlock()
+	s.mu.Unlock()
 }
 
 // peers returns the raft peers known to this Store
@@ -979,7 +981,8 @@ func (s *Store) saveMetadataStatistics() {
 
 func (s *Store) serveSnapshot() {
 	defer s.wg.Done()
-	checkTime := time.After(updateCacheInterval)
+	ticker := time.NewTicker(updateCacheInterval)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-s.dataChanged:
@@ -988,11 +991,10 @@ func (s *Store) serveSnapshot() {
 			}
 		case <-s.closing:
 			return
-		case <-checkTime:
+		case <-ticker.C:
 			if s.index() > s.cacheIndex() {
 				s.updateCacheData()
 			}
-			checkTime = time.After(updateCacheInterval)
 		}
 	}
 }
@@ -1325,9 +1327,7 @@ func (s *Store) deleteDatabaseMetadata(database string) error {
 	}
 	t := mproto.Command_DropDatabaseCommand
 	cmd := &mproto.Command{Type: &t}
-	if err := proto.SetExtension(cmd, mproto.E_DropDatabaseCommand_Command, val); err != nil {
-		return err
-	}
+	proto.SetExtension(cmd, mproto.E_DropDatabaseCommand_Command, val)
 	return s.ApplyCmd(cmd)
 }
 
@@ -1338,9 +1338,7 @@ func (s *Store) deleteRpMetadata(database string, policy string) error {
 	}
 	t := mproto.Command_DropRetentionPolicyCommand
 	cmd := &mproto.Command{Type: &t}
-	if err := proto.SetExtension(cmd, mproto.E_DropRetentionPolicyCommand_Command, val); err != nil {
-		return err
-	}
+	proto.SetExtension(cmd, mproto.E_DropRetentionPolicyCommand_Command, val)
 	return s.ApplyCmd(cmd)
 }
 
@@ -1352,9 +1350,7 @@ func (s *Store) deleteMeasurementMetaData(database, policy, measurement string) 
 	}
 	t := mproto.Command_DropMeasurementCommand
 	cmd := &mproto.Command{Type: &t}
-	if err := proto.SetExtension(cmd, mproto.E_DropMeasurementCommand_Command, val); err != nil {
-		return err
-	}
+	proto.SetExtension(cmd, mproto.E_DropMeasurementCommand_Command, val)
 	return s.ApplyCmd(cmd)
 }
 
@@ -1425,9 +1421,7 @@ func (s *Store) UpdateNodeTmpIndex(role mclient.Role, index uint64, nodeId uint6
 
 	t := mproto.Command_UpdateNodeTmpIndexCommand
 	cmd := &mproto.Command{Type: &t}
-	if err := proto.SetExtension(cmd, mproto.E_UpdateNodeTmpIndexCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, mproto.E_UpdateNodeTmpIndexCommand_Command, val)
 
 	err := s.ApplyCmd(cmd)
 	if err != nil {
@@ -1553,9 +1547,9 @@ func (s *Store) leader() string {
 	return s.raft.Leader()
 }
 
-// leaderHTTP returns the http address what the Store thinks is the current leader. An empty
+// LeaderHTTP returns the http address what the Store thinks is the current leader. An empty
 // string indicates no leader exists.
-func (s *Store) leaderHTTP() string {
+func (s *Store) LeaderHTTP() string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.raft == nil {
@@ -1567,10 +1561,17 @@ func (s *Store) leaderHTTP() string {
 		return leader
 	}
 
+	leaderHost, _, err := net.SplitHostPort(leader)
+	if err != nil {
+		logger.GetLogger().Error("split leader host error", zap.String("host", leader), zap.Error(err))
+		return ""
+	}
+
+	namedLeader := config.CombineDomain(s.config.Domain, leader)
 	var addr string
 	for _, node := range s.data.MetaNodes {
-		if leader == node.TCPHost {
-			addr = node.Host
+		if namedLeader == node.TCPHost {
+			addr = config.CombineDomain(leaderHost, node.Host)
 			break
 		}
 	}
@@ -1643,13 +1644,11 @@ func (s *Store) createMetaNode(httpAddr, rpcAddr, raftAddr string) error {
 		HTTPAddr: proto.String(httpAddr),
 		RPCAddr:  proto.String(rpcAddr),
 		TCPAddr:  proto.String(raftAddr),
-		Rand:     proto.Uint64(uint64(rand.Int63())),
+		Rand:     proto.Uint64(uint64(rand.Int64())),
 	}
 	t := mproto.Command_CreateMetaNodeCommand
 	cmd := &mproto.Command{Type: &t}
-	if err := proto.SetExtension(cmd, mproto.E_CreateMetaNodeCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, mproto.E_CreateMetaNodeCommand_Command, val)
 
 	return s.ApplyCmd(cmd)
 }
@@ -1662,13 +1661,11 @@ func (s *Store) setMetaNode(addr, rpcAddr, raftAddr string) error {
 		HTTPAddr: proto.String(addr),
 		RPCAddr:  proto.String(rpcAddr),
 		TCPAddr:  proto.String(raftAddr),
-		Rand:     proto.Uint64(uint64(rand.Int63())),
+		Rand:     proto.Uint64(uint64(rand.Int64())),
 	}
 	t := mproto.Command_SetMetaNodeCommand
 	cmd := &mproto.Command{Type: &t}
-	if err := proto.SetExtension(cmd, mproto.E_SetMetaNodeCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, mproto.E_SetMetaNodeCommand_Command, val)
 
 	return s.ApplyCmd(cmd)
 }
@@ -1744,9 +1741,7 @@ func (s *Store) reSharding(db string, rp string, sgId uint64, splitTime int64, s
 		ShardBounds:  shardBounds}
 	t := mproto.Command_ReShardingCommand
 	cmd := &mproto.Command{Type: &t}
-	if err := proto.SetExtension(cmd, mproto.E_ReShardingCommand_Command, val); err != nil {
-		return err
-	}
+	proto.SetExtension(cmd, mproto.E_ReShardingCommand_Command, val)
 
 	return s.ApplyCmd(cmd)
 }
@@ -1782,7 +1777,7 @@ func (s *Store) UpdateLoad(b []byte) error {
 		return fmt.Errorf("err command type")
 	}
 
-	ext, _ := proto.GetExtension(&cmd, mproto.E_ReportShardsLoadCommand_Command)
+	ext := proto.GetExtension(&cmd, mproto.E_ReportShardsLoadCommand_Command)
 	v := ext.(*mproto.ReportShardsLoadCommand)
 	res := make(chan *reShardingRes)
 	reShardingNum := 0
@@ -1854,6 +1849,11 @@ func (s *Store) UpdateLoad(b []byte) error {
 	return nil
 }
 
+func (s *Store) forceMetaData(data *meta.Data) error {
+	s.SetData(data)
+	return s.userSnapshot(uint32(s.GetConfig().Version))
+}
+
 func (s *Store) createDataNode(writeHost, queryHost, role, az string) ([]byte, error) {
 	val := &mproto.CreateDataNodeCommand{
 		HTTPAddr: proto.String(writeHost),
@@ -1864,9 +1864,7 @@ func (s *Store) createDataNode(writeHost, queryHost, role, az string) ([]byte, e
 	logger.GetLogger().Info("create data node start")
 	t := mproto.Command_CreateDataNodeCommand
 	cmd := &mproto.Command{Type: &t}
-	if err := proto.SetExtension(cmd, mproto.E_CreateDataNodeCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, mproto.E_CreateDataNodeCommand_Command, val)
 
 	err := s.ApplyCmd(cmd)
 	if err != nil {
@@ -1909,9 +1907,7 @@ func (s *Store) CreateSqlNode(httpHost string, gossipAddr string) ([]byte, error
 
 	t := mproto.Command_CreateSqlNodeCommand
 	cmd := &mproto.Command{Type: &t}
-	if err := proto.SetExtension(cmd, mproto.E_CreateSqlNodeCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, mproto.E_CreateSqlNodeCommand_Command, val)
 
 	err := s.ApplyCmd(cmd)
 	if err != nil {
@@ -2028,7 +2024,7 @@ func (s *Store) getMeasurementsInfo(dbName, rpName string) ([]byte, error) {
 }
 
 func (s *Store) getTimeRange(cmd *mproto.Command) ([]byte, error) {
-	ext, _ := proto.GetExtension(cmd, mproto.E_TimeRangeCommand_Command)
+	ext := proto.GetExtension(cmd, mproto.E_TimeRangeCommand_Command)
 	v := ext.(*mproto.TimeRangeCommand)
 	s.cacheMu.RLock()
 	defer s.cacheMu.RUnlock()
@@ -2051,7 +2047,7 @@ func (s *Store) getTimeRange(cmd *mproto.Command) ([]byte, error) {
 func (s *Store) getTimeRangeV2(cmd *mproto.Command) ([]byte, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	ext, _ := proto.GetExtension(cmd, mproto.E_TimeRangeCommand_Command)
+	ext := proto.GetExtension(cmd, mproto.E_TimeRangeCommand_Command)
 	v, ok := ext.(*mproto.TimeRangeCommand)
 	if !ok {
 		panic(fmt.Errorf("%s is not a TimeRangeCommand", ext))
@@ -2073,7 +2069,7 @@ func (s *Store) getTimeRangeV2(cmd *mproto.Command) ([]byte, error) {
 }
 
 func (s *Store) getDurationInfo(cmd *mproto.Command) ([]byte, error) {
-	ext, _ := proto.GetExtension(cmd, mproto.E_ShardDurationCommand_Command)
+	ext := proto.GetExtension(cmd, mproto.E_ShardDurationCommand_Command)
 	v := ext.(*mproto.ShardDurationCommand)
 	s.mu.RLock()
 	dbPtIds := s.getDbPtsByNodeId(v.GetNodeId())
@@ -2090,10 +2086,7 @@ func (s *Store) getDurationInfo(cmd *mproto.Command) ([]byte, error) {
 func (s *Store) getDurationInfoV2(cmd *mproto.Command) ([]byte, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	ext, err := proto.GetExtension(cmd, mproto.E_ShardDurationCommand_Command)
-	if err != nil {
-		return nil, fmt.Errorf("%s is not a E_ShardDurationCommand_Command", ext)
-	}
+	ext := proto.GetExtension(cmd, mproto.E_ShardDurationCommand_Command)
 	v, ok := ext.(*mproto.ShardDurationCommand)
 	if !ok {
 		return nil, fmt.Errorf("%s is not a ShardDurationCommand", ext)
@@ -2109,12 +2102,9 @@ func (s *Store) getDurationInfoV2(cmd *mproto.Command) ([]byte, error) {
 func (s *Store) GetIndexDurationInfo(cmd *mproto.Command) ([]byte, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	ext, err := proto.GetExtension(cmd, mproto.E_IndexDurationCommand_Command)
-	if err != nil {
-		return nil, fmt.Errorf("%s is not a E_IndexDurationCommand_Command", ext)
-	}
+	ext := proto.GetExtension(cmd, mproto.E_IndexDurationCommand_Command)
 	v, ok := ext.(*mproto.IndexDurationCommand)
-	if !ok {
+	if !ok || v == nil {
 		return nil, fmt.Errorf("%s is not a IndexDurationCommand", ext)
 	}
 	dbPtIds := s.getDbPtsByNodeId(v.GetNodeId())
@@ -2172,9 +2162,7 @@ func (s *Store) updateNodeStatus(id uint64, status int32, lTime uint64, gossipPo
 		GossipAddr: proto.String(gossipPort)}
 	t := mproto.Command_UpdateNodeStatusCommand
 	cmd := &mproto.Command{Type: &t}
-	if err := proto.SetExtension(cmd, mproto.E_UpdateNodeStatusCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, mproto.E_UpdateNodeStatusCommand_Command, val)
 
 	err := s.ApplyCmd(cmd)
 	if err != nil {
@@ -2196,9 +2184,7 @@ func (s *Store) UpdateSqlNodeStatus(id uint64, status int32, lTime uint64, gossi
 		GossipAddr: proto.String(gossipPort)}
 	t := mproto.Command_UpdateSqlNodeStatusCommand
 	cmd := &mproto.Command{Type: &t}
-	if err := proto.SetExtension(cmd, mproto.E_UpdateSqlNodeStatusCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, mproto.E_UpdateSqlNodeStatusCommand_Command, val)
 
 	err := s.ApplyCmd(cmd)
 	if err != nil {
@@ -2215,9 +2201,7 @@ func (s *Store) UpdateMetaNodeStatus(id uint64, status int32, lTime uint64, goss
 		GossipAddr: proto.String(gossipPort)}
 	t := mproto.Command_UpdateMetaNodeStatusCommand
 	cmd := &mproto.Command{Type: &t}
-	if err := proto.SetExtension(cmd, mproto.E_UpdateMetaNodeStatusCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, mproto.E_UpdateMetaNodeStatusCommand_Command, val)
 
 	err := s.ApplyCmd(cmd)
 	if err != nil {
@@ -2243,9 +2227,7 @@ func (s *Store) updateReplication(database string, rgId uint32, masterId uint32,
 		Peers:      mPeers}
 	t := mproto.Command_UpdateReplicationCommand
 	cmd := &mproto.Command{Type: &t}
-	if err := proto.SetExtension(cmd, mproto.E_UpdateReplicationCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, mproto.E_UpdateReplicationCommand_Command, val)
 
 	return s.ApplyCmd(cmd)
 }
@@ -2279,9 +2261,7 @@ func (s *Store) removeEvent(eventId string) error {
 
 	t := mproto.Command_RemoveEventCommand
 	cmd := &mproto.Command{Type: &t}
-	if err := proto.SetExtension(cmd, mproto.E_RemoveEventCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, mproto.E_RemoveEventCommand_Command, val)
 	return s.ApplyCmd(cmd)
 }
 
@@ -2291,9 +2271,7 @@ func (s *Store) createMigrateEvent(e MigrateEvent) error {
 	}
 	t := mproto.Command_CreateEventCommand
 	cmd := &mproto.Command{Type: &t}
-	if err := proto.SetExtension(cmd, mproto.E_CreateEventCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, mproto.E_CreateEventCommand_Command, val)
 	return s.ApplyCmd(cmd)
 }
 
@@ -2303,9 +2281,7 @@ func (s *Store) updateMigrateEvent(e MigrateEvent) error {
 	}
 	t := mproto.Command_UpdateEventCommand
 	cmd := &mproto.Command{Type: &t}
-	if err := proto.SetExtension(cmd, mproto.E_UpdateEventCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, mproto.E_UpdateEventCommand_Command, val)
 	return s.ApplyCmd(cmd)
 }
 
@@ -2321,9 +2297,7 @@ func (s *Store) updatePtInfo(db string, ptInfo *meta.PtInfo, ownerNode uint64, s
 	}
 	t := mproto.Command_UpdatePtInfoCommand
 	cmd := &mproto.Command{Type: &t}
-	if err := proto.SetExtension(cmd, mproto.E_UpdatePtInfoCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, mproto.E_UpdatePtInfoCommand_Command, val)
 	return s.ApplyCmd(cmd)
 }
 
@@ -2418,9 +2392,7 @@ func (s *Store) ExpandGroups() error {
 	val := &mproto.ExpandGroupsCommand{}
 	t := mproto.Command_ExpandGroupsCommand
 	cmd := &mproto.Command{Type: &t}
-	if err := proto.SetExtension(cmd, mproto.E_ExpandGroupsCommand_Command, val); err != nil {
-		return err
-	}
+	proto.SetExtension(cmd, mproto.E_ExpandGroupsCommand_Command, val)
 
 	return s.ApplyCmd(cmd)
 }
@@ -2432,9 +2404,7 @@ func (s *Store) updatePtVersion(db string, ptId uint32) error {
 	}
 	t := mproto.Command_UpdatePtVersionCommand
 	cmd := &mproto.Command{Type: &t}
-	if err := proto.SetExtension(cmd, mproto.E_UpdatePtVersionCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, mproto.E_UpdatePtVersionCommand_Command, val)
 	return s.ApplyCmd(cmd)
 }
 
@@ -2520,9 +2490,7 @@ func (s *Store) registerQueryIDOffset(host meta.SQLHost) (uint64, error) {
 	}
 	t := mproto.Command_RegisterQueryIDOffsetCommand
 	cmd := &mproto.Command{Type: &t}
-	if err := proto.SetExtension(cmd, mproto.E_RegisterQueryIDOffsetCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, mproto.E_RegisterQueryIDOffsetCommand_Command, val)
 
 	err := s.ApplyCmd(cmd)
 	if err != nil {
@@ -2799,9 +2767,7 @@ func (s *Store) RemoveNode(nodeIds []uint64) error {
 	}
 	t := mproto.Command_RemoveNodeCommand
 	cmd := &mproto.Command{Type: &t}
-	if err := proto.SetExtension(cmd, mproto.E_RemoveNodeCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, mproto.E_RemoveNodeCommand_Command, val)
 	err := s.ApplyCmd(cmd)
 	if err != nil {
 		return err
@@ -2832,9 +2798,7 @@ func (s *Store) SetSegregateNodeStatus(status []uint64, nodeIds []uint64) error 
 	}
 	t := mproto.Command_SetNodeSegregateStatusCommand
 	cmd := &mproto.Command{Type: &t}
-	if err := proto.SetExtension(cmd, mproto.E_SetNodeSegregateStatusCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, mproto.E_SetNodeSegregateStatusCommand_Command, val)
 	err := s.ApplyCmd(cmd)
 	if err != nil {
 		return err
@@ -2901,9 +2865,7 @@ func (s *Store) recoverMetaData(databases []string, metaData []byte, nodeMap map
 	}
 	t := mproto.Command_RecoverMetaData
 	cmd := &mproto.Command{Type: &t}
-	if err := proto.SetExtension(cmd, mproto.E_RecoverMetaDataCommand_Command, val); err != nil {
-		return err
-	}
+	proto.SetExtension(cmd, mproto.E_RecoverMetaDataCommand_Command, val)
 
 	return s.ApplyCmd(cmd)
 }
@@ -2947,7 +2909,7 @@ func (s *Store) ShowCluster(body []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	ext, _ := proto.GetExtension(&cmd, mproto.E_ShowClusterCommand_Command)
+	ext := proto.GetExtension(&cmd, mproto.E_ShowClusterCommand_Command)
 	v, ok := ext.(*mproto.ShowClusterCommand)
 	if !ok {
 		panic(fmt.Errorf("%s is not a ShowClusterCommand", ext))
@@ -3023,4 +2985,39 @@ func (s *Store) GetFailedDbPtsForRep(ownerNode uint64, status meta.PtStatus) (ma
 		}
 	}
 	return rgPtInfoMap, resPtInfos
+}
+
+func (s *Store) GetConfig() *config.Meta {
+	return s.config
+}
+
+func (s *Store) RestoreData(dataHost string) error {
+	if !s.IsLeader() {
+		return errno.NewError(errno.MetaIsNotLeader)
+	}
+	if dataHost == "" {
+		return fmt.Errorf("data hosts cannot be empty")
+	}
+	dataHosts := strings.Split(dataHost, ",")
+	validHosts := make([]string, 0)
+	for _, host := range dataHosts {
+		if host != "" {
+			validHosts = append(validHosts, host)
+		}
+	}
+	if len(validHosts) == 0 {
+		return fmt.Errorf("valid hosts cannot be empty")
+	}
+	val := &mproto.ClearUselessDataNodeCommand{
+		DataHosts: validHosts,
+	}
+	t := mproto.Command_ClearUselessDataNodeCommand
+	cmd := &mproto.Command{Type: &t}
+	proto.SetExtension(cmd, mproto.E_ClearUselessDataNodeCommand_Command, val)
+
+	err := s.ApplyCmd(cmd)
+	if err != nil {
+		return err
+	}
+	return nil
 }

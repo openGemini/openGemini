@@ -21,9 +21,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/openGemini/openGemini/lib/raftconn"
 	"github.com/openGemini/openGemini/lib/raftlog"
+	"github.com/openGemini/openGemini/lib/util/lifted/encoding"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/require"
 	"go.etcd.io/etcd/raft/v3"

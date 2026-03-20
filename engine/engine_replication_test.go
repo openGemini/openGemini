@@ -118,7 +118,9 @@ func TestSendRaftMessage_PartitionNodeIsNil(t *testing.T) {
 	assert1.NoError(t, err)
 }
 
-type mockNode struct{}
+type mockNode struct {
+	storage *raftlog.RaftDiskStorage
+}
 
 func (n mockNode) GetProposeC() chan []byte {
 
@@ -154,6 +156,10 @@ func (n mockNode) RemoveCommittedDataC(dw *raftlog.DataWrapper) {
 }
 
 func (n mockNode) RetCommittedDataC(dw *raftlog.DataWrapper, err error) {
+}
+
+func (n *mockNode) GetStorage() *raftlog.RaftDiskStorage {
+	return n.storage
 }
 
 func TestSendRaftMessage_Success(t *testing.T) {

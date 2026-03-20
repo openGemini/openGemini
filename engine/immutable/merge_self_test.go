@@ -21,6 +21,7 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/require"
 )
@@ -29,7 +30,7 @@ func TestMergeSelf(t *testing.T) {
 	var begin int64 = 1e12
 	defer beforeTest(t, 0)()
 	conf := config.GetStoreConfig()
-	conf.Merge.MergeSelfOnly = true
+	conf.Merge.UnorderedMergeSelf = true
 
 	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
 	defer mh.store.Close()
@@ -55,7 +56,7 @@ func TestMergeSelf(t *testing.T) {
 	mh.addRecord(100, rg.generate(schema, 10))
 	require.NoError(t, mh.saveToUnordered())
 
-	conf.Merge.MergeSelfOnly = false
+	conf.Merge.UnorderedMergeSelf = false
 	err := mh.store.MergeOutOfOrder(1, false, true)
 	require.NoError(t, err)
 	mh.store.Wait()
@@ -68,7 +69,7 @@ func TestMergeSelf_Stop(t *testing.T) {
 	var begin int64 = 1e12
 	defer beforeTest(t, 0)()
 	conf := config.GetStoreConfig()
-	conf.Merge.MergeSelfOnly = true
+	conf.Merge.UnorderedMergeSelf = true
 	conf.Merge.StreamMergeModeLevel = 2
 
 	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
@@ -139,16 +140,10 @@ func TestMergeOneFile(t *testing.T) {
 }
 
 func TestCompactUnordered(t *testing.T) {
-	var run = func(rowCount int) {
+	var run = func(rowCount int, mode int32) {
 		var begin int64 = 1e12
 		defer beforeTest(t, 0)()
-		conf := config.GetStoreConfig()
-		conf.Compact.CorrectTimeDisorder = true
-		conf.Compact.CompactionMethod = 1
-		defer func() {
-			conf.Compact.CompactionMethod = 0
-			conf.Compact.CorrectTimeDisorder = false
-		}()
+		immutable.SetMergeFlag4TsStore(mode)
 
 		mh := NewMergeTestHelper(immutable.NewTsStoreConfig())
 		defer mh.store.Close()
@@ -162,17 +157,20 @@ func TestCompactUnordered(t *testing.T) {
 		require.NoError(t, mh.mergeAndCompact(false))
 		require.NoError(t, compareRecords(mh.readExpectRecord(), mh.readMergedRecord()))
 	}
-	run(1)
-	run(10)
+	flag := immutable.GetMergeFlag4TsStore()
+	defer immutable.SetMergeFlag4TsStore(flag)
+
+	run(10, util.StreamingCompact)
+	run(10, util.NonStreamingCompact)
 }
 
 func TestMergeInParquetProcess(t *testing.T) {
 	var begin int64 = 1e12
 	defer beforeTest(t, 0)()
 	conf := config.GetStoreConfig()
-	conf.Merge.MergeSelfOnly = true
+	conf.Merge.UnorderedMergeSelf = true
 	defer func() {
-		conf.Merge.MergeSelfOnly = false
+		conf.Merge.UnorderedMergeSelf = false
 	}()
 
 	mh := NewMergeTestHelper(immutable.NewTsStoreConfig())

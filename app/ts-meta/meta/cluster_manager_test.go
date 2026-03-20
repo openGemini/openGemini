@@ -15,6 +15,7 @@
 package meta
 
 import (
+	"fmt"
 	"net"
 	"strconv"
 	"strings"
@@ -530,7 +531,10 @@ func TestClusterManager_PassiveTakeOver_WhenDropDB(t *testing.T) {
 }
 
 func TestClusterManager_getTakeoverNode(t *testing.T) {
-	c := CreateClusterManager()
+	dir := strings.ReplaceAll(t.TempDir(), "\\", "/")
+	c, err := newWAFClusterManager(dir, []uint64{})
+	require.NoError(t, err)
+
 	c.memberIds[1] = struct{}{}
 	nid, err := c.getTakeOverNode(c, 1, nil, false)
 	assert.Equal(t, nil, err)
@@ -939,4 +943,44 @@ func TestClusterManagerProcessEventFail(t *testing.T) {
 	e1 := generateMemberEvent(serf.EventMemberJoin, "1", 1, serf.StatusAlive)
 	c.eventWg.Add(1)
 	c.processEvent(*e1, "")
+}
+
+func TestIsNodeAlive(t *testing.T) {
+	dir := strings.ReplaceAll(t.TempDir(), "\\", "/")
+	c, err := newWAFClusterManager(dir, []uint64{10})
+	require.NoError(t, err)
+
+	c.SetMemberIds(map[uint64]struct{}{
+		1: {},
+	})
+
+	require.True(t, c.isNodeAlive(1))
+	require.False(t, c.isNodeAlive(2))
+	require.True(t, c.isNodeAlive(10))
+}
+
+func newWAFClusterManager(dir string, aliveNodes []uint64) (*ClusterManager, error) {
+	mms, err := BuildMockMetaService(dir, testIp)
+	if err != nil {
+		return nil, err
+	}
+	_ = config.SetHaPolicy(config.WAFPolicy)
+	c := CreateClusterManager()
+
+	data := &meta.Data{
+		DataNodes: []meta.DataNode{},
+	}
+	for _, id := range aliveNodes {
+		data.DataNodes = append(data.DataNodes, meta.DataNode{
+			NodeInfo: meta.NodeInfo{
+				ID:      id,
+				Status:  serf.StatusAlive,
+				TCPHost: fmt.Sprintf("127.0.0.1:%d", id),
+			},
+		})
+	}
+
+	mms.GetStore().SetData(data)
+	c.store = mms.GetStore()
+	return c, nil
 }

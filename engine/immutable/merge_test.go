@@ -17,13 +17,13 @@ package immutable_test
 import (
 	"bytes"
 	"fmt"
+	"math/rand/v2"
 	"reflect"
 	"sort"
 	"time"
 
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/lib/config"
-	"github.com/openGemini/openGemini/lib/rand"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"

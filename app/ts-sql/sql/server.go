@@ -26,6 +26,7 @@ import (
 	"github.com/openGemini/openGemini/app"
 	"github.com/openGemini/openGemini/coordinator"
 	"github.com/openGemini/openGemini/engine/executor"
+	"github.com/openGemini/openGemini/lib/compress"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/errno"
@@ -43,6 +44,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/auth"
 	coordinator2 "github.com/openGemini/openGemini/lib/util/lifted/influx/coordinator"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/httpd"
+	httpconfig "github.com/openGemini/openGemini/lib/util/lifted/influx/httpd/config"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/validation"
@@ -100,6 +102,8 @@ type Server struct {
 	ctx          context.Context
 	ctxCancel    context.CancelFunc
 	serfInstance *serf.Serf
+
+	monitorPass string
 }
 
 // updateTLSConfig stores with into the tls config pointed at by into but only if with is not nil
@@ -124,6 +128,7 @@ func NewServer(conf config.Config, info app.ServerInfo, logger *Logger.Logger) (
 	// not already specified (set the default).
 	updateTLSConfig(&c.HTTP.TLS, tlsConfig)
 	config.SetShelfMode(c.ShelfMode)
+	config.SetAdaptiveShardEnabled(c.Meta.AdaptiveShardingEnabled)
 
 	metaMaxConcurrentWriteLimit := 64
 	if c.HTTP.MaxConcurrentWriteLimit != 0 && c.HTTP.MaxEnqueuedWriteLimit != 0 {
@@ -161,11 +166,17 @@ func NewServer(conf config.Config, info app.ServerInfo, logger *Logger.Logger) (
 	}
 	config.SetSubscriptionEnable(s.config.Subscriber.Enabled)
 
+	config.SetCoordinatorConfig(c.Coordinator)
+	httpconfig.SetHttpConfig(c.HTTP)
 	syscontrol.SysCtrl.MetaClient = s.MetaClient
 	// set query schema limit
 	syscontrol.SetQuerySchemaLimit(c.SelectSpec.QuerySchemaLimit)
 	syscontrol.SetParallelQueryInBatch(c.HTTP.ParallelQueryInBatch)
+	if err = config.UpdateTimeZoneLoc(s.config.Meta.ShardGroupTimeZone); err != nil {
+		s.Logger.Warn("invaild time zone config, use default time zone (UTC)", zap.Error(err))
+	}
 
+	syscontrol.SetDatabaselimit(s.config.Coordinator.DatabaseNumLimit)
 	s.initQueryExecutor(c)
 
 	s.initStatisticsPusher()
@@ -173,7 +184,9 @@ func NewServer(conf config.Config, info app.ServerInfo, logger *Logger.Logger) (
 	syscontrol.SetQueryParallel(int64(c.HTTP.ChunkReaderParallel))
 	syscontrol.SetTimeFilterProtection(c.HTTP.TimeFilterProtection)
 	syscontrol.UpdateNodeReadonly(c.Data.Readonly)
+	syscontrol.UpdateNodeEnableReadonlyWrite(c.Data.EnableReadonlyWrite)
 	executor.IgnoreEmptyTag = c.Common.IgnoreEmptyTag
+	compress.SetGzipCompressLevel(c.HTTP.GzipLevel)
 
 	machine.InitMachineID(c.HTTP.BindAddress)
 
@@ -209,9 +222,9 @@ func NewServer(conf config.Config, info app.ServerInfo, logger *Logger.Logger) (
 func newServer(info app.ServerInfo, logger *Logger.Logger, c *config.TSSql, metaMaxConcurrentWriteLimit int) *Server {
 	// new continuous query service
 	var cqService *continuousquery.Service
-	if c.ContinuousQuery.Enabled {
+	if c.ContinuousQuery.Enabled && !c.Common.TaskNodeEnabled {
 		hostname := config.CombineDomain(c.HTTP.Domain, c.HTTP.BindAddress)
-		cqService = continuousquery.NewService(hostname, time.Duration(c.ContinuousQuery.RunInterval), c.ContinuousQuery.MaxProcessCQNumber)
+		cqService = continuousquery.NewService(hostname, c.ContinuousQuery)
 		cqService.WithLogger(logger)
 	}
 
@@ -246,6 +259,7 @@ func (s *Server) initWriter() {
 
 	s.PointsWriter = coordinator.NewPointsWriter(time.Duration(conf.ShardWriterTimeout))
 	s.PointsWriter.TSDBStore = s.TSDBStore
+	s.PointsWriter.ApplyMstBlacklist(conf.MeasurementBlacklist)
 	go s.PointsWriter.ApplyTimeRangeLimit(conf.TimeRangeLimit)
 
 	s.RPCRecordWriter = writer.NewRecordWriter(s.MetaClient, time.Duration(conf.WriteTimeout))
@@ -328,6 +342,7 @@ func (s *Server) initQueryExecutor(c *config.TSSql) {
 	s.QueryExecutor.TaskManager.Register = s.MetaClient
 	s.QueryExecutor.TaskManager.Host = config.CombineDomain(c.HTTP.Domain, c.HTTP.BindAddress)
 	config.SetHardWrite(c.Coordinator.HardWrite)
+	config.SetSmartQuery(c.Coordinator.SmartQuery)
 
 	s.httpService.Handler.QueryExecutor = s.QueryExecutor
 	if s.cqService != nil {
@@ -552,7 +567,7 @@ func (s *Server) initializeMetaClient() error {
 			panic(err)
 		}
 		s.MetaClient.SetNode(nid, clock)
-		err = s.MetaClient.Open()
+		err = s.MetaClient.Open(meta.SQL)
 		if err != nil {
 			return err
 		}
@@ -569,6 +584,11 @@ type Service interface {
 func (s *Server) initStatisticsPusher() {
 	if !s.config.Monitor.StoreEnabled {
 		return
+	}
+
+	if s.monitorPass != "" {
+		s.config.Monitor.Password = s.monitorPass
+		s.monitorPass = ""
 	}
 
 	s.statisticsPusher = statisticsPusher.NewStatisticsPusher(&s.config.Monitor, s.Logger)
@@ -591,6 +611,9 @@ func (s *Server) initStatisticsPusher() {
 	stat.NewErrnoStat().Init(globalTags)
 	stat.NewLogKeeperStatistics().Init(globalTags)
 	stat.NewCollector().SetGlobalTags(globalTags)
+	if s.statisticsPusher.Pushers() > 0 {
+		stat.InitSlowQueryStatistics(globalTags)
+	}
 
 	s.statisticsPusher.Register(
 		stat.CollectSpdyStatistics,
@@ -600,6 +623,7 @@ func (s *Server) initStatisticsPusher() {
 		stat.NewErrnoStat().Collect,
 		stat.NewLogKeeperStatistics().Collect,
 		stat.NewCollector().Collect,
+		stat.NewMetaStatistics().Collect,
 	)
 
 	s.statisticsPusher.RegisterOps(stat.NewCollector().CollectOps)
@@ -607,6 +631,7 @@ func (s *Server) initStatisticsPusher() {
 	s.statisticsPusher.RegisterOps(stat.CollectOpsSqlSlowQueryStatistics)
 	s.statisticsPusher.RegisterOps(stat.CollectExecutorStatisticsOps)
 	s.statisticsPusher.RegisterOps(stat.NewErrnoStat().CollectOps)
+	s.statisticsPusher.RegisterOps(stat.NewMetaStatistics().CollectOps)
 
 	s.statisticsPusher.Start()
 }

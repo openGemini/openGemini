@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agiledragon/gomonkey/v2"
 	"github.com/hashicorp/raft"
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
 	"github.com/openGemini/openGemini/lib/config"
@@ -26,9 +27,9 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
-	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestCreateDatabase(t *testing.T) {
@@ -183,9 +184,9 @@ func TestRegisterQueryIDOffset_Process(t *testing.T) {
 	}
 }
 
-func TestSql2MetaHeartbeatProcess(t *testing.T) {
+func TestCQ2MetaHeartbeatProcess(t *testing.T) {
 	mockStore := NewMockRPCStore()
-	msg := message.NewMetaMessage(message.Sql2MetaHeartbeatRequestMessage, &message.Sql2MetaHeartbeatRequest{
+	msg := message.NewMetaMessage(message.CQ2MetaHeartbeatRequestMessage, &message.CQ2MetaHeartbeatRequest{
 		Host: "localhost:8086",
 	})
 	h := New(msg.Type())
@@ -197,7 +198,7 @@ func TestSql2MetaHeartbeatProcess(t *testing.T) {
 
 	_, err = h.Process()
 	if err != nil {
-		t.Fatal("TestSql2MetaHeartbeatProcess fail", err)
+		t.Fatal("TestCQ2MetaHeartbeatProcess fail", err)
 	}
 }
 
@@ -311,7 +312,11 @@ func TestSendBackupToMetaProcess(t *testing.T) {
 	for _, testcase := range []TestCase{
 		{
 			Param:     map[string]string{},
-			ExpectErr: "",
+			ExpectErr: "missing the required parameter backupPath",
+		},
+		{
+			Param:     map[string]string{"backupPath": "backupPath"},
+			ExpectErr: "meta global service is nil",
 		},
 	} {
 		msg := message.NewMetaMessage(message.SendBackupToMetaRequestMessage, &message.SendBackupToMetaRequest{
@@ -319,7 +324,8 @@ func TestSendBackupToMetaProcess(t *testing.T) {
 			Param: testcase.Param,
 		})
 		h := New(msg.Type())
-		h.InitHandler(mockStore, nil, nil)
+		h.InitHandler(mockStore, &config.Meta{Dir: "/meta"}, nil)
+
 		var err error
 		if err = h.SetRequestMsg(msg.Data()); err != nil {
 			t.Fatal(err)
@@ -406,9 +412,7 @@ func Test_ShowCluster(t *testing.T) {
 
 	c := proto2.Command_ShowClusterCommand
 	cmd := &proto2.Command{Type: &c}
-	if err := proto.SetExtension(cmd, proto2.E_ShowClusterCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, proto2.E_ShowClusterCommand_Command, val)
 	b, err := proto.Marshal(cmd)
 	if err != nil {
 		t.Fatal("cmd marshal err")
@@ -443,6 +447,47 @@ func Test_ShowCluster(t *testing.T) {
 
 	msg1 := message.NewMetaMessage(message.SnapshotV2RequestMessage, &message.SnapshotV2Request{})
 	require.Error(t, h.SetRequestMsg(msg1.Data()))
+}
+
+func Test_GetShardingPlanProcess(t *testing.T) {
+	conf := config.NewMeta()
+	_ = NewService(conf, nil, nil)
+	mockStore := NewMockRPCStore()
+
+	dbName := "testdb"
+	rpName := "testrp"
+
+	req := &message.GetShardingPlanRequest{
+		DbName: dbName,
+		RpName: rpName,
+	}
+	msg := message.NewMetaMessage(message.GetShardingPlanRequestMessage, req)
+	h := New(msg.Type())
+	h.InitHandler(mockStore, nil, nil)
+	require.NoError(t, h.SetRequestMsg(msg.Data()))
+
+	globalService.rpPtBalanceManager = NewRpPtBalanceManager(0, false)
+	_, err := h.Process()
+	assert.Equal(t, err, nil)
+
+	globalService.rpPtBalanceManager = NewRpPtBalanceManager(0, true)
+	_, err = h.Process()
+	assert.Equal(t, err, nil)
+
+	mockStore.stat = raft.Follower
+	_, err = h.Process()
+	assert.Equal(t, err, nil)
+
+	patches := gomonkey.ApplyMethod(globalService.rpPtBalanceManager, "GetShardingPlans", func(_ *RpPtBalanceManager, dbName string, rpName string) ([]byte, error) {
+		return nil, errno.NewError(errno.ServiceNotEnable)
+	})
+	defer patches.Reset()
+	mockStore.stat = raft.Leader
+	_, err = h.Process()
+	assert.Equal(t, err, nil)
+
+	h.Instance()
+	globalService.rpPtBalanceManager = nil
 }
 
 func Test_doHandleRsp(t *testing.T) {

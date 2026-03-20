@@ -17,12 +17,15 @@ package encoding
 import (
 	"encoding/binary"
 	"fmt"
+	"slices"
 
 	"github.com/klauspost/compress/zstd"
 	"github.com/openGemini/openGemini/lib/numberenc"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/encoding/simple8b"
 )
+
+//go:generate tmpl -data=@delta_simple8b_decode.data delta_simple8b_decode.gen.go.tmpl
 
 const (
 	intCompressedConstDelta = 1
@@ -48,7 +51,6 @@ type Integer struct {
 	buf     *BytesBuffer
 	zstdEnc *zstd.Encoder
 	zstdDec *zstd.Decoder
-	values  [240]uint64
 
 	outPos       int
 	out          []byte
@@ -271,30 +273,23 @@ func (enc *Integer) decodingSimple8b() ([]byte, error) {
 		return nil, fmt.Errorf("integer: too small data for decode %v < %v", len(in), l)
 	}
 
-	srcLen := srcCount*8 + enc.outPos
-	if cap(out) < srcLen {
-		out = append(make([]byte, 0, srcLen), out...)
-	}
-	out = out[:srcLen]
+	srcLen := srcCount * util.Uint64SizeBytes
+	out = slices.Grow(out, srcLen)[:enc.outPos+srcLen]
 
 	intArr := util.Bytes2Int64Slice(out[enc.outPos:])
 	intArr[0] = ZigZagDecode(numberenc.UnmarshalUint64(in))
-	idx := 1
 
+	idx := 1
 	for pos := util.Uint64SizeBytes; pos < l; pos += util.Uint64SizeBytes {
-		n, err := simple8b.Decode(&enc.values, numberenc.UnmarshalUint64(in[pos:]))
+		n, err := DeltaSimple8bDecode(numberenc.UnmarshalUint64(in[pos:]), intArr[idx-1], intArr[idx:])
 		if err != nil {
 			return nil, err
 		}
-		for i := 0; i < n; i++ {
-			val := intArr[idx-1] + ZigZagDecode(enc.values[i])
-			intArr[idx] = val
-			idx++
-		}
+		idx += n
 	}
 
 	if idx != srcCount {
-		panic("idx != count+1")
+		return nil, fmt.Errorf("simple8b decode failed. exp: %d, got: %d", srcCount, idx)
 	}
 
 	return out, nil

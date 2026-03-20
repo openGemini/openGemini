@@ -69,14 +69,14 @@ func Test_getContinuousQueryLease(t *testing.T) {
 	// case 3: get host cq lease successfully.
 	// The host connects to get the cq lease.
 	s.cqNames = []string{"cq0", "cq1"}
-	err = s.handlerSql2MetaHeartbeat(host)
+	err = s.handlerCQ2MetaHeartbeat(host)
 	require.Nil(t, err)
 	cqs, err = s.getContinuousQueryLease(host)
 	require.Nil(t, err)
 	require.Equal(t, []string{"cq0", "cq1"}, cqs)
 }
 
-func Test_handlerSql2MetaHeartbeat(t *testing.T) {
+func Test_handlerCQ2MetaHeartbeat(t *testing.T) {
 	s := &Store{
 		heartbeatInfoList: list.New(),
 		raft:              &MockRaftForCQ{isLeader: false},
@@ -85,7 +85,7 @@ func Test_handlerSql2MetaHeartbeat(t *testing.T) {
 	host1 := "127.0.0.1:8086"
 	host2 := "127.0.0.2:8086"
 
-	err := s.handlerSql2MetaHeartbeat(host1)
+	err := s.handlerCQ2MetaHeartbeat(host1)
 	require.EqualError(t, raft.ErrNotLeader, err.Error())
 
 	s = &Store{
@@ -95,16 +95,16 @@ func Test_handlerSql2MetaHeartbeat(t *testing.T) {
 		Logger:            logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop()),
 	}
 
-	err = s.handlerSql2MetaHeartbeat(host1)
+	err = s.handlerCQ2MetaHeartbeat(host1)
 	require.NoError(t, err)
 	require.Equal(t, s.cqLease[host1].LastHeartbeat, s.heartbeatInfoList.Front())
 	require.Equal(t, s.heartbeatInfoList.Front().Value.(*HeartbeatInfo).Host, host1)
 
-	err = s.handlerSql2MetaHeartbeat(host2)
+	err = s.handlerCQ2MetaHeartbeat(host2)
 	require.NoError(t, err)
 	require.Equal(t, s.cqLease[host2].LastHeartbeat, s.heartbeatInfoList.Front().Next())
 
-	err = s.handlerSql2MetaHeartbeat(host1)
+	err = s.handlerCQ2MetaHeartbeat(host1)
 	require.NoError(t, err)
 	require.Equal(t, s.cqLease[host1].LastHeartbeat, s.heartbeatInfoList.Front().Next())
 }
@@ -128,7 +128,7 @@ func Test_checkSQLNodesHeartbeat(t *testing.T) {
 	}
 	host1 := "127.0.0.1:8086"
 
-	err := s.handlerSql2MetaHeartbeat(host1)
+	err := s.handlerCQ2MetaHeartbeat(host1)
 	require.NoError(t, err)
 	require.Equal(t, s.cqLease[host1].LastHeartbeat, s.heartbeatInfoList.Front())
 	require.Equal(t, s.heartbeatInfoList.Front().Value.(*HeartbeatInfo).Host, host1)
@@ -173,7 +173,7 @@ func Test_checkSQLNodesHeartbeat_WithoutCQ(t *testing.T) {
 	}
 	host1 := "127.0.0.1:8086"
 
-	err := s.handlerSql2MetaHeartbeat(host1)
+	err := s.handlerCQ2MetaHeartbeat(host1)
 	require.NoError(t, err)
 	require.Equal(t, s.cqLease[host1].LastHeartbeat, s.heartbeatInfoList.Front())
 	require.Equal(t, s.heartbeatInfoList.Front().Value.(*HeartbeatInfo).Host, host1)

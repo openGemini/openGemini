@@ -63,6 +63,6 @@ func TestServer_Write_OutTimeRangeLimit(t *testing.T) {
 
 	for _, line := range lines {
 		_, err := s.Write("db0", "rp0", line, nil)
-		require.Contains(t, err.Error(), `point time is expired`)
+		require.Contains(t, err.Error(), `points beyond retention policy`)
 	}
 }

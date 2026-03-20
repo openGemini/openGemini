@@ -110,6 +110,7 @@ type ChunkOperator interface {
 	SlimChunk(ridIdx []int) Chunk
 	Clone() Chunk
 	CopyTo(Chunk)
+	FilterRowsByIndexes(indexes ...int) Chunk
 	CheckChunk()
 	GetRecord() *record.Record
 	Append(ck Chunk, start, end int)
@@ -494,6 +495,46 @@ func (c *ChunkImpl) CopyTo(dstChunk Chunk) {
 	c.copy(dstChunk)
 }
 
+// Convention: The indexes parameter is a list of valid row IDs in ascending order
+func (c *ChunkImpl) FilterRowsByIndexes(indexes ...int) Chunk {
+	newChunk := NewChunkBuilder(c.RowDataType()).NewChunk(c.Name())
+
+	// add graph (cant be filtered)
+	newChunk.SetGraph(c.graph)
+
+	// filter times/tags/tagIndex/intervalIndex
+	var oriTagIdx int = -1
+	var oriIntervalIdx int = -1
+	for _, rowIdx := range indexes {
+		currentTagIdx := findIndex(c.TagIndex(), rowIdx)
+		if currentTagIdx != oriTagIdx {
+			oriTagIdx = currentTagIdx
+			newChunk.AppendTagsAndIndex(c.Tags()[currentTagIdx], newChunk.NumberOfRows())
+		}
+
+		currentIntervalIdx := findIndex(c.IntervalIndex(), rowIdx)
+		if currentIntervalIdx != oriIntervalIdx {
+			oriIntervalIdx = currentIntervalIdx
+			newChunk.AppendIntervalIndex(newChunk.NumberOfRows())
+		}
+
+		newChunk.AppendTime(c.Time()[rowIdx])
+	}
+
+	// filter columns
+	for i, column := range c.columns {
+		newColumn := column.FilterColumnByRowIndexes(indexes...)
+		newChunk.SetColumn(newColumn, i)
+	}
+
+	if newChunk.NumberOfRows() == 0 {
+		newChunk.AppendTagsAndIndex(*NewChunkTagsV2(nil), 0)
+		newChunk.AppendIntervalIndexes([]int{0})
+	}
+
+	return newChunk
+}
+
 // Append used to append one chunk with the same number of columns and the same data type to other one
 // based on the specified row interval.
 func (c *ChunkImpl) Append(ck Chunk, start, end int) {
@@ -618,16 +659,20 @@ func (c *ChunkImpl) String() string {
 				line = append(line, " ")
 				continue
 			}
-			l = c.Column(i).GetValueIndexV2(l)
+			r := c.Column(i).GetValueIndexV2(l)
 			switch c.Column(i).DataType() {
 			case influxql.Integer:
-				line = append(line, strconv.FormatInt(c.Column(i).IntegerValue(l), 10))
+				line = append(line, strconv.FormatInt(c.Column(i).IntegerValue(r), 10))
 			case influxql.Float:
-				line = append(line, strconv.FormatFloat(c.Column(i).FloatValue(l), 'f', -1, 64))
+				line = append(line, strconv.FormatFloat(c.Column(i).FloatValue(r), 'f', -1, 64))
 			case influxql.Boolean:
-				line = append(line, strconv.FormatBool(c.Column(i).BooleanValue(l)))
+				line = append(line, strconv.FormatBool(c.Column(i).BooleanValue(r)))
 			case influxql.String, influxql.Tag:
-				line = append(line, c.Column(i).StringValue(l))
+				line = append(line, c.Column(i).StringValue(r))
+			case influxql.FloatTuple:
+				values := c.Column(i).GetFloatTupleValues(r)
+				valuesStr := fmt.Sprintf("%.2f", values)
+				line = append(line, valuesStr)
 			}
 		}
 		_, err = fmt.Fprintln(w, strings.Join(line, "\t"))

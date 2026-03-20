@@ -80,17 +80,30 @@ type ChunkMetaCodecCtx struct {
 	int64s  []int64
 	int64ps []*int64
 	binDec  codec.BinaryDecoder
+
+	buf      pool.Buffer
+	compress bool // whether to compress ChunkMeta
 }
 
-var codecCtxPool = pool.NewDefaultUnionPool[ChunkMetaCodecCtx](func() *ChunkMetaCodecCtx {
+var codecCtxPool = pool.NewDefaultUnionPool[ChunkMetaCodecCtx](NewChunkMetaCodecCtx)
+
+func NewChunkMetaCodecCtx() *ChunkMetaCodecCtx {
 	return &ChunkMetaCodecCtx{
 		header: &ChunkMetaHeader{},
 		dict:   make(map[string]uint64),
 	}
-})
+}
 
 func GetChunkMetaCodecCtx() *ChunkMetaCodecCtx {
 	return codecCtxPool.Get()
+}
+
+func (ctx *ChunkMetaCodecCtx) EnableCompress() {
+	ctx.compress = true
+}
+
+func (ctx *ChunkMetaCodecCtx) CompressEnabled() bool {
+	return ctx.compress
 }
 
 func (ctx *ChunkMetaCodecCtx) GetHeader() *ChunkMetaHeader {
@@ -102,6 +115,10 @@ func (ctx *ChunkMetaCodecCtx) GetHeader() *ChunkMetaHeader {
 
 func (ctx *ChunkMetaCodecCtx) SetTrailer(trailer *Trailer) {
 	ctx.trailer = trailer
+}
+
+func (ctx *ChunkMetaCodecCtx) CompressedSelf() bool {
+	return ctx != nil && ctx.trailer != nil && ctx.trailer.ChunkMetaCompressFlag == ChunkMetaCompressSelf
 }
 
 func (ctx *ChunkMetaCodecCtx) GetIndex(val string) uint64 {
@@ -128,6 +145,7 @@ func (ctx *ChunkMetaCodecCtx) Instance() *ChunkMetaCodecCtx {
 }
 
 func (ctx *ChunkMetaCodecCtx) Release() {
+	ctx.compress = false
 	ctx.header.Reset()
 	ctx.trailer = nil
 	ctx.binDec.Reset(nil)
@@ -138,7 +156,7 @@ func (ctx *ChunkMetaCodecCtx) Release() {
 }
 
 func MarshalChunkMeta(ctx *ChunkMetaCodecCtx, cm *ChunkMeta, dst []byte) ([]byte, error) {
-	if !IsChunkMetaCompressSelf() {
+	if ctx == nil || !ctx.CompressEnabled() {
 		return cm.marshal(dst), nil
 	}
 
@@ -391,7 +409,7 @@ func UnmarshalColumnName(ctx *ChunkMetaCodecCtx, buf []byte) ([]byte, string) {
 }
 
 func UnmarshalChunkMetaAdaptive(ctx *ChunkMetaCodecCtx, cm *ChunkMeta, columns []string, buf []byte) ([]byte, error) {
-	if ctx != nil && ctx.trailer.ChunkMetaCompressFlag == ChunkMetaCompressSelf {
+	if ctx.CompressedSelf() {
 		return UnmarshalChunkMetaWithColumns(ctx, cm, columns, buf)
 	}
 

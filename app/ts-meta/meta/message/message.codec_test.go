@@ -343,3 +343,12 @@ func Test_CreateSqlNode_Unmarshal(t *testing.T) {
 	err = myRep.Unmarshal(nil)
 	assert.NoError(t, err)
 }
+
+func Test_GetShardingPlan_Unmarshal(t *testing.T) {
+	rep := &message.GetShardingPlanRequest{}
+	err := rep.Unmarshal(nil)
+	assert.NoError(t, err)
+	myRep := &message.GetShardingPlanResponse{}
+	err = myRep.Unmarshal(nil)
+	assert.NoError(t, err)
+}

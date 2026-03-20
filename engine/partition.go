@@ -40,7 +40,6 @@ import (
 	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/interruptsignal"
 	"github.com/openGemini/openGemini/lib/logger"
-	"github.com/openGemini/openGemini/lib/logstore"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/raftconn"
@@ -49,8 +48,8 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
-	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -82,6 +81,7 @@ type DBPTInfo struct {
 
 	logger     *logger.Logger
 	exeCount   int64
+	rExeCount  int64
 	offloading bool
 	preload    bool
 	bgrEnabled bool
@@ -118,6 +118,7 @@ func NewDBPTInfo(db string, id uint32, dataPath, walPath string, ctx *metaclient
 		database:            db,
 		id:                  id,
 		exeCount:            0,
+		rExeCount:           0,
 		offloading:          false,
 		ch:                  nil,
 		closed:              interruptsignal.NewInterruptSignal(),
@@ -178,12 +179,112 @@ func (dbPT *DBPTInfo) SetDoingOff(df bool) {
 	dbPT.doingOff = df
 }
 
+func (dbPT *DBPTInfo) MarkDropSeries(mstName []byte, metaClient metaclient.MetaClient, expr influxql.Expr, t tsi.TimeRange) error {
+	var err error
+	name := string(mstName)
+	arr := strings.Split(name, ".")
+	if len(arr) < 2 {
+		return errors.New("mstName must be like rp.mstName")
+	}
+	rpName := arr[0]
+	mstName = []byte(strings.Join(arr[1:], "."))
+	for _, sh := range dbPT.Shards() {
+		if sh.GetRPName() != rpName {
+			continue
+		}
+		if err = sh.OpenAndEnable(metaClient); err != nil {
+			return err
+		}
+
+		idx := sh.GetIndexBuilder().GetPrimaryIndex()
+		idsResult, e := idx.SearchSeriesByTableAndCond(mstName, expr, t)
+		if e != nil {
+			return e
+		}
+
+		err = dbPT.storeTsids(idsResult, metaClient, sh)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (dbPT *DBPTInfo) storeTsids(idsResult []uint64, client metaclient.MetaClient, shard Shard) error {
+	if len(idsResult) <= 0 {
+		return nil
+	}
+	rp := shard.GetRPName()
+	logger.GetLogger().Info("store the tsids to be deleted", zap.Int("count", len(idsResult)))
+	if dbPT.GetDelIndexBuilderByRp(rp) == nil {
+		timeRangeInfo := &meta.ShardTimeRangeInfo{
+			ShardDuration: &meta.ShardDurationInfo{
+				DurationInfo: meta.DurationDescriptor{Duration: time.Second}},
+			OwnerIndex: meta.IndexDescriptor{IndexID: DelIndexBuilderId},
+		}
+
+		engineType := shard.GetEngineType()
+		if _, _, _, _, err := dbPT.NewMergeSetIndex(rp, timeRangeInfo, client, engineType); err == nil {
+			if err = SetDelMergeSetForEachMergeSet(dbPT, rp); err != nil {
+				return err
+			}
+		} else {
+			return err
+		}
+	}
+	delIndex := dbPT.GetDelIndexBuilderByRp(rp).GetPrimaryIndex()
+
+	err := errors.New("delIndex must be *tsi.MergeSetIndex")
+	if idx, ok := delIndex.(*tsi.MergeSetIndex); ok {
+		if err = idx.Open(); err == nil {
+			err = idx.WriteDeleteTsids(idsResult)
+		}
+	}
+	return err
+}
+
+func (dbPT *DBPTInfo) ApplyDroppedSeries(ptId uint32, db string, errs []error) []error {
+	if !dbPT.ref() {
+		errs = append(errs, errno.NewError(errno.DBPTClosed))
+		return errs
+	}
+	defer dbPT.unref()
+
+	ibMap := dbPT.indexBuilder
+	for rp, delIndexBuilder := range dbPT.delIndexBuilderMap {
+		if deleteMergeSet, ok := delIndexBuilder.GetPrimaryIndex().(*tsi.MergeSetIndex); ok {
+			deleteMergeSet.SetLabelForDeletePart()
+			for indexId, ib := range ibMap {
+				if rp != ib.RPName() {
+					continue
+				}
+				err := ib.DropSeries()
+				if err != nil {
+					dbPT.logger.GetZapLogger().Error("drop series failed",
+						zap.Uint32("pt", ptId), zap.String("db", db),
+						zap.Uint64("indexId", indexId), zap.Error(err))
+					errs = append(errs, err)
+				}
+			}
+			if len(errs) == 0 {
+				deleteMergeSet.RemoveDeletedPart()
+				if err := deleteMergeSet.LoadDeletedTSIDs(); err != nil {
+					errs = append(errs, err)
+				}
+			}
+		} else {
+			errs = append(errs, errors.New("delIndex not be *MergeSetIndex"))
+		}
+	}
+	return errs
+}
+
 func (dbPT *DBPTInfo) reportLoad() {
 	t := time.NewTicker(reportLoadFrequency)
 	defer func() {
 		dbPT.wg.Done()
 		t.Stop()
-		dbPT.logger.Info("dbpt reportLoad stopped", zap.Uint32("ptid", dbPT.id))
+		dbPT.logger.GetZapLogger().Info("dbpt reportLoad stopped", zap.Uint32("ptid", dbPT.id))
 	}()
 
 	for {
@@ -223,7 +324,7 @@ func (dbPT *DBPTInfo) reportLoad() {
 				if rpStats[len(rpStats)-1].ShardStats == nil {
 					rpStats[len(rpStats)-1].ShardStats = &proto2.ShardStatus{}
 				}
-				rpStats[len(rpStats)-1].ShardStats.SeriesCount = proto.Int(seriesCount)
+				rpStats[len(rpStats)-1].ShardStats.SeriesCount = proto.Int32(int32(seriesCount))
 				rpStats[len(rpStats)-1].ShardStats.ShardID = proto.Uint64(shardID)
 				rpStats[len(rpStats)-1].ShardStats.ShardSize = proto.Uint64(dbPT.shards[shardID].GetRowCount())
 				rpStats[len(rpStats)-1].ShardStats.MaxTime = proto.Int64(dbPT.shards[shardID].GetMaxTime())
@@ -250,11 +351,11 @@ func (dbPT *DBPTInfo) markOffload(ch chan bool) bool {
 	dbPT.offloading = true
 	count := atomic.LoadInt64(&dbPT.exeCount)
 	if count == 0 {
-		dbPT.logger.Info("markOffload suc ", zap.String("db", dbPT.database), zap.Uint32("ptID", dbPT.id))
+		dbPT.logger.GetZapLogger().Info("markOffload suc ", zap.String("db", dbPT.database), zap.Uint32("ptID", dbPT.id))
 		return true
 	}
 
-	dbPT.logger.Warn("markOffload error ", zap.String("db", dbPT.database), zap.Uint32("ptID", dbPT.id), zap.Int64("ref", count))
+	dbPT.logger.GetZapLogger().Warn("markOffload error ", zap.String("db", dbPT.database), zap.Uint32("ptID", dbPT.id), zap.Int64("ref", count))
 	dbPT.ch = ch
 	return false
 }
@@ -266,12 +367,36 @@ func (dbPT *DBPTInfo) unMarkOffload() {
 	if !dbPT.offloading {
 		return
 	}
-	dbPT.logger.Info("unMarkOffload ", zap.String("db", dbPT.database), zap.Uint32("ptID", dbPT.id))
+	dbPT.logger.GetZapLogger().Info("unMarkOffload ", zap.String("db", dbPT.database), zap.Uint32("ptID", dbPT.id))
 	dbPT.offloading = false
 	if dbPT.ch != nil {
 		close(dbPT.ch)
 		dbPT.ch = nil
 	}
+}
+
+func (dbPT *DBPTInfo) onlyReadRemained() bool {
+	rCnt := atomic.LoadInt64(&dbPT.rExeCount)
+	if rCnt == atomic.LoadInt64(&dbPT.exeCount) {
+		dbPT.logger.Info("only read refs remained", zap.String("db", dbPT.database), zap.Uint32("ptID", dbPT.id), zap.Int64("read refs", rCnt))
+		return true
+	}
+	return false
+}
+
+func (dbPT *DBPTInfo) rwRef(read bool) bool {
+	ref := dbPT.ref()
+	if ref && read {
+		atomic.AddInt64(&dbPT.rExeCount, 1)
+	}
+	return ref
+}
+
+func (dbPT *DBPTInfo) unRWRef(read bool) {
+	if read {
+		atomic.AddInt64(&dbPT.rExeCount, -1)
+	}
+	dbPT.unref()
 }
 
 func (dbPT *DBPTInfo) ref() bool {
@@ -289,7 +414,7 @@ func (dbPT *DBPTInfo) unref() {
 	defer dbPT.mu.RUnlock()
 	newCount := atomic.AddInt64(&dbPT.exeCount, -1)
 	if newCount < 0 {
-		dbPT.logger.Error("dbpt ref error!", zap.String("database", dbPT.database), zap.Uint32("pt", dbPT.id))
+		dbPT.logger.GetZapLogger().Error("dbpt ref error!", zap.String("database", dbPT.database), zap.Uint32("pt", dbPT.id))
 	}
 	if !dbPT.offloading || newCount != 0 {
 		return
@@ -297,7 +422,7 @@ func (dbPT *DBPTInfo) unref() {
 
 	// offloading is true means drop database
 	if dbPT.ch == nil {
-		dbPT.logger.Error("dbPT chan is nil", zap.String("db", dbPT.database), zap.Uint32("pt id", dbPT.id))
+		dbPT.logger.GetZapLogger().Error("dbPT chan is nil", zap.String("db", dbPT.database), zap.Uint32("pt id", dbPT.id))
 		panic("chan is nil")
 	}
 
@@ -382,6 +507,23 @@ func parseIndexDir(indexDirName string) (uint64, *meta.TimeRangeInfo, error) {
 	return indexID, &meta.TimeRangeInfo{StartTime: startTime, EndTime: endTime}, nil
 }
 
+func (dbPT *DBPTInfo) getIndexTimezoneMap(rp string, client metaclient.MetaClient) (map[uint64]string, error) {
+	rpi, err := client.RetentionPolicy(dbPT.database, rp)
+	if err != nil {
+		return nil, err
+	}
+	timezoneMap := make(map[uint64]string)
+	if rpi == nil {
+		return timezoneMap, nil
+	}
+	for _, igi := range rpi.IndexGroups {
+		for _, indexInfo := range igi.Indexes {
+			timezoneMap[indexInfo.ID] = igi.Timezone
+		}
+	}
+	return timezoneMap, nil
+}
+
 func (dbPT *DBPTInfo) loadShards(opId uint64, rp string, durationInfos map[uint64]*meta.ShardDurationInfo, loadStat int, client metaclient.MetaClient, engineType config.EngineType) error {
 	if loadStat != immutable.PRELOAD {
 		err := dbPT.OpenIndexes(opId, rp, engineType, client)
@@ -396,7 +538,7 @@ func (dbPT *DBPTInfo) OpenIndexes(opId uint64, rp string, engineType config.Engi
 	indexBasePath := path.Join(dbPT.path, rp, config.IndexFileDirectory)
 	remoteIndexDirNames, remoteIndexPath, remoteErr := dbPT.getRemoteIndexPaths(indexBasePath, client, rp)
 	if remoteErr != nil {
-		dbPT.logger.Error("load remote index error.", zap.Error(remoteErr))
+		dbPT.logger.GetZapLogger().Error("load remote index error.", zap.Error(remoteErr))
 	}
 	localIndexDirs, err := fileops.ReadDir(indexBasePath)
 	if err != nil {
@@ -418,23 +560,27 @@ func (dbPT *DBPTInfo) OpenIndexes(opId uint64, rp string, engineType config.Engi
 
 	resC := make(chan *res, len(localIndexDirs)+len(remoteIndexDirNames))
 	n := 0
+	timezoneMap, err := dbPT.getIndexTimezoneMap(rp, client)
+	if err != nil {
+		return err
+	}
 
 	for _, remoteIndexDirName := range remoteIndexDirNames {
 		n++
 		openShardsLimit <- struct{}{}
-		go dbPT.openIndex(opId, remoteIndexPath, remoteIndexDirName, rp, engineType, resC, util.Cold, client)
+		go dbPT.openIndex(opId, remoteIndexPath, remoteIndexDirName, rp, engineType, resC, util.Cold, client, timezoneMap)
 	}
 
 	for indexIdx := range localIndexDirs {
 		if !localIndexDirs[indexIdx].IsDir() {
-			dbPT.logger.Warn("skip load index because it's not a dir", zap.String("dir", localIndexDirs[indexIdx].Name()))
+			dbPT.logger.GetZapLogger().Warn("skip load index because it's not a dir", zap.String("dir", localIndexDirs[indexIdx].Name()))
 			continue
 		}
 		n++
 
 		openShardsLimit <- struct{}{}
 		indexDirName := localIndexDirs[indexIdx].Name()
-		go dbPT.openIndex(opId, indexBasePath, indexDirName, rp, engineType, resC, util.Hot, client)
+		go dbPT.openIndex(opId, indexBasePath, indexDirName, rp, engineType, resC, util.Hot, client, timezoneMap)
 	}
 
 	for i := 0; i < n; i++ {
@@ -509,7 +655,7 @@ func (dbPT *DBPTInfo) NewMergeSetIndex(rp string, timeRangeInfo *meta.ShardTimeR
 			pathSeparator + strconv.Itoa(int(meta.MarshalTime(timeRangeInfo.OwnerIndex.TimeRange.EndTime)))
 		iPath := path.Join(rpPath, config.IndexFileDirectory, indexPath)
 		ObsOptions, _ := client.DatabaseOption(dbPT.database)
-		if ObsOptions != nil && ObsOptions.Enabled {
+		if ObsOptions != nil {
 			iPath = fileops.GetRemoteDataPath(ObsOptions, iPath)
 		}
 
@@ -519,7 +665,7 @@ func (dbPT *DBPTInfo) NewMergeSetIndex(rp string, timeRangeInfo *meta.ShardTimeR
 
 		indexIdent := &meta.IndexIdentifier{OwnerDb: dbPT.database, OwnerPt: dbPT.id, Policy: rp}
 		indexIdent.Index = &meta.IndexDescriptor{IndexID: indexID,
-			IndexGroupID: timeRangeInfo.OwnerIndex.IndexGroupID, TimeRange: timeRangeInfo.OwnerIndex.TimeRange}
+			IndexGroupID: timeRangeInfo.OwnerIndex.IndexGroupID, TimeRange: timeRangeInfo.OwnerIndex.TimeRange, Timezone: timeRangeInfo.OwnerIndex.Timezone}
 
 		opts := new(tsi.Options).
 			Ident(indexIdent).
@@ -717,7 +863,7 @@ func (dbPT *DBPTInfo) OpenShards(opId uint64, rp string, durationInfos map[uint6
 	return err
 }
 
-func (dbPT *DBPTInfo) openIndex(opId uint64, indexPath, indexDirName, rp string, engineType config.EngineType, resC chan<- *res, tier uint64, client metaclient.MetaClient) {
+func (dbPT *DBPTInfo) openIndex(opId uint64, indexPath, indexDirName, rp string, engineType config.EngineType, resC chan<- *res, tier uint64, client metaclient.MetaClient, timezoneMap map[uint64]string) {
 	defer func() {
 		openShardsLimit.Release()
 	}()
@@ -728,7 +874,7 @@ func (dbPT *DBPTInfo) openIndex(opId uint64, indexPath, indexDirName, rp string,
 	indexDirName = filepath.Base(filepath.Clean(indexDirName))
 	indexID, tr, err := parseIndexDir(indexDirName)
 	if err != nil {
-		dbPT.logger.Error("parse index dir failed", zap.Error(err))
+		dbPT.logger.GetZapLogger().Error("parse index dir failed", zap.Error(err))
 		resC <- &res{}
 		return
 	}
@@ -763,8 +909,12 @@ func (dbPT *DBPTInfo) openIndex(opId uint64, indexPath, indexDirName, rp string,
 		}
 	}
 
+	indexTimezone, exist := timezoneMap[indexID]
+	if !exist {
+		indexTimezone = ""
+	}
 	indexIdent := &meta.IndexIdentifier{OwnerDb: dbPT.database, OwnerPt: dbPT.id, Policy: rp}
-	indexIdent.Index = &meta.IndexDescriptor{IndexID: indexID, TimeRange: *tr}
+	indexIdent.Index = &meta.IndexDescriptor{IndexID: indexID, TimeRange: *tr, Timezone: indexTimezone}
 	opts := new(tsi.Options).
 		OpId(opId).
 		Ident(indexIdent).
@@ -846,12 +996,12 @@ func (dbPT *DBPTInfo) openShard(opId uint64, thermalShards map[uint64]struct{}, 
 	shardDirName = filepath.Base(filepath.Clean(shardDirName))
 	shardId, indexID, tr, err := parseShardDir(shardDirName)
 	if err != nil {
-		dbPT.logger.Error("skip load shard invalid shard directory", zap.String("shardDir", shardDirName))
+		dbPT.logger.GetZapLogger().Error("skip load shard invalid shard directory", zap.String("shardDir", shardDirName))
 		resC <- &res{}
 		return
 	}
 	if durationInfos[shardId] == nil {
-		dbPT.logger.Error("skip load shard because database may be delete", zap.Uint64("shardId", shardId))
+		dbPT.logger.GetZapLogger().Error("skip load shard because database may be delete", zap.Uint64("shardId", shardId))
 		resC <- &res{}
 		return
 	}
@@ -900,7 +1050,7 @@ func (dbPT *DBPTInfo) preloadProcess(opId uint64, thermalShards map[uint64]struc
 		statistics.ShardStepDuration(sh.GetID(), sh.opId, "shardOpenDone", 0, true)
 	} else {
 		statistics.ShardStepDuration(sh.GetID(), sh.opId, "shardSkipOpen", 0, true)
-		dbPT.logger.Info("skipping open shard for preload", zap.String("path", shardPath))
+		dbPT.logger.GetZapLogger().Info("skipping open shard for preload", zap.String("path", shardPath))
 	}
 	return sh, nil
 }
@@ -947,14 +1097,7 @@ func (dbPT *DBPTInfo) loadProcess(opId uint64, thermalShards map[uint64]struct{}
 			if mstInfo.EngineType != config.COLUMNSTORE {
 				continue
 			}
-			d := NewDetachedMetaInfo()
-			if immutable.GetDetachedFlushEnabled() {
-				err = checkAndTruncateDetachedFiles(d, mstInfo, sh)
-				if err != nil {
-					return nil, err
-				}
-			}
-			ident := colstore.NewMeasurementIdent(sh.ident.OwnerDb, sh.ident.Policy)
+			ident := util.NewMeasurementIdent(sh.ident.OwnerDb, sh.ident.Policy)
 			ident.SetSafeName(mstInfo.Name)
 			colstore.MstManagerIns().Add(ident, mstInfo)
 		}
@@ -970,7 +1113,7 @@ func (dbPT *DBPTInfo) loadProcess(opId uint64, thermalShards map[uint64]struct{}
 			}
 			rowCount, err := mutable.LoadMstRowCount(path.Join(mstPath, immutable.CountBinFile))
 			if err != nil {
-				sh.log.Error("load row count failed", zap.Uint64("shard", sh.GetID()), zap.String("mst", mst.OriginName()), zap.Error(err))
+				sh.log.GetZapLogger().Error("load row count failed", zap.Uint64("shard", sh.GetID()), zap.String("mst", mst.OriginName()), zap.Error(err))
 			}
 			rowCountPtr := int64(rowCount)
 			sh.msRowCount.Store(mst.Name, &rowCountPtr)
@@ -988,30 +1131,10 @@ func (dbPT *DBPTInfo) loadProcess(opId uint64, thermalShards map[uint64]struct{}
 		statistics.ShardStepDuration(sh.GetID(), sh.opId, "shardOpenAndEnableDone", 0, true)
 	} else {
 		statistics.ShardStepDuration(sh.GetID(), sh.opId, "shardSkipOpen", 0, true)
-		dbPT.logger.Info("skipping open shard for load", zap.String("path", shardPath))
+		dbPT.logger.GetZapLogger().Info("skipping open shard for load", zap.String("path", shardPath))
 	}
 
 	return sh, nil
-}
-
-func checkAndTruncateDetachedFiles(d *DetachedMetaInfo, mstInfo *meta.MeasurementInfo, sh *shard) error {
-	d.obsOpt = mstInfo.ObsOptions
-	err := d.checkAndTruncateDetachedFiles(sh.filesPath, mstInfo.Name, mstInfo.IndexRelation.GetBloomFilterColumns(), logstore.IsFullTextIdx(&mstInfo.IndexRelation))
-	if err != nil {
-		return err
-	}
-
-	setAccumulateMetaIndex(d, mstInfo, sh)
-	return nil
-}
-
-func setAccumulateMetaIndex(d *DetachedMetaInfo, mstInfo *meta.MeasurementInfo, sh *shard) {
-	//update accumulate metaIndex after check detached files
-	aMetaIndex := &immutable.AccumulateMetaIndex{}
-	aMetaIndex.SetAccumulateMetaIndex(d.lastPkMetaOff+d.lastPkMetaSize, d.lastPkMetaEndBlockId,
-		d.lastChunkMetaOff+int64(d.lastChunkMetaSize), d.lastMetaIdxOff+int64(d.lastMetaIdxSize))
-	sh.storage.SetAccumulateMetaIndex(mstInfo.Name, aMetaIndex)
-	sh.immTables.SetAccumulateMetaIndex(mstInfo.Name, aMetaIndex)
 }
 
 func (dbPT *DBPTInfo) getShardIndex(indexID uint64, duration time.Duration, mergeDuration time.Duration) (*tsi.IndexBuilder, error) {
@@ -1062,6 +1185,8 @@ func (dbPT *DBPTInfo) SetOption(opt EngineOptions) {
 }
 
 func (dbPT *DBPTInfo) SetParams(preload bool, lockPath *string, enableTagArray bool) {
+	dbPT.mu.Lock()
+	defer dbPT.mu.Unlock()
 	dbPT.unload = make(chan struct{})
 	dbPT.preload = preload
 	dbPT.lockPath = lockPath
@@ -1082,7 +1207,7 @@ func (dbPT *DBPTInfo) NewShard(rp string, shardID uint64, timeRangeInfo *meta.Sh
 		pathSeparator + strconv.Itoa(int(indexID))
 	dataPath := path.Join(rpPath, shardPath)
 	walPath = path.Join(walPath, shardPath)
-	if mstInfo.ObsOptions != nil && mstInfo.ObsOptions.Enabled {
+	if mstInfo.ObsOptions != nil {
 		dataPath = fileops.GetRemoteDataPath(mstInfo.ObsOptions, dataPath)
 	}
 	if err = fileops.MkdirAll(dataPath, DefaultDirPerm, lock); err != nil {
@@ -1155,29 +1280,33 @@ func (dbPT *DBPTInfo) closeDBPt() error {
 	}
 
 	start := time.Now()
-	dbPT.logger.Info("start close dbpt", zap.String("db", dbPT.database), zap.Uint32("pt", dbPT.id))
+	dbPT.logger.GetZapLogger().Info("start close dbpt", zap.String("db", dbPT.database), zap.Uint32("pt", dbPT.id))
 	for id, sh := range dbPT.shards {
 		if err := sh.Close(); err != nil {
+			if errno.Equal(err, errno.ErrShardClosed) {
+				dbPT.logger.Info("skip closed shard", zap.Uint64("id", id), zap.Error(err))
+				continue
+			}
 			dbPT.mu.Unlock()
-			dbPT.logger.Error("close shard fail", zap.Uint64("id", id), zap.Error(err))
+			dbPT.logger.GetZapLogger().Error("close shard fail", zap.Uint64("id", id), zap.Error(err))
 			return err
 		}
 	}
 
 	end := time.Now()
 	d := end.Sub(start)
-	dbPT.logger.Info("dbpt shard close done", zap.String("db", dbPT.database), zap.Uint32("pt", dbPT.id), zap.Duration("time used", d))
+	dbPT.logger.GetZapLogger().Info("dbpt shard close done", zap.String("db", dbPT.database), zap.Uint32("pt", dbPT.id), zap.Duration("time used", d))
 	for id, iBuild := range dbPT.indexBuilder {
 		if err := iBuild.Close(); err != nil {
 			dbPT.mu.Unlock()
-			dbPT.logger.Error("close index fail", zap.Uint64("id", id), zap.Error(err))
+			dbPT.logger.GetZapLogger().Error("close index fail", zap.Uint64("id", id), zap.Error(err))
 			return err
 		}
 	}
 	for rp, iBuild := range dbPT.delIndexBuilderMap {
 		if err := iBuild.Close(); err != nil {
 			dbPT.mu.Unlock()
-			dbPT.logger.Error("close index fail", zap.String("rp", rp), zap.Error(err))
+			dbPT.logger.GetZapLogger().Error("close index fail", zap.String("rp", rp), zap.Error(err))
 			return err
 		}
 	}
@@ -1187,7 +1316,7 @@ func (dbPT *DBPTInfo) closeDBPt() error {
 	}
 	dbPT.mu.Unlock()
 	d = time.Since(start)
-	dbPT.logger.Info("close dbpt success", zap.String("db", dbPT.database), zap.Uint32("pt", dbPT.id), zap.Duration("time used", d))
+	dbPT.logger.GetZapLogger().Info("close dbpt success", zap.String("db", dbPT.database), zap.Uint32("pt", dbPT.id), zap.Duration("time used", d))
 
 	dbPT.wg.Wait()
 
@@ -1214,7 +1343,11 @@ func (dbPT *DBPTInfo) seriesCardinality(measurements [][]byte, measurementCardin
 		}
 		measurementCardinalityInfos = append(measurementCardinalityInfos,
 			meta.MeasurementCardinalityInfo{
-				CardinalityInfos: []meta.CardinalityInfo{{TimeRange: indexBuilder.Ident().Index.TimeRange, Cardinality: seriesCount}}})
+				CardinalityInfos: []meta.CardinalityInfo{{
+					TimeRange:   indexBuilder.Ident().Index.TimeRange,
+					Timezone:    indexBuilder.Ident().Index.Timezone,
+					Cardinality: seriesCount,
+				}}})
 	}
 	return measurementCardinalityInfos, nil
 }
@@ -1239,7 +1372,9 @@ func (dbPT *DBPTInfo) seriesCardinalityWithCondition(measurements [][]byte, cond
 			log.Info("get series cardinality", zap.String("mst", string(measurements[i])), zap.Duration("cost", time.Since(stime)))
 			cardinalityInfo = append(cardinalityInfo, meta.CardinalityInfo{
 				TimeRange:   indexBuilder.Ident().Index.TimeRange,
-				Cardinality: count})
+				Timezone:    indexBuilder.Ident().Index.Timezone,
+				Cardinality: count,
+			})
 		}
 		if len(cardinalityInfo) != 0 {
 			measurementCardinalityInfos = append(measurementCardinalityInfos, meta.MeasurementCardinalityInfo{
@@ -1269,7 +1404,7 @@ func (dbPT *DBPTInfo) disableDBPtBgr() error {
 
 func (dbPT *DBPTInfo) setEnableShardsBgr(enabled bool) {
 	shardIds := dbPT.ShardIds(nil)
-	dbPT.logger.Info("set shard compaction merge and downsample tasks", zap.Bool("enabled", enabled), zap.Int("shards", len(shardIds)))
+	dbPT.logger.GetZapLogger().Info("set shard compaction merge and downsample tasks", zap.Bool("enabled", enabled), zap.Int("shards", len(shardIds)))
 
 	for _, id := range shardIds {
 		dbPT.mu.RLock()
@@ -1281,9 +1416,11 @@ func (dbPT *DBPTInfo) setEnableShardsBgr(enabled bool) {
 		if enabled {
 			sh.EnableCompAndMerge()
 			sh.EnableDownSample()
+			sh.EnableConsume()
 		} else {
 			sh.DisableCompAndMerge()
 			sh.DisableDownSample()
+			sh.DisableConsume()
 		}
 	}
 }
@@ -1300,7 +1437,7 @@ func (dbPT *DBPTInfo) ShardIds(tr *influxql.TimeRange) []uint64 {
 	return shardIds
 }
 
-func (dbPT *DBPTInfo) walkShards(tr *influxql.TimeRange, callback func(sh Shard)) {
+func (dbPT *DBPTInfo) walkShards(tr *influxql.TimeRange, callback func(sh Shard) bool) {
 	shardIDs := dbPT.ShardIds(tr)
 	for _, id := range shardIDs {
 		dbPT.mu.RLock()
@@ -1310,7 +1447,10 @@ func (dbPT *DBPTInfo) walkShards(tr *influxql.TimeRange, callback func(sh Shard)
 			continue
 		}
 
-		callback(sh)
+		con := callback(sh)
+		if !con {
+			return
+		}
 	}
 }
 
@@ -1329,4 +1469,31 @@ func (dbpt *DBPTInfo) HasCoverShard(srcShardTimeRange *meta.ShardTimeRangeInfo, 
 		}
 	}
 	return false
+}
+
+func (dbPT *DBPTInfo) GetLastIndex() (uint64, error) {
+	if dbPT.node != nil {
+		index, err := dbPT.node.GetStorage().LastIndex()
+		dbPT.logger.Info("GetLastIndex", zap.String("db", dbPT.database), zap.Uint32("ptId", dbPT.id), zap.Uint64("lastIndex", index), zap.Error(err))
+		return index, err
+	}
+	return 0, errno.NewError(errno.DBPTNotRaftNode, dbPT.database, dbPT.id)
+}
+
+func (dbPT *DBPTInfo) recoverParquetLog() {
+	shardIds := dbPT.ShardIds(nil)
+	dbPT.logger.Info("dbPT begin to recover parquet log", zap.Uint32("pt id", dbPT.id), zap.Int("shard nums", len(shardIds)))
+	for _, id := range shardIds {
+		dbPT.mu.RLock()
+		sh, ok := dbPT.shards[id]
+		dbPT.mu.RUnlock()
+		if !ok {
+			continue
+		}
+		if err := sh.RecoverParquetLog(); err != nil {
+			dbPT.logger.Error("dbPT failed to recover parquet log", zap.Uint32("pt id", dbPT.id), zap.Uint64("shard id", sh.GetID()),
+				zap.Error(err))
+			continue
+		}
+	}
 }

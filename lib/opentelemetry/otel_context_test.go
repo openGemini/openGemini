@@ -23,13 +23,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/indirect/go.opentelemetry.io/collector/pdata/pmetric"
 	"github.com/influxdata/influxdb-observability/common"
 	"github.com/influxdata/influxdb-observability/otel2influx"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/stretchr/testify/assert"
-	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 )

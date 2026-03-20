@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/encoding"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/filestream"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/fs"
 )
@@ -105,7 +105,7 @@ func (bsr *blockStreamReader) InitFromInmemoryPart(ip *inmemoryPart) {
 	var err error
 	bsr.mrs, err = unmarshalMetaindexRows(bsr.mrs[:0], ip.metaindexData.NewReader())
 	if err != nil {
-		logger.Panicf("BUG: cannot unmarshal metaindex rows from inmemory part: %s", err)
+		logger.GetLogger().Panic(fmt.Sprintf("BUG: cannot unmarshal metaindex rows from inmemory part: %s", err))
 	}
 
 	bsr.ph.CopyFrom(&ip.ph)
@@ -114,10 +114,10 @@ func (bsr *blockStreamReader) InitFromInmemoryPart(ip *inmemoryPart) {
 	bsr.lensReader = ip.lensData.NewReader()
 
 	if bsr.ph.itemsCount <= 0 {
-		logger.Panicf("BUG: source inmemoryPart must contain at least a single item")
+		logger.GetLogger().Panic(fmt.Sprintf("BUG: source inmemoryPart must contain at least a single item"))
 	}
 	if bsr.ph.blocksCount <= 0 {
-		logger.Panicf("BUG: source inmemoryPart must contain at least a single block")
+		logger.GetLogger().Panic(fmt.Sprintf("BUG: source inmemoryPart must contain at least a single block"))
 	}
 }
 
@@ -211,13 +211,13 @@ func (bsr *blockStreamReader) Next() bool {
 	bsr.bh = &bsr.bhs[bsr.bhIdx]
 	bsr.bhIdx++
 
-	bsr.sb.itemsData = bytesutil.Resize(bsr.sb.itemsData, int(bsr.bh.itemsBlockSize))
+	bsr.sb.itemsData = bytesutil.ResizeNoCopyMayOverallocate(bsr.sb.itemsData, int(bsr.bh.itemsBlockSize))
 	if err := fs.ReadFullData(bsr.itemsReader, bsr.sb.itemsData); err != nil {
 		bsr.err = fmt.Errorf("cannot read compressed items block with size %d: %w", bsr.bh.itemsBlockSize, err)
 		return false
 	}
 
-	bsr.sb.lensData = bytesutil.Resize(bsr.sb.lensData, int(bsr.bh.lensBlockSize))
+	bsr.sb.lensData = bytesutil.ResizeNoCopyMayOverallocate(bsr.sb.lensData, int(bsr.bh.lensBlockSize))
 	if err := fs.ReadFullData(bsr.lensReader, bsr.sb.lensData); err != nil {
 		bsr.err = fmt.Errorf("cannot read compressed lens block with size %d: %w", bsr.bh.lensBlockSize, err)
 		return false
@@ -260,7 +260,7 @@ func (bsr *blockStreamReader) readNextBHS() error {
 	bsr.mrIdx++
 
 	// Read compressed index block.
-	bsr.packedBuf = bytesutil.Resize(bsr.packedBuf, int(mr.indexBlockSize))
+	bsr.packedBuf = bytesutil.ResizeNoCopyMayOverallocate(bsr.packedBuf, int(mr.indexBlockSize))
 	if err := fs.ReadFullData(bsr.indexReader, bsr.packedBuf); err != nil {
 		return fmt.Errorf("cannot read compressed index block with size %d: %w", mr.indexBlockSize, err)
 	}
@@ -273,22 +273,11 @@ func (bsr *blockStreamReader) readNextBHS() error {
 	}
 
 	// Unmarshal the unpacked index block into bsr.bhs.
-	if n := int(mr.blockHeadersCount) - cap(bsr.bhs); n > 0 {
-		bsr.bhs = append(bsr.bhs[:cap(bsr.bhs)], make([]blockHeader, n)...)
+	bsr.bhs, err = unmarshalBlockHeadersNoCopy(bsr.bhs[:0], bsr.unpackedBuf, int(mr.blockHeadersCount))
+	if err != nil {
+		return fmt.Errorf("cannot unmarshal blockHeaders in the index block #%d: %w", bsr.mrIdx, err)
 	}
-	bsr.bhs = bsr.bhs[:mr.blockHeadersCount]
 	bsr.bhIdx = 0
-	b := bsr.unpackedBuf
-	for i := 0; i < int(mr.blockHeadersCount); i++ {
-		tail, err := bsr.bhs[i].Unmarshal(b)
-		if err != nil {
-			return fmt.Errorf("cannot unmarshal blockHeader #%d in the index block #%d: %w", len(bsr.bhs), bsr.mrIdx, err)
-		}
-		b = tail
-	}
-	if len(b) > 0 {
-		return fmt.Errorf("unexpected non-empty tail left after unmarshaling block headers; len(tail)=%d", len(b))
-	}
 	return nil
 }
 

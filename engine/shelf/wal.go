@@ -27,8 +27,8 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/fasttime"
-	"github.com/golang/snappy"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/fasttime"
+	"github.com/klauspost/compress/snappy"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/config"
@@ -52,7 +52,7 @@ const (
 	walCompressLz4    = 1
 	walCompressSnappy = 2
 
-	walBufferSize = config.MB
+	walBufferSize = 10 * config.MB
 )
 
 var walBlockHeaderSize = int(unsafe.Sizeof(WalBlockHeader{}))
@@ -97,6 +97,7 @@ type Wal struct {
 	backgroundSync  bool
 	backgroundFlush bool
 	writing         bool
+	StateSwitching  bool
 
 	option *obs.ObsOptions
 }
@@ -121,6 +122,15 @@ func NewWal(dir string, lock *string, opt *obs.ObsOptions) *Wal {
 	}
 
 	return wal
+}
+
+func (wal *Wal) ForceUnref() {
+	stat.ForceUnrefTotal.Incr()
+	wal.Unref()
+}
+
+func (wal *Wal) NeedSwitch() bool {
+	return wal.SizeLimited() || wal.Expired()
 }
 
 func (wal *Wal) SizeLimited() bool {
@@ -159,16 +169,17 @@ func (wal *Wal) open() error {
 		return nil
 	}
 
-	err := fileops.MkdirAll(wal.dir, 0700)
-	if err != nil {
-		return err
-	}
+	IncrInuseWalCount()
+	begin := time.Now()
+	defer func() {
+		stat.WALFileOpenDurSum.AddSinceMicro(begin)
+	}()
 
 	file := filepath.Join(wal.dir, fmt.Sprintf("%d.%s", AllocWalSeq(), walFileSuffixes))
 	wal.file = NewWalFile(file, wal.lock)
 	wal.file.setWalObsOptions(wal.option)
 
-	if err = wal.file.Open(); err != nil {
+	if err := wal.file.Open(); err != nil {
 		return err
 	}
 
@@ -284,11 +295,13 @@ func (wal *Wal) compressSeriesKey(seriesKey []byte) []byte {
 
 		header.Set(len(buf.Swap)-walBlockHeaderSize, 0, flagSeriesKey, walCompressLz4, 0)
 		header.Put(buf.Swap)
+		return buf.Swap
 	case walCompressSnappy:
 		buf.Swap = slices.Grow(buf.Swap, walBlockHeaderSize)[:walBlockHeaderSize]
 		buf.Swap = SnappyCompressBlock(seriesKey, buf.Swap[:len(buf.Swap)])
 		header.Set(len(buf.Swap)-walBlockHeaderSize, 0, flagSeriesKey, walCompressSnappy, 0)
 		header.Put(buf.Swap)
+		return buf.Swap
 	default:
 		break
 	}
@@ -393,6 +406,12 @@ func (wal *Wal) MustClose() {
 }
 
 func (wal *Wal) Clean() {
+	if !wal.opened {
+		return
+	}
+
+	DecrInuseWalCount()
+	wal.MustClose()
 	lockOpt := fileops.FileLockOption(*wal.lock)
 	util.MustRun(func() error {
 		return fileops.RemoveAll(wal.file.Name(), lockOpt)
@@ -811,10 +830,16 @@ func (s *SeriesMap) HasMeasurement(mst string) bool {
 	return ok
 }
 
-func (s *SeriesMap) Walk(fn func(mst string, series map[uint64]struct{})) {
-	for mst, series := range s.data {
-		fn(mst, series)
+func (s *SeriesMap) GetSeriesIDs(mst string) map[uint64]struct{} {
+	return s.data[mst]
+}
+
+func (s *SeriesMap) GetAalMst() []string {
+	items := make([]string, 0, len(s.data))
+	for mst := range s.data {
+		items = append(items, mst)
 	}
+	return items
 }
 
 type WalFileHot struct {
@@ -863,4 +888,35 @@ func readSeriesKey(dst []byte, header *WalBlockHeader, fd *WalFile) ([]byte, err
 		break
 	}
 	return dst, err
+}
+
+type WalCreatedEvent struct {
+	Wal    *Wal
+	Info   *ShardInfo
+	WorkId int
+}
+
+func (e *WalCreatedEvent) CreateIterator(mst string) record.RecIterator {
+	walItr := NewWalIterator(e.Wal, mst, e.Info.idx)
+	return walItr
+}
+
+func (e *WalCreatedEvent) UniqueId() uint64 {
+	return (uint64(e.Info.ident.OwnerPt) << 32) | uint64(e.WorkId)
+}
+
+func (e *WalCreatedEvent) Ref() {
+	e.Wal.Ref()
+}
+
+func (e *WalCreatedEvent) UnRef() {
+	e.Wal.Unref()
+}
+
+func BuildWalCreatedEventKey(info *ShardInfo) string {
+	var b strings.Builder
+	b.WriteString(info.ident.OwnerDb)
+	b.WriteByte(':')
+	b.WriteString(info.ident.Policy)
+	return b.String()
 }

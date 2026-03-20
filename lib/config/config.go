@@ -63,6 +63,7 @@ type Config interface {
 	GetCommon() *Common
 	ShowConfigs() map[string]interface{}
 	GetLogStoreConfig() *LogStoreConfig
+	GetData() *Store
 }
 
 type App string
@@ -74,6 +75,7 @@ const (
 	AppSingle  App = "single"
 	AppMonitor App = "monitor"
 	AppData    App = "data"
+	AppTask    App = "task"
 	Unknown    App = "unKnown"
 
 	DefaultCpuAllocationRatio  = 1
@@ -156,12 +158,15 @@ type Common struct {
 	StorePprofPort     string         `toml:"store-pprof-port"`
 	SqlPprofPort       string         `toml:"sql-pprof-port"`
 	MetaPprofPort      string         `toml:"meta-pprof-port"`
+	TaskPprofPort      string         `toml:"task-pprof-port"`
 
 	Bindjoin        []string `toml:"bind-join"`
 	GlobalDictFiles []string `toml:"global-dict-files"`
 
 	MetaConnRetryTime   itoml.Duration `toml:"meta-conn-retry-time"`
 	MetaConnRetryNumber int            `toml:"meta-conn-retry-number"`
+
+	TaskNodeEnabled bool `toml:"task-node-enabled"`
 }
 
 // NewCommon builds a new CommonConfiguration with default values.

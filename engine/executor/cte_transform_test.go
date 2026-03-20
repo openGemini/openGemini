@@ -25,6 +25,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 var reqId = "1122222333333333"
@@ -134,6 +135,13 @@ func TestCTETransform1(t *testing.T) {
 
 	ops := buildOps()
 	ctePlan := buildPlan(t, outerSchema)
+	executeCTEQuery(t, inrts, ort, outerSchema, ctePlan, stmt, ops, chunk1, chunks1, source1)
+	executeCTEQuery(t, inrts, ort, outerSchema, ctePlan, stmt, ops, chunk1, chunks1, source1) // using cache
+
+	executor.CTEBuf.ClearDataStoreByKey(reqId, stmt.CTEs)
+}
+
+func executeCTEQuery(t *testing.T, inrts []hybridqp.RowDataType, ort hybridqp.RowDataType, outerSchema *executor.QuerySchema, ctePlan hybridqp.QueryNode, stmt *influxql.WithSelectStatement, ops []hybridqp.ExprOptions, chunk1 executor.Chunk, chunks1 []executor.Chunk, source1 *SourceFromMultiChunk) {
 	trans, err := executor.NewCTETransform(inrts[0], ort, outerSchema, ctePlan, stmt.CTEs[0], ops)
 	assert.True(t, err == nil)
 
@@ -166,8 +174,7 @@ func TestCTETransform1(t *testing.T) {
 	processors = append(processors, trans)
 	processors = append(processors, sink)
 	executors := executor.NewPipelineExecutor(processors)
-	executors.Execute(context.Background())
-	executors.Execute(context.Background()) // using cache
-	executors.Release()
-	executor.CTEBuf.ClearDataStoreByKey(reqId, stmt.CTEs)
+	defer executors.Release()
+	err = executors.Execute(context.Background())
+	require.NoError(t, err)
 }

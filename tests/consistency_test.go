@@ -18,12 +18,11 @@ package tests
 
 import (
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/openGemini/openGemini/lib/rand"
 )
 
 var letterRunes = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
@@ -31,23 +30,21 @@ var letterRunes = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
 func RandStringRunes(n int) string {
 	b := make([]rune, n)
 	for i := range b {
-		b[i] = letterRunes[rand.Intn(len(letterRunes))]
+		b[i] = letterRunes[rand.IntN(len(letterRunes))]
 	}
 	return string(b)
 }
 
 func RandInt() int {
-	return rand.Intn(10000)
+	return rand.IntN(10000)
 }
 
 func RandFloat(min, max float64) float64 {
-	var res float64
-	res = min + rand.Float64()*(max-min)
-	return res
+	return min + rand.Float64()*(max-min)
 }
 
 func RandBool() string {
-	if rand.Intn(2)%2 == 0 {
+	if rand.IntN(2)%2 == 0 {
 		return "true"
 	}
 	return "false"
@@ -56,7 +53,7 @@ func RandBool() string {
 func TestServer_Query_Consistency(t *testing.T) {
 	t.Parallel()
 	if url := os.Getenv("TSDBURL"); url == "" {
-		t.Skip("Skipping.  DO not run TestServer_Query_Consistency1")
+		t.Skip("Skipping.  Do not run TestServer_Query_Consistency.")
 	}
 
 	seriesCountTotal := 10000

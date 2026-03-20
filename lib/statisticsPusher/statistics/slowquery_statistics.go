@@ -16,6 +16,7 @@ package statistics
 
 import (
 	"sync/atomic"
+	"time"
 
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics/opsStat"
 )
@@ -39,7 +40,9 @@ type SQLSlowQueryStatistics struct {
 	PrepareDuration  int64
 	IteratorDuration int64
 	EmitDuration     int64
+	TransDuration    int64
 	Query            string
+	QueryEndTime     time.Time
 	QueryLocs        [][2]int // <stmtId, <startLoc, endLoc>>
 	DB               string
 	QueryBatch       int64
@@ -48,6 +51,7 @@ type SQLSlowQueryStatistics struct {
 var SlowQueryTagMap map[string]string
 var SqlSlowQueryStatisticsName = "sql_slow_queries"
 var SlowQueries = make(chan *SQLSlowQueryStatistics, 256)
+var opened bool
 
 func NewSqlSlowQueryStatistics(db string) *SQLSlowQueryStatistics {
 	return &SQLSlowQueryStatistics{
@@ -58,6 +62,7 @@ func NewSqlSlowQueryStatistics(db string) *SQLSlowQueryStatistics {
 
 func InitSlowQueryStatistics(tags map[string]string) {
 	SlowQueryTagMap = tags
+	opened = true
 }
 
 func (s *SQLSlowQueryStatistics) GetQueryByStmtId(stmtId int) string {
@@ -89,6 +94,8 @@ func (s *SQLSlowQueryStatistics) AddDuration(durationName string, d int64) {
 		if d > td {
 			atomic.StoreInt64(&s.EmitDuration, d)
 		}
+	case "TransDuration":
+		atomic.AddInt64(&s.TransDuration, d)
 	default:
 	}
 }
@@ -134,13 +141,16 @@ func allocSqlSlowQueryValueMap(d *SQLSlowQueryStatistics) map[string]interface{}
 }
 
 func CollectSqlSlowQueryStatistics(buffer []byte) ([]byte, error) {
+	if !opened {
+		return buffer, nil
+	}
 	durations := getSqlQueryDuration()
 	for _, d := range durations {
 		tagMap := make(map[string]string)
 		tagMap[StatSlowQueryDatabase] = d.DB
 		AllocTagMap(tagMap, SlowQueryTagMap)
 		valueMap := allocSqlSlowQueryValueMap(d)
-		buffer = AddPointToBuffer(SqlSlowQueryStatisticsName, tagMap, valueMap, buffer)
+		buffer = AddTimeToBuffer(SqlSlowQueryStatisticsName, tagMap, valueMap, d.QueryEndTime, buffer)
 	}
 	return buffer, nil
 }
@@ -164,9 +174,10 @@ func CollectOpsSqlSlowQueryStatistics() []opsStat.OpsStatistic {
 }
 
 func AppendSqlQueryDuration(d *SQLSlowQueryStatistics) {
-	if d == nil {
+	if !opened || d == nil {
 		return
 	}
+	d.QueryEndTime = time.Now()
 	select {
 	case SlowQueries <- d:
 	default:

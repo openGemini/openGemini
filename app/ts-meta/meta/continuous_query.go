@@ -22,8 +22,8 @@ import (
 
 	"github.com/hashicorp/raft"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
-	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
 )
 
 type situation int
@@ -83,14 +83,14 @@ func (s *Store) getContinuousQueryLease(host string) ([]string, error) {
 	return leaseInfo.CQNames, nil
 }
 
-func (s *Store) handlerSql2MetaHeartbeat(host string) error {
-	if err := s.handlerSql2MetaHeartbeatBase(host); err != nil {
+func (s *Store) handlerCQ2MetaHeartbeat(host string) error {
+	if err := s.handlerCQ2MetaHeartbeatBase(host); err != nil {
 		return err
 	}
 	return s.notifyCQLeaseChanged()
 }
 
-func (s *Store) handlerSql2MetaHeartbeatBase(host string) error {
+func (s *Store) handlerCQ2MetaHeartbeatBase(host string) error {
 	if !s.IsLeader() {
 		return raft.ErrNotLeader
 	}
@@ -124,9 +124,7 @@ func (s *Store) notifyCQLeaseChanged() error {
 	desc := proto2.E_NotifyCQLeaseChangedCommand_Command
 	value := &proto2.NotifyCQLeaseChangedCommand{}
 	cmd := &proto2.Command{Type: &typ}
-	if err := proto.SetExtension(cmd, desc, value); err != nil {
-		return err
-	}
+	proto.SetExtension(cmd, desc, value)
 	body, err := proto.Marshal(cmd)
 	if err != nil {
 		return err

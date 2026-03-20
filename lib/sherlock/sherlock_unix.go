@@ -23,7 +23,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/cgroup"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/cgroup"
 	cgroup2 "github.com/openGemini/openGemini/lib/cpu/cgroup"
 	"github.com/shirou/gopsutil/v3/process"
 )

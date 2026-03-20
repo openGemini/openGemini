@@ -24,6 +24,7 @@ import (
 	"github.com/influxdata/influxdb/toml"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/scheduler"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
@@ -84,14 +85,14 @@ func TestMergeWithParquetTask(t *testing.T) {
 
 	conf := config.GetStoreConfig()
 	conf.ParquetTask.TSSPToParquetLevel = 2
-	conf.Merge.MergeSelfOnly = true
+	conf.Merge.UnorderedMergeSelf = true
 	conf.Merge.MinInterval = 0
 	conf.Merge.MaxMergeSelfLevel = 4
 	defer func() {
 		conf.Merge.MinInterval = toml.Duration(300 * time.Second)
 		conf.ParquetTask.TSSPToParquetLevel = 0
 		conf.Merge.MaxMergeSelfLevel = 0
-		conf.Merge.MergeSelfOnly = false
+		conf.Merge.UnorderedMergeSelf = false
 	}()
 
 	rg.setBegin(begin)
@@ -121,14 +122,14 @@ func TestReliabilityLog(t *testing.T) {
 	lockFile := ""
 
 	dir := t.TempDir()
-	logFile, err := immutable.SaveReliabilityLog(plan, dir, lockFile, func() string {
+	logFile, err := fileops.SaveReliabilityLog(plan, dir, lockFile, func() string {
 		return "plan.log"
 	})
 	require.NoError(t, err)
 	require.Contains(t, logFile, "plan.log")
 
 	other := &immutable.TSSP2ParquetPlan{}
-	require.NoError(t, immutable.ReadReliabilityLog(logFile, other))
+	require.NoError(t, fileops.ReadReliabilityLog(logFile, other))
 	require.Equal(t, plan, other)
 
 	signal := make(chan struct{})
@@ -142,7 +143,7 @@ func TestReliabilityLog(t *testing.T) {
 		return nil
 	}}, sch, signal)
 
-	require.NotEmpty(t, immutable.ReadReliabilityLog(logFile+".not_exists", other))
+	require.NotEmpty(t, fileops.ReadReliabilityLog(logFile+".not_exists", other))
 	require.NoError(t, immutable.ProcParquetLog(dir, &lockFile, ctx))
 
 	fp, err := os.OpenFile(logFile, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0600)
@@ -152,7 +153,10 @@ func TestReliabilityLog(t *testing.T) {
 	require.NoError(t, fp.Sync())
 	require.NoError(t, fp.Close())
 
-	require.NotEmpty(t, immutable.ReadReliabilityLog(dir, other))
+	require.NotEmpty(t, fileops.ReadReliabilityLog(dir, other))
+	require.NoError(t, immutable.ProcParquetLog(dir, &lockFile, ctx))
+
+	ctx = immutable.NewEventContext(nil, sch, signal)
 	require.NoError(t, immutable.ProcParquetLog(dir, &lockFile, ctx))
 }
 
@@ -221,11 +225,13 @@ func TestTSSP2ParquetEvent(t *testing.T) {
 }
 
 func TestMergeWithParquetTask_full(t *testing.T) {
+	config.GetStoreConfig().Merge.MaxNumOfFileToMergeSelf = []int{8, 8, 4}
+	config.GetStoreConfig().Merge.MaxMergeSelfLevel = 3
 	var begin int64 = 1e12
 	defer beforeTest(t, 0)()
 
 	conf := config.GetStoreConfig()
-	conf.Merge.MergeSelfOnly = true
+	conf.Merge.UnorderedMergeSelf = true
 	conf.ParquetTask.TSSPToParquetLevel = 2
 	defer func() {
 		conf.ParquetTask.TSSPToParquetLevel = 0
@@ -265,4 +271,26 @@ func TestMergeWithParquetTask_full(t *testing.T) {
 	require.NoError(t, mh.store.MergeOutOfOrder(1, true, false))
 	mh.store.Wait()
 	assertFileNumber(1)
+}
+
+func TestCompactTaskMarshal(t *testing.T) {
+	table := &immutable.MmsTables{ImmTable: immutable.NewTsImmTable()}
+	group := immutable.NewCompactGroup("mst1", "path1", 1, 0)
+	c := immutable.NewCompactTask(table, group, true)
+	buf := make([]byte, 0)
+	buf, err := c.MarshalBinary(buf)
+	require.NoError(t, err)
+	buf = buf[:len(buf)-6]
+
+	c2 := &immutable.CompactTask{}
+	_, err = c2.UnmarshalBinary(buf)
+	require.Error(t, err)
+
+	_, err = c.UnmarshalBinary([]byte{})
+	require.Error(t, err)
+}
+
+func TestGenerateCompactedInfoError(t *testing.T) {
+	info := immutable.GenerateCompactedInfo("mst1", []immutable.TSSPFile{}, []immutable.TSSPFile{}, "basePath", false)
+	require.Nil(t, info)
 }

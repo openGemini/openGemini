@@ -33,7 +33,7 @@ import (
 )
 
 const (
-	CTETransformName = "CTETransformName"
+	CTETransformName = "CTETransform"
 )
 
 type CTETransformCreator struct {
@@ -172,10 +172,9 @@ type CTETransform struct {
 	mapTransToIn   []int
 	mapTransToName []string
 
-	schema      hybridqp.Catalog
-	opt         hybridqp.Options
-	workTracing *tracing.Span
-	cteLogger   *logger.Logger
+	schema    hybridqp.Catalog
+	opt       hybridqp.Options
+	cteLogger *logger.Logger
 }
 
 type CTEExecutorBuilder interface {
@@ -184,31 +183,24 @@ type CTEExecutorBuilder interface {
 }
 
 func (trans *CTETransform) Work(ctx context.Context) error {
-	span := trans.StartSpan("[cteTransform] TotalWorkCost", false)
-	trans.workTracing = tracing.Start(span, "cost_for_cteOp", false)
+	span := trans.StartSpan("[CTETransform] TotalWorkCost", true)
 	defer func() {
+		tracing.Finish(span)
 		trans.Close()
-		tracing.Finish(span, trans.workTracing)
 	}()
 
 	key := trans.reqId + "_" + trans.cteMst
-	for {
-		status := CTEBuf.getCacheStatusByKey(key)
-		if status == READY {
-			value := CTEBuf.getValueByKey(key)
-			if chs, ok := value.([]Chunk); ok {
-				for _, c := range chs {
-					trans.SendChunk(trans.transform(c))
-				}
-			}
-			return nil
-		}
-		if status == NOT_READY && CTEBuf.register(key) {
-			break
-		}
+	if trans.getDataFromCache(span, key) {
+		return nil
 	}
 
-	if err := trans.RunPlan(ctx); err != nil {
+	return trans.getDataFromDisk(ctx, span, key)
+}
+
+func (trans *CTETransform) getDataFromDisk(ctx context.Context, span *tracing.Span, key string) error {
+	traceForGetDataFromDisk := tracing.Start(span, "cte_cost_from_disk_"+trans.cteMst, true)
+	defer tracing.Finish(traceForGetDataFromDisk)
+	if err := trans.RunPlan(ctx, traceForGetDataFromDisk); err != nil {
 		if errno.Equal(err, errno.FilterAllPoints) {
 			return nil
 		}
@@ -228,6 +220,27 @@ func (trans *CTETransform) Work(ctx context.Context) error {
 			return nil
 		}
 	}
+}
+
+func (trans *CTETransform) getDataFromCache(span *tracing.Span, key string) bool {
+	traceForGetDataFromCache := tracing.Start(span, "cte_cost_from_cache_"+trans.cteMst, true)
+	defer tracing.Finish(traceForGetDataFromCache)
+	for {
+		status := CTEBuf.getCacheStatusByKey(key)
+		if status == READY {
+			value := CTEBuf.getValueByKey(key)
+			if chs, ok := value.([]Chunk); ok {
+				for _, c := range chs {
+					trans.SendChunk(trans.transform(c))
+				}
+			}
+			return true
+		}
+		if status == NOT_READY && CTEBuf.register(key) {
+			break
+		}
+	}
+	return false
 }
 
 func (trans *CTETransform) transform(chunk Chunk) Chunk {
@@ -285,12 +298,14 @@ func (trans *CTETransform) TagValueFromChunk(chunk Chunk, name string) Column {
 	return column
 }
 
-func (trans *CTETransform) RunPlan(ctx context.Context) error {
+func (trans *CTETransform) RunPlan(ctx context.Context, span *tracing.Span) error {
 
+	traceForRunPlan := tracing.Start(span, "cte_cost_run_plan", true)
+	defer tracing.Finish(traceForRunPlan)
 	PrintPlan("cteTransform best ctePlan", trans.ctePlan)
 
 	// 1. build dag
-	err := trans.buildDag(ctx)
+	err := trans.buildDag()
 	if err != nil {
 		return err
 	}
@@ -331,9 +346,9 @@ func (trans *CTETransform) connectOuterDag() error {
 	return nil
 }
 
-func (trans *CTETransform) buildDag(ctx context.Context) error {
+func (trans *CTETransform) buildDag() error {
 	// skip schemaOverLimit check
-	span := tracing.SpanFromContext(ctx)
+	span := trans.BaseSpan()
 	if span != nil {
 		trans.ExecutorBuilder.Analyze(span)
 	}
@@ -378,6 +393,7 @@ func NewCTETransform(inRowDataType hybridqp.RowDataType, outRowDataType hybridqp
 		ctePlan:   ctePlan,
 		cteMst:    cteMst,
 		reqId:     cte.ReqId,
+		cteLogger: logger.NewLogger(errno.ModuleQueryEngine),
 	}
 
 	trans.input = NewChunkPort(inRowDataType)

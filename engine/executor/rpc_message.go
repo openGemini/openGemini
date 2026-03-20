@@ -17,13 +17,13 @@ package executor
 import (
 	"fmt"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/openGemini/openGemini/lib/codec"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/spdy/rpc"
 	"github.com/openGemini/openGemini/lib/spdy/transport"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util"
+	"github.com/openGemini/openGemini/lib/util/lifted/encoding"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/query/proto"
 	"google.golang.org/protobuf/proto"

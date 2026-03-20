@@ -22,6 +22,7 @@ import (
 	"github.com/openGemini/openGemini/engine/comm"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/tracing"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
@@ -219,6 +220,7 @@ func (c *groupCursor) StartSpan(span *tracing.Span) {
 		c.span.CreateCounter(unorderRowCount, "")
 		c.span.CreateCounter(unorderDuration, "ns")
 		enableFileCursor := executor.GetEnableFileCursor() && c.querySchema.HasOptimizeAgg()
+		immutable.CreateLocIOSpanCounters(c.span, enableFileCursor)
 		if enableFileCursor {
 			if c.querySchema.Options().IsPromQuery() {
 				c.span.CreateCounter(seriesCursorReadDuration, "ns")

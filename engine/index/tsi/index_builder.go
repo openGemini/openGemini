@@ -27,7 +27,9 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/dictmap"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/failpoint"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/logger"
@@ -41,8 +43,6 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/mergeset"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
-	"github.com/pingcap/failpoint"
-	"github.com/savsgio/dictpool"
 	"go.uber.org/zap"
 )
 
@@ -95,7 +95,7 @@ func NewIndexBuilder(opt *Options) *IndexBuilder {
 		logicalClock:  opt.logicalClock,
 		sequenceID:    opt.sequenceID,
 		lock:          opt.lock,
-		Relations:     make([]*IndexRelation, index.IndexTypeAll),
+		Relations:     make([]*IndexRelation, index.TypeEnd),
 		mergeDuration: opt.mergeDuration,
 		ObsOpt:        opt.obsOpt,
 	}
@@ -252,7 +252,7 @@ func (iBuilder *IndexBuilder) Overlaps(tr influxql.TimeRange) bool {
 	return !iBuilder.startTime.After(tr.Max) && iBuilder.endTime.After(tr.Min)
 }
 
-func (iBuilder *IndexBuilder) CreateIndexIfNotExists(mmRows *dictpool.Dict, needSecondaryIndex bool) error {
+func (iBuilder *IndexBuilder) CreateIndexIfNotExists(mmRows dictmap.DictMap[string, *[]influx.Row], needSecondaryIndex bool) error {
 	if iBuilder.Tier >= util.Cold {
 		return errno.NewError(errno.ForbidIndexWrite, iBuilder.GetIndexID(), iBuilder.Tier)
 	}
@@ -260,13 +260,7 @@ func (iBuilder *IndexBuilder) CreateIndexIfNotExists(mmRows *dictpool.Dict, need
 	var wg sync.WaitGroup
 	// 1st, create primary index.
 	iRows := getIndexRows()
-	for mmIdx := range mmRows.D {
-		rows, ok := mmRows.D[mmIdx].Value.(*[]influx.Row)
-		if !ok {
-			putIndexRows(iRows)
-			return errno.NewError(errno.CreateIndexFailPointRowType)
-		}
-
+	for _, rows := range mmRows {
 		for rowIdx := range *rows {
 			row := &(*rows)[rowIdx]
 			if row.SeriesId != 0 {
@@ -303,8 +297,7 @@ func (iBuilder *IndexBuilder) CreateIndexIfNotExists(mmRows *dictpool.Dict, need
 		return nil
 	}
 
-	for mmIdx := range mmRows.D {
-		rows, _ := mmRows.D[mmIdx].Value.(*[]influx.Row)
+	for _, rows := range mmRows {
 		for rowIdx := range *rows {
 			row := &(*rows)[rowIdx]
 			if err := iBuilder.createSecondaryIndex(row, primaryIndex); err != nil {
@@ -377,10 +370,9 @@ func (iBuilder *IndexBuilder) CreateIndexIfNotExistsByCol(rec *record.Record, ta
 	return nil
 }
 
-func (iBuilder *IndexBuilder) CreateSecondaryIndexIfNotExist(mmRows *dictpool.Dict) error {
+func (iBuilder *IndexBuilder) CreateSecondaryIndexIfNotExist(mmRows dictmap.DictMap[string, *[]influx.Row]) error {
 	primaryIndex := iBuilder.GetPrimaryIndex()
-	for mmIdx := range mmRows.D {
-		rows, _ := mmRows.D[mmIdx].Value.(*[]influx.Row)
+	for _, rows := range mmRows {
 		for rowIdx := range *rows {
 			row := &(*rows)[rowIdx]
 			if err := iBuilder.createSecondaryIndex(row, primaryIndex); err != nil {
@@ -661,7 +653,7 @@ func (iBuilder *IndexBuilder) startFilesMove(localIndexFiles []string, coldTmpIn
 				return err
 			}
 		}
-		failpoint.Inject("copy-file-delay", nil)
+		failpoint.Sleep("copy-file-delay", func() {})
 	}
 	indexPath := iBuilder.path
 	iBuilder.renameIBuilderAndRelationPath()
@@ -762,25 +754,19 @@ func (iBuilder *IndexBuilder) ReplaceByNoClearIndexId(noClearIndex uint64) (stri
 func (iBuilder *IndexBuilder) DropSeries() error {
 	iBuilder.mu.Lock()
 	defer iBuilder.mu.Unlock()
-	e := errors.New("idx is nil or not be *MergeSetIndex")
-	if idx, ok := iBuilder.GetPrimaryIndex().(*MergeSetIndex); ok {
-		deleteMergeSet := idx.DeleteMergeSet()
-		if deleteMergeSet == nil {
-			logger.GetLogger().Info("new db and didn't execute drop, no need to delete")
-			return nil
+	if idx, ok := iBuilder.GetPrimaryIndex().(*MergeSetIndex); !ok {
+		return errors.New("idx is nil or not be *MergeSetIndex")
+	} else {
+		if err := idx.Open(); err != nil {
+			return err
 		}
-		deleteMergeSet.tb.SetLabelForDeletePart()
 
 		delTsids := idx.GetDeletedTSIDs()
 		if delTsids == nil || delTsids.Len() <= 0 {
 			return nil
 		}
-
-		if e = idx.tb.RemoveItemsByDelTsidsFromParts(delTsids); e == nil {
-			deleteMergeSet.tb.RemoveDeletedPart()
-		}
+		return idx.tb.RemoveItemsByDelTsidsFromParts(delTsids)
 	}
-	return e
 }
 
 func (iBuilder *IndexBuilder) DeleteMsts(msts []string, onlyUseDiskThreshold uint64) error {
@@ -816,4 +802,12 @@ func (iBuilder *IndexBuilder) DeleteMsts(msts []string, onlyUseDiskThreshold uin
 		return err
 	}
 	return nil
+}
+
+func (iBuilder *IndexBuilder) RLock() {
+	iBuilder.mu.RLock()
+}
+
+func (iBuilder *IndexBuilder) RUnlock() {
+	iBuilder.mu.RUnlock()
 }

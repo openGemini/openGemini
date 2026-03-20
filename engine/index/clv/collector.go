@@ -18,8 +18,8 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/logger"
 )
 
 var Qmax = 7

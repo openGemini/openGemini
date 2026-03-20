@@ -18,8 +18,11 @@ import (
 	"container/heap"
 	"errors"
 	"fmt"
+	"math"
 	"path"
 	"runtime/debug"
+	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -32,6 +35,7 @@ import (
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/scheduler"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+	"github.com/openGemini/openGemini/lib/util"
 	"go.uber.org/zap"
 )
 
@@ -41,18 +45,17 @@ const (
 )
 
 var (
-	fullCompactingCount   int64
-	maxFullCompactor      = cpu.GetCpuNum() / 2
-	maxCompactor          = cpu.GetCpuNum()
-	compLimiter           = limiter.NewFixed(maxCompactor)
-	ErrCompStopped        = errors.New("compact stopped")
-	ErrDownSampleStopped  = errors.New("downSample stopped")
-	ErrDroppingMst        = errors.New("measurement is dropped")
-	ErrParquetStopped     = errors.New("parquet task stopped")
-	LevelCompactRule      = []uint16{0, 1, 0, 2, 0, 3, 0, 1, 2, 3, 0, 4, 0, 5, 0, 1, 2, 6}
-	LevelCompactRuleForCs = []uint16{0, 1, 0, 1, 0, 1} // columnStore currently only doing level 0 and level 1 compaction,but the full functionality is available
-	LeveLMinGroupFiles    = [CompactLevels]int{8, 4, 4, 4, 4, 4, 2}
-	compLogSeq            = uint64(time.Now().UnixNano())
+	fullCompactingCount  int64
+	maxFullCompactor     = cpu.GetCpuNum() / 2
+	maxCompactor         = cpu.GetCpuNum()
+	CompLimiter          = limiter.NewFixed(maxCompactor)
+	ErrCompStopped       = errors.New("compact stopped")
+	ErrDownSampleStopped = errors.New("downSample stopped")
+	ErrDroppingMst       = errors.New("measurement is dropped")
+	ErrParquetStopped    = errors.New("parquet task stopped")
+	LevelCompactRule     = []uint16{0, 1, 0, 2, 0, 3, 0, 1, 2, 3, 0, 4, 0, 5, 0, 1, 2, 6}
+	LeveLMinGroupFiles   = [CompactLevels]int{8, 4, 4, 4, 4, 4, 2}
+	compLogSeq           = uint64(time.Now().UnixNano())
 
 	EnableMergeOutOfOrder = true
 	log                   = Log.GetLogger()
@@ -64,22 +67,21 @@ func Init() {
 	log = Log.GetLogger()
 }
 
+func calculateMaxCompactor() int {
+	cpuN := cpu.GetCpuNumWithoutRatio()
+	// 2U:2, 4U:2, 8U:4, 16U:6, 32U:8, 64U:10
+	return max(2, 2*int(math.Log2(float64(cpuN)))-2)
+}
+
 func SetMaxCompactor(n int) {
 	log = Log.GetLogger().With(zap.String("service", "compact"))
 	maxCompactor = n
 	if maxCompactor == 0 {
-		maxCompactor = cpu.GetCpuNum()
+		maxCompactor = calculateMaxCompactor()
 	}
+	maxCompactor = min(32, maxCompactor)
 
-	if maxCompactor < 2 {
-		maxCompactor = 2
-	}
-
-	if maxCompactor > 32 {
-		maxCompactor = 32
-	}
-
-	compLimiter = limiter.NewFixed(maxCompactor)
+	CompLimiter = limiter.NewFixed(maxCompactor)
 	log.Info("set maxCompactor", zap.Int("number", maxCompactor))
 }
 
@@ -131,9 +133,23 @@ func (m *MmsTables) LevelCompact(level uint16, shid uint64) error {
 
 	taskGroups := m.buildCompactTaskGroup(plans, false, shid)
 	for _, group := range taskGroups {
-		m.scheduler.ExecuteTaskGroup(group, m.stopCompMerge)
+		if config.GetCommon().TaskNodeEnabled && m.ImmTable.GetEngineType() == config.TSSTORE {
+			m.registerTasks(group.GetTasks())
+		} else {
+			m.scheduler.ExecuteTaskGroup(group, m.stopCompMerge)
+		}
 	}
 	return nil
+}
+
+func (m *MmsTables) registerTasks(srcTasks []scheduler.Task) {
+	for _, task := range srcTasks {
+		t, ok := task.(*CompactTask)
+		if !ok {
+			continue
+		}
+		m.scheduler.RegisterCompactTask(t)
+	}
 }
 
 func (m *MmsTables) blockCompactStop(name string) {
@@ -178,8 +194,12 @@ func (m *MmsTables) compact(itrs *ChunkIterators, files []TSSPFile, level uint16
 	tableBuilder := NewMsBuilder(m.path, itrs.name, m.lock, m.Conf, itrs.maxN, fileName, FilesMergedTire(files),
 		nil, itrs.estimateSize, config.TSSTORE, m.obsOpt, m.GetShardID())
 	tableBuilder.WithLog(cLog)
-
-	correctTimeDisorder := config.GetStoreConfig().Compact.CorrectTimeDisorder
+	success := false
+	defer func() {
+		if !success {
+			tableBuilder.Clean()
+		}
+	}()
 
 	for {
 		select {
@@ -200,13 +220,12 @@ func (m *MmsTables) compact(itrs *ChunkIterators, files []TSSPFile, level uint16
 			break
 		}
 
-		record.CheckRecord(rec)
-		if correctTimeDisorder {
-			rec = record.SortRecordIfNeeded(rec)
-			itrs.merged = rec
-		} else {
-			record.CheckTimes(rec.Times())
+		times := rec.Times()
+		if !slices.IsSorted(times) {
+			return nil, errno.NewError(errno.CompactTimeDisorder, times[0], times[len(times)-1])
 		}
+
+		record.CheckRecord(rec)
 
 		if m.indexMergeSet != nil && m.indexMergeSet.HasDeletedTSID(id) {
 			continue
@@ -236,6 +255,7 @@ func (m *MmsTables) compact(itrs *ChunkIterators, files []TSSPFile, level uint16
 		tableBuilder.removeEmptyFile()
 	}
 
+	success = true
 	newFiles := make([]TSSPFile, 0, len(tableBuilder.Files))
 	newFiles = append(newFiles, tableBuilder.Files...)
 	return newFiles, nil
@@ -333,17 +353,22 @@ func (m *MmsTables) buildFullCompactPlan(n int64, toLevel uint16) []*CompactGrou
 			continue
 		}
 
-		builder.Init(k, &v.closing, v.Len())
+		builder.Init(k, m.path, &v.closing, v.Len(), m.lock)
 		for _, f := range v.files {
 			if m.isClosed() || m.isCompMergeStopped() {
 				return nil
 			}
 			if f.(*tsspFile).ref == 0 {
-				panic("file closed")
+				name := f.FileName()
+				m.logger.Warn("file closed",
+					zap.String("path", m.path),
+					zap.String("mst", k),
+					zap.String("file", name.String()))
+				return nil
 			}
 
 			name := f.Path()
-			if tmpFileSuffix == name[len(name)-len(tmpFileSuffix):] {
+			if len(name) == 0 || strings.HasSuffix(name, tmpFileSuffix) {
 				continue
 			}
 
@@ -424,30 +449,40 @@ func (m *MmsTables) FullCompact(shid uint64) error {
 	if preLevel := config.PreFullCompactLevel(); preLevel > 0 {
 		plans := m.buildFullCompactPlan(n, preLevel)
 		if len(plans) > 0 {
-			m.scheduler.ExecuteBatch(m.buildCompactTasks(plans, true, shid), m.stopCompMerge)
+			m.executePlan(plans, shid)
 			return nil
 		}
 	}
 
 	plans := m.buildFullCompactPlan(n, 0)
-	if len(plans) > 0 {
-		m.scheduler.ExecuteBatch(m.buildCompactTasks(plans, true, shid), m.stopCompMerge)
+	if len(plans) == 0 {
+		return nil
 	}
+	m.executePlan(plans, shid)
 
 	return nil
 }
 
-func (m *MmsTables) RenameFileToLevel(plan *CompactGroup) error {
-	files, err := m.getFilesByPath(plan.name, plan.group, true)
+func (m *MmsTables) executePlan(plans []*CompactGroup, shid uint64) {
+	tasks := m.buildCompactTasks(plans, true, shid)
+	if config.GetCommon().TaskNodeEnabled && m.ImmTable.GetEngineType() == config.TSSTORE {
+		m.registerTasks(tasks)
+	} else {
+		m.scheduler.ExecuteBatch(tasks, m.stopCompMerge)
+	}
+}
+
+func (m *MmsTables) RenameFileToLevel(name string, group []string, toLevel uint16) error {
+	files, err := m.getFilesByPath(name, group, true)
 	if err != nil {
 		return err
 	}
 	file := files.files[0]
 	tsspFileName := file.FileName()
-	tsspFileName.level = plan.toLevel
+	tsspFileName.level = toLevel
 	err = file.Rename(tsspFileName.Path(path.Dir(file.Path()), false))
 	if err == nil {
-		file.UpdateLevel(plan.toLevel)
+		file.UpdateLevel(toLevel)
 	}
 	return err
 }
@@ -488,7 +523,7 @@ func (m *MmsTables) buildCompactTaskGroup(plans []*CompactGroup, full bool, shar
 }
 
 func (m *MmsTables) Wait() {
-	m.wg.Wait()
+	util.WaitTimeOut(m.wg.Wait, m.wg.Done, 10*time.Minute)
 	m.scheduler.Wait()
 }
 

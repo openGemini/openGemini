@@ -108,6 +108,7 @@ func TestMonitor(t *testing.T) {
 
 func TestTSMeta(t *testing.T) {
 	conf := config.NewTSMeta(false)
+	conf.Data.InitFields()
 
 	// Data conf
 	conf.Data.IngesterAddress = "127.0.0.1:8800"
@@ -157,6 +158,7 @@ func TestTSSql(t *testing.T) {
 
 func TestTSStore(t *testing.T) {
 	conf := config.NewTSStore(true)
+	conf.Data.InitFields()
 	conf.Data.IngesterAddress = "127.0.0.1:8800"
 	conf.Data.SelectAddress = "127.0.0.1:8801"
 	conf.Data.DataDir = "/opt/gemini"
@@ -236,6 +238,7 @@ func TestCombineDomain(t *testing.T) {
 
 func TestTSStoreThroughput(t *testing.T) {
 	conf := config.NewTSStore(true)
+	conf.Data.InitFields()
 	conf.Data.IngesterAddress = "127.0.0.1:8800"
 	conf.Data.SelectAddress = "127.0.0.1:8801"
 	conf.Data.DataDir = "/opt/gemini"
@@ -248,7 +251,8 @@ func TestTSStoreThroughput(t *testing.T) {
 
 	for _, cpu := range []int{4, 8, 16, 32} {
 		conf.Data = config.NewStore()
-		compact := &conf.Data.Compact
+		conf.Data.InitFields()
+		compact := conf.Data.Compact
 		n := toml.Size(cpu / 4)
 		conf.Common.CPUNum = cpu
 		conf.Data.Corrector(conf.Common.CPUNum, 0)
@@ -269,6 +273,7 @@ func TestHAPolicy(t *testing.T) {
 
 func TestTSStoreCorrector(t *testing.T) {
 	conf := config.NewTSStore(true)
+	conf.Data.InitFields()
 	conf.Data.ReadCache.ReadMetaCacheEn = 1
 	conf.Data.ReadCache.ReadMetaCacheEnPct = 5
 	conf.Data.ReadCache.ReadDataCacheEn = 1
@@ -370,4 +375,15 @@ func Test_InvalidShardMergeConfig(t *testing.T) {
 	if err := c.Validate(); err == nil {
 		t.Fatal(err)
 	}
+}
+
+func TestStoreRewriteConfig(t *testing.T) {
+	s := config.NewStore()
+
+	s.StoreComp.WalEnabled = false
+	s.ReadCache.ReadMetaPageSize = []string{"1"}
+	s.RewriteDataConf()
+
+	require.Equal(t, s.WalEnabled, false)
+	require.Equal(t, s.ReadCache.ReadMetaPageSize, []string{"1"})
 }

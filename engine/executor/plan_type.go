@@ -178,6 +178,11 @@ func NormalGetPlanType(schema hybridqp.Catalog, stmt *influxql.SelectStatement) 
 		return UNKNOWN
 	}
 
+	// if distinct query, then return unknown
+	if stmt != nil && stmt.DistinctFields != nil {
+		return UNKNOWN
+	}
+
 	// Avoid promql function call
 	hasPromCall := len(schema.GetPromCalls()) > 0
 	isPromQuery := schema.Options().IsPromQuery()

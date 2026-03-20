@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"math/rand/v2"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -23,12 +24,13 @@ import (
 	"github.com/influxdata/influxdb"
 	"github.com/influxdata/influxdb/models"
 	"github.com/influxdata/influxdb/uuid"
-	jsoniter "github.com/json-iterator/go"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	compression "github.com/openGemini/openGemini/lib/compress"
 	config2 "github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
+	"github.com/openGemini/openGemini/lib/encoding"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/failpoint"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/memory"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
@@ -46,16 +48,17 @@ import (
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	Parser "github.com/openGemini/openGemini/lib/util/lifted/parser"
+	"github.com/openGemini/openGemini/lib/util/lifted/smart_query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/openGemini/openGemini/lib/validation"
-	"github.com/pingcap/failpoint"
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/prompb"
 	"go.uber.org/zap"
 	"golang.org/x/time/rate"
 )
 
-var json2 = jsoniter.ConfigCompatibleWithStandardLibrary
+var json2 = encoding.JSONConfig
 
 var handlerLogLimit int
 
@@ -234,6 +237,7 @@ func NewHandler(c config.Config) *Handler {
 	if c.ResultCache.Enabled {
 		h.ResultCache = NewResultCache(h.Logger, c.ResultCache)
 	}
+	Parser.NewWriteRequestPool(max(c.MaxConcurrentWriteLimit))
 
 	return h
 }
@@ -309,15 +313,15 @@ func (h *Handler) AddInfluxDBAPIRoutes(writeLogEnabled bool) {
 		},
 		{
 			"otlp-traces-write", // open-telemetry OTLP traces remote write
-			"POST", "/api/v1/otlp/traces", false, true, h.serveOtlpTracesWrite,
+			"POST", "/api/v1/otlp/{otlp_db}/traces", false, true, h.serveOtlpTracesWrite,
 		},
 		{
 			"otlp-metrics-write", // open-telemetry OTLP metrics remote write
-			"POST", "/api/v1/otlp/metrics", false, true, h.serveOtlpMetricsWrite,
+			"POST", "/api/v1/otlp/{otlp_db}/metrics", false, true, h.serveOtlpMetricsWrite,
 		},
 		{
 			"otlp-logs-write", // open-telemetry OTLP logs remote write
-			"POST", "/api/v1/otlp/logs", false, true, h.serveOtlpLogsWrite,
+			"POST", "/api/v1/otlp/{otlp_db}/logs", false, true, h.serveOtlpLogsWrite,
 		},
 	}...)
 }
@@ -635,7 +639,7 @@ func (h *Handler) AddRoutes(routes ...Route) {
 		if r.Method == http.MethodPost {
 			switch r.Pattern {
 			case "/write", "/api/v1/prom/write", "/repo/{repository}/logstreams/{logStream}/records",
-				"/api/streams/{repository}/{logStream}/upload", "/api/v1/otlp/traces", "/api/v1/otlp/metrics", "/api/v1/otlp/logs":
+				"/api/streams/{repository}/{logStream}/upload", "/api/v1/otlp/{otlp_db}/traces", "/api/v1/otlp/{otlp_db}/metrics", "/api/v1/otlp/{otlp_db}/logs":
 				handler = h.writeThrottler.Handler(handler)
 			case "/query", "/api/v1/prom/query":
 				handler = h.queryThrottler.Handler(handler)
@@ -679,6 +683,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// changed 2023-06-30, use GeminiDB replace influxdb
 	// Add version and build header to all Geminidb requests.
+	w.Header().Add("X-Influxdb-Version", h.Version)
 	w.Header().Add("X-Geminidb-Version", h.Version)
 	w.Header().Add("X-Geminidb-Build", h.BuildType)
 
@@ -705,10 +710,6 @@ func (h *Handler) writeHeader(w http.ResponseWriter, code int) {
 		handlerStat.ServerErrors.Incr()
 	}
 	w.WriteHeader(code)
-}
-
-func isInternalDatabase(dbName string) bool {
-	return dbName == "_internal"
 }
 
 func (h *Handler) serveSysCtrl(w http.ResponseWriter, r *http.Request, user meta2.User) {
@@ -796,7 +797,15 @@ func (h *Handler) serveBackup(w http.ResponseWriter, r *http.Request, mod string
 
 	var err error
 	if mod == syscontrol.Backup {
-		err = syscontrol.ProcessBackup(req, nw, config.CombineDomain(h.SQLConfig.HTTP.Domain, h.Config.BindAddress))
+		sqlHost := strings.Split(h.Config.BindAddress, ",")
+		for i := range sqlHost {
+			sqlHost[i] = config.CombineDomain(h.SQLConfig.HTTP.Domain, sqlHost[i])
+			s := strings.Split(sqlHost[i], ":")
+			if len(s) > 0 {
+				sqlHost[i] = s[0]
+			}
+		}
+		err = syscontrol.ProcessBackup(req, nw, sqlHost)
 	} else {
 		err = syscontrol.ProcessRequest(req, nw)
 	}
@@ -819,6 +828,10 @@ func (h *Handler) getQueryFromRequest(r *http.Request, param *QueryParam, user m
 	}
 
 	qp = strings.TrimSpace(qp)
+	if config2.IsSmartQuery() {
+		return qp
+	}
+
 	if user != nil {
 		h.Logger.Info(HideQueryPassword(qp), zap.String("userID", user.ID()), zap.String("remote_addr", r.RemoteAddr))
 	} else {
@@ -1072,12 +1085,19 @@ func transformRequestParams(r *http.Request) {
 }
 
 // rewritePipeStateForQuery is used to generate selectStmt based on the pipe state.
-func (h *Handler) rewritePipeStateForQuery(q *influxql.Query, param *QueryParam, info *measurementInfo) {
+func (h *Handler) rewritePipeStateForQuery(q *influxql.Query, param *QueryParam, info *measurementInfo) (error, int) {
 	var selectStmt *influxql.SelectStatement
+	var ok bool
 	if stmt, currOk := q.Statements[0].(*influxql.ExplainStatement); currOk {
-		selectStmt = stmt.Statement
+		selectStmt, ok = stmt.Statement.(*influxql.SelectStatement)
 	} else {
-		selectStmt, _ = q.Statements[0].(*influxql.SelectStatement)
+		selectStmt, ok = q.Statements[0].(*influxql.SelectStatement)
+	}
+	if !ok {
+		errMsgMark := "it can not be parser which is not select statement"
+		errMsg := fmt.Sprintf("%s: %v", errMsgMark, zap.String("db", info.database))
+		h.Logger.Error(errMsg)
+		return fmt.Errorf("%s", errMsgMark), http.StatusBadRequest
 	}
 	selectStmt.RewriteUnnestSource()
 	selectStmt.Sources = influxql.Sources{&influxql.Measurement{Name: info.name, Database: info.database, RetentionPolicy: info.retentionPolicy}}
@@ -1106,6 +1126,7 @@ func (h *Handler) rewritePipeStateForQuery(q *influxql.Query, param *QueryParam,
 			}
 		}
 	}
+	return nil, http.StatusOK
 }
 
 func (h *Handler) buildLogQueryParam(r *http.Request) (*QueryParam, error) {
@@ -1152,18 +1173,105 @@ func (h *Handler) parsePipeAndSqlForQuery(r *http.Request, user meta2.User, info
 		}
 	}
 
-	h.rewritePipeStateForQuery(sqlQuery, para, info)
+	if err, i := h.rewritePipeStateForQuery(sqlQuery, para, info); err != nil {
+		return nil, i, err
+	}
 	return sqlQuery, http.StatusOK, nil
+}
+
+func (h *Handler) IsSmartQuery(q *influxql.Query, r *http.Request) (*smart_query.SmartSelectStatement, bool) {
+	db := r.FormValue("db")
+	rp := r.FormValue("rp")
+	if len(q.Statements) != 1 {
+		return nil, false
+	}
+	selectStmt, ok := q.Statements[0].(*influxql.SelectStatement)
+	if !ok {
+		return nil, false
+	}
+	if len(selectStmt.Dimensions) > 1 {
+		return nil, false
+	}
+	groupByInterval, err := selectStmt.GroupByInterval()
+	if err != nil || (len(selectStmt.Dimensions) == 1 && groupByInterval == 0) {
+		return nil, false
+	}
+	newCond, newTimeRange, ok := smart_query.CheckCond(selectStmt.Condition, selectStmt.Location)
+	if !ok {
+		return nil, false
+	}
+	fields, ok := smart_query.CheckFields(selectStmt.Fields)
+	if !ok {
+		return nil, false
+	}
+	source, ok := smart_query.CheckSource(selectStmt.Sources)
+	if !ok {
+		return nil, false
+	}
+	hintType := hybridqp.GetHintType(selectStmt)
+	source.Database = db
+	source.RetentionPolicy = rp
+	smartStmt := &smart_query.SmartSelectStatement{
+		Condition:       newCond,
+		StartT:          newTimeRange.Min,
+		EndT:            newTimeRange.Max,
+		Fields:          fields,
+		Source:          source,
+		GroupByInterval: groupByInterval,
+		HintType:        int64(hintType),
+		Limit:           selectStmt.Limit,
+		Offset:          selectStmt.Offset,
+	}
+	return smartStmt, true
+}
+
+func (h *Handler) getOpts(r *http.Request, q *influxql.Query, user meta2.User, rw ResponseWriter, nodeID uint64, db string,
+	chunked bool, chunkSize int, innerChunkSize int) (*query.ExecutionOptions, error) {
+	// Check authorization.
+	err := h.checkAuthorization(user, q, db)
+	if err != nil {
+		h.httpError(rw, "error authorizing query: "+err.Error(), http.StatusForbidden)
+		h.Logger.Error("serveQuery error:user is not authorized to query to database", zap.Error(err))
+		return nil, err
+	}
+	isQuerySeriesLimit := r.FormValue("is_query_series_limit") == "true"
+	opts := query.ExecutionOptions{
+		IsQuerySeriesLimit: isQuerySeriesLimit,
+		Database:           db,
+		RetentionPolicy:    r.FormValue("rp"),
+		ChunkSize:          chunkSize,
+		Chunked:            chunked,
+		ReadOnly:           r.Method == "GET",
+		NodeID:             nodeID,
+		InnerChunkSize:     innerChunkSize,
+		ParallelQuery:      atomic.LoadInt32(&syscontrol.ParallelQueryInBatch) == 1,
+		Quiet:              true,
+		Authorizer:         h.getAuthorizer(user),
+	}
+
+	// Make sure if the client disconnects we signal the query to abort
+	return &opts, nil
 }
 
 // serveQuery parses an incoming query and, if valid, executes the query
 func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.User) {
-	handlerStat.QueryRequests.Incr()
-	handlerStat.ActiveQueryRequests.Incr()
+
+	db := r.FormValue("db")
+
+	statAdd := func(addr *statistics.ItemInt64, delta int64) {
+		if util.IsInternalDatabase(db) {
+			return
+		} else {
+			addr.Add(delta)
+		}
+	}
+
+	statAdd(handlerStat.QueryRequests, 1)
+	statAdd(handlerStat.ActiveQueryRequests, 1)
 	start := time.Now()
 	defer func() {
-		handlerStat.ActiveQueryRequests.Decr()
-		handlerStat.QueryRequestDuration.AddSinceNano(start)
+		statAdd(handlerStat.ActiveQueryRequests, -1)
+		statAdd(handlerStat.QueryRequestDuration, time.Since(start).Nanoseconds())
 	}()
 
 	// Retrieve the underlying ResponseWriter or initialize our own.
@@ -1199,6 +1307,7 @@ func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.
 	var err error
 	var status int
 	isPipe := r.FormValue("pipe") == "true"
+	async := r.FormValue("async") == "true"
 	if isPipe {
 		repository := r.URL.Query().Get("db")
 		logStream := r.URL.Query().Get("measurement")
@@ -1232,59 +1341,72 @@ func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.
 		}
 	}
 
-	epoch := strings.TrimSpace(r.FormValue("epoch"))
-	if epoch == "" {
-		epoch = "rfc3339"
-	}
-
-	db := r.FormValue("db")
-	var qDuration *statistics.SQLSlowQueryStatistics
-	if !isInternalDatabase(db) {
-		qDuration = statistics.NewSqlSlowQueryStatistics(db)
-		defer func() {
-			d := time.Now().Sub(start)
-			statQueryInfo(q, d, db)
-			if d.Nanoseconds() > time.Second.Nanoseconds()*10 {
-				qDuration.AddDuration("TotalDuration", d.Nanoseconds())
-				statistics.AppendSqlQueryDuration(qDuration)
-				h.Logger.Info("slow query", zap.Duration("duration", d), zap.String("db", qDuration.DB),
-					zap.String("query", qDuration.Query))
-			}
-		}()
-	}
-
-	// Check authorization.
-	err = h.checkAuthorization(user, q, db)
-	if err != nil {
-		h.httpError(rw, "error authorizing query: "+err.Error(), http.StatusForbidden)
-		h.Logger.Error("serveQuery error:user is not authorized to query to database", zap.Error(err))
-		return
-	}
-
 	// Parse chunk size. Use default if not provided or unparsable.
 	chunked, chunkSize, innerChunkSize, err := h.parseChunkSize(r)
 	if err != nil {
 		h.httpError(rw, err.Error(), http.StatusBadRequest)
 		h.Logger.Error("serveQuery: parseChunkSize error!", zap.Error(err))
-	}
-	// Parse whether this is an async command.
-	async := r.FormValue("async") == "true"
-
-	isQuerySeriesLimit := r.FormValue("is_query_series_limit") == "true"
-	opts := query.ExecutionOptions{
-		IsQuerySeriesLimit: isQuerySeriesLimit,
-		Database:           db,
-		RetentionPolicy:    r.FormValue("rp"),
-		ChunkSize:          chunkSize,
-		Chunked:            chunked,
-		ReadOnly:           r.Method == "GET",
-		NodeID:             nodeID,
-		InnerChunkSize:     innerChunkSize,
-		ParallelQuery:      atomic.LoadInt32(&syscontrol.ParallelQueryInBatch) == 1,
-		Quiet:              true,
-		Authorizer:         h.getAuthorizer(user),
+		return
 	}
 
+	rp := r.FormValue("rp")
+	if rp == "" {
+		var database *meta2.DatabaseInfo
+		if database, err = h.MetaClient.Database(db); err == nil && database != nil {
+			rp = database.DefaultRetentionPolicy
+		}
+	}
+
+	var qDuration *statistics.SQLSlowQueryStatistics
+	if !util.IsInternalDatabase(db) {
+		qDuration = statistics.NewSqlSlowQueryStatistics(db)
+		defer func() {
+			d := time.Now().Sub(start)
+			if h.SQLConfig.Monitor.StoreEnabled && h.Config.QueryStatEnabled && h.Config.QueryStatRatio > rand.Float64() {
+				statQueryInfo(q, d, db)
+			}
+
+			if d.Nanoseconds() > int64(config.GetHttpConfig().SlowQueryTime) {
+				var userID string
+				if user != nil {
+					userID = user.ID()
+				}
+				qDuration.AddDuration("TotalDuration", d.Nanoseconds())
+				statistics.AppendSqlQueryDuration(qDuration)
+				// The character string content "Slow query" is used by the influxdb-agent to
+				// determine slow logs and cannot be modified.
+				logger.GetSlowQueryLogger().Info("Slow query",
+					zap.String("query", qDuration.Query),
+					zap.Duration("elapsed", time.Since(start)),
+					zap.String("db", qDuration.DB),
+					zap.String("rp", rp),
+					zap.String("local", r.Host),
+					zap.String("from", r.RemoteAddr),
+					zap.String("user", userID),
+					zap.Int64("prepareDuration(ns)", atomic.LoadInt64(&qDuration.PrepareDuration)),
+					zap.Int64("iteratorDuration(ns)", atomic.LoadInt64(&qDuration.IteratorDuration)),
+					zap.Int64("emitDuration(ns)", atomic.LoadInt64(&qDuration.EmitDuration)),
+					zap.Int64("transDuration(ns)", atomic.LoadInt64(&qDuration.TransDuration)),
+				)
+			}
+		}()
+	}
+
+	if config2.IsSmartQuery() && h.handleSmartQuery(w, r, q) {
+		return
+	}
+
+	var results <-chan *query.Result
+	var auditLogTraceId string
+	epoch := strings.TrimSpace(r.FormValue("epoch"))
+	if epoch == "" {
+		epoch = "rfc3339"
+	}
+	var opts *query.ExecutionOptions
+	opts, err = h.getOpts(r, q, user, rw, nodeID, db, chunked, chunkSize, innerChunkSize)
+	if err != nil {
+		return
+	}
 	// Make sure if the client disconnects we signal the query to abort
 	var closing chan struct{}
 	if !async {
@@ -1304,9 +1426,14 @@ func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.
 		}()
 	}
 
-	// Execute query
-	results := h.QueryExecutor.ExecuteQuery(q, opts, closing, qDuration)
+	// audit log
+	auditLogTraceId = logger.GenTraceID()
+	for _, stmt := range q.Statements {
+		LoggingAudit(stmt, r.Host, r.RemoteAddr, auditLogTraceId, user, nil, nil)
+	}
 
+	// Execute query
+	results = h.QueryExecutor.ExecuteQuery(q, *opts, closing, qDuration)
 	// If we are running in async mode, open a goroutine to drain the results
 	// and return with a StatusNoContent.
 	if async {
@@ -1330,35 +1457,42 @@ func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.
 
 	// pull all results from the channel
 	rows := 0
-	for r := range results {
+	for res := range results {
 		// Ignore nil results.
-		if r == nil {
+		if res == nil {
 			continue
 		}
 
-		if isPipe && r.Err != nil {
-			h.httpError(rw, r.Err.Error(), http.StatusBadRequest)
+		if isPipe && res.Err != nil {
+			h.httpError(rw, res.Err.Error(), http.StatusBadRequest)
 			h.Logger.Error("serveQuery: executeQuery results error!", zap.Error(err))
+			LoggingAudit(q.Statements[res.StatementID], r.Host, r.RemoteAddr, auditLogTraceId, user, &start, res.Err)
 			return
 		}
+		// logging audit log after execute
+		LoggingAudit(q.Statements[res.StatementID], r.Host, r.RemoteAddr, auditLogTraceId, user, &start, nil)
 
 		// if requested, convert result timestamps to epoch
 		if epoch != "rfc3339" {
-			convertToEpoch(r, epoch)
+			convertToEpoch(res, epoch)
 		}
 
 		// Write out result immediately if chunked.
 		if chunked {
+			transStart := time.Now()
 			n, _ := rw.WriteResponse(Response{
-				Results: []*query.Result{r},
+				Results: []*query.Result{res},
 			})
-			handlerStat.QueryRequestBytesTransmitted.Add(int64(n))
+			statAdd(handlerStat.QueryRequestBytesTransmitted, int64(n))
 			w.(http.Flusher).Flush()
+			if qDuration != nil {
+				qDuration.AddDuration("TransDuration", time.Since(transStart).Nanoseconds())
+			}
 			continue
 		}
 
-		rows = h.getResultRowsCnt(r, rows)
-		if !h.updateStmtId2Result(r, stmtID2Result) {
+		rows = h.getResultRowsCnt(res, rows)
+		if !h.updateStmtId2Result(res, stmtID2Result) {
 			continue
 		}
 
@@ -1372,7 +1506,7 @@ func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.
 			// with another result.  The series, on the other hand, still
 			// returns partial true if it was truncated or had more data to
 			// send in a future chunk.
-			r.Partial = false
+			res.Partial = false
 			break
 		}
 	}
@@ -1380,9 +1514,68 @@ func (h *Handler) serveQuery(w http.ResponseWriter, r *http.Request, user meta2.
 	resp := h.getStmtResult(stmtID2Result)
 	// If it's not chunked we buffered everything in memory, so write it out
 	if !chunked {
+		transStart := time.Now()
 		n, _ := rw.WriteResponse(resp)
-		handlerStat.QueryRequestBytesTransmitted.Add(int64(n))
+		statAdd(handlerStat.QueryRequestBytesTransmitted, int64(n))
+		if qDuration != nil {
+			qDuration.AddDuration("TransDuration", time.Since(transStart).Nanoseconds())
+		}
 	}
+}
+
+func LoggingAudit(stmt influxql.Statement, local, from, traceId string, user meta2.User, start *time.Time, err error) {
+	switch stmt.(type) {
+	case *influxql.AlterRetentionPolicyStatement:
+	case *influxql.AlterShardKeyStatement:
+	case *influxql.CreateDatabaseStatement:
+	case *influxql.CreateMeasurementStatement:
+	case *influxql.CreateRetentionPolicyStatement:
+	case *influxql.CreateSubscriptionStatement:
+	case *influxql.CreateContinuousQueryStatement:
+	case *influxql.DropContinuousQueryStatement:
+	case *influxql.CreateUserStatement:
+	case *influxql.DeleteSeriesStatement:
+	case *influxql.DropDatabaseStatement:
+	case *influxql.DropMeasurementStatement:
+	case *influxql.DropSeriesStatement:
+	case *influxql.DropRetentionPolicyStatement:
+	case *influxql.DropShardStatement:
+	case *influxql.DropSubscriptionStatement:
+	case *influxql.DropUserStatement:
+	case *influxql.GrantStatement:
+	case *influxql.GrantAdminStatement:
+	case *influxql.RevokeStatement:
+	case *influxql.RevokeAdminStatement:
+	case *influxql.SetPasswordUserStatement:
+	case *influxql.KillQueryStatement:
+	case *influxql.CreateDownSampleStatement:
+	case *influxql.DropDownSampleStatement:
+	case *influxql.CreateStreamStatement:
+	case *influxql.DropStreamsStatement:
+	case *influxql.SetConfigStatement:
+	default:
+		return
+	}
+
+	fields := []zap.Field{
+		zap.String("statement", stmt.String()),
+		zap.String("traceID", traceId),
+		zap.String("local", local),
+		zap.String("from", from),
+	}
+	if user != nil {
+		fields = append(fields, zap.String("user", user.ID()))
+	}
+	msg := "DDL Statement (Start)"
+	if start != nil {
+		msg = "DDL Statement (End)"
+		fields = append(fields, zap.Duration("elapsed", time.Since(*start)))
+	}
+	if err != nil {
+		msg = "DDL Statement (Failed)"
+		fields = append(fields, zap.Error(err))
+	}
+	logger.GetAuditLogger().Info(msg, fields...)
 }
 
 // async drains the results from an async query and logs a message if it fails.
@@ -1486,13 +1679,21 @@ func (h *Handler) serveWriteV1(w http.ResponseWriter, r *http.Request, user meta
 
 // serveWrite receives incoming series data in line protocol format and writes it to the database.
 func (h *Handler) serveWrite(database string, rp string, w http.ResponseWriter, r *http.Request, user meta2.User) {
-	handlerStat.WriteRequests.Incr()
-	handlerStat.ActiveWriteRequests.Incr()
-	handlerStat.WriteRequestBytesIn.Add(r.ContentLength)
+	statAdd := func(addr *statistics.ItemInt64, delta int64) {
+		if util.IsInternalDatabase(database) {
+			return
+		} else {
+			addr.Add(delta)
+		}
+	}
+
+	statAdd(handlerStat.WriteRequests, 1)
+	statAdd(handlerStat.ActiveWriteRequests, 1)
+	statAdd(handlerStat.WriteRequestBytesIn, r.ContentLength)
 	defer func(start time.Time) {
 		d := time.Since(start).Nanoseconds()
-		handlerStat.ActiveWriteRequests.Decr()
-		handlerStat.WriteRequestDuration.Add(d)
+		statAdd(handlerStat.ActiveWriteRequests, -1)
+		statAdd(handlerStat.WriteRequestDuration, d)
 	}(time.Now())
 
 	if syscontrol.DisableWrites {
@@ -1501,9 +1702,9 @@ func (h *Handler) serveWrite(database string, rp string, w http.ResponseWriter, 
 		return
 	}
 
-	if syscontrol.IsReadonly() {
+	if syscontrol.IsReadonly() && !syscontrol.IsEnableReadonlyWrite() {
 		h.httpError(w, "readonly now and writing is not allowed", http.StatusBadRequest)
-		h.Logger.Error("serveWrite: readonly now and writing is not allowed", zap.Bool("IsReadonly", syscontrol.IsReadonly()))
+		h.Logger.Error("serveWrite: readonly now and writing is not allowed")
 		return
 	}
 
@@ -1512,7 +1713,7 @@ func (h *Handler) serveWrite(database string, rp string, w http.ResponseWriter, 
 		err := errno.NewError(errno.HttpDatabaseNotFound)
 		h.Logger.Error("serveWrite", zap.Error(err))
 		h.httpError(w, "database is required", http.StatusBadRequest)
-		handlerStat.Write400ErrRequests.Incr()
+		statAdd(handlerStat.Write400ErrRequests, 1)
 		return
 	}
 
@@ -1520,7 +1721,7 @@ func (h *Handler) serveWrite(database string, rp string, w http.ResponseWriter, 
 		err := errno.NewError(errno.HttpDatabaseNotFound)
 		h.Logger.Error("serveWrite", zap.Error(err), zap.String("db", database))
 		h.httpError(w, fmt.Sprintf("database not found: %q", database), http.StatusNotFound)
-		handlerStat.Write400ErrRequests.Incr()
+		statAdd(handlerStat.Write400ErrRequests, 1)
 		return
 	}
 
@@ -1529,7 +1730,7 @@ func (h *Handler) serveWrite(database string, rp string, w http.ResponseWriter, 
 			h.httpError(w, fmt.Sprintf("user is required to write to database %q", database), http.StatusForbidden)
 			err := errno.NewError(errno.HttpForbidden)
 			h.Logger.Error("write error: user is required to write to database", zap.Error(err), zap.String("db", database))
-			handlerStat.Write400ErrRequests.Incr()
+			statAdd(handlerStat.Write400ErrRequests, 1)
 			return
 		}
 
@@ -1537,7 +1738,7 @@ func (h *Handler) serveWrite(database string, rp string, w http.ResponseWriter, 
 			err := errno.NewError(errno.HttpForbidden)
 			h.httpError(w, fmt.Sprintf("%q user is not authorized to write to database %q", user.ID(), database), http.StatusForbidden)
 			h.Logger.Error("write error:user is not authorized to write to database", zap.Error(err), zap.String("db", database), zap.String("user", user.ID()))
-			handlerStat.Write400ErrRequests.Incr()
+			statAdd(handlerStat.Write400ErrRequests, 1)
 			return
 		}
 	}
@@ -1554,7 +1755,7 @@ func (h *Handler) serveWrite(database string, rp string, w http.ResponseWriter, 
 			h.httpError(w, err.Error(), http.StatusBadRequest)
 			error := errno.NewError(errno.HttpBadRequest)
 			h.Logger.Error("write error:Handle gzip decoding of the body err", zap.Error(error), zap.String("db", database))
-			handlerStat.Write400ErrRequests.Incr()
+			statAdd(handlerStat.Write400ErrRequests, 1)
 			return
 		}
 		defer compression.PutGzipReader(b)
@@ -1566,7 +1767,7 @@ func (h *Handler) serveWrite(database string, rp string, w http.ResponseWriter, 
 			h.httpError(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
 			err := errno.NewError(errno.HttpRequestEntityTooLarge)
 			h.Logger.Error("serveWrite", zap.Int64("ContentLength", r.ContentLength), zap.Error(err), zap.String("db", database))
-			handlerStat.Write400ErrRequests.Incr()
+			statAdd(handlerStat.Write400ErrRequests, 1)
 			return
 		}
 	}
@@ -1620,7 +1821,7 @@ func (h *Handler) serveWrite(database string, rp string, w http.ResponseWriter, 
 					// uw.ReqBuf is the line protocol
 					h.SubscriberManager.Send(db, rp, uw.ReqBuf)
 				}
-				handlerStat.PointsWrittenOK.Add(int64(len(rows)))
+				statAdd(handlerStat.PointsWrittenOK, int64(len(rows)))
 			}
 			ctx.Wg.Done()
 		}
@@ -1628,59 +1829,59 @@ func (h *Handler) serveWrite(database string, rp string, w http.ResponseWriter, 
 		uw.Db = database
 		uw.ReqBuf, ctx.ReqBuf = ctx.ReqBuf, uw.ReqBuf
 		uw.EnableTagArray = h.MetaClient.TagArrayEnabled(database)
-		handlerStat.WriteRequestBytesReceived.Add(int64(len(uw.ReqBuf)))
+		statAdd(handlerStat.WriteRequestBytesReceived, int64(len(uw.ReqBuf)))
 
 		ctx.Wg.Add(1)
 		start := time.Now()
 		influx.ScheduleUnmarshalWork(uw)
-		handlerStat.WriteScheduleUnMarshalDns.AddSinceNano(start)
+		statAdd(handlerStat.WriteScheduleUnMarshalDns, time.Since(start).Nanoseconds())
 		numPtsInsert++
 	}
 	ctx.Wg.Wait()
 	if err := ctx.Error(); err != nil {
 		h.Logger.Error("write error:read body ", zap.Error(err), zap.String("db", database))
 		h.httpError(w, err.Error(), http.StatusBadRequest)
-		handlerStat.Write400ErrRequests.Incr()
+		statAdd(handlerStat.Write400ErrRequests, 1)
 		return
 	}
 	if err := ctx.UnmarshalErr; err != nil {
-		handlerStat.PointsWrittenFail.Add(int64(numPtsInsert))
+		statAdd(handlerStat.PointsWrittenFail, int64(numPtsInsert))
 		h.Logger.Error("write client error, unmarshal points failed", zap.Error(err), zap.String("db", database))
 		h.httpError(w, err.Error(), http.StatusBadRequest)
-		handlerStat.Write400ErrRequests.Incr()
+		statAdd(handlerStat.Write400ErrRequests, 1)
 		return
 	}
 	if err := ctx.CallbackErr; err != nil {
 		if influxdb.IsClientError(err) {
-			handlerStat.PointsWrittenFail.Add(int64(numPtsInsert))
+			statAdd(handlerStat.PointsWrittenFail, int64(numPtsInsert))
 			h.Logger.Error("write client error:WritePointsWithContext", zap.Error(err), zap.String("db", database))
 			h.httpError(w, err.Error(), http.StatusBadRequest)
-			handlerStat.Write400ErrRequests.Incr()
+			statAdd(handlerStat.Write400ErrRequests, 1)
 			return
 		} else if influxdb.IsAuthorizationError(err) {
-			handlerStat.PointsWrittenFail.Add(int64(numPtsParse))
+			statAdd(handlerStat.PointsWrittenFail, int64(numPtsParse))
 			h.httpError(w, err.Error(), http.StatusForbidden)
 			h.Logger.Error("write authorization error:WritePointsWithContext", zap.Error(err), zap.String("db", database))
-			handlerStat.Write400ErrRequests.Incr()
+			statAdd(handlerStat.Write400ErrRequests, 1)
 			return
 		} else if werr, ok := err.(msgservice.PartialWriteError); ok {
-			handlerStat.PointsWrittenOK.Add(int64(numPtsInsert - werr.Dropped))
-			handlerStat.PointsWrittenDropped.Add(int64(werr.Dropped))
+			statAdd(handlerStat.PointsWrittenOK, int64(numPtsInsert-werr.Dropped))
+			statAdd(handlerStat.PointsWrittenDropped, int64(werr.Dropped))
 			h.httpError(w, werr.Error(), http.StatusBadRequest)
 			h.Logger.Error("write Partial Write error:WritePointsWithContext", zap.Error(werr.Reason), zap.String("db", database))
-			handlerStat.Write400ErrRequests.Incr()
+			statAdd(handlerStat.Write400ErrRequests, 1)
 			return
 		} else if errno.Equal(err, errno.MeasurementNameTooLong) {
-			handlerStat.PointsWrittenFail.Add(int64(numPtsParse))
+			statAdd(handlerStat.PointsWrittenFail, int64(numPtsParse))
 			h.httpError(w, werr.Error(), http.StatusBadRequest)
 			h.Logger.Error("write error:WritePointsWithContext", zap.Error(werr.Reason), zap.String("db", database))
-			handlerStat.Write400ErrRequests.Incr()
+			statAdd(handlerStat.Write400ErrRequests, 1)
 			return
-		} else if err != nil {
-			handlerStat.PointsWrittenFail.Add(int64(numPtsInsert))
+		} else {
+			statAdd(handlerStat.PointsWrittenFail, int64(numPtsInsert))
 			h.httpError(w, err.Error(), http.StatusInternalServerError)
 			h.Logger.Error("write error:WritePointsWithContext", zap.Error(err), zap.String("db", database))
-			handlerStat.Write500ErrRequests.Incr()
+			statAdd(handlerStat.Write500ErrRequests, 1)
 			return
 		}
 	}
@@ -1720,12 +1921,9 @@ func (h *Handler) failPoint(w http.ResponseWriter, r *http.Request) {
 	var err error
 	if flag == "enable" {
 		term := strings.TrimSpace(r.FormValue("term"))
-		err = failpoint.Enable(point, term)
-		if err != nil {
-			h.Logger.Error("enable failpoint fail", zap.String("point", point), zap.String("term", term), zap.Error(err))
-		} else {
-			h.Logger.Info("enable failpoint success", zap.String("point", point), zap.String("term", term))
-		}
+		failpoint.Enable(point, term)
+		h.Logger.Info("enable failpoint success", zap.String("point", point), zap.String("term", term))
+
 		var req msgservice.SysCtrlRequest
 		req.SetMod(syscontrol.Failpoint)
 		req.SetParam(map[string]string{
@@ -1740,12 +1938,9 @@ func (h *Handler) failPoint(w http.ResponseWriter, r *http.Request) {
 		nw.WriteString("\n}\n")
 		nw.Flush()
 	} else if flag == "disable" {
-		err = failpoint.Disable(point)
-		if err != nil {
-			h.Logger.Error("disable failpoint fail", zap.String("point", point), zap.Error(err))
-		} else {
-			h.Logger.Info("disable failpoint success", zap.String("point", point))
-		}
+		failpoint.Disable(point)
+		h.Logger.Info("disable failpoint success", zap.String("point", point))
+
 		var req msgservice.SysCtrlRequest
 		req.SetMod(syscontrol.Failpoint)
 		req.SetParam(map[string]string{
@@ -1769,20 +1964,7 @@ func (h *Handler) failPoint(w http.ResponseWriter, r *http.Request) {
 
 // convertToEpoch converts result timestamps from time.Time to the specified epoch.
 func convertToEpoch(r *query.Result, epoch string) {
-	divisor := int64(1)
-
-	switch epoch {
-	case "u":
-		divisor = int64(time.Microsecond)
-	case "ms":
-		divisor = int64(time.Millisecond)
-	case "s":
-		divisor = int64(time.Second)
-	case "m":
-		divisor = int64(time.Minute)
-	case "h":
-		divisor = int64(time.Hour)
-	}
+	divisor := util.EpochDivisor(epoch)
 
 	for _, s := range r.Series {
 		for _, v := range s.Values {
@@ -2264,19 +2446,12 @@ func (t *Throttler) Handler(h http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// If there is no limit for concurrent queries and queues, the memory usage
 			// exceeds the threshold the new query is canceled and an error is reported
-			if t.query && sysconfig.GetInterruptQuery() {
+			if t.query && sysconfig.GetInterruptQuery() && !util.IsInternalDatabase(r.FormValue("db")) {
 				memUsed := memory.GetMemMonitor().MemUsedPct()
 				memThre := float64(sysconfig.GetUpperMemPct())
-				if memUsed > memThre {
-					// Even if the memory usage exceeds the threshold
-					// the `show queries` and `kill query` statements will not be blocked.
-					uri := strings.ToLower(r.RequestURI)
-					if strings.Contains(uri, "show+queries") || strings.Contains(uri, "kill+query") {
-						h.ServeHTTP(w, r)
-						return
-					}
+				if memUsed > memThre && IsBlockQuery(r.FormValue("q")) {
 					resMsg := "request throttled, query memory exceeds the threshold, query is canceled"
-					t.Logger.Warn(resMsg, zap.Float64("mem used", memUsed), zap.Float64("mem threshold", memThre))
+					t.Logger.Warn(resMsg, zap.Float64("mem used", memUsed), zap.Float64("mem threshold", memThre), zap.String("query", r.FormValue("q")))
 					http.Error(w, resMsg, http.StatusServiceUnavailable)
 					return
 				}
@@ -2304,10 +2479,10 @@ func (t *Throttler) Handler(h http.Handler) http.Handler {
 				// If there is limit for concurrent queries and queues, the memory usage exceeds the threshold
 				// the new query is blocked and wait until the memory is less than the threshold the query
 				// queue is full, or the query times out
-				if t.query && sysconfig.GetInterruptQuery() {
+				if t.query && sysconfig.GetInterruptQuery() && !util.IsInternalDatabase(r.FormValue("db")) {
 					memUsed := memory.GetMemMonitor().MemUsedPct()
 					memThre := float64(sysconfig.GetUpperMemPct())
-					if memUsed < memThre {
+					if memUsed < memThre || !IsBlockQuery(r.FormValue("q")) {
 						break
 					}
 					// Even if the memory usage exceeds the threshold
@@ -2317,7 +2492,7 @@ func (t *Throttler) Handler(h http.Handler) http.Handler {
 						break
 					}
 					resMsg := "request throttled, query memory exceeds the threshold, query is blocked"
-					t.Logger.Warn(resMsg, zap.Float64("mem used", memUsed), zap.Float64("mem threshold", memThre))
+					t.Logger.Warn(resMsg, zap.Float64("mem used", memUsed), zap.Float64("mem threshold", memThre), zap.String("query", r.FormValue("q")))
 					ticker := time.NewTicker(periodOfInspection)
 					defer ticker.Stop()
 				Loop:
@@ -2461,6 +2636,16 @@ func (h *Handler) httpErrorRsp(w http.ResponseWriter, b []byte, code int) {
 	w.Write(b)
 }
 
+func (h *Handler) ValidAndGetQueryType(req FlightRequest) (string, error) {
+	if req.QueryType == "" {
+		return query.QueryTypeInfluxQL, nil // Default to influxql if not provided
+	} else if req.QueryType != query.QueryTypeInfluxQL && req.QueryType != query.QueryTypeSQL {
+		h.Logger.Error("invalid query type", zap.String("query_type", req.QueryType), zap.Any("r", req))
+		return "", fmt.Errorf(`invalid query_type "%s", must be "influxql" or "sql"`, req.QueryType)
+	}
+	return req.QueryType, nil
+}
+
 type LogResponse struct {
 	ErrorCode string `json:"error_code"`
 	ErrorMsg  string `json:"error_msg"`
@@ -2502,4 +2687,11 @@ func ConditionFuzz(b *influxql.BinaryExpr) {
 	default:
 		return
 	}
+}
+
+func IsBlockQuery(query string) bool {
+	q := strings.ToLower(strings.TrimSpace(query))
+	return strings.HasPrefix(q, "select") ||
+		strings.Contains(q, "show tag values") ||
+		strings.Contains(q, "show series")
 }

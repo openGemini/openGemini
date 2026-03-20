@@ -19,10 +19,10 @@ import (
 	"path"
 	"sync"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util/lifted/encoding"
 	"github.com/openGemini/openGemini/lib/util/lifted/encoding/lz4"
 )
 
@@ -416,6 +416,12 @@ func DecodeOffs(offs []uint32, i int) (start, end uint32) {
 	return
 }
 
+type FieldWriter struct {
+	dw *colstore.IndexWriter
+	hw *colstore.IndexWriter
+	pw *colstore.IndexWriter
+}
+
 type TextIndexWriter struct {
 	builder  *FullTextIndexBuilder
 	dir      string
@@ -423,6 +429,16 @@ type TextIndexWriter struct {
 	filePath string
 	lockPath string
 	tokens   string
+
+	writers map[string]*FieldWriter
+}
+
+func (w *TextIndexWriter) FlushSegment() error {
+	return nil
+}
+
+func (w *TextIndexWriter) Flush() error {
+	return nil
 }
 
 func NewTextIndexWriter(dir, msName, filePath, lockPath string, tokens string) *TextIndexWriter {
@@ -434,31 +450,28 @@ func NewTextIndexWriter(dir, msName, filePath, lockPath string, tokens string) *
 		filePath: filePath,
 		lockPath: lockPath,
 		tokens:   tokens,
+		writers:  make(map[string]*FieldWriter),
 	}
 	return indexWriter
 }
 
-func GetRowIdRange(rowsPerSegment []int, segId int) (int, int) {
-	startRow := 0
-	if segId > 0 {
-		startRow = rowsPerSegment[segId-1]
+func (w *TextIndexWriter) Files() []string {
+	files := make([]string, 0, len(w.writers)*3)
+	for _, fw := range w.writers {
+		files = append(files, fw.dw.FileName(), fw.hw.FileName(), fw.pw.FileName())
 	}
-
-	endRow := 0
-	segmentCnt := len(rowsPerSegment)
-	if segId+segmentCntInPart < segmentCnt {
-		endRow = rowsPerSegment[segId+segmentCntInPart-1]
-	} else {
-		endRow = rowsPerSegment[segmentCnt-1] + 1
-	}
-	return startRow, endRow
+	return files
 }
 
-func (w *TextIndexWriter) Open() error {
-	return nil
+func (w *TextIndexWriter) Open() {
+
 }
 
 func (w *TextIndexWriter) Close() error {
+	for _, fw := range w.writers {
+		w.CloseIndexWriters(fw.dw, fw.hw, fw.pw)
+	}
+
 	FreeFullTextIndexBuilder(w.builder)
 	w.builder = nil
 	return nil
@@ -469,6 +482,11 @@ func (w *TextIndexWriter) GetTextIndexFilePath(field string, fileType int) strin
 }
 
 func (w *TextIndexWriter) GetIndexFileWriters(field string) (*colstore.IndexWriter, *colstore.IndexWriter, *colstore.IndexWriter, error) {
+	ws, ok := w.writers[field]
+	if ok {
+		return ws.dw, ws.hw, ws.pw, nil
+	}
+
 	blockDataPath := w.GetTextIndexFilePath(field, colstore.TextIndexData)
 	blockHeadPath := w.GetTextIndexFilePath(field, colstore.TextIndexHead)
 	blockPartPath := w.GetTextIndexFilePath(field, colstore.TextIndexPart)
@@ -486,6 +504,12 @@ func (w *TextIndexWriter) GetIndexFileWriters(field string) (*colstore.IndexWrit
 		dataWriter.Reset()
 		headWriter.Reset()
 		return nil, nil, nil, err
+	}
+
+	w.writers[field] = &FieldWriter{
+		dw: dataWriter,
+		hw: headWriter,
+		pw: partWriter,
 	}
 	return dataWriter, headWriter, partWriter, nil
 }
@@ -637,20 +661,16 @@ func (w *TextIndexWriter) CreateAttachIndex(writeRec *record.Record, schemaIdx, 
 				data.GrowPackedBuf(keyDstLen, postDstLen)
 				keysPackSize, err := lz4.CompressBlock(data.Keys, data.PackedKeys)
 				if err != nil {
-					w.CloseIndexWriters(dataWriter, headWriter, partWriter)
 					return err
 				}
 				postPackSize, err := lz4.CompressBlock(data.Data, data.PackedData)
 				if err != nil {
-					w.CloseIndexWriters(dataWriter, headWriter, partWriter)
 					return err
 				}
 				if err := dataWriter.WriteData(data.PackedKeys[:keysPackSize]); err != nil {
-					w.CloseIndexWriters(dataWriter, headWriter, partWriter)
 					return err
 				}
 				if err := dataWriter.WriteData(data.PackedData[:postPackSize]); err != nil {
-					w.CloseIndexWriters(dataWriter, headWriter, partWriter)
 					return err
 				}
 				// update blockHeader and marshal
@@ -682,14 +702,11 @@ func (w *TextIndexWriter) CreateAttachIndex(writeRec *record.Record, schemaIdx, 
 			wp.memElements[i] = nil
 		}
 		if err := headWriter.WriteData(headBuf); err != nil {
-			w.CloseIndexWriters(dataWriter, headWriter, partWriter)
 			return err
 		}
 		if err := partWriter.WriteData(partBuf); err != nil {
-			w.CloseIndexWriters(dataWriter, headWriter, partWriter)
 			return err
 		}
-		w.CloseIndexWriters(dataWriter, headWriter, partWriter)
 		headBuf = headBuf[:0]
 		partBuf = partBuf[:0]
 	}

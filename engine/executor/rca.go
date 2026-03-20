@@ -20,6 +20,7 @@ import (
 	"sort"
 
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/lib/errno"
 	"go.uber.org/zap"
 )
 
@@ -188,6 +189,10 @@ func FaultDemarcation(chunks []Chunk, subTopo *Graph, algoParams AlgoParam, colM
 	}
 	BFSNarrow := algoParams.BFSNarrow
 
+	if err := validInputFields(chunks, colMap); err != nil {
+		return nil, err
+	}
+
 	// Extract anomaly timestamps.
 	coreAnomalyTS, err := extractCoreAnomalyTimestamps(chunks, colMap, coreEntityID, taskMeta)
 	if err != nil {
@@ -285,6 +290,62 @@ func FaultDemarcation(chunks []Chunk, subTopo *Graph, algoParams AlgoParam, colM
 	}
 
 	return buildGraph(nodeList, edgeList), nil
+}
+
+// rca assumes all values in ID, EntityID, Type and Annotation columns are valid
+func validInputFields(chunks []Chunk, colMap map[string]int) error {
+	for _, chunk := range chunks {
+		IDIdx, idOk := colMap[ID]
+		entityIDIdx, entityIDOk := colMap[EntityID]
+		typeIdx, typeOk := colMap[Type]
+		annotationIdx, annotationsOk := colMap[Annotations]
+		if !idOk || !entityIDOk || !typeOk || !annotationsOk {
+			return errno.NewError(errno.FieldNotFound)
+		}
+		columns := chunk.Columns()
+		idCol := columns[IDIdx]
+		entityIDCol := columns[entityIDIdx]
+		typeCol := columns[typeIdx]
+		annotationsCol := columns[annotationIdx]
+		if idCol.NilCount() != 0 {
+			return errno.NewError(errno.RequiredFieldInvalid, ID)
+		}
+		if entityIDCol.NilCount() != 0 {
+			return errno.NewError(errno.RequiredFieldInvalid, EntityID)
+		}
+		if typeCol.NilCount() != 0 {
+			return errno.NewError(errno.RequiredFieldInvalid, Type)
+		}
+		if annotationsCol.NilCount() != 0 {
+			return errno.NewError(errno.RequiredFieldInvalid, Annotations)
+		}
+	}
+	return nil
+}
+
+func FilterEventChunks(chunks []Chunk, nodes map[string]GraphNode, colMap map[string]int) (filterChunks []Chunk, err error) {
+	if _, exists := colMap[EntityID]; !exists {
+		return nil, errors.New("colMap has no entity_id when filter the events")
+	}
+	filterChunks = make([]Chunk, 0)
+	for _, chunk := range chunks {
+		if colMap[EntityID] >= len(chunk.Columns()) {
+			return nil, errors.New("the chunk has no entity_id column")
+		}
+		entityIDCol := chunk.Columns()[colMap[EntityID]]
+		rowsLength := entityIDCol.Length()
+		relatedIds := make([]int, 0, rowsLength)
+		for rowIdx := 0; rowIdx < rowsLength; rowIdx++ {
+			// entityIDCol has no nil
+			entityID := entityIDCol.StringValue(rowIdx)
+			if _, exists := nodes[entityID]; exists {
+				relatedIds = append(relatedIds, rowIdx)
+			}
+		}
+		filterChunk := chunk.FilterRowsByIndexes(relatedIds...)
+		filterChunks = append(filterChunks, filterChunk)
+	}
+	return
 }
 
 func buildGraph(nodeList []GraphNode, edgeList []GraphEdge) *Graph {

@@ -32,14 +32,20 @@ func TestStream(t *testing.T) {
 	stat.Init(tags)
 	stat.AddStreamIn(2)
 	stat.AddStreamInNum(2)
-	stat.AddStreamFilter(2)
-	stat.AddStreamFilterNum(2)
+	stat.AddStreamFilterIn(2)
+	stat.AddStreamFilterInNum(2)
+	stat.AddStreamFilterOut(2)
+	stat.AddStreamFilterOutNum(2)
+	stat.AddStreamReplayInNum(2)
 
 	fields := map[string]interface{}{
-		"StreamIn":        int64(2),
-		"StreamInNum":     int64(2),
-		"StreamFilter":    int64(2),
-		"StreamFilterNum": int64(2),
+		"StreamIn":           int64(2),
+		"StreamInNum":        int64(2),
+		"StreamFilter":       int64(2),
+		"StreamFilterNum":    int64(2),
+		"StreamFilterOut":    int64(2),
+		"StreamFilterOutNum": int64(2),
+		"StreamReplayInNum":  int64(2),
 	}
 	statistics.NewTimestamp().Init(time.Second)
 	buf, err := stat.Collect(nil)

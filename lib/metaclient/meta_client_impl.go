@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/url"
@@ -38,20 +39,22 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/obs"
-	"github.com/openGemini/openGemini/lib/rand"
 	"github.com/openGemini/openGemini/lib/spdy/transport"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics/opsStat"
 	"github.com/openGemini/openGemini/lib/sysinfo"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
-	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
+	"github.com/openGemini/openGemini/lib/util/lifted/smart_query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"go.uber.org/zap"
 	"golang.org/x/text/encoding/unicode"
 	"golang.org/x/text/transform"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/runtime/protoimpl"
 )
 
 // Client is used to execute commands on and read data from
@@ -145,6 +148,12 @@ var applyFunc = map[proto2.Command_Type]func(c *Client, op *proto2.Command) erro
 	proto2.Command_UpdateMetaNodeStatusCommand:      applyUpdateMetaNodeStatus,
 	proto2.Command_ReplaceMergeShardsCommand:        applyReplaceMergeShardsCommand,
 	proto2.Command_RecoverMetaData:                  applyRecoverMetaData,
+	proto2.Command_AlterShardsNumCommand:            applyAlterShardsNum,
+	proto2.Command_CreateResourceCommand:            applyCreateResource,
+	proto2.Command_DropResourceCommand:              applyDropResource,
+	proto2.Command_CreateTaskCommand:                applyCreateTask,
+	proto2.Command_DropTaskCommand:                  applyDropTask,
+	proto2.Command_UpdateShardingPlanCommand:        applyShardingPlan,
 }
 
 // NewClient returns a new *Client.
@@ -192,23 +201,23 @@ func (c *Client) SetHashAlgo(optHashAlgo string) {
 }
 
 // Open a connection to a meta service cluster.
-func (c *Client) Open() error {
+func (c *Client) Open(role Role) error {
 	if c.auth == nil {
 		c.auth = NewAuth(c.logger)
 	}
 	if c.UseSnapshotV2 {
 		meta2.DataLogger = logger.GetLogger().With(zap.String("service", "data"))
-		err := c.retryUntilSnapshotV2(SQL, 0)
+		err := c.retryUntilSnapshotV2(role, 0)
 		if err != nil {
 			// this will only be nil if the client has been closed,
 			// so we can exit out
 			c.logger.Error("client has been closed:", zap.String("err:", err.Error()))
 			return err
 		}
-		go c.pollForUpdatesV2(SQL)
+		go c.pollForUpdatesV2(role)
 	} else {
-		c.cacheData = c.retryUntilSnapshot(SQL, 0)
-		go c.pollForUpdates(SQL)
+		c.cacheData = c.retryUntilSnapshot(role, 0)
+		go c.pollForUpdates(role)
 	}
 
 	return nil
@@ -796,9 +805,7 @@ func (c *Client) ShowCluster(nodeType string, ID uint64) (models.Rows, error) {
 
 	t := proto2.Command_ShowClusterCommand
 	cmd := &proto2.Command{Type: &t}
-	if err := proto.SetExtension(cmd, proto2.E_ShowClusterCommand_Command, val); err != nil {
-		return nil, fmt.Errorf("setExtension err%v", err)
-	}
+	proto.SetExtension(cmd, proto2.E_ShowClusterCommand_Command, val)
 	b, err := c.RetryShowCluster(cmd)
 	if err != nil {
 		return nil, err
@@ -1035,6 +1042,24 @@ func (c *Client) AlterShardKey(database, retentionPolicy, mst string, shardKey *
 	return c.retryUntilExec(proto2.Command_AlterShardKeyCmd, proto2.E_AlterShardKeyCmd_Command, cmd)
 }
 
+func (c *Client) AlterShardsNum(database, retentionPolicy, mst string, numOfShards int32) error {
+	if numOfShards < -1 {
+		return fmt.Errorf("not valid numOfShards: %d", numOfShards)
+	}
+	_, err := c.Measurement(database, retentionPolicy, mst)
+	if err != nil {
+		return err
+	}
+
+	cmd := &proto2.AlterShardsNumCommand{
+		DBName:      proto.String(database),
+		RpName:      proto.String(retentionPolicy),
+		Name:        proto.String(mst),
+		NumOfShards: proto.Int32(numOfShards),
+	}
+	return c.retryUntilExec(proto2.Command_AlterShardsNumCommand, proto2.E_AlterShardsNumCommand_Command, cmd)
+}
+
 // CreateDatabase creates a database or returns it if it already exists.
 func (c *Client) CreateDatabase(name string, enableTagArray bool, replicaN uint32, options *obs.ObsOptions) (*meta2.DatabaseInfo, error) {
 	if strings.Count(name, "") > maxDbOrRpName {
@@ -1058,7 +1083,7 @@ func (c *Client) CreateDatabase(name string, enableTagArray bool, replicaN uint3
 		ReplicaNum:     proto.Uint32(replicaN),
 	}
 
-	if options != nil && options.Enabled {
+	if options != nil {
 		cmd.Options = meta2.MarshalObsOptions(options)
 	}
 
@@ -1408,6 +1433,24 @@ func (c *Client) GetNodePtsMap(database string) (map[uint64][]uint32, error) {
 			continue
 		}
 		if config.GetHaPolicy() == config.Replication && ptInfo[i].RGID < repGroupN && !repGroups[ptInfo[i].RGID].IsMasterPt(ptInfo[i].PtId) {
+			continue
+		}
+		nodePtMap[ptInfo[i].Owner.NodeID] = append(nodePtMap[ptInfo[i].Owner.NodeID], ptInfo[i].PtId)
+	}
+	return nodePtMap, nil
+}
+
+func (c *Client) GetAllRepNodePtsMap(database string) (map[uint64][]uint32, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if c.cacheData == nil || len(c.cacheData.PtView[database]) == 0 {
+		return nil, errno.NewError(errno.DatabaseNotFound, database)
+	}
+	nodePtMap := make(map[uint64][]uint32, len(c.cacheData.DataNodes))
+	ptInfo := c.cacheData.DBPtView(database)
+	for i := range ptInfo {
+		if c.cacheData.PtView[database][i].Status == meta2.Offline {
 			continue
 		}
 		nodePtMap[ptInfo[i].Owner.NodeID] = append(nodePtMap[ptInfo[i].Owner.NodeID], ptInfo[i].PtId)
@@ -1828,6 +1871,52 @@ func (c *Client) DropShard(id uint64) error {
 	return nil
 }
 
+func (c *Client) GetShardingPlan(dbName, rpName string) (*proto2.RPPTShardingPlan, error) {
+	startTime := time.Now()
+	currentServer := connectedServer
+	var err error
+	var data []byte
+	for {
+		c.mu.RLock()
+		select {
+		case <-c.closing:
+			c.mu.RUnlock()
+			return nil, errors.New("GetShardingPlan fail")
+		default:
+
+		}
+
+		if currentServer >= len(c.metaServers) {
+			currentServer = 0
+		}
+		c.mu.RUnlock()
+		callback := &GetShardingPlanCallback{}
+		msg := message.NewMetaMessage(message.GetShardingPlanRequestMessage, &message.GetShardingPlanRequest{DbName: dbName, RpName: rpName})
+		err = c.SendRPCMsg(currentServer, msg, callback)
+		if err == nil {
+			data = callback.Data
+			break
+		}
+		if !errno.Equal(err, errno.MetaIsNotLeader) {
+			return nil, err
+		}
+		if time.Since(startTime).Nanoseconds() > int64(len(c.metaServers))*HttpReqTimeout.Nanoseconds() {
+			break
+		}
+		time.Sleep(errSleep)
+		currentServer++
+	}
+	if len(data) == 0 {
+		return nil, nil
+	}
+	pb := &proto2.RPPTShardingPlan{}
+	err = proto.Unmarshal(data, pb)
+	if err != nil {
+		return nil, err
+	}
+	return pb, nil
+}
+
 func (c *Client) GetSgEndTime(database string, rp string, timestamp time.Time, engineType config.EngineType) (int64, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -1862,6 +1951,19 @@ func (c *Client) CreateShardGroup(database, policy string, timestamp time.Time, 
 	}
 	c.mu.RUnlock()
 
+	// get sharding plan for adaptive sharding
+	var plan *proto2.RPPTShardingPlan
+	if config.GetAdaptiveShardEnabled() {
+		plan, err = c.GetShardingPlan(database, policy)
+		// whether get sharding plan error or not should not interrupt createShardGroup
+		if err != nil {
+			c.logger.Error("GetShardingPlan fail", zap.Error(err))
+			plan = nil
+		}
+	}
+
+	shardGroupTimezone := config.GetTimeZoneName()
+
 	cmd := &proto2.CreateShardGroupCommand{
 		Database:   proto.String(database),
 		Policy:     proto.String(policy),
@@ -1869,6 +1971,10 @@ func (c *Client) CreateShardGroup(database, policy string, timestamp time.Time, 
 		ShardTier:  proto.Uint64(tier),
 		EngineType: proto.Uint32(uint32(engineType)),
 		Version:    proto.Uint32(version),
+		Timezone:   proto.String(shardGroupTimezone),
+	}
+	if plan != nil {
+		cmd.ShardingPlans = plan.Idxes
 	}
 
 	if err := c.retryUntilExec(proto2.Command_CreateShardGroupCommand, proto2.E_CreateShardGroupCommand_Command, cmd); err != nil {
@@ -2167,7 +2273,7 @@ func (c *Client) CreateMetaNode(httpAddr, tcpAddr string) (*meta2.NodeInfo, erro
 	cmd := &proto2.CreateMetaNodeCommand{
 		HTTPAddr: proto.String(httpAddr),
 		TCPAddr:  proto.String(tcpAddr),
-		Rand:     proto.Uint64(uint64(rand.Int63())),
+		Rand:     proto.Uint64(uint64(rand.Int64())),
 	}
 
 	if err := c.retryUntilExec(proto2.Command_CreateMetaNodeCommand, proto2.E_CreateMetaNodeCommand_Command, cmd); err != nil {
@@ -2276,7 +2382,7 @@ func (c *Client) index() uint64 {
 	return c.cacheData.Index
 }
 
-func (c *Client) LocalExec(index uint64, typ proto2.Command_Type, desc *proto.ExtensionDesc, value interface{}) error {
+func (c *Client) LocalExec(index uint64, typ proto2.Command_Type, desc *protoimpl.ExtensionInfo, value interface{}) error {
 	c.mu.RLock()
 	if index <= c.cacheData.Index {
 		c.mu.RUnlock()
@@ -2284,9 +2390,7 @@ func (c *Client) LocalExec(index uint64, typ proto2.Command_Type, desc *proto.Ex
 	}
 	c.mu.RUnlock()
 	opcmd := &proto2.Command{Type: &typ}
-	if err := proto.SetExtension(opcmd, desc, value); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(opcmd, desc, value)
 	if _, ok := applyFunc[typ]; ok {
 		c.waitForIndex(index)
 		return nil
@@ -2298,7 +2402,7 @@ func (c *Client) LocalExec(index uint64, typ proto2.Command_Type, desc *proto.Ex
 
 // retryUntilExec will attempt the command on each of the metaservers until it either succeeds or
 // hits the max number of tries
-func (c *Client) retryUntilExec(typ proto2.Command_Type, desc *proto.ExtensionDesc, value interface{}) error {
+func (c *Client) retryUntilExec(typ proto2.Command_Type, desc *protoimpl.ExtensionInfo, value interface{}) error {
 	index, err := c.retryExec(typ, desc, value)
 	if err != nil {
 		return err
@@ -2310,7 +2414,7 @@ func (c *Client) retryUntilExec(typ proto2.Command_Type, desc *proto.ExtensionDe
 	return nil
 }
 
-func (c *Client) retryExec(typ proto2.Command_Type, desc *proto.ExtensionDesc, value interface{}) (index uint64, err error) {
+func (c *Client) retryExec(typ proto2.Command_Type, desc *protoimpl.ExtensionInfo, value interface{}) (index uint64, err error) {
 	// TODO do not use index to check cache data is newest
 	tries := 0
 	currentServer := connectedServer
@@ -2373,12 +2477,10 @@ func getMetaMsg(msgTy uint8, body []byte) *message.MetaMessage {
 	}
 }
 
-func (c *Client) exec(currentServer int, typ proto2.Command_Type, desc *proto.ExtensionDesc, value interface{}, msgTy uint8) (index uint64, err error) {
+func (c *Client) exec(currentServer int, typ proto2.Command_Type, desc *protoimpl.ExtensionInfo, value interface{}, msgTy uint8) (index uint64, err error) {
 	// Create command.
 	cmd := &proto2.Command{Type: &typ}
-	if err := proto.SetExtension(cmd, desc, value); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, desc, value)
 
 	b, err := proto.Marshal(cmd)
 	if err != nil {
@@ -2720,7 +2822,7 @@ const (
 )
 
 func applyCreateDatabase(c *Client, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_CreateDatabaseCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_CreateDatabaseCommand_Command)
 	v, ok := ext.(*proto2.CreateDatabaseCommand)
 	if !ok {
 		panic(fmt.Errorf("%s is not a CreateDatabaseCommand", ext))
@@ -2757,9 +2859,7 @@ func applyCreateDatabase(c *Client, cmd *proto2.Command) error {
 	}
 	t := proto2.Command_CreateDbPtViewCommand
 	command := &proto2.Command{Type: &t}
-	if err := proto.SetExtension(command, proto2.E_CreateDbPtViewCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(command, proto2.E_CreateDbPtViewCommand_Command, val)
 	err := c.cacheData.CreateDatabase(v.GetName(), rp, v.GetSki(), v.GetEnableTagArray(), repN, v.GetOptions())
 	if err != nil {
 		return errno.NewError(errno.ApplyFuncErr, "applyCreateDatabase2", err.Error())
@@ -2768,7 +2868,7 @@ func applyCreateDatabase(c *Client, cmd *proto2.Command) error {
 }
 
 func applyDropDatabase(c *Client, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_DropDatabaseCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_DropDatabaseCommand_Command)
 	v, ok := ext.(*proto2.DropDatabaseCommand)
 	if !ok {
 		panic(fmt.Errorf("%s is not a DropDatabaseCommand", ext))
@@ -2792,6 +2892,48 @@ func applyCreateRetentionPolicy(c *Client, cmd *proto2.Command) error {
 func applyRecoverMetaData(c *Client, cmd *proto2.Command) error {
 	if err := meta2.ApplyRecoverMetaData(c.cacheData, cmd); err != nil {
 		return errno.NewError(errno.ApplyFuncErr, "applyRecoverMetaData", err.Error())
+	}
+	return nil
+}
+
+func applyShardingPlan(c *Client, cmd *proto2.Command) error {
+	if err := meta2.ApplyShardingPlan(c.cacheData, cmd); err != nil {
+		return errno.NewError(errno.ApplyFuncErr, "applyShardingPlan", err.Error())
+	}
+	return nil
+}
+
+func applyAlterShardsNum(c *Client, cmd *proto2.Command) error {
+	if err := meta2.ApplyAlterShardsNum(c.cacheData, cmd); err != nil {
+		return errno.NewError(errno.ApplyFuncErr, "applyAlterShardsNum", err.Error())
+	}
+	return nil
+}
+
+func applyCreateResource(c *Client, cmd *proto2.Command) error {
+	if err := meta2.ApplyCreateResource(c.cacheData, cmd); err != nil {
+		return errno.NewError(errno.ApplyFuncErr, "applyCreateResource", err.Error())
+	}
+	return nil
+}
+
+func applyDropResource(c *Client, cmd *proto2.Command) error {
+	if err := meta2.ApplyDropResource(c.cacheData, cmd); err != nil {
+		return errno.NewError(errno.ApplyFuncErr, "applyDropResource", err.Error())
+	}
+	return nil
+}
+
+func applyCreateTask(c *Client, cmd *proto2.Command) error {
+	if err := meta2.ApplyCreateTask(c.cacheData, cmd); err != nil {
+		return errno.NewError(errno.ApplyFuncErr, "applyCreateTask", err.Error())
+	}
+	return nil
+}
+
+func applyDropTask(c *Client, cmd *proto2.Command) error {
+	if err := meta2.ApplyDropTask(c.cacheData, cmd); err != nil {
+		return errno.NewError(errno.ApplyFuncErr, "applyDropTask", err.Error())
 	}
 	return nil
 }
@@ -2851,7 +2993,7 @@ func applySetAdminPrivilege(c *Client, cmd *proto2.Command) error {
 }
 
 func applySetData(c *Client, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_SetDataCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_SetDataCommand_Command)
 	v, ok := ext.(*proto2.SetDataCommand)
 	if !ok {
 		c.logger.Error("applySetData err")
@@ -2892,7 +3034,7 @@ func applyMarkDatabaseDelete(c *Client, cmd *proto2.Command) error {
 }
 
 func applyCreateSqlNode(c *Client, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_CreateSqlNodeCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_CreateSqlNodeCommand_Command)
 	v, ok := ext.(*proto2.CreateSqlNodeCommand)
 	if !ok {
 		c.logger.Error("applyCreateSqlNode err")
@@ -2983,7 +3125,7 @@ func applyDropDownSample(c *Client, cmd *proto2.Command) error {
 }
 
 func applyUpdateSqlNodeStatus(c *Client, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_UpdateSqlNodeStatusCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_UpdateSqlNodeStatusCommand_Command)
 	v, ok := ext.(*proto2.UpdateSqlNodeStatusCommand)
 	if !ok {
 		panic(fmt.Errorf("%s is not a UpdateSqlNodeStatusCommand", ext))
@@ -2992,7 +3134,7 @@ func applyUpdateSqlNodeStatus(c *Client, cmd *proto2.Command) error {
 }
 
 func applyUpdateMetaNodeStatus(c *Client, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_UpdateMetaNodeStatusCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_UpdateMetaNodeStatusCommand_Command)
 	v, ok := ext.(*proto2.UpdateMetaNodeStatusCommand)
 	if !ok {
 		panic(fmt.Errorf("%s is not a UpdateMetaNodeStatusCommand", ext))
@@ -3033,7 +3175,7 @@ func applyRegisterQueryIDOffset(c *Client, cmd *proto2.Command) error {
 }
 
 func applyCreateContinuousQuery(c *Client, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_CreateContinuousQueryCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_CreateContinuousQueryCommand_Command)
 	v, ok := ext.(*proto2.CreateContinuousQueryCommand)
 	if !ok {
 		panic(fmt.Errorf("%s is not a CreateContinuousQueryCommand", ext))
@@ -3050,7 +3192,7 @@ func applyContinuousQueryReport(c *Client, cmd *proto2.Command) error {
 }
 
 func applyDropContinuousQuery(c *Client, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_DropContinuousQueryCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_DropContinuousQueryCommand_Command)
 	v, ok := ext.(*proto2.DropContinuousQueryCommand)
 	if !ok {
 		panic(fmt.Errorf("%s is not a DropContinuousQueryCommand", ext))
@@ -3192,9 +3334,7 @@ func (c *Client) GetShardRangeInfo(db string, rp string, shardID uint64) (*meta2
 
 	t := proto2.Command_TimeRangeCommand
 	cmd := &proto2.Command{Type: &t}
-	if err := proto.SetExtension(cmd, proto2.E_TimeRangeCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, proto2.E_TimeRangeCommand_Command, val)
 	b, err := c.RetryGetShardAuxInfo(cmd)
 	if err != nil {
 		return nil, err
@@ -3211,9 +3351,7 @@ func (c *Client) GetShardDurationInfo(index uint64) (*meta2.ShardDurationRespons
 	val := &proto2.ShardDurationCommand{Index: proto.Uint64(index), Pts: nil, NodeId: proto.Uint64(c.nodeID)}
 	t := proto2.Command_ShardDurationCommand
 	cmd := &proto2.Command{Type: &t}
-	if err := proto.SetExtension(cmd, proto2.E_ShardDurationCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, proto2.E_ShardDurationCommand_Command, val)
 	b, err := c.RetryGetShardAuxInfo(cmd)
 	if err != nil {
 		return nil, err
@@ -3230,9 +3368,7 @@ func (c *Client) GetIndexDurationInfo(index uint64) (*meta2.IndexDurationRespons
 	val := &proto2.IndexDurationCommand{Index: proto.Uint64(index), Pts: nil, NodeId: proto.Uint64(c.nodeID)}
 	t := proto2.Command_IndexDurationCommand
 	cmd := &proto2.Command{Type: &t}
-	if err := proto.SetExtension(cmd, proto2.E_IndexDurationCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, proto2.E_IndexDurationCommand_Command, val)
 	b, err := c.RetryGetShardAuxInfo(cmd)
 	if err != nil {
 		return nil, err
@@ -3274,7 +3410,7 @@ func (c *Client) InitMetaClient(joinPeers []string, tlsEn bool, storageNodeInfo 
 	return nid, clock, connId, err
 }
 
-func (c *Client) retryReport(typ proto2.Command_Type, desc *proto.ExtensionDesc, value interface{}) error {
+func (c *Client) retryReport(typ proto2.Command_Type, desc *protoimpl.ExtensionInfo, value interface{}) error {
 	tries := 0
 	currentServer := connectedServer
 	timeout := time.After(RetryReportTimeout)
@@ -3872,22 +4008,40 @@ func (c *Client) ThermalShards(dbName string, start, end time.Duration) map[uint
 		if rt.IsZero() {
 			rt = time.Now().Add(rp.ShardGroupDuration).UTC()
 		}
-		for i := 0; i < len(rp.ShardGroups); i++ {
-			if rp.ShardGroups[i].Deleted() {
-				continue
-			}
-			sg := &rp.ShardGroups[i]
-			if sg.EndTime.Before(lt) || sg.EndTime.After(rt) {
-				continue
-			}
-			for k := 0; k < len(sg.Shards); k++ {
-				shards[sg.Shards[k].ID] = struct{}{}
-			}
+		setThermalShard(rp.ShardGroups, lt, rt, shards)
+	}
+
+	// stream task need load 2 nearest active shards
+	for _, streamInfo := range c.cacheData.Streams {
+		if streamInfo.SrcMst.Database != dbName {
+			continue
 		}
+		rp, ok := db.RetentionPolicies[streamInfo.SrcMst.RetentionPolicy]
+		if !ok {
+			continue
+		}
+		lt = time.Now().Add(-2 * rp.ShardGroupDuration).UTC()
+		rt = time.Now().Add(2 * rp.ShardGroupDuration).UTC()
+		setThermalShard(rp.ShardGroups, lt, rt, shards)
 	}
 	c.logger.Info("thermal shards", zap.String("db", dbName), zap.Time("start", lt), zap.Time("end", rt),
 		zap.Any("shards", shards), zap.Duration("duration", time.Since(startTime)))
 	return shards
+}
+
+func setThermalShard(shardGroups []meta2.ShardGroupInfo, lt, rt time.Time, shards map[uint64]struct{}) {
+	for i := 0; i < len(shardGroups); i++ {
+		if shardGroups[i].Deleted() {
+			continue
+		}
+		sg := &shardGroups[i]
+		if sg.EndTime.Before(lt) || sg.EndTime.After(rt) {
+			continue
+		}
+		for k := 0; k < len(sg.Shards); k++ {
+			shards[sg.Shards[k].ID] = struct{}{}
+		}
+	}
 }
 
 func (c *Client) UpdateMeasurement(db, rp, mst string, options *meta2.Options) error {
@@ -4176,4 +4330,201 @@ func (c *Client) GetMergeShardsList() []meta2.MergeShards {
 		}
 	}
 	return mergeShardss
+}
+
+func (c *Client) StatisticDatabaseShards() []opsStat.OpsStatistic {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	var statistic []opsStat.OpsStatistic
+	dbs := c.cacheData.Databases
+	for _, db := range dbs {
+		var count int
+		for _, rp := range db.RetentionPolicies {
+			for _, sg := range rp.ShardGroups {
+				if sg.Deleted() {
+					continue
+				}
+				count += len(sg.Shards)
+			}
+		}
+		valueMap := map[string]interface{}{"Count": int64(count)}
+		statistic = append(statistic, opsStat.OpsStatistic{
+			Name:   "shard_count",
+			Tags:   statistics.StatisticTags{"database": db.Name}.Merge(statistics.DatabaseTagMap),
+			Values: valueMap,
+		})
+	}
+	return statistic
+}
+
+// Resource returns info for the requested resource.
+func (c *Client) Resource(name string) (*meta2.ResourceInfo, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.cacheData.GetResource(name)
+}
+
+// Resources returns info for all resources.
+func (c *Client) Resources() []string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.cacheData.GetResources()
+}
+
+// Task returns info for the requested task.
+func (c *Client) Task(taskName string, taskType influxql.TaskType) (*meta2.TaskInfo, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.cacheData.GetTask(taskName, string(taskType))
+}
+
+// Tasks returns info for all task.
+func (c *Client) Tasks(taskType influxql.TaskType) []string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.cacheData.GetTasks(string(taskType))
+}
+
+// AllTasksCount returns count for all task.
+func (c *Client) AllTasksCount() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.cacheData.GetAllTasksCount()
+}
+
+// CreateResource creates a resource or returns error if it already exists.
+func (c *Client) CreateResource(resourceName string, properties map[string]string) error {
+	_, ok := c.Resource(resourceName)
+	if ok {
+		return errno.NewError(errno.ResourceExists, resourceName)
+	}
+	resourceInfo := &meta2.ResourceInfo{Name: resourceName, Properties: make(map[string]string, len(properties))}
+	for k, v := range properties {
+		resourceInfo.Properties[k] = v
+	}
+	cmd := &proto2.CreateResourceCommand{
+		Name:         proto.String(resourceName),
+		ResourceInfo: resourceInfo.Marshal(),
+	}
+	return c.retryUntilExec(proto2.Command_CreateResourceCommand, proto2.E_CreateResourceCommand_Command, cmd)
+}
+
+// AlterResource alter a resource or returns error if it not found.
+func (c *Client) AlterResource(resourceName string, properties map[string]string) error {
+	_, ok := c.Resource(resourceName)
+	if !ok {
+		return errno.NewError(errno.ResourceNotFound, resourceName)
+	}
+	resourceInfo := &meta2.ResourceInfo{Name: resourceName, Properties: make(map[string]string, len(properties))}
+	for k, v := range properties {
+		resourceInfo.Properties[k] = v
+	}
+	cmd := &proto2.CreateResourceCommand{
+		Name:         proto.String(resourceName),
+		ResourceInfo: resourceInfo.Marshal(),
+	}
+	return c.retryUntilExec(proto2.Command_CreateResourceCommand, proto2.E_CreateResourceCommand_Command, cmd)
+}
+
+// GetResource get a resource with resource name
+func (c *Client) GetResource(resourceName string) (map[string]string, bool) {
+	res, ok := c.Resource(resourceName)
+	if !ok {
+		return nil, ok
+	}
+	return res.Properties, ok
+}
+
+// GetResources get all resources
+func (c *Client) GetResources() []string {
+	return c.Resources()
+}
+
+// DropResource drop a certain resource
+func (c *Client) DropResource(resourceName string) error {
+	cmd := &proto2.DropResourceCommand{
+		Name: proto.String(resourceName),
+	}
+	return c.retryUntilExec(proto2.Command_DropResourceCommand, proto2.E_DropResourceCommand_Command, cmd)
+}
+
+func (c *Client) CreateTask(taskName string, taskType influxql.TaskType, properties map[string]string) error {
+	taskInfo := &meta2.TaskInfo{Name: taskName, Type: string(taskType), Properties: make(map[string]string, len(properties))}
+	for k, v := range properties {
+		taskInfo.Properties[k] = v
+	}
+	cmd := &proto2.CreateTaskCommand{
+		TaskInfo: taskInfo.Marshal(),
+	}
+	return c.retryUntilExec(proto2.Command_CreateTaskCommand, proto2.E_CreateTaskCommand_Command, cmd)
+}
+
+func (c *Client) AlterTask(taskName string, taskType influxql.TaskType, properties map[string]string) error {
+	currentTaskInfo, ok := c.Task(taskName, taskType)
+	if !ok {
+		return errno.NewError(errno.TaskNotFound, taskName, taskType)
+	}
+	finalProperties := util.MergeMaps(currentTaskInfo.Properties, properties)
+
+	taskInfo := &meta2.TaskInfo{Name: taskName, Type: string(taskType), Properties: make(map[string]string, len(finalProperties))}
+	for k, v := range finalProperties {
+		taskInfo.Properties[k] = v
+	}
+	cmd := &proto2.CreateTaskCommand{
+		TaskInfo: taskInfo.Marshal(),
+	}
+	return c.retryUntilExec(proto2.Command_CreateTaskCommand, proto2.E_CreateTaskCommand_Command, cmd)
+}
+
+func (c *Client) DropTask(taskName string, taskType influxql.TaskType) error {
+	cmd := &proto2.DropTaskCommand{
+		TaskName: proto.String(taskName),
+		TaskType: proto.String(string(taskType)),
+	}
+	return c.retryUntilExec(proto2.Command_DropTaskCommand, proto2.E_DropTaskCommand_Command, cmd)
+}
+
+// GetTask get a task with task name and task type
+func (c *Client) GetTask(taskName string, taskType influxql.TaskType) (map[string]string, bool) {
+	res, ok := c.Task(taskName, taskType)
+	if !ok {
+		return nil, ok
+	}
+	return res.Properties, ok
+}
+
+// GetTasks get all tasks
+func (c *Client) GetTasks(taskType influxql.TaskType) []string {
+	return c.Tasks(taskType)
+}
+
+// GetTasksWithProperties get all tasks  and their meta properties
+func (c *Client) GetTasksWithProperties(taskType influxql.TaskType) map[uint64]*meta2.TaskInfo {
+	tasks := c.Tasks(taskType)
+	result := make(map[uint64]*meta2.TaskInfo, len(tasks))
+
+	for _, taskName := range tasks {
+		taskInfo, ok := c.Task(taskName, taskType)
+		if ok {
+			result[taskInfo.ID] = taskInfo
+		}
+	}
+	return result
+}
+
+// GetAllTaskCount returns the total number of all tasks across all task groups.
+func (c *Client) GetAllTaskCount() int {
+	return c.AllTasksCount()
+}
+
+func (c *Client) CheckAndWriteSmartStmtSchema(stmt *smart_query.SmartSelectStatement) error {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.cacheData.CheckAndWriteSmartStmtSchema(stmt)
+}
+
+func (c *Client) GetSmartStmtETraits(stmt *smart_query.SmartSelectStatement, startTime time.Time, endTime time.Time) ([]smart_query.SmartRemoteQuery, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.cacheData.GetSmartStmtETraits(stmt, startTime, endTime)
 }

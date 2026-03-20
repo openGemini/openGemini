@@ -86,6 +86,12 @@ func TestMessage(t *testing.T) {
 			module: errno.ModuleQueryEngine,
 			level:  errno.LevelFatal,
 		},
+		{
+			err:    errno.NewError(errno.LastRowRetry),
+			errno:  errno.LastRowRetry,
+			module: errno.ModuleQueryEngine,
+			level:  errno.LevelWarn,
+		},
 	}
 
 	for _, item := range items {

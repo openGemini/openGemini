@@ -20,6 +20,7 @@ import (
 
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/encoding/simple8b"
+	"github.com/stretchr/testify/require"
 )
 
 func TestTimeEncoder_simple8b(t *testing.T) {
@@ -121,4 +122,35 @@ func TestTimeEncoder_Snappy(t *testing.T) {
 	if !reflect.DeepEqual(inArr, dArr) {
 		t.Fatalf("exp:%v, get:%v", inArr, dArr)
 	}
+}
+
+func BenchmarkDecodeConstDeltaDecoding(b *testing.B) {
+	var times []int64
+	for i := 0; i < 802; i++ {
+		times = append(times, int64(10000+i*4))
+	}
+
+	swap := make([]byte, 8000)
+	coder := GetTimeCoder()
+	encBuf, _ := coder.Encoding(util.Int64Slice2byte(times), nil)
+
+	for i := 0; i < b.N; i++ {
+		swap, _ = coder.Decoding(encBuf, swap[:0])
+	}
+}
+
+func TestDecodeConstDeltaDecoding(t *testing.T) {
+	var times []int64
+	for i := 0; i < 300; i++ {
+		times = append(times, int64(10000+i*4))
+	}
+
+	swap := make([]byte, 8000)
+	coder := GetTimeCoder()
+	encBuf, err := coder.Encoding(util.Int64Slice2byte(times), nil)
+	require.NoError(t, err)
+
+	swap, err = coder.Decoding(encBuf, swap[:0])
+	require.NoError(t, err)
+	require.Equal(t, times, util.Bytes2Int64Slice(swap))
 }

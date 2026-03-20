@@ -16,6 +16,7 @@ package meta
 
 import (
 	"math"
+	"math/rand/v2"
 	"net"
 	"sort"
 	"strconv"
@@ -28,7 +29,6 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/netstorage"
-	"github.com/openGemini/openGemini/lib/rand"
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"go.uber.org/zap"
@@ -433,7 +433,12 @@ func (cm *ClusterManager) isNodeAlive(id uint64) bool {
 	cm.mu.RLock()
 	_, ok := cm.memberIds[id]
 	cm.mu.RUnlock()
-	return ok
+
+	if ok {
+		return true
+	}
+	node := cm.getDataNode(id)
+	return node != nil && node.Status == serf.StatusAlive
 }
 
 // handleClusterMember adds or removes ts-store node id to memberIds
@@ -458,15 +463,12 @@ func getTakeOverNodeForWAF(cm *ClusterManager, oid uint64, nodePtNumMap *map[uin
 			break
 		}
 
-		cm.mu.RLock()
-		if _, ok := cm.memberIds[oid]; ok {
-			cm.mu.RUnlock()
+		if cm.isNodeAlive(oid) {
 			return oid, nil
 		}
 
-		cm.mu.RUnlock()
 		time.Sleep(time.Second)
-		logger.GetSuppressLogger().Warn("the target store is not alive", zap.Uint64("id", oid), zap.Bool("isRetry", isRetry))
+		logger.NewLogger(errno.ModuleHA).Warn("the target store is not alive", zap.Uint64("id", oid), zap.Bool("isRetry", isRetry))
 	}
 	return 0, errno.NewError(errno.ClusterManagerIsNotRunning)
 }
@@ -511,7 +513,7 @@ func getTakeOverNodeForSS(cm *ClusterManager, oid uint64, nodePtNumMap *map[uint
 		}
 		cm.mu.RUnlock()
 		time.Sleep(time.Second)
-		logger.GetSuppressLogger().Warn("can not get take over node id, because no store alive")
+		logger.NewLogger(errno.ModuleHA).Warn("can not get take over node id, because no store alive")
 	}
 	return 0, errno.NewError(errno.ClusterManagerIsNotRunning)
 }
@@ -534,7 +536,7 @@ func (cm *ClusterManager) chooseNodeByPtNum(nodePtNumMap *map[uint64]uint32) uin
 }
 
 func (cm *ClusterManager) chooseNodeRandom(nodeIds []int) uint64 {
-	i := rand.Intn(len(nodeIds))
+	i := rand.IntN(len(nodeIds))
 	return uint64(nodeIds[i])
 }
 
@@ -556,6 +558,7 @@ func (cm *ClusterManager) processFailedDbPtNormal(dbPt *meta.DbPtInfo, nodePtNum
 	if err != nil {
 		return err
 	}
+	logger.GetLogger().Info("assign failed dbpt", zap.String("dbPt", dbPt.String()), zap.Uint64("targetId", targetId), zap.Uint64("aliveConnId", aliveConnId))
 	return globalService.balanceManager.assignDbPt(dbPt, targetId, aliveConnId, false)
 }
 

@@ -40,12 +40,14 @@ import (
 	influxql2 "github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/openGemini/openGemini/lib/util/lifted/smart_query"
 	"github.com/openGemini/openGemini/services"
 	"github.com/openGemini/openGemini/services/arrowflight"
 	"github.com/stretchr/testify/assert"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
@@ -156,6 +158,10 @@ func (w *MockRecordWriter) RetryWriteRecord(database, retentionPolicy, measureme
 }
 
 type mockStatementExecutor struct {
+}
+
+func (e *mockStatementExecutor) ExecuteSmartStatement(stmt *smart_query.SmartSelectStatement, results chan *query.Result) error {
+	return nil
 }
 
 func (e *mockStatementExecutor) ExecuteStatement(stmt influxql2.Statement, ctx *query.ExecutionContext, seq int) error {
@@ -438,6 +444,30 @@ func TestArrowFlightService_AuthErr(t *testing.T) {
 	testDoPutAuth(t, c, err, service, "err")
 	testDoPutAuth(t, c, err, service, "err1")
 	testDoGetAuth(t, c, err, service, "err2")
+	testDoGetSchemaAuth(t, c, err, service, "err2")
+}
+
+func testDoGetSchemaAuth(t *testing.T, c config.Config, err error, service *arrowflight.Service, username string) {
+	authClient := &clientAuth{authEnabled: c.FlightAuthEnabled}
+	client, err := flight.NewFlightClient(service.GetServer().Addr().String(), authClient, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err = client.Close(); err != nil {
+			t.Fatal("Flight Client Close failed")
+		}
+	}()
+	s := "{\"username\": \"" + username + "\", \"password\": \"pwd\"}"
+	ctx := context.WithValue(context.Background(), Token, []byte(s))
+	err = client.Authenticate(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	desc := &flight.FlightDescriptor{Cmd: []byte("select * from mst1")}
+	schema, err := client.GetSchema(ctx, desc)
+	fmt.Println(schema)
+	assert.Equal(t, err.Error(), "rpc error: code = PermissionDenied desc = err2 not authorized")
 }
 
 func testDoGetAuth(t *testing.T, c config.Config, err error, service *arrowflight.Service, username string) {
@@ -609,7 +639,8 @@ func TestArrowFlightServiceWithAuth(t *testing.T) {
 }
 
 func TestFlightServer_AuthEnabled(t *testing.T) {
-	s := arrowflight.NewFlightServer(nil, nil)
+	c := config.Config{FlightAddress: "127.0.0.1:8087"}
+	s := arrowflight.NewFlightServer(nil, &c)
 	assert.False(t, s.AuthEnabled())
 }
 
@@ -712,4 +743,247 @@ func TestArrowFlightServiceErr(t *testing.T) {
 	querier := arrowflight.NewFlightServer(logger.NewLogger(errno.ModuleHTTP), &config.Config{})
 	err = querier.DoGet(&flight.Ticket{}, NewDoGetServer())
 	assert.Equal(t, err, status.Error(codes.FailedPrecondition, "service unavailable"), true)
+
+	_, err = querier.GetSchema(context.Background(), &flight.FlightDescriptor{})
+	assert.Equal(t, err, status.Error(codes.FailedPrecondition, "service unavailable"), true)
+
+	_, err = querier.GetFlightInfo(context.Background(), &flight.FlightDescriptor{})
+	assert.Equal(t, err, status.Error(codes.FailedPrecondition, "service unavailable"), true)
+}
+
+// setupTestService creates a test flight server with mock dependencies
+func setupTestService(t *testing.T, authEnabled bool) *arrowflight.Service {
+	c := config.Config{
+		FlightAddress:     "127.0.0.1:8087",
+		MaxBodySize:       1024 * 1024 * 1024,
+		FlightAuthEnabled: authEnabled,
+	}
+
+	service, err := arrowflight.NewService(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create mock handler
+	service.MetaClient = metaclient.NewClient("", false, 1)
+	service.RecordWriter = &MockRecordWriter{}
+	handler := httpd.NewHandler(c)
+	handler.QueryExecutor = newQueryExecutorForTest()
+	service.SetHandler(handler)
+	service.GetAuthHandler().SetMetaClient(NewMockFlightMetaClient())
+
+	return service
+}
+
+func TestGetFlightInfo(t *testing.T) {
+	tests := []struct {
+		name           string
+		authEnabled    bool
+		expectError    bool
+		queryParams    string
+		cmd            string
+		expectedErrMsg string
+	}{
+		{
+			name:        "GetFlightInfo with auth disabled",
+			authEnabled: false,
+			queryParams: "",
+			expectError: false,
+		},
+		{
+			name:        "GetFlightInfo with auth enabled",
+			authEnabled: true,
+			queryParams: "",
+			expectError: false,
+		},
+		{
+			name:           "GetFlightInfo with auth disabled",
+			authEnabled:    false,
+			queryParams:    "invalid params",
+			expectError:    true,
+			expectedErrMsg: "invalid character 'i' looking for beginning of value",
+		},
+		{
+			name:        "GetFlightInfo with auth disabled",
+			authEnabled: false,
+			queryParams: `{}`,
+			expectError: false,
+		},
+		{
+			name:           "GetFlightInfo with auth disabled",
+			authEnabled:    false,
+			queryParams:    `{}`,
+			cmd:            "invalid sql",
+			expectError:    true,
+			expectedErrMsg: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			service := setupTestService(t, tt.authEnabled)
+			err := service.Open()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if err = service.Close(); err != nil {
+					t.Fatal("Service Close failed", err)
+				}
+			}()
+			service.GetAuthHandler().SetMetaClient(NewMockFlightMetaClient())
+			authClient := &clientAuth{authEnabled: tt.authEnabled}
+			client, err := flight.NewFlightClient(service.GetServer().Addr().String(), authClient, grpc.WithTransportCredentials(insecure.NewCredentials()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if err = client.Close(); err != nil {
+					t.Fatal("Flight Client Close failed")
+				}
+			}()
+
+			ctx := context.WithValue(context.Background(), Token, []byte("{\"username\": \"xiaoming\", \"password\": \"pwd\"}"))
+			err = client.Authenticate(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			cmd := "SELECT * FROM test"
+			if tt.cmd != "" {
+				cmd = tt.cmd
+			}
+			flightDescriptor := &flight.FlightDescriptor{
+				Cmd: []byte(cmd),
+			}
+
+			if tt.queryParams != "" {
+				params := map[string][]string{"query_params": {tt.queryParams}}
+				ctx = metadata.NewOutgoingContext(ctx, params)
+			}
+
+			result, err := client.GetFlightInfo(ctx, flightDescriptor)
+
+			expectedTicket := `{"q":"SELECT * FROM test","db":"","rp":"","node_id":"","params":"","chunked":"","chunk_size":"","inner_chunk_size":"","is_query_series_limit":"","query_type":""}`
+
+			if tt.expectError {
+				assert.Error(t, err)
+				if tt.expectedErrMsg != "" {
+					assert.Contains(t, err.Error(), tt.expectedErrMsg)
+				}
+				assert.Nil(t, result)
+			} else {
+				assert.NoError(t, err)
+				assert.NotNil(t, result)
+				assert.Equal(t, expectedTicket, string(result.Endpoint[0].GetTicket().Ticket))
+				assert.NotNil(t, result.Schema)
+				assert.Len(t, result.Endpoint, 1)
+				assert.NotNil(t, result.Endpoint[0].Ticket)
+				assert.NotNil(t, result.Endpoint[0].Location)
+			}
+		})
+	}
+}
+
+func TestGetSchema(t *testing.T) {
+	tests := []struct {
+		name           string
+		authEnabled    bool
+		expectError    bool
+		queryParams    string
+		cmd            string
+		expectedErrMsg string
+	}{
+		{
+			name:        "GetSchema with auth disabled",
+			authEnabled: false,
+			queryParams: "",
+			expectError: false,
+		},
+		{
+			name:        "GetSchema with auth enabled",
+			authEnabled: true,
+			queryParams: "",
+			expectError: false,
+		},
+		{
+			name:           "GetSchema with auth disabled",
+			authEnabled:    false,
+			queryParams:    "invalid params",
+			expectError:    true,
+			expectedErrMsg: "invalid character 'i' looking for beginning of value",
+		},
+		{
+			name:        "GetSchema with auth disabled",
+			authEnabled: false,
+			queryParams: `{}`,
+			expectError: false,
+		},
+		{
+			name:           "GetSchema with auth disabled",
+			authEnabled:    false,
+			queryParams:    `{}`,
+			cmd:            "invalid sql",
+			expectError:    true,
+			expectedErrMsg: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			service := setupTestService(t, tt.authEnabled)
+			err := service.Open()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if err = service.Close(); err != nil {
+					t.Fatal("Service Close failed", err)
+				}
+			}()
+			service.GetAuthHandler().SetMetaClient(NewMockFlightMetaClient())
+			authClient := &clientAuth{authEnabled: tt.authEnabled}
+			client, err := flight.NewFlightClient(service.GetServer().Addr().String(), authClient, grpc.WithTransportCredentials(insecure.NewCredentials()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if err = client.Close(); err != nil {
+					t.Fatal("Flight Client Close failed")
+				}
+			}()
+
+			ctx := context.WithValue(context.Background(), Token, []byte("{\"username\": \"xiaoming\", \"password\": \"pwd\"}"))
+			err = client.Authenticate(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			cmd := "SELECT * FROM test"
+			if tt.cmd != "" {
+				cmd = tt.cmd
+			}
+			flightDescriptor := &flight.FlightDescriptor{
+				Cmd: []byte(cmd),
+			}
+
+			if tt.queryParams != "" {
+				params := map[string][]string{"query_params": {tt.queryParams}}
+				ctx = metadata.NewOutgoingContext(ctx, params)
+			}
+			result, err := client.GetSchema(ctx, flightDescriptor)
+
+			if tt.expectError {
+				assert.Error(t, err)
+				if tt.expectedErrMsg != "" {
+					assert.Contains(t, err.Error(), tt.expectedErrMsg)
+				}
+				assert.Nil(t, result)
+			} else {
+				assert.NoError(t, err)
+				assert.NotNil(t, result)
+				assert.NotNil(t, result.Schema)
+			}
+		})
+	}
 }

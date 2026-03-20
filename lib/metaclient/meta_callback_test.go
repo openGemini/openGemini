@@ -86,9 +86,9 @@ func TestRegisterQueryIDOffsetCallbackResponse(t *testing.T) {
 	assert.NoError(t, callback.Handle(msg))
 }
 
-func TestSql2MetaHeartbeatCallbackResponse(t *testing.T) {
-	callback := &metaclient.Sql2MetaHeartbeatCallback{}
-	msg := message.NewMetaMessage(message.Sql2MetaHeartbeatResponseMessage, &message.Sql2MetaHeartbeatResponse{})
+func TestCQ2MetaHeartbeatCallbackResponse(t *testing.T) {
+	callback := &metaclient.CQ2MetaHeartbeatCallback{}
+	msg := message.NewMetaMessage(message.CQ2MetaHeartbeatResponseMessage, &message.CQ2MetaHeartbeatResponse{})
 	err := callback.Handle(msg)
 	assert.NoError(t, err)
 
@@ -99,12 +99,12 @@ func TestSql2MetaHeartbeatCallbackResponse(t *testing.T) {
 	// wrong message
 	badMsg := message.NewMetaMessage(message.UnknownMessage, &message.PingResponse{})
 	err = callback.Handle(badMsg)
-	assert.EqualError(t, err, "data is not a Sql2MetaHeartbeatResponse, got type *message.PingResponse")
+	assert.EqualError(t, err, "data is not a CQ2MetaHeartbeatResponse, got type *message.PingResponse")
 
 	// wrong message
-	badMsg2 := message.NewMetaMessage(message.Sql2MetaHeartbeatResponseMessage, &message.Sql2MetaHeartbeatResponse{Err: "mock error"})
+	badMsg2 := message.NewMetaMessage(message.CQ2MetaHeartbeatResponseMessage, &message.CQ2MetaHeartbeatResponse{Err: "mock error"})
 	err = callback.Handle(badMsg2)
-	assert.EqualError(t, err, "get sql to meta heartbeat callback error: mock error")
+	assert.EqualError(t, err, "get cq node to meta heartbeat callback error: mock error")
 }
 
 func TestGetCqLeaseCallbackResponse(t *testing.T) {

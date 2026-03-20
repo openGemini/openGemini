@@ -69,8 +69,8 @@ const (
 	RegisterQueryIDOffsetRequestMessage
 	RegisterQueryIDOffsetResponseMessage
 
-	Sql2MetaHeartbeatRequestMessage
-	Sql2MetaHeartbeatResponseMessage
+	CQ2MetaHeartbeatRequestMessage
+	CQ2MetaHeartbeatResponseMessage
 
 	GetContinuousQueryLeaseRequestMessage
 	GetContinuousQueryLeaseResponseMessage
@@ -92,6 +92,9 @@ const (
 
 	SendBackupToMetaRequestMessage
 	SendBackupToMetaResponseMessage
+
+	GetShardingPlanRequestMessage
+	GetShardingPlanResponseMessage
 )
 
 var MetaMessageBinaryCodec = make(map[uint8]func() transport.Codec, 20)
@@ -132,8 +135,8 @@ func init() {
 	MetaMessageBinaryCodec[GetMeasurementsInfoResponseMessage] = func() transport.Codec { return &GetMeasurementsInfoResponse{} }
 	MetaMessageBinaryCodec[RegisterQueryIDOffsetRequestMessage] = func() transport.Codec { return &RegisterQueryIDOffsetRequest{} }
 	MetaMessageBinaryCodec[RegisterQueryIDOffsetResponseMessage] = func() transport.Codec { return &RegisterQueryIDOffsetResponse{} }
-	MetaMessageBinaryCodec[Sql2MetaHeartbeatRequestMessage] = func() transport.Codec { return &Sql2MetaHeartbeatRequest{} }
-	MetaMessageBinaryCodec[Sql2MetaHeartbeatResponseMessage] = func() transport.Codec { return &Sql2MetaHeartbeatResponse{} }
+	MetaMessageBinaryCodec[CQ2MetaHeartbeatRequestMessage] = func() transport.Codec { return &CQ2MetaHeartbeatRequest{} }
+	MetaMessageBinaryCodec[CQ2MetaHeartbeatResponseMessage] = func() transport.Codec { return &CQ2MetaHeartbeatResponse{} }
 	MetaMessageBinaryCodec[GetContinuousQueryLeaseRequestMessage] = func() transport.Codec { return &GetContinuousQueryLeaseRequest{} }
 	MetaMessageBinaryCodec[GetContinuousQueryLeaseResponseMessage] = func() transport.Codec { return &GetContinuousQueryLeaseResponse{} }
 	MetaMessageBinaryCodec[VerifyDataNodeStatusRequestMessage] = func() transport.Codec { return &VerifyDataNodeStatusRequest{} }
@@ -144,7 +147,8 @@ func init() {
 	MetaMessageBinaryCodec[ShowClusterResponseMessage] = func() transport.Codec { return &ShowClusterResponse{} }
 	MetaMessageBinaryCodec[SendBackupToMetaRequestMessage] = func() transport.Codec { return &SendBackupToMetaRequest{} }
 	MetaMessageBinaryCodec[SendBackupToMetaResponseMessage] = func() transport.Codec { return &SendBackupToMetaResponse{} }
-
+	MetaMessageBinaryCodec[GetShardingPlanRequestMessage] = func() transport.Codec { return &GetShardingPlanRequest{} }
+	MetaMessageBinaryCodec[GetShardingPlanResponseMessage] = func() transport.Codec { return &GetShardingPlanResponse{} }
 	MetaMessageResponseTyp = map[uint8]uint8{
 		PingRequestMessage:                    PingResponseMessage,
 		PeersRequestMessage:                   PeersResponseMessage,
@@ -162,11 +166,12 @@ func init() {
 		GetMeasurementInfoRequestMessage:      GetMeasurementInfoResponseMessage,
 		GetMeasurementsInfoRequestMessage:     GetMeasurementsInfoResponseMessage,
 		RegisterQueryIDOffsetRequestMessage:   RegisterQueryIDOffsetResponseMessage,
-		Sql2MetaHeartbeatRequestMessage:       Sql2MetaHeartbeatResponseMessage,
+		CQ2MetaHeartbeatRequestMessage:        CQ2MetaHeartbeatResponseMessage,
 		GetContinuousQueryLeaseRequestMessage: GetContinuousQueryLeaseResponseMessage,
 		VerifyDataNodeStatusRequestMessage:    VerifyDataNodeStatusResponseMessage,
 		SendSysCtrlToMetaRequestMessage:       SendSysCtrlToMetaResponseMessage,
 		ShowClusterRequestMessage:             ShowClusterResponseMessage,
 		SendBackupToMetaRequestMessage:        SendBackupToMetaResponseMessage,
+		GetShardingPlanRequestMessage:         GetShardingPlanResponseMessage,
 	}
 }

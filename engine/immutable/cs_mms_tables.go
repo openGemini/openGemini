@@ -34,6 +34,7 @@ import (
 	Log "github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"go.uber.org/zap"
 )
@@ -304,12 +305,60 @@ func TimeSorted(sortKeys []string) bool {
 	return sortKeys[0] == record.TimeField
 }
 
-func (c *csImmTableImpl) compactToLevel(m *MmsTables, group FilesInfo, full, isNonStream bool) error {
+func (c *csImmTableImpl) compactToLevel(m *MmsTables, group FilesInfo, full, _ bool) error {
 	if InParquetProcess(group.oldFids...) {
 		m.logger.Info("in parquet process skip compact", zap.String("mst", group.name))
 		return nil
 	}
 
+	if colStoreCompactorFactory == nil {
+		return c.detachedCompactToLevel(m, group, full)
+	}
+
+	return c.attachedCompactToLevel(m, group, full)
+}
+
+func (c *csImmTableImpl) attachedCompactToLevel(m *MmsTables, group FilesInfo, full bool) error {
+	compactStatItem := statistics.NewCompactStatItem(group.name, group.shId)
+	compactStatItem.Full = full
+	compactStatItem.Level = group.toLevel - 1
+	compactStat.AddActive(1)
+	defer func() {
+		compactStat.AddActive(-1)
+		compactStat.PushCompaction(compactStatItem)
+	}()
+
+	ident := util.NewMeasurementIdent(m.db, m.rp)
+	ident.SetName(group.name)
+
+	cmp := NewColStoreCompactor(m.GetLockPath(), m.NewStreamWriteFile(group.name))
+	newFiles, err := cmp.Compact(ident, group.oldFiles)
+	if err != nil {
+		return err
+	}
+	if len(newFiles) == 0 {
+		Log.GetLogger().Warn("compact exception, compacted file is nil", zap.Strings("old files", group.oldFids))
+		return errors.New("compacted file is nil")
+	}
+
+	Log.GetLogger().Info("compact success", zap.String("newFile", newFiles[0].Path()))
+	if err = m.ReplaceFiles(group.name, group.oldFiles, newFiles, true); err != nil {
+		Log.GetLogger().Error("replace compacted file error", zap.Error(err), zap.String("mst", group.name))
+		for _, f := range newFiles {
+			util.MustRun(f.Remove)
+		}
+		return err
+	}
+
+	compactStatItem.OriginalFileCount = int64(len(group.oldFiles))
+	compactStatItem.CompactedFileCount = int64(len(newFiles))
+	compactStatItem.OriginalFileSize = int64(group.estimateSize)
+	compactStatItem.CompactedFileSize = SumFilesSize(newFiles)
+
+	return nil
+}
+
+func (c *csImmTableImpl) detachedCompactToLevel(m *MmsTables, group FilesInfo, full bool) error {
 	compactStatItem := statistics.NewCompactStatItem(group.name, group.shId)
 	compactStatItem.Full = full
 	compactStatItem.Level = group.toLevel - 1
@@ -378,7 +427,8 @@ func (c *csImmTableImpl) ReplaceFiles(m *MmsTables, name string, oldFiles, newFi
 
 	var logFile string
 	shardDir := filepath.Dir(m.path)
-	logFile, err = m.writeCompactedFileInfo(name, oldFiles, newFiles, shardDir, isOrder)
+	info := GenerateCompactedInfo(name, oldFiles, newFiles, m.path, isOrder)
+	logFile, err = m.writeCompactedFileInfo(info, shardDir)
 	if err != nil {
 		if len(logFile) > 0 {
 			lock := fileops.FileLockOption(*m.lock)

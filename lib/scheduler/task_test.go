@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/influxdata/influxdb/pkg/limiter"
+	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/lib/scheduler"
 	"github.com/stretchr/testify/require"
 )
@@ -128,4 +129,21 @@ func (t *CustomTask) BeforeExecute() bool {
 func (t *CustomTask) Execute() {
 	atomic.AddUint64(t.n, 1)
 	time.Sleep(time.Second / 100)
+}
+
+func TestCompactTask(t *testing.T) {
+	listen := func(signal chan struct{}, onClose func()) {}
+	ts := scheduler.NewTaskScheduler(listen, nil)
+	cg := immutable.NewCompactGroup("mst_0000", "", 2, 0)
+	store := &immutable.MmsTables{
+		ImmTable: immutable.NewTsImmTable(),
+	}
+	ts.RegisterCompactTask(immutable.NewCompactTask(store, cg, true))
+	task := ts.GetTask(scheduler.CompactTask)
+	require.NotNil(t, task)
+
+	task = ts.GetTask(-1)
+	require.Nil(t, task)
+
+	ts.CloseAll()
 }

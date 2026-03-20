@@ -26,8 +26,8 @@ import (
 	"bytes"
 	"fmt"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/openGemini/openGemini/lib/util"
+	"github.com/openGemini/openGemini/lib/util/lifted/encoding"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 

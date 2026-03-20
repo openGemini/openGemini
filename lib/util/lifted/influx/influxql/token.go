@@ -93,7 +93,7 @@ const (
 	//DESTINATIONS
 
 	//DIAGNOSTICS  // SHOW DIAGNOSTICS
-	DISTINCT //distinct()
+	//DISTINCT //distinct()
 	//DROP
 	//DURATION
 	//END
@@ -221,6 +221,7 @@ var tokens = [...]string{
 	LIKE:           "LIKE",
 	MATCH:          "MATCH",
 	MATCHPHRASE:    "MATCHPHRASE",
+	UNMATCHPHRASE:  "UNMATCHPHRASE",
 	IPINRANGE:      "IPINRANGE",
 	ENGINETYPE:     "ENGINETYPE",
 	COLUMNSTORE:    "COLUMNSTORE",
@@ -357,6 +358,12 @@ var tokens = [...]string{
 	RSQUARE:        "]",
 	RETURN:         "RETURN",
 	MULTIHOP:       "*..",
+	RESOURCE:       "RESOURCE",
+	RESOURCES:      "RESOURCES",
+	PROPERTIES:     "PROPERTIES",
+	LASTINDEX:      "LASTINDEX",
+	TASK:           "TASK",
+	TASKS:          "TASKS",
 }
 
 var keywords map[string]int
@@ -398,12 +405,13 @@ var operatorMap = map[Token]int{
 	DIV:      DIV,
 	MOD:      1, //fixme
 
-	MATCH:       MATCH,
-	MATCHPHRASE: MATCHPHRASE,
-	IPINRANGE:   IPINRANGE,
-	LIKE:        LIKE,
-	IN:          IN,
-	NOTIN:       NOTIN,
+	MATCH:         MATCH,
+	MATCHPHRASE:   MATCHPHRASE,
+	UNMATCHPHRASE: UNMATCHPHRASE,
+	IPINRANGE:     IPINRANGE,
+	LIKE:          LIKE,
+	IN:            IN,
+	NOTIN:         NOTIN,
 }
 
 // Precedence returns the operator precedence of the binary operator token.
@@ -419,7 +427,7 @@ func (tok Token) Precedence() int {
 		return 4
 	case MUL, DIV, MOD, BITWISE_AND:
 		return 5
-	case MATCH, MATCHPHRASE, LIKE, IPINRANGE:
+	case MATCH, MATCHPHRASE, UNMATCHPHRASE, LIKE, IPINRANGE:
 		return 6
 	}
 	return 0

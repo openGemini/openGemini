@@ -17,10 +17,9 @@ package executor
 import (
 	"encoding/json"
 	"fmt"
-	"math/rand"
+	"math/rand/v2"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/smartystreets/goconvey/convey"
@@ -653,12 +652,10 @@ func generateGraphData(nodeNum int, edgesPerNode int) Response {
 		"proptest2": "orientprop2",
 	}
 
-	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
-
 	nodes := make([]GraphNode, nodeNum)
 	nodeUIDs := make([]string, nodeNum)
 	for i := 0; i < nodeNum; i++ {
-		kind := NODE_KINDS[rng.Intn(len(NODE_KINDS))]
+		kind := NODE_KINDS[rand.IntN(len(NODE_KINDS))]
 		uid := fmt.Sprintf("vertex-%d", i)
 
 		nodeProperties := make(map[string]string, len(PROPERTY_TEMPLATE))
@@ -667,8 +664,8 @@ func generateGraphData(nodeNum int, edgesPerNode int) Response {
 		}
 
 		for k := range nodeProperties {
-			if rng.Float64() > 0.3 {
-				nodeProperties[k] = fmt.Sprintf("nodeprop%d", rng.Intn(100)+1)
+			if rand.Float64() > 0.3 {
+				nodeProperties[k] = fmt.Sprintf("nodeprop%d", rand.IntN(100)+1)
 			}
 		}
 
@@ -692,14 +689,14 @@ func generateGraphData(nodeNum int, edgesPerNode int) Response {
 		for j := 0; j < edgesPerNode; j++ {
 			var targetUID string
 			for {
-				targetUID = nodeUIDs[rng.Intn(nodeNum)]
+				targetUID = nodeUIDs[rand.IntN(nodeNum)]
 				_, exist := seen[targetUID]
 				if targetUID != sourceUID && !exist {
 					seen[targetUID] = struct{}{}
 					break
 				}
 			}
-			kind := EDGE_KINDS[rng.Intn(len(EDGE_KINDS))]
+			kind := EDGE_KINDS[rand.IntN(len(EDGE_KINDS))]
 
 			edgeProperties := make(map[string]string, len(PROPERTY_TEMPLATE))
 			for k, v := range PROPERTY_TEMPLATE {
@@ -707,8 +704,8 @@ func generateGraphData(nodeNum int, edgesPerNode int) Response {
 			}
 
 			for k := range edgeProperties {
-				if rng.Float64() > 0.3 {
-					edgeProperties[k] = fmt.Sprintf("edgeprop%d", rng.Intn(100)+1)
+				if rand.Float64() > 0.3 {
+					edgeProperties[k] = fmt.Sprintf("edgeprop%d", rand.IntN(100)+1)
 				}
 			}
 

@@ -17,6 +17,7 @@ package immutable
 import (
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -27,7 +28,6 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/interruptsignal"
-	"github.com/openGemini/openGemini/lib/rand"
 	"github.com/openGemini/openGemini/lib/readcache"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/util"
@@ -64,7 +64,6 @@ func TestFileWriter(t *testing.T) {
 		t.Fatalf("write data fail")
 	}
 
-	fw.SwitchMetaBuffer()
 	if err := fw.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -694,7 +693,7 @@ func genIntColumn(st *int64, rows int, interval int64) *record.Record {
 	tCol := rec.TimeColumn()
 	startTime := *st
 	for i := 0; i < rows; i++ {
-		v := rand.Int63n(1 << 60)
+		v := rand.Int64N(1 << 60)
 		col.AppendInteger(v)
 		tCol.AppendInteger(startTime)
 		if i > 0 && i%5 == 0 {
@@ -826,18 +825,8 @@ func TestStreamWriteFile_WriteData_panic(t *testing.T) {
 
 	require.EqualError(t, sw.WriteData(0, ref, record.ColVal{}, nil), "series id is 0")
 
-	var err string
-	var write = func() {
-		defer func() {
-			if e := recover(); e != nil {
-				err = fmt.Sprintf("%v", e)
-			}
-		}()
-
-		_ = sw.WriteData(100, ref, col, nil)
-	}
-	write()
-	require.Equal(t, "col.Len=20 is greater than MaxRowsPerSegment=16", err)
+	err := sw.WriteData(100, ref, col, nil)
+	require.EqualError(t, err, "col.Len=20 is greater than MaxRowsPerSegment=16")
 }
 
 func TestFileIterator_lessGroup(t *testing.T) {
@@ -897,7 +886,6 @@ func TestStreamIterators_ListenCloseSignal(t *testing.T) {
 
 func TestStreamNewFileWithColdTier(t *testing.T) {
 	testCompDir := t.TempDir()
-	_ = fileops.RemoveAll(testCompDir)
 
 	sw := &StreamWriteFile{}
 	tmpLockFile := filepath.Join(testCompDir, "lock")
@@ -907,5 +895,6 @@ func TestStreamNewFileWithColdTier(t *testing.T) {
 	sw.name = "mst"
 	sw.fileName = NewTSSPFileName(1, 0, 0, 0, true, sw.lock)
 
-	sw.NewFile(false)
+	err := sw.NewFile(false)
+	require.NoError(t, err)
 }

@@ -11,8 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
 	"github.com/openGemini/openGemini/lib/fileops"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/fs"
 	"github.com/stretchr/testify/assert"
@@ -103,7 +103,7 @@ func testAddItemsSerial(tb *Table, itemsCount int) {
 			item = item[:maxInmemoryBlockSize]
 		}
 		if err := tb.AddItems([][]byte{item}); err != nil {
-			logger.Panicf("BUG: cannot add item to table: %s", err)
+			logger.GetLogger().Panic(fmt.Sprintf("BUG: cannot add item to table: %s", err))
 		}
 	}
 }
@@ -263,7 +263,7 @@ func testAddItemsConcurrent(tb *Table, itemsCount int) {
 					item = item[:maxInmemoryBlockSize]
 				}
 				if err := tb.AddItems([][]byte{item}); err != nil {
-					logger.Panicf("BUG: cannot add item to table: %s", err)
+					logger.GetLogger().Panic(fmt.Sprintf("BUG: cannot add item to table: %s", err))
 				}
 			}
 		}()

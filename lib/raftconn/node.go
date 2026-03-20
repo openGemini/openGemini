@@ -25,12 +25,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/raftlog"
+	"github.com/openGemini/openGemini/lib/util/lifted/encoding"
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 	"go.etcd.io/etcd/raft/v3"
 	"go.etcd.io/etcd/raft/v3/raftpb"
@@ -677,7 +677,7 @@ func (n *RaftNode) replay(sp raftpb.Snapshot) error {
 	first, last := n.Store.GetFirstLast()
 	n.logger.Info("raftNode replay range", zap.String("db", n.database), zap.Uint32("ptid", n.ptId), zap.Uint64("lo", fromIndex), zap.Uint64("hi", committedIndex+1),
 		zap.Uint64("first", first), zap.Uint64("last", last))
-	entries, err1 := n.Store.Entries(fromIndex, committedIndex+1, math.MaxUint64)
+	entries, err1 := n.Store.AllValidEntries(fromIndex, committedIndex+1, first, last, math.MaxUint64)
 	if err1 != nil {
 		return err1
 	}
@@ -876,4 +876,8 @@ func GetRaftNodeId(ptId uint32) uint64 {
 // GetPtId returns pt view id. Less 1 than the raft node.
 func GetPtId(raftNode uint64) uint32 {
 	return uint32(raftNode) - 1
+}
+
+func (n *RaftNode) GetStorage() *raftlog.RaftDiskStorage {
+	return n.Store
 }

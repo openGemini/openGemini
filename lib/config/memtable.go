@@ -42,8 +42,8 @@ type MemTable struct {
 	FragmentsNumPerFlush   int           `toml:"fragments-num-per-flush"`
 }
 
-func NewMemTableConfig() MemTable {
-	return MemTable{
+func NewMemTableConfig() *MemTable {
+	return &MemTable{
 		WriteColdDuration:      toml.Duration(DefaultWriteColdDuration),
 		ForceSnapShotDuration:  toml.Duration(DefaultForceSnapShotTime),
 		ShardMutableSizeLimit:  toml.Size(minSizeLimit),
@@ -54,7 +54,7 @@ func NewMemTableConfig() MemTable {
 }
 
 func GetMemTableConfig() *MemTable {
-	return &GetStoreConfig().MemTable
+	return GetStoreConfig().MemTable
 }
 
 func GetShardMemTableMinSize() int64 {
@@ -109,6 +109,12 @@ type ShelfMode struct {
 	// number of background write threads. default value is CPUNum
 	Concurrent int `toml:"concurrent"`
 
+	// Limit the number of WAL files (waiting to be converted + being converted + being written)
+	// to prevent disk space from being fully occupied, which could cause node failure.
+	// It is not a strict constraint; the actual number may exceed this limit.
+	// Default value is concurrent*8
+	MaxNumOfWal int `toml:"max-num-of-wal"`
+
 	// by default, the table is grouped based on the hash value of the measurement name
 	// If this parameter is set to a value greater than 1,
 	// secondary grouping is performed based on the hash value of the series key
@@ -117,6 +123,10 @@ type ShelfMode struct {
 	// max number of concurrent WAL files to be converted to SSP files.
 	// default value is the same as Concurrent
 	TSSPConvertConcurrent int `toml:"tssp-convert-concurrent"`
+
+	// max number of concurrent conversions from a single WAL file to TSSP file
+	// default value is max(1, TSSPConvertConcurrent/4)
+	OneTSSPConvertConcurrent int `toml:"one-tssp-convert-concurrent"`
 
 	// Compress the series key in memory to save memory and reduce the risk of OOM
 	// When the memory used by the series key exceeds this value, compression is enabled.
@@ -139,6 +149,8 @@ func (t *ShelfMode) Corrector(cpuNum int) {
 	ResetZero2Default(&t.MaxWalDuration, 0, defaultMaxWalDuration)
 	ResetZero2Default(&t.Concurrent, 0, max(1, cpuNum/2))
 	ResetZero2Default(&t.TSSPConvertConcurrent, 0, max(1, cpuNum/8))
+	ResetZero2Default(&t.OneTSSPConvertConcurrent, 0, max(1, t.TSSPConvertConcurrent/4))
+	ResetZero2Default(&t.MaxNumOfWal, 0, max(1, t.Concurrent*8))
 	LimitRange(&t.ReliabilityLevel, ReliabilityLevelLow, ReliabilityLevelHigh, ReliabilityLevelMedium)
 }
 

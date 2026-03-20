@@ -16,6 +16,7 @@ package resourceallocator
 
 import (
 	"errors"
+	"math"
 	"sync/atomic"
 	"time"
 
@@ -53,7 +54,9 @@ func NewShardsParallelismAllocator(maxTime time.Duration, maxShardsParallelism, 
 	if ptNumPerNode == 0 {
 		ptNumPerNode = 1
 	}
-	if maxShardsParallelism <= 0 {
+	if maxShardsParallelism < 0 {
+		maxShardsParallelism = math.MaxInt64
+	} else if maxShardsParallelism == 0 {
 		maxShardsParallelism = int64(cpu.GetCpuNum()) * 2 * int64(ptNumPerNode)
 	} else {
 		maxShardsParallelism *= int64(ptNumPerNode)
@@ -94,6 +97,10 @@ func (s *ShardParallelismAllocator) Free(num, totalNum int64) {
 	s.maxParallelismAllocator.Free(num, totalNum)
 }
 
+func (s *ShardParallelismAllocator) Idle() int64 {
+	return s.sharedParallelismPool.GetFreeResource()
+}
+
 type SeriesResAllocator struct {
 	seriesParallelismPool bucket.ResourceBucket
 }
@@ -102,7 +109,9 @@ func NewSeriesParallelismAllocator(maxTime time.Duration, maxSeriesParallelism i
 	if maxTime <= 0 {
 		maxTime = DefaultWaitTimeOut
 	}
-	if maxSeriesParallelism <= 0 {
+	if maxSeriesParallelism < 0 {
+		maxSeriesParallelism = math.MaxInt64
+	} else if maxSeriesParallelism == 0 {
 		maxSeriesParallelism = int64(DefaultMaxSeriesParallelismNumRatio * cpu.GetCpuNum())
 	}
 	return &SeriesResAllocator{
@@ -125,6 +134,10 @@ func (s *SeriesResAllocator) AllocParallelism(num int64) (int64, error) {
 
 func (s *SeriesResAllocator) Free(num, totalNum int64) {
 	s.seriesParallelismPool.ReleaseResource(num)
+}
+
+func (s *SeriesResAllocator) Idle() int64 {
+	return s.seriesParallelismPool.GetFreeResource()
 }
 
 // not use
@@ -173,6 +186,15 @@ type ChunkReaderResAllocator struct {
 }
 
 func NewChunkReaderResAllocator(threshold, minAllocNum, funcType int64) (*ChunkReaderResAllocator, error) {
+	if minAllocNum <= 0 {
+		cpuN := cpu.GetCpuNumWithoutRatio()
+		if cpuN <= 16 {
+			minAllocNum = 2
+		} else {
+			minAllocNum = 4
+		}
+	}
+
 	allocator, err := NewBaseResAllocator(threshold, minAllocNum, funcType)
 	return &ChunkReaderResAllocator{allocator: allocator}, err
 }

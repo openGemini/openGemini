@@ -44,7 +44,7 @@ type MockMetaClient struct {
 	MetaClient
 }
 
-func (mc *MockMetaClient) SendSql2MetaHeartbeat(host string) error {
+func (mc *MockMetaClient) SendCQ2MetaHeartbeat(host string) error {
 	return nil
 }
 
@@ -83,7 +83,9 @@ func (e *mockQueryExecutor) ExecuteQuery(q *influxql.Query, opt query.ExecutionO
 
 // NewTestService returns a new *Service with default mock object members.
 func NewTestService() *Service {
-	s := NewService("127.0.0.1:8086", config.DefaultRunInterval, 1)
+	conf := config.NewContinuousQueryConfig()
+	conf.MaxProcessCQNumber = 1
+	s := NewService("127.0.0.1:8086", conf)
 	s.WithLogger(logger.NewLogger(errno.ModuleUnknown).SetZapLogger(zap.NewNop()))
 	s.MetaClient = &MockMetaClient{}
 
@@ -322,11 +324,14 @@ func TestService_ExecuteContinuousQuery_Successfully(t *testing.T) {
 		},
 	}
 
+	oldSlowCQDuration := SlowCQDuration
+	SlowCQDuration = time.Nanosecond
 	now := time.Now()
 	ok, err := s.ExecuteContinuousQuery(cq, now)
+	SlowCQDuration = oldSlowCQDuration
 	assert.True(t, ok)
 	assert.NoError(t, err)
-	assert.Equal(t, s.lastRuns[strings.ToLower(cq.name)], now.Truncate(time.Hour))
+	assert.Equal(t, now.Truncate(time.Hour).Add(RunDelayDuration), s.lastRuns[strings.ToLower(cq.name)])
 }
 
 func TestService_ExecuteContinuousQuery_Successfully2(t *testing.T) {
@@ -366,15 +371,10 @@ func TestService_ExecuteContinuousQuery_WithTimeZone(t *testing.T) {
 	}
 
 	cqi := &meta.ContinuousQueryInfo{
-		Name:  "cq",
 		Query: `CREATE CONTINUOUS QUERY "cq" ON "db1" BEGIN SELECT count(value) INTO "count_value" FROM "measurement" GROUP BY time(1h) TZ('Asia/Shanghai') END`,
 	}
 	dbi := &meta.DatabaseInfo{
-		Name:                   "db1",
 		DefaultRetentionPolicy: "default",
-		ContinuousQueries: map[string]*meta.ContinuousQueryInfo{
-			"cq": cqi,
-		},
 	}
 	cq := NewContinuousQuery(dbi.DefaultRetentionPolicy, cqi.Query)
 	assert.NotNil(t, cq)
@@ -383,7 +383,7 @@ func TestService_ExecuteContinuousQuery_WithTimeZone(t *testing.T) {
 	ok, err := s.ExecuteContinuousQuery(cq, now)
 	assert.True(t, ok)
 	assert.NoError(t, err)
-	assert.Equal(t, s.lastRuns[cq.name], now.In(cq.source.Location).Truncate(time.Hour))
+	assert.Equal(t, now.In(cq.source.Location).Truncate(time.Hour).Add(RunDelayDuration), s.lastRuns[cq.name])
 }
 
 func TestService_NewContinuousQuery(t *testing.T) {

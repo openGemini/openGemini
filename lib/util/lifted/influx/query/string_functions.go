@@ -15,6 +15,7 @@ package query
 // limitations under the License.
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -23,7 +24,7 @@ import (
 	"strconv"
 	"strings"
 
-	json "github.com/json-iterator/go"
+	"github.com/openGemini/openGemini/lib/encoding"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/util"
@@ -39,6 +40,9 @@ const (
 	IPv6LENGTH = 128
 )
 
+var json2 = encoding.JSONConfig
+
+// String
 var (
 	_ = RegistryMaterializeFunction("levenshtein_distance", &levenshteinDistanceFunc{
 		BaseInfo: BaseInfo{FuncType: STRING},
@@ -86,6 +90,9 @@ var (
 		BaseInfo: BaseInfo{FuncType: STRING},
 	})
 	_ = RegistryMaterializeFunction("typeof", &typeofFunc{
+		BaseInfo: BaseInfo{FuncType: STRING},
+	})
+	_ = RegistryMaterializeFunction("element_at", &elementAtFunc{
 		BaseInfo: BaseInfo{FuncType: STRING},
 	})
 )
@@ -252,59 +259,12 @@ func minDistance(str1 string, str2 string) string {
 	return strconv.Itoa(dp[m][n])
 }
 
+// TODO: Use the builtin min() function in Golang.
 func min(a, b int) int {
 	if a < b {
 		return a
 	}
 	return b
-}
-
-type lpadFunc struct {
-	BaseInfo
-}
-
-func (s *lpadFunc) GetRules(name string) []CheckRule {
-	return []CheckRule{
-		&ArgNumberCheckRule{Name: name, Min: 3, Max: 3},
-		&TypeCheckRule{Name: name, Index: 1, Asserts: []func(interface{}) bool{AssertIntegerLiteral}},
-		&TypeCheckRule{Name: name, Index: 2, Asserts: []func(interface{}) bool{AssertStringLiteral}},
-	}
-}
-
-func (s *lpadFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
-	if expr.Name != "lpad" {
-		return fmt.Errorf("invalid name, expected %s, got %s", "lpad", expr.Name)
-	}
-
-	return compileAllStringArgs(expr, c)
-}
-
-func (s *lpadFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
-	if args[0] != influxql.String {
-		return influxql.Unknown, fmt.Errorf("invalid argument type for the first argument in %s(): %s", name, args[0])
-	}
-
-	return influxql.String, nil
-}
-
-func (s *lpadFunc) CallFunc(name string, args []interface{}) (interface{}, bool) {
-	return LpadString(args[0].(string), args[2].(string), int(args[1].(int64))), true
-}
-
-func LpadString(s, padStr string, length int) string {
-	if length <= 0 || padStr == "" {
-		return s
-	}
-
-	// Calculate the number of padding characters we need
-	numPadChars := length - len(s)
-	if numPadChars <= 0 {
-		return s[:length]
-	}
-
-	// Repeat the padding string until we reach the desired length
-	padding := strings.Repeat(padStr, (numPadChars+len(padStr)-1)/len(padStr))
-	return padding[:numPadChars] + s
 }
 
 type regexpExtractFunc struct {
@@ -475,54 +435,6 @@ func ReverseString(s string) string {
 	return string(runeSlice)
 }
 
-type rpadFunc struct {
-	BaseInfo
-}
-
-func (s *rpadFunc) GetRules(name string) []CheckRule {
-	return []CheckRule{
-		&ArgNumberCheckRule{Name: name, Min: 3, Max: 3},
-		&TypeCheckRule{Name: name, Index: 1, Asserts: []func(interface{}) bool{AssertIntegerLiteral}},
-		&TypeCheckRule{Name: name, Index: 2, Asserts: []func(interface{}) bool{AssertStringLiteral}},
-	}
-}
-
-func (s *rpadFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
-	if expr.Name != "rpad" {
-		return fmt.Errorf("invalid name, expected %s, got %s", "rpad", expr.Name)
-	}
-
-	return compileAllStringArgs(expr, c)
-}
-
-func (s *rpadFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
-	if args[0] != influxql.String {
-		return influxql.Unknown, fmt.Errorf("invalid argument type for the first argument in %s(): %s", name, args[0])
-	}
-
-	return influxql.String, nil
-}
-
-func (s *rpadFunc) CallFunc(name string, args []interface{}) (interface{}, bool) {
-	return RpadString(args[0].(string), args[2].(string), int(args[1].(int64))), true
-}
-
-func RpadString(s, padStr string, length int) string {
-	if length <= 0 || padStr == "" {
-		return s
-	}
-
-	// Calculate the number of padding characters we need
-	numPadChars := length - len(s)
-	if numPadChars <= 0 {
-		return s[:length]
-	}
-
-	// Repeat the padding string until we reach the desired length
-	padding := strings.Repeat(padStr, (numPadChars+len(padStr)-1)/len(padStr))
-	return s + padding[:numPadChars]
-}
-
 type splitFunc struct {
 	BaseInfo
 }
@@ -560,7 +472,7 @@ func (s *splitFunc) CallFunc(name string, args []interface{}) (interface{}, bool
 }
 
 func SplitString(s, seq string, n int) string {
-	res, _ := json.MarshalToString(strings.SplitN(s, seq, n))
+	res, _ := json2.MarshalToString(strings.SplitN(s, seq, n))
 	return res
 }
 
@@ -934,6 +846,48 @@ func (s *typeofFunc) CallFunc(name string, args []interface{}) (interface{}, boo
 		return "bool", true
 	}
 
+	return nil, false
+}
+
+type elementAtFunc struct {
+	BaseInfo
+}
+
+func (e *elementAtFunc) GetRules(name string) []CheckRule {
+	return []CheckRule{
+		&ArgNumberCheckRule{Name: name, Min: 2, Max: 2},
+		&TypeCheckRule{Name: name, Index: 0, Asserts: []func(interface{}) bool{AssertVarRef}},
+		&TypeCheckRule{Name: name, Index: 1, Asserts: []func(interface{}) bool{AssertStringLiteral}},
+	}
+}
+
+func (e *elementAtFunc) CompileFunc(expr *influxql.Call, c *compiledField) error {
+	return compileAllStringArgs(expr, c)
+}
+
+func (e *elementAtFunc) CallTypeFunc(name string, args []influxql.DataType) (influxql.DataType, error) {
+	return influxql.String, nil
+}
+
+func (e *elementAtFunc) CallFunc(name string, args []interface{}) (interface{}, bool) {
+	input, ok := args[0].(string)
+	if !ok {
+		return nil, false
+	}
+	key, ok := args[1].(string)
+	if !ok {
+		return nil, false
+	}
+	pairs := strings.Split(input, influxql.DefaultLabelKeySplit)
+	for _, pair := range pairs {
+		kv := strings.Split(pair, influxql.DefaultLabelValueSplit)
+		if len(kv) != 2 {
+			continue
+		}
+		if kv[0] == key {
+			return kv[1], true
+		}
+	}
 	return nil, false
 }
 
@@ -1325,7 +1279,7 @@ func JsonExtract(jsonStr, jsonPath string) (string, error) {
 
 	if jsonStr[0] == '[' && jsonStr[len(jsonStr)-1] == ']' {
 		var data []interface{}
-		err = json.UnmarshalFromString(jsonStr, &data)
+		err = json2.UnmarshalFromString(jsonStr, &data)
 		if err != nil {
 			return "", err
 		}
@@ -1337,7 +1291,7 @@ func JsonExtract(jsonStr, jsonPath string) (string, error) {
 	}
 
 	var data map[string]interface{}
-	err = json.UnmarshalFromString(jsonStr, &data)
+	err = json2.UnmarshalFromString(jsonStr, &data)
 	if err != nil {
 		return "", err
 	}
@@ -1349,7 +1303,7 @@ func GetJsonValue(value interface{}, pathParts []string) (string, error) {
 	if len(pathParts) == 0 {
 		s, ok := value.(string)
 		if !ok {
-			b, err := json.MarshalToString(value)
+			b, err := json2.MarshalToString(value)
 			return b, err
 		}
 
@@ -1878,17 +1832,20 @@ func (s *mobileCarrierFunc) CallFunc(name string, args []interface{}) (interface
 	return getMobileCarrier(arg0), true
 }
 
+// TODO: How to determine the carrier when user changed carrier but keep the old number?
 func getMobileCarrier(phone string) string {
 	ChinaTelecom := `^133|^149|^153|^173|^177|^180|^181|^189|^190|^191|^193|^199|^1700|^1701|^1702|^162`
 	reg := regexp.MustCompile(ChinaTelecom)
 	if reg.MatchString(phone) {
 		return "中国电信"
 	}
+
 	ChinaUnicom := `^130|^131|^132|^145|^155|^156|^166|^167|^171|^175|^176|^185|^186|^196|^1704|^1707|^1708|^1709`
 	reg = regexp.MustCompile(ChinaUnicom)
 	if reg.MatchString(phone) {
 		return "中国联通"
 	}
+
 	ChinaMobile := `^134|^135|^136|^137|^138|^139|^147|^148|^150|^151|^152|^157|^158|^159|^172|^178|^182|^183|` +
 		`^184|^187|^188|^195|^197|^198|^1440|^1703|^1705|^1706|^165`
 	reg = regexp.MustCompile(ChinaMobile)
@@ -1901,6 +1858,7 @@ func getMobileCarrier(phone string) string {
 	if reg.MatchString(phone) {
 		return "中国广电"
 	}
+
 	SatelliteCommunication := `^1349|^174`
 	reg = regexp.MustCompile(SatelliteCommunication)
 	if reg.MatchString(phone) {

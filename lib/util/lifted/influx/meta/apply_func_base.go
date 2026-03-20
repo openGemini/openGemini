@@ -23,12 +23,12 @@ import (
 	originql "github.com/influxdata/influxql"
 	"github.com/openGemini/openGemini/lib/config"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
-	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
 )
 
 func ApplyCreateRetentionPolicy(data *Data, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_CreateRetentionPolicyCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_CreateRetentionPolicyCommand_Command)
 	v, ok := ext.(*proto2.CreateRetentionPolicyCommand)
 	if !ok {
 		panic(fmt.Errorf("%s is not a CreateRetentionPolicyCommand", ext))
@@ -51,7 +51,7 @@ func ApplyCreateRetentionPolicy(data *Data, cmd *proto2.Command) error {
 }
 
 func ApplyDropRetentionPolicy(data *Data, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_DropRetentionPolicyCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_DropRetentionPolicyCommand_Command)
 	v, ok := ext.(*proto2.DropRetentionPolicyCommand)
 	if !ok {
 		DataLogger.Error("applyDropRetentionPolicy err")
@@ -60,7 +60,7 @@ func ApplyDropRetentionPolicy(data *Data, cmd *proto2.Command) error {
 }
 
 func ApplySetDefaultRetentionPolicy(data *Data, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_SetDefaultRetentionPolicyCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_SetDefaultRetentionPolicyCommand_Command)
 	v, ok := ext.(*proto2.SetDefaultRetentionPolicyCommand)
 	if !ok {
 		DataLogger.Error("applySetDefaultRetentionPolicy err")
@@ -69,7 +69,7 @@ func ApplySetDefaultRetentionPolicy(data *Data, cmd *proto2.Command) error {
 }
 
 func ApplyUpdateRetentionPolicy(data *Data, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_UpdateRetentionPolicyCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_UpdateRetentionPolicyCommand_Command)
 	v, ok := ext.(*proto2.UpdateRetentionPolicyCommand)
 	if !ok {
 		DataLogger.Error("applyUpdateRetentionPolicy err")
@@ -96,17 +96,27 @@ func ApplyUpdateRetentionPolicy(data *Data, cmd *proto2.Command) error {
 }
 
 func ApplyCreateShardGroup(data *Data, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_CreateShardGroupCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_CreateShardGroupCommand_Command)
 	v, ok := ext.(*proto2.CreateShardGroupCommand)
 	if !ok {
 		DataLogger.Error("applyCreateShardGroup err")
 	}
+
+	pbPlans := v.GetShardingPlans()
+	shardingPlans := make(map[string][]int, len(pbPlans))
+	for mstName, pbIdxes := range pbPlans {
+		idxes := make([]int, len(pbIdxes.Idx))
+		for i, pbIdx := range pbIdxes.Idx {
+			idxes[i] = int(pbIdx)
+		}
+		shardingPlans[mstName] = idxes
+	}
 	return data.CreateShardGroup(v.GetDatabase(), v.GetPolicy(), time.Unix(0, v.GetTimestamp()), v.GetShardTier(),
-		config.EngineType(v.GetEngineType()), v.GetVersion())
+		config.EngineType(v.GetEngineType()), v.GetVersion(), v.GetTimezone(), shardingPlans)
 }
 
 func ApplyDeleteShardGroup(data *Data, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_DeleteShardGroupCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_DeleteShardGroupCommand_Command)
 	v, ok := ext.(*proto2.DeleteShardGroupCommand)
 	if !ok {
 		DataLogger.Error("applyDeleteShardGroup err")
@@ -115,7 +125,7 @@ func ApplyDeleteShardGroup(data *Data, cmd *proto2.Command) error {
 }
 
 func ApplyCreateSubscription(data *Data, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_CreateSubscriptionCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_CreateSubscriptionCommand_Command)
 	v, ok := ext.(*proto2.CreateSubscriptionCommand)
 	if !ok {
 		DataLogger.Error("applyCreateSubscription err")
@@ -124,7 +134,7 @@ func ApplyCreateSubscription(data *Data, cmd *proto2.Command) error {
 }
 
 func ApplyDropSubscription(data *Data, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_DropSubscriptionCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_DropSubscriptionCommand_Command)
 	v, ok := ext.(*proto2.DropSubscriptionCommand)
 	if !ok {
 		DataLogger.Error("applyDropSubscription err")
@@ -133,7 +143,7 @@ func ApplyDropSubscription(data *Data, cmd *proto2.Command) error {
 }
 
 func ApplyCreateUser(data *Data, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_CreateUserCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_CreateUserCommand_Command)
 	v, ok := ext.(*proto2.CreateUserCommand)
 	if !ok {
 		DataLogger.Error("applyCreateUser err")
@@ -144,7 +154,7 @@ func ApplyCreateUser(data *Data, cmd *proto2.Command) error {
 }
 
 func ApplyDropUser(data *Data, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_DropUserCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_DropUserCommand_Command)
 	v, ok := ext.(*proto2.DropUserCommand)
 	if !ok {
 		DataLogger.Error("applyDropUser err")
@@ -155,7 +165,7 @@ func ApplyDropUser(data *Data, cmd *proto2.Command) error {
 }
 
 func ApplyUpdateUser(data *Data, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_UpdateUserCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_UpdateUserCommand_Command)
 	v, ok := ext.(*proto2.UpdateUserCommand)
 	if !ok {
 		DataLogger.Error("applyUpdateUser err")
@@ -164,7 +174,7 @@ func ApplyUpdateUser(data *Data, cmd *proto2.Command) error {
 }
 
 func ApplySetPrivilege(data *Data, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_SetPrivilegeCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_SetPrivilegeCommand_Command)
 	v, ok := ext.(*proto2.SetPrivilegeCommand)
 	if !ok {
 		DataLogger.Error("applySetPrivilege err")
@@ -176,7 +186,7 @@ func ApplySetPrivilege(data *Data, cmd *proto2.Command) error {
 }
 
 func ApplySetAdminPrivilege(data *Data, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_SetAdminPrivilegeCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_SetAdminPrivilegeCommand_Command)
 	v, ok := ext.(*proto2.SetAdminPrivilegeCommand)
 	if !ok {
 		DataLogger.Error("applySetAdminPrivilege err")
@@ -187,7 +197,7 @@ func ApplySetAdminPrivilege(data *Data, cmd *proto2.Command) error {
 }
 
 func ApplyCreateMetaNode(data *Data, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_CreateMetaNodeCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_CreateMetaNodeCommand_Command)
 	v, ok := ext.(*proto2.CreateMetaNodeCommand)
 	if !ok {
 		DataLogger.Error("applyCreateMetaNode err")
@@ -201,7 +211,7 @@ func ApplyCreateMetaNode(data *Data, cmd *proto2.Command) error {
 }
 
 func ApplySetMetaNode(data *Data, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_SetMetaNodeCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_SetMetaNodeCommand_Command)
 	v, ok := ext.(*proto2.SetMetaNodeCommand)
 	if !ok {
 		DataLogger.Error("applySetMetaNode err")
@@ -220,7 +230,7 @@ func ApplySetMetaNode(data *Data, cmd *proto2.Command) error {
 }
 
 func ApplyDeleteMetaNode(data *Data, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_DeleteMetaNodeCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_DeleteMetaNodeCommand_Command)
 	v, ok := ext.(*proto2.DeleteMetaNodeCommand)
 	if !ok {
 		DataLogger.Error("applyDeleteMetaNode err")
@@ -229,7 +239,7 @@ func ApplyDeleteMetaNode(data *Data, cmd *proto2.Command) error {
 }
 
 func ApplyCreateDataNode(data *Data, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_CreateDataNodeCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_CreateDataNodeCommand_Command)
 	v, ok := ext.(*proto2.CreateDataNodeCommand)
 	if !ok {
 		DataLogger.Error("applyCreateDataNode err")
@@ -249,7 +259,7 @@ func ApplyCreateDataNode(data *Data, cmd *proto2.Command) error {
 }
 
 func ApplyDeleteDataNode(data *Data, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_DeleteDataNodeCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_DeleteDataNodeCommand_Command)
 	v, ok := ext.(*proto2.DeleteDataNodeCommand)
 	if !ok {
 		DataLogger.Error("applyDeleteDataNode err")
@@ -258,7 +268,7 @@ func ApplyDeleteDataNode(data *Data, cmd *proto2.Command) error {
 }
 
 func ApplyMarkDatabaseDelete(data *Data, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_MarkDatabaseDeleteCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_MarkDatabaseDeleteCommand_Command)
 	v, ok := ext.(*proto2.MarkDatabaseDeleteCommand)
 	if !ok {
 		panic(fmt.Errorf("%s is not a MarkDatabaseDeleteCommand", ext))
@@ -267,7 +277,7 @@ func ApplyMarkDatabaseDelete(data *Data, cmd *proto2.Command) error {
 }
 
 func ApplyMarkRetentionPolicyDelete(data *Data, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_MarkRetentionPolicyDeleteCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_MarkRetentionPolicyDeleteCommand_Command)
 	v, ok := ext.(*proto2.MarkRetentionPolicyDeleteCommand)
 	if !ok {
 		DataLogger.Error("applyMarkRetentionPolicyDelete err")
@@ -276,7 +286,7 @@ func ApplyMarkRetentionPolicyDelete(data *Data, cmd *proto2.Command) error {
 }
 
 func ApplyCreateMeasurement(data *Data, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_CreateMeasurementCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_CreateMeasurementCommand_Command)
 	v, ok := ext.(*proto2.CreateMeasurementCommand)
 	if !ok {
 		panic(fmt.Errorf("%s is not a CreateMeasurementCommand", ext))
@@ -286,7 +296,7 @@ func ApplyCreateMeasurement(data *Data, cmd *proto2.Command) error {
 }
 
 func ApplyReSharding(data *Data, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_ReShardingCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_ReShardingCommand_Command)
 	v, ok := ext.(*proto2.ReShardingCommand)
 	if !ok {
 		DataLogger.Error("applyReSharding err")
@@ -302,7 +312,7 @@ func ApplyReSharding(data *Data, cmd *proto2.Command) error {
 }
 
 func ApplyUpdateSchema(data *Data, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_UpdateSchemaCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_UpdateSchemaCommand_Command)
 	v, ok := ext.(*proto2.UpdateSchemaCommand)
 	if !ok {
 		panic(fmt.Errorf("%s is not a UpdateSchemaCommand", ext))
@@ -312,7 +322,7 @@ func ApplyUpdateSchema(data *Data, cmd *proto2.Command) error {
 }
 
 func ApplyAlterShardKey(data *Data, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_AlterShardKeyCmd_Command)
+	ext := proto.GetExtension(cmd, proto2.E_AlterShardKeyCmd_Command)
 	v, ok := ext.(*proto2.AlterShardKeyCmd)
 	if !ok {
 		panic(fmt.Errorf("%s is not a AlterShardKeyCmd", ext))
@@ -320,8 +330,62 @@ func ApplyAlterShardKey(data *Data, cmd *proto2.Command) error {
 	return data.AlterShardKey(v.GetDBName(), v.GetRpName(), v.GetName(), v.GetSki())
 }
 
+func ApplyAlterShardsNum(data *Data, cmd *proto2.Command) error {
+	ext := proto.GetExtension(cmd, proto2.E_AlterShardsNumCommand_Command)
+	v, ok := ext.(*proto2.AlterShardsNumCommand)
+	if !ok {
+		return fmt.Errorf("%s is not a AlterShardsNumCommand", ext)
+	}
+	return data.AlterShardsNum(v.GetDBName(), v.GetRpName(), v.GetName(), v.GetNumOfShards())
+}
+
+func ApplyClearUselessDataNodeCommand(data *Data, cmd *proto2.Command) error {
+	ext := proto.GetExtension(cmd, proto2.E_ClearUselessDataNodeCommand_Command)
+	v, ok := ext.(*proto2.ClearUselessDataNodeCommand)
+	if !ok {
+		return fmt.Errorf("%s is not a ClearUselessDataNodeCommand", ext)
+	}
+	return data.ClearUselessDataNode(v.GetDataHosts())
+}
+
+func ApplyCreateResource(data *Data, cmd *proto2.Command) error {
+	ext := proto.GetExtension(cmd, proto2.E_CreateResourceCommand_Command)
+	v, ok := ext.(*proto2.CreateResourceCommand)
+	if !ok {
+		return fmt.Errorf("%v is not a CreateResourceCommand", ext)
+	}
+	return data.CreateResource(v.GetName(), v.GetResourceInfo())
+}
+
+func ApplyDropResource(data *Data, cmd *proto2.Command) error {
+	ext := proto.GetExtension(cmd, proto2.E_DropResourceCommand_Command)
+	v, ok := ext.(*proto2.DropResourceCommand)
+	if !ok {
+		return fmt.Errorf("%v is not a DropResourceCommand", ext)
+	}
+	return data.DropResource(v.GetName())
+}
+
+func ApplyCreateTask(data *Data, cmd *proto2.Command) error {
+	ext := proto.GetExtension(cmd, proto2.E_CreateTaskCommand_Command)
+	v, ok := ext.(*proto2.CreateTaskCommand)
+	if !ok {
+		return fmt.Errorf("%v is not a CreateTaskCommand", ext)
+	}
+	return data.CreateTask(v.GetTaskInfo())
+}
+
+func ApplyDropTask(data *Data, cmd *proto2.Command) error {
+	ext := proto.GetExtension(cmd, proto2.E_DropTaskCommand_Command)
+	v, ok := ext.(*proto2.DropTaskCommand)
+	if !ok {
+		return fmt.Errorf("%v is not a DropTaskCommand", ext)
+	}
+	return data.DropTask(v.GetTaskName(), v.GetTaskType())
+}
+
 func ApplyPruneGroups(data *Data, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_PruneGroupsCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_PruneGroupsCommand_Command)
 	v, ok := ext.(*proto2.PruneGroupsCommand)
 	if !ok {
 		DataLogger.Error("applyPruneGroups err")
@@ -330,7 +394,7 @@ func ApplyPruneGroups(data *Data, cmd *proto2.Command) error {
 }
 
 func ApplyMarkMeasurementDelete(data *Data, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_MarkMeasurementDeleteCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_MarkMeasurementDeleteCommand_Command)
 	v, ok := ext.(*proto2.MarkMeasurementDeleteCommand)
 	if !ok {
 		panic(fmt.Errorf("%s is not a MarkMeasurementDeleteCommand", ext))
@@ -339,7 +403,7 @@ func ApplyMarkMeasurementDelete(data *Data, cmd *proto2.Command) error {
 }
 
 func ApplyDropMeasurement(data *Data, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_DropMeasurementCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_DropMeasurementCommand_Command)
 	v, ok := ext.(*proto2.DropMeasurementCommand)
 	if !ok {
 		panic(fmt.Errorf("%s is not a DropMeasurementCommand", ext))
@@ -348,7 +412,7 @@ func ApplyDropMeasurement(data *Data, cmd *proto2.Command) error {
 }
 
 func ApplyDeleteIndexGroup(data *Data, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_DeleteIndexGroupCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_DeleteIndexGroupCommand_Command)
 	v, ok := ext.(*proto2.DeleteIndexGroupCommand)
 	if !ok {
 		DataLogger.Error("applyDeleteIndexGroup err")
@@ -357,7 +421,7 @@ func ApplyDeleteIndexGroup(data *Data, cmd *proto2.Command) error {
 }
 
 func ApplyUpdateShardInfoTier(data *Data, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_UpdateShardInfoTierCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_UpdateShardInfoTierCommand_Command)
 	v, ok := ext.(*proto2.UpdateShardInfoTierCommand)
 	if !ok {
 		DataLogger.Error("applyUpdateShardInfoTier err")
@@ -366,7 +430,7 @@ func ApplyUpdateShardInfoTier(data *Data, cmd *proto2.Command) error {
 }
 
 func ApplyUpdateIndexInfoTier(data *Data, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_UpdateIndexInfoTierCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_UpdateIndexInfoTierCommand_Command)
 	v, ok := ext.(*proto2.UpdateIndexInfoTierCommand)
 	if !ok {
 		DataLogger.Error("applyUpdateIndexInfoTier err")
@@ -375,7 +439,7 @@ func ApplyUpdateIndexInfoTier(data *Data, cmd *proto2.Command) error {
 }
 
 func ApplyUpdateNodeStatus(data *Data, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_UpdateNodeStatusCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_UpdateNodeStatusCommand_Command)
 	v, ok := ext.(*proto2.UpdateNodeStatusCommand)
 	if !ok {
 		DataLogger.Error("applyUpdateNodeStatus err")
@@ -384,7 +448,7 @@ func ApplyUpdateNodeStatus(data *Data, cmd *proto2.Command) error {
 }
 
 func ApplyUpdatePtInfo(data *Data, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_UpdatePtInfoCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_UpdatePtInfoCommand_Command)
 	v, ok := ext.(*proto2.UpdatePtInfoCommand)
 	if !ok {
 		DataLogger.Error("applyUpdatePtInfo err")
@@ -393,7 +457,7 @@ func ApplyUpdatePtInfo(data *Data, cmd *proto2.Command) error {
 }
 
 func ApplyCreateDownSample(data *Data, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_CreateDownSamplePolicyCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_CreateDownSamplePolicyCommand_Command)
 	v, ok := ext.(*proto2.CreateDownSamplePolicyCommand)
 	if !ok {
 		DataLogger.Error("applyCreateDownSample err")
@@ -409,7 +473,7 @@ func ApplyCreateDownSample(data *Data, cmd *proto2.Command) error {
 }
 
 func ApplyDropDownSample(data *Data, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_DropDownSamplePolicyCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_DropDownSamplePolicyCommand_Command)
 	v, ok := ext.(*proto2.DropDownSamplePolicyCommand)
 	if !ok {
 		DataLogger.Error("applyDropDownSample err")
@@ -419,7 +483,7 @@ func ApplyDropDownSample(data *Data, cmd *proto2.Command) error {
 }
 
 func ApplyCreateDbPtViewCommand(data *Data, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_CreateDbPtViewCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_CreateDbPtViewCommand_Command)
 	v, ok := ext.(*proto2.CreateDbPtViewCommand)
 	if !ok {
 		panic(fmt.Errorf("%s is not a CreateDbPtViewCommand", ext))
@@ -435,7 +499,7 @@ func ApplyCreateDbPtViewCommand(data *Data, cmd *proto2.Command) error {
 }
 
 func ApplyUpdateShardDownSampleInfo(data *Data, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_UpdateShardDownSampleInfoCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_UpdateShardDownSampleInfoCommand_Command)
 	v, ok := ext.(*proto2.UpdateShardDownSampleInfoCommand)
 	if !ok {
 		DataLogger.Error("applyUpdateShardDownSampleInfo err")
@@ -446,7 +510,7 @@ func ApplyUpdateShardDownSampleInfo(data *Data, cmd *proto2.Command) error {
 }
 
 func ApplyCreateStream(data *Data, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_CreateStreamCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_CreateStreamCommand_Command)
 	v, ok := ext.(*proto2.CreateStreamCommand)
 	if !ok {
 		DataLogger.Error("applyCreateStream err")
@@ -459,7 +523,7 @@ func ApplyCreateStream(data *Data, cmd *proto2.Command) error {
 }
 
 func ApplyDropStream(data *Data, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_DropStreamCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_DropStreamCommand_Command)
 	v, ok := ext.(*proto2.DropStreamCommand)
 	if !ok {
 		DataLogger.Error("applyDropStream err")
@@ -469,7 +533,7 @@ func ApplyDropStream(data *Data, cmd *proto2.Command) error {
 }
 
 func ApplyUpdatePtVersion(data *Data, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_UpdatePtVersionCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_UpdatePtVersionCommand_Command)
 	v, ok := ext.(*proto2.UpdatePtVersionCommand)
 	if !ok {
 		panic(fmt.Errorf("%s is not a UpdatePtVersionCommand", ext))
@@ -479,7 +543,7 @@ func ApplyUpdatePtVersion(data *Data, cmd *proto2.Command) error {
 }
 
 func ApplyRegisterQueryIDOffset(data *Data, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_RegisterQueryIDOffsetCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_RegisterQueryIDOffsetCommand_Command)
 	v, ok := ext.(*proto2.RegisterQueryIDOffsetCommand)
 	if !ok {
 		panic(fmt.Errorf("%s is not a RegisterQueryIDOffsetCommand", ext))
@@ -489,7 +553,7 @@ func ApplyRegisterQueryIDOffset(data *Data, cmd *proto2.Command) error {
 }
 
 func ApplyContinuousQueryReport(data *Data, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_ContinuousQueryReportCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_ContinuousQueryReportCommand_Command)
 	v, ok := ext.(*proto2.ContinuousQueryReportCommand)
 	if !ok {
 		panic(fmt.Errorf("%s is not a ContinuousQueryReportCommand", ext))
@@ -499,7 +563,7 @@ func ApplyContinuousQueryReport(data *Data, cmd *proto2.Command) error {
 }
 
 func ApplySetNodeSegregateStatus(data *Data, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_SetNodeSegregateStatusCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_SetNodeSegregateStatusCommand_Command)
 	v, ok := ext.(*proto2.SetNodeSegregateStatusCommand)
 	if !ok {
 		panic(fmt.Errorf("%s is not a SetNodeSegregateStatusCommand", ext))
@@ -511,7 +575,7 @@ func ApplySetNodeSegregateStatus(data *Data, cmd *proto2.Command) error {
 }
 
 func ApplyRemoveNode(data *Data, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_RemoveNodeCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_RemoveNodeCommand_Command)
 	v, ok := ext.(*proto2.RemoveNodeCommand)
 	if !ok {
 		panic(fmt.Errorf("%s is not a RemoveNodeCommand", ext))
@@ -522,7 +586,7 @@ func ApplyRemoveNode(data *Data, cmd *proto2.Command) error {
 }
 
 func ApplyUpdateReplication(data *Data, cmd *proto2.Command, metaTransferLeadership func(string, uint32, uint32, uint32)) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_UpdateReplicationCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_UpdateReplicationCommand_Command)
 	v, ok := ext.(*proto2.UpdateReplicationCommand)
 	if !ok {
 		panic(fmt.Errorf("%s is not a UpdateReplicationCommand", ext))
@@ -540,7 +604,7 @@ func ApplyUpdateReplication(data *Data, cmd *proto2.Command, metaTransferLeaders
 }
 
 func ApplyUpdateMeasurement(data *Data, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_UpdateMeasurementCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_UpdateMeasurementCommand_Command)
 	v, ok := ext.(*proto2.UpdateMeasurementCommand)
 	if !ok {
 		panic(fmt.Errorf("%s is not a UpdateMeasurementCommand", ext))
@@ -549,7 +613,7 @@ func ApplyUpdateMeasurement(data *Data, cmd *proto2.Command) error {
 }
 
 func ApplyReplaceMergeShards(data *Data, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_ReplaceMergeShardsCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_ReplaceMergeShardsCommand_Command)
 	v, ok := ext.(*proto2.ReplaceMergeShardsCommand)
 	if !ok {
 		return fmt.Errorf("%s is not a ReplaceMergeShardsCommand", ext)
@@ -558,7 +622,7 @@ func ApplyReplaceMergeShards(data *Data, cmd *proto2.Command) error {
 }
 
 func ApplyRecoverMetaData(data *Data, cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_RecoverMetaDataCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_RecoverMetaDataCommand_Command)
 	v, ok := ext.(*proto2.RecoverMetaDataCommand)
 	if !ok {
 		return fmt.Errorf("%s is not a RecoverMetaDataCommand", ext)
@@ -588,4 +652,13 @@ func ApplyRecoverMetaData(data *Data, cmd *proto2.Command) error {
 		}
 	}
 	return err
+}
+
+func ApplyShardingPlan(data *Data, cmd *proto2.Command) error {
+	ext := proto.GetExtension(cmd, proto2.E_UpdateShardingPlanCommand_Command)
+	v, ok := ext.(*proto2.UpdateShardingPlanCommand)
+	if !ok {
+		return fmt.Errorf("%v is not a UpdateShardingPlanCommand", ext)
+	}
+	return data.UpdateShardingPlans(v.GetPlans())
 }

@@ -381,9 +381,7 @@ func (s *shard) initGroupCursors(ctx context.Context, querySchema *executor.Quer
 		}
 
 		// init chunk meta context
-		if querySchema.Options().IsPromQuery() {
-			c.ctx.metaContext = immutable.NewChunkMetaContext(c.ctx.schema)
-		}
+		c.ctx.metaContext = immutable.NewChunkMetaContext(c.ctx.schema)
 
 		// init map
 		c.ctx.filterOption.FiltersMap = make(map[string]*influxql.FilterMapValue)
@@ -585,6 +583,8 @@ func (s *shard) createGroupCursors(ctx context.Context, span *tracing.Span, sche
 			subGroupSpan := groupSpan.StartSpan(fmt.Sprintf("group%d", i)).StartPP()
 			subGroupSpan.CreateCounter(memTableDuration, "ns")
 			subGroupSpan.CreateCounter(memTableRowCount, "")
+			enableFileCursor := executor.GetEnableFileCursor() && schema.HasOptimizeAgg()
+			immutable.CreateLocFileOpenSpanCounters(subGroupSpan, enableFileCursor)
 			cursors[i].(*groupCursor).span = subGroupSpan
 		}
 	}
@@ -699,26 +699,39 @@ func (s *seriesInfo) GetSid() uint64 {
 }
 
 type idKeyCursorContext struct {
-	filterOption    immutable.BaseFilterOptions
-	maxRowCnt       int
-	engineType      config.EngineType
-	tr              util.TimeRange
-	queryTr         util.TimeRange
-	interTr         util.TimeRange // intersection of the query time and shard time
-	auxTags         []string
-	schema          record.Schemas
-	readers         *immutable.MmsReaders
-	memTables       MemDataReader
-	aggPool         *record.RecordPool
-	seriesPool      *record.RecordPool
-	tmsMergePool    *record.RecordPool
-	querySchema     *executor.QuerySchema
-	decs            *immutable.ReadContext
-	colAux          *immutable.ColAux
-	metaContext     *immutable.ChunkMetaContext
-	closedSignal    *bool
-	immTableReaders map[uint64]*immutable.MmsReaders
-	memTableReader  map[uint64]MemDataReader
+	filterOption     immutable.BaseFilterOptions
+	maxRowCnt        int
+	engineType       config.EngineType
+	tr               util.TimeRange
+	queryTr          util.TimeRange
+	interTr          util.TimeRange // intersection of the query time and shard time
+	auxTags          []string
+	schema           record.Schemas
+	readers          *immutable.MmsReaders
+	memTables        MemDataReader
+	aggPool          *record.RecordPool
+	seriesPool       *record.RecordPool
+	tmsMergePool     *record.RecordPool
+	querySchema      *executor.QuerySchema
+	decs             *immutable.ReadContext
+	colAux           *immutable.ColAux
+	metaContext      *immutable.ChunkMetaContext
+	closedSignal     *bool
+	immTableReaders  map[uint64]*immutable.MmsReaders
+	memTableReader   map[uint64]MemDataReader
+	isLastRowQuery   bool
+	isLastFieldQuery bool
+	span             *tracing.Span
+}
+
+func NewKeyCursorContext(schema hybridqp.Catalog) *idKeyCursorContext {
+	return &idKeyCursorContext{
+		maxRowCnt:    schema.Options().ChunkSizeNum(),
+		aggPool:      AggPool,
+		seriesPool:   SeriesPool,
+		tmsMergePool: TsmMergePool,
+		querySchema:  schema.(*executor.QuerySchema),
+	}
 }
 
 func (i *idKeyCursorContext) IsAborted() bool {
@@ -735,6 +748,10 @@ func (i *idKeyCursorContext) hasFieldCondition() bool {
 
 func (i *idKeyCursorContext) SetSchema(r record.Schemas) {
 	i.schema = r
+}
+
+func (i *idKeyCursorContext) SetSpan(span *tracing.Span) {
+	i.span = span
 }
 
 func (i *idKeyCursorContext) GetFilterOption() *immutable.BaseFilterOptions {
@@ -823,9 +840,10 @@ func (s *shard) newTagSetCursor(ctx *idKeyCursorContext, span *tracing.Span, sch
 }
 
 func (s *shard) getAllSeriesMemtableRecord(ctx *idKeyCursorContext, schema *executor.QuerySchema,
-	tagSet tsi.TagSetEx, start, step int) (map[uint64][]*SeriesIter, int64, int64) {
+	tagSet tsi.TagSetEx, start, step int) (map[uint64][]*SeriesIter, int64, int64, int64, error) {
 	minTime := int64(math.MaxInt64)
 	maxTime := int64(math.MinInt64)
+	flushWriteTime := int64(math.MaxInt64)
 	tagSetNum := tagSet.Len()
 	mapSize := tagSetNum / step
 	if mapSize > memtableInitMapSize {
@@ -839,6 +857,12 @@ func (s *shard) getAllSeriesMemtableRecord(ctx *idKeyCursorContext, schema *exec
 		filter := tagSet.GetFilters(i)
 		rowFilter := tagSet.GetRowFilter(i)
 		nameWithVer := schema.Options().OptionsName()
+		if ctx.isLastRowQuery {
+			flushWriteTime, _ = s.immTables.Sequencer().Get(nameWithVer, sid)
+			if flushWriteTime == math.MaxInt64 {
+				return memItrs, minTime, maxTime, flushWriteTime, errno.NewError(errno.LastRowRetry)
+			}
+		}
 		memTableRecord := ctx.memTables.Values(nameWithVer, sid, ctx.tr, ctx.schema, schema.Options().IsAscending())
 		memTableRecord = immutable.FilterByField(memTableRecord, nil, &ctx.filterOption, filter, rowFilter, ptTags, nil, &ctx.colAux)
 		if memTableRecord == nil || memTableRecord.RowNums() == 0 {
@@ -847,6 +871,11 @@ func (s *shard) getAllSeriesMemtableRecord(ctx *idKeyCursorContext, schema *exec
 		memTableRecord = memTableRecord.KickNilRow(nil, &colAux)
 		if memTableRecord.RowNums() == 0 {
 			continue
+		}
+		if ctx.isLastRowQuery {
+			if (ctx.tr.Min <= flushWriteTime && flushWriteTime <= ctx.tr.Max) && flushWriteTime > memTableRecord.Time(memTableRecord.RowNums()-1) {
+				continue
+			}
 		}
 		midItr := getRecordIterator()
 		midItr.init(memTableRecord)
@@ -863,7 +892,7 @@ func (s *shard) getAllSeriesMemtableRecord(ctx *idKeyCursorContext, schema *exec
 		minTime = GetMinTime(minTime, midItr.record, schema.Options().IsAscending())
 		maxTime = GetMaxTime(maxTime, midItr.record, schema.Options().IsAscending())
 	}
-	return memItrs, minTime, maxTime
+	return memItrs, minTime, maxTime, flushWriteTime, nil
 }
 
 func (s *shard) newAggTagSetCursorInSerial(ctx *idKeyCursorContext, span *tracing.Span, schema *executor.QuerySchema,
@@ -909,6 +938,8 @@ func (s *shard) newAggTagSetCursor(ctx *idKeyCursorContext, span *tracing.Span, 
 
 func (s *shard) iteratorInit(ctx *idKeyCursorContext, span *tracing.Span, schema *executor.QuerySchema,
 	tagSet tsi.TagSetEx, start, step int, havePreAgg bool, notAggOnSeriesFunc func(m map[string]*influxql.Call) bool) (comm.KeyCursor, error) {
+	ctx.isLastRowQuery = schema.IsLastRowQuery()
+	ctx.isLastFieldQuery = schema.IsLastFieldQuery()
 	var itr comm.KeyCursor
 	if !schema.Options().IsPromQuery() {
 		itr = NewFileLoopCursor(ctx, span, schema, tagSet, start, step, s)

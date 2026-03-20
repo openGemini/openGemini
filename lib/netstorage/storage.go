@@ -18,23 +18,27 @@ import (
 	"fmt"
 	"time"
 
-	numenc "github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/openGemini/openGemini/lib/codec"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/msgservice"
+	data "github.com/openGemini/openGemini/lib/msgservice/data"
+	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/spdy"
 	"github.com/openGemini/openGemini/lib/spdy/transport"
+	numenc "github.com/openGemini/openGemini/lib/util/lifted/encoding"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
-	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
+	"github.com/openGemini/openGemini/lib/util/lifted/smart_query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
 )
 
 var (
-	migrateTimeout            = 5 * time.Second
+	// increase the migrate timeout to reduce frequency of retries
+	migrateTimeout            = 15 * time.Second
 	segregateTimeout          = 5 * time.Second
 	transferLeadershipTimeout = 20 * time.Second
 	sendClearEvent            = 5 * time.Second
@@ -71,6 +75,10 @@ type Storage interface {
 
 	TransferLeadership(database string, nodeId uint64, oldMasterPtId, newMasterPtId uint32) error
 	SendClearEvents(nodeId uint64, data transport.Codec) error
+
+	ShowLastIndex(nodeId uint64, database string, ptIds []uint32) ([]meta2.DbPtLastIndexInfo, error)
+	ExecuteSmartQuery(nodeID uint64, db, rp, mst string, ptIDs []uint32, stmt *smart_query.SmartSelectStatement) (*record.SmartQueryResult, error)
+	GetRPPTWriteStatus(node *meta2.DataNode, db, rp string) (meta2.PTMstWriteStatus, error)
 }
 
 type NetStorage struct {
@@ -220,6 +228,7 @@ func (s *NetStorage) ddlRequestWithNodeId(nodeID uint64, typ uint8, data codec.B
 	r := msgservice.NewRequester(typ, data, s.metaClient)
 	err := r.InitWithNodeID(nodeID)
 	if err != nil {
+		s.log.Error("error here", zap.Error(err))
 		return nil, err
 	}
 
@@ -242,7 +251,7 @@ func (s *NetStorage) TagValues(nodeID uint64, db string, ptIDs []uint32, tagKeys
 		req.Condition = proto.String(cond.String())
 	}
 	req.SetTagKeys(tagKeys)
-	req.Limit = proto.Int(limit)
+	req.Limit = proto.Int32(int32(limit))
 
 	v, err := s.ddlRequestWithNodeId(nodeID, msgservice.ShowTagValuesRequestMessage, req)
 	if err != nil {
@@ -256,6 +265,76 @@ func (s *NetStorage) TagValues(nodeID uint64, db string, ptIDs []uint32, tagKeys
 
 	s.log.Debug("[ShowTagValuesRequestMessage] request success", zap.Uint64("nodeID", nodeID))
 	return resp.GetTagValuesSlice(), resp.Error()
+}
+
+// ExecuteSmartQuery performs a smart query operation on the specified node to retrieve data based on the provided parameters.
+// It constructs a query request, sends it to the target node, and processes the response.
+// Parameters:
+//
+//		nodeID: The unique identifier of the target node where the query will be executed.
+//		db: The name of the database to query.
+//		mst: The name of the table within the database.
+//		ptIDs: An array of partition IDs to filter the query results.
+//	    stmt: The smart select statement, including fields, startTime, endTime, interval, condition, limit and hint
+//
+// Returns:
+//
+//	*record.SmartQueryResult: The result of the query operation, containing the retrieved data.
+//	error: An error object if the operation fails, or nil if successful.
+func (s *NetStorage) ExecuteSmartQuery(nodeID uint64, db string, rp, mst string, ptIDs []uint32, stmt *smart_query.SmartSelectStatement) (*record.SmartQueryResult, error) {
+	req := &msgservice.SmarterQueryRequest{}
+	req.Db = proto.String(db)
+	req.RP = proto.String(rp)
+	req.Mst = proto.String(mst)
+	req.PtIDs = ptIDs
+	fields := stmt.Fields
+	if len(fields) == 0 {
+		return nil, errno.NewError(errno.FieldNotFound)
+	}
+	req.Fields = make([]*data.Field, 0, len(fields))
+	for i := range fields {
+		req.Fields = append(req.Fields,
+			&data.Field{
+				Call: proto.String(fields[i].Call),
+				Val:  proto.String(fields[i].Val),
+				Typ:  proto.Uint32(uint32(fields[i].Typ)),
+			})
+	}
+	startTime, endTime, interval := stmt.StartT.UnixNano(), stmt.EndT.UnixNano(), stmt.GroupByInterval.Nanoseconds()
+	req.StartTime = proto.Int64(startTime)
+	req.EndTime = proto.Int64(endTime)
+	req.Interval = proto.Int64(interval)
+	req.Limit = proto.Int32(int32(stmt.Limit))
+	req.Offset = proto.Int32(int32(stmt.Offset))
+	req.HintType = proto.Int64(stmt.HintType)
+	req.HintSeriesKeys = stmt.HintSeriesKey
+	cond := stmt.Condition
+	if len(cond.Cond) > 0 {
+		req.Condition = make([]*data.EqCond, 0, len(cond.Cond))
+		for i := range cond.Cond {
+			req.Condition = append(req.Condition,
+				&data.EqCond{
+					Key: proto.String(cond.Cond[i].Key),
+					Val: proto.String(cond.Cond[i].Val),
+					Op:  proto.Int64(int64(cond.Cond[i].Op)),
+					Typ: proto.Uint32(uint32(cond.Cond[i].Typ)),
+				},
+			)
+		}
+	}
+
+	v, err := s.ddlRequestWithNodeId(nodeID, msgservice.SmarterQueryRequestMessage, req)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, ok := v.(*msgservice.SmarterQueryResponse)
+	if !ok {
+		return nil, errno.NewInvalidTypeError("*msgservice.SmarterQueryResponse", v)
+	}
+
+	s.log.Debug("[SmarterQueryRequestMessage] request success", zap.Uint64("nodeID", nodeID))
+	return resp.GetResult(), resp.Error()
 }
 
 func (s *NetStorage) TagValuesCardinality(nodeID uint64, db string, ptIDs []uint32,
@@ -350,6 +429,24 @@ func (s *NetStorage) ShowTagKeys(nodeID uint64, db string, ptIDs []uint32, measu
 	}
 
 	return resp.TagKeys, resp.Error()
+}
+
+func (s *NetStorage) ShowLastIndex(nodeId uint64, database string, ptIds []uint32) ([]meta2.DbPtLastIndexInfo, error) {
+	req := &msgservice.ShowLastIndexRequest{}
+	req.Database = proto.String(database)
+	req.PtIds = ptIds
+
+	v, err := s.ddlRequestWithNodeId(nodeId, msgservice.ShowLastIndexRequestMessage, req)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, ok := v.(*msgservice.ShowLastIndexResponse)
+	if !ok {
+		return nil, errno.NewInvalidTypeError("*msgservice.ShowLastIndexResponse", v)
+	}
+
+	return resp.Infos, resp.Error()
 }
 
 func (s *NetStorage) DropSeries(nodeID uint64, db string, ptIDs []uint32, measurements []string, condition influxql.Expr) error {
@@ -533,4 +630,19 @@ func PingNode(nodeID uint64, address string, timeout time.Duration) error {
 		return err
 	}
 	return trans.Wait()
+}
+
+func (s *NetStorage) GetRPPTWriteStatus(node *meta2.DataNode, db, rp string) (meta2.PTMstWriteStatus, error) {
+	req := &msgservice.PullRPPTWriteStatusRequest{}
+	req.Database = proto.String(db)
+	req.RetentionPolicy = proto.String(rp)
+	v, err := s.ddlRequestWithNode(node, msgservice.PullRPPTWriteStatusRequestMessage, req)
+	if err != nil {
+		return nil, err
+	}
+	resp, ok := v.(*msgservice.PullRPPTWriteStatusResponse)
+	if !ok {
+		return nil, errno.NewInvalidTypeError("*msgservice.PullRPPTWriteStatusResponse", v)
+	}
+	return resp.StatusInfo, nil
 }

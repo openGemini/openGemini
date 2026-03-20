@@ -15,6 +15,7 @@
 package encoding
 
 import (
+	"encoding/binary"
 	"fmt"
 	"io"
 	"math"
@@ -22,6 +23,7 @@ import (
 
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/numberenc"
+	"github.com/openGemini/openGemini/lib/sysinfo"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
@@ -307,6 +309,9 @@ func (ctx *CoderContext) SetFloatCoder(floatCoder *Float) {
 }
 
 func (ctx *CoderContext) GetStringCoder() *String {
+	if ctx.stringCoder == nil {
+		ctx.stringCoder = GetStringCoder()
+	}
 	return ctx.stringCoder
 }
 
@@ -557,30 +562,23 @@ func EncodeStringBlock(in []byte, offset []uint32, out []byte, ctx *CoderContext
 	return ctx.stringCoder.Encoding(src, out)
 }
 
-func DecodeStringBlock(in []byte, out *[]byte, dstOffset *[]uint32, ctx *CoderContext) ([]byte, []uint32, error) {
+func DecodeStringBlock(in []byte, out []byte, dstOffset []uint32, ctx *CoderContext) ([]byte, []uint32, error) {
 	if len(in) == 0 {
-		return *out, *dstOffset, nil
+		return out, dstOffset, nil
 	}
 
 	var err error
-	if ctx.stringCoder == nil {
-		ctx.stringCoder = GetStringCoder()
-	}
-
-	ctx.buf, err = ctx.stringCoder.Decoding(in, ctx.buf[:0])
+	out, err = ctx.GetStringCoder().Decoding(in, out[:0])
 	if err != nil {
 		return nil, nil, err
 	}
 
-	var values []byte
-	values, *dstOffset, err = unpackString(ctx.buf, (*dstOffset)[:0])
+	out, dstOffset, err = unpackString(out, dstOffset[:0])
 	if err != nil {
 		return nil, nil, err
 	}
 
-	*out = append(*out, values...)
-
-	return *out, *dstOffset, nil
+	return out, dstOffset, nil
 }
 
 func EncodeTimestampBlock(in, out []byte, ctx *CoderContext) ([]byte, error) {
@@ -620,4 +618,22 @@ func DecodeUnsignedBlock(in []byte, out *[]byte, ctx *CoderContext) ([]uint64, e
 	*out = values
 
 	return util.Bytes2Uint64Slice(values), nil
+}
+
+type BinaryEndian interface {
+	AppendUint64(dst []byte, u uint64) []byte
+}
+
+var endian BinaryEndian
+
+func BinaryEndianIns() BinaryEndian {
+	return endian
+}
+
+func init() {
+	if sysinfo.IsLittleEndian() {
+		endian = &binary.LittleEndian
+	} else {
+		endian = &binary.BigEndian
+	}
 }

@@ -25,20 +25,19 @@ import (
 	"github.com/openGemini/openGemini/lib/tokenizer"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestBloomFilterIpIndexWriter(t *testing.T) {
 	rec := record.NewRecord(record.Schemas{{Name: "srcIp", Type: influx.Field_Type_String}}, false)
 	rec.ColVals[0].AppendStrings("1.1.1.1", "2.2.2.2", "3.3.3.3", "4.4.4.4")
 
-	bloomFilterWriter := NewBloomFilterIpWriter("", "", "", "", tokenizer.CONTENT_SPLITTER)
+	bloomFilterWriter := NewBloomFilterIpWriter(t.TempDir(), "", "", "", tokenizer.CONTENT_SPLITTER)
 	bloomFilterWriter.Open()
 	defer bloomFilterWriter.Close()
 
 	err := bloomFilterWriter.CreateAttachIndex(rec, []int{0}, []int{4})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	bloomFilterWriter.CreateDetachIndex(rec, []int{0}, []int{4}, nil)
 
 	bytes := bloomFilterWriter.GenBloomFilterData(&rec.ColVals[0], []int{2, 2}, influx.Field_Type_String)
@@ -48,6 +47,9 @@ func TestBloomFilterIpIndexWriter(t *testing.T) {
 
 	crc := crc32.Checksum(bytes[0:segBfSize-4], crc32.MakeTable(crc32.Castagnoli))
 	assert.Equal(t, crc, binary.LittleEndian.Uint32(bytes[segBfSize-4:segBfSize]))
+
+	err = bloomFilterWriter.Flush()
+	require.NoError(t, err)
 
 	bf := bloomfilter.NewOneHitBloomFilter(bytes[0:segBfSize-4], 3)
 	ipTokenizer := tokenizer.NewIpTokenizer()

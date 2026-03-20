@@ -17,7 +17,10 @@ package mutable_test
 import (
 	"os"
 	"path"
+	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/mutable"
@@ -159,4 +162,56 @@ func TestSplitRecordByTime_EmptyStringColumn(t *testing.T) {
 	require.Equal(t, 3, unOrder.RowNums())
 	require.Equal(t, 2, order.Len())
 	require.Equal(t, 2, unOrder.Len())
+}
+
+func TestRecordFlusher(t *testing.T) {
+	dir := t.TempDir()
+	hot := uint64(1)
+	tb := immutable.NewTableStore(dir, &dir, &hot, true, immutable.NewTsStoreConfig())
+	defer tb.Close()
+
+	schema := record.Schemas{
+		record.Field{Type: influx.Field_Type_String, Name: "a1"},
+		record.Field{Type: influx.Field_Type_Int, Name: record.TimeField},
+	}
+	rec := &record.Record{}
+	rec.ResetWithSchema(schema)
+	rec.Column(0).AppendStrings("", "", "", "", "")
+	rec.Column(1).AppendIntegers(1, 2, 3, 4, 5)
+
+	t.Run("flush success", func(t *testing.T) {
+		wg := sync.WaitGroup{}
+		wg.Add(1)
+		ch := make(chan []immutable.FileInfoExtend)
+		var info []immutable.FileInfoExtend
+		go func() {
+			defer wg.Done()
+			select {
+			case info = <-ch:
+			case <-time.After(3 * time.Second):
+			}
+		}()
+
+		flusher := mutable.NewRecordFlusher(tb, "mst", ch)
+		err := flusher.FlushRecord(1, rec)
+		require.NoError(t, err)
+
+		order, unorder, err := flusher.Flush()
+		require.NoError(t, err)
+		require.Len(t, order, 1)
+		require.Len(t, unorder, 0)
+
+		wg.Wait()
+		require.Len(t, info, 1)
+		require.NoError(t, order[0].Close())
+	})
+
+	t.Run("flush failed", func(t *testing.T) {
+		err := os.WriteFile(filepath.Join(dir, "/mst/00000002-0000-00000000.tssp.init"), make([]byte, 10), 0600)
+		require.NoError(t, err)
+
+		flusher := mutable.NewRecordFlusher(tb, "mst", nil)
+		err = flusher.FlushRecord(1, rec)
+		require.Error(t, err)
+	})
 }

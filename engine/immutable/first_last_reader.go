@@ -27,14 +27,14 @@ import (
 
 var firstLastReaderPool sync.Pool
 
-func readFirstOrLast(cm *ChunkMeta, ref *record.Field, dst *record.Record, ctx *ReadContext, cr ColumnReader, copied, first bool, ioPriority int) error {
+func readFirstOrLast(cm *ChunkMeta, ref *record.Field, dst *record.Record, ctx *ReadContext, cr ColumnReader, copied, first, lastRow bool, ioPriority int) error {
 	reader, ok := firstLastReaderPool.Get().(*FirstLastReader)
 	if !ok || reader == nil {
 		reader = &FirstLastReader{}
 	}
 	defer reader.Release()
 
-	reader.Init(cm, cr, ref, dst, first)
+	reader.Init(cm, cr, ref, dst, first, lastRow)
 	if reader.ref.Name == record.TimeField {
 		return reader.ReadTime(ctx, copied, ioPriority)
 	}
@@ -42,8 +42,9 @@ func readFirstOrLast(cm *ChunkMeta, ref *record.Field, dst *record.Record, ctx *
 }
 
 type FirstLastReader struct {
-	first bool
-	cr    ColumnReader
+	first   bool
+	lastRow bool
+	cr      ColumnReader
 
 	ref     *record.Field
 	cm      *ChunkMeta
@@ -60,8 +61,9 @@ type FirstLastReader struct {
 	intPreAgg   *IntegerPreAgg
 }
 
-func (r *FirstLastReader) Init(cm *ChunkMeta, cr ColumnReader, ref *record.Field, dst *record.Record, first bool) *FirstLastReader {
+func (r *FirstLastReader) Init(cm *ChunkMeta, cr ColumnReader, ref *record.Field, dst *record.Record, first bool, lastRow bool) *FirstLastReader {
 	r.first = first
+	r.lastRow = lastRow
 	r.ref = ref
 	r.cr = cr
 	r.cm = cm
@@ -144,9 +146,13 @@ func (r *FirstLastReader) Read(ctx *ReadContext, copied bool, ioPriority int) er
 				return err
 			}
 
-			rowIndex = r.readRowIndex(ctx, r.timeCol, r.dataCol)
-			if rowIndex >= r.timeCol.Length() {
-				continue
+			if r.lastRow {
+				rowIndex = r.timeCol.Len - 1
+			} else {
+				rowIndex = r.readRowIndex(ctx, r.timeCol, r.dataCol)
+				if rowIndex >= r.timeCol.Length() {
+					continue
+				}
 			}
 			tm, _ = r.timeCol.IntegerValue(rowIndex)
 		}

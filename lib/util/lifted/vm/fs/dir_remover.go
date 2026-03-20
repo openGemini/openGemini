@@ -1,12 +1,13 @@
 package fs
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/syncwg"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/syncwg"
 	"github.com/openGemini/openGemini/lib/fileops"
+	"github.com/openGemini/openGemini/lib/logger"
 )
 
 func mustRemoveAll(path string, lock *string, done func()) {
@@ -17,7 +18,7 @@ func mustRemoveAll(path string, lock *string, done func()) {
 	select {
 	case removeDirConcurrencyCh <- struct{}{}:
 	default:
-		logger.Panicf("FATAL: cannot schedule %s for removal, since the removal queue is full (%d entries)", path, cap(removeDirConcurrencyCh))
+		logger.GetLogger().Panic(fmt.Sprintf("FATAL: cannot schedule %s for removal, since the removal queue is full (%d entries)", path, cap(removeDirConcurrencyCh)))
 	}
 	dirRemoverWG.Add(1)
 	go func() {
@@ -47,7 +48,7 @@ func tryRemoveAll(path string, lockPath *string) bool {
 		return true
 	}
 	if !isTemporaryNFSError(err) {
-		logger.Panicf("FATAL: cannot remove %q: %s", path, err)
+		logger.GetLogger().Panic(fmt.Sprintf("FATAL: cannot remove %q: %s", path, err))
 	}
 	// NFS prevents from removing directories with open files.
 	// See https://github.com/VictoriaMetrics/VictoriaMetrics/issues/61 .
@@ -83,6 +84,6 @@ func MustStopDirRemover() {
 	case <-doneCh:
 		return
 	case <-time.After(maxWaitTime):
-		logger.Errorf("cannot stop dirRemover in %s; the remaining empty NFS directories should be automatically removed on the next startup", maxWaitTime)
+		logger.GetLogger().Error(fmt.Sprintf("cannot stop dirRemover in %s; the remaining empty NFS directories should be automatically removed on the next startup", maxWaitTime))
 	}
 }

@@ -17,10 +17,10 @@ package codec
 import (
 	"encoding/binary"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/sysinfo"
 	"github.com/openGemini/openGemini/lib/util"
+	"github.com/openGemini/openGemini/lib/util/lifted/encoding"
 )
 
 type BinaryDecoder struct {

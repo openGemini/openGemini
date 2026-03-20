@@ -59,8 +59,8 @@ func New(typ uint8) RPCHandler {
 		return &GetMeasurementsInfo{}
 	case message.RegisterQueryIDOffsetRequestMessage:
 		return &RegisterQueryIDOffset{}
-	case message.Sql2MetaHeartbeatRequestMessage:
-		return &Sql2MetaHeartbeat{}
+	case message.CQ2MetaHeartbeatRequestMessage:
+		return &CQ2MetaHeartbeat{}
 	case message.GetContinuousQueryLeaseRequestMessage:
 		return &GetContinuousQueryLease{}
 	case message.VerifyDataNodeStatusRequestMessage:
@@ -71,6 +71,8 @@ func New(typ uint8) RPCHandler {
 		return &ShowCluster{}
 	case message.SendBackupToMetaRequestMessage:
 		return &SendBackupToMeta{}
+	case message.GetShardingPlanRequestMessage:
+		return &GetShardingPlan{}
 	default:
 		return nil
 	}
@@ -380,23 +382,23 @@ func (h *RegisterQueryIDOffset) Instance() RPCHandler {
 	return &RegisterQueryIDOffset{}
 }
 
-type Sql2MetaHeartbeat struct {
+type CQ2MetaHeartbeat struct {
 	BaseHandler
 
-	req *message.Sql2MetaHeartbeatRequest
+	req *message.CQ2MetaHeartbeatRequest
 }
 
-func (h *Sql2MetaHeartbeat) SetRequestMsg(data transport.Codec) error {
-	msg, ok := data.(*message.Sql2MetaHeartbeatRequest)
+func (h *CQ2MetaHeartbeat) SetRequestMsg(data transport.Codec) error {
+	msg, ok := data.(*message.CQ2MetaHeartbeatRequest)
 	if !ok {
-		return errno.NewInvalidTypeError("*message.Sql2MetaHeartbeatRequest", data)
+		return errno.NewInvalidTypeError("*message.CQ2MetaHeartbeatRequest", data)
 	}
 	h.req = msg
 	return nil
 }
 
-func (h *Sql2MetaHeartbeat) Instance() RPCHandler {
-	return &Sql2MetaHeartbeat{}
+func (h *CQ2MetaHeartbeat) Instance() RPCHandler {
+	return &CQ2MetaHeartbeat{}
 }
 
 type GetContinuousQueryLease struct {
@@ -492,4 +494,23 @@ func (h *SendBackupToMeta) SetRequestMsg(data transport.Codec) error {
 
 func (h *SendBackupToMeta) Instance() RPCHandler {
 	return &SendBackupToMeta{}
+}
+
+type GetShardingPlan struct {
+	BaseHandler
+
+	req *message.GetShardingPlanRequest
+}
+
+func (h *GetShardingPlan) SetRequestMsg(data transport.Codec) error {
+	msg, ok := data.(*message.GetShardingPlanRequest)
+	if !ok {
+		return errno.NewInvalidTypeError("*message.GetShardingPlanRequest", data)
+	}
+	h.req = msg
+	return nil
+}
+
+func (h *GetShardingPlan) Instance() RPCHandler {
+	return &GetShardingPlan{}
 }

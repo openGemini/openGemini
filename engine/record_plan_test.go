@@ -29,6 +29,7 @@ import (
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/engine/immutable"
+	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/engine/mutable"
 	"github.com/openGemini/openGemini/lib/config"
@@ -1053,9 +1054,7 @@ func Test_ShardDownSampleTask(t *testing.T) {
 					}
 				}
 			}
-			if rowCount != 2028 {
-				t.Fail()
-			}
+			require.Equal(t, 2028, rowCount)
 		})
 	}
 }
@@ -1834,9 +1833,7 @@ func Test_DownSample_EmptyColumn(t *testing.T) {
 					}
 				}
 			}
-			if rowCount != 0 {
-				t.Fail()
-			}
+			require.Equal(t, 0, rowCount)
 			planWriter := executor.NewLogicalPlanWriterImpl(&strings.Builder{})
 			node2.ExplainIterms(planWriter)
 		})
@@ -2027,6 +2024,16 @@ func (m MocTsspFile) GetFileReaderRef() int64 {
 
 func (m MocTsspFile) RenameOnObs(newName string, tmp bool, opt *obs.ObsOptions) error {
 	return errors.New("RenameOnObs error")
+}
+
+func (m MocTsspFile) GetPkInfo() *colstore.PKInfo {
+	rec := &record.Record{}
+	rec.Schema = append(rec.Schema, record.Field{
+		Type: 1,
+		Name: "foo",
+	})
+
+	return colstore.NewPKInfo(rec, nil, meta.PrimaryKeyTypeCluster, -1)
 }
 
 func TestCanDoDownSample(t *testing.T) {
@@ -2509,9 +2516,7 @@ func Test_Create(t *testing.T) {
 					}
 				}
 			}
-			if rowCount != 2028 {
-				t.Fail()
-			}
+			require.Equal(t, 2028, rowCount)
 			planWriter := executor.NewLogicalPlanWriterImpl(&strings.Builder{})
 			node2.ExplainIterms(planWriter)
 			require.Equal(t, writeIntoStorage.Name(), "WriteIntoStorageTransform")

@@ -21,15 +21,16 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with:
           go-version: ${{ matrix.go }}
       - name: Run gotest
         run: |
           go mod tidy
+          go install github.com/pingcap/failpoint/failpoint-ctl@latest
           make gotest
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v3
+        uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}

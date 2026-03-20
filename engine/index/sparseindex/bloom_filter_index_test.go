@@ -157,3 +157,16 @@ func Hash(bytes []byte) uint64 {
 	}
 	return hash
 }
+
+func TestGetFragmentRowCount(t *testing.T) {
+	readers := []sparseindex.SKFileReader{
+		&sparseindex.BloomFilterIndexReader{},
+		&sparseindex.MinMaxIndexReader{},
+		&sparseindex.SetIndexReader{},
+	}
+	for _, reader := range readers {
+		count, err := reader.GetFragmentRowCount(0)
+		assert.NoError(t, err)
+		assert.Equal(t, int64(0), count)
+	}
+}

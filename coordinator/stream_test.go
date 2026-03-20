@@ -31,7 +31,6 @@ import (
 	strings2 "github.com/openGemini/openGemini/lib/strings"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
-	"github.com/savsgio/dictpool"
 	assert2 "github.com/stretchr/testify/assert"
 )
 
@@ -153,25 +152,6 @@ func Benchmark_Map_Write(t *testing.B) {
 	}
 }
 
-func Benchmark_Dict_Write(t *testing.B) {
-	t.N = 10
-	size := 100
-	repeat := 10000
-	m := &dictpool.Dict{}
-	t.ReportAllocs()
-	t.ResetTimer()
-	for i := 0; i < t.N; i++ {
-		t.StartTimer()
-		for k := 0; k < repeat; k++ {
-			for j := 0; j < size; j++ {
-				m.Set(fmt.Sprintf("name%v", j), &influx.Row{})
-			}
-			m.Reset()
-		}
-		t.StopTimer()
-	}
-}
-
 // Comparing Benchmark_Map_Read and Benchmark_Dict_Read to get the conclusion,
 // map speed 50% than dict
 func Benchmark_Map_Read(t *testing.B) {
@@ -189,67 +169,6 @@ func Benchmark_Map_Read(t *testing.B) {
 		for k := 0; k < repeat; k++ {
 			for j := 0; j < size; j++ {
 				_ = m[fmt.Sprintf("name%v", j)]
-			}
-		}
-		t.StopTimer()
-	}
-}
-
-func Benchmark_Dict_Read(t *testing.B) {
-	t.N = 10
-	size := 100
-	repeat := 10000
-	m := &dictpool.Dict{}
-	for j := 0; j < size; j++ {
-		m.Set(fmt.Sprintf("name%v", j), &influx.Row{})
-	}
-	t.ReportAllocs()
-	t.ResetTimer()
-	for i := 0; i < t.N; i++ {
-		t.StartTimer()
-		for k := 0; k < repeat; k++ {
-			for j := 0; j < size; j++ {
-				_ = m.Get(fmt.Sprintf("name%v", j))
-			}
-		}
-		t.StopTimer()
-	}
-}
-
-// Comparing Benchmark_Map_Reuse and Benchmark_Dict_Reuse to get the conclusion,
-// reuse dict, speed up 15% than new dict, mem reduce 30% than new
-func Benchmark_Dict_Reuse(t *testing.B) {
-	t.N = 10
-	size := 100
-	repeat := 10000
-	m := &dictpool.Dict{}
-	t.ReportAllocs()
-	t.ResetTimer()
-	for i := 0; i < t.N; i++ {
-		t.StartTimer()
-		for k := 0; k < repeat; k++ {
-			for j := 0; j < size; j++ {
-				m.Set(fmt.Sprintf("name%v", j), &influx.Row{})
-			}
-			m.Reset()
-		}
-		t.StopTimer()
-	}
-}
-
-func Benchmark_Dict_No_Reuse(t *testing.B) {
-	t.N = 10
-	size := 100
-	repeat := 10000
-
-	t.ReportAllocs()
-	t.ResetTimer()
-	for i := 0; i < t.N; i++ {
-		t.StartTimer()
-		for k := 0; k < repeat; k++ {
-			m := &dictpool.Dict{}
-			for j := 0; j < size; j++ {
-				m.Set(fmt.Sprintf("name%v", j), &influx.Row{})
 			}
 		}
 		t.StopTimer()

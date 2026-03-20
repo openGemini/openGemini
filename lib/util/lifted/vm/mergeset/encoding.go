@@ -1,6 +1,7 @@
 package mergeset
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"sort"
@@ -8,10 +9,10 @@ import (
 	"sync"
 	"unsafe"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/cgroup"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/encoding"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/slicesutil"
+	"github.com/openGemini/openGemini/lib/logger"
 )
 
 // Item represents a single item for storing in a mergeset.
@@ -27,22 +28,31 @@ type Item struct {
 //
 // The returned bytes representation belongs to data.
 func (it Item) Bytes(data []byte) []byte {
-	return unsafe.Slice((*byte)(unsafe.Pointer(uintptr(unsafe.Pointer(unsafe.SliceData(data)))+uintptr(it.Start))), it.End-it.Start)
+	n := int(it.End - it.Start)
+	return unsafe.Slice((*byte)(unsafe.Pointer(uintptr(unsafe.Pointer(unsafe.SliceData(data)))+uintptr(it.Start))), n)
 }
 
-// String returns string represetnation of it obtained from data.
+// String returns string representation of it obtained from data.
 //
 // The returned string representation belongs to data.
 func (it Item) String(data []byte) string {
-	return unsafe.String((*byte)(unsafe.Pointer(uintptr(unsafe.Pointer(unsafe.SliceData(data)))+uintptr(it.Start))), it.End-it.Start)
+	n := int(it.End - it.Start)
+	return unsafe.String((*byte)(unsafe.Pointer(uintptr(unsafe.Pointer(unsafe.SliceData(data)))+uintptr(it.Start))), n)
 }
 
-func (ib *inmemoryBlock) Len() int { return len(ib.items) }
+func (ib *inmemoryBlock) Len() int {
+	return len(ib.items)
+}
 
 func (ib *inmemoryBlock) Less(i, j int) bool {
-	data := ib.data
 	items := ib.items
-	return string(items[i].Bytes(data)) < string(items[j].Bytes(data))
+	a := items[i]
+	b := items[j]
+	cpLen := uint32(len(ib.commonPrefix))
+	a.Start += cpLen
+	b.Start += cpLen
+	data := ib.data
+	return a.String(data) < b.String(data)
 }
 
 func (ib *inmemoryBlock) Swap(i, j int) {
@@ -51,9 +61,30 @@ func (ib *inmemoryBlock) Swap(i, j int) {
 }
 
 type inmemoryBlock struct {
+	// commonPrefix contains common prefix for all the items stored in the inmemoryBlock
 	commonPrefix []byte
-	data         []byte
-	items        []Item
+
+	// data contains source data for items
+	data []byte
+
+	// items contains items stored in inmemoryBlock.
+	// Every item contains the prefix specified at commonPrefix.
+	items []Item
+}
+
+func (ib *inmemoryBlock) CopyFrom(src *inmemoryBlock) {
+	ib.commonPrefix = append(ib.commonPrefix[:0], src.commonPrefix...)
+	ib.data = append(ib.data[:0], src.data...)
+	ib.items = append(ib.items[:0], src.items...)
+}
+
+func (ib *inmemoryBlock) SortItems() {
+	if !ib.isSorted() {
+		ib.updateCommonPrefixUnsorted()
+		sort.Sort(ib)
+	} else {
+		ib.updateCommonPrefixSorted()
+	}
 }
 
 func (ib *inmemoryBlock) SizeBytes() int {
@@ -66,19 +97,36 @@ func (ib *inmemoryBlock) Reset() {
 	ib.items = ib.items[:0]
 }
 
-func (ib *inmemoryBlock) updateCommonPrefix() {
-	ib.commonPrefix = ib.commonPrefix[:0]
-	if len(ib.items) == 0 {
+func (ib *inmemoryBlock) updateCommonPrefixSorted() {
+	items := ib.items
+	if len(items) <= 1 {
+		// There is no sense in duplicating a single item or zero items into commonPrefix,
+		// since this only can increase blockHeader size without any benefits.
+		ib.commonPrefix = ib.commonPrefix[:0]
 		return
 	}
-	items := ib.items
+
 	data := ib.data
 	cp := items[0].Bytes(data)
-	if len(cp) == 0 {
+	cpLen := commonPrefixLen(cp, items[len(items)-1].Bytes(data))
+	cp = cp[:cpLen]
+	ib.commonPrefix = append(ib.commonPrefix[:0], cp...)
+}
+
+func (ib *inmemoryBlock) updateCommonPrefixUnsorted() {
+	ib.commonPrefix = ib.commonPrefix[:0]
+	items := ib.items
+	if len(items) == 0 {
 		return
 	}
+	data := ib.data
+	cp := items[0].Bytes(data)
 	for _, it := range items[1:] {
-		cpLen := commonPrefixLen(cp, it.Bytes(data))
+		item := it.Bytes(data)
+		if bytes.HasPrefix(item, cp) {
+			continue
+		}
+		cpLen := commonPrefixLen(cp, item)
 		if cpLen == 0 {
 			return
 		}
@@ -103,15 +151,16 @@ func commonPrefixLen(a, b []byte) int {
 
 // Add adds x to the end of ib.
 //
-// false is returned if x isn't added to ib due to block size contraints.
+// false is returned if x isn't added to ib due to block size constraints.
 func (ib *inmemoryBlock) Add(x []byte) bool {
 	data := ib.data
 	if len(x)+len(data) > maxInmemoryBlockSize {
 		return false
 	}
-	if cap(data) < maxInmemoryBlockSize {
-		dataLen := len(data)
-		data = bytesutil.Resize(data, maxInmemoryBlockSize)[:dataLen]
+	if cap(data) == 0 {
+		// Pre-allocate data and items in order to reduce memory allocations
+		data = make([]byte, 0, maxInmemoryBlockSize)
+		ib.items = make([]Item, 0, 512)
 	}
 	dataLen := len(data)
 	data = append(data, x...)
@@ -127,25 +176,6 @@ func (ib *inmemoryBlock) Add(x []byte) bool {
 //
 // It must fit CPU cache size, i.e. 64KB for the current CPUs.
 const maxInmemoryBlockSize = 64 * 1024
-
-func (ib *inmemoryBlock) sort() {
-	sort.Sort(ib)
-	data := ib.data
-	items := ib.items
-	bb := bbPool.Get()
-	b := bytesutil.Resize(bb.B, len(data))
-	b = b[:0]
-	for i, it := range items {
-		bLen := len(b)
-		b = append(b, it.String(data)...)
-		items[i] = Item{
-			Start: uint32(bLen),
-			End:   uint32(len(b)),
-		}
-	}
-	bb.B, ib.data = data, b
-	bbPool.Put(bb)
-}
 
 // storageBlock represents a block of data on the storage.
 type storageBlock struct {
@@ -185,10 +215,7 @@ func (ib *inmemoryBlock) isSorted() bool {
 // - returns the number of items encoded including the first item.
 // - returns the marshal type used for the encoding.
 func (ib *inmemoryBlock) MarshalUnsortedData(sb *storageBlock, firstItemDst, commonPrefixDst []byte, compressLevel int) ([]byte, []byte, uint32, marshalType) {
-	if !ib.isSorted() {
-		ib.sort()
-	}
-	ib.updateCommonPrefix()
+	ib.SortItems()
 	return ib.marshalData(sb, firstItemDst, commonPrefixDst, compressLevel)
 }
 
@@ -205,9 +232,9 @@ var isInTest = func() bool {
 // - returns the marshal type used for the encoding.
 func (ib *inmemoryBlock) MarshalSortedData(sb *storageBlock, firstItemDst, commonPrefixDst []byte, compressLevel int) ([]byte, []byte, uint32, marshalType) {
 	if isInTest && !ib.isSorted() {
-		logger.Panicf("BUG: %d items must be sorted; items:\n%s", len(ib.items), ib.debugItemsString())
+		logger.GetLogger().Panic(fmt.Sprintf("BUG: %d items must be sorted; items:\n%s", len(ib.items), ib.debugItemsString()))
 	}
-	ib.updateCommonPrefix()
+	ib.updateCommonPrefixSorted()
 	return ib.marshalData(sb, firstItemDst, commonPrefixDst, compressLevel)
 }
 
@@ -228,13 +255,13 @@ func (ib *inmemoryBlock) debugItemsString() string {
 
 // Preconditions:
 // - ib.items must be sorted.
-// - updateCommonPrefix must be called.
+// - updateCommonPrefix* must be called.
 func (ib *inmemoryBlock) marshalData(sb *storageBlock, firstItemDst, commonPrefixDst []byte, compressLevel int) ([]byte, []byte, uint32, marshalType) {
 	if len(ib.items) <= 0 {
-		logger.Panicf("BUG: inmemoryBlock.marshalData must be called on non-empty blocks only")
+		logger.GetLogger().Panic(fmt.Sprintf("BUG: inmemoryBlock.marshalData must be called on non-empty blocks only"))
 	}
 	if uint64(len(ib.items)) >= 1<<32 {
-		logger.Panicf("BUG: the number of items in the block must be smaller than %d; got %d items", uint64(1<<32), len(ib.items))
+		logger.GetLogger().Panic(fmt.Sprintf("BUG: the number of items in the block must be smaller than %d; got %d items", uint64(1<<32), len(ib.items)))
 	}
 
 	data := ib.data
@@ -242,7 +269,7 @@ func (ib *inmemoryBlock) marshalData(sb *storageBlock, firstItemDst, commonPrefi
 	firstItemDst = append(firstItemDst, firstItem...)
 	commonPrefixDst = append(commonPrefixDst, ib.commonPrefix...)
 
-	if len(ib.data)-len(ib.commonPrefix)*len(ib.items) < 64 || len(ib.items) < 2 {
+	if len(data)-len(ib.commonPrefix)*len(ib.items) < 64 || len(ib.items) < 2 {
 		// Use plain encoding form small block, since it is cheaper.
 		ib.marshalDataPlain(sb)
 		return firstItemDst, commonPrefixDst, uint32(len(ib.items)), marshalTypePlain
@@ -293,7 +320,7 @@ func (ib *inmemoryBlock) marshalData(sb *storageBlock, firstItemDst, commonPrefi
 	bbLens.B = bLens
 	bbPool.Put(bbLens)
 
-	if float64(len(sb.itemsData)) > 0.9*float64(len(ib.data)-len(ib.commonPrefix)*len(ib.items)) {
+	if float64(len(sb.itemsData)) > 0.9*float64(len(data)-len(ib.commonPrefix)*len(ib.items)) {
 		// Bad compression rate. It is cheaper to use plain encoding.
 		ib.marshalDataPlain(sb)
 		return firstItemDst, commonPrefixDst, uint32(len(ib.items)), marshalTypePlain
@@ -303,13 +330,12 @@ func (ib *inmemoryBlock) marshalData(sb *storageBlock, firstItemDst, commonPrefi
 	return firstItemDst, commonPrefixDst, uint32(len(ib.items)), marshalTypeZSTD
 }
 
-// UnmarshalData decodes itemsCount items from sb and firstItem and stores
-// them to ib.
+// UnmarshalData decodes itemsCount items from sb and firstItem and stores them to ib.
 func (ib *inmemoryBlock) UnmarshalData(sb *storageBlock, firstItem, commonPrefix []byte, itemsCount uint32, mt marshalType) error {
 	ib.Reset()
 
 	if itemsCount <= 0 {
-		logger.Panicf("BUG: cannot unmarshal zero items")
+		logger.GetLogger().Panic(fmt.Sprintf("BUG: cannot unmarshal zero items"))
 	}
 
 	ib.commonPrefix = append(ib.commonPrefix[:0], commonPrefix...)
@@ -370,12 +396,12 @@ func (ib *inmemoryBlock) UnmarshalData(sb *storageBlock, firstItem, commonPrefix
 		return fmt.Errorf("unexpected tail left unmarshaling %d lens; tail size=%d; contents=%X", itemsCount, len(tail), tail)
 	}
 	lens[0] = uint64(len(firstItem) - len(commonPrefix))
-	dataLen := uint64(len(commonPrefix) * int(itemsCount))
-	dataLen += lens[0]
+	dataLen := len(commonPrefix) * int(itemsCount)
+	dataLen += int(lens[0])
 	for i, xLen := range is.A {
 		itemLen := xLen ^ lens[i]
 		lens[i+1] = itemLen
-		dataLen += itemLen
+		dataLen += int(itemLen)
 	}
 
 	// Unmarshal items data.
@@ -383,11 +409,11 @@ func (ib *inmemoryBlock) UnmarshalData(sb *storageBlock, firstItem, commonPrefix
 	if err != nil {
 		return fmt.Errorf("cannot decompress lensData: %w", err)
 	}
-	data := bytesutil.Resize(ib.data, maxInmemoryBlockSize)
-	if n := int(itemsCount) - cap(ib.items); n > 0 {
-		ib.items = append(ib.items[:cap(ib.items)], make([]Item, n)...)
-	}
-	ib.items = ib.items[:itemsCount]
+	// Resize ib.data to dataLen instead of maxInmemoryBlockSize,
+	// since the data isn't going to be resized after unmarshaling.
+	// This may save memory for caching the unmarshaled block.
+	data := bytesutil.ResizeNoCopyNoOverallocate(ib.data, dataLen)
+	ib.items = slicesutil.SetLength(ib.items, int(itemsCount))
 	data = append(data[:0], firstItem...)
 	items := ib.items
 	items[0] = Item{
@@ -409,12 +435,12 @@ func (ib *inmemoryBlock) UnmarshalData(sb *storageBlock, firstItem, commonPrefix
 		if prefixLen > uint64(len(prevItem)) {
 			return fmt.Errorf("prefixLen cannot exceed %d; got %d", len(prevItem), prefixLen)
 		}
-		dataLen := len(data)
+		dataStart := len(data)
 		data = append(data, commonPrefix...)
 		data = append(data, prevItem[:prefixLen]...)
 		data = append(data, b[:suffixLen]...)
 		items[i] = Item{
-			Start: uint32(dataLen),
+			Start: uint32(dataStart),
 			End:   uint32(len(data)),
 		}
 		b = b[suffixLen:]
@@ -423,7 +449,7 @@ func (ib *inmemoryBlock) UnmarshalData(sb *storageBlock, firstItem, commonPrefix
 	if len(b) > 0 {
 		return fmt.Errorf("unexpected tail left after itemsData with len %d: %q", len(b), b)
 	}
-	if uint64(len(data)) != dataLen {
+	if len(data) != dataLen {
 		return fmt.Errorf("unexpected data len; got %d; want %d", len(data), dataLen)
 	}
 	ib.data = data
@@ -481,7 +507,8 @@ func (ib *inmemoryBlock) unmarshalDataPlain(sb *storageBlock, firstItem []byte, 
 	// Unmarshal items data.
 	data := ib.data
 	items := ib.items
-	data = bytesutil.Resize(data, len(firstItem)+len(sb.itemsData)+len(commonPrefix)*int(itemsCount))
+	dataLen := len(firstItem) + len(sb.itemsData) + len(commonPrefix)*(int(itemsCount)-1)
+	data = bytesutil.ResizeNoCopyNoOverallocate(data, dataLen)
 	data = append(data[:0], firstItem...)
 	items = append(items[:0], Item{
 		Start: 0,
@@ -493,20 +520,23 @@ func (ib *inmemoryBlock) unmarshalDataPlain(sb *storageBlock, firstItem []byte, 
 		if uint64(len(b)) < itemLen {
 			return fmt.Errorf("not enough data for decoding item from itemsData; want %d bytes; remained %d bytes", itemLen, len(b))
 		}
-		dataLen := len(data)
+		dataStart := len(data)
 		data = append(data, commonPrefix...)
 		data = append(data, b[:itemLen]...)
 		items = append(items, Item{
-			Start: uint32(dataLen),
+			Start: uint32(dataStart),
 			End:   uint32(len(data)),
 		})
 		b = b[itemLen:]
 	}
-	ib.data = data
-	ib.items = items
 	if len(b) > 0 {
 		return fmt.Errorf("unexpected tail left after itemsData with len %d: %q", len(b), b)
 	}
+	if len(data) != dataLen {
+		return fmt.Errorf("unexpected data len; got %d; want %d", len(data), dataLen)
+	}
+	ib.data = data
+	ib.items = items
 	return nil
 }
 
@@ -522,36 +552,10 @@ func getLensBuffer(n int) *lensBuffer {
 		v = &lensBuffer{}
 	}
 	lb := v.(*lensBuffer)
-	if nn := n - cap(lb.lens); nn > 0 {
-		lb.lens = append(lb.lens[:cap(lb.lens)], make([]uint64, nn)...)
-	}
-	lb.lens = lb.lens[:n]
+	lb.lens = slicesutil.SetLength(lb.lens, n)
 	return lb
 }
 
 func putLensBuffer(lb *lensBuffer) {
 	lensBufferPool.Put(lb)
 }
-
-func getInmemoryBlock() *inmemoryBlock {
-	select {
-	case ib := <-ibPoolCh:
-		return ib
-	default:
-		return &inmemoryBlock{}
-	}
-}
-
-func putInmemoryBlock(ib *inmemoryBlock) {
-	ib.Reset()
-	select {
-	case ibPoolCh <- ib:
-	default:
-		// drop ib in order to reduce memory usage on systems with big number of CPU cores
-	}
-}
-
-// Every inmemoryBlock struct occupies at least 64KB of memory, e.g. quite big amounts of memory.
-// Use a chan instead of sync.Pool in order to reduce memory usage on systems
-// with big number of CPU cores.
-var ibPoolCh = make(chan *inmemoryBlock, 100*cgroup.AvailableCPUs())

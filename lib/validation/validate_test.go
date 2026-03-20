@@ -19,7 +19,7 @@ import (
 	"testing"
 	"time"
 
-	prompb2 "github.com/VictoriaMetrics/VictoriaMetrics/lib/prompb"
+	prompb2 "github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/prompb"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/prompb"

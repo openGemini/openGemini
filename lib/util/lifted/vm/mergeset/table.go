@@ -14,18 +14,18 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/cgroup"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/fasttime"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/memory"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/syncwg"
 	"github.com/bits-and-blooms/bloom/v3"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/cgroup"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/fasttime"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/memory"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/syncwg"
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/fileops"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/util"
+	"github.com/openGemini/openGemini/lib/util/lifted/encoding"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/fs"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/uint64set"
 )
@@ -230,16 +230,15 @@ func (ris *rawItemsShard) addItems(tb *Table, items [][]byte) error {
 	ris.mu.Lock()
 	ibs := ris.ibs
 	if len(ibs) == 0 {
-		ib := getInmemoryBlock()
+		ib := &inmemoryBlock{}
 		ibs = append(ibs, ib)
 		ris.ibs = ibs
 	}
 	ib := ibs[len(ibs)-1]
 	for _, item := range items {
 		if !ib.Add(item) {
-			ib = getInmemoryBlock()
+			ib = &inmemoryBlock{}
 			if !ib.Add(item) {
-				putInmemoryBlock(ib)
 				err = fmt.Errorf("cannot insert an item %q into an empty inmemoryBlock; it looks like the item is too large? len(item)=%d", item, len(item))
 				break
 			}
@@ -284,7 +283,7 @@ func (pw *partWrapper) incRef() {
 func (pw *partWrapper) decRef() {
 	n := atomic.AddUint64(&pw.refCount, ^uint64(0))
 	if int64(n) < 0 {
-		logger.Panicf("BUG: pw.refCount must be bigger than 0; got %d", int64(n))
+		logger.GetLogger().Panic(fmt.Sprintf("BUG: pw.refCount must be bigger than 0; got %d", int64(n)))
 	}
 	if n > 0 {
 		return
@@ -314,7 +313,7 @@ func (pw *partWrapper) decRef() {
 // The table is created if it doesn't exist yet.
 func OpenTable(path string, flushCallback func(), prepareBlock PrepareBlockCallback, lock *string) (*Table, error) {
 	path = fileops.Clean(path)
-	logger.Infof("opening table %q...", path)
+	logger.GetLogger().Info(fmt.Sprintf("opening table %q...", path))
 	startTime := time.Now()
 
 	// Create a directory for the table if it doesn't exist yet.
@@ -344,8 +343,8 @@ func OpenTable(path string, flushCallback func(), prepareBlock PrepareBlockCallb
 	tb.startRawItemsFlusher()
 	var m TableMetrics
 	tb.UpdateMetrics(&m)
-	logger.Infof("table %q has been opened in %.3f seconds; partsCount: %d; blocksCount: %d, itemsCount: %d; sizeBytes: %d",
-		path, time.Since(startTime).Seconds(), m.PartsCount, m.BlocksCount, m.ItemsCount, m.SizeBytes)
+	logger.GetLogger().Info(fmt.Sprintf("table %q has been opened in %.3f seconds; partsCount: %d; blocksCount: %d, itemsCount: %d; sizeBytes: %d",
+		path, time.Since(startTime).Seconds(), m.PartsCount, m.BlocksCount, m.ItemsCount, m.SizeBytes))
 
 	tb.convertersWG.Add(1)
 	go func() {
@@ -427,7 +426,7 @@ func OpenBloomFilter(path string, lock *string, size int, enabled bool) ([]*bloo
 
 		bf, err := OpenBloomFilterFile(filePath, *lock)
 		if err != nil {
-			logger.Errorf("failed to open the bloom filter file. the file will be deleted. path:%s, err:%s", filePath, err)
+			logger.GetLogger().Error(fmt.Sprintf("failed to open the bloom filter file. the file will be deleted. path:%s, err:%s", filePath, err))
 			util.MustRun(func() error {
 				return os.RemoveAll(filePath)
 			})
@@ -457,7 +456,7 @@ func OpenBloomFilterFile(file string, lock string) (*bloom.BloomFilter, error) {
 func checkBloomFilterFiles(dir string) error {
 	nameDirs, err := fileops.ReadDir(dir)
 	if err != nil {
-		logger.Errorf("check bloom filter dir fail, path:%s, err:%s", dir, err)
+		logger.GetLogger().Error(fmt.Sprintf("check bloom filter dir fail, path:%s, err:%s", dir, err))
 		return err
 	}
 
@@ -478,7 +477,7 @@ func checkBloomFilterFiles(dir string) error {
 		case BloomFilterFileSuffix:
 			continue
 		default:
-			logger.Errorf("unsupported bloom filter suffix, path:%s", item.Name())
+			logger.GetLogger().Error(fmt.Sprintf("unsupported bloom filter suffix, path:%s", item.Name()))
 			return errors.New("unsupported bloom filter suffix")
 		}
 	}
@@ -533,27 +532,27 @@ func FlushBloomFilter(i int, byteSize int64, dirPath string, buffer *bytes.Buffe
 	pri := fileops.FilePriorityOption(fileops.IO_PRIORITY_NORMAL)
 	fd, err := fileops.OpenFile(tmpFilePath, os.O_CREATE|os.O_RDWR, 0600, lock, pri)
 	if err != nil {
-		logger.Errorf("open mergeSet bloom filter file error, err:%s, path:%s", err, tmpFilePath)
+		logger.GetLogger().Error(fmt.Sprintf("open mergeSet bloom filter file error, err:%s, path:%s", err, tmpFilePath))
 		return err
 	}
 
 	n, err := fd.Write(buffer.Bytes())
 	_ = fd.Close()
 	if err != nil || byteSize != int64(n) {
-		logger.Errorf("write mergeSet bloom filter file error, err:%s, path:%s", err, tmpFilePath)
+		logger.GetLogger().Error(fmt.Sprintf("write mergeSet bloom filter file error, err:%s, path:%s", err, tmpFilePath))
 		return err
 	}
 	// rename init file
 	err = fileops.RenameFile(tmpFilePath, filePath)
 	if err != nil {
-		logger.Errorf("rename tmp bloom filter file error, err:%s, path:%s", err, tmpFilePath)
+		logger.GetLogger().Error(fmt.Sprintf("rename tmp bloom filter file error, err:%s, path:%s", err, tmpFilePath))
 		return err
 	}
 	// remove old file
 	if exist {
 		err = fileops.Remove(filePath + LastBloomFilterFileSuffix)
 		if err != nil {
-			logger.Errorf("remove last bloom filter file error, err:%s, path:%s", err, filePath+LastBloomFilterFileSuffix)
+			logger.GetLogger().Error(fmt.Sprintf("remove last bloom filter file error, err:%s, path:%s", err, filePath+LastBloomFilterFileSuffix))
 			return err
 		}
 	}
@@ -568,22 +567,22 @@ func (tb *Table) SetFlushBfCallback(flushBfCallback func()) {
 func (tb *Table) MustClose() {
 	close(tb.stopCh)
 
-	logger.Infof("waiting for raw items flusher to stop on %q...", tb.path)
+	logger.GetLogger().Info(fmt.Sprintf("waiting for raw items flusher to stop on %q...", tb.path))
 	startTime := time.Now()
 	tb.rawItemsFlusherWG.Wait()
-	logger.Infof("raw items flusher stopped in %.3f seconds on %q", time.Since(startTime).Seconds(), tb.path)
+	logger.GetLogger().Info(fmt.Sprintf("raw items flusher stopped in %.3f seconds on %q", time.Since(startTime).Seconds(), tb.path))
 
-	logger.Infof("waiting for converters to stop on %q...", tb.path)
+	logger.GetLogger().Info(fmt.Sprintf("waiting for converters to stop on %q...", tb.path))
 	startTime = time.Now()
 	tb.convertersWG.Wait()
-	logger.Infof("converters stopped in %.3f seconds on %q", time.Since(startTime).Seconds(), tb.path)
+	logger.GetLogger().Info(fmt.Sprintf("converters stopped in %.3f seconds on %q", time.Since(startTime).Seconds(), tb.path))
 
-	logger.Infof("waiting for part mergers to stop on %q...", tb.path)
+	logger.GetLogger().Info(fmt.Sprintf("waiting for part mergers to stop on %q...", tb.path))
 	startTime = time.Now()
 	tb.partMergersWG.Wait()
-	logger.Infof("part mergers stopped in %.3f seconds on %q", time.Since(startTime).Seconds(), tb.path)
+	logger.GetLogger().Info(fmt.Sprintf("part mergers stopped in %.3f seconds on %q", time.Since(startTime).Seconds(), tb.path))
 
-	logger.Infof("flushing inmemory parts to files on %q...", tb.path)
+	logger.GetLogger().Info(fmt.Sprintf("flushing inmemory parts to files on %q...", tb.path))
 	startTime = time.Now()
 
 	// Flush raw items the last time before exit.
@@ -597,7 +596,7 @@ func (tb *Table) MustClose() {
 			continue
 		}
 		if pw.isInMerge {
-			logger.Panicf("BUG: the inmemory part %s mustn't be in merge after stopping parts merger in %q", &pw.mp.ph, tb.path)
+			logger.GetLogger().Panic(fmt.Sprintf("BUG: the inmemory part %s mustn't be in merge after stopping parts merger in %q", &pw.mp.ph, tb.path))
 		}
 		pw.isInMerge = true
 		pws = append(pws, pw)
@@ -605,14 +604,14 @@ func (tb *Table) MustClose() {
 	tb.partsLock.Unlock()
 
 	if err := tb.mergePartsOptimal(pws, nil); err != nil {
-		logger.Panicf("FATAL: cannot flush inmemory parts to files in %q: %s", tb.path, err)
+		logger.GetLogger().Panic(fmt.Sprintf("FATAL: cannot flush inmemory parts to files in %q: %s", tb.path, err))
 	}
-	logger.Infof("%d inmemory parts have been flushed to files in %.3f seconds on %q", len(pws), time.Since(startTime).Seconds(), tb.path)
+	logger.GetLogger().Info(fmt.Sprintf("%d inmemory parts have been flushed to files in %.3f seconds on %q", len(pws), time.Since(startTime).Seconds(), tb.path))
 
-	logger.Infof("waiting for flush callback worker to stop on %q...", tb.path)
+	logger.GetLogger().Info(fmt.Sprintf("waiting for flush callback worker to stop on %q...", tb.path))
 	startTime = time.Now()
 	tb.flushCallbackWorkerWG.Wait()
-	logger.Infof("flush callback worker stopped in %.3f seconds on %q", time.Since(startTime).Seconds(), tb.path)
+	logger.GetLogger().Info(fmt.Sprintf("flush callback worker stopped in %.3f seconds on %q", time.Since(startTime).Seconds(), tb.path))
 
 	// Remove references to parts from the tb, so they may be eventually closed
 	// after all the searches are done.
@@ -798,30 +797,30 @@ func (tb *Table) convertToV1280() {
 	}
 	pws := getAllPartsForMerge()
 	if len(pws) > 0 {
-		logger.Infof("started round 1 of background conversion of %q to v1.28.0 format; merge %d parts", tb.path, len(pws))
+		logger.GetLogger().Info(fmt.Sprintf("started round 1 of background conversion of %q to v1.28.0 format; merge %d parts", tb.path, len(pws)))
 		startTime := time.Now()
 		if err := tb.mergePartsOptimal(pws, tb.stopCh); err != nil {
-			logger.Errorf("failed round 1 of background conversion of %q to v1.28.0 format: %s", tb.path, err)
+			logger.GetLogger().Error(fmt.Sprintf("failed round 1 of background conversion of %q to v1.28.0 format: %s", tb.path, err))
 			return
 		}
-		logger.Infof("finished round 1 of background conversion of %q to v1.28.0 format in %.3f seconds", tb.path, time.Since(startTime).Seconds())
+		logger.GetLogger().Info(fmt.Sprintf("finished round 1 of background conversion of %q to v1.28.0 format in %.3f seconds", tb.path, time.Since(startTime).Seconds()))
 
 		// The second round is needed in order to merge small blocks
 		// with tag->metricIDs rows left after the first round.
 		pws = getAllPartsForMerge()
-		logger.Infof("started round 2 of background conversion of %q to v1.28.0 format; merge %d parts", tb.path, len(pws))
+		logger.GetLogger().Info(fmt.Sprintf("started round 2 of background conversion of %q to v1.28.0 format; merge %d parts", tb.path, len(pws)))
 		startTime = time.Now()
 		if len(pws) > 0 {
 			if err := tb.mergePartsOptimal(pws, tb.stopCh); err != nil {
-				logger.Errorf("failed round 2 of background conversion of %q to v1.28.0 format: %s", tb.path, err)
+				logger.GetLogger().Error(fmt.Sprintf("failed round 2 of background conversion of %q to v1.28.0 format: %s", tb.path, err))
 				return
 			}
 		}
-		logger.Infof("finished round 2 of background conversion of %q to v1.28.0 format in %.3f seconds", tb.path, time.Since(startTime).Seconds())
+		logger.GetLogger().Info(fmt.Sprintf("finished round 2 of background conversion of %q to v1.28.0 format in %.3f seconds", tb.path, time.Since(startTime).Seconds()))
 	}
 
 	if err := fs.WriteFileAtomically(flagFilePath, tb.lock, []byte("ok")); err != nil {
-		logger.Panicf("FATAL: cannot create %q: %s", flagFilePath, err)
+		logger.GetLogger().Panic(fmt.Sprintf("FATAL: cannot create %q: %s", flagFilePath, err))
 	}
 }
 
@@ -943,7 +942,7 @@ func (tb *Table) mergeRawItemsBlocks(ibs []*inmemoryBlock, isFinal bool) {
 	wg.Wait()
 	if len(pws) > 0 {
 		if err := tb.mergeParts(pws, nil, true); err != nil {
-			logger.Panicf("FATAL: cannot merge raw parts: %s", err)
+			logger.GetLogger().Panic(fmt.Sprintf("FATAL: cannot merge raw parts: %s", err))
 		}
 		if tb.flushCallback != nil {
 			if isFinal {
@@ -973,7 +972,7 @@ func (tb *Table) mergeRawItemsBlocks(ibs []*inmemoryBlock, isFinal bool) {
 		if errors.Is(err, errNothingToMerge) || errors.Is(err, errForciblyStopped) {
 			return
 		}
-		logger.Panicf("FATAL: cannot merge small parts: %s", err)
+		logger.GetLogger().Panic(fmt.Sprintf("FATAL: cannot merge small parts: %s", err))
 	}
 }
 
@@ -984,9 +983,8 @@ func (tb *Table) mergeInmemoryBlocks(ibs []*inmemoryBlock) *partWrapper {
 		if len(ib.items) == 0 {
 			continue
 		}
-		mp := getInmemoryPart()
+		mp := &inmemoryPart{}
 		mp.Init(ib)
-		putInmemoryBlock(ib)
 		mps = append(mps, mp)
 	}
 	if len(mps) == 0 {
@@ -1032,7 +1030,7 @@ func (tb *Table) mergeInmemoryBlocks(ibs []*inmemoryBlock) *partWrapper {
 	// since it may be final after stopCh is closed.
 	err := mergeBlockStreams(&mpDst.ph, bsw, bsrs, tb.prepareBlock, nil, &tb.itemsMerged)
 	if err != nil {
-		logger.Panicf("FATAL: cannot merge inmemoryBlocks: %s", err)
+		logger.GetLogger().Panic(fmt.Sprintf("FATAL: cannot merge inmemoryBlocks: %s", err))
 	}
 	putBlockStreamWriter(bsw)
 	for _, bsr := range bsrs {
@@ -1053,7 +1051,7 @@ func (tb *Table) startPartMergers() {
 		tb.partMergersWG.Add(1)
 		go func() {
 			if err := tb.partMerger(); err != nil {
-				logger.Panicf("FATAL: unrecoverable error when merging parts in %q: %s", tb.path, err)
+				logger.GetLogger().Panic(fmt.Sprintf("FATAL: unrecoverable error when merging parts in %q: %s", tb.path, err))
 			}
 			tb.partMergersWG.Done()
 		}()
@@ -1150,7 +1148,7 @@ func (tb *Table) mergeParts(pws []*partWrapper, stopCh <-chan struct{}, isOuterP
 		tb.partsLock.Lock()
 		for _, pw := range pws {
 			if !pw.isInMerge {
-				logger.Panicf("BUG: missing isInMerge flag on the part %q", pw.p.path)
+				logger.GetLogger().Panic(fmt.Sprintf("BUG: missing isInMerge flag on the part %q", pw.p.path))
 			}
 			pw.isInMerge = false
 		}
@@ -1168,7 +1166,7 @@ func (tb *Table) mergeParts(pws []*partWrapper, stopCh <-chan struct{}, isOuterP
 		bsr := getBlockStreamReader()
 		if pw.mp != nil {
 			if !isOuterParts {
-				logger.Panicf("BUG: inmemory part must be always outer")
+				logger.GetLogger().Panic(fmt.Sprintf("BUG: inmemory part must be always outer"))
 			}
 			bsr.InitFromInmemoryPart(pw.mp)
 		} else {
@@ -1259,7 +1257,7 @@ func (tb *Table) mergeParts(pws []*partWrapper, stopCh <-chan struct{}, isOuterP
 		m[pw] = true
 	}
 	if len(m) != len(pws) {
-		logger.Panicf("BUG: %d duplicate parts found in the merge of %d parts", len(pws)-len(m), len(pws))
+		logger.GetLogger().Panic(fmt.Sprintf("BUG: %d duplicate parts found in the merge of %d parts", len(pws)-len(m), len(pws)))
 	}
 	removedParts := 0
 	tb.partsLock.Lock()
@@ -1268,10 +1266,10 @@ func (tb *Table) mergeParts(pws []*partWrapper, stopCh <-chan struct{}, isOuterP
 	tb.partsLock.Unlock()
 	if removedParts != len(m) {
 		if !isOuterParts {
-			logger.Panicf("BUG: unexpected number of parts removed; got %d; want %d", removedParts, len(m))
+			logger.GetLogger().Panic(fmt.Sprintf("BUG: unexpected number of parts removed; got %d; want %d", removedParts, len(m)))
 		}
 		if removedParts != 0 {
-			logger.Panicf("BUG: removed non-zero outer parts: %d", removedParts)
+			logger.GetLogger().Panic(fmt.Sprintf("BUG: removed non-zero outer parts: %d", removedParts))
 		}
 	}
 
@@ -1282,8 +1280,8 @@ func (tb *Table) mergeParts(pws []*partWrapper, stopCh <-chan struct{}, isOuterP
 
 	d := time.Since(startTime)
 	if d > 30*time.Second {
-		logger.Infof("merged %d items across %d blocks in %.3f seconds at %d items/sec to %q; sizeBytes: %d",
-			outItemsCount, outBlocksCount, d.Seconds(), int(float64(outItemsCount)/d.Seconds()), dstPartPath, newPSize)
+		logger.GetLogger().Info(fmt.Sprintf("merged %d items across %d blocks in %.3f seconds at %d items/sec to %q; sizeBytes: %d",
+			outItemsCount, outBlocksCount, d.Seconds(), int(float64(outItemsCount)/d.Seconds()), dstPartPath, newPSize))
 	}
 
 	return nil
@@ -1450,7 +1448,7 @@ func openParts(path string, lock *string) ([]*partWrapper, error) {
 func mustCloseParts(pws []*partWrapper) {
 	for _, pw := range pws {
 		if pw.refCount != 1 {
-			logger.Panicf("BUG: unexpected refCount when closing part %q: %d; want 1", pw.p.path, pw.refCount)
+			logger.GetLogger().Panic(fmt.Sprintf("BUG: unexpected refCount when closing part %q: %d; want 1", pw.p.path, pw.refCount))
 		}
 		pw.p.MustClose()
 	}
@@ -1461,7 +1459,7 @@ func mustCloseParts(pws []*partWrapper) {
 // Snapshot is created using linux hard links, so it is usually created
 // very quickly.
 func (tb *Table) CreateSnapshotAt(dstDir string, lock *string) error {
-	logger.Infof("creating Table snapshot of %q...", tb.path)
+	logger.GetLogger().Info(fmt.Sprintf("creating Table snapshot of %q...", tb.path))
 	startTime := time.Now()
 
 	var err error
@@ -1524,7 +1522,7 @@ func (tb *Table) CreateSnapshotAt(dstDir string, lock *string) error {
 	parentDir := filepath.Dir(dstDir)
 	fs.MustSyncPath(parentDir)
 
-	logger.Infof("created Table snapshot of %q at %q in %.3f seconds", srcDir, dstDir, time.Since(startTime).Seconds())
+	logger.GetLogger().Info(fmt.Sprintf("created Table snapshot of %q at %q in %.3f seconds", srcDir, dstDir, time.Since(startTime).Seconds()))
 	return nil
 }
 
@@ -1637,8 +1635,8 @@ func runTransaction(txnLock *sync.RWMutex, pathPrefix, txnPath string, lockPath 
 		// Emit info message for the expected condition after unclean shutdown on NFS disk.
 		// The dstPath part may be missing because it could be already merged into bigger part
 		// while old source parts for the current txn weren't still deleted due to NFS locks.
-		logger.Infof("cannot find both source and destination paths: %q -> %q; this may be the case after unclean shutdown (OOM, `kill -9`, hard reset) on NFS disk",
-			srcPath, dstPath)
+		logger.GetLogger().Info(fmt.Sprintf("cannot find both source and destination paths: %q -> %q; this may be the case after unclean shutdown (OOM, `kill -9`, hard reset) on NFS disk",
+			srcPath, dstPath))
 	}
 
 	// Flush pathPrefix directory metadata to the underying storage.
@@ -1652,7 +1650,7 @@ func runTransaction(txnLock *sync.RWMutex, pathPrefix, txnPath string, lockPath 
 		removeWG.Wait()
 		lock := fileops.FileLockOption(*lockPath)
 		if err := fileops.Remove(txnPath, lock); err != nil {
-			logger.Errorf("cannot remove transaction file %q: %s", txnPath, err)
+			logger.GetLogger().Error(fmt.Sprintf("cannot remove transaction file %q: %s", txnPath, err))
 		}
 	}()
 
@@ -1704,7 +1702,7 @@ func getPartsToMerge(pws []*partWrapper, maxOutBytes uint64, isFinal bool) []*pa
 	}
 	for _, pw := range dst {
 		if pw.isInMerge {
-			logger.Panicf("BUG: partWrapper.isInMerge is already set")
+			logger.GetLogger().Panic(fmt.Sprintf("BUG: partWrapper.isInMerge is already set"))
 		}
 		pw.isInMerge = true
 	}
@@ -1727,7 +1725,7 @@ func appendPartsToMerge(dst, src []*partWrapper, maxPartsToMerge int, maxOutByte
 		return dst
 	}
 	if maxPartsToMerge < 2 {
-		logger.Panicf("BUG: maxPartsToMerge cannot be smaller than 2; got %d", maxPartsToMerge)
+		logger.GetLogger().Panic(fmt.Sprintf("BUG: maxPartsToMerge cannot be smaller than 2; got %d", maxPartsToMerge))
 	}
 
 	// Filter out too big parts.
@@ -1881,7 +1879,7 @@ func (tb *Table) addNewPWAndRemoveOldPW(ps *partSearch, newPW *partWrapper) erro
 		m[pw] = true
 	}
 	if len(m) != len(pws) {
-		logger.Panicf("BUG: %d duplicate parts found in the delete of %d parts", len(pws)-len(m), len(pws))
+		logger.GetLogger().Panic(fmt.Sprintf("BUG: %d duplicate parts found in the delete of %d parts", len(pws)-len(m), len(pws)))
 	}
 	removedParts := 0
 	tb.partsLock.Lock()
@@ -1893,7 +1891,7 @@ func (tb *Table) addNewPWAndRemoveOldPW(ps *partSearch, newPW *partWrapper) erro
 
 	tb.partsLock.Unlock()
 	if removedParts != len(m) {
-		logger.Panicf("BUG: unexpected number of parts removed; got %d; want %d", removedParts, len(m))
+		logger.GetLogger().Panic(fmt.Sprintf("BUG: unexpected number of parts removed; got %d; want %d", removedParts, len(m)))
 	}
 
 	// Remove partition references from old parts.
@@ -2020,7 +2018,7 @@ func itemContainsMst(item []byte, msts []string, parseItem func([]byte) (res *ut
 	for _, mst := range msts {
 		itemInfo, err := parseItem(item)
 		if err != nil {
-			logger.Errorf("parse item err: %s", err)
+			logger.GetLogger().Error(fmt.Sprintf("parse item err: %s", err))
 			return false
 		}
 		if mst == itemInfo.Name {
@@ -2056,7 +2054,7 @@ func (tb *Table) RemoveDeletedPart() {
 	tb.parts, removedParts = removeParts(tb.parts, m)
 	tb.partsLock.Unlock()
 	if removedParts != len(m) {
-		logger.Panicf("BUG: unexpected number of parts removed; got %d; want %d", removedParts, len(m))
+		logger.GetLogger().Panic(fmt.Sprintf("BUG: unexpected number of parts removed; got %d; want %d", removedParts, len(m)))
 	}
 
 	// Remove partition references from old parts.
@@ -2158,7 +2156,7 @@ func (tb *Table) filterByDelTsidAndGenNewPart(pw *partWrapper, delTsids *uint64s
 	}
 	tb.partsLock.Unlock()
 	if removedParts != 1 {
-		logger.Panicf("BUG: unexpected number of parts removed; got %d; want %d", removedParts, 1)
+		logger.GetLogger().Panic(fmt.Sprintf("BUG: unexpected number of parts removed; got %d; want %d", removedParts, 1))
 	}
 
 	var removeWG sync.WaitGroup

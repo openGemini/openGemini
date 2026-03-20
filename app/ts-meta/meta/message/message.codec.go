@@ -1006,14 +1006,14 @@ func (o *RegisterQueryIDOffsetResponse) Instance() transport.Codec {
 	return &RegisterQueryIDOffsetResponse{}
 }
 
-func (o *Sql2MetaHeartbeatRequest) Marshal(buf []byte) ([]byte, error) {
+func (o *CQ2MetaHeartbeatRequest) Marshal(buf []byte) ([]byte, error) {
 	var err error
 	buf = codec.AppendString(buf, o.Host)
 
 	return buf, err
 }
 
-func (o *Sql2MetaHeartbeatRequest) Unmarshal(buf []byte) error {
+func (o *CQ2MetaHeartbeatRequest) Unmarshal(buf []byte) error {
 	if len(buf) == 0 {
 		return nil
 	}
@@ -1024,25 +1024,25 @@ func (o *Sql2MetaHeartbeatRequest) Unmarshal(buf []byte) error {
 	return err
 }
 
-func (o *Sql2MetaHeartbeatRequest) Size() int {
+func (o *CQ2MetaHeartbeatRequest) Size() int {
 	size := 0
 	size += codec.SizeOfString(o.Host)
 
 	return size
 }
 
-func (o *Sql2MetaHeartbeatRequest) Instance() transport.Codec {
-	return &Sql2MetaHeartbeatRequest{}
+func (o *CQ2MetaHeartbeatRequest) Instance() transport.Codec {
+	return &CQ2MetaHeartbeatRequest{}
 }
 
-func (o *Sql2MetaHeartbeatResponse) Marshal(buf []byte) ([]byte, error) {
+func (o *CQ2MetaHeartbeatResponse) Marshal(buf []byte) ([]byte, error) {
 	var err error
 	buf = codec.AppendString(buf, o.Err)
 
 	return buf, err
 }
 
-func (o *Sql2MetaHeartbeatResponse) Unmarshal(buf []byte) error {
+func (o *CQ2MetaHeartbeatResponse) Unmarshal(buf []byte) error {
 	if len(buf) == 0 {
 		return nil
 	}
@@ -1053,15 +1053,15 @@ func (o *Sql2MetaHeartbeatResponse) Unmarshal(buf []byte) error {
 	return err
 }
 
-func (o *Sql2MetaHeartbeatResponse) Size() int {
+func (o *CQ2MetaHeartbeatResponse) Size() int {
 	size := 0
 	size += codec.SizeOfString(o.Err)
 
 	return size
 }
 
-func (o *Sql2MetaHeartbeatResponse) Instance() transport.Codec {
-	return &Sql2MetaHeartbeatResponse{}
+func (o *CQ2MetaHeartbeatResponse) Instance() transport.Codec {
+	return &CQ2MetaHeartbeatResponse{}
 }
 
 func (o *GetContinuousQueryLeaseRequest) Marshal(buf []byte) ([]byte, error) {
@@ -1323,4 +1323,61 @@ func (o *ShowClusterResponse) Size() int {
 
 func (o *ShowClusterResponse) Instance() transport.Codec {
 	return &ShowClusterResponse{}
+}
+
+func (o *GetShardingPlanRequest) Marshal(buf []byte) ([]byte, error) {
+	buf = codec.AppendString(buf, o.DbName)
+	buf = codec.AppendString(buf, o.RpName)
+	return buf, nil
+}
+
+func (o *GetShardingPlanRequest) Unmarshal(buf []byte) error {
+	if len(buf) == 0 {
+		return nil
+	}
+	dec := codec.NewBinaryDecoder(buf)
+	o.DbName = dec.String()
+	o.RpName = dec.String()
+	return nil
+}
+
+func (o *GetShardingPlanRequest) Size() int {
+	size := 0
+	size += codec.SizeOfString(o.DbName)
+	size += codec.SizeOfString(o.RpName)
+	return size
+}
+
+func (o *GetShardingPlanRequest) Instance() transport.Codec {
+	return &GetShardingPlanRequest{}
+}
+
+func (o *GetShardingPlanResponse) Marshal(buf []byte) ([]byte, error) {
+	buf = codec.AppendBytes(buf, o.Data)
+	buf = codec.AppendUint16(buf, uint16(o.ErrCode))
+	buf = codec.AppendString(buf, o.Err)
+	return buf, nil
+}
+
+func (o *GetShardingPlanResponse) Unmarshal(buf []byte) error {
+	if len(buf) == 0 {
+		return nil
+	}
+	dec := codec.NewBinaryDecoder(buf)
+	o.Data = dec.Bytes()
+	o.ErrCode = errno.Errno(dec.Uint16())
+	o.Err = dec.String()
+	return nil
+}
+
+func (o *GetShardingPlanResponse) Size() int {
+	size := 0
+	size += codec.SizeOfByteSlice(o.Data)
+	size += 2
+	size += codec.SizeOfString(o.Err)
+	return size
+}
+
+func (o *GetShardingPlanResponse) Instance() transport.Codec {
+	return &GetShardingPlanResponse{}
 }

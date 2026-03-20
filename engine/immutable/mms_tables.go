@@ -35,6 +35,7 @@ import (
 	"github.com/openGemini/openGemini/engine/clearevent"
 	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/lib/config"
+	"github.com/openGemini/openGemini/lib/dictmap"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/index"
@@ -45,7 +46,6 @@ import (
 	stats "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
-	"github.com/savsgio/dictpool"
 	"go.uber.org/zap"
 )
 
@@ -59,6 +59,7 @@ type TablesStore interface {
 	FreeAllMemReader()
 	ReplaceFiles(name string, oldFiles, newFiles []TSSPFile, isOrder bool) error
 	GetBothFilesRef(measurement string, hasTimeFilter bool, tr util.TimeRange, flushed *bool) ([]TSSPFile, []TSSPFile, bool)
+	GetCSFilesRef(measurement string) ([]TSSPFile, bool)
 	ReplaceDownSampleFiles(mstNames []string, originFiles [][]TSSPFile, newFiles [][]TSSPFile, isOrder bool, callBack func()) error
 	NextSequence() uint64
 	Sequencer() *Sequencer
@@ -92,7 +93,6 @@ type TablesStore interface {
 	EnableCompAndMerge()
 	FreeSequencer() bool
 	SetImmTableType(engineType config.EngineType)
-	SetAccumulateMetaIndex(name string, aMetaIndex *AccumulateMetaIndex)
 	SeriesTotal() uint64
 	SetLockPath(lock *string)
 	FullyCompacted() bool
@@ -103,6 +103,9 @@ type TablesStore interface {
 	GetAllMstList() []string
 	ReplaceByNoClearShardId(supplier clearevent.NoClearShardAndIndexSupplier) (map[string][]TSSPFile, map[string][]TSSPFile, error)
 	ClearOldTsspFiles(map[string][]TSSPFile, map[string][]TSSPFile) error
+	NewStreamWriteFile(mst string) *StreamWriteFile
+	AddPtWriteStats(msName string, count int)
+	GetScheduler() *scheduler.TaskScheduler
 }
 
 type ImmTable interface {
@@ -160,9 +163,13 @@ type MmsTables struct {
 
 	indexMergeSet IndexMergeSet
 	scheduler     *scheduler.TaskScheduler
+	writeStat     *stats.PtWriteStats
 }
 
-func NewTableStore(dir string, lock *string, tier *uint64, compactRecovery bool, config *Config) *MmsTables {
+func NewTableStore(dir string, lock *string, tier *uint64, compactRecovery bool, conf *Config) *MmsTables {
+	if conf == nil {
+		conf = GetTsStoreConfig()
+	}
 	store := &MmsTables{
 		path:            dir,
 		lock:            lock,
@@ -180,10 +187,10 @@ func NewTableStore(dir string, lock *string, tier *uint64, compactRecovery bool,
 		compactionEn:    1,
 		sequencer:       NewSequencer(),
 		compactRecovery: compactRecovery,
-		Conf:            config,
+		Conf:            conf,
 		logger:          logger.NewLogger(errno.ModuleShard),
 	}
-	store.scheduler = scheduler.NewTaskScheduler(store.Listen, compLimiter)
+	store.scheduler = scheduler.NewTaskScheduler(store.Listen, CompLimiter)
 	return store
 }
 
@@ -194,6 +201,16 @@ func (m *MmsTables) Path() string {
 func (m *MmsTables) SetDbRp(db, rp string) {
 	m.db = db
 	m.rp = rp
+}
+
+func (m *MmsTables) SetPtWriteStatistics(pt uint32) {
+	m.writeStat = stats.NewPtWriteStats(m.db, m.rp, pt)
+}
+
+func (m *MmsTables) AddPtWriteStats(msName string, count int) {
+	if m.writeStat != nil {
+		m.writeStat.AddMstBytesCount(msName, int64(count))
+	}
 }
 
 func (m *MmsTables) SetImmTableType(engineType config.EngineType) {
@@ -210,10 +227,6 @@ func (m *MmsTables) SetObsOption(option *obs.ObsOptions) {
 
 func (m *MmsTables) GetObsOption() *obs.ObsOptions {
 	return m.obsOpt
-}
-
-func (m *MmsTables) SetAccumulateMetaIndex(name string, aMetaIndex *AccumulateMetaIndex) {
-	m.ImmTable.UpdateAccumulateMetaIndexInfo(name, aMetaIndex)
 }
 
 func (m *MmsTables) Tier() uint64 {
@@ -467,7 +480,7 @@ func (m *MmsTables) Close() error {
 			}
 		}
 	}
-
+	m.sequencer.free()
 	return nil
 }
 
@@ -514,6 +527,20 @@ func (m *MmsTables) GetBothFilesRef(measurement string, hasTimeFilter bool, tr u
 	}
 	return orderFiles, unorderFiles, false
 }
+func (m *MmsTables) GetCSFilesRef(name string) ([]TSSPFile, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var csFiles []TSSPFile
+	files, ok := m.CSFiles[name]
+	if ok {
+		csFiles = make([]TSSPFile, 0, len(files.Files()))
+		for _, f := range files.Files() {
+			f.Ref()
+			csFiles = append(csFiles, f)
+		}
+	}
+	return csFiles, ok
+}
 
 func (m *MmsTables) NextSequence() uint64 {
 	return atomic.AddUint64(&m.fileSeq, 1)
@@ -548,11 +575,14 @@ func (m *MmsTables) GetAllMstList() []string {
 	defer func() {
 		m.mu.RUnlock()
 	}()
-	fileList := make([]string, 0, len(m.Order)+len(m.OutOfOrder))
+	fileList := make([]string, 0, len(m.Order)+len(m.OutOfOrder)+len(m.CSFiles))
 	for name := range m.Order {
 		fileList = append(fileList, name)
 	}
 	for name := range m.OutOfOrder {
+		fileList = append(fileList, name)
+	}
+	for name := range m.CSFiles {
 		fileList = append(fileList, name)
 	}
 	return fileList
@@ -850,17 +880,23 @@ func (m *MmsTables) ReplaceFiles(name string, oldFiles, newFiles []TSSPFile, isO
 	if len(newFiles) == 0 || len(oldFiles) == 0 {
 		return nil
 	}
+	shardDir := filepath.Dir(m.path)
+	info := GenerateCompactedInfo(name, oldFiles, newFiles, shardDir, isOrder)
+	return m.replaceFiles(info, oldFiles, newFiles)
+}
 
+func (m *MmsTables) replaceFiles(info *CompactedFileInfo, oldFiles, newFiles []TSSPFile) (err error) {
 	defer func() {
 		if e := recover(); e != nil {
 			err = errno.NewError(errno.RecoverPanic, e)
 			log.Error("replace file fail", zap.Error(err))
 		}
 	}()
+	name := info.Name
 
-	var logFile string
 	shardDir := filepath.Dir(m.path)
-	logFile, err = m.writeCompactedFileInfo(name, oldFiles, newFiles, shardDir, isOrder)
+	var logFile string
+	logFile, err = m.writeCompactedFileInfo(info, shardDir)
 	if err != nil {
 		if len(logFile) > 0 {
 			lock := fileops.FileLockOption(*m.lock)
@@ -875,7 +911,7 @@ func (m *MmsTables) ReplaceFiles(name string, oldFiles, newFiles []TSSPFile, isO
 		return err
 	}
 
-	mmsTables := m.ImmTable.getFiles(m, isOrder)
+	mmsTables := m.ImmTable.getFiles(m, info.IsOrder)
 	m.mu.RLock()
 	fs, ok := mmsTables[name]
 	m.mu.RUnlock()
@@ -979,6 +1015,23 @@ func RenameTmpFiles(newFiles []TSSPFile) error {
 	}
 
 	return nil
+}
+
+func GetNewTSSPFiles(info *CompactedFileInfo) ([]TSSPFile, error) {
+	newFiles := make([]TSSPFile, 0, len(info.NewFile))
+	if info.Lock == nil {
+		return newFiles, errors.New("wrong CompactedFileInfo, lock should not be nil")
+	}
+
+	for _, f := range info.NewFile {
+		file, err := OpenTSSPFile(filepath.Join(info.BasePath, f), info.Lock, info.IsOrder)
+		if err != nil {
+			return newFiles, err
+		}
+		newFiles = append(newFiles, file)
+	}
+
+	return newFiles, nil
 }
 
 func RenameTmpFilesWithPKIndex(newFiles []TSSPFile, ir *influxql.IndexRelation) error {
@@ -1121,20 +1174,24 @@ func (m *MmsTables) CompactDone(files []string) {
 }
 
 var (
-	seqMapPool = sync.Pool{New: func() interface{} { return &dictpool.Dict{} }}
+	seqMapPool = sync.Pool{New: func() interface{} { return make(dictmap.DictMap[string, TSSPFile]) }}
 )
 
-func (m *MmsTables) genCompactGroup(seqMap *dictpool.Dict, name string, level uint16) *CompactGroup {
+func (m *MmsTables) genCompactGroup(seqMap dictmap.DictMap[string, TSSPFile], name string, level uint16) *CompactGroup {
 	if m.ImmTable.GetCompactionType(name) == config.BLOCK && !m.inBlockCompact.Add(name) {
 		log.Debug("block compact in process", zap.String("name", name))
 		return nil
 	}
 
-	group := NewCompactGroup(name, level+1, seqMap.Len())
-	for i, kv := range seqMap.D {
-		f := kv.Value.(TSSPFile)
+	group := NewCompactGroup(name, m.path, level+1, len(seqMap))
+	var i int
+	for _, f := range seqMap {
+		if i == 0 {
+			group.lock = f.GetLock()
+		}
 		fn := f.Path()
 		group.group[i] = fn
+		i++
 	}
 
 	if m.busy(group.group) || InParquetProcess(group.group...) {
@@ -1150,7 +1207,7 @@ func (m *MmsTables) mmsPlan(name string, files *TSSPFiles, level uint16, minGrou
 		return plans
 	}
 
-	seqMap := seqMapPool.Get().(*dictpool.Dict)
+	seqMap := seqMapPool.Get().(dictmap.DictMap[string, TSSPFile])
 	seqMap.Reset()
 	defer seqMapPool.Put(seqMap)
 
@@ -1168,12 +1225,12 @@ func (m *MmsTables) mmsPlan(name string, files *TSSPFiles, level uint16, minGrou
 		}
 
 		seqByte := record.Uint64ToBytesUnsafe(seq)
-		if !seqMap.HasBytes(seqByte) {
+		if _, ok := seqMap[util.Bytes2str(seqByte)]; !ok {
 			plans = m.genCompactPlan(seqMap, minGroupFileN, name, level, files, plans)
 			if files.splitByUnloadFile(idx) {
 				seqMap.Reset()
 			}
-			seqMap.SetBytes(seqByte, f)
+			seqMap[util.Bytes2str(seqByte)] = f
 			idx++
 		} else {
 			i := idx + 1
@@ -1209,9 +1266,9 @@ func (m *MmsTables) getMmsPlan(name string, files *TSSPFiles, level uint16, minG
 	return plans
 }
 
-func (m *MmsTables) genCompactPlan(seqMap *dictpool.Dict, minGroupFileN int, name string, level uint16,
+func (m *MmsTables) genCompactPlan(seqMap dictmap.DictMap[string, TSSPFile], minGroupFileN int, name string, level uint16,
 	files *TSSPFiles, plans []*CompactGroup) []*CompactGroup {
-	if seqMap.Len() >= minGroupFileN {
+	if len(seqMap) >= minGroupFileN {
 		plan := m.genCompactGroup(seqMap, name, level)
 		if plan != nil {
 			plan.dropping = &files.closing
@@ -1249,22 +1306,9 @@ func (m *MmsTables) getTSSPFiles(mstName string, isOrder bool) (*TSSPFiles, bool
 }
 
 func (m *MmsTables) NewStreamWriteFile(mst string) *StreamWriteFile {
-	sw := getStreamWriteFile()
-	sw.closed = m.closed
-	sw.name = mst
-	sw.dir = m.path
-	sw.pair.Reset(mst)
-	sw.Conf = m.Conf
-	sw.chunkRows = 0
-	sw.maxChunkRows = 0
+	sw := NewStreamWriteFile(mst, m.Conf, m.path, m.closed, m.lock)
 	cLog, _ := influxLogger.NewOperation(log, "StreamDownSample", mst)
 	sw.log = logger.NewLogger(errno.ModuleDownSample).SetZapLogger(cLog)
-	sw.colSegs = make([]record.ColVal, 1)
-	sw.lock = m.lock
-	sw.colBuilder.timePreAggBuilder = acquireTimePreAggBuilder()
-	if IsChunkMetaCompressSelf() {
-		sw.chunkMetaCodecCtx = GetChunkMetaCodecCtx()
-	}
 	return sw
 }
 
@@ -1295,6 +1339,24 @@ func (m *MmsTables) GetTableFileNum(name string, order bool) int {
 	return files.Len()
 }
 
+func (m *MmsTables) GetScheduler() *scheduler.TaskScheduler {
+	return m.scheduler
+}
+
+// RecoverFile is intended for rollbackPreAssign
+func (m *MmsTables) RecoverParquetLog() error {
+	shardDir := filepath.Dir(m.path)
+	logDir := filepath.Join(shardDir, parquetLogDir)
+
+	if _, err := fileops.Stat(logDir); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	return ProcParquetLog(logDir, m.lock, m.getEventContext())
+}
+
 func levelSequenceEqual(level uint16, seq uint64, f TSSPFile) bool {
 	lv, n := f.LevelAndSequence()
 	return lv == level && seq == n
@@ -1309,6 +1371,12 @@ func recoverFile(shardDir string, lockPath *string, engineType config.EngineType
 
 	for i := range dirs {
 		switch dirs[i].Name() {
+		case parquetLogDir:
+			logDir := filepath.Join(shardDir, parquetLogDir)
+			if err := ProcParquetLog(logDir, lockPath, ctx); err != nil {
+				log.Error("proc parquet log failed", zap.String("logDir", logDir), zap.Error(err))
+				continue
+			}
 		case compactLogDir:
 			logDir := filepath.Join(shardDir, compactLogDir)
 			err := procCompactLog(shardDir, logDir, lockPath, engineType)
@@ -1317,40 +1385,8 @@ func recoverFile(shardDir string, lockPath *string, engineType config.EngineType
 					return err
 				}
 			}
-		case parquetLogDir:
-			logDir := filepath.Join(shardDir, compactLogDir)
-			if err := ProcParquetLog(logDir, lockPath, ctx); err != nil {
-				return err
-			}
 		}
 	}
 
 	return nil
-}
-
-//lint:ignore U1000 test used only
-func compareFile(f1, f2 interface{}) bool {
-	firstMin, firstMax, _ := f1.(TSSPFile).MinMaxTime()
-	secondMin, secondMax, _ := f2.(TSSPFile).MinMaxTime()
-	if firstMin == secondMin {
-		return firstMax <= secondMax
-	}
-	if firstMin < secondMin {
-		return false
-	}
-	return true
-}
-
-//lint:ignore U1000 test used only
-func compareFileByDescend(f1, f2 interface{}) bool {
-	firstMin, firstMax, _ := f1.(TSSPFile).MinMaxTime()
-	secondMin, secondMax, _ := f2.(TSSPFile).MinMaxTime()
-	if firstMax == secondMax {
-		return firstMin <= secondMin
-	}
-
-	if firstMax > secondMax {
-		return true
-	}
-	return false
 }

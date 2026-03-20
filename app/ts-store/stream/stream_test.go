@@ -30,7 +30,6 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	stream2 "github.com/openGemini/openGemini/services/stream"
-	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
@@ -43,6 +42,8 @@ type MockStorage struct {
 	count     int
 	value     float64
 	timestamp time.Time
+
+	onPTLoaded map[engine.CallbackKey]engine.PtLoadFunc
 }
 
 func (m *MockStorage) WriteRows(db, rp string, ptId uint32, shardID uint64, rows []influx.Row, binaryRows []byte) error {
@@ -74,10 +75,21 @@ func (m *MockStorage) TimeStamp() time.Time {
 	return m.timestamp
 }
 
-func (m *MockStorage) RegisterOnPTOffload(id uint64, f func(ptID uint32)) {
+func (m *MockStorage) RegisterOnPTOffload(key engine.CallbackKey, f engine.PtOffLoadFunc) {
 }
 
-func (m *MockStorage) UninstallOnPTOffload(id uint64) {
+func (m *MockStorage) UninstallOnPTOffload(key engine.CallbackKey) {
+}
+
+func (m *MockStorage) RegisterOnPTLoaded(key engine.CallbackKey, f engine.PtLoadFunc) {
+	if m.onPTLoaded == nil {
+		m.onPTLoaded = make(map[engine.CallbackKey]engine.PtLoadFunc)
+	}
+	m.onPTLoaded[key] = f
+}
+
+func (m *MockStorage) UninstallOnPTLoaded(key engine.CallbackKey) {
+	delete(m.onPTLoaded, key)
 }
 
 func buildRow(tagValue, eipValue string, fieldIndex bool) influx.Row {
@@ -196,20 +208,15 @@ func buildTestRecord(size int) *record.Record {
 	return &rec
 }
 
-type TestLogger interface {
-	Log(args ...any)
-}
-
 type MockLogger struct {
-	t TestLogger
 }
 
 func (m MockLogger) Info(msg string, fields ...zap.Field) {
-	m.t.Log(msg)
+	fmt.Println(msg)
 }
 
 func (m MockLogger) Debug(msg string, fields ...zap.Field) {
-	m.t.Log(msg)
+	fmt.Println(msg)
 }
 
 func (m MockLogger) Error(msg string, fields ...zap.Field) {
@@ -218,7 +225,11 @@ func (m MockLogger) Error(msg string, fields ...zap.Field) {
 		msg += f.String
 		msg += "\n"
 	}
-	m.t.Log(msg)
+	fmt.Println(msg)
+}
+
+func (m MockLogger) GetZapLogger() *zap.Logger {
+	return zap.NewNop()
 }
 
 type MockMetaclient struct {
@@ -304,14 +315,13 @@ func (ww *MockWritePointsWork) UnRef() int64 {
 
 func Test_Call(t *testing.T) {
 	m := &MockStorage{}
-	l := &MockLogger{t}
+	l := &MockLogger{}
 	metaClient := &MockMetaclient{}
 	conf := stream2.NewConfig()
 	stream, err := NewStream(m, l, metaClient, conf, "/tmp", "", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	FlushParallelMinRowNum = 10
 	dataBlock := &MockWritePointsWork{}
 	fieldRows := buildRows(30)
 	fieldRows2 := buildRows(1)
@@ -365,6 +375,9 @@ func Test_Call(t *testing.T) {
 	select {
 	case <-after.C:
 	}
+	for _, f := range m.onPTLoaded {
+		f("test", 0)
+	}
 	//wait flush
 	time.Sleep(window)
 	t.Log("m count", m.Count(), "m value", m.Value(), time.Now())
@@ -383,14 +396,13 @@ func Test_Call(t *testing.T) {
 
 func Test_RecCall(t *testing.T) {
 	m := &MockStorage{}
-	l := &MockLogger{t}
+	l := &MockLogger{}
 	metaClient := &MockMetaclient{}
 	conf := stream2.NewConfig()
 	stream, err := NewStream(m, l, metaClient, conf, "/tmp", "", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	FlushParallelMinRowNum = 10
 	window := time.Second * 1
 	now := time.Now()
 	t.Log("now", now)
@@ -436,7 +448,7 @@ func Test_RecCall(t *testing.T) {
 
 func Test_RegisterFail(t *testing.T) {
 	m := &MockStorage{}
-	l := &MockLogger{t}
+	l := &MockLogger{}
 	metaClient := &MockMetaclient{getInfoFail: true}
 	conf := stream2.NewConfig()
 	stream, err := NewStream(m, l, metaClient, conf, "/tmp", "", 1)
@@ -473,7 +485,7 @@ func Test_RegisterFail(t *testing.T) {
 
 func Test_RegisterTimeTask(t *testing.T) {
 	m := &MockStorage{}
-	l := &MockLogger{t}
+	l := &MockLogger{}
 	metaClient := &MockMetaclient{getInfoFail: true}
 	conf := stream2.NewConfig()
 	stream, err := NewStream(m, l, metaClient, conf, "/tmp", "", 1)
@@ -510,7 +522,7 @@ func Test_RegisterTimeTask(t *testing.T) {
 
 func Test_RegisterCondTask(t *testing.T) {
 	m := &MockStorage{}
-	l := &MockLogger{t}
+	l := &MockLogger{}
 	metaClient := &MockMetaclient{getInfoFail: true}
 	conf := stream2.NewConfig()
 	stream, err := NewStream(m, l, metaClient, conf, "/tmp", "", 1)
@@ -543,7 +555,7 @@ func Test_RegisterCondTask(t *testing.T) {
 
 func Test_MaxDelay(t *testing.T) {
 	m := &MockStorage{}
-	l := &MockLogger{t}
+	l := &MockLogger{}
 	metaClient := &MockMetaclient{}
 	conf := stream2.NewConfig()
 	stream, err := NewStream(m, l, metaClient, conf, "/tmp", "", 1)
@@ -693,7 +705,7 @@ func buildStreamInfoCond(fields []string, cond string) map[string]*meta.StreamIn
 
 func Bench_Stream_POINT(t *testing.B, pointNum int) {
 	m := &MockStorage{}
-	l := &MockLogger{t}
+	l := &MockLogger{}
 	metaClient := &MockMetaclient{}
 	conf := stream2.NewConfig()
 	conf.FilterConcurrency = 1
@@ -823,7 +835,7 @@ func buildReplayRows(length int) []influx.Row {
 
 func TestStreamHandler(t *testing.T) {
 	m := &MockStorage{}
-	l := &MockLogger{t}
+	l := &MockLogger{}
 	metaClient := &MockMetaclient{}
 	conf := stream2.NewConfig()
 	stream, err := NewStream(m, l, metaClient, conf, "/tmp", "", 1)
@@ -848,23 +860,6 @@ func TestStreamHandler(t *testing.T) {
 	if err != nil {
 		t.Fatal(err.Error())
 	}
-}
-
-func TestStreamHandlerError(t *testing.T) {
-	s := &Stream{
-		Logger: MockLogger{
-			t: t,
-		},
-	}
-	t.Run("1", func(t *testing.T) {
-		err := s.StreamHandler(influx.Rows{}, true, []string{"xxx"})
-		require.NotEmpty(t, err)
-	})
-
-	t.Run("2", func(t *testing.T) {
-		err := s.StreamHandler(influx.Rows{influx.Row{}}, true, []string{"xxx"})
-		require.NotEmpty(t, err)
-	})
 }
 
 func TestParseFileName(t *testing.T) {
