@@ -15,6 +15,7 @@
 package shelf
 
 import (
+	"container/list"
 	"io/fs"
 	"path/filepath"
 	"strconv"
@@ -23,9 +24,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/fasttime"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/fasttime"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/mutable"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/obs"
@@ -33,11 +35,22 @@ import (
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
+	"github.com/openGemini/openGemini/services/pubsub"
 	"go.uber.org/zap"
 )
 
 const DefaultShardFreeDuration = 600 // Second
 const backgroundSyncDuration = time.Millisecond * 100
+
+var inuseWalCount atomic.Int64
+
+func IncrInuseWalCount() {
+	inuseWalCount.Add(1)
+}
+
+func DecrInuseWalCount() {
+	inuseWalCount.Add(-1)
+}
 
 type ShardInfo struct {
 	ident     *meta.ShardIdentifier
@@ -48,6 +61,19 @@ type ShardInfo struct {
 	tbStore   immutable.TablesStore
 	idx       Index
 	options   *obs.ObsOptions
+}
+
+func NewShardInfo(ident *meta.ShardIdentifier, filePath, walPath string, lock *string,
+	tbStore immutable.TablesStore, index Index, options *obs.ObsOptions) *ShardInfo {
+	return &ShardInfo{
+		ident:    ident,
+		filePath: filePath,
+		walPath:  walPath,
+		lock:     lock,
+		tbStore:  tbStore,
+		idx:      index,
+		options:  options,
+	}
 }
 
 type Shard struct {
@@ -65,40 +91,37 @@ type Shard struct {
 
 	// List of Wal files waiting to be converted to tssp files
 	// key of map is the path of the Wal file
-	waitSwitchWal map[string]*Wal
+	waitSwitchWalList *list.List
 
 	wal *Wal
 
 	freeDuration       uint64
 	lastWriteTimestamp uint64
-}
-
-func NewShardInfo(ident *meta.ShardIdentifier, filePath, walPath string, lock *string,
-	tbStore immutable.TablesStore, index Index, options *obs.ObsOptions) *ShardInfo {
-	return &ShardInfo{
-		ident:    ident,
-		filePath: filePath,
-		walPath:  walPath,
-		lock:     lock,
-		tbStore:  tbStore,
-		idx:      index,
-		options:  options,
-	}
+	workerID           int
 }
 
 func NewShard(workerID int, info *ShardInfo, freeDuration uint64) *Shard {
 	shard := &Shard{
 		idle:               true,
 		signal:             util.NewSignal(),
-		waitSwitchWal:      make(map[string]*Wal),
 		info:               info,
 		freeDuration:       freeDuration,
 		lastWriteTimestamp: fasttime.UnixTimestamp(),
+		workerID:           workerID,
 	}
 	shard.idxCreator = NewRunner().IndexCreatorManager().Alloc(info.idx)
 	shard.walDir = filepath.Join(info.walPath, strconv.FormatUint(uint64(workerID), 10))
-	shard.wal = NewWal(shard.walDir, info.lock, info.options)
+	shard.wal = shard.CreateWal()
+	shard.waitSwitchWalList = list.New()
+
+	util.MustRun(func() error {
+		return fileops.MkdirAll(shard.walDir, 0700)
+	})
 	return shard
+}
+
+func (si *ShardInfo) Index() Index {
+	return si.idx
 }
 
 func (s *Shard) Run() {
@@ -145,17 +168,21 @@ func (s *Shard) backgroundCreateIndex() {
 func (s *Shard) backgroundWalProcess() {
 	defer s.wg.Done()
 
-	util.TickerRun(backgroundSyncDuration, s.signal.C(), func() {
-		s.SwitchWalIfNeeded()
-		s.wal.BackgroundSync()
-	}, func() {})
+	after := time.Now().UnixNano() % int64(backgroundSyncDuration)
+	time.AfterFunc(time.Duration(after), func() {
+		util.TickerRun(backgroundSyncDuration, s.signal.C(), func() {
+			s.SwitchWalIfNeeded()
+			s.wal.BackgroundSync()
+		}, func() {})
+	})
 }
 
 func (s *Shard) GetWalReaders(dst []*Wal, mst string, tr *util.TimeRange) []*Wal {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	for _, w := range s.waitSwitchWal {
+	for e := s.waitSwitchWalList.Front(); e != nil; e = e.Next() {
+		w, _ := e.Value.(*Wal)
 		if w.HasMeasurement(mst) && w.Overlaps(tr.Min, tr.Max) {
 			w.Ref()
 			dst = append(dst, w)
@@ -170,33 +197,67 @@ func (s *Shard) GetWalReaders(dst []*Wal, mst string, tr *util.TimeRange) []*Wal
 }
 
 func (s *Shard) SwitchWalIfNeeded() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.wal.SizeLimited() || s.wal.Expired() {
-		s.switchWal()
-	}
-}
-
-func (s *Shard) SwitchWal() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	s.switchWal()
-}
-
-func (s *Shard) switchWal() {
-	if !s.wal.opened {
+	if wal := s.wal; !wal.NeedSwitch() {
 		return
 	}
 
+	newWal := s.CreateWal()
+
+	// By opening WAL in the background, resources are pre-allocated, reducing the latency of synchronous writes.
+	err := newWal.open()
+	if err != nil {
+		logger.GetLogger().Error("open WAL fail", zap.Error(err))
+		newWal = s.CreateWal()
+	}
+
+	oldWal := s.SwitchWal(newWal, false)
+	if oldWal == nil {
+		// wal switch failed
+		newWal.Clean()
+		return
+	}
+	util.MustRun(oldWal.sync)
+}
+
+func (s *Shard) SwitchWal(wal *Wal, force bool) *Wal {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !force && !s.wal.NeedSwitch() {
+		return nil
+	}
+
+	return s.switchWal(wal)
+}
+
+func (s *Shard) switchWal(newWal *Wal) *Wal {
+	if !s.wal.opened {
+		return nil
+	}
+
+	oldWal := s.wal
 	stat.WALFileCount.Incr()
 	stat.WALFileSizeSum.Add(s.wal.WrittenSize() / 1024)
 
-	s.waitSwitchWal[s.wal.Name()] = s.wal
+	s.waitSwitchWalList.PushBack(oldWal)
 	stat.WALWaitConvert.Incr()
 
-	s.wal = NewWal(s.GetWalDir(), s.info.lock, s.info.options)
+	s.wal = newWal
+	oldWal.StateSwitching = true
+	return oldWal
+}
+
+func (s *Shard) CreateWal() *Wal {
+	wal := NewWal(s.GetWalDir(), s.info.lock, s.info.options)
+
+	if config.GetStoreConfig().Consume.ConsumeEnable {
+		// Notify registry that a new WAL has been created so the update
+		// can be cached and broadcast to any active subscribers.
+		pubsub.DefaultCachedPubSub.Publish(BuildWalCreatedEventKey(s.info),
+			&WalCreatedEvent{Info: s.info, Wal: wal, WorkId: s.workerID})
+	}
+
+	return wal
 }
 
 func (s *Shard) GetWalDir() string {
@@ -206,52 +267,41 @@ func (s *Shard) GetWalDir() string {
 func (s *Shard) Stop() {
 	s.signal.CloseOnce(func() {
 		s.Wait()
-		s.switchWal()
-		for _, wal := range s.waitSwitchWal {
+		s.switchWal(s.CreateWal())
+		for e := s.waitSwitchWalList.Front(); e != nil; e = e.Next() {
+			wal, _ := e.Value.(*Wal)
 			s.convertWalToTSSP(wal)
-			wal.MustClose()
+			util.WaitTimeOut(wal.Wait, wal.ForceUnref, time.Minute)
 			wal.Clean()
 		}
+
 		NewRunner().IndexCreatorManager().Recycle(s.idxCreator)
 		s.idxCreator = nil
 	})
 }
 
 func (s *Shard) ForceFlush() {
-	s.SwitchWal()
+	wal := s.SwitchWal(s.CreateWal(), true)
+	if wal != nil {
+		util.MustRun(wal.sync)
+	}
 }
 
 func (s *Shard) Wait() {
 	s.wg.Wait()
 }
 
-func (s *Shard) getWaitSwitchWal() *Wal {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	for _, wal := range s.waitSwitchWal {
-		return wal
-	}
-
-	return nil
-}
-
 func (s *Shard) Write(wal *Wal, seriesKey, rec []byte) error {
+	s.lastWriteTimestamp = fasttime.UnixTimestamp()
 	if s.idle {
 		s.openBackgroundProcessor()
 	}
 
-	s.lastWriteTimestamp = fasttime.UnixTimestamp()
 	err := s.writeRecord(wal, seriesKey, rec)
 	return err
 }
 
 func (s *Shard) UpdateWal(tr *util.TimeRange) *Wal {
-	if s.wal.SizeLimited() {
-		util.MustRun(s.wal.sync)
-		s.SwitchWal()
-	}
-
 	if !s.wal.writing {
 		s.mu.Lock()
 		s.wal.writing = true
@@ -275,7 +325,10 @@ func (s *Shard) writeRecord(wal *Wal, seriesKey []byte, rec []byte) error {
 	err = wal.WriteRecord(sid, seriesKey, rec)
 	if err != nil {
 		logger.GetLogger().Error("write record failed", zap.Error(err))
-		s.SwitchWal()
+		oldWal := s.SwitchWal(s.CreateWal(), true)
+		if oldWal != nil {
+			util.MustRun(oldWal.sync)
+		}
 	}
 	return err
 }
@@ -287,16 +340,16 @@ func (s *Shard) Free() {
 	}
 
 	s.mu.Lock()
-	inuse := len(s.waitSwitchWal) > 0 || s.wal.WrittenSize() > 0
-	if !inuse {
-		clear(s.waitSwitchWal)
-		s.wal = NewWal(s.GetWalDir(), s.info.lock, s.info.options)
-	}
-	s.mu.Unlock()
+	defer s.mu.Unlock()
 
+	inuse := s.waitSwitchWalList.Len() > 0 || s.wal.WrittenSize() > 0 || s.wal.writing
 	if inuse {
 		return
 	}
+
+	s.wal.Clean()
+	s.waitSwitchWalList.Init()
+	s.wal = s.CreateWal()
 
 	stat.ActiveShardTotal.Decr()
 	logger.GetLogger().Info("free shelf shard", zap.String("wal dir", s.walDir))
@@ -305,34 +358,28 @@ func (s *Shard) Free() {
 }
 
 func (s *Shard) ConvertToTSSP() {
-	wal := s.getWaitSwitchWal()
-	if wal == nil {
+	s.mu.RLock()
+	e := s.waitSwitchWalList.Front()
+	if e == nil {
+		s.mu.RUnlock()
 		return
 	}
+	s.mu.RUnlock()
+	wal, _ := e.Value.(*Wal)
 
-	if !tsspConvertLimited.TryTake() {
-		return
-	}
-
-	func() {
-		defer func() {
-			tsspConvertLimited.Release()
-		}()
-
-		stat.WALWaitConvert.Decr()
-		stat.WALConverting.Incr()
-		s.convertWalToTSSP(wal)
-		stat.WALConverting.Decr()
-	}()
+	stat.WALWaitConvert.Decr()
+	stat.WALConverting.Incr()
+	s.convertWalToTSSP(wal)
+	stat.WALConverting.Decr()
 
 	s.mu.Lock()
-	delete(s.waitSwitchWal, wal.Name())
+	s.waitSwitchWalList.Remove(e)
 	s.mu.Unlock()
 
 	go func() {
 		// asynchronous waiting to avoid blocking the thread that converts WAL to TSSP
-		wal.Wait()
-		wal.MustClose()
+		// Set a wait timeout to prevent WAL files from being unable to be deleted due to reference count bugs.
+		util.WaitTimeOut(wal.Wait, wal.ForceUnref, 15*time.Minute)
 		wal.Clean()
 	}()
 }
@@ -355,16 +402,61 @@ func (s *Shard) convertWalToTSSP(wal *Wal) {
 
 	s.idxCreator.Create(wal)
 
-	itr := NewWalRecordIterator(wal)
-	itr.WalMeasurements(func(mst string) {
-		tsMemTable := mutable.NewTsMemTableImpl()
-		orderFiles, unorderedFiles := tsMemTable.FlushRecords(s.info.tbStore, itr, mst,
-			s.info.filePath, s.info.lock, s.info.fileInfos)
+	mstList := wal.seriesMap.GetAalMst()
+	mstNum := len(mstList)
+	if mstNum == 0 {
+		return
+	}
 
-		wal.AddTargetTSSPFiles(orderFiles...)
-		wal.AddTargetTSSPFiles(unorderedFiles...)
-		s.info.tbStore.AddBothTSSPFiles(nil, mst, orderFiles, unorderedFiles)
-	})
+	idx := atomic.Int64{}
+	var convert = func() {
+		itr, release := NewWalRecordIterator(wal)
+		defer release()
+		for {
+			n := int(idx.Add(1))
+			if n > mstNum {
+				return
+			}
+			mst := mstList[n-1]
+
+			itr.SetSeries(wal.seriesMap.GetSeriesIDs(mst))
+			tsMemTable := mutable.NewTsMemTableImpl()
+			orderFiles, unorderedFiles, err := tsMemTable.FlushRecords(s.info.tbStore, itr, mst, s.info.fileInfos)
+			if err != nil {
+				logger.GetLogger().Error("failed to flush records", zap.Error(err), zap.String("mst", mst))
+				return
+			}
+
+			wal.AddTargetTSSPFiles(orderFiles...)
+			wal.AddTargetTSSPFiles(unorderedFiles...)
+			s.info.tbStore.AddBothTSSPFiles(nil, mst, orderFiles, unorderedFiles)
+		}
+	}
+
+	var parallel = min(mstNum, max(1, conf.OneTSSPConvertConcurrent))
+	wg := sync.WaitGroup{}
+	wg.Add(parallel)
+
+	for range parallel {
+		if int(idx.Load()) > mstNum {
+			wg.Done()
+			continue
+		}
+
+		tsspConvertLimited.Take()
+		stat.ConvertParallel.Incr()
+
+		go func() {
+			defer func() {
+				wg.Done()
+				tsspConvertLimited.Release()
+				stat.ConvertParallel.Decr()
+			}()
+			convert()
+		}()
+	}
+
+	wg.Wait()
 }
 
 func (s *Shard) Load() {
@@ -387,11 +479,11 @@ func (s *Shard) loadWalFile(file string) {
 		}
 	}()
 
-	wal := NewWal(s.GetWalDir(), s.info.lock, s.info.options)
+	wal := s.CreateWal()
 	wal.PreLoad(file)
 	stat.WALWaitConvert.Incr()
 	s.mu.Lock()
-	s.waitSwitchWal[wal.Name()] = wal
+	s.waitSwitchWalList.PushBack(wal)
 	s.mu.Unlock()
 }
 

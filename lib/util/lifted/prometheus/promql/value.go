@@ -123,8 +123,6 @@ func (s Sample) String() string {
 	return fmt.Sprintf("%s => %s", s.Metric, str)
 }
 
-// MarshalJSON is mirrored in web/api/v1/api.go with jsoniter because FPoint and
-// HPoint wouldn't be marshaled with jsoniter otherwise.
 func (s Sample) MarshalJSON() ([]byte, error) {
 	f := struct {
 		M labels.Labels `json:"metric"`

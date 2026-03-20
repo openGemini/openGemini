@@ -118,11 +118,7 @@ func NewMsBuilder(dir, name string, lockPath *string, conf *Config, idCount int,
 	_ = fileops.MkdirAll(dir, 0750, lock)
 	filePath, fileName := genFilePath(dir, fileName, obsOpt, FlushRemoteEnabled(tier))
 	msBuilder.FileName = fileName
-	_, err := fileops.Stat(filePath)
-	if err == nil {
-		panic(fmt.Sprintf("file(%v) exist", filePath))
-	}
-
+	var err error
 	if FlushRemoteEnabled(tier) {
 		msBuilder.fd, err = fileops.CreateV2(filePath, lock, pri)
 	} else {
@@ -143,8 +139,9 @@ func NewMsBuilder(dir, name string, lockPath *string, conf *Config, idCount int,
 		msBuilder.diskFileWriter = NewHotFileWriter(msBuilder.diskFileWriter)
 	}
 
-	if IsChunkMetaCompressSelf() {
+	if conf.CompressChunkMeta {
 		msBuilder.chunkMetaCodecCtx = GetChunkMetaCodecCtx()
+		msBuilder.chunkMetaCodecCtx.EnableCompress()
 	}
 
 	return msBuilder
@@ -345,22 +342,13 @@ func (b *MsBuilder) writeToDisk(rowCounts int64) error {
 		b.mIndex.maxTime = maxT
 	}
 
-	if needSwitchChunkMeta(b.Conf, int(b.diskFileWriter.ChunkMetaBlockSize()), int(b.mIndex.count)) {
+	if config.ChunkMetaLimited(int(b.diskFileWriter.ChunkMetaBlockSize()), int(b.mIndex.count)) {
 		if err := b.SwitchChunkMeta(); err != nil {
 			return err
 		}
 	}
 
 	return nil
-}
-
-func needSwitchChunkMeta(conf *Config, size int, count int) bool {
-	maxCount := conf.maxChunkMetaItemCount
-	if GetChunkMetaCompressMode() != ChunkMetaCompressNone {
-		maxCount = util.CompressModMaxChunkMetaItemCount
-	}
-
-	return size >= conf.maxChunkMetaItemSize || count >= maxCount
 }
 
 func switchTsspFile(msb *MsBuilder, rec, totalRec *record.Record, rowsLimit int, fSize int64,
@@ -481,7 +469,11 @@ func (b *MsBuilder) writeDetachedPrimaryIndex(firstFlush bool, pkRec *record.Rec
 
 func (b *MsBuilder) NewIndexWriterBuilder(schema record.Schemas, indexRelation influxql.IndexRelation) {
 	b.indexWriterBuilder = index.NewIndexWriterBuilder()
-	b.indexWriterBuilder.NewIndexWriters(b.Path, b.msName, b.FileName.String(), *b.lock, schema, indexRelation)
+	b.indexWriterBuilder.NewIndexWriters(b.Path, b.msName, b.FileName.String(), *b.lock, schema, nil, indexRelation)
+	skipWriters := b.indexWriterBuilder.GetSkipIndexWriters()
+	for i := range skipWriters {
+		skipWriters[i].Open()
+	}
 }
 
 func (b *MsBuilder) writeSkipIndex(writeRec *record.Record, rowsPerSegment []int) error {
@@ -1407,8 +1399,11 @@ func (b *MsBuilder) Flush() error {
 	}
 
 	b.trailer.EnableTimeStore()
-	b.trailer.SetChunkMetaHeader(b.chunkMetaCodecCtx.GetHeader())
-	b.trailer.SetChunkMetaCompressFlag()
+	if b.chunkMetaCodecCtx != nil && b.chunkMetaCodecCtx.CompressEnabled() {
+		b.trailer.SetChunkMetaHeader(b.chunkMetaCodecCtx.GetHeader())
+		b.trailer.SetChunkMetaCompressFlag()
+	}
+
 	b.trailerData = b.trailer.Marshal(b.trailerData[:0])
 
 	b.trailerOffset = b.diskFileWriter.DataSize()
@@ -1520,4 +1515,10 @@ func (b *MsBuilder) WriteChunkMeta(cm *ChunkMeta) (int, error) {
 		b.log.Error("write chunk meta fail", zap.String("file", b.fd.Name()), zap.Error(err))
 	}
 	return wn, err
+}
+
+func (b *MsBuilder) Clean() {
+	if b.fd != nil {
+		CleanTempFile(b.fd)
+	}
 }

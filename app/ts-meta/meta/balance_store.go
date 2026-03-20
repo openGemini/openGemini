@@ -15,10 +15,13 @@
 package meta
 
 import (
+	"container/heap"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/openGemini/openGemini/lib/config"
@@ -250,8 +253,9 @@ func (s *Store) addMovePtTasks(db string, tasks *taskDatas, moveEvents []*MoveEv
 		shardDurations := s.data.GetShardDurationsByDbPt(db, task.ptId)
 		pt := s.data.GetPtInfo(db, task.ptId)
 		dn := s.data.DataNode(task.destDn)
-		moveEvents = append(moveEvents, NewMoveEvent(&meta.DbPtInfo{Db: db, Pti: pt, Shards: shardDurations, DBBriefInfo: dbBriefInfo},
-			task.srcDn, task.destDn, dn.AliveConnID, false))
+		e := NewMoveEvent(&meta.DbPtInfo{Db: db, Pti: pt, Shards: shardDurations, DBBriefInfo: dbBriefInfo}, task.srcDn, task.destDn, dn.AliveConnID, false)
+		logger.GetLogger().Info("new move event", zap.String("event", e.String()))
+		moveEvents = append(moveEvents, e)
 	}
 	return moveEvents
 }
@@ -815,4 +819,389 @@ func (s *Store) selectUpdateRGEvents() ([]string, []uint32, []uint32, [][]meta.P
 		}
 	}
 	return eventDbs, eventRgs, eventPts, eventPeers
+}
+
+type rpToBalance struct {
+	rp   string
+	msts map[string]mstToBalance
+}
+
+type mstToBalance struct {
+	mstName     string
+	prevIdxes   []int
+	numOfShards int32
+}
+
+type DBShardingPlans map[string]RPShardingPlans
+
+type RPShardingPlans map[string]ShardingPlans
+
+type ShardingPlans map[string][]int
+
+// RP balance for PTs
+func (s *Store) balanceRPPTWithLoads() (DBShardingPlans, error) {
+	shardingPlans := make(DBShardingPlans)
+	toPlan, ptNum := s.getRPPTToBalance()
+	for dbName, rps := range toPlan {
+		rpShardingPlans := make(RPShardingPlans)
+		for _, rp := range rps {
+			rpPtWriteStatus, err := s.GetPtWriteStatus(dbName, rp.rp)
+			if err != nil {
+				return nil, err
+			}
+			plan, err := s.balanceRPPT(dbName, rp, rpPtWriteStatus, ptNum)
+			if err != nil {
+				return nil, err
+			}
+			if len(plan) == 0 {
+				continue
+			}
+			rpShardingPlans[rp.rp] = plan
+		}
+		shardingPlans[dbName] = rpShardingPlans
+	}
+	return shardingPlans, nil
+}
+
+func (s *Store) getRPPTToBalance() (map[string][]rpToBalance, uint32) {
+	toPlan := make(map[string][]rpToBalance)
+	s.cacheMu.RLock()
+	defer s.cacheMu.RUnlock()
+	ptNum := s.cacheData.ClusterPtNum
+	s.cacheData.WalkDatabases(func(dbInfo *meta.DatabaseInfo) {
+		var rpToPlan []rpToBalance
+		dbInfo.WalkRetentionPolicy(func(rpInfo *meta.RetentionPolicyInfo) {
+			rp := rpToBalance{
+				rp:   rpInfo.Name,
+				msts: make(map[string]mstToBalance, len(rpInfo.Measurements)),
+			}
+			prevPtId := rpInfo.MaxShardGroupID()
+			for _, mstInfo := range rpInfo.Measurements {
+				prevShardIdxes := mstInfo.ShardIdexes[prevPtId]
+				mst := mstToBalance{
+					mstName:     mstInfo.Name,
+					prevIdxes:   prevShardIdxes,
+					numOfShards: mstInfo.InitNumOfShards,
+				}
+				rp.msts[mst.mstName] = mst
+			}
+			rpToPlan = append(rpToPlan, rp)
+		})
+		toPlan[dbInfo.Name] = rpToPlan
+	})
+	return toPlan, ptNum
+}
+
+func combineRPPTWriteStatus(dst MstPtStatus, status meta.PTMstWriteStatus) {
+	for ptId, mstWriteStatus := range status {
+		for mst, writeStatus := range mstWriteStatus {
+			shards := dst[mst]
+			shards = append(shards, &mstSharding{
+				ptId,
+				writeStatus,
+			})
+			dst[mst] = shards
+		}
+	}
+}
+
+func (s *Store) GetPtWriteStatus(db, rp string) (MstPtStatus, error) {
+	s.cacheMu.RLock()
+	ptInfos, ok := s.cacheData.PtView[db]
+	if !ok {
+		s.cacheMu.RUnlock()
+		return nil, fmt.Errorf("database %s not found", db)
+	}
+	errChan := make(chan error, 1)
+	nodes := make(map[uint64]*meta.DataNode)
+	for i := range ptInfos {
+		node := s.cacheData.DataNode(ptInfos[i].Owner.NodeID)
+		if node == nil {
+			s.Logger.Warn("[GetStorageStatus] DataNode not found", zap.Uint64("nodeId", ptInfos[i].Owner.NodeID))
+			continue
+		}
+		nodes[node.ID] = node
+	}
+	var wg sync.WaitGroup
+	statusChan := make(chan meta.PTMstWriteStatus, len(nodes))
+	for _, node := range nodes {
+		wg.Add(1)
+		go func(node *meta.DataNode, db, rp string) {
+			defer wg.Done()
+			status, err := s.NetStore.GetRPPTWriteStatus(node, db, rp)
+			if err != nil {
+				s.Logger.Error("[GetStorageStatus] netStore GetStorageStatus failed", zap.Error(err), zap.Uint64("nodeId", node.ID))
+				select {
+				case errChan <- err:
+				default:
+				}
+				return
+			}
+			statusChan <- status
+		}(node, db, rp)
+	}
+	s.cacheMu.RUnlock()
+
+	go func() {
+		wg.Wait()
+		close(statusChan)
+		close(errChan)
+	}()
+
+	mstPtStatus := make(MstPtStatus)
+	for {
+		select {
+		case err, ok := <-errChan:
+			if !ok {
+				continue
+			}
+			if err != nil {
+				return nil, err
+			}
+		case status, ok := <-statusChan:
+			if !ok {
+				return mstPtStatus, nil
+			}
+			combineRPPTWriteStatus(mstPtStatus, status)
+		}
+	}
+}
+
+type MstPtStatus map[string][]*mstSharding
+
+type mstSharding struct {
+	ptId  uint32
+	write int64
+}
+
+type mstForBalance struct {
+	mst         string
+	prevIdxes   map[int]int
+	shards      []*mstSharding
+	totalFlow   int64
+	numOfShards int
+}
+
+type ptAllocation struct {
+	ptId  uint32
+	load  int64
+	index int
+}
+
+type ptAllocationHeap []*ptAllocation
+
+func (h ptAllocationHeap) Len() int { return len(h) }
+func (h ptAllocationHeap) Less(i, j int) bool {
+	if h[i].load == h[j].load {
+		return h[i].ptId < h[j].ptId
+	}
+	return h[i].load < h[j].load
+}
+func (h ptAllocationHeap) Swap(i, j int) {
+	h[i], h[j] = h[j], h[i]
+	h[i].index = i
+	h[j].index = j
+}
+
+func (h *ptAllocationHeap) Push(x interface{}) {
+	node, ok := x.(*ptAllocation)
+	if !ok {
+		// node must be *ptAllocation
+		panic("Bug: ptAllocationHeap.Push: cannot push non-*ptAllocation type")
+	}
+
+	node.index = len(*h)
+	*h = append(*h, node)
+}
+
+func (h *ptAllocationHeap) Pop() interface{} {
+	old := *h
+	n := len(old)
+	node := old[n-1]
+	node.index = -1
+	*h = old[0 : n-1]
+	return node
+}
+
+// balanceRPPT balances the rp through all pt, as input, write traffic from mst to each pt during last shard group duration
+// is provided. After balance, which mst shard is written to which pt will be determined.
+func (s *Store) balanceRPPT(db string, rp rpToBalance, writeStatus MstPtStatus, ptNum uint32) (ShardingPlans, error) {
+	balancer := NewRPPTBalancer(db, rp, writeStatus, int(ptNum))
+	return balancer.Balance()
+}
+
+type RPPTBalancer struct {
+	PTs         []*ptAllocation
+	PTHeap      ptAllocationHeap
+	MSTs        []*mstForBalance
+	Allocations map[string][]int
+	MstPtMap    map[string]map[uint32]interface{}
+	PTNum       int
+}
+
+func (b *RPPTBalancer) sortMSTsByTotalFlow() {
+	sort.Slice(b.MSTs, func(i, j int) bool {
+		if b.MSTs[i].totalFlow == b.MSTs[j].totalFlow {
+			return b.MSTs[i].mst < b.MSTs[j].mst
+		}
+		return b.MSTs[i].totalFlow > b.MSTs[j].totalFlow
+	})
+}
+
+func (b *RPPTBalancer) sortMstShardsByFlow(m *mstForBalance) []*mstSharding {
+	shards := make([]*mstSharding, len(m.shards))
+	copy(shards, m.shards)
+	sort.Slice(shards, func(i, j int) bool {
+		if shards[i].write == shards[j].write {
+			return shards[i].ptId < shards[j].ptId
+		}
+		return shards[i].write > shards[j].write
+	})
+	return shards
+}
+
+// getMinLoadAvailablePt Obtain the smallest available load pt (excluding nodes that have already been assigned this table partition)
+func (b *RPPTBalancer) getMinLoadAvailablePt(mst string) *ptAllocation {
+	tempPT := make([]*ptAllocation, 0)
+
+	var availablePT *ptAllocation
+	for b.PTHeap.Len() > 0 {
+		pt, ok := heap.Pop(&b.PTHeap).(*ptAllocation)
+		if !ok {
+			// pt must be *ptAllocation type
+			return nil
+		}
+		tempPT = append(tempPT, pt)
+
+		// Check whether the node has been assigned the partition of this table.
+		if usedPT, exist := b.MstPtMap[mst]; exist {
+			if _, exist = usedPT[pt.ptId]; exist {
+				continue
+			}
+			availablePT = pt
+			break
+		}
+	}
+
+	for _, pt := range tempPT {
+		heap.Push(&b.PTHeap, pt)
+	}
+	return availablePT
+}
+
+func (b *RPPTBalancer) Balance() (ShardingPlans, error) {
+	idxes := make(map[string][]int, len(b.MSTs))
+
+	// 1.Sort mst by total flow in descending order.
+	b.sortMSTsByTotalFlow()
+
+	// 2. Traverse each table for allocation
+	for _, mst := range b.MSTs {
+		alloc := make([]int, mst.numOfShards)
+		mstName := mst.mst
+		b.MstPtMap[mstName] = make(map[uint32]interface{})
+
+		// Sort the table partitions in descending order of traffic.
+		sortedShards := b.sortMstShardsByFlow(mst)
+
+		// allocate shards for the mst
+		for _, shard := range sortedShards {
+			idx, ok := mst.prevIdxes[int(shard.ptId)]
+			if !ok {
+				continue
+			}
+			tarPt := b.getMinLoadAvailablePt(mstName)
+			if tarPt == nil {
+				return nil, errors.New("RPPT Balance failed: no available pts for measurement shards")
+			}
+
+			tarPt.load += shard.write
+			b.MstPtMap[mstName][tarPt.ptId] = struct{}{}
+			alloc[idx] = int(tarPt.ptId)
+		}
+		idxes[mstName] = alloc
+	}
+	b.Allocations = idxes
+	return b.Allocations, nil
+}
+
+func NewRPPTBalancer(db string, rp rpToBalance, status MstPtStatus, ptNum int) *RPPTBalancer {
+	nodes := make([]*ptAllocation, 0, ptNum)
+	nodeHeap := make(ptAllocationHeap, 0, ptNum)
+	for i := 0; i < ptNum; i++ {
+		node := &ptAllocation{ptId: uint32(i)}
+		nodes = append(nodes, node)
+		nodeHeap = append(nodeHeap, node)
+	}
+	heap.Init(&nodeHeap)
+
+	mstMap := make(map[string]*mstForBalance)
+	for mst, writeStatus := range status {
+		mstStatus, ok := mstMap[mst]
+		if !ok {
+			mstTB := rp.msts[mst]
+			// if the numOfShards change, just random assign at first time
+			numOfShards := int(mstTB.numOfShards)
+			if numOfShards == 0 {
+				numOfShards = ptNum
+			}
+			// for case numOfShards is 0, which means map to all pts, then the prevIdxes should be nil
+			if numOfShards != len(mstTB.prevIdxes) && len(mstTB.prevIdxes) != 0 {
+				continue
+			}
+			mstStatus = &mstForBalance{
+				mst:         mst,
+				numOfShards: numOfShards,
+				prevIdxes:   idxSliceToMap(mstTB.prevIdxes, numOfShards),
+			}
+			mstMap[mst] = mstStatus
+		}
+		mstStatus.shards = writeStatus
+		for _, sh := range writeStatus {
+			mstStatus.totalFlow += sh.write
+		}
+	}
+
+	// for shards no write record, fill with zero values
+	msts := make([]*mstForBalance, 0, len(mstMap))
+	shs := make(map[uint32]interface{}, ptNum)
+	for _, mst := range mstMap {
+		for _, sh := range mst.shards {
+			shs[sh.ptId] = struct{}{}
+		}
+		for _, idx := range mst.prevIdxes {
+			ptId := uint32(idx)
+			if _, ok := shs[ptId]; !ok {
+				mst.shards = append(mst.shards, &mstSharding{
+					ptId: ptId,
+				})
+			}
+		}
+		msts = append(msts, mst)
+		clear(shs)
+	}
+
+	return &RPPTBalancer{
+		PTs:      nodes,
+		PTHeap:   nodeHeap,
+		MSTs:     msts,
+		MstPtMap: make(map[string]map[uint32]interface{}),
+		PTNum:    ptNum,
+	}
+}
+
+func idxSliceToMap(slice []int, numOfShards int) map[int]int {
+	if len(slice) == 0 {
+		// for  case numOfShards in mstInfo is 0
+		res := make(map[int]int, numOfShards)
+		for i := 0; i < numOfShards; i++ {
+			res[i] = i
+		}
+		return res
+	}
+	res := make(map[int]int, len(slice))
+	for i, v := range slice {
+		res[v] = i
+	}
+	return res
 }

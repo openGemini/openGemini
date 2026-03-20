@@ -193,7 +193,7 @@ func (enc *Time) constDeltaDecoding(out []byte) ([]byte, error) {
 		return nil, fmt.Errorf("time: too small data for decode %v", len(in))
 	}
 
-	first := numberenc.UnmarshalUint64(in)
+	val := int64(numberenc.UnmarshalUint64(in))
 	in = in[8:]
 
 	//the delta value
@@ -209,16 +209,30 @@ func (enc *Time) constDeltaDecoding(out []byte) ([]byte, error) {
 		return nil, fmt.Errorf("time: invalid const delta count")
 	}
 
+	itemCount := deltaCount + 1
 	outPos := len(out)
-	l := int(deltaCount+1) * util.Int64SizeBytes
-	out = growBuffer(out, l)
-	out = out[:l+outPos]
+	size := int(itemCount) * util.Int64SizeBytes
+	out = growBuffer(out, size)
+	out = out[:size+outPos]
 
 	outArr := util.Bytes2Int64Slice(out[outPos:])
-	outArr[0] = int64(first)
 	v := int64(delta)
-	for i := uint64(1); i < deltaCount+1; i++ {
-		outArr[i] = outArr[i-1] + v
+
+	m := (itemCount / 4) * 4
+	for i := uint64(0); i < m; i += 4 {
+		outArr[i] = val
+		val += v
+		outArr[i+1] = val
+		val += v
+		outArr[i+2] = val
+		val += v
+		outArr[i+3] = val
+		val += v
+	}
+
+	for i := m; i < itemCount; i++ {
+		outArr[i] = val
+		val += v
 	}
 
 	return out, nil

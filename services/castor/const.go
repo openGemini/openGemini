@@ -16,7 +16,11 @@ limitations under the License.
 
 package castor
 
-import "time"
+import (
+	"time"
+
+	"github.com/openGemini/openGemini/lib/opentelemetry"
+)
 
 type internalTagKey string // distingush data tag and meta-info tag in record
 
@@ -37,6 +41,7 @@ const (
 	OutputInfo      internalTagKey = "_outputInfo"
 	AlgoParams      internalTagKey = "_algoParams"
 	Metric          internalTagKey = "_metric"
+	TraceContext    internalTagKey = opentelemetry.TraceContextHeader
 )
 
 var internalKeySet = map[string]struct{}{
@@ -54,6 +59,7 @@ var internalKeySet = map[string]struct{}{
 	string(PostProcessType): {},
 	string(ResultSeries):    {},
 	string(OutputInfo):      {},
+	string(TraceContext):    {},
 }
 
 type resultFieldKey string // validate result from castor
@@ -82,8 +88,8 @@ const (
 )
 
 const (
-	maxRespBufSize    int           = 1000
-	chanBufferSize    int           = 100
+	maxRespBufSize    int           = 10000
+	chanBufferSize    int           = 10000
 	getCliTimeout     time.Duration = 2 * time.Second
 	connCheckInterval time.Duration = 5 * time.Second
 	maxSendRetry      int           = 1

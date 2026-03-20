@@ -16,6 +16,7 @@ package encoding
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/klauspost/compress/snappy"
 	"github.com/klauspost/compress/zstd"
@@ -256,12 +257,12 @@ func (enc *String) decodingInit(in []byte, out []byte) error {
 	in = in[:compLen]
 
 	enc.outLen = len(out)
-	if cap(out) < enc.srcLen+enc.outLen {
-		n := enc.srcLen + enc.outLen - cap(out)
-		out = out[:cap(out)]
-		out = append(out, make([]byte, n)...)
+	size := enc.srcLen + enc.outLen
+	if enc.outLen == 0 && cap(out) < size {
+		out = make([]byte, size)
+	} else {
+		out = slices.Grow(out, size)[:size]
 	}
-	out = out[:enc.srcLen+enc.outLen]
 
 	enc.buf.Reset(in)
 	if enc.encodingType == StringCompressedLz4 {

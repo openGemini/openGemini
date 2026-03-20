@@ -16,6 +16,7 @@ package numberenc
 
 import (
 	"encoding/binary"
+	"slices"
 	"unsafe"
 
 	"github.com/openGemini/openGemini/lib/util"
@@ -121,13 +122,7 @@ func UnmarshalInt64Slice2Bytes(src []byte, dst []byte) []byte {
 // MarshalUint32SliceAppend appends marshaled v to dst and returns the result.
 func MarshalUint32SliceAppend(dst []byte, us []uint32) []byte {
 	usLen := len(us) * util.Uint32SizeBytes
-	preLen := len(dst)
-	if cap(dst) == 0 {
-		dst = make([]byte, 0, usLen)
-	} else if cap(dst)-preLen < usLen {
-		dst = append(dst, make([]byte, usLen)...)
-		dst = dst[:preLen]
-	}
+	dst = slices.Grow(dst, usLen)
 	for i := range us {
 		dst = MarshalUint32Append(dst, us[i])
 	}

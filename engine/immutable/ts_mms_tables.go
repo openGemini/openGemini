@@ -24,10 +24,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/influxdata/influxdb/logger"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
-	Log "github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"go.uber.org/zap"
@@ -67,12 +66,12 @@ func (t *tsImmTableImpl) compactToLevel(m *MmsTables, group FilesInfo, full, isN
 	var cLog *zap.Logger
 	var logEnd func()
 	if isNonStream {
-		cLog, logEnd = logger.NewOperation(log, "Compaction", group.name)
+		cLog, logEnd = logger.GetCompactLogger("Compaction", group.name)
 	} else {
-		cLog, logEnd = logger.NewOperation(log, "StreamCompaction", group.name)
+		cLog, logEnd = logger.GetCompactLogger("StreamCompaction", group.name)
 	}
 	defer logEnd()
-	lcLog := Log.NewLogger(errno.ModuleCompact).SetZapLogger(cLog)
+	lcLog := logger.NewLogger(errno.ModuleCompact).SetZapLogger(cLog)
 	start := time.Now()
 	lcLog.Debug("start compact file", zap.Uint64("shid", group.shId), zap.Any("seqs", group.oldFids), zap.Time("start", start))
 	lcLog.Debug(fmt.Sprintf("compactionGroup: name=%v, groups=%v", group.name, group.oldFids))

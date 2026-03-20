@@ -17,6 +17,8 @@ package resourceallocator
 import (
 	"errors"
 	"time"
+
+	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 )
 
 type ResourceType int64
@@ -51,9 +53,12 @@ func InitResAllocator(threshold, minAllocNum, minShardsAllocNum, funcType int64,
 		if e != nil {
 			return e
 		}
+		stat.NewStoreQuery().ShardResourceHook = shardsAllocator.Idle
 		resourceArr[ShardsParallelismRes] = shardsAllocator
 	case SeriesParallelismRes:
-		resourceArr[SeriesParallelismRes] = NewSeriesParallelismAllocator(maxWaitTime, threshold)
+		allocator := NewSeriesParallelismAllocator(maxWaitTime, threshold)
+		stat.NewStoreQuery().SeriesResourceHook = allocator.Idle
+		resourceArr[SeriesParallelismRes] = allocator
 	default:
 		return ErrResTypeNotFound
 	}

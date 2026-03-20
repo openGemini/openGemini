@@ -21,6 +21,9 @@ const (
 	DefaultMaxLoadFactor       = 0.5
 )
 
+var zeroInt64Page Int64Array = make(Int64Array, Int64PageSize)
+var zeroBytePage ByteArray = make(ByteArray, BytePageSize)
+
 type hashmap struct {
 	slots  Int64DoubleArray
 	hashes Int64DoubleArray // cache hashes for high-performance re-hashing
@@ -59,6 +62,7 @@ func (m *hashmap) id(index uint64) int64 {
 func (m *hashmap) rehash() {
 	newCapacity := m.hashCapacity << 1
 	m.slots.grow(newCapacity)
+	m.hashes.grow(newCapacity)
 	m.mask = newCapacity - 1
 
 	reset := func(index, id uint64) {
@@ -96,4 +100,30 @@ func (m *hashmap) rehash() {
 
 	m.hashCapacity = newCapacity
 	m.maxSize = uint64(float64(m.hashCapacity) * m.maxLoadFactor)
+}
+
+// clear resets the hashmap to its initial empty state while preserving capacity,
+// load factor, and other configuration parameters for memory reuse. This allows
+// efficient reuse of allocated memory instead of creating new hashmaps repeatedly.
+//
+// Fields that are preserved (not reset):
+// - maxLoadFactor: load factor configuration
+// - hashCapacity: table capacity
+// - mask: derived from hashCapacity
+// - maxSize: derived from hashCapacity and maxLoadFactor
+//
+// Fields that are reset:
+// - size: number of entries (reset to 0)
+// - slots: all slots cleared to 0
+// - hashes: all hash values cleared to 0
+func (m *hashmap) clear() {
+	// Reset size to 0
+	m.size = 0
+
+	// Clear all slots/hashes to empty (set to 0)
+	int64PageNum := m.hashCapacity >> int64PageShift
+	for i := 0; i < int(int64PageNum); i++ {
+		copy(m.slots[i], zeroInt64Page)
+		copy(m.hashes[i], zeroInt64Page)
+	}
 }

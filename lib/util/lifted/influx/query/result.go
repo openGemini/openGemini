@@ -12,10 +12,9 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/bytedance/sonic"
+	"github.com/apache/arrow/go/v13/arrow"
 	"github.com/influxdata/influxdb/models"
 	"github.com/influxdata/influxql"
-	json "github.com/json-iterator/go"
 )
 
 const (
@@ -98,9 +97,14 @@ type Result struct {
 	StatementID int
 	Series      models.Rows
 	Records     []*models.RecordContainer
-	Messages    []*Message
-	Partial     bool
-	Err         error
+	// output schema when using arrow flight protocol to get flight info
+	Schema   *arrow.Schema
+	Messages []*Message
+	Partial  bool
+	Err      error
+
+	JSONBuf    []byte
+	FreeHandle func()
 }
 
 // MarshalJSON encodes the result into JSON.
@@ -123,7 +127,7 @@ func (r *Result) MarshalJSON() ([]byte, error) {
 		o.Err = r.Err.Error()
 	}
 
-	return sonic.ConfigStd.Marshal(&o)
+	return json2.Marshal(&o)
 }
 
 // UnmarshalJSON decodes the data into the Result struct
@@ -136,7 +140,7 @@ func (r *Result) UnmarshalJSON(b []byte) error {
 		Err         string        `json:"error,omitempty"`
 	}
 
-	err := json.Unmarshal(b, &o)
+	err := json2.Unmarshal(b, &o)
 	if err != nil {
 		return err
 	}

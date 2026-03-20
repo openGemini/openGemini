@@ -33,9 +33,11 @@ type ReadContext struct {
 
 	ops             []*comm.CallOption
 	tr              util.TimeRange
+	isTimeDisorder  bool
 	Ascending       bool
 	onlyFirstOrLast bool
 	hasPrimaryKey   bool
+	isCsStore       bool
 	origData        []byte
 
 	readBuf []byte
@@ -120,6 +122,22 @@ func (d *ReadContext) Release() {
 
 func (d *ReadContext) SetTr(tr util.TimeRange) {
 	d.tr = tr
+}
+
+func (d *ReadContext) SetTimeDisorder() {
+	d.isTimeDisorder = true
+}
+
+func (d *ReadContext) IsTimeDisorder() bool {
+	return d.isTimeDisorder
+}
+
+func (d *ReadContext) SetCsStore() {
+	d.isCsStore = true
+}
+
+func (d *ReadContext) IsCsStore() bool {
+	return d.isCsStore
 }
 
 func (d *ReadContext) InitPreAggBuilder() {

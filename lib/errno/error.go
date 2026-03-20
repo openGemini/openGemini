@@ -41,6 +41,7 @@ const (
 	NodeStore  = 3
 	NodeServer = 4
 	NodeData   = 5
+	NodeTask   = 6
 )
 
 const (
@@ -325,6 +326,7 @@ var retryableErrnos = []Errno{
 	PtNotFound,
 	DBPTClosed,
 	ShardMetaNotFound,
+	LastRowRetry,
 }
 
 var retryableErrStrs = []string{

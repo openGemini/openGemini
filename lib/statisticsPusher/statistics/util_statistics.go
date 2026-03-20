@@ -49,7 +49,7 @@ func addTagFieldToBuffer(statisticsName string, tagMap map[string]string, fieldM
 		buffer = append(buffer, k...)
 		buffer = append(buffer, '=')
 		switch item := v.(type) {
-		case int64, float64:
+		case int64, uint64, float64:
 			buffer = append(buffer, fmt.Sprintf("%v", item)...)
 		case string:
 			buffer = append(buffer, formatString(item, true)...)

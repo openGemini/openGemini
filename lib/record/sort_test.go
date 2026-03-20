@@ -31,7 +31,6 @@ func SortAndDedup(table *mutable.MemTable, msName string) {
 	if err != nil {
 		return
 	}
-	mutable.JoinWriteRec(table, msName)
 	msInfo.GetWriteChunk().SortRecord(0)
 }
 

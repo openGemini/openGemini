@@ -21,17 +21,18 @@ import (
 	"os"
 	"testing"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/rpn"
+	"github.com/openGemini/openGemini/lib/util/lifted/encoding"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
@@ -389,6 +390,20 @@ func TestTextIndexReader(t *testing.T) {
 	ok, err := reader.MayBeInFragment(0)
 	assert.Equal(t, err, nil)
 	assert.Equal(t, ok, true)
+
+	option.Condition = &influxql.BinaryExpr{
+		Op:  influxql.UNMATCHPHRASE,
+		LHS: &influxql.VarRef{Val: field},
+		RHS: &influxql.StringLiteral{Val: "AppleWebKit"},
+	}
+	rpnExpr = rpn.ConvertToRPNExpr(option.GetCondition())
+	reader, err = NewTextIndexReader(rpnExpr, schema, option, false)
+	assert.Equal(t, err, nil)
+	err = reader.ReInit(dataFile)
+	assert.Equal(t, err, nil)
+	ok, err = reader.MayBeInFragment(0)
+	assert.Equal(t, err, nil)
+	assert.Equal(t, ok, true)
 	reader.Close()
 
 	// test hit 0
@@ -456,6 +471,91 @@ func TestTextIndexReader(t *testing.T) {
 	ok, err = reader.MayBeInFragment(0)
 	assert.Equal(t, err, nil)
 	assert.Equal(t, ok, false)
-
 	reader.Close()
+}
+
+func TestRunContainerGetCounts(t *testing.T) {
+	count := 0
+	countPointer := &count
+	pairs := &[]RunPair{}
+	testContainerGetCounts(t,
+		func(start, end int) {
+			*countPointer++
+			*pairs = append(*pairs, RunPair{uint16(start), uint16(end - start)})
+		},
+		func() Container {
+			bytes := []byte{}
+			bytes = encoding.MarshalUint16(bytes, uint16(*countPointer))
+			for _, pair := range *pairs {
+				bytes = encoding.MarshalUint16(bytes, pair.Value)
+				bytes = encoding.MarshalUint16(bytes, pair.Len)
+			}
+			c := NewRunContainer(&ContainerHead{})
+			_, err := c.Unmarshal(bytes)
+			require.NoError(t, err)
+			return c
+		},
+	)
+}
+
+func TestArrayContainerGetCounts(t *testing.T) {
+	count := 0
+	countPointer := &count
+	ids := &[]int{}
+	testContainerGetCounts(t,
+		func(start, end int) {
+			*countPointer += end - start
+			for i := start; i < end; i++ {
+				*ids = append(*ids, i)
+			}
+		},
+		func() Container {
+			bytes := []byte{}
+			for _, id := range *ids {
+				bytes = encoding.MarshalUint16(bytes, uint16(id))
+			}
+			c := NewArrayContainer(&ContainerHead{Cardinality: uint32(count)})
+			_, err := c.Unmarshal(bytes)
+			require.NoError(t, err)
+			return c
+		},
+	)
+}
+
+func TestBitsetContainerGetCounts(t *testing.T) {
+	c := NewBitsetContainer(&ContainerHead{})
+	testContainerGetCounts(t,
+		func(start, end int) {
+			c.SetBitsetRange(start, end)
+		},
+		func() Container {
+			return c
+		},
+	)
+}
+
+func testContainerGetCounts(t *testing.T, setRange func(int, int), getContainer func() Container) {
+	rowIds := []uint32{}
+	n := 1 << 16
+	k := 1000
+	for i := 0; i < n; i += k {
+		rowIds = append(rowIds, uint32(i))
+	}
+	for i := 0; i < n; i += 10 {
+		setRange(i, i+3)
+	}
+	counts := make([]int64, len(rowIds))
+	getContainer().GetCounts(rowIds, counts)
+	for i, count := range counts {
+		expect := int64(k / 10 * 3)
+		if i == len(rowIds)-1 {
+			size := uint32(n) - rowIds[i]
+			if size%10 < 3 {
+				expect = int64(size/10*3 + size%3)
+			} else {
+				expect = int64(size/10*3 + 3)
+			}
+		}
+		require.Equal(t, expect, count)
+	}
 }

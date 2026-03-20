@@ -56,8 +56,10 @@ type Engine interface {
 type Storage interface {
 	WriteRows(db, rp string, ptId uint32, shardID uint64, rows []influx.Row, binaryRows []byte) error
 	WriteRec(db, rp, mst string, ptId uint32, shardID uint64, rec *record.Record, binaryRec []byte) error
-	RegisterOnPTOffload(id uint64, f func(ptID uint32))
-	UninstallOnPTOffload(id uint64)
+	RegisterOnPTLoaded(key engine.CallbackKey, f engine.PtLoadFunc)
+	UninstallOnPTLoaded(key engine.CallbackKey)
+	RegisterOnPTOffload(key engine.CallbackKey, f engine.PtOffLoadFunc)
+	UninstallOnPTOffload(key engine.CallbackKey)
 }
 
 type WritePointsWorkIF interface {
@@ -112,6 +114,7 @@ type Logger interface {
 	Error(msg string, fields ...zap.Field)
 	Info(msg string, fields ...zap.Field)
 	Debug(msg string, fields ...zap.Field)
+	GetZapLogger() *zap.Logger
 }
 
 type MetaClient interface {
@@ -151,11 +154,12 @@ type Task interface {
 	Put(r ChanData)
 	getSrcInfo() *meta.StreamMeasurementInfo
 	getDesInfo() *meta.StreamMeasurementInfo
-	getCurrentTimestamp() int64
+	getCleanTimestamp() int64
 	getLoadStatus() map[uint32]*flushStatus
 	IsInit() bool
 	FilterRowsByCond(cache ChanData) (bool, error)
 	cleanPtInfo(ptID uint32)
+	initPtInfo(db string, ptID uint32)
 }
 
 type ChanData interface {
@@ -341,7 +345,7 @@ func (s *Stream) updateTask() {
 }
 
 func (s *Stream) Run() {
-	s.Logger.Info("start stream")
+	s.Logger.GetZapLogger().Info("start stream")
 	s.updateTask()
 	go s.cleanStreamWal()
 	go s.detectReplay()
@@ -389,25 +393,32 @@ func (s *Stream) detectReplay() {
 			if !init {
 				continue
 			}
-			s.Logger.Debug("stream replay task init", zap.Any("initTime", initTime))
 			var replayCount int
+			var hasData bool
 			// TODO: replay function support get data based pt
 			for ptID := range initTime {
 				var err error
 				isLastPT := replayCount == len(initTime)-1
 				replayCount++
-				err = engine.NewStreamWalManager().Replay(ctx, ptID, isLastPT)
+				err = engine.NewStreamWalManager().Replay(ctx, ptID, isLastPT, &hasData)
 				if err != nil {
 					s.Logger.Error("replay task init error", zap.Error(err))
 				}
 			}
-			s.Logger.Debug("stream replay task init over")
 		}
 	}
 }
 
 func (s *Stream) StreamHandler(rows influx.Rows, isLastRows bool, fileNames []string) error {
-	if (len(rows) == 0 || len(fileNames) == 0) && !isLastRows {
+	if isLastRows {
+		r := &ReplayRow{
+			isLastRows: true,
+		}
+		s.cache <- r
+		s.Logger.Info("replay last rows")
+		return nil
+	}
+	if len(rows) == 0 || len(fileNames) == 0 {
 		return nil
 	}
 
@@ -415,6 +426,8 @@ func (s *Stream) StreamHandler(rows influx.Rows, isLastRows bool, fileNames []st
 	if err != nil {
 		return err
 	}
+
+	s.Logger.Info("replay stream rows", zap.String("db", db), zap.Uint32("ptID", ptID), zap.Uint64("shardID", shardID), zap.Int("row number", len(rows)))
 
 	r := &ReplayRow{}
 	r.isLastRows = isLastRows
@@ -424,16 +437,14 @@ func (s *Stream) StreamHandler(rows influx.Rows, isLastRows bool, fileNames []st
 	r.db = db
 	r.rp = rp
 
-	s.stats.AddStreamIn(1)
-	s.stats.AddStreamInNum(int64(len(r.rows)))
+	s.stats.AddStreamReplayInNum(int64(len(r.rows)))
 	s.cache <- r
 
 	return nil
 }
 
 func (s *Stream) cleanStreamWal() {
-	d := 30 * time.Second
-	util.TickerRun(d, s.abort, s.deleteStreamWal, s.AbortFunc)
+	util.TickerRun(time.Minute, s.abort, s.deleteStreamWal, s.AbortFunc)
 }
 
 func (s *Stream) deleteStreamWal() {
@@ -444,14 +455,15 @@ func (s *Stream) deleteStreamWal() {
 		flushWindowTime = int64(math.MaxInt64)
 		s.tasks.Range(func(key, value any) bool {
 			w, _ := value.(Task)
-			if flushWindowTime > w.getCurrentTimestamp() {
-				flushWindowTime = w.getCurrentTimestamp()
+
+			if flushWindowTime > w.getCleanTimestamp() {
+				flushWindowTime = w.getCleanTimestamp()
 			}
 			return true
 		})
 	}
 	engine.NewStreamWalManager().Free(flushWindowTime)
-	s.Logger.Debug("clean stream wal", zap.Int64("flushWindowTime", flushWindowTime))
+	s.Logger.Info("clean stream wal", zap.Int64("flushWindowTime", flushWindowTime))
 }
 
 // Close shutdown
@@ -466,22 +478,23 @@ func (s *Stream) Close() {
 }
 
 func (s *Stream) DeleteTask(id uint64) {
-	s.Logger.Info("delete stream task", zap.String("streamId", strconv.FormatUint(id, 10)))
+	s.Logger.GetZapLogger().Info("delete stream task", zap.String("streamId", strconv.FormatUint(id, 10)))
 	v, exist := s.tasks.Load(id)
 	if exist {
 		w, _ := v.(Task)
 		err := w.stop()
 		if err != nil {
-			s.Logger.Error("task stop fail", zap.String("name", w.getName()),
+			s.Logger.GetZapLogger().Error("task stop fail", zap.String("name", w.getName()),
 				zap.Error(err))
 		}
 		s.tasks.Delete(id)
-		s.store.UninstallOnPTOffload(id)
+		s.store.UninstallOnPTLoaded(engine.CallbackKey{ModuleID: engine.ModuleStream, ItemID: id})
+		s.store.UninstallOnPTOffload(engine.CallbackKey{ModuleID: engine.ModuleStream, ItemID: id})
 	}
 }
 
 func (s *Stream) RegisterTask(info *meta.StreamInfo, fieldCalls []*streamLib.FieldCall) error {
-	s.Logger.Info("register stream task", zap.String("streamName", info.Name), zap.String("streamId", strconv.FormatUint(info.ID, 10)))
+	s.Logger.GetZapLogger().Info("register stream task", zap.String("streamName", info.Name), zap.String("streamId", strconv.FormatUint(info.ID, 10)))
 	start := time.Now().Truncate(info.Interval).Add(info.Interval)
 	var logger Logger
 	l, ok := s.Logger.(*Logger2.Logger)
@@ -558,19 +571,21 @@ func (s *Stream) RegisterTask(info *meta.StreamInfo, fieldCalls []*streamLib.Fie
 			// new task need write a flush time,which used to replay data
 			pts := s.cli.GetNodePT(baseTask.des.Database)
 			for _, pt := range pts {
-				tagTask.snapshot(pt)
+				tagTask.snapshot(pt, false)
 			}
 		}
 		task = tagTask
-		s.store.RegisterOnPTOffload(info.ID, task.cleanPtInfo)
+		s.store.RegisterOnPTLoaded(engine.CallbackKey{ModuleID: engine.ModuleStream, ItemID: info.ID}, task.initPtInfo)
+		s.store.RegisterOnPTOffload(engine.CallbackKey{ModuleID: engine.ModuleStream, ItemID: info.ID}, task.cleanPtInfo)
 	}
-	go func() {
-		err := task.run()
-		if err != nil {
-			s.Logger.Error("task run fail", zap.String("name", task.getName()),
-				zap.Error(err))
-		}
-	}()
+
+	// Ensure that the task is stored only after the 'task.initVar' call has been executed.
+	// Avoid performing delete operations before initialization is complete.
+	err := task.run()
+	if err != nil {
+		s.Logger.GetZapLogger().Error("task run fail", zap.String("name", task.getName()),
+			zap.Error(err))
+	}
 	s.tasks.Store(info.ID, task)
 	return nil
 }
@@ -591,7 +606,7 @@ func (s *Stream) filter() {
 		case c := <-s.cache:
 			switch r := c.(type) {
 			case *CacheRow:
-				s.stats.AddStreamFilter(1)
+				s.stats.AddStreamFilterIn(1)
 				release := func() {
 					if atomic.AddInt64(&r.refCount, -1) == 0 {
 						r.ww.PutWritePointsWork()
@@ -625,7 +640,7 @@ func (s *Stream) filter() {
 					}
 				}
 			case *CacheRecord:
-				s.stats.AddStreamFilter(1)
+				s.stats.AddStreamFilterIn(1)
 				ref, indexes := s.recordRangeTask(r)
 				if !ref {
 					continue
@@ -639,19 +654,17 @@ func (s *Stream) filter() {
 					}
 				}
 			case *ReplayRow:
-				_, indexes := s.rowsRangeTask(r)
-
+				s.stats.AddStreamFilterIn(1)
 				if r.isLastRows {
-					for i := range indexes {
+					s.tasks.Range(func(key, value interface{}) bool {
 						newRows := &LastReplayRow{}
-						v, ok := s.tasks.Load(i)
-						if ok {
-							w, _ := v.(Task)
-							w.Put(newRows)
-						}
-					}
+						v, _ := value.(Task)
+						v.Put(newRows)
+						return true
+					})
 					continue
 				}
+				_, indexes := s.rowsRangeTask(r)
 				for i, vs := range indexes {
 					for j := 0; j+1 < len(vs); j = j + 2 {
 						newRows := &ReplayRow{}
@@ -661,6 +674,8 @@ func (s *Stream) filter() {
 						v, ok := s.tasks.Load(i)
 						if ok {
 							w, _ := v.(Task)
+							s.stats.AddStreamFilterOutNum(int64(len(newRows.rows)))
+							s.stats.AddStreamFilterOut(1)
 							w.Put(newRows)
 						}
 					}
@@ -686,7 +701,7 @@ func (s *Stream) rowsRangeTask(r Rows) (bool, map[uint64][]int) {
 		if db != v.getSrcInfo().Database || rp != v.getSrcInfo().RetentionPolicy {
 			return true
 		}
-		s.stats.AddStreamFilterNum(int64(len(rows)))
+		s.stats.AddStreamFilterInNum(int64(len(rows)))
 		index, exist := indexes[i]
 		if !exist {
 			index = []int{}
@@ -731,7 +746,7 @@ func (s *Stream) recordRangeTask(r *CacheRecord) (bool, map[uint64]struct{}) {
 		if r.db != v.getSrcInfo().Database || r.rp != v.getSrcInfo().RetentionPolicy || name != v.getSrcInfo().Name {
 			return true
 		}
-		s.stats.AddStreamFilterNum(int64(r.rec.RowNums()))
+		s.stats.AddStreamFilterInNum(int64(r.rec.RowNums()))
 		indexes[i] = struct{}{}
 		ref = true
 		return true

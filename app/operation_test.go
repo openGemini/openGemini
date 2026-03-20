@@ -24,6 +24,7 @@ import (
 	"github.com/openGemini/openGemini/app/ts-store/transport/query"
 	"github.com/openGemini/openGemini/engine/executor"
 	query2 "github.com/openGemini/openGemini/lib/util/lifted/influx/query"
+	"github.com/stretchr/testify/require"
 )
 
 func TestProactiveManager_ServiceStartAndClose(t *testing.T) {
@@ -68,4 +69,12 @@ func TestProactiveManager_ServiceKillQuery(t *testing.T) {
 	if len(val) != 0 {
 		t.Error("TestProactiveManager_ServiceKillQuery fail")
 	}
+}
+
+func TestProactiveManager_GetQueryList(t *testing.T) {
+	qm := query.NewManager(1)
+	qm.Add(1, handler2.NewSelect(nil, nil, &executor.RemoteQuery{Opt: query2.ProcessorOptions{QueryId: 1}, Database: "_internal"}))
+	pm := app.NewProactiveManager()
+	got := pm.GetQueryList(1)
+	require.Equal(t, 0, len(got))
 }

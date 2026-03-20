@@ -36,6 +36,8 @@ import (
 	"go.uber.org/zap"
 )
 
+const updateInterval = 10 * time.Second
+
 type TimeTask struct {
 	values      []float64
 	validValues []bool
@@ -75,7 +77,9 @@ func (s *TimeTask) getLoadStatus() map[uint32]*flushStatus {
 }
 
 func (s *TimeTask) stop() error {
-	close(s.abort)
+	if s.abort != nil {
+		close(s.abort)
+	}
 	return s.err
 }
 
@@ -84,11 +88,8 @@ func (s *TimeTask) getName() string {
 }
 
 func (s *TimeTask) run() error {
-	err := s.initVar()
-	if err != nil {
-		s.err = err
-		return err
-	}
+	var err error
+	s.initVar()
 	s.info, err = s.cli.Measurement(s.des.Database, s.des.RetentionPolicy, s.des.Name)
 	if err != nil {
 		s.err = err
@@ -96,12 +97,22 @@ func (s *TimeTask) run() error {
 	}
 
 	if s.window == 0 {
+		go s.setCurFlushTime()
 		return nil
 	}
 
 	go s.monitorRecover(s.consumeData)
 	go s.cycleFlush()
 	return nil
+}
+
+func (s *TimeTask) initPtInfo(db string, ptID uint32) {
+}
+
+func (s *TimeTask) setCurFlushTime() {
+	util.TickerRun(updateInterval, s.abort, func() {
+		atomic.StoreInt64(&s.curFlushTime, time.Now().UnixNano())
+	}, func() {})
 }
 
 func (s *TimeTask) monitorRecover(f func()) {
@@ -116,7 +127,7 @@ func (s *TimeTask) monitorRecover(f func()) {
 	}
 }
 
-func (s *TimeTask) initVar() error {
+func (s *TimeTask) initVar() {
 	s.maxDuration = s.windowNum * s.window.Nanoseconds()
 	s.abort = make(chan struct{})
 	// chan len zero, make updateWindow cannot parallel execute with flush
@@ -148,7 +159,6 @@ func (s *TimeTask) initVar() error {
 	s.startTimeStamp = s.start.UnixNano()
 	s.endTimeStamp = s.end.UnixNano()
 	s.maxTimeStamp = s.startTimeStamp + s.maxDuration
-	return nil
 }
 
 // consume data from window cache, and update window metadata
@@ -956,4 +966,8 @@ func splitMatchedRows(srcRows []influx.Row, matchedIndexes []int, dstMstInfo *me
 	}
 
 	return dstRows
+}
+
+func (s *TimeTask) getCleanTimestamp() int64 {
+	return s.getCurrentTimestamp()
 }

@@ -32,13 +32,20 @@ func (f *{{.Name}}LinearFillProcessor) fillHelperFunc(input, output, prev Chunk,
 	if (prev != nil && fillItem.inputReadAt >= fillItem.prevReadAt) &&
 		(fillItem.prevReadAt < prev.Len() && !prev.Column(f.inOrdinal).IsNilV2(fillItem.prevReadAt)) &&
 		(fillItem.inputReadAt < input.Len() && !input.Column(f.inOrdinal).IsNilV2(fillItem.inputReadAt)) {
+		// prevent case that preTime equals to nextTime, lead to NaN in result
+        preTime := prev.TimeByIndex(fillItem.prevReadAt)/fillItem.interval
+        nextTime := input.TimeByIndex(fillItem.inputReadAt)/fillItem.interval
+        if preTime == nextTime {
+            output.Column(f.outOrdinal).AppendNil()
+        	return
+        }
         inputValueIndex := input.Column(f.inOrdinal).GetValueIndexV2(fillItem.inputReadAt)
         prevValueIndex := prev.Column(f.inOrdinal).GetValueIndexV2(fillItem.prevReadAt)
 		output.Column(f.outOrdinal).Append{{.Name}}Value(
 			hybridqp.LinearInterpolate{{.Name}}(
 				fillItem.start,
-				prev.TimeByIndex(fillItem.prevReadAt)/fillItem.interval,
-				input.TimeByIndex(fillItem.inputReadAt)/fillItem.interval,
+				preTime,
+				nextTime,
 				prev.Column(f.inOrdinal).{{.Name}}Value(prevValueIndex),
 				input.Column(f.inOrdinal).{{.Name}}Value(inputValueIndex),
 			),

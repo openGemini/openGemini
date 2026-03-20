@@ -28,7 +28,9 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/fragment"
 	"github.com/openGemini/openGemini/lib/logger"
+	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/tracing"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"go.uber.org/zap"
@@ -42,12 +44,15 @@ const (
 type SparseIndexScanTransform struct {
 	BaseProcessor
 
-	aborted      bool
-	hasRowCount  bool
-	span         *tracing.Span
-	indexSpan    *tracing.Span
-	allocateSpan *tracing.Span
-	buildSpan    *tracing.Span
+	aborted       bool
+	hasRowCount   bool
+	isQueryPreAgg bool
+	queryAggExprs []string
+	preAggRecord  *record.Record
+	span          *tracing.Span
+	indexSpan     *tracing.Span
+	allocateSpan  *tracing.Span
+	buildSpan     *tracing.Span
 
 	input            *ChunkPort
 	output           *ChunkPort
@@ -73,6 +78,7 @@ func NewSparseIndexScanTransform(inRowDataType hybridqp.RowDataType, node hybrid
 		output:         NewChunkPort(inRowDataType),
 		chunkBuilder:   NewChunkBuilder(inRowDataType),
 		hasRowCount:    schema.HasRowCount(),
+		isQueryPreAgg:  schema.IsOnlyCSPreAgg(),
 		outRowDataType: inRowDataType,
 		ops:            ops,
 		opt:            *schema.Options().(*query.ProcessorOptions),
@@ -80,6 +86,21 @@ func NewSparseIndexScanTransform(inRowDataType hybridqp.RowDataType, node hybrid
 		schema:         schema,
 		node:           node,
 		indexLogger:    logger.NewLogger(errno.ModuleIndex),
+	}
+
+	if !trans.isQueryPreAgg {
+		return trans
+	}
+	trans.queryAggExprs = make([]string, 0, len(inRowDataType.Fields()))
+	for _, field := range inRowDataType.Fields() {
+		if varRef, ok := field.Expr.(*influxql.VarRef); ok {
+			agg, err := schema.CalculateQueryTagFromSymbol(varRef.Val)
+			if err != nil {
+				trans.isQueryPreAgg = false
+				break
+			}
+			trans.queryAggExprs = append(trans.queryAggExprs, agg)
+		}
 	}
 	return trans
 }
@@ -107,17 +128,15 @@ func (trans *SparseIndexScanTransform) Explain() []ValuePair {
 }
 
 func (trans *SparseIndexScanTransform) Close() {
-	trans.Once(func() {
-		trans.output.Close()
-		trans.mutex.Lock()
-		trans.aborted = true
-		if trans.pipelineExecutor != nil {
-			// When the SparseIndexScanTransform is closed, the pipelineExecutor must be closed at the same time.
-			// Otherwise, which increases the memory usage.
-			trans.pipelineExecutor.Crash()
-		}
-		trans.mutex.Unlock()
-	})
+	trans.output.Close()
+	trans.mutex.Lock()
+	defer trans.mutex.Unlock()
+	trans.aborted = true
+	if trans.pipelineExecutor != nil {
+		// When the SparseIndexScanTransform is closed, the pipelineExecutor must be closed at the same time.
+		// Otherwise, which increases the memory usage.
+		trans.pipelineExecutor.Crash()
+	}
 }
 
 func (trans *SparseIndexScanTransform) Release() error {
@@ -179,6 +198,12 @@ func (trans *SparseIndexScanTransform) scanWithSparseIndex(ctx context.Context) 
 			return err
 		}
 		trans.rowCount = rowCount
+	} else if trans.isQueryPreAgg {
+		preAggRecord, err := trans.info.Store.GetPreAgg(trans.info.Req.Database, trans.info.Req.PtID, trans.info.Req.ShardIDs, schema, trans.queryAggExprs)
+		if err != nil {
+			return err
+		}
+		trans.preAggRecord = preAggRecord
 	} else {
 		fragments, err := trans.info.Store.ScanWithSparseIndex(ctx, trans.info.Req.Database, trans.info.Req.PtID, trans.info.Req.ShardIDs, schema)
 		if err != nil {
@@ -220,6 +245,8 @@ func (trans *SparseIndexScanTransform) WorkHelper(ctx context.Context) error {
 	}()
 	if trans.hasRowCount {
 		trans.Counting(ctx)
+	} else if trans.isQueryPreAgg {
+		trans.QueryPreAgging(ctx)
 	} else {
 		trans.Running(ctx)
 	}
@@ -263,6 +290,52 @@ func (trans *SparseIndexScanTransform) Counting(ctx context.Context) {
 	}
 }
 
+func (trans *SparseIndexScanTransform) QueryPreAgging(ctx context.Context) {
+	trans.wg.Add(1)
+	defer trans.wg.Done()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			c := trans.TransAggToChunk()
+			trans.output.State <- c
+			return
+		}
+	}
+}
+func (trans *SparseIndexScanTransform) SetPreAggRecord(preAggRecord *record.Record) {
+	trans.preAggRecord = preAggRecord
+}
+
+func (trans *SparseIndexScanTransform) TransAggToChunk() Chunk {
+	c := NewChunkBuilder(trans.outRowDataType).NewChunk(influx.GetOriginMstName(trans.schema.Options().GetSourcesNames()[0]))
+	preAggRecord := trans.preAggRecord
+	if preAggRecord == nil {
+		return c
+	}
+	c.AppendTagsAndIndex(ChunkTags{}, 0)
+	c.AppendIntervalIndex(0)
+	c.AppendTime(0)
+	for i, col := range preAggRecord.ColVals {
+		if col.IsNil(0) {
+			c.Column(i).AppendNil()
+			continue
+		}
+		switch preAggRecord.Schema[i].Type {
+		case influx.Field_Type_Int:
+			c.Column(i).AppendIntegerValue(col.IntegerValues()[0])
+		case influx.Field_Type_Float:
+			c.Column(i).AppendFloatValue(col.FloatValues()[0])
+		default:
+			c.Column(i).AppendNil()
+			continue
+		}
+		c.Column(i).AppendNilsV2(true)
+	}
+	return c
+}
+
 func (trans *SparseIndexScanTransform) buildExecutor(input hybridqp.QueryNode, fragments ShardsFragments) error {
 	parallelism := trans.schema.Options().GetMaxParallel()
 	if parallelism <= 0 {
@@ -278,7 +351,7 @@ func (trans *SparseIndexScanTransform) buildExecutor(input hybridqp.QueryNode, f
 
 	var err error
 	var fragmentsGroups *ShardsFragmentsGroups
-	if trans.hasRowCount {
+	if trans.hasRowCount || trans.isQueryPreAgg {
 		fragmentsGroups = NewShardsFragmentsGroups(1)
 		fragmentsGroups.Items[0] = NewShardsFragmentsGroup(NewShardsFragments(), 0)
 	} else {
@@ -385,21 +458,25 @@ type FileFragment interface {
 	GetFragmentRanges() fragment.FragmentRanges
 	GetFragmentRange(int) *fragment.FragmentRange
 	AppendFragmentRange(fragment.FragmentRanges)
+	AppendFragmentRangeDetails(fragment.FragmentRangeDetails)
 	FragmentCount() int64
 	CutTo(num int64) FileFragment
+	GetFragmentRangeDetails() fragment.FragmentRangeDetails
 }
 
 type FileFragmentImpl struct {
-	dataFile       immutable.TSSPFile
-	fragmentRanges fragment.FragmentRanges
-	fragmentCount  int64
+	dataFile             immutable.TSSPFile
+	fragmentRanges       fragment.FragmentRanges
+	fragmentRangeDetails fragment.FragmentRangeDetails
+	fragmentCount        int64
 }
 
-func NewFileFragment(f immutable.TSSPFile, fr fragment.FragmentRanges, fc int64) *FileFragmentImpl {
+func NewFileFragment(f immutable.TSSPFile, fr fragment.FragmentRanges, frd fragment.FragmentRangeDetails, fc int64) *FileFragmentImpl {
 	return &FileFragmentImpl{
-		dataFile:       f,
-		fragmentRanges: fr,
-		fragmentCount:  fc,
+		dataFile:             f,
+		fragmentRanges:       fr,
+		fragmentRangeDetails: frd,
+		fragmentCount:        fc,
 	}
 }
 
@@ -422,6 +499,10 @@ func (f *FileFragmentImpl) AppendFragmentRange(frs fragment.FragmentRanges) {
 	}
 }
 
+func (f *FileFragmentImpl) AppendFragmentRangeDetails(frds fragment.FragmentRangeDetails) {
+	f.fragmentRangeDetails = append(f.fragmentRangeDetails, frds...)
+}
+
 func (f *FileFragmentImpl) FragmentCount() int64 {
 	return f.fragmentCount
 }
@@ -431,21 +512,43 @@ func (f *FileFragmentImpl) CutTo(num int64) FileFragment {
 		return f
 	}
 
-	m := &FileFragmentImpl{dataFile: f.dataFile, fragmentRanges: make([]*fragment.FragmentRange, 0, len(f.GetFragmentRanges()))}
+	m := &FileFragmentImpl{dataFile: f.dataFile, fragmentRanges: make([]*fragment.FragmentRange, 0, len(f.GetFragmentRanges())), fragmentRangeDetails: make([]*fragment.FragmentRangeDetail, 0, len(f.GetFragmentRangeDetails()))}
 	for m.FragmentCount() < num && len(f.fragmentRanges) > 0 {
 		ra := f.GetFragmentRange(0)
+		frd := f.fragmentRangeDetails[0]
 		if need := num - m.FragmentCount(); int64(ra.End-ra.Start) > need {
 			m.fragmentRanges = append(m.fragmentRanges, fragment.NewFragmentRange(ra.End-uint32(need), ra.End))
+			m.fragmentRangeDetails = append(m.fragmentRangeDetails, &fragment.FragmentRangeDetail{Count: frd.Count})
 			m.fragmentCount += need
 			ra.End = ra.End - uint32(need)
+			frd.Count = 0
 			break
 		}
 		m.fragmentRanges = append(m.fragmentRanges, ra)
+		m.fragmentRangeDetails = append(m.fragmentRangeDetails, frd)
 		m.fragmentCount += int64(ra.End - ra.Start)
 		f.fragmentRanges = f.fragmentRanges[1:]
+		f.fragmentRangeDetails = f.fragmentRangeDetails[1:]
 	}
 	f.fragmentCount -= m.fragmentCount
 	return m
+}
+
+func (f *FileFragmentImpl) GetFragmentRangeDetails() fragment.FragmentRangeDetails {
+	return f.fragmentRangeDetails
+}
+
+func NewFileFragmentForTest(f immutable.TSSPFile, fr fragment.FragmentRanges, fc int64) *FileFragmentImpl {
+	ffi := &FileFragmentImpl{
+		dataFile:             f,
+		fragmentRanges:       fr,
+		fragmentRangeDetails: make(fragment.FragmentRangeDetails, len(fr)),
+		fragmentCount:        fc,
+	}
+	for i := 0; i < len(fr); i++ {
+		ffi.fragmentRangeDetails[i] = &fragment.FragmentRangeDetail{Count: 0}
+	}
+	return ffi
 }
 
 // DistributeFragments used for balanced fragment allocation of data files.
@@ -712,6 +815,7 @@ func (sfg *ShardsFragmentsGroup) MoveTo(des *ShardsFragmentsGroup, id uint64, fi
 	newPagePath := newPage.GetFile().Path()
 	if _, ok := des.frags[id].FileMarks[newPagePath]; ok {
 		des.frags[id].FileMarks[newPagePath].AppendFragmentRange(newPage.GetFragmentRanges())
+		des.frags[id].FileMarks[newPagePath].AppendFragmentRangeDetails(newPage.GetFragmentRangeDetails())
 	} else {
 		des.frags[id].FileMarks[newPagePath] = newPage
 	}

@@ -288,3 +288,18 @@ func TestReplaceAndClear(t *testing.T) {
 	}, time.Now())
 	require.NoError(t, err)
 }
+
+func TestGetCSFilesRef(t *testing.T) {
+	testDir := t.TempDir()
+	conf := NewColumnStoreConfig()
+	conf.FragmentsNumPerFlush = 1
+	tier := uint64(util.Hot)
+	lockPath := ""
+	store := NewTableStore(testDir, &lockPath, &tier, true, conf)
+	store.CSFiles = map[string]*TSSPFiles{"table1": &TSSPFiles{files: []TSSPFile{MocTsspFile{
+		path: "/tmp/openGemini",
+	}}}}
+	csFiles, _ := store.GetCSFilesRef("table1")
+	require.Equal(t, csFiles[0].Path(), "/tmp/openGemini")
+	UnrefFiles(csFiles...)
+}

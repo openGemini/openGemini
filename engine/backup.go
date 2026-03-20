@@ -24,6 +24,8 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/engine/immutable"
+	"github.com/openGemini/openGemini/engine/immutable/colstore"
+	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/lib/backup"
 	"github.com/openGemini/openGemini/lib/errno"
 	meta "github.com/openGemini/openGemini/lib/metaclient"
@@ -58,11 +60,16 @@ type Backup struct {
 
 func (s *Backup) RunBackupData() error {
 	s.time = time.Now().UnixNano()
-	dbPtIds := s.Engine.GetDBPtIds()
+	dbPtIds := s.Engine.GetAllDBPtIds()
 	ch := make(chan struct{})
 	var wg sync.WaitGroup
 
-	result := &backup.BackupResult{Result: "backup success", Time: s.time, DataBases: make(map[string]struct{})}
+	result := &backup.BackupResult{
+		Result: "backup success",
+		Time:   s.time, Databases: make(map[string]struct{}),
+		DataDir: s.Engine.dataPath,
+		WalDir:  s.Engine.walPath,
+	}
 	wg.Add(1)
 	go execTicker(ch, s.BackupPath, &wg)
 	defer func() {
@@ -76,11 +83,8 @@ func (s *Backup) RunBackupData() error {
 		} else {
 			s.Status = Success
 		}
-		b, err := json.Marshal(result)
-		if err != nil {
-			log.Error(err.Error())
-		}
-		if err = backup.WriteBackupLogFile(b, s.BackupPath, backup.ResultLog); err != nil {
+
+		if err := backup.WriteResultFile(result, s.BackupPath, backup.ResultLog); err != nil {
 			log.Error(err.Error())
 		}
 	}()
@@ -108,7 +112,7 @@ func (s *Backup) RunBackupData() error {
 				return err
 			}
 		}
-		result.DataBases = dbMap
+		result.Databases = dbMap
 	}
 
 	return nil
@@ -132,7 +136,11 @@ func (s *Backup) BackupPt(dbName string, ptId uint32) error {
 	if err != nil {
 		return err
 	}
-	defer p.unref()
+	p.mu.RLock()
+	defer func() {
+		p.unref()
+		p.mu.RUnlock()
+	}()
 
 	var peersPtIDMap map[uint32]*NodeInfo
 	if s.OnlyBackupMater && metaClient.DBRepGroups(dbName) != nil {
@@ -149,6 +157,12 @@ func (s *Backup) BackupPt(dbName string, ptId uint32) error {
 	shardIds := p.ShardIds(nil)
 	for _, id := range shardIds {
 		sh := p.Shard(id)
+		opened := sh.IsOpened()
+		err := sh.OpenAndEnable(s.Engine.metaClient)
+
+		if err != nil {
+			return err
+		}
 		if s.IsInc {
 			s.BackupLogInfo = &backup.BackupLogInfo{}
 			if err := backup.ReadBackupLogFile(filepath.Join(sh.GetDataPath(), backup.BackupLogPath, backup.FullBackupLog), s.BackupLogInfo); err != nil {
@@ -162,17 +176,39 @@ func (s *Backup) BackupPt(dbName string, ptId uint32) error {
 				return err
 			}
 		}
+		if !opened {
+			sh.FreeSequencer()
+		}
 	}
 
 	// backup index
 	for _, ib := range p.indexBuilder {
-		indexPath := ib.Path()
-		dstPath := filepath.Join(backupPath, indexPath)
-		if err := backup.FolderCopy(indexPath, dstPath); err != nil {
-			log.Error("backup index file error", zap.Error(err))
+		if err := BackupIndex(ib, backupPath); err != nil {
 			return err
 		}
 	}
+
+	// backup wal
+	if p.node == nil {
+		return nil
+	}
+	storage := p.node.GetStorage()
+	entryLog := storage.GetRaftEntryLog()
+	walStorage := storage.GetDir()
+	walDir, _ := filepath.Split(walStorage)
+	walBackupPath := filepath.Join(s.BackupPath, backup.WalBackupDir)
+	dstPath := filepath.Join(walBackupPath, walDir)
+	storage.Lock()
+	entryLog.FileRLock()
+	defer func() {
+		storage.UnLock()
+		entryLog.FileRUnLock()
+	}()
+	if err := backup.FolderCopy(walDir, dstPath); err != nil {
+		log.Error("backup wal file error", zap.Error(err))
+		return err
+	}
+
 	return nil
 }
 
@@ -187,7 +223,7 @@ func (s *Backup) FullBackup(sh Shard, dataPath, nodePath string, peersPtIDMap ma
 		if fileListMap[name] != nil {
 			continue
 		}
-		fileList, err := s.FullBackupTableFile(sh, t, peersPtIDMap, name, true, nodePath, dataPath)
+		fileList, err := s.FullBackupTableFile(sh.GetDataPath(), t, peersPtIDMap, name, true, nodePath, dataPath)
 		if err != nil {
 			return err
 		}
@@ -228,7 +264,7 @@ func (s *Backup) IncBackup(sh Shard, dataPath, nodePath string, peersPtIDMap map
 		if addFileListMap[name] != nil || delFileListMap[name] != nil {
 			continue
 		}
-		aList, dList, err := s.IncBackupTableFile(sh, t, peersPtIDMap, name, true, nodePath, dataPath)
+		aList, dList, err := s.IncBackupTableFile(sh.GetDataPath(), t, peersPtIDMap, name, true, nodePath, dataPath)
 		if err != nil {
 			return err
 		}
@@ -261,10 +297,16 @@ func (s *Backup) IncBackup(sh Shard, dataPath, nodePath string, peersPtIDMap map
 	return nil
 }
 
-func (s *Backup) FullBackupTableFile(sh Shard, t immutable.TablesStore, peersPtIDMap map[uint32]*NodeInfo, name string, isOrder bool, nodePath, outPath string) ([][]string, error) {
+func (s *Backup) FullBackupTableFile(shardPath string, t immutable.TablesStore, peersPtIDMap map[uint32]*NodeInfo, name string, isOrder bool, nodePath, outPath string) ([][]string, error) {
 	orderfiles, unOrderFiles, _ := t.GetBothFilesRef(name, false, util.TimeRange{}, nil)
 	if len(unOrderFiles) > 0 {
 		orderfiles = append(orderfiles, unOrderFiles...)
+	}
+	csFiles, ok := t.GetCSFilesRef(name)
+	if ok {
+		if len(csFiles) > 0 {
+			orderfiles = append(orderfiles, csFiles...)
+		}
 	}
 	if len(orderfiles) == 0 {
 		return nil, nil
@@ -278,7 +320,15 @@ func (s *Backup) FullBackupTableFile(sh Shard, t immutable.TablesStore, peersPtI
 		if s.IsAborted {
 			return nil, fmt.Errorf("backup aborted")
 		}
-		if err := copyFullTableFile(f, sh, peersPtIDMap, nodePath, outPath, &fileList); err != nil {
+		if err := copyTableFile(f, nil, shardPath, peersPtIDMap, nodePath, outPath, &fileList); err != nil {
+			return fileList, err
+		}
+	}
+	if len(csFiles) > 0 {
+		countPath := filepath.Join(filepath.Dir(csFiles[0].Path()), immutable.CountBinFile)
+		fileList = append(fileList, []string{countPath})
+		if err := retryFileCopy(countPath, filepath.Join(outPath, countPath)); err != nil {
+			log.Error("backup colstore count file error", zap.Error(err))
 			return fileList, err
 		}
 	}
@@ -286,26 +336,64 @@ func (s *Backup) FullBackupTableFile(sh Shard, t immutable.TablesStore, peersPtI
 	return fileList, nil
 }
 
-func copyFullTableFile(f immutable.TSSPFile, sh Shard, peersPtIDMap map[uint32]*NodeInfo, nodePath, outPath string, fileList *[][]string) error {
+func copyTableFile(f immutable.TSSPFile, seen map[string]bool, shardPath string, peersPtIDMap map[uint32]*NodeInfo, nodePath, outPath string, fileList *[][]string) error {
 	f.RefFileReader()
 	defer func() {
 		f.UnrefFileReader()
 	}()
 	fullPath := f.Path()
-	fileListItem := GenPeerPtFilePath(sh, peersPtIDMap, nodePath, fullPath)
+	if seen != nil && seen[fullPath] {
+		seen[fullPath] = false
+		return nil
+	}
+	fileListItem := GenPeerPtFilePath(shardPath, peersPtIDMap, nodePath, fullPath)
 	*fileList = append(*fileList, fileListItem)
 	dstPath := filepath.Join(outPath, fullPath)
-	if err := backup.FileCopy(fullPath, dstPath); err != nil {
+	if err := retryFileCopy(fullPath, dstPath); err != nil {
 		log.Error("backup file error", zap.Error(err))
 		return err
+	}
+	if f.GetPkInfo() != nil {
+		// backup colstore index files
+		idxPath := strings.Replace(fullPath, immutable.TsspFileSuffix, colstore.IndexFileSuffix, -1)
+		*fileList = append(*fileList, []string{idxPath})
+		if err := retryFileCopy(idxPath, filepath.Join(outPath, idxPath)); err != nil {
+			log.Error("backup colstore index file error", zap.Error(err))
+			return err
+		}
+	}
+	if f.GetSkipIndexInfo() != nil {
+		for _, s := range f.GetSkipIndexInfo() {
+			*fileList = append(*fileList, []string{s.Name()})
+			if err := retryFileCopy(s.Name(), filepath.Join(outPath, s.Name())); err != nil {
+				log.Error("backup colstore index file error", zap.Error(err))
+				return err
+			}
+		}
 	}
 	return nil
 }
 
-func (s *Backup) IncBackupTableFile(sh Shard, t immutable.TablesStore, peersPtIDMap map[uint32]*NodeInfo, name string, isOrder bool, nodePath, outPath string) ([][]string, [][]string, error) {
+func retryFileCopy(srcPath, dstPath string) error {
+	dstPath = strings.Replace(dstPath, ".init", "", -1)
+	err := backup.FileCopy(srcPath, dstPath)
+	if err == nil {
+		return nil
+	}
+	srcPath += ".init"
+	return backup.FileCopy(srcPath, dstPath)
+}
+
+func (s *Backup) IncBackupTableFile(shardPath string, t immutable.TablesStore, peersPtIDMap map[uint32]*NodeInfo, name string, isOrder bool, nodePath, outPath string) ([][]string, [][]string, error) {
 	orderfiles, unOrderFiles, _ := t.GetBothFilesRef(name, false, util.TimeRange{}, nil)
 	if len(unOrderFiles) > 0 {
 		orderfiles = append(orderfiles, unOrderFiles...)
+	}
+	csFiles, ok := t.GetCSFilesRef(name)
+	if ok {
+		if len(csFiles) > 0 {
+			orderfiles = append(orderfiles, csFiles...)
+		}
 	}
 	if len(orderfiles) == 0 {
 		return nil, nil, nil
@@ -326,14 +414,24 @@ func (s *Backup) IncBackupTableFile(sh Shard, t immutable.TablesStore, peersPtID
 		if s.IsAborted {
 			return nil, nil, fmt.Errorf("backup aborted")
 		}
-		if err := copyIncTableFile(f, seen, sh, peersPtIDMap, nodePath, outPath, &addFileList); err != nil {
+		if err := copyTableFile(f, seen, shardPath, peersPtIDMap, nodePath, outPath, &addFileList); err != nil {
+			return addFileList, deleteFileList, err
+		}
+	}
+
+	if len(csFiles) > 0 {
+		countPath := filepath.Join(filepath.Dir(csFiles[0].Path()), immutable.CountBinFile)
+		addFileList = append(addFileList, []string{countPath})
+		deleteFileList = append(addFileList, []string{countPath})
+		if err := retryFileCopy(countPath, filepath.Join(outPath, countPath)); err != nil {
+			log.Error("backup colstore count file error", zap.Error(err))
 			return addFileList, deleteFileList, err
 		}
 	}
 
 	for f, v := range seen {
 		if v {
-			deleteFileListItem := GenPeerPtFilePath(sh, peersPtIDMap, nodePath, f)
+			deleteFileListItem := GenPeerPtFilePath(shardPath, peersPtIDMap, nodePath, f)
 			deleteFileList = append(deleteFileList, deleteFileListItem)
 		}
 	}
@@ -341,20 +439,13 @@ func (s *Backup) IncBackupTableFile(sh Shard, t immutable.TablesStore, peersPtID
 	return addFileList, deleteFileList, nil
 }
 
-func copyIncTableFile(f immutable.TSSPFile, seen map[string]bool, sh Shard, peersPtIDMap map[uint32]*NodeInfo, nodePath, outPath string, addFileList *[][]string) error {
-	f.RefFileReader()
-	defer func() {
-		f.UnrefFileReader()
-	}()
-	fullPath := f.Path()
-	if seen[fullPath] {
-		seen[fullPath] = false
-		return nil
-	}
-	addFileListItem := GenPeerPtFilePath(sh, peersPtIDMap, nodePath, fullPath)
-	*addFileList = append(*addFileList, addFileListItem)
-	dstPath := filepath.Join(outPath, fullPath)
-	if err := backup.FileCopy(fullPath, dstPath); err != nil {
+func BackupIndex(ib *tsi.IndexBuilder, backupPath string) error {
+	ib.RLock()
+	defer ib.RUnlock()
+	indexPath := ib.Path()
+	dstPath := filepath.Join(backupPath, indexPath)
+	if err := backup.FolderCopy(indexPath, dstPath); err != nil {
+		log.Error("backup index file error", zap.Error(err))
 		return err
 	}
 	return nil
@@ -425,10 +516,10 @@ func GenShardDirPath(metaClient meta.MetaClient, dbName string, ptId uint32) (ma
 	return peersPtIDMap, nil
 }
 
-func GenPeerPtFilePath(sh Shard, peersPtIDMap map[uint32]*NodeInfo, nodePath, fullPath string) []string {
+func GenPeerPtFilePath(shardPath string, peersPtIDMap map[uint32]*NodeInfo, nodePath, fullPath string) []string {
 	fileListItem := make([]string, 0, len(peersPtIDMap)+1)
 	fileListItem = append(fileListItem, fullPath)
-	shFilePath := strings.Replace(fullPath, sh.GetDataPath(), "", -1)
+	shFilePath := strings.Replace(fullPath, shardPath, "", -1)
 	basicPath, _ := filepath.Split(nodePath)
 	for _, p := range peersPtIDMap {
 		fileListItem = append(fileListItem, filepath.Join(basicPath, p.shardDirName, shFilePath))

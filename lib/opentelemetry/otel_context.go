@@ -17,6 +17,7 @@ package opentelemetry
 import (
 	"io"
 
+	semconv "github.com/indirect/go.opentelemetry.io/collector/semconv/v1.16.0"
 	"github.com/influxdata/influxdb-observability/common"
 	"github.com/influxdata/influxdb-observability/otel2influx"
 	"github.com/openGemini/openGemini/lib/cpu"
@@ -25,7 +26,6 @@ import (
 	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
-	semconv "go.opentelemetry.io/collector/semconv/v1.16.0"
 )
 
 var otelContextPool = pool.NewUnionPool[OtelContext](cpu.GetCpuNum(), pool.DefaultMaxEleMemSize, pool.DefaultMaxLocalEleMemSize, NewOtelContext)

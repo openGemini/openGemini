@@ -258,7 +258,7 @@ func (e *ShowTagValuesExecutor) queryTagValues(q *influxql.ShowTagValuesStatemen
 
 	lock := new(sync.Mutex)
 
-	exact := influxql.IsExactStatisticQueryForDDL(q)
+	exact := influxql.IsExactStatisticQueryForDDL(q) && len(q.SortFields) == 0
 	err = e.me.EachDBNodes(q.Database, func(nodeID uint64, pts []uint32) error {
 		s, err := e.store.TagValues(nodeID, q.Database, pts, tagKeys, q.Condition, q.Limit+q.Offset, exact)
 		lock.Lock()
@@ -269,7 +269,7 @@ func (e *ShowTagValuesExecutor) queryTagValues(q *influxql.ShowTagValuesStatemen
 		}
 		tagValuesSlice = append(tagValuesSlice, s...)
 		return err
-	})
+	}, e.mc.GetNodePtsMap)
 	if err != nil {
 		e.logger.Error("failed to show tag values", zap.Error(err))
 		return nil, err

@@ -40,3 +40,7 @@ func (h *HeartbeatV0) Handle(header protocol.RequestHeader, body []byte, onMessa
 
 	return onMessage(resp)
 }
+
+func (h *HeartbeatV0) Release() {
+
+}

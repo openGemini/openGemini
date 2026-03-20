@@ -18,6 +18,8 @@ import (
 	"flag"
 	"log"
 	"strconv"
+
+	"github.com/influxdata/influxdb/toml"
 )
 
 const (
@@ -31,8 +33,9 @@ type Index struct {
 	TagFilterCostCacheSize int `toml:"tag-filter-cost-cache-size"`
 	Concurrency            int `toml:"concurrency"`
 
-	TagScanPruneThreshold int `toml:"tag-scan-prune-threshold"`
-	MemoryAllowedPercent  int `toml:"memory-allowed-percent"`
+	TagScanPruneThreshold int           `toml:"tag-scan-prune-threshold"`
+	MemoryAllowedPercent  int           `toml:"memory-allowed-percent"`
+	CacheExpireDuration   toml.Duration `toml:"cache-expire-duration"`
 
 	CacheCompressEnable bool `toml:"cache-compress-enable"`
 	BloomFilterEnabled  bool `toml:"bloom-filter-enable"`
@@ -51,7 +54,7 @@ func SetIndexConfig(conf *Index) {
 	}
 
 	if conf.MemoryAllowedPercent > 0 {
-		// See: github.com/VictoriaMetrics/VictoriaMetrics/lib/memory/memory.go memory.allowedPercent
+		// See: github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/memory/memory.go memory.allowedPercent
 		err := flag.Set("memory.allowedPercent", strconv.Itoa(conf.MemoryAllowedPercent))
 		log.Printf("set memory.allowedPercent=%d; err=%v \n", conf.MemoryAllowedPercent, err)
 	}

@@ -24,9 +24,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func assertFetchResult(t *testing.T, rec *record.Record, pkSchema record.Schemas, expSize int) {
+func assertFetchResult(t *testing.T, rec *record.Record, pkSchema record.Schemas, tcDuration int64, expSize int) {
 	pks := &colstore.PrimaryKeyFetcher{}
-	pkRec, offsets, pkSlice := pks.Fetch(rec, pkSchema)
+	pkRec, offsets, pkSlice := pks.Fetch(rec, pkSchema, tcDuration)
 	require.Equal(t, expSize, pkRec.RowNums())
 	require.Equal(t, expSize, len(pkSlice))
 
@@ -44,6 +44,7 @@ func TestPrimaryKeyFetcher(t *testing.T) {
 		record.Field{Type: influx.Field_Type_String, Name: "s1"},
 		record.Field{Type: influx.Field_Type_Tag, Name: "t1"},
 		record.Field{Type: influx.Field_Type_Boolean, Name: "b1"},
+		record.Field{Type: influx.Field_Type_Int, Name: record.TimeField},
 	}
 	rec.ResetWithSchema(schema)
 	rec.ColVals[0].AppendFloats(1.1, 1.1, 1.2, 1.3, 1.3)
@@ -51,14 +52,16 @@ func TestPrimaryKeyFetcher(t *testing.T) {
 	rec.ColVals[2].AppendStrings("f1", "f8", "f1", "f4", "f8")
 	rec.ColVals[3].AppendStrings("t8", "t1", "t1", "t8", "t4")
 	rec.ColVals[4].AppendBooleans(true, false, false, true, false)
+	rec.ColVals[5].AppendTimes([]int64{10, 20, 30, 40, 50})
 
-	assertFetchResult(t, rec, rec.Schema, 5)
+	assertFetchResult(t, rec, rec.Schema, 0, 5)
 
 	for i := range 4 {
-		assertFetchResult(t, rec, record.Schemas{schema[i]}, 3)
+		assertFetchResult(t, rec, record.Schemas{schema[i]}, 0, 3)
 	}
 
-	assertFetchResult(t, rec, record.Schemas{schema[4]}, 2)
+	assertFetchResult(t, rec, record.Schemas{schema[4]}, 0, 2)
+	assertFetchResult(t, rec, record.Schemas{schema[5]}, 30, 2)
 }
 
 func TestPrimaryKeyFetcher_sortNil(t *testing.T) {
@@ -81,7 +84,7 @@ func TestPrimaryKeyFetcher_sortNil(t *testing.T) {
 		col1.AppendFloatNulls(2)
 		col1.AppendIntegers(3)
 
-		assertFetchResult(t, rec, rec.Schema, 6)
+		assertFetchResult(t, rec, rec.Schema, 0, 6)
 	})
 
 	t.Run("string boolean", func(t *testing.T) {
@@ -103,7 +106,7 @@ func TestPrimaryKeyFetcher_sortNil(t *testing.T) {
 		col1.AppendBooleanNulls(1)
 		col1.AppendBooleans(true)
 
-		assertFetchResult(t, rec, rec.Schema, 6)
+		assertFetchResult(t, rec, rec.Schema, 0, 6)
 	})
 }
 
@@ -124,13 +127,13 @@ func TestFetchKeyAtRow(t *testing.T) {
 				recovered = true
 			}
 		}()
-		colstore.FetchKeyAtRow(nil, []*record.ColVal{&rec.ColVals[0]}, schema, 1)
+		colstore.FetchKeyAtRow(nil, []*record.ColVal{&rec.ColVals[0]}, schema, 1, 0)
 	}()
 	require.True(t, recovered)
 
 	buf := colstore.FetchKeyAtRow(nil, []*record.ColVal{nil}, record.Schemas{
 		record.Field{Type: influx.Field_Type_Float, Name: "not_exists"},
-	}, 1)
+	}, 1, 0)
 	require.True(t, len(buf) == 2)
 	require.True(t, buf[1] == 0)
 }
@@ -180,7 +183,7 @@ func BenchmarkPrimaryKeyFetcher(b *testing.B) {
 
 	b.Run("v1", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			pks.Fetch(rec, rec.Schema)
+			pks.Fetch(rec, rec.Schema, 0)
 		}
 	})
 }

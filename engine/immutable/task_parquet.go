@@ -15,11 +15,8 @@
 package immutable
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -32,9 +29,9 @@ import (
 	"github.com/openGemini/openGemini/lib/parquet"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/scheduler"
+	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
-	"github.com/pingcap/failpoint"
 	"go.uber.org/zap"
 )
 
@@ -116,8 +113,12 @@ func (e *TSSP2ParquetEvent) OnReplaceFile(shardDir string, lockFile string) erro
 		return nil
 	}
 
-	logFile, err := SaveReliabilityLog(&e.plan, filepath.Join(shardDir, parquetLogDir), lockFile, GenParquetLogName)
+	logFile, err := fileops.SaveReliabilityLog(&e.plan, filepath.Join(shardDir, parquetLogDir), lockFile, GenParquetLogName)
 	if err != nil {
+		log.Error("save reliable log failed",
+			zap.String("mst of plan", e.plan.Mst),
+			zap.Uint64("parquetLogSeq", parquetLogSeq),
+			zap.Error(err))
 		return err
 	}
 
@@ -153,6 +154,7 @@ func (e *TSSP2ParquetEvent) OnFinish(ctx *EventContext) {
 		return
 	}
 
+	e.task.mergeSet = ctx.mergeSet
 	e.task.OnFinish(func() {
 		e.task.UnLockFiles()
 		e.task.mergeSet = nil
@@ -219,14 +221,14 @@ func (t *ParquetTask) Stop() {
 }
 
 func (t *ParquetTask) Execute() {
+	statistics.AddTaskNum()
 	success := true
 	defer func() {
+		statistics.DelTaskNum()
 		if success {
 			t.RemoveLog()
 		}
 	}()
-
-	failpoint.Inject("parquet-convert-delay", nil)
 
 	parquetMappings, err := t.prepare()
 	if err != nil {
@@ -262,6 +264,9 @@ func (t *ParquetTask) prepare() (map[string]string, error) {
 	for _, file := range t.plan.Files {
 		parquetDir, parquetFile, err := t.prepareDir(file)
 		if err != nil {
+			if err.Error() == SkipParquetTask {
+				continue
+			}
 			return parquetMapping, err
 		}
 		lockFile := fileops.FileLockOption("")
@@ -293,32 +298,7 @@ func transformMergedFileName(mergedFile string) (string, error) {
 		return "", err
 	}
 	tmp.merge |= uint16(0x0010)
-	return tmp.String() + tsspFileSuffix, nil
-}
-
-func markParquetTaskDone(path string, id uint64) error {
-	t := ParquetTask{}
-	dir, _, err := t.prepareDir(path)
-	if err != nil {
-		return err
-	}
-
-	isOrdered := func(path string) string {
-		if strings.Contains(path, unorderedDir) {
-			return "UnOrdered"
-		}
-		return "Ordered"
-	}
-
-	finishFileName := fmt.Sprintf("%d_%s_Finish.parquet", id, isOrdered(path))
-	filePath := filepath.Join(dir, finishFileName)
-
-	log.Info("markParquetTaskDone", zap.String("finish file path:", filePath))
-	lock := fileops.FileLockOption("")
-	if _, err := fileops.Create(filePath, lock); err != nil {
-		return err
-	}
-	return nil
+	return tmp.String() + TsspFileSuffix, nil
 }
 
 func initParquetFileInfo(args []string, isMerged bool) (*parquetFileInfo, error) {
@@ -346,7 +326,7 @@ const parquetSuffix = ".parquet"
 func (p *parquetFileInfo) genParquetName() {
 	tmp := strings.Split(p.shardInfo, "_")
 	shardId := tmp[0]
-	fileName := strings.ReplaceAll(p.fileName, tsspFileSuffix, parquetSuffix)
+	fileName := strings.ReplaceAll(p.fileName, TsspFileSuffix, parquetSuffix)
 	p.fileName = shardId + "_" + fileName
 }
 
@@ -356,9 +336,7 @@ func (p *parquetFileInfo) getDateDir() error {
 	if err != nil {
 		return err
 	}
-	// current  dir timeZone should be CST
-	var cstZone = time.FixedZone("CST", 8*3600)
-	p.dt += time.Unix(0, startTime).In(cstZone).Format("2006-01-02")
+	p.dt += time.Unix(0, startTime).In(config.GetTimeZoneLoc()).Format("2006-01-02")
 	return nil
 }
 
@@ -393,12 +371,41 @@ func (p *parquetFileInfo) getFullPath() (string, string, error) {
 	return dir, path, nil
 }
 
+func (p *parquetFileInfo) getMstFullName() string {
+	var sb strings.Builder
+	sb.WriteString(p.db)
+	sb.WriteString(".")
+	sb.WriteString(p.rp)
+	sb.WriteString(".")
+
+	sb.WriteString(influx.GetOriginMstName(p.mst))
+	return sb.String()
+}
+
+const SkipParquetTask = "skipParquetTask"
+
+func (t *ParquetTask) shouldSkipTask(taskInfo *parquetFileInfo) bool {
+	if taskInfo.db == "_internal" {
+		return true
+	}
+	msts := config.GetStoreConfig().ParquetTask.GetEnableMst()
+	if len(msts) == 0 {
+		return false
+	}
+	for _, mst := range msts {
+		if mst == taskInfo.getMstFullName() {
+			return false
+		}
+	}
+	return true
+}
+
 func (t *ParquetTask) prepareDir(tsspPath string) (parquetDir, parquetPath string, err error) {
 	/* transfer tssp file from
-	 /tsdb/instanceId/data/db/dbpt/rp/shardId_startTime_endTime_indexId/tssp/mst/xxxxx.tssp
-	 /tsdb/instanceId/data/db/dbpt/rp/shardId_startTime_endTime_indexId/tssp/mst/out-of-order/xxxxx.tssp
-	to parquet file
-	 /tsdb/instanceId/parquet/db/rp/table/dt=2024-06-14/shardId_xxxxx.parquet
+	    /tsdb/instanceId/data/db/dbpt/rp/shardId_startTime_endTime_indexId/tssp/mst/xxxxx.tssp
+	    /tsdb/instanceId/data/db/dbpt/rp/shardId_startTime_endTime_indexId/tssp/mst/out-of-order/xxxxx.tssp
+	   to parquet file
+	    /tsdb/instanceId/parquet/db/rp/table/dt=2024-06-14/shardId_xxxxx.parquet
 	*/
 	tmps := strings.Split(tsspPath, `/`)
 
@@ -418,12 +425,33 @@ func (t *ParquetTask) prepareDir(tsspPath string) (parquetDir, parquetPath strin
 	if err != nil {
 		return
 	}
+	if t.shouldSkipTask(parquetInfo) {
+		err = errors.New(SkipParquetTask)
+		return
+	}
 	parquetDir, parquetPath, err = parquetInfo.getFullPath()
 	return
 }
 
 func (t *ParquetTask) process(tsspFilePath, parquetPath, lockPath string) error {
+	log.Info("ParquetTask Process start", zap.String("tsspFilePath:", tsspFilePath), zap.String("parquetPath:", parquetPath))
 	start := time.Now()
+	var err error
+	var exportElapsed, getTagKeysElapsed time.Duration
+	var writeLines uint64
+	defer func() {
+		if err != nil {
+			statistics.AddParquetTaskStat(statistics.FailedTaskNum, int64(1))
+			log.Error("ParquetTask failed", zap.String("parquet path", parquetPath), zap.String("tssp path", tsspFilePath), zap.Error(err))
+		} else {
+			statistics.AddParquetTaskStat(statistics.TotalProcessTime, int64(time.Since(start).Seconds()))
+			statistics.AddParquetTaskStat(statistics.ProcessFileNum, 1)
+			statistics.AddParquetTaskStat(statistics.ProcessLines, int64(writeLines))
+			log.Info("ParquetTask info", zap.String("parquet path", parquetPath), zap.String("tssp path", tsspFilePath),
+				zap.Uint64("process lines", writeLines), zap.Duration("get tag key cost", getTagKeysElapsed),
+				zap.Duration("export cost", exportElapsed), zap.Duration("elapsed", time.Since(start)))
+		}
+	}()
 	f, err := OpenTSSPFile(tsspFilePath, &lockPath, true)
 	if err != nil {
 		return err
@@ -437,6 +465,7 @@ func (t *ParquetTask) process(tsspFilePath, parquetPath, lockPath string) error 
 		log.Info("ParquetTask get tag keys failed", zap.String("mst", t.plan.Mst), zap.Strings("files", t.plan.Files))
 		return err
 	}
+	getTagKeysElapsed = time.Since(getTagKeysStart)
 
 	for key := range tagkeys {
 		t.plan.Schema[key] = influx.Field_Type_String
@@ -449,14 +478,12 @@ func (t *ParquetTask) process(tsspFilePath, parquetPath, lockPath string) error 
 	defer w.Close()
 
 	startExport := time.Now()
-	if err := t.export2TSSPFile(f, w); err != nil {
-		if err != nil {
-			return err
-		}
+	if err := t.exportFromTSSPFile(f, w); err != nil {
+		return err
 	}
-	log.Info("ParquetTask info", zap.String("parquet path", parquetPath), zap.String("tssp path", parquetPath),
-		zap.Uint64("process lines", atomic.LoadUint64(&w.WriteLines)), zap.Duration("get tag key cost", time.Since(getTagKeysStart)),
-		zap.Duration("export cost", time.Since(startExport)), zap.Duration("elapsed", time.Since(start)))
+	exportElapsed = time.Since(startExport)
+
+	writeLines = atomic.LoadUint64(&w.WriteLines)
 	return w.WriteStop()
 }
 
@@ -493,9 +520,10 @@ func (t *ParquetTask) GetSeries(sId uint64) (map[string]string, error) {
 	return series, nil
 }
 
-func (t *ParquetTask) export2TSSPFile(f TSSPFile, writer *parquet.Writer) error {
+func (t *ParquetTask) exportFromTSSPFile(f TSSPFile, writer *parquet.Writer) error {
 	fi := NewFileIterator(f, CLog)
 	itr := NewChunkIterator(fi)
+	defer itr.Close()
 
 	for {
 		if t.stopped {
@@ -523,7 +551,7 @@ func (t *ParquetTask) export2TSSPFile(f TSSPFile, writer *parquet.Writer) error 
 			return err
 		}
 	}
-	return nil
+	return writer.ForceFlush()
 }
 
 const (
@@ -536,73 +564,11 @@ func GenParquetLogName() string {
 	return fmt.Sprintf("%d.log", atomic.AddUint64(&parquetLogSeq, 1))
 }
 
-func SaveReliabilityLog(data interface{}, dir string, lockFile string, nameGenerator func() string) (string, error) {
-	buf, err := json.Marshal(data)
-	if err != nil {
-		return "", err
-	}
-
-	lock := fileops.FileLockOption(lockFile)
-	if err := fileops.MkdirAll(dir, 0750, lock); err != nil {
-		log.Error("mkdir error", zap.String("dir name", dir), zap.Error(err))
-		return "", err
-	}
-	fName := filepath.Join(dir, nameGenerator())
-
-	pri := fileops.FilePriorityOption(fileops.IO_PRIORITY_NORMAL)
-	fd, err := fileops.OpenFile(fName, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600, lock, pri)
-	if err != nil {
-		log.Error("create file error", zap.String("name", fName), zap.Error(err))
-		return "", err
-	}
-
-	s, err := fd.Write(buf)
-	if err != nil || s != len(buf) {
-		err = fmt.Errorf("write reliability log fail, write %v, size %v, err:%v", s, len(buf), err)
-		log.Error("write parquet plan log fail", zap.Int("write", s),
-			zap.String("file", fName), zap.Int("size", len(buf)), zap.Error(err))
-		panic(err)
-	}
-
-	if err = fd.Sync(); err != nil {
-		log.Error("sync parquet log file file")
-		panic(err)
-	}
-
-	return fName, fd.Close()
-}
-
-func ReadReliabilityLog(file string, dst interface{}) error {
-	_, err := fileops.Stat(file)
-	if err != nil {
-		log.Error("stat reliability log file fail", zap.String("file", file), zap.Error(err))
-		return err
-	}
-
-	lock := fileops.FileLockOption("")
-	pri := fileops.FilePriorityOption(fileops.IO_PRIORITY_NORMAL)
-	fd, err := fileops.OpenFile(file, os.O_RDONLY, 0600, lock, pri)
-	if err != nil {
-		log.Error("read reliability log file fail", zap.String("file", file), zap.Error(err))
-		return err
-	}
-	defer util.MustClose(fd)
-
-	buf, err := io.ReadAll(fd)
-	if err != nil {
-		log.Error("read reliability log file fail", zap.Error(err), zap.String("file", file))
-		return err
-	}
-
-	if err := json.Unmarshal(buf, dst); err != nil {
-		log.Error("unmarshal reliability log fail", zap.String("file", file), zap.Error(err))
-		return err
-	}
-
-	return nil
-}
-
 func ProcParquetLog(logDir string, lockPath *string, ctx *EventContext) error {
+	if ctx.mergeSet == nil {
+		log.Warn("ProcParquetLog get nil mergeSet, will not recover parquet log", zap.String("parquet log dir", logDir))
+		return nil
+	}
 	dirs, err := fileops.ReadDir(logDir)
 	if err != nil {
 		log.Error("read compact log dir fail", zap.String("path", logDir), zap.Error(err))
@@ -614,7 +580,7 @@ func ProcParquetLog(logDir string, lockPath *string, ctx *EventContext) error {
 		logFile := filepath.Join(logDir, logName)
 
 		plan := &TSSP2ParquetPlan{}
-		err = ReadReliabilityLog(logFile, plan)
+		err = fileops.ReadReliabilityLog(logFile, plan)
 		if err != nil {
 			log.Error("read parquet log fail, skip", zap.String("file", logFile), zap.Error(err))
 			continue

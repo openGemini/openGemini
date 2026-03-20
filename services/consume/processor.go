@@ -15,34 +15,49 @@
 package consume
 
 import (
+	"context"
 	"fmt"
 	"io"
+	"strings"
+	"sync/atomic"
+	"time"
 
 	"github.com/openGemini/openGemini/coordinator"
 	"github.com/openGemini/openGemini/engine"
+	"github.com/openGemini/openGemini/engine/immutable/tsreader"
+	"github.com/openGemini/openGemini/engine/shelf"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/query"
 	"github.com/openGemini/openGemini/services/consume/kafka/protocol"
+	"github.com/openGemini/openGemini/services/pubsub"
+	"go.uber.org/zap"
 )
 
-const noContentSId = 0
+const (
+	initProcessorTimeout = 5 * time.Second
+	defaultRowLimit      = 1000
+)
 
 type ProcessorInterface interface {
 	Init(topic *Topic) error
-	Process(onMsg func(msg protocol.Marshaler) bool) error
+	Process(params FetchParams, onMsg func(msg protocol.Marshaler) bool) error
 	Compile(sql string) (query.PreparedStatement, error)
 	IteratorSize() int
-	IteratorReset()
+	Release()
 }
 
 type Processor struct {
-	engine engine.Engine
-	mc     metaclient.MetaClient
-	itrs   []record.Iterator
+	engine    engine.Engine
+	mc        metaclient.MetaClient
+	Iterators []record.Iterator
+
+	cancelFunc context.CancelFunc
+	release    func()
 }
 
 func NewProcessor(mc metaclient.MetaClient, engine engine.Engine) *Processor {
@@ -98,44 +113,62 @@ func (p *Processor) Init(topic *Topic) error {
 		}
 	})
 
-	p.itrs = p.engine.CreateConsumeIterator(mst.Database, mstOrigin.Name, opts)
-	if len(p.itrs) == 0 {
-		return fmt.Errorf("failed to create consume iterator with query: %s", topic.Query)
-	}
-	return nil
-}
-
-func (p *Processor) Process(onMsg func(msg protocol.Marshaler) bool) error {
-	for _, itr := range p.itrs {
-		isDataReady, err := p.process(itr, onMsg)
+	switch topic.Mode {
+	case HistoryMode:
+		ident := util.MeasurementIdent{
+			DB:   mst.Database,
+			RP:   mst.RetentionPolicy,
+			Name: mstOrigin.Name,
+		}
+		p.Iterators, p.release = p.engine.CreateConsumeIterator(ident, p.engine.GetDBPtIds(mst.Database), opts)
+		if len(p.Iterators) == 0 {
+			return fmt.Errorf("consume failed to create consume iterator with query: %s", topic.Query)
+		}
+	case RealTimeMode:
+		err = p.InitWalConsumeIterator(mst.Database, mst.RetentionPolicy, mstOrigin.Name, opts)
 		if err != nil {
 			return err
 		}
-		if isDataReady {
-			return nil
-		}
 	}
-	// If a connection sends multiple requests for the same topic, reset to ensure that data can be obtained.
-	p.IteratorReset()
 	return nil
 }
 
-func (p *Processor) process(itr record.Iterator, onMsg func(msg protocol.Marshaler) bool) (bool, error) {
-	for {
-		sid, rec, err := itr.Next()
-		if err == io.EOF {
-			return false, nil
+func (p *Processor) Process(fetchParams FetchParams, onMsg func(msg protocol.Marshaler) bool) error {
+	var (
+		accumulated uint32
+		timeoutHit  int32
+	)
+
+	if fetchParams.TimeoutMs > 0 {
+		time.AfterFunc(time.Duration(fetchParams.TimeoutMs)*time.Millisecond, func() {
+			atomic.StoreInt32(&timeoutHit, 1)
+		})
+	}
+
+	for accumulated < fetchParams.MinRows {
+		if atomic.LoadInt32(&timeoutHit) == 1 {
+			break
 		}
-		if err != nil {
-			return false, err
-		}
-		if sid == noContentSId {
-			return false, nil
-		}
-		if onMsg(rec) {
-			return true, nil
+
+		for _, itr := range p.Iterators {
+			rec, err := itr.Next()
+			if err != nil {
+				if err == io.EOF {
+					continue
+				}
+				return err
+			}
+			if !onMsg(rec) {
+				return nil
+			}
+
+			accumulated += uint32(rec.Rec.RowNums())
+			if accumulated >= fetchParams.MinRows {
+				return nil
+			}
 		}
 	}
+	return nil
 }
 
 func (p *Processor) Compile(sql string) (query.PreparedStatement, error) {
@@ -158,12 +191,66 @@ func (p *Processor) Compile(sql string) (query.PreparedStatement, error) {
 }
 
 func (p *Processor) IteratorSize() int {
-	return len(p.itrs)
+	return len(p.Iterators)
 }
 
-func (p *Processor) IteratorReset() {
-	for i := range p.itrs {
-		p.itrs[i].Release()
+func (p *Processor) Release() {
+	if p.cancelFunc != nil {
+		p.cancelFunc()
 	}
-	p.itrs = nil
+	for i := range p.Iterators {
+		p.Iterators[i].Release()
+	}
+	p.Iterators = nil
+	if p.release != nil {
+		p.release()
+	}
+}
+
+type FetchParams struct {
+	MinRows   uint32
+	MaxRows   uint32
+	TimeoutMs uint32
+}
+
+type RecordIterCreator interface {
+	CreateIterator(mst string) record.RecIterator
+}
+
+func (p *Processor) InitWalConsumeIterator(db, rp, mst string, opt *query.ProcessorOptions) error {
+	opts, err := tsreader.NewConsumeOptions(opt, nil)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	p.cancelFunc = cancel
+
+	walIterators := shelf.NewWalIterators(nil, mst, opts.Schema(), opts.TagSelected(), opts.FieldSelected(), defaultRowLimit, nil)
+	p.Iterators = append(p.Iterators, walIterators)
+
+	key := BuildPubSubMessageKey(db, rp)
+	go func() {
+		err = pubsub.DefaultCachedPubSub.Subscribe(key, ctx, func(msg pubsub.Message) {
+			creator, ok := msg.(RecordIterCreator)
+			if !ok {
+				logger.GetLogger().Error("consume subscribe failed", zap.String("topic", key))
+				return
+			}
+			iterator := creator.CreateIterator(mst)
+			walIterators.AddIterator(iterator)
+		})
+		if err != nil {
+			logger.GetLogger().Error("consume subscribe failed", zap.String("topic", key))
+		}
+	}()
+	return nil
+}
+
+func BuildPubSubMessageKey(db, rp string) string {
+	var b strings.Builder
+	b.WriteString(db)
+	b.WriteByte(':')
+	b.WriteString(rp)
+	return b.String()
 }

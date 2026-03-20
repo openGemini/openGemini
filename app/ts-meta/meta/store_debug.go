@@ -21,8 +21,8 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	mproto "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
-	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
 )
 
 func (s *Store) markTakeOver(enable bool) error {
@@ -32,9 +32,7 @@ func (s *Store) markTakeOver(enable bool) error {
 	t := mproto.Command_MarkTakeoverCommand
 	cmd := &mproto.Command{Type: &t}
 
-	if err := proto.SetExtension(cmd, mproto.E_MarkTakeoverCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, mproto.E_MarkTakeoverCommand_Command, val)
 
 	err := s.ApplyCmd(cmd)
 	if err != nil {
@@ -51,9 +49,7 @@ func (s *Store) markBalancer(enable bool) error {
 	t := mproto.Command_MarkBalancerCommand
 	cmd := &mproto.Command{Type: &t}
 
-	if err := proto.SetExtension(cmd, mproto.E_MarkBalancerCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, mproto.E_MarkBalancerCommand_Command, val)
 
 	return s.ApplyCmd(cmd)
 }

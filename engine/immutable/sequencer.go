@@ -23,6 +23,7 @@ import (
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/encoding"
 	"github.com/openGemini/openGemini/lib/numberenc"
+	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/openGemini/openGemini/lib/util"
 )
 
@@ -191,6 +192,12 @@ func (s *Sequencer) SetStat(free, loading bool) {
 	s.seqMu.Unlock()
 }
 
+func (s *Sequencer) GetStat() (bool, bool) {
+	s.seqMu.RLock()
+	defer s.seqMu.RUnlock()
+	return s.isFree, s.isLoading
+}
+
 func (s *Sequencer) SetToInLoading() bool {
 	s.seqMu.Lock()
 	ok := s.isFree && !s.isLoading
@@ -276,10 +283,16 @@ func (s *Sequencer) GetMmsIdTime(name string) *MmsIdTime {
 	return s.mmsIdTime[name]
 }
 
+var idTimesPool = pool.NewDefaultUnionPool(func() *IdTimePairs {
+	return &IdTimePairs{
+		Ids:  make([]uint64, 0, 64),
+		Tms:  make([]int64, 0, 64),
+		Rows: make([]int64, 0, 64),
+	}
+})
+
 // IdTimePairs If you change the order of the elements in the structure,
 // remember to modify marshal() and unmarshal() as well.
-var idTimesPool = sync.Pool{}
-
 type IdTimePairs struct {
 	Name string
 	Ids  []uint64
@@ -288,21 +301,17 @@ type IdTimePairs struct {
 }
 
 func GetIDTimePairs(name string) *IdTimePairs {
-	v := idTimesPool.Get()
-	if v == nil {
-		return &IdTimePairs{
-			Ids:  make([]uint64, 0, 64),
-			Tms:  make([]int64, 0, 64),
-			Rows: make([]int64, 0, 64),
-			Name: name,
-		}
-	}
-	p, ok := v.(*IdTimePairs)
-	if !ok {
-		panic("GetIDTimePairs idTimesPool Get value isn't *IdTimePairs type")
-	}
+	p := idTimesPool.Get()
 	p.Reset(name)
 	return p
+}
+
+func (p *IdTimePairs) Instance() *IdTimePairs {
+	return p
+}
+
+func (p *IdTimePairs) MemSize() int {
+	return cap(p.Ids)*util.Uint64SizeBytes + cap(p.Tms)*util.Uint64SizeBytes + cap(p.Rows)*util.Uint64SizeBytes
 }
 
 func PutIDTimePairs(pair *IdTimePairs) {

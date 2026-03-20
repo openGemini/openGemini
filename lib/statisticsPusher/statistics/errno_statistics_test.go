@@ -15,10 +15,10 @@
 package statistics_test
 
 import (
+	"math/rand/v2"
 	"testing"
 	"time"
 
-	"github.com/openGemini/openGemini/lib/rand"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/stretchr/testify/assert"
 )
@@ -33,7 +33,7 @@ func TestErrnoStat(t *testing.T) {
 		tags["errno"] = code
 		tags["module"] = code[1:3]
 
-		k := int(rand.Int63n(10) + 1)
+		k := int(rand.Int64N(10) + 1)
 		for i := 0; i < k; i++ {
 			stat.Add(code)
 		}
@@ -73,7 +73,7 @@ func TestOpsErrnoStat(t *testing.T) {
 		tags["errno"] = code
 		tags["module"] = code[1:3]
 
-		k := int(rand.Int63n(10) + 1)
+		k := int(rand.Int64N(10) + 1)
 		for i := 0; i < k; i++ {
 			stat.Add(code)
 		}

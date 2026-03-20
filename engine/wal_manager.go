@@ -71,6 +71,9 @@ func (m *StreamWalManager) Load(dir string, lock *string) error {
 	if err != nil {
 		return err
 	}
+	if len(files) == 0 {
+		return nil
+	}
 
 	fileGroups := make(map[int64]*WalFiles)
 
@@ -110,12 +113,24 @@ func (m *StreamWalManager) Load(dir string, lock *string) error {
 	return nil
 }
 
-func (m *StreamWalManager) Replay(ctx context.Context, ptID uint32, isLastPT bool) error {
+func (m *StreamWalManager) Replay(ctx context.Context, ptID uint32, isLastPT bool, hasData *bool) error {
 	m.mu.Lock()
 	ptLoadFiles := m.loadFiles[ptID]
 	m.mu.Unlock()
+	defer func() {
+		m.mu.Lock()
+		m.loadFiles[ptID] = [][]*WalFiles{}
+		m.mu.Unlock()
+	}()
 	if len(ptLoadFiles) == 0 {
-		return nil
+		var err error
+		if isLastPT && *hasData {
+			rowObj := getWalRowsObjects()
+			rowObj.isLastRows = true
+			err = m.streamHandler(rowObj.rows, true, []string{})
+
+		}
+		return err
 	}
 	lastIndex := m.LastIndex(ptID)
 
@@ -124,8 +139,6 @@ func (m *StreamWalManager) Replay(ctx context.Context, ptID uint32, isLastPT boo
 			continue
 		}
 		lastReplay := isLastPT && i == lastIndex
-		path := strconv.FormatUint(uint64(ptID), 10)
-		logger.NewLogger(errno.ModuleWal).Info("StreamWalManager Replay", zap.String("path", path))
 		conf := config.GetStoreConfig().Wal
 		wal := &WAL{}
 		wal.walEnabled = true
@@ -136,16 +149,9 @@ func (m *StreamWalManager) Replay(ctx context.Context, ptID uint32, isLastPT boo
 		for i, walFiles := range loadFiles {
 			wal.logReplay[i].fileNames = walFiles.files
 		}
-		logger.NewLogger(errno.ModuleWal).Info("StreamWalManager Replay", zap.Int("loadFiles", len(loadFiles)))
 
 		_, err := wal.Replay(ctx, func(binary []byte, rowsCtx *walRowsObjects, writeWalType WalRecordType, logReplay LogReplay) error {
-			lastShard := i == lastIndex
-			if lastShard && rowsCtx.isLastRows {
-				m.loadFiles[ptID] = [][]*WalFiles{}
-				if isLastPT {
-					m.CleanLoadFiles()
-				}
-			}
+			*hasData = true
 			return m.streamHandler(rowsCtx.rows, rowsCtx.isLastRows && lastReplay, logReplay.fileNames)
 		})
 
@@ -153,7 +159,6 @@ func (m *StreamWalManager) Replay(ctx context.Context, ptID uint32, isLastPT boo
 			return err
 		}
 	}
-
 	return nil
 }
 

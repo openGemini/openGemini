@@ -35,17 +35,19 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/index"
 	"github.com/openGemini/openGemini/lib/obs"
-	internal "github.com/openGemini/openGemini/lib/util/lifted/influx/influxql/internal"
-	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/prometheus/prometheus/promql/parser"
 )
 
 const (
-	POW      = "pow"
-	POW_OP   = 57342
-	ATAN2    = "ATAN2"
-	ATAN2_OP = 57343
+	POW                    = "pow"
+	POW_OP                 = 57342
+	ATAN2                  = "ATAN2"
+	ATAN2_OP               = 57343
+	DefaultLabels          = "__labels__"
+	DefaultLabelKeySplit   = "|"
+	DefaultLabelValueSplit = "#$#"
+	ElementAtName          = "element_at"
 )
 
 // DataType represents the primitive data typ available in InfluxQL.
@@ -453,6 +455,10 @@ func (*WithSelectStatement) node() {}
 
 func (*GraphStatement) node() {}
 
+func (*AlterShardsNumStatement) node() {}
+
+func (*ShowLastIndexStatement) node() {}
+
 func (*BinaryExpr) node()                  {}
 func (*BooleanLiteral) node()              {}
 func (*BoundParameter) node()              {}
@@ -753,6 +759,10 @@ func (*WithSelectStatement) stmt() {}
 
 func (*GraphStatement) stmt() {}
 
+func (*AlterShardsNumStatement) stmt() {}
+
+func (*ShowLastIndexStatement) stmt() {}
+
 // Expr represents an expression that can be evaluated to a value.
 type Expr interface {
 	Node
@@ -918,6 +928,9 @@ func (a Sources) HaveOnlyCSStore() bool {
 			return false
 		}
 	}
+	if len(msts) == 0 {
+		return false
+	}
 	return true
 }
 
@@ -939,33 +952,6 @@ func (a Sources) IsCTE() bool {
 	}
 	_, ok := a[0].(*CTE)
 	return ok
-}
-
-// MarshalBinary encodes a list of sources to a binary format.
-func (a Sources) MarshalBinary() ([]byte, error) {
-	var pb internal.Measurements
-	pb.Items = make([]*internal.Measurement, len(a))
-	for i, source := range a {
-		pb.Items[i] = encodeMeasurement(source.(*Measurement))
-	}
-	return proto.Marshal(&pb)
-}
-
-// UnmarshalBinary decodes binary data into a list of sources.
-func (a *Sources) UnmarshalBinary(buf []byte) error {
-	var pb internal.Measurements
-	if err := proto.Unmarshal(buf, &pb); err != nil {
-		return err
-	}
-	*a = make(Sources, len(pb.GetItems()))
-	for i := range pb.GetItems() {
-		mm, err := decodeMeasurement(pb.GetItems()[i])
-		if err != nil {
-			return err
-		}
-		(*a)[i] = mm
-	}
-	return nil
 }
 
 // RequiredPrivileges recursively returns a list of execution privileges required.
@@ -995,6 +981,15 @@ func (a Sources) RequiredPrivileges() (ExecutionPrivileges, error) {
 			}
 			ep = append(ep, privs...)
 		case *Union:
+			var sources Sources
+			sources = append(sources, source.LSrc)
+			sources = append(sources, source.RSrc)
+			privs, err := sources.RequiredPrivileges()
+			if err != nil {
+				return nil, err
+			}
+			ep = append(ep, privs...)
+		case *BinOp:
 			var sources Sources
 			sources = append(sources, source.LSrc)
 			sources = append(sources, source.RSrc)
@@ -1244,6 +1239,7 @@ type CreateMeasurementStatement struct {
 	Fields              map[string]int32
 	IndexType           []string
 	IndexList           [][]string
+	IndexParams         [][]Expr
 	IndexOption         []*IndexOption
 	TimeClusterDuration time.Duration
 	CompactType         string
@@ -1267,6 +1263,7 @@ func (s *CreateMeasurementStatement) UpdateDepthForTests() int {
 type CreateMeasurementStatementOption struct {
 	IndexType           []string
 	IndexList           [][]string
+	IndexParams         [][]Expr
 	ShardKey            []string
 	NumOfShards         int64
 	Type                string
@@ -2109,6 +2106,8 @@ type SelectStatement struct {
 	// Expressions returned from the selection.
 	Fields Fields
 
+	DistinctFields Fields
+
 	// Target (destination) for the result of a SELECT INTO query.
 	Target *Target
 
@@ -2242,6 +2241,8 @@ type SelectStatement struct {
 	AllDependencyCTEs CTES
 
 	depth int
+
+	IsQueryTypeSQL bool
 }
 
 func (s *SelectStatement) Depth() int {
@@ -2326,6 +2327,30 @@ func (s *SelectStatement) TimeFieldName() string {
 		return s.TimeAlias
 	}
 	return "time"
+}
+
+// IsLastQuery Used to determine whether the query is a last/last_row query.
+func (s *SelectStatement) IsLastQuery() bool {
+	if s == nil {
+		return false
+	}
+	// last or last row call
+	aggNum, prevAgg := 0, ""
+	for i := range s.Fields {
+		agg, ok := s.Fields[i].Expr.(*Call)
+		if !ok {
+			continue
+		}
+		if prevAgg != "" && prevAgg != agg.Name {
+			return false
+		}
+		if agg.Name != "last_row" && agg.Name != "last" {
+			return false
+		}
+		prevAgg = agg.Name
+		aggNum++
+	}
+	return aggNum >= 1
 }
 
 // Clone returns a deep copy of the statement.
@@ -2821,6 +2846,70 @@ func rewriteConfVarRefForAll(condition Expr, allVarRef map[string]Expr) error {
 	return nil
 }
 
+// rewriteElementAt used to pre-materialize, extract key from DefaultLabels as tag .
+func rewriteElementAt(call *Call) Expr {
+	if call.Name != ElementAtName {
+		return call
+	}
+	if len(call.Args) != 2 {
+		return call
+	}
+	arg0, ok := call.Args[0].(*VarRef)
+	if !ok {
+		return call
+	}
+	arg1, ok := call.Args[1].(*StringLiteral)
+	if !ok {
+		return call
+	}
+	if arg0.Val == DefaultLabels {
+		if arg0.Type != Unknown {
+			return &VarRef{Val: arg1.Val, Type: arg0.Type}
+		}
+		return &VarRef{Val: arg1.Val, Type: Tag}
+	}
+	return call
+}
+
+func rewriteConditionElementAt(condition *Expr) error {
+	switch expr := (*condition).(type) {
+	case *ParenExpr:
+		return rewriteConditionElementAt(&(expr.Expr))
+	case *BinaryExpr:
+		if err := rewriteConditionElementAt(&(expr.LHS)); err != nil {
+			return err
+		}
+		if err := rewriteConditionElementAt(&(expr.RHS)); err != nil {
+			return err
+		}
+	case *Call:
+		if expr.Name == ElementAtName {
+			*condition = rewriteElementAt(expr)
+		}
+	default:
+	}
+	return nil
+}
+
+func rewriteFieldElementAt(fields Fields) error {
+	for i := range fields {
+		if err := rewriteConditionElementAt(&fields[i].Expr); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func RewriteElementAtFunction(condition Expr, fields Fields) error {
+	if err := rewriteConditionElementAt(&condition); err != nil {
+		return err
+	}
+	if err := rewriteFieldElementAt(fields); err != nil {
+		return err
+	}
+	return nil
+}
+
 // for the pipe-systax parser of logkeeper
 func rewriteConfVarRefForLog(condition Expr, allVarRef map[string]Expr) error {
 	if !config.IsLogKeeper() || condition == nil {
@@ -3016,6 +3105,22 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin boo
 	// Clone the statement so we aren't rewriting the original.
 	other := s.Clone()
 
+	if len(other.DistinctFields) == 0 && other.DistinctFields != nil {
+		if len(other.Fields) == 1 && !other.HasFieldWildcard() && !other.Sources.HaveOnlyCSStore() {
+			other.DistinctFields = nil
+			args := []Expr{other.Fields[0].Expr}
+			cols := &Call{Name: "distinct", Args: args, depth: 1 + other.Fields[0].Expr.Depth()}
+			field := &Field{Expr: cols, Alias: other.Fields[0].Alias, depth: 1 + cols.Depth()}
+			other.Fields = []*Field{field}
+		}
+	} else if len(other.DistinctFields) > 0 {
+		fields := make(Fields, 0, len(other.DistinctFields))
+		for _, f := range other.DistinctFields {
+			fields = append(fields, &Field{Expr: CloneExpr(f.Expr), Alias: f.Alias, depth: f.depth, Auxiliary: true})
+		}
+		other.Fields = append(other.Fields, fields...)
+	}
+
 	// Iterate through the sources and rewrite any subqueries first.
 	sources := make(Sources, 0, len(other.Sources))
 
@@ -3193,6 +3298,11 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin boo
 	containTimeField := false
 
 	getFieldVarRef := func(n Node) {
+		call, ok := n.(*Call)
+		if ok && call.Name == ElementAtName {
+			n = rewriteElementAt(call)
+		}
+
 		ref, ok := n.(*VarRef)
 
 		if ok {
@@ -3217,6 +3327,11 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin boo
 	}
 
 	getCondVarRef := func(n Node) {
+		call, ok := n.(*Call)
+		if ok && call.Name == ElementAtName {
+			n = rewriteElementAt(call)
+		}
+
 		ref, ok := n.(*VarRef)
 
 		if ok {
@@ -3324,7 +3439,11 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin boo
 	rewriteDefaultTypeOfVarRef := func(n Node) {
 		ref, ok := n.(*VarRef)
 		if ok && ref.Type == Unknown {
-			ref.Type = Integer
+			if ref.Val == DefaultLabels {
+				ref.Type = Tag
+			} else {
+				ref.Type = Integer
+			}
 		}
 	}
 
@@ -3342,6 +3461,9 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin boo
 	}
 
 	WalkFunc(other.Fields, rewriteDefaultTypeOfVarRef)
+	if err := RewriteElementAtFunction(other.Condition, other.Fields); err != nil {
+		return nil, err
+	}
 
 	if len(other.Dimensions) == 1 {
 		if _, ok := other.Dimensions[0].Expr.(*Wildcard); ok {
@@ -3371,6 +3493,18 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin boo
 	fieldSet, dimensionSet, err := FieldDimensions(other.Sources, m, &other.Schema)
 	if err != nil {
 		return nil, err
+	}
+	// for arrow flight standard sql format, select * should return time
+	if s.IsQueryTypeSQL && fieldSet["time"].LessThan(Integer) {
+	Loop:
+		for _, src := range s.Sources {
+			switch src.(type) {
+			case *Measurement:
+				fieldSet["time"] = Integer
+				break Loop
+			default:
+			}
+		}
 	}
 	if err := s.GetUnnestSchema(fieldSet); err != nil {
 		return nil, err
@@ -3406,7 +3540,7 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin boo
 	dimensions := stringSetSlice(dimensionSet)
 
 	// Rewrite all wildcard query fields
-	if hasFieldWildcard && !tableFunction {
+	if hasFieldWildcard {
 		// Allocate a slice assuming there is exactly one wildcard for efficiency.
 		rwFields := make(Fields, 0, len(other.Fields)+len(fields)-1)
 		for _, f := range other.Fields {
@@ -3470,7 +3604,7 @@ func (s *SelectStatement) RewriteFields(m FieldMapper, batchEn bool, hasJoin boo
 
 				// Add additional typ for certain functions.
 				switch call.Name {
-				case "count", "first", "last", "distinct", "elapsed", "mode", "sample", "absent":
+				case "count", "first", "last", "distinct", "elapsed", "mode", "sample", "absent", "last_row":
 					supportedTypes[String] = struct{}{}
 					fallthrough
 				case "min", "max":
@@ -4621,40 +4755,6 @@ func (s *SelectStatement) rewriteWithoutTimeDimensions() string {
 	return n.String()
 }
 
-func encodeMeasurement(mm *Measurement) *internal.Measurement {
-	pb := &internal.Measurement{
-		Database:        proto.String(mm.Database),
-		RetentionPolicy: proto.String(mm.RetentionPolicy),
-		Name:            proto.String(mm.Name),
-		IsTarget:        proto.Bool(mm.IsTarget),
-		EngineType:      proto.Uint32(uint32(mm.EngineType)),
-	}
-	if mm.Regex != nil {
-		pb.Regex = proto.String(mm.Regex.Val.String())
-	}
-	return pb
-}
-
-func decodeMeasurement(pb *internal.Measurement) (*Measurement, error) {
-	mm := &Measurement{
-		Database:        pb.GetDatabase(),
-		RetentionPolicy: pb.GetRetentionPolicy(),
-		Name:            pb.GetName(),
-		IsTarget:        pb.GetIsTarget(),
-		EngineType:      config.EngineType(pb.GetEngineType()),
-	}
-
-	if pb.Regex != nil {
-		regex, err := regexp.Compile(pb.GetRegex())
-		if err != nil {
-			return nil, fmt.Errorf("invalid binary measurement regex: value=%q, err=%s", pb.GetRegex(), err)
-		}
-		mm.Regex = &RegexLiteral{Val: regex}
-	}
-
-	return mm, nil
-}
-
 // walkNames will walk the Expr and return the identifier names used.
 func walkNames(exp Expr) []string {
 	switch expr := exp.(type) {
@@ -4776,7 +4876,7 @@ func (t *Target) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.B
 
 // ExplainStatement represents a command for explaining a select statement.
 type ExplainStatement struct {
-	Statement *SelectStatement
+	Statement Statement
 	Analyze   bool
 	depth     int
 }
@@ -5043,7 +5143,7 @@ func (s *DropSeriesStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositions
 
 // RequiredPrivileges returns the privilege required to execute a DropSeriesStatement.
 func (s DropSeriesStatement) RequiredPrivileges() (ExecutionPrivileges, error) {
-	return ExecutionPrivileges{{Admin: false, Name: "", Rwuser: true, Privilege: WritePrivilege}}, nil
+	return ExecutionPrivileges{{Admin: true, Name: "", Rwuser: true, Privilege: AllPrivileges}}, nil
 }
 
 // DeleteSeriesStatement represents a command for deleting all or part of a series from a database.
@@ -6922,8 +7022,15 @@ func (f *Field) Name() string {
 		return f.Name()
 	case *VarRef:
 		return expr.Val
+	case *StringLiteral:
+		return expr.Val
+	case *NumberLiteral:
+		return strconv.FormatFloat(expr.Val, 'f', 10, 64)
+	case *IntegerLiteral:
+		return strconv.FormatInt(expr.Val, 10)
+	case *BooleanLiteral:
+		return strconv.FormatBool(expr.Val)
 	}
-
 	// Otherwise return a blank name.
 	return ""
 }
@@ -7122,11 +7229,24 @@ func (il *IndexList) Clone() *IndexList {
 	return clone
 }
 
+type IndexParam struct {
+	IList []Expr
+}
+
+func (ip *IndexParam) Clone() *IndexParam {
+	clone := &IndexParam{
+		IList: make([]Expr, len(ip.IList)),
+	}
+	copy(clone.IList, ip.IList)
+	return clone
+}
+
 type IndexRelation struct {
 	Rid          uint32
 	Oids         []uint32
 	IndexNames   []string
 	IndexList    []*IndexList    // indexType to column name (all column indexed with indexType)
+	IndexParam   []*IndexParam   // index params that related to index type
 	IndexOptions []*IndexOptions // indexType to IndexOptions
 }
 
@@ -7136,6 +7256,7 @@ func NewIndexRelation() *IndexRelation {
 		IndexNames:   make([]string, 0),
 		IndexList:    make([]*IndexList, 0),
 		IndexOptions: make([]*IndexOptions, 0),
+		IndexParam:   make([]*IndexParam, 0),
 	}
 }
 
@@ -7186,6 +7307,9 @@ func (ir *IndexRelation) Clone() *IndexRelation {
 	for _, opts := range ir.IndexOptions {
 		clone.IndexOptions = append(clone.IndexOptions, opts.Clone())
 	}
+	for _, src := range ir.IndexParam {
+		clone.IndexParam = append(clone.IndexParam, src.Clone())
+	}
 	return clone
 }
 
@@ -7235,7 +7359,7 @@ func (ir *IndexRelation) GetTimeClusterDuration() int64 {
 }
 
 func (ir *IndexRelation) IsSkipIndex(idx int) bool {
-	if ir.Oids[idx] >= uint32(index.BloomFilter) && ir.Oids[idx] < uint32(index.IndexTypeAll) {
+	if ir.Oids[idx] >= uint32(index.BloomFilter) && ir.Oids[idx] < uint32(index.TypeEnd) {
 		return true
 	}
 	return false
@@ -8362,8 +8486,21 @@ type BinaryExpr struct {
 	LHS Expr
 	RHS Expr
 	// If a comparison operator, return 0/1 rather than filtering.
-	ReturnBool bool
-	depth      int
+	ReturnBool  bool
+	IsPromQuery bool
+	depth       int
+}
+
+func (e *BinaryExpr) MatchTagValFastWay(tagkey []byte) bool {
+	if lhs, ok := e.LHS.(*VarRef); ok {
+		if lhs.Val != string(tagkey) {
+			return false
+		}
+	}
+	if _, ok := e.RHS.(*RegexLiteral); !ok {
+		return false
+	}
+	return e.Op == NEQREGEX || e.Op == EQREGEX
 }
 
 func (e *BinaryExpr) Depth() int {
@@ -8448,6 +8585,10 @@ func (m *MatchExpr) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *byte
 		_ = m.Field.RenderBytes(buf, posmap)
 		_, _ = buf.WriteString("match_phrase")
 		_ = m.Value.RenderBytes(buf, posmap)
+	case UNMATCHPHRASE:
+		_ = m.Field.RenderBytes(buf, posmap)
+		_, _ = buf.WriteString("unmatch_phrase")
+		_ = m.Value.RenderBytes(buf, posmap)
 	}
 
 	if posmap != nil {
@@ -8503,6 +8644,14 @@ func (e *ParenExpr) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *byte
 // RegexLiteral represents a regular expression.
 type RegexLiteral struct {
 	Val *regexp.Regexp
+}
+
+func (r *RegexLiteral) Match(val []byte, op Token) bool {
+	match := r.Val.MatchString(string(val))
+	if op == NEQREGEX {
+		return !match
+	}
+	return match
 }
 
 func (r *RegexLiteral) Depth() int { return 1 }
@@ -9153,6 +9302,8 @@ func (v *ValuerEval) evalBinaryExpr(expr *BinaryExpr) interface{} {
 		case DIV:
 			if !ok {
 				return nil
+			} else if rhs == 0 && !expr.IsPromQuery {
+				return float64(0)
 			}
 			return lhs / rhs
 		case MOD:
@@ -9205,6 +9356,9 @@ func (v *ValuerEval) evalBinaryExpr(expr *BinaryExpr) interface{} {
 			case MUL:
 				return lhs * rhs
 			case DIV:
+				if rhs == 0 && !expr.IsPromQuery {
+					return float64(0)
+				}
 				return lhs / rhs
 			case MOD:
 				return math.Mod(lhs, rhs)
@@ -9231,6 +9385,9 @@ func (v *ValuerEval) evalBinaryExpr(expr *BinaryExpr) interface{} {
 				return lhs * rhs
 			case DIV:
 				if v.IntegerFloatDivision {
+					if rhs == 0 && !expr.IsPromQuery {
+						return float64(0)
+					}
 					return float64(lhs) / float64(rhs)
 				}
 
@@ -9335,6 +9492,9 @@ func (v *ValuerEval) evalBinaryExpr(expr *BinaryExpr) interface{} {
 			case MUL:
 				return lhs * rhs
 			case DIV:
+				if rhs == 0 {
+					return float64(0)
+				}
 				return lhs / rhs
 			case MOD:
 				return math.Mod(lhs, rhs)
@@ -9742,6 +9902,15 @@ func (v *TypeValuerEval) evalVarRefExprType(expr *VarRef, batchEn bool) (DataTyp
 				if e != nil {
 					return Unknown, e
 				}
+			case *TableFunction:
+				if src.FunctionName == "ms_get_node_id" {
+					return String, nil
+				}
+				valuer := TypeValuerEval{
+					TypeMapper: v.TypeMapper,
+					Sources:    Sources(src.TableFunctionSource),
+				}
+				return valuer.evalVarRefExprType(expr, batchEn)
 			}
 		}
 	}
@@ -12205,7 +12374,31 @@ func (s *WithSelectStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositions
 }
 
 func (s *WithSelectStatement) RequiredPrivileges() (ExecutionPrivileges, error) {
-	return ExecutionPrivileges{{Admin: true, Name: "", Rwuser: true, Privilege: AllPrivileges}}, nil
+	ep, err := s.Query.RequiredPrivileges()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, cte := range s.CTEs {
+		if cte.Query != nil {
+			epSelect, err := cte.Query.RequiredPrivileges()
+			if err != nil {
+				return nil, err
+			}
+			ep = append(ep, epSelect...)
+		}
+
+		if cte.GraphQuery != nil {
+			epGraph, err := cte.GraphQuery.RequiredPrivileges()
+			if err != nil {
+				return nil, err
+			}
+			ep = append(ep, epGraph...)
+		}
+
+	}
+
+	return ep, nil
 }
 
 type TagSet struct {
@@ -12266,13 +12459,6 @@ func (stmt *ShowTagValuesStatement) RewriteShowTagValStmt(in *InCondition) (*Sho
 	if in.TimeCond != nil {
 		stmt.Condition = in.TimeCond
 		stmt.depth = max(stmt.depth, 1+stmt.Condition.Depth())
-		stringLiteral := &StringLiteral{
-			Val: "exact_statistic_query",
-		}
-		hint := &Hint{
-			Expr: stringLiteral,
-		}
-		stmt.Hints = Hints{hint}
 	} else {
 		stmt.Condition = nil
 	}
@@ -12331,7 +12517,7 @@ func (s *GraphStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) 
 }
 
 func (s *GraphStatement) RequiredPrivileges() (ExecutionPrivileges, error) {
-	return ExecutionPrivileges{{Admin: true, Name: "", Rwuser: true, Privilege: AllPrivileges}}, nil
+	return ExecutionPrivileges{{Admin: false, Name: "", Rwuser: true, Privilege: ReadPrivilege}}, nil
 }
 
 // Clone returns a deep copy of the statement.
@@ -12439,4 +12625,98 @@ func (s *TableFunction) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *
 		posmap[s] = Position{Begin: Begin, End: buf.Len()}
 	}
 	return buf
+}
+
+type AlterShardsNumStatement struct {
+	Database        string
+	RetentionPolicy string
+	Name            string
+	NumOfShards     int64
+}
+
+func (s *AlterShardsNumStatement) Depth() int {
+	if s != nil {
+		return 1
+	}
+	return 0
+}
+
+func (s *AlterShardsNumStatement) UpdateDepthForTests() int {
+	if s != nil {
+		return 1
+	}
+	return 0
+}
+
+func (s *AlterShardsNumStatement) String() string {
+	return s.RenderBytes(&bytes.Buffer{}, nil).String()
+}
+
+func (s *AlterShardsNumStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	_, _ = buf.WriteString("ALTER MEASUREMENT ")
+	if s.Database != "" {
+		_, _ = buf.WriteString(QuoteIdent(s.Database))
+		_, _ = buf.WriteString(".")
+	}
+
+	if s.RetentionPolicy != "" {
+		_, _ = buf.WriteString(QuoteIdent(s.RetentionPolicy))
+		_, _ = buf.WriteString(".")
+	}
+
+	if s.Name != "" {
+		_, _ = buf.WriteString(QuoteIdent(s.Name))
+	}
+
+	_, _ = buf.WriteString(" WITH")
+	_, _ = buf.WriteString(" SHARDS ")
+	_, _ = buf.WriteString(strconv.FormatInt(s.NumOfShards, 10))
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
+}
+
+func (s *AlterShardsNumStatement) RequiredPrivileges() (ExecutionPrivileges, error) {
+	return ExecutionPrivileges{{Admin: true, Name: "", Rwuser: true, Privilege: AllPrivileges}}, nil
+}
+
+type ShowLastIndexStatement struct {
+	DbName string
+}
+
+func (s *ShowLastIndexStatement) Depth() int {
+	return 1
+}
+
+func (s *ShowLastIndexStatement) UpdateDepthForTests() int {
+	if s != nil {
+		return 1
+	}
+	return 0
+}
+
+func (s *ShowLastIndexStatement) String() string { return s.RenderBytes(&bytes.Buffer{}, nil).String() }
+
+func (s *ShowLastIndexStatement) RenderBytes(buf *bytes.Buffer, posmap BufPositionsMap) *bytes.Buffer {
+	Begin := buf.Len()
+
+	_, _ = buf.WriteString("SHOW LASTINDEX")
+
+	if s.DbName != "" {
+		_, _ = buf.WriteString(" dbName ")
+		_, _ = buf.WriteString(QuoteIdent(s.DbName))
+	}
+
+	if posmap != nil {
+		posmap[s] = Position{Begin: Begin, End: buf.Len()}
+	}
+	return buf
+}
+
+func (s *ShowLastIndexStatement) RequiredPrivileges() (ExecutionPrivileges, error) {
+	return ExecutionPrivileges{{Admin: true, Name: "", Rwuser: true, Privilege: AllPrivileges}}, nil
 }

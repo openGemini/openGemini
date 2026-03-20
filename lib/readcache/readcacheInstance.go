@@ -20,6 +20,7 @@ import (
 	"sync"
 
 	"github.com/openGemini/openGemini/lib/logger"
+	"go.uber.org/zap"
 )
 
 var readMetaCacheInstance *ReadCacheInstance
@@ -41,6 +42,17 @@ type ReadCacheInstance struct {
 func SetReadMetaCacheLimitSize(size uint64) {
 	readMetaCacheLimitSize = size
 	MetaCachePool.SetLimit(size)
+}
+
+func ReSetReadDataCacheLimitSize(en uint64) {
+	SetReadDataCacheLimitSize(en)
+	if readDataCacheInstance != nil {
+		segMu.Lock()
+		defer segMu.Unlock()
+		readDataCacheInstance.Purge(CachePagePool)
+		readDataCacheInstance = nil
+	}
+	logger.GetLogger().Info("ReSetReadDataCacheLimitSize", zap.Uint64("en", en))
 }
 
 func SetReadDataCacheLimitSize(size uint64) {

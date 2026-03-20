@@ -18,11 +18,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/indirect/go.opentelemetry.io/collector/pdata/pcommon"
+	"github.com/indirect/go.opentelemetry.io/collector/pdata/pmetric"
 	"github.com/influxdata/influxdb-observability/common"
 	"github.com/influxdata/influxdb-observability/otel2influx"
 	"go.opentelemetry.io/collector/consumer/consumererror"
-	"go.opentelemetry.io/collector/pdata/pcommon"
-	"go.opentelemetry.io/collector/pdata/pmetric"
 )
 
 type OtlpMetricWriter struct {

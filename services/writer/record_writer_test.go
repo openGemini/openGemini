@@ -57,7 +57,7 @@ func TestRecordWriter(t *testing.T) {
 	recs[0].Rec = *rec
 
 	err := recordWriter.RetryWriteRecords("db0", "default", recs)
-	require.ErrorContains(t, err, "point time is expired")
+	require.ErrorContains(t, err, "points beyond retention policy")
 
 	conf := config.GetShelfMode()
 	conf.Corrector(8)

@@ -16,8 +16,17 @@ package scheduler
 
 import (
 	"sync"
+	"time"
 
 	"github.com/influxdata/influxdb/pkg/limiter"
+	"github.com/openGemini/openGemini/lib/util"
+)
+
+type TaskType int
+
+const (
+	CompactTask TaskType = iota
+	MergeTask
 )
 
 type ListenHook func(signal chan struct{}, onClose func())
@@ -31,15 +40,18 @@ type TaskScheduler struct {
 	wg          sync.WaitGroup
 	closed      bool
 	closeSignal chan struct{}
+
+	signedCompactTask map[uint64]Task
 }
 
 func NewTaskScheduler(listen ListenHook, limiter limiter.Fixed) *TaskScheduler {
 	ts := &TaskScheduler{
-		taskMutex:   make(map[string]struct{}),
-		tasks:       make(map[uint64]Task),
-		closeSignal: make(chan struct{}),
-		closed:      false,
-		limiter:     limiter,
+		taskMutex:         make(map[string]struct{}),
+		tasks:             make(map[uint64]Task),
+		closeSignal:       make(chan struct{}),
+		closed:            false,
+		limiter:           limiter,
+		signedCompactTask: make(map[uint64]Task),
 	}
 
 	go func() {
@@ -52,7 +64,10 @@ func NewTaskScheduler(listen ListenHook, limiter limiter.Fixed) *TaskScheduler {
 }
 
 func (ts *TaskScheduler) Wait() {
-	ts.wg.Wait()
+	// This function is only called when the process is terminated or the shard expires.
+	// The long waiting time may be caused by some bugs.
+	// By setting a timeout, the waiting is forcibly terminated.
+	util.WaitTimeOut(ts.wg.Wait, ts.wg.Done, 10*time.Minute)
 }
 
 func (ts *TaskScheduler) CloseAll() {
@@ -86,6 +101,8 @@ func (ts *TaskScheduler) delTask(task Task) {
 	defer ts.mu.Unlock()
 
 	delete(ts.tasks, task.UUID())
+
+	delete(ts.signedCompactTask, task.UUID())
 }
 
 func (ts *TaskScheduler) addTaskMutex(key string) bool {
@@ -185,4 +202,54 @@ func (ts *TaskScheduler) execute(task Task, signal chan struct{}) {
 			}
 		}()
 	}
+}
+
+func (ts *TaskScheduler) RegisterCompactTask(t Task) {
+	if t.BeforeExecute() {
+		ts.signedCompactTask[t.UUID()] = t
+	}
+}
+
+func (ts *TaskScheduler) GetTask(typ TaskType) Task {
+	switch typ {
+	case CompactTask:
+		return ts.getTask(ts.signedCompactTask)
+	default:
+		return nil
+	}
+}
+
+func (ts *TaskScheduler) getTask(tasks map[uint64]Task) Task {
+	for _, t := range tasks {
+		if !ts.addTaskMutex(t.Key()) {
+			return nil
+		}
+		t.OnFinish(func() {
+			ts.delTaskMutex(t.Key())
+			ts.delTask(t)
+			ts.wg.Done()
+		})
+		return t
+	}
+	return nil
+}
+
+func (ts *TaskScheduler) GetTaskByID(typ TaskType, id uint64) Task {
+	switch typ {
+	case CompactTask:
+		return ts.getTaskByID(ts.signedCompactTask, id)
+	default:
+		return nil
+	}
+}
+
+func (ts *TaskScheduler) getTaskByID(tasks map[uint64]Task, id uint64) Task {
+	t, ok := tasks[id]
+	if !ok {
+		return nil
+	}
+	if _, ok := ts.taskMutex[t.Key()]; !ok {
+		return nil
+	}
+	return t
 }

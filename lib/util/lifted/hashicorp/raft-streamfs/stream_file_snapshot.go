@@ -101,7 +101,7 @@ func NewStreamFileSnapshotStore(base string, retain int, logger *log.Logger) (*S
 
 	// Ensure our path exists
 	path := filepath.Join(base, snapPath)
-	if err := fileops.MkdirAll(path, 0755); err != nil {
+	if err := fileops.MkdirAll(path, 0740); err != nil {
 		return nil, fmt.Errorf("snapshot path not accessible: %v", err)
 	}
 
@@ -139,7 +139,7 @@ func (f *StreamFileSnapshotStore) Create(version raft.SnapshotVersion, index, te
 	path := filepath.Join(f.path, name+tmpSuffix)
 
 	// Make the directory
-	if err := fileops.MkdirAll(path, 0755); err != nil {
+	if err := fileops.MkdirAll(path, 0740); err != nil {
 		f.logger.Printf("[ERR] snapshot: Failed to make snapshot directory: %v", err)
 		return nil, err
 	}
@@ -252,7 +252,7 @@ func (f *StreamFileSnapshotStore) getSnapshots() ([]*fileSnapshotMeta, error) {
 func (f *StreamFileSnapshotStore) readMeta(name string) (*fileSnapshotMeta, error) {
 	// Open the meta file
 	metaPath := filepath.Join(f.path, name, metaFilePath)
-	fh, err := fileops.OpenFile(metaPath, os.O_RDONLY, 0666, fileops.FilePriorityOption(fileops.IO_PRIORITY_NORMAL))
+	fh, err := fileops.OpenFile(metaPath, os.O_RDONLY, 0640, fileops.FilePriorityOption(fileops.IO_PRIORITY_NORMAL))
 	if err != nil {
 		return nil, err
 	}
@@ -448,7 +448,7 @@ func (s *StreamFileSnapshotSink) finalize() error {
 func (s *StreamFileSnapshotSink) writeMeta() error {
 	// Open the meta file
 	metaPath := filepath.Join(s.dir, metaFilePath)
-	fh, err := fileops.OpenFile(metaPath, os.O_CREATE, 0666, fileops.FilePriorityOption(fileops.IO_PRIORITY_NORMAL))
+	fh, err := fileops.OpenFile(metaPath, os.O_CREATE, 0640, fileops.FilePriorityOption(fileops.IO_PRIORITY_NORMAL))
 	if err != nil {
 		return err
 	}

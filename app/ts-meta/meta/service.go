@@ -60,6 +60,7 @@ type Service struct {
 	msm                    *MigrateStateMachine
 	balanceManager         *BalanceManager
 	masterPtBalanceManager *MasterPtBalanceManager
+	rpPtBalanceManager     *RpPtBalanceManager
 
 	httpServer *httpServer
 	metaServer *MetaServer
@@ -112,6 +113,7 @@ func (s *Service) startMetaServer() error {
 	s.clusterManager.SetPingFailedNode(s.config.PingFailedNode)
 	s.balanceManager = NewBalanceManager(s.config.BalanceAlgo)
 	s.masterPtBalanceManager = NewMasterPtBalanceManager()
+	s.rpPtBalanceManager = NewRpPtBalanceManager(time.Duration(s.config.AdaptiveShardingInterval), s.config.AdaptiveShardingEnabled)
 	s.msm = NewMigrateStateMachine()
 	s.store.cm = s.clusterManager
 	return nil
@@ -220,6 +222,9 @@ func (s *Service) Close() error {
 	}
 	if s.masterPtBalanceManager != nil {
 		s.masterPtBalanceManager.Stop()
+	}
+	if s.rpPtBalanceManager != nil {
+		s.rpPtBalanceManager.Stop()
 	}
 	if s.msm != nil {
 		s.msm.Stop()

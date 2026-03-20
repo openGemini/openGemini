@@ -16,23 +16,27 @@ package meta
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/hashicorp/raft"
 	"github.com/openGemini/openGemini/app/ts-meta/meta/message"
+	"github.com/openGemini/openGemini/lib/backup"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/failpoint"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/spdy/transport"
 	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
-	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
-	"github.com/pingcap/failpoint"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
 )
 
 func (h *Ping) Process() (transport.Codec, error) {
@@ -235,7 +239,7 @@ func isRetryError(err error) bool {
 }
 
 func createDatabase(cmd *proto2.Command) error {
-	ext, _ := proto.GetExtension(cmd, proto2.E_CreateDatabaseCommand_Command)
+	ext := proto.GetExtension(cmd, proto2.E_CreateDatabaseCommand_Command)
 	v, ok := ext.(*proto2.CreateDatabaseCommand)
 	if !ok {
 		return fmt.Errorf("%s is not a CreateDatabaseCommand", ext)
@@ -248,9 +252,7 @@ func createDatabase(cmd *proto2.Command) error {
 	}
 	t := proto2.Command_CreateDbPtViewCommand
 	command := &proto2.Command{Type: &t}
-	if err := proto.SetExtension(command, proto2.E_CreateDbPtViewCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(command, proto2.E_CreateDbPtViewCommand_Command, val)
 	if err := globalService.store.ApplyCmd(command); err != nil {
 		return err
 	}
@@ -432,9 +434,9 @@ func (h *RegisterQueryIDOffset) Process() (transport.Codec, error) {
 	return rsp, nil
 }
 
-func (h *Sql2MetaHeartbeat) Process() (transport.Codec, error) {
-	rsp := &message.Sql2MetaHeartbeatResponse{}
-	err := h.store.handlerSql2MetaHeartbeat(h.req.Host)
+func (h *CQ2MetaHeartbeat) Process() (transport.Codec, error) {
+	rsp := &message.CQ2MetaHeartbeatResponse{}
+	err := h.store.handlerCQ2MetaHeartbeat(h.req.Host)
 	if err != nil {
 		rsp.Err = err.Error()
 		return rsp, nil
@@ -492,7 +494,7 @@ func (h *SendBackupToMeta) Process() (transport.Codec, error) {
 	var err error
 	switch h.req.Mod {
 	case syscontrol.Backup:
-		rsp.Result, err = h.store.GetMarshalData([]string{})
+		err = handleBackup(h)
 	default:
 		return rsp, fmt.Errorf("SendBackupToMeta: param mod not support, mod: %s", h.req.Mod)
 	}
@@ -501,6 +503,34 @@ func (h *SendBackupToMeta) Process() (transport.Codec, error) {
 		rsp.Err = err.Error()
 	}
 	return rsp, nil
+}
+
+func handleBackup(h *SendBackupToMeta) error {
+	backupPath := h.req.Param[backup.BackupPath]
+	if backupPath == "" {
+		return errors.New("missing the required parameter backupPath")
+	}
+	isRemote := strings.ToLower(h.req.Param[backup.IsRemote]) == "true"
+	isNode := strings.ToLower(h.req.Param[backup.IsNode]) == "true"
+	backupMeta := strings.ToLower(h.req.Param[backup.BackupMeta]) == "true"
+	var dbs []string
+	if _, ok := h.req.Param[backup.DataBases]; ok {
+		dbs = strings.Split(h.req.Param[backup.DataBases], ",")
+	}
+
+	b := &Backup{
+		IsRemote:   isRemote,
+		IsNode:     isNode,
+		BackupPath: backupPath,
+		BackupMeta: backupMeta,
+		Databases:  dbs,
+		MetaDir:    h.config.Dir,
+	}
+	if err := b.RunBackupMeta(); err != nil {
+		logger.GetLogger().Error("run backup error", zap.Error(err))
+		return err
+	}
+	return nil
 }
 
 func handleFailpoint(h *SendSysCtrlToMeta) error {
@@ -528,12 +558,16 @@ func handleFailpoint(h *SendSysCtrlToMeta) error {
 	}
 
 	switchon, point, term, err := inner()
-	if err == nil && !switchon {
-		err = failpoint.Disable(point)
-	} else if err == nil {
-		err = failpoint.Enable(point, term)
+	if err != nil {
+		return err
 	}
-	return err
+
+	if switchon {
+		failpoint.Enable(point, term)
+	} else {
+		failpoint.Disable(point)
+	}
+	return nil
 }
 
 func (h *ShowCluster) Process() (transport.Codec, error) {
@@ -561,6 +595,32 @@ func (h *ShowCluster) Process() (transport.Codec, error) {
 		default:
 		}
 		rsp.Err = err.Error()
+		return rsp, nil
+	}
+	rsp.Data = b
+	return rsp, nil
+}
+
+func (h *GetShardingPlan) Process() (transport.Codec, error) {
+	rsp := &message.GetShardingPlanResponse{}
+	if !h.store.IsLeader() {
+		err := errno.NewError(errno.MetaIsNotLeader)
+		rsp.ErrCode = err.Errno()
+		rsp.Err = err.Error()
+		return rsp, nil
+	}
+
+	dbName := h.req.DbName
+	rpName := h.req.RpName
+	b, err := globalService.rpPtBalanceManager.GetShardingPlans(dbName, rpName)
+	if err != nil {
+		h.logger.Error("get shard plans fail", zap.Error(err))
+		rsp.Err = err.Error()
+		switch stdErr := err.(type) {
+		case *errno.Error:
+			rsp.ErrCode = stdErr.Errno()
+		default:
+		}
 		return rsp, nil
 	}
 	rsp.Data = b

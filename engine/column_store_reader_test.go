@@ -346,6 +346,7 @@ func TestColumnStoreReaderFunctions(t *testing.T) {
 }
 
 type MockStoreEngine struct {
+	hybridqp.StoreEngine
 	shard Shard
 }
 
@@ -635,13 +636,14 @@ func TestColumnStoreReader(t *testing.T) {
 			stmt.OmitTime = true
 			sopt := query.SelectOptions{ChunkSize: 1024}
 			opt, _ := query.NewProcessorOptionsStmt(stmt, sopt)
-			source := influxql.Sources{&influxql.Measurement{Database: "db0", RetentionPolicy: "rp0", Name: msNames[0]}}
+			source := influxql.Sources{&influxql.Measurement{Database: "db0", RetentionPolicy: "rp0", Name: msNames[0], EngineType: config.COLUMNSTORE}}
 			opt.Name = msNames[0]
 			opt.Sources = source
 			opt.StartTime = tt.tr.Min
 			opt.EndTime = tt.tr.Max
 			opt.Condition = stmt.Condition
 			opt.MaxParallel = 1
+			opt.SetSources(source)
 			querySchema := executor.NewQuerySchema(stmt.Fields, stmt.ColumnNames(), &opt, nil)
 
 			// step2: build the store executor

@@ -162,7 +162,7 @@ func (t *Transpiler) setAggregateFields(selectStatement *influxql.SelectStatemen
 // transpileAggregateExpr transpiles PromQL AggregateExpr to InfluxQL SelectStatement
 func (t *Transpiler) transpileAggregateExpr(a *parser.AggregateExpr) (influxql.Node, error) {
 	// Recursively transpile sub expression
-	t.dropMetric = true
+	t.dropMetric = false
 	expr, err := t.transpileExpr(a.Expr)
 	if err != nil {
 		return nil, errno.NewError(errno.TranspileAggFail, err.Error())

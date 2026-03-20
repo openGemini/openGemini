@@ -23,6 +23,7 @@ import (
 
 	"github.com/openGemini/openGemini/engine/comm"
 	"github.com/openGemini/openGemini/engine/hybridqp"
+	"github.com/openGemini/openGemini/engine/lastrowcache"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
@@ -59,36 +60,45 @@ type IndexScanTransform struct {
 	limit          int
 	rowCnt         int
 
-	frags         ShardsFragments
-	schema        hybridqp.Catalog
-	indexInfo     *CSIndexInfo
-	tsIndexInfo   comm.TSIndexInfo
-	oneShardState bool
-	crossShard    bool
-	stop          bool
+	frags       ShardsFragments
+	schema      hybridqp.Catalog
+	indexInfo   *CSIndexInfo
+	tsIndexInfo comm.TSIndexInfo
+	crossShard  bool
+
+	oneShardState    bool
+	isLastPerfQuery  bool // Used to determine whether the last row/field of data is queried.
+	serialShard      bool // Used to determine whether shards is scheduled in serial mode.
+	stop             bool // Used to stop execution in advance
+	isEmptyIndexScan bool // Index scan result of the shard is empty. Continue to scan the next shard.
 }
 
 func NewIndexScanTransform(outRowDataType hybridqp.RowDataType, ops []hybridqp.ExprOptions, schema hybridqp.Catalog,
 	input hybridqp.QueryNode, info *IndexScanExtraInfo, limiter chan struct{}, limit int, oneShardState bool) *IndexScanTransform {
 	trans := &IndexScanTransform{
-		outRowDataType: outRowDataType,
-		output:         NewChunkPort(outRowDataType),
-		inputPort:      NewChunkPort(outRowDataType),
-		builder:        NewChunkBuilder(outRowDataType),
-		ops:            ops,
-		opt:            *schema.Options().(*query.ProcessorOptions),
-		schema:         schema,
-		node:           input,
-		info:           info,
-		limiter:        limiter,
-		aborted:        false,
-		indexScanErr:   true,
-		limit:          limit,
-		oneShardState:  oneShardState,
+		outRowDataType:  outRowDataType,
+		output:          NewChunkPort(outRowDataType),
+		inputPort:       NewChunkPort(outRowDataType),
+		builder:         NewChunkBuilder(outRowDataType),
+		ops:             ops,
+		opt:             *schema.Options().(*query.ProcessorOptions),
+		schema:          schema,
+		node:            input,
+		info:            info,
+		limiter:         limiter,
+		aborted:         false,
+		indexScanErr:    true,
+		limit:           limit,
+		oneShardState:   oneShardState,
+		isLastPerfQuery: schema.IsLastRowQuery() || schema.IsLastFieldQuery(),
 	}
 	closedSignal := false
 	trans.closedSignal = &closedSignal
 	trans.crossShard = trans.opt.IsPromQuery() && (info.Req != nil && len(info.Req.ShardIDs) > 1)
+	trans.serialShard = trans.isLastPerfQuery && (info.Req != nil && len(info.Req.ShardIDs) > 1)
+	if trans.info != nil {
+		trans.info.Dsc = trans.isLastPerfQuery
+	}
 	return trans
 }
 
@@ -274,7 +284,7 @@ func (trans *IndexScanTransform) tsIndexScan() error {
 	info := trans.info
 
 	shardInfo := trans.info.Next()
-	if shardInfo == nil || (trans.crossShard && trans.stop) {
+	if shardInfo == nil || (trans.crossShard && trans.stop) || (trans.serialShard && trans.stop) {
 		return errors.New("nil plan")
 	}
 
@@ -307,6 +317,7 @@ func (trans *IndexScanTransform) tsIndexScan() error {
 		return err
 	}
 	if plan == nil {
+		trans.isEmptyIndexScan = true
 		return errors.New("nil plan")
 	}
 	planInfo, isOK := plan.(*LogicalDummyShard)
@@ -414,27 +425,40 @@ func (trans *IndexScanTransform) Close() {
 	}
 }
 
+// Unref releases resources associated with the IndexScanTransform instance.
+// It performs the following operations:
+// 1. Releases file handles and resources for all fragments in 'frags'.
+// 2. Releases file handles and resources for all files in 'indexInfo'.
+// 3. Releases resources associated with 'tsIndexInfo'.
+// This method ensures proper cleanup of allocated resources.
+func (trans *IndexScanTransform) Unref() {
+	if trans.frags != nil {
+		for _, shardFrags := range trans.frags {
+			for _, fileFrags := range shardFrags.FileMarks {
+				file := fileFrags.GetFile()
+				file.UnrefFileReader()
+				file.Unref()
+			}
+		}
+		trans.frags = nil
+	}
+	if trans.indexInfo != nil {
+		files := trans.indexInfo.Files()
+		for i := range files {
+			files[i].UnrefFileReader()
+			files[i].Unref()
+		}
+		trans.indexInfo = nil
+	}
+	if trans.tsIndexInfo != nil {
+		trans.tsIndexInfo.Unref()
+		trans.tsIndexInfo = nil
+	}
+}
+
 func (trans *IndexScanTransform) Release() error {
 	trans.Once(func() {
-		if trans.frags != nil {
-			for _, shardFrags := range trans.frags {
-				for _, fileFrags := range shardFrags.FileMarks {
-					file := fileFrags.GetFile()
-					file.UnrefFileReader()
-					file.Unref()
-				}
-			}
-		}
-		if trans.indexInfo != nil {
-			files := trans.indexInfo.Files()
-			for i := range files {
-				files[i].UnrefFileReader()
-				files[i].Unref()
-			}
-		}
-		if trans.tsIndexInfo != nil {
-			trans.tsIndexInfo.Unref()
-		}
+		trans.Unref()
 	})
 	return resourceallocator.FreeRes(resourceallocator.ChunkReaderRes, trans.chunkReaderNum, trans.chunkReaderNum)
 }
@@ -454,6 +478,11 @@ func (trans *IndexScanTransform) Work(ctx context.Context) error {
 		// build pipelineExecutor for indexScan
 		if err := trans.indexScan(); err != nil {
 			if err.Error() == "nil plan" {
+				// if the latest shard index scan fails, the next shard will be scanned.
+				if trans.isLastPerfQuery && !trans.stop && trans.isEmptyIndexScan {
+					trans.isEmptyIndexScan = false
+					continue
+				}
 				return nil
 			}
 			return err
@@ -467,6 +496,10 @@ func (trans *IndexScanTransform) Work(ctx context.Context) error {
 		if trans.limit != 0 && trans.rowCnt >= trans.limit {
 			return nil
 		}
+
+		// When scheduling multiple shards or partitions in serial,
+		// the previous one must be unref after it has finished executing.
+		trans.Unref()
 	}
 }
 
@@ -510,9 +543,27 @@ func (trans *IndexScanTransform) Running(ctx context.Context) bool {
 				c = trans.RewriteChunk(c)
 			}
 			trans.rowCnt += c.Len()
+			trans.stop = trans.isLastPerfQuery && trans.rowCnt > 0
 			if localStorageForQuery != nil && trans.schema.HasCall() && !trans.schema.Options().GetMeasurements()[0].IsCSStore() && trans.oneShardState {
 				c = c.Clone()
 			}
+
+			// set last row cache
+			if trans.stop && lastrowcache.IsLastRowCacheEnabled() && trans.schema.IsLastRowQuery() {
+				var db, rp string
+				for _, source := range trans.info.Req.Opt.Sources {
+					mst, isMst := source.(*influxql.Measurement)
+					if !isMst {
+						continue
+					}
+					// last_row supports only one source now
+					db, rp = mst.Database, mst.RetentionPolicy
+					break
+				}
+
+				lastrowcache.Set(db, rp, trans.opt.SeriesKey, ChunkToLastRowCache(c, trans.schema))
+			}
+
 			trans.output.State <- c
 		case <-ctx.Done():
 			return true
@@ -569,4 +620,81 @@ func (trans *IndexScanTransform) SetPipelineExecutor(exec *PipelineExecutor) {
 
 func (trans *IndexScanTransform) SetIndexScanErr(err bool) {
 	trans.indexScanErr = err
+}
+
+func ChunkToLastRowCache(chunk Chunk, schema hybridqp.Catalog) *lastrowcache.CacheValue {
+	cacheValueInst := &lastrowcache.CacheValue{}
+	cacheValueInst.SetTimestamp(chunk.TimeByIndex(0))
+	fieldKVs := &sync.Map{}
+	cacheValueInst.SetFields(fieldKVs)
+
+	for i, field := range chunk.RowDataType().Fields() {
+		fieldKey := LastRowFieldKey(field.Expr, schema.Mapping())
+		if fieldKey == "" {
+			continue
+		}
+
+		chunkColumn := chunk.Column(i)
+		if chunkColumn.IsNilV2(0) {
+			continue
+		}
+		switch chunkColumn.DataType() {
+		case influxql.String:
+			fieldKVs.Store(fieldKey, chunkColumn.StringValue(0))
+		case influxql.Integer:
+			fieldKVs.Store(fieldKey, chunkColumn.IntegerValue(0))
+		case influxql.Float:
+			fieldKVs.Store(fieldKey, chunkColumn.FloatValue(0))
+		case influxql.Boolean:
+			fieldKVs.Store(fieldKey, chunkColumn.BooleanValue(0))
+		default:
+			fieldKVs.Store(fieldKey, nil)
+		}
+	}
+
+	return cacheValueInst
+}
+
+// LastRowFieldKey
+// The input `field` is the value in the `mapping`.
+// The function is used to recursively search for the `VarRef key` based on the `field`.
+func LastRowFieldKey(field influxql.Expr, mapping map[influxql.Expr]influxql.VarRef) string {
+	fieldVarRef, ok := field.(*influxql.VarRef)
+	if !ok {
+		return ""
+	}
+
+	for expr, varRef := range mapping {
+		if varRef.Val != fieldVarRef.Val {
+			continue
+		}
+
+		switch exprTyped := expr.(type) {
+		case *influxql.VarRef:
+			return exprTyped.Val
+		case *influxql.Call:
+			lastRowCall, isLastRow := expr.(*influxql.Call)
+			if !isLastRow {
+				return ""
+			}
+
+			if len(lastRowCall.Args) == 0 {
+				return ""
+			}
+
+			// In order to avoid dead loop, especially influxql.Call 's Arg is same with param field scenario
+			// when they are same, just return its value
+			tempVar, ok := lastRowCall.Args[0].(*influxql.VarRef)
+			if ok && fieldVarRef.Val == tempVar.Val {
+				return fieldVarRef.Val
+			}
+			fieldKey := LastRowFieldKey(lastRowCall.Args[0], mapping)
+			if fieldKey != "" {
+				return fieldKey
+			}
+		default:
+			return ""
+		}
+	}
+	return ""
 }

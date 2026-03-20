@@ -422,7 +422,7 @@ func TestStorageBig(t *testing.T) {
 
 		require.Equal(t, 0, len(rds.entryLog.files))
 
-		files, err := getLogFiles(filepath.Join(dir, raftEntriesDir))
+		files, err := getLogFiles(filepath.Join(dir, RaftEntriesDir))
 		require.NoError(t, err)
 		require.Equal(t, 1, len(files))
 

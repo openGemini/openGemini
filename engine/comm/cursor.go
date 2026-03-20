@@ -15,9 +15,12 @@
 package comm
 
 import (
+	"io"
+
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/tracing"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
@@ -53,6 +56,102 @@ type KeyCursor interface {
 	StartSpan(span *tracing.Span)
 	EndSpan()
 	NextAggData() (*record.Record, *FileInfo, error)
+}
+
+type SourceIterator struct {
+	KeyCursor
+	itrs     []record.Iterator
+	pos      int
+	fileInfo *FileInfo
+}
+
+func NewSourceIterator(itrs []record.Iterator, opt hybridqp.Options) *SourceIterator {
+	return &SourceIterator{itrs: itrs, pos: 0, fileInfo: &FileInfo{MinTime: opt.GetStartTime(), MaxTime: opt.GetEndTime()}}
+}
+
+func (s *SourceIterator) NextAggData() (*record.Record, *FileInfo, error) {
+	for s.pos < len(s.itrs) {
+		rec, err := s.itrs[s.pos].Next()
+		if err != nil {
+			if err == io.EOF {
+				s.pos++
+				continue
+			}
+			return nil, nil, err
+		}
+		if rec == nil {
+			s.pos++
+			continue
+		}
+		return rec.Rec, s.fileInfo, nil
+	}
+	return nil, s.fileInfo, nil
+}
+
+func (s *SourceIterator) Close() error {
+	for _, itr := range s.itrs {
+		itr.Release()
+	}
+	s.itrs = s.itrs[:0]
+	s.pos = 0
+	return nil
+}
+
+type WrapCursor struct {
+	KeyCursor
+	itr record.Iterator
+}
+
+func NewWrapCursor(itr record.Iterator) KeyCursor {
+	return &WrapCursor{itr: itr}
+}
+
+func (w *WrapCursor) Next() (*record.Record, SeriesInfoIntf, error) {
+	rec, err := w.itr.Next()
+	if err != nil {
+		if err == io.EOF {
+			return nil, nil, nil
+		}
+		return nil, nil, err
+	}
+	if rec == nil {
+		return nil, nil, nil
+	}
+	return rec.Rec, nil, nil
+}
+
+func (w *WrapCursor) Close() error {
+	w.itr.Release()
+	return nil
+}
+
+type WrapIterator struct {
+	record.Iterator
+	itr    KeyCursor
+	sidCnt int
+}
+
+func NewWrapIterator(itr KeyCursor, sidCnt int) record.Iterator {
+	return &WrapIterator{itr: itr, sidCnt: sidCnt}
+}
+
+func (w *WrapIterator) Next() (*record.ConsumeRecord, error) {
+	rec, _, err := w.itr.Next()
+	if err != nil {
+		return nil, err
+	}
+	if rec == nil {
+		return nil, nil
+	}
+	return &record.ConsumeRecord{Rec: rec}, err
+}
+
+func (w *WrapIterator) Release() {
+	util.MustClose(w.itr)
+}
+
+func (w *WrapIterator) SidCnt() int {
+	return w.sidCnt
 }
 
 type TimeCutKeyCursor interface {

@@ -2,10 +2,12 @@
 package promql2influxql
 
 import (
-	jsoniter "github.com/json-iterator/go"
+	"github.com/openGemini/openGemini/lib/encoding"
 	"github.com/openGemini/openGemini/lib/util/lifted/prometheus/promql"
 	"github.com/tinylib/msgp/msgp"
 )
+
+var json2 = encoding.JSONConfig
 
 func (p *PromData) GetMatrix() *promql.Matrix {
 	if m, ok := p.Result.(*PromDataMatrix); ok {
@@ -51,27 +53,27 @@ func (*PromDataString) PromDataResult() {}
 
 func (p PromDataVector) MarshalJSON() ([]byte, error) {
 	if p.Vector == nil {
-		return jsoniter.Marshal([]promql.Sample{})
+		return []byte("[]"), nil
 	}
-	return jsoniter.Marshal(p.Vector)
+	return json2.Marshal(p.Vector)
 }
 func (p PromDataMatrix) MarshalJSON() ([]byte, error) {
 	if p.Matrix == nil {
-		return jsoniter.Marshal([]promql.Series{})
+		return []byte("[]"), nil
 	}
-	return jsoniter.Marshal(p.Matrix)
+	return json2.Marshal(p.Matrix)
 }
 func (p PromDataScalar) MarshalJSON() ([]byte, error) {
 	if p.Scalar == nil {
-		return jsoniter.Marshal([]interface{}{})
+		return []byte("[]"), nil
 	}
-	return jsoniter.Marshal(p.Scalar)
+	return json2.Marshal(p.Scalar)
 }
 func (p PromDataString) MarshalJSON() ([]byte, error) {
 	if p.String == nil {
-		return jsoniter.Marshal([]interface{}{})
+		return []byte("[]"), nil
 	}
-	return jsoniter.Marshal(p.String)
+	return json2.Marshal(p.String)
 }
 
 func NewPromData(result PromDataResult, resultType string) *PromData {

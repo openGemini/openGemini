@@ -16,27 +16,29 @@
 package influxql
 
 import (
-	"fmt"
-	"regexp"
-	"sort"
-	"strings"
-	"time"
+    "fmt"
+    "regexp"
+    "sort"
+    "strings"
+    "time"
 
-	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
+    "github.com/openGemini/openGemini/lib/obs"
+    "github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
 const DefaultQueryTimeout = time.Duration(0)
 // Some large number, that should be enough for real-life queries,
 // but prevents exploiting any lurking odd behaviour in codebase.
 const MaxAstDepth = 50000
+const StringLength = 512
 
 func setParseTree(yylex interface{}, query Query) {
     yylex.(*YyParser).Query = query
 }
 
 func deal_Fill (fill interface{})  (FillOption , interface{},bool) {
-	switch fill.(type){
-	case string:
+    switch fill.(type){
+    case string:
         switch fill {
         case "null":
             return 0,nil,true
@@ -49,13 +51,13 @@ func deal_Fill (fill interface{})  (FillOption , interface{},bool) {
         default:
             return -1,nil,false
         }
-	case int64:
-		return 2,fill.(int64),true
-	case float64:
-		return 2,fill.(float64),true
-	default:
-		return -1,nil,false
-	}
+    case int64:
+        return 2,fill.(int64),true
+    case float64:
+        return 2,fill.(float64),true
+    default:
+        return -1,nil,false
+    }
 }
 
 // Function that returns maximum depth of list of nodes, that may be nil.
@@ -112,6 +114,7 @@ func depthCheck(yylex interface{}, depth int) int {
     float64             float64
     dataType            DataType
     expr                Expr
+    exprs               []Expr
     tdur                time.Duration
     tdurs               []time.Duration
     bool                bool
@@ -130,6 +133,7 @@ func depthCheck(yylex interface{}, depth int) int {
     indexOptions        []*IndexOption
     indexOption         *IndexOption
     databasePolicy      DatabasePolicy
+    obsOptions          *obs.ObsOptions
     cmOption            *CreateMeasurementStatementOption
     cte                 *CTE
     ctes                ctesList
@@ -137,7 +141,8 @@ func depthCheck(yylex interface{}, depth int) int {
     tableFunctionField  *TableFunctionField
     tableFunctionFields *TableFunctionFields
     tableFunction       *TableFunction
-
+    propertyOption      *Property
+    propertyOptions     []*Property
 }
 
 %token <str>    FROM MEASUREMENT INTO ON SELECT WHERE AS GROUP BY ORDER LIMIT OFFSET SLIMIT SOFFSET SHOW CREATE FULL PRIVILEGES OUTER JOIN UNION
@@ -145,13 +150,14 @@ func depthCheck(yylex interface{}, depth int) int {
                 DATABASES DATABASE MEASUREMENTS RETENTION POLICIES POLICY DURATION DEFAULT SHARD INDEX GRANT HOT WARM INDEXCOLD TYPE SET FOR GRANTS
                 REPLICATION SERIES DROP CASE WHEN THEN ELSE BEGIN END TRUE FALSE TAG ATTRIBUTE FIELD KEYS VALUES KEY EXPLAIN ANALYZE EXACT CARDINALITY SHARDKEY
                 PRIMARYKEY SORTKEY PROPERTY COMPACT SHARDMERGE
+                DISTINCT
                 CONTINUOUS DIAGNOSTICS QUERIES QUERIE SHARDS STATS SUBSCRIPTIONS SUBSCRIPTION GROUPS INDEXTYPE INDEXLIST SEGMENT KILL
-                EVERY RESAMPLE
+                EVERY RESAMPLE RESOURCE RESOURCES PROPERTIES TASK TASKS
                 DOWNSAMPLE DOWNSAMPLES SAMPLEINTERVAL TIMEINTERVAL STREAM DELAY STREAMS
                 QUERY PARTITION
-                TOKEN TOKENIZERS MATCH LIKE MATCHPHRASE CONFIG CONFIGS CLUSTER IPINRANGE
+                TOKEN TOKENIZERS MATCH LIKE MATCHPHRASE UNMATCHPHRASE CONFIG CONFIGS CLUSTER IPINRANGE
                 REPLICAS DETAIL DESTINATIONS
-                SCHEMA INDEXES AUTO EXCEPT INNER LEFT RIGHT GRAPH NODE EDGE TTL RETURN
+                SCHEMA INDEXES AUTO EXCEPT INNER LEFT RIGHT GRAPH NODE EDGE TTL RETURN LASTINDEX
 %token <bool>   DESC ASC
 %token <str>    COMMA SEMICOLON LPAREN RPAREN REGEX LBRACKET RBRACKET LSQUARE RSQUARE COLON
 %token <int>    EQ NEQ LT LTE GT GTE DOT DOUBLECOLON NEQREGEX EQREGEX MULTIHOP
@@ -163,7 +169,8 @@ func depthCheck(yylex interface{}, depth int) int {
 %token <hints>  HINT
 %token <expr>   BOUNDPARAM
 
-%left  <int>  AND OR
+%left  <int>  OR
+%left  <int>  AND
 %left  <int>  ADD SUB BITWISE_OR BITWISE_XOR
 %left  <int>  MUL DIV MOD BITWISE_AND
 %left  UNION
@@ -185,16 +192,20 @@ func depthCheck(yylex interface{}, depth int) int {
                                     CREATE_DOWNSAMPLE_STATEMENT DOWNSAMPLE_INTERVALS DROP_DOWNSAMPLE_STATEMENT SHOW_DOWNSAMPLE_STATEMENT
                                     CREATE_STREAM_STATEMENT SHOW_STREAM_STATEMENT DROP_STREAM_STATEMENT COLUMN_LISTS SHOW_MEASUREMENT_KEYS_STATEMENT
                                     SHOW_QUERIES_STATEMENT KILL_QUERY_STATEMENT SHOW_CONFIGS_STATEMENT SET_CONFIG_STATEMENT SHOW_CLUSTER_STATEMENT
-                                    CREATE_SUBSCRIPTION_STATEMENT SHOW_SUBSCRIPTION_STATEMENT DROP_SUBSCRIPTION_STATEMENT GRAPH_STATEMENT
-%type <fields>                      COLUMN_CLAUSES DOWNSAMPLE_CALLS
+                                    CREATE_SUBSCRIPTION_STATEMENT SHOW_SUBSCRIPTION_STATEMENT DROP_SUBSCRIPTION_STATEMENT GRAPH_STATEMENT ALTER_SHARDS_NUM_STATEMENT
+                                    CREATE_RESOURCE_STATEMENT SHOW_RESOURCE_STATEMENT SHOW_RESOURCES_STATEMENT ALTER_RESOURCE_STATEMENT DROP_RESOURCE_STATEMENT
+                                    SHOW_LAST_INDEX_STATEMENT
+                                    CREATE_TASK_STATEMENT SHOW_TASK_STATEMENT SHOW_TASKS_STATEMENT ALTER_TASK_STATEMENT DROP_TASK_STATEMENT
+%type <fields>                      DISTINCT_CLAUSES COLUMN_CLAUSES DOWNSAMPLE_CALLS
 %type <field>                       COLUMN_CLAUSE DOWNSAMPLE_CALL
-%type <query>                       ALL_QUERIES ALL_QUERY
+%type <query>                       ALL_QUERIES ALL_QUERY SELECT_STATEMENT_LIST
 %type <sources>                     FROM_CLAUSE FROM_LIST FROM_SOURCE SUBQUERY_CLAUSE INTO_CLAUSE JOIN_CLAUSE
 %type <joinType>                    JOIN_TYPE
 %type <unionType>                   UNION_TYPE
 %type <ment>                        TABLE_OPTION  TABLE_NAME_WITH_OPTION TABLE_CASE MEASUREMENT_WITH
 %type <expr>                        WHERE_CLAUSE OR_CONDITION AND_CONDITION CONDITION OPERATION_EQUAL COLUMN_VAREF COLUMN COLUMN_CALL CONDITION_COLUMN TAG_KEYS
                                     CASE_WHEN_CASE CASE_WHEN_CASES ADDITIONAL_CONDITION
+%type <exprs>                       INDEX_PARAMS INDEX_PARAMS_VAREF
 %type <int>                         CONDITION_OPERATOR
 %type <dataType>                    COLUMN_VAREF_TYPE
 %type <sortfs>                      SORTFIELDS ORDER_CLAUSES
@@ -204,7 +215,7 @@ func depthCheck(yylex interface{}, depth int) int {
 %type <intSlice>                    OPTION_CLAUSES LIMIT_OFFSET_OPTION SLIMIT_SOFFSET_OPTION
 %type <inter>                       FILL_CLAUSE FILLCONTENT
 %type <durations>                   SHARD_HOT_WARM_INDEX_DURATIONS SHARD_HOT_WARM_INDEX_DURATION CREAT_DATABASE_POLICY  CREAT_DATABASE_POLICYS
-%type <str>                         REGULAR_EXPRESSION TAG_KEY ON_DATABASE TYPE_CLAUSE SHARD_KEY STRING_TYPE MEASUREMENT_INFO SUBSCRIPTION_TYPE COMPACTION_TYPE_CLAUSE
+%type <str>                         REGULAR_EXPRESSION TAG_KEY ON_DATABASE TYPE_CLAUSE SHARD_KEY STRING_TYPE MEASUREMENT_INFO SUBSCRIPTION_TYPE COMPACTION_TYPE_CLAUSE SEMICOLON_OPT
 %type <strSlice>                    SHARDKEYLIST CMOPTION_SHARDKEY INDEX_LIST PRIMARYKEY_LIST SORTKEY_LIST ALL_DESTINATION CMOPTION_PRIMARYKEY CMOPTION_SORTKEY
 %type <strSlices>                   MEASUREMENT_PROPERTYS MEASUREMENT_PROPERTY MEASUREMENT_PROPERTYS_LIST CMOPTION_PROPERTIES
 %type <location>                    TIME_ZONE
@@ -213,7 +224,7 @@ func depthCheck(yylex interface{}, depth int) int {
 %type <tdur>                        TTL_CLAUSE_OPT DELAY_CLAUSE_OPT
 %type <tdurs>                       DURATIONVALS
 %type <cqsp>                        SAMPLE_POLICY
-%type <int64>                       INTEGERPARA CMOPTION_SHARDNUM
+%type <int64>                       INTEGERPARA CMOPTION_SHARDNUM SHARDSNUM
 %type <bool>                        ALLOW_TAG_ARRAY
 %type <fieldOption>                 FIELD_OPTION FIELD_COLUMN
 %type <fieldOptions>                FIELD_OPTIONS
@@ -222,10 +233,14 @@ func depthCheck(yylex interface{}, depth int) int {
 %type <cmOption>                    CMOPTIONS_TS CMOPTIONS_CS
 %type <str>                         CMOPTION_ENGINETYPE_TS CMOPTION_ENGINETYPE_CS
 %type <ctes>                        CTE_CLAUSES
+%type <obsOptions>                  OBS_OPTIONS
 %type <cte>                         CTE_CLAUSE
 %type <cypherCondition>             CYPHER_CONDITION
 %type <tableFunctionField>          TABLE_FUNCTION_PARAM
 %type <tableFunction>               TABLE_FUNCTION_PARAMS TABLE_FUNCTION
+
+%type <propertyOption>              PROPERTY_OPTION PROPERTY_COLUMN
+%type <propertyOptions>             PROPERTY_OPTIONS PROPERTY_LIST
 
 %%
 
@@ -483,6 +498,83 @@ STATEMENT:
     {
     	$$ = $1
     }
+    | ALTER_SHARDS_NUM_STATEMENT
+    {
+        $$ = $1
+    }
+    | CREATE_RESOURCE_STATEMENT
+    {
+        $$ = $1
+    }
+    | SHOW_RESOURCE_STATEMENT
+    {
+        $$ = $1
+    }
+    | SHOW_RESOURCES_STATEMENT
+    {
+        $$ = $1
+    }
+    | ALTER_RESOURCE_STATEMENT
+    {
+        $$ = $1
+    }
+    | DROP_RESOURCE_STATEMENT
+    {
+        $$ = $1
+    }
+    | SHOW_LAST_INDEX_STATEMENT
+    {
+        $$ = $1
+    }
+    | CREATE_TASK_STATEMENT
+    {
+        $$ = $1
+    }
+    | SHOW_TASK_STATEMENT
+    {
+        $$ = $1
+    }
+    | SHOW_TASKS_STATEMENT
+    {
+        $$ = $1
+    }
+    | ALTER_TASK_STATEMENT
+    {
+        $$ = $1
+    }
+    | DROP_TASK_STATEMENT
+    {
+        $$ = $1
+    }
+
+SEMICOLON_OPT:
+    {
+        $$ = ""
+    }
+    | SEMICOLON
+    {
+        $$ = ""
+    }
+
+SELECT_STATEMENT_LIST:
+    SELECT_STATEMENT SEMICOLON SELECT_STATEMENT SEMICOLON_OPT
+    {
+        $$ = Query {
+            Statements: []Statement{$1, $3},
+            depth: depthCheck(yylex, 2 + $1.Depth() + $3.Depth()),
+        }
+    }
+    | SELECT_STATEMENT SEMICOLON SELECT_STATEMENT_LIST
+    {
+        q := $3
+        q.Statements = append(q.Statements, $1)
+        q.depth = depthCheck(yylex, max(q.depth, len(q.Statements) + $1.Depth()))
+        $$ = q
+    }
+    | LPAREN SELECT_STATEMENT_LIST RPAREN
+    {
+        $$ = $2
+    }
 
 SELECT_STATEMENT:
     SELECT_NO_PARENS		%prec UMINUS
@@ -529,124 +621,127 @@ BASE_SELECT_STATEMENT:
     }
 
 SIMPLE_SELECT_STATEMENT:
-    SELECT COLUMN_CLAUSES INTO_CLAUSE FROM_CLAUSE WHERE_CLAUSE GROUP_BY_CLAUSE EXCEPT_CLAUSE FILL_CLAUSE ORDER_CLAUSES OPTION_CLAUSES TIME_ZONE
+    SELECT DISTINCT_CLAUSES COLUMN_CLAUSES INTO_CLAUSE FROM_CLAUSE WHERE_CLAUSE GROUP_BY_CLAUSE EXCEPT_CLAUSE FILL_CLAUSE ORDER_CLAUSES OPTION_CLAUSES TIME_ZONE
     {
         stmt := &SelectStatement{
-            Fields: $2.fields,
-            Sources: $4.sources,
-            Dimensions: $6.dims,
-            ExceptDimensions: $7.dims,
-            Condition: $5,
-            SortFields: $9,
-            Limit: $10[0],
-            Offset: $10[1],
-            SLimit: $10[2],
-            SOffset: $10[3],
-            depth: depthCheck(yylex, 1 + maxDepth($2, $4, $5, $6, $7, $9)),
-        }
-        tempfill,tempfillvalue,fillflag := deal_Fill($8)
-        if fillflag==false{
-            yylex.Error("Invalid characters in fill")
-        }else{
-            stmt.Fill,stmt.FillValue = tempfill,tempfillvalue
-        }
-        stmt.IsRawQuery = true
-	WalkFunc(stmt.Fields, func(n Node) {
-		if _, ok := n.(*Call); ok {
-			stmt.IsRawQuery = false
-		}
-	})
-        stmt.Location = $11
-        if len($3.sources) > 1{
-            yylex.Error("into clause only support one measurement")
-        }else if len($3.sources) == 1{
-            mst,ok := $3.sources[0].(*Measurement)
-            if !ok{
-                 yylex.Error("into clause only support measurement clause")
-            }
-            mst.IsTarget = true
-            stmt.Target = &Target{
-            	Measurement: mst,
-                depth: depthCheck(yylex, 2),
-            }
-            stmt.depth = depthCheck(yylex, max(stmt.depth, 1 + stmt.Target.depth))
-        }
-        $$ = stmt
-    }
-    |SELECT HINT COLUMN_CLAUSES INTO_CLAUSE FROM_CLAUSE WHERE_CLAUSE GROUP_BY_CLAUSE EXCEPT_CLAUSE FILL_CLAUSE ORDER_CLAUSES OPTION_CLAUSES TIME_ZONE
-    {
-        stmt := &SelectStatement{
-            Hints: $2,
-            Fields: $3.fields,
-            Sources: $5.sources,
-            Dimensions: $7.dims,
+            DistinctFields: $2.fields,
+            Fields:         $3.fields,
+            Sources:        $5.sources,
+            Dimensions:     $7.dims,
             ExceptDimensions: $8.dims,
-            Condition: $6,
-            SortFields: $10,
-            Limit: $11[0],
-            Offset: $11[1],
-            SLimit: $11[2],
-            SOffset: $11[3],
-            depth: depthCheck(yylex, 1 + maxDepth($3, $5, $6, $7, $8, $10)),
+            Condition:      $6,
+            SortFields:     $10,
+            Limit:          $11[0],
+            Offset:         $11[1],
+            SLimit:         $11[2],
+            SOffset:        $11[3],
+            depth:          depthCheck(yylex, 1+maxDepth($2, $3, $5, $6, $7, $8, $10)),
         }
-
-        tempfill,tempfillvalue,fillflag := deal_Fill($9)
-        if fillflag==false{
+        tempfill, tempfillvalue, fillflag := deal_Fill($9)
+        if fillflag == false {
             yylex.Error("Invalid characters in fill")
-        }else{
-            stmt.Fill,stmt.FillValue = tempfill,tempfillvalue
+        } else {
+            stmt.Fill, stmt.FillValue = tempfill, tempfillvalue
         }
         stmt.IsRawQuery = true
-	WalkFunc(stmt.Fields, func(n Node) {
-		if _, ok := n.(*Call); ok {
-			stmt.IsRawQuery = false
-		}
-	})
+        WalkFunc(stmt.Fields, func(n Node) {
+            if _, ok := n.(*Call); ok {
+                stmt.IsRawQuery = false
+            }
+        })
         stmt.Location = $12
-        if len($4.sources) > 1{
-            yylex.Error("into clause only support one measurement")
-        }else if len($4.sources) == 1{
-            mst,ok := $4.sources[0].(*Measurement)
-            if !ok{
-                 yylex.Error("into clause only support measurement clause")
+        if len($4.sources) > 1 {
+            yylex.Error("INTO clause only supports a single measurement as the target")
+        } else if len($4.sources) == 1 {
+            mst, ok := $4.sources[0].(*Measurement)
+            if !ok {
+                yylex.Error("INTO clause requires a measurement as the target (only measurement clauses are supported)")
             }
             mst.IsTarget = true
             stmt.Target = &Target{
-            	Measurement: mst,
-                depth: depthCheck(yylex, 2),
+                Measurement: mst,
+                depth:       depthCheck(yylex, 2),
             }
-            stmt.depth = depthCheck(yylex, max(stmt.depth, 1 + stmt.Target.depth))
+            stmt.depth = depthCheck(yylex, max(stmt.depth, 1+stmt.Target.depth))
         }
         $$ = stmt
     }
-    |SELECT COLUMN_CLAUSES WHERE_CLAUSE GROUP_BY_CLAUSE EXCEPT_CLAUSE FILL_CLAUSE ORDER_CLAUSES OPTION_CLAUSES TIME_ZONE
+    |SELECT HINT DISTINCT_CLAUSES COLUMN_CLAUSES INTO_CLAUSE FROM_CLAUSE WHERE_CLAUSE GROUP_BY_CLAUSE EXCEPT_CLAUSE FILL_CLAUSE ORDER_CLAUSES OPTION_CLAUSES TIME_ZONE
     {
         stmt := &SelectStatement{
-            Fields: $2.fields,
-            Dimensions: $4.dims,
-            ExceptDimensions: $5.dims,
-            Condition: $3,
-            SortFields: $7,
-            Limit: $8[0],
-            Offset: $8[1],
-            SLimit: $8[2],
-            SOffset: $8[3],
-            depth: depthCheck(yylex, 1 + maxDepth($2, $3, $4, $5, $7)),
+            Hints:          $2,
+            DistinctFields: $3.fields,
+            Fields:         $4.fields,
+            Sources:        $6.sources,
+            Dimensions:     $8.dims,
+            ExceptDimensions: $9.dims,
+            Condition:      $7,
+            SortFields:     $11,
+            Limit:          $12[0],
+            Offset:         $12[1],
+            SLimit:         $12[2],
+            SOffset:        $12[3],
+            depth:          depthCheck(yylex, 1+maxDepth($4, $6, $7, $8, $9, $11)),
         }
 
-        tempfill,tempfillvalue,fillflag := deal_Fill($6)
-        if fillflag==false{
+        tempfill, tempfillvalue, fillflag := deal_Fill($10)
+        if fillflag == false {
             yylex.Error("Invalid characters in fill")
-        }else{
-            stmt.Fill,stmt.FillValue = tempfill,tempfillvalue
+        } else {
+            stmt.Fill, stmt.FillValue = tempfill, tempfillvalue
         }
         stmt.IsRawQuery = true
-	WalkFunc(stmt.Fields, func(n Node) {
-		if _, ok := n.(*Call); ok {
-			stmt.IsRawQuery = false
-		}
-	})
-        stmt.Location = $9
+        WalkFunc(stmt.Fields, func(n Node) {
+            if _, ok := n.(*Call); ok {
+                stmt.IsRawQuery = false
+            }
+        })
+        stmt.Location = $13
+        if len($5.sources) > 1 {
+            yylex.Error("INTO clause only supports a single measurement as the target")
+        } else if len($5.sources) == 1 {
+            mst, ok := $5.sources[0].(*Measurement)
+            if !ok {
+                yylex.Error("INTO clause requires a measurement as the target (only measurement clauses are supported)")
+            }
+            mst.IsTarget = true
+            stmt.Target = &Target{
+                Measurement: mst,
+                depth:       depthCheck(yylex, 2),
+            }
+            stmt.depth = depthCheck(yylex, max(stmt.depth, 1+stmt.Target.depth))
+        }
+        $$ = stmt
+    }
+    |SELECT DISTINCT_CLAUSES COLUMN_CLAUSES WHERE_CLAUSE GROUP_BY_CLAUSE EXCEPT_CLAUSE FILL_CLAUSE ORDER_CLAUSES OPTION_CLAUSES TIME_ZONE
+    {
+        stmt := &SelectStatement{
+            DistinctFields: $2.fields,
+            Fields:         $3.fields,
+            Dimensions:     $5.dims,
+            ExceptDimensions: $6.dims,
+            Condition:      $4,
+            SortFields:     $8,
+            Limit:          $9[0],
+            Offset:         $9[1],
+            SLimit:         $9[2],
+            SOffset:        $9[3],
+            depth:          depthCheck(yylex, 1+maxDepth($2, $3, $4, $5, $6, $8)),
+        }
+
+        tempfill, tempfillvalue, fillflag := deal_Fill($7)
+        if fillflag == false {
+            yylex.Error("Invalid characters in fill")
+        } else {
+            stmt.Fill, stmt.FillValue = tempfill, tempfillvalue
+        }
+        stmt.IsRawQuery = true
+        WalkFunc(stmt.Fields, func(n Node) {
+            if _, ok := n.(*Call); ok {
+                stmt.IsRawQuery = false
+            }
+        })
+        stmt.Location = $10
         $$ = stmt
     }
     |GRAPH_STATEMENT
@@ -655,28 +750,28 @@ SIMPLE_SELECT_STATEMENT:
     }
     |BASE_SELECT_STATEMENT UNION UNION_TYPE BASE_SELECT_STATEMENT
     {
-        stmt1,ok := $1.(*SelectStatement)
-        if !ok{
+        stmt1, ok := $1.(*SelectStatement)
+        if !ok {
             yylex.Error("Expected SelectStatement on left of UNION")
         }
         subquery1 := &SubQuery{Statement: stmt1, Alias: "", depth: depthCheck(yylex, 1+stmt1.Depth())}
-        stmt2,ok := $4.(*SelectStatement)
-        if !ok{
+        stmt2, ok := $4.(*SelectStatement)
+        if !ok {
             yylex.Error("Expected SelectStatement on right of UNION")
         }
         subquery2 := &SubQuery{Statement: stmt2, Alias: "", depth: depthCheck(yylex, 1+stmt2.Depth())}
 
         union := &Union{
-          LSrc: subquery1,
-          UnionType: $3,
-          RSrc: subquery2,
-          depth: depthCheck(yylex, max(subquery1.Depth(), subquery2.Depth())),
+            LSrc:      subquery1,
+            UnionType: $3,
+            RSrc:      subquery2,
+            depth:     depthCheck(yylex, max(subquery1.Depth(), subquery2.Depth())),
         }
         $$ = &SelectStatement{
-            Fields: []*Field{{Expr: &Wildcard{Type:Token(MUL)}, depth: depthCheck(yylex, 2)}},
-            Sources: []Source{union},
+            Fields: []*Field{{Expr: &Wildcard{Type: Token(MUL)}, depth: depthCheck(yylex, 2)}},
+            Sources:  []Source{union},
             IsRawQuery: true,
-            depth: depthCheck(yylex, 1 + union.Depth()),
+            depth:    depthCheck(yylex, 1+union.Depth()),
         }
     }
 
@@ -685,11 +780,19 @@ UNION_TYPE:
     {
         $$ = UnionDistinct
     }
+    |DISTINCT
+    {
+        $$ = UnionDistinct
+    }
     |ALL
     {
         $$ = UnionAll
     }
     |BY NAME
+    {
+        $$ = UnionDistinctByName
+    }
+    |DISTINCT BY NAME
     {
         $$ = UnionDistinctByName
     }
@@ -723,19 +826,19 @@ GRAPH_STATEMENT:
     {
         stmt := &GraphStatement{depth: depthCheck(yylex, 1)}
         stmt.HopNum = int($16)
-        if !strings.EqualFold($7, "uid")  {
+        if !strings.EqualFold($7, "uid") {
             yylex.Error("cypher multi-hop-filter stmt node.uid ident err")
         }
         stmt.StartNodeId = $9
         if $21 != nil {
             c := $21
-            if $2 != c.PathName && c.PathName != ""  {
+            if $2 != c.PathName && c.PathName != "" {
                 yylex.Error("cypher multi-hop-filter stmt PathName err1")
             }
             stmt.NodeCondition = c.NodeCondition
             stmt.EdgeCondition = c.EdgeCondition
             stmt.AdditionalCondition = c.AdditionalCondition
-            stmt.depth = depthCheck(yylex, max(stmt.depth, 1 + maxDepth(stmt.NodeCondition, stmt.EdgeCondition, stmt.AdditionalCondition)))
+            stmt.depth = depthCheck(yylex, max(stmt.depth, 1+maxDepth(stmt.NodeCondition, stmt.EdgeCondition, stmt.AdditionalCondition)))
         }
         if $2 != $23 {
             yylex.Error("cypher multi-hop-filter stmt PathName err2")
@@ -758,11 +861,11 @@ CYPHER_CONDITION:
             cc.NodeCondition = $11
         } else if strings.EqualFold($6, "edges") {
             cc.EdgeCondition = $11
-        } else  {
+        } else {
             yylex.Error("CYPHER_CONDITION nodes/edges func err")
         }
         if $13 != nil {
-           cc.AdditionalCondition = $13
+            cc.AdditionalCondition = $13
         }
         $$ = cc
     }
@@ -780,7 +883,7 @@ CYPHER_CONDITION:
             cc.NodeCondition = $11
         } else if strings.EqualFold($6, "edges") {
             cc.EdgeCondition = $11
-        } else  {
+        } else {
             yylex.Error("CYPHER_CONDITION nodes/edges func err1")
         }
 
@@ -788,11 +891,11 @@ CYPHER_CONDITION:
             cc.NodeCondition = $23
         } else if strings.EqualFold($18, "edges") {
             cc.EdgeCondition = $23
-        } else  {
+        } else {
             yylex.Error("CYPHER_CONDITION nodes/edges func err2")
         }
         if $25 != nil {
-           cc.AdditionalCondition = $25
+            cc.AdditionalCondition = $25
         }
         $$ = cc
     }
@@ -809,6 +912,20 @@ ADDITIONAL_CONDITION:
     {
         $$ = $2
     }
+
+DISTINCT_CLAUSES:
+    {
+        $$ = fieldsList{fields:nil, depth: depthCheck(yylex, 0)}
+    }
+    |DISTINCT
+    {
+        $$ = fieldsList{fields:[]*Field{}, depth: depthCheck(yylex, 1)}
+    }
+    |DISTINCT ON LPAREN COLUMN_CLAUSES RPAREN
+    {
+        $$ = fieldsList{fields:$4.fields, depth: depthCheck(yylex, $4.depth) }
+    }
+
 
 COLUMN_CLAUSES:
     COLUMN_CLAUSE
@@ -858,7 +975,7 @@ CASE_WHEN_CASES:
     {
         newcase := $2.(*CaseWhenExpr)
         c := $1.(*CaseWhenExpr)
-        c.depth = depthCheck(yylex, max(c.depth, len(c.Conditions) + newcase.depth))
+        c.depth = depthCheck(yylex, max(c.depth, len(c.Conditions)+newcase.depth))
         c.Conditions = append(c.Conditions, newcase.Conditions...)
         c.Assigners = append(c.Assigners, newcase.Assigners...)
         $$ = c
@@ -918,15 +1035,14 @@ COLUMN:
     {
         switch s := $2.(type) {
         case *NumberLiteral:
-            s.Val = -1*s.Val
-        	$$ = $2
+            s.Val = -1 * s.Val
+            $$ = $2
         case *IntegerLiteral:
-            s.Val = -1*s.Val
+            s.Val = -1 * s.Val
             $$ = $2
         default:
-        	$$ = &BinaryExpr{Op:Token(MUL), LHS:&IntegerLiteral{Val:-1}, RHS:$2, depth: depthCheck(yylex, 1 + $2.Depth())}
+            $$ = &BinaryExpr{Op: Token(MUL), LHS: &IntegerLiteral{Val: -1}, RHS: $2, depth: depthCheck(yylex, 1+$2.Depth())}
         }
-
     }
     |COLUMN_VAREF
     {
@@ -953,8 +1069,8 @@ COLUMN_CALL:
     IDENT LPAREN COLUMN_CLAUSES RPAREN
     {
         if strings.ToLower($1) == "cast" {
-            if len($3.fields)!=1 {
-                 yylex.Error("The cast format is incorrect.")
+            if len($3.fields) != 1 {
+                yylex.Error("The cast format is incorrect.")
             } else {
                 name := "Unknown"
                 if strings.ToLower($3.fields[0].Alias) == "bool" {
@@ -969,17 +1085,30 @@ COLUMN_CALL:
                 if strings.ToLower($3.fields[0].Alias) == "string" {
                     name = "cast_string"
                 }
-                cols := &Call{Name: strings.ToLower(name), Args: []Expr{$3.fields[0].Expr}, depth: depthCheck(yylex, 2 + $3.fields[0].Depth())}
+                cols := &Call{Name: strings.ToLower(name), Args: []Expr{$3.fields[0].Expr}, depth: depthCheck(yylex, 2+$3.fields[0].Depth())}
                 $$ = cols
             }
         } else {
             cols := &Call{Name: strings.ToLower($1), Args: []Expr{}, depth: depthCheck(yylex, 1)}
-            for i,fld := range $3.fields {
+            for i, fld := range $3.fields {
                 cols.Args = append(cols.Args, fld.Expr)
-                cols.depth = depthCheck(yylex, max(cols.depth, 2 + i + fld.Expr.Depth()))
+                cols.depth = depthCheck(yylex, max(cols.depth, 2+i+fld.Expr.Depth()))
             }
             $$ = cols
         }
+    }
+    |IDENT LPAREN DISTINCT COLUMN_CLAUSES RPAREN
+    {
+        distinctCall := &Call{Name: "distinct", Args: []Expr{}, depth: depthCheck(yylex, 1)}
+        for i, fld := range $4.fields {
+            distinctCall.Args = append(distinctCall.Args, fld.Expr)
+            distinctCall.depth = depthCheck(yylex, max(distinctCall.depth, 2+i+fld.Expr.Depth()))
+        }
+        distinctFiled := &Field{Expr: distinctCall, depth: depthCheck(yylex, 1+distinctCall.Depth())}
+        cols := &Call{Name: strings.ToLower($1), Args: []Expr{}, depth: depthCheck(yylex, 1)}
+        cols.Args = append(cols.Args, distinctFiled.Expr)
+        cols.depth = depthCheck(yylex, max(cols.depth, 2+distinctFiled.Expr.Depth()))
+        $$ = cols
     }
     |IDENT LPAREN RPAREN
     {
@@ -992,7 +1121,7 @@ INTO_CLAUSE:
     {
         $$ = sourcesList{
             sources: []Source{$2},
-            depth: depthCheck(yylex, 1 + $2.Depth()),
+            depth:   depthCheck(yylex, 1+$2.Depth()),
         }
     }
     |
@@ -1014,8 +1143,8 @@ FROM_LIST:
     |
     FROM_LIST COMMA FROM_SOURCE
     {
-        sl := $1;
-        sl.depth = depthCheck(yylex, max(sl.depth, len(sl.sources) + $3.depth))
+        sl := $1
+        sl.depth = depthCheck(yylex, max(sl.depth, len(sl.sources)+$3.depth))
         sl.sources = append(sl.sources, $3.sources...)
         $$ = sl
     }
@@ -1029,7 +1158,7 @@ FROM_SOURCE:
     | TABLE_NAME_WITH_OPTION AS IDENT
     {
         $1.Alias = $3
-        $$ = sourcesList{sources:[]Source{$1}, depth:depthCheck(yylex, 1+$1.Depth())}
+        $$ = sourcesList{sources: []Source{$1}, depth: depthCheck(yylex, 1+$1.Depth())}
     }
     |SUBQUERY_CLAUSE
     {
@@ -1040,39 +1169,39 @@ FROM_SOURCE:
         $$ = $1
     }
     |TABLE_FUNCTION
-         {
-             $$ = sourcesList{sources:[]Source{$1}, depth:depthCheck(yylex, 1+$1.Depth())}
-         }
+    {
+        $$ = sourcesList{sources:[]Source{$1}, depth:depthCheck(yylex, 1+$1.Depth())}
+    }
 
 TABLE_FUNCTION:
      IDENT LPAREN TABLE_FUNCTION_PARAMS RPAREN
      {
-         tableFunction := $3
-         tableFunction.FunctionName = $1
-         $$ = tableFunction
+        tableFunction := $3
+        tableFunction.FunctionName = $1
+        $$ = tableFunction
      }
 
 TABLE_FUNCTION_PARAMS:
      TABLE_FUNCTION_PARAM
      {
-         if($1.GetType() == 0){
-             $$ = &TableFunction{TableFunctionSource: []Source{$1.GetSource()}, depth: depthCheck(yylex, 1 + $1.Depth())}
-         }else{
-             $$ = &TableFunction{Params: $1.GetContent(), depth: depthCheck(yylex, 1 + $1.Depth())}
-         }
+        if $1.GetType() == 0 {
+            $$ = &TableFunction{TableFunctionSource: []Source{$1.GetSource()}, depth: depthCheck(yylex, 1+$1.Depth())}
+        } else {
+            $$ = &TableFunction{Params: $1.GetContent(), depth: depthCheck(yylex, 1+$1.Depth())}
+        }
      }
      |
      TABLE_FUNCTION_PARAMS COMMA TABLE_FUNCTION_PARAM
      {
-         tableFunction := $1
-         tableFunctionField := $3
-         if(tableFunctionField.GetType() == 0){
-             tableFunction.TableFunctionSource = append(tableFunction.TableFunctionSource, tableFunctionField.GetSource())
-         }else{
-             tableFunction.Params = tableFunctionField.GetContent()
-         }
-         tableFunction.depth = depthCheck(yylex, max(tableFunction.depth, len(tableFunction.TableFunctionFields) + $3.Depth()))
-         $$ = tableFunction
+        tableFunction := $1
+        tableFunctionField := $3
+        if tableFunctionField.GetType() == 0 {
+            tableFunction.TableFunctionSource = append(tableFunction.TableFunctionSource, tableFunctionField.GetSource())
+        } else {
+            tableFunction.Params = tableFunctionField.GetContent()
+        }
+        tableFunction.depth = depthCheck(yylex, max(tableFunction.depth, len(tableFunction.TableFunctionFields)+$3.Depth()))
+        $$ = tableFunction
      }
 
 TABLE_FUNCTION_PARAM:
@@ -1138,46 +1267,46 @@ JOIN_CLAUSE:
             yylex.Error("expected 1 source")
         }
         join := &Join{
-            JoinType: $2,
+            JoinType:  $2,
             Condition: $5,
-            depth: depthCheck(yylex, 1 + $5.Depth()),
+            depth:     depthCheck(yylex, 1+$5.Depth()),
         }
-        if joinLeft,ok := $1.sources[0].(*Join); ok{
-             joinStatement := &SelectStatement{
-                 Fields: []*Field{{Expr: &Wildcard{Type:Token(MUL)}, depth: depthCheck(yylex, 2)}},
-                 Sources: []Source{joinLeft},
-                 IsRawQuery: true,
-                 depth: depthCheck (yylex, 2 + joinLeft.Depth ()),
-             }
-             alias := joinLeft.LSrc.GetName() + "," + joinLeft.RSrc.GetName()
-             join.LSrc = &SubQuery{Statement: joinStatement, Alias: alias, depth: depthCheck(yylex, 1+joinStatement.Depth())}
+        if joinLeft, ok := $1.sources[0].(*Join); ok {
+            joinStatement := &SelectStatement{
+                Fields:     []*Field{{Expr: &Wildcard{Type: Token(MUL)}, depth: depthCheck(yylex, 2)}},
+                Sources:    []Source{joinLeft},
+                IsRawQuery: true,
+                depth:      depthCheck(yylex, 2+joinLeft.Depth()),
+            }
+            alias := joinLeft.LSrc.GetName() + "," + joinLeft.RSrc.GetName()
+            join.LSrc = &SubQuery{Statement: joinStatement, Alias: alias, depth: depthCheck(yylex, 1+joinStatement.Depth())}
         } else {
-             join.LSrc =$1.sources[0]
+            join.LSrc = $1.sources[0]
         }
         if joinRight, ok := $3.sources[0].(*Join); ok {
-            joinStatement := &SelectStatement {
-                Fields: []*Field{{Expr: &Wildcard{Type:Token(MUL)}, depth: depthCheck(yylex, 2)}},
-                Sources: []Source{joinRight},
+            joinStatement := &SelectStatement{
+                Fields:     []*Field{{Expr: &Wildcard{Type: Token(MUL)}, depth: depthCheck(yylex, 2)}},
+                Sources:    []Source{joinRight},
                 IsRawQuery: true,
-                depth: depthCheck(yylex, 2 + joinRight.Depth()),
+                depth:      depthCheck(yylex, 2+joinRight.Depth()),
             }
             join.RSrc = &SubQuery{Statement: joinStatement, Alias: "", depth: depthCheck(yylex, 1+joinStatement.Depth())}
         } else {
-            join.RSrc =$3.sources[0]
+            join.RSrc = $3.sources[0]
         }
-        join.depth = depthCheck(yylex, max(join.depth, 1 + maxDepth(join.LSrc, join.RSrc)))
-        $$ = sourcesList{sources:[]Source{join}, depth: depthCheck(yylex, 1 + join.depth)}
+        join.depth = depthCheck(yylex, max(join.depth, 1+maxDepth(join.LSrc, join.RSrc)))
+        $$ = sourcesList{sources: []Source{join}, depth: depthCheck(yylex, 1+join.depth)}
     }
 
 SUBQUERY_CLAUSE:
     SELECT_WITH_PARENS AS IDENT
     {
-        stmt,ok := $1.(*SelectStatement)
-        if !ok{
-            yylex.Error("expexted SelectStatement")
+        stmt, ok := $1.(*SelectStatement)
+        if !ok {
+            yylex.Error("expected SelectStatement")
         }
         subquery := &SubQuery{Statement: stmt, Alias: $3, depth: depthCheck(yylex, 1+stmt.Depth())}
-        $$ = sourcesList{sources:[]Source{subquery}, depth: depthCheck(yylex, 1 + subquery.depth)}
+        $$ = sourcesList{sources: []Source{subquery}, depth: depthCheck(yylex, 1+subquery.depth)}
     }
     |SELECT_WITH_PARENS
     {
@@ -1187,6 +1316,19 @@ SUBQUERY_CLAUSE:
         }
         subquery := &SubQuery{Statement: stmt, depth: depthCheck(yylex, 1+stmt.Depth())}
         $$ = sourcesList{sources:[]Source{subquery}, depth: depthCheck(yylex, 1 + subquery.depth)}
+    }
+    | LPAREN SELECT_STATEMENT_LIST RPAREN
+    {
+        subQueries := sourcesList{sources: []Source{}, depth: depthCheck(yylex, $2.depth)}
+        for _, tempStmt := range $2.Statements {
+            stmt, ok:= tempStmt.(*SelectStatement)
+            if !ok {
+                yylex.Error("subquery's source expected SelectStatement")
+            }
+            subQuery := &SubQuery{Statement: stmt, depth: depthCheck(yylex, 1 + stmt.Depth())}
+            subQueries.sources = append(subQueries.sources, subQuery)
+        }
+        $$ = subQueries
     }
 
 TABLE_NAME_WITH_OPTION:
@@ -1505,6 +1647,15 @@ CONDITION:
     		depth: depthCheck(yylex, 2),
     	}
     }
+    |UNMATCHPHRASE LPAREN STRING_TYPE COMMA STRING_TYPE RPAREN
+    {
+    	$$ = &BinaryExpr{
+    		LHS:  &VarRef{Val: $3},
+    		RHS:  &StringLiteral{Val: $5},
+    		Op: UNMATCHPHRASE,
+    		depth: depthCheck(yylex, 2),
+    	}
+    }
     |IPINRANGE LPAREN STRING_TYPE COMMA STRING_TYPE RPAREN
     {
         $$ = &BinaryExpr{
@@ -1780,6 +1931,65 @@ CREATE_DATABASE_STATEMENT:
         $$ = stmt
     }
 
+OBS_OPTIONS:
+    IDENT IDENT IDENT STRING IDENT STRING IDENT STRING IDENT STRING IDENT STRING
+    {
+        op := &obs.ObsOptions{}
+        if !strings.EqualFold($1, "store") {
+            yylex.Error(__yyfmt__.Sprintf("invalid store: expected 'store', got %s", $1))
+        }
+        if !strings.EqualFold($2, "file") && !strings.EqualFold($2, "s3") && !strings.EqualFold($2, "obs") {
+            yylex.Error(__yyfmt__.Sprintf("invalid store: expected 'file/s3/obs', got %s", $2))
+        }
+        if !strings.EqualFold($3, "bucket") {
+            yylex.Error(__yyfmt__.Sprintf("invalid store: expected 'bucket', got %s", $3))
+        } else {
+            if len($4) > StringLength || len($4) == 0 {
+                yylex.Error("bucket length must be between 1 and 512 bytes")
+            } else {
+                op.BucketName = $4
+            }
+        }
+        if !strings.EqualFold($5, "endpoint") {
+            yylex.Error(__yyfmt__.Sprintf("invalid store: expected 'endpoint', got %s", $5))
+        } else {
+            if len($6) > StringLength || len($6) == 0 {
+                yylex.Error("endpoint length must be between 1 and 512 bytes")
+            } else {
+                op.Endpoint = $6
+            }
+        }
+        if !strings.EqualFold($7, "basepath") {
+            yylex.Error(__yyfmt__.Sprintf("invalid store: expected 'basepath', got %s", $7))
+        } else {
+            if len($8) > StringLength || len($8) == 0 {
+                yylex.Error("basepath length must be between 1 and 512 bytes")
+            } else {
+                op.BasePath = $8
+            }
+        }
+        if !strings.EqualFold($9, "access_key") {
+            yylex.Error(__yyfmt__.Sprintf("invalid store: expected 'access_key', got %s", $9))
+        } else {
+            if len($10) > StringLength || len($10) == 0 {
+                yylex.Error("access_key length must be between 1 and 512 bytes")
+            } else {
+                op.Ak = $10
+            }
+        }
+        if !strings.EqualFold($11, "secret_access_key") {
+            yylex.Error(__yyfmt__.Sprintf("invalid store: expected 'secret_access_key', got %s", $11))
+        } else {
+            if len($12) > StringLength || len($12) == 0 {
+                yylex.Error("secret_access_key length must be between 1 and 512 bytes")
+            } else {
+                op.Sk = $12
+            }
+        }
+        $$ = op
+    }
+
+
 DATABASE_POLICY:
     REPLICAS INTEGER
     {
@@ -1871,8 +2081,12 @@ WITH_CLAUSES:
         }
         $$ = stmt
     }
-
-
+    |WITH OBS_OPTIONS
+    {
+        stmt := &CreateDatabaseStatement{}
+        stmt.ObsOptions = $2
+        $$ = stmt
+    }
 
 CREAT_DATABASE_POLICYS:
     CREAT_DATABASE_POLICY
@@ -1881,19 +2095,19 @@ CREAT_DATABASE_POLICYS:
     }
     |CREAT_DATABASE_POLICY CREAT_DATABASE_POLICYS
     {
-        if $1.ShardGroupDuration<0  || $2.ShardGroupDuration<0{
-            if $2.ShardGroupDuration>=0 {
+        if $1.ShardGroupDuration < 0 || $2.ShardGroupDuration < 0 {
+            if $2.ShardGroupDuration >= 0 {
                 $1.ShardGroupDuration = $2.ShardGroupDuration
             }
-        }else{
+        } else {
             yylex.Error("Repeat Shard Group Duration")
         }
 
-        if $1.ShardMergeDuration<0  || $2.ShardMergeDuration<0{
-            if $2.ShardMergeDuration>=0 {
+        if $1.ShardMergeDuration < 0 || $2.ShardMergeDuration < 0 {
+            if $2.ShardMergeDuration >= 0 {
                 $1.ShardMergeDuration = $2.ShardMergeDuration
             }
-        }else{
+        } else {
             yylex.Error("Repeat Shard Merge Duration")
         }
 
@@ -1903,67 +2117,67 @@ CREAT_DATABASE_POLICYS:
             $1.ShardKey = $2.ShardKey
         }
 
-        if $1.HotDuration<0  || $2.HotDuration<0{
-            if $2.HotDuration>=0 {
+        if $1.HotDuration < 0 || $2.HotDuration < 0 {
+            if $2.HotDuration >= 0 {
                 $1.HotDuration = $2.HotDuration
             }
-        }else{
+        } else {
             yylex.Error("Repeat Hot Duration")
         }
 
-        if $1.WarmDuration<0 || $2.WarmDuration<0{
-            if $2.WarmDuration>=0 {
+        if $1.WarmDuration < 0 || $2.WarmDuration < 0 {
+            if $2.WarmDuration >= 0 {
                 $1.WarmDuration = $2.WarmDuration
             }
-        }else{
+        } else {
             yylex.Error("Repeat Warm Duration")
         }
 
-        if $1.IndexColdDuration<0 || $2.IndexColdDuration<0{
-            if $2.IndexColdDuration>=0 {
+        if $1.IndexColdDuration < 0 || $2.IndexColdDuration < 0 {
+            if $2.IndexColdDuration >= 0 {
                 $1.IndexColdDuration = $2.IndexColdDuration
             }
-        }else{
+        } else {
             yylex.Error("Repeat Index Cold Duration")
         }
 
-        if $1.IndexGroupDuration<0 || $2.IndexGroupDuration<0{
-            if $2.IndexGroupDuration>=0 {
+        if $1.IndexGroupDuration < 0 || $2.IndexGroupDuration < 0 {
+            if $2.IndexGroupDuration >= 0 {
                 $1.IndexGroupDuration = $2.IndexGroupDuration
             }
-        }else{
+        } else {
             yylex.Error("Repeat Index Group Duration")
         }
 
-        if $1.PolicyDuration == nil || $2.PolicyDuration == nil{
-            if $2.PolicyDuration != nil{
+        if $1.PolicyDuration == nil || $2.PolicyDuration == nil {
+            if $2.PolicyDuration != nil {
                 $1.PolicyDuration = $2.PolicyDuration
             }
-        }else{
+        } else {
             yylex.Error("Repeat Policy Duration")
         }
 
-        if $1.Replication == nil || $2.Replication == nil{
-            if $2.Replication != nil{
-                 $1.Replication = $2.Replication
+        if $1.Replication == nil || $2.Replication == nil {
+            if $2.Replication != nil {
+                $1.Replication = $2.Replication
             }
-        }else{
+        } else {
             yylex.Error("Repeat Policy Replication")
         }
 
-        if len($1.PolicyName) == 0 || len($2.PolicyName) == 0{
-            if len($2.PolicyName) != 0{
+        if len($1.PolicyName) == 0 || len($2.PolicyName) == 0 {
+            if len($2.PolicyName) != 0 {
                 $1.PolicyName = $2.PolicyName
             }
-        }else{
+        } else {
             yylex.Error("Repeat Policy Name")
         }
 
-        if $1.rpdefault == false || $2.rpdefault == false{
-            if $2.rpdefault == true{
+        if $1.rpdefault == false || $2.rpdefault == false {
+            if $2.rpdefault == true {
                 $1.rpdefault = $2.rpdefault
             }
-        }else{
+        } else {
             yylex.Error("Repeat rpdefault")
         }
         $$ = $1
@@ -2136,47 +2350,47 @@ CREATE_USER_STATEMENT:
 RP_DURATION_OPTIONS:
     DURATION DURATIONVAL REPLICATION INTEGER SHARD_HOT_WARM_INDEX_DURATIONS
     {
-    	stmt := &CreateRetentionPolicyStatement{}
-    	stmt.Duration = $2
-    	stmt.Replication = int($4)
+        stmt := &CreateRetentionPolicyStatement{}
+        stmt.Duration = $2
+        stmt.Replication = int($4)
 
-    	if $5.ShardGroupDuration==-1||$5.ShardGroupDuration==0{
-           stmt.ShardGroupDuration = time.Duration(DefaultQueryTimeout)
-        }else{
-           stmt.ShardGroupDuration = $5.ShardGroupDuration
+        if $5.ShardGroupDuration == -1 || $5.ShardGroupDuration == 0 {
+            stmt.ShardGroupDuration = time.Duration(DefaultQueryTimeout)
+        } else {
+            stmt.ShardGroupDuration = $5.ShardGroupDuration
         }
 
-        if $5.HotDuration==-1||$5.HotDuration==0{
-           stmt.HotDuration = time.Duration(DefaultQueryTimeout)
-        }else{
-           stmt.HotDuration = $5.HotDuration
+        if $5.HotDuration == -1 || $5.HotDuration == 0 {
+            stmt.HotDuration = time.Duration(DefaultQueryTimeout)
+        } else {
+            stmt.HotDuration = $5.HotDuration
         }
 
-        if $5.WarmDuration==-1||$5.WarmDuration==0{
-           stmt.WarmDuration = time.Duration(DefaultQueryTimeout)
-        }else{
-           stmt.WarmDuration = $5.WarmDuration
+        if $5.WarmDuration == -1 || $5.WarmDuration == 0 {
+            stmt.WarmDuration = time.Duration(DefaultQueryTimeout)
+        } else {
+            stmt.WarmDuration = $5.WarmDuration
         }
 
-        if $5.IndexColdDuration==-1||$5.IndexColdDuration==0{
-           stmt.IndexColdDuration = time.Duration(DefaultQueryTimeout)
-        }else{
-           stmt.IndexColdDuration = $5.IndexColdDuration
+        if $5.IndexColdDuration == -1 || $5.IndexColdDuration == 0 {
+            stmt.IndexColdDuration = time.Duration(DefaultQueryTimeout)
+        } else {
+            stmt.IndexColdDuration = $5.IndexColdDuration
         }
 
-        if $5.IndexGroupDuration==-1||$5.IndexGroupDuration==0{
-           stmt.IndexGroupDuration = time.Duration(DefaultQueryTimeout)
-        }else{
-           stmt.IndexGroupDuration = $5.IndexGroupDuration
+        if $5.IndexGroupDuration == -1 || $5.IndexGroupDuration == 0 {
+            stmt.IndexGroupDuration = time.Duration(DefaultQueryTimeout)
+        } else {
+            stmt.IndexGroupDuration = $5.IndexGroupDuration
         }
 
-        if $5.ShardMergeDuration==-1||$5.ShardMergeDuration==0{
-           stmt.ShardMergeDuration = time.Duration(DefaultQueryTimeout)
-        }else{
-           stmt.ShardMergeDuration = $5.ShardMergeDuration
+        if $5.ShardMergeDuration == -1 || $5.ShardMergeDuration == 0 {
+            stmt.ShardMergeDuration = time.Duration(DefaultQueryTimeout)
+        } else {
+            stmt.ShardMergeDuration = $5.ShardMergeDuration
         }
 
-    	$$ = stmt
+        $$ = stmt
     }
     |DURATION DURATIONVAL REPLICATION INTEGER
     {
@@ -2194,51 +2408,51 @@ SHARD_HOT_WARM_INDEX_DURATIONS:
     }
     |SHARD_HOT_WARM_INDEX_DURATION SHARD_HOT_WARM_INDEX_DURATIONS
     {
-        if $1.ShardGroupDuration<0  || $2.ShardGroupDuration<0{
-            if $2.ShardGroupDuration>=0 {
+        if $1.ShardGroupDuration < 0 || $2.ShardGroupDuration < 0 {
+            if $2.ShardGroupDuration >= 0 {
                 $1.ShardGroupDuration = $2.ShardGroupDuration
             }
-        }else{
+        } else {
             yylex.Error("Repeat Shard Group Duration")
         }
 
-        if $1.HotDuration<0  || $2.HotDuration<0{
-            if $2.HotDuration>=0 {
+        if $1.HotDuration < 0 || $2.HotDuration < 0 {
+            if $2.HotDuration >= 0 {
                 $1.HotDuration = $2.HotDuration
             }
-        }else{
+        } else {
             yylex.Error("Repeat Hot Duration")
         }
 
-        if $1.WarmDuration<0  || $2.WarmDuration<0{
-            if $2.WarmDuration>=0 {
+        if $1.WarmDuration < 0 || $2.WarmDuration < 0 {
+            if $2.WarmDuration >= 0 {
                 $1.WarmDuration = $2.WarmDuration
             }
-        }else{
+        } else {
             yylex.Error("Repeat Warm Duration")
         }
 
-        if $1.IndexColdDuration<0  || $2.IndexColdDuration<0{
-            if $2.IndexColdDuration>=0 {
+        if $1.IndexColdDuration < 0 || $2.IndexColdDuration < 0 {
+            if $2.IndexColdDuration >= 0 {
                 $1.IndexColdDuration = $2.IndexColdDuration
             }
-        }else{
-             yylex.Error("Repeat Index Cold Duration")
+        } else {
+            yylex.Error("Repeat Index Cold Duration")
         }
 
-        if $1.IndexGroupDuration<0  || $2.IndexGroupDuration<0{
-            if $2.IndexGroupDuration>=0 {
+        if $1.IndexGroupDuration < 0 || $2.IndexGroupDuration < 0 {
+            if $2.IndexGroupDuration >= 0 {
                 $1.IndexGroupDuration = $2.IndexGroupDuration
             }
-        }else{
+        } else {
             yylex.Error("Repeat Index Group Duration")
         }
 
-        if $1.ShardMergeDuration<0  || $2.ShardMergeDuration<0{
-            if $2.ShardMergeDuration>=0 {
+        if $1.ShardMergeDuration < 0 || $2.ShardMergeDuration < 0 {
+            if $2.ShardMergeDuration >= 0 {
                 $1.ShardMergeDuration = $2.ShardMergeDuration
             }
-        }else{
+        } else {
             yylex.Error("Repeat ShardMerge Duration")
         }
         $$ = $1
@@ -2379,34 +2593,39 @@ ALTER_RENTRENTION_POLICY_STATEMENT:
         stmt.Duration = $7.PolicyDuration
         stmt.Replication = $7.Replication
         stmt.Default = $7.rpdefault
-        if $7.ShardGroupDuration==-1{
-           stmt.ShardGroupDuration = nil
-        }else{
-           stmt.ShardGroupDuration = &$7.ShardGroupDuration
-        }
-        if $7.HotDuration==-1{
-           stmt.HotDuration = nil
-        }else{
-           stmt.HotDuration = &$7.HotDuration
-        }
-        if $7.WarmDuration==-1{
-           stmt.WarmDuration = nil
-        }else{
-           stmt.WarmDuration = &$7.WarmDuration
-        }
-        if $7.IndexColdDuration==-1{
-           stmt.IndexColdDuration = nil
-        }else{
-           stmt.IndexColdDuration = &$7.IndexColdDuration
-        }
-        if $7.IndexGroupDuration==-1{
-           stmt.IndexGroupDuration = nil
-        }else{
-           stmt.IndexGroupDuration = &$7.IndexGroupDuration
+
+        if $7.ShardGroupDuration == -1 {
+            stmt.ShardGroupDuration = nil
+        } else {
+            stmt.ShardGroupDuration = &$7.ShardGroupDuration
         }
 
-        if len($7.PolicyName)>0|| $7.ReplicaNum != 0{
-           yylex.Error("PolicyName and ReplicaNum")
+        if $7.HotDuration == -1 {
+            stmt.HotDuration = nil
+        } else {
+            stmt.HotDuration = &$7.HotDuration
+        }
+
+        if $7.WarmDuration == -1 {
+            stmt.WarmDuration = nil
+        } else {
+            stmt.WarmDuration = &$7.WarmDuration
+        }
+
+        if $7.IndexColdDuration == -1 {
+            stmt.IndexColdDuration = nil
+        } else {
+            stmt.IndexColdDuration = &$7.IndexColdDuration
+        }
+
+        if $7.IndexGroupDuration == -1 {
+            stmt.IndexGroupDuration = nil
+        } else {
+            stmt.IndexGroupDuration = &$7.IndexGroupDuration
+        }
+
+        if len($7.PolicyName) > 0 || $7.ReplicaNum != 0 {
+            yylex.Error("PolicyName and ReplicaNum")
         }
         $$ = stmt
     }
@@ -2782,18 +3001,18 @@ TAG_KEY:
 
 
 EXPLAIN_STATEMENT:
-    EXPLAIN ANALYZE SELECT_STATEMENT
+    EXPLAIN ANALYZE STATEMENT
     {
         $$ = &ExplainStatement{
-            Statement: $3.(*SelectStatement),
+            Statement: $3.(Statement),
             Analyze: true,
             depth: depthCheck(yylex, 1 + $3.Depth()),
         }
     }
-    |EXPLAIN SELECT_STATEMENT
+    |EXPLAIN STATEMENT
     {
         $$ = &ExplainStatement{
-            Statement: $2.(*SelectStatement),
+            Statement: $2.(Statement),
             Analyze: false,
             depth: depthCheck(yylex, 1 + $2.Depth()),
         }
@@ -2995,6 +3214,7 @@ CREATE_MEASUREMENT_STATEMENT:
         }
         stmt.IndexType = $5.IndexType
         stmt.IndexList = $5.IndexList
+        stmt.IndexParams = $5.IndexParams
         stmt.ShardKey = $5.ShardKey
         stmt.NumOfShards = $5.NumOfShards
         stmt.Type = $5.Type
@@ -3049,32 +3269,6 @@ CREATE_MEASUREMENT_STATEMENT:
                 return 1
             }
         }
-        // check if primary key is left prefix of sort key
-        if len($5.PrimaryKey) > len($5.SortKey) {
-            yylex.Error("PrimaryKey should be left prefix of SortKey")
-            return 1
-        }
-        for i, v := range $5.PrimaryKey {
-            if v != $5.SortKey[i] {
-                yylex.Error("PrimaryKey should be left prefix of SortKey")
-                return 1
-            }
-        }
-        // check if indexlist of secondary is IN Tags/Fields
-        for i := range $5.IndexType {
-            indextype := $5.IndexType[i]
-            if indextype == "timecluster" {
-                continue
-            }
-            indexlist := $5.IndexList[i]
-            for _, col := range indexlist {
-                _, inTag := stmt.Tags[col]
-                _, inField := stmt.Fields[col]
-                if !inTag && !inField {
-                    yylex.Error("Invalid indexlist")
-                }
-            }
-        }
         if $5.NumOfShards != 0 && $5.Type == "range" {
             yylex.Error("Not support to set num-of-shards for range sharding")
         }
@@ -3082,6 +3276,7 @@ CREATE_MEASUREMENT_STATEMENT:
         stmt.EngineType = $5.EngineType
         stmt.IndexType = $5.IndexType
         stmt.IndexList = $5.IndexList
+        stmt.IndexParams = $5.IndexParams
         stmt.TimeClusterDuration = $5.TimeClusterDuration
         stmt.ShardKey = $5.ShardKey
         stmt.NumOfShards = $5.NumOfShards
@@ -3107,6 +3302,7 @@ CMOPTIONS_TS:
         if $3 != nil {
             option.IndexType = $3.types
             option.IndexList = $3.lists
+            option.IndexParams = $3.indexParams
         }
         if $4 != nil {
             option.ShardKey = $4
@@ -3126,6 +3322,7 @@ CMOPTIONS_CS:
             option.IndexType = $3.types
             option.IndexList = $3.lists
             option.TimeClusterDuration = $3.timeClusterDuration
+            option.IndexParams = $3.indexParams
         }
         if $4 != nil {
             option.ShardKey = $4
@@ -3181,6 +3378,7 @@ CMOPTION_INDEXTYPE_CS:
         validIndexType := map[string]struct{}{}
         validIndexType["bloomfilter"] = struct{}{}
         validIndexType["bloomfilter_ip"] = struct{}{}
+        validIndexType["bloomfilter_universal"] = struct{}{}
         validIndexType["minmax"] = struct{}{}
         validIndexType["text"] = struct{}{}
         if $2 == nil {
@@ -3204,6 +3402,7 @@ CMOPTION_INDEXTYPE_CS:
         indextype := &IndexType{
             types: []string{indexType},
             lists: [][]string{{"time"}},
+            indexParams: [][]Expr{{}},
             timeClusterDuration: $4,
         }
         validIndexType := map[string]struct{}{}
@@ -3220,6 +3419,7 @@ CMOPTION_INDEXTYPE_CS:
             }
             indextype.types = append(indextype.types, $6.types...)
             indextype.lists = append(indextype.lists, $6.lists...)
+            indextype.indexParams = append(indextype.indexParams, $6.indexParams...)
             $$ = indextype
             depthCheck(yylex, max(len($$.types), len($$.lists)))
         }
@@ -3422,16 +3622,18 @@ INDEX_TYPE_LIST:
         indextype := $1
         indextype.types = append(indextype.types,$2.types...)
         indextype.lists = append(indextype.lists,$2.lists...)
+        indextype.indexParams = append(indextype.indexParams,$2.indexParams...)
         $$ = indextype
         depthCheck(yylex, max(len($$.types), len($$.lists)))
     }
 
 INDEX_TYPE:
-    IDENT INDEXLIST INDEX_LIST
+    IDENT INDEX_PARAMS INDEXLIST INDEX_LIST
     {
         $$ = &IndexType{
             types: []string{$1},
-            lists: [][]string{$3},
+            lists: [][]string{$4},
+            indexParams: [][]Expr{$2},
         }
     }
     |
@@ -3443,6 +3645,43 @@ INDEX_TYPE:
         }
     }
 
+INDEX_PARAMS:
+    {
+        $$ = nil
+    }
+    |
+    LPAREN INDEX_PARAMS_VAREF RPAREN
+    {
+        $$ = $2
+    }
+
+INDEX_PARAMS_VAREF:
+    {
+        $$ = nil
+    }
+    |NUMBER
+    {
+        $$ = []Expr{&NumberLiteral{Val:$1}}
+    }
+    |NUMBER COMMA INDEX_PARAMS_VAREF
+    {
+        e := []Expr{&NumberLiteral{Val:$1}}
+        e = append(e,$3...)
+        $$ = e
+        depthCheck(yylex, len($$))
+    }
+    |STRING
+    {
+        $$ = []Expr{&StringLiteral{Val:$1}}
+    }
+    |STRING COMMA INDEX_PARAMS_VAREF
+    {
+        e := []Expr{&StringLiteral{Val:$1}}
+        e = append(e,$3...)
+        $$ = e
+        depthCheck(yylex, len($$))
+    }
+
 INDEX_LIST:
     IDENT
     {
@@ -3450,7 +3689,6 @@ INDEX_LIST:
     }
     |INDEX_LIST COMMA IDENT
     {
-
         $$ = append($1, $3)
         depthCheck(yylex, len($$))
     }
@@ -4138,6 +4376,192 @@ CTE_CLAUSE:
             yylex.Error("Invalid stmt clause in cte.query")
         }
         $$ = cte
+    }
+
+SHARDSNUM:
+    AUTO
+    {
+        $$ = -1
+    }
+    | INTEGER
+    {
+        $$ = $1
+    }
+
+ALTER_SHARDS_NUM_STATEMENT:
+    ALTER MEASUREMENT TABLE_CASE WITH SHARDS SHARDSNUM
+    {
+        stmt := &AlterShardsNumStatement{}
+        stmt.Database = $3.Database
+        stmt.Name = $3.Name
+        stmt.RetentionPolicy = $3.RetentionPolicy
+        stmt.NumOfShards = $6
+        $$ = stmt
+    }
+
+PROPERTY_LIST:
+    LPAREN PROPERTY_OPTIONS
+    {
+        $$ = $2
+    }
+    |
+    {
+        $$ = nil
+    }
+
+PROPERTY_OPTIONS:
+    PROPERTY_OPTION PROPERTY_OPTIONS
+    {
+        properties := []*Property{$1}
+        $$ = append(properties, $2...)
+        depthCheck(yylex, len($$))
+    }
+    |
+    PROPERTY_OPTION
+    {
+        $$ = []*Property{$1}
+    }
+
+PROPERTY_OPTION:
+   PROPERTY_COLUMN COMMA
+   {
+        $$ = $1
+   }
+   |
+   PROPERTY_COLUMN RPAREN
+   {
+        $$ = $1
+   }
+
+PROPERTY_COLUMN:
+   STRING_TYPE EQ STRING_TYPE
+   {
+        $$ = &Property{Key: $1, Value: $3}
+   }
+
+CREATE_RESOURCE_STATEMENT:
+    CREATE RESOURCE IDENT PROPERTIES PROPERTY_LIST
+    {
+        stmt := &CreateResourceStmt{Name: $3, Properties: make(map[string]string, len($5))}
+        for _, p := range $5 {
+          stmt.Properties[p.Key] = p.Value
+        }
+        $$ = stmt
+    }
+
+ALTER_RESOURCE_STATEMENT:
+    ALTER RESOURCE IDENT PROPERTIES PROPERTY_LIST
+    {
+        stmt := &AlterResourceStmt{Name: $3, Properties: make(map[string]string, len($5))}
+        for _, p := range $5 {
+          stmt.Properties[p.Key] = p.Value
+        }
+        $$ = stmt
+    }
+
+SHOW_RESOURCE_STATEMENT:
+    SHOW RESOURCE IDENT
+    {
+        stmt := &ShowResourceStmt{}
+        stmt.Name = $3
+        $$ = stmt
+    }
+
+SHOW_RESOURCES_STATEMENT:
+    SHOW RESOURCES
+    {
+        $$ = &ShowResourcesStmt{}
+    }
+
+DROP_RESOURCE_STATEMENT:
+    DROP RESOURCE IDENT
+    {
+        stmt := &DropResourceStmt{}
+        stmt.Name = $3
+        $$ = stmt
+    }
+
+SHOW_LAST_INDEX_STATEMENT:
+    SHOW LASTINDEX ON IDENT
+    {
+        stmt := &ShowLastIndexStatement{}
+        stmt.DbName = $4
+        $$ = stmt
+    }
+
+CREATE_TASK_STATEMENT:
+    CREATE TASK IDENT PROPERTIES PROPERTY_LIST
+    {
+        stmt := &CreateTaskStmt{}
+        if len($3) > StringLength || len($3) == 0 {
+            yylex.Error("task name length must be between 1 and 512 bytes")
+        } else {
+            stmt.Name = $3
+        }
+        stmt.Properties = make(map[string]string, len($5))
+        for _, p := range $5 {
+          stmt.Properties[p.Key] = p.Value
+        }
+        $$ = stmt
+    }
+
+ALTER_TASK_STATEMENT:
+    ALTER TASK IDENT PROPERTIES PROPERTY_LIST
+    {
+        stmt := &AlterTaskStmt{}
+        if len($3) > StringLength || len($3) == 0 {
+            yylex.Error("task name length must be between 1 and 512 bytes")
+        } else {
+            stmt.Name = $3
+        }
+        stmt.Properties = make(map[string]string, len($5))
+        for _, p := range $5 {
+          stmt.Properties[p.Key] = p.Value
+        }
+        $$ = stmt
+    }
+
+SHOW_TASK_STATEMENT:
+    SHOW TASK IDENT PROPERTIES PROPERTY_LIST
+    {
+        stmt := &ShowTaskStmt{}
+        if len($3) > StringLength || len($3) == 0 {
+            yylex.Error("task name length must be between 1 and 512 bytes")
+        } else {
+            stmt.Name = $3
+        }
+        stmt.Properties = make(map[string]string, len($5))
+        for _, p := range $5 {
+          stmt.Properties[p.Key] = p.Value
+        }
+        $$ = stmt
+    }
+
+SHOW_TASKS_STATEMENT:
+    SHOW TASKS PROPERTIES PROPERTY_LIST
+    {
+        stmt := &ShowTasksStmt{}
+        stmt.Properties = make(map[string]string, len($4))
+        for _, p := range $4 {
+          stmt.Properties[p.Key] = p.Value
+        }
+        $$ = stmt
+    }
+
+DROP_TASK_STATEMENT:
+    DROP TASK IDENT PROPERTIES PROPERTY_LIST
+    {
+        stmt := &DropTaskStmt{}
+        if len($3) > StringLength || len($3) == 0 {
+            yylex.Error("task name length must be between 1 and 512 bytes")
+        } else {
+            stmt.Name = $3
+        }
+        stmt.Properties = make(map[string]string, len($5))
+        for _, p := range $5 {
+          stmt.Properties[p.Key] = p.Value
+        }
+        $$ = stmt
     }
 
 %%

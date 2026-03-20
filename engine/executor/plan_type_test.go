@@ -359,6 +359,7 @@ func TestPlanTypeShard(t *testing.T) {
 	if init.GetSeriesKey() != nil {
 		t.Error("planTypeShard getSeriesKey error")
 	}
+	assert.Equal(t, len(init.GetResource("")), 0)
 	initMapper := executor.NewPlanTypeInitShardMapper()
 	if initMapper.Close() != nil {
 		t.Error("planTypeShardMapper close error")

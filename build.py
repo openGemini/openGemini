@@ -5,17 +5,17 @@ This code is originally from: https://github.com/influxdata/influxdb/blob/v1.8.8
 Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
 """
 #!/usr/bin/env python3
+
 import sys
 import os
 import platform
 import subprocess
-from datetime import datetime
+from datetime import datetime, timezone
 import shutil
 import re
 import logging
-import stat
+from typing import List, Dict, Optional
 import click
-from typing import List, Dict, Optional, Tuple, Union
 
 ################
 # Configuration Constants
@@ -24,7 +24,8 @@ from typing import List, Dict, Optional, Tuple, Union
 PACKAGE_NAME = "openGemini"
 GOBUILD_OUT = 'gobuild.txt'
 PREREQS = ['git', 'go']
-GO_VET_COMMAND = "go vet ./..."
+# Use the CI script instead of "go vet ./..."  to make it consistent.
+GO_VET_COMMAND = "scripts/ci/go_vet.sh"
 
 TARGETS: Dict[str, str] = {
     'ts-sql': './app/ts-sql',
@@ -33,7 +34,8 @@ TARGETS: Dict[str, str] = {
     'ts-server': './app/ts-server',
     'ts-monitor': './app/ts-monitor',
     'ts-data': './app/ts-data',
-    'ts-recover': './app/ts-recover'
+    'ts-recover': './app/ts-recover',
+    'ts-task': './app/ts-task'
 }
 
 SUPPORTED_BUILDS: Dict[str, List[str]] = {
@@ -53,7 +55,7 @@ def init_logging(verbose: bool) -> None:
         level=log_level,
         format='[%(levelname)s] %(funcName)s: %(message)s'
     )
-    logging.info(f"Writing error details to")
+    logging.info("Writing error details to the console.")
 
 ################
 # Utility Functions
@@ -65,7 +67,7 @@ def run_command(
     shell: bool = False
 ) -> Optional[str]:
     """Execute a shell command with error handling"""
-    logging.debug(f"Executing command: {command}")
+    logging.debug("Executing command: %s", command)
     try:
         if shell:
             if get_system_platform() != "windows":
@@ -99,30 +101,30 @@ def run_command(
 
     except subprocess.CalledProcessError as e:
         if allow_failure:
-            logging.warning(f"Command failed: {command}, Error: {e.output}")
+            logging.warning("Command failed: %s, Error: %s", command, e.output)
             return None
         else:
-            logging.error(f"Command failed: {command}, Error: {e.output}")
+            logging.error("Command failed: %s, Error: %s", command, e.output)
             write_to_gobuild(e.output)
             sys.exit(1)
     except OSError as e:
         if allow_failure:
-            logging.warning(f"Command environment error: {command}, Error: {e}")
+            logging.warning("Command environment error: %s, Error: %s", command, e)
             return None
         else:
-            logging.error(f"Command environment error: {command}, Error: {e}")
+            logging.error("Command environment error: %s, Error: %s", command, e)
             write_to_gobuild(str(e))
             sys.exit(1)
 
 def write_to_gobuild(content: str) -> None:
     """Write build error information to log file"""
-    logging.info(f"Writing error details to {GOBUILD_OUT}")
+    logging.info("Writing error details to %s", GOBUILD_OUT)
     try:
         with open(GOBUILD_OUT, 'w', encoding='utf-8') as f:
             f.write("error\n")
             f.write(content)
     except IOError as e:
-        logging.error(f"Failed to write to {GOBUILD_OUT}: {e}")
+        logging.error("Failed to write to %s, Error: %s", GOBUILD_OUT, e)
 
 def get_system_arch() -> str:
     """Get current system architecture in Go-compatible format"""
@@ -154,7 +156,7 @@ def local_changes_exist() -> bool:
 def get_current_version() -> str:
     """Parse version information from git tag"""
     version_tag = run_command("git describe --always --tags --abbrev=0") or ""
-    if isinstance(version_tag, str) and version_tag.startswith('v'):
+    if version_tag.startswith('v'):
         version_tag = version_tag[1:]
     return version_tag.replace("-", "~").replace("_", "~")
 
@@ -184,7 +186,7 @@ def check_dependency(binary: str) -> Optional[str]:
 
     for path in os.environ["PATH"].split(os.pathsep):
         path = path.strip('"')
-        if get_system_platform() == "windows" and isinstance(path, str) and binary.upper() in path.upper():
+        if get_system_platform() == "windows" and binary.upper() in path.upper():
             return path
         full_path = os.path.join(path, binary)
         if is_executable(full_path):
@@ -210,7 +212,7 @@ def print_banner() -> None:
 """
     logging.info(banner)
 
-def check_environment(build_dir: Optional[str] = None) -> None:
+def check_environment() -> None:
     """Verify build environment is valid"""
     logging.info("Checking build environment...")
 
@@ -223,16 +225,16 @@ def check_environment(build_dir: Optional[str] = None) -> None:
     go_version = get_go_version()
     if not go_version:
         raise RuntimeError("Could not determine Go version. Ensure Go is properly installed.")
-    logging.info(f"Using Go version: {go_version}")
+    logging.info("Using Go version: %s", go_version)
 
     # Log relevant environment variables
     for env_var in ["GOPATH", "GOBIN", "GOROOT"]:
-        logging.debug(f"{env_var}: {os.environ.get(env_var, 'Not set')}")
+        logging.debug("%s : %s", env_var, os.environ.get(env_var, 'Not set'))
 
-def go_get_dependencies(branch: str, update: bool = False, no_uncommitted: bool = False) -> bool:
+def go_get_dependencies(no_uncommitted: bool = False) -> bool:
     """Retrieve or update Go dependencies"""
     if local_changes_exist() and no_uncommitted:
-        logging.error("There are uncommitted changes. Commit or stash them first.")
+        logging.error("There are uncommitted changes, commit or stash them first.")
         return False
     return True
 
@@ -248,9 +250,9 @@ def run_tests(
     if race:
         logging.info("Race detection enabled")
     if parallel is not None:
-        logging.info(f"Parallel test processes: {parallel}")
+        logging.info("Parallel test processes: %s", parallel)
     if timeout is not None:
-        logging.info(f"Test timeout: {timeout}")
+        logging.info("Test timeout: %s", timeout)
 
     # Download module dependencies
     run_command("go mod download")
@@ -299,10 +301,10 @@ def _run_tests_normal(test_cmd: str) -> bool:
         if output and "FAIL" in output:
             write_to_gobuild(output)
             return False
-        logging.debug(f"Test output:\n{output}")
+        logging.debug("Test output: %s\n", output)
         return True
-    except Exception as e:
-        logging.error(f"Test execution failed: {e}")
+    except (subprocess.CalledProcessError, OSError) as e:
+        logging.error("Test execution failed: %s", e)
         return False
 
 def _run_tests_with_junit(test_cmd: str) -> bool:
@@ -331,53 +333,54 @@ def _run_tests_with_junit(test_cmd: str) -> bool:
             )
             _, err = junit_proc.communicate(output)
             if junit_proc.returncode != 0:
-                logging.error(f"Failed to generate JUnit report: {err}")
+                logging.error("Failed to generate JUnit report: %s", err)
                 return False
 
         if proc.returncode != 0:
-            logging.error(f"Tests failed: {output}")
+            logging.error("Tests failed: %s", output)
             return False
         return True
-    except Exception as e:
-        logging.error(f"Test execution failed: {e}")
+    except (subprocess.TimeoutExpired, subprocess.CalledProcessError, OSError) as e:
+        logging.error("Test execution failed: %s", e)
         return False
 
 def build_targets(
-    platform: str,
+    platform_str: str,
     arch: str,
     version: str,
     clean: bool = False,
     outdir: str = ".",
-    tags: List[str] = None,
+    tags: Optional[List[str]] = None,
     static: bool = False,
     race: bool = False
 ) -> None:
     """Build targets for specified platform and architecture"""
-    tags = tags or []
-    if platform not in SUPPORTED_BUILDS:
-        raise ValueError(f"Unsupported platform: {platform}")
-    if arch not in SUPPORTED_BUILDS[platform]:
-        raise ValueError(f"Unsupported architecture {arch} for platform {platform}")
+    if tags is None:
+        tags = []
+    if platform_str not in SUPPORTED_BUILDS:
+        raise ValueError(f"Unsupported platform: {platform_str}")
+    if arch not in SUPPORTED_BUILDS[platform_str]:
+        raise ValueError(f"Unsupported architecture {arch} for platform {platform_str}")
 
     # Prepare output directory
     if not os.path.exists(outdir):
         os.makedirs(outdir)
     elif clean and outdir not in ('/', '.'):
-        logging.info(f"Cleaning build directory: {outdir}")
+        logging.info("Cleaning build directory: %s", outdir)
         shutil.rmtree(outdir)
         os.makedirs(outdir)
 
-    logging.info(f"Building for {platform}/{arch}...")
-    logging.info(f"Output directory: {outdir}")
+    logging.info("Building for %s/%s...", platform_str, arch)
+    logging.info("Output directory: %s", outdir)
 
     # Build each target
     for target_name, target_path in TARGETS.items():
         # Add .exe extension for Windows
-        output_filename = f"{target_name}.exe" if platform == "windows" else target_name
+        output_filename = f"{target_name}.exe" if platform_str == "windows" else target_name
         output_path = os.path.join(outdir, output_filename)
 
         # Construct build command
-        build_cmd_parts = []
+        build_cmd_parts: List[str] = []
 
         # Handle static build
         if static or "static_" in arch:
@@ -387,10 +390,10 @@ def build_targets(
             build_cmd_parts.append("CGO_ENABLED=0")
 
         # Set GOOS and GOARCH
-        build_cmd_parts.append(f"GOOS={platform} GOARCH={arch}")
+        build_cmd_parts.append(f"GOOS={platform_str} GOARCH={arch}")
 
         # Handle ARM specific flags
-        if "arm" in arch and platform != "windows":
+        if "arm" in arch and platform_str != "windows":
             if arch == "armel":
                 build_cmd_parts.append("GOARM=5")
             elif arch in ("armhf", "arm"):
@@ -423,11 +426,11 @@ def build_targets(
 
         # Execute build
         build_cmd = " ".join(build_cmd_parts)
-        start_time = datetime.utcnow()
-        logging.info(f"Building {target_name}: {build_cmd}")
+        start_time = datetime.now(timezone.utc)
+        logging.info("Building %s : %s", target_name, build_cmd)
         run_command(build_cmd, shell=True)
-        end_time = datetime.utcnow()
-        logging.info(f"Build completed in {(end_time - start_time).total_seconds():.2f}s")
+        end_time = datetime.now(timezone.utc)
+        logging.info("Build completed in %.2fs", (end_time - start_time).total_seconds())
 
 
 # Initialize logging
@@ -505,15 +508,15 @@ init_logging(True)
 
 def main(
     outdir: str,
-    name: str,
+    name: str,          # pylint: disable=unused-argument
     arch: str,
-    platform: str,
+    platform: str,      # pylint: disable=redefined-outer-name
     branch: str,
     commit: str,
     version: str,
-    iteration: str,
+    iteration: str,     # pylint: disable=unused-argument
     nightly: bool,
-    update: bool,
+    update: bool,       # pylint: disable=unused-argument
     release: bool,
     clean: bool,
     no_get: bool,
@@ -544,7 +547,7 @@ def main(
                     version = ".".join(ver_parts)
                 except (ValueError, IndexError):
                     logging.warning("Could not increment version, using original")
-            version = f"{version}~n{datetime.utcnow().strftime('%Y%m%d%H%M')}"
+            version = f"{version}~n{datetime.now(timezone.utc).strftime('%Y%m%d%H%M')}"
 
         # Process build tags
         build_tags_list = build_tags.split(',') if build_tags else []
@@ -561,16 +564,16 @@ def main(
         if branch != orig_branch and commit != orig_commit:
             raise click.BadParameter("Specify either --branch or --commit, not both")
         elif branch != orig_branch:
-            logging.info(f"Checking out branch: {branch}")
+            logging.info("Checking out branch: %s", branch)
             run_command(f"git checkout {branch}")
         elif commit != orig_commit:
-            logging.info(f"Checking out commit: {commit}")
+            logging.info("Checking out commit: %s", commit)
             run_command(f"git checkout {commit}")
 
         # Check environment and dependencies
         check_environment()
         if not no_get:
-            if not go_get_dependencies(branch, update, no_uncommitted):
+            if not go_get_dependencies(no_uncommitted):
                 sys.exit(1)
 
         # Run tests if requested
@@ -594,7 +597,7 @@ def main(
 
                 # Build targets
                 build_targets(
-                    platform=plf,
+                    platform_str=plf,
                     arch=arch_target,
                     version=version,
                     clean=clean,
@@ -606,15 +609,18 @@ def main(
 
         # Restore original git branch
         if orig_branch != get_current_branch():
-            logging.info(f"Restoring original branch: {orig_branch}")
+            logging.info("Restoring original branch: %s", orig_branch)
             run_command(f"git checkout {orig_branch}")
 
         logging.info("Build completed successfully!")
 
-    except Exception as e:
-        logging.error(f"Build failed: {str(e)}")
+    except (subprocess.CalledProcessError, OSError, KeyboardInterrupt) as e:
+        logging.error("Build failed: %s", e)
         sys.exit(1)
 
 if __name__ == '__main__':
     print_banner()
-    main()
+    # We use Click to parse arguments, so ignore the warning by PyLint complaining that
+    # calling main() without arguments.
+    main()      # pylint: disable=no-value-for-parameter
+

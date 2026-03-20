@@ -17,6 +17,7 @@ package record
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 
@@ -27,6 +28,10 @@ import (
 
 const (
 	TimeField              = "time"
+	CountColSuffix         = "_count"
+	SumColSuffix           = "_sum"
+	MaxColSuffix           = "_max"
+	MinColSuffix           = "_min"
 	SeqIDField             = "__seq_id___"
 	FragmentField          = "__fragment__"
 	RecMaxLenForRuse       = 512
@@ -518,6 +523,7 @@ func (c *ColVal) getValidCount(start int, pos int, posValidCount *int) {
 		}
 	}
 }
+
 func (rec *Record) appendRecImpl(srcRec *Record, start, end int, pad bool, colPos []int, colPosValidCount []int) {
 	if start == end {
 		return
@@ -1442,6 +1448,18 @@ func (rec *Record) Split(dst []Record, maxRows int) []Record {
 	return dst
 }
 
+func (rec *Record) IsFullAllCol(colIdx map[int]struct{}) (map[int]struct{}, bool) {
+	for i := 0; i < rec.ColNums(); i++ {
+		if _, ok := colIdx[i]; ok {
+			continue
+		}
+		if rec.ColVals[i].Len > 0 && rec.ColVals[i].NilCount == 0 {
+			colIdx[i] = struct{}{}
+		}
+	}
+	return colIdx, len(colIdx) == len(rec.ColVals)
+}
+
 func stringUpdateFunction(rec, iRec *Record, index, row, recRow int) {
 	v, isNil := rec.ColVals[index].StringValueUnsafe(recRow)
 	iRec.ColVals[index].UpdateStringValue(v, isNil, row)
@@ -1549,4 +1567,92 @@ func UpdateSeqIdCol(startSeqId int64, rec *Record) {
 	}
 	rec.ColVals[idx].Init()
 	rec.ColVals[idx].AppendIntegers(seqCol...)
+}
+
+// MergeRecords merges a slice of Records into a single Record.
+// The method assumes that all input Records have the same Schema.
+// Columns ending with "_count" or "_sum" are summed up.
+// Columns ending with "_min" or "_max" are compared and the min/max value is kept.
+// The returned Record has all columns with length 1.
+// Note: This method assumes that all input Records have consistent Schema
+// and contain only count/sum/min/max columns. No validation is performed.
+func MergeRecords(records []*Record) *Record {
+	if len(records) == 0 {
+		return nil
+	}
+
+	// Use the first record's schema as the base schema
+	schema := records[0].Schema
+	result := NewRecordBuilder(schema)
+
+	for _, record := range records {
+		for i := 0; i < len(schema); i++ {
+			fieldName := schema[i].Name
+			fieldType := schema[i].Type
+
+			// Skip if the field is nil in the current record
+			if record.ColVals[i].IsNil(0) {
+				continue
+			}
+
+			var hasResult = false
+
+			if !result.ColVals[i].IsNil(0) {
+				hasResult = true
+			}
+
+			switch fieldType {
+			case influx.Field_Type_Int:
+				values := record.ColVals[i].IntegerValues()
+				currentVal, _ := result.ColVals[i].IntegerValue(0)
+				result.ColVals[i].Init()
+
+				var newVal int64
+				switch {
+				case strings.HasSuffix(fieldName, CountColSuffix) || strings.HasSuffix(fieldName, SumColSuffix):
+					newVal = util.CalculateSum(values) + currentVal
+				case strings.HasSuffix(fieldName, MinColSuffix):
+					if hasResult {
+						newVal = min(util.CalculateMin(values, math.MaxInt64), currentVal)
+					} else {
+						newVal = util.CalculateMin(values, math.MaxInt64)
+					}
+				case strings.HasSuffix(fieldName, MaxColSuffix):
+					if hasResult {
+						newVal = max(util.CalculateMax(values, math.MinInt64), currentVal)
+					} else {
+						newVal = util.CalculateMax(values, math.MinInt64)
+					}
+				}
+				result.ColVals[i].AppendInteger(newVal)
+			case influx.Field_Type_Float:
+				values := record.ColVals[i].FloatValues()
+				currentVal, _ := result.ColVals[i].FloatValue(0)
+				result.ColVals[i].Init()
+
+				var newVal float64
+				switch {
+				case strings.HasSuffix(fieldName, CountColSuffix) || strings.HasSuffix(fieldName, SumColSuffix):
+					newVal = util.CalculateSum(values) + currentVal
+				case strings.HasSuffix(fieldName, MinColSuffix):
+					if hasResult {
+						newVal = min(util.CalculateMin(values, math.MaxFloat64), currentVal)
+					} else {
+						newVal = util.CalculateMin(values, math.MaxFloat64)
+					}
+				case strings.HasSuffix(fieldName, MaxColSuffix):
+					if hasResult {
+						newVal = max(util.CalculateMax(values, -math.MaxFloat64), currentVal)
+					} else {
+						newVal = util.CalculateMax(values, -math.MaxFloat64)
+					}
+				}
+				result.ColVals[i].AppendFloat(newVal)
+			default:
+				result.ColVals[i].AppendNull(false)
+			}
+		}
+	}
+
+	return result
 }

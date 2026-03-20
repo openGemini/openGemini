@@ -17,6 +17,8 @@ package bufferpool
 import "github.com/openGemini/openGemini/lib/cpu"
 
 var pointsPool = NewByteBufferPool(0, cpu.GetCpuNum(), MaxLocalCacheLen)
+var smartQueryPool = NewByteBufferPool(0, cpu.GetCpuNum(), cpu.GetCpuNum())
+var RaftMsgPool = NewByteBufferPool(0, cpu.GetCpuNum(), cpu.GetCpuNum())
 
 func GetPoints() []byte {
 	return pointsPool.Get()
@@ -24,4 +26,20 @@ func GetPoints() []byte {
 
 func PutPoints(b []byte) {
 	pointsPool.Put(b)
+}
+
+func GetSmartQuery() []byte {
+	return smartQueryPool.Get()
+}
+
+func PutSmartQuery(b []byte) {
+	smartQueryPool.Put(b)
+}
+
+func GetRaftMsg() []byte {
+	return RaftMsgPool.Get()
+}
+
+func PutRaftMsg(b []byte) {
+	RaftMsgPool.Put(b)
 }

@@ -31,6 +31,7 @@ const (
 	StorePprofPort   = "6060"
 	SqlPprofPort     = "6061"
 	MetaPprofPort    = "6062"
+	TaskPprofPort    = "6063"
 )
 
 func OpenPprofServer(host, port string) {

@@ -16,6 +16,7 @@ package raftconn
 
 import (
 	"github.com/cockroachdb/errors"
+	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/codec"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
@@ -38,7 +39,12 @@ func NewRaftConnStore(mc meta.MetaClient) SendRaftMessageToStorage {
 }
 
 func (s *RaftConnStore) SendRaftMessages(nodeID uint64, database string, pt uint32, msgs raftpb.Message) error {
-	req := &msgservice.RaftMessagesRequest{}
+	req := msgservice.RaftMsgRequestPool.Get()
+	req.Data = bufferpool.GetRaftMsg()
+	defer func() {
+		bufferpool.PutRaftMsg(req.Data)
+		req.Release()
+	}()
 	req.Database = database
 	req.PtId = pt
 	req.RaftMessage = msgs

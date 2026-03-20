@@ -9,6 +9,8 @@ import (
 	"io"
 	"sync"
 
+	"github.com/openGemini/openGemini/lib/cpu"
+	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 )
 
@@ -109,4 +111,19 @@ func (p *YyParser) Error(err string) {
 
 func (p *YyParser) HasError() bool {
 	return len(p.error) > 0
+}
+
+var yyParserPool = pool.NewUnionPool(cpu.GetCpuNum(), 0, 0, func() *yyParserImpl {
+	return &yyParserImpl{}
+})
+
+func (p *yyParserImpl) Reset() {
+	p.lval = yySymType{}
+	p.stack = [yyInitialStackSize]yySymType{}
+	p.char = 0
+}
+
+func (p *yyParserImpl) Release() {
+	p.Reset()
+	yyParserPool.PutWithMemSize(p, 0)
 }

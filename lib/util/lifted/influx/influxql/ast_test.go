@@ -1,8 +1,11 @@
 package influxql
 
 import (
+	"fmt"
+	"math"
 	"sort"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -846,4 +849,376 @@ func TestInNotIn(t *testing.T) {
 	expr.RHS = &NumberLiteral{}
 	v.Eval(expr)
 	assert.Equal(t, false, false)
+}
+
+func TestEvalDivZero(t *testing.T) {
+	v := &ValuerEval{}
+
+	// div float64
+	expr := &BinaryExpr{
+		Op:  DIV,
+		LHS: &NumberLiteral{Val: 0.1},
+		RHS: &NumberLiteral{Val: 0},
+	}
+	value := v.Eval(expr)
+	assert.Equal(t, value, float64(0))
+
+	expr = &BinaryExpr{
+		Op:          DIV,
+		LHS:         &NumberLiteral{Val: 0.1},
+		RHS:         &NumberLiteral{Val: 0},
+		IsPromQuery: true,
+	}
+	value = v.Eval(expr)
+	assert.Equal(t, value, float64(math.Inf(1)))
+
+	// div int64
+	expr = &BinaryExpr{
+		Op:  DIV,
+		LHS: &IntegerLiteral{Val: 1},
+		RHS: &IntegerLiteral{Val: 0},
+	}
+	value = v.Eval(expr)
+	assert.Equal(t, value, int64(0))
+
+	expr = &BinaryExpr{
+		Op:          DIV,
+		LHS:         &IntegerLiteral{Val: 1},
+		RHS:         &IntegerLiteral{Val: 0},
+		IsPromQuery: true,
+	}
+	value = v.Eval(expr)
+	assert.Equal(t, value, int64(0))
+
+	// div uint64
+	expr = &BinaryExpr{
+		Op:  DIV,
+		LHS: &UnsignedLiteral{Val: 1},
+		RHS: &UnsignedLiteral{Val: 0},
+	}
+	value = v.Eval(expr)
+	assert.Equal(t, value, uint64(0))
+
+	expr = &BinaryExpr{
+		Op:          DIV,
+		LHS:         &UnsignedLiteral{Val: 1},
+		RHS:         &UnsignedLiteral{Val: 0},
+		IsPromQuery: true,
+	}
+	value = v.Eval(expr)
+	assert.Equal(t, value, uint64(0))
+}
+
+func TestRewriteElementAtFunction(t *testing.T) {
+	t.Run("no element_at", func(t *testing.T) {
+		condition := &BinaryExpr{
+			Op:  EQ,
+			LHS: &VarRef{Val: "tag1"},
+			RHS: &StringLiteral{Val: "value1"},
+		}
+		fields := Fields{
+			{
+				Expr:  &VarRef{Val: "field1"},
+				Alias: "field1",
+			},
+			{
+				Expr:  &VarRef{Val: "field2"},
+				Alias: "field2",
+			},
+		}
+		err := RewriteElementAtFunction(condition, fields)
+		if err != nil {
+			t.Errorf("Expected no error, but got: %v", err)
+		}
+	})
+
+	t.Run("element_at in where clause", func(t *testing.T) {
+		condition := &BinaryExpr{
+			Op: EQ,
+			LHS: &Call{
+				Name: ElementAtName,
+				Args: []Expr{
+					&VarRef{Val: DefaultLabels, Type: Tag},
+					&StringLiteral{Val: "tag1"}},
+			},
+			RHS: &StringLiteral{Val: "value1"},
+		}
+		fields := Fields{
+			{
+				Expr:  &VarRef{Val: "field1"},
+				Alias: "field1",
+			},
+			{
+				Expr:  &VarRef{Val: "field2"},
+				Alias: "field2",
+			},
+		}
+		err := RewriteElementAtFunction(condition, fields)
+		if err != nil {
+			t.Errorf("Expected no error, but got: %v", err)
+		}
+	})
+
+	t.Run("element_at in select clause", func(t *testing.T) {
+		condition := &BinaryExpr{
+			Op:  EQ,
+			LHS: &VarRef{Val: "tag1"},
+			RHS: &StringLiteral{Val: "value1"},
+		}
+		fields := Fields{
+			{
+				Expr: &Call{
+					Name: ElementAtName,
+					Args: []Expr{
+						&VarRef{Val: DefaultLabels, Type: Tag},
+						&StringLiteral{Val: "tag1"}},
+				},
+				Alias: "tag1",
+			},
+			{
+				Expr:  &VarRef{Val: "field2"},
+				Alias: "field2",
+			},
+		}
+		err := RewriteElementAtFunction(condition, fields)
+		if err != nil {
+			t.Errorf("Expected no error, but got: %v", err)
+		}
+	})
+
+	t.Run("element_at in select and where clauses", func(t *testing.T) {
+		condition := &ParenExpr{Expr: &BinaryExpr{
+			Op: EQ,
+			LHS: &Call{
+				Name: ElementAtName,
+				Args: []Expr{
+					&VarRef{Val: DefaultLabels, Type: Tag},
+					&StringLiteral{Val: "tag1"}},
+			},
+			RHS: &StringLiteral{Val: "value1"},
+		},
+		}
+		fields := Fields{
+			{
+				Expr: &ParenExpr{Expr: &Call{
+					Name: ElementAtName,
+					Args: []Expr{
+						&VarRef{Val: DefaultLabels, Type: Tag},
+						&StringLiteral{Val: "tag1"}},
+				},
+				},
+				Alias: "tag1",
+			},
+			{
+				Expr:  &VarRef{Val: "field2"},
+				Alias: "field2",
+			},
+		}
+		err := RewriteElementAtFunction(condition, fields)
+		if err != nil {
+			t.Errorf("Expected no error, but got: %v", err)
+		}
+	})
+}
+
+// invalidSource is used for testing invalid source type
+type invalidSource struct {
+	Source
+}
+
+func TestRequiredPrivileges(t *testing.T) {
+	testCases := []struct {
+		name     string
+		sources  Sources
+		expected ExecutionPrivileges
+		wantErr  bool
+	}{
+		{
+			name:     "Single Measurement",
+			sources:  Sources{&Measurement{Database: "db1"}},
+			expected: ExecutionPrivileges{{Name: "db1", Privilege: ReadPrivilege, Rwuser: true}},
+			wantErr:  false,
+		},
+		{
+			name:    "Multiple Measurements",
+			sources: Sources{&Measurement{Database: "db1"}, &Measurement{Database: "db2"}},
+			expected: ExecutionPrivileges{
+				{Name: "db1", Privilege: ReadPrivilege, Rwuser: true},
+				{Name: "db2", Privilege: ReadPrivilege, Rwuser: true},
+			},
+			wantErr: false,
+		},
+		{
+			name:     "SubQuery with Measurement",
+			sources:  Sources{&SubQuery{Statement: &SelectStatement{Sources: Sources{&Measurement{Database: "db1"}}}}},
+			expected: ExecutionPrivileges{{Name: "db1", Privilege: ReadPrivilege, Rwuser: true}},
+			wantErr:  false,
+		},
+		{
+			name:    "Join with Measurements",
+			sources: Sources{&Join{LSrc: &Measurement{Database: "db1"}, RSrc: &Measurement{Database: "db2"}}},
+			expected: ExecutionPrivileges{
+				{Name: "db1", Privilege: ReadPrivilege, Rwuser: true},
+				{Name: "db2", Privilege: ReadPrivilege, Rwuser: true},
+			},
+			wantErr: false,
+		},
+		{
+			name:    "Union with Measurements",
+			sources: Sources{&Union{LSrc: &Measurement{Database: "db1"}, RSrc: &Measurement{Database: "db2"}}},
+			expected: ExecutionPrivileges{
+				{Name: "db1", Privilege: ReadPrivilege, Rwuser: true},
+				{Name: "db2", Privilege: ReadPrivilege, Rwuser: true},
+			},
+			wantErr: false,
+		},
+		{
+			name:    "BinOp with Measurements",
+			sources: Sources{&BinOp{LSrc: &Measurement{Database: "db1"}, RSrc: &Measurement{Database: "db2"}}},
+			expected: ExecutionPrivileges{
+				{Name: "db1", Privilege: ReadPrivilege, Rwuser: true},
+				{Name: "db2", Privilege: ReadPrivilege, Rwuser: true},
+			},
+			wantErr: false,
+		},
+		{
+			name:     "Invalid Source Type",
+			sources:  Sources{&invalidSource{}},
+			expected: nil,
+			wantErr:  true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			privs, err := tc.sources.RequiredPrivileges()
+			if tc.wantErr {
+				if err == nil {
+					t.Errorf("Expected error but got nil")
+				} else {
+					// Check if the error message is correct
+					if !strings.Contains(fmt.Sprintf("%v", err), "invalid source") {
+						t.Errorf("Unexpected error: %v", err)
+					}
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Unexpected error: %v", err)
+				}
+				if len(privs) != len(tc.expected) {
+					t.Errorf("Expected %d privileges, got %d", len(tc.expected), len(privs))
+				}
+				for i, p := range tc.expected {
+					if privs[i] != p {
+						t.Errorf("Expected privilege %v, got %v", p, privs[i])
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestField_Name(t *testing.T) {
+	tests := []struct {
+		name  string
+		field Field
+		want  string
+	}{
+		{
+			name: "Test when the field has an alias",
+			field: Field{
+				Alias: "alias_name",
+			},
+			want: "alias_name",
+		},
+		{
+			name: "Test when the expression is a Call",
+			field: Field{
+				Expr: &Call{
+					Name: "call_name",
+				},
+			},
+			want: "call_name",
+		},
+		{
+			name: "Test when the expression is a BinaryExpr",
+			field: Field{
+				Expr: &BinaryExpr{
+					Op: ADD,
+					LHS: &VarRef{
+						Val: "a",
+					},
+					RHS: &NumberLiteral{
+						Val: 1,
+					},
+				},
+			},
+			want: "a",
+		},
+		{
+			name: "Test when the expression is a ParenExpr",
+			field: Field{
+				Expr: &ParenExpr{
+					Expr: &VarRef{
+						Val: "var_name",
+					},
+				},
+			},
+			want: "var_name",
+		},
+		{
+			name: "Test when the expression is a VarRef",
+			field: Field{
+				Expr: &VarRef{
+					Val: "var_name",
+				},
+			},
+			want: "var_name",
+		},
+		{
+			name: "Test when the expression is a StringLiteral",
+			field: Field{
+				Expr: &StringLiteral{
+					Val: "str",
+				},
+			},
+			want: "str",
+		},
+		{
+			name: "Test when the expression is a NumberLiteral",
+			field: Field{
+				Expr: &NumberLiteral{
+					Val: 123.45,
+				},
+			},
+			want: "123.4500000000",
+		},
+		{
+			name: "Test when the expression is an IntegerLiteral",
+			field: Field{
+				Expr: &IntegerLiteral{
+					Val: 456,
+				},
+			},
+			want: "456",
+		},
+		{
+			name: "Test when the expression is a BooleanLiteral",
+			field: Field{
+				Expr: &BooleanLiteral{
+					Val: true,
+				},
+			},
+			want: "true",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.field.Name()
+			if got != tt.want {
+				t.Errorf("Name() = %v, want %v", got, tt.want)
+			}
+		})
+	}
 }

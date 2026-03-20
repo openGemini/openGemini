@@ -682,3 +682,21 @@ func TestAppendHeapItemsWithGraphChunk(t *testing.T) {
 	sort.Sort(heap)
 	assert.Equal(t, "g1", heap.Items[0].ChunkBuf.Name())
 }
+
+func TestTransformVertextGetNode(t *testing.T) {
+	opt := query.ProcessorOptions{
+		Interval: hybridqp.Interval{
+			Duration: 10 * time.Nanosecond,
+		},
+		Dimensions: []string{"host"},
+		Ascending:  true,
+		ChunkSize:  100,
+	}
+	schema := executor.NewQuerySchema(nil, nil, &opt, nil)
+	sink := NewSinkFromFunction(buildRowDataType(), func(chunk executor.Chunk) error {
+		return nil
+	})
+	sinkVertex := executor.NewTransformVertex(NewLogicalSink(buildRowDataType(), schema), sink)
+	node := sinkVertex.GetNode()
+	assert.NotNil(t, node)
+}

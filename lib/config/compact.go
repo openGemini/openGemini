@@ -29,9 +29,13 @@ const (
 	DefaultSnapshotThroughput           = 48 * MB
 	DefaultSnapshotThroughputBurst      = 48 * MB
 	DefaultBackGroundReadThroughput     = 64 * MB
+
+	CompactOnLocal  = 1
+	CompactOnRemote = 2
 )
 
 type Compact struct {
+	CompactionMode               int           `toml:"compaction-mode"`
 	CompactFullWriteColdDuration toml.Duration `toml:"compact-full-write-cold-duration"`
 	MaxConcurrentCompactions     int           `toml:"max-concurrent-compactions"`
 	MaxFullCompactions           int           `toml:"max-full-compactions"`
@@ -42,14 +46,15 @@ type Compact struct {
 	BackGroundReadThroughput     toml.Size     `toml:"back-ground-read-throughput"`
 	CompactionMethod             int           `toml:"compaction-method"` // 0:auto, 1: streaming, 2: non-streaming
 	MaxCompactionLevel           int           `toml:"max-compaction-level"`
+	CompactMemUsageLimit         int           `toml:"compact-mem-usage-limit"`
 
 	CompactRecovery     bool `toml:"compact-recovery"`
 	CsCompactionEnabled bool `toml:"column-store-compact-enabled"`
-	CorrectTimeDisorder bool `toml:"correct-time-disorder"`
 }
 
-func NewCompactConfig() Compact {
-	return Compact{
+func NewCompactConfig() *Compact {
+	return &Compact{
+		CompactionMode:               CompactOnLocal,
 		CompactFullWriteColdDuration: toml.Duration(DefaultCompactFullWriteColdDuration),
 		MaxConcurrentCompactions:     DefaultMaxConcurrentCompactions,
 		MaxFullCompactions:           DefaultMaxConcurrentFullCompactions,

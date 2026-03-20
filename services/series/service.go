@@ -18,6 +18,8 @@ import (
 	"time"
 
 	log "github.com/influxdata/influxdb/logger"
+	"github.com/openGemini/openGemini/lib/config"
+	Log "github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/services"
 	"go.uber.org/zap"
 )
@@ -37,7 +39,14 @@ type Service struct {
 
 func NewDropSeriesService() *Service {
 	s := &Service{}
-	s.Init("drop series", DropSeriesHandleInterval, s.dropSeriesHandle)
+	configPeriod := time.Duration(config.GetStoreConfig().DropSeriesPeriod) * time.Second
+	if configPeriod <= 0 {
+		Log.GetLogger().Info("new drop series task with default period", zap.Duration("period", DropSeriesHandleInterval))
+		s.Init("drop series", DropSeriesHandleInterval, s.dropSeriesHandle)
+	} else {
+		Log.GetLogger().Info("new drop series task with config period", zap.Duration("period", configPeriod))
+		s.Init("drop series", configPeriod, s.dropSeriesHandle)
+	}
 	return s
 }
 

@@ -17,6 +17,8 @@ package sparseindex
 import (
 	"math"
 
+	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 )
 
@@ -74,6 +76,22 @@ func (r *Range) intersectsRange(nr *Range) bool {
 
 func (r *Range) containsRange(nr *Range) bool {
 	return r.leftLEQ(nr.left) && r.rightGEQ(nr.right)
+}
+
+func (r *Range) MatchedIndices(ColVal *record.ColVal, isFirstPK bool) ([]int, error) {
+	if r.left.IsNegativeInfinity() {
+		if r.rightIncluded {
+			return r.right.MatchedIndices(ColVal, influxql.LTE, isFirstPK)
+		}
+		return r.right.MatchedIndices(ColVal, influxql.LT, isFirstPK)
+	}
+	if r.right.IsPositiveInfinity() {
+		if r.leftIncluded {
+			return r.left.MatchedIndices(ColVal, influxql.GTE, isFirstPK)
+		}
+		return r.left.MatchedIndices(ColVal, influxql.GT, isFirstPK)
+	}
+	return r.left.MatchedIndices(ColVal, influxql.EQ, isFirstPK)
 }
 
 // createWholeRangeIncludeBound create an infinite range, including boundaries.

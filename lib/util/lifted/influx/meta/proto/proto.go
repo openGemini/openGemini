@@ -1,3 +1,3 @@
 package proto
 
-//go:generate  protoc --gogo_out=. ./meta.proto
+//go:generate  protoc --go_out=. ./meta.proto

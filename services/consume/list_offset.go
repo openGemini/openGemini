@@ -56,3 +56,7 @@ func (h *ListOffsetV1) Handle(header protocol.RequestHeader, body []byte, onMess
 
 	return onMessage(resp)
 }
+
+func (h *ListOffsetV1) Release() {
+
+}

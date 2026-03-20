@@ -5,8 +5,9 @@ import (
 	"sort"
 	"unsafe"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/logger"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/encoding"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/slicesutil"
+	"github.com/openGemini/openGemini/lib/logger"
 )
 
 type blockHeader struct {
@@ -15,6 +16,9 @@ type blockHeader struct {
 
 	// The first item.
 	firstItem []byte
+
+	// Whether commonPrefix and firstItem point to external data.
+	noCopy bool
 
 	// Marshal type used for block compression.
 	marshalType marshalType
@@ -40,8 +44,13 @@ func (bh *blockHeader) SizeBytes() int {
 }
 
 func (bh *blockHeader) Reset() {
-	bh.commonPrefix = bh.commonPrefix[:0]
-	bh.firstItem = bh.firstItem[:0]
+	if bh.noCopy {
+		bh.commonPrefix = nil
+		bh.firstItem = nil
+	} else {
+		bh.commonPrefix = bh.commonPrefix[:0]
+		bh.firstItem = bh.firstItem[:0]
+	}
 	bh.marshalType = marshalTypePlain
 	bh.itemsCount = 0
 	bh.itemsBlockOffset = 0
@@ -62,22 +71,26 @@ func (bh *blockHeader) Marshal(dst []byte) []byte {
 	return dst
 }
 
-func (bh *blockHeader) Unmarshal(src []byte) ([]byte, error) {
+// UnmarshalNoCopy unmarshals bh from src without copying the data from src.
+//
+// The src must remain unchanged while bh is in use.
+func (bh *blockHeader) UnmarshalNoCopy(src []byte) ([]byte, error) {
+	bh.noCopy = true
 	// Unmarshal commonPrefix
-	fi, nSize := encoding.UnmarshalBytes(src)
+	cp, nSize := encoding.UnmarshalBytes(src)
 	if nSize <= 0 {
 		return src, fmt.Errorf("cannot unmarshal commonPrefix")
 	}
-	bh.commonPrefix = append(bh.commonPrefix[:0], fi...)
 	src = src[nSize:]
+	bh.commonPrefix = cp[:len(cp):len(cp)]
 
 	// Unmarshal firstItem
-	fi, nSize = encoding.UnmarshalBytes(src)
+	fi, nSize := encoding.UnmarshalBytes(src)
 	if nSize <= 0 {
 		return src, fmt.Errorf("cannot unmarshal firstItem")
 	}
-	bh.firstItem = append(bh.firstItem[:0], fi...)
 	src = src[nSize:]
+	bh.firstItem = fi[:len(fi):len(fi)]
 
 	// Unmarshal marshalType
 	if len(src) == 0 {
@@ -98,7 +111,7 @@ func (bh *blockHeader) Unmarshal(src []byte) ([]byte, error) {
 
 	// Unmarshal itemsBlockOffset
 	if len(src) < 8 {
-		return src, fmt.Errorf("cannot unmarshal itemsBlockOffset from %d bytes; neet at least %d bytes", len(src), 8)
+		return src, fmt.Errorf("cannot unmarshal itemsBlockOffset from %d bytes; need at least %d bytes", len(src), 8)
 	}
 	bh.itemsBlockOffset = encoding.UnmarshalUint64(src)
 	src = src[8:]
@@ -137,23 +150,22 @@ func (bh *blockHeader) Unmarshal(src []byte) ([]byte, error) {
 	return src, nil
 }
 
-// unmarshalBlockHeaders unmarshals all the block headers from src,
+// unmarshalBlockHeadersNoCopy unmarshals all the block headers from src,
 // appends them to dst and returns the appended result.
 //
 // Block headers must be sorted by bh.firstItem.
-func unmarshalBlockHeaders(dst []blockHeader, src []byte, blockHeadersCount int) ([]blockHeader, error) {
+//
+// It is expected that src remains unchanged while rhe returned blocks are in use.
+func unmarshalBlockHeadersNoCopy(dst []blockHeader, src []byte, blockHeadersCount int) ([]blockHeader, error) {
 	if blockHeadersCount <= 0 {
-		logger.Panicf("BUG: blockHeadersCount must be greater than 0; got %d", blockHeadersCount)
+		logger.GetLogger().Panic(fmt.Sprintf("BUG: blockHeadersCount must be greater than 0; got %d", blockHeadersCount))
 	}
 	dstLen := len(dst)
-	if n := dstLen + blockHeadersCount - cap(dst); n > 0 {
-		dst = append(dst[:cap(dst)], make([]blockHeader, n)...)
-	}
-	dst = dst[:dstLen+blockHeadersCount]
+	dst = slicesutil.SetLength(dst, dstLen+blockHeadersCount)
 	for i := 0; i < blockHeadersCount; i++ {
-		tail, err := dst[dstLen+i].Unmarshal(src)
+		tail, err := dst[dstLen+i].UnmarshalNoCopy(src)
 		if err != nil {
-			return dst, fmt.Errorf("cannot unmarshal block header: %w", err)
+			return dst, fmt.Errorf("cannot unmarshal block header #%d out of %d: %w", i, blockHeadersCount, err)
 		}
 		src = tail
 	}

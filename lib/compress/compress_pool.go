@@ -17,11 +17,11 @@ limitations under the License.
 package compress
 
 import (
-	"compress/gzip"
 	"io"
 	"sync"
 
-	"github.com/golang/snappy"
+	"github.com/klauspost/compress/gzip"
+	"github.com/klauspost/compress/snappy"
 	"github.com/klauspost/compress/zstd"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/pool"
@@ -29,9 +29,23 @@ import (
 	"github.com/pierrec/lz4/v4"
 )
 
+var gzipCompressLevel = gzip.DefaultCompression
+
+func SetGzipCompressLevel(level int) {
+	gzipCompressLevel = level
+}
+
 var gzipWriterPool = pool.NewUnionPool[gzip.Writer](
 	cpu.GetCpuNum()*2, pool.DefaultMaxEleMemSize, pool.DefaultMaxLocalEleMemSize,
 	func() *gzip.Writer {
+		// -2:HuffmanOnly, -1:DefaultCompression, 0:NoCompression, 1:BestSpeed ... 9:BestCompression
+		if gzipCompressLevel >= gzip.HuffmanOnly && gzipCompressLevel <= gzip.BestCompression {
+			zw, err := gzip.NewWriterLevel(nil, gzipCompressLevel)
+			if err == nil {
+				return zw
+			}
+		}
+
 		return gzip.NewWriter(nil)
 	})
 

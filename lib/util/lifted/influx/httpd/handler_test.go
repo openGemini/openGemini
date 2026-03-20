@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	prompb2 "github.com/VictoriaMetrics/VictoriaMetrics/lib/prompb"
 	"github.com/agiledragon/gomonkey/v2"
 	"github.com/gorilla/mux"
+	prompb2 "github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/prompb"
 	config2 "github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/errno"
@@ -322,6 +322,72 @@ func TestHandler_Disabled_Write_Read(t *testing.T) {
 		req = httptest.NewRequest(http.MethodPost, "/api/v1/write", nil)
 		h.serveWrite("db", "rp", w, req, user)
 		assert.Equal(t, http.StatusForbidden, w.Code)
+	})
+}
+
+func TestHandler_Write_Stat(t *testing.T) {
+	h := Handler{
+		Logger: logger.NewLogger(errno.ModuleHTTP),
+	}
+
+	var user meta.User
+	t.Run("write normal db", func(t *testing.T) {
+		syscontrol.DisableWrites = true
+		defer func() {
+			syscontrol.DisableWrites = false
+		}()
+		handlerStat.WriteRequests.Store(0)
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/write", nil)
+		h.serveWrite("db", "rp", w, req, user)
+		assert.Equal(t, handlerStat.WriteRequests.GetValue(), int64(1))
+	})
+
+	t.Run("write internal db", func(t *testing.T) {
+		syscontrol.DisableWrites = true
+		defer func() {
+			syscontrol.DisableWrites = false
+		}()
+		handlerStat.WriteRequests.Store(0)
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/write", nil)
+		h.serveWrite("_internal", "rp", w, req, user)
+		assert.Equal(t, handlerStat.WriteRequests.GetValue(), int64(0))
+	})
+}
+
+func TestHandler_Query_Stat(t *testing.T) {
+	h := Handler{
+		Logger: logger.NewLogger(errno.ModuleHTTP),
+	}
+
+	var user meta.User
+	t.Run("query normal db", func(t *testing.T) {
+		syscontrol.DisableReads = true
+		defer func() {
+			syscontrol.DisableReads = false
+		}()
+		handlerStat.QueryRequests.Store(0)
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/read", nil)
+		req.Form = make(map[string][]string)
+		req.Form["db"] = []string{"db"}
+		h.serveQuery(w, req, user)
+		assert.Equal(t, handlerStat.QueryRequests.GetValue(), int64(1))
+	})
+
+	t.Run("query internal db", func(t *testing.T) {
+		syscontrol.DisableReads = true
+		defer func() {
+			syscontrol.DisableReads = false
+		}()
+		handlerStat.QueryRequests.Store(0)
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/read", nil)
+		req.Form = make(map[string][]string)
+		req.Form["db"] = []string{"_internal"}
+		h.serveQuery(w, req, user)
+		assert.Equal(t, handlerStat.QueryRequests.GetValue(), int64(0))
 	})
 }
 
@@ -789,7 +855,7 @@ func TestTimeSeries2Rows(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := timeSeries2Rows(EmptyPromMst, tt.args.dst, tt.args.tss, make(map[int]bool))
+			got, err := timeSeries2Rows(EmptyPromMst, tt.args.dst, tt.args.tss, make(map[int]bool), false)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("timeSeries2Rows() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -868,7 +934,7 @@ func Benchmark_TimeSeries2Rows(t *testing.B) {
 	for i := 0; i < t.N; i++ {
 		t.StartTimer()
 		for j := 0; j < num; j++ {
-			*rs, err = timeSeries2Rows(EmptyPromMst, *rs, tss, make(map[int]bool))
+			*rs, err = timeSeries2Rows(EmptyPromMst, *rs, tss, make(map[int]bool), false)
 			if err != nil {
 				t.Fatal("timeSeries2Rows fail")
 			}

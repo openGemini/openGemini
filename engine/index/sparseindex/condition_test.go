@@ -111,6 +111,10 @@ func (m *MockSKBaseReader) IsExist(_ int64, _ *rpn.SKRPNElement) (bool, error) {
 	return true, m.err
 }
 
+func (m *MockSKBaseReader) GetRowCount(_ int64, _ *rpn.SKRPNElement) (int64, error) {
+	return 0, nil
+}
+
 func (m *MockSKBaseReader) StartSpan(span *tracing.Span) {
 }
 

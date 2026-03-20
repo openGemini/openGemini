@@ -180,6 +180,8 @@ func (p *RaftMsgProcessor) Handle(w spdy.Responser, data interface{}) error {
 		return fmt.Errorf("unsupported message type: %d", msg.Typ)
 	}
 
+	defer h.Release()
+
 	if err := h.SetMessage(msg.Data); err != nil {
 		return err
 	}

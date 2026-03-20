@@ -20,16 +20,23 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
+	"github.com/gorilla/mux"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/opentelemetry"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"go.uber.org/zap"
 )
 
+const OtlpDB string = "otlp_db"
+
 func (h *Handler) serveOTLP(w http.ResponseWriter, r *http.Request, user meta.User) (io.ReadCloser, string, error) {
-	database := r.URL.Query().Get("db")
+	database, err := getDBByOtlp(h, w, r)
+	if err != nil {
+		return nil, "", err
+	}
 
 	if err := h.validateDatabase(w, database); err != nil {
 		return nil, "", err
@@ -48,6 +55,18 @@ func (h *Handler) serveOTLP(w http.ResponseWriter, r *http.Request, user meta.Us
 	}
 
 	return body, database, nil
+}
+
+// getDBByOtlp get the mst name from the url path parameters.
+func getDBByOtlp(h *Handler, w http.ResponseWriter, r *http.Request) (string, error) {
+	db := strings.TrimSpace(mux.Vars(r)[OtlpDB])
+	if len(db) == 0 {
+		err := errno.NewError(errno.InvalidOtlpDBName)
+		h.httpError(w, err.Error(), http.StatusBadRequest)
+		h.Logger.Error("invalid the otlp database", zap.Error(err))
+		return db, err
+	}
+	return db, nil
 }
 
 func (h *Handler) checkWriteAuthorization(w http.ResponseWriter, user meta.User, database string) error {

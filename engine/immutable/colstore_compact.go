@@ -45,17 +45,17 @@ import (
 )
 
 type ColStoreCompactor interface {
-	Compact(ident colstore.MeasurementIdent, files []TSSPFile) ([]TSSPFile, error)
+	Compact(ident util.MeasurementIdent, files []TSSPFile) ([]TSSPFile, error)
 }
 
-var colStoreCompactorFactory func(tb *MmsTables, mst string) ColStoreCompactor
+var colStoreCompactorFactory func(lock *string, sw *StreamWriteFile) ColStoreCompactor
 
-func SetColStoreCompactorFactory(fn func(tb *MmsTables, mst string) ColStoreCompactor) {
+func SetColStoreCompactorFactory(fn func(lock *string, sw *StreamWriteFile) ColStoreCompactor) {
 	colStoreCompactorFactory = fn
 }
 
-func NewColStoreCompactor(tb *MmsTables, mst string) ColStoreCompactor {
-	return colStoreCompactorFactory(tb, mst)
+func NewColStoreCompactor(lock *string, sw *StreamWriteFile) ColStoreCompactor {
+	return colStoreCompactorFactory(lock, sw)
 }
 
 var fragmentIteratorsPool = NewFragmentIteratorsPool(cpu.GetCpuNum() / 2)
@@ -103,7 +103,7 @@ func IsFlushToFinalFile(totalSegmentCnt, flushToFinalFileLimit uint64) bool {
 	return totalSegmentCnt >= flushToFinalFileLimit
 }
 
-type FragmentIterator interface {
+type DetachedFragmentIterator interface {
 	compact(pkSchema record.Schemas, tbStore *MmsTables) ([]TSSPFile, error)
 }
 
@@ -228,7 +228,7 @@ func (ir *IteratorByRow) Flush(tbStore *MmsTables, pkSchema record.Schemas, fina
 		tbStore.AddTSSPFiles(f.builder.msName, true, f.builder.Files...)
 		if f.builder.GetPKInfoNum() != 0 {
 			for i, file := range f.builder.Files {
-				file.SetPkInfo(colstore.NewPKInfo(f.builder.GetPKRecord(i), f.builder.GetPKMark(i), colstore.DefaultTCLocation))
+				file.SetPkInfo(colstore.NewPKInfo(f.builder.GetPKRecord(i), f.builder.GetPKMark(i), "", colstore.DefaultTCLocation))
 			}
 		}
 	}
@@ -613,7 +613,7 @@ func (ib *IteratorByBlock) Flush(pkSchema record.Schemas, readFinal bool, tbStor
 		tbStore.AddTSSPFiles(f.builder.msName, true, f.builder.Files...)
 		if f.builder.GetPKInfoNum() != 0 {
 			for i, file := range f.builder.Files {
-				file.SetPkInfo(colstore.NewPKInfo(f.builder.GetPKRecord(i), f.builder.GetPKMark(i), colstore.DefaultTCLocation))
+				file.SetPkInfo(colstore.NewPKInfo(f.builder.GetPKRecord(i), f.builder.GetPKMark(i), "", colstore.DefaultTCLocation))
 			}
 		}
 	}
@@ -684,6 +684,13 @@ func (ib *IteratorByBlock) flushIntoFiles(pkSchema record.Schemas, tbStore *MmsT
 	newFiles := make([]TSSPFile, 0, len(ib.f.builder.Files))
 	newFiles = append(newFiles, ib.f.builder.Files...)
 	ib.f.builder = nil
+
+	for _, items := range ib.f.bfIterator.bloomFilterReaders {
+		for _, item := range items {
+			util.MustClose(item)
+		}
+	}
+
 	return newFiles, nil
 }
 
@@ -707,7 +714,7 @@ type FragmentIterators struct {
 	accumulateRowsIndex []int //eg, [700,1400,2100] there are three segment,each length is 700,700,700
 
 	TableData
-	fi                FragmentIterator
+	fi                DetachedFragmentIterator
 	bfIterator        *BloomFilterIterator
 	mIndex            MetaIndex
 	Conf              *Config
@@ -1206,7 +1213,7 @@ func (f *FragmentIterators) writeMetaIndex(wn int, minT, maxT int64) error {
 		f.builder.mIndex.maxTime = maxT
 	}
 
-	if f.builder.mIndex.size >= uint32(f.builder.Conf.maxChunkMetaItemSize) || f.builder.mIndex.count >= uint32(f.builder.Conf.maxChunkMetaItemCount) {
+	if config.ChunkMetaLimited(int(f.builder.mIndex.size), int(f.builder.mIndex.count)) {
 		err := f.builder.SwitchChunkMeta()
 		if err != nil {
 			return err

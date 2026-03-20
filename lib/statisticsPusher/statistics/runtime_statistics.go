@@ -54,6 +54,8 @@ type Runtime struct {
 	Version           *ItemString
 	SpdyCertExpireAt  *ItemString
 	HttpsCertExpireAt *ItemString
+
+	TSSPForceDoneTotal *ItemInt64
 }
 
 func (r *Runtime) BeforeCollect() {

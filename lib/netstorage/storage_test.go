@@ -27,6 +27,7 @@ import (
 	"github.com/openGemini/openGemini/lib/util/lifted/hashicorp/serf/serf"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
+	"github.com/openGemini/openGemini/lib/util/lifted/smart_query"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -312,4 +313,47 @@ func TestNetStorage_SendClearEvents(t *testing.T) {
 	store := netstorage.NewNetStorage(&MockMetaClient{})
 	err := store.SendClearEvents(1, nil)
 	assert.Error(t, err)
+}
+
+func TestNetStorage_ShowLastIndex(t *testing.T) {
+	store := netstorage.NewNetStorage(&MockMetaClient{})
+	_, err := store.ShowLastIndex(1, "db0", []uint32{1})
+	assert.Equal(t, err.Error(), "no connections available, node: 1, ")
+}
+
+func TestNetStorage_ExecuteSmartQuery(t *testing.T) {
+	store := netstorage.NewNetStorage(&MockMetaClient{})
+	fields := []smart_query.Field{{Call: "max", Val: "cpu", Typ: influxql.Float}}
+	cond := smart_query.OrCond{Cond: []smart_query.EqCond{{Key: "hostname", Val: "hostname_1"}}}
+	stmt := &smart_query.SmartSelectStatement{Fields: fields, Condition: cond}
+	_, err := store.ExecuteSmartQuery(1, "db0", "rp0", "mst0", []uint32{1}, stmt)
+	assert.Equal(t, err.Error(), "no connections available, node: 1, ")
+}
+
+func TestNetStorage_GetRPPTWriteStatus(t *testing.T) {
+	store := netstorage.NewNetStorage(&MockMetaClient{})
+
+	// Test case 1: Node exists but no connections
+	_, err := store.GetRPPTWriteStatus(&meta.DataNode{NodeInfo: meta.NodeInfo{ID: 1}}, "db0", "default")
+	require.ErrorContains(t, err, fmt.Sprintf("no connections available, node: %d", exitNodeID))
+
+	// Test case 2: Successful response with valid status
+	patches := gomonkey.ApplyPrivateMethod(store, "ddlRequestWithNode", func(_ *netstorage.NetStorage) (interface{}, error) {
+		res := &msgservice.PullRPPTWriteStatusResponse{}
+		res.StatusInfo = meta.PTMstWriteStatus{0: {"mst0": 1}}
+		return res, nil
+	})
+
+	status, err := store.GetRPPTWriteStatus(&meta.DataNode{NodeInfo: meta.NodeInfo{ID: 1024}}, "db0", "default")
+	require.NoError(t, err)
+	require.NotNil(t, status)
+	assert.Equal(t, 1, len(status))
+	patches.Reset()
+	// Test case 3: DDL request returns invalid type
+	patches = gomonkey.ApplyPrivateMethod(store, "ddlRequestWithNode", func(_ *netstorage.NetStorage) (interface{}, error) {
+		return &msgservice.ShowLastIndexResponse{}, nil
+	})
+	_, err = store.GetRPPTWriteStatus(&meta.DataNode{NodeInfo: meta.NodeInfo{ID: 1}}, "db0", "default")
+	require.EqualError(t, err, "invalid data type, exp: *msgservice.PullRPPTWriteStatusResponse, got: *msgservice.ShowLastIndexResponse")
+	patches.Reset()
 }

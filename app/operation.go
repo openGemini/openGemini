@@ -24,11 +24,12 @@ import (
 
 	"github.com/openGemini/openGemini/app/ts-store/transport/query"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/failpoint"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/memory"
 	"github.com/openGemini/openGemini/lib/msgservice"
 	"github.com/openGemini/openGemini/lib/sysconfig"
-	"github.com/pingcap/failpoint"
+	"github.com/openGemini/openGemini/lib/util"
 	"go.uber.org/zap"
 )
 
@@ -137,7 +138,7 @@ func (pm *ProactiveManager) GetQueryList(cnt int) []uint64 {
 		if cnt <= 0 {
 			break
 		}
-		if qryLst[i].RunState != msgservice.Running {
+		if qryLst[i].RunState != msgservice.Running || util.IsInternalDatabase(qryLst[i].Database) {
 			continue
 		}
 		ids = append(ids, qryLst[i].QueryID)
@@ -154,11 +155,10 @@ func (pm *ProactiveManager) interruptQuery(memPct float64) {
 	}
 
 	// set-mem-use-percent: set the percentage of memory used by the system
-	failpoint.Inject("set-mem-use-percent", func(val failpoint.Value) {
-		if n, ok := val.(int); ok {
-			memPct = float64(n)
-		} else if m, ok := val.(float64); ok {
-			memPct = m
+	failpoint.Call("set-mem-use-percent", func(val *failpoint.Value) {
+		pct := val.Float64()
+		if pct > 0 {
+			memPct = pct
 		}
 	})
 

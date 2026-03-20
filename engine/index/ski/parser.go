@@ -19,8 +19,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/openGemini/openGemini/engine/index/mergeindex"
+	"github.com/openGemini/openGemini/lib/util/lifted/encoding"
 )
 
 type shardKeyToSeriesIdParser struct {
