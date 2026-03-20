@@ -7,11 +7,23 @@ before:
     - go mod tidy
 
 builds:
-  - id: "ts-meta"
+  - id: "ts-meta-linux"
     binary: usr/bin/ts-meta
     main: ./app/ts-meta
     goos:
       - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.TsVersion={{.Tag}} -X main.TsBranch={{.Branch}} -X main.TsCommit={{.Commit}} -X main.TsBuildTime={{.Date}}
+    env:
+      - CGO_ENABLED=1
+
+  - id: "ts-meta-cross"
+    binary: usr/bin/ts-meta
+    main: ./app/ts-meta
+    goos:
       - darwin
       - windows
     goarch:
@@ -23,12 +35,25 @@ builds:
     ldflags:
       - -s -w -X main.TsVersion={{.Tag}} -X main.TsBranch={{.Branch}} -X main.TsCommit={{.Commit}} -X main.TsBuildTime={{.Date}}
     env:
-      - CGO_ENABLED=1
-  - id: "ts-monitor"
+      - CGO_ENABLED=0
+
+  - id: "ts-monitor-linux"
     binary: usr/bin/ts-monitor
     main: ./app/ts-monitor
     goos:
       - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.TsVersion={{.Tag}} -X main.TsBranch={{.Branch}} -X main.TsCommit={{.Commit}} -X main.TsBuildTime={{.Date}}
+    env:
+      - CGO_ENABLED=1
+
+  - id: "ts-monitor-cross"
+    binary: usr/bin/ts-monitor
+    main: ./app/ts-monitor
+    goos:
       - darwin
       - windows
     goarch:
@@ -40,12 +65,25 @@ builds:
     ldflags:
       - -s -w -X main.TsVersion={{.Tag}} -X main.TsBranch={{.Branch}} -X main.TsCommit={{.Commit}} -X main.TsBuildTime={{.Date}}
     env:
-      - CGO_ENABLED=1
-  - id: "ts-server"
+      - CGO_ENABLED=0
+
+  - id: "ts-server-linux"
     binary: usr/bin/ts-server
     main: ./app/ts-server
     goos:
       - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.TsVersion={{.Tag}} -X main.TsBranch={{.Branch}} -X main.TsCommit={{.Commit}} -X main.TsBuildTime={{.Date}}
+    env:
+      - CGO_ENABLED=1
+
+  - id: "ts-server-cross"
+    binary: usr/bin/ts-server
+    main: ./app/ts-server
+    goos:
       - darwin
       - windows
     goarch:
@@ -57,12 +95,25 @@ builds:
     ldflags:
       - -s -w -X main.TsVersion={{.Tag}} -X main.TsBranch={{.Branch}} -X main.TsCommit={{.Commit}} -X main.TsBuildTime={{.Date}}
     env:
-      - CGO_ENABLED=1
-  - id: "ts-sql"
+      - CGO_ENABLED=0
+
+  - id: "ts-sql-linux"
     binary: usr/bin/ts-sql
     main: ./app/ts-sql
     goos:
       - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.TsVersion={{.Tag}} -X main.TsBranch={{.Branch}} -X main.TsCommit={{.Commit}} -X main.TsBuildTime={{.Date}}
+    env:
+      - CGO_ENABLED=1
+
+  - id: "ts-sql-cross"
+    binary: usr/bin/ts-sql
+    main: ./app/ts-sql
+    goos:
       - darwin
       - windows
     goarch:
@@ -74,12 +125,25 @@ builds:
     ldflags:
       - -s -w -X main.TsVersion={{.Tag}} -X main.TsBranch={{.Branch}} -X main.TsCommit={{.Commit}} -X main.TsBuildTime={{.Date}}
     env:
-      - CGO_ENABLED=1
-  - id: "ts-store"
+      - CGO_ENABLED=0
+
+  - id: "ts-store-linux"
     binary: usr/bin/ts-store
     main: ./app/ts-store
     goos:
       - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.TsVersion={{.Tag}} -X main.TsBranch={{.Branch}} -X main.TsCommit={{.Commit}} -X main.TsBuildTime={{.Date}}
+    env:
+      - CGO_ENABLED=1
+
+  - id: "ts-store-cross"
+    binary: usr/bin/ts-store
+    main: ./app/ts-store
+    goos:
       - darwin
       - windows
     goarch:
@@ -91,7 +155,7 @@ builds:
     ldflags:
       - -s -w -X main.TsVersion={{.Tag}} -X main.TsBranch={{.Branch}} -X main.TsCommit={{.Commit}} -X main.TsBuildTime={{.Date}}
     env:
-      - CGO_ENABLED=1
+      - CGO_ENABLED=0
 archives:
   - format: tar.gz
     # this name template makes the OS and Arch compatible with the results of uname.
