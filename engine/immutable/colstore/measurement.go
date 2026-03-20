@@ -15,11 +15,12 @@
 package colstore
 
 import (
-	"fmt"
 	"sync"
+	"time"
 
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/record"
-	"github.com/openGemini/openGemini/lib/stringinterner"
+	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
@@ -29,51 +30,39 @@ var mstManagerIns *MstManager
 
 func init() {
 	mstManagerIns = &MstManager{
-		mst: make(map[MeasurementIdent]*Measurement),
+		mst: make(map[util.MeasurementIdent]*Measurement),
 	}
-}
-
-type MeasurementIdent struct {
-	DB   string
-	RP   string
-	Name string
-}
-
-func NewMeasurementIdent(db, rp string) MeasurementIdent {
-	return MeasurementIdent{
-		DB: db,
-		RP: rp,
-	}
-}
-
-func (t *MeasurementIdent) SetSafeName(name string) {
-	t.Name = stringinterner.InternSafe(name)
-}
-
-func (t *MeasurementIdent) SetName(name string) {
-	t.Name = name
-}
-
-func (t *MeasurementIdent) String() string {
-	return fmt.Sprintf("%s.%s.%s", t.DB, t.RP, t.Name)
 }
 
 type Measurement struct {
-	mi       *meta.MeasurementInfo
-	pkSchema []record.Field
-	skSchema []record.Field
+	mi         *meta.MeasurementInfo
+	pkSchema   []record.Field
+	skSchema   []record.Field
+	tcDuration time.Duration
 }
 
 func (m *Measurement) ColStoreInfo() *meta.ColStoreInfo {
 	return m.mi.ColStoreInfo
 }
 
-func (m *Measurement) IndexRelation() influxql.IndexRelation {
-	return m.mi.IndexRelation
+func (m *Measurement) IndexRelation() *influxql.IndexRelation {
+	return &m.mi.IndexRelation
 }
 
 func (m *Measurement) PrimaryKey() []record.Field {
 	return m.pkSchema
+}
+
+func (m *Measurement) BuildPKMap() map[string]struct{} {
+	pk := m.PrimaryKey()
+	pkMap := make(map[string]struct{})
+	for i := range pk {
+		if pk[i].Name == record.TimeField {
+			continue
+		}
+		pkMap[pk[i].Name] = struct{}{}
+	}
+	return pkMap
 }
 
 func (m *Measurement) SortKey() []record.Field {
@@ -84,13 +73,32 @@ func (m *Measurement) MeasurementInfo() *meta.MeasurementInfo {
 	return m.mi
 }
 
+func (m *Measurement) TCDuration() int64 {
+	return int64(m.tcDuration)
+}
+
+func (m *Measurement) TCLocation() int8 {
+	if m.TCDuration() > 0 {
+		return TCLocationUsed
+	}
+	return DefaultTCLocation
+}
+
+func (m *Measurement) IsUniqueEnabled() bool {
+	return m.ColStoreInfo().UniqueEnabled()
+}
+
+func (m *Measurement) IsClusterPKIndex() bool {
+	return m.ColStoreInfo().IsClusterPKIndex()
+}
+
 func MstManagerIns() *MstManager {
 	return mstManagerIns
 }
 
 type MstManager struct {
 	mu  sync.RWMutex
-	mst map[MeasurementIdent]*Measurement
+	mst map[util.MeasurementIdent]*Measurement
 }
 
 func (m *MstManager) Clear() {
@@ -100,14 +108,14 @@ func (m *MstManager) Clear() {
 	clear(m.mst)
 }
 
-func (m *MstManager) Exists(ident MeasurementIdent) bool {
+func (m *MstManager) Exists(ident util.MeasurementIdent) bool {
 	m.mu.RLock()
 	_, ok := m.mst[ident]
 	m.mu.RUnlock()
 	return ok
 }
 
-func (m *MstManager) Del(ident MeasurementIdent) {
+func (m *MstManager) Del(ident util.MeasurementIdent) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -115,7 +123,7 @@ func (m *MstManager) Del(ident MeasurementIdent) {
 }
 
 func (m *MstManager) DelAll(db, rp string) {
-	var idents []MeasurementIdent
+	var idents []util.MeasurementIdent
 	m.mu.RLock()
 	for trip := range m.mst {
 		if trip.DB == db && (rp == "" || trip.RP == rp) {
@@ -137,7 +145,7 @@ func (m *MstManager) DelAll(db, rp string) {
 }
 
 func (m *MstManager) Get(db, rp, name string) (*Measurement, bool) {
-	ident := MeasurementIdent{
+	ident := util.MeasurementIdent{
 		DB:   db,
 		RP:   rp,
 		Name: name,
@@ -145,7 +153,7 @@ func (m *MstManager) Get(db, rp, name string) (*Measurement, bool) {
 	return m.GetByIdent(ident)
 }
 
-func (m *MstManager) GetByIdent(ident MeasurementIdent) (*Measurement, bool) {
+func (m *MstManager) GetByIdent(ident util.MeasurementIdent) (*Measurement, bool) {
 	m.mu.RLock()
 	mst, ok := m.mst[ident]
 	m.mu.RUnlock()
@@ -153,7 +161,7 @@ func (m *MstManager) GetByIdent(ident MeasurementIdent) (*Measurement, bool) {
 	return mst, ok
 }
 
-func (m *MstManager) Add(ident MeasurementIdent, mi *meta.MeasurementInfo) {
+func (m *MstManager) Add(ident util.MeasurementIdent, mi *meta.MeasurementInfo) {
 	if m.Exists(ident) {
 		return
 	}
@@ -173,13 +181,36 @@ func (m *MstManager) buildMeasurement(mi *meta.MeasurementInfo) *Measurement {
 	sk := mi.ColStoreInfo.SortKey
 	mst := &Measurement{mi: mi}
 
-	mst.pkSchema = m.buildKeySchema(mi.Schema, pk)
-	mst.skSchema = m.buildSortKeySchema(mi.Schema, pk, sk)
+	mst.pkSchema, mst.tcDuration = m.buildPrimaryKeySchema(mi)
+	mst.skSchema = m.buildSortKeySchema(mi.Schema, pk, sk, mi.ColStoreInfo.IsClusterPKIndex())
 
 	return mst
 }
 
-func (m *MstManager) buildSortKeySchema(schema *meta.CleanSchema, pk, sk []string) record.Schemas {
+func (m *MstManager) buildPrimaryKeySchema(mi *meta.MeasurementInfo) (record.Schemas, time.Duration) {
+	pk := mi.ColStoreInfo.PrimaryKey
+	if config.IsLogKeeper() || config.GetStoreConfig().MemTable.CsDetachedFlushEnabled {
+		return m.buildKeySchema(mi.Schema, pk), 0
+	}
+
+	tcd := mi.ColStoreInfo.TimeClusterDuration
+	for i := range pk {
+		if pk[i] == record.TimeField && tcd == 0 {
+			// The primary key includes a time column, but since TimeCluster is not set,
+			// the default Duration will be used.
+			tcd = DefaultTCDuration
+			break
+		}
+	}
+
+	if tcd > 0 {
+		tcd = max(tcd, MinTCDuration)
+	}
+
+	return m.buildKeySchema(mi.Schema, pk), tcd
+}
+
+func (m *MstManager) buildSortKeySchema(schema *meta.CleanSchema, pk, sk []string, isCluster bool) record.Schemas {
 	pkMap := make(map[string]struct{}, len(pk))
 	for i := range pk {
 		pkMap[pk[i]] = struct{}{}
@@ -190,6 +221,10 @@ func (m *MstManager) buildSortKeySchema(schema *meta.CleanSchema, pk, sk []strin
 	for i := range sk {
 		if sk[i] == record.TimeField {
 			hasTime = true
+		}
+		if !isCluster {
+			newSk = append(newSk, sk[i])
+			continue
 		}
 		if _, ok := pkMap[sk[i]]; !ok {
 			newSk = append(newSk, sk[i])

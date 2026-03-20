@@ -21,7 +21,7 @@ import (
 
 	"github.com/influxdata/influxdb/models"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
-	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
+	"google.golang.org/protobuf/proto"
 )
 
 func (data *Data) CreateContinuousQueryBase(dbName, cqName, cqQuery string) (bool, error) {

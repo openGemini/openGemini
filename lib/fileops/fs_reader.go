@@ -24,7 +24,9 @@ import (
 	"time"
 
 	"github.com/openGemini/openGemini/lib/bufferpool"
+	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/memory"
 	"github.com/openGemini/openGemini/lib/obs"
 	"github.com/openGemini/openGemini/lib/readcache"
 	"github.com/openGemini/openGemini/lib/request"
@@ -68,6 +70,18 @@ func EnableReadMetaCache(en uint64) {
 	}
 }
 
+func ResetReadDataCache(en uint64) {
+	if en > 0 {
+		ReadDataCacheEn = true
+		size, _ := memory.GetMemMonitor().SysMem()
+		memorySize := size * 1024
+		en = uint64(memorySize) * uint64(config.ReadDataCachePct) / 100
+	} else {
+		ReadDataCacheEn = false
+	}
+	readcache.ReSetReadDataCacheLimitSize(en)
+}
+
 func EnableReadDataCache(en uint64) {
 	if en > 0 {
 		ReadDataCacheEn = true
@@ -99,6 +113,7 @@ type fileReader struct {
 	lock     *string
 	mmapData []byte
 	once     *sync.Once
+	cacheEn  bool
 }
 
 func NewFileReader(f File, lock *string) *fileReader {
@@ -110,7 +125,7 @@ func NewFileReader(f File, lock *string) *fileReader {
 	}
 
 	fileSize := fi.Size()
-	r := &fileReader{fd: f, fileSize: fileSize, lock: lock, name: fName, once: new(sync.Once)}
+	r := &fileReader{fd: f, fileSize: fileSize, lock: lock, name: fName, once: new(sync.Once), cacheEn: true}
 
 	if MmapEn {
 		r.mmapData, err = Mmap(int(f.Fd()), 0, int(fileSize))
@@ -121,6 +136,10 @@ func NewFileReader(f File, lock *string) *fileReader {
 	}
 
 	return r
+}
+
+func (r *fileReader) SetCacheEn(enable bool) {
+	r.cacheEn = enable
 }
 
 func (r *fileReader) IsMmapRead() bool {
@@ -333,11 +352,11 @@ func (r *fileReader) ReOpen() error {
 }
 
 func (r *fileReader) Close() error {
-	if ReadMetaCacheEn {
+	if ReadMetaCacheEn && r.cacheEn {
 		cacheIns := readcache.GetReadMetaCacheIns()
 		cacheIns.Remove(r.Name())
 	}
-	if ReadDataCacheEn {
+	if ReadDataCacheEn && r.cacheEn {
 		dataCacheIns := readcache.GetReadDataCacheIns()
 		dataCacheIns.RemovePageCache(r.Name())
 	}

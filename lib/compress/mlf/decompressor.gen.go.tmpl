@@ -21,7 +21,7 @@ import (
 
 type decodeFunc func(dst []float64, data []byte, precision, multiplicand float64, publicPrefixSize int)
 
-var decodeFuncTable [maxFactorBits]decodeFunc
+var decodeFuncTable [maxFactorBits+1]decodeFunc
 
 func init() {
     {{- range .NeatItemSizes }}
@@ -32,7 +32,7 @@ func init() {
     decodeFuncTable[{{$n}}] = decodeItemSize{{$n}}
     {{- end}}
     {{- end}}
-    {{- range $n := .ItemSize33To49 }}
+    {{- range $n := .ItemSize33To50 }}
     decodeFuncTable[{{$n}}] = decodeItemSize{{$n}}
     {{- end}}
 }
@@ -136,7 +136,7 @@ func decodeItemSize{{$n}}(dst []float64, data []byte, precision float64, multipl
 {{end -}}
 {{end -}}
 
-{{- range $n := .ItemSize33To49 }}
+{{- range $n := .ItemSize33To50 }}
 func decodeItemSize{{$n}}(dst []float64, data []byte, precision float64, multiplicand float64, publicPrefixSize int) {
 	const itemSize = {{$n}}
 	var f float64

@@ -25,6 +25,7 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 )
 
@@ -267,4 +268,46 @@ func Test_dispatchErr(t *testing.T) {
 	if len(ch.ErrCh) != 1 {
 		t.Fatal("error not dispatch to corresponsive channel")
 	}
+}
+
+func Test_OpenWithOpenTelemetry(t *testing.T) {
+	confStr := `
+	[castor]
+		enabled = true
+		tracing-enabled = true
+		pyworker-addr = ["127.0.0.1:6666"]
+		connect-timeout = 10  # default: 10 second
+		connect-pool-size = 1  # default: 30, connection pool to pyworker
+		result-wait-timeout = 10  # default: 30 second
+	`
+	conf := mockCastorConf{config.Castor{}}
+	wait := 3 * time.Second
+	toml.Decode(confStr, &conf)
+	svc := NewService(conf.Analysis)
+	if err := svc.Open(); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(wait)
+	if err := svc.Close(); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(wait)
+}
+
+func Test_OpenWithOpenTelemetry_TracingRatioError(t *testing.T) {
+	confStr := `
+	[castor]
+		enabled = true
+		tracing-enabled = true
+		pyworker-addr = ["127.0.0.1:6666"]
+		connect-timeout = 10  # default: 10 second
+		connect-pool-size = 1  # default: 30, connection pool to pyworker
+		result-wait-timeout = 10  # default: 30 second
+        tracing-ratio = 1.1
+	`
+	conf := mockCastorConf{config.Castor{}}
+	toml.Decode(confStr, &conf)
+	svc := NewService(conf.Analysis)
+	err := svc.Open()
+	assert.Error(t, err)
 }

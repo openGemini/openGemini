@@ -32,6 +32,8 @@ type ResourceBucket interface {
 	GetResource(int64) error
 	GetResDetected(int64, *time.Timer) error
 	GetFreeResource() int64
+	GetBlockExecutor() int64
+	GetTotalResource() int64
 }
 
 type Int64bucket struct {
@@ -115,4 +117,12 @@ func (b *Int64bucket) GetResDetected(cost int64, timer *time.Timer) error {
 
 func (b *Int64bucket) GetFreeResource() int64 {
 	return b.freeResource
+}
+
+func (b *Int64bucket) GetTotalResource() int64 {
+	return atomic.LoadInt64(&b.totalResource)
+}
+
+func (b *Int64bucket) GetBlockExecutor() int64 {
+	return atomic.LoadInt64(&b.blockExecutor)
 }

@@ -16,8 +16,11 @@ package util
 
 import (
 	"errors"
+	"fmt"
 	"io"
+	"math"
 	"reflect"
+	"runtime/debug"
 	"time"
 	"unsafe"
 
@@ -27,17 +30,18 @@ import (
 )
 
 const (
-	TierBegin = 0
-	Hot       = 1
-	Warm      = 2
-	Cold      = 3
-	Moving    = 4
-	Cleared   = 5
-	NoClear   = 6
-	Clearing  = 7
-	TierEnd   = 8
-	True      = "true"
-	False     = "false"
+	TierBegin          = 0
+	Hot                = 1
+	Warm               = 2
+	Cold               = 3
+	Moving             = 4
+	Cleared            = 5
+	NoClear            = 6
+	Clearing           = 7
+	TierEnd            = 8
+	True               = "true"
+	False              = "false"
+	PrecisionThreshold = 1e-9
 )
 
 type Item struct {
@@ -72,9 +76,6 @@ const (
 	DefaultMaxRowsPerSegment4TsStore      = 1000
 	DefaultMaxRowsPerSegment4ColStore     = RowsNumPerFragment // should be the same as RowsNumPerFragment@colstore
 	DefaultMaxSegmentLimit4ColStore       = 256 * 1024
-	DefaultMaxChunkMetaItemSize           = 256 * 1024
-	DefaultMaxChunkMetaItemCount          = 512
-	CompressModMaxChunkMetaItemCount      = 16
 
 	NonStreamingCompact               = 2
 	StreamingCompact                  = 1
@@ -408,9 +409,22 @@ func Bool2Byte(b bool) byte {
 	}
 }
 
-func MemorySet(buf []byte, val byte) {
-	for i := range buf {
-		buf[i] = val
+func Bool2Int64(b bool) int64 {
+	if b {
+		return 1
+	} else {
+		return 0
+	}
+}
+
+func MemorySet[T any](buf []T, val T) {
+	size := len(buf)
+	if size == 0 {
+		return
+	}
+	buf[0] = val
+	for i := 1; i < size; i *= 2 {
+		copy(buf[i:], buf[:i])
 	}
 }
 
@@ -592,8 +606,275 @@ func FindIntersectionIndex[T1, T2 any](slice1 []T1, slice2 []T2,
 	return nil
 }
 
-func SplitUint64(original uint64) (high, low uint32) {
-	low = uint32(original & 0xFFFFFFFF)
-	high = uint32(original >> 32)
+// Median calculates the median value of a numeric slice.
+// It returns the median as a float64 and an error if the input slice is empty.
+//
+// Note: This implementation uses the QuickSelect algorithm, which modifies the order
+// of elements in the input slice during execution (through in-place partitioning).
+// The original element positions will not be preserved.
+//
+// The median is defined as:
+// - For an odd-length slice: the middle element when the slice is sorted.
+// - For an even-length slice: the average of the two middle elements when sorted.
+//
+// QuickSelect is used here for efficient median calculation (average O(n) time complexity)
+// without full sorting, making it suitable for large datasets.
+func Median[T NumberOnly](data []T) (float64, error) {
+	if len(data) == 0 {
+		return 0, errors.New("empty data")
+	}
+	n := len(data)
+
+	if n%2 == 1 {
+		// Odd length: median is the middle element
+		mid := n / 2
+		return quickSelect(data, mid), nil
+	} else {
+		// Even length: median is the average of the two middle elements
+		mid1 := (n / 2) - 1
+		val1 := quickSelect(data, mid1)
+		// Use the first partition of quickSelect partition: elements after mid1 are ≥ val1.
+		// The 1st smallest in this subSlice is the (mid1+1)th smallest in the original slice.
+		val2 := quickSelect(data[mid1:], 1)
+		return (val1 + val2) / 2, nil
+	}
+}
+
+// TrimMean calculates the trimmed mean of a numeric slice by removing a specified proportion of elements
+// from both the lower and upper ends, then averaging the remaining elements.
+//
+// Note: This implementation uses the QuickSelect algorithm, which modifies the order
+// of elements in the input slice during execution (through in-place partitioning).
+// The original element positions will not be preserved.
+func TrimMean[T NumberOnly](data []T, proportionToCut float64) (float64, error) {
+	if len(data) == 0 {
+		return 0, errors.New("empty data")
+	}
+	if proportionToCut < 0 || proportionToCut >= 0.5 {
+		return 0, errors.New("proportionToCut must be in [0, 0.5)")
+	}
+
+	n := len(data)
+	lowerCut := int(proportionToCut * float64(n))
+	upperCut := n - lowerCut
+
+	// 1. Ensure elements after upperCut-1 are larger than the retained set
+	quickSelect(data, upperCut-1)
+	// 2. Ensure elements before lowerCut in the trimmed range are smaller than the retained set
+	quickSelect(data[:upperCut], lowerCut)
+
+	sum := 0.0
+	for i := lowerCut; i < upperCut; i++ {
+		sum += float64(data[i])
+	}
+	return sum / float64(upperCut-lowerCut), nil
+}
+
+// Quantile computes the empirical quantile of a dataset using linear interpolation,
+// consistent with the behavior of numpy.quantile (method="linear").
+//
+// Note: This implementation uses the QuickSelect algorithm, which modifies the order
+// of elements in the input slice during execution (through in-place partitioning).
+// The original element positions will not be preserved.
+func Quantile[T NumberOnly](data []T, q float64) (float64, error) {
+	if len(data) == 0 {
+		return 0, errors.New("empty data")
+	}
+	if q < 0 || q > 1 {
+		return 0, fmt.Errorf("q must be in [0, 1], got %.1f", q)
+	}
+
+	n := len(data)
+	if n == 1 {
+		return float64(data[0]), nil
+	}
+
+	index := q * float64(n-1)
+	k := int(math.Floor(index))
+	d := index - float64(k)
+
+	lowerVal := quickSelect(data, k)
+	upperVal := 0.0
+	if k+1 < n {
+		upperVal = quickSelect(data, k+1)
+	} else {
+		upperVal = float64(data[n-1])
+	}
+
+	return (1-d)*lowerVal + d*upperVal, nil
+}
+
+// quickSelect: Find the k-th smallest element (0-based index) in nums, modifies the array in-place
+func quickSelect[T NumberOnly](nums []T, k int) float64 {
+	left, right := 0, len(nums)-1
+	for left < right {
+		pivotIdx := partition(nums, left, right)
+		if pivotIdx == k {
+			return float64(nums[k])
+		} else if pivotIdx < k {
+			left = pivotIdx + 1
+		} else {
+			right = pivotIdx - 1
+		}
+	}
+	return float64(nums[left])
+}
+
+// partition function: Uses nums[right] as pivot, returns the pivot's final position
+func partition[T NumberOnly](nums []T, left, right int) int {
+	pivot := nums[right]
+	i := left
+	for j := left; j < right; j++ {
+		if nums[j] <= pivot {
+			nums[i], nums[j] = nums[j], nums[i]
+			i++
+		}
+	}
+	nums[i], nums[right] = nums[right], nums[i]
+	return i
+}
+
+// IsInternalDatabase returns true if the database is "_internal".
+func IsInternalDatabase(dbName string) bool {
+	return dbName == "_internal"
+}
+
+func WaitTimeOut(wait func(), done func(), timeout time.Duration) {
+	var rcv = func() {
+		if err := recover(); err != nil {
+			fmt.Println(err)
+			logger.Error("wait crashed", zap.Any("recover", err),
+				zap.String("stack", string(debug.Stack())))
+		}
+	}
+	defer rcv()
+
+	ch := make(chan struct{})
+	go func() {
+		defer rcv()
+		TickerRun(timeout, ch, func() {
+			done()
+		}, func() {})
+	}()
+
+	wait()
+	close(ch)
+}
+
+// MergeMaps merges two maps into a new map following specific rules:
+// 1. For keys present in both maps, the value from newMap is used
+// 2. For keys present only in oldMap, the value from oldMap is preserved
+// 3. For keys present only in newMap, the value from newMap is included
+func MergeMaps[K comparable, V any](oldMap, newMap map[K]V) map[K]V {
+	// Handle nil input maps to avoid panics during iteration
+	safeOldMap := oldMap
+	if safeOldMap == nil {
+		safeOldMap = make(map[K]V)
+	}
+
+	safeNewMap := newMap
+	if safeNewMap == nil {
+		safeNewMap = make(map[K]V)
+	}
+
+	result := make(map[K]V, len(safeOldMap)+len(safeNewMap))
+	for k, v := range safeOldMap {
+		result[k] = v
+	}
+	for k, v := range safeNewMap {
+		result[k] = v
+	}
+
+	return result
+}
+
+func EpochDivisor(epoch string) int64 {
+	divisor := int64(1)
+
+	switch epoch {
+	case "u", "us", "µs", "μs": // see time.unitMap
+		divisor = int64(time.Microsecond)
+	case "ms":
+		divisor = int64(time.Millisecond)
+	case "s":
+		divisor = int64(time.Second)
+	case "m":
+		divisor = int64(time.Minute)
+	case "h":
+		divisor = int64(time.Hour)
+	}
+
+	return divisor
+}
+
+// CalculateSum calculates the sum of all elements in a numeric slice using NumberOnly constraint.
+// Returns 0 if the slice is empty or nil.
+func CalculateSum[T NumberOnly](values []T) T {
+	var sum T
+	for _, v := range values {
+		sum += v
+	}
+	return sum
+}
+
+// CalculateMax calculates the maximum value in a numeric slice using NumberOnly constraint.
+// Returns type-specific zero value for empty/nil slices: defaultMax
+func CalculateMax[T NumberOnly](values []T, defaultMax T) T {
+	if len(values) == 0 {
+		return defaultMax
+	}
+
+	_max := values[0]
+	for _, v := range values[1:] {
+		if v > _max {
+			_max = v
+		}
+	}
+	return _max
+}
+
+// CalculateMin calculates the minimum value in a numeric slice using NumberOnly constraint.
+// Returns type-specific zero value for empty/nil slices: defaultMin
+func CalculateMin[T NumberOnly](values []T, defaultMin T) T {
+	if len(values) == 0 {
+		return defaultMin
+	}
+
+	_min := values[0]
+	for _, v := range values[1:] {
+		if v < _min {
+			_min = v
+		}
+	}
+	return _min
+}
+
+func CalculateMinMax[T NumberOnly](values []T, def T) (T, T) {
+	if len(values) == 0 {
+		return def, def
+	}
+
+	minV, maxV := values[0], values[0]
+	for _, v := range values[1:] {
+		if v < minV {
+			minV = v
+		}
+		if v > maxV {
+			maxV = v
+		}
+	}
+	return minV, maxV
+}
+
+func SplitInt64(n int64) (low32 uint32, high32 uint32) {
+	u := uint64(n)
+	low32 = uint32(u & 0xFFFFFFFF)
+	high32 = uint32((u >> 32) & 0xFFFFFFFF)
 	return
+}
+
+func MergeToInt64(low32, high32 uint32) int64 {
+	high64 := uint64(high32) << 32
+	low64 := uint64(low32)
+	return int64(high64 | low64)
 }

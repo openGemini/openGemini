@@ -135,8 +135,8 @@ func OperateParam(e influxql.Expr, param *util.Param) error {
 }
 
 func (trans *GraphTransform) Work(ctx context.Context) error {
-	span := trans.StartSpan("[GraphTransform] TotalWorkCost", false)
-	trans.workTracing = tracing.Start(span, "cost_for_GraphTransform", false)
+	span := trans.StartSpan("[GraphTransform] TotalWorkCost", true)
+	trans.workTracing = tracing.Start(span, "cost_for_GraphTransform", true)
 	defer func() {
 		trans.Close()
 		tracing.Finish(span, trans.workTracing)

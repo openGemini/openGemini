@@ -15,6 +15,7 @@
 package record
 
 import (
+	"slices"
 	"sort"
 	"time"
 
@@ -24,9 +25,40 @@ import (
 
 const TimeClusterCol = "clustered_time"
 
+type NilCounts struct {
+	ncs []NilCount
+}
+
+func (ncs *NilCounts) Build(rec *Record) {
+	n := rec.Len()
+	ncs.ncs = slices.Grow(ncs.ncs[:0], n)[:n]
+
+	for i := 0; i < rec.Len(); i++ {
+		ncs.Column(i).Build(&rec.ColVals[i])
+	}
+}
+
+func (ncs *NilCounts) Column(i int) *NilCount {
+	return &ncs.ncs[i]
+}
+
 type NilCount struct {
 	value []int
 	total int
+}
+
+func (nc *NilCount) Build(col *ColVal) {
+	nc.init(col.NilCount, col.Len+1)
+	if col.NilCount == 0 {
+		return
+	}
+
+	for i := 1; i < col.Len+1; i++ {
+		nc.value[i] = nc.value[i-1]
+		if col.IsNil(i - 1) {
+			nc.value[i]++
+		}
+	}
 }
 
 func (nc *NilCount) init(total, size int) {
@@ -46,7 +78,7 @@ type SortHelper struct {
 	aux      *SortAux
 	SortData *SortData //Multi-field sort data
 
-	nilCount []NilCount
+	nilCount NilCounts
 	times    []int64
 }
 
@@ -78,7 +110,7 @@ func (h *SortHelper) Sort(rec *Record) *Record {
 	aux.Init(times)
 	sort.Stable(aux)
 	rows := aux.RowIds
-	h.initNilCount(rec, times)
+	h.initNilCount(rec)
 	h.times = h.times[:0]
 
 	start := 0
@@ -117,7 +149,7 @@ func (h *SortHelper) SortForColumnStore(rec *Record, orderBy []PrimaryKey, dedup
 	}
 	rows := data.RowIds
 
-	h.initNilCount(rec, times)
+	h.initNilCount(rec)
 	h.times = h.times[:0]
 	if deduplicate {
 		h.handleDuplication(rec, isTimeClusterSet)
@@ -206,9 +238,9 @@ func (h *SortHelper) appendRecord(rec *Record, aux *Record, start, end int, tc b
 	for i := 0; i < rec.Len(); i++ {
 		col := &rec.ColVals[i]
 		if tc {
-			aux.ColVals[i+1].AppendWithNilCount(col, rec.Schema[i].Type, start, end, &h.nilCount[i])
+			aux.ColVals[i+1].AppendWithNilCount(col, rec.Schema[i].Type, start, end, h.nilCount.Column(i))
 		} else {
-			aux.ColVals[i].AppendWithNilCount(col, rec.Schema[i].Type, start, end, &h.nilCount[i])
+			aux.ColVals[i].AppendWithNilCount(col, rec.Schema[i].Type, start, end, h.nilCount.Column(i))
 		}
 	}
 }
@@ -223,34 +255,13 @@ func (h *SortHelper) replaceRecord(rec *Record, aux *Record, idx int) {
 		}
 
 		auxCol := &aux.ColVals[i]
-		auxCol.deleteLast(rec.Schema[i].Type)
-		auxCol.AppendWithNilCount(col, rec.Schema[i].Type, idx, idx+1, &h.nilCount[i])
+		auxCol.DeleteLast(rec.Schema[i].Type)
+		auxCol.AppendWithNilCount(col, rec.Schema[i].Type, idx, idx+1, h.nilCount.Column(i))
 	}
 }
 
-func (h *SortHelper) initNilCount(rec *Record, times []int64) {
-	if cap(h.nilCount) < rec.Len() {
-		h.nilCount = make([]NilCount, rec.Len())
-	}
-	h.nilCount = h.nilCount[:rec.Len()]
-
-	tl := len(times)
-
-	for i := 0; i < rec.Len(); i++ {
-		col := &rec.ColVals[i]
-		nc := &h.nilCount[i]
-		nc.init(col.NilCount, tl+1)
-		if col.NilCount == 0 {
-			continue
-		}
-
-		for j := 1; j < tl+1; j++ {
-			nc.value[j] = nc.value[j-1]
-			if col.IsNil(j - 1) {
-				nc.value[j]++
-			}
-		}
-	}
+func (h *SortHelper) initNilCount(rec *Record) {
+	h.nilCount.Build(rec)
 }
 
 // AppendWithNilCount modified from method "ColVal.Append"
@@ -314,7 +325,7 @@ func (cv *ColVal) appendAll(src *ColVal) {
 	cv.NilCount = src.NilCount
 }
 
-func (cv *ColVal) deleteLast(typ int) {
+func (cv *ColVal) DeleteLast(typ int) {
 	if cv.Len == 0 {
 		return
 	}

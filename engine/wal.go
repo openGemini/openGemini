@@ -19,6 +19,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -26,22 +27,22 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/golang/snappy"
+	"github.com/klauspost/compress/snappy"
+	atomic2 "github.com/openGemini/openGemini/lib/atomic"
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/cpu"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/failpoint"
 	"github.com/openGemini/openGemini/lib/fileops"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
-	"github.com/pingcap/failpoint"
 	"go.uber.org/zap"
 )
 
@@ -127,12 +128,13 @@ type WAL struct {
 	logWriter       LogWriters
 	logReplay       LogReplays
 	walEnabled      bool
+	usedForStream   bool
 	replayParallel  bool
 	replayBatchSize int
 	maxRowTime      int64
 }
 
-func NewWAL(path string, lockPath *string, shardID uint64, walSyncInterval time.Duration, walEnabled, replayParallel bool, partitionNum int, walReplayBatchSize int) *WAL {
+func NewWAL(path string, lockPath *string, shardID uint64, walSyncInterval time.Duration, replayParallel bool, partitionNum int, walReplayBatchSize int) *WAL {
 	if walReplayBatchSize < 256*config.KB {
 		walReplayBatchSize = 256 * config.KB // at least 256 KiB
 	}
@@ -143,12 +145,12 @@ func NewWAL(path string, lockPath *string, shardID uint64, walSyncInterval time.
 		shardID:         shardID,
 		logWriter:       make(LogWriters, partitionNum),
 		logReplay:       make(LogReplays, partitionNum),
-		walEnabled:      walEnabled,
 		replayParallel:  replayParallel,
 		replayBatchSize: walReplayBatchSize,
 		log:             logger.NewLogger(errno.ModuleWal),
 		lock:            lockPath,
 		maxRowTime:      math.MinInt64,
+		usedForStream:   config.GetStoreConfig().Wal.WalUsedForStream,
 	}
 
 	lock := fileops.FileLockOption(*lockPath)
@@ -243,27 +245,24 @@ func (l *WAL) writeBinary(walRecord *walRecord) error {
 }
 
 func (l *WAL) Write(rows []byte, typ WalRecordType, maxRowTime int64) error {
-	if !l.walEnabled {
+	if !config.GetStoreConfig().Wal.WalEnabled {
 		return nil
 	}
 	if len(rows) == 0 {
 		return nil
 	}
-
-	l.mu.Lock()
-	l.maxRowTime = max(l.maxRowTime, maxRowTime)
-	l.mu.Unlock()
-
 	// write wal
 	start := time.Now()
-	failpoint.Inject("SlowDownWalWrite", nil)
+	if l.usedForStream {
+		atomic2.CompareAndSwapMaxInt64(&l.maxRowTime, maxRowTime)
+	}
 	err := l.writeBinary(&walRecord{binary: rows, writeWalType: typ})
 	atomic.AddInt64(&statistics.PerfStat.WriteWalDurationNs, time.Since(start).Nanoseconds())
 	return err
 }
 
 func (l *WAL) Switch() (*WalFiles, error) {
-	if !l.walEnabled {
+	if !config.GetStoreConfig().Wal.WalEnabled {
 		return nil, nil
 	}
 	errs := errno.NewErrs()
@@ -278,8 +277,8 @@ func (l *WAL) Switch() (*WalFiles, error) {
 	for i := 0; i < l.partitionNum; i++ {
 		go func(lw *LogWriter) {
 			files, err := lw.Switch()
-			errs.Dispatch(err)
 			walFiles.Add(files...)
+			errs.Dispatch(err)
 		}(&l.logWriter[i])
 	}
 
@@ -287,20 +286,20 @@ func (l *WAL) Switch() (*WalFiles, error) {
 	return walFiles, err
 }
 
-func (l *WAL) Remove(files []string) error {
-	if !l.walEnabled {
+func (l *WAL) SwitchReplay() *WalFiles {
+	if !config.GetStoreConfig().Wal.WalEnabled {
 		return nil
 	}
-	lock := fileops.FileLockOption(*l.lock)
-	for _, fn := range files {
-		err := fileops.Remove(fn, lock)
-		if err != nil {
-			l.log.Error("failed to remove wal file", zap.String("file", fn))
-			return err
-		}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	walFiles := newWalFiles(time.Now().UnixNano(), l.lock, l.logPath)
+
+	for i := 0; i < l.partitionNum; i++ {
+		walFiles.Add(l.logReplay[i].fileNames...)
 	}
 
-	return nil
+	return walFiles
 }
 
 func (l *WAL) replayPhysicRecord(fr *bufio.Reader, walFileName string, recordCompBuff []byte, callBack func(pc *walRecord) error) ([]byte, error) {
@@ -312,13 +311,13 @@ func (l *WAL) replayPhysicRecord(fr *bufio.Reader, walFileName string, recordCom
 		return recordCompBuff, io.EOF
 	}
 	if n != WalRecordHeadSize {
-		l.log.Warn(errno.NewError(errno.WalRecordHeaderCorrupted).Error(), zap.Error(err))
+		l.log.Warn(errno.NewError(errno.WalRecordHeaderCorrupted).Error(), zap.Error(err), zap.String("walFileName", walFileName))
 		return recordCompBuff, io.EOF
 	}
 
 	writeWalType := WalRecordType(recordHeader[0])
 	if writeWalType <= WriteWalUnKnownType || writeWalType >= WriteWalEnd {
-		l.log.Error("unKnown write wal type", zap.Int("writeWalType", int(writeWalType)))
+		l.log.Error("unKnown write wal type", zap.Int("writeWalType", int(writeWalType)), zap.String("walFileName", walFileName))
 		return recordCompBuff, io.EOF
 	}
 
@@ -388,12 +387,12 @@ func (l *WAL) unmarshalRows(binary []byte, ctx *walRowsObjects) (*walRowsObjects
 }
 
 func (l *WAL) replayWalFile(ctx context.Context, walFileName string, lastFile bool, callBack func(pc *walRecord) error) error {
-	failpoint.Inject("mock-replay-wal-error", func(val failpoint.Value) {
-		msg := val.(string)
-		if strings.Contains(walFileName, msg) {
-			failpoint.Return(fmt.Errorf("%s", msg))
-		}
-	})
+	failpoint.ApplyFunc("mock-replay-wal-error", fileops.OpenFile,
+		func(name string, flag int, perm os.FileMode, opt ...fileops.FSOption) (fileops.File, error) {
+			val := failpoint.GetValue("mock-replay-wal-error", func() {})
+			return nil, errors.New(val.String())
+		})
+
 	lock := fileops.FileLockOption("")
 	pri := fileops.FilePriorityOption(fileops.IO_PRIORITY_NORMAL)
 	fd, err := fileops.OpenFile(walFileName, os.O_RDONLY, 0600, lock, pri)
@@ -587,7 +586,7 @@ type walRecord struct {
 }
 
 func (l *WAL) Replay(ctx context.Context, callBack ReplayCallFuncType) ([]string, error) {
-	if !l.walEnabled {
+	if !l.walEnabled && !config.GetStoreConfig().Wal.WalEnabled {
 		return nil, nil
 	}
 
@@ -631,7 +630,7 @@ func (l *WAL) Replay(ctx context.Context, callBack ReplayCallFuncType) ([]string
 }
 
 func (l *WAL) Close() error {
-	if !l.walEnabled {
+	if !config.GetStoreConfig().Wal.WalEnabled {
 		return nil
 	}
 	l.mu.Lock()

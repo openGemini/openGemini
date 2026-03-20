@@ -28,6 +28,27 @@ import (
 )
 
 var logger *zap.Logger
+var slowQueryLogger *zap.Logger
+var queryLogger *zap.Logger
+var auditLogger *zap.Logger
+var compactLogger *zap.Logger
+
+type LoggerType int
+
+const (
+	LoggerTypeDefault   LoggerType = 0
+	LoggerTypeSlowQuery LoggerType = 1
+	LoggerTypeQuery     LoggerType = 2
+	LoggerTypeAudit     LoggerType = 3
+	LoggerTypeCompact   LoggerType = 4
+)
+
+const (
+	LogFileSlowQuery string = "slow_query"
+	LogFileQuery     string = "query"
+	LogFileAudit     string = "audit"
+	LogFileCompact   string = "compact"
+)
 
 var hooks []*lumberjack.Logger
 
@@ -57,17 +78,60 @@ func SetInitLoggerHandler(handler func(*zap.Logger)) {
 
 func InitLogger(conf config.Logger) {
 	level = conf.Level
-	logger = getLogger(conf, conf.GetApp())
+	logger = getLogger(conf, conf.GetApp(), LoggerTypeDefault)
 	if initHandler != nil {
 		initHandler(logger)
 	}
 	util.SetLogger(logger)
 	crypto.SetLogger(logger)
-	fmt.Printf("%s init logger, conf: %+v\n", time.Now().String(), conf)
+
+	switch conf.GetApp() {
+	case string(config.AppSql):
+		if conf.SlowQueryLogger != nil {
+			slowQueryLogger = getLogger(*conf.SlowQueryLogger, conf.GetApp(), LoggerTypeSlowQuery)
+		} else {
+			slowQueryLogger = logger
+		}
+
+		if conf.QueryLogger != nil {
+			queryLogger = getLogger(*conf.QueryLogger, conf.GetApp(), LoggerTypeQuery)
+		} else {
+			queryLogger = logger
+		}
+
+		if conf.AuditLogger != nil {
+			auditLogger = getLogger(*conf.AuditLogger, conf.GetApp(), LoggerTypeAudit)
+		} else {
+			auditLogger = logger
+		}
+	case string(config.AppStore):
+		if conf.CompactLogger != nil {
+			compactLogger = getLogger(*conf.CompactLogger, conf.GetApp(), LoggerTypeCompact)
+		} else {
+			compactLogger = logger
+		}
+	default:
+		slowQueryLogger = logger
+		queryLogger = logger
+		auditLogger = logger
+		compactLogger = logger
+	}
 }
 
 func GetLogger() *zap.Logger {
 	return logger
+}
+
+func Errorf(format string, a ...any) {
+	logger.Error(fmt.Sprintf(format, a...))
+}
+
+func Infof(format string, a ...any) {
+	logger.Info(fmt.Sprintf(format, a...))
+}
+
+func Panicf(format string, a ...any) {
+	logger.Panic(fmt.Sprintf(format, a...))
 }
 
 func SetLogger(zapLogger *zap.Logger) {
@@ -82,11 +146,7 @@ func CloseLogger() {
 	closeHooks()
 }
 
-func getLogger(conf config.Logger, name string) *zap.Logger {
-	hookNormal := conf.NewLumberjackLogger(name)
-	hookError := conf.NewLumberjackLogger(makeErrFileName(name))
-	hooks = append(hooks, hookNormal, hookError)
-
+func getLogger(conf config.Logger, name string, loggerType LoggerType) *zap.Logger {
 	encoder := newEncoder()
 
 	logLevel := rewriteLevel(conf.Level)
@@ -97,13 +157,34 @@ func getLogger(conf config.Logger, name string) *zap.Logger {
 
 	Alevel = zap.NewAtomicLevel()
 	Alevel.SetLevel(logLevel)
-
-	core := zapcore.NewTee(
-		zapcore.NewCore(encoder, zapcore.AddSync(hookNormal), Alevel),
-		zapcore.NewCore(encoder, zapcore.AddSync(hookError), levelError),
-	)
-
-	return zap.New(core, zap.AddCaller(), zap.Development())
+	if loggerType == LoggerTypeDefault {
+		// default logger
+		hookNormal := conf.NewLumberjackLogger(name)
+		hookError := conf.NewLumberjackLogger(makeErrFileName(name))
+		hooks = append(hooks, hookNormal, hookError)
+		core := zapcore.NewTee(
+			zapcore.NewCore(encoder, zapcore.AddSync(hookNormal), Alevel),
+			zapcore.NewCore(encoder, zapcore.AddSync(hookError), levelError),
+		)
+		return zap.New(core, zap.AddCaller(), zap.Development())
+	} else {
+		// specific logger
+		var fileName string
+		switch loggerType {
+		case LoggerTypeSlowQuery:
+			fileName = LogFileSlowQuery
+		case LoggerTypeQuery:
+			fileName = LogFileQuery
+		case LoggerTypeAudit:
+			fileName = LogFileAudit
+		case LoggerTypeCompact:
+			fileName = LogFileCompact
+		default:
+			return nil
+		}
+		core := zapcore.NewCore(encoder, zapcore.AddSync(conf.NewLumberjackLogger(fileName)), Alevel)
+		return zap.New(core, zap.AddCaller(), zap.Development())
+	}
 }
 
 func rewriteLevel(level zapcore.Level) zapcore.Level {
@@ -152,7 +233,7 @@ var srLogger raft.Logger
 
 func InitSrLogger(conf config.Logger) {
 	level = conf.Level
-	zapLogger := getLogger(conf, config.DefaultStoreRaftLoggerName)
+	zapLogger := getLogger(conf, config.DefaultStoreRaftLoggerName, LoggerTypeDefault)
 	fmt.Printf("%s init sr logger, conf: %+v\n", time.Now().String(), conf)
 	srLogger = &SugarLogger{zapLogger.Sugar()}
 }

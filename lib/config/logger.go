@@ -62,6 +62,10 @@ type Logger struct {
 	MaxAge          int           `toml:"max-age"`
 	CompressEnabled bool          `toml:"compress-enabled"`
 	Path            string        `toml:"path"`
+	SlowQueryLogger *Logger       `toml:"slow-query"`
+	AuditLogger     *Logger       `toml:"audit"`
+	QueryLogger     *Logger       `toml:"query"`
+	CompactLogger   *Logger       `toml:"compact"`
 }
 
 // NewLogger returns a new instance of Config with defaults.
@@ -75,6 +79,42 @@ func NewLogger(app App) Logger {
 		MaxAge:          DefaultMaxAge,
 		CompressEnabled: DefaultCompressEnabled,
 		Path:            filepath.Join(openGeminiDir(), DefaultSubPath),
+		SlowQueryLogger: &Logger{
+			app:             app,
+			Format:          "auto",
+			Level:           DefaultLevel,
+			MaxSize:         toml.Size(DefaultMaxSize),
+			MaxNum:          DefaultMaxNum,
+			MaxAge:          DefaultMaxAge,
+			CompressEnabled: DefaultCompressEnabled,
+		},
+		QueryLogger: &Logger{
+			app:             app,
+			Format:          "auto",
+			Level:           DefaultLevel,
+			MaxSize:         toml.Size(DefaultMaxSize),
+			MaxNum:          DefaultMaxNum,
+			MaxAge:          DefaultMaxAge,
+			CompressEnabled: DefaultCompressEnabled,
+		},
+		AuditLogger: &Logger{
+			app:             app,
+			Format:          "auto",
+			Level:           DefaultLevel,
+			MaxSize:         toml.Size(DefaultMaxSize),
+			MaxNum:          DefaultMaxNum,
+			MaxAge:          DefaultMaxAge,
+			CompressEnabled: DefaultCompressEnabled,
+		},
+		CompactLogger: &Logger{
+			app:             app,
+			Format:          "auto",
+			Level:           DefaultLevel,
+			MaxSize:         toml.Size(DefaultMaxSize),
+			MaxNum:          DefaultMaxNum,
+			MaxAge:          DefaultMaxAge,
+			CompressEnabled: DefaultCompressEnabled,
+		},
 	}
 	globalLogger = &logger
 	return logger
@@ -96,6 +136,42 @@ func (c Logger) Validate() error {
 
 	if c.Path == "" {
 		return errors.New("logger path must not be empty")
+	}
+
+	if c.SlowQueryLogger != nil {
+		if c.SlowQueryLogger.Path == "" {
+			c.SlowQueryLogger.Path = c.Path
+		}
+		if err := c.SlowQueryLogger.Validate(); err != nil {
+			return err
+		}
+	}
+
+	if c.QueryLogger != nil {
+		if c.QueryLogger.Path == "" {
+			c.QueryLogger.Path = c.Path
+		}
+		if err := c.QueryLogger.Validate(); err != nil {
+			return err
+		}
+	}
+
+	if c.AuditLogger != nil {
+		if c.AuditLogger.Path == "" {
+			c.AuditLogger.Path = c.Path
+		}
+		if err := c.AuditLogger.Validate(); err != nil {
+			return err
+		}
+	}
+
+	if c.CompactLogger != nil {
+		if c.CompactLogger.Path == "" {
+			c.CompactLogger.Path = c.Path
+		}
+		if err := c.CompactLogger.Validate(); err != nil {
+			return err
+		}
 	}
 
 	return nil

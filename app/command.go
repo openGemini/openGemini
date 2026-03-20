@@ -19,7 +19,7 @@ import (
 	"os"
 	"runtime"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/procutil"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/procutil"
 	"github.com/influxdata/influxdb/cmd"
 	"github.com/openGemini/openGemini/lib/compress/dict"
 	"github.com/openGemini/openGemini/lib/config"
@@ -72,6 +72,7 @@ func (cmd *Command) Run(args ...string) error {
 	cmd.Logger = logger.NewLogger(errno.ModuleUnknown)
 
 	fmt.Fprint(os.Stdout, cmd.Logo)
+	cmd.Info.MonitorPass = &options.monitorPass
 
 	s, err := cmd.NewServerFunc(cmd.Config, cmd.Info, cmd.Logger)
 	if err != nil {
@@ -111,12 +112,19 @@ func (cmd *Command) InitConfig(conf config.Config, path string) error {
 		return fmt.Errorf("parse config: %s", err)
 	}
 
+	if data := conf.GetData(); data != nil {
+		data.RewriteDataConf()
+	}
+
 	if sc := conf.GetSpdy(); sc != nil {
 		spdy.SetDefaultConfiguration(*sc)
 	}
 
 	if lc := conf.GetLogging(); lc != nil {
 		lc.SetApp(cmd.Info.App)
+		if err := lc.Validate(); err != nil {
+			return err
+		}
 		logger.InitLogger(*lc)
 	}
 

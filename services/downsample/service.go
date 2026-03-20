@@ -19,6 +19,7 @@ import (
 	"time"
 
 	log "github.com/influxdata/influxdb/logger"
+	"github.com/openGemini/openGemini/engine"
 	"github.com/openGemini/openGemini/engine/hybridqp"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	"github.com/openGemini/openGemini/services"
@@ -36,12 +37,8 @@ type Service struct {
 	}
 
 	Engine interface {
-		StartDownSampleTask(sdsp *meta.ShardDownSamplePolicyInfo, schema []hybridqp.Catalog, log *zap.Logger, meta interface {
-			UpdateShardDownSampleInfo(Ident *meta.ShardIdentifier) error
-		}) error
-		GetShardDownSamplePolicyInfos(meta interface {
-			UpdateShardDownSampleInfo(Ident *meta.ShardIdentifier) error
-		}) ([]*meta.ShardDownSamplePolicyInfo, error)
+		StartDownSampleTask(sdsp *meta.ShardDownSamplePolicyInfo, schema []hybridqp.Catalog, log *zap.Logger, meta engine.MetaDownSample) error
+		GetShardDownSamplePolicyInfos(meta engine.MetaDownSample) ([]*meta.ShardDownSamplePolicyInfo, error)
 		GetDownSamplePolicy(key string) *meta.StoreDownSamplePolicy
 		UpdateDownSampleInfo(policies *meta.DownSamplePoliciesInfoWithDbRp)
 	}

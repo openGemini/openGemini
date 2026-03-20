@@ -79,4 +79,7 @@ func (s *SelectServer) register(store *storage.Storage) {
 
 	s.server.RegisterEHF(transport.NewEventHandlerFactory(spdy.SendClearEvent,
 		handler.NewClearRepColdEvent(store), &msgservice.SendClearEventsRequest{}))
+
+	s.server.RegisterEHF(transport.NewEventHandlerFactory(spdy.TaskNodeRequest,
+		handler.NewTaskProcessor(store), &msgservice.TaskMessage{}))
 }

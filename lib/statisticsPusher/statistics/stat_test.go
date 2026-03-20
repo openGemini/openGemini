@@ -53,8 +53,16 @@ func TestStoreQuery(t *testing.T) {
 	obj := stat.NewStoreQuery()
 	obj.StoreQueryRequests.Store(10)
 	obj.UnmarshalQueryTimeTotal.Store(100)
+	obj.ShardResourceHook = func() int64 {
+		return 10
+	}
+	obj.SeriesResourceHook = func() int64 {
+		return 11
+	}
 
-	assertCollect(t, obj.MeasurementName(), "storeQueryReq=10", "UnmarshalQueryTimeTotal=100")
+	assertCollect(t, obj.MeasurementName(), "storeQueryReq=10", "UnmarshalQueryTimeTotal=100",
+		"ShardResourceIdle=10", "SeriesResourceIdle=11")
+
 	assertCollectOps(t, obj.MeasurementName(), map[string]interface{}{
 		"storeQueryReq":           int64(10),
 		"UnmarshalQueryTimeTotal": int64(100),
@@ -91,6 +99,33 @@ func TestRuntime(t *testing.T) {
 	assertCollectOps(t, "runtime", map[string]interface{}{
 		"Version":          "1.0.0",
 		"SpdyCertExpireAt": now.Format(time.DateTime),
+	})
+}
+
+func TestExport(t *testing.T) {
+	// Test representative metrics for all functions
+	obj := stat.GetExport()
+	obj.MetaSyncDuration.Store(100)
+	obj.MetaSyncDuration.Add(50)
+	obj.MetaSyncDuration.Incr()
+	obj.MetaSyncDuration.Decr()
+	obj.MetaSyncSuccessCount.Store(5)
+	obj.MetaSyncSuccessCount.Add(3)
+	obj.MetaSyncSuccessCount.Incr()
+	obj.MetaSyncSuccessCount.Decr()
+
+	assertCollect(t, "export", "MetaSyncDuration=150", "MetaSyncSuccessCount=8")
+
+	obj.MetaSyncDeletedCount.Incr()
+	obj.MetaSyncDeletedCount.Incr()
+
+	assertCollect(t, "export", "MetaSyncDeletedCount=2")
+
+	// Test ops collection
+	assertCollectOps(t, "export", map[string]interface{}{
+		"MetaSyncDuration":     int64(150),
+		"MetaSyncSuccessCount": int64(8),
+		"MetaSyncDeletedCount": int64(2),
 	})
 }
 

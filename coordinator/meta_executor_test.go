@@ -31,16 +31,16 @@ func TestMetaExecutor(t *testing.T) {
 	defer me.Close()
 
 	me.SetTimeOut(time.Second)
-	err := me.EachDBNodes("db_not_exists", func(nodeID uint64, pts []uint32) error { return nil })
+	err := me.EachDBNodes("db_not_exists", func(nodeID uint64, pts []uint32) error { return nil }, me.MetaClient.GetNodePtsMap)
 	assert.True(t, errno.Equal(err, errno.DatabaseNotFound))
 
-	err = me.EachDBNodes("dbpt_not_exists", func(nodeID uint64, pts []uint32) error { return nil })
+	err = me.EachDBNodes("dbpt_not_exists", func(nodeID uint64, pts []uint32) error { return nil }, me.MetaClient.GetNodePtsMap)
 	assert.True(t, errno.Equal(err, errno.DatabaseNotFound))
 
-	err = me.EachDBNodes("db0", func(nodeID uint64, pts []uint32) error { return nil })
+	err = me.EachDBNodes("db0", func(nodeID uint64, pts []uint32) error { return nil }, me.MetaClient.GetNodePtsMap)
 	assert.NoError(t, err)
 
-	err = me.EachDBNodes("db1", func(nodeID uint64, pts []uint32) error { return nil })
+	err = me.EachDBNodes("db1", func(nodeID uint64, pts []uint32) error { return nil }, me.MetaClient.GetNodePtsMap)
 	assert.NoError(t, err)
 
 }

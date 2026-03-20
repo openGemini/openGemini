@@ -71,13 +71,14 @@ type StringDict struct {
 }
 
 func (s *StringDict) LoadIndex(key string) uint64 {
+	s.corpusLock.Lock()
+	defer s.corpusLock.Unlock()
 	vv, ok := s.corpus.Load(key)
 	if ok {
 		index, _ := vv.(uint64)
 		return index
 	}
 	key = strings.Clone(key)
-	s.corpusLock.Lock()
 	s.corpusIndex = s.corpusIndex + 1
 	index := s.corpusIndex
 	if uint64(len(s.corpusIndexes)) <= index {
@@ -85,7 +86,6 @@ func (s *StringDict) LoadIndex(key string) uint64 {
 		s.corpusIndexes = s.corpusIndexes[:cap(s.corpusIndexes)]
 	}
 	s.corpusIndexes[index] = key
-	s.corpusLock.Unlock()
 	s.corpus.Store(key, index)
 	return index
 }

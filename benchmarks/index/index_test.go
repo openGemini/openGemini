@@ -24,7 +24,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
 	"github.com/openGemini/openGemini/engine"
 	"github.com/openGemini/openGemini/engine/executor"
 	"github.com/openGemini/openGemini/engine/index/tsi"
@@ -57,7 +57,6 @@ func init() {
 	DefaultEngineOption.MaxWriteHangTime = time.Second
 	DefaultEngineOption.MemDataReadEnabled = true
 	DefaultEngineOption.WalSyncInterval = 100 * time.Millisecond
-	DefaultEngineOption.WalEnabled = true
 	DefaultEngineOption.WalReplayParallel = false
 	DefaultEngineOption.DownSampleWriteDrop = true
 	_ = resourceallocator.InitResAllocator(math.MaxInt64, 1, 1, resourceallocator.GradientDesc, resourceallocator.ChunkReaderRes, 0, 0)

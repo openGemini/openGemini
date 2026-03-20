@@ -85,7 +85,8 @@ func GetTagCondition(v *parser.VectorSelector, haveMetricStore bool) (influxql.E
 			cond = &influxql.BinaryExpr{
 				Op: influxql.EQ,
 				LHS: &influxql.VarRef{
-					Val: item.Name,
+					Val:  item.Name,
+					Type: influxql.Tag,
 				},
 				RHS: &influxql.StringLiteral{
 					Val: escapeSingleQuotes(item.Value),
@@ -104,7 +105,8 @@ func GetTagCondition(v *parser.VectorSelector, haveMetricStore bool) (influxql.E
 			cond = &influxql.BinaryExpr{
 				Op: influxql.EQREGEX,
 				LHS: &influxql.VarRef{
-					Val: item.Name,
+					Val:  item.Name,
+					Type: influxql.Tag,
 				},
 				RHS: &influxql.RegexLiteral{
 					Val: re,

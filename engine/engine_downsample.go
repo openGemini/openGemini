@@ -38,9 +38,7 @@ func (e *EngineImpl) removeDeadDownSamplePolicy() {
 	}
 }
 
-func (e *EngineImpl) GetShardDownSamplePolicyInfos(meta interface {
-	UpdateShardDownSampleInfo(Ident *meta2.ShardIdentifier) error
-}) ([]*meta2.ShardDownSamplePolicyInfo, error) {
+func (e *EngineImpl) GetShardDownSamplePolicyInfos(meta MetaDownSample) ([]*meta2.ShardDownSamplePolicyInfo, error) {
 	policies := make([]*meta2.ShardDownSamplePolicyInfo, 0)
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -92,9 +90,7 @@ func (e *EngineImpl) GetDownSamplePolicy(key string) *meta2.StoreDownSamplePolic
 }
 
 func (e *EngineImpl) StartDownSampleTask(sdsp *meta2.ShardDownSamplePolicyInfo, schema []hybridqp.Catalog, log *zap.Logger,
-	meta interface {
-		UpdateShardDownSampleInfo(Ident *meta2.ShardIdentifier) error
-	}) error {
+	meta MetaDownSample) error {
 	e.mu.RLock()
 	if err := e.checkAndAddRefPTNoLock(sdsp.DbName, sdsp.PtId); err != nil {
 		e.mu.RUnlock()

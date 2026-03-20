@@ -91,6 +91,7 @@ func (s *Server) Process(conn net.Conn) {
 
 func (s *Server) process(conn net.Conn) error {
 	hm := handle.NewHandlerManager()
+	defer hm.MustClose()
 	dec := &codec.BinaryDecoder{}
 	reader := NewReader(conn)
 	buffer, release := getBuffer()

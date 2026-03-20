@@ -64,14 +64,14 @@ var messageMap = map[Errno]*Message{
 	// write error codes
 	WriteNoShardGroup:               newWarnMessage("nil shard group", ModuleWrite),
 	WriteNoShardKey:                 newWarnMessage("measurement should have shard key", ModuleWrite),
-	WritePointMustHaveAField:        newWarnMessage("parse fail, point without fields is unsupported", ModuleWrite),
-	WritePointInvalidTimeField:      newWarnMessage("parse fail, time of field key is unsupported", ModuleWrite),
-	WriteInvalidPoint:               newWarnMessage("point is invalid", ModuleWrite),
-	WritePointMustHaveAMeasurement:  newWarnMessage("parse fail, point without measurement is unsupported", ModuleWrite),
+	WritePointMustHaveAField:        newWarnMessage("unable to parse points, point without fields is unsupported", ModuleWrite),
+	WritePointInvalidTimeField:      newWarnMessage("unable to parse points, time of field key is unsupported", ModuleWrite),
+	WriteInvalidPoint:               newWarnMessage("unable to parse points, point is invalid", ModuleWrite),
+	WritePointMustHaveAMeasurement:  newWarnMessage("unable to parse points, point without measurement is unsupported", ModuleWrite),
 	WritePointShouldHaveAllShardKey: newWarnMessage("point should have all shard key", ModuleWrite),
 	WritePointMap2Shard:             newWarnMessage("can't map point to shard", ModuleWrite),
 	WriteMapMetaShardInfo:           newWarnMessage("can't map meta.ShardInfo", ModuleWrite),
-	WritePointOutOfRP:               newWarnMessage("point time is expired, compared with rp duration", ModuleWrite),
+	WritePointOutOfRP:               newWarnMessage("points beyond retention policy, compared with rp duration", ModuleWrite),
 
 	ErrUnmarshalPoints:             newWarnMessage("unmarshal points error, err: %s", ModuleWrite),
 	ErrWriteReadonly:               newWarnMessage("this node is readonly status", ModuleWrite),
@@ -107,6 +107,9 @@ var messageMap = map[Errno]*Message{
 	UsedProposeId:                  newWarnMessage("UsedProposeId, identity: %s, proposeId: %d", ModuleWrite),
 	WriteToRaftTimeoutAfterPropose: newWarnMessage("WriteToRaftTimeoutAfterPropose, identity: %s, proposeId: %d", ModuleWrite),
 	WriteDstStreamMstNotAllowed:    newWarnMessage("the stream destination measurement cannot be written. measurement name is %s", ModuleWrite),
+	ShardReadonly:                  newWarnMessage("shard is readonly status. db=%s, rp=%s, shard_id=%d", ModuleWrite),
+	MstOnBlacklist:                 newWarnMessage("measurement on blacklist. mst=%s", ModuleWrite),
+	ShelfWriteLimited:              newWarnMessage("data write limited", ModuleWrite),
 
 	// write interface error codes
 	InvalidLogDataType:              newWarnMessage("invalid log data type value", ModuleWriteInterface),
@@ -225,6 +228,8 @@ var messageMap = map[Errno]*Message{
 	ShardMovingStopped:              newFatalMessage("shard moving is disabled, shardID %d", ModuleStorageEngine),
 	AlreadyHotFile:                  newNoticeMessage("already a hot file", ModuleStorageEngine),
 	ForbidIndexWrite:                newNoticeMessage("forbid index write, indexId:%d, indexTier:%d", ModuleStorageEngine),
+	DBPTNotRaftNode:                 newNoticeMessage("dbpt is not a raftnode db:%s ptId:%d", ModuleStorageEngine),
+	CompactTimeDisorder:             newWarnMessage("time between the ordered files is out of order: %d >= %d", ModuleCompact),
 
 	// wal error codes
 	ReadWalFileFailed:         newWarnMessage("read wal file failed", ModuleWal),
@@ -247,6 +252,7 @@ var messageMap = map[Errno]*Message{
 	ShardBucketLacks:               newWarnMessage("get shard resources out of time: bucket lacks of resources", ModuleQueryEngine),
 	SeriesBucketLacks:              newWarnMessage("get series resources out of time: bucket lacks of resources", ModuleQueryEngine),
 	QueryAborted:                   newWarnMessage("query has been aborted", ModuleQueryEngine),
+	LastRowRetry:                   newWarnMessage("Loading data, please try again for lastRow query", ModuleQueryEngine),
 	FilterAllPoints:                newWarnMessage("filter all points after rewriteCondition", ModuleQueryEngine),
 	SortTransformRunningErr:        newWarnMessage("SortTransform run error", ModuleQueryEngine),
 	HashMergeTransformRunningErr:   newWarnMessage("HashMergeTransform run error", ModuleQueryEngine),
@@ -301,6 +307,15 @@ var messageMap = map[Errno]*Message{
 	SqlNodeNotFound:         newWarnMessage("sqlNode(id=%d,host=%s) not found", ModuleMeta),
 	DataNoAlive:             newWarnMessage("dataNode(id=%d,host=%s) is not alive", ModuleMeta),
 	MetaNodeNotFound:        newWarnMessage("metaNode(id=%d,host=%s) not found", ModuleMeta),
+	ResourceNotFound:        newWarnMessage("resource(name=%s) not found", ModuleMeta),
+	ResourceExists:          newWarnMessage("resource(name=%s) exists", ModuleMeta),
+	InValidResource:         newWarnMessage("invalid resource(name=%s, err=%v)", ModuleMeta),
+	TaskExists:              newWarnMessage("task(name=%s, type=%q) exists", ModuleMeta),
+	TaskNotFound:            newWarnMessage("task(name=%s, type=%q) not found", ModuleMeta),
+	MissingTaskType:         newWarnMessage("missing 'type' in properties", ModuleMeta),
+	InvalidTaskType:         newWarnMessage("invalid task type(type=%q)", ModuleMeta),
+	InvalidTaskProperties:   newWarnMessage("invalid task properties(name=%q, type=%q, err=%v)", ModuleMeta),
+	TaskLimitExceeded:       newWarnMessage("task limit exceeded (current: %d, max: %d)", ModuleMeta),
 	ShardMetaNotFound:       newWarnMessage("shard(id=%d) meta not found", ModuleMeta),
 	DataIsOlder:             newWarnMessage("current data is older than remote", ModuleMeta),
 	DatabaseIsBeingDelete:   newWarnMessage("database(%s) is being delete", ModuleMeta),
@@ -390,6 +405,7 @@ var messageMap = map[Errno]*Message{
 	ErrValueTypeFullTextIndex:   newNoticeMessage("compare value of full text index should be string", ModuleQueryEngine),
 	ErrSearchSeriesKey:          newWarnMessage("SearchSeriesKey fail: io.EOF", ModuleIndex),
 	ErrUnsupportedConditionType: newFatalMessage("unsupportted value type", ModuleIndex),
+	ErrRPNElemType:              newFatalMessage("operand type clash: column[%s] %s%s%s", ModuleIndex),
 
 	// monitoring and statistics
 	WatchFileTimeout: newWarnMessage("watch file timeout", ModuleStat),
@@ -431,7 +447,8 @@ var messageMap = map[Errno]*Message{
 	TaskQueueFull:            newNoticeMessage("task queue full", ModuleCastor),
 	ExceedRetryChance:        newNoticeMessage("exceed retry chance", ModuleCastor),
 	InvalidHaPolicy:          newNoticeMessage("HaPolicy should in (write-available-first, shared-storage, replication)", ModuleCastor),
-	ColumnsNotAligned:        newNoticeMessage("columns not aligned", ModuleCastor),
+	RequiredFieldInvalid:     newNoticeMessage("field %s invalid", ModuleCastor),
+	InvalidOtlpDBName:        newFatalMessage("invalid database for otlp", ModuleCastor),
 	UnknownErr:               newNoticeMessage("unknown error", ModuleCastor),
 
 	// promql2influxql

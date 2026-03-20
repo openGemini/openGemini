@@ -73,3 +73,20 @@ func (m *IntHashMap) Set(key int64) uint64 {
 func (m *IntHashMap) Get(id uint64) int64 {
 	return m.keys.get(id)
 }
+
+// clear resets the IntHashMap to its initial empty state while preserving capacity
+// and load factor for memory reuse. This allows efficient reuse of allocated
+// memory instead of creating new IntHashMaps repeatedly.
+//
+// Fields that are reset:
+// - hashmap
+// - keys: all key data cleared
+func (m *IntHashMap) Clear() {
+	// Call the base hashmap clear method to reset common fields
+	m.hashmap.clear()
+
+	// Clear keys data using slice assignment for batch clearing
+	for i := 0; i < len(m.keys); i++ {
+		copy(m.keys[i], zeroInt64Page)
+	}
+}

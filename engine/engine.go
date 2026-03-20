@@ -37,6 +37,7 @@ import (
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/engine/index/tsi"
+	"github.com/openGemini/openGemini/engine/lastrowcache"
 	"github.com/openGemini/openGemini/engine/shelf"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
@@ -50,6 +51,7 @@ import (
 	"github.com/openGemini/openGemini/lib/raftlog"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/resourceallocator"
+	"github.com/openGemini/openGemini/lib/scheduler"
 	stat "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/syscontrol"
 	"github.com/openGemini/openGemini/lib/tracing"
@@ -73,6 +75,23 @@ func init() {
 const MaxFileInfoSize = 1024
 
 const DefaultUploadFrequence = 500 * time.Millisecond
+
+const (
+	ModuleInvalid ModuleID = iota
+	ModuleStream
+	ModuleExport
+)
+
+type PtLoadFunc func(db string, ptID uint32)
+
+type PtOffLoadFunc func(ptID uint32)
+
+type ModuleID uint32
+
+type CallbackKey struct {
+	ModuleID ModuleID // Module identifier
+	ItemID   uint64   // Unique ID within the module
+}
 
 type EngineImpl struct {
 	mu       sync.RWMutex // read/write lock for Engine
@@ -101,7 +120,8 @@ type EngineImpl struct {
 	fileInfos     chan []immutable.FileInfoExtend
 	backup        *Backup
 
-	onPTOffload map[uint64]func(ptID uint32)
+	onPTOffload map[CallbackKey]PtOffLoadFunc
+	onPTLoaded  map[CallbackKey]PtLoadFunc
 
 	clearShardMapLock    sync.RWMutex
 	clearRepColdShardMap map[string]struct{}
@@ -123,7 +143,8 @@ func NewEngine(dataPath, walPath string, options EngineOptions, ctx *meta.LoadCt
 		droppingMst:          make(map[string]string),
 		migratingDbPT:        make(map[string]map[uint32]struct{}),
 		fileInfos:            nil,
-		onPTOffload:          make(map[uint64]func(ptID uint32)),
+		onPTLoaded:           make(map[CallbackKey]PtLoadFunc),
+		onPTOffload:          make(map[CallbackKey]PtOffLoadFunc),
 		clearRepColdShardMap: make(map[string]struct{}),
 		clearRepColdIndexMap: make(map[string]struct{}),
 	}
@@ -133,20 +154,19 @@ func NewEngine(dataPath, walPath string, options EngineOptions, ctx *meta.LoadCt
 	replayWalLimit = limiter.NewFixed(options.OpenShardLimit)
 
 	SetFullCompColdDuration(options.FullCompactColdDuration)
+	SetCompactMemUsageLimit(options.CompactMemUsageLimit)
 	fileops.EnableMmapRead(options.EnableMmapRead)
 	fileops.SetPageSize(options.ReadPageSize)
 	fileops.SetMetaPageList(options.ReadMetaPageSize)
 	fileops.EnableReadMetaCache(options.ReadMetaCacheLimit)
 	fileops.EnableReadDataCache(options.ReadDataCacheLimit)
+	fileops.SetBackgroundReadLimiter(options.BackgroundReadThroughput)
 	immutable.SetMaxCompactor(options.MaxConcurrentCompactions)
 	immutable.SetMaxFullCompactor(options.MaxFullCompactions)
 	immutable.SetCompactLimit(options.CompactThroughput, options.CompactThroughputBurst)
 	immutable.SetSnapshotLimit(options.SnapshotThroughput, options.SnapshotThroughputBurst)
-	fileops.SetBackgroundReadLimiter(options.BackgroundReadThroughput)
 	immutable.SetMergeFlag4TsStore(int32(options.CompactionMethod))
 	immutable.SetSnapshotTblNum(options.SnapshotTblNum)
-	immutable.SetCompactionEnabled(options.CsCompactionEnabled)
-	immutable.SetDetachedFlushEnabled(options.CsDetachedFlushEnabled)
 	immutable.SetFragmentsNumPerFlush(options.FragmentsNumPerFlush)
 	immutable.SetMaxRowsPerSegment4TsStore(options.MaxRowsPerSegment)
 	obs.SetPrefixDataPath(dataPath)
@@ -160,13 +180,13 @@ func (e *EngineImpl) GetLockFile() string {
 }
 
 func (e *EngineImpl) Open(durationInfos map[uint64]*meta2.ShardDurationInfo, dbBriefInfos map[string]*meta2.DatabaseBriefInfo, m meta.MetaClient) error {
-	e.log.Info("start open engine...")
+	e.log.GetZapLogger().Info("start open engine...")
 	start := time.Now()
 	defer func(tm time.Time) {
 		d := time.Since(tm)
 		atomic.AddInt64(&stat.EngineStat.OpenDurations, d.Nanoseconds())
 		stat.UpdateEngineStatS()
-		log.Info("open engine done", zap.Duration("time used", d))
+		log.GetZapLogger().Info("open engine done", zap.Duration("time used", d))
 	}(start)
 
 	lockFile := fileops.FileLockOption(e.GetLockFile())
@@ -297,7 +317,7 @@ uploadChannel:
 }
 
 func (e *EngineImpl) loadShards(durationInfos map[uint64]*meta2.ShardDurationInfo, dbBriefInfos map[string]*meta2.DatabaseBriefInfo, loadStat int, client meta.MetaClient) error {
-	e.log.Info("start loadShards...", zap.Int("loadStat", loadStat))
+	e.log.GetZapLogger().Info("start loadShards...", zap.Int("loadStat", loadStat))
 	dataPath := path.Join(e.dataPath, config.DataDirectory)
 	_, err := fileops.Stat(dataPath)
 	if err != nil {
@@ -321,7 +341,7 @@ func (e *EngineImpl) loadShards(durationInfos map[uint64]*meta2.ShardDurationInf
 			enableTagArray := false
 			if len(dbBriefInfos) != 0 {
 				if _, ok := dbBriefInfos[db]; !ok {
-					e.log.Error("fail to get dbBriefInfos", zap.String("db", db), zap.Uint32("pt", pt),
+					e.log.GetZapLogger().Error("fail to get dbBriefInfos", zap.String("db", db), zap.Uint32("pt", pt),
 						zap.String("rp", rp))
 					errChan <- errno.NewError(errno.DatabaseNotFound)
 					return
@@ -334,7 +354,7 @@ func (e *EngineImpl) loadShards(durationInfos map[uint64]*meta2.ShardDurationInf
 			e.mu.RUnlock()
 			err := dbPTInfo.loadShards(0, rp, durationInfos, loadStat, client, engineType)
 			if err != nil {
-				e.log.Error("fail to load db rp", zap.String("db", db), zap.Uint32("pt", pt),
+				e.log.GetZapLogger().Error("fail to load db rp", zap.String("db", db), zap.Uint32("pt", pt),
 					zap.String("rp", rp), zap.Error(err))
 			}
 			errChan <- err
@@ -357,12 +377,12 @@ func (e *EngineImpl) Close() error {
 	e.closed.Close()
 
 	start := time.Now()
-	log.Info("start close engine...")
+	log.GetZapLogger().Info("start close engine...")
 	defer func(tm time.Time) {
 		d := time.Since(tm)
 		atomic.AddInt64(&stat.EngineStat.CloseDurations, d.Nanoseconds())
 		stat.UpdateEngineStatS()
-		log.Info("close engine done", zap.Duration("time used", d))
+		log.GetZapLogger().Info("close engine done", zap.Duration("time used", d))
 	}(start)
 
 	wg := sync.WaitGroup{}
@@ -377,7 +397,7 @@ func (e *EngineImpl) Close() error {
 
 				if err := pt.closeDBPt(); err != nil {
 					atomic.AddInt64(&stat.EngineStat.CloseErrors, 1)
-					log.Error("failed to close db pt", zap.String("path", pt.path))
+					log.GetZapLogger().Error("failed to close db pt", zap.String("path", pt.path))
 				}
 			}(pt)
 		}
@@ -425,7 +445,7 @@ func (e *EngineImpl) getShardStatus(param map[string]string) (map[string]string,
 			shardId = uint64(n)
 		}
 	}
-	e.log.Info("query shard status", zap.String("db", dbName), zap.String("rp", rpName), zap.Uint32("pt", ptId), zap.Uint64("shard", shardId))
+	e.log.GetZapLogger().Info("query shard status", zap.String("db", dbName), zap.String("rp", rpName), zap.Uint32("pt", ptId), zap.Uint64("shard", shardId))
 
 	resp := make(map[string][]ShardStatus)
 
@@ -475,7 +495,7 @@ func (e *EngineImpl) ForceFlush() {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	start := time.Now()
-	log.Info("start force flush shard...")
+	log.GetZapLogger().Info("start force flush shard...")
 
 	flushDBPT := func(db string, ptID uint32) error {
 		err := e.checkAndAddRefPTNoLock(db, ptID)
@@ -502,7 +522,7 @@ func (e *EngineImpl) ForceFlush() {
 	}
 
 	d := time.Since(start)
-	log.Info("shard flush done", zap.Duration("time used(s)", d))
+	log.GetZapLogger().Info("shard flush done", zap.Duration("time used(s)", d))
 }
 
 func (e *EngineImpl) UpdateIndexDurationInfo(info *meta2.IndexDurationInfo, nilIndexMap *map[uint64]*meta2.IndexDurationInfo) error {
@@ -520,13 +540,13 @@ func (e *EngineImpl) UpdateIndexDurationInfo(info *meta2.IndexDurationInfo, nilI
 	index := dbPT.indexBuilder[info.Ident.IndexID]
 	if index == nil {
 		(*nilIndexMap)[info.Ident.IndexID] = info
-		log.Info("nil index duration info", zap.Uint64("indexId", info.Ident.IndexID),
+		log.GetZapLogger().Info("nil index duration info", zap.Uint64("indexId", info.Ident.IndexID),
 			zap.Uint64("index group id", info.Ident.IndexGroupID),
 			zap.Duration("duration", info.DurationInfo.Duration),
 			zap.Duration("mergeDuration", info.DurationInfo.MergeDuration))
 		return nil
 	}
-	log.Info("duration info", zap.Uint64("indexId", info.Ident.IndexID),
+	log.GetZapLogger().Info("duration info", zap.Uint64("indexId", info.Ident.IndexID),
 		zap.Uint64("index group id", info.Ident.IndexGroupID),
 		zap.Duration("duration", info.DurationInfo.Duration), zap.Duration("merge Duration", info.DurationInfo.MergeDuration))
 	index.Ident().Index.IndexGroupID = info.Ident.IndexGroupID
@@ -550,12 +570,12 @@ func (e *EngineImpl) UpdateShardDurationInfo(info *meta2.ShardDurationInfo, nilS
 	shard := dbPT.shards[info.Ident.ShardID]
 	if shard == nil || shard.GetIndexBuilder() == nil {
 		(*nilShardMap)[info.Ident.ShardID] = info
-		log.Info("nil shard duration info", zap.Uint64("shardId", info.Ident.ShardID),
+		log.GetZapLogger().Info("nil shard duration info", zap.Uint64("shardId", info.Ident.ShardID),
 			zap.Uint64("shard group id", info.Ident.ShardGroupID),
 			zap.Duration("duration", info.DurationInfo.Duration), zap.Duration("merge Duration", info.DurationInfo.MergeDuration))
 		return nil
 	}
-	log.Info("duration info", zap.Uint64("shardId", info.Ident.ShardID),
+	log.GetZapLogger().Info("duration info", zap.Uint64("shardId", info.Ident.ShardID),
 		zap.Uint64("shard group id", info.Ident.ShardGroupID),
 		zap.Duration("duration", info.DurationInfo.Duration), zap.Duration("merge duration", info.DurationInfo.MergeDuration))
 	shard.GetIdent().ShardGroupID = info.Ident.ShardGroupID
@@ -701,14 +721,14 @@ func (e *EngineImpl) ExpiredIndexesForMst(db, rp string, mst *meta2.MeasurementT
 }
 
 func (e *EngineImpl) DeleteMstInShard(db string, ptId uint32, shardID uint64, mst string) error {
-	e.log.Info("start delete mst...", zap.String("db", db), zap.Uint64("shardID", shardID), zap.String("mst", mst))
+	e.log.GetZapLogger().Info("start delete mst...", zap.String("db", db), zap.Uint64("shardID", shardID), zap.String("mst", mst))
 	start := time.Now()
 	atomic.AddInt64(&stat.EngineStat.DelShardCount, 1)
 	defer func(tm time.Time) {
 		d := time.Since(tm)
 		atomic.AddInt64(&stat.EngineStat.DelShardDuration, d.Nanoseconds())
 		stat.UpdateEngineStatS()
-		e.log.Info("delete mst done", zap.String("db", db), zap.Uint64("shardID", shardID), zap.String("mst", mst),
+		e.log.GetZapLogger().Info("delete mst done", zap.String("db", db), zap.Uint64("shardID", shardID), zap.String("mst", mst),
 			zap.Duration("time used", d))
 	}(start)
 
@@ -745,14 +765,14 @@ func (e *EngineImpl) DeleteMstInShard(db string, ptId uint32, shardID uint64, ms
 
 // todo:need confirm
 func (e *EngineImpl) DeleteShard(db string, ptId uint32, shardID uint64) error {
-	e.log.Info("start delete shard...", zap.String("db", db), zap.Uint64("shardID", shardID))
+	e.log.GetZapLogger().Info("start delete shard...", zap.String("db", db), zap.Uint64("shardID", shardID))
 	start := time.Now()
 	atomic.AddInt64(&stat.EngineStat.DelShardCount, 1)
 	defer func(tm time.Time) {
 		d := time.Since(tm)
 		atomic.AddInt64(&stat.EngineStat.DelShardDuration, d.Nanoseconds())
 		stat.UpdateEngineStatS()
-		e.log.Info("delete shard done", zap.String("db", db), zap.Uint64("shardID", shardID),
+		e.log.GetZapLogger().Info("delete shard done", zap.String("db", db), zap.Uint64("shardID", shardID),
 			zap.Duration("time used", d))
 	}(start)
 
@@ -821,7 +841,7 @@ func (e *EngineImpl) DeleteShard(db string, ptId uint32, shardID uint64) error {
 }
 
 func (e *EngineImpl) DeleteMstInIndex(db string, ptId uint32, indexID uint64, msts []string, onlyUseDiskThreshold uint64) error {
-	e.log.Info("start delete msts in index...", zap.String("db", db), zap.Uint32("pt", ptId),
+	e.log.GetZapLogger().Info("start delete msts in index...", zap.String("db", db), zap.Uint32("pt", ptId),
 		zap.Uint64("indexID", indexID), zap.Strings("msts", msts))
 	start := time.Now()
 	atomic.AddInt64(&stat.EngineStat.DelIndexCount, 1)
@@ -829,7 +849,7 @@ func (e *EngineImpl) DeleteMstInIndex(db string, ptId uint32, indexID uint64, ms
 		d := time.Since(tm)
 		atomic.AddInt64(&stat.EngineStat.DelIndexDuration, d.Nanoseconds())
 		stat.UpdateEngineStatS()
-		e.log.Info("delete msts in index done", zap.String("db", db), zap.Uint64("indexID", indexID),
+		e.log.GetZapLogger().Info("delete msts in index done", zap.String("db", db), zap.Uint64("indexID", indexID),
 			zap.Strings("msts", msts), zap.Duration("time used", d))
 	}(start)
 
@@ -861,14 +881,14 @@ func (e *EngineImpl) DeleteMstInIndex(db string, ptId uint32, indexID uint64, ms
 }
 
 func (e *EngineImpl) DeleteIndex(db string, ptId uint32, indexID uint64) error {
-	e.log.Info("start delete index...", zap.String("db", db), zap.Uint32("pt", ptId), zap.Uint64("indexID", indexID))
+	e.log.GetZapLogger().Info("start delete index...", zap.String("db", db), zap.Uint32("pt", ptId), zap.Uint64("indexID", indexID))
 	start := time.Now()
 	atomic.AddInt64(&stat.EngineStat.DelIndexCount, 1)
 	defer func(tm time.Time) {
 		d := time.Since(tm)
 		atomic.AddInt64(&stat.EngineStat.DelIndexDuration, d.Nanoseconds())
 		stat.UpdateEngineStatS()
-		e.log.Info("delete index done", zap.String("db", db), zap.Uint64("indexID", indexID),
+		e.log.GetZapLogger().Info("delete index done", zap.String("db", db), zap.Uint64("indexID", indexID),
 			zap.Duration("time used", d))
 	}(start)
 
@@ -941,7 +961,7 @@ func (e *EngineImpl) ExpiredCacheIndexes() []*meta2.IndexIdentifier {
 }
 
 func (e *EngineImpl) ClearIndexCache(db string, ptId uint32, indexID uint64) error {
-	e.log.Info("start clear index cache...", zap.String("db", db), zap.Uint32("pt", ptId), zap.Uint64("indexID", indexID))
+	e.log.GetZapLogger().Info("start clear index cache...", zap.String("db", db), zap.Uint32("pt", ptId), zap.Uint64("indexID", indexID))
 
 	e.mu.RLock()
 	if err := e.checkAndAddRefPTNoLock(db, ptId); err != nil {
@@ -966,7 +986,7 @@ func (e *EngineImpl) ClearIndexCache(db string, ptId uint32, indexID uint64) err
 		return err
 	}
 
-	e.log.Info("clear index cache success", zap.String("db", db), zap.Uint32("pt", ptId), zap.Uint64("indexID", indexID))
+	e.log.GetZapLogger().Info("clear index cache success", zap.String("db", db), zap.Uint32("pt", ptId), zap.Uint64("indexID", indexID))
 	return nil
 }
 
@@ -1034,7 +1054,7 @@ func (e *EngineImpl) getLatestShard(shards map[uint64]Shard) uint64 {
 }
 
 func (e *EngineImpl) ChangeShardTierToWarm(db string, ptId uint32, shardID uint64) error {
-	log.Info("change hot shard to warm", zap.String("db", db), zap.Uint64("shardID", shardID))
+	log.GetZapLogger().Info("change hot shard to warm", zap.String("db", db), zap.Uint64("shardID", shardID))
 	e.mu.RLock()
 	if err := e.checkAndAddRefPTNoLock(db, ptId); err != nil {
 		e.mu.RUnlock()
@@ -1078,12 +1098,12 @@ func (e *EngineImpl) openShardLazy(sh Shard) error {
 	}
 
 	start := time.Now()
-	e.log.Info("lazy shard open start", zap.String("path", sh.GetDataPath()), zap.Uint32("pt", sh.GetIdent().OwnerPt))
+	e.log.GetZapLogger().Info("lazy shard open start", zap.String("path", sh.GetDataPath()), zap.Uint32("pt", sh.GetIdent().OwnerPt))
 	if err := sh.OpenAndEnable(e.metaClient); err != nil {
-		e.log.Error("lazy shard open error", zap.Error(err), zap.Duration("duration", time.Since(start)))
+		e.log.GetZapLogger().Error("lazy shard open error", zap.Error(err), zap.Duration("duration", time.Since(start)))
 		return err
 	}
-	e.log.Info("lazy shard open end", zap.Duration("duration", time.Since(start)))
+	e.log.GetZapLogger().Info("lazy shard open end", zap.Duration("duration", time.Since(start)))
 	return nil
 }
 
@@ -1145,10 +1165,19 @@ func (e *EngineImpl) checkAndGetDBPTInfo(db string, ptId uint32) (*DBPTInfo, err
 	if err := e.checkAndAddRefPTNoLock(db, ptId); err != nil {
 		return nil, err
 	}
-	defer e.unrefDBPT(db, ptId)
 
 	dbPTInfo := e.DBPartitions[db][ptId]
 	return dbPTInfo, nil
+}
+
+func (e *EngineImpl) executeInDBPT(db string, ptId uint32, fn func(pt *DBPTInfo) error) error {
+	pt, err := e.checkAndGetDBPTInfo(db, ptId)
+	if err != nil {
+		return err
+	}
+	defer e.unrefDBPT(db, ptId)
+
+	return fn(pt)
 }
 
 func (e *EngineImpl) WriteToRaft(db, rp string, ptId uint32, tail []byte) error {
@@ -1164,6 +1193,7 @@ func (e *EngineImpl) WriteToRaft(db, rp string, ptId uint32, tail []byte) error 
 	if err != nil {
 		return err
 	}
+	e.unrefDBPT(db, ptId)
 	// 1.build dataWrapper
 	newTail := make([]byte, 0, len(tail))
 	newTail = append(newTail, tail...)
@@ -1216,11 +1246,21 @@ func (e *EngineImpl) WriteRows(db, rp string, ptId uint32, shardID uint64, rows 
 		}
 	}
 
-	return sh.WriteRows(rows, binaryRows)
+	err = sh.WriteRows(rows, binaryRows)
+	if err != nil {
+		return err
+	}
+
+	// update last row cache
+	if lastrowcache.IsLastRowCacheEnabled() {
+		lastrowcache.SetRows(db, rp, &rows)
+	}
+
+	return nil
 }
 
 func (e *EngineImpl) updateColumnStoreMstInfoByRows(db, rp string, rows []influx.Row) error {
-	ident := colstore.NewMeasurementIdent(db, rp)
+	ident := util.NewMeasurementIdent(db, rp)
 	for i := range rows {
 		mstName := rows[i].Name
 		if mstName == ident.Name {
@@ -1237,7 +1277,7 @@ func (e *EngineImpl) updateColumnStoreMstInfoByRows(db, rp string, rows []influx
 	return nil
 }
 
-func (e *EngineImpl) updateColumnStoreMstInfo(ident colstore.MeasurementIdent) error {
+func (e *EngineImpl) updateColumnStoreMstInfo(ident util.MeasurementIdent) error {
 	mm := colstore.MstManagerIns()
 	if !mm.Exists(ident) {
 		ident.SetSafeName(ident.Name)
@@ -1257,7 +1297,7 @@ func (e *EngineImpl) WriteRec(db, mst string, ptId uint32, shardID uint64, rec *
 		return err
 	}
 
-	ident := colstore.NewMeasurementIdent(db, sh.GetIdent().Policy)
+	ident := util.NewMeasurementIdent(db, sh.GetIdent().Policy)
 	ident.SetName(mst)
 	err = e.updateColumnStoreMstInfo(ident)
 	if err != nil {
@@ -1283,7 +1323,7 @@ func (e *EngineImpl) CreateShard(db, rp string, ptId uint32, shardID uint64, tim
 	_, ok := dbPTInfo.shards[shardID]
 	if !ok {
 		if dbPTInfo.HasCoverShard(timeRangeInfo, rp, shardID) {
-			e.log.Error("create a merged shard", zap.String("db", db), zap.String("rp", rp), zap.Uint32("ptId", ptId),
+			e.log.GetZapLogger().Error("create a merged shard", zap.String("db", db), zap.String("rp", rp), zap.Uint32("ptId", ptId),
 				zap.Uint64("shardId", shardID), zap.Time("startTime", timeRangeInfo.TimeRange.StartTime), zap.Time("endTime", timeRangeInfo.TimeRange.EndTime))
 			return fmt.Errorf("create a merged shard %d", shardID)
 		}
@@ -1299,6 +1339,8 @@ func (e *EngineImpl) CreateShard(db, rp string, ptId uint32, shardID uint64, tim
 		if !ok || newestShardID < shardID {
 			dbPTInfo.newestRpShard[rp] = shardID
 		}
+		// for adaptive sharding, when a new shard group is created, just clear
+		stat.ClearPtWriteStatistics(db, rp, ptId)
 	}
 	return nil
 }
@@ -1363,7 +1405,7 @@ func (e *EngineImpl) CreateDBPT(db string, pt uint32, enableTagArray bool) {
 	lockPath := path.Join(ptPath, "LOCK")
 
 	options, _ := e.metaClient.DatabaseOption(db)
-	if options != nil && options.Enabled {
+	if options != nil {
 		ptPath = fileops.GetRemoteDataPath(options, ptPath)
 	}
 	dbPTInfo := NewDBPTInfo(db, pt, ptPath, walPath, e.loadCtx, e.fileInfos, options)
@@ -1389,7 +1431,7 @@ func (e *EngineImpl) startDrop(name string, droppingMap map[string]string) error
 		e.dropMu.Lock()
 		if _, ok := droppingMap[name]; ok {
 			e.dropMu.Unlock()
-			log.Warn("concurrency delete", zap.String("del", name))
+			log.GetZapLogger().Warn("concurrency delete", zap.String("del", name))
 			time.Sleep(5 * time.Second)
 			continue
 		}
@@ -1400,10 +1442,39 @@ func (e *EngineImpl) startDrop(name string, droppingMap map[string]string) error
 	return fmt.Errorf("concurrency delete database timeout")
 }
 
+func (e *EngineImpl) startDropRP(name string, dbPt *DBPTInfo) error {
+	for st := time.Now(); time.Since(st) < 5*time.Minute; {
+		dbPt.mu.Lock()
+		if dbPt.doingShardMoveN > 0 {
+			dbPt.mu.Unlock()
+			return errno.NewError(errno.PtIsDoingSomeShardMove)
+		}
+		e.dropMu.Lock()
+		if _, ok := e.droppingRP[name]; ok {
+			e.dropMu.Unlock()
+			dbPt.mu.Unlock()
+			log.Warn("concurrency delete rp", zap.String("del", name))
+			time.Sleep(5 * time.Second)
+			continue
+		}
+		e.droppingRP[name] = ""
+		e.dropMu.Unlock()
+		dbPt.mu.Unlock()
+		return nil
+	}
+	return fmt.Errorf("concurrency delete rp timeout")
+}
+
 func (e *EngineImpl) endDrop(name string, droppingMap map[string]string) {
 	e.dropMu.Lock()
 	delete(droppingMap, name)
 	e.dropMu.Unlock()
+}
+
+func (e *EngineImpl) hasDrop() bool {
+	e.dropMu.RLock()
+	defer e.dropMu.RUnlock()
+	return len(e.droppingRP) > 0
 }
 
 func (e *EngineImpl) getPartition(db string, ptID uint32, isRef bool) (*DBPTInfo, error) {
@@ -1476,7 +1547,7 @@ func (e *EngineImpl) deleteShardsAndIndexes(dbPTInfo *DBPTInfo) error {
 	deleteRps := make([]string, 0, len(dbPTInfo.delIndexBuilderMap))
 	for rp, iBuild := range dbPTInfo.delIndexBuilderMap {
 		if err := iBuild.Close(); err != nil {
-			e.log.Error("drop series failed", zap.Uint32("ptId", dbPTInfo.id), zap.String("rp", rp), zap.Error(err))
+			e.log.GetZapLogger().Error("drop series failed", zap.Uint32("ptId", dbPTInfo.id), zap.String("rp", rp), zap.Error(err))
 			errs = append(errs, err)
 		} else {
 			deleteRps = append(deleteRps, rp)
@@ -1686,18 +1757,19 @@ func (e *EngineImpl) handleTagKeys(key []byte, keysMap map[string]map[string]str
 	}
 }
 
-func (e *EngineImpl) DbPTRef(db string, ptId uint32) error {
+func (e *EngineImpl) DbPTRef(db string, ptId uint32, read bool) error {
 	var err error
 	e.mu.RLock()
-	err = e.checkAndAddRefPTNoLock(db, ptId)
+	err = e.checkAndAddRWRefNoLock(db, ptId, read)
 	e.mu.RUnlock()
 	return err
 }
 
-func (e *EngineImpl) DbPTUnref(db string, ptId uint32) {
+func (e *EngineImpl) DbPTUnref(db string, ptId uint32, read bool) {
 	e.mu.RLock()
-	e.unrefDBPTNoLock(db, ptId)
-	e.mu.RUnlock()
+	// unRWRefNoLock may panic, make sure to release the lock
+	defer e.mu.RUnlock()
+	e.unRWRefNoLock(db, ptId, read)
 }
 
 func (e *EngineImpl) GetShard(db string, ptId uint32, shardID uint64) (Shard, error) {
@@ -1810,7 +1882,7 @@ func (e *EngineImpl) CreateLogicalPlanCrossShard(ctx context.Context, db string,
 	return executor.NewLogicalDummyShard(info), nil
 }
 
-func (e *EngineImpl) ScanWithSparseIndex(ctx context.Context, db string, ptId uint32, shardIDs []uint64, schema *executor.QuerySchema) (executor.ShardsFragments, error) {
+func (e *EngineImpl) ScanWithSparseIndex(ctx context.Context, db string, ptId uint32, shardIDs []uint64, schema hybridqp.Catalog) (executor.ShardsFragments, error) {
 	shardFrags := executor.NewShardsFragments()
 	for _, shardId := range shardIDs {
 		s, err := e.GetShard(db, ptId, shardId)
@@ -1845,7 +1917,7 @@ func (e *EngineImpl) GetIndexInfo(db string, ptId uint32, shardID uint64, schema
 	return s.GetIndexInfo(schema)
 }
 
-func (e *EngineImpl) RowCount(db string, ptId uint32, shardIDs []uint64, schema *executor.QuerySchema) (int64, error) {
+func (e *EngineImpl) RowCount(db string, ptId uint32, shardIDs []uint64, schema hybridqp.Catalog, isOnlyPKFilter bool) (int64, error) {
 	var rowCount int64
 	for _, shardId := range shardIDs {
 		s, err := e.GetShard(db, ptId, shardId)
@@ -1853,16 +1925,52 @@ func (e *EngineImpl) RowCount(db string, ptId uint32, shardIDs []uint64, schema 
 			return 0, err
 		}
 		if s == nil {
-			e.log.Warn(fmt.Sprintf("RowCount shard is null. db: %s, ptId: %d, shardId: %d", db, ptId, shardId))
+			e.log.Warn("RowCount shard is nil", zap.String("db", db), zap.Uint32("ptID", ptId), zap.Uint64("shardID", shardId))
 			continue
 		}
-		shardRowCount, err := s.RowCount(schema)
-		if err != nil {
-			return 0, err
+		var shardCnt int64
+		if isOnlyPKFilter {
+			shardCnt, err = s.GetRowCountClusterIndex(schema)
+			if err != nil {
+				return 0, err
+			}
+		} else {
+			shardCnt, err = s.RowCount(schema)
+			if err != nil {
+				return 0, err
+			}
 		}
-		rowCount += shardRowCount
+		rowCount += shardCnt
 	}
 	return rowCount, nil
+}
+
+func (e *EngineImpl) GetPreAgg(db string, ptId uint32, shardIDs []uint64, schema hybridqp.Catalog, queryAggExprs []string) (*record.Record, error) {
+	var recs []*record.Record
+
+	for _, shardId := range shardIDs {
+		s, err := e.GetShard(db, ptId, shardId)
+		if err != nil {
+			return nil, err
+		}
+		if s == nil {
+			e.log.Warn("Agg shard is null.", zap.String("db", db), zap.Uint32("ptId", ptId), zap.Uint64("shardId", shardId))
+			continue
+		}
+
+		rec, err := s.GetPreAgg(schema, queryAggExprs)
+		if err != nil {
+			return nil, err
+		}
+		if rec == nil {
+			continue
+		}
+
+		recs = append(recs, rec)
+	}
+	mergeRec := record.MergeRecords(recs)
+
+	return mergeRec, nil
 }
 
 func (e *EngineImpl) LogicalPlanCost(db string, ptId uint32, sources influxql.Sources, opt query.ProcessorOptions) (hybridqp.LogicalPlanCost, error) {
@@ -1885,6 +1993,33 @@ func (e *EngineImpl) checkAndAddRefPTSNoLock(database string, ptIDs []uint32) ([
 		e.unrefDBPTSNoLock(database, delRefPtId)
 	}
 	return delRefPtId, err
+}
+
+func (e *EngineImpl) checkAndAddRWRefNoLock(database string, ptID uint32, read bool) error {
+	dbPT, ok := e.DBPartitions[database]
+	if !ok {
+		return errno.NewError(errno.PtNotFound)
+	}
+	if _, ok = dbPT[ptID]; !ok {
+		return errno.NewError(errno.PtNotFound)
+	}
+	if ok = dbPT[ptID].rwRef(read); ok {
+		return nil
+	}
+	return errno.NewError(errno.DBPTClosed)
+}
+
+func (e *EngineImpl) unRWRefNoLock(database string, ptID uint32, read bool) {
+	dbPT, ok := e.DBPartitions[database]
+	if !ok {
+		return
+	}
+	if _, ok = dbPT[ptID]; !ok {
+		log.GetZapLogger().Error("dbpt not found", zap.String("db", database), zap.Uint32("pt", ptID))
+		// if dbpt not existed, direct return may affect the correctness of the query results
+		panic(fmt.Sprintf("dbpt %s:%d not found", database, ptID))
+	}
+	dbPT[ptID].unRWRef(read)
 }
 
 func (e *EngineImpl) checkAndAddRefPTNoLock(database string, ptID uint32) error {
@@ -1947,7 +2082,7 @@ func (e *EngineImpl) unrefDBPTNoLock(database string, ptID uint32) {
 	}
 	_, ok := dbPT[ptID]
 	if !ok {
-		log.Error("pt not found", zap.String("database", database), zap.Uint32("pt", ptID))
+		log.GetZapLogger().Error("pt not found", zap.String("database", database), zap.Uint32("pt", ptID))
 		panic("pt not found")
 	}
 	dbPT[ptID].unref()
@@ -2030,11 +2165,11 @@ func GetCtx(querySchema *executor.QuerySchema) (*idKeyCursorContext, error) {
 }
 
 func (e *EngineImpl) HierarchicalStorage(db string, ptId uint32, shardID uint64) bool {
-	e.log.Info("[hierarchical storage]", zap.String("db", db), zap.Uint32("pt", ptId), zap.Uint64("shard", shardID))
+	e.log.GetZapLogger().Info("[hierarchical storage]", zap.String("db", db), zap.Uint32("pt", ptId), zap.Uint64("shard", shardID))
 	e.mu.RLock()
 	if err := e.checkAndAddRefPTNoLock(db, ptId); err != nil {
 		e.mu.RUnlock()
-		e.log.Error("[hierarchical storage] add pt ref err", zap.String("db", db), zap.Uint32("pt", ptId), zap.Error(err))
+		e.log.GetZapLogger().Error("[hierarchical storage] add pt ref err", zap.String("db", db), zap.Uint32("pt", ptId), zap.Error(err))
 		return false
 	}
 
@@ -2044,7 +2179,7 @@ func (e *EngineImpl) HierarchicalStorage(db string, ptId uint32, shardID uint64)
 	dbPTInfo.mu.Lock()
 	if dbPTInfo.doingOff {
 		dbPTInfo.mu.Unlock()
-		e.log.Error("[hierarchical storage] pt is doingMigrate err", zap.String("db", db), zap.Uint32("pt", ptId))
+		e.log.GetZapLogger().Error("[hierarchical storage] pt is doingMigrate err", zap.String("db", db), zap.Uint32("pt", ptId))
 		return false
 	} else {
 		dbPTInfo.doingShardMoveNInc()
@@ -2053,43 +2188,55 @@ func (e *EngineImpl) HierarchicalStorage(db string, ptId uint32, shardID uint64)
 	sh := dbPTInfo.ShardNoLock(shardID)
 	dbPTInfo.mu.Unlock()
 	if sh == nil {
-		e.log.Error("shard not found", zap.Error(errno.NewError(errno.ShardNotFound, shardID)))
+		e.log.GetZapLogger().Error("shard not found", zap.Error(errno.NewError(errno.ShardNotFound, shardID)))
 		return false
 	}
 
 	if err := sh.OpenAndEnable(e.metaClient); err != nil {
-		e.log.Error("[hierarchical storage] shard open err", zap.String("db", db),
+		e.log.GetZapLogger().Error("[hierarchical storage] shard open err", zap.String("db", db),
 			zap.Uint32("pt", ptId), zap.Uint64("shard", shardID), zap.Error(err))
+		return false
+	}
+
+	// check whether shard can move or not firstly, then set shard to readonly
+	if !sh.CanDoShardMove() {
+		e.log.Info("shard have not finished full compact yet", zap.Uint64("shard id", shardID))
 		return false
 	}
 
 	if !syscontrol.IsWriteColdShardEnabled() {
 		if err := sh.UpdateShardReadOnly(e.metaClient); err != nil {
-			e.log.Error("[hierarchical storage] update shard read only fail", zap.String("db", db),
+			e.log.GetZapLogger().Error("[hierarchical storage] update shard read only fail", zap.String("db", db),
 				zap.Uint32("pt", ptId), zap.Uint64("shard", shardID), zap.Error(err))
 			return false
 		}
 	}
 
 	if !sh.CanDoShardMove() {
-		e.log.Info("shard have not finished full compact yet ", zap.Uint64("shard id", shardID))
+		e.log.GetZapLogger().Info("shard have not finished full compact yet ", zap.Uint64("shard id", shardID))
 		return false
 	}
 
+	// before unregister cold shard, we need to check related resources has been released
+	if !sh.FreeMemTableSequencer() {
+		e.log.GetZapLogger().Warn("[hierarchical storage] free memTable Sequencer failed, will lead to memory leakage",
+			zap.String("db", db), zap.Uint32("pt", ptId), zap.Uint64("shard", shardID))
+		return false
+	}
 	// unregister cold shard
 	sh.UnregisterShard()
 	if err := sh.ExecShardMove(); err != nil {
-		e.log.Error("[hierarchical storage] exec shard move fail", zap.String("db", db),
+		e.log.GetZapLogger().Error("[hierarchical storage] exec shard move fail", zap.String("db", db),
 			zap.Uint32("pt", ptId), zap.Uint64("shard", shardID), zap.Error(err))
 		return false
 	}
 
-	e.log.Info("[hierarchical storage] shard move success", zap.String("db", db),
+	e.log.GetZapLogger().Info("[hierarchical storage] shard move success", zap.String("db", db),
 		zap.Uint32("pt", ptId), zap.Uint64("shard", shardID))
 	return true
 }
 
-func (e *EngineImpl) GetDBPtIds() map[string][]uint32 {
+func (e *EngineImpl) GetAllDBPtIds() map[string][]uint32 {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
@@ -2153,11 +2300,11 @@ func genKey(database string, rp string, ptId uint32, shardId uint64) string {
 }
 
 func (e *EngineImpl) IndexHierarchicalStorage(db string, ptId uint32, indexID uint64) bool {
-	e.log.Info("[hierarchical index storage]", zap.String("db", db), zap.Uint32("pt", ptId), zap.Uint64("index", indexID))
+	e.log.GetZapLogger().Info("[hierarchical index storage]", zap.String("db", db), zap.Uint32("pt", ptId), zap.Uint64("index", indexID))
 	e.mu.RLock()
 	if err := e.checkAndAddRefPTNoLock(db, ptId); err != nil {
 		e.mu.RUnlock()
-		e.log.Error("[hierarchical index storage] add pt ref err", zap.String("db", db), zap.Uint32("pt", ptId), zap.Error(err))
+		e.log.GetZapLogger().Error("[hierarchical index storage] add pt ref err", zap.String("db", db), zap.Uint32("pt", ptId), zap.Error(err))
 		return false
 	}
 	dbPTInfo := e.DBPartitions[db][ptId]
@@ -2166,7 +2313,7 @@ func (e *EngineImpl) IndexHierarchicalStorage(db string, ptId uint32, indexID ui
 	dbPTInfo.mu.Lock()
 	if dbPTInfo.doingOff {
 		dbPTInfo.mu.Unlock()
-		e.log.Error("[hierarchical index storage] pt is doingMigrate err", zap.String("db", db), zap.Uint32("pt", ptId))
+		e.log.GetZapLogger().Error("[hierarchical index storage] pt is doingMigrate err", zap.String("db", db), zap.Uint32("pt", ptId))
 		return false
 	} else {
 		dbPTInfo.doingIndexMoveNInc()
@@ -2175,17 +2322,17 @@ func (e *EngineImpl) IndexHierarchicalStorage(db string, ptId uint32, indexID ui
 	index := dbPTInfo.IndexNoLock(indexID)
 	dbPTInfo.mu.Unlock()
 	if index == nil {
-		e.log.Error("index not found", zap.Error(errno.NewError(errno.ShardNotFound, indexID)))
+		e.log.GetZapLogger().Error("index not found", zap.Error(errno.NewError(errno.ShardNotFound, indexID)))
 		return false
 	}
 
 	if err := index.ExecIndexMove(); err != nil {
-		e.log.Error("[hierarchical index storage] exec index move fail", zap.String("db", db),
+		e.log.GetZapLogger().Error("[hierarchical index storage] exec index move fail", zap.String("db", db),
 			zap.Uint32("pt", ptId), zap.Uint64("index", indexID), zap.Error(err))
 		return false
 	}
 
-	e.log.Info("[hierarchical index storage] index move success", zap.String("db", db),
+	e.log.GetZapLogger().Info("[hierarchical index storage] index move success", zap.String("db", db),
 		zap.Uint32("pt", ptId), zap.Uint64("index", indexID))
 	return true
 }
@@ -2226,16 +2373,27 @@ func (e *EngineImpl) MergeShards(mergeShards meta2.MergeShards) error {
 	e.mu.RUnlock()
 	defer e.unrefDBPT(mergeShards.DbName, mergeShards.PtId)
 
+	// not allow drop command & doingoff
 	dbpt.mu.Lock()
 	if dbpt.doingOff {
 		dbpt.mu.Unlock()
 		e.log.Error("[merge shards] pt is doingMigrate err", zap.String("db", dbpt.database), zap.Uint32("pt", dbpt.id))
 		return nil
+	} else if e.hasDrop() {
+		dbpt.mu.Unlock()
+		return fmt.Errorf("engine is doing user drop command")
 	} else {
 		dbpt.doingShardMoveNInc()
 		defer dbpt.doingShardMoveNDec()
 	}
 	dbpt.mu.Unlock()
+
+	// not allow bgr like retention (mst) Expired
+	if err = dbpt.disableDBPtBgr(); err != nil {
+		return err
+	}
+	defer dbpt.enableDBPtBgr()
+
 	validShardsCount := 0
 	for _, shardId := range mergeShards.ShardIds {
 		shard = dbpt.Shard(shardId)
@@ -2431,9 +2589,12 @@ func (e *EngineImpl) ReplaceShards(newShard Shard, shards []Shard, mergeShardPat
 		}
 	}
 	if newShardVal, ok := newShard.(*shard); ok {
-		e.log.Info("[replace shard] registerNewShard to CompWorker", zap.Uint64("newShardId", newShard.GetID()),
+		e.log.Info("[replace shard] openAndEnable newShard", zap.Uint64("newShardId", newShard.GetID()),
 			zap.String("db", dbpt.database), zap.String("rp", newShard.GetRPName()), zap.Uint32("ptId", dbpt.id))
-		compWorker.RegisterShard(newShardVal)
+		err := newShardVal.OpenAndEnable(e.metaClient)
+		if err != nil {
+			return err
+		}
 	}
 
 	dbpt.AddShard(newShard.GetID(), newShard)
@@ -2488,6 +2649,58 @@ func (e *EngineImpl) GetDatabase(database string) map[uint32]*DBPTInfo {
 	return e.DBPartitions[database]
 }
 
+func (e *EngineImpl) GetTask(typ scheduler.TaskType, id uint64) (scheduler.Task, error) {
+	dbPts := e.GetAllDBPtIds()
+	for db, pts := range dbPts {
+		for _, pt := range pts {
+			task, err := e.getPTTask(typ, id, db, pt)
+			if err != nil || task != nil {
+				return task, err
+			}
+		}
+	}
+	return nil, nil
+}
+
+func (e *EngineImpl) getPTTask(typ scheduler.TaskType, id uint64, db string, pt uint32) (scheduler.Task, error) {
+	var t scheduler.Task
+	err := e.executeInDBPT(db, pt, func(pt *DBPTInfo) error {
+		pt.walkShards(nil, func(sh Shard) bool {
+			tables := sh.GetTableStore()
+			scheduler := tables.GetScheduler()
+			if id == 0 {
+				t = scheduler.GetTask(typ)
+			} else {
+				t = scheduler.GetTaskByID(typ, id)
+			}
+			if t != nil {
+				return false
+			}
+			return true
+		})
+		return nil
+	})
+	if err != nil || t != nil {
+		return t, err
+	}
+	return nil, nil
+}
+
+func (e *EngineImpl) CompactFiles(typ scheduler.TaskType, id uint64, info *immutable.CompactedFileInfo) error {
+	task, err := e.GetTask(typ, id)
+	if err != nil {
+		e.log.Error("GetTask error", zap.Error(err))
+		return err
+	}
+	defer task.Finish()
+
+	t, ok := task.(*immutable.CompactTask)
+	if !ok {
+		return errors.New("wrong task type,expect *immutable.CompactTask")
+	}
+	return t.ReplaceFiles(info)
+}
+
 func GenMergeShardPath(rpPath string, startTime int64, endTime int64, shardId uint64, indexId uint64) string {
 	return rpPath + strconv.FormatUint(shardId, 10) + pathSeparator + strconv.FormatInt(startTime, 10) +
 		pathSeparator + strconv.FormatInt(endTime, 10) + pathSeparator + strconv.FormatUint(indexId, 10)
@@ -2504,4 +2717,9 @@ func InitMergeShardDirs(mergeShardPath string, lock fileops.FileLockOption, engi
 	}
 	mergeTsspPath := immutable.GetDir(engineType, mergeShardPath)
 	return fileops.Mkdir(mergeTsspPath, 0700, lock)
+}
+
+func (e *EngineImpl) GetLastIndex(db string, ptId uint32) (uint64, error) {
+	dbptInfo := e.getDBPTInfo(db, ptId)
+	return dbptInfo.GetLastIndex()
 }

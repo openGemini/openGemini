@@ -171,7 +171,7 @@ func TestReadMultiVerticalFilterErr(t *testing.T) {
 	spilt := make(map[string][]byte)
 	spilt["tag"] = tagSpilt
 	spilt["content"] = contentSpilt
-	_, err := NewMultiFiledLineFilterReader("", nil, nil, 4, spilt, "")
+	_, err := NewMultiFieldLineFilterReader("", nil, nil, 4, spilt, "")
 	assert.False(t, false, IsInterfaceNil(err))
 }
 
@@ -294,9 +294,9 @@ func TestReadMultiFiledLineFilter(t *testing.T) {
 	splitMap := make(map[string][]byte)
 	splitMap["content"] = tokenizer.CONTENT_SPLIT_TABLE
 
-	filterReader, err := NewMultiFiledLineFilterReader(tmpDir, nil, expr, 4, splitMap, fileName)
+	filterReader, err := NewMultiFieldLineFilterReader(tmpDir, nil, expr, 4, splitMap, fileName)
 	if err != nil {
-		t.Errorf("NewMultiFiledLineFilterReader failed: %s", err)
+		t.Errorf("NewMultiFieldLineFilterReader failed: %s", err)
 	}
 	filterReader.StartSpan(nil)
 	for i := 0; i < 10; i++ {

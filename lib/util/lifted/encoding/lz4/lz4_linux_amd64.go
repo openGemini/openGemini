@@ -1,3 +1,5 @@
+//go:build linux && amd64
+
 /*
 Copyright 2024 Huawei Cloud Computing Technologies Co., Ltd.
 

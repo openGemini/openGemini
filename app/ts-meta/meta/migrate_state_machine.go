@@ -25,8 +25,8 @@ import (
 	"github.com/openGemini/openGemini/lib/spdy/transport"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
-	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
 )
 
 type MSMState int
@@ -167,7 +167,7 @@ func (m *MigrateStateMachine) sendMigrateCommand(e MigrateEvent) (NextAction, er
 	pti := e.getPtInfo()
 	ptReq := msgservice.NewPtRequest()
 	ptReq.Pt = pti.Marshal()
-	ptReq.MigrateType = proto.Int(e.getCurrState()) // use currState to determine the action
+	ptReq.MigrateType = proto.Int32(int32(e.getCurrState())) // use currState to determine the action
 	// todo you should send operation id to store to make sure store response should not delete other events
 	ptReq.OpId = proto.Uint64(e.getOpId())
 	ptReq.AliveConnId = proto.Uint64(e.getAliveConnId())
@@ -197,8 +197,8 @@ func (m *MigrateStateMachine) sendMigrateCommand(e MigrateEvent) (NextAction, er
 
 // if migrate command response from store, you need get event and process it
 func (m *MigrateStateMachine) handleMigrateCommandResponse(err error, e MigrateEvent) {
-	m.logger.Info("[MSM] execute migrate cmd", zap.String("event", e.String()), zap.Error(err))
 	scheduleType := m.handleCmdResult(err, e)
+	m.logger.Info("[MSM] handle migrate cmd reponse", zap.String("event", e.String()), zap.Error(err), zap.Int("scheduleType", int(scheduleType)))
 	switch scheduleType {
 	case ScheduleNormal:
 		m.scheduleExistEvent(e)
@@ -219,7 +219,7 @@ func (m *MigrateStateMachine) handleCmdResult(err error, e MigrateEvent) Schedul
 		e.stateTransition(err)
 		return ScheduleNormal
 	}
-
+	// SelectClosedConn,PtIsAlreadyMigrating and SessionSelectTimeout donot increase retry cnt
 	if !errno.Equal(err, errno.SelectClosedConn) && !errno.Equal(err, errno.PtIsAlreadyMigrating) &&
 		!errno.Equal(err, errno.SessionSelectTimeout) {
 		e.increaseRetryCnt()

@@ -25,7 +25,7 @@ import (
 	libStrings "github.com/openGemini/openGemini/lib/strings"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
-	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
+	"google.golang.org/protobuf/proto"
 )
 
 var DownSampleSupportAgg = map[string]bool{"first": true, "last": true, "min": true, "max": true, "sum": true, "count": true, "mean": true}
@@ -541,13 +541,6 @@ type ShardDownSampleUpdateInfo struct {
 
 type ShardDownSampleUpdateInfos struct {
 	Infos []*ShardDownSampleUpdateInfo
-}
-
-func NewShardDownSampleUpdateInfo(ident *ShardIdentifier, downSampleLvl int) *ShardDownSampleUpdateInfo {
-	return &ShardDownSampleUpdateInfo{
-		Ident:         ident,
-		DownSampleLvl: downSampleLvl,
-	}
 }
 
 func (s *ShardDownSampleUpdateInfos) Marshal() *proto2.ShardDownSampleUpdateInfos {

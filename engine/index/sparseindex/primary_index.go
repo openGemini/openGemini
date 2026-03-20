@@ -23,6 +23,7 @@ import (
 	"github.com/openGemini/openGemini/lib/fragment"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/rpn"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"go.uber.org/zap"
 )
@@ -262,6 +263,108 @@ func (r *PKIndexReaderImpl) doExclusionSearch(
 
 func (r *PKIndexReaderImpl) Close() error {
 	return nil
+}
+
+type GroupPKIndexReaderImpl struct {
+	property *IndexProperty
+	logger   *logger.Logger
+}
+
+func NewGroupPKIndexReader(rowsNumPerFragment int, coarseIndexFragment int, minRowsForSeek int) *GroupPKIndexReaderImpl {
+	return &GroupPKIndexReaderImpl{
+		property: NewIndexProperty(rowsNumPerFragment, coarseIndexFragment, minRowsForSeek),
+		logger:   logger.NewLogger(errno.ModuleIndex),
+	}
+}
+
+func (r *GroupPKIndexReaderImpl) Scan(
+	fileName string,
+	pkRec *record.Record,
+	pkMark fragment.IndexFragment,
+	keyCondition KeyCondition,
+) (fragment.FragmentRanges, error) {
+	pkLength := pkRec.Len()
+	if pkLength == 0 || pkLength != len(pkRec.ColVals) {
+		return nil, errors.New("illegal pkRec")
+	}
+	// the length of pkRec is guaranteed to be within valid uint32 range
+	fragmentCount := uint32(pkRec.ColVals[pkLength-1].Len)
+	r.logger.Debug("Running search on group PK index range for", zap.String("datafile", fileName), zap.Uint32("masks", fragmentCount))
+	var res fragment.FragmentRanges
+
+	// if index is not used
+	if !keyCondition.HavePrimaryKey() {
+		res = append(res, fragment.NewFragmentRange(0, fragmentCount))
+		return res, nil
+	}
+
+	res, err := r.EvaluateCondition(pkRec, keyCondition, fragmentCount)
+	if err != nil {
+		return nil, err
+	}
+	r.logger.Debug("Found", zap.String("range", getSearchStatus(res)))
+
+	return res, nil
+}
+
+func (r *GroupPKIndexReaderImpl) EvaluateCondition(pkRec *record.Record, keyCondition KeyCondition, fragmentCount uint32) (fragment.FragmentRanges, error) {
+	var stack []fragment.FragmentRanges
+	for _, rpnElem := range keyCondition.GetRPN() {
+		op := rpnElem.op
+		switch op {
+		// field condition
+		case rpn.AlwaysTrue:
+			fragmentRanges := fragment.FragmentRanges{{Start: 0, End: fragmentCount}}
+			stack = append(stack, fragmentRanges)
+		// pk condition, =、!=(<>)、>、<、>=、<=
+		case rpn.InRange, rpn.NotInRange:
+			fragmentRanges, err := checkFragmentID(pkRec, rpnElem)
+			if err != nil {
+				return nil, err
+			}
+			if op == rpn.NotInRange {
+				wholeFragmentRanges := fragment.FragmentRanges{{Start: 0, End: fragmentCount}}
+				fragmentRanges = wholeFragmentRanges.Complement(fragmentRanges)
+			}
+			stack = append(stack, fragmentRanges)
+		case rpn.AND, rpn.OR:
+			// Process the operator
+			if len(stack) < 2 {
+				return nil, ErrInvalidRPN
+			}
+
+			// Pop the top two elements from the stack
+			right := stack[len(stack)-1]
+			left := stack[len(stack)-2]
+			stack = stack[:len(stack)-2]
+			if op == rpn.AND {
+				stack = append(stack, left.Intersect(right))
+			} else {
+				stack = append(stack, left.Union(right))
+			}
+		default:
+			return nil, ErrInvalidRPN
+		}
+	}
+
+	if len(stack) != 1 {
+		return nil, ErrInvalidRPNResult
+	}
+
+	return stack[0], nil
+}
+
+func (r *GroupPKIndexReaderImpl) Close() error {
+	return nil
+}
+
+func checkFragmentID(pkRec *record.Record, rpnElem *RPNElement) (fragment.FragmentRanges, error) {
+	indices, err := rpnElem.MatchedIndices(pkRec)
+	if err != nil {
+		return nil, err
+	}
+	ranges := fragment.CalcFragmentRanges(indices)
+	return ranges, nil
 }
 
 var (

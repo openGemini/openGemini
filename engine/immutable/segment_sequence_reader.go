@@ -288,7 +288,7 @@ func (reader *SegmentSequenceReader) getBlockBy(pkData *colstore.DetachedPKInfo)
 	if reader.cond != nil {
 		var err error
 		for j := range reader.skFileReader {
-			frs, err = reader.skIndexReader.Scan(reader.skFileReader[j], frs)
+			frs, _, err = reader.skIndexReader.Scan(reader.skFileReader[j], frs)
 			if err != nil {
 				return nil, err
 			}

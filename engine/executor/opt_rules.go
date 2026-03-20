@@ -247,10 +247,10 @@ func (c *OptRuleCall) TransformTo(to hybridqp.QueryNode) []hybridqp.QueryNode {
 	return c.results
 }
 
-type OptRuleCatagory int
+type OptRuleCategory int
 
 const (
-	RULE_TEST OptRuleCatagory = iota
+	RULE_TEST OptRuleCategory = iota
 	RULE_PUSHDOWN_LIMIT
 	RULE_PUSHDOWN_AGG
 	RULE_SPREAD_AGG
@@ -263,7 +263,7 @@ type OptRule interface {
 	Initialize(rule OptRule, operand OptRuleOperand, description string)
 	ToString() string
 	Description() string
-	Catagory() OptRuleCatagory
+	Category() OptRuleCategory
 	Equals(OptRule) bool
 	GetOperand() OptRuleOperand
 	Matches(call *OptRuleCall) bool

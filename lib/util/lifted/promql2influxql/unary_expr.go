@@ -32,7 +32,8 @@ func (t *Transpiler) transpileUnaryExpr(ue *parser.UnaryExpr) (influxql.Node, er
 					LHS: &influxql.IntegerLiteral{
 						Val: int64(mul),
 					},
-					RHS: expr,
+					RHS:         expr,
+					IsPromQuery: true,
 				}, nil
 			}
 		case influxql.Statement:
@@ -48,7 +49,8 @@ func (t *Transpiler) transpileUnaryExpr(ue *parser.UnaryExpr) (influxql.Node, er
 						LHS: &influxql.IntegerLiteral{
 							Val: int64(mul),
 						},
-						RHS: field.Expr,
+						RHS:         field.Expr,
+						IsPromQuery: true,
 					},
 					Alias: DefaultFieldKey,
 				}

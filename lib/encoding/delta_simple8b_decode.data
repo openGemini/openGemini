@@ -1,0 +1,90 @@
+{
+    "Items": [
+        {
+            "FuncIndex": 15,
+            "EleCount": 1,
+            "Width": 60,
+            "Index":[0]
+        },
+        {
+            "FuncIndex": 14,
+            "EleCount": 2,
+            "Width": 30,
+            "Index":[0,0]
+        },
+        {
+            "FuncIndex": 13,
+            "EleCount": 3,
+            "Width": 20,
+            "Index":[0,0,0]
+        }
+    ],
+    "ItemsFast": [
+        {
+            "FuncIndex": 12,
+            "EleCount": 4,
+            "Width": 15,
+            "Index": [0,0,0,0]
+        },
+        {
+            "FuncIndex": 11,
+            "EleCount": 5,
+            "Width": 12,
+            "Index": [0,0,0,0,0]
+        },
+        {
+            "FuncIndex": 10,
+            "EleCount": 6,
+            "Width": 10,
+            "Index": [0,0,0,0,0,0]
+        },
+        {
+            "FuncIndex": 9,
+            "EleCount": 7,
+            "Width": 8,
+            "Index": [0,0,0,0,0,0,0]
+        },
+        {
+            "FuncIndex": 8,
+            "EleCount": 8,
+            "Width": 7,
+            "Index": [0,0,0,0,0,0,0,0]
+        },
+        {
+            "FuncIndex": 7,
+            "EleCount": 10,
+            "Width": 6,
+            "Index": [0,0,0,0,0,0,0,0,0,0]
+        },
+        {
+            "FuncIndex": 6,
+            "EleCount": 12,
+            "Width": 5,
+            "Index": [0,0,0,0,0,0,0,0,0,0,0,0]
+        },
+        {
+            "FuncIndex": 5,
+            "EleCount": 15,
+            "Width": 4,
+            "Index": [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
+        },
+        {
+            "FuncIndex": 4,
+            "EleCount": 20,
+            "Width": 3,
+            "Index": [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
+        },
+        {
+            "FuncIndex": 3,
+            "EleCount": 30,
+            "Width": 2,
+            "Index": [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
+        },
+        {
+            "FuncIndex": 2,
+            "EleCount": 60,
+            "Width": 1,
+            "Index": [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
+        }
+    ]
+}

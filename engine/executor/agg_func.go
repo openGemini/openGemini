@@ -23,6 +23,19 @@ import (
 	"github.com/openGemini/openGemini/lib/util"
 )
 
+const (
+	TrimPercent     = 0.1  // Percentage of extreme values dropped at each tail when computing trimmed mean
+	Q1Percentile    = 0.25 // 1st quartile used to build the IQR
+	Q3Percentile    = 0.75 // 3rd quartile used to build the IQR
+	WeightMedian    = 0.5  // Weight of median absolute deviation in the final synthetic score
+	WeightTrimMean  = 0.3  // Weight of trimmed-mean absolute deviation in the final synthetic score
+	WeightIQRCenter = 0.2  // Weight of IQR-center absolute deviation in the final synthetic score
+
+	SlopeThreshold    = 0.1 // Minimum slope (change per unit time) required to consider an uptrend or downtrend significant
+	AbsoluteThreshold = 5.0 // Minimum absolute difference between actual and predicted values that triggers a level-based alert
+	TrendScore        = 1.1 // Boost factor applied to the final score when a significant trend is detected
+)
+
 func SortByValueDsc[T util.NumberOnly](f *HeapItem[T]) {
 	f.sortByTime = false
 	sort.Sort(sort.Reverse(f))
@@ -130,6 +143,76 @@ func averageCol[T util.NumberOnly](numbers []T) float64 {
 	return float64(sum) / float64(n)
 }
 
+// ADDiffAbsReduce computes the anomaly score of a data sequence to quantify
+// the distribution difference between its first half and second half.
+//
+// The calculation process:
+// 1. Compare key statistical features (median, trimmed mean, interquartile center)
+// between the first half and second half of the data sequence.
+// 2. Synthesize a single-index anomaly score by weighted processing of the above
+// feature differences.
+//
+// Interpretation: A higher score indicates a greater distribution difference
+// between the two segments, suggesting a higher possibility of anomaly in the data sequence.
+func ADDiffAbsReduce[T util.NumberOnly](si *SliceItem[T]) (int, int64, float64, bool) {
+	n := len(si.value)
+	if n == 0 {
+		return -1, 0, 0, true
+	}
+	if n == 1 {
+		return -1, si.time[0], 0, false
+	}
+
+	mid := n / 2
+	actual := si.value[:mid]
+	predicted := si.value[n-mid:]
+
+	// 1. Median absolute deviation
+	var actualMedian, predictedMedian float64
+	var err error
+	if actualMedian, err = util.Median(actual); err != nil {
+		return -1, si.time[0], 0, false
+	}
+	if predictedMedian, err = util.Median(predicted); err != nil {
+		return -1, si.time[0], 0, false
+	}
+	medianAbsDiff := math.Abs(actualMedian - predictedMedian)
+
+	// 2. 10% trimmed mean absolute deviation
+	var actualTrimMean, predictedTrimMean float64
+	if actualTrimMean, err = util.TrimMean(actual, TrimPercent); err != nil {
+		return -1, si.time[0], 0, false
+	}
+	if predictedTrimMean, err = util.TrimMean(predicted, TrimPercent); err != nil {
+		return -1, si.time[0], 0, false
+	}
+	trimMeanAbsDiff := math.Abs(actualTrimMean - predictedTrimMean)
+
+	// 3. IQR central absolute deviation
+	var actualQ1, actualQ3, predictedQ1, predictedQ3 float64
+	if actualQ1, err = util.Quantile(actual, Q1Percentile); err != nil {
+		return -1, si.time[0], 0, false
+	}
+	if actualQ3, err = util.Quantile(actual, Q3Percentile); err != nil {
+		return -1, si.time[0], 0, false
+	}
+	if predictedQ1, err = util.Quantile(predicted, Q1Percentile); err != nil {
+		return -1, si.time[0], 0, false
+	}
+	if predictedQ3, err = util.Quantile(predicted, Q3Percentile); err != nil {
+		return -1, si.time[0], 0, false
+	}
+	actualIqrCenter := (actualQ1 + actualQ3) / 2
+	predictedIqrCenter := (predictedQ1 + predictedQ3) / 2
+	iqrCenterAbsDiff := math.Abs(actualIqrCenter - predictedIqrCenter)
+
+	// 4. Weighted synthesis
+	weighted := WeightMedian*medianAbsDiff + WeightTrimMean*trimMeanAbsDiff + WeightIQRCenter*iqrCenterAbsDiff
+	val := math.Round(weighted*100) / 100
+
+	return -1, si.time[0], val, false
+}
+
 func NewMedianReduce[T util.NumberOnly](si *SliceItem[T]) (int, int64, float64, bool) {
 	length := len(si.value)
 	if length == 0 {
@@ -153,23 +236,87 @@ func RegrSlopeReduce[T util.NumberOnly](si *SliceItem[T]) (int, int64, float64, 
 	if length == 0 {
 		return -1, 0, 0, true
 	}
-	n := float64(length)
 	// linear regression: least squares method
-	var sumX, sumY, sumXY, sumX2 float64
-	for i, yVal := range si.value {
-		x := float64(i)
-		y := float64(yVal)
-		sumX += x
-		sumY += y
-		sumXY += x * y
-		sumX2 += x * x
-	}
-	denominator := n*sumX2 - sumX*sumX
-	if denominator == 0 {
+	slope, ok := linearSlope(si.value)
+	if !ok {
 		return -1, si.time[0], 0, false
 	}
-	slope := (n*sumXY - sumX*sumY) / denominator
+
 	return -1, si.time[0], slope, false
+}
+
+// ADSlopeScoreReduce assesses whether a data sequence has abnormal trends by integrating
+// two key indicators: the overall trend slope (linear change trend) and the median difference
+// between the first half and second half (magnitude of sudden change).
+//
+// The function outputs a quantified trend anomaly score, which reflects both the degree
+// of deviation in the data trend and its direction (positive/negative).
+func ADSlopeScoreReduce[T util.NumberOnly](si *SliceItem[T]) (int, int64, float64, bool) {
+	length := len(si.value)
+	if length == 0 {
+		return -1, 0, 0, true
+	}
+
+	// 1. Slope calculation
+	slope, ok := linearSlope(si.value)
+	if !ok {
+		return -1, si.time[0], 0, false
+	}
+
+	// 2. Median Absolute Deviation.
+	var actualMedian, predictedMedian float64
+	var err error
+	split := length / 2
+	if actualMedian, err = util.Median(si.value[:split]); err != nil {
+		return -1, si.time[0], 0, false
+	}
+	if predictedMedian, err = util.Median(si.value[length-split:]); err != nil {
+		return -1, si.time[0], 0, false
+	}
+	medianDiff := predictedMedian - actualMedian
+
+	// 3. Scoring logic – kept in sync with Python impl.
+	var trendSlopeScore, trendDiffScore float64
+	if slope > SlopeThreshold {
+		trendSlopeScore = TrendScore
+	} else if slope < -SlopeThreshold {
+		trendSlopeScore = -TrendScore
+	}
+
+	if medianDiff > AbsoluteThreshold {
+		trendDiffScore = TrendScore
+	} else if medianDiff < -AbsoluteThreshold {
+		trendDiffScore = -TrendScore
+	}
+
+	score := trendSlopeScore + trendDiffScore
+	return -1, si.time[0], score, false
+}
+
+// helper: least-squares slope; returns (slope, ok).
+func linearSlope[T util.NumberOnly](y []T) (slope float64, ok bool) {
+	length := len(y)
+	if length < 2 {
+		return 0, false
+	}
+
+	var sumX, sumY, sumXY, sumX2 float64
+	for i := 0; i < length; i++ {
+		xi := float64(i)
+		yi := float64(y[i])
+		sumX += xi
+		sumY += yi
+		sumXY += xi * yi
+		sumX2 += xi * xi
+	}
+
+	fl := float64(length)
+	den := fl*sumX2 - sumX*sumX
+	if math.Abs(den) < util.PrecisionThreshold {
+		return 0, false
+	}
+
+	return (fl*sumXY - sumX*sumY) / den, true
 }
 
 func NewModeReduce[T util.ExceptBool](si *SliceItem[T]) (int, int64, float64, bool) {
@@ -1298,4 +1445,23 @@ func BooleanFirstTimeColReduce(c Chunk, values []bool, ordinal, start, end int) 
 		return BooleanFirstTimeColFastReduce(c, values, ordinal, start, end)
 	}
 	return BooleanFirstTimeColSlowReduce(c, values, ordinal, start, end)
+}
+
+func ADDiffTimeReduce[T util.NumberOnly](si *SliceItem[T]) (index int, time int64, value float64, isNil bool) {
+	length := len(si.value)
+	if length == 0 {
+		return -1, 0, 0, true
+	}
+	if length == 1 {
+		return -1, si.time[0], 0, false
+	}
+	var maxDuration int64
+
+	for i := 1; i < length; i++ {
+		if si.value[i] != si.value[i-1] {
+			maxDuration += si.time[i] - si.time[i-1]
+		}
+	}
+
+	return -1, si.time[0], float64(maxDuration), false
 }

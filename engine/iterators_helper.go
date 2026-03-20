@@ -228,6 +228,7 @@ func (r *recordIter) readMemTableMetaRecord(ops []*comm.CallOption) {
 
 	timeCol := r.record.TimeColumn()
 
+	totalCallNum := len(ops)
 	for _, call := range ops {
 		if r.record == nil {
 			return
@@ -239,25 +240,25 @@ func (r *recordIter) readMemTableMetaRecord(ops []*comm.CallOption) {
 
 		switch r.record.Schema[idx].Type {
 		case influx.Field_Type_Int:
-			r.setIntColumnMeta(timeCol, idx, r.record, ops)
+			r.setIntColumnMeta(timeCol, idx, totalCallNum, r.record, call)
 		case influx.Field_Type_String, influx.Field_Type_Tag:
-			r.setStringColumnMeta(timeCol, idx, r.record, ops)
+			r.setStringColumnMeta(timeCol, idx, totalCallNum, r.record, call)
 		case influx.Field_Type_Float:
-			r.setFloatColumnMeta(timeCol, idx, r.record, ops)
+			r.setFloatColumnMeta(timeCol, idx, totalCallNum, r.record, call)
 		case influx.Field_Type_Boolean:
-			r.setBoolColumnMeta(timeCol, idx, r.record, ops)
+			r.setBoolColumnMeta(timeCol, idx, totalCallNum, r.record, call)
 		default:
 			return
 		}
 	}
 }
 
-func (r *recordIter) setIntColumnMeta(timeColVals *record.ColVal, idx int, rec *record.Record, ops []*comm.CallOption) {
+func (r *recordIter) setIntColumnMeta(timeColVals *record.ColVal, idx, totalCallNum int, rec *record.Record, callOpt *comm.CallOption) {
 	timeCols := timeColVals.IntegerValues()
 	colVals := rec.ColVals[idx]
 	cols := colVals.IntegerValues()
 	if cols == nil {
-		if len(ops) == 1 {
+		if totalCallNum == 1 {
 			r.reset()
 		}
 		return
@@ -304,22 +305,26 @@ func (r *recordIter) setIntColumnMeta(timeColVals *record.ColVal, idx int, rec *
 		lastIndex = colIndex
 	}
 
-	rec.ColMeta[idx].SetLast(cols[lastIndex], timeCols[len(timeCols)-1])
+	if callOpt.Call.Name == "last_row" && colVals.IsNil(len(timeCols)-1) {
+		rec.ColMeta[idx].SetLast(nil, timeCols[len(timeCols)-1])
+	} else {
+		rec.ColMeta[idx].SetLast(cols[lastIndex], timeCols[len(timeCols)-1])
+	}
 	rec.ColMeta[idx].SetMin(minV, minVTime)
 	rec.ColMeta[idx].SetMax(maxV, maxVTime)
 	rec.ColMeta[idx].SetCount(countV)
 	rec.ColMeta[idx].SetSum(sumV)
 
-	setColValInAux(timeColVals, idx, ops, rec, minIndex, firstIndex, maxIndex, lastIndex)
+	setColValInAux(timeColVals, idx, callOpt, rec, minIndex, firstIndex, maxIndex, lastIndex, totalCallNum)
 }
 
-func (r *recordIter) setBoolColumnMeta(timeColVals *record.ColVal, idx int, rec *record.Record, ops []*comm.CallOption) {
+func (r *recordIter) setBoolColumnMeta(timeColVals *record.ColVal, idx, totalCallNum int, rec *record.Record, callOpt *comm.CallOption) {
 	timeCols := timeColVals.IntegerValues()
 	colVals := rec.ColVals[idx]
 	cols := colVals.BooleanValues()
 
 	if cols == nil {
-		if len(ops) == 1 {
+		if totalCallNum == 1 {
 			r.reset()
 		}
 		return
@@ -366,21 +371,25 @@ func (r *recordIter) setBoolColumnMeta(timeColVals *record.ColVal, idx int, rec 
 		lastIndex = colIndex
 	}
 
-	rec.ColMeta[idx].SetLast(cols[lastIndex], timeCols[len(timeCols)-1])
+	if callOpt.Call.Name == "last_row" && colVals.IsNil(len(timeCols)-1) {
+		rec.ColMeta[idx].SetLast(nil, timeCols[len(timeCols)-1])
+	} else {
+		rec.ColMeta[idx].SetLast(cols[lastIndex], timeCols[len(timeCols)-1])
+	}
 	rec.ColMeta[idx].SetMin(minV, minVTime)
 	rec.ColMeta[idx].SetMax(maxV, maxVTime)
 	rec.ColMeta[idx].SetCount(countV)
 
-	setColValInAux(timeColVals, idx, ops, rec, minIndex, firstIndex, maxIndex, lastIndex)
+	setColValInAux(timeColVals, idx, callOpt, rec, minIndex, firstIndex, maxIndex, lastIndex, totalCallNum)
 }
 
-func (r *recordIter) setFloatColumnMeta(timeColVals *record.ColVal, idx int, rec *record.Record, ops []*comm.CallOption) {
+func (r *recordIter) setFloatColumnMeta(timeColVals *record.ColVal, idx, totalCallNum int, rec *record.Record, callOpt *comm.CallOption) {
 	timeCols := timeColVals.IntegerValues()
 	colVals := rec.ColVals[idx]
 	cols := colVals.FloatValues()
 
 	if cols == nil {
-		if len(ops) == 1 {
+		if totalCallNum == 1 {
 			r.reset()
 		}
 		return
@@ -429,22 +438,26 @@ func (r *recordIter) setFloatColumnMeta(timeColVals *record.ColVal, idx int, rec
 		lastIndex = colIndex
 	}
 
-	rec.ColMeta[idx].SetLast(cols[lastIndex], timeCols[len(timeCols)-1])
+	if callOpt.Call.Name == "last_row" && colVals.IsNil(len(timeCols)-1) {
+		rec.ColMeta[idx].SetLast(nil, timeCols[len(timeCols)-1])
+	} else {
+		rec.ColMeta[idx].SetLast(cols[lastIndex], timeCols[len(timeCols)-1])
+	}
 	rec.ColMeta[idx].SetMin(minV, minVTime)
 	rec.ColMeta[idx].SetMax(maxV, maxVTime)
 	rec.ColMeta[idx].SetCount(countV)
 	rec.ColMeta[idx].SetSum(sumV)
 
-	setColValInAux(timeColVals, idx, ops, rec, minIndex, firstIndex, maxIndex, lastIndex)
+	setColValInAux(timeColVals, idx, callOpt, rec, minIndex, firstIndex, maxIndex, lastIndex, totalCallNum)
 }
 
-func (r *recordIter) setStringColumnMeta(timeColVals *record.ColVal, idx int, rec *record.Record, ops []*comm.CallOption) {
+func (r *recordIter) setStringColumnMeta(timeColVals *record.ColVal, idx, totalCallNum int, rec *record.Record, callOption *comm.CallOption) {
 	timeCols := timeColVals.IntegerValues()
 	colVals := rec.ColVals[idx]
 	cols := colVals.StringValues(nil)
 
 	if cols == nil {
-		if len(ops) == 1 {
+		if totalCallNum == 1 {
 			r.reset()
 		}
 		return
@@ -471,9 +484,13 @@ func (r *recordIter) setStringColumnMeta(timeColVals *record.ColVal, idx int, re
 		lastIndex = colIndex
 	}
 
-	rec.ColMeta[idx].SetLast(cols[lastIndex], timeCols[len(timeCols)-1])
+	if callOption.Call.Name == "last_row" && colVals.IsNil(len(timeCols)-1) {
+		rec.ColMeta[idx].SetLast(nil, timeCols[len(timeCols)-1])
+	} else {
+		rec.ColMeta[idx].SetLast(cols[lastIndex], timeCols[len(timeCols)-1])
+	}
 	rec.ColMeta[idx].SetCount(countV)
-	setColValInAux(timeColVals, idx, ops, rec, -1, firstIndex, -1, lastIndex)
+	setColValInAux(timeColVals, idx, callOption, rec, -1, firstIndex, -1, lastIndex, totalCallNum)
 }
 
 // mergeData is used for merge two record iter data(eg, mem table and immutable or order and out order in immutable)
@@ -547,13 +564,13 @@ func setSchemaColVal(field *record.Field, col *record.ColVal, rowIndex int) {
 	}
 }
 
-func setColValInAux(timeColVals *record.ColVal, idx int, ops []*comm.CallOption, rec *record.Record, minIndex, firstIndex, maxIndex, lastIndex int) {
-	if rec.Schema.Len() > 2 && len(ops) == 1 {
+func setColValInAux(timeColVals *record.ColVal, idx int, callOpt *comm.CallOption, rec *record.Record, minIndex, firstIndex, maxIndex, lastIndex, totalCallNum int) {
+	if rec.Schema.Len() > 2 && totalCallNum == 1 {
 		for i := range rec.Schema[:len(rec.Schema)-1] {
 			field := &rec.Schema[i]
 			col := rec.Column(i)
 			timeColVals.Init()
-			switch ops[0].Call.Name {
+			switch callOpt.Call.Name {
 			case "min":
 				setSchemaColVal(field, col, minIndex)
 				_, minVTime := rec.ColMeta[idx].Min()

@@ -119,7 +119,7 @@ func (s *Server) Open() error {
 // use file lock to guarantee start one instance.
 func (s *Server) singletonMonitor() error {
 	var err error
-	path, err := filepath.Abs(filepath.Dir(os.Args[0]))
+	path, err := filepath.Abs(s.config.MonitorConfig.LockFilePath)
 	if err != nil {
 		return fmt.Errorf("get binary filepath failed, err:%s", err)
 	}

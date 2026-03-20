@@ -21,6 +21,7 @@ import (
 	"net"
 	"net/http"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -34,8 +35,8 @@ import (
 	"github.com/openGemini/openGemini/lib/spdy/transport"
 	meta2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
-	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
 )
 
 type MetaService struct {
@@ -221,7 +222,7 @@ func NewMockMetaService(dir, ip string) (*MockMetaService, error) {
 }
 
 func BuildMockMetaService(dir, ip string) (*MockMetaService, error) {
-	c, err := NewMetaConfig(dir, ip)
+	c, err := NewMetaConfig(strings.ReplaceAll(dir, "\\", "/"), ip)
 	if err != nil {
 		return nil, err
 	}
@@ -338,9 +339,7 @@ func GenerateCreateDataNodeCmd(httpAddr, tcpAddr string) *proto2.Command {
 
 	t1 := proto2.Command_CreateDataNodeCommand
 	cmd := &proto2.Command{Type: &t1}
-	if err := proto.SetExtension(cmd, proto2.E_CreateDataNodeCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, proto2.E_CreateDataNodeCommand_Command, val)
 	return cmd
 }
 
@@ -352,9 +351,7 @@ func GenerateUpdateUserCmd() *proto2.Command {
 
 	t1 := proto2.Command_UpdateUserCommand
 	cmd := &proto2.Command{Type: &t1}
-	if err := proto.SetExtension(cmd, proto2.E_UpdateUserCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, proto2.E_UpdateUserCommand_Command, val)
 	return cmd
 }
 
@@ -365,9 +362,7 @@ func GenerateCreateSqlNodeCmd(httpAddr string) *proto2.Command {
 
 	t1 := proto2.Command_CreateSqlNodeCommand
 	cmd := &proto2.Command{Type: &t1}
-	if err := proto.SetExtension(cmd, proto2.E_CreateSqlNodeCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, proto2.E_CreateSqlNodeCommand_Command, val)
 	return cmd
 }
 
@@ -380,9 +375,7 @@ func GenerateCreateDatabaseCmd(database string) *proto2.Command {
 
 	t1 := proto2.Command_CreateDatabaseCommand
 	cmd := &proto2.Command{Type: &t1}
-	if err := proto.SetExtension(cmd, proto2.E_CreateDatabaseCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, proto2.E_CreateDatabaseCommand_Command, val)
 	return cmd
 }
 
@@ -394,9 +387,7 @@ func GenerateCreateDatabaseCmdWithDefaultRep(database string, replicaN uint32) *
 
 	t1 := proto2.Command_CreateDatabaseCommand
 	cmd := &proto2.Command{Type: &t1}
-	if err := proto.SetExtension(cmd, proto2.E_CreateDatabaseCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, proto2.E_CreateDatabaseCommand_Command, val)
 	return cmd
 }
 
@@ -413,9 +404,7 @@ func GenerateCreateMeasurementCmd(db string, rp string, mst string, shardKey []s
 
 	t1 := proto2.Command_CreateMeasurementCommand
 	cmd := &proto2.Command{Type: &t1}
-	if err := proto.SetExtension(cmd, proto2.E_CreateMeasurementCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, proto2.E_CreateMeasurementCommand_Command, val)
 	return cmd
 }
 
@@ -429,9 +418,7 @@ func GenerateCreateShardGroupCmd(db, rp string, timestamp time.Time, engineType 
 	}
 	t1 := proto2.Command_CreateShardGroupCommand
 	cmd := &proto2.Command{Type: &t1}
-	if err := proto.SetExtension(cmd, proto2.E_CreateShardGroupCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, proto2.E_CreateShardGroupCommand_Command, val)
 	return cmd
 }
 
@@ -444,9 +431,7 @@ func GenerateGetShardRangeInfoCmd(db, rp string, shardId uint64) *proto2.Command
 
 	t := proto2.Command_TimeRangeCommand
 	cmd := &proto2.Command{Type: &t}
-	if err := proto.SetExtension(cmd, proto2.E_TimeRangeCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, proto2.E_TimeRangeCommand_Command, val)
 	return cmd
 }
 
@@ -459,9 +444,7 @@ func GenerateGetIndexDurationCommand(indexId int, rp string, shardId uint64) *pr
 
 	t := proto2.Command_IndexDurationCommand
 	cmd := &proto2.Command{Type: &t}
-	if err := proto.SetExtension(cmd, proto2.E_IndexDurationCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, proto2.E_IndexDurationCommand_Command, val)
 	return cmd
 }
 
@@ -469,9 +452,7 @@ func GenerateShardDurationCmd(index uint64, pts []uint32, nodeId uint64) *proto2
 	val := &proto2.ShardDurationCommand{Index: proto.Uint64(index), Pts: pts, NodeId: proto.Uint64(nodeId)}
 	t := proto2.Command_ShardDurationCommand
 	cmd := &proto2.Command{Type: &t}
-	if err := proto.SetExtension(cmd, proto2.E_ShardDurationCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, proto2.E_ShardDurationCommand_Command, val)
 	return cmd
 }
 
@@ -481,9 +462,7 @@ func GenerateMarkDatabaseDelete(db string) *proto2.Command {
 	}
 	t1 := proto2.Command_MarkDatabaseDeleteCommand
 	cmd := &proto2.Command{Type: &t1}
-	if err := proto.SetExtension(cmd, proto2.E_MarkDatabaseDeleteCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, proto2.E_MarkDatabaseDeleteCommand_Command, val)
 	return cmd
 }
 
@@ -494,9 +473,7 @@ func GenerateMarkRpDelete(db, rp string) *proto2.Command {
 	}
 	t1 := proto2.Command_MarkRetentionPolicyDeleteCommand
 	cmd := &proto2.Command{Type: &t1}
-	if err := proto.SetExtension(cmd, proto2.E_MarkRetentionPolicyDeleteCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, proto2.E_MarkRetentionPolicyDeleteCommand_Command, val)
 	return cmd
 }
 
@@ -508,9 +485,7 @@ func GenerateMarkMeasurementDeleteCmd(db, rp, mst string) *proto2.Command {
 	}
 	t1 := proto2.Command_MarkMeasurementDeleteCommand
 	cmd := &proto2.Command{Type: &t1}
-	if err := proto.SetExtension(cmd, proto2.E_MarkMeasurementDeleteCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, proto2.E_MarkMeasurementDeleteCommand_Command, val)
 	return cmd
 }
 
@@ -518,9 +493,7 @@ func GenerateRegisterQueryIDOffsetCmd(host string) *proto2.Command {
 	val := &proto2.RegisterQueryIDOffsetCommand{Host: proto.String(host)}
 	t1 := proto2.Command_RegisterQueryIDOffsetCommand
 	cmd := &proto2.Command{Type: &t1}
-	if err := proto.SetExtension(cmd, proto2.E_RegisterQueryIDOffsetCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, proto2.E_RegisterQueryIDOffsetCommand_Command, val)
 	return cmd
 }
 
@@ -548,9 +521,7 @@ func GenerateCreateContinuousQueryCommand(db, name, query string) *proto2.Comman
 	t1 := proto2.Command_CreateContinuousQueryCommand
 
 	cmd := &proto2.Command{Type: &t1}
-	if err := proto.SetExtension(cmd, proto2.E_CreateContinuousQueryCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, proto2.E_CreateContinuousQueryCommand_Command, val)
 	return cmd
 }
 
@@ -572,6 +543,7 @@ type MockNetStorage struct {
 	MigratePtFn             func(nodeID uint64, data transport.Codec, cb transport.Callback) error
 	PingFn                  func(nodeId uint64, address string, timeout time.Duration) error
 	SendClearEventsFn       func(nodeId uint64, data transport.Codec) error
+	GetRPPTWriteStatusFn    func(node *meta2.DataNode, db, rp string) (meta2.PTMstWriteStatus, error)
 }
 
 func (s *MockNetStorage) GetShardSplitPoints(node *meta2.DataNode, database string, pt uint32,
@@ -614,6 +586,10 @@ func (s *MockNetStorage) SendClearEvents(nodeId uint64, data transport.Codec) er
 	return nil
 }
 
+func (s *MockNetStorage) GetRPPTWriteStatus(node *meta2.DataNode, db, rp string) (meta2.PTMstWriteStatus, error) {
+	return s.GetRPPTWriteStatusFn(node, db, rp)
+}
+
 func NewMockNetStorage() *MockNetStorage {
 	netStore := &MockNetStorage{}
 	netStore.DeleteDatabaseFn = func(node *meta2.DataNode, database string, ptId uint32) error {
@@ -638,6 +614,9 @@ func NewMockNetStorage() *MockNetStorage {
 	netStore.PingFn = func(nodeId uint64, address string, timeout time.Duration) error {
 		return nil
 	}
+	netStore.GetRPPTWriteStatusFn = func(node *meta2.DataNode, db, rp string) (meta2.PTMstWriteStatus, error) {
+		return nil, nil
+	}
 	return netStore
 }
 
@@ -661,9 +640,7 @@ func GenerateCreateDownSampleCmd(db, rp string, duration time.Duration, sampleIn
 	val.DownSamplePolicyInfo = dp.Marshal()
 	t1 := proto2.Command_CreateDownSamplePolicyCommand
 	cmd := &proto2.Command{Type: &t1}
-	if err := proto.SetExtension(cmd, proto2.E_CreateDownSamplePolicyCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, proto2.E_CreateDownSamplePolicyCommand_Command, val)
 	return cmd
 }
 
@@ -673,9 +650,7 @@ func GenerateUpdateShardDownSampleInfoCmd(ident *meta2.ShardIdentifier) *proto2.
 	}
 	t1 := proto2.Command_UpdateShardDownSampleInfoCommand
 	cmd := &proto2.Command{Type: &t1}
-	if err := proto.SetExtension(cmd, proto2.E_UpdateShardDownSampleInfoCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, proto2.E_UpdateShardDownSampleInfoCommand_Command, val)
 	return cmd
 }
 
@@ -687,9 +662,7 @@ func GenerateDropDownSampleCmd(db, rp string, dropAll bool) *proto2.Command {
 	}
 	t1 := proto2.Command_DropDownSamplePolicyCommand
 	cmd := &proto2.Command{Type: &t1}
-	if err := proto.SetExtension(cmd, proto2.E_DropDownSamplePolicyCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, proto2.E_DropDownSamplePolicyCommand_Command, val)
 	return cmd
 }
 
@@ -715,9 +688,7 @@ func GenerateCreateStreamCmd(db, rp, srcMst, desMst, name string, calls []*meta2
 	val.StreamInfo = info.Marshal()
 	t1 := proto2.Command_CreateStreamCommand
 	cmd := &proto2.Command{Type: &t1}
-	if err := proto.SetExtension(cmd, proto2.E_CreateStreamCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, proto2.E_CreateStreamCommand_Command, val)
 	return cmd
 }
 
@@ -727,8 +698,6 @@ func GenerateDropStreamCmd(name string) *proto2.Command {
 	}
 	t1 := proto2.Command_DropStreamCommand
 	cmd := &proto2.Command{Type: &t1}
-	if err := proto.SetExtension(cmd, proto2.E_DropStreamCommand_Command, val); err != nil {
-		panic(err)
-	}
+	proto.SetExtension(cmd, proto2.E_DropStreamCommand_Command, val)
 	return cmd
 }

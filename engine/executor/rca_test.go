@@ -593,6 +593,7 @@ func TestRCA(t *testing.T) {
 		influxql.VarRef{Val: "value5", Type: influxql.String},
 		influxql.VarRef{Val: "value6", Type: influxql.String},
 	)
+
 	chunk := executor.NewChunkBuilder(rowDataType).NewChunk("rca")
 	chunk.AppendTimes(ts)
 
@@ -623,6 +624,45 @@ func TestRCA(t *testing.T) {
 	chunk.Column(6).AppendStringValues(annotation)
 	chunk.Column(6).AppendColumnTimes(ts)
 	chunk.Column(6).AppendManyNotNil(5)
+
+	invalidChunk := executor.NewChunkBuilder(rowDataType).NewChunk("rca")
+	invalidTs := []int64{1, 2, 3, 4, 5, 6}
+	invalidChunk.AppendTimes(invalidTs)
+
+	invalidChunk.Column(0).AppendStringValues(id)
+	invalidChunk.Column(0).AppendColumnTimes(invalidTs)
+	invalidChunk.Column(0).AppendManyNotNil(5)
+	invalidChunk.Column(0).AppendNil()
+
+	invalidChunk.Column(1).AppendStringValues(name)
+	invalidChunk.Column(1).AppendColumnTimes(invalidTs)
+	invalidChunk.Column(1).AppendNil()
+	invalidChunk.Column(1).AppendManyNotNil(5)
+
+	invalidChunk.Column(2).AppendIntegerValues(level)
+	invalidChunk.Column(2).AppendColumnTimes(invalidTs)
+	invalidChunk.Column(2).AppendManyNotNil(3)
+	invalidChunk.Column(2).AppendManyNil(3)
+
+	invalidChunk.Column(3).AppendStringValues(ruleid)
+	invalidChunk.Column(3).AppendColumnTimes(invalidTs)
+	invalidChunk.Column(3).AppendManyNotNil(5)
+	invalidChunk.Column(3).AppendNil()
+
+	invalidChunk.Column(4).AppendStringValues(entityid)
+	invalidChunk.Column(4).AppendColumnTimes(invalidTs)
+	invalidChunk.Column(4).AppendManyNotNil(2)
+	invalidChunk.Column(4).AppendManyNil(4)
+
+	invalidChunk.Column(5).AppendStringValues(typ)
+	invalidChunk.Column(5).AppendColumnTimes(invalidTs)
+	invalidChunk.Column(5).AppendManyNotNil(4)
+	invalidChunk.Column(5).AppendManyNil(2)
+
+	invalidChunk.Column(6).AppendStringValues(annotation)
+	invalidChunk.Column(6).AppendColumnTimes(invalidTs)
+	invalidChunk.Column(6).AppendManyNotNil(3)
+	invalidChunk.Column(6).AppendManyNil(3)
 
 	colMap := map[string]int{
 		executor.ID:          0,
@@ -671,6 +711,10 @@ func TestRCA(t *testing.T) {
 	_, err = executor.FaultDemarcation(chunks, subTopo, algoParamsErr, colMap)
 	assert.EqualError(t, err, "RCA Error: meta not found in algoParams")
 
+	invalidChunks := []executor.Chunk{invalidChunk}
+	_, err = executor.FaultDemarcation(invalidChunks, subTopo, algoParams, colMap)
+	assert.EqualError(t, err, "field id invalid")
+
 	check := func(t *testing.T, ret *executor.Graph, expNodes []string, expEdges []string) {
 		if len(ret.Nodes) != len(expNodes) {
 			t.Error("ret error from FaultDemarcation")
@@ -703,4 +747,194 @@ func TestRCA(t *testing.T) {
 	ret, err = executor.FaultDemarcation(chunks, subTopo, algoParams, colMap)
 	assert.NoError(t, err)
 	check(t, ret, expNodes, expEdges)
+}
+
+func Test_validInputFields(t *testing.T) {
+	subTopo := executor.NewGraph()
+	subTopo.CreateGraph(mockGetTimeGraph())
+
+	var algoParams executor.AlgoParam
+	err := json.Unmarshal([]byte(algoParam), &algoParams)
+	if err != nil {
+		t.Error("unknow algo_params")
+	}
+	colMap := map[string]int{
+		executor.ID:          0,
+		executor.Name:        1,
+		executor.Level:       2,
+		executor.RuleID:      3,
+		executor.EntityID:    4,
+		executor.Type:        5,
+		executor.Annotations: 6,
+	}
+	rowDataType := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "value0", Type: influxql.String},
+		influxql.VarRef{Val: "value1", Type: influxql.String},
+		influxql.VarRef{Val: "value2", Type: influxql.Integer},
+		influxql.VarRef{Val: "value3", Type: influxql.String},
+		influxql.VarRef{Val: "value4", Type: influxql.String},
+		influxql.VarRef{Val: "value5", Type: influxql.String},
+		influxql.VarRef{Val: "value6", Type: influxql.String},
+	)
+	invalidTs := []int64{1}
+	invalidChunk := executor.NewChunkBuilder(rowDataType).NewChunk("rca")
+	invalidChunk.AppendTimes(invalidTs)
+	invalidChunk.Column(0).AppendNil()
+
+	_, err = executor.FaultDemarcation([]executor.Chunk{invalidChunk}, subTopo, algoParams, colMap)
+	assert.EqualError(t, err, "field id invalid")
+
+	invalidChunk = executor.NewChunkBuilder(rowDataType).NewChunk("rca")
+	invalidChunk.AppendTimes(invalidTs)
+	invalidChunk.Column(0).AppendStringValue("a")
+	invalidChunk.Column(0).AppendNotNil()
+	invalidChunk.Column(4).AppendNil()
+	_, err = executor.FaultDemarcation([]executor.Chunk{invalidChunk}, subTopo, algoParams, colMap)
+	assert.EqualError(t, err, "field entity_id invalid")
+
+	invalidChunk = executor.NewChunkBuilder(rowDataType).NewChunk("rca")
+	invalidChunk.AppendTimes(invalidTs)
+	invalidChunk.Column(0).AppendStringValue("a")
+	invalidChunk.Column(0).AppendNotNil()
+	invalidChunk.Column(4).AppendStringValue("a")
+	invalidChunk.Column(4).AppendNotNil()
+	invalidChunk.Column(5).AppendNil()
+	_, err = executor.FaultDemarcation([]executor.Chunk{invalidChunk}, subTopo, algoParams, colMap)
+	assert.EqualError(t, err, "field type invalid")
+
+	invalidChunk = executor.NewChunkBuilder(rowDataType).NewChunk("rca")
+	invalidChunk.AppendTimes(invalidTs)
+	invalidChunk.Column(0).AppendStringValue("a")
+	invalidChunk.Column(0).AppendNotNil()
+	invalidChunk.Column(4).AppendStringValue("a")
+	invalidChunk.Column(4).AppendNotNil()
+	invalidChunk.Column(5).AppendStringValue("a")
+	invalidChunk.Column(5).AppendNotNil()
+	invalidChunk.Column(6).AppendNil()
+	_, err = executor.FaultDemarcation([]executor.Chunk{invalidChunk}, subTopo, algoParams, colMap)
+	assert.EqualError(t, err, "field annotations invalid")
+
+	invalidRowDataType := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "value1", Type: influxql.String},
+		influxql.VarRef{Val: "value2", Type: influxql.Integer},
+		influxql.VarRef{Val: "value3", Type: influxql.String},
+		influxql.VarRef{Val: "value4", Type: influxql.String},
+		influxql.VarRef{Val: "value5", Type: influxql.String},
+		influxql.VarRef{Val: "value6", Type: influxql.String},
+	)
+	invalidColMap := map[string]int{
+		executor.Name:        0,
+		executor.Level:       1,
+		executor.RuleID:      2,
+		executor.EntityID:    3,
+		executor.Type:        4,
+		executor.Annotations: 5,
+	}
+	invalidChunk = executor.NewChunkBuilder(invalidRowDataType).NewChunk("rca")
+	_, err = executor.FaultDemarcation([]executor.Chunk{invalidChunk}, subTopo, algoParams, invalidColMap)
+	assert.EqualError(t, err, "field not found")
+}
+
+func Test_FilterEventChunks(t *testing.T) {
+	colMap := map[string]int{
+		executor.Type:     0,
+		executor.Name:     1,
+		executor.Level:    2,
+		executor.EntityID: 3,
+	}
+
+	rowDataType := hybridqp.NewRowDataTypeImpl(
+		influxql.VarRef{Val: "value0", Type: influxql.Tag},
+		influxql.VarRef{Val: "value1", Type: influxql.Float},
+		influxql.VarRef{Val: "value2", Type: influxql.Integer},
+		influxql.VarRef{Val: "value3", Type: influxql.String},
+	)
+	ts1 := []int64{1, 2, 3, 4, 5, 6}
+	chunk1 := executor.NewChunkBuilder(rowDataType).NewChunk("events")
+	chunk1.AppendTimes(ts1)
+
+	types := []string{"t1", "t2", "t3", "t4", "t5", "t6"}
+	chunk1.Column(0).AppendStringValues(types)
+	chunk1.Column(0).AppendManyNotNil(6)
+
+	names := []float64{1.0, 2.0, 3.0, 4.0, 5.0, 6.0}
+	chunk1.Column(1).AppendFloatValues(names)
+	chunk1.Column(1).AppendManyNotNil(6)
+
+	levels := []int64{1, 2, 3, 4, 5, 6}
+	chunk1.Column(2).AppendIntegerValues(levels)
+	chunk1.Column(2).AppendManyNotNil(6)
+
+	entityids := []string{"ELB1", "ELB2", "ELB3", "VM1", "VM2", "VM3"}
+	chunk1.Column(3).AppendStringValues(entityids)
+	chunk1.Column(3).AppendManyNotNil(6)
+
+	ts2 := []int64{1, 2, 3}
+	chunk2 := executor.NewChunkBuilder(rowDataType).NewChunk("events")
+	chunk2.AppendTimes(ts2)
+
+	chunk2.Column(0).AppendStringValues([]string{"t1", "t2", "t3"})
+	chunk2.Column(0).AppendManyNotNil(3)
+
+	chunk2.Column(1).AppendFloatValues([]float64{4.0, 5.0, 6.0})
+	chunk2.Column(1).AppendManyNotNil(3)
+
+	chunk2.Column(2).AppendIntegerValues([]int64{2, 3, 4})
+	chunk2.Column(2).AppendManyNotNil(3)
+
+	chunk2.Column(3).AppendStringValues([]string{"Service2", "Service2", "Service3"})
+	chunk2.Column(3).AppendManyNotNil(3)
+
+	chunks := []executor.Chunk{chunk1, chunk2}
+
+	nodes := map[string]executor.GraphNode{
+		"ELB2":     executor.GraphNode{},
+		"VM1":      executor.GraphNode{},
+		"VM2":      executor.GraphNode{},
+		"Service1": executor.GraphNode{},
+	}
+
+	dstChunk1 := executor.NewChunkBuilder(rowDataType).NewChunk("events")
+	dstChunk1.AppendTimes([]int64{2, 4, 5})
+
+	dstChunk1.Column(0).AppendStringValues([]string{"t2", "t4", "t5"})
+	dstChunk1.Column(0).AppendManyNotNil(3)
+
+	dstChunk1.Column(1).AppendFloatValues([]float64{2.0, 4.0, 5.0})
+	dstChunk1.Column(1).AppendManyNotNil(3)
+
+	dstChunk1.Column(2).AppendIntegerValues([]int64{2, 4, 5})
+	dstChunk1.Column(2).AppendManyNotNil(3)
+
+	dstChunk1.Column(3).AppendStringValues([]string{"ELB2", "VM1", "VM2"})
+	dstChunk1.Column(3).AppendManyNotNil(3)
+
+	ret, err := executor.FilterEventChunks(chunks, nodes, colMap)
+	assert.NoError(t, err)
+	assert.Equal(t, 2, len(ret))
+
+	assert.Equal(t, dstChunk1.Name(), ret[0].Name())
+	assert.Equal(t, dstChunk1.Tags(), ret[0].Tags())
+	assert.Equal(t, dstChunk1.Time(), ret[0].Time())
+	assert.Equal(t, dstChunk1.TagIndex(), ret[0].TagIndex())
+	assert.Equal(t, dstChunk1.IntervalIndex(), ret[0].IntervalIndex())
+	for j, column := range ret[0].Columns() {
+		assert.Equal(t, dstChunk1.Column(j), column)
+	}
+
+	assert.Equal(t, 0, len(ret[1].Time()))
+
+	colMap1 := map[string]int{
+		executor.Type:  0,
+		executor.Name:  1,
+		executor.Level: 2,
+	}
+	ret, err = executor.FilterEventChunks(chunks, nodes, colMap1)
+	assert.EqualError(t, err, "colMap has no entity_id when filter the events")
+
+	colMap2 := map[string]int{
+		executor.EntityID: 4,
+	}
+	ret, err = executor.FilterEventChunks(chunks, nodes, colMap2)
+	assert.EqualError(t, err, "the chunk has no entity_id column")
 }

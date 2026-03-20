@@ -17,7 +17,7 @@ package compress
 import (
 	"io"
 
-	"github.com/golang/snappy"
+	"github.com/klauspost/compress/snappy"
 )
 
 type SnappyBlockWriter struct {

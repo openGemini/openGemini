@@ -16,6 +16,7 @@ package record
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/openGemini/openGemini/lib/bufferpool"
 	"github.com/openGemini/openGemini/lib/util"
@@ -166,9 +167,11 @@ func (cv *ColVal) Append(value []byte, offsets []uint32, bitMap []byte, bitOffse
 func (cv *ColVal) AppendColVal(srcCol *ColVal, colType, start, end int) {
 	cv.Append(srcCol.Val, srcCol.Offset, srcCol.Bitmap, srcCol.BitMapOffset, srcCol.Len, srcCol.NilCount, colType, start, end, 0, 0)
 }
+
 func (cv *ColVal) AppendColValFast(srcCol *ColVal, colType, start, end int, pos int, posValidCount int) {
 	cv.Append(srcCol.Val, srcCol.Offset, srcCol.Bitmap, srcCol.BitMapOffset, srcCol.Len, srcCol.NilCount, colType, start, end, pos, posValidCount)
 }
+
 func (cv *ColVal) PadColVal(colType, padLen int) {
 	if padLen == 0 {
 		return
@@ -241,6 +244,12 @@ func (cv *ColVal) PadEmptyCol2FixBitmap(bitMapOffset, bitMapLen int) {
 }
 
 func (cv *ColVal) RowBitmap(dst []bool) []bool {
+	if cv.NilCount == 0 {
+		dst = slices.Grow(dst[:0], cv.Len)[:cv.Len]
+		util.MemorySet(dst, true)
+		return dst
+	}
+
 	var idx int
 	for i := 0; i < cv.Len; i++ {
 		idx = cv.BitMapOffset + i
@@ -303,14 +312,8 @@ func (cv *ColVal) ValidCount(start, end int) int {
 		return end - start
 	}
 
-	end += cv.BitMapOffset
-	start += cv.BitMapOffset
-	for i := start; i < end; i++ {
-		if cv.Bitmap[i>>3]&BitMask[i&0x07] != 0 {
-			validCount++
-		}
-	}
-	return validCount
+	start, end = valueIndexRange(cv.Bitmap, cv.BitMapOffset, start, end, 0, 0)
+	return end - start
 }
 
 func (cv *ColVal) sliceBitMap(srcCol *ColVal, start, end int) {
@@ -651,9 +654,9 @@ func AppendPKColumns(pkCol *ColVal, dstCol *ColVal,
 			dstCol.AppendFloat(pkValues[offset])
 		}
 	case influx.Field_Type_String:
-		pkValues := pkCol.StringValues(nil)
+		pkValue, _ := pkCol.StringValue(offset)
 		for i := 0; i < count; i++ {
-			dstCol.AppendString(pkValues[offset])
+			dstCol.AppendString(util.Bytes2str(pkValue))
 		}
 	case influx.Field_Type_Boolean:
 		pkValues := pkCol.BooleanValues()
@@ -665,4 +668,27 @@ func AppendPKColumns(pkCol *ColVal, dstCol *ColVal,
 	}
 
 	return nil
+}
+
+func ReadRowValue(col *ColVal, typ int, rowIdx int) any {
+	var val any
+	var isNil bool
+
+	switch typ {
+	case influx.Field_Type_Tag, influx.Field_Type_String:
+		val, isNil = col.StringValueSafe(rowIdx)
+	case influx.Field_Type_Int:
+		val, isNil = col.IntegerValue(rowIdx)
+	case influx.Field_Type_Float:
+		val, isNil = col.FloatValue(rowIdx)
+	case influx.Field_Type_Boolean:
+		val, isNil = col.BooleanValue(rowIdx)
+	default:
+		// BUG, do nothing
+	}
+
+	if isNil {
+		val = nil
+	}
+	return val
 }

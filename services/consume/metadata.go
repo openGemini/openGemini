@@ -91,3 +91,7 @@ func (h *MetaDataV1) buildResp(header protocol.RequestHeader, nodes []meta.DataN
 
 	return resp
 }
+
+func (h *MetaDataV1) Release() {
+
+}

@@ -15,8 +15,8 @@ import (
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
-	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
+	"google.golang.org/protobuf/proto"
 )
 
 type MeasurementVer struct {
@@ -48,6 +48,7 @@ type RetentionPolicyInfo struct {
 	Subscriptions        []SubscriptionInfo
 	DownSamplePolicyInfo *DownSamplePolicyInfo
 	MarkDeleted          bool
+	AdaptiveSharding     bool
 }
 
 // NewRetentionPolicyInfo returns a new instance of RetentionPolicyInfo
@@ -263,7 +264,7 @@ func (rpi *RetentionPolicyInfo) TimeRangeInfo(shardID uint64) *ShardTimeRangeInf
 		}
 
 		timeRangeInfo.OwnerIndex = IndexDescriptor{IndexID: shard.IndexID}
-		timeRangeInfo.OwnerIndex.IndexGroupID, timeRangeInfo.OwnerIndex.TimeRange = rpi.getIndexGroupTimeRange(shard.IndexID)
+		timeRangeInfo.OwnerIndex.IndexGroupID, timeRangeInfo.OwnerIndex.TimeRange, timeRangeInfo.OwnerIndex.Timezone = rpi.getIndexGroupTimeRange(shard.IndexID)
 		timeRangeInfo.ShardDuration = &ShardDurationInfo{DurationInfo: DurationDescriptor{Duration: rpi.Duration, MergeDuration: rpi.ShardMergeDuration,
 			Tier: shard.Tier, TierDuration: rpi.TierDuration(shard.Tier)}}
 		timeRangeInfo.ShardType = rpi.shardingType()
@@ -286,7 +287,7 @@ func (rpi *RetentionPolicyInfo) ShardTimeRangeInfo(shardID uint64) *ShardTimeRan
 		}
 
 		timeRangeInfo.OwnerIndex = IndexDescriptor{IndexID: shard.IndexID}
-		timeRangeInfo.OwnerIndex.IndexGroupID, timeRangeInfo.OwnerIndex.TimeRange = rpi.getIndexGroupTimeRange(shard.IndexID)
+		timeRangeInfo.OwnerIndex.IndexGroupID, timeRangeInfo.OwnerIndex.TimeRange, timeRangeInfo.OwnerIndex.Timezone = rpi.getIndexGroupTimeRange(shard.IndexID)
 		timeRangeInfo.ShardDuration = &ShardDurationInfo{
 			DurationInfo: DurationDescriptor{Duration: rpi.Duration, MergeDuration: rpi.ShardMergeDuration, Tier: shard.Tier, TierDuration: rpi.TierDuration(shard.Tier)},
 			Ident: ShardIdentifier{
@@ -302,16 +303,17 @@ func (rpi *RetentionPolicyInfo) ShardTimeRangeInfo(shardID uint64) *ShardTimeRan
 	return nil
 }
 
-func (rpi *RetentionPolicyInfo) getIndexGroupTimeRange(indexID uint64) (indexGroupID uint64, timeRange TimeRangeInfo) {
+func (rpi *RetentionPolicyInfo) getIndexGroupTimeRange(indexID uint64) (indexGroupID uint64, timeRange TimeRangeInfo, timezone string) {
 	for i := len(rpi.IndexGroups) - 1; i >= 0; i-- {
 		length := len(rpi.IndexGroups[i].Indexes)
 		if indexID >= rpi.IndexGroups[i].Indexes[0].ID && indexID <= rpi.IndexGroups[i].Indexes[length-1].ID {
 			indexGroupID = rpi.IndexGroups[i].ID
 			timeRange = TimeRangeInfo{StartTime: rpi.IndexGroups[i].StartTime, EndTime: rpi.IndexGroups[i].EndTime}
+			timezone = rpi.IndexGroups[i].Timezone
 			break
 		}
 	}
-	return indexGroupID, timeRange
+	return indexGroupID, timeRange, timezone
 }
 
 func (rpi *RetentionPolicyInfo) TierDuration(tier uint64) time.Duration {
@@ -462,15 +464,6 @@ func (rpi *RetentionPolicyInfo) unmarshal(pb *proto2.RetentionPolicyInfo) {
 	rpi.IndexGroupDuration = time.Duration(pb.GetIndexGroupDuration())
 	rpi.ShardMergeDuration = time.Duration(pb.GetShardMergeDuration())
 
-	if len(pb.GetMeasurements()) > 0 {
-		rpi.Measurements = make(map[string]*MeasurementInfo, len(pb.GetMeasurements()))
-		for _, x := range pb.GetMeasurements() {
-			msti := &MeasurementInfo{}
-			msti.unmarshal(x)
-			rpi.Measurements[msti.Name] = msti
-		}
-	}
-
 	if len(pb.GetMstVersions()) > 0 {
 		mstVersions := pb.GetMstVersions()
 		rpi.MstVersions = make(map[string]MeasurementVer, len(mstVersions))
@@ -483,6 +476,20 @@ func (rpi *RetentionPolicyInfo) unmarshal(pb *proto2.RetentionPolicyInfo) {
 		rpi.ShardGroups = make([]ShardGroupInfo, len(pb.GetShardGroups()))
 		for i, x := range pb.GetShardGroups() {
 			rpi.ShardGroups[i].unmarshal(x)
+		}
+	}
+
+	var lastSgEndTime int64
+	if len(rpi.ShardGroups) > 0 {
+		lastSgEndTime = rpi.ShardGroups[len(rpi.ShardGroups)-1].EndTime.UnixNano()
+	}
+
+	if len(pb.GetMeasurements()) > 0 {
+		rpi.Measurements = make(map[string]*MeasurementInfo, len(pb.GetMeasurements()))
+		for _, x := range pb.GetMeasurements() {
+			msti := &MeasurementInfo{}
+			msti.unmarshal(x, TimeReserveHigh32(lastSgEndTime))
+			rpi.Measurements[msti.Name] = msti
 		}
 	}
 
@@ -663,7 +670,7 @@ func (rpi *RetentionPolicyInfo) validMeasurementShardType(shardType, mstName str
 	return nil
 }
 
-func (rpi *RetentionPolicyInfo) maxShardGroupID() uint64 {
+func (rpi *RetentionPolicyInfo) MaxShardGroupID() uint64 {
 	if len(rpi.ShardGroups) == 0 {
 		return 0
 	}

@@ -81,68 +81,6 @@ func TestPrimaryKeyWriterWriteChunkMeta(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestPrimaryKeyWriterChunkMetaSize(t *testing.T) {
-	testCompDir := t.TempDir()
-	fn := filepath.Join(testCompDir, "PrimaryKeyWriter.test")
-	_ = fileops.MkdirAll(testCompDir, 0755)
-	defer func() {
-		_ = fileops.Remove(fn)
-	}()
-	fd, err := fileops.OpenFile(fn, os.O_RDWR|os.O_CREATE, 0640)
-	if err != nil {
-		t.Fatal(err)
-	}
-	lockPath := ""
-	fw := newIndexWriter(fd, &lockPath)
-	defer func() {
-		err := recover()
-		require.Equal(t, err, "ChunkMetaSize not implement for indexWriter")
-	}()
-	fw.ChunkMetaSize()
-	require.Equal(t, int64(0), fw.ChunkMetaBlockSize())
-}
-
-func TestPrimaryKeyWriterAppendChunkMetaToData(t *testing.T) {
-	testCompDir := t.TempDir()
-	fn := filepath.Join(testCompDir, "PrimaryKeyWriter.test")
-	_ = fileops.MkdirAll(testCompDir, 0755)
-	defer func() {
-		_ = fileops.Remove(fn)
-	}()
-	fd, err := fileops.OpenFile(fn, os.O_RDWR|os.O_CREATE, 0640)
-	if err != nil {
-		t.Fatal(err)
-	}
-	lockPath := ""
-	fw := newIndexWriter(fd, &lockPath)
-	defer func() {
-		err := recover()
-		require.Equal(t, err, "AppendChunkMetaToData not implement for indexWriter")
-	}()
-	err = fw.AppendChunkMetaToData()
-	assert.NoError(t, err)
-}
-
-func TestPrimaryKeyWriterSwitchMetaBuffer(t *testing.T) {
-	testCompDir := t.TempDir()
-	fn := filepath.Join(testCompDir, "PrimaryKeyWriter.test")
-	_ = fileops.MkdirAll(testCompDir, 0755)
-	defer func() {
-		_ = fileops.Remove(fn)
-	}()
-	fd, err := fileops.OpenFile(fn, os.O_RDWR|os.O_CREATE, 0640)
-	if err != nil {
-		t.Fatal(err)
-	}
-	lockPath := ""
-	fw := newIndexWriter(fd, &lockPath)
-	defer func() {
-		err := recover()
-		require.Equal(t, err, "SwitchMetaBuffer not implement for indexWriter")
-	}()
-	fw.SwitchMetaBuffer()
-}
-
 func TestPrimaryKeyWriterMetaDataBlocks(t *testing.T) {
 	testCompDir := t.TempDir()
 	fn := filepath.Join(testCompDir, "PrimaryKeyWriter.test")

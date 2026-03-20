@@ -98,6 +98,7 @@ func NewTagSetCursorForTest(schema *executor.QuerySchema, seriesN int) *tagSetCu
 		breakPoint: &breakPoint{},
 	}
 	itr.ctx = &idKeyCursorContext{}
+	itr.SetNextMethod()
 	return itr
 }
 
@@ -372,6 +373,10 @@ func (t *tagSetCursor) CheckRecordLen() bool {
 
 func (t *tagSetCursor) TagAuxHandler(start, end int) {
 	for i := range t.ctx.auxTags {
+		if t.ctx.auxTags[i] == influxql.DefaultLabels {
+			executor.AuxTagKeyHandler(t.auxColIndex[i], t.currSeriesInfo.GetSeriesTags(), t.RecordResult, start, end)
+			continue
+		}
 		for j := 0; j < end-start; j++ {
 			pTag := (*t.currSeriesInfo.GetSeriesTags()).FindPointTag(t.ctx.auxTags[i])
 			if pTag != nil {

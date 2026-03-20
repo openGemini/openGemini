@@ -191,3 +191,25 @@ func (c *RaftMsgCallback) GetCodec() transport.Codec {
 func (c *RaftMsgCallback) GetResponse() interface{} {
 	return c.data
 }
+
+type GetTaskCallback struct {
+	data interface{}
+}
+
+func (c *GetTaskCallback) Handle(data interface{}) error {
+	msg, ok := data.(*TaskMessage)
+	if !ok {
+		return errno.NewInvalidTypeError("*msgservice.TaskMessage", data)
+	}
+
+	c.data = msg
+	return nil
+}
+
+func (c *GetTaskCallback) GetCodec() transport.Codec {
+	return &TaskMessage{}
+}
+
+func (c *GetTaskCallback) GetResponse() interface{} {
+	return c.data
+}

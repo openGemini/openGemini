@@ -40,11 +40,11 @@ type {{.}} struct {
 }
 
 func (h *{{.}}) SetMessage(msg codec.BinaryCodec) error {
-	h.rsp = &msgservice.{{.}}Response{}
     req, ok := msg.(*msgservice.{{.}}Request)
     if !ok {
         return errno.NewInvalidTypeError("*msgservice.{{.}}Request", msg)
     }
+    h.rsp = &msgservice.{{.}}Response{}
     h.req = req
     return nil
 }

@@ -61,7 +61,7 @@ func newProcessor(inSchema, outSchema record.Schemas, exprOpt []hybridqp.ExprOpt
 			case "first":
 				coProcessor.AppendRoutine(newFirstRoutineImpl(inSchema, outSchema, exprOpt[i], auxProcessors))
 				initColMata = true
-			case "last":
+			case "last", "last_row":
 				coProcessor.AppendRoutine(newLastRoutineImpl(inSchema, outSchema, exprOpt[i], auxProcessors))
 				initColMata = true
 			case "min":

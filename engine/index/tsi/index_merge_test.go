@@ -10,16 +10,16 @@ Copyright 2022 Huawei Cloud Computing Technologies Co., Ltd.
 
 import (
 	"bytes"
+	"math/rand/v2"
 	"reflect"
 	"sort"
 	"strconv"
 	"testing"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/bytesutil"
 	"github.com/openGemini/openGemini/engine/index/mergeindex"
 	"github.com/openGemini/openGemini/lib/config"
-	"github.com/openGemini/openGemini/lib/rand"
+	"github.com/openGemini/openGemini/lib/util/lifted/encoding"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/mergeset"
 	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
@@ -664,7 +664,7 @@ func BenchmarkMakeGroupTagsKey(b *testing.B) {
 func genMakeGroupTagsKeyTestData(dimSize int, tagSize int) ([]string, map[string]int, []string, influx.PointTags) {
 	var dim []string
 	for i := 0; i < dimSize; i++ {
-		dim = append(dim, "tag"+strconv.Itoa(rand.Intn(tagSize)))
+		dim = append(dim, "tag"+strconv.Itoa(rand.IntN(tagSize)))
 	}
 	dimPos := make(map[string]int)
 	originPos := make([]string, len(dim))

@@ -17,13 +17,16 @@ package syscontrol
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/openGemini/openGemini/lib/backup"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
@@ -62,6 +65,10 @@ func (s *SysControl) SendSysCtrlOnNode(nodeID uint64, req msgservice.SysCtrlRequ
 	resp, ok := v.(*msgservice.SysCtrlResponse)
 	if !ok {
 		return nil, errno.NewInvalidTypeError("*msgservice.SysCtrlResponse", v)
+	}
+
+	if resp.Error() != nil {
+		return nil, resp.Error()
 	}
 
 	return resp.Result(), nil
@@ -112,6 +119,11 @@ curl -i -XPOST 'http://127.0.0.1:8086/debug/ctrl?mod=backgroundReadLimiter&limit
 curl -i -XPOST 'http://127.0.0.1:8086/debug/ctrl?mod=interruptquery&switchon=true&allnodes=y'
 curl -i -XPOST 'http://127.0.0.1:8086/debug/ctrl?mod=uppermemusepct&limit=99&allnodes=y'
 curl -i -XPOST 'http://127.0.0.1:8086/debug/ctrl?mod=backup'
+curl -i -XPOST 'http://127.0.0.1:8086/debug/ctrl?mod=compactmemusagelimit&limit=90&allnodes=y'
+curl -i -XPOST 'http://127.0.0.1:8635/debug/ctrl?mod=updatestreamconf&key=xxx&val=xxx&allnodes=y'
+curl -i -XPOST 'http://127.0.0.1:8635/debug/ctrl?mod=tsspunreftimeout&duration=0s&allnodes=y'
+curl -i -XPOST 'http://127.0.0.1:8635/debug/ctrl?mod=dbptunreftimeout&duration=0s&allnodes=y'
+curl -i -XPOST 'http://127.0.0.1:8635/debug/ctrl?mod=offloadwaitquery&switchon=true&allnodes=y'
 
 Sql cmd:
 curl -i -XPOST 'http://127.0.0.1:8086/debug/ctrl?mod=chunk_reader_parallel&limit=4'
@@ -123,6 +135,16 @@ curl -i -XPOST 'http://127.0.0.1:8086/debug/ctrl?mod=force_broadcast_query&enabl
 curl -i -XPOST 'http://127.0.0.1:8086/debug/ctrl?mod=time_filter_protection&enabled=true'
 curl -i -XPOST 'http://127.0.0.1:8086/debug/ctrl?mod=disablewrite&switchon=true'
 curl -i -XPOST 'http://127.0.0.1:8086/debug/ctrl?mod=disableread&switchon=true'
+curl -i -XPOST 'http://127.0.0.1:8635/debug/ctrl?mod=db_num_limit&limit=3'
+curl -i -XPOST 'http://127.0.0.1:8635/debug/ctrl?mod=obsaksk&ak="xx"&sk="xx"'
+curl -i -XPOST 'http://127.0.0.1:8635/debug/ctrl?mod=obshostname&hostname="xxx"'
+curl -i -XPOST 'http://127.0.0.1:8635/debug/ctrl?mod=slowquery&limit=10s'
+curl -i -XPOST 'http://127.0.0.1:8635/debug/ctrl?mod=querytimeout&limit=10s'
+curl -i -XPOST 'http://127.0.0.1:8635/debug/ctrl?mod=shard_group_timezone&timezone=Asia/Shanghai'
+curl -i -XPOST 'http://127.0.0.1:8086/debug/ctrl?mod=enable_readonly_write&switchon=true'
+curl -i -XPOST 'http://127.0.0.1:8635/debug/ctrl?mod=merge_self_conf&max_merge_self_level=3&max_num_of_file_to_merge_self=8,8,4&allnodes=y'
+curl -i -XPOST 'http://127.0.0.1:8086/debug/ctrl?mod=walenabled&switchon=true'
+curl -i -XPOST 'http://127.0.0.1:8086/debug/ctrl?mod=datacacheenable&enabled=1'
 */
 
 const (
@@ -137,10 +159,10 @@ const (
 	SlidingWindowPushUp   = "sliding_window_push_up"
 	ForceBroadcastQuery   = "force_broadcast_query"
 	Failpoint             = "failpoint"
-	NodeReadonly          = "readonly"
 	LogRows               = "log_rows"
 	verifyNode            = "verifynode"
 	memUsageLimit         = "memusagelimit"
+	CompactMemUsageLimit  = "compactmemusagelimit"
 	TimeFilterProtection  = "time_filter_protection"
 	disableWrite          = "disablewrite"
 	disableRead           = "disableread"
@@ -154,6 +176,46 @@ const (
 	BackupStatus       = "backup_status"
 
 	WriteStreamPointsEnable = "write_stream_points_enable"
+	DBLimit                 = "db_num_limit"
+
+	UpdateStreamConf   = "updatestreamconf"
+	ObsAkSk            = "obsaksk"
+	ObsHostName        = "obshostname"
+	SlowQuery          = "slowquery"
+	QueryTimeOut       = "querytimeout"
+	ShardGroupTimeZone = "shard_group_timezone"
+
+	LastRowCache = "last_row_cache"
+
+	NodeReadonly            = "readonly"
+	NodeEnableReadonlyWrite = "enable_readonly_write"
+	MergeSelfConf           = "merge_self_conf"
+
+	TsspUnrefTimeout = "tsspunreftimeout"
+	DbptUnrefTimeout = "dbptunreftimeout"
+	OffloadWaitQuery = "offloadwaitquery"
+)
+
+const (
+	LastRowCacheEnable        = "last-row-cache-enabled"
+	LastRowCacheMetricsEnable = "last-row-cache-metrics-enabled"
+	LastRowCacheMaxCost       = "last-row-cache-max-cost"
+	ForceFlushDuration        = "force_flush_duration"
+	WalEnabled                = "walenabled"
+	DataCacheEnable           = "datacacheenable"
+)
+
+const (
+	ParquetTask               = "parquet_task"
+	ParquetLevel              = "tssp-to-parquet-level"
+	ParquetGroupLen           = "max-group-len"
+	ParquetPageSize           = "page-size"
+	ParquetBatchSize          = "write-batch-size"
+	ParquetItrSize            = "itr-batch-size"
+	ParquetDictCompressEnable = "dict-compress-enable"
+	ParquetCompressAlg        = "compress-alg"
+	ParquetEnableMst          = "enable-mst"
+	ParquetMaxStatsSize       = "max-stats-size"
 )
 
 var (
@@ -168,7 +230,8 @@ var (
 
 	ParallelQueryInBatch int32 = 0 // this determines whether to use parallel query when a query is combined with multi queries
 
-	Readonly = false
+	Readonly            = false
+	EnableReadonlyWrite = false
 
 	HierarchicalStorageEnabled int32 = 0
 
@@ -176,12 +239,18 @@ var (
 
 	WriteColdShardEnable int32 = 0
 
-	indexReadCachePersistent bool = true
+	indexReadCachePersistent bool  = true
+	DatabaseNumLimit         int32 = 0
 )
 
 func SetDisableWrite(en bool) {
 	DisableWrites = en
 	logger.GetLogger().Info("DisableWrites", zap.Bool("switch", en))
+}
+
+func SetDatabaselimit(limit int32) {
+	atomic.StoreInt32(&DatabaseNumLimit, limit)
+	logger.GetLogger().Info("SetDatabaselimit", zap.Int32("limit", DatabaseNumLimit))
 }
 
 func SetDisableRead(en bool) {
@@ -284,6 +353,15 @@ func UpdateNodeReadonly(switchOn bool) {
 
 func IsReadonly() bool {
 	return Readonly
+}
+
+func UpdateNodeEnableReadonlyWrite(switchOn bool) {
+	EnableReadonlyWrite = switchOn
+	log.Printf("set EnableReadonlyWrite: %v", switchOn)
+}
+
+func IsEnableReadonlyWrite() bool {
+	return EnableReadonlyWrite
 }
 
 func IsHierarchicalStorageEnabled() bool {
@@ -411,7 +489,7 @@ func ProcessRequest(req msgservice.SysCtrlRequest, resp *bufio.Writer) (err erro
 		for n, s := range metaRes {
 			WriteString(resp, fmt.Sprintf("\n\t%v: %s,", n, s))
 		}
-	case DataFlush, compactionEn, compmerge, snapshot, DownSampleInOrder, verifyNode, memUsageLimit, BackgroundReadLimiter:
+	case DataFlush, compactionEn, compmerge, snapshot, DownSampleInOrder, verifyNode, memUsageLimit, BackgroundReadLimiter, CompactMemUsageLimit:
 		// store SysCtrl cmd
 		dataNodes, err := SysCtrl.MetaClient.DataNodes()
 		if err != nil {
@@ -532,9 +610,6 @@ func ProcessRequest(req msgservice.SysCtrlRequest, resp *bufio.Writer) (err erro
 		res := "\n\tsuccess"
 		WriteString(resp, res)
 	case NodeInterruptQuery:
-		if err != nil {
-			return err
-		}
 		// update InterruptQuery status for ts-sql
 		switchOn, err := GetBoolValue(req.Param(), "switchon")
 		if err != nil {
@@ -544,9 +619,6 @@ func ProcessRequest(req msgservice.SysCtrlRequest, resp *bufio.Writer) (err erro
 		// update InterruptQuery status for all of ts-store
 		return broadcastCmdToStore(req, resp)
 	case UpperMemUsePct:
-		if err != nil {
-			return err
-		}
 		// update UpperMemUsePct for ts-sql
 		upper, err := GetIntValue(req.Param(), "limit")
 		if err != nil {
@@ -568,19 +640,104 @@ func ProcessRequest(req msgservice.SysCtrlRequest, resp *bufio.Writer) (err erro
 		if err != nil {
 			return err
 		}
+		return sendCmdToLocalOrAll(req, resp)
+	case ShardGroupTimeZone:
+		timezone, ok := req.Param()["timezone"]
+		if !ok {
+			return ErrNoSuchParam
+		}
+		err := config.UpdateTimeZoneLoc(timezone)
+		if err != nil {
+			return err
+		}
+		// update ShardGroupTimeZone for all of ts-store
 		return broadcastCmdToStore(req, resp)
+	case ObsAkSk, ObsHostName, UpdateStreamConf:
+		return broadcastCmdToStore(req, resp)
+	case DBLimit:
+		// update db_num_limit for ts-sql
+		dblimit, err := GetIntValue(req.Param(), "limit")
+		if err != nil {
+			logger.GetLogger().Error("parse DBLimit value error", zap.Error(err))
+			return err
+		}
+		if dblimit < 0 {
+			err = fmt.Errorf("dblimit value should be greater than 0")
+			logger.GetLogger().Error("parse dblimit value error", zap.Error(err))
+			return err
+		}
+		SetDatabaselimit(int32(dblimit))
+		res := "\n\tsuccess"
+		WriteString(resp, res)
+	case SlowQuery:
+		slowQueryLimit, err := GetDurationValue(req.Param(), "limit")
+		if err != nil {
+			logger.GetLogger().Error("parse SlowQuery value error", zap.Error(err))
+			return err
+		}
+		if slowQueryLimit < 0 {
+			err = fmt.Errorf("slowQueryLimit value should be greater than 0")
+			logger.GetLogger().Error("parse slowQueryLimit value error", zap.Error(err))
+			return err
+		}
+		sysconfig.SetSlowQuery(slowQueryLimit)
+		res := "\n\tsuccess"
+		WriteString(resp, res)
+	case QueryTimeOut:
+		queryTimeOutLimit, err := GetDurationValue(req.Param(), "limit")
+		if err != nil {
+			logger.GetLogger().Error("parse QueryTimeOut value error", zap.Error(err))
+			return err
+		}
+		if queryTimeOutLimit < 0 {
+			err = fmt.Errorf("QueryTimeOut value should be greater than 0")
+			logger.GetLogger().Error("parse QueryTimeOut value error", zap.Error(err))
+			return err
+		}
+		sysconfig.SetQueryTimeOut(queryTimeOutLimit)
+		res := "\n\tsuccess"
+		WriteString(resp, res)
+	case LastRowCache:
+		return sendCmdToLocalOrAll(req, resp)
+	case ParquetTask:
+		if err := CheckUpdateParquetTaskParamValid(req.Param()); err != nil {
+			return err
+		}
+		return sendCmdToLocalOrAll(req, resp)
+	case NodeEnableReadonlyWrite:
+		switchOn, err := GetBoolValue(req.Param(), "switchon")
+		if err != nil {
+			return err
+		}
+		UpdateNodeEnableReadonlyWrite(switchOn)
+		WriteString(resp, "\n\tsuccess")
+	case ForceFlushDuration:
+		_, err := GetDurationValue(req.Param(), "duration")
+		if err != nil {
+			return err
+		}
+		return sendCmdToLocalOrAll(req, resp)
+	case MergeSelfConf:
+		return sendCmdToLocalOrAll(req, resp)
+	case WalEnabled:
+		if _, err := CheckSwitchOnParamValid(req.Param()); err != nil {
+			return err
+		}
+		return broadcastCmdToStore(req, resp)
+	case DataCacheEnable:
+		if _, err := CheckEnabledParamValid(req.Param()); err != nil {
+			return err
+		}
+		return broadcastCmdToStore(req, resp)
+	case TsspUnrefTimeout, DbptUnrefTimeout, OffloadWaitQuery:
+		return sendCmdToLocalOrAll(req, resp)
 	default:
 		return fmt.Errorf("unknown sysctrl mod: %v", req.Mod())
 	}
 	return nil
 }
 
-func ProcessBackup(req msgservice.SysCtrlRequest, resp *bufio.Writer, sqlHost string) (err error) {
-	var host string
-	s := strings.Split(sqlHost, ":")
-	if len(s) > 0 {
-		host = s[0]
-	}
+func ProcessBackup(req msgservice.SysCtrlRequest, resp *bufio.Writer, sqlHost []string) (err error) {
 	params := req.Param()
 	isNode := params["isNode"] == "true"
 	// store SysCtrl cmd
@@ -591,27 +748,106 @@ func ProcessBackup(req msgservice.SysCtrlRequest, resp *bufio.Writer, sqlHost st
 	var lock sync.Mutex
 	var wg sync.WaitGroup
 	for _, d := range dataNodes {
-		if !isNode || strings.Contains(d.Host, host) {
+		if !isNode {
 			wg.Add(1)
 			go sendCmdToStoreAsync(req, resp, d.ID, d.Host, &lock, &wg)
+			continue
+		}
+		for _, host := range sqlHost {
+			if strings.HasPrefix(d.Host, host+":") {
+				wg.Add(1)
+				go sendCmdToStoreAsync(req, resp, d.ID, d.Host, &lock, &wg)
+				break
+			}
 		}
 	}
 	wg.Wait()
 
-	var metaRes map[string]string
-	backupMeta := params["backupMeta"] == "true"
-	if backupMeta {
-		metaRes, err = SysCtrl.MetaClient.SendBackupToMeta(req.Mod(), req.Param())
+	backupMeta := params[backup.BackupMeta] == "true"
+	if params[backup.DataBases] == "" {
+		backupMeta = true
 	}
-	if err != nil {
-		WriteString(resp, fmt.Sprintf("\n\t%v,", err))
-
+	if !backupMeta {
+		return nil
+	}
+	metaServers := SysCtrl.MetaClient.MetaServers()
+	metaRes := make(map[string]string, len(metaServers))
+	for i, m := range metaServers {
+		if !isNode {
+			res := SysCtrl.MetaClient.SendBackupToMeta(i, req.Mod(), req.Param())
+			metaRes[m] = res
+			continue
+		}
+		for _, host := range sqlHost {
+			if strings.HasPrefix(m, host+":") {
+				res := SysCtrl.MetaClient.SendBackupToMeta(i, req.Mod(), req.Param())
+				metaRes[m] = res
+				break
+			}
+		}
 	}
 	for n, s := range metaRes {
 		WriteString(resp, fmt.Sprintf("\n\t%v: %s,", n, s))
 	}
 
 	return nil
+}
+
+func sendCmdToLocalOrAll(req msgservice.SysCtrlRequest, resp *bufio.Writer) error {
+	if allNodes, ok := req.Param()["allnodes"]; ok {
+		if strings.EqualFold(allNodes, "y") || strings.EqualFold(allNodes, "yes") {
+			return broadcastCmdToStore(req, resp)
+		}
+	}
+
+	if req.LocalBindAddress() == "" && req.LocalDomain() == "" {
+		return broadcastCmdToStore(req, resp)
+	}
+
+	// Optimized for cloud instances. Only send to the store node of the same container.
+	storeHosts, storeDomain := getLocalStoreNodeInfo(req.LocalDomain(), req.LocalBindAddress())
+	dataNodes, err := SysCtrl.MetaClient.DataNodes()
+	if err != nil {
+		return err
+	}
+	for _, node := range dataNodes {
+		if _, ok := storeHosts[node.Host]; ok || node.Host == storeDomain {
+			res := sendCmdToStore(req, node.ID, node.Host)
+			_, err = resp.WriteString(res)
+			return err
+		}
+	}
+
+	logger.GetLogger().Info("local store node not found, broadcast to all nodes")
+	return broadcastCmdToStore(req, resp)
+}
+
+var sqlBindIpList []string
+var localStoreHosts map[string]struct{}
+var localStoreDomain string
+
+func getLocalStoreNodeInfo(sqlDomain, sqlBindAddr string) (map[string]struct{}, string) {
+	// Initialized, return directly
+	if len(localStoreHosts) > 0 && len(localStoreDomain) > 0 {
+		return localStoreHosts, localStoreDomain
+	}
+
+	// parse sql node ip
+	if len(sqlBindIpList) == 0 {
+		addrs := strings.Split(sqlBindAddr, ",")
+		sqlBindIpList = make([]string, len(addrs))
+		for i, addr := range addrs {
+			sqlBindIpList[i] = strings.Split(addr, ":")[0]
+		}
+	}
+
+	// `sqlstore_sql_node_N` to `sqlstore_store_node_N`
+	localStoreDomain = fmt.Sprintf("%s:8400", strings.ReplaceAll(sqlDomain, "_sql_node_", "_store_node_"))
+	localStoreHosts = make(map[string]struct{}, len(sqlBindIpList))
+	for _, ip := range sqlBindIpList {
+		localStoreHosts[fmt.Sprintf("%s:8400", strings.Split(ip, ":")[0])] = struct{}{}
+	}
+	return localStoreHosts, localStoreDomain
 }
 
 func broadcastCmdToStore(req msgservice.SysCtrlRequest, resp *bufio.Writer) error {
@@ -760,4 +996,73 @@ func WriteString(w *bufio.Writer, content string) {
 	if err != nil {
 		logger.GetLogger().Error("WriteString error", zap.Error(err))
 	}
+}
+
+func CheckUpdateAsSkParamValid(params map[string]string) error {
+	if _, ok := params["ak"]; !ok {
+		return errors.New("missing ak")
+	}
+
+	if _, ok := params["sk"]; !ok {
+		return errors.New("missing sk")
+	}
+	return nil
+}
+
+func CheckUpdateObsHostNameParamValid(params map[string]string) error {
+	if _, ok := params["hostname"]; !ok {
+		return errors.New("missing hostName")
+	}
+	return nil
+}
+
+func CheckUpdateStreamConfParamValid(params map[string]string) error {
+	if key, ok := params["key"]; !ok || key == "" {
+		return errors.New("missing key")
+	}
+
+	if val, ok := params["val"]; !ok || val == "" {
+		return errors.New("missing val")
+	}
+	return nil
+}
+
+func CheckUpdateParquetTaskParamValid(params map[string]string) error {
+	delete(params, "mod")
+	validKeys := []string{ParquetLevel, ParquetPageSize, ParquetBatchSize, ParquetGroupLen, ParquetItrSize,
+		ParquetDictCompressEnable, ParquetCompressAlg, ParquetEnableMst, "allnodes", ParquetMaxStatsSize}
+	checkValid := func(v string) bool {
+		for _, validKey := range validKeys {
+			if validKey == v {
+				return true
+			}
+		}
+		return false
+	}
+
+	for k := range params {
+		if !checkValid(k) {
+			return fmt.Errorf("invalid parquet task param %s", k)
+		}
+	}
+	return nil
+}
+
+func CheckSwitchOnParamValid(params map[string]string) (bool, error) {
+	switchOn, err := GetBoolValue(params, "switchon")
+	if err != nil {
+		return false, err
+	}
+	return switchOn, nil
+}
+
+func CheckEnabledParamValid(params map[string]string) (int64, error) {
+	enabled, err := GetIntValue(params, "enabled")
+	if err != nil {
+		return -1, err
+	}
+	if enabled != 0 && enabled != 1 {
+		return -1, fmt.Errorf("invalid enabled:%v", enabled)
+	}
+	return enabled, nil
 }

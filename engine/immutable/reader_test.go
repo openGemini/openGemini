@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/openGemini/openGemini/engine/comm"
 	"github.com/openGemini/openGemini/lib/binaryfilterfunc"
 	"github.com/openGemini/openGemini/lib/bitmap"
 	"github.com/openGemini/openGemini/lib/encoding"
@@ -592,11 +593,22 @@ func (codec *colValCodec) decode(t *testing.T) {
 	ctx := NewReadContext(true)
 	err := decodeColumnData(ref, codec.buf, &codec.other, ctx, true)
 	require.NoError(t, err)
+	codec.format(&codec.dataCol)
+	codec.format(&codec.other)
 	require.Equal(t, codec.dataCol, codec.other)
 }
 
 func (codec *colValCodec) assertEncodeDataSize(t *testing.T, expSize int) {
 	require.Equal(t, expSize, len(codec.buf))
+}
+
+func (codec *colValCodec) format(col *record.ColVal) {
+	if len(col.Val) == 0 {
+		col.Val = []byte{}
+	}
+	if len(col.Offset) == 0 {
+		col.Offset = []uint32{}
+	}
 }
 
 // ColVal.Len = 1
@@ -933,6 +945,76 @@ func Test_findRowIdxRange(t *testing.T) {
 			got, got1 := findRowIdxRange(tt.args.timeCol, tt.args.tr, tt.args.ascending)
 			assert.Equal(t, tt.want, got)
 			assert.Equal(t, tt.want1, got1)
+		})
+	}
+}
+
+func TestAggregateData(t *testing.T) {
+	type args struct {
+		newRec  *record.Record
+		baseRec *record.Record
+		ops     []*comm.CallOption
+	}
+	Schema := []record.Field{{Name: "value", Type: influx.Field_Type_Float}}
+	rec := record.NewRecord(Schema, true)
+	tests := []struct {
+		name string
+		args args
+		want bool
+	}{
+		{
+			name: "last_row",
+			args: args{
+				newRec:  rec,
+				baseRec: rec,
+				ops: []*comm.CallOption{
+					{
+						Call: &influxql.Call{Name: "last_row", Args: []influxql.Expr{&influxql.VarRef{Val: "value", Type: influxql.Float}}},
+						Ref:  &influxql.VarRef{Val: "value", Type: influxql.Float},
+					},
+				},
+			},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, AggregateData(tt.args.newRec, tt.args.baseRec, tt.args.ops))
+		})
+	}
+}
+
+func TestResetAggregateData(t *testing.T) {
+	type args struct {
+		newRec *record.Record
+		ops    []*comm.CallOption
+	}
+	Schema := []record.Field{{Name: "value", Type: influx.Field_Type_Float}, {Name: "value", Type: influx.Field_Type_Float}}
+	rec := record.NewRecord(Schema, true)
+	tests := []struct {
+		name string
+		args args
+	}{
+		{
+			name: "last_row",
+			args: args{
+				newRec: rec,
+				ops: []*comm.CallOption{
+					{
+						Call: &influxql.Call{Name: "last_row", Args: []influxql.Expr{&influxql.VarRef{Val: "value", Type: influxql.Float}}},
+						Ref:  &influxql.VarRef{Val: "value", Type: influxql.Float},
+					},
+					{
+						Call: &influxql.Call{Name: "last_row", Args: []influxql.Expr{&influxql.VarRef{Val: "value", Type: influxql.Float}}},
+						Ref:  &influxql.VarRef{Val: "value", Type: influxql.Float},
+					},
+				},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ResetAggregateData(tt.args.newRec, tt.args.ops)
 		})
 	}
 }

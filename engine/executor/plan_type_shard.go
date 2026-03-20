@@ -179,6 +179,10 @@ func (pts *PlanTypeInitShard) LogicalPlanCost(source *influxql.Measurement, opt 
 	return hybridqp.LogicalPlanCost{}, nil
 }
 
+func (pts *PlanTypeInitShard) GetResource(resource string) map[string]string {
+	return nil
+}
+
 func NewSqlPlanTypePool(planType PlanType) ([]hybridqp.QueryNode, error) {
 	sqlReader := strings.NewReader(TemplateSql[planType])
 	parser := influxql.NewParser(sqlReader)

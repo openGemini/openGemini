@@ -19,13 +19,14 @@ import (
 	"fmt"
 	"runtime/debug"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/encoding"
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/metaclient"
 	"github.com/openGemini/openGemini/lib/pointsdecoder"
+	"github.com/openGemini/openGemini/lib/pool"
 	"github.com/openGemini/openGemini/lib/raftconn"
 	"github.com/openGemini/openGemini/lib/raftlog"
+	"github.com/openGemini/openGemini/lib/util/lifted/encoding"
 	"go.etcd.io/etcd/raft/v3/raftpb"
 	"go.uber.org/zap"
 )
@@ -41,6 +42,7 @@ type raftNodeRequest interface {
 	RetCommittedDataC(*raftlog.DataWrapper, error)
 	TransferLeadership(newLeader uint64) error
 	Stop()
+	GetStorage() *raftlog.RaftDiskStorage
 }
 
 func readReplayForReplication(ReplayC <-chan *raftconn.Commit, client metaclient.MetaClient, storage StorageService, db string, ptId uint32) {
@@ -120,12 +122,16 @@ func dealCommitData(node *raftconn.RaftNode, client metaclient.MetaClient, stora
 	}
 }
 
+var pointsDecoderPool = pool.NewDefaultUnionPool[pointsdecoder.DecoderWork](func() *pointsdecoder.DecoderWork {
+	return pointsdecoder.GetDecoderWork()
+})
+
 func dealNormalData(dataWrapper *raftlog.DataWrapper, database string, ptId uint32, client metaclient.MetaClient,
 	storage StorageService, node *raftconn.RaftNode) error {
 	tail := dataWrapper.GetData()
-	ww := pointsdecoder.GetDecoderWork()
+	ww := pointsDecoderPool.Get()
 	ww.SetReqBuf(tail)
-	defer pointsdecoder.PutDecoderWork(ww)
+	defer pointsDecoderPool.PutWithMemSize(ww, 0)
 	masterShId, _, _, err := ww.DecodeShardAndRows(database, "", ptId, tail)
 	if err != nil {
 		logger.GetLogger().Error("decode shard and rows failed", zap.Error(err))

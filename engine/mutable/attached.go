@@ -18,80 +18,32 @@ import (
 	"fmt"
 	"math"
 	"reflect"
-	"sync/atomic"
 
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/immutable/colstore"
 	"github.com/openGemini/openGemini/lib/fragment"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/record"
-	Statistics "github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
 	"github.com/openGemini/openGemini/lib/util"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	"go.uber.org/zap"
 )
 
 type WriteAttached struct {
-	db            string
-	rp            string
-	mst           string
-	primaryKey    record.Schemas
-	sortKey       record.Schemas
-	indexRelation *influxql.IndexRelation
+	db  string
+	rp  string
+	mst *colstore.Measurement
 }
 
-func NewWriteAttached(mst string, primaryKey, sortKey record.Schemas, indexRelation *influxql.IndexRelation) *WriteAttached {
+func NewWriteAttached(mst *colstore.Measurement) *WriteAttached {
 	return &WriteAttached{
-		mst:           mst,
-		primaryKey:    primaryKey,
-		sortKey:       sortKey,
-		indexRelation: indexRelation,
+		mst: mst,
 	}
 }
 
 func (w *WriteAttached) SetDBInfo(db string, rp string) {
 	w.db = db
 	w.rp = rp
-}
-
-func (w *WriteAttached) updateAccumulateMetaIndex(accumulateMetaIndex *immutable.AccumulateMetaIndex) {
-
-}
-
-func (w *WriteAttached) getAccumulateMetaIndex() *immutable.AccumulateMetaIndex {
-	return nil
-}
-
-func (w *WriteAttached) flushChunk(primaryKey record.Schemas, msName string, indexRelation *influxql.IndexRelation, tbStore immutable.TablesStore,
-	chunk *WriteChunkForColumnStore, writeMs *immutable.MsBuilder, tcLocation int8) {
-
-	writeRec := chunk.WriteRec.GetRecord()
-
-	writeMs = w.WriteRecordForFlush(writeRec, writeMs, tbStore, 0, true, math.MinInt64, primaryKey, indexRelation)
-	atomic.AddInt64(&Statistics.PerfStat.FlushRowsCount, int64(writeRec.RowNums()))
-
-	if writeMs != nil {
-		if err := immutable.WriteIntoFile(writeMs, true, writeMs.GetPKInfoNum() != 0, indexRelation); err != nil {
-			writeMs = nil
-			logger.GetLogger().Error("rename init file failed", zap.String("mstName", msName), zap.Error(err))
-			return
-		}
-
-		immutable.NewCSParquetManager().Convert(writeMs.Files, w.db, w.rp, msName)
-
-		tbStore.AddTSSPFiles(writeMs.Name(), false, writeMs.Files...)
-		if writeMs.GetPKInfoNum() != 0 {
-			for i, file := range writeMs.Files {
-				file.SetPkInfo(colstore.NewPKInfo(writeMs.GetPKRecord(i), writeMs.GetPKMark(i), tcLocation))
-			}
-		}
-	}
-
-	err := writeMs.CloseIndexWriters()
-	if err != nil {
-		logger.GetLogger().Error("close indexWriters failed", zap.String("mstName", msName), zap.Error(err))
-		return
-	}
 }
 
 func (w *WriteAttached) WriteRecordForFlush(rec *record.Record, msb *immutable.MsBuilder, tbStore immutable.TablesStore, id uint64, order bool,
@@ -126,27 +78,32 @@ func (w *WriteAttached) flushRecord(tbStore immutable.TablesStore, rec *record.R
 		return fmt.Errorf("unsupported store type. expect: *immutable.MmsTables, got: %v", reflect.TypeOf(tbStore))
 	}
 
-	sw := mmsTb.NewStreamWriteFile(w.mst)
+	sw := mmsTb.NewStreamWriteFile(w.mst.MeasurementInfo().Name)
 	err := sw.InitFlushFile(tbStore.NextSequence(), true)
 	if err != nil {
 		return err
 	}
 
-	cw := immutable.NewColumnStoreTSSPWriter(sw)
-	ret, err := cw.WriteRecord(rec, w.primaryKey, w.sortKey, w.indexRelation)
+	cw := immutable.NewColumnStoreTSSPWriter(sw, w.mst)
+	ret, err := cw.WriteRecord(rec)
 
 	if err != nil {
 		return err
 	}
 
-	err = immutable.RenameTmpFilesWithPKIndex([]immutable.TSSPFile{ret.File}, w.indexRelation)
-	if err != nil {
-		return err
+	tcLoc := colstore.DefaultTCLocation
+	if w.mst.TCDuration() > 0 {
+		tcLoc = colstore.TCLocationUsed
 	}
 
 	uts := util.Bytes2Uint64Slice(util.Int64Slice2byte(ret.Fragments))
 	pkMark := fragment.NewIndexFragmentVariable(uts)
-	ret.File.SetPkInfo(colstore.NewPKInfo(ret.PKRecord, pkMark, -1))
-	tbStore.AddTSSPFiles(w.mst, true, ret.File)
+	ret.File.SetPkInfo(colstore.NewPKInfo(ret.PKRecord, pkMark, w.mst.ColStoreInfo().GetPKType(), tcLoc))
+
+	err = ret.File.Rename(immutable.RemoveTmpSuffix(ret.File.Path()))
+	if err != nil {
+		return err
+	}
+	tbStore.AddTSSPFiles(w.mst.MeasurementInfo().Name, true, ret.File)
 	return nil
 }

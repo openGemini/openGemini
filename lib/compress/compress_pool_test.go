@@ -21,7 +21,7 @@ import (
 	"io"
 	"testing"
 
-	"github.com/golang/snappy"
+	"github.com/klauspost/compress/snappy"
 	"github.com/klauspost/compress/zstd"
 	"github.com/pierrec/lz4/v4"
 	"github.com/stretchr/testify/assert"

@@ -28,7 +28,6 @@ import (
 	"github.com/openGemini/openGemini/lib/bitmap"
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/errno"
-	"github.com/openGemini/openGemini/lib/fragment"
 	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
@@ -76,6 +75,7 @@ type ColumnStoreReader struct {
 	inOutIdxMap  map[int]int
 	closedCh     chan struct{}
 	closedSignal *bool
+	isCount      bool
 }
 
 func NewColumnStoreReader(plan hybridqp.QueryNode, frags executor.ShardsFragments) *ColumnStoreReader {
@@ -92,6 +92,7 @@ func NewColumnStoreReader(plan hybridqp.QueryNode, frags executor.ShardsFragment
 		dimVals:     make([]string, len(plan.Schema().Options().GetOptDimension())),
 		logger:      logger.NewLogger(errno.ModuleQueryEngine),
 		closedCh:    make(chan struct{}, 2),
+		isCount:     plan.Schema().IsColumnStoreCount(),
 	}
 	if len(r.schema.GetSortFields()) == 0 && !r.schema.HasCall() {
 		r.limit = plan.Schema().Options().GetLimit() + plan.Schema().Options().GetOffset()
@@ -215,15 +216,20 @@ func (r *ColumnStoreReader) initQueryCtx() (tr util.TimeRange, readCtx *immutabl
 	// init the read ctx
 	readCtx = immutable.NewReadContext(r.schema.Options().IsAscending())
 	tr = util.TimeRange{Min: querySchema.Options().GetStartTime(), Max: querySchema.Options().GetEndTime()}
-	// TODO: General solution of the first sort key to be adapted
-	if querySchema.Options().IsTimeSorted() {
-		readCtx.SetTr(tr)
+	readCtx.SetTr(tr)
+	if !r.schema.Options().IsTimeSorted() {
+		readCtx.SetTimeDisorder()
 	}
+	readCtx.SetCsStore()
 	readCtx.SetSpan(r.readSpan, r.filterSpan)
 	return
 }
 
 func (r *ColumnStoreReader) initReadCursor(queryCtx context.Context) (err error) {
+	if r.isCount {
+		return
+	}
+
 	var tr util.TimeRange
 	var readCtx *immutable.ReadContext
 	tr, readCtx, err = r.initQueryCtx()
@@ -231,15 +237,11 @@ func (r *ColumnStoreReader) initReadCursor(queryCtx context.Context) (err error)
 		return
 	}
 	readCtx.SetClosedSignal(r.closedSignal)
-	if !r.schema.Options().IsTimeSorted() {
-		tr = util.TimeRange{Min: influxql.MinTime, Max: influxql.MaxTime}
-	}
 	var locs []*immutable.Location
 
 	ctx := immutable.NewChunkMetaContext(nil)
 	defer ctx.Release()
 
-	var segmentRanges fragment.FragmentRanges
 	for _, shardFrags := range r.frags {
 		for _, fileFrags := range shardFrags.FileMarks {
 			file := fileFrags.GetFile()
@@ -257,14 +259,7 @@ func (r *ColumnStoreReader) initReadCursor(queryCtx context.Context) (err error)
 				}
 				immutable.PutChunkMeta(file.Path(), loc.GetChunkMeta())
 			}
-			pkMark := file.GetPkInfo().GetMark()
-			allSegmentRanges := pkMark.GetSegmentsFromFragmentRange()
-			fragmentRanges := fileFrags.GetFragmentRanges()
-			segmentRanges, err = getSegmentRanges(fragmentRanges, allSegmentRanges)
-			if err != nil {
-				return
-			}
-			loc.SetFragmentRanges(segmentRanges)
+			loc.SetFragmentRanges(fileFrags.GetFragmentRanges())
 			locs = append(locs, loc)
 		}
 	}
@@ -277,22 +272,19 @@ func (r *ColumnStoreReader) initReadCursor(queryCtx context.Context) (err error)
 	return
 }
 
-func getSegmentRanges(fragmentRanges, allSegmentRanges fragment.FragmentRanges) (fragment.FragmentRanges, error) {
-	fragmentCount := len(allSegmentRanges)
-	var segmentRanges fragment.FragmentRanges
-	for _, fragmentRange := range fragmentRanges {
-		fragmentEnd := fragmentRange.End
-		fragmentStart := fragmentRange.Start
-		if fragmentEnd > uint32(fragmentCount) {
-			return nil, errors.New("can`t get segment ranges when init the read cursor")
-		}
-		segmentRange := &fragment.FragmentRange{Start: allSegmentRanges[fragmentStart].Start, End: allSegmentRanges[fragmentEnd-1].End}
-		segmentRanges = append(segmentRanges, segmentRange)
+func (r *ColumnStoreReader) getFragmentCount() (int, int) {
+	if r.isCount {
+		return 0, 0
 	}
-	return segmentRanges, nil
+	return r.FragmentCount(), r.readCursor.FragmentCount()
 }
 
 func (r *ColumnStoreReader) initSchemaAndPool() (err error) {
+	if r.isCount {
+		r.chunkPool = executor.NewCircularChunkPool(ColumnStoreReaderChunkNum, executor.NewChunkBuilder(r.outSchema))
+		return
+	}
+
 	// TODO: to support the multi data type for tag, such as int/float/bool/string
 	// init the input schema
 	useIdxMap := make(map[int]struct{})
@@ -409,13 +401,11 @@ func (r *ColumnStoreReader) Work(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	fragCountBeforeFilter = r.FragmentCount()
-	fragCountAfterFilter = r.readCursor.FragmentCount()
+	fragCountBeforeFilter, fragCountAfterFilter = r.getFragmentCount()
 	tracing.EndPP(r.initReaderSpan)
 
 	defer func() {
 		if r.span != nil {
-			rowCountBeforeFilter = r.readCursor.RowCount()
 			r.span.SetNameValue(fmt.Sprintf("frag_count_bf=%d", fragCountBeforeFilter))
 			r.span.SetNameValue(fmt.Sprintf("frag_count_af=%d", fragCountAfterFilter))
 			r.span.SetNameValue(fmt.Sprintf("row_count_bf=%d", rowCountBeforeFilter))
@@ -427,15 +417,22 @@ func (r *ColumnStoreReader) Work(ctx context.Context) error {
 	}()
 
 	tracing.StartPP(r.span)
-	iterCount, rowCountAfterFilter, err = r.Run(ctx)
+	iterCount, rowCountBeforeFilter, rowCountAfterFilter, err = r.Run(ctx)
 	tracing.EndPP(r.span)
 	return err
 }
 
-func (r *ColumnStoreReader) Run(ctx context.Context) (iterCount, rowCountAfterFilter int, err error) {
+func (r *ColumnStoreReader) Run(ctx context.Context) (iterCount, rowCountBeforeFilter, rowCountAfterFilter int, err error) {
+	if r.isCount {
+		return r.runCount(ctx)
+	}
+
 	var ch executor.Chunk
 	filterBitmap := bitmap.NewFilterBitmap(r.queryCtx.filterOption.CondFunctions.NumFilter())
 	colAux := record.ColAux{}
+	defer func() {
+		rowCountBeforeFilter = r.readCursor.RowCount()
+	}()
 	for {
 		select {
 		case <-r.closedCh:
@@ -481,6 +478,42 @@ func (r *ColumnStoreReader) Run(ctx context.Context) (iterCount, rowCountAfterFi
 	}
 }
 
+func (r *ColumnStoreReader) runCount(ctx context.Context) (int, int, int, error) {
+	count, fragmentCount := int64(0), 0
+	for _, frag := range r.frags {
+		fragmentCount += int(frag.FragmentCount)
+		for _, fm := range frag.FileMarks {
+			for _, frd := range fm.GetFragmentRangeDetails() {
+				count += frd.Count
+			}
+		}
+	}
+
+	select {
+	case <-ctx.Done():
+		return 0, 0, 0, nil
+	default:
+		mstName, err := getMstName(r.schema)
+		if err != nil {
+			return 0, 0, 0, err
+		}
+		chunk := r.chunkPool.GetChunk()
+		chunk.SetName(mstName)
+		times := []int64{0}
+		column := chunk.Columns()[0]
+		column.AppendIntegerValue(count)
+		column.AppendNotNil()
+		if len(times) > cap(chunk.Time()) {
+			chunk.SetTime(make([]int64, 0, len(times)))
+		}
+		chunk.AppendTimes(times)
+		tracing.SpanElapsed(r.outputSpan, func() {
+			r.sendChunk(chunk)
+		})
+		return 0, int(count), int(count), nil
+	}
+}
+
 func (r *ColumnStoreReader) runLimit(rec *record.Record, ch executor.Chunk, rowCountAfterFilter int) (err error) {
 	var sliceRec *record.Record
 	if r.limit < rowCountAfterFilter {
@@ -505,9 +538,13 @@ func (r *ColumnStoreReader) runLimit(rec *record.Record, ch executor.Chunk, rowC
 }
 
 func (r *ColumnStoreReader) tranRecToChunk(rec *record.Record) (executor.Chunk, error) {
+	mstName, err := getMstName(r.schema)
+	if err != nil {
+		return nil, err
+	}
 	chunk := r.chunkPool.GetChunk()
 	// for multi-table query, each plan is created for each table at the coordinator. Only one table exists in the reader.
-	chunk.SetName(influx.GetOriginMstName(r.schema.GetSourcesNames()[0]))
+	chunk.SetName(mstName)
 	times := rec.Times()
 	for i, column := range chunk.Columns() {
 		if column.DataType() == influxql.Unknown {
@@ -522,6 +559,8 @@ func (r *ColumnStoreReader) tranRecToChunk(rec *record.Record) (executor.Chunk, 
 		transFun(recColumn, column)
 		if recColumn.NilCount == recColumn.Length() {
 			column.AppendManyNil(len(times))
+		} else if recColumn.NilCount == 0 {
+			column.AppendManyNotNil(len(times))
 		} else {
 			r.rowBitmap = recColumn.RowBitmap(r.rowBitmap[:0])
 			column.AppendNilsV2(r.rowBitmap...)
@@ -605,4 +644,12 @@ func (r *ColumnStoreReader) GetOutputNumber(_ executor.Port) int {
 
 func (r *ColumnStoreReader) GetInputNumber(_ executor.Port) int {
 	return 0
+}
+
+func getMstName(schema hybridqp.Catalog) (string, error) {
+	names := schema.GetSourcesNames()
+	if len(names) == 0 {
+		return "", errors.New("schema sources's length is zero")
+	}
+	return influx.GetOriginMstName(names[0]), nil
 }

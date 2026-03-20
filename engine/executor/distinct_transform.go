@@ -34,12 +34,13 @@ type DistinctTransform struct {
 	BaseProcessor
 	distinctMap *hashtable.StringHashMap
 
-	chunkPool     *CircularChunkPool
-	iteratorParam *IteratorParams
-	coProcessor   CoProcessor
-	Inputs        ChunkPorts
-	Outputs       ChunkPorts
-	opt           *query.ProcessorOptions
+	chunkPool       *CircularChunkPool
+	iteratorParam   *IteratorParams
+	coProcessor     CoProcessor
+	Inputs          ChunkPorts
+	Outputs         ChunkPorts
+	distinctColumns []int
+	opt             hybridqp.Options
 
 	span           *tracing.Span
 	distinctCost   *tracing.Span
@@ -52,6 +53,8 @@ type DistinctTransform struct {
 
 	newChunk Chunk
 
+	lastChunkTag []byte
+
 	errs errno.Errs
 }
 
@@ -62,21 +65,21 @@ var _ = RegistryTransformCreator(&LogicalDistinct{}, &DistinctTransformCreator{}
 type DistinctTransformCreator struct {
 }
 
-func (d *DistinctTransformCreator) Create(plan LogicalPlan, opt *query.ProcessorOptions) (Processor, error) {
-	p := NewDistinctTransform([]hybridqp.RowDataType{plan.Children()[0].RowDataType()}, []hybridqp.RowDataType{plan.RowDataType()}, opt)
+func (d *DistinctTransformCreator) Create(plan LogicalPlan, _ *query.ProcessorOptions) (Processor, error) {
+	p := NewDistinctTransform([]hybridqp.RowDataType{plan.Children()[0].RowDataType()}, []hybridqp.RowDataType{plan.RowDataType()}, plan.Schema())
 	return p, nil
 }
 
-func NewDistinctTransform(inRowDataTypes []hybridqp.RowDataType, outRowDataTypes []hybridqp.RowDataType, opt *query.ProcessorOptions) *DistinctTransform {
+func NewDistinctTransform(inRowDataTypes []hybridqp.RowDataType, outRowDataTypes []hybridqp.RowDataType, schema hybridqp.Catalog) *DistinctTransform {
 	if len(inRowDataTypes) != 1 || len(outRowDataTypes) != 1 {
 		panic("NewDistinctTransform raise error: the Inputs and Outputs should be 1")
 	}
 	closedSignal := false
 	trans := &DistinctTransform{
 		distinctMap:    hashtable.DefaultStringHashMap(),
-		opt:            opt,
-		Inputs:         make(ChunkPorts, 0, len(inRowDataTypes)),
-		Outputs:        make(ChunkPorts, 0, len(outRowDataTypes)),
+		opt:            schema.Options(),
+		Inputs:         make(ChunkPorts, 1),
+		Outputs:        make(ChunkPorts, 1),
 		coProcessor:    NewIntervalCoProcessor(outRowDataTypes[0]),
 		iteratorParam:  &IteratorParams{},
 		chunkPool:      NewCircularChunkPool(CircularChunkNum, NewChunkBuilder(outRowDataTypes[0])),
@@ -89,15 +92,23 @@ func NewDistinctTransform(inRowDataTypes []hybridqp.RowDataType, outRowDataTypes
 	}
 	trans.newChunk = trans.chunkPool.GetChunk()
 
-	for _, schema := range inRowDataTypes {
-		input := NewChunkPort(schema)
-		trans.Inputs = append(trans.Inputs, input)
+	trans.Inputs[0] = NewChunkPort(inRowDataTypes[0])
+	trans.Outputs[0] = NewChunkPort(outRowDataTypes[0])
+
+	fields := schema.Fields()
+	distinctColumns := make([]int, 0, len(fields))
+	for i, f := range fields {
+		if f.Auxiliary {
+			distinctColumns = append(distinctColumns, i)
+		}
 	}
 
-	for _, schema := range outRowDataTypes {
-		output := NewChunkPort(schema)
-		trans.Outputs = append(trans.Outputs, output)
+	if len(distinctColumns) == 0 {
+		for i := range outRowDataTypes[0].Fields() {
+			distinctColumns = append(distinctColumns, i)
+		}
 	}
+	trans.distinctColumns = distinctColumns
 
 	return trans
 }
@@ -124,7 +135,7 @@ func (d *DistinctTransform) running(ctx context.Context) {
 		if e := recover(); e != nil {
 			err := errno.NewError(errno.RecoverPanic, e)
 			d.distinctLogger.Error(err.Error(), zap.String("query", "DistinctTransform"),
-				zap.Uint64("query_id", d.opt.QueryId))
+				zap.Uint64("query_id", d.opt.GetQueryID()))
 			d.errs.Dispatch(err)
 		} else {
 			d.errs.Dispatch(nil)
@@ -157,7 +168,7 @@ func (d *DistinctTransform) work() {
 		if e := recover(); e != nil {
 			err := errno.NewError(errno.RecoverPanic, e)
 			d.distinctLogger.Error(err.Error(), zap.String("query", "DistinctTransform"),
-				zap.Uint64("query_id", d.opt.QueryId))
+				zap.Uint64("query_id", d.opt.GetQueryID()))
 			d.errs.Dispatch(err)
 		} else {
 			d.errs.Dispatch(nil)
@@ -194,7 +205,7 @@ func (d *DistinctTransform) work() {
 			d.distinct(chunk)
 		})
 
-		if d.newChunk.NumberOfRows() >= d.opt.ChunkSize {
+		if d.newChunk.NumberOfRows() >= d.opt.ChunkSizeNum() {
 			d.sendChunk(d.newChunk)
 		}
 
@@ -207,37 +218,76 @@ func (d *DistinctTransform) distinct(c Chunk) {
 		d.newChunk.SetName(c.Name())
 	}
 
+	tags := c.Tags()
+	tagIndexes := c.TagIndex()
 	base := d.newChunk.NumberOfRows()
 	chunkRows := c.NumberOfRows()
 	dupRowIdx := make([]uint16, 0, chunkRows)
-	var builder bytes.Buffer
-	var start int
-	for i := 0; i < chunkRows; i++ {
-		builder.Reset()
-		for _, col := range c.Columns() {
-			if col.IsNilV2(i) {
-				builder.WriteByte(NilMarkByte)
-				continue
-			}
-			start = col.GetValueIndexV2(i)
-			switch col.DataType() {
-			case influxql.Integer:
-				builder.Write(util.Int64Slice2byte([]int64{col.IntegerValue(start)}))
-			case influxql.Float:
-				builder.Write(util.Float64Slice2byte([]float64{col.FloatValue(start)}))
-			case influxql.Boolean:
-				builder.WriteByte(util.Bool2Byte(col.BooleanValue(start)))
-			case influxql.String, influxql.Tag:
-				builder.Write(util.Str2bytes(col.StringValue(start)))
+
+	for tagIdx := 0; tagIdx < len(tags); tagIdx++ {
+		tag := tags[tagIdx]
+
+		shouldReset := true
+		if tagIdx == 0 {
+			if len(tag.subset) == 0 {
+				shouldReset = false
+			} else if len(d.lastChunkTag) > 0 && len(tag.subset) > 0 {
+				if bytes.Equal(d.lastChunkTag, tag.GetTag()) {
+					shouldReset = false
+				}
 			}
 		}
-		key := builder.Bytes()
-		if _, exists := d.distinctMap.Check(key); !exists {
-			d.distinctMap.Set(key)
-			d.newChunk.Append(c, i, i+1)
-		} else {
-			dupRowIdx = append(dupRowIdx, uint16(i))
+
+		if shouldReset {
+			d.distinctMap.Clear()
 		}
+
+		startRow := 0
+		if tagIdx < len(tagIndexes) {
+			startRow = tagIndexes[tagIdx]
+		}
+		endRow := chunkRows
+		if tagIdx < len(tagIndexes)-1 {
+			endRow = tagIndexes[tagIdx+1]
+		}
+
+		var builder bytes.Buffer
+		for i := startRow; i < endRow; i++ {
+			builder.Reset()
+
+			for _, j := range d.distinctColumns {
+				col := c.Column(j)
+				if col.IsNilV2(i) {
+					builder.WriteByte(NilMarkByte)
+					continue
+				}
+				start := col.GetValueIndexV2(i)
+				switch col.DataType() {
+				case influxql.Integer:
+					builder.Write(util.Int64Slice2byte([]int64{col.IntegerValue(start)}))
+				case influxql.Float:
+					builder.Write(util.Float64Slice2byte([]float64{col.FloatValue(start)}))
+				case influxql.Boolean:
+					builder.WriteByte(util.Bool2Byte(col.BooleanValue(start)))
+				case influxql.String, influxql.Tag:
+					builder.Write(util.Str2bytes(col.StringValue(start)))
+				}
+			}
+
+			key := builder.Bytes()
+			if _, exists := d.distinctMap.Check(key); !exists {
+				d.distinctMap.Set(key)
+				d.newChunk.Append(c, i, i+1)
+			} else {
+				dupRowIdx = append(dupRowIdx, uint16(i))
+			}
+		}
+	}
+
+	if len(tags) > 0 && len(tags[0].subset) > 0 {
+		d.lastChunkTag = tags[len(tags)-1].GetTag()
+	} else {
+		d.lastChunkTag = nil
 	}
 
 	if len(dupRowIdx) == chunkRows {
@@ -253,7 +303,8 @@ func (d *DistinctTransform) distinct(c Chunk) {
 }
 
 func (d *DistinctTransform) Close() {
-	d.distinctMap = hashtable.DefaultStringHashMap()
+	d.lastChunkTag = nil
+	d.distinctMap.Clear()
 	for _, output := range d.Outputs {
 		output.Close()
 	}

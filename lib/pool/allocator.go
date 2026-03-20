@@ -17,12 +17,19 @@ package pool
 type Allocator[K comparable, V any] struct {
 	values []*V
 	valMap map[K]*V
+
+	maxCacheSize int
 }
 
 func NewAllocator[K comparable, V any]() *Allocator[K, V] {
 	return &Allocator[K, V]{
-		valMap: make(map[K]*V),
+		valMap:       make(map[K]*V),
+		maxCacheSize: 0,
 	}
+}
+
+func (a *Allocator[K, V]) SetMaxCacheSize(v int) {
+	a.maxCacheSize = v
 }
 
 func (a *Allocator[K, V]) Values() []*V {
@@ -44,8 +51,12 @@ func (a *Allocator[K, V]) MapAlloc(key K) (*V, bool) {
 
 func (a *Allocator[K, V]) Alloc() *V {
 	idx := len(a.values)
+	if a.maxCacheSize > 0 && idx >= a.maxCacheSize {
+		return new(V)
+	}
+
 	if cap(a.values) == idx {
-		a.values = append(a.values, &make([]V, 1)[0])
+		a.values = append(a.values, new(V))
 		return a.values[idx]
 	}
 
@@ -53,7 +64,7 @@ func (a *Allocator[K, V]) Alloc() *V {
 	item := a.values[idx]
 
 	if item == nil {
-		a.values = append(a.values[:idx], &make([]V, 1)[0])
+		a.values = append(a.values[:idx], new(V))
 		return a.values[idx]
 	}
 

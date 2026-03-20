@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/openGemini/openGemini/lib/config"
 	"github.com/openGemini/openGemini/lib/msgservice"
@@ -63,7 +64,7 @@ func (h *Handler) serveDebug(w http.ResponseWriter, r *http.Request) {
 
 	mp := make(map[string]string, len(q))
 	for k, v := range q {
-		if k == mod {
+		if k == "mod" {
 			continue
 		}
 		if len(v) < 1 {
@@ -73,12 +74,24 @@ func (h *Handler) serveDebug(w http.ResponseWriter, r *http.Request) {
 	}
 	req.SetParam(mp)
 	req.SetMod(mod)
+	if h.Config != nil {
+		req.SetLocalDomain(h.Config.Domain)
+		req.SetLocalBindAddress(h.Config.BindAddress)
+	}
 
 	nw := bufio.NewWriter(w)
 	nw.WriteString("{\n\t")
 	var err error
 	if req.Mod() == syscontrol.Backup {
-		err = syscontrol.ProcessBackup(req, nw, config.CombineDomain(h.SQLConfig.HTTP.Domain, h.Config.BindAddress))
+		sqlHost := strings.Split(h.Config.BindAddress, ",")
+		for i := range sqlHost {
+			sqlHost[i] = config.CombineDomain(h.SQLConfig.HTTP.Domain, sqlHost[i])
+			s := strings.Split(sqlHost[i], ":")
+			if len(s) > 0 {
+				sqlHost[i] = s[0]
+			}
+		}
+		err = syscontrol.ProcessBackup(req, nw, sqlHost)
 	} else {
 		err = syscontrol.ProcessRequest(req, nw)
 	}

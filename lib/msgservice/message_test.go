@@ -25,13 +25,15 @@ import (
 	"github.com/openGemini/openGemini/lib/errno"
 	"github.com/openGemini/openGemini/lib/msgservice"
 	netdata "github.com/openGemini/openGemini/lib/msgservice/data"
+	"github.com/openGemini/openGemini/lib/record"
 	"github.com/openGemini/openGemini/lib/spdy/transport"
 	"github.com/openGemini/openGemini/lib/util/lifted/influx/influxql"
 	proto2 "github.com/openGemini/openGemini/lib/util/lifted/influx/meta/proto"
-	"github.com/openGemini/openGemini/lib/util/lifted/protobuf/proto"
+	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.etcd.io/etcd/raft/v3/raftpb"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestSeriesKeysRequestMessage(t *testing.T) {
@@ -538,7 +540,12 @@ func TestRaftMsgRequest_Marshal_Unmarshal(t *testing.T) {
 	require.NoError(t, err)
 	require.EqualValues(t, req.Database, req2.Database)
 	require.EqualValues(t, req.PtId, req2.PtId)
-	require.EqualValues(t, req, req2)
+	require.EqualValues(t, req.RaftMessage, req2.RaftMessage)
+
+	req3 := &msgservice.RaftMessagesRequest{}
+	require.NoError(t, req3.UnmarshalBinary(nil))
+	require.EqualError(t, req3.UnmarshalBinary([]byte{'1'}), "cannot unmarshal empty byte slice")
+	require.EqualError(t, req3.UnmarshalBinary([]byte{1, 2, 3, 4}), "invalid message, exp size: 16909060, actual size: 0")
 }
 
 func TestRaftMsgResponse_Marshal_Unmarshal(t *testing.T) {
@@ -787,5 +794,96 @@ func TestSendClearEventsResponseMarshal(t *testing.T) {
 	str := "mock error"
 	res.Err = &str
 	err = res.Error()
+	require.Error(t, err)
+}
+
+func TestSmarterQueryRequest(t *testing.T) {
+	req := &msgservice.SmarterQueryRequest{}
+	buf, err := req.MarshalBinary()
+	assert.Error(t, err, "Db not set")
+
+	other := &msgservice.SmarterQueryRequest{}
+	assert.Error(t, other.UnmarshalBinary(buf), "Db not set")
+	assert.Equal(t, len(req.Fields), len(other.Fields))
+}
+
+func TestSmarterQueryResponse(t *testing.T) {
+	resp := &msgservice.SmarterQueryResponse{}
+	defer resp.Release()
+
+	rec := record.Record{}
+	rec.ResetWithSchema([]record.Field{
+		{
+			Type: influx.Field_Type_Int,
+			Name: "field1",
+		},
+	})
+	rec.ColVals[0].AppendIntegers(1, 2, 3, 4, 5, 6, 7)
+	ret := record.NewSmartQueryResult([]*record.ConsumeRecord{
+		{
+			Tags: []*record.Tag{{Key: "foo", Value: "bar"}},
+			Rec:  &rec,
+		},
+	}, true)
+	resp.SetResult(ret)
+	buf, err := resp.MarshalBinary()
+	require.NoError(t, err)
+
+	other := &msgservice.SmarterQueryResponse{}
+	require.NoError(t, other.UnmarshalBinary(buf))
+	require.False(t, other.GetResult().IsEmpty())
+	require.Equal(t, ret, other.GetResult())
+
+	// codec error message
+	resp = &msgservice.SmarterQueryResponse{}
+	resp.Err = proto.String("mock error")
+	resp.SetResult(&record.SmartQueryResult{})
+	buf, err = resp.MarshalBinary()
+	require.NoError(t, err)
+	other = &msgservice.SmarterQueryResponse{}
+	require.NoError(t, other.UnmarshalBinary(buf))
+	require.Equal(t, resp.Err, other.Err)
+
+	// invalid data = nil
+	resp = &msgservice.SmarterQueryResponse{}
+	require.True(t, resp.GetResult().IsEmpty())
+	require.NoError(t, other.UnmarshalBinary(nil))
+
+	// invalid data
+	resp = &msgservice.SmarterQueryResponse{}
+	require.True(t, resp.GetResult().IsEmpty())
+	require.Error(t, other.UnmarshalBinary([]byte{0, 1, 2}))
+	require.Error(t, other.UnmarshalBinary([]byte{0, 0, 0, 0, 0, 0, 1, 1}))
+}
+
+func TestPullRPPTWriteStatusRequest(t *testing.T) {
+	req := &msgservice.PullRPPTWriteStatusRequest{}
+	db := "db"
+	rp := "autogen"
+	req.Database = &db
+	req.RetentionPolicy = &rp
+	buf, err := req.MarshalBinary()
+	assert.NoError(t, err)
+
+	other := &msgservice.PullRPPTWriteStatusRequest{}
+	assert.NoError(t, other.UnmarshalBinary(buf))
+	assert.Equal(t, req.String(), other.String())
+}
+
+func TestTaskMessage(t *testing.T) {
+	m := msgservice.NewTaskMessage(msgservice.GetTaskRequestMessage, &msgservice.GetTaskRequest{})
+	b := []byte{}
+	b, err := m.Marshal(b)
+	require.NoError(t, err)
+
+	m2 := msgservice.NewTaskMessage(msgservice.GetTaskRequestMessage, &msgservice.GetTaskRequest{})
+	err = m2.Unmarshal(b)
+	require.NoError(t, err)
+}
+
+func TestTaskMessageError(t *testing.T) {
+	m := msgservice.NewTaskMessage(msgservice.GetTaskRequestMessage, &msgservice.GetTaskRequest{})
+	require.Equal(t, m.Instance(), &msgservice.TaskMessage{})
+	err := m.Unmarshal([]byte{})
 	require.Error(t, err)
 }

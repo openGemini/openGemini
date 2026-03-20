@@ -15,6 +15,7 @@
 package fragment
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/openGemini/openGemini/lib/errno"
@@ -68,12 +69,152 @@ func (frs FragmentRanges) String() string {
 	return res
 }
 
+// Convention: The range intervals represented by elements in 'frs' and 'other' are each sorted in ascending order and non-overlapping
+func (frs FragmentRanges) Intersect(other FragmentRanges) FragmentRanges {
+	var result FragmentRanges
+	i, j := 0, 0
+
+	for i < len(frs) && j < len(other) {
+		a := frs[i]
+		b := other[j]
+
+		start := max(a.Start, b.Start)
+		end := min(a.End, b.End)
+
+		if start < end {
+			result = append(result, &FragmentRange{Start: start, End: end})
+		}
+
+		if a.End < b.End {
+			i++
+		} else {
+			j++
+		}
+	}
+
+	return result
+}
+
+// Convention: The range intervals represented by elements in 'frs' and 'other' are each sorted in ascending order and non-overlapping
+func (frs FragmentRanges) Union(other FragmentRanges) FragmentRanges {
+	var result FragmentRanges
+	i, j := 0, 0
+
+	for i < len(frs) || j < len(other) {
+		if i < len(frs) && (j >= len(other) || frs[i].Start < other[j].Start) {
+			addRange(&result, frs[i])
+			i++
+		} else {
+			addRange(&result, other[j])
+			j++
+		}
+	}
+	return result
+}
+
+func addRange(result *FragmentRanges, current *FragmentRange) {
+	addCur := &FragmentRange{Start: current.Start, End: current.End}
+	if len(*result) == 0 {
+		*result = append(*result, addCur)
+	} else {
+		last := (*result)[len(*result)-1]
+		if current.Start <= last.End {
+			last.End = max(last.End, current.End)
+		} else {
+			*result = append(*result, addCur)
+		}
+	}
+}
+
+// Convention: 'frs' represents the full range set; 'subset' is a subset where the range intervals represented by its elements are sorted in ascending order and non-overlapping
+func (frs FragmentRanges) Complement(subset FragmentRanges) FragmentRanges {
+	if len(frs) == 0 {
+		return FragmentRanges{}
+	}
+
+	var result FragmentRanges
+
+	motherStart := frs[0].Start
+	motherEnd := frs[0].End
+
+	if len(subset) == 0 {
+		result = append(result, NewFragmentRange(motherStart, motherEnd))
+		return result
+	}
+
+	if subset[0].Start > motherStart {
+		result = append(result, NewFragmentRange(motherStart, subset[0].Start))
+	}
+
+	for i := 0; i < len(subset)-1; i++ {
+		current := subset[i]
+		next := subset[i+1]
+		if current.End < next.Start {
+			result = append(result, NewFragmentRange(current.End, next.Start))
+		}
+	}
+
+	last := subset[len(subset)-1]
+	if last.End < motherEnd {
+		result = append(result, NewFragmentRange(last.End, motherEnd))
+	}
+
+	return result
+}
+
+// Convention: The indices parameter is a list of valid range IDs in ascending order
+func CalcFragmentRanges(indices []int) FragmentRanges {
+	var ranges FragmentRanges
+	if len(indices) == 0 {
+		return ranges
+	}
+
+	currentStart := indices[0]
+	for i := 1; i < len(indices); i++ {
+		if indices[i] != indices[i-1]+1 {
+			ranges = append(ranges, NewFragmentRange(uint32(currentStart), uint32(indices[i-1]+1)))
+			currentStart = indices[i]
+		}
+	}
+
+	ranges = append(ranges, NewFragmentRange(uint32(currentStart), uint32(indices[len(indices)-1]+1)))
+
+	return ranges
+}
+
 func (frs FragmentRanges) GetLastFragment() uint32 {
 	currentTaskLastFragment := uint32(0)
 	for _, fr := range frs {
 		currentTaskLastFragment = util.MaxUint32(currentTaskLastFragment, fr.End)
 	}
 	return currentTaskLastFragment
+}
+
+// Generate segment ranges from fragment ranges
+func (frs FragmentRanges) ConvertToSegmentRanges(segmentIDsLayout []int64) (FragmentRanges, error) {
+	segmentRanges := make(FragmentRanges, 0, len(frs))
+	layoutLength := uint32(len(segmentIDsLayout))
+
+	var segStart, segEnd uint32
+	for _, fr := range frs {
+		if fr.Start >= fr.End {
+			return nil, errors.New("invalid fragment ranges when calculate segemnt ranges from fragment ranges")
+		}
+		if fr.End > layoutLength {
+			return nil, errors.New("invalid fragment ranges or segment ID`s layout when calculate segemnt ranges from fragment ranges")
+		}
+		if fr.Start == 0 {
+			segStart = 0
+		} else {
+			segStart = uint32(segmentIDsLayout[fr.Start-1])
+		}
+		segEnd = uint32(segmentIDsLayout[fr.End-1])
+		segmentRanges = append(segmentRanges, &FragmentRange{
+			Start: segStart,
+			End:   segEnd,
+		})
+	}
+	return segmentRanges, nil
 }
 
 type IndexFragment interface {
@@ -91,16 +232,26 @@ type IndexFragmentVariableImpl struct {
 	fragmentRanges     FragmentRanges
 }
 
-func NewIndexFragmentVariable(accumulateRowCount []uint64) IndexFragment {
-	f := &IndexFragmentVariableImpl{}
-	f.accumulateRowCount = append(f.accumulateRowCount, accumulateRowCount...)
-	var res FragmentRanges
-	for _, ranges := range f.accumulateRowCount {
-		high, low := util.SplitUint64(ranges)
-		fragmentRange := FragmentRange{Start: high, End: high + low}
-		res = append(res, &fragmentRange)
+func NewIndexFragmentVariable(segment []uint64) IndexFragment {
+	n := len(segment)
+	f := &IndexFragmentVariableImpl{
+		accumulateRowCount: make([]uint64, n),
+		fragmentRanges:     make(FragmentRanges, n),
 	}
-	f.fragmentRanges = res
+
+	frs := make([]FragmentRange, n)
+	var start uint32 = 0
+	segmentOffset := util.Bytes2Int64Slice(util.Uint64Slice2byte(segment))
+	for i := range segmentOffset {
+		segmentCount, rowCount := util.SplitInt64(segmentOffset[i])
+		fr := &frs[i]
+		fr.Start = start
+		fr.End = segmentCount
+		f.fragmentRanges[i] = fr
+		f.accumulateRowCount[i] = uint64(rowCount)
+		start = fr.End
+	}
+
 	return f
 }
 
@@ -202,3 +353,9 @@ func (f *IndexFragmentFixedSizeImpl) PopFragment() {
 func (f *IndexFragmentFixedSizeImpl) Empty() bool {
 	return f.fragmentCount == 0
 }
+
+type FragmentRangeDetail struct {
+	Count int64
+}
+
+type FragmentRangeDetails []*FragmentRangeDetail

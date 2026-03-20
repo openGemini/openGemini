@@ -21,14 +21,14 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/VictoriaMetrics/VictoriaMetrics/lib/fasttime"
+	"github.com/indirect/VictoriaMetrics/VictoriaMetrics/lib/fasttime"
 	"github.com/openGemini/openGemini/engine/immutable"
 	"github.com/openGemini/openGemini/engine/index/tsi"
 	"github.com/openGemini/openGemini/lib/errno"
+	"github.com/openGemini/openGemini/lib/logger"
 	"github.com/openGemini/openGemini/lib/record"
+	"github.com/openGemini/openGemini/lib/resourceallocator"
 	"github.com/openGemini/openGemini/lib/statisticsPusher/statistics"
-	"github.com/openGemini/openGemini/lib/util/lifted/vm/protoparser/influx"
-	"github.com/pingcap/failpoint"
 )
 
 type tsstoreImpl struct {
@@ -38,14 +38,7 @@ func (storage *tsstoreImpl) WriteCols(s *shard, cols *record.Record, mst string,
 	return errors.New("not implement yet")
 }
 
-func (storage *tsstoreImpl) WriteIndex(idx *tsi.IndexBuilder, mw *mstWriteCtx) func() error {
-	err := storage.writeIndex(idx, mw)
-	return func() error {
-		return err
-	}
-}
-
-func (storage *tsstoreImpl) writeIndex(idx *tsi.IndexBuilder, mw *mstWriteCtx) error {
+func (storage *tsstoreImpl) WriteIndex(idx *tsi.IndexBuilder, mw *mstWriteCtx) error {
 	mmPoints := mw.getMstMap()
 	var err error
 	var writeIndexRequired bool
@@ -56,12 +49,7 @@ func (storage *tsstoreImpl) writeIndex(idx *tsi.IndexBuilder, mw *mstWriteCtx) e
 		return errno.NewInvalidTypeError("*tsi.MergeSetIndex", idx.GetPrimaryIndex())
 	}
 
-	for _, mp := range mmPoints.D {
-		rows, ok := mp.Value.(*[]influx.Row)
-		if !ok {
-			return errors.New("can't map mmPoints")
-		}
-
+	for _, rows := range mmPoints {
 		for i := range *rows {
 			ri := &(*rows)[i]
 
@@ -84,7 +72,6 @@ func (storage *tsstoreImpl) writeIndex(idx *tsi.IndexBuilder, mw *mstWriteCtx) e
 		}
 	}
 
-	failpoint.Inject("SlowDownCreateIndex", nil)
 	if writeIndexRequired {
 		if err = idx.CreateIndexIfNotExists(mmPoints, true); err != nil {
 			return err
@@ -96,9 +83,6 @@ func (storage *tsstoreImpl) writeIndex(idx *tsi.IndexBuilder, mw *mstWriteCtx) e
 	}
 	atomic.AddInt64(&statistics.PerfStat.WriteIndexDurationNs, time.Since(start).Nanoseconds())
 	return nil
-}
-
-func (storage *tsstoreImpl) SetAccumulateMetaIndex(name string, detachedMetaInfo *immutable.AccumulateMetaIndex) {
 }
 
 func (storage *tsstoreImpl) shouldSnapshot(s *shard) bool {
@@ -155,22 +139,19 @@ func (storage *tsstoreImpl) writeSnapshot(s *shard) {
 	s.indexBuilder.Flush()
 
 	s.commitSnapshot(s.snapshotTbl)
-	nodeMutableLimit.freeResource(curSize)
+	resourceallocator.NodeMutableLimit.FreeResource(curSize)
 
 	err = RemoveWalFiles(walFiles)
 	if err != nil {
-		panic("wal remove files failed: " + err.Error())
+		logger.Errorf("wal remove files failed: %v", err)
 	}
-
-	//This fail point is used in scenarios where "s.snapshotTbl" is not recycled
-	failpoint.Inject("snapshot-table-reset-delay", func() {
-		time.Sleep(2 * time.Second)
-	})
 
 	s.snapshotLock.Lock()
 	s.snapshotTbl.UnRef()
 	s.snapshotTbl = nil
 	s.snapshotLock.Unlock()
+	// record last flush ok time
+	atomic.StoreUint64(&s.lastFlushTime, fasttime.UnixTimestamp())
 
 	atomic.AddInt64(&statistics.PerfStat.FlushSnapshotDurationNs, time.Since(start).Nanoseconds())
 	atomic.AddInt64(&statistics.PerfStat.FlushSnapshotCount, 1)

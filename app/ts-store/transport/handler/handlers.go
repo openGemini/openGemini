@@ -53,6 +53,16 @@ func NewHandler(typ uint8) RPCHandler {
 		return &RaftMessages{}
 	case msgservice.DropSeriesRequestMessage:
 		return &DropSeries{}
+	case msgservice.ShowLastIndexRequestMessage:
+		return &ShowLastIndex{}
+	case msgservice.SmarterQueryRequestMessage:
+		return &SmarterQuery{}
+	case msgservice.PullRPPTWriteStatusRequestMessage:
+		return &PullRPPTWriteStatus{}
+	case msgservice.GetTaskRequestMessage:
+		return &GetTask{}
+	case msgservice.SendTaskResultRequestMessage:
+		return &SendTaskResult{}
 	default:
 		return nil
 	}
@@ -66,11 +76,11 @@ type SeriesKeys struct {
 }
 
 func (h *SeriesKeys) SetMessage(msg codec.BinaryCodec) error {
-	h.rsp = &msgservice.SeriesKeysResponse{}
 	req, ok := msg.(*msgservice.SeriesKeysRequest)
 	if !ok {
 		return errno.NewInvalidTypeError("*msgservice.SeriesKeysRequest", msg)
 	}
+	h.rsp = &msgservice.SeriesKeysResponse{}
 	h.req = req
 	return nil
 }
@@ -83,11 +93,11 @@ type SeriesExactCardinality struct {
 }
 
 func (h *SeriesExactCardinality) SetMessage(msg codec.BinaryCodec) error {
-	h.rsp = &msgservice.SeriesExactCardinalityResponse{}
 	req, ok := msg.(*msgservice.SeriesExactCardinalityRequest)
 	if !ok {
 		return errno.NewInvalidTypeError("*msgservice.SeriesExactCardinalityRequest", msg)
 	}
+	h.rsp = &msgservice.SeriesExactCardinalityResponse{}
 	h.req = req
 	return nil
 }
@@ -100,11 +110,11 @@ type SeriesCardinality struct {
 }
 
 func (h *SeriesCardinality) SetMessage(msg codec.BinaryCodec) error {
-	h.rsp = &msgservice.SeriesCardinalityResponse{}
 	req, ok := msg.(*msgservice.SeriesCardinalityRequest)
 	if !ok {
 		return errno.NewInvalidTypeError("*msgservice.SeriesCardinalityRequest", msg)
 	}
+	h.rsp = &msgservice.SeriesCardinalityResponse{}
 	h.req = req
 	return nil
 }
@@ -117,11 +127,11 @@ type ShowTagValues struct {
 }
 
 func (h *ShowTagValues) SetMessage(msg codec.BinaryCodec) error {
-	h.rsp = &msgservice.ShowTagValuesResponse{}
 	req, ok := msg.(*msgservice.ShowTagValuesRequest)
 	if !ok {
 		return errno.NewInvalidTypeError("*msgservice.ShowTagValuesRequest", msg)
 	}
+	h.rsp = &msgservice.ShowTagValuesResponse{}
 	h.req = req
 	return nil
 }
@@ -134,11 +144,11 @@ type ShowTagValuesCardinality struct {
 }
 
 func (h *ShowTagValuesCardinality) SetMessage(msg codec.BinaryCodec) error {
-	h.rsp = &msgservice.ShowTagValuesCardinalityResponse{}
 	req, ok := msg.(*msgservice.ShowTagValuesCardinalityRequest)
 	if !ok {
 		return errno.NewInvalidTypeError("*msgservice.ShowTagValuesCardinalityRequest", msg)
 	}
+	h.rsp = &msgservice.ShowTagValuesCardinalityResponse{}
 	h.req = req
 	return nil
 }
@@ -151,11 +161,11 @@ type GetShardSplitPoints struct {
 }
 
 func (h *GetShardSplitPoints) SetMessage(msg codec.BinaryCodec) error {
-	h.rsp = &msgservice.GetShardSplitPointsResponse{}
 	req, ok := msg.(*msgservice.GetShardSplitPointsRequest)
 	if !ok {
 		return errno.NewInvalidTypeError("*msgservice.GetShardSplitPointsRequest", msg)
 	}
+	h.rsp = &msgservice.GetShardSplitPointsResponse{}
 	h.req = req
 	return nil
 }
@@ -168,11 +178,11 @@ type Delete struct {
 }
 
 func (h *Delete) SetMessage(msg codec.BinaryCodec) error {
-	h.rsp = &msgservice.DeleteResponse{}
 	req, ok := msg.(*msgservice.DeleteRequest)
 	if !ok {
 		return errno.NewInvalidTypeError("*msgservice.DeleteRequest", msg)
 	}
+	h.rsp = &msgservice.DeleteResponse{}
 	h.req = req
 	return nil
 }
@@ -185,11 +195,11 @@ type CreateDataBase struct {
 }
 
 func (h *CreateDataBase) SetMessage(msg codec.BinaryCodec) error {
-	h.rsp = &msgservice.CreateDataBaseResponse{}
 	req, ok := msg.(*msgservice.CreateDataBaseRequest)
 	if !ok {
 		return errno.NewInvalidTypeError("*msgservice.CreateDataBaseRequest", msg)
 	}
+	h.rsp = &msgservice.CreateDataBaseResponse{}
 	h.req = req
 	return nil
 }
@@ -202,11 +212,11 @@ type ShowQueries struct {
 }
 
 func (h *ShowQueries) SetMessage(msg codec.BinaryCodec) error {
-	h.rsp = &msgservice.ShowQueriesResponse{}
 	req, ok := msg.(*msgservice.ShowQueriesRequest)
 	if !ok {
 		return errno.NewInvalidTypeError("*msgservice.ShowQueriesRequest", msg)
 	}
+	h.rsp = &msgservice.ShowQueriesResponse{}
 	h.req = req
 	return nil
 }
@@ -219,11 +229,11 @@ type KillQuery struct {
 }
 
 func (h *KillQuery) SetMessage(msg codec.BinaryCodec) error {
-	h.rsp = &msgservice.KillQueryResponse{}
 	req, ok := msg.(*msgservice.KillQueryRequest)
 	if !ok {
 		return errno.NewInvalidTypeError("*msgservice.KillQueryRequest", msg)
 	}
+	h.rsp = &msgservice.KillQueryResponse{}
 	h.req = req
 	return nil
 }
@@ -236,11 +246,11 @@ type ShowTagKeys struct {
 }
 
 func (h *ShowTagKeys) SetMessage(msg codec.BinaryCodec) error {
-	h.rsp = &msgservice.ShowTagKeysResponse{}
 	req, ok := msg.(*msgservice.ShowTagKeysRequest)
 	if !ok {
 		return errno.NewInvalidTypeError("*msgservice.ShowTagKeysRequest", msg)
 	}
+	h.rsp = &msgservice.ShowTagKeysResponse{}
 	h.req = req
 	return nil
 }
@@ -253,11 +263,11 @@ type RaftMessages struct {
 }
 
 func (h *RaftMessages) SetMessage(msg codec.BinaryCodec) error {
-	h.rsp = &msgservice.RaftMessagesResponse{}
 	req, ok := msg.(*msgservice.RaftMessagesRequest)
 	if !ok {
 		return errno.NewInvalidTypeError("*msgservice.RaftMessagesRequest", msg)
 	}
+	h.rsp = &msgservice.RaftMessagesResponse{}
 	h.req = req
 	return nil
 }
@@ -270,11 +280,96 @@ type DropSeries struct {
 }
 
 func (h *DropSeries) SetMessage(msg codec.BinaryCodec) error {
-	h.rsp = &msgservice.DropSeriesResponse{}
 	req, ok := msg.(*msgservice.DropSeriesRequest)
 	if !ok {
 		return errno.NewInvalidTypeError("*msgservice.DropSeriesRequest", msg)
 	}
+	h.rsp = &msgservice.DropSeriesResponse{}
+	h.req = req
+	return nil
+}
+
+type ShowLastIndex struct {
+	BaseHandler
+
+	req *msgservice.ShowLastIndexRequest
+	rsp *msgservice.ShowLastIndexResponse
+}
+
+func (h *ShowLastIndex) SetMessage(msg codec.BinaryCodec) error {
+	req, ok := msg.(*msgservice.ShowLastIndexRequest)
+	if !ok {
+		return errno.NewInvalidTypeError("*msgservice.ShowLastIndexRequest", msg)
+	}
+	h.rsp = &msgservice.ShowLastIndexResponse{}
+	h.req = req
+	return nil
+}
+
+type SmarterQuery struct {
+	BaseHandler
+
+	req *msgservice.SmarterQueryRequest
+	rsp *msgservice.SmarterQueryResponse
+}
+
+func (h *SmarterQuery) SetMessage(msg codec.BinaryCodec) error {
+	req, ok := msg.(*msgservice.SmarterQueryRequest)
+	if !ok {
+		return errno.NewInvalidTypeError("*msgservice.SmarterQueryRequest", msg)
+	}
+	h.rsp = &msgservice.SmarterQueryResponse{}
+	h.req = req
+	return nil
+}
+
+type PullRPPTWriteStatus struct {
+	BaseHandler
+
+	req *msgservice.PullRPPTWriteStatusRequest
+	rsp *msgservice.PullRPPTWriteStatusResponse
+}
+
+func (h *PullRPPTWriteStatus) SetMessage(msg codec.BinaryCodec) error {
+	req, ok := msg.(*msgservice.PullRPPTWriteStatusRequest)
+	if !ok {
+		return errno.NewInvalidTypeError("*msgservice.PullRPPTWriteStatusRequest", msg)
+	}
+	h.rsp = &msgservice.PullRPPTWriteStatusResponse{}
+	h.req = req
+	return nil
+}
+
+type GetTask struct {
+	BaseHandler
+
+	req *msgservice.GetTaskRequest
+	rsp *msgservice.GetTaskResponse
+}
+
+func (h *GetTask) SetMessage(msg codec.BinaryCodec) error {
+	req, ok := msg.(*msgservice.GetTaskRequest)
+	if !ok {
+		return errno.NewInvalidTypeError("*msgservice.GetTaskRequest", msg)
+	}
+	h.rsp = &msgservice.GetTaskResponse{}
+	h.req = req
+	return nil
+}
+
+type SendTaskResult struct {
+	BaseHandler
+
+	req *msgservice.SendTaskResultRequest
+	rsp *msgservice.SendTaskResultResponse
+}
+
+func (h *SendTaskResult) SetMessage(msg codec.BinaryCodec) error {
+	req, ok := msg.(*msgservice.SendTaskResultRequest)
+	if !ok {
+		return errno.NewInvalidTypeError("*msgservice.SendTaskResultRequest", msg)
+	}
+	h.rsp = &msgservice.SendTaskResultResponse{}
 	h.req = req
 	return nil
 }

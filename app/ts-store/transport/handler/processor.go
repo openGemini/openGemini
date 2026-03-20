@@ -40,6 +40,7 @@ type RPCHandler interface {
 	SetMessage(binaryCodec codec.BinaryCodec) error
 	SetStore(*storage.Storage)
 	Process() (codec.BinaryCodec, error)
+	Release()
 }
 
 type BaseHandler struct {
@@ -54,7 +55,51 @@ func (h *BaseHandler) SetMessage(msg codec.BinaryCodec) error {
 	return nil
 }
 
+func (h *BaseHandler) Release() {
+
+}
+
 func (h *BaseHandler) Abort() {
+}
+
+type TaskProcessor struct {
+	store *storage.Storage
+}
+
+func NewTaskProcessor(store *storage.Storage) *TaskProcessor {
+	return &TaskProcessor{
+		store: store,
+	}
+}
+
+func (p *TaskProcessor) Handle(w spdy.Responser, data interface{}) error {
+	msg, ok := data.(*msgservice.TaskMessage)
+	if !ok {
+		return errno.NewInvalidTypeError("*msgservice.TaskMessage", data)
+	}
+
+	h := NewHandler(msg.Typ)
+	if h == nil {
+		return fmt.Errorf("unsupported message type: %d", msg.Typ)
+	}
+
+	if err := h.SetMessage(msg.Data); err != nil {
+		return err
+	}
+
+	h.SetStore(p.store)
+	rspMsg, err := h.Process()
+	if err != nil {
+		return err
+	}
+
+	rspTyp, ok := msgservice.MessageResponseTyp[msg.Typ]
+	if !ok {
+		return fmt.Errorf("no response message type: %d", msg.Typ)
+	}
+
+	rsp := msgservice.NewTaskMessage(rspTyp, rspMsg)
+	return w.Response(rsp, true)
 }
 
 type DDLProcessor struct {
@@ -77,6 +122,8 @@ func (p *DDLProcessor) Handle(w spdy.Responser, data interface{}) error {
 	if h == nil {
 		return fmt.Errorf("unsupported message type: %d", msg.Typ)
 	}
+
+	defer h.Release()
 
 	if err := h.SetMessage(msg.Data); err != nil {
 		return err

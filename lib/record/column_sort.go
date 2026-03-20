@@ -59,7 +59,7 @@ func (h *ColumnSortHelper) sort(rec *Record, aux *SortAux) *Record {
 
 	for i := 0; i < rec.Len()-1; i++ {
 		col := rec.Column(i)
-		h.initNilCount(col, len(times)+1)
+		h.initNilCount(col)
 		h.sortColumn(col, aux, i)
 	}
 
@@ -102,23 +102,12 @@ func (h *ColumnSortHelper) replace(col *ColVal, aux *ColVal, typ, idx int) {
 		return
 	}
 
-	aux.deleteLast(typ)
+	aux.DeleteLast(typ)
 	aux.AppendWithNilCount(col, typ, idx, idx+1, &h.nilCount)
 }
 
-func (h *ColumnSortHelper) initNilCount(col *ColVal, size int) {
-	nc := &h.nilCount
-	nc.init(col.NilCount, size)
-	if col.NilCount == 0 {
-		return
-	}
-
-	for j := 1; j < size; j++ {
-		nc.value[j] = nc.value[j-1]
-		if col.IsNil(j - 1) {
-			nc.value[j]++
-		}
-	}
+func (h *ColumnSortHelper) initNilCount(col *ColVal) {
+	h.nilCount.Build(col)
 }
 
 type SortAux struct {

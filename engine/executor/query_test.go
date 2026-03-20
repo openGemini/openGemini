@@ -109,7 +109,7 @@ func TestMockTSDBSystem(t *testing.T) {
 				assert.Equal(t, len(results), 1)
 				assert.Equal(t, results[0].Name(), "mst0")
 				assert.Equal(t, results[0].Time(), []int64{0})
-				assert.Equal(t, results[0].Columns()[1].IntegerValues(), []int64{1})
+				assert.Equal(t, results[0].Columns()[0].IntegerValues(), []int64{1})
 			},
 		},
 		{
@@ -763,7 +763,7 @@ func TestUDFCastor(t *testing.T) {
 				assert.Equal(t, len(results), 1)
 				assert.Equal(t, results[0].Name(), "mst0")
 				assert.Equal(t, results[0].Time(), []int64{0})
-				assert.Equal(t, results[0].Columns()[1].IntegerValues(), []int64{0})
+				assert.Equal(t, results[0].Columns()[0].FloatValues(), []float64{0})
 			},
 		},
 	} {
@@ -877,7 +877,7 @@ func TestMockTSDBSystemWhenExceedSchema(t *testing.T) {
 				assert.Equal(t, len(results), 1)
 				assert.Equal(t, results[0].Name(), "mst0")
 				assert.Equal(t, results[0].Time(), []int64{0})
-				assert.Equal(t, results[0].Columns()[1].IntegerValues(), []int64{1})
+				assert.Equal(t, results[0].Columns()[0].IntegerValues(), []int64{1})
 			},
 		},
 		{
@@ -940,7 +940,7 @@ func TestMockTSDBSystemWhenExceedSchema(t *testing.T) {
 			}
 			execErr := tsdb.ExecSQL(tc.sql, tc.validator, tc.intoValidator, false)
 			if execErr != nil && !strings.Contains(execErr.Error(), "max-select-schema limit exceeded") {
-				t.Error("expect error")
+				t.Errorf("not expect error, err: %v", execErr)
 			}
 		})
 	}

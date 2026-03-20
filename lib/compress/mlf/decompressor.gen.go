@@ -26,7 +26,7 @@ import (
 
 type decodeFunc func(dst []float64, data []byte, precision, multiplicand float64, publicPrefixSize int)
 
-var decodeFuncTable [maxFactorBits]decodeFunc
+var decodeFuncTable [maxFactorBits + 1]decodeFunc
 
 func init() {
 	decodeFuncTable[1] = decodeItemSize1
@@ -78,6 +78,7 @@ func init() {
 	decodeFuncTable[47] = decodeItemSize47
 	decodeFuncTable[48] = decodeItemSize48
 	decodeFuncTable[49] = decodeItemSize49
+	decodeFuncTable[50] = decodeItemSize50
 }
 
 func decodeItemSize1(dst []float64, data []byte, precision float64, multiplicand float64, publicPrefixSize int) {
@@ -2914,6 +2915,43 @@ func decodeItemSize48(dst []float64, data []byte, precision float64, multiplican
 
 func decodeItemSize49(dst []float64, data []byte, precision float64, multiplicand float64, publicPrefixSize int) {
 	const itemSize = 49
+	var f float64
+	var base uint64 = ((1<<publicPrefixSize - 1) << (mantissaBits - publicPrefixSize)) | (middleNumber << mantissaBits)
+	left := mantissaBits - itemSize - publicPrefixSize
+
+	var decode = func(c uint64) float64 {
+		f = math.Float64frombits(base|(c<<left)) - 1
+		return math.Floor(multiplicand*f*precision) / precision
+	}
+
+	i := 0
+	n := len(dst)
+	var swap, coefficient uint64
+	var swapSize = 0
+
+	for i < n {
+		coefficient = swap >> (64 - itemSize)
+		swap = binary.BigEndian.Uint64(data)
+		data = data[8:]
+
+		k := itemSize - swapSize
+		swapSize = 64 - k
+		coefficient |= swap >> swapSize
+		dst[i] = decode(coefficient)
+		swap <<= k
+		i++
+
+		if i < n && swapSize >= itemSize {
+			dst[i] = decode(swap >> (64 - itemSize))
+			swap <<= itemSize
+			swapSize -= itemSize
+			i++
+		}
+	}
+}
+
+func decodeItemSize50(dst []float64, data []byte, precision float64, multiplicand float64, publicPrefixSize int) {
+	const itemSize = 50
 	var f float64
 	var base uint64 = ((1<<publicPrefixSize - 1) << (mantissaBits - publicPrefixSize)) | (middleNumber << mantissaBits)
 	left := mantissaBits - itemSize - publicPrefixSize

@@ -141,7 +141,7 @@ func TestLimitPushdownRule(t *testing.T) {
 	toMeasurement := executor.NewLimitPushdownToReaderRule("")
 	toSeries := executor.NewLimitPushdownToSeriesRule("")
 	pb := NewHeuProgramBuilder()
-	pb.AddRuleCatagory(executor.RULE_PUSHDOWN_LIMIT)
+	pb.AddRuleCategory(executor.RULE_PUSHDOWN_LIMIT)
 	planner := executor.NewHeuPlannerImpl(pb.Build())
 	planner.AddRule(toExchange)
 	planner.AddRule(toMeasurement)
@@ -210,8 +210,8 @@ func TestAggPushdownToExchangeRuleWithPercentile(t *testing.T) {
 	spreadToExchange := executor.NewAggSpreadToExchangeRule("")
 	spreadToReader := executor.NewAggSpreadToReaderRule("")
 	pb := NewHeuProgramBuilder()
-	pb.AddRuleCatagory(executor.RULE_PUSHDOWN_AGG)
-	pb.AddRuleCatagory(executor.RULE_SPREAD_AGG)
+	pb.AddRuleCategory(executor.RULE_PUSHDOWN_AGG)
+	pb.AddRuleCategory(executor.RULE_SPREAD_AGG)
 	planner := executor.NewHeuPlannerImpl(pb.Build())
 	planner.AddRule(toExchange)
 	planner.AddRule(toMeasurement)
@@ -283,8 +283,8 @@ func TestAggPushdownToExchangeRuleWithCount(t *testing.T) {
 	spreadToExchange := executor.NewAggSpreadToExchangeRule("")
 	spreadToReader := executor.NewAggSpreadToReaderRule("")
 	pb := NewHeuProgramBuilder()
-	pb.AddRuleCatagory(executor.RULE_PUSHDOWN_AGG)
-	pb.AddRuleCatagory(executor.RULE_SPREAD_AGG)
+	pb.AddRuleCategory(executor.RULE_PUSHDOWN_AGG)
+	pb.AddRuleCategory(executor.RULE_SPREAD_AGG)
 	planner := executor.NewHeuPlannerImpl(pb.Build())
 	planner.AddRule(toExchange)
 	planner.AddRule(toMeasurement)
@@ -358,8 +358,8 @@ func TestAggPushdownToExchangeRuleWithPreCount(t *testing.T) {
 	spreadToExchange := executor.NewAggSpreadToExchangeRule("")
 	spreadToReader := executor.NewAggSpreadToReaderRule("")
 	pb := NewHeuProgramBuilder()
-	pb.AddRuleCatagory(executor.RULE_PUSHDOWN_AGG)
-	pb.AddRuleCatagory(executor.RULE_SPREAD_AGG)
+	pb.AddRuleCategory(executor.RULE_PUSHDOWN_AGG)
+	pb.AddRuleCategory(executor.RULE_SPREAD_AGG)
 	planner := executor.NewHeuPlannerImpl(pb.Build())
 	planner.AddRule(toExchange)
 	planner.AddRule(toMeasurement)
@@ -426,9 +426,9 @@ func testAggPushDownToSubQueryRule(t *testing.T, schemaIn, schemaOut *executor.Q
 	spreadToReader := executor.NewAggSpreadToReaderRule("")
 	aggToSubquery := executor.NewAggPushDownToSubQueryRule("")
 	pb := NewHeuProgramBuilder()
-	pb.AddRuleCatagory(executor.RULE_SUBQUERY)
-	pb.AddRuleCatagory(executor.RULE_PUSHDOWN_AGG)
-	pb.AddRuleCatagory(executor.RULE_SPREAD_AGG)
+	pb.AddRuleCategory(executor.RULE_SUBQUERY)
+	pb.AddRuleCategory(executor.RULE_PUSHDOWN_AGG)
+	pb.AddRuleCategory(executor.RULE_SPREAD_AGG)
 	planner := executor.NewHeuPlannerImpl(pb.Build())
 	planner.AddRule(aggToSubquery)
 	planner.AddRule(toExchange)
@@ -601,9 +601,9 @@ func TestAggPushDownToSubQueryRuleWithAbs(t *testing.T) {
 	spreadToReader := executor.NewAggSpreadToReaderRule("")
 	aggToSubquery := executor.NewAggPushDownToSubQueryRule("")
 	pb := NewHeuProgramBuilder()
-	pb.AddRuleCatagory(executor.RULE_SUBQUERY)
-	pb.AddRuleCatagory(executor.RULE_PUSHDOWN_AGG)
-	pb.AddRuleCatagory(executor.RULE_SPREAD_AGG)
+	pb.AddRuleCategory(executor.RULE_SUBQUERY)
+	pb.AddRuleCategory(executor.RULE_PUSHDOWN_AGG)
+	pb.AddRuleCategory(executor.RULE_SPREAD_AGG)
 	planner := executor.NewHeuPlannerImpl(pb.Build())
 	planner.AddRule(aggToSubquery)
 	planner.AddRule(toExchange)
@@ -699,9 +699,9 @@ func TestAggPushDownToSubQueryRuleWithAlias(t *testing.T) {
 	spreadToReader := executor.NewAggSpreadToReaderRule("")
 	aggToSubquery := executor.NewAggPushDownToSubQueryRule("")
 	pb := NewHeuProgramBuilder()
-	pb.AddRuleCatagory(executor.RULE_SUBQUERY)
-	pb.AddRuleCatagory(executor.RULE_PUSHDOWN_AGG)
-	pb.AddRuleCatagory(executor.RULE_SPREAD_AGG)
+	pb.AddRuleCategory(executor.RULE_SUBQUERY)
+	pb.AddRuleCategory(executor.RULE_PUSHDOWN_AGG)
+	pb.AddRuleCategory(executor.RULE_SPREAD_AGG)
 	planner := executor.NewHeuPlannerImpl(pb.Build())
 	planner.AddRule(aggToSubquery)
 	planner.AddRule(toExchange)
@@ -807,9 +807,9 @@ func TestAggPushDownToSubQueryRuleWithAliasWithNoPreAgg1(t *testing.T) {
 	spreadToReader := executor.NewAggSpreadToReaderRule("")
 	aggToSubquery := executor.NewAggPushDownToSubQueryRule("")
 	pb := NewHeuProgramBuilder()
-	pb.AddRuleCatagory(executor.RULE_SUBQUERY)
-	pb.AddRuleCatagory(executor.RULE_PUSHDOWN_AGG)
-	pb.AddRuleCatagory(executor.RULE_SPREAD_AGG)
+	pb.AddRuleCategory(executor.RULE_SUBQUERY)
+	pb.AddRuleCategory(executor.RULE_PUSHDOWN_AGG)
+	pb.AddRuleCategory(executor.RULE_SPREAD_AGG)
 	planner := executor.NewHeuPlannerImpl(pb.Build())
 	planner.AddRule(aggToSubquery)
 	planner.AddRule(toExchange)
@@ -911,9 +911,9 @@ func TestAggPushDownToSubQueryRuleWithAliasWithNoPreAgg2(t *testing.T) {
 	spreadToReader := executor.NewAggSpreadToReaderRule("")
 	aggToSubquery := executor.NewAggPushDownToSubQueryRule("")
 	pb := NewHeuProgramBuilder()
-	pb.AddRuleCatagory(executor.RULE_SUBQUERY)
-	pb.AddRuleCatagory(executor.RULE_PUSHDOWN_AGG)
-	pb.AddRuleCatagory(executor.RULE_SPREAD_AGG)
+	pb.AddRuleCategory(executor.RULE_SUBQUERY)
+	pb.AddRuleCategory(executor.RULE_PUSHDOWN_AGG)
+	pb.AddRuleCategory(executor.RULE_SPREAD_AGG)
 	planner := executor.NewHeuPlannerImpl(pb.Build())
 	planner.AddRule(aggToSubquery)
 	planner.AddRule(toExchange)
@@ -1049,9 +1049,9 @@ func TestAggPushDownToSubQueryRuleWithAliasAndBinary(t *testing.T) {
 	spreadToReader := executor.NewAggSpreadToReaderRule("")
 	aggToSubquery := executor.NewAggPushDownToSubQueryRule("")
 	pb := NewHeuProgramBuilder()
-	pb.AddRuleCatagory(executor.RULE_SUBQUERY)
-	pb.AddRuleCatagory(executor.RULE_PUSHDOWN_AGG)
-	pb.AddRuleCatagory(executor.RULE_SPREAD_AGG)
+	pb.AddRuleCategory(executor.RULE_SUBQUERY)
+	pb.AddRuleCategory(executor.RULE_PUSHDOWN_AGG)
+	pb.AddRuleCategory(executor.RULE_SPREAD_AGG)
 	planner := executor.NewHeuPlannerImpl(pb.Build())
 	planner.AddRule(aggToSubquery)
 	planner.AddRule(toExchange)
@@ -1131,9 +1131,9 @@ func TestSlideWindowPushDownToExchange(t *testing.T) {
 	}
 
 	pb := NewHeuProgramBuilder()
-	pb.AddRuleCatagory(executor.RULE_SUBQUERY)
-	pb.AddRuleCatagory(executor.RULE_PUSHDOWN_AGG)
-	pb.AddRuleCatagory(executor.RULE_SPREAD_AGG)
+	pb.AddRuleCategory(executor.RULE_SUBQUERY)
+	pb.AddRuleCategory(executor.RULE_PUSHDOWN_AGG)
+	pb.AddRuleCategory(executor.RULE_SPREAD_AGG)
 	planner := executor.NewHeuPlannerImpl(pb.Build())
 	planner.AddRule(executor.NewAggPushDownToSubQueryRule(""))
 	planner.AddRule(executor.NewAggToProjectInSubQueryRule(""))
@@ -1165,10 +1165,10 @@ func TestSlideWindowPushDownToExchange(t *testing.T) {
 
 func getPlanner() *executor.HeuPlannerImpl {
 	pb := NewHeuProgramBuilder()
-	pb.AddRuleCatagory(executor.RULE_SUBQUERY)
-	pb.AddRuleCatagory(executor.RULE_PUSHDOWN_AGG)
-	pb.AddRuleCatagory(executor.RULE_SPREAD_AGG)
-	pb.AddRuleCatagory(executor.RULE_HEIMADLL_PUSHDOWN)
+	pb.AddRuleCategory(executor.RULE_SUBQUERY)
+	pb.AddRuleCategory(executor.RULE_PUSHDOWN_AGG)
+	pb.AddRuleCategory(executor.RULE_SPREAD_AGG)
+	pb.AddRuleCategory(executor.RULE_HEIMADLL_PUSHDOWN)
 	planner := executor.NewHeuPlannerImpl(pb.Build())
 	planner.AddRule(executor.NewAggPushDownToSubQueryRule(""))
 	planner.AddRule(executor.NewAggToProjectInSubQueryRule(""))
@@ -1350,7 +1350,7 @@ func NewHeuProgramBuilder() *HeuProgramBuilder {
 }
 
 func (b *HeuProgramBuilder) InitDefaultRules() {
-	rules := []executor.OptRuleCatagory{
+	rules := []executor.OptRuleCategory{
 		executor.RULE_SUBQUERY,
 		executor.RULE_PUSHDOWN_LIMIT,
 		executor.RULE_PUSHDOWN_AGG,
@@ -1358,12 +1358,12 @@ func (b *HeuProgramBuilder) InitDefaultRules() {
 		executor.RULE_HEIMADLL_PUSHDOWN,
 	}
 	for _, r := range rules {
-		b.AddRuleCatagory(r)
+		b.AddRuleCategory(r)
 	}
 }
 
-func (b *HeuProgramBuilder) AddRuleCatagory(ruleCatagory executor.OptRuleCatagory) *HeuProgramBuilder {
-	ri := executor.NewRuleInstruction(ruleCatagory)
+func (b *HeuProgramBuilder) AddRuleCategory(ruleCategory executor.OptRuleCategory) *HeuProgramBuilder {
+	ri := executor.NewRuleInstruction(ruleCategory)
 	b.instructions = append(b.instructions, ri)
 	return b
 }
@@ -1510,8 +1510,8 @@ func testAggPushDownBase(t *testing.T, schema *executor.QuerySchema) *AggPushDow
 	spreadToExchange := executor.NewAggSpreadToExchangeRule("")
 	spreadToReader := executor.NewAggSpreadToReaderRule("")
 	pb := NewHeuProgramBuilder()
-	pb.AddRuleCatagory(executor.RULE_PUSHDOWN_AGG)
-	pb.AddRuleCatagory(executor.RULE_SPREAD_AGG)
+	pb.AddRuleCategory(executor.RULE_PUSHDOWN_AGG)
+	pb.AddRuleCategory(executor.RULE_SPREAD_AGG)
 	planner := executor.NewHeuPlannerImpl(pb.Build())
 	planner.AddRule(toExchange)
 	planner.AddRule(toMeasurement)
@@ -1661,8 +1661,8 @@ func TestAggPushdownRuleWithIncondition(t *testing.T) {
 	}
 
 	pb := NewHeuProgramBuilder()
-	pb.AddRuleCatagory(executor.RULE_SUBQUERY)
-	pb.AddRuleCatagory(executor.RULE_PUSHDOWN_AGG)
+	pb.AddRuleCategory(executor.RULE_SUBQUERY)
+	pb.AddRuleCategory(executor.RULE_PUSHDOWN_AGG)
 
 	planner := executor.NewHeuPlannerImpl(pb.Build())
 	planner.AddRule(executor.NewAggPushDownToSubQueryRule(""))
@@ -1731,7 +1731,7 @@ func testDistinctPushDownToExchangeRuleBase(t *testing.T, schema hybridqp.Catalo
 	}
 
 	pb := NewHeuProgramBuilder()
-	pb.AddRuleCatagory(executor.RULE_PUSHDOWN_DISTINCT)
+	pb.AddRuleCategory(executor.RULE_PUSHDOWN_DISTINCT)
 	planner := executor.NewHeuPlannerImpl(pb.Build())
 	planner.AddRule(executor.NewDistinctPushDownToExchangeRule(""))
 	planner.SetRoot(plan)
@@ -1747,9 +1747,9 @@ func testDistinctPushDownToExchangeRuleBase(t *testing.T, schema hybridqp.Catalo
 func TestDistinctPushDownToExchangeRule(t *testing.T) {
 	rule := executor.NewDistinctPushDownToExchangeRule("DistinctPushDownToExchangeRule")
 
-	// Test Catagory method
-	if rule.Catagory() != executor.RULE_PUSHDOWN_DISTINCT {
-		t.Errorf("Expected Catagory to return %v, but got %v", executor.RULE_PUSHDOWN_DISTINCT, rule.Catagory())
+	// Test Category method
+	if rule.Category() != executor.RULE_PUSHDOWN_DISTINCT {
+		t.Errorf("Expected Category to return %v, but got %v", executor.RULE_PUSHDOWN_DISTINCT, rule.Category())
 	}
 
 	// Test ToString method
