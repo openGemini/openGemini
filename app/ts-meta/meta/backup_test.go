@@ -49,8 +49,9 @@ func TestRunBackup(t *testing.T) {
 		globalService.store = s
 
 		b := &Backup{
-			IsNode:   true,
-			IsRemote: false,
+			BackupPath: "/tmp",
+			IsNode:     true,
+			IsRemote:   false,
 		}
 		err := b.RunBackupMeta()
 		assert.NoError(t, err)
@@ -61,8 +62,9 @@ func TestRunBackup(t *testing.T) {
 			raft: &MockRaftForSG{isLeader: false},
 		}
 		b := &Backup{
-			IsNode:   true,
-			IsRemote: false,
+			BackupPath: "/tmp",
+			IsNode:     true,
+			IsRemote:   false,
 		}
 		globalService.store = s
 		err := b.RunBackupMeta()
@@ -74,8 +76,9 @@ func TestRunBackup(t *testing.T) {
 			raft: &MockRaftForSG{isLeader: true},
 		}
 		b := &Backup{
-			IsNode:   true,
-			IsRemote: false,
+			BackupPath: "/tmp",
+			IsNode:     true,
+			IsRemote:   false,
 		}
 		globalService.store = s
 		err := b.RunBackupMeta()
@@ -92,9 +95,10 @@ func TestRunBackup(t *testing.T) {
 			},
 		}
 		b := &Backup{
-			IsNode:    true,
-			IsRemote:  false,
-			Databases: []string{"prom"},
+			BackupPath: "/tmp",
+			IsNode:     true,
+			IsRemote:   false,
+			Databases:  []string{"prom"},
 		}
 		globalService.store = s
 		err := b.RunBackupMeta()

@@ -236,7 +236,7 @@ func (r *RecoverOptions) recoverMeta(backupPath string, dbs []string) error {
 	// while single or multi databases backup,then run logic recover
 	if len(dbs) > 0 {
 		if _, err := fileops.Stat(backupMetaPath); err != nil {
-			return nil
+			return err
 		}
 		buf, err := fileops.ReadFile(filepath.Join(backupMetaPath, backup.MetaInfo))
 		if err != nil {
@@ -266,7 +266,7 @@ func (r *RecoverOptions) recoverMeta(backupPath string, dbs []string) error {
 	}
 
 	if _, err := fileops.Stat(backupMetaPath); err != nil {
-		return nil
+		return err
 	}
 
 	if err := fileops.RemoveAll(filepath.Join(backupPath, backup.MetaInfo)); err != nil {

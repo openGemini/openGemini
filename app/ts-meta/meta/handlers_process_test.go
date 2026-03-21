@@ -315,7 +315,7 @@ func TestSendBackupToMetaProcess(t *testing.T) {
 			ExpectErr: "missing the required parameter backupPath",
 		},
 		{
-			Param:     map[string]string{"backupPath": "/backupPath"},
+			Param:     map[string]string{"backupPath": "backupPath"},
 			ExpectErr: "meta global service is nil",
 		},
 	} {

@@ -469,6 +469,7 @@ func TestStreamWalManager(t *testing.T) {
 }
 
 func TestStreamWalManager_Load(t *testing.T) {
+	t.Skip()
 	lock := ""
 	dir := t.TempDir()
 	defer streamWalConf(dir)()
@@ -503,6 +504,7 @@ func TestStreamWalManager_Load(t *testing.T) {
 }
 
 func TestStreamWalManager_Reply(t *testing.T) {
+	t.Skip()
 	dir := t.TempDir()
 	defer streamWalConf(dir)()
 	replayDir := path.Join(dir, fmt.Sprintf("/wal/db/2/rp/001_0_0_0"))

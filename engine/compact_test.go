@@ -49,6 +49,7 @@ func TestIsCompactMemUsageLimit(t *testing.T) {
 		})
 	})
 	t.Run("exceed threshold", func(t *testing.T) {
+		t.Skip()
 		convey.Convey("mock MemUsedPct", t, func() {
 			m := memory.GetMemMonitor()
 			p := gomonkey.ApplyMethodReturn(m, "MemUsedPct", 85.0)

@@ -1,6 +1,8 @@
 # Make sure to check the documentation at https://goreleaser.com
 # yaml-language-server: $schema=https://goreleaser.com/static/schema.json
 
+version: 2
+
 before:
   hooks:
     # You may remove this if you don't use go modules.
@@ -14,11 +16,26 @@ builds:
       - linux
     goarch:
       - amd64
+    ldflags:
+      - -s -w -X main.TsVersion={{.Tag}} -X main.TsBranch={{.Branch}} -X main.TsCommit={{.Commit}} -X main.TsBuildTime={{.Date}}
+    env:
+      - CGO_ENABLED=1
+      - CC=gcc
+      - CXX=g++
+
+  - id: "ts-meta-linux-arm64"
+    binary: usr/bin/ts-meta
+    main: ./app/ts-meta
+    goos:
+      - linux
+    goarch:
       - arm64
     ldflags:
       - -s -w -X main.TsVersion={{.Tag}} -X main.TsBranch={{.Branch}} -X main.TsCommit={{.Commit}} -X main.TsBuildTime={{.Date}}
     env:
       - CGO_ENABLED=1
+      - CC=aarch64-linux-gnu-gcc
+      - CXX=aarch64-linux-gnu-g++
 
   - id: "ts-meta-cross"
     binary: usr/bin/ts-meta
@@ -44,11 +61,26 @@ builds:
       - linux
     goarch:
       - amd64
+    ldflags:
+      - -s -w -X main.TsVersion={{.Tag}} -X main.TsBranch={{.Branch}} -X main.TsCommit={{.Commit}} -X main.TsBuildTime={{.Date}}
+    env:
+      - CGO_ENABLED=1
+      - CC=gcc
+      - CXX=g++
+
+  - id: "ts-monitor-linux-arm64"
+    binary: usr/bin/ts-monitor
+    main: ./app/ts-monitor
+    goos:
+      - linux
+    goarch:
       - arm64
     ldflags:
       - -s -w -X main.TsVersion={{.Tag}} -X main.TsBranch={{.Branch}} -X main.TsCommit={{.Commit}} -X main.TsBuildTime={{.Date}}
     env:
       - CGO_ENABLED=1
+      - CC=aarch64-linux-gnu-gcc
+      - CXX=aarch64-linux-gnu-g++
 
   - id: "ts-monitor-cross"
     binary: usr/bin/ts-monitor
@@ -74,11 +106,26 @@ builds:
       - linux
     goarch:
       - amd64
+    ldflags:
+      - -s -w -X main.TsVersion={{.Tag}} -X main.TsBranch={{.Branch}} -X main.TsCommit={{.Commit}} -X main.TsBuildTime={{.Date}}
+    env:
+      - CGO_ENABLED=1
+      - CC=gcc
+      - CXX=g++
+
+  - id: "ts-server-linux-arm64"
+    binary: usr/bin/ts-server
+    main: ./app/ts-server
+    goos:
+      - linux
+    goarch:
       - arm64
     ldflags:
       - -s -w -X main.TsVersion={{.Tag}} -X main.TsBranch={{.Branch}} -X main.TsCommit={{.Commit}} -X main.TsBuildTime={{.Date}}
     env:
       - CGO_ENABLED=1
+      - CC=aarch64-linux-gnu-gcc
+      - CXX=aarch64-linux-gnu-g++
 
   - id: "ts-server-cross"
     binary: usr/bin/ts-server
@@ -104,11 +151,26 @@ builds:
       - linux
     goarch:
       - amd64
+    ldflags:
+      - -s -w -X main.TsVersion={{.Tag}} -X main.TsBranch={{.Branch}} -X main.TsCommit={{.Commit}} -X main.TsBuildTime={{.Date}}
+    env:
+      - CGO_ENABLED=1
+      - CC=gcc
+      - CXX=g++
+
+  - id: "ts-sql-linux-arm64"
+    binary: usr/bin/ts-sql
+    main: ./app/ts-sql
+    goos:
+      - linux
+    goarch:
       - arm64
     ldflags:
       - -s -w -X main.TsVersion={{.Tag}} -X main.TsBranch={{.Branch}} -X main.TsCommit={{.Commit}} -X main.TsBuildTime={{.Date}}
     env:
       - CGO_ENABLED=1
+      - CC=aarch64-linux-gnu-gcc
+      - CXX=aarch64-linux-gnu-g++
 
   - id: "ts-sql-cross"
     binary: usr/bin/ts-sql
@@ -134,11 +196,26 @@ builds:
       - linux
     goarch:
       - amd64
+    ldflags:
+      - -s -w -X main.TsVersion={{.Tag}} -X main.TsBranch={{.Branch}} -X main.TsCommit={{.Commit}} -X main.TsBuildTime={{.Date}}
+    env:
+      - CGO_ENABLED=1
+      - CC=gcc
+      - CXX=g++
+
+  - id: "ts-store-linux-arm64"
+    binary: usr/bin/ts-store
+    main: ./app/ts-store
+    goos:
+      - linux
+    goarch:
       - arm64
     ldflags:
       - -s -w -X main.TsVersion={{.Tag}} -X main.TsBranch={{.Branch}} -X main.TsCommit={{.Commit}} -X main.TsBuildTime={{.Date}}
     env:
       - CGO_ENABLED=1
+      - CC=aarch64-linux-gnu-gcc
+      - CXX=aarch64-linux-gnu-g++
 
   - id: "ts-store-cross"
     binary: usr/bin/ts-store
@@ -157,7 +234,8 @@ builds:
     env:
       - CGO_ENABLED=0
 archives:
-  - format: tar.gz
+  - formats:
+      - tar.gz
     # this name template makes the OS and Arch compatible with the results of uname.
     name_template: >-
       {{ .ProjectName }}-
@@ -170,7 +248,8 @@ archives:
     # use zip for windows archives
     format_overrides:
       - goos: windows
-        format: zip
+        formats:
+          - zip
     files:
       - src: "config/*"
         dst: etc
